@@ -397,6 +397,7 @@ ABI uint64_t lantern_ssz_size_bounds(const void *type, void *out);
 
 /* Beacon API: docs/reference/beacon-api.md. */
 ABI uint64_t lantern_api_answer(const void *request, const void *view, void *out);
+ABI uint64_t lantern_http_request(const void *bytes, const void *limits, void *out);
 
 /* Application: docs/reference/app.md. */
 ABI uint64_t lantern_app_options(const void *args, void *options, void *fault);
@@ -6735,6 +6736,95 @@ static void run_api_answer(const char *file, case_file *f) {
     }
 }
 
+#define HTTP_INVALID_STATUS 52
+#define HTTP_REQUEST_FIXED 144
+
+/* The status of lantern_http_request on the first len bytes of b, with out of osize bytes; the HTTP status in *http. */
+static uint64_t http_request_call(const uint8_t *b, uint64_t len, const uint64_t *limits, uint64_t osize, uint8_t **out,
+                                  uint64_t *http, const char **why) {
+    uint64_t size;
+    uint8_t *l = list_of(b, len, 0, 8, &size), *lim = buffer(16);
+    wr64(lim, limits[0]);
+    wr64(lim + 8, limits[1]);
+    *out = buffer(osize);
+    wr64(*out, osize);
+    uint64_t st = CALL(lantern_http_request, l, lim, *out);
+    if (!guard_ok(*out, osize) || !guard_ok(l, size) || !guard_ok(lim, 16)) *why = "lantern_http_request wrote out of bounds";
+    *http = rd64(*out + 8);
+    free(l);
+    free(lim);
+    return st;
+}
+
+/*
+ * http-request: lantern_http_request of each case's bytes (tests/generator/http_request.py): the
+ * status, the HTTP status of a fault, and for a request read its fields and its six parts, each at
+ * a multiple of 8 and in order; with one byte less of room than out_size, LANTERN_BUFFER_TOO_SMALL;
+ * and the status of every shorter prefix of the bytes.
+ */
+static void run_http_request(const char *file, case_file *f) {
+    static const char *const parts_names[6] = {"path", "query", "accept", "content_type", "consensus_version", "body"};
+    for (uint64_t i = 0; i < f->count; i++) {
+        const char *name, *why = NULL;
+        uint64_t len, blen, plen, http = 0;
+        tv parts = next_case(f, &name, &len);
+        const uint8_t *b = tv_bytes(tv_get(parts, "bytes"), &blen), *prefix = tv_bytes(tv_get(parts, "prefix"), &plen);
+        uint64_t limits[2] = {tv_u64(tv_get(parts, "head_max")), tv_u64(tv_get(parts, "body_max"))};
+        uint64_t want = tv_u64(tv_get(parts, "status")), want_http = tv_u64(tv_get(parts, "http_status"));
+        tv osz = tv_get(parts, "out_size");
+        uint64_t osize = osz ? tv_u64(osz) : HTTP_REQUEST_FIXED + 64;
+        uint8_t *out = NULL;
+        uint64_t st = http_request_call(b, blen, limits, osize, &out, &http, &why);
+        static char msg[256];
+        if (why) {
+        } else if (st != want) {
+            snprintf(msg, sizeof msg, "status %llu, not %llu", (unsigned long long)st, (unsigned long long)want);
+            why = msg;
+        } else if (st == HTTP_INVALID_STATUS && http != want_http) {
+            snprintf(msg, sizeof msg, "HTTP status %llu, not %llu", (unsigned long long)http, (unsigned long long)want_http);
+            why = msg;
+        } else if (st == 0) {
+            static const char *const fields[5] = {"used", "method", "version", "close", NULL};
+            static const uint64_t offsets[4] = {16, 24, 32, 40};
+            for (int k = 0; k < 4 && !why; k++)
+                if (rd64(out + offsets[k]) != tv_u64(tv_get(parts, fields[k]))) {
+                    snprintf(msg, sizeof msg, "%s is %llu", fields[k], (unsigned long long)rd64(out + offsets[k]));
+                    why = msg;
+                }
+            uint64_t at = HTTP_REQUEST_FIXED;
+            for (int k = 0; k < 6 && !why; k++) {
+                uint64_t wl, off = rd64(out + 48 + 16 * k), cnt = rd64(out + 56 + 16 * k);
+                const uint8_t *w = tv_bytes(tv_get(parts, parts_names[k]), &wl);
+                if (off != at || cnt != wl || (wl && memcmp(out + off, w, (size_t)wl))) {
+                    snprintf(msg, sizeof msg, "part %s: offset %llu, count %llu", parts_names[k], (unsigned long long)off,
+                             (unsigned long long)cnt);
+                    why = msg;
+                }
+                at += (wl + 7) / 8 * 8;
+            }
+            uint8_t *small = NULL;
+            if (!why && http_request_call(b, blen, limits, osize - 1, &small, &http, &why) != 1 && !why)
+                why = "one byte less of room is not LANTERN_BUFFER_TOO_SMALL";
+            free(small);
+        }
+        free(out);
+        for (uint64_t k = 0; k < blen && !why && plen == 3 * blen; k++) {
+            uint64_t ws = prefix[3 * k], wh = prefix[3 * k + 1] | (uint64_t)prefix[3 * k + 2] << 8;
+            uint8_t *o = NULL;
+            uint64_t s = http_request_call(b, k, limits, HTTP_REQUEST_FIXED + 2048, &o, &http, &why);
+            if (!why && (s != ws || (s == HTTP_INVALID_STATUS && http != wh))) {
+                snprintf(msg, sizeof msg, "the first %llu bytes: status %llu (HTTP %llu), not %llu (HTTP %llu)",
+                         (unsigned long long)k, (unsigned long long)s, (unsigned long long)http, (unsigned long long)ws,
+                         (unsigned long long)wh);
+                why = msg;
+            }
+            free(o);
+        }
+        if (!why && plen != 3 * blen) why = "the case's prefix list is not 3 bytes per length";
+        report(file, name, len, !why, why);
+    }
+}
+
 /* ---------------------------------------------------------------- Engine API client */
 
 #define INVALID_HTTP 52
@@ -6983,6 +7073,7 @@ int main(int argc, char **argv) {
         else if (!bls_off && !strcmp(kind, "config-parse")) run_config_parse(file, &f);
         else if (!bls_off && !strcmp(kind, "app-options")) run_app_options(file, &f);
         else if (!bls_off && !strcmp(kind, "api-answer")) run_api_answer(file, &f);
+        else if (!bls_off && !strcmp(kind, "http-request")) run_http_request(file, &f);
         else if (!bls_off && !strcmp(kind, "db-index")) run_db_index(file, &f);
 #if FORK == FORK_FULU
         else if (!bls_off && (!strcmp(kind, "networking-get_custody_groups") ||

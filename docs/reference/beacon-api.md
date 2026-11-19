@@ -5,10 +5,13 @@
 ### Functions
 
 - [`lantern_api_answer`](#function-lantern_api_answer): the HTTP response to a Beacon API request.
+- [`lantern_http_request`](#function-lantern_http_request): reads one HTTP/1.1 request, head and body, from a connection's bytes.
 
 ### Types
 
 - [`ApiView`](#type-apiview): the values of the node that the answers show.
+- [`HttpLimits`](#type-httplimits): the largest request head and body a connection takes.
+- [`HttpRequest`](#type-httprequest): one request, read.
 
 ## Spec
 
@@ -16,10 +19,17 @@
 - Section: the endpoints below, of `apis/node/` and `apis/beacon/`, with the JSON of `types/`: numbers as decimal strings, byte strings as `0x` and lower case hex.
 - The endpoints are those that ethereum-package and Assertoor read: `ethereum-package` waits for `/eth/v1/node/health` to give 200 or 206, and reads `data.enr`, `data.p2p_addresses[0]` and `data.peer_id` of `/eth/v1/node/identity`.
 - HTTP/1.1: RFC 9112. Each response closes its connection.
+- Requests: [RFC 9112](https://www.rfc-editor.org/rfc/rfc9112) sections 2 to 7 (message format, request line, fields, body length, chunked coding) and [RFC 9110](https://www.rfc-editor.org/rfc/rfc9110) section 5 (field syntax); status 431 of [RFC 6585](https://www.rfc-editor.org/rfc/rfc6585) section 5.
 
 ## Test vectors
 
 - tests/generator/api.py: views, requests, and the response bytes of each, written out by the rules below. File: `<preset>-phase0-api-answer.bin`.
+- tests/generator/http_request.py: requests and the `HttpRequest` or fault of each, by the rules of lantern_http_request, apart from the assembly. Each case also runs with its bytes cut short at every length (`LANTERN_HTTP_MORE`, or the same fault once the faulty byte is in), and with `out` one byte short. File: `<preset>-phase0-http-request.bin`.
+  - Request lines: each method, origin forms with and without a query, both versions, HTTP/2.0 (505), and broken lines.
+  - Fields: each read field, names in mixed case, repeated lines joined, white space before a colon, folded lines, no `Host`, two `Host` lines.
+  - Bodies: `Content-Length` (zero, exact, past `body_max`, two equal values, two different values), chunked (one and many chunks, extensions, trailers, bad sizes, past `body_max`), both fields together, another coding.
+  - Limits: a head of exactly `head_max` bytes and one byte more.
+  - Pipelining: two requests in one buffer; `used` ends the first.
 
 ## Function `lantern_api_answer`
 
@@ -76,6 +86,70 @@ lantern_api_answer(request, view, out) -> status
 - Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
 - Argument order: `request`, `view`, `out`.
 
+## Function `lantern_http_request`
+
+Reads one HTTP/1.1 request, its head and its body, from the start of a connection's unread bytes.
+
+### Signature
+
+```
+lantern_http_request(bytes, limits, out) -> status
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `bytes` | input | ByteList: the connection's bytes not yet taken by a request |
+| `limits` | input | [`HttpLimits`](#type-httplimits) |
+| `out` | output | [`HttpRequest`](#type-httprequest), its `size` set by the caller |
+
+### Returns
+
+- `LANTERN_OK`: `out` holds the request, and `used` the bytes it took.
+- `LANTERN_HTTP_MORE`: `bytes` holds no whole request yet, and no fault so far.
+- `LANTERN_INVALID_HTTP`: the request breaks a rule below; `status` of `out` is the HTTP status to answer, after which the connection closes.
+- `LANTERN_BUFFER_TOO_SMALL`: `out` has room for fewer bytes than the request's parts.
+
+### Function does
+
+- Request line, `method SP request-target SP HTTP-version CRLF` (RFC 9112 section 3):
+  - `method`: a token. `GET` and `POST` get their own value; another token is `HTTP_METHOD_OTHER`.
+  - `request-target`: origin form, `/` and then visible bytes up to the space. Split at the first `?` into `path` and `query`.
+  - `HTTP-version`: `HTTP/1.1` or `HTTP/1.0`. Another `HTTP/` version gives 505; anything else gives 400.
+  - Any other fault of the line gives 400.
+- A request may start after empty lines (CRLF), as RFC 9112 section 2.2 allows; they count in `used`.
+- The head ends at the first CRLF CRLF after the empty lines. No end within the first `head_max` bytes of `bytes` gives 431.
+- Field lines, `field-name ":" OWS field-value OWS CRLF` (RFC 9112 section 5):
+  - Field names compare without regard to case.
+  - White space between the name and the colon, a line that starts with white space (obsolete line folding), or a name that is no token: 400.
+  - A value holds no CR, LF or NUL: else 400.
+- Fields it reads, by name:
+  - `Host`: HTTP/1.1 needs exactly one; none, or more than one, gives 400 (RFC 9112 section 3.2).
+  - `Content-Length`: digits only; more than one line, or one list, with differing values: 400. A value above `body_max`: 413.
+  - `Transfer-Encoding`: `chunked`, alone, without regard to case. Any other coding: 501. Present with `Content-Length`: 400 (RFC 9112 section 6.3 allows rejecting it as a likely smuggling attempt).
+  - `Connection`: the token `close` sets `close`; HTTP/1.0 sets `close` unless the token `keep-alive` is there.
+  - `Accept`, `Content-Type` and `Eth-Consensus-Version`: their values go to `accept`, `content_type` and `consensus_version`. Lines of one field join with `, ` between them, in order (RFC 9110 section 5.3).
+- The body (RFC 9112 section 6):
+  - `Content-Length`: that many bytes after the head.
+  - `chunked`: chunks of hex size, each line followed by CRLF; after the hex digits a line may hold `;`, space or tab and then anything but CR, LF and NUL, which is skipped (chunk extensions). The last chunk is size 0; trailer lines are skipped up to the empty line. A size line with no hex digit, a size past 2^64 - 1, chunk data not followed by CRLF, or a size line longer than `head_max` gives 400. Trailer lines of more than `head_max` bytes in all give 431. A body above `body_max` gives 413, once the size line that passes it is in.
+  - Neither: no body.
+- `used`: the bytes from the start of `bytes` to the end of the request, chunk framing and trailers included. The next request on the connection starts there.
+- `out` holds copies: `path`, `query`, the three field values and the body (unchunked), in its parts, in that order, each at a multiple of 8 bytes. Its room: `HTTP_REQUEST_FIXED` + each part's bytes rounded up to a multiple of 8.
+- Faults of the head are found once the head has ended: before that, only 431.
+
+### Function never
+
+- Reads more than `bytes`, `limits` and the `size` field of `out`.
+- Writes more than `out`.
+
+### ABI
+
+- Role: L1.
+- Symbol: `lantern_http_request` (`_lantern_http_request` on macOS).
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- Argument order: `bytes`, `limits`, `out`.
+
 ## Type `ApiView`
 
 The values of the node that the answers show, filled by the binary before each answer. A text field is a length, then that many bytes.
@@ -113,6 +187,43 @@ The values of the node that the answers show, filled by the binary before each a
 | 1216 | `discovery_address` | text of 128 bytes | A multiaddr, or length 0 |
 | 1352 | `version` | text of 64 bytes | |
 | 1424 | | | Size |
+
+## Type `HttpLimits`
+
+The largest request head and body a connection takes.
+
+### Layout
+
+| Offset | Field | Type | Meaning |
+|---|---|---|---|
+| 0 | `head_max` | u64 | Bytes from the start of the connection's bytes to the end of the head, the final CRLF CRLF included |
+| 8 | `body_max` | u64 | Bytes of the body, unchunked |
+
+## Type `HttpRequest`
+
+One request, read by lantern_http_request.
+
+### Layout
+
+| Offset | Field | Type | Meaning |
+|---|---|---|---|
+| 0 | `size` | u64 | Bytes of the buffer, this field included |
+| 8 | `status` | u64 | With `LANTERN_INVALID_HTTP`: the HTTP status to answer |
+| 16 | `used` | u64 | Bytes of the connection the request took |
+| 24 | `method` | u64 | `HTTP_METHOD_GET`, `HTTP_METHOD_POST` or `HTTP_METHOD_OTHER` |
+| 32 | `version` | u64 | 10 for HTTP/1.0, 11 for HTTP/1.1 |
+| 40 | `close` | u64 | 1 when the connection closes after the answer |
+| 48 | `path` | PartRef | The target up to the first `?` |
+| 64 | `query` | PartRef | The target after the first `?` |
+| 80 | `accept` | PartRef | The `Accept` value |
+| 96 | `content_type` | PartRef | The `Content-Type` value |
+| 112 | `consensus_version` | PartRef | The `Eth-Consensus-Version` value |
+| 128 | `body` | PartRef | The body |
+
+### Rules
+
+- The fixed part is `HTTP_REQUEST_FIXED` (144) bytes; the parts follow in field order, each holding bytes.
+- A field that the request does not hold is a part of count 0.
 
 ## Results
 

@@ -925,6 +925,26 @@
 .set ApiView_version, 1352               /* 64 */
 .set ApiView__size, 1424
 
+/* HttpLimits and HttpRequest (docs/reference/beacon-api.md): lantern_http_request. */
+.set HttpLimits_head_max, 0
+.set HttpLimits_body_max, 8
+.set HTTP_METHOD_GET, 1
+.set HTTP_METHOD_POST, 2
+.set HTTP_METHOD_OTHER, 3
+.set HttpRequest_size, 0
+.set HttpRequest_status, 8
+.set HttpRequest_used, 16
+.set HttpRequest_method, 24
+.set HttpRequest_version, 32
+.set HttpRequest_close, 40
+.set HttpRequest_path, 48                 /* PartRef; then query, accept, content_type, consensus_version, body */
+.set HttpRequest_query, 64
+.set HttpRequest_accept, 80
+.set HttpRequest_content_type, 96
+.set HttpRequest_consensus_version, 112
+.set HttpRequest_body, 128
+.set HTTP_REQUEST_FIXED, 144
+
 /* ArgList, Arg and AppOptions (docs/reference/app.md): a text field is an Arg (start, length) of the ArgList's bytes. */
 .set ArgList_args, 8
 .set ArgList_bytes, 24
