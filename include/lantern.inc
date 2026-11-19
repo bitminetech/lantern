@@ -941,10 +941,12 @@
 .set AppOptions_data_dir, 96
 .set AppOptions_checkpoint_state, 112
 .set AppOptions_checkpoint_block, 128
-.set AppOptions__size, 144
+.set AppOptions_log_level, 144          /* 0 error, 1 warn, 2 info, 3 debug */
+.set AppOptions__size, 152
 .set APP_DEFAULT_PORT, 9000
 .set APP_DEFAULT_HTTP_PORT, 5052
 .set APP_DEFAULT_TARGET_PEERS, 64
+.set APP_DEFAULT_LOG_LEVEL, 2           /* info */
 .set APP_MAX_TARGET_PEERS, 1024
 
 .if DB_SEGMENT_SLOTS != 1 << DB_SEGMENT_SHIFT

@@ -161,14 +161,124 @@ LOCAL_FUNCTION app_alloc
 1:  LEAVE 0
 END_FUNCTION app_alloc
 
-/* L0: the log line starts with "lantern: ". Uses x0-x2, x9-x12. */
+/* L0: the log line starts, with room for the time and the level that app_line_end writes. */
 LOCAL_FUNCTION app_line_start
     UNWIND_END_PROLOGUE
-    str     xzr, [x19, #(APP_LINE + 16)]
-    ADDRESS x0, app_m_prefix
-    mov     x1, #app_m_prefix_len
-    b       app_line_text
+    mov     x9, #APP_LOG_PREFIX
+    str     x9, [x19, #(APP_LINE + 16)]
+    ret
 END_FUNCTION app_line_start
+
+/*
+ * L0: the UTC time of the Unix milliseconds x0, as YYYY-MM-DD HH:MM:SS.mmm, in the 23 bytes at
+ * x1 (civil_from_days of the days since 1970). A leaf; uses x0-x15 and keeps x30 in x7.
+ */
+LOCAL_FUNCTION app_time_text
+    UNWIND_END_PROLOGUE
+    MOVQ    x2, 86400000
+    udiv    x3, x0, x2                      /* days */
+    msub    x4, x3, x2, x0                  /* milliseconds of the day */
+    MOVQ    x5, 719468
+    add     x3, x3, x5                      /* z */
+    MOVQ    x5, 146097
+    udiv    x6, x3, x5                      /* era */
+    msub    x7, x6, x5, x3                  /* day of the era */
+    mov     x8, #1460
+    udiv    x9, x7, x8
+    sub     x10, x7, x9
+    MOVQ    x8, 36524
+    udiv    x9, x7, x8
+    add     x10, x10, x9
+    MOVQ    x8, 146096
+    udiv    x9, x7, x8
+    sub     x10, x10, x9
+    mov     x8, #365
+    udiv    x10, x10, x8                    /* year of the era */
+    mov     x8, #400
+    madd    x11, x6, x8, x10                /* the year, from March */
+    mov     x8, #365
+    mul     x12, x10, x8
+    add     x12, x12, x10, lsr #2
+    mov     x8, #100
+    udiv    x13, x10, x8
+    sub     x12, x12, x13
+    sub     x12, x7, x12                    /* day of the year, from March 1 */
+    mov     x8, #5
+    mul     x13, x12, x8
+    add     x13, x13, #2
+    mov     x8, #153
+    udiv    x13, x13, x8                    /* month, from March */
+    mul     x14, x13, x8
+    add     x14, x14, #2
+    mov     x8, #5
+    udiv    x14, x14, x8
+    sub     x14, x12, x14
+    add     x14, x14, #1                    /* day */
+    cmp     x13, #10
+    b.hs    1f
+    add     x13, x13, #3                    /* month */
+    b       2f
+1:  sub     x13, x13, #9
+2:  cmp     x13, #2
+    cinc    x11, x11, ls                    /* the year: January and February are of the next */
+    mov     w8, #0x2d                       /* the separators */
+    strb    w8, [x1, #4]
+    strb    w8, [x1, #7]
+    mov     w8, #0x20
+    strb    w8, [x1, #10]
+    mov     w8, #0x3a
+    strb    w8, [x1, #13]
+    strb    w8, [x1, #16]
+    mov     w8, #0x2e
+    strb    w8, [x1, #19]
+    mov     x15, x1
+    mov     x7, x30                         /* the return: the digits below use bl */
+    add     x1, x15, #4                     /* the digits, each field from its end */
+    mov     x2, #4
+    mov     x0, x11
+    bl      3f
+    add     x1, x15, #7
+    mov     x2, #2
+    mov     x0, x13
+    bl      3f
+    add     x1, x15, #10
+    mov     x2, #2
+    mov     x0, x14
+    bl      3f
+    MOVQ    x8, 3600000
+    udiv    x0, x4, x8                      /* hours */
+    msub    x4, x0, x8, x4
+    add     x1, x15, #13
+    mov     x2, #2
+    bl      3f
+    MOVQ    x8, 60000
+    udiv    x0, x4, x8                      /* minutes */
+    msub    x4, x0, x8, x4
+    add     x1, x15, #16
+    mov     x2, #2
+    bl      3f
+    mov     x8, #1000
+    udiv    x0, x4, x8                      /* seconds */
+    msub    x4, x0, x8, x4
+    add     x1, x15, #19
+    mov     x2, #2
+    bl      3f
+    mov     x0, x4                          /* milliseconds */
+    add     x1, x15, #23
+    mov     x2, #3
+    bl      3f
+    mov     x30, x7
+    ret
+3:  mov     x9, #10                         /* x2 digits of x0 before x1; a leaf of its own, x30 the return */
+4:  udiv    x10, x0, x9
+    msub    x11, x10, x9, x0
+    add     x11, x11, #0x30
+    strb    w11, [x1, #-1]!
+    mov     x0, x10
+    subs    x2, x2, #1
+    b.ne    4b
+    ret
+END_FUNCTION app_time_text
 
 /* L0: the x1 bytes at x0 join the log line, as far as it has room. Uses x0, x1, x9-x12. */
 LOCAL_FUNCTION app_line_text
@@ -232,20 +342,117 @@ LOCAL_FUNCTION app_line_hex
 2:  UNFRAME 32
 END_FUNCTION app_line_hex
 
-/* L1: the log line and an LF go to stream x0: 1 the standard output, 2 the standard error. */
+/*
+ * L1: the log line of kind x0 (APP_LOG_INFO, ERROR, WARN or DEBUG), when its level is at most the
+ * log level: its time and level before it, an LF after it, to the standard error for ERROR and
+ * WARN, else the standard output. Locals: sp+16 the level, sp+24 the time, sp+32 an LF.
+ */
 LOCAL_FUNCTION app_line_end
-    FRAME 16
-    str     x0, [x19, #APP_STREAM]
+    FRAME 32
+    ADDRESS x9, app_log_rank
+    ldrb    w10, [x9, x0]
+    ldr     x11, [x19, #(APP_OPTIONS + AppOptions_log_level)]
+    cmp     x10, x11
+    b.hi    9f
+    mov     x12, #1
+    cmp     x10, #1
+    b.hi    1f
+    mov     x12, #2
+1:  str     x12, [x19, #APP_STREAM]
+    str     x10, [sp, #16]
+    add     x0, sp, #24
+    CALL_GLOBAL lantern_shell_time_ms
+    ldr     x0, [sp, #24]
+    add     x1, x19, #(APP_LINE + 24)
+    bl      app_time_text
+    add     x9, x19, #(APP_LINE + 24)
+    mov     w10, #0x20
+    strb    w10, [x9, #23]
+    strb    w10, [x9, #29]
+    ldr     x10, [sp, #16]
+    ADDRESS x11, app_log_names
+    add     x11, x11, x10, lsl #3
+    ldr     w12, [x11]
+    str     w12, [x9, #24]
+    ldrb    w12, [x11, #4]
+    strb    w12, [x9, #28]
     mov     w9, #10
-    strb    w9, [sp, #16]
-    add     x0, sp, #16
+    strb    w9, [sp, #32]
+    add     x0, sp, #32
     mov     x1, #1
     bl      app_line_text
     add     x0, x19, #APP_STREAM
     add     x1, x19, #APP_LINE
     CALL_GLOBAL lantern_shell_write
-    UNFRAME 16
+9:  UNFRAME 32
 END_FUNCTION app_line_end
+
+/*
+ * L1: the log lines of a work that ran (app.md, the log): DEBUG work <kind> result <n>; for a
+ * block's import, INFO block <slot> imported, <a> attestations, or WARN block <slot> not imported:
+ * result <n>. x24 the work's data entry, x26 its kind. Locals: sp+16 the result, sp+24 the slot.
+ */
+LOCAL_FUNCTION app_log_work
+    FRAME 16
+    ldr     x9, [x19, #APP_WORK_EVENT]
+    ldr     x10, [x9, #NodeEvent_result]
+    str     x10, [sp, #16]
+    bl      app_line_start
+    ADDRESS x0, app_m_log_work
+    mov     x1, #app_m_log_work_len
+    bl      app_line_text
+    mov     x0, x26
+    bl      app_line_u64
+    ADDRESS x0, app_m_log_result
+    mov     x1, #app_m_log_result_len
+    bl      app_line_text
+    ldr     x0, [sp, #16]
+    bl      app_line_u64
+    mov     x0, #APP_LOG_DEBUG
+    bl      app_line_end
+    cmp     x26, #NODE_WORK_IMPORT_BLOCK
+    b.ne    9f
+    ldr     x10, [sp, #16]
+    cmp     x10, #LANTERN_NEED_JUSTIFIED_STATE
+    b.eq    9f
+    cbz     x24, 9f
+    ldr     x9, [x24, #8]                   /* the block's bytes: its slot at byte 100 */
+    ldr     x11, [x9, #16]
+    cmp     x11, #108
+    b.lo    9f
+    ldr     x11, [x9, #8]
+    add     x11, x9, x11
+    ldr     x11, [x11, #100]
+    str     x11, [sp, #24]
+    bl      app_line_start
+    ADDRESS x0, app_m_log_block
+    mov     x1, #app_m_log_block_len
+    bl      app_line_text
+    ldr     x0, [sp, #24]
+    bl      app_line_u64
+    ldr     x10, [sp, #16]
+    cbnz    x10, 1f
+    ADDRESS x0, app_m_log_imported
+    mov     x1, #app_m_log_imported_len
+    bl      app_line_text
+    ldr     x9, [x19, #APP_WORK_EVENT]
+    ldr     x0, [x9, #NodeEvent_index]
+    bl      app_line_u64
+    ADDRESS x0, app_m_log_attestations
+    mov     x1, #app_m_log_attestations_len
+    bl      app_line_text
+    mov     x0, #APP_LOG_INFO
+    bl      app_line_end
+    b       9f
+1:  ADDRESS x0, app_m_log_not
+    mov     x1, #app_m_log_not_len
+    bl      app_line_text
+    ldr     x0, [sp, #16]
+    bl      app_line_u64
+    mov     x0, #APP_LOG_WARN
+    bl      app_line_end
+9:  UNFRAME 16
+END_FUNCTION app_log_work
 
 /* L1: the path of the x1 bytes of the name at x0 in the network directory: a ByteList at APP_PATH. */
 LOCAL_FUNCTION app_path
@@ -309,7 +516,7 @@ LOCAL_FUNCTION app_read
     bl      app_line_text
     ldr     x0, [x19, #APP_FILE]
     bl      app_line_u64
-    mov     x0, #2
+    mov     x0, #APP_LOG_ERROR
     bl      app_line_end
     mov     x0, #2
     UNFRAME 0
@@ -416,7 +623,7 @@ LOCAL_FUNCTION app_checkpoint
     ADDRESS x0, app_m_short
     mov     x1, #app_m_short_len
     bl      app_line_text
-    mov     x0, #2
+    mov     x0, #APP_LOG_ERROR
     bl      app_line_end
     b       99f
 97: bl      app_file_free                   /* no memory */
@@ -424,7 +631,7 @@ LOCAL_FUNCTION app_checkpoint
     ADDRESS x0, app_m_memory
     mov     x1, #app_m_memory_len
     bl      app_line_text
-    mov     x0, #2
+    mov     x0, #APP_LOG_ERROR
     bl      app_line_end
 98: add     x0, sp, #L                      /* the block file goes */
     add     x1, sp, #(L + 8)
@@ -459,7 +666,7 @@ LOCAL_FUNCTION app_fail_status
     bl      app_line_text
     ldr     x0, [sp, #32]
     bl      app_line_u64
-    mov     x0, #2
+    mov     x0, #APP_LOG_ERROR
     bl      app_line_end
     mov     x0, #2
     UNFRAME 32
@@ -710,7 +917,7 @@ LOCAL_FUNCTION app_start
     bl      app_line_text
     ldr     x0, [x19, #(APP_ANCHOR + 32)]
     bl      app_line_u64
-    mov     x0, #1
+    mov     x0, #APP_LOG_INFO
     bl      app_line_end
     b       14f
 141: bl     app_db_scan_all                 /* from anchor.ssz: the history's segments to the node */
@@ -721,7 +928,7 @@ LOCAL_FUNCTION app_start
     bl      app_line_text
     ldr     x0, [x19, #(APP_ANCHOR + 32)]
     bl      app_line_u64
-    mov     x0, #1
+    mov     x0, #APP_LOG_INFO
     bl      app_line_end
 14:
     add     x0, x19, #APP_SEEN_ROOM         /* the Seen */
@@ -792,7 +999,7 @@ LOCAL_FUNCTION app_start
     add     x0, x19, #APP_ANCHOR
     mov     x1, #32
     bl      app_line_hex
-    mov     x0, #1
+    mov     x0, #APP_LOG_INFO
     bl      app_line_end
     mov     x0, #0
     LEAVE 16
@@ -810,7 +1017,7 @@ LOCAL_FUNCTION app_start
     ADDRESS x0, app_m_memory
     mov     x1, #app_m_memory_len
     bl      app_line_text
-98: mov     x0, #2
+98: mov     x0, #APP_LOG_ERROR
     bl      app_line_end
 99: mov     x0, #2
     LEAVE 16
@@ -1227,7 +1434,8 @@ LOCAL_FUNCTION app_work
     bl      app_regrow
     cbnz    x0, 91f
     b       1b
-8:  ldr     x0, [x19, #APP_WORK_EVENT]      /* the WORK_DONE event */
+8:  bl      app_log_work
+    ldr     x0, [x19, #APP_WORK_EVENT]      /* the WORK_DONE event */
     ldr     x1, [x0]
     bl      app_event_put
     LEAVE 0
@@ -1456,7 +1664,7 @@ LOCAL_FUNCTION app_db_append
     bl      app_line_text
     ldr     x0, [sp, #(L + 24)]
     bl      app_line_u64
-    mov     x0, #2
+    mov     x0, #APP_LOG_ERROR
     bl      app_line_end
     LEAVE 48
 END_FUNCTION app_db_append
@@ -1991,7 +2199,7 @@ LOCAL_FUNCTION app_db_state
     bl      app_line_text
     ldr     x0, [sp, #(L + 24)]
     bl      app_line_u64
-    mov     x0, #2
+    mov     x0, #APP_LOG_ERROR
     bl      app_line_end
 98: cbz     x23, 99f                        /* the bytes' memory goes back */
     str     x23, [sp, #(L + 24)]
@@ -2162,7 +2370,7 @@ LOCAL_FUNCTION app_step
     bl      app_line_text
     ldr     x0, [x19, #(APP_RESULT + NodeStepResult_short)]
     bl      app_line_u64
-    mov     x0, #2
+    mov     x0, #APP_LOG_ERROR
     bl      app_line_end
     LEAVE 0
 2:  mov     x2, x0                          /* a node step: status <n> */
@@ -2317,7 +2525,7 @@ LOCAL_FUNCTION app_boot_nodes
     ADDRESS x0, app_m_not_enr
     mov     x1, #app_m_not_enr_len
     bl      app_line_text
-    mov     x0, #2
+    mov     x0, #APP_LOG_ERROR
     bl      app_line_end
     b       1b
 9:  LEAVE 16
@@ -2482,7 +2690,7 @@ LOCAL_FUNCTION app_net
     bl      app_line_text
     ldr     x0, [sp, #(L + 64)]
     bl      app_line_u64
-    mov     x0, #2
+    mov     x0, #APP_LOG_ERROR
     bl      app_line_end
     mov     x0, #2
     LEAVE 112
@@ -2497,7 +2705,7 @@ LOCAL_FUNCTION app_net
     bl      app_line_text
     ldr     x0, [x19, #(APP_OPTIONS + AppOptions_port)]
     bl      app_line_u64
-    mov     x0, #1
+    mov     x0, #APP_LOG_INFO
     bl      app_line_end
     mov     x0, #0
     LEAVE 112
@@ -2511,7 +2719,7 @@ LOCAL_FUNCTION app_net
     ADDRESS x0, app_m_memory
     mov     x1, #app_m_memory_len
     bl      app_line_text
-    mov     x0, #2
+    mov     x0, #APP_LOG_ERROR
     bl      app_line_end
     mov     x0, #2
     LEAVE 112
@@ -2713,7 +2921,7 @@ LOCAL_FUNCTION app_engine_conf
     ADDRESS x0, app_m_hex
     mov     x1, #app_m_hex_len
     bl      app_line_text
-98: mov     x0, #2
+98: mov     x0, #APP_LOG_ERROR
     bl      app_line_end
 99: mov     x0, #2
     LEAVE 0
@@ -3129,7 +3337,7 @@ LOCAL_FUNCTION app_dv_start
     bl      app_line_text
     ldr     x0, [sp, #(L + 184)]
     bl      app_line_u64
-    mov     x0, #2
+    mov     x0, #APP_LOG_ERROR
     bl      app_line_end
     mov     x0, #2
     LEAVE 256
@@ -3142,7 +3350,7 @@ LOCAL_FUNCTION app_dv_start
     ADDRESS x0, app_m_memory
     mov     x1, #app_m_memory_len
     bl      app_line_text
-    mov     x0, #2
+    mov     x0, #APP_LOG_ERROR
     bl      app_line_end
     mov     x0, #2
     LEAVE 256
@@ -3340,7 +3548,7 @@ LOCAL_FUNCTION app_discv5
     add     x0, x20, #DISCV5_ACT_RECORD_DATA
     ldr     x1, [x20, #DISCV5_ACT_RECORD_LEN]
     bl      app_line_base64url
-    mov     x0, #1
+    mov     x0, #APP_LOG_INFO
     bl      app_line_end
     b       80f
 72: cmp     x9, #DISCV5_ACTION_WAKEUP
@@ -3619,7 +3827,7 @@ LOCAL_FUNCTION app_api_start
     ldr     x1, [x9], #8
     mov     x0, x9
     bl      app_line_text
-    mov     x0, #1
+    mov     x0, #APP_LOG_INFO
     bl      app_line_end
     mov     x0, #0
     LEAVE 208
@@ -3634,7 +3842,7 @@ LOCAL_FUNCTION app_api_start
     bl      app_line_text
     ldr     x0, [sp, #(L + 32)]
     bl      app_line_u64
-    mov     x0, #2
+    mov     x0, #APP_LOG_ERROR
     bl      app_line_end
     mov     x0, #2
     LEAVE 208
@@ -3642,7 +3850,7 @@ LOCAL_FUNCTION app_api_start
     ADDRESS x0, app_m_memory
     mov     x1, #app_m_memory_len
     bl      app_line_text
-    mov     x0, #2
+    mov     x0, #APP_LOG_ERROR
     bl      app_line_end
     mov     x0, #2
     LEAVE 208
@@ -4086,7 +4294,7 @@ LOCAL_FUNCTION app_loop
     ldr     x0, [x19, #APP_NODE]
     ldr     x0, [x0, #Node_earliest_slot]
     bl      app_line_u64
-    mov     x0, #1
+    mov     x0, #APP_LOG_INFO
     bl      app_line_end
 3:  ldr     x9, [x19, #APP_NODE]            /* a line when the count of connected peers changes */
     ldr     x9, [x9, #(Node_peers + 8)]
@@ -4100,7 +4308,7 @@ LOCAL_FUNCTION app_loop
     bl      app_line_text
     ldr     x0, [x19, #APP_PEERS]
     bl      app_line_u64
-    mov     x0, #1
+    mov     x0, #APP_LOG_INFO
     bl      app_line_end
 4:  ldr     x9, [x19, #(APP_RESULT + 8)]    /* the wait: to the node's or discv5's wakeup, at most APP_WAIT_MS */
     ldr     x13, [x19, #APP_DV_WAKE]
@@ -4148,7 +4356,7 @@ FUNCTION lantern_app_main
     bl      app_line_text
     ldr     x0, [sp, #L]
     bl      app_line_u64
-    mov     x0, #2
+    mov     x0, #APP_LOG_ERROR
     bl      app_line_end
     mov     x0, #1
     LEAVE 16

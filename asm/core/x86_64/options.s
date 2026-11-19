@@ -87,7 +87,7 @@ END_FUNCTION app_ipv4
  * (args, options, fault): docs/reference/app.md. rbx args, rbp options, r12 fault, r13 the
  * argument count, r14 the next argument, r15 the Arg entries, S7 an option record, S8 the
  * value's start, S9 its length, S10 the argument that holds it. Locals: L the name's start,
- * L+8 its length, L+16 the option's argument.
+ * L+8 its length, L+16 the option's argument, L+24 a log level.
  */
 FUNCTION lantern_app_options
     ENTER 32
@@ -100,6 +100,7 @@ FUNCTION lantern_app_options
     movq    $APP_DEFAULT_PORT, AppOptions_port(%rbp)
     movq    $APP_DEFAULT_HTTP_PORT, AppOptions_http_port(%rbp)
     movq    $APP_DEFAULT_TARGET_PEERS, AppOptions_target_peers(%rbp)
+    movq    $APP_DEFAULT_LOG_LEVEL, AppOptions_log_level(%rbp)
     mov     (ArgList_args + 8)(%rbx), %r13
     mov     ArgList_args(%rbx), %r15
     add     %rbx, %r15
@@ -192,7 +193,9 @@ FUNCTION lantern_app_options
     mov     S9(%rsp), %rcx
     mov     %rcx, 8(%rbp,%rax)
     jmp     1b
-20: mov     S8(%rsp), %rdi                  # a number, or an address
+20: cmp     $APP_OPTION_LEVEL, %rax
+    je      24f
+    mov     S8(%rsp), %rdi                  # a number, or an address
     add     %rbx, %rdi
     mov     S9(%rsp), %rsi
     add     %rdi, %rsi
@@ -218,6 +221,24 @@ FUNCTION lantern_app_options
     mov     8(%rax), %rax
     mov     %rdx, (%rbp,%rax)
     jmp     1b
+24: movq    $0, (L + 24)(%rsp)              # a log level: one of the names of app_levels
+25: mov     (L + 24)(%rsp), %rcx
+    cmp     $4, %rcx
+    jae     90f
+    mov     S8(%rsp), %rdi
+    add     %rbx, %rdi
+    mov     S9(%rsp), %rsi
+    ADDRESS %rdx, app_levels
+    lea     (%rdx,%rcx,8), %rdx
+    ADDRESS %rax, app_level_lengths
+    movzbl  (%rax,%rcx), %ecx
+    call    config_name_is
+    test    %rax, %rax
+    jnz     26f
+    incq    (L + 24)(%rsp)
+    jmp     25b
+26: mov     (L + 24)(%rsp), %rdx
+    jmp     23b
 50: mov     %r13, S10(%rsp)                 # --network-dir is required
     cmpq    $0, (AppOptions_network_dir + 8)(%rbp)
     je      90f

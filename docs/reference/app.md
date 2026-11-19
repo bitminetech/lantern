@@ -25,7 +25,7 @@
 ## Test vectors
 
 - tests/generator/app.py: command lines with their `AppOptions`, or the argument index of their fault. File: `<preset>-phase0-app-options.bin`.
-- tests/app/start.sh and tests/app/start.ps1 (Windows): the binary of each target given a faulty option exits with 1 and its line; given a network directory with no config.yaml, it exits with 2 and a "cannot read" line. CI runs them.
+- tests/app/start.sh and tests/app/start.ps1 (Windows): the binary of each target given a faulty option exits with 1 and its ERROR line, whose time has the form of the log and today's UTC date; given a network directory with no config.yaml, it exits with 2 and a "cannot read" line. CI runs them.
 - tests/app/network.py: a network directory (config.yaml, genesis.ssz) to run the binary with, alone or beside other clients.
 - tests/app/trusted_setup.py: writes include/trusted_setup_4096.bin from the pinned spec, or with `--check` exits 1 when the file differs; the interop job of CI runs the check.
 - tests/app/devnet.sh: a devnet of ethpandaops/ethereum-package (tests/kurtosis/, at a pinned commit) of geth and one consensus client with all the validators, and the binary's image (platform/docker/Dockerfile) beside it with every consensus client's record as a boot node; lantern's head must reach slot 8, be a block of the client's chain and be within 2 slots of the client's head, at two checks a slot apart.
@@ -74,6 +74,7 @@ lantern_app_options(args, options, fault) -> status
 | `--data-dir` | `data_dir` | a directory for the node's history: the segment files of [db.md](db.md) | none: the node keeps its history in memory |
 | `--checkpoint-state` | `checkpoint_state` | a file of the SSZ bytes of a finalized `BeaconState`: the post-state of the checkpoint block | none: the node starts from `genesis.ssz` |
 | `--checkpoint-block` | `checkpoint_block` | a file of the SSZ bytes of that block's `SignedBeaconBlock` | none |
+| `--log-level` | `log_level` | `error`, `warn`, `info` or `debug`: the log lines of that level and the levels before it | `info` |
 
 - Keeps the last value of an option given twice.
 - Drops `http://` at the start of `--execution-endpoint`.
@@ -127,6 +128,11 @@ lantern_app_main(args) -> status
 - `NODE_ACT_DB_STATE`, the first of a run and then each one `DB_SEGMENT_SLOTS` slots or more after the last written: the open segment files are synced; `<dir>/anchor.tmp` gets two ByteLists, the second at the first multiple of 8 after the first: lantern_node_state_bytes of the state, then the block's message, its bytes from 100 of the `SignedBeaconBlock`; it is synced, renamed over `<dir>/anchor.ssz`, and the directory is synced. A failure gives a `cannot write` line.
 - A start with `--checkpoint-state` and `--checkpoint-block`, and no `<dir>/anchor.ssz`, takes them in place of `genesis.ssz`: the two files go into one buffer in the form of `anchor.ssz` (the state's bytes, then the block's message from byte 100 of its `SignedBeaconBlock`) for lantern_node_anchor_block of the fork of the state's slot; a block file below 184 bytes gives a line `<path>: too short`. The anchor's `history_slot` is its slot. Then a line `checkpoint at slot <n>` on the standard output.
 - A start with `--data-dir` and a `<dir>/anchor.ssz` reads it in place of `genesis.ssz` and of the checkpoint files, with lantern_node_anchor_block of the fork of its state's slot. The first block segment file there, from 0 to the anchor's segment, gives the anchor's `history_slot`; the `Db` has room from it to the last block segment file there from the anchor's on, and a segment more, with a power of two of roots above twice those slots. After lantern_node_init each segment file goes to lantern_node_db_scan, the blocks' then the sidecars', and a file with bytes after its last whole record is cut there. Then a line `restart at slot <n>` on the standard output. The node syncs the blocks after the anchor from its peers; those the `Db` holds already get no second record.
+- The log: each line is the UTC time of lantern_shell_time_ms as `YYYY-MM-DD HH:MM:SS.mmm`, a space, its level in 5 characters (`ERROR`, `WARN `, `INFO ` or `DEBUG`), a space, the message and an LF. A line goes out when its level is at most `log_level`, in the order error, warn, info, debug: ERROR and WARN lines to the standard error, INFO and DEBUG lines to the standard output.
+  - ERROR: the lines of a faulty option or a failed start, `cannot write`, and `a node step: no room`.
+  - WARN: `block <slot> not imported: result <n>` for a `NODE_WORK_IMPORT_BLOCK` whose result is neither `LANTERN_VALID` nor `LANTERN_NEED_JUSTIFIED_STATE`.
+  - INFO: the lines of the start, `checkpoint at slot`, `restart at slot`, the slot line and the `peers` line; and `block <slot> imported, <a> attestations` for a `NODE_WORK_IMPORT_BLOCK` with `LANTERN_VALID`, with the count of the event.
+  - DEBUG: `work <kind> result <n>` for each work that lantern_node_run ran, with its `NODE_WORK_*` kind and result.
 - Writes the size of its scratch buffer into the buffer's first 8 bytes before each call that takes it (ARCHITECTURE.md section 6: a callee may leave scratch invalid, and the caller reinitialises it before reuse).
 
 ### ABI
@@ -183,7 +189,8 @@ The options of a run. A text field is an [`Arg`](#type-arg) of the bytes of the 
 | 96 | `data_dir` | `Arg` | The directory of the node's history |
 | 112 | `checkpoint_state` | `Arg` | The path of the checkpoint state file |
 | 128 | `checkpoint_block` | `Arg` | The path of the checkpoint block file |
-| 144 | | | Size |
+| 144 | `log_level` | u64 | 0 error, 1 warn, 2 info, 3 debug |
+| 152 | | | Size |
 
 ## Results
 

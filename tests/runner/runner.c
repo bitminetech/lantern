@@ -6590,7 +6590,7 @@ static void run_db_index(const char *file, case_file *f) {
 /* ---------------------------------------------------------------- Application */
 
 #define INVALID_OPTION 61
-#define APP_OPTIONS_SIZE 144
+#define APP_OPTIONS_SIZE 152
 
 /*
  * app-options: lantern_app_options over each case's command line (tests/generator/app.py), as an
@@ -6602,6 +6602,7 @@ static void run_app_options(const char *file, case_file *f) {
                                   "checkpoint_block"};
     static const uint64_t text_at[] = {0, 16, 32, 48, 96, 112, 128};
     static const char *numbers[] = {"port", "enr_address", "http_port", "target_peers"};
+    static const uint64_t number_at[] = {64, 72, 80, 88, 144};
     for (uint64_t i = 0; i < f->count; i++) {
         const char *name, *why = NULL;
         uint64_t len, total = 0, alen;
@@ -6643,7 +6644,8 @@ static void run_app_options(const char *file, case_file *f) {
                 if (got != wl || !inside || (wl && memcmp(list + start, w, (size_t)wl))) why = texts[t];
             }
             for (int t = 0; t < 4 && !why; t++)
-                if (rd64(opts + 64 + 8 * t) != tv_u64(tv_get(want, numbers[t]))) why = numbers[t];
+                if (rd64(opts + number_at[t]) != tv_u64(tv_get(want, numbers[t]))) why = numbers[t];
+            if (!why && rd64(opts + number_at[4]) != tv_u64(tv_get(want, "log_level"))) why = "log_level";
         } else if (st != INVALID_OPTION) why = "status is not LANTERN_INVALID_OPTION";
         else if (fault != tv_u64(wfault)) why = "fault is not the case's index";
         report(file, name, len, !why, why);
