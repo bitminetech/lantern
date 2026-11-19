@@ -623,7 +623,8 @@
 .set Node_sidecar_floor, 720          /* with NODE_FLAG_DB: the Db holds no sidecar below this slot */
 .set Node_config, 728
 .set Node_api_identity, 728 + CONFIG_SIZE  /* ApiIdentity of the last NODE_EV_API_IDENTITY */
-.set NODE_FIXED, 728 + CONFIG_SIZE + 936
+.set Node_api, 728 + CONFIG_SIZE + 936     /* PartRef: NodeApi entries */
+.set NODE_FIXED, 728 + CONFIG_SIZE + 936 + 16
 .set NODE_LOOKUP_MS, 10000             /* the least time between two lookups of the node */
 .set NODE_STATUS_MS, 12000             /* the least time between two Status requests of node_sync */
 .set NODE_SUBSCRIBE_AHEAD, 2           /* epochs: the topics of a new ForkDigest join this early, the old ones leave this late */
@@ -776,7 +777,8 @@
 .set NodeRoom_engine_bytes, 72         /* bytes of the execution engine's answers the node holds */
 .set NodeRoom_db_slots, 80             /* a DbRoom: the slots of the Db */
 .set NodeRoom_db_roots, 88             /* its root table, a power of two */
-.set NODE_ROOM_FIELDS, 12
+.set NodeRoom_api_streams, 96          /* NodeApi entries: answers the node streams */
+.set NODE_ROOM_FIELDS, 13
 
 /* NodeStepResult: the output of lantern_node_step */
 .set NodeStepResult_accepted, 0        /* events handled, from the first */
@@ -801,7 +803,9 @@
 .set NODE_EV_ENR, 10                   /* 24 a ByteList of a node record discv5 found */
 .set NODE_EV_API, 11                   /* 16 the connection, 24 a ByteList of an HttpRequest */
 .set NODE_EV_API_IDENTITY, 12          /* 24 a ByteList of an ApiIdentity */
-.set NODE_EV_LAST, 12
+.set NODE_EV_API_SENT, 13             /* 16 the connection: the shell has room for its next chunk */
+.set NODE_EV_API_CLOSED, 14           /* 16 the connection: it closed */
+.set NODE_EV_LAST, 14
 .set NodeEvent_result, 72
 .set NodeEvent_checkpoint, 80
 .set NODE_EV_WORK_DONE_SIZE, 128
@@ -825,6 +829,8 @@
 .set NODE_ACT_API_SEND, 12             /* 16 the connection, 24 last, 32 a ByteList of the bytes */
 .set NODE_ACT_API_CLOSE, 13            /* 16 the connection */
 .set NODE_ACT_API_CLOSE_SIZE, 24
+.set NODE_ACT_STATE_BYTES, 14         /* 16 a state's id, 24 a new id: the shell keeps the state's SSZ bytes as it */
+.set NODE_ACT_STATE_BYTES_SIZE, 32
 .set NODE_DB_REF, 1 << 63              /* a BufferId of a Db record: bit 62 a sidecar segment, segment << 48, the offset below */
 .set NODE_DB_SIDECARS, 1 << 62
 .set DB_SEGMENT_SHIFT, 13              /* slot >> DB_SEGMENT_SHIFT: its segment */
@@ -857,10 +863,13 @@
 .set NODE_WORK_BLOCK_SLASHING, 17      /* a: the justified root's post-state; data: an imported block; arg: the index of an attester slashing of its body */
 .set NODE_WORK_GOSSIP_VOTE, 18         /* a: the target checkpoint state, or 0; data: a valid SignedAggregateAndProof; target: its message Handle */
 .set NODE_WORK_API_ENCODE, 19          /* a: the block's post-state; data: its bytes, a NODE_DB_REF or 0; target: the connection; arg: op + 256 * flags + 65536 * NodeBlock index */
+.set NODE_WORK_API_CHUNK, 20           /* data: the SSZ bytes, or a NODE_DB_REF; target: the connection; arg: the NodeApi index */
 .set NODE_VOTES_MAX, 130               /* MAX_ATTESTATIONS + MAX_ATTESTER_SLASHINGS: the votes of a block the node takes */
 .set NodeEvent_root, NodeEvent_checkpoint + 8  /* GOSSIP of a valid beacon_block, SYNC_BLOCK: its root; of a valid blob_sidecar, BLOB: the root of its block header */
 .set NodeEvent_index, NodeEvent_root + 32      /* GOSSIP of a valid beacon_block, SYNC_BLOCK: its blob commitments; of a valid blob_sidecar: its index */
 .set NodeEvent_chunk, NODE_EV_WORK_DONE_SIZE   /* SERVE: a ByteList of the response chunk after the WORK_DONE fields; NEW_PAYLOAD, FORKCHOICE: of the HTTP request */
+.set NodeEvent_api, NodeEvent_chunk           /* API_CHUNK: sent, flags, a JsonCursor, after the chunk */
+.set NodeEvent_api_bytes, NodeEvent_api + 616 /* API_CHUNK: a ByteList of the chunk's bytes */
 .set LANTERN_NEED_TARGET_STATE, 55     /* lantern_node_run: an attestation needs its target checkpoint state */
 .set LANTERN_INVALID_ENCODING, 56     /* lantern_node_run, the node hooks: the bytes are not an SSZ encoding of the type */
 .set LANTERN_INVALID_EVENT, 57        /* lantern_node_step: an event breaks the rules of its kind */
@@ -931,7 +940,8 @@
 .set ApiView_p2p_address, 1080           /* 128 */
 .set ApiView_discovery_address, 1216     /* 128 */
 .set ApiView_version, 1352               /* 64 */
-.set ApiView__size, 1424
+.set ApiView_head_finalized, 1424        /* 1 when head_root is the store's finalized root */
+.set ApiView__size, 1432
 .set ApiIdentity_peer_id, 0              /* ApiIdentity (beacon-api.md): texts, each a length and its room */
 .set ApiIdentity_enr, 72
 .set ApiIdentity_p2p_address, 592
@@ -941,6 +951,29 @@
 .set API_ANSWER_CLOSE, 1                 /* the answer flags of a NODE_WORK_API_ENCODE's arg, times 256 */
 .set API_ANSWER_HTTP10, 2
 .set NODE_API_SCRATCH, 8192              /* the step's scratch for a NODE_EV_API, and 4 bytes per byte of its query */
+.set NODE_API_CHUNK, 65536               /* the most bytes of a NODE_ACT_API_SEND of a stream */
+.set NODE_API_FIRST_ROOM, 1024           /* the least room for the first chunk of a stream */
+.set NodeApi_connection, 0               /* NodeApi (node.md): an answer the node streams; 0 for a free entry */
+.set NodeApi_op, 8
+.set NodeApi_flags, 16                   /* API_STREAM_* */
+.set NodeApi_data, 24                    /* the BufferId of the SSZ bytes, or a NODE_DB_REF */
+.set NodeApi_fork, 32
+.set NodeApi_sent, 40                    /* SSZ: the bytes of data sent */
+.set NodeApi_cursor, 48                  /* JSON: a JsonCursor */
+.set NodeApi__mem, 648
+.set API_STREAM_CLOSE, 1
+.set API_STREAM_HTTP10, 2
+.set API_STREAM_SSZ, 4
+.set API_STREAM_OWN, 8
+.set API_STREAM_BUSY, 16
+.set API_STREAM_GONE, 32
+.set API_STREAM_STARTED, 64
+.set API_STREAM_CHUNKED, 128
+.set API_STREAM_OPTIMISTIC, 256
+.set API_STREAM_FINALIZED, 512
+.set API_STREAM_DONE, 1024
+.set NODE_JSON_BLOCK, 0                  /* lantern_node_json: a SignedBeaconBlock */
+.set NODE_JSON_STATE, 1                  /* a BeaconState */
 
 /* HttpLimits and HttpRequest (docs/reference/beacon-api.md): lantern_http_request. */
 .set HttpLimits_head_max, 0

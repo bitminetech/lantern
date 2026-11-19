@@ -981,6 +981,8 @@ LOCAL_FUNCTION app_start
     call    lantern_copy
     LDQ     t0, s1, (APP_OPTIONS + AppOptions_target_peers)
     STQ     t0, s1, (APP_NODE_ROOM + NodeRoom_peers)
+    LDQ     t0, s1, (APP_OPTIONS + AppOptions_http_max_connections)
+    STQ     t0, s1, (APP_NODE_ROOM + NodeRoom_api_streams)
     call    app_db_start                    # the history's files
     li      t0, 1
     bne     s7, t0, 13f
@@ -1443,6 +1445,17 @@ LOCAL_FUNCTION app_work
     beq     s4, t0, 90f
     beq     s5, t0, 90f
     beq     s6, t0, 90f
+    li      t0, NODE_WORK_API_CHUNK         # API_CHUNK: room for a whole chunk
+    bne     s8, t0, 1f
+    LDQ     t0, s1, (APP_WORK_EVENT + 8)
+    li      t1, NodeEvent_api_bytes + 24 + NODE_API_CHUNK
+    bgeu    t0, t1, 1f
+    li      a0, APP_WORK_EVENT
+    call    app_unmap
+    li      a0, APP_WORK_EVENT
+    li      a1, NodeEvent_api_bytes + 24 + NODE_API_CHUNK
+    call    app_alloc
+    beqz    a0, 91f
 1:  LDQ     t0, s1, APP_WORK_EVENT          # the event's room
     LDQ     t1, s1, (APP_WORK_EVENT + 8)
     sd      t1, 0(t0)
@@ -1484,6 +1497,8 @@ LOCAL_FUNCTION app_work
     li      t0, NODE_WORK_FORKCHOICE
     beq     s8, t0, 2f
     li      t0, NODE_WORK_API_ENCODE
+    beq     s8, t0, 2f
+    li      t0, NODE_WORK_API_CHUNK
     beq     s8, t0, 2f
     li      t0, NODE_WORK_GOSSIP            # GOSSIP: the Seen, and the proposer state
     beq     s8, t0, 3f
@@ -2365,7 +2380,12 @@ LOCAL_FUNCTION app_actions
     mv      a0, s2                          # DB_STATE: anchor.ssz
     call    app_db_state
     j       8f
-10: li      t1, NODE_ACT_BYTES_PUT
+10: li      t1, NODE_ACT_STATE_BYTES
+    bne     t0, t1, 13f
+    mv      a0, s2                          # STATE_BYTES: the state's SSZ bytes
+    call    app_state_bytes
+    j       8f
+13: li      t1, NODE_ACT_BYTES_PUT
     bne     t0, t1, 2f
     addi    a0, s2, 24                      # BYTES_PUT: a copy of the ByteList
     ld      a1, 24(s2)
@@ -3931,7 +3951,8 @@ LOCAL_FUNCTION app_api_start
     call    app_alloc
     beqz    a0, 97f
     LDQ     t0, s1, (APP_OPTIONS + AppOptions_http_max_connections)
-    slli    a1, t0, 5                       # APP_API_SLOT bytes each
+    li      a1, APP_API_SLOT                # APP_API_SLOT bytes each
+    mul     a1, t0, a1
     li      a0, APP_API_SLOTS
     call    app_alloc
     beqz    a0, 97f
@@ -4057,7 +4078,8 @@ LOCAL_FUNCTION app_api_slot
     LDQ     t1, s1, (APP_OPTIONS + AppOptions_http_max_connections)
     bgeu    t0, t1, 9f
     LDQ     t1, s1, APP_API_SLOTS
-    slli    t0, t0, 5
+    li      t2, APP_API_SLOT
+    mul     t0, t0, t2
     add     t1, t1, t0
     ld      t2, 8(t1)
     beqz    t2, 9f
@@ -4140,7 +4162,8 @@ LOCAL_FUNCTION app_api_read
     ENTER 16
     mv      s7, a0
     LDQ     s4, s1, APP_API_SLOTS
-    slli    t0, s7, 5
+    li      t0, APP_API_SLOT
+    mul     t0, s7, t0
     add     s4, s4, t0
     ld      t0, 8(s4)
     li      t1, APP_API_READING
@@ -4248,8 +4271,19 @@ LOCAL_FUNCTION app_api_action
     addi    a1, s2, 56
     mv      a2, t0
     call    lantern_copy
+    ld      t0, 32(s4)                      # its bytes are in flight
+    ld      t1, 48(s2)
+    add     t0, t0, t1
+    sd      t0, 32(s4)
     ld      t0, 24(s2)                      # last: the slot reads its next request
-    beqz    t0, 99f
+    bnez    t0, 97f
+    li      t0, 1                           # else an API_SENT is owed
+    sd      t0, 40(s4)
+    mv      a0, s4
+    ld      a1, 16(s2)
+    call    app_api_due
+    j       99f
+97:
     li      t0, APP_API_READING
     sd      t0, 8(s4)
     LDQ     t0, s1, (APP_TICK + LIBP2P_TICK_NOW)
@@ -4263,6 +4297,98 @@ LOCAL_FUNCTION app_api_action
     call    app_api_close
 99: LEAVE 0
 END_FUNCTION app_api_action
+
+/* L1: a NODE_EV_API_SENT or NODE_EV_API_CLOSED (a0) of the connection a1 for the next step. Locals: the event. */
+LOCAL_FUNCTION app_api_note
+    FRAME 32
+    li      t0, 24
+    sd      t0, 0(sp)
+    sd      a0, 8(sp)
+    sd      a1, 16(sp)
+    mv      a0, sp
+    li      a1, 24
+    call    app_event_put
+    UNFRAME 32
+END_FUNCTION app_api_note
+
+/* L1: the slot a0 of the connection a1, owing an API_SENT: it goes once the slot's bytes in flight are at most APP_API_SEND_WINDOW - NODE_API_CHUNK. */
+LOCAL_FUNCTION app_api_due
+    FRAME 0
+    ld      t0, 40(a0)
+    beqz    t0, 9f
+    ld      t0, 32(a0)
+    li      t1, APP_API_SEND_WINDOW - NODE_API_CHUNK
+    bgtu    t0, t1, 9f
+    sd      zero, 40(a0)
+    li      a0, NODE_EV_API_SENT
+    call    app_api_note
+9:  UNFRAME 0
+END_FUNCTION app_api_due
+
+/*
+ * L2: the NODE_ACT_STATE_BYTES a0: lantern_node_state_bytes of the fork of the state's slot in new
+ * memory, kept as the bytes of the new id; with no memory, a ByteList of no bytes. s2 the action,
+ * s3 the state's entry, s4 the bytes' size, s5 the memory. Locals: L a ByteList, L+24 the size,
+ * L+32 the fork.
+ */
+LOCAL_FUNCTION app_state_bytes
+    ENTER 48
+    mv      s2, a0
+    ld      a0, 16(s2)
+    call    app_buf_find
+    beqz    a0, 9f
+    mv      s3, a0
+    ld      t0, 8(s3)
+    ld      a0, NODE_STATE_SLOT(t0)
+    ADDQ    a1, s1, APP_CONFIG
+    call    app_fork
+    sd      a0, (L + 32)(sp)
+    li      t0, 24                          # the size first
+    sd      t0, L(sp)
+    sd      zero, (L + 24)(sp)
+    mv      t6, a0
+    ld      a0, 8(s3)
+    SCRATCH a1
+    addi    a2, sp, L
+    addi    a3, sp, L + 24
+    FORK_CALL node_state_bytes
+    ld      s4, (L + 24)(sp)
+    li      t0, 24
+    bleu    s4, t0, 8f
+    mv      a0, s4
+    call    app_map
+    beqz    a0, 8f
+    mv      s5, a0
+    sd      s4, 0(s5)
+    ld      t6, (L + 32)(sp)
+    ld      a0, 8(s3)
+    SCRATCH a1
+    mv      a2, s5
+    addi    a3, sp, L + 24
+    FORK_CALL node_state_bytes
+    beqz    a0, 7f
+    li      t0, 24                          # no bytes
+    sd      t0, 8(s5)
+    sd      zero, 16(s5)
+7:  ld      a0, 24(s2)
+    mv      a1, s5
+    mv      a2, s4
+    call    app_buf_add
+    LEAVE 48
+8:  li      t0, 24                          # no memory: a ByteList of no bytes
+    sd      t0, L(sp)
+    sd      t0, (L + 8)(sp)
+    sd      zero, (L + 16)(sp)
+    addi    a0, sp, L
+    li      a1, 24
+    call    app_dup
+    beqz    a0, 9f
+    mv      a1, a0
+    ld      a0, 24(s2)
+    li      a2, 24
+    call    app_buf_add
+9:  LEAVE 48
+END_FUNCTION app_state_bytes
 
 /*
  * L2: the Beacon API's sockets, without waiting: ACCEPTED takes a free slot (ADOPT) or a REFUSE,
@@ -4313,6 +4439,8 @@ LOCAL_FUNCTION app_api_poll
     sd      zero, 16(s4)
     LDQ     t1, s1, (APP_TICK + LIBP2P_TICK_NOW)
     sd      t1, 24(s4)
+    sd      zero, 32(s4)                    # no bytes in flight, no API_SENT owed
+    sd      zero, 40(s4)
     slli    s6, t0, 32
     or      s6, s6, s5
     li      a0, LIBP2P_ACT_ADOPT_SIZE
@@ -4326,7 +4454,22 @@ LOCAL_FUNCTION app_api_poll
     sd      t0, LIBP2P_ACT_TOKEN(a0)
     sd      s6, (LIBP2P_ACT_TOKEN + 8)(a0)
     j       79f
-3:  li      t1, LIBP2P_EVENT_RECEIVED
+3:  li      t1, LIBP2P_EVENT_SENT           # SENT: fewer bytes in flight, and an API_SENT once owed
+    bne     t0, t1, 30f
+    ld      s6, LIBP2P_EV_CONN(s2)
+    mv      a0, s6
+    call    app_api_slot
+    beqz    a0, 79f
+    ld      t0, 32(a0)
+    ld      t1, LIBP2P_EV_COUNT(s2)
+    sub     t2, t0, t1
+    bgeu    t0, t1, 301f
+    li      t2, 0
+301: sd     t2, 32(a0)
+    mv      a1, s6
+    call    app_api_due
+    j       79f
+30: li      t1, LIBP2P_EVENT_RECEIVED
     beq     t0, t1, 31f
     li      t1, LIBP2P_EVENT_CLOSED
     bne     t0, t1, 79f
@@ -4338,7 +4481,10 @@ LOCAL_FUNCTION app_api_poll
     ld      t0, 8(s2)
     li      t1, LIBP2P_EVENT_CLOSED
     bne     t0, t1, 4f
-    sd      zero, 8(s4)                     # CLOSED: the slot is free
+    li      a0, NODE_EV_API_CLOSED          # CLOSED: the node's stream ends, and the slot is free
+    mv      a1, s6
+    call    app_api_note
+    sd      zero, 8(s4)
     sd      zero, 16(s4)
     j       79f
 4:  ld      t0, 8(s4)                       # RECEIVED, unless closing: the bytes join the buffer
@@ -4519,7 +4665,11 @@ LOCAL_FUNCTION app_loop
 32: li      t3, APP_WAIT_MS
     bltu    t2, t3, 33f
     mv      t2, t3
-33: sd      t2, (L + 8)(sp)
+33: LDQ     t0, s1, APP_EVENTS              # no wait while events wait for the next step
+    ld      t0, 16(t0)
+    beqz    t0, 34f
+    li      t2, 0
+34: sd      t2, (L + 8)(sp)
     LDQ     a0, s1, APP_SHELL
     addi    a1, sp, (L + 8)
     LDQ     a2, s1, APP_SHELL_EVENTS

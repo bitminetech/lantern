@@ -86,6 +86,7 @@ FUNCTION lantern_node_size
     NODE_SIZE_ADD peers, NodePeer__mem
     NODE_SIZE_ADD messages, NodeMessage__mem
     NODE_SIZE_ADD blobs, NodeBlob__mem
+    NODE_SIZE_ADD api_streams, NodeApi__mem
     mov     NodeRoom_p2p_out(%rdi), %rax    # a ByteList
     add     $(24 + 7), %rax
     jc      9f
@@ -150,6 +151,7 @@ LOCAL_FUNCTION node_layout
     add     %rcx, %rax
     NODE_PART messages, messages, NodeMessage__mem
     NODE_PART blobs, blobs, NodeBlob__mem
+    NODE_PART api, api_streams, NodeApi__mem
     mov     %rax, Node_p2p_out(%rdi)        # one ByteList, empty
     movq    $1, (Node_p2p_out + 8)(%rdi)
     mov     NodeRoom_p2p_out(%rsi), %rcx
@@ -361,6 +363,7 @@ FUNCTION lantern_node_copy
     NODE_COPY_ROOM streams, Node_streams
     NODE_COPY_ROOM messages, Node_messages
     NODE_COPY_ROOM blobs, Node_blobs
+    NODE_COPY_ROOM api_streams, Node_api
     mov     Node_p2p_out(%rbx), %rax        # the queued bytes fit
     mov     16(%rbx,%rax), %rax
     cmp     %rax, NodeRoom_p2p_out(%rbp)
@@ -396,6 +399,7 @@ FUNCTION lantern_node_copy
     NODE_COPY_PART Node_peers, NodePeer__mem
     NODE_COPY_PART Node_messages, NodeMessage__mem
     NODE_COPY_PART Node_blobs, NodeBlob__mem
+    NODE_COPY_PART Node_api, NodeApi__mem
     mov     Node_p2p_out(%rbx), %rsi        # the queued bytes
     add     %rbx, %rsi
     mov     16(%rsi), %rdx
@@ -524,9 +528,31 @@ LOCAL_FUNCTION node_work
     ret
 END_FUNCTION node_work
 
-/* An action of kind rdi with the two ids rsi and rdx (STATE_COPY: source, new; the FREE kinds: rsi). Uses rax, r10. */
+/*
+ * An action of kind rdi with the two ids rsi and rdx (STATE_COPY: source, new; the FREE kinds: rsi).
+ * A BYTES_FREE of bytes a NodeApi entry sends goes to the entry instead: API_STREAM_OWN. Uses rax, r10, r11.
+ */
 LOCAL_FUNCTION node_ids
     UNWIND_END_PROLOGUE
+    cmp     $NODE_ACT_BYTES_FREE, %rdi
+    jne     3f
+    PART    %rax, %r10, %rbx, Node_api
+1:  test    %r10, %r10
+    jz      3f
+    cmpq    $0, NodeApi_connection(%rax)
+    je      2f
+    cmp     %rsi, NodeApi_data(%rax)
+    jne     2f
+    mov     NodeApi_flags(%rax), %r11
+    test    $API_STREAM_OWN, %r11
+    jnz     2f                              # API_STREAM_OWN: its own bytes already
+    or      $API_STREAM_OWN, %r11
+    mov     %r11, NodeApi_flags(%rax)
+    ret
+2:  add     $NodeApi__mem, %rax
+    dec     %r10
+    jmp     1b
+3:
     mov     8(%r15), %rax
     add     %r15, %rax
     mov     16(%r15), %r10
@@ -3339,12 +3365,22 @@ LOCAL_FUNCTION node_event
     call    node_api_event
     LEAVE 48
 472: cmp    $NODE_EV_API_IDENTITY, %rax
-    jne     50f
+    jne     473f
     lea     Node_api_identity(%rbx), %rdi   # API_IDENTITY: the node keeps the texts
     mov     (NodeEvent_bytes + 8)(%r12), %rsi
     lea     NodeEvent_bytes(%r12,%rsi), %rsi
     mov     $API_IDENTITY_SIZE, %edx
     call    lantern_copy
+    LEAVE 48
+473: cmp    $NODE_EV_API_SENT, %rax
+    jne     474f
+    mov     16(%r12), %rdi                  # API_SENT: the next chunk of the connection's stream
+    call    node_api_sent
+    LEAVE 48
+474: cmp    $NODE_EV_API_CLOSED, %rax
+    jne     50f
+    mov     16(%r12), %rdi                  # API_CLOSED: the connection's stream ends
+    call    node_api_closed
     LEAVE 48
 50: mov     NodeAction_work_kind(%r12), %rax        # WORK_DONE
     mov     NodeEvent_result(%r12), %rcx
@@ -3760,9 +3796,14 @@ LOCAL_FUNCTION node_event
     movq    $0, NodeBlock_data_id(%r13)
     LEAVE 48
 701: cmp    $NODE_WORK_API_ENCODE, %rax     # API_ENCODE: the response to its connection
-    jne     70f
+    jne     702f
     mov     %r12, %rdi
     call    node_api_done
+    LEAVE 48
+702: cmp    $NODE_WORK_API_CHUNK, %rax      # API_CHUNK: the chunk to its connection
+    jne     70f
+    mov     %r12, %rdi
+    call    node_api_chunk_done
     LEAVE 48
 70: cmp     $NODE_WORK_ATTESTATION, %rax    # done with an attestation or a slashing: free its bytes
     je      71f
@@ -7575,7 +7616,12 @@ FUNCTION lantern_node_step
     lea     -1(%rdx), %rsi
     cmp     $NODE_EV_LAST, %rsi
     jae     7f
-    cmp     $NODE_EV_TICK, %rdx
+    cmp     $NODE_EV_API_SENT, %rdx         # API_SENT, API_CLOSED: the connection at 16
+    jb      11f
+    cmp     $24, %rcx
+    jb      7f
+    jmp     4f
+11: cmp     $NODE_EV_TICK, %rdx
     jne     2f
     cmp     $24, %rcx
     jb      7f
@@ -7607,6 +7653,20 @@ FUNCTION lantern_node_step
     jmp     22f
 204: cmp    $NODE_WORK_SERVE, %rsi
     je      202f
+    cmp     $NODE_WORK_API_CHUNK, %rsi      # API_CHUNK of LANTERN_VALID: its ByteList at NodeEvent_api_bytes
+    jne     207f
+    cmpq    $0, NodeEvent_result(%rdi)
+    jne     22f
+    cmp     $(NodeEvent_api_bytes + 24), %rcx
+    jb      7f
+    cmpq    $24, (NodeEvent_api_bytes + 8)(%rdi)
+    jne     7f
+    lea     -(NodeEvent_api_bytes + 24)(%rcx), %rsi
+    cmp     %rsi, (NodeEvent_api_bytes + 16)(%rdi)
+    ja      7f
+    jmp     22f
+207: cmp    $NODE_WORK_API_ENCODE, %rsi
+    je      203f
     cmp     $NODE_WORK_NEW_PAYLOAD, %rsi
     je      203f
     cmp     $NODE_WORK_FORKCHOICE, %rsi
@@ -7815,6 +7875,12 @@ FUNCTION lantern_node_step
     cmp     %rax, (Db_slots + 8)(%rsi)
     jb      93f
 56:
+    cmpq    $0, (L + 216)(%rsp)             # api: an entry free for each API event
+    je      57f
+    call    node_api_free
+    cmp     (L + 216)(%rsp), %rax
+    jb      95f
+57:
     mov     Node_peers(%rbx), %rax          # pow blocks: one for each POW_BLOCK event
     sub     Node_pow_blocks(%rbx), %rax
     xor     %edx, %edx
@@ -8041,6 +8107,8 @@ FUNCTION lantern_node_step
 93: mov     $NodeRoom_db_slots, %ecx
     jmp     82f
 94: mov     $NodeRoom_db_roots, %ecx
+    jmp     82f
+95: mov     $NodeRoom_api_streams, %ecx
     jmp     82f
 90: mov     $NodeRoom_p2p_out, %ecx
 82: mov     S7(%rsp), %rdx
@@ -8723,7 +8791,7 @@ FUNCTION lantern_node_run
     call    node_run_backfill
     LEAVE 192
 975: cmp    $NODE_WORK_API_ENCODE, %rax
-    jne     8f
+    jne     976f
     mov     %rbx, %rdi                      # API_ENCODE: the response of an answer
     mov     %rbp, %rsi
     mov     %r12, %rdx
@@ -8733,6 +8801,16 @@ FUNCTION lantern_node_run
     mov     S8(%rsp), %r10
     mov     S9(%rsp), %r11
     call    node_api_run
+    LEAVE 192
+976: cmp    $NODE_WORK_API_CHUNK, %rax
+    jne     8f
+    mov     %rbx, %rdi                      # API_CHUNK: the next chunk of a stream
+    mov     %r12, %rsi
+    mov     %r14, %rdx
+    mov     %r15, %rcx
+    mov     S8(%rsp), %r8
+    mov     S9(%rsp), %r9
+    call    node_api_chunk_run
     LEAVE 192
 8:  mov     $LANTERN_INVALID_EVENT, %eax
     LEAVE 192

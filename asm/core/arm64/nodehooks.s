@@ -251,6 +251,20 @@ SPEC_FUNCTION node_state_checkpoints
     UNFRAME 16
 SPEC_END node_state_checkpoints
 
+/* (kind, ssz, cursor, out): lantern_json_encode_ssz with the fork's SignedBeaconBlock (kind 0) or BeaconState (kind 1). */
+SPEC_FUNCTION node_json
+    FRAME 0
+    mov     x9, x0
+    mov     x0, #LANTERN_INVALID_EVENT
+    cmp     x9, #NODE_JSON_STATE
+    b.hi    9f
+    ADDRESS x0, lantern_type_SignedBeaconBlock
+    b.ne    1f
+    ADDRESS x0, lantern_type_BeaconState
+1:  CALL_GLOBAL lantern_json_encode_ssz
+9:  UNFRAME 0
+SPEC_END node_json
+
 /*
  * L0: x0 = the bytes of the SSZ default value of the type node x1 of the TypeDescriptor x0, written
  * at x2: zero bytes for a fixed size type, none for a list, the byte 1 for a bitlist, and for a

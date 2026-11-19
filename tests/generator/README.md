@@ -60,7 +60,7 @@ tests/generator/run.sh ~/.cache/lantern/vectors
 | `<preset>-phase0-api-route.bin` | Lantern's cases of lantern_api_route (beacon-api.md): the request's `method` and parts, `status`, and `out`, the whole ApiRoute, or `http_status`, `fault`, `allow` and `op` |
 | `<preset>-phase0-app-options.bin` | Lantern's cases of lantern_app_options (app.md): `args`, a command line, and `options`, the fields it gives, or `fault`, the index of its first faulty argument |
 | `<preset>-kzg_setup.bin` | One case: the three point lists of `trusted_setup_4096.json` as bytes |
-| `network/` | The network directory of the binary's start tests (tests/app/start.sh, start.ps1): tests/app/network.py of minimal and altair; made in a run with phase0 and the `app` cases |
+| `network/` | The network directory of the binary's start tests (tests/app/start.sh, start.ps1): tests/app/network.py of minimal and altair, 4096 validators at slot 0; made in a run with phase0 and the `app` cases |
 | `manifest.txt` | Each file, its case count and its SHA-256 |
 
 - `<preset>`: `mainnet` or `minimal`.

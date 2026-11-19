@@ -98,7 +98,7 @@
 .set APP_API_BODY_MAX, 1 << 20
 .set APP_API_BUFFER, APP_API_HEAD_MAX + APP_API_BODY_MAX + APP_API_HEAD_MAX  /* the bytes a slot holds */
 .set APP_API_SLOT_BYTES, 24 + APP_API_BUFFER
-.set APP_API_SLOT, 32                       /* a slot: its generation, its state, its bytes held, the time of its last bytes */
+.set APP_API_SLOT, 48                       /* a slot: its generation, its state, its bytes held, the time of its last bytes, its bytes in flight, 1 when an API_SENT is owed */
 .set APP_API_FREE, 0                        /* the states of a slot */
 .set APP_API_READING, 1                     /* no answer pending: its bytes are read */
 .set APP_API_ANSWERING, 2                   /* a NODE_EV_API went; the answer's last bytes have not */
@@ -125,8 +125,8 @@ app_builtin_config_text:
     .incbin "config.yaml"
 app_builtin_config_end:
     .p2align 3
-app_node_room:                              /* NodeRoom; peers from --target-peers */
-    .quad 1024, 64, 1, 64, 512, 8192, 1 << 20, 4096, 1024, 1 << 20, 0, 1
+app_node_room:                              /* NodeRoom; peers from --target-peers, api_streams from --http-max-connections */
+    .quad 1024, 64, 1, 64, 512, 8192, 1 << 20, 4096, 1024, 1 << 20, 0, 1, 64
 app_seen_room:                              /* SeenRoom */
     .quad 65536, 65536, 4096, 1 << 20
 app_state_room:                             /* StateRoom */

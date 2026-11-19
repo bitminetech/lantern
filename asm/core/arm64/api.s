@@ -279,6 +279,9 @@ LOCAL_FUNCTION api_body
     ldr     x0, [x22, #ApiView_is_optimistic]
     bl      api_bool
     API_LIT api_x_finalized
+    LDQ     x0, x22, ApiView_head_finalized
+    bl      api_bool
+    API_LIT api_x_data
     API_LIT api_h_root
     add     x0, x22, #ApiView_head_root
     mov     x1, #32
@@ -313,6 +316,9 @@ LOCAL_FUNCTION api_body
     ldr     x0, [x22, #ApiView_is_optimistic]
     bl      api_bool
     API_LIT api_x_finalized
+    LDQ     x0, x22, ApiView_head_finalized
+    bl      api_bool
+    API_LIT api_x_data
     API_LIT api_f_previous
     add     x0, x22, #ApiView_previous_justified
     bl      api_checkpoint
@@ -465,8 +471,30 @@ LOCAL_FUNCTION node_api_view
     ADDQ    x1, x19, Node_api_identity
     mov     x2, #API_IDENTITY_SIZE
     bl      lantern_copy
+    ldr     x0, [sp, #16]
+    bl      api_view_finalized
     UNFRAME 16
 END_FUNCTION node_api_view
+
+/* L0: ApiView_head_finalized of the view x0: 1 when its head_root is the root of the store x20's finalized checkpoint. Uses x9-x16. */
+LOCAL_FUNCTION api_view_finalized
+    UNWIND_END_PROLOGUE
+    add     x9, x0, #ApiView_head_root
+    add     x10, x20, #(Store_finalized_checkpoint + 8)
+    mov     x13, #0
+    ldp     x11, x12, [x9]
+    ldp     x14, x15, [x10]
+    cmp     x11, x14
+    ccmp    x12, x15, #0, eq
+    b.ne    1f
+    ldp     x11, x12, [x9, #16]
+    ldp     x14, x15, [x10, #16]
+    cmp     x11, x14
+    ccmp    x12, x15, #0, eq
+    cset    x13, eq
+1:  STQ     x13, x0, ApiView_head_finalized
+    ret
+END_FUNCTION api_view_finalized
 
 /* L0: the 32 bytes at x1 to x0. Uses x16, x17. */
 LOCAL_FUNCTION lantern_copy_root
@@ -576,7 +604,9 @@ LOCAL_FUNCTION node_api_check
 4:  mov     x0, #0
     mov     x1, #0
     ret
-5:  cmp     x10, #HTTP_REQUEST_FIXED        /* API: an HttpRequest of the count's size */
+5:  ldr     x12, [x0, #16]                  /* API: a connection, not 0 */
+    cbz     x12, 8f
+    cmp     x10, #HTTP_REQUEST_FIXED        /* an HttpRequest of the count's size */
     b.lo    8f
     tst     x10, #7
     b.ne    8f
@@ -714,7 +744,7 @@ LOCAL_FUNCTION node_api_event
     b.ne    80f
     b       60f
 5:  cmp     x3, #API_OP_GET_BLOCK_HEADER
-    b.ne    7f
+    b.ne    62f
     ldr     x9, [x25, #ApiRoute_id_kind]    /* headers: of head, or of the head's root */
     cmp     x9, #API_ID_HEAD
     b.eq    60f
@@ -759,6 +789,44 @@ LOCAL_FUNCTION node_api_event
     mov     x4, x27
     bl      node_work
     b       90f
+62: cmp     x3, #API_OP_GET_STATE_V2         /* getStateV2: of head */
+    b.ne    63f
+    ldr     x9, [x25, #ApiRoute_id_kind]
+    cmp     x9, #API_ID_HEAD
+    b.ne    80f
+    b       64f
+63: cmp     x3, #API_OP_GET_BLOCK_V2         /* getBlockV2: of head, or of the head's root */
+    b.ne    7f
+    ldr     x9, [x25, #ApiRoute_id_kind]
+    cmp     x9, #API_ID_HEAD
+    b.eq    64f
+    cmp     x9, #API_ID_ROOT
+    b.ne    80f
+    add     x0, x25, #ApiRoute_id_root
+    add     x1, x19, #Node_head_root
+    ldp     x9, x10, [x0]
+    ldp     x11, x12, [x1]
+    cmp     x9, x11
+    ccmp    x10, x12, #0, eq
+    b.ne    80f
+    ldp     x9, x10, [x0, #16]
+    ldp     x11, x12, [x1, #16]
+    cmp     x9, x11
+    ccmp    x10, x12, #0, eq
+    b.ne    80f
+64: mov     x0, x27                         /* a stream of the answer */
+    mov     x1, x25
+    tst     x28, #API_R_CLOSE
+    cset    x2, ne
+    ldr     x9, [x22, #HttpRequest_version]
+    cmp     x9, #10
+    cset    x9, eq
+    orr     x2, x2, x9, lsl #1
+    mov     x3, x26
+    bl      node_api_stream
+    cbz     x0, 90f
+    mov     x2, x0
+    b       80f
 7:  mov     x2, #501                        /* another operation */
 80: mov     x3, #API_BODY_ERROR
 81: mov     x0, x27
@@ -873,6 +941,8 @@ LOCAL_FUNCTION node_api_run
     cmp     x9, #PAYLOAD_STATUS_NOT_VALIDATED
     cset    x9, eq
     str     x9, [x26, #ApiView_is_optimistic]
+    mov     x0, x26
+    bl      api_view_finalized
     ldr     x9, [x21, #NodeAction_arg]
     and     x9, x9, #255
     cmp     x9, #API_OP_GET_STATE_FINALITY_CHECKPOINTS
@@ -971,6 +1041,618 @@ LOCAL_FUNCTION node_api_run
 7:  mov     x0, #LANTERN_BUFFER_TOO_SMALL
     LEAVE 16
 END_FUNCTION node_api_run
+
+/* ---------------------------------------------------------------- Streams (node.md, NodeApi) */
+
+/* L0: x0 = the free NodeApi entries of the node x19: the capacity past the count, and the free ones below it. Uses x9-x12, x16. */
+LOCAL_FUNCTION node_api_free
+    UNWIND_END_PROLOGUE
+    PART    x9, x10, x19, Node_api
+    LDQ     x11, x19, Node_p2p_out
+    LDQ     x12, x19, Node_api
+    sub     x11, x11, x12
+    mov     x12, #NodeApi__mem
+    udiv    x0, x11, x12
+    sub     x0, x0, x10
+1:  cbz     x10, 9f
+    ldr     x11, [x9, #NodeApi_connection]
+    cmp     x11, #0
+    cinc    x0, x0, eq
+    add     x9, x9, #NodeApi__mem
+    sub     x10, x10, #1
+    b       1b
+9:  ret
+END_FUNCTION node_api_free
+
+/* L0: x0 = the index of the NodeApi entry of the connection x0, or 2^64 - 1; x1 = the entry. Uses x9-x12, x16. */
+LOCAL_FUNCTION node_api_find
+    UNWIND_END_PROLOGUE
+    PART    x9, x10, x19, Node_api
+    mov     x11, #0
+    cbz     x0, 3f
+1:  cmp     x11, x10
+    b.hs    3f
+    ldr     x12, [x9, #NodeApi_connection]
+    cmp     x12, x0
+    b.eq    4f
+    add     x9, x9, #NodeApi__mem
+    add     x11, x11, #1
+    b       1b
+3:  mov     x0, #-1
+    ret
+4:  mov     x0, x11
+    mov     x1, x9
+    ret
+END_FUNCTION node_api_find
+
+/* L0: x0 = the index of a free NodeApi entry (the first free, else the next; the step checked one is free), x1 = the entry. Uses x9-x12, x16. */
+LOCAL_FUNCTION node_api_new
+    UNWIND_END_PROLOGUE
+    PART    x9, x10, x19, Node_api
+    mov     x11, #0
+1:  cmp     x11, x10
+    b.hs    2f
+    ldr     x12, [x9, #NodeApi_connection]
+    cbz     x12, 3f
+    add     x9, x9, #NodeApi__mem
+    add     x11, x11, #1
+    b       1b
+2:  add     x10, x10, #1
+    STQ     x10, x19, Node_api + 8
+3:  mov     x0, x11
+    mov     x1, x9
+    ret
+END_FUNCTION node_api_new
+
+/*
+ * L1: the end of the stream of the NodeApi entry x0: the entry is free, the api part's count drops
+ * past the free entries at its end; with API_STREAM_OWN, a BYTES_FREE of its data, which node_ids
+ * gives to another entry that sends the same bytes. Locals: L data, L+8 flags.
+ */
+LOCAL_FUNCTION node_api_end
+    FRAME 32
+    ldp     x9, x10, [x0, #NodeApi_flags]
+    stp     x10, x9, [sp, #16]
+    str     xzr, [x0, #NodeApi_connection]
+    PART    x9, x10, x19, Node_api
+1:  cbz     x10, 2f
+    sub     x11, x10, #1
+    mov     x12, #NodeApi__mem
+    madd    x12, x11, x12, x9
+    ldr     x12, [x12, #NodeApi_connection]
+    cbnz    x12, 2f
+    mov     x10, x11
+    b       1b
+2:  STQ     x10, x19, Node_api + 8
+    ldr     x9, [sp, #24]
+    tbz     x9, #3, 9f                      /* API_STREAM_OWN */
+    mov     x0, #NODE_ACT_BYTES_FREE
+    ldr     x1, [sp, #16]
+    mov     x2, #0
+    bl      node_ids
+9:  UNFRAME 32
+END_FUNCTION node_api_end
+
+/* L1: a NODE_WORK_API_CHUNK of the NodeApi entry x1 at index x0, which takes API_STREAM_BUSY. */
+LOCAL_FUNCTION node_api_chunk_work
+    FRAME 0
+    ldr     x9, [x1, #NodeApi_flags]
+    orr     x9, x9, #API_STREAM_BUSY
+    str     x9, [x1, #NodeApi_flags]
+    mov     x5, x0
+    ldr     x3, [x1, #NodeApi_data]
+    ldr     x4, [x1, #NodeApi_connection]
+    mov     x0, #NODE_WORK_API_CHUNK
+    mov     x1, #0
+    mov     x2, #0
+    bl      node_work
+    UNFRAME 0
+END_FUNCTION node_api_chunk_work
+
+/* L1: NODE_EV_API_SENT of the connection x0: the next chunk of its stream, unless one is queued. */
+LOCAL_FUNCTION node_api_sent
+    FRAME 0
+    bl      node_api_find
+    cmn     x0, #1
+    b.eq    9f
+    ldr     x9, [x1, #NodeApi_flags]
+    tbnz    x9, #4, 9f                      /* API_STREAM_BUSY */
+    bl      node_api_chunk_work
+9:  UNFRAME 0
+END_FUNCTION node_api_sent
+
+/* L1: NODE_EV_API_CLOSED of the connection x0: its stream ends, or with a chunk queued takes API_STREAM_GONE. */
+LOCAL_FUNCTION node_api_closed
+    FRAME 0
+    bl      node_api_find
+    cmn     x0, #1
+    b.eq    9f
+    ldr     x9, [x1, #NodeApi_flags]
+    tbz     x9, #4, 1f
+    orr     x9, x9, #API_STREAM_GONE
+    str     x9, [x1, #NodeApi_flags]
+    b       9f
+1:  mov     x0, x1
+    bl      node_api_end
+9:  UNFRAME 0
+END_FUNCTION node_api_closed
+
+/*
+ * L2: (connection x0, route x1, flags x2, view x3) -> x0: a stream of getBlockV2 or getStateV2 of
+ * the head (node.md, NODE_EV_API): 0 once it started, else the status of the error to answer.
+ * flags: API_STREAM_CLOSE and API_STREAM_HTTP10. x19 the node, x24 the actions. x21 the data,
+ * x22 the head's entry, x25 the route, x26 the view, x27 the connection, x28 the flags. Locals:
+ * L the entry's index, L+8 the entry.
+ */
+LOCAL_FUNCTION node_api_stream
+    ENTER 16
+    mov     x27, x0
+    mov     x25, x1
+    mov     x28, x2
+    mov     x26, x3
+    add     x0, x19, #Node_head_root
+    bl      node_find_block
+    cmn     x0, #1
+    b.eq    80f
+    mov     x22, x1
+    ldr     x9, [x25, #ApiRoute_response]   /* SSZ, else JSON; the values of the JSON */
+    cmp     x9, #API_TYPE_SSZ
+    b.ne    1f
+    orr     x28, x28, #API_STREAM_SSZ
+1:  ldr     x9, [x26, #ApiView_is_optimistic]
+    cbz     x9, 2f
+    orr     x28, x28, #API_STREAM_OPTIMISTIC
+2:  LDQ     x9, x26, ApiView_head_finalized
+    cbz     x9, 3f
+    orr     x28, x28, #API_STREAM_FINALIZED
+3:  ldr     x9, [x25, #ApiRoute_op]
+    cmp     x9, #API_OP_GET_STATE_V2
+    b.eq    5f
+    ldr     x21, [x22, #NodeBlock_data_id]  /* getBlockV2: the head's bytes, or its Db record */
+    cbnz    x21, 6f
+    mov     x0, x22
+    bl      node_api_db_ref
+    mov     x21, x0
+    cbz     x21, 80f
+    b       6f
+5:  ldr     x9, [x22, #NodeBlock_state_id]  /* getStateV2: the post-state's SSZ bytes, as a new id the stream owns */
+    cbz     x9, 80f
+    bl      node_new_id
+    mov     x21, x0
+    mov     x0, #NODE_ACT_STATE_BYTES
+    mov     x1, #NODE_ACT_STATE_BYTES_SIZE
+    bl      node_act
+    ldr     x9, [x22, #NodeBlock_state_id]
+    stp     x9, x21, [x0, #16]
+    orr     x28, x28, #API_STREAM_OWN
+6:  bl      node_api_new                    /* the entry */
+    stp     x0, x1, [sp, #L]
+    mov     x0, x1
+    mov     x1, #NodeApi__mem
+    bl      lantern_zero
+    ldr     x0, [x22, #NodeBlock_slot]
+    add     x1, x19, #Node_config
+    bl      node_fork
+    ldr     x1, [sp, #(L + 8)]
+    str     x0, [x1, #NodeApi_fork]
+    str     x27, [x1, #NodeApi_connection]
+    ldr     x9, [x25, #ApiRoute_op]
+    str     x9, [x1, #NodeApi_op]
+    stp     x28, x21, [x1, #NodeApi_flags]
+    ldr     x0, [sp, #L]
+    bl      node_api_chunk_work
+    mov     x0, #0
+    LEAVE 16
+80: mov     x0, #404
+    LEAVE 16
+END_FUNCTION node_api_stream
+
+/*
+ * L2: the NODE_EV_WORK_DONE x0 of a NODE_WORK_API_CHUNK (node.md, lantern_node_step). x19 the
+ * node, x24 the actions. x21 the event, x22 the entry, x23 the action, x25 the flags.
+ */
+LOCAL_FUNCTION node_api_chunk_done
+    ENTER 0
+    mov     x21, x0
+    ldr     x9, [x21, #NodeAction_arg]
+    PART    x10, x11, x19, Node_api
+    cmp     x9, x11
+    b.hs    99f
+    mov     x12, #NodeApi__mem
+    madd    x22, x9, x12, x10
+    ldr     x9, [x22, #NodeApi_connection]
+    cbz     x9, 99f
+    ldr     x10, [x21, #NodeAction_target]
+    cmp     x9, x10
+    b.ne    99f
+    ldr     x25, [x22, #NodeApi_flags]
+    and     x25, x25, #~API_STREAM_BUSY
+    str     x25, [x22, #NodeApi_flags]
+    tbnz    x25, #5, 90f                    /* API_STREAM_GONE: the stream ends */
+    ldr     x10, [x21, #NodeEvent_result]
+    cbnz    x10, 50f
+    ldr     x9, [x21, #NodeEvent_api]       /* valid: the entry takes sent, flags and cursor */
+    str     x9, [x22, #NodeApi_sent]
+    ldr     x9, [x21, #(NodeEvent_api + 8)]
+    and     x9, x9, #~(API_STREAM_BUSY | API_STREAM_OWN)
+    and     x10, x25, #API_STREAM_OWN
+    orr     x25, x9, x10
+    str     x25, [x22, #NodeApi_flags]
+    add     x0, x22, #NodeApi_cursor
+    add     x1, x21, #(NodeEvent_api + 16)
+    mov     x2, #JSON_CURSOR_SIZE
+    bl      lantern_copy
+    ldr     x9, [x21, #(NodeEvent_api_bytes + 16)]  /* the chunk in a SEND */
+    add     x1, x9, #(56 + 7)
+    and     x1, x1, #~7
+    mov     x0, #NODE_ACT_API_SEND
+    bl      node_act
+    mov     x23, x0
+    ldr     x9, [x22, #NodeApi_connection]
+    ubfx    x10, x25, #10, #1               /* last: API_STREAM_DONE */
+    stp     x9, x10, [x23, #16]
+    ldr     x9, [x23]
+    sub     x9, x9, #32
+    mov     x10, #24
+    stp     x9, x10, [x23, #32]
+    ldr     x2, [x21, #(NodeEvent_api_bytes + 16)]
+    str     x2, [x23, #48]
+    add     x0, x23, #56
+    ldr     x9, [x21, #(NodeEvent_api_bytes + 8)]
+    add     x1, x21, #NodeEvent_api_bytes
+    add     x1, x1, x9
+    bl      lantern_copy
+    ldr     x9, [x23, #48]                  /* zero bytes to the size */
+    add     x0, x23, #56
+    add     x0, x0, x9
+    ldr     x10, [x23]
+    sub     x1, x10, #56
+    sub     x1, x1, x9
+    bl      lantern_zero
+    tbz     x25, #10, 99f                   /* not the last: the next chunk at the next API_SENT */
+    tbz     x25, #0, 90f                    /* API_STREAM_CLOSE: a CLOSE after it */
+    b       60f
+50: tbnz    x25, #6, 60f                    /* another result: before API_STREAM_STARTED the error 500, after it a CLOSE */
+    ldr     x0, [x22, #NodeApi_connection]
+    mov     x1, #0
+    mov     x2, #500
+    mov     x3, #API_BODY_ERROR
+    and     x4, x25, #API_R_CLOSE           /* API_STREAM_CLOSE is API_R_CLOSE; HTTP/1.0 kept open says so */
+    cbnz    x4, 51f
+    tst     x25, #API_STREAM_HTTP10
+    mov     x9, #API_R_KEEP
+    csel    x4, x9, xzr, ne
+51: bl      node_api_send
+    b       90f
+60: mov     x0, #NODE_ACT_API_CLOSE
+    mov     x1, #NODE_ACT_API_CLOSE_SIZE
+    bl      node_act
+    ldr     x9, [x22, #NodeApi_connection]
+    str     x9, [x0, #16]
+90: mov     x0, x22
+    bl      node_api_end
+99: LEAVE 0
+END_FUNCTION node_api_chunk_done
+
+/* L1: the name of the fork x0 joins the response. */
+LOCAL_FUNCTION api_fork_name
+    FRAME 0
+    ADDRESS x9, api_forks
+    add     x9, x9, x0, lsl #4
+    ldrb    w1, [x9], #1
+    mov     x0, x9
+    bl      api_put
+    UNFRAME 0
+END_FUNCTION api_fork_name
+
+/*
+ * L1: the head of a streamed answer (beacon-api.md, Common rules) for the flags at
+ * NodeEvent_api + 8 of the event x23 and the fork of the entry x22: with Content-Length x0, or
+ * for x0 = 2^64 - 1 Transfer-Encoding: chunked when API_STREAM_CHUNKED is set, else neither.
+ * Locals: x0.
+ */
+LOCAL_FUNCTION api_stream_head
+    FRAME 16
+    str     x0, [sp, #16]
+    API_LIT api_ok
+    ldr     x9, [x23, #(NodeEvent_api + 8)]
+    tbz     x9, #2, 1f
+    API_LIT api_octet
+    b       2f
+1:  API_LIT api_type
+2:  API_LIT api_version
+    ldr     x0, [x22, #NodeApi_fork]
+    bl      api_fork_name
+    API_LIT api_crlf
+    ldr     x0, [sp, #16]
+    cmn     x0, #1
+    b.eq    3f
+    API_LIT api_length
+    ldr     x0, [sp, #16]
+    bl      api_dec
+    API_LIT api_crlf
+    b       4f
+3:  ldr     x9, [x23, #(NodeEvent_api + 8)]
+    tbz     x9, #7, 4f
+    API_LIT api_chunked
+4:  ldr     x9, [x23, #(NodeEvent_api + 8)]
+    tbz     x9, #0, 5f
+    API_LIT api_close
+    b       6f
+5:  tbz     x9, #1, 6f
+    API_LIT api_keep
+6:  API_LIT api_crlf
+    UNFRAME 16
+END_FUNCTION api_stream_head
+
+/* L0: the 4 lower case hex digits of x0 at x1. Uses x9, x10. */
+LOCAL_FUNCTION api_hex4
+    UNWIND_END_PROLOGUE
+    ADDRESS x9, api_hex
+    ubfx    x10, x0, #12, #4
+    ldrb    w10, [x9, x10]
+    strb    w10, [x1]
+    ubfx    x10, x0, #8, #4
+    ldrb    w10, [x9, x10]
+    strb    w10, [x1, #1]
+    ubfx    x10, x0, #4, #4
+    ldrb    w10, [x9, x10]
+    strb    w10, [x1, #2]
+    and     x10, x0, #15
+    ldrb    w10, [x9, x10]
+    strb    w10, [x1, #3]
+    ret
+END_FUNCTION api_hex4
+
+/*
+ * L1: the JSON of the entry x22's SSZ bytes x21 from the cursor at NodeEvent_api + 16 of the event
+ * x23, at the writer's cursor x24 up to x26 less a byte, through the event's ByteList at
+ * NodeEvent_api_bytes whose bytes start at x28; then } once it is whole. x0 = 1 when whole, 0
+ * when more is to come, 2 for bytes that are no encoding.
+ */
+LOCAL_FUNCTION api_stream_json
+    FRAME 0
+    add     x9, x23, #NodeEvent_api_bytes   /* the ByteList: its room to x26 - 1, its bytes to x24 */
+    sub     x10, x26, #1
+    sub     x10, x10, x9
+    mov     x11, #24
+    stp     x10, x11, [x9]
+    sub     x10, x24, x28
+    str     x10, [x9, #16]
+    ldr     x9, [x22, #NodeApi_op]
+    cmp     x9, #API_OP_GET_STATE_V2
+    cset    x0, eq                          /* NODE_JSON_STATE, else NODE_JSON_BLOCK */
+    mov     x1, x21
+    add     x2, x23, #(NodeEvent_api + 16)
+    add     x3, x23, #NodeEvent_api_bytes
+    ldr     x15, [x22, #NodeApi_fork]
+    FORK_CALL node_json
+    ldr     x9, [x23, #(NodeEvent_api_bytes + 16)]
+    add     x24, x28, x9
+    cmp     x0, #LANTERN_JSON_MORE
+    b.eq    8f
+    cbnz    x0, 7f
+    API_LIT api_end1
+    mov     x0, #1
+    UNFRAME 0
+7:  mov     x0, #2
+    UNFRAME 0
+8:  mov     x0, #0
+    UNFRAME 0
+END_FUNCTION api_stream_json
+
+/*
+ * (node, work, data, scratch, event, room) -> status: a NODE_WORK_API_CHUNK of lantern_node_run
+ * (node.md): the next chunk of the NodeApi entry at the work's arg, from the SSZ bytes in data,
+ * at NodeEvent_api of the event, whose buffer has room bytes. x19 the node, x20 the work, x21
+ * data, x22 the entry, x23 the event; the writer's x24-x27 (api_put); x28 where the chunk's bytes
+ * start. Locals: L the end of the chunk's room, L+8 the SSZ bytes, L+16 their count, L+24 the
+ * body's start, L+32 the head's bytes.
+ */
+LOCAL_FUNCTION node_api_chunk_run
+    ENTER 48
+    mov     x19, x0
+    mov     x20, x1
+    mov     x21, x2
+    mov     x23, x4
+    ldr     x9, [x20, #NodeAction_arg]      /* the entry */
+    PART    x10, x11, x19, Node_api
+    cmp     x9, x11
+    b.hs    98f
+    mov     x12, #NodeApi__mem
+    madd    x22, x9, x12, x10
+    ldr     x9, [x22, #NodeApi_connection]
+    cbz     x9, 98f
+    ldr     x9, [x22, #NodeApi_op]
+    cmp     x9, #API_OP_GET_BLOCK_V2
+    b.eq    1f
+    cmp     x9, #API_OP_GET_STATE_V2
+    b.ne    98f
+1:
+    cbz     x21, 98f
+    mov     x9, #(NodeEvent_api_bytes + 24) /* the chunk's room: at most NODE_API_CHUNK */
+    subs    x10, x5, x9
+    b.lo    97f
+    and     x10, x10, #~7
+    MOVQ    x11, NODE_API_CHUNK
+    cmp     x10, x11
+    csel    x10, x11, x10, hi
+    ldr     x9, [x22, #NodeApi_flags]
+    tst     x9, #API_STREAM_STARTED
+    mov     x11, #NODE_API_FIRST_ROOM
+    mov     x12, #64
+    csel    x11, x12, x11, ne
+    cmp     x10, x11
+    b.lo    97f
+    add     x28, x23, #(NodeEvent_api_bytes + 24)
+    add     x9, x28, x10
+    str     x9, [sp, #L]
+    ldr     x9, [x21, #8]                   /* the SSZ bytes */
+    add     x9, x21, x9
+    ldr     x10, [x21, #16]
+    stp     x9, x10, [sp, #(L + 8)]
+    cbz     x10, 96f
+    ldr     x9, [x22, #NodeApi_sent]        /* the entry's sent, flags and cursor go on in the event */
+    str     x9, [x23, #NodeEvent_api]
+    ldr     x9, [x22, #NodeApi_flags]
+    str     x9, [x23, #(NodeEvent_api + 8)]
+    add     x0, x23, #(NodeEvent_api + 16)
+    add     x1, x22, #NodeApi_cursor
+    mov     x2, #JSON_CURSOR_SIZE
+    bl      lantern_copy
+    mov     x24, x28                        /* the writer */
+    mov     x25, #1
+    ldr     x26, [sp, #L]
+    mov     x27, #0
+    ldr     x9, [x23, #(NodeEvent_api + 8)]
+    tbz     x9, #2, 30f
+    tbnz    x9, #6, 11f                     /* SSZ: the head first, with Content-Length */
+    ldr     x0, [sp, #(L + 16)]
+    bl      api_stream_head
+11: ldp     x1, x10, [sp, #(L + 8)]         /* then the bytes from sent, as many as fit */
+    ldr     x9, [x23, #NodeEvent_api]
+    sub     x2, x10, x9
+    sub     x11, x26, x24
+    cmp     x2, x11
+    csel    x2, x11, x2, hi
+    add     x1, x1, x9
+    add     x9, x9, x2
+    str     x9, [x23, #NodeEvent_api]
+    mov     x0, x24
+    add     x24, x24, x2
+    bl      lantern_copy
+    ldr     x9, [x23, #NodeEvent_api]
+    ldr     x10, [sp, #(L + 16)]
+    ldr     x11, [x23, #(NodeEvent_api + 8)]
+    orr     x11, x11, #API_STREAM_STARTED
+    cmp     x9, x10
+    b.ne    12f
+    orr     x11, x11, #API_STREAM_DONE
+12: str     x11, [x23, #(NodeEvent_api + 8)]
+    b       80f
+30: tbnz    x9, #6, 40f                     /* JSON, the first chunk: the body after room for the head */
+    add     x24, x28, #API_HEAD_ROOM
+    str     x24, [sp, #(L + 24)]
+    ldr     x9, [sp, #L]
+    sub     x26, x9, #7                     /* room for CRLF and the last chunk */
+    /* {"version":"<fork>","execution_optimistic":…,"finalized":…,"data": */
+    API_LIT api_j_version
+    ldr     x0, [x22, #NodeApi_fork]
+    bl      api_fork_name
+    API_LIT api_j_optimistic
+    ldr     x9, [x23, #(NodeEvent_api + 8)]
+    ubfx    x0, x9, #8, #1
+    bl      api_bool
+    API_LIT api_x_finalized
+    ldr     x9, [x23, #(NodeEvent_api + 8)]
+    ubfx    x0, x9, #9, #1
+    bl      api_bool
+    API_LIT api_j_data
+    bl      api_stream_json
+    cmp     x0, #2
+    b.eq    96f
+    ldr     x9, [x23, #(NodeEvent_api + 8)]
+    orr     x9, x9, #API_STREAM_STARTED
+    mov     x10, #-1                        /* not whole: chunked, or for HTTP/1.0 no length and a close */
+    cbz     x0, 31f
+    orr     x9, x9, #API_STREAM_DONE        /* whole: Content-Length */
+    ldr     x10, [sp, #(L + 24)]
+    sub     x10, x24, x10
+    b       33f
+31: tst     x9, #API_STREAM_HTTP10
+    b.eq    32f
+    orr     x9, x9, #API_STREAM_CLOSE
+    b       33f
+32: orr     x9, x9, #API_STREAM_CHUNKED
+33: str     x9, [x23, #(NodeEvent_api + 8)]
+    str     x10, [sp, #(L + 32)]
+    ldr     x9, [sp, #(L + 24)]             /* the body's bytes */
+    sub     x9, x24, x9
+    str     x9, [sp, #(L + 16)]
+    mov     x25, #0                         /* the head's bytes: a pass that counts */
+    mov     x24, #0
+    ldr     x0, [sp, #(L + 32)]
+    bl      api_stream_head
+    add     x0, x28, x24                    /* the body after the head, and a size line when chunked */
+    ldr     x9, [x23, #(NodeEvent_api + 8)]
+    tst     x9, #API_STREAM_CHUNKED
+    add     x10, x0, #6
+    csel    x0, x10, x0, ne
+    ldr     x1, [sp, #(L + 24)]
+    ldr     x2, [sp, #(L + 16)]
+    add     x9, x0, x2
+    str     x9, [sp, #(L + 24)]             /* now the body's end */
+    bl      lantern_copy
+    mov     x25, #1                         /* the head */
+    mov     x24, x28
+    ldr     x26, [sp, #L]
+    ldr     x0, [sp, #(L + 32)]
+    bl      api_stream_head
+    ldr     x9, [x23, #(NodeEvent_api + 8)]
+    tbz     x9, #7, 34f
+    ldr     x0, [sp, #(L + 16)]             /* chunked: the size line, then CRLF after the bytes */
+    mov     x1, x24
+    bl      api_hex4
+    mov     w9, #0x0a0d
+    strh    w9, [x24, #4]
+    ldr     x24, [sp, #(L + 24)]
+    API_LIT api_crlf
+    b       80f
+34: ldr     x24, [sp, #(L + 24)]
+    b       80f
+40: tbz     x9, #7, 45f                     /* JSON, a later chunk; chunked: a size line, the bytes, CRLF */
+    add     x24, x28, #6
+    ldr     x9, [sp, #L]
+    sub     x26, x9, #7
+    bl      api_stream_json
+    cmp     x0, #2
+    b.eq    96f
+    str     x0, [sp, #(L + 32)]
+    sub     x0, x24, x28
+    sub     x0, x0, #6
+    mov     x1, x28
+    bl      api_hex4
+    mov     w9, #0x0a0d
+    strh    w9, [x28, #4]
+    ldr     x26, [sp, #L]
+    API_LIT api_crlf
+    ldr     x9, [sp, #(L + 32)]
+    cbz     x9, 80f
+    API_LIT api_last_chunk
+    b       44f
+45: bl      api_stream_json                 /* HTTP/1.0: the bytes alone */
+    cmp     x0, #2
+    b.eq    96f
+    cbz     x0, 80f
+44: ldr     x9, [x23, #(NodeEvent_api + 8)]
+    orr     x9, x9, #API_STREAM_DONE
+    str     x9, [x23, #(NodeEvent_api + 8)]
+80: sub     x9, x24, x28                    /* the chunk's ByteList; the event's size covers it */
+    add     x10, x9, #(24 + 7)
+    and     x10, x10, #~7
+    add     x11, x23, #NodeEvent_api_bytes
+    mov     x12, #24
+    stp     x10, x12, [x11]
+    str     x9, [x11, #16]
+    add     x12, x10, #NodeEvent_api_bytes
+    str     x12, [x23]
+    mov     x0, x24
+    sub     x1, x10, #24
+    sub     x1, x1, x9
+    bl      lantern_zero
+    mov     x0, #LANTERN_OK
+    LEAVE 48
+96: mov     x9, #LANTERN_INVALID_ENCODING   /* bytes that are no encoding of the type */
+    str     x9, [x23, #NodeEvent_result]
+    mov     x9, #NODE_EV_WORK_DONE_SIZE
+    str     x9, [x23]
+    mov     x0, #LANTERN_OK
+    LEAVE 48
+97: mov     x0, #LANTERN_BUFFER_TOO_SMALL
+    LEAVE 48
+98: mov     x0, #LANTERN_INVALID_EVENT
+    LEAVE 48
+END_FUNCTION node_api_chunk_run
 
     RODATA
     .p2align 3

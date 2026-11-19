@@ -989,6 +989,8 @@ LOCAL_FUNCTION app_start
     call    lantern_copy
     mov     (APP_OPTIONS + AppOptions_target_peers)(%rbx), %rax
     mov     %rax, (APP_NODE_ROOM + NodeRoom_peers)(%rbx)
+    mov     (APP_OPTIONS + AppOptions_http_max_connections)(%rbx), %rax
+    mov     %rax, (APP_NODE_ROOM + NodeRoom_api_streams)(%rbx)
     call    app_db_start                    # the history's files
     cmpq    $1, S7(%rsp)
     jne     13f
@@ -1464,6 +1466,17 @@ LOCAL_FUNCTION app_work
     je      90f
     cmp     $-1, %r15
     je      90f
+    cmpq    $NODE_WORK_API_CHUNK, S8(%rsp)  # API_CHUNK: room for a whole chunk
+    jne     1f
+    cmpq    $(NodeEvent_api_bytes + 24 + NODE_API_CHUNK), (APP_WORK_EVENT + 8)(%rbx)
+    jae     1f
+    mov     $APP_WORK_EVENT, %edi
+    call    app_unmap
+    mov     $APP_WORK_EVENT, %edi
+    mov     $(NodeEvent_api_bytes + 24 + NODE_API_CHUNK), %esi
+    call    app_alloc
+    test    %rax, %rax
+    jz      91f
 1:  mov     APP_WORK_EVENT(%rbx), %rax      # the event's room
     mov     (APP_WORK_EVENT + 8)(%rbx), %rcx
     mov     %rcx, (%rax)
@@ -1513,6 +1526,8 @@ LOCAL_FUNCTION app_work
     cmp     $NODE_WORK_FORKCHOICE, %rcx
     je      2f
     cmp     $NODE_WORK_API_ENCODE, %rcx
+    je      2f
+    cmp     $NODE_WORK_API_CHUNK, %rcx
     je      2f
     cmp     $NODE_WORK_GOSSIP, %rcx         # GOSSIP: the Seen, and the proposer state
     je      3f
@@ -2384,7 +2399,12 @@ LOCAL_FUNCTION app_actions
     mov     %rbp, %rdi                      # DB_STATE: anchor.ssz
     call    app_db_state
     jmp     8f
-10: cmp     $NODE_ACT_BYTES_PUT, %rax
+10: cmp     $NODE_ACT_STATE_BYTES, %rax
+    jne     13f
+    mov     %rbp, %rdi                      # STATE_BYTES: the state's SSZ bytes
+    call    app_state_bytes
+    jmp     8f
+13: cmp     $NODE_ACT_BYTES_PUT, %rax
     jne     2f
     lea     24(%rbp), %rdi                  # BYTES_PUT: a copy of the ByteList
     mov     24(%rbp), %rsi
@@ -3927,7 +3947,7 @@ LOCAL_FUNCTION app_api_start
     test    %rax, %rax
     jz      97f
     mov     (APP_OPTIONS + AppOptions_http_max_connections)(%rbx), %rsi
-    shl     $5, %rsi                        # APP_API_SLOT bytes each
+    imul    $APP_API_SLOT, %rsi, %rsi       # APP_API_SLOT bytes each
     mov     $APP_API_SLOTS, %edi
     call    app_alloc
     test    %rax, %rax
@@ -4047,7 +4067,7 @@ LOCAL_FUNCTION app_api_slot
     mov     %edi, %ecx
     cmp     (APP_OPTIONS + AppOptions_http_max_connections)(%rbx), %rcx
     jae     9f
-    shl     $5, %rcx
+    imul    $APP_API_SLOT, %rcx, %rcx
     mov     APP_API_SLOTS(%rbx), %rax
     add     %rcx, %rax
     cmpq    $0, 8(%rax)
@@ -4131,8 +4151,7 @@ END_FUNCTION app_api_close
 LOCAL_FUNCTION app_api_read
     ENTER 16
     mov     %rdi, %r15
-    mov     %rdi, %r12
-    shl     $5, %r12
+    imul    $APP_API_SLOT, %rdi, %r12
     add     APP_API_SLOTS(%rbx), %r12
     cmpq    $APP_API_READING, 8(%r12)
     jne     99f
@@ -4239,8 +4258,16 @@ LOCAL_FUNCTION app_api_action
     lea     56(%rbp), %rsi
     mov     %rcx, %rdx
     call    lantern_copy
+    mov     48(%rbp), %rax                  # its bytes are in flight
+    add     %rax, 32(%r12)
     cmpq    $0, 24(%rbp)                    # last: the slot reads its next request
-    je      99f
+    jne     97f
+    movq    $1, 40(%r12)                    # else an API_SENT is owed
+    mov     %r12, %rdi
+    mov     16(%rbp), %rsi
+    call    app_api_due
+    jmp     99f
+97:
     movq    $APP_API_READING, 8(%r12)
     mov     (APP_TICK + LIBP2P_TICK_NOW)(%rbx), %rax
     mov     %rax, 24(%r12)
@@ -4251,6 +4278,97 @@ LOCAL_FUNCTION app_api_action
     call    app_api_close
 99: LEAVE 0
 END_FUNCTION app_api_action
+
+/* L1: a NODE_EV_API_SENT or NODE_EV_API_CLOSED (rdi) of the connection rsi for the next step. Locals: the event. */
+LOCAL_FUNCTION app_api_note
+    FRAME 32
+    movq    $24, (%rsp)
+    mov     %rdi, 8(%rsp)
+    mov     %rsi, 16(%rsp)
+    mov     %rsp, %rdi
+    mov     $24, %esi
+    call    app_event_put
+    UNFRAME 32
+END_FUNCTION app_api_note
+
+/* L1: the slot rdi of the connection rsi, owing an API_SENT: it goes once the slot's bytes in flight are at most APP_API_SEND_WINDOW - NODE_API_CHUNK. */
+LOCAL_FUNCTION app_api_due
+    FRAME 0
+    cmpq    $0, 40(%rdi)
+    je      9f
+    cmpq    $(APP_API_SEND_WINDOW - NODE_API_CHUNK), 32(%rdi)
+    ja      9f
+    movq    $0, 40(%rdi)
+    mov     $NODE_EV_API_SENT, %edi
+    call    app_api_note
+9:  UNFRAME 0
+END_FUNCTION app_api_due
+
+/*
+ * L2: the NODE_ACT_STATE_BYTES rdi: lantern_node_state_bytes of the fork of the state's slot in new
+ * memory, kept as the bytes of the new id; with no memory, a ByteList of no bytes. rbp the action,
+ * r12 the state's entry, r13 the bytes' size, r14 the memory. Locals: L a ByteList, L+24 the size,
+ * L+32 the fork.
+ */
+LOCAL_FUNCTION app_state_bytes
+    ENTER 48
+    mov     %rdi, %rbp
+    mov     16(%rbp), %rdi
+    call    app_buf_find
+    test    %rax, %rax
+    jz      9f
+    mov     %rax, %r12
+    mov     8(%r12), %rax
+    mov     NODE_STATE_SLOT(%rax), %rdi
+    lea     APP_CONFIG(%rbx), %rsi
+    call    app_fork
+    mov     %rax, (L + 32)(%rsp)
+    movq    $24, L(%rsp)                    # the size first
+    movq    $0, (L + 24)(%rsp)
+    mov     %rax, %r10
+    mov     8(%r12), %rdi
+    SCRATCH %rsi
+    lea     L(%rsp), %rdx
+    lea     (L + 24)(%rsp), %rcx
+    FORK_CALL node_state_bytes
+    mov     (L + 24)(%rsp), %r13
+    cmp     $24, %r13
+    jbe     8f
+    mov     %r13, %rdi
+    call    app_map
+    test    %rax, %rax
+    jz      8f
+    mov     %rax, %r14
+    mov     %r13, (%r14)
+    mov     (L + 32)(%rsp), %r10
+    mov     8(%r12), %rdi
+    SCRATCH %rsi
+    mov     %r14, %rdx
+    lea     (L + 24)(%rsp), %rcx
+    FORK_CALL node_state_bytes
+    test    %rax, %rax
+    jz      7f
+    movq    $24, 8(%r14)                    # no bytes
+    movq    $0, 16(%r14)
+7:  mov     24(%rbp), %rdi
+    mov     %r14, %rsi
+    mov     %r13, %rdx
+    call    app_buf_add
+    LEAVE 48
+8:  movq    $24, L(%rsp)                    # no memory: a ByteList of no bytes
+    movq    $24, (L + 8)(%rsp)
+    movq    $0, (L + 16)(%rsp)
+    lea     L(%rsp), %rdi
+    mov     $24, %esi
+    call    app_dup
+    test    %rax, %rax
+    jz      9f
+    mov     %rax, %rsi
+    mov     24(%rbp), %rdi
+    mov     $24, %edx
+    call    app_buf_add
+9:  LEAVE 48
+END_FUNCTION app_state_bytes
 
 /*
  * L2: the Beacon API's sockets, without waiting: ACCEPTED takes a free slot (ADOPT) or a REFUSE,
@@ -4300,6 +4418,8 @@ LOCAL_FUNCTION app_api_poll
     movq    $0, 16(%r13)
     mov     (APP_TICK + LIBP2P_TICK_NOW)(%rbx), %rcx
     mov     %rcx, 24(%r13)
+    movq    $0, 32(%r13)                    # no bytes in flight, no API_SENT owed
+    movq    $0, 40(%r13)
     mov     %rax, %r15
     shl     $32, %r15
     or      %r14, %r15
@@ -4313,7 +4433,23 @@ LOCAL_FUNCTION app_api_poll
     mov     %rcx, LIBP2P_ACT_TOKEN(%rax)
     mov     %r15, (LIBP2P_ACT_TOKEN + 8)(%rax)
     jmp     79f
-3:  cmp     $LIBP2P_EVENT_RECEIVED, %rax
+3:  cmp     $LIBP2P_EVENT_SENT, %rax        # SENT: fewer bytes in flight, and an API_SENT once owed
+    jne     30f
+    mov     LIBP2P_EV_CONN(%rbp), %r15
+    mov     %r15, %rdi
+    call    app_api_slot
+    test    %rax, %rax
+    jz      79f
+    mov     32(%rax), %rcx
+    sub     LIBP2P_EV_COUNT(%rbp), %rcx
+    jae     301f
+    xor     %ecx, %ecx
+301: mov    %rcx, 32(%rax)
+    mov     %rax, %rdi
+    mov     %r15, %rsi
+    call    app_api_due
+    jmp     79f
+30: cmp     $LIBP2P_EVENT_RECEIVED, %rax
     je      31f
     cmp     $LIBP2P_EVENT_CLOSED, %rax
     jne     79f
@@ -4325,7 +4461,10 @@ LOCAL_FUNCTION app_api_poll
     mov     %rax, %r13
     cmpq    $LIBP2P_EVENT_CLOSED, 8(%rbp)
     jne     4f
-    movq    $0, 8(%r13)                     # CLOSED: the slot is free
+    mov     $NODE_EV_API_CLOSED, %edi       # CLOSED: the node's stream ends, and the slot is free
+    mov     %r15, %rsi
+    call    app_api_note
+    movq    $0, 8(%r13)
     movq    $0, 16(%r13)
     jmp     79f
 4:  cmpq    $APP_API_CLOSING, 8(%r13)       # RECEIVED, unless closing: the bytes join the buffer
@@ -4498,7 +4637,11 @@ LOCAL_FUNCTION app_loop
 32: cmp     $APP_WAIT_MS, %rax
     jb      33f
     mov     $APP_WAIT_MS, %eax
-33: mov     %rax, (L + 8)(%rsp)
+33: mov     APP_EVENTS(%rbx), %rcx          # no wait while events wait for the next step
+    cmpq    $0, 16(%rcx)
+    je      34f
+    xor     %eax, %eax
+34: mov     %rax, (L + 8)(%rsp)
     mov     APP_SHELL(%rbx), %rdi
     lea     (L + 8)(%rsp), %rsi
     mov     APP_SHELL_EVENTS(%rbx), %rdx

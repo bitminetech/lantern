@@ -201,8 +201,11 @@ api_x_optimistic:
     .ascii "{\"execution_optimistic\":"
 .set api_x_optimistic_len, 24
 api_x_finalized:
-    .ascii ",\"finalized\":false,\"data\":{"
-.set api_x_finalized_len, 27
+    .ascii ",\"finalized\":"
+.set api_x_finalized_len, 13
+api_x_data:
+    .ascii ",\"data\":{"
+.set api_x_data_len, 9
 api_h_root:
     .ascii "\"root\":"
 .set api_h_root_len, 7
@@ -242,6 +245,46 @@ api_f_root:
 api_hex:
     .ascii "0123456789abcdef"
 .set api_hex_len, 16
+api_ok:
+    .ascii "HTTP/1.1 200 OK\r\n"
+.set api_ok_len, 17
+api_octet:
+    .ascii "Content-Type: application/octet-stream\r\n"
+.set api_octet_len, 40
+api_version:
+    .ascii "Eth-Consensus-Version: "
+.set api_version_len, 23
+api_chunked:
+    .ascii "Transfer-Encoding: chunked\r\n"
+.set api_chunked_len, 28
+api_j_version:
+    .ascii "{\"version\":\""
+.set api_j_version_len, 12
+api_j_optimistic:
+    .ascii "\",\"execution_optimistic\":"
+.set api_j_optimistic_len, 25
+api_j_data:
+    .ascii ",\"data\":"
+.set api_j_data_len, 8
+api_last_chunk:
+    .ascii "0\r\n\r\n"
+.set api_last_chunk_len, 5
+
+/* The name of each fork, FORK_PHASE0 to FORK_FULU: 16 bytes each, its length, then its bytes. */
+.macro API_FORK name
+77: .byte 78f - 77b - 1
+    .ascii "\name"
+78: .space 16 - (78b - 77b)
+.endm
+api_forks:
+    API_FORK phase0
+    API_FORK altair
+    API_FORK bellatrix
+    API_FORK capella
+    API_FORK deneb
+    API_FORK electra
+    API_FORK fulu
+.set API_HEAD_ROOM, 168                     /* a streamed answer's head and a chunk's size line, at most */
 
 /* Each status: its code, then its reason phrase and its error message, each an offset from api_texts and a length. */
 .macro API_CODE code, reason, message

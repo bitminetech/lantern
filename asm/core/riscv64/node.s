@@ -86,6 +86,7 @@ FUNCTION lantern_node_size
     NODE_SIZE_ADD peers, NodePeer__mem
     NODE_SIZE_ADD messages, NodeMessage__mem
     NODE_SIZE_ADD blobs, NodeBlob__mem
+    NODE_SIZE_ADD api_streams, NodeApi__mem
     ld      t0, NodeRoom_p2p_out(a0)        # a ByteList
     addi    t1, t0, 24 + 7
     bltu    t1, t0, 9f
@@ -127,8 +128,8 @@ END_FUNCTION lantern_node_size
 
 /* The next part of the node a0 at t0; t0 += the room a1 field times width. Uses t1, t2. */
 .macro NODE_PART part, field, width
-    sd      t0, Node_\part(a0)
-    sd      zero, (Node_\part + 8)(a0)
+    STQ     t0, a0, Node_\part
+    STQ     zero, a0, Node_\part + 8
     ld      t1, NodeRoom_\field(a1)
     li      t2, \width
     mul     t1, t1, t2
@@ -154,6 +155,7 @@ LOCAL_FUNCTION node_layout
     add     t0, t0, t1
     NODE_PART messages, messages, NodeMessage__mem
     NODE_PART blobs, blobs, NodeBlob__mem
+    NODE_PART api, api_streams, NodeApi__mem
     sd      t0, Node_p2p_out(a0)            # one ByteList, empty
     li      t1, 1
     sd      t1, (Node_p2p_out + 8)(a0)
@@ -344,10 +346,10 @@ END_FUNCTION lantern_node_init
 /* Copy the entries of the part at ref of the node s1, of width bytes each, into the node s3. */
 .macro NODE_COPY_PART ref, width
     PART    a1, a2, s1, \ref
-    sd      a2, ((\ref) + 8)(s3)
+    STQ     a2, s3, (\ref) + 8
     li      t0, \width
     mul     a2, a2, t0
-    ld      a0, (\ref)(s3)
+    LDQ     a0, s3, (\ref)
     add     a0, s3, a0
     call    lantern_copy
 .endm
@@ -355,7 +357,7 @@ END_FUNCTION lantern_node_init
 /* Branch to 8f when the room s2 field is below the entries of the part at ref of the node s1. Uses t0, t1. */
 .macro NODE_COPY_ROOM field, ref
     ld      t0, NodeRoom_\field(s2)
-    ld      t1, ((\ref) + 8)(s1)
+    LDQ     t1, s1, (\ref) + 8
     bltu    t0, t1, 8f
 .endm
 
@@ -382,6 +384,7 @@ FUNCTION lantern_node_copy
     NODE_COPY_ROOM streams, Node_streams
     NODE_COPY_ROOM messages, Node_messages
     NODE_COPY_ROOM blobs, Node_blobs
+    NODE_COPY_ROOM api_streams, Node_api
     ld      t0, NodeRoom_p2p_out(s2)        # the queued bytes fit
     ld      t1, Node_p2p_out(s1)
     add     t1, s1, t1
@@ -417,6 +420,7 @@ FUNCTION lantern_node_copy
     NODE_COPY_PART Node_peers, NodePeer__mem
     NODE_COPY_PART Node_messages, NodeMessage__mem
     NODE_COPY_PART Node_blobs, NodeBlob__mem
+    NODE_COPY_PART Node_api, NodeApi__mem
     ld      a1, Node_p2p_out(s1)            # the queued bytes
     add     a1, s1, a1
     ld      a2, 16(a1)
@@ -551,6 +555,24 @@ END_FUNCTION node_work
 /* An action of kind a0 with the two ids a1 and a2 (STATE_COPY: source, new; the FREE kinds: a1). Uses t0-t2. */
 LOCAL_FUNCTION node_ids
     UNWIND_END_PROLOGUE
+    li      t0, NODE_ACT_BYTES_FREE         # a BYTES_FREE of bytes a NodeApi entry sends goes to the entry: API_STREAM_OWN
+    bne     a0, t0, 3f
+    PART    t0, t1, s1, Node_api
+1:  beqz    t1, 3f
+    ld      t2, NodeApi_connection(t0)
+    beqz    t2, 2f
+    ld      t2, NodeApi_data(t0)
+    bne     t2, a1, 2f
+    ld      t2, NodeApi_flags(t0)
+    andi    a7, t2, API_STREAM_OWN
+    bnez    a7, 2f                          # API_STREAM_OWN: its own bytes already
+    ori     t2, t2, API_STREAM_OWN
+    sd      t2, NodeApi_flags(t0)
+    ret
+2:  addi    t0, t0, NodeApi__mem
+    addi    t1, t1, -1
+    j       1b
+3:
     ld      t0, 8(s6)
     ld      t1, 16(s6)
     add     t2, s6, t0
@@ -3346,13 +3368,23 @@ LOCAL_FUNCTION node_event
     call    node_api_event
     LEAVE 48
 472: li     t1, NODE_EV_API_IDENTITY
-    bne     t0, t1, 50f
+    bne     t0, t1, 473f
     ADDQ    a0, s1, Node_api_identity       # API_IDENTITY: the node keeps the texts
     ld      t0, (NodeEvent_bytes + 8)(s3)
     addi    a1, s3, NodeEvent_bytes
     add     a1, a1, t0
     li      a2, API_IDENTITY_SIZE
     call    lantern_copy
+    LEAVE 48
+473: li     t1, NODE_EV_API_SENT
+    bne     t0, t1, 474f
+    ld      a0, 16(s3)                      # API_SENT: the next chunk of the connection's stream
+    call    node_api_sent
+    LEAVE 48
+474: li     t1, NODE_EV_API_CLOSED
+    bne     t0, t1, 50f
+    ld      a0, 16(s3)                      # API_CLOSED: the connection's stream ends
+    call    node_api_closed
     LEAVE 48
 50: ld      t0, NodeAction_work_kind(s3)    # WORK_DONE
     ld      t1, NodeEvent_result(s3)
@@ -3772,9 +3804,14 @@ LOCAL_FUNCTION node_event
     sd      zero, NodeBlock_data_id(s4)
     LEAVE 48
 701: li     t2, NODE_WORK_API_ENCODE        # API_ENCODE: the response to its connection
-    bne     t0, t2, 70f
+    bne     t0, t2, 702f
     mv      a0, s3
     call    node_api_done
+    LEAVE 48
+702: li     t2, NODE_WORK_API_CHUNK         # API_CHUNK: the chunk to its connection
+    bne     t0, t2, 70f
+    mv      a0, s3
+    call    node_api_chunk_done
     LEAVE 48
 70: li      t2, NODE_WORK_ATTESTATION       # done with an attestation or a slashing: free its bytes
     beq     t0, t2, 71f
@@ -7530,7 +7567,12 @@ FUNCTION lantern_node_step
     addi    t4, t3, -1
     li      t6, NODE_EV_LAST
     bgeu    t4, t6, 7f
-    li      t4, NODE_EV_TICK
+    li      t4, NODE_EV_API_SENT            # API_SENT, API_CLOSED: the connection at 16
+    bltu    t3, t4, 11f
+    li      t4, 24
+    bltu    t2, t4, 7f
+    j       4f
+11: li      t4, NODE_EV_TICK
     bne     t3, t4, 2f
     li      t4, 24
     bltu    t2, t4, 7f
@@ -7565,6 +7607,21 @@ FUNCTION lantern_node_step
     j       22f
 231: li     t6, NODE_WORK_SERVE             # SERVE, and NEW_PAYLOAD or FORKCHOICE of LANTERN_VALID: a ByteList of the chunk inside
     beq     t4, t6, 25f
+    li      t6, NODE_WORK_API_CHUNK         # API_CHUNK of LANTERN_VALID: its ByteList at NodeEvent_api_bytes
+    bne     t4, t6, 232f
+    ld      t6, NodeEvent_result(t0)
+    bnez    t6, 22f
+    li      t4, NodeEvent_api_bytes + 24
+    bltu    t2, t4, 7f
+    ld      t4, (NodeEvent_api_bytes + 8)(t0)
+    li      t6, 24
+    bne     t4, t6, 7f
+    ld      t4, (NodeEvent_api_bytes + 16)(t0)
+    addi    t6, t2, -(NodeEvent_api_bytes + 24)
+    bgtu    t4, t6, 7f
+    j       22f
+232: li     t6, NODE_WORK_API_ENCODE
+    beq     t4, t6, 24f
     li      t6, NODE_WORK_NEW_PAYLOAD
     beq     t4, t6, 24f
     li      t6, NODE_WORK_FORKCHOICE
@@ -7795,6 +7852,12 @@ FUNCTION lantern_node_step
     ld      t1, (Db_slots + 8)(t2)
     bltu    t1, t0, 93f
 56:
+    ld      t0, (L + 192)(sp)               # api: an entry free for each API event
+    beqz    t0, 57f
+    call    node_api_free
+    ld      t0, (L + 192)(sp)
+    bltu    a0, t0, 95f
+57:
     ld      t0, Node_peers(s1)              # pow blocks: one for each POW_BLOCK event
     ld      t1, Node_pow_blocks(s1)
     sub     t0, t0, t1
@@ -8027,6 +8090,8 @@ FUNCTION lantern_node_step
 93: li      t0, NodeRoom_db_slots
     j       82f
 94: li      t0, NodeRoom_db_roots
+    j       82f
+95: li      t0, NodeRoom_api_streams
     j       82f
 90: li      t0, NodeRoom_p2p_out
 82: sd      t0, NodeStepResult_room(s7)
@@ -8660,7 +8725,7 @@ FUNCTION lantern_node_run
     call    node_run_backfill
     LEAVE 192
 975: li     t1, NODE_WORK_API_ENCODE
-    bne     t0, t1, 8f
+    bne     t0, t1, 976f
     mv      a0, s1                          # API_ENCODE: the response of an answer
     mv      a1, s2
     mv      a2, s3
@@ -8670,6 +8735,16 @@ FUNCTION lantern_node_run
     mv      a6, s7
     mv      a7, s8
     call    node_api_run
+    LEAVE 192
+976: li     t1, NODE_WORK_API_CHUNK
+    bne     t0, t1, 8f
+    mv      a0, s1                          # API_CHUNK: the next chunk of a stream
+    mv      a1, s3
+    mv      a2, s5
+    mv      a3, s6
+    mv      a4, s7
+    mv      a5, s8
+    call    node_api_chunk_run
     LEAVE 192
 8:  li      a0, LANTERN_INVALID_EVENT
     LEAVE 192

@@ -79,6 +79,7 @@ FUNCTION lantern_node_size
     NODE_SIZE_ADD peers, NodePeer__mem
     NODE_SIZE_ADD messages, NodeMessage__mem
     NODE_SIZE_ADD blobs, NodeBlob__mem
+    NODE_SIZE_ADD api_streams, NodeApi__mem
     ldr     x10, [x0, #NodeRoom_p2p_out] /* a ByteList */
     adds    x10, x10, #(24 + 7)
     b.cs    9f
@@ -147,6 +148,7 @@ LOCAL_FUNCTION node_layout
     madd    x9, x10, x12, x9
     NODE_PART messages, messages, NodeMessage__mem
     NODE_PART blobs, blobs, NodeBlob__mem
+    NODE_PART api, api_streams, NodeApi__mem
     str     x9, [x0, #Node_p2p_out]         /* one ByteList, empty */
     mov     x10, #1
     str     x10, [x0, #(Node_p2p_out + 8)]
@@ -366,6 +368,7 @@ FUNCTION lantern_node_copy
     NODE_COPY_ROOM streams, Node_streams
     NODE_COPY_ROOM messages, Node_messages
     NODE_COPY_ROOM blobs, Node_blobs
+    NODE_COPY_ROOM api_streams, Node_api
     ldr     x9, [x20, #NodeRoom_p2p_out]    /* the queued bytes fit */
     ldr     x10, [x19, #Node_p2p_out]
     add     x10, x19, x10
@@ -404,6 +407,7 @@ FUNCTION lantern_node_copy
     NODE_COPY_PART Node_peers, NodePeer__mem
     NODE_COPY_PART Node_messages, NodeMessage__mem
     NODE_COPY_PART Node_blobs, NodeBlob__mem
+    NODE_COPY_PART Node_api, NodeApi__mem
     ldr     x1, [x19, #Node_p2p_out]        /* the queued bytes */
     add     x1, x19, x1
     ldr     x2, [x1, #16]
@@ -549,10 +553,30 @@ LOCAL_FUNCTION node_work
     UNFRAME 48
 END_FUNCTION node_work
 
-/* L0: an action of kind x0 with the two ids x1 and x2 (STATE_COPY: source, new; the FREE kinds: x1). */
+/*
+ * L0: an action of kind x0 with the two ids x1 and x2 (STATE_COPY: source, new; the FREE kinds: x1).
+ * A BYTES_FREE of bytes a NodeApi entry sends goes to the entry instead: API_STREAM_OWN.
+ */
 LOCAL_FUNCTION node_ids
     FRAME 32
     stp     x1, x2, [sp, #16]
+    cmp     x0, #NODE_ACT_BYTES_FREE
+    b.ne    3f
+    PART    x9, x10, x19, Node_api
+1:  cbz     x10, 3f
+    ldr     x11, [x9, #NodeApi_connection]
+    cbz     x11, 2f
+    ldp     x11, x12, [x9, #NodeApi_flags]  /* flags, data */
+    cmp     x12, x1
+    b.ne    2f
+    tbnz    x11, #3, 2f                     /* API_STREAM_OWN: its own bytes already */
+    orr     x11, x11, #API_STREAM_OWN
+    str     x11, [x9, #NodeApi_flags]
+    UNFRAME 32
+2:  add     x9, x9, #NodeApi__mem
+    sub     x10, x10, #1
+    b       1b
+3:
     mov     x1, #32
     bl      node_act
     ldp     x9, x10, [sp, #16]
@@ -3381,13 +3405,23 @@ LOCAL_FUNCTION node_event
     bl      node_api_event
     LEAVE 48
 472: cmp    x9, #NODE_EV_API_IDENTITY
-    b.ne    50f
+    b.ne    473f
     ADDQ    x0, x19, Node_api_identity      /* API_IDENTITY: the node keeps the texts */
     ldr     x9, [x21, #(NodeEvent_bytes + 8)]
     add     x1, x21, #NodeEvent_bytes
     add     x1, x1, x9
     mov     x2, #API_IDENTITY_SIZE
     bl      lantern_copy
+    LEAVE 48
+473: cmp    x9, #NODE_EV_API_SENT
+    b.ne    474f
+    ldr     x0, [x21, #16]                  /* API_SENT: the next chunk of the connection's stream */
+    bl      node_api_sent
+    LEAVE 48
+474: cmp    x9, #NODE_EV_API_CLOSED
+    b.ne    50f
+    ldr     x0, [x21, #16]                  /* API_CLOSED: the connection's stream ends */
+    bl      node_api_closed
     LEAVE 48
 50: ldr     x9, [x21, #NodeAction_work_kind]    /* WORK_DONE */
     ldr     x10, [x21, #NodeEvent_result]
@@ -3803,9 +3837,14 @@ LOCAL_FUNCTION node_event
     str     xzr, [x22, #NodeBlock_data_id]
     LEAVE 48
 701: cmp    x9, #NODE_WORK_API_ENCODE          /* API_ENCODE: the response to its connection */
-    b.ne    70f
+    b.ne    702f
     mov     x0, x21
     bl      node_api_done
+    LEAVE 48
+702: cmp    x9, #NODE_WORK_API_CHUNK           /* API_CHUNK: the chunk to its connection */
+    b.ne    70f
+    mov     x0, x21
+    bl      node_api_chunk_done
     LEAVE 48
 70: cmp     x9, #NODE_WORK_ATTESTATION         /* done with an attestation or a slashing: free its bytes */
     ccmp    x9, #NODE_WORK_ATTESTER_SLASHING, #4, ne
@@ -7471,7 +7510,12 @@ FUNCTION lantern_node_step
     sub     x14, x13, #1
     cmp     x14, #NODE_EV_LAST
     b.hs    7f
-    cmp     x13, #NODE_EV_TICK
+    cmp     x13, #NODE_EV_API_SENT          /* API_SENT, API_CLOSED: the connection at 16 */
+    b.lo    11f
+    cmp     x12, #24
+    b.lo    7f
+    b       4f
+11: cmp     x13, #NODE_EV_TICK
     b.ne    2f
     cmp     x12, #24
     b.lo    7f
@@ -7505,9 +7549,26 @@ FUNCTION lantern_node_step
     b       22f
 231: cmp    x14, #NODE_WORK_SERVE
     b.eq    24f
+    cmp     x14, #NODE_WORK_API_CHUNK       /* API_CHUNK of LANTERN_VALID: its ByteList at NodeEvent_api_bytes */
+    b.ne    232f
+    ldr     x15, [x11, #NodeEvent_result]
+    cbnz    x15, 22f
+    cmp     x12, #(NodeEvent_api_bytes + 24)
+    b.lo    7f
+    add     x14, x11, #NodeEvent_api_bytes
+    ldp     x14, x15, [x14, #8]
+    cmp     x14, #24
+    b.ne    7f
+    sub     x14, x12, #(NodeEvent_api_bytes + 24)
+    cmp     x15, x14
+    b.hi    7f
+    b       22f
+232: cmp    x14, #NODE_WORK_API_ENCODE
+    b.eq    233f
     cmp     x14, #NODE_WORK_NEW_PAYLOAD
     ccmp    x14, #NODE_WORK_FORKCHOICE, #4, ne
     b.ne    22f
+233:
     ldr     x15, [x11, #NodeEvent_result]
     cbnz    x15, 22f
 24:
@@ -7729,6 +7790,13 @@ FUNCTION lantern_node_step
     cmp     x10, x9
     b.lo    93f
 56:
+    ldr     x9, [sp, #(L + 184)]            /* api: an entry free for each API event */
+    cbz     x9, 57f
+    bl      node_api_free
+    ldr     x9, [sp, #(L + 184)]
+    cmp     x0, x9
+    b.lo    95f
+57:
     ldr     x9, [x19, #Node_peers]          /* pow blocks: one for each POW_BLOCK event */
     ldr     x10, [x19, #Node_pow_blocks]
     sub     x9, x9, x10
@@ -7959,6 +8027,8 @@ FUNCTION lantern_node_step
 93: mov     x10, #NodeRoom_db_slots
     b       82f
 94: mov     x10, #NodeRoom_db_roots
+    b       82f
+95: mov     x10, #NodeRoom_api_streams
     b       82f
 90: mov     x10, #NodeRoom_p2p_out
 82: str     x10, [x25, #NodeStepResult_room]
@@ -8588,7 +8658,7 @@ FUNCTION lantern_node_run
     bl      node_run_backfill
     LEAVE 192
 975: cmp    x9, #NODE_WORK_API_ENCODE
-    b.ne    8f
+    b.ne    976f
     mov     x0, x19                         /* API_ENCODE: the response of an answer */
     mov     x1, x20
     mov     x2, x21
@@ -8598,6 +8668,16 @@ FUNCTION lantern_node_run
     mov     x6, x25
     mov     x7, x26
     bl      node_api_run
+    LEAVE 192
+976: cmp    x9, #NODE_WORK_API_CHUNK
+    b.ne    8f
+    mov     x0, x19                         /* API_CHUNK: the next chunk of a stream */
+    mov     x1, x21
+    mov     x2, x23
+    mov     x3, x24
+    mov     x4, x25
+    mov     x5, x26
+    bl      node_api_chunk_run
     LEAVE 192
 8:  mov     x0, #LANTERN_INVALID_EVENT
     LEAVE 192

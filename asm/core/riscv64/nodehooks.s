@@ -245,6 +245,21 @@ SPEC_FUNCTION node_state_checkpoints
     UNFRAME 0
 SPEC_END node_state_checkpoints
 
+/* (kind, ssz, cursor, out): lantern_json_encode_ssz with the fork's SignedBeaconBlock (kind 0) or BeaconState (kind 1). */
+SPEC_FUNCTION node_json
+    FRAME 0
+    li      t0, NODE_JSON_STATE
+    bgtu    a0, t0, 8f
+    beq     a0, t0, 1f
+    ADDRESS a0, lantern_type_SignedBeaconBlock
+    j       2f
+1:  ADDRESS a0, lantern_type_BeaconState
+2:  CALL_GLOBAL lantern_json_encode_ssz
+    UNFRAME 0
+8:  li      a0, LANTERN_INVALID_EVENT
+    UNFRAME 0
+SPEC_END node_json
+
 /* The u32 \val at \addr, a byte at a time: the place may not be aligned. Uses \tmp. */
 .macro NODE_STORE_U32 val, addr, tmp
     sb      \val, 0(\addr)

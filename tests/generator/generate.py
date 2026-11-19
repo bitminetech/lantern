@@ -15,6 +15,7 @@ import pathlib
 import re
 import struct
 import subprocess
+import time
 import sys
 import tarfile
 import urllib.request
@@ -278,7 +279,7 @@ def main():
         if preset == "minimal" and "phase0" in forks and (not runners or "app" in runners):
             # The network directory of the binary's start tests (tests/app/start.sh, start.ps1).
             subprocess.run([sys.executable, str(pathlib.Path(__file__).resolve().parents[1] / "app" / "network.py"),
-                            str(out / "network"), preset, "altair"], check=True)
+                            str(out / "network"), preset, "altair", str(int(time.time())), "4096"], check=True)
         if not runners or "api" in runners:
             file = f"{preset}-phase0-http-request.bin"
             count, digest = write_file(out / file, list(http_request.cases()))

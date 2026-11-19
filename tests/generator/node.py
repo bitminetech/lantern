@@ -142,7 +142,7 @@ MESSAGES = {400: b"BAD_REQUEST", 404: b"NOT_FOUND", 405: b"METHOD_NOT_ALLOWED", 
 METHODS = {1: b"GET", 2: b"POST", 3: b"DELETE"}
 ALLOW = {1: b"GET", 2: b"POST", 3: b"GET, POST"}
 ANSWERED = ("getHealth", "getNetworkIdentity", "getNodeVersion", "getSyncingStatus", "getPeerCount", "getGenesis",
-            "getBlockHeader", "getStateFinalityCheckpoints")
+            "getBlockHeader", "getStateFinalityCheckpoints", "getBlockV2", "getStateV2")
 IDENTITY = (b"16Uiu2HAmPLe7Mzm8TsYUubgCAW1aJoeFScxrLj8ppHFivPo97bUZ",
             b"enr:-Iu4QLm7bZGdAhVwRqZ6Zf3LlnqKsBTnZGOByHQhPMQJ3pV4F3t8L9i5yJOZ0X0hiZ6q4D5V0jB7l8J3ZtYw1JDH9C4BgmlkgnY0gmlwhAoAAAGJc2VjcDI1NmsxoQPKY0yuDUmstAHYpMa2_oxVtw0RW_QAdpzBQA8yWM0xOIN0Y3CCIyg",
             b"/ip4/10.0.0.1/tcp/9000/p2p/16Uiu2HAmPLe7Mzm8TsYUubgCAW1aJoeFScxrLj8ppHFivPo97bUZ",
@@ -168,6 +168,17 @@ def response(code, body=b"", close=False, keep_alive=False, allow=0, reason=True
     out += b"Content-Length: %d\r\n" % len(body)
     if code == 405:
         out += b"Allow: " + ALLOW[allow] + b"\r\n"
+    if close:
+        out += b"Connection: close\r\n"
+    elif keep_alive:
+        out += b"Connection: keep-alive\r\n"
+    return out + b"\r\n" + body
+
+
+def streamed(fork, body, ssz=False, close=False, keep_alive=False):
+    """A streamed answer (beacon-api.md, Common rules) in its form with Content-Length."""
+    out = b"HTTP/1.1 200 OK\r\nContent-Type: " + (b"application/octet-stream" if ssz else b"application/json") + b"\r\n"
+    out += b"Eth-Consensus-Version: " + fork.encode() + b"\r\nContent-Length: %d\r\n" % len(body)
     if close:
         out += b"Connection: close\r\n"
     elif keep_alive:
@@ -212,7 +223,10 @@ def api_values(spec, fork, state, block):
     if header.state_root == spec.Bytes32():
         header.state_root = state_root
     assert spec.hash_tree_root(header) == root
-    return dict(genesis_time=int(store.genesis_time_ms) // 1000, gvr=bytes(state.genesis_validators_root),
+    from json_codec import to_json
+    return dict(fork=fork, finalized=store.finalized_checkpoint.root == root, state_ssz=bytes(state.encode_bytes()),
+                state_json=to_json(state).encode(),
+                genesis_time=int(store.genesis_time_ms) // 1000, gvr=bytes(state.genesis_validators_root),
                 genesis_version=bytes(spec.config.GENESIS_FORK_VERSION), root=bytes(root), slot=int(block.slot),
                 header=header, cgc=int(spec.config.CUSTODY_REQUIREMENT) if fork == "fulu" else None,
                 checkpoints=[state.previous_justified_checkpoint, state.current_justified_checkpoint, state.finalized_checkpoint])
@@ -251,7 +265,7 @@ def answer(v, name, route, offline, close, keep_alive):
         if not (route.id_kind == 1 or (route.id_kind == 6 and route.id_root == v["root"])):
             return error(404, **kw)
         h = v["header"]
-        body = (b'{"execution_optimistic":false,"finalized":false,"data":{"root":' + qhex(v["root"]) +
+        body = (b'{"execution_optimistic":false,"finalized":' + flag(v["finalized"]) + b',"data":{"root":' + qhex(v["root"]) +
                 b',"canonical":true,"header":{"message":{"slot":' + q(h.slot) + b',"proposer_index":' + q(h.proposer_index) +
                 b',"parent_root":' + qhex(h.parent_root) + b',"state_root":' + qhex(h.state_root) + b',"body_root":' +
                 qhex(h.body_root) + b'},"signature":' + qhex(bytes(96)) + b"}}}")
@@ -260,10 +274,20 @@ def answer(v, name, route, offline, close, keep_alive):
         if route.id_kind != 1:
             return error(404, **kw)
         c = v["checkpoints"]
-        body = (b'{"execution_optimistic":false,"finalized":false,"data":{"previous_justified":{"epoch":' + q(c[0].epoch) +
+        body = (b'{"execution_optimistic":false,"finalized":' + flag(v["finalized"]) + b',"data":{"previous_justified":{"epoch":' + q(c[0].epoch) +
                 b',"root":' + qhex(c[0].root) + b'},"current_justified":{"epoch":' + q(c[1].epoch) + b',"root":' +
                 qhex(c[1].root) + b'},"finalized":{"epoch":' + q(c[2].epoch) + b',"root":' + qhex(c[2].root) + b"}}}")
         return response(200, body, **kw)
+    if name == "getBlockV2":  # the anchor block's bytes are not the node's
+        return error(404, **kw)
+    if name == "getStateV2":
+        if route.id_kind != 1:
+            return error(404, **kw)
+        if route.response == 2:
+            return streamed(v["fork"], v["state_ssz"], ssz=True, **kw)
+        body = (b'{"version":"' + v["fork"].encode() + b'","execution_optimistic":false,"finalized":' +
+                flag(v["finalized"]) + b',"data":' + v["state_json"] + b"}")
+        return streamed(v["fork"], body, **kw)
     raise AssertionError(name)
 
 
@@ -272,6 +296,7 @@ class Route:
     def __init__(self, out):
         import struct
         self.op = struct.unpack_from("<Q", out, 16)[0]
+        self.response = struct.unpack_from("<Q", out, 48)[0]
         self.id_kind = struct.unpack_from("<Q", out, 72)[0]
         self.id_root = bytes(out[88:120])
         self.syncing_status = struct.unpack_from("<Q", out, 240)[0]
@@ -334,6 +359,20 @@ def api_requests(spec, fork, v):
     add("accept_406", api_route.base(block, accept=b"text/html"))
     add("accept_ssz", api_route.base(block, accept=b"application/octet-stream"))
     add("bad_block_id_400", api_route.base(header, path_values={"block_id": b"0x12"}))
+    state = by_name["getStateV2"]
+    octet = b"application/octet-stream"
+    add("state_head_json", api_route.base(state, path_values={"state_id": b"head"}))
+    add("state_head_ssz", api_route.base(state, path_values={"state_id": b"head"}, accept=octet))
+    add("state_head_json_http10", api_route.base(state, path_values={"state_id": b"head"}), version=b"HTTP/1.0")
+    add("state_head_ssz_http10", api_route.base(state, path_values={"state_id": b"head"}, accept=octet), version=b"HTTP/1.0")
+    add("state_head_ssz_http10_keep_alive", api_route.base(state, path_values={"state_id": b"head"}, accept=octet),
+        version=b"HTTP/1.0", connection=b"keep-alive")
+    add("state_head_json_close", api_route.base(state, path_values={"state_id": b"head"}), connection=b"close")
+    for state_id in (b"genesis", b"finalized", b"0", qhex(v["root"])[1:-1]):
+        add(f"state_{state_id.decode()[:10]}", api_route.base(state, path_values={"state_id": state_id}))
+    for block_id in (b"head", qhex(v["root"])[1:-1], b"finalized"):
+        add(f"block_{block_id.decode()[:10]}", api_route.base(block, path_values={"block_id": block_id}))
+        add(f"block_{block_id.decode()[:10]}_ssz", api_route.base(block, path_values={"block_id": block_id}, accept=octet))
     validators = by_name["getStateValidators"]
     add("ids_65_414", api_route.base(validators, [("id", b",".join(str(i).encode() for i in range(65)))]))
     publish = by_name["publishBlockV2"]

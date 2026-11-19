@@ -286,6 +286,9 @@ LOCAL_FUNCTION api_body
     ld      a0, ApiView_is_optimistic(s4)
     call    api_bool
     API_LIT api_x_finalized
+    ld      a0, ApiView_head_finalized(s4)
+    call    api_bool
+    API_LIT api_x_data
     API_LIT api_h_root
     addi    a0, s4, ApiView_head_root
     li      a1, 32
@@ -320,6 +323,9 @@ LOCAL_FUNCTION api_body
     ld      a0, ApiView_is_optimistic(s4)
     call    api_bool
     API_LIT api_x_finalized
+    ld      a0, ApiView_head_finalized(s4)
+    call    api_bool
+    API_LIT api_x_data
     API_LIT api_f_previous
     addi    a0, s4, ApiView_previous_justified
     call    api_checkpoint
@@ -480,8 +486,22 @@ LOCAL_FUNCTION node_api_view
     ADDQ    a1, s1, Node_api_identity
     li      a2, API_IDENTITY_SIZE
     call    lantern_copy
+    ld      a0, 0(sp)
+    call    api_view_finalized
     UNFRAME 16
 END_FUNCTION node_api_view
+
+/* ApiView_head_finalized of the view a0: 1 when its head_root is the root of the store s2's finalized checkpoint. Uses t0-t2, a6, a7. */
+LOCAL_FUNCTION api_view_finalized
+    UNWIND_END_PROLOGUE
+    addi    t0, a0, ApiView_head_root
+    addi    t1, s2, (Store_finalized_checkpoint + 8)
+    li      t2, 0
+    NE32    t0, t1, 1f
+    li      t2, 1
+1:  sd      t2, ApiView_head_finalized(a0)
+    ret
+END_FUNCTION api_view_finalized
 
 /*
  * One NODE_ACT_API_SEND of the connection a0, with last 1, at the end of the actions s6: the
@@ -589,7 +609,9 @@ LOCAL_FUNCTION node_api_check
 4:  li      a0, 0
     li      a1, 0
     ret
-5:  li      t3, HTTP_REQUEST_FIXED          # API: an HttpRequest of the count's size
+5:  ld      t3, 16(a0)                      # API: a connection, not 0
+    beqz    t3, 8f
+    li      t3, HTTP_REQUEST_FIXED          # an HttpRequest of the count's size
     bltu    t1, t3, 8f
     andi    t3, t1, 7
     bnez    t3, 8f
@@ -728,7 +750,7 @@ LOCAL_FUNCTION node_api_event
     bne     t1, t0, 80f
     j       60f
 5:  li      t0, API_OP_GET_BLOCK_HEADER
-    bne     a3, t0, 7f
+    bne     a3, t0, 62f
     li      t0, API_ID_HEAD                 # headers: of head, or of the head's root
     beq     t1, t0, 60f
     li      t0, API_ID_ROOT
@@ -766,6 +788,34 @@ LOCAL_FUNCTION node_api_event
     mv      a4, s9
     call    node_work
     j       90f
+62: li      t0, API_OP_GET_STATE_V2          # getStateV2: of head
+    bne     a3, t0, 63f
+    li      t0, API_ID_HEAD
+    bne     t1, t0, 80f
+    j       64f
+63: li      t0, API_OP_GET_BLOCK_V2          # getBlockV2: of head, or of the head's root
+    bne     a3, t0, 7f
+    li      t0, API_ID_HEAD
+    beq     t1, t0, 64f
+    li      t0, API_ID_ROOT
+    bne     t1, t0, 80f
+    addi    t2, s7, ApiRoute_id_root
+    addi    t3, s1, Node_head_root
+    NE32    t2, t3, 80f
+64: mv      a0, s9                          # a stream of the answer
+    mv      a1, s7
+    andi    a2, s10, API_R_CLOSE
+    snez    a2, a2
+    ld      t0, HttpRequest_version(s4)
+    addi    t0, t0, -10
+    seqz    t0, t0
+    slli    t0, t0, 1
+    or      a2, a2, t0
+    mv      a3, s8
+    call    node_api_stream
+    beqz    a0, 90f
+    mv      a2, a0
+    j       80f
 7:  li      a2, 501                         # another operation
 80: li      a3, API_BODY_ERROR
 81: mv      a0, s9
@@ -883,6 +933,8 @@ LOCAL_FUNCTION node_api_run
     addi    t0, t0, -PAYLOAD_STATUS_NOT_VALIDATED
     seqz    t0, t0
     sd      t0, ApiView_is_optimistic(s8)
+    mv      a0, s8
+    call    api_view_finalized
     ld      t2, NodeAction_arg(s3)
     andi    t2, t2, 255
     li      t0, API_OP_GET_STATE_FINALITY_CHECKPOINTS
@@ -984,6 +1036,633 @@ LOCAL_FUNCTION node_api_run
 7:  li      a0, LANTERN_BUFFER_TOO_SMALL
     LEAVE 16
 END_FUNCTION node_api_run
+
+/* ---------------------------------------------------------------- Streams (node.md, NodeApi) */
+
+/* a0 = the free NodeApi entries of the node s1: the capacity past the count, and the free ones below it. Uses t0-t3, a7. */
+LOCAL_FUNCTION node_api_free
+    UNWIND_END_PROLOGUE
+    PART    t0, t1, s1, Node_api
+    ld      t2, Node_p2p_out(s1)
+    LDQ     t3, s1, Node_api
+    sub     t2, t2, t3
+    li      t3, NodeApi__mem
+    divu    a0, t2, t3
+    sub     a0, a0, t1
+1:  beqz    t1, 9f
+    ld      t2, NodeApi_connection(t0)
+    bnez    t2, 2f
+    addi    a0, a0, 1
+2:  addi    t0, t0, NodeApi__mem
+    addi    t1, t1, -1
+    j       1b
+9:  ret
+END_FUNCTION node_api_free
+
+/* a0 = the index of the NodeApi entry of the connection a0, or 2^64 - 1; a1 = the entry. Uses t0-t3, a7. */
+LOCAL_FUNCTION node_api_find
+    UNWIND_END_PROLOGUE
+    PART    a1, t1, s1, Node_api
+    li      t0, 0
+    beqz    a0, 3f
+1:  bgeu    t0, t1, 3f
+    ld      t2, NodeApi_connection(a1)
+    beq     t2, a0, 4f
+    addi    a1, a1, NodeApi__mem
+    addi    t0, t0, 1
+    j       1b
+3:  li      a0, -1
+    ret
+4:  mv      a0, t0
+    ret
+END_FUNCTION node_api_find
+
+/* a0 = the index of a free NodeApi entry (the first free, else the next; the step checked one is free), a1 = the entry. Uses t0-t2, a7. */
+LOCAL_FUNCTION node_api_new
+    UNWIND_END_PROLOGUE
+    PART    a1, t1, s1, Node_api
+    li      t0, 0
+1:  bgeu    t0, t1, 2f
+    ld      t2, NodeApi_connection(a1)
+    beqz    t2, 3f
+    addi    a1, a1, NodeApi__mem
+    addi    t0, t0, 1
+    j       1b
+2:  addi    t1, t1, 1
+    STQ     t1, s1, Node_api + 8
+3:  mv      a0, t0
+    ret
+END_FUNCTION node_api_new
+
+/*
+ * The end of the stream of the NodeApi entry a0: the entry is free, the api part's count drops
+ * past the free entries at its end; with API_STREAM_OWN, a BYTES_FREE of its data, which node_ids
+ * gives to another entry that sends the same bytes. Uses t0-t3, a0-a2, a7.
+ */
+LOCAL_FUNCTION node_api_end
+    UNWIND_END_PROLOGUE
+    sd      zero, NodeApi_connection(a0)
+    PART    t0, t1, s1, Node_api
+    li      t3, NodeApi__mem
+1:  beqz    t1, 2f
+    addi    t2, t1, -1
+    mul     t2, t2, t3
+    add     t2, t0, t2
+    ld      t2, NodeApi_connection(t2)
+    bnez    t2, 2f
+    addi    t1, t1, -1
+    j       1b
+2:  STQ     t1, s1, Node_api + 8
+    ld      t0, NodeApi_flags(a0)
+    andi    t0, t0, API_STREAM_OWN
+    beqz    t0, 9f
+    ld      a1, NodeApi_data(a0)
+    li      a0, NODE_ACT_BYTES_FREE
+    li      a2, 0
+    j       node_ids
+9:  ret
+END_FUNCTION node_api_end
+
+/* A NODE_WORK_API_CHUNK of the NodeApi entry a1 at index a0, which takes API_STREAM_BUSY. */
+LOCAL_FUNCTION node_api_chunk_work
+    UNWIND_END_PROLOGUE
+    ld      t0, NodeApi_flags(a1)
+    ori     t0, t0, API_STREAM_BUSY
+    sd      t0, NodeApi_flags(a1)
+    mv      a5, a0
+    ld      a3, NodeApi_data(a1)
+    ld      a4, NodeApi_connection(a1)
+    li      a0, NODE_WORK_API_CHUNK
+    li      a2, 0
+    li      a1, 0
+    j       node_work
+END_FUNCTION node_api_chunk_work
+
+/* NODE_EV_API_SENT of the connection a0: the next chunk of its stream, unless one is queued. */
+LOCAL_FUNCTION node_api_sent
+    FRAME 0
+    call    node_api_find
+    li      t0, -1
+    beq     a0, t0, 9f
+    ld      t0, NodeApi_flags(a1)
+    andi    t0, t0, API_STREAM_BUSY
+    bnez    t0, 9f
+    call    node_api_chunk_work
+9:  UNFRAME 0
+END_FUNCTION node_api_sent
+
+/* NODE_EV_API_CLOSED of the connection a0: its stream ends, or with a chunk queued takes API_STREAM_GONE. */
+LOCAL_FUNCTION node_api_closed
+    FRAME 0
+    call    node_api_find
+    li      t0, -1
+    beq     a0, t0, 9f
+    ld      t0, NodeApi_flags(a1)
+    andi    t1, t0, API_STREAM_BUSY
+    beqz    t1, 1f
+    ori     t0, t0, API_STREAM_GONE
+    sd      t0, NodeApi_flags(a1)
+    j       9f
+1:  mv      a0, a1
+    call    node_api_end
+9:  UNFRAME 0
+END_FUNCTION node_api_closed
+
+/*
+ * (connection a0, route a1, flags a2, view a3) -> a0: a stream of getBlockV2 or getStateV2 of the
+ * head (node.md, NODE_EV_API): 0 once it started, else the status of the error to answer. flags:
+ * API_STREAM_CLOSE and API_STREAM_HTTP10. s1 the node, s6 the actions. s3 the data, s4 the head's
+ * entry, s7 the route, s8 the view, s9 the connection, s10 the flags. Locals: L the entry's index,
+ * L+8 the entry.
+ */
+LOCAL_FUNCTION node_api_stream
+    ENTER 16
+    mv      s9, a0
+    mv      s7, a1
+    mv      s10, a2
+    mv      s8, a3
+    addi    a0, s1, Node_head_root
+    call    node_find_block
+    li      t0, -1
+    beq     a0, t0, 80f
+    mv      s4, a1
+    ld      t0, ApiRoute_response(s7)       # SSZ, else JSON; the values of the JSON
+    li      t1, API_TYPE_SSZ
+    bne     t0, t1, 1f
+    ori     s10, s10, API_STREAM_SSZ
+1:  ld      t0, ApiView_is_optimistic(s8)
+    beqz    t0, 2f
+    ori     s10, s10, API_STREAM_OPTIMISTIC
+2:  ld      t0, ApiView_head_finalized(s8)
+    beqz    t0, 3f
+    ori     s10, s10, API_STREAM_FINALIZED
+3:  ld      t0, ApiRoute_op(s7)
+    li      t1, API_OP_GET_STATE_V2
+    beq     t0, t1, 5f
+    ld      s3, NodeBlock_data_id(s4)       # getBlockV2: the head's bytes, or its Db record
+    bnez    s3, 6f
+    mv      a0, s4
+    call    node_api_db_ref
+    mv      s3, a0
+    beqz    s3, 80f
+    j       6f
+5:  ld      t0, NodeBlock_state_id(s4)      # getStateV2: the post-state's SSZ bytes, as a new id the stream owns
+    beqz    t0, 80f
+    call    node_new_id
+    mv      s3, a0
+    li      a0, NODE_ACT_STATE_BYTES
+    li      a1, NODE_ACT_STATE_BYTES_SIZE
+    call    node_act
+    ld      t0, NodeBlock_state_id(s4)
+    sd      t0, 16(a0)
+    sd      s3, 24(a0)
+    ori     s10, s10, API_STREAM_OWN
+6:  call    node_api_new                    # the entry
+    sd      a0, (L + 0)(sp)
+    sd      a1, (L + 8)(sp)
+    mv      a0, a1
+    li      a1, NodeApi__mem
+    call    lantern_zero
+    ld      a0, NodeBlock_slot(s4)
+    addi    a1, s1, Node_config
+    call    node_fork
+    ld      a1, (L + 8)(sp)
+    sd      a0, NodeApi_fork(a1)
+    sd      s9, NodeApi_connection(a1)
+    ld      t0, ApiRoute_op(s7)
+    sd      t0, NodeApi_op(a1)
+    sd      s10, NodeApi_flags(a1)
+    sd      s3, NodeApi_data(a1)
+    ld      a0, (L + 0)(sp)
+    call    node_api_chunk_work
+    li      a0, 0
+    LEAVE 16
+80: li      a0, 404
+    LEAVE 16
+END_FUNCTION node_api_stream
+
+/*
+ * The NODE_EV_WORK_DONE a0 of a NODE_WORK_API_CHUNK (node.md, lantern_node_step). s1 the node,
+ * s6 the actions. s3 the event, s4 the entry, s7 the action, s8 the flags.
+ */
+LOCAL_FUNCTION node_api_chunk_done
+    ENTER 0
+    mv      s3, a0
+    ld      t0, NodeAction_arg(s3)
+    PART    t1, t2, s1, Node_api
+    bgeu    t0, t2, 99f
+    li      t3, NodeApi__mem
+    mul     t0, t0, t3
+    add     s4, t1, t0
+    ld      t0, NodeApi_connection(s4)
+    beqz    t0, 99f
+    ld      t1, NodeAction_target(s3)
+    bne     t0, t1, 99f
+    ld      s8, NodeApi_flags(s4)
+    andi    s8, s8, ~API_STREAM_BUSY
+    sd      s8, NodeApi_flags(s4)
+    andi    t0, s8, API_STREAM_GONE
+    bnez    t0, 90f                         # API_STREAM_GONE: the stream ends
+    ld      t0, NodeEvent_result(s3)
+    bnez    t0, 50f
+    ld      t0, NodeEvent_api(s3)           # valid: the entry takes sent, flags and cursor
+    sd      t0, NodeApi_sent(s4)
+    ld      t0, (NodeEvent_api + 8)(s3)
+    andi    t0, t0, ~(API_STREAM_BUSY | API_STREAM_OWN)
+    andi    t1, s8, API_STREAM_OWN
+    or      s8, t0, t1
+    sd      s8, NodeApi_flags(s4)
+    addi    a0, s4, NodeApi_cursor
+    addi    a1, s3, (NodeEvent_api + 16)
+    li      a2, JSON_CURSOR_SIZE
+    call    lantern_copy
+    ld      a1, (NodeEvent_api_bytes + 16)(s3)  # the chunk in a SEND
+    addi    a1, a1, (56 + 7)
+    andi    a1, a1, -8
+    li      a0, NODE_ACT_API_SEND
+    call    node_act
+    mv      s7, a0
+    ld      t0, NodeApi_connection(s4)
+    sd      t0, 16(s7)
+    srli    t0, s8, 10                      # last: API_STREAM_DONE
+    andi    t0, t0, 1
+    sd      t0, 24(s7)
+    ld      t0, 0(s7)
+    addi    t0, t0, -32
+    sd      t0, 32(s7)
+    li      t0, 24
+    sd      t0, 40(s7)
+    ld      a2, (NodeEvent_api_bytes + 16)(s3)
+    sd      a2, 48(s7)
+    addi    a0, s7, 56
+    ld      t0, (NodeEvent_api_bytes + 8)(s3)
+    addi    a1, s3, NodeEvent_api_bytes
+    add     a1, a1, t0
+    call    lantern_copy
+    ld      t0, 48(s7)                      # zero bytes to the size
+    addi    a0, s7, 56
+    add     a0, a0, t0
+    ld      a1, 0(s7)
+    addi    a1, a1, -56
+    sub     a1, a1, t0
+    call    lantern_zero
+    srli    t0, s8, 10                      # not the last: the next chunk at the next API_SENT
+    andi    t0, t0, 1
+    beqz    t0, 99f
+    andi    t0, s8, API_STREAM_CLOSE
+    beqz    t0, 90f
+    j       60f
+50: andi    t0, s8, API_STREAM_STARTED      # another result: before API_STREAM_STARTED the error 500, after it a CLOSE
+    bnez    t0, 60f
+    ld      a0, NodeApi_connection(s4)
+    li      a1, 0
+    li      a2, 500
+    li      a3, API_BODY_ERROR
+    andi    a4, s8, API_R_CLOSE             # API_STREAM_CLOSE is API_R_CLOSE; HTTP/1.0 kept open says so
+    bnez    a4, 51f
+    andi    t0, s8, API_STREAM_HTTP10
+    beqz    t0, 51f
+    li      a4, API_R_KEEP
+51: call    node_api_send
+    j       90f
+60: li      a0, NODE_ACT_API_CLOSE
+    li      a1, NODE_ACT_API_CLOSE_SIZE
+    call    node_act
+    ld      t0, NodeApi_connection(s4)
+    sd      t0, 16(a0)
+90: mv      a0, s4
+    call    node_api_end
+99: LEAVE 0
+END_FUNCTION node_api_chunk_done
+
+/* The name of the fork a0 joins the response. */
+LOCAL_FUNCTION api_fork_name
+    UNWIND_END_PROLOGUE
+    ADDRESS t0, api_forks
+    slli    a0, a0, 4
+    add     a0, t0, a0
+    lbu     a1, 0(a0)
+    addi    a0, a0, 1
+    j       api_put
+END_FUNCTION api_fork_name
+
+/*
+ * The head of a streamed answer (beacon-api.md, Common rules) for the flags at NodeEvent_api + 8
+ * of the event s5 and the fork of the entry s4: with Content-Length a0, or for a0 = 2^64 - 1
+ * Transfer-Encoding: chunked when API_STREAM_CHUNKED is set, else neither. Locals: a0.
+ */
+LOCAL_FUNCTION api_stream_head
+    FRAME 16
+    sd      a0, 0(sp)
+    API_LIT api_ok
+    ld      t0, (NodeEvent_api + 8)(s5)
+    andi    t0, t0, API_STREAM_SSZ
+    beqz    t0, 1f
+    API_LIT api_octet
+    j       2f
+1:  API_LIT api_type
+2:  API_LIT api_version
+    ld      a0, NodeApi_fork(s4)
+    call    api_fork_name
+    API_LIT api_crlf
+    ld      a0, 0(sp)
+    li      t0, -1
+    beq     a0, t0, 3f
+    API_LIT api_length
+    ld      a0, 0(sp)
+    call    api_dec
+    API_LIT api_crlf
+    j       4f
+3:  ld      t0, (NodeEvent_api + 8)(s5)
+    andi    t0, t0, API_STREAM_CHUNKED
+    beqz    t0, 4f
+    API_LIT api_chunked
+4:  ld      t0, (NodeEvent_api + 8)(s5)
+    andi    t1, t0, API_STREAM_CLOSE
+    beqz    t1, 5f
+    API_LIT api_close
+    j       6f
+5:  andi    t1, t0, API_STREAM_HTTP10
+    beqz    t1, 6f
+    API_LIT api_keep
+6:  API_LIT api_crlf
+    UNFRAME 16
+END_FUNCTION api_stream_head
+
+/* The 4 lower case hex digits of a0 at a1. Uses t0-t2, a0, a2. */
+LOCAL_FUNCTION api_hex4
+    UNWIND_END_PROLOGUE
+    ADDRESS t0, api_hex
+    li      t2, 3
+1:  andi    t1, a0, 15
+    add     t1, t0, t1
+    lbu     t1, 0(t1)
+    add     a2, a1, t2
+    sb      t1, 0(a2)
+    srli    a0, a0, 4
+    addi    t2, t2, -1
+    bgez    t2, 1b
+    ret
+END_FUNCTION api_hex4
+
+/*
+ * The JSON of the entry s4's SSZ bytes s3 from the cursor at NodeEvent_api + 16 of the event s5,
+ * at the writer's cursor s6 up to s8 less a byte, through the event's ByteList at
+ * NodeEvent_api_bytes whose bytes start at s10; then } once it is whole. a0 = 1 when whole, 0
+ * when more is to come, 2 for bytes that are no encoding.
+ */
+LOCAL_FUNCTION api_stream_json
+    FRAME 0
+    addi    t0, s5, NodeEvent_api_bytes     # the ByteList: its room to s8 - 1, its bytes to s6
+    addi    t1, s8, -1
+    sub     t1, t1, t0
+    sd      t1, 0(t0)
+    li      t1, 24
+    sd      t1, 8(t0)
+    sub     t1, s6, s10
+    sd      t1, 16(t0)
+    ld      t1, NodeApi_op(s4)
+    addi    t1, t1, -API_OP_GET_STATE_V2
+    seqz    a0, t1                          # NODE_JSON_STATE, else NODE_JSON_BLOCK
+    mv      a1, s3
+    addi    a2, s5, (NodeEvent_api + 16)
+    addi    a3, s5, NodeEvent_api_bytes
+    ld      t6, NodeApi_fork(s4)
+    FORK_CALL node_json
+    ld      t0, (NodeEvent_api_bytes + 16)(s5)
+    add     s6, s10, t0
+    li      t0, LANTERN_JSON_MORE
+    beq     a0, t0, 8f
+    bnez    a0, 7f
+    API_LIT api_end1
+    li      a0, 1
+    UNFRAME 0
+7:  li      a0, 2
+    UNFRAME 0
+8:  li      a0, 0
+    UNFRAME 0
+END_FUNCTION api_stream_json
+
+/*
+ * (node a0, work a1, data a2, scratch a3, event a4, room a5) -> a0: a NODE_WORK_API_CHUNK of
+ * lantern_node_run (node.md): the next chunk of the NodeApi entry at the work's arg, from the SSZ
+ * bytes in data, at NodeEvent_api of the event, whose buffer has room bytes. s3 data, s4 the
+ * entry, s5 the event; the writer's s6-s9 (api_put); s10 where the chunk's bytes start. Locals: L
+ * the end of the chunk's room, L+8 the SSZ bytes, L+16 their count, L+24 the body's start, L+32
+ * the head's bytes.
+ */
+LOCAL_FUNCTION node_api_chunk_run
+    ENTER 48
+    mv      s3, a2
+    mv      s5, a4
+    ld      t0, NodeAction_arg(a1)          # the entry
+    PART    t1, t2, a0, Node_api
+    bgeu    t0, t2, 98f
+    li      t3, NodeApi__mem
+    mul     t0, t0, t3
+    add     s4, t1, t0
+    ld      t0, NodeApi_connection(s4)
+    beqz    t0, 98f
+    ld      t0, NodeApi_op(s4)
+    li      t1, API_OP_GET_BLOCK_V2
+    beq     t0, t1, 1f
+    li      t1, API_OP_GET_STATE_V2
+    bne     t0, t1, 98f
+1:  beqz    s3, 98f
+    li      t0, NodeEvent_api_bytes + 24    # the chunk's room: at most NODE_API_CHUNK
+    bltu    a5, t0, 97f
+    sub     t0, a5, t0
+    andi    t0, t0, -8
+    li      t1, NODE_API_CHUNK
+    bleu    t0, t1, 2f
+    mv      t0, t1
+2:  ld      t2, NodeApi_flags(s4)
+    andi    t2, t2, API_STREAM_STARTED
+    li      t1, NODE_API_FIRST_ROOM
+    beqz    t2, 3f
+    li      t1, 64
+3:  bltu    t0, t1, 97f
+    addi    s10, s5, (NodeEvent_api_bytes + 24)
+    add     t0, s10, t0
+    sd      t0, (L + 0)(sp)
+    ld      t0, 8(s3)                       # the SSZ bytes
+    add     t0, s3, t0
+    sd      t0, (L + 8)(sp)
+    ld      t0, 16(s3)
+    sd      t0, (L + 16)(sp)
+    beqz    t0, 96f
+    ld      t0, NodeApi_sent(s4)            # the entry's sent, flags and cursor go on in the event
+    sd      t0, NodeEvent_api(s5)
+    ld      t0, NodeApi_flags(s4)
+    sd      t0, (NodeEvent_api + 8)(s5)
+    addi    a0, s5, (NodeEvent_api + 16)
+    addi    a1, s4, NodeApi_cursor
+    li      a2, JSON_CURSOR_SIZE
+    call    lantern_copy
+    mv      s6, s10                         # the writer
+    li      s7, 1
+    ld      s8, (L + 0)(sp)
+    li      s9, 0
+    ld      t0, (NodeEvent_api + 8)(s5)
+    andi    t1, t0, API_STREAM_SSZ
+    beqz    t1, 30f
+    andi    t1, t0, API_STREAM_STARTED
+    bnez    t1, 11f
+    ld      a0, (L + 16)(sp)                # SSZ: the head first, with Content-Length
+    call    api_stream_head
+11: ld      a2, (L + 16)(sp)                # then the bytes from sent, as many as fit
+    ld      t0, NodeEvent_api(s5)
+    sub     a2, a2, t0
+    sub     t1, s8, s6
+    bleu    a2, t1, 12f
+    mv      a2, t1
+12: ld      a1, (L + 8)(sp)
+    add     a1, a1, t0
+    add     t0, t0, a2
+    sd      t0, NodeEvent_api(s5)
+    mv      a0, s6
+    add     s6, s6, a2
+    call    lantern_copy
+    ld      t0, (NodeEvent_api + 8)(s5)
+    ori     t0, t0, API_STREAM_STARTED
+    ld      t1, NodeEvent_api(s5)
+    ld      t2, (L + 16)(sp)
+    bne     t1, t2, 13f
+    ori     t0, t0, API_STREAM_DONE
+13: sd      t0, (NodeEvent_api + 8)(s5)
+    j       80f
+30: andi    t1, t0, API_STREAM_STARTED      # JSON, the first chunk: the body after room for the head
+    bnez    t1, 40f
+    addi    s6, s10, API_HEAD_ROOM
+    sd      s6, (L + 24)(sp)
+    ld      s8, (L + 0)(sp)
+    addi    s8, s8, -7                      # room for CRLF and the last chunk
+    /* {"version":"<fork>","execution_optimistic":…,"finalized":…,"data": */
+    API_LIT api_j_version
+    ld      a0, NodeApi_fork(s4)
+    call    api_fork_name
+    API_LIT api_j_optimistic
+    ld      a0, (NodeEvent_api + 8)(s5)
+    srli    a0, a0, 8
+    andi    a0, a0, 1
+    call    api_bool
+    API_LIT api_x_finalized
+    ld      a0, (NodeEvent_api + 8)(s5)
+    srli    a0, a0, 9
+    andi    a0, a0, 1
+    call    api_bool
+    API_LIT api_j_data
+    call    api_stream_json
+    li      t0, 2
+    beq     a0, t0, 96f
+    ld      t0, (NodeEvent_api + 8)(s5)
+    ori     t0, t0, API_STREAM_STARTED
+    li      t1, -1                          # not whole: chunked, or for HTTP/1.0 no length and a close
+    beqz    a0, 31f
+    ori     t0, t0, API_STREAM_DONE         # whole: Content-Length
+    ld      t1, (L + 24)(sp)
+    sub     t1, s6, t1
+    j       33f
+31: andi    t2, t0, API_STREAM_HTTP10
+    beqz    t2, 32f
+    ori     t0, t0, API_STREAM_CLOSE
+    j       33f
+32: ori     t0, t0, API_STREAM_CHUNKED
+33: sd      t0, (NodeEvent_api + 8)(s5)
+    sd      t1, (L + 32)(sp)
+    ld      t0, (L + 24)(sp)                # the body's bytes
+    sub     t0, s6, t0
+    sd      t0, (L + 16)(sp)
+    li      s7, 0                           # the head's bytes: a pass that counts
+    li      s6, 0
+    ld      a0, (L + 32)(sp)
+    call    api_stream_head
+    add     a0, s10, s6                     # the body after the head, and a size line when chunked
+    ld      t0, (NodeEvent_api + 8)(s5)
+    andi    t0, t0, API_STREAM_CHUNKED
+    beqz    t0, 34f
+    addi    a0, a0, 6
+34: ld      a1, (L + 24)(sp)
+    ld      a2, (L + 16)(sp)
+    add     t0, a0, a2
+    sd      t0, (L + 24)(sp)                # now the body's end
+    call    lantern_copy
+    li      s7, 1                           # the head
+    mv      s6, s10
+    ld      s8, (L + 0)(sp)
+    ld      a0, (L + 32)(sp)
+    call    api_stream_head
+    ld      t0, (NodeEvent_api + 8)(s5)
+    andi    t0, t0, API_STREAM_CHUNKED
+    beqz    t0, 35f
+    ld      a0, (L + 16)(sp)                # chunked: the size line, then CRLF after the bytes
+    mv      a1, s6
+    call    api_hex4
+    li      t0, 0x0d
+    sb      t0, 4(s6)
+    li      t0, 0x0a
+    sb      t0, 5(s6)
+    ld      s6, (L + 24)(sp)
+    API_LIT api_crlf
+    j       80f
+35: ld      s6, (L + 24)(sp)
+    j       80f
+40: andi    t1, t0, API_STREAM_CHUNKED      # JSON, a later chunk; chunked: a size line, the bytes, CRLF
+    beqz    t1, 45f
+    addi    s6, s10, 6
+    ld      s8, (L + 0)(sp)
+    addi    s8, s8, -7
+    call    api_stream_json
+    li      t0, 2
+    beq     a0, t0, 96f
+    sd      a0, (L + 32)(sp)
+    sub     a0, s6, s10
+    addi    a0, a0, -6
+    mv      a1, s10
+    call    api_hex4
+    li      t0, 0x0d
+    sb      t0, 4(s10)
+    li      t0, 0x0a
+    sb      t0, 5(s10)
+    ld      s8, (L + 0)(sp)
+    API_LIT api_crlf
+    ld      t0, (L + 32)(sp)
+    beqz    t0, 80f
+    API_LIT api_last_chunk
+    j       44f
+45: call    api_stream_json                 # HTTP/1.0: the bytes alone
+    li      t0, 2
+    beq     a0, t0, 96f
+    beqz    a0, 80f
+44: ld      t0, (NodeEvent_api + 8)(s5)
+    ori     t0, t0, API_STREAM_DONE
+    sd      t0, (NodeEvent_api + 8)(s5)
+80: sub     t0, s6, s10                     # the chunk's ByteList; the event's size covers it
+    addi    t1, t0, (24 + 7)
+    andi    t1, t1, -8
+    sd      t1, NodeEvent_api_bytes(s5)
+    li      t2, 24
+    sd      t2, (NodeEvent_api_bytes + 8)(s5)
+    sd      t0, (NodeEvent_api_bytes + 16)(s5)
+    addi    t2, t1, NodeEvent_api_bytes
+    sd      t2, 0(s5)
+    mv      a0, s6
+    addi    a1, t1, -24
+    sub     a1, a1, t0
+    call    lantern_zero
+    li      a0, LANTERN_OK
+    LEAVE 48
+96: li      t0, LANTERN_INVALID_ENCODING    # bytes that are no encoding of the type
+    sd      t0, NodeEvent_result(s5)
+    li      t0, NODE_EV_WORK_DONE_SIZE
+    sd      t0, 0(s5)
+    li      a0, LANTERN_OK
+    LEAVE 48
+97: li      a0, LANTERN_BUFFER_TOO_SMALL
+    LEAVE 48
+98: li      a0, LANTERN_INVALID_EVENT
+    LEAVE 48
+END_FUNCTION node_api_chunk_run
 
     RODATA
     .p2align 3

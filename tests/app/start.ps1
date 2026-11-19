@@ -17,7 +17,7 @@ if ($code -eq 2 -and $out -match '^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d{3} ER
 if ($Network -ne '') {
     $log = [System.IO.Path]::GetTempFileName()
     $proc = Start-Process -FilePath $Binary -ArgumentList @('--network-dir', $Network, '--port', '19100', '--http-port', '15052', '--http-max-connections', '2') -RedirectStandardOutput $log -RedirectStandardError "$log.err" -PassThru -NoNewWindow
-    python (Join-Path $PSScriptRoot 'api.py') 15052
+    python (Join-Path $PSScriptRoot 'api.py') 15052 (Join-Path $Network 'genesis.ssz')
     if ($LASTEXITCODE -ne 0) { $fail = 1 }
     Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
     Get-Content $log -TotalCount 5

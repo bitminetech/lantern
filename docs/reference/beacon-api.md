@@ -25,15 +25,16 @@
 - Document: [beacon-APIs v4.0.0](https://github.com/ethereum/beacon-APIs/tree/v4.0.0).
 - Section: the operations of `beacon-node-oapi.yaml` and `apis/`, with the JSON of `types/`: numbers as decimal strings, byte strings as `0x` and lower case hex; an error body is an `ErrorMessage` of `types/http.yaml`.
 - JSON of SSZ values: beacon-APIs `types/primitive.yaml` and the types of each fork: a uint as a decimal string, `Boolean` as `true` or `false`, byte strings and bit strings as `0x` and lower case hex, lists and vectors as arrays, containers as objects of the spec's field names.
-- Responses: [RFC 9112](https://www.rfc-editor.org/rfc/rfc9112) section 4 (status line) and section 9.3 (persistence: an HTTP/1.1 connection stays open unless `close`; an HTTP/1.0 connection closes unless `keep-alive`); [RFC 9110](https://www.rfc-editor.org/rfc/rfc9110) section 8.6 (`Content-Length`), section 10.2.1 (`Allow`) and section 15 (status codes and reason phrases).
+- Responses: [RFC 9112](https://www.rfc-editor.org/rfc/rfc9112) section 4 (status line), section 6.3 (an HTTP/1.0 body with no length ends when the connection closes), section 7.1 (chunked transfer coding) and section 9.3 (persistence: an HTTP/1.1 connection stays open unless `close`; an HTTP/1.0 connection closes unless `keep-alive`); [RFC 9110](https://www.rfc-editor.org/rfc/rfc9110) section 8.6 (`Content-Length`), section 10.2.1 (`Allow`) and section 15 (status codes and reason phrases).
 - Requests: [RFC 9112](https://www.rfc-editor.org/rfc/rfc9112) sections 2 to 7 (message format, request line, fields, body length, chunked coding) and [RFC 9110](https://www.rfc-editor.org/rfc/rfc9110) section 5 (field syntax); status 431 of [RFC 6585](https://www.rfc-editor.org/rfc/rfc6585) section 5.
+- `Eth-Consensus-Version` on the responses of getBlockV2 and getStateV2: the fork of the block or the state, as beacon-APIs `apis/beacon/blocks/block.v2.yaml` and `apis/debug/state.v2.yaml` require it.
 - Routes: the 69 paths and 76 operations of `beacon-node-oapi.yaml` and `apis/` at beacon-APIs v4.0.0 (commit 88fc940), with their parameters of `params/index.yaml` and `apis/`; percent-encoding of [RFC 3986](https://www.rfc-editor.org/rfc/rfc3986) section 2.1; `Accept` of RFC 9110 section 12.5.1; `Content-Type` of RFC 9110 section 8.3.
 
 ## Common rules
 
 The answers of the node (node.md, `NODE_EV_API`) follow these rules.
 
-- The response:
+- The response in one piece:
   - The status line: `HTTP/1.1`, a space, the code in decimal, a space, its reason phrase, CRLF.
   - `Content-Type: application/json` CRLF, when it has a body.
   - `Content-Length: ` and the body's bytes in decimal, CRLF; `0` with no body.
@@ -47,7 +48,7 @@ The answers of the node (node.md, `NODE_EV_API`) follow these rules.
 - The values:
   - `genesis_time`: the store's `genesis_time_ms` / 1000.
   - `genesis_validators_root`: the node's. `genesis_fork_version`: `GENESIS_FORK_VERSION` of the node's config.
-  - The head: the `NodeBlock` of `head_root`. `head_slot`: its slot. `is_optimistic` and `execution_optimistic`: its `payload_status` is `PAYLOAD_STATUS_NOT_VALIDATED`.
+  - The head: the `NodeBlock` of `head_root`. `head_slot`: its slot. `is_optimistic` and `execution_optimistic`: its `payload_status` is `PAYLOAD_STATUS_NOT_VALIDATED`. `finalized`: its root is the root of the store's finalized checkpoint.
   - `current_slot`: the store's slot. `is_syncing`: `NODE_FLAG_SYNCING`. `el_offline`: `NODE_FLAG_EL_OFFLINE`.
   - `connected`: the `NodePeer` entries.
   - The MetaData: `seq_number` the node's `metadata_seq`; `attnets` the 8 bytes of the node's `attnets` (bit i of byte i / 8 for subnet i); from altair `syncnets` 1 zero byte; from fulu `custody_group_count` `CUSTODY_REQUIREMENT` of the node's config. The fork is that of the store's slot.
@@ -60,14 +61,22 @@ The answers of the node (node.md, `NODE_EV_API`) follow these rules.
 - getGenesis: `{"data":{"genesis_time":…,"genesis_validators_root":…,"genesis_fork_version":…}}`.
 - getBlockHeader of the head: `block_id` `head`, or the head's root; another gives 404.
   - The header: lantern_node_block_header of the head's bytes, or of its record when its bytes went to the `Db`. With neither, the `latest_block_header` of its post-state, with the post-state's hash_tree_root as `state_root` when that is zero, and a zero signature.
-  - `{"execution_optimistic":…,"finalized":false,"data":{"root":…,"canonical":true,"header":{"message":{"slot":…,"proposer_index":…,"parent_root":…,"state_root":…,"body_root":…},"signature":…}}}`.
+  - `{"execution_optimistic":…,"finalized":…,"data":{"root":…,"canonical":true,"header":{"message":{"slot":…,"proposer_index":…,"parent_root":…,"state_root":…,"body_root":…},"signature":…}}}`.
 - getStateFinalityCheckpoints of `head`: lantern_node_state_checkpoints of the head's post-state; another `state_id` gives 404.
-  - `{"execution_optimistic":…,"finalized":false,"data":{"previous_justified":{"epoch":…,"root":…},"current_justified":{…},"finalized":{…}}}`.
+  - `{"execution_optimistic":…,"finalized":…,"data":{"previous_justified":{"epoch":…,"root":…},"current_justified":{…},"finalized":{…}}}`.
+- getBlockV2 of the head: `block_id` `head`, or the head's root; another gives 404. The head's SSZ bytes, or those of its `Db` record; with neither, 404.
+- getStateV2 of `head`: the SSZ bytes of the head's post-state, by lantern_node_state_bytes; another `state_id`, or a head with no post-state, gives 404.
+- The answer of getBlockV2 and getStateV2 is streamed (node.md, `NodeApi`): it goes in chunks, from the SSZ bytes of the block or the state.
+  - The fork: that of the slot of the block or the state, by its name: `phase0`, `altair`, `bellatrix`, `capella`, `deneb`, `electra` or `fulu`.
+  - After the status line: `Content-Type: application/octet-stream` CRLF for SSZ (`response` `API_TYPE_SSZ`), else `Content-Type: application/json` CRLF; `Eth-Consensus-Version: ` and the fork's name, CRLF; then `Content-Length`, `Transfer-Encoding: chunked` CRLF, or neither, as below; then `Connection` as for a response in one piece; CRLF.
+  - SSZ: `Content-Length` of the SSZ bytes; the body is the bytes.
+  - JSON: the body is `{"version":"<fork>","execution_optimistic":…,"finalized":…,"data":<data>}`, its data the JSON of the SSZ bytes by lantern_json_encode_ssz with the fork's `SignedBeaconBlock` or `BeaconState`; the values those of the head.
+  - JSON whose whole body is in the first chunk: `Content-Length`. Else, over HTTP/1.1, `Transfer-Encoding: chunked`: each chunk of the stream holds the body's bytes in one chunk of RFC 9112 section 7.1, its size in 4 lower case hex digits, CRLF, the bytes, CRLF; the last also `0` CRLF CRLF. Over HTTP/1.0, neither field and `Connection: close`: the connection closes after the body.
 - Every other operation: 501.
 
 ## Test vectors
 
-- The answers: the `api` cases of [node.md](node.md#test-vectors), through lantern_node_step and lantern_node_run.
+- The answers: the `api` cases of [node.md](node.md#test-vectors), through lantern_node_step and lantern_node_run, and the getBlockV2 and getStateV2 checks of its fork_choice cases in node mode.
 - tests/generator/http_request.py: requests and the `HttpRequest` or fault of each, by the rules of lantern_http_request, apart from the assembly. Each case also runs with its bytes cut short at every length (`LANTERN_HTTP_MORE`, or the same fault once the faulty byte is in), and with `out` one byte short. File: `<preset>-phase0-http-request.bin`.
   - Request lines: each method, origin forms with and without a query, both versions, HTTP/2.0 (505), and broken lines.
   - Fields: each read field, names in mixed case, repeated lines joined, white space before a colon, folded lines, no `Host`, two `Host` lines.

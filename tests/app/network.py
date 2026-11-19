@@ -38,7 +38,7 @@ def genesis(spec, fork, count):
     )
     for i in range(count):
         state.validators.append(spec.Validator(
-            pubkey=pubkeys[i], withdrawal_credentials=spec.Bytes32(b"\x01" + bytes(11) + bytes([i + 1]) * 20),
+            pubkey=pubkeys[i], withdrawal_credentials=spec.Bytes32(b"\x01" + bytes(11) + bytes([i % 255 + 1]) * 20),
             effective_balance=spec.MAX_EFFECTIVE_BALANCE, activation_eligibility_epoch=0, activation_epoch=0,
             exit_epoch=spec.FAR_FUTURE_EPOCH, withdrawable_epoch=spec.FAR_FUTURE_EPOCH))
         state.balances.append(spec.MAX_EFFECTIVE_BALANCE)

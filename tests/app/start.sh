@@ -28,7 +28,7 @@ if [ -n "$network" ]; then
     log=$(mktemp)
     $runner "$binary" --network-dir "$network" --port 19100 --http-port 15052 --http-max-connections 2 > "$log" 2>&1 &
     pid=$!
-    python3 "$(dirname "$0")/api.py" 15052 || fail=1
+    python3 "$(dirname "$0")/api.py" 15052 "$network/genesis.ssz" || fail=1
     kill -INT $pid 2>/dev/null; sleep 1; kill -9 $pid 2>/dev/null
     head -5 "$log"
     rm -f "$log"
