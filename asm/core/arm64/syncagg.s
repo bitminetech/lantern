@@ -35,10 +35,11 @@
  * x25 keys, x26 committee indices, x27 bit count, x28 i.
  * Locals: L SYNC_COMMITTEE_SIZE, L+8 previous slot, L+16 epoch, L+24 domain type, L+32 domain (32),
  * L+64 signing root as a ByteList (56), L+120 block root (32), L+152 valid, L+160 total active balance,
- * L+168 base reward per increment, L+176 participant reward, L+184 proposer reward, L+192 proposer, L+200 the one.
+ * L+168 base reward per increment, L+176 participant reward, L+184 proposer reward, L+192 proposer, L+200 the one,
+ * L+208 1 when x25 is the participants' indices for crypto_bls_fast_aggregate_verify_cached, else 0.
  */
 SPEC_FUNCTION process_sync_aggregate
-    ENTER 208
+    ENTER 224
     mov     x19, x0
     mov     x20, x1
     mov     x21, x2
@@ -72,6 +73,7 @@ SPEC_FUNCTION process_sync_aggregate
     add     x2, sp, #(L + 152)
     bl      lantern_get_set_bit_count
     ldr     x27, [sp, #(L + 152)]
+    str     xzr, [sp, #(L + 208)]
     MOVQ    x9, BeaconState_current_sync_committee
     add     x9, x19, x9
     cmp     x27, #SYNC_COMMITTEE_SIZE
@@ -80,7 +82,49 @@ SPEC_FUNCTION process_sync_aggregate
     add     x10, x9, x10
     KEYS_APPEND x25, x10
     b       4f
-1:  cmp     x27, #(SYNC_COMMITTEE_SIZE / 2)
+1:  ldr     x10, [x21, #CONFIG_PUBKEY_CACHE]    /* with a key cache, some signed: one cached check of their indices */
+    cbz     x10, 11f
+    cbz     x27, 11f
+    mov     x0, x19                         /* committee_indices first: the participants' keys are those validators' */
+    MOVQ    x1, BeaconState_current_sync_committee + SyncCommittee_pubkeys
+    add     x1, x19, x1
+    add     x2, x26, #LIST_FIXED
+    mov     x3, x25                         /* the hash table, where the keys go */
+    bl      find_pubkeys
+    mov     x9, x0
+    mov     x0, #LANTERN_INVALID_SYNC_AGGREGATE
+    cbnz    x9, 6f
+    MOVQ    x9, SYNC_KEYS_LIST              /* the participants' indices: a BlsIndexList where the keys were */
+    str     x9, [x25]
+    mov     x9, #24
+    str     x9, [x25, #8]
+    ldr     x10, [x21, #CONFIG_PUBKEY_CACHE]
+    ldr     x14, [x10, #CRYPTO_BLS_CACHE_COUNT]
+    mov     x28, #0
+    mov     x15, #0
+12: cmp     x28, #SYNC_COMMITTEE_SIZE
+    b.hs    13f
+    lsr     x10, x28, #3
+    add     x11, x20, #SyncAggregate_sync_committee_bits
+    ldrb    w10, [x11, x10]
+    and     x11, x28, #7
+    lsr     w10, w10, w11
+    tbz     w10, #0, 121f
+    add     x12, x26, #LIST_FIXED
+    ldr     x9, [x12, x28, lsl #3]
+    cmp     x9, x14
+    b.hs    14f                             /* an index past the cache: the spec's steps */
+    add     x12, x25, #24
+    str     x9, [x12, x15, lsl #3]
+    add     x15, x15, #1
+121: add    x28, x28, #1
+    b       12b
+13: str     x15, [x25, #16]
+    mov     x9, #1
+    str     x9, [sp, #(L + 208)]
+    b       4f
+14: str     xzr, [x25, #16]
+11: cmp     x27, #(SYNC_COMMITTEE_SIZE / 2)
     b.ls    3f
     mov     x28, #0                         /* more than half: aggregate minus the non participants */
 2:  cmp     x28, #SYNC_COMMITTEE_SIZE
@@ -183,6 +227,8 @@ SPEC_FUNCTION process_sync_aggregate
     str     x9, [sp, #(L + 72)]
     mov     x9, #32
     str     x9, [sp, #(L + 80)]
+    ldr     x9, [sp, #(L + 208)]
+    cbnz    x9, 46f
     mov     x0, x25                         /* assert eth_fast_aggregate_verify(participant_pubkeys, signing_root, signature) */
     add     x1, sp, #(L + 64)
     add     x2, x20, #SyncAggregate_sync_committee_signature
@@ -203,7 +249,7 @@ SPEC_FUNCTION process_sync_aggregate
     mov     x9, x0
     mov     x0, #LANTERN_INVALID_SYNC_AGGREGATE
     cbnz    x9, 6f
-    mov     x0, x19
+47: mov     x0, x19
     mov     x1, x22
     add     x2, sp, #(L + 160)
     bl      lantern_get_total_active_balance
@@ -269,13 +315,28 @@ SPEC_FUNCTION process_sync_aggregate
 45: add     x28, x28, #1
     b       43b
 8:  mov     x0, #LANTERN_OK
-7:  LEAVE 208
+7:  LEAVE 224
 5:  mov     x0, #LANTERN_INVALID_AGGREGATE_PUBKEYS
 6:  str     x0, [x23]
     mov     x0, #LANTERN_OK
-    LEAVE 208
+    LEAVE 224
 9:  mov     x0, #LANTERN_BUFFER_TOO_SMALL
-    LEAVE 208
+    LEAVE 224
+46: PART    x0, x9, x19, BeaconState_validators     /* eth_fast_aggregate_verify of at least one key, through the cache */
+    add     x0, x0, #Validator_pubkey
+    mov     x1, x25
+    ldr     x2, [x21, #CONFIG_PUBKEY_CACHE]
+    add     x3, sp, #(L + 64)
+    add     x4, x20, #SyncAggregate_sync_committee_signature
+    mov     x5, x22
+    add     x6, sp, #(L + 152)
+    CALL_GLOBAL crypto_bls_fast_aggregate_verify_cached
+    cbnz    x0, 7b
+    ldr     x9, [sp, #(L + 152)]
+    mov     x0, #LANTERN_INVALID_SYNC_AGGREGATE
+    cbz     x9, 6b
+    add     x27, x26, #LIST_FIXED           /* committee_indices, found before */
+    b       47b
 SPEC_END process_sync_aggregate
 
 .if WEIGHT_DENOMINATOR != 64

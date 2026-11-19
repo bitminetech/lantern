@@ -40,12 +40,14 @@
  * S7 committee indices, S8 the non participant aggregate then the committee entries, S9 scratch size, S10 P1.
  * Locals: L SYNC_COMMITTEE_SIZE, L+8 previous slot, L+16 epoch, L+24 domain type, L+32 domain (32),
  * L+64 signing root as a ByteList (56), L+120 block root (32), L+152 valid or bit count, L+160 total active balance,
- * L+168 base reward per increment, L+176 participant reward, L+184 proposer reward, L+192 proposer, L+200 the one.
+ * L+168 base reward per increment, L+176 participant reward, L+184 proposer reward, L+192 proposer, L+200 the one,
+ * L+208 1 when r15 is the participants' indices for crypto_bls_fast_aggregate_verify_cached, else 0, L+216 config.
  */
 SPEC_FUNCTION process_sync_aggregate
-    ENTER 208
+    ENTER 224
     mov     %rdi, %rbx
     mov     %rsi, %rbp
+    mov     %rdx, (L + 216)(%rsp)          # config
     mov     %rcx, %r12
     mov     %r8, %r13
 .if FORK >= FORK_FULU
@@ -74,12 +76,54 @@ SPEC_FUNCTION process_sync_aggregate
     lea     (L + 152)(%rsp), %rdx
     call    lantern_get_set_bit_count
     mov     (L + 152)(%rsp), %rax
+    movq    $0, (L + 208)(%rsp)
     cmp     $SYNC_COMMITTEE_SIZE, %rax
     jne     1f
     lea     (BeaconState_current_sync_committee + SyncCommittee_aggregate_pubkey)(%rbx), %rcx  # all signed: [aggregate_pubkey]
     KEYS_APPEND %r15, %rcx
     jmp     4f
-1:  cmp     $(SYNC_COMMITTEE_SIZE / 2), %rax
+1:  mov     (L + 216)(%rsp), %rcx           # with a key cache, some signed: one cached check of their indices
+    mov     CONFIG_PUBKEY_CACHE(%rcx), %rcx
+    test    %rcx, %rcx
+    jz      11f
+    test    %rax, %rax
+    jz      11f
+    mov     %rbx, %rdi                      # committee_indices first: the participants' keys are those validators'
+    lea     (BeaconState_current_sync_committee + SyncCommittee_pubkeys)(%rbx), %rsi
+    mov     S7(%rsp), %rdx
+    add     $LIST_FIXED, %rdx
+    mov     %r15, %rcx                      # the hash table, where the keys go
+    call    find_pubkeys
+    mov     %rax, %rcx
+    mov     $LANTERN_INVALID_SYNC_AGGREGATE, %eax
+    test    %rcx, %rcx
+    jnz     6f
+    movq    $SYNC_KEYS_LIST, (%r15)         # the participants' indices: a BlsIndexList where the keys were
+    movq    $24, 8(%r15)
+    mov     (L + 216)(%rsp), %rcx
+    mov     CONFIG_PUBKEY_CACHE(%rcx), %rcx
+    mov     CRYPTO_BLS_CACHE_COUNT(%rcx), %r8
+    mov     S7(%rsp), %r9
+    add     $LIST_FIXED, %r9
+    xor     %r14d, %r14d
+    xor     %r10d, %r10d
+12: cmp     $SYNC_COMMITTEE_SIZE, %r14
+    jae     13f
+    bt      %r14, SyncAggregate_sync_committee_bits(%rbp)
+    jnc     121f
+    mov     (%r9,%r14,8), %rax
+    cmp     %r8, %rax
+    jae     14f                             # an index past the cache: the spec's steps
+    mov     %rax, 24(%r15,%r10,8)
+    inc     %r10
+121: inc    %r14
+    jmp     12b
+13: mov     %r10, 16(%r15)
+    movq    $1, (L + 208)(%rsp)
+    jmp     4f
+14: movq    $0, 16(%r15)
+11: mov     (L + 152)(%rsp), %rax
+    cmp     $(SYNC_COMMITTEE_SIZE / 2), %rax
     jbe     3f
     xor     %r14d, %r14d                    # more than half: aggregate minus the non participants
 2:  cmp     $SYNC_COMMITTEE_SIZE, %r14
@@ -172,6 +216,8 @@ SPEC_FUNCTION process_sync_aggregate
     movq    $56, (L + 64)(%rsp)
     movq    $24, (L + 72)(%rsp)
     movq    $32, (L + 80)(%rsp)
+    cmpq    $0, (L + 208)(%rsp)
+    jne     46f
     mov     %r15, %rdi                      # assert eth_fast_aggregate_verify(participant_pubkeys, signing_root, signature)
     lea     (L + 64)(%rsp), %rsi
     lea     SyncAggregate_sync_committee_signature(%rbp), %rdx
@@ -194,7 +240,7 @@ SPEC_FUNCTION process_sync_aggregate
     mov     $LANTERN_INVALID_SYNC_AGGREGATE, %eax
     test    %rcx, %rcx
     jnz     6f
-    mov     %rbx, %rdi
+47: mov     %rbx, %rdi
     mov     %r12, %rsi
     lea     (L + 160)(%rsp), %rdx
     call    lantern_get_total_active_balance
@@ -260,13 +306,34 @@ SPEC_FUNCTION process_sync_aggregate
 45: inc     %r14
     jmp     43b
 8:  xor     %eax, %eax
-7:  LEAVE 208
+7:  LEAVE 224
 5:  mov     $LANTERN_INVALID_AGGREGATE_PUBKEYS, %eax
 6:  mov     %rax, (%r13)
     xor     %eax, %eax
-    LEAVE 208
+    LEAVE 224
 9:  mov     $LANTERN_BUFFER_TOO_SMALL, %eax
-    LEAVE 208
+    LEAVE 224
+46: mov     S7(%rsp), %rdx                  # eth_fast_aggregate_verify of at least one key, through the cache
+    add     $LIST_FIXED, %rdx
+    mov     %rdx, S8(%rsp)                  # committee_indices, found before
+    mov     BeaconState_validators(%rbx), %rdi
+    add     %rbx, %rdi
+    add     $Validator_pubkey, %rdi
+    mov     %r15, %rsi
+    mov     (L + 216)(%rsp), %rdx
+    mov     CONFIG_PUBKEY_CACHE(%rdx), %rdx
+    lea     (L + 64)(%rsp), %rcx
+    lea     SyncAggregate_sync_committee_signature(%rbp), %r8
+    mov     %r12, %r9
+    lea     (L + 152)(%rsp), %rax
+    mov     %rax, S7(%rsp)                  # valid: the 7th argument, at the stack pointer
+    CALL_GLOBAL crypto_bls_fast_aggregate_verify_cached
+    test    %rax, %rax
+    jnz     7b
+    mov     $LANTERN_INVALID_SYNC_AGGREGATE, %eax
+    cmpq    $0, (L + 152)(%rsp)
+    je      6b
+    jmp     47b
 SPEC_END process_sync_aggregate
 
 .if WEIGHT_DENOMINATOR != 64
