@@ -8,7 +8,7 @@ tests/generator/run.sh ~/.cache/lantern/vectors
 
 - The output folder must be outside this repo.
 - It runs in the image from [platform/linux/Dockerfile](../../platform/linux/Dockerfile).
-- The output folder keeps the downloads (`sources/`), the consensus-specs clone and the Python environment. A second run downloads nothing.
+- The output folder keeps the downloads (`sources/`), the consensus-specs and beacon-APIs clones and the Python environment. A second run downloads nothing.
 - Fork names after the folder, such as `fulu`, convert only those forks; spec test runner names, such as `fork_choice_compliance`, only those runners. The other entries of `manifest.txt` stay.
 - A run with no names leaves only its own `.bin` files in the folder.
 
@@ -26,6 +26,8 @@ tests/generator/run.sh ~/.cache/lantern/vectors
 | `config.py` | The cases of lantern_config_parse: the pinned spec configs, and hand cases with their values or fault lines |
 | `app.py` | The cases of lantern_app_options: command lines with their options or fault index |
 | `api.py` | The cases of lantern_api_answer: views, requests and the response bytes |
+| `http_request.py` | The cases of lantern_http_request: connection bytes and the request or fault of each |
+| `api_route.py` | The cases of lantern_api_route: requests and the route or fault of each; reads the operations from the beacon-APIs clone |
 
 ## Sources
 
@@ -34,6 +36,7 @@ tests/generator/run.sh ~/.cache/lantern/vectors
 | `mainnet.tar.gz`, `minimal.tar.gz` of consensus-specs v1.7.0-beta.4 | The cases of phase0 to fulu of every runner in scope |
 | `comptests.tar.gz` of the same release | The fork choice compliance cases of altair to fulu, minimal only |
 | The consensus-specs clone at aa16bb4 | The type descriptors, the configs, the KZG trusted setup, and the expected results of the p2p helper cases and the node cases |
+| The beacon-APIs clone at 88fc940 (v4.0.0) | The operations and parameters of the Beacon API, for the route cases |
 
 - Each archive's SHA-256 is pinned in `generate.py`.
 
@@ -50,6 +53,8 @@ tests/generator/run.sh ~/.cache/lantern/vectors
 | `<preset>-config.bin` | One case: `configs/<preset>.yaml` |
 | `<preset>-phase0-config-parse.bin` | Lantern's cases of lantern_config_parse (config.md): `text`, the bytes of a config file, and `config`, the values it gives, or `line`, its first faulty line |
 | `<preset>-phase0-api-answer.bin` | Lantern's cases of lantern_api_answer (beacon-api.md): `view`, an ApiView, `request`, and `response`, the bytes it must give, or `more` |
+| `<preset>-phase0-http-request.bin` | Lantern's cases of lantern_http_request (beacon-api.md): `bytes`, `head_max`, `body_max`, the `status` and `http_status`, `prefix`, the status of each shorter length, and the request's fields and parts |
+| `<preset>-phase0-api-route.bin` | Lantern's cases of lantern_api_route (beacon-api.md): the request's `method` and parts, `status`, and `out`, the whole ApiRoute, or `http_status`, `fault`, `allow` and `op` |
 | `<preset>-phase0-app-options.bin` | Lantern's cases of lantern_app_options (app.md): `args`, a command line, and `options`, the fields it gives, or `fault`, the index of its first faulty argument |
 | `<preset>-kzg_setup.bin` | One case: the three point lists of `trusted_setup_4096.json` as bytes |
 | `manifest.txt` | Each file, its case count and its SHA-256 |

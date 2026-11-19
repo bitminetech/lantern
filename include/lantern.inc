@@ -945,6 +945,56 @@
 .set HttpRequest_body, 128
 .set HTTP_REQUEST_FIXED, 144
 
+/* ApiRoute and ValidatorRef (docs/reference/beacon-api.md): lantern_api_route. */
+.set LANTERN_INVALID_ROUTE, 64          /* lantern_api_route: the request breaks a rule; ApiRoute.status is the HTTP status */
+.set API_TYPE_JSON, 1
+.set API_TYPE_SSZ, 2
+.set API_ID_HEAD, 1
+.set API_ID_GENESIS, 2
+.set API_ID_FINALIZED, 3
+.set API_ID_JUSTIFIED, 4
+.set API_ID_SLOT, 5
+.set API_ID_ROOT, 6
+.set API_VALIDATOR_INDEX, 1
+.set API_VALIDATOR_PUBKEY, 2
+.set ValidatorRef_kind, 0
+.set ValidatorRef_index, 8
+.set ValidatorRef_pubkey, 16
+.set ValidatorRef__size, 64
+.set ApiRoute_size, 0
+.set ApiRoute_status, 8
+.set ApiRoute_op, 16
+.set ApiRoute_allow, 24
+.set ApiRoute_fault, 32
+.set ApiRoute_present, 40
+.set ApiRoute_response, 48
+.set ApiRoute_body, 56
+.set ApiRoute_consensus_version, 64
+.set ApiRoute_id_kind, 72
+.set ApiRoute_id_slot, 80
+.set ApiRoute_id_root, 88
+.set ApiRoute_validator, 120              /* ValidatorRef */
+.set ApiRoute_epoch, 184
+.set ApiRoute_slot, 192
+.set ApiRoute_index, 200
+.set ApiRoute_committee_index, 208
+.set ApiRoute_subcommittee_index, 216
+.set ApiRoute_start_period, 224
+.set ApiRoute_count, 232
+.set ApiRoute_syncing_status, 240
+.set ApiRoute_builder_boost_factor, 248
+.set ApiRoute_broadcast_validation, 256
+.set ApiRoute_statuses, 264
+.set ApiRoute_peer_states, 272
+.set ApiRoute_peer_directions, 280
+.set ApiRoute_topics, 288
+.set ApiRoute_root, 296
+.set ApiRoute_randao_reveal, 328
+.set ApiRoute_graffiti, 424
+.set ApiRoute_list, 456                   /* PartRef: ValidatorRef, u64 or Root items */
+.set ApiRoute_peer_id, 472                /* PartRef of bytes */
+.set API_ROUTE_FIXED, 488
+
 /* ArgList, Arg and AppOptions (docs/reference/app.md): a text field is an Arg (start, length) of the ArgList's bytes. */
 .set ArgList_args, 8
 .set ArgList_bytes, 24

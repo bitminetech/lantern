@@ -17,6 +17,7 @@
 .include "reqresp_protocols.inc"
 .include "engine_text.inc"
 .include "gossip_topics.inc"
+.include "api_routes.inc"
 .include "macros.s"
 
 /* ---------------------------------------------------------------- Functions */
@@ -26,6 +27,7 @@
 .include "options.s"
 .include "api.s"
 .include "http.s"
+.include "route.s"
 .include "seen_find.s"
 .include "store.s"
 .include "seen.s"

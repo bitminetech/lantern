@@ -5,13 +5,16 @@
 ### Functions
 
 - [`lantern_api_answer`](#function-lantern_api_answer): the HTTP response to a Beacon API request.
+- [`lantern_api_route`](#function-lantern_api_route): finds the operation of a request and reads its parameters.
 - [`lantern_http_request`](#function-lantern_http_request): reads one HTTP/1.1 request, head and body, from a connection's bytes.
 
 ### Types
 
+- [`ApiRoute`](#type-apiroute): the operation of a request and its parameters.
 - [`ApiView`](#type-apiview): the values of the node that the answers show.
 - [`HttpLimits`](#type-httplimits): the largest request head and body a connection takes.
 - [`HttpRequest`](#type-httprequest): one request, read.
+- [`ValidatorRef`](#type-validatorref): a validator by index or by public key.
 
 ## Spec
 
@@ -20,6 +23,7 @@
 - The endpoints are those that ethereum-package and Assertoor read: `ethereum-package` waits for `/eth/v1/node/health` to give 200 or 206, and reads `data.enr`, `data.p2p_addresses[0]` and `data.peer_id` of `/eth/v1/node/identity`.
 - HTTP/1.1: RFC 9112. Each response closes its connection.
 - Requests: [RFC 9112](https://www.rfc-editor.org/rfc/rfc9112) sections 2 to 7 (message format, request line, fields, body length, chunked coding) and [RFC 9110](https://www.rfc-editor.org/rfc/rfc9110) section 5 (field syntax); status 431 of [RFC 6585](https://www.rfc-editor.org/rfc/rfc6585) section 5.
+- Routes: the 69 paths and 76 operations of `beacon-node-oapi.yaml` and `apis/` at beacon-APIs v4.0.0 (commit 88fc940), with their parameters of `params/index.yaml` and `apis/`; percent-encoding of [RFC 3986](https://www.rfc-editor.org/rfc/rfc3986) section 2.1; `Accept` of RFC 9110 section 12.5.1; `Content-Type` of RFC 9110 section 8.3.
 
 ## Test vectors
 
@@ -30,6 +34,12 @@
   - Bodies: `Content-Length` (zero, exact, past `body_max`, two equal values, two different values), chunked (one and many chunks, extensions, trailers, bad sizes, past `body_max`), both fields together, another coding.
   - Limits: a head of exactly `head_max` bytes and one byte more.
   - Pipelining: two requests in one buffer; `used` ends the first.
+- tests/generator/api_route.py: requests and the `ApiRoute` or fault of each, by the rules of lantern_api_route, apart from the assembly. It reads the operations from the beacon-APIs clone at the pinned commit, so the table of the assembly is checked against the spec; a parameter of the spec that the rules below do not name stops it. Each case with `LANTERN_OK` also runs with `out` one byte short. File: `<preset>-phase0-api-route.bin`.
+  - Every operation: its method and path with every required parameter; then each optional parameter.
+  - Every path: each other method (405, `allow`), a trailing `/`, a missing and an extra segment (404).
+  - Every parameter: each form of its type, and values that break it (400 and `fault`).
+  - Query: repeated names, comma lists, empty items, names the operation does not take, percent-encoding (good and broken), 65 ids (414).
+  - Headers: `Accept` with q-values, wildcards, parameters and broken items (406); `Content-Type` (415); `Eth-Consensus-Version` of each fork, missing and wrong (400).
 
 ## Function `lantern_api_answer`
 
@@ -85,6 +95,96 @@ lantern_api_answer(request, view, out) -> status
 - Symbol: `lantern_api_answer` (`_lantern_api_answer` on macOS).
 - Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
 - Argument order: `request`, `view`, `out`.
+
+## Function `lantern_api_route`
+
+Finds the operation of one request and reads its parameters, by their types.
+
+### Signature
+
+```
+lantern_api_route(request, out) -> status
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `request` | input | [`HttpRequest`](#type-httprequest), as lantern_http_request gave it with `LANTERN_OK` |
+| `out` | output | [`ApiRoute`](#type-apiroute), its `size` set by the caller |
+
+### Returns
+
+- `LANTERN_OK`: `out` holds the operation and its parameters.
+- `LANTERN_INVALID_ROUTE`: `status` of `out` is the HTTP status to answer: 400, 404, 405, 406, 414 or 415. `fault`, `allow` and `op` say why.
+- `LANTERN_BUFFER_TOO_SMALL`: `size` of `out` is below `API_ROUTE_FIXED`, or the request breaks no rule and `out` has room for fewer bytes than its parts.
+
+### Function does
+
+- Operations:
+  - The 76 operations of beacon-APIs v4.0.0, numbered `API_OP_*` from 1 in the order of `paths` in `beacon-node-oapi.yaml`, `GET` before `POST` on one path.
+  - Each has a method, a path template, and its parameters (include/api_routes.inc).
+- Path:
+  - The `path` part splits at each `/` after the first byte. Each segment is percent-decoded: `%` and two hex digits of either case is that byte. A `%` without two hex digits gives 400, `fault` 0.
+  - A template matches when it has as many segments, each fixed segment is equal byte for byte, and each parameter segment `{name}` is not empty.
+  - No template matches: 404.
+  - A template matches, but it has no operation for the method: 405. `allow` holds its methods: bit 0 `GET`, bit 1 `POST`.
+- Query:
+  - The `query` part splits at each `&`. An empty item is skipped. An item splits at its first `=` into name and value; with no `=` the value is empty. Both are percent-decoded, as the path is; a broken `%` gives 400, `fault` 0.
+  - A name the operation does not take is skipped.
+  - A name given twice: a list or a set takes both values, in order. Any other parameter gives 400.
+  - The value of a list or a set splits at each `,`. An empty item gives 400.
+  - A required parameter that is missing gives 400.
+- Parameters by type. A value that breaks its type gives 400, `fault` the parameter:
+  - Number (`epoch`, `slot`, `index`, `committee_index`, `subcommittee_index`, `start_period`, `count`, `builder_boost_factor`): one or more decimal digits, value below 2^64.
+  - `syncing_status`: a number from 100 to 599.
+  - Hex: `0x` and hex digits of either case, as many as the type says.
+  - `state_id`: `head`, `genesis`, `finalized`, `justified`, a number (a slot), or hex of 32 bytes (a state root).
+  - `block_id`: `head`, `genesis`, `finalized`, a number (a slot), or hex of 32 bytes (a block root).
+  - `block_root`: hex of 32 bytes.
+  - `validator_id`, and each item of `id`: a number (an index) or hex of 48 bytes (a public key, any bytes).
+  - `peer_id`: 1 to 128 bytes of the base58btc alphabet.
+  - `parent_root`, `attestation_data_root`, `beacon_block_root`, each item of `versioned_hashes`: hex of 32 bytes.
+  - `randao_reveal`: hex of 96 bytes. `graffiti`: hex of 32 bytes.
+  - `skip_randao_verification`: an empty value.
+  - `broadcast_validation`: `gossip` (1), `consensus` (2) or `consensus_and_equivocation` (3). When it is missing: 1.
+  - Each item of `indices`: a number.
+  - Sets, a bit for each name: `status` (the nine `ValidatorStatus` names; `pending`, `active`, `exited` and `withdrawal` set the bits of their statuses), `state` and `direction` of getPeers, `topics` of eventstream (`API_STATUS_*`, `API_PEER_*`, `API_DIRECTION_*`, `API_TOPIC_*`).
+  - `id` of getStateValidators and getStateValidatorBalances: more than 64 items give 414, `fault` `API_PARAM_ID`.
+- `Eth-Consensus-Version`, on the five operations that require it (publishBlindedBlockV2, publishBlockV2, submitPoolAttestationsV2, submitPoolAttesterSlashingsV2, publishAggregateAndProofsV2): a fork name from `phase0` to `fulu`, which sets `consensus_version` to its `FORK_*`. Missing or another value: 400, `fault` `API_PARAM_CONSENSUS_VERSION`.
+- `Accept`, on the operations that can answer with SSZ (those whose responses list 406):
+  - No `Accept`: JSON.
+  - Items split at each `,`, white space around them trimmed, empty items skipped. An item is a media range, then parameters after `;`. The range compares without regard to case.
+  - `q=` sets the item's weight: `0` to `1` with up to 3 decimals (RFC 9110 section 12.4.2). A broken `q` value skips the item. No `q`: weight 1. Other parameters are skipped.
+  - `application/json` weighs by the most specific range that matches it: `application/json`, then `application/*`, then `*/*`; the highest weight among ranges of that kind. No match: weight 0. `application/octet-stream` the same way.
+  - The heavier type answers; a tie answers JSON. Both weight 0: 406.
+  - Other operations ignore `Accept` and answer JSON.
+- `Content-Type`, on the operations that take an SSZ body (those whose responses list 415):
+  - The media type before any `;`, trimmed, without regard to case: `application/json` or no `Content-Type` is JSON; `application/octet-stream` is SSZ; another type gives 415.
+  - Other `POST` operations ignore it: JSON.
+- Order of the checks; the first fault found is the one given:
+  1. `size` of `out` below `API_ROUTE_FIXED`.
+  2. The path's percent-encoding; then its template (404) and its method (405).
+  3. The query's percent-encoding.
+  4. The path parameters, in the order of the path.
+  5. The query items, in their order; within a list or a set, its items in order. The 65th `id` gives 414 before it is read.
+  6. Required query parameters: the missing one of lowest `API_PARAM_*`.
+  7. `Eth-Consensus-Version`, then `Content-Type`, then `Accept`.
+  8. The room of `out`.
+- On `LANTERN_OK`, every field of `out` is written; a parameter that is not given is zero, its bit of `present` clear, apart from `broadcast_validation`, which is 1 when the operation takes it. The list, then the peer id, follow the fixed part, each at a multiple of 8 bytes, with zero bytes between.
+- On `LANTERN_INVALID_ROUTE`, `status`, `fault`, `allow` and `op` are written: `allow` once the path matches, `op` once its method matches too, else zero; `fault` the parameter for 400 and 414, else zero.
+
+### Function never
+
+- Reads more than `request` and the `size` field of `out`.
+- Writes more than `out`.
+
+### ABI
+
+- Role: L1.
+- Symbol: `lantern_api_route` (`_lantern_api_route` on macOS).
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- Argument order: `request`, `out`.
 
 ## Function `lantern_http_request`
 
@@ -149,6 +249,52 @@ lantern_http_request(bytes, limits, out) -> status
 - Symbol: `lantern_http_request` (`_lantern_http_request` on macOS).
 - Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
 - Argument order: `bytes`, `limits`, `out`.
+
+## Type `ApiRoute`
+
+The operation of one request and its parameters, by lantern_api_route.
+
+### Layout
+
+| Offset | Field | Type | Meaning |
+|---|---|---|---|
+| 0 | `size` | u64 | Bytes of the buffer, this field included |
+| 8 | `status` | u64 | With `LANTERN_INVALID_ROUTE`: the HTTP status to answer |
+| 16 | `op` | u64 | `API_OP_*` |
+| 24 | `allow` | u64 | The methods of the matched path: bit 0 `GET`, bit 1 `POST` |
+| 32 | `fault` | u64 | `API_PARAM_*` of the parameter at fault, or 0 |
+| 40 | `present` | u64 | Bit `API_PARAM_*` set for each parameter given |
+| 48 | `response` | u64 | `API_TYPE_JSON` (1) or `API_TYPE_SSZ` (2) |
+| 56 | `body` | u64 | 0 for `GET`; else `API_TYPE_JSON` or `API_TYPE_SSZ` |
+| 64 | `consensus_version` | u64 | `FORK_*` of `Eth-Consensus-Version` |
+| 72 | `id_kind` | u64 | `state_id`, `block_id` or `block_root`: `API_ID_HEAD` (1), `API_ID_GENESIS` (2), `API_ID_FINALIZED` (3), `API_ID_JUSTIFIED` (4), `API_ID_SLOT` (5) or `API_ID_ROOT` (6) |
+| 80 | `id_slot` | u64 | With `API_ID_SLOT` |
+| 88 | `id_root` | Root | With `API_ID_ROOT` |
+| 120 | `validator` | [`ValidatorRef`](#type-validatorref) | `validator_id` |
+| 184 | `epoch` | u64 | |
+| 192 | `slot` | u64 | |
+| 200 | `index` | u64 | |
+| 208 | `committee_index` | u64 | |
+| 216 | `subcommittee_index` | u64 | |
+| 224 | `start_period` | u64 | |
+| 232 | `count` | u64 | |
+| 240 | `syncing_status` | u64 | |
+| 248 | `builder_boost_factor` | u64 | |
+| 256 | `broadcast_validation` | u64 | 1, 2 or 3 |
+| 264 | `statuses` | u64 | `status`: bits `API_STATUS_*` |
+| 272 | `peer_states` | u64 | `state`: bits `API_PEER_*` |
+| 280 | `peer_directions` | u64 | `direction`: bits `API_DIRECTION_*` |
+| 288 | `topics` | u64 | Bits `API_TOPIC_*` |
+| 296 | `root` | Root | `parent_root`, `attestation_data_root` or `beacon_block_root` |
+| 328 | `randao_reveal` | BLSSignature | |
+| 424 | `graffiti` | Bytes32 | |
+| 456 | `list` | PartRef | `id`: `ValidatorRef` items; `indices`: u64 items; `versioned_hashes`: Root items |
+| 472 | `peer_id` | PartRef | The bytes of `peer_id` |
+
+### Rules
+
+- The fixed part is `API_ROUTE_FIXED` (488) bytes.
+- An operation takes at most one of `state_id`, `block_id` and `block_root`; one of the three roots; and one list.
 
 ## Type `ApiView`
 
@@ -224,6 +370,19 @@ One request, read by lantern_http_request.
 
 - The fixed part is `HTTP_REQUEST_FIXED` (144) bytes; the parts follow in field order, each holding bytes.
 - A field that the request does not hold is a part of count 0.
+
+## Type `ValidatorRef`
+
+A validator by its index or by its public key.
+
+### Layout
+
+| Offset | Field | Type | Meaning |
+|---|---|---|---|
+| 0 | `kind` | u64 | `API_VALIDATOR_INDEX` (1) or `API_VALIDATOR_PUBKEY` (2) |
+| 8 | `index` | u64 | With `API_VALIDATOR_INDEX` |
+| 16 | `pubkey` | BLSPubkey | With `API_VALIDATOR_PUBKEY` |
+| 64 | | | Size |
 
 ## Results
 

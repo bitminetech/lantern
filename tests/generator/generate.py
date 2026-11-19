@@ -31,6 +31,7 @@ import config  # lantern's network config file cases
 import app  # lantern's command line cases
 import api  # lantern's Beacon API cases
 import http_request  # lantern_http_request cases
+import api_route  # lantern_api_route cases, from the beacon-APIs clone
 import db  # lantern's database index cases
 
 RELEASE = "https://github.com/ethereum/consensus-specs/releases/download/v1.7.0-beta.4/"
@@ -270,6 +271,11 @@ def main():
         if not runners or "api" in runners:
             file = f"{preset}-phase0-http-request.bin"
             count, digest = write_file(out / file, list(http_request.cases()))
+            manifest.append((file, count, digest))
+            print(f"{file}: {count} cases")
+        if not runners or "api" in runners:
+            file = f"{preset}-phase0-api-route.bin"
+            count, digest = write_file(out / file, list(api_route.cases()))
             manifest.append((file, count, digest))
             print(f"{file}: {count} cases")
         if not runners or "db" in runners:

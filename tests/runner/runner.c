@@ -398,6 +398,7 @@ ABI uint64_t lantern_ssz_size_bounds(const void *type, void *out);
 /* Beacon API: docs/reference/beacon-api.md. */
 ABI uint64_t lantern_api_answer(const void *request, const void *view, void *out);
 ABI uint64_t lantern_http_request(const void *bytes, const void *limits, void *out);
+ABI uint64_t lantern_api_route(const void *request, void *out);
 
 /* Application: docs/reference/app.md. */
 ABI uint64_t lantern_app_options(const void *args, void *options, void *fault);
@@ -6825,6 +6826,90 @@ static void run_http_request(const char *file, case_file *f) {
     }
 }
 
+#define ROUTE_INVALID_STATUS 64
+#define API_ROUTE_FIXED 488
+
+/* An HttpRequest of the case's method and parts path, query, accept, content_type and consensus_version, with no body. */
+static uint8_t *route_request(tv parts, uint64_t *size) {
+    static const char *const names[5] = {"path", "query", "accept", "content_type", "consensus_version"};
+    const uint8_t *b[5];
+    uint64_t lens[5], n = HTTP_REQUEST_FIXED;
+    for (int k = 0; k < 5; k++) {
+        b[k] = tv_bytes(tv_get(parts, names[k]), &lens[k]);
+        n += (lens[k] + 7) / 8 * 8;
+    }
+    uint8_t *r = buffer(n);
+    wr64(r, n);
+    wr64(r + 8, 0);
+    wr64(r + 16, 0);
+    wr64(r + 24, tv_u64(tv_get(parts, "method")));
+    wr64(r + 32, 11);
+    wr64(r + 40, 0);
+    uint64_t at = HTTP_REQUEST_FIXED;
+    for (int k = 0; k < 5; k++) {
+        wr64(r + 48 + 16 * k, at);
+        wr64(r + 56 + 16 * k, lens[k]);
+        if (lens[k]) memcpy(r + at, b[k], (size_t)lens[k]);
+        at += (lens[k] + 7) / 8 * 8;
+    }
+    wr64(r + 128, at);
+    wr64(r + 136, 0);
+    *size = n;
+    return r;
+}
+
+/*
+ * api-route: lantern_api_route of each case's request (tests/generator/api_route.py): the status;
+ * with LANTERN_OK every byte of the ApiRoute, then one byte less of room; with
+ * LANTERN_INVALID_ROUTE its HTTP status, fault, allow and op.
+ */
+static void run_api_route(const char *file, case_file *f) {
+    for (uint64_t i = 0; i < f->count; i++) {
+        const char *name, *why = NULL;
+        uint64_t len, size, wl = 0;
+        tv parts = next_case(f, &name, &len);
+        uint8_t *r = route_request(parts, &size);
+        uint64_t want = tv_u64(tv_get(parts, "status"));
+        tv wo = tv_get(parts, "out");
+        const uint8_t *w = wo ? tv_bytes(wo, &wl) : NULL;
+        uint64_t osize = w ? wl : API_ROUTE_FIXED + 4096;
+        uint8_t *out = buffer(osize);
+        wr64(out, osize);
+        uint64_t st = CALL(lantern_api_route, r, out);
+        static char msg[256];
+        if (!guard_ok(out, osize) || !guard_ok(r, size)) {
+            why = "lantern_api_route wrote out of bounds";
+        } else if (st != want) {
+            snprintf(msg, sizeof msg, "status %llu, not %llu", (unsigned long long)st, (unsigned long long)want);
+            why = msg;
+        } else if (st == 0) {
+            for (uint64_t k = 0; k < wl && !why; k++)
+                if (out[k] != w[k]) {
+                    snprintf(msg, sizeof msg, "byte %llu is %u, not %u", (unsigned long long)k, out[k], w[k]);
+                    why = msg;
+                }
+            if (!why) {
+                uint8_t *small = buffer(osize - 1);
+                wr64(small, osize - 1);
+                if (CALL(lantern_api_route, r, small) != 1) why = "one byte less of room is not LANTERN_BUFFER_TOO_SMALL";
+                else if (!guard_ok(small, osize - 1)) why = "lantern_api_route wrote past a short out";
+                free(small);
+            }
+        } else if (st == ROUTE_INVALID_STATUS) {
+            static const char *const fields[4] = {"http_status", "fault", "allow", "op"};
+            static const uint64_t offsets[4] = {8, 32, 24, 16};
+            for (int k = 0; k < 4 && !why; k++)
+                if (rd64(out + offsets[k]) != tv_u64(tv_get(parts, fields[k]))) {
+                    snprintf(msg, sizeof msg, "%s is %llu", fields[k], (unsigned long long)rd64(out + offsets[k]));
+                    why = msg;
+                }
+        }
+        report(file, name, len, !why, why);
+        free(r);
+        free(out);
+    }
+}
+
 /* ---------------------------------------------------------------- Engine API client */
 
 #define INVALID_HTTP 52
@@ -7074,6 +7159,7 @@ int main(int argc, char **argv) {
         else if (!bls_off && !strcmp(kind, "app-options")) run_app_options(file, &f);
         else if (!bls_off && !strcmp(kind, "api-answer")) run_api_answer(file, &f);
         else if (!bls_off && !strcmp(kind, "http-request")) run_http_request(file, &f);
+        else if (!bls_off && !strcmp(kind, "api-route")) run_api_route(file, &f);
         else if (!bls_off && !strcmp(kind, "db-index")) run_db_index(file, &f);
 #if FORK == FORK_FULU
         else if (!bls_off && (!strcmp(kind, "networking-get_custody_groups") ||
