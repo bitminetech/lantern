@@ -4114,6 +4114,12 @@ LOCAL_FUNCTION app_loop
     mov     APP_STORE(%rbx), %rax
     mov     Store_finalized_checkpoint(%rax), %rdi
     call    app_line_u64
+    ADDRESS %rdi, app_m_earliest            # the first slot the node serves blocks and sidecars from: the backfill's
+    mov     $app_m_earliest_len, %esi
+    call    app_line_text
+    mov     APP_NODE(%rbx), %rax
+    mov     Node_earliest_slot(%rax), %rdi
+    call    app_line_u64
     mov     $1, %edi
     call    app_line_end
 3:  mov     APP_NODE(%rbx), %rax            # a line when the count of connected peers changes

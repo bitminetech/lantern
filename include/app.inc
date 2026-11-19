@@ -187,6 +187,9 @@ app_m_slot:
 app_m_finalized:
     .ascii ", finalized epoch "
 .set app_m_finalized_len, 18
+app_m_earliest:
+    .ascii ", earliest slot "
+.set app_m_earliest_len, 16
 app_config_name:
     .ascii "config.yaml"
 .set app_config_name_len, 11

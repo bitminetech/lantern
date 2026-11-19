@@ -4132,6 +4132,12 @@ LOCAL_FUNCTION app_loop
     LDQ     a0, s1, APP_STORE
     LDQ     a0, a0, Store_finalized_checkpoint
     call    app_line_u64
+    ADDRESS a0, app_m_earliest              # the first slot the node serves blocks and sidecars from: the backfill's
+    li      a1, app_m_earliest_len
+    call    app_line_text
+    LDQ     a0, s1, APP_NODE
+    LDQ     a0, a0, Node_earliest_slot
+    call    app_line_u64
     li      a0, 1
     call    app_line_end
 3:  LDQ     t0, s1, APP_NODE                # a line when the count of connected peers changes

@@ -13,7 +13,8 @@
 # LANTERN_DELAY: seconds before lantern starts (default 0). RESTART=1: 6-second slots, lantern with
 # --data-dir /data; after it follows, once its log shows finalized epoch 2 or later, lantern stops and
 # starts again, and must log "restart at slot" and follow again. CHECKPOINT=1: 6-second slots, lantern
-# starts from the client's finalized block and its post-state, and must log "checkpoint at slot".
+# starts from the client's finalized block and its post-state, must log "checkpoint at slot", and its
+# "earliest slot" must fall below the checkpoint's slot (the backfill).
 # FORK=1: 6-second slots, electra at genesis and fulu at epoch 1 (no BPO fork); lantern's head must
 # reach the fork: slot 40 or later.
 set -eu
@@ -112,6 +113,19 @@ if [ $status -eq 0 ] && [ "${CHECKPOINT:-0}" = 1 ]; then
     else
         echo "FAIL lantern does not start from the checkpoint"; status=1
     fi
+fi
+if [ $status -eq 0 ] && [ "${CHECKPOINT:-0}" = 1 ]; then
+    # the backfill: lantern's earliest slot falls below the checkpoint's slot as lighthouse's blocks join its history
+    cp=$($kurtosis service logs -a $enclave lantern 2>/dev/null | grep -o "checkpoint at slot [0-9]*" | head -1 | grep -o "[0-9]*$")
+    status=1
+    waited=0
+    while [ $waited -lt "$secs" ]; do
+        e=$($kurtosis service logs -a $enclave lantern 2>/dev/null | grep -o "earliest slot [0-9]*" | tail -1 | grep -o "[0-9]*$" || true)
+        echo "lantern earliest slot ${e:-none}, checkpoint slot $cp"
+        [ -n "$e" ] && [ "$e" -lt "$cp" ] && { status=0; break; }
+        sleep 12; waited=$((waited + 12))
+    done
+    if [ $status -eq 0 ]; then echo "PASS lantern backfills below the checkpoint"; else echo "FAIL lantern does not backfill below the checkpoint"; fi
 fi
 [ $status -eq 0 ] && [ "${RESTART:-0}" = 1 ] || exit $status
 
