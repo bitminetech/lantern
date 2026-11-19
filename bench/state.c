@@ -101,12 +101,17 @@ int main(int argc, char **argv) {
         wr64(one, need);
         CALL(LF(beacon_state_copy), state, keep, one);
         uint64_t s1 = rd64(one + 48) + 1, r1 = 0; /* NODE_STATE_SLOT 48 */
-        if (s1 % SLOTS_PER_EPOCH_RUNNER == 0) s1++;
+        if ((s1 % SLOTS_PER_EPOCH_RUNNER) == 0) { /* past the epoch's end first, untimed */
+            s1++;
+            wr64(scratch, ssize);
+            CALL(LF(process_slots), one, &s1, config, scratch, &r1);
+            s1++;
+        }
         wr64(scratch, ssize);
         double a = now_s();
         uint64_t st1 = CALL(LF(process_slots), one, &s1, config, scratch, &r1);
-        printf("process_slots of one slot, with the cache: %.3f s (status %llu, result %llu)\n", now_s() - a,
-               (unsigned long long)st1, (unsigned long long)r1);
+        printf("process_slots of one slot inside an epoch, with the cache: %.3f s (status %llu, result %llu)\n",
+               now_s() - a, (unsigned long long)st1, (unsigned long long)r1);
         free(one);
     }
     wr64(config + CONFIG_STATE_CACHE, 0);
