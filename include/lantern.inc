@@ -148,7 +148,31 @@
 .set CONFIG_MAX_REQUEST_BLOCKS, 392 + 16 * 32 + 128
 .set CONFIG_MESSAGE_DOMAIN_INVALID_SNAPPY, 392 + 16 * 32 + 136   /* DomainType, 4 bytes */
 .set CONFIG_MESSAGE_DOMAIN_VALID_SNAPPY, 392 + 16 * 32 + 144     /* DomainType, 4 bytes */
-.set CONFIG_SIZE, 392 + 16 * 32 + 152
+.set CONFIG_STATE_CACHE, 392 + 16 * 32 + 152    /* the address of a StateCache, or 0 (docs/reference/state.md) */
+.set CONFIG_SIZE, 392 + 16 * 32 + 160
+
+/* StateCache and CacheTree (docs/reference/state.md). */
+.set StateCache_size, 0
+.set StateCache_validators, 8
+.set StateCache_trees, 16
+.set STATE_CACHE_TREES, 16
+.set CacheTree_capacity, 0
+.set CacheTree_count, 8
+.set CacheTree_nodes, 16
+.set CacheTree_dirty, 24
+.set CacheTree_copies, 32
+.set CacheTree_copy, 40
+.set CacheTree__mem, 48
+.set STATE_CACHE_FIXED, 16 + 48 * 16
+.set STATE_CACHE_HISTORICAL_ROOTS, 4096         /* leaves of the historical_roots tree */
+.set STATE_CACHE_LIST, 65536                    /* leaves of the historical_summaries and two pending trees */
+.set STATE_CACHE_PENDING_DEPOSITS, 262144       /* leaves of the pending_deposits tree */
+.set STATE_CACHE_COPY_Validator, 128            /* the __mem of each element type of a tree */
+.set STATE_CACHE_COPY_Eth1Data, 72
+.set STATE_CACHE_COPY_HistoricalSummary, 64
+.set STATE_CACHE_COPY_PendingDeposit, 192
+.set STATE_CACHE_COPY_PendingPartialWithdrawal, 24
+.set STATE_CACHE_COPY_PendingConsolidation, 16
 
 /*
  * The keys of a network config file that lantern_config_parse reads (docs/reference/config.md):

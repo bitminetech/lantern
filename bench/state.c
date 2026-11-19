@@ -77,6 +77,40 @@ int main(int argc, char **argv) {
     printf("state copy: %.3f s\n", t1 - t0);
     root_of("BeaconState", state, root, &why);
     double t2 = now_s();
+    printf("hash_tree_root: %.3f s%s\n", t2 - t1, why ? " (failed)" : "");
+    /* lantern_state_root with a StateCache for n validators: empty, filled, then after one slot. */
+    uint64_t csize = 0;
+    CALL(LF(state_cache_size), &n, &csize);
+    uint8_t *cache = buffer(csize);
+    wr64(cache, csize);
+    CALL(LF(state_cache_init), &n, cache);
+    uint8_t got[32];
+    const char *rwhy = NULL;
+    double c0 = now_s();
+    wr64(scratch, ssize);
+    if (CALL(LF(state_root), state, cache, scratch, got) != 0 || memcmp(got, root, 32)) rwhy = "differs";
+    double c1 = now_s();
+    wr64(scratch, ssize);
+    if (CALL(LF(state_root), state, cache, scratch, got) != 0 || memcmp(got, root, 32)) rwhy = "differs";
+    double c2 = now_s();
+    printf("state cache: %llu MB; state_root empty %.3f s, unchanged %.3f s%s\n", (unsigned long long)(csize >> 20), c1 - c0,
+           c2 - c1, rwhy ? " (root differs)" : "");
+    wr64(config + CONFIG_STATE_CACHE, (uint64_t)(uintptr_t)cache);
+    {
+        uint8_t *one = buffer(need);
+        wr64(one, need);
+        CALL(LF(beacon_state_copy), state, keep, one);
+        uint64_t s1 = rd64(one + 48) + 1, r1 = 0; /* NODE_STATE_SLOT 48 */
+        if (s1 % SLOTS_PER_EPOCH_RUNNER == 0) s1++;
+        wr64(scratch, ssize);
+        double a = now_s();
+        uint64_t st1 = CALL(LF(process_slots), one, &s1, config, scratch, &r1);
+        printf("process_slots of one slot, with the cache: %.3f s (status %llu, result %llu)\n", now_s() - a,
+               (unsigned long long)st1, (unsigned long long)r1);
+        free(one);
+    }
+    wr64(config + CONFIG_STATE_CACHE, 0);
+    t2 = now_s();
     for (int k = 0; EPOCH[k].handler; k++) { /* each epoch step alone, on a copy */
         uint8_t *one = buffer(need);
         wr64(one, need);
@@ -88,17 +122,18 @@ int main(int argc, char **argv) {
         free(one);
     }
     t2 = now_s();
-    printf("hash_tree_root: %.3f s%s\n", t2 - t1, why ? " (failed)" : "");
     wr64(scratch, ssize);
     uint64_t st = CALL(LF(process_epoch), state, config, scratch, &result);
     double t3 = now_s();
     printf("process_epoch: %.3f s (status %llu, result %llu)\n", t3 - t2, (unsigned long long)st, (unsigned long long)result);
     uint64_t slot = rd64(copy + 48) + SLOTS_PER_EPOCH_RUNNER; /* NODE_STATE_SLOT 48: one epoch later */
     slot -= slot % SLOTS_PER_EPOCH_RUNNER;
+    wr64(config + CONFIG_STATE_CACHE, (uint64_t)(uintptr_t)cache);
     wr64(scratch, ssize);
+    t3 = now_s();
     st = CALL(LF(process_slots), copy, &slot, config, scratch, &result);
     double t4 = now_s();
-    printf("process_slots to the next epoch: %.3f s (status %llu, result %llu)\n", t4 - t3, (unsigned long long)st,
-           (unsigned long long)result);
+    printf("process_slots to the next epoch, with the cache: %.3f s (status %llu, result %llu)\n", t4 - t3,
+           (unsigned long long)st, (unsigned long long)result);
     return 0;
 }

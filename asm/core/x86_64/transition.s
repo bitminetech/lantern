@@ -555,14 +555,15 @@ SPEC_END process_block
 SPEC_FUNCTION process_slot
     ENTER 64
     mov     %rdi, %rbx
-    mov     %rsi, %rbp
+    mov     %rdx, %rbp
+    mov     %rsi, %r13
     mov     BeaconState_slot(%rbx), %r12
     and     $(SLOTS_PER_HISTORICAL_ROOT - 1), %r12d
-    ADDRESS %rdi, lantern_type_BeaconState  # previous_state_root = hash_tree_root(state)
-    mov     %rbx, %rsi
+    mov     %rbx, %rdi                      # previous_state_root = hash_tree_root(state)
+    mov     CONFIG_STATE_CACHE(%r13), %rsi
     mov     %rbp, %rdx
     lea     L(%rsp), %rcx
-    CALL_GLOBAL ssz_hash_tree_root
+    call    lantern_state_root
     test    %rax, %rax
     jnz     7f
     mov     %r12, %rax
@@ -718,7 +719,8 @@ SPEC_FUNCTION process_slots
     jbe     8f
     mov     %r15, (%r13)
     mov     %rbx, %rdi
-    mov     %r13, %rsi
+    mov     %r12, %rsi
+    mov     %r13, %rdx
     call    lantern_process_slot
     test    %rax, %rax
     jnz     7f
@@ -878,11 +880,11 @@ SPEC_FUNCTION state_transition
     je      8f
     mov     S8(%rsp), %rax
     mov     %rax, (%r14)
-    ADDRESS %rdi, lantern_type_BeaconState
-    mov     %rbx, %rsi
+    mov     %rbx, %rdi
+    mov     CONFIG_STATE_CACHE(%r13), %rsi
     mov     %r14, %rdx
     lea     (L + 8)(%rsp), %rcx
-    CALL_GLOBAL ssz_hash_tree_root
+    call    lantern_state_root
     test    %rax, %rax
     jnz     7f
     mov     S7(%rsp), %rax

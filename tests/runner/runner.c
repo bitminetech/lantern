@@ -113,6 +113,9 @@ ABI uint64_t LF(node_state_bytes)(const void *state, void *scratch, void *out, v
 ABI uint64_t LF(node_block_header)(const void *data, void *scratch, void *out);
 ABI uint64_t LF(node_state_checkpoints)(const void *state, void *out);
 ABI uint64_t LF(beacon_state_copy)(const void *state, const void *room, void *out);
+ABI uint64_t LF(state_cache_size)(const void *validators, void *size);
+ABI uint64_t LF(state_cache_init)(const void *validators, void *cache);
+ABI uint64_t LF(state_root)(const void *state, void *cache, void *scratch, void *out);
 
 ABI uint64_t LF(compute_shuffled_permutation)(const void *index_count, const void *seed, void *scratch, void *out);
 ABI uint64_t LF(compute_shuffled_index)(const void *index, const void *index_count, const void *seed, void *scratch,
@@ -856,7 +859,8 @@ static const struct {
 #define CONFIG_BLOB_SCHEDULE_COUNT 384
 #define CONFIG_SUBNETS_PER_NODE 336
 #define CONFIG_BLOB_SCHEDULE 392
-#define CONFIG_SIZE (392 + 16 * 32 + 152)
+#define CONFIG_STATE_CACHE (392 + 16 * 32 + 152)
+#define CONFIG_SIZE (392 + 16 * 32 + 160)
 
 static uint8_t config[CONFIG_SIZE];
 
@@ -919,6 +923,8 @@ static void config_from_map(tv map, int overrides) {
 
 /* The config of <preset>-config.bin, and a copy of it for the cases that override values. */
 static uint8_t base_config[CONFIG_SIZE];
+static uint8_t *state_cache;
+static unsigned long cached_roots;
 static void load_config(const char *dir) {
     case_file f;
     char name[64];
@@ -930,6 +936,16 @@ static void load_config(const char *dir) {
     const char *cname;
     uint64_t clen;
     config_from_map(next_case(&f, &cname, &clen), 0);
+    /* One StateCache for the process (state.md, Test vectors): every call's config names it. */
+    uint64_t validators = 4096, csize = 0;
+    CALL(LF(state_cache_size), &validators, &csize);
+    state_cache = buffer(csize);
+    wr64(state_cache, csize);
+    if (CALL(LF(state_cache_init), &validators, state_cache) != 0) {
+        fprintf(stderr, "state_cache_init status\n");
+        exit(2);
+    }
+    wr64(config + CONFIG_STATE_CACHE, (uint64_t)(uintptr_t)state_cache);
     memcpy(base_config, config, CONFIG_SIZE);
     free(f.data);
 }
@@ -1044,6 +1060,15 @@ static int state_equals(const uint8_t *state, const uint8_t *want, uint64_t len,
         else if (memcmp(out + 24, want, (size_t)len)) *why = "post state: bytes differ";
         else ok = 1;
         free(out);
+    }
+    if (ok) { /* lantern_state_root, with the process's cache and with 0, against ssz_hash_tree_root */
+        uint8_t want_root[32], got[32];
+        if (ssz_hash_tree_root(desc, state, scr, want_root) != 0) *why = "post state: hash_tree_root status", ok = 0;
+        else if (CALL(LF(state_root), state, state_cache, fresh_scratch(), got) != 0) *why = "post state: state_root status", ok = 0;
+        else if (memcmp(got, want_root, 32)) *why = "post state: state_root with the cache differs", ok = 0;
+        else if (CALL(LF(state_root), state, NULL, fresh_scratch(), got) != 0) *why = "post state: state_root status", ok = 0;
+        else if (memcmp(got, want_root, 32)) *why = "post state: state_root with no cache differs", ok = 0;
+        else cached_roots++;
     }
     free(scr);
     return ok;
@@ -6906,6 +6931,7 @@ int main(int argc, char **argv) {
     if (node_replays) printf("NOTE: %lu post-states the nodes rebuilt by replay\n", node_replays);
     if (gossip_votes) printf("NOTE: %lu of %lu valid attestations went to fork choice as gossip aggregates\n", gossip_votes_applied, gossip_votes);
     if (drop_ran) printf("NOTE: the sidecar drop check passed\n");
+    if (cached_roots) printf("NOTE: %lu post states hashed alike with and without the state cache\n", cached_roots);
 #if FORK > FORK_PHASE0
     if (node_transitions) printf("NOTE: %lu transition cases through the node\n", node_transitions);
 #endif

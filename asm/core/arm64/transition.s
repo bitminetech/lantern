@@ -538,18 +538,19 @@ SPEC_END process_block
 
 /* ---------------------------------------------------------------- Slots */
 
-/* x19 state, x20 scratch, x21 slot index. Locals: L the state root, L+32 the header root. */
+/* x19 state, x20 scratch, x21 slot index, x22 config. Locals: L the state root, L+32 the header root. */
 SPEC_FUNCTION process_slot
     ENTER 64
     mov     x19, x0
-    mov     x20, x1
+    mov     x22, x1
+    mov     x20, x2
     LDQ     x21, x19, BeaconState_slot
     and     x21, x21, #(SLOTS_PER_HISTORICAL_ROOT - 1)
-    ADDRESS x0, lantern_type_BeaconState    /* previous_state_root = hash_tree_root(state) */
-    mov     x1, x19
+    mov     x0, x19                         /* previous_state_root = hash_tree_root(state) */
+    ldr     x1, [x22, #CONFIG_STATE_CACHE]
     mov     x2, x20
     add     x3, sp, #L
-    CALL_GLOBAL ssz_hash_tree_root
+    bl      lantern_state_root
     cbnz    x0, 7f
     ADDQ    x9, x19, BeaconState_state_roots
     add     x9, x9, x21, lsl #5
@@ -694,7 +695,8 @@ SPEC_FUNCTION process_slots
     b.hs    8f
     str     x24, [x22]
     mov     x0, x19
-    mov     x1, x22
+    mov     x1, x21
+    mov     x2, x22
     bl      lantern_process_slot
     cbnz    x0, 7f
     LDQ     x9, x19, BeaconState_slot
@@ -844,11 +846,11 @@ SPEC_FUNCTION state_transition
     ldr     x9, [x21]                       /* if validate_result: assert block.state_root == hash_tree_root(state) */
     cbz     x9, 8f
     str     x26, [x23]
-    ADDRESS x0, lantern_type_BeaconState
-    mov     x1, x19
+    mov     x0, x19
+    ldr     x1, [x22, #CONFIG_STATE_CACHE]
     mov     x2, x23
     add     x3, sp, #(L + 8)
-    CALL_GLOBAL ssz_hash_tree_root
+    bl      lantern_state_root
     cbnz    x0, 7f
     add     x14, x25, #BeaconBlock_state_root
     add     x15, sp, #(L + 8)
