@@ -13,7 +13,8 @@
 # LANTERN_DELAY: seconds before lantern starts (default 0). RESTART=1: 6-second slots, lantern with
 # --data-dir /data; after it follows, once its log shows finalized epoch 2 or later, lantern stops and
 # starts again, and must log "restart at slot" and follow again. CHECKPOINT=1: 6-second slots, lantern
-# starts from the client's finalized block and its post-state, must log "checkpoint at slot", and its
+# with --data-dir /data (the backfill keeps its blocks there) starts from the client's finalized block
+# and its post-state, must log "checkpoint at slot", and its
 # "earliest slot" must fall below the checkpoint's slot (the backfill).
 # FORK=1: 6-second slots, electra at genesis and fulu at epoch 1 (no BPO fork); lantern's head must
 # reach the fork: slot 40 or later.
@@ -56,7 +57,7 @@ if [ "${FORK:-0}" = 1 ]; then
     for n in 1 2 3 4 5; do printf '  bpo_%s_epoch: 18446744073709551615\n' $n >> "$work/args.yaml"; done
     min_slot=40
 fi
-if [ "${RESTART:-0}" = 1 ]; then printf 'lantern_data_dir: /data\n' >> "$work/args.yaml"; fi
+if [ "${RESTART:-0}" = 1 ] || [ "${CHECKPOINT:-0}" = 1 ]; then printf 'lantern_data_dir: /data\n' >> "$work/args.yaml"; fi
 if [ "${CHECKPOINT:-0}" = 1 ]; then printf 'lantern_checkpoint: true\n' >> "$work/args.yaml"; fi
 
 cleanup() {
