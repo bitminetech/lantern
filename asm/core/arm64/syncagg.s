@@ -5,6 +5,14 @@
 .set G1_POINT_BYTES, 144                                        /* asm-crypto G1Point: X, Y, Z */
 .set SYNC_KEYS_LIST, 24 + 48 * SYNC_COMMITTEE_SIZE              /* a BlsPublicKeyList of the committee */
 .set SYNC_AGG_EXTRA, SYNC_KEYS_LIST + SYNC_INDICES_BYTES + 3 * G1_POINT_BYTES + 48
+.set SYNC_TABLE_SLOTS, 2 * SYNC_COMMITTEE_SIZE                  /* find_pubkeys: slots of (fingerprint, member + 1) */
+.set SYNC_TABLE_BYTES, 16 * SYNC_TABLE_SLOTS
+.if SYNC_TABLE_SLOTS & (SYNC_TABLE_SLOTS - 1)
+.error "find_pubkeys takes a slot number by a mask: SYNC_COMMITTEE_SIZE must be a power of 2"
+.endif
+.if SYNC_TABLE_BYTES + 24 > SYNC_KEYS_LIST
+.error "the hash table of find_pubkeys and its 3 words do not fit where the keys were"
+.endif
 
 /* Append the 48-byte key at register key to the BlsPublicKeyList at register list. Uses x13-x15, x17. */
 .macro KEYS_APPEND list, key
@@ -185,24 +193,17 @@ SPEC_FUNCTION process_sync_aggregate
     ldr     x9, [sp, #(L + 152)]
     mov     x0, #LANTERN_INVALID_SYNC_AGGREGATE
     cbz     x9, 6f
-    mov     x28, #0                         /* committee_indices = [all_pubkeys.index(pubkey) for pubkey in committee] */
-    add     x27, x26, #LIST_FIXED
-41: cmp     x28, #SYNC_COMMITTEE_SIZE
-    b.hs    42f
-    MOVQ    x10, BeaconState_current_sync_committee + SyncCommittee_pubkeys
-    add     x10, x19, x10
-    mov     x11, #48
-    madd    x1, x28, x11, x10
+    add     x27, x26, #LIST_FIXED           /* committee_indices = [all_pubkeys.index(pubkey) for pubkey in committee] */
     mov     x0, x19
-    bl      find_pubkey
+    MOVQ    x1, BeaconState_current_sync_committee + SyncCommittee_pubkeys
+    add     x1, x19, x1
+    mov     x2, x27
+    mov     x3, x25                         /* the hash table, where the keys were */
+    bl      find_pubkeys
     mov     x9, x0
     mov     x0, #LANTERN_INVALID_SYNC_AGGREGATE
-    cmn     x9, #1
-    b.eq    6f
-    str     x9, [x27, x28, lsl #3]
-    add     x28, x28, #1
-    b       41b
-42: mov     x0, x19
+    cbnz    x9, 6f
+    mov     x0, x19
     mov     x1, x22
     add     x2, sp, #(L + 160)
     bl      lantern_get_total_active_balance
@@ -280,3 +281,129 @@ SPEC_END process_sync_aggregate
 .if WEIGHT_DENOMINATOR != 64
 .error "lantern_process_sync_aggregate divides by WEIGHT_DENOMINATOR with a shift by 6"
 .endif
+
+/*
+ * L0: all_pubkeys.index(pubkey) of state x0 for each of the SYNC_COMMITTEE_SIZE 48-byte keys at
+ * x1, written to the u64 entries at x2: the first validator with the key. One pass over the
+ * validators, with the distinct keys in a hash table at x3 (SYNC_TABLE_BYTES): a slot holds the
+ * key's bytes 8 to 15, then its member + 1, or 0 when empty. While the pass runs, an entry holds
+ * -1 for a key not found yet, or 1 << 63 | j for a key that is that of member j < k.
+ * x0 = 0, or -1 when a key is missing. Uses x4-x7, x9-x17.
+ */
+LOCAL_FUNCTION find_pubkeys
+    UNWIND_END_PROLOGUE
+    mov     x9, x3                          /* the table: empty */
+    MOVQ    x10, SYNC_TABLE_BYTES
+    add     x10, x3, x10
+1:  stp     xzr, xzr, [x9], #16
+    cmp     x9, x10
+    b.lo    1b
+    mov     x11, #0                         /* k */
+    mov     x15, #0                         /* distinct keys not found yet */
+2:  cmp     x11, #SYNC_COMMITTEE_SIZE
+    b.hs    6f
+    mov     x12, #48
+    madd    x12, x11, x12, x1               /* key k */
+    ldr     x13, [x12, #8]                  /* its fingerprint */
+    and     x14, x13, #(SYNC_TABLE_SLOTS - 1)
+3:  add     x16, x3, x14, lsl #4            /* the slot */
+    ldr     x17, [x16, #8]
+    cbz     x17, 5f
+    ldr     x9, [x16]
+    cmp     x9, x13
+    b.ne    4f
+    sub     x9, x17, #1                     /* the same fingerprint: the key of member j */
+    mov     x10, #48
+    madd    x9, x9, x10, x1
+    ldp     x4, x5, [x9]
+    ldp     x6, x7, [x12]
+    cmp     x4, x6
+    ccmp    x5, x7, #0, eq
+    b.ne    4f
+    ldp     x4, x5, [x9, #16]
+    ldp     x6, x7, [x12, #16]
+    cmp     x4, x6
+    ccmp    x5, x7, #0, eq
+    b.ne    4f
+    ldp     x4, x5, [x9, #32]
+    ldp     x6, x7, [x12, #32]
+    cmp     x4, x6
+    ccmp    x5, x7, #0, eq
+    b.ne    4f
+    sub     x9, x17, #1                     /* the key of member j: 1 << 63 | j */
+    orr     x9, x9, #0x8000000000000000
+    str     x9, [x2, x11, lsl #3]
+    b       55f
+4:  add     x14, x14, #1
+    and     x14, x14, #(SYNC_TABLE_SLOTS - 1)
+    b       3b
+5:  str     x13, [x16]                      /* a new key */
+    add     x17, x11, #1
+    str     x17, [x16, #8]
+    mov     x9, #-1
+    str     x9, [x2, x11, lsl #3]
+    add     x15, x15, #1
+55: add     x11, x11, #1
+    b       2b
+6:  PART    x9, x10, x0, BeaconState_validators
+    mov     x11, #0                         /* i */
+7:  cbz     x15, 10f
+    cmp     x11, x10
+    b.hs    10f
+    ldr     x13, [x9, #(Validator_pubkey + 8)]
+    and     x14, x13, #(SYNC_TABLE_SLOTS - 1)
+8:  add     x16, x3, x14, lsl #4
+    ldp     x4, x17, [x16]
+    cbz     x17, 95f
+    cmp     x4, x13
+    b.ne    9f
+    sub     x12, x17, #1                    /* the same fingerprint: compare the whole key */
+    mov     x5, #48
+    madd    x12, x12, x5, x1
+    ldp     x4, x5, [x9, #Validator_pubkey]
+    ldp     x6, x7, [x12]
+    cmp     x4, x6
+    ccmp    x5, x7, #0, eq
+    b.ne    9f
+    ldp     x4, x5, [x9, #(Validator_pubkey + 16)]
+    ldp     x6, x7, [x12, #16]
+    cmp     x4, x6
+    ccmp    x5, x7, #0, eq
+    b.ne    9f
+    ldp     x4, x5, [x9, #(Validator_pubkey + 32)]
+    ldp     x6, x7, [x12, #32]
+    cmp     x4, x6
+    ccmp    x5, x7, #0, eq
+    b.ne    9f
+    sub     x12, x17, #1                    /* the first validator with the key: its index */
+    ldr     x4, [x2, x12, lsl #3]
+    cmn     x4, #1
+    b.ne    95f
+    str     x11, [x2, x12, lsl #3]
+    sub     x15, x15, #1
+    b       95f
+9:  add     x14, x14, #1
+    and     x14, x14, #(SYNC_TABLE_SLOTS - 1)
+    b       8b
+95: add     x9, x9, #Validator__mem
+    add     x11, x11, #1
+    b       7b
+10: mov     x11, #0                         /* each repeated key takes the index of its first member */
+11: cmp     x11, #SYNC_COMMITTEE_SIZE
+    b.hs    13f
+    ldr     x4, [x2, x11, lsl #3]
+    cmn     x4, #1
+    b.eq    12f
+    tbz     x4, #63, 115f
+    and     x4, x4, #0x7fffffffffffffff
+    ldr     x4, [x2, x4, lsl #3]
+    cmn     x4, #1
+    b.eq    12f
+    str     x4, [x2, x11, lsl #3]
+115: add    x11, x11, #1
+    b       11b
+12: mov     x0, #-1
+    ret
+13: mov     x0, #0
+    ret
+END_FUNCTION find_pubkeys
