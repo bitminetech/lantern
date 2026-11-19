@@ -812,10 +812,11 @@ SPEC_END process_attestation
  * Locals: L previous epoch, L+8 current epoch, L+16 committees per slot, L+24 committee index,
  * L+32 inclusion delay, L+40 valid, L+48 flags (FLAGS_BYTES), L+96 proposer, L+104 base reward,
  * L+112 index, L+120 proposer reward numerator, L+128 flag, L+136 cursor end, L+144 the indexed
- * attestation, L+152 the attesting list, L+160 the scratch size callees get, L+168 participation.
+ * attestation, L+152 the attesting list, L+160 the scratch size callees get, L+168 participation,
+ * L+176 base reward per increment.
  */
 SPEC_FUNCTION process_attestation
-    ENTER 176
+    ENTER 192
     mv      s1, a0
     mv      s2, a1
     mv      s3, a2
@@ -1005,6 +1006,13 @@ SPEC_FUNCTION process_attestation
     ld      a3, (L + 152)(sp)
     call    lantern_get_attesting_indices
     CHECK_STATUS s5, 7f, 8f
+    ld      t0, (L + 160)(sp)
+    sd      t0, 0(s4)
+    mv      a0, s1                          # get_base_reward's factor, once for every index
+    mv      a1, s4
+    addi    a2, sp, (L + 176)
+    call    lantern_get_base_reward_per_increment
+    bnez    a0, 7f
     sd      zero, (L + 120)(sp)
     ld      s8, (L + 152)(sp)               # the attesting list; the committee indices are done
     addi    s9, s8, LIST_FIXED
@@ -1043,15 +1051,15 @@ SPEC_FUNCTION process_attestation
     addi    a1, sp, (L + 128)
     mv      a2, a0
     call    lantern_add_flag
-    ld      t0, (L + 160)(sp)
-    sd      t0, 0(s4)
-    mv      a0, s1                          # proposer_reward_numerator += get_base_reward(state, index) * weight
-    addi    a1, sp, (L + 112)
-    mv      a2, s4
-    addi    a3, sp, (L + 104)
-    call    lantern_get_base_reward
-    bnez    a0, 7f
-    ld      t0, (L + 104)(sp)
+    PART    t0, t1, s1, BeaconState_validators
+    ld      t2, (L + 112)(sp)               # proposer_reward_numerator += get_base_reward(state, index) * weight
+    slli    t2, t2, 7
+    add     t0, t0, t2
+    ld      t0, Validator_effective_balance(t0)
+    li      t1, EFFECTIVE_BALANCE_INCREMENT
+    divu    t0, t0, t1                      # increments * base_reward_per_increment
+    ld      t1, (L + 176)(sp)
+    mul     t0, t0, t1
     li      t1, TIMELY_SOURCE_WEIGHT        # the source and head weights are equal
     li      t2, TIMELY_TARGET_FLAG_INDEX
     bne     s10, t2, 46f
@@ -1085,13 +1093,13 @@ SPEC_FUNCTION process_attestation
     addi    a2, sp, (L + 120)
     call    lantern_increase_balance
 8:  li      a0, LANTERN_OK
-7:  LEAVE 176
+7:  LEAVE 192
 5:  li      a0, LANTERN_INVALID_OVERFLOW
 6:  sd      a0, 0(s5)
     li      a0, LANTERN_OK
-    LEAVE 176
+    LEAVE 192
 9:  li      a0, LANTERN_BUFFER_TOO_SMALL
-    LEAVE 176
+    LEAVE 192
 SPEC_END process_attestation
 .endif
 

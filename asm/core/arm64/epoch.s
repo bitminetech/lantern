@@ -333,7 +333,7 @@ END_FUNCTION zero_deltas
  * x25 participating list, x26 eligible list, x27 eligible cursor, x28 participating cursor.
  * Locals: L previous epoch, L+8 participating balance, L+16 total active, L+24 leak,
  * L+32 eligible end, L+40 participating end, L+48 base reward, L+56 sub scratch,
- * L+64 callee result, L+72 index, L+80 weight.
+ * L+64 callee result, L+72 index, L+80 weight, L+88 scratch size, L+96 base reward per increment.
  */
 SPEC_FUNCTION get_flag_index_deltas
     ENTER 112
@@ -400,6 +400,13 @@ SPEC_FUNCTION get_flag_index_deltas
     mov     x0, x19
     add     x1, sp, #(L + 24)
     bl      lantern_is_in_inactivity_leak
+    ldr     x9, [sp, #(L + 88)]
+    SCRATCH_GIVE x21, x9, 2, x24
+    mov     x0, x19                         /* get_base_reward's factor, once for every index */
+    ldr     x1, [sp, #(L + 56)]
+    add     x2, sp, #(L + 96)
+    bl      lantern_get_base_reward_per_increment
+    cbnz    x0, 8f
     add     x27, x26, #LIST_FIXED
     ldr     x9, [x26, #LIST_COUNT]
     add     x9, x27, x9, lsl #3
@@ -413,15 +420,14 @@ SPEC_FUNCTION get_flag_index_deltas
     b.hs    7f
     ldr     x11, [x27], #8
     str     x11, [sp, #(L + 72)]
-    ldr     x9, [sp, #(L + 88)]
-    SCRATCH_GIVE x21, x9, 2, x24
-    mov     x0, x19                         /* base_reward = get_base_reward(state, index) */
-    add     x1, sp, #(L + 72)
-    ldr     x2, [sp, #(L + 56)]
-    add     x3, sp, #(L + 48)
-    bl      lantern_get_base_reward
-    cbnz    x0, 8f
-    ldr     x11, [sp, #(L + 72)]
+    PART    x9, x10, x19, BeaconState_validators
+    add     x9, x9, x11, lsl #7             /* base_reward = get_base_reward(state, index): */
+    ldr     x9, [x9, #Validator_effective_balance]
+    MOVQ    x10, EFFECTIVE_BALANCE_INCREMENT
+    udiv    x9, x9, x10                     /* increments * base_reward_per_increment */
+    ldr     x10, [sp, #(L + 96)]
+    mul     x9, x9, x10
+    str     x9, [sp, #(L + 48)]
     ldr     x13, [sp, #(L + 40)]
     IN_SORTED x11, x28, x13
     b.ne    2f

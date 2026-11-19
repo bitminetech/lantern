@@ -972,8 +972,11 @@ lantern_compute_shuffled_index(index, index_count, seed, scratch, out) -> status
 ### Returns
 
 - `LANTERN_OK`: `out` holds the shuffled index.
-- `LANTERN_BUFFER_TOO_SMALL`: `scratch` has fewer than 32 + 8 * index_count + 32 * ceil(index_count / 256) bytes.
 - `LANTERN_INVALID_SHUFFLED_INDEX`: index is not below index_count.
+
+### Function does
+
+- The spec's compute_shuffled_index: `SHUFFLE_ROUND_COUNT` rounds on the one index, each with the pivot digest and the digest of the position's bucket.
 
 ### ABI
 
@@ -1030,7 +1033,6 @@ lantern_compute_proposer_index(state, indices, seed, scratch, out) -> status
 ### Returns
 
 - `LANTERN_OK`: `out` holds the proposer.
-- `LANTERN_BUFFER_TOO_SMALL`: `scratch` has fewer than S(1) bytes.
 - `LANTERN_INVALID_NO_INDICES`: `indices` is empty.
 
 ### Caller must
@@ -1070,7 +1072,6 @@ lantern_compute_proposer_indices(state, epoch, seed, indices, scratch, out) -> s
 ### Returns
 
 - `LANTERN_OK`: `out` holds the proposers.
-- `LANTERN_BUFFER_TOO_SMALL`: `scratch` has fewer than S(1) bytes.
 - A `LANTERN_INVALID_*` code: a check of lantern_compute_proposer_index failed, or the start slot leaves the Uint64 range.
 
 ### ABI

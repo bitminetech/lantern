@@ -808,10 +808,11 @@ SPEC_END process_attestation
  * Locals: L previous epoch, L+8 current epoch, L+16 committees per slot, L+24 committee index,
  * L+32 inclusion delay, L+40 valid, L+48 flags (FLAGS_BYTES), L+96 proposer, L+104 base reward,
  * L+112 index, L+120 proposer reward numerator, L+128 flag, L+136 cursor end, L+144 the indexed
- * attestation, L+152 the attesting list, L+160 the scratch size callees get, L+168 participation.
+ * attestation, L+152 the attesting list, L+160 the scratch size callees get, L+168 participation,
+ * L+176 base reward per increment.
  */
 SPEC_FUNCTION process_attestation
-    ENTER 176
+    ENTER 192
     mov     x19, x0
     mov     x20, x1
     mov     x21, x2
@@ -1008,6 +1009,13 @@ SPEC_FUNCTION process_attestation
     ldr     x3, [sp, #(L + 152)]
     bl      lantern_get_attesting_indices
     CHECK_STATUS x23, 7f, 8f
+    ldr     x9, [sp, #(L + 160)]
+    str     x9, [x22]
+    mov     x0, x19                         /* get_base_reward's factor, once for every index */
+    mov     x1, x22
+    add     x2, sp, #(L + 176)
+    bl      lantern_get_base_reward_per_increment
+    cbnz    x0, 7f
     str     xzr, [sp, #(L + 120)]
     ldr     x26, [sp, #(L + 152)]           /* the attesting list; the committee indices are done */
     add     x27, x26, #LIST_FIXED
@@ -1045,15 +1053,14 @@ SPEC_FUNCTION process_attestation
     add     x1, sp, #(L + 128)
     mov     x2, x0
     bl      lantern_add_flag
-    ldr     x9, [sp, #(L + 160)]
-    str     x9, [x22]
-    mov     x0, x19                         /* proposer_reward_numerator += get_base_reward(state, index) * weight */
-    add     x1, sp, #(L + 112)
-    mov     x2, x22
-    add     x3, sp, #(L + 104)
-    bl      lantern_get_base_reward
-    cbnz    x0, 7f
-    ldr     x9, [sp, #(L + 104)]
+    ldr     x9, [sp, #(L + 112)]            /* proposer_reward_numerator += get_base_reward(state, index) * weight */
+    PART    x10, x11, x19, BeaconState_validators
+    add     x10, x10, x9, lsl #7
+    ldr     x9, [x10, #Validator_effective_balance]
+    MOVQ    x10, EFFECTIVE_BALANCE_INCREMENT
+    udiv    x9, x9, x10                     /* increments * base_reward_per_increment */
+    ldr     x10, [sp, #(L + 176)]
+    mul     x9, x9, x10
     mov     x10, #TIMELY_TARGET_WEIGHT
     mov     x11, #TIMELY_SOURCE_WEIGHT
     cmp     x28, #TIMELY_TARGET_FLAG_INDEX
@@ -1087,12 +1094,12 @@ SPEC_FUNCTION process_attestation
     add     x2, sp, #(L + 120)
     bl      lantern_increase_balance
 8:  mov     x0, #LANTERN_OK
-7:  LEAVE 176
+7:  LEAVE 192
 5:  mov     x0, #LANTERN_INVALID_OVERFLOW
 6:  str     x0, [x23]
     mov     x0, #LANTERN_OK
-    LEAVE 176
+    LEAVE 192
 9:  mov     x0, #LANTERN_BUFFER_TOO_SMALL
-    LEAVE 176
+    LEAVE 192
 SPEC_END process_attestation
 .endif

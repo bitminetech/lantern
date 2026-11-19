@@ -1069,11 +1069,7 @@ lantern_compute_committee(indices, seed, index, count, scratch, out) -> status
 ### Returns
 
 - `LANTERN_OK`: `out` holds the committee.
-- `LANTERN_BUFFER_TOO_SMALL`: scratch is short, or `out` has too little room.
-
-### Limits
-
-- Scratch: S(1), with n the length of indices.
+- `LANTERN_BUFFER_TOO_SMALL`: `out` has too little room.
 
 ## Function `lantern_get_beacon_committee`
 

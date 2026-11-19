@@ -317,7 +317,7 @@ END_FUNCTION zero_deltas
  * s7 participating list, s8 eligible list, s9 eligible cursor, s10 participating cursor.
  * Locals: L previous epoch, L+8 participating balance, L+16 total active, L+24 leak,
  * L+32 eligible end, L+40 participating end, L+48 base reward, L+56 scratch,
- * L+72 index, L+80 weight, L+88 the scratch size on entry.
+ * L+72 index, L+80 weight, L+88 the scratch size on entry, L+96 base reward per increment.
  */
 SPEC_FUNCTION get_flag_index_deltas
     ENTER 112
@@ -381,6 +381,13 @@ SPEC_FUNCTION get_flag_index_deltas
     mv      a0, s1
     addi    a1, sp, (L + 24)
     call    lantern_is_in_inactivity_leak
+    ld      t0, (L + 88)(sp)
+    SCRATCH_GIVE s3, t0, 2, s6
+    mv      a0, s1                          # get_base_reward's factor, once for every index
+    ld      a1, (L + 56)(sp)
+    addi    a2, sp, (L + 96)
+    call    lantern_get_base_reward_per_increment
+    bnez    a0, 8f
     addi    s9, s8, LIST_FIXED
     ld      t0, LIST_COUNT(s8)
     slli    t0, t0, 3
@@ -396,15 +403,15 @@ SPEC_FUNCTION get_flag_index_deltas
     ld      t2, 0(s9)
     addi    s9, s9, 8
     sd      t2, (L + 72)(sp)
-    ld      t0, (L + 88)(sp)
-    SCRATCH_GIVE s3, t0, 2, s6
-    mv      a0, s1                          # base_reward = get_base_reward(state, index)
-    addi    a1, sp, (L + 72)
-    ld      a2, (L + 56)(sp)
-    addi    a3, sp, (L + 48)
-    call    lantern_get_base_reward
-    bnez    a0, 8f
-    ld      t2, (L + 72)(sp)
+    PART    t0, t1, s1, BeaconState_validators
+    slli    t3, t2, 7                       # base_reward = get_base_reward(state, index):
+    add     t0, t0, t3
+    ld      t0, Validator_effective_balance(t0)
+    li      t1, EFFECTIVE_BALANCE_INCREMENT
+    divu    t0, t0, t1                      # increments * base_reward_per_increment
+    ld      t1, (L + 96)(sp)
+    mul     t0, t0, t1
+    sd      t0, (L + 48)(sp)
     ld      t4, (L + 40)(sp)
     IN_SORTED t2, s10, t4, t5
     beqz    t5, 3f

@@ -1194,6 +1194,7 @@ lantern_get_next_sync_committee_indices(state, scratch, out) -> status
 
 - Altair to deneb: a candidate passes when effective_balance * 255 >= MAX_EFFECTIVE_BALANCE * sha256(seed + uint_to_bytes(i // 32))[i % 32].
 - Electra and later: a candidate passes when effective_balance * 65535 >= MAX_EFFECTIVE_BALANCE_ELECTRA * the two bytes at i % 16 * 2 of sha256(seed + uint_to_bytes(i // 16)).
+- The shuffled index of each candidate is its entry of one lantern_compute_shuffled_permutation of the active validator count, in the second list of scratch.
 
 ### Limits
 

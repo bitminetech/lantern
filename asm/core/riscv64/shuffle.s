@@ -117,45 +117,63 @@ SPEC_FUNCTION compute_shuffled_permutation
     LEAVE 80
 SPEC_END compute_shuffled_permutation
 
-/* s1 index, s2 count pointer, s3 seed, s4 scratch, s5 out, s6 list. */
+/*
+ * s1 index, s2 index count, s3 round, s4 flip, s5 out, s6 position.
+ * Locals: L the message (seed, round, bucket), L+40 the digest.
+ */
 SPEC_FUNCTION compute_shuffled_index
-    ENTER 16
+    ENTER 80
     ld      s1, 0(a0)
-    mv      s2, a1
-    mv      s3, a2
-    mv      s4, a3
+    ld      s2, 0(a1)
     mv      s5, a4
-    ld      t0, 0(s2)
-    bgeu    s1, t0, 8f                      # assert index < index_count
-    slli    t1, t0, 3                       # the permutation's list: L(index_count), at the end of scratch
-    addi    t1, t1, LIST_FIXED
-    addi    t2, t0, 255
-    srli    t2, t2, 8
-    slli    t2, t2, 5
-    addi    t2, t2, 8
-    add     t2, t2, t1                      # and the callee's 8 + 32 * buckets
-    ld      t3, 0(s4)
-    bltu    t3, t2, 9f
-    sub     t3, t3, t1
-    add     s6, s4, t3
-    sd      t1, 0(s6)
-    sd      t3, 0(s4)
-    mv      a0, s2
-    mv      a1, s3
-    mv      a2, s4
-    mv      a3, s6
-    call    lantern_compute_shuffled_permutation
-    bnez    a0, 7f
-    slli    t0, s1, 3
-    add     t0, s6, t0
-    ld      t0, LIST_FIXED(t0)
-    sd      t0, 0(s5)
+    bgeu    s1, s2, 8f                      # assert index < index_count
+    addi    t0, sp, L                       # the message starts with the seed
+    COPY32  t0, a2
+    li      s3, 0
+1:  li      t0, SHUFFLE_ROUND_COUNT
+    bgeu    s3, t0, 3f
+    sb      s3, (L + 32)(sp)                # round_bytes
+    addi    a0, sp, L                       # pivot = bytes_to_uint64(sha256(seed + round_bytes)[0:8]) % index_count
+    li      a1, 33
+    addi    a2, sp, (L + 40)
+    call    sha256_short
+    ld      t0, (L + 40)(sp)
+    remu    t0, t0, s2
+    add     s4, t0, s2
+    sub     s4, s4, s1                      # flip = (pivot + index_count - index) % index_count
+    bltu    s4, s2, 2f
+    sub     s4, s4, s2
+2:  mv      s6, s1                          # position = max(index, flip)
+    bgtu    s1, s4, 21f
+    mv      s6, s4
+21: srli    t0, s6, 8                       # uint_to_bytes(uint32(position // 256))
+    sb      t0, (L + 33)(sp)
+    srli    t1, t0, 8
+    sb      t1, (L + 34)(sp)
+    srli    t1, t0, 16
+    sb      t1, (L + 35)(sp)
+    srli    t1, t0, 24
+    sb      t1, (L + 36)(sp)
+    addi    a0, sp, L                       # source = sha256(seed + round_bytes + position_bytes)
+    li      a1, 37
+    addi    a2, sp, (L + 40)
+    call    sha256_short
+    srli    t0, s6, 3                       # source[(position % 256) // 8]
+    andi    t0, t0, 31
+    add     t0, sp, t0
+    lbu     t0, (L + 40)(t0)
+    andi    t1, s6, 7
+    srl     t0, t0, t1
+    andi    t0, t0, 1
+    beqz    t0, 22f
+    mv      s1, s4                          # index = flip if bit else index
+22: addi    s3, s3, 1
+    j       1b
+3:  sd      s1, 0(s5)
     li      a0, LANTERN_OK
-7:  LEAVE 16
+    LEAVE 80
 8:  li      a0, LANTERN_INVALID_SHUFFLED_INDEX
-    LEAVE 16
-9:  li      a0, LANTERN_BUFFER_TOO_SMALL
-    LEAVE 16
+    LEAVE 80
 SPEC_END compute_shuffled_index
 
 /*

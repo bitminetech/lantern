@@ -110,45 +110,62 @@ SPEC_FUNCTION compute_shuffled_permutation
     LEAVE 80
 SPEC_END compute_shuffled_permutation
 
-/* rbx index, rbp count pointer, r12 seed, r13 scratch, r14 out, r15 list. */
+/*
+ * rbx index, rbp index count, r12 round, r13 flip, r14 out, r15 position.
+ * Locals: L the message (seed, round, bucket), L+40 the digest.
+ */
 SPEC_FUNCTION compute_shuffled_index
-    ENTER 16
+    ENTER 80
     mov     (%rdi), %rbx
-    mov     %rsi, %rbp
-    mov     %rdx, %r12
-    mov     %rcx, %r13
+    mov     (%rsi), %rbp
     mov     %r8, %r14
-    mov     (%rbp), %rax
-    cmp     %rax, %rbx                      # assert index < index_count
+    cmp     %rbp, %rbx                      # assert index < index_count
     jae     8f
-    lea     LIST_FIXED(,%rax,8), %rcx       # the permutation's list: L(index_count), at the end of scratch
-    lea     255(%rax), %rdx
-    shr     $8, %rdx
-    shl     $5, %rdx
-    add     $8, %rdx
-    add     %rcx, %rdx                      # and the callee's 8 + 32 * buckets
-    mov     (%r13), %rax
-    cmp     %rdx, %rax
-    jb      9f
-    sub     %rcx, %rax
-    lea     (%r13,%rax), %r15
-    mov     %rcx, (%r15)
-    mov     %rax, (%r13)
-    mov     %rbp, %rdi
-    mov     %r12, %rsi
-    mov     %r13, %rdx
+    lea     L(%rsp), %rax                   # the message starts with the seed
+    COPY32  %rax, %rdx
+    xor     %r12d, %r12d
+1:  cmp     $SHUFFLE_ROUND_COUNT, %r12
+    jae     3f
+    mov     %r12b, (L + 32)(%rsp)           # round_bytes
+    lea     L(%rsp), %rdi                   # pivot = bytes_to_uint64(sha256(seed + round_bytes)[0:8]) % index_count
+    mov     $33, %esi
+    lea     (L + 40)(%rsp), %rdx
+    call    sha256_short
+    mov     (L + 40)(%rsp), %rax
+    xor     %edx, %edx
+    div     %rbp
+    lea     (%rdx,%rbp), %r13
+    sub     %rbx, %r13                      # flip = (pivot + index_count - index) % index_count
+    mov     %r13, %rax
+    sub     %rbp, %rax
+    cmp     %rbp, %r13
+    cmovae  %rax, %r13
+    mov     %r13, %r15                      # position = max(index, flip)
+    cmp     %r13, %rbx
+    cmova   %rbx, %r15
+    mov     %r15, %rax
+    shr     $8, %rax
+    mov     %eax, (L + 33)(%rsp)            # uint_to_bytes(uint32(position // 256))
+    lea     L(%rsp), %rdi                   # source = sha256(seed + round_bytes + position_bytes)
+    mov     $37, %esi
+    lea     (L + 40)(%rsp), %rdx
+    call    sha256_short
+    mov     %r15, %rax                      # source[(position % 256) // 8]
+    shr     $3, %rax
+    and     $31, %eax
+    movzbl  (L + 40)(%rsp,%rax), %eax
     mov     %r15, %rcx
-    call    lantern_compute_shuffled_permutation
-    test    %rax, %rax
-    jnz     7f
-    mov     LIST_FIXED(%r15,%rbx,8), %rax
-    mov     %rax, (%r14)
+    and     $7, %ecx
+    shr     %cl, %eax
+    test    $1, %al
+    cmovnz  %r13, %rbx                      # index = flip if bit else index
+    inc     %r12
+    jmp     1b
+3:  mov     %rbx, (%r14)
     xor     %eax, %eax
-7:  LEAVE 16
+    LEAVE 80
 8:  mov     $LANTERN_INVALID_SHUFFLED_INDEX, %eax
-    LEAVE 16
-9:  mov     $LANTERN_BUFFER_TOO_SMALL, %eax
-    LEAVE 16
+    LEAVE 80
 SPEC_END compute_shuffled_index
 
 /* Locals: rsp+0 the message (domain type 4, epoch 8, mix 32), rsp+48 the mix epoch, rsp+56 out. */
