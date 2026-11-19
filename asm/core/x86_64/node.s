@@ -1974,10 +1974,10 @@ END_FUNCTION node_backfill_link
  * from backfill_ms on, while backfill_next is above the target and the streams part has room for
  * three entries. rbp the store. r12 the peers part, r13 the peers, S7 the target, S8 the start
  * slot, S9 the first index, S10 the peers checked. Locals: L the request (24), L+24 the index,
- * L+32 the peer.
+ * L+32 the peer, L+40 the fork, L+48 the pass: 1 for peers of any earliest_slot.
  */
 LOCAL_FUNCTION node_backfill_ask
-    ENTER 48
+    ENTER 64
     testq   $NODE_FLAG_DB, Node_flags(%rbx)
     jz      99f
     cmpq    $0, Node_backfill_handle(%rbx)
@@ -2020,10 +2020,16 @@ LOCAL_FUNCTION node_backfill_ask
     div     %r13
     mov     %rdx, S9(%rsp)
     movq    $0, S10(%rsp)
+    movq    $0, (L + 48)(%rsp)              # first the peers whose earliest_slot is at most the start
 4:  mov     S10(%rsp), %rax
     cmp     %r13, %rax
-    jae     99f
-    add     S9(%rsp), %rax
+    jb      40f
+    cmpq    $0, (L + 48)(%rsp)              # with none, a peer of any earliest_slot
+    jne     99f
+    movq    $1, (L + 48)(%rsp)
+    movq    $0, S10(%rsp)
+    xor     %eax, %eax
+40: add     S9(%rsp), %rax
     xor     %edx, %edx
     div     %r13
     mov     %rdx, (L + 24)(%rsp)
@@ -2037,7 +2043,10 @@ LOCAL_FUNCTION node_backfill_ask
     jne     4b
     mov     NodePeer_earliest_slot(%rcx), %rax
     cmp     S8(%rsp), %rax
-    ja      4b
+    jbe     42f
+    cmpq    $0, (L + 48)(%rsp)              # above the start in the first pass: the next peer
+    je      4b
+42:
     testq   $NODE_PEER_METADATA, NodePeer_flags(%rcx)   # from fulu, its MetaData read: its custody
     jnz     41f
     mov     %rcx, (L + 32)(%rsp)
@@ -2089,7 +2098,7 @@ LOCAL_FUNCTION node_backfill_ask
     movq    $0, Node_backfill_got(%rbx)
     mov     (L + 24)(%rsp), %rcx
     mov     %rcx, Node_backfill_peer(%rbx)
-99: LEAVE 48
+99: LEAVE 64
 END_FUNCTION node_backfill_ask
 
 /*

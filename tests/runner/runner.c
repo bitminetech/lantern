@@ -4886,7 +4886,8 @@ static int p2p_backfilled(struct p2p_net *net, int arg) {
  * answers BeaconBlocksByRange with the chain's blocks; each must reach the Db, and backfill_slot is
  * the first's. With bad, the block at bad has another signature: it and those below stay out.
  */
-static void backfill_once(tv parts, case_block **chain, size_t nchain, uint64_t last_ms, size_t bad, const char **why) {
+static void backfill_once(tv parts, case_block **chain, size_t nchain, uint64_t last_ms, size_t bad, int late,
+                          const char **why) {
     uint64_t vsize = 0;
     uint8_t *sb = decode(type_by_name("SignedBeaconBlock"), chain[nchain - 1]->bytes, chain[nchain - 1]->len, &vsize, why);
     if (!sb) return;
@@ -4921,6 +4922,7 @@ static void backfill_once(tv parts, case_block **chain, size_t nchain, uint64_t 
         CALL(LF(compute_fork_digest), gvr, &epoch, ncfg, fresh_scratch(), status);
         memcpy(status + 44, chain[nchain - 1]->root, 32); /* finalized (0, 0), head the chain's last block */
         wr64(status + 76, chain[nchain - 1]->slot);
+        if (late) wr64(status + 84, chain[nchain - 1]->slot); /* earliest_available_slot: its sidecars' first */
         peer_record(gvr, epoch, record, why);
     }
     if (!*why) {
@@ -4984,8 +4986,11 @@ static void backfill_check(tv parts, case_block **chain, size_t nchain, uint64_t
                            uint64_t head_size, const char **why) {
     bf_state = head_state;
     bf_state_size = head_size;
-    backfill_once(parts, chain, nchain, last_ms, SIZE_MAX, why);
-    if (!*why) backfill_once(parts, chain, nchain, last_ms, nchain / 2, why);
+    backfill_once(parts, chain, nchain, last_ms, SIZE_MAX, 0, why);
+    if (!*why) backfill_once(parts, chain, nchain, last_ms, nchain / 2, 0, why);
+#if FORK >= FORK_FULU
+    if (!*why) backfill_once(parts, chain, nchain, last_ms, SIZE_MAX, 1, why); /* a peer of a later earliest slot */
+#endif
     bf_state = NULL;
 }
 
