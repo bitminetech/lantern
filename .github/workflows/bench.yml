@@ -1,0 +1,31 @@
+# The state benchmarks of bench/ (bench/README.md) on an ARM64 runner, on a push to a bench/
+# branch, with the fulu vectors of the ci workflow's cache.
+name: bench
+
+on:
+  push:
+    branches: ['bench/**']
+
+permissions:
+  contents: read
+
+jobs:
+  state:
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 300
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
+        with:
+          path: vectors
+          key: vectors-fulu-${{ hashFiles('tests/generator/*') }}
+          enableCrossOsArchive: true
+          fail-on-cache-miss: true
+      - name: Build the image
+        run: docker build -q -t lantern-build -f platform/linux/Dockerfile platform/linux
+      - name: Run the benchmarks
+        run: |
+          for n in 20000 80000 1000000; do
+            echo "== $n validators"
+            VECTORS="$PWD/vectors" bench/run.sh arm64 "$n"
+          done
