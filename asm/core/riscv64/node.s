@@ -2185,6 +2185,76 @@ LOCAL_FUNCTION node_votes
 END_FUNCTION node_votes
 
 /*
+ * L0: the aggregate of the SignedAggregateAndProof in the ByteList a0: a0 = 0 and a1 its SSZ bytes,
+ * a2 their length; a0 = 2^64 - 1 when the bytes do not hold it. The message's offset is at byte 0,
+ * the aggregate's at byte 8 of the message; the aggregate runs to the end. Uses t0-t3, t6.
+ */
+LOCAL_FUNCTION node_aggregate
+    UNWIND_END_PROLOGUE
+    ld      t0, 16(a0)
+    ld      t1, 8(a0)
+    add     t1, a0, t1
+    li      t2, 4
+    bltu    t0, t2, 9f
+    LD32B   t2, t1, 0, t6                   # the message
+    bgtu    t2, t0, 9f
+    add     t1, t1, t2
+    sub     t0, t0, t2
+    li      t2, 12
+    bltu    t0, t2, 9f
+    LD32B   t2, t1, 8, t6                   # the aggregate
+    bgtu    t2, t0, 9f
+    add     a1, t1, t2
+    sub     a2, t0, t2
+    li      a0, 0
+    ret
+9:  li      a0, -1
+    li      a1, 0
+    li      a2, 0
+    ret
+END_FUNCTION node_aggregate
+
+/*
+ * After the head (node.md): each NodeMessage in NODE_MESSAGE_VOTE whose slot is below the store's
+ * gets a GOSSIP_VOTE work and takes NODE_MESSAGE_VOTING, while the actions have room for it and
+ * 4096 bytes. a0 = 1 when an entry is left waiting, else 0. s3 an entry, s4 the entries left, s7
+ * the store's slot, s8 left waiting.
+ */
+LOCAL_FUNCTION node_vote_due
+    ENTER 0
+    li      s8, 0
+    mv      a0, s2
+    call    node_store_slot
+    mv      s7, a0
+    PART    s3, s4, s1, Node_messages
+1:  beqz    s4, 9f
+    ld      t0, NodeMessage_state(s3)
+    li      t1, NODE_MESSAGE_VOTE
+    bne     t0, t1, 2f
+    ld      t0, NodeMessage_slot(s3)
+    bgeu    t0, s7, 2f
+    li      a0, NODE_ACT_WORK_SIZE
+    call    node_room
+    bnez    a0, 3f
+    li      s8, 1
+    j       9f
+3:  li      a0, NODE_WORK_GOSSIP_VOTE
+    li      a1, 0
+    li      a2, 0
+    ld      a3, NodeMessage_data_id(s3)
+    ld      a4, NodeMessage_handle(s3)
+    li      a5, 0
+    call    node_work
+    li      t0, NODE_MESSAGE_VOTING
+    sd      t0, NodeMessage_state(s3)
+2:  addi    s3, s3, NodeMessage__mem
+    addi    s4, s4, -1
+    j       1b
+9:  mv      a0, s8
+    LEAVE 0
+END_FUNCTION node_vote_due
+
+/*
  * With NODE_FLAG_DB, the canonical blocks from db_next_slot to the finalized block a0 and their
  * sidecars go to the Db, in slot order: a record of each in the index and in a DB_APPEND action,
  * then their bytes and entries go, but the finalized block's entry and bytes a stream sends. A
@@ -3136,7 +3206,41 @@ LOCAL_FUNCTION node_event
     ld      a5, NodeAction_arg(s3)
     call    node_work
     LEAVE 48
-622: li     t2, NODE_WORK_SERVE             # SERVE: the chunk to its stream, then the next block or the close
+622: li     t2, NODE_WORK_GOSSIP_VOTE       # GOSSIP_VOTE: the target state; a future slot waits; else the entry goes
+    bne     t0, t2, 623f
+    li      t2, LANTERN_NEED_TARGET_STATE
+    bne     t1, t2, 6221f
+    ld      a0, NodeEvent_checkpoint(s3)
+    addi    a1, s3, NodeEvent_checkpoint + 8
+    call    node_checkpoint_state
+    beqz    a0, 6221f
+    mv      a1, a0
+    li      a0, NODE_WORK_GOSSIP_VOTE
+    ld      a2, NodeAction_state_b(s3)
+    ld      a3, NodeAction_data(s3)
+    ld      a4, NodeAction_target(s3)
+    ld      a5, NodeAction_arg(s3)
+    call    node_work
+    LEAVE 48
+6221: ld    a0, NodeAction_target(s3)
+    call    node_find_message
+    li      t0, -1
+    beq     a0, t0, 79f
+    mv      s4, a1
+    ld      t1, NodeEvent_result(s3)
+    li      t2, LANTERN_INVALID_FUTURE_SLOT
+    bne     t1, t2, 6222f
+    li      t0, NODE_MESSAGE_VOTE
+    sd      t0, NodeMessage_state(s4)
+    LEAVE 48
+6222: li    a0, NODE_ACT_BYTES_FREE
+    ld      a1, NodeMessage_data_id(s4)
+    li      a2, 0
+    call    node_ids
+    mv      a0, s4
+    call    node_drop_message
+    LEAVE 48
+623: li     t2, NODE_WORK_SERVE             # SERVE: the chunk to its stream, then the next block or the close
     bne     t0, t2, 63f
     ld      a0, NodeAction_target(s3)
     call    node_find_stream
@@ -3207,7 +3311,20 @@ LOCAL_FUNCTION node_event
     li      t0, LIBP2P_ACCEPT
     bne     s7, t0, 65f
     ld      t0, NodeMessage_topic(s4)
-    li      t1, GOSSIP_ATTESTER_SLASHING
+    li      t1, GOSSIP_BEACON_AGGREGATE_AND_PROOF
+    bne     t0, t1, 640f
+    ld      t1, Node_blobs(s1)              # a valid aggregate: kept for its vote, with half the part free
+    ld      t2, Node_messages(s1)
+    sub     t1, t1, t2
+    li      t2, NodeMessage__mem
+    divu    t1, t1, t2
+    ld      t2, (Node_messages + 8)(s1)
+    slli    t2, t2, 1
+    bgeu    t2, t1, 65f
+    li      t0, NODE_MESSAGE_VOTE
+    sd      t0, NodeMessage_state(s4)
+    LEAVE 48
+640: li     t1, GOSSIP_ATTESTER_SLASHING
     bne     t0, t1, 641f
     ld      a1, NodeAction_state_c(s3)      # a valid attester slashing keeps the bytes: on_attester_slashing with the justified root's state
     beqz    a1, 65f
@@ -5463,7 +5580,7 @@ LOCAL_FUNCTION node_message
     add     t2, t2, t3
     j       4f
 31: li      t3, GOSSIP_DATA_COLUMN_SIDECAR
-    bne     t0, t3, 5f
+    bne     t0, t3, 32f
     li      t3, 20 + 48
     bltu    t1, t3, 5f
     addi    t2, t2, 20
@@ -5473,6 +5590,20 @@ LOCAL_FUNCTION node_message
     addi    a1, t2, 16
     li      a2, 32
     call    lantern_copy
+    j       5f
+32: li      t3, GOSSIP_BEACON_AGGREGATE_AND_PROOF   # an aggregate: the slot of its data
+    bne     t0, t3, 5f
+    mv      a0, s9
+    call    node_aggregate
+    li      t3, -1
+    bnez    a0, 33f
+    li      t0, 12
+    bltu    a2, t0, 33f
+    LD32B   t3, a1, 4, t6
+    LD32B   t4, a1, 8, t6
+    slli    t4, t4, 32
+    or      t3, t3, t4
+33: sd      t3, NodeMessage_slot(s7)
 5:  mv      a0, s9                          # the bytes, kept by the shell
     call    node_put
     sd      a0, NodeMessage_data_id(s7)
@@ -7408,6 +7539,10 @@ FUNCTION lantern_node_step
     call    node_subscribe
     call    node_serve
     sd      a0, (L + 112)(sp)
+    call    node_vote_due                   # the votes of valid aggregates whose slot is past
+    ld      t0, (L + 112)(sp)
+    or      t0, t0, a0
+    sd      t0, (L + 112)(sp)
     call    node_sync
     ld      t0, (L + 112)(sp)
     or      t0, t0, a0
@@ -8086,6 +8221,8 @@ FUNCTION lantern_node_run
     LEAVE 192
 971: li     t1, NODE_WORK_BLOCK_ATTESTATION
     beq     t0, t1, 975f
+    li      t1, NODE_WORK_GOSSIP_VOTE
+    beq     t0, t1, 975f
     li      t1, NODE_WORK_BLOCK_SLASHING
     bne     t0, t1, 974f
 975: mv     a0, t0                          # BLOCK_ATTESTATION, BLOCK_SLASHING
@@ -8145,13 +8282,19 @@ LOCAL_FUNCTION node_run_vote
     ENTER 16
     mv      s8, a0
     ld      s9, 0(s6)
-    li      t0, NODE_WORK_BLOCK_ATTESTATION
+    li      t0, NODE_WORK_GOSSIP_VOTE
+    bne     s8, t0, 1f
+    mv      a0, s5                          # GOSSIP_VOTE: the aggregate
+    call    node_aggregate
+    bnez    a0, 7f
+    j       2f
+1:  li      t0, NODE_WORK_BLOCK_ATTESTATION
     sub     t0, s8, t0
     seqz    a1, t0
     mv      a0, s5
     ld      a2, NodeAction_arg(s3)
     call    node_body_item
-    beqz    a2, 7f
+2:  beqz    a2, 7f
     addi    t0, a2, 24 + 7                  # the ByteList at the end of scratch
     andi    t0, t0, -8
     bltu    s9, t0, 8f
@@ -8164,8 +8307,8 @@ LOCAL_FUNCTION node_run_vote
     sd      a2, 16(s10)
     addi    a0, s10, 24
     call    lantern_copy
-    li      t0, NODE_WORK_BLOCK_ATTESTATION
-    bne     s8, t0, 3f
+    li      t0, NODE_WORK_BLOCK_SLASHING
+    beq     s8, t0, 3f
     ld      t0, 16(s10)                     # ATTESTATION: the fork of its slot
     li      t1, 4 + 128 + 96
     bltu    t0, t1, 61f
@@ -8173,7 +8316,9 @@ LOCAL_FUNCTION node_run_vote
     addi    a1, s1, Node_config
     call    node_fork
     mv      t6, a0
-    li      t0, 1
+    li      t0, NODE_WORK_BLOCK_ATTESTATION # is_from_block: 1 for a block's, 0 for an aggregate's
+    sub     t0, s8, t0
+    seqz    t0, t0
     sd      t0, L(sp)
     mv      a0, s2
     mv      a1, s10

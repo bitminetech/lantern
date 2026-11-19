@@ -2155,6 +2155,80 @@ LOCAL_FUNCTION node_votes
 END_FUNCTION node_votes
 
 /*
+ * The aggregate of the SignedAggregateAndProof in the ByteList rdi: rax = 0 and rdx its SSZ bytes,
+ * rcx their length; rax = 2^64 - 1 when the bytes do not hold it. The message's offset is at byte
+ * 0, the aggregate's at byte 8 of the message; the aggregate runs to the end. Uses r8-r10.
+ */
+LOCAL_FUNCTION node_aggregate
+    UNWIND_END_PROLOGUE
+    mov     16(%rdi), %r8
+    mov     8(%rdi), %r9
+    add     %rdi, %r9
+    cmp     $4, %r8
+    jb      9f
+    mov     (%r9), %r10d                    # the message
+    cmp     %r8, %r10
+    ja      9f
+    add     %r10, %r9
+    sub     %r10, %r8
+    cmp     $12, %r8
+    jb      9f
+    mov     8(%r9), %r10d                   # the aggregate
+    cmp     %r8, %r10
+    ja      9f
+    lea     (%r9,%r10), %rdx
+    mov     %r8, %rcx
+    sub     %r10, %rcx
+    xor     %eax, %eax
+    ret
+9:  mov     $-1, %rax
+    xor     %edx, %edx
+    xor     %ecx, %ecx
+    ret
+END_FUNCTION node_aggregate
+
+/*
+ * After the head (node.md): each NodeMessage in NODE_MESSAGE_VOTE whose slot is below the store's
+ * gets a GOSSIP_VOTE work and takes NODE_MESSAGE_VOTING, while the actions have room for it and
+ * 4096 bytes. rax = 1 when an entry is left waiting, else 0. r12 an entry, r13 the entries left,
+ * S7 the store's slot, S8 left waiting.
+ */
+LOCAL_FUNCTION node_vote_due
+    ENTER 0
+    movq    $0, S8(%rsp)
+    mov     %rbp, %rdi
+    call    node_store_slot
+    mov     %rax, S7(%rsp)
+    PART    %r12, %r13, %rbx, Node_messages
+1:  test    %r13, %r13
+    jz      9f
+    cmpq    $NODE_MESSAGE_VOTE, NodeMessage_state(%r12)
+    jne     2f
+    mov     NodeMessage_slot(%r12), %rax
+    cmp     S7(%rsp), %rax
+    jae     2f
+    mov     $NODE_ACT_WORK_SIZE, %edi
+    call    node_room
+    test    %rax, %rax
+    jnz     3f
+    movq    $1, S8(%rsp)
+    jmp     9f
+3:  mov     $NODE_WORK_GOSSIP_VOTE, %edi
+    xor     %esi, %esi
+    xor     %edx, %edx
+    mov     NodeMessage_data_id(%r12), %rcx
+    mov     NodeMessage_handle(%r12), %r8
+    xor     %r9d, %r9d
+    call    node_work
+    movq    $NODE_MESSAGE_VOTING, NodeMessage_state(%r12)
+2:  add     $NodeMessage__mem, %r12
+    dec     %r13
+    jmp     1b
+9:  mov     S8(%rsp), %rax
+    LEAVE 0
+END_FUNCTION node_vote_due
+
+/*
  * With NODE_FLAG_DB, the canonical blocks from db_next_slot to the finalized block rdi and their
  * sidecars go to the Db, in slot order: a record of each in the index and in a DB_APPEND action,
  * then their bytes and entries go, but the finalized block's entry and bytes a stream sends. A
@@ -3126,7 +3200,40 @@ LOCAL_FUNCTION node_event
     mov     NodeAction_arg(%r12), %r9
     call    node_work
     LEAVE 48
-622: cmp    $NODE_WORK_SERVE, %rax          # SERVE: the chunk to its stream, then the next block or the close
+622: cmp    $NODE_WORK_GOSSIP_VOTE, %rax    # GOSSIP_VOTE: the target state; a future slot waits; else the entry goes
+    jne     623f
+    cmp     $LANTERN_NEED_TARGET_STATE, %rcx
+    jne     6221f
+    mov     NodeEvent_checkpoint(%r12), %rdi
+    lea     (NodeEvent_checkpoint + 8)(%r12), %rsi
+    call    node_checkpoint_state
+    test    %rax, %rax
+    jz      6221f
+    mov     %rax, %rsi
+    mov     $NODE_WORK_GOSSIP_VOTE, %edi
+    mov     NodeAction_state_b(%r12), %rdx
+    mov     NodeAction_data(%r12), %rcx
+    mov     NodeAction_target(%r12), %r8
+    mov     NodeAction_arg(%r12), %r9
+    call    node_work
+    LEAVE 48
+6221: mov   NodeAction_target(%r12), %rdi
+    call    node_find_message
+    cmp     $-1, %rax
+    je      79f
+    mov     %rdx, %r13
+    cmpq    $LANTERN_INVALID_FUTURE_SLOT, NodeEvent_result(%r12)
+    jne     6222f
+    movq    $NODE_MESSAGE_VOTE, NodeMessage_state(%r13)
+    LEAVE 48
+6222: mov   $NODE_ACT_BYTES_FREE, %edi
+    mov     NodeMessage_data_id(%r13), %rsi
+    xor     %edx, %edx
+    call    node_ids
+    mov     %r13, %rdi
+    call    node_drop_message
+    LEAVE 48
+623: cmp    $NODE_WORK_SERVE, %rax          # SERVE: the chunk to its stream, then the next block or the close
     jne     63f
     mov     NodeAction_target(%r12), %rdi
     call    node_find_stream
@@ -3199,7 +3306,20 @@ LOCAL_FUNCTION node_event
     mov     %rdx, %r13
     cmpq    $LIBP2P_ACCEPT, S7(%rsp)
     jne     65f
-    cmpq    $GOSSIP_ATTESTER_SLASHING, NodeMessage_topic(%r13)
+    cmpq    $GOSSIP_BEACON_AGGREGATE_AND_PROOF, NodeMessage_topic(%r13)
+    jne     640f
+    mov     Node_blobs(%rbx), %rax          # a valid aggregate: kept for its vote, with half the part free
+    sub     Node_messages(%rbx), %rax
+    xor     %edx, %edx
+    mov     $NodeMessage__mem, %ecx
+    div     %rcx
+    mov     (Node_messages + 8)(%rbx), %rcx
+    shl     $1, %rcx
+    cmp     %rax, %rcx
+    jae     65f
+    movq    $NODE_MESSAGE_VOTE, NodeMessage_state(%r13)
+    LEAVE 48
+640: cmpq   $GOSSIP_ATTESTER_SLASHING, NodeMessage_topic(%r13)
     jne     641f
     mov     NodeAction_state_c(%r12), %rsi  # a valid attester slashing keeps the bytes: on_attester_slashing with the justified root's state
     test    %rsi, %rsi
@@ -5504,7 +5624,7 @@ LOCAL_FUNCTION node_message
     add     $NODE_BLOB_HEADER, %rsi
     jmp     4f
 31: cmp     $GOSSIP_DATA_COLUMN_SIDECAR, %rax
-    jne     5f
+    jne     32f
     cmp     $(20 + 48), %rcx
     jb      5f
     add     $20, %rsi
@@ -5514,6 +5634,18 @@ LOCAL_FUNCTION node_message
     add     $16, %rsi
     mov     $32, %edx
     call    lantern_copy
+    jmp     5f
+32: cmp     $GOSSIP_BEACON_AGGREGATE_AND_PROOF, %rax  # an aggregate: the slot of its data
+    jne     5f
+    mov     S9(%rsp), %rdi
+    call    node_aggregate
+    mov     $-1, %rsi
+    test    %rax, %rax
+    jnz     33f
+    cmp     $12, %rcx
+    jb      33f
+    mov     4(%rdx), %rsi
+33: mov     %rsi, NodeMessage_slot(%r13)
 5:  mov     S9(%rsp), %rdi                  # the bytes, kept by the shell
     call    node_put
     mov     %rax, NodeMessage_data_id(%r13)
@@ -7422,6 +7554,8 @@ FUNCTION lantern_node_step
     call    node_subscribe
     call    node_serve
     mov     %rax, (L + 112)(%rsp)
+    call    node_vote_due                   # the votes of valid aggregates whose slot is past
+    or      %rax, (L + 112)(%rsp)
     call    node_sync
     or      %rax, (L + 112)(%rsp)
     mov     (L + 24)(%rsp), %rdi
@@ -8146,6 +8280,8 @@ FUNCTION lantern_node_run
     LEAVE 192
 971: cmp    $NODE_WORK_BLOCK_ATTESTATION, %rax
     je      975f
+    cmp     $NODE_WORK_GOSSIP_VOTE, %rax
+    je      975f
     cmp     $NODE_WORK_BLOCK_SLASHING, %rax
     jne     974f
 975: mov    %rax, %rdi                      # BLOCK_ATTESTATION, BLOCK_SLASHING
@@ -8209,13 +8345,20 @@ LOCAL_FUNCTION node_run_vote
     mov     %rsi, S8(%rsp)
     mov     (%r15), %rax
     mov     %rax, S10(%rsp)
-    xor     %esi, %esi
+    cmp     $NODE_WORK_GOSSIP_VOTE, %rdi
+    jne     1f
+    mov     %r14, %rdi                      # GOSSIP_VOTE: the aggregate
+    call    node_aggregate
+    test    %rax, %rax
+    jnz     7f
+    jmp     2f
+1:  xor     %esi, %esi
     cmp     $NODE_WORK_BLOCK_ATTESTATION, %rdi
     sete    %sil
     mov     %r14, %rdi
     mov     NodeAction_arg(%r12), %rdx
     call    node_body_item
-    test    %rcx, %rcx
+2:  test    %rcx, %rcx
     jz      7f
     lea     (24 + 7)(%rcx), %rax            # the ByteList at the end of scratch
     and     $-8, %rax
@@ -8232,8 +8375,8 @@ LOCAL_FUNCTION node_run_vote
     add     $24, %rdi
     mov     %rcx, %rdx
     call    lantern_copy
-    cmpq    $NODE_WORK_BLOCK_ATTESTATION, S9(%rsp)
-    jne     3f
+    cmpq    $NODE_WORK_BLOCK_SLASHING, S9(%rsp)
+    je      3f
     mov     (L + 8)(%rsp), %rax             # ATTESTATION: the fork of its slot
     cmpq    $(4 + 128 + 96), 16(%rax)
     jb      61f
@@ -8241,7 +8384,10 @@ LOCAL_FUNCTION node_run_vote
     lea     Node_config(%rbx), %rsi
     call    node_fork
     mov     %rax, %r10
-    movq    $1, L(%rsp)
+    xor     %eax, %eax                      # is_from_block: 1 for a block's, 0 for an aggregate's
+    cmpq    $NODE_WORK_BLOCK_ATTESTATION, S9(%rsp)
+    sete    %al
+    mov     %rax, L(%rsp)
     mov     %rbp, %rdi
     mov     (L + 8)(%rsp), %rsi
     lea     L(%rsp), %rdx

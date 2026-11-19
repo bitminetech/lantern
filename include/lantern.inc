@@ -686,6 +686,8 @@
 .set NODE_MESSAGE_NO_ROOM, 3           /* the bytes did not fit in the actions: IGNORE */
 .set NODE_MESSAGE_CORRUPT, 4           /* the data is no Snappy block of at most MAX_PAYLOAD_SIZE bytes: REJECT */
 .set NODE_MESSAGE_OTHER_DIGEST, 5      /* a topic of another ForkDigest than fork_digest: IGNORE, its data unread */
+.set NODE_MESSAGE_VOTE, 6              /* a valid aggregate: its vote goes to fork choice once its slot is past */
+.set NODE_MESSAGE_VOTING, 7            /* a valid aggregate: its GOSSIP_VOTE work is queued */
 
 /* NodeGossip: the inputs of lantern_node_gossip */
 .set NodeGossip_seen, 0
@@ -797,6 +799,7 @@
 .set NODE_WORK_BACKFILL, 15            /* a: F's post-state; data: a block of the backfill; target: its NodeBlock index */
 .set NODE_WORK_BLOCK_ATTESTATION, 16   /* a: the target checkpoint state, or 0; data: an imported block; arg: the index of an attestation of its body */
 .set NODE_WORK_BLOCK_SLASHING, 17      /* a: the justified root's post-state; data: an imported block; arg: the index of an attester slashing of its body */
+.set NODE_WORK_GOSSIP_VOTE, 18         /* a: the target checkpoint state, or 0; data: a valid SignedAggregateAndProof; target: its message Handle */
 .set NODE_VOTES_MAX, 130               /* MAX_ATTESTATIONS + MAX_ATTESTER_SLASHINGS: the votes of a block the node takes */
 .set NodeEvent_root, NodeEvent_checkpoint + 8  /* GOSSIP of a valid beacon_block, SYNC_BLOCK: its root; of a valid blob_sidecar, BLOB: the root of its block header */
 .set NodeEvent_index, NodeEvent_root + 32      /* GOSSIP of a valid beacon_block, SYNC_BLOCK: its blob commitments; of a valid blob_sidecar: its index */

@@ -259,6 +259,10 @@ ABI uint64_t crypto_kzg_trusted_setup_of_bytes(const void *g1_lagrange, const vo
 ABI uint64_t crypto_secp256k1_public_key(const void *private_key, void *public_key);
 ABI uint64_t crypto_secp256k1_decompress(const void *public_key, void *point);
 ABI uint64_t crypto_keccak256(const void *message, void *digest);
+ABI uint64_t crypto_sha256(const void *message, void *digest);
+ABI uint64_t crypto_bls_sign(const void *secret_key, const void *message, void *scratch, void *signature);
+ABI uint64_t LF(get_attesting_indices)(const void *state, const void *attestation, void *scratch, void *out);
+ABI uint64_t LF(get_domain)(const void *state, const void *domain_type, const void *epoch, void *scratch, void *out);
 
 #if FORK == FORK_FULU
 /* Networking rules: docs/reference/networking.md. */
@@ -2395,7 +2399,7 @@ enum { ACT_BYTES_PUT = 1, ACT_STATE_COPY, ACT_STATE_FREE, ACT_BYTES_FREE, ACT_WO
 #define NODE_DB_SEGMENTS 256 /* the segments one node's runner keeps */
 enum { WORK_IMPORT_BLOCK = 1, WORK_JUSTIFIED_STATE, WORK_TARGET_STATE, WORK_ATTESTATION, WORK_ATTESTER_SLASHING, WORK_SERVE, WORK_GOSSIP,
        WORK_SYNC_BLOCK, WORK_BLOB, WORK_NEW_PAYLOAD, WORK_FORKCHOICE, WORK_SLOTS, WORK_UPGRADE, WORK_REPLAY, WORK_BACKFILL,
-       WORK_BLOCK_ATTESTATION, WORK_BLOCK_SLASHING };
+       WORK_BLOCK_ATTESTATION, WORK_BLOCK_SLASHING, WORK_GOSSIP_VOTE };
 static unsigned long node_replays; /* the REPLAY works the nodes ran: post-states they rebuilt */
 #define EV_RESULT 72
 #define EV_WORK_DONE_SIZE 128
@@ -2863,7 +2867,7 @@ static void shell_work(fc_node *n, const uint8_t *work, const char **why) {
         *why = "lantern_node_run: the event is not the WORK_DONE of the work";
     if (!*why) {
         uint64_t result = rd64(ev + EV_RESULT);
-        int k = kind == WORK_ATTESTATION || kind == WORK_BLOCK_ATTESTATION ? 0
+        int k = kind == WORK_ATTESTATION || kind == WORK_BLOCK_ATTESTATION || kind == WORK_GOSSIP_VOTE ? 0
                 : kind == WORK_ATTESTER_SLASHING || kind == WORK_BLOCK_SLASHING ? 1 : -1;
         if (k >= 0 && !(k == 0 && result == LANTERN_NEED_TARGET_STATE)) {
             if (s->nresults[k] == SHELL_RESULTS) *why = "too many results";
@@ -4946,7 +4950,7 @@ static void fc_sync_check(tv parts, const char **why) {
 ABI uint64_t snappy_compress_size(const void *input, void *size);
 ABI uint64_t snappy_compress(const void *input, void *scratch, void *compressed);
 #define SNAPPY_SCRATCH_COMPRESS 32776
-enum { GOSSIP_BEACON_BLOCK_TOPIC = 1, GOSSIP_ATTESTER_SLASHING_TOPIC = 6, GOSSIP_BLOB_SIDECAR_TOPIC = 10, GOSSIP_DATA_COLUMN_SIDECAR_TOPIC = 11 }; /* include/lantern.inc GOSSIP_* */
+enum { GOSSIP_BEACON_BLOCK_TOPIC = 1, GOSSIP_BEACON_AGGREGATE_AND_PROOF_TOPIC = 2, GOSSIP_ATTESTER_SLASHING_TOPIC = 6, GOSSIP_BLOB_SIDECAR_TOPIC = 10, GOSSIP_DATA_COLUMN_SIDECAR_TOPIC = 11 }; /* include/lantern.inc GOSSIP_* */
 
 /* The peer publishes the SSZ bytes ssz as a message of the topic string topic: Snappy, its message-id, a PUBLISH. */
 static void p2p_publish(struct p2p_net *net, const uint8_t *topic, uint64_t tlen, const uint8_t *ssz, uint64_t len,
@@ -5093,6 +5097,89 @@ static int gossip_case(tv parts, uint64_t genesis_ms) {
     return nslots > 0;
 }
 
+/* The signing root of the 32-byte root under the domain: sha256(root || domain), as SigningData's. */
+static void signing_root(const uint8_t *root, const uint8_t *domain, uint8_t *out) {
+    uint8_t bl[24 + 64];
+    wr64(bl, sizeof bl);
+    wr64(bl + 8, 24);
+    wr64(bl + 16, 64);
+    memcpy(bl + 24, root, 32);
+    memcpy(bl + 56, domain, 32);
+    CALL(crypto_sha256, bl, out);
+}
+
+/* bls.Sign of the 32-byte message by the pyspec test key of validator v: the secret key v + 1. */
+static void test_sign(uint64_t v, const uint8_t *msg, uint8_t *sig, const char **why) {
+    uint8_t sk[32] = {0}, bl[24 + 32];
+    for (int i = 0; i < 8; i++) sk[31 - i] = (uint8_t)((v + 1) >> (8 * i));
+    wr64(bl, sizeof bl);
+    wr64(bl + 8, 24);
+    wr64(bl + 16, 32);
+    memcpy(bl + 24, msg, 32);
+    uint64_t ssize = 8192 + 64;
+    uint8_t *scratch = buffer(ssize);
+    wr64(scratch, ssize);
+    if (CALL(crypto_bls_sign, sk, bl, scratch, sig) != 0) *why = "crypto_bls_sign status";
+    free(scratch);
+}
+
+/*
+ * A SignedAggregateAndProof of the Attestation bytes att by its first attester, signed with the
+ * pyspec test keys and the domains of state, in *olen bytes; NULL when the attestation has no
+ * attester, or from electra more than one committee.
+ */
+static uint8_t *test_aggregate(const uint8_t *state, const uint8_t *att, uint64_t alen, uint64_t *olen, const char **why) {
+    uint64_t vsize = 0, nval = rd64(state + field_offset("BeaconState", 11) + 8);
+    if (alen < 4 + 128 + 96) return NULL;
+#if FORK >= FORK_ELECTRA
+    uint64_t fixed = (uint64_t)att[0] | (uint64_t)att[1] << 8 | (uint64_t)att[2] << 16 | (uint64_t)att[3] << 24, bits = 0;
+    for (uint64_t i = 228; i < fixed && i < alen; i++) bits += (uint64_t)__builtin_popcount(att[i]);
+    if (bits != 1) return NULL;
+#endif
+    uint8_t *a = decode(type_by_name("Attestation"), att, alen, &vsize, why), *out = NULL, *list = NULL;
+    if (!a) return NULL;
+    uint64_t lsize = 24 + 8 * nval;
+    list = buffer(lsize);
+    wr64(list, lsize);
+    wr64(list + 8, 24);
+    wr64(list + 16, 0);
+    if (CALL(LF(get_attesting_indices), state, a, fresh_scratch(), list) == 0 && rd64(list + 16)) {
+        uint64_t aggr = rd64(list + 24), slot = rd64(att + 4), epoch = slot / SLOTS_PER_EPOCH_RUNNER, mlen = 108 + alen;
+        uint8_t dt[4] = {5, 0, 0, 0}, domain[32], chunk[32] = {0}, root[32], sel[96];
+        wr64(chunk, slot); /* selection proof: the slot under DOMAIN_SELECTION_PROOF */
+        if (CALL(LF(get_domain), state, dt, &epoch, fresh_scratch(), domain) != 0) *why = "get_domain status";
+        signing_root(chunk, domain, root);
+        if (!*why) test_sign(aggr, root, sel, why);
+        *olen = 100 + mlen;
+        out = buffer(*olen);
+        memset(out, 0, (size_t)*olen);
+        out[0] = 100;               /* SignedAggregateAndProof: the message's offset, the signature */
+        uint8_t *m = out + 100;     /* AggregateAndProof: aggregator_index, the aggregate's offset, selection_proof, the aggregate */
+        wr64(m, aggr);
+        m[8] = 108;
+        memcpy(m + 12, sel, 96);
+        memcpy(m + 108, att, (size_t)alen);
+        uint8_t *mv = *why ? NULL : decode(type_by_name("AggregateAndProof"), m, mlen, &vsize, why);
+        if (mv) {
+            dt[0] = 6; /* DOMAIN_AGGREGATE_AND_PROOF */
+            root_of("AggregateAndProof", mv, chunk, why);
+            if (!*why && CALL(LF(get_domain), state, dt, &epoch, fresh_scratch(), domain) != 0) *why = "get_domain status";
+            signing_root(chunk, domain, root);
+            if (!*why) test_sign(aggr, root, out + 4, why);
+            free(mv);
+        }
+        if (*why) {
+            free(out);
+            out = NULL;
+        }
+    }
+    free(list);
+    free(a);
+    return out;
+}
+
+static unsigned long gossip_votes, gossip_votes_applied; /* valid attestation steps sent as aggregates, and applied by the node */
+
 /*
  * A case through a node that gets its blocks over gossip: the peer publishes each valid block on
  * beacon_block after the case's ticks, and the node must import it; the other steps are events
@@ -5209,8 +5296,35 @@ static void fc_gossip_case(tv parts, int *ran, const char **why) {
             char key[128];
             uint64_t olen;
             snprintf(key, sizeof key, "%.*s", (int)rd64(nm + 1), (const char *)(nm + 9));
-            shell_event(s, att ? EV_ATTESTATION : pow ? EV_POW_BLOCK : EV_ATTESTER_SLASHING, 0, tv_bytes(tv_get(parts, key), &olen), olen);
-            p2p_settle(&n, &net, why);
+            const uint8_t *bytes = tv_bytes(tv_get(parts, key), &olen);
+            int applied = 0;
+            if (att && valid) { /* a valid attestation: over gossip first, as an aggregate of its first attester */
+                const uint8_t *e = shell_block(s, s->node + NODE_HEAD_ROOT);
+                shell_buf *h = e ? shell_find(s, rd64(e + NB_STATE_ID)) : NULL;
+                uint64_t glen = 0, before = s->nresults[0];
+                uint8_t *agg = h ? test_aggregate(h->b, bytes, olen, &glen, why) : NULL;
+                if (agg && !*why) {
+                    uint64_t epoch = now_ms < genesis_ms ? 0 : (now_ms - genesis_ms) / rd64(config + 104) / SLOTS_PER_EPOCH_RUNNER;
+                    uint8_t topic[24] = {0}, list[24 + 128];
+                    wr64(list, sizeof list);
+                    CALL(LF(compute_fork_digest), gvr, &epoch, ncfg, fresh_scratch(), topic);
+                    wr64(topic + 8, GOSSIP_BEACON_AGGREGATE_AND_PROOF_TOPIC);
+                    if (CALL(lantern_gossip_topic, topic, list) != 0) *why = "gossip_topic status";
+                    if (!*why) p2p_publish(&net, list + 24, rd64(list + 16), agg, glen, why);
+                    if (!*why) p2p_settle(&n, &net, why);
+                    gossip_votes++;
+                    if (!*why && s->nresults[0] > before) {
+                        applied = 1;
+                        gossip_votes_applied++;
+                        if (s->results[0][s->nresults[0] - 1] != 0) *why = "a valid attestation's vote over gossip is not valid";
+                    }
+                }
+                free(agg);
+            }
+            if (!applied && !*why) {
+                shell_event(s, att ? EV_ATTESTATION : pow ? EV_POW_BLOCK : EV_ATTESTER_SLASHING, 0, bytes, olen);
+                p2p_settle(&n, &net, why);
+            }
         } else if (tv_get(st, "checks")) {
             fc_checks(&n, tv_get(st, "checks"), why);
         }
@@ -6650,6 +6764,7 @@ int main(int argc, char **argv) {
     }
     if (node_settles_finalized) printf("NOTE: %lu node settles past a finalized epoch\n", node_settles_finalized);
     if (node_replays) printf("NOTE: %lu post-states the nodes rebuilt by replay\n", node_replays);
+    if (gossip_votes) printf("NOTE: %lu of %lu valid attestations went to fork choice as gossip aggregates\n", gossip_votes_applied, gossip_votes);
 #if FORK > FORK_PHASE0
     if (node_transitions) printf("NOTE: %lu transition cases through the node\n", node_transitions);
 #endif

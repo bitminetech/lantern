@@ -1918,6 +1918,79 @@ LOCAL_FUNCTION node_votes
 END_FUNCTION node_votes
 
 /*
+ * L0: the aggregate of the SignedAggregateAndProof in the ByteList x0: x0 = 0 and x1 its SSZ bytes,
+ * x2 their length; x0 = 2^64 - 1 when the bytes do not hold it. The message's offset is at byte 0,
+ * the aggregate's at byte 8 of the message; the aggregate runs to the end. Uses x9-x13.
+ */
+LOCAL_FUNCTION node_aggregate
+    UNWIND_END_PROLOGUE
+    ldr     x9, [x0, #16]
+    ldr     x10, [x0, #8]
+    add     x10, x0, x10
+    cmp     x9, #4
+    b.lo    9f
+    ldr     w11, [x10]                      /* the message */
+    cmp     x11, x9
+    b.hi    9f
+    add     x10, x10, x11
+    sub     x9, x9, x11
+    cmp     x9, #12
+    b.lo    9f
+    ldr     w11, [x10, #8]                  /* the aggregate */
+    cmp     x11, x9
+    b.hi    9f
+    add     x1, x10, x11
+    sub     x2, x9, x11
+    mov     x0, #0
+    ret
+9:  mov     x0, #-1
+    mov     x1, #0
+    mov     x2, #0
+    ret
+END_FUNCTION node_aggregate
+
+/*
+ * After the head (node.md): each NodeMessage in NODE_MESSAGE_VOTE whose slot is below the store's
+ * gets a GOSSIP_VOTE work and takes NODE_MESSAGE_VOTING, while the actions have room for it and
+ * 4096 bytes. x0 = 1 when an entry is left waiting, else 0. x21 an entry, x22 the entries left,
+ * x26 the store's slot, x27 left waiting.
+ */
+LOCAL_FUNCTION node_vote_due
+    ENTER 0
+    mov     x27, #0
+    mov     x0, x20
+    bl      node_store_slot
+    mov     x26, x0
+    PART    x21, x22, x19, Node_messages
+1:  cbz     x22, 9f
+    ldr     x9, [x21, #NodeMessage_state]
+    cmp     x9, #NODE_MESSAGE_VOTE
+    b.ne    2f
+    ldr     x9, [x21, #NodeMessage_slot]
+    cmp     x9, x26
+    b.hs    2f
+    mov     x0, #NODE_ACT_WORK_SIZE
+    bl      node_room
+    cbnz    x0, 3f
+    mov     x27, #1
+    b       9f
+3:  mov     x0, #NODE_WORK_GOSSIP_VOTE
+    mov     x1, #0
+    mov     x2, #0
+    ldr     x3, [x21, #NodeMessage_data_id]
+    ldr     x4, [x21, #NodeMessage_handle]
+    mov     x5, #0
+    bl      node_work
+    mov     x9, #NODE_MESSAGE_VOTING
+    str     x9, [x21, #NodeMessage_state]
+2:  add     x21, x21, #NodeMessage__mem
+    sub     x22, x22, #1
+    b       1b
+9:  mov     x0, x27
+    LEAVE 0
+END_FUNCTION node_vote_due
+
+/*
  * L0: with NODE_FLAG_DB, the canonical blocks from db_next_slot to the finalized block x0 and
  * their sidecars go to the Db, in slot order: a record of each in the index and in a DB_APPEND
  * action, then their bytes and entries go, but the finalized block's entry and bytes a stream
@@ -3157,7 +3230,40 @@ LOCAL_FUNCTION node_event
     ldp     x4, x5, [x21, #NodeAction_target]
     bl      node_work
     LEAVE 48
-622: cmp    x9, #NODE_WORK_SERVE               /* SERVE: the chunk to its stream, then the next block or the close */
+622: cmp    x9, #NODE_WORK_GOSSIP_VOTE         /* GOSSIP_VOTE: the target state; a future slot waits; else the entry goes */
+    b.ne    623f
+    cmp     x10, #LANTERN_NEED_TARGET_STATE
+    b.ne    6221f
+    ldr     x0, [x21, #NodeEvent_checkpoint]
+    add     x1, x21, #(NodeEvent_checkpoint + 8)
+    bl      node_checkpoint_state
+    cbz     x0, 6221f
+    mov     x1, x0
+    mov     x0, #NODE_WORK_GOSSIP_VOTE
+    ldr     x2, [x21, #NodeAction_state_b]
+    ldr     x3, [x21, #NodeAction_data]
+    ldp     x4, x5, [x21, #NodeAction_target]
+    bl      node_work
+    LEAVE 48
+6221: ldr   x0, [x21, #NodeAction_target]
+    bl      node_find_message
+    cmn     x0, #1
+    b.eq    79f
+    mov     x22, x1
+    ldr     x10, [x21, #NodeEvent_result]
+    cmp     x10, #LANTERN_INVALID_FUTURE_SLOT
+    b.ne    6222f
+    mov     x9, #NODE_MESSAGE_VOTE
+    str     x9, [x22, #NodeMessage_state]
+    LEAVE 48
+6222: mov   x0, #NODE_ACT_BYTES_FREE
+    ldr     x1, [x22, #NodeMessage_data_id]
+    mov     x2, #0
+    bl      node_ids
+    mov     x0, x22
+    bl      node_drop_message
+    LEAVE 48
+623: cmp    x9, #NODE_WORK_SERVE               /* SERVE: the chunk to its stream, then the next block or the close */
     b.ne    63f
     ldr     x0, [x21, #NodeAction_target]
     bl      node_find_stream
@@ -3228,7 +3334,21 @@ LOCAL_FUNCTION node_event
     cmp     x25, #LIBP2P_ACCEPT
     b.ne    65f
     ldr     x9, [x22, #NodeMessage_topic]
-    cmp     x9, #GOSSIP_ATTESTER_SLASHING
+    cmp     x9, #GOSSIP_BEACON_AGGREGATE_AND_PROOF
+    b.ne    640f
+    PART    x10, x11, x19, Node_messages    /* a valid aggregate: kept for its vote, with half the part free */
+    ldr     x12, [x19, #Node_blobs]
+    ldr     x13, [x19, #Node_messages]
+    sub     x12, x12, x13
+    mov     x13, #NodeMessage__mem
+    udiv    x12, x12, x13
+    lsl     x11, x11, #1
+    cmp     x11, x12
+    b.hs    65f
+    mov     x9, #NODE_MESSAGE_VOTE
+    str     x9, [x22, #NodeMessage_state]
+    LEAVE 48
+640: cmp    x9, #GOSSIP_ATTESTER_SLASHING
     b.ne    641f
     ldr     x1, [x21, #NodeAction_state_c]     /* a valid attester slashing keeps the bytes: on_attester_slashing with the justified root's state */
     cbz     x1, 65f
@@ -5442,7 +5562,7 @@ LOCAL_FUNCTION node_message
     add     x11, x11, x12
     b       4f
 31: cmp     x9, #GOSSIP_DATA_COLUMN_SIDECAR
-    b.ne    5f
+    b.ne    32f
     cmp     x10, #(20 + 48)
     b.lo    5f
     add     x11, x11, #20
@@ -5452,6 +5572,17 @@ LOCAL_FUNCTION node_message
     add     x1, x11, #16
     mov     x2, #32
     bl      lantern_copy
+    b       5f
+32: cmp     x9, #GOSSIP_BEACON_AGGREGATE_AND_PROOF  /* an aggregate: the slot of its data */
+    b.ne    5f
+    mov     x0, x27
+    bl      node_aggregate
+    mov     x12, #-1
+    cbnz    x0, 33f
+    cmp     x2, #12
+    b.lo    33f
+    ldr     x12, [x1, #4]
+33: str     x12, [x25, #NodeMessage_slot]
 5:  mov     x0, x27                         /* the bytes, kept by the shell */
     bl      node_put
     str     x0, [x25, #NodeMessage_data_id]
@@ -7348,6 +7479,10 @@ FUNCTION lantern_node_step
     bl      node_subscribe
     bl      node_serve
     str     x0, [sp, #(L + 112)]
+    bl      node_vote_due                   /* the votes of valid aggregates whose slot is past */
+    ldr     x9, [sp, #(L + 112)]
+    orr     x9, x9, x0
+    str     x9, [sp, #(L + 112)]
     bl      node_sync
     ldr     x9, [sp, #(L + 112)]
     orr     x9, x9, x0
@@ -8022,6 +8157,7 @@ FUNCTION lantern_node_run
     LEAVE 192
 971: cmp    x9, #NODE_WORK_BLOCK_ATTESTATION
     ccmp    x9, #NODE_WORK_BLOCK_SLASHING, #4, ne
+    ccmp    x9, #NODE_WORK_GOSSIP_VOTE, #4, ne
     b.ne    974f
     mov     x0, x9                          /* BLOCK_ATTESTATION, BLOCK_SLASHING */
     bl      node_run_vote
@@ -8077,12 +8213,18 @@ LOCAL_FUNCTION node_run_vote
     ENTER 16
     mov     x26, x0
     ldr     x27, [x24]
-    cmp     x26, #NODE_WORK_BLOCK_ATTESTATION
+    cmp     x26, #NODE_WORK_GOSSIP_VOTE
+    b.ne    1f
+    mov     x0, x23                         /* GOSSIP_VOTE: the aggregate */
+    bl      node_aggregate
+    cbnz    x0, 7f
+    b       2f
+1:  cmp     x26, #NODE_WORK_BLOCK_ATTESTATION
     cset    x1, eq
     mov     x0, x23
     ldr     x2, [x21, #NodeAction_arg]
     bl      node_body_item
-    cbz     x2, 7f
+2:  cbz     x2, 7f
     add     x9, x2, #(24 + 7)               /* the ByteList at the end of scratch */
     and     x9, x9, #~7
     subs    x10, x27, x9
@@ -8094,8 +8236,8 @@ LOCAL_FUNCTION node_run_vote
     str     x2, [x28, #16]
     add     x0, x28, #24
     bl      lantern_copy
-    cmp     x26, #NODE_WORK_BLOCK_ATTESTATION
-    b.ne    3f
+    cmp     x26, #NODE_WORK_BLOCK_SLASHING
+    b.eq    3f
     ldr     x9, [x28, #16]                  /* ATTESTATION: the fork of its slot */
     cmp     x9, #(4 + 128 + 96)
     b.lo    61f
@@ -8103,7 +8245,8 @@ LOCAL_FUNCTION node_run_vote
     add     x1, x19, #Node_config
     bl      node_fork
     mov     x15, x0
-    mov     x9, #1
+    cmp     x26, #NODE_WORK_BLOCK_ATTESTATION   /* is_from_block: 1 for a block's, 0 for an aggregate's */
+    cset    x9, eq
     str     x9, [sp, #L]
     mov     x0, x20
     mov     x1, x28
