@@ -2029,6 +2029,132 @@ LOCAL_FUNCTION node_backfill_ask
 END_FUNCTION node_backfill_ask
 
 /*
+ * The list of the body of the SignedBeaconBlock in the ByteList rdi: rsi 0 attester_slashings, 1
+ * attestations (offsets at bytes 204 and 208 of the body in every fork). rax = its count, or
+ * 2^64 - 1 when the bytes do not hold it; for an index rdx below the count, rdx the item's SSZ
+ * bytes and rcx their length, else 0 and 0. Uses r8-r11.
+ */
+LOCAL_FUNCTION node_body_item
+    UNWIND_END_PROLOGUE
+    mov     16(%rdi), %r8                   # the length
+    mov     8(%rdi), %r9
+    add     %rdi, %r9                       # the bytes
+    cmp     $(100 + 84), %r8
+    jb      9f
+    mov     (%r9), %eax                     # the message
+    cmp     %r8, %rax
+    ja      9f
+    add     %rax, %r9
+    sub     %rax, %r8
+    cmp     $88, %r8
+    jb      9f
+    mov     80(%r9), %eax                   # the body: its offset at 80
+    cmp     %r8, %rax
+    ja      9f
+    add     %rax, %r9
+    sub     %rax, %r8
+    cmp     $216, %r8
+    jb      9f
+    mov     204(%r9,%rsi,4), %r10d          # the list: from its offset to the next field's
+    mov     208(%r9,%rsi,4), %r11d
+    cmp     %r11, %r10
+    ja      9f
+    cmp     %r8, %r11
+    ja      9f
+    sub     %r10, %r11                      # the list's bytes
+    add     %r10, %r9
+    test    %r11, %r11
+    jz      7f
+    cmp     $4, %r11
+    jb      9f
+    mov     (%r9), %eax                     # its first offset: 4 times the count
+    test    $3, %al
+    jnz     9f
+    cmp     %r11, %rax
+    ja      9f
+    shr     $2, %rax
+    test    %rax, %rax
+    jz      9f
+    cmp     %rax, %rdx
+    jae     8f
+    mov     (%r9,%rdx,4), %r10d
+    lea     1(%rdx), %rcx
+    mov     %r11, %r8
+    cmp     %rax, %rcx
+    jae     1f
+    mov     (%r9,%rcx,4), %r8d
+1:  cmp     %r8, %r10
+    ja      9f
+    cmp     %r11, %r8
+    ja      9f
+    lea     (%r9,%r10), %rdx
+    mov     %r8, %rcx
+    sub     %r10, %rcx
+    ret
+7:  xor     %eax, %eax
+8:  xor     %edx, %edx
+    xor     %ecx, %ecx
+    ret
+9:  mov     $-1, %rax
+    xor     %edx, %edx
+    xor     %ecx, %ecx
+    ret
+END_FUNCTION node_body_item
+
+/*
+ * The votes of the imported block entry rdi (node.md): a BLOCK_ATTESTATION of each of its rsi
+ * attestations, then a BLOCK_SLASHING of each of its rdx attester slashings with the post-state of
+ * the justified root; at most NODE_VOTES_MAX in all. r12 the entry, r13 the index, S7 the
+ * attestations, S8 the slashings, S9 the justified state.
+ */
+LOCAL_FUNCTION node_votes
+    ENTER 0
+    mov     %rdi, %r12
+    mov     $128, %eax
+    cmp     %rax, %rsi
+    cmova   %rax, %rsi
+    mov     %rsi, S7(%rsp)
+    mov     $2, %eax
+    cmp     %rax, %rdx
+    cmova   %rax, %rdx
+    mov     %rdx, S8(%rsp)
+    xor     %r13d, %r13d
+1:  cmp     S7(%rsp), %r13
+    jae     2f
+    mov     $NODE_WORK_BLOCK_ATTESTATION, %edi
+    xor     %esi, %esi
+    xor     %edx, %edx
+    mov     NodeBlock_data_id(%r12), %rcx
+    xor     %r8d, %r8d
+    mov     %r13, %r9
+    call    node_work
+    inc     %r13
+    jmp     1b
+2:  cmpq    $0, S8(%rsp)
+    je      9f
+    lea     (Store_justified_checkpoint + 8)(%rbp), %rdi
+    call    node_find_block
+    movq    $0, S9(%rsp)
+    cmp     $-1, %rax
+    je      3f
+    mov     NodeBlock_state_id(%rdx), %rax
+    mov     %rax, S9(%rsp)
+3:  xor     %r13d, %r13d
+4:  cmp     S8(%rsp), %r13
+    jae     9f
+    mov     $NODE_WORK_BLOCK_SLASHING, %edi
+    mov     S9(%rsp), %rsi
+    xor     %edx, %edx
+    mov     NodeBlock_data_id(%r12), %rcx
+    xor     %r8d, %r8d
+    mov     %r13, %r9
+    call    node_work
+    inc     %r13
+    jmp     4b
+9:  LEAVE 0
+END_FUNCTION node_votes
+
+/*
  * With NODE_FLAG_DB, the canonical blocks from db_next_slot to the finalized block rdi and their
  * sidecars go to the Db, in slot order: a record of each in the index and in a DB_APPEND action,
  * then their bytes and entries go, but the finalized block's entry and bytes a stream sends. A
@@ -2947,7 +3073,11 @@ LOCAL_FUNCTION node_event
     LEAVE 48
 51: test    %rcx, %rcx
     jnz     52f
-    movq    $NODE_BLOCK_IMPORTED, NodeBlock_status(%r13)    # imported: then its waiting children
+    movq    $NODE_BLOCK_IMPORTED, NodeBlock_status(%r13)    # imported: its votes, then its waiting children
+    mov     %r13, %rdi
+    mov     NodeEvent_index(%r12), %rsi
+    mov     NodeEvent_root(%r12), %rdx
+    call    node_votes
     mov     %r13, %rdi
     call    node_children
     LEAVE 48
@@ -2979,7 +3109,24 @@ LOCAL_FUNCTION node_event
     mov     NodeAction_arg(%r12), %r9
     call    node_work
     LEAVE 48
-62: cmp     $NODE_WORK_SERVE, %rax          # SERVE: the chunk to its stream, then the next block or the close
+62: cmp     $NODE_WORK_BLOCK_ATTESTATION, %rax  # BLOCK_ATTESTATION: with NEED_TARGET_STATE, the target state, then again
+    jne     622f
+    cmp     $LANTERN_NEED_TARGET_STATE, %rcx
+    jne     79f
+    mov     NodeEvent_checkpoint(%r12), %rdi
+    lea     (NodeEvent_checkpoint + 8)(%r12), %rsi
+    call    node_checkpoint_state
+    test    %rax, %rax
+    jz      79f
+    mov     %rax, %rsi
+    mov     $NODE_WORK_BLOCK_ATTESTATION, %edi
+    mov     NodeAction_state_b(%r12), %rdx
+    mov     NodeAction_data(%r12), %rcx
+    mov     NodeAction_target(%r12), %r8
+    mov     NodeAction_arg(%r12), %r9
+    call    node_work
+    LEAVE 48
+622: cmp    $NODE_WORK_SERVE, %rax          # SERVE: the chunk to its stream, then the next block or the close
     jne     63f
     mov     NodeAction_target(%r12), %rdi
     call    node_find_stream
@@ -6917,7 +7064,23 @@ FUNCTION lantern_node_step
     inc     %r9
     incq    (L + 120)(%rsp)
 201: mov    NodeAction_work_kind(%rdi), %rsi    # SERVE, and NEW_PAYLOAD or FORKCHOICE of LANTERN_VALID: a ByteList of the chunk inside
-    cmp     $NODE_WORK_SERVE, %rsi
+    cmp     $NODE_WORK_IMPORT_BLOCK, %rsi   # a valid IMPORT_BLOCK: a work for each vote
+    jne     204f
+    cmpq    $0, NodeEvent_result(%rdi)
+    jne     22f
+    mov     NodeEvent_index(%rdi), %rsi
+    cmp     $128, %rsi
+    jbe     205f
+    mov     $128, %esi
+205: mov    NodeEvent_root(%rdi), %rdx
+    cmp     $2, %rdx
+    jbe     206f
+    mov     $2, %edx
+206: add    %rdx, %rsi
+    imul    $NODE_ACT_WORK_SIZE, %rsi, %rsi
+    add     %rsi, %r10
+    jmp     22f
+204: cmp    $NODE_WORK_SERVE, %rsi
     je      202f
     cmp     $NODE_WORK_NEW_PAYLOAD, %rsi
     je      203f
@@ -7438,11 +7601,20 @@ FUNCTION lantern_node_run
     mov     %rax, S7(%rsp)                  # result, the seventh argument
     FORK_CALL node_import
     cmp     $LANTERN_NEED_JUSTIFIED_STATE, %rax
-    jne     99f
+    jne     972f
     mov     S8(%rsp), %rcx
     mov     %rax, NodeEvent_result(%rcx)
     xor     %eax, %eax
     LEAVE 192
+972: test   %rax, %rax                      # valid: the counts of its votes
+    jnz     973f
+    mov     S8(%rsp), %rsi
+    cmpq    $0, NodeEvent_result(%rsi)
+    jne     973f
+    mov     %r14, %rdi
+    call    node_vote_counts
+    xor     %eax, %eax
+973: LEAVE 192
 18: mov     S8(%rsp), %rcx
     movq    $LANTERN_INVALID_ENCODING, NodeEvent_result(%rcx)
     xor     %eax, %eax
@@ -7972,7 +8144,15 @@ FUNCTION lantern_node_run
     add     $NodeEvent_result, %r8
     FORK_CALL node_replay
     LEAVE 192
-971: cmp    $NODE_WORK_BACKFILL, %rax
+971: cmp    $NODE_WORK_BLOCK_ATTESTATION, %rax
+    je      975f
+    cmp     $NODE_WORK_BLOCK_SLASHING, %rax
+    jne     974f
+975: mov    %rax, %rdi                      # BLOCK_ATTESTATION, BLOCK_SLASHING
+    mov     S8(%rsp), %rsi
+    call    node_run_vote
+    LEAVE 192
+974: cmp    $NODE_WORK_BACKFILL, %rax
     jne     8f
     cmpq    $(100 + 84), 16(%r14)           # BACKFILL: its root, then the signature with state_a
     jb      18b
@@ -7989,6 +8169,130 @@ FUNCTION lantern_node_run
 7:  mov     $LANTERN_BUFFER_TOO_SMALL, %eax
     LEAVE 192
 END_FUNCTION lantern_node_run
+
+/* The counts of the votes of the block in data rdi, at NodeEvent_index and NodeEvent_root of the event rsi. Locals: rsp+0 data, rsp+8 event. */
+LOCAL_FUNCTION node_vote_counts
+    FRAME 16
+    mov     %rdi, 0(%rsp)
+    mov     %rsi, 8(%rsp)
+    mov     $1, %esi
+    mov     $-1, %rdx
+    call    node_body_item
+    xor     %ecx, %ecx
+    cmp     $-1, %rax
+    cmove   %rcx, %rax
+    mov     8(%rsp), %rsi
+    mov     %rax, NodeEvent_index(%rsi)
+    mov     0(%rsp), %rdi
+    xor     %esi, %esi
+    mov     $-1, %rdx
+    call    node_body_item
+    xor     %ecx, %ecx
+    cmp     $-1, %rax
+    cmove   %rcx, %rax
+    mov     8(%rsp), %rsi
+    mov     %rax, NodeEvent_root(%rsi)
+    UNFRAME 16
+END_FUNCTION node_vote_counts
+
+/*
+ * The BLOCK_ATTESTATION or BLOCK_SLASHING work rdi of lantern_node_run, with the event rsi
+ * (node.md): the item at index arg of the block's body, as a ByteList at the end of scratch, then
+ * node_attestation with is_from_block 1 of the fork of its slot, or node_attester_slashing of the
+ * fork of the store's slot. The run's rbx node, rbp store, r12 work, r13 state_a, r14 data, r15
+ * scratch. S7 the seventh argument, S8 the event, S9 the kind, S10 the scratch size. Locals: L
+ * is_from_block, L+8 the ByteList, L+16 a fork.
+ */
+LOCAL_FUNCTION node_run_vote
+    ENTER 32
+    mov     %rdi, S9(%rsp)
+    mov     %rsi, S8(%rsp)
+    mov     (%r15), %rax
+    mov     %rax, S10(%rsp)
+    xor     %esi, %esi
+    cmp     $NODE_WORK_BLOCK_ATTESTATION, %rdi
+    sete    %sil
+    mov     %r14, %rdi
+    mov     NodeAction_arg(%r12), %rdx
+    call    node_body_item
+    test    %rcx, %rcx
+    jz      7f
+    lea     (24 + 7)(%rcx), %rax            # the ByteList at the end of scratch
+    and     $-8, %rax
+    mov     S10(%rsp), %rdi
+    sub     %rax, %rdi
+    jb      8f
+    mov     %rdi, (%r15)
+    add     %r15, %rdi
+    mov     %rdi, (L + 8)(%rsp)
+    mov     %rax, (%rdi)
+    movq    $24, 8(%rdi)
+    mov     %rcx, 16(%rdi)
+    mov     %rdx, %rsi
+    add     $24, %rdi
+    mov     %rcx, %rdx
+    call    lantern_copy
+    cmpq    $NODE_WORK_BLOCK_ATTESTATION, S9(%rsp)
+    jne     3f
+    mov     (L + 8)(%rsp), %rax             # ATTESTATION: the fork of its slot
+    cmpq    $(4 + 128 + 96), 16(%rax)
+    jb      61f
+    mov     (24 + 4)(%rax), %rdi
+    lea     Node_config(%rbx), %rsi
+    call    node_fork
+    mov     %rax, %r10
+    movq    $1, L(%rsp)
+    mov     %rbp, %rdi
+    mov     (L + 8)(%rsp), %rsi
+    lea     L(%rsp), %rdx
+    mov     %r13, %rcx
+    mov     %r15, %r8
+    mov     S8(%rsp), %r9
+    lea     NodeEvent_checkpoint(%r9), %rax
+    mov     %rax, S7(%rsp)                  # target, the seventh argument
+    add     $NodeEvent_result, %r9
+    FORK_CALL node_attestation
+    jmp     9f
+3:  mov     %rbp, %rdi                      # SLASHING: the fork of the store's slot, a state of it
+    call    node_store_slot
+    mov     %rax, %rdi
+    lea     Node_config(%rbx), %rsi
+    call    node_fork
+    mov     %rax, (L + 16)(%rsp)
+    test    %r13, %r13
+    jz      4f
+    mov     NODE_STATE_SLOT(%r13), %rdi
+    lea     Node_config(%rbx), %rsi
+    call    node_fork
+    cmp     (L + 16)(%rsp), %rax
+    jne     62f
+4:  mov     (L + 16)(%rsp), %r10
+    mov     %rbp, %rdi
+    mov     (L + 8)(%rsp), %rsi
+    mov     %r13, %rdx
+    mov     %r15, %rcx
+    mov     S8(%rsp), %r8
+    add     $NodeEvent_result, %r8
+    FORK_CALL node_attester_slashing
+    jmp     9f
+61: mov     S8(%rsp), %rcx
+    movq    $LANTERN_INVALID_ENCODING, NodeEvent_result(%rcx)
+    xor     %eax, %eax
+    jmp     9f
+62: mov     S8(%rsp), %rcx
+    movq    $LANTERN_GOSSIP_IGNORE, NodeEvent_result(%rcx)
+    xor     %eax, %eax
+    jmp     9f
+7:  mov     S8(%rsp), %rcx                  # no such item
+    movq    $LANTERN_INVALID_ENCODING, NodeEvent_result(%rcx)
+    xor     %eax, %eax
+    LEAVE 32
+8:  mov     $LANTERN_BUFFER_TOO_SMALL, %eax
+    LEAVE 32
+9:  mov     S10(%rsp), %rcx
+    mov     %rcx, (%r15)
+    LEAVE 32
+END_FUNCTION node_run_vote
 
 /*
  * The BACKFILL work (node.md): node_block_root of the fork of the block's slot of data rdi, its

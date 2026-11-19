@@ -2394,7 +2394,8 @@ enum { ACT_BYTES_PUT = 1, ACT_STATE_COPY, ACT_STATE_FREE, ACT_BYTES_FREE, ACT_WO
 #define NODE_DB_SIDECARS (1ull << 62)
 #define NODE_DB_SEGMENTS 256 /* the segments one node's runner keeps */
 enum { WORK_IMPORT_BLOCK = 1, WORK_JUSTIFIED_STATE, WORK_TARGET_STATE, WORK_ATTESTATION, WORK_ATTESTER_SLASHING, WORK_SERVE, WORK_GOSSIP,
-       WORK_SYNC_BLOCK, WORK_BLOB, WORK_NEW_PAYLOAD, WORK_FORKCHOICE, WORK_SLOTS, WORK_UPGRADE, WORK_REPLAY };
+       WORK_SYNC_BLOCK, WORK_BLOB, WORK_NEW_PAYLOAD, WORK_FORKCHOICE, WORK_SLOTS, WORK_UPGRADE, WORK_REPLAY, WORK_BACKFILL,
+       WORK_BLOCK_ATTESTATION, WORK_BLOCK_SLASHING };
 static unsigned long node_replays; /* the REPLAY works the nodes ran: post-states they rebuilt */
 #define EV_RESULT 72
 #define EV_WORK_DONE_SIZE 128
@@ -2862,7 +2863,8 @@ static void shell_work(fc_node *n, const uint8_t *work, const char **why) {
         *why = "lantern_node_run: the event is not the WORK_DONE of the work";
     if (!*why) {
         uint64_t result = rd64(ev + EV_RESULT);
-        int k = kind == WORK_ATTESTATION ? 0 : kind == WORK_ATTESTER_SLASHING ? 1 : -1;
+        int k = kind == WORK_ATTESTATION || kind == WORK_BLOCK_ATTESTATION ? 0
+                : kind == WORK_ATTESTER_SLASHING || kind == WORK_BLOCK_SLASHING ? 1 : -1;
         if (k >= 0 && !(k == 0 && result == LANTERN_NEED_TARGET_STATE)) {
             if (s->nresults[k] == SHELL_RESULTS) *why = "too many results";
             else s->results[k][s->nresults[k]++] = result;
@@ -3195,7 +3197,7 @@ static void header_check(const uint8_t *enc, uint64_t len, const char **why) {
     free(out);
 }
 
-/* A block step through the node, then the block's attestations and attester slashings as events when it is valid. */
+/* A block step through the node; a valid block's attestations and attester slashings go to fork choice by the node's own works. */
 static void shell_block_step(fc_node *n, tv parts, tv step, const char **why) {
     struct node_shell *s = n->shell;
     char key[128];
@@ -3210,6 +3212,7 @@ static void shell_block_step(fc_node *n, tv parts, tv step, const char **why) {
     const uint8_t *body = nested(block, field_offset("BeaconBlock", 4));
     root_of("BeaconBlock", block, root, why);
     uint64_t available = step_data_available(parts, step, body, why);
+    s->nresults[0] = s->nresults[1] = 0;
     if (!*why) {
         shell_event(s, EV_BLOCK, available, bytes, blen);
         shell_settle(n, why);
@@ -3223,26 +3226,13 @@ static void shell_block_step(fc_node *n, tv parts, tv step, const char **why) {
         *why = msg;
     } else if (!*why && !valid && imported) *why = "block: expected not imported";
     if (!*why && valid) {
-        s->nresults[0] = s->nresults[1] = 0;
-        uint64_t ref = field_offset("BeaconBlockBody", 5), natt = rd64(body + ref + 8), nsl;
-        const uint8_t *a = body + rd64(body + ref);
-        for (uint64_t i = 0; i < natt && !*why; i++, a += rd64(a)) {
-            uint64_t olen = 0;
-            uint8_t *enc = encoded("Attestation", a, &olen, why);
-            if (enc) shell_event(s, EV_ATTESTATION, 1, enc + 24, olen);
-            free(enc);
+        uint64_t natt = rd64(body + field_offset("BeaconBlockBody", 5) + 8), nsl = rd64(body + field_offset("BeaconBlockBody", 4) + 8);
+        if (!*why && (s->nresults[0] != natt || s->nresults[1] != nsl)) {
+            static char msg[128];
+            snprintf(msg, sizeof msg, "the block's votes: not one result each: %zu of %llu attestations, %zu of %llu slashings",
+                     s->nresults[0], (unsigned long long)natt, s->nresults[1], (unsigned long long)nsl);
+            *why = msg;
         }
-        ref = field_offset("BeaconBlockBody", 4);
-        nsl = rd64(body + ref + 8);
-        a = body + rd64(body + ref);
-        for (uint64_t i = 0; i < nsl && !*why; i++, a += rd64(a)) {
-            uint64_t olen = 0;
-            uint8_t *enc = encoded("AttesterSlashing", a, &olen, why);
-            if (enc) shell_event(s, EV_ATTESTER_SLASHING, 0, enc + 24, olen);
-            free(enc);
-        }
-        shell_settle(n, why);
-        if (!*why && (s->nresults[0] != natt || s->nresults[1] != nsl)) *why = "the block's operations: not one result each";
         for (size_t i = 0; i < s->nresults[0] && !*why; i++)
             if (s->results[0][i] != 0) *why = "a block attestation is not valid";
         for (size_t i = 0; i < s->nresults[1] && !*why; i++)
@@ -5211,26 +5201,7 @@ static void fc_gossip_case(tv parts, int *ran, const char **why) {
             gossip_root = root;
             if (!*why) p2p_run(&n, &net, p2p_imported, 0, why);
             if (*why && !strcmp(*why, "the network does not get there")) *why = "a valid block is not imported over gossip";
-            if (!*why) { /* the block's attestations and attester slashings, as fc_node_case gives them */
-                const uint8_t *body = nested(block, field_offset("BeaconBlock", 4));
-                uint64_t ref = field_offset("BeaconBlockBody", 5);
-                const uint8_t *a = body + rd64(body + ref);
-                for (uint64_t i = 0, cnt = rd64(body + ref + 8); i < cnt && !*why; i++, a += rd64(a)) {
-                    uint64_t olen = 0;
-                    uint8_t *enc = encoded("Attestation", a, &olen, why);
-                    if (enc) shell_event(s, EV_ATTESTATION, 1, enc + 24, olen);
-                    free(enc);
-                }
-                ref = field_offset("BeaconBlockBody", 4);
-                a = body + rd64(body + ref);
-                for (uint64_t i = 0, cnt = rd64(body + ref + 8); i < cnt && !*why; i++, a += rd64(a)) {
-                    uint64_t olen = 0;
-                    uint8_t *enc = encoded("AttesterSlashing", a, &olen, why);
-                    if (enc) shell_event(s, EV_ATTESTER_SLASHING, 0, enc + 24, olen);
-                    free(enc);
-                }
-                p2p_settle(&n, &net, why);
-            }
+            if (!*why) p2p_settle(&n, &net, why); /* the block's votes: the node's own works */
             free(sb);
         } else if (tv_get(st, "attestation") || tv_get(st, "attester_slashing") || tv_get(st, "pow_block")) {
             int att = tv_get(st, "attestation") != NULL, pow = tv_get(st, "pow_block") != NULL;

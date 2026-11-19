@@ -2056,6 +2056,134 @@ LOCAL_FUNCTION node_backfill_ask
 99: LEAVE 32
 END_FUNCTION node_backfill_ask
 
+/* reg = the u32 at off(base), little endian, byte by byte: SSZ offsets need not be aligned. Uses tmp. */
+.macro LD32B reg, base, off, tmp
+    lbu     \reg, (\off)(\base)
+    lbu     \tmp, ((\off) + 1)(\base)
+    slli    \tmp, \tmp, 8
+    or      \reg, \reg, \tmp
+    lbu     \tmp, ((\off) + 2)(\base)
+    slli    \tmp, \tmp, 16
+    or      \reg, \reg, \tmp
+    lbu     \tmp, ((\off) + 3)(\base)
+    slli    \tmp, \tmp, 24
+    or      \reg, \reg, \tmp
+.endm
+
+/*
+ * L0: the list of the body of the SignedBeaconBlock in the ByteList a0: a1 0 attester_slashings,
+ * 1 attestations (offsets at bytes 204 and 208 of the body in every fork). a0 = its count, or
+ * 2^64 - 1 when the bytes do not hold it; for an index a2 below the count, a1 the item's SSZ bytes
+ * and a2 their length, else 0 and 0. Uses t0-t6, a3-a5.
+ */
+LOCAL_FUNCTION node_body_item
+    UNWIND_END_PROLOGUE
+    ld      t0, 16(a0)                      # the length
+    ld      t1, 8(a0)
+    add     t1, a0, t1                      # the bytes
+    li      t2, 100 + 84
+    bltu    t0, t2, 9f
+    LD32B   t2, t1, 0, t6                   # the message
+    bgtu    t2, t0, 9f
+    add     t1, t1, t2
+    sub     t0, t0, t2
+    li      t2, 88
+    bltu    t0, t2, 9f
+    LD32B   t2, t1, 80, t6                  # the body: its offset at 80
+    bgtu    t2, t0, 9f
+    add     t1, t1, t2
+    sub     t0, t0, t2
+    li      t2, 216
+    bltu    t0, t2, 9f
+    slli    t3, a1, 2
+    add     t3, t1, t3
+    LD32B   t4, t3, 204, t6                 # the list: from its offset to the next field's
+    LD32B   t5, t3, 208, t6
+    bgtu    t4, t5, 9f
+    bgtu    t5, t0, 9f
+    sub     t5, t5, t4                      # the list's bytes
+    add     t1, t1, t4
+    beqz    t5, 7f
+    li      t2, 4
+    bltu    t5, t2, 9f
+    LD32B   t2, t1, 0, t6                   # its first offset: 4 times the count
+    andi    t3, t2, 3
+    bnez    t3, 9f
+    bgtu    t2, t5, 9f
+    srli    a0, t2, 2
+    beqz    a0, 9f
+    bgeu    a2, a0, 8f
+    slli    t3, a2, 2
+    add     t3, t1, t3
+    LD32B   t4, t3, 0, t6
+    addi    t2, a2, 1
+    mv      a3, t5
+    bgeu    t2, a0, 1f
+    LD32B   a3, t3, 4, t6
+1:  bgtu    t4, a3, 9f
+    bgtu    a3, t5, 9f
+    add     a1, t1, t4
+    sub     a2, a3, t4
+    ret
+7:  li      a0, 0
+8:  li      a1, 0
+    li      a2, 0
+    ret
+9:  li      a0, -1
+    li      a1, 0
+    li      a2, 0
+    ret
+END_FUNCTION node_body_item
+
+/*
+ * The votes of the imported block entry a0 (node.md): a BLOCK_ATTESTATION of each of its a1
+ * attestations, then a BLOCK_SLASHING of each of its a2 attester slashings with the post-state of
+ * the justified root; at most NODE_VOTES_MAX in all. s3 the entry, s4 the index, s7 the
+ * attestations, s8 the slashings, s9 the justified state.
+ */
+LOCAL_FUNCTION node_votes
+    ENTER 0
+    mv      s3, a0
+    li      t0, 128
+    mv      s7, a1
+    bleu    s7, t0, 1f
+    mv      s7, t0
+1:  li      t0, 2
+    mv      s8, a2
+    bleu    s8, t0, 2f
+    mv      s8, t0
+2:  li      s4, 0
+3:  bgeu    s4, s7, 4f
+    li      a0, NODE_WORK_BLOCK_ATTESTATION
+    li      a1, 0
+    li      a2, 0
+    ld      a3, NodeBlock_data_id(s3)
+    li      a4, 0
+    mv      a5, s4
+    call    node_work
+    addi    s4, s4, 1
+    j       3b
+4:  beqz    s8, 9f
+    addi    a0, s2, Store_justified_checkpoint + 8
+    call    node_find_block
+    li      s9, 0
+    li      t0, -1
+    beq     a0, t0, 5f
+    ld      s9, NodeBlock_state_id(a1)
+5:  li      s4, 0
+6:  bgeu    s4, s8, 9f
+    li      a0, NODE_WORK_BLOCK_SLASHING
+    mv      a1, s9
+    li      a2, 0
+    ld      a3, NodeBlock_data_id(s3)
+    li      a4, 0
+    mv      a5, s4
+    call    node_work
+    addi    s4, s4, 1
+    j       6b
+9:  LEAVE 0
+END_FUNCTION node_votes
+
 /*
  * With NODE_FLAG_DB, the canonical blocks from db_next_slot to the finalized block a0 and their
  * sidecars go to the Db, in slot order: a record of each in the index and in a DB_APPEND action,
@@ -2953,8 +3081,12 @@ LOCAL_FUNCTION node_event
     sd      t0, NodeAction_state_c(a0)
     LEAVE 48
 51: bnez    t1, 52f
-    li      t0, NODE_BLOCK_IMPORTED         # imported: then its waiting children
+    li      t0, NODE_BLOCK_IMPORTED         # imported: its votes, then its waiting children
     sd      t0, NodeBlock_status(s4)
+    mv      a0, s4
+    ld      a1, NodeEvent_index(s3)
+    ld      a2, NodeEvent_root(s3)
+    call    node_votes
     mv      a0, s4
     call    node_children
     LEAVE 48
@@ -2988,7 +3120,23 @@ LOCAL_FUNCTION node_event
     ld      a5, NodeAction_arg(s3)
     call    node_work
     LEAVE 48
-62: li      t2, NODE_WORK_SERVE             # SERVE: the chunk to its stream, then the next block or the close
+62: li      t2, NODE_WORK_BLOCK_ATTESTATION # BLOCK_ATTESTATION: with NEED_TARGET_STATE, the target state, then again
+    bne     t0, t2, 622f
+    li      t2, LANTERN_NEED_TARGET_STATE
+    bne     t1, t2, 79f
+    ld      a0, NodeEvent_checkpoint(s3)
+    addi    a1, s3, NodeEvent_checkpoint + 8
+    call    node_checkpoint_state
+    beqz    a0, 79f
+    mv      a1, a0
+    li      a0, NODE_WORK_BLOCK_ATTESTATION
+    ld      a2, NodeAction_state_b(s3)
+    ld      a3, NodeAction_data(s3)
+    ld      a4, NodeAction_target(s3)
+    ld      a5, NodeAction_arg(s3)
+    call    node_work
+    LEAVE 48
+622: li     t2, NODE_WORK_SERVE             # SERVE: the chunk to its stream, then the next block or the close
     bne     t0, t2, 63f
     ld      a0, NodeAction_target(s3)
     call    node_find_stream
@@ -6875,7 +7023,24 @@ FUNCTION lantern_node_step
     ld      t6, (L + 120)(sp)
     addi    t6, t6, 1
     sd      t6, (L + 120)(sp)
-23: li      t6, NODE_WORK_SERVE             # SERVE, and NEW_PAYLOAD or FORKCHOICE of LANTERN_VALID: a ByteList of the chunk inside
+23: li      t6, NODE_WORK_IMPORT_BLOCK      # a valid IMPORT_BLOCK: a work for each vote
+    bne     t4, t6, 231f
+    ld      t6, NodeEvent_result(t0)
+    bnez    t6, 22f
+    ld      t4, NodeEvent_index(t0)
+    li      t6, 128
+    bleu    t4, t6, 232f
+    mv      t4, t6
+232: ld     t6, NodeEvent_root(t0)
+    li      t3, 2
+    bleu    t6, t3, 233f
+    mv      t6, t3
+233: add    t4, t4, t6
+    li      t3, NODE_ACT_WORK_SIZE
+    mul     t4, t4, t3
+    add     s10, s10, t4
+    j       22f
+231: li     t6, NODE_WORK_SERVE             # SERVE, and NEW_PAYLOAD or FORKCHOICE of LANTERN_VALID: a ByteList of the chunk inside
     beq     t4, t6, 25f
     li      t6, NODE_WORK_NEW_PAYLOAD
     beq     t4, t6, 24f
@@ -7418,10 +7583,18 @@ FUNCTION lantern_node_run
     addi    a6, s7, NodeEvent_result
     FORK_CALL node_import
     li      t0, LANTERN_NEED_JUSTIFIED_STATE
-    bne     a0, t0, 99f
+    bne     a0, t0, 972f
     sd      a0, NodeEvent_result(s7)
     li      a0, LANTERN_OK
     LEAVE 192
+972: bnez   a0, 973f                        # valid: the counts of its votes
+    ld      t0, NodeEvent_result(s7)
+    bnez    t0, 973f
+    mv      a0, s5
+    mv      a1, s7
+    call    node_vote_counts
+    li      a0, LANTERN_OK
+973: LEAVE 192
 18: li      t0, LANTERN_INVALID_ENCODING
     sd      t0, NodeEvent_result(s7)
     li      a0, LANTERN_OK
@@ -7911,7 +8084,14 @@ FUNCTION lantern_node_run
     addi    a4, s7, NodeEvent_result
     FORK_CALL node_replay
     LEAVE 192
-971: li     t1, NODE_WORK_BACKFILL
+971: li     t1, NODE_WORK_BLOCK_ATTESTATION
+    beq     t0, t1, 975f
+    li      t1, NODE_WORK_BLOCK_SLASHING
+    bne     t0, t1, 974f
+975: mv     a0, t0                          # BLOCK_ATTESTATION, BLOCK_SLASHING
+    call    node_run_vote
+    LEAVE 192
+974: li     t1, NODE_WORK_BACKFILL
     bne     t0, t1, 8f
     ld      t0, 16(s5)                      # BACKFILL: its root, then the signature with state_a
     li      t1, 100 + 84
@@ -7928,6 +8108,118 @@ FUNCTION lantern_node_run
 7:  li      a0, LANTERN_BUFFER_TOO_SMALL
     LEAVE 192
 END_FUNCTION lantern_node_run
+
+/* L0: the counts of the votes of the block in data a0, at NodeEvent_index and NodeEvent_root of the event a1. Locals: sp+0 data, sp+8 event. */
+LOCAL_FUNCTION node_vote_counts
+    FRAME 16
+    sd      a0, 0(sp)
+    sd      a1, 8(sp)
+    li      a1, 1
+    li      a2, -1
+    call    node_body_item
+    li      t0, -1
+    bne     a0, t0, 1f
+    li      a0, 0
+1:  ld      t1, 8(sp)
+    sd      a0, NodeEvent_index(t1)
+    ld      a0, 0(sp)
+    li      a1, 0
+    li      a2, -1
+    call    node_body_item
+    li      t0, -1
+    bne     a0, t0, 2f
+    li      a0, 0
+2:  ld      t1, 8(sp)
+    sd      a0, NodeEvent_root(t1)
+    UNFRAME 16
+END_FUNCTION node_vote_counts
+
+/*
+ * L1: the BLOCK_ATTESTATION or BLOCK_SLASHING work a0 of lantern_node_run (node.md): the item at
+ * index arg of the block's body, as a ByteList at the end of scratch, then node_attestation with
+ * is_from_block 1 of the fork of its slot, or node_attester_slashing of the fork of the store's
+ * slot. The run's s1 node, s2 store, s3 work, s4 state_a, s5 data, s6 scratch, s7 event. s8 the
+ * kind, s9 the scratch size, s10 the ByteList. Locals: L is_from_block, L+8 a fork.
+ */
+LOCAL_FUNCTION node_run_vote
+    ENTER 16
+    mv      s8, a0
+    ld      s9, 0(s6)
+    li      t0, NODE_WORK_BLOCK_ATTESTATION
+    sub     t0, s8, t0
+    seqz    a1, t0
+    mv      a0, s5
+    ld      a2, NodeAction_arg(s3)
+    call    node_body_item
+    beqz    a2, 7f
+    addi    t0, a2, 24 + 7                  # the ByteList at the end of scratch
+    andi    t0, t0, -8
+    bltu    s9, t0, 8f
+    sub     t1, s9, t0
+    sd      t1, 0(s6)
+    add     s10, s6, t1
+    sd      t0, 0(s10)
+    li      t2, 24
+    sd      t2, 8(s10)
+    sd      a2, 16(s10)
+    addi    a0, s10, 24
+    call    lantern_copy
+    li      t0, NODE_WORK_BLOCK_ATTESTATION
+    bne     s8, t0, 3f
+    ld      t0, 16(s10)                     # ATTESTATION: the fork of its slot
+    li      t1, 4 + 128 + 96
+    bltu    t0, t1, 61f
+    LDU64   a0, s10, 24 + 4, t1
+    addi    a1, s1, Node_config
+    call    node_fork
+    mv      t6, a0
+    li      t0, 1
+    sd      t0, L(sp)
+    mv      a0, s2
+    mv      a1, s10
+    addi    a2, sp, L
+    mv      a3, s4
+    mv      a4, s6
+    addi    a5, s7, NodeEvent_result
+    addi    a6, s7, NodeEvent_checkpoint
+    FORK_CALL node_attestation
+    j       9f
+3:  mv      a0, s2                          # SLASHING: the fork of the store's slot, a state of it
+    call    node_store_slot
+    addi    a1, s1, Node_config
+    call    node_fork
+    sd      a0, (L + 8)(sp)
+    beqz    s4, 4f
+    ld      a0, NODE_STATE_SLOT(s4)
+    addi    a1, s1, Node_config
+    call    node_fork
+    ld      t0, (L + 8)(sp)
+    bne     a0, t0, 62f
+4:  ld      t6, (L + 8)(sp)
+    mv      a0, s2
+    mv      a1, s10
+    mv      a2, s4
+    mv      a3, s6
+    addi    a4, s7, NodeEvent_result
+    FORK_CALL node_attester_slashing
+    j       9f
+61: li      t0, LANTERN_INVALID_ENCODING
+    sd      t0, NodeEvent_result(s7)
+    li      a0, LANTERN_OK
+    j       9f
+62: li      t0, LANTERN_GOSSIP_IGNORE
+    sd      t0, NodeEvent_result(s7)
+    li      a0, LANTERN_OK
+    j       9f
+7:  li      t0, LANTERN_INVALID_ENCODING    # no such item
+    sd      t0, NodeEvent_result(s7)
+    li      a0, LANTERN_OK
+    LEAVE 16
+8:  li      a0, LANTERN_BUFFER_TOO_SMALL
+    LEAVE 16
+9:  sd      s9, 0(s6)
+    LEAVE 16
+END_FUNCTION node_run_vote
 
 /*
  * L0: the BACKFILL work (node.md): node_block_root of the fork of the block's slot of data a0, its

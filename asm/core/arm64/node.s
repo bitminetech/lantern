@@ -1796,6 +1796,128 @@ LOCAL_FUNCTION node_backfill_ask
 END_FUNCTION node_backfill_ask
 
 /*
+ * L0: the list of the body of the SignedBeaconBlock in the ByteList x0: x1 0 attester_slashings,
+ * 1 attestations (offsets at bytes 204 and 208 of the body in every fork). x0 = its count, or
+ * 2^64 - 1 when the bytes do not hold it; for an index x2 below the count, x1 the item's SSZ bytes
+ * and x2 their length, else 0 and 0. Uses x9-x16.
+ */
+LOCAL_FUNCTION node_body_item
+    UNWIND_END_PROLOGUE
+    ldr     x9, [x0, #16]
+    ldr     x10, [x0, #8]
+    add     x10, x0, x10
+    cmp     x9, #(100 + 84)
+    b.lo    9f
+    ldr     w11, [x10]                      /* the message */
+    cmp     x11, x9
+    b.hi    9f
+    add     x12, x10, x11
+    sub     x13, x9, x11
+    cmp     x13, #88
+    b.lo    9f
+    ldr     w11, [x12, #80]                 /* the body: its offset at 80 */
+    cmp     x11, x13
+    b.hi    9f
+    add     x12, x12, x11
+    sub     x13, x13, x11
+    cmp     x13, #216
+    b.lo    9f
+    mov     x14, #204
+    add     x14, x14, x1, lsl #2
+    ldr     w15, [x12, x14]
+    add     x14, x14, #4
+    ldr     w16, [x12, x14]
+    cmp     x15, x16
+    b.hi    9f
+    cmp     x16, x13
+    b.hi    9f
+    sub     x13, x16, x15                   /* the list's bytes */
+    add     x12, x12, x15
+    cbz     x13, 7f
+    cmp     x13, #4
+    b.lo    9f
+    ldr     w11, [x12]                      /* its first offset: 4 times the count */
+    tst     x11, #3
+    b.ne    9f
+    cmp     x11, x13
+    b.hi    9f
+    lsr     x0, x11, #2
+    cbz     x0, 9f
+    cmp     x2, x0
+    b.hs    8f
+    ldr     w11, [x12, x2, lsl #2]
+    add     x14, x2, #1
+    mov     x15, x13
+    cmp     x14, x0
+    b.hs    1f
+    ldr     w15, [x12, x14, lsl #2]
+1:  cmp     x11, x15
+    b.hi    9f
+    cmp     x15, x13
+    b.hi    9f
+    add     x1, x12, x11
+    sub     x2, x15, x11
+    ret
+7:  mov     x0, #0
+8:  mov     x1, #0
+    mov     x2, #0
+    ret
+9:  mov     x0, #-1
+    mov     x1, #0
+    mov     x2, #0
+    ret
+END_FUNCTION node_body_item
+
+/*
+ * The votes of the imported block entry x0 (node.md): a BLOCK_ATTESTATION of each of its x1
+ * attestations, then a BLOCK_SLASHING of each of its x2 attester slashings with the post-state of
+ * the justified root; at most NODE_VOTES_MAX in all. x21 the entry, x22 the index, x26 the
+ * attestations, x27 the slashings, x28 the justified state.
+ */
+LOCAL_FUNCTION node_votes
+    ENTER 0
+    mov     x21, x0
+    mov     x9, #128
+    cmp     x1, x9
+    csel    x26, x9, x1, hi
+    cmp     x2, #2
+    mov     x9, #2
+    csel    x27, x9, x2, hi
+    mov     x22, #0
+1:  cmp     x22, x26
+    b.hs    2f
+    mov     x0, #NODE_WORK_BLOCK_ATTESTATION
+    mov     x1, #0
+    mov     x2, #0
+    ldr     x3, [x21, #NodeBlock_data_id]
+    mov     x4, #0
+    mov     x5, x22
+    bl      node_work
+    add     x22, x22, #1
+    b       1b
+2:  cbz     x27, 9f
+    add     x0, x20, #(Store_justified_checkpoint + 8)
+    bl      node_find_block
+    mov     x28, #0
+    cmn     x0, #1
+    b.eq    3f
+    ldr     x28, [x1, #NodeBlock_state_id]
+3:  mov     x22, #0
+4:  cmp     x22, x27
+    b.hs    9f
+    mov     x0, #NODE_WORK_BLOCK_SLASHING
+    mov     x1, x28
+    mov     x2, #0
+    ldr     x3, [x21, #NodeBlock_data_id]
+    mov     x4, #0
+    mov     x5, x22
+    bl      node_work
+    add     x22, x22, #1
+    b       4b
+9:  LEAVE 0
+END_FUNCTION node_votes
+
+/*
  * L0: with NODE_FLAG_DB, the canonical blocks from db_next_slot to the finalized block x0 and
  * their sidecars go to the Db, in slot order: a record of each in the index and in a DB_APPEND
  * action, then their bytes and entries go, but the finalized block's entry and bytes a stream
@@ -2982,8 +3104,12 @@ LOCAL_FUNCTION node_event
     str     x9, [x0, #NodeAction_state_c]
     LEAVE 48
 51: cbnz    x10, 52f
-    mov     x9, #NODE_BLOCK_IMPORTED        /* imported: then its waiting children */
+    mov     x9, #NODE_BLOCK_IMPORTED        /* imported: its votes, then its waiting children */
     str     x9, [x22, #NodeBlock_status]
+    mov     x0, x22
+    ldr     x1, [x21, #NodeEvent_index]
+    ldr     x2, [x21, #NodeEvent_root]
+    bl      node_votes
     mov     x0, x22
     bl      node_children
     LEAVE 48
@@ -3016,7 +3142,22 @@ LOCAL_FUNCTION node_event
     ldp     x4, x5, [x21, #NodeAction_target]
     bl      node_work
     LEAVE 48
-62: cmp     x9, #NODE_WORK_SERVE               /* SERVE: the chunk to its stream, then the next block or the close */
+62: cmp     x9, #NODE_WORK_BLOCK_ATTESTATION   /* BLOCK_ATTESTATION: with NEED_TARGET_STATE, the target state, then again */
+    b.ne    622f
+    cmp     x10, #LANTERN_NEED_TARGET_STATE
+    b.ne    79f
+    ldr     x0, [x21, #NodeEvent_checkpoint]
+    add     x1, x21, #(NodeEvent_checkpoint + 8)
+    bl      node_checkpoint_state
+    cbz     x0, 79f
+    mov     x1, x0
+    mov     x0, #NODE_WORK_BLOCK_ATTESTATION
+    ldr     x2, [x21, #NodeAction_state_b]
+    ldr     x3, [x21, #NodeAction_data]
+    ldp     x4, x5, [x21, #NodeAction_target]
+    bl      node_work
+    LEAVE 48
+622: cmp    x9, #NODE_WORK_SERVE               /* SERVE: the chunk to its stream, then the next block or the close */
     b.ne    63f
     ldr     x0, [x21, #NodeAction_target]
     bl      node_find_stream
@@ -6823,7 +6964,23 @@ FUNCTION lantern_node_step
     ldr     x15, [sp, #(L + 120)]
     add     x15, x15, #1
     str     x15, [sp, #(L + 120)]
-23: cmp     x14, #NODE_WORK_SERVE
+23: cmp     x14, #NODE_WORK_IMPORT_BLOCK    /* a valid IMPORT_BLOCK: a work for each vote */
+    b.ne    231f
+    ldr     x15, [x11, #NodeEvent_result]
+    cbnz    x15, 22f
+    ldr     x15, [x11, #NodeEvent_index]
+    mov     x16, #128
+    cmp     x15, x16
+    csel    x15, x16, x15, hi
+    ldr     x16, [x11, #NodeEvent_root]
+    cmp     x16, #2
+    mov     x17, #2
+    csel    x16, x17, x16, hi
+    add     x15, x15, x16
+    mov     x16, #NODE_ACT_WORK_SIZE
+    madd    x28, x15, x16, x28
+    b       22f
+231: cmp    x14, #NODE_WORK_SERVE
     b.eq    24f
     cmp     x14, #NODE_WORK_NEW_PAYLOAD
     ccmp    x14, #NODE_WORK_FORKCHOICE, #4, ne
@@ -7362,10 +7519,18 @@ FUNCTION lantern_node_run
     add     x6, x25, #NodeEvent_result
     FORK_CALL node_import
     cmp     x0, #LANTERN_NEED_JUSTIFIED_STATE
-    b.ne    99f
+    b.ne    972f
     str     x0, [x25, #NodeEvent_result]
     mov     x0, #LANTERN_OK
     LEAVE 192
+972: cbnz   x0, 973f                        /* valid: the counts of its votes */
+    ldr     x9, [x25, #NodeEvent_result]
+    cbnz    x9, 973f
+    mov     x0, x23
+    mov     x1, x25
+    bl      node_vote_counts
+    mov     x0, #LANTERN_OK
+973: LEAVE 192
 18: mov     x9, #LANTERN_INVALID_ENCODING
     str     x9, [x25, #NodeEvent_result]
     mov     x0, #LANTERN_OK
@@ -7855,7 +8020,13 @@ FUNCTION lantern_node_run
     add     x4, x25, #NodeEvent_result
     FORK_CALL node_replay
     LEAVE 192
-971: cmp    x9, #NODE_WORK_BACKFILL
+971: cmp    x9, #NODE_WORK_BLOCK_ATTESTATION
+    ccmp    x9, #NODE_WORK_BLOCK_SLASHING, #4, ne
+    b.ne    974f
+    mov     x0, x9                          /* BLOCK_ATTESTATION, BLOCK_SLASHING */
+    bl      node_run_vote
+    LEAVE 192
+974: cmp    x9, #NODE_WORK_BACKFILL
     b.ne    8f
     ldr     x9, [x23, #16]                  /* BACKFILL: its root, then the signature with state_a */
     cmp     x9, #(100 + 84)
@@ -7872,6 +8043,112 @@ FUNCTION lantern_node_run
 7:  mov     x0, #LANTERN_BUFFER_TOO_SMALL
     LEAVE 192
 END_FUNCTION lantern_node_run
+
+/* L0: the counts of the votes of the block in data x0, at NodeEvent_index and NodeEvent_root of the event x1. */
+LOCAL_FUNCTION node_vote_counts
+    FRAME 16
+    stp     x0, x1, [sp, #16]
+    mov     x1, #1
+    mov     x2, #-1
+    bl      node_body_item
+    cmn     x0, #1
+    csel    x0, xzr, x0, eq
+    ldr     x9, [sp, #24]
+    str     x0, [x9, #NodeEvent_index]
+    ldr     x0, [sp, #16]
+    mov     x1, #0
+    mov     x2, #-1
+    bl      node_body_item
+    cmn     x0, #1
+    csel    x0, xzr, x0, eq
+    ldr     x9, [sp, #24]
+    str     x0, [x9, #NodeEvent_root]
+    UNFRAME 16
+END_FUNCTION node_vote_counts
+
+/*
+ * L1: the BLOCK_ATTESTATION or BLOCK_SLASHING work x0 of lantern_node_run (node.md): the item at
+ * index arg of the block's body, as a ByteList at the end of scratch, then node_attestation with
+ * is_from_block 1 of the fork of its slot, or node_attester_slashing of the fork of the store's
+ * slot. The run's x19 node, x20 store, x21 work, x22 state_a, x23 data, x24 scratch, x25 event.
+ * x26 the kind, x27 the scratch size, x28 the ByteList. Locals: L is_from_block.
+ */
+LOCAL_FUNCTION node_run_vote
+    ENTER 16
+    mov     x26, x0
+    ldr     x27, [x24]
+    cmp     x26, #NODE_WORK_BLOCK_ATTESTATION
+    cset    x1, eq
+    mov     x0, x23
+    ldr     x2, [x21, #NodeAction_arg]
+    bl      node_body_item
+    cbz     x2, 7f
+    add     x9, x2, #(24 + 7)               /* the ByteList at the end of scratch */
+    and     x9, x9, #~7
+    subs    x10, x27, x9
+    b.lo    8f
+    str     x10, [x24]
+    add     x28, x24, x10
+    mov     x11, #24
+    stp     x9, x11, [x28]
+    str     x2, [x28, #16]
+    add     x0, x28, #24
+    bl      lantern_copy
+    cmp     x26, #NODE_WORK_BLOCK_ATTESTATION
+    b.ne    3f
+    ldr     x9, [x28, #16]                  /* ATTESTATION: the fork of its slot */
+    cmp     x9, #(4 + 128 + 96)
+    b.lo    61f
+    ldr     x0, [x28, #(24 + 4)]
+    add     x1, x19, #Node_config
+    bl      node_fork
+    mov     x15, x0
+    mov     x9, #1
+    str     x9, [sp, #L]
+    mov     x0, x20
+    mov     x1, x28
+    add     x2, sp, #L
+    mov     x3, x22
+    mov     x4, x24
+    add     x5, x25, #NodeEvent_result
+    add     x6, x25, #NodeEvent_checkpoint
+    FORK_CALL node_attestation
+    b       9f
+3:  mov     x0, x20                         /* SLASHING: the fork of the store's slot, a state of it */
+    bl      node_store_slot
+    add     x1, x19, #Node_config
+    bl      node_fork
+    mov     x15, x0
+    cbz     x22, 4f
+    ldr     x0, [x22, #NODE_STATE_SLOT]
+    add     x1, x19, #Node_config
+    bl      node_fork
+    cmp     x0, x15
+    b.ne    62f
+4:  mov     x0, x20
+    mov     x1, x28
+    mov     x2, x22
+    mov     x3, x24
+    add     x4, x25, #NodeEvent_result
+    FORK_CALL node_attester_slashing
+    b       9f
+61: mov     x9, #LANTERN_INVALID_ENCODING
+    str     x9, [x25, #NodeEvent_result]
+    mov     x0, #LANTERN_OK
+    b       9f
+62: mov     x9, #LANTERN_GOSSIP_IGNORE
+    str     x9, [x25, #NodeEvent_result]
+    mov     x0, #LANTERN_OK
+    b       9f
+7:  mov     x9, #LANTERN_INVALID_ENCODING   /* no such item */
+    str     x9, [x25, #NodeEvent_result]
+    mov     x0, #LANTERN_OK
+    LEAVE 16
+8:  mov     x0, #LANTERN_BUFFER_TOO_SMALL
+    LEAVE 16
+9:  str     x27, [x24]
+    LEAVE 16
+END_FUNCTION node_run_vote
 
 /*
  * L0: the BACKFILL work (node.md): node_block_root of the fork of the block's slot of data x0, its

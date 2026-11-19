@@ -795,6 +795,9 @@
 .set NODE_WORK_UPGRADE, 13             /* a: a state at the fork's first slot; b: the buffer for the upgraded state; arg: the fork */
 .set NODE_WORK_REPLAY, 14              /* a: the post-state of a block's parent; data: the block, imported before */
 .set NODE_WORK_BACKFILL, 15            /* a: F's post-state; data: a block of the backfill; target: its NodeBlock index */
+.set NODE_WORK_BLOCK_ATTESTATION, 16   /* a: the target checkpoint state, or 0; data: an imported block; arg: the index of an attestation of its body */
+.set NODE_WORK_BLOCK_SLASHING, 17      /* a: the justified root's post-state; data: an imported block; arg: the index of an attester slashing of its body */
+.set NODE_VOTES_MAX, 130               /* MAX_ATTESTATIONS + MAX_ATTESTER_SLASHINGS: the votes of a block the node takes */
 .set NodeEvent_root, NodeEvent_checkpoint + 8  /* GOSSIP of a valid beacon_block, SYNC_BLOCK: its root; of a valid blob_sidecar, BLOB: the root of its block header */
 .set NodeEvent_index, NodeEvent_root + 32      /* GOSSIP of a valid beacon_block, SYNC_BLOCK: its blob commitments; of a valid blob_sidecar: its index */
 .set NodeEvent_chunk, NODE_EV_WORK_DONE_SIZE   /* SERVE: a ByteList of the response chunk after the WORK_DONE fields; NEW_PAYLOAD, FORKCHOICE: of the HTTP request */
