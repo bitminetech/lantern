@@ -1750,7 +1750,7 @@ END_FUNCTION node_backfill_link
  * from backfill_ms on, while backfill_next is above the target and the streams part has room for
  * three entries. x20 the store. x21 the peers part, x22 the peers, x24 the index, x25 the target,
  * then a peer, x26 the start slot, x27 the first index, x28 the peers checked. Locals: L the
- * request (24).
+ * request (24), L+24 the index, L+32 the fork, L+40 the pass: 1 for peers of any earliest_slot.
  */
 LOCAL_FUNCTION node_backfill_ask
     ENTER 48
@@ -1797,9 +1797,15 @@ LOCAL_FUNCTION node_backfill_ask
     udiv    x9, x27, x22
     msub    x27, x9, x22, x27
     mov     x28, #0
+    str     xzr, [sp, #(L + 40)]            /* first the peers whose earliest_slot is at most the start */
 4:  cmp     x28, x22
-    b.hs    99f
-    add     x10, x27, x28
+    b.lo    40f
+    ldr     x9, [sp, #(L + 40)]             /* with none, a peer of any earliest_slot */
+    cbnz    x9, 99f
+    mov     x9, #1
+    str     x9, [sp, #(L + 40)]
+    mov     x28, #0
+40: add     x10, x27, x28
     udiv    x9, x10, x22
     msub    x10, x9, x22, x10
     str     x10, [sp, #(L + 24)]
@@ -1813,8 +1819,10 @@ LOCAL_FUNCTION node_backfill_ask
     cmp     x9, x10
     b.ne    4b
     ldr     x9, [x25, #NodePeer_earliest_slot]
+    ldr     x10, [sp, #(L + 40)]
     cmp     x9, x26
-    b.hi    4b
+    ccmp    x10, #0, #0, hi                 /* above the start in the first pass: the next peer */
+    b.eq    4b
     ldr     x9, [x25, #NodePeer_flags]      /* from fulu, its MetaData read: its custody */
     tst     x9, #NODE_PEER_METADATA
     b.ne    41f

@@ -2010,10 +2010,11 @@ END_FUNCTION node_backfill_link
  * slots below backfill_next, to a peer from backfill_peer on, when no request is open or unweighed,
  * from backfill_ms on, while backfill_next is above the target and the streams part has room for
  * three entries. s2 the store. s3 the peers part, s4 the peers, s7 the target, then a peer, s8 the
- * start slot, s9 the first index, s10 the peers checked. Locals: L the request (24), L+24 the index.
+ * start slot, s9 the first index, s10 the peers checked. Locals: L the request (24), L+24 the index,
+ * L+32 the fork, L+48 the pass: 1 for peers of any earliest_slot.
  */
 LOCAL_FUNCTION node_backfill_ask
-    ENTER 48
+    ENTER 64
     ld      t0, Node_flags(s1)
     andi    t0, t0, NODE_FLAG_DB
     beqz    t0, 99f
@@ -2056,8 +2057,14 @@ LOCAL_FUNCTION node_backfill_ask
     ld      t0, Node_backfill_peer(s1)
     remu    s9, t0, s4
     li      s10, 0
-4:  bgeu    s10, s4, 99f
-    add     t0, s9, s10
+    sd      zero, (L + 48)(sp)              # first the peers whose earliest_slot is at most the start
+4:  bltu    s10, s4, 40f
+    ld      t0, (L + 48)(sp)                # with none, a peer of any earliest_slot
+    bnez    t0, 99f
+    li      t0, 1
+    sd      t0, (L + 48)(sp)
+    li      s10, 0
+40: add     t0, s9, s10
     remu    t0, t0, s4
     sd      t0, (L + 24)(sp)
     addi    s10, s10, 1
@@ -2071,7 +2078,10 @@ LOCAL_FUNCTION node_backfill_ask
     ld      t1, Node_fork_digest(s1)
     bne     t0, t1, 4b
     ld      t0, NodePeer_earliest_slot(s7)
-    bgtu    t0, s8, 4b
+    bleu    t0, s8, 42f
+    ld      t0, (L + 48)(sp)                # above the start in the first pass: the next peer
+    beqz    t0, 4b
+42:
     ld      t0, NodePeer_flags(s7)          # from fulu, its MetaData read: its custody
     andi    t0, t0, NODE_PEER_METADATA
     bnez    t0, 41f
@@ -2116,7 +2126,7 @@ LOCAL_FUNCTION node_backfill_ask
     sd      zero, Node_backfill_got(s1)
     ld      t0, (L + 24)(sp)
     sd      t0, Node_backfill_peer(s1)
-99: LEAVE 48
+99: LEAVE 64
 END_FUNCTION node_backfill_ask
 
 /* reg = the u32 at off(base), little endian, byte by byte: SSZ offsets need not be aligned. Uses tmp. */
