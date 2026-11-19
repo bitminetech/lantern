@@ -53,12 +53,13 @@ build_objects() {
         -c "$dep/asm-libp2p/asm/shell/$os/$isa/shell.s" -o "$out/deps/libp2p-shell.o"
 
     # The signatures-off test runner (tests/runner/bls_off.c) links a copy of the
-    # BLS object whose three signature checks are renamed, so that the stand-ins
+    # BLS object whose four signature checks are renamed, so that the stand-ins
     # of bls_off.c take their names. $deps_off is $deps with that copy.
     prefix=""
     [ "$os" = macos ] && prefix=_
     renames=""
-    for fn in crypto_bls_verify crypto_bls_fast_aggregate_verify crypto_bls_eth_fast_aggregate_verify; do
+    for fn in crypto_bls_verify crypto_bls_fast_aggregate_verify crypto_bls_eth_fast_aggregate_verify \
+              crypto_bls_fast_aggregate_verify_cached; do
         renames="$renames --redefine-sym $prefix$fn=$prefix${fn}_real"
     done
     llvm-objcopy $renames "$out/deps/crypto-bls12381.o" "$out/deps/crypto-bls12381-off.o"

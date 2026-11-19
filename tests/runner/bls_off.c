@@ -1,12 +1,14 @@
 /*
- * Stand-ins for the three asm-crypto signature checks that lantern calls, for
+ * Stand-ins for the four asm-crypto signature checks that lantern calls, for
  * the signatures-off runner, runner-<preset>-bls-off. Test code.
  *
  * Cases with bls_setting 2 were made with signature checks off. In the spec's
  * test mode (tests/core/pyspec/eth_consensus_specs/utils/bls.py of the pinned
  * spec), Verify and FastAggregateVerify, and so eth_fast_aggregate_verify,
- * return True, while public key aggregation still runs. platform/objects.sh
- * renames these three functions in a copy of asm-crypto's bls12381 object to
+ * return True, while public key aggregation still runs. The fourth,
+ * crypto_bls_fast_aggregate_verify_cached, is FastAggregateVerify with keys
+ * through a cache. platform/objects.sh
+ * renames these four functions in a copy of asm-crypto's bls12381 object to
  * <name>_real, and these take their names. Each writes 1 to valid and returns
  * CRYPTO_OK; lantern's own checks around them still run.
  */
@@ -29,6 +31,9 @@ ABI uint64_t crypto_bls_fast_aggregate_verify(const void *public_keys, const voi
                                               void *scratch, void *valid);
 ABI uint64_t crypto_bls_eth_fast_aggregate_verify(const void *public_keys, const void *message, const void *signature,
                                                   void *scratch, void *valid);
+ABI uint64_t crypto_bls_fast_aggregate_verify_cached(const void *keys, const void *indices, void *cache,
+                                                     const void *message, const void *signature, void *scratch,
+                                                     void *valid);
 
 ABI uint64_t crypto_bls_verify(const void *public_key, const void *message, const void *signature, void *scratch,
                                void *valid) {
@@ -45,5 +50,12 @@ ABI uint64_t crypto_bls_fast_aggregate_verify(const void *public_keys, const voi
 ABI uint64_t crypto_bls_eth_fast_aggregate_verify(const void *public_keys, const void *message, const void *signature,
                                                   void *scratch, void *valid) {
     (void)public_keys, (void)message, (void)signature, (void)scratch;
+    return accept(valid);
+}
+
+ABI uint64_t crypto_bls_fast_aggregate_verify_cached(const void *keys, const void *indices, void *cache,
+                                                     const void *message, const void *signature, void *scratch,
+                                                     void *valid) {
+    (void)keys, (void)indices, (void)cache, (void)message, (void)signature, (void)scratch;
     return accept(valid);
 }
