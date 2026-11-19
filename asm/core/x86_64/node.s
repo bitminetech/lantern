@@ -213,6 +213,9 @@ FUNCTION lantern_node_init
     lea     Node_genesis_validators_root(%r15), %rdi
     lea     NodeAnchor_genesis_validators_root(%r12), %rsi
     COPY32  %rdi, %rsi
+    lea     Node_node_id(%r15), %rdi
+    lea     NodeAnchor_node_id(%r12), %rsi
+    COPY32  %rdi, %rsi
     lea     Node_config(%r15), %rdi
     mov     %rbp, %rsi
     MOVQ    %rdx, CONFIG_SIZE
@@ -4165,6 +4168,8 @@ LOCAL_FUNCTION node_request
     call    lantern_zero
     mov     Node_metadata_seq(%rbx), %rax
     mov     %rax, (L + 64)(%rsp)
+    mov     Node_attnets(%rbx), %rax
+    mov     %rax, (L + 72)(%rsp)
     mov     (Node_config + CONFIG_CUSTODY_REQUIREMENT)(%rbx), %rax
     mov     %rax, (L + 56)(%rsp)
     lea     (L + 64 + 17)(%rsp), %rdi
@@ -5101,14 +5106,15 @@ LOCAL_FUNCTION node_enr_entries
     FORK_CALL compute_enr_fork_id
     mov     S7(%rsp), %rax
     add     $64, %rax
-    movq    $56, (%rax)                     # attnets: no subnet
+    movq    $56, (%rax)                     # attnets: the bits of the node's subnets
     movq    $DISCV5_EVENT_SET_ENTRY, 8(%rax)
     movq    $7, 16(%rax)
     movabs  $0x007374656e747461, %rcx
     mov     %rcx, 24(%rax)
     movq    $0, 32(%rax)
     movq    $8, 40(%rax)
-    movq    $0, 48(%rax)
+    mov     Node_attnets(%rbx), %rcx
+    mov     %rcx, 48(%rax)
     add     $56, %rax
     mov     %rax, S7(%rsp)
     cmp     $FORK_ALTAIR, %r12
@@ -5408,6 +5414,20 @@ LOCAL_FUNCTION node_topics
     mov     (L + 8)(%rsp), %rcx
     call    node_sub
     .endr
+    xor     %r13d, %r13d                    # beacon_attestation of each subnet of attnets
+10: cmp     $ATTESTATION_SUBNET_COUNT, %r13
+    jae     12f
+    mov     Node_attnets(%rbx), %rax
+    bt      %r13, %rax
+    jnc     11f
+    mov     $GOSSIP_BEACON_ATTESTATION, %edi
+    mov     %r13, %rsi
+    mov     L(%rsp), %rdx
+    mov     (L + 8)(%rsp), %rcx
+    call    node_sub
+11: inc     %r13
+    jmp     10b
+12:
     cmp     $FORK_ALTAIR, %r12
     jb      9f
     mov     $GOSSIP_SYNC_COMMITTEE_CONTRIBUTION_AND_PROOF, %edi
@@ -5476,6 +5496,93 @@ LOCAL_FUNCTION node_topics
 END_FUNCTION node_topics
 
 /*
+ * rax = the attestation subnets of the node at epoch rdi (node.md), bit i for subnet i:
+ * lantern_compute_subscribed_subnet of the node ID for each index below SUBNETS_PER_NODE, of the
+ * fork of the store's slot; 0 on a failure. Apart from node_subscribe, as FORK_CALL takes the
+ * labels 81 to 89. r12 the subnets, r13 the index, S7 the fork. Locals: L the epoch, L+8 the
+ * index, L+16 a subnet.
+ */
+LOCAL_FUNCTION node_attnets
+    ENTER 32
+    mov     %rdi, L(%rsp)
+    mov     %rbp, %rdi
+    call    node_store_slot
+    mov     %rax, %rdi
+    lea     Node_config(%rbx), %rsi
+    call    node_fork
+    mov     %rax, S7(%rsp)
+    xor     %r12d, %r12d
+    xor     %r13d, %r13d
+1:  cmp     (Node_config + CONFIG_SUBNETS_PER_NODE)(%rbx), %r13
+    jae     9f
+    cmp     $ATTESTATION_SUBNET_COUNT, %r13
+    jae     9f
+    mov     %r13, (L + 8)(%rsp)
+    mov     S7(%rsp), %r10
+    lea     Node_node_id(%rbx), %rdi
+    lea     L(%rsp), %rsi
+    lea     (L + 8)(%rsp), %rdx
+    lea     Node_config(%rbx), %rcx
+    mov     %r14, %r8
+    lea     (L + 16)(%rsp), %r9
+    FORK_CALL compute_subscribed_subnet
+    test    %rax, %rax
+    jnz     8f
+    mov     (L + 16)(%rsp), %rcx
+    and     $(ATTESTATION_SUBNET_COUNT - 1), %ecx
+    mov     $1, %eax
+    shl     %cl, %rax
+    or      %rax, %r12
+    inc     %r13
+    jmp     1b
+8:  xor     %r12d, %r12d
+9:  mov     %r12, %rax
+    LEAVE 32
+END_FUNCTION node_attnets
+
+/* attnets takes the subnets of epoch rdi; a change adds 1 to metadata_seq. */
+LOCAL_FUNCTION node_attnets_set
+    FRAME 0
+    call    node_attnets
+    cmp     Node_attnets(%rbx), %rax
+    je      1f
+    mov     %rax, Node_attnets(%rbx)
+    incq    Node_metadata_seq(%rbx)
+1:  UNFRAME 0
+END_FUNCTION node_attnets_set
+
+/*
+ * An event rsi (SUBSCRIBE or UNSUBSCRIBE) of beacon_attestation of each subnet of rdi, at
+ * fork_digest and at next_digest when it is not 0. r12 the subnets, r13 the event, S7 a subnet.
+ */
+LOCAL_FUNCTION node_attnets_topics
+    ENTER 0
+    mov     %rdi, %r12
+    mov     %rsi, %r13
+    movq    $0, S7(%rsp)
+1:  mov     S7(%rsp), %rax
+    cmp     $ATTESTATION_SUBNET_COUNT, %rax
+    jae     9f
+    bt      %rax, %r12
+    jnc     3f
+    mov     $GOSSIP_BEACON_ATTESTATION, %edi
+    mov     S7(%rsp), %rsi
+    mov     Node_fork_digest(%rbx), %rdx
+    mov     %r13, %rcx
+    call    node_sub
+    mov     Node_next_digest(%rbx), %rdx
+    test    %rdx, %rdx
+    jz      3f
+    mov     $GOSSIP_BEACON_ATTESTATION, %edi
+    mov     S7(%rsp), %rsi
+    mov     %r13, %rcx
+    call    node_sub
+3:  incq    S7(%rsp)
+    jmp     1b
+9:  LEAVE 0
+END_FUNCTION node_attnets_topics
+
+/*
  * The node's gossip topics (node.md; altair p2p-interface.md, Transitioning the gossip), one change
  * a step, when p2p_out has room: the topics of the fork of the store's epoch at its ForkDigest,
  * once for each digest, with the record entries; else those of the epoch NODE_SUBSCRIBE_AHEAD
@@ -5537,6 +5644,8 @@ LOCAL_FUNCTION node_subscribe
 1:  mov     S7(%rsp), %rax
     mov     %rax, Node_fork_digest(%rbx)
     orq     $NODE_FLAG_SUBSCRIBED, Node_flags(%rbx)
+    mov     %r12, %rdi                      # the subnets of the epoch
+    call    node_attnets_set
     lea     L(%rsp), %rdi                   # the record entries of the new digest
     mov     %r13, %rsi
     call    node_enr_entries
@@ -5576,7 +5685,31 @@ LOCAL_FUNCTION node_subscribe
     mov     $LIBP2P_EVENT_SUBSCRIBE, %edx
     call    node_topics
     jmp     9f
-30: mov     Node_old_digest(%rbx), %rsi     # the old digest's topics leave
+30: mov     %r12, %rdi                      # the subnets of the epoch, when they changed
+    call    node_attnets
+    mov     Node_attnets(%rbx), %rcx
+    cmp     %rcx, %rax
+    je      31f
+    mov     %rax, S8(%rsp)
+    mov     %rcx, S9(%rsp)
+    mov     %rax, %rdi                      # those that go, then those that come
+    not     %rdi
+    and     %rcx, %rdi
+    mov     $LIBP2P_EVENT_UNSUBSCRIBE, %esi
+    call    node_attnets_topics
+    mov     S9(%rsp), %rdi
+    not     %rdi
+    and     S8(%rsp), %rdi
+    mov     $LIBP2P_EVENT_SUBSCRIBE, %esi
+    call    node_attnets_topics
+    mov     %r12, %rdi
+    call    node_attnets_set
+    mov     %r12, L(%rsp)
+    lea     L(%rsp), %rdi
+    mov     %r13, %rsi
+    call    node_enr_entries
+    jmp     9f
+31: mov     Node_old_digest(%rbx), %rsi     # the old digest's topics leave
     test    %rsi, %rsi
     jz      9f
     cmp     Node_old_epoch(%rbx), %r12

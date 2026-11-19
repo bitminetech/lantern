@@ -233,6 +233,9 @@ FUNCTION lantern_node_init
     addi    t0, s6, Node_genesis_validators_root
     addi    t1, s3, NodeAnchor_genesis_validators_root
     COPY32  t0, t1
+    addi    t0, s6, Node_node_id
+    addi    t1, s3, NodeAnchor_node_id
+    COPY32  t0, t1
     addi    a0, s6, Node_config
     mv      a1, s2
     li      a2, CONFIG_SIZE
@@ -4153,6 +4156,8 @@ LOCAL_FUNCTION node_request
     call    lantern_zero
     ld      t0, Node_metadata_seq(s1)
     sd      t0, (L + 64)(sp)
+    ld      t0, Node_attnets(s1)
+    sd      t0, (L + 72)(sp)
     LDQ     t0, s1, Node_config + CONFIG_CUSTODY_REQUIREMENT
     sd      t0, (L + 56)(sp)
     addi    a0, sp, L + 64 + 17
@@ -5089,7 +5094,9 @@ LOCAL_FUNCTION node_enr_entries
     mv      t6, s3
     FORK_CALL compute_enr_fork_id
     addi    s7, s7, 64
-    ENR_ENTRY 56, 7, 0x007374656e747461, 8  # attnets: no subnet
+    ENR_ENTRY 56, 7, 0x007374656e747461, 8  # attnets: the bits of the node's subnets
+    ld      t0, Node_attnets(s1)
+    sd      t0, 48(s7)
     addi    s7, s7, 56
     li      t0, FORK_ALTAIR
     bltu    s3, t0, 8f
@@ -5378,6 +5385,21 @@ LOCAL_FUNCTION node_topics
     ld      a3, (L + 8)(sp)
     call    node_sub
     .endr
+    li      s4, 0                           # beacon_attestation of each subnet of attnets
+10: li      t0, ATTESTATION_SUBNET_COUNT
+    bgeu    s4, t0, 12f
+    ld      t0, Node_attnets(s1)
+    srl     t0, t0, s4
+    andi    t0, t0, 1
+    beqz    t0, 11f
+    li      a0, GOSSIP_BEACON_ATTESTATION
+    mv      a1, s4
+    ld      a2, L(sp)
+    ld      a3, (L + 8)(sp)
+    call    node_sub
+11: addi    s4, s4, 1
+    j       10b
+12:
     li      t0, FORK_ALTAIR
     bltu    s3, t0, 9f
     li      a0, GOSSIP_SYNC_COMMITTEE_CONTRIBUTION_AND_PROOF
@@ -5441,6 +5463,92 @@ LOCAL_FUNCTION node_topics
 END_FUNCTION node_topics
 
 /*
+ * L0: a0 = the attestation subnets of the node at epoch a0 (node.md), bit i for subnet i:
+ * lantern_compute_subscribed_subnet of the node ID for each index below SUBNETS_PER_NODE, of the
+ * fork of the store's slot; 0 on a failure. Apart from node_subscribe, as FORK_CALL takes the
+ * labels 81 to 89. s3 the index, s4 the subnets, s7 the fork. Locals: L the epoch, L+8 the index,
+ * L+16 a subnet.
+ */
+LOCAL_FUNCTION node_attnets
+    ENTER 32
+    sd      a0, L(sp)
+    mv      a0, s2
+    call    node_store_slot
+    addi    a1, s1, Node_config
+    call    node_fork
+    mv      s7, a0
+    li      s4, 0
+    li      s3, 0
+1:  LDQ     t0, s1, Node_config + CONFIG_SUBNETS_PER_NODE
+    bgeu    s3, t0, 9f
+    li      t0, ATTESTATION_SUBNET_COUNT
+    bgeu    s3, t0, 9f
+    sd      s3, (L + 8)(sp)
+    mv      t6, s7
+    addi    a0, s1, Node_node_id
+    addi    a1, sp, L
+    addi    a2, sp, L + 8
+    addi    a3, s1, Node_config
+    mv      a4, s5
+    addi    a5, sp, L + 16
+    FORK_CALL compute_subscribed_subnet
+    bnez    a0, 8f
+    ld      t0, (L + 16)(sp)
+    andi    t0, t0, ATTESTATION_SUBNET_COUNT - 1
+    li      t1, 1
+    sll     t1, t1, t0
+    or      s4, s4, t1
+    addi    s3, s3, 1
+    j       1b
+8:  li      s4, 0
+9:  mv      a0, s4
+    LEAVE 32
+END_FUNCTION node_attnets
+
+/* L0: attnets takes the subnets of epoch a0; a change adds 1 to metadata_seq. */
+LOCAL_FUNCTION node_attnets_set
+    FRAME 0
+    call    node_attnets
+    ld      t0, Node_attnets(s1)
+    beq     a0, t0, 1f
+    sd      a0, Node_attnets(s1)
+    ld      t0, Node_metadata_seq(s1)
+    addi    t0, t0, 1
+    sd      t0, Node_metadata_seq(s1)
+1:  UNFRAME 0
+END_FUNCTION node_attnets_set
+
+/*
+ * L0: an event a1 (SUBSCRIBE or UNSUBSCRIBE) of beacon_attestation of each subnet of a0, at
+ * fork_digest and at next_digest when it is not 0. s3 the subnets, s4 the event, s7 a subnet.
+ */
+LOCAL_FUNCTION node_attnets_topics
+    ENTER 0
+    mv      s3, a0
+    mv      s4, a1
+    li      s7, 0
+1:  li      t0, ATTESTATION_SUBNET_COUNT
+    bgeu    s7, t0, 9f
+    srl     t0, s3, s7
+    andi    t0, t0, 1
+    beqz    t0, 3f
+    li      a0, GOSSIP_BEACON_ATTESTATION
+    mv      a1, s7
+    ld      a2, Node_fork_digest(s1)
+    mv      a3, s4
+    call    node_sub
+    ld      a2, Node_next_digest(s1)
+    beqz    a2, 3f
+    li      a0, GOSSIP_BEACON_ATTESTATION
+    mv      a1, s7
+    mv      a3, s4
+    call    node_sub
+3:  addi    s7, s7, 1
+    j       1b
+9:  LEAVE 0
+END_FUNCTION node_attnets_topics
+
+/*
  * The node's gossip topics (node.md; altair p2p-interface.md, Transitioning the gossip), one change
  * a step, when p2p_out has room: the topics of the fork of the store's epoch at its ForkDigest,
  * once for each digest, with the record entries; else those of the epoch NODE_SUBSCRIBE_AHEAD
@@ -5498,6 +5606,8 @@ LOCAL_FUNCTION node_subscribe
     ld      t0, Node_flags(s1)
     ori     t0, t0, NODE_FLAG_SUBSCRIBED
     sd      t0, Node_flags(s1)
+    mv      a0, s3                          # the subnets of the epoch
+    call    node_attnets_set
     addi    a0, sp, L                       # the record entries of the new digest
     mv      a1, s4
     call    node_enr_entries
@@ -5535,7 +5645,27 @@ LOCAL_FUNCTION node_subscribe
     li      a2, LIBP2P_EVENT_SUBSCRIBE
     call    node_topics
     j       9f
-30: ld      a1, Node_old_digest(s1)         # the old digest's topics leave
+30: mv      a0, s3                          # the subnets of the epoch, when they changed
+    call    node_attnets
+    ld      s9, Node_attnets(s1)
+    beq     a0, s9, 31f
+    mv      s8, a0
+    not     a0, s8                          # those that go, then those that come
+    and     a0, a0, s9
+    li      a1, LIBP2P_EVENT_UNSUBSCRIBE
+    call    node_attnets_topics
+    not     a0, s9
+    and     a0, a0, s8
+    li      a1, LIBP2P_EVENT_SUBSCRIBE
+    call    node_attnets_topics
+    mv      a0, s3
+    call    node_attnets_set
+    sd      s3, L(sp)
+    addi    a0, sp, L
+    mv      a1, s4
+    call    node_enr_entries
+    j       9f
+31: ld      a1, Node_old_digest(s1)         # the old digest's topics leave
     beqz    a1, 9f
     ld      t0, Node_old_epoch(s1)
     bltu    s3, t0, 9f

@@ -3821,6 +3821,7 @@ static void p2p_peer_app(struct p2p_net *net, uint8_t *act) {
 }
 
 static void node_config(uint8_t *ncfg);
+static uint64_t node_attnets(const uint8_t *node_id, uint64_t epoch, const char **why);
 
 /*
  * The peer writes a response chunk of result 0 and the SSZ bytes to stream k: with ctx 4, the
@@ -4002,7 +4003,7 @@ static uint8_t *p2p_config(int side, const uint8_t *protos, uint64_t n) {
     memset(c, 0, (size_t)size);
     static const uint64_t fields[][2] = {
         {8, 1},                                                        /* key_type: Ed25519; the peer's is secp256k1 */
-        {80, 1000},   {88, 8},     {96, 64},     {104, 16},  {112, 32}, /* now, the slots: from fulu, a node's column topics too */
+        {80, 1000},   {88, 8},     {96, 64},     {104, 16},  {112, 64}, /* now, the slots: from fulu, a node's column topics too, and its attestation subnets */
         {120, 1 << 22}, {128, 1024}, {136, 256}, {144, 64},  {152, 3}, /* heap, caches, muxers */
         {160, 1 << 18}, {168, 1 << 20}, {176, 1 << 19}, {184, 10000}, {192, 5000}, {200, 1 << 20},
         {224, 8},     {232, 6},    {240, 12},    {248, 6},   {256, 4},  {264, 2}, /* D */
@@ -4118,6 +4119,20 @@ static void node_config(uint8_t *ncfg) {
     memcpy(ncfg, config, CONFIG_SIZE);
     for (uint64_t f = FORK_ALTAIR; f <= FORK_FULU; f++) wr64(ncfg + 16 * f, f <= FORK ? 0 : UINT64_MAX);
 }
+
+/* The node's attestation subnets at epoch: bit i for subnet i (lantern_compute_subscribed_subnets of its node ID). */
+static uint64_t node_attnets(const uint8_t *node_id, uint64_t epoch, const char **why) {
+    uint8_t ncfg[CONFIG_SIZE], list[24 + 8 * 64];
+    uint64_t bits = 0;
+    node_config(ncfg);
+    wr64(list, sizeof list);
+    wr64(list + 8, 24);
+    wr64(list + 16, 0);
+    if (CALL(LF(compute_subscribed_subnets), node_id, &epoch, ncfg, fresh_scratch(), list) != 0) *why = "compute_subscribed_subnets status";
+    for (uint64_t i = 0; i < rd64(list + 16) && !*why; i++) bits |= 1ull << (rd64(list + 24 + 8 * i) % 64);
+    return bits;
+}
+
 
 /*
  * The network of a node: its room for peers and streams, its libp2p state and a peer's, and the
@@ -4242,14 +4257,24 @@ static void run_node_p2p(const char *file, case_file *f) {
             if (!why && (!(rd64(peer + 16) & 1) || memcmp(peer + 24, status, 4) || memcmp(peer + 32, status + 4, 80)))
                 why = "the node's peer entry: not the peer's Status";
         }
-        if (!why) { /* Ping: the node's seq_number, 0 */
-            static const uint8_t seq[8] = {5}, zero[8];
+        if (!why) { /* Ping: the node's seq_number */
+            static const uint8_t seq[8] = {5};
+            uint8_t ours[8];
+            wr64(ours, rd64(s->node + 176)); /* Node_metadata_seq */
             int k = p2p_request(&n, &net, 1, "ping", 1, seq, 8, &why);
-            if (!why) p2p_check_response(&net, k, zero, 8, "ping", &why);
+            if (!why) p2p_check_response(&net, k, ours, 8, "ping", &why);
         }
         if (!why) { /* MetaData: no request bytes */
             int k = p2p_request(&n, &net, 2, "metadata", tv_u64(tv_get(parts, "metadata_version")), NULL, 0, &why);
-            if (!why) p2p_check_response(&net, k, metadata, mlen, "metadata", &why);
+            /* the case's, with the bits of the node's subnets as attnets and the node's seq_number, above 0 with them */
+            uint8_t md[64] = {0};
+            uint64_t bits = node_attnets(s->anchor + 176, rd64(s->node + 216) / SLOTS_PER_EPOCH_RUNNER, &why), seq = rd64(s->node + 176);
+            if (mlen > sizeof md || mlen < 16) why = "the case's MetaData";
+            else memcpy(md, metadata, (size_t)mlen);
+            wr64(md, seq);
+            wr64(md + 8, bits);
+            if (!why && bits && !seq) why = "MetaData: subnets with seq_number 0";
+            if (!why) p2p_check_response(&net, k, md, mlen, "metadata", &why);
         }
         if (!why) { /* Goodbye: the node closes the stream with no answer */
             static const uint8_t reason[8] = {1};
@@ -4263,7 +4288,9 @@ static void run_node_p2p(const char *file, case_file *f) {
             node_config(ncfg);
             CALL(LF(compute_enr_fork_id), gvr, &epoch, ncfg, fresh_scratch(), want);
             if (!shell_entry(s, "eth2", want, 16)) why = "the record's eth2";
-            else if (!shell_entry(s, "attnets", zero, 8)) why = "the record's attnets";
+            uint8_t att[8];
+            wr64(att, node_attnets(s->anchor + 176, epoch, &why));
+            if (!why && !shell_entry(s, "attnets", att, 8)) why = "the record's attnets";
             else if (FORK >= FORK_ALTAIR && !shell_entry(s, "syncnets", zero, 1)) why = "the record's syncnets";
             else if (!s->lookups) why = "no lookup";
 #if FORK >= FORK_FULU
@@ -5012,8 +5039,9 @@ static int p2p_subscribed(struct p2p_net *net, int arg) { return net->topics >= 
 static int p2p_unsubscribed(struct p2p_net *net, int arg) { return net->untopics >= arg; }
 
 /* The gossip topics of a fork before fulu (node.md): five, sync_committee_contribution_and_proof, bls_to_execution_change, blob subnets. */
+/* The topics of a fork the node joins: from phase0 those of its SUBNETS_PER_NODE attestation subnets too. */
 static int fork_topics(uint64_t fork) {
-    int t = 5 + (fork >= FORK_ALTAIR) + (fork >= FORK_CAPELLA);
+    int t = 5 + (int)rd64(config + 336) + (fork >= FORK_ALTAIR) + (fork >= FORK_CAPELLA);
     if (fork == FORK_DENEB) t += (int)rd64(config + 392 + 16 * 32 + 112);   /* BLOB_SIDECAR_SUBNET_COUNT */
     if (fork == FORK_ELECTRA) t += (int)rd64(config + 392 + 16 * 32 + 120); /* BLOB_SIDECAR_SUBNET_COUNT_ELECTRA */
     return t;
@@ -5042,7 +5070,7 @@ static void fc_subscribe_check(tv parts, const char **why) {
     const uint8_t *cols = s->node + 440;
     for (uint64_t c = 0, sc = rd64(config + 296); c < 128 && sc && !*why; c++) /* DATA_COLUMN_SIDECAR_SUBNET_COUNT */
         if (cols[c / 8] >> (c % 8) & 1) subnets[(c % sc) / 8] |= (uint8_t)(1u << ((c % sc) % 8));
-    next = 7;
+    next = 7 + (int)rd64(config + 336); /* SUBNETS_PER_NODE */
     for (int c = 0; c < 128; c++) next += subnets[c / 8] >> (c % 8) & 1;
 #endif
     if (!*why) p2p_open(&n, &net, why);
@@ -5219,13 +5247,13 @@ static void fc_gossip_case(tv parts, int *ran, const char **why) {
     memcpy(gvr, n.anchor + field_offset("BeaconState", 1), 32);
     node_config(ncfg);
     p2p_open(&n, &net, why);
-    int topics = 5; /* the node's topics reach the peer: from fulu, those of its column subnets too */
+    int topics = 5 + (int)rd64(config + 336); /* the node's topics reach the peer, its attestation subnets': from fulu, those of its column subnets too */
 #if FORK >= FORK_FULU
     uint8_t cols[16], subnets[16] = {0};
     node_columns(cols, why);
     for (uint64_t c = 0, sc = rd64(config + 296); c < 128 && sc && !*why; c++) /* DATA_COLUMN_SIDECAR_SUBNET_COUNT */
         if (cols[c / 8] >> (c % 8) & 1) subnets[(c % sc) / 8] |= (uint8_t)(1u << ((c % sc) % 8));
-    topics = 7;
+    topics = 7 + (int)rd64(config + 336);
     for (int c = 0; c < 128; c++) topics += subnets[c / 8] >> (c % 8) & 1;
 #endif
     if (!*why) p2p_run(&n, &net, p2p_subscribed, topics, why);

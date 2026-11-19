@@ -575,8 +575,10 @@
 .set Node_backfill_got, 656           /* the blocks the last backfill request gave */
 .set Node_backfill_sidecar_segment, 664  /* the sidecar segment of the last backfill sidecar record, or 2^64 - 1 */
 .set Node_backfill_sidecar_end, 672   /* the bytes of that segment */
-.set Node_config, 680
-.set NODE_FIXED, 680 + CONFIG_SIZE
+.set Node_node_id, 680                /* the anchor's node ID: the node ID of the node's key */
+.set Node_attnets, 712                /* the attestation subnets the node is subscribed to: bit i for subnet i */
+.set Node_config, 720
+.set NODE_FIXED, 720 + CONFIG_SIZE
 .set NODE_LOOKUP_MS, 10000             /* the least time between two lookups of the node */
 .set NODE_STATUS_MS, 12000             /* the least time between two Status requests of node_sync */
 .set NODE_SUBSCRIBE_AHEAD, 2           /* epochs: the topics of a new ForkDigest join this early, the old ones leave this late */

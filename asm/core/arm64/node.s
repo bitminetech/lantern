@@ -219,6 +219,9 @@ FUNCTION lantern_node_init
     add     x9, x24, #Node_genesis_validators_root
     add     x10, x21, #NodeAnchor_genesis_validators_root
     COPY32  x9, x10
+    add     x9, x24, #Node_node_id
+    add     x10, x21, #NodeAnchor_node_id
+    COPY32  x9, x10
     add     x0, x24, #Node_config
     mov     x1, x20
     MOVQ    x2, CONFIG_SIZE
@@ -4173,7 +4176,8 @@ LOCAL_FUNCTION node_request
     mov     x1, #32
     bl      lantern_zero
     ldr     x9, [x19, #Node_metadata_seq]
-    str     x9, [sp, #(L + 64)]
+    ldr     x10, [x19, #Node_attnets]
+    stp     x9, x10, [sp, #(L + 64)]
     LDQ     x9, x19, Node_config + CONFIG_CUSTODY_REQUIREMENT
     str     x9, [sp, #(L + 56)]
     add     x0, sp, #(L + 64 + 17)
@@ -5060,7 +5064,7 @@ LOCAL_FUNCTION node_enr_entries
     mov     x15, x21
     FORK_CALL compute_enr_fork_id
     add     x25, x25, #64
-    mov     x9, #56                         /* attnets: no subnet */
+    mov     x9, #56                         /* attnets: the bits of the node's subnets */
     mov     x10, #DISCV5_EVENT_SET_ENTRY
     stp     x9, x10, [x25]
     mov     x9, #7
@@ -5068,7 +5072,8 @@ LOCAL_FUNCTION node_enr_entries
     stp     x9, x10, [x25, #16]
     mov     x9, #8
     stp     xzr, x9, [x25, #32]
-    str     xzr, [x25, #48]
+    ldr     x9, [x19, #Node_attnets]
+    str     x9, [x25, #48]
     add     x25, x25, #56
     cmp     x21, #FORK_ALTAIR
     b.lo    8f
@@ -5366,6 +5371,19 @@ LOCAL_FUNCTION node_topics
     ldp     x2, x3, [sp, #L]
     bl      node_sub
     .endr
+    mov     x22, #0                         /* beacon_attestation of each subnet of attnets */
+10: cmp     x22, #ATTESTATION_SUBNET_COUNT
+    b.hs    12f
+    ldr     x9, [x19, #Node_attnets]
+    lsr     x9, x9, x22
+    tbz     x9, #0, 11f
+    mov     x0, #GOSSIP_BEACON_ATTESTATION
+    mov     x1, x22
+    ldp     x2, x3, [sp, #L]
+    bl      node_sub
+11: add     x22, x22, #1
+    b       10b
+12:
     cmp     x21, #FORK_ALTAIR
     b.lo    9f
     mov     x0, #GOSSIP_SYNC_COMMITTEE_CONTRIBUTION_AND_PROOF
@@ -5427,6 +5445,93 @@ LOCAL_FUNCTION node_topics
 END_FUNCTION node_topics
 
 /*
+ * L0: x0 = the attestation subnets of the node at epoch x0 (node.md), bit i for subnet i:
+ * lantern_compute_subscribed_subnet of the node ID for each index below SUBNETS_PER_NODE, of the
+ * fork of the store's slot; 0 on a failure. Apart from node_subscribe, as FORK_CALL takes the
+ * labels 81 to 89. x21 the index, x22 the subnets, x25 the fork. Locals: L the epoch, L+8 the
+ * index, L+16 a subnet.
+ */
+LOCAL_FUNCTION node_attnets
+    ENTER 32
+    str     x0, [sp, #L]
+    mov     x0, x20
+    bl      node_store_slot
+    add     x1, x19, #Node_config
+    bl      node_fork
+    mov     x25, x0
+    mov     x22, #0
+    mov     x21, #0
+1:  LDQ     x9, x19, Node_config + CONFIG_SUBNETS_PER_NODE
+    cmp     x21, x9
+    b.hs    9f
+    cmp     x21, #ATTESTATION_SUBNET_COUNT
+    b.hs    9f
+    str     x21, [sp, #(L + 8)]
+    mov     x15, x25
+    add     x0, x19, #Node_node_id
+    add     x1, sp, #L
+    add     x2, sp, #(L + 8)
+    add     x3, x19, #Node_config
+    mov     x4, x23
+    add     x5, sp, #(L + 16)
+    FORK_CALL compute_subscribed_subnet
+    cbnz    x0, 8f
+    ldr     x9, [sp, #(L + 16)]
+    and     x9, x9, #(ATTESTATION_SUBNET_COUNT - 1)
+    mov     x10, #1
+    lsl     x10, x10, x9
+    orr     x22, x22, x10
+    add     x21, x21, #1
+    b       1b
+8:  mov     x22, #0
+9:  mov     x0, x22
+    LEAVE 32
+END_FUNCTION node_attnets
+
+/* L0: attnets takes the subnets of epoch x0; a change adds 1 to metadata_seq. */
+LOCAL_FUNCTION node_attnets_set
+    FRAME 0
+    bl      node_attnets
+    ldr     x9, [x19, #Node_attnets]
+    cmp     x0, x9
+    b.eq    1f
+    str     x0, [x19, #Node_attnets]
+    ldr     x9, [x19, #Node_metadata_seq]
+    add     x9, x9, #1
+    str     x9, [x19, #Node_metadata_seq]
+1:  UNFRAME 0
+END_FUNCTION node_attnets_set
+
+/*
+ * L0: an event x1 (SUBSCRIBE or UNSUBSCRIBE) of beacon_attestation of each subnet of x0, at
+ * fork_digest and at next_digest when it is not 0. x21 the subnets, x22 the event, x25 a subnet.
+ */
+LOCAL_FUNCTION node_attnets_topics
+    ENTER 0
+    mov     x21, x0
+    mov     x22, x1
+    mov     x25, #0
+1:  cmp     x25, #ATTESTATION_SUBNET_COUNT
+    b.hs    9f
+    lsr     x9, x21, x25
+    tbz     x9, #0, 3f
+    mov     x0, #GOSSIP_BEACON_ATTESTATION
+    mov     x1, x25
+    ldr     x2, [x19, #Node_fork_digest]
+    mov     x3, x22
+    bl      node_sub
+    ldr     x2, [x19, #Node_next_digest]
+    cbz     x2, 3f
+    mov     x0, #GOSSIP_BEACON_ATTESTATION
+    mov     x1, x25
+    mov     x3, x22
+    bl      node_sub
+3:  add     x25, x25, #1
+    b       1b
+9:  LEAVE 0
+END_FUNCTION node_attnets_topics
+
+/*
  * L0: the node's gossip topics (node.md; altair p2p-interface.md, Transitioning the gossip), one
  * change a step, when p2p_out has room: the topics of the fork of the store's epoch at its
  * ForkDigest, once for each digest, with the record entries; else those of the epoch
@@ -5485,6 +5590,8 @@ LOCAL_FUNCTION node_subscribe
 1:  str     x25, [x19, #Node_fork_digest]
     orr     x9, x9, #NODE_FLAG_SUBSCRIBED
     str     x9, [x19, #Node_flags]
+    mov     x0, x21                         /* the subnets of the epoch */
+    bl      node_attnets_set
     add     x0, sp, #L                      /* the record entries of the new digest */
     mov     x1, x22
     bl      node_enr_entries
@@ -5525,7 +5632,26 @@ LOCAL_FUNCTION node_subscribe
     mov     x2, #LIBP2P_EVENT_SUBSCRIBE
     bl      node_topics
     b       9f
-30: ldr     x9, [x19, #Node_old_digest]     /* the old digest's topics leave */
+30: mov     x0, x21                         /* the subnets of the epoch, when they changed */
+    bl      node_attnets
+    ldr     x27, [x19, #Node_attnets]
+    cmp     x0, x27
+    b.eq    31f
+    mov     x26, x0
+    bic     x0, x27, x26                    /* those that go, then those that come */
+    mov     x1, #LIBP2P_EVENT_UNSUBSCRIBE
+    bl      node_attnets_topics
+    bic     x0, x26, x27
+    mov     x1, #LIBP2P_EVENT_SUBSCRIBE
+    bl      node_attnets_topics
+    mov     x0, x21
+    bl      node_attnets_set
+    str     x21, [sp, #L]
+    add     x0, sp, #L
+    mov     x1, x22
+    bl      node_enr_entries
+    b       9f
+31: ldr     x9, [x19, #Node_old_digest]     /* the old digest's topics leave */
     cbz     x9, 9f
     ldr     x10, [x19, #Node_old_epoch]
     cmp     x21, x10
