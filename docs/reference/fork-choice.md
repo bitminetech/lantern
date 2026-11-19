@@ -318,11 +318,12 @@ lantern_get_head(store, scratch, out) -> status
 ### Function does
 
 - Reads the tree of lantern_get_filtered_node_tree.
+- The weights of all nodes at once: each counted latest message (as get_attestation_score counts it) adds its `effective_balance` to its node, and get_proposer_score to the proposer boost node (as get_weight adds it); then, from the last node to the first, each node adds its weight to its parent's. A parent comes before its children, so each node then holds the sum over its subtree: get_weight of the node, as is_ancestor(latest message node, node) holds exactly for the messages of its subtree. A sum past 2^64 - 1, or a failure of the boost's get_proposer_score or node, is the result of the first child whose weight it is.
 - Compares roots as byte strings, first byte first.
 
 ### Limits
 
-- Scratch: S(1), with n the node count of the store.
+- Scratch: S(2), with n the node count of the store.
 
 ## Function `lantern_on_tick`
 
@@ -390,7 +391,7 @@ lantern_on_block(store, signed_block, state, options, scratch, result) -> status
 
 ### Limits
 
-- Scratch: that of lantern_state_transition, and S(1) with n the node count of the store.
+- Scratch: that of lantern_state_transition, and S(2) with n the node count of the store, for get_head.
 
 ## Function `lantern_validate_merge_block`
 

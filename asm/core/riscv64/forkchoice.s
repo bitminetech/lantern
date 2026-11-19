@@ -10,6 +10,7 @@
 .set F_CHILD, 2            # has a child
 .set F_VIABLE, 4           # in get_filtered_node_tree
 .set F_CHILD_VIABLE, 8     # has a child in get_filtered_node_tree
+.set F_OVERFLOW, 16        # its weight passed 2^64 - 1
 
 .if BlockNode__mem != 216 || StoreValidator__mem != 32 || Checkpoint__mem != 40 || Checkpoint_root != 8
 .error "the fork choice code assumes the layouts of include/lantern.inc"
@@ -484,20 +485,129 @@ LOCAL_FUNCTION filter_tree
 END_FUNCTION filter_tree
 
 /*
- * L0: a0 = status, a1 = get_head(store a0), with scratch a1 of S(1) for the node count.
- * s1 store, s2 flags, s3 node count, s4 justified node, s6 i, s7 head, s8 best child,
- * s9 best weight, s10 nodes.
+ * L0: a0 = status, a1 = get_head(store a0), with scratch a1 of S(2) for the node count. The
+ * weights of all nodes at once (fork-choice.md, lantern_get_head): each latest message's balance on
+ * its node, the boost on the boost node, then each node's weight onto its parent's.
+ * s1 store, s2 flags, s3 node count, s4 justified node, s5 the weights, s6 i, s7 head, s8 best
+ * child, s9 best weight, s10 nodes. Locals: L the status of the boost.
  */
 LOCAL_FUNCTION head
     ENTER 16
     mv      s1, a0
+    ld      s3, (Store_blocks + 8)(s1)
+    ld      t0, 0(a1)                       # the weights: 8 bytes a node, before filter_tree's flags
+    slli    t1, s3, 4
+    li      t2, LIST_FIXED + LANTERN_SCRATCH_FIXED
+    add     t2, t1, t2
+    bltu    t0, t2, 9f
+    sub     t0, t0, t1
+    add     s5, a1, t0
+    mv      a0, s1
     call    filter_tree                     # nodes = get_filtered_node_tree(store)
     bnez    a0, 7f
     mv      s2, a1
     mv      s4, a2
-    ld      s3, (Store_blocks + 8)(s1)
     ld      s10, Store_blocks(s1)
     add     s10, s1, s10
+    mv      a0, s5
+    slli    a1, s3, 3
+    call    lantern_zero
+    PART    t5, t6, s1, Store_validators    # each counted latest message, on its node
+    li      t4, BlockNode__mem
+1:  beqz    t6, 3f
+    addi    t6, t6, -1
+    ld      t0, StoreValidator_flags(t5)
+    andi    t0, t0, (STORE_ACTIVE_UNSLASHED | STORE_EQUIVOCATING)
+    li      t1, STORE_ACTIVE_UNSLASHED      # unslashed and active, not equivocating
+    bne     t0, t1, 2f
+    ld      t0, StoreValidator_latest_node(t5)
+    li      t1, -1
+    beq     t0, t1, 2f
+    mul     t1, t0, t4                      # not a vote for an INVALIDATED block (optimistic sync)
+    add     t1, s10, t1
+    ld      t2, BlockNode_payload_status(t1)
+    li      t3, PAYLOAD_STATUS_INVALIDATED
+    beq     t2, t3, 2f
+    ld      t1, StoreValidator_effective_balance(t5)
+    slli    t2, t0, 3
+    add     t3, s5, t2
+    ld      a2, 0(t3)
+    add     a3, a2, t1
+    sd      a3, 0(t3)
+    bgeu    a3, a2, 2f
+    add     t3, s2, t2
+    ld      a2, 0(t3)
+    ori     a2, a2, F_OVERFLOW
+    sd      a2, 0(t3)
+2:  addi    t5, t5, StoreValidator__mem
+    j       1b
+3:  sd      zero, L(sp)                     # the proposer boost, on its node
+    addi    a1, s1, Store_proposer_boost_root
+    ld      t0, 0(a1)
+    ld      t1, 8(a1)
+    ld      t2, 16(a1)
+    ld      t3, 24(a1)
+    or      t0, t0, t1
+    or      t2, t2, t3
+    or      t0, t0, t2
+    beqz    t0, 4f
+    mv      a0, s1
+    call    find_node
+    li      t0, -1
+    bne     a0, t0, 31f
+    li      t0, LANTERN_INVALID_UNKNOWN_BLOCK
+    sd      t0, L(sp)
+    j       4f
+31: mv      s6, a0
+    li      t0, BlockNode__mem              # no boost from an INVALIDATED block (optimistic sync)
+    mul     t0, s6, t0
+    add     t0, s10, t0
+    ld      t0, BlockNode_payload_status(t0)
+    li      t1, PAYLOAD_STATUS_INVALIDATED
+    beq     t0, t1, 4f
+    mv      a0, s1                          # get_proposer_score(store)
+    ld      a1, (Store_config + CONFIG_PROPOSER_SCORE_BOOST)(s1)
+    call    committee_fraction
+    beqz    a0, 32f
+    sd      a0, L(sp)
+    j       4f
+32: slli    t2, s6, 3
+    add     t3, s5, t2
+    ld      a2, 0(t3)
+    add     a3, a2, a1
+    sd      a3, 0(t3)
+    bgeu    a3, a2, 4f
+    add     t3, s2, t2
+    ld      a2, 0(t3)
+    ori     a2, a2, F_OVERFLOW
+    sd      a2, 0(t3)
+4:  addi    s6, s3, -1                      # from the last node to the first: onto the parent
+    li      t4, BlockNode__mem
+41: beqz    s6, 60f
+    mul     t0, s6, t4
+    add     t0, s10, t0
+    ld      t1, BlockNode_parent(t0)
+    li      t0, -1
+    beq     t1, t0, 44f
+    slli    t2, s6, 3                       # the child's weight and flags
+    slli    t3, t1, 3                       # the parent's
+    add     a2, s2, t2
+    ld      a2, 0(a2)
+    andi    a2, a2, F_OVERFLOW
+    add     a4, s2, t3
+    ld      a3, 0(a4)
+    or      a3, a3, a2
+    add     a2, s5, t2
+    ld      a2, 0(a2)
+    add     a5, s5, t3
+    ld      t5, 0(a5)
+    add     t6, t5, a2
+    sd      t6, 0(a5)
+    bgeu    t6, t5, 43f
+    ori     a3, a3, F_OVERFLOW
+43: sd      a3, 0(a4)
+44: addi    s6, s6, -1
+    j       41b
 60: mv      s7, s4                          # head = the justified node
 61: li      s8, -1                          # the best child so far
     li      s9, 0
@@ -511,12 +621,15 @@ LOCAL_FUNCTION head
     slli    t1, s6, 3
     add     t1, s2, t1
     ld      t3, 0(t1)
-    andi    t3, t3, F_VIABLE                # a child in nodes
-    beqz    t3, 64f
-    mv      a0, s1
-    mv      a1, s6
-    call    weight
+    andi    t0, t3, F_VIABLE                # a child in nodes
+    beqz    t0, 64f
+    ld      a0, L(sp)                       # its weight: a failure of the boost, or a sum past 2^64 - 1
     bnez    a0, 7f
+    andi    t0, t3, F_OVERFLOW
+    bnez    t0, 8f
+    slli    t1, s6, 3
+    add     t1, s5, t1
+    ld      a1, 0(t1)
     li      t0, -1
     beq     s8, t0, 63f
     bltu    s9, a1, 63f                     # max by (weight, root)
@@ -538,6 +651,10 @@ LOCAL_FUNCTION head
 66: mv      a1, s7
     li      a0, LANTERN_OK
 7:  LEAVE 16
+8:  li      a0, LANTERN_INVALID_OVERFLOW
+    LEAVE 16
+9:  li      a0, LANTERN_BUFFER_TOO_SMALL
+    LEAVE 16
 END_FUNCTION head
 
 /* s1 store, s2 out. */
