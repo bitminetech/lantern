@@ -418,3 +418,34 @@ FUNCTION lantern_db_prune
 9:  xor     %eax, %eax
     LEAVE 0
 END_FUNCTION lantern_db_prune
+
+/*
+ * (db, slot): the sidecars of the slots from first_slot below the slot and end_slot leave the index:
+ * each DbSlot keeps its root and block, and its sidecar fields become 0. rbx db, r12 an entry, r13
+ * the entries left.
+ */
+FUNCTION lantern_db_drop_sidecars
+    ENTER 0
+    mov     %rdi, %rbx
+    mov     (%rsi), %rax
+    mov     Db_end_slot(%rbx), %rcx
+    cmp     %rcx, %rax
+    cmova   %rcx, %rax
+    mov     Db_first_slot(%rbx), %rcx
+    cmp     %rcx, %rax
+    jbe     9f
+    sub     %rcx, %rax
+    mov     %rax, %r13
+    mov     Db_slots(%rbx), %r12
+    add     %rbx, %r12
+1:  test    %r13, %r13
+    jz      9f
+    lea     DbSlot_sidecars(%r12), %rdi
+    mov     $(DbSlot__mem - DbSlot_sidecars), %esi
+    call    lantern_zero
+    add     $DbSlot__mem, %r12
+    dec     %r13
+    jmp     1b
+9:  xor     %eax, %eax
+    LEAVE 0
+END_FUNCTION lantern_db_drop_sidecars

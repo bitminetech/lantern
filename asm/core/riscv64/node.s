@@ -318,6 +318,8 @@ FUNCTION lantern_node_init
     add     a2, s6, a2
     call    lantern_db_init
     bnez    a0, 9f
+    ld      t0, L(sp)                       # the Db's first slot: no sidecar dropped yet
+    sd      t0, Node_sidecar_floor(s6)
     addi    t0, s4, 1
     sd      t0, Node_db_next_slot(s6)
     li      t0, -1
@@ -2346,6 +2348,8 @@ LOCAL_FUNCTION node_db_sidecars
     mv      s8, a0
     ld      s10, NodeBlock_slot(s8)
     sd      a1, (L + 96)(sp)
+    ld      t0, Node_sidecar_floor(s1)      # below sidecar_floor: no record
+    bltu    s10, t0, 9f
     li      s9, 0
 4:  li      t0, DB_SIDECAR_INDICES
     bgeu    s9, t0, 9f
@@ -2428,6 +2432,73 @@ LOCAL_FUNCTION node_db_sidecars
     j       4b
 9:  LEAVE 112
 END_FUNCTION node_db_sidecars
+
+/*
+ * With NODE_FLAG_DB, the sidecars the node no longer serves go (node.md): the drop slot, the first
+ * slot of the earlier of the blob window's and the column window's first epochs, at most the Db's
+ * end_slot, down to a multiple of DB_SEGMENT_SLOTS, at most 16 segments above sidecar_floor; a
+ * DB_DROP of each sidecar segment below it from sidecar_floor's, lantern_db_drop_sidecars, and
+ * sidecar_floor takes it. s3 the drop slot, s4 a segment. Locals: L the slot.
+ */
+LOCAL_FUNCTION node_drop_sidecars
+    ENTER 16
+    ld      t0, Node_flags(s1)
+    andi    t0, t0, NODE_FLAG_DB
+    beqz    t0, 9f
+    LDQ     a0, s1, Node_config + CONFIG_MIN_EPOCHS_FOR_BLOB_SIDECARS_REQUESTS
+    li      a1, FORK_DENEB
+    call    node_window
+    mv      s3, a0
+    LDQ     a0, s1, Node_config + CONFIG_MIN_EPOCHS_FOR_DATA_COLUMN_SIDECARS_REQUESTS
+    li      a1, FORK_FULU
+    call    node_window
+    bgeu    a0, s3, 1f
+    mv      s3, a0
+1:  li      t0, SLOTS_PER_EPOCH
+    mulhu   t1, s3, t0
+    mul     s3, s3, t0
+    beqz    t1, 2f
+    li      s3, -1
+2:  ld      t0, Node_db(s1)
+    add     t0, s1, t0
+    ld      t1, Db_end_slot(t0)
+    bleu    s3, t1, 3f
+    mv      s3, t1
+3:  li      t0, -DB_SEGMENT_SLOTS
+    and     s3, s3, t0
+    ld      t1, Node_sidecar_floor(s1)
+    bleu    s3, t1, 9f
+    li      t0, 16 * DB_SEGMENT_SLOTS       # at most 16 segments a step
+    add     t0, t1, t0
+    bleu    s3, t0, 4f
+    mv      s3, t0
+4:  srli    s4, t1, DB_SEGMENT_SHIFT
+5:  slli    t0, s4, DB_SEGMENT_SHIFT        # each sidecar segment below the drop slot
+    bgeu    t0, s3, 6f
+    li      a0, NODE_ACT_DB_DROP
+    li      a1, NODE_ACT_DB_DROP_SIZE
+    call    node_act
+    sd      s4, 16(a0)
+    li      t0, 1
+    sd      t0, 24(a0)
+    addi    s4, s4, 1
+    j       5b
+6:  sd      s3, L(sp)
+    ld      a0, Node_db(s1)
+    add     a0, s1, a0
+    addi    a1, sp, L
+    call    lantern_db_drop_sidecars
+    sd      s3, Node_sidecar_floor(s1)
+    srli    t0, s3, DB_SEGMENT_SHIFT        # a writer's segment below it: none
+    li      t2, -1
+    ld      t1, Node_db_sidecar_segment(s1)
+    bgeu    t1, t0, 7f
+    sd      t2, Node_db_sidecar_segment(s1)
+7:  ld      t1, Node_backfill_sidecar_segment(s1)
+    bgeu    t1, t0, 9f
+    sd      t2, Node_backfill_sidecar_segment(s1)
+9:  LEAVE 16
+END_FUNCTION node_drop_sidecars
 
 /*
  * With NODE_FLAG_DB, the canonical blocks from db_next_slot to the finalized block a0 and their
@@ -7817,6 +7888,7 @@ FUNCTION lantern_node_step
     call    node_engine_next
     call    node_shed                       # the post-states the node can rebuild go
     call    node_backfill_link              # the backfill's blocks of the chain join the Db
+    call    node_drop_sidecars              # the sidecars the node no longer serves go
     sd      zero, (L + 112)(sp)
     ld      t0, (L + 16)(sp)                # the next block of each stream that serves, then libp2p again
     beqz    t0, 40f

@@ -577,8 +577,9 @@
 .set Node_backfill_sidecar_end, 672   /* the bytes of that segment */
 .set Node_node_id, 680                /* the anchor's node ID: the node ID of the node's key */
 .set Node_attnets, 712                /* the attestation subnets the node is subscribed to: bit i for subnet i */
-.set Node_config, 720
-.set NODE_FIXED, 720 + CONFIG_SIZE
+.set Node_sidecar_floor, 720          /* with NODE_FLAG_DB: the Db holds no sidecar below this slot */
+.set Node_config, 728
+.set NODE_FIXED, 728 + CONFIG_SIZE
 .set NODE_LOOKUP_MS, 10000             /* the least time between two lookups of the node */
 .set NODE_STATUS_MS, 12000             /* the least time between two Status requests of node_sync */
 .set NODE_SUBSCRIBE_AHEAD, 2           /* epochs: the topics of a new ForkDigest join this early, the old ones leave this late */
@@ -773,6 +774,8 @@
 .set NODE_ACT_DB_APPEND_SIZE, 128
 .set NODE_ACT_DB_STATE, 10              /* 16 a state's BufferId, 24 its block's BufferId, 32 the slot: the finalized block, for a restart */
 .set NODE_ACT_DB_STATE_SIZE, 40
+.set NODE_ACT_DB_DROP, 11              /* 16 a segment, 24 1 for a sidecar segment: the shell deletes its file */
+.set NODE_ACT_DB_DROP_SIZE, 32
 .set NODE_DB_REF, 1 << 63              /* a BufferId of a Db record: bit 62 a sidecar segment, segment << 48, the offset below */
 .set NODE_DB_SIDECARS, 1 << 62
 .set DB_SEGMENT_SHIFT, 13              /* slot >> DB_SEGMENT_SHIFT: its segment */

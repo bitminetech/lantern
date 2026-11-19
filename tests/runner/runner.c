@@ -404,6 +404,8 @@ ABI uint64_t lantern_db_scan(void *db, const void *segment, const void *sidecars
 ABI uint64_t lantern_node_db_scan(void *node, const void *segment, const void *sidecars, const void *bytes, void *valid);
 ABI uint64_t lantern_db_find_root(const void *db, const void *root, void *slot);
 ABI uint64_t lantern_db_prune(void *db, const void *slot);
+ABI uint64_t lantern_db_drop_sidecars(void *db, const void *slot);
+ABI uint64_t lantern_db_add(void *db, const void *record, const void *offset);
 
 /* Engine API client: docs/reference/engine-api.md. */
 ABI uint64_t lantern_jwt_token(const void *secret, const void *iat, void *scratch, void *out);
@@ -2325,6 +2327,7 @@ static void root_of(const char *type, const uint8_t *value, uint8_t root[32], co
  * The anchor state, the anchor block and the store of a case. Returns the anchor block, or NULL with a reason.
  */
 static const uint8_t *bf_state, *bf_block; /* with them, the anchor of the next node: a state value and a BeaconBlock value */
+static int drop_room, drop_ran; /* set: the next node has a Db of three segments and NODE_FLAG_DB; the drop check ran */
 static uint64_t bf_state_size;
 static uint8_t *fc_setup(fc_node *n, tv parts, const char **why) {
     uint64_t slen, blen, vsize;
@@ -2389,7 +2392,7 @@ enum { NB_WAITING = 1, NB_IMPORTING, NB_IMPORTED, NB_INVALID, NB_HASHING, NB_BLO
 #define NODE_BLOB_BYTES 72
 #define NBLOB_VALID 2
 enum { EV_TICK = 1, EV_BLOCK, EV_ATTESTATION, EV_ATTESTER_SLASHING, EV_POW_BLOCK, EV_PAYLOAD_STATUS, EV_WORK_DONE, EV_P2P, EV_ENGINE, EV_ENR };
-enum { ACT_BYTES_PUT = 1, ACT_STATE_COPY, ACT_STATE_FREE, ACT_BYTES_FREE, ACT_WORK, ACT_P2P_LIST, ACT_ENGINE, ACT_DISCV5, ACT_DB_APPEND, ACT_DB_STATE };
+enum { ACT_BYTES_PUT = 1, ACT_STATE_COPY, ACT_STATE_FREE, ACT_BYTES_FREE, ACT_WORK, ACT_P2P_LIST, ACT_ENGINE, ACT_DISCV5, ACT_DB_APPEND, ACT_DB_STATE, ACT_DB_DROP };
 #define NODE_FLAG_DISCV5 64
 #define NODE_FLAG_DB 128
 #define NODE_FLAG_FEW_STATES 256
@@ -2441,6 +2444,8 @@ struct node_shell {
     size_t nsegs;
     uint8_t anchor[216], ncfg[CONFIG_SIZE]; /* the node's NodeAnchor and config, for a new node of the same start */
     uint64_t flags, db_states;              /* its flags; the NODE_ACT_DB_STATE actions */
+    uint64_t drops[16];                     /* the NODE_ACT_DB_DROP actions: bit 63 for sidecars, the segment */
+    size_t ndrops;
 };
 
 /* The records the nodes archived, and the works that served one from the Db: printed as a NOTE. */
@@ -2985,6 +2990,17 @@ static void shell_step(fc_node *n, const char **why) {
             shell_work(n, act, why);
         else if (kind == ACT_DB_APPEND && size == 128)
             shell_db_append(s, act, why);
+        else if (kind == ACT_DB_DROP && size == 32) { /* the segment goes */
+            uint64_t sidecars = rd64(act + 24), number = rd64(act + 16);
+            size_t k = 0;
+            while (k < s->nsegs && !(s->segs[k].sidecars == sidecars && s->segs[k].number == number)) k++;
+            if (sidecars > 1) *why = "DB_DROP: not a block or a sidecar segment";
+            else if (k < s->nsegs) {
+                free(s->segs[k].b);
+                s->segs[k] = s->segs[--s->nsegs];
+            }
+            if (s->ndrops < 16) s->drops[s->ndrops++] = sidecars << 63 | number;
+        }
         else if (kind == ACT_DB_STATE && size == 40) {
             shell_buf *st = shell_find(s, rd64(act + 16)), *bl = shell_find(s, rd64(act + 24));
             if (!st || !bl) *why = "DB_STATE names no buffer";
@@ -3287,7 +3303,7 @@ static struct node_shell *shell_open(fc_node *n, tv parts, uint8_t **anchor_bloc
         /* Small capacities, so that the node grows through lantern_node_copy. */
         uint8_t anchor[216] = {0}; /* NodeAnchor: root, slot, genesis_validators_root, jwt_secret, engine_host_len, engine_host, node_id, history_slot */
         static unsigned long opened; /* every second node archives to a Db */
-        int force_db = bf_state != NULL; /* the backfill's node archives to a Db */
+        int force_db = bf_state != NULL || drop_room; /* the backfill's and the drop check's nodes archive to a Db */
         /* every second node archives to a Db; every second pair keeps few post-states and rebuilds the others */
         uint64_t flags = (FORK >= FORK_BELLATRIX ? NODE_FLAG_ENGINE : 0) | NODE_FLAG_DISCV5 | (opened % 2 || force_db ? NODE_FLAG_DB : 0) |
                          (opened / 2 % 2 ? NODE_FLAG_FEW_STATES : 0), need = 0;
@@ -3295,6 +3311,10 @@ static struct node_shell *shell_open(fc_node *n, tv parts, uint8_t **anchor_bloc
         for (int i = 0; i < NODE_ROOM_FIELDS; i++) s->room[i] = 2;
         s->room[2] = 1;
         s->room[9] = 4096; /* the execution engine's answers */
+        if (drop_room) { /* the drop check: a Db of three segments */
+            s->room[10] = 3 * 8192;
+            s->room[11] = 64;
+        }
         memset(anchor + 72, 0x42, 32);
         wr64(anchor + 104, strlen(ENGINE_HOST));
         memcpy(anchor + 112, ENGINE_HOST, strlen(ENGINE_HOST));
@@ -3347,6 +3367,7 @@ static void shell_close(fc_node *n, uint8_t *anchor_block) {
 
 static void fc_serve_check(fc_node *n, tv parts, const char **why);
 static void fc_sync_check(tv parts, const char **why);
+static void drop_check(tv parts, const char **why);
 
 /* One case through the node: the shell's buffers, then each step as events; with serve, then fc_serve_check. */
 static void fc_node_case(tv parts, int serve, const char **why) {
@@ -3396,6 +3417,8 @@ static void fc_node_case(tv parts, int serve, const char **why) {
     if (!*why) shell_db_rescan(n.shell, why);
     if (serve && !*why) fc_serve_check(&n, parts, why);
     if (serve && !*why) fc_sync_check(parts, why);
+    static int dropped; /* once in each process */
+    if (serve && !*why && !dropped++) drop_check(parts, why);
     shell_close(&n, anchor_block);
 }
 
@@ -4966,6 +4989,58 @@ static void backfill_check(tv parts, case_block **chain, size_t nchain, uint64_t
     bf_state = NULL;
 }
 
+/*
+ * The sidecar drop (node.md): a node with NODE_FLAG_DB whose Db holds a block and a sidecar at slot
+ * 1 and a block in the third segment, with windows of 0 epochs, at a slot past them, must drop
+ * sidecar segments 0 and 1 and no other, take sidecar_floor the third segment's first slot, and keep
+ * every block of its index.
+ */
+#define NODE_SIDECAR_FLOOR 720 /* include/lantern.inc: Node_sidecar_floor */
+#define NODE_CONFIG 728        /* Node_config */
+static void drop_check(tv parts, const char **why) {
+    fc_node m;
+    uint8_t *anchor_block;
+    drop_room = 1;
+    struct node_shell *s = shell_open(&m, parts, &anchor_block, why);
+    drop_room = 0;
+    uint8_t *db = *why ? NULL : s->node + rd64(s->node + NODE_DB);
+    uint64_t far = 2 * 8192 + 5;
+    if (db && rd64(db + 8) != 0) *why = "drop: the Db does not start at slot 0";
+    for (int r = 0; r < 3 && !*why; r++) { /* a block at 1, its sidecar, a block at far */
+        uint8_t rec[80] = {0};
+        uint64_t off = 0, slot = r == 2 ? far : 1;
+        wr64(rec, r == 1 ? 2 : 1); /* DB_BLOB_SIDECAR, DB_BLOCK */
+        wr64(rec + 8, slot);
+        memset(rec + 24, 0x30 + r, 32);
+        wr64(rec + 56, 24 + 8);
+        wr64(rec + 64, 24);
+        wr64(rec + 72, 8);
+        if (CALL(lantern_db_add, db, rec, &off) != 0) *why = "drop: lantern_db_add status";
+    }
+    uint8_t *before = *why ? NULL : copy_of(db, rd64(db));
+    if (!*why) { /* windows of 0 epochs, at a slot past the last block */
+        wr64(s->node + NODE_CONFIG + 376, 0);
+        wr64(s->node + NODE_CONFIG + 312, 0);
+        shell_event(s, EV_TICK, rd64(m.store + STORE_GENESIS_TIME_MS) + (3 * 8192) * rd64(config + 104), NULL, 0);
+        shell_settle(&m, why);
+    }
+    if (!*why && (s->ndrops != 2 || s->drops[0] != (1ull << 63 | 0) || s->drops[1] != (1ull << 63 | 1)))
+        *why = "drop: not a DB_DROP of sidecar segments 0 and 1 alone";
+    if (!*why && rd64(s->node + NODE_SIDECAR_FLOOR) != 2 * 8192) *why = "drop: sidecar_floor is not the third segment's first slot";
+    if (!*why) {
+        db = s->node + rd64(s->node + NODE_DB);
+        static const uint8_t zero[48];
+        const uint8_t *a = before + rd64(before + 24), *b = db + rd64(db + 24);
+        for (uint64_t sl = 0; sl < rd64(db + 16) && !*why; sl++, a += 88, b += 88) {
+            if (memcmp(a, b, 40)) *why = "drop: a block of the index changed";
+            else if (memcmp(b + 40, zero, 48)) *why = "drop: a sidecar below sidecar_floor stays";
+        }
+    }
+    free(before);
+    if (!*why) drop_ran = 1;
+    shell_close(&m, anchor_block);
+}
+
 static void fc_sync_check(tv parts, const char **why) {
     case_block *blocks, **chain;
     size_t nchain = case_chain(parts, &blocks, &chain, why);
@@ -6439,6 +6514,20 @@ static void run_db_index(const char *file, case_file *f) {
             }
             free(db2);
         }
+        if (!why) { /* the sidecars below the second segment leave; every block and every later sidecar stays */
+            uint8_t *d2 = copy_of(db, size);
+            uint64_t cut = (first / 8192 + 1) * 8192, f0 = rd64(db + 8), e0 = rd64(db + 16);
+            if (CALL(lantern_db_drop_sidecars, d2, &cut) != 0) why = "lantern_db_drop_sidecars status";
+            else if (!guard_ok(d2, size)) why = "lantern_db_drop_sidecars wrote out of bounds";
+            const uint8_t *a = db + rd64(db + 24), *b = d2 + rd64(d2 + 24);
+            static const uint8_t zero[48];
+            for (uint64_t sl = f0; sl < e0 && !why; sl++, a += 88, b += 88) {
+                if (memcmp(a, b, 40)) why = "lantern_db_drop_sidecars: a block changed";
+                else if (sl < cut && memcmp(b + 40, zero, 48)) why = "lantern_db_drop_sidecars: a sidecar below the slot stays";
+                else if (sl >= cut && memcmp(a + 40, b + 40, 48)) why = "lantern_db_drop_sidecars: a later sidecar changed";
+            }
+            free(d2);
+        }
         tv prune = tv_get(parts, "prune");
         if (!why && prune) {
             uint64_t slot = tv_u64(prune);
@@ -6811,6 +6900,7 @@ int main(int argc, char **argv) {
     if (node_settles_finalized) printf("NOTE: %lu node settles past a finalized epoch\n", node_settles_finalized);
     if (node_replays) printf("NOTE: %lu post-states the nodes rebuilt by replay\n", node_replays);
     if (gossip_votes) printf("NOTE: %lu of %lu valid attestations went to fork choice as gossip aggregates\n", gossip_votes_applied, gossip_votes);
+    if (drop_ran) printf("NOTE: the sidecar drop check passed\n");
 #if FORK > FORK_PHASE0
     if (node_transitions) printf("NOTE: %lu transition cases through the node\n", node_transitions);
 #endif

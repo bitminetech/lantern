@@ -1459,6 +1459,57 @@ LOCAL_FUNCTION app_db_append
 END_FUNCTION app_db_append
 
 /*
+ * L1: NODE_ACT_DB_DROP a0: the segment's file goes: the open file of its kind, when it is that
+ * segment, closes; a map of it goes; then the file is deleted. s2 the action, s3 the kind (0
+ * blocks, 1 sidecars), s4 the segment, s5 the map key, s6 a map's index, s7 a map, s10 the AppDb.
+ */
+LOCAL_FUNCTION app_db_drop
+    ENTER 0
+    mv      s2, a0
+    ADDQ    s10, s1, APP_DB
+    ld      s3, 24(s2)
+    andi    s3, s3, 1
+    ld      s4, 16(s2)
+    slli    t0, s3, 3                       # the open file of its kind
+    add     t0, s10, t0
+    ld      t1, AppDb_segment(t0)
+    bne     t1, s4, 1f
+    addi    a0, t0, AppDb_file
+    CALL_GLOBAL lantern_shell_close
+    slli    t0, s3, 3
+    add     t0, s10, t0
+    li      t1, -1
+    sd      t1, AppDb_segment(t0)
+1:  slli    s5, s3, 63                      # its map
+    or      s5, s5, s4
+    li      s6, 0
+2:  li      t0, APP_DB_MAP_COUNT
+    bgeu    s6, t0, 4f
+    slli    t0, s6, 5
+    add     s7, s10, t0
+    addi    s7, s7, AppDb_maps
+    ld      t0, 0(s7)
+    bne     t0, s5, 3f
+    ld      t0, 8(s7)
+    beqz    t0, 21f
+    addi    a0, s7, 8
+    addi    a1, s7, 24
+    CALL_GLOBAL lantern_shell_unmap_file
+21: li      t0, -1
+    sd      t0, 0(s7)
+    sd      zero, 8(s7)
+3:  addi    s6, s6, 1
+    j       2b
+4:  mv      a0, s3                          # the file
+    mv      a1, s4
+    call    app_db_path
+    ADDQ    a0, s1, APP_PATH
+    addi    a1, s10, AppDb_op
+    CALL_GLOBAL lantern_shell_remove
+    LEAVE 0
+END_FUNCTION app_db_drop
+
+/*
  * L0: a0 = the AppDb's view entry of the record at offset a0 of the mapped segment a1: its
  * ByteList in place, at byte DbRecord_bytes of the record; 0 when the record is not all inside
  * the map, or its ByteList header is not of its bytes. Uses t0-t5, a7.
@@ -1983,7 +2034,12 @@ LOCAL_FUNCTION app_actions
     mv      a0, s2                          # DB_APPEND: the record in its segment file
     call    app_db_append
     j       8f
-11: li      t1, NODE_ACT_DB_STATE
+11: li      t1, NODE_ACT_DB_DROP
+    bne     t0, t1, 12f
+    mv      a0, s2                          # DB_DROP: the segment's file goes
+    call    app_db_drop
+    j       8f
+12: li      t1, NODE_ACT_DB_STATE
     bne     t0, t1, 10f
     mv      a0, s2                          # DB_STATE: anchor.ssz
     call    app_db_state

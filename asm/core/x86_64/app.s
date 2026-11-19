@@ -1476,6 +1476,54 @@ LOCAL_FUNCTION app_db_append
 END_FUNCTION app_db_append
 
 /*
+ * L1: NODE_ACT_DB_DROP rdi: the segment's file goes: the open file of its kind, when it is that
+ * segment, closes; a map of it goes; then the file is deleted. r12 the action, r13 the kind (0
+ * blocks, 1 sidecars), r14 the segment, r15 the AppDb, rbp a map, S7 the map key, S8 a map's index.
+ */
+LOCAL_FUNCTION app_db_drop
+    ENTER 0
+    mov     %rdi, %r12
+    lea     APP_DB(%rbx), %r15
+    mov     24(%r12), %r13
+    and     $1, %r13d
+    mov     16(%r12), %r14
+    cmp     AppDb_segment(%r15,%r13,8), %r14    # the open file of its kind
+    jne     1f
+    lea     AppDb_file(%r15,%r13,8), %rdi
+    CALL_GLOBAL lantern_shell_close
+    movq    $-1, AppDb_segment(%r15,%r13,8)
+1:  mov     %r13, %rax                      # its map
+    shl     $63, %rax
+    or      %r14, %rax
+    mov     %rax, S7(%rsp)
+    movq    $0, S8(%rsp)
+2:  mov     S8(%rsp), %rax
+    cmp     $APP_DB_MAP_COUNT, %rax
+    jae     4f
+    shl     $5, %rax
+    lea     AppDb_maps(%r15,%rax), %rbp
+    mov     (%rbp), %rax
+    cmp     S7(%rsp), %rax
+    jne     3f
+    cmpq    $0, 8(%rbp)
+    je      21f
+    lea     8(%rbp), %rdi
+    lea     24(%rbp), %rsi
+    CALL_GLOBAL lantern_shell_unmap_file
+21: movq    $-1, (%rbp)
+    movq    $0, 8(%rbp)
+3:  incq    S8(%rsp)
+    jmp     2b
+4:  mov     %r13, %rdi                      # the file
+    mov     %r14, %rsi
+    call    app_db_path
+    lea     APP_PATH(%rbx), %rdi
+    lea     AppDb_op(%r15), %rsi
+    CALL_GLOBAL lantern_shell_remove
+    LEAVE 0
+END_FUNCTION app_db_drop
+
+/*
  * L0: rax = the AppDb's view entry of the record at offset rdi of the mapped segment rsi: its
  * ByteList in place, at byte DbRecord_bytes of the record; 0 when the record is not all inside
  * the map, or its ByteList header is not of its bytes. Uses rcx, rdx, r8, r9.
@@ -2011,7 +2059,12 @@ LOCAL_FUNCTION app_actions
     mov     %rbp, %rdi                      # DB_APPEND: the record in its segment file
     call    app_db_append
     jmp     8f
-11: cmp     $NODE_ACT_DB_STATE, %rax
+11: cmp     $NODE_ACT_DB_DROP, %rax
+    jne     12f
+    mov     %rbp, %rdi                      # DB_DROP: the segment's file goes
+    call    app_db_drop
+    jmp     8f
+12: cmp     $NODE_ACT_DB_STATE, %rax
     jne     10f
     mov     %rbp, %rdi                      # DB_STATE: anchor.ssz
     call    app_db_state

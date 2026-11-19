@@ -426,3 +426,31 @@ FUNCTION lantern_db_prune
 9:  li      a0, LANTERN_OK
     LEAVE 0
 END_FUNCTION lantern_db_prune
+
+/*
+ * (db, slot): the sidecars of the slots from first_slot below the slot and end_slot leave the index:
+ * each DbSlot keeps its root and block, and its sidecar fields become 0. s1 db, s2 an entry, s3 the
+ * entries left.
+ */
+FUNCTION lantern_db_drop_sidecars
+    ENTER 0
+    mv      s1, a0
+    ld      t0, 0(a1)
+    ld      t1, Db_end_slot(s1)
+    bleu    t0, t1, 1f
+    mv      t0, t1
+1:  ld      t1, Db_first_slot(s1)
+    bleu    t0, t1, 9f
+    sub     s3, t0, t1
+    ld      s2, Db_slots(s1)
+    add     s2, s1, s2
+2:  beqz    s3, 9f
+    addi    a0, s2, DbSlot_sidecars
+    li      a1, DbSlot__mem - DbSlot_sidecars
+    call    lantern_zero
+    addi    s2, s2, DbSlot__mem
+    addi    s3, s3, -1
+    j       2b
+9:  li      a0, LANTERN_OK
+    LEAVE 0
+END_FUNCTION lantern_db_drop_sidecars

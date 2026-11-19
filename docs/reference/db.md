@@ -11,6 +11,7 @@
 - [`lantern_db_scan`](#function-lantern_db_scan): adds each whole record of a segment's bytes to the index.
 - [`lantern_db_find_root`](#function-lantern_db_find_root): the slot of a block root.
 - [`lantern_db_prune`](#function-lantern_db_prune): drops the slots below a new first slot.
+- [`lantern_db_drop_sidecars`](#function-lantern_db_drop_sidecars): drops the sidecars of the slots below a slot.
 
 ### Types
 
@@ -42,6 +43,7 @@
   - lantern_db_find_root of each block root of the case must give its slot, and of made up roots no slot.
   - Segments that end inside a record, or whose next record breaks a rule, must give the valid length up to that record.
   - lantern_db_prune to a later first slot must leave the entries from it, and lantern_db_find_root of a dropped root no slot.
+  - lantern_db_drop_sidecars to the first slot of the second segment must leave no sidecar below it, and every block and every later sidecar as they were.
   - A `Db` of small room must give `LANTERN_BUFFER_TOO_SMALL`, and lantern_db_copy to twice the room must hold the same index.
 
 ## Function `lantern_db_size`
@@ -226,6 +228,31 @@ lantern_db_prune(db, slot) -> status
 ### Caller must
 
 - Drop whole segments only: a slot that is a multiple of `DB_SEGMENT_SLOTS`, so no kept slot has records in a dropped file.
+
+## Function `lantern_db_drop_sidecars`
+
+Drops the sidecars of the slots below a slot from the index, as a node does once they leave their serve range (deneb and fulu `p2p-interface.md`: the node serves sidecars of `MIN_EPOCHS_FOR_BLOB_SIDECARS_REQUESTS` and `MIN_EPOCHS_FOR_DATA_COLUMN_SIDECARS_REQUESTS` epochs).
+
+### Signature
+
+```
+lantern_db_drop_sidecars(db, slot) -> status
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `db` | state | `Db` |
+| `slot` | input | u64 |
+
+### Returns
+
+- `LANTERN_OK`: each `DbSlot` from `first_slot` below the slot and `end_slot` has `sidecars`, `sidecar_count`, `sidecar_end`, `sidecar_last` and `indices` 0; its root and block stay.
+
+### Caller must
+
+- Drop whole sidecar segments only: a slot that is a multiple of `DB_SEGMENT_SLOTS`.
 
 ## Type `Db`
 

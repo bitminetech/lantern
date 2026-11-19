@@ -1413,6 +1413,57 @@ LOCAL_FUNCTION app_db_append
 END_FUNCTION app_db_append
 
 /*
+ * L1: NODE_ACT_DB_DROP x0: the segment's file goes: the open file of its kind, when it is that
+ * segment, closes; a map of it goes; then the file is deleted. x20 the action, x21 the kind (0
+ * blocks, 1 sidecars), x22 the segment, x23 the map key, x25 a map's index, x26 a map, x27 the AppDb.
+ */
+LOCAL_FUNCTION app_db_drop
+    ENTER 0
+    mov     x20, x0
+    ADDQ    x27, x19, APP_DB
+    ldr     x21, [x20, #24]
+    and     x21, x21, #1
+    ldr     x22, [x20, #16]
+    add     x9, x27, #AppDb_segment         /* the open file of its kind */
+    ldr     x10, [x9, x21, lsl #3]
+    cmp     x10, x22
+    b.ne    1f
+    add     x0, x27, #AppDb_file
+    add     x0, x0, x21, lsl #3
+    CALL_GLOBAL lantern_shell_close
+    mov     x9, #-1
+    add     x10, x27, #AppDb_segment
+    str     x9, [x10, x21, lsl #3]
+1:  lsl     x23, x21, #63                   /* its map */
+    orr     x23, x23, x22
+    mov     x25, #0
+2:  cmp     x25, #APP_DB_MAP_COUNT
+    b.hs    4f
+    add     x26, x27, #AppDb_maps
+    add     x26, x26, x25, lsl #5
+    ldr     x9, [x26]
+    cmp     x9, x23
+    b.ne    3f
+    ldr     x9, [x26, #8]
+    cbz     x9, 21f
+    add     x0, x26, #8
+    add     x1, x26, #24
+    CALL_GLOBAL lantern_shell_unmap_file
+21: mov     x9, #-1
+    str     x9, [x26]
+    str     xzr, [x26, #8]
+3:  add     x25, x25, #1
+    b       2b
+4:  mov     x0, x21                         /* the file */
+    mov     x1, x22
+    bl      app_db_path
+    ADDQ    x0, x19, APP_PATH
+    add     x1, x27, #AppDb_op
+    CALL_GLOBAL lantern_shell_remove
+    LEAVE 0
+END_FUNCTION app_db_drop
+
+/*
  * L0: x0 = the AppDb's view entry of the record at offset x23 of the mapped segment x26: its
  * ByteList in place, at byte DbRecord_bytes of the record; 0 when the record is not all inside
  * the map, or its ByteList header is not of its bytes. Uses x9-x13, x16.
@@ -1933,7 +1984,12 @@ LOCAL_FUNCTION app_actions
     mov     x0, x20                         /* DB_APPEND: the record in its segment file */
     bl      app_db_append
     b       8f
-11: cmp     x9, #NODE_ACT_DB_STATE
+11: cmp     x9, #NODE_ACT_DB_DROP
+    b.ne    12f
+    mov     x0, x20                         /* DB_DROP: the segment's file goes */
+    bl      app_db_drop
+    b       8f
+12: cmp     x9, #NODE_ACT_DB_STATE
     b.ne    10f
     mov     x0, x20                         /* DB_STATE: anchor.ssz */
     bl      app_db_state
