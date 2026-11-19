@@ -26,6 +26,7 @@
 .include "config.s"
 .include "options.s"
 .include "api.s"
+.include "json.s"
 .include "http.s"
 .include "route.s"
 .include "seen_find.s"

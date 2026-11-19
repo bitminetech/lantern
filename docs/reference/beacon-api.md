@@ -5,6 +5,7 @@
 ### Functions
 
 - [`lantern_api_route`](#function-lantern_api_route): finds the operation of a request and reads its parameters.
+- [`lantern_json_encode`](#function-lantern_json_encode): the JSON of an SSZ value, a chunk at a time.
 - [`lantern_http_request`](#function-lantern_http_request): reads one HTTP/1.1 request, head and body, from a connection's bytes.
 
 ### Types
@@ -13,12 +14,14 @@
 - [`ApiRoute`](#type-apiroute): the operation of a request and its parameters.
 - [`HttpLimits`](#type-httplimits): the largest request head and body a connection takes.
 - [`HttpRequest`](#type-httprequest): one request, read.
+- [`JsonCursor`](#type-jsoncursor): where lantern_json_encode goes on.
 - [`ValidatorRef`](#type-validatorref): a validator by index or by public key.
 
 ## Spec
 
 - Document: [beacon-APIs v4.0.0](https://github.com/ethereum/beacon-APIs/tree/v4.0.0).
 - Section: the operations of `beacon-node-oapi.yaml` and `apis/`, with the JSON of `types/`: numbers as decimal strings, byte strings as `0x` and lower case hex; an error body is an `ErrorMessage` of `types/http.yaml`.
+- JSON of SSZ values: beacon-APIs `types/primitive.yaml` and the types of each fork: a uint as a decimal string, `Boolean` as `true` or `false`, byte strings and bit strings as `0x` and lower case hex, lists and vectors as arrays, containers as objects of the spec's field names.
 - Responses: [RFC 9112](https://www.rfc-editor.org/rfc/rfc9112) section 4 (status line) and section 9.3 (persistence: an HTTP/1.1 connection stays open unless `close`; an HTTP/1.0 connection closes unless `keep-alive`); [RFC 9110](https://www.rfc-editor.org/rfc/rfc9110) section 8.6 (`Content-Length`), section 10.2.1 (`Allow`) and section 15 (status codes and reason phrases).
 - Requests: [RFC 9112](https://www.rfc-editor.org/rfc/rfc9112) sections 2 to 7 (message format, request line, fields, body length, chunked coding) and [RFC 9110](https://www.rfc-editor.org/rfc/rfc9110) section 5 (field syntax); status 431 of [RFC 6585](https://www.rfc-editor.org/rfc/rfc6585) section 5.
 - Routes: the 69 paths and 76 operations of `beacon-node-oapi.yaml` and `apis/` at beacon-APIs v4.0.0 (commit 88fc940), with their parameters of `params/index.yaml` and `apis/`; percent-encoding of [RFC 3986](https://www.rfc-editor.org/rfc/rfc3986) section 2.1; `Accept` of RFC 9110 section 12.5.1; `Content-Type` of RFC 9110 section 8.3.
@@ -68,6 +71,7 @@ The answers of the node (node.md, `NODE_EV_API`) follow these rules.
   - Bodies: `Content-Length` (zero, exact, past `body_max`, two equal values, two different values), chunked (one and many chunks, extensions, trailers, bad sizes, past `body_max`), both fields together, another coding.
   - Limits: a head of exactly `head_max` bytes and one byte more.
   - Pipelining: two requests in one buffer; `used` ends the first.
+- tests/generator/json_codec.py: values of every container type of each fork's spec module (get_random_ssz_object of the pinned spec's test helpers: in minimal the modes zero, one, random and max with lists of at most 4 items and byte lists of at most 64 bytes; in mainnet the mode zero) and the JSON of each, written by the rules of lantern_json_encode, apart from the assembly. The runner reads each value with the type of the fork's type table of that name, when lantern has it, and counts the others in a NOTE; each case also runs in chunks of 1, 7 and 64 bytes of room, and with `out` one byte short of the whole JSON (`LANTERN_JSON_MORE`), then with no room (`LANTERN_BUFFER_TOO_SMALL`). File: `<preset>-<fork>-json-encode.bin`.
 - tests/generator/api_route.py: requests and the `ApiRoute` or fault of each, by the rules of lantern_api_route, apart from the assembly. It reads the operations from the beacon-APIs clone at the pinned commit, so the table of the assembly is checked against the spec; a parameter of the spec that the rules below do not name stops it. Each case with `LANTERN_OK` also runs with `out` one byte short. File: `<preset>-phase0-api-route.bin`.
   - Every operation: its method and path with every required parameter; then each optional parameter.
   - Every path: each other method (405, `allow`), a trailing `/`, a missing and an extra segment (404).
@@ -229,6 +233,62 @@ lantern_http_request(bytes, limits, out) -> status
 - Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
 - Argument order: `bytes`, `limits`, `out`.
 
+## Function `lantern_json_encode`
+
+Writes the JSON of one SSZ value, as the Beacon API shows it, a chunk at a time.
+
+### Signature
+
+```
+lantern_json_encode(type, value, cursor, out) -> status
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `type` | input | asm-ssz `TypeDescriptor`: a root type of a fork's type table (include/descriptors.inc), whose field records are followed by the names of its fields |
+| `value` | input | asm-ssz `Value` of the type |
+| `cursor` | state | [`JsonCursor`](#type-jsoncursor): all zero for a new value |
+| `out` | output | ByteList: the bytes go after its `count`, up to its `size` |
+
+### Returns
+
+- `LANTERN_OK`: the JSON is whole, and `cursor` says so.
+- `LANTERN_JSON_MORE`: `out` is full; `cursor` holds where the next call goes on.
+- `LANTERN_BUFFER_TOO_SMALL`: `out` has no room for a byte. Nothing is changed.
+
+### Caller must
+
+- Pass a valid value of the type.
+- Pass the same `type` and `value` again with the `cursor` of the last call, until `LANTERN_OK`.
+
+### Function does
+
+- Each SSZ kind (beacon-APIs `types/primitive.yaml`):
+  - uint: its decimal digits, in quotes.
+  - `Boolean`: `true` or `false`.
+  - `ByteVector`, `ByteList`: `0x` and two lower case hex digits for each byte, in quotes.
+  - `BitVector`: the same, of its bytes.
+  - `BitList`: the same, of its SSZ bytes: its bits, then the delimiter bit.
+  - `Vector`, `List` of another kind: `[`, its items with `,` between them, `]`.
+  - `Container`: `{`, then for each field in order `"name":` and its value, with `,` between them, `}`.
+- No white space.
+- The name of a field: the 32 bytes after the type table's field records at the same index as its field record, up to the first zero byte, or all 32.
+- The bytes of all the calls of one value, in order, are the whole JSON, whatever the room of each call.
+
+### Function never
+
+- Reads more than `type`, the names after its field records, `value` and `cursor`.
+- Writes more than `out` from its `count` and `cursor`.
+
+### ABI
+
+- Role: L1.
+- Symbol: `lantern_json_encode` (`_lantern_json_encode` on macOS).
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- Argument order: `type`, `value`, `cursor`, `out`.
+
 ## Type `ApiIdentity`
 
 The texts of the node's identity that the shell knows. A text is a u64 length, then its room of bytes; its bytes are `0x21` to `0x7e`, but `"` and `\`.
@@ -326,6 +386,26 @@ One request, read by lantern_http_request.
 
 - The fixed part is `HTTP_REQUEST_FIXED` (144) bytes; the parts follow in field order, each holding bytes.
 - A field that the request does not hold is a part of count 0.
+
+## Type `JsonCursor`
+
+Where lantern_json_encode goes on: the path from the root type to the current token, and the bytes of that token already written.
+
+### Layout
+
+| Offset | Field | Type | Meaning |
+|---|---|---|---|
+| 0 | `depth` | u64 | Levels in use; 0 before the first byte |
+| 8 | `done` | u64 | Bytes of the current token already written |
+| 16 | `whole` | u64 | 1 once the JSON is whole |
+| 24 | `levels` | 12 `JsonLevel` | The path, the root first |
+| 600 | | | Size: `JSON_CURSOR_SIZE` |
+
+### Rules
+
+- A `JsonLevel` is 48 bytes: `node`, the index of the level's `TypeNode` in the type's descriptor; `step`, where the level is (below); `item`, the index of its next item or field; `count`, its items, or the bytes or bits of a byte or bit string; `base`, the offset from `value` of its fields (a container), its first item (a list or vector) or its bytes; `next`, the offset from `value` of its next item when its items are of variable size.
+- `step` of a list, vector or container: 0 before `[` or `{`; 1 before its next item, or `]` or `}` after the last; 2 before the name of a field, or before an item after `,`; 3 while the item is written, one level deeper.
+- A type has at most 12 levels, as asm-ssz allows.
 
 ## Type `ValidatorRef`
 

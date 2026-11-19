@@ -398,6 +398,7 @@ ABI uint64_t lantern_ssz_size_bounds(const void *type, void *out);
 /* Beacon API: docs/reference/beacon-api.md. */
 ABI uint64_t lantern_http_request(const void *bytes, const void *limits, void *out);
 ABI uint64_t lantern_api_route(const void *request, void *out);
+ABI uint64_t lantern_json_encode(const void *type, const void *value, void *cursor, void *out);
 
 /* Application: docs/reference/app.md. */
 ABI uint64_t lantern_app_options(const void *args, void *options, void *fault);
@@ -6752,6 +6753,84 @@ static uint64_t http_request_call(const uint8_t *b, uint64_t len, const uint64_t
     return st;
 }
 
+#define JSON_MORE_STATUS 65
+#define JSON_CURSOR_SIZE 600
+
+/*
+ * json-encode: lantern_json_encode of each case's value (tests/generator/json_codec.py), read with
+ * the type of this fork's type table of the case's name, when lantern has it: the JSON in one call
+ * must be the case's, and in calls of 1, 7 and 64 bytes of room the bytes of all calls in order;
+ * one byte short of the whole gives LANTERN_JSON_MORE, and no room LANTERN_BUFFER_TOO_SMALL.
+ */
+static unsigned long json_types_skipped;
+static void run_json_encode(const char *file, case_file *f) {
+    for (uint64_t i = 0; i < f->count; i++) {
+        const char *name, *why = NULL;
+        uint64_t len, tlen, slen, jlen, vsize = 0;
+        tv parts = next_case(f, &name, &len);
+        const uint8_t *tn = tv_bytes(tv_get(parts, "type"), &tlen), *enc = tv_bytes(tv_get(parts, "ssz"), &slen);
+        const uint8_t *want = tv_bytes(tv_get(parts, "json"), &jlen);
+        char tname[128];
+        snprintf(tname, sizeof tname, "%.*s", (int)(tlen < 120 ? tlen : 120), (const char *)tn);
+        const uint8_t *desc = type_by_name(tname);
+        if (!desc) {
+            json_types_skipped++;
+            continue;
+        }
+        uint8_t *value = decode(desc, enc, slen, &vsize, &why);
+        static const uint64_t rooms[4] = {0, 1, 7, 64}; /* 0: all of it at once */
+        for (int r = 0; r < 4 && !why; r++) {
+            uint64_t room = rooms[r] ? rooms[r] : jlen + 8, got = 0, calls = 0, st = JSON_MORE_STATUS;
+            uint8_t *cursor = buffer(JSON_CURSOR_SIZE), *out = buffer(24 + room), *all = buffer(jlen + 64);
+            memset(cursor, 0, JSON_CURSOR_SIZE);
+            while (st == JSON_MORE_STATUS && !why) {
+                wr64(out, 24 + room);
+                wr64(out + 8, 24);
+                wr64(out + 16, 0);
+                st = CALL(lantern_json_encode, desc, value, cursor, out);
+                if (!guard_ok(out, 24 + room) || !guard_ok(cursor, JSON_CURSOR_SIZE) || !guard_ok(value, vsize))
+                    why = "lantern_json_encode wrote out of bounds";
+                else if (st != 0 && st != JSON_MORE_STATUS) why = "status is neither LANTERN_OK nor LANTERN_JSON_MORE";
+                else if (rd64(out + 16) > room || (st == JSON_MORE_STATUS && rd64(out + 16) != room))
+                    why = "a call did not fill its room";
+                else if (got + rd64(out + 16) > jlen) why = "more bytes than the case's JSON";
+                else {
+                    memcpy(all + got, out + 24, (size_t)rd64(out + 16));
+                    got += rd64(out + 16);
+                }
+                if (++calls > jlen + 2) why = "the calls do not end";
+            }
+            if (!why && (got != jlen || memcmp(all, want, (size_t)jlen))) {
+                static char msg[700];
+                uint64_t k = 0;
+                while (k < got && k < jlen && all[k] == want[k]) k++;
+                snprintf(msg, sizeof msg, "room %llu: the JSON differs at byte %llu of %llu (case %llu): %.*s",
+                         (unsigned long long)room, (unsigned long long)k, (unsigned long long)got, (unsigned long long)jlen,
+                         (int)(got - k < 200 ? got - k : 200), (const char *)all + k);
+                why = msg;
+            }
+            free(cursor);
+            free(out);
+            free(all);
+        }
+        if (!why && jlen > 1) { /* one byte short, then no room */
+            uint8_t *cursor = buffer(JSON_CURSOR_SIZE), *out = buffer(24 + jlen - 1);
+            memset(cursor, 0, JSON_CURSOR_SIZE);
+            wr64(out, 24 + jlen - 1);
+            wr64(out + 8, 24);
+            wr64(out + 16, 0);
+            if (CALL(lantern_json_encode, desc, value, cursor, out) != JSON_MORE_STATUS) why = "one byte short is not LANTERN_JSON_MORE";
+            wr64(out, 24);
+            wr64(out + 16, 0);
+            if (!why && CALL(lantern_json_encode, desc, value, cursor, out) != 1) why = "no room is not LANTERN_BUFFER_TOO_SMALL";
+            free(cursor);
+            free(out);
+        }
+        free(value);
+        report(file, name, len, !why, why);
+    }
+}
+
 /*
  * One request to the node on the connection conn (docs/reference/node.md, Test vectors): its
  * HttpRequest of lantern_http_request (head_max 16384, body_max 1048576) in a NODE_EV_API, then
@@ -7277,6 +7356,7 @@ int main(int argc, char **argv) {
         else if (!bls_off && !strcmp(kind, "config-parse")) run_config_parse(file, &f);
         else if (!bls_off && !strcmp(kind, "app-options")) run_app_options(file, &f);
         else if (!bls_off && !strcmp(kind, "node-api")) run_node_api(file, &f);
+        else if (!bls_off && !strcmp(kind, "json-encode")) run_json_encode(file, &f);
         else if (!bls_off && !strcmp(kind, "http-request")) run_http_request(file, &f);
         else if (!bls_off && !strcmp(kind, "api-route")) run_api_route(file, &f);
         else if (!bls_off && !strcmp(kind, "db-index")) run_db_index(file, &f);
@@ -7312,6 +7392,7 @@ int main(int argc, char **argv) {
     if (node_replays) printf("NOTE: %lu post-states the nodes rebuilt by replay\n", node_replays);
     if (gossip_votes) printf("NOTE: %lu of %lu valid attestations went to fork choice as gossip aggregates\n", gossip_votes_applied, gossip_votes);
     if (drop_ran) printf("NOTE: the sidecar drop check passed\n");
+    if (json_types_skipped) printf("NOTE: %lu JSON cases of types lantern does not define\n", json_types_skipped);
     if (cached_roots) printf("NOTE: %lu post states hashed alike with and without the state cache\n", cached_roots);
 #if FORK > FORK_PHASE0
     if (node_transitions) printf("NOTE: %lu transition cases through the node\n", node_transitions);

@@ -1012,6 +1012,22 @@
 .set ApiRoute_peer_id, 472                /* PartRef of bytes */
 .set API_ROUTE_FIXED, 488
 
+/* JsonCursor (docs/reference/beacon-api.md): lantern_json_encode. */
+.set LANTERN_JSON_MORE, 65              /* lantern_json_encode: out is full; the cursor goes on */
+.set JsonCursor_depth, 0
+.set JsonCursor_done, 8
+.set JsonCursor_whole, 16
+.set JsonCursor_levels, 24
+.set JSON_LEVELS, 12
+.set JsonLevel_node, 0
+.set JsonLevel_step, 8
+.set JsonLevel_item, 16
+.set JsonLevel_count, 24
+.set JsonLevel_base, 32
+.set JsonLevel_next, 40
+.set JSON_LEVEL_SIZE, 48
+.set JSON_CURSOR_SIZE, 24 + JSON_LEVELS * JSON_LEVEL_SIZE
+
 /* ArgList, Arg and AppOptions (docs/reference/app.md): a text field is an Arg (start, length) of the ArgList's bytes. */
 .set ArgList_args, 8
 .set ArgList_bytes, 24

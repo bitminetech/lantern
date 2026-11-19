@@ -33,6 +33,7 @@ import app  # lantern's command line cases
 import http_request  # lantern_http_request cases
 import api_route  # lantern_api_route cases, from the beacon-APIs clone
 import db  # lantern's database index cases
+import json_codec  # lantern_json_encode cases, from the pinned spec's values
 
 RELEASE = "https://github.com/ethereum/consensus-specs/releases/download/v1.7.0-beta.4/"
 ARCHIVES = {  # SHA-256 of each archive of consensus-specs v1.7.0-beta.4 (aa16bb4)
@@ -251,6 +252,12 @@ def main():
                     count, digest = write_file(out / file, items)
                     manifest.append((file, count, digest))
                     print(f"{file}: {count} cases")
+        if not runners or "json" in runners:
+            for fork in forks:
+                file = f"{preset}-{fork}-json-encode.bin"
+                count, digest = write_file(out / file, list(json_codec.cases(fork, preset)))
+                manifest.append((file, count, digest))
+                print(f"{file}: {count} cases")
         count, digest = write_config(out / f"{preset}-config.bin", preset)
         manifest.append((f"{preset}-config.bin", count, digest))
         if not runners or "config" in runners:
