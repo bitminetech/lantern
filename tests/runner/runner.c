@@ -396,7 +396,6 @@ ABI uint64_t lantern_reqresp_read_payload(const void *input, const void *start, 
 ABI uint64_t lantern_ssz_size_bounds(const void *type, void *out);
 
 /* Beacon API: docs/reference/beacon-api.md. */
-ABI uint64_t lantern_api_answer(const void *request, const void *view, void *out);
 ABI uint64_t lantern_http_request(const void *bytes, const void *limits, void *out);
 ABI uint64_t lantern_api_route(const void *request, void *out);
 
@@ -2459,8 +2458,10 @@ enum { NB_WAITING = 1, NB_IMPORTING, NB_IMPORTED, NB_INVALID, NB_HASHING, NB_BLO
 #define NODE_BLOBS 256 /* Node_blobs: NodeBlob entries of 72 bytes: block_root, index, slot, data_id, status, length */
 #define NODE_BLOB_BYTES 72
 #define NBLOB_VALID 2
-enum { EV_TICK = 1, EV_BLOCK, EV_ATTESTATION, EV_ATTESTER_SLASHING, EV_POW_BLOCK, EV_PAYLOAD_STATUS, EV_WORK_DONE, EV_P2P, EV_ENGINE, EV_ENR };
-enum { ACT_BYTES_PUT = 1, ACT_STATE_COPY, ACT_STATE_FREE, ACT_BYTES_FREE, ACT_WORK, ACT_P2P_LIST, ACT_ENGINE, ACT_DISCV5, ACT_DB_APPEND, ACT_DB_STATE, ACT_DB_DROP };
+enum { EV_TICK = 1, EV_BLOCK, EV_ATTESTATION, EV_ATTESTER_SLASHING, EV_POW_BLOCK, EV_PAYLOAD_STATUS, EV_WORK_DONE, EV_P2P, EV_ENGINE, EV_ENR, EV_API,
+       EV_API_IDENTITY };
+enum { ACT_BYTES_PUT = 1, ACT_STATE_COPY, ACT_STATE_FREE, ACT_BYTES_FREE, ACT_WORK, ACT_P2P_LIST, ACT_ENGINE, ACT_DISCV5, ACT_DB_APPEND, ACT_DB_STATE, ACT_DB_DROP,
+       ACT_API_SEND, ACT_API_CLOSE };
 #define NODE_FLAG_DISCV5 64
 #define NODE_FLAG_DB 128
 #define NODE_FLAG_FEW_STATES 256
@@ -2470,7 +2471,7 @@ enum { ACT_BYTES_PUT = 1, ACT_STATE_COPY, ACT_STATE_FREE, ACT_BYTES_FREE, ACT_WO
 #define NODE_DB_SEGMENTS 256 /* the segments one node's runner keeps */
 enum { WORK_IMPORT_BLOCK = 1, WORK_JUSTIFIED_STATE, WORK_TARGET_STATE, WORK_ATTESTATION, WORK_ATTESTER_SLASHING, WORK_SERVE, WORK_GOSSIP,
        WORK_SYNC_BLOCK, WORK_BLOB, WORK_NEW_PAYLOAD, WORK_FORKCHOICE, WORK_SLOTS, WORK_UPGRADE, WORK_REPLAY, WORK_BACKFILL,
-       WORK_BLOCK_ATTESTATION, WORK_BLOCK_SLASHING, WORK_GOSSIP_VOTE };
+       WORK_BLOCK_ATTESTATION, WORK_BLOCK_SLASHING, WORK_GOSSIP_VOTE, WORK_API_ENCODE };
 static unsigned long node_replays; /* the REPLAY works the nodes ran: post-states they rebuilt */
 #define EV_RESULT 72
 #define EV_WORK_DONE_SIZE 128
@@ -2514,6 +2515,10 @@ struct node_shell {
     uint64_t flags, db_states;              /* its flags; the NODE_ACT_DB_STATE actions */
     uint64_t drops[16];                     /* the NODE_ACT_DB_DROP actions: bit 63 for sidecars, the segment */
     size_t ndrops;
+    struct { /* the Beacon API: the bytes of the connection's NODE_ACT_API_SEND actions, in order */
+        uint64_t conn, len, cap, sends, lasts, closes, late; /* late: a send or a close after the close, or a send after the last */
+        uint8_t *b;
+    } api;
 };
 
 /* The records the nodes archived, and the works that served one from the Db: printed as a NOTE. */
@@ -2862,7 +2867,7 @@ static void shell_work(fc_node *n, const uint8_t *work, const char **why) {
     shell_buf *c = c_id ? shell_find(s, c_id) : NULL, *d = d_id && !(d_id & NODE_DB_REF) ? shell_find(s, d_id) : NULL;
     shell_buf view = {0, 0, NULL};
     if (d_id & NODE_DB_REF) { /* the record of the node's Db, in place */
-        if (kind != WORK_SERVE) {
+        if (kind != WORK_SERVE && kind != WORK_API_ENCODE) {
             *why = "a NODE_DB_REF in a WORK that does not serve";
             return;
         }
@@ -2897,7 +2902,7 @@ static void shell_work(fc_node *n, const uint8_t *work, const char **why) {
         free(sa);
         if (st != 1 || *why) break;
         /* BUFFER_TOO_SMALL: the event of a SERVE, the store for a node or for the justified balances, else the state's lists. */
-        if (kind == WORK_SERVE || kind == WORK_NEW_PAYLOAD || kind == WORK_FORKCHOICE) {
+        if (kind == WORK_SERVE || kind == WORK_NEW_PAYLOAD || kind == WORK_FORKCHOICE || kind == WORK_API_ENCODE) {
             free(ev);
             ev_size *= 4;
             ev = buffer(ev_size);
@@ -2936,7 +2941,8 @@ static void shell_work(fc_node *n, const uint8_t *work, const char **why) {
     uint64_t esize = *why ? 0 : rd64(ev);
     if (!*why && (esize < EV_WORK_DONE_SIZE || esize > ev_size || esize % 8 || rd64(ev + 8) != EV_WORK_DONE ||
                   memcmp(ev + 16, work + 16, 56) ||
-                  (kind != WORK_SERVE && kind != WORK_NEW_PAYLOAD && kind != WORK_FORKCHOICE && esize != EV_WORK_DONE_SIZE)))
+                  (kind != WORK_SERVE && kind != WORK_NEW_PAYLOAD && kind != WORK_FORKCHOICE && kind != WORK_API_ENCODE &&
+                   esize != EV_WORK_DONE_SIZE)))
         *why = "lantern_node_run: the event is not the WORK_DONE of the work";
     if (!*why) {
         uint64_t result = rd64(ev + EV_RESULT);
@@ -3083,6 +3089,32 @@ static void shell_step(fc_node *n, const char **why) {
             shell_engine(n, act + 48, rd64(act + 40), why);
         else if (kind == ACT_DISCV5 && size >= 48 && rd64(act + 24) == size - 24 && rd64(act + 32) == 24 && rd64(act + 40) <= size - 48)
             shell_discv5(s, act + 48, rd64(act + 40), why);
+        else if (kind == ACT_API_SEND && size >= 56 && rd64(act + 24) <= 1 && rd64(act + 32) == size - 32 && rd64(act + 40) == 24 &&
+                 rd64(act + 48) <= size - 56) {
+            uint64_t n = rd64(act + 48);
+            if (rd64(act + 16) != s->api.conn) *why = "API_SEND of another connection";
+            else {
+                if (s->api.closes || s->api.lasts) s->api.late++;
+                if (s->api.len + n > s->api.cap) {
+                    s->api.cap = 2 * (s->api.len + n) + 4096;
+                    s->api.b = realloc(s->api.b, (size_t)s->api.cap);
+                    if (!s->api.b) {
+                        fprintf(stderr, "out of memory\n");
+                        exit(2);
+                    }
+                }
+                memcpy(s->api.b + s->api.len, act + 56, (size_t)n);
+                s->api.len += n;
+                s->api.sends++;
+                s->api.lasts += rd64(act + 24);
+            }
+        } else if (kind == ACT_API_CLOSE && size == 24) {
+            if (rd64(act + 16) != s->api.conn) *why = "API_CLOSE of another connection";
+            else {
+                if (s->api.closes || !s->api.lasts) s->api.late++;
+                s->api.closes++;
+            }
+        }
         else if (kind == ACT_P2P_LIST && s->net && size >= 40 && rd64(act + 16) == size - 16 && rd64(act + 24) == 24 &&
                  rd64(act + 32) == size - 40) {
             /* the shell requests of libp2p, in order; the node took the application notices */
@@ -3432,6 +3464,7 @@ static struct node_shell *shell_open(fc_node *n, tv parts, uint8_t **anchor_bloc
 
 static void shell_close(fc_node *n, uint8_t *anchor_block) {
     struct node_shell *s = n->shell;
+    free(s->api.b);
     free(s->seen);
     for (size_t k = 0; k < s->nbufs; k++) free(s->bufs[k].b);
     free(s->bufs);
@@ -3447,6 +3480,7 @@ static void shell_close(fc_node *n, uint8_t *anchor_block) {
 
 static void fc_serve_check(fc_node *n, tv parts, const char **why);
 static void fc_sync_check(tv parts, const char **why);
+static void shell_api_head(fc_node *n, const char **why);
 static void drop_check(tv parts, const char **why);
 
 /* One case through the node: the shell's buffers, then each step as events; with serve, then fc_serve_check. */
@@ -3495,6 +3529,7 @@ static void fc_node_case(tv parts, int serve, const char **why) {
         }
     }
     if (!*why) shell_db_rescan(n.shell, why);
+    if (serve && !*why) shell_api_head(&n, why);
     if (serve && !*why) fc_serve_check(&n, parts, why);
     if (serve && !*why) fc_sync_check(parts, why);
     static int dropped; /* once in each process */
@@ -6629,7 +6664,7 @@ static void run_db_index(const char *file, case_file *f) {
 /* ---------------------------------------------------------------- Application */
 
 #define INVALID_OPTION 61
-#define APP_OPTIONS_SIZE 152
+#define APP_OPTIONS_SIZE 168
 
 /*
  * app-options: lantern_app_options over each case's command line (tests/generator/app.py), as an
@@ -6640,8 +6675,9 @@ static void run_app_options(const char *file, case_file *f) {
     static const char *texts[] = {"network_dir", "execution", "jwt_secret", "boot_nodes", "data_dir", "checkpoint_state",
                                   "checkpoint_block"};
     static const uint64_t text_at[] = {0, 16, 32, 48, 96, 112, 128};
-    static const char *numbers[] = {"port", "enr_address", "http_port", "target_peers"};
-    static const uint64_t number_at[] = {64, 72, 80, 88, 144};
+    static const char *numbers[] = {"port", "enr_address", "http_port", "target_peers", "log_level", "http_address",
+                                    "http_max_connections"};
+    static const uint64_t number_at[] = {64, 72, 80, 88, 144, 152, 160};
     for (uint64_t i = 0; i < f->count; i++) {
         const char *name, *why = NULL;
         uint64_t len, total = 0, alen;
@@ -6682,9 +6718,8 @@ static void run_app_options(const char *file, case_file *f) {
                     inside = start >= rd64(list + 40 + 16 * k) && start + got <= rd64(list + 40 + 16 * k) + rd64(list + 48 + 16 * k);
                 if (got != wl || !inside || (wl && memcmp(list + start, w, (size_t)wl))) why = texts[t];
             }
-            for (int t = 0; t < 4 && !why; t++)
+            for (int t = 0; t < 7 && !why; t++)
                 if (rd64(opts + number_at[t]) != tv_u64(tv_get(want, numbers[t]))) why = numbers[t];
-            if (!why && rd64(opts + number_at[4]) != tv_u64(tv_get(want, "log_level"))) why = "log_level";
         } else if (st != INVALID_OPTION) why = "status is not LANTERN_INVALID_OPTION";
         else if (fault != tv_u64(wfault)) why = "fault is not the case's index";
         report(file, name, len, !why, why);
@@ -6696,46 +6731,6 @@ static void run_app_options(const char *file, case_file *f) {
 /* ---------------------------------------------------------------- Beacon API */
 
 #define HTTP_MORE_STATUS 53
-#define API_VIEW_SIZE 1424
-
-/*
- * api-answer: lantern_api_answer of each case's request and view (tests/generator/api.py): the
- * response bytes must be the case's, or the status LANTERN_HTTP_MORE; with one byte less of room
- * than the response, LANTERN_BUFFER_TOO_SMALL.
- */
-static void run_api_answer(const char *file, case_file *f) {
-    for (uint64_t i = 0; i < f->count; i++) {
-        const char *name, *why = NULL;
-        uint64_t len, vlen, rlen, wlen = 0, size;
-        tv parts = next_case(f, &name, &len);
-        const uint8_t *vb = tv_bytes(tv_get(parts, "view"), &vlen);
-        const uint8_t *req = tv_bytes(tv_get(parts, "request"), &rlen);
-        tv want = tv_get(parts, "response");
-        const uint8_t *w = want ? tv_bytes(want, &wlen) : NULL;
-        uint8_t *view = buffer(API_VIEW_SIZE), *l = list_of(req, rlen, 0, 8, &size);
-        memcpy(view, vb, API_VIEW_SIZE);
-        uint64_t osize = 24 + wlen + 64;
-        uint8_t *out = buffer(osize), *small = buffer(24 + (wlen ? wlen - 1 : 0));
-        wr64(out, osize);
-        wr64(small, 24 + (wlen ? wlen - 1 : 0));
-        uint64_t st = CALL(lantern_api_answer, l, view, out);
-        if (!guard_ok(out, osize) || !guard_ok(view, API_VIEW_SIZE)) why = "lantern_api_answer wrote out of bounds";
-        else if (!w) {
-            if (st != HTTP_MORE_STATUS) why = "status is not LANTERN_HTTP_MORE";
-        } else if (st != 0) why = "status is not LANTERN_OK";
-        else if (rd64(out + 8) != 24 || rd64(out + 16) != wlen || memcmp(out + 24, w, (size_t)wlen)) {
-            static char msg[512];
-            snprintf(msg, sizeof msg, "the response is not the case's: %.*s", (int)(rd64(out + 16) < 400 ? rd64(out + 16) : 400),
-                     (const char *)out + 24);
-            why = msg;
-        } else if (CALL(lantern_api_answer, l, view, small) != 1) why = "one byte less of room is not LANTERN_BUFFER_TOO_SMALL";
-        report(file, name, len, !why, why);
-        free(view);
-        free(l);
-        free(out);
-        free(small);
-    }
-}
 
 #define HTTP_INVALID_STATUS 52
 #define HTTP_REQUEST_FIXED 144
@@ -6755,6 +6750,130 @@ static uint64_t http_request_call(const uint8_t *b, uint64_t len, const uint64_t
     free(l);
     free(lim);
     return st;
+}
+
+/*
+ * One request to the node on the connection conn (docs/reference/node.md, Test vectors): its
+ * HttpRequest of lantern_http_request (head_max 16384, body_max 1048576) in a NODE_EV_API, then
+ * the node settles; the connection's sends and closes are in s->api.
+ */
+static void shell_api_ask(fc_node *n, const uint8_t *req, uint64_t len, uint64_t conn, const char **why) {
+    static const uint64_t limits[2] = {16384, 1048576};
+    struct node_shell *s = n->shell;
+    uint8_t *out = NULL;
+    uint64_t http = 0, osize = (HTTP_REQUEST_FIXED + 2 * len + 64 + 7) & ~(uint64_t)7;
+    uint64_t st = http_request_call(req, len, limits, osize, &out, &http, why);
+    if (!*why && st != 0 && st != HTTP_INVALID_STATUS) *why = "lantern_http_request: status is not LANTERN_OK or LANTERN_INVALID_HTTP";
+    s->api.conn = conn;
+    s->api.len = s->api.sends = s->api.lasts = s->api.closes = s->api.late = 0;
+    if (!*why) {
+        if (st != 0) wr64(out, HTTP_REQUEST_FIXED); /* LANTERN_INVALID_HTTP: the fixed part, with its status */
+        shell_event(s, EV_API, conn, out, rd64(out));
+        shell_settle(n, why);
+    }
+    free(out);
+}
+
+/* The answer's response bytes, then a line of its sends and closes, for a failure message. */
+static const char *api_mismatch(const struct node_shell *s, const char *name, const uint8_t *want, uint64_t wlen) {
+    static char msg[1024];
+    uint64_t k = 0;
+    while (k < s->api.len && k < wlen && s->api.b[k] == want[k]) k++;
+    snprintf(msg, sizeof msg, "%s: the response differs at byte %llu of %llu (case %llu), sends %llu, lasts %llu, closes %llu: got %.*s",
+             name, (unsigned long long)k, (unsigned long long)s->api.len, (unsigned long long)wlen, (unsigned long long)s->api.sends,
+             (unsigned long long)s->api.lasts, (unsigned long long)s->api.closes, (int)(s->api.len < 600 ? s->api.len : 600),
+             s->api.b ? (const char *)s->api.b : "");
+    return msg;
+}
+
+/*
+ * node-api: each case's requests to a node at its anchor (tests/generator/node.py), each on its own
+ * connection, after a NODE_EV_TICK of the case's time and a NODE_EV_API_IDENTITY; from the index
+ * offline on, after a NODE_EV_ENGINE with arg 1. The sends must be the case's response, the last
+ * with last 1 and no other, and one NODE_ACT_API_CLOSE after them when the case closes.
+ */
+static void run_node_api(const char *file, case_file *f) {
+    for (uint64_t i = 0; i < f->count; i++) {
+        const char *name, *why = NULL;
+        uint64_t len, ilen, clen;
+        tv parts = next_case(f, &name, &len);
+        if (skip_case(parts)) continue;
+        fc_node n;
+        uint8_t *anchor_block;
+        struct node_shell *s = shell_open(&n, parts, &anchor_block, &why);
+        const uint8_t *identity = tv_bytes(tv_get(parts, "identity"), &ilen), *closes = tv_bytes(tv_get(parts, "closes"), &clen);
+        tv names = tv_get(parts, "names"), reqs = tv_get(parts, "requests"), resps = tv_get(parts, "responses");
+        uint64_t count = rd64(reqs + 1), offline = tv_u64(tv_get(parts, "offline"));
+        if (!why && (rd64(names + 1) != count || rd64(resps + 1) != count || clen != count)) why = "the case's lists differ in length";
+        if (!why) {
+            shell_event(s, EV_TICK, tv_u64(tv_get(parts, "time_ms")), NULL, 0);
+            shell_event(s, EV_API_IDENTITY, 0, identity, ilen);
+            shell_settle(&n, &why);
+        }
+        tv nm = names + 9, rq = reqs + 9, rs = resps + 9;
+        for (uint64_t k = 0; k < count && !why; k++, nm = tv_skip(nm), rq = tv_skip(rq), rs = tv_skip(rs)) {
+            uint64_t rlen, wlen, nlen;
+            const uint8_t *req = tv_bytes(rq, &rlen), *want = tv_bytes(rs, &wlen), *nb = tv_bytes(nm, &nlen);
+            char rname[96];
+            snprintf(rname, sizeof rname, "%.*s", (int)(nlen < 90 ? nlen : 90), (const char *)nb);
+            if (k == offline) {
+                shell_event(s, EV_ENGINE, 1, NULL, 0);
+                shell_settle(&n, &why);
+            }
+            if (!why) shell_api_ask(&n, req, rlen, (k + 1) | (uint64_t)7 << 32, &why);
+            if (!why && (s->api.len != wlen || memcmp(s->api.b, want, (size_t)wlen))) why = api_mismatch(s, rname, want, wlen);
+            else if (!why && (s->api.lasts != 1 || s->api.late || s->api.closes != closes[k])) why = api_mismatch(s, rname, want, wlen);
+            if (why && strncmp(why, rname, strlen(rname))) {
+                static char msg[256];
+                snprintf(msg, sizeof msg, "%s: %s", rname, why);
+                why = msg;
+            }
+        }
+        shell_close(&n, anchor_block);
+        report(file, name, len, why == NULL, why);
+    }
+}
+
+/*
+ * Node mode, after the steps: getBlockHeader of head must give 200 with the node's head_root as
+ * root and its block's slot; getStateFinalityCheckpoints of head the checkpoints of the head's
+ * post-state (docs/reference/node.md, Test vectors).
+ */
+static void shell_api_head(fc_node *n, const char **why) {
+    struct node_shell *s = n->shell;
+    static const char hreq[] = "GET /eth/v1/beacon/headers/head HTTP/1.1\r\nHost: lantern\r\n\r\n";
+    static const char freq[] = "GET /eth/v1/beacon/states/head/finality_checkpoints HTTP/1.1\r\nHost: lantern\r\n\r\n";
+    const uint8_t *head = s->node + NODE_HEAD_ROOT, *e = shell_block(s, head), *st = shell_state_of(n, head);
+    char want[512];
+    int k = 0;
+    if (!e || !st) {
+        *why = "API: the head has no block or no post-state";
+        return;
+    }
+    k = snprintf(want, sizeof want, "\"data\":{\"root\":\"0x");
+    for (int b = 0; b < 32; b++) k += snprintf(want + k, sizeof want - (size_t)k, "%02x", head[b]);
+    snprintf(want + k, sizeof want - (size_t)k, "\",\"canonical\":true,\"header\":{\"message\":{\"slot\":\"%llu\"",
+             (unsigned long long)rd64(e + 64)); /* NodeBlock_slot */
+    shell_api_ask(n, (const uint8_t *)hreq, sizeof hreq - 1, 1, why);
+    if (!*why && (s->api.len < 17 || memcmp(s->api.b, "HTTP/1.1 200 OK\r\n", 17) || !find_bytes((const char *)s->api.b, s->api.len, want)))
+        *why = api_mismatch(s, "API getBlockHeader of head", (const uint8_t *)want, strlen(want));
+    if (*why) return;
+    uint8_t cps[120];
+    if (CALL(LF(node_state_checkpoints), st, cps) != 0) {
+        *why = "lantern_node_state_checkpoints: status not 0";
+        return;
+    }
+    static const char *names[3] = {"previous_justified", "current_justified", "finalized"};
+    k = snprintf(want, sizeof want, "\"data\":{");
+    for (int c = 0; c < 3; c++) {
+        k += snprintf(want + k, sizeof want - (size_t)k, "%s\"%s\":{\"epoch\":\"%llu\",\"root\":\"0x", c ? "," : "", names[c],
+                      (unsigned long long)rd64(cps + 40 * c));
+        for (int b = 0; b < 32; b++) k += snprintf(want + k, sizeof want - (size_t)k, "%02x", cps[40 * c + 8 + b]);
+        k += snprintf(want + k, sizeof want - (size_t)k, "\"}");
+    }
+    shell_api_ask(n, (const uint8_t *)freq, sizeof freq - 1, 2, why);
+    if (!*why && (s->api.len < 17 || memcmp(s->api.b, "HTTP/1.1 200 OK\r\n", 17) || !find_bytes((const char *)s->api.b, s->api.len, want)))
+        *why = api_mismatch(s, "API getStateFinalityCheckpoints of head", (const uint8_t *)want, strlen(want));
 }
 
 /*
@@ -7157,7 +7276,7 @@ int main(int argc, char **argv) {
         else if (!bls_off && !strcmp(kind, "node-p2p")) run_node_p2p(file, &f);
         else if (!bls_off && !strcmp(kind, "config-parse")) run_config_parse(file, &f);
         else if (!bls_off && !strcmp(kind, "app-options")) run_app_options(file, &f);
-        else if (!bls_off && !strcmp(kind, "api-answer")) run_api_answer(file, &f);
+        else if (!bls_off && !strcmp(kind, "node-api")) run_node_api(file, &f);
         else if (!bls_off && !strcmp(kind, "http-request")) run_http_request(file, &f);
         else if (!bls_off && !strcmp(kind, "api-route")) run_api_route(file, &f);
         else if (!bls_off && !strcmp(kind, "db-index")) run_db_index(file, &f);

@@ -26,6 +26,7 @@
 
 - tests/generator/app.py: command lines with their `AppOptions`, or the argument index of their fault. File: `<preset>-phase0-app-options.bin`.
 - tests/app/start.sh and tests/app/start.ps1 (Windows): the binary of each target given a faulty option exits with 1 and its ERROR line, whose time has the form of the log and today's UTC date; given a network directory with no config.yaml, it exits with 2 and a "cannot read" line. CI runs them.
+- tests/app/api.py, run by tests/app/start.sh and start.ps1: the binary started with `--http-max-connections 2` and the network directory that tests/generator/run.sh writes beside the vectors (tests/app/network.py, minimal, altair). On one connection, two getNodeVersion requests in one write and then a getHealth must give three responses, and the connection must stay open; a third connection must be closed with no bytes while two are open; a request head of 16385 bytes must give 431 and the connection must close; a `DELETE` must give 405 with `Allow: GET`; a connection with no bytes must close within 31 s.
 - tests/app/network.py: a network directory (config.yaml, genesis.ssz) to run the binary with, alone or beside other clients.
 - tests/app/trusted_setup.py: writes include/trusted_setup_4096.bin from the pinned spec, or with `--check` exits 1 when the file differs; CI's trusted-setup job runs the check.
 - tests/app/devnet.sh: a devnet of ethpandaops/ethereum-package (tests/kurtosis/, at a pinned commit) of geth and one consensus client with all the validators, and the binary's image (platform/docker/Dockerfile) beside it with every consensus client's record as a boot node; lantern's head must reach slot 8, be a block of the client's chain and be within 2 slots of the client's head, at two checks a slot apart.
@@ -68,7 +69,9 @@ lantern_app_options(args, options, fault) -> status
 | `--boot-nodes` | `boot_nodes` | ENRs (`enr:` and base64url), with commas between them | none |
 | `--port` | `port` | 1 to 65535: the TCP port of libp2p and the UDP port of discv5 | 9000 |
 | `--enr-address` | `enr_address` | an IPv4 address in dotted decimal, for the node record | none |
+| `--http-address` | `http_address` | an IPv4 address in dotted decimal: the Beacon API listens on it | 127.0.0.1 |
 | `--http-port` | `http_port` | 1 to 65535: the Beacon API | 5052 |
+| `--http-max-connections` | `http_max_connections` | 1 to 4096: the Beacon API's connections at a time | 64 |
 | `--target-peers` | `target_peers` | 1 to 1024 | 64 |
 | `--data-dir` | `data_dir` | a directory for the node's history: the segment files of [db.md](db.md) | none: the node keeps its history in memory |
 | `--checkpoint-state` | `checkpoint_state` | a file of the SSZ bytes of a finalized `BeaconState`: the post-state of the checkpoint block | none: the node starts from `genesis.ssz` |
@@ -114,7 +117,15 @@ lantern_app_main(args) -> status
 - A `StateCache` ([state.md](state.md#type-statecache)) for the anchor file's bytes / 121 + 65536 validators, from lantern_state_cache_size, lantern_shell_map and lantern_state_cache_init, at `CONFIG_STATE_CACHE` of the config before the store and the node start, so each state root of the node goes through it; with no memory for it, none. A `CommitteeCache` ([block-processing.md](block-processing.md#type-committeecache)) for as many validators, from lantern_committee_cache_size, lantern_shell_map and lantern_committee_cache_init, at `CONFIG_COMMITTEE_CACHE` the same way, and a `PubkeyCache` ([block-processing.md](block-processing.md#type-pubkeycache)) for as many, from lantern_pubkey_cache_size and lantern_pubkey_cache_init, at `CONFIG_PUBKEY_CACHE`.
 - Makes a new secp256k1 key. Starts the store (lantern_get_forkchoice_store), the node (lantern_node_init, with `NODE_FLAG_ENGINE` when it has an execution endpoint, `NODE_FLAG_DISCV5`, and the anchor's `node_id`: keccak256 of the key's uncompressed point, x then y, in reverse byte order), the libp2p state with that key, and the discv5 state with the same key, the `ip` of `--enr-address`, and the `udp` and `tcp` of `--port`.
 - Decodes the KZG trusted setup with crypto_kzg_trusted_setup_of_bytes: include/trusted_setup_4096.bin, the compressed points of `presets/<preset>/trusted_setups/trusted_setup_4096.json` of the pinned spec (the same file for both presets): the 4096 of `g1_lagrange`, the 4096 of `g1_monomial`, then the 65 of `g2_monomial`.
-- Listens on TCP `--port` and binds UDP `--port` on every address, through the shell of asm-libp2p, gives each boot node to discv5, and listens for the Beacon API ([beacon-api.md](beacon-api.md)) on TCP `--http-port`.
+- Listens on TCP `--port` and binds UDP `--port` on every address, through the shell of asm-libp2p, gives each boot node to discv5, and listens for the Beacon API ([beacon-api.md](beacon-api.md)) on TCP `--http-address` and `--http-port`.
+- The Beacon API's connections, through a second shell context of asm-libp2p:
+  - A new connection takes a free slot of `--http-max-connections`; with none free, it is refused.
+  - Its bytes join the slot's buffer of `APP_API_BUFFER` bytes: `APP_API_HEAD_MAX` (16384) + `APP_API_BODY_MAX` (1048576) + `APP_API_HEAD_MAX`.
+  - While the slot waits for no answer, lantern_http_request reads the buffer with `head_max` `APP_API_HEAD_MAX` and `body_max` `APP_API_BODY_MAX`. `LANTERN_OK` or `LANTERN_INVALID_HTTP`: a `NODE_EV_API` of the slot's connection and the `HttpRequest`, and the slot waits for the answer. `LANTERN_HTTP_MORE` with a full buffer: a `NODE_EV_API` of an `HttpRequest` with `status` 413. The `used` bytes leave the buffer.
+  - `NODE_ACT_API_SEND`: its bytes go to the connection; with `last` 1 the slot waits for no answer, and the buffer is read again. `NODE_ACT_API_CLOSE`: the connection closes once its bytes are sent. An action of a slot's older connection is dropped.
+  - A connection whose slot waits for no answer, with no bytes in 30000 ms (`APP_API_IDLE_MS`), closes.
+  - The connection of a slot is its index + 2^32 times its generation, which grows by 1 with each new connection of the slot.
+  - A `NODE_EV_API_IDENTITY` at the start and at each record of discv5: the peer ID in base58btc, `enr:` and the record in base64url, `/ip4/<--enr-address>/tcp/<--port>/p2p/<peer ID>` and the same with `udp` (empty with no `--enr-address`), and the version `lantern/v0.1.0`.
 - Loops: reads the clock; passes each libp2p shell event, each discv5 record found, each execution engine response and the time to lantern_node_step; performs its actions (on `LANTERN_BUFFER_TOO_SMALL` of lantern_node_step it grows the buffer that `short` names: the node with lantern_node_copy and twice the `NodeRoom` capacity that `room` names, or twice the room of the actions or the scratch; after 64 tries a line `a node step: no room in buffer <short>`); runs each work with lantern_node_run, with the KZG settings, and with more room when it asks; waits for the sockets until the next wakeup, at most 100 ms.
 - `NODE_ACT_STATE_COPY` and `NODE_ACT_BYTES_PUT`: new memory from lantern_shell_map with a copy of the bytes. When the source and its size are multiples of 8, a page of 4096 bytes that is all zero is not written, as the new memory is zero already: the OS keeps no memory for it, so a state's free room costs none.
 - Writes a line `slot <s>, head 0x<the head root's first 8 bytes>, finalized epoch <e>, earliest slot <n>` to the standard output at each new slot of the store, with the node's `earliest_slot` (it falls as the backfill's blocks join the history), and a line `peers <n>` when the count of connected peers changes.
@@ -122,7 +133,7 @@ lantern_app_main(args) -> status
 - The segment files of the history: `<dir>/b<n>.seg` for blocks and `<dir>/s<n>.seg` for sidecars, with n the segment's number in decimal.
 - `NODE_ACT_DB_APPEND`: one file of each kind stays open. A record of another segment closes it and opens that one with lantern_shell_open to append, cut to the record's offset with lantern_shell_truncate. The record goes in three appends: its `DbRecord`, its bytes, and zero bytes to a multiple of 8. A failure gives a line `cannot write <path>: error <n>` on the standard error, and the file closes, so the next record opens it again.
 - A SERVE work whose data is a `NODE_DB_REF`: lantern_node_run gets the record's own ByteList, at its byte 56, in its segment file mapped with lantern_shell_map_file. Up to `APP_DB_MAP_COUNT` (4) files stay mapped, the oldest map going first; a record past a map's end maps its file again. A record not in its file, or whose ByteList header is not of its bytes, is a buffer the work does not name.
-- The Beacon API's head header: lantern_node_block_header of the head block's bytes; for a head whose bytes went to the `Db`, of its record there (lantern_db_find_root of its root, then its slot's block record); else the anchor's header.
+- An API_ENCODE work whose data is a `NODE_DB_REF` gets the record's ByteList as a SERVE work does.
 - `NODE_ACT_DB_DROP`: the segment's file goes: the open file of its kind closes when it is that segment, a map of it goes, and the file is deleted with lantern_shell_remove.
 - `NODE_ACT_DB_STATE`, the first of a run and then each one `DB_SEGMENT_SLOTS` slots or more after the last written: the open segment files are synced; `<dir>/anchor.tmp` gets two ByteLists, the second at the first multiple of 8 after the first: lantern_node_state_bytes of the state, then the block's message, its bytes from 100 of the `SignedBeaconBlock`; it is synced, renamed over `<dir>/anchor.ssz`, and the directory is synced. A failure gives a `cannot write` line.
 - A start with `--checkpoint-state` and `--checkpoint-block`, and no `<dir>/anchor.ssz`, takes them in place of `genesis.ssz`: the two files go into one buffer in the form of `anchor.ssz` (the state's bytes, then the block's message from byte 100 of its `SignedBeaconBlock`) for lantern_node_anchor_block of the fork of the state's slot; a block file below 184 bytes gives a line `<path>: too short`. The anchor's `history_slot` is its slot. Then a line `checkpoint at slot <n>` on the standard output.
@@ -189,7 +200,9 @@ The options of a run. A text field is an [`Arg`](#type-arg) of the bytes of the 
 | 112 | `checkpoint_state` | `Arg` | The path of the checkpoint state file |
 | 128 | `checkpoint_block` | `Arg` | The path of the checkpoint block file |
 | 144 | `log_level` | u64 | 0 error, 1 warn, 2 info, 3 debug |
-| 152 | | | Size |
+| 152 | `http_address` | u64 | The Beacon API's IPv4 address, its 4 bytes in network order in the low bytes |
+| 160 | `http_max_connections` | u64 | The Beacon API's connections at a time |
+| 168 | | | Size |
 
 ## Results
 

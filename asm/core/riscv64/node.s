@@ -1234,6 +1234,9 @@ LOCAL_FUNCTION node_engine_read
     li      t0, LANTERN_HTTP_MORE
     beq     a0, t0, 6f
     bnez    a0, 7f
+    ld      t0, Node_flags(s1)              # a whole response: the engine is online
+    andi    t0, t0, ~NODE_FLAG_EL_OFFLINE
+    sd      t0, Node_flags(s1)
     ld      t0, L(sp)
     li      t1, 200
     bne     t0, t1, 70f
@@ -3310,7 +3313,10 @@ LOCAL_FUNCTION node_event
     bne     t0, t1, 47f
     ld      t0, 16(s3)
     beqz    t0, 46f
-    call    node_engine_failed              # ENGINE 1: the connection failed
+    ld      t0, Node_flags(s1)              # ENGINE 1: the connection failed; the engine is offline
+    ori     t0, t0, NODE_FLAG_EL_OFFLINE
+    sd      t0, Node_flags(s1)
+    call    node_engine_failed
     ld      t0, Node_engine_in(s1)
     add     t0, s1, t0
     sd      zero, 16(t0)
@@ -3330,9 +3336,23 @@ LOCAL_FUNCTION node_event
     call    node_engine_read
     LEAVE 48
 47: li      t1, NODE_EV_ENR
-    bne     t0, t1, 50f
+    bne     t0, t1, 471f
     mv      a0, s3                          # ENR: a record discv5 found
     call    node_enr
+    LEAVE 48
+471: li     t1, NODE_EV_API
+    bne     t0, t1, 472f
+    mv      a0, s3                          # API: the answer to a request
+    call    node_api_event
+    LEAVE 48
+472: li     t1, NODE_EV_API_IDENTITY
+    bne     t0, t1, 50f
+    ADDQ    a0, s1, Node_api_identity       # API_IDENTITY: the node keeps the texts
+    ld      t0, (NodeEvent_bytes + 8)(s3)
+    addi    a1, s3, NodeEvent_bytes
+    add     a1, a1, t0
+    li      a2, API_IDENTITY_SIZE
+    call    lantern_copy
     LEAVE 48
 50: ld      t0, NodeAction_work_kind(s3)    # WORK_DONE
     ld      t1, NodeEvent_result(s3)
@@ -3706,7 +3726,7 @@ LOCAL_FUNCTION node_event
 85: li      t2, NODE_WORK_NEW_PAYLOAD       # NEW_PAYLOAD, FORKCHOICE: the request to the execution engine
     beq     t0, t2, 86f
     li      t2, NODE_WORK_FORKCHOICE
-    bne     t0, t2, 70f
+    bne     t0, t2, 701f
 86: bnez    t1, 87f
     ld      s7, (NodeEvent_chunk + 16)(s3)
     addi    a1, s7, 48 + 7
@@ -3750,6 +3770,11 @@ LOCAL_FUNCTION node_event
     li      a2, 0
     call    node_ids
     sd      zero, NodeBlock_data_id(s4)
+    LEAVE 48
+701: li     t2, NODE_WORK_API_ENCODE        # API_ENCODE: the response to its connection
+    bne     t0, t2, 70f
+    mv      a0, s3
+    call    node_api_done
     LEAVE 48
 70: li      t2, NODE_WORK_ATTESTATION       # done with an attestation or a slashing: free its bytes
     beq     t0, t2, 71f
@@ -7466,7 +7491,7 @@ END_FUNCTION node_block_entry
  * L+144 the POW_BLOCK events.
  */
 FUNCTION lantern_node_step
-    ENTER 160
+    ENTER 208
     mv      s1, a0
     mv      s2, a1
     sd      a2, (L + 16)(sp)
@@ -7488,6 +7513,8 @@ FUNCTION lantern_node_step
     sd      zero, (L + 128)(sp)
     sd      zero, (L + 136)(sp)
     sd      zero, (L + 144)(sp)
+    sd      zero, (L + 184)(sp)              # API: the largest scratch, and the API events
+    sd      zero, (L + 192)(sp)
     mv      t0, s3
 1:  bgeu    t0, s4, 5f
     sub     t1, s4, t0
@@ -7614,7 +7641,28 @@ FUNCTION lantern_node_step
     beqz    t4, 7f
     li      t4, 1
     sd      t4, (L + 136)(sp)
-33: li      t4, NODE_EV_BLOCK
+33: li      t4, NODE_EV_API                 # API, API_IDENTITY: their bytes keep their rules
+    bltu    t3, t4, 34f
+    sd      t0, (L + 160)(sp)
+    sd      t2, (L + 168)(sp)
+    sd      t5, (L + 176)(sp)
+    mv      a0, t0
+    call    node_api_check
+    ld      t0, (L + 160)(sp)
+    ld      t2, (L + 168)(sp)
+    ld      t5, (L + 176)(sp)
+    bnez    a0, 7f
+    ld      t4, (L + 184)(sp)
+    bgeu    t4, a1, 35f
+    sd      a1, (L + 184)(sp)
+35: ld      t3, 8(t0)
+    li      t4, NODE_EV_API
+    bne     t3, t4, 4f
+    ld      t4, (L + 192)(sp)
+    addi    t4, t4, 1
+    sd      t4, (L + 192)(sp)
+    j       4f
+34: li      t4, NODE_EV_BLOCK
     beq     t3, t4, 31f
     li      t4, NODE_EV_POW_BLOCK
     bne     t3, t4, 4f
@@ -7633,6 +7681,9 @@ FUNCTION lantern_node_step
     li      t1, 512                         # room: actions, node parts, scratch
     mul     t1, s8, t1
     add     t1, t1, s10
+    ld      t2, (L + 192)(sp)               # 2048 for each API answer
+    slli    t2, t2, 11
+    add     t1, t1, t2
     ld      t2, (Node_blocks + 8)(s1)       # the prune's and the rebuilds' actions: 384 for each block, 160 for each blob, 32 for each checkpoint
     li      t3, 384
     mul     t2, t2, t3
@@ -7783,7 +7834,9 @@ FUNCTION lantern_node_step
     beqz    t1, 55f
     li      t1, DISCV5_ENR_SIZE + DISCV5_ENR_SCRATCH
     add     t0, t0, t1
-55: ld      t1, 0(s5)
+55: ld      t1, (L + 184)(sp)               # and the largest API answer's
+    add     t0, t0, t1
+    ld      t1, 0(s5)
     bltu    t1, t0, 83f
     sd      t1, (L + 8)(sp)
     sub     t1, t1, t3
@@ -7953,12 +8006,12 @@ FUNCTION lantern_node_step
     ld      t0, (L + 80)(sp)
     sd      t0, NodeStepResult_wakeup(s7)
     li      a0, LANTERN_OK
-    LEAVE 160
+    LEAVE 208
 14: ld      t0, (L + 8)(sp)                 # a status before any change
     sd      t0, 0(s5)
-    LEAVE 160
+    LEAVE 208
 7:  li      a0, LANTERN_INVALID_EVENT
-    LEAVE 160
+    LEAVE 208
 81: li      t0, NODE_SHORT_ACTIONS          # the buffer with too little room
     j       84f
 85: li      t0, NodeRoom_blocks             # a part of the node: the NodeRoom field of its capacity
@@ -7982,7 +8035,7 @@ FUNCTION lantern_node_step
 83: li      t0, NODE_SHORT_SCRATCH
 84: sd      t0, NodeStepResult_short(s7)
 8:  li      a0, LANTERN_BUFFER_TOO_SMALL
-    LEAVE 160
+    LEAVE 208
 END_FUNCTION lantern_node_step
 
 /*
@@ -8595,7 +8648,7 @@ FUNCTION lantern_node_run
     call    node_run_vote
     LEAVE 192
 974: li     t1, NODE_WORK_BACKFILL
-    bne     t0, t1, 8f
+    bne     t0, t1, 975f
     ld      t0, 16(s5)                      # BACKFILL: its root, then the signature with state_a
     li      t1, 100 + 84
     bltu    t0, t1, 18b
@@ -8605,6 +8658,18 @@ FUNCTION lantern_node_run
     mv      a2, s6
     mv      a3, s7
     call    node_run_backfill
+    LEAVE 192
+975: li     t1, NODE_WORK_API_ENCODE
+    bne     t0, t1, 8f
+    mv      a0, s1                          # API_ENCODE: the response of an answer
+    mv      a1, s2
+    mv      a2, s3
+    mv      a3, s4
+    mv      a4, s5
+    mv      a5, s6
+    mv      a6, s7
+    mv      a7, s8
+    call    node_api_run
     LEAVE 192
 8:  li      a0, LANTERN_INVALID_EVENT
     LEAVE 192

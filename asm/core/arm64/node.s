@@ -3020,6 +3020,9 @@ LOCAL_FUNCTION node_engine_read
     cmp     x0, #LANTERN_HTTP_MORE
     b.eq    6f
     cbnz    x0, 7f
+    ldr     x9, [x19, #Node_flags]          /* a whole response: the engine is online */
+    bic     x9, x9, #NODE_FLAG_EL_OFFLINE
+    str     x9, [x19, #Node_flags]
     ldr     x9, [sp, #L]                    /* HttpResponse status */
     cmp     x9, #200
     b.ne    70f
@@ -3345,7 +3348,10 @@ LOCAL_FUNCTION node_event
     b.ne    47f
     ldr     x9, [x21, #16]
     cbz     x9, 46f
-    bl      node_engine_failed              /* ENGINE 1: the connection failed */
+    ldr     x9, [x19, #Node_flags]          /* ENGINE 1: the connection failed; the engine is offline */
+    orr     x9, x9, #NODE_FLAG_EL_OFFLINE
+    str     x9, [x19, #Node_flags]
+    bl      node_engine_failed
     ldr     x9, [x19, #Node_engine_in]
     add     x9, x19, x9
     str     xzr, [x9, #16]
@@ -3365,9 +3371,23 @@ LOCAL_FUNCTION node_event
     bl      node_engine_read
     LEAVE 48
 47: cmp     x9, #NODE_EV_ENR
-    b.ne    50f
+    b.ne    471f
     mov     x0, x21                         /* ENR: a record discv5 found */
     bl      node_enr
+    LEAVE 48
+471: cmp    x9, #NODE_EV_API
+    b.ne    472f
+    mov     x0, x21                         /* API: the answer to a request */
+    bl      node_api_event
+    LEAVE 48
+472: cmp    x9, #NODE_EV_API_IDENTITY
+    b.ne    50f
+    ADDQ    x0, x19, Node_api_identity      /* API_IDENTITY: the node keeps the texts */
+    ldr     x9, [x21, #(NodeEvent_bytes + 8)]
+    add     x1, x21, #NodeEvent_bytes
+    add     x1, x1, x9
+    mov     x2, #API_IDENTITY_SIZE
+    bl      lantern_copy
     LEAVE 48
 50: ldr     x9, [x21, #NodeAction_work_kind]    /* WORK_DONE */
     ldr     x10, [x21, #NodeEvent_result]
@@ -3738,7 +3758,7 @@ LOCAL_FUNCTION node_event
     LEAVE 48
 85: cmp     x9, #NODE_WORK_NEW_PAYLOAD         /* NEW_PAYLOAD, FORKCHOICE: the request to the execution engine */
     ccmp    x9, #NODE_WORK_FORKCHOICE, #4, ne
-    b.ne    70f
+    b.ne    701f
     cbnz    x10, 87f
     ldr     x25, [x21, #(NodeEvent_chunk + 16)]
     add     x1, x25, #(48 + 7)
@@ -3781,6 +3801,11 @@ LOCAL_FUNCTION node_event
     mov     x2, #0
     bl      node_ids
     str     xzr, [x22, #NodeBlock_data_id]
+    LEAVE 48
+701: cmp    x9, #NODE_WORK_API_ENCODE          /* API_ENCODE: the response to its connection */
+    b.ne    70f
+    mov     x0, x21
+    bl      node_api_done
     LEAVE 48
 70: cmp     x9, #NODE_WORK_ATTESTATION         /* done with an attestation or a slashing: free its bytes */
     ccmp    x9, #NODE_WORK_ATTESTER_SLASHING, #4, ne
@@ -7410,7 +7435,7 @@ END_FUNCTION node_block_entry
  * L+144 the POW_BLOCK events.
  */
 FUNCTION lantern_node_step
-    ENTER 160
+    ENTER 192
     mov     x19, x0
     mov     x20, x1
     stp     x2, x3, [sp, #(L + 16)]
@@ -7429,6 +7454,7 @@ FUNCTION lantern_node_step
     str     xzr, [sp, #(L + 136)]
     str     xzr, [sp, #(L + 144)]
     stp     xzr, xzr, [sp, #(L + 56)]
+    stp     xzr, xzr, [sp, #(L + 176)]       /* API: the largest scratch, and the API events */
     mov     x11, x21
 1:  cmp     x11, x22
     b.hs    5f
@@ -7554,7 +7580,22 @@ FUNCTION lantern_node_step
     cbz     x14, 7f
     mov     x14, #1
     str     x14, [sp, #(L + 136)]
-31: cmp     x13, #NODE_EV_BLOCK
+31: cmp     x13, #NODE_EV_API               /* API, API_IDENTITY: their bytes keep their rules */
+    b.lo    32f
+    stp     x11, x12, [sp, #(L + 160)]
+    mov     x0, x11
+    bl      node_api_check
+    ldp     x11, x12, [sp, #(L + 160)]
+    cbnz    x0, 7f
+    ldr     x13, [x11, #8]
+    ldp     x9, x10, [sp, #(L + 176)]
+    cmp     x1, x9
+    csel    x9, x1, x9, hi
+    cmp     x13, #NODE_EV_API
+    cinc    x10, x10, eq
+    stp     x9, x10, [sp, #(L + 176)]
+    b       4f
+32: cmp     x13, #NODE_EV_BLOCK
     cinc    x27, x27, eq
     cmp     x13, #NODE_EV_POW_BLOCK         /* POW_BLOCK: counted at L+144 */
     b.ne    4f
@@ -7569,6 +7610,9 @@ FUNCTION lantern_node_step
     str     x0, [sp, #(L + 152)]
     mov     x12, #512                       /* room: actions, node parts, scratch */
     madd    x12, x26, x12, x28
+    ldr     x13, [sp, #(L + 184)]           /* 2048 for each API answer */
+    mov     x14, #2048
+    madd    x12, x13, x14, x12
     ldr     x13, [x19, #(Node_blocks + 8)]  /* the prune's and the rebuilds' actions: 384 for each block, 160 for each blob, 32 for each checkpoint */
     mov     x14, #384
     madd    x12, x13, x14, x12
@@ -7726,6 +7770,8 @@ FUNCTION lantern_node_step
     MOVQ    x10, DISCV5_ENR_SIZE + DISCV5_ENR_SCRATCH
     add     x9, x9, x10
 55:
+    ldr     x10, [sp, #(L + 176)]           /* and the largest API answer's */
+    add     x9, x9, x10
     ldr     x10, [x23]
     cmp     x10, x9
     b.lo    83f
@@ -7892,12 +7938,12 @@ FUNCTION lantern_node_step
     ldr     x9, [sp, #(L + 80)]
     stp     x26, x9, [x25]
     mov     x0, #LANTERN_OK
-    LEAVE 160
+    LEAVE 192
 14: ldr     x9, [sp, #(L + 8)]              /* a status before any change */
     str     x9, [x23]
-    LEAVE 160
+    LEAVE 192
 7:  mov     x0, #LANTERN_INVALID_EVENT
-    LEAVE 160
+    LEAVE 192
 81: mov     x9, #NODE_SHORT_ACTIONS         /* the buffer with too little room */
     b       84f
 85: mov     x10, #NodeRoom_blocks           /* a part of the node: the NodeRoom field of its capacity */
@@ -7921,7 +7967,7 @@ FUNCTION lantern_node_step
 83: mov     x9, #NODE_SHORT_SCRATCH
 84: str     x9, [x25, #NodeStepResult_short]
 8:  mov     x0, #LANTERN_BUFFER_TOO_SMALL
-    LEAVE 160
+    LEAVE 192
 END_FUNCTION lantern_node_step
 
 /*
@@ -8530,7 +8576,7 @@ FUNCTION lantern_node_run
     bl      node_run_vote
     LEAVE 192
 974: cmp    x9, #NODE_WORK_BACKFILL
-    b.ne    8f
+    b.ne    975f
     ldr     x9, [x23, #16]                  /* BACKFILL: its root, then the signature with state_a */
     cmp     x9, #(100 + 84)
     b.lo    18b
@@ -8540,6 +8586,18 @@ FUNCTION lantern_node_run
     mov     x2, x24
     mov     x3, x25
     bl      node_run_backfill
+    LEAVE 192
+975: cmp    x9, #NODE_WORK_API_ENCODE
+    b.ne    8f
+    mov     x0, x19                         /* API_ENCODE: the response of an answer */
+    mov     x1, x20
+    mov     x2, x21
+    mov     x3, x22
+    mov     x4, x23
+    mov     x5, x24
+    mov     x6, x25
+    mov     x7, x26
+    bl      node_api_run
     LEAVE 192
 8:  mov     x0, #LANTERN_INVALID_EVENT
     LEAVE 192

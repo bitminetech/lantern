@@ -1512,6 +1512,8 @@ LOCAL_FUNCTION app_work
     je      2f
     cmp     $NODE_WORK_FORKCHOICE, %rcx
     je      2f
+    cmp     $NODE_WORK_API_ENCODE, %rcx
+    je      2f
     cmp     $NODE_WORK_GOSSIP, %rcx         # GOSSIP: the Seen, and the proposer state
     je      3f
     cmp     $NODE_WORK_TARGET_STATE, %rcx   # TARGET_STATE, SLOTS, and IMPORT_BLOCK with store room: state_a
@@ -2436,14 +2438,22 @@ LOCAL_FUNCTION app_actions
     call    app_dv_put
     jmp     8f
 7:  cmp     $NODE_ACT_P2P_LIST, %rax
-    jne     8f
+    jne     71f
     mov     APP_SHELL(%rbx), %rdi           # P2P_LIST: the shell requests of libp2p
     lea     16(%rbp), %rsi
     mov     APP_SHELL_EVENTS(%rbx), %rdx
     CALL_GLOBAL libp2p_shell_perform
+    jmp     8f
+71: cmp     $NODE_ACT_API_SEND, %rax
+    je      72f
+    cmp     $NODE_ACT_API_CLOSE, %rax
+    jne     8f
+72: mov     %rbp, %rdi                      # API_SEND, API_CLOSE: to the Beacon API's connection
+    call    app_api_action
 8:  add     %r13, %rbp
     jmp     1b
-9:  LEAVE 0
+9:  call    app_api_flush                   # the answers go out now
+    LEAVE 0
 END_FUNCTION app_actions
 
 /*
@@ -3686,10 +3696,11 @@ LOCAL_FUNCTION app_discv5
     lea     DISCV5_ACT_RECORD_DATA(%rbp), %rdi
     mov     DISCV5_ACT_RECORD_LEN(%rbp), %rsi
     call    app_line_base64url
-    mov     APP_VIEW(%rbx), %rdi
-    add     $ApiView_enr, %rdi
+    mov     APP_IDENTITY(%rbx), %rdi
+    add     $(48 + ApiIdentity_enr), %rdi
     mov     $512, %esi
     call    app_line_to
+    call    app_identity_put                # the node's identity: the new record
     call    app_line_start                  # record enr:<base64url>
     ADDRESS %rdi, app_m_record
     mov     $app_m_record_len, %esi
@@ -3853,9 +3864,9 @@ LOCAL_FUNCTION app_multiaddr
     ADDRESS %rdi, app_t_p2p
     mov     $5, %esi
     call    app_line_text
-    mov     APP_VIEW(%rbx), %rax
-    lea     (ApiView_peer_id + 8)(%rax), %rdi
-    mov     ApiView_peer_id(%rax), %rsi
+    mov     APP_IDENTITY(%rbx), %rax
+    lea     (48 + ApiIdentity_peer_id + 8)(%rax), %rdi
+    mov     (48 + ApiIdentity_peer_id)(%rax), %rsi
     call    app_line_text
     mov     8(%rsp), %rdi
     mov     $128, %esi
@@ -3864,14 +3875,16 @@ LOCAL_FUNCTION app_multiaddr
 END_FUNCTION app_multiaddr
 
 /*
- * L2: the Beacon API: a shell context that listens on --http-port, its buffers, and the view's
- * fixed values: the peer id, the addresses, the version, and the anchor's header: rax = 0, or 2
- * after a line on the standard error. Locals: L ShellParams or an Address, L+32 a ListenResult
- * or the public key, L+80 the peer id's multihash, L+128 base58's work area.
+ * L2: the Beacon API: a shell context with --http-max-connections slots that listens on
+ * --http-address and --http-port, the slots' buffers, and the identity's texts: the peer id, the
+ * addresses and the version, in a NODE_EV_API_IDENTITY: rax = 0, or 2 after a line on the
+ * standard error. Locals: L ShellParams or an Address, L+32 a ListenResult or the public key,
+ * L+80 the peer id's multihash, L+128 base58's work area.
  */
 LOCAL_FUNCTION app_api_start
     ENTER 208
-    movq    $APP_API_SLOTS_MAX, L(%rsp)
+    mov     (APP_OPTIONS + AppOptions_http_max_connections)(%rbx), %rax
+    mov     %rax, L(%rsp)
     movq    $APP_API_SEND_WINDOW, (L + 8)(%rsp)
     lea     L(%rsp), %rdi
     lea     (L + 32)(%rsp), %rsi
@@ -3896,31 +3909,40 @@ LOCAL_FUNCTION app_api_start
     movq    $24, 8(%rax)
     movq    $0, 16(%rax)
     mov     $APP_API_ACT, %edi
-    MOVQ    %rsi, 24 + APP_API_SLOTS_MAX * (64 + APP_API_OUT_BYTES)
+    mov     $APP_API_ACT_BYTES, %esi
     call    app_alloc
     test    %rax, %rax
     jz      97f
     movq    $24, 8(%rax)
     movq    $0, 16(%rax)
-    mov     $APP_API_OUT, %edi
-    mov     $(24 + APP_API_OUT_BYTES), %esi
+    mov     $APP_API_EVENT, %edi
+    MOVQ    %rsi, 48 + HTTP_REQUEST_FIXED + APP_API_BUFFER + 64
     call    app_alloc
     test    %rax, %rax
     jz      97f
-    mov     $APP_API_REQ, %edi
-    MOVQ    %rsi, APP_API_SLOTS_MAX * (24 + APP_API_REQ_BYTES)
+    mov     (APP_OPTIONS + AppOptions_http_max_connections)(%rbx), %rsi
+    imul    $APP_API_SLOT_BYTES, %rsi, %rsi
+    mov     $APP_API_BUF, %edi
     call    app_alloc
     test    %rax, %rax
     jz      97f
-    mov     $APP_VIEW, %edi
-    mov     $4096, %esi
+    mov     (APP_OPTIONS + AppOptions_http_max_connections)(%rbx), %rsi
+    shl     $5, %rsi                        # APP_API_SLOT bytes each
+    mov     $APP_API_SLOTS, %edi
     call    app_alloc
     test    %rax, %rax
     jz      97f
-    movq    $4, L(%rsp)                     # listen: TCP --http-port on every IPv4 address
+    movq    $0, (%rax)
+    mov     $APP_IDENTITY, %edi
+    mov     $(48 + API_IDENTITY_SIZE), %esi
+    call    app_alloc
+    test    %rax, %rax
+    jz      97f
+    movq    $4, L(%rsp)                     # listen: TCP --http-address, --http-port
     mov     (APP_OPTIONS + AppOptions_http_port)(%rbx), %rax
     mov     %rax, (L + 8)(%rsp)
-    movq    $0, (L + 16)(%rsp)
+    mov     (APP_OPTIONS + AppOptions_http_address)(%rbx), %rax
+    mov     %rax, (L + 16)(%rsp)
     movq    $0, (L + 24)(%rsp)
     mov     APP_API_SHELL(%rbx), %rdi
     lea     L(%rsp), %rsi
@@ -3941,49 +3963,45 @@ LOCAL_FUNCTION app_api_start
     call    lantern_copy
     lea     (L + 80)(%rsp), %rdi
     mov     $39, %esi
-    mov     APP_VIEW(%rbx), %rdx
-    add     $(ApiView_peer_id + 8), %rdx
+    mov     APP_IDENTITY(%rbx), %rdx
+    add     $(48 + ApiIdentity_peer_id + 8), %rdx
     lea     (L + 128)(%rsp), %rcx
     call    app_base58
-    mov     APP_VIEW(%rbx), %rcx
-    mov     %rax, ApiView_peer_id(%rcx)
-    mov     APP_VIEW(%rbx), %rdi            # the version
-    add     $ApiView_version, %rdi
+    mov     APP_IDENTITY(%rbx), %rcx
+    mov     %rax, (48 + ApiIdentity_peer_id)(%rcx)
+    mov     APP_IDENTITY(%rbx), %rdi        # the version
+    add     $(48 + ApiIdentity_version), %rdi
     movq    $app_version_text_len, (%rdi)
     add     $8, %rdi
     ADDRESS %rsi, app_version_text
     mov     $app_version_text_len, %edx
     call    lantern_copy
     ADDRESS %rdi, app_t_tcp                 # the addresses
-    mov     APP_VIEW(%rbx), %rsi
-    add     $ApiView_p2p_address, %rsi
+    mov     APP_IDENTITY(%rbx), %rsi
+    add     $(48 + ApiIdentity_p2p_address), %rsi
     call    app_multiaddr
     ADDRESS %rdi, app_t_udp
-    mov     APP_VIEW(%rbx), %rsi
-    add     $ApiView_discovery_address, %rsi
+    mov     APP_IDENTITY(%rbx), %rsi
+    add     $(48 + ApiIdentity_discovery_address), %rsi
     call    app_multiaddr
-    mov     APP_STATE(%rbx), %rsi           # the anchor's header: its state's latest_block_header, the block's state_root
-    add     $NODE_STATE_HEADER, %rsi
-    lea     APP_ANCHOR_HEADER(%rbx), %rdi
-    mov     $112, %edx
-    call    lantern_copy
-    lea     (APP_ANCHOR_HEADER + 48)(%rbx), %rdi
-    mov     APP_BLOCK(%rbx), %rsi
-    add     $NODE_BLOCK_STATE_ROOT, %rsi
-    mov     $32, %edx
-    call    lantern_copy
-    call    app_line_start                  # Beacon API on TCP port <p>, peer id <id>
+    call    app_identity_put
+    call    app_line_start                  # Beacon API on TCP <address>:<port>, peer id <id>
     ADDRESS %rdi, app_m_api
     mov     $app_m_api_len, %esi
+    call    app_line_text
+    mov     (APP_OPTIONS + AppOptions_http_address)(%rbx), %rdi
+    call    app_line_ip4
+    ADDRESS %rdi, app_t_colon
+    mov     $1, %esi
     call    app_line_text
     mov     (APP_OPTIONS + AppOptions_http_port)(%rbx), %rdi
     call    app_line_u64
     ADDRESS %rdi, app_m_peer_id
     mov     $app_m_peer_id_len, %esi
     call    app_line_text
-    mov     APP_VIEW(%rbx), %rax
-    lea     (ApiView_peer_id + 8)(%rax), %rdi
-    mov     ApiView_peer_id(%rax), %rsi
+    mov     APP_IDENTITY(%rbx), %rax
+    lea     (48 + ApiIdentity_peer_id + 8)(%rax), %rdi
+    mov     (48 + ApiIdentity_peer_id)(%rax), %rsi
     call    app_line_text
     mov     $APP_LOG_INFO, %edi
     call    app_line_end
@@ -4008,204 +4026,240 @@ LOCAL_FUNCTION app_api_start
     LEAVE 208
 END_FUNCTION app_api_start
 
-/*
- * L2: the view's values of the node now: genesis, the head and its header, the head state's
- * checkpoints, the clock's slot, sync, peers and MetaData. rbp the view, r12 the head's NodeBlock,
- * r13 a count or a buffer, r14 the header.
- */
-LOCAL_FUNCTION app_view_fill
-    ENTER 0
-    mov     APP_VIEW(%rbx), %rbp
-    mov     APP_STORE(%rbx), %rax           # genesis
-    mov     Store_genesis_time_ms(%rax), %rax
-    xor     %edx, %edx
-    mov     $1000, %ecx
-    div     %rcx
-    mov     %rax, ApiView_genesis_time(%rbp)
-    lea     ApiView_genesis_validators_root(%rbp), %rdi
-    lea     (APP_ANCHOR + NodeAnchor_genesis_validators_root)(%rbx), %rsi
-    mov     $32, %edx
-    call    lantern_copy
-    mov     (APP_CONFIG + CONFIG_GENESIS_FORK_VERSION)(%rbx), %rax
-    mov     %rax, ApiView_genesis_fork_version(%rbp)
-    mov     APP_NODE(%rbx), %rax            # the head's NodeBlock
-    mov     Node_blocks(%rax), %r12
-    add     %rax, %r12
-    mov     (Node_blocks + 8)(%rax), %r13
-1:  test    %r13, %r13
-    jz      90f
-    mov     %r12, %rdi
-    mov     APP_NODE(%rbx), %rsi
-    add     $Node_head_root, %rsi
-    call    app_same32
-    test    %rax, %rax
-    jnz     2f
-    add     $NodeBlock__mem, %r12
-    dec     %r13
-    jmp     1b
-2:  mov     NodeBlock_slot(%r12), %rax
-    mov     %rax, ApiView_head_slot(%rbp)
-    lea     ApiView_head_root(%rbp), %rdi
-    mov     %r12, %rsi
-    mov     $32, %edx
-    call    lantern_copy
-    lea     APP_ANCHOR_HEADER(%rbx), %r14   # the header: the anchor's, or the block's
-    mov     NodeBlock_data_id(%r12), %rdi
-    test    %rdi, %rdi
-    jz      31f
-    call    app_buf_find
-    test    %rax, %rax
-    jz      3f
-    jmp     32f
-31: mov     APP_NODE(%rbx), %rdi            # no bytes: the block's record in the Db, when it holds one
-    testq   $NODE_FLAG_DB, Node_flags(%rdi)
-    jz      3f
-    add     Node_db(%rdi), %rdi
-    mov     %r12, %rsi
-    lea     APP_HEADER(%rbx), %rdx
-    CALL_GLOBAL lantern_db_find_root
-    mov     APP_HEADER(%rbx), %rdx
-    mov     APP_NODE(%rbx), %rax
-    add     Node_db(%rax), %rax
-    cmp     Db_end_slot(%rax), %rdx
-    jae     3f
-    mov     %rdx, %rcx
-    sub     Db_first_slot(%rax), %rcx
-    jb      3f
-    imul    $DbSlot__mem, %rcx, %rcx
-    add     Db_slots(%rax), %rcx
-    mov     DbSlot_block(%rax,%rcx), %rdi
-    test    %rdi, %rdi
-    jz      3f
-    dec     %rdi
-    shr     $DB_SEGMENT_SHIFT, %rdx
-    shl     $48, %rdx
-    or      %rdx, %rdi
-    bts     $63, %rdi
-    call    app_work_data
-    cmp     $-1, %rax
-    je      3f
-32: mov     8(%rax), %r13
-    mov     NodeBlock_slot(%r12), %rdi
-    lea     APP_CONFIG(%rbx), %rsi
-    call    app_fork
-    mov     %rax, %r10
-    mov     %r13, %rdi
-    SCRATCH %rsi
-    lea     APP_HEADER(%rbx), %rdx
-    FORK_CALL node_block_header
-    test    %rax, %rax
-    jnz     3f
-    lea     APP_HEADER(%rbx), %r14
-3:  mov     8(%r14), %rax
-    mov     %rax, ApiView_proposer_index(%rbp)
-    lea     ApiView_parent_root(%rbp), %rdi
-    lea     16(%r14), %rsi
-    mov     $(32 * 3), %edx
-    call    lantern_copy
-    lea     ApiView_signature(%rbp), %rdi
-    lea     112(%r14), %rsi
-    mov     $96, %edx
-    call    lantern_copy
-    mov     NodeBlock_state_id(%r12), %rdi  # the head state's checkpoints
-    call    app_buf_find
-    test    %rax, %rax
-    jz      4f
-    mov     8(%rax), %r13
-    mov     NODE_STATE_SLOT(%r13), %rdi
-    lea     APP_CONFIG(%rbx), %rsi
-    call    app_fork
-    mov     %rax, %r10
-    mov     %r13, %rdi
-    lea     ApiView_previous_justified(%rbp), %rsi
-    FORK_CALL node_state_checkpoints
-4:  xor     %eax, %eax
-    cmpq    $PAYLOAD_STATUS_NOT_VALIDATED, NodeBlock_payload_status(%r12)
-    sete    %al
-    mov     %rax, ApiView_is_optimistic(%rbp)
-90: mov     APP_STORE(%rbx), %rdi           # the clock, sync, peers, MetaData
-    call    app_store_slot
-    mov     %rax, ApiView_current_slot(%rbp)
-    mov     %rax, %rdi
-    lea     APP_CONFIG(%rbx), %rsi
-    call    app_fork
-    mov     %rax, ApiView_fork(%rbp)
-    mov     APP_NODE(%rbx), %rcx
-    mov     Node_flags(%rcx), %rax
-    shr     $3, %rax                        # NODE_FLAG_SYNCING
-    and     $1, %eax
-    mov     %rax, ApiView_is_syncing(%rbp)
-    movq    $0, ApiView_el_offline(%rbp)
-    mov     (Node_peers + 8)(%rcx), %rax
-    mov     %rax, ApiView_peers(%rbp)
-    mov     Node_metadata_seq(%rcx), %rax
-    mov     %rax, ApiView_seq_number(%rbp)
-    movq    $0, ApiView_attnets(%rbp)
-    movq    $0, ApiView_syncnets(%rbp)
-    mov     (APP_CONFIG + CONFIG_CUSTODY_REQUIREMENT)(%rbx), %rax
-    mov     %rax, ApiView_custody_group_count(%rbp)
-    LEAVE 0
-END_FUNCTION app_view_fill
-
-/* L0: rax = 1 when the 32 bytes at rdi are those at rsi, else 0. */
-LOCAL_FUNCTION app_same32
-    UNWIND_END_PROLOGUE
-    mov     (%rdi), %rax
-    cmp     (%rsi), %rax
-    jne     1f
-    mov     8(%rdi), %rax
-    cmp     8(%rsi), %rax
-    jne     1f
-    mov     16(%rdi), %rax
-    cmp     16(%rsi), %rax
-    jne     1f
-    mov     24(%rdi), %rax
-    cmp     24(%rsi), %rax
-    jne     1f
-    mov     $1, %eax
-    ret
-1:  xor     %eax, %eax
-    ret
-END_FUNCTION app_same32
-
-/* L1: an action of rsi bytes, the rsi bytes at rdi, joins the Beacon API's shell actions, when it fits. */
-LOCAL_FUNCTION app_api_act
+/* L1: the identity's texts go to the next step in a NODE_EV_API_IDENTITY. */
+LOCAL_FUNCTION app_identity_put
     FRAME 0
-    mov     APP_API_ACT(%rbx), %rax
-    mov     16(%rax), %rcx
-    lea     24(%rcx,%rsi), %rdx
+    mov     APP_IDENTITY(%rbx), %rdi
+    movq    $(48 + API_IDENTITY_SIZE), (%rdi)
+    movq    $NODE_EV_API_IDENTITY, 8(%rdi)
+    movq    $0, 16(%rdi)
+    movq    $(24 + API_IDENTITY_SIZE), 24(%rdi)
+    movq    $24, 32(%rdi)
+    movq    $API_IDENTITY_SIZE, 40(%rdi)
+    mov     $(48 + API_IDENTITY_SIZE), %esi
+    call    app_event_put
+    UNFRAME 0
+END_FUNCTION app_identity_put
+
+/* L0: rax = the slot of the connection rdi, while it is open at that generation, else 0. Uses rcx, rdx. */
+LOCAL_FUNCTION app_api_slot
+    UNWIND_END_PROLOGUE
+    mov     %edi, %ecx
+    cmp     (APP_OPTIONS + AppOptions_http_max_connections)(%rbx), %rcx
+    jae     9f
+    shl     $5, %rcx
+    mov     APP_API_SLOTS(%rbx), %rax
+    add     %rcx, %rax
+    cmpq    $0, 8(%rax)
+    je      9f
+    mov     %rdi, %rdx
+    shr     $32, %rdx
     cmp     (%rax), %rdx
-    ja      9f
-    sub     $24, %rdx
+    jne     9f
+    ret
+9:  xor     %eax, %eax
+    ret
+END_FUNCTION app_api_slot
+
+/* L1: the Beacon API's shell actions go out; their results come at the next poll. */
+LOCAL_FUNCTION app_api_flush
+    FRAME 0
+    mov     APP_API_ACT(%rbx), %rsi
+    test    %rsi, %rsi
+    jz      9f
+    cmpq    $0, 16(%rsi)
+    je      9f
+    mov     APP_API_SHELL(%rbx), %rdi
+    mov     APP_API_EVENTS(%rbx), %rdx
+    CALL_GLOBAL libp2p_shell_perform
+    mov     APP_API_ACT(%rbx), %rax
+    movq    $0, 16(%rax)
+9:  UNFRAME 0
+END_FUNCTION app_api_flush
+
+/* L1: rax = room for a shell action of rdi bytes at the end of the Beacon API's actions, its bytes counted, after a flush when they are full; 0 when it never fits. Locals: rdi. */
+LOCAL_FUNCTION app_api_room
+    FRAME 16
+    mov     %rdi, (%rsp)
+    mov     APP_API_ACT(%rbx), %rax
+    mov     (%rax), %rcx
+    sub     $24, %rcx
+    cmp     %rcx, %rdi
+    ja      8f
+    mov     16(%rax), %rdx
+    add     %rdi, %rdx
+    cmp     %rcx, %rdx
+    jbe     1f
+    call    app_api_flush
+1:  mov     APP_API_ACT(%rbx), %rax
+    mov     16(%rax), %rcx
+    mov     (%rsp), %rdx
+    add     %rcx, %rdx
     mov     %rdx, 16(%rax)
     lea     24(%rax,%rcx), %rax
-    mov     %rsi, %rdx
-    mov     %rdi, %rsi
-    mov     %rax, %rdi
-    call    lantern_copy
-9:  UNFRAME 0
-END_FUNCTION app_api_act
+    UNFRAME 16
+8:  xor     %eax, %eax
+    UNFRAME 16
+END_FUNCTION app_api_room
 
-/* L1: a CLOSE of the connection rdi joins the shell actions. Locals: the action. */
+/* L1: a CLOSE of the connection rdi, while it is open; its slot waits for the shell's CLOSED. Locals: rdi. */
 LOCAL_FUNCTION app_api_close
-    FRAME 32
-    movq    $LIBP2P_ACT_CLOSE_SIZE, (%rsp)
-    movq    $LIBP2P_ACTION_CLOSE, 8(%rsp)
-    mov     %rdi, LIBP2P_ACT_CONN(%rsp)
-    mov     %rsp, %rdi
-    mov     $LIBP2P_ACT_CLOSE_SIZE, %esi
-    call    app_api_act
-    UNFRAME 32
+    FRAME 16
+    mov     %rdi, (%rsp)
+    call    app_api_slot
+    test    %rax, %rax
+    jz      9f
+    movq    $APP_API_CLOSING, 8(%rax)
+    mov     $LIBP2P_ACT_CLOSE_SIZE, %edi
+    call    app_api_room
+    test    %rax, %rax
+    jz      9f
+    movq    $LIBP2P_ACT_CLOSE_SIZE, (%rax)
+    movq    $LIBP2P_ACTION_CLOSE, 8(%rax)
+    mov     (%rsp), %rcx
+    mov     %rcx, LIBP2P_ACT_CONN(%rax)
+9:  UNFRAME 16
 END_FUNCTION app_api_close
 
 /*
+ * L2: the slot rdi, when it waits for no answer: lantern_http_request of its bytes, then a
+ * NODE_EV_API of the request, or of a fault's status (413 for a full buffer with no whole
+ * request); the request's bytes leave the buffer, and the slot waits for the answer. r12 the slot,
+ * r13 its ByteList, r14 its bytes, r15 its index, S7 the event, S8 the HttpRequest's room.
+ * Locals: L HttpLimits.
+ */
+LOCAL_FUNCTION app_api_read
+    ENTER 16
+    mov     %rdi, %r15
+    mov     %rdi, %r12
+    shl     $5, %r12
+    add     APP_API_SLOTS(%rbx), %r12
+    cmpq    $APP_API_READING, 8(%r12)
+    jne     99f
+    imul    $APP_API_SLOT_BYTES, %r15, %r13
+    add     APP_API_BUF(%rbx), %r13
+    mov     16(%r12), %r14
+    test    %r14, %r14
+    jz      99f
+    movq    $APP_API_SLOT_BYTES, (%r13)
+    movq    $24, 8(%r13)
+    mov     %r14, 16(%r13)
+    movq    $APP_API_HEAD_MAX, L(%rsp)
+    movq    $APP_API_BODY_MAX, (L + 8)(%rsp)
+    mov     APP_API_EVENT(%rbx), %rax
+    mov     %rax, S7(%rsp)
+    lea     (HTTP_REQUEST_FIXED + 48 + 7)(%r14), %rcx
+    and     $-8, %rcx
+    mov     %rcx, S8(%rsp)
+    mov     %rcx, 48(%rax)
+    mov     %r13, %rdi
+    lea     L(%rsp), %rsi
+    lea     48(%rax), %rdx
+    CALL_GLOBAL lantern_http_request
+    test    %rax, %rax
+    jz      4f
+    cmp     $LANTERN_INVALID_HTTP, %rax
+    je      3f
+    mov     $400, %ecx                      # no room: a request too large to read
+    cmp     $LANTERN_HTTP_MORE, %rax
+    jne     2f
+    cmp     $APP_API_BUFFER, %r14           # more to come, unless the buffer is full
+    jb      99f
+    mov     $413, %ecx
+2:  mov     S7(%rsp), %rax
+    mov     %rcx, (48 + HttpRequest_status)(%rax)
+3:  movq    $HTTP_REQUEST_FIXED, S8(%rsp)   # a fault: the fixed part, with its status; the bytes go
+    mov     S7(%rsp), %rax
+    movq    $HTTP_REQUEST_FIXED, 48(%rax)
+    movq    $0, 16(%r12)
+    jmp     5f
+4:  mov     S7(%rsp), %rax                  # the request's bytes leave the buffer
+    mov     (48 + HttpRequest_used)(%rax), %rcx
+    mov     %r14, %rdx
+    sub     %rcx, %rdx
+    mov     %rdx, 16(%r12)
+    lea     24(%r13), %rdi
+    lea     24(%r13,%rcx), %rsi
+    call    lantern_copy
+5:  mov     S7(%rsp), %rdi                  # the event: size, kind, connection, a ByteList of the HttpRequest
+    mov     S8(%rsp), %rcx
+    lea     48(%rcx), %rax
+    mov     %rax, (%rdi)
+    movq    $NODE_EV_API, 8(%rdi)
+    mov     (%r12), %rax
+    shl     $32, %rax
+    or      %r15, %rax
+    mov     %rax, 16(%rdi)
+    lea     24(%rcx), %rax
+    mov     %rax, 24(%rdi)
+    movq    $24, 32(%rdi)
+    mov     %rcx, 40(%rdi)
+    lea     48(%rcx), %rsi
+    call    app_event_put
+    movq    $APP_API_ANSWERING, 8(%r12)
+99: LEAVE 16
+END_FUNCTION app_api_read
+
+/*
+ * L2: the NODE_ACT_API_SEND or NODE_ACT_API_CLOSE rdi of the node: a SEND of its bytes, or the
+ * close, on its connection; after the bytes with last 1, the slot's next request. An action of a
+ * connection no longer open goes. rbp the action, r12 the slot, r13 the shell action.
+ */
+LOCAL_FUNCTION app_api_action
+    ENTER 0
+    mov     %rdi, %rbp
+    mov     16(%rbp), %rdi
+    call    app_api_slot
+    test    %rax, %rax
+    jz      99f
+    mov     %rax, %r12
+    cmpq    $APP_API_CLOSING, 8(%r12)
+    je      99f
+    cmpq    $NODE_ACT_API_CLOSE, 8(%rbp)
+    jne     1f
+    mov     16(%rbp), %rdi
+    call    app_api_close
+    jmp     99f
+1:  mov     48(%rbp), %rdi                  # SEND: size, kind, connection, count, the bytes
+    add     $(LIBP2P_ACT_SEND_DATA + 7), %rdi
+    and     $-8, %rdi
+    call    app_api_room
+    test    %rax, %rax
+    jz      98f
+    mov     %rax, %r13
+    mov     48(%rbp), %rcx
+    lea     (LIBP2P_ACT_SEND_DATA + 7)(%rcx), %rax
+    and     $-8, %rax
+    mov     %rax, (%r13)
+    movq    $LIBP2P_ACTION_SEND, 8(%r13)
+    mov     16(%rbp), %rax
+    mov     %rax, LIBP2P_ACT_CONN(%r13)
+    mov     %rcx, (LIBP2P_ACT_CONN + 8)(%r13)
+    lea     LIBP2P_ACT_SEND_DATA(%r13), %rdi
+    lea     56(%rbp), %rsi
+    mov     %rcx, %rdx
+    call    lantern_copy
+    cmpq    $0, 24(%rbp)                    # last: the slot reads its next request
+    je      99f
+    movq    $APP_API_READING, 8(%r12)
+    mov     (APP_TICK + LIBP2P_TICK_NOW)(%rbx), %rax
+    mov     %rax, 24(%r12)
+    mov     16(%rbp), %edi
+    call    app_api_read
+    jmp     99f
+98: mov     16(%rbp), %rdi                  # bytes that never fit: the connection closes
+    call    app_api_close
+99: LEAVE 0
+END_FUNCTION app_api_action
+
+/*
  * L2: the Beacon API's sockets, without waiting: ACCEPTED takes a free slot (ADOPT) or a REFUSE,
- * RECEIVED joins its slot's request, then a complete request gets its answer (SEND, CLOSE),
- * CLOSED frees the slot; then the shell actions go out. rbp the next event, r12 the end, r13 a
- * slot's entry, r14 its request ByteList, r15 the connection. Locals: L the wait, L+8 an action.
+ * RECEIVED joins its slot's buffer and the slot reads it, CLOSED frees the slot; a slot that waits
+ * for no answer with no bytes for APP_API_IDLE_MS closes; then the shell actions go out. rbp the
+ * next event, r12 the end, r13 a slot, r14 an index, r15 the connection. Locals: L the wait.
  */
 LOCAL_FUNCTION app_api_poll
-    ENTER 64
+    ENTER 16
     movq    $0, L(%rsp)
     mov     APP_API_SHELL(%rbx), %rdi
     lea     L(%rsp), %rsi
@@ -4221,123 +4275,108 @@ LOCAL_FUNCTION app_api_poll
     mov     8(%rbp), %rax
     cmp     $LIBP2P_EVENT_ACCEPTED, %rax
     jne     3f
-    lea     APP_API_SLOTS(%rbx), %r13       # ACCEPTED: a free slot, or REFUSE
-    xor     %ecx, %ecx
-2:  cmp     $APP_API_SLOTS_MAX, %rcx
+    mov     APP_API_SLOTS(%rbx), %r13       # ACCEPTED: a free slot, or REFUSE
+    xor     %r14d, %r14d
+2:  cmp     (APP_OPTIONS + AppOptions_http_max_connections)(%rbx), %r14
     jae     21f
     cmpq    $0, 8(%r13)
     je      22f
-    add     $16, %r13
-    inc     %rcx
+    add     $APP_API_SLOT, %r13
+    inc     %r14
     jmp     2b
-21: movq    $LIBP2P_ACT_REFUSE_SIZE, (L + 8)(%rsp)
-    movq    $LIBP2P_ACTION_REFUSE, (L + 16)(%rsp)
-    mov     LIBP2P_EV_TOKEN(%rbp), %rax
-    mov     %rax, (L + 8 + LIBP2P_ACT_TOKEN)(%rsp)
-    lea     (L + 8)(%rsp), %rdi
-    mov     $LIBP2P_ACT_REFUSE_SIZE, %esi
-    call    app_api_act
+21: mov     $LIBP2P_ACT_REFUSE_SIZE, %edi
+    call    app_api_room
+    test    %rax, %rax
+    jz      79f
+    movq    $LIBP2P_ACT_REFUSE_SIZE, (%rax)
+    movq    $LIBP2P_ACTION_REFUSE, 8(%rax)
+    mov     LIBP2P_EV_TOKEN(%rbp), %rcx
+    mov     %rcx, LIBP2P_ACT_TOKEN(%rax)
     jmp     79f
-22: mov     (%r13), %rax                    # a new generation, its request empty
+22: mov     (%r13), %rax                    # a new generation, reading, no bytes, the time now
     inc     %rax
     mov     %rax, (%r13)
-    movq    $1, 8(%r13)
+    movq    $APP_API_READING, 8(%r13)
+    movq    $0, 16(%r13)
+    mov     (APP_TICK + LIBP2P_TICK_NOW)(%rbx), %rcx
+    mov     %rcx, 24(%r13)
     mov     %rax, %r15
     shl     $32, %r15
-    or      %rcx, %r15
-    imul    $(24 + APP_API_REQ_BYTES), %rcx, %r14
-    add     APP_API_REQ(%rbx), %r14
-    movq    $(24 + APP_API_REQ_BYTES), (%r14)
-    movq    $24, 8(%r14)
-    movq    $0, 16(%r14)
-    movq    $LIBP2P_ACT_ADOPT_SIZE, (L + 8)(%rsp)
-    movq    $LIBP2P_ACTION_ADOPT, (L + 16)(%rsp)
-    mov     LIBP2P_EV_TOKEN(%rbp), %rax
-    mov     %rax, (L + 8 + LIBP2P_ACT_TOKEN)(%rsp)
-    mov     %r15, (L + 8 + LIBP2P_ACT_TOKEN + 8)(%rsp)
-    lea     (L + 8)(%rsp), %rdi
-    mov     $LIBP2P_ACT_ADOPT_SIZE, %esi
-    call    app_api_act
+    or      %r14, %r15
+    mov     $LIBP2P_ACT_ADOPT_SIZE, %edi
+    call    app_api_room
+    test    %rax, %rax
+    jz      79f
+    movq    $LIBP2P_ACT_ADOPT_SIZE, (%rax)
+    movq    $LIBP2P_ACTION_ADOPT, 8(%rax)
+    mov     LIBP2P_EV_TOKEN(%rbp), %rcx
+    mov     %rcx, LIBP2P_ACT_TOKEN(%rax)
+    mov     %r15, (LIBP2P_ACT_TOKEN + 8)(%rax)
     jmp     79f
 3:  cmp     $LIBP2P_EVENT_RECEIVED, %rax
     je      31f
     cmp     $LIBP2P_EVENT_CLOSED, %rax
     jne     79f
 31: mov     LIBP2P_EV_CONN(%rbp), %r15      # the slot of the connection, at its generation
-    mov     %r15d, %ecx
-    cmp     $APP_API_SLOTS_MAX, %rcx
-    jae     79f
-    mov     %rcx, %r13
-    shl     $4, %r13
-    lea     APP_API_SLOTS(%rbx,%r13), %r13
-    mov     %r15, %rdx
-    shr     $32, %rdx
-    cmp     (%r13), %rdx
-    jne     79f
-    cmp     $LIBP2P_EVENT_CLOSED, %rax
+    mov     %r15, %rdi
+    call    app_api_slot
+    test    %rax, %rax
+    jz      79f
+    mov     %rax, %r13
+    cmpq    $LIBP2P_EVENT_CLOSED, 8(%rbp)
     jne     4f
     movq    $0, 8(%r13)                     # CLOSED: the slot is free
+    movq    $0, 16(%r13)
     jmp     79f
-4:  cmpq    $1, 8(%r13)                     # RECEIVED, while reading: the bytes join the request
-    jne     79f
-    imul    $(24 + APP_API_REQ_BYTES), %rcx, %r14
-    add     APP_API_REQ(%rbx), %r14
-    mov     16(%r14), %rcx
+4:  cmpq    $APP_API_CLOSING, 8(%r13)       # RECEIVED, unless closing: the bytes join the buffer
+    je      79f
+    mov     (APP_TICK + LIBP2P_TICK_NOW)(%rbx), %rax
+    mov     %rax, 24(%r13)
+    mov     %r15d, %r14d
+    mov     16(%r13), %rcx
     mov     LIBP2P_EV_COUNT(%rbp), %rdx
     lea     (%rcx,%rdx), %rax
-    cmp     $APP_API_REQ_BYTES, %rax
-    ja      6f
-    mov     %rax, 16(%r14)
-    lea     24(%r14,%rcx), %rdi
+    cmp     $APP_API_BUFFER, %rax
+    jbe     5f
+    cmpq    $APP_API_READING, 8(%r13)       # no room: while reading, what fits (then 413); else the connection closes
+    jne     6f
+    mov     $APP_API_BUFFER, %edx
+    sub     %rcx, %rdx
+    mov     $APP_API_BUFFER, %eax
+5:  mov     %rax, 16(%r13)
+    imul    $APP_API_SLOT_BYTES, %r14, %rdi
+    add     APP_API_BUF(%rbx), %rdi
+    lea     24(%rdi,%rcx), %rdi
     lea     LIBP2P_EV_DATA(%rbp), %rsi
     call    lantern_copy
-    call    app_view_fill                   # the answer, once the request's head is complete
-    mov     APP_API_OUT(%rbx), %rax
-    movq    $(24 + APP_API_OUT_BYTES), (%rax)
     mov     %r14, %rdi
-    mov     APP_VIEW(%rbx), %rsi
-    mov     APP_API_OUT(%rbx), %rdx
-    CALL_GLOBAL lantern_api_answer
-    cmp     $LANTERN_HTTP_MORE, %rax
-    je      79f
-    test    %rax, %rax
-    jnz     6f
-    mov     APP_API_OUT(%rbx), %rsi         # SEND the response: size, kind, connection, count, the bytes
-    mov     16(%rsi), %rcx
-    lea     (LIBP2P_ACT_SEND_DATA + 7)(%rcx), %r8
-    and     $-8, %r8
-    mov     APP_API_ACT(%rbx), %r9
-    mov     16(%r9), %rdx
-    lea     24(%rdx,%r8), %rax
-    cmp     (%r9), %rax
-    ja      6f
-    sub     $24, %rax
-    mov     %rax, 16(%r9)
-    lea     24(%r9,%rdx), %rdi
-    mov     %r8, (%rdi)
-    movq    $LIBP2P_ACTION_SEND, 8(%rdi)
-    mov     %r15, LIBP2P_ACT_CONN(%rdi)
-    mov     %rcx, (LIBP2P_ACT_CONN + 8)(%rdi)
-    add     $LIBP2P_ACT_SEND_DATA, %rdi
-    add     $24, %rsi
-    mov     %rcx, %rdx
-    call    lantern_copy
-6:  movq    $2, 8(%r13)                     # then CLOSE
-    mov     %r15, %rdi
+    call    app_api_read
+    jmp     79f
+6:  mov     %r15, %rdi
     call    app_api_close
 79: add     (%rbp), %rbp
     jmp     1b
-80: mov     APP_API_EVENTS(%rbx), %rax      # the actions go out; their results come at the next poll
+80: mov     APP_API_EVENTS(%rbx), %rax      # the idle connections close
     movq    $0, 16(%rax)
-    mov     APP_API_ACT(%rbx), %rsi
-    cmpq    $0, 16(%rsi)
-    je      9f
-    mov     APP_API_SHELL(%rbx), %rdi
-    mov     APP_API_EVENTS(%rbx), %rdx
-    CALL_GLOBAL libp2p_shell_perform
-    mov     APP_API_ACT(%rbx), %rax
-    movq    $0, 16(%rax)
-9:  LEAVE 64
+    mov     APP_API_SLOTS(%rbx), %r13
+    xor     %r14d, %r14d
+81: cmp     (APP_OPTIONS + AppOptions_http_max_connections)(%rbx), %r14
+    jae     85f
+    cmpq    $APP_API_READING, 8(%r13)
+    jne     84f
+    mov     24(%r13), %rax
+    add     $APP_API_IDLE_MS, %rax
+    cmp     (APP_TICK + LIBP2P_TICK_NOW)(%rbx), %rax
+    ja      84f
+    mov     (%r13), %rdi
+    shl     $32, %rdi
+    or      %r14, %rdi
+    call    app_api_close
+84: add     $APP_API_SLOT, %r13
+    inc     %r14
+    jmp     81b
+85: call    app_api_flush
+    LEAVE 16
 END_FUNCTION app_api_poll
 
 /* L2: each event of the shell becomes a NODE_EV_P2P event of the next step, but those of the engine's connection. rbp the next event, r12 the end. Locals: L the header. */

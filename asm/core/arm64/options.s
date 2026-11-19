@@ -102,6 +102,10 @@ FUNCTION lantern_app_options
     str     x9, [x20, #AppOptions_target_peers]
     mov     x9, #APP_DEFAULT_LOG_LEVEL
     str     x9, [x20, #AppOptions_log_level]
+    MOVQ    x9, APP_DEFAULT_HTTP_ADDRESS
+    str     x9, [x20, #AppOptions_http_address]
+    mov     x9, #APP_DEFAULT_HTTP_CONNECTIONS
+    str     x9, [x20, #AppOptions_http_max_connections]
     ldr     x22, [x19, #(ArgList_args + 8)]
     ldr     x9, [x19, #ArgList_args]
     add     x24, x19, x9
@@ -193,6 +197,9 @@ FUNCTION lantern_app_options
     cmp     x9, #APP_OPTION_PORT
     b.eq    22f
     mov     x10, #APP_MAX_TARGET_PEERS
+    cmp     x9, #APP_OPTION_CONNECTIONS
+    b.ne    22f
+    mov     x10, #APP_MAX_HTTP_CONNECTIONS
 22: cmp     x1, x10
     b.hi    90f
     b       23f

@@ -4,14 +4,13 @@
 
 ### Functions
 
-- [`lantern_api_answer`](#function-lantern_api_answer): the HTTP response to a Beacon API request.
 - [`lantern_api_route`](#function-lantern_api_route): finds the operation of a request and reads its parameters.
 - [`lantern_http_request`](#function-lantern_http_request): reads one HTTP/1.1 request, head and body, from a connection's bytes.
 
 ### Types
 
+- [`ApiIdentity`](#type-apiidentity): the texts of the node's identity that the shell knows.
 - [`ApiRoute`](#type-apiroute): the operation of a request and its parameters.
-- [`ApiView`](#type-apiview): the values of the node that the answers show.
 - [`HttpLimits`](#type-httplimits): the largest request head and body a connection takes.
 - [`HttpRequest`](#type-httprequest): one request, read.
 - [`ValidatorRef`](#type-validatorref): a validator by index or by public key.
@@ -19,15 +18,50 @@
 ## Spec
 
 - Document: [beacon-APIs v4.0.0](https://github.com/ethereum/beacon-APIs/tree/v4.0.0).
-- Section: the endpoints below, of `apis/node/` and `apis/beacon/`, with the JSON of `types/`: numbers as decimal strings, byte strings as `0x` and lower case hex.
-- The endpoints are those that ethereum-package and Assertoor read: `ethereum-package` waits for `/eth/v1/node/health` to give 200 or 206, and reads `data.enr`, `data.p2p_addresses[0]` and `data.peer_id` of `/eth/v1/node/identity`.
-- HTTP/1.1: RFC 9112. Each response closes its connection.
+- Section: the operations of `beacon-node-oapi.yaml` and `apis/`, with the JSON of `types/`: numbers as decimal strings, byte strings as `0x` and lower case hex; an error body is an `ErrorMessage` of `types/http.yaml`.
+- Responses: [RFC 9112](https://www.rfc-editor.org/rfc/rfc9112) section 4 (status line) and section 9.3 (persistence: an HTTP/1.1 connection stays open unless `close`; an HTTP/1.0 connection closes unless `keep-alive`); [RFC 9110](https://www.rfc-editor.org/rfc/rfc9110) section 8.6 (`Content-Length`), section 10.2.1 (`Allow`) and section 15 (status codes and reason phrases).
 - Requests: [RFC 9112](https://www.rfc-editor.org/rfc/rfc9112) sections 2 to 7 (message format, request line, fields, body length, chunked coding) and [RFC 9110](https://www.rfc-editor.org/rfc/rfc9110) section 5 (field syntax); status 431 of [RFC 6585](https://www.rfc-editor.org/rfc/rfc6585) section 5.
 - Routes: the 69 paths and 76 operations of `beacon-node-oapi.yaml` and `apis/` at beacon-APIs v4.0.0 (commit 88fc940), with their parameters of `params/index.yaml` and `apis/`; percent-encoding of [RFC 3986](https://www.rfc-editor.org/rfc/rfc3986) section 2.1; `Accept` of RFC 9110 section 12.5.1; `Content-Type` of RFC 9110 section 8.3.
 
+## Common rules
+
+The answers of the node (node.md, `NODE_EV_API`) follow these rules.
+
+- The response:
+  - The status line: `HTTP/1.1`, a space, the code in decimal, a space, its reason phrase, CRLF.
+  - `Content-Type: application/json` CRLF, when it has a body.
+  - `Content-Length: ` and the body's bytes in decimal, CRLF; `0` with no body.
+  - With 405: `Allow: ` and the methods of `allow`, `GET`, `POST` or `GET, POST`, CRLF.
+  - `Connection: close` CRLF when the connection closes after it; `Connection: keep-alive` CRLF when an HTTP/1.0 request keeps it open.
+  - CRLF, then the body.
+- The connection closes after the response when the request has `close`, or when lantern_http_request found it faulty.
+- Reason phrases: 200 `OK`, 206 `Partial Content`, 400 `Bad Request`, 404 `Not Found`, 405 `Method Not Allowed`, 406 `Not Acceptable`, 413 `Content Too Large`, 414 `URI Too Long`, 415 `Unsupported Media Type`, 431 `Request Header Fields Too Large`, 500 `Internal Server Error`, 501 `Not Implemented`, 505 `HTTP Version Not Supported`. The code of getHealth's `syncing_status` has none: the line ends with the space after the code.
+- An error is a status of 400 or more. Its body is `{"code":<code>,"message":"<message>"}`, with the code in decimal and the message of its status: 400 `BAD_REQUEST`, 404 `NOT_FOUND`, 405 `METHOD_NOT_ALLOWED`, 406 `NOT_ACCEPTABLE`, 413 `CONTENT_TOO_LARGE`, 414 `URI_TOO_LONG`, 415 `UNSUPPORTED_MEDIA_TYPE`, 431 `REQUEST_HEADER_FIELDS_TOO_LARGE`, 500 `INTERNAL_SERVER_ERROR`, 501 `NOT_IMPLEMENTED`, 505 `HTTP_VERSION_NOT_SUPPORTED`.
+- JSON has no white space and the fields in the order below. A number is a decimal string, a byte string `0x` and lower case hex, a text its bytes in quotes, a flag `true` or `false`.
+- The values:
+  - `genesis_time`: the store's `genesis_time_ms` / 1000.
+  - `genesis_validators_root`: the node's. `genesis_fork_version`: `GENESIS_FORK_VERSION` of the node's config.
+  - The head: the `NodeBlock` of `head_root`. `head_slot`: its slot. `is_optimistic` and `execution_optimistic`: its `payload_status` is `PAYLOAD_STATUS_NOT_VALIDATED`.
+  - `current_slot`: the store's slot. `is_syncing`: `NODE_FLAG_SYNCING`. `el_offline`: `NODE_FLAG_EL_OFFLINE`.
+  - `connected`: the `NodePeer` entries.
+  - The MetaData: `seq_number` the node's `metadata_seq`; `attnets` the 8 bytes of the node's `attnets` (bit i of byte i / 8 for subnet i); from altair `syncnets` 1 zero byte; from fulu `custody_group_count` `CUSTODY_REQUIREMENT` of the node's config. The fork is that of the store's slot.
+  - The texts: the node's `api_identity`, from the last `NODE_EV_API_IDENTITY`; each is empty before one.
+- getHealth: no body. 200; 206 when `is_syncing`, `is_optimistic` or `el_offline`; and then, with `syncing_status`, that code in place of 206.
+- getNetworkIdentity: `{"data":{"peer_id":…,"enr":…,"p2p_addresses":[…],"discovery_addresses":[…],"metadata":{"seq_number":…,"attnets":…,"syncnets":…,"custody_group_count":…}}}`. Each address list holds its text, or nothing when the text is empty.
+- getNodeVersion: `{"data":{"version":…}}`.
+- getSyncingStatus: `{"data":{"head_slot":…,"sync_distance":…,"is_syncing":…,"is_optimistic":…,"el_offline":…}}`; `sync_distance` is `current_slot` minus `head_slot`, or 0 when it is below.
+- getPeerCount: `{"data":{"disconnected":"0","connecting":"0","connected":…,"disconnecting":"0"}}`.
+- getGenesis: `{"data":{"genesis_time":…,"genesis_validators_root":…,"genesis_fork_version":…}}`.
+- getBlockHeader of the head: `block_id` `head`, or the head's root; another gives 404.
+  - The header: lantern_node_block_header of the head's bytes, or of its record when its bytes went to the `Db`. With neither, the `latest_block_header` of its post-state, with the post-state's hash_tree_root as `state_root` when that is zero, and a zero signature.
+  - `{"execution_optimistic":…,"finalized":false,"data":{"root":…,"canonical":true,"header":{"message":{"slot":…,"proposer_index":…,"parent_root":…,"state_root":…,"body_root":…},"signature":…}}}`.
+- getStateFinalityCheckpoints of `head`: lantern_node_state_checkpoints of the head's post-state; another `state_id` gives 404.
+  - `{"execution_optimistic":…,"finalized":false,"data":{"previous_justified":{"epoch":…,"root":…},"current_justified":{…},"finalized":{…}}}`.
+- Every other operation: 501.
+
 ## Test vectors
 
-- tests/generator/api.py: views, requests, and the response bytes of each, written out by the rules below. File: `<preset>-phase0-api-answer.bin`.
+- The answers: the `api` cases of [node.md](node.md#test-vectors), through lantern_node_step and lantern_node_run.
 - tests/generator/http_request.py: requests and the `HttpRequest` or fault of each, by the rules of lantern_http_request, apart from the assembly. Each case also runs with its bytes cut short at every length (`LANTERN_HTTP_MORE`, or the same fault once the faulty byte is in), and with `out` one byte short. File: `<preset>-phase0-http-request.bin`.
   - Request lines: each method, origin forms with and without a query, both versions, HTTP/2.0 (505), and broken lines.
   - Fields: each read field, names in mixed case, repeated lines joined, white space before a colon, folded lines, no `Host`, two `Host` lines.
@@ -40,61 +74,6 @@
   - Every parameter: each form of its type, and values that break it (400 and `fault`).
   - Query: repeated names, comma lists, empty items, names the operation does not take, percent-encoding (good and broken), 65 ids (414).
   - Headers: `Accept` with q-values, wildcards, parameters and broken items (406); `Content-Type` (415); `Eth-Consensus-Version` of each fork, missing and wrong (400).
-
-## Function `lantern_api_answer`
-
-The HTTP/1.1 response to one request of the Beacon API, from the values of a view.
-
-### Signature
-
-```
-lantern_api_answer(request, view, out) -> status
-```
-
-### Arguments
-
-| Name | Role | Type |
-|---|---|---|
-| `request` | input | ByteList: the bytes of the connection so far |
-| `view` | input | [`ApiView`](#type-apiview) |
-| `out` | output | ByteList, its `size` set by the caller |
-
-### Returns
-
-- `LANTERN_OK`: `out` holds the response.
-- `LANTERN_HTTP_MORE`: `request` has no empty line yet: the end of the request head.
-- `LANTERN_BUFFER_TOO_SMALL`: `out` has room for fewer bytes than the response.
-
-### Function does
-
-- Reads the request line, `METHOD SP target SP HTTP/1.x`, up to the first CR LF, and the end of the head, the first CR LF CR LF. Reads no header and no body.
-- Splits the target at its first `?`: the path, then the query.
-- Gives:
-  - 400, `BAD_REQUEST`, for a request line not of that form.
-  - 405, `METHOD_NOT_ALLOWED`, for a method other than `GET`.
-  - 404, `NOT_FOUND`, for a path not below.
-- Writes the response: `HTTP/1.1`, the code and its reason, CR LF; `Content-Type: application/json` CR LF when it has a body; `Content-Length:` and the body's bytes in decimal, CR LF; `Connection: close` CR LF; CR LF; the body.
-- An error body: `{"code":<code>,"message":"<message>"}`.
-- Writes JSON with no space and with the fields in the order below; a number as a decimal string, a byte string as `0x` and lower case hex, a text field as its bytes, which are only `0x21` to `0x7e`.
-- `GET /eth/v1/node/health`: 200 `OK`, or 206 `Partial Content` when `is_syncing`, `is_optimistic` or `el_offline` is 1; no body. A query `syncing_status=<n>` with `n` from 100 to 599 gives `n` in place of 206 (with no reason text); another value gives 400 `BAD_REQUEST`.
-- `GET /eth/v1/node/identity`: `{"data":{"peer_id":…,"enr":…,"p2p_addresses":[…],"discovery_addresses":[…],"metadata":{"seq_number":…,"attnets":…,"syncnets":…,"custody_group_count":…}}}`; each address list holds the view's address, or nothing when its length is 0; `syncnets` from altair; `custody_group_count` from fulu.
-- `GET /eth/v1/node/version`: `{"data":{"version":…}}`.
-- `GET /eth/v1/node/syncing`: `{"data":{"head_slot":…,"sync_distance":…,"is_syncing":…,"is_optimistic":…,"el_offline":…}}`; `sync_distance` is `current_slot` minus `head_slot`, or 0 when it is below; the last three are `true` or `false`.
-- `GET /eth/v1/node/peer_count`: `{"data":{"disconnected":"0","connecting":"0","connected":…,"disconnecting":"0"}}`.
-- `GET /eth/v1/beacon/genesis`: `{"data":{"genesis_time":…,"genesis_validators_root":…,"genesis_fork_version":…}}`.
-- `GET /eth/v1/beacon/headers/<block_id>`, with `block_id` `head` or `0x` and the 64 hex digits of the head's root: `{"execution_optimistic":…,"finalized":false,"data":{"root":…,"canonical":true,"header":{"message":{"slot":…,"proposer_index":…,"parent_root":…,"state_root":…,"body_root":…},"signature":…}}}`; `execution_optimistic` is `is_optimistic`; another `block_id` gives 404 `NOT_FOUND`.
-- `GET /eth/v1/beacon/states/head/finality_checkpoints`: `{"execution_optimistic":…,"finalized":false,"data":{"previous_justified":{"epoch":…,"root":…},"current_justified":{…},"finalized":{…}}}`.
-
-### Function never
-
-- Writes more than `out`.
-
-### ABI
-
-- Role: L1.
-- Symbol: `lantern_api_answer` (`_lantern_api_answer` on macOS).
-- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
-- Argument order: `request`, `view`, `out`.
 
 ## Function `lantern_api_route`
 
@@ -250,6 +229,21 @@ lantern_http_request(bytes, limits, out) -> status
 - Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
 - Argument order: `bytes`, `limits`, `out`.
 
+## Type `ApiIdentity`
+
+The texts of the node's identity that the shell knows. A text is a u64 length, then its room of bytes; its bytes are `0x21` to `0x7e`, but `"` and `\`.
+
+### Layout
+
+| Offset | Field | Type | Meaning |
+|---|---|---|---|
+| 0 | `peer_id` | text of 64 bytes | Base58btc of the libp2p peer ID |
+| 72 | `enr` | text of 512 bytes | `enr:` and base64url of the node record |
+| 592 | `p2p_address` | text of 128 bytes | A multiaddr of libp2p, or empty |
+| 728 | `discovery_address` | text of 128 bytes | A multiaddr of discv5, or empty |
+| 864 | `version` | text of 64 bytes | |
+| 936 | | | Size: `API_IDENTITY_SIZE` |
+
 ## Type `ApiRoute`
 
 The operation of one request and its parameters, by lantern_api_route.
@@ -295,44 +289,6 @@ The operation of one request and its parameters, by lantern_api_route.
 
 - The fixed part is `API_ROUTE_FIXED` (488) bytes.
 - An operation takes at most one of `state_id`, `block_id` and `block_root`; one of the three roots; and one list.
-
-## Type `ApiView`
-
-The values of the node that the answers show, filled by the binary before each answer. A text field is a length, then that many bytes.
-
-### Layout
-
-| Offset | Field | Type | Meaning |
-|---|---|---|---|
-| 0 | `genesis_time` | u64 | |
-| 8 | `genesis_validators_root` | Root | |
-| 40 | `genesis_fork_version` | Version | 4 bytes, then 4 zero bytes |
-| 48 | `head_slot` | u64 | |
-| 56 | `head_root` | Root | |
-| 88 | `proposer_index` | u64 | Of the head's header |
-| 96 | `parent_root` | Root | |
-| 128 | `state_root` | Root | |
-| 160 | `body_root` | Root | |
-| 192 | `signature` | BLSSignature | Of the head's block; zero for an anchor with no block |
-| 288 | `previous_justified` | Checkpoint | Epoch, then root |
-| 328 | `current_justified` | Checkpoint | |
-| 368 | `finalized` | Checkpoint | |
-| 408 | `current_slot` | u64 | The slot of the clock |
-| 416 | `is_syncing` | u64 | 1 or 0 |
-| 424 | `is_optimistic` | u64 | 1 or 0 |
-| 432 | `el_offline` | u64 | 1 or 0 |
-| 440 | `peers` | u64 | Connected peers |
-| 448 | `seq_number` | u64 | Of the node's MetaData |
-| 456 | `attnets` | 8 bytes | |
-| 464 | `syncnets` | 1 byte | Then 7 zero bytes |
-| 472 | `custody_group_count` | u64 | |
-| 480 | `fork` | u64 | `FORK_*` of the head |
-| 488 | `peer_id` | text of 64 bytes | Base58btc |
-| 560 | `enr` | text of 512 bytes | `enr:` and base64url |
-| 1080 | `p2p_address` | text of 128 bytes | A multiaddr, or length 0 |
-| 1216 | `discovery_address` | text of 128 bytes | A multiaddr, or length 0 |
-| 1352 | `version` | text of 64 bytes | |
-| 1424 | | | Size |
 
 ## Type `HttpLimits`
 
@@ -387,14 +343,6 @@ A validator by its index or by its public key.
 ## Results
 
 <!-- CI generates the tick table for each function here. -->
-
-### `lantern_api_answer`
-
-| ISA | Linux | Windows | macOS | `equal` |
-|---|---|---|---|---|
-| x86-64 | ✅ | ✅ | ✅ |  |
-| ARM64 | ✅ | ✅ | ✅ |  |
-| RISC-V | ✅ |  |  |  |
 
 ### `lantern_api_route`
 

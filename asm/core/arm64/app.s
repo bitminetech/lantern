@@ -1398,6 +1398,8 @@ LOCAL_FUNCTION app_work
     b.eq    2f
     cmp     x26, #NODE_WORK_FORKCHOICE
     b.eq    2f
+    cmp     x26, #NODE_WORK_API_ENCODE
+    b.eq    2f
     cmp     x26, #NODE_WORK_GOSSIP          /* GOSSIP: the Seen, and the proposer state */
     b.eq    3f
     cmp     x26, #NODE_WORK_TARGET_STATE    /* TARGET_STATE, SLOTS, and IMPORT_BLOCK with store room: state_a */
@@ -2316,14 +2318,21 @@ LOCAL_FUNCTION app_actions
     bl      app_dv_put
     b       8f
 7:  cmp     x9, #NODE_ACT_P2P_LIST
-    b.ne    8f
+    b.ne    71f
     ldr     x0, [x19, #APP_SHELL]           /* P2P_LIST: the shell requests of libp2p */
     add     x1, x20, #16
     ldr     x2, [x19, #APP_SHELL_EVENTS]
     CALL_GLOBAL libp2p_shell_perform
+    b       8f
+71: cmp     x9, #NODE_ACT_API_SEND
+    ccmp    x9, #NODE_ACT_API_CLOSE, #4, ne
+    b.ne    8f
+    mov     x0, x20                         /* API_SEND, API_CLOSE: to the Beacon API's connection */
+    bl      app_api_action
 8:  add     x20, x20, x22
     b       1b
-9:  LEAVE 0
+9:  bl      app_api_flush                   /* the answers go out now */
+    LEAVE 0
 END_FUNCTION app_actions
 
 /*
@@ -3552,10 +3561,11 @@ LOCAL_FUNCTION app_discv5
     add     x0, x20, #DISCV5_ACT_RECORD_DATA
     ldr     x1, [x20, #DISCV5_ACT_RECORD_LEN]
     bl      app_line_base64url
-    ldr     x0, [x19, #APP_VIEW]
-    add     x0, x0, #ApiView_enr
+    ldr     x0, [x19, #APP_IDENTITY]
+    add     x0, x0, #(48 + ApiIdentity_enr)
     mov     x1, #512
     bl      app_line_to
+    bl      app_identity_put                /* the node's identity: the new record */
     bl      app_line_start                  /* record enr:<base64url> */
     ADDRESS x0, app_m_record
     mov     x1, #app_m_record_len
@@ -3715,8 +3725,8 @@ LOCAL_FUNCTION app_multiaddr
     ADDRESS x0, app_t_p2p
     mov     x1, #5
     bl      app_line_text
-    ldr     x9, [x19, #APP_VIEW]
-    add     x9, x9, #ApiView_peer_id
+    ldr     x9, [x19, #APP_IDENTITY]
+    add     x9, x9, #(48 + ApiIdentity_peer_id)
     ldr     x1, [x9], #8
     mov     x0, x9
     bl      app_line_text
@@ -3727,14 +3737,15 @@ LOCAL_FUNCTION app_multiaddr
 END_FUNCTION app_multiaddr
 
 /*
- * L2: the Beacon API: a shell context that listens on --http-port, its buffers, and the view's
- * fixed values: the peer id, the addresses, the version, and the anchor's header: x0 = 0, or 2
- * after a line on the standard error. Locals: L ShellParams or an Address, L+32 a ListenResult
- * or the public key, L+80 the peer id's multihash, L+128 base58's work area.
+ * L2: the Beacon API: a shell context with --http-max-connections slots that listens on
+ * --http-address and --http-port, the slots' buffers, and the identity's texts: the peer id, the
+ * addresses and the version, in a NODE_EV_API_IDENTITY: x0 = 0, or 2 after a line on the standard
+ * error. Locals: L ShellParams or an Address, L+32 a ListenResult or the public key, L+80 the peer
+ * id's multihash, L+128 base58's work area.
  */
 LOCAL_FUNCTION app_api_start
     ENTER 208
-    mov     x9, #APP_API_SLOTS_MAX
+    ldr     x9, [x19, #(APP_OPTIONS + AppOptions_http_max_connections)]
     MOVQ    x10, APP_API_SEND_WINDOW
     stp     x9, x10, [sp, #L]
     add     x0, sp, #L
@@ -3756,27 +3767,36 @@ LOCAL_FUNCTION app_api_start
     mov     x9, #24
     stp     x9, xzr, [x0, #8]
     mov     x0, #APP_API_ACT
-    MOVQ    x1, 24 + APP_API_SLOTS_MAX * (64 + APP_API_OUT_BYTES)
+    MOVQ    x1, APP_API_ACT_BYTES
     bl      app_alloc
     cbz     x0, 97f
     mov     x9, #24
     stp     x9, xzr, [x0, #8]
-    mov     x0, #APP_API_OUT
-    MOVQ    x1, 24 + APP_API_OUT_BYTES
+    mov     x0, #APP_API_EVENT
+    MOVQ    x1, 48 + HTTP_REQUEST_FIXED + APP_API_BUFFER + 64
     bl      app_alloc
     cbz     x0, 97f
-    mov     x0, #APP_API_REQ
-    MOVQ    x1, APP_API_SLOTS_MAX * (24 + APP_API_REQ_BYTES)
+    ldr     x9, [x19, #(APP_OPTIONS + AppOptions_http_max_connections)]
+    MOVQ    x10, APP_API_SLOT_BYTES
+    mul     x1, x9, x10
+    mov     x0, #APP_API_BUF
     bl      app_alloc
     cbz     x0, 97f
-    mov     x0, #APP_VIEW
-    mov     x1, #4096
+    ldr     x9, [x19, #(APP_OPTIONS + AppOptions_http_max_connections)]
+    lsl     x1, x9, #5                      /* APP_API_SLOT bytes each */
+    mov     x0, #APP_API_SLOTS
     bl      app_alloc
     cbz     x0, 97f
-    mov     x9, #4                          /* listen: TCP --http-port on every IPv4 address */
+    str     xzr, [x0]
+    mov     x0, #APP_IDENTITY
+    mov     x1, #(48 + API_IDENTITY_SIZE)
+    bl      app_alloc
+    cbz     x0, 97f
+    mov     x9, #4                          /* listen: TCP --http-address, --http-port */
     ldr     x10, [x19, #(APP_OPTIONS + AppOptions_http_port)]
     stp     x9, x10, [sp, #L]
-    stp     xzr, xzr, [sp, #(L + 16)]
+    ldr     x9, [x19, #(APP_OPTIONS + AppOptions_http_address)]
+    stp     x9, xzr, [sp, #(L + 16)]
     ldr     x0, [x19, #APP_API_SHELL]
     add     x1, sp, #L
     add     x2, sp, #(L + 32)
@@ -3795,50 +3815,47 @@ LOCAL_FUNCTION app_api_start
     bl      lantern_copy
     add     x0, sp, #(L + 80)
     mov     x1, #39
-    ldr     x2, [x19, #APP_VIEW]
-    add     x2, x2, #(ApiView_peer_id + 8)
+    ldr     x2, [x19, #APP_IDENTITY]
+    add     x2, x2, #(48 + ApiIdentity_peer_id + 8)
     add     x3, sp, #(L + 128)
     bl      app_base58
-    ldr     x9, [x19, #APP_VIEW]
-    str     x0, [x9, #ApiView_peer_id]
-    ldr     x0, [x19, #APP_VIEW]            /* the version */
-    add     x0, x0, #ApiView_version
+    ldr     x9, [x19, #APP_IDENTITY]
+    str     x0, [x9, #(48 + ApiIdentity_peer_id)]
+    ldr     x0, [x19, #APP_IDENTITY]        /* the version */
+    MOVQ    x9, 48 + ApiIdentity_version
+    add     x0, x0, x9
     mov     x9, #app_version_text_len
     str     x9, [x0], #8
     ADDRESS x1, app_version_text
     mov     x2, #app_version_text_len
     bl      lantern_copy
     ADDRESS x0, app_t_tcp                   /* the addresses */
-    ldr     x1, [x19, #APP_VIEW]
-    MOVQ    x9, ApiView_p2p_address
+    ldr     x1, [x19, #APP_IDENTITY]
+    MOVQ    x9, 48 + ApiIdentity_p2p_address
     add     x1, x1, x9
     bl      app_multiaddr
     ADDRESS x0, app_t_udp
-    ldr     x1, [x19, #APP_VIEW]
-    MOVQ    x9, ApiView_discovery_address
+    ldr     x1, [x19, #APP_IDENTITY]
+    MOVQ    x9, 48 + ApiIdentity_discovery_address
     add     x1, x1, x9
     bl      app_multiaddr
-    ldr     x9, [x19, #APP_STATE]           /* the anchor's header: its state's latest_block_header, the block's state_root */
-    add     x1, x9, #NODE_STATE_HEADER
-    add     x0, x19, #APP_ANCHOR_HEADER
-    mov     x2, #112
-    bl      lantern_copy
-    add     x0, x19, #(APP_ANCHOR_HEADER + 48)
-    ldr     x1, [x19, #APP_BLOCK]
-    add     x1, x1, #NODE_BLOCK_STATE_ROOT
-    mov     x2, #32
-    bl      lantern_copy
-    bl      app_line_start                  /* Beacon API on TCP port <p>, peer id <id> */
+    bl      app_identity_put
+    bl      app_line_start                  /* Beacon API on TCP <address>:<port>, peer id <id> */
     ADDRESS x0, app_m_api
     mov     x1, #app_m_api_len
+    bl      app_line_text
+    ldr     x0, [x19, #(APP_OPTIONS + AppOptions_http_address)]
+    bl      app_line_ip4
+    ADDRESS x0, app_t_colon
+    mov     x1, #1
     bl      app_line_text
     ldr     x0, [x19, #(APP_OPTIONS + AppOptions_http_port)]
     bl      app_line_u64
     ADDRESS x0, app_m_peer_id
     mov     x1, #app_m_peer_id_len
     bl      app_line_text
-    ldr     x9, [x19, #APP_VIEW]
-    add     x9, x9, #ApiView_peer_id
+    ldr     x9, [x19, #APP_IDENTITY]
+    add     x9, x9, #(48 + ApiIdentity_peer_id)
     ldr     x1, [x9], #8
     mov     x0, x9
     bl      app_line_text
@@ -3871,206 +3888,234 @@ LOCAL_FUNCTION app_api_start
     LEAVE 208
 END_FUNCTION app_api_start
 
-/*
- * L2: the view's values of the node now: genesis, the head and its header, the head state's
- * checkpoints, the clock's slot, sync, peers and MetaData. x20 the view, x21 the head's NodeBlock,
- * x22 its fork, x23 the header.
- */
-LOCAL_FUNCTION app_view_fill
-    ENTER 0
-    ldr     x20, [x19, #APP_VIEW]
-    ldr     x9, [x19, #APP_STORE]           /* genesis */
-    ldr     x9, [x9, #Store_genesis_time_ms]
-    mov     x10, #1000
-    udiv    x9, x9, x10
-    str     x9, [x20, #ApiView_genesis_time]
-    add     x0, x20, #ApiView_genesis_validators_root
-    add     x1, x19, #(APP_ANCHOR + NodeAnchor_genesis_validators_root)
-    mov     x2, #32
-    bl      lantern_copy
-    ldr     x9, [x19, #(APP_CONFIG + CONFIG_GENESIS_FORK_VERSION)]
-    str     x9, [x20, #ApiView_genesis_fork_version]
-    ldr     x9, [x19, #APP_NODE]            /* the head's NodeBlock */
-    ldr     x10, [x9, #Node_blocks]
-    add     x21, x9, x10
-    ldr     x11, [x9, #(Node_blocks + 8)]
-1:  cbz     x11, 90f
-    mov     x0, x21
-    ldr     x1, [x19, #APP_NODE]
-    add     x1, x1, #Node_head_root
-    mov     x2, #32
-    bl      app_same32
-    cbnz    x0, 2f
-    add     x21, x21, #NodeBlock__mem
-    ldr     x9, [x19, #APP_NODE]
-    ldr     x10, [x9, #Node_blocks]
-    add     x10, x9, x10
-    ldr     x11, [x9, #(Node_blocks + 8)]
-    mov     x12, #NodeBlock__mem
-    madd    x10, x11, x12, x10
-    cmp     x21, x10
-    b.hs    90f
-    mov     x11, #1
-    b       1b
-2:  ldr     x9, [x21, #NodeBlock_slot]
-    str     x9, [x20, #ApiView_head_slot]
-    add     x0, x20, #ApiView_head_root
-    mov     x1, x21
-    mov     x2, #32
-    bl      lantern_copy
-    add     x23, x19, #APP_ANCHOR_HEADER    /* the header: the anchor's, or the block's */
-    ldr     x0, [x21, #NodeBlock_data_id]
-    cbz     x0, 31f
-    bl      app_buf_find
-    cbz     x0, 3f
-    b       32f
-31: ldr     x9, [x19, #APP_NODE]            /* no bytes: the block's record in the Db, when it holds one */
-    ldr     x10, [x9, #Node_flags]
-    tst     x10, #NODE_FLAG_DB
-    b.eq    3f
-    ldr     x0, [x9, #Node_db]
-    add     x0, x9, x0
-    mov     x1, x21
-    add     x2, x19, #APP_HEADER
-    CALL_GLOBAL lantern_db_find_root
-    ldr     x12, [x19, #APP_HEADER]
-    ldr     x9, [x19, #APP_NODE]
-    ldr     x13, [x9, #Node_db]
-    add     x13, x9, x13
-    ldr     x10, [x13, #Db_end_slot]
-    cmp     x12, x10
-    b.hs    3f
-    ldr     x10, [x13, #Db_first_slot]
-    subs    x10, x12, x10
-    b.lo    3f
-    ldr     x11, [x13, #Db_slots]
-    add     x13, x13, x11
-    mov     x11, #DbSlot__mem
-    madd    x13, x10, x11, x13
-    ldr     x9, [x13, #DbSlot_block]
-    cbz     x9, 3f
-    sub     x9, x9, #1
-    lsr     x10, x12, #DB_SEGMENT_SHIFT
-    orr     x0, x9, x10, lsl #48
-    orr     x0, x0, #NODE_DB_REF
-    bl      app_work_data
-    cmn     x0, #1
-    b.eq    3f
-32: ldr     x22, [x0, #8]
-    ldr     x0, [x21, #NodeBlock_slot]
-    add     x1, x19, #APP_CONFIG
-    bl      app_fork
-    mov     x15, x0
-    mov     x0, x22
-    SCRATCH x1
-    add     x2, x19, #APP_HEADER
-    FORK_CALL node_block_header
-    cbnz    x0, 3f
-    add     x23, x19, #APP_HEADER
-3:  ldr     x9, [x23, #8]
-    str     x9, [x20, #ApiView_proposer_index]
-    add     x0, x20, #ApiView_parent_root
-    add     x1, x23, #16
-    mov     x2, #(32 * 3)
-    bl      lantern_copy
-    add     x0, x20, #ApiView_signature
-    add     x1, x23, #112
-    mov     x2, #96
-    bl      lantern_copy
-    ldr     x0, [x21, #NodeBlock_state_id]  /* the head state's checkpoints */
-    bl      app_buf_find
-    cbz     x0, 4f
-    ldr     x22, [x0, #8]
-    ldr     x0, [x22, #NODE_STATE_SLOT]
-    add     x1, x19, #APP_CONFIG
-    bl      app_fork
-    mov     x15, x0
-    mov     x0, x22
-    add     x1, x20, #ApiView_previous_justified
-    FORK_CALL node_state_checkpoints
-4:  ldr     x9, [x21, #NodeBlock_payload_status]
-    cmp     x9, #PAYLOAD_STATUS_NOT_VALIDATED
-    cset    x9, eq
-    str     x9, [x20, #ApiView_is_optimistic]
-90: ldr     x0, [x19, #APP_STORE]           /* the clock, sync, peers, MetaData */
-    bl      app_store_slot
-    str     x0, [x20, #ApiView_current_slot]
-    add     x1, x19, #APP_CONFIG
-    bl      app_fork
-    str     x0, [x20, #ApiView_fork]
-    ldr     x9, [x19, #APP_NODE]
-    ldr     x10, [x9, #Node_flags]
-    ubfx    x10, x10, #3, #1                /* NODE_FLAG_SYNCING */
-    str     x10, [x20, #ApiView_is_syncing]
-    str     xzr, [x20, #ApiView_el_offline]
-    ldr     x10, [x9, #(Node_peers + 8)]
-    str     x10, [x20, #ApiView_peers]
-    ldr     x10, [x9, #Node_metadata_seq]
-    str     x10, [x20, #ApiView_seq_number]
-    str     xzr, [x20, #ApiView_attnets]
-    str     xzr, [x20, #ApiView_syncnets]
-    ldr     x10, [x19, #(APP_CONFIG + CONFIG_CUSTODY_REQUIREMENT)]
-    str     x10, [x20, #ApiView_custody_group_count]
-    LEAVE 0
-END_FUNCTION app_view_fill
+/* L1: the identity's texts go to the next step in a NODE_EV_API_IDENTITY. */
+LOCAL_FUNCTION app_identity_put
+    FRAME 0
+    ldr     x0, [x19, #APP_IDENTITY]
+    mov     x9, #(48 + API_IDENTITY_SIZE)
+    mov     x10, #NODE_EV_API_IDENTITY
+    stp     x9, x10, [x0]
+    mov     x9, #(24 + API_IDENTITY_SIZE)
+    stp     xzr, x9, [x0, #16]
+    mov     x9, #24
+    mov     x10, #API_IDENTITY_SIZE
+    stp     x9, x10, [x0, #32]
+    mov     x1, #(48 + API_IDENTITY_SIZE)
+    bl      app_event_put
+    UNFRAME 0
+END_FUNCTION app_identity_put
 
-/* L0: x0 = 1 when the 32 bytes at x0 are those at x1, else 0. Uses x9-x12. */
-LOCAL_FUNCTION app_same32
+/* L0: x0 = the slot of the connection x0, while it is open at that generation, else 0. Uses x9-x11. */
+LOCAL_FUNCTION app_api_slot
     UNWIND_END_PROLOGUE
-    ldp     x9, x10, [x0]
-    ldp     x11, x12, [x1]
-    cmp     x9, x11
-    ccmp    x10, x12, #0, eq
-    b.ne    1f
-    ldp     x9, x10, [x0, #16]
-    ldp     x11, x12, [x1, #16]
-    cmp     x9, x11
-    ccmp    x10, x12, #0, eq
-    b.ne    1f
-    mov     x0, #1
+    and     x9, x0, #0xffffffff
+    ldr     x10, [x19, #(APP_OPTIONS + AppOptions_http_max_connections)]
+    cmp     x9, x10
+    b.hs    9f
+    ldr     x10, [x19, #APP_API_SLOTS]
+    add     x10, x10, x9, lsl #5
+    ldp     x11, x9, [x10]
+    cbz     x9, 9f
+    cmp     x11, x0, lsr #32
+    b.ne    9f
+    mov     x0, x10
     ret
-1:  mov     x0, #0
+9:  mov     x0, #0
     ret
-END_FUNCTION app_same32
+END_FUNCTION app_api_slot
 
-/* L1: an action of x1 bytes, the x1 bytes at x0, joins the Beacon API's shell actions, when it fits. Uses x9-x11. */
-LOCAL_FUNCTION app_api_act
+/* L1: the Beacon API's shell actions go out; their results come at the next poll. */
+LOCAL_FUNCTION app_api_flush
     FRAME 0
     ldr     x9, [x19, #APP_API_ACT]
+    cbz     x9, 9f
     ldr     x10, [x9, #16]
-    add     x11, x10, x1
-    add     x11, x11, #24
-    ldr     x12, [x9]
-    cmp     x11, x12
-    b.hi    9f
-    sub     x11, x11, #24
+    cbz     x10, 9f
+    ldr     x0, [x19, #APP_API_SHELL]
+    mov     x1, x9
+    ldr     x2, [x19, #APP_API_EVENTS]
+    CALL_GLOBAL libp2p_shell_perform
+    ldr     x9, [x19, #APP_API_ACT]
+    str     xzr, [x9, #16]
+9:  UNFRAME 0
+END_FUNCTION app_api_flush
+
+/* L1: x0 = room for a shell action of x0 bytes at the end of the Beacon API's actions, its bytes counted, after a flush when they are full; 0 when it never fits. Locals: x0. */
+LOCAL_FUNCTION app_api_room
+    FRAME 16
+    str     x0, [sp, #16]
+    ldr     x9, [x19, #APP_API_ACT]
+    ldr     x10, [x9]
+    sub     x10, x10, #24
+    cmp     x0, x10
+    b.hi    8f
+    ldr     x11, [x9, #16]
+    add     x11, x11, x0
+    cmp     x11, x10
+    b.ls    1f
+    bl      app_api_flush
+1:  ldr     x9, [x19, #APP_API_ACT]
+    ldr     x10, [x9, #16]
+    ldr     x11, [sp, #16]
+    add     x11, x10, x11
     str     x11, [x9, #16]
-    mov     x2, x1
-    mov     x1, x0
     add     x0, x9, #24
     add     x0, x0, x10
-    bl      lantern_copy
-9:  UNFRAME 0
-END_FUNCTION app_api_act
+    UNFRAME 16
+8:  mov     x0, #0
+    UNFRAME 16
+END_FUNCTION app_api_room
 
-/* L1: a CLOSE of the connection x0 joins the shell actions. Locals: the action. */
+/* L1: a CLOSE of the connection x0, while it is open; its slot waits for the shell's CLOSED. Locals: x0. */
 LOCAL_FUNCTION app_api_close
-    FRAME 32
+    FRAME 16
+    str     x0, [sp, #16]
+    bl      app_api_slot
+    cbz     x0, 9f
+    mov     x9, #APP_API_CLOSING
+    str     x9, [x0, #8]
+    mov     x0, #LIBP2P_ACT_CLOSE_SIZE
+    bl      app_api_room
+    cbz     x0, 9f
     mov     x9, #LIBP2P_ACT_CLOSE_SIZE
     mov     x10, #LIBP2P_ACTION_CLOSE
-    stp     x9, x10, [sp, #16]
-    str     x0, [sp, #(16 + LIBP2P_ACT_CONN)]
-    add     x0, sp, #16
-    mov     x1, #LIBP2P_ACT_CLOSE_SIZE
-    bl      app_api_act
-    UNFRAME 32
+    stp     x9, x10, [x0]
+    ldr     x9, [sp, #16]
+    str     x9, [x0, #LIBP2P_ACT_CONN]
+9:  UNFRAME 16
 END_FUNCTION app_api_close
 
 /*
+ * L2: the slot x0, when it waits for no answer: lantern_http_request of its bytes, then a
+ * NODE_EV_API of the request, or of a fault's status (413 for a full buffer with no whole
+ * request); the request's bytes leave the buffer, and the slot waits for the answer. x22 the slot,
+ * x23 its ByteList, x24 its bytes, x25 its index, x26 the event, x27 the HttpRequest's room.
+ * Locals: L HttpLimits.
+ */
+LOCAL_FUNCTION app_api_read
+    ENTER 16
+    mov     x25, x0
+    ldr     x22, [x19, #APP_API_SLOTS]
+    add     x22, x22, x25, lsl #5
+    ldr     x9, [x22, #8]
+    cmp     x9, #APP_API_READING
+    b.ne    99f
+    ldr     x23, [x19, #APP_API_BUF]
+    MOVQ    x9, APP_API_SLOT_BYTES
+    madd    x23, x25, x9, x23
+    ldr     x24, [x22, #16]
+    cbz     x24, 99f
+    mov     x10, #24
+    stp     x9, x10, [x23]
+    str     x24, [x23, #16]
+    mov     x9, #APP_API_HEAD_MAX
+    MOVQ    x10, APP_API_BODY_MAX
+    stp     x9, x10, [sp, #L]
+    ldr     x26, [x19, #APP_API_EVENT]
+    add     x27, x24, #(HTTP_REQUEST_FIXED + 48 + 7)
+    and     x27, x27, #~7
+    str     x27, [x26, #48]
+    mov     x0, x23
+    add     x1, sp, #L
+    add     x2, x26, #48
+    CALL_GLOBAL lantern_http_request
+    cbz     x0, 4f
+    cmp     x0, #LANTERN_INVALID_HTTP
+    b.eq    3f
+    mov     x9, #400                        /* no room: a request too large to read */
+    cmp     x0, #LANTERN_HTTP_MORE
+    b.ne    2f
+    MOVQ    x10, APP_API_BUFFER             /* more to come, unless the buffer is full */
+    cmp     x24, x10
+    b.lo    99f
+    mov     x9, #413
+2:  str     x9, [x26, #(48 + HttpRequest_status)]
+3:  mov     x27, #HTTP_REQUEST_FIXED        /* a fault: the fixed part, with its status; the bytes go */
+    str     x27, [x26, #48]
+    str     xzr, [x22, #16]
+    b       5f
+4:  ldr     x9, [x26, #(48 + HttpRequest_used)]     /* the request's bytes leave the buffer */
+    sub     x2, x24, x9
+    str     x2, [x22, #16]
+    add     x0, x23, #24
+    add     x1, x0, x9
+    bl      lantern_copy
+5:  add     x9, x27, #48                    /* the event: size, kind, connection, a ByteList of the HttpRequest */
+    mov     x10, #NODE_EV_API
+    stp     x9, x10, [x26]
+    ldr     x11, [x22]
+    orr     x11, x25, x11, lsl #32
+    add     x12, x27, #24
+    stp     x11, x12, [x26, #16]
+    mov     x10, #24
+    stp     x10, x27, [x26, #32]
+    mov     x0, x26
+    add     x1, x27, #48
+    bl      app_event_put
+    mov     x9, #APP_API_ANSWERING
+    str     x9, [x22, #8]
+99: LEAVE 16
+END_FUNCTION app_api_read
+
+/*
+ * L2: the NODE_ACT_API_SEND or NODE_ACT_API_CLOSE x0 of the node: a SEND of its bytes, or the
+ * close, on its connection; after the bytes with last 1, the slot's next request. An action of a
+ * connection no longer open goes. x20 the action, x22 the slot, x23 the shell action.
+ */
+LOCAL_FUNCTION app_api_action
+    ENTER 0
+    mov     x20, x0
+    ldr     x0, [x20, #16]
+    bl      app_api_slot
+    cbz     x0, 99f
+    mov     x22, x0
+    ldr     x9, [x22, #8]
+    cmp     x9, #APP_API_CLOSING
+    b.eq    99f
+    ldr     x9, [x20, #8]
+    cmp     x9, #NODE_ACT_API_CLOSE
+    b.ne    1f
+    ldr     x0, [x20, #16]
+    bl      app_api_close
+    b       99f
+1:  ldr     x9, [x20, #48]                  /* SEND: size, kind, connection, count, the bytes */
+    add     x0, x9, #(LIBP2P_ACT_SEND_DATA + 7)
+    and     x0, x0, #~7
+    bl      app_api_room
+    cbz     x0, 98f
+    mov     x23, x0
+    ldr     x9, [x20, #48]
+    add     x10, x9, #(LIBP2P_ACT_SEND_DATA + 7)
+    and     x10, x10, #~7
+    mov     x11, #LIBP2P_ACTION_SEND
+    stp     x10, x11, [x23]
+    ldr     x10, [x20, #16]
+    stp     x10, x9, [x23, #LIBP2P_ACT_CONN]
+    add     x0, x23, #LIBP2P_ACT_SEND_DATA
+    add     x1, x20, #56
+    mov     x2, x9
+    bl      lantern_copy
+    ldr     x9, [x20, #24]                  /* last: the slot reads its next request */
+    cbz     x9, 99f
+    mov     x9, #APP_API_READING
+    str     x9, [x22, #8]
+    ldr     x9, [x19, #(APP_TICK + LIBP2P_TICK_NOW)]
+    str     x9, [x22, #24]
+    ldr     x0, [x20, #16]
+    and     x0, x0, #0xffffffff
+    bl      app_api_read
+    b       99f
+98: ldr     x0, [x20, #16]                  /* bytes that never fit: the connection closes */
+    bl      app_api_close
+99: LEAVE 0
+END_FUNCTION app_api_action
+
+/*
  * L2: the Beacon API's sockets, without waiting: ACCEPTED takes a free slot (ADOPT) or a REFUSE,
- * RECEIVED joins its slot's request, then a complete request gets its answer (SEND, CLOSE),
- * CLOSED frees the slot; then the shell actions go out. x20 the next event, x21 the end, x22 a
- * slot's entry, x23 its request ByteList, x24 the connection. Locals: L the wait, L+8 an action.
+ * RECEIVED joins its slot's buffer and the slot reads it, CLOSED frees the slot; a slot that waits
+ * for no answer with no bytes for APP_API_IDLE_MS closes; then the shell actions go out. x20 the
+ * next event, x21 the end, x22 a slot, x23 its ByteList or an index, x24 the connection. Locals: L
+ * the wait, L+8 an action.
  */
 LOCAL_FUNCTION app_api_poll
     ENTER 64
@@ -4089,129 +4134,111 @@ LOCAL_FUNCTION app_api_poll
     ldr     x9, [x20, #8]
     cmp     x9, #LIBP2P_EVENT_ACCEPTED
     b.ne    3f
-    add     x22, x19, #APP_API_SLOTS        /* ACCEPTED: a free slot, or REFUSE */
+    ldr     x22, [x19, #APP_API_SLOTS]      /* ACCEPTED: a free slot, or REFUSE */
+    ldr     x23, [x19, #(APP_OPTIONS + AppOptions_http_max_connections)]
     mov     x10, #0
-2:  cmp     x10, #APP_API_SLOTS_MAX
+2:  cmp     x10, x23
     b.hs    21f
     ldr     x11, [x22, #8]
     cbz     x11, 22f
-    add     x22, x22, #16
+    add     x22, x22, #APP_API_SLOT
     add     x10, x10, #1
     b       2b
-21: mov     x9, #LIBP2P_ACT_REFUSE_SIZE
+21: mov     x0, #LIBP2P_ACT_REFUSE_SIZE
+    bl      app_api_room
+    cbz     x0, 79f
+    mov     x9, #LIBP2P_ACT_REFUSE_SIZE
     mov     x11, #LIBP2P_ACTION_REFUSE
-    stp     x9, x11, [sp, #(L + 8)]
+    stp     x9, x11, [x0]
     ldr     x9, [x20, #LIBP2P_EV_TOKEN]
-    str     x9, [sp, #(L + 8 + LIBP2P_ACT_TOKEN)]
-    add     x0, sp, #(L + 8)
-    mov     x1, #LIBP2P_ACT_REFUSE_SIZE
-    bl      app_api_act
+    str     x9, [x0, #LIBP2P_ACT_TOKEN]
     b       79f
-22: ldr     x11, [x22]                      /* a new generation, its request empty */
+22: ldr     x11, [x22]                      /* a new generation, reading, no bytes, the time now */
     add     x11, x11, #1
-    mov     x12, #1
+    mov     x12, #APP_API_READING
     stp     x11, x12, [x22]
+    ldr     x12, [x19, #(APP_TICK + LIBP2P_TICK_NOW)]
+    stp     xzr, x12, [x22, #16]
     orr     x24, x10, x11, lsl #32
-    MOVQ    x13, 24 + APP_API_REQ_BYTES
-    ldr     x23, [x19, #APP_API_REQ]
-    madd    x23, x10, x13, x23
-    mov     x9, #24
-    stp     x13, x9, [x23]
-    str     xzr, [x23, #16]
+    mov     x0, #LIBP2P_ACT_ADOPT_SIZE
+    bl      app_api_room
+    cbz     x0, 79f
     mov     x9, #LIBP2P_ACT_ADOPT_SIZE
     mov     x11, #LIBP2P_ACTION_ADOPT
-    stp     x9, x11, [sp, #(L + 8)]
+    stp     x9, x11, [x0]
     ldr     x9, [x20, #LIBP2P_EV_TOKEN]
-    stp     x9, x24, [sp, #(L + 8 + LIBP2P_ACT_TOKEN)]
-    add     x0, sp, #(L + 8)
-    mov     x1, #LIBP2P_ACT_ADOPT_SIZE
-    bl      app_api_act
+    stp     x9, x24, [x0, #LIBP2P_ACT_TOKEN]
     b       79f
 3:  cmp     x9, #LIBP2P_EVENT_RECEIVED
     ccmp    x9, #LIBP2P_EVENT_CLOSED, #4, ne
     b.ne    79f
     ldr     x24, [x20, #LIBP2P_EV_CONN]     /* the slot of the connection, at its generation */
-    and     x10, x24, #0xffffffff
-    cmp     x10, #APP_API_SLOTS_MAX
-    b.hs    79f
-    add     x22, x19, #APP_API_SLOTS
-    add     x22, x22, x10, lsl #4
-    ldr     x11, [x22]
-    cmp     x11, x24, lsr #32
-    b.ne    79f
+    mov     x0, x24
+    bl      app_api_slot
+    cbz     x0, 79f
+    mov     x22, x0
+    ldr     x9, [x20, #8]
     cmp     x9, #LIBP2P_EVENT_CLOSED
     b.ne    4f
-    str     xzr, [x22, #8]                  /* CLOSED: the slot is free */
+    stp     xzr, xzr, [x22, #8]             /* CLOSED: the slot is free */
     b       79f
-4:  ldr     x11, [x22, #8]                  /* RECEIVED, while reading: the bytes join the request */
-    cmp     x11, #1
-    b.ne    79f
-    MOVQ    x13, 24 + APP_API_REQ_BYTES
-    ldr     x23, [x19, #APP_API_REQ]
-    madd    x23, x10, x13, x23
-    ldr     x11, [x23, #16]
+4:  ldr     x11, [x22, #8]                  /* RECEIVED, unless closing: the bytes join the buffer */
+    cmp     x11, #APP_API_CLOSING
+    b.eq    79f
+    ldr     x12, [x19, #(APP_TICK + LIBP2P_TICK_NOW)]
+    str     x12, [x22, #24]
+    and     x23, x24, #0xffffffff
+    ldr     x9, [x22, #16]
     ldr     x2, [x20, #LIBP2P_EV_COUNT]
-    add     x12, x11, x2
-    MOVQ    x13, APP_API_REQ_BYTES
-    cmp     x12, x13
-    b.hi    6f
-    str     x12, [x23, #16]
-    add     x0, x23, #24
-    add     x0, x0, x11
+    add     x10, x9, x2
+    MOVQ    x11, APP_API_BUFFER
+    cmp     x10, x11
+    b.ls    5f
+    ldr     x12, [x22, #8]                  /* no room: while reading, what fits (then 413); else the connection closes */
+    cmp     x12, #APP_API_READING
+    b.ne    6f
+    sub     x2, x11, x9
+    mov     x10, x11
+5:  str     x10, [x22, #16]
+    ldr     x0, [x19, #APP_API_BUF]
+    MOVQ    x10, APP_API_SLOT_BYTES
+    madd    x0, x23, x10, x0
+    add     x0, x0, #24
+    add     x0, x0, x9
     add     x1, x20, #LIBP2P_EV_DATA
     bl      lantern_copy
-    bl      app_view_fill                   /* the answer, once the request's head is complete */
-    ldr     x9, [x19, #APP_API_OUT]
-    MOVQ    x10, 24 + APP_API_OUT_BYTES
-    str     x10, [x9]
     mov     x0, x23
-    ldr     x1, [x19, #APP_VIEW]
-    ldr     x2, [x19, #APP_API_OUT]
-    CALL_GLOBAL lantern_api_answer
-    cmp     x0, #LANTERN_HTTP_MORE
-    b.eq    79f
-    cbnz    x0, 6f
-    ldr     x9, [x19, #APP_API_OUT]         /* SEND the response: size, kind, connection, count, the bytes */
-    ldr     x10, [x9, #16]
-    add     x11, x10, #(LIBP2P_ACT_SEND_DATA + 7)
-    and     x11, x11, #~7
-    ldr     x12, [x19, #APP_API_ACT]
-    ldr     x13, [x12, #16]
-    add     x14, x13, x11
-    add     x14, x14, #24
-    ldr     x15, [x12]
-    cmp     x14, x15
-    b.hi    6f
-    sub     x14, x14, #24
-    str     x14, [x12, #16]
-    add     x0, x12, #24
-    add     x0, x0, x13
-    mov     x14, #LIBP2P_ACTION_SEND
-    stp     x11, x14, [x0]
-    stp     x24, x10, [x0, #LIBP2P_ACT_CONN]
-    add     x0, x0, #LIBP2P_ACT_SEND_DATA
-    add     x1, x9, #24
-    mov     x2, x10
-    bl      lantern_copy
-6:  mov     x9, #2                          /* then CLOSE */
-    str     x9, [x22, #8]
-    mov     x0, x24
+    bl      app_api_read
+    b       79f
+6:  mov     x0, x24
     bl      app_api_close
 79: ldr     x9, [x20]
     add     x20, x20, x9
     b       1b
-80: ldr     x9, [x19, #APP_API_EVENTS]      /* the actions go out; their results come at the next poll */
+80: ldr     x9, [x19, #APP_API_EVENTS]      /* the idle connections close */
     str     xzr, [x9, #16]
-    ldr     x9, [x19, #APP_API_ACT]
-    ldr     x10, [x9, #16]
-    cbz     x10, 9f
-    ldr     x0, [x19, #APP_API_SHELL]
-    mov     x1, x9
-    ldr     x2, [x19, #APP_API_EVENTS]
-    CALL_GLOBAL libp2p_shell_perform
-    ldr     x9, [x19, #APP_API_ACT]
-    str     xzr, [x9, #16]
-9:  LEAVE 64
+    ldr     x22, [x19, #APP_API_SLOTS]
+    mov     x23, #0
+81: ldr     x9, [x19, #(APP_OPTIONS + AppOptions_http_max_connections)]
+    cmp     x23, x9
+    b.hs    85f
+    ldr     x10, [x22, #8]
+    cmp     x10, #APP_API_READING
+    b.ne    84f
+    ldr     x10, [x22, #24]
+    MOVQ    x11, APP_API_IDLE_MS
+    add     x10, x10, x11
+    ldr     x12, [x19, #(APP_TICK + LIBP2P_TICK_NOW)]
+    cmp     x12, x10
+    b.lo    84f
+    ldr     x9, [x22]
+    orr     x0, x23, x9, lsl #32
+    bl      app_api_close
+84: add     x22, x22, #APP_API_SLOT
+    add     x23, x23, #1
+    b       81b
+85: bl      app_api_flush
+    LEAVE 64
 END_FUNCTION app_api_poll
 
 /* L2: each event of the shell becomes a NODE_EV_P2P event of the next step, but those of the engine's connection. x20 the next event, x21 the end. Locals: L the header. */

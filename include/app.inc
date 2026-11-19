@@ -49,13 +49,11 @@
 .set APP_API_SHELL, APP_DV_TICK + 40        /* pair: the shell context of the Beacon API */
 .set APP_API_EVENTS, APP_API_SHELL + 16     /* pair: a ByteList of its events */
 .set APP_API_ACT, APP_API_EVENTS + 16       /* pair: a ByteList of its shell actions */
-.set APP_API_OUT, APP_API_ACT + 16          /* pair: a ByteList of a response */
-.set APP_API_REQ, APP_API_OUT + 16          /* pair: a request ByteList for each connection slot */
-.set APP_VIEW, APP_API_REQ + 16             /* pair: the ApiView */
-.set APP_API_SLOTS, APP_VIEW + 16           /* each slot: its generation, then 0 free, 1 reading, 2 answered */
-.set APP_ANCHOR_HEADER, APP_API_SLOTS + 16 * APP_API_SLOTS_MAX  /* the anchor's SignedBeaconBlockHeader */
-.set APP_HEADER, APP_ANCHOR_HEADER + 208    /* a block's SignedBeaconBlockHeader */
-.set APP_RECORD, APP_HEADER + 208           /* a NODE_EV_ENR event of a boot node: 48 bytes, then the record */
+.set APP_API_EVENT, APP_API_ACT + 16        /* pair: a NODE_EV_API event: 48 bytes, then its HttpRequest */
+.set APP_API_BUF, APP_API_EVENT + 16        /* pair: each slot's ByteList of its connection's bytes, APP_API_SLOT_BYTES apart */
+.set APP_IDENTITY, APP_API_BUF + 16         /* pair: a NODE_EV_API_IDENTITY event: 48 bytes, then its ApiIdentity */
+.set APP_API_SLOTS, APP_IDENTITY + 16       /* pair: the slots, APP_API_SLOT bytes each */
+.set APP_RECORD, APP_API_SLOTS + 16         /* a NODE_EV_ENR event of a boot node: 48 bytes, then the record */
 .set APP_FILE, APP_RECORD + 48 + APP_RECORD_MAX /* FileResult */
 .set APP_RESULT, APP_FILE + 32              /* NodeStepResult */
 .set APP_NODE_ROOM, APP_RESULT + NodeStepResult__size         /* NodeRoom */
@@ -96,11 +94,19 @@
 .set APP_DV_EVENT_BYTES, 1 << 20            /* the events of a discv5 step */
 .set APP_DV_OUT_BYTES, 4 << 20              /* the datagrams of a discv5 step */
 .set APP_DV_DATAGRAM_MAX, 1280
-.set APP_API_SLOTS_MAX, 16                  /* Beacon API connections at a time */
-.set APP_API_REQ_BYTES, 8192                /* the bytes of a request */
-.set APP_API_OUT_BYTES, 1 << 16
+.set APP_API_HEAD_MAX, 16384                /* HttpLimits of the Beacon API's requests */
+.set APP_API_BODY_MAX, 1 << 20
+.set APP_API_BUFFER, APP_API_HEAD_MAX + APP_API_BODY_MAX + APP_API_HEAD_MAX  /* the bytes a slot holds */
+.set APP_API_SLOT_BYTES, 24 + APP_API_BUFFER
+.set APP_API_SLOT, 32                       /* a slot: its generation, its state, its bytes held, the time of its last bytes */
+.set APP_API_FREE, 0                        /* the states of a slot */
+.set APP_API_READING, 1                     /* no answer pending: its bytes are read */
+.set APP_API_ANSWERING, 2                   /* a NODE_EV_API went; the answer's last bytes have not */
+.set APP_API_CLOSING, 3                     /* closed, until the shell's CLOSED */
+.set APP_API_IDLE_MS, 30000
 .set APP_API_SEND_WINDOW, 1 << 17
 .set APP_API_EVENT_BYTES, 1 << 20
+.set APP_API_ACT_BYTES, 1 << 20
 .set APP_WORK_TRIES, 16                     /* the times a work grows a buffer */
 .set APP_STEP_TRIES, 64                     /* the times a node step grows a buffer, one field at a time */
 
@@ -276,8 +282,10 @@ app_version_text:
     .ascii "lantern/v0.1.0"
 .set app_version_text_len, 14
 app_m_api:
-    .ascii "Beacon API on TCP port "
-.set app_m_api_len, 23
+    .ascii "Beacon API on TCP "
+.set app_m_api_len, 18
+app_t_colon:
+    .ascii ":"
 app_m_peer_id:
     .ascii ", peer id "
 .set app_m_peer_id_len, 10

@@ -101,6 +101,10 @@ FUNCTION lantern_app_options
     sd      t0, AppOptions_target_peers(s2)
     li      t0, APP_DEFAULT_LOG_LEVEL
     STQ     t0, s2, AppOptions_log_level
+    li      t0, APP_DEFAULT_HTTP_ADDRESS
+    STQ     t0, s2, AppOptions_http_address
+    li      t0, APP_DEFAULT_HTTP_CONNECTIONS
+    STQ     t0, s2, AppOptions_http_max_connections
     ld      s4, (ArgList_args + 8)(s1)
     ld      t0, ArgList_args(s1)
     add     s6, s1, t0
@@ -194,6 +198,9 @@ FUNCTION lantern_app_options
     li      t2, APP_OPTION_PORT
     beq     t0, t2, 22f
     li      t1, APP_MAX_TARGET_PEERS
+    li      t2, APP_OPTION_CONNECTIONS
+    bne     t0, t2, 22f
+    li      t1, APP_MAX_HTTP_CONNECTIONS
 22: bgtu    a1, t1, 90f
     j       23f
 21: call    app_ipv4

@@ -1207,6 +1207,7 @@ LOCAL_FUNCTION node_engine_read
     je      6f
     test    %rax, %rax
     jnz     7f
+    andq    $~NODE_FLAG_EL_OFFLINE, Node_flags(%rbx)   # a whole response: the engine is online
     cmpq    $200, L(%rsp)
     jne     70f
     mov     %r13, (L + 24)(%rsp)
@@ -3310,7 +3311,8 @@ LOCAL_FUNCTION node_event
     jne     47f
     cmpq    $0, 16(%r12)
     je      46f
-    call    node_engine_failed              # ENGINE 1: the connection failed
+    orq     $NODE_FLAG_EL_OFFLINE, Node_flags(%rbx) # ENGINE 1: the connection failed; the engine is offline
+    call    node_engine_failed
     mov     Node_engine_in(%rbx), %rax
     movq    $0, 16(%rbx,%rax)
     LEAVE 48
@@ -3327,9 +3329,22 @@ LOCAL_FUNCTION node_event
     call    node_engine_read
     LEAVE 48
 47: cmp     $NODE_EV_ENR, %rax
-    jne     50f
+    jne     471f
     mov     %r12, %rdi                      # ENR: a record discv5 found
     call    node_enr
+    LEAVE 48
+471: cmp    $NODE_EV_API, %rax
+    jne     472f
+    mov     %r12, %rdi                      # API: the answer to a request
+    call    node_api_event
+    LEAVE 48
+472: cmp    $NODE_EV_API_IDENTITY, %rax
+    jne     50f
+    lea     Node_api_identity(%rbx), %rdi   # API_IDENTITY: the node keeps the texts
+    mov     (NodeEvent_bytes + 8)(%r12), %rsi
+    lea     NodeEvent_bytes(%r12,%rsi), %rsi
+    mov     $API_IDENTITY_SIZE, %edx
+    call    lantern_copy
     LEAVE 48
 50: mov     NodeAction_work_kind(%r12), %rax        # WORK_DONE
     mov     NodeEvent_result(%r12), %rcx
@@ -3702,7 +3717,7 @@ LOCAL_FUNCTION node_event
 85: cmp     $NODE_WORK_NEW_PAYLOAD, %rax    # NEW_PAYLOAD, FORKCHOICE: the request to the execution engine
     je      86f
     cmp     $NODE_WORK_FORKCHOICE, %rax
-    jne     70f
+    jne     701f
 86: test    %rcx, %rcx
     jnz     87f
     mov     (NodeEvent_chunk + 16)(%r12), %r13
@@ -3743,6 +3758,11 @@ LOCAL_FUNCTION node_event
     xor     %edx, %edx
     call    node_ids
     movq    $0, NodeBlock_data_id(%r13)
+    LEAVE 48
+701: cmp    $NODE_WORK_API_ENCODE, %rax     # API_ENCODE: the response to its connection
+    jne     70f
+    mov     %r12, %rdi
+    call    node_api_done
     LEAVE 48
 70: cmp     $NODE_WORK_ATTESTATION, %rax    # done with an attestation or a slashing: free its bytes
     je      71f
@@ -7512,7 +7532,7 @@ END_FUNCTION node_block_entry
  * L+144 the POW_BLOCK events.
  */
 FUNCTION lantern_node_step
-    ENTER 160
+    ENTER 224
     mov     %rdi, %rbx
     mov     %rsi, %rbp
     mov     %rdx, (L + 16)(%rsp)
@@ -7522,8 +7542,8 @@ FUNCTION lantern_node_step
     mov     16(%r8), %r13
     add     %r12, %r13
     mov     %r9, %r14
-    mov     (160 + 96)(%rsp), %r15          # the seventh and eighth arguments
-    mov     (160 + 104)(%rsp), %rax
+    mov     (224 + 96)(%rsp), %r15          # the seventh and eighth arguments
+    mov     (224 + 104)(%rsp), %rax
     mov     %rax, S7(%rsp)
     xor     %r8d, %r8d                      # first: check every event, and count
     xor     %r9d, %r9d
@@ -7535,6 +7555,8 @@ FUNCTION lantern_node_step
     movq    $0, (L + 128)(%rsp)
     movq    $0, (L + 136)(%rsp)
     movq    $0, (L + 144)(%rsp)
+    movq    $0, (L + 208)(%rsp)              # API: the largest scratch, and the API events
+    movq    $0, (L + 216)(%rsp)
     mov     %r12, %rdi
 1:  cmp     %r13, %rdi
     jae     5f
@@ -7652,7 +7674,31 @@ FUNCTION lantern_node_step
     cmpq    $0, (L + 16)(%rsp)
     je      7f
     movq    $1, (L + 136)(%rsp)
-33: cmp     $NODE_EV_BLOCK, %rdx
+33: cmp     $NODE_EV_API, %rdx              # API, API_IDENTITY: their bytes keep their rules
+    jb      34f
+    mov     %rdi, (L + 160)(%rsp)
+    mov     %rcx, (L + 168)(%rsp)
+    mov     %r8, (L + 176)(%rsp)
+    mov     %r9, (L + 184)(%rsp)
+    mov     %r10, (L + 192)(%rsp)
+    mov     %r11, (L + 200)(%rsp)
+    call    node_api_check
+    mov     (L + 160)(%rsp), %rdi
+    mov     (L + 168)(%rsp), %rcx
+    mov     (L + 176)(%rsp), %r8
+    mov     (L + 184)(%rsp), %r9
+    mov     (L + 192)(%rsp), %r10
+    mov     (L + 200)(%rsp), %r11
+    test    %rax, %rax
+    jnz     7f
+    cmp     (L + 208)(%rsp), %rdx
+    jbe     35f
+    mov     %rdx, (L + 208)(%rsp)
+35: cmpq    $NODE_EV_API, 8(%rdi)
+    jne     4f
+    incq    (L + 216)(%rsp)
+    jmp     4f
+34: cmp     $NODE_EV_BLOCK, %rdx
     je      31f
     cmp     $NODE_EV_POW_BLOCK, %rdx
     jne     4f
@@ -7669,6 +7715,9 @@ FUNCTION lantern_node_step
     mov     %r11, L(%rsp)
     imul    $512, %r8, %rcx                 # room: actions, node parts, scratch
     add     %r10, %rcx
+    mov     (L + 216)(%rsp), %rdx           # 2048 for each API answer
+    shl     $11, %rdx
+    add     %rdx, %rcx
     imul    $384, (Node_blocks + 8)(%rbx), %rdx    # the prune's and the rebuilds' actions: 384 for each block, 160 for each blob, 32 for each checkpoint
     add     %rdx, %rcx
     imul    $160, (Node_blobs + 8)(%rbx), %rdx
@@ -7801,7 +7850,8 @@ FUNCTION lantern_node_step
     je      53f
     MOVQ    %rcx, DISCV5_ENR_SIZE + DISCV5_ENR_SCRATCH
     add     %rcx, %rax
-53: mov     (%r14), %rcx
+53: add     (L + 208)(%rsp), %rax           # and the largest API answer's
+    mov     (%r14), %rcx
     cmp     %rax, %rcx
     jb      83f
     mov     %rcx, (L + 8)(%rsp)
@@ -7970,12 +8020,12 @@ FUNCTION lantern_node_step
     mov     (L + 80)(%rsp), %rax
     mov     %rax, NodeStepResult_wakeup(%rdi)
     xor     %eax, %eax
-    LEAVE 160
+    LEAVE 224
 14: mov     (L + 8)(%rsp), %rcx             # a status before any change
     mov     %rcx, (%r14)
-    LEAVE 160
+    LEAVE 224
 7:  mov     $LANTERN_INVALID_EVENT, %eax
-    LEAVE 160
+    LEAVE 224
 81: mov     $NODE_SHORT_ACTIONS, %ecx       # the buffer with too little room
     jmp     84f
 85: mov     $NodeRoom_blocks, %ecx          # a part of the node: the NodeRoom field of its capacity
@@ -8001,7 +8051,7 @@ FUNCTION lantern_node_step
 84: mov     S7(%rsp), %rdx
     mov     %rcx, NodeStepResult_short(%rdx)
 8:  mov     $LANTERN_BUFFER_TOO_SMALL, %eax
-    LEAVE 160
+    LEAVE 224
 END_FUNCTION lantern_node_step
 
 /*
@@ -8661,7 +8711,7 @@ FUNCTION lantern_node_run
     call    node_run_vote
     LEAVE 192
 974: cmp    $NODE_WORK_BACKFILL, %rax
-    jne     8f
+    jne     975f
     cmpq    $(100 + 84), 16(%r14)           # BACKFILL: its root, then the signature with state_a
     jb      18b
     test    %r13, %r13
@@ -8671,6 +8721,18 @@ FUNCTION lantern_node_run
     mov     %r15, %rdx
     mov     S8(%rsp), %rcx
     call    node_run_backfill
+    LEAVE 192
+975: cmp    $NODE_WORK_API_ENCODE, %rax
+    jne     8f
+    mov     %rbx, %rdi                      # API_ENCODE: the response of an answer
+    mov     %rbp, %rsi
+    mov     %r12, %rdx
+    mov     %r13, %rcx
+    mov     %r14, %r8
+    mov     %r15, %r9
+    mov     S8(%rsp), %r10
+    mov     S9(%rsp), %r11
+    call    node_api_run
     LEAVE 192
 8:  mov     $LANTERN_INVALID_EVENT, %eax
     LEAVE 192

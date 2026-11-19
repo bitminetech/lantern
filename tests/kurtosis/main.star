@@ -53,6 +53,8 @@ def run(plan, args={}):
                 "/network-configs",
                 "--port",
                 "9000",
+                "--http-address",
+                "0.0.0.0",
                 "--http-port",
                 "5052",
                 "--enr-address",

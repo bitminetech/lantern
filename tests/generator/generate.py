@@ -14,6 +14,7 @@ import os
 import pathlib
 import re
 import struct
+import subprocess
 import sys
 import tarfile
 import urllib.request
@@ -29,7 +30,6 @@ import engine  # lantern's Engine API client cases
 import node  # lantern's node core cases over libp2p
 import config  # lantern's network config file cases
 import app  # lantern's command line cases
-import api  # lantern's Beacon API cases
 import http_request  # lantern_http_request cases
 import api_route  # lantern_api_route cases, from the beacon-APIs clone
 import db  # lantern's database index cases
@@ -263,11 +263,10 @@ def main():
             count, digest = write_file(out / file, list(app.cases()))
             manifest.append((file, count, digest))
             print(f"{file}: {count} cases")
-        if not runners or "api" in runners:
-            file = f"{preset}-phase0-api-answer.bin"
-            count, digest = write_file(out / file, list(api.cases()))
-            manifest.append((file, count, digest))
-            print(f"{file}: {count} cases")
+        if preset == "minimal" and "phase0" in forks and (not runners or "app" in runners):
+            # The network directory of the binary's start tests (tests/app/start.sh, start.ps1).
+            subprocess.run([sys.executable, str(pathlib.Path(__file__).resolve().parents[1] / "app" / "network.py"),
+                            str(out / "network"), preset, "altair"], check=True)
         if not runners or "api" in runners:
             file = f"{preset}-phase0-http-request.bin"
             count, digest = write_file(out / file, list(http_request.cases()))

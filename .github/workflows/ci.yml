@@ -51,6 +51,7 @@ jobs:
           tests/generator/run.sh "$RUNNER_TEMP/generator" ${{ matrix.fork }}
           mkdir -p vectors
           mv "$RUNNER_TEMP"/generator/*.bin vectors/
+          if [ -d "$RUNNER_TEMP/generator/network" ]; then cp -R "$RUNNER_TEMP/generator/network" vectors/; fi
       - name: Save the vectors
         if: steps.restore.outputs.cache-hit != 'true'
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
@@ -151,7 +152,7 @@ jobs:
         if: matrix.fork == 'phase0'
         run: |
           chmod +x build/linux-${{ matrix.isa }}/lantern-minimal
-          tests/app/start.sh "${{ matrix.qemu }}" build/linux-${{ matrix.isa }}/lantern-minimal
+          tests/app/start.sh "${{ matrix.qemu }}" build/linux-${{ matrix.isa }}/lantern-minimal vectors/network
       - name: Run vectors
         run: |
           set -o pipefail
@@ -301,7 +302,7 @@ jobs:
         run: |
           build/windows-${{ matrix.isa }}/shell-test.exe $env:RUNNER_TEMP
           if ($LASTEXITCODE -ne 0) { exit 1 }
-          tests/app/start.ps1 build/windows-${{ matrix.isa }}/lantern-minimal.exe
+          tests/app/start.ps1 build/windows-${{ matrix.isa }}/lantern-minimal.exe vectors/network
           exit $LASTEXITCODE
       - if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
@@ -339,7 +340,7 @@ jobs:
         run: build/macos-${{ matrix.isa }}/shell-test "$RUNNER_TEMP"
       - name: Run the binary
         if: matrix.fork == 'phase0'
-        run: tests/app/start.sh "" build/macos-${{ matrix.isa }}/lantern-minimal
+        run: tests/app/start.sh "" build/macos-${{ matrix.isa }}/lantern-minimal vectors/network
       - if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
         with:

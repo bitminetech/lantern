@@ -22,10 +22,9 @@ tests/generator/run.sh ~/.cache/lantern/vectors
 | `p2p.py` | The cases of the p2p helpers, from the pinned spec modules |
 | `engine.py` | The cases of the Engine API client: JWTs, HTTP requests and responses |
 | `reqresp.py` | The cases of the req/resp encoding, and the req/resp message types of the spec's text |
-| `node.py` | The cases of the node core over libp2p: an anchor, and the Status and MetaData the node answers; the blob sidecars of the spec's fork choice cases with blobs |
+| `node.py` | The cases of the node core: an anchor, and the Status and MetaData the node answers over libp2p; the Beacon API requests and the response of each; the blob sidecars of the spec's fork choice cases with blobs |
 | `config.py` | The cases of lantern_config_parse: the pinned spec configs, and hand cases with their values or fault lines |
 | `app.py` | The cases of lantern_app_options: command lines with their options or fault index |
-| `api.py` | The cases of lantern_api_answer: views, requests and the response bytes |
 | `http_request.py` | The cases of lantern_http_request: connection bytes and the request or fault of each |
 | `api_route.py` | The cases of lantern_api_route: requests and the route or fault of each; reads the operations from the beacon-APIs clone |
 
@@ -48,15 +47,17 @@ tests/generator/run.sh ~/.cache/lantern/vectors
 | `<preset>-<fork>-p2p-<function>.bin` | Lantern's cases of one p2p helper of networking.md: `config` (the values that replace the preset's), `input`, and `output`, null where the spec raises |
 | `<preset>-<fork>-reqresp-<function>.bin` | Lantern's cases of one function of req-resp.md: `input`, and `output`, null or a string (`more`, `invalid`) where the function refuses the input |
 | `<preset>-<fork>-engine-<function>.bin` | Lantern's cases of one function of engine-api.md: `input`, and `output`, or a string (`more`, `invalid`) where the function refuses the input |
+| `<preset>-<fork>-node-p2p.bin` | Lantern's node cases over libp2p, altair to fulu: `anchor_state`, `anchor_block`, and the `status` and `metadata` the node answers |
+| `<preset>-<fork>-node-api.bin` | Lantern's Beacon API cases of the node, altair to fulu: `anchor_state`, `anchor_block`, `identity`, `time_ms`, the lists `names`, `requests` and `responses`, `closes` (a byte for each request: 1 when it closes), and `offline`, the index of the first request after a failed execution engine connection |
 | `<preset>-<fork>-node-blobs.bin` | Lantern's blob sidecars of the spec's `fork_choice-on_block` cases with blobs, deneb and electra: a part for each block file; made in a run with the `fork_choice` cases |
 | `<preset>-<fork>-descriptors.bin` | Each SSZ container type of the fork, and each req/resp message type, with its reference `TypeDescriptor` |
 | `<preset>-config.bin` | One case: `configs/<preset>.yaml` |
 | `<preset>-phase0-config-parse.bin` | Lantern's cases of lantern_config_parse (config.md): `text`, the bytes of a config file, and `config`, the values it gives, or `line`, its first faulty line |
-| `<preset>-phase0-api-answer.bin` | Lantern's cases of lantern_api_answer (beacon-api.md): `view`, an ApiView, `request`, and `response`, the bytes it must give, or `more` |
 | `<preset>-phase0-http-request.bin` | Lantern's cases of lantern_http_request (beacon-api.md): `bytes`, `head_max`, `body_max`, the `status` and `http_status`, `prefix`, the status of each shorter length, and the request's fields and parts |
 | `<preset>-phase0-api-route.bin` | Lantern's cases of lantern_api_route (beacon-api.md): the request's `method` and parts, `status`, and `out`, the whole ApiRoute, or `http_status`, `fault`, `allow` and `op` |
 | `<preset>-phase0-app-options.bin` | Lantern's cases of lantern_app_options (app.md): `args`, a command line, and `options`, the fields it gives, or `fault`, the index of its first faulty argument |
 | `<preset>-kzg_setup.bin` | One case: the three point lists of `trusted_setup_4096.json` as bytes |
+| `network/` | The network directory of the binary's start tests (tests/app/start.sh, start.ps1): tests/app/network.py of minimal and altair; made in a run with phase0 and the `app` cases |
 | `manifest.txt` | Each file, its case count and its SHA-256 |
 
 - `<preset>`: `mainnet` or `minimal`.

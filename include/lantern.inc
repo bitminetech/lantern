@@ -571,6 +571,7 @@
 .set NODE_FLAG_DISCV5, 64              /* the shell runs discv5 for the node: it takes NODE_ACT_DISCV5 and gives NODE_EV_ENR */
 .set NODE_FLAG_DB, 128                 /* the node archives the finalized history: it gives NODE_ACT_DB_APPEND and serves NODE_DB_REF records */
 .set NODE_FLAG_FEW_STATES, 256         /* the node keeps the post-states of the head, the justified root, F and the blocks with no child only */
+.set NODE_FLAG_EL_OFFLINE, 512         /* the last connection to the execution engine failed before an answer */
 .set Node_peers, 120                   /* PartRef of NodePeer */
 .set Node_streams, 136                 /* PartRef of NodeStream entries of Node_stream_bytes each */
 .set Node_p2p_out, 152                 /* PartRef of bytes: libp2p events the node made for its next libp2p step */
@@ -621,7 +622,8 @@
 .set Node_attnets, 712                /* the attestation subnets the node is subscribed to: bit i for subnet i */
 .set Node_sidecar_floor, 720          /* with NODE_FLAG_DB: the Db holds no sidecar below this slot */
 .set Node_config, 728
-.set NODE_FIXED, 728 + CONFIG_SIZE
+.set Node_api_identity, 728 + CONFIG_SIZE  /* ApiIdentity of the last NODE_EV_API_IDENTITY */
+.set NODE_FIXED, 728 + CONFIG_SIZE + 936
 .set NODE_LOOKUP_MS, 10000             /* the least time between two lookups of the node */
 .set NODE_STATUS_MS, 12000             /* the least time between two Status requests of node_sync */
 .set NODE_SUBSCRIBE_AHEAD, 2           /* epochs: the topics of a new ForkDigest join this early, the old ones leave this late */
@@ -797,7 +799,9 @@
 .set NODE_EV_P2P, 8                    /* 16 a libp2p shell result Event */
 .set NODE_EV_ENGINE, 9                 /* 16 0: 24 a ByteList of bytes the execution engine sent; 16 1: the connection failed */
 .set NODE_EV_ENR, 10                   /* 24 a ByteList of a node record discv5 found */
-.set NODE_EV_LAST, 10
+.set NODE_EV_API, 11                   /* 16 the connection, 24 a ByteList of an HttpRequest */
+.set NODE_EV_API_IDENTITY, 12          /* 24 a ByteList of an ApiIdentity */
+.set NODE_EV_LAST, 12
 .set NodeEvent_result, 72
 .set NodeEvent_checkpoint, 80
 .set NODE_EV_WORK_DONE_SIZE, 128
@@ -818,6 +822,9 @@
 .set NODE_ACT_DB_STATE_SIZE, 40
 .set NODE_ACT_DB_DROP, 11              /* 16 a segment, 24 1 for a sidecar segment: the shell deletes its file */
 .set NODE_ACT_DB_DROP_SIZE, 32
+.set NODE_ACT_API_SEND, 12             /* 16 the connection, 24 last, 32 a ByteList of the bytes */
+.set NODE_ACT_API_CLOSE, 13            /* 16 the connection */
+.set NODE_ACT_API_CLOSE_SIZE, 24
 .set NODE_DB_REF, 1 << 63              /* a BufferId of a Db record: bit 62 a sidecar segment, segment << 48, the offset below */
 .set NODE_DB_SIDECARS, 1 << 62
 .set DB_SEGMENT_SHIFT, 13              /* slot >> DB_SEGMENT_SHIFT: its segment */
@@ -849,6 +856,7 @@
 .set NODE_WORK_BLOCK_ATTESTATION, 16   /* a: the target checkpoint state, or 0; data: an imported block; arg: the index of an attestation of its body */
 .set NODE_WORK_BLOCK_SLASHING, 17      /* a: the justified root's post-state; data: an imported block; arg: the index of an attester slashing of its body */
 .set NODE_WORK_GOSSIP_VOTE, 18         /* a: the target checkpoint state, or 0; data: a valid SignedAggregateAndProof; target: its message Handle */
+.set NODE_WORK_API_ENCODE, 19          /* a: the block's post-state; data: its bytes, a NODE_DB_REF or 0; target: the connection; arg: op + 256 * flags + 65536 * NodeBlock index */
 .set NODE_VOTES_MAX, 130               /* MAX_ATTESTATIONS + MAX_ATTESTER_SLASHINGS: the votes of a block the node takes */
 .set NodeEvent_root, NodeEvent_checkpoint + 8  /* GOSSIP of a valid beacon_block, SYNC_BLOCK: its root; of a valid blob_sidecar, BLOB: the root of its block header */
 .set NodeEvent_index, NodeEvent_root + 32      /* GOSSIP of a valid beacon_block, SYNC_BLOCK: its blob commitments; of a valid blob_sidecar: its index */
@@ -894,7 +902,7 @@
 .set DB_RECORD_MAX, 1 << 32
 .set DB_SIDECAR_INDICES, 128           /* a sidecar's index is below this */
 
-/* ApiView (docs/reference/beacon-api.md): the values lantern_api_answer shows. A text field is a length, then its bytes. */
+/* ApiView: the values the node's Beacon API answers show (beacon-api.md, Common rules), in scratch; internal. A text field is a length, then its bytes. */
 .set ApiView_genesis_time, 0
 .set ApiView_genesis_validators_root, 8
 .set ApiView_genesis_fork_version, 40
@@ -918,12 +926,21 @@
 .set ApiView_syncnets, 464
 .set ApiView_custody_group_count, 472
 .set ApiView_fork, 480
-.set ApiView_peer_id, 488                /* 64 bytes of text */
+.set ApiView_peer_id, 488                /* the ApiIdentity, from here to the end: 64 bytes of text */
 .set ApiView_enr, 560                    /* 512 */
 .set ApiView_p2p_address, 1080           /* 128 */
 .set ApiView_discovery_address, 1216     /* 128 */
 .set ApiView_version, 1352               /* 64 */
 .set ApiView__size, 1424
+.set ApiIdentity_peer_id, 0              /* ApiIdentity (beacon-api.md): texts, each a length and its room */
+.set ApiIdentity_enr, 72
+.set ApiIdentity_p2p_address, 592
+.set ApiIdentity_discovery_address, 728
+.set ApiIdentity_version, 864
+.set API_IDENTITY_SIZE, 936
+.set API_ANSWER_CLOSE, 1                 /* the answer flags of a NODE_WORK_API_ENCODE's arg, times 256 */
+.set API_ANSWER_HTTP10, 2
+.set NODE_API_SCRATCH, 8192              /* the step's scratch for a NODE_EV_API, and 4 bytes per byte of its query */
 
 /* HttpLimits and HttpRequest (docs/reference/beacon-api.md): lantern_http_request. */
 .set HttpLimits_head_max, 0
@@ -1014,12 +1031,17 @@
 .set AppOptions_checkpoint_state, 112
 .set AppOptions_checkpoint_block, 128
 .set AppOptions_log_level, 144          /* 0 error, 1 warn, 2 info, 3 debug */
-.set AppOptions__size, 152
+.set AppOptions_http_address, 152       /* IPv4, its 4 bytes in network order in the low bytes */
+.set AppOptions_http_max_connections, 160
+.set AppOptions__size, 168
 .set APP_DEFAULT_PORT, 9000
 .set APP_DEFAULT_HTTP_PORT, 5052
 .set APP_DEFAULT_TARGET_PEERS, 64
 .set APP_DEFAULT_LOG_LEVEL, 2           /* info */
 .set APP_MAX_TARGET_PEERS, 1024
+.set APP_DEFAULT_HTTP_ADDRESS, 0x0100007f  /* 127.0.0.1 */
+.set APP_DEFAULT_HTTP_CONNECTIONS, 64
+.set APP_MAX_HTTP_CONNECTIONS, 4096
 
 .if DB_SEGMENT_SLOTS != 1 << DB_SEGMENT_SHIFT
 .error "DB_SEGMENT_SHIFT is not the log of DB_SEGMENT_SLOTS"

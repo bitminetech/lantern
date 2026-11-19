@@ -78,6 +78,7 @@
 - libp2p's actions go out in a `NODE_ACT_P2P_LIST` action. The shell does its shell requests in order; the node took its application notices.
 - The node's queue (`p2p_out`) is one ByteList of libp2p events inside the node. libp2p_step reads it in place.
 - A stream carries one request and one answer, as the req/resp functions of [req-resp.md](req-resp.md) encode them.
+- The node answers the Beacon API ([beacon-api.md](beacon-api.md)). The shell keeps the connections: it reads each request with lantern_http_request and passes it in a `NODE_EV_API`, one request of a connection at a time, and writes the bytes of each `NODE_ACT_API_SEND` to its connection. A connection is a u64 the shell gives; the node keeps none.
 - lantern_node_size, lantern_node_init, lantern_node_copy, lantern_node_step, lantern_node_run and lantern_node_protocols are in the common object of the core (asm/core/<ISA>/node.s), and each symbol is its name.
 - lantern_node_import, lantern_node_block_root, lantern_node_attestation, lantern_node_attester_slashing and lantern_node_gossip are in each fork object (asm/core/<ISA>/nodehooks.s), exported as `lantern_<fork>_<name>`. lantern_node_blob_sidecar is in the deneb and electra objects only, lantern_node_column_sidecar in the fulu object only, lantern_node_new_payload in the bellatrix and later objects.
 
@@ -138,6 +139,11 @@
   - Each column sidecar it sent must be a `NODE_BLOB_VALID` entry of the node.
   - Then the node serves them: DataColumnSidecarsByRange v1 of every column from the anchor's slot to the head's must give each of those sidecars in (slot, index) order; DataColumnSidecarsByRoot v1 of the chain's blocks from the last to the first, each with the node's columns and one column it does not sample, then an identifier of a root of no block, must give those sidecars in that order. Each chunk must have result 0, the sidecar's SSZ bytes, and compute_fork_digest of its slot's epoch as context bytes.
   - A fulu case with column sidecars syncs again with a new node and a peer whose MetaData gives `CUSTODY_REQUIREMENT` custody groups and whose answers hold no sidecars: each DataColumnSidecarsByRange of the node must ask for the columns of get_custody_groups(the peer's node ID, `CUSTODY_REQUIREMENT`), in ascending order, and no block of the chain with blob commitments, and no later one, may be `NODE_BLOCK_IMPORTED`.
+- Lantern's cases `<preset>-<fork>-node-api.bin` of altair to fulu, made by tests/generator/node.py with the pinned spec: the anchor of the `p2p` cases, an `ApiIdentity`, a time, and requests with the response of each, written by the rules of [beacon-api.md](beacon-api.md#common-rules) from the spec's values.
+  - The runner gives the node a `NODE_EV_TICK` of the time and a `NODE_EV_API_IDENTITY`, then each request on its own connection: lantern_http_request with `head_max` 16384 and `body_max` 1048576, then a `NODE_EV_API` of its `HttpRequest`, of `LANTERN_OK` or `LANTERN_INVALID_HTTP`; it plays the shell until the node settles.
+  - The bytes of the connection's `NODE_ACT_API_SEND` actions must be the case's response, the last with `last` 1 and no other; the connection must get one `NODE_ACT_API_CLOSE` after them when the case says it closes, else none.
+  - Requests: each operation the node answers; the head by `head` and by its root, and another root (404); each other operation (501); route faults (400, 404, 405 with `Allow`, 406, 414, 415); faulty requests (400, 413, 431, 501, 505); `Connection: close`; HTTP/1.0 with and without `keep-alive`; getHealth with `syncing_status`.
+- The `fork_choice-get_head` and `fork_choice-on_block` cases in node mode, after their steps: getBlockHeader of `head` must answer 200 with the node's `head_root` as `root` and the slot of its block, and getStateFinalityCheckpoints of `head` with the checkpoints of the post-state the node keeps for the head.
 - Lantern's cases `<preset>-<fork>-node-blobs.bin` of deneb and electra, made by tests/generator/node.py with the pinned spec: one for each `fork_choice-on_block` case whose block steps have blobs, of the same name.
   - Each part is named after a block file of the case and holds the `BlobSidecar` SSZ bytes of get_blob_sidecars of the block and the step's blobs and proofs, as a list.
   - A step with fewer proofs than blobs gives the sidecars of the indices that have both.
@@ -267,7 +273,7 @@ lantern_node_step(node, store, p2p, tick, events, scratch, actions, result) -> s
 
 ### Function does
 
-- Room: `actions` has the event bytes + 512 per event + `NODE_ACT_WORK_SIZE` per vote of each `NODE_EV_WORK_DONE` of a valid `NODE_WORK_IMPORT_BLOCK` (its `NodeEvent_index` + `NodeEvent_root` counts) + 384 per known block + 160 per `NodeBlob` entry + 32 per `NodeCheckpoint` entry + 2048 bytes free (the crossing of a fork boundary takes 208), and `LIBP2P_ACTIONS_MIN` + 40 more with `p2p`; with `p2p`, `p2p_out` has room for the libp2p events of the `NODE_EV_P2P` events, and `scratch` holds as many bytes again and `LIBP2P_SCRATCH_SIZE`; the blocks part has an entry free per `NODE_EV_BLOCK` and per `NODE_EV_WORK_DONE` of `NODE_WORK_GOSSIP`, and `NODE_SYNC_BATCH` more with `p2p`; the blobs part has an entry free per `NODE_EV_WORK_DONE` of `NODE_WORK_GOSSIP`, and with `p2p` `NODE_SYNC_BATCH` times the largest of `MAX_BLOBS_PER_BLOCK`, `MAX_BLOBS_PER_BLOCK_ELECTRA` and the count of `columns` more; the checkpoints part has 2 free per `NODE_EV_WORK_DONE`, and 2; the pow blocks part has an entry free per `NODE_EV_POW_BLOCK`; `engine_in` has room for the bytes of the `NODE_EV_ENGINE` events; `scratch` has `LANTERN_SCRATCH_FIXED` + 64 + 16 bytes per store node + 8 per `NodeBlock` entry, and `DISCV5_ENR_SIZE` + `DISCV5_ENR_SCRATCH` more with a `NODE_EV_ENR`.
+- Room: `actions` has the event bytes + 512 per event + `NODE_ACT_WORK_SIZE` per vote of each `NODE_EV_WORK_DONE` of a valid `NODE_WORK_IMPORT_BLOCK` (its `NodeEvent_index` + `NodeEvent_root` counts) + 384 per known block + 160 per `NodeBlob` entry + 32 per `NodeCheckpoint` entry + 2048 bytes free (the crossing of a fork boundary takes 208), and `LIBP2P_ACTIONS_MIN` + 40 more with `p2p`; with `p2p`, `p2p_out` has room for the libp2p events of the `NODE_EV_P2P` events, and `scratch` holds as many bytes again and `LIBP2P_SCRATCH_SIZE`; the blocks part has an entry free per `NODE_EV_BLOCK` and per `NODE_EV_WORK_DONE` of `NODE_WORK_GOSSIP`, and `NODE_SYNC_BATCH` more with `p2p`; the blobs part has an entry free per `NODE_EV_WORK_DONE` of `NODE_WORK_GOSSIP`, and with `p2p` `NODE_SYNC_BATCH` times the largest of `MAX_BLOBS_PER_BLOCK`, `MAX_BLOBS_PER_BLOCK_ELECTRA` and the count of `columns` more; the checkpoints part has 2 free per `NODE_EV_WORK_DONE`, and 2; the pow blocks part has an entry free per `NODE_EV_POW_BLOCK`; `engine_in` has room for the bytes of the `NODE_EV_ENGINE` events; `scratch` has `LANTERN_SCRATCH_FIXED` + 64 + 16 bytes per store node + 8 per `NodeBlock` entry, and `DISCV5_ENR_SIZE` + `DISCV5_ENR_SCRATCH` more with a `NODE_EV_ENR`, and `NODE_API_SCRATCH` (8192) + 4 bytes per byte of the largest `query` more with a `NODE_EV_API`; `actions` has 2048 more per `NODE_EV_API`.
 - Before any change: the root of each `NODE_EV_BLOCK`, with lantern_node_block_root of the fork of its slot. A status of that call is the step's.
 - On `LANTERN_BUFFER_TOO_SMALL`, `short`: `NODE_SHORT_ACTIONS` for the room of `actions`, and for `LIBP2P_BUFFER_TOO_SMALL` of libp2p_step (its scratch is the step's own); `NODE_SHORT_NODE` for a part of the node, with `room` the byte offset in `NodeRoom` of its capacity (`blocks`, `checkpoints`, `pow_blocks`, `p2p_out`, `blobs` or `engine_bytes`); `NODE_SHORT_SCRATCH` for `scratch`, and for `LANTERN_BUFFER_TOO_SMALL` of lantern_node_block_root.
 - The prune, after libp2p's first round and before the node's events, when the store's finalized epoch is above `pruned_epoch`: lantern_store_prune with the step's scratch; on its success `pruned_epoch` takes that epoch, and with F the block of the finalized root:
@@ -362,6 +368,16 @@ lantern_node_step(node, store, p2p, tick, events, scratch, actions, result) -> s
 - `latestValidHash` applies from a block of the store: up the chain from it, by `parent_root`, each block whose `block_hash` is not `latestValidHash` gets lantern_store_payload_status with `PAYLOAD_STATUS_INVALIDATED`, until the block whose `block_hash` is `latestValidHash`. A zero hash stops at the first block whose `block_hash` is zero. With null, or a hash no block of the chain has, only the block in question (a block of the store) gets it.
 - `NODE_EV_WORK_DONE` of `NODE_WORK_GOSSIP`: a `VALIDATION` of `LIBP2P_ACCEPT` for `LANTERN_VALID`, `LIBP2P_REJECT` for `LANTERN_GOSSIP_REJECT`, else `LIBP2P_IGNORE`; a `NODE_ACT_STATE_FREE` of the proposer state. A valid beacon_block of a root the node does not know keeps its bytes as a `NodeBlock` with the blob count at `NodeEvent_index`, which waits for its blobs. A valid blob_sidecar keeps its bytes as a `NodeBlob` in `NODE_BLOB_VALID` of the root at `NodeEvent_root`, the index at `NodeEvent_index` and the message's slot, when the node holds no `NODE_BLOB_VALID` entry of that root and index. A valid data_column_sidecar of a column of `columns` keeps its bytes as a `NodeBlob` in `NODE_BLOB_VALID` of the root at `NodeEvent_root`, the index at `NodeEvent_index` and the message's slot, when the node holds no `NODE_BLOB_VALID` entry of that root and index. A valid attester_slashing with a justified state keeps its bytes for a `NODE_WORK_ATTESTER_SLASHING` with that state. A valid beacon_aggregate_and_proof keeps its bytes and its entry, in `NODE_MESSAGE_VOTE`, for fork choice from the slot after its aggregate's (phase0 `fork-choice.md`: an attestation affects the fork choice of later slots only), when the messages part has more than half its capacity free after it. Else the bytes go. The entry goes, but an entry kept for its vote.
 
+- `NODE_EV_API` (beacon-api.md, Common rules): the answer to the request, in one `NODE_ACT_API_SEND` of its connection with `last` 1, then a `NODE_ACT_API_CLOSE` of it when the connection closes after the answer.
+  - An `HttpRequest` with a `status`: the error of that status.
+  - Else lantern_api_route of the request, its `ApiRoute` in `scratch`. `LANTERN_INVALID_ROUTE`: the error of its `status`.
+  - getHealth, getNetworkIdentity, getNodeVersion, getSyncingStatus, getPeerCount and getGenesis: the answer of the node, the store and the config.
+  - getBlockHeader and getStateFinalityCheckpoints of the head: a `NODE_WORK_API_ENCODE` with the head's post-state as `state_a`; as `data` the head's bytes, a `NODE_DB_REF` of its block record when its bytes went to the `Db` (lantern_db_find_root of its root), or 0; the connection as `target`; and as `arg` the operation + 256 times the answer flags (`API_ANSWER_CLOSE` 1, `API_ANSWER_HTTP10` 2) + 65536 times the head's `NodeBlock` index.
+  - Every other operation: 501.
+- `NODE_EV_API_IDENTITY`: the node's `api_identity` takes the event's `ApiIdentity`.
+- `NODE_EV_WORK_DONE` of `NODE_WORK_API_ENCODE`: `LANTERN_VALID`, the response at `NodeEvent_chunk` in a `NODE_ACT_API_SEND` of the connection `target` with `last` 1; another result, the error 500. With `API_ANSWER_CLOSE` in `arg`, a `NODE_ACT_API_CLOSE` after it.
+- With `NODE_FLAG_ENGINE`: a `NODE_EV_ENGINE` with arg 1 sets `NODE_FLAG_EL_OFFLINE`; a whole response of lantern_http_parse_response in `engine_in` clears it.
+
 ### Function never
 
 - Reads a beacon state or keeps an argument's address.
@@ -396,11 +412,11 @@ lantern_node_run(node, store, seen, work, state_a, state_b, state_c, data, setti
 
 - `LANTERN_OK`: `event` holds the work's fields and its `result`.
 - `LANTERN_BUFFER_TOO_SMALL`: the store, `state_a`, `scratch` or `event` has too little room. Nothing is changed.
-- `LANTERN_INVALID_EVENT`: the work is of no kind, or names no `NodeCheckpoint`.
+- `LANTERN_INVALID_EVENT`: the work is of no kind, or names no `NodeCheckpoint`; a `NODE_WORK_API_ENCODE` of another operation, of a block index past the blocks part, or with no `state_a`.
 
 ### Caller must
 
-- On `LANTERN_BUFFER_TOO_SMALL`, grow the store with lantern_store_copy, or `state_a` with lantern_beacon_state_copy, or `scratch`, or for a SERVE work `event`, then call again.
+- On `LANTERN_BUFFER_TOO_SMALL`, grow the store with lantern_store_copy, or `state_a` with lantern_beacon_state_copy, or `scratch`, or for a SERVE, NEW_PAYLOAD, FORKCHOICE or API_ENCODE work `event`, then call again.
 
 ### Function does
 
@@ -422,6 +438,7 @@ lantern_node_run(node, store, seen, work, state_a, state_b, state_c, data, setti
 - `NODE_WORK_FORKCHOICE`: engine_forkchoiceUpdated of the fork of the store's slot with the `block_hash` of the store's nodes of `head_root`, the justified checkpoint's root (safe) and the finalized checkpoint's root, in an HTTP POST to `engine_host` with a JWT of `jwt_secret` and the time `time_ms` / 1000, a ByteList at `NodeEvent_chunk`; `LANTERN_INVALID_UNKNOWN_BLOCK` when the store has no node of one of those roots, `LANTERN_NO_PAYLOAD` before bellatrix or when the head's `block_hash` is zero (no call).
 - `NODE_WORK_BLOB`: with `arg` 0, a `BlobSidecar`: lantern_node_blob_sidecar of the fork of its slot when it is deneb or electra; with `arg` 1, a `DataColumnSidecar`: lantern_node_column_sidecar when the fork of its slot is fulu. Each with the node's config and `settings`, the root at `NodeEvent_root`; a slot of another fork gives the result `LANTERN_INVALID_ENCODING`.
 - `NODE_WORK_GOSSIP`: lantern_node_gossip of the fork of the store's slot, with a `NodeGossip` of `seen`, the store, `time_ms`, the topic and subnet of `arg`, `state_a` as head, `state_b` as proposer, `state_c` as justified, `settings` and the node's config, its `root` at `NodeEvent_root` and its `index` at `NodeEvent_index`. A proposer or justified state whose slot's fork is not that of the store's slot is passed as 0; a head state whose slot's fork is not that of the store's slot gives the result `LANTERN_GOSSIP_IGNORE`, as at a fork's first slots, before the node imports a block of the new fork.
+- `NODE_WORK_API_ENCODE`: the response of the operation in `arg` (beacon-api.md, Common rules), with the answer flags of `arg`, for the `NodeBlock` at index `arg` / 65536, as a ByteList at `NodeEvent_chunk` of the event; the event's `size` then covers it. getBlockHeader: the header of the block in `data` with lantern_node_block_header of the fork of its slot; with no `data`, the `latest_block_header` of `state_a`, its `state_root` lantern_state_root of the fork of the state's slot (with the `StateCache` of the node's config) when it is zero, and a zero signature. getStateFinalityCheckpoints: lantern_node_state_checkpoints of `state_a`. Bytes that do not hold a block give the result `LANTERN_INVALID_ENCODING`.
 - Bytes too short for their type give the result `LANTERN_INVALID_ENCODING`.
 
 ## Function `lantern_node_protocols`
@@ -1101,10 +1118,11 @@ The state of the node: a value with parts.
 | 712 | `attnets` | u64 | The attestation subnets the node is subscribed to: bit i for subnet i |
 | 720 | `sidecar_floor` | u64 | With `NODE_FLAG_DB`: the `Db` holds no sidecar below this slot; the `Db`'s first slot at the start |
 | 728 | `config` | `Config` | |
+| 728 + `CONFIG_SIZE` | `api_identity` | `ApiIdentity` of [beacon-api.md](beacon-api.md#type-apiidentity) | Of the last `NODE_EV_API_IDENTITY`; its texts empty at the start |
 
 ### Rules
 
-- `NODE_FIXED` (520 + `CONFIG_SIZE`) bytes of fixed fields; the parts follow in the order blocks, checkpoints, pow_blocks, peers, streams, messages, blobs, p2p_out, engine_in, db.
+- `NODE_FIXED` (728 + `CONFIG_SIZE` + `API_IDENTITY_SIZE`) bytes of fixed fields; the parts follow in the order blocks, checkpoints, pow_blocks, peers, streams, messages, blobs, p2p_out, engine_in, db.
 - The `Db` has the capacities of the `NodeRoom` fields `db_slots` and `db_roots`, and its `first_slot` is the lowest of the anchor's `history_slot`, its slot and the first slot of the epoch max(0, the epoch of its slot - compute_min_epochs_for_block_requests), rounded down to a multiple of `DB_SEGMENT_SLOTS`: the backfill's blocks fit in it.
 - The backfill at the start: `backfill_root` the anchor's root, `backfill_slot` and `backfill_next` its slot + 1 (the anchor block's bytes come from a peer too), `backfill_segment`, `backfill_sidecar_segment` and `backfill_start` 2^64 - 1, and `backfill_handle`, `backfill_end`, `backfill_ms`, `backfill_peer` and `backfill_got` 0.
 - The capacity of a part is its bytes up to the next part over its entry's bytes; `p2p_out` is the last part.
@@ -1115,6 +1133,7 @@ The state of the node: a value with parts.
 - `NODE_FLAG_ENGINE`: the node drives an execution engine; `NODE_FLAG_FCU`: an engine_forkchoiceUpdated is due.
 - `NODE_FLAG_DISCV5`: the shell runs asm-discv5 for the node.
 - `NODE_FLAG_DB`: the node archives the finalized history in its `Db`, and the shell keeps the segment files: it does each `NODE_ACT_DB_APPEND` and gives the bytes of a `NODE_DB_REF`.
+- `NODE_FLAG_EL_OFFLINE`: the last connection to the execution engine failed or closed before an answer, and no answer came since.
 - `NODE_FLAG_FEW_STATES`: the node keeps the post-states of the head, the justified root, F and the blocks with no child, and rebuilds the others when it needs them.
 - `columns` has room for `NUMBER_OF_COLUMNS` of the preset, at most 128.
 
@@ -1319,8 +1338,8 @@ The events of one step: a ByteList whose bytes are `NodeEvent` entries one after
 |---|---|---|---|
 | 0 | `size` | u64 | Bytes of the event, a multiple of 8 |
 | 8 | `kind` | u64 | `NODE_EV_*` |
-| 16 | `arg` | u64 | `NODE_EV_TICK`: time_ms; `NODE_EV_BLOCK`: data_available; `NODE_EV_ATTESTATION`: is_from_block; `NODE_EV_P2P`: the libp2p event starts here; `NODE_EV_ENGINE`: 0 bytes, 1 the connection failed |
-| 24 | `bytes` | ByteList | `NODE_EV_BLOCK`, `NODE_EV_ATTESTATION`, `NODE_EV_ATTESTER_SLASHING`, `NODE_EV_POW_BLOCK`: the SSZ bytes; `NODE_EV_ENGINE` with arg 0: the bytes of the execution engine's connection; `NODE_EV_ENR`: a node record; offset 24 |
+| 16 | `arg` | u64 | `NODE_EV_TICK`: time_ms; `NODE_EV_BLOCK`: data_available; `NODE_EV_ATTESTATION`: is_from_block; `NODE_EV_P2P`: the libp2p event starts here; `NODE_EV_ENGINE`: 0 bytes, 1 the connection failed; `NODE_EV_API`: the connection |
+| 24 | `bytes` | ByteList | `NODE_EV_BLOCK`, `NODE_EV_ATTESTATION`, `NODE_EV_ATTESTER_SLASHING`, `NODE_EV_POW_BLOCK`: the SSZ bytes; `NODE_EV_ENGINE` with arg 0: the bytes of the execution engine's connection; `NODE_EV_ENR`: a node record; `NODE_EV_API`: an `HttpRequest`; `NODE_EV_API_IDENTITY`: an `ApiIdentity`; offset 24 |
 
 ### Rules
 
@@ -1331,6 +1350,8 @@ The events of one step: a ByteList whose bytes are `NodeEvent` entries one after
 - `NODE_EV_ENGINE`: arg 0 or 1; with 0, the event has `bytes`; only with `NODE_FLAG_ENGINE`.
 - `NODE_EV_ENR`: has `bytes`; only with `p2p`.
 - `NODE_EV_PAYLOAD_STATUS` is `LANTERN_INVALID_EVENT` in this version: the answers come in `NODE_EV_ENGINE`.
+- `NODE_EV_API`: `arg` the connection; `bytes` an `HttpRequest` of lantern_http_request, of `LANTERN_OK` or `LANTERN_INVALID_HTTP`: its `size` the ByteList's count, at least `HTTP_REQUEST_FIXED` and a multiple of 8; with `status` 0, each of its parts inside it.
+- `NODE_EV_API_IDENTITY`: `bytes` an `ApiIdentity` of `API_IDENTITY_SIZE` bytes, each text's length at most its room and its bytes as the type says.
 
 ## Type `NodeActions`
 
@@ -1364,6 +1385,9 @@ The actions of one step: a ByteList whose bytes are `NodeAction` entries one aft
 - `NODE_ACT_DB_STATE` (`NODE_ACT_DB_STATE_SIZE`, 40 bytes): 16 the `BufferId` of a finalized block's post-state, 24 the `BufferId` of the block's SSZ bytes, 32 its slot. The shell may keep them, so that a later start has an anchor whose blocks the `Db` holds.
 - `NODE_ACT_DB_DROP` (`NODE_ACT_DB_DROP_SIZE`, 32 bytes): 16 a segment, 24 1 for a sidecar segment, else 0. The shell deletes the segment's file; a later record of that segment starts a new file.
 - A `NODE_DB_REF` is a `BufferId` with bit 63 set: bit 62 set for a sidecar segment, the segment's number in bits 48 to 61, and the offset of a record in bits 0 to 47. As the `data` of a SERVE work it names the SSZ bytes of that record: the shell gives lantern_node_run the record's ByteList at its byte 56, in place in the segment's memory.
+- `NODE_ACT_API_SEND`: 16 the connection, 24 `last`, 1 when the bytes end the answer, else 0; a ByteList at 32, offset 24: write its bytes to the connection, after those before. The shell reads the next request of the connection after the bytes of `last` 1.
+- `NODE_ACT_API_CLOSE` (`NODE_ACT_API_CLOSE_SIZE`, 24 bytes): 16 the connection: close it once its bytes are written.
+- An API action of a connection that closed is dropped.
 - `NODE_ACT_ENGINE`: a ByteList at 24, offset 24: write its bytes to the connection to the execution engine, opening one when there is none, and pass what the engine sends in `NODE_EV_ENGINE` events; a connection that fails or closes before an answer is a `NODE_EV_ENGINE` with arg 1.
 
 ## Results

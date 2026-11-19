@@ -1,88 +1,82 @@
 /*
- * The text of lantern_api_answer (docs/reference/beacon-api.md), in RODATA: each label with its
- * length in bytes as <label>_len. The same on every ISA.
+ * The texts of the Beacon API answers (docs/reference/beacon-api.md, Common rules), in RODATA:
+ * each label with its length in bytes as <label>_len, after api_texts. The same on every ISA.
  */
-api_crlf:
-    .ascii "\r\n"
-.set api_crlf_len, 2
-api_end_head:
-    .ascii "\r\n\r\n"
-.set api_end_head_len, 4
+api_texts:
 api_http:
     .ascii "HTTP/1.1 "
 .set api_http_len, 9
-api_r200:
-    .ascii " OK"
-.set api_r200_len, 3
-api_r206:
-    .ascii " Partial Content"
-.set api_r206_len, 16
-api_r400:
-    .ascii " Bad Request"
-.set api_r400_len, 12
-api_r404:
-    .ascii " Not Found"
-.set api_r404_len, 10
-api_r405:
-    .ascii " Method Not Allowed"
-.set api_r405_len, 19
-api_rnone:
+api_sp:
     .ascii " "
-.set api_rnone_len, 1
+.set api_sp_len, 1
+api_crlf:
+    .ascii "\r\n"
+.set api_crlf_len, 2
 api_type:
-    .ascii "\r\nContent-Type: application/json"
+    .ascii "Content-Type: application/json\r\n"
 .set api_type_len, 32
 api_length:
-    .ascii "\r\nContent-Length: "
-.set api_length_len, 18
-api_close:
-    .ascii "\r\nConnection: close\r\n\r\n"
-.set api_close_len, 23
+    .ascii "Content-Length: "
+.set api_length_len, 16
+api_allow:
+    .ascii "Allow: "
+.set api_allow_len, 7
 api_get:
     .ascii "GET"
 .set api_get_len, 3
-api_version_prefix:
-    .ascii " HTTP/1."
-.set api_version_prefix_len, 8
-api_p_health:
-    .ascii "/eth/v1/node/health"
-.set api_p_health_len, 19
-api_p_identity:
-    .ascii "/eth/v1/node/identity"
-.set api_p_identity_len, 21
-api_p_version:
-    .ascii "/eth/v1/node/version"
-.set api_p_version_len, 20
-api_p_syncing:
-    .ascii "/eth/v1/node/syncing"
-.set api_p_syncing_len, 20
-api_p_peer_count:
-    .ascii "/eth/v1/node/peer_count"
-.set api_p_peer_count_len, 23
-api_p_genesis:
-    .ascii "/eth/v1/beacon/genesis"
-.set api_p_genesis_len, 22
-api_p_headers:
-    .ascii "/eth/v1/beacon/headers/"
-.set api_p_headers_len, 23
-api_p_finality:
-    .ascii "/eth/v1/beacon/states/head/finality_checkpoints"
-.set api_p_finality_len, 47
-api_q_status:
-    .ascii "syncing_status="
-.set api_q_status_len, 15
-api_head:
-    .ascii "head"
-.set api_head_len, 4
-api_e_code:
-    .ascii "{\"code\":"
-.set api_e_code_len, 8
-api_e_message:
-    .ascii ",\"message\":\""
-.set api_e_message_len, 12
-api_e_end:
-    .ascii "\"}"
-.set api_e_end_len, 2
+api_comma:
+    .ascii ", "
+.set api_comma_len, 2
+api_post:
+    .ascii "POST"
+.set api_post_len, 4
+api_close:
+    .ascii "Connection: close\r\n"
+.set api_close_len, 19
+api_keep:
+    .ascii "Connection: keep-alive\r\n"
+.set api_keep_len, 24
+api_none:
+.set api_none_len, 0
+api_r200:
+    .ascii "OK"
+.set api_r200_len, 2
+api_r206:
+    .ascii "Partial Content"
+.set api_r206_len, 15
+api_r400:
+    .ascii "Bad Request"
+.set api_r400_len, 11
+api_r404:
+    .ascii "Not Found"
+.set api_r404_len, 9
+api_r405:
+    .ascii "Method Not Allowed"
+.set api_r405_len, 18
+api_r406:
+    .ascii "Not Acceptable"
+.set api_r406_len, 14
+api_r413:
+    .ascii "Content Too Large"
+.set api_r413_len, 17
+api_r414:
+    .ascii "URI Too Long"
+.set api_r414_len, 12
+api_r415:
+    .ascii "Unsupported Media Type"
+.set api_r415_len, 22
+api_r431:
+    .ascii "Request Header Fields Too Large"
+.set api_r431_len, 31
+api_r500:
+    .ascii "Internal Server Error"
+.set api_r500_len, 21
+api_r501:
+    .ascii "Not Implemented"
+.set api_r501_len, 15
+api_r505:
+    .ascii "HTTP Version Not Supported"
+.set api_r505_len, 26
 api_m400:
     .ascii "BAD_REQUEST"
 .set api_m400_len, 11
@@ -92,6 +86,39 @@ api_m404:
 api_m405:
     .ascii "METHOD_NOT_ALLOWED"
 .set api_m405_len, 18
+api_m406:
+    .ascii "NOT_ACCEPTABLE"
+.set api_m406_len, 14
+api_m413:
+    .ascii "CONTENT_TOO_LARGE"
+.set api_m413_len, 17
+api_m414:
+    .ascii "URI_TOO_LONG"
+.set api_m414_len, 12
+api_m415:
+    .ascii "UNSUPPORTED_MEDIA_TYPE"
+.set api_m415_len, 22
+api_m431:
+    .ascii "REQUEST_HEADER_FIELDS_TOO_LARGE"
+.set api_m431_len, 31
+api_m500:
+    .ascii "INTERNAL_SERVER_ERROR"
+.set api_m500_len, 21
+api_m501:
+    .ascii "NOT_IMPLEMENTED"
+.set api_m501_len, 15
+api_m505:
+    .ascii "HTTP_VERSION_NOT_SUPPORTED"
+.set api_m505_len, 26
+api_e_code:
+    .ascii "{\"code\":"
+.set api_e_code_len, 8
+api_e_message:
+    .ascii ",\"message\":\""
+.set api_e_message_len, 12
+api_e_end:
+    .ascii "\"}"
+.set api_e_end_len, 2
 api_quote:
     .ascii "\""
 .set api_quote_len, 1
@@ -215,3 +242,29 @@ api_f_root:
 api_hex:
     .ascii "0123456789abcdef"
 .set api_hex_len, 16
+
+/* Each status: its code, then its reason phrase and its error message, each an offset from api_texts and a length. */
+.macro API_CODE code, reason, message
+    .quad \code, \reason - api_texts, \reason\()_len, \message - api_texts, \message\()_len
+.endm
+    .p2align 3
+api_codes:
+    API_CODE 200, api_r200, api_none
+    API_CODE 206, api_r206, api_none
+    API_CODE 400, api_r400, api_m400
+    API_CODE 404, api_r404, api_m404
+    API_CODE 405, api_r405, api_m405
+    API_CODE 406, api_r406, api_m406
+    API_CODE 413, api_r413, api_m413
+    API_CODE 414, api_r414, api_m414
+    API_CODE 415, api_r415, api_m415
+    API_CODE 431, api_r431, api_m431
+    API_CODE 500, api_r500, api_m500
+    API_CODE 501, api_r501, api_m501
+    API_CODE 505, api_r505, api_m505
+api_codes_end:
+.set API_CODE_ENTRY, 40
+.set API_BODY_ERROR, 255                    /* the body kind of an error; else 0 for none or an API_OP_* */
+.set API_R_CLOSE, 1                         /* the flags of api_respond; the allow bits from bit 8 */
+.set API_R_KEEP, 2
+.set API_R_NO_REASON, 4

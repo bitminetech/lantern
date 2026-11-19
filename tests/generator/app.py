@@ -15,7 +15,7 @@ def ip4(a, b, c, d):
 
 DEFAULTS = {"network_dir": "", "execution": "", "jwt_secret": "", "boot_nodes": "", "port": 9000, "enr_address": 0,
             "http_port": 5052, "target_peers": 64, "data_dir": "", "checkpoint_state": "", "checkpoint_block": "",
-            "log_level": 2}
+            "log_level": 2, "http_address": ip4(127, 0, 0, 1), "http_max_connections": 64}
 
 
 def options(**values):
@@ -45,6 +45,10 @@ GOOD = [
      options(network_dir="n", target_peers=1024, http_port=1, enr_address=ip4(255, 255, 255, 255))),
     ("address_zero", ["--network-dir", "n", "--enr-address=0.0.0.0", "--target-peers", "1"],
      options(network_dir="n", target_peers=1)),
+    ("http_address_and_connections", ["--http-address", "0.0.0.0", "--network-dir", "n", "--http-max-connections=1"],
+     options(network_dir="n", http_address=0, http_max_connections=1)),
+    ("http_limits", ["--network-dir", "n", "--http-max-connections", "4096", "--http-address=10.1.2.3"],
+     options(network_dir="n", http_max_connections=4096, http_address=ip4(10, 1, 2, 3))),
 ]
 
 FAULTS = [
@@ -69,6 +73,10 @@ FAULTS = [
     ("checkpoint_block_alone", ["--checkpoint-block=b.ssz", "--network-dir", "/n"], 3),
     ("log_level_unknown", ["--network-dir", "/n", "--log-level", "trace"], 3),
     ("log_level_capitals", ["--log-level=INFO", "--network-dir", "/n"], 0),
+    ("http_connections_zero", ["--network-dir", "/n", "--http-max-connections", "0"], 3),
+    ("http_connections_too_many", ["--network-dir", "/n", "--http-max-connections=4097"], 2),
+    ("http_address_three_parts", ["--http-address", "127.0.0", "--network-dir", "/n"], 1),
+    ("http_address_part_too_big", ["--network-dir", "/n", "--http-address", "127.0.0.256"], 3),
 ]
 
 

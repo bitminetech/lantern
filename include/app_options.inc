@@ -9,6 +9,7 @@
 .set APP_OPTION_PEERS, 3                /* 1 to APP_MAX_TARGET_PEERS */
 .set APP_OPTION_ADDRESS, 4              /* an IPv4 address */
 .set APP_OPTION_LEVEL, 5                /* error, warn, info or debug: 0 to 3 */
+.set APP_OPTION_CONNECTIONS, 6          /* 1 to APP_MAX_HTTP_CONNECTIONS */
 .set APP_OPTION_BYTES, 48
 
     .p2align 3
@@ -34,6 +35,12 @@ app_options:
     .quad 9, AppOptions_http_port, APP_OPTION_PORT
     .ascii "http-port"
     .space 24 - 9
+    .quad 12, AppOptions_http_address, APP_OPTION_ADDRESS
+    .ascii "http-address"
+    .space 24 - 12
+    .quad 20, AppOptions_http_max_connections, APP_OPTION_CONNECTIONS
+    .ascii "http-max-connections"
+    .space 24 - 20
     .quad 12, AppOptions_target_peers, APP_OPTION_PEERS
     .ascii "target-peers"
     .space 24 - 12

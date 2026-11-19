@@ -101,6 +101,8 @@ FUNCTION lantern_app_options
     movq    $APP_DEFAULT_HTTP_PORT, AppOptions_http_port(%rbp)
     movq    $APP_DEFAULT_TARGET_PEERS, AppOptions_target_peers(%rbp)
     movq    $APP_DEFAULT_LOG_LEVEL, AppOptions_log_level(%rbp)
+    movq    $APP_DEFAULT_HTTP_ADDRESS, AppOptions_http_address(%rbp)
+    movq    $APP_DEFAULT_HTTP_CONNECTIONS, AppOptions_http_max_connections(%rbp)
     mov     (ArgList_args + 8)(%rbx), %r13
     mov     ArgList_args(%rbx), %r15
     add     %rbx, %r15
@@ -211,6 +213,9 @@ FUNCTION lantern_app_options
     cmpq    $APP_OPTION_PORT, 16(%rax)
     je      22f
     mov     $APP_MAX_TARGET_PEERS, %ecx
+    cmpq    $APP_OPTION_CONNECTIONS, 16(%rax)
+    jne     22f
+    mov     $APP_MAX_HTTP_CONNECTIONS, %ecx
 22: cmp     %rcx, %rdx
     ja      90f
     jmp     23f
