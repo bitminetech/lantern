@@ -22,6 +22,15 @@
 | get_beacon_committee, no cache | 0.0074 s | 0.0070 s | 0.0331 s |
 | get_beacon_committee, empty `CommitteeCache` | 0.0063 s | 0.0246 s | 0.3224 s |
 | get_beacon_committee, filled `CommitteeCache` | 0.000007 s | 0.000008 s | 0.000008 s |
+
+## Attestation signatures
+
+From the run of `70a1dd8`, the same machine: is_valid_indexed_attestation of an indexed attestation whose signature is of another message, so that every check runs and the result is 0.
+
+| Keys | No cache | Empty `PubkeyCache` | Filled `PubkeyCache` |
+|---|---|---|---|
+| 488: one committee at 1000000 validators | 0.1104 s | 0.1103 s | 0.0051 s |
+| 31232: 64 committees, every committee of a slot at 1000000 validators | 6.7608 s | 6.7589 s | 0.0289 s |
 | process_epoch | 0.111 s | 0.121 s | 0.310 s |
 | process_slots to the next epoch, with the cache | 0.116 s | 0.134 s | 0.449 s |
 
