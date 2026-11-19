@@ -164,22 +164,18 @@ jobs:
           name: results-linux-${{ matrix.isa }}-${{ matrix.fork }}
           path: results-linux-${{ matrix.isa }}-${{ matrix.fork }}.txt
 
-  # The ARM64 binary beside each other consensus client on one Docker network (tests/app/interop.sh).
-  interop:
-    needs: build
-    strategy:
-      fail-fast: false
-      matrix:
-        client: [lighthouse, prysm, teku, nimbus, lodestar, grandine]
-    runs-on: ubuntu-24.04-arm
+  # include/trusted_setup_4096.bin against the trusted setup of the pinned spec (tests/app/trusted_setup.py).
+  trusted-setup:
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
-      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333  # v8.0.2
-        with: { name: build-linux-arm64, path: build/linux-arm64 }
-      - name: lantern beside ${{ matrix.client }}
+      - name: The trusted setup of consensus-specs v1.7.0-beta.4
         run: |
-          chmod +x build/linux-arm64/lantern-mainnet
-          tests/app/interop.sh ${{ matrix.client }} build/linux-arm64/lantern-mainnet "$RUNNER_TEMP/interop"
+          spec="$RUNNER_TEMP/consensus-specs"
+          git init -q "$spec"
+          git -C "$spec" fetch -q --depth 1 https://github.com/ethereum/consensus-specs aa16bb4c156184e9548a997d53efaf2a228a6304
+          git -C "$spec" checkout -q FETCH_HEAD
+          python3 -I tests/app/trusted_setup.py "$spec" --check
 
   # A devnet of geth and each consensus client, with the ARM64 binary's image following its chain
   # (tests/app/devnet.sh). The Kurtosis CLI comes from its release, checked against its checksum.

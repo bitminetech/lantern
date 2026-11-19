@@ -1,5 +1,5 @@
-# The images of the clients that the tests of the binary run beside lantern (tests/app/interop.sh,
-# tests/app/devnet.sh), each the latest release pinned by digest. Sourced:
+# The images of the clients that the devnet tests run beside lantern (tests/app/devnet.sh), each the
+# latest release pinned by digest. Sourced:
 # client_image CLIENT and validator_image CLIENT print an image, or nothing for an unknown client.
 
 geth_image=ethereum/client-go:v1.17.10@sha256:5015dcab74ec5c9ef6584ada930ea353264a1c4e72383f256802e3178e10918c

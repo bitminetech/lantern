@@ -27,12 +27,11 @@
 - tests/generator/app.py: command lines with their `AppOptions`, or the argument index of their fault. File: `<preset>-phase0-app-options.bin`.
 - tests/app/start.sh and tests/app/start.ps1 (Windows): the binary of each target given a faulty option exits with 1 and its ERROR line, whose time has the form of the log and today's UTC date; given a network directory with no config.yaml, it exits with 2 and a "cannot read" line. CI runs them.
 - tests/app/network.py: a network directory (config.yaml, genesis.ssz) to run the binary with, alone or beside other clients.
-- tests/app/trusted_setup.py: writes include/trusted_setup_4096.bin from the pinned spec, or with `--check` exits 1 when the file differs; the interop job of CI runs the check.
+- tests/app/trusted_setup.py: writes include/trusted_setup_4096.bin from the pinned spec, or with `--check` exits 1 when the file differs; CI's trusted-setup job runs the check.
 - tests/app/devnet.sh: a devnet of ethpandaops/ethereum-package (tests/kurtosis/, at a pinned commit) of geth and one consensus client with all the validators, and the binary's image (platform/docker/Dockerfile) beside it with every consensus client's record as a boot node; lantern's head must reach slot 8, be a block of the client's chain and be within 2 slots of the client's head, at two checks a slot apart.
   - RESTART=1, beside lighthouse, CI's restart job: lantern with `--data-dir`; once its log shows finalized epoch 2 or later, it stops and starts again, must log `restart at slot`, and must follow again.
   - FORK=1, beside lighthouse, CI's fork job: electra at genesis and fulu at epoch 1 (no BPO fork), with 6-second slots; lantern's head must reach slot 40, past the fork.
   - CHECKPOINT=1, beside lighthouse, CI's checkpoint job: lantern, with `--data-dir` (the backfill's blocks go to its `Db`), starts from lighthouse's finalized block and its post-state, as SSZ from its Beacon API once its finalized epoch is 1 or more, must log `checkpoint at slot`, must follow, and its `earliest slot` must fall below the checkpoint's slot: the backfill takes lighthouse's blocks.
-- tests/app/interop.sh: the ARM64 binary beside another consensus client (lighthouse, prysm, teku, nimbus, lodestar or grandine, each image of tests/app/clients.sh, pinned by digest) on one Docker network, from the genesis of tests/app/network.py; each Beacon API must show the other node as a connected peer, and again two slots later. CI runs it for each client on an ARM64 runner.
 
 ## Function `lantern_app_options`
 
