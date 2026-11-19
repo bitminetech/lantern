@@ -84,7 +84,7 @@ END_FUNCTION app_ipv4
  * (args, options, fault): docs/reference/app.md. x19 args, x20 options, x21 fault, x22 the
  * argument count, x23 the next argument, x24 the Arg entries, x25 an option record, x26 the
  * value's start, x27 its length, x28 the argument that holds it. Locals: L the name's start,
- * L+8 its length, L+16 the option's argument.
+ * L+8 its length, L+16 the option's argument, L+24 a log level.
  */
 FUNCTION lantern_app_options
     ENTER 32
@@ -100,6 +100,8 @@ FUNCTION lantern_app_options
     str     x9, [x20, #AppOptions_http_port]
     mov     x9, #APP_DEFAULT_TARGET_PEERS
     str     x9, [x20, #AppOptions_target_peers]
+    mov     x9, #APP_DEFAULT_LOG_LEVEL
+    str     x9, [x20, #AppOptions_log_level]
     ldr     x22, [x19, #(ArgList_args + 8)]
     ldr     x9, [x19, #ArgList_args]
     add     x24, x19, x9
@@ -177,7 +179,9 @@ FUNCTION lantern_app_options
     add     x10, x20, x10
     stp     x26, x27, [x10]
     b       1b
-20: add     x0, x19, x26                    /* a number, or an address */
+20: cmp     x9, #APP_OPTION_LEVEL
+    b.eq    24f
+    add     x0, x19, x26                    /* a number, or an address */
     add     x1, x0, x27
     cmp     x9, #APP_OPTION_ADDRESS
     b.eq    21f
@@ -197,6 +201,24 @@ FUNCTION lantern_app_options
 23: ldr     x10, [x25, #8]
     str     x1, [x20, x10]
     b       1b
+24: str     xzr, [sp, #(L + 24)]            /* a log level: one of the names of app_levels */
+25: ldr     x9, [sp, #(L + 24)]
+    cmp     x9, #4
+    b.hs    90f
+    ADDRESS x2, app_levels
+    add     x2, x2, x9, lsl #3
+    ADDRESS x3, app_level_lengths
+    ldrb    w3, [x3, x9]
+    add     x0, x19, x26
+    mov     x1, x27
+    bl      config_name_is
+    cbnz    x0, 26f
+    ldr     x9, [sp, #(L + 24)]
+    add     x9, x9, #1
+    str     x9, [sp, #(L + 24)]
+    b       25b
+26: ldr     x1, [sp, #(L + 24)]
+    b       23b
 50: ldr     x9, [x20, #(AppOptions_network_dir + 8)]    /* --network-dir is required */
     mov     x28, x22
     cbz     x9, 90f

@@ -63,8 +63,8 @@ if [ "${CHECKPOINT:-0}" = 1 ]; then printf 'lantern_checkpoint: true\n' >> "$wor
 cleanup() {
     echo "== lantern"
     $kurtosis service logs -a $enclave lantern > "$work/lantern.log" 2>&1 || true
-    grep -v "record enr" "$work/lantern.log" | grep -v "lantern: slot" | head -40 || true
-    grep "lantern: slot" "$work/lantern.log" | tail -10 || true
+    grep -v "record enr" "$work/lantern.log" | grep -v " INFO  slot " | head -40 || true
+    grep " INFO  slot " "$work/lantern.log" | tail -10 || true
     [ "${KEEP:-0}" = 1 ] || $kurtosis enclave rm -f $enclave >/dev/null 2>&1 || true
     rm -rf "$work"
 }

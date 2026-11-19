@@ -14,7 +14,8 @@ def ip4(a, b, c, d):
 
 
 DEFAULTS = {"network_dir": "", "execution": "", "jwt_secret": "", "boot_nodes": "", "port": 9000, "enr_address": 0,
-            "http_port": 5052, "target_peers": 64, "data_dir": "", "checkpoint_state": "", "checkpoint_block": ""}
+            "http_port": 5052, "target_peers": 64, "data_dir": "", "checkpoint_state": "", "checkpoint_block": "",
+            "log_level": 2}
 
 
 def options(**values):
@@ -29,10 +30,13 @@ GOOD = [
      ["--network-dir=/data/net", "--execution-endpoint", "http://el:8551", "--jwt-secret=/data/jwt.hex",
       "--boot-nodes", "enr:-AAA,enr:-BBB", "--port=30303", "--enr-address", "10.0.0.7", "--http-port", "4000",
       "--target-peers=100", "--data-dir", "/data/lantern", "--checkpoint-state", "/cp/state.ssz",
-      "--checkpoint-block=/cp/block.ssz"],
+      "--checkpoint-block=/cp/block.ssz", "--log-level", "debug"],
      options(network_dir="/data/net", execution="el:8551", jwt_secret="/data/jwt.hex", boot_nodes="enr:-AAA,enr:-BBB",
              port=30303, enr_address=ip4(10, 0, 0, 7), http_port=4000, target_peers=100, data_dir="/data/lantern",
-             checkpoint_state="/cp/state.ssz", checkpoint_block="/cp/block.ssz")),
+             checkpoint_state="/cp/state.ssz", checkpoint_block="/cp/block.ssz", log_level=3)),
+    ("log_levels", ["--log-level=error", "--network-dir", "n"], options(network_dir="n", log_level=0)),
+    ("log_level_warn", ["--network-dir", "n", "--log-level", "warn"], options(network_dir="n", log_level=1)),
+    ("log_level_info", ["--log-level", "debug", "--network-dir", "n", "--log-level=info"], options(network_dir="n", log_level=2)),
     ("execution_without_scheme", ["--execution-endpoint=127.0.0.1:8551", "--network-dir", "n"],
      options(network_dir="n", execution="127.0.0.1:8551")),
     ("option_twice", ["--port", "1", "--network-dir", "a", "--port", "65535", "--network-dir", "b"],
@@ -63,6 +67,8 @@ FAULTS = [
     ("single_dash", ["-network-dir", "/n"], 0),
     ("checkpoint_state_alone", ["--network-dir", "/n", "--checkpoint-state", "s.ssz"], 4),
     ("checkpoint_block_alone", ["--checkpoint-block=b.ssz", "--network-dir", "/n"], 3),
+    ("log_level_unknown", ["--network-dir", "/n", "--log-level", "trace"], 3),
+    ("log_level_capitals", ["--log-level=INFO", "--network-dir", "/n"], 0),
 ]
 
 
