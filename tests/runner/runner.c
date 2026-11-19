@@ -6839,7 +6839,7 @@ static void run_json_encode(const char *file, case_file *f) {
     }
 }
 
-#define JSON_INVALID_STATUS 66
+#define JSON_INVALID_STATUS 54
 #define JSON_FAULT_BYTES 128
 #define JSON_DECODE_SCRATCH 6208
 

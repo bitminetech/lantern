@@ -336,7 +336,7 @@
 /* lantern_http_parse_response: the connection's bytes end before the response does. */
 .set LANTERN_HTTP_MORE, 53
 
-.set LANTERN_INVALID_JSON, 54                   /* lantern_engine_parse_response: not a JSON-RPC response of the method */
+.set LANTERN_INVALID_JSON, 54                   /* lantern_engine_parse_response: not a JSON-RPC response of the method; lantern_json_decode: the text breaks a rule */
 
 /* EngineResponse (engine-api.md) */
 .set EngineResponse_id, 0
@@ -1027,7 +1027,6 @@
 .set JsonLevel_next, 40
 .set JSON_LEVEL_SIZE, 48
 .set JSON_CURSOR_SIZE, 24 + JSON_LEVELS * JSON_LEVEL_SIZE
-.set LANTERN_INVALID_JSON, 66            /* lantern_json_decode: the text breaks a rule; the JsonFault says which */
 .set JsonFault_kind, 0                    /* JsonFault (docs/reference/beacon-api.md): lantern_json_decode */
 .set JsonFault_offset, 8
 .set JsonFault_size, 16
