@@ -611,16 +611,22 @@ static uint8_t *committee_cache;
 static uint64_t committee_validators = 4096;
 
 /* The file and case that run now, for the crash report of Windows. */
+#ifdef _WIN32
 static const char *current_file = "", *current_case = "";
 static uint64_t current_case_len;
+#define NOTE_CASE(n, l) (current_case = (n), current_case_len = (l))
+#define NOTE_FILE(f) (current_file = (f))
+#else
+#define NOTE_CASE(n, l) ((void)0)
+#define NOTE_FILE(f) ((void)0)
+#endif
 
 /* The next case: its name (not zero ended) and its parts map. */
 static tv next_case(case_file *f, const char **name, uint64_t *name_len) {
     if (committee_cache) CALL(LF(committee_cache_init), &committee_validators, committee_cache);
     *name_len = rd64(f->data + f->at);
     *name = (const char *)(f->data + f->at + 8);
-    current_case = *name;
-    current_case_len = *name_len;
+    NOTE_CASE(*name, *name_len);
     tv parts = f->data + f->at + 8 + *name_len;
     f->at = (uint64_t)(tv_skip(parts) - f->data);
     return parts;
@@ -6925,7 +6931,7 @@ int main(int argc, char **argv) {
     for (int a = 2; a < argc; a++) {
         const char *file = argv[a];
         if (strncmp(file, prefix, plen)) continue;
-        current_file = file;
+        NOTE_FILE(file);
         char kind[256];
         snprintf(kind, sizeof kind, "%s", file + plen);
         char *dot = strstr(kind, ".bin");
