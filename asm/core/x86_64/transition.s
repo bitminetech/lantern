@@ -185,7 +185,7 @@ SPEC_END process_eth1_data
 .endm
 
 /* The same for a list of nested values: each starts with its size. */
-.macro FOR_VARIABLE value, ref, fn
+.macro FOR_VARIABLE value, ref, fn, memo=0
     PART    %rax, %rcx, \value, \ref
     mov     %rax, S7(%rsp)
     mov     %rcx, S8(%rsp)
@@ -197,6 +197,9 @@ SPEC_END process_eth1_data
     mov     %r12, %rdx
     mov     %r13, %rcx
     mov     %r14, %r8
+.if \memo
+    lea     L(%rsp), %r9                    # the block's base reward factor
+.endif
     call    \fn
     test    %rax, %rax
     jnz     7f
@@ -210,7 +213,7 @@ SPEC_END process_eth1_data
 92:
 .endm
 
-/* rbx state, rbp body, r12 config, r13 scratch, r14 result, r15 scratch size, S7 entry, S8 left, S9 requests. */
+/* rbx state, rbp body, r12 config, r13 scratch, r14 result, r15 scratch size, S7 entry, S8 left, S9 requests. Locals: L the attestations' base reward factor. */
 SPEC_FUNCTION process_operations
     ENTER 16
     mov     %rdi, %rbx
@@ -220,6 +223,7 @@ SPEC_FUNCTION process_operations
     mov     %r8, %r14
     mov     (%r13), %r15
     movq    $0, (%r14)
+    movq    $0, L(%rsp)                     # the attestations' base reward factor: not found yet
 .if FORK >= FORK_FULU
     cmpq    $0, (BeaconBlockBody_deposits + 8)(%rbp)    # assert len(body.deposits) == 0
     je      1f
@@ -252,7 +256,11 @@ SPEC_FUNCTION process_operations
     jmp     8f
 1:  FOR_FIXED %rbp, BeaconBlockBody_proposer_slashings, ProposerSlashing__mem, lantern_process_proposer_slashing
     FOR_VARIABLE %rbp, BeaconBlockBody_attester_slashings, lantern_process_attester_slashing
+.if FORK >= FORK_ALTAIR
+    FOR_VARIABLE %rbp, BeaconBlockBody_attestations, attestation_memo, 1
+.else
     FOR_VARIABLE %rbp, BeaconBlockBody_attestations, lantern_process_attestation
+.endif
 .if FORK < FORK_FULU
     FOR_FIXED %rbp, BeaconBlockBody_deposits, Deposit__mem, lantern_process_deposit
 .endif

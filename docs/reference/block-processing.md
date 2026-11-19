@@ -657,6 +657,7 @@ lantern_process_operations(state, body, config, scratch, result) -> status
 - Phase0 to electra: applies the deposits after the attestations.
 - Fulu: asserts that the body holds no deposits.
 - Capella and later: also the BLS to execution changes; electra and later: also the execution requests.
+- Altair and later: get_base_reward_per_increment once for all the attestations of the body. The first attestation that reaches it computes it; the others take that value. No operation of a block changes an effective balance or an active validator of the current epoch, so the value holds for every attestation.
 
 ### Limits
 
