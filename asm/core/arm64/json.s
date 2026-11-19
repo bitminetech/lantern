@@ -254,9 +254,159 @@ LOCAL_FUNCTION json_child
     UNFRAME 0
 END_FUNCTION json_child
 
-/* (type, value, cursor, out): docs/reference/beacon-api.md. Locals: L a token of punctuation or a name. */
+/*
+ * L0: x0 = the offset of the next variable field after field x1 of the container level x28 in an
+ * SSZ encoding, or the level's end with none. Uses x9-x13.
+ */
+LOCAL_FUNCTION jss_field_end
+    UNWIND_END_PROLOGUE
+    ldr     x9, [x28, #JsonLevel_node]
+    mov     x10, #SSZ_NODE_STRIDE
+    madd    x9, x9, x10, x25
+    ldr     x10, [x9, #SSZ_NODE_LENGTH]
+    ldr     x9, [x9, #SSZ_NODE_ELEMENT]
+    ldr     x11, [x28, #JsonLevel_base]
+1:  add     x1, x1, #1
+    cmp     x1, x10
+    b.hs    9f
+    add     x12, x9, x1
+    add     x12, x26, x12, lsl #5
+    ldr     x13, [x12, #SSZ_FIELD_FLAGS]
+    tbz     x13, #0, 1b
+    ldr     x13, [x12, #SSZ_FIELD_SSZ_OFFSET]
+    add     x13, x11, x13
+    ldr     w0, [x20, x13]
+    add     x0, x11, x0
+    ret
+9:  ldr     x0, [x28, #JsonLevel_next]
+    ret
+END_FUNCTION jss_field_end
+
+/*
+ * L0: the level x28 for the type node x0 whose SSZ encoding is the bytes x1 to x2 of the
+ * encoding: base and end (next), and the count of its items or bytes. Uses x3-x5, x9-x12.
+ */
+LOCAL_FUNCTION jss_open
+    UNWIND_END_PROLOGUE
+    mov     x3, #SSZ_NODE_STRIDE
+    madd    x3, x0, x3, x25
+    stp     x0, xzr, [x28, #JsonLevel_node]
+    str     xzr, [x28, #JsonLevel_item]
+    str     x1, [x28, #JsonLevel_base]
+    str     x2, [x28, #JsonLevel_next]
+    ldr     x4, [x3, #SSZ_NODE_KIND]
+    ldr     x5, [x3, #SSZ_NODE_LENGTH]
+    cmp     x4, #SSZ_KIND_BYTE_LIST         /* a byte or bit list: its bytes */
+    ccmp    x4, #SSZ_KIND_BIT_LIST, #4, ne
+    b.ne    1f
+    sub     x5, x2, x1
+    b       9f
+1:  cmp     x4, #SSZ_KIND_LIST
+    b.ne    9f
+    ldr     x9, [x3, #SSZ_NODE_ELEMENT]     /* a list: its bytes over the item's size, or its first offset over 4 */
+    mov     x10, #SSZ_NODE_STRIDE
+    madd    x9, x9, x10, x25
+    ldr     x10, [x9, #SSZ_NODE_SSZ_SIZE]
+    sub     x11, x2, x1
+    cbz     x10, 2f
+    udiv    x5, x11, x10
+    b       9f
+2:  mov     x5, #0
+    cbz     x11, 9f
+    ldr     w5, [x20, x1]
+    lsr     x5, x5, #2
+9:  str     x5, [x28, #JsonLevel_count]
+    ret
+END_FUNCTION jss_open
+
+/* L1: the next item of the compound level x28 of an SSZ encoding at index item, one level deeper. */
+LOCAL_FUNCTION jss_child
+    FRAME 16
+    ldr     x9, [x28, #JsonLevel_node]
+    mov     x10, #SSZ_NODE_STRIDE
+    madd    x9, x9, x10, x25
+    ldr     x10, [x9, #SSZ_NODE_KIND]
+    ldr     x11, [x28, #JsonLevel_item]
+    ldr     x12, [x28, #JsonLevel_base]
+    cmp     x10, #SSZ_KIND_CONTAINER
+    b.ne    3f
+    ldr     x10, [x9, #SSZ_NODE_ELEMENT]    /* a field: at its ssz_offset, or from its offset to the next */
+    add     x10, x10, x11
+    add     x10, x26, x10, lsl #5
+    ldr     x0, [x10, #SSZ_FIELD_NODE]
+    ldr     x13, [x10, #SSZ_FIELD_SSZ_OFFSET]
+    add     x13, x12, x13
+    ldr     x14, [x10, #SSZ_FIELD_FLAGS]
+    tbnz    x14, #0, 2f
+    mov     x1, x13
+    mov     x14, #SSZ_NODE_STRIDE
+    madd    x14, x0, x14, x25
+    ldr     x14, [x14, #SSZ_NODE_SSZ_SIZE]
+    add     x2, x13, x14
+    b       5f
+2:  ldr     w14, [x20, x13]
+    add     x14, x12, x14
+    str     x0, [sp, #16]
+    str     x14, [sp, #24]
+    mov     x1, x11
+    bl      jss_field_end
+    mov     x2, x0
+    ldp     x0, x1, [sp, #16]
+    b       5f
+3:  ldr     x0, [x9, #SSZ_NODE_ELEMENT]     /* an item: at its index times its size, or from its offset to the next */
+    mov     x14, #SSZ_NODE_STRIDE
+    madd    x14, x0, x14, x25
+    ldr     x14, [x14, #SSZ_NODE_SSZ_SIZE]
+    cbz     x14, 4f
+    madd    x1, x11, x14, x12
+    add     x2, x1, x14
+    b       5f
+4:  add     x13, x12, x11, lsl #2
+    ldr     w1, [x20, x13]
+    add     x1, x12, x1
+    ldr     x2, [x28, #JsonLevel_next]
+    ldr     x15, [x28, #JsonLevel_count]
+    add     x13, x11, #1
+    cmp     x13, x15
+    b.hs    5f
+    add     x13, x12, x13, lsl #2
+    ldr     w2, [x20, x13]
+    add     x2, x12, x2
+5:  ldr     x9, [x21, #JsonCursor_depth]
+    add     x9, x9, #1
+    str     x9, [x21, #JsonCursor_depth]
+    add     x28, x28, #JSON_LEVEL_SIZE
+    bl      jss_open
+    UNFRAME 16
+END_FUNCTION jss_child
+
+/* (type, value, cursor, out): docs/reference/beacon-api.md. */
 FUNCTION lantern_json_encode
-    ENTER 48
+    FRAME 0
+    mov     x4, #0
+    mov     x5, #0
+    bl      json_main
+    UNFRAME 0
+END_FUNCTION lantern_json_encode
+
+/* (type, ssz, cursor, out): docs/reference/beacon-api.md. */
+FUNCTION lantern_json_encode_ssz
+    FRAME 0
+    ldp     x9, x5, [x1, #8]
+    add     x1, x1, x9
+    mov     x4, #1
+    bl      json_main
+    UNFRAME 0
+END_FUNCTION lantern_json_encode_ssz
+
+/*
+ * L1: (type, value or encoding, cursor, out, mode, the encoding's bytes): the JSON of a value
+ * (mode 0) or of an encoding (mode 1). Locals: L a token of punctuation or a name, L+48 the mode,
+ * L+56 the encoding's bytes.
+ */
+LOCAL_FUNCTION json_main
+    ENTER 64
+    stp     x4, x5, [sp, #(L + 48)]
     mov     x19, x0
     mov     x20, x1
     mov     x21, x2
@@ -284,8 +434,12 @@ FUNCTION lantern_json_encode
     add     x28, x21, #JsonCursor_levels
     ldr     x0, [x19, #40]
     mov     x1, #0
+    ldp     x9, x2, [sp, #(L + 48)]
+    cbnz    x9, 2f
     mov     x2, #-1
     bl      json_open
+    b       1f
+2:  bl      jss_open
 1:  ldr     x9, [x21, #JsonCursor_depth]
     sub     x9, x9, #1
     mov     x10, #JSON_LEVEL_SIZE
@@ -303,7 +457,12 @@ FUNCTION lantern_json_encode
     b       50f
 11: cmp     x0, #SSZ_KIND_VECTOR
     b.hs    20f
-    bl      json_hex                        /* a byte or bit string */
+    ldr     x9, [sp, #(L + 48)]             /* a byte or bit string; a bit list's encoding as its bytes */
+    cmp     x0, #SSZ_KIND_BIT_LIST
+    ccmp    x9, #0, #4, eq
+    mov     x9, #SSZ_KIND_BYTE_LIST
+    csel    x0, x9, x0, ne
+    bl      json_hex
     cbnz    x0, 91f
     b       50f
 20: ldr     x9, [x28, #JsonLevel_step]      /* a list, vector or container */
@@ -379,7 +538,11 @@ FUNCTION lantern_json_encode
     ldr     x9, [x21, #JsonCursor_depth]
     cmp     x9, #JSON_LEVELS
     b.hs    97f
+    ldr     x9, [sp, #(L + 48)]
+    cbnz    x9, 28f
     bl      json_child
+    b       10b
+28: bl      jss_child
     b       10b
 50: ldr     x9, [x21, #JsonCursor_depth]    /* the level is whole: up one, the next item there */
     subs    x9, x9, #1
@@ -398,16 +561,16 @@ FUNCTION lantern_json_encode
     sub     x9, x23, x9
     str     x9, [x22, #16]
     mov     x0, #LANTERN_OK
-    LEAVE 48
+    LEAVE 64
 91: ldr     x9, [x22, #8]
     add     x9, x22, x9
     sub     x9, x23, x9
     str     x9, [x22, #16]
     mov     x0, #LANTERN_JSON_MORE
-    LEAVE 48
+    LEAVE 64
 97: mov     x0, #LANTERN_BUFFER_TOO_SMALL
-    LEAVE 48
-END_FUNCTION lantern_json_encode
+    LEAVE 64
+END_FUNCTION json_main
 
 /*
  * ---------------------------------------------------------------- lantern_json_decode

@@ -254,9 +254,173 @@ LOCAL_FUNCTION json_child
     UNFRAME 16
 END_FUNCTION json_child
 
-/* (type, value, cursor, out): docs/reference/beacon-api.md. Locals: L a token of punctuation or a name. */
+/*
+ * rax = the offset of the next variable field after field rsi of the container level r12 in an SSZ
+ * encoding, or the level's end with none. rdi the nodes, rdx the fields. Uses rcx, r8-r11.
+ */
+LOCAL_FUNCTION jss_field_end
+    UNWIND_END_PROLOGUE
+    imul    $SSZ_NODE_STRIDE, JsonLevel_node(%r12), %r8
+    add     %rdi, %r8
+    mov     SSZ_NODE_LENGTH(%r8), %r9
+    mov     SSZ_NODE_ELEMENT(%r8), %r8
+    mov     JsonLevel_base(%r12), %r10
+1:  inc     %rsi
+    cmp     %r9, %rsi
+    jae     9f
+    lea     (%r8,%rsi), %r11
+    shl     $5, %r11
+    add     %rdx, %r11
+    testq   $SSZ_FIELD_VARIABLE, SSZ_FIELD_FLAGS(%r11)
+    jz      1b
+    mov     SSZ_FIELD_SSZ_OFFSET(%r11), %rcx
+    add     %r10, %rcx
+    mov     (%rbp,%rcx), %eax
+    add     %r10, %rax
+    ret
+9:  mov     JsonLevel_next(%r12), %rax
+    ret
+END_FUNCTION jss_field_end
+
+/*
+ * The level r12 for the type node rdi whose SSZ encoding is the bytes rsi to rdx of the encoding:
+ * base and end (next), and the count of its items or bytes. rcx the nodes. Uses rax, r8-r11.
+ */
+LOCAL_FUNCTION jss_open
+    UNWIND_END_PROLOGUE
+    imul    $SSZ_NODE_STRIDE, %rdi, %r8
+    add     %rcx, %r8
+    mov     %rdi, JsonLevel_node(%r12)
+    movq    $0, JsonLevel_step(%r12)
+    movq    $0, JsonLevel_item(%r12)
+    mov     %rsi, JsonLevel_base(%r12)
+    mov     %rdx, JsonLevel_next(%r12)
+    mov     SSZ_NODE_KIND(%r8), %r9
+    mov     SSZ_NODE_LENGTH(%r8), %rax
+    cmp     $SSZ_KIND_BYTE_LIST, %r9        # a byte or bit list: its bytes
+    je      1f
+    cmp     $SSZ_KIND_BIT_LIST, %r9
+    jne     2f
+1:  mov     %rdx, %rax
+    sub     %rsi, %rax
+    jmp     9f
+2:  cmp     $SSZ_KIND_LIST, %r9
+    jne     9f
+    imul    $SSZ_NODE_STRIDE, SSZ_NODE_ELEMENT(%r8), %r10    # a list: its bytes over the item's size, or its first offset over 4
+    add     %rcx, %r10
+    mov     SSZ_NODE_SSZ_SIZE(%r10), %r10
+    mov     %rdx, %rax
+    sub     %rsi, %rax
+    test    %r10, %r10
+    jz      3f
+    mov     %rdx, %r11
+    xor     %edx, %edx
+    div     %r10
+    mov     %r11, %rdx
+    jmp     9f
+3:  test    %rax, %rax
+    jz      9f
+    mov     (%rbp,%rsi), %eax
+    shr     $2, %rax
+9:  mov     %rax, JsonLevel_count(%r12)
+    ret
+END_FUNCTION jss_open
+
+/* The next item of the compound level r12 of an SSZ encoding at index item, one level deeper. rdi the nodes, rsi the fields. */
+LOCAL_FUNCTION jss_child
+    FRAME 32
+    mov     %rdi, (%rsp)
+    mov     %rsi, 8(%rsp)
+    imul    $SSZ_NODE_STRIDE, JsonLevel_node(%r12), %r8
+    add     %rdi, %r8
+    mov     JsonLevel_item(%r12), %r9
+    mov     JsonLevel_base(%r12), %r10
+    cmpq    $SSZ_KIND_CONTAINER, SSZ_NODE_KIND(%r8)
+    jne     3f
+    mov     SSZ_NODE_ELEMENT(%r8), %rax     # a field: at its ssz_offset, or from its offset to the next
+    add     %r9, %rax
+    shl     $5, %rax
+    add     %rsi, %rax
+    mov     SSZ_FIELD_SSZ_OFFSET(%rax), %r11
+    add     %r10, %r11
+    testq   $SSZ_FIELD_VARIABLE, SSZ_FIELD_FLAGS(%rax)
+    jnz     2f
+    mov     SSZ_FIELD_NODE(%rax), %rdi
+    mov     %r11, %rsi
+    imul    $SSZ_NODE_STRIDE, %rdi, %rdx
+    add     (%rsp), %rdx
+    mov     SSZ_NODE_SSZ_SIZE(%rdx), %rdx
+    add     %r11, %rdx
+    jmp     5f
+2:  mov     SSZ_FIELD_NODE(%rax), %rcx
+    mov     %rcx, 16(%rsp)
+    mov     (%rbp,%r11), %ecx
+    add     %r10, %rcx
+    mov     %rcx, 24(%rsp)
+    mov     (%rsp), %rdi
+    mov     8(%rsp), %rdx
+    mov     %r9, %rsi
+    call    jss_field_end
+    mov     %rax, %rdx
+    mov     16(%rsp), %rdi
+    mov     24(%rsp), %rsi
+    jmp     5f
+3:  mov     SSZ_NODE_ELEMENT(%r8), %rdi     # an item: at its index times its size, or from its offset to the next
+    imul    $SSZ_NODE_STRIDE, %rdi, %r11
+    add     (%rsp), %r11
+    mov     SSZ_NODE_SSZ_SIZE(%r11), %r11
+    test    %r11, %r11
+    jz      4f
+    mov     %r11, %rsi
+    imul    %r9, %rsi
+    add     %r10, %rsi
+    lea     (%rsi,%r11), %rdx
+    jmp     5f
+4:  lea     (%r10,%r9,4), %rax
+    mov     (%rbp,%rax), %esi
+    add     %r10, %rsi
+    mov     JsonLevel_next(%r12), %rdx
+    lea     1(%r9), %rax
+    cmp     JsonLevel_count(%r12), %rax
+    jae     5f
+    lea     (%r10,%rax,4), %rax
+    mov     (%rbp,%rax), %edx
+    add     %r10, %rdx
+5:  incq    JsonCursor_depth(%rbx)
+    add     $JSON_LEVEL_SIZE, %r12
+    mov     (%rsp), %rcx
+    call    jss_open
+    UNFRAME 32
+END_FUNCTION jss_child
+
+/* (type, value, cursor, out): docs/reference/beacon-api.md. */
 FUNCTION lantern_json_encode
-    ENTER 48
+    FRAME 0
+    xor     %r8d, %r8d
+    xor     %r9d, %r9d
+    call    json_main
+    UNFRAME 0
+END_FUNCTION lantern_json_encode
+
+/* (type, ssz, cursor, out): docs/reference/beacon-api.md. */
+FUNCTION lantern_json_encode_ssz
+    FRAME 0
+    mov     16(%rsi), %r9
+    add     8(%rsi), %rsi
+    mov     $1, %r8d
+    call    json_main
+    UNFRAME 0
+END_FUNCTION lantern_json_encode_ssz
+
+/*
+ * (type, value or encoding, cursor, out, mode r8, the encoding's bytes r9): the JSON of a value
+ * (mode 0) or of an encoding (mode 1). Locals: L a token of punctuation or a name, L+40 the kind,
+ * L+48 the mode, L+56 the encoding's bytes.
+ */
+LOCAL_FUNCTION json_main
+    ENTER 64
+    mov     %r8, (L + 48)(%rsp)
+    mov     %r9, (L + 56)(%rsp)
     mov     %rdi, S7(%rsp)
     mov     %rsi, %rbp
     mov     %rdx, %rbx
@@ -287,9 +451,14 @@ FUNCTION lantern_json_encode
     lea     JsonCursor_levels(%rbx), %r12
     mov     40(%rdi), %rdi
     xor     %esi, %esi
-    mov     $-1, %rdx
     mov     S8(%rsp), %rcx
+    cmpq    $0, (L + 48)(%rsp)
+    jne     2f
+    mov     $-1, %rdx
     call    json_open
+    jmp     1f
+2:  mov     (L + 56)(%rsp), %rdx
+    call    jss_open
 1:  mov     JsonCursor_depth(%rbx), %rax
     dec     %rax
     imul    $JSON_LEVEL_SIZE, %rax, %rax
@@ -305,7 +474,12 @@ FUNCTION lantern_json_encode
     jmp     50f
 11: cmp     $SSZ_KIND_VECTOR, %rdi
     jae     20f
-    call    json_hex                        # a byte or bit string
+    cmp     $SSZ_KIND_BIT_LIST, %rdi        # a byte or bit string; a bit list's encoding as its bytes
+    jne     12f
+    cmpq    $0, (L + 48)(%rsp)
+    je      12f
+    mov     $SSZ_KIND_BYTE_LIST, %edi
+12: call    json_hex
     test    %rax, %rax
     jnz     91f
     jmp     50f
@@ -379,7 +553,11 @@ FUNCTION lantern_json_encode
     jae     97f
     mov     S8(%rsp), %rdi
     mov     S9(%rsp), %rsi
+    cmpq    $0, (L + 48)(%rsp)
+    jne     28f
     call    json_child
+    jmp     10b
+28: call    jss_child
     jmp     10b
 50: decq    JsonCursor_depth(%rbx)          # the level is whole: up one, the next item there
     jz      80f
@@ -393,16 +571,16 @@ FUNCTION lantern_json_encode
     sub     8(%r13), %rax
     mov     %rax, 16(%r13)
     xor     %eax, %eax
-    LEAVE 48
+    LEAVE 64
 91: mov     %r14, %rax
     sub     %r13, %rax
     sub     8(%r13), %rax
     mov     %rax, 16(%r13)
     mov     $LANTERN_JSON_MORE, %eax
-    LEAVE 48
+    LEAVE 64
 97: mov     $LANTERN_BUFFER_TOO_SMALL, %eax
-    LEAVE 48
-END_FUNCTION lantern_json_encode
+    LEAVE 64
+END_FUNCTION json_main
 
 /*
  * ---------------------------------------------------------------- lantern_json_decode

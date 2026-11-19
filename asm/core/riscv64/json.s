@@ -265,9 +265,180 @@ LOCAL_FUNCTION json_child
     UNFRAME 0
 END_FUNCTION json_child
 
-/* (type, value, cursor, out): docs/reference/beacon-api.md. Locals: L a token of punctuation or a name, L+40 the kind. */
+/*
+ * a0 = the offset of the next variable field after field a1 of the container level s10 in an SSZ
+ * encoding, or the level's end with none. Uses t0-t5.
+ */
+LOCAL_FUNCTION jss_field_end
+    UNWIND_END_PROLOGUE
+    ld      t0, JsonLevel_node(s10)
+    li      t1, SSZ_NODE_STRIDE
+    mul     t0, t0, t1
+    add     t0, s7, t0
+    ld      t1, SSZ_NODE_LENGTH(t0)
+    ld      t0, SSZ_NODE_ELEMENT(t0)
+    ld      t2, JsonLevel_base(s10)
+1:  addi    a1, a1, 1
+    bgeu    a1, t1, 9f
+    add     t3, t0, a1
+    slli    t3, t3, 5
+    add     t3, s8, t3
+    ld      t4, SSZ_FIELD_FLAGS(t3)
+    andi    t4, t4, SSZ_FIELD_VARIABLE
+    beqz    t4, 1b
+    ld      t4, SSZ_FIELD_SSZ_OFFSET(t3)
+    add     t4, t2, t4
+    add     t5, s2, t4
+    lwu     a0, 0(t5)
+    add     a0, t2, a0
+    ret
+9:  ld      a0, JsonLevel_next(s10)
+    ret
+END_FUNCTION jss_field_end
+
+/*
+ * The level s10 for the type node a0 whose SSZ encoding is the bytes a1 to a2 of the encoding:
+ * base and end (next), and the count of its items or bytes. Uses t0-t4.
+ */
+LOCAL_FUNCTION jss_open
+    UNWIND_END_PROLOGUE
+    li      t0, SSZ_NODE_STRIDE
+    mul     t0, a0, t0
+    add     t0, s7, t0
+    sd      a0, JsonLevel_node(s10)
+    sd      zero, JsonLevel_step(s10)
+    sd      zero, JsonLevel_item(s10)
+    sd      a1, JsonLevel_base(s10)
+    sd      a2, JsonLevel_next(s10)
+    ld      t1, SSZ_NODE_KIND(t0)
+    ld      t2, SSZ_NODE_LENGTH(t0)
+    li      t3, SSZ_KIND_BYTE_LIST          # a byte or bit list: its bytes
+    beq     t1, t3, 1f
+    li      t3, SSZ_KIND_BIT_LIST
+    bne     t1, t3, 2f
+1:  sub     t2, a2, a1
+    j       9f
+2:  li      t3, SSZ_KIND_LIST
+    bne     t1, t3, 9f
+    ld      t3, SSZ_NODE_ELEMENT(t0)        # a list: its bytes over the item's size, or its first offset over 4
+    li      t4, SSZ_NODE_STRIDE
+    mul     t3, t3, t4
+    add     t3, s7, t3
+    ld      t3, SSZ_NODE_SSZ_SIZE(t3)
+    sub     t4, a2, a1
+    beqz    t3, 3f
+    divu    t2, t4, t3
+    j       9f
+3:  li      t2, 0
+    beqz    t4, 9f
+    add     t4, s2, a1
+    lwu     t2, 0(t4)
+    srli    t2, t2, 2
+9:  sd      t2, JsonLevel_count(s10)
+    ret
+END_FUNCTION jss_open
+
+/* The next item of the compound level s10 of an SSZ encoding at index item, one level deeper. Locals: a field's node, its start. */
+LOCAL_FUNCTION jss_child
+    FRAME 16
+    ld      t0, JsonLevel_node(s10)
+    li      t1, SSZ_NODE_STRIDE
+    mul     t0, t0, t1
+    add     t0, s7, t0
+    ld      t1, SSZ_NODE_KIND(t0)
+    ld      t2, JsonLevel_item(s10)
+    ld      t3, JsonLevel_base(s10)
+    li      t4, SSZ_KIND_CONTAINER
+    bne     t1, t4, 3f
+    ld      t4, SSZ_NODE_ELEMENT(t0)        # a field: at its ssz_offset, or from its offset to the next
+    add     t4, t4, t2
+    slli    t4, t4, 5
+    add     t4, s8, t4
+    ld      a0, SSZ_FIELD_NODE(t4)
+    ld      t5, SSZ_FIELD_SSZ_OFFSET(t4)
+    add     t5, t3, t5
+    ld      t6, SSZ_FIELD_FLAGS(t4)
+    andi    t6, t6, SSZ_FIELD_VARIABLE
+    bnez    t6, 2f
+    mv      a1, t5
+    li      t6, SSZ_NODE_STRIDE
+    mul     t6, a0, t6
+    add     t6, s7, t6
+    ld      t6, SSZ_NODE_SSZ_SIZE(t6)
+    add     a2, t5, t6
+    j       5f
+2:  add     t6, s2, t5
+    lwu     t6, 0(t6)
+    add     t6, t3, t6
+    sd      a0, 0(sp)
+    sd      t6, 8(sp)
+    mv      a1, t2
+    call    jss_field_end
+    mv      a2, a0
+    ld      a0, 0(sp)
+    ld      a1, 8(sp)
+    j       5f
+3:  ld      a0, SSZ_NODE_ELEMENT(t0)        # an item: at its index times its size, or from its offset to the next
+    li      t6, SSZ_NODE_STRIDE
+    mul     t6, a0, t6
+    add     t6, s7, t6
+    ld      t6, SSZ_NODE_SSZ_SIZE(t6)
+    beqz    t6, 4f
+    mul     a1, t2, t6
+    add     a1, t3, a1
+    add     a2, a1, t6
+    j       5f
+4:  slli    t5, t2, 2
+    add     t5, t3, t5
+    add     t6, s2, t5
+    lwu     a1, 0(t6)
+    add     a1, t3, a1
+    ld      a2, JsonLevel_next(s10)
+    ld      t4, JsonLevel_count(s10)
+    addi    t5, t2, 1
+    bgeu    t5, t4, 5f
+    slli    t5, t5, 2
+    add     t5, t3, t5
+    add     t6, s2, t5
+    lwu     a2, 0(t6)
+    add     a2, t3, a2
+5:  ld      t0, JsonCursor_depth(s3)
+    addi    t0, t0, 1
+    sd      t0, JsonCursor_depth(s3)
+    addi    s10, s10, JSON_LEVEL_SIZE
+    call    jss_open
+    UNFRAME 16
+END_FUNCTION jss_child
+
+/* (type, value, cursor, out): docs/reference/beacon-api.md. */
 FUNCTION lantern_json_encode
-    ENTER 48
+    FRAME 0
+    li      a4, 0
+    li      a5, 0
+    call    json_main
+    UNFRAME 0
+END_FUNCTION lantern_json_encode
+
+/* (type, ssz, cursor, out): docs/reference/beacon-api.md. */
+FUNCTION lantern_json_encode_ssz
+    FRAME 0
+    ld      t0, 8(a1)
+    ld      a5, 16(a1)
+    add     a1, a1, t0
+    li      a4, 1
+    call    json_main
+    UNFRAME 0
+END_FUNCTION lantern_json_encode_ssz
+
+/*
+ * (type, value or encoding, cursor, out, mode a4, the encoding's bytes a5): the JSON of a value
+ * (mode 0) or of an encoding (mode 1). Locals: L a token of punctuation or a name, L+40 the kind,
+ * L+48 the mode, L+56 the encoding's bytes.
+ */
+LOCAL_FUNCTION json_main
+    ENTER 64
+    sd      a4, (L + 48)(sp)
+    sd      a5, (L + 56)(sp)
     mv      s1, a0
     mv      s2, a1
     mv      s3, a2
@@ -296,8 +467,13 @@ FUNCTION lantern_json_encode
     addi    s10, s3, JsonCursor_levels
     ld      a0, 40(s1)
     li      a1, 0
+    ld      t0, (L + 48)(sp)
+    bnez    t0, 2f
     li      a2, -1
     call    json_open
+    j       1f
+2:  ld      a2, (L + 56)(sp)
+    call    jss_open
 1:  ld      t0, JsonCursor_depth(s3)
     addi    t0, t0, -1
     li      t1, JSON_LEVEL_SIZE
@@ -316,7 +492,12 @@ FUNCTION lantern_json_encode
     j       50f
 11: li      t1, SSZ_KIND_VECTOR
     bgeu    a0, t1, 20f
-    call    json_hex                        # a byte or bit string
+    li      t1, SSZ_KIND_BIT_LIST           # a byte or bit string; a bit list's encoding as its bytes
+    bne     a0, t1, 12f
+    ld      t1, (L + 48)(sp)
+    beqz    t1, 12f
+    li      a0, SSZ_KIND_BYTE_LIST
+12: call    json_hex
     bnez    a0, 91f
     j       50f
 20: sd      a0, (L + 40)(sp)                # a list, vector or container
@@ -395,7 +576,11 @@ FUNCTION lantern_json_encode
     ld      t0, JsonCursor_depth(s3)
     li      t1, JSON_LEVELS
     bgeu    t0, t1, 97f
+    ld      t0, (L + 48)(sp)
+    bnez    t0, 28f
     call    json_child
+    j       10b
+28: call    jss_child
     j       10b
 50: ld      t0, JsonCursor_depth(s3)        # the level is whole: up one, the next item there
     addi    t0, t0, -1
@@ -415,16 +600,16 @@ FUNCTION lantern_json_encode
     sub     t0, s5, t0
     sd      t0, 16(s4)
     li      a0, LANTERN_OK
-    LEAVE 48
+    LEAVE 64
 91: ld      t0, 8(s4)
     add     t0, s4, t0
     sub     t0, s5, t0
     sd      t0, 16(s4)
     li      a0, LANTERN_JSON_MORE
-    LEAVE 48
+    LEAVE 64
 97: li      a0, LANTERN_BUFFER_TOO_SMALL
-    LEAVE 48
-END_FUNCTION lantern_json_encode
+    LEAVE 64
+END_FUNCTION json_main
 
 /*
  * ---------------------------------------------------------------- lantern_json_decode

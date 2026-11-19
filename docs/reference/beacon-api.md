@@ -7,6 +7,7 @@
 - [`lantern_api_route`](#function-lantern_api_route): finds the operation of a request and reads its parameters.
 - [`lantern_json_decode`](#function-lantern_json_decode): the SSZ encoding of a value from its JSON, strictly.
 - [`lantern_json_encode`](#function-lantern_json_encode): the JSON of an SSZ value, a chunk at a time.
+- [`lantern_json_encode_ssz`](#function-lantern_json_encode_ssz): the JSON of an SSZ encoding, a chunk at a time.
 - [`lantern_http_request`](#function-lantern_http_request): reads one HTTP/1.1 request, head and body, from a connection's bytes.
 
 ### Types
@@ -73,7 +74,7 @@ The answers of the node (node.md, `NODE_EV_API`) follow these rules.
   - Bodies: `Content-Length` (zero, exact, past `body_max`, two equal values, two different values), chunked (one and many chunks, extensions, trailers, bad sizes, past `body_max`), both fields together, another coding.
   - Limits: a head of exactly `head_max` bytes and one byte more.
   - Pipelining: two requests in one buffer; `used` ends the first.
-- tests/generator/json_codec.py: values of every container type of each fork's spec module (get_random_ssz_object of the pinned spec's test helpers: in minimal the modes zero, one, random and max with lists of at most 4 items and byte lists of at most 64 bytes; in mainnet the mode zero) and the JSON of each, written by the rules of lantern_json_encode, apart from the assembly. The runner reads each value with the type of the fork's type table of that name, when lantern has it, and counts the others in a NOTE; each case also runs in chunks of 1, 7 and 64 bytes of room, and with `out` one byte short of the whole JSON (`LANTERN_JSON_MORE`), then with no room (`LANTERN_BUFFER_TOO_SMALL`). File: `<preset>-<fork>-json-encode.bin`.
+- tests/generator/json_codec.py: values of every container type of each fork's spec module (get_random_ssz_object of the pinned spec's test helpers: in minimal the modes zero, one, random and max with lists of at most 4 items and byte lists of at most 64 bytes; in mainnet the mode zero) and the JSON of each, written by the rules of lantern_json_encode, apart from the assembly. The runner reads each value with the type of the fork's type table of that name, when lantern has it, and counts the others in a NOTE; each case also runs in chunks of 1, 7 and 64 bytes of room, and with `out` one byte short of the whole JSON (`LANTERN_JSON_MORE`), then with no room (`LANTERN_BUFFER_TOO_SMALL`). The runner also gives each case's SSZ bytes to lantern_json_encode_ssz, in the same rooms. File: `<preset>-<fork>-json-encode.bin`.
 - tests/generator/json_codec.py also makes the cases of lantern_json_decode: the JSON of each `json-encode` case, with white space between its tokens and its fields in reverse order in a second copy, must give the case's SSZ bytes; then for some types, texts that break one rule each, with the `JsonFault` of each (its kind, offset and path). Each valid case also runs with `out` one byte short. File: `<preset>-<fork>-json-decode.bin`.
 - tests/generator/api_route.py: requests and the `ApiRoute` or fault of each, by the rules of lantern_api_route, apart from the assembly. It reads the operations from the beacon-APIs clone at the pinned commit, so the table of the assembly is checked against the spec; a parameter of the spec that the rules below do not name stops it. Each case with `LANTERN_OK` also runs with `out` one byte short. File: `<preset>-phase0-api-route.bin`.
   - Every operation: its method and path with every required parameter; then each optional parameter.
@@ -351,6 +352,51 @@ lantern_json_encode(type, value, cursor, out) -> status
 - Symbol: `lantern_json_encode` (`_lantern_json_encode` on macOS).
 - Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
 - Argument order: `type`, `value`, `cursor`, `out`.
+
+## Function `lantern_json_encode_ssz`
+
+Writes the JSON of one SSZ encoding, as lantern_json_encode writes it for the value of that encoding, a chunk at a time.
+
+### Signature
+
+```
+lantern_json_encode_ssz(type, ssz, cursor, out) -> status
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `type` | input | asm-ssz `TypeDescriptor`, as for lantern_json_encode |
+| `ssz` | input | ByteList: a valid SSZ encoding of the type |
+| `cursor` | state | [`JsonCursor`](#type-jsoncursor): all zero for a new encoding |
+| `out` | output | ByteList: the bytes go after its `count`, up to its `size` |
+
+### Returns
+
+- As lantern_json_encode.
+
+### Caller must
+
+- Pass a valid encoding of the type: one that ssz_deserialize takes.
+- Pass the same `type` and `ssz` again with the `cursor` of the last call, until `LANTERN_OK`.
+
+### Function does
+
+- The JSON of lantern_json_encode for the value of the encoding, from the bytes of the encoding: a field of fixed size at its `ssz_offset`; a field of variable size from its 4-byte offset to the next variable field's offset, or the end; an item of a list or vector of fixed size at its index times the item's size, with the count of a list its bytes over that size; an item of variable size from its offset to the next, the count of a list its first offset over 4, or 0 with no bytes; a bit list's bytes as they are, with their delimiter.
+- In `JsonCursor`, `base` of a level is the offset in `ssz` of its first byte, and `next` the offset of the byte after its last.
+
+### Function never
+
+- Reads more than `type`, the names after its field records, the bytes of `ssz` and `cursor`.
+- Writes more than `out` from its `count` and `cursor`.
+
+### ABI
+
+- Role: L1.
+- Symbol: `lantern_json_encode_ssz` (`_lantern_json_encode_ssz` on macOS).
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- Argument order: `type`, `ssz`, `cursor`, `out`.
 
 ## Type `ApiIdentity`
 

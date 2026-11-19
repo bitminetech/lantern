@@ -399,6 +399,7 @@ ABI uint64_t lantern_ssz_size_bounds(const void *type, void *out);
 ABI uint64_t lantern_http_request(const void *bytes, const void *limits, void *out);
 ABI uint64_t lantern_api_route(const void *request, void *out);
 ABI uint64_t lantern_json_encode(const void *type, const void *value, void *cursor, void *out);
+ABI uint64_t lantern_json_encode_ssz(const void *type, const void *ssz, void *cursor, void *out);
 ABI uint64_t lantern_json_decode(const void *type, const void *json, void *scratch, void *out, void *fault);
 
 /* Application: docs/reference/app.md. */
@@ -6761,7 +6762,8 @@ static uint64_t http_request_call(const uint8_t *b, uint64_t len, const uint64_t
  * json-encode: lantern_json_encode of each case's value (tests/generator/json_codec.py), read with
  * the type of this fork's type table of the case's name, when lantern has it: the JSON in one call
  * must be the case's, and in calls of 1, 7 and 64 bytes of room the bytes of all calls in order;
- * one byte short of the whole gives LANTERN_JSON_MORE, and no room LANTERN_BUFFER_TOO_SMALL.
+ * one byte short of the whole gives LANTERN_JSON_MORE, and no room LANTERN_BUFFER_TOO_SMALL. The
+ * same again with lantern_json_encode_ssz of the case's SSZ bytes.
  */
 static unsigned long json_types_skipped;
 static void run_json_encode(const char *file, case_file *f) {
@@ -6779,17 +6781,21 @@ static void run_json_encode(const char *file, case_file *f) {
             continue;
         }
         uint8_t *value = decode(desc, enc, slen, &vsize, &why);
+        uint64_t esize;
+        uint8_t *encl = list_of(enc, slen, 0, 8, &esize);
         static const uint64_t rooms[4] = {0, 1, 7, 64}; /* 0: all of it at once */
-        for (int r = 0; r < 4 && !why; r++) {
-            uint64_t room = rooms[r] ? rooms[r] : jlen + 8, got = 0, calls = 0, st = JSON_MORE_STATUS;
+        for (int r = 0; r < 8 && !why; r++) {
+            int ssz_in = r >= 4; /* the second four: from the SSZ bytes */
+            const uint8_t *input = ssz_in ? encl : value;
+            uint64_t room = rooms[r % 4] ? rooms[r % 4] : jlen + 8, got = 0, calls = 0, st = JSON_MORE_STATUS;
             uint8_t *cursor = buffer(JSON_CURSOR_SIZE), *out = buffer(24 + room), *all = buffer(jlen + 64);
             memset(cursor, 0, JSON_CURSOR_SIZE);
             while (st == JSON_MORE_STATUS && !why) {
                 wr64(out, 24 + room);
                 wr64(out + 8, 24);
                 wr64(out + 16, 0);
-                st = CALL(lantern_json_encode, desc, value, cursor, out);
-                if (!guard_ok(out, 24 + room) || !guard_ok(cursor, JSON_CURSOR_SIZE) || !guard_ok(value, vsize))
+                st = ssz_in ? CALL(lantern_json_encode_ssz, desc, input, cursor, out) : CALL(lantern_json_encode, desc, input, cursor, out);
+                if (!guard_ok(out, 24 + room) || !guard_ok(cursor, JSON_CURSOR_SIZE) || !guard_ok(value, vsize) || !guard_ok(encl, esize))
                     why = "lantern_json_encode wrote out of bounds";
                 else if (st != 0 && st != JSON_MORE_STATUS) why = "status is neither LANTERN_OK nor LANTERN_JSON_MORE";
                 else if (rd64(out + 16) > room || (st == JSON_MORE_STATUS && rd64(out + 16) != room))
@@ -6805,8 +6811,8 @@ static void run_json_encode(const char *file, case_file *f) {
                 static char msg[700];
                 uint64_t k = 0;
                 while (k < got && k < jlen && all[k] == want[k]) k++;
-                snprintf(msg, sizeof msg, "room %llu: the JSON differs at byte %llu of %llu (case %llu): %.*s",
-                         (unsigned long long)room, (unsigned long long)k, (unsigned long long)got, (unsigned long long)jlen,
+                snprintf(msg, sizeof msg, "%s, room %llu: the JSON differs at byte %llu of %llu (case %llu): %.*s",
+                         ssz_in ? "from SSZ" : "from the value", (unsigned long long)room, (unsigned long long)k, (unsigned long long)got, (unsigned long long)jlen,
                          (int)(got - k < 200 ? got - k : 200), (const char *)all + k);
                 why = msg;
             }
@@ -6828,6 +6834,7 @@ static void run_json_encode(const char *file, case_file *f) {
             free(out);
         }
         free(value);
+        free(encl);
         report(file, name, len, !why, why);
     }
 }
