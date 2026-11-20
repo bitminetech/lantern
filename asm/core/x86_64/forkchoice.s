@@ -13,7 +13,7 @@
 .set F_CHILD_VIABLE, 8     # has a child in get_filtered_node_tree
 .set F_OVERFLOW, 16        # its weight passed 2^64 - 1
 
-.if BlockNode__mem != 216 || StoreValidator__mem != 32 || Checkpoint__mem != 40 || Checkpoint_root != 8
+.if BlockNode__mem != 224 || StoreValidator__mem != 32 || Checkpoint__mem != 40 || Checkpoint_root != 8
 .error "the fork choice code assumes the layouts of include/lantern.inc"
 .endif
 .if PAYLOAD_STATUS_VALID != 0 || PAYLOAD_STATUS_INVALIDATED != 1
@@ -484,36 +484,21 @@ LOCAL_FUNCTION filter_tree
 END_FUNCTION filter_tree
 
 /*
- * L0: rax = status, rdx = get_head(store rdi), with scratch rsi of S(2) for the node count. The
- * weights of all nodes at once (fork-choice.md, lantern_get_head): each latest message's balance on
- * its node, the boost on the boost node, then each node's weight onto its parent's.
- * rbx store, rbp flags, r12 node count, r13 nodes, r14 i, r15 head; S7 justified node, S8 the
- * weights, S9 best child, S10 best weight. Locals: L the status of the boost.
+ * L1: the weights of all nodes at once (fork-choice.md, lantern_get_head): store rdi, weights rsi
+ * and flags rdx, 8 bytes a node: rax = the status of the proposer boost, LANTERN_OK or a failure
+ * of its node or get_proposer_score. Each weight is get_weight of its node; a sum past 2^64 - 1
+ * sets F_OVERFLOW in the flags of the node and of each node above it. rbx store, rbp flags, r12
+ * node count, r13 nodes, r14 i, S8 the weights. Locals: L the status of the boost.
  */
-LOCAL_FUNCTION head
+LOCAL_FUNCTION weights
     ENTER 16
     mov     %rdi, %rbx
-    mov     (Store_blocks + 8)(%rbx), %r12
-    mov     (%rsi), %rax                    # the weights: 8 bytes a node, before filter_tree's flags
-    mov     %r12, %rcx
-    shl     $4, %rcx
-    lea     (LIST_FIXED + LANTERN_SCRATCH_FIXED)(%rcx), %rdx
-    cmp     %rdx, %rax
-    jb      9f
-    mov     %r12, %rcx
-    shl     $4, %rcx
-    sub     %rcx, %rax
-    add     %rsi, %rax
-    mov     %rax, S8(%rsp)
-    mov     %rbx, %rdi
-    call    filter_tree                     # nodes = get_filtered_node_tree(store)
-    test    %rax, %rax
-    jnz     7f
+    mov     %rsi, S8(%rsp)
     mov     %rdx, %rbp
-    mov     %rcx, S7(%rsp)
+    mov     (Store_blocks + 8)(%rbx), %r12
     mov     Store_blocks(%rbx), %r13
     add     %rbx, %r13
-    mov     S8(%rsp), %rdi
+    mov     %rsi, %rdi
     mov     %r12, %rsi
     shl     $3, %rsi
     call    lantern_zero
@@ -583,6 +568,45 @@ LOCAL_FUNCTION head
     orq     $F_OVERFLOW, (%rbp,%rcx,8)
 44: dec     %r14
     jmp     41b
+60: mov     L(%rsp), %rax
+    LEAVE 16
+END_FUNCTION weights
+
+/*
+ * L0: rax = status, rdx = get_head(store rdi), with scratch rsi of S(2) for the node count. The
+ * weights of all nodes at once (fork-choice.md, lantern_get_head): each latest message's balance on
+ * its node, the boost on the boost node, then each node's weight onto its parent's.
+ * rbx store, rbp flags, r12 node count, r13 nodes, r14 i, r15 head; S7 justified node, S8 the
+ * weights, S9 best child, S10 best weight. Locals: L the status of the boost.
+ */
+LOCAL_FUNCTION head
+    ENTER 16
+    mov     %rdi, %rbx
+    mov     (Store_blocks + 8)(%rbx), %r12
+    mov     (%rsi), %rax                    # the weights: 8 bytes a node, before filter_tree's flags
+    mov     %r12, %rcx
+    shl     $4, %rcx
+    lea     (LIST_FIXED + LANTERN_SCRATCH_FIXED)(%rcx), %rdx
+    cmp     %rdx, %rax
+    jb      9f
+    mov     %r12, %rcx
+    shl     $4, %rcx
+    sub     %rcx, %rax
+    add     %rsi, %rax
+    mov     %rax, S8(%rsp)
+    mov     %rbx, %rdi
+    call    filter_tree                     # nodes = get_filtered_node_tree(store)
+    test    %rax, %rax
+    jnz     7f
+    mov     %rdx, %rbp
+    mov     %rcx, S7(%rsp)
+    mov     Store_blocks(%rbx), %r13
+    add     %rbx, %r13
+    mov     %rbx, %rdi                      # the weights of all nodes at once
+    mov     S8(%rsp), %rsi
+    mov     %rbp, %rdx
+    call    weights
+    mov     %rax, L(%rsp)
 60: mov     S7(%rsp), %r15                  # head = the justified node
 61: movq    $-1, S9(%rsp)                   # the best child so far
     movq    $0, S10(%rsp)
@@ -922,6 +946,8 @@ SPEC_FUNCTION get_forkchoice_store
     lea     BlockNode_justified_checkpoint(%rax), %rdx      # block_states[anchor_root].current_justified_checkpoint
     lea     BeaconState_current_justified_checkpoint(%rbx), %rcx
     COPY40  %rdx, %rcx
+    mov     (BeaconState_finalized_checkpoint + Checkpoint_epoch)(%rbx), %rcx   # and its finalized_checkpoint.epoch
+    mov     %rcx, BlockNode_finalized_epoch(%rax)
     mov     S9(%rsp), %rcx                  # unrealized_justifications
     mov     %rcx, BlockNode_unrealized_justified_checkpoint(%rax)
     lea     (BlockNode_unrealized_justified_checkpoint + Checkpoint_root)(%rax), %rdx
@@ -1814,6 +1840,8 @@ SPEC_FUNCTION on_block
     lea     BlockNode_justified_checkpoint(%rax), %rdx  # block_states[block_root].current_justified_checkpoint
     lea     BeaconState_current_justified_checkpoint(%r12), %rcx
     COPY40  %rdx, %rcx
+    mov     (BeaconState_finalized_checkpoint + Checkpoint_epoch)(%r12), %rcx   # and its finalized_checkpoint.epoch
+    mov     %rcx, BlockNode_finalized_epoch(%rax)
     lea     BlockNode_unrealized_justified_checkpoint(%rax), %rdx      # unrealized_justifications[block_root]
     lea     (L + 64)(%rsp), %rcx
     COPY40  %rdx, %rcx

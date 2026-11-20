@@ -1265,7 +1265,11 @@ LOCAL_FUNCTION api_body
     b.ne    110f
     bl      api_heads_body
     UNFRAME 16
-110: cmp    x28, #API_OP_GET_STATE_RANDAO
+110: cmp    x28, #API_OP_GET_DEBUG_FORK_CHOICE
+    b.ne    115f
+    bl      api_fork_choice_body
+    UNFRAME 16
+115: cmp    x28, #API_OP_GET_STATE_RANDAO
     b.eq    111f
     cmp     x28, #API_OP_GET_EPOCH_SYNC_COMMITTEES
     b.eq    112f
@@ -1689,6 +1693,89 @@ LOCAL_FUNCTION api_heads_body
 9:  API_LIT api_v_end
     UNFRAME 32
 END_FUNCTION api_heads_body
+
+/*
+ * L1: the body of getDebugForkChoice (beacon-api.md): {"justified_checkpoint":…,"finalized_checkpoint":…,
+ * "fork_choice_nodes":[…]} of the store at ApiView_val_state of the view x22, each node's weight at
+ * ApiView_weights. Locals: the index, the node.
+ */
+LOCAL_FUNCTION api_fork_choice_body
+    FRAME 16
+    API_LIT api_fc_justified
+    ldr     x0, [x22, #ApiView_val_state]
+    add     x0, x0, #Store_justified_checkpoint
+    bl      api_checkpoint
+    API_LIT api_fc_finalized
+    ldr     x0, [x22, #ApiView_val_state]
+    add     x0, x0, #Store_finalized_checkpoint
+    bl      api_checkpoint
+    API_LIT api_fc_nodes
+    str     xzr, [sp, #16]
+1:  ldr     x9, [x22, #ApiView_val_state]
+    ldr     x10, [x9, #(Store_blocks + 8)]
+    ldr     x11, [sp, #16]
+    cmp     x11, x10
+    b.hs    9f
+    cbz     x11, 2f
+    API_LIT api_p_comma
+2:  ldr     x9, [x22, #ApiView_val_state]
+    ldr     x10, [x9, #Store_blocks]
+    add     x10, x9, x10
+    ldr     x11, [sp, #16]
+    mov     x12, #BlockNode__mem
+    madd    x0, x11, x12, x10
+    str     x0, [sp, #24]
+    API_LIT api_fc_slot
+    ldr     x0, [sp, #24]
+    ldr     x0, [x0, #BlockNode_slot]
+    bl      api_qdec
+    API_LIT api_fc_block_root
+    ldr     x0, [sp, #24]
+    mov     x1, #32
+    bl      api_qhex
+    API_LIT api_h_parent
+    ldr     x0, [sp, #24]
+    add     x0, x0, #BlockNode_parent_root
+    mov     x1, #32
+    bl      api_qhex
+    API_LIT api_fc_justified_epoch
+    ldr     x0, [sp, #24]
+    ldr     x0, [x0, #BlockNode_justified_checkpoint]   /* its epoch, the Checkpoint's first field */
+    bl      api_qdec
+    API_LIT api_fc_finalized_epoch
+    ldr     x0, [sp, #24]
+    ldr     x0, [x0, #BlockNode_finalized_epoch]
+    bl      api_qdec
+    API_LIT api_fc_weight
+    LDQ     x9, x22, ApiView_weights
+    ldr     x11, [sp, #16]
+    ldr     x0, [x9, x11, lsl #3]
+    bl      api_qdec
+    API_LIT api_fc_validity
+    ldr     x0, [sp, #24]
+    ldr     x0, [x0, #BlockNode_payload_status]
+    cmp     x0, #PAYLOAD_STATUS_NOT_VALIDATED
+    b.eq    3f
+    cmp     x0, #PAYLOAD_STATUS_INVALIDATED
+    b.eq    4f
+    API_LIT api_fc_valid
+    b       5f
+3:  API_LIT api_fc_optimistic
+    b       5f
+4:  API_LIT api_fc_invalid
+5:  API_LIT api_fc_hash
+    ldr     x0, [sp, #24]
+    add     x0, x0, #BlockNode_block_hash
+    mov     x1, #32
+    bl      api_qhex
+    API_LIT api_end1
+    ldr     x11, [sp, #16]
+    add     x11, x11, #1
+    str     x11, [sp, #16]
+    b       1b
+9:  API_LIT api_v_end
+    UNFRAME 16
+END_FUNCTION api_fork_choice_body
 
 /*
  * L1: the bodies of getStateRandao, getEpochSyncCommittees and getProposerLookahead (beacon-api.md),
@@ -2253,6 +2340,8 @@ LOCAL_FUNCTION node_api_event
     b.eq    67f
     cmp     x3, #API_OP_GET_DEBUG_CHAIN_HEADS_V2
     b.eq    67f
+    cmp     x3, #API_OP_GET_DEBUG_FORK_CHOICE
+    b.eq    67f
     cmp     x3, #API_OP_GET_PROPOSER_DUTIES
     b.eq    63f
     cmp     x3, #API_OP_PRODUCE_ATTESTATION_DATA
@@ -2598,9 +2687,11 @@ LOCAL_FUNCTION node_api_run
     cbz     x10, 8f
     cbz     x22, 8f
     b       2f
-1:  cmp     x27, #API_OP_GET_SPEC           /* getSpec, getDebugChainHeadsV2: no state */
+1:  cmp     x27, #API_OP_GET_SPEC           /* getSpec, getDebugChainHeadsV2, getDebugForkChoice: no state */
     b.eq    2f
     cmp     x27, #API_OP_GET_DEBUG_CHAIN_HEADS_V2
+    b.eq    2f
+    cmp     x27, #API_OP_GET_DEBUG_FORK_CHOICE
     b.eq    2f
     cbz     x22, 8f                         /* a state's answer: a state */
     cmp     x27, #API_OP_GET_STATE_FINALITY_CHECKPOINTS
@@ -2646,6 +2737,8 @@ LOCAL_FUNCTION node_api_run
     b.eq    5f
     cmp     x27, #API_OP_GET_DEBUG_CHAIN_HEADS_V2
     b.eq    29f
+    cmp     x27, #API_OP_GET_DEBUG_FORK_CHOICE
+    b.eq    28f
     ldr     x0, [x22, #NODE_STATE_SLOT]     /* a state at the work's slot, else the work that brought it there failed */
     lsr     x9, x9, #24
     cmp     x0, x9
@@ -2936,6 +3029,31 @@ LOCAL_FUNCTION node_api_run
 293: strb   w12, [x13, x14]
     add     x14, x14, #1
     b       291b
+    /* getDebugForkChoice: lantern_node_weights of the fork of the head's slot into the end of scratch; a failure, the error 500 */
+28: LDQ     x10, x20, Store_blocks + 8
+    ldr     x11, [x24]
+    lsl     x12, x10, #3
+    cmp     x11, x12
+    b.lo    71f
+    sub     x11, x11, x12
+    str     x11, [x24]
+    add     x9, x24, x11
+    STQ     x9, x26, ApiView_weights
+    str     x20, [x26, #ApiView_val_state]
+    ldr     x0, [x26, #ApiView_head_slot]
+    add     x1, x19, #Node_config
+    bl      node_fork
+    mov     x15, x0
+    mov     x0, x20
+    mov     x1, x24
+    LDQ     x2, x26, ApiView_weights
+    FORK_CALL node_weights
+    cmp     x0, #LANTERN_BUFFER_TOO_SMALL
+    b.eq    71f
+    cbz     x0, 5b
+    mov     x9, #500
+    str     x9, [x26, #ApiView_status]
+    b       5b
 42: mov     x9, #LANTERN_INVALID_SLOT
     str     x9, [x25, #NodeEvent_result]
     b       9f
@@ -3425,6 +3543,8 @@ LOCAL_FUNCTION node_api_encode
     mov     x4, x1
     cmp     x0, #API_OP_GET_SPEC            /* getSpec, getDebugChainHeadsV2: no state, no bytes, no values */
     mov     x12, #API_OP_GET_DEBUG_CHAIN_HEADS_V2
+    ccmp    x0, x12, #4, ne
+    mov     x12, #API_OP_GET_DEBUG_FORK_CHOICE
     ccmp    x0, x12, #4, ne
     b.ne    1f
     mov     x1, #0

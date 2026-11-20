@@ -317,6 +317,45 @@ api_ch_root:
 api_ch_optimistic:
     .ascii ",\"execution_optimistic\":"
 .set api_ch_optimistic_len, 24
+api_fc_justified:
+    .ascii "{\"justified_checkpoint\":"
+.set api_fc_justified_len, 24
+api_fc_finalized:
+    .ascii ",\"finalized_checkpoint\":"
+.set api_fc_finalized_len, 24
+api_fc_nodes:
+    .ascii ",\"fork_choice_nodes\":["
+.set api_fc_nodes_len, 22
+api_fc_slot:
+    .ascii "{\"slot\":"
+.set api_fc_slot_len, 8
+api_fc_block_root:
+    .ascii ",\"block_root\":"
+.set api_fc_block_root_len, 14
+api_fc_justified_epoch:
+    .ascii ",\"justified_epoch\":"
+.set api_fc_justified_epoch_len, 19
+api_fc_finalized_epoch:
+    .ascii ",\"finalized_epoch\":"
+.set api_fc_finalized_epoch_len, 19
+api_fc_weight:
+    .ascii ",\"weight\":"
+.set api_fc_weight_len, 10
+api_fc_validity:
+    .ascii ",\"validity\":"
+.set api_fc_validity_len, 12
+api_fc_valid:
+    .ascii "\"valid\""
+.set api_fc_valid_len, 7
+api_fc_optimistic:
+    .ascii "\"optimistic\""
+.set api_fc_optimistic_len, 12
+api_fc_invalid:
+    .ascii "\"invalid\""
+.set api_fc_invalid_len, 9
+api_fc_hash:
+    .ascii ",\"execution_block_hash\":"
+.set api_fc_hash_len, 24
 api_p_lbracket:
     .ascii "["
 .set api_p_lbracket_len, 1

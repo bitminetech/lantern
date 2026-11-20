@@ -12,7 +12,7 @@
 .set F_CHILD_VIABLE, 8     # has a child in get_filtered_node_tree
 .set F_OVERFLOW, 16        # its weight passed 2^64 - 1
 
-.if BlockNode__mem != 216 || StoreValidator__mem != 32 || Checkpoint__mem != 40 || Checkpoint_root != 8
+.if BlockNode__mem != 224 || StoreValidator__mem != 32 || Checkpoint__mem != 40 || Checkpoint_root != 8
 .error "the fork choice code assumes the layouts of include/lantern.inc"
 .endif
 .if PAYLOAD_STATUS_VALID != 0 || PAYLOAD_STATUS_INVALIDATED != 1
@@ -485,28 +485,18 @@ LOCAL_FUNCTION filter_tree
 END_FUNCTION filter_tree
 
 /*
- * L0: a0 = status, a1 = get_head(store a0), with scratch a1 of S(2) for the node count. The
- * weights of all nodes at once (fork-choice.md, lantern_get_head): each latest message's balance on
- * its node, the boost on the boost node, then each node's weight onto its parent's.
- * s1 store, s2 flags, s3 node count, s4 justified node, s5 the weights, s6 i, s7 head, s8 best
- * child, s9 best weight, s10 nodes. Locals: L the status of the boost.
+ * L1: the weights of all nodes at once (fork-choice.md, lantern_get_head): store a0, weights a1
+ * and flags a2, 8 bytes a node: a0 = the status of the proposer boost, LANTERN_OK or a failure of
+ * its node or get_proposer_score. Each weight is get_weight of its node; a sum past 2^64 - 1 sets
+ * F_OVERFLOW in the flags of the node and of each node above it. s1 store, s2 flags, s3 node
+ * count, s5 the weights, s6 i, s10 nodes. Locals: L the status of the boost.
  */
-LOCAL_FUNCTION head
+LOCAL_FUNCTION weights
     ENTER 16
     mv      s1, a0
+    mv      s5, a1
+    mv      s2, a2
     ld      s3, (Store_blocks + 8)(s1)
-    ld      t0, 0(a1)                       # the weights: 8 bytes a node, before filter_tree's flags
-    slli    t1, s3, 4
-    li      t2, LIST_FIXED + LANTERN_SCRATCH_FIXED
-    add     t2, t1, t2
-    bltu    t0, t2, 9f
-    sub     t0, t0, t1
-    add     s5, a1, t0
-    mv      a0, s1
-    call    filter_tree                     # nodes = get_filtered_node_tree(store)
-    bnez    a0, 7f
-    mv      s2, a1
-    mv      s4, a2
     ld      s10, Store_blocks(s1)
     add     s10, s1, s10
     mv      a0, s5
@@ -608,6 +598,40 @@ LOCAL_FUNCTION head
 43: sd      a3, 0(a4)
 44: addi    s6, s6, -1
     j       41b
+60: ld      a0, L(sp)
+    LEAVE 16
+END_FUNCTION weights
+
+/*
+ * L0: a0 = status, a1 = get_head(store a0), with scratch a1 of S(2) for the node count. The
+ * weights of all nodes at once (fork-choice.md, lantern_get_head): each latest message's balance on
+ * its node, the boost on the boost node, then each node's weight onto its parent's.
+ * s1 store, s2 flags, s3 node count, s4 justified node, s5 the weights, s6 i, s7 head, s8 best
+ * child, s9 best weight, s10 nodes. Locals: L the status of the boost.
+ */
+LOCAL_FUNCTION head
+    ENTER 16
+    mv      s1, a0
+    ld      s3, (Store_blocks + 8)(s1)
+    ld      t0, 0(a1)                       # the weights: 8 bytes a node, before filter_tree's flags
+    slli    t1, s3, 4
+    li      t2, LIST_FIXED + LANTERN_SCRATCH_FIXED
+    add     t2, t1, t2
+    bltu    t0, t2, 9f
+    sub     t0, t0, t1
+    add     s5, a1, t0
+    mv      a0, s1
+    call    filter_tree                     # nodes = get_filtered_node_tree(store)
+    bnez    a0, 7f
+    mv      s2, a1
+    mv      s4, a2
+    ld      s10, Store_blocks(s1)
+    add     s10, s1, s10
+    mv      a0, s1                          # the weights of all nodes at once
+    mv      a1, s5
+    mv      a2, s2
+    call    weights
+    sd      a0, L(sp)
 60: mv      s7, s4                          # head = the justified node
 61: li      s8, -1                          # the best child so far
     li      s9, 0
@@ -946,6 +970,8 @@ SPEC_FUNCTION get_forkchoice_store
     addi    t0, s10, BlockNode_justified_checkpoint     # block_states[anchor_root].current_justified_checkpoint
     ADDQ    t1, s1, BeaconState_current_justified_checkpoint
     COPY40  t0, t1
+    LDQ     t0, s1, BeaconState_finalized_checkpoint + Checkpoint_epoch    # and its finalized_checkpoint.epoch
+    sd      t0, BlockNode_finalized_epoch(s10)
     sd      s9, BlockNode_unrealized_justified_checkpoint(s10)     # unrealized_justifications
     addi    t0, s10, (BlockNode_unrealized_justified_checkpoint + Checkpoint_root)
     addi    t1, sp, (L + 32)
@@ -1783,6 +1809,8 @@ SPEC_FUNCTION on_block
     addi    t0, s10, BlockNode_justified_checkpoint    # block_states[block_root].current_justified_checkpoint
     ADDQ    t1, s3, BeaconState_current_justified_checkpoint
     COPY40  t0, t1
+    LDQ     t0, s3, BeaconState_finalized_checkpoint + Checkpoint_epoch    # and its finalized_checkpoint.epoch
+    sd      t0, BlockNode_finalized_epoch(s10)
     addi    t0, s10, BlockNode_unrealized_justified_checkpoint     # unrealized_justifications[block_root]
     addi    t1, sp, (L + 64)
     COPY40  t0, t1

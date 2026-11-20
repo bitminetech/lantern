@@ -19,6 +19,7 @@
 - [`lantern_node_randao`](#function-lantern_node_randao): the RANDAO mix of an epoch in a state, for one fork.
 - [`lantern_node_sync_committee`](#function-lantern_node_sync_committee): the validator indices of a state's sync committee of an epoch, for one fork.
 - [`lantern_node_proposer_lookahead`](#function-lantern_node_proposer_lookahead): a state's `proposer_lookahead`, for one fork.
+- [`lantern_node_weights`](#function-lantern_node_weights): get_weight of each node of a store, for one fork.
 - [`lantern_node_pending`](#function-lantern_node_pending): the items of a pending list of a state, for one fork.
 - [`lantern_node_blinded_block`](#function-lantern_node_blinded_block): the blinded block of a block's SSZ bytes, for one fork.
 - [`lantern_node_attestation`](#function-lantern_node_attestation): on_attestation of an attestation's SSZ bytes, for one fork.
@@ -169,7 +170,7 @@
   - getSpec, getForkSchedule and getDepositContract, from the pinned config, presets and the spec module's constants, with the node's fork epochs; getSpec also over HTTP/1.0 and with `Connection: close`, and getForkSchedule over HTTP/1.0.
   - Lookup requests, the states from process_slots of the anchor state: getBlockRoot, getBlockHeader and getBlockV2 of `head`, `finalized`, `genesis`, the anchor's slot and the slots before and after it, the anchor's root and another root; getStateRoot, getStateFork and getStateFinalityCheckpoints of `head`, `finalized`, `justified`, `genesis`, the anchor's slot, each slot after it to the store's slot and the slot after that, the anchor state's root, the root of the state of the anchor's slot + 1, and another root; getStateV2 as JSON of `finalized` and of the anchor's slot + 2; getStateRandao, getEpochSyncCommittees and getProposerLookahead of `head`, `finalized`, `genesis`, another root, the root of the state of the anchor's slot + 1 and that slot, getProposerLookahead of `head` as SSZ, getStateRandao of `head` at the epochs 0, the anchor's epoch - 1, it, + 1 and + EPOCHS_PER_HISTORICAL_VECTOR, and getEpochSyncCommittees of `head` at the epochs 0, the anchor's, and the first of the next two sync committee periods. The anchor state has the sync committees of genesis (both get_next_sync_committee) from altair; from electra three pending deposits of slots past the finalized one, two pending partial withdrawals and two pending consolidations of a source that is not withdrawable, which the epochs keep. getPendingDeposits, getPendingPartialWithdrawals and getPendingConsolidations of the state ids of the reads above, of `head` as SSZ, and over HTTP/1.0.
   - getStateV2 of `head` as SSZ with the small event, and a `NODE_EV_API_CLOSED` of the connection after its first chunk: the connection must get no more actions, and the node must hold no `NodeApi` entry and must free the state's bytes.
-- The `fork_choice-get_head` and `fork_choice-on_block` cases in node mode, after their steps: getBlockHeader of `head` must answer 200 with the node's `head_root` as `root` and the slot of its block, and getStateFinalityCheckpoints of `head` with the checkpoints of the post-state the node keeps for the head, and getDebugChainHeadsV2 with the leaves of the node's store, as beacon-api.md gives them.
+- The `fork_choice-get_head` and `fork_choice-on_block` cases in node mode, after their steps: getBlockHeader of `head` must answer 200 with the node's `head_root` as `root` and the slot of its block, and getStateFinalityCheckpoints of `head` with the checkpoints of the post-state the node keeps for the head, getDebugChainHeadsV2 with the leaves of the node's store, and getDebugForkChoice with the store's checkpoints and nodes, each weight lantern_get_weight of its node, as beacon-api.md gives them.
   - The chain: the case's valid blocks from the node's `head_root` by `parent_root`. For each slot after the anchor's to the head's, getBlockRoot of the slot must answer the root of the chain's block of that slot, or 404 for a slot with none.
   - For each slot from the head's to the store's, at most an epoch and a slot past the head's: getStateRoot of the slot must answer the hash_tree_root of the head's post-state, processed to that slot with lantern_process_slots of the fork of the head's slot (from a slot it does not reach, the rest is skipped).
   - For each valid block of the case the node holds: getBlockHeader of its root must answer 200, with `canonical` true when it is on the chain, else false.
@@ -419,7 +420,7 @@ lantern_node_step(node, store, p2p, tick, events, scratch, actions, result) -> s
   - An `HttpRequest` with a `status`: the error of that status.
   - Else lantern_api_route of the request, its `ApiRoute` in `scratch`. `LANTERN_INVALID_ROUTE`: the error of its `status`.
   - getHealth, getNetworkIdentity, getNodeVersion, getSyncingStatus, getPeerCount, getGenesis, getForkSchedule and getDepositContract: the answer of the node, the store and the config.
-  - getSpec and getDebugChainHeadsV2: a `NODE_WORK_API_ENCODE` with no state and no `data`, the connection as `target`, and as `arg` the operation + 2^8 times the answer flags.
+  - getSpec, getDebugChainHeadsV2 and getDebugForkChoice: a `NODE_WORK_API_ENCODE` with no state and no `data`, the connection as `target`, and as `arg` the operation + 2^8 times the answer flags.
   - The block of a `block_id` and the state of a `state_id`, as beacon-api.md gives them: the walk of the chain by `parent_root` from the head's `NodeBlock`; below its lowest block, the `Db`'s `DbSlot` of a slot or lantern_db_find_root of a root; the bytes of a `Db` block a `NODE_DB_REF` of its record.
   - A state at a slot past its post-state's, or past its `NodeCheckpoint`'s: a `NODE_ACT_STATE_COPY` of it, the copy across the fork boundaries to the slot (the crossing), then a `NODE_WORK_SLOTS` of the copy to the slot when it is below it; after the copy's last use, a `NODE_ACT_STATE_FREE` of it.
   - getBlockRoot: the answer at once.
@@ -504,7 +505,7 @@ lantern_node_run(node, store, seen, work, state_a, state_b, state_c, data, setti
 
 - `LANTERN_OK`: `event` holds the work's fields and its `result`.
 - `LANTERN_BUFFER_TOO_SMALL`: the store, `state_a`, `scratch`, `seen` or `event` has too little room. Nothing is changed.
-- `LANTERN_INVALID_EVENT`: the work is of no kind, or names no `NodeCheckpoint`; a `NODE_WORK_API_ENCODE` of another operation, of a block index past the blocks part, getBlockHeader with neither `data` nor `state_a` or with neither `data` nor a block index, another but getSpec and getDebugChainHeadsV2 with no `state_a`; a `NODE_WORK_API_CHUNK` of an index past the api part, of a free entry or one of another operation, with no `data` for getBlockV2 and getStateV2, or with no `state_a` for the validator streams; a `NODE_WORK_API_LOOKUP` with no `state_a`; a `NODE_WORK_API_EVENT` of another topic, of head with no `state_a`, or of finalized_checkpoint with neither `data` nor `state_a`; a `NODE_WORK_API_SUBMIT` of another operation, or with no `state_a` or `data`; a `NODE_WORK_POOL_CHECK` of another topic, or with no `state_a` or `data`.
+- `LANTERN_INVALID_EVENT`: the work is of no kind, or names no `NodeCheckpoint`; a `NODE_WORK_API_ENCODE` of another operation, of a block index past the blocks part, getBlockHeader with neither `data` nor `state_a` or with neither `data` nor a block index, another but getSpec, getDebugChainHeadsV2 and getDebugForkChoice with no `state_a`; a `NODE_WORK_API_CHUNK` of an index past the api part, of a free entry or one of another operation, with no `data` for getBlockV2 and getStateV2, or with no `state_a` for the validator streams; a `NODE_WORK_API_LOOKUP` with no `state_a`; a `NODE_WORK_API_EVENT` of another topic, of head with no `state_a`, or of finalized_checkpoint with neither `data` nor `state_a`; a `NODE_WORK_API_SUBMIT` of another operation, or with no `state_a` or `data`; a `NODE_WORK_POOL_CHECK` of another topic, or with no `state_a` or `data`.
 
 ### Caller must
 
@@ -536,6 +537,7 @@ lantern_node_run(node, store, seen, work, state_a, state_b, state_c, data, setti
   - getStateRandao: lantern_node_randao of the fork of the state's slot, of `state_a` and the u64 at byte 0 of `data`. getEpochSyncCommittees: lantern_node_sync_committee of the fork of the state's slot, of `state_a` and the u64 at byte 0 of `data`, into `scratch`. getProposerLookahead: lantern_node_proposer_lookahead of the fork of the state's slot, of `state_a`; the answer's version the fork of the state's slot. `LANTERN_NO_STATE_ANSWER` of any of them: the error 400 as the answer. `data` of fewer than 8 bytes gives `LANTERN_INVALID_ENCODING`.
   - getSpec: of the node's config, the preset and the constants (include/api_spec.inc); it reads no state.
   - getDebugChainHeadsV2: of the store's `blocks`, with 2 bits a node in `scratch`: a node is out when its `payload_status` is `PAYLOAD_STATUS_INVALIDATED` or its `parent` is out (a parent comes before its children); a leaf is a node not out that is the `parent` of no node not out. It reads no state.
+  - getDebugForkChoice: lantern_node_weights of the fork of the head's slot, of the store, into `scratch`; a status of it but `LANTERN_BUFFER_TOO_SMALL` gives the error 500 as the answer. It reads no state.
   - getProposerDuties: lantern_node_proposers of the fork of the state's slot, of `state_a`, with the node's config.
   - produceAttestationData: lantern_node_attestation_data of the fork of the state's slot, of `state_a` and the u64 at byte 0 of `data`, with the node's config; `data` of fewer than 8 bytes gives `LANTERN_INVALID_ENCODING`.
   - getAttesterDuties: lantern_node_attester_duties of the fork of the state's slot, of `state_a` and the `ValidatorRef` items of `data`, with the node's config, into `scratch`; then the answer of each item in order.
@@ -861,6 +863,44 @@ lantern_node_proposer_lookahead(state, out) -> status
 
 - Export: `lantern_<fork>_node_proposer_lookahead` of each fork object.
 - Argument order: `state`, `out`.
+
+## Function `lantern_node_weights`
+
+get_weight of each node of a store (beacon-api.md, getDebugForkChoice).
+
+### Signature
+
+```
+lantern_node_weights(store, scratch, out) -> status
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `store` | input | `Store` |
+| `scratch` | scratch | `Scratch`: 8 bytes a node, at its end |
+| `out` | output | a u64 for each node of the store's `blocks`, in their order |
+
+### Returns
+
+- `LANTERN_OK`: `out` holds get_weight of each node.
+- `LANTERN_BUFFER_TOO_SMALL`: scratch is short.
+- `LANTERN_NEED_JUSTIFIED_STATE`: the store's balances are not those of its justified checkpoint (fork-choice.md, Common rules).
+- `LANTERN_INVALID_UNKNOWN_BLOCK`, `LANTERN_INVALID_OVERFLOW`: a failure of the proposer boost's node or get_proposer_score, or a weight past 2^64 - 1.
+
+### Function does
+
+- The weights of all nodes at once, as lantern_get_head computes them (fork-choice.md), for every node of the store: each the weight lantern_get_weight gives the node.
+
+### Caller must
+
+- Keep `out` apart from `scratch`.
+
+### ABI
+
+- Export: `lantern_<fork>_node_weights` of each fork object.
+- Argument order: `store`, `scratch`, `out`.
 
 ## Function `lantern_node_pending`
 

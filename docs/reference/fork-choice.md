@@ -70,7 +70,7 @@
   - For `INVALID` with a `latest_valid_hash`, it first sets `INVALIDATED` with lantern_store_payload_status on each ancestor of the block whose `block_hash` is not that hash, as the spec's test helper `add_optimistic_block` does.
 - The fork choice compliance cases of the release, `comptests.tar.gz` with the SHA-256 in tests/generator/generate.py: `tests/minimal/<fork>/fork_choice_compliance/<handler>/` of altair to fulu, as `minimal-<fork>-fork_choice_compliance-<handler>.bin`.
   - Every case has `bls_setting` 2, so `runner-minimal-<fork>-bls-off` runs them.
-  - The runner follows the spec's compliance runner (`tests/generators/compliance_runners/fork_choice/runner/test_run.py`): it ignores invalid attestations and attester slashings inside a valid block, and checks `viable_for_head_roots_and_weights` with lantern_get_filtered_node_tree and lantern_get_weight.
+  - The runner follows the spec's compliance runner (`tests/generators/compliance_runners/fork_choice/runner/test_run.py`): it ignores invalid attestations and attester slashings inside a valid block, and checks `viable_for_head_roots_and_weights` with lantern_get_filtered_node_tree and lantern_get_weight, and lantern_node_weights (node.md) against lantern_get_weight for every node.
 - The KZG trusted setup: `presets/<preset>/trusted_setups/trusted_setup_4096.json` of the pinned spec, as `<preset>-kzg_setup.bin`.
 
 ## Function `lantern_get_forkchoice_store`
@@ -786,10 +786,11 @@ The fork choice store: a value with two parts.
 | 168 | `timely` | u64 | `block_timeliness[root]`: 1 or 0; 0 for the anchor |
 | 176 | `block_hash` | Hash32 | `body.execution_payload.block_hash` of the block |
 | 208 | `payload_status` | u64 | `PAYLOAD_STATUS_*`: the execution engine's answer for the payload; `VALID` for the anchor |
+| 216 | `finalized_epoch` | u64 | `finalized_checkpoint.epoch` of the block's post-state |
 
 ### Rules
 
-- `BlockNode__mem` (216) bytes.
+- `BlockNode__mem` (224) bytes.
 
 ## Type `StoreValidator`
 

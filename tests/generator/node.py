@@ -396,7 +396,7 @@ ANSWERED = ("getHealth", "getNetworkIdentity", "getNodeVersion", "getSyncingStat
             "getBlockHeader", "getStateFinalityCheckpoints", "getBlockV2", "getStateV2", "getBlockRoot", "getStateRoot",
             "getStateFork", "getSpec", "getForkSchedule", "getDepositContract", "getEpochCommittees",
             "getProposerDuties", "produceAttestationData", "getAttesterDuties", "eventstream", "getStateRandao",
-            "getEpochSyncCommittees", "getProposerLookahead", "getBlockAttestationsV2", "getBlindedBlock", "getDebugChainHeadsV2") + tuple(PENDING) + VALIDATOR_OPS
+            "getEpochSyncCommittees", "getProposerLookahead", "getBlockAttestationsV2", "getBlindedBlock", "getDebugChainHeadsV2", "getDebugForkChoice") + tuple(PENDING) + VALIDATOR_OPS
 STATE_READS = ("getStateRandao", "getEpochSyncCommittees", "getProposerLookahead")
 IDENTITY = (b"16Uiu2HAmPLe7Mzm8TsYUubgCAW1aJoeFScxrLj8ppHFivPo97bUZ",
             b"enr:-Iu4QLm7bZGdAhVwRqZ6Zf3LlnqKsBTnZGOByHQhPMQJ3pV4F3t8L9i5yJOZ0X0hiZ6q4D5V0jB7l8J3ZtYw1JDH9C4BgmlkgnY0gmlwhAoAAAGJc2VjcDI1NmsxoQPKY0yuDUmstAHYpMa2_oxVtw0RW_QAdpzBQA8yWM0xOIN0Y3CCIyg",
@@ -561,6 +561,16 @@ def api_values(spec, fork, state, block):
         header.state_root = state_root
     assert spec.hash_tree_root(header) == root
     from json_codec import to_json
+
+    def cp(c):
+        return b'{"epoch":' + q(c.epoch) + b',"root":' + qhex(c.root) + b"}"
+    payload = getattr(block.body, "execution_payload", None)
+    fork_choice_body = (  # the store holds the anchor alone
+        b'{"justified_checkpoint":' + cp(store.justified_checkpoint) + b',"finalized_checkpoint":' +
+        cp(store.finalized_checkpoint) + b',"fork_choice_nodes":[{"slot":' + q(block.slot) + b',"block_root":' + qhex(root) +
+        b',"parent_root":' + qhex(block.parent_root) + b',"justified_epoch":' + q(state.current_justified_checkpoint.epoch) +
+        b',"finalized_epoch":' + q(state.finalized_checkpoint.epoch) + b',"weight":' + q(spec.get_weight(store, root)) +
+        b',"validity":"valid","execution_block_hash":' + qhex(payload.block_hash if payload is not None else bytes(32)) + b"}]}")
     states = {int(block.slot): state}  # the anchor state processed to each slot to the store's
     for slot in range(int(block.slot) + 1, int(block.slot) + SLOTS_AHEAD + 1):
         s = state.copy()
@@ -575,7 +585,8 @@ def api_values(spec, fork, state, block):
                 genesis_time=int(store.genesis_time_ms) // 1000, gvr=bytes(state.genesis_validators_root),
                 genesis_version=bytes(spec.config.GENESIS_FORK_VERSION), root=bytes(root), slot=int(block.slot),
                 header=header, cgc=int(spec.config.CUSTODY_REQUIREMENT) if fork == "fulu" else None,
-                checkpoints=[state.previous_justified_checkpoint, state.current_justified_checkpoint, state.finalized_checkpoint])
+                checkpoints=[state.previous_justified_checkpoint, state.current_justified_checkpoint, state.finalized_checkpoint],
+                fork_choice_body=fork_choice_body)
 
 
 def status_of(spec, val, epoch):
@@ -829,6 +840,8 @@ def answer(v, name, route, offline, close, keep_alive, syncing=False):
         return response(200, b'{"data":{"disconnected":"0","connecting":"0","connected":"0","disconnecting":"0"}}', **kw)
     if name in ("getSpec", "getForkSchedule", "getDepositContract"):
         return response(200, v["config_bodies"][name], **kw)
+    if name == "getDebugForkChoice":
+        return response(200, v["fork_choice_body"], **kw)
     if name == "getDebugChainHeadsV2":  # the store holds the anchor alone: one leaf
         return response(200, b'{"data":[{"root":' + qhex(v["root"]) + b',"slot":' + q(v["slot"]) +
                         b',"execution_optimistic":false}]}', **kw)

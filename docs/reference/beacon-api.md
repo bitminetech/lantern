@@ -60,6 +60,12 @@ The answers of the node (node.md, `NODE_EV_API`) follow these rules.
 - getPeerCount: `{"data":{"disconnected":"0","connecting":"0","connected":…,"disconnecting":"0"}}`.
 - getGenesis: `{"data":{"genesis_time":…,"genesis_validators_root":…,"genesis_fork_version":…}}`.
 - getDebugChainHeadsV2: `{"data":[{"root":…,"slot":…,"execution_optimistic":…},…]}`, the leaves of the fork choice tree: each node of the store's `blocks`, in their order, that no node names as its `parent`. A node whose payload is `INVALIDATED`, and each node below it, is out of the tree (fork-choice.md, optimistic sync: removed from fork choice). `execution_optimistic`: its `payload_status` is `NOT_VALIDATED`.
+- getDebugForkChoice: `{"justified_checkpoint":…,"finalized_checkpoint":…,"fork_choice_nodes":[…]}`, the store's checkpoints and each node of its `blocks`, in their order: `{"slot":…,"block_root":…,"parent_root":…,"justified_epoch":…,"finalized_epoch":…,"weight":…,"validity":…,"execution_block_hash":…}`.
+  - `justified_epoch` and `finalized_epoch`: the epochs of `current_justified_checkpoint` and `finalized_checkpoint` of the block's post-state (`BlockNode.justified_checkpoint`, `BlockNode.finalized_epoch`).
+  - `weight`: get_weight of the node (fork-choice.md, lantern_get_weight), from lantern_node_weights.
+  - `validity`: `valid`, `invalid` or `optimistic` for a `payload_status` of `VALID`, `INVALIDATED` or `NOT_VALIDATED`.
+  - `execution_block_hash`: `BlockNode.block_hash`, zero before bellatrix.
+  - The error 500 when lantern_node_weights fails, as when the store's balances are not those of its justified checkpoint.
 - getSpec: `{"data":{…}}`, the keys and values of the node's config, the preset and the spec's constants:
   - Each key of `CONFIG_KEYS` and `BLOB_SCHEDULE`, in the order of the pinned configs/<preset>.yaml, with the node's values; and `SECONDS_PER_SLOT`, `SLOT_DURATION_MS` / 1000, right before `SLOT_DURATION_MS`, the key clients and tools read from configs before the spec gave the slot in milliseconds.
   - Then each key of the pinned presets/<preset>/phase0.yaml to fulu.yaml, in file order.

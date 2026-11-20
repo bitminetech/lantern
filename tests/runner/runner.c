@@ -230,6 +230,7 @@ ABI uint64_t LF(on_tick)(void *store, const void *time_ms, void *result);
 ABI uint64_t LF(get_head)(const void *store, void *scratch, void *out);
 ABI uint64_t LF(get_filtered_node_tree)(const void *store, void *scratch, void *out);
 ABI uint64_t LF(get_weight)(const void *store, const void *node, void *out);
+ABI uint64_t LF(node_weights)(const void *store, void *scratch, void *out);
 ABI uint64_t LF(on_block)(void *store, const void *signed_block, void *state, const void *options, void *scratch,
                               void *result);
 ABI uint64_t LF(validate_on_attestation)(const void *store, const void *attestation, const void *is_from_block);
@@ -1821,7 +1822,8 @@ static void run_rewards(const char *file, case_file *f) {
 #define STORE_BLOCKS 264
 #define STORE_VALIDATORS 280
 #define STORE_CONFIG 296 /* include/lantern.inc: Store_config */
-#define NODE_BYTES 216
+#define NODE_BYTES 224
+#define NODE_FINALIZED_EPOCH 216
 #define NODE_PARENT 80
 #define NODE_BLOCK_HASH 176
 #define NODE_PAYLOAD_STATUS 208
@@ -2334,6 +2336,19 @@ static void fc_viable(fc_node *n, tv want, const char **why) {
         for (uint64_t j = 0; j < nleaves; j++, e = tv_skip(e))
             if (hex_root_equals(tv_get(e, "root"), node_at(n, node)) && tv_u64(tv_get(e, "weight")) == weight) found = 1;
         if (!found) *why = "check viable_for_head_roots_and_weights";
+    }
+    if (!*why) { /* lantern_node_weights: lantern_get_weight of each node, so the leaves' weights of the check */
+        uint64_t wsize = 8 * (count ? count : 1);
+        uint8_t *ws = buffer(wsize);
+        uint64_t st = FC_RETRY(n, why, CALL(LF(node_weights), n->store, fresh_scratch(), ws), break, NULL, 0);
+        if (!*why && st != 0) *why = "lantern_node_weights: status not 0";
+        if (!*why && !guard_ok(ws, wsize)) *why = "lantern_node_weights wrote out of bounds";
+        for (uint64_t i = 0; !*why && i < count; i++) {
+            uint64_t node = i, weight = 0;
+            if (CALL(LF(get_weight), n->store, &node, &weight) != 0) *why = "get_weight: status not 0";
+            else if (rd64(ws + 8 * i) != weight) *why = "lantern_node_weights: not lantern_get_weight of a node";
+        }
+        free(ws);
     }
     free(tree);
     free(in);
@@ -7459,6 +7474,7 @@ static int body_attestations(const uint8_t *b, uint64_t n, uint64_t *at, uint64_
 #define BLINDED_MESSAGE "BeaconBlock"
 #endif
 static unsigned long api_heads_streamed; /* the heads whose block and state went as streams */
+static unsigned long api_fork_choice_200, api_fork_choice_500; /* getDebugForkChoice answers checked, of each status */
 static void api_streams_head(fc_node *n, const uint8_t *st, const char **why) {
     static const char *const reqs[7] = {
         "GET /eth/v2/beacon/blocks/head HTTP/1.1\r\nHost: lantern\r\nAccept: application/octet-stream\r\n\r\n",
@@ -7612,6 +7628,57 @@ static void api_heads_check(fc_node *n, const char **why) {
 }
 
 /*
+ * Node mode, after the steps: getDebugForkChoice must answer the store's justified and finalized checkpoints and
+ * each BlockNode in order (beacon-api.md), each weight lantern_get_weight of its node; the error 500 when
+ * lantern_get_weight of a node fails.
+ */
+static void api_fork_choice_check(fc_node *n, const char **why) {
+    struct node_shell *s = n->shell;
+    static const char req[] = "GET /eth/v1/debug/fork_choice HTTP/1.1\r\nHost: lantern\r\n\r\n";
+    static const char *const validity[3] = {"valid", "invalid", "optimistic"}; /* of PAYLOAD_STATUS_* */
+    const uint8_t *st = n->store;
+    uint64_t off = rd64(st + STORE_BLOCKS), cnt = rd64(st + STORE_BLOCKS + 8), k = 0, cap = 256 + 640 * cnt, fail = 0;
+    char *want = malloc(cap);
+    for (int c = 0; c < 2; c++) {
+        const uint8_t *cp = st + (c ? STORE_FINALIZED : STORE_JUSTIFIED);
+        k += (uint64_t)snprintf(want + k, cap - k, "%s\"%s_checkpoint\":{\"epoch\":\"%llu\",\"root\":\"0x", c ? "," : "{",
+                                c ? "finalized" : "justified", (unsigned long long)rd64(cp));
+        for (int j = 0; j < 32; j++) k += (uint64_t)snprintf(want + k, cap - k, "%02x", cp[8 + j]);
+        k += (uint64_t)snprintf(want + k, cap - k, "\"}");
+    }
+    k += (uint64_t)snprintf(want + k, cap - k, ",\"fork_choice_nodes\":[");
+    for (uint64_t i = 0; i < cnt; i++) {
+        const uint8_t *b = st + off + i * NODE_BYTES;
+        uint64_t node = i, weight = 0, ps = rd64(b + NODE_PAYLOAD_STATUS);
+        if (CALL(LF(get_weight), st, &node, &weight) != 0) fail = 1;
+        k += (uint64_t)snprintf(want + k, cap - k, "%s{\"slot\":\"%llu\",\"block_root\":\"0x", i ? "," : "",
+                                (unsigned long long)rd64(b + NODE_SLOT));
+        for (int j = 0; j < 32; j++) k += (uint64_t)snprintf(want + k, cap - k, "%02x", b[j]);
+        k += (uint64_t)snprintf(want + k, cap - k, "\",\"parent_root\":\"0x");
+        for (int j = 0; j < 32; j++) k += (uint64_t)snprintf(want + k, cap - k, "%02x", b[32 + j]);
+        k += (uint64_t)snprintf(want + k, cap - k,
+                                "\",\"justified_epoch\":\"%llu\",\"finalized_epoch\":\"%llu\",\"weight\":\"%llu\",\"validity\":\"%s\","
+                                "\"execution_block_hash\":\"0x",
+                                (unsigned long long)rd64(b + 88), (unsigned long long)rd64(b + NODE_FINALIZED_EPOCH),
+                                (unsigned long long)weight, ps < 3 ? validity[ps] : "?");
+        for (int j = 0; j < 32; j++) k += (uint64_t)snprintf(want + k, cap - k, "%02x", b[NODE_BLOCK_HASH + j]);
+        k += (uint64_t)snprintf(want + k, cap - k, "\"}");
+    }
+    k += (uint64_t)snprintf(want + k, cap - k, "]}");
+    shell_api_ask(n, (const uint8_t *)req, sizeof req - 1, 31, why);
+    if (!*why && fail && (s->api.len < 13 || memcmp(s->api.b, "HTTP/1.1 500 ", 13)))
+        *why = "API getDebugForkChoice: not the error 500 when lantern_get_weight fails";
+    else if (!*why && !fail && (s->api.len < 17 + k || memcmp(s->api.b, "HTTP/1.1 200 OK\r\n", 17) ||
+                                memcmp(s->api.b + s->api.len - k, want, (size_t)k)))
+        *why = api_mismatch(s, "API getDebugForkChoice", (const uint8_t *)want, k);
+    if (!*why) {
+        if (fail) api_fork_choice_500++;
+        else api_fork_choice_200++;
+    }
+    free(want);
+}
+
+/*
  * Node mode, after the steps: getBlockHeader of head must give 200 with the node's head_root as
  * root and its block's slot; getStateFinalityCheckpoints of head the checkpoints of the head's
  * post-state (docs/reference/node.md, Test vectors).
@@ -7652,6 +7719,7 @@ static void shell_api_head(fc_node *n, const char **why) {
     if (!*why && (s->api.len < 17 || memcmp(s->api.b, "HTTP/1.1 200 OK\r\n", 17) || !find_bytes((const char *)s->api.b, s->api.len, want)))
         *why = api_mismatch(s, "API getStateFinalityCheckpoints of head", (const uint8_t *)want, strlen(want));
     if (!*why) api_heads_check(n, why);
+    if (!*why) api_fork_choice_check(n, why);
     if (!*why) api_streams_head(n, st, why);
 }
 
@@ -8216,6 +8284,8 @@ int main(int argc, char **argv) {
     }
     if (node_settles_finalized) printf("NOTE: %lu node settles past a finalized epoch\n", node_settles_finalized);
     if (api_heads_streamed) printf("NOTE: %lu heads served as getBlockV2 and getStateV2 streams\n", api_heads_streamed);
+    if (api_fork_choice_200 || api_fork_choice_500)
+        printf("NOTE: getDebugForkChoice answered 200 %lu times, 500 %lu times\n", api_fork_choice_200, api_fork_choice_500);
     if (api_lookups) printf("NOTE: %lu lookups of a block or a state by slot or root\n", api_lookups);
     if (node_replays) printf("NOTE: %lu post-states the nodes rebuilt by replay\n", node_replays);
     if (gossip_votes) printf("NOTE: %lu of %lu valid attestations went to fork choice as gossip aggregates\n", gossip_votes_applied, gossip_votes);

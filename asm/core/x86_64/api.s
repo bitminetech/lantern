@@ -1222,7 +1222,11 @@ LOCAL_FUNCTION api_body
     jne     110f
     call    api_heads_body
     UNFRAME 16
-110: cmp    $API_OP_GET_STATE_RANDAO, %rsi
+110: cmp    $API_OP_GET_DEBUG_FORK_CHOICE, %rsi
+    jne     115f
+    call    api_fork_choice_body
+    UNFRAME 16
+115: cmp    $API_OP_GET_STATE_RANDAO, %rsi
     je      113f
     cmp     $API_OP_GET_EPOCH_SYNC_COMMITTEES, %rsi
     je      113f
@@ -1643,6 +1647,86 @@ LOCAL_FUNCTION api_heads_body
 9:  API_LIT api_v_end
     UNFRAME 32
 END_FUNCTION api_heads_body
+
+/*
+ * L1: the body of getDebugForkChoice (beacon-api.md): {"justified_checkpoint":…,"finalized_checkpoint":…,
+ * "fork_choice_nodes":[…]} of the store at ApiView_val_state of the view rbp, each node's weight at
+ * ApiView_weights. Locals: the index, the node.
+ */
+LOCAL_FUNCTION api_fork_choice_body
+    FRAME 16
+    API_LIT api_fc_justified
+    mov     ApiView_val_state(%rbp), %rdi
+    add     $Store_justified_checkpoint, %rdi
+    call    api_checkpoint
+    API_LIT api_fc_finalized
+    mov     ApiView_val_state(%rbp), %rdi
+    add     $Store_finalized_checkpoint, %rdi
+    call    api_checkpoint
+    API_LIT api_fc_nodes
+    movq    $0, (%rsp)
+1:  mov     ApiView_val_state(%rbp), %rax
+    mov     (%rsp), %rcx
+    cmp     (Store_blocks + 8)(%rax), %rcx
+    jae     9f
+    test    %rcx, %rcx
+    jz      2f
+    API_LIT api_p_comma
+2:  mov     ApiView_val_state(%rbp), %rax
+    mov     Store_blocks(%rax), %rdi
+    add     %rax, %rdi
+    imul    $BlockNode__mem, (%rsp), %rcx
+    add     %rcx, %rdi
+    mov     %rdi, 8(%rsp)
+    API_LIT api_fc_slot
+    mov     8(%rsp), %rax
+    mov     BlockNode_slot(%rax), %rdi
+    call    api_qdec
+    API_LIT api_fc_block_root
+    mov     8(%rsp), %rdi
+    mov     $32, %esi
+    call    api_qhex
+    API_LIT api_h_parent
+    mov     8(%rsp), %rdi
+    add     $BlockNode_parent_root, %rdi
+    mov     $32, %esi
+    call    api_qhex
+    API_LIT api_fc_justified_epoch
+    mov     8(%rsp), %rax
+    mov     BlockNode_justified_checkpoint(%rax), %rdi   # its epoch, the Checkpoint's first field
+    call    api_qdec
+    API_LIT api_fc_finalized_epoch
+    mov     8(%rsp), %rax
+    mov     BlockNode_finalized_epoch(%rax), %rdi
+    call    api_qdec
+    API_LIT api_fc_weight
+    mov     ApiView_weights(%rbp), %rax
+    mov     (%rsp), %rcx
+    mov     (%rax,%rcx,8), %rdi
+    call    api_qdec
+    API_LIT api_fc_validity
+    mov     8(%rsp), %rax
+    mov     BlockNode_payload_status(%rax), %rax
+    cmp     $PAYLOAD_STATUS_NOT_VALIDATED, %rax
+    je      3f
+    cmp     $PAYLOAD_STATUS_INVALIDATED, %rax
+    je      4f
+    API_LIT api_fc_valid
+    jmp     5f
+3:  API_LIT api_fc_optimistic
+    jmp     5f
+4:  API_LIT api_fc_invalid
+5:  API_LIT api_fc_hash
+    mov     8(%rsp), %rdi
+    add     $BlockNode_block_hash, %rdi
+    mov     $32, %esi
+    call    api_qhex
+    API_LIT api_end1
+    incq    (%rsp)
+    jmp     1b
+9:  API_LIT api_v_end
+    UNFRAME 16
+END_FUNCTION api_fork_choice_body
 
 /*
  * The bodies of getStateRandao, getEpochSyncCommittees and getProposerLookahead (beacon-api.md), as
@@ -2203,6 +2287,8 @@ LOCAL_FUNCTION node_api_event
     je      67f
     cmp     $API_OP_GET_DEBUG_CHAIN_HEADS_V2, %rcx
     je      67f
+    cmp     $API_OP_GET_DEBUG_FORK_CHOICE, %rcx
+    je      67f
     cmp     $API_OP_GET_PROPOSER_DUTIES, %rcx
     je      63f
     cmp     $API_OP_PRODUCE_ATTESTATION_DATA, %rcx
@@ -2584,9 +2670,11 @@ LOCAL_FUNCTION node_api_run
     test    %r13, %r13
     jz      8f
     jmp     2f
-1:  cmp     $API_OP_GET_SPEC, %eax          # getSpec, getDebugChainHeadsV2: no state
+1:  cmp     $API_OP_GET_SPEC, %eax          # getSpec, getDebugChainHeadsV2, getDebugForkChoice: no state
     je      2f
     cmp     $API_OP_GET_DEBUG_CHAIN_HEADS_V2, %eax
+    je      2f
+    cmp     $API_OP_GET_DEBUG_FORK_CHOICE, %eax
     je      2f
     test    %r13, %r13                      # a state's answer: a state
     jz      8f
@@ -2640,6 +2728,8 @@ LOCAL_FUNCTION node_api_run
     je      5f
     cmpq    $API_OP_GET_DEBUG_CHAIN_HEADS_V2, S9(%rsp)
     je      29f
+    cmpq    $API_OP_GET_DEBUG_FORK_CHOICE, S9(%rsp)
+    je      28f
     shr     $24, %rax                       # a state at the work's slot, else the work that brought it there failed
     mov     NODE_STATE_SLOT(%r13), %rdi
     cmp     %rax, %rdi
@@ -2961,6 +3051,33 @@ LOCAL_FUNCTION node_api_run
 293: mov    %al, (%rdi,%rdx)
     inc     %rdx
     jmp     291b
+    # getDebugForkChoice: lantern_node_weights of the fork of the head's slot into the end of scratch; a failure, the error 500
+28: mov     (Store_blocks + 8)(%rbp), %rcx
+    shl     $3, %rcx
+    mov     (%r14), %rax
+    sub     %rcx, %rax
+    jb      71f
+    mov     %rax, (%r14)
+    add     %r14, %rax
+    mov     S8(%rsp), %rdi
+    mov     %rax, ApiView_weights(%rdi)
+    mov     %rbp, ApiView_val_state(%rdi)
+    mov     ApiView_head_slot(%rdi), %rdi
+    lea     Node_config(%rbx), %rsi
+    call    node_fork
+    mov     %rax, %r10
+    mov     %rbp, %rdi
+    mov     %r14, %rsi
+    mov     S8(%rsp), %rdx
+    mov     ApiView_weights(%rdx), %rdx
+    FORK_CALL node_weights
+    cmp     $LANTERN_BUFFER_TOO_SMALL, %rax
+    je      71f
+    test    %rax, %rax
+    jz      5b
+    mov     S8(%rsp), %rdi
+    movq    $500, ApiView_status(%rdi)
+    jmp     5b
 42: movq    $LANTERN_INVALID_SLOT, NodeEvent_result(%r15)
     jmp     9f
 41: movq    $LANTERN_INVALID_ENCODING, NodeEvent_result(%r15)
@@ -3338,6 +3455,8 @@ LOCAL_FUNCTION node_api_encode
     cmp     $API_OP_GET_SPEC, %rdi          # getSpec, getDebugChainHeadsV2: no state, no bytes, no values
     je      4f
     cmp     $API_OP_GET_DEBUG_CHAIN_HEADS_V2, %rdi
+    je      4f
+    cmp     $API_OP_GET_DEBUG_FORK_CHOICE, %rdi
     jne     1f
 4:
     shl     $8, %rdx

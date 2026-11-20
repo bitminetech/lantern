@@ -1332,6 +1332,49 @@ SPEC_FUNCTION node_randao
 8:  mov     x0, #LANTERN_NO_STATE_ANSWER
     UNFRAME 0
 SPEC_END node_randao
+
+/*
+ * (store, scratch, out) -> status: get_weight of each node of the store, in node order, a u64 a
+ * node at out, as lantern_get_head computes them all at once (node.md, lantern_node_weights).
+ * x19 store, x20 scratch, x21 out, x22 node count, x23 the flags at the end of scratch.
+ */
+SPEC_FUNCTION node_weights
+    ENTER 0
+    mov     x19, x0
+    mov     x20, x1
+    mov     x21, x2
+    NEED_BALANCES x19, 8f
+    LDQ     x22, x19, Store_blocks + 8
+    ldr     x9, [x20]
+    lsl     x10, x22, #3
+    MOVQ    x11, LANTERN_SCRATCH_FIXED
+    add     x11, x11, x10
+    cmp     x9, x11
+    b.lo    9f
+    sub     x9, x9, x10
+    add     x23, x20, x9
+    mov     x0, x23
+    mov     x1, x10
+    bl      lantern_zero
+    mov     x0, x19
+    mov     x1, x21
+    mov     x2, x23
+    bl      weights
+    cbnz    x0, 7f
+    mov     x9, #0                          /* a sum past 2^64 - 1 */
+1:  cmp     x9, x22
+    b.hs    7f
+    ldr     x10, [x23, x9, lsl #3]
+    add     x9, x9, #1
+    tst     x10, #F_OVERFLOW
+    b.eq    1b
+    mov     x0, #LANTERN_INVALID_OVERFLOW
+7:  LEAVE 0
+8:  mov     x0, #LANTERN_NEED_JUSTIFIED_STATE
+    LEAVE 0
+9:  mov     x0, #LANTERN_BUFFER_TOO_SMALL
+    LEAVE 0
+SPEC_END node_weights
 .if EPOCHS_PER_HISTORICAL_VECTOR & (EPOCHS_PER_HISTORICAL_VECTOR - 1)
 .error "lantern_node_randao takes EPOCHS_PER_HISTORICAL_VECTOR as a power of two"
 .endif

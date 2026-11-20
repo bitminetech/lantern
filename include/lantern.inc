@@ -422,7 +422,8 @@
 .set BlockNode_timely, 168
 .set BlockNode_block_hash, 176         /* body.execution_payload.block_hash */
 .set BlockNode_payload_status, 208     /* PAYLOAD_STATUS_*: the execution engine's answer for the payload */
-.set BlockNode__mem, 216
+.set BlockNode_finalized_epoch, 216    /* finalized_checkpoint.epoch of the block's post-state */
+.set BlockNode__mem, 224
 
 /* StoreValidator */
 .set StoreValidator_latest_epoch, 0
@@ -998,7 +999,8 @@
 .set ApiView_lookahead, ApiView_att + 192    /* getProposerLookahead: lantern_node_proposer_lookahead's out */
 .set API_LOOKAHEAD_SLOTS, (MIN_SEED_LOOKAHEAD + 1) * SLOTS_PER_EPOCH
 .set ApiView_heads, ApiView_lookahead + 8 * API_LOOKAHEAD_SLOTS  /* getDebugChainHeadsV2: a byte for each store node, at the end of scratch */
-.set ApiView__size, ApiView_heads + 8
+.set ApiView_weights, ApiView_heads + 8   /* getDebugForkChoice: lantern_node_weights's out, at the end of scratch */
+.set ApiView__size, ApiView_weights + 8
 .set ApiIdentity_peer_id, 0              /* ApiIdentity (beacon-api.md): texts, each a length and its room */
 .set ApiIdentity_enr, 72
 .set ApiIdentity_p2p_address, 592
