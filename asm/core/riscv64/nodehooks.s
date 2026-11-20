@@ -2937,7 +2937,10 @@ SPEC_FUNCTION node_produce_block
     mv      s5, a4
     ld      t0, 0(s4)
     sd      t0, (L + 80)(sp)
-    li      t0, 1
+    ld      t0, 0(s3)                       # execution_valid 1, + 2 with skip_randao_verification
+    ld      t0, 128(t0)
+    slli    t0, t0, 1
+    ori     t0, t0, 1
     sd      t0, (L + 64)(sp)
     li      t0, 24                          # out: the block from offset 24, as large as its room
     sd      t0, 8(s5)

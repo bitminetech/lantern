@@ -311,7 +311,9 @@ def produce_cases(fork, preset):
     SHARD_COMMITTEE_PERIOD epochs later with 2 SLOTS_PER_EPOCH more validators, and in the slot
     before, POSTs of each pool operation the block takes, and of those its rules leave out (an
     attester slashing of only the proposer slashing's validator, an exit of a validator the
-    attester slashing slashes)."""
+    attester slashing slashes). skip_randao: skip_randao_verification with the point at infinity,
+    the state root of process_block with no signature checks. bad_reveal: 400 for a reveal of
+    another key, and for skip_randao_verification with a reveal that is not the point at infinity."""
     import json_codec
     import reqresp
     from eth_consensus_specs.utils import bls
@@ -447,7 +449,7 @@ def produce_cases(fork, preset):
         body.sync_aggregate = aggregate
         return reqs
 
-    def build(full):
+    def build(full, skip):
         epoch0 = int(spec.config.SHARD_COMMITTEE_PERIOD) + ANCHOR_EPOCH if full else ANCHOR_EPOCH
         extra = 2 * int(spec.SLOTS_PER_EPOCH) if full else 0  # committees of two and more
         state, anchor_block = (payload_anchor(spec, fork, epoch0, extra) if merged
@@ -460,7 +462,8 @@ def produce_cases(fork, preset):
             proposer = int(spec.get_beacon_proposer_index(st))
         epoch = spec.get_current_epoch(st)
         root = spec.compute_signing_root(spec.Epoch(epoch), spec.get_domain(st, spec.DOMAIN_RANDAO, epoch))
-        reveal = bls.Sign(KEYS.privkeys[proposer], root)
+        reveal = spec.G2_POINT_AT_INFINITY if skip else bls.Sign(KEYS.privkeys[proposer], root)
+        other = bls.Sign(KEYS.privkeys[(proposer + 1) % len(st.validators)], root)  # another key's reveal
         body = spec.BeaconBlockBody(randao_reveal=reveal, eth1_data=st.eth1_data, graffiti=spec.Bytes32(graffiti))
         if f >= FORKS.index("altair"):
             body.sync_aggregate = spec.SyncAggregate(sync_committee_signature=spec.G2_POINT_AT_INFINITY)
@@ -494,18 +497,23 @@ def produce_cases(fork, preset):
         block = spec.BeaconBlock(slot=slot, proposer_index=proposer, parent_root=spec.hash_tree_root(st.latest_block_header), body=body)
         before = int(st.balances[proposer])
         post_state = st.copy()
-        spec.process_block(post_state, block)
+        active = bls.bls_active
+        bls.bls_active = not skip  # skip_randao_verification: no check of the reveal's signature
+        try:
+            spec.process_block(post_state, block)
+        finally:
+            bls.bls_active = active
         block.state_root = spec.hash_tree_root(post_state)
         gained = int(post_state.balances[proposer]) - before
         if capella:
             gained += sum(int(w.amount) for w in body.execution_payload.withdrawals if int(w.validator_index) == proposer)
-        return state, anchor_block, slot, reveal, block, result, max(gained, 0), reqs
+        return state, anchor_block, slot, reveal, block, result, max(gained, 0), reqs, bytes(root), bytes(other)
 
-    for name, full in (("empty_pool", False), ("full_pool", True)):
-        made = run(spec, schedule(fork), lambda: build(full))
+    for name, full, skip in (("empty_pool", False, False), ("full_pool", True, False), ("skip_randao", False, True)):
+        made = run(spec, schedule(fork), lambda: build(full, skip))
         if made is None:
             raise RuntimeError(f"node-produce {fork} {name}: the spec refuses the block")
-        state, anchor_block, slot, reveal, block, result, gwei, pool_reqs = made
+        state, anchor_block, slot, reveal, block, result, gwei, pool_reqs, root, other = made
         slot_ms = int(spec.config.SLOT_DURATION_MS)
         time_ms = int(state.genesis_time) * 1000 + int(slot) * slot_ms
         payload_value = block_value if capella else 0
@@ -524,6 +532,8 @@ def produce_cases(fork, preset):
         body = (b'{"version":"' + fork.encode() + b'","execution_payload_blinded":false,"execution_payload_value":"%d",'
                 b'"consensus_block_value":"%s","data":' % (payload_value, wei) + data_json + b"}")
         path = b"/eth/v3/validator/blocks/%d?randao_reveal=0x%s&graffiti=0x%s" % (int(slot), bytes(reveal).hex().encode(), graffiti.hex().encode())
+        if skip:
+            path += b"&skip_randao_verification="
         # the pool's POSTs in the slot before, at 100 ms; then the requests at the slot's start
         ticks = ([time_ms - slot_ms + 100] + [0] * (len(pool_reqs) - 1) if pool_reqs else []) + [time_ms, 0]
         yield "produce", name, {
@@ -534,6 +544,21 @@ def produce_cases(fork, preset):
             "requests": pool_reqs + [b"GET " + path + b" HTTP/1.1\r\nHost: lantern\r\n\r\n",
                                      b"GET " + path + b" HTTP/1.1\r\nHost: lantern\r\nAccept: application/octet-stream\r\n\r\n"],
             "responses": [response(200)] * len(pool_reqs) + [answer(body, False), answer(data_ssz, True)],
+            "payload_id": bytes(range(1, 9)) if merged else b"",
+            "result": result.encode() if result is not None else b"",
+        }
+        if name != "empty_pool":
+            continue
+        # 400 before any engine call: a reveal of another key; the skip flag with a reveal not the point at infinity
+        bad = [b"/eth/v3/validator/blocks/%d?randao_reveal=0x%s" % (int(slot), other.hex().encode()),
+               b"/eth/v3/validator/blocks/%d?randao_reveal=0x%s&skip_randao_verification=" % (int(slot), bytes(reveal).hex().encode())]
+        yield "produce", "bad_reveal", {
+            "anchor_state": bytes(state.encode_bytes()),
+            "anchor_block": bytes(anchor_block.encode_bytes()),
+            "time_ms": time_ms,
+            "ticks": [time_ms, 0],
+            "requests": [b"GET " + q + b" HTTP/1.1\r\nHost: lantern\r\n\r\n" for q in bad],
+            "responses": [error(400), error(400)],
             "payload_id": bytes(range(1, 9)) if merged else b"",
             "result": result.encode() if result is not None else b"",
         }

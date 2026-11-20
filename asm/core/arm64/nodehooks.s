@@ -2889,7 +2889,10 @@ SPEC_FUNCTION node_produce_block
     mov     x23, x4
     ldr     x9, [x22]
     str     x9, [sp, #(L + 80)]
-    mov     x9, #1
+    ldr     x9, [x21]                       /* execution_valid 1, + 2 with skip_randao_verification */
+    ldr     x9, [x9, #128]
+    lsl     x9, x9, #1
+    orr     x9, x9, #1
     str     x9, [sp, #(L + 64)]
     ldp     x9, x10, [x23]                  /* out: the block from offset 24, as large as its room */
     mov     x11, #24

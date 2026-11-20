@@ -200,6 +200,8 @@
 - Lantern's cases `<preset>-<fork>-node-produce.bin` of altair to fulu, made by tests/generator/node.py with the pinned spec: the anchor of the `api` cases (from bellatrix that of the node-payload cases), the first slot after the anchor's whose proposer is not slashed, the requests with a time for each (0 for none), from bellatrix a `payloadId` and the engine's result, and the answers.
   - `empty_pool`: two produceBlockV3 requests of the slot at its start.
   - `full_pool`: the anchor `SHARD_COMMITTEE_PERIOD` epochs later with 2 `SLOTS_PER_EPOCH` more active validators. At 100 ms into the slot before: POSTs (200) of two voluntary exits, a proposer slashing, two attester slashings, from capella a BLS change, two attestations of one committee of the anchor's slot (from electra `SingleAttestation`s), and two sync committee messages of the slot before on the anchor's root, each valid by the spec's gossip validation; the first attester slashing slashes only the proposer slashing's validator, and the second exit is of a validator the second attester slashing slashes, so the block leaves both out. Then the two produceBlockV3 requests at the slot's start.
+  - `skip_randao`: as `empty_pool`, with `skip_randao_verification` and `randao_reveal` the point at infinity; the state root is of process_block with no check of signatures.
+  - `bad_reveal`: as `empty_pool`, two requests that must answer 400 before any engine call: a `randao_reveal` of another validator's key, and `skip_randao_verification` with the proposer's reveal.
   - The produceBlockV3 requests: `randao_reveal` the proposer's signature of the epoch with the test keys, `graffiti` the bytes 0 to 31; the first with JSON, the second with `Accept: application/octet-stream`.
   - The engine's result: from the attributes of the spec's prepare_execution_payload of the anchor state processed to the slot, with the fee recipient zero, an empty payload on the anchor's, with `block_value` 123456789012345678901234567890 from capella and an empty bundle from deneb.
   - The answers: the spec's block with `eth1_data` the state's, the operations the rules of beacon-api.md take (the two attestations as one aggregate, the messages as the sync aggregate; with none, no bit and the point at infinity), the engine's payload, and `state_root` from process_block, which must accept it; consensus_block_value its rule of beacon-api.md.
@@ -1204,7 +1206,7 @@ lantern_node_produce_block(state, draft, params, scratch, out) -> status
 ### Function does
 
 - The body of beacon-api.md: the operations in the draft's record order; the attestations of the draft's aggregates by `data.slot` descending, then `order`, at most the fork's limit, from electra those of one data joined; the draft's sync aggregate; the payload, commitments and requests of the result (bellatrix: the result is the payload; with no result, before the merge, the empty payload).
-- `state_root`: hash_tree_root of the state after process_block with an execution_valid of 1.
+- `state_root`: hash_tree_root of the state after process_block with an execution_valid of 1, or 3 with `skip_randao_verification` (no check of the reveal's signature).
 - `execution_payload_value`: the result's `block_value`, 0 in bellatrix. `consensus_block_value`: the proposer's balance after less before, plus the payload's withdrawals to the proposer, at least 0.
 
 ### Tests

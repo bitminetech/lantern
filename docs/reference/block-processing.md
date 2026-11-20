@@ -83,7 +83,7 @@
 - A function that changes the state takes a [`Result`](helpers.md#type-result) as its last argument; it checks scratch and room before any change.
 - `state` is a valid `BeaconState` value; blocks, bodies and operations are valid asm-ssz Values of their types, apart from `state`.
 - Scratch is S(k) of [Type Scratch](helpers.md#type-scratch), with k under Limits.
-- `execution_valid` is the answer of the execution engine to the payload, given by the caller: 1 valid, 0 not.
+- `execution_valid`: bit 0 is the answer of the execution engine to the payload, given by the caller: 1 valid, 0 not. Bit 1 is for block production only (beacon-api.md, produceBlockV3 with `skip_randao_verification`): lantern_process_block then makes no check of the RANDAO reveal's signature, and mixes the reveal in as process_randao does.
 - A function never makes an OS call and never keeps a pointer after it returns.
 - Role, convention and symbol: as in [helpers.md](helpers.md#common-rules).
 - The `process_*` operation functions take (`state`, the operation, `config`, `scratch`, `result`) in that order.

@@ -2915,7 +2915,10 @@ SPEC_FUNCTION node_produce_block
     mov     %r8, %r14
     mov     (%r13), %rax
     mov     %rax, (L + 80)(%rsp)
-    movq    $1, (L + 64)(%rsp)
+    mov     (%r12), %rax                    # execution_valid 1, + 2 with skip_randao_verification
+    mov     128(%rax), %rax
+    lea     1(%rax,%rax), %rax
+    mov     %rax, (L + 64)(%rsp)
     movq    $24, 8(%r14)                    # out: the block from offset 24, as large as its room
     movq    $0, 16(%r14)
     lea     24(%r14), %rax
