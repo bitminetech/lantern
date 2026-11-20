@@ -104,6 +104,11 @@ The answers of the node (node.md, `NODE_EV_API`) follow these rules.
   - getStateValidator: the validator of `validator_id`, as an item of getStateValidators: `{"execution_optimistic":…,"finalized":…,"data":<item>}`; with none, 404.
   - The other five are streamed, as getStateV2 but with no `Eth-Consensus-Version`: the JSON body is `{"execution_optimistic":…,"finalized":…,"data":[<the items, with , between>]}`, the values those of the state.
   - postStateValidatorIdentities as SSZ: `Content-Length` of 64 bytes for each item: its index (u64), `pubkey`, and `activation_epoch` (u64), in order, as Lighthouse v8.3.3 writes its `Vec<ValidatorIdentityData>`; the spec names no type.
+- getEpochCommittees: the committees of the state of `state_id`.
+  - The epoch: `epoch`, else that of the state's slot. 400 when it is above the state's epoch + 1, or when epoch - MIN_SEED_LOOKAHEAD - 1 (0 when below) is below the state's epoch + 1 - EPOCHS_PER_HISTORICAL_VECTOR (0 when below), so that the RANDAO mix of its seed is not in the state. Lighthouse v8.3.3 gives 400 for both (`CommitteeCache::initialized`).
+  - With `slot`, 400 when the slot is not of the epoch. With `index`, 400 when it is get_committee_count_per_slot of the state and the epoch, or more. The checks go in that order.
+  - An item for each slot of the epoch (or `slot`), in order, and in each for each index from 0 below get_committee_count_per_slot (or `index`): `{"index":…,"slot":…,"validators":[…]}`, the members of get_beacon_committee of the state, the slot and the index, in order.
+  - Streamed, as getStateValidators: `{"execution_optimistic":…,"finalized":…,"data":[<the items, with , between>]}`, the values those of the state.
 - Every other operation: 501.
 
 ## Test vectors

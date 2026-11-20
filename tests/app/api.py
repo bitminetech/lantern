@@ -16,6 +16,8 @@ the file GENESIS (genesis.ssz: altair, 4096 validators at slot 0). The checks:
 - getSpec, getForkSchedule and getDepositContract: the values of the config.yaml beside GENESIS;
 - getStateValidators of head (chunked, 4096 validators, each active_ongoing with the pubkey and
   balance of GENESIS), postStateValidators of two ids, and getStateValidator of an index;
+- getEpochCommittees of head: 4 committees for each slot of epoch 0, in order, which hold each of
+  the 4096 validators once;
 - a connection with no bytes closes within 31 s.
 Prints a PASS or FAIL line for each, and exits 1 when one fails.
 """
@@ -288,6 +290,9 @@ def main():
                lambda d, h: [x["index"] for x in d] == ["7", "4095"])
     validators("getStateValidator of an index", request(b"GET", b"/eth/v1/beacon/states/head/validators/12"),
                lambda d, h: d["index"] == "12" and d["validator"]["pubkey"] == pubkey(12))
+    validators("getEpochCommittees of head", request(b"GET", b"/eth/v1/beacon/states/head/committees"),
+               lambda d, h: ([(x["slot"], x["index"]) for x in d] == [(str(s), str(i)) for s in range(8) for i in range(4)] and
+                             sorted(int(v) for x in d for v in x["validators"]) == list(range(4096))))
 
     f = connect(port)
     start = time.monotonic()

@@ -848,6 +848,261 @@ LOCAL_FUNCTION api_validators_json
 END_FUNCTION api_validators_json
 
 /*
+ * a0 = the epoch of getEpochCommittees of the route a0 and the state of the view a1 (beacon-api.md,
+ * Common rules), or 2^64 - 1 for 400: an epoch above the state's + 1, one whose seed's RANDAO mix the
+ * state no longer holds, or a slot of another epoch. A leaf. Uses t0-t4.
+ */
+LOCAL_FUNCTION node_api_committees_check
+    UNWIND_END_PROLOGUE
+    ld      t0, ApiView_head_slot(a1)       # the state's epoch at t0, the epoch at t1
+    li      t2, SLOTS_PER_EPOCH
+    divu    t0, t0, t2
+    mv      t1, t0
+    ld      t3, ApiRoute_present(a0)
+    srli    t4, t3, API_PARAM_EPOCH
+    andi    t4, t4, 1
+    beqz    t4, 1f
+    ld      t1, ApiRoute_epoch(a0)
+1:  addi    t2, t0, 1                       # at most the state's epoch + 1
+    bgtu    t1, t2, 8f
+    li      t4, EPOCHS_PER_HISTORICAL_VECTOR    # epoch - MIN_SEED_LOOKAHEAD - 1 at least epoch + 1 - EPOCHS_PER_HISTORICAL_VECTOR, each 0 when below
+    bltu    t2, t4, 11f
+    sub     t2, t2, t4
+    j       12f
+11: li      t2, 0
+12: li      t4, MIN_SEED_LOOKAHEAD + 1
+    bltu    t1, t4, 13f
+    sub     t4, t1, t4
+    j       14f
+13: li      t4, 0
+14: bltu    t4, t2, 8f
+    srli    t4, t3, API_PARAM_SLOT          # a slot of the epoch
+    andi    t4, t4, 1
+    beqz    t4, 2f
+    ld      t4, ApiRoute_slot(a0)
+    li      t2, SLOTS_PER_EPOCH
+    divu    t4, t4, t2
+    bne     t4, t1, 8f
+2:  mv      a0, t1
+    ret
+8:  li      a0, -1
+    ret
+END_FUNCTION node_api_committees_check
+
+/*
+ * The cursor of the getEpochCommittees stream of the entry a0, for the route a1 and the epoch a2
+ * (node.md, NODE_EV_API): the first slot at 0, the first index at 8, the epoch at 24, the slot and
+ * the index asked at 40 and 48 (2^64 - 1 for none). A leaf. Uses t0-t3.
+ */
+LOCAL_FUNCTION node_api_committees_cursor
+    UNWIND_END_PROLOGUE
+    sd      a2, (NodeApi_cursor + 24)(a0)
+    li      t0, SLOTS_PER_EPOCH
+    mul     t0, a2, t0
+    li      t1, -1
+    ld      t2, ApiRoute_present(a1)
+    srli    t3, t2, API_PARAM_SLOT
+    andi    t3, t3, 1
+    beqz    t3, 1f
+    ld      t0, ApiRoute_slot(a1)
+    mv      t1, t0
+1:  sd      t0, NodeApi_cursor(a0)
+    sd      t1, (NodeApi_cursor + 40)(a0)
+    li      t0, 0
+    li      t1, -1
+    srli    t3, t2, API_PARAM_INDEX
+    andi    t3, t3, 1
+    beqz    t3, 2f
+    ld      t0, ApiRoute_index(a1)
+    mv      t1, t0
+2:  sd      t0, (NodeApi_cursor + 8)(a0)
+    sd      t1, (NodeApi_cursor + 48)(a0)
+    ret
+END_FUNCTION node_api_committees_cursor
+
+/*
+ * A chunk's start of a getEpochCommittees stream (node.md, NODE_WORK_API_CHUNK), at the cursor at
+ * NodeEvent_api + 16 of the event s5: +56 get_committee_count_per_slot of the state a1 at the epoch
+ * at +24; +72 the scratch a0 and +80 the CommitteeCache of the node a2, for api_committees_json. a0 =
+ * 0; 400 for an index asked at or past the count, in the first chunk; LANTERN_BUFFER_TOO_SMALL for a
+ * scratch with no room for a committee and lantern_get_beacon_committee; else the status of the
+ * count. Locals: the epoch, the count, the state.
+ */
+LOCAL_FUNCTION node_api_committees_prep
+    FRAME 32
+    sd      a0, (NodeEvent_api + 16 + 72)(s5)
+    sd      a1, 16(sp)
+    ld      t0, (NodeEvent_api + 16 + 24)(s5)
+    sd      t0, 0(sp)
+    mv      a3, a0
+    mv      a0, a1
+    mv      a1, sp
+    LDQ     a2, a2, Node_config + CONFIG_COMMITTEE_CACHE
+    sd      a2, (NodeEvent_api + 16 + 80)(s5)
+    addi    a4, sp, 8
+    ld      t6, NodeApi_fork(s4)
+    FORK_CALL get_committee_count_per_slot
+    bnez    a0, 9f
+    ld      t0, 8(sp)                       # the count
+    sd      t0, (NodeEvent_api + 16 + 56)(s5)
+    ld      t1, 16(sp)                      # the scratch: 16, a committee's list, then S(2)
+    LDQ     t1, t1, NODE_STATE_VALIDATORS + 8
+    li      t2, SLOTS_PER_EPOCH
+    mul     t2, t0, t2
+    divu    t2, t1, t2
+    addi    t2, t2, 1
+    slli    t2, t2, 3
+    addi    t2, t2, (16 + LIST_FIXED)
+    slli    t1, t1, 3
+    addi    t1, t1, LIST_FIXED
+    slli    t1, t1, 1
+    add     t2, t2, t1
+    li      t1, LANTERN_SCRATCH_FIXED
+    add     t2, t2, t1
+    ld      t1, (NodeEvent_api + 16 + 72)(s5)
+    ld      t1, 0(t1)
+    bltu    t1, t2, 97f
+    ld      t1, (NodeEvent_api + 8)(s5)     # the first chunk: an index at or past the count, 400
+    andi    t1, t1, API_STREAM_STARTED
+    bnez    t1, 8f
+    ld      t1, (NodeEvent_api + 16 + 48)(s5)
+    li      t2, -1
+    beq     t1, t2, 8f
+    bltu    t1, t0, 8f
+    li      a0, 400
+    UNFRAME 32
+8:  li      a0, 0
+9:  UNFRAME 32
+97: li      a0, LANTERN_BUFFER_TOO_SMALL
+    UNFRAME 32
+END_FUNCTION node_api_committees_prep
+
+/*
+ * The items of the getEpochCommittees stream of the entry s4, of the state s3, from the cursor at
+ * NodeEvent_api + 16 of the event s5 (+0 the slot, +8 the index, +16 the member, +24 the epoch, +32
+ * the items written, +40 and +48 the slot and the index asked or 2^64 - 1, +56 the committees per
+ * slot, +64 1 within an item, +72 the scratch, +80 the CommitteeCache), at the writer's cursor s6 up
+ * to s8; then ]} once they are all written. a0 = 1 when whole, 0 when more is to come, 2 when a
+ * committee fails. Locals: the slot, the index, the committee's list.
+ */
+LOCAL_FUNCTION api_committees_json
+    FRAME 32
+1:  ld      t0, (NodeEvent_api + 16)(s5)    # the slot and the index
+    ld      t1, (NodeEvent_api + 16 + 8)(s5)
+    ld      t2, (NodeEvent_api + 16 + 40)(s5)   # the last slot: the one asked, else the epoch's last
+    li      t3, -1
+    bne     t2, t3, 2f
+    ld      t2, (NodeEvent_api + 16 + 24)(s5)
+    addi    t2, t2, 1
+    li      t4, SLOTS_PER_EPOCH
+    mul     t2, t2, t4
+    addi    t2, t2, -1
+2:  bgtu    t0, t2, 8f
+    ld      t2, (NodeEvent_api + 16 + 48)(s5)   # the end of the indices: past the one asked, else the count
+    ld      t4, (NodeEvent_api + 16 + 56)(s5)
+    beq     t2, t3, 21f
+    addi    t4, t2, 1
+21: bltu    t1, t4, 3f
+    addi    t0, t0, 1                       # the slot's committees are written: the next slot
+    li      t1, 0
+    beq     t2, t3, 22f
+    mv      t1, t2
+22: sd      t0, (NodeEvent_api + 16)(s5)
+    sd      t1, (NodeEvent_api + 16 + 8)(s5)
+    j       1b
+3:  ld      t2, (NodeEvent_api + 16 + 64)(s5)
+    bnez    t2, 4f
+    sub     t2, s8, s6                      # the item's head: {"index":…,"slot":…,"validators":[
+    li      t3, 80
+    bltu    t2, t3, 9f
+    ld      t2, (NodeEvent_api + 16 + 32)(s5)
+    beqz    t2, 31f
+    API_LIT api_p_comma
+31: ld      t2, (NodeEvent_api + 16 + 32)(s5)
+    addi    t2, t2, 1
+    sd      t2, (NodeEvent_api + 16 + 32)(s5)
+    li      t2, 1
+    sd      t2, (NodeEvent_api + 16 + 64)(s5)
+    sd      zero, (NodeEvent_api + 16 + 16)(s5)
+    API_LIT api_v_index
+    ld      a0, (NodeEvent_api + 16 + 8)(s5)
+    call    api_qdec
+    API_LIT api_c_slot
+    ld      a0, (NodeEvent_api + 16)(s5)
+    call    api_qdec
+    API_LIT api_c_validators
+4:  ld      t0, (NodeEvent_api + 16)(s5)    # the committee, in a list after 16 bytes of the scratch
+    sd      t0, 0(sp)
+    ld      t0, (NodeEvent_api + 16 + 8)(s5)
+    sd      t0, 8(sp)
+    LDQ     t0, s3, NODE_STATE_VALIDATORS + 8
+    ld      t1, (NodeEvent_api + 16 + 56)(s5)
+    li      t2, SLOTS_PER_EPOCH
+    mul     t1, t1, t2
+    divu    t0, t0, t1
+    addi    t0, t0, 1
+    slli    t0, t0, 3
+    addi    t0, t0, LIST_FIXED
+    ld      t1, (NodeEvent_api + 16 + 72)(s5)
+    addi    t2, t1, 16
+    sd      t0, 0(t2)
+    li      t3, LIST_FIXED
+    sd      t3, LIST_OFFSET(t2)
+    sd      zero, LIST_COUNT(t2)
+    sd      t2, 16(sp)
+    addi    t3, t0, 16
+    add     a4, t1, t3
+    ld      t4, 0(t1)
+    sub     t4, t4, t3
+    sd      t4, 0(a4)
+    mv      a0, s3
+    mv      a1, sp
+    addi    a2, sp, 8
+    ld      a3, (NodeEvent_api + 16 + 80)(s5)
+    mv      a5, t2
+    ld      t6, NodeApi_fork(s4)
+    FORK_CALL get_beacon_committee
+    bnez    a0, 7f
+41: ld      t0, (NodeEvent_api + 16 + 16)(s5)   # its members from the one at +16
+    ld      t1, 16(sp)
+    ld      t2, LIST_COUNT(t1)
+    bgeu    t0, t2, 5f
+    sub     t2, s8, s6
+    li      t3, 24
+    bltu    t2, t3, 9f
+    beqz    t0, 42f
+    API_LIT api_p_comma
+42: ld      t0, (NodeEvent_api + 16 + 16)(s5)
+    ld      t1, 16(sp)
+    slli    t2, t0, 3
+    add     t1, t1, t2
+    ld      a0, LIST_FIXED(t1)
+    addi    t0, t0, 1
+    sd      t0, (NodeEvent_api + 16 + 16)(s5)
+    call    api_qdec
+    j       41b
+5:  sub     t2, s8, s6                      # the item's end: ]}
+    li      t3, 2
+    bltu    t2, t3, 9f
+    API_LIT api_v_end
+    sd      zero, (NodeEvent_api + 16 + 64)(s5)
+    ld      t1, (NodeEvent_api + 16 + 8)(s5)
+    addi    t1, t1, 1
+    sd      t1, (NodeEvent_api + 16 + 8)(s5)
+    j       1b
+7:  li      a0, 2
+    UNFRAME 32
+8:  sub     t2, s8, s6                      # all: ]}
+    li      t3, 2
+    bltu    t2, t3, 9f
+    API_LIT api_v_end
+    li      a0, 1
+    UNFRAME 32
+9:  li      a0, 0
+    UNFRAME 32
+END_FUNCTION api_committees_json
+
+/*
  * a0 = the new id of a NODE_ACT_BYTES_PUT of the ValidatorRef items of the validator operation of
  * the route a0 (getStateValidator: its validator_id), or 0 with none (node.md, NODE_EV_API).
  * Locals: a ByteList head whose offset reaches the items.
@@ -1553,8 +1808,8 @@ LOCAL_FUNCTION node_api_event
     beq     a3, t0, 66f
     li      t0, API_OP_GET_SPEC
     beq     a3, t0, 67f
-    addi    t0, a3, -API_OP_GET_STATE_VALIDATORS   # the six validator operations: a state
-    li      t1, API_OP_POST_STATE_VALIDATOR_IDENTITIES - API_OP_GET_STATE_VALIDATORS
+    addi    t0, a3, -API_OP_GET_STATE_VALIDATORS   # the six validator operations and getEpochCommittees: a state
+    li      t1, API_OP_GET_EPOCH_COMMITTEES - API_OP_GET_STATE_VALIDATORS
     bleu    t0, t1, 66f
     li      t0, API_OP_GET_STATE_V2
     bne     a3, t0, 7f
@@ -1579,7 +1834,7 @@ LOCAL_FUNCTION node_api_event
     li      t1, API_OP_GET_STATE_V2
     beq     t0, t1, 64f
     addi    t0, t0, -API_OP_GET_STATE_VALIDATORS
-    li      t1, API_OP_POST_STATE_VALIDATOR_IDENTITIES - API_OP_GET_STATE_VALIDATORS
+    li      t1, API_OP_GET_EPOCH_COMMITTEES - API_OP_GET_STATE_VALIDATORS
     bgtu    t0, t1, 67f
     mv      a0, s7                          # the validator operations: their ids; getStateValidator a work, the others a stream
     call    node_api_ids
@@ -2358,12 +2613,20 @@ LOCAL_FUNCTION node_api_lookup
     addi    t0, s4, NodeApi_cursor
     addi    t1, s3, ApiRoute_id_root
     COPY32  t0, t1
-    ld      t0, ApiRoute_op(s3)             # the validator operations: statuses, validator_id and ids
+    ld      t0, ApiRoute_op(s3)             # the validator operations and getEpochCommittees: statuses, validator_id, epoch, slot, index, present and ids
     addi    t0, t0, -API_OP_GET_STATE_VALIDATORS
-    li      t1, API_OP_POST_STATE_VALIDATOR_IDENTITIES - API_OP_GET_STATE_VALIDATORS
+    li      t1, API_OP_GET_EPOCH_COMMITTEES - API_OP_GET_STATE_VALIDATORS
     bgtu    t0, t1, 2f
     ld      t0, ApiRoute_statuses(s3)
     sd      t0, (NodeApi_cursor + 32)(s4)
+    ld      t0, ApiRoute_epoch(s3)
+    sd      t0, (NodeApi_cursor + 104)(s4)
+    ld      t0, ApiRoute_slot(s3)
+    sd      t0, (NodeApi_cursor + 112)(s4)
+    ld      t0, ApiRoute_index(s3)
+    sd      t0, (NodeApi_cursor + 120)(s4)
+    ld      t0, ApiRoute_present(s3)
+    sd      t0, (NodeApi_cursor + 128)(s4)
     addi    a0, s4, (NodeApi_cursor + 40)
     addi    a1, s3, ApiRoute_validator
     li      a2, 64
@@ -2395,7 +2658,7 @@ END_FUNCTION node_api_lookup
  * operation. Locals: L the scratch's size.
  */
 LOCAL_FUNCTION node_api_lookup_done
-    ENTER 96
+    ENTER 128
     mv      s3, a0
     ld      t0, NodeAction_arg(s3)
     PART    t1, t2, s1, Node_api
@@ -2424,6 +2687,10 @@ LOCAL_FUNCTION node_api_lookup_done
     addi    a0, sp, (L + 32)
     addi    a1, s4, (NodeApi_cursor + 40)
     li      a2, 64
+    call    lantern_copy
+    addi    a0, sp, (L + 96)
+    addi    a1, s4, (NodeApi_cursor + 104)
+    li      a2, 32
     call    lantern_copy
     mv      a0, s4
     andi    t0, s7, ~API_STREAM_OWN         # the entry ends; it owns no bytes
@@ -2456,6 +2723,14 @@ LOCAL_FUNCTION node_api_lookup_done
     addi    a1, sp, (L + 32)
     li      a2, 64
     call    lantern_copy
+    ld      t0, (L + 96)(sp)
+    sd      t0, ApiRoute_epoch(s4)
+    ld      t0, (L + 104)(sp)
+    sd      t0, ApiRoute_slot(s4)
+    ld      t0, (L + 112)(sp)
+    sd      t0, ApiRoute_index(s4)
+    ld      t0, (L + 120)(sp)
+    sd      t0, ApiRoute_present(s4)
     li      t0, API_ID_SLOT
     sd      t0, ApiRoute_id_kind(s4)
     ld      t0, NodeEvent_index(s3)
@@ -2479,9 +2754,9 @@ LOCAL_FUNCTION node_api_lookup_done
     li      t0, API_OP_GET_STATE_VALIDATOR
     beq     s10, t0, 2f
     addi    t0, s10, -API_OP_GET_STATE_VALIDATORS
-    li      t1, API_OP_POST_STATE_VALIDATOR_IDENTITIES - API_OP_GET_STATE_VALIDATORS
+    li      t1, API_OP_GET_EPOCH_COMMITTEES - API_OP_GET_STATE_VALIDATORS
     bgtu    t0, t1, 2f
-3:  mv      a0, s9                          # getStateV2 and the validator streams: a stream
+3:  mv      a0, s9                          # getStateV2, the validator streams and getEpochCommittees: a stream
     mv      a1, s4
     mv      a3, s8
     call    node_api_stream
@@ -2512,7 +2787,7 @@ LOCAL_FUNCTION node_api_lookup_done
 81: call    node_api_send
 90: ld      t0, L(sp)
     sd      t0, 0(s5)
-99: LEAVE 96
+99: LEAVE 128
 END_FUNCTION node_api_lookup_done
 
 /*
@@ -2762,7 +3037,23 @@ LOCAL_FUNCTION node_api_stream
     or      s10, s10, t0
 32: ld      t0, ApiView_look_state(s8)
     sd      t0, (L + 16)(sp)
-    j       6f
+    ld      t0, ApiRoute_op(s7)             # getEpochCommittees: its epoch, else 400 and no stream
+    li      t1, API_OP_GET_EPOCH_COMMITTEES
+    bne     t0, t1, 6f
+    mv      a0, s7
+    mv      a1, s8
+    call    node_api_committees_check
+    sd      a0, (L + 24)(sp)
+    li      t0, -1
+    bne     a0, t0, 6f
+    ld      t0, ApiView_look_copy(s8)
+    beqz    t0, 33f
+    li      a0, NODE_ACT_STATE_FREE
+    ld      a1, ApiView_look_state(s8)
+    li      a2, 0
+    call    node_ids
+33: li      a0, 400
+    LEAVE 32
 4:  ld      s3, ApiView_look_data(s8)       # getBlockV2: the block's bytes
     beqz    s3, 80f
     j       6f
@@ -2803,7 +3094,15 @@ LOCAL_FUNCTION node_api_stream
     sd      t0, NodeApi_state(a1)
     ld      t0, ApiRoute_statuses(s7)
     sd      t0, NodeApi_statuses(a1)
-    ld      a0, (L + 0)(sp)
+    ld      t0, ApiRoute_op(s7)             # getEpochCommittees: its cursor
+    li      t1, API_OP_GET_EPOCH_COMMITTEES
+    bne     t0, t1, 7f
+    mv      a0, a1
+    mv      a1, s7
+    ld      a2, (L + 24)(sp)
+    call    node_api_committees_cursor
+7:  ld      a0, (L + 0)(sp)
+    ld      a1, (L + 8)(sp)
     call    node_api_chunk_work
     li      a0, 0
     LEAVE 32
@@ -2993,7 +3292,11 @@ LOCAL_FUNCTION api_stream_json
     beq     t0, t1, 1f
     li      t1, API_OP_GET_STATE_V2
     beq     t0, t1, 1f
+    li      t1, API_OP_GET_EPOCH_COMMITTEES
+    beq     t0, t1, 2f
     call    api_validators_json
+    UNFRAME 0
+2:  call    api_committees_json
     UNFRAME 0
 1:  addi    t0, s5, NodeEvent_api_bytes     # the ByteList: its room to s8 - 1, its bytes to s6
     addi    t1, s8, -1
@@ -3041,6 +3344,7 @@ LOCAL_FUNCTION node_api_chunk_run
     mv      s5, a4
     sd      a6, (L + 48)(sp)
     sd      a3, (L + 56)(sp)
+    sd      a0, (L + 64)(sp)
     ld      t0, NodeAction_arg(a1)          # the entry
     PART    t1, t2, a0, Node_api
     bgeu    t0, t2, 98f
@@ -3057,12 +3361,14 @@ LOCAL_FUNCTION node_api_chunk_run
     li      t1, API_OP_GET_STATE_VALIDATOR  # a validator stream: a state
     beq     t0, t1, 98f
     addi    t0, t0, -API_OP_GET_STATE_VALIDATORS
-    li      t1, API_OP_POST_STATE_VALIDATOR_IDENTITIES - API_OP_GET_STATE_VALIDATORS
+    li      t1, API_OP_GET_EPOCH_COMMITTEES - API_OP_GET_STATE_VALIDATORS
     bgtu    t0, t1, 98f
-    ld      t0, (L + 48)(sp)
-    beqz    t0, 98f
-    li      t0, 1
-    sd      t0, (L + 40)(sp)
+    ld      t2, (L + 48)(sp)
+    beqz    t2, 98f
+    li      t2, 1                           # a validator stream (1) or getEpochCommittees (2)
+    bne     t0, t1, 103f
+    li      t2, 2
+103: sd     t2, (L + 40)(sp)
     j       101f
 1:  beqz    s3, 98f
     sd      zero, (L + 40)(sp)
@@ -3123,14 +3429,44 @@ LOCAL_FUNCTION node_api_chunk_run
     li      s7, 1
     ld      s8, (L + 0)(sp)
     li      s9, 0
-    ld      t0, (L + 40)(sp)                # a validator stream: its selection; then api_stream_json reads the state
+    ld      t0, (L + 40)(sp)                # a validator stream: its selection; getEpochCommittees its count; then api_stream_json reads the state
     beqz    t0, 6f
     ld      a0, (L + 56)(sp)
     ld      a1, (L + 48)(sp)
+    li      t1, 2
+    beq     t0, t1, 63f
     mv      a2, s3
     call    node_api_validators_prep
     bnez    a0, 97f
-    ld      s3, (L + 48)(sp)
+    j       66f
+63: ld      a2, (L + 64)(sp)
+    call    node_api_committees_prep
+    li      t0, 400
+    beq     a0, t0, 64f
+    bnez    a0, 97f
+66: ld      s3, (L + 48)(sp)
+    j       6f
+64: addi    a1, s5, NodeEvent_api_bytes     # an index past the count: the error 400 is the answer
+    ld      t0, (L + 0)(sp)
+    sub     t0, t0, a1
+    sd      t0, 0(a1)
+    ld      t0, (NodeEvent_api + 8)(s5)
+    andi    a4, t0, API_R_CLOSE
+    bnez    a4, 65f
+    andi    t1, t0, API_STREAM_HTTP10
+    beqz    t1, 65f
+    li      a4, API_R_KEEP
+65: li      a0, 0
+    li      a2, 400
+    li      a3, API_BODY_ERROR
+    call    api_respond
+    bnez    a0, 97f
+    ld      t0, (NodeEvent_api_bytes + 16)(s5)
+    add     s6, s10, t0
+    ld      t0, (NodeEvent_api + 8)(s5)
+    ori     t0, t0, (API_STREAM_STARTED | API_STREAM_DONE)
+    sd      t0, (NodeEvent_api + 8)(s5)
+    j       80f
 6:  ld      t0, (NodeEvent_api + 8)(s5)
     andi    t1, t0, API_STREAM_SSZ
     beqz    t1, 30f

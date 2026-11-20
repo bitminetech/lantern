@@ -814,6 +814,244 @@ LOCAL_FUNCTION api_validators_json
     UNFRAME 32
 END_FUNCTION api_validators_json
 
+# rax = the epoch of getEpochCommittees of the route rdi and the state of the view rsi (beacon-api.md,
+# Common rules), or 2^64 - 1 for 400: an epoch above the state's + 1, one whose seed's RANDAO mix the
+# state no longer holds, or a slot of another epoch. A leaf. Uses rax, rcx, rdx, r8, r9.
+LOCAL_FUNCTION node_api_committees_check
+    UNWIND_END_PROLOGUE
+    mov     ApiView_head_slot(%rsi), %rax   # the state's epoch at r8, the epoch at r9
+    xor     %edx, %edx
+    mov     $SLOTS_PER_EPOCH, %ecx
+    div     %rcx
+    mov     %rax, %r8
+    mov     %rax, %r9
+    testq   $(1 << API_PARAM_EPOCH), ApiRoute_present(%rdi)
+    jz      1f
+    mov     ApiRoute_epoch(%rdi), %r9
+1:  lea     1(%r8), %rax                    # at most the state's epoch + 1
+    cmp     %rax, %r9
+    ja      8f
+    sub     $EPOCHS_PER_HISTORICAL_VECTOR, %rax   # epoch - MIN_SEED_LOOKAHEAD - 1 at least epoch + 1 - EPOCHS_PER_HISTORICAL_VECTOR, each 0 when below
+    jae     11f
+    xor     %eax, %eax
+11: mov     %r9, %rcx
+    sub     $(MIN_SEED_LOOKAHEAD + 1), %rcx
+    jae     12f
+    xor     %ecx, %ecx
+12: cmp     %rax, %rcx
+    jb      8f
+    testq   $(1 << API_PARAM_SLOT), ApiRoute_present(%rdi)    # a slot of the epoch
+    jz      2f
+    mov     ApiRoute_slot(%rdi), %rax
+    xor     %edx, %edx
+    mov     $SLOTS_PER_EPOCH, %ecx
+    div     %rcx
+    cmp     %r9, %rax
+    jne     8f
+2:  mov     %r9, %rax
+    ret
+8:  mov     $-1, %rax
+    ret
+END_FUNCTION node_api_committees_check
+
+# The cursor of the getEpochCommittees stream of the entry rdi, for the route rsi and the epoch rdx
+# (node.md, NODE_EV_API): the first slot at 0, the first index at 8, the epoch at 24, the slot and the
+# index asked at 40 and 48 (2^64 - 1 for none). A leaf. Uses rax, rcx.
+LOCAL_FUNCTION node_api_committees_cursor
+    UNWIND_END_PROLOGUE
+    mov     %rdx, (NodeApi_cursor + 24)(%rdi)
+    imul    $SLOTS_PER_EPOCH, %rdx, %rax
+    mov     $-1, %rcx
+    testq   $(1 << API_PARAM_SLOT), ApiRoute_present(%rsi)
+    jz      1f
+    mov     ApiRoute_slot(%rsi), %rax
+    mov     %rax, %rcx
+1:  mov     %rax, NodeApi_cursor(%rdi)
+    mov     %rcx, (NodeApi_cursor + 40)(%rdi)
+    xor     %eax, %eax
+    mov     $-1, %rcx
+    testq   $(1 << API_PARAM_INDEX), ApiRoute_present(%rsi)
+    jz      2f
+    mov     ApiRoute_index(%rsi), %rax
+    mov     %rax, %rcx
+2:  mov     %rax, (NodeApi_cursor + 8)(%rdi)
+    mov     %rcx, (NodeApi_cursor + 48)(%rdi)
+    ret
+END_FUNCTION node_api_committees_cursor
+
+# A chunk's start of a getEpochCommittees stream (node.md, NODE_WORK_API_CHUNK), at the cursor at
+# NodeEvent_api + 16 of the event rbp: +56 get_committee_count_per_slot of the state rsi at the epoch
+# at +24; +72 the scratch rdi and +80 the CommitteeCache of the node rdx, for api_committees_json.
+# rax = 0; 400 for an index asked at or past the count, in the first chunk; LANTERN_BUFFER_TOO_SMALL
+# for a scratch with no room for a committee and lantern_get_beacon_committee; else the status of the
+# count. Locals: the epoch, the count, the state.
+LOCAL_FUNCTION node_api_committees_prep
+    FRAME 32
+    mov     %rdi, (NodeEvent_api + 16 + 72)(%rbp)
+    mov     %rsi, 16(%rsp)
+    mov     (NodeEvent_api + 16 + 24)(%rbp), %rax
+    mov     %rax, (%rsp)
+    mov     %rdi, %rcx
+    mov     %rsi, %rdi
+    mov     %rsp, %rsi
+    mov     (Node_config + CONFIG_COMMITTEE_CACHE)(%rdx), %rdx
+    mov     %rdx, (NodeEvent_api + 16 + 80)(%rbp)
+    lea     8(%rsp), %r8
+    mov     NodeApi_fork(%rbx), %r10
+    FORK_CALL get_committee_count_per_slot
+    test    %rax, %rax
+    jnz     9f
+    mov     8(%rsp), %rcx                   # the count
+    mov     %rcx, (NodeEvent_api + 16 + 56)(%rbp)
+    mov     16(%rsp), %rax                  # the scratch: 16, a committee's list, then S(2)
+    mov     (NODE_STATE_VALIDATORS + 8)(%rax), %r8
+    imul    $SLOTS_PER_EPOCH, %rcx, %rcx
+    mov     %r8, %rax
+    xor     %edx, %edx
+    div     %rcx
+    lea     (16 + LIST_FIXED + 8)(,%rax,8), %r9
+    lea     LIST_FIXED(,%r8,8), %rax
+    lea     (%r9,%rax,2), %r9
+    add     $LANTERN_SCRATCH_FIXED, %r9
+    mov     (NodeEvent_api + 16 + 72)(%rbp), %rax
+    cmp     (%rax), %r9
+    ja      97f
+    testq   $API_STREAM_STARTED, (NodeEvent_api + 8)(%rbp)   # the first chunk: an index at or past the count, 400
+    jnz     8f
+    mov     (NodeEvent_api + 16 + 48)(%rbp), %rax
+    cmp     $-1, %rax
+    je      8f
+    cmp     (NodeEvent_api + 16 + 56)(%rbp), %rax
+    jb      8f
+    mov     $400, %eax
+    UNFRAME 32
+8:  xor     %eax, %eax
+9:  UNFRAME 32
+97: mov     $LANTERN_BUFFER_TOO_SMALL, %eax
+    UNFRAME 32
+END_FUNCTION node_api_committees_prep
+
+# The items of the getEpochCommittees stream of the entry rbx, of the state rdi, from the cursor at
+# NodeEvent_api + 16 of the event rbp (+0 the slot, +8 the index, +16 the member, +24 the epoch, +32
+# the items written, +40 and +48 the slot and the index asked or 2^64 - 1, +56 the committees per
+# slot, +64 1 within an item, +72 the scratch, +80 the CommitteeCache), at the writer's cursor r12 up
+# to r14; then ]} once they are all written. rax = 1 when whole, 0 when more is to come, 2 when a
+# committee fails. Locals: the slot, the index, the committee's list, the state.
+LOCAL_FUNCTION api_committees_json
+    FRAME 48
+    mov     %rdi, 32(%rsp)
+1:  mov     (NodeEvent_api + 16)(%rbp), %rax        # the slot and the index
+    mov     (NodeEvent_api + 16 + 8)(%rbp), %rcx
+    mov     (NodeEvent_api + 16 + 40)(%rbp), %rdx   # the last slot: the one asked, else the epoch's last
+    cmp     $-1, %rdx
+    jne     2f
+    mov     (NodeEvent_api + 16 + 24)(%rbp), %rdx
+    inc     %rdx
+    imul    $SLOTS_PER_EPOCH, %rdx, %rdx
+    dec     %rdx
+2:  cmp     %rdx, %rax
+    ja      8f
+    mov     (NodeEvent_api + 16 + 48)(%rbp), %rdx   # the end of the indices: past the one asked, else the count
+    mov     (NodeEvent_api + 16 + 56)(%rbp), %rsi
+    cmp     $-1, %rdx
+    je      21f
+    lea     1(%rdx), %rsi
+21: cmp     %rsi, %rcx
+    jb      3f
+    inc     %rax                            # the slot's committees are written: the next slot
+    xor     %ecx, %ecx
+    cmp     $-1, %rdx
+    cmovne  %rdx, %rcx
+    mov     %rax, (NodeEvent_api + 16)(%rbp)
+    mov     %rcx, (NodeEvent_api + 16 + 8)(%rbp)
+    jmp     1b
+3:  cmpq    $0, (NodeEvent_api + 16 + 64)(%rbp)
+    jne     4f
+    mov     %r14, %rax                      # the item's head: {"index":…,"slot":…,"validators":[
+    sub     %r12, %rax
+    cmp     $80, %rax
+    jb      9f
+    cmpq    $0, (NodeEvent_api + 16 + 32)(%rbp)
+    je      31f
+    API_LIT api_p_comma
+31: incq    (NodeEvent_api + 16 + 32)(%rbp)
+    movq    $1, (NodeEvent_api + 16 + 64)(%rbp)
+    movq    $0, (NodeEvent_api + 16 + 16)(%rbp)
+    API_LIT api_v_index
+    mov     (NodeEvent_api + 16 + 8)(%rbp), %rdi
+    call    api_qdec
+    API_LIT api_c_slot
+    mov     (NodeEvent_api + 16)(%rbp), %rdi
+    call    api_qdec
+    API_LIT api_c_validators
+4:  mov     (NodeEvent_api + 16)(%rbp), %rax        # the committee, in a list after 16 bytes of the scratch
+    mov     %rax, (%rsp)
+    mov     (NodeEvent_api + 16 + 8)(%rbp), %rax
+    mov     %rax, 8(%rsp)
+    mov     32(%rsp), %rax
+    mov     (NODE_STATE_VALIDATORS + 8)(%rax), %rax
+    mov     (NodeEvent_api + 16 + 56)(%rbp), %rcx
+    imul    $SLOTS_PER_EPOCH, %rcx, %rcx
+    xor     %edx, %edx
+    div     %rcx
+    lea     (LIST_FIXED + 8)(,%rax,8), %rax
+    mov     (NodeEvent_api + 16 + 72)(%rbp), %rsi
+    lea     16(%rsi), %r9
+    mov     %rax, (%r9)
+    movq    $LIST_FIXED, LIST_OFFSET(%r9)
+    movq    $0, LIST_COUNT(%r9)
+    mov     %r9, 16(%rsp)
+    lea     16(%rax), %rcx
+    lea     (%rsi,%rcx), %r8
+    mov     (%rsi), %rdx
+    sub     %rcx, %rdx
+    mov     %rdx, (%r8)
+    mov     32(%rsp), %rdi
+    mov     %rsp, %rsi
+    lea     8(%rsp), %rdx
+    mov     (NodeEvent_api + 16 + 80)(%rbp), %rcx
+    mov     NodeApi_fork(%rbx), %r10
+    FORK_CALL get_beacon_committee
+    test    %rax, %rax
+    jnz     7f
+41: mov     (NodeEvent_api + 16 + 16)(%rbp), %rcx   # its members from the one at +16
+    mov     16(%rsp), %rax
+    cmp     LIST_COUNT(%rax), %rcx
+    jae     5f
+    mov     %r14, %rax
+    sub     %r12, %rax
+    cmp     $24, %rax
+    jb      9f
+    test    %rcx, %rcx
+    jz      42f
+    API_LIT api_p_comma
+42: mov     (NodeEvent_api + 16 + 16)(%rbp), %rcx
+    mov     16(%rsp), %rax
+    mov     LIST_FIXED(%rax,%rcx,8), %rdi
+    incq    (NodeEvent_api + 16 + 16)(%rbp)
+    call    api_qdec
+    jmp     41b
+5:  mov     %r14, %rax                      # the item's end: ]}
+    sub     %r12, %rax
+    cmp     $2, %rax
+    jb      9f
+    API_LIT api_v_end
+    movq    $0, (NodeEvent_api + 16 + 64)(%rbp)
+    incq    (NodeEvent_api + 16 + 8)(%rbp)
+    jmp     1b
+7:  mov     $2, %eax
+    UNFRAME 48
+8:  mov     %r14, %rax                      # all: ]}
+    sub     %r12, %rax
+    cmp     $2, %rax
+    jb      9f
+    API_LIT api_v_end
+    mov     $1, %eax
+    UNFRAME 48
+9:  xor     %eax, %eax
+    UNFRAME 48
+END_FUNCTION api_committees_json
+
 # rax = the new id of a NODE_ACT_BYTES_PUT of the ValidatorRef items of the validator operation of
 # the route rdi (getStateValidator: its validator_id), or 0 with none (node.md, NODE_EV_API).
 # Locals: a ByteList head whose offset reaches the items.
@@ -1518,8 +1756,8 @@ LOCAL_FUNCTION node_api_event
     je      66f
     cmp     $API_OP_GET_SPEC, %rcx
     je      67f
-    lea     -API_OP_GET_STATE_VALIDATORS(%rcx), %rax    # the six validator operations: a state
-    cmp     $(API_OP_POST_STATE_VALIDATOR_IDENTITIES - API_OP_GET_STATE_VALIDATORS), %rax
+    lea     -API_OP_GET_STATE_VALIDATORS(%rcx), %rax    # the six validator operations and getEpochCommittees: a state
+    cmp     $(API_OP_GET_EPOCH_COMMITTEES - API_OP_GET_STATE_VALIDATORS), %rax
     jbe     66f
     cmp     $API_OP_GET_STATE_V2, %rcx
     jne     7f
@@ -1547,7 +1785,7 @@ LOCAL_FUNCTION node_api_event
     cmp     $API_OP_GET_STATE_V2, %rcx
     je      64f
     sub     $API_OP_GET_STATE_VALIDATORS, %rcx
-    cmp     $(API_OP_POST_STATE_VALIDATOR_IDENTITIES - API_OP_GET_STATE_VALIDATORS), %rcx
+    cmp     $(API_OP_GET_EPOCH_COMMITTEES - API_OP_GET_STATE_VALIDATORS), %rcx
     ja      67f
     mov     %rax, %rdi                      # the validator operations: their ids; getStateValidator a work, the others a stream
     call    node_api_ids
@@ -2365,12 +2603,20 @@ LOCAL_FUNCTION node_api_lookup
     lea     NodeApi_cursor(%r13), %rax
     lea     ApiRoute_id_root(%r12), %rcx
     COPY32  %rax, %rcx
-    mov     ApiRoute_op(%r12), %rax         # the validator operations: statuses, validator_id and ids
+    mov     ApiRoute_op(%r12), %rax         # the validator operations and getEpochCommittees: statuses, validator_id, epoch, slot, index, present and ids
     sub     $API_OP_GET_STATE_VALIDATORS, %rax
-    cmp     $(API_OP_POST_STATE_VALIDATOR_IDENTITIES - API_OP_GET_STATE_VALIDATORS), %rax
+    cmp     $(API_OP_GET_EPOCH_COMMITTEES - API_OP_GET_STATE_VALIDATORS), %rax
     ja      2f
     mov     ApiRoute_statuses(%r12), %rax
     mov     %rax, (NodeApi_cursor + 32)(%r13)
+    mov     ApiRoute_epoch(%r12), %rax
+    mov     %rax, (NodeApi_cursor + 104)(%r13)
+    mov     ApiRoute_slot(%r12), %rax
+    mov     %rax, (NodeApi_cursor + 112)(%r13)
+    mov     ApiRoute_index(%r12), %rax
+    mov     %rax, (NodeApi_cursor + 120)(%r13)
+    mov     ApiRoute_present(%r12), %rax
+    mov     %rax, (NodeApi_cursor + 128)(%r13)
     lea     (NodeApi_cursor + 40)(%r13), %rdi
     lea     ApiRoute_validator(%r12), %rsi
     mov     $64, %edx
@@ -2401,7 +2647,7 @@ END_FUNCTION node_api_lookup
  * connection, S10 the operation. Locals: L the scratch's size.
  */
 LOCAL_FUNCTION node_api_lookup_done
-    ENTER 96
+    ENTER 128
     mov     %rdi, %r12
     mov     NodeAction_arg(%r12), %rax
     PART    %rdi, %rcx, %rbx, Node_api
@@ -2433,6 +2679,10 @@ LOCAL_FUNCTION node_api_lookup_done
     lea     (L + 32)(%rsp), %rdi
     lea     (NodeApi_cursor + 40)(%r13), %rsi
     mov     $64, %edx
+    call    lantern_copy
+    lea     (L + 96)(%rsp), %rdi
+    lea     (NodeApi_cursor + 104)(%r13), %rsi
+    mov     $32, %edx
     call    lantern_copy
     mov     %r13, %rdi
     mov     S7(%rsp), %rax
@@ -2466,6 +2716,14 @@ LOCAL_FUNCTION node_api_lookup_done
     lea     (L + 32)(%rsp), %rsi
     mov     $64, %edx
     call    lantern_copy
+    mov     (L + 96)(%rsp), %rax
+    mov     %rax, ApiRoute_epoch(%r13)
+    mov     (L + 104)(%rsp), %rax
+    mov     %rax, ApiRoute_slot(%r13)
+    mov     (L + 112)(%rsp), %rax
+    mov     %rax, ApiRoute_index(%r13)
+    mov     (L + 120)(%rsp), %rax
+    mov     %rax, ApiRoute_present(%r13)
     movq    $API_ID_SLOT, ApiRoute_id_kind(%r13)
     mov     NodeEvent_index(%r12), %rax
     mov     %rax, ApiRoute_id_slot(%r13)
@@ -2492,9 +2750,9 @@ LOCAL_FUNCTION node_api_lookup_done
     cmp     $API_OP_GET_STATE_VALIDATOR, %rax
     je      2f
     sub     $API_OP_GET_STATE_VALIDATORS, %rax
-    cmp     $(API_OP_POST_STATE_VALIDATOR_IDENTITIES - API_OP_GET_STATE_VALIDATORS), %rax
+    cmp     $(API_OP_GET_EPOCH_COMMITTEES - API_OP_GET_STATE_VALIDATORS), %rax
     ja      2f
-3:  mov     S9(%rsp), %rdi                  # getStateV2 and the validator streams: a stream
+3:  mov     S9(%rsp), %rdi                  # getStateV2, the validator streams and getEpochCommittees: a stream
     mov     %r13, %rsi
     mov     S8(%rsp), %rcx
     call    node_api_stream
@@ -2529,7 +2787,7 @@ LOCAL_FUNCTION node_api_lookup_done
 81: call    node_api_send
 90: mov     L(%rsp), %rax
     mov     %rax, (%r14)
-99: LEAVE 96
+99: LEAVE 128
 END_FUNCTION node_api_lookup_done
 
 /*
@@ -2764,7 +3022,23 @@ LOCAL_FUNCTION node_api_stream
     orq     $API_STREAM_OWN_STATE, S10(%rsp)
 32: mov     ApiView_look_state(%rcx), %rax
     mov     %rax, (L + 16)(%rsp)
-    jmp     6f
+    cmpq    $API_OP_GET_EPOCH_COMMITTEES, ApiRoute_op(%rsi)   # getEpochCommittees: its epoch, else 400 and no stream
+    jne     6f
+    mov     %rsi, %rdi
+    mov     %rcx, %rsi
+    call    node_api_committees_check
+    mov     %rax, (L + 24)(%rsp)
+    cmp     $-1, %rax
+    jne     6f
+    mov     S8(%rsp), %rcx
+    cmpq    $0, ApiView_look_copy(%rcx)
+    je      33f
+    mov     $NODE_ACT_STATE_FREE, %edi
+    mov     ApiView_look_state(%rcx), %rsi
+    xor     %edx, %edx
+    call    node_ids
+33: mov     $400, %eax
+    LEAVE 32
 4:  mov     ApiView_look_data(%rcx), %r12   # getBlockV2: the block's bytes
     test    %r12, %r12
     jz      80f
@@ -2812,7 +3086,14 @@ LOCAL_FUNCTION node_api_stream
     mov     S7(%rsp), %rax
     mov     ApiRoute_statuses(%rax), %rax
     mov     %rax, NodeApi_statuses(%rdx)
-    mov     L(%rsp), %rax
+    mov     S7(%rsp), %rsi                  # getEpochCommittees: its cursor
+    cmpq    $API_OP_GET_EPOCH_COMMITTEES, ApiRoute_op(%rsi)
+    jne     7f
+    mov     %rdx, %rdi
+    mov     (L + 24)(%rsp), %rdx
+    call    node_api_committees_cursor
+    mov     (L + 8)(%rsp), %rdx
+7:  mov     L(%rsp), %rax
     call    node_api_chunk_work
     xor     %eax, %eax
     LEAVE 32
@@ -2997,7 +3278,11 @@ LOCAL_FUNCTION api_stream_json
     je      1f
     cmpq    $API_OP_GET_STATE_V2, NodeApi_op(%rbx)
     je      1f
+    cmpq    $API_OP_GET_EPOCH_COMMITTEES, NodeApi_op(%rbx)
+    je      2f
     call    api_validators_json
+    UNFRAME 0
+2:  call    api_committees_json
     UNFRAME 0
 1:  lea     NodeEvent_api_bytes(%rbp), %rsi # the ByteList: its room to r14 - 1, its bytes to r12
     lea     -1(%r14), %rax
@@ -3045,6 +3330,7 @@ LOCAL_FUNCTION node_api_chunk_run
     mov     %rdx, (L + 40)(%rsp)
     mov     %r10, (L + 48)(%rsp)
     mov     %rcx, (L + 64)(%rsp)
+    mov     %rdi, (L + 72)(%rsp)
     mov     %r8, %rbp
     mov     NodeAction_arg(%rsi), %rax      # the entry
     PART    %rbx, %rcx, %rdi, Node_api
@@ -3062,11 +3348,15 @@ LOCAL_FUNCTION node_api_chunk_run
     cmp     $API_OP_GET_STATE_VALIDATOR, %rax       # a validator stream: a state
     je      98f
     sub     $API_OP_GET_STATE_VALIDATORS, %rax
-    cmp     $(API_OP_POST_STATE_VALIDATOR_IDENTITIES - API_OP_GET_STATE_VALIDATORS), %rax
+    cmp     $(API_OP_GET_EPOCH_COMMITTEES - API_OP_GET_STATE_VALIDATORS), %rax
     ja      98f
     cmpq    $0, (L + 48)(%rsp)
     je      98f
-    movq    $1, (L + 56)(%rsp)
+    mov     $1, %ecx                        # a validator stream (1) or getEpochCommittees (2)
+    cmp     $(API_OP_GET_EPOCH_COMMITTEES - API_OP_GET_STATE_VALIDATORS), %rax
+    jne     103f
+    mov     $2, %ecx
+103: mov    %rcx, (L + 56)(%rsp)
     jmp     101f
 1:  test    %rdx, %rdx
     jz      98f
@@ -3123,16 +3413,47 @@ LOCAL_FUNCTION node_api_chunk_run
     mov     $1, %r13d
     mov     L(%rsp), %r14
     xor     %r15d, %r15d
-    cmpq    $0, (L + 56)(%rsp)              # a validator stream: its selection; then the state is what api_stream_json reads
+    cmpq    $0, (L + 56)(%rsp)              # a validator stream: its selection; getEpochCommittees its count; then the state is what api_stream_json reads
     je      6f
     mov     (L + 64)(%rsp), %rdi
     mov     (L + 48)(%rsp), %rsi
+    cmpq    $2, (L + 56)(%rsp)
+    je      63f
     mov     (L + 40)(%rsp), %rdx
     call    node_api_validators_prep
     test    %rax, %rax
     jnz     97f
-    mov     (L + 48)(%rsp), %rax
+    jmp     66f
+63: mov     (L + 72)(%rsp), %rdx
+    call    node_api_committees_prep
+    cmp     $400, %rax
+    je      64f
+    test    %rax, %rax
+    jnz     97f
+66: mov     (L + 48)(%rsp), %rax
     mov     %rax, (L + 40)(%rsp)
+    jmp     6f
+64: lea     NodeEvent_api_bytes(%rbp), %rsi # an index past the count: the error 400 is the answer
+    mov     L(%rsp), %rax
+    sub     %rsi, %rax
+    mov     %rax, (%rsi)
+    mov     (NodeEvent_api + 8)(%rbp), %rax
+    mov     %rax, %r8
+    and     $API_R_CLOSE, %r8d
+    jnz     65f
+    test    $API_STREAM_HTTP10, %eax
+    jz      65f
+    mov     $API_R_KEEP, %r8d
+65: xor     %edi, %edi
+    mov     $400, %edx
+    mov     $API_BODY_ERROR, %ecx
+    call    api_respond
+    test    %rax, %rax
+    jnz     97f
+    mov     (NodeEvent_api_bytes + 16)(%rbp), %rax
+    lea     (NodeEvent_api_bytes + 24)(%rbp,%rax), %r12
+    orq     $(API_STREAM_STARTED | API_STREAM_DONE), (NodeEvent_api + 8)(%rbp)
+    jmp     80f
 6:  mov     (NodeEvent_api + 8)(%rbp), %rax
     test    $API_STREAM_SSZ, %eax
     jz      30f

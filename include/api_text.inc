@@ -341,6 +341,12 @@ api_v_list:
 api_v_end:
     .ascii "]}"
 .set api_v_end_len, 2
+api_c_slot:
+    .ascii ",\"slot\":"
+.set api_c_slot_len, 8
+api_c_validators:
+    .ascii ",\"validators\":["
+.set api_c_validators_len, 15
 api_v_statuses:                         /* the names of the statuses, API_STATUS_* order: 24 bytes each, the length first */
     .byte 19
     .ascii "pending_initialized"
