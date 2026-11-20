@@ -1445,15 +1445,24 @@ LOCAL_FUNCTION app_work
     beq     s4, t0, 90f
     beq     s5, t0, 90f
     beq     s6, t0, 90f
-    li      t0, NODE_WORK_API_CHUNK         # API_CHUNK: room for a whole chunk
-    bne     s8, t0, 1f
-    LDQ     t0, s1, (APP_WORK_EVENT + 8)
     li      t1, NodeEvent_api_bytes + 24 + NODE_API_CHUNK
+    li      t0, NODE_WORK_API_CHUNK         # API_CHUNK: room for a whole chunk
+    beq     s8, t0, 15f
+    li      t0, NODE_WORK_PUBLISH_DECODE    # PUBLISH_DECODE and PUBLISH_CHECK: room for the bytes of data
+    beq     s8, t0, 16f
+    li      t0, NODE_WORK_PUBLISH_CHECK
+    bne     s8, t0, 1f
+16: beqz    s6, 1f
+    ld      t1, 16(s6)
+    addi    t1, t1, NodeEvent_chunk + 7
+    andi    t1, t1, -8
+15: LDQ     t0, s1, (APP_WORK_EVENT + 8)
     bgeu    t0, t1, 1f
+    mv      s9, t1
     li      a0, APP_WORK_EVENT
     call    app_unmap
     li      a0, APP_WORK_EVENT
-    li      a1, NodeEvent_api_bytes + 24 + NODE_API_CHUNK
+    mv      a1, s9
     call    app_alloc
     beqz    a0, 91f
 1:  LDQ     t0, s1, APP_WORK_EVENT          # the event's room
@@ -1502,6 +1511,18 @@ LOCAL_FUNCTION app_work
     beq     s8, t0, 2f
     li      t0, NODE_WORK_API_EVENT
     beq     s8, t0, 2f
+    li      t0, NODE_WORK_PREPARE_PAYLOAD
+    beq     s8, t0, 2f
+    li      t0, NODE_WORK_GET_PAYLOAD
+    beq     s8, t0, 2f
+    li      t0, NODE_WORK_PRODUCE_BLOCK
+    beq     s8, t0, 2f
+    li      t0, NODE_WORK_PUBLISH_DECODE
+    beq     s8, t0, 2f
+    li      t0, NODE_WORK_PUBLISH_SIDECAR
+    beq     s8, t0, 2f
+    li      t0, NODE_WORK_PUBLISH_CHECK     # PUBLISH_CHECK: the Seen, and the parent's state
+    beq     s8, t0, 31f
     li      t0, NODE_WORK_API_SUBMIT        # API_SUBMIT: the Seen, and a larger event
     beq     s8, t0, 7f
     li      t0, NODE_WORK_GOSSIP            # GOSSIP: the Seen, and the proposer state
@@ -1543,6 +1564,10 @@ LOCAL_FUNCTION app_work
     call    app_regrow
     bnez    a0, 91f
     j       1b
+31: li      a0, 2
+    li      a1, -1
+    call    app_grow
+    bnez    a0, 91f
 4:  beqz    s3, 91f
     mv      a0, s3
     call    app_regrow
