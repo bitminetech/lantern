@@ -662,4 +662,93 @@ SPEC_FUNCTION engine_get_payload
     LEAVE 0
 SPEC_END engine_get_payload
 
+.if FORK >= FORK_CAPELLA
+.if Withdrawal_index != 0 || Withdrawal_validator_index != 8
+.error "get_payload_attributes copies index and validator_index as the first 16 bytes of a Withdrawal"
+.endif
+.endif
+
+/*
+ * (state, fee_recipient, config, scratch, out): x19 state, x20 fee_recipient, x21 config, x22
+ * scratch, x23 out, x24 the scratch size, x25 the ExpectedWithdrawals, x26 a withdrawal, x27 those
+ * left. Locals: L the current epoch.
+ */
+SPEC_FUNCTION get_payload_attributes
+    ENTER 16
+    mov     x19, x0
+    mov     x20, x1
+    mov     x21, x2
+    mov     x22, x3
+    mov     x23, x4
+    ADDQ    x0, x19, BeaconState_genesis_time
+    ADDQ    x1, x19, BeaconState_slot
+    mov     x2, x21
+    add     x3, x23, #PayloadAttributes_timestamp
+    bl      lantern_compute_time_at_slot
+    cbnz    x0, 9f
+    mov     x0, x19                         /* prev_randao: the mix of the current epoch */
+    add     x1, sp, #L
+    bl      lantern_get_current_epoch
+    cbnz    x0, 9f
+    mov     x0, x19
+    add     x1, sp, #L
+    add     x2, x23, #PayloadAttributes_prev_randao
+    bl      lantern_get_randao_mix
+    cbnz    x0, 9f
+    ldp     x9, x10, [x20]                  /* the fee recipient, then 4 zero bytes */
+    ldr     w11, [x20, #16]
+    stp     x9, x10, [x23, #PayloadAttributes_suggested_fee_recipient]
+    str     x11, [x23, #(PayloadAttributes_suggested_fee_recipient + 16)]
+    add     x9, x23, #PayloadAttributes_parent_beacon_block_root
+    stp     xzr, xzr, [x9]
+    stp     xzr, xzr, [x9, #16]
+    str     xzr, [x23, #PayloadAttributes_withdrawals]
+.if FORK >= FORK_DENEB
+    ADDRESS x0, lantern_type_BeaconBlockHeader  /* parent_beacon_block_root = hash_tree_root(state.latest_block_header) */
+    ADDQ    x1, x19, BeaconState_latest_block_header
+    mov     x2, x22
+    add     x3, x23, #PayloadAttributes_parent_beacon_block_root
+    CALL_GLOBAL ssz_hash_tree_root
+    cbnz    x0, 9f
+.endif
+.if FORK >= FORK_CAPELLA
+    ldr     x24, [x22]                      /* get_expected_withdrawals, its value at the end of scratch */
+    MOVQ    x9, EXPECTED_SCRATCH + SWEEP_BYTES
+    cmp     x24, x9
+    b.lo    8f
+    MOVQ    x9, SWEEP_BYTES
+    sub     x9, x24, x9
+    add     x25, x22, x9
+    str     x9, [x22]
+    mov     x0, x19
+    mov     x1, x22
+    mov     x2, x25
+    bl      lantern_get_expected_withdrawals
+    str     x24, [x22]
+    cbnz    x0, 9f
+    ldr     x27, [x25, #(16 + LIST_COUNT)]
+    add     x26, x25, #(16 + LIST_FIXED)
+    str     x27, [x23, #PayloadAttributes_withdrawals]
+    add     x9, x23, #PAYLOAD_ATTRIBUTES_WITHDRAWAL
+1:  cbz     x27, 2f                         /* each withdrawal: its 44 SSZ bytes */
+    ldp     x10, x11, [x26]
+    stp     x10, x11, [x9]
+    ldp     x10, x11, [x26, #Withdrawal_address]
+    stp     x10, x11, [x9, #16]
+    ldr     w10, [x26, #(Withdrawal_address + 16)]
+    str     w10, [x9, #32]
+    ldr     x10, [x26, #Withdrawal_amount]
+    stur    x10, [x9, #36]
+    add     x26, x26, #Withdrawal__mem
+    add     x9, x9, #PAYLOAD_ATTRIBUTES_WITHDRAWAL_SIZE
+    sub     x27, x27, #1
+    b       1b
+2:
+.endif
+    mov     x0, #LANTERN_OK
+9:  LEAVE 16
+8:  mov     x0, #LANTERN_BUFFER_TOO_SMALL
+    LEAVE 16
+SPEC_END get_payload_attributes
+
 .endif

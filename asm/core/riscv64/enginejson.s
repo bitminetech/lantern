@@ -692,4 +692,101 @@ SPEC_FUNCTION engine_get_payload
     LEAVE 0
 SPEC_END engine_get_payload
 
+.if FORK >= FORK_CAPELLA
+.if Withdrawal_index != 0 || Withdrawal_validator_index != 8 || Withdrawal_address != 16
+.error "get_payload_attributes copies the first 36 bytes of a Withdrawal as its SSZ bytes"
+.endif
+.endif
+
+/*
+ * (state, fee_recipient, config, scratch, out): s1 state, s2 fee_recipient, s3 config, s4 scratch,
+ * s5 out, s6 the scratch size, s7 the ExpectedWithdrawals. Locals: L the current epoch.
+ */
+SPEC_FUNCTION get_payload_attributes
+    ENTER 16
+    mv      s1, a0
+    mv      s2, a1
+    mv      s3, a2
+    mv      s4, a3
+    mv      s5, a4
+    ADDQ    a0, s1, BeaconState_genesis_time
+    ADDQ    a1, s1, BeaconState_slot
+    mv      a2, s3
+    addi    a3, s5, PayloadAttributes_timestamp
+    call    lantern_compute_time_at_slot
+    bnez    a0, 9f
+    mv      a0, s1                          # prev_randao: the mix of the current epoch
+    addi    a1, sp, L
+    call    lantern_get_current_epoch
+    bnez    a0, 9f
+    mv      a0, s1
+    addi    a1, sp, L
+    addi    a2, s5, PayloadAttributes_prev_randao
+    call    lantern_get_randao_mix
+    bnez    a0, 9f
+    li      t0, 0                           # the fee recipient a byte at a time, then 4 zero bytes
+1:  add     t1, s2, t0
+    lbu     t2, 0(t1)
+    add     t1, s5, t0
+    sb      t2, PayloadAttributes_suggested_fee_recipient(t1)
+    addi    t0, t0, 1
+    li      t1, 20
+    bltu    t0, t1, 1b
+    sw      zero, (PayloadAttributes_suggested_fee_recipient + 20)(s5)
+    sd      zero, (PayloadAttributes_parent_beacon_block_root + 0)(s5)
+    sd      zero, (PayloadAttributes_parent_beacon_block_root + 8)(s5)
+    sd      zero, (PayloadAttributes_parent_beacon_block_root + 16)(s5)
+    sd      zero, (PayloadAttributes_parent_beacon_block_root + 24)(s5)
+    sd      zero, PayloadAttributes_withdrawals(s5)
+.if FORK >= FORK_DENEB
+    ADDRESS a0, lantern_type_BeaconBlockHeader  # parent_beacon_block_root = hash_tree_root(state.latest_block_header)
+    ADDQ    a1, s1, BeaconState_latest_block_header
+    mv      a2, s4
+    addi    a3, s5, PayloadAttributes_parent_beacon_block_root
+    CALL_GLOBAL ssz_hash_tree_root
+    bnez    a0, 9f
+.endif
+.if FORK >= FORK_CAPELLA
+    ld      s6, 0(s4)                       # get_expected_withdrawals, its value at the end of scratch
+    li      t0, EXPECTED_SCRATCH + SWEEP_BYTES
+    bltu    s6, t0, 8f
+    li      t0, SWEEP_BYTES
+    sub     t0, s6, t0
+    add     s7, s4, t0
+    sd      t0, 0(s4)
+    mv      a0, s1
+    mv      a1, s4
+    mv      a2, s7
+    call    lantern_get_expected_withdrawals
+    sd      s6, 0(s4)
+    bnez    a0, 9f
+    ld      t3, (16 + LIST_COUNT)(s7)
+    sd      t3, PayloadAttributes_withdrawals(s5)
+    addi    t4, s7, 16 + LIST_FIXED
+    addi    t5, s5, PAYLOAD_ATTRIBUTES_WITHDRAWAL
+2:  beqz    t3, 4f                          # each withdrawal: its 44 SSZ bytes, a word at a time
+    li      t0, 0
+3:  add     t1, t4, t0
+    lwu     t2, 0(t1)
+    add     t1, t5, t0
+    sw      t2, 0(t1)
+    addi    t0, t0, 4
+    li      t1, 36
+    bltu    t0, t1, 3b
+    lwu     t2, Withdrawal_amount(t4)
+    sw      t2, 36(t5)
+    lwu     t2, (Withdrawal_amount + 4)(t4)
+    sw      t2, 40(t5)
+    addi    t4, t4, Withdrawal__mem
+    addi    t5, t5, PAYLOAD_ATTRIBUTES_WITHDRAWAL_SIZE
+    addi    t3, t3, -1
+    j       2b
+4:
+.endif
+    li      a0, LANTERN_OK
+9:  LEAVE 16
+8:  li      a0, LANTERN_BUFFER_TOO_SMALL
+    LEAVE 16
+SPEC_END get_payload_attributes
+
 .endif

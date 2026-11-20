@@ -226,6 +226,46 @@ def payload_attributes(spec, fork, rng):
         yield raw, o
 
 
+def attribute_raw(spec, fork, a):
+    """The PayloadAttributes bytes of engine-api.md for the spec's PayloadAttributes a."""
+    f = FORKS.index(fork)
+    withdrawals = list(a.withdrawals) if f >= FORKS.index("capella") else []
+    return (int(a.timestamp).to_bytes(8, "little") + bytes(a.prev_randao) + bytes(a.suggested_fee_recipient) + bytes(4)
+            + (bytes(a.parent_beacon_block_root) if f >= FORKS.index("deneb") else bytes(32))
+            + len(withdrawals).to_bytes(8, "little") + b"".join(spec.Withdrawal.encode_bytes(w) for w in withdrawals))
+
+
+def attribute_cases(fork, preset, cases):
+    """payload_attributes: the attributes that the spec's prepare_execution_payload gives the
+    execution engine, for the pre states of the spec's operations cases of execution_payload and
+    withdrawals (cases: (name, parts)), each at a block's slot, with random fee recipients. Bellatrix
+    states before the merge are left out: prepare_execution_payload asks the PoW chain there."""
+    import random
+    f = FORKS.index(fork)
+    if f < FORKS.index("bellatrix"):
+        return
+    spec = __import__(f"eth_consensus_specs.{fork}.{preset}", fromlist=["*"])
+    rng = random.Random(f"attributes-{fork}-{preset}")
+
+    class Engine:
+        def notify_forkchoice_updated(self, head_block_hash, safe_block_hash, finalized_block_hash, payload_attributes):
+            self.attributes = payload_attributes
+
+    for name, parts in cases:
+        state = spec.BeaconState.decode_bytes(parts["pre"])
+        if f == FORKS.index("bellatrix") and not spec.is_merge_transition_complete(state):
+            continue
+        fee = spec.ExecutionAddress(bytes(rng.getrandbits(8) for _ in range(20)))
+        engine = Engine()
+        inputs = {"state": parts["pre"], "fee_recipient": bytes(fee)}
+        try:
+            spec.prepare_execution_payload(state, spec.Hash32(), spec.Hash32(), fee, engine)
+        except (AssertionError, ValueError, OverflowError):
+            yield "payload_attributes", name, {"input": inputs, "output": "invalid"}
+            continue
+        yield "payload_attributes", name, {"input": inputs, "output": attribute_raw(spec, fork, engine.attributes)}
+
+
 def ssz_list(items):
     """The SSZ bytes of a list of variable size items: an offset each, then the items."""
     head = 4 * len(items)

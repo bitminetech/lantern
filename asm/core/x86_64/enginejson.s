@@ -676,4 +676,101 @@ SPEC_FUNCTION engine_get_payload
     LEAVE 0
 SPEC_END engine_get_payload
 
+.if FORK >= FORK_CAPELLA
+.if Withdrawal_index != 0 || Withdrawal_validator_index != 8
+.error "get_payload_attributes copies index and validator_index as the first 16 bytes of a Withdrawal"
+.endif
+.endif
+
+/*
+ * (state, fee_recipient, config, scratch, out): rbx state, rbp fee_recipient, r12 config, r13
+ * scratch, r14 out, r15 the ExpectedWithdrawals. Locals: L the current epoch, L+8 the scratch size.
+ */
+SPEC_FUNCTION get_payload_attributes
+    ENTER 16
+    mov     %rdi, %rbx
+    mov     %rsi, %rbp
+    mov     %rdx, %r12
+    mov     %rcx, %r13
+    mov     %r8, %r14
+    lea     BeaconState_genesis_time(%rbx), %rdi
+    lea     BeaconState_slot(%rbx), %rsi
+    mov     %r12, %rdx
+    lea     PayloadAttributes_timestamp(%r14), %rcx
+    call    lantern_compute_time_at_slot
+    test    %rax, %rax
+    jnz     9f
+    mov     %rbx, %rdi                      # prev_randao: the mix of the current epoch
+    lea     L(%rsp), %rsi
+    call    lantern_get_current_epoch
+    test    %rax, %rax
+    jnz     9f
+    mov     %rbx, %rdi
+    lea     L(%rsp), %rsi
+    lea     PayloadAttributes_prev_randao(%r14), %rdx
+    call    lantern_get_randao_mix
+    test    %rax, %rax
+    jnz     9f
+    mov     (%rbp), %rax                    # the fee recipient, then 4 zero bytes
+    mov     8(%rbp), %rcx
+    mov     16(%rbp), %edx
+    mov     %rax, PayloadAttributes_suggested_fee_recipient(%r14)
+    mov     %rcx, (PayloadAttributes_suggested_fee_recipient + 8)(%r14)
+    mov     %rdx, (PayloadAttributes_suggested_fee_recipient + 16)(%r14)
+    pxor    %xmm0, %xmm0
+    movdqu  %xmm0, PayloadAttributes_parent_beacon_block_root(%r14)
+    movdqu  %xmm0, (PayloadAttributes_parent_beacon_block_root + 16)(%r14)
+    movq    $0, PayloadAttributes_withdrawals(%r14)
+.if FORK >= FORK_DENEB
+    # parent_beacon_block_root = hash_tree_root(state.latest_block_header)
+    ADDRESS %rdi, lantern_type_BeaconBlockHeader
+    lea     BeaconState_latest_block_header(%rbx), %rsi
+    mov     %r13, %rdx
+    lea     PayloadAttributes_parent_beacon_block_root(%r14), %rcx
+    CALL_GLOBAL ssz_hash_tree_root
+    test    %rax, %rax
+    jnz     9f
+.endif
+.if FORK >= FORK_CAPELLA
+    mov     (%r13), %rax                    # get_expected_withdrawals, its value at the end of scratch
+    mov     %rax, (L + 8)(%rsp)
+    cmp     $(EXPECTED_SCRATCH + SWEEP_BYTES), %rax
+    jb      8f
+    sub     $SWEEP_BYTES, %rax
+    lea     (%r13,%rax), %r15
+    mov     %rax, (%r13)
+    mov     %rbx, %rdi
+    mov     %r13, %rsi
+    mov     %r15, %rdx
+    call    lantern_get_expected_withdrawals
+    mov     (L + 8)(%rsp), %rcx
+    mov     %rcx, (%r13)
+    test    %rax, %rax
+    jnz     9f
+    mov     (16 + LIST_COUNT)(%r15), %rcx
+    mov     %rcx, PayloadAttributes_withdrawals(%r14)
+    lea     (16 + LIST_FIXED)(%r15), %rsi
+    lea     PAYLOAD_ATTRIBUTES_WITHDRAWAL(%r14), %rdi
+1:  test    %rcx, %rcx                      # each withdrawal: its 44 SSZ bytes
+    jz      2f
+    movdqu  (%rsi), %xmm0
+    movdqu  %xmm0, (%rdi)
+    movdqu  Withdrawal_address(%rsi), %xmm0
+    movdqu  %xmm0, 16(%rdi)
+    mov     (Withdrawal_address + 16)(%rsi), %eax
+    mov     %eax, 32(%rdi)
+    mov     Withdrawal_amount(%rsi), %rax
+    mov     %rax, 36(%rdi)
+    add     $Withdrawal__mem, %rsi
+    add     $PAYLOAD_ATTRIBUTES_WITHDRAWAL_SIZE, %rdi
+    dec     %rcx
+    jmp     1b
+2:
+.endif
+    xor     %eax, %eax
+9:  LEAVE 16
+8:  mov     $LANTERN_BUFFER_TOO_SMALL, %eax
+    LEAVE 16
+SPEC_END get_payload_attributes
+
 .endif

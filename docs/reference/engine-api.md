@@ -11,6 +11,7 @@
 - [`lantern_engine_get_payload`](#function-lantern_engine_get_payload): the JSON-RPC request of engine_getPayload.
 - [`lantern_engine_json_decode`](#function-lantern_engine_json_decode): the SSZ encoding of a value from its Engine API JSON.
 - [`lantern_get_execution_requests`](#function-lantern_get_execution_requests): the `ExecutionRequests` of the request lists of an engine_getPayload result.
+- [`lantern_get_payload_attributes`](#function-lantern_get_payload_attributes): the payload attributes of a state at the slot of a block to propose.
 - [`lantern_engine_exchange_capabilities`](#function-lantern_engine_exchange_capabilities): the JSON-RPC request of engine_exchangeCapabilities.
 - [`lantern_engine_parse_response`](#function-lantern_engine_parse_response): the result of a JSON-RPC response.
 - [`lantern_jwt_token`](#function-lantern_jwt_token): the JWT of an Engine API request.
@@ -37,7 +38,7 @@
 - The node calls four methods: engine_exchangeCapabilities, engine_newPayload, engine_forkchoiceUpdated (with null payload attributes, or with them for a payload it builds for a proposer) and engine_getPayload.
 - The versions follow the fork of the block: bellatrix engine_newPayloadV1, engine_forkchoiceUpdatedV1 (`PayloadAttributesV1`) and engine_getPayloadV1; capella V2, V2 (`PayloadAttributesV2`) and V2; deneb V3, V3 (`PayloadAttributesV3`) and V3; electra engine_newPayloadV4, engine_forkchoiceUpdatedV3 and engine_getPayloadV4; fulu engine_newPayloadV4, engine_forkchoiceUpdatedV3 and engine_getPayloadV5 (osaka.md: `BlobsBundleV2`).
 - JSON is written compact, with no spaces, in the field order of the spec's lists. A `QUANTITY` is lowercase hex with no leading zeros, `0x0` for zero; `DATA` is lowercase hex, two digits a byte.
-- lantern_get_execution_requests_list, lantern_get_execution_requests, lantern_engine_new_payload_size, lantern_engine_new_payload, lantern_engine_forkchoice_updated and lantern_engine_get_payload read the fork's layouts, and are in the objects of bellatrix and later (electra and later for the first two). lantern_engine_exchange_capabilities, lantern_engine_parse_response, lantern_jwt_token, lantern_http_post and lantern_http_parse_response read no fork's layouts. Each is in the common object of the core (asm/core/<ISA>/common.s), and its symbol is its name.
+- lantern_get_execution_requests_list, lantern_get_execution_requests, lantern_engine_new_payload_size, lantern_engine_new_payload, lantern_engine_forkchoice_updated, lantern_engine_get_payload and lantern_get_payload_attributes read the fork's layouts, and are in the objects of bellatrix and later (electra and later for the first two). lantern_engine_exchange_capabilities, lantern_engine_parse_response, lantern_jwt_token, lantern_http_post and lantern_http_parse_response read no fork's layouts. Each is in the common object of the core (asm/core/<ISA>/common.s), and its symbol is its name.
 
 ## Test vectors
 
@@ -45,6 +46,7 @@
   - Requests: random blocks of the fork from the spec's `debug/random_value.py`, in each of its modes, and the JSON that the encoding rules of `common.md` give for them, with `kzg_commitment_to_versioned_hash` and `get_execution_requests_list` of the spec module.
   - Responses: JSON-RPC responses of each method that Python's `json` module writes with several spacings and member orders, with members the parser ignores, and with values the spec does not allow.
   - Payload attributes: random `PayloadAttributes` of the fork, as engine_forkchoiceUpdated requests with the fork's `PayloadAttributesVn`.
+  - Payload attributes of states, `<preset>-<fork>-engine-payload_attributes.bin`: the pre states of the spec's operations cases of execution_payload and withdrawals, each at a block's slot, with random fee recipients, and the attributes that the spec's prepare_execution_payload gives the execution engine. Bellatrix states before the merge are left out.
   - getPayload results: random `GetPayloadResult` values of the fork in the JSON of `common.md` (`QUANTITY` and `DATA`, camelCase names), with several spacings, member orders and members the decoder skips; and texts it refuses: a `QUANTITY` with a leading zero, of no digit or past its width, a `DATA` of odd length, a missing or repeated field.
   - Request lists: the `get_execution_requests_list` of random `ExecutionRequests`, and lists the spec's asserts of get_execution_requests reject.
   - JWTs: the token of RFC 7519 with Python's `hmac`, `hashlib` and `base64` modules.
@@ -249,6 +251,46 @@ lantern_get_execution_requests(list, out) -> status
 
 - Argument order: `list`, `out`.
 - Forks: electra and later.
+
+## Function `lantern_get_payload_attributes`
+
+The `PayloadAttributes` of prepare_execution_payload (bellatrix `validator.md`, with the changes of capella and deneb), for a state at the slot of the block to propose.
+
+### Signature
+
+```
+lantern_get_payload_attributes(state, fee_recipient, config, scratch, out) -> status
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `state` | input | `BeaconState`: at the slot of the block |
+| `fee_recipient` | input | `ExecutionAddress`: 20 bytes |
+| `config` | input | `Config` |
+| `scratch` | scratch | `Scratch` |
+| `out` | output | `PayloadAttributes` |
+
+### Returns
+
+- `LANTERN_OK`: `out` holds the attributes.
+- `LANTERN_BUFFER_TOO_SMALL`: `scratch` is short for lantern_get_expected_withdrawals.
+- `LANTERN_INVALID_OVERFLOW`: the time of the slot leaves the Uint64 range.
+- Another `LANTERN_INVALID_*` code: a check of lantern_get_expected_withdrawals failed.
+
+### Function does
+
+- `timestamp`: compute_time_at_slot of `state.genesis_time` and `state.slot`.
+- `prev_randao`: get_randao_mix of the state's current epoch.
+- `suggested_fee_recipient`: `fee_recipient`, then 4 zero bytes.
+- From capella, `withdrawals`: the `withdrawals` of get_expected_withdrawals, each its 44 SSZ bytes; in bellatrix none.
+- From deneb, `parent_beacon_block_root`: hash_tree_root of `state.latest_block_header`; zero before.
+
+### ABI
+
+- Argument order: `state`, `fee_recipient`, `config`, `scratch`, `out`.
+- Forks: bellatrix and later.
 
 ## Function `lantern_engine_exchange_capabilities`
 
