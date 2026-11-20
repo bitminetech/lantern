@@ -2211,6 +2211,8 @@ LOCAL_FUNCTION node_api_event
     beq     a3, t0, 65f
     li      t0, API_OP_GET_BLOCK_V2
     beq     a3, t0, 65f
+    li      t0, API_OP_GET_BLOCK_ATTESTATIONS_V2
+    beq     a3, t0, 65f
     li      t0, API_OP_GET_STATE_ROOT
     beq     a3, t0, 66f
     li      t0, API_OP_GET_STATE_FORK
@@ -2436,6 +2438,8 @@ LOCAL_FUNCTION node_api_event
     li      t0, API_OP_GET_BLOCK_ROOT       # getBlockRoot: the answer at once
     beq     a3, t0, 81f
     li      t0, API_OP_GET_BLOCK_V2
+    beq     a3, t0, 64f
+    li      t0, API_OP_GET_BLOCK_ATTESTATIONS_V2
     beq     a3, t0, 64f
 67: ld      a0, ApiRoute_op(s7)             # a work
     mv      a1, s9
@@ -4335,6 +4339,8 @@ LOCAL_FUNCTION node_api_stream
     beq     t0, t1, 5f
     li      t1, API_OP_GET_BLOCK_V2
     beq     t0, t1, 4f
+    li      t1, API_OP_GET_BLOCK_ATTESTATIONS_V2
+    beq     t0, t1, 4f
     ld      s3, ApiView_look_data(s8)       # a validator stream: its ids, and its state
     beqz    s3, 31f
     ori     s10, s10, API_STREAM_OWN
@@ -4558,6 +4564,8 @@ LOCAL_FUNCTION api_stream_head
 2:  ld      t0, NodeApi_op(s4)              # Eth-Consensus-Version: of getBlockV2 and getStateV2
     li      t1, API_OP_GET_BLOCK_V2
     beq     t0, t1, 21f
+    li      t1, API_OP_GET_BLOCK_ATTESTATIONS_V2
+    beq     t0, t1, 21f
     li      t1, API_OP_GET_STATE_V2
     beq     t0, t1, 21f
     li      t1, API_OP_GET_POOL_ATTESTER_SLASHINGS_V2
@@ -4641,6 +4649,8 @@ LOCAL_FUNCTION api_stream_json
 31: ld      t0, NodeApi_op(s4)              # the validator streams: their items, of the state s3
     li      t1, API_OP_GET_BLOCK_V2
     beq     t0, t1, 1f
+    li      t1, API_OP_GET_BLOCK_ATTESTATIONS_V2
+    beq     t0, t1, 1f
     li      t1, API_OP_GET_STATE_V2
     beq     t0, t1, 1f
     li      t1, API_OP_GET_EPOCH_COMMITTEES
@@ -4659,7 +4669,12 @@ LOCAL_FUNCTION api_stream_json
     sd      t1, 16(t0)
     ld      t1, NodeApi_op(s4)
     addi    t1, t1, -API_OP_GET_STATE_V2
-    seqz    a0, t1                          # NODE_JSON_STATE, else NODE_JSON_BLOCK
+    seqz    a0, t1                          # NODE_JSON_STATE, else NODE_JSON_BLOCK; NODE_JSON_ATTESTATIONS of a block's
+    ld      t1, NodeApi_op(s4)
+    li      t2, API_OP_GET_BLOCK_ATTESTATIONS_V2
+    bne     t1, t2, 121f
+    li      a0, NODE_JSON_ATTESTATIONS
+121:
     mv      a1, s3
     addi    a2, s5, (NodeEvent_api + 16)
     addi    a3, s5, NodeEvent_api_bytes
@@ -4706,6 +4721,8 @@ LOCAL_FUNCTION node_api_chunk_run
     beqz    t0, 98f
     ld      t0, NodeApi_op(s4)
     li      t1, API_OP_GET_BLOCK_V2
+    beq     t0, t1, 1f
+    li      t1, API_OP_GET_BLOCK_ATTESTATIONS_V2
     beq     t0, t1, 1f
     li      t1, API_OP_GET_STATE_V2
     beq     t0, t1, 1f
@@ -4790,6 +4807,40 @@ LOCAL_FUNCTION node_api_chunk_run
     or      t2, t2, t3
     ld      t3, NodeApi_slot(s4)
     bne     t2, t3, 96f
+    ld      t0, NodeApi_op(s4)              # getBlockAttestationsV2: the body's attestations, a ByteList at the end of scratch
+    li      t1, API_OP_GET_BLOCK_ATTESTATIONS_V2
+    bne     t0, t1, 5f
+    ld      t4, (L + 8)(sp)
+    ld      t5, (L + 16)(sp)
+    lwu     t0, 0(t4)                       # the message
+    addi    t1, t0, 84
+    bgtu    t1, t5, 96f
+    add     t1, t4, t0
+    lwu     t2, 80(t1)                      # its body
+    add     t0, t0, t2
+    addi    t1, t0, 216
+    bgtu    t1, t5, 96f
+    add     t1, t4, t0
+    lwu     t2, 208(t1)                     # the list: from attestations to deposits
+    lwu     t3, 212(t1)
+    bgtu    t2, t3, 96f
+    add     t3, t0, t3
+    bgtu    t3, t5, 96f
+    add     t2, t0, t2
+    sub     t3, t3, t2
+    ld      t1, (L + 56)(sp)
+    ld      t0, 0(t1)
+    li      t5, 64
+    bltu    t0, t5, 97f
+    addi    t0, t0, -32
+    add     t1, t1, t0                      # its ByteList: size, an offset that reaches the list, count
+    li      t0, 32
+    sd      t0, 0(t1)
+    add     t2, t4, t2
+    sub     t2, t2, t1
+    sd      t2, 8(t1)
+    sd      t3, 16(t1)
+    mv      s3, t1
 5:  ld      t0, NodeApi_sent(s4)            # the entry's sent, flags and cursor go on in the event
     sd      t0, NodeEvent_api(s5)
     ld      t0, NodeApi_flags(s4)

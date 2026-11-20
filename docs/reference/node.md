@@ -174,6 +174,7 @@
   - For each valid block of the case the node holds: getBlockHeader of its root must answer 200, with `canonical` true when it is on the chain, else false.
   - For each slot from the anchor's to the head's, at most `SLOTS_PER_HISTORICAL_ROOT` below the head's: getStateRoot of the state root of that slot (the head's post-state's hash_tree_root, or its `state_roots` entry) must answer that root; or 404, for a slot below that of the block of the store's finalized root.
   - getBlockV2 of `head` as SSZ must answer 200 with the SSZ bytes of the case's head block, and as JSON with `version` the name of the fork of its slot and a `data` that lantern_json_decode of the fork's `SignedBeaconBlock` gives as those bytes. A head that is the case's anchor must answer 404.
+  - getBlockAttestationsV2 of `head` must answer 200 with `Eth-Consensus-Version` and `version` the name of the fork of its slot and a `data` that lantern_json_decode of the fork's `Attestations` gives as the bytes of the body's `attestations` of the head block; 404 for the anchor. As getBlockV2, in chunks of `NODE_API_CHUNK` and of 2048 bytes.
   - getStateV2 of `head` as SSZ must answer 200 with lantern_node_state_bytes of the post-state the node keeps for the head, and as JSON with a `data` that lantern_json_decode of the fork's `BeaconState` gives as those bytes.
   - Each a second time with 2048 bytes of room for each chunk, or a 128th of the state's SSZ bytes when that is more.
 - Lantern's cases `<preset>-<fork>-node-events.bin` of altair to fulu, made by tests/generator/node.py with the pinned spec: one for each `fork_choice-get_head` and `fork_choice-on_block` case, named after its handler and its name, `get_head/` or `on_block/` and the case's name. Its part `events` is a list with the text of the events (beacon-api.md, eventstream) the node must send in each step of the case, from a replay of the steps with the spec module:
@@ -437,7 +438,7 @@ lantern_node_step(node, store, p2p, tick, events, scratch, actions, result) -> s
 - `NODE_EV_WORK_DONE` of `NODE_WORK_API_LOOKUP`, of the `NodeApi` entry at index `arg`: the entry ends. Without `API_STREAM_GONE`: with a slot at `NodeEvent_index`, the answer of the entry's operation for the `state_id` of that slot, as for a `NODE_EV_API` with its answer flags, `statuses`, `validator`, `epoch`, `slot`, `index`, `present` and ids, whose `data` the answer takes; with 2^64 - 1 there, the error 404 (and the ids' `NODE_ACT_BYTES_FREE`).
   - Every other operation: 501.
 - A stream: the first free `NodeApi` entry, else the next, with the connection, the operation, the answer flags (`API_STREAM_CLOSE`, `API_STREAM_HTTP10`), `API_STREAM_SSZ` for `response` `API_TYPE_SSZ`, `API_STREAM_OPTIMISTIC` and `API_STREAM_FINALIZED` as beacon-api.md gives `execution_optimistic` and `finalized`, the slot of the block or the state and its fork, and `sent` and `cursor` zero; then a `NODE_WORK_API_CHUNK` of it, and `API_STREAM_BUSY`.
-  - getBlockV2: `data` the block's bytes; with none, the error 404 and no stream.
+  - getBlockV2 and getBlockAttestationsV2: `data` the block's bytes; with none, the error 404 and no stream.
   - getStateV2: a `NODE_ACT_STATE_BYTES` of the state (the copy at its slot, then the copy's `NODE_ACT_STATE_FREE`) to a new id, which is `data`, with `API_STREAM_OWN`.
   - The pending streams: `state` the state's id, with `API_STREAM_OWN_STATE` when it is the lookup's copy; `data` 0; `fork` the fork of the state's slot.
   - The five validator streams: `state` the state's id, with `API_STREAM_OWN_STATE` when it is the lookup's copy; the route's `statuses` at byte 8 of `cursor`; with `id` items, `data` a `NODE_ACT_BYTES_PUT` of the route's list of `ValidatorRef` items to a new id, with `API_STREAM_OWN`; else `data` 0.
@@ -559,7 +560,7 @@ lantern_node_run(node, store, seen, work, state_a, state_b, state_c, data, setti
   - The pool streams: the head and `{"data":[` (getPoolAttesterSlashingsV2 and getPoolAttestationsV2: `{"version":"<fork>","data":[`, the fork `fork`); then, with `data`, the JSON of the bytes of the pool entry at `slot` by lantern_node_json of the entry's fork (`sent`) and the kind of the GET's topic, from `cursor`, after `,` when `API_STREAM_ITEMS` is set; once it is whole, `API_STREAM_ITEMS` and `API_STREAM_ITEM_DONE` in the event. With `data` 0: `]}`, and `API_STREAM_DONE`. A chunk holds the JSON of one entry at most.
   - getPoolAttestationsV2, an entry of a fork from electra: its bytes are a `SingleAttestation`, and the JSON is that of the electra `Attestation` of it, written at the end of `scratch` (`NODE_POOL_ATTESTATION_ROOM`, 1024 bytes): `aggregation_bits` of the committee's length (`member` / 2^16) with the bit at the attester's place (`member` % 2^16), its `data` and `signature`, and `committee_bits` with the bit of its `committee_index`, as the spec's aggregation of a single attester gives it. Bytes that are no `SingleAttestation`, a member of a place not below the length or of a length above `MAX_VALIDATORS_PER_COMMITTEE`, and a `committee_index` not below `MAX_COMMITTEES_PER_SLOT` give the result `LANTERN_INVALID_ENCODING`.
   - SSZ: the bytes of `data` from `sent`; `sent` counts them.
-  - JSON: the body's start, then lantern_json_encode_ssz of `cursor` (lantern_node_json of the fork of the entry, `SignedBeaconBlock` for getBlockV2 and `BeaconState` for getStateV2), then `}` once the cursor is whole. A first chunk that holds the whole body has `Content-Length`; else, with `API_STREAM_HTTP10`, it sets `API_STREAM_CLOSE`, and else `API_STREAM_CHUNKED`, and each chunk then holds the body's bytes in one chunk of RFC 9112 section 7.1, the last also `0` CRLF CRLF.
+  - JSON: the body's start, then lantern_json_encode_ssz of `cursor` (lantern_node_json of the fork of the entry, `SignedBeaconBlock` for getBlockV2 and `BeaconState` for getStateV2), then `}` once the cursor is whole. getBlockAttestationsV2: the fork's `Attestations` (`NODE_JSON_ATTESTATIONS`) of the bytes of the body's `attestations` in `data`, the same in every fork: the message from the 4-byte offset at byte 0, its body from the offset at byte 80 of the message, the list from the offset at byte 208 of the body to the offset at byte 212 (`deposits`). Offsets past the bytes or out of order give the result `LANTERN_INVALID_ENCODING`. A first chunk that holds the whole body has `Content-Length`; else, with `API_STREAM_HTTP10`, it sets `API_STREAM_CLOSE`, and else `API_STREAM_CHUNKED`, and each chunk then holds the body's bytes in one chunk of RFC 9112 section 7.1, the last also `0` CRLF CRLF.
   - The chunk that ends the body sets `API_STREAM_DONE`.
 - Bytes too short for their type give the result `LANTERN_INVALID_ENCODING`.
 
@@ -1464,14 +1465,14 @@ lantern_node_json(kind, ssz, cursor, out) -> status
 
 | Name | Role | Type |
 |---|---|---|
-| `kind` | input | u64: `NODE_JSON_BLOCK` (0) `SignedBeaconBlock`, `NODE_JSON_STATE` (1) `BeaconState`, `NODE_JSON_EXIT` (2) `SignedVoluntaryExit`, `NODE_JSON_PROPOSER_SLASHING` (3) `ProposerSlashing`, `NODE_JSON_ATTESTER_SLASHING` (4) `AttesterSlashing`, `NODE_JSON_BLS_CHANGE` (5) `SignedBLSToExecutionChange` |
+| `kind` | input | u64: `NODE_JSON_BLOCK` (0) `SignedBeaconBlock`, `NODE_JSON_STATE` (1) `BeaconState`, `NODE_JSON_EXIT` (2) `SignedVoluntaryExit`, `NODE_JSON_PROPOSER_SLASHING` (3) `ProposerSlashing`, `NODE_JSON_ATTESTER_SLASHING` (4) `AttesterSlashing`, `NODE_JSON_BLS_CHANGE` (5) `SignedBLSToExecutionChange`, `NODE_JSON_ATTESTATION` (6) `Attestation`, `NODE_JSON_SINGLE_ATTESTATION` (7) `SingleAttestation`, `NODE_JSON_ATTESTATIONS` (8) `Attestations` |
 | `ssz` | input | ByteList: a valid SSZ encoding of the type |
 | `cursor` | state | `JsonCursor` of [beacon-api.md](beacon-api.md#type-jsoncursor) |
 | `out` | output | ByteList |
 
 ### Returns
 
-- As lantern_json_encode_ssz; `LANTERN_INVALID_EVENT` for another `kind`, or for a type the fork does not have (`SignedBLSToExecutionChange` before capella).
+- As lantern_json_encode_ssz; `LANTERN_INVALID_EVENT` for another `kind`, or for a type the fork does not have (`SignedBLSToExecutionChange` before capella, `SingleAttestation` before electra).
 
 ### Function does
 

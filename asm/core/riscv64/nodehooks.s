@@ -657,6 +657,9 @@ LOCAL_FUNCTION node_type_of_kind
     ADDRESS a0, lantern_type_Attestation
     li      t1, NODE_JSON_ATTESTATION
     beq     t0, t1, 9f
+    ADDRESS a0, lantern_type_Attestations
+    li      t1, NODE_JSON_ATTESTATIONS
+    beq     t0, t1, 9f
 .if FORK >= FORK_ELECTRA
     ADDRESS a0, lantern_type_SingleAttestation
     li      t1, NODE_JSON_SINGLE_ATTESTATION

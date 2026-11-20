@@ -301,6 +301,7 @@
     \m SignedAggregateAndProof
     \m AggregateAndProof
     \m Attestation
+    \m Attestations
     \m AttesterSlashing
     \m IndexedAttestation
     .if FORK >= FORK_ELECTRA

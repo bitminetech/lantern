@@ -2175,6 +2175,8 @@ LOCAL_FUNCTION node_api_event
     b.eq    65f
     cmp     x3, #API_OP_GET_BLOCK_V2
     b.eq    65f
+    cmp     x3, #API_OP_GET_BLOCK_ATTESTATIONS_V2
+    b.eq    65f
     cmp     x3, #API_OP_GET_STATE_ROOT
     b.eq    66f
     cmp     x3, #API_OP_GET_STATE_FORK
@@ -2399,6 +2401,8 @@ LOCAL_FUNCTION node_api_event
     cmp     x3, #API_OP_GET_BLOCK_ROOT      /* getBlockRoot: the answer at once */
     b.eq    81f
     cmp     x3, #API_OP_GET_BLOCK_V2
+    b.eq    64f
+    cmp     x3, #API_OP_GET_BLOCK_ATTESTATIONS_V2
     b.eq    64f
 67: ldr     x0, [x25, #ApiRoute_op]         /* a work */
     mov     x1, x27
@@ -4277,6 +4281,8 @@ LOCAL_FUNCTION node_api_stream
     b.eq    5f
     cmp     x9, #API_OP_GET_BLOCK_V2
     b.eq    4f
+    cmp     x9, #API_OP_GET_BLOCK_ATTESTATIONS_V2
+    b.eq    4f
     ldr     x21, [x26, #ApiView_look_data]  /* a validator stream: its ids, and its state */
     cbz     x21, 31f
     orr     x28, x28, #API_STREAM_OWN
@@ -4485,6 +4491,8 @@ LOCAL_FUNCTION api_stream_head
 2:  ldr     x9, [x22, #NodeApi_op]          /* Eth-Consensus-Version: of getBlockV2 and getStateV2 */
     cmp     x9, #API_OP_GET_BLOCK_V2
     b.eq    21f
+    cmp     x9, #API_OP_GET_BLOCK_ATTESTATIONS_V2
+    b.eq    21f
     cmp     x9, #API_OP_GET_STATE_V2
     b.eq    21f
     cmp     x9, #API_OP_GET_POOL_ATTESTER_SLASHINGS_V2
@@ -4566,6 +4574,8 @@ LOCAL_FUNCTION api_stream_json
     UNFRAME 0
 31: cmp     x9, #API_OP_GET_BLOCK_V2
     b.eq    1f
+    cmp     x9, #API_OP_GET_BLOCK_ATTESTATIONS_V2
+    b.eq    1f
     cmp     x9, #API_OP_GET_STATE_V2
     b.eq    1f
     cmp     x9, #API_OP_GET_EPOCH_COMMITTEES
@@ -4583,7 +4593,10 @@ LOCAL_FUNCTION api_stream_json
     str     x10, [x9, #16]
     ldr     x9, [x22, #NodeApi_op]
     cmp     x9, #API_OP_GET_STATE_V2
-    cset    x0, eq                          /* NODE_JSON_STATE, else NODE_JSON_BLOCK */
+    cset    x0, eq                          /* NODE_JSON_STATE, else NODE_JSON_BLOCK; NODE_JSON_ATTESTATIONS of a block's */
+    cmp     x9, #API_OP_GET_BLOCK_ATTESTATIONS_V2
+    mov     x10, #NODE_JSON_ATTESTATIONS
+    csel    x0, x10, x0, eq
     mov     x1, x21
     add     x2, x23, #(NodeEvent_api + 16)
     add     x3, x23, #NodeEvent_api_bytes
@@ -4630,6 +4643,8 @@ LOCAL_FUNCTION node_api_chunk_run
     cbz     x9, 98f
     ldr     x9, [x22, #NodeApi_op]
     cmp     x9, #API_OP_GET_BLOCK_V2
+    b.eq    1f
+    cmp     x9, #API_OP_GET_BLOCK_ATTESTATIONS_V2
     b.eq    1f
     cmp     x9, #API_OP_GET_STATE_V2
     b.eq    1f
@@ -4713,6 +4728,42 @@ LOCAL_FUNCTION node_api_chunk_run
     ldr     x12, [x22, #NodeApi_slot]
     cmp     x11, x12
     b.ne    96f
+    ldr     x13, [x22, #NodeApi_op]         /* getBlockAttestationsV2: the body's attestations, a ByteList at the end of scratch */
+    cmp     x13, #API_OP_GET_BLOCK_ATTESTATIONS_V2
+    b.ne    5f
+    ldp     x9, x10, [sp, #(L + 8)]
+    ldr     w11, [x9]                       /* the message */
+    add     x12, x11, #84
+    cmp     x12, x10
+    b.hi    96f
+    add     x12, x9, x11
+    ldr     w13, [x12, #80]                 /* its body */
+    add     x11, x11, x13
+    add     x12, x11, #216
+    cmp     x12, x10
+    b.hi    96f
+    add     x12, x9, x11
+    ldr     w13, [x12, #208]                /* the list: from attestations to deposits */
+    ldr     w14, [x12, #212]
+    cmp     x13, x14
+    b.hi    96f
+    add     x14, x11, x14
+    cmp     x14, x10
+    b.hi    96f
+    add     x13, x11, x13
+    sub     x14, x14, x13
+    ldr     x15, [sp, #(L + 48)]
+    ldr     x12, [x15]
+    cmp     x12, #64
+    b.lo    97f
+    sub     x12, x12, #32
+    add     x15, x15, x12                   /* its ByteList: size, an offset that reaches the list, count */
+    mov     x12, #32
+    str     x12, [x15]
+    add     x12, x9, x13
+    sub     x12, x12, x15
+    stp     x12, x14, [x15, #8]
+    mov     x21, x15
 5:  ldr     x9, [x22, #NodeApi_sent]        /* the entry's sent, flags and cursor go on in the event */
     str     x9, [x23, #NodeEvent_api]
     ldr     x9, [x22, #NodeApi_flags]

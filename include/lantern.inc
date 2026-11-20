@@ -1063,6 +1063,7 @@
 .set NODE_JSON_BLS_CHANGE, 5             /* a SignedBLSToExecutionChange, from capella */
 .set NODE_JSON_ATTESTATION, 6            /* an Attestation */
 .set NODE_JSON_SINGLE_ATTESTATION, 7     /* a SingleAttestation, from electra */
+.set NODE_JSON_ATTESTATIONS, 8           /* an Attestations list, a block body's */
 .set NodePool_topic, 0                   /* NodePool (node.md): GOSSIP_* of the operation; 0 for a free entry */
 .set NodePool_state, 8                   /* NODE_POOL_* */
 .set NodePool_data_id, 16                /* the BufferId of its SSZ bytes */

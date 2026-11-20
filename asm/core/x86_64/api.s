@@ -2129,6 +2129,8 @@ LOCAL_FUNCTION node_api_event
     je      65f
     cmp     $API_OP_GET_BLOCK_V2, %rcx
     je      65f
+    cmp     $API_OP_GET_BLOCK_ATTESTATIONS_V2, %rcx
+    je      65f
     cmp     $API_OP_GET_STATE_ROOT, %rcx
     je      66f
     cmp     $API_OP_GET_STATE_FORK, %rcx
@@ -2381,6 +2383,8 @@ LOCAL_FUNCTION node_api_event
     cmp     $API_OP_GET_BLOCK_ROOT, %rcx    # getBlockRoot: the answer at once
     je      81f
     cmp     $API_OP_GET_BLOCK_V2, %rcx
+    je      64f
+    cmp     $API_OP_GET_BLOCK_ATTESTATIONS_V2, %rcx
     je      64f
 67: mov     S7(%rsp), %rax                  # a work
     mov     ApiRoute_op(%rax), %rdi
@@ -4332,6 +4336,8 @@ LOCAL_FUNCTION node_api_stream
     je      5f
     cmpq    $API_OP_GET_BLOCK_V2, ApiRoute_op(%rsi)
     je      4f
+    cmpq    $API_OP_GET_BLOCK_ATTESTATIONS_V2, ApiRoute_op(%rsi)
+    je      4f
     mov     ApiView_look_data(%rcx), %r12   # a validator stream: its ids, and its state
     test    %r12, %r12
     jz      31f
@@ -4561,6 +4567,8 @@ LOCAL_FUNCTION api_stream_head
 1:  API_LIT api_type
 2:  cmpq    $API_OP_GET_BLOCK_V2, NodeApi_op(%rbx)  # Eth-Consensus-Version: of getBlockV2 and getStateV2
     je      21f
+    cmpq    $API_OP_GET_BLOCK_ATTESTATIONS_V2, NodeApi_op(%rbx)
+    je      21f
     cmpq    $API_OP_GET_STATE_V2, NodeApi_op(%rbx)
     je      21f
     cmpq    $API_OP_GET_POOL_ATTESTER_SLASHINGS_V2, NodeApi_op(%rbx)
@@ -4641,6 +4649,8 @@ LOCAL_FUNCTION api_stream_json
     UNFRAME 0
 31: cmpq    $API_OP_GET_BLOCK_V2, NodeApi_op(%rbx)  # the validator streams: their items, of the state rdi
     je      1f
+    cmpq    $API_OP_GET_BLOCK_ATTESTATIONS_V2, NodeApi_op(%rbx)
+    je      1f
     cmpq    $API_OP_GET_STATE_V2, NodeApi_op(%rbx)
     je      1f
     cmpq    $API_OP_GET_EPOCH_COMMITTEES, NodeApi_op(%rbx)
@@ -4659,9 +4669,13 @@ LOCAL_FUNCTION api_stream_json
     sub     $24, %rax
     mov     %rax, 16(%rsi)
     mov     %rdi, %rsi
-    xor     %edi, %edi                      # NODE_JSON_STATE, else NODE_JSON_BLOCK
+    xor     %edi, %edi                      # NODE_JSON_STATE, else NODE_JSON_BLOCK; NODE_JSON_ATTESTATIONS of a block's
     cmpq    $API_OP_GET_STATE_V2, NodeApi_op(%rbx)
     sete    %dil
+    cmpq    $API_OP_GET_BLOCK_ATTESTATIONS_V2, NodeApi_op(%rbx)
+    jne     121f
+    mov     $NODE_JSON_ATTESTATIONS, %edi
+121:
     lea     (NodeEvent_api + 16)(%rbp), %rdx
     lea     NodeEvent_api_bytes(%rbp), %rcx
     mov     NodeApi_fork(%rbx), %r10
@@ -4707,6 +4721,8 @@ LOCAL_FUNCTION node_api_chunk_run
     je      98f
     mov     NodeApi_op(%rbx), %rax
     cmp     $API_OP_GET_BLOCK_V2, %rax
+    je      1f
+    cmp     $API_OP_GET_BLOCK_ATTESTATIONS_V2, %rax
     je      1f
     cmp     $API_OP_GET_STATE_V2, %rax
     je      1f
@@ -4790,6 +4806,39 @@ LOCAL_FUNCTION node_api_chunk_run
     mov     (%rsi,%rcx), %rsi
     cmp     NodeApi_slot(%rbx), %rsi
     jne     96f
+    cmpq    $API_OP_GET_BLOCK_ATTESTATIONS_V2, NodeApi_op(%rbx)  # getBlockAttestationsV2: the body's attestations, a ByteList at the end of scratch
+    jne     5f
+    mov     (L + 8)(%rsp), %rsi
+    mov     (L + 16)(%rsp), %rdi
+    mov     (%rsi), %eax                    # the message
+    lea     84(%rax), %rcx
+    cmp     %rdi, %rcx
+    ja      96f
+    mov     80(%rsi,%rax), %ecx             # its body
+    add     %rcx, %rax
+    lea     216(%rax), %rcx
+    cmp     %rdi, %rcx
+    ja      96f
+    mov     208(%rsi,%rax), %ecx            # the list: from attestations to deposits
+    mov     212(%rsi,%rax), %edx
+    cmp     %rdx, %rcx
+    ja      96f
+    add     %rax, %rdx
+    cmp     %rdi, %rdx
+    ja      96f
+    add     %rax, %rcx
+    sub     %rcx, %rdx
+    mov     (L + 64)(%rsp), %rax
+    mov     (%rax), %rdi
+    cmp     $64, %rdi
+    jb      97f
+    lea     -32(%rax,%rdi), %rax            # its ByteList: size, an offset that reaches the list, count
+    movq    $32, (%rax)
+    add     %rsi, %rcx
+    sub     %rax, %rcx
+    mov     %rcx, 8(%rax)
+    mov     %rdx, 16(%rax)
+    mov     %rax, (L + 40)(%rsp)
 5:  mov     NodeApi_sent(%rbx), %rax        # the entry's sent, flags and cursor go on in the event
     mov     %rax, NodeEvent_api(%rbp)
     mov     NodeApi_flags(%rbx), %rax

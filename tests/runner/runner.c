@@ -7421,21 +7421,42 @@ static void run_node_api(const char *file, case_file *f) {
     }
 }
 
+/* The bytes of the attestations of a SignedBeaconBlock's body: its message at the offset at byte 0,
+ * the body at the offset at byte 80 of it, the list from the offset at byte 208 of the body to the
+ * offset at 212. 0 for offsets that break those rules. */
+static int body_attestations(const uint8_t *b, uint64_t n, uint64_t *at, uint64_t *len) {
+    if (n < 4) return 0;
+    uint64_t m = (uint64_t)b[0] | (uint64_t)b[1] << 8 | (uint64_t)b[2] << 16 | (uint64_t)b[3] << 24;
+    if (m + 84 > n) return 0;
+    const uint8_t *p = b + m + 80;
+    uint64_t body = m + ((uint64_t)p[0] | (uint64_t)p[1] << 8 | (uint64_t)p[2] << 16 | (uint64_t)p[3] << 24);
+    if (body + 216 > n) return 0;
+    p = b + body + 208;
+    uint64_t a = (uint64_t)p[0] | (uint64_t)p[1] << 8 | (uint64_t)p[2] << 16 | (uint64_t)p[3] << 24;
+    uint64_t d = (uint64_t)p[4] | (uint64_t)p[5] << 8 | (uint64_t)p[6] << 16 | (uint64_t)p[7] << 24;
+    if (a > d || body + d > n) return 0;
+    *at = body + a;
+    *len = d - a;
+    return 1;
+}
+
 /*
  * Node mode, after the steps (docs/reference/node.md, Test vectors): getBlockV2 of head as SSZ, the
  * bytes of a block whose root is the head's, and as JSON, a data that lantern_json_decode gives as
  * those bytes; getStateV2 of head as SSZ, lantern_node_state_bytes of the head's post-state st, and
- * as JSON the same way; each in NODE_API_CHUNK and in chunks of 2048 bytes. A head that is the
- * anchor has no block bytes: 404.
+ * as JSON the same way; getBlockAttestationsV2 of head, a data that lantern_json_decode of the
+ * fork's Attestations gives as the bytes of the block body's attestations; each in NODE_API_CHUNK
+ * and in chunks of 2048 bytes. A head that is the anchor has no block bytes: 404.
  */
 static unsigned long api_heads_streamed; /* the heads whose block and state went as streams */
 static void api_streams_head(fc_node *n, const uint8_t *st, const char **why) {
-    static const char *const reqs[4] = {
+    static const char *const reqs[5] = {
         "GET /eth/v2/beacon/blocks/head HTTP/1.1\r\nHost: lantern\r\nAccept: application/octet-stream\r\n\r\n",
         "GET /eth/v2/beacon/blocks/head HTTP/1.1\r\nHost: lantern\r\n\r\n",
         "GET /eth/v2/debug/beacon/states/head HTTP/1.1\r\nHost: lantern\r\nAccept: application/octet-stream\r\n\r\n",
-        "GET /eth/v2/debug/beacon/states/head HTTP/1.1\r\nHost: lantern\r\n\r\n"};
-    static const char *const types[2] = {"SignedBeaconBlock", "BeaconState"};
+        "GET /eth/v2/debug/beacon/states/head HTTP/1.1\r\nHost: lantern\r\n\r\n",
+        "GET /eth/v2/beacon/blocks/head/attestations HTTP/1.1\r\nHost: lantern\r\n\r\n"};
+    static const char *const types[3] = {"SignedBeaconBlock", "BeaconState", "Attestations"};
     struct node_shell *s = n->shell;
     const uint8_t *head = s->node + NODE_HEAD_ROOT;
     int anchor = !memcmp(head, s->anchor, 32);
@@ -7451,7 +7472,7 @@ static void api_streams_head(fc_node *n, const uint8_t *st, const char **why) {
     if (CALL(LF(node_state_bytes), st, fresh_scratch(), sb, &got) != 0) *why = "lantern_node_state_bytes: status";
     char version[64];
     snprintf(version, sizeof version, "\r\nEth-Consensus-Version: %s\r\n", STR(FORK_NAME));
-    for (int q = 0; q < 4 && !*why; q++)
+    for (int q = 0; q < 5 && !*why; q++)
         for (int r = 0; r < 2 && !*why; r++) {
             static char msg[160];
             uint64_t small = (need - 24) / 128 > 2048 ? ((need - 24) / 128) & ~(uint64_t)7 : 2048; /* some hundreds of chunks */
@@ -7461,12 +7482,12 @@ static void api_streams_head(fc_node *n, const uint8_t *st, const char **why) {
             uint8_t *g = *why ? NULL : api_normalize(s, &glen, why);
             const char *gb = (const char *)g, *end = g ? find_bytes(gb, glen, "\r\n\r\n") : NULL;
             if (*why) break;
-            if (q < 2 && anchor) {
+            if ((q < 2 || q == 4) && anchor) {
                 if (glen < 13 || memcmp(g, "HTTP/1.1 404 ", 13)) *why = "API getBlockV2 of an anchor head is not 404";
             } else if (!end || glen < 17 || memcmp(g, "HTTP/1.1 200 OK\r\n", 17) || !find_bytes(gb, (uint64_t)(end - gb) + 2, version) ||
                        s->api.lasts != 1 || s->api.late) {
-                snprintf(msg, sizeof msg, "API %s of head: not a 200 answer with Eth-Consensus-Version %s", q < 2 ? "getBlockV2" : "getStateV2",
-                         STR(FORK_NAME));
+                snprintf(msg, sizeof msg, "API %s of head: not a 200 answer with Eth-Consensus-Version %s",
+                         q < 2 ? "getBlockV2" : q < 4 ? "getStateV2" : "getBlockAttestationsV2", STR(FORK_NAME));
                 *why = msg;
             } else {
                 const uint8_t *body = (const uint8_t *)end + 4;
@@ -7490,7 +7511,9 @@ static void api_streams_head(fc_node *n, const uint8_t *st, const char **why) {
                     int pl = snprintf(pre, sizeof pre, "{\"version\":\"%s\",\"execution_optimistic\":", STR(FORK_NAME));
                     const char *d = len > (uint64_t)pl ? find_bytes((const char *)body, len, ",\"data\":") : NULL;
                     const uint8_t *ssz = q == 1 ? block : sb + 24;
-                    uint64_t slen = q == 1 ? blen : need - 24;
+                    uint64_t slen = q == 1 ? blen : need - 24, aat = 0;
+                    if (q == 4 && (!block || !body_attestations(block, blen, &aat, &slen))) ssz = NULL; /* the body's attestations */
+                    else if (q == 4) ssz = block + aat;
                     if (!d || memcmp(body, pre, (size_t)pl) || body[len - 1] != '}' || !ssz) {
                         *why = "API JSON of head: not {version, execution_optimistic, finalized, data}";
                     } else {
@@ -7499,9 +7522,9 @@ static void api_streams_head(fc_node *n, const uint8_t *st, const char **why) {
                         uint8_t *out = buffer(osize), *fault = buffer(JSON_FAULT_BYTES);
                         wr64(scr, JSON_DECODE_SCRATCH);
                         wr64(out, osize);
-                        uint64_t js = CALL(lantern_json_decode, type_by_name(types[q / 2]), l, scr, out, fault);
+                        uint64_t js = CALL(lantern_json_decode, type_by_name(types[q == 4 ? 2 : q / 2]), l, scr, out, fault);
                         if (js != 0 || rd64(out + 16) != slen || memcmp(out + 24, ssz, (size_t)slen)) {
-                            snprintf(msg, sizeof msg, "API JSON of head %s: lantern_json_decode status %llu, fault at %llu", types[q / 2],
+                            snprintf(msg, sizeof msg, "API JSON of head %s: lantern_json_decode status %llu, fault at %llu", types[q == 4 ? 2 : q / 2],
                                      (unsigned long long)js, (unsigned long long)rd64(fault + 8));
                             *why = msg;
                         }

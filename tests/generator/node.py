@@ -396,7 +396,7 @@ ANSWERED = ("getHealth", "getNetworkIdentity", "getNodeVersion", "getSyncingStat
             "getBlockHeader", "getStateFinalityCheckpoints", "getBlockV2", "getStateV2", "getBlockRoot", "getStateRoot",
             "getStateFork", "getSpec", "getForkSchedule", "getDepositContract", "getEpochCommittees",
             "getProposerDuties", "produceAttestationData", "getAttesterDuties", "eventstream", "getStateRandao",
-            "getEpochSyncCommittees", "getProposerLookahead") + tuple(PENDING) + VALIDATOR_OPS
+            "getEpochSyncCommittees", "getProposerLookahead", "getBlockAttestationsV2") + tuple(PENDING) + VALIDATOR_OPS
 STATE_READS = ("getStateRandao", "getEpochSyncCommittees", "getProposerLookahead")
 IDENTITY = (b"16Uiu2HAmPLe7Mzm8TsYUubgCAW1aJoeFScxrLj8ppHFivPo97bUZ",
             b"enr:-Iu4QLm7bZGdAhVwRqZ6Zf3LlnqKsBTnZGOByHQhPMQJ3pV4F3t8L9i5yJOZ0X0hiZ6q4D5V0jB7l8J3ZtYw1JDH9C4BgmlkgnY0gmlwhAoAAAGJc2VjcDI1NmsxoQPKY0yuDUmstAHYpMa2_oxVtw0RW_QAdpzBQA8yWM0xOIN0Y3CCIyg",
@@ -833,11 +833,11 @@ def answer(v, name, route, offline, close, keep_alive, syncing=False):
         body = (b'{"data":{"genesis_time":' + q(v["genesis_time"]) + b',"genesis_validators_root":' + qhex(v["gvr"]) +
                 b',"genesis_fork_version":' + qhex(v["genesis_version"]) + b"}}")
         return response(200, body, **kw)
-    if name in ("getBlockHeader", "getBlockRoot", "getBlockV2"):
+    if name in ("getBlockHeader", "getBlockRoot", "getBlockV2", "getBlockAttestationsV2"):
         # The chain is the anchor alone: head, finalized, its slot and its root name it.
         found = (route.id_kind in (1, 3) or (route.id_kind == 5 and route.id_slot == v["slot"]) or
                  (route.id_kind == 2 and v["slot"] == 0) or (route.id_kind == 6 and route.id_root == v["root"]))
-        if not found or name == "getBlockV2":  # the anchor block's bytes are not the node's
+        if not found or name in ("getBlockV2", "getBlockAttestationsV2"):  # the anchor block's bytes are not the node's
             return error(404, **kw)
         values = b'{"execution_optimistic":false,"finalized":true,"data":{"root":' + qhex(v["root"])
         if name == "getBlockRoot":
@@ -1270,7 +1270,7 @@ def api_requests(spec, fork, v, kind="main"):
         add(f"block_{block_id.decode()[:10]}", api_route.base(block, path_values={"block_id": block_id}))
         add(f"block_{block_id.decode()[:10]}_ssz", api_route.base(block, path_values={"block_id": block_id}, accept=octet))
     root_id, other_root = qhex(v["root"])[1:-1], b"0x" + bytes(range(32)).hex().encode()
-    for op in ("getBlockRoot", "getBlockHeader", "getBlockV2"):
+    for op in ("getBlockRoot", "getBlockHeader", "getBlockV2", "getBlockAttestationsV2"):
         for block_id in (b"head", b"finalized", b"genesis", b"%d" % (v["slot"] - 1), b"%d" % v["slot"], b"%d" % (v["slot"] + 1),
                          root_id, other_root):
             add(f"lookup_{op}_{block_id.decode()[:12]}", api_route.base(by_name[op], path_values={"block_id": block_id}))
