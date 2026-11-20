@@ -6360,6 +6360,9 @@ LOCAL_FUNCTION node_submit_topic
     li      a0, GOSSIP_BEACON_AGGREGATE_AND_PROOF
     li      t1, API_OP_PUBLISH_AGGREGATE_AND_PROOFS_V2
     beq     t0, t1, 9f
+    li      a0, GOSSIP_SYNC_COMMITTEE
+    li      t1, API_OP_SUBMIT_POOL_SYNC_COMMITTEE_SIGNATURES
+    beq     t0, t1, 9f
     li      a0, 0
 9:  ret
 END_FUNCTION node_submit_topic
@@ -7479,10 +7482,11 @@ END_FUNCTION node_submit_check
  * bytes go; each valid operation joins the pool, goes out on its topic with NODE_FLAG_SUBSCRIBED,
  * and an attester slashing to fork choice; then the answer to the connection. s1 the node, s2 the
  * store, s6 the actions. s3 the event, s4 the record, s7 the records left, s8 the failures, s9 the
- * topic, s10 the new id. Locals: L 1 when the pool keeps it, L+8 the answer's flags.
+ * topic, s10 the new id. Locals: L 1 when the pool keeps it, L+8 the answer's flags, L+16 a
+ * sync message's subnet.
  */
 LOCAL_FUNCTION node_api_submit_done
-    ENTER 16
+    ENTER 32
     mv      s3, a0
     li      a0, NODE_ACT_BYTES_FREE
     ld      a1, NodeAction_data(s3)
@@ -7522,7 +7526,15 @@ LOCAL_FUNCTION node_api_submit_done
     li      a5, 0
     ld      a6, 8(s4)
     srli    a6, a6, 32
-    li      t1, GOSSIP_BEACON_ATTESTATION
+    li      t1, GOSSIP_SYNC_COMMITTEE       # a sync message: its slot, its subnets
+    bne     s9, t1, 24f
+    ld      t0, 24(s4)
+    add     t0, s4, t0
+    ld      a4, 16(t0)
+    lwu     a5, 8(s4)
+    li      a6, 0
+    j       22f
+24: li      t1, GOSSIP_BEACON_ATTESTATION
     bne     s9, t1, 22f
     ld      t0, 24(s4)
     add     t0, s4, t0
@@ -7546,10 +7558,28 @@ LOCAL_FUNCTION node_api_submit_done
     ld      t0, Node_flags(s1)              # NODE_FLAG_SUBSCRIBED: out on its topic, an attestation on its subnet
     andi    t0, t0, NODE_FLAG_SUBSCRIBED
     beqz    t0, 3f
+    li      t0, GOSSIP_SYNC_COMMITTEE
+    beq     s9, t0, 25f
     mv      a0, s9
     addi    a1, s4, 16
     lwu     a2, 8(s4)
     call    node_publish
+    j       3f
+25: sd      zero, (L + 16)(sp)              # a sync message: on each of its subnets
+26: ld      a2, (L + 16)(sp)
+    li      t0, SYNC_COMMITTEE_SUBNET_COUNT
+    bgeu    a2, t0, 3f
+    lwu     t0, 8(s4)
+    srl     t0, t0, a2
+    andi    t0, t0, 1
+    beqz    t0, 27f
+    mv      a0, s9
+    addi    a1, s4, 16
+    call    node_publish
+27: ld      t0, (L + 16)(sp)
+    addi    t0, t0, 1
+    sd      t0, (L + 16)(sp)
+    j       26b
 3:  li      t0, GOSSIP_ATTESTER_SLASHING    # an attester slashing: on_attester_slashing with the justified root's state
     bne     s9, t0, 4f
     addi    a0, s2, Store_justified_checkpoint + 8
@@ -7587,6 +7617,8 @@ LOCAL_FUNCTION node_api_submit_done
     beq     t0, t1, 72f
     li      t1, API_OP_PUBLISH_AGGREGATE_AND_PROOFS_V2
     beq     t0, t1, 72f
+    li      t1, API_OP_SUBMIT_POOL_SYNC_COMMITTEE_SIGNATURES
+    beq     t0, t1, 72f
     li      t1, API_OP_SUBMIT_POOL_BLS_TO_EXECUTION_CHANGE
     bne     t0, t1, 80f
 72: mv      a1, s3
@@ -7594,20 +7626,20 @@ LOCAL_FUNCTION node_api_submit_done
     li      a3, API_OP_SUBMIT_POOL_BLS_TO_EXECUTION_CHANGE
     ld      a4, (L + 8)(sp)
     call    node_api_send
-    LEAVE 16
+    LEAVE 32
 71: li      a1, 0
     li      a2, 200
     li      a3, 0
     ld      a4, (L + 8)(sp)
     call    node_api_send
-    LEAVE 16
+    LEAVE 32
 80: ld      a0, NodeAction_target(s3)
     li      a1, 0
     li      a2, 400
     li      a3, API_BODY_ERROR
     ld      a4, (L + 8)(sp)
     call    node_api_send
-    LEAVE 16
+    LEAVE 32
 END_FUNCTION node_api_submit_done
 
 /*
@@ -7853,6 +7885,10 @@ LOCAL_FUNCTION node_api_submit_run
     sub     t3, a0, t3
     seqz    t3, t3
     or      t2, t2, t3
+    li      t3, API_OP_SUBMIT_POOL_SYNC_COMMITTEE_SIGNATURES
+    sub     t3, a0, t3
+    seqz    t3, t3
+    or      t2, t2, t3
     sd      t2, (L + 40)(sp)
     call    node_submit_topic
     beqz    a0, 98f
@@ -7861,7 +7897,11 @@ LOCAL_FUNCTION node_api_submit_run
     bne     a0, t0, 14f
     li      a0, NODE_JSON_AGGREGATE_AND_PROOF
     j       13f
-14: li      t0, GOSSIP_BEACON_ATTESTATION   # an attestation: of the fork's type
+14: li      t0, GOSSIP_SYNC_COMMITTEE       # a sync message: SyncCommitteeMessage
+    bne     a0, t0, 15f
+    li      a0, NODE_JSON_SYNC_COMMITTEE_MESSAGE
+    j       13f
+15: li      t0, GOSSIP_BEACON_ATTESTATION   # an attestation: of the fork's type
     bne     a0, t0, 12f
     ld      t0, (L + 24)(sp)
     li      t1, FORK_ELECTRA
@@ -8069,14 +8109,19 @@ LOCAL_FUNCTION node_api_submit_run
     sd      t0, (NodeEvent_chunk + 16)(s7)
     ld      t0, (L + 32)(sp)
     sd      t0, NodeEvent_index(s7)
-    ld      t1, (L + 0)(sp)                 # seen has a key free for each operation
+    ld      t1, (L + 0)(sp)                 # seen has a key free for each operation, for a sync message one a subnet
     ld      t2, Seen_bits(t1)
     ld      t3, Seen_keys(t1)
     sub     t2, t2, t3
     srli    t2, t2, 5
     ld      t3, (Seen_keys + 8)(t1)
     sub     t2, t2, t3
-    bltu    t2, t0, 97f
+    ld      t3, (L + 16)(sp)
+    li      t4, GOSSIP_SYNC_COMMITTEE
+    bne     t3, t4, 301f
+    li      t4, SYNC_COMMITTEE_SUBNET_COUNT
+    mul     t0, t0, t4
+301: bltu   t2, t0, 97f
     ld      t0, (L + 0)(sp)                 # the NodeGossip of the operations
     sd      t0, (L + 64 + NodeGossip_seen)(sp)
     sd      s2, (L + 64 + NodeGossip_store)(sp)
@@ -8096,6 +8141,8 @@ LOCAL_FUNCTION node_api_submit_run
 31: beqz    s10, 39f
     sd      zero, 8(s9)                     # the subnet: 0, but an attestation's
     ld      t0, (L + 16)(sp)
+    li      t1, GOSSIP_SYNC_COMMITTEE
+    beq     t0, t1, 36f
     li      t1, GOSSIP_BEACON_ATTESTATION
     bne     t0, t1, 33f
     ld      t0, 32(s9)
@@ -8161,6 +8208,65 @@ LOCAL_FUNCTION node_api_submit_run
     add     s9, s9, t0
     addi    s10, s10, -1
     j       31b
+36: li      a1, -1                          # a sync message: its check on each subnet of compute_subnets_for_sync_committee
+    ld      t0, 32(s9)
+    li      t1, 144
+    bne     t0, t1, 361f
+    ld      a1, (40 + 40)(s9)               # validator_index
+361: mv     a0, s4
+    addi    a2, sp, L + 48
+    ld      t6, (L + 24)(sp)
+    FORK_CALL node_sync_subnets
+    bnez    a0, 99f
+    sd      zero, (L + 144)(sp)             # the valid subnets, a reject, the subnet
+    sd      zero, (L + 152)(sp)
+    sd      zero, (L + 160)(sp)
+    ld      t0, (L + 48)(sp)
+    bnez    t0, 37f
+    li      t0, 1                           # none: the check on subnet 0, which it fails
+    sd      t0, (L + 48)(sp)
+37: ld      t1, (L + 160)(sp)
+    li      t0, SYNC_COMMITTEE_SUBNET_COUNT
+    bgeu    t1, t0, 38f
+    ld      t0, (L + 48)(sp)
+    srl     t0, t0, t1
+    andi    t0, t0, 1
+    beqz    t0, 371f
+    sd      t1, (L + 64 + NodeGossip_subnet)(sp)
+    ld      t6, (L + 24)(sp)
+    addi    a0, sp, L + 64
+    addi    a1, s9, 16
+    mv      a2, s6
+    mv      a3, s9
+    addi    a4, sp, L + 272
+    addi    a5, sp, L + 304
+    FORK_CALL node_gossip
+    bnez    a0, 99f
+    ld      t0, 0(s9)
+    ld      t1, (L + 160)(sp)
+    bnez    t0, 372f
+    ld      t2, (L + 144)(sp)               # valid: its bit
+    li      t3, 1
+    sll     t3, t3, t1
+    or      t2, t2, t3
+    sd      t2, (L + 144)(sp)
+    j       371f
+372: li     t2, LANTERN_GOSSIP_REJECT
+    bne     t0, t2, 371f
+    sd      t0, (L + 152)(sp)
+371: ld     t1, (L + 160)(sp)
+    addi    t1, t1, 1
+    sd      t1, (L + 160)(sp)
+    j       37b
+38: ld      t0, (L + 144)(sp)               # valid on a subnet; else a reject; else the last code
+    sd      t0, 8(s9)
+    beqz    t0, 381f
+    sd      zero, 0(s9)
+    j       35b
+381: ld     t0, (L + 152)(sp)
+    beqz    t0, 35b
+    sd      t0, 0(s9)
+    j       35b
 39: li      a0, LANTERN_OK
     LEAVE 320
 90: li      t0, LANTERN_INVALID_ENCODING    # a body that is no such text

@@ -1082,6 +1082,7 @@
 .set NODE_JSON_BLOB_SIDECAR, 10          /* a BlobSidecar, of deneb and electra */
 .set NODE_JSON_DATA_COLUMN_SIDECAR, 11   /* a DataColumnSidecar, from fulu */
 .set NODE_JSON_AGGREGATE_AND_PROOF, 12   /* a SignedAggregateAndProof */
+.set NODE_JSON_SYNC_COMMITTEE_MESSAGE, 13 /* a SyncCommitteeMessage, from altair */
 .set NodePool_topic, 0                   /* NodePool (node.md): GOSSIP_* of the operation; 0 for a free entry */
 .set NodePool_state, 8                   /* NODE_POOL_* */
 .set NodePool_data_id, 16                /* the BufferId of its SSZ bytes */

@@ -631,14 +631,18 @@ LOCAL_FUNCTION node_pool_add
     je      1f
     cmp     $GOSSIP_BEACON_ATTESTATION, %rdi
     je      1f
+    cmp     $GOSSIP_SYNC_COMMITTEE, %rdi
+    je      1f
     cmp     $GOSSIP_BLS_TO_EXECUTION_CHANGE, %rdi
     jne     8f
-1:  mov     Node_p2p_out(%rbx), %rax        # the capacity, for an attestation 3/4 of it
+1:  mov     Node_p2p_out(%rbx), %rax        # the capacity, for an attestation or a sync message 3/4 of it
     sub     Node_pool(%rbx), %rax
     shr     $6, %rax
     cmp     $GOSSIP_BEACON_ATTESTATION, %rdi
+    je      12f
+    cmp     $GOSSIP_SYNC_COMMITTEE, %rdi
     jne     11f
-    lea     (%rax,%rax,2), %rax
+12: lea     (%rax,%rax,2), %rax
     shr     $2, %rax
 11: PART    %r9, %r10, %rbx, Node_pool
     xor     %r11d, %r11d
@@ -663,9 +667,11 @@ LOCAL_FUNCTION node_pool_add
     movq    $0, NodePool_slot(%r9)
     movq    $0, NodePool_index(%r9)
     movq    $0, NodePool_member(%r9)
-    cmp     $GOSSIP_BEACON_ATTESTATION, %rdi    # an attestation's slot, index and member
+    cmp     $GOSSIP_BEACON_ATTESTATION, %rdi    # an attestation's or a sync message's slot, index and member
+    je      6f
+    cmp     $GOSSIP_SYNC_COMMITTEE, %rdi
     jne     5f
-    mov     (%r8), %rax
+6:  mov     (%r8), %rax
     mov     %rax, NodePool_slot(%r9)
     mov     8(%r8), %rax
     mov     %rax, NodePool_index(%r9)
@@ -706,15 +712,17 @@ END_FUNCTION node_pool_drop
 
 /*
  * At a new head, each attestation of the pool whose slot's epoch + 1 is below the epoch of the
- * store rbp's slot goes; then each other entry in NODE_POOL_KEPT gets a NODE_WORK_POOL_CHECK with
- * the head's post-state rdi, and takes NODE_POOL_CHECKING; with rdi = 0, none. Locals: the state,
- * the index, the epoch.
+ * store rbp's slot goes, and each sync committee message whose slot + 1 is below that slot; then
+ * each other entry in NODE_POOL_KEPT gets a NODE_WORK_POOL_CHECK with the head's post-state rdi,
+ * and takes NODE_POOL_CHECKING; with rdi = 0, none. Locals: the state, the index, the epoch, the
+ * slot.
  */
 LOCAL_FUNCTION node_pool_checks
     FRAME 32
     mov     %rdi, (%rsp)
     mov     %rbp, %rdi
     call    node_store_slot
+    mov     %rax, 24(%rsp)
     xor     %edx, %edx
     mov     $SLOTS_PER_EPOCH, %ecx
     div     %rcx
@@ -726,7 +734,15 @@ LOCAL_FUNCTION node_pool_checks
     jae     6f
     imul    $NodePool__mem, %r8, %rdx
     lea     (%rax,%rdx), %rdi
-    cmpq    $GOSSIP_BEACON_ATTESTATION, NodePool_topic(%rdi)
+    cmpq    $GOSSIP_SYNC_COMMITTEE, NodePool_topic(%rdi)  # a sync message: its slot + 1 below the store's slot
+    jne     71f
+    mov     NodePool_slot(%rdi), %rax
+    inc     %rax
+    cmp     24(%rsp), %rax
+    jae     7f
+    call    node_pool_drop
+    jmp     7f
+71: cmpq    $GOSSIP_BEACON_ATTESTATION, NodePool_topic(%rdi)
     jne     7f
     mov     NodePool_slot(%rdi), %rax
     xor     %edx, %edx
@@ -750,6 +766,8 @@ LOCAL_FUNCTION node_pool_checks
     cmpq    $0, NodePool_topic(%rax)
     je      2f
     cmpq    $GOSSIP_BEACON_ATTESTATION, NodePool_topic(%rax)
+    je      2f
+    cmpq    $GOSSIP_SYNC_COMMITTEE, NodePool_topic(%rax)
     je      2f
     cmpq    $NODE_POOL_KEPT, NodePool_state(%rax)
     jne     2f
