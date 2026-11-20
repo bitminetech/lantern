@@ -4828,19 +4828,22 @@ LOCAL_FUNCTION node_api_chunk_run
     bgtu    t3, t5, 96f
     add     t2, t0, t2
     sub     t3, t3, t2
-    ld      t1, (L + 56)(sp)
+    ld      t1, (L + 56)(sp)                # its bytes copied into a ByteList at the end of scratch
     ld      t0, 0(t1)
-    li      t5, 64
+    addi    t5, t3, 24 + 7
+    andi    t5, t5, -8
     bltu    t0, t5, 97f
-    addi    t0, t0, -32
-    add     t1, t1, t0                      # its ByteList: size, an offset that reaches the list, count
-    li      t0, 32
-    sd      t0, 0(t1)
-    add     t2, t4, t2
-    sub     t2, t2, t1
-    sd      t2, 8(t1)
+    sub     t0, t0, t5
+    add     t1, t1, t0
+    sd      t5, 0(t1)
+    li      t0, 24
+    sd      t0, 8(t1)
     sd      t3, 16(t1)
     mv      s3, t1
+    addi    a0, t1, 24
+    add     a1, t4, t2
+    mv      a2, t3
+    call    lantern_copy
 5:  ld      t0, NodeApi_sent(s4)            # the entry's sent, flags and cursor go on in the event
     sd      t0, NodeEvent_api(s5)
     ld      t0, NodeApi_flags(s4)

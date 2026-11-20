@@ -4828,17 +4828,21 @@ LOCAL_FUNCTION node_api_chunk_run
     ja      96f
     add     %rax, %rcx
     sub     %rcx, %rdx
-    mov     (L + 64)(%rsp), %rax
+    mov     (L + 64)(%rsp), %rax            # its bytes copied into a ByteList at the end of scratch
     mov     (%rax), %rdi
-    cmp     $64, %rdi
+    lea     (24 + 7)(%rdx), %r8
+    and     $~7, %r8
+    cmp     %r8, %rdi
     jb      97f
-    lea     -32(%rax,%rdi), %rax            # its ByteList: size, an offset that reaches the list, count
-    movq    $32, (%rax)
-    add     %rsi, %rcx
-    sub     %rax, %rcx
-    mov     %rcx, 8(%rax)
+    sub     %r8, %rdi
+    add     %rdi, %rax
+    mov     %r8, (%rax)
+    movq    $24, 8(%rax)
     mov     %rdx, 16(%rax)
     mov     %rax, (L + 40)(%rsp)
+    lea     24(%rax), %rdi
+    add     %rcx, %rsi
+    call    lantern_copy
 5:  mov     NodeApi_sent(%rbx), %rax        # the entry's sent, flags and cursor go on in the event
     mov     %rax, NodeEvent_api(%rbp)
     mov     NodeApi_flags(%rbx), %rax

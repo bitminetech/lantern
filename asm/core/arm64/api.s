@@ -4752,18 +4752,22 @@ LOCAL_FUNCTION node_api_chunk_run
     b.hi    96f
     add     x13, x11, x13
     sub     x14, x14, x13
-    ldr     x15, [sp, #(L + 48)]
-    ldr     x12, [x15]
-    cmp     x12, #64
+    ldr     x25, [sp, #(L + 48)]            /* its bytes copied into a ByteList at the end of scratch */
+    ldr     x12, [x25]
+    add     x11, x14, #(24 + 7)
+    and     x11, x11, #~7
+    cmp     x12, x11
     b.lo    97f
-    sub     x12, x12, #32
-    add     x15, x15, x12                   /* its ByteList: size, an offset that reaches the list, count */
-    mov     x12, #32
-    str     x12, [x15]
-    add     x12, x9, x13
-    sub     x12, x12, x15
-    stp     x12, x14, [x15, #8]
-    mov     x21, x15
+    sub     x12, x12, x11
+    add     x25, x25, x12
+    mov     x10, #24
+    stp     x11, x10, [x25]
+    str     x14, [x25, #16]
+    add     x0, x25, #24
+    add     x1, x9, x13
+    mov     x2, x14
+    bl      lantern_copy
+    mov     x21, x25
 5:  ldr     x9, [x22, #NodeApi_sent]        /* the entry's sent, flags and cursor go on in the event */
     str     x9, [x23, #NodeEvent_api]
     ldr     x9, [x22, #NodeApi_flags]
