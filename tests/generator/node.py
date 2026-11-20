@@ -355,7 +355,7 @@ ALLOW = {1: b"GET", 2: b"POST", 3: b"GET, POST"}
 VALIDATOR_OPS = ("getStateValidators", "postStateValidators", "getStateValidator", "getStateValidatorBalances",
                  "postStateValidatorBalances", "postStateValidatorIdentities")
 POOL_GETS = ("getPoolVoluntaryExits", "getPoolProposerSlashings", "getPoolAttesterSlashingsV2",
-             "getPoolBLSToExecutionChanges")
+             "getPoolBLSToExecutionChanges", "getPoolAttestationsV2")
 POOL_POSTS = ("submitPoolVoluntaryExit", "submitPoolProposerSlashings", "submitPoolAttesterSlashingsV2",
               "submitPoolBLSToExecutionChange", "submitPoolAttestationsV2")
 ANSWERED = ("getHealth", "getNetworkIdentity", "getNodeVersion", "getSyncingStatus", "getPeerCount", "getGenesis",
@@ -893,8 +893,8 @@ def pool_requests(spec, fork, v, by_name, add):
                 continue
             results = [validate(kind, op) for op in ops]
             for op, r in zip(ops, results):
-                if r == "VALID" and kind != "attestation":  # attestations go out, and no pool keeps them
-                    pool[kind].append(op)
+                if r == "VALID":
+                    pool[kind].append(pool_form(op) if kind == "attestation" else op)
             failures = [i for i, r in enumerate(results) if r == "REJECT"]
             answers.append(("ok", None) if not failures else ("bad", None if single else failures))
         if answers[0] != answers[1]:
@@ -1000,6 +1000,20 @@ def pool_requests(spec, fork, v, by_name, add):
         bits[place] = True
         return spec.Attestation(aggregation_bits=bits, data=data, signature=sig)
 
+    def pool_form(att):
+        """(slot, committee index, the pool's Attestation): from electra the Attestation of the
+        SingleAttestation's one attester in its committee of the head state, as the node gives it."""
+        if not electra:
+            return int(att.data.slot), int(att.data.index), att
+        head = spec.get_head(store)
+        hs = store.block_states[getattr(head, "root", head)]
+        committee = list(spec.get_beacon_committee(hs, att.data.slot, att.committee_index))
+        bits = spec.AggregationBits(data=[False] * len(committee))
+        bits[committee.index(att.attester_index)] = True
+        out = spec.Attestation(aggregation_bits=bits, data=att.data, signature=att.signature)
+        out.committee_bits[att.committee_index] = True
+        return int(att.data.slot), int(att.committee_index), out
+
     def json_list(items):
         return ("[" + ",".join(to_json(x) for x in items) + "]").encode()
 
@@ -1025,8 +1039,11 @@ def pool_requests(spec, fork, v, by_name, add):
            single=False, headers={"version": other})
     submit("pool_attestations_no_attestation", "submitPoolAttestationsV2", "attestation", None, b'[{"data":1}]',
            single=False, headers=att_version)
-    ssz_body = ssz_list([att_of(duties[2], duties[2][3])])
-    submit("pool_attestations_ssz", "submitPoolAttestationsV2", "attestation", [att_of(duties[2], duties[2][3])], ssz_body,
+    # the SSZ one: of another slot, and of another committee when the slots have two
+    ssz_duty = next((d for d in duties if d[0] != duties[0][0] and d[1] != duties[0][1]), None) or \
+        next(d for d in duties if d[0] != duties[0][0])
+    ssz_body = ssz_list([att_of(ssz_duty, ssz_duty[3])])
+    submit("pool_attestations_ssz", "submitPoolAttestationsV2", "attestation", [att_of(ssz_duty, ssz_duty[3])], ssz_body,
            single=False, headers=att_version, content_type=b"application/octet-stream")
     store_fork = fork
 
@@ -1042,6 +1059,24 @@ def pool_requests(spec, fork, v, by_name, add):
                                           ("pool_get_bls", "getPoolBLSToExecutionChanges", pool["bls"], None)):
         for http in (b"HTTP/1.1", b"HTTP/1.0"):
             add(f"{name}_{http.decode()[5:]}", api_route.base(by_name[op_name]), version=http, want=listing(items, version))
+    # the attestations: all, then by slot, by committee index, by both, and by a slot of none
+    atts = pool["attestation"]
+    if len({a[0] for a in atts}) < 2:
+        raise RuntimeError("pool_get_attestations: the cases need attestations of two slots")
+    first_slot, first_index = atts[0][0], atts[0][1]
+    for http in (b"HTTP/1.1", b"HTTP/1.0"):
+        add(f"pool_get_attestations_{http.decode()[5:]}", api_route.base(by_name["getPoolAttestationsV2"]),
+            version=http, want=listing([a[2] for a in atts], store_fork))
+    for name, slot, index in (("slot", first_slot, None), ("index", None, first_index),
+                              ("both", first_slot, first_index), ("none", 2**63, None)):
+        query = []
+        if slot is not None:
+            query.append(("slot", b"%d" % slot))
+        if index is not None:
+            query.append(("committee_index", b"%d" % index))
+        items = [a[2] for a in atts if (slot is None or a[0] == slot) and (index is None or a[1] == index)]
+        add(f"pool_get_attestations_{name}", api_route.base(by_name["getPoolAttestationsV2"], query),
+            want=listing(items, store_fork))
 
 
 def api_requests(spec, fork, v, kind="main"):
@@ -1072,7 +1107,7 @@ def api_requests(spec, fork, v, kind="main"):
             elif opname == "eventstream":  # the head; the stream stays open
                 want, stream = stream_head(version, connection), True
             elif opname in POOL_GETS:  # an empty pool
-                pool_version = fork if opname == "getPoolAttesterSlashingsV2" else None
+                pool_version = fork if opname in ("getPoolAttesterSlashingsV2", "getPoolAttestationsV2") else None
                 body = b'{"data":[]}' if pool_version is None else b'{"version":"%s","data":[]}' % fork.encode()
                 want = streamed(pool_version, body, close=close, keep_alive=keep_alive)
             elif opname in POOL_POSTS and not req["body"]:  # a body of no operation

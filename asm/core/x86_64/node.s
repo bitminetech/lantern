@@ -617,8 +617,9 @@ END_FUNCTION node_ids
 
 /*
  * rax = 1 when the bytes rsi (rdx bytes) of the topic rdi, of the fork rcx, join the pool: a
- * voluntary_exit, proposer_slashing, attester_slashing or bls_to_execution_change, in the first
- * free entry; else 0. Uses r8, r10, r11.
+ * voluntary_exit, proposer_slashing, attester_slashing, bls_to_execution_change or
+ * beacon_attestation (with the slot, committee index and member at r8), in the first free entry,
+ * for an attestation one below 3/4 of the pool's capacity; else 0. Uses r9, r10, r11.
  */
 LOCAL_FUNCTION node_pool_add
     UNWIND_END_PROLOGUE
@@ -628,35 +629,56 @@ LOCAL_FUNCTION node_pool_add
     je      1f
     cmp     $GOSSIP_ATTESTER_SLASHING, %rdi
     je      1f
+    cmp     $GOSSIP_BEACON_ATTESTATION, %rdi
+    je      1f
     cmp     $GOSSIP_BLS_TO_EXECUTION_CHANGE, %rdi
     jne     8f
-1:  PART    %r8, %r10, %rbx, Node_pool
+1:  mov     Node_p2p_out(%rbx), %rax        # the capacity, for an attestation 3/4 of it
+    sub     Node_pool(%rbx), %rax
+    shr     $6, %rax
+    cmp     $GOSSIP_BEACON_ATTESTATION, %rdi
+    jne     11f
+    lea     (%rax,%rax,2), %rax
+    shr     $2, %rax
+11: PART    %r9, %r10, %rbx, Node_pool
     xor     %r11d, %r11d
 2:  cmp     %r10, %r11
     jae     3f
-    cmpq    $0, NodePool_topic(%r8)
+    cmp     %rax, %r11
+    jae     8f
+    cmpq    $0, NodePool_topic(%r9)
     je      4f
-    add     $NodePool__mem, %r8
+    add     $NodePool__mem, %r9
     inc     %r11
     jmp     2b
-3:  mov     Node_p2p_out(%rbx), %rax        # past the count: one more within the capacity
-    sub     Node_pool(%rbx), %rax
-    lea     1(%r10), %r11
-    imul    $NodePool__mem, %r11, %r11
-    cmp     %rax, %r11
-    ja      8f
+3:  cmp     %rax, %r10                      # past the count: one more within the capacity
+    jae     8f
     inc     %r10
     mov     %r10, (Node_pool + 8)(%rbx)
-4:  mov     %rdi, NodePool_topic(%r8)
-    movq    $NODE_POOL_KEPT, NodePool_state(%r8)
-    mov     %rsi, NodePool_data_id(%r8)
-    mov     %rdx, NodePool_length(%r8)
-    mov     %rcx, NodePool_fork(%r8)
-    mov     $1, %eax
+4:  mov     %rdi, NodePool_topic(%r9)
+    movq    $NODE_POOL_KEPT, NodePool_state(%r9)
+    mov     %rsi, NodePool_data_id(%r9)
+    mov     %rdx, NodePool_length(%r9)
+    mov     %rcx, NodePool_fork(%r9)
+    movq    $0, NodePool_slot(%r9)
+    movq    $0, NodePool_index(%r9)
+    movq    $0, NodePool_member(%r9)
+    cmp     $GOSSIP_BEACON_ATTESTATION, %rdi    # an attestation's slot, index and member
+    jne     5f
+    mov     (%r8), %rax
+    mov     %rax, NodePool_slot(%r9)
+    mov     8(%r8), %rax
+    mov     %rax, NodePool_index(%r9)
+    mov     16(%r8), %rax
+    mov     %rax, NodePool_member(%r9)
+5:  mov     $1, %eax
     ret
 8:  xor     %eax, %eax
     ret
 END_FUNCTION node_pool_add
+.if NodePool__mem != 64
+.error "node_pool_add: the capacity takes NodePool__mem as 2^6"
+.endif
 
 /*
  * The pool entry rdi goes: it is free (topic 0), the pool's count drops past the free entries at
@@ -683,14 +705,41 @@ LOCAL_FUNCTION node_pool_drop
 END_FUNCTION node_pool_drop
 
 /*
- * At a new head, each pool entry in NODE_POOL_KEPT gets a NODE_WORK_POOL_CHECK with the head's
- * post-state rdi, and takes NODE_POOL_CHECKING; with rdi = 0, none. Locals: the state, the index.
+ * At a new head, each attestation of the pool whose slot's epoch + 1 is below the epoch of the
+ * store rbp's slot goes; then each other entry in NODE_POOL_KEPT gets a NODE_WORK_POOL_CHECK with
+ * the head's post-state rdi, and takes NODE_POOL_CHECKING; with rdi = 0, none. Locals: the state,
+ * the index, the epoch.
  */
 LOCAL_FUNCTION node_pool_checks
-    FRAME 16
-    test    %rdi, %rdi
-    jz      9f
+    FRAME 32
     mov     %rdi, (%rsp)
+    mov     %rbp, %rdi
+    call    node_store_slot
+    xor     %edx, %edx
+    mov     $SLOTS_PER_EPOCH, %ecx
+    div     %rcx
+    mov     %rax, 16(%rsp)
+    movq    $0, 8(%rsp)
+5:  mov     8(%rsp), %r8
+    PART    %rax, %r10, %rbx, Node_pool
+    cmp     %r10, %r8
+    jae     6f
+    imul    $NodePool__mem, %r8, %rdx
+    lea     (%rax,%rdx), %rdi
+    cmpq    $GOSSIP_BEACON_ATTESTATION, NodePool_topic(%rdi)
+    jne     7f
+    mov     NodePool_slot(%rdi), %rax
+    xor     %edx, %edx
+    mov     $SLOTS_PER_EPOCH, %ecx
+    div     %rcx
+    inc     %rax
+    cmp     16(%rsp), %rax
+    jae     7f
+    call    node_pool_drop
+7:  incq    8(%rsp)
+    jmp     5b
+6:  cmpq    $0, (%rsp)
+    je      9f
     movq    $0, 8(%rsp)
 1:  mov     8(%rsp), %r8
     PART    %rax, %r10, %rbx, Node_pool
@@ -699,6 +748,8 @@ LOCAL_FUNCTION node_pool_checks
     imul    $NodePool__mem, %r8, %rdx
     add     %rdx, %rax
     cmpq    $0, NodePool_topic(%rax)
+    je      2f
+    cmpq    $GOSSIP_BEACON_ATTESTATION, NodePool_topic(%rax)
     je      2f
     cmpq    $NODE_POOL_KEPT, NodePool_state(%rax)
     jne     2f
@@ -711,7 +762,7 @@ LOCAL_FUNCTION node_pool_checks
     call    node_work
 2:  incq    8(%rsp)
     jmp     1b
-9:  UNFRAME 16
+9:  UNFRAME 32
 END_FUNCTION node_pool_checks
 
 /*
@@ -3771,6 +3822,7 @@ LOCAL_FUNCTION node_event
     mov     NodeMessage_topic(%r13), %rdi
     mov     NodeAction_data(%r12), %rsi
     mov     NodeMessage_length(%r13), %rdx
+    lea     NodeEvent_root(%r12), %r8       # an attestation: its slot, committee index and member
     call    node_pool_add
     test    %rax, %rax
     jz      639f

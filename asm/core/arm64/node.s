@@ -633,8 +633,9 @@ END_FUNCTION node_ids
 
 /*
  * L0: x0 = 1 when the bytes x1 (x2 bytes) of the topic x0, of the fork x3, join the pool: a
- * voluntary_exit, proposer_slashing, attester_slashing or bls_to_execution_change, in the first
- * free entry; else 0. Uses x9-x13.
+ * voluntary_exit, proposer_slashing, attester_slashing, bls_to_execution_change or
+ * beacon_attestation (with its slot x4, committee index x5 and member x6), in the first free
+ * entry, for an attestation one below 3/4 of the pool's capacity; else 0. Uses x9-x14.
  */
 LOCAL_FUNCTION node_pool_add
     UNWIND_END_PROLOGUE
@@ -642,22 +643,29 @@ LOCAL_FUNCTION node_pool_add
     ccmp    x0, #GOSSIP_PROPOSER_SLASHING, #4, ne
     ccmp    x0, #GOSSIP_ATTESTER_SLASHING, #4, ne
     ccmp    x0, #GOSSIP_BLS_TO_EXECUTION_CHANGE, #4, ne
+    ccmp    x0, #GOSSIP_BEACON_ATTESTATION, #4, ne
     b.ne    8f
-    PART    x9, x10, x19, Node_pool
+    LDQ     x12, x19, Node_p2p_out          /* the capacity, for an attestation 3/4 of it */
+    LDQ     x13, x19, Node_pool
+    sub     x12, x12, x13
+    mov     x13, #NodePool__mem
+    udiv    x14, x12, x13
+    cmp     x0, #GOSSIP_BEACON_ATTESTATION
+    b.ne    11f
+    add     x14, x14, x14, lsl #1
+    lsr     x14, x14, #2
+11: PART    x9, x10, x19, Node_pool
     mov     x11, #0
 1:  cmp     x11, x10
     b.hs    2f
+    cmp     x11, x14
+    b.hs    8f
     ldr     x12, [x9, #NodePool_topic]
     cbz     x12, 3f
     add     x9, x9, #NodePool__mem
     add     x11, x11, #1
     b       1b
-2:  LDQ     x12, x19, Node_p2p_out          /* past the count: one more within the capacity */
-    LDQ     x13, x19, Node_pool
-    sub     x12, x12, x13
-    mov     x13, #NodePool__mem
-    udiv    x12, x12, x13
-    cmp     x10, x12
+2:  cmp     x10, x14                        /* past the count: one more within the capacity */
     b.hs    8f
     add     x10, x10, #1
     STQ     x10, x19, Node_pool + 8
@@ -667,6 +675,13 @@ LOCAL_FUNCTION node_pool_add
     str     x1, [x9, #NodePool_data_id]
     str     x2, [x9, #NodePool_length]
     str     x3, [x9, #NodePool_fork]
+    cmp     x0, #GOSSIP_BEACON_ATTESTATION  /* an attestation's slot, index and member; else 0 */
+    csel    x12, x4, xzr, eq
+    str     x12, [x9, #NodePool_slot]
+    csel    x12, x5, xzr, eq
+    str     x12, [x9, #NodePool_index]
+    csel    x12, x6, xzr, eq
+    str     x12, [x9, #NodePool_member]
     mov     x0, #1
     ret
 8:  mov     x0, #0
@@ -700,13 +715,42 @@ LOCAL_FUNCTION node_pool_drop
 END_FUNCTION node_pool_drop
 
 /*
- * L1: at a new head, each pool entry in NODE_POOL_KEPT gets a NODE_WORK_POOL_CHECK with the head's
- * post-state x0, and takes NODE_POOL_CHECKING; with x0 = 0, none. Locals: the state, the index.
+ * L1: at a new head, each attestation of the pool whose slot's epoch + 1 is below the epoch of
+ * the store x20's slot goes; then each other entry in NODE_POOL_KEPT gets a NODE_WORK_POOL_CHECK
+ * with the head's post-state x0, and takes NODE_POOL_CHECKING; with x0 = 0, none. Locals: the
+ * state, the index, the epoch.
  */
 LOCAL_FUNCTION node_pool_checks
-    FRAME 16
-    cbz     x0, 9f
+    FRAME 32
     str     x0, [sp, #16]
+    mov     x0, x20
+    bl      node_store_slot
+    mov     x10, #SLOTS_PER_EPOCH
+    udiv    x9, x0, x10
+    str     x9, [sp, #32]
+    mov     x9, #0
+5:  str     x9, [sp, #24]
+    PART    x10, x11, x19, Node_pool
+    cmp     x9, x11
+    b.hs    6f
+    mov     x12, #NodePool__mem
+    madd    x0, x9, x12, x10
+    ldr     x12, [x0, #NodePool_topic]
+    cmp     x12, #GOSSIP_BEACON_ATTESTATION
+    b.ne    7f
+    ldr     x12, [x0, #NodePool_slot]
+    mov     x13, #SLOTS_PER_EPOCH
+    udiv    x12, x12, x13
+    add     x12, x12, #1
+    ldr     x13, [sp, #32]
+    cmp     x12, x13
+    b.hs    7f
+    bl      node_pool_drop
+7:  ldr     x9, [sp, #24]
+    add     x9, x9, #1
+    b       5b
+6:  ldr     x0, [sp, #16]
+    cbz     x0, 9f
     mov     x9, #0
 1:  str     x9, [sp, #24]
     PART    x10, x11, x19, Node_pool
@@ -716,6 +760,8 @@ LOCAL_FUNCTION node_pool_checks
     madd    x10, x9, x12, x10
     ldr     x12, [x10, #NodePool_topic]
     cbz     x12, 2f
+    cmp     x12, #GOSSIP_BEACON_ATTESTATION
+    b.eq    2f
     ldr     x12, [x10, #NodePool_state]
     cmp     x12, #NODE_POOL_KEPT
     b.ne    2f
@@ -731,7 +777,7 @@ LOCAL_FUNCTION node_pool_checks
 2:  ldr     x9, [sp, #24]
     add     x9, x9, #1
     b       1b
-9:  UNFRAME 16
+9:  UNFRAME 32
 END_FUNCTION node_pool_checks
 
 /*
@@ -3812,6 +3858,8 @@ LOCAL_FUNCTION node_event
     ldr     x0, [x22, #NodeMessage_topic]
     ldr     x1, [x21, #NodeAction_data]
     ldr     x2, [x22, #NodeMessage_length]
+    ldp     x4, x5, [x21, #NodeEvent_root]  /* an attestation: its slot, committee index and member */
+    ldr     x6, [x21, #(NodeEvent_root + 16)]
     bl      node_pool_add
     cbz     x0, 639f
     ldr     x9, [x22, #NodeMessage_topic]

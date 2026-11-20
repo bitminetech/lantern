@@ -1962,6 +1962,8 @@ LOCAL_FUNCTION node_api_event
     b.eq    68f
     cmp     x3, #API_OP_GET_POOL_BLS_TO_EXECUTION_CHANGES
     b.eq    68f
+    cmp     x3, #API_OP_GET_POOL_ATTESTATIONS_V2
+    b.eq    68f
     mov     x0, x3
     bl      node_submit_topic
     cbnz    x0, 60f
@@ -4141,6 +4143,8 @@ LOCAL_FUNCTION api_stream_head
     cmp     x9, #API_OP_GET_STATE_V2
     b.eq    21f
     cmp     x9, #API_OP_GET_POOL_ATTESTER_SLASHINGS_V2
+    b.eq    21f
+    cmp     x9, #API_OP_GET_POOL_ATTESTATIONS_V2
     b.ne    22f
 21: API_LIT api_version
     ldr     x0, [x22, #NodeApi_fork]
@@ -4200,6 +4204,8 @@ LOCAL_FUNCTION api_stream_json
     cmp     x9, #API_OP_GET_POOL_PROPOSER_SLASHINGS
     b.eq    4f
     cmp     x9, #API_OP_GET_POOL_ATTESTER_SLASHINGS_V2
+    b.eq    4f
+    cmp     x9, #API_OP_GET_POOL_ATTESTATIONS_V2
     b.eq    4f
     cmp     x9, #API_OP_GET_POOL_BLS_TO_EXECUTION_CHANGES
     b.ne    3f
@@ -4282,6 +4288,8 @@ LOCAL_FUNCTION node_api_chunk_run
     b.eq    2f
     cmp     x10, #API_OP_GET_POOL_ATTESTER_SLASHINGS_V2
     b.eq    2f
+    cmp     x10, #API_OP_GET_POOL_ATTESTATIONS_V2
+    b.eq    2f
     cmp     x10, #API_OP_GET_POOL_BLS_TO_EXECUTION_CHANGES
     b.eq    2f
     mov     x9, x10
@@ -4361,12 +4369,28 @@ LOCAL_FUNCTION node_api_chunk_run
     ldr     x9, [sp, #(L + 40)]             /* a validator stream: its selection; getEpochCommittees its count */
     cbz     x9, 6f
     cmp     x9, #3
-    b.eq    6f
+    b.eq    66f
     ldr     x0, [sp, #(L + 48)]
     cmp     x9, #2
     b.eq    63f
     bl      node_api_validators_prep
     cbnz    x0, 97f
+    b       6f
+66: cbz     x21, 6f                         /* getPoolAttestationsV2 from electra: the Attestation of a SingleAttestation */
+    ldr     x9, [x22, #NodeApi_op]
+    cmp     x9, #API_OP_GET_POOL_ATTESTATIONS_V2
+    b.ne    6f
+    ldr     x9, [x22, #NodeApi_sent]
+    cmp     x9, #FORK_ELECTRA
+    b.lo    6f
+    ldr     x0, [sp, #(L + 48)]
+    mov     x1, x21
+    ldr     x2, [x22, #NodeApi_member]
+    bl      node_pool_attestation
+    cmp     x0, #1
+    b.eq    96f
+    b.hi    97f
+    mov     x21, x1
     b       6f
 63: bl      node_api_committees_prep
     cmp     x0, #400
@@ -4444,9 +4468,12 @@ LOCAL_FUNCTION node_api_chunk_run
     cbz     x9, 35f
     cmp     x9, #3
     b.ne    37f
-    ldr     x9, [x22, #NodeApi_op]          /* a pool stream: {"data":[, getPoolAttesterSlashingsV2 {"version":"<fork>","data":[ */
+    ldr     x9, [x22, #NodeApi_op]          /* a pool stream: {"data":[, the V2 GETs {"version":"<fork>","data":[ */
     cmp     x9, #API_OP_GET_POOL_ATTESTER_SLASHINGS_V2
+    b.eq    39f
+    cmp     x9, #API_OP_GET_POOL_ATTESTATIONS_V2
     b.ne    38f
+39:
     API_LIT api_j_version
     ldr     x0, [x22, #NodeApi_fork]
     bl      api_fork_name
@@ -4588,6 +4615,90 @@ END_FUNCTION node_api_chunk_run
 
 /* ------------------------------------------------------------ The pools (beacon-api.md, node.md) */
 
+/*
+ * L1: (scratch x0, the ByteList x1 of a SingleAttestation, member x2) -> x0: the electra Attestation
+ * of it as a ByteList at the end of scratch, at x1 (node.md, NODE_WORK_API_CHUNK, the pool streams):
+ * aggregation_bits of the length member / 2^16 with the bit of the place member % 2^16, data,
+ * signature, committee_bits with the bit of committee_index. x0 = 0; 1 for bytes of another size,
+ * a place not below the length, a length above MAX_VALIDATORS_PER_COMMITTEE or a committee_index
+ * not below MAX_COMMITTEES_PER_SLOT; 2 for a scratch without NODE_POOL_ATTESTATION_ROOM bytes.
+ * Locals: the ByteList, the SingleAttestation, the committee index, the place, the length.
+ */
+LOCAL_FUNCTION node_pool_attestation
+    FRAME 48
+    ldr     x9, [x1, #16]
+    cmp     x9, #240
+    b.ne    81f
+    ldr     x9, [x1, #8]
+    add     x10, x1, x9
+    ldr     x11, [x10]
+    cmp     x11, #MAX_COMMITTEES_PER_SLOT
+    b.hs    81f
+    and     x12, x2, #0xffff
+    lsr     x13, x2, #16
+    cmp     x13, #MAX_VALIDATORS_PER_COMMITTEE
+    b.hi    81f
+    cmp     x12, x13
+    b.hs    81f
+    ldr     x14, [x0]
+    cmp     x14, #NODE_POOL_ATTESTATION_ROOM
+    b.lo    82f
+    add     x15, x0, x14
+    sub     x15, x15, #NODE_POOL_ATTESTATION_ROOM
+    str     x15, [sp, #16]
+    stp     x10, x11, [sp, #24]
+    stp     x12, x13, [sp, #40]
+    add     x0, x15, #24
+    mov     x1, #(NODE_POOL_ATTESTATION_ROOM - 24)
+    bl      lantern_zero
+    ldr     x15, [sp, #16]                  /* its head: size, offset 24, count */
+    mov     x9, #NODE_POOL_ATTESTATION_ROOM
+    mov     x10, #24
+    stp     x9, x10, [x15]
+    ldr     x13, [sp, #48]
+    lsr     x9, x13, #3
+    add     x9, x9, #(NODE_POOL_ATTESTATION_FIXED + 1)
+    str     x9, [x15, #16]
+    mov     x9, #NODE_POOL_ATTESTATION_FIXED    /* the offset of aggregation_bits, data and signature */
+    str     w9, [x15, #24]
+    add     x0, x15, #28
+    ldr     x1, [sp, #24]
+    add     x1, x1, #16
+    mov     x2, #(128 + 96)
+    bl      lantern_copy
+    ldr     x15, [sp, #16]
+    add     x9, x15, #(24 + 4 + 128 + 96)   /* committee_bits */
+    ldr     x11, [sp, #32]
+    lsr     x10, x11, #3
+    and     x11, x11, #7
+    mov     x12, #1
+    lsl     x12, x12, x11
+    strb    w12, [x9, x10]
+    add     x9, x15, #(24 + NODE_POOL_ATTESTATION_FIXED)    /* aggregation_bits: the place, then the length's bit */
+    ldp     x12, x13, [sp, #40]
+    lsr     x10, x12, #3
+    and     x11, x12, #7
+    mov     x14, #1
+    lsl     x14, x14, x11
+    ldrb    w11, [x9, x10]
+    orr     w11, w11, w14
+    strb    w11, [x9, x10]
+    lsr     x10, x13, #3
+    and     x11, x13, #7
+    mov     x14, #1
+    lsl     x14, x14, x11
+    ldrb    w11, [x9, x10]
+    orr     w11, w11, w14
+    strb    w11, [x9, x10]
+    ldr     x1, [sp, #16]
+    mov     x0, #0
+    UNFRAME 48
+81: mov     x0, #1
+    UNFRAME 48
+82: mov     x0, #2
+    UNFRAME 48
+END_FUNCTION node_pool_attestation
+
 /* L1: x0 = the new id of a NODE_ACT_BYTES_PUT of the 8 bytes at x0. Locals: a ByteList head whose offset reaches them. */
 LOCAL_FUNCTION node_api_put8
     FRAME 32
@@ -4638,23 +4749,31 @@ END_FUNCTION node_pool_kind
 .endif
 
 /*
- * L0: x0 = the index of the first pool entry from the index x0 that the pool GET x1 of the fork x2
- * answers (node.md, NODE_EV_API): of its topic, and for getPoolAttesterSlashingsV2 of that fork's
- * AttesterSlashing type; else 2^64 - 1. x1 = the entry. Uses x9-x12.
+ * L0: x0 = the index of the first pool entry from the index x0 that the pool stream x1 answers
+ * (node.md, NODE_EV_API): of its topic; for getPoolAttesterSlashingsV2 and getPoolAttestationsV2
+ * of the type of its fork, and for getPoolAttestationsV2 of its filters; else 2^64 - 1. x1 = the
+ * entry. Uses x2, x9-x14.
  */
 LOCAL_FUNCTION node_pool_next
     UNWIND_END_PROLOGUE
+    ldr     x10, [x1, #NodeApi_op]
     mov     x9, #GOSSIP_VOLUNTARY_EXIT
-    cmp     x1, #API_OP_GET_POOL_VOLUNTARY_EXITS
+    cmp     x10, #API_OP_GET_POOL_VOLUNTARY_EXITS
     b.eq    1f
     mov     x9, #GOSSIP_PROPOSER_SLASHING
-    cmp     x1, #API_OP_GET_POOL_PROPOSER_SLASHINGS
+    cmp     x10, #API_OP_GET_POOL_PROPOSER_SLASHINGS
     b.eq    1f
     mov     x9, #GOSSIP_ATTESTER_SLASHING
-    cmp     x1, #API_OP_GET_POOL_ATTESTER_SLASHINGS_V2
+    cmp     x10, #API_OP_GET_POOL_ATTESTER_SLASHINGS_V2
+    b.eq    1f
+    mov     x9, #GOSSIP_BEACON_ATTESTATION
+    cmp     x10, #API_OP_GET_POOL_ATTESTATIONS_V2
     b.eq    1f
     mov     x9, #GOSSIP_BLS_TO_EXECUTION_CHANGE
-1:  cmp     x2, #FORK_ELECTRA
+1:  ldr     x13, [x1, #NodeApi_filter_slot]
+    ldr     x14, [x1, #NodeApi_filter_index]
+    ldr     x2, [x1, #NodeApi_fork]
+    cmp     x2, #FORK_ELECTRA
     cset    x2, hs
     PART    x10, x11, x19, Node_pool
     mov     x12, #NodePool__mem
@@ -4665,8 +4784,20 @@ LOCAL_FUNCTION node_pool_next
     cmp     x12, x9
     b.ne    3f
     cmp     x9, #GOSSIP_ATTESTER_SLASHING
+    b.eq    21f
+    cmp     x9, #GOSSIP_BEACON_ATTESTATION
     b.ne    4f
-    ldr     x12, [x10, #NodePool_fork]
+    ldr     x12, [x10, #NodePool_slot]      /* an attestation: of the filters */
+    cmn     x13, #1
+    b.eq    20f
+    cmp     x12, x13
+    b.ne    3f
+20: ldr     x12, [x10, #NodePool_index]
+    cmn     x14, #1
+    b.eq    21f
+    cmp     x12, x14
+    b.ne    3f
+21: ldr     x12, [x10, #NodePool_fork]
     cmp     x12, #FORK_ELECTRA
     cset    x12, hs
     cmp     x12, x2
@@ -4682,9 +4813,10 @@ END_FUNCTION node_pool_next
 
 /*
  * L1: (connection x0, route x1, flags x2, view x3): a stream of a pool GET (node.md, NODE_EV_API):
- * fork the store's; slot the first entry it answers, data its bytes, sent its fork; data 0 with
- * none. flags: API_STREAM_CLOSE and API_STREAM_HTTP10. Locals: the connection, the route, the
- * flags, the fork, the entry's index and address.
+ * fork the store's, the filters of getPoolAttestationsV2; slot the first entry it answers, data
+ * its bytes, sent its fork, member its member; data 0 with none. flags: API_STREAM_CLOSE and
+ * API_STREAM_HTTP10. Locals: the connection, the route, the flags, the fork, the entry's index
+ * and address.
  */
 LOCAL_FUNCTION node_api_pool_stream
     FRAME 48
@@ -4706,8 +4838,20 @@ LOCAL_FUNCTION node_api_pool_stream
     str     x9, [x1, #NodeApi_flags]
     ldr     x2, [sp, #40]
     str     x2, [x1, #NodeApi_fork]
+    mov     x12, #-1                        /* the filters: getPoolAttestationsV2's slot and committee_index */
+    mov     x13, #-1
+    cmp     x11, #API_OP_GET_POOL_ATTESTATIONS_V2
+    b.ne    2f
+    ldr     x9, [x10, #ApiRoute_present]
+    ldr     x14, [x10, #ApiRoute_slot]
+    tst     x9, #(1 << API_PARAM_SLOT)
+    csel    x12, x14, x12, ne
+    ldr     x14, [x10, #ApiRoute_committee_index]
+    tst     x9, #(1 << API_PARAM_COMMITTEE_INDEX)
+    csel    x13, x14, x13, ne
+2:  str     x12, [x1, #NodeApi_filter_slot]
+    str     x13, [x1, #NodeApi_filter_index]
     mov     x0, #0
-    mov     x1, x11
     bl      node_pool_next
     ldr     x9, [sp, #56]
     cmn     x0, #1
@@ -4717,6 +4861,8 @@ LOCAL_FUNCTION node_api_pool_stream
     str     x10, [x9, #NodeApi_data]
     ldr     x10, [x1, #NodePool_fork]
     str     x10, [x9, #NodeApi_sent]
+    ldr     x10, [x1, #NodePool_member]
+    str     x10, [x9, #NodeApi_member]
 1:  ldp     x0, x1, [sp, #48]
     bl      node_api_chunk_work
     UNFRAME 48
@@ -4724,7 +4870,7 @@ END_FUNCTION node_api_pool_stream
 
 /*
  * L1: the pool stream of the NodeApi entry x0 goes to its next entry after slot (node.md,
- * NODE_WORK_API_CHUNK): its slot, data and sent, a zero cursor; data 0 with none. Bytes it owned
+ * NODE_WORK_API_CHUNK): its slot, data, sent and member, a zero cursor; data 0 with none. Bytes it owned
  * get a NODE_ACT_BYTES_FREE, and API_STREAM_OWN clears. Locals: the entry, the old data, the flags.
  */
 LOCAL_FUNCTION node_api_pool_advance
@@ -4734,8 +4880,7 @@ LOCAL_FUNCTION node_api_pool_advance
     ldr     x10, [x0, #NodeApi_flags]
     stp     x9, x10, [sp, #24]
     ldr     x9, [x0, #NodeApi_slot]
-    ldr     x1, [x0, #NodeApi_op]
-    ldr     x2, [x0, #NodeApi_fork]
+    mov     x1, x0
     add     x0, x9, #1
     bl      node_pool_next
     ldr     x9, [sp, #16]
@@ -4745,6 +4890,8 @@ LOCAL_FUNCTION node_api_pool_advance
     str     x0, [x9, #NodeApi_slot]
     ldr     x11, [x1, #NodePool_fork]
     str     x11, [x9, #NodeApi_sent]
+    ldr     x11, [x1, #NodePool_member]
+    str     x11, [x9, #NodeApi_member]
     ldr     x10, [x1, #NodePool_data_id]
 1:  str     x10, [x9, #NodeApi_data]
     ldr     x10, [x9, #NodeApi_flags]
@@ -4789,6 +4936,9 @@ LOCAL_FUNCTION api_pool_json
     b.eq    3f
     mov     x0, #NODE_JSON_ATTESTER_SLASHING
     cmp     x9, #API_OP_GET_POOL_ATTESTER_SLASHINGS_V2
+    b.eq    3f
+    mov     x0, #NODE_JSON_ATTESTATION
+    cmp     x9, #API_OP_GET_POOL_ATTESTATIONS_V2
     b.eq    3f
     mov     x0, #NODE_JSON_BLS_CHANGE
 3:  add     x9, x23, #NodeEvent_api_bytes   /* the ByteList: its room to x26 - 1, its bytes to x24 */
@@ -5012,19 +5162,28 @@ LOCAL_FUNCTION node_api_submit_done
     cmp     x9, #LANTERN_GOSSIP_REJECT
     cinc    x25, x25, eq
     cbnz    x9, 6f
-    cmp     x26, #GOSSIP_BEACON_ATTESTATION /* a valid attestation: out on its subnet, no pool */
-    b.ne    21f
-    ldr     x9, [x19, #Node_flags]
-    tbz     x9, #2, 6f
-    mov     x0, x26
-    add     x1, x22, #16
-    ldr     x2, [x22, #8]
-    bl      node_publish
-    b       6f
-21: add     x0, x22, #16                    /* valid: its bytes to a new id, kept by the pool when it has room */
+    add     x0, x22, #16                    /* valid: its bytes to a new id, kept by the pool when it has room */
     bl      node_put
     mov     x27, x0
-    mov     x0, x26
+    mov     x4, #0                          /* an attestation: its slot and committee index, its member */
+    mov     x5, #0
+    ldr     x6, [x22, #8]
+    lsr     x6, x6, #32
+    cmp     x26, #GOSSIP_BEACON_ATTESTATION
+    b.ne    22f
+    ldr     x9, [x22, #24]
+    add     x9, x22, x9
+    add     x9, x9, #16
+    ldr     x10, [x21, #NodeAction_arg]
+    lsr     x10, x10, #16
+    cmp     x10, #FORK_ELECTRA
+    b.hs    21f
+    ldr     x4, [x9, #4]                    /* Attestation: data.slot at 4, data.index at 12 */
+    ldr     x5, [x9, #12]
+    b       22f
+21: ldr     x4, [x9, #16]                   /* SingleAttestation: committee_index at 0, data.slot at 16 */
+    ldr     x5, [x9]
+22: mov     x0, x26
     mov     x1, x27
     ldr     x2, [x22, #32]
     ldr     x3, [x21, #NodeAction_arg]
@@ -5032,10 +5191,10 @@ LOCAL_FUNCTION node_api_submit_done
     bl      node_pool_add
     str     x0, [sp, #L]
     ldr     x9, [x19, #Node_flags]
-    tbz     x9, #2, 3f                      /* NODE_FLAG_SUBSCRIBED: out on its topic */
+    tbz     x9, #2, 3f                      /* NODE_FLAG_SUBSCRIBED: out on its topic, an attestation on its subnet */
     mov     x0, x26
     add     x1, x22, #16
-    mov     x2, #0
+    ldr     w2, [x22, #8]
     bl      node_publish
 3:  cmp     x26, #GOSSIP_ATTESTER_SLASHING  /* an attester slashing: on_attester_slashing with the justified root's state */
     b.ne    4f
@@ -5598,7 +5757,16 @@ LOCAL_FUNCTION node_api_submit_run
     add     x5, sp, #(L + 312)
     FORK_CALL node_gossip
     cbnz    x0, 99f
-    ldr     x9, [x27, #16]
+    ldr     x9, [sp, #(L + 16)]             /* a valid attestation: its member, 2^32 times, with the subnet */
+    cmp     x9, #GOSSIP_BEACON_ATTESTATION
+    b.ne    35f
+    ldr     x9, [x27]
+    cbnz    x9, 35f
+    ldr     x9, [sp, #(L + 280 + 16)]
+    ldr     x10, [x27, #8]
+    orr     x10, x10, x9, lsl #32
+    str     x10, [x27, #8]
+35: ldr     x9, [x27, #16]
     add     x27, x27, #16
     add     x27, x27, x9
     sub     x28, x28, #1

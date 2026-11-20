@@ -637,8 +637,9 @@ END_FUNCTION node_ids
 
 /*
  * a0 = 1 when the bytes a1 (a2 bytes) of the topic a0, of the fork a3, join the pool: a
- * voluntary_exit, proposer_slashing, attester_slashing or bls_to_execution_change, in the first
- * free entry; else 0. Uses t0-t3, a7.
+ * voluntary_exit, proposer_slashing, attester_slashing, bls_to_execution_change or
+ * beacon_attestation (with its slot a4, committee index a5 and member a6), in the first free
+ * entry, for an attestation one below 3/4 of the pool's capacity; else 0. Uses t0-t4, a7.
  */
 LOCAL_FUNCTION node_pool_add
     UNWIND_END_PROLOGUE
@@ -648,23 +649,30 @@ LOCAL_FUNCTION node_pool_add
     beq     a0, t0, 1f
     li      t0, GOSSIP_ATTESTER_SLASHING
     beq     a0, t0, 1f
+    li      t0, GOSSIP_BEACON_ATTESTATION
+    beq     a0, t0, 1f
     li      t0, GOSSIP_BLS_TO_EXECUTION_CHANGE
     bne     a0, t0, 8f
-1:  PART    t0, t1, s1, Node_pool
+1:  ld      t4, Node_p2p_out(s1)            # the capacity, for an attestation 3/4 of it
+    LDQ     t3, s1, Node_pool
+    sub     t4, t4, t3
+    li      a7, NodePool__mem
+    divu    t4, t4, a7
+    li      t0, GOSSIP_BEACON_ATTESTATION
+    bne     a0, t0, 11f
+    slli    t3, t4, 1
+    add     t4, t4, t3
+    srli    t4, t4, 2
+11: PART    t0, t1, s1, Node_pool
     li      t2, 0
 2:  bgeu    t2, t1, 3f
+    bgeu    t2, t4, 8f
     ld      t3, NodePool_topic(t0)
     beqz    t3, 4f
     addi    t0, t0, NodePool__mem
     addi    t2, t2, 1
     j       2b
-3:  ld      t2, Node_p2p_out(s1)            # past the count: one more within the capacity
-    LDQ     t3, s1, Node_pool
-    sub     t2, t2, t3
-    addi    t3, t1, 1
-    li      a7, NodePool__mem
-    mul     t3, t3, a7
-    bltu    t2, t3, 8f
+3:  bgeu    t1, t4, 8f                      # past the count: one more within the capacity
     addi    t1, t1, 1
     STQ     t1, s1, Node_pool + 8
 4:  sd      a0, NodePool_topic(t0)
@@ -673,7 +681,15 @@ LOCAL_FUNCTION node_pool_add
     sd      a1, NodePool_data_id(t0)
     sd      a2, NodePool_length(t0)
     sd      a3, NodePool_fork(t0)
-    li      a0, 1
+    sd      zero, NodePool_slot(t0)
+    sd      zero, NodePool_index(t0)
+    sd      zero, NodePool_member(t0)
+    li      t3, GOSSIP_BEACON_ATTESTATION   # an attestation's slot, index and member
+    bne     a0, t3, 5f
+    sd      a4, NodePool_slot(t0)
+    sd      a5, NodePool_index(t0)
+    sd      a6, NodePool_member(t0)
+5:  li      a0, 1
     ret
 8:  li      a0, 0
     ret
@@ -705,13 +721,42 @@ LOCAL_FUNCTION node_pool_drop
 END_FUNCTION node_pool_drop
 
 /*
- * At a new head, each pool entry in NODE_POOL_KEPT gets a NODE_WORK_POOL_CHECK with the head's
- * post-state a0, and takes NODE_POOL_CHECKING; with a0 = 0, none. Locals: the state, the index.
+ * At a new head, each attestation of the pool whose slot's epoch + 1 is below the epoch of the
+ * store s2's slot goes; then each other entry in NODE_POOL_KEPT gets a NODE_WORK_POOL_CHECK with
+ * the head's post-state a0, and takes NODE_POOL_CHECKING; with a0 = 0, none. Locals: the state,
+ * the index, the epoch.
  */
 LOCAL_FUNCTION node_pool_checks
-    FRAME 16
-    beqz    a0, 9f
+    FRAME 32
     sd      a0, 0(sp)
+    mv      a0, s2
+    call    node_store_slot
+    li      t0, SLOTS_PER_EPOCH
+    divu    t0, a0, t0
+    sd      t0, 16(sp)
+    sd      zero, 8(sp)
+5:  ld      a4, 8(sp)
+    PART    t0, t1, s1, Node_pool
+    bgeu    a4, t1, 6f
+    li      t2, NodePool__mem
+    mul     t2, a4, t2
+    add     a0, t0, t2
+    ld      t2, NodePool_topic(a0)
+    li      t3, GOSSIP_BEACON_ATTESTATION
+    bne     t2, t3, 7f
+    ld      t2, NodePool_slot(a0)
+    li      t3, SLOTS_PER_EPOCH
+    divu    t2, t2, t3
+    addi    t2, t2, 1
+    ld      t3, 16(sp)
+    bgeu    t2, t3, 7f
+    call    node_pool_drop
+7:  ld      t0, 8(sp)
+    addi    t0, t0, 1
+    sd      t0, 8(sp)
+    j       5b
+6:  ld      t0, 0(sp)
+    beqz    t0, 9f
     sd      zero, 8(sp)
 1:  ld      a4, 8(sp)
     PART    t0, t1, s1, Node_pool
@@ -721,6 +766,8 @@ LOCAL_FUNCTION node_pool_checks
     add     t0, t0, t2
     ld      t2, NodePool_topic(t0)
     beqz    t2, 2f
+    li      t3, GOSSIP_BEACON_ATTESTATION
+    beq     t2, t3, 2f
     ld      t2, NodePool_state(t0)
     li      t3, NODE_POOL_KEPT
     bne     t2, t3, 2f
@@ -736,7 +783,7 @@ LOCAL_FUNCTION node_pool_checks
     addi    t0, t0, 1
     sd      t0, 8(sp)
     j       1b
-9:  UNFRAME 16
+9:  UNFRAME 32
 END_FUNCTION node_pool_checks
 
 /*
@@ -3781,6 +3828,9 @@ LOCAL_FUNCTION node_event
     ld      a0, NodeMessage_topic(s4)
     ld      a1, NodeAction_data(s3)
     ld      a2, NodeMessage_length(s4)
+    ld      a4, NodeEvent_root(s3)          # an attestation: its slot, committee index and member
+    ld      a5, (NodeEvent_root + 8)(s3)
+    ld      a6, (NodeEvent_root + 16)(s3)
     call    node_pool_add
     beqz    a0, 639f
     ld      t0, NodeMessage_topic(s4)

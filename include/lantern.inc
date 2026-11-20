@@ -1013,7 +1013,10 @@
 .set NodeApi_cursor, 48                  /* JSON: a JsonCursor */
 .set NodeApi_slot, 648                   /* the slot of the block or the state */
 .set NodeApi_state, 656                  /* the validator streams: the id of their state */
-.set NodeApi__mem, 664
+.set NodeApi_member, 664                 /* a pool stream: the member of the entry at slot */
+.set NodeApi_filter_slot, 672            /* a pool stream: the slot of its entries, or 2^64 - 1 */
+.set NodeApi_filter_index, 680           /* a pool stream: the committee index of its entries, or 2^64 - 1 */
+.set NodeApi__mem, 688
 .set NodeApi_position, NodeApi_cursor    /* the validator streams: the next index */
 .set NodeApi_statuses, NodeApi_cursor + 8   /* the validator streams: the status bits */
 .set API_STREAM_CLOSE, 1
@@ -1059,7 +1062,12 @@
 .set NodePool_data_id, 16                /* the BufferId of its SSZ bytes */
 .set NodePool_length, 24
 .set NodePool_fork, 32                   /* FORK_* of the type it was decoded with */
-.set NodePool__mem, 40
+.set NodePool_slot, 40                   /* an attestation: its data.slot */
+.set NodePool_index, 48                  /* an attestation: its committee index */
+.set NodePool_member, 56                 /* a SingleAttestation: its place + 2^16 x its committee's length */
+.set NodePool__mem, 64
+.set NODE_POOL_ATTESTATION_ROOM, 1024    /* scratch of the electra Attestation of a SingleAttestation */
+.set NODE_POOL_ATTESTATION_FIXED, 4 + 128 + 96 + (MAX_COMMITTEES_PER_SLOT + 7) / 8   /* electra Attestation: offset, data, signature, committee_bits */
 .set NODE_POOL_KEPT, 1
 .set NODE_POOL_CHECKING, 2               /* its NODE_WORK_POOL_CHECK is queued */
 

@@ -1303,6 +1303,71 @@ SPEC_FUNCTION node_attester_slashing
 SPEC_END node_attester_slashing
 
 /*
+ * a0 = a status: in the root s5 of lantern_node_gossip for the valid beacon_attestation s2, its
+ * data.slot, its committee index, its member and 0 (node.md): from electra, the member is the
+ * place of attester_index in lantern_get_beacon_committee of the head state of the args s1, +
+ * 2^16 times the committee's length, the committee a list at the end of the scratch s3; before
+ * electra, 0. s7 the list, s8 the scratch's size. Locals: L the slot, L+8 the index.
+ */
+LOCAL_FUNCTION node_gossip_member
+    ENTER 16
+.if FORK >= FORK_ELECTRA
+    ld      t0, (SingleAttestation_data + AttestationData_slot)(s2)
+    ld      t1, SingleAttestation_committee_index(s2)
+.else
+    ld      t0, (Attestation_data + AttestationData_slot)(s2)
+    ld      t1, (Attestation_data + AttestationData_index)(s2)
+.endif
+    sd      t0, 0(s5)
+    sd      t1, 8(s5)
+    sd      zero, 16(s5)
+    sd      zero, 24(s5)
+.if FORK >= FORK_ELECTRA
+    sd      t0, L(sp)
+    sd      t1, (L + 8)(sp)
+    ld      s8, 0(s3)                       # the committee's list at the end of scratch
+    li      t2, LIST_FIXED + 8 * MAX_VALIDATORS_PER_COMMITTEE
+    bltu    s8, t2, 8f
+    sub     t3, s8, t2
+    sd      t3, 0(s3)
+    add     s7, s3, t3
+    sd      t2, 0(s7)
+    li      t0, LIST_FIXED
+    sd      t0, LIST_OFFSET(s7)
+    sd      zero, LIST_COUNT(s7)
+    ld      a0, NodeGossip_head(s1)
+    addi    a1, sp, L
+    addi    a2, sp, L + 8
+    ld      a3, NodeGossip_config(s1)
+    ld      a3, CONFIG_COMMITTEE_CACHE(a3)
+    mv      a4, s3
+    mv      a5, s7
+    call    lantern_get_beacon_committee
+    sd      s8, 0(s3)
+    bnez    a0, 9f
+    ld      t0, LIST_OFFSET(s7)             # the attester's place
+    add     t0, s7, t0
+    ld      t1, LIST_COUNT(s7)
+    ld      t2, SingleAttestation_attester_index(s2)
+    li      t3, 0
+1:  bgeu    t3, t1, 7f
+    slli    t4, t3, 3
+    add     t4, t0, t4
+    ld      t4, 0(t4)
+    beq     t4, t2, 2f
+    addi    t3, t3, 1
+    j       1b
+2:  slli    t1, t1, 16
+    or      t3, t3, t1
+    sd      t3, 16(s5)
+.endif
+7:  li      a0, LANTERN_OK
+9:  LEAVE 16
+8:  li      a0, LANTERN_BUFFER_TOO_SMALL
+    LEAVE 16
+END_FUNCTION node_gossip_member
+
+/*
  * (args, data, scratch, result, root, index): the gossip validation of the topic args.topic for
  * the message in data, decoded with the fork's type. For beacon_block, blob_sidecar and
  * data_column_sidecar the proposer state first gets process_slots to the message's slot. A valid
@@ -1471,6 +1536,10 @@ SPEC_FUNCTION node_gossip
     mv      a6, s3
     mv      a7, s4
     call    lantern_validate_beacon_attestation_gossip
+    bnez    a0, 98f
+    ld      t0, 0(s4)                       # a valid attestation: its slot, committee index and member
+    bnez    t0, 99f
+    call    node_gossip_member
     j       98f
 32: li      t0, GOSSIP_VOLUNTARY_EXIT
     bne     s6, t0, 33f

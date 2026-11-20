@@ -1937,6 +1937,8 @@ LOCAL_FUNCTION node_api_event
     je      68f
     cmp     $API_OP_GET_POOL_BLS_TO_EXECUTION_CHANGES, %rcx
     je      68f
+    cmp     $API_OP_GET_POOL_ATTESTATIONS_V2, %rcx
+    je      68f
     mov     %rcx, %rdi
     call    node_submit_topic
     test    %rax, %rax
@@ -4225,6 +4227,8 @@ LOCAL_FUNCTION api_stream_head
     cmpq    $API_OP_GET_STATE_V2, NodeApi_op(%rbx)
     je      21f
     cmpq    $API_OP_GET_POOL_ATTESTER_SLASHINGS_V2, NodeApi_op(%rbx)
+    je      21f
+    cmpq    $API_OP_GET_POOL_ATTESTATIONS_V2, NodeApi_op(%rbx)
     jne     22f
 21: API_LIT api_version
     mov     NodeApi_fork(%rbx), %rdi
@@ -4281,6 +4285,8 @@ LOCAL_FUNCTION api_stream_json
     cmp     $API_OP_GET_POOL_PROPOSER_SLASHINGS, %rax
     je      4f
     cmp     $API_OP_GET_POOL_ATTESTER_SLASHINGS_V2, %rax
+    je      4f
+    cmp     $API_OP_GET_POOL_ATTESTATIONS_V2, %rax
     je      4f
     cmp     $API_OP_GET_POOL_BLS_TO_EXECUTION_CHANGES, %rax
     jne     3f
@@ -4364,6 +4370,8 @@ LOCAL_FUNCTION node_api_chunk_run
     je      103f
     cmp     $API_OP_GET_POOL_ATTESTER_SLASHINGS_V2, %rax
     je      103f
+    cmp     $API_OP_GET_POOL_ATTESTATIONS_V2, %rax
+    je      103f
     cmp     $API_OP_GET_POOL_BLS_TO_EXECUTION_CHANGES, %rax
     je      103f
     cmp     $API_OP_GET_STATE_VALIDATOR, %rax       # a validator stream: a state
@@ -4442,7 +4450,7 @@ LOCAL_FUNCTION node_api_chunk_run
     cmpq    $0, (L + 56)(%rsp)              # a validator stream: its selection; getEpochCommittees its count; then the state is what api_stream_json reads
     je      6f
     cmpq    $3, (L + 56)(%rsp)
-    je      6f
+    je      67f
     mov     (L + 64)(%rsp), %rdi
     mov     (L + 48)(%rsp), %rsi
     cmpq    $2, (L + 56)(%rsp)
@@ -4460,6 +4468,21 @@ LOCAL_FUNCTION node_api_chunk_run
     jnz     97f
 66: mov     (L + 48)(%rsp), %rax
     mov     %rax, (L + 40)(%rsp)
+    jmp     6f
+67: mov     (L + 40)(%rsp), %rsi            # getPoolAttestationsV2 from electra: the Attestation of a SingleAttestation
+    test    %rsi, %rsi
+    jz      6f
+    cmpq    $API_OP_GET_POOL_ATTESTATIONS_V2, NodeApi_op(%rbx)
+    jne     6f
+    cmpq    $FORK_ELECTRA, NodeApi_sent(%rbx)
+    jb      6f
+    mov     (L + 64)(%rsp), %rdi
+    mov     NodeApi_member(%rbx), %rdx
+    call    node_pool_attestation
+    cmp     $1, %rax
+    je      96f
+    ja      97f
+    mov     %rdx, (L + 40)(%rsp)
     jmp     6f
 64: lea     NodeEvent_api_bytes(%rbp), %rsi # an index past the count: the error 400 is the answer
     mov     L(%rsp), %rax
@@ -4533,9 +4556,11 @@ LOCAL_FUNCTION node_api_chunk_run
     je      35f
     cmpq    $3, (L + 56)(%rsp)
     jne     38f
-    cmpq    $API_OP_GET_POOL_ATTESTER_SLASHINGS_V2, NodeApi_op(%rbx)   # a pool stream: {"data":[, getPoolAttesterSlashingsV2 {"version":"<fork>","data":[
+    cmpq    $API_OP_GET_POOL_ATTESTER_SLASHINGS_V2, NodeApi_op(%rbx)   # a pool stream: {"data":[, the V2 GETs {"version":"<fork>","data":[
+    je      391f
+    cmpq    $API_OP_GET_POOL_ATTESTATIONS_V2, NodeApi_op(%rbx)
     jne     39f
-    API_LIT api_j_version
+391: API_LIT api_j_version
     mov     NodeApi_fork(%rbx), %rdi
     call    api_fork_name
     API_LIT api_p_version
@@ -4682,6 +4707,88 @@ END_FUNCTION node_api_chunk_run
 
 /* ------------------------------------------------------------ The pools (beacon-api.md, node.md) */
 
+/*
+ * (scratch rdi, the ByteList rsi of a SingleAttestation, member rdx) -> rax: the electra Attestation
+ * of it as a ByteList at the end of scratch, at rdx (node.md, NODE_WORK_API_CHUNK, the pool
+ * streams): aggregation_bits of the length member / 2^16 with the bit of the place member % 2^16,
+ * data, signature, committee_bits with the bit of committee_index. rax = 0; 1 for bytes of another
+ * size, a place not below the length, a length above MAX_VALIDATORS_PER_COMMITTEE or a
+ * committee_index not below MAX_COMMITTEES_PER_SLOT; 2 for a scratch without
+ * NODE_POOL_ATTESTATION_ROOM bytes. Locals: the ByteList, the SingleAttestation, the committee
+ * index, the place, the length.
+ */
+LOCAL_FUNCTION node_pool_attestation
+    FRAME 48
+    cmpq    $240, 16(%rsi)
+    jne     81f
+    mov     8(%rsi), %rax
+    add     %rsi, %rax
+    mov     (%rax), %rcx
+    cmp     $MAX_COMMITTEES_PER_SLOT, %rcx
+    jae     81f
+    movzwl  %dx, %r8d
+    shr     $16, %rdx
+    cmp     $MAX_VALIDATORS_PER_COMMITTEE, %rdx
+    ja      81f
+    cmp     %rdx, %r8
+    jae     81f
+    mov     (%rdi), %r9
+    cmp     $NODE_POOL_ATTESTATION_ROOM, %r9
+    jb      82f
+    lea     -NODE_POOL_ATTESTATION_ROOM(%rdi,%r9), %r9
+    mov     %r9, (%rsp)
+    mov     %rax, 8(%rsp)
+    mov     %rcx, 16(%rsp)
+    mov     %r8, 24(%rsp)
+    mov     %rdx, 32(%rsp)
+    lea     24(%r9), %rdi
+    mov     $(NODE_POOL_ATTESTATION_ROOM - 24), %esi
+    call    lantern_zero
+    mov     (%rsp), %r9                     # its head: size, offset 24, count
+    movq    $NODE_POOL_ATTESTATION_ROOM, (%r9)
+    movq    $24, 8(%r9)
+    mov     32(%rsp), %rax
+    shr     $3, %rax
+    add     $(NODE_POOL_ATTESTATION_FIXED + 1), %rax
+    mov     %rax, 16(%r9)
+    movl    $NODE_POOL_ATTESTATION_FIXED, 24(%r9)   # the offset of aggregation_bits, data and signature
+    lea     28(%r9), %rdi
+    mov     8(%rsp), %rsi
+    add     $16, %rsi
+    mov     $(128 + 96), %edx
+    call    lantern_copy
+    mov     (%rsp), %r9
+    mov     16(%rsp), %rcx                  # committee_bits
+    mov     %rcx, %rax
+    shr     $3, %rax
+    and     $7, %ecx
+    mov     $1, %edx
+    shl     %cl, %edx
+    or      %dl, (24 + 4 + 128 + 96)(%r9,%rax)
+    add     $(24 + NODE_POOL_ATTESTATION_FIXED), %r9    # aggregation_bits: the place, then the length's bit
+    mov     24(%rsp), %rcx
+    mov     %rcx, %rax
+    shr     $3, %rax
+    and     $7, %ecx
+    mov     $1, %edx
+    shl     %cl, %edx
+    or      %dl, (%r9,%rax)
+    mov     32(%rsp), %rcx
+    mov     %rcx, %rax
+    shr     $3, %rax
+    and     $7, %ecx
+    mov     $1, %edx
+    shl     %cl, %edx
+    or      %dl, (%r9,%rax)
+    mov     (%rsp), %rdx
+    xor     %eax, %eax
+    UNFRAME 48
+81: mov     $1, %eax
+    UNFRAME 48
+82: mov     $2, %eax
+    UNFRAME 48
+END_FUNCTION node_pool_attestation
+
 /* rax = the new id of a NODE_ACT_BYTES_PUT of the 8 bytes at rdi. Locals: a ByteList head whose offset reaches them. */
 LOCAL_FUNCTION node_api_put8
     FRAME 32
@@ -4731,25 +4838,31 @@ END_FUNCTION node_pool_kind
 .endif
 
 /*
- * rax = the index of the first pool entry from the index rdi that the pool GET rsi of the fork
- * rdx answers (node.md, NODE_EV_API): of its topic, and for getPoolAttesterSlashingsV2 of that
- * fork's AttesterSlashing type; else 2^64 - 1. rdx = the entry. rbx the node. Uses rcx, r8, r10, r11.
+ * rax = the index of the first pool entry from the index rdi that the pool stream rsi answers
+ * (node.md, NODE_EV_API): of its topic; for getPoolAttesterSlashingsV2 and getPoolAttestationsV2
+ * of the type of its fork, and for getPoolAttestationsV2 of its filters; else 2^64 - 1. rdx = the
+ * entry. rbx the node. Uses rcx, r8, r9, r10, r11.
  */
 LOCAL_FUNCTION node_pool_next
     UNWIND_END_PROLOGUE
+    mov     NodeApi_op(%rsi), %rax
     mov     $GOSSIP_VOLUNTARY_EXIT, %ecx
-    cmp     $API_OP_GET_POOL_VOLUNTARY_EXITS, %rsi
+    cmp     $API_OP_GET_POOL_VOLUNTARY_EXITS, %rax
     je      1f
     mov     $GOSSIP_PROPOSER_SLASHING, %ecx
-    cmp     $API_OP_GET_POOL_PROPOSER_SLASHINGS, %rsi
+    cmp     $API_OP_GET_POOL_PROPOSER_SLASHINGS, %rax
     je      1f
     mov     $GOSSIP_ATTESTER_SLASHING, %ecx
-    cmp     $API_OP_GET_POOL_ATTESTER_SLASHINGS_V2, %rsi
+    cmp     $API_OP_GET_POOL_ATTESTER_SLASHINGS_V2, %rax
+    je      1f
+    mov     $GOSSIP_BEACON_ATTESTATION, %ecx
+    cmp     $API_OP_GET_POOL_ATTESTATIONS_V2, %rax
     je      1f
     mov     $GOSSIP_BLS_TO_EXECUTION_CHANGE, %ecx
 1:  xor     %r11d, %r11d
-    cmp     $FORK_ELECTRA, %rdx
+    cmpq    $FORK_ELECTRA, NodeApi_fork(%rsi)
     setae   %r11b
+    mov     NodeApi_filter_slot(%rsi), %r9
     mov     %rdi, %rax
     PART    %rdx, %r10, %rbx, Node_pool
     imul    $NodePool__mem, %rax, %r8
@@ -4759,8 +4872,19 @@ LOCAL_FUNCTION node_pool_next
     cmp     %rcx, NodePool_topic(%rdx)
     jne     3f
     cmp     $GOSSIP_ATTESTER_SLASHING, %rcx
+    je      21f
+    cmp     $GOSSIP_BEACON_ATTESTATION, %rcx
     jne     4f
-    xor     %r8d, %r8d
+    cmp     $-1, %r9                        # an attestation: of the filters
+    je      20f
+    cmp     %r9, NodePool_slot(%rdx)
+    jne     3f
+20: mov     NodeApi_filter_index(%rsi), %r8
+    cmp     $-1, %r8
+    je      21f
+    cmp     %r8, NodePool_index(%rdx)
+    jne     3f
+21: xor     %r8d, %r8d
     cmpq    $FORK_ELECTRA, NodePool_fork(%rdx)
     setae   %r8b
     cmp     %r11, %r8
@@ -4775,8 +4899,8 @@ END_FUNCTION node_pool_next
 
 /*
  * (connection rdi, route rsi, flags rdx, view rcx): a stream of a pool GET (node.md, NODE_EV_API):
- * fork the store's; slot the first entry it answers, data its bytes, sent its fork; data 0 with
- * none. flags: API_STREAM_CLOSE and API_STREAM_HTTP10. Locals: the connection, the route, the
+ * fork the store's, the filters of getPoolAttestationsV2; slot the first entry it answers, data
+ * its bytes, sent its fork, member its member; data 0 with none. flags: API_STREAM_CLOSE and API_STREAM_HTTP10. Locals: the connection, the route, the
  * flags, the fork, the entry's index and address.
  */
 LOCAL_FUNCTION node_api_pool_stream
@@ -4802,8 +4926,21 @@ LOCAL_FUNCTION node_api_pool_stream
     mov     %rax, NodeApi_flags(%rdx)
     mov     24(%rsp), %rax
     mov     %rax, NodeApi_fork(%rdx)
-    xor     %edi, %edi
-    mov     %rax, %rdx
+    movq    $-1, NodeApi_filter_slot(%rdx)  # the filters: getPoolAttestationsV2's slot and committee_index
+    movq    $-1, NodeApi_filter_index(%rdx)
+    cmp     $API_OP_GET_POOL_ATTESTATIONS_V2, %rsi
+    jne     2f
+    mov     8(%rsp), %rax
+    testq   $(1 << API_PARAM_SLOT), ApiRoute_present(%rax)
+    jz      3f
+    mov     ApiRoute_slot(%rax), %rcx
+    mov     %rcx, NodeApi_filter_slot(%rdx)
+3:  testq   $(1 << API_PARAM_COMMITTEE_INDEX), ApiRoute_present(%rax)
+    jz      2f
+    mov     ApiRoute_committee_index(%rax), %rcx
+    mov     %rcx, NodeApi_filter_index(%rdx)
+2:  xor     %edi, %edi
+    mov     %rdx, %rsi
     call    node_pool_next
     mov     40(%rsp), %rcx
     cmp     $-1, %rax
@@ -4813,6 +4950,8 @@ LOCAL_FUNCTION node_api_pool_stream
     mov     %rax, NodeApi_data(%rcx)
     mov     NodePool_fork(%rdx), %rax
     mov     %rax, NodeApi_sent(%rcx)
+    mov     NodePool_member(%rdx), %rax
+    mov     %rax, NodeApi_member(%rcx)
 1:  mov     32(%rsp), %rax
     mov     40(%rsp), %rdx
     call    node_api_chunk_work
@@ -4821,7 +4960,7 @@ END_FUNCTION node_api_pool_stream
 
 /*
  * The pool stream of the NodeApi entry rdi goes to its next entry after slot (node.md,
- * NODE_WORK_API_CHUNK): its slot, data and sent, a zero cursor; data 0 with none. Bytes it owned
+ * NODE_WORK_API_CHUNK): its slot, data, sent and member, a zero cursor; data 0 with none. Bytes it owned
  * get a NODE_ACT_BYTES_FREE, and API_STREAM_OWN clears. Locals: the entry, the old data, the flags.
  */
 LOCAL_FUNCTION node_api_pool_advance
@@ -4831,8 +4970,7 @@ LOCAL_FUNCTION node_api_pool_advance
     mov     %rax, 8(%rsp)
     mov     NodeApi_flags(%rdi), %rax
     mov     %rax, 16(%rsp)
-    mov     NodeApi_op(%rdi), %rsi
-    mov     NodeApi_fork(%rdi), %rdx
+    mov     %rdi, %rsi
     mov     NodeApi_slot(%rdi), %rdi
     inc     %rdi
     call    node_pool_next
@@ -4843,6 +4981,8 @@ LOCAL_FUNCTION node_api_pool_advance
     mov     %rax, NodeApi_slot(%rcx)
     mov     NodePool_fork(%rdx), %rax
     mov     %rax, NodeApi_sent(%rcx)
+    mov     NodePool_member(%rdx), %rax
+    mov     %rax, NodeApi_member(%rcx)
     mov     NodePool_data_id(%rdx), %r8
 1:  mov     %r8, NodeApi_data(%rcx)
     andq    $~API_STREAM_OWN, NodeApi_flags(%rcx)
@@ -4887,6 +5027,9 @@ LOCAL_FUNCTION api_pool_json
     je      3f
     mov     $NODE_JSON_ATTESTER_SLASHING, %edi
     cmp     $API_OP_GET_POOL_ATTESTER_SLASHINGS_V2, %rax
+    je      3f
+    mov     $NODE_JSON_ATTESTATION, %edi
+    cmp     $API_OP_GET_POOL_ATTESTATIONS_V2, %rax
     je      3f
     mov     $NODE_JSON_BLS_CHANGE, %edi
 3:  lea     NodeEvent_api_bytes(%rbp), %rsi # the ByteList: its room to r14 - 1, its bytes to r12
@@ -5075,10 +5218,11 @@ END_FUNCTION node_submit_check
  * bytes go; each valid operation joins the pool, goes out on its topic with NODE_FLAG_SUBSCRIBED,
  * and an attester slashing to fork choice; then the answer to the connection. rbx the node, rbp
  * the store, r15 the actions. r12 the event, r13 the record, S7 the records left, S8 the failures,
- * S9 the topic, S10 the new id. Locals: L 1 when the pool keeps it, L+8 the answer's flags.
+ * S9 the topic, S10 the new id. Locals: L 1 when the pool keeps it, L+8 the answer's flags,
+ * L+16 an attestation's slot, committee index and member.
  */
 LOCAL_FUNCTION node_api_submit_done
-    ENTER 16
+    ENTER 48
     mov     %rdi, %r12
     mov     $NODE_ACT_BYTES_FREE, %edi
     mov     NodeAction_data(%r12), %rsi
@@ -5112,30 +5256,44 @@ LOCAL_FUNCTION node_api_submit_done
     incq    S8(%rsp)
 21: test    %rax, %rax
     jnz     6f
-    cmpq    $GOSSIP_BEACON_ATTESTATION, S9(%rsp)    # a valid attestation: out on its subnet, no pool
-    jne     22f
-    testq   $NODE_FLAG_SUBSCRIBED, Node_flags(%rbx)
-    jz      6f
-    mov     S9(%rsp), %rdi
-    lea     16(%r13), %rsi
-    mov     8(%r13), %rdx
-    call    node_publish
-    jmp     6f
-22: lea     16(%r13), %rdi                  # valid: its bytes to a new id, kept by the pool when it has room
+    lea     16(%r13), %rdi                  # valid: its bytes to a new id, kept by the pool when it has room
     call    node_put
     mov     %rax, S10(%rsp)
-    mov     S9(%rsp), %rdi
-    mov     %rax, %rsi
+    mov     8(%r13), %rax                   # an attestation: its slot and committee index, its member
+    shr     $32, %rax
+    mov     %rax, (L + 32)(%rsp)
+    movq    $0, (L + 16)(%rsp)
+    movq    $0, (L + 24)(%rsp)
+    cmpq    $GOSSIP_BEACON_ATTESTATION, S9(%rsp)
+    jne     22f
+    mov     24(%r13), %rax
+    lea     16(%r13,%rax), %rax
+    mov     NodeAction_arg(%r12), %rcx
+    shr     $16, %rcx
+    cmp     $FORK_ELECTRA, %rcx
+    jae     23f
+    mov     4(%rax), %rcx                   # Attestation: data.slot at 4, data.index at 12
+    mov     %rcx, (L + 16)(%rsp)
+    mov     12(%rax), %rcx
+    mov     %rcx, (L + 24)(%rsp)
+    jmp     22f
+23: mov     16(%rax), %rcx                  # SingleAttestation: committee_index at 0, data.slot at 16
+    mov     %rcx, (L + 16)(%rsp)
+    mov     (%rax), %rcx
+    mov     %rcx, (L + 24)(%rsp)
+22: mov     S9(%rsp), %rdi
+    mov     S10(%rsp), %rsi
     mov     32(%r13), %rdx
     mov     NodeAction_arg(%r12), %rcx
     shr     $16, %rcx
+    lea     (L + 16)(%rsp), %r8
     call    node_pool_add
     mov     %rax, L(%rsp)
-    testq   $NODE_FLAG_SUBSCRIBED, Node_flags(%rbx) # NODE_FLAG_SUBSCRIBED: out on its topic
+    testq   $NODE_FLAG_SUBSCRIBED, Node_flags(%rbx) # NODE_FLAG_SUBSCRIBED: out on its topic, an attestation on its subnet
     jz      3f
     mov     S9(%rsp), %rdi
     lea     16(%r13), %rsi
-    xor     %edx, %edx
+    mov     8(%r13), %edx
     call    node_publish
 3:  cmpq    $GOSSIP_ATTESTER_SLASHING, S9(%rsp) # an attester slashing: on_attester_slashing with the justified root's state
     jne     4f
@@ -5178,20 +5336,20 @@ LOCAL_FUNCTION node_api_submit_done
     mov     $API_OP_SUBMIT_POOL_BLS_TO_EXECUTION_CHANGE, %ecx
     mov     (L + 8)(%rsp), %r8
     call    node_api_send
-    LEAVE 16
+    LEAVE 48
 71: xor     %esi, %esi
     mov     $200, %edx
     xor     %ecx, %ecx
     mov     (L + 8)(%rsp), %r8
     call    node_api_send
-    LEAVE 16
+    LEAVE 48
 80: mov     NodeAction_target(%r12), %rdi
     xor     %esi, %esi
     mov     $400, %edx
     mov     $API_BODY_ERROR, %ecx
     mov     (L + 8)(%rsp), %r8
     call    node_api_send
-    LEAVE 16
+    LEAVE 48
 END_FUNCTION node_api_submit_done
 
 /*
@@ -5742,7 +5900,14 @@ LOCAL_FUNCTION node_api_submit_run
     test    %rax, %rax
     jnz     99f
     mov     S9(%rsp), %rcx
-    mov     16(%rcx), %rax
+    cmpq    $GOSSIP_BEACON_ATTESTATION, (L + 16)(%rsp)  # a valid attestation: its member, 2^32 times, with the subnet
+    jne     35f
+    cmpq    $0, (%rcx)
+    jne     35f
+    mov     (L + 272 + 16)(%rsp), %rax
+    shl     $32, %rax
+    or      %rax, 8(%rcx)
+35: mov     16(%rcx), %rax
     lea     16(%rcx,%rax), %rcx
     mov     %rcx, S9(%rsp)
     decq    (L + 32)(%rsp)

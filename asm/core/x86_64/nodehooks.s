@@ -1314,6 +1314,71 @@ SPEC_FUNCTION node_attester_slashing
 SPEC_END node_attester_slashing
 
 /*
+ * rax = a status: in the root r14 of lantern_node_gossip for the valid beacon_attestation rbp,
+ * its data.slot, its committee index, its member and 0 (node.md): from electra, the member is the
+ * place of attester_index in lantern_get_beacon_committee of the head state of the args rbx, +
+ * 2^16 times the committee's length, the committee a list at the end of the scratch r12; before
+ * electra, 0. r13 the list, r15 the scratch's size. Locals: L the slot, L+8 the index.
+ */
+LOCAL_FUNCTION node_gossip_member
+    ENTER 16
+.if FORK >= FORK_ELECTRA
+    mov     (SingleAttestation_data + AttestationData_slot)(%rbp), %rax
+    mov     SingleAttestation_committee_index(%rbp), %rcx
+.else
+    mov     (Attestation_data + AttestationData_slot)(%rbp), %rax
+    mov     (Attestation_data + AttestationData_index)(%rbp), %rcx
+.endif
+    mov     %rax, (%r14)
+    mov     %rcx, 8(%r14)
+    movq    $0, 16(%r14)
+    movq    $0, 24(%r14)
+.if FORK >= FORK_ELECTRA
+    mov     %rax, L(%rsp)
+    mov     %rcx, (L + 8)(%rsp)
+    mov     (%r12), %r15                    # the committee's list at the end of scratch
+    mov     $(LIST_FIXED + 8 * MAX_VALIDATORS_PER_COMMITTEE), %edx
+    mov     %r15, %rax
+    sub     %rdx, %rax
+    jb      8f
+    mov     %rax, (%r12)
+    lea     (%r12,%rax), %r13
+    mov     %rdx, (%r13)
+    movq    $LIST_FIXED, LIST_OFFSET(%r13)
+    movq    $0, LIST_COUNT(%r13)
+    mov     NodeGossip_head(%rbx), %rdi
+    lea     L(%rsp), %rsi
+    lea     (L + 8)(%rsp), %rdx
+    mov     NodeGossip_config(%rbx), %rcx
+    mov     CONFIG_COMMITTEE_CACHE(%rcx), %rcx
+    mov     %r12, %r8
+    mov     %r13, %r9
+    call    lantern_get_beacon_committee
+    mov     %r15, (%r12)
+    test    %rax, %rax
+    jnz     9f
+    mov     LIST_OFFSET(%r13), %rdx         # the attester's place
+    add     %r13, %rdx
+    mov     LIST_COUNT(%r13), %rcx
+    mov     SingleAttestation_attester_index(%rbp), %rsi
+    xor     %eax, %eax
+1:  cmp     %rcx, %rax
+    jae     7f
+    cmp     %rsi, (%rdx,%rax,8)
+    je      2f
+    inc     %rax
+    jmp     1b
+2:  shl     $16, %rcx
+    or      %rcx, %rax
+    mov     %rax, 16(%r14)
+.endif
+7:  xor     %eax, %eax
+9:  LEAVE 16
+8:  mov     $LANTERN_BUFFER_TOO_SMALL, %eax
+    LEAVE 16
+END_FUNCTION node_gossip_member
+
+/*
  * (args, data, scratch, result, root, index): the gossip validation of the topic args.topic for
  * the message in data, decoded with the fork's type. For beacon_block, blob_sidecar and
  * data_column_sidecar the proposer state first gets process_slots to the message's slot. A valid
@@ -1488,6 +1553,11 @@ SPEC_FUNCTION node_gossip
     mov     %r12, S7(%rsp)
     mov     %r13, S8(%rsp)
     call    lantern_validate_beacon_attestation_gossip
+    test    %rax, %rax
+    jnz     98f
+    cmpq    $0, (%r13)                      # a valid attestation: its slot, committee index and member
+    jne     99f
+    call    node_gossip_member
     jmp     98f
 32: cmp     $GOSSIP_VOLUNTARY_EXIT, %r15
     jne     33f

@@ -2503,7 +2503,7 @@ enum { WORK_IMPORT_BLOCK = 1, WORK_JUSTIFIED_STATE, WORK_TARGET_STATE, WORK_ATTE
 #define NODE_API_CHUNK 65536
 #define NODE_API_PART (728 + CONFIG_SIZE + 936) /* Node_api: the PartRef of the NodeApi entries */
 #define NODE_POOL_PART (NODE_API_PART + 72)    /* Node_pool: the PartRef of the NodePool entries */
-#define NODE_POOL_MEM 40
+#define NODE_POOL_MEM 64
 
 /* The pool entries in use (topic not 0) of the node: each keeps a buffer. */
 static uint64_t node_pool_held(const uint8_t *node) {

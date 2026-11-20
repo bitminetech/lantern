@@ -2002,6 +2002,8 @@ LOCAL_FUNCTION node_api_event
     beq     a3, t0, 68f
     li      t0, API_OP_GET_POOL_BLS_TO_EXECUTION_CHANGES
     beq     a3, t0, 68f
+    li      t0, API_OP_GET_POOL_ATTESTATIONS_V2
+    beq     a3, t0, 68f
     mv      a0, a3
     call    node_submit_topic
     bnez    a0, 60f
@@ -4210,6 +4212,8 @@ LOCAL_FUNCTION api_stream_head
     li      t1, API_OP_GET_STATE_V2
     beq     t0, t1, 21f
     li      t1, API_OP_GET_POOL_ATTESTER_SLASHINGS_V2
+    beq     t0, t1, 21f
+    li      t1, API_OP_GET_POOL_ATTESTATIONS_V2
     bne     t0, t1, 22f
 21: API_LIT api_version
     ld      a0, NodeApi_fork(s4)
@@ -4269,6 +4273,8 @@ LOCAL_FUNCTION api_stream_json
     li      t1, API_OP_GET_POOL_PROPOSER_SLASHINGS
     beq     t0, t1, 4f
     li      t1, API_OP_GET_POOL_ATTESTER_SLASHINGS_V2
+    beq     t0, t1, 4f
+    li      t1, API_OP_GET_POOL_ATTESTATIONS_V2
     beq     t0, t1, 4f
     li      t1, API_OP_GET_POOL_BLS_TO_EXECUTION_CHANGES
     bne     t0, t1, 3f
@@ -4352,6 +4358,8 @@ LOCAL_FUNCTION node_api_chunk_run
     beq     t0, t1, 103f
     li      t1, API_OP_GET_POOL_ATTESTER_SLASHINGS_V2
     beq     t0, t1, 103f
+    li      t1, API_OP_GET_POOL_ATTESTATIONS_V2
+    beq     t0, t1, 103f
     li      t1, API_OP_GET_POOL_BLS_TO_EXECUTION_CHANGES
     beq     t0, t1, 103f
     li      t1, API_OP_GET_STATE_VALIDATOR  # a validator stream: a state
@@ -4432,7 +4440,7 @@ LOCAL_FUNCTION node_api_chunk_run
     ld      t0, (L + 40)(sp)                # a validator stream: its selection; getEpochCommittees its count; then api_stream_json reads the state
     beqz    t0, 6f
     li      t1, 3
-    beq     t0, t1, 6f
+    beq     t0, t1, 67f
     ld      a0, (L + 56)(sp)
     ld      a1, (L + 48)(sp)
     li      t1, 2
@@ -4447,6 +4455,22 @@ LOCAL_FUNCTION node_api_chunk_run
     beq     a0, t0, 64f
     bnez    a0, 97f
 66: ld      s3, (L + 48)(sp)
+    j       6f
+67: beqz    s3, 6f                          # getPoolAttestationsV2 from electra: the Attestation of a SingleAttestation
+    ld      t0, NodeApi_op(s4)
+    li      t1, API_OP_GET_POOL_ATTESTATIONS_V2
+    bne     t0, t1, 6f
+    ld      t0, NodeApi_sent(s4)
+    li      t1, FORK_ELECTRA
+    bltu    t0, t1, 6f
+    ld      a0, (L + 56)(sp)
+    mv      a1, s3
+    ld      a2, NodeApi_member(s4)
+    call    node_pool_attestation
+    li      t0, 1
+    beq     a0, t0, 96f
+    bgtu    a0, t0, 97f
+    mv      s3, a1
     j       6f
 64: addi    a1, s5, NodeEvent_api_bytes     # an index past the count: the error 400 is the answer
     ld      t0, (L + 0)(sp)
@@ -4521,10 +4545,12 @@ LOCAL_FUNCTION node_api_chunk_run
     beqz    t0, 35f
     li      t1, 3
     bne     t0, t1, 38f
-    ld      t0, NodeApi_op(s4)              # a pool stream: {"data":[, getPoolAttesterSlashingsV2 {"version":"<fork>","data":[
+    ld      t0, NodeApi_op(s4)              # a pool stream: {"data":[, the V2 GETs {"version":"<fork>","data":[
     li      t1, API_OP_GET_POOL_ATTESTER_SLASHINGS_V2
+    beq     t0, t1, 391f
+    li      t1, API_OP_GET_POOL_ATTESTATIONS_V2
     bne     t0, t1, 39f
-    API_LIT api_j_version
+391: API_LIT api_j_version
     ld      a0, NodeApi_fork(s4)
     call    api_fork_name
     API_LIT api_p_version
@@ -4675,6 +4701,97 @@ END_FUNCTION node_api_chunk_run
 
 # ---------------------------------------------------------------- The pools (beacon-api.md, node.md)
 
+/*
+ * (scratch a0, the ByteList a1 of a SingleAttestation, member a2) -> a0: the electra Attestation
+ * of it as a ByteList at the end of scratch, at a1 (node.md, NODE_WORK_API_CHUNK, the pool
+ * streams): aggregation_bits of the length member / 2^16 with the bit of the place member % 2^16,
+ * data, signature, committee_bits with the bit of committee_index. a0 = 0; 1 for bytes of another
+ * size, a place not below the length, a length above MAX_VALIDATORS_PER_COMMITTEE or a
+ * committee_index not below MAX_COMMITTEES_PER_SLOT; 2 for a scratch without
+ * NODE_POOL_ATTESTATION_ROOM bytes. Locals: the ByteList, the SingleAttestation, the committee
+ * index, the place, the length.
+ */
+LOCAL_FUNCTION node_pool_attestation
+    FRAME 48
+    ld      t0, 16(a1)
+    li      t1, 240
+    bne     t0, t1, 81f
+    ld      t0, 8(a1)
+    add     t0, a1, t0
+    ld      t1, 0(t0)
+    li      t2, MAX_COMMITTEES_PER_SLOT
+    bgeu    t1, t2, 81f
+    slli    t2, a2, 48
+    srli    t2, t2, 48
+    srli    t3, a2, 16
+    li      t4, MAX_VALIDATORS_PER_COMMITTEE
+    bgtu    t3, t4, 81f
+    bgeu    t2, t3, 81f
+    ld      t4, 0(a0)
+    li      t5, NODE_POOL_ATTESTATION_ROOM
+    bltu    t4, t5, 82f
+    add     t4, a0, t4
+    sub     t4, t4, t5
+    sd      t4, 0(sp)
+    sd      t0, 8(sp)
+    sd      t1, 16(sp)
+    sd      t2, 24(sp)
+    sd      t3, 32(sp)
+    addi    a0, t4, 24
+    li      a1, NODE_POOL_ATTESTATION_ROOM - 24
+    call    lantern_zero
+    ld      t4, 0(sp)                       # its head: size, offset 24, count
+    li      t0, NODE_POOL_ATTESTATION_ROOM
+    sd      t0, 0(t4)
+    li      t0, 24
+    sd      t0, 8(t4)
+    ld      t0, 32(sp)
+    srli    t0, t0, 3
+    addi    t0, t0, NODE_POOL_ATTESTATION_FIXED + 1
+    sd      t0, 16(t4)
+    li      t0, NODE_POOL_ATTESTATION_FIXED # the offset of aggregation_bits, data and signature
+    sw      t0, 24(t4)
+    addi    a0, t4, 28
+    ld      a1, 8(sp)
+    addi    a1, a1, 16
+    li      a2, 128 + 96
+    call    lantern_copy
+    ld      t4, 0(sp)
+    ld      t1, 16(sp)                      # committee_bits
+    srli    t0, t1, 3
+    andi    t1, t1, 7
+    li      t2, 1
+    sll     t2, t2, t1
+    add     t0, t4, t0
+    sb      t2, (24 + 4 + 128 + 96)(t0)
+    addi    t4, t4, 24 + NODE_POOL_ATTESTATION_FIXED    # aggregation_bits: the place, then the length's bit
+    ld      t1, 24(sp)
+    srli    t0, t1, 3
+    andi    t1, t1, 7
+    li      t2, 1
+    sll     t2, t2, t1
+    add     t0, t4, t0
+    lbu     t3, 0(t0)
+    or      t3, t3, t2
+    sb      t3, 0(t0)
+    ld      t1, 32(sp)
+    srli    t0, t1, 3
+    andi    t1, t1, 7
+    li      t2, 1
+    sll     t2, t2, t1
+    add     t0, t4, t0
+    lbu     t3, 0(t0)
+    or      t3, t3, t2
+    sb      t3, 0(t0)
+    ld      a1, 0(sp)
+    li      a0, 0
+    UNFRAME 48
+81: li      a0, 1
+    UNFRAME 48
+82: li      a0, 2
+    UNFRAME 48
+END_FUNCTION node_pool_attestation
+
 /* a0 = the new id of a NODE_ACT_BYTES_PUT of the 8 bytes at a0. Locals: a ByteList head whose offset reaches them. */
 LOCAL_FUNCTION node_api_put8
     FRAME 32
@@ -4726,24 +4843,32 @@ END_FUNCTION node_pool_kind
 .endif
 
 /*
- * a0 = the index of the first pool entry from the index a0 that the pool GET a1 of the fork a2
- * answers (node.md, NODE_EV_API): of its topic, and for getPoolAttesterSlashingsV2 of that
- * fork's AttesterSlashing type; else 2^64 - 1. a1 = the entry. s1 the node. Uses t0-t4, a7.
+ * a0 = the index of the first pool entry from the index a0 that the pool stream a1 answers
+ * (node.md, NODE_EV_API): of its topic; for getPoolAttesterSlashingsV2 and getPoolAttestationsV2
+ * of the type of its fork, and for getPoolAttestationsV2 of its filters; else 2^64 - 1. a1 = the
+ * entry. s1 the node. Uses t0-t6, a7.
  */
 LOCAL_FUNCTION node_pool_next
     UNWIND_END_PROLOGUE
+    ld      t5, NodeApi_op(a1)
     li      t0, GOSSIP_VOLUNTARY_EXIT
     li      t1, API_OP_GET_POOL_VOLUNTARY_EXITS
-    beq     a1, t1, 1f
+    beq     t5, t1, 1f
     li      t0, GOSSIP_PROPOSER_SLASHING
     li      t1, API_OP_GET_POOL_PROPOSER_SLASHINGS
-    beq     a1, t1, 1f
+    beq     t5, t1, 1f
     li      t0, GOSSIP_ATTESTER_SLASHING
     li      t1, API_OP_GET_POOL_ATTESTER_SLASHINGS_V2
-    beq     a1, t1, 1f
+    beq     t5, t1, 1f
+    li      t0, GOSSIP_BEACON_ATTESTATION
+    li      t1, API_OP_GET_POOL_ATTESTATIONS_V2
+    beq     t5, t1, 1f
     li      t0, GOSSIP_BLS_TO_EXECUTION_CHANGE
-1:  li      t1, FORK_ELECTRA
-    sltu    t4, a2, t1
+1:  ld      t5, NodeApi_filter_slot(a1)
+    ld      t6, NodeApi_filter_index(a1)
+    ld      t4, NodeApi_fork(a1)
+    li      t1, FORK_ELECTRA
+    sltu    t4, t4, t1
     xori    t4, t4, 1
     PART    t1, t2, s1, Node_pool
     li      t3, NodePool__mem
@@ -4753,8 +4878,17 @@ LOCAL_FUNCTION node_pool_next
     ld      t3, NodePool_topic(t1)
     bne     t3, t0, 3f
     li      t3, GOSSIP_ATTESTER_SLASHING
+    beq     t0, t3, 21f
+    li      t3, GOSSIP_BEACON_ATTESTATION
     bne     t0, t3, 4f
-    ld      t3, NodePool_fork(t1)
+    li      a7, -1                          # an attestation: of the filters
+    beq     t5, a7, 20f
+    ld      t3, NodePool_slot(t1)
+    bne     t3, t5, 3f
+20: beq     t6, a7, 21f
+    ld      t3, NodePool_index(t1)
+    bne     t3, t6, 3f
+21: ld      t3, NodePool_fork(t1)
     li      a7, FORK_ELECTRA
     sltu    t3, t3, a7
     xori    t3, t3, 1
@@ -4770,8 +4904,8 @@ END_FUNCTION node_pool_next
 
 /*
  * (connection a0, route a1, flags a2, view a3): a stream of a pool GET (node.md, NODE_EV_API):
- * fork the store's; slot the first entry it answers, data its bytes, sent its fork; data 0 with
- * none. flags: API_STREAM_CLOSE and API_STREAM_HTTP10. Locals: the connection, the route, the
+ * fork the store's, the filters of getPoolAttestationsV2; slot the first entry it answers, data
+ * its bytes, sent its fork, member its member; data 0 with none. flags: API_STREAM_CLOSE and API_STREAM_HTTP10. Locals: the connection, the route, the
  * flags, the fork, the entry's index and address.
  */
 LOCAL_FUNCTION node_api_pool_stream
@@ -4797,7 +4931,23 @@ LOCAL_FUNCTION node_api_pool_stream
     sd      t1, NodeApi_flags(t0)
     ld      a2, 24(sp)
     sd      a2, NodeApi_fork(t0)
+    li      t2, -1                          # the filters: getPoolAttestationsV2's slot and committee_index
+    li      t3, -1
+    li      t4, API_OP_GET_POOL_ATTESTATIONS_V2
+    bne     a1, t4, 2f
+    ld      t1, 8(sp)
+    ld      t4, ApiRoute_present(t1)
+    andi    t5, t4, (1 << API_PARAM_SLOT)
+    beqz    t5, 3f
+    ld      t2, ApiRoute_slot(t1)
+3:  li      t5, (1 << API_PARAM_COMMITTEE_INDEX)
+    and     t5, t4, t5
+    beqz    t5, 2f
+    ld      t3, ApiRoute_committee_index(t1)
+2:  sd      t2, NodeApi_filter_slot(t0)
+    sd      t3, NodeApi_filter_index(t0)
     li      a0, 0
+    mv      a1, t0
     call    node_pool_next
     ld      t0, 40(sp)
     li      t1, -1
@@ -4807,6 +4957,8 @@ LOCAL_FUNCTION node_api_pool_stream
     sd      t1, NodeApi_data(t0)
     ld      t1, NodePool_fork(a1)
     sd      t1, NodeApi_sent(t0)
+    ld      t1, NodePool_member(a1)
+    sd      t1, NodeApi_member(t0)
 1:  ld      a0, 32(sp)
     ld      a1, 40(sp)
     call    node_api_chunk_work
@@ -4815,7 +4967,7 @@ END_FUNCTION node_api_pool_stream
 
 /*
  * The pool stream of the NodeApi entry a0 goes to its next entry after slot (node.md,
- * NODE_WORK_API_CHUNK): its slot, data and sent, a zero cursor; data 0 with none. Bytes it owned
+ * NODE_WORK_API_CHUNK): its slot, data, sent and member, a zero cursor; data 0 with none. Bytes it owned
  * get a NODE_ACT_BYTES_FREE, and API_STREAM_OWN clears. Locals: the entry, the old data, the flags.
  */
 LOCAL_FUNCTION node_api_pool_advance
@@ -4825,8 +4977,7 @@ LOCAL_FUNCTION node_api_pool_advance
     sd      t0, 8(sp)
     ld      t0, NodeApi_flags(a0)
     sd      t0, 16(sp)
-    ld      a1, NodeApi_op(a0)
-    ld      a2, NodeApi_fork(a0)
+    mv      a1, a0
     ld      t0, NodeApi_slot(a0)
     addi    a0, t0, 1
     call    node_pool_next
@@ -4837,6 +4988,8 @@ LOCAL_FUNCTION node_api_pool_advance
     sd      a0, NodeApi_slot(t0)
     ld      t1, NodePool_fork(a1)
     sd      t1, NodeApi_sent(t0)
+    ld      t1, NodePool_member(a1)
+    sd      t1, NodeApi_member(t0)
     ld      t2, NodePool_data_id(a1)
 1:  sd      t2, NodeApi_data(t0)
     ld      t1, NodeApi_flags(t0)
@@ -4884,6 +5037,9 @@ LOCAL_FUNCTION api_pool_json
     beq     t0, t1, 3f
     li      a0, NODE_JSON_ATTESTER_SLASHING
     li      t1, API_OP_GET_POOL_ATTESTER_SLASHINGS_V2
+    beq     t0, t1, 3f
+    li      a0, NODE_JSON_ATTESTATION
+    li      t1, API_OP_GET_POOL_ATTESTATIONS_V2
     beq     t0, t1, 3f
     li      a0, NODE_JSON_BLS_CHANGE
 3:  addi    t0, s5, NodeEvent_api_bytes     # the ByteList: its room to s8 - 1, its bytes to s6
@@ -5113,32 +5269,40 @@ LOCAL_FUNCTION node_api_submit_done
     bne     t0, t1, 21f
     addi    s8, s8, 1
 21: bnez    t0, 6f
-    li      t1, GOSSIP_BEACON_ATTESTATION   # a valid attestation: out on its subnet, no pool
-    bne     s9, t1, 22f
-    ld      t0, Node_flags(s1)
-    andi    t0, t0, NODE_FLAG_SUBSCRIBED
-    beqz    t0, 6f
-    mv      a0, s9
-    addi    a1, s4, 16
-    ld      a2, 8(s4)
-    call    node_publish
-    j       6f
-22: addi    a0, s4, 16                      # valid: its bytes to a new id, kept by the pool when it has room
+    addi    a0, s4, 16                      # valid: its bytes to a new id, kept by the pool when it has room
     call    node_put
     mv      s10, a0
-    mv      a0, s9
+    li      a4, 0                           # an attestation: its slot and committee index, its member
+    li      a5, 0
+    ld      a6, 8(s4)
+    srli    a6, a6, 32
+    li      t1, GOSSIP_BEACON_ATTESTATION
+    bne     s9, t1, 22f
+    ld      t0, 24(s4)
+    add     t0, s4, t0
+    addi    t0, t0, 16
+    ld      t1, NodeAction_arg(s3)
+    srli    t1, t1, 16
+    li      t2, FORK_ELECTRA
+    bgeu    t1, t2, 23f
+    LDU64   a4, t0, 4, t1                   # Attestation: data.slot at 4, data.index at 12
+    LDU64   a5, t0, 12, t1
+    j       22f
+23: ld      a4, 16(t0)                      # SingleAttestation: committee_index at 0, data.slot at 16
+    ld      a5, 0(t0)
+22: mv      a0, s9
     mv      a1, s10
     ld      a2, 32(s4)
     ld      a3, NodeAction_arg(s3)
     srli    a3, a3, 16
     call    node_pool_add
     sd      a0, (L + 0)(sp)
-    ld      t0, Node_flags(s1)              # NODE_FLAG_SUBSCRIBED: out on its topic
+    ld      t0, Node_flags(s1)              # NODE_FLAG_SUBSCRIBED: out on its topic, an attestation on its subnet
     andi    t0, t0, NODE_FLAG_SUBSCRIBED
     beqz    t0, 3f
     mv      a0, s9
     addi    a1, s4, 16
-    li      a2, 0
+    lwu     a2, 8(s4)
     call    node_publish
 3:  li      t0, GOSSIP_ATTESTER_SLASHING    # an attester slashing: on_attester_slashing with the justified root's state
     bne     s9, t0, 4f
@@ -5723,7 +5887,17 @@ LOCAL_FUNCTION node_api_submit_run
     addi    a5, sp, L + 304
     FORK_CALL node_gossip
     bnez    a0, 99f
-    ld      t0, 16(s9)
+    ld      t0, (L + 16)(sp)                # a valid attestation: its member, 2^32 times, with the subnet
+    li      t1, GOSSIP_BEACON_ATTESTATION
+    bne     t0, t1, 35f
+    ld      t0, 0(s9)
+    bnez    t0, 35f
+    ld      t0, (L + 272 + 16)(sp)
+    slli    t0, t0, 32
+    ld      t1, 8(s9)
+    or      t1, t1, t0
+    sd      t1, 8(s9)
+35: ld      t0, 16(s9)
     addi    s9, s9, 16
     add     s9, s9, t0
     addi    s10, s10, -1
