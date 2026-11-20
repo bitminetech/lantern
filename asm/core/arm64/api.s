@@ -1413,31 +1413,10 @@ LOCAL_FUNCTION api_body
     add     x0, x22, #ApiView_head_root
     mov     x1, #32
     bl      api_qhex
-    API_LIT api_h_canonical
-    ldr     x0, [x22, #ApiView_canonical]
-    bl      api_bool
-    API_LIT api_h_slot
     ldr     x0, [x22, #ApiView_head_slot]
-    bl      api_qdec
-    API_LIT api_h_proposer
-    ldr     x0, [x22, #ApiView_proposer_index]
-    bl      api_qdec
-    API_LIT api_h_parent
-    add     x0, x22, #ApiView_parent_root
-    mov     x1, #32
-    bl      api_qhex
-    API_LIT api_h_state
-    add     x0, x22, #ApiView_state_root
-    mov     x1, #32
-    bl      api_qhex
-    API_LIT api_h_body
-    add     x0, x22, #ApiView_body_root
-    mov     x1, #32
-    bl      api_qhex
-    API_LIT api_h_signature
-    add     x0, x22, #ApiView_signature
-    mov     x1, #96
-    bl      api_qhex
+    add     x1, x22, #ApiView_proposer_index
+    ldr     x2, [x22, #ApiView_canonical]
+    bl      api_header_json
     API_LIT api_end3
     UNFRAME 16
 7:  cmp     x28, #API_OP_GET_STATE_FINALITY_CHECKPOINTS
@@ -1776,6 +1755,84 @@ LOCAL_FUNCTION api_fork_choice_body
 9:  API_LIT api_v_end
     UNFRAME 16
 END_FUNCTION api_fork_choice_body
+
+/*
+ * L1: ,"canonical":…,"header":{"message":{"slot":…,"proposer_index":…,"parent_root":…,"state_root":…,"body_root":…},"signature":…
+ * of the slot x0, canonical x2, and at x1 the header's proposer_index, parent_root, state_root,
+ * body_root and signature, in that order. Locals: x0, x1, x2.
+ */
+LOCAL_FUNCTION api_header_json
+    FRAME 32
+    stp     x0, x1, [sp, #16]
+    str     x2, [sp, #32]
+    API_LIT api_h_canonical
+    ldr     x0, [sp, #32]
+    bl      api_bool
+    API_LIT api_h_slot
+    ldr     x0, [sp, #16]
+    bl      api_qdec
+    API_LIT api_h_proposer
+    ldr     x9, [sp, #24]
+    ldr     x0, [x9]
+    bl      api_qdec
+    API_LIT api_h_parent
+    ldr     x0, [sp, #24]
+    add     x0, x0, #(ApiView_parent_root - ApiView_proposer_index)
+    mov     x1, #32
+    bl      api_qhex
+    API_LIT api_h_state
+    ldr     x0, [sp, #24]
+    add     x0, x0, #(ApiView_state_root - ApiView_proposer_index)
+    mov     x1, #32
+    bl      api_qhex
+    API_LIT api_h_body
+    ldr     x0, [sp, #24]
+    add     x0, x0, #(ApiView_body_root - ApiView_proposer_index)
+    mov     x1, #32
+    bl      api_qhex
+    API_LIT api_h_signature
+    ldr     x0, [sp, #24]
+    add     x0, x0, #(ApiView_signature - ApiView_proposer_index)
+    mov     x1, #96
+    bl      api_qhex
+    UNFRAME 32
+END_FUNCTION api_header_json
+.if ApiView_parent_root - ApiView_proposer_index != 8 || ApiView_state_root - ApiView_proposer_index != 40 || ApiView_body_root - ApiView_proposer_index != 72 || ApiView_signature - ApiView_proposer_index != 104
+.error "api_header_json reads the fields of a SignedBeaconBlockHeader after its slot"
+.endif
+
+/*
+ * L1: getBlockHeaders' JSON, as api_stream_json: with x21, the address of an item's header (its
+ * slot, then the fields api_header_json reads), the item {"root":…,"canonical":…,"header":…}, its
+ * root at byte 0 of the entry x22's cursor and canonical bit 0 of its member, after , when
+ * API_STREAM_ITEMS is set; then API_STREAM_ITEMS and API_STREAM_ITEM_DONE in the event. With x21 = 0:
+ * ]}. x0 = 1 when the answer is whole, else 0.
+ */
+LOCAL_FUNCTION api_headers_json
+    FRAME 0
+    cbnz    x21, 1f
+    API_LIT api_v_end
+    mov     x0, #1
+    UNFRAME 0
+1:  ldr     x9, [x23, #(NodeEvent_api + 8)]
+    tbz     x9, #13, 2f                     /* API_STREAM_ITEMS */
+    API_LIT api_p_comma
+2:  API_LIT api_ch_root
+    add     x0, x22, #NodeApi_cursor
+    mov     x1, #32
+    bl      api_qhex
+    ldr     x0, [x21]
+    add     x1, x21, #8
+    ldr     x2, [x22, #NodeApi_member]
+    and     x2, x2, #1
+    bl      api_header_json
+    API_LIT api_end2
+    ldr     x9, [x23, #(NodeEvent_api + 8)]
+    orr     x9, x9, #(API_STREAM_ITEMS | API_STREAM_ITEM_DONE)
+    str     x9, [x23, #(NodeEvent_api + 8)]
+    mov     x0, #0
+    UNFRAME 0
+END_FUNCTION api_headers_json
 
 /*
  * L1: the bodies of getStateRandao, getEpochSyncCommittees and getProposerLookahead (beacon-api.md),
@@ -2342,6 +2399,8 @@ LOCAL_FUNCTION node_api_event
     b.eq    67f
     cmp     x3, #API_OP_GET_DEBUG_FORK_CHOICE
     b.eq    67f
+    cmp     x3, #API_OP_GET_BLOCK_HEADERS
+    b.eq    57f
     cmp     x3, #API_OP_GET_PROPOSER_DUTIES
     b.eq    63f
     cmp     x3, #API_OP_PRODUCE_ATTESTATION_DATA
@@ -2491,6 +2550,11 @@ LOCAL_FUNCTION node_api_event
     b.ne    67f
     orr     x21, x21, #API_ANSWER_SSZ
     b       67f
+57: mov     x0, x27                         /* getBlockHeaders: a stream of the blocks of its query */
+    mov     x1, x25
+    mov     x2, x21
+    bl      node_api_headers_stream
+    b       90f
 68: mov     x0, x27                         /* a pool GET: a stream of the pool */
     mov     x1, x25
     mov     x2, x21
@@ -4628,12 +4692,19 @@ LOCAL_FUNCTION node_api_chunk_done
     add     x1, x21, #(NodeEvent_api + 16)
     mov     x2, #JSON_CURSOR_SIZE
     bl      lantern_copy
-    tbz     x25, #14, 1f                    /* API_STREAM_ITEM_DONE: the pool stream's next entry */
+    tbz     x25, #14, 1f                    /* API_STREAM_ITEM_DONE: the pool stream's next entry, getBlockHeaders' next item */
     and     x25, x25, #~API_STREAM_ITEM_DONE
     str     x25, [x22, #NodeApi_flags]
     mov     x0, x22
-    bl      node_api_pool_advance
-    ldr     x25, [x22, #NodeApi_flags]
+    ldr     x9, [x22, #NodeApi_op]
+    cmp     x9, #API_OP_GET_BLOCK_HEADERS
+    b.ne    2f
+    ldr     x1, [x22, #NodeApi_slot]
+    add     x1, x1, #1
+    bl      node_headers_next
+    b       3f
+2:  bl      node_api_pool_advance
+3:  ldr     x25, [x22, #NodeApi_flags]
 1:  ldr     x9, [x21, #(NodeEvent_api_bytes + 16)]  /* the chunk in a SEND */
     add     x1, x9, #(56 + 7)
     and     x1, x1, #~7
@@ -4793,7 +4864,11 @@ LOCAL_FUNCTION api_stream_json
     b.ne    3f
 4:  bl      api_pool_json
     UNFRAME 0
-3:  sub     x10, x9, #API_OP_GET_PENDING_CONSOLIDATIONS /* the pending streams: their items */
+3:  cmp     x9, #API_OP_GET_BLOCK_HEADERS
+    b.ne    32f
+    bl      api_headers_json
+    UNFRAME 0
+32: sub     x10, x9, #API_OP_GET_PENDING_CONSOLIDATIONS /* the pending streams: their items */
     cmp     x10, #2
     b.hi    31f
     bl      api_pending_json
@@ -4893,6 +4968,9 @@ LOCAL_FUNCTION node_api_chunk_run
     b.eq    2f
     cmp     x10, #API_OP_GET_POOL_BLS_TO_EXECUTION_CHANGES
     b.eq    2f
+    mov     x9, #5                          /* getBlockHeaders (5): an item of data or state, none at its end */
+    cmp     x10, #API_OP_GET_BLOCK_HEADERS
+    b.eq    2f
     mov     x9, x10
     sub     x11, x9, #API_OP_GET_PENDING_CONSOLIDATIONS /* a pending stream (4): a state */
     cmp     x11, #2
@@ -4939,6 +5017,8 @@ LOCAL_FUNCTION node_api_chunk_run
     ldr     x9, [sp, #(L + 40)]
     cbz     x9, 4f
     cmp     x9, #3
+    b.eq    5f
+    cmp     x9, #5
     b.eq    5f
     ldr     x11, [x20, #NODE_STATE_SLOT]    /* the state at the entry's slot */
     ldr     x12, [x22, #NodeApi_slot]
@@ -5046,6 +5126,8 @@ LOCAL_FUNCTION node_api_chunk_run
     b.eq    66f
     cmp     x9, #4
     b.eq    67f
+    cmp     x9, #5
+    b.eq    68f
     ldr     x0, [sp, #(L + 48)]
     cmp     x9, #2
     b.eq    63f
@@ -5081,6 +5163,64 @@ LOCAL_FUNCTION node_api_chunk_run
     ldp     x9, x10, [sp, #(L + 16)]
     mul     x9, x9, x10
     str     x9, [sp, #(L + 16)]
+    b       6f
+68: orr     x9, x21, x20                    /* getBlockHeaders: an item's header at the end of scratch, x21 its address */
+    cbz     x9, 6f
+    ldr     x25, [sp, #(L + 48)]
+    ldr     x12, [x25]
+    cmp     x12, #(208 + 64)
+    b.lo    97f
+    sub     x12, x12, #208
+    str     x12, [x25]
+    add     x27, x25, x12
+    cbz     x21, 681f
+    ldr     x9, [x21, #16]                  /* of the bytes: lantern_node_block_header of the fork of their slot */
+    cmp     x9, #108
+    b.lo    96f
+    ldr     x9, [x21, #8]
+    add     x9, x21, x9
+    ldr     x0, [x9, #100]
+    add     x1, x19, #Node_config
+    bl      node_fork
+    mov     x15, x0
+    mov     x0, x21
+    mov     x1, x25
+    mov     x2, x27
+    FORK_CALL node_block_header
+    cmp     x0, #LANTERN_BUFFER_TOO_SMALL
+    b.eq    97f
+    cbnz    x0, 96f
+    b       683f
+681: ldr    x9, [x20, #NODE_STATE_HEADER]   /* of the post-state: its latest_block_header, a zero signature */
+    str     x9, [x27]
+    add     x0, x27, #8
+    add     x1, x20, #(NODE_STATE_HEADER + 8)
+    mov     x2, #(112 - 8)
+    bl      lantern_copy
+    add     x0, x27, #112
+    mov     x1, #96
+    bl      lantern_zero
+    ldp     x9, x10, [x27, #48]
+    ldp     x11, x12, [x27, #64]
+    orr     x9, x9, x10
+    orr     x11, x11, x12
+    orr     x9, x9, x11
+    cbnz    x9, 683f
+    ldr     x0, [x20, #NODE_STATE_SLOT]     /* a zero state_root: the state's root */
+    add     x1, x19, #Node_config
+    bl      node_fork
+    mov     x15, x0
+    mov     x0, x20
+    LDQ     x1, x19, Node_config + CONFIG_STATE_CACHE
+    mov     x2, x25
+    add     x3, x27, #48
+    FORK_CALL state_root
+    cmp     x0, #LANTERN_BUFFER_TOO_SMALL
+    b.eq    97f
+    cbnz    x0, 96f
+683: mov    x21, x27
+    mov     x25, #1                         /* the writer's x25 and x27 again */
+    mov     x27, #0
     b       6f
 63: bl      node_api_committees_prep
     cmp     x0, #400
@@ -5161,7 +5301,7 @@ LOCAL_FUNCTION node_api_chunk_run
     cmp     x9, #4
     b.eq    392f
     cmp     x9, #3
-    b.ne    37f
+    b.ne    37f                             /* getBlockHeaders: as the validator streams */
     ldr     x9, [x22, #NodeApi_op]          /* a pool stream: {"data":[, the V2 GETs {"version":"<fork>","data":[ */
     cmp     x9, #API_OP_GET_POOL_ATTESTER_SLASHINGS_V2
     b.eq    39f
@@ -5575,6 +5715,228 @@ LOCAL_FUNCTION node_api_pool_stream
     bl      node_api_chunk_work
     UNFRAME 48
 END_FUNCTION node_api_pool_stream
+
+/*
+ * L1: the item of the getBlockHeaders stream x0 at or after the position x1 (node.md, NODE_EV_API, an
+ * item of getBlockHeaders): position 0 the Db's block of the query, i + 1 the NodeBlock at index i.
+ * Its slot (the position), data, state, member (1 on the chain, + 2 optimistic, + 4 finalized) and
+ * its root at byte 0 of cursor; x0 = 1, or 0 with data and state 0 for none. x21 the entry, x22 the
+ * position, x23 the slot of the query or 2^64 - 1, x24 the address of its parent_root or 0, x25 a
+ * NodeBlock index, x26 a slot or an entry, x27 the member. Locals: L a slot.
+ */
+LOCAL_FUNCTION node_headers_next
+    ENTER 16
+    mov     x21, x0
+    mov     x22, x1
+    ldr     x23, [x21, #NodeApi_filter_slot]
+    ldr     x9, [x21, #(NodeApi_cursor + 64)]
+    add     x24, x21, #(NodeApi_cursor + 32)
+    cmp     x9, #0
+    csel    x24, x24, xzr, ne
+    cbnz    x22, 20f
+    ldr     x9, [x19, #Node_flags]          /* position 0: with NODE_FLAG_DB, the Db's block of the query */
+    tst     x9, #NODE_FLAG_DB
+    b.eq    19f
+    cbz     x24, 15f
+    mov     x0, x24                         /* with parent_root: its slot r, of the node's imported block on the chain, else of the Db */
+    bl      node_find_block
+    cmn     x0, #1
+    b.eq    11f
+    ldr     x9, [x1, #NodeBlock_status]
+    cmp     x9, #NODE_BLOCK_IMPORTED
+    b.ne    11f
+    mov     x25, x1
+    mov     x0, x1
+    bl      node_api_on_chain
+    cbz     x0, 19f
+    ldr     x26, [x25, #NodeBlock_slot]
+    b       12f
+11: ldr     x0, [x19, #Node_db]
+    add     x0, x19, x0
+    mov     x1, x24
+    add     x2, sp, #L
+    bl      lantern_db_find_root
+    ldr     x26, [sp, #L]
+    cmn     x26, #1
+    b.eq    19f
+12: add     x26, x26, #1                    /* the first slot above r whose block is in the Db, below the chain the node keeps */
+    cmp     x26, x23
+    b.hi    19f                             /* with slot: at most slot */
+    mov     x0, x26
+    bl      node_api_below
+    cmn     x0, #1
+    b.ne    19f
+    mov     x0, x26
+    bl      node_db_slot
+    cbz     x0, 12b
+    cmn     x23, #1
+    b.eq    16f
+    cmp     x26, x23
+    b.ne    19f
+    b       16f
+15: mov     x26, x23                        /* slot alone: the Db's block of slot, below the chain the node keeps */
+    mov     x0, x26
+    bl      node_api_below
+    cmn     x0, #1
+    b.ne    19f
+    mov     x0, x26
+    bl      node_db_slot
+    cbz     x0, 19f
+16: mov     x1, x0                          /* the Db's block of slot x26: its DbSlot x0, the root at 0 */
+    add     x0, x21, #NodeApi_cursor
+    bl      lantern_copy_root
+    mov     x0, x26
+    bl      node_db_block
+    str     x0, [x21, #NodeApi_data]
+    str     xzr, [x21, #NodeApi_state]
+    str     xzr, [x21, #NodeApi_slot]
+    mov     x0, x26
+    bl      node_api_final_block
+    lsl     x27, x0, #2
+    orr     x27, x27, #1                    /* on the chain, not optimistic */
+    str     x27, [x21, #NodeApi_member]
+    mov     x0, #1
+    LEAVE 16
+19: mov     x22, #1
+20: PART    x10, x11, x19, Node_blocks      /* the node's imported blocks from the index x22 - 1 */
+    sub     x25, x22, #1
+    cmp     x25, x11
+    b.hs    29f
+    mov     x12, #NodeBlock__mem
+    madd    x26, x25, x12, x10
+    ldr     x9, [x26, #NodeBlock_status]
+    cmp     x9, #NODE_BLOCK_IMPORTED
+    b.ne    28f
+    cmn     x23, #1
+    b.eq    22f
+    ldr     x9, [x26, #NodeBlock_slot]
+    cmp     x9, x23
+    b.ne    28f
+22: cbz     x24, 23f
+    add     x9, x26, #NodeBlock_parent_root
+    NE32    x9, x24, 28f
+23: ldr     x0, [x26, #NodeBlock_data_id]   /* its bytes, else its Db record, else its post-state */
+    cbnz    x0, 24f
+    mov     x0, x26
+    bl      node_api_db_ref
+24: str     x0, [x21, #NodeApi_data]
+    mov     x9, #0
+    cbnz    x0, 25f
+    ldr     x9, [x26, #NodeBlock_state_id]
+    cbz     x9, 28f                         /* neither: left out */
+25: str     x9, [x21, #NodeApi_state]
+    str     x22, [x21, #NodeApi_slot]
+    add     x0, x21, #NodeApi_cursor
+    mov     x1, x26
+    bl      lantern_copy_root
+    ldr     x9, [x26, #NodeBlock_payload_status]
+    cmp     x9, #PAYLOAD_STATUS_NOT_VALIDATED
+    cset    x27, eq
+    lsl     x27, x27, #1
+    mov     x0, x26
+    bl      node_api_on_chain
+    orr     x27, x27, x0
+    cbz     x0, 26f
+    ldr     x0, [x26, #NodeBlock_slot]
+    bl      node_api_final_block
+    orr     x27, x27, x0, lsl #2
+26: str     x27, [x21, #NodeApi_member]
+    mov     x0, #1
+    LEAVE 16
+28: add     x22, x22, #1
+    b       20b
+29: str     xzr, [x21, #NodeApi_data]
+    str     xzr, [x21, #NodeApi_state]
+    mov     x0, #0
+    LEAVE 16
+END_FUNCTION node_headers_next
+
+/*
+ * L1: (connection x0, route x1, flags x2): the getBlockHeaders stream of the route's query (node.md,
+ * NODE_EV_API): filter_slot its slot, the head's slot with neither slot nor parent_root, else
+ * 2^64 - 1; its parent_root at byte 32 of cursor and 1 at byte 64; API_STREAM_OPTIMISTIC and
+ * API_STREAM_FINALIZED of all its items; then its first item and a NODE_WORK_API_CHUNK. Locals: the
+ * connection, the route, the flags, the entry's index and address, the position.
+ */
+LOCAL_FUNCTION node_api_headers_stream
+    FRAME 48
+    stp     x0, x1, [sp, #16]
+    str     x2, [sp, #32]
+    bl      node_api_new
+    stp     x0, x1, [sp, #40]
+    mov     x0, x1
+    mov     x1, #NodeApi__mem
+    bl      lantern_zero
+    ldr     x1, [sp, #48]
+    ldp     x9, x10, [sp, #16]
+    str     x9, [x1, #NodeApi_connection]
+    mov     x9, #API_OP_GET_BLOCK_HEADERS
+    str     x9, [x1, #NodeApi_op]
+    ldr     x9, [x10, #ApiRoute_present]
+    mov     x12, #-1
+    tst     x9, #(1 << API_PARAM_PARENT_ROOT)
+    b.eq    1f
+    add     x0, x1, #(NodeApi_cursor + 32)
+    add     x1, x10, #ApiRoute_root
+    bl      lantern_copy_root
+    ldr     x1, [sp, #48]
+    mov     x9, #1
+    str     x9, [x1, #(NodeApi_cursor + 64)]
+    mov     x12, #-1
+    b       2f
+1:  add     x0, x19, #Node_head_root        /* neither: the head's slot */
+    bl      node_find_block
+    mov     x12, #-1
+    cmn     x0, #1
+    b.eq    2f
+    ldr     x12, [x1, #NodeBlock_slot]
+2:  ldp     x9, x10, [sp, #16]
+    ldr     x11, [x10, #ApiRoute_present]
+    ldr     x13, [x10, #ApiRoute_slot]
+    tst     x11, #(1 << API_PARAM_SLOT)
+    csel    x12, x13, x12, ne
+    ldr     x1, [sp, #48]
+    str     x12, [x1, #NodeApi_filter_slot]
+    mov     x9, #API_STREAM_FINALIZED       /* the flags of all items: optimistic of any, finalized of each, and of some */
+    ldr     x10, [sp, #32]
+    orr     x9, x9, x10
+    str     x9, [x1, #NodeApi_flags]
+    str     xzr, [sp, #56]
+    mov     x9, #0                          /* the items */
+    str     x9, [sp, #24]
+3:  ldr     x0, [sp, #48]
+    ldr     x1, [sp, #56]
+    bl      node_headers_next
+    ldr     x1, [sp, #48]
+    cbz     x0, 5f
+    ldr     x9, [sp, #24]
+    add     x9, x9, #1
+    str     x9, [sp, #24]
+    ldr     x10, [x1, #NodeApi_member]
+    ldr     x11, [x1, #NodeApi_flags]
+    tst     x10, #2
+    orr     x12, x11, #API_STREAM_OPTIMISTIC
+    csel    x11, x12, x11, ne
+    tst     x10, #4
+    and     x12, x11, #~API_STREAM_FINALIZED
+    csel    x11, x12, x11, eq
+    str     x11, [x1, #NodeApi_flags]
+    ldr     x9, [x1, #NodeApi_slot]
+    add     x9, x9, #1
+    str     x9, [sp, #56]
+    b       3b
+5:  ldr     x9, [sp, #24]
+    cbnz    x9, 6f
+    ldr     x11, [x1, #NodeApi_flags]
+    and     x11, x11, #~API_STREAM_FINALIZED
+    str     x11, [x1, #NodeApi_flags]
+6:  ldr     x0, [sp, #48]                   /* the first item */
+    mov     x1, #0
+    bl      node_headers_next
+    ldp     x0, x1, [sp, #40]
+    bl      node_api_chunk_work
+    UNFRAME 48
+END_FUNCTION node_api_headers_stream
 
 /*
  * L1: the pool stream of the NodeApi entry x0 goes to its next entry after slot (node.md,

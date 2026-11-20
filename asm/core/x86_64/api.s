@@ -1365,31 +1365,10 @@ LOCAL_FUNCTION api_body
     lea     ApiView_head_root(%rbp), %rdi
     mov     $32, %esi
     call    api_qhex
-    API_LIT api_h_canonical
-    mov     ApiView_canonical(%rbp), %rdi
-    call    api_bool
-    API_LIT api_h_slot
     mov     ApiView_head_slot(%rbp), %rdi
-    call    api_qdec
-    API_LIT api_h_proposer
-    mov     ApiView_proposer_index(%rbp), %rdi
-    call    api_qdec
-    API_LIT api_h_parent
-    lea     ApiView_parent_root(%rbp), %rdi
-    mov     $32, %esi
-    call    api_qhex
-    API_LIT api_h_state
-    lea     ApiView_state_root(%rbp), %rdi
-    mov     $32, %esi
-    call    api_qhex
-    API_LIT api_h_body
-    lea     ApiView_body_root(%rbp), %rdi
-    mov     $32, %esi
-    call    api_qhex
-    API_LIT api_h_signature
-    lea     ApiView_signature(%rbp), %rdi
-    mov     $96, %esi
-    call    api_qhex
+    lea     ApiView_proposer_index(%rbp), %rsi
+    mov     ApiView_canonical(%rbp), %rdx
+    call    api_header_json
     API_LIT api_end3
     UNFRAME 16
 7:  cmp     $API_OP_GET_STATE_FINALITY_CHECKPOINTS, %rsi
@@ -1727,6 +1706,82 @@ LOCAL_FUNCTION api_fork_choice_body
 9:  API_LIT api_v_end
     UNFRAME 16
 END_FUNCTION api_fork_choice_body
+
+# ,"canonical":…,"header":{"message":{"slot":…,"proposer_index":…,"parent_root":…,"state_root":…,"body_root":…},"signature":…
+# of the slot rdi, canonical rdx, and at rsi the header's proposer_index, parent_root, state_root,
+# body_root and signature, in that order. Locals: rdi, rsi, rdx.
+LOCAL_FUNCTION api_header_json
+    FRAME 32
+    mov     %rdi, (%rsp)
+    mov     %rsi, 8(%rsp)
+    mov     %rdx, 16(%rsp)
+    API_LIT api_h_canonical
+    mov     16(%rsp), %rdi
+    call    api_bool
+    API_LIT api_h_slot
+    mov     (%rsp), %rdi
+    call    api_qdec
+    API_LIT api_h_proposer
+    mov     8(%rsp), %rax
+    mov     (%rax), %rdi
+    call    api_qdec
+    API_LIT api_h_parent
+    mov     8(%rsp), %rdi
+    add     $(ApiView_parent_root - ApiView_proposer_index), %rdi
+    mov     $32, %esi
+    call    api_qhex
+    API_LIT api_h_state
+    mov     8(%rsp), %rdi
+    add     $(ApiView_state_root - ApiView_proposer_index), %rdi
+    mov     $32, %esi
+    call    api_qhex
+    API_LIT api_h_body
+    mov     8(%rsp), %rdi
+    add     $(ApiView_body_root - ApiView_proposer_index), %rdi
+    mov     $32, %esi
+    call    api_qhex
+    API_LIT api_h_signature
+    mov     8(%rsp), %rdi
+    add     $(ApiView_signature - ApiView_proposer_index), %rdi
+    mov     $96, %esi
+    call    api_qhex
+    UNFRAME 32
+END_FUNCTION api_header_json
+.if ApiView_parent_root - ApiView_proposer_index != 8 || ApiView_state_root - ApiView_proposer_index != 40 || ApiView_body_root - ApiView_proposer_index != 72 || ApiView_signature - ApiView_proposer_index != 104
+.error "api_header_json reads the fields of a SignedBeaconBlockHeader after its slot"
+.endif
+
+# getBlockHeaders' JSON, as api_stream_json: with rdi, the address of an item's header (its slot,
+# then the fields api_header_json reads), the item {"root":…,"canonical":…,"header":…}, its root at
+# byte 0 of the entry rbx's cursor and canonical bit 0 of its member, after , when API_STREAM_ITEMS
+# is set; then API_STREAM_ITEMS and API_STREAM_ITEM_DONE in the event rbp. With rdi = 0: ]}. rax = 1
+# when the answer is whole, else 0. Locals: rdi.
+LOCAL_FUNCTION api_headers_json
+    FRAME 16
+    mov     %rdi, (%rsp)
+    test    %rdi, %rdi
+    jnz     1f
+    API_LIT api_v_end
+    mov     $1, %eax
+    UNFRAME 16
+1:  testq   $API_STREAM_ITEMS, (NodeEvent_api + 8)(%rbp)
+    jz      2f
+    API_LIT api_p_comma
+2:  API_LIT api_ch_root
+    lea     NodeApi_cursor(%rbx), %rdi
+    mov     $32, %esi
+    call    api_qhex
+    mov     (%rsp), %rsi
+    mov     (%rsi), %rdi
+    add     $8, %rsi
+    mov     NodeApi_member(%rbx), %rdx
+    and     $1, %edx
+    call    api_header_json
+    API_LIT api_end2
+    orq     $(API_STREAM_ITEMS | API_STREAM_ITEM_DONE), (NodeEvent_api + 8)(%rbp)
+    xor     %eax, %eax
+    UNFRAME 16
+END_FUNCTION api_headers_json
 
 /*
  * The bodies of getStateRandao, getEpochSyncCommittees and getProposerLookahead (beacon-api.md), as
@@ -2289,6 +2344,8 @@ LOCAL_FUNCTION node_api_event
     je      67f
     cmp     $API_OP_GET_DEBUG_FORK_CHOICE, %rcx
     je      67f
+    cmp     $API_OP_GET_BLOCK_HEADERS, %rcx
+    je      57f
     cmp     $API_OP_GET_PROPOSER_DUTIES, %rcx
     je      63f
     cmp     $API_OP_PRODUCE_ATTESTATION_DATA, %rcx
@@ -2458,6 +2515,11 @@ LOCAL_FUNCTION node_api_event
     jne     67f
     or      $API_ANSWER_SSZ, %r12
     jmp     67f
+57: mov     S9(%rsp), %rdi                  # getBlockHeaders: a stream of the blocks of its query
+    mov     S7(%rsp), %rsi
+    mov     %r12, %rdx
+    call    node_api_headers_stream
+    jmp     90f
 68: mov     S9(%rsp), %rdi                  # a pool GET: a stream of the pool
     mov     S7(%rsp), %rsi
     mov     %r12, %rdx
@@ -4694,12 +4756,18 @@ LOCAL_FUNCTION node_api_chunk_done
     lea     (NodeEvent_api + 16)(%r12), %rsi
     mov     $JSON_CURSOR_SIZE, %edx
     call    lantern_copy
-    testq   $API_STREAM_ITEM_DONE, S7(%rsp) # API_STREAM_ITEM_DONE: the pool stream's next entry
+    testq   $API_STREAM_ITEM_DONE, S7(%rsp) # API_STREAM_ITEM_DONE: the pool stream's next entry, getBlockHeaders' next item
     jz      1f
     andq    $~API_STREAM_ITEM_DONE, NodeApi_flags(%r13)
     mov     %r13, %rdi
-    call    node_api_pool_advance
-    mov     NodeApi_flags(%r13), %rax
+    cmpq    $API_OP_GET_BLOCK_HEADERS, NodeApi_op(%r13)
+    jne     2f
+    mov     NodeApi_slot(%r13), %rsi
+    inc     %rsi
+    call    node_headers_next
+    jmp     3f
+2:  call    node_api_pool_advance
+3:  mov     NodeApi_flags(%r13), %rax
     mov     %rax, S7(%rsp)
 1:  mov     (NodeEvent_api_bytes + 16)(%r12), %rsi  # the chunk in a SEND
     add     $(56 + 7), %rsi
@@ -4861,7 +4929,11 @@ LOCAL_FUNCTION api_stream_json
     jne     3f
 4:  call    api_pool_json
     UNFRAME 0
-3:  mov     NodeApi_op(%rbx), %rax          # the pending streams: their items, of the state rdi
+3:  cmpq    $API_OP_GET_BLOCK_HEADERS, NodeApi_op(%rbx)
+    jne     32f
+    call    api_headers_json
+    UNFRAME 0
+32: mov     NodeApi_op(%rbx), %rax          # the pending streams: their items, of the state rdi
     sub     $API_OP_GET_PENDING_CONSOLIDATIONS, %rax
     cmp     $2, %rax
     ja      31f
@@ -4964,6 +5036,9 @@ LOCAL_FUNCTION node_api_chunk_run
     je      103f
     cmp     $API_OP_GET_POOL_BLS_TO_EXECUTION_CHANGES, %rax
     je      103f
+    mov     $5, %ecx                        # getBlockHeaders (5): an item of data or state, none at its end
+    cmp     $API_OP_GET_BLOCK_HEADERS, %rax
+    je      103f
     mov     $4, %ecx                        # a pending stream (4): a state
     mov     %rax, %r8
     sub     $API_OP_GET_PENDING_CONSOLIDATIONS, %r8
@@ -5011,6 +5086,8 @@ LOCAL_FUNCTION node_api_chunk_run
     cmpq    $0, (L + 56)(%rsp)
     je      102f
     cmpq    $3, (L + 56)(%rsp)
+    je      5f
+    cmpq    $5, (L + 56)(%rsp)
     je      5f
     mov     (L + 48)(%rsp), %rax            # the state at the entry's slot
     mov     NODE_STATE_SLOT(%rax), %rax
@@ -5117,6 +5194,8 @@ LOCAL_FUNCTION node_api_chunk_run
     je      67f
     cmpq    $4, (L + 56)(%rsp)
     je      68f
+    cmpq    $5, (L + 56)(%rsp)
+    je      69f
     mov     (L + 64)(%rsp), %rdi
     mov     (L + 48)(%rsp), %rsi
     cmpq    $2, (L + 56)(%rsp)
@@ -5141,6 +5220,76 @@ LOCAL_FUNCTION node_api_chunk_run
     imul    (L + 24)(%rsp), %rax
     mov     %rax, (L + 16)(%rsp)
     mov     (L + 48)(%rsp), %rax            # the state is what api_stream_json reads
+    mov     %rax, (L + 40)(%rsp)
+    jmp     6f
+69: mov     (L + 40)(%rsp), %rax            # getBlockHeaders: an item's header at the end of scratch, at L+40
+    or      (L + 48)(%rsp), %rax
+    jz      6f
+    mov     (L + 64)(%rsp), %rsi
+    mov     (%rsi), %rax
+    cmp     $(208 + 64), %rax
+    jb      97f
+    sub     $208, %rax
+    mov     %rax, (%rsi)
+    add     %rsi, %rax
+    mov     %rax, (L + 32)(%rsp)
+    mov     (L + 40)(%rsp), %rdx
+    test    %rdx, %rdx
+    jz      691f
+    cmpq    $108, 16(%rdx)                  # of the bytes: lantern_node_block_header of the fork of their slot
+    jb      96f
+    mov     8(%rdx), %rax
+    add     %rdx, %rax
+    mov     100(%rax), %rdi
+    mov     (L + 72)(%rsp), %rsi
+    add     $Node_config, %rsi
+    call    node_fork
+    mov     %rax, %r10
+    mov     (L + 40)(%rsp), %rdi
+    mov     (L + 64)(%rsp), %rsi
+    mov     (L + 32)(%rsp), %rdx
+    FORK_CALL node_block_header
+    cmp     $LANTERN_BUFFER_TOO_SMALL, %rax
+    je      97f
+    test    %rax, %rax
+    jnz     96f
+    jmp     693f
+691: mov    (L + 48)(%rsp), %rsi            # of the post-state: its latest_block_header, a zero signature
+    mov     (L + 32)(%rsp), %rdi
+    mov     NODE_STATE_HEADER(%rsi), %rax
+    mov     %rax, (%rdi)
+    add     $8, %rdi
+    add     $(NODE_STATE_HEADER + 8), %rsi
+    mov     $(112 - 8), %edx
+    call    lantern_copy
+    mov     (L + 32)(%rsp), %rdi
+    add     $112, %rdi
+    mov     $96, %esi
+    call    lantern_zero
+    mov     (L + 32)(%rsp), %rax
+    mov     48(%rax), %rcx
+    or      56(%rax), %rcx
+    or      64(%rax), %rcx
+    or      72(%rax), %rcx
+    jnz     693f
+    mov     (L + 48)(%rsp), %rax            # a zero state_root: the state's root
+    mov     NODE_STATE_SLOT(%rax), %rdi
+    mov     (L + 72)(%rsp), %rsi
+    add     $Node_config, %rsi
+    call    node_fork
+    mov     %rax, %r10
+    mov     (L + 48)(%rsp), %rdi
+    mov     (L + 72)(%rsp), %rsi
+    mov     (Node_config + CONFIG_STATE_CACHE)(%rsi), %rsi
+    mov     (L + 64)(%rsp), %rdx
+    mov     (L + 32)(%rsp), %rcx
+    add     $48, %rcx
+    FORK_CALL state_root
+    cmp     $LANTERN_BUFFER_TOO_SMALL, %rax
+    je      97f
+    test    %rax, %rax
+    jnz     96f
+693: mov    (L + 32)(%rsp), %rax
     mov     %rax, (L + 40)(%rsp)
     jmp     6f
 63: mov     (L + 72)(%rsp), %rdx
@@ -5660,6 +5809,233 @@ LOCAL_FUNCTION node_api_pool_stream
     call    node_api_chunk_work
     UNFRAME 48
 END_FUNCTION node_api_pool_stream
+
+/*
+ * The item of the getBlockHeaders stream rdi at or after the position rsi (node.md, NODE_EV_API, an
+ * item of getBlockHeaders): position 0 the Db's block of the query, i + 1 the NodeBlock at index i.
+ * Its slot (the position), data, state, member (1 on the chain, + 2 optimistic, + 4 finalized) and
+ * its root at byte 0 of cursor; rax = 1, or 0 with data and state 0 for none. rbx the node, rbp the
+ * store. r12 the entry, r13 the position, r14 the slot of the query or 2^64 - 1, r15 the address of
+ * its parent_root or 0. Locals: L, L+8 the member, L+16 a slot or a NodeBlock entry.
+ */
+LOCAL_FUNCTION node_headers_next
+    ENTER 32
+    mov     %rdi, %r12
+    mov     %rsi, %r13
+    mov     NodeApi_filter_slot(%r12), %r14
+    xor     %r15d, %r15d
+    cmpq    $0, (NodeApi_cursor + 64)(%r12)
+    je      1f
+    lea     (NodeApi_cursor + 32)(%r12), %r15
+1:  test    %r13, %r13
+    jnz     20f
+    testq   $NODE_FLAG_DB, Node_flags(%rbx)  # position 0: with NODE_FLAG_DB, the Db's block of the query
+    jz      19f
+    test    %r15, %r15
+    jz      15f
+    mov     %r15, %rdi                      # with parent_root: its slot r, of the node's imported block on the chain, else of the Db
+    call    node_find_block
+    cmp     $-1, %rax
+    je      11f
+    cmpq    $NODE_BLOCK_IMPORTED, NodeBlock_status(%rdx)
+    jne     11f
+    mov     %rdx, (L + 16)(%rsp)
+    mov     %rdx, %rdi
+    call    node_api_on_chain
+    test    %rax, %rax
+    jz      19f
+    mov     (L + 16)(%rsp), %rax
+    mov     NodeBlock_slot(%rax), %rax
+    mov     %rax, (L + 16)(%rsp)
+    jmp     12f
+11: mov     Node_db(%rbx), %rdi
+    add     %rbx, %rdi
+    mov     %r15, %rsi
+    lea     (L + 16)(%rsp), %rdx
+    call    lantern_db_find_root
+    cmpq    $-1, (L + 16)(%rsp)
+    je      19f
+12: incq    (L + 16)(%rsp)                  # the first slot above r whose block is in the Db, below the chain the node keeps
+    cmp     %r14, (L + 16)(%rsp)
+    ja      19f                             # with slot: at most slot
+    mov     (L + 16)(%rsp), %rdi
+    call    node_api_below
+    cmp     $-1, %rax
+    jne     19f
+    mov     (L + 16)(%rsp), %rdi
+    call    node_db_slot
+    test    %rax, %rax
+    jz      12b
+    cmp     $-1, %r14
+    je      16f
+    cmp     %r14, (L + 16)(%rsp)
+    jne     19f
+    jmp     16f
+15: mov     %r14, (L + 16)(%rsp)            # slot alone: the Db's block of slot, below the chain the node keeps
+    mov     %r14, %rdi
+    call    node_api_below
+    cmp     $-1, %rax
+    jne     19f
+    mov     %r14, %rdi
+    call    node_db_slot
+    test    %rax, %rax
+    jz      19f
+16: lea     NodeApi_cursor(%r12), %rdi      # the Db's block of the slot at L + 16: its DbSlot rax, the root at 0
+    COPY32  %rdi, %rax
+    mov     (L + 16)(%rsp), %rdi
+    call    node_db_block
+    mov     %rax, NodeApi_data(%r12)
+    movq    $0, NodeApi_state(%r12)
+    movq    $0, NodeApi_slot(%r12)
+    mov     (L + 16)(%rsp), %rdi
+    call    node_api_final_block
+    shl     $2, %rax
+    or      $1, %rax                        # on the chain, not optimistic
+    mov     %rax, NodeApi_member(%r12)
+    mov     $1, %eax
+    LEAVE 32
+19: mov     $1, %r13d
+20: PART    %rcx, %rdx, %rbx, Node_blocks   # the node's imported blocks from the index r13 - 1
+    lea     -1(%r13), %rax
+    cmp     %rdx, %rax
+    jae     29f
+    imul    $NodeBlock__mem, %rax, %rax
+    lea     (%rcx,%rax), %rsi
+    mov     %rsi, (L + 16)(%rsp)
+    cmpq    $NODE_BLOCK_IMPORTED, NodeBlock_status(%rsi)
+    jne     28f
+    cmp     $-1, %r14
+    je      22f
+    cmp     %r14, NodeBlock_slot(%rsi)
+    jne     28f
+22: test    %r15, %r15
+    jz      23f
+    lea     NodeBlock_parent_root(%rsi), %rax
+    NE32    %rax, %r15, 28f
+23: mov     NodeBlock_data_id(%rsi), %rax   # its bytes, else its Db record, else its post-state
+    test    %rax, %rax
+    jnz     24f
+    mov     %rsi, %rdi
+    call    node_api_db_ref
+24: mov     (L + 16)(%rsp), %rsi
+    mov     %rax, NodeApi_data(%r12)
+    xor     %ecx, %ecx
+    test    %rax, %rax
+    jnz     25f
+    mov     NodeBlock_state_id(%rsi), %rcx
+    test    %rcx, %rcx
+    jz      28f                             # neither: left out
+25: mov     %rcx, NodeApi_state(%r12)
+    mov     %r13, NodeApi_slot(%r12)
+    lea     NodeApi_cursor(%r12), %rdi
+    COPY32  %rdi, %rsi
+    xor     %eax, %eax
+    cmpq    $PAYLOAD_STATUS_NOT_VALIDATED, NodeBlock_payload_status(%rsi)
+    sete    %al
+    shl     $1, %eax
+    mov     %rax, (L + 8)(%rsp)
+    mov     %rsi, %rdi
+    call    node_api_on_chain
+    or      %rax, (L + 8)(%rsp)
+    test    %rax, %rax
+    jz      26f
+    mov     (L + 16)(%rsp), %rsi
+    mov     NodeBlock_slot(%rsi), %rdi
+    call    node_api_final_block
+    shl     $2, %rax
+    or      %rax, (L + 8)(%rsp)
+26: mov     (L + 8)(%rsp), %rax
+    mov     %rax, NodeApi_member(%r12)
+    mov     $1, %eax
+    LEAVE 32
+28: inc     %r13
+    jmp     20b
+29: movq    $0, NodeApi_data(%r12)
+    movq    $0, NodeApi_state(%r12)
+    xor     %eax, %eax
+    LEAVE 32
+END_FUNCTION node_headers_next
+
+/*
+ * (connection rdi, route rsi, flags rdx): the getBlockHeaders stream of the route's query (node.md,
+ * NODE_EV_API): filter_slot its slot, the head's slot with neither slot nor parent_root, else
+ * 2^64 - 1; its parent_root at byte 32 of cursor and 1 at byte 64; API_STREAM_OPTIMISTIC and
+ * API_STREAM_FINALIZED of all its items; then its first item and a NODE_WORK_API_CHUNK. rbx the
+ * node. Locals: the connection, the route then the items, the flags, the entry's index and address,
+ * the position.
+ */
+LOCAL_FUNCTION node_api_headers_stream
+    FRAME 48
+    mov     %rdi, (%rsp)
+    mov     %rsi, 8(%rsp)
+    mov     %rdx, 16(%rsp)
+    call    node_api_new
+    mov     %rax, 24(%rsp)
+    mov     %rdx, 32(%rsp)
+    mov     %rdx, %rdi
+    mov     $NodeApi__mem, %esi
+    call    lantern_zero
+    mov     32(%rsp), %rdx
+    mov     (%rsp), %rax
+    mov     %rax, NodeApi_connection(%rdx)
+    movq    $API_OP_GET_BLOCK_HEADERS, NodeApi_op(%rdx)
+    mov     8(%rsp), %rax
+    testq   $(1 << API_PARAM_PARENT_ROOT), ApiRoute_present(%rax)
+    jz      1f
+    lea     (NodeApi_cursor + 32)(%rdx), %rdi
+    lea     ApiRoute_root(%rax), %rsi
+    COPY32  %rdi, %rsi
+    mov     32(%rsp), %rdx
+    movq    $1, (NodeApi_cursor + 64)(%rdx)
+    movq    $-1, NodeApi_filter_slot(%rdx)
+    jmp     2f
+1:  lea     Node_head_root(%rbx), %rdi      # neither: the head's slot
+    call    node_find_block
+    mov     $-1, %rcx
+    cmp     $-1, %rax
+    je      11f
+    mov     NodeBlock_slot(%rdx), %rcx
+11: mov     32(%rsp), %rdx
+    mov     %rcx, NodeApi_filter_slot(%rdx)
+2:  mov     8(%rsp), %rax
+    testq   $(1 << API_PARAM_SLOT), ApiRoute_present(%rax)
+    jz      3f
+    mov     ApiRoute_slot(%rax), %rcx
+    mov     %rcx, NodeApi_filter_slot(%rdx)
+3:  mov     16(%rsp), %rax                  # the flags of all items: optimistic of any, finalized of each, and of some
+    or      $API_STREAM_FINALIZED, %rax
+    mov     %rax, NodeApi_flags(%rdx)
+    movq    $0, 8(%rsp)
+    movq    $0, 40(%rsp)
+4:  mov     32(%rsp), %rdi
+    mov     40(%rsp), %rsi
+    call    node_headers_next
+    mov     32(%rsp), %rdx
+    test    %rax, %rax
+    jz      5f
+    incq    8(%rsp)
+    mov     NodeApi_member(%rdx), %rcx
+    test    $2, %ecx
+    jz      41f
+    orq     $API_STREAM_OPTIMISTIC, NodeApi_flags(%rdx)
+41: test    $4, %ecx
+    jnz     42f
+    andq    $~API_STREAM_FINALIZED, NodeApi_flags(%rdx)
+42: mov     NodeApi_slot(%rdx), %rax
+    inc     %rax
+    mov     %rax, 40(%rsp)
+    jmp     4b
+5:  cmpq    $0, 8(%rsp)
+    jne     6f
+    andq    $~API_STREAM_FINALIZED, NodeApi_flags(%rdx)
+6:  mov     32(%rsp), %rdi                  # the first item
+    xor     %esi, %esi
+    call    node_headers_next
+    mov     24(%rsp), %rax
+    mov     32(%rsp), %rdx
+    call    node_api_chunk_work
+    UNFRAME 48
+END_FUNCTION node_api_headers_stream
 
 /*
  * The pool stream of the NodeApi entry rdi goes to its next entry after slot (node.md,

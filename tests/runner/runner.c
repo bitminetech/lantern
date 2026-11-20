@@ -5277,6 +5277,7 @@ static int p2p_backfilled(struct p2p_net *net, int arg) {
  * answers BeaconBlocksByRange with the chain's blocks; each must reach the Db, and backfill_slot is
  * the first's. With bad, the block at bad has another signature: it and those below stay out.
  */
+static void api_headers_db_checks(fc_node *n, case_block **chain, size_t nchain, const char **why);
 static void backfill_once(tv parts, case_block **chain, size_t nchain, uint64_t last_ms, size_t bad, int late,
                           const char **why) {
     uint64_t vsize = 0;
@@ -5367,6 +5368,7 @@ static void backfill_once(tv parts, case_block **chain, size_t nchain, uint64_t 
 #endif
             }
             p2p_close(&net);
+            if (!*why && bad >= nchain && !late) api_headers_db_checks(&m, chain, nchain, why);
         }
     }
     free(badbytes);
@@ -7729,13 +7731,214 @@ static int api_root_of(const struct node_shell *s, uint8_t *out) {
            find_hash((const char *)s->api.b, s->api.len, "\"root\":\"0x", out);
 }
 
+/* A block of a case for getBlockHeaders: its roots, slot and bytes, the node's NodeBlock of it or NULL, and 1 on the chain. */
+typedef struct {
+    uint8_t root[32], parent[32], body_root[32];
+    uint64_t slot, len;
+    const uint8_t *bytes, *entry;
+    int on;
+} hd_block;
+static unsigned long api_headers_asked, api_headers_db; /* the getBlockHeaders answers checked; of them, with a Db block */
+
+/*
+ * One getBlockHeaders request of the query (has_slot, slot, proot), its answer from the case's blocks: first the
+ * chain's block of the query the node no longer holds (with NODE_FLAG_DB, in its Db), then each block of the query
+ * the node holds imported, in the order of its NodeBlock entries; each item's header from the block's bytes.
+ */
+static void api_headers_query(fc_node *n, const hd_block *hb, size_t nh, const char *req, int has_slot, uint64_t slot,
+                              const uint8_t *proot, uint64_t f_slot, uint64_t conn, const char **why) {
+    struct node_shell *s = n->shell;
+    static char msg[512];
+    int db = (rd64(s->node + NODE_FLAGS) & NODE_FLAG_DB) != 0, opt = 0, fin;
+    const hd_block *items[128];
+    size_t ni = 0, held;
+    for (size_t k = 0; k < nh; k++)
+        if (db && hb[k].on && !hb[k].entry && (!has_slot || hb[k].slot == slot) && (!proot || !memcmp(hb[k].parent, proot, 32)) &&
+            ni < 128)
+            items[ni++] = &hb[k];
+    held = ni;
+    for (size_t k = 0; k < nh; k++)
+        if (hb[k].entry && rd64(hb[k].entry + NB_STATUS) == NB_IMPORTED && (!has_slot || hb[k].slot == slot) &&
+            (!proot || !memcmp(hb[k].parent, proot, 32)) && ni < 128)
+            items[ni++] = &hb[k];
+    for (size_t a = held + 1; a < ni; a++) /* in the order of the node's entries */
+        for (size_t b = a; b > held && items[b - 1]->entry > items[b]->entry; b--) {
+            const hd_block *t = items[b];
+            items[b] = items[b - 1];
+            items[b - 1] = t;
+        }
+    fin = ni > 0;
+    for (size_t k = 0; k < ni; k++) {
+        if (items[k]->entry && rd64(items[k]->entry + 120) == PAYLOAD_NOT_VALIDATED) opt = 1; /* NodeBlock_payload_status */
+        if (!items[k]->on || items[k]->slot > f_slot) fin = 0;
+    }
+    uint64_t cap = 256 + 800 * ni, k = 0;
+    char *want = malloc(cap);
+    k += (uint64_t)snprintf(want + k, cap - k, "{\"execution_optimistic\":%s,\"finalized\":%s,\"data\":[", opt ? "true" : "false",
+                            fin ? "true" : "false");
+    for (size_t i = 0; i < ni; i++) {
+        const uint8_t *b = items[i]->bytes, *m = b + ((uint64_t)b[0] | (uint64_t)b[1] << 8 | (uint64_t)b[2] << 16 | (uint64_t)b[3] << 24);
+        k += (uint64_t)snprintf(want + k, cap - k, "%s{\"root\":\"0x", i ? "," : "");
+        for (int j = 0; j < 32; j++) k += (uint64_t)snprintf(want + k, cap - k, "%02x", items[i]->root[j]);
+        k += (uint64_t)snprintf(want + k, cap - k, "\",\"canonical\":%s,\"header\":{\"message\":{\"slot\":\"%llu\",\"proposer_index\":\"%llu\",\"parent_root\":\"0x",
+                                items[i]->on ? "true" : "false", (unsigned long long)rd64(m), (unsigned long long)rd64(m + 8));
+        for (int j = 0; j < 32; j++) k += (uint64_t)snprintf(want + k, cap - k, "%02x", m[16 + j]);
+        k += (uint64_t)snprintf(want + k, cap - k, "\",\"state_root\":\"0x");
+        for (int j = 0; j < 32; j++) k += (uint64_t)snprintf(want + k, cap - k, "%02x", m[48 + j]);
+        k += (uint64_t)snprintf(want + k, cap - k, "\",\"body_root\":\"0x");
+        for (int j = 0; j < 32; j++) k += (uint64_t)snprintf(want + k, cap - k, "%02x", items[i]->body_root[j]);
+        k += (uint64_t)snprintf(want + k, cap - k, "\"},\"signature\":\"0x");
+        for (int j = 0; j < 96; j++) k += (uint64_t)snprintf(want + k, cap - k, "%02x", b[4 + j]);
+        k += (uint64_t)snprintf(want + k, cap - k, "\"}}");
+    }
+    k += (uint64_t)snprintf(want + k, cap - k, "]}");
+    shell_api_ask(n, (const uint8_t *)req, strlen(req), conn, why);
+    uint64_t glen = 0;
+    uint8_t *g = *why ? NULL : api_normalize(s, &glen, why);
+    const char *gb = (const char *)g, *end = g ? find_bytes(gb, glen, "\r\n\r\n") : NULL;
+    if (!*why && (!end || glen < 17 || memcmp(g, "HTTP/1.1 200 OK\r\n", 17) || glen - (uint64_t)(end + 4 - gb) != k ||
+                  memcmp(end + 4, want, (size_t)k) || s->api.lasts != 1 || s->api.late)) {
+        uint64_t at = 0, blen = end ? glen - (uint64_t)(end + 4 - gb) : 0;
+        while (at < blen && at < k && end[4 + at] == want[at]) at++;
+        snprintf(msg, sizeof msg, "API getBlockHeaders %.60s: the body differs at byte %llu of %llu (case %llu): %.200s", req + 4,
+                 (unsigned long long)at, (unsigned long long)blen, (unsigned long long)k, end ? end + 4 + (at > 40 ? at - 40 : 0) : gb);
+        *why = msg;
+    }
+    if (!*why) *why = api_clean(s);
+    if (!*why) {
+        api_headers_asked++;
+        if (held) api_headers_db++;
+    }
+    free(g);
+    free(want);
+}
+
+/*
+ * getBlockHeaders of the Db's blocks (beacon-api.md), in a node whose Db holds the chain below its anchor, the
+ * chain's last block: of each slot of a block below the anchor, and of the root of each block below the anchor's
+ * parent as parent_root; each answer the Db's block alone.
+ */
+static void api_headers_db_checks(fc_node *n, case_block **chain, size_t nchain, const char **why) {
+    size_t nh = nchain ? nchain - 1 : 0;
+    hd_block *hb = xmalloc(sizeof *hb * (nh ? nh : 1));
+    uint64_t conn = 200, f_slot = nchain ? chain[nchain - 1]->slot : 0;
+    char req[256];
+    for (size_t b = 0; b < nh && !*why; b++) {
+        hd_block *h = &hb[b];
+        uint64_t vsize;
+        uint8_t *sb = decode(type_by_name("SignedBeaconBlock"), chain[b]->bytes, chain[b]->len, &vsize, why);
+        if (!sb) break;
+        root_of("BeaconBlockBody", nested(nested(sb, field_offset("SignedBeaconBlock", 0)), field_offset("BeaconBlock", 4)),
+                h->body_root, why);
+        free(sb);
+        memcpy(h->root, chain[b]->root, 32);
+        memcpy(h->parent, chain[b]->parent, 32);
+        h->slot = chain[b]->slot;
+        h->len = chain[b]->len;
+        h->bytes = chain[b]->bytes;
+        h->entry = NULL;
+        h->on = 1;
+    }
+    for (size_t b = 0; b < nh && !*why; b++) {
+        snprintf(req, sizeof req, "GET /eth/v1/beacon/headers?slot=%llu HTTP/1.1\r\nHost: lantern\r\n\r\n", (unsigned long long)hb[b].slot);
+        api_headers_query(n, hb, nh, req, 1, hb[b].slot, NULL, f_slot, conn++, why);
+        if (*why || b + 1 >= nh) continue;
+        int k = snprintf(req, sizeof req, "GET /eth/v1/beacon/headers?parent_root=0x");
+        for (int j = 0; j < 32; j++) k += snprintf(req + k, sizeof req - (size_t)k, "%02x", hb[b].root[j]);
+        snprintf(req + k, sizeof req - (size_t)k, " HTTP/1.1\r\nHost: lantern\r\n\r\n");
+        api_headers_query(n, hb, nh, req, 0, 0, hb[b].root, f_slot, conn++, why);
+    }
+    free(hb);
+}
+
+/*
+ * getBlockHeaders in node mode (beacon-api.md): of each slot of a valid block of the case and of the slot after the
+ * head's, of the root of the anchor and of each such block as parent_root, of a block's slot
+ * with its parent root and with another root, and with no query (the head's slot).
+ */
+static void api_headers_checks(fc_node *n, tv parts, case_block **chain, size_t nchain, uint64_t anchor_slot, uint64_t head_slot,
+                               uint64_t *conn, const char **why) {
+    struct node_shell *s = n->shell;
+    tv steps = tv_get(parts, "steps");
+    uint64_t count = steps ? rd64(steps + 1) : 0, f_slot = 0;
+    hd_block *hb = xmalloc(sizeof *hb * (count ? count : 1));
+    size_t nh = 0;
+    const uint8_t *anchor_root = s->anchor, *ae = shell_block(s, anchor_root);
+    uint64_t at = 0;
+    for (tv stp = steps ? steps + 9 : NULL; stp && at < count && !*why; stp = tv_skip(stp), at++) {
+        tv v = tv_get(stp, "valid"), bname = tv_get(stp, "block");
+        if (!bname || (v && !(*v == T_BOOL && v[1]))) goto next;
+        char key[128];
+        uint64_t vsize;
+        snprintf(key, sizeof key, "%.*s", (int)rd64(bname + 1), (const char *)(bname + 9));
+        hd_block *h = &hb[nh];
+        h->bytes = tv_bytes(tv_get(parts, key), &h->len);
+        uint8_t *sb = decode(type_by_name("SignedBeaconBlock"), h->bytes, h->len, &vsize, why);
+        if (!sb) break;
+        const uint8_t *block = nested(sb, field_offset("SignedBeaconBlock", 0));
+        root_of("BeaconBlock", block, h->root, why);
+        root_of("BeaconBlockBody", nested(block, field_offset("BeaconBlock", 4)), h->body_root, why);
+        h->slot = rd64(block + field_offset("BeaconBlock", 0));
+        memcpy(h->parent, block + field_offset("BeaconBlock", 2), 32);
+        free(sb);
+        int dup = 0;
+        for (size_t j = 0; j < nh; j++)
+            if (!memcmp(hb[j].root, h->root, 32)) dup = 1;
+        if (dup) goto next;
+        h->entry = shell_block(s, h->root);
+        h->on = 0;
+        for (size_t c = 0; c < nchain; c++)
+            if (!memcmp(chain[c]->root, h->root, 32)) h->on = 1;
+        nh++;
+    next:;
+    }
+    const uint8_t *fr = n->store + STORE_FINALIZED + 8;
+    if (!memcmp(fr, anchor_root, 32)) f_slot = anchor_slot;
+    for (size_t j = 0; j < nh; j++)
+        if (!memcmp(hb[j].root, fr, 32)) f_slot = hb[j].slot;
+    char req[256];
+    const char *tail = " HTTP/1.1\r\nHost: lantern\r\n\r\n";
+    static const uint8_t other[32] = {7, 7, 7};
+    if (!*why && ae && head_slot > anchor_slot) { /* no query: the head's slot */
+        snprintf(req, sizeof req, "GET /eth/v1/beacon/headers%s", tail);
+        api_headers_query(n, hb, nh, req, 1, head_slot, NULL, f_slot, (*conn)++, why);
+    }
+    if (!*why && ae && head_slot >= anchor_slot) { /* the slot after the head's: none */
+        snprintf(req, sizeof req, "GET /eth/v1/beacon/headers?slot=%llu%s", (unsigned long long)(head_slot + 1), tail);
+        api_headers_query(n, hb, nh, req, 1, head_slot + 1, NULL, f_slot, (*conn)++, why);
+    }
+    for (size_t j = 0; ae && j <= nh && !*why; j++) {
+        const uint8_t *root = j < nh ? hb[j].root : anchor_root;
+        int k = snprintf(req, sizeof req, "GET /eth/v1/beacon/headers?parent_root=0x");
+        for (int b = 0; b < 32; b++) k += snprintf(req + k, sizeof req - (size_t)k, "%02x", root[b]);
+        snprintf(req + k, sizeof req - (size_t)k, "%s", tail);
+        api_headers_query(n, hb, nh, req, 0, 0, root, f_slot, (*conn)++, why);
+        if (*why || j == nh || hb[j].slot == anchor_slot || !memcmp(hb[j].parent, ae + 32, 32)) continue; /* NodeBlock_parent_root */
+        int seen = 0;
+        for (size_t i = 0; i < j; i++)
+            if (hb[i].slot == hb[j].slot) seen = 1;
+        if (!seen) {
+            snprintf(req, sizeof req, "GET /eth/v1/beacon/headers?slot=%llu%s", (unsigned long long)hb[j].slot, tail);
+            api_headers_query(n, hb, nh, req, 1, hb[j].slot, NULL, f_slot, (*conn)++, why);
+        }
+        for (int o = 0; o < 2 && !*why; o++) {
+            const uint8_t *pr = o ? other : hb[j].parent;
+            k = snprintf(req, sizeof req, "GET /eth/v1/beacon/headers?slot=%llu&parent_root=0x", (unsigned long long)hb[j].slot);
+            for (int b = 0; b < 32; b++) k += snprintf(req + k, sizeof req - (size_t)k, "%02x", pr[b]);
+            snprintf(req + k, sizeof req - (size_t)k, "%s", tail);
+            api_headers_query(n, hb, nh, req, 1, hb[j].slot, pr, f_slot, (*conn)++, why);
+        }
+    }
+    free(hb);
+}
+
 /*
  * Node mode, after the steps (docs/reference/node.md, Test vectors): the chain is the case's valid
  * blocks from the node's head_root by parent_root. getBlockRoot of each slot after the anchor's to
  * the head's: the chain's block of that slot, else 404. getStateRoot of each slot from the head's to
  * the store's, at most an epoch and a slot past the head's: the hash_tree_root of the head's
  * post-state processed to the slot. getBlockHeader of the root of each valid block the node holds:
- * 200, canonical when it is on the chain.
+ * 200, canonical when it is on the chain. Then getBlockHeaders (api_headers_checks).
  */
 static unsigned long api_lookups;
 static void api_lookup_checks(fc_node *n, tv parts, const char **why) {
@@ -7839,6 +8042,7 @@ static void api_lookup_checks(fc_node *n, tv parts, const char **why) {
         }
         api_lookups++;
     }
+    if (!*why) api_headers_checks(n, parts, chain, nchain, anchor_slot, head_slot, &conn, why);
 done:
     free(chain);
     free(blocks);
@@ -8284,6 +8488,7 @@ int main(int argc, char **argv) {
     }
     if (node_settles_finalized) printf("NOTE: %lu node settles past a finalized epoch\n", node_settles_finalized);
     if (api_heads_streamed) printf("NOTE: %lu heads served as getBlockV2 and getStateV2 streams\n", api_heads_streamed);
+    if (api_headers_asked) printf("NOTE: %lu getBlockHeaders answers checked, %lu with a Db block\n", api_headers_asked, api_headers_db);
     if (api_fork_choice_200 || api_fork_choice_500)
         printf("NOTE: getDebugForkChoice answered 200 %lu times, 500 %lu times\n", api_fork_choice_200, api_fork_choice_500);
     if (api_lookups) printf("NOTE: %lu lookups of a block or a state by slot or root\n", api_lookups);

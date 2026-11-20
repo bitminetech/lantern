@@ -396,7 +396,7 @@ ANSWERED = ("getHealth", "getNetworkIdentity", "getNodeVersion", "getSyncingStat
             "getBlockHeader", "getStateFinalityCheckpoints", "getBlockV2", "getStateV2", "getBlockRoot", "getStateRoot",
             "getStateFork", "getSpec", "getForkSchedule", "getDepositContract", "getEpochCommittees",
             "getProposerDuties", "produceAttestationData", "getAttesterDuties", "eventstream", "getStateRandao",
-            "getEpochSyncCommittees", "getProposerLookahead", "getBlockAttestationsV2", "getBlindedBlock", "getDebugChainHeadsV2", "getDebugForkChoice") + tuple(PENDING) + VALIDATOR_OPS
+            "getEpochSyncCommittees", "getProposerLookahead", "getBlockAttestationsV2", "getBlindedBlock", "getDebugChainHeadsV2", "getDebugForkChoice", "getBlockHeaders") + tuple(PENDING) + VALIDATOR_OPS
 STATE_READS = ("getStateRandao", "getEpochSyncCommittees", "getProposerLookahead")
 IDENTITY = (b"16Uiu2HAmPLe7Mzm8TsYUubgCAW1aJoeFScxrLj8ppHFivPo97bUZ",
             b"enr:-Iu4QLm7bZGdAhVwRqZ6Zf3LlnqKsBTnZGOByHQhPMQJ3pV4F3t8L9i5yJOZ0X0hiZ6q4D5V0jB7l8J3ZtYw1JDH9C4BgmlkgnY0gmlwhAoAAAGJc2VjcDI1NmsxoQPKY0yuDUmstAHYpMa2_oxVtw0RW_QAdpzBQA8yWM0xOIN0Y3CCIyg",
@@ -840,6 +840,18 @@ def answer(v, name, route, offline, close, keep_alive, syncing=False):
         return response(200, b'{"data":{"disconnected":"0","connecting":"0","connected":"0","disconnecting":"0"}}', **kw)
     if name in ("getSpec", "getForkSchedule", "getDepositContract"):
         return response(200, v["config_bodies"][name], **kw)
+    if name == "getBlockHeaders":  # the node holds the anchor alone, with no bytes: its header as getBlockHeader's
+        h = v["header"]
+        slot_given, root_given = route.present >> 7 & 1, route.present >> 13 & 1
+        slot = route.slot if slot_given else (None if root_given else v["slot"])
+        if (slot is None or slot == v["slot"]) and (not root_given or route.root == bytes(h.parent_root)):
+            item = (b'{"root":' + qhex(v["root"]) + b',"canonical":true,"header":{"message":{"slot":' + q(h.slot) +
+                    b',"proposer_index":' + q(h.proposer_index) + b',"parent_root":' + qhex(h.parent_root) + b',"state_root":' +
+                    qhex(h.state_root) + b',"body_root":' + qhex(h.body_root) + b'},"signature":' + qhex(bytes(96)) + b"}}")
+            body = b'{"execution_optimistic":false,"finalized":true,"data":[' + item + b"]}"
+        else:
+            body = b'{"execution_optimistic":false,"finalized":false,"data":[]}'
+        return streamed(None, body, **kw)
     if name == "getDebugForkChoice":
         return response(200, v["fork_choice_body"], **kw)
     if name == "getDebugChainHeadsV2":  # the store holds the anchor alone: one leaf
@@ -933,6 +945,7 @@ class Route:
         self.syncing_status = struct.unpack_from("<Q", out, 240)[0]
         self.validator = bytes(out[120:184])
         self.present = struct.unpack_from("<Q", out, 40)[0]
+        self.root = bytes(out[296:328])
         self.epoch, self.slot, self.index, self.committee_index = struct.unpack_from("<QQQQ", out, 184)
         self.statuses = struct.unpack_from("<Q", out, 264)[0]
         at, count = struct.unpack_from("<QQ", out, 456)
@@ -1290,6 +1303,17 @@ def api_requests(spec, fork, v, kind="main"):
         for block_id in (b"head", b"finalized", b"genesis", b"%d" % (v["slot"] - 1), b"%d" % v["slot"], b"%d" % (v["slot"] + 1),
                          root_id, other_root):
             add(f"lookup_{op}_{block_id.decode()[:12]}", api_route.base(by_name[op], path_values={"block_id": block_id}))
+    headers, parent = by_name["getBlockHeaders"], qhex(v["header"].parent_root)[1:-1]
+    for key, query in (("slot", [("slot", b"%d" % v["slot"])]), ("slot_below", [("slot", b"%d" % (v["slot"] - 1))]),
+                       ("slot_above", [("slot", b"%d" % (v["slot"] + 1))]), ("slot_0", [("slot", b"0")]),
+                       ("parent", [("parent_root", parent)]), ("parent_anchor", [("parent_root", root_id)]),
+                       ("parent_other", [("parent_root", other_root)]),
+                       ("slot_parent", [("slot", b"%d" % v["slot"]), ("parent_root", parent)]),
+                       ("slot_parent_other", [("slot", b"%d" % v["slot"]), ("parent_root", other_root)]),
+                       ("slot_above_parent", [("slot", b"%d" % (v["slot"] + 1)), ("parent_root", parent)])):
+        add(f"headers_{key}", api_route.base(headers, query))
+    add("headers_http10", api_route.base(headers), version=b"HTTP/1.0")
+    add("headers_close", api_route.base(headers), connection=b"close")
     for op in ("getStateRoot", "getStateFork", "getStateFinalityCheckpoints"):
         ids = [b"head", b"finalized", b"justified", b"genesis", other_root, qhex(v["state_roots"][0])[1:-1],
                qhex(v["state_roots"][1])[1:-1]]

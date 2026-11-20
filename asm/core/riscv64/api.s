@@ -1424,31 +1424,10 @@ LOCAL_FUNCTION api_body
     addi    a0, s4, ApiView_head_root
     li      a1, 32
     call    api_qhex
-    API_LIT api_h_canonical
-    ld      a0, ApiView_canonical(s4)
-    call    api_bool
-    API_LIT api_h_slot
     ld      a0, ApiView_head_slot(s4)
-    call    api_qdec
-    API_LIT api_h_proposer
-    ld      a0, ApiView_proposer_index(s4)
-    call    api_qdec
-    API_LIT api_h_parent
-    addi    a0, s4, ApiView_parent_root
-    li      a1, 32
-    call    api_qhex
-    API_LIT api_h_state
-    addi    a0, s4, ApiView_state_root
-    li      a1, 32
-    call    api_qhex
-    API_LIT api_h_body
-    addi    a0, s4, ApiView_body_root
-    li      a1, 32
-    call    api_qhex
-    API_LIT api_h_signature
-    addi    a0, s4, ApiView_signature
-    li      a1, 96
-    call    api_qhex
+    addi    a1, s4, ApiView_proposer_index
+    ld      a2, ApiView_canonical(s4)
+    call    api_header_json
     API_LIT api_end3
     UNFRAME 16
 7:  li      t0, API_OP_GET_STATE_FINALITY_CHECKPOINTS
@@ -1808,6 +1787,84 @@ LOCAL_FUNCTION api_fork_choice_body
 9:  API_LIT api_v_end
     UNFRAME 16
 END_FUNCTION api_fork_choice_body
+
+# ,"canonical":…,"header":{"message":{"slot":…,"proposer_index":…,"parent_root":…,"state_root":…,"body_root":…},"signature":…
+# of the slot a0, canonical a2, and at a1 the header's proposer_index, parent_root, state_root,
+# body_root and signature, in that order. Locals: a0, a1, a2.
+LOCAL_FUNCTION api_header_json
+    FRAME 32
+    sd      a0, 0(sp)
+    sd      a1, 8(sp)
+    sd      a2, 16(sp)
+    API_LIT api_h_canonical
+    ld      a0, 16(sp)
+    call    api_bool
+    API_LIT api_h_slot
+    ld      a0, 0(sp)
+    call    api_qdec
+    API_LIT api_h_proposer
+    ld      t0, 8(sp)
+    ld      a0, 0(t0)
+    call    api_qdec
+    API_LIT api_h_parent
+    ld      a0, 8(sp)
+    addi    a0, a0, ApiView_parent_root - ApiView_proposer_index
+    li      a1, 32
+    call    api_qhex
+    API_LIT api_h_state
+    ld      a0, 8(sp)
+    addi    a0, a0, ApiView_state_root - ApiView_proposer_index
+    li      a1, 32
+    call    api_qhex
+    API_LIT api_h_body
+    ld      a0, 8(sp)
+    addi    a0, a0, ApiView_body_root - ApiView_proposer_index
+    li      a1, 32
+    call    api_qhex
+    API_LIT api_h_signature
+    ld      a0, 8(sp)
+    addi    a0, a0, ApiView_signature - ApiView_proposer_index
+    li      a1, 96
+    call    api_qhex
+    UNFRAME 32
+END_FUNCTION api_header_json
+.if ApiView_parent_root - ApiView_proposer_index != 8 || ApiView_state_root - ApiView_proposer_index != 40 || ApiView_body_root - ApiView_proposer_index != 72 || ApiView_signature - ApiView_proposer_index != 104
+.error "api_header_json reads the fields of a SignedBeaconBlockHeader after its slot"
+.endif
+
+# getBlockHeaders' JSON, as api_stream_json: with s3, the address of an item's header (its slot,
+# then the fields api_header_json reads), the item {"root":…,"canonical":…,"header":…}, its root at
+# byte 0 of the entry s4's cursor and canonical bit 0 of its member, after , when API_STREAM_ITEMS
+# is set; then API_STREAM_ITEMS and API_STREAM_ITEM_DONE in the event s5. With s3 = 0: ]}. a0 = 1
+# when the answer is whole, else 0.
+LOCAL_FUNCTION api_headers_json
+    FRAME 0
+    bnez    s3, 1f
+    API_LIT api_v_end
+    li      a0, 1
+    UNFRAME 0
+1:  ld      t0, (NodeEvent_api + 8)(s5)
+    li      t1, API_STREAM_ITEMS
+    and     t0, t0, t1
+    beqz    t0, 2f
+    API_LIT api_p_comma
+2:  API_LIT api_ch_root
+    addi    a0, s4, NodeApi_cursor
+    li      a1, 32
+    call    api_qhex
+    ld      a0, 0(s3)
+    addi    a1, s3, 8
+    ld      a2, NodeApi_member(s4)
+    andi    a2, a2, 1
+    call    api_header_json
+    API_LIT api_end2
+    ld      t0, (NodeEvent_api + 8)(s5)
+    li      t1, API_STREAM_ITEMS | API_STREAM_ITEM_DONE
+    or      t0, t0, t1
+    sd      t0, (NodeEvent_api + 8)(s5)
+    li      a0, 0
+    UNFRAME 0
+END_FUNCTION api_headers_json
 
 /*
  * The bodies of getStateRandao, getEpochSyncCommittees and getProposerLookahead (beacon-api.md), as
@@ -2382,6 +2439,8 @@ LOCAL_FUNCTION node_api_event
     beq     a3, t0, 67f
     li      t0, API_OP_GET_DEBUG_FORK_CHOICE
     beq     a3, t0, 67f
+    li      t0, API_OP_GET_BLOCK_HEADERS
+    beq     a3, t0, 57f
     li      t0, API_OP_GET_PROPOSER_DUTIES
     beq     a3, t0, 63f
     li      t0, API_OP_PRODUCE_ATTESTATION_DATA
@@ -2533,6 +2592,11 @@ LOCAL_FUNCTION node_api_event
     bne     t0, t1, 67f
     ori     s3, s3, API_ANSWER_SSZ
     j       67f
+57: mv      a0, s9                          # getBlockHeaders: a stream of the blocks of its query
+    mv      a1, s7
+    mv      a2, s3
+    call    node_api_headers_stream
+    j       90f
 68: mv      a0, s9                          # a pool GET: a stream of the pool
     mv      a1, s7
     mv      a2, s3
@@ -4701,8 +4765,15 @@ LOCAL_FUNCTION node_api_chunk_done
     and     s8, s8, t0
     sd      s8, NodeApi_flags(s4)
     mv      a0, s4
-    call    node_api_pool_advance
-    ld      s8, NodeApi_flags(s4)
+    ld      t0, NodeApi_op(s4)              # getBlockHeaders: its next item
+    li      t1, API_OP_GET_BLOCK_HEADERS
+    bne     t0, t1, 2f
+    ld      a1, NodeApi_slot(s4)
+    addi    a1, a1, 1
+    call    node_headers_next
+    j       3f
+2:  call    node_api_pool_advance
+3:  ld      s8, NodeApi_flags(s4)
 1:  ld      a1, (NodeEvent_api_bytes + 16)(s3)  # the chunk in a SEND
     addi    a1, a1, (56 + 7)
     andi    a1, a1, -8
@@ -4869,7 +4940,12 @@ LOCAL_FUNCTION api_stream_json
     bne     t0, t1, 3f
 4:  call    api_pool_json
     UNFRAME 0
-3:  ld      t0, NodeApi_op(s4)              # the pending streams: their items, of the state s3
+3:  ld      t0, NodeApi_op(s4)
+    li      t1, API_OP_GET_BLOCK_HEADERS
+    bne     t0, t1, 32f
+    call    api_headers_json
+    UNFRAME 0
+32: ld      t0, NodeApi_op(s4)              # the pending streams: their items, of the state s3
     addi    t1, t0, -API_OP_GET_PENDING_CONSOLIDATIONS
     li      t2, 2
     bgtu    t1, t2, 31f
@@ -4973,6 +5049,9 @@ LOCAL_FUNCTION node_api_chunk_run
     beq     t0, t1, 103f
     li      t1, API_OP_GET_POOL_BLS_TO_EXECUTION_CHANGES
     beq     t0, t1, 103f
+    li      t2, 5                           # getBlockHeaders (5): an item of data or state, none at its end
+    li      t1, API_OP_GET_BLOCK_HEADERS
+    beq     t0, t1, 103f
     addi    t1, t0, -API_OP_GET_PENDING_CONSOLIDATIONS  # a pending stream (4): a state
     li      t2, 2
     bgtu    t1, t2, 104f
@@ -5017,6 +5096,8 @@ LOCAL_FUNCTION node_api_chunk_run
     ld      t1, (L + 40)(sp)
     beqz    t1, 102f
     li      t2, 3
+    beq     t1, t2, 5f
+    li      t2, 5
     beq     t1, t2, 5f
     ld      t1, (L + 48)(sp)                # the state at the entry's slot
     ld      t1, NODE_STATE_SLOT(t1)
@@ -5124,6 +5205,8 @@ LOCAL_FUNCTION node_api_chunk_run
     beq     t0, t1, 67f
     li      t1, 4
     beq     t0, t1, 68f
+    li      t1, 5
+    beq     t0, t1, 69f
     ld      a0, (L + 56)(sp)
     ld      a1, (L + 48)(sp)
     li      t1, 2
@@ -5147,6 +5230,75 @@ LOCAL_FUNCTION node_api_chunk_run
     mul     t0, t0, t1
     sd      t0, (L + 16)(sp)
     ld      s3, (L + 48)(sp)                # the state is what api_stream_json reads
+    j       6f
+69: ld      t0, (L + 48)(sp)                # getBlockHeaders: an item's header at the end of scratch, s3 its address
+    or      t0, t0, s3
+    beqz    t0, 6f
+    ld      t1, (L + 56)(sp)
+    ld      t2, 0(t1)
+    li      t3, 208 + 64
+    bltu    t2, t3, 97f
+    addi    t2, t2, -208
+    sd      t2, 0(t1)
+    add     t2, t1, t2
+    sd      t2, (L + 32)(sp)
+    beqz    s3, 691f
+    ld      t0, 16(s3)                      # of the bytes: lantern_node_block_header of the fork of their slot
+    li      t1, 108
+    bltu    t0, t1, 96f
+    ld      t0, 8(s3)
+    add     t0, s3, t0
+    ld      a0, 100(t0)
+    ld      a1, (L + 64)(sp)
+    addi    a1, a1, Node_config
+    call    node_fork
+    mv      t6, a0
+    mv      a0, s3
+    ld      a1, (L + 56)(sp)
+    ld      a2, (L + 32)(sp)
+    FORK_CALL node_block_header
+    li      t0, LANTERN_BUFFER_TOO_SMALL
+    beq     a0, t0, 97f
+    bnez    a0, 96f
+    j       693f
+691: ld     a1, (L + 48)(sp)                # of the post-state: its latest_block_header, a zero signature
+    ld      a0, (L + 32)(sp)
+    ld      t0, NODE_STATE_HEADER(a1)
+    sd      t0, 0(a0)
+    addi    a0, a0, 8
+    addi    a1, a1, NODE_STATE_HEADER + 8
+    li      a2, 112 - 8
+    call    lantern_copy
+    ld      a0, (L + 32)(sp)
+    addi    a0, a0, 112
+    li      a1, 96
+    call    lantern_zero
+    ld      t0, (L + 32)(sp)
+    ld      t1, 48(t0)
+    ld      t2, 56(t0)
+    or      t1, t1, t2
+    ld      t2, 64(t0)
+    or      t1, t1, t2
+    ld      t2, 72(t0)
+    or      t1, t1, t2
+    bnez    t1, 693f
+    ld      t0, (L + 48)(sp)                # a zero state_root: the state's root
+    ld      a0, NODE_STATE_SLOT(t0)
+    ld      a1, (L + 64)(sp)
+    addi    a1, a1, Node_config
+    call    node_fork
+    mv      t6, a0
+    ld      a0, (L + 48)(sp)
+    ld      t0, (L + 64)(sp)
+    LDQ     a1, t0, Node_config + CONFIG_STATE_CACHE
+    ld      a2, (L + 56)(sp)
+    ld      a3, (L + 32)(sp)
+    addi    a3, a3, 48
+    FORK_CALL state_root
+    li      t0, LANTERN_BUFFER_TOO_SMALL
+    beq     a0, t0, 97f
+    bnez    a0, 96f
+693: ld     s3, (L + 32)(sp)
     j       6f
 63: ld      a2, (L + 64)(sp)
     call    node_api_committees_prep
@@ -5683,6 +5835,228 @@ LOCAL_FUNCTION node_api_pool_stream
     call    node_api_chunk_work
     UNFRAME 48
 END_FUNCTION node_api_pool_stream
+
+/*
+ * The item of the getBlockHeaders stream a0 at or after the position a1 (node.md, NODE_EV_API, an
+ * item of getBlockHeaders): position 0 the Db's block of the query, i + 1 the NodeBlock at index i.
+ * Its slot (the position), data, state, member (1 on the chain, + 2 optimistic, + 4 finalized) and
+ * its root at byte 0 of cursor; a0 = 1, or 0 with data and state 0 for none. s1 the node, s2 the
+ * store. s9 the entry, s3 the position, s4 the slot of the query or 2^64 - 1, s5 the address of its parent_root
+ * or 0, s6 a slot or a NodeBlock entry, s7 the member. Locals: L a slot.
+ */
+LOCAL_FUNCTION node_headers_next
+    ENTER 16
+    mv      s9, a0
+    mv      s3, a1
+    ld      s4, NodeApi_filter_slot(s9)
+    ld      t0, (NodeApi_cursor + 64)(s9)
+    addi    s5, s9, NodeApi_cursor + 32
+    bnez    t0, 1f
+    li      s5, 0
+1:  bnez    s3, 20f
+    ld      t0, Node_flags(s1)              # position 0: with NODE_FLAG_DB, the Db's block of the query
+    andi    t0, t0, NODE_FLAG_DB
+    beqz    t0, 19f
+    beqz    s5, 15f
+    mv      a0, s5                          # with parent_root: its slot r, of the node's imported block on the chain, else of the Db
+    call    node_find_block
+    li      t0, -1
+    beq     a0, t0, 11f
+    ld      t0, NodeBlock_status(a1)
+    li      t1, NODE_BLOCK_IMPORTED
+    bne     t0, t1, 11f
+    mv      s6, a1
+    mv      a0, a1
+    call    node_api_on_chain
+    beqz    a0, 19f
+    ld      s6, NodeBlock_slot(s6)
+    j       12f
+11: ld      a0, Node_db(s1)
+    add     a0, s1, a0
+    mv      a1, s5
+    addi    a2, sp, L
+    call    lantern_db_find_root
+    ld      s6, L(sp)
+    li      t0, -1
+    beq     s6, t0, 19f
+12: addi    s6, s6, 1                       # the first slot above r whose block is in the Db, below the chain the node keeps
+    bgtu    s6, s4, 19f                     # with slot: at most slot
+    mv      a0, s6
+    call    node_api_below
+    li      t0, -1
+    bne     a0, t0, 19f
+    mv      a0, s6
+    call    node_db_slot
+    beqz    a0, 12b
+    li      t0, -1
+    beq     s4, t0, 16f
+    bne     s6, s4, 19f
+    j       16f
+15: mv      s6, s4                          # slot alone: the Db's block of slot, below the chain the node keeps
+    mv      a0, s6
+    call    node_api_below
+    li      t0, -1
+    bne     a0, t0, 19f
+    mv      a0, s6
+    call    node_db_slot
+    beqz    a0, 19f
+16: addi    t0, s9, NodeApi_cursor          # the Db's block of slot s6: its DbSlot a0, the root at 0
+    COPY32  t0, a0
+    mv      a0, s6
+    call    node_db_block
+    sd      a0, NodeApi_data(s9)
+    sd      zero, NodeApi_state(s9)
+    sd      zero, NodeApi_slot(s9)
+    mv      a0, s6
+    call    node_api_final_block
+    slli    s7, a0, 2
+    ori     s7, s7, 1                       # on the chain, not optimistic
+    sd      s7, NodeApi_member(s9)
+    li      a0, 1
+    LEAVE 16
+19: li      s3, 1
+20: PART    t0, t1, s1, Node_blocks         # the node's imported blocks from the index s3 - 1
+    addi    t2, s3, -1
+    bgeu    t2, t1, 29f
+    li      t3, NodeBlock__mem
+    mul     t2, t2, t3
+    add     s6, t0, t2
+    ld      t0, NodeBlock_status(s6)
+    li      t1, NODE_BLOCK_IMPORTED
+    bne     t0, t1, 28f
+    li      t0, -1
+    beq     s4, t0, 22f
+    ld      t0, NodeBlock_slot(s6)
+    bne     t0, s4, 28f
+22: beqz    s5, 23f
+    addi    t0, s6, NodeBlock_parent_root
+    NE32    t0, s5, 28f
+23: ld      a0, NodeBlock_data_id(s6)       # its bytes, else its Db record, else its post-state
+    bnez    a0, 24f
+    mv      a0, s6
+    call    node_api_db_ref
+24: sd      a0, NodeApi_data(s9)
+    li      t0, 0
+    bnez    a0, 25f
+    ld      t0, NodeBlock_state_id(s6)
+    beqz    t0, 28f                         # neither: left out
+25: sd      t0, NodeApi_state(s9)
+    sd      s3, NodeApi_slot(s9)
+    addi    t0, s9, NodeApi_cursor
+    COPY32  t0, s6
+    ld      t0, NodeBlock_payload_status(s6)
+    addi    t0, t0, -PAYLOAD_STATUS_NOT_VALIDATED
+    seqz    s7, t0
+    slli    s7, s7, 1
+    mv      a0, s6
+    call    node_api_on_chain
+    or      s7, s7, a0
+    beqz    a0, 26f
+    ld      a0, NodeBlock_slot(s6)
+    call    node_api_final_block
+    slli    a0, a0, 2
+    or      s7, s7, a0
+26: sd      s7, NodeApi_member(s9)
+    li      a0, 1
+    LEAVE 16
+28: addi    s3, s3, 1
+    j       20b
+29: sd      zero, NodeApi_data(s9)
+    sd      zero, NodeApi_state(s9)
+    li      a0, 0
+    LEAVE 16
+END_FUNCTION node_headers_next
+
+/*
+ * (connection a0, route a1, flags a2): the getBlockHeaders stream of the route's query (node.md,
+ * NODE_EV_API): filter_slot its slot, the head's slot with neither slot nor parent_root, else
+ * 2^64 - 1; its parent_root at byte 32 of cursor and 1 at byte 64; API_STREAM_OPTIMISTIC and
+ * API_STREAM_FINALIZED of all its items; then its first item and a NODE_WORK_API_CHUNK. s1 the
+ * node. Locals: the connection, the route then the items, the flags, the entry's index and address,
+ * the position.
+ */
+LOCAL_FUNCTION node_api_headers_stream
+    FRAME 48
+    sd      a0, 0(sp)
+    sd      a1, 8(sp)
+    sd      a2, 16(sp)
+    call    node_api_new
+    sd      a0, 24(sp)
+    sd      a1, 32(sp)
+    mv      a0, a1
+    li      a1, NodeApi__mem
+    call    lantern_zero
+    ld      a1, 32(sp)
+    ld      t0, 0(sp)
+    sd      t0, NodeApi_connection(a1)
+    li      t0, API_OP_GET_BLOCK_HEADERS
+    sd      t0, NodeApi_op(a1)
+    ld      t1, 8(sp)
+    ld      t0, ApiRoute_present(t1)
+    li      t2, 1 << API_PARAM_PARENT_ROOT
+    and     t0, t0, t2
+    beqz    t0, 1f
+    addi    a0, a1, NodeApi_cursor + 32
+    addi    t2, t1, ApiRoute_root
+    COPY32  a0, t2
+    ld      a1, 32(sp)
+    li      t0, 1
+    sd      t0, (NodeApi_cursor + 64)(a1)
+    li      t0, -1
+    sd      t0, NodeApi_filter_slot(a1)
+    j       2f
+1:  addi    a0, s1, Node_head_root          # neither: the head's slot
+    call    node_find_block
+    li      t0, -1
+    beq     a0, t0, 11f
+    ld      t0, NodeBlock_slot(a1)
+11: ld      a1, 32(sp)
+    sd      t0, NodeApi_filter_slot(a1)
+2:  ld      t1, 8(sp)
+    ld      t0, ApiRoute_present(t1)
+    andi    t0, t0, 1 << API_PARAM_SLOT
+    beqz    t0, 3f
+    ld      t0, ApiRoute_slot(t1)
+    sd      t0, NodeApi_filter_slot(a1)
+3:  ld      t0, 16(sp)                      # the flags of all items: optimistic of any, finalized of each, and of some
+    ori     t0, t0, API_STREAM_FINALIZED
+    sd      t0, NodeApi_flags(a1)
+    sd      zero, 8(sp)
+    sd      zero, 40(sp)
+4:  ld      a0, 32(sp)
+    ld      a1, 40(sp)
+    call    node_headers_next
+    ld      a1, 32(sp)
+    beqz    a0, 5f
+    ld      t0, 8(sp)
+    addi    t0, t0, 1
+    sd      t0, 8(sp)
+    ld      t0, NodeApi_member(a1)
+    ld      t1, NodeApi_flags(a1)
+    andi    t2, t0, 2
+    beqz    t2, 41f
+    ori     t1, t1, API_STREAM_OPTIMISTIC
+41: andi    t2, t0, 4
+    bnez    t2, 42f
+    andi    t1, t1, ~API_STREAM_FINALIZED
+42: sd      t1, NodeApi_flags(a1)
+    ld      t0, NodeApi_slot(a1)
+    addi    t0, t0, 1
+    sd      t0, 40(sp)
+    j       4b
+5:  ld      t0, 8(sp)
+    bnez    t0, 6f
+    ld      t1, NodeApi_flags(a1)
+    andi    t1, t1, ~API_STREAM_FINALIZED
+    sd      t1, NodeApi_flags(a1)
+6:  ld      a0, 32(sp)                      # the first item
+    li      a1, 0
+    call    node_headers_next
+    ld      a0, 24(sp)
+    ld      a1, 32(sp)
+    call    node_api_chunk_work
+    UNFRAME 48
+END_FUNCTION node_api_headers_stream
 
 /*
  * The pool stream of the NodeApi entry a0 goes to its next entry after slot (node.md,
