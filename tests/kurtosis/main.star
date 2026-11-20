@@ -16,7 +16,9 @@ ethereum = import_module("github.com/ethpandaops/ethereum-package/main.star")
 ASSERTOOR_IMAGE = "ethpandaops/assertoor:v0.1.2@sha256:aba67ca18ea77bece68abe1cca171642d9212c2c399d18740969105ae3442078"
 
 # Its config: lantern as the one endpoint, the API without the frontend, and one test of the checks
-# that read the Beacon API (Assertoor's tasks of v0.1.2), each over lantern.
+# that read the Beacon API (Assertoor's tasks of v0.1.2), each over lantern; then operations of the
+# validators of ethereum-package's default mnemonic (its DEFAULT_MNEMONIC, src/package_io/constants.star)
+# through lantern's pool POSTs, each awaited in a block: lantern publishes them, the client includes them.
 ASSERTOOR_CONFIG = """endpoints:
 - name: "lantern"
   consensusUrl: "{{ .LanternURL }}"
@@ -90,7 +92,55 @@ tests:
           minCheckEpochCount: 1
       - name: check_consensus_forks
         title: "forks"
-"""
+  - name: run_tasks_concurrent
+    title: "operations through lantern's pool POSTs, in blocks"
+    timeout: 30m
+    config:
+      tasks:
+      - name: generate_exits
+        title: "two voluntary exits"
+        config:
+          limitTotal: 2
+          limitPerSlot: 1
+          mnemonic: "MNEMONIC"
+          startIndex: 100
+          indexCount: 2
+          clientPattern: "lantern"
+          awaitInclusion: true
+      - name: generate_bls_changes
+        title: "two BLS to execution changes"
+        config:
+          limitTotal: 2
+          limitPerSlot: 1
+          mnemonic: "MNEMONIC"
+          startIndex: 104
+          indexCount: 2
+          targetAddress: "0x8943545177806ED17B9F23F0a21ee5948eCaa776"
+          clientPattern: "lantern"
+          awaitInclusion: true
+      - name: generate_slashings
+        title: "a proposer slashing"
+        config:
+          slashingType: proposer
+          limitTotal: 1
+          limitPerSlot: 1
+          mnemonic: "MNEMONIC"
+          startIndex: 108
+          indexCount: 1
+          clientPattern: "lantern"
+          awaitInclusion: true
+      - name: generate_slashings
+        title: "an attester slashing"
+        config:
+          slashingType: attester
+          limitTotal: 1
+          limitPerSlot: 1
+          mnemonic: "MNEMONIC"
+          startIndex: 110
+          indexCount: 1
+          clientPattern: "lantern"
+          awaitInclusion: true
+""".replace("MNEMONIC", "giant issue aisle success illegal bike spike question tent bar rely arctic volcano long crawl hungry vocal artwork sniff fantasy very lucky have athlete")
 
 # The finalized block and its post-state of the Beacon API at URL, as SSZ, in /checkpoint.
 CHECKPOINT_SH = """mkdir -p /checkpoint

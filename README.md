@@ -80,7 +80,7 @@ Standard: [asm-standard@2a19d3f](https://github.com/bitminetech/asm-standard/blo
 | Network directory for the binary | [tests/app/network.py](tests/app/network.py) |
 | Devnet of geth and each client, lantern following it | [tests/app/devnet.sh](tests/app/devnet.sh), [tests/kurtosis/](tests/kurtosis/), images in [tests/app/clients.sh](tests/app/clients.sh) |
 | Devnet: lantern restarts from its history, starts from a checkpoint, and follows across a fork | [tests/app/devnet.sh](tests/app/devnet.sh) (RESTART=1, CHECKPOINT=1, FORK=1) |
-| Devnet: Assertoor's Beacon API checks over lantern | [tests/app/devnet.sh](tests/app/devnet.sh) (ASSERTOOR=1), [tests/kurtosis/main.star](tests/kurtosis/main.star) |
+| Devnet: Assertoor's Beacon API checks, and pool operations through lantern into blocks | [tests/app/devnet.sh](tests/app/devnet.sh) (ASSERTOOR=1), [tests/kurtosis/main.star](tests/kurtosis/main.star) |
 | CI, 7 targets | [.github/workflows/ci.yml](.github/workflows/ci.yml) |
 | State benchmarks at mainnet scale | [bench/](bench/README.md) |
 
