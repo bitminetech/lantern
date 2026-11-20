@@ -9963,7 +9963,83 @@ FUNCTION lantern_node_run
     add     a1, s5, t1
     call    lantern_copy
     j       8441b
-8470:
+8470: li    t1, NODE_WORK_PUBLISH_SIDECARS
+    bne     t0, t1, 8480f
+    beqz    s5, 837b                        # PUBLISH_SIDECARS: lantern_node_publish_sidecars of the fork arg & 255, into state_b
+    ld      a3, (L + 72)(sp)
+    beqz    a3, 837b
+    ld      t0, NodeAction_arg(s3)
+    andi    t6, t0, 255
+    srli    t0, t0, 8
+    andi    t0, t0, 1
+    xori    a1, t0, 1                       # JSON without the SSZ bit
+    mv      a0, s5
+    mv      a2, s6
+    li      t1, FORK_DENEB
+    bltu    t6, t1, 837b
+    li      t1, FORK_ELECTRA
+    bgeu    t6, t1, 8471f
+    CALL_GLOBAL lantern_deneb_node_publish_sidecars
+    j       8473f
+8471: li    t1, FORK_FULU
+    bgeu    t6, t1, 8472f
+    CALL_GLOBAL lantern_electra_node_publish_sidecars
+    j       8473f
+8472: CALL_GLOBAL lantern_fulu_node_publish_sidecars
+8473: li    t0, LANTERN_BUFFER_TOO_SMALL
+    beq     a0, t0, 8449b
+    bnez    a0, 8458b
+    LEAVE 192
+8480: li    t1, NODE_WORK_PUBLISH_SIDECAR
+    bne     t0, t1, 8490f
+    ld      t2, (L + 72)(sp)                # PUBLISH_SIDECAR: the sidecar arg of state_b, as a ByteList at NodeEvent_chunk
+    beqz    t2, 837b
+    ld      t3, NodeAction_arg(s3)
+    ld      t4, 8(t2)
+    add     t4, t2, t4                      # the first sidecar's ByteList
+    ld      t5, 16(t2)
+    add     t5, t4, t5                      # their end
+8481: bgeu  t4, t5, 8483f
+    beqz    t3, 8482f
+    ld      t0, 0(t4)
+    add     t4, t4, t0
+    addi    t3, t3, -1
+    j       8481b
+8482: ld    s9, 16(t4)                      # its length
+    addi    t0, s9, NodeEvent_chunk + 24 + 7
+    bltu    s8, t0, 8419b
+    sd      t4, (L + 96)(sp)
+    ld      t0, NodeAction_target(s3)       # its block's root and slot: the entry's
+    PART    t1, t2, s1, Node_api
+    bgeu    t0, t2, 837b
+    li      t2, NodeApi__mem
+    mul     t0, t0, t2
+    add     t1, t1, t0
+    addi    a0, s7, NodeEvent_root
+    addi    a1, t1, NodeApi_root
+    COPY32  a0, a1
+    ld      t0, NodeApi_slot(t1)
+    sd      t0, NodeEvent_checkpoint(s7)
+    ld      t4, (L + 96)(sp)
+    ld      t0, 8(t4)                       # its index: the u64 at byte 0 of its bytes
+    add     t0, t4, t0
+    ld      t0, 0(t0)
+    sd      t0, NodeEvent_index(s7)
+    addi    t0, s7, NodeEvent_chunk         # its bytes as a ByteList
+    addi    t1, s8, -NodeEvent_chunk
+    sd      t1, 0(t0)
+    li      t1, 24
+    sd      t1, 8(t0)
+    sd      s9, 16(t0)
+    addi    a0, t0, 24
+    ld      t1, 8(t4)
+    add     a1, t4, t1
+    mv      a2, s9
+    call    lantern_copy
+    j       8441b
+8483: li    a0, LANTERN_INVALID_EVENT       # past the last
+    j       8458b
+8490:
 89: li      t1, NODE_WORK_SLOTS
     bne     t0, t1, 90f
     ld      a0, NODE_STATE_SLOT(s4)         # SLOTS: process_slots of the fork of the state's slot, to arg

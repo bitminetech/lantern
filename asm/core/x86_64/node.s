@@ -10008,7 +10008,89 @@ FUNCTION lantern_node_run
     add     %r14, %rsi
     call    lantern_copy
     jmp     8441b
-8470:
+8470: cmp   $NODE_WORK_PUBLISH_SIDECARS, %rax
+    jne     8480f
+    test    %r14, %r14                      # PUBLISH_SIDECARS: lantern_node_publish_sidecars of the fork arg & 255, into state_b
+    jz      837b
+    mov     (L + 72)(%rsp), %rcx
+    test    %rcx, %rcx
+    jz      837b
+    mov     NodeAction_arg(%r12), %rax
+    movzbl  %al, %r10d
+    shr     $8, %eax
+    and     $1, %eax
+    xor     $1, %eax
+    mov     %rax, %rsi                      # JSON without the SSZ bit
+    mov     %r14, %rdi
+    mov     %r15, %rdx
+    cmp     $FORK_DENEB, %r10
+    jb      837b
+    cmp     $FORK_ELECTRA, %r10
+    jae     8471f
+    CALL_GLOBAL lantern_deneb_node_publish_sidecars
+    jmp     8473f
+8471: cmp   $FORK_FULU, %r10
+    jae     8472f
+    CALL_GLOBAL lantern_electra_node_publish_sidecars
+    jmp     8473f
+8472: CALL_GLOBAL lantern_fulu_node_publish_sidecars
+8473: cmp   $LANTERN_BUFFER_TOO_SMALL, %rax
+    je      8449b
+    test    %rax, %rax
+    jnz     8458b
+    LEAVE 192
+8480: cmp   $NODE_WORK_PUBLISH_SIDECAR, %rax
+    jne     8490f
+    mov     (L + 72)(%rsp), %rcx            # PUBLISH_SIDECAR: the sidecar arg of state_b, as a ByteList at NodeEvent_chunk
+    test    %rcx, %rcx
+    jz      837b
+    mov     NodeAction_arg(%r12), %rdx
+    mov     8(%rcx), %rsi
+    add     %rcx, %rsi                      # the first sidecar's ByteList
+    mov     16(%rcx), %rdi
+    add     %rsi, %rdi                      # their end
+8481: cmp   %rdi, %rsi
+    jae     8483f
+    test    %rdx, %rdx
+    jz      8482f
+    add     (%rsi), %rsi
+    dec     %rdx
+    jmp     8481b
+8482: mov   16(%rsi), %r8                   # its length
+    lea     (NodeEvent_chunk + 24 + 7)(%r8), %rax
+    cmp     S9(%rsp), %rax
+    ja      8419b
+    mov     %rsi, (L + 96)(%rsp)
+    mov     NodeAction_target(%r12), %rax   # its block's root and slot: the entry's
+    PART    %rcx, %rdx, %rbx, Node_api
+    cmp     %rdx, %rax
+    jae     837b
+    imul    $NodeApi__mem, %rax, %rax
+    add     %rax, %rcx
+    mov     S8(%rsp), %rdx
+    lea     NodeEvent_root(%rdx), %rdi
+    lea     NodeApi_root(%rcx), %rax
+    COPY32  %rdi, %rax
+    mov     NodeApi_slot(%rcx), %rax
+    mov     %rax, NodeEvent_checkpoint(%rdx)
+    mov     (L + 96)(%rsp), %rsi
+    mov     8(%rsi), %rax                   # its index: the u64 at byte 0 of its bytes
+    mov     (%rsi,%rax), %rax
+    mov     %rax, NodeEvent_index(%rdx)
+    mov     S9(%rsp), %rax                  # its bytes as a ByteList
+    sub     $NodeEvent_chunk, %rax
+    mov     %rax, NodeEvent_chunk(%rdx)
+    movq    $24, (NodeEvent_chunk + 8)(%rdx)
+    mov     %r8, (NodeEvent_chunk + 16)(%rdx)
+    lea     (NodeEvent_chunk + 24)(%rdx), %rdi
+    mov     8(%rsi), %rax
+    add     %rax, %rsi
+    mov     %r8, %rdx
+    call    lantern_copy
+    jmp     8441b
+8483: mov   $LANTERN_INVALID_EVENT, %eax    # past the last
+    jmp     8458b
+8490:
 89: cmp     $NODE_WORK_SLOTS, %rax
     jne     90f
     mov     NODE_STATE_SLOT(%r13), %rdi     # SLOTS: process_slots of the fork of the state's slot, to arg

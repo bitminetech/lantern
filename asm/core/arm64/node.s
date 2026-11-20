@@ -9908,7 +9908,79 @@ FUNCTION lantern_node_run
     add     x1, x23, x10
     bl      lantern_copy
     b       8441b
-8470:
+8470: cmp   x9, #NODE_WORK_PUBLISH_SIDECARS
+    b.ne    8480f
+    cbz     x23, 837b                       /* PUBLISH_SIDECARS: lantern_node_publish_sidecars of the fork arg & 255, into state_b */
+    ldr     x3, [sp, #(L + 72)]
+    cbz     x3, 837b
+    ldr     x9, [x21, #NodeAction_arg]
+    and     x15, x9, #255
+    ubfx    x9, x9, #8, #1
+    eor     x1, x9, #1                      /* JSON without the SSZ bit */
+    mov     x0, x23
+    mov     x2, x24
+    cmp     x15, #FORK_DENEB
+    b.lo    837b
+    cmp     x15, #FORK_ELECTRA
+    b.hs    8471f
+    CALL_GLOBAL lantern_deneb_node_publish_sidecars
+    b       8473f
+8471: cmp   x15, #FORK_FULU
+    b.hs    8472f
+    CALL_GLOBAL lantern_electra_node_publish_sidecars
+    b       8473f
+8472: CALL_GLOBAL lantern_fulu_node_publish_sidecars
+8473: cmp   x0, #LANTERN_BUFFER_TOO_SMALL
+    b.eq    8449b
+    cbnz    x0, 8458b
+    LEAVE 192
+8480: cmp   x9, #NODE_WORK_PUBLISH_SIDECAR
+    b.ne    8490f
+    ldr     x10, [sp, #(L + 72)]            /* PUBLISH_SIDECAR: the sidecar arg of state_b, as a ByteList at NodeEvent_chunk */
+    cbz     x10, 837b
+    ldr     x11, [x21, #NodeAction_arg]
+    ldp     x12, x13, [x10, #8]
+    add     x12, x10, x12                   /* the first sidecar's ByteList */
+    add     x13, x12, x13                   /* their end */
+8481: cmp   x12, x13
+    b.hs    8483f
+    cbz     x11, 8482f
+    ldr     x14, [x12]
+    add     x12, x12, x14
+    sub     x11, x11, #1
+    b       8481b
+8482: ldr   x14, [x12, #16]                 /* its length */
+    add     x15, x14, #(NodeEvent_chunk + 24 + 7)
+    cmp     x26, x15
+    b.lo    8419b
+    ldr     x9, [x21, #NodeAction_target]   /* its block's root and slot: the entry's */
+    PART    x10, x11, x19, Node_api
+    cmp     x9, x11
+    b.hs    837b
+    mov     x11, #NodeApi__mem
+    madd    x9, x9, x11, x10
+    add     x0, x25, #NodeEvent_root
+    add     x1, x9, #NodeApi_root
+    COPY32  x0, x1
+    ldr     x10, [x9, #NodeApi_slot]
+    str     x10, [x25, #NodeEvent_checkpoint]
+    ldr     x10, [x12, #8]                  /* its index: the u64 at byte 0 of its bytes */
+    ldr     x10, [x12, x10]
+    str     x10, [x25, #NodeEvent_index]
+    add     x9, x25, #NodeEvent_chunk
+    sub     x10, x26, #NodeEvent_chunk
+    mov     x11, #24
+    stp     x10, x11, [x9]
+    str     x14, [x9, #16]
+    add     x0, x9, #24
+    ldr     x1, [x12, #8]
+    add     x1, x12, x1
+    mov     x2, x14
+    bl      lantern_copy
+    b       8441b
+8483: mov   x0, #LANTERN_INVALID_EVENT      /* past the last */
+    b       8458b
+8490:
 89: cmp     x9, #NODE_WORK_SLOTS
     b.ne    90f
     ldr     x0, [x22, #NODE_STATE_SLOT]     /* SLOTS: process_slots of the fork of the state's slot, to arg */

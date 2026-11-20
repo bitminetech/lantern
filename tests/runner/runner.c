@@ -1080,6 +1080,21 @@ static uint8_t *fresh_scratch(void) {
     return scratch_buf;
 }
 
+/* A fresh scratch of size bytes, as fresh_scratch: past SCRATCH_BYTES, a larger buffer kept for the next such call. */
+static uint8_t *sized_scratch(uint64_t size) {
+    static uint8_t *big;
+    static uint64_t big_size;
+    if (size <= SCRATCH_BYTES) return fresh_scratch();
+    if (size > big_size) {
+        free(big);
+        big = buffer(size);
+        big_size = size;
+    }
+    memset(big, FILL, (size_t)(size + GUARD));
+    wr64(big, size);
+    return big;
+}
+
 /* A state decoded from enc and copied with room in each list. NULL with a reason on failure. */
 static uint8_t *load_state(const uint8_t *enc, uint64_t len, uint64_t *size, const char **why) {
     const uint8_t *desc = type_by_name("BeaconState");
@@ -3012,8 +3027,13 @@ static void shell_work(fc_node *n, const uint8_t *work, const char **why) {
         st = CALL(lantern_node_run, s->node, n->store, s->seen, work, a ? a->b : NULL, b ? b->b : NULL, c ? c->b : NULL,
                   d ? d->b : NULL, settings, fresh_scratch(), ev);
         if (st != 0 && (memcmp(snode, s->node, (size_t)s->node_size) || memcmp(sstore, n->store, (size_t)n->size) ||
-                        (a && memcmp(sa, a->b, (size_t)a->size))))
-            *why = "lantern_node_run: a non-zero status changed a state";
+                        (a && memcmp(sa, a->b, (size_t)a->size)))) {
+            static char msg[128];
+            snprintf(msg, sizeof msg, "lantern_node_run: status %llu of work kind %llu changed %s", (unsigned long long)st,
+                     (unsigned long long)kind, memcmp(snode, s->node, (size_t)s->node_size) ? "the node"
+                     : memcmp(sstore, n->store, (size_t)n->size) ? "the store" : "state_a");
+            *why = msg;
+        }
         free(snode);
         free(sstore);
         free(sa);
@@ -3040,13 +3060,18 @@ static void shell_work(fc_node *n, const uint8_t *work, const char **why) {
             free(ev);
             ev_size *= 4;
             ev = buffer(ev_size);
-        } else if (kind == WORK_PUBLISH_CHECK) { /* its event holds the block from the start: the Seen, and the parent's state's lists */
-            for (int i = 0; i < 4; i++) s->seen_room[i] *= 2;
-            shell_seen(s, why);
-            if (a) {
+        } else if (kind == WORK_PUBLISH_CHECK) {
+            /* its event holds the block from the start: the Seen while it has fewer free keys than the block and
+               NUMBER_OF_COLUMNS sidecars add (the check restores the Seen it asks room of), else the parent's state */
+            uint64_t keys_room = (rd64(s->seen + 24) - rd64(s->seen + 8)) / 32 - rd64(s->seen + 16);
+            if (keys_room < 1 + 128) {
+                for (int i = 0; i < 4; i++) s->seen_room[i] *= 2;
+                shell_seen(s, why);
+            } else if (a) {
                 a->b = regrow_slot(s, a->b, &a->size, growth, why);
                 growth *= 2;
-            }
+            } else
+                *why = "lantern_node_run: PUBLISH_CHECK asks for room with no state";
         } else if (kind == WORK_PUBLISH_SIDECARS) {
             *why = "lantern_node_run: PUBLISH_SIDECARS asks for room";
         } else if (kind == WORK_GOSSIP) { /* the Seen, and the proposer state's lists */
@@ -3148,6 +3173,7 @@ static void shell_step(fc_node *n, const char **why) {
     memcpy(events + 24, s->pending, (size_t)len);
     s->pending_len = 0;
     for (uint64_t at = 0; at < len; at += rd64(events + 24 + at)) nevents++;
+    uint64_t step_scratch = SCRATCH_BYTES;
     for (int t = 0; t < 128 && st == 1 && !*why; t++) {
         wr64(s->actions + 8, 24);
         wr64(s->actions + 16, 0);
@@ -3156,7 +3182,8 @@ static void shell_step(fc_node *n, const char **why) {
         uint64_t p2p_size = p2p ? rd64(p2p) : 0;
         uint8_t *sp2p = p2p ? copy_of(p2p, p2p_size) : NULL;
         if (s->net) p2p_tick(s->net, 0, tick);
-        st = CALL(lantern_node_step, s->node, n->store, p2p, s->net ? tick : NULL, events, fresh_scratch(), s->actions, count);
+        st = CALL(lantern_node_step, s->node, n->store, p2p, s->net ? tick : NULL, events, sized_scratch(step_scratch), s->actions,
+                  count);
         if (st != 0 && (memcmp(snode, s->node, (size_t)s->node_size) || memcmp(sstore, n->store, (size_t)n->size) ||
                         (p2p && memcmp(sp2p, p2p, (size_t)p2p_size))))
             *why = "lantern_node_step: a non-zero status changed a state";
@@ -3175,8 +3202,10 @@ static void shell_step(fc_node *n, const char **why) {
             s->actions_size *= 2;
             s->actions = buffer(s->actions_size);
             wr64(s->actions, s->actions_size);
+        } else if (count[2] == 3 && step_scratch < (uint64_t)1 << 30) { /* scratch: twice the room, as the app grows it */
+            step_scratch *= 2;
         } else {
-            *why = count[2] == 3 ? "lantern_node_step: short of scratch" : "lantern_node_step: short is no NODE_SHORT_*";
+            *why = count[2] == 3 ? "lantern_node_step asks for scratch past 1 GiB" : "lantern_node_step: short is no NODE_SHORT_*";
         }
     }
     if (!*why && st != 0) {
@@ -7496,10 +7525,56 @@ static const char *api_mismatch(const struct node_shell *s, const char *name, co
  * with last 1 and no other, and one NODE_ACT_API_CLOSE after them when the case closes.
  */
 /*
+ * node-publish: the NodeBlob entries of the case's root in NODE_BLOB_VALID must be the case's
+ * sidecars at their indices: each of them before fulu, the columns of Node_columns in fulu.
+ */
+static const char *publish_sidecars_held(struct node_shell *s, tv parts, tv sc) {
+    uint64_t rlen, nsc = rd64(sc + 1), held = 0, want = nsc;
+    const uint8_t *root = tv_bytes(tv_get(parts, "root"), &rlen);
+    static char msg[160];
+#if FORK >= FORK_FULU
+    if (nsc) {
+        want = 0;
+        for (int i = 0; i < 128; i++) want += (s->node[440 + i / 8] >> (i % 8)) & 1; /* Node_columns */
+    }
+#endif
+    uint64_t off = rd64(s->node + NODE_BLOBS), count = rd64(s->node + NODE_BLOBS + 8);
+    for (uint64_t i = 0; i < count; i++) {
+        const uint8_t *e = s->node + off + NODE_BLOB_BYTES * i;
+        if (rlen != 32 || memcmp(e, root, 32) || rd64(e + 56) != NBLOB_VALID) continue;
+        uint64_t index = rd64(e + 32), glen;
+        shell_buf *b = shell_find(s, rd64(e + 48));
+        tv item = sc + 9;
+        for (uint64_t k = 0; k < index && k < nsc; k++) item = tv_skip(item);
+        if (index >= nsc) {
+            snprintf(msg, sizeof msg, "a NodeBlob of index %llu, past the case's sidecars", (unsigned long long)index);
+            return msg;
+        }
+        const uint8_t *g = tv_bytes(item, &glen);
+        if (!b || rd64(b->b + 16) != glen || memcmp(b->b + rd64(b->b + 8), g, (size_t)glen)) {
+            snprintf(msg, sizeof msg, "the NodeBlob of index %llu is not the spec's sidecar", (unsigned long long)index);
+            return msg;
+        }
+        held++;
+    }
+    if (held != want) {
+        snprintf(msg, sizeof msg, "the node holds %llu sidecars of the block, not %llu", (unsigned long long)held,
+                 (unsigned long long)want);
+        return msg;
+    }
+    return NULL;
+}
+
+/*
  * node-produce and node-publish: lantern's cases of produceBlockV3 and publishBlockV2 (node.md, Test
  * vectors). Each request after its tick; the runner's buffers grow only by those the node holds.
  */
-static void run_node_produce(const char *file, case_file *f) {
+static void run_node_produce(const char *file, const char *dir, case_file *f) {
+#if FORK >= FORK_DENEB
+    load_kzg_settings(dir); /* the sidecars' gossip checks */
+#else
+    (void)dir;
+#endif
     for (uint64_t i = 0; i < f->count; i++) {
         const char *name, *why = NULL;
         uint64_t len, plen;
@@ -7568,6 +7643,8 @@ static void run_node_produce(const char *file, case_file *f) {
             free(got);
             if (!why) why = api_clean(s);
         }
+        tv sc = tv_get(parts, "sidecars");
+        if (!why && sc) why = publish_sidecars_held(s, parts, sc);
         n.produce = 0;
         shell_close(&n, anchor_block);
         report(file, name, len, why == NULL, why);
@@ -9091,7 +9168,7 @@ int main(int argc, char **argv) {
         else if (!bls_off && !strcmp(kind, "app-options")) run_app_options(file, &f);
         else if (!bls_off && !strcmp(kind, "node-api")) run_node_api(file, &f);
         else if (!bls_off && !strcmp(kind, "node-payload")) run_node_payload(file, &f);
-        else if (!bls_off && (!strcmp(kind, "node-produce") || !strcmp(kind, "node-publish"))) run_node_produce(file, &f);
+        else if (!bls_off && (!strcmp(kind, "node-produce") || !strcmp(kind, "node-publish"))) run_node_produce(file, argv[1], &f);
         else if (!bls_off && !strcmp(kind, "json-encode")) run_json_encode(file, &f);
         else if (!bls_off && !strcmp(kind, "json-decode")) run_json_decode(file, &f, 0);
         else if (!bls_off && !strcmp(kind, "json-engine_decode")) run_json_decode(file, &f, 1);

@@ -975,6 +975,15 @@
 .set NODE_PUBLISH_SIDECARS, 2
 .set NODE_PUBLISH_CHECK, 3
 .set NODE_PUBLISH_IMPORT, 4
+.set PUB_BLOB_BYTES, FIELD_ELEMENTS_PER_BLOB * BYTES_PER_FIELD_ELEMENT    /* a Blob */
+.set PUB_CELL_BYTES, FIELD_ELEMENTS_PER_CELL * BYTES_PER_FIELD_ELEMENT    /* a Cell */
+.set PUB_HEADER_BYTES, 208             /* a SignedBeaconBlockHeader */
+.set PUB_BLOB_SIDECAR, 8 + PUB_BLOB_BYTES + 96 + PUB_HEADER_BYTES + 32 * KZG_COMMITMENT_INCLUSION_PROOF_DEPTH   /* a BlobSidecar */
+.set PUB_COLUMN_FIXED, 8 + 12 + PUB_HEADER_BYTES + 32 * KZG_COMMITMENTS_INCLUSION_PROOF_DEPTH  /* a DataColumnSidecar's fixed part; each blob adds a cell and two 48-byte items */
+.set PUB_COMMITMENTS_GINDEX, 16 + 11   /* blob_kzg_commitments: field 11 of the 16 leaves of BeaconBlockBody, deneb to fulu */
+.if 4 + 1 + 12 - KZG_COMMITMENT_INCLUSION_PROOF_DEPTH || MAX_BLOB_COMMITMENTS_PER_BLOCK - 4096 || 4 - KZG_COMMITMENTS_INCLUSION_PROOF_DEPTH
+.error "the inclusion proofs are not of field 11 of 16 leaves and 4096 commitments"
+.endif
 .set NODE_VOTES_MAX, 130               /* MAX_ATTESTATIONS + MAX_ATTESTER_SLASHINGS: the votes of a block the node takes */
 .set NodeEvent_root, NodeEvent_checkpoint + 8  /* GOSSIP of a valid beacon_block, SYNC_BLOCK: its root; of a valid blob_sidecar, BLOB: the root of its block header */
 .set NodeEvent_index, NodeEvent_root + 32      /* GOSSIP of a valid beacon_block, SYNC_BLOCK: its blob commitments; of a valid blob_sidecar: its index */

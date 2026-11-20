@@ -3906,7 +3906,6 @@ END_FUNCTION produce_contents
 
 /* ---------------------------------------------------------------- publishBlockV2 */
 
-.set PUB_BLOB_BYTES, FIELD_ELEMENTS_PER_BLOB * 32
 
 /*
  * (body, json, scratch, out, facts): node.md, lantern_node_publish_decode. rbx body, rbp json,
@@ -4029,10 +4028,11 @@ SPEC_END node_publish_decode
 /*
  * (gossip, block, sidecars, level, scratch): node.md, lantern_node_publish_check. rbx gossip,
  * rbp block, r12 sidecars, r13 level, r14 scratch, r15 a sidecar. Locals: L a Result, L+8 a root
- * (32), L+40 the sidecars' end, L+48 execution_valid 1, L+56 the scratch size.
+ * (32), L+40 the sidecars' end, L+48 execution_valid 1, L+56 the scratch size, L+64 the counts
+ * of seen's parts (40).
  */
 SPEC_FUNCTION node_publish_check
-    ENTER 64
+    ENTER 112
     mov     %rdi, %rbx
     mov     %rsi, %rbp
     mov     %rdx, %r12
@@ -4040,6 +4040,17 @@ SPEC_FUNCTION node_publish_check
     mov     %r8, %r14
     mov     (%r14), %rax
     mov     %rax, (L + 56)(%rsp)
+    mov     NodeGossip_seen(%rbx), %rcx     # the counts of seen's parts, for a check that fails
+    mov     (Seen_keys + 8)(%rcx), %rax
+    mov     %rax, (L + 64)(%rsp)
+    mov     (Seen_bits + 8)(%rcx), %rax
+    mov     %rax, (L + 72)(%rsp)
+    mov     (Seen_blocks + 8)(%rcx), %rax
+    mov     %rax, (L + 80)(%rsp)
+    mov     (Seen_headers + 8)(%rcx), %rax
+    mov     %rax, (L + 88)(%rsp)
+    mov     Seen_header_bytes(%rcx), %rax
+    mov     %rax, (L + 96)(%rsp)
     movq    $GOSSIP_BEACON_BLOCK, NodeGossip_topic(%rbx)    # the beacon_block topic's checks
     movq    $0, NodeGossip_subnet(%rbx)
     mov     %rbx, %rdi
@@ -4126,20 +4137,30 @@ SPEC_FUNCTION node_publish_check
 3:  mov     $LANTERN_INVALID_STATE_ROOT, %eax
 4:  mov     (L + 56)(%rsp), %rcx
     mov     %rcx, (%r14)
-    LEAVE 64
+    jmp     99f
 7:  mov     (L + 56)(%rsp), %rcx
     mov     %rcx, (%r14)
     xor     %eax, %eax
-    LEAVE 64
+    LEAVE 112
 6:  mov     (L + 56)(%rsp), %rcx
     mov     %rcx, (%r14)
     mov     $LANTERN_BUFFER_TOO_SMALL, %eax
-    LEAVE 64
+    jmp     99f
 8:  mov     (L + 56)(%rsp), %rcx
     mov     %rcx, (%r14)
     mov     $LANTERN_INVALID_ENCODING, %eax
-    LEAVE 64
-99: LEAVE 64
+99: mov     NodeGossip_seen(%rbx), %rcx     # a check that fails, or no room: seen as it was
+    mov     (L + 64)(%rsp), %rdx
+    mov     %rdx, (Seen_keys + 8)(%rcx)
+    mov     (L + 72)(%rsp), %rdx
+    mov     %rdx, (Seen_bits + 8)(%rcx)
+    mov     (L + 80)(%rsp), %rdx
+    mov     %rdx, (Seen_blocks + 8)(%rcx)
+    mov     (L + 88)(%rsp), %rdx
+    mov     %rdx, (Seen_headers + 8)(%rcx)
+    mov     (L + 96)(%rsp), %rdx
+    mov     %rdx, Seen_header_bytes(%rcx)
+    LEAVE 112
 SPEC_END node_publish_check
 
 /*
@@ -4157,3 +4178,282 @@ LOCAL_FUNCTION publish_gossip
     mov     (%rsp), %rax
 9:  UNFRAME 48
 END_FUNCTION publish_gossip
+
+.if FORK >= FORK_DENEB
+/*
+ * (body, json, scratch, out): node.md, lantern_node_publish_sidecars. rbx scratch, rbp out, r12 the
+ * SignedBlockContents value, r13 its block's body, r14 the blob count, r15 a counter. Locals: L the
+ * signed header (208), L+208 a GeneralizedIndex, L+216 a JsonFault (128), then a Branch of the
+ * commitments' list (24 + 128), L+368 the KzgScratch, L+376 the cells, L+384 the stride, L+392 the
+ * scratch size, L+400 a sidecar or a column.
+ */
+SPEC_FUNCTION node_publish_sidecars
+    ENTER 416
+    mov     %rdx, %rbx
+    mov     %rcx, %rbp
+    mov     (%rbx), %rax
+    mov     %rax, (L + 392)(%rsp)
+    mov     16(%rdi), %rcx                  # the SSZ bytes at the end of scratch: 24 + the body's length
+    add     $(24 + 7), %rcx
+    and     $-8, %rcx
+    lea     64(%rcx), %rdx
+    cmp     %rax, %rdx
+    jae     8f
+    sub     %rcx, %rax
+    mov     %rax, (%rbx)
+    lea     (%rbx,%rax), %r12
+    mov     %rcx, (%r12)
+    movq    $24, 8(%r12)
+    movq    $0, 16(%r12)
+    test    %rsi, %rsi
+    jz      1f
+    mov     %rdi, %rsi                      # JSON: its SSZ bytes
+    ADDRESS %rdi, lantern_type_SignedBlockContents
+    mov     %rbx, %rdx
+    mov     %r12, %rcx
+    lea     (L + 216)(%rsp), %r8
+    CALL_GLOBAL lantern_json_decode
+    cmp     $LANTERN_BUFFER_TOO_SMALL, %rax
+    je      8f
+    test    %rax, %rax
+    jnz     9f
+    jmp     2f
+1:  mov     8(%rdi), %rsi                   # SSZ: the bytes as they are
+    mov     16(%rdi), %rdx
+    mov     %rdx, 16(%r12)
+    add     %rdi, %rsi
+    lea     24(%r12), %rdi
+    call    lantern_copy
+2:  ADDRESS %rdi, lantern_type_SignedBlockContents   # its value
+    mov     %r12, %rsi
+    mov     %rbx, %rdx
+    call    node_decode
+    cmp     $1, %rax
+    je      8f
+    ja      9f
+    mov     %rdx, %r12
+    PART    %rsi, %rax, %r12, SignedBlockContents_signed_block   # compute_signed_block_header
+    PART    %rdi, %rax, %rsi, SignedBeaconBlock_message
+    mov     BeaconBlock_slot(%rdi), %rax
+    mov     %rax, L(%rsp)
+    mov     BeaconBlock_proposer_index(%rdi), %rax
+    mov     %rax, (L + 8)(%rsp)
+    PART    %r13, %rax, %rdi, BeaconBlock_body
+    lea     BeaconBlock_parent_root(%rdi), %rax
+    lea     (L + 16)(%rsp), %rcx
+    COPY32  %rcx, %rax
+    lea     BeaconBlock_state_root(%rdi), %rax
+    lea     (L + 48)(%rsp), %rcx
+    COPY32  %rcx, %rax
+    lea     (L + 112)(%rsp), %rdi
+    add     $SignedBeaconBlock_signature, %rsi
+    mov     $96, %edx
+    call    lantern_copy
+    ADDRESS %rdi, lantern_type_BeaconBlockBody
+    mov     %r13, %rsi
+    mov     %rbx, %rdx
+    lea     (L + 80)(%rsp), %rcx
+    CALL_GLOBAL ssz_hash_tree_root
+    test    %rax, %rax
+    jnz     8f
+    mov     (BeaconBlockBody_blob_kzg_commitments + 8)(%r13), %r14   # the blob count
+.if FORK >= FORK_FULU
+    imul    $(PUB_CELL_BYTES + 96), %r14, %rax  # the stride: a ByteList of a column sidecar of the count
+    add     $(PUB_COLUMN_FIXED + 24 + 7), %rax
+    and     $-8, %rax
+    mov     %rax, (L + 384)(%rsp)
+    imul    $NUMBER_OF_COLUMNS, %rax, %rcx
+    add     $24, %rcx
+    cmp     (%rbp), %rcx
+    ja      8f
+    movq    $PUB_COMMITMENTS_GINDEX, (L + 208)(%rsp)    # the commitments' branch, the same for each column
+    movq    $(24 + 32 * KZG_COMMITMENTS_INCLUSION_PROOF_DEPTH), (L + 216)(%rsp)
+    ADDRESS %rdi, lantern_type_BeaconBlockBody
+    mov     %r13, %rsi
+    lea     (L + 208)(%rsp), %rdx
+    mov     %rbx, %rcx
+    lea     (L + 216)(%rsp), %r8
+    CALL_GLOBAL ssz_build_proof
+    cmp     $SSZ_BUFFER_TOO_SMALL, %rax
+    je      8f
+    test    %rax, %rax
+    jnz     9f
+    xor     %r15d, %r15d                    # each column: its fixed part, the commitments and its proofs
+3:  cmp     $NUMBER_OF_COLUMNS, %r15
+    jae     4f
+    mov     (L + 384)(%rsp), %rcx
+    imul    %r15, %rcx
+    lea     24(%rbp,%rcx), %rcx
+    mov     %rcx, (L + 400)(%rsp)
+    mov     (L + 384)(%rsp), %rax
+    mov     %rax, (%rcx)
+    movq    $24, 8(%rcx)
+    imul    $(PUB_CELL_BYTES + 96), %r14, %rax
+    add     $PUB_COLUMN_FIXED, %rax
+    mov     %rax, 16(%rcx)
+    mov     %r15, 24(%rcx)                  # index
+    mov     $PUB_COLUMN_FIXED, %eax         # the offsets of column, kzg_commitments, kzg_proofs
+    mov     %eax, 32(%rcx)
+    imul    $PUB_CELL_BYTES, %r14, %rdx
+    add     %rdx, %rax
+    mov     %eax, 36(%rcx)
+    imul    $48, %r14, %rdx
+    add     %rdx, %rax
+    mov     %eax, 40(%rcx)
+    lea     44(%rcx), %rdi                  # signed_block_header
+    lea     L(%rsp), %rsi
+    mov     $PUB_HEADER_BYTES, %edx
+    call    lantern_copy
+    mov     (L + 400)(%rsp), %rcx
+    lea     (44 + PUB_HEADER_BYTES)(%rcx), %rdi     # kzg_commitments_inclusion_proof
+    lea     (L + 216 + 24)(%rsp), %rsi
+    mov     $(32 * KZG_COMMITMENTS_INCLUSION_PROOF_DEPTH), %edx
+    call    lantern_copy
+    mov     (L + 400)(%rsp), %rcx           # kzg_commitments: the body's
+    mov     36(%rcx), %edi
+    lea     24(%rcx,%rdi), %rdi
+    PART    %rsi, %rax, %r13, BeaconBlockBody_blob_kzg_commitments
+    imul    $48, %r14, %rdx
+    call    lantern_copy
+    xor     %r8d, %r8d                      # kzg_proofs: proof c of each blob
+31: cmp     %r14, %r8
+    jae     32f
+    mov     (L + 400)(%rsp), %rcx
+    mov     40(%rcx), %edi
+    lea     24(%rcx,%rdi), %rdi
+    imul    $48, %r8, %rax
+    add     %rax, %rdi
+    PART    %rsi, %rax, %r12, SignedBlockContents_kzg_proofs
+    imul    $CELLS_PER_EXT_BLOB, %r8, %rax
+    add     %r15, %rax
+    imul    $48, %rax, %rax
+    add     %rax, %rsi
+    movdqu  (%rsi), %xmm0
+    movdqu  16(%rsi), %xmm1
+    movdqu  32(%rsi), %xmm2
+    movdqu  %xmm0, (%rdi)
+    movdqu  %xmm1, 16(%rdi)
+    movdqu  %xmm2, 32(%rdi)
+    inc     %r8
+    jmp     31b
+32: inc     %r15
+    jmp     3b
+4:  mov     (%rbx), %rax                    # the cells of each blob: a KzgScratch and the cells at the end of scratch
+    mov     $(CRYPTO_KZG_SCRATCH + CELLS_PER_EXT_BLOB * PUB_CELL_BYTES + 64), %ecx
+    cmp     %rcx, %rax
+    jb      8f
+    sub     %rcx, %rax
+    mov     %rax, (%rbx)
+    lea     63(%rbx,%rax), %rax
+    and     $-64, %rax
+    movq    $CRYPTO_KZG_SCRATCH, (%rax)
+    mov     %rax, (L + 368)(%rsp)
+    add     $CRYPTO_KZG_SCRATCH, %rax
+    mov     %rax, (L + 376)(%rsp)
+    xor     %r15d, %r15d                    # blob b: its cells, then cell c to column c's place b
+5:  cmp     %r14, %r15
+    jae     7f
+    PART    %rdi, %rax, %r12, SignedBlockContents_blobs
+    imul    $PUB_BLOB_BYTES, %r15, %rax
+    add     %rax, %rdi
+    mov     (L + 368)(%rsp), %rsi
+    mov     (L + 376)(%rsp), %rdx
+    CALL_GLOBAL crypto_kzg_compute_cells
+    cmp     $CRYPTO_BUFFER_TOO_SMALL, %rax
+    je      8f
+    test    %rax, %rax
+    jnz     9f
+    movq    $0, (L + 400)(%rsp)
+6:  mov     (L + 400)(%rsp), %rax
+    cmp     $NUMBER_OF_COLUMNS, %rax
+    jae     61f
+    imul    (L + 384)(%rsp), %rax
+    lea     (24 + 24 + PUB_COLUMN_FIXED)(%rbp,%rax), %rdi
+    imul    $PUB_CELL_BYTES, %r15, %rax
+    add     %rax, %rdi
+    mov     (L + 400)(%rsp), %rax
+    imul    $PUB_CELL_BYTES, %rax, %rax
+    mov     (L + 376)(%rsp), %rsi
+    add     %rax, %rsi
+    mov     $PUB_CELL_BYTES, %edx
+    call    lantern_copy
+    incq    (L + 400)(%rsp)
+    jmp     6b
+61: inc     %r15
+    jmp     5b
+7:  imul    $NUMBER_OF_COLUMNS, (L + 384)(%rsp), %rax
+    mov     %rax, 16(%rbp)
+.else
+    imul    $(PUB_BLOB_SIDECAR + 24), %r14, %rax    # a BlobSidecar for each blob
+    add     $24, %rax
+    cmp     (%rbp), %rax
+    ja      8f
+    xor     %r15d, %r15d
+3:  cmp     %r14, %r15
+    jae     7f
+    imul    $(PUB_BLOB_SIDECAR + 24), %r15, %rcx
+    lea     24(%rbp,%rcx), %rcx
+    mov     %rcx, (L + 400)(%rsp)
+    movq    $(PUB_BLOB_SIDECAR + 24), (%rcx)
+    movq    $24, 8(%rcx)
+    movq    $PUB_BLOB_SIDECAR, 16(%rcx)
+    mov     %r15, 24(%rcx)                  # index
+    lea     32(%rcx), %rdi                  # blob
+    PART    %rsi, %rax, %r12, SignedBlockContents_blobs
+    imul    $PUB_BLOB_BYTES, %r15, %rax
+    add     %rax, %rsi
+    mov     $PUB_BLOB_BYTES, %edx
+    call    lantern_copy
+    mov     (L + 400)(%rsp), %rcx
+    lea     (32 + PUB_BLOB_BYTES)(%rcx), %rdi   # kzg_commitment
+    PART    %rsi, %rax, %r13, BeaconBlockBody_blob_kzg_commitments
+    imul    $48, %r15, %rax
+    add     %rax, %rsi
+    mov     $48, %edx
+    call    lantern_copy
+    mov     (L + 400)(%rsp), %rcx
+    lea     (32 + PUB_BLOB_BYTES + 48)(%rcx), %rdi  # kzg_proof
+    PART    %rsi, %rax, %r12, SignedBlockContents_kzg_proofs
+    imul    $48, %r15, %rax
+    add     %rax, %rsi
+    mov     $48, %edx
+    call    lantern_copy
+    mov     $(PUB_COMMITMENTS_GINDEX << 13), %eax   # the inclusion proof, its Branch header in the header's place
+    add     %r15, %rax
+    mov     %rax, (L + 208)(%rsp)
+    mov     (L + 400)(%rsp), %r8
+    add     $(32 + PUB_BLOB_BYTES + 96 + PUB_HEADER_BYTES - 24), %r8
+    movq    $(24 + 32 * KZG_COMMITMENT_INCLUSION_PROOF_DEPTH), (%r8)
+    ADDRESS %rdi, lantern_type_BeaconBlockBody
+    mov     %r13, %rsi
+    lea     (L + 208)(%rsp), %rdx
+    mov     %rbx, %rcx
+    CALL_GLOBAL ssz_build_proof
+    cmp     $SSZ_BUFFER_TOO_SMALL, %rax
+    je      8f
+    test    %rax, %rax
+    jnz     9f
+    mov     (L + 400)(%rsp), %rcx
+    lea     (32 + PUB_BLOB_BYTES + 96)(%rcx), %rdi  # signed_block_header, over the Branch header
+    lea     L(%rsp), %rsi
+    mov     $PUB_HEADER_BYTES, %edx
+    call    lantern_copy
+    inc     %r15
+    jmp     3b
+7:  imul    $(PUB_BLOB_SIDECAR + 24), %r14, %rax
+    mov     %rax, 16(%rbp)
+.endif
+    mov     (L + 392)(%rsp), %rax
+    mov     %rax, (%rbx)
+    xor     %eax, %eax
+    LEAVE 416
+8:  mov     (L + 392)(%rsp), %rax
+    mov     %rax, (%rbx)
+    mov     $LANTERN_BUFFER_TOO_SMALL, %eax
+    LEAVE 416
+9:  mov     (L + 392)(%rsp), %rax
+    mov     %rax, (%rbx)
+    mov     $LANTERN_INVALID_ENCODING, %eax
+    LEAVE 416
+SPEC_END node_publish_sidecars
+.endif

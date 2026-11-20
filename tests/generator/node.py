@@ -684,6 +684,104 @@ def publish_cases(spec, fork, state, anchor_block, block, time_ms):
             "payload_id": b"",
             "result": b"",
             "closes": closes,
+            "root": bytes(root),
+            "sidecars": [],
+        }
+    if f < FORKS.index("deneb"):
+        return
+    # with blobs: the block with the commitments of two blobs, its state root again, signed again
+    fulu = f >= FORKS.index("fulu")
+    blobs = [spec.Blob(b"".join((4096 * b + j + 1).to_bytes(32, "big") for j in range(int(spec.FIELD_ELEMENTS_PER_BLOB))))
+             for b in range(2)]
+    commitments = [spec.KZGCommitment(kzg.blob_to_kzg_commitment(x)) for x in blobs]
+    with_blobs = block.copy()
+    for c in commitments:
+        with_blobs.body.blob_kzg_commitments.append(c)
+
+    def state_root_of(message):
+        st = state.copy()
+        spec.process_slots(st, message.slot)
+        spec.process_block(st, message)
+        return spec.hash_tree_root(st)
+    with_blobs.state_root = run(spec, schedule(fork), lambda: state_root_of(with_blobs))
+    blob_root = spec.hash_tree_root(with_blobs)
+    signed = run(spec, schedule(fork), lambda: signed_of(with_blobs, proposer))
+    if fulu:  # the cells and proofs of each blob; the bad ones swap the proofs of cells 0 and 1 of blob 0
+        cells_proofs = [([spec.Cell(c) for c in cs], [spec.KZGProof(p) for p in ps])
+                        for cs, ps in (kzg.compute_cells_and_kzg_proofs(x) for x in blobs)]
+        proofs = [p for _, ps in cells_proofs for p in ps]
+        swapped = list(cells_proofs[0][1])
+        swapped[0], swapped[1] = swapped[1], swapped[0]
+        bad_cells = [(cells_proofs[0][0], swapped), cells_proofs[1]]
+        bad_proofs = [p for _, ps in bad_cells for p in ps]
+        sidecars = run(spec, schedule(fork), lambda: spec.get_data_column_sidecars_from_block(signed, cells_proofs))
+        bad_sidecars = run(spec, schedule(fork), lambda: spec.get_data_column_sidecars_from_block(signed, bad_cells))
+    else:  # the bad ones swap the two blobs' proofs
+        proofs = [spec.KZGProof(kzg.compute_blob_kzg_proof(x, c)) for x, c in zip(blobs, commitments)]
+        bad_proofs = [proofs[1], proofs[0]]
+        sidecars = run(spec, schedule(fork), lambda: spec.get_blob_sidecars(signed, blobs, proofs))
+        bad_sidecars = run(spec, schedule(fork), lambda: spec.get_blob_sidecars(signed, blobs, bad_proofs))
+
+    def sidecar_verdicts(items):
+        store = spec.get_forkchoice_store(state, anchor_block)
+        spec.on_tick(store, time_ms)
+        seen = spec.Seen(**{x.name: (dict() if "dict" in str(x.type) else set()) for x in dataclasses.fields(spec.Seen)})
+        out = [gossip_result(spec, spec.validate_beacon_block_gossip, seen, store, signed, time_ms, {})]
+        for sc in items:
+            if fulu:
+                out.append(gossip_result(spec, spec.validate_data_column_sidecar_gossip, seen, store, sc, time_ms,
+                                         spec.compute_subnet_for_data_column_sidecar(sc.index)))
+            else:
+                out.append(gossip_result(spec, spec.validate_blob_sidecar_gossip, seen, store, sc, time_ms,
+                                         spec.compute_subnet_for_blob_sidecar(sc.index)))
+        return out
+
+    def blob_head():
+        store = spec.get_forkchoice_store(state, anchor_block)
+        spec.on_tick(store, time_ms)
+        patch = ({"retrieve_column_sidecars": lambda _r: sidecars} if fulu else
+                 {"retrieve_blobs_and_proofs": lambda _r: (blobs, proofs)})
+        saved = {k: getattr(spec, k) for k in patch}
+        for k, v in patch.items():
+            setattr(spec, k, v)
+        try:
+            spec.on_block(store, signed)
+        finally:
+            for k, v in saved.items():
+                setattr(spec, k, v)
+        head = spec.get_head(store)
+        return bytes(head.root if hasattr(head, "root") else head)
+    good_v = run(spec, schedule(fork), lambda: sidecar_verdicts(sidecars))
+    bad_v = run(spec, schedule(fork), lambda: sidecar_verdicts(bad_sidecars))
+    if good_v != ["VALID"] * (1 + len(sidecars)) or bad_v[:2] != ["VALID", "REJECT"] or \
+            run(spec, schedule(fork), blob_head) != bytes(blob_root):
+        raise RuntimeError(f"node-publish {fork} blobs: the spec's verdicts are {good_v[:3]}, {bad_v[:3]}")
+    contents = reqresp.produce_types(spec, fork)["SignedBlockContents"]
+    fields = ({k: v.annotation for k, v in contents.model_fields.items()} if hasattr(contents, "model_fields")
+              else contents.fields())  # the list types of the container itself
+    good_c = contents(signed_block=signed, kzg_proofs=fields["kzg_proofs"](data=proofs), blobs=fields["blobs"](data=blobs))
+    bad_c = contents(signed_block=signed, kzg_proofs=fields["kzg_proofs"](data=bad_proofs), blobs=fields["blobs"](data=blobs))
+    kept = [bytes(sc.encode_bytes()) for sc in sidecars]
+    blob_plans = [
+        ("blobs", [post(to_json(good_c).encode(), level=b"consensus"), head], [response(200), at(blob_root, False)], 0, kept),
+        ("blobs_ssz", [post(bytes(good_c.encode_bytes()), ssz=True), head], [response(200), at(blob_root, False)], 0, kept),
+        ("bad_proof", [post(to_json(bad_c).encode(), level=b"consensus"), head], [error(400), at(anchor_root, True)], 0, []),
+        ("blobs_closed", [post(to_json(good_c).encode()), head], [response(200), at(blob_root, False)],
+         PUBLISH_CLOSES + len(sidecars) + 8, kept),
+    ]
+    for name, reqs, resps, closes, held in blob_plans:
+        yield "publish", name, {
+            "anchor_state": bytes(state.encode_bytes()),
+            "anchor_block": bytes(anchor_block.encode_bytes()),
+            "time_ms": time_ms,
+            "ticks": [time_ms] + [0] * (len(reqs) - 1),
+            "requests": reqs,
+            "responses": resps,
+            "payload_id": b"",
+            "result": b"",
+            "closes": closes,
+            "root": bytes(blob_root),
+            "sidecars": held,
         }
 
 

@@ -4638,7 +4638,15 @@ LOCAL_FUNCTION node_publish_done
 2:  mv      a0, s4
     call    node_publish_end
     LEAVE 16
-1:  li      a1, 400                         # a check that fails: 400
+1:  li      t1, NODE_WORK_PUBLISH_SIDECAR   # a sidecar past the last: the sidecars end
+    bne     s7, t1, 12f
+    ld      t0, NodeEvent_result(s3)
+    beqz    t0, 12f
+    sd      zero, (NodeApi_cursor + 40)(s4)
+    mv      a0, s4
+    call    node_publish_drop
+    LEAVE 16
+12: li      a1, 400                         # a check that fails: 400
     ld      t0, NodeEvent_result(s3)
     bnez    t0, 90f
     li      t1, NODE_WORK_PUBLISH_DECODE
@@ -4673,14 +4681,20 @@ LOCAL_FUNCTION node_publish_done
     li      t1, NODE_BLOCK_INVALID
     li      a1, 200
     bne     t0, t1, 90f
-11: ld      t0, NodeApi_fork(s4)            # from deneb with blobs: the sidecars, else the check
-    li      t1, FORK_DENEB
-    bltu    t0, t1, 30f
-    ld      t0, (NodeApi_cursor + 16)(s4)
+11: ld      t0, (NodeApi_cursor + 16)(s4)   # with blobs: the sidecars, else the check
     beqz    t0, 30f
-    li      a1, 501                         # the sidecars: not yet
-    j       90f
-20: li      t1, NODE_WORK_PUBLISH_CHECK
+    mv      a0, s4
+    call    node_publish_sidecars_work
+    LEAVE 16
+20: li      t1, NODE_WORK_PUBLISH_SIDECARS  # SIDECARS: the check
+    beq     s7, t1, 30f
+    li      t1, NODE_WORK_PUBLISH_SIDECAR
+    bne     s7, t1, 22f
+    mv      a0, s4                          # SIDECAR: it goes out and stays, then the next
+    mv      a1, s3
+    call    node_publish_sidecar_done
+    LEAVE 16
+22: li      t1, NODE_WORK_PUBLISH_CHECK
     bne     s7, t1, 99f
     call    node_new_block                  # CHECK: the block's NodeBlock, before the publish
     sd      a0, L(sp)
@@ -4711,11 +4725,17 @@ LOCAL_FUNCTION node_publish_done
     addi    a1, s3, NodeEvent_chunk
     li      a2, 0
     call    node_publish
-21: li      t0, NODE_PUBLISH_IMPORT         # the import, then the answer
+21: li      t0, NODE_PUBLISH_IMPORT         # the import, the sidecars one at a time, then the answer
     sd      t0, NodeApi_member(s4)
+    ld      t0, NodeApi_filter_index(s4)
+    beqz    t0, 23f
+    sd      zero, (NodeApi_cursor + 40)(s4)
     mv      a0, s4
+    call    node_publish_sidecar_work
+    j       24f
+23: mv      a0, s4
     call    node_publish_drop
-    ld      a0, L(sp)
+24: ld      a0, L(sp)
     call    node_try_import
     LEAVE 16
 30: mv      a0, s4                          # the check
@@ -4728,9 +4748,161 @@ LOCAL_FUNCTION node_publish_done
 END_FUNCTION node_publish_done
 
 /*
+ * L1: the PUBLISH_SIDECARS of the publishBlockV2 entry a0 (node.md, NODE_PUBLISH_SIDECARS): a
+ * BYTES_NEW of the sidecars' room, its id the entry's filter_index, then the work. Locals: the
+ * entry, the room, the action.
+ */
+LOCAL_FUNCTION node_publish_sidecars_work
+    FRAME 32
+    sd      a0, 0(sp)
+    ld      t0, (NodeApi_cursor + 16)(a0)   # the blob count
+    ld      t1, NodeApi_fork(a0)
+    li      t2, FORK_FULU
+    bgeu    t1, t2, 1f
+    li      t2, PUB_BLOB_SIDECAR + 24       # deneb and electra: a BlobSidecar for each blob
+    mul     t0, t0, t2
+    j       2f
+1:  li      t2, PUB_CELL_BYTES + 96         # fulu: NUMBER_OF_COLUMNS column sidecars of the count
+    mul     t0, t0, t2
+    li      t2, PUB_COLUMN_FIXED + 24 + 7
+    add     t0, t0, t2
+    andi    t0, t0, -8
+    li      t2, NUMBER_OF_COLUMNS
+    mul     t0, t0, t2
+2:  addi    t0, t0, 24
+    sd      t0, 8(sp)
+    li      a0, NODE_ACT_BYTES_NEW
+    li      a1, NODE_ACT_BYTES_NEW_SIZE
+    call    node_act
+    sd      a0, 16(sp)
+    call    node_new_id
+    ld      t0, 16(sp)
+    sd      a0, 16(t0)
+    ld      t1, 8(sp)
+    sd      t1, 24(t0)
+    ld      t0, 0(sp)
+    sd      a0, NodeApi_filter_index(t0)
+    li      t1, NODE_PUBLISH_SIDECARS
+    sd      t1, NodeApi_member(t0)
+    ld      t1, NodeApi_flags(t0)
+    ori     t1, t1, API_STREAM_BUSY
+    sd      t1, NodeApi_flags(t0)
+    mv      a2, a0                          # the work: the sidecars as state_b, the body as data
+    ld      a3, NodeApi_data(t0)
+    PART    t1, t2, s1, Node_api
+    sub     a4, t0, t1
+    li      t2, NodeApi__mem
+    divu    a4, a4, t2
+    ld      a5, NodeApi_fork(t0)
+    ld      t1, (NodeApi_cursor + 24)(t0)   # 2^8 for SSZ
+    xori    t1, t1, 1
+    slli    t1, t1, 8
+    or      a5, a5, t1
+    li      a0, NODE_WORK_PUBLISH_SIDECARS
+    li      a1, 0
+    call    node_work
+    UNFRAME 32
+END_FUNCTION node_publish_sidecars_work
+
+/* L1: the PUBLISH_SIDECAR of the next sidecar (cursor + 40) of the publishBlockV2 entry a0 in NODE_PUBLISH_IMPORT. */
+LOCAL_FUNCTION node_publish_sidecar_work
+    FRAME 16
+    ld      t1, NodeApi_flags(a0)
+    ori     t1, t1, API_STREAM_BUSY
+    sd      t1, NodeApi_flags(a0)
+    ld      a2, NodeApi_filter_index(a0)
+    ld      a5, (NodeApi_cursor + 40)(a0)
+    PART    t1, t2, s1, Node_api
+    sub     a4, a0, t1
+    li      t2, NodeApi__mem
+    divu    a4, a4, t2
+    li      a0, NODE_WORK_PUBLISH_SIDECAR
+    li      a1, 0
+    li      a3, 0
+    call    node_work
+    UNFRAME 16
+END_FUNCTION node_publish_sidecar_work
+
+/*
+ * L2: the WORK_DONE a1 of a valid PUBLISH_SIDECAR of the publishBlockV2 entry a0: the sidecar
+ * stays as a NodeBlob when the node keeps it (each blob sidecar; the column sidecars it samples),
+ * goes out on its subnet's topic with NODE_FLAG_SUBSCRIBED, then the next. s3 the entry, s4 the
+ * event, s7 the sidecar's ByteList, s8 its id. Step code keeps s5 and s6.
+ */
+LOCAL_FUNCTION node_publish_sidecar_done
+    ENTER 0
+    mv      s3, a0
+    mv      s4, a1
+    addi    s7, s4, NodeEvent_chunk
+    ld      t0, NodeApi_fork(s3)
+    li      t1, FORK_FULU
+    bltu    t0, t1, 1f
+    ld      a0, NodeEvent_index(s4)         # a column the node samples
+    call    node_sampled
+    beqz    a0, 3f
+1:  addi    a0, s4, NodeEvent_root          # one the node does not hold yet
+    ld      a1, NodeEvent_index(s4)
+    call    node_blob_held
+    bnez    a0, 3f
+    mv      a0, s7
+    call    node_put
+    mv      s8, a0
+    call    node_new_blob
+    addi    a0, t0, NodeBlob_block_root
+    addi    a1, s4, NodeEvent_root
+    COPY32  a0, a1
+    ld      t1, NodeEvent_index(s4)
+    sd      t1, NodeBlob_index(t0)
+    ld      t1, NodeEvent_checkpoint(s4)
+    sd      t1, NodeBlob_slot(t0)
+    sd      s8, NodeBlob_data_id(t0)
+    li      t1, NODE_BLOB_VALID
+    sd      t1, NodeBlob_status(t0)
+    ld      t1, 16(s7)
+    sd      t1, NodeBlob_length(t0)
+    addi    a0, s4, NodeEvent_root
+    call    node_blob_added
+3:  ld      t0, Node_flags(s1)              # subscribed: out on its subnet's topic
+    andi    t0, t0, NODE_FLAG_SUBSCRIBED
+    beqz    t0, 4f
+    ld      t2, NodeEvent_index(s4)
+    ld      t0, NodeApi_fork(s3)
+    li      t1, FORK_FULU
+    bltu    t0, t1, 31f
+    li      a0, GOSSIP_DATA_COLUMN_SIDECAR
+    LDQ     t3, s1, Node_config + CONFIG_DATA_COLUMN_SIDECAR_SUBNET_COUNT
+    j       33f
+31: li      a0, GOSSIP_BLOB_SIDECAR
+    li      t1, FORK_ELECTRA
+    bltu    t0, t1, 32f
+    LDQ     t3, s1, Node_config + CONFIG_BLOB_SIDECAR_SUBNET_COUNT_ELECTRA
+    j       33f
+32: LDQ     t3, s1, Node_config + CONFIG_BLOB_SIDECAR_SUBNET_COUNT
+33: beqz    t3, 4f
+    remu    a2, t2, t3
+    mv      a1, s7
+    call    node_publish
+4:  ld      t0, (NodeApi_cursor + 40)(s3)   # the next sidecar; after the last, the body and the sidecars go
+    addi    t0, t0, 1
+    sd      t0, (NodeApi_cursor + 40)(s3)
+    ld      t1, (NodeApi_cursor + 16)(s3)
+    ld      t2, NodeApi_fork(s3)
+    li      t3, FORK_FULU
+    bltu    t2, t3, 41f
+    li      t1, NUMBER_OF_COLUMNS
+41: mv      a0, s3
+    bgeu    t0, t1, 5f
+    call    node_publish_sidecar_work
+    LEAVE 0
+5:  call    node_publish_drop
+    LEAVE 0
+END_FUNCTION node_publish_sidecar_done
+
+/*
  * L2: the PUBLISH_CHECK of the publishBlockV2 entry a0 (node.md, NODE_PUBLISH_CHECK): a0 = 0 once
  * it went, else 400 with no post-state of the parent, or 500 with no head post-state. s3 the
- * entry, s4 the parent's entry, s7 the copy, s8 the head's state id.
+ * entry, s4 the parent's entry, s7 the copy, s8 the head's state id, s9 the parent's fork, s10
+ * the copy's slot.
  */
 LOCAL_FUNCTION node_publish_check_work
     ENTER 0
@@ -4765,7 +4937,31 @@ LOCAL_FUNCTION node_publish_check_work
     ld      a3, NodeApi_slot(s3)
     call    node_cross
     mv      s7, a0
-    PART    t0, t1, s1, Node_api            # the entry's index
+    ld      a0, NodeBlock_slot(s4)          # the copy's slot: the parent's, or the first of the block's fork after an upgrade
+    ADDQ    a1, s1, Node_config
+    call    node_fork
+    mv      s9, a0
+    ld      a0, NodeApi_slot(s3)
+    ADDQ    a1, s1, Node_config
+    call    node_fork
+    ld      s10, NodeBlock_slot(s4)
+    bleu    a0, s9, 1f
+    slli    t0, a0, 4
+    add     t0, s1, t0
+    LDQ     t0, t0, Node_config
+    li      t1, SLOTS_PER_EPOCH
+    mul     t0, t0, t1
+    bleu    t0, s10, 1f
+    mv      s10, t0
+1:  ld      a5, NodeApi_slot(s3)            # then process_slots to the block's slot, as a lookup's
+    bleu    a5, s10, 2f
+    li      a0, NODE_WORK_SLOTS
+    mv      a1, s7
+    li      a2, 0
+    li      a3, 0
+    li      a4, 0
+    call    node_work
+2:  PART    t0, t1, s1, Node_api            # the entry's index
     sub     a4, s3, t0
     li      t1, NodeApi__mem
     divu    a4, a4, t1

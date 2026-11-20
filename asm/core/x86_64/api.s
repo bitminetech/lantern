@@ -4805,7 +4805,15 @@ LOCAL_FUNCTION node_publish_done
 2:  mov     %r13, %rdi
     call    node_publish_end
     LEAVE 0
-1:  mov     $400, %esi                      # a check that fails: 400
+1:  cmpq    $NODE_WORK_PUBLISH_SIDECAR, NodeAction_work_kind(%r12)  # a sidecar past the last: the sidecars end
+    jne     12f
+    cmpq    $0, NodeEvent_result(%r12)
+    je      12f
+    movq    $0, (NodeApi_cursor + 40)(%r13)
+    mov     %r13, %rdi
+    call    node_publish_drop
+    LEAVE 0
+12: mov     $400, %esi                      # a check that fails: 400
     cmpq    $0, NodeEvent_result(%r12)
     jne     90f
     mov     NodeAction_work_kind(%r12), %rax
@@ -4838,13 +4846,20 @@ LOCAL_FUNCTION node_publish_done
     mov     $200, %esi
     cmpq    $NODE_BLOCK_INVALID, NodeBlock_status(%rdx)
     jne     90f
-11: cmpq    $FORK_DENEB, NodeApi_fork(%r13) # from deneb with blobs: the sidecars, else the check
-    jb      30f
-    cmpq    $0, (NodeApi_cursor + 16)(%r13)
+11: cmpq    $0, (NodeApi_cursor + 16)(%r13)    # with blobs: the sidecars, else the check
     je      30f
-    mov     $501, %esi                      # the sidecars: not yet
-    jmp     90f
-20: cmp     $NODE_WORK_PUBLISH_CHECK, %rax
+    mov     %r13, %rdi
+    call    node_publish_sidecars_work
+    LEAVE 0
+20: cmp     $NODE_WORK_PUBLISH_SIDECARS, %rax  # SIDECARS: the check
+    je      30f
+    cmp     $NODE_WORK_PUBLISH_SIDECAR, %rax
+    jne     22f
+    mov     %r13, %rdi                      # SIDECAR: it goes out and stays, then the next
+    mov     %r12, %rsi
+    call    node_publish_sidecar_done
+    LEAVE 0
+22: cmp     $NODE_WORK_PUBLISH_CHECK, %rax
     jne     99f
     call    node_new_block                  # CHECK: the block's NodeBlock, before the publish
     mov     %rax, S7(%rsp)
@@ -4872,10 +4887,16 @@ LOCAL_FUNCTION node_publish_done
     lea     NodeEvent_chunk(%r12), %rsi
     xor     %edx, %edx
     call    node_publish
-21: movq    $NODE_PUBLISH_IMPORT, NodeApi_member(%r13)  # the import, then the answer
+21: movq    $NODE_PUBLISH_IMPORT, NodeApi_member(%r13)  # the import, the sidecars one at a time, then the answer
+    cmpq    $0, NodeApi_filter_index(%r13)
+    je      23f
+    movq    $0, (NodeApi_cursor + 40)(%r13)
     mov     %r13, %rdi
+    call    node_publish_sidecar_work
+    jmp     24f
+23: mov     %r13, %rdi
     call    node_publish_drop
-    mov     S7(%rsp), %rdi
+24: mov     S7(%rsp), %rdi
     call    node_try_import
     LEAVE 0
 30: mov     %r13, %rdi                      # the check
@@ -4889,9 +4910,165 @@ LOCAL_FUNCTION node_publish_done
 END_FUNCTION node_publish_done
 
 /*
+ * The PUBLISH_SIDECARS of the publishBlockV2 entry rdi (node.md, NODE_PUBLISH_SIDECARS): a
+ * BYTES_NEW of the sidecars' room, its id the entry's filter_index, then the work. Locals: the
+ * entry, the room, the action.
+ */
+LOCAL_FUNCTION node_publish_sidecars_work
+    FRAME 32
+    mov     %rdi, (%rsp)
+    mov     (NodeApi_cursor + 16)(%rdi), %rax   # the blob count
+    cmpq    $FORK_FULU, NodeApi_fork(%rdi)
+    jae     1f
+    imul    $(PUB_BLOB_SIDECAR + 24), %rax, %rax    # deneb and electra: a BlobSidecar for each blob
+    jmp     2f
+1:  imul    $(PUB_CELL_BYTES + 96), %rax, %rax      # fulu: NUMBER_OF_COLUMNS column sidecars of the count
+    add     $(PUB_COLUMN_FIXED + 24 + 7), %rax
+    and     $-8, %rax
+    imul    $NUMBER_OF_COLUMNS, %rax, %rax
+2:  add     $24, %rax
+    mov     %rax, 8(%rsp)
+    mov     $NODE_ACT_BYTES_NEW, %edi
+    mov     $NODE_ACT_BYTES_NEW_SIZE, %esi
+    call    node_act
+    mov     %rax, 16(%rsp)
+    call    node_new_id
+    mov     16(%rsp), %rcx
+    mov     %rax, 16(%rcx)
+    mov     8(%rsp), %rdx
+    mov     %rdx, 24(%rcx)
+    mov     (%rsp), %rcx
+    mov     %rax, NodeApi_filter_index(%rcx)
+    movq    $NODE_PUBLISH_SIDECARS, NodeApi_member(%rcx)
+    orq     $API_STREAM_BUSY, NodeApi_flags(%rcx)
+    mov     %rax, %rdx                      # the work: the sidecars as state_b, the body as data
+    mov     NodeApi_data(%rcx), %rax
+    mov     %rax, 24(%rsp)
+    PART    %rsi, %rdi, %rbx, Node_api
+    mov     %rcx, %rax
+    sub     %rsi, %rax
+    mov     %rdx, %rsi
+    xor     %edx, %edx
+    mov     $NodeApi__mem, %edi
+    div     %rdi
+    mov     %rax, %r8
+    mov     (%rsp), %rcx
+    mov     (NodeApi_cursor + 24)(%rcx), %r9    # 2^8 for SSZ
+    xor     $1, %r9
+    shl     $8, %r9
+    or      NodeApi_fork(%rcx), %r9
+    mov     %rsi, %rdx
+    mov     24(%rsp), %rcx
+    mov     $NODE_WORK_PUBLISH_SIDECARS, %edi
+    xor     %esi, %esi
+    call    node_work
+    UNFRAME 32
+END_FUNCTION node_publish_sidecars_work
+
+/* The PUBLISH_SIDECAR of the next sidecar (cursor + 40) of the publishBlockV2 entry rdi in NODE_PUBLISH_IMPORT. */
+LOCAL_FUNCTION node_publish_sidecar_work
+    FRAME 0
+    orq     $API_STREAM_BUSY, NodeApi_flags(%rdi)
+    mov     NodeApi_filter_index(%rdi), %rdx
+    mov     (NodeApi_cursor + 40)(%rdi), %r9
+    PART    %rsi, %rcx, %rbx, Node_api
+    mov     %rdi, %rax
+    sub     %rsi, %rax
+    mov     %rdx, %rsi
+    xor     %edx, %edx
+    mov     $NodeApi__mem, %ecx
+    div     %rcx
+    mov     %rax, %r8
+    mov     %rsi, %rdx
+    mov     $NODE_WORK_PUBLISH_SIDECAR, %edi
+    xor     %esi, %esi
+    xor     %ecx, %ecx
+    call    node_work
+    UNFRAME 0
+END_FUNCTION node_publish_sidecar_work
+
+/*
+ * The WORK_DONE rsi of a valid PUBLISH_SIDECAR of the publishBlockV2 entry rdi: the sidecar stays
+ * as a NodeBlob when the node keeps it (each blob sidecar; the column sidecars it samples), goes
+ * out on its subnet's topic with NODE_FLAG_SUBSCRIBED, then the next. r12 the entry, r13 the
+ * event; S7 the sidecar's id. Step code keeps r14 and r15.
+ */
+LOCAL_FUNCTION node_publish_sidecar_done
+    ENTER 0
+    mov     %rdi, %r12
+    mov     %rsi, %r13
+    cmpq    $FORK_FULU, NodeApi_fork(%r12)
+    jb      1f
+    mov     NodeEvent_index(%r13), %rdi     # a column the node samples
+    call    node_sampled
+    test    %rax, %rax
+    jz      3f
+1:  lea     NodeEvent_root(%r13), %rdi      # one the node does not hold yet
+    mov     NodeEvent_index(%r13), %rsi
+    call    node_blob_held
+    test    %rax, %rax
+    jnz     3f
+    lea     NodeEvent_chunk(%r13), %rdi
+    call    node_put
+    mov     %rax, S7(%rsp)
+    call    node_new_blob
+    mov     %rdi, %rdx
+    lea     NodeBlob_block_root(%rdx), %rdi
+    lea     NodeEvent_root(%r13), %rsi
+    COPY32  %rdi, %rsi
+    mov     NodeEvent_index(%r13), %rax
+    mov     %rax, NodeBlob_index(%rdx)
+    mov     NodeEvent_checkpoint(%r13), %rax
+    mov     %rax, NodeBlob_slot(%rdx)
+    mov     S7(%rsp), %rax
+    mov     %rax, NodeBlob_data_id(%rdx)
+    movq    $NODE_BLOB_VALID, NodeBlob_status(%rdx)
+    mov     (NodeEvent_chunk + 16)(%r13), %rax
+    mov     %rax, NodeBlob_length(%rdx)
+    lea     NodeEvent_root(%r13), %rdi
+    call    node_blob_added
+3:  testq   $NODE_FLAG_SUBSCRIBED, Node_flags(%rbx)  # subscribed: out on its subnet's topic
+    jz      4f
+    mov     NodeEvent_index(%r13), %rax
+    mov     NodeApi_fork(%r12), %rcx
+    cmp     $FORK_FULU, %rcx
+    jb      31f
+    mov     $GOSSIP_DATA_COLUMN_SIDECAR, %edi
+    mov     (Node_config + CONFIG_DATA_COLUMN_SIDECAR_SUBNET_COUNT)(%rbx), %rcx
+    jmp     33f
+31: mov     $GOSSIP_BLOB_SIDECAR, %edi
+    cmp     $FORK_ELECTRA, %rcx
+    jb      32f
+    mov     (Node_config + CONFIG_BLOB_SIDECAR_SUBNET_COUNT_ELECTRA)(%rbx), %rcx
+    jmp     33f
+32: mov     (Node_config + CONFIG_BLOB_SIDECAR_SUBNET_COUNT)(%rbx), %rcx
+33: test    %rcx, %rcx
+    jz      4f
+    xor     %edx, %edx
+    div     %rcx
+    lea     NodeEvent_chunk(%r13), %rsi
+    call    node_publish
+4:  mov     (NodeApi_cursor + 40)(%r12), %rax   # the next sidecar; after the last, the body and the sidecars go
+    inc     %rax
+    mov     %rax, (NodeApi_cursor + 40)(%r12)
+    mov     (NodeApi_cursor + 16)(%r12), %rcx
+    mov     $NUMBER_OF_COLUMNS, %edx
+    cmpq    $FORK_FULU, NodeApi_fork(%r12)
+    cmovae  %rdx, %rcx
+    mov     %r12, %rdi
+    cmp     %rcx, %rax
+    jae     5f
+    call    node_publish_sidecar_work
+    LEAVE 0
+5:  call    node_publish_drop
+    LEAVE 0
+END_FUNCTION node_publish_sidecar_done
+
+/*
  * The PUBLISH_CHECK of the publishBlockV2 entry rdi (node.md, NODE_PUBLISH_CHECK): rax = 0 once
  * it went, else 400 with no post-state of the parent, or 500 with no head post-state. r12 the
- * entry, r13 the parent's entry; S7 the copy, S8 the head's state id.
+ * entry, r13 the parent's entry; S7 the copy, S8 the head's state id, S9 the parent's fork, S10
+ * the copy's slot.
  */
 LOCAL_FUNCTION node_publish_check_work
     ENTER 0
@@ -4925,7 +5102,33 @@ LOCAL_FUNCTION node_publish_check_work
     mov     NodeApi_slot(%r12), %rcx
     call    node_cross
     mov     %rax, S7(%rsp)
-    PART    %rcx, %rdx, %rbx, Node_api      # the entry's index
+    mov     NodeBlock_slot(%r13), %rdi      # the copy's slot: the parent's, or the first of the block's fork after an upgrade
+    lea     Node_config(%rbx), %rsi
+    call    node_fork
+    mov     %rax, S9(%rsp)
+    mov     NodeApi_slot(%r12), %rdi
+    lea     Node_config(%rbx), %rsi
+    call    node_fork
+    mov     NodeBlock_slot(%r13), %rcx
+    mov     %rcx, S10(%rsp)
+    cmp     S9(%rsp), %rax
+    jbe     1f
+    shl     $4, %rax
+    mov     Node_config(%rbx,%rax), %rax
+    imul    $SLOTS_PER_EPOCH, %rax, %rax
+    cmp     S10(%rsp), %rax
+    jbe     1f
+    mov     %rax, S10(%rsp)
+1:  mov     NodeApi_slot(%r12), %r9         # then process_slots to the block's slot, as a lookup's
+    cmp     S10(%rsp), %r9
+    jbe     2f
+    mov     $NODE_WORK_SLOTS, %edi
+    mov     S7(%rsp), %rsi
+    xor     %edx, %edx
+    xor     %ecx, %ecx
+    xor     %r8d, %r8d
+    call    node_work
+2:  PART    %rcx, %rdx, %rbx, Node_api      # the entry's index
     mov     %r12, %rax
     sub     %rcx, %rax
     xor     %edx, %edx
