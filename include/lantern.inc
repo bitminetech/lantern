@@ -1006,7 +1006,9 @@
 .set ApiView_peer_directions, ApiView_weights + 16 /* getPeers: the direction set, all bits with none */
 .set ApiView_peer, ApiView_weights + 24            /* getPeer: its NodePeer */
 .set ApiView_node, ApiView_weights + 32            /* getPeers: the Node */
-.set ApiView__size, ApiView_weights + 40
+.set ApiView_next_period, ApiView_weights + 40     /* getSyncCommitteeDuties: 1, API_VALUE_NEXT_PERIOD of the work */
+.set ApiView_sd_ids, ApiView_weights + 48          /* getSyncCommitteeDuties: the address of the work's ValidatorRef items */
+.set ApiView__size, ApiView_weights + 56
 .set ApiIdentity_peer_id, 0              /* ApiIdentity (beacon-api.md): texts, each a length and its room */
 .set ApiIdentity_enr, 72
 .set ApiIdentity_p2p_address, 592
@@ -1053,6 +1055,7 @@
 .set API_VALUE_CANONICAL, 1              /* the values of a NODE_WORK_API_ENCODE's arg, times 2^16 */
 .set API_VALUE_FINALIZED, 2
 .set API_VALUE_OPTIMISTIC, 4
+.set API_VALUE_NEXT_PERIOD, 8            /* getSyncCommitteeDuties: the epoch's period is the next of the state's */
 .set NODE_STATE_FORK, 56               /* BeaconState.fork in the value of every fork */
 .set NODE_STATE_VALIDATORS, 296 + 64 * SLOTS_PER_HISTORICAL_ROOT   /* BeaconState.validators, a PartRef, in every fork */
 .set NODE_STATE_BALANCES, NODE_STATE_VALIDATORS + 16                /* BeaconState.balances, a PartRef of u64 */

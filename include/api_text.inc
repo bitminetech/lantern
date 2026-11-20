@@ -364,6 +364,9 @@ api_pe_data:
 .set api_pe_data_len, 8
 api_base58_digits:
     .ascii "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
+api_sd_indices:
+    .ascii ",\"validator_sync_committee_indices\":["
+.set api_sd_indices_len, 37
 api_fc_justified:
     .ascii "{\"justified_checkpoint\":"
 .set api_fc_justified_len, 24

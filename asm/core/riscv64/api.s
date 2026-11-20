@@ -1579,7 +1579,11 @@ LOCAL_FUNCTION api_body
     j       20b
 21: API_LIT api_v_end
     UNFRAME 16
-18: li      t0, API_OP_GET_ATTESTER_DUTIES
+18: li      t0, API_OP_GET_SYNC_COMMITTEE_DUTIES
+    bne     s10, t0, 181f
+    call    api_sync_duties_body
+    UNFRAME 16
+181: li     t0, API_OP_GET_ATTESTER_DUTIES
     bne     s10, t0, 99f
     call    api_duties_json
 99: UNFRAME 16
@@ -2147,6 +2151,90 @@ LOCAL_FUNCTION node_api_find_peer
 8:  li      a0, 0
     UNFRAME 176
 END_FUNCTION node_api_find_peer
+
+/*
+ * The body of getSyncCommitteeDuties (beacon-api.md): {"execution_optimistic":…,"data":[{"pubkey":…,
+ * "validator_index":…,"validator_sync_committee_indices":[…]},…]} of the ValidatorRef items at
+ * ApiView_sd_ids of the view s4, each by its places in the committee at ApiView_sync_out, the pubkeys
+ * those of the state at ApiView_val_state. Locals: the item's index, the items written, the
+ * validator, the place, its places written.
+ */
+LOCAL_FUNCTION api_sync_duties_body
+    FRAME 48
+    API_LIT api_x_optimistic
+    ld      a0, ApiView_is_optimistic(s4)
+    call    api_bool
+    API_LIT api_v_list
+    sd      zero, 0(sp)
+    sd      zero, 8(sp)
+1:  LDQ     t0, s4, ApiView_sd_ids          # each item: a validator index the state has
+    ld      t1, 16(t0)
+    srli    t1, t1, 6
+    ld      t2, 0(sp)
+    bgeu    t2, t1, 9f
+    addi    t3, t2, 1
+    sd      t3, 0(sp)
+    ld      t1, 8(t0)
+    add     t1, t0, t1
+    slli    t2, t2, 6
+    add     t1, t1, t2
+    ld      t2, 8(t1)
+    sd      t2, 16(sp)
+    ld      t0, ApiView_val_state(s4)
+    PART    t3, t1, t0, NODE_STATE_VALIDATORS
+    bgeu    t2, t1, 1b
+    sd      zero, 24(sp)                    # its places in the committee
+    sd      zero, 32(sp)
+2:  ld      t1, 24(sp)
+    li      t2, SYNC_COMMITTEE_SIZE
+    bgeu    t1, t2, 7f
+    addi    t2, t1, 1
+    sd      t2, 24(sp)
+    LDQ     t0, s4, ApiView_sync_out
+    slli    t1, t1, 3
+    add     t0, t0, t1
+    ld      t0, 0(t0)
+    ld      t1, 16(sp)
+    bne     t0, t1, 2b
+    ld      t0, 32(sp)
+    bnez    t0, 5f
+    ld      t0, 8(sp)                       # the first place: the item's head
+    beqz    t0, 3f
+    API_LIT api_p_comma
+3:  ld      t0, 8(sp)
+    addi    t0, t0, 1
+    sd      t0, 8(sp)
+    API_LIT api_u_pubkey
+    ld      t0, ApiView_val_state(s4)
+    PART    a0, t1, t0, NODE_STATE_VALIDATORS
+    ld      t1, 16(sp)
+    slli    t1, t1, 7                       # NODE_VALIDATOR_MEM: the pubkey first
+    add     a0, a0, t1
+    li      a1, 48
+    call    api_qhex
+    API_LIT api_u_index
+    ld      a0, 16(sp)
+    call    api_qdec
+    API_LIT api_sd_indices
+    j       6f
+5:  API_LIT api_p_comma
+6:  ld      t0, 32(sp)
+    addi    t0, t0, 1
+    sd      t0, 32(sp)
+    ld      a0, 24(sp)
+    addi    a0, a0, -1
+    call    api_qdec
+    j       2b
+7:  ld      t0, 32(sp)                      # places written: the item's end
+    beqz    t0, 1b
+    API_LIT api_v_end
+    j       1b
+9:  API_LIT api_v_end
+    UNFRAME 48
+END_FUNCTION api_sync_duties_body
+.if NODE_VALIDATOR_MEM != 128
+.error "api_sync_duties_body reads a pubkey at index * 128"
+.endif
 
 /*
  * The bodies of getStateRandao, getEpochSyncCommittees and getProposerLookahead (beacon-api.md), as
@@ -2737,6 +2825,8 @@ LOCAL_FUNCTION node_api_event
     beq     a3, t0, 59f
     li      t0, API_OP_GET_ATTESTER_DUTIES
     beq     a3, t0, 58f
+    li      t0, API_OP_GET_SYNC_COMMITTEE_DUTIES
+    beq     a3, t0, 53f
     li      t0, API_OP_EVENTSTREAM
     beq     a3, t0, 61f
     li      t0, API_OP_GET_POOL_VOLUNTARY_EXITS
@@ -2812,6 +2902,69 @@ LOCAL_FUNCTION node_api_event
     li      t1, API_OP_GET_STATE_VALIDATOR
     bne     t0, t1, 64f
     j       67f
+53: li      a2, 503                         # getSyncCommitteeDuties: 503 while syncing; 400 past the next period, with no index or a key
+    ld      t0, ApiView_is_syncing(s8)
+    bnez    t0, 80f
+    li      a2, 400
+    ld      t0, ApiRoute_list(s7)
+    ld      t1, (ApiRoute_list + 8)(s7)
+    beqz    t1, 80f
+    add     t0, s7, t0
+531: ld     t2, 0(t0)
+    li      t3, API_VALIDATOR_INDEX
+    bne     t2, t3, 80f
+    addi    t0, t0, 64
+    addi    t1, t1, -1
+    bnez    t1, 531b
+    mv      a0, s2
+    call    node_store_slot
+    li      t1, SLOTS_PER_EPOCH * EPOCHS_PER_SYNC_COMMITTEE_PERIOD
+    divu    t0, a0, t1
+    addi    t0, t0, 1
+    ld      t2, ApiRoute_epoch(s7)
+    li      t1, EPOCHS_PER_SYNC_COMMITTEE_PERIOD
+    divu    t2, t2, t1
+    li      a2, 400
+    bgtu    t2, t0, 80f
+    sd      t2, (L + 8)(sp)                 # the epoch's period
+    addi    a0, s1, Node_head_root          # the head's post-state, of altair on, at the epoch's period or the one before
+    call    node_find_block
+    li      t0, -1
+    beq     a0, t0, 532f
+    ld      a0, NodeBlock_slot(a1)
+    addi    a1, s1, Node_config
+    call    node_fork
+    li      t0, FORK_ALTAIR
+    bltu    a0, t0, 532f
+    addi    a0, s1, Node_head_root
+    call    node_find_block
+    ld      t0, NodeBlock_slot(a1)
+    li      t1, SLOTS_PER_EPOCH * EPOCHS_PER_SYNC_COMMITTEE_PERIOD
+    divu    t0, t0, t1
+    ld      t2, (L + 8)(sp)
+    bltu    t2, t0, 532f
+    sub     t2, t2, t0
+    li      t1, 1
+    bgtu    t2, t1, 532f
+    sd      t2, (L + 8)(sp)                 # 1: the next period
+    li      t0, API_ID_HEAD
+    sd      t0, ApiRoute_id_kind(s7)
+    mv      a0, s7
+    mv      a1, s8
+    call    node_api_state
+    li      a2, 400
+    bnez    a0, 80f
+    ld      t0, (L + 8)(sp)
+    STQ     t0, s8, ApiView_next_period
+    mv      a0, s7                          # its ids in the work's data
+    call    node_api_ids
+    sd      a0, ApiView_look_data(s8)
+    j       67f
+532: mv     a0, s2                          # else the state of the epoch's first slot, as getAttesterDuties
+    call    node_store_slot
+    ld      t2, ApiRoute_epoch(s7)
+    li      t1, SLOTS_PER_EPOCH
+    j       583f
 58: li      a2, 503                         # getAttesterDuties: 503 while syncing; 400 past the next epoch, with no index or a key
     ld      t0, ApiView_is_syncing(s8)
     bnez    t0, 80f
@@ -2834,7 +2987,7 @@ LOCAL_FUNCTION node_api_event
     ld      t2, ApiRoute_epoch(s7)
     li      a2, 400
     bgtu    t2, t0, 80f
-    mul     t2, t2, t1                      # the state of the first slot, as getProposerDuties; none: 400
+583: mul    t2, t2, t1                      # the state of the first slot, as getProposerDuties; none: 400
     sd      t2, ApiRoute_id_slot(s7)
     li      t0, API_ID_SLOT
     bleu    t2, a0, 582f
@@ -3031,6 +3184,8 @@ LOCAL_FUNCTION node_api_done
     beq     t0, t1, 3f
     li      t1, API_OP_GET_EPOCH_SYNC_COMMITTEES
     beq     t0, t1, 3f
+    li      t1, API_OP_GET_SYNC_COMMITTEE_DUTIES
+    beq     t0, t1, 3f
     li      t1, API_OP_GET_ATTESTER_DUTIES
     bne     t0, t1, 2f
 3:  ld      a1, NodeAction_data(s3)
@@ -3141,6 +3296,8 @@ LOCAL_FUNCTION node_api_run
     beq     s9, t2, 2f
     li      t2, API_OP_GET_ATTESTER_DUTIES
     beq     s9, t2, 2f
+    li      t2, API_OP_GET_SYNC_COMMITTEE_DUTIES
+    beq     s9, t2, 2f
     li      t2, API_OP_GET_STATE_RANDAO
     beq     s9, t2, 2f
     li      t2, API_OP_GET_EPOCH_SYNC_COMMITTEES
@@ -3206,7 +3363,7 @@ LOCAL_FUNCTION node_api_run
     FORK_CALL node_randao
     j       275f
 272: li     t0, API_OP_GET_EPOCH_SYNC_COMMITTEES    # lantern_node_sync_committee of the epoch in data, its out at the end of scratch
-    bne     s9, t0, 273f
+    bne     s9, t0, 274f
     beqz    s5, 41f
     ld      t0, 16(s5)
     li      t1, 8
@@ -3215,6 +3372,30 @@ LOCAL_FUNCTION node_api_run
     add     t0, s5, t0
     ld      a1, 0(t0)
     ld      t0, 0(s6)
+    li      t1, 8 * SYNC_COMMITTEE_SIZE
+    bltu    t0, t1, 71f
+    sub     t0, t0, t1
+    sd      t0, 0(s6)
+    add     a3, s6, t0
+    STQ     a3, s8, ApiView_sync_out
+    mv      a0, s4
+    mv      a2, s6
+    FORK_CALL node_sync_committee
+    j       275f
+274: li     t0, API_OP_GET_SYNC_COMMITTEE_DUTIES    # lantern_node_sync_committee of the state's epoch, or of the next period's
+    bne     s9, t0, 273f
+    beqz    s5, 41f
+    STQ     s5, s8, ApiView_sd_ids
+    sd      s4, ApiView_val_state(s8)
+    ld      a1, NODE_STATE_SLOT(s4)
+    li      t0, SLOTS_PER_EPOCH
+    divu    a1, a1, t0
+    ld      t0, NodeAction_arg(s3)
+    li      t1, API_VALUE_NEXT_PERIOD << 16
+    and     t0, t0, t1
+    beqz    t0, 2741f
+    addi    a1, a1, EPOCHS_PER_SYNC_COMMITTEE_PERIOD
+2741: ld    t0, 0(s6)
     li      t1, 8 * SYNC_COMMITTEE_SIZE
     bltu    t0, t1, 71f
     sub     t0, t0, t1
@@ -3870,6 +4051,9 @@ LOCAL_FUNCTION node_api_encode
     ld      t1, ApiView_is_optimistic(a3)
     slli    t1, t1, 2
     or      t0, t0, t1
+    LDQ     t1, a3, ApiView_next_period     # API_VALUE_NEXT_PERIOD
+    slli    t1, t1, 3
+    or      t0, t0, t1
     slli    t0, t0, 16
     slli    a2, a2, 8
     or      a5, a0, a2
@@ -3911,6 +4095,8 @@ LOCAL_FUNCTION node_api_encode
     li      t1, API_OP_GET_STATE_RANDAO
     beq     a0, t1, 4f
     li      t1, API_OP_GET_EPOCH_SYNC_COMMITTEES
+    beq     a0, t1, 4f
+    li      t1, API_OP_GET_SYNC_COMMITTEE_DUTIES
     beq     a0, t1, 4f
     li      t1, API_OP_GET_ATTESTER_DUTIES
     bne     a0, t1, 3f

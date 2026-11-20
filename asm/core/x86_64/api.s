@@ -1516,7 +1516,11 @@ LOCAL_FUNCTION api_body
     jmp     20b
 21: API_LIT api_v_end
     UNFRAME 16
-18: cmp     $API_OP_GET_ATTESTER_DUTIES, %rsi
+18: cmp     $API_OP_GET_SYNC_COMMITTEE_DUTIES, %rsi
+    jne     181f
+    call    api_sync_duties_body
+    UNFRAME 16
+181: cmp    $API_OP_GET_ATTESTER_DUTIES, %rsi
     jne     99f
     call    api_duties_json
 99: UNFRAME 16
@@ -2051,6 +2055,83 @@ LOCAL_FUNCTION node_api_find_peer
 8:  xor     %eax, %eax
     UNFRAME 176
 END_FUNCTION node_api_find_peer
+
+/*
+ * The body of getSyncCommitteeDuties (beacon-api.md): {"execution_optimistic":…,"data":[{"pubkey":…,
+ * "validator_index":…,"validator_sync_committee_indices":[…]},…]} of the ValidatorRef items at
+ * ApiView_sd_ids of the view rbp, each by its places in the committee at ApiView_sync_out, the pubkeys
+ * those of the state at ApiView_val_state. Locals: the item's index, the items written, the
+ * validator, the place, its places written.
+ */
+LOCAL_FUNCTION api_sync_duties_body
+    FRAME 48
+    API_LIT api_x_optimistic
+    mov     ApiView_is_optimistic(%rbp), %rdi
+    call    api_bool
+    API_LIT api_v_list
+    movq    $0, (%rsp)
+    movq    $0, 8(%rsp)
+1:  mov     ApiView_sd_ids(%rbp), %rax      # each item: a validator index the state has
+    mov     16(%rax), %rcx
+    shr     $6, %rcx
+    mov     (%rsp), %rdx
+    cmp     %rcx, %rdx
+    jae     9f
+    incq    (%rsp)
+    mov     8(%rax), %rcx
+    add     %rax, %rcx
+    shl     $6, %rdx
+    mov     8(%rcx,%rdx), %rdx
+    mov     %rdx, 16(%rsp)
+    mov     ApiView_val_state(%rbp), %rax
+    PART    %rsi, %rcx, %rax, NODE_STATE_VALIDATORS
+    cmp     %rcx, %rdx
+    jae     1b
+    movq    $0, 24(%rsp)                    # its places in the committee
+    movq    $0, 32(%rsp)
+2:  mov     24(%rsp), %rcx
+    cmp     $SYNC_COMMITTEE_SIZE, %rcx
+    jae     7f
+    incq    24(%rsp)
+    mov     ApiView_sync_out(%rbp), %rax
+    mov     (%rax,%rcx,8), %rax
+    cmp     16(%rsp), %rax
+    jne     2b
+    cmpq    $0, 32(%rsp)
+    jne     5f
+    cmpq    $0, 8(%rsp)                     # the first place: the item's head
+    je      3f
+    API_LIT api_p_comma
+3:  incq    8(%rsp)
+    API_LIT api_u_pubkey
+    mov     ApiView_val_state(%rbp), %rax
+    PART    %rdi, %rcx, %rax, NODE_STATE_VALIDATORS
+    mov     16(%rsp), %rcx
+    shl     $7, %rcx                        # NODE_VALIDATOR_MEM: the pubkey first
+    add     %rcx, %rdi
+    mov     $48, %esi
+    call    api_qhex
+    API_LIT api_u_index
+    mov     16(%rsp), %rdi
+    call    api_qdec
+    API_LIT api_sd_indices
+    jmp     6f
+5:  API_LIT api_p_comma
+6:  incq    32(%rsp)
+    mov     24(%rsp), %rdi
+    dec     %rdi
+    call    api_qdec
+    jmp     2b
+7:  cmpq    $0, 32(%rsp)                    # places written: the item's end
+    je      1b
+    API_LIT api_v_end
+    jmp     1b
+9:  API_LIT api_v_end
+    UNFRAME 48
+END_FUNCTION api_sync_duties_body
+.if NODE_VALIDATOR_MEM != 128
+.error "api_sync_duties_body reads a pubkey at index * 128"
+.endif
 
 /*
  * The bodies of getStateRandao, getEpochSyncCommittees and getProposerLookahead (beacon-api.md), as
@@ -2629,6 +2710,8 @@ LOCAL_FUNCTION node_api_event
     je      59f
     cmp     $API_OP_GET_ATTESTER_DUTIES, %rcx
     je      58f
+    cmp     $API_OP_GET_SYNC_COMMITTEE_DUTIES, %rcx
+    je      53f
     cmp     $API_OP_EVENTSTREAM, %rcx
     je      61f
     cmp     $API_OP_GET_POOL_VOLUNTARY_EXITS, %rcx
@@ -2710,6 +2793,80 @@ LOCAL_FUNCTION node_api_event
     cmpq    $API_OP_GET_STATE_VALIDATOR, ApiRoute_op(%rax)
     jne     64f
     jmp     67f
+53: mov     $503, %edx                      # getSyncCommitteeDuties: 503 while syncing; 400 past the next period, with no index or a key
+    mov     S8(%rsp), %rax
+    cmpq    $0, ApiView_is_syncing(%rax)
+    jne     80f
+    mov     $400, %edx
+    mov     S7(%rsp), %rdi
+    mov     ApiRoute_list(%rdi), %rax
+    mov     (ApiRoute_list + 8)(%rdi), %rcx
+    test    %rcx, %rcx
+    jz      80f
+    add     %rdi, %rax
+531: cmpq   $API_VALIDATOR_INDEX, (%rax)
+    jne     80f
+    add     $64, %rax
+    dec     %rcx
+    jnz     531b
+    mov     %rbp, %rdi
+    call    node_store_slot
+    xor     %edx, %edx
+    mov     $(SLOTS_PER_EPOCH * EPOCHS_PER_SYNC_COMMITTEE_PERIOD), %ecx
+    div     %rcx
+    inc     %rax
+    mov     %rax, (L + 8)(%rsp)             # the store's period + 1
+    mov     S7(%rsp), %rdi
+    mov     ApiRoute_epoch(%rdi), %rax
+    xor     %edx, %edx
+    mov     $EPOCHS_PER_SYNC_COMMITTEE_PERIOD, %ecx
+    div     %rcx
+    mov     $400, %edx
+    cmp     (L + 8)(%rsp), %rax
+    ja      80f
+    mov     %rax, (L + 8)(%rsp)             # the epoch's period
+    lea     Node_head_root(%rbx), %rdi      # the head's post-state, of altair on, at the epoch's period or the one before
+    call    node_find_block
+    cmp     $-1, %rax
+    je      532f
+    mov     NodeBlock_slot(%rdx), %rdi
+    lea     Node_config(%rbx), %rsi
+    call    node_fork
+    cmp     $FORK_ALTAIR, %rax
+    jb      532f
+    lea     Node_head_root(%rbx), %rdi
+    call    node_find_block
+    mov     NodeBlock_slot(%rdx), %rax
+    xor     %edx, %edx
+    mov     $(SLOTS_PER_EPOCH * EPOCHS_PER_SYNC_COMMITTEE_PERIOD), %ecx
+    div     %rcx
+    mov     (L + 8)(%rsp), %rcx
+    sub     %rax, %rcx
+    jb      532f
+    cmp     $1, %rcx
+    ja      532f
+    mov     %rcx, (L + 8)(%rsp)             # 1: the next period
+    mov     S7(%rsp), %rdi
+    movq    $API_ID_HEAD, ApiRoute_id_kind(%rdi)
+    mov     S8(%rsp), %rsi
+    call    node_api_state
+    mov     $400, %edx
+    test    %rax, %rax
+    jnz     80f
+    mov     S8(%rsp), %rdi
+    mov     (L + 8)(%rsp), %rax
+    mov     %rax, ApiView_next_period(%rdi)
+    mov     S7(%rsp), %rdi                  # its ids in the work's data
+    call    node_api_ids
+    mov     S8(%rsp), %rcx
+    mov     %rax, ApiView_look_data(%rcx)
+    jmp     67f
+532: mov    %rbp, %rdi                      # else the state of the epoch's first slot, as getAttesterDuties
+    call    node_store_slot
+    mov     %rax, %rsi
+    mov     S7(%rsp), %rdi
+    mov     ApiRoute_epoch(%rdi), %rcx
+    jmp     583f
 58: mov     $503, %edx                      # getAttesterDuties: 503 while syncing; 400 past the next epoch, with no index or a key
     mov     S8(%rsp), %rax
     cmpq    $0, ApiView_is_syncing(%rax)
@@ -2738,7 +2895,7 @@ LOCAL_FUNCTION node_api_event
     mov     $400, %edx
     cmp     %rax, %rcx
     ja      80f
-    imul    $SLOTS_PER_EPOCH, %rcx, %rcx    # the state of the first slot, as getProposerDuties; none: 400
+583: imul   $SLOTS_PER_EPOCH, %rcx, %rcx    # the state of the first slot, as getProposerDuties; none: 400
     mov     %rcx, ApiRoute_id_slot(%rdi)
     movq    $API_ID_SLOT, ApiRoute_id_kind(%rdi)
     cmp     %rsi, %rcx
@@ -2954,6 +3111,8 @@ LOCAL_FUNCTION node_api_done
     je      3f
     cmp     $API_OP_GET_EPOCH_SYNC_COMMITTEES, %eax
     je      3f
+    cmp     $API_OP_GET_SYNC_COMMITTEE_DUTIES, %eax
+    je      3f
     cmp     $API_OP_GET_ATTESTER_DUTIES, %eax
     jne     2f
 3:  mov     NodeAction_data(%r12), %rsi
@@ -3068,6 +3227,8 @@ LOCAL_FUNCTION node_api_run
     je      2f
     cmp     $API_OP_GET_ATTESTER_DUTIES, %eax
     je      2f
+    cmp     $API_OP_GET_SYNC_COMMITTEE_DUTIES, %eax
+    je      2f
     cmp     $API_OP_GET_STATE_RANDAO, %eax
     je      2f
     cmp     $API_OP_GET_EPOCH_SYNC_COMMITTEES, %eax
@@ -3141,7 +3302,7 @@ LOCAL_FUNCTION node_api_run
     FORK_CALL node_randao
     jmp     275f
 272: cmpq   $API_OP_GET_EPOCH_SYNC_COMMITTEES, S9(%rsp)  # lantern_node_sync_committee of the epoch in data, its out at the end of scratch
-    jne     273f
+    jne     274f
     mov     S7(%rsp), %rax
     test    %rax, %rax
     jz      41f
@@ -3150,6 +3311,33 @@ LOCAL_FUNCTION node_api_run
     mov     8(%rax), %rsi
     mov     (%rax,%rsi), %rsi
     mov     (%r14), %rcx
+    sub     $(8 * SYNC_COMMITTEE_SIZE), %rcx
+    jb      71f
+    mov     %rcx, (%r14)
+    add     %r14, %rcx
+    mov     S8(%rsp), %rax
+    mov     %rcx, ApiView_sync_out(%rax)
+    mov     %r13, %rdi
+    mov     %r14, %rdx
+    FORK_CALL node_sync_committee
+    jmp     275f
+274: cmpq   $API_OP_GET_SYNC_COMMITTEE_DUTIES, S9(%rsp)  # lantern_node_sync_committee of the state's epoch, or of the next period's
+    jne     273f
+    mov     S7(%rsp), %rax
+    test    %rax, %rax
+    jz      41f
+    mov     S8(%rsp), %rcx
+    mov     %rax, ApiView_sd_ids(%rcx)
+    mov     %r13, ApiView_val_state(%rcx)
+    mov     NODE_STATE_SLOT(%r13), %rax
+    xor     %edx, %edx
+    mov     $SLOTS_PER_EPOCH, %ecx
+    div     %rcx
+    mov     %rax, %rsi
+    testq   $(API_VALUE_NEXT_PERIOD << 16), NodeAction_arg(%r12)
+    jz      2741f
+    add     $EPOCHS_PER_SYNC_COMMITTEE_PERIOD, %rsi
+2741: mov   (%r14), %rcx
     sub     $(8 * SYNC_COMMITTEE_SIZE), %rcx
     jb      71f
     mov     %rcx, (%r14)
@@ -3847,6 +4035,8 @@ LOCAL_FUNCTION node_api_encode
     lea     (%r9,%rax,2), %r9
     mov     ApiView_is_optimistic(%rcx), %rax
     lea     (%r9,%rax,4), %r9
+    mov     ApiView_next_period(%rcx), %rax # API_VALUE_NEXT_PERIOD
+    lea     (%r9,%rax,8), %r9
     shl     $16, %r9
     shl     $8, %rdx
     or      %rdx, %r9
@@ -3878,6 +4068,8 @@ LOCAL_FUNCTION node_api_encode
     cmp     $API_OP_PRODUCE_ATTESTATION_DATA, %rdi
     cmove   %rax, %rcx
     cmp     $API_OP_GET_ATTESTER_DUTIES, %rdi
+    cmove   %rax, %rcx
+    cmp     $API_OP_GET_SYNC_COMMITTEE_DUTIES, %rdi
     cmove   %rax, %rcx
     cmp     $API_OP_GET_STATE_RANDAO, %rdi
     cmove   %rax, %rcx

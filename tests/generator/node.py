@@ -396,7 +396,7 @@ ANSWERED = ("getHealth", "getNetworkIdentity", "getNodeVersion", "getSyncingStat
             "getBlockHeader", "getStateFinalityCheckpoints", "getBlockV2", "getStateV2", "getBlockRoot", "getStateRoot",
             "getStateFork", "getSpec", "getForkSchedule", "getDepositContract", "getEpochCommittees",
             "getProposerDuties", "produceAttestationData", "getAttesterDuties", "eventstream", "getStateRandao",
-            "getEpochSyncCommittees", "getProposerLookahead", "getBlockAttestationsV2", "getBlindedBlock", "getDebugChainHeadsV2", "getDebugForkChoice", "getBlockHeaders", "getPeers", "getPeer", "getBlobSidecars", "getDebugDataColumnSidecars") + tuple(PENDING) + VALIDATOR_OPS
+            "getEpochSyncCommittees", "getProposerLookahead", "getBlockAttestationsV2", "getBlindedBlock", "getDebugChainHeadsV2", "getDebugForkChoice", "getBlockHeaders", "getPeers", "getPeer", "getBlobSidecars", "getDebugDataColumnSidecars", "getSyncCommitteeDuties") + tuple(PENDING) + VALIDATOR_OPS
 STATE_READS = ("getStateRandao", "getEpochSyncCommittees", "getProposerLookahead")
 IDENTITY = (b"16Uiu2HAmPLe7Mzm8TsYUubgCAW1aJoeFScxrLj8ppHFivPo97bUZ",
             b"enr:-Iu4QLm7bZGdAhVwRqZ6Zf3LlnqKsBTnZGOByHQhPMQJ3pV4F3t8L9i5yJOZ0X0hiZ6q4D5V0jB7l8J3ZtYw1JDH9C4BgmlkgnY0gmlwhAoAAAGJc2VjcDI1NmsxoQPKY0yuDUmstAHYpMa2_oxVtw0RW_QAdpzBQA8yWM0xOIN0Y3CCIyg",
@@ -755,6 +755,53 @@ def att_data_answer(v, route, kw, syncing):
     return response(200, b'{"data":' + to_json(data).encode() + b"}", **kw)
 
 
+def sync_duties_answer(v, route, kw, syncing):
+    """The answer of getSyncCommitteeDuties (beacon-api.md): the places in the sync committee of `epoch` of each index
+    of the body, from the head's post-state for its period and the next, else the state of the epoch's first slot."""
+    import struct
+    spec = v["spec"]
+    if syncing:
+        return error(503, **kw)
+    spe = int(spec.SLOTS_PER_EPOCH)
+    store_slot = v["slot"] + SLOTS_AHEAD
+    epoch = route.epoch
+    period = spec.compute_sync_committee_period
+    if period(spec.Epoch(epoch)) > period(spec.Epoch(store_slot // spe)) + 1:
+        return error(400, **kw)
+    if not route.refs or any(struct.unpack_from("<Q", r, 0)[0] != 1 for r in route.refs):
+        return error(400, **kw)
+    head = v["states"][v["slot"]]
+    hp = period(spec.get_current_epoch(head))
+    if period(spec.Epoch(epoch)) in (hp, hp + 1):
+        s = head
+    else:
+        first = epoch * spe
+        if first > store_slot:  # the head's post-state brought to the epoch's first slot
+            s = head.copy()
+            spec.process_slots(s, first)
+        elif first in v["states"]:
+            s = v["states"][first]
+        else:
+            return error(400, **kw)
+    sp = period(spec.get_current_epoch(s))
+    if period(spec.Epoch(epoch)) == sp:
+        pubkeys = list(s.current_sync_committee.pubkeys)
+    elif period(spec.Epoch(epoch)) == sp + 1:
+        pubkeys = list(s.next_sync_committee.pubkeys)
+    else:
+        return error(400, **kw)
+    items = []
+    for r in route.refs:
+        i = struct.unpack_from("<Q", r, 8)[0]
+        if i >= len(s.validators):
+            continue
+        places = [k for k, pk in enumerate(pubkeys) if pk == s.validators[i].pubkey]
+        if places:
+            items.append(b'{"pubkey":' + qhex(s.validators[i].pubkey) + b',"validator_index":' + q(i) +
+                         b',"validator_sync_committee_indices":[' + b",".join(q(k) for k in places) + b"]}")
+    return response(200, b'{"execution_optimistic":false,"data":[' + b",".join(items) + b"]}", **kw)
+
+
 def attester_duties_answer(v, route, kw, syncing):
     """The answer of getAttesterDuties (beacon-api.md): get_committee_assignment of each index of the body."""
     import struct
@@ -815,6 +862,8 @@ def answer(v, name, route, offline, close, keep_alive, syncing=False):
         return att_data_answer(v, route, kw, syncing)
     if name == "getAttesterDuties":
         return attester_duties_answer(v, route, kw, syncing)
+    if name == "getSyncCommitteeDuties":
+        return sync_duties_answer(v, route, kw, syncing)
 
     current = v["slot"] + SLOTS_AHEAD
     if name == "getHealth":
@@ -1407,6 +1456,22 @@ def api_requests(spec, fork, v, kind="main"):
                        ("att_duties_pubkey", b'["0x' + bytes(48).hex().encode() + b'"]')):
         add(name, att_duties(current, body), body=body if body else None)
     add("att_duties_http10", att_duties(current, some), body=some, version=b"HTTP/1.0")
+    sync_duties = by_name["getSyncCommitteeDuties"]
+
+    def sd(e, body, **headers):
+        return api_route.request(sync_duties["method"], api_route.fill(sync_duties, {"epoch": b"%d" % e}), b"", body=body,
+                                 content_type=b"application/json", **headers)
+    every = b"[" + b",".join(b'"%d"' % i for i in range(n + 2)) + b"]"
+    epsp = int(spec.EPOCHS_PER_SYNC_COMMITTEE_PERIOD)
+    for e in sorted({0, epoch - 1, epoch, current, current + 1, current + epsp, epoch + epsp, current + 2 * epsp}):
+        if e >= 0:
+            add(f"sync_duties_{e}", sd(e, every), body=every)
+    add("sync_duties_some", sd(current, some), body=some)
+    for name, body in (("sync_duties_none", b""), ("sync_duties_empty", b"[]"),
+                       ("sync_duties_pubkey", b'["0x' + bytes(48).hex().encode() + b'"]')):
+        add(name, sd(current, body), body=body if body else None)
+    add("sync_duties_http10", sd(current, some), body=some, version=b"HTTP/1.0")
+    add("sync_duties_syncing", sd(current, some), body=some, syncing=True)
     add("att_duties_syncing", att_duties(current, some), body=some, syncing=True)
     first = epoch * int(spec.SLOTS_PER_EPOCH)
     for e in range(epoch - 1, epoch + 3):

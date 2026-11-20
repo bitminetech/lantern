@@ -1566,7 +1566,11 @@ LOCAL_FUNCTION api_body
 21: API_LIT api_v_end
     UNFRAME 16
     /* {"dependent_root":…,"execution_optimistic":…,"data":[{"pubkey":…,…,"slot":…},…]}, x21 the items written */
-18: cmp     x28, #API_OP_GET_ATTESTER_DUTIES
+18: cmp     x28, #API_OP_GET_SYNC_COMMITTEE_DUTIES
+    b.ne    181f
+    bl      api_sync_duties_body
+    UNFRAME 16
+181: cmp    x28, #API_OP_GET_ATTESTER_DUTIES
     b.ne    99f
     API_LIT api_u_root
     LDQ     x0, x22, ApiView_ad_out
@@ -1632,6 +1636,87 @@ LOCAL_FUNCTION api_body
 16: API_LIT api_v_end
 99: UNFRAME 16
 END_FUNCTION api_body
+
+/*
+ * L1: the body of getSyncCommitteeDuties (beacon-api.md): {"execution_optimistic":…,"data":[{"pubkey":…,
+ * "validator_index":…,"validator_sync_committee_indices":[…]},…]} of the ValidatorRef items at
+ * ApiView_sd_ids of the view x22, each by its places in the committee at ApiView_sync_out, the
+ * pubkeys those of the state at ApiView_val_state. Locals: the item's index, the items written,
+ * the validator, the place, its places written.
+ */
+LOCAL_FUNCTION api_sync_duties_body
+    FRAME 48
+    API_LIT api_x_optimistic
+    ldr     x0, [x22, #ApiView_is_optimistic]
+    bl      api_bool
+    API_LIT api_v_list
+    stp     xzr, xzr, [sp, #16]
+1:  LDQ     x9, x22, ApiView_sd_ids         /* each item: a validator index the state has */
+    ldr     x10, [x9, #16]
+    lsr     x10, x10, #6
+    ldr     x11, [sp, #16]
+    cmp     x11, x10
+    b.hs    9f
+    add     x12, x11, #1
+    str     x12, [sp, #16]
+    ldr     x10, [x9, #8]
+    add     x10, x9, x10
+    add     x10, x10, x11, lsl #6
+    ldr     x12, [x10, #8]
+    str     x12, [sp, #32]
+    ldr     x13, [x22, #ApiView_val_state]
+    PART    x9, x10, x13, NODE_STATE_VALIDATORS
+    cmp     x12, x10
+    b.hs    1b
+    stp     xzr, xzr, [sp, #40]             /* its places in the committee */
+2:  ldr     x11, [sp, #40]
+    cmp     x11, #SYNC_COMMITTEE_SIZE
+    b.hs    7f
+    add     x12, x11, #1
+    str     x12, [sp, #40]
+    ldr     x9, [x22, #ApiView_sync_out]
+    ldr     x9, [x9, x11, lsl #3]
+    ldr     x10, [sp, #32]
+    cmp     x9, x10
+    b.ne    2b
+    ldr     x9, [sp, #48]
+    cbnz    x9, 5f
+    ldr     x9, [sp, #24]                   /* the first place: the item's head */
+    cbz     x9, 3f
+    API_LIT api_p_comma
+3:  ldr     x9, [sp, #24]
+    add     x9, x9, #1
+    str     x9, [sp, #24]
+    API_LIT api_u_pubkey
+    ldr     x13, [x22, #ApiView_val_state]
+    PART    x9, x10, x13, NODE_STATE_VALIDATORS
+    ldr     x11, [sp, #32]
+    add     x0, x9, x11, lsl #7             /* NODE_VALIDATOR_MEM: the pubkey first */
+    mov     x1, #48
+    bl      api_qhex
+    API_LIT api_u_index
+    ldr     x0, [sp, #32]
+    bl      api_qdec
+    API_LIT api_sd_indices
+    b       6f
+5:  API_LIT api_p_comma
+6:  ldr     x9, [sp, #48]
+    add     x9, x9, #1
+    str     x9, [sp, #48]
+    ldr     x0, [sp, #40]
+    sub     x0, x0, #1
+    bl      api_qdec
+    b       2b
+7:  ldr     x9, [sp, #48]                   /* places written: the item's end */
+    cbz     x9, 1b
+    API_LIT api_v_end
+    b       1b
+9:  API_LIT api_v_end
+    UNFRAME 48
+END_FUNCTION api_sync_duties_body
+.if NODE_VALIDATOR_MEM != 128
+.error "api_sync_duties_body reads a pubkey at index * 128"
+.endif
 
 /*
  * L1: the body of getDebugChainHeadsV2 (beacon-api.md): {"data":[{"root":…,"slot":…,"execution_optimistic":…},…]}
@@ -2690,6 +2775,8 @@ LOCAL_FUNCTION node_api_event
     b.eq    59f
     cmp     x3, #API_OP_GET_ATTESTER_DUTIES
     b.eq    58f
+    cmp     x3, #API_OP_GET_SYNC_COMMITTEE_DUTIES
+    b.eq    53f
     cmp     x3, #API_OP_EVENTSTREAM
     b.eq    61f
     cmp     x3, #API_OP_GET_POOL_VOLUNTARY_EXITS
@@ -2764,6 +2851,69 @@ LOCAL_FUNCTION node_api_event
     cmp     x0, #API_OP_GET_STATE_VALIDATOR
     b.ne    64f
     b       67f
+53: mov     x2, #503                        /* getSyncCommitteeDuties: 503 while syncing; 400 past the next period, with no index or a key */
+    ldr     x9, [x26, #ApiView_is_syncing]
+    cbnz    x9, 80f
+    mov     x2, #400
+    ldp     x10, x11, [x25, #ApiRoute_list]
+    cbz     x11, 80f
+    add     x10, x25, x10
+531: ldr    x12, [x10], #64
+    cmp     x12, #API_VALIDATOR_INDEX
+    b.ne    80f
+    subs    x11, x11, #1
+    b.ne    531b
+    mov     x0, x20
+    bl      node_store_slot
+    MOVQ    x11, SLOTS_PER_EPOCH * EPOCHS_PER_SYNC_COMMITTEE_PERIOD
+    udiv    x9, x0, x11
+    add     x9, x9, #1
+    ldr     x10, [x25, #ApiRoute_epoch]
+    mov     x12, #EPOCHS_PER_SYNC_COMMITTEE_PERIOD
+    udiv    x12, x10, x12
+    mov     x2, #400
+    cmp     x12, x9
+    b.hi    80f
+    add     x0, x19, #Node_head_root        /* the head's post-state, of altair on, at the epoch's period or the one before */
+    bl      node_find_block
+    cmn     x0, #1
+    b.eq    532f
+    ldr     x0, [x1, #NodeBlock_slot]
+    add     x1, x19, #Node_config
+    bl      node_fork
+    cmp     x0, #FORK_ALTAIR
+    b.lo    532f
+    add     x0, x19, #Node_head_root
+    bl      node_find_block
+    ldr     x9, [x1, #NodeBlock_slot]
+    MOVQ    x11, SLOTS_PER_EPOCH * EPOCHS_PER_SYNC_COMMITTEE_PERIOD
+    udiv    x9, x9, x11                     /* the head's period */
+    ldr     x10, [x25, #ApiRoute_epoch]
+    mov     x12, #EPOCHS_PER_SYNC_COMMITTEE_PERIOD
+    udiv    x12, x10, x12
+    subs    x12, x12, x9
+    b.lo    532f
+    cmp     x12, #1
+    b.hi    532f
+    str     x12, [sp, #(L + 8)]             /* 1: the next period */
+    mov     x9, #API_ID_HEAD
+    str     x9, [x25, #ApiRoute_id_kind]
+    mov     x0, x25
+    mov     x1, x26
+    bl      node_api_state
+    mov     x2, #400
+    cbnz    x0, 80f
+    ldr     x9, [sp, #(L + 8)]
+    STQ     x9, x26, ApiView_next_period
+    mov     x0, x25                         /* its ids in the work's data */
+    bl      node_api_ids
+    str     x0, [x26, #ApiView_look_data]
+    b       67f
+532: mov    x0, x20                         /* else the state of the epoch's first slot, as getAttesterDuties */
+    bl      node_store_slot
+    ldr     x10, [x25, #ApiRoute_epoch]
+    mov     x11, #SLOTS_PER_EPOCH
+    b       583f
 58: mov     x2, #503                        /* getAttesterDuties: 503 while syncing; 400 past the next epoch, with no index or a key */
     ldr     x9, [x26, #ApiView_is_syncing]
     cbnz    x9, 80f
@@ -2785,7 +2935,7 @@ LOCAL_FUNCTION node_api_event
     mov     x2, #400
     cmp     x10, x9
     b.hi    80f
-    mul     x10, x10, x11                   /* the state of the first slot, as getProposerDuties; none: 400 */
+583: mul    x10, x10, x11                   /* the state of the first slot, as getProposerDuties; none: 400 */
     mov     x9, #API_ID_SLOT
     cmp     x10, x0
     b.ls    582f
@@ -2975,9 +3125,11 @@ LOCAL_FUNCTION node_api_done
     and     x10, x9, #255                   /* getStateValidator: its ids go; produceAttestationData its index; the epoch reads their epoch */
     mov     x11, #API_OP_PRODUCE_ATTESTATION_DATA
     mov     x12, #API_OP_GET_ATTESTER_DUTIES
+    mov     x13, #API_OP_GET_SYNC_COMMITTEE_DUTIES
     cmp     x10, #API_OP_GET_STATE_VALIDATOR
     ccmp    x10, x11, #4, ne
     ccmp    x10, x12, #4, ne
+    ccmp    x10, x13, #4, ne
     ccmp    x10, #API_OP_GET_STATE_RANDAO, #4, ne
     ccmp    x10, #API_OP_GET_EPOCH_SYNC_COMMITTEES, #4, ne
     b.ne    2f
@@ -3088,6 +3240,8 @@ LOCAL_FUNCTION node_api_run
     b.eq    2f
     cmp     x27, #API_OP_GET_ATTESTER_DUTIES
     b.eq    2f
+    cmp     x27, #API_OP_GET_SYNC_COMMITTEE_DUTIES
+    b.eq    2f
     cmp     x27, #API_OP_GET_STATE_RANDAO
     b.eq    2f
     cmp     x27, #API_OP_GET_EPOCH_SYNC_COMMITTEES
@@ -3150,7 +3304,7 @@ LOCAL_FUNCTION node_api_run
     FORK_CALL node_randao
     b       275f
 272: cmp    x27, #API_OP_GET_EPOCH_SYNC_COMMITTEES  /* lantern_node_sync_committee of the epoch in data, its out at the end of scratch */
-    b.ne    273f
+    b.ne    274f
     cbz     x23, 41f
     ldr     x9, [x23, #16]
     cmp     x9, #8
@@ -3158,6 +3312,29 @@ LOCAL_FUNCTION node_api_run
     ldr     x9, [x23, #8]
     ldr     x1, [x23, x9]
     ldr     x10, [x24]
+    MOVQ    x11, 8 * SYNC_COMMITTEE_SIZE
+    subs    x10, x10, x11
+    b.lo    71f
+    str     x10, [x24]
+    add     x3, x24, x10
+    str     x3, [x26, #ApiView_sync_out]
+    mov     x0, x22
+    mov     x2, x24
+    FORK_CALL node_sync_committee
+    b       275f
+274: cmp    x27, #API_OP_GET_SYNC_COMMITTEE_DUTIES  /* lantern_node_sync_committee of the state's epoch, or of the next period's */
+    b.ne    273f
+    cbz     x23, 41f
+    STQ     x23, x26, ApiView_sd_ids
+    str     x22, [x26, #ApiView_val_state]
+    ldr     x1, [x22, #NODE_STATE_SLOT]
+    mov     x10, #SLOTS_PER_EPOCH
+    udiv    x1, x1, x10
+    ldr     x9, [x21, #NodeAction_arg]
+    tst     x9, #(API_VALUE_NEXT_PERIOD << 16)
+    b.eq    2741f
+    add     x1, x1, #EPOCHS_PER_SYNC_COMMITTEE_PERIOD
+2741: ldr   x10, [x24]
     MOVQ    x11, 8 * SYNC_COMMITTEE_SIZE
     subs    x10, x10, x11
     b.lo    71f
@@ -3921,6 +4098,8 @@ LOCAL_FUNCTION node_api_encode
     ldr     x11, [x3, #ApiView_is_optimistic]
     orr     x9, x9, x10, lsl #1
     orr     x9, x9, x11, lsl #2
+    LDQ     x10, x3, ApiView_next_period
+    orr     x9, x9, x10, lsl #3             /* API_VALUE_NEXT_PERIOD */
     orr     x5, x0, x2, lsl #8
     mov     x4, x1
     cmp     x0, #API_OP_GET_SPEC            /* getSpec, getDebugChainHeadsV2: no state, no bytes, no values */
@@ -3951,9 +4130,11 @@ LOCAL_FUNCTION node_api_encode
     ldr     x1, [x3, #ApiView_look_state]
     mov     x10, #API_OP_PRODUCE_ATTESTATION_DATA
     mov     x11, #API_OP_GET_ATTESTER_DUTIES
+    mov     x12, #API_OP_GET_SYNC_COMMITTEE_DUTIES
     cmp     x0, #API_OP_GET_STATE_VALIDATOR
     ccmp    x0, x10, #4, ne
     ccmp    x0, x11, #4, ne
+    ccmp    x0, x12, #4, ne
     ccmp    x0, #API_OP_GET_STATE_RANDAO, #4, ne
     ccmp    x0, #API_OP_GET_EPOCH_SYNC_COMMITTEES, #4, ne
     ldr     x9, [x3, #ApiView_look_data]
