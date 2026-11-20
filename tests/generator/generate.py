@@ -199,6 +199,8 @@ def write_descriptors(path, fork, preset):
                 continue  # a kind outside asm-ssz's scope, such as a progressive type of a later fork
     for name, t in reqresp.message_types(spec, fork).items():  # the req/resp messages of the spec's text
         types[name] = descriptor.build(t)
+    for name, t in reqresp.api_body_types(spec, fork).items():  # lantern's Beacon API request bodies
+        types[name] = descriptor.build(t)
     return write_file(path, [(name, {"descriptor": d}) for name, d in types.items()])
 
 

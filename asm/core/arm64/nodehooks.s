@@ -693,7 +693,13 @@ LOCAL_FUNCTION node_type_of_kind
     ADDRESS x0, lantern_type_SignedContributionAndProof
     cmp     x9, #NODE_JSON_CONTRIBUTION_AND_PROOF
     b.eq    9f
+    ADDRESS x0, lantern_type_SyncCommitteeSubscription
+    cmp     x9, #NODE_JSON_SYNC_SUBSCRIPTION
+    b.eq    9f
 .endif
+    ADDRESS x0, lantern_type_BeaconCommitteeSubscription
+    cmp     x9, #NODE_JSON_COMMITTEE_SUBSCRIPTION
+    b.eq    9f
 .if FORK >= FORK_BELLATRIX
     ADDRESS x0, lantern_type_SignedBlindedBeaconBlock
 .else

@@ -4565,6 +4565,7 @@ static void p2p_open_record(fc_node *n, struct p2p_net *net, const uint8_t *reco
                             uint64_t slen, const char **why);
 static void p2p_open(fc_node *n, struct p2p_net *net, const char **why) { p2p_open_record(n, net, NULL, 0, NULL, 0, why); }
 static void api_peers_check(fc_node *n, struct p2p_net *net, int outbound, const char **why);
+static void api_subscribe_check(fc_node *n, struct p2p_net *net, const char **why);
 
 /*
  * The network of a node, as p2p_open: with a record, the node gets it in a NODE_EV_ENR and must
@@ -4728,6 +4729,7 @@ static void run_node_p2p(const char *file, case_file *f) {
             if (!why && !shell_entry(s, "nfd", want, 4)) why = "the record's nfd";
 #endif
         }
+        if (!why) api_subscribe_check(&n, &net, &why);
         if (!why && rd64(s->node + rd64(s->node + 152) + 16)) why = "the node keeps libp2p events at the end"; /* Node_p2p_out: a ByteList */
         p2p_close(&net);
         shell_close(&n, anchor_block);
@@ -7900,6 +7902,97 @@ static void api_peers_check(fc_node *n, struct p2p_net *net, int outbound, const
     }
     if (!*why) *why = api_clean(s);
     if (!*why) api_peers_checked[outbound]++;
+}
+
+static int p2p_topic(struct p2p_net *net, int arg) { return net->topics >= arg; }
+static int p2p_untopic(struct p2p_net *net, int arg) { return net->untopics >= arg; }
+
+/* The subscription POST body to path, the node's answer to be 200 with no body. */
+static void api_subscribe(fc_node *n, const char *path, const char *body, uint64_t conn, const char **why) {
+    struct node_shell *s = n->shell;
+    static const char ok[] = "HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n";
+    char req[768];
+    snprintf(req, sizeof req, "POST %s HTTP/1.1\r\nHost: lantern\r\nContent-Type: application/json\r\nContent-Length: %zu\r\n\r\n%s",
+             path, strlen(body), body);
+    shell_api_ask(n, (const uint8_t *)req, strlen(req), conn, why);
+    if (!*why && (s->api.len != sizeof ok - 1 || memcmp(s->api.b, ok, sizeof ok - 1)))
+        *why = api_mismatch(s, path, (const uint8_t *)ok, sizeof ok - 1);
+    if (!*why) *why = api_clean(s);
+}
+
+/*
+ * The subscriptions (beacon-api.md, prepareBeaconCommitteeSubnet and prepareSyncCommitteeSubnets;
+ * node.md, the subscriptions), with a peer: an aggregator's subscription for the next slot on a
+ * subnet outside attnets makes the node join beacon_attestation of that subnet, one topic, and
+ * leave it once the store's slot is past that slot. From altair, a sync subscription of index 0 to
+ * the next epoch makes it join sync_committee_0, one topic, with seq_number one more, bit 0 of
+ * syncnets in its MetaData and its record; at that epoch it leaves it, with seq_number one more.
+ */
+static void api_subscribe_check(fc_node *n, struct p2p_net *net, const char **why) {
+    struct node_shell *s = n->shell;
+    uint64_t slot = 0, genesis_ms = rd64(n->store + STORE_GENESIS_TIME_MS), slot_ms = rd64(config + 104);
+    uint64_t attnets = rd64(s->node + 712), max = strcmp(PRESET, "minimal") ? 64u : 4u, c, at = 0; /* MAX_COMMITTEES_PER_SLOT */
+    char body[256];
+    if (CALL(LF(get_current_slot), n->store, &slot) != 0) {
+        *why = "subscribe: get_current_slot status";
+        return;
+    }
+    for (c = 0; c < max; c++) { /* compute_subnet_for_attestation of the next slot: one outside attnets */
+        at = (max * ((slot + 1) % SLOTS_PER_EPOCH_RUNNER) + c) % 64;
+        if (!(attnets >> at & 1)) break;
+    }
+    if (c == max) {
+        *why = "subscribe: no subnet outside attnets";
+        return;
+    }
+    snprintf(body, sizeof body,
+             "[{\"validator_index\":\"0\",\"committee_index\":\"%llu\",\"committees_at_slot\":\"%llu\",\"slot\":\"%llu\",\"is_aggregator\":true}]",
+             (unsigned long long)c, (unsigned long long)max, (unsigned long long)(slot + 1));
+    int topics = net->topics, untopics = net->untopics;
+    api_subscribe(n, "/eth/v1/validator/beacon_committee_subscriptions", body, 400, why);
+    if (!*why) p2p_run(n, net, p2p_topic, topics + 1, why);
+    if (!*why) p2p_settle(n, net, why);
+    if (!*why && (net->topics != topics + 1 || net->untopics != untopics))
+        *why = "subscribe: an aggregator's subscription: not one topic joined";
+    if (!*why) {
+        shell_event(s, EV_TICK, genesis_ms + (slot + 2) * slot_ms, NULL, 0);
+        p2p_run(n, net, p2p_untopic, untopics + 1, why);
+    }
+    if (!*why) p2p_settle(n, net, why);
+    if (!*why && (net->untopics != untopics + 1 || net->topics != topics + 1))
+        *why = "subscribe: past the aggregator's slot: not one topic left";
+#if FORK >= FORK_ALTAIR
+    uint64_t epoch = (slot + 2) / SLOTS_PER_EPOCH_RUNNER, seq = rd64(s->node + 176); /* Node_metadata_seq */
+    snprintf(body, sizeof body, "[{\"validator_index\":\"0\",\"sync_committee_indices\":[\"0\"],\"until_epoch\":\"%llu\"}]",
+             (unsigned long long)(epoch + 1));
+    topics = net->topics;
+    untopics = net->untopics;
+    if (!*why) api_subscribe(n, "/eth/v1/validator/sync_committee_subscriptions", body, 401, why);
+    if (!*why) p2p_run(n, net, p2p_topic, topics + 1, why);
+    if (!*why) p2p_settle(n, net, why);
+    if (!*why && (net->topics != topics + 1 || net->untopics != untopics))
+        *why = "subscribe: a sync subscription: not one topic joined";
+    if (!*why && rd64(s->node + 176) != seq + 1) *why = "subscribe: a sync subscription: seq_number not one more";
+    static const uint8_t one[1] = {1}, none[1] = {0};
+    if (!*why && !shell_entry(s, "syncnets", one, 1)) *why = "subscribe: a sync subscription: the record's syncnets";
+    if (!*why) { /* MetaData v2: seq_number, attnets, syncnets with bit 0 */
+        uint8_t md[17] = {0};
+        wr64(md, seq + 1);
+        wr64(md + 8, rd64(s->node + 712));
+        md[16] = 1;
+        int k = p2p_request(n, net, 4, "metadata", 2, NULL, 0, why);
+        if (!*why) p2p_check_response(net, k, md, sizeof md, "metadata of a sync subscription", why);
+    }
+    if (!*why) {
+        shell_event(s, EV_TICK, genesis_ms + (epoch + 1) * SLOTS_PER_EPOCH_RUNNER * slot_ms, NULL, 0);
+        p2p_run(n, net, p2p_untopic, untopics + 1, why);
+    }
+    if (!*why) p2p_settle(n, net, why);
+    if (!*why && (net->untopics != untopics + 1 || net->topics != topics + 1))
+        *why = "subscribe: at the sync subscription's epoch: not one topic left";
+    if (!*why && rd64(s->node + 176) != seq + 2) *why = "subscribe: at the sync subscription's epoch: seq_number not one more";
+    if (!*why && !shell_entry(s, "syncnets", none, 1)) *why = "subscribe: at the sync subscription's epoch: the record's syncnets";
+#endif
 }
 
 /*

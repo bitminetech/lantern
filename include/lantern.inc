@@ -649,7 +649,11 @@
 .set Node_event_epoch, Node_api + 56       /* the store's finalized epoch at the last finalized_checkpoint event */
 .set Node_event_votes, Node_api + 64       /* BLOCK_ATTESTATION and BLOCK_SLASHING works queued and not done */
 .set Node_pool, Node_api + 72              /* PartRef: NodePool entries, the pool */
-.set NODE_FIXED, 728 + CONFIG_SIZE + 936 + 88
+.set Node_subnets, Node_api + 88           /* the beacon_attestation subnets the node is subscribed to: attnets, and an aggregator's */
+.set Node_syncnets, Node_api + 96          /* the sync_committee subnets the node is subscribed to */
+.set Node_sync_until, Node_api + 104       /* SYNC_COMMITTEE_SUBNET_COUNT u64: each sync subnet stays below this epoch */
+.set Node_subnet_until, Node_sync_until + 8 * SYNC_COMMITTEE_SUBNET_COUNT  /* ATTESTATION_SUBNET_COUNT u64: each subnet stays below this slot */
+.set NODE_FIXED, Node_subnet_until + 8 * ATTESTATION_SUBNET_COUNT
 .set NODE_LOOKUP_MS, 10000             /* the least time between two lookups of the node */
 .set NODE_STATUS_MS, 12000             /* the least time between two Status requests of node_sync */
 .set NODE_SUBSCRIBE_AHEAD, 2           /* epochs: the topics of a new ForkDigest join this early, the old ones leave this late */
@@ -1085,6 +1089,8 @@
 .set NODE_JSON_SYNC_COMMITTEE_MESSAGE, 13 /* a SyncCommitteeMessage, from altair */
 .set NODE_JSON_SYNC_CONTRIBUTION, 14     /* a SyncCommitteeContribution, from altair */
 .set NODE_JSON_CONTRIBUTION_AND_PROOF, 15 /* a SignedContributionAndProof, from altair */
+.set NODE_JSON_COMMITTEE_SUBSCRIPTION, 16 /* lantern's BeaconCommitteeSubscription */
+.set NODE_JSON_SYNC_SUBSCRIPTION, 17     /* lantern's SyncCommitteeSubscription, from altair */
 .set NodePool_topic, 0                   /* NodePool (node.md): GOSSIP_* of the operation; 0 for a free entry */
 .set NodePool_state, 8                   /* NODE_POOL_* */
 .set NodePool_data_id, 16                /* the BufferId of its SSZ bytes */

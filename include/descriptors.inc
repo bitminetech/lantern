@@ -215,10 +215,18 @@
     \m SigningData, F_SigningData
     \m ForkData, F_ForkData
     \m DepositMessage, F_DepositMessage
+    \m BeaconCommitteeSubscription, F_BeaconCommitteeSubscription
+    .if FORK >= FORK_ALTAIR
+    \m SyncCommitteeSubscription, F_SyncCommitteeSubscription
+    .endif
+    \m ProposerPreparation, F_ProposerPreparation
     \m BlockRoots, N_Bytes32
     \m BeaconBlockRoots, N_Bytes32
     \m ErrorMessage, N_Uint8
     \m HistoricalRoots, N_Bytes32
+    .if FORK >= FORK_ALTAIR
+    \m SyncCommitteeIndices, N_Uint64
+    .endif
     \m RandaoMixes, N_Bytes32
     \m Slashings, N_Uint64
     \m Balances, N_Uint64
@@ -458,6 +466,11 @@
     \m SigningData
     \m ForkData
     \m DepositMessage
+    \m BeaconCommitteeSubscription
+    .if FORK >= FORK_ALTAIR
+    \m SyncCommitteeSubscription
+    .endif
+    \m ProposerPreparation
     \m BlockRoots
     \m Bytes32
     \m Uint64
