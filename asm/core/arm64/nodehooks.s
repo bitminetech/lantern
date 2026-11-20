@@ -700,6 +700,9 @@ LOCAL_FUNCTION node_type_of_kind
     ADDRESS x0, lantern_type_BeaconCommitteeSubscription
     cmp     x9, #NODE_JSON_COMMITTEE_SUBSCRIPTION
     b.eq    9f
+    ADDRESS x0, lantern_type_ProposerPreparation
+    cmp     x9, #NODE_JSON_PROPOSER_PREPARATION
+    b.eq    9f
 .if FORK >= FORK_BELLATRIX
     ADDRESS x0, lantern_type_SignedBlindedBeaconBlock
 .else
