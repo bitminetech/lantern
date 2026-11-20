@@ -432,6 +432,7 @@ ABI uint64_t LF(engine_new_payload_size)(const void *block, void *out);
 ABI uint64_t LF(engine_new_payload)(const void *block, const void *id, void *scratch, void *out);
 ABI uint64_t LF(engine_forkchoice_updated)(const void *state, const void *attributes, const void *id, void *out);
 ABI uint64_t LF(engine_get_payload)(const void *payload_id, const void *id, void *out);
+ABI uint64_t LF(get_payload_attributes)(const void *state, const void *fee_recipient, const void *config, void *scratch, void *out);
 #endif
 #if FORK >= FORK_ELECTRA
 ABI uint64_t LF(get_execution_requests_list)(const void *requests, void *out);
@@ -8605,6 +8606,30 @@ static void run_engine(const char *file, const char *handler, case_file *f) {
             free(value);
             free(out);
             free(small);
+        } else if (!strcmp(handler, "payload_attributes")) {
+#if FORK >= FORK_BELLATRIX
+            uint64_t flen, vsize, wl = 0;
+            const uint8_t *enc = tv_bytes(tv_get(in, "state"), &blen), *fee = tv_bytes(tv_get(in, "fee_recipient"), &flen);
+            const char *dwhy = NULL;
+            uint8_t *state = decode(type_by_name("BeaconState"), enc, blen, &vsize, &dwhy);
+            if (!state) {
+                report(file, name, len, 0, dwhy);
+                continue;
+            }
+            const uint8_t *w = is_text(want, "invalid") ? NULL : tv_bytes(want, &wl);
+            size = w ? wl : 104 + 44 * 16; /* the attributes' bytes: 104 and 44 a withdrawal */
+            uint8_t *out = buffer(size);
+            st = CALL(LF(get_payload_attributes), state, fee, config, fresh_scratch(), out);
+            if (!w) {
+                if (st < 2) why = "status";
+            } else if (st) why = "status";
+            else if (memcmp(out, w, (size_t)wl)) why = "attributes differ";
+            else if (!guard_ok(out, size)) why = "wrote past out";
+            free(state);
+            free(out);
+#else
+            why = "no such handler";
+#endif
         } else if (!strcmp(handler, "get_execution_requests")) {
 #if FORK >= FORK_ELECTRA
             uint64_t lsize, wl = 0;
