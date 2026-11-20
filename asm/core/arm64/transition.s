@@ -10,13 +10,24 @@
  * Locals: L epoch, L+8 proposer index, L+16 domain type, L+24 domain (32),
  * L+56 signing root as a ByteList (56), L+112 sha256(reveal), L+144 mix.
  */
-SPEC_FUNCTION process_randao
+SPEC_LEAF process_randao
+    mov     x5, #0
+    b       randao_step
+SPEC_END process_randao
+
+/*
+ * (state, body, config, scratch, result, skip x5): process_randao; with skip 1, no check of the
+ * reveal's signature (block production with skip_randao_verification, block-processing.md).
+ * x19 state, x20 body, x21 config, x22 scratch, x23 result, x24 the proposer, x25 skip.
+ */
+LOCAL_FUNCTION randao_step
     ENTER 176
     mov     x19, x0
     mov     x20, x1
     mov     x21, x2
     mov     x22, x3
     mov     x23, x4
+    mov     x25, x5
 .if FORK >= FORK_FULU
     NEED_SCRATCH x22, x19, 0, 9f
 .else
@@ -64,6 +75,7 @@ SPEC_FUNCTION process_randao
     add     x4, sp, #(L + 80)
     bl      lantern_compute_signing_root
     cbnz    x0, 7f
+    cbnz    x25, 3f                         /* skip: no check of the reveal's signature */
     add     x0, x24, #Validator_pubkey      /* assert bls.Verify(proposer.pubkey, signing_root, body.randao_reveal) */
     add     x1, x20, #BeaconBlockBody_randao_reveal
     add     x2, sp, #(L + 56)
@@ -72,7 +84,7 @@ SPEC_FUNCTION process_randao
     cbnz    x0, 7f
     mov     x0, #LANTERN_INVALID_RANDAO_REVEAL
     cbz     x1, 6f
-    add     x0, x20, #BeaconBlockBody_randao_reveal     /* mix = xor(get_randao_mix(state, epoch), sha256(randao_reveal)) */
+3:  add     x0, x20, #BeaconBlockBody_randao_reveal     /* mix = xor(get_randao_mix(state, epoch), sha256(randao_reveal)) */
     mov     x1, #96
     add     x2, sp, #(L + 112)
     bl      sha256_short
@@ -94,7 +106,7 @@ SPEC_FUNCTION process_randao
     LEAVE 176
 9:  mov     x0, #LANTERN_BUFFER_TOO_SMALL
     LEAVE 176
-SPEC_END process_randao
+END_FUNCTION randao_step
 
 /* x19 state, x20 body, x21 result. */
 SPEC_FUNCTION process_eth1_data
@@ -510,7 +522,9 @@ SPEC_FUNCTION process_block
     mov     x2, x22
     mov     x3, x23
     mov     x4, x24
-    bl      lantern_process_randao
+    ldr     x5, [x21]                       /* bit 1 of execution_valid: no check of the reveal's signature */
+    ubfx    x5, x5, #1, #1
+    bl      randao_step
     BLOCK_STEP
     str     x26, [x23]
     mov     x0, x19

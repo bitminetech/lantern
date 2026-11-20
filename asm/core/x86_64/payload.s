@@ -261,10 +261,10 @@ SPEC_FUNCTION process_execution_payload
     cmp     %rdx, %rcx
     ja      6f
 .endif
-    mov     S7(%rsp), %rcx                  # assert execution_engine.verify_and_notify_new_payload(...)
+    mov     S7(%rsp), %rcx                  # assert execution_engine.verify_and_notify_new_payload(...): bit 0
     mov     $LANTERN_INVALID_PAYLOAD, %eax
-    cmpq    $0, (%rcx)
-    je      6f
+    testq   $1, (%rcx)
+    jz      6f
     # The new header, built in scratch before the state changes.
     mov     S9(%rsp), %rax
     sub     $HEADER_ROOM, %rax

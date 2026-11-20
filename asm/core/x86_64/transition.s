@@ -10,13 +10,24 @@
  * Locals: L epoch, L+8 proposer index, L+16 domain type, L+24 domain (32),
  * L+56 signing root as a ByteList (56), L+112 sha256(reveal), L+144 mix.
  */
-SPEC_FUNCTION process_randao
+SPEC_LEAF process_randao
+    xor     %r9d, %r9d
+    jmp     randao_step
+SPEC_END process_randao
+
+/*
+ * (state, body, config, scratch, result, skip r9): process_randao; with skip 1, no check of the
+ * reveal's signature (block production with skip_randao_verification, block-processing.md).
+ * rbx state, rbp body, r12 config, r13 scratch, r14 result, r15 the proposer; S7 skip.
+ */
+LOCAL_FUNCTION randao_step
     ENTER 176
     mov     %rdi, %rbx
     mov     %rsi, %rbp
     mov     %rdx, %r12
     mov     %rcx, %r13
     mov     %r8, %r14
+    mov     %r9, S7(%rsp)
 .if FORK >= FORK_FULU
     NEED_SCRATCH %r13, %rbx, 0, 9f
 .else
@@ -65,6 +76,8 @@ SPEC_FUNCTION process_randao
     call    lantern_compute_signing_root
     test    %rax, %rax
     jnz     7f
+    cmpq    $0, S7(%rsp)                    # skip: no check of the reveal's signature
+    jne     3f
     lea     Validator_pubkey(%r15), %rdi    # assert bls.Verify(proposer.pubkey, signing_root, body.randao_reveal)
     lea     BeaconBlockBody_randao_reveal(%rbp), %rsi
     lea     (L + 56)(%rsp), %rdx
@@ -75,7 +88,7 @@ SPEC_FUNCTION process_randao
     mov     $LANTERN_INVALID_RANDAO_REVEAL, %eax
     test    %rdx, %rdx
     jz      6f
-    lea     BeaconBlockBody_randao_reveal(%rbp), %rdi   # mix = xor(get_randao_mix(state, epoch), sha256(randao_reveal))
+3:  lea     BeaconBlockBody_randao_reveal(%rbp), %rdi   # mix = xor(get_randao_mix(state, epoch), sha256(randao_reveal))
     mov     $96, %esi
     lea     (L + 112)(%rsp), %rdx
     call    sha256_short
@@ -97,7 +110,7 @@ SPEC_FUNCTION process_randao
     LEAVE 176
 9:  mov     $LANTERN_BUFFER_TOO_SMALL, %eax
     LEAVE 176
-SPEC_END process_randao
+END_FUNCTION randao_step
 
 /* rbx state, rbp body, r12 result. */
 SPEC_FUNCTION process_eth1_data
@@ -523,7 +536,11 @@ SPEC_FUNCTION process_block
     mov     %r12, %rdx
     mov     %r13, %rcx
     mov     %r14, %r8
-    call    lantern_process_randao
+    mov     S7(%rsp), %r9                   # bit 1 of execution_valid: no check of the reveal's signature
+    mov     (%r9), %r9
+    shr     $1, %r9
+    and     $1, %r9d
+    call    randao_step
     BLOCK_STEP
     SCRATCH_RESET
     mov     %rbx, %rdi
