@@ -1500,6 +1500,8 @@ LOCAL_FUNCTION app_work
     beq     s8, t0, 2f
     li      t0, NODE_WORK_API_CHUNK
     beq     s8, t0, 2f
+    li      t0, NODE_WORK_API_EVENT
+    beq     s8, t0, 2f
     li      t0, NODE_WORK_GOSSIP            # GOSSIP: the Seen, and the proposer state
     beq     s8, t0, 3f
     li      t0, NODE_WORK_TARGET_STATE      # TARGET_STATE, SLOTS, and IMPORT_BLOCK with store room: state_a

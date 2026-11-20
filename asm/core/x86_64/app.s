@@ -1529,6 +1529,8 @@ LOCAL_FUNCTION app_work
     je      2f
     cmp     $NODE_WORK_API_CHUNK, %rcx
     je      2f
+    cmp     $NODE_WORK_API_EVENT, %rcx
+    je      2f
     cmp     $NODE_WORK_GOSSIP, %rcx         # GOSSIP: the Seen, and the proposer state
     je      3f
     cmp     $NODE_WORK_TARGET_STATE, %rcx   # TARGET_STATE, SLOTS, and IMPORT_BLOCK with store room: state_a

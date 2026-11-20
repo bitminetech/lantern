@@ -19,8 +19,8 @@ ASSERTOOR_IMAGE = "ethpandaops/assertoor:v0.1.2@sha256:aba67ca18ea77bece68abe1cc
 # that read the Beacon API (Assertoor's tasks of v0.1.2), each over lantern.
 ASSERTOOR_CONFIG = """endpoints:
 - name: "lantern"
-  consensusUrl: "LANTERN_URL"
-  executionUrl: "EL_URL"
+  consensusUrl: "{{ .LanternURL }}"
+  executionUrl: "{{ .ElURL }}"
 web:
   server:
     host: "0.0.0.0"
@@ -155,10 +155,12 @@ def run(plan, args={}):
         ),
     )
     if lantern_assertoor:
-        config = ASSERTOOR_CONFIG.replace("LANTERN_URL", "http://{0}:5052".format(lantern.ip_address))
-        config = config.replace("EL_URL", out.all_participants[0].el_context.rpc_http_url)
+        data = {
+            "LanternURL": "http://{0}:5052".format(lantern.ip_address),
+            "ElURL": out.all_participants[0].el_context.rpc_http_url,
+        }
         files = plan.render_templates(
-            config={"assertoor.yaml": struct(template=config, data={})},
+            config={"assertoor.yaml": struct(template=ASSERTOOR_CONFIG, data=data)},
             name="lantern_assertoor_config",
         )
         plan.add_service(

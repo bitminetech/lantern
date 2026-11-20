@@ -2496,7 +2496,7 @@ enum { ACT_BYTES_PUT = 1, ACT_STATE_COPY, ACT_STATE_FREE, ACT_BYTES_FREE, ACT_WO
 #define NODE_DB_SEGMENTS 256 /* the segments one node's runner keeps */
 enum { WORK_IMPORT_BLOCK = 1, WORK_JUSTIFIED_STATE, WORK_TARGET_STATE, WORK_ATTESTATION, WORK_ATTESTER_SLASHING, WORK_SERVE, WORK_GOSSIP,
        WORK_SYNC_BLOCK, WORK_BLOB, WORK_NEW_PAYLOAD, WORK_FORKCHOICE, WORK_SLOTS, WORK_UPGRADE, WORK_REPLAY, WORK_BACKFILL,
-       WORK_BLOCK_ATTESTATION, WORK_BLOCK_SLASHING, WORK_GOSSIP_VOTE, WORK_API_ENCODE, WORK_API_CHUNK };
+       WORK_BLOCK_ATTESTATION, WORK_BLOCK_SLASHING, WORK_GOSSIP_VOTE, WORK_API_ENCODE, WORK_API_CHUNK, WORK_API_LOOKUP, WORK_API_EVENT };
 #define EV_API_BYTES (128 + 616) /* NodeEvent_api_bytes: the chunk's ByteList in the WORK_DONE of an API_CHUNK */
 #define NODE_API_CHUNK 65536
 #define NODE_API_PART (728 + CONFIG_SIZE + 936) /* Node_api: the PartRef of the NodeApi entries */
@@ -2947,7 +2947,8 @@ static void shell_work(fc_node *n, const uint8_t *work, const char **why) {
         free(sa);
         if (st != 1 || *why) break;
         /* BUFFER_TOO_SMALL: the event of a SERVE, the store for a node or for the justified balances, else the state's lists. */
-        if (kind == WORK_SERVE || kind == WORK_NEW_PAYLOAD || kind == WORK_FORKCHOICE || kind == WORK_API_ENCODE) {
+        if (kind == WORK_SERVE || kind == WORK_NEW_PAYLOAD || kind == WORK_FORKCHOICE || kind == WORK_API_ENCODE ||
+            kind == WORK_API_EVENT) {
             free(ev);
             ev_size *= 4;
             ev = buffer(ev_size);
@@ -2989,7 +2990,7 @@ static void shell_work(fc_node *n, const uint8_t *work, const char **why) {
     if (!*why && (esize < EV_WORK_DONE_SIZE || esize > ev_size || esize % 8 || rd64(ev + 8) != EV_WORK_DONE ||
                   memcmp(ev + 16, work + 16, 56) ||
                   (kind != WORK_SERVE && kind != WORK_NEW_PAYLOAD && kind != WORK_FORKCHOICE && kind != WORK_API_ENCODE &&
-                   kind != WORK_API_CHUNK && esize != EV_WORK_DONE_SIZE)))
+                   kind != WORK_API_CHUNK && kind != WORK_API_EVENT && esize != EV_WORK_DONE_SIZE)))
         *why = "lantern_node_run: the event is not the WORK_DONE of the work";
     if (!*why) {
         uint64_t result = rd64(ev + EV_RESULT);

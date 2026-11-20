@@ -1416,6 +1416,8 @@ LOCAL_FUNCTION app_work
     b.eq    2f
     cmp     x26, #NODE_WORK_API_CHUNK
     b.eq    2f
+    cmp     x26, #NODE_WORK_API_EVENT
+    b.eq    2f
     cmp     x26, #NODE_WORK_GOSSIP          /* GOSSIP: the Seen, and the proposer state */
     b.eq    3f
     cmp     x26, #NODE_WORK_TARGET_STATE    /* TARGET_STATE, SLOTS, and IMPORT_BLOCK with store room: state_a */
