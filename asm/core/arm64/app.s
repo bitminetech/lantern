@@ -2299,11 +2299,26 @@ LOCAL_FUNCTION app_actions
     bl      app_state_bytes
     b       8f
 13: cmp     x9, #NODE_ACT_BYTES_PUT
-    b.ne    2f
+    b.ne    131f
     add     x0, x20, #24                    /* BYTES_PUT: a copy of the ByteList */
     ldr     x1, [x20, #24]
     bl      app_dup
     cbz     x0, 8f
+    mov     x1, x0
+    ldr     x0, [x20, #16]
+    ldr     x2, [x20, #24]
+    bl      app_buf_add
+    b       8f
+131: cmp    x9, #NODE_ACT_BYTES_NEW
+    b.ne    2f
+    ldr     x0, [x20, #24]                  /* BYTES_NEW: a ByteList of the size, its bytes zero */
+    bl      app_map
+    cbz     x0, 8f
+    ldr     x9, [x20, #24]
+    sub     x10, x9, #24
+    mov     x11, #24
+    str     x9, [x0]
+    stp     x11, x10, [x0, #8]
     mov     x1, x0
     ldr     x0, [x20, #16]
     ldr     x2, [x20, #24]

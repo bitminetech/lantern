@@ -710,6 +710,14 @@ LOCAL_FUNCTION node_type_of_kind
     ADDRESS a0, lantern_type_ProposerPreparation
     li      t1, NODE_JSON_PROPOSER_PREPARATION
     beq     t0, t1, 9f
+    ADDRESS a0, lantern_type_BeaconBlock
+    li      t1, NODE_JSON_BEACON_BLOCK
+    beq     t0, t1, 9f
+.if FORK >= FORK_DENEB
+    ADDRESS a0, lantern_type_BlockContents
+    li      t1, NODE_JSON_BLOCK_CONTENTS
+    beq     t0, t1, 9f
+.endif
 .if FORK >= FORK_BELLATRIX
     ADDRESS a0, lantern_type_SignedBlindedBeaconBlock
 .else
@@ -2343,4 +2351,1571 @@ SPEC_FUNCTION node_new_payload
 99: sd      s10, 0(s3)
     LEAVE 16
 SPEC_END node_new_payload
+.endif
+
+/* SSZ bytes have no alignment: these read and write their integers a byte at a time. */
+/* reg = the u32 at base + off. Uses tmp. */
+.macro LWB reg, base, off, tmp
+    lbu     \reg, (\off)(\base)
+    lbu     \tmp, ((\off) + 1)(\base)
+    slli    \tmp, \tmp, 8
+    or      \reg, \reg, \tmp
+    lbu     \tmp, ((\off) + 2)(\base)
+    slli    \tmp, \tmp, 16
+    or      \reg, \reg, \tmp
+    lbu     \tmp, ((\off) + 3)(\base)
+    slli    \tmp, \tmp, 24
+    or      \reg, \reg, \tmp
+.endm
+/* reg = the u64 at base + off. Uses tmp, tmp2. */
+.macro LDB reg, base, off, tmp, tmp2
+    LWB     \reg, \base, \off, \tmp
+    LWB     \tmp2, \base, (\off) + 4, \tmp
+    slli    \tmp2, \tmp2, 32
+    or      \reg, \reg, \tmp2
+.endm
+/* The u32 reg at base + off. Uses tmp. */
+.macro SWB reg, base, off, tmp
+    sb      \reg, (\off)(\base)
+    srli    \tmp, \reg, 8
+    sb      \tmp, ((\off) + 1)(\base)
+    srli    \tmp, \reg, 16
+    sb      \tmp, ((\off) + 2)(\base)
+    srli    \tmp, \reg, 24
+    sb      \tmp, ((\off) + 3)(\base)
+.endm
+
+/*
+ * (state, request, scratch, out): node.md, lantern_node_produce_check. s1 state, s2 request, s3
+ * scratch, s4 out, s5 the scratch size, s6 the proposer's Validator. Locals: L epoch, L+8 the
+ * proposer, L+16 domain type, L+24 domain (32), L+56 the signing root after a ByteList header (56).
+ */
+SPEC_FUNCTION node_produce_check
+    ENTER 112
+    mv      s1, a0
+    mv      s2, a1
+    mv      s3, a2
+    mv      s4, a3
+.if FORK >= FORK_FULU
+    NEED_SCRATCH s3, s1, 0, 9f
+.else
+    NEED_SCRATCH s3, s1, 2, 9f                  # get_beacon_proposer_index takes S(2)
+.endif
+    ld      s5, 0(s3)
+    mv      a0, s1
+    addi    a1, sp, L
+    call    lantern_get_current_epoch
+    mv      a0, s1
+.if FORK >= FORK_FULU
+    addi    a1, sp, (L + 8)
+    call    lantern_get_beacon_proposer_index
+.else
+    mv      a1, s3
+    addi    a2, sp, (L + 8)
+    call    lantern_get_beacon_proposer_index
+    sd      s5, 0(s3)
+.endif
+    bnez    a0, 7f
+    ld      t0, (L + 8)(sp)
+    sd      t0, 0(s4)
+    ld      t0, 128(s2)                     # skip_randao_verification: the point at infinity
+    beqz    t0, 1f
+    lbu     t0, 0(s2)
+    li      t1, 0xc0
+    bne     t0, t1, 5f
+    li      t1, 1
+2:  add     t2, s2, t1
+    lbu     t0, 0(t2)
+    bnez    t0, 5f
+    addi    t1, t1, 1
+    li      t2, 96
+    bltu    t1, t2, 2b
+    j       3f
+1:  ld      t0, (L + 8)(sp)                 # else the check of process_randao, no mix
+    PART    s6, t1, s1, BeaconState_validators
+    li      a0, LANTERN_INVALID_VALIDATOR_INDEX
+    bgeu    t0, t1, 7f
+    slli    t0, t0, 7
+    add     s6, s6, t0
+    li      t0, DOMAIN_RANDAO
+    sw      t0, (L + 16)(sp)
+    mv      a0, s1
+    addi    a1, sp, (L + 16)
+    addi    a2, sp, L
+    mv      a3, s3
+    addi    a4, sp, (L + 24)
+    call    lantern_get_domain
+    bnez    a0, 7f
+    ADDRESS a0, lantern_type_Uint64
+    addi    a1, sp, L
+    addi    a2, sp, (L + 24)
+    mv      a3, s3
+    addi    a4, sp, (L + 80)
+    call    lantern_compute_signing_root
+    bnez    a0, 7f
+    addi    a0, s6, Validator_pubkey
+    mv      a1, s2
+    addi    a2, sp, (L + 56)
+    mv      a3, s3
+    call    verify_root_signature
+    bnez    a0, 7f
+    beqz    a1, 5f
+3:
+.if FORK < FORK_ELECTRA
+    LDQ     t0, s1, BeaconState_eth1_data + Eth1Data_deposit_count     # deposits the block would need
+    LDQ     t1, s1, BeaconState_eth1_deposit_index
+    bgtu    t0, t1, 6f
+.elseif FORK == FORK_ELECTRA
+    LDQ     t0, s1, BeaconState_eth1_data + Eth1Data_deposit_count     # get_eth1_pending_deposit_count
+    LDQ     t2, s1, BeaconState_deposit_requests_start_index
+    bltu    t0, t2, 31f
+    mv      t0, t2
+31: LDQ     t1, s1, BeaconState_eth1_deposit_index
+    bltu    t1, t0, 6f
+.endif
+    li      a0, LANTERN_OK
+7:  LEAVE 112
+5:  li      a0, LANTERN_INVALID_RANDAO_REVEAL
+    LEAVE 112
+6:  li      a0, LANTERN_INVALID_DEPOSITS
+    LEAVE 112
+9:  li      a0, LANTERN_BUFFER_TOO_SMALL
+    LEAVE 112
+SPEC_END node_produce_check
+
+.if FORK >= FORK_BELLATRIX
+/* (json, scratch, out, fault): node.md, lantern_node_payload_result. */
+SPEC_FUNCTION node_payload_result
+    FRAME 0
+    mv      a4, a3
+    mv      a3, a2
+    mv      a2, a1
+    mv      a1, a0
+.if FORK == FORK_BELLATRIX
+    ADDRESS a0, lantern_type_ExecutionPayload
+.else
+    ADDRESS a0, lantern_type_GetPayloadResult
+.endif
+    CALL_GLOBAL lantern_engine_json_decode
+    UNFRAME 0
+SPEC_END node_payload_result
+.endif
+
+/*
+ * (state, entry, draft, arg, scratch): node.md, lantern_node_produce_fold. s1 state, s2 the
+ * entry's bytes, s3 their count, s4 the draft, s5 arg, s6 scratch, s7 the topic, s8 the entry's
+ * fork, s9 an aggregate, s10 the place. Locals: L data, L+8 signature, L+16 length, L+24 the
+ * committee index, L+40 the parent root (32). An Attestation's data is 4-aligned only.
+ */
+SPEC_FUNCTION node_produce_fold
+    ENTER 96
+    mv      s1, a0
+    ld      t0, 8(a1)
+    ld      s3, 16(a1)
+    add     s2, a1, t0
+    ld      t0, 8(a2)
+    add     s4, a2, t0
+    mv      s5, a3
+    mv      s6, a4
+    andi    s7, s5, 0xff
+    srli    s8, s5, 8
+    andi    s8, s8, 0xff
+    li      t0, GOSSIP_BEACON_ATTESTATION
+    beq     s7, t0, 100f
+.if FORK >= FORK_ALTAIR
+    li      t0, GOSSIP_SYNC_COMMITTEE
+    beq     s7, t0, 200f
+.endif
+    li      t2, MAX_VOLUNTARY_EXITS         # an operation: a record, while its kind has room
+    li      t0, GOSSIP_VOLUNTARY_EXIT
+    beq     s7, t0, 1f
+    li      t2, MAX_PROPOSER_SLASHINGS
+    li      t0, GOSSIP_PROPOSER_SLASHING
+    beq     s7, t0, 1f
+.if FORK >= FORK_CAPELLA
+    li      t2, MAX_BLS_TO_EXECUTION_CHANGES
+    li      t0, GOSSIP_BLS_TO_EXECUTION_CHANGE
+    beq     s7, t0, 1f
+.endif
+    li      t0, GOSSIP_ATTESTER_SLASHING
+    bne     s7, t0, 8f
+    li      t0, FORK_ELECTRA                # an attester slashing of the fork's type
+.if FORK >= FORK_ELECTRA
+    bltu    s8, t0, 8f
+    li      t2, MAX_ATTESTER_SLASHINGS_ELECTRA
+.else
+    bgeu    s8, t0, 8f
+    li      t2, MAX_ATTESTER_SLASHINGS
+.endif
+1:  ld      t3, ProduceDraft_ops(s4)
+    ADDQ    t4, s4, PRODUCE_DRAFT_OPS
+    add     t5, t4, t3                      # the end of the records
+    li      t1, 0
+2:  bgeu    t4, t5, 3f                      # the records of the topic
+    ld      t0, 0(t4)
+    bne     t0, s7, 21f
+    addi    t1, t1, 1
+21: ld      t0, 8(t4)
+    addi    t0, t0, (16 + 7)
+    andi    t0, t0, -8
+    add     t4, t4, t0
+    j       2b
+3:  bgeu    t1, t2, 8f
+    li      t0, GOSSIP_ATTESTER_SLASHING    # the clashes, with the kinds folded before
+    bne     s7, t0, 4f
+    mv      a0, s2
+    mv      a1, s3
+    ADDQ    a2, s4, PRODUCE_DRAFT_OPS
+    mv      a3, t5
+    call    produce_takes_slashing
+    beqz    a0, 8f
+4:  li      t0, GOSSIP_VOLUNTARY_EXIT
+    bne     s7, t0, 5f
+    ld      a0, 8(s2)
+    ADDQ    a1, s4, PRODUCE_DRAFT_OPS
+    ld      a2, ProduceDraft_ops(s4)
+    add     a2, a1, a2
+    call    produce_slashed
+    bnez    a0, 8f
+5:  ld      t3, ProduceDraft_ops(s4)
+    ADDQ    t4, s4, PRODUCE_DRAFT_OPS
+    add     t5, t4, t3                      # the record's place
+    addi    t0, s3, (16 + 7)
+    andi    t0, t0, -8
+    add     t0, t3, t0
+    li      t1, PRODUCE_DRAFT_OPS_ROOM
+    bgtu    t0, t1, 8f
+    sd      s7, 0(t5)
+    sd      s3, 8(t5)
+    sd      t0, ProduceDraft_ops(s4)
+    addi    a0, t5, 16
+    mv      a1, s2
+    mv      a2, s3
+    call    lantern_copy
+    li      a0, LANTERN_OK
+    LEAVE 96
+8:  li      a0, LANTERN_INVALID_ENCODING    # left out
+    LEAVE 96
+9:  li      a0, LANTERN_BUFFER_TOO_SMALL
+    LEAVE 96
+
+    /* An attestation of the fork's type: its data, signature, committee, length and place. */
+100: li     t0, FORK_ELECTRA
+.if FORK >= FORK_ELECTRA
+    bltu    s8, t0, 8b
+    li      t0, 240                         # a SingleAttestation: committee_index 0, data at 16, signature at 144
+    bne     s3, t0, 8b
+    addi    t0, s2, 16
+    sd      t0, L(sp)
+    addi    t0, s2, 144
+    sd      t0, (L + 8)(sp)
+    ld      t0, 0(s2)
+    sd      t0, (L + 24)(sp)
+    srli    t0, s5, 16                      # member: the place, + 2^16 x the length
+    slli    s10, t0, 48
+    srli    s10, s10, 48
+    srli    t0, t0, 16
+    sd      t0, (L + 16)(sp)
+    ld      t0, (16 + 8)(s2)                # data.index 0
+    bnez    t0, 8b
+.else
+    bgeu    s8, t0, 8b
+    li      t0, (228 + 1)                   # an Attestation: offset 228, data at 4, signature at 132, its bits
+    bltu    s3, t0, 8b
+    li      t0, (228 + MAX_VALIDATORS_PER_COMMITTEE / 8 + 1)
+    bgtu    s3, t0, 8b
+    lwu     t0, 0(s2)
+    li      t1, 228
+    bne     t0, t1, 8b
+    addi    t0, s2, 4
+    sd      t0, L(sp)
+    addi    t0, s2, 132
+    sd      t0, (L + 8)(sp)
+    LDU64   t0, s2, (4 + 8), t1
+    sd      t0, (L + 24)(sp)
+    addi    t1, s2, 228                     # the bits
+    addi    t2, s3, -229                    # the last byte: its highest bit is the length's
+    add     t0, t1, t2
+    lbu     t3, 0(t0)
+    beqz    t3, 8b
+    li      t4, -1
+109: beqz   t3, 108f
+    srli    t3, t3, 1
+    addi    t4, t4, 1
+    j       109b
+108: slli   t2, t2, 3
+    add     t4, t4, t2
+    sd      t4, (L + 16)(sp)
+    li      s10, 0                          # the place: the first bit set
+101: bgeu   s10, t4, 8b
+    srli    t0, s10, 3
+    add     t0, t1, t0
+    lbu     t0, 0(t0)
+    andi    t2, s10, 7
+    srl     t0, t0, t2
+    andi    t0, t0, 1
+    bnez    t0, 102f
+    addi    s10, s10, 1
+    j       101b
+102:
+.endif
+    ld      t4, (L + 16)(sp)
+    li      t0, MAX_VALIDATORS_PER_COMMITTEE
+    bgtu    t4, t0, 8b
+    bgeu    s10, t4, 8b
+    ld      t1, L(sp)                       # process_attestation's checks of slot, target and source
+    LDU64   t2, t1, 0, t0                   # data.slot
+    LDU64   t3, t1, 88, t0                  # target.epoch
+    LDQ     t4, s1, BeaconState_slot
+    li      t0, SLOTS_PER_EPOCH
+    divu    t5, t4, t0                      # the current epoch
+    divu    t6, t2, t0
+    bne     t6, t3, 8b
+    beq     t3, t5, 103f
+    beqz    t5, 8b
+    addi    t6, t5, -1
+    bne     t3, t6, 8b
+103: addi   t6, t2, MIN_ATTESTATION_INCLUSION_DELAY
+    bgtu    t6, t4, 8b
+.if FORK < FORK_DENEB
+    addi    t6, t2, SLOTS_PER_EPOCH
+    bgtu    t4, t6, 8b
+.endif
+    ADDQ    t6, s1, BeaconState_current_justified_checkpoint
+    beq     t3, t5, 104f
+    ADDQ    t6, s1, BeaconState_previous_justified_checkpoint
+104: addi   t1, t1, 48                      # source: epoch, root
+    LDU64   t0, t1, 0, t2
+    ld      t2, 0(t6)
+    bne     t0, t2, 8b
+    addi    t1, t1, 8
+    addi    t6, t6, 8
+    NE32W   t1, t6, 8b
+    ADDQ    s9, s4, PRODUCE_DRAFT_AGGREGATES  # its aggregate: of the same data and committee
+    ld      t2, ProduceDraft_aggregates(s4)
+    li      t3, 0
+105: bgeu   t3, t2, 110f
+    ld      t0, DraftAggregate_committee_index(s9)
+    ld      t1, (L + 24)(sp)
+    bne     t0, t1, 107f
+    ld      t4, L(sp)
+    li      t5, 0
+106: add    t0, s9, t5
+    lwu     t0, 0(t0)
+    add     t1, t4, t5
+    lwu     t1, 0(t1)
+    bne     t0, t1, 107f
+    addi    t5, t5, 4
+    li      t0, 128
+    bltu    t5, t0, 106b
+    j       120f
+107: li     t0, DraftAggregate__mem
+    add     s9, s9, t0
+    addi    t3, t3, 1
+    j       105b
+110: li     t0, PRODUCE_DRAFT_AGGREGATE_COUNT  # a new aggregate: its data, committee, length, order, signature
+    bgeu    t2, t0, 8b
+    addi    t0, t2, 1
+    sd      t0, ProduceDraft_aggregates(s4)
+    mv      a0, s9
+    ld      a1, L(sp)
+    li      a2, 128
+    call    lantern_copy
+    ld      t0, (L + 24)(sp)
+    sd      t0, DraftAggregate_committee_index(s9)
+    ld      t0, (L + 16)(sp)
+    sd      t0, DraftAggregate_length(s9)
+    ld      t0, ProduceDraft_aggregates(s4)
+    addi    t0, t0, -1
+    sd      t0, DraftAggregate_order(s9)
+    ADDQ    a0, s9, DraftAggregate_signature
+    ld      a1, (L + 8)(sp)
+    li      a2, 96
+    call    lantern_copy
+    j       130f
+120: ld     t0, DraftAggregate_length(s9)   # the same length, a place not taken, the signatures added
+    ld      t1, (L + 16)(sp)
+    bne     t0, t1, 8b
+    ADDQ    t1, s9, DraftAggregate_bits
+    srli    t2, s10, 3
+    add     t2, t1, t2
+    lbu     t2, 0(t2)
+    andi    t3, s10, 7
+    srl     t2, t2, t3
+    andi    t2, t2, 1
+    bnez    t2, 8b
+    ADDQ    a0, s9, DraftAggregate_signature
+    ld      a1, (L + 8)(sp)
+    mv      a2, s6
+    call    produce_add_signature
+    li      t0, LANTERN_BUFFER_TOO_SMALL
+    beq     a0, t0, 9b
+    bnez    a0, 8b
+130: ADDQ   t1, s9, DraftAggregate_bits     # its place's bit
+    srli    t2, s10, 3
+    add     t2, t1, t2
+    lbu     t3, 0(t2)
+    andi    t4, s10, 7
+    li      t5, 1
+    sll     t5, t5, t4
+    or      t3, t3, t5
+    sb      t3, 0(t2)
+    li      a0, LANTERN_OK
+    LEAVE 96
+
+.if FORK >= FORK_ALTAIR
+    /*
+     * A SyncCommitteeMessage of the state's slot - 1 and the block's parent root: each place of its
+     * validator's public key in the state's current_sync_committee not set yet, its signature added.
+     */
+200: li     t0, 144
+    bne     s3, t0, 8b
+    ld      t0, 0(s2)
+    addi    t0, t0, 1
+    LDQ     t1, s1, BeaconState_slot
+    bne     t0, t1, 8b
+    ADDRESS a0, lantern_type_BeaconBlockHeader  # the parent root: hash_tree_root(state.latest_block_header)
+    ADDQ    a1, s1, BeaconState_latest_block_header
+    mv      a2, s6
+    addi    a3, sp, (L + 40)
+    CALL_GLOBAL ssz_hash_tree_root
+    bnez    a0, 9b
+    addi    t0, s2, 8
+    addi    t1, sp, (L + 40)
+    NE32    t0, t1, 8b
+    ld      t0, 40(s2)                      # its validator's public key
+    PART    t1, t2, s1, BeaconState_validators
+    bgeu    t0, t2, 8b
+    slli    t0, t0, 7
+    add     s9, t1, t0
+    ADDQ    s9, s9, Validator_pubkey
+    ADDQ    s8, s1, BeaconState_current_sync_committee + SyncCommittee_pubkeys
+    li      s10, 0
+201: li     t0, SYNC_COMMITTEE_SIZE
+    bgeu    s10, t0, 209f
+    li      t0, 48
+    mul     t1, s10, t0
+    add     t1, t1, s8
+    li      t2, 0
+202: add    t3, t1, t2
+    ld      t3, 0(t3)
+    add     t4, s9, t2
+    ld      t4, 0(t4)
+    bne     t3, t4, 208f
+    addi    t2, t2, 8
+    li      t0, 48
+    bltu    t2, t0, 202b
+    addi    t1, s4, ProduceDraft_sync_bits  # a place: set, the signature added
+    srli    t2, s10, 3
+    add     t2, t1, t2
+    lbu     t3, 0(t2)
+    andi    t4, s10, 7
+    srl     t5, t3, t4
+    andi    t5, t5, 1
+    bnez    t5, 208f
+    li      t5, 1
+    sll     t5, t5, t4
+    or      t3, t3, t5
+    sb      t3, 0(t2)
+    ld      t0, ProduceDraft_sync_set(s4)
+    bnez    t0, 203f
+    li      t0, 1
+    sd      t0, ProduceDraft_sync_set(s4)
+    ADDQ    a0, s4, ProduceDraft_sync_signature
+    addi    a1, s2, 48
+    li      a2, 96
+    call    lantern_copy
+    j       208f
+203: ADDQ   a0, s4, ProduceDraft_sync_signature
+    addi    a1, s2, 48
+    mv      a2, s6
+    call    produce_add_signature
+    li      t0, LANTERN_BUFFER_TOO_SMALL
+    beq     a0, t0, 9b
+208: addi   s10, s10, 1
+    j       201b
+209: li     a0, LANTERN_OK
+    LEAVE 96
+.endif
+SPEC_END node_produce_fold
+
+/*
+ * L1: the signature a1 added to the aggregate a0 with crypto_bls_aggregate, through a list of the
+ * two at the end of scratch a2: a0 = LANTERN_OK, a status of crypto_bls_aggregate, or
+ * LANTERN_BUFFER_TOO_SMALL. Locals: F the aggregate, F+8 the signature, F+16 the list.
+ */
+LOCAL_FUNCTION produce_add_signature
+    FRAME 32
+    sd      a0, 0(sp)
+    sd      a1, 8(sp)
+    ld      t0, 0(a2)
+    li      t1, (24 + 2 * 96 + 8)
+    bltu    t0, t1, 9f
+    addi    t0, t0, -(24 + 2 * 96)
+    andi    t0, t0, -8
+    add     t0, a2, t0
+    sd      t0, 16(sp)
+    li      t1, (24 + 2 * 96)
+    sd      t1, 0(t0)
+    li      t1, 24
+    sd      t1, 8(t0)
+    li      t1, 2
+    sd      t1, 16(t0)
+    addi    a0, t0, 24
+    ld      a1, 0(sp)
+    li      a2, 96
+    call    lantern_copy
+    ld      t0, 16(sp)
+    addi    a0, t0, (24 + 96)
+    ld      a1, 8(sp)
+    li      a2, 96
+    call    lantern_copy
+    ld      a0, 16(sp)
+    ld      a1, 0(sp)
+    CALL_GLOBAL crypto_bls_aggregate
+    UNFRAME 32
+9:  li      a0, LANTERN_BUFFER_TOO_SMALL
+    UNFRAME 32
+END_FUNCTION produce_add_signature
+
+/* ---------------------------------------------------------------- produceBlockV3: the block */
+
+.if Eth1Data_block_hash != 40 || Eth1Data__mem != 72
+.error "node_produce_block copies Eth1Data as its 72 SSZ bytes"
+.endif
+.set PB_FIXED, 84                               /* BeaconBlock: slot, proposer_index, parent_root, state_root, the body's offset */
+.set PB_SYNC, 220                               /* the body's offsets: proposer_slashings at 200 to voluntary_exits at 216 */
+.if FORK >= FORK_ALTAIR
+.set PB_PAYLOAD, PB_SYNC + SYNC_COMMITTEE_SIZE / 8 + 96
+.else
+.set PB_PAYLOAD, PB_SYNC
+.endif
+.if FORK >= FORK_BELLATRIX
+.set PB_BLS, PB_PAYLOAD + 4
+.else
+.set PB_BLS, PB_PAYLOAD
+.endif
+.if FORK >= FORK_CAPELLA
+.set PB_COMMITMENTS, PB_BLS + 4
+.else
+.set PB_COMMITMENTS, PB_BLS
+.endif
+.if FORK >= FORK_DENEB
+.set PB_REQUESTS, PB_COMMITMENTS + 4
+.else
+.set PB_REQUESTS, PB_COMMITMENTS
+.endif
+.if FORK >= FORK_ELECTRA
+.set PB_BODY_FIXED, PB_REQUESTS + 4
+.set PB_MAX_ATTESTATIONS, MAX_ATTESTATIONS_ELECTRA
+.else
+.set PB_BODY_FIXED, PB_REQUESTS
+.set PB_MAX_ATTESTATIONS, MAX_ATTESTATIONS
+.endif
+
+/* The offset of the body's field at pos: the write position s6 from the body s8. Uses t0. */
+.macro PB_OFFSET pos
+    sub     t0, s6, s8
+    sw      t0, (\pos)(s8)
+.endm
+
+/*
+ * (state, draft, params, scratch, out): node.md, lantern_node_produce_block. s1 state, s2 the
+ * draft, s3 params, s4 scratch, s5 out, s6 the write position, s7 the block, s8 the body. Locals:
+ * L proposer, L+8 the result's bytes, L+16 their count, L+24 the payload, L+32 its count, L+40
+ * the bundle, L+48 its count, L+56 balance before, L+64 1, L+72 a Result, L+80 the scratch size,
+ * L+88 a ByteList view of the request lists (electra), L+256 24 bytes kept aside. The engine's
+ * result and the block's parts after the attestations have no alignment.
+ */
+SPEC_FUNCTION node_produce_block
+    ENTER 288
+    mv      s1, a0
+    ld      t0, 8(a1)
+    add     s2, a1, t0
+    mv      s3, a2
+    mv      s4, a3
+    mv      s5, a4
+    ld      t0, 0(s4)
+    sd      t0, (L + 80)(sp)
+    li      t0, 1
+    sd      t0, (L + 64)(sp)
+    li      t0, 24                          # out: the block from offset 24, as large as its room
+    sd      t0, 8(s5)
+    sd      zero, 16(s5)
+    addi    s7, s5, 24
+    mv      a0, s1                          # the proposer
+.if FORK >= FORK_FULU
+    addi    a1, sp, L
+    call    lantern_get_beacon_proposer_index
+.else
+    mv      a1, s4
+    addi    a2, sp, L
+    call    lantern_get_beacon_proposer_index
+    ld      t0, (L + 80)(sp)
+    sd      t0, 0(s4)
+.endif
+    bnez    a0, 99f
+    ld      t0, L(sp)                       # its balance before
+    PART    t1, t2, s1, BeaconState_balances
+    bgeu    t0, t2, 97f
+    slli    t0, t0, 3
+    add     t0, t1, t0
+    ld      t0, 0(t0)
+    sd      t0, (L + 56)(sp)
+    sd      zero, (L + 8)(sp)               # the engine's result: the payload, and from deneb the bundle
+    sd      zero, (L + 16)(sp)
+    sd      zero, (L + 24)(sp)
+    sd      zero, (L + 32)(sp)
+    sd      zero, (L + 40)(sp)
+    sd      zero, (L + 48)(sp)
+    ld      a1, 16(s3)
+    beqz    a1, 5f
+    ld      t0, 8(a1)
+    ld      t1, 16(a1)
+    add     t0, a1, t0
+    sd      t0, (L + 8)(sp)
+    sd      t1, (L + 16)(sp)
+.if FORK == FORK_BELLATRIX
+    sd      t0, (L + 24)(sp)                # the result is the payload
+    sd      t1, (L + 32)(sp)
+.else
+    li      t2, (4 + 32)                    # GetPayloadResult: the payload's offset, block_value at 4
+    bltu    t1, t2, 96f
+    lwu     t2, 0(t0)
+.if FORK >= FORK_DENEB
+    lwu     t3, 36(t0)                      # blobs_bundle's offset
+.else
+    mv      t3, t1
+.endif
+    bgtu    t2, t3, 96f
+    bgtu    t3, t1, 96f
+    add     t4, t0, t2
+    sub     t5, t3, t2
+    sd      t4, (L + 24)(sp)
+    sd      t5, (L + 32)(sp)
+.if FORK >= FORK_DENEB
+.if FORK >= FORK_ELECTRA
+    LWB     t4, t0, 41, t5                  # execution_requests' offset: the bundle up to it
+.else
+    mv      t4, t1
+.endif
+    bgtu    t3, t4, 96f
+    bgtu    t4, t1, 96f
+    add     t5, t0, t3
+    sub     t6, t4, t3
+    sd      t5, (L + 40)(sp)
+    sd      t6, (L + 48)(sp)
+.endif
+.endif
+5:  ld      t0, 0(s5)                       # room: the fixed parts of the block and the body
+    li      t1, (PB_FIXED + PB_BODY_FIXED + 24)
+    bltu    t0, t1, 98f
+    LDQ     t0, s1, BeaconState_slot
+    sd      t0, 0(s7)
+    ld      t0, L(sp)
+    sd      t0, 8(s7)
+    ADDRESS a0, lantern_type_BeaconBlockHeader  # parent_root: hash_tree_root(state.latest_block_header)
+    ADDQ    a1, s1, BeaconState_latest_block_header
+    mv      a2, s4
+    addi    a3, s7, 16
+    CALL_GLOBAL ssz_hash_tree_root
+    bnez    a0, 99f
+    sd      zero, 48(s7)                    # state_root, written last
+    sd      zero, 56(s7)
+    sd      zero, 64(s7)
+    sd      zero, 72(s7)
+    li      t0, PB_FIXED
+    sw      t0, 80(s7)
+    addi    s8, s7, PB_FIXED
+    mv      a0, s8                          # randao_reveal, eth1_data (an empty eth1 chain's vote), graffiti
+    ld      a1, 0(s3)
+    li      a2, 96
+    call    lantern_copy
+    addi    a0, s8, 96
+    ADDQ    a1, s1, BeaconState_eth1_data
+    li      a2, 72
+    call    lantern_copy
+    addi    a0, s8, 168
+    ld      a1, 0(s3)
+    addi    a1, a1, 96
+    li      a2, 32
+    call    lantern_copy
+.if FORK >= FORK_ALTAIR
+    addi    a0, s8, PB_SYNC                 # the draft's sync aggregate; with none, no bit and the point at infinity
+    addi    a1, s2, ProduceDraft_sync_bits
+    li      a2, (SYNC_COMMITTEE_SIZE / 8 + 96)
+    call    lantern_copy
+    ld      t0, ProduceDraft_sync_set(s2)
+    bnez    t0, 6f
+    addi    a0, s8, (PB_SYNC + SYNC_COMMITTEE_SIZE / 8)
+    li      a1, 96
+    call    lantern_zero
+    li      t0, 0xc0
+    sb      t0, (PB_SYNC + SYNC_COMMITTEE_SIZE / 8)(s8)
+6:
+.endif
+    addi    s6, s8, PB_BODY_FIXED
+    /* proposer_slashings, attester_slashings: the draft's records, which the folds kept free of clashes */
+    PB_OFFSET 200
+    li      a0, GOSSIP_PROPOSER_SLASHING
+    mv      a1, s6
+    call    produce_records
+    mv      s6, a1
+    bnez    a0, 98f
+    PB_OFFSET 204
+    mv      a0, s6
+    call    produce_attester_slashings
+    mv      s6, a1
+    bnez    a0, 98f
+    /* attestations: the draft's aggregates */
+    PB_OFFSET 208
+    addi    a0, sp, L
+    mv      a1, s6
+    call    produce_attestations
+    mv      s6, a1
+    li      t0, LANTERN_BUFFER_TOO_SMALL
+    beq     a0, t0, 98f
+    bnez    a0, 99f
+    /* deposits: none; voluntary_exits */
+    PB_OFFSET 212
+    PB_OFFSET 216
+    li      a0, GOSSIP_VOLUNTARY_EXIT
+    mv      a1, s6
+    call    produce_records
+    mv      s6, a1
+    bnez    a0, 98f
+.if FORK >= FORK_BELLATRIX
+    PB_OFFSET PB_PAYLOAD                    /* the payload, the empty one before the merge */
+    ld      t0, (L + 24)(sp)
+    bnez    t0, 7f
+.if FORK == FORK_BELLATRIX
+    mv      a0, s6                          # ExecutionPayload.empty(): the offsets of extra_data and transactions at 508
+    li      a1, 508
+    call    produce_room
+    bnez    a0, 98f
+    mv      a0, s6
+    li      a1, 508
+    call    lantern_zero
+    li      t0, 508
+    SWB     t0, s6, 436, t1
+    SWB     t0, s6, 504, t1
+    addi    s6, s6, 508
+    j       71f
+.else
+    j       96f
+.endif
+7:  mv      a0, s6
+    ld      a1, (L + 32)(sp)
+    call    produce_room
+    bnez    a0, 98f
+    mv      a0, s6
+    ld      a1, (L + 24)(sp)
+    ld      a2, (L + 32)(sp)
+    add     s6, s6, a2
+    call    lantern_copy
+71:
+.endif
+.if FORK >= FORK_CAPELLA
+    PB_OFFSET PB_BLS
+    li      a0, GOSSIP_BLS_TO_EXECUTION_CHANGE
+    mv      a1, s6
+    call    produce_records
+    mv      s6, a1
+    bnez    a0, 98f
+.endif
+.if FORK >= FORK_DENEB
+    PB_OFFSET PB_COMMITMENTS                /* the bundle's commitments */
+    ld      t0, (L + 40)(sp)
+    ld      t1, (L + 48)(sp)
+    li      t2, 12
+    bltu    t1, t2, 96f
+    LWB     t2, t0, 0, t4
+    LWB     t3, t0, 4, t4
+    bgtu    t2, t3, 96f
+    bgtu    t3, t1, 96f
+    add     t4, t0, t2
+    sub     t5, t3, t2
+    sd      t4, (L + 8)(sp)
+    sd      t5, (L + 16)(sp)
+    mv      a0, s6
+    mv      a1, t5
+    call    produce_room
+    bnez    a0, 98f
+    mv      a0, s6
+    ld      a1, (L + 8)(sp)
+    ld      a2, (L + 16)(sp)
+    add     s6, s6, a2
+    call    lantern_copy
+.endif
+.if FORK >= FORK_ELECTRA
+    PB_OFFSET PB_REQUESTS                   /* lantern_get_execution_requests of the result's request lists */
+    ld      t0, 16(s3)
+    ld      t1, 8(t0)
+    ld      t2, 16(t0)                      # the count
+    add     t1, t0, t1                      # the result's bytes
+    LWB     t3, t1, 41, t4
+    bgtu    t3, t2, 96f
+    addi    t4, sp, (L + 112)               # a ByteList view of them in the locals
+    add     t5, t1, t3
+    sub     t5, t5, t4                      # its offset: from the view to the lists
+    sub     t6, t2, t3                      # their count
+    sd      t5, -16(t4)
+    sd      t6, -8(t4)
+    add     t5, t5, t6
+    sd      t5, -24(t4)
+    ld      t0, -24(s6)                     # the requests' room: the rest of out, as a ByteList at the write position less 24
+    sd      t0, (L + 256)(sp)
+    ld      t0, -16(s6)
+    sd      t0, (L + 264)(sp)
+    ld      t0, -8(s6)
+    sd      t0, (L + 272)(sp)
+    ld      t0, 0(s5)
+    add     t0, s5, t0
+    addi    t0, t0, -24
+    addi    a1, s6, -24
+    sub     t0, t0, a1
+    sd      t0, 0(a1)
+    li      t0, 24
+    sd      t0, 8(a1)
+    sd      zero, 16(a1)
+    addi    a0, sp, (L + 88)
+    call    lantern_get_execution_requests
+    ld      t1, -8(s6)                      # the bytes written; the 24 bytes before them back
+    ld      t0, (L + 256)(sp)
+    sd      t0, -24(s6)
+    ld      t0, (L + 264)(sp)
+    sd      t0, -16(s6)
+    ld      t0, (L + 272)(sp)
+    sd      t0, -8(s6)
+    li      t0, LANTERN_BUFFER_TOO_SMALL
+    beq     a0, t0, 98f
+    bnez    a0, 96f
+    add     s6, s6, t1
+.endif
+    sub     t0, s6, s7                      # the block's bytes
+    sd      t0, 16(s5)
+    ADDRESS a0, lantern_type_BeaconBlock    # the state root: process_block of the decoded block, then the state's root
+    mv      a1, s5
+    mv      a2, s4
+    call    node_decode
+    li      t0, 1
+    beq     a0, t0, 98f
+    bgtu    a0, t0, 96f
+    mv      a0, s1
+    addi    a2, sp, (L + 64)
+    ld      a3, 8(s3)
+    mv      a4, s4
+    addi    a5, sp, (L + 72)
+    call    lantern_process_block
+    ld      t0, (L + 80)(sp)
+    sd      t0, 0(s4)
+    bnez    a0, 99f
+    ld      a0, (L + 72)(sp)
+    bnez    a0, 99f
+    mv      a0, s1
+    li      a1, 0
+    mv      a2, s4
+    addi    a3, s7, 48
+    call    lantern_state_root
+    bnez    a0, 99f
+    ld      t0, L(sp)                       # consensus_block_value: the balance after less before, plus the proposer's withdrawals
+    PART    t1, t2, s1, BeaconState_balances
+    slli    t2, t0, 3
+    add     t1, t1, t2
+    ld      t1, 0(t1)
+    ld      t2, (L + 56)(sp)
+    sub     t3, t1, t2
+.if FORK >= FORK_CAPELLA
+    ld      t4, (L + 24)(sp)                # the payload's withdrawals: from the offset at 508, 44 bytes each
+    beqz    t4, 81f
+    ld      t5, (L + 32)(sp)
+    LWB     t6, t4, 508, t1
+    bgtu    t6, t5, 81f
+80: addi    t1, t6, 44
+    bgtu    t1, t5, 81f
+    add     a2, t4, t6
+    LDB     a3, a2, 8, t1, a4
+    bne     a3, t0, 801f
+    LDB     a3, a2, 36, t1, a4
+    add     t3, t3, a3
+801: addi   t6, t6, 44
+    j       80b
+81:
+.endif
+    bgez    t3, 82f
+    li      t3, 0
+82: ld      t0, 32(s3)
+    sd      t3, 0(t0)
+    ld      a0, 24(s3)                      # execution_payload_value: the result's block_value, else 0
+    sd      zero, 0(a0)
+    sd      zero, 8(a0)
+    sd      zero, 16(a0)
+    sd      zero, 24(a0)
+.if FORK >= FORK_CAPELLA
+    ld      t0, (L + 8)(sp)
+    beqz    t0, 83f
+    ld      t0, 16(s3)
+    ld      t1, 8(t0)
+    add     a1, t0, t1
+    addi    a1, a1, 4
+    li      a2, 32
+    call    lantern_copy
+83:
+.endif
+.if FORK >= FORK_DENEB
+    addi    a0, sp, L                       # BlockContents: the block, the bundle's proofs and blobs
+    call    produce_contents
+    bnez    a0, 98f
+.endif
+    li      a0, LANTERN_OK
+99: LEAVE 288
+96: li      a0, LANTERN_INVALID_ENCODING
+    LEAVE 288
+97: li      a0, LANTERN_INVALID_VALIDATOR_INDEX
+    LEAVE 288
+98: ld      t0, (L + 80)(sp)
+    sd      t0, 0(s4)
+    li      a0, LANTERN_BUFFER_TOO_SMALL
+    LEAVE 288
+SPEC_END node_produce_block
+
+/* L0: a0 = 0 when a1 bytes from a0 fit in the ByteList s5, else 1. Uses t5, t6. */
+LOCAL_FUNCTION produce_room
+    UNWIND_END_PROLOGUE
+    ld      t5, 0(s5)
+    add     t5, s5, t5
+    add     t6, a0, a1
+    sltu    a0, t5, t6
+    ret
+END_FUNCTION produce_room
+
+/*
+ * L0: (index a0, record a1) -> a0 = 1 when the index is in both attestations of the attester
+ * slashing whose SSZ bytes follow the draft record a1, else 0. Its indices are 4-aligned. Uses
+ * a1-a5, t0-t4.
+ */
+LOCAL_FUNCTION produce_in_slashing
+    UNWIND_END_PROLOGUE
+    ld      t0, 8(a1)                       # its length
+    addi    a1, a1, 16
+    li      t1, 8
+    bltu    t0, t1, 9f
+    lwu     t1, 0(a1)                       # the attestations: [o1, o2), then [o2, end)
+    lwu     t2, 4(a1)
+    mv      a2, t1
+    mv      a3, t2
+    li      a5, 0
+1:  bgeu    a2, a3, 9f
+    add     t3, a1, a2
+    lwu     t3, 0(t3)                       # its indices, from its offset
+    add     a4, a2, t3
+2:  addi    t3, a4, 8
+    bgtu    t3, a3, 9f
+    add     t3, a1, a4
+    LDU64   t4, t3, 0, t3
+    beq     t4, a0, 3f
+    addi    a4, a4, 8
+    j       2b
+3:  bnez    a5, 4f                          # in the first: then the second
+    li      a5, 1
+    mv      a2, t2
+    mv      a3, t0
+    j       1b
+4:  li      a0, 1
+    ret
+9:  li      a0, 0
+    ret
+END_FUNCTION produce_in_slashing
+
+/*
+ * L2: (topic a0, write position a1) -> a0 = 0, or 1 for a short out; a1 = the write position. The
+ * SSZ bytes of the draft's records of the topic in their order, back to back. s3 a record, s4 the
+ * records' end, s7 the topic, s9 the position.
+ */
+LOCAL_FUNCTION produce_records
+    ENTER 0
+    mv      s7, a0
+    mv      s9, a1
+    ld      t0, ProduceDraft_ops(s2)
+    ADDQ    s3, s2, PRODUCE_DRAFT_OPS
+    add     s4, s3, t0
+1:  bgeu    s3, s4, 8f
+    ld      t0, 0(s3)
+    bne     t0, s7, 5f
+    mv      a0, s9
+    ld      a1, 8(s3)
+    call    produce_room
+    bnez    a0, 9f
+    mv      a0, s9
+    addi    a1, s3, 16
+    ld      a2, 8(s3)
+    add     s9, s9, a2
+    call    lantern_copy
+5:  ld      t0, 8(s3)
+    addi    t0, t0, (16 + 7)
+    andi    t0, t0, -8
+    add     s3, s3, t0
+    j       1b
+8:  li      a0, 0
+    mv      a1, s9
+    LEAVE 0
+9:  li      a0, 1
+    mv      a1, s9
+    LEAVE 0
+END_FUNCTION produce_records
+
+/*
+ * L2: (write position a0) -> a0 = 0, or 1 for a short out; a1 = the write position. The draft's
+ * attester slashing records as an SSZ list: their offsets, then their bytes. s3 a record, s4 the
+ * end, s7 their count, s8 the next offset, s9 the position, s10 the next offset's place.
+ */
+LOCAL_FUNCTION produce_attester_slashings
+    ENTER 0
+    mv      s9, a0
+    ld      t0, ProduceDraft_ops(s2)
+    ADDQ    s3, s2, PRODUCE_DRAFT_OPS
+    add     s4, s3, t0
+    li      s7, 0
+    mv      t1, s3
+1:  bgeu    t1, s4, 2f
+    ld      t0, 0(t1)
+    li      t2, GOSSIP_ATTESTER_SLASHING
+    bne     t0, t2, 11f
+    addi    s7, s7, 1
+11: ld      t0, 8(t1)
+    addi    t0, t0, (16 + 7)
+    andi    t0, t0, -8
+    add     t1, t1, t0
+    j       1b
+2:  slli    s8, s7, 2                       # the offsets, the first slashing after them
+    mv      a0, s9
+    mv      a1, s8
+    call    produce_room
+    bnez    a0, 9f
+    mv      s10, s9
+    add     s9, s9, s8
+3:  bgeu    s3, s4, 8f
+    ld      t0, 0(s3)
+    li      t2, GOSSIP_ATTESTER_SLASHING
+    bne     t0, t2, 4f
+    sw      s8, 0(s10)
+    addi    s10, s10, 4
+    ld      t0, 8(s3)
+    add     s8, s8, t0
+    mv      a0, s9
+    mv      a1, t0
+    call    produce_room
+    bnez    a0, 9f
+    mv      a0, s9
+    addi    a1, s3, 16
+    ld      a2, 8(s3)
+    add     s9, s9, a2
+    call    lantern_copy
+4:  ld      t0, 8(s3)
+    addi    t0, t0, (16 + 7)
+    andi    t0, t0, -8
+    add     s3, s3, t0
+    j       3b
+8:  li      a0, 0
+    mv      a1, s9
+    LEAVE 0
+9:  li      a0, 1
+    mv      a1, s9
+    LEAVE 0
+END_FUNCTION produce_attester_slashings
+
+/*
+ * L1: (index a0, records a1, their end a2) -> a0 = 1 when a proposer slashing record of [a1, a2)
+ * has the index as its proposer, or an attester slashing record has it in both attestations;
+ * else 0. s1 the index, s2 a record, s3 the end.
+ */
+LOCAL_FUNCTION produce_slashed
+    ENTER 0
+    mv      s1, a0
+    mv      s2, a1
+    mv      s3, a2
+1:  bgeu    s2, s3, 8f
+    ld      t0, 0(s2)
+    li      t1, GOSSIP_PROPOSER_SLASHING
+    bne     t0, t1, 2f
+    ld      t1, (16 + 8)(s2)                # signed_header_1.message.proposer_index
+    beq     t1, s1, 9f
+    j       3f
+2:  li      t1, GOSSIP_ATTESTER_SLASHING
+    bne     t0, t1, 3f
+    mv      a0, s1
+    mv      a1, s2
+    call    produce_in_slashing
+    bnez    a0, 9f
+3:  ld      t0, 8(s2)
+    addi    t0, t0, (16 + 7)
+    andi    t0, t0, -8
+    add     s2, s2, t0
+    j       1b
+8:  li      a0, 0
+    LEAVE 0
+9:  li      a0, 1
+    LEAVE 0
+END_FUNCTION produce_slashed
+
+/*
+ * L0: (the attester slashing's bytes a0, their count a1, records a2, their end a3) -> a0 = 1 when
+ * an index is in both attestations (whose indices are sorted, as is_valid_indexed_attestation
+ * holds them) and no proposer slashing record of [a2, a3) has it as its proposer; else 0. a4 a
+ * place in the first list, a5 its end, t5 a place in the second, a1 its end. Uses t0-t6.
+ */
+LOCAL_FUNCTION produce_takes_slashing
+    UNWIND_END_PROLOGUE
+    li      t0, 8
+    bltu    a1, t0, 8f
+    lwu     t0, 0(a0)                       # the attestations: [o1, o2), [o2, count)
+    lwu     t1, 4(a0)
+    bgtu    t0, t1, 8f
+    bgtu    t1, a1, 8f
+    addi    t2, t0, 228
+    bgtu    t2, t1, 8f
+    addi    t2, t1, 228
+    bgtu    t2, a1, 8f
+    add     t2, a0, t0                      # each one's indices: from its offset to its end
+    lwu     t2, 0(t2)
+    add     a4, t0, t2
+    mv      a5, t1
+    add     t2, a0, t1
+    lwu     t2, 0(t2)
+    add     t5, t1, t2
+1:  addi    t0, a4, 8
+    bgtu    t0, a5, 8f
+    addi    t0, t5, 8
+    bgtu    t0, a1, 8f
+    add     t0, a0, a4
+    LDU64   t2, t0, 0, t0
+    add     t0, a0, t5
+    LDU64   t3, t0, 0, t0
+    bltu    t2, t3, 2f
+    bgtu    t2, t3, 3f
+    mv      t4, a2                          # in both: a proposer slashing's proposer?
+4:  bgeu    t4, a3, 9f
+    ld      t0, 0(t4)
+    li      t1, GOSSIP_PROPOSER_SLASHING
+    bne     t0, t1, 5f
+    ld      t0, (16 + 8)(t4)
+    beq     t0, t2, 6f
+5:  ld      t0, 8(t4)
+    addi    t0, t0, (16 + 7)
+    andi    t0, t0, -8
+    add     t4, t4, t0
+    j       4b
+6:  addi    t5, t5, 8
+2:  addi    a4, a4, 8
+    j       1b
+3:  addi    t5, t5, 8
+    j       1b
+8:  li      a0, 0
+    ret
+9:  li      a0, 1
+    ret
+END_FUNCTION produce_takes_slashing
+
+.set PB_COMMITTEE_BITS, (MAX_COMMITTEES_PER_SLOT + 7) / 8
+/* An Attestation's fixed bytes: the bits' offset, data, signature, and from electra committee_bits */
+.if FORK >= FORK_ELECTRA
+.set PB_ATT_COMMITTEE, PB_COMMITTEE_BITS
+.else
+.set PB_ATT_COMMITTEE, 0
+.endif
+.set PB_ATT_FIXED, 228 + PB_ATT_COMMITTEE
+
+/* L0: a0 = 1 when the 128 bytes at a0 and a1 (each 8-aligned) are equal, else 0. Uses t0-t2. */
+LOCAL_FUNCTION produce_same_data
+    UNWIND_END_PROLOGUE
+    li      t0, 0
+1:  add     t1, a0, t0
+    ld      t1, 0(t1)
+    add     t2, a1, t0
+    ld      t2, 0(t2)
+    bne     t1, t2, 2f
+    addi    t0, t0, 8
+    li      t1, 128
+    bltu    t0, t1, 1b
+    li      a0, 1
+    ret
+2:  li      a0, 0
+    ret
+END_FUNCTION produce_same_data
+
+/*
+ * L2: (the block's locals a0, write position a1) -> a0 = 0, 1 for a short out or scratch, or a
+ * status of crypto_bls_aggregate; a1 = the write position. The draft's aggregates chosen by
+ * data.slot descending, then order, at most the fork's limit; before electra an Attestation of
+ * each, from electra one Attestation for each data of the aggregates of every committee
+ * (compute_on_chain_aggregate). The list: offsets, then the attestations. s1 an aggregate, s3 the
+ * aggregates, s4 scratch, s6 the chosen aggregate, s7 their count, s8 the chosen indices (in
+ * scratch, after a flag byte for each aggregate), s9 the position, s10 the chosen count. Locals:
+ * L the scratch size, L+8 an index, L+16 the bits' cursor, L+24 a committee.
+ */
+LOCAL_FUNCTION produce_attestations
+    ENTER 32
+    mv      s9, a1
+    ld      s7, ProduceDraft_aggregates(s2)
+    ADDQ    s3, s2, PRODUCE_DRAFT_AGGREGATES
+    ld      t0, 0(s4)                       # the flags and the chosen at the end of scratch
+    sd      t0, L(sp)
+    li      t1, (8 * PB_MAX_ATTESTATIONS + 7)
+    add     t1, s7, t1
+    andi    t1, t1, -8
+    addi    t2, t1, 1024
+    bltu    t0, t2, 97f
+    sub     t0, t0, t1
+    sd      t0, 0(s4)
+    add     s8, s4, t0
+    mv      a0, s8
+    mv      a1, s7
+    call    lantern_zero
+    add     s8, s8, s7                      # the chosen indices after the flags
+    addi    s8, s8, 7
+    andi    s8, s8, -8
+    li      s10, 0
+1:  li      t0, PB_MAX_ATTESTATIONS         # the next: of the highest slot, then the lowest order
+    bgeu    s10, t0, 3f
+    li      t1, -1
+    li      t2, 0
+    li      t3, 0                           # the best's slot
+    ld      t4, 0(s4)
+    add     t4, s4, t4                      # the flags
+2:  bgeu    t2, s7, 21f
+    add     t5, t4, t2
+    lbu     t5, 0(t5)
+    bnez    t5, 22f
+    li      t5, DraftAggregate__mem
+    mul     t5, t2, t5
+    add     t5, s3, t5
+    ld      t5, 0(t5)                       # data.slot
+    li      t6, -1
+    beq     t1, t6, 23f
+    bleu    t5, t3, 22f
+23: mv      t1, t2
+    mv      t3, t5
+22: addi    t2, t2, 1
+    j       2b
+21: li      t6, -1
+    beq     t1, t6, 3f
+    slli    t5, s10, 3
+    add     t5, s8, t5
+    sd      t1, 0(t5)
+    addi    s10, s10, 1
+    add     t5, t4, t1                      # chosen: its flag, from electra those of its data too
+    li      t6, 1
+    sb      t6, 0(t5)
+.if FORK >= FORK_ELECTRA
+    li      t5, DraftAggregate__mem
+    mul     t5, t1, t5
+    add     t5, s3, t5
+    sd      t5, (L + 8)(sp)
+    li      t2, 0
+24: bgeu    t2, s7, 1b
+    li      t5, DraftAggregate__mem
+    mul     a1, t2, t5
+    add     a1, s3, a1
+    ld      a0, (L + 8)(sp)
+    sd      t2, (L + 16)(sp)
+    call    produce_same_data
+    ld      t2, (L + 16)(sp)
+    beqz    a0, 25f
+    ld      t4, 0(s4)
+    add     t4, s4, t4
+    add     t4, t4, t2
+    li      t5, 1
+    sb      t5, 0(t4)
+25: addi    t2, t2, 1
+    j       24b
+.else
+    j       1b
+.endif
+3:  slli    t0, s10, 2                      # the offsets: the size of each attestation
+    sd      t0, (L + 24)(sp)
+    mv      a0, s9
+    mv      a1, t0
+    call    produce_room
+    bnez    a0, 98f
+    ld      t0, (L + 24)(sp)
+    sd      t0, (L + 16)(sp)                # the next offset
+    sd      zero, (L + 8)(sp)
+4:  ld      t1, (L + 8)(sp)
+    bgeu    t1, s10, 5f
+    ld      t0, (L + 16)(sp)
+    slli    t2, t1, 2
+    add     t2, s9, t2
+    sw      t0, 0(t2)
+    slli    t2, t1, 3
+    add     t2, s8, t2
+    ld      a0, 0(t2)
+    call    produce_att_bits
+    addi    a0, a0, (8 + 7)                 # the bits: as many as the length, and the end bit
+    srli    a0, a0, 3
+    addi    a0, a0, PB_ATT_FIXED
+    ld      t0, (L + 16)(sp)
+    add     t0, t0, a0
+    sd      t0, (L + 16)(sp)
+    ld      t1, (L + 8)(sp)
+    addi    t1, t1, 1
+    sd      t1, (L + 8)(sp)
+    j       4b
+5:  ld      t0, (L + 24)(sp)
+    add     s9, s9, t0
+    sd      zero, (L + 8)(sp)
+6:  ld      t1, (L + 8)(sp)                 # each attestation
+    bgeu    t1, s10, 8f
+    slli    t2, t1, 3
+    add     t2, s8, t2
+    ld      a0, 0(t2)
+    li      t0, DraftAggregate__mem
+    mul     s6, a0, t0
+    add     s6, s3, s6                      # the chosen aggregate
+    call    produce_att_bits
+    addi    a0, a0, (8 + 7)
+    srli    a0, a0, 3
+    addi    a1, a0, PB_ATT_FIXED
+    mv      a0, s9
+    call    produce_room
+    bnez    a0, 98f
+    li      t0, PB_ATT_FIXED                # its place has no alignment
+    SWB     t0, s9, 0, t1
+    addi    a0, s9, 4                       # data
+    mv      a1, s6
+    li      a2, 128
+    call    lantern_copy
+    addi    a0, s9, 132                     # signature: the first's
+    ADDQ    a1, s6, DraftAggregate_signature
+    li      a2, 96
+    call    lantern_copy
+    ld      t1, (L + 8)(sp)                 # from electra the committee bits; the aggregation bits, zero
+    slli    t2, t1, 3
+    add     t2, s8, t2
+    ld      a0, 0(t2)
+    call    produce_att_bits
+    addi    a1, a0, (8 + 7)
+    srli    a1, a1, 3
+    addi    a1, a1, PB_ATT_COMMITTEE
+    addi    a0, s9, 228
+    call    lantern_zero
+    sd      zero, (L + 16)(sp)              # the bits' cursor
+.if FORK >= FORK_ELECTRA
+    sd      zero, (L + 24)(sp)              # each committee in order: its aggregate of the data
+61: ld      t0, (L + 24)(sp)
+    li      t1, MAX_COMMITTEES_PER_SLOT
+    bgeu    t0, t1, 7f
+    li      s1, 0
+62: bgeu    s1, s7, 66f
+    li      t0, DraftAggregate__mem
+    mul     a1, s1, t0
+    add     a1, s3, a1
+    ld      t0, DraftAggregate_committee_index(a1)
+    ld      t1, (L + 24)(sp)
+    bne     t0, t1, 65f
+    mv      a0, s6
+    call    produce_same_data
+    beqz    a0, 65f
+    li      t0, DraftAggregate__mem
+    mul     a1, s1, t0
+    add     a1, s3, a1
+    ld      t1, (L + 24)(sp)                # its committee's bit
+    srli    t2, t1, 3
+    add     t2, s9, t2
+    addi    t2, t2, 228
+    lbu     t3, 0(t2)
+    andi    t4, t1, 7
+    li      t5, 1
+    sll     t5, t5, t4
+    or      t3, t3, t5
+    sb      t3, 0(t2)
+    beq     a1, s6, 63f                     # its signature, after the first's
+    mv      s1, a1
+    addi    a0, s9, 132
+    ADDQ    a1, s1, DraftAggregate_signature
+    mv      a2, s4
+    call    produce_add_signature
+    li      t0, LANTERN_BUFFER_TOO_SMALL
+    beq     a0, t0, 97f
+    bnez    a0, 96f
+    mv      a1, s1
+63: addi    a0, s9, (228 + PB_COMMITTEE_BITS)  # its bits at the cursor
+    ld      a2, (L + 16)(sp)
+    call    produce_copy_bits
+    sd      a0, (L + 16)(sp)
+    j       66f
+65: addi    s1, s1, 1
+    j       62b
+66: ld      t0, (L + 24)(sp)
+    addi    t0, t0, 1
+    sd      t0, (L + 24)(sp)
+    j       61b
+.else
+    addi    a0, s9, 228
+    mv      a1, s6
+    li      a2, 0
+    call    produce_copy_bits
+    sd      a0, (L + 16)(sp)
+.endif
+7:  ld      t0, (L + 16)(sp)                # the end bit
+    addi    t1, s9, PB_ATT_FIXED
+    srli    t2, t0, 3
+    add     t2, t1, t2
+    andi    t3, t0, 7
+    li      t4, 1
+    sll     t4, t4, t3
+    lbu     t3, 0(t2)
+    or      t3, t3, t4
+    sb      t3, 0(t2)
+    addi    s9, t2, 1
+    ld      t1, (L + 8)(sp)
+    addi    t1, t1, 1
+    sd      t1, (L + 8)(sp)
+    j       6b
+8:  ld      t0, L(sp)
+    sd      t0, 0(s4)
+    li      a0, 0
+    mv      a1, s9
+    LEAVE 32
+96: ld      t0, L(sp)
+    sd      t0, 0(s4)
+    mv      a1, s9
+    LEAVE 32
+97: ld      t0, L(sp)
+    sd      t0, 0(s4)
+98: li      a0, 1
+    mv      a1, s9
+    LEAVE 32
+END_FUNCTION produce_attestations
+
+/*
+ * L0: (index a0) -> a0: the aggregation bits of the attestation of the draft's aggregate a0, s3
+ * the aggregates, s7 their count: its length; from electra the lengths of the aggregates of its
+ * data. Uses a1, t0-t5.
+ */
+LOCAL_FUNCTION produce_att_bits
+    UNWIND_END_PROLOGUE
+    li      t0, DraftAggregate__mem
+    mul     t1, a0, t0
+    add     t1, s3, t1
+.if FORK >= FORK_ELECTRA
+    li      a0, 0
+    li      t2, 0
+1:  bgeu    t2, s7, 3f
+    mul     a1, t2, t0
+    add     a1, s3, a1
+    li      t3, 0
+2:  add     t4, t1, t3
+    ld      t4, 0(t4)
+    add     t5, a1, t3
+    ld      t5, 0(t5)
+    bne     t4, t5, 4f
+    addi    t3, t3, 8
+    li      t4, 128
+    bltu    t3, t4, 2b
+    ld      t4, DraftAggregate_length(a1)
+    add     a0, a0, t4
+4:  addi    t2, t2, 1
+    j       1b
+3:  ret
+.else
+    ld      a0, DraftAggregate_length(t1)
+    ret
+.endif
+END_FUNCTION produce_att_bits
+
+/* L0: (bits a0, aggregate a1, cursor a2) -> a0: the aggregate's length bits set at bit a2 of a0 on; the cursor after them. Uses a3, t0-t4. */
+LOCAL_FUNCTION produce_copy_bits
+    UNWIND_END_PROLOGUE
+    ld      t0, DraftAggregate_length(a1)
+    addi    t1, a1, DraftAggregate_bits
+    li      t2, 0
+1:  bgeu    t2, t0, 2f
+    srli    t3, t2, 3
+    add     t3, t1, t3
+    lbu     t3, 0(t3)
+    andi    t4, t2, 7
+    srl     t3, t3, t4
+    andi    t3, t3, 1
+    beqz    t3, 3f
+    add     t3, a2, t2                      # its bit at the cursor
+    srli    t4, t3, 3
+    add     t4, a0, t4
+    andi    t3, t3, 7
+    li      a3, 1
+    sll     a3, a3, t3
+    lbu     t3, 0(t4)
+    or      t3, t3, a3
+    sb      t3, 0(t4)
+3:  addi    t2, t2, 1
+    j       1b
+2:  add     a0, a2, t0
+    ret
+END_FUNCTION produce_copy_bits
+
+.if FORK >= FORK_DENEB
+/*
+ * L1: (the block's locals a0) -> a0 = 0, or 1 for a short out: out s5 holds the block from offset
+ * 24; it becomes the BlockContents: the block moved 12 bytes on, the three offsets, the bundle's
+ * proofs and blobs (the bundle at locals + 40, its bytes at + 48, of no alignment). Locals: F the
+ * bundle, F+8 the blobs' offset, F+16 the proofs' bytes, F+24 the blobs' bytes.
+ */
+LOCAL_FUNCTION produce_contents
+    FRAME 32
+    ld      t0, 40(a0)                      # the bundle: its offsets of commitments, proofs, blobs
+    ld      t1, 48(a0)
+    li      t2, 12
+    bltu    t1, t2, 9f
+    LWB     t2, t0, 4, t4
+    LWB     t3, t0, 8, t4
+    bgtu    t2, t3, 9f
+    bgtu    t3, t1, 9f
+    sd      t0, 0(sp)
+    sd      t3, 8(sp)
+    sub     t4, t3, t2                      # the proofs' bytes, then the blobs'
+    sd      t4, 16(sp)
+    sub     t5, t1, t3
+    sd      t5, 24(sp)
+    ld      t6, 16(s5)                      # the block's
+    addi    a1, t6, 12
+    add     a1, a1, t4
+    add     a1, a1, t5
+    ld      a2, 0(s5)
+    addi    a2, a2, -24
+    bgtu    a1, a2, 9f
+    sd      a1, 16(s5)
+    addi    a3, s5, 24                      # the block on by 12, from its end
+    mv      a4, t6
+1:  beqz    a4, 2f
+    addi    a4, a4, -1
+    add     a5, a3, a4
+    lbu     t1, 0(a5)
+    sb      t1, 12(a5)
+    j       1b
+2:  li      t1, 12
+    sw      t1, 0(a3)
+    addi    t1, t6, 12
+    sw      t1, 4(a3)
+    add     t1, t1, t4
+    sw      t1, 8(a3)
+    addi    a0, a3, 12                      # the proofs, then the blobs
+    add     a0, a0, t6
+    ld      a1, 0(sp)
+    add     a1, a1, t2
+    mv      a2, t4
+    call    lantern_copy
+    ld      t0, 16(s5)
+    add     a0, s5, t0
+    addi    a0, a0, 24
+    ld      t1, 24(sp)
+    sub     a0, a0, t1
+    ld      a1, 0(sp)
+    ld      t1, 8(sp)
+    add     a1, a1, t1
+    ld      a2, 24(sp)
+    call    lantern_copy
+    li      a0, 0
+    UNFRAME 32
+9:  li      a0, 1
+    UNFRAME 32
+END_FUNCTION produce_contents
 .endif

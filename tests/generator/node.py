@@ -187,6 +187,7 @@ def cases(fork, preset):
     yield "api", "anchor_epoch_0", api_cases(fork, preset, epoch=0)
     if FORKS.index(fork) >= FORKS.index("bellatrix"):
         yield from payload_cases(fork, preset)
+    yield from produce_cases(fork, preset)
     yield "p2p", "anchor_epoch_2", {
         "anchor_state": bytes(state.encode_bytes()),
         "anchor_block": bytes(block.encode_bytes()),
@@ -202,11 +203,11 @@ def cases(fork, preset):
 PAYLOAD_HASH = bytes([0x11]) * 32  # the anchor payload's block hash
 
 
-def payload_anchor(spec, fork):
+def payload_anchor(spec, fork, epoch=ANCHOR_EPOCH, extra=0):
     """The api anchor with an execution payload in its block and its header in the state, so the
     merge is complete; from capella validators 2 and 3 have 0x01 credentials, 2 a balance past the
     maximum (a partial withdrawal) and 3 a withdrawable epoch of 0 (a full one)."""
-    state, block = anchor(spec, fork, statuses=True)
+    state, block = anchor(spec, fork, statuses=True, epoch=epoch, extra=extra)
     if FORKS.index(fork) >= FORKS.index("capella"):  # a partial withdrawal of validator 2, a full one of validator 3
         for i in (2, 3):
             state.validators[i].withdrawal_credentials = spec.Bytes32(spec.ETH1_ADDRESS_WITHDRAWAL_PREFIX + bytes(11) + bytes([0xa0 + i]) * 20)
@@ -297,6 +298,244 @@ def payload_cases(fork, preset):
             "payload_root": bytes(root) if due else bytes(32),
             "payload_status": (3 if pid else 0) if prepared else 0,
             "payload_proposer": proposer if prepared else 0,
+        }
+
+
+# ---------------------------------------------------------------- Block production (beacon-api.md, produceBlockV3)
+
+def produce_cases(fork, preset):
+    """node-produce: produceBlockV3 of the first slot after the anchor's of a proposer not slashed,
+    with a randao reveal of the proposer's test key, and from bellatrix an empty payload of the
+    engine on the attributes of the spec's prepare_execution_payload: the answer of the spec's
+    block proposal, in JSON and SSZ. empty_pool: no pool entries. full_pool: an anchor
+    SHARD_COMMITTEE_PERIOD epochs later with 2 SLOTS_PER_EPOCH more validators, and in the slot
+    before, POSTs of each pool operation the block takes, and of those its rules leave out (an
+    attester slashing of only the proposer slashing's validator, an exit of a validator the
+    attester slashing slashes)."""
+    import json_codec
+    import reqresp
+    from eth_consensus_specs.utils import bls
+    spec = module(fork, preset)
+    f = FORKS.index(fork)
+    merged = f >= FORKS.index("bellatrix")
+    capella = f >= FORKS.index("capella")
+    electra = f >= FORKS.index("electra")
+    graffiti = bytes(range(32))
+    block_value = 123456789012345678901234567890
+    to_json = json_codec.to_json
+
+    def post(path, body, version=False):
+        return (b"POST " + path + b" HTTP/1.1\r\nHost: lantern\r\nContent-Type: application/json\r\n"
+                + (b"Eth-Consensus-Version: " + fork.encode() + b"\r\n" if version else b"")
+                + b"Content-Length: %d\r\n\r\n" % len(body) + body)
+
+    def pool_of(st, state, anchor_block, slot, proposer, body):
+        """The POSTs of the pool, each VALID by the spec's gossip validation at 100 ms into the slot
+        before, and the body's operations of them (the block's rules)."""
+        import dataclasses
+        a, epoch = int(state.slot), spec.get_current_epoch(state)
+        anchor_root = spec.hash_tree_root(anchor_block)
+        time_ms = int(state.genesis_time) * 1000 + (int(slot) - 1) * int(spec.config.SLOT_DURATION_MS) + 100
+        store = spec.get_forkchoice_store(state, anchor_block)
+        spec.on_tick(store, time_ms)
+        seen = spec.Seen(**{x.name: (dict() if "dict" in str(x.type) else set()) for x in dataclasses.fields(spec.Seen)})
+
+        def valid(name, fn, *args):
+            if gossip_result(spec, fn, seen, store, *args) != "VALID":
+                raise RuntimeError(f"node-produce {fork} full_pool: the spec's gossip validation refuses {name}")
+        signers = [i for i in (4, 5, 0, 6, 1) if i != proposer]
+        ia, ib, ic = signers[:3]
+        id_ = next(i for i in (2, 6, 5, 4) if i not in (ia, ib, ic, proposer))
+
+        def exit_of(index):
+            ex = spec.VoluntaryExit(epoch=epoch, validator_index=index)
+            if f >= FORKS.index("deneb"):
+                domain = spec.compute_domain(spec.DOMAIN_VOLUNTARY_EXIT, spec.config.CAPELLA_FORK_VERSION, state.genesis_validators_root)
+            else:
+                domain = spec.get_domain(state, spec.DOMAIN_VOLUNTARY_EXIT, ex.epoch)
+            return spec.SignedVoluntaryExit(message=ex, signature=bls.Sign(KEYS.privkeys[index], spec.compute_signing_root(ex, domain)))
+
+        def header_of(index, body_root):
+            h = spec.BeaconBlockHeader(slot=a, proposer_index=index, parent_root=b"\x03" * 32, state_root=b"\x04" * 32, body_root=body_root)
+            domain = spec.get_domain(state, spec.DOMAIN_BEACON_PROPOSER, spec.compute_epoch_at_slot(h.slot))
+            return spec.SignedBeaconBlockHeader(message=h, signature=bls.Sign(KEYS.privkeys[index], spec.compute_signing_root(h, domain)))
+
+        def indexed_of(indices, root):
+            data = spec.AttestationData(slot=a, index=0, beacon_block_root=root, source=state.current_justified_checkpoint,
+                                        target=spec.Checkpoint(epoch=epoch, root=root))
+            sr = spec.compute_signing_root(data, spec.get_domain(state, spec.DOMAIN_BEACON_ATTESTER, epoch))
+            ia_ = spec.IndexedAttestation(data=data, signature=bls.Aggregate([bls.Sign(KEYS.privkeys[i], sr) for i in indices]))
+            for i in indices:
+                ia_.attesting_indices.append(i)
+            return ia_
+
+        reqs = []
+        exits = [exit_of(id_), exit_of(ib)]  # the second: of a validator the attester slashing slashes
+        for ex in exits:
+            valid("an exit", spec.validate_voluntary_exit_gossip, ex, time_ms)
+            reqs.append(post(b"/eth/v1/beacon/pool/voluntary_exits", to_json(ex).encode()))
+        ps = spec.ProposerSlashing(signed_header_1=header_of(ia, b"\x01" * 32), signed_header_2=header_of(ia, b"\x02" * 32))
+        valid("the proposer slashing", spec.validate_proposer_slashing_gossip, ps)
+        reqs.append(post(b"/eth/v1/beacon/pool/proposer_slashings", to_json(ps).encode()))
+        as1 = spec.AttesterSlashing(attestation_1=indexed_of([ia], b"\x05" * 32), attestation_2=indexed_of([ia], b"\x06" * 32))
+        as2 = spec.AttesterSlashing(attestation_1=indexed_of(sorted([ib, ic]), b"\x07" * 32),
+                                    attestation_2=indexed_of(sorted([ib, ic]), b"\x08" * 32))
+        for x in (as1, as2):
+            valid("an attester slashing", spec.validate_attester_slashing_gossip, x)
+            reqs.append(post(b"/eth/v2/beacon/pool/attester_slashings", to_json(x).encode(), version=True))
+        body.proposer_slashings.append(ps)
+        body.attester_slashings.append(as2)
+        body.voluntary_exits.append(exits[0])
+        if capella:
+            c = spec.BLSToExecutionChange(validator_index=7, from_bls_pubkey=KEYS.pubkeys[8191 - 7], to_execution_address=b"\x42" * 20)
+            domain = spec.compute_domain(spec.DOMAIN_BLS_TO_EXECUTION_CHANGE, genesis_validators_root=state.genesis_validators_root)
+            change = spec.SignedBLSToExecutionChange(message=c, signature=bls.Sign(KEYS.privkeys[8191 - 7], spec.compute_signing_root(c, domain)))
+            valid("the change", spec.validate_bls_to_execution_change_gossip, change, time_ms)
+            reqs.append(post(b"/eth/v1/beacon/pool/bls_to_execution_changes", ("[" + to_json(change) + "]").encode()))
+            body.bls_to_execution_changes.append(change)
+        # two attesters of committee 0 of the anchor's slot, aggregated as the block's one attestation
+        committee = list(spec.get_beacon_committee(state, spec.Slot(a), spec.CommitteeIndex(0)))
+        data = spec.AttestationData(slot=a, index=0, beacon_block_root=anchor_root, source=state.current_justified_checkpoint,
+                                    target=spec.Checkpoint(epoch=epoch, root=anchor_root))
+        sr = spec.compute_signing_root(data, spec.get_domain(state, spec.DOMAIN_BEACON_ATTESTER, epoch))
+        places = [0, len(committee) - 1]
+        sigs = [bls.Sign(KEYS.privkeys[committee[p]], sr) for p in places]
+        singles = []
+        for p, sig in zip(places, sigs):
+            if electra:
+                singles.append(spec.SingleAttestation(committee_index=0, attester_index=committee[p], data=data, signature=sig))
+            else:
+                bits = spec.AggregationBits(data=[False] * len(committee))
+                bits[p] = True
+                singles.append(spec.Attestation(aggregation_bits=bits, data=data, signature=sig))
+        count = spec.get_committee_count_per_slot(state, epoch)
+        for x in singles:
+            valid("an attestation", spec.validate_beacon_attestation_gossip, x, time_ms, spec.compute_subnet_for_attestation(count, a, 0))
+        reqs.append(post(b"/eth/v2/beacon/pool/attestations", ("[" + ",".join(to_json(x) for x in singles) + "]").encode(), version=True))
+        bits = spec.AggregationBits(data=[p in places for p in range(len(committee))])
+        att = spec.Attestation(aggregation_bits=bits, data=data, signature=bls.Aggregate(sigs))
+        if electra:
+            att.committee_bits[0] = True
+        body.attestations.append(att)
+        # sync committee messages of slot - 1 on the parent root, of two validators of the committee
+        pubkeys = [bytes(k) for k in st.current_sync_committee.pubkeys]
+        members = []
+        for k in pubkeys:
+            v = next(i for i, val in enumerate(st.validators) if bytes(val.pubkey) == k)
+            if v not in members:
+                members.append(v)
+        members = members[:2]
+        msg_slot = slot - 1
+        parent = spec.hash_tree_root(st.latest_block_header)
+        domain = spec.get_domain(st, spec.DOMAIN_SYNC_COMMITTEE, spec.compute_epoch_at_slot(msg_slot))
+        sr = spec.compute_signing_root(parent, domain)
+        msgs = [spec.SyncCommitteeMessage(slot=msg_slot, beacon_block_root=parent, validator_index=v,
+                                          signature=bls.Sign(KEYS.privkeys[v], sr)) for v in members]
+        for m in msgs:
+            subnet = min(spec.compute_subnets_for_sync_committee(state, m.validator_index))
+            valid("a sync committee message", spec.validate_sync_committee_message_gossip, m, time_ms, subnet)
+        reqs.append(post(b"/eth/v1/beacon/pool/sync_committees", ("[" + ",".join(to_json(m) for m in msgs) + "]").encode()))
+        sync_bits, sync_sigs = [], []
+        for k in pubkeys:
+            v = next(i for i, val in enumerate(st.validators) if bytes(val.pubkey) == k)
+            sync_bits.append(v in members)
+            if v in members:
+                sync_sigs.append(msgs[members.index(v)].signature)
+        aggregate = spec.SyncAggregate(sync_committee_signature=bls.Aggregate(sync_sigs))
+        for i, bit in enumerate(sync_bits):
+            aggregate.sync_committee_bits[i] = bit
+        body.sync_aggregate = aggregate
+        return reqs
+
+    def build(full):
+        epoch0 = int(spec.config.SHARD_COMMITTEE_PERIOD) + ANCHOR_EPOCH if full else ANCHOR_EPOCH
+        extra = 2 * int(spec.SLOTS_PER_EPOCH) if full else 0  # committees of two and more
+        state, anchor_block = (payload_anchor(spec, fork, epoch0, extra) if merged
+                               else anchor(spec, fork, statuses=True, epoch=epoch0, extra=extra))
+        slot, st = state.slot, None
+        while st is None or st.validators[proposer].slashed:  # the first slot after the anchor's of a proposer not slashed
+            slot += 1
+            st = state.copy()
+            spec.process_slots(st, slot)
+            proposer = int(spec.get_beacon_proposer_index(st))
+        epoch = spec.get_current_epoch(st)
+        root = spec.compute_signing_root(spec.Epoch(epoch), spec.get_domain(st, spec.DOMAIN_RANDAO, epoch))
+        reveal = bls.Sign(KEYS.privkeys[proposer], root)
+        body = spec.BeaconBlockBody(randao_reveal=reveal, eth1_data=st.eth1_data, graffiti=spec.Bytes32(graffiti))
+        if f >= FORKS.index("altair"):
+            body.sync_aggregate = spec.SyncAggregate(sync_committee_signature=spec.G2_POINT_AT_INFINITY)
+        reqs = pool_of(st, state, anchor_block, slot, proposer, body) if full else []
+        result = None
+        if merged:
+            class Engine:
+                def notify_forkchoice_updated(self, head_block_hash, safe_block_hash, finalized_block_hash, payload_attributes):
+                    self.attributes = payload_attributes
+            e = Engine()
+            spec.prepare_execution_payload(st, spec.Hash32(PAYLOAD_HASH), spec.Hash32(PAYLOAD_HASH), spec.ExecutionAddress(), e)
+            attrs, parent = e.attributes, st.latest_execution_payload_header
+            payload = spec.ExecutionPayload(parent_hash=parent.block_hash, fee_recipient=attrs.suggested_fee_recipient,
+                                            state_root=spec.Bytes32(bytes([0x55]) * 32), receipts_root=spec.Bytes32(bytes([0x66]) * 32),
+                                            prev_randao=attrs.prev_randao, block_number=parent.block_number + 1,
+                                            gas_limit=parent.gas_limit, timestamp=attrs.timestamp, base_fee_per_gas=7,
+                                            block_hash=spec.Hash32(bytes([0x44]) * 32))
+            if capella:
+                payload.withdrawals = type(payload.withdrawals)(data=list(attrs.withdrawals))
+            body.execution_payload = payload
+            if f == FORKS.index("bellatrix"):
+                result = json_codec.to_engine_json(payload)
+            else:
+                types = reqresp.engine_result_types(spec, fork)
+                t = types["GetPayloadResult"]
+                fields = {"execution_payload": payload, "block_value": spec.Uint256(block_value)}
+                if f >= FORKS.index("deneb"):
+                    fields["blobs_bundle"] = types["BlobsBundle"]()
+                    fields["should_override_builder"] = False
+                result = json_codec.to_engine_json(t(**fields))
+        block = spec.BeaconBlock(slot=slot, proposer_index=proposer, parent_root=spec.hash_tree_root(st.latest_block_header), body=body)
+        before = int(st.balances[proposer])
+        post_state = st.copy()
+        spec.process_block(post_state, block)
+        block.state_root = spec.hash_tree_root(post_state)
+        gained = int(post_state.balances[proposer]) - before
+        if capella:
+            gained += sum(int(w.amount) for w in body.execution_payload.withdrawals if int(w.validator_index) == proposer)
+        return state, anchor_block, slot, reveal, block, result, max(gained, 0), reqs
+
+    for name, full in (("empty_pool", False), ("full_pool", True)):
+        made = run(spec, schedule(fork), lambda: build(full))
+        if made is None:
+            raise RuntimeError(f"node-produce {fork} {name}: the spec refuses the block")
+        state, anchor_block, slot, reveal, block, result, gwei, pool_reqs = made
+        slot_ms = int(spec.config.SLOT_DURATION_MS)
+        time_ms = int(state.genesis_time) * 1000 + int(slot) * slot_ms
+        payload_value = block_value if capella else 0
+        wei = b"%d" % gwei + (b"000000000" if gwei else b"")
+        if f >= FORKS.index("deneb"):
+            bc = reqresp.produce_types(spec, fork)["BlockContents"](block=block)
+            data_json, data_ssz = to_json(bc).encode(), bytes(bc.encode_bytes())
+        else:
+            data_json, data_ssz = to_json(block).encode(), bytes(block.encode_bytes())
+        head = (b"Eth-Consensus-Version: " + fork.encode() + b"\r\nEth-Execution-Payload-Blinded: false\r\n"
+                b"Eth-Execution-Payload-Value: %d\r\nEth-Consensus-Block-Value: %s\r\n" % (payload_value, wei))
+
+        def answer(body, ssz):
+            return (b"HTTP/1.1 200 OK\r\nContent-Type: " + (b"application/octet-stream" if ssz else b"application/json") + b"\r\n"
+                    + head + b"Content-Length: %d\r\n\r\n" % len(body) + body)
+        body = (b'{"version":"' + fork.encode() + b'","execution_payload_blinded":false,"execution_payload_value":"%d",'
+                b'"consensus_block_value":"%s","data":' % (payload_value, wei) + data_json + b"}")
+        path = b"/eth/v3/validator/blocks/%d?randao_reveal=0x%s&graffiti=0x%s" % (int(slot), bytes(reveal).hex().encode(), graffiti.hex().encode())
+        # the pool's POSTs in the slot before, at 100 ms; then the requests at the slot's start
+        ticks = ([time_ms - slot_ms + 100] + [0] * (len(pool_reqs) - 1) if pool_reqs else []) + [time_ms, 0]
+        yield "produce", name, {
+            "anchor_state": bytes(state.encode_bytes()),
+            "anchor_block": bytes(anchor_block.encode_bytes()),
+            "time_ms": time_ms - slot_ms if pool_reqs else time_ms,
+            "ticks": ticks,
+            "requests": pool_reqs + [b"GET " + path + b" HTTP/1.1\r\nHost: lantern\r\n\r\n",
+                                     b"GET " + path + b" HTTP/1.1\r\nHost: lantern\r\nAccept: application/octet-stream\r\n\r\n"],
+            "responses": [response(200)] * len(pool_reqs) + [answer(body, False), answer(data_ssz, True)],
+            "payload_id": bytes(range(1, 9)) if merged else b"",
+            "result": result.encode() if result is not None else b"",
         }
 
 
@@ -1632,6 +1871,9 @@ def api_requests(spec, fork, v, kind="main"):
                 want = error(404, close=close, keep_alive=keep_alive)
             elif opname in ANSWERED:
                 want = answer(v, opname, route, offline, close, keep_alive, syncing)
+            elif opname == "produceBlockV3":  # 503 while syncing; else the path's slot is at or below the head's: 400
+                assert int(route.slot) <= v["slot"]
+                want = error(503 if int(syncing) & 1 else 400, close=close, keep_alive=keep_alive)
             else:
                 want = error(501, close=close, keep_alive=keep_alive)
         out.append((name, raw, want, close, offline, syncing, stream))

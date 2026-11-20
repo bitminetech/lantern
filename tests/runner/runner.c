@@ -1915,6 +1915,10 @@ typedef struct {
     int watch;
     uint64_t engine_calls, tail_len, pid_len;
     const uint8_t *tail, *pid;
+    /* node-produce: the forkchoiceUpdated's payloadId is pid, and engine_getPayload answers result */
+    int produce;
+    uint64_t result_len;
+    const uint8_t *result;
 } fc_node;
 
 #if FORK >= FORK_BELLATRIX
@@ -2518,7 +2522,7 @@ enum { NB_WAITING = 1, NB_IMPORTING, NB_IMPORTED, NB_INVALID, NB_HASHING, NB_BLO
 enum { EV_TICK = 1, EV_BLOCK, EV_ATTESTATION, EV_ATTESTER_SLASHING, EV_POW_BLOCK, EV_PAYLOAD_STATUS, EV_WORK_DONE, EV_P2P, EV_ENGINE, EV_ENR, EV_API,
        EV_API_IDENTITY, EV_API_SENT, EV_API_CLOSED };
 enum { ACT_BYTES_PUT = 1, ACT_STATE_COPY, ACT_STATE_FREE, ACT_BYTES_FREE, ACT_WORK, ACT_P2P_LIST, ACT_ENGINE, ACT_DISCV5, ACT_DB_APPEND, ACT_DB_STATE, ACT_DB_DROP,
-       ACT_API_SEND, ACT_API_CLOSE, ACT_STATE_BYTES };
+       ACT_API_SEND, ACT_API_CLOSE, ACT_STATE_BYTES, ACT_BYTES_NEW };
 #define NODE_FLAG_DISCV5 64
 #define NODE_FLAG_DB 128
 #define NODE_FLAG_FEW_STATES 256
@@ -2531,7 +2535,8 @@ enum { ACT_BYTES_PUT = 1, ACT_STATE_COPY, ACT_STATE_FREE, ACT_BYTES_FREE, ACT_WO
 enum { WORK_IMPORT_BLOCK = 1, WORK_JUSTIFIED_STATE, WORK_TARGET_STATE, WORK_ATTESTATION, WORK_ATTESTER_SLASHING, WORK_SERVE, WORK_GOSSIP,
        WORK_SYNC_BLOCK, WORK_BLOB, WORK_NEW_PAYLOAD, WORK_FORKCHOICE, WORK_SLOTS, WORK_UPGRADE, WORK_REPLAY, WORK_BACKFILL,
        WORK_BLOCK_ATTESTATION, WORK_BLOCK_SLASHING, WORK_GOSSIP_VOTE, WORK_API_ENCODE, WORK_API_CHUNK, WORK_API_LOOKUP, WORK_API_EVENT,
-       WORK_API_SUBMIT, WORK_POOL_CHECK, WORK_PREPARE_PAYLOAD };
+       WORK_API_SUBMIT, WORK_POOL_CHECK, WORK_PREPARE_PAYLOAD, WORK_PRODUCE_CHECK, WORK_GET_PAYLOAD, WORK_PRODUCE_FOLD,
+       WORK_PRODUCE_BLOCK };
 #define EV_API_BYTES (128 + 616) /* NodeEvent_api_bytes: the chunk's ByteList in the WORK_DONE of an API_CHUNK */
 #define NODE_API_CHUNK 65536
 #define NODE_API_PART (728 + CONFIG_SIZE + 936) /* Node_api: the PartRef of the NodeApi entries */
@@ -3000,10 +3005,10 @@ static void shell_work(fc_node *n, const uint8_t *work, const char **why) {
             ev = buffer(ev_size);
             for (int i = 0; i < 4; i++) s->seen_room[i] *= 2;
             shell_seen(s, why);
-        } else if (kind == WORK_POOL_CHECK) {
-            *why = "lantern_node_run: POOL_CHECK asks for room";
+        } else if (kind == WORK_POOL_CHECK || kind == WORK_PRODUCE_CHECK || kind == WORK_PRODUCE_FOLD) {
+            *why = "lantern_node_run: POOL_CHECK, PRODUCE_CHECK or PRODUCE_FOLD asks for room";
         } else if (kind == WORK_SERVE || kind == WORK_NEW_PAYLOAD || kind == WORK_FORKCHOICE || kind == WORK_API_ENCODE ||
-            kind == WORK_API_EVENT || kind == WORK_PREPARE_PAYLOAD) {
+            kind == WORK_API_EVENT || kind == WORK_PREPARE_PAYLOAD || kind == WORK_GET_PAYLOAD || kind == WORK_PRODUCE_BLOCK) {
             free(ev);
             ev_size *= 4;
             ev = buffer(ev_size);
@@ -3046,7 +3051,7 @@ static void shell_work(fc_node *n, const uint8_t *work, const char **why) {
                   memcmp(ev + 16, work + 16, 56) ||
                   (kind != WORK_SERVE && kind != WORK_NEW_PAYLOAD && kind != WORK_FORKCHOICE && kind != WORK_API_ENCODE &&
                    kind != WORK_API_CHUNK && kind != WORK_API_EVENT && kind != WORK_API_SUBMIT && kind != WORK_PREPARE_PAYLOAD &&
-                   esize != EV_WORK_DONE_SIZE)))
+                   kind != WORK_GET_PAYLOAD && kind != WORK_PRODUCE_BLOCK && esize != EV_WORK_DONE_SIZE)))
         *why = "lantern_node_run: the event is not the WORK_DONE of the work";
     if (!*why) {
         uint64_t result = rd64(ev + EV_RESULT);
@@ -3158,7 +3163,15 @@ static void shell_step(fc_node *n, const char **why) {
         if (kind == ACT_BYTES_PUT && size >= 48 && rd64(act + 24) == size - 24 && rd64(act + 32) == 24 &&
             rd64(act + 40) <= size - 48)
             shell_keep(s, rd64(act + 16), copy_of(act + 24, size - 24), size - 24, why);
-        else if (kind == ACT_STATE_BYTES && size == 32) {
+        else if (kind == ACT_BYTES_NEW && size == 32 && rd64(act + 24) >= 24) { /* a ByteList of the size, its bytes zero */
+            uint64_t n = rd64(act + 24);
+            uint8_t *b = buffer(n);
+            memset(b, 0, (size_t)n);
+            wr64(b, n);
+            wr64(b + 8, 24);
+            wr64(b + 16, n - 24);
+            shell_keep(s, rd64(act + 16), b, n, why);
+        } else if (kind == ACT_STATE_BYTES && size == 32) {
             shell_buf *src = shell_find(s, rd64(act + 16));
             uint64_t need = 0, got = 0;
             uint8_t small[24] = {0};
@@ -3334,6 +3347,29 @@ static void shell_engine(fc_node *n, const uint8_t *req, uint64_t len, const cha
     const char *body = end + 4;
     uint64_t blen = len - (uint64_t)(body - r);
     int fcu = find_bytes(body, blen, "\"method\":\"engine_forkchoiceUpdatedV") != NULL;
+    if (n->produce && find_bytes(body, blen, "\"method\":\"engine_getPayloadV")) { /* the case's result */
+        const char *ip = find_bytes(body, blen, "\"id\":");
+        unsigned long long gid = 0;
+        for (const char *d = ip ? ip + 5 : body + blen; d < body + blen && *d >= '0' && *d <= '9'; d++) gid = gid * 10 + (unsigned long long)(*d - '0');
+        size_t jl = (size_t)n->result_len + 64, hl;
+        char *json = malloc(jl), *http = malloc(jl + 128);
+        if (!json || !http) {
+            fprintf(stderr, "out of memory\n");
+            exit(2);
+        }
+        int k = snprintf(json, jl, "{\"jsonrpc\":\"2.0\",\"id\":%llu,\"result\":", gid);
+        memcpy(json + k, n->result, (size_t)n->result_len);
+        k += (int)n->result_len;
+        json[k++] = '}';
+        hl = (size_t)snprintf(http, 128, "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: %d\r\n\r\n", k);
+        memcpy(http + hl, json, (size_t)k);
+        hl += (size_t)k;
+        shell_event(n->shell, EV_ENGINE, 0, (const uint8_t *)http, (uint64_t)hl / 2); /* in two parts */
+        shell_event(n->shell, EV_ENGINE, 0, (const uint8_t *)http + hl / 2, (uint64_t)(hl - hl / 2));
+        free(json);
+        free(http);
+        return;
+    }
     if (!fcu && !find_bytes(body, blen, "\"method\":\"engine_newPayloadV")) {
         *why = "engine: no engine_newPayload or engine_forkchoiceUpdated";
         return;
@@ -3373,7 +3409,7 @@ static void shell_engine(fc_node *n, const uint8_t *req, uint64_t len, const cha
     }
     snprintf(status, sizeof status, "{\"status\":\"%s\",\"latestValidHash\":%s,\"validationError\":null}", names[el - 1], lvh);
     char pid[24] = "null";
-    if (n->watch && n->pid_len == 8) {
+    if ((n->watch || n->produce) && n->pid_len == 8 && find_bytes(body, blen, "\"timestamp\":")) {
         strcpy(pid, "\"0x");
         for (int i = 0; i < 8; i++) snprintf(pid + 3 + 2 * i, 3, "%02x", n->pid[i]);
         strcat(pid, "\"");
@@ -7384,6 +7420,56 @@ static const char *api_mismatch(const struct node_shell *s, const char *name, co
  * offline on, after a NODE_EV_ENGINE with arg 1. The sends must be the case's response, the last
  * with last 1 and no other, and one NODE_ACT_API_CLOSE after them when the case closes.
  */
+/* node-produce: lantern's cases of produceBlockV3 (node.md, Test vectors). */
+static void run_node_produce(const char *file, case_file *f) {
+    for (uint64_t i = 0; i < f->count; i++) {
+        const char *name, *why = NULL;
+        uint64_t len, plen;
+        tv parts = next_case(f, &name, &len);
+        if (skip_case(parts)) continue;
+        fc_node n;
+        uint8_t *anchor_block;
+        struct node_shell *s = shell_open(&n, parts, &anchor_block, &why);
+        tv reqs = tv_get(parts, "requests"), resps = tv_get(parts, "responses");
+        n.produce = 1;
+        n.pid = tv_bytes(tv_get(parts, "payload_id"), &plen);
+        n.pid_len = plen;
+        n.result = tv_bytes(tv_get(parts, "result"), &n.result_len);
+        if (!why) {
+            for (uint64_t fk = FORK_ALTAIR; fk <= FORK_FULU; fk++)
+                wr64(n.store + STORE_CONFIG + 16 * fk, rd64(s->ncfg + 16 * fk));
+            shell_event(s, EV_TICK, tv_u64(tv_get(parts, "time_ms")), NULL, 0);
+            shell_settle(&n, &why);
+        }
+        tv rq = reqs + 9, rs = resps + 9, tk = tv_get(parts, "ticks") + 9;
+        uint64_t nreq = rd64(reqs + 1);
+        if (rd64(tv_get(parts, "ticks") + 1) != nreq) why = "the case's ticks are not one for each request";
+        for (uint64_t k = 0; k < nreq && !why; k++, rq = tv_skip(rq), rs = tv_skip(rs), tk = tv_skip(tk)) {
+            uint64_t rlen, wlen, glen = 0, at = tv_u64(tk);
+            const uint8_t *req = tv_bytes(rq, &rlen), *want = tv_bytes(rs, &wlen);
+            if (at) { /* a tick before the request */
+                shell_event(s, EV_TICK, at, NULL, 0);
+                shell_settle(&n, &why);
+                if (why) break;
+            }
+            shell_api_ask(&n, req, rlen, (k + 1) | (uint64_t)7 << 32, &why);
+            uint8_t *got = why ? NULL : api_normalize(s, &glen, &why);
+            if (!why && (glen != wlen || memcmp(got, want, (size_t)wlen))) {
+                free(s->api.b);
+                s->api.b = got;
+                s->api.len = s->api.cap = glen;
+                got = NULL;
+                why = api_mismatch(s, k + 2 < nreq ? "a pool POST" : k + 1 < nreq ? "produceBlockV3" : "produceBlockV3 (SSZ)", want, wlen);
+            }
+            free(got);
+            if (!why) why = api_clean(s);
+        }
+        n.produce = 0;
+        shell_close(&n, anchor_block);
+        report(file, name, len, why == NULL, why);
+    }
+}
+
 /* node-payload: lantern's cases of payload preparation (node.md, Test vectors). */
 #define NODE_PAYLOAD_SLOT (NODE_API_PART + 664) /* Node_payload_slot: past the proposers PartRef */
 static void run_node_payload(const char *file, case_file *f) {
@@ -8901,6 +8987,7 @@ int main(int argc, char **argv) {
         else if (!bls_off && !strcmp(kind, "app-options")) run_app_options(file, &f);
         else if (!bls_off && !strcmp(kind, "node-api")) run_node_api(file, &f);
         else if (!bls_off && !strcmp(kind, "node-payload")) run_node_payload(file, &f);
+        else if (!bls_off && !strcmp(kind, "node-produce")) run_node_produce(file, &f);
         else if (!bls_off && !strcmp(kind, "json-encode")) run_json_encode(file, &f);
         else if (!bls_off && !strcmp(kind, "json-decode")) run_json_decode(file, &f, 0);
         else if (!bls_off && !strcmp(kind, "json-engine_decode")) run_json_decode(file, &f, 1);

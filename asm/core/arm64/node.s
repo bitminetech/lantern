@@ -616,7 +616,19 @@ LOCAL_FUNCTION node_ids
     ldr     x11, [x9, #NodeApi_connection]
     cbz     x11, 2f
     ldp     x11, x12, [x9, #NodeApi_flags]  /* flags, data */
-    cmp     x12, x1
+    ldr     x13, [x9, #NodeApi_op]          /* a produceBlockV3 in its folds: the pool bytes of its fold in flight */
+    cmp     x13, #API_OP_PRODUCE_BLOCK_V3
+    b.ne    11f
+    ldr     x13, [x9, #NodeApi_member]
+    cmp     x13, #NODE_PRODUCE_FOLD
+    b.ne    2f
+    ldr     x13, [x9, #NodeApi_root]
+    cmp     x13, x1
+    b.ne    2f
+    orr     x11, x11, #API_STREAM_PRODUCE_OWN
+    str     x11, [x9, #NodeApi_flags]
+    UNFRAME 32
+11: cmp     x12, x1
     b.ne    2f
     tbnz    x11, #3, 2f                     /* API_STREAM_OWN: its own bytes already */
     orr     x11, x11, #API_STREAM_OWN
@@ -1318,6 +1330,8 @@ LOCAL_FUNCTION node_engine_next
     ldr     x9, [x19, #Node_engine_wait]
     cmp     x25, x9
     b.lo    9f
+    bl      node_produce_engine             /* a produceBlockV3 waiting for its payload goes first */
+    cbnz    x0, 9f
     PART    x21, x22, x19, Node_blocks
     mov     x26, #0
 1:  cmp     x26, x22
@@ -1434,7 +1448,116 @@ LOCAL_FUNCTION node_prepare
     cmp     x11, x13
     ccmp    x12, x14, #0, eq
     b.eq    8f
-4:  STQ     x26, x19, Node_payload_slot
+4:  mov     x0, x26
+    mov     x1, #0
+    bl      node_prepare_go
+    LEAVE 0
+8:  mov     x0, #0
+    LEAVE 0
+END_FUNCTION node_prepare
+
+/*
+ * L1: with no engine call in flight, the call of the first produceBlockV3 entry in
+ * NODE_PRODUCE_PAYLOAD (node.md, Block production): a GET_PAYLOAD of payload_id when the payload
+ * of its slot on the head is NODE_PAYLOAD_READY; else a forced preparation of its slot, once (a
+ * second that ends with no payloadId: 500). x0 = 1 when a call went. x21 an entry, x22 its index,
+ * x26 the count.
+ */
+LOCAL_FUNCTION node_produce_engine
+    ENTER 0
+    PART    x21, x26, x19, Node_api
+    mov     x22, #0
+1:  cmp     x22, x26
+    b.hs    8f
+    ldr     x9, [x21, #NodeApi_connection]
+    cbz     x9, 2f
+    ldr     x9, [x21, #NodeApi_op]
+    cmp     x9, #API_OP_PRODUCE_BLOCK_V3
+    b.ne    2f
+    ldr     x9, [x21, #NodeApi_member]
+    cmp     x9, #NODE_PRODUCE_PAYLOAD
+    b.eq    3f
+2:  add     x21, x21, #NodeApi__mem
+    add     x22, x22, #1
+    b       1b
+3:  LDQ     x9, x19, Node_payload_slot      /* the payload of its slot on the head */
+    ldr     x10, [x21, #NodeApi_slot]
+    cmp     x9, x10
+    b.ne    6f
+    ADDQ    x9, x19, Node_payload_root
+    add     x10, x19, #Node_head_root
+    ldp     x11, x12, [x9]
+    ldp     x13, x14, [x10]
+    cmp     x11, x13
+    ccmp    x12, x14, #0, eq
+    b.ne    6f
+    ldp     x11, x12, [x9, #16]
+    ldp     x13, x14, [x10, #16]
+    cmp     x11, x13
+    ccmp    x12, x14, #0, eq
+    b.ne    6f
+    LDQ     x9, x19, Node_payload_status
+    cmp     x9, #NODE_PAYLOAD_READY
+    b.eq    4f
+    ldr     x9, [x21, #NodeApi_flags]       /* no payloadId: a preparation of its own, else 500 */
+    tbz     x9, #17, 6f                     /* API_STREAM_PRODUCE_FORCED */
+    mov     x0, x21
+    mov     x1, #500
+    bl      node_produce_fail
+    mov     x0, #0
+    LEAVE 0
+4:  mov     x9, #ENGINE_METHOD_GET_PAYLOAD
+    str     x9, [x19, #Node_engine_method]
+    str     x22, [x19, #Node_engine_target]
+    ldr     x5, [x19, #Node_engine_id]
+    add     x9, x5, #1
+    str     x9, [x19, #Node_engine_id]
+    mov     x0, #NODE_WORK_GET_PAYLOAD
+    mov     x1, #0
+    mov     x2, #0
+    mov     x3, #0
+    mov     x4, x22
+    bl      node_work
+    mov     x0, #1
+    LEAVE 0
+6:  ldr     x9, [x21, #NodeApi_flags]
+    orr     x9, x9, #API_STREAM_PRODUCE_FORCED
+    str     x9, [x21, #NodeApi_flags]
+    ldr     x0, [x21, #NodeApi_slot]
+    mov     x1, #1
+    bl      node_prepare_go
+    cbnz    x0, 7f
+    mov     x0, x21
+    mov     x1, #500
+    bl      node_produce_fail
+    mov     x0, #0
+    LEAVE 0
+7:  mov     x0, #1
+    LEAVE 0
+8:  mov     x0, #0
+    LEAVE 0
+END_FUNCTION node_produce_engine
+
+/*
+ * L1: the preparation of a payload for slot x0 on the head (node.md, Payload preparation), forced
+ * with x1 = 1 (a fee recipient of zero bytes when the proposer has none): a copy of the head's
+ * post-state at that slot, a PREPARE_PAYLOAD work of it with the next engine id and x1 as its
+ * target, and the copy's STATE_FREE; it is the call in flight. x0 = 1 when it went, 0 with no head
+ * post-state. x21 the head's entry, x22 the copy, x25 forced, x26 the slot, x27 the copy's slot,
+ * x28 a fork.
+ */
+LOCAL_FUNCTION node_prepare_go
+    ENTER 0
+    mov     x26, x0
+    mov     x25, x1
+    add     x0, x19, #Node_head_root
+    bl      node_find_block
+    cmn     x0, #1
+    b.eq    8f
+    mov     x21, x1
+    ldr     x9, [x21, #NodeBlock_state_id]
+    cbz     x9, 8f
+    STQ     x26, x19, Node_payload_slot
     ADDQ    x0, x19, Node_payload_root
     add     x1, x19, #Node_head_root
     bl      lantern_copy_root
@@ -1489,7 +1612,7 @@ LOCAL_FUNCTION node_prepare
     mov     x1, x22
     mov     x2, #0
     mov     x3, #0
-    mov     x4, #0
+    mov     x4, x25
     bl      node_work
     mov     x0, #NODE_ACT_STATE_FREE
     mov     x1, x22
@@ -1499,7 +1622,7 @@ LOCAL_FUNCTION node_prepare
     LEAVE 0
 8:  mov     x0, #0
     LEAVE 0
-END_FUNCTION node_prepare
+END_FUNCTION node_prepare_go
 
 /* L0: the import of each waiting block whose parent is the block of the entry x0. x21 the root, x22 index, x25 count. */
 LOCAL_FUNCTION node_children
@@ -3321,12 +3444,106 @@ LOCAL_FUNCTION node_engine_failed
     STQ     xzr, x19, Node_payload_slot
     STQ     xzr, x19, Node_payload_status
     LEAVE 0
-1:  cmp     x9, #ENGINE_METHOD_NEW_PAYLOAD
+1:  cmp     x9, #ENGINE_METHOD_GET_PAYLOAD  /* a getPayload's entry: 500 */
+    b.ne    2f
+    ldr     x0, [x19, #Node_engine_target]
+    bl      node_produce_fail_at
+    LEAVE 0
+2:  cmp     x9, #ENGINE_METHOD_NEW_PAYLOAD
     b.ne    9f
     ldr     x0, [x19, #Node_engine_target]
     bl      node_payload_retry
 9:  LEAVE 0
 END_FUNCTION node_engine_failed
+
+/* L1: the produceBlockV3 entry at index x0, while it waits for its payload: 500. */
+LOCAL_FUNCTION node_produce_fail_at
+    FRAME 0
+    PART    x9, x10, x19, Node_api
+    cmp     x0, x10
+    b.hs    9f
+    mov     x10, #NodeApi__mem
+    madd    x0, x0, x10, x9
+    ldr     x9, [x0, #NodeApi_connection]
+    cbz     x9, 9f
+    ldr     x9, [x0, #NodeApi_op]
+    cmp     x9, #API_OP_PRODUCE_BLOCK_V3
+    b.ne    9f
+    ldr     x9, [x0, #NodeApi_member]
+    cmp     x9, #NODE_PRODUCE_PAYLOAD
+    b.ne    9f
+    mov     x1, #500
+    bl      node_produce_fail
+9:  UNFRAME 0
+END_FUNCTION node_produce_fail_at
+
+/*
+ * L2: the engine_getPayload body x0 (a ByteList in scratch x23, which stays short) with its
+ * EngineResponse x1, for the produceBlockV3 entry at engine_target in NODE_PRODUCE_PAYLOAD: its
+ * result decoded by lantern_node_payload_result into a BYTES_PUT action, whose id the entry keeps
+ * as filter_index before its fold; a result that does not decode: 500, and the action goes. x21
+ * the body, x22 the entry, x25 the action, x26 its size. Locals: L a JsonFault (128).
+ */
+LOCAL_FUNCTION node_produce_payload
+    ENTER 128
+    mov     x21, x0
+    ldr     x9, [x19, #Node_engine_target]
+    PART    x22, x10, x19, Node_api
+    cmp     x9, x10
+    b.hs    9f
+    mov     x10, #NodeApi__mem
+    madd    x22, x9, x10, x22
+    ldr     x9, [x22, #NodeApi_connection]
+    cbz     x9, 9f
+    ldr     x9, [x22, #NodeApi_op]
+    cmp     x9, #API_OP_PRODUCE_BLOCK_V3
+    b.ne    9f
+    ldr     x9, [x22, #NodeApi_member]
+    cmp     x9, #NODE_PRODUCE_PAYLOAD
+    b.ne    9f
+    ldr     x9, [x1, #EngineResponse_result_offset]     /* the body becomes the result's bytes */
+    ldr     x10, [x1, #EngineResponse_result_length]
+    ldr     x11, [x21, #8]
+    add     x11, x11, x9
+    stp     x11, x10, [x21, #8]
+    add     x26, x10, #(48 + 1024 + 7)      /* the action: room for the SSZ bytes, at most the text's + 1024 */
+    and     x26, x26, #~7
+    mov     x0, #NODE_ACT_BYTES_PUT
+    mov     x1, x26
+    bl      node_act
+    mov     x25, x0
+    bl      node_new_id
+    str     x0, [x25, #16]
+    sub     x9, x26, #24
+    mov     x10, #24
+    stp     x9, x10, [x25, #24]
+    str     xzr, [x25, #40]
+    ldr     x0, [x22, #NodeApi_slot]
+    add     x1, x19, #Node_config
+    bl      node_fork
+    mov     x15, x0
+    mov     x0, x21
+    mov     x1, x23
+    add     x2, x25, #24
+    add     x3, sp, #L
+    FORK_CALL_BELLATRIX node_payload_result
+    cbnz    x0, 8f
+    ldr     x9, [x25, #16]                  /* the entry keeps the result, then folds */
+    str     x9, [x22, #NodeApi_filter_index]
+    mov     x9, #NODE_PRODUCE_FOLD
+    str     x9, [x22, #NodeApi_member]
+    str     xzr, [x22, #NodeApi_filter_slot]
+    mov     x0, x22
+    bl      node_produce_next
+    LEAVE 128
+8:  ldr     x9, [x24, #16]                  /* no result: the action goes, and 500 */
+    sub     x9, x9, x26
+    str     x9, [x24, #16]
+    mov     x0, x22
+    mov     x1, #500
+    bl      node_produce_fail
+9:  LEAVE 128
+END_FUNCTION node_produce_payload
 
 /* L0: the block of index x0, if NODE_BLOCK_EXECUTING, takes NODE_BLOCK_PAYLOAD with retry the store's slot + 1. x21 the entry. */
 LOCAL_FUNCTION node_payload_retry
@@ -3461,7 +3678,15 @@ LOCAL_FUNCTION node_engine_read
     mov     x0, x21
     ldr     x1, [sp, #(L + 8)]
     bl      node_engine_consume
+    cmp     x22, #ENGINE_METHOD_GET_PAYLOAD /* engine_getPayload: its result, decoded with the body still in scratch */
+    b.ne    44f
+    mov     x0, x26
+    add     x1, sp, #(L + 32)
+    bl      node_produce_payload
     str     x25, [x23]
+    str     xzr, [x19, #Node_engine_method]
+    b       9f
+44: str     x25, [x23]
     str     xzr, [x19, #Node_engine_method] /* the call ends */
     ldr     x9, [sp, #(L + 32 + EngineResponse_status)]
     cmp     x22, #ENGINE_METHOD_NEW_PAYLOAD
@@ -4223,6 +4448,7 @@ LOCAL_FUNCTION node_event
 85: cmp     x9, #NODE_WORK_NEW_PAYLOAD         /* NEW_PAYLOAD, FORKCHOICE, PREPARE_PAYLOAD: the request to the execution engine */
     ccmp    x9, #NODE_WORK_FORKCHOICE, #4, ne
     ccmp    x9, #NODE_WORK_PREPARE_PAYLOAD, #4, ne
+    ccmp    x9, #NODE_WORK_GET_PAYLOAD, #4, ne
     b.ne    701f
     cbnz    x10, 87f
     cmp     x9, #NODE_WORK_PREPARE_PAYLOAD     /* a preparation: its proposer; its call updates the fork choice too */
@@ -4254,8 +4480,13 @@ LOCAL_FUNCTION node_event
 87: str     xzr, [x19, #Node_engine_method]    /* no request: the call ends */
     ldr     x9, [x21, #NodeAction_work_kind]
     cmp     x9, #NODE_WORK_PREPARE_PAYLOAD
-    b.ne    871f
+    b.ne    870f
     STQ     xzr, x19, Node_payload_status
+    LEAVE 48
+870: cmp    x9, #NODE_WORK_GET_PAYLOAD
+    b.ne    871f
+    ldr     x0, [x21, #NodeAction_target]
+    bl      node_produce_fail_at
     LEAVE 48
 871: cmp    x9, #NODE_WORK_NEW_PAYLOAD
     b.ne    79f
@@ -4307,9 +4538,16 @@ LOCAL_FUNCTION node_event
     bl      node_api_submit_done
     LEAVE 48
 706: cmp    x9, #NODE_WORK_POOL_CHECK          /* POOL_CHECK: the entry stays, or goes */
-    b.ne    70f
+    b.ne    707f
     mov     x0, x21
     bl      node_pool_check_done
+    LEAVE 48
+707: cmp    x9, #NODE_WORK_PRODUCE_CHECK       /* the works of block production: their entry goes on */
+    ccmp    x9, #NODE_WORK_PRODUCE_FOLD, #4, ne
+    ccmp    x9, #NODE_WORK_PRODUCE_BLOCK, #4, ne
+    b.ne    70f
+    mov     x0, x21
+    bl      node_produce_done
     LEAVE 48
 70: cmp     x9, #NODE_WORK_ATTESTATION         /* done with an attestation or a slashing: free its bytes */
     ccmp    x9, #NODE_WORK_ATTESTER_SLASHING, #4, ne
@@ -8321,7 +8559,15 @@ FUNCTION lantern_node_step
     ldr     x13, [x19, #(Node_checkpoints + 8)]
     add     x12, x12, x13, lsl #5
     add     x12, x12, #2048                 /* and 2048 free: the crossing of a fork boundary takes 208 */
-    str     x12, [sp, #(L + 72)]
+    ldr     x9, [x19, #Node_engine_method]  /* a getPayload in flight: its result's bytes, as engine_in holds them, and 1072 */
+    cmp     x9, #ENGINE_METHOD_GET_PAYLOAD
+    b.ne    581f
+    ldr     x9, [x19, #Node_engine_in]
+    add     x9, x19, x9
+    ldr     x9, [x9, #16]
+    add     x12, x12, x9
+    add     x12, x12, #1072
+581: str    x12, [sp, #(L + 72)]
     ldr     x9, [sp, #(L + 16)]
     cbz     x9, 51f
     MOVQ    x9, LIBP2P_ACTIONS_MIN + 24 + 16
@@ -9258,7 +9504,7 @@ FUNCTION lantern_node_run
     mov     x11, #SLOTS_PER_EPOCH
     udiv    x10, x10, x11
     PART    x12, x13, x19, Node_proposers
-833: cbz    x13, 836f
+833: cbz    x13, 8335f
     ldr     x14, [x12, #NodeProposer_validator_index]
     ldr     x15, [x12, #NodeProposer_until_epoch]
     cmp     x14, x9
@@ -9268,6 +9514,14 @@ FUNCTION lantern_node_run
     sub     x13, x13, #1
     b       833b
 834: str    x12, [sp, #(L + 24)]
+    b       8336f
+8335: ldr   x9, [x21, #NodeAction_target]    /* forced: a fee recipient of zero bytes, at L+40 */
+    cbz     x9, 836f
+    stp     xzr, xzr, [sp, #(L + 40)]
+    str     xzr, [sp, #(L + 56)]
+    add     x12, sp, #(L + 24)
+    str     x12, [sp, #(L + 24)]
+8336:
     ADDQ    x0, x19, Node_payload_root      /* the ForkchoiceState: the parent hash, safe (justified), finalized */
     bl      node_store_find
     cmn     x0, #1
@@ -9330,7 +9584,180 @@ FUNCTION lantern_node_run
     str     x9, [x25, #NodeEvent_result]
     mov     x0, #LANTERN_OK
     LEAVE 192
-890:
+890: cmp    x9, #NODE_WORK_PRODUCE_CHECK
+    b.ne    8410f
+    cbz     x22, 837b                       /* PRODUCE_CHECK: lantern_node_produce_check of the request in the entry's cursor */
+    ldr     x0, [x22, #NODE_STATE_SLOT]
+    add     x1, x19, #Node_config
+    bl      node_fork
+    mov     x15, x0
+    ldr     x9, [x21, #NodeAction_target]
+    PART    x10, x11, x19, Node_api
+    cmp     x9, x11
+    b.hs    837b
+    mov     x11, #NodeApi__mem
+    madd    x1, x9, x11, x10
+    add     x1, x1, #NodeApi_cursor
+    mov     x0, x22
+    mov     x2, x24
+    add     x3, x25, #NodeEvent_index
+    FORK_CALL node_produce_check
+    cmp     x0, #LANTERN_BUFFER_TOO_SMALL
+    b.eq    8401f
+    str     x0, [x25, #NodeEvent_result]
+    mov     x0, #LANTERN_OK
+8401: LEAVE 192
+8410: cmp   x9, #NODE_WORK_GET_PAYLOAD
+    b.ne    8420f
+    ldr     x9, [x21, #NodeAction_target]   /* GET_PAYLOAD: engine_getPayload of the fork of the entry's slot */
+    PART    x10, x11, x19, Node_api
+    cmp     x9, x11
+    b.hs    837b
+    mov     x11, #NodeApi__mem
+    madd    x9, x9, x11, x10
+    ldr     x0, [x9, #NodeApi_slot]
+    add     x1, x19, #Node_config
+    bl      node_fork
+    mov     x28, x0
+    cmp     x26, #(NodeEvent_chunk + 24)
+    b.lo    8419f
+    ldr     x27, [x24]                      /* at the end of scratch: the JSON (536), the token (280), the host (88) */
+    MOVQ    x9, 904 + 512
+    cmp     x27, x9
+    b.lo    8419f
+    sub     x10, x27, #904
+    str     x10, [x24]
+    add     x22, x24, x10
+    mov     x11, #24
+    mov     x9, #536
+    stp     x9, x11, [x22]
+    str     xzr, [x22, #16]
+    mov     x9, #280
+    add     x12, x22, #536
+    stp     x9, x11, [x12]
+    str     xzr, [x12, #16]
+    mov     x9, #88
+    add     x12, x22, #816
+    stp     x9, x11, [x12]
+    ldr     x2, [x19, #Node_engine_host_len]
+    str     x2, [x12, #16]
+    add     x0, x22, #(816 + 24)
+    add     x1, x19, #Node_engine_host
+    bl      lantern_copy
+    ADDQ    x0, x19, Node_payload_id
+    add     x1, x21, #NodeAction_arg
+    mov     x2, x22
+    mov     x15, x28
+    FORK_CALL_BELLATRIX engine_get_payload
+    cbnz    x0, 8418f
+    ldr     x9, [x19, #Node_time_ms]        /* the JWT at the time in seconds */
+    mov     x10, #1000
+    udiv    x9, x9, x10
+    str     x9, [sp, #L]
+    add     x0, x19, #Node_jwt_secret
+    add     x1, sp, #L
+    mov     x2, x24
+    add     x3, x22, #536
+    bl      lantern_jwt_token
+    cbnz    x0, 8418f
+    add     x3, x25, #NodeEvent_chunk       /* the HTTP request after the WORK_DONE fields */
+    sub     x9, x26, #NodeEvent_chunk
+    mov     x10, #24
+    stp     x9, x10, [x3]
+    str     xzr, [x3, #16]
+    add     x0, x22, #816
+    add     x1, x22, #536
+    mov     x2, x22
+    bl      lantern_http_post
+    cbnz    x0, 8418f
+    str     x27, [x24]
+    add     x9, x25, #NodeEvent_chunk       /* the sizes of the list and the event */
+    ldr     x10, [x9, #16]
+    add     x10, x10, #(24 + 7)
+    and     x10, x10, #~7
+    str     x10, [x9]
+    add     x10, x10, #NodeEvent_chunk
+    str     x10, [x25]
+    mov     x0, #LANTERN_OK
+    LEAVE 192
+8418: str   x27, [x24]
+    LEAVE 192
+8419: mov   x0, #LANTERN_BUFFER_TOO_SMALL
+    LEAVE 192
+8420: cmp   x9, #NODE_WORK_PRODUCE_FOLD
+    b.ne    8430f
+    cbz     x22, 837b                       /* PRODUCE_FOLD: lantern_node_produce_fold of the pool entry in state_b, into the draft in place */
+    ldr     x9, [sp, #(L + 72)]
+    cbz     x9, 837b
+    cbz     x23, 837b
+    ldr     x0, [x22, #NODE_STATE_SLOT]
+    add     x1, x19, #Node_config
+    bl      node_fork
+    mov     x15, x0
+    mov     x0, x22
+    ldr     x1, [sp, #(L + 72)]
+    mov     x2, x23
+    ldr     x3, [x21, #NodeAction_arg]
+    mov     x4, x24
+    FORK_CALL node_produce_fold
+    cmp     x0, #LANTERN_BUFFER_TOO_SMALL
+    b.eq    8449f
+    str     x0, [x25, #NodeEvent_result]
+    mov     x0, #LANTERN_OK
+    LEAVE 192
+8430: cmp   x9, #NODE_WORK_PRODUCE_BLOCK
+    b.ne    8450f
+    cbz     x22, 837b                       /* PRODUCE_BLOCK: lantern_node_produce_block, as a ByteList at NodeEvent_chunk */
+    cbz     x23, 837b
+    cmp     x26, #(NodeEvent_chunk + 24)
+    b.lo    8419b
+    add     x9, x25, #NodeEvent_chunk
+    sub     x10, x26, #NodeEvent_chunk
+    mov     x11, #24
+    stp     x10, x11, [x9]
+    str     xzr, [x9, #16]
+    ldr     x9, [x21, #NodeAction_target]   /* the request: the entry's cursor */
+    PART    x10, x11, x19, Node_api
+    cmp     x9, x11
+    b.hs    837b
+    mov     x11, #NodeApi__mem
+    madd    x9, x9, x11, x10
+    add     x9, x9, #NodeApi_cursor
+    str     x9, [sp, #(L + 32)]
+    ldr     x0, [x22, #NODE_STATE_SLOT]
+    add     x1, x19, #Node_config
+    bl      node_fork
+    mov     x15, x0
+    add     x9, x19, #Node_config           /* ProduceBlock at L+96: request, config, result, values */
+    ldr     x10, [sp, #(L + 32)]
+    stp     x10, x9, [sp, #(L + 96)]
+    ldr     x9, [sp, #(L + 72)]
+    add     x10, x25, #NodeEvent_root
+    stp     x9, x10, [sp, #(L + 112)]
+    add     x9, x25, #NodeEvent_index
+    str     x9, [sp, #(L + 128)]
+    mov     x0, x22
+    mov     x1, x23
+    add     x2, sp, #(L + 96)
+    mov     x3, x24
+    add     x4, x25, #NodeEvent_chunk
+    FORK_CALL node_produce_block
+8440: cmp   x0, #LANTERN_BUFFER_TOO_SMALL
+    b.eq    8449f
+    cbz     x0, 8441f
+    str     x0, [x25, #NodeEvent_result]    /* a failed check: the result, no bytes */
+    mov     x0, #LANTERN_OK
+    LEAVE 192
+8441: add   x9, x25, #NodeEvent_chunk       /* the sizes of the list and the event */
+    ldr     x10, [x9, #16]
+    add     x10, x10, #(24 + 7)
+    and     x10, x10, #~7
+    str     x10, [x9]
+    add     x10, x10, #NodeEvent_chunk
+    str     x10, [x25]
+    mov     x0, #LANTERN_OK
+8449: LEAVE 192
+8450:
 89: cmp     x9, #NODE_WORK_SLOTS
     b.ne    90f
     ldr     x0, [x22, #NODE_STATE_SLOT]     /* SLOTS: process_slots of the fork of the state's slot, to arg */
