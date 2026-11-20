@@ -361,7 +361,7 @@ POOL_POSTS = ("submitPoolVoluntaryExit", "submitPoolProposerSlashings", "submitP
 ANSWERED = ("getHealth", "getNetworkIdentity", "getNodeVersion", "getSyncingStatus", "getPeerCount", "getGenesis",
             "getBlockHeader", "getStateFinalityCheckpoints", "getBlockV2", "getStateV2", "getBlockRoot", "getStateRoot",
             "getStateFork", "getSpec", "getForkSchedule", "getDepositContract", "getEpochCommittees",
-            "getProposerDuties", "produceAttestationData", "eventstream") + VALIDATOR_OPS
+            "getProposerDuties", "produceAttestationData", "getAttesterDuties", "eventstream") + VALIDATOR_OPS
 IDENTITY = (b"16Uiu2HAmPLe7Mzm8TsYUubgCAW1aJoeFScxrLj8ppHFivPo97bUZ",
             b"enr:-Iu4QLm7bZGdAhVwRqZ6Zf3LlnqKsBTnZGOByHQhPMQJ3pV4F3t8L9i5yJOZ0X0hiZ6q4D5V0jB7l8J3ZtYw1JDH9C4BgmlkgnY0gmlwhAoAAAGJc2VjcDI1NmsxoQPKY0yuDUmstAHYpMa2_oxVtw0RW_QAdpzBQA8yWM0xOIN0Y3CCIyg",
             b"/ip4/10.0.0.1/tcp/9000/p2p/16Uiu2HAmPLe7Mzm8TsYUubgCAW1aJoeFScxrLj8ppHFivPo97bUZ",
@@ -673,6 +673,49 @@ def att_data_answer(v, route, kw, syncing):
     return response(200, b'{"data":' + to_json(data).encode() + b"}", **kw)
 
 
+def attester_duties_answer(v, route, kw, syncing):
+    """The answer of getAttesterDuties (beacon-api.md): get_committee_assignment of each index of the body."""
+    import struct
+    spec = v["spec"]
+    if syncing:
+        return error(503, **kw)
+    spe = int(spec.SLOTS_PER_EPOCH)
+    store_slot = v["slot"] + SLOTS_AHEAD
+    epoch = route.epoch
+    if epoch > store_slot // spe + 1:
+        return error(400, **kw)
+    if not route.refs or any(struct.unpack_from("<Q", r, 0)[0] != 1 for r in route.refs):
+        return error(400, **kw)
+    first = epoch * spe
+    if first > store_slot:  # the next epoch: the head's post-state brought to its first slot
+        s = v["states"][v["slot"]].copy()
+        spec.process_slots(s, first)
+    elif first in v["states"]:
+        s = v["states"][first]
+    else:
+        return error(400, **kw)
+    count = int(spec.get_committee_count_per_slot(s, spec.Epoch(epoch)))
+    items = []
+    for r in route.refs:
+        i = struct.unpack_from("<Q", r, 8)[0]
+        if i >= len(s.validators):
+            continue
+        a = spec.get_committee_assignment(s, spec.Epoch(epoch), spec.ValidatorIndex(i))
+        if a is None:
+            continue
+        committee, ci, slot = a
+        items.append(b'{"pubkey":' + qhex(s.validators[i].pubkey) + b',"validator_index":' + q(i) +
+                     b',"committee_index":' + q(ci) + b',"committee_length":' + q(len(committee)) +
+                     b',"committees_at_slot":' + q(count) + b',"validator_committee_index":' +
+                     q(list(committee).index(i)) + b',"slot":' + q(slot) + b"}")
+    if epoch < 2:  # compute_start_slot_at_epoch(epoch - 1) - 1 underflows: the genesis block's root
+        root = bytes(spec.get_block_root_at_slot(s, 0)) if s.slot > 0 else v["root"]
+    else:
+        root = bytes(spec.get_block_root_at_slot(s, spec.compute_start_slot_at_epoch(epoch - 1) - 1))
+    return response(200, b'{"dependent_root":' + qhex(root) + b',"execution_optimistic":false,"data":[' +
+                    b",".join(items) + b"]}", **kw)
+
+
 def stream_head(version, connection):
     """The head of an eventstream answer (beacon-api.md, eventstream)."""
     out = b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nCache-Control: no-cache\r\n"
@@ -688,6 +731,8 @@ def answer(v, name, route, offline, close, keep_alive, syncing=False):
         return duties_answer(v, route, kw, syncing)
     if name == "produceAttestationData":
         return att_data_answer(v, route, kw, syncing)
+    if name == "getAttesterDuties":
+        return attester_duties_answer(v, route, kw, syncing)
 
     current = v["slot"] + SLOTS_AHEAD
     if name == "getHealth":
@@ -1080,6 +1125,20 @@ def api_requests(spec, fork, v, kind="main"):
     add("att_data_ssz", att_data(v["slot"] + 2, 0, accept=b"application/octet-stream"))
     add("att_data_http10", att_data(v["slot"] + 2), version=b"HTTP/1.0")
     add("att_data_syncing", att_data(v["slot"]), syncing=True)
+    attester = by_name["getAttesterDuties"]
+    n = len(v["states"][v["slot"]].validators)
+
+    def att_duties(e, body, **headers):
+        return api_route.request(attester["method"], api_route.fill(attester, {"epoch": b"%d" % e}), b"", body=body,
+                                 content_type=b"application/json", **headers)
+    some = b'["3","%d","%d","%d","3","0"]' % (n - 1, n - 8, n + 5)
+    for e in range(epoch - 1, current + 3):
+        add(f"att_duties_{e}", att_duties(e, some), body=some)
+    for name, body in (("att_duties_none", b""), ("att_duties_empty", b"[]"),
+                       ("att_duties_pubkey", b'["0x' + bytes(48).hex().encode() + b'"]')):
+        add(name, att_duties(current, body), body=body if body else None)
+    add("att_duties_http10", att_duties(current, some), body=some, version=b"HTTP/1.0")
+    add("att_duties_syncing", att_duties(current, some), body=some, syncing=True)
     first = epoch * int(spec.SLOTS_PER_EPOCH)
     for e in range(epoch - 1, epoch + 3):
         add(f"committees_epoch_{e}", api_route.base(committees, [("epoch", b"%d" % e)]))

@@ -250,9 +250,9 @@ api_routes:
     .quad   api_t_49 - api_route_text, 28 + (1 << 16) + (0 << 24), 0x0, 0x0   /* getForkSchedule */
     .quad   api_t_50 - api_route_text, 19 + (1 << 16) + (0 << 24), 0x0, 0x0   /* getSpec */
     .quad   api_t_51 - api_route_text, 31 + (1 << 16) + (0 << 24), 0x0, 0x0   /* getDepositContract */
-    .quad   api_t_52 - api_route_text, 35 + (2 << 16) + (0 << 24), 0x0, 0x0   /* getAttesterDuties */
+    .quad   api_t_52 - api_route_text, 35 + (2 << 16) + (32 << 24), 0x0, 0x0   /* getAttesterDuties */
     .quad   api_t_53 - api_route_text, 35 + (1 << 16) + (0 << 24), 0x0, 0x0   /* getProposerDuties */
-    .quad   api_t_54 - api_route_text, 31 + (2 << 16) + (0 << 24), 0x0, 0x0   /* getSyncCommitteeDuties */
+    .quad   api_t_54 - api_route_text, 31 + (2 << 16) + (32 << 24), 0x0, 0x0   /* getSyncCommitteeDuties */
     .quad   api_t_55 - api_route_text, 26 + (1 << 16) + (1 << 24), 0x3c00000, 0x400000   /* produceBlockV3 */
     .quad   api_t_56 - api_route_text, 34 + (1 << 16) + (1 << 24), 0x880, 0x880   /* produceAttestationData */
     .quad   api_t_57 - api_route_text, 39 + (1 << 16) + (1 << 24), 0x4000880, 0x4000880   /* getAggregatedAttestationV2 */
@@ -265,7 +265,7 @@ api_routes:
     .quad   api_t_64 - api_route_text, 41 + (2 << 16) + (0 << 24), 0x0, 0x0   /* publishContributionAndProofs */
     .quad   api_t_65 - api_route_text, 41 + (2 << 16) + (0 << 24), 0x0, 0x0   /* prepareBeaconProposer */
     .quad   api_t_66 - api_route_text, 36 + (2 << 16) + (2 << 24), 0x0, 0x0   /* registerValidator */
-    .quad   api_t_67 - api_route_text, 28 + (2 << 16) + (0 << 24), 0x0, 0x0   /* getLiveness */
+    .quad   api_t_67 - api_route_text, 28 + (2 << 16) + (32 << 24), 0x0, 0x0   /* getLiveness */
     .quad   api_t_68 - api_route_text, 14 + (1 << 16) + (0 << 24), 0x10000000, 0x10000000   /* eventstream */
 api_params:
     .quad   0, 0, 0, 0                         /* entry 0: no parameter */

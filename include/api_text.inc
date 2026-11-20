@@ -489,6 +489,18 @@ api_a_source:
 api_a_target:
     .ascii ",\"target\":"
 .set api_a_target_len, 10
+api_t_committee_index:
+    .ascii ",\"committee_index\":"
+.set api_t_committee_index_len, 19
+api_t_committee_length:
+    .ascii ",\"committee_length\":"
+.set api_t_committee_length_len, 20
+api_t_committees_at_slot:
+    .ascii ",\"committees_at_slot\":"
+.set api_t_committees_at_slot_len, 22
+api_t_validator_committee_index:
+    .ascii ",\"validator_committee_index\":"
+.set api_t_validator_committee_index_len, 29
 api_f_list:
     .ascii "\",\"failures\":["
 .set api_f_list_len, 14

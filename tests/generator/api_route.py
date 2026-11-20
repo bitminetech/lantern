@@ -51,7 +51,8 @@ BROADCAST = {b"gossip": 1, b"consensus": 2, b"consensus_and_equivocation": 3}
 F_SSZ_RESPONSE, F_SSZ_BODY, F_VERSION, F_ID_MAX, F_IDS_OBJECT, F_IDS_ARRAY = 1, 2, 4, 8, 16, 32
 IDS_BODIES = {"postStateValidators": F_IDS_OBJECT, "postStateValidatorBalances": F_IDS_ARRAY,
               "postStateValidatorIdentities": F_IDS_ARRAY, "getSyncCommitteeRewards": F_IDS_ARRAY,
-              "getAttestationsRewards": F_IDS_ARRAY}
+              "getAttestationsRewards": F_IDS_ARRAY, "getAttesterDuties": F_IDS_ARRAY,
+              "getSyncCommitteeDuties": F_IDS_ARRAY, "getLiveness": F_IDS_ARRAY}
 
 
 def sets():
@@ -159,6 +160,8 @@ def operations(spec):
                 elif (schema.get("type") == "array" and item.get("type") == "string" and
                       "public key" in item.get("description", "") and "validator index" in item.get("description", "")):
                     flags |= F_IDS_ARRAY
+                elif schema.get("type") == "array" and schema.get("items", {}).get("$ref", "").endswith("/Uint64"):
+                    flags |= F_IDS_ARRAY  # validator indices: read as ids; a public key is the operation's 400
             if flags & (F_IDS_OBJECT | F_IDS_ARRAY) != IDS_BODIES.get(name, 0):
                 fail(f"{name}: body of ids {flags}")
             template = path.encode()

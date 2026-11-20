@@ -471,6 +471,166 @@ SPEC_FUNCTION node_attestation_data
 9:  LEAVE 128
 SPEC_END node_attestation_data
 
+/*
+ * (state, config, ids, scratch, out) -> status: the committee assignments of the ids in the epoch
+ * of the state at its first slot (node.md, lantern_node_attester_duties). x19 the state, x20 the
+ * config, x21 the items, x22 scratch, x23 out, x24 the items' count, x25 a bit for each validator an
+ * item names, x26 a committee's list, both at the end of scratch, x27 a member's place. Locals: L the
+ * epoch, L+8 the committees at a slot, L+16 the validators, L+24 the scratch's size, L+32 a slot,
+ * L+40 a committee index, L+64 lantern_node_event_roots's out (128).
+ */
+SPEC_FUNCTION node_attester_duties
+    ENTER 192
+    mov     x19, x0
+    mov     x20, x1
+    ldr     x9, [x2, #8]
+    add     x21, x2, x9
+    ldr     x24, [x2, #16]
+    lsr     x24, x24, #6
+    mov     x22, x3
+    mov     x23, x4
+    LDQ     x9, x19, BeaconState_slot       /* the first slot of an epoch */
+    tst     x9, #(SLOTS_PER_EPOCH - 1)
+    b.ne    95f
+    lsr     x9, x9, #LOG2_SLOTS_PER_EPOCH
+    str     x9, [sp, #L]
+    ldr     x9, [x22]
+    str     x9, [sp, #(L + 24)]
+    mov     x0, x19                         /* the dependent root: the previous duty dependent root */
+    mov     x1, x20
+    mov     x2, x22
+    add     x3, sp, #(L + 64)
+    bl      lantern_node_event_roots
+    cbnz    x0, 99f
+    mov     x0, x23
+    add     x1, sp, #(L + 64 + 64)
+    mov     x2, #32
+    bl      lantern_copy
+    mov     x0, x19                         /* the committees at a slot */
+    add     x1, sp, #L
+    LDQ     x2, x20, CONFIG_COMMITTEE_CACHE
+    mov     x3, x22
+    add     x4, sp, #(L + 8)
+    bl      lantern_get_committee_count_per_slot
+    cbnz    x0, 99f
+    ldr     x9, [sp, #(L + 8)]
+    str     x9, [x23, #32]
+    add     x0, x23, #40                    /* no assignment yet */
+    mov     x9, #48
+    mul     x1, x24, x9
+    bl      lantern_zero
+    LDQ     x9, x19, BeaconState_validators + 8 /* the bits and a committee's list at the end of scratch, S(2) before them */
+    str     x9, [sp, #(L + 16)]
+    add     x10, x9, #63
+    lsr     x10, x10, #6
+    lsl     x10, x10, #3
+    ldr     x11, [sp, #(L + 8)]
+    mov     x12, #SLOTS_PER_EPOCH
+    mul     x11, x11, x12
+    udiv    x11, x9, x11
+    add     x11, x11, #1
+    lsl     x11, x11, #3
+    add     x11, x11, #LIST_FIXED
+    add     x12, x10, x11
+    lsl     x13, x9, #3
+    add     x13, x13, #LIST_FIXED
+    lsl     x13, x13, #1
+    MOVQ    x14, LANTERN_SCRATCH_FIXED
+    add     x13, x13, x14
+    add     x13, x13, x12
+    ldr     x14, [x22]
+    cmp     x14, x13
+    b.lo    97f
+    sub     x14, x14, x12
+    str     x14, [x22]
+    add     x25, x22, x14
+    add     x26, x25, x10
+    str     x11, [x26]
+    mov     x9, #LIST_FIXED
+    stp     x9, xzr, [x26, #LIST_OFFSET]
+    mov     x0, x25
+    mov     x1, x10
+    bl      lantern_zero
+    mov     x9, #0                          /* a bit for each item's index */
+1:  cmp     x9, x24
+    b.hs    2f
+    add     x10, x21, x9, lsl #6
+    ldr     x10, [x10, #8]
+    ldr     x11, [sp, #(L + 16)]
+    cmp     x10, x11
+    b.hs    11f
+    lsr     x11, x10, #6
+    ldr     x12, [x25, x11, lsl #3]
+    mov     x13, #1
+    lsl     x13, x13, x10
+    orr     x12, x12, x13
+    str     x12, [x25, x11, lsl #3]
+11: add     x9, x9, #1
+    b       1b
+2:  ldr     x9, [sp, #L]                    /* each committee of each slot of the epoch */
+    lsl     x9, x9, #LOG2_SLOTS_PER_EPOCH
+    str     x9, [sp, #(L + 32)]
+3:  str     xzr, [sp, #(L + 40)]
+4:  mov     x0, x19
+    add     x1, sp, #(L + 32)
+    add     x2, sp, #(L + 40)
+    LDQ     x3, x20, CONFIG_COMMITTEE_CACHE
+    mov     x4, x22
+    mov     x5, x26
+    bl      lantern_get_beacon_committee
+    cbnz    x0, 98f
+    mov     x27, #0
+5:  ldr     x9, [x26, #LIST_COUNT]
+    cmp     x27, x9
+    b.hs    7f
+    add     x10, x26, #LIST_FIXED
+    ldr     x10, [x10, x27, lsl #3]         /* a member an item names: each such item's assignment */
+    lsr     x11, x10, #6
+    ldr     x12, [x25, x11, lsl #3]
+    lsr     x12, x12, x10
+    tbz     x12, #0, 6f
+    mov     x11, #0
+51: cmp     x11, x24
+    b.hs    6f
+    add     x12, x21, x11, lsl #6
+    ldr     x12, [x12, #8]
+    cmp     x12, x10
+    b.ne    52f
+    mov     x13, #48
+    madd    x13, x11, x13, x23
+    add     x13, x13, #40
+    mov     x14, #1
+    ldr     x15, [sp, #(L + 32)]
+    stp     x14, x15, [x13]
+    ldr     x14, [sp, #(L + 40)]
+    ldr     x15, [x26, #LIST_COUNT]
+    stp     x14, x15, [x13, #16]
+    stp     x27, x10, [x13, #32]
+52: add     x11, x11, #1
+    b       51b
+6:  add     x27, x27, #1
+    b       5b
+7:  ldr     x9, [sp, #(L + 40)]             /* the next committee, then the next slot */
+    add     x9, x9, #1
+    str     x9, [sp, #(L + 40)]
+    ldr     x10, [sp, #(L + 8)]
+    cmp     x9, x10
+    b.lo    4b
+    ldr     x9, [sp, #(L + 32)]
+    add     x9, x9, #1
+    str     x9, [sp, #(L + 32)]
+    tst     x9, #(SLOTS_PER_EPOCH - 1)
+    b.ne    3b
+    mov     x0, #LANTERN_OK
+98: ldr     x9, [sp, #(L + 24)]
+    str     x9, [x22]
+99: LEAVE 192
+95: mov     x0, #LANTERN_INVALID_SLOT
+    LEAVE 192
+97: mov     x0, #LANTERN_BUFFER_TOO_SMALL
+    LEAVE 192
+SPEC_END node_attester_duties
+
 /* L0: x0 = the fork's TypeDescriptor of the NODE_JSON_* kind x9, or 0. Uses x0. */
 LOCAL_FUNCTION node_type_of_kind
     UNWIND_END_PROLOGUE

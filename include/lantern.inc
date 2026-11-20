@@ -989,7 +989,9 @@
 .set ApiView_event_previous, ApiView_event_slot + 88
 .set ApiView_event_current, ApiView_event_slot + 120
 .set ApiView_att, ApiView_event_slot + 152      /* produceAttestationData: lantern_node_attestation_data's out, 128 bytes */
-.set ApiView__size, ApiView_att + 128
+.set ApiView_ad_out, ApiView_att + 128       /* getAttesterDuties: lantern_node_attester_duties's out */
+.set ApiView_ad_count, ApiView_att + 136     /* its items */
+.set ApiView__size, ApiView_att + 144
 .set ApiIdentity_peer_id, 0              /* ApiIdentity (beacon-api.md): texts, each a length and its room */
 .set ApiIdentity_enr, 72
 .set ApiIdentity_p2p_address, 592

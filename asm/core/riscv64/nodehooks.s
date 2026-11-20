@@ -466,6 +466,171 @@ SPEC_FUNCTION node_attestation_data
 9:  LEAVE 128
 SPEC_END node_attestation_data
 
+/*
+ * (state, config, ids, scratch, out) -> a0: the committee assignments of the ids in the epoch of
+ * the state at its first slot (node.md, lantern_node_attester_duties). s1 the state, s2 the config,
+ * s3 the items, s4 scratch, s5 out, s6 the items' count, s7 a bit for each validator an item names
+ * and s8 a committee's list, both at the end of scratch, s9 a member's place. Locals: L the epoch,
+ * L+8 the committees at a slot, L+16 the validators, L+24 the scratch's size, L+32 a slot, L+40 a
+ * committee index, L+64 lantern_node_event_roots's out (128).
+ */
+SPEC_FUNCTION node_attester_duties
+    ENTER 192
+    mv      s1, a0
+    mv      s2, a1
+    ld      t0, 8(a2)
+    add     s3, a2, t0
+    ld      s6, 16(a2)
+    srli    s6, s6, 6
+    mv      s4, a3
+    mv      s5, a4
+    LDQ     t0, s1, BeaconState_slot        # the first slot of an epoch
+    andi    t1, t0, SLOTS_PER_EPOCH - 1
+    bnez    t1, 95f
+    srli    t0, t0, LOG2_SLOTS_PER_EPOCH
+    sd      t0, (L + 0)(sp)
+    ld      t0, 0(s4)
+    sd      t0, (L + 24)(sp)
+    mv      a0, s1                          # the dependent root: the previous duty dependent root
+    mv      a1, s2
+    mv      a2, s4
+    addi    a3, sp, L + 64
+    call    lantern_node_event_roots
+    bnez    a0, 99f
+    mv      a0, s5
+    addi    a1, sp, L + 128
+    li      a2, 32
+    call    lantern_copy
+    mv      a0, s1                          # the committees at a slot
+    addi    a1, sp, L + 0
+    LDQ     a2, s2, CONFIG_COMMITTEE_CACHE
+    mv      a3, s4
+    addi    a4, sp, L + 8
+    call    lantern_get_committee_count_per_slot
+    bnez    a0, 99f
+    ld      t0, (L + 8)(sp)
+    sd      t0, 32(s5)
+    addi    a0, s5, 40                      # no assignment yet
+    li      t0, 48
+    mul     a1, s6, t0
+    call    lantern_zero
+    LDQ     t0, s1, BeaconState_validators + 8  # the bits and a committee's list at the end of scratch, S(2) before them
+    sd      t0, (L + 16)(sp)
+    addi    t1, t0, 63
+    srli    t1, t1, 6
+    slli    t1, t1, 3
+    ld      t2, (L + 8)(sp)
+    li      t3, SLOTS_PER_EPOCH
+    mul     t2, t2, t3
+    divu    t2, t0, t2
+    addi    t2, t2, 1
+    slli    t2, t2, 3
+    addi    t2, t2, LIST_FIXED
+    add     t3, t1, t2
+    slli    t4, t0, 3
+    addi    t4, t4, LIST_FIXED
+    slli    t4, t4, 1
+    li      t5, LANTERN_SCRATCH_FIXED
+    add     t4, t4, t5
+    add     t4, t4, t3
+    ld      t5, 0(s4)
+    bltu    t5, t4, 97f
+    sub     t5, t5, t3
+    sd      t5, 0(s4)
+    add     s7, s4, t5
+    add     s8, s7, t1
+    sd      t2, 0(s8)
+    li      t4, LIST_FIXED
+    sd      t4, LIST_OFFSET(s8)
+    sd      zero, LIST_COUNT(s8)
+    mv      a0, s7
+    mv      a1, t1
+    call    lantern_zero
+    li      t0, 0                           # a bit for each item's index
+1:  bgeu    t0, s6, 2f
+    slli    t1, t0, 6
+    add     t1, s3, t1
+    ld      t1, 8(t1)
+    ld      t2, (L + 16)(sp)
+    bgeu    t1, t2, 11f
+    srli    t2, t1, 6
+    slli    t2, t2, 3
+    add     t2, s7, t2
+    ld      t3, 0(t2)
+    li      t4, 1
+    sll     t4, t4, t1
+    or      t3, t3, t4
+    sd      t3, 0(t2)
+11: addi    t0, t0, 1
+    j       1b
+2:  ld      t0, (L + 0)(sp)                 # each committee of each slot of the epoch
+    slli    t0, t0, LOG2_SLOTS_PER_EPOCH
+    sd      t0, (L + 32)(sp)
+3:  sd      zero, (L + 40)(sp)
+4:  mv      a0, s1
+    addi    a1, sp, L + 32
+    addi    a2, sp, L + 40
+    LDQ     a3, s2, CONFIG_COMMITTEE_CACHE
+    mv      a4, s4
+    mv      a5, s8
+    call    lantern_get_beacon_committee
+    bnez    a0, 98f
+    li      s9, 0
+5:  ld      t0, LIST_COUNT(s8)
+    bgeu    s9, t0, 7f
+    slli    t1, s9, 3
+    add     t1, s8, t1
+    ld      t1, LIST_FIXED(t1)              # a member an item names: each such item's assignment
+    srli    t2, t1, 6
+    slli    t2, t2, 3
+    add     t2, s7, t2
+    ld      t2, 0(t2)
+    srl     t2, t2, t1
+    andi    t2, t2, 1
+    beqz    t2, 6f
+    li      t3, 0
+51: bgeu    t3, s6, 6f
+    slli    t4, t3, 6
+    add     t4, s3, t4
+    ld      t4, 8(t4)
+    bne     t4, t1, 52f
+    li      t4, 48
+    mul     t4, t3, t4
+    add     t4, s5, t4
+    addi    t4, t4, 40
+    li      t5, 1
+    sd      t5, 0(t4)
+    ld      t5, (L + 32)(sp)
+    sd      t5, 8(t4)
+    ld      t5, (L + 40)(sp)
+    sd      t5, 16(t4)
+    sd      t0, 24(t4)
+    sd      s9, 32(t4)
+    sd      t1, 40(t4)
+52: addi    t3, t3, 1
+    j       51b
+6:  addi    s9, s9, 1
+    j       5b
+7:  ld      t0, (L + 40)(sp)                # the next committee, then the next slot
+    addi    t0, t0, 1
+    sd      t0, (L + 40)(sp)
+    ld      t1, (L + 8)(sp)
+    bltu    t0, t1, 4b
+    ld      t0, (L + 32)(sp)
+    addi    t0, t0, 1
+    sd      t0, (L + 32)(sp)
+    andi    t1, t0, SLOTS_PER_EPOCH - 1
+    bnez    t1, 3b
+    li      a0, LANTERN_OK
+98: ld      t0, (L + 24)(sp)
+    sd      t0, 0(s4)
+99: LEAVE 192
+95: li      a0, LANTERN_INVALID_SLOT
+    LEAVE 192
+97: li      a0, LANTERN_BUFFER_TOO_SMALL
+    LEAVE 192
+SPEC_END node_attester_duties
+
 /* a0 = the fork's TypeDescriptor of the NODE_JSON_* kind t0, or 0. Uses t1. */
 LOCAL_FUNCTION node_type_of_kind
     UNWIND_END_PROLOGUE

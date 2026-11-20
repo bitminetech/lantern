@@ -1367,7 +1367,7 @@ LOCAL_FUNCTION api_body
     UNFRAME 16
     # getProposerDuties: {"dependent_root":…,"execution_optimistic":…,"data":[{"pubkey":…,"validator_index":…,"slot":…},…]}
 19: cmp     $API_OP_GET_PROPOSER_DUTIES, %rsi
-    jne     99f
+    jne     18f
     API_LIT api_u_root
     lea     ApiView_duties(%rbp), %rdi
     mov     $32, %esi
@@ -1405,8 +1405,82 @@ LOCAL_FUNCTION api_body
     incq    8(%rsp)
     jmp     20b
 21: API_LIT api_v_end
+    UNFRAME 16
+18: cmp     $API_OP_GET_ATTESTER_DUTIES, %rsi
+    jne     99f
+    call    api_duties_json
 99: UNFRAME 16
 END_FUNCTION api_body
+
+/*
+ * The JSON of getAttesterDuties from the view rbp: {"dependent_root":…,"execution_optimistic":…,
+ * "data":[{"pubkey":…,…,"slot":…},…]}, an item for each record with an assignment. Locals: a
+ * record's place, the items written, the record.
+ */
+LOCAL_FUNCTION api_duties_json
+    FRAME 32
+    API_LIT api_u_root
+    mov     ApiView_ad_out(%rbp), %rdi
+    mov     $32, %esi
+    call    api_qhex
+    API_LIT api_u_optimistic
+    mov     ApiView_is_optimistic(%rbp), %rdi
+    call    api_bool
+    API_LIT api_v_list
+    movq    $0, (%rsp)
+    movq    $0, 8(%rsp)
+1:  mov     (%rsp), %rax
+    cmp     ApiView_ad_count(%rbp), %rax
+    jae     9f
+    imul    $48, %rax, %rax
+    add     ApiView_ad_out(%rbp), %rax
+    add     $40, %rax
+    mov     %rax, 16(%rsp)
+    cmpq    $0, (%rax)
+    je      8f
+    cmpq    $0, 8(%rsp)
+    je      2f
+    API_LIT api_p_comma
+2:  incq    8(%rsp)
+    API_LIT api_u_pubkey
+    mov     ApiView_val_state(%rbp), %rdi
+    PART    %rax, %rcx, %rdi, NODE_STATE_VALIDATORS
+    mov     16(%rsp), %rcx
+    mov     40(%rcx), %rsi
+    shl     $7, %rsi                        # NODE_VALIDATOR_MEM: the pubkey first
+    lea     (%rax,%rsi), %rdi
+    mov     $48, %esi
+    call    api_qhex
+    API_LIT api_u_index
+    mov     16(%rsp), %rax
+    mov     40(%rax), %rdi
+    call    api_qdec
+    API_LIT api_t_committee_index
+    mov     16(%rsp), %rax
+    mov     16(%rax), %rdi
+    call    api_qdec
+    API_LIT api_t_committee_length
+    mov     16(%rsp), %rax
+    mov     24(%rax), %rdi
+    call    api_qdec
+    API_LIT api_t_committees_at_slot
+    mov     ApiView_ad_out(%rbp), %rax
+    mov     32(%rax), %rdi
+    call    api_qdec
+    API_LIT api_t_validator_committee_index
+    mov     16(%rsp), %rax
+    mov     32(%rax), %rdi
+    call    api_qdec
+    API_LIT api_c_slot
+    mov     16(%rsp), %rax
+    mov     8(%rax), %rdi
+    call    api_qdec
+    API_LIT api_end1
+8:  incq    (%rsp)
+    jmp     1b
+9:  API_LIT api_v_end
+    UNFRAME 32
+END_FUNCTION api_duties_json
 
 /*
  * (view rdi, out rsi, status rdx, body rcx, flags r8) -> rax: the HTTP response of beacon-api.md,
@@ -1851,6 +1925,8 @@ LOCAL_FUNCTION node_api_event
     je      63f
     cmp     $API_OP_PRODUCE_ATTESTATION_DATA, %rcx
     je      59f
+    cmp     $API_OP_GET_ATTESTER_DUTIES, %rcx
+    je      58f
     cmp     $API_OP_EVENTSTREAM, %rcx
     je      61f
     cmp     $API_OP_GET_POOL_VOLUNTARY_EXITS, %rcx
@@ -1905,6 +1981,55 @@ LOCAL_FUNCTION node_api_event
     mov     S7(%rsp), %rax
     cmpq    $API_OP_GET_STATE_VALIDATOR, ApiRoute_op(%rax)
     jne     64f
+    jmp     67f
+58: mov     $503, %edx                      # getAttesterDuties: 503 while syncing; 400 past the next epoch, with no index or a key
+    mov     S8(%rsp), %rax
+    cmpq    $0, ApiView_is_syncing(%rax)
+    jne     80f
+    mov     $400, %edx
+    mov     S7(%rsp), %rdi
+    mov     ApiRoute_list(%rdi), %rax
+    mov     (ApiRoute_list + 8)(%rdi), %rcx
+    test    %rcx, %rcx
+    jz      80f
+    add     %rdi, %rax
+581: cmpq   $API_VALIDATOR_INDEX, (%rax)
+    jne     80f
+    add     $64, %rax
+    dec     %rcx
+    jnz     581b
+    mov     %rbp, %rdi
+    call    node_store_slot
+    mov     %rax, %rsi
+    xor     %edx, %edx
+    mov     $SLOTS_PER_EPOCH, %ecx
+    div     %rcx
+    inc     %rax
+    mov     S7(%rsp), %rdi
+    mov     ApiRoute_epoch(%rdi), %rcx
+    mov     $400, %edx
+    cmp     %rax, %rcx
+    ja      80f
+    imul    $SLOTS_PER_EPOCH, %rcx, %rcx    # the state of the first slot, as getProposerDuties; none: 400
+    mov     %rcx, ApiRoute_id_slot(%rdi)
+    movq    $API_ID_SLOT, ApiRoute_id_kind(%rdi)
+    cmp     %rsi, %rcx
+    jbe     582f
+    movq    $API_ID_HEAD, ApiRoute_id_kind(%rdi)
+582: mov    S8(%rsp), %rsi
+    call    node_api_state
+    mov     $400, %edx
+    test    %rax, %rax
+    jnz     80f
+    mov     S7(%rsp), %rax
+    mov     ApiRoute_id_slot(%rax), %rax
+    mov     S8(%rsp), %rdi
+    mov     %rax, ApiView_head_slot(%rdi)
+    call    node_api_advance
+    mov     S7(%rsp), %rdi                  # its ids in the work's data
+    call    node_api_ids
+    mov     S8(%rsp), %rcx
+    mov     %rax, ApiView_look_data(%rcx)
     jmp     67f
 59: mov     $503, %edx                      # produceAttestationData: 503 while syncing; 400 past the store's slot
     mov     S8(%rsp), %rax
@@ -2048,6 +2173,8 @@ LOCAL_FUNCTION node_api_done
     cmp     $API_OP_GET_STATE_VALIDATOR, %eax
     je      3f
     cmp     $API_OP_PRODUCE_ATTESTATION_DATA, %eax
+    je      3f
+    cmp     $API_OP_GET_ATTESTER_DUTIES, %eax
     jne     2f
 3:  mov     NodeAction_data(%r12), %rsi
     test    %rsi, %rsi
@@ -2155,6 +2282,8 @@ LOCAL_FUNCTION node_api_run
     je      2f
     cmp     $API_OP_PRODUCE_ATTESTATION_DATA, %eax
     je      2f
+    cmp     $API_OP_GET_ATTESTER_DUTIES, %eax
+    je      2f
     cmp     $API_OP_GET_STATE_FORK, %eax
     jne     8f
 2:  mov     (%r14), %rax                    # the ApiView at the end of scratch, with the work's values
@@ -2223,7 +2352,35 @@ LOCAL_FUNCTION node_api_run
     jz      5f
     mov     %rax, NodeEvent_result(%r15)
     jmp     9f
-25: cmpq    $API_OP_GET_PROPOSER_DUTIES, S9(%rsp)
+25: cmpq    $API_OP_GET_ATTESTER_DUTIES, S9(%rsp)
+    jne     26f
+    mov     S7(%rsp), %rax                  # getAttesterDuties: lantern_node_attester_duties of its ids, its out at the end of scratch
+    test    %rax, %rax
+    jz      41f
+    mov     16(%rax), %rax
+    shr     $6, %rax
+    mov     S8(%rsp), %rdi
+    mov     %rax, ApiView_ad_count(%rdi)
+    imul    $48, %rax, %rax
+    add     $40, %rax
+    mov     (%r14), %rcx
+    sub     %rax, %rcx
+    jb      71f
+    mov     %rcx, (%r14)
+    lea     (%r14,%rcx), %r8
+    mov     %r8, ApiView_ad_out(%rdi)
+    mov     %r13, %rdi
+    lea     Node_config(%rbx), %rsi
+    mov     S7(%rsp), %rdx
+    mov     %r14, %rcx
+    FORK_CALL node_attester_duties
+    cmp     $LANTERN_BUFFER_TOO_SMALL, %rax
+    je      71f
+    test    %rax, %rax
+    jz      24f
+    mov     %rax, NodeEvent_result(%r15)
+    jmp     9f
+26: cmpq    $API_OP_GET_PROPOSER_DUTIES, S9(%rsp)
     jne     23f
     mov     %r13, %rdi                      # getProposerDuties: lantern_node_proposers
     lea     Node_config(%rbx), %rsi
@@ -2798,6 +2955,8 @@ LOCAL_FUNCTION node_api_encode
     cmp     $API_OP_GET_STATE_VALIDATOR, %rdi
     cmove   %rax, %rcx
     cmp     $API_OP_PRODUCE_ATTESTATION_DATA, %rdi
+    cmove   %rax, %rcx
+    cmp     $API_OP_GET_ATTESTER_DUTIES, %rdi
     cmove   %rax, %rcx
 3:  mov     $NODE_WORK_API_ENCODE, %edi
     xor     %edx, %edx

@@ -473,6 +473,164 @@ SPEC_FUNCTION node_attestation_data
 9:  LEAVE 128
 SPEC_END node_attestation_data
 
+/*
+ * (state, config, ids, scratch, out) -> rax: the committee assignments of the ids in the epoch of
+ * the state at its first slot (node.md, lantern_node_attester_duties). rbx the state, rbp the
+ * config, r12 the items, r13 scratch, r14 out, r15 the items' count; S7 a bit for each validator an
+ * item names and S8 a committee's list, both at the end of scratch; S9 a member's place. Locals: L
+ * the epoch, L+8 the committees at a slot, L+16 the validators, L+24 the scratch's size, L+32 a
+ * slot, L+40 a committee index, L+64 lantern_node_event_roots's out (128).
+ */
+SPEC_FUNCTION node_attester_duties
+    ENTER 192
+    mov     %rdi, %rbx
+    mov     %rsi, %rbp
+    mov     8(%rdx), %r12
+    add     %rdx, %r12
+    mov     16(%rdx), %r15
+    shr     $6, %r15
+    mov     %rcx, %r13
+    mov     %r8, %r14
+    mov     BeaconState_slot(%rbx), %rax    # the first slot of an epoch
+    test    $(SLOTS_PER_EPOCH - 1), %eax
+    jnz     95f
+    shr     $LOG2_SLOTS_PER_EPOCH, %rax
+    mov     %rax, L(%rsp)
+    mov     (%r13), %rax
+    mov     %rax, (L + 24)(%rsp)
+    mov     %rbx, %rdi                      # the dependent root: the previous duty dependent root
+    mov     %rbp, %rsi
+    mov     %r13, %rdx
+    lea     (L + 64)(%rsp), %rcx
+    call    lantern_node_event_roots
+    test    %rax, %rax
+    jnz     99f
+    mov     %r14, %rdi
+    lea     (L + 128)(%rsp), %rsi
+    mov     $32, %edx
+    call    lantern_copy
+    mov     %rbx, %rdi                      # the committees at a slot
+    lea     L(%rsp), %rsi
+    mov     CONFIG_COMMITTEE_CACHE(%rbp), %rdx
+    mov     %r13, %rcx
+    lea     (L + 8)(%rsp), %r8
+    call    lantern_get_committee_count_per_slot
+    test    %rax, %rax
+    jnz     99f
+    mov     (L + 8)(%rsp), %rax
+    mov     %rax, 32(%r14)
+    lea     40(%r14), %rdi                  # no assignment yet
+    imul    $48, %r15, %rsi
+    call    lantern_zero
+    mov     (BeaconState_validators + 8)(%rbx), %rax    # the bits and a committee's list at the end of scratch, S(2) before them
+    mov     %rax, (L + 16)(%rsp)
+    lea     63(%rax), %rcx
+    shr     $6, %rcx
+    shl     $3, %rcx
+    mov     (L + 8)(%rsp), %rsi
+    imul    $SLOTS_PER_EPOCH, %rsi, %rsi
+    xor     %edx, %edx
+    div     %rsi
+    lea     1(%rax), %rdx
+    shl     $3, %rdx
+    add     $LIST_FIXED, %rdx
+    lea     (%rcx,%rdx), %r8
+    mov     (L + 16)(%rsp), %rax
+    shl     $3, %rax
+    add     $LIST_FIXED, %rax
+    shl     $1, %rax
+    add     $LANTERN_SCRATCH_FIXED, %rax
+    add     %r8, %rax
+    mov     (%r13), %r9
+    cmp     %rax, %r9
+    jb      97f
+    sub     %r8, %r9
+    mov     %r9, (%r13)
+    lea     (%r13,%r9), %rdi
+    mov     %rdi, S7(%rsp)
+    lea     (%rdi,%rcx), %rax
+    mov     %rax, S8(%rsp)
+    mov     %rdx, (%rax)
+    movq    $LIST_FIXED, LIST_OFFSET(%rax)
+    movq    $0, LIST_COUNT(%rax)
+    mov     %rcx, %rsi
+    call    lantern_zero
+    xor     %ecx, %ecx                      # a bit for each item's index
+1:  cmp     %r15, %rcx
+    jae     2f
+    mov     %rcx, %rax
+    shl     $6, %rax
+    mov     8(%r12,%rax), %rax
+    cmp     (L + 16)(%rsp), %rax
+    jae     11f
+    mov     S7(%rsp), %rdx
+    bts     %rax, (%rdx)
+11: inc     %rcx
+    jmp     1b
+2:  mov     L(%rsp), %rax                   # each committee of each slot of the epoch
+    shl     $LOG2_SLOTS_PER_EPOCH, %rax
+    mov     %rax, (L + 32)(%rsp)
+3:  movq    $0, (L + 40)(%rsp)
+4:  mov     %rbx, %rdi
+    lea     (L + 32)(%rsp), %rsi
+    lea     (L + 40)(%rsp), %rdx
+    mov     CONFIG_COMMITTEE_CACHE(%rbp), %rcx
+    mov     %r13, %r8
+    mov     S8(%rsp), %r9
+    call    lantern_get_beacon_committee
+    test    %rax, %rax
+    jnz     98f
+    movq    $0, S9(%rsp)
+5:  mov     S9(%rsp), %rcx
+    mov     S8(%rsp), %rdx
+    cmp     LIST_COUNT(%rdx), %rcx
+    jae     7f
+    mov     LIST_FIXED(%rdx,%rcx,8), %rax   # a member an item names: each such item's assignment
+    mov     S7(%rsp), %rsi
+    bt      %rax, (%rsi)
+    jnc     6f
+    xor     %r8d, %r8d
+51: cmp     %r15, %r8
+    jae     6f
+    mov     %r8, %r9
+    shl     $6, %r9
+    cmp     8(%r12,%r9), %rax
+    jne     52f
+    imul    $48, %r8, %r9
+    lea     40(%r14,%r9), %r9
+    movq    $1, (%r9)
+    mov     (L + 32)(%rsp), %r10
+    mov     %r10, 8(%r9)
+    mov     (L + 40)(%rsp), %r10
+    mov     %r10, 16(%r9)
+    mov     LIST_COUNT(%rdx), %r10
+    mov     %r10, 24(%r9)
+    mov     %rcx, 32(%r9)
+    mov     %rax, 40(%r9)
+52: inc     %r8
+    jmp     51b
+6:  incq    S9(%rsp)
+    jmp     5b
+7:  mov     (L + 40)(%rsp), %rax            # the next committee, then the next slot
+    inc     %rax
+    mov     %rax, (L + 40)(%rsp)
+    cmp     (L + 8)(%rsp), %rax
+    jb      4b
+    mov     (L + 32)(%rsp), %rax
+    inc     %rax
+    mov     %rax, (L + 32)(%rsp)
+    test    $(SLOTS_PER_EPOCH - 1), %eax
+    jnz     3b
+    xor     %eax, %eax
+98: mov     (L + 24)(%rsp), %rcx
+    mov     %rcx, (%r13)
+99: LEAVE 192
+95: mov     $LANTERN_INVALID_SLOT, %eax
+    LEAVE 192
+97: mov     $LANTERN_BUFFER_TOO_SMALL, %eax
+    LEAVE 192
+SPEC_END node_attester_duties
+
 /* rdi = the fork's TypeDescriptor of the NODE_JSON_* kind r10, or 0. Uses rdi. */
 LOCAL_FUNCTION node_type_of_kind
     UNWIND_END_PROLOGUE

@@ -1419,7 +1419,7 @@ LOCAL_FUNCTION api_body
     UNFRAME 16
     # getProposerDuties: {"dependent_root":…,"execution_optimistic":…,"data":[{"pubkey":…,"validator_index":…,"slot":…},…]}
 19: li      t0, API_OP_GET_PROPOSER_DUTIES
-    bne     s10, t0, 99f
+    bne     s10, t0, 18f
     API_LIT api_u_root
     addi    a0, s4, ApiView_duties
     li      a1, 32
@@ -1463,8 +1463,88 @@ LOCAL_FUNCTION api_body
     sd      t0, 8(sp)
     j       20b
 21: API_LIT api_v_end
+    UNFRAME 16
+18: li      t0, API_OP_GET_ATTESTER_DUTIES
+    bne     s10, t0, 99f
+    call    api_duties_json
 99: UNFRAME 16
 END_FUNCTION api_body
+
+/*
+ * The JSON of getAttesterDuties from the view s4: {"dependent_root":…,"execution_optimistic":…,
+ * "data":[{"pubkey":…,…,"slot":…},…]}, an item for each record with an assignment. Locals: a
+ * record's place, the items written, the record.
+ */
+LOCAL_FUNCTION api_duties_json
+    FRAME 32
+    API_LIT api_u_root
+    LDQ     a0, s4, ApiView_ad_out
+    li      a1, 32
+    call    api_qhex
+    API_LIT api_u_optimistic
+    ld      a0, ApiView_is_optimistic(s4)
+    call    api_bool
+    API_LIT api_v_list
+    sd      zero, 0(sp)
+    sd      zero, 8(sp)
+1:  ld      t0, 0(sp)
+    LDQ     t1, s4, ApiView_ad_count
+    bgeu    t0, t1, 9f
+    li      t1, 48
+    mul     t0, t0, t1
+    LDQ     t1, s4, ApiView_ad_out
+    add     t0, t0, t1
+    addi    t0, t0, 40
+    sd      t0, 16(sp)
+    ld      t1, 0(t0)
+    beqz    t1, 8f
+    ld      t1, 8(sp)
+    beqz    t1, 2f
+    API_LIT api_p_comma
+2:  ld      t1, 8(sp)
+    addi    t1, t1, 1
+    sd      t1, 8(sp)
+    API_LIT api_u_pubkey
+    ld      t2, ApiView_val_state(s4)
+    PART    t0, t1, t2, NODE_STATE_VALIDATORS
+    ld      t1, 16(sp)
+    ld      t1, 40(t1)
+    slli    t1, t1, 7                       # NODE_VALIDATOR_MEM: the pubkey first
+    add     a0, t0, t1
+    li      a1, 48
+    call    api_qhex
+    API_LIT api_u_index
+    ld      t0, 16(sp)
+    ld      a0, 40(t0)
+    call    api_qdec
+    API_LIT api_t_committee_index
+    ld      t0, 16(sp)
+    ld      a0, 16(t0)
+    call    api_qdec
+    API_LIT api_t_committee_length
+    ld      t0, 16(sp)
+    ld      a0, 24(t0)
+    call    api_qdec
+    API_LIT api_t_committees_at_slot
+    LDQ     t0, s4, ApiView_ad_out
+    ld      a0, 32(t0)
+    call    api_qdec
+    API_LIT api_t_validator_committee_index
+    ld      t0, 16(sp)
+    ld      a0, 32(t0)
+    call    api_qdec
+    API_LIT api_c_slot
+    ld      t0, 16(sp)
+    ld      a0, 8(t0)
+    call    api_qdec
+    API_LIT api_end1
+8:  ld      t0, 0(sp)
+    addi    t0, t0, 1
+    sd      t0, 0(sp)
+    j       1b
+9:  API_LIT api_v_end
+    UNFRAME 32
+END_FUNCTION api_duties_json
 
 /*
  * (view a0, out a1, status a2, body a3, flags a4) -> a0: the HTTP response of beacon-api.md,
@@ -1910,6 +1990,8 @@ LOCAL_FUNCTION node_api_event
     beq     a3, t0, 63f
     li      t0, API_OP_PRODUCE_ATTESTATION_DATA
     beq     a3, t0, 59f
+    li      t0, API_OP_GET_ATTESTER_DUTIES
+    beq     a3, t0, 58f
     li      t0, API_OP_EVENTSTREAM
     beq     a3, t0, 61f
     li      t0, API_OP_GET_POOL_VOLUNTARY_EXITS
@@ -1957,6 +2039,47 @@ LOCAL_FUNCTION node_api_event
     ld      t0, ApiRoute_op(s7)
     li      t1, API_OP_GET_STATE_VALIDATOR
     bne     t0, t1, 64f
+    j       67f
+58: li      a2, 503                         # getAttesterDuties: 503 while syncing; 400 past the next epoch, with no index or a key
+    ld      t0, ApiView_is_syncing(s8)
+    bnez    t0, 80f
+    li      a2, 400
+    ld      t0, ApiRoute_list(s7)
+    ld      t1, (ApiRoute_list + 8)(s7)
+    beqz    t1, 80f
+    add     t0, s7, t0
+581: ld     t2, 0(t0)
+    li      t3, API_VALIDATOR_INDEX
+    bne     t2, t3, 80f
+    addi    t0, t0, 64
+    addi    t1, t1, -1
+    bnez    t1, 581b
+    mv      a0, s2
+    call    node_store_slot
+    li      t1, SLOTS_PER_EPOCH
+    divu    t0, a0, t1
+    addi    t0, t0, 1
+    ld      t2, ApiRoute_epoch(s7)
+    li      a2, 400
+    bgtu    t2, t0, 80f
+    mul     t2, t2, t1                      # the state of the first slot, as getProposerDuties; none: 400
+    sd      t2, ApiRoute_id_slot(s7)
+    li      t0, API_ID_SLOT
+    bleu    t2, a0, 582f
+    li      t0, API_ID_HEAD
+582: sd     t0, ApiRoute_id_kind(s7)
+    mv      a0, s7
+    mv      a1, s8
+    call    node_api_state
+    li      a2, 400
+    bnez    a0, 80f
+    ld      t0, ApiRoute_id_slot(s7)
+    sd      t0, ApiView_head_slot(s8)
+    mv      a0, s8
+    call    node_api_advance
+    mv      a0, s7                          # its ids in the work's data
+    call    node_api_ids
+    sd      a0, ApiView_look_data(s8)
     j       67f
 59: li      a2, 503                         # produceAttestationData: 503 while syncing; 400 past the store's slot
     ld      t0, ApiView_is_syncing(s8)
@@ -2085,6 +2208,8 @@ LOCAL_FUNCTION node_api_done
     li      t1, API_OP_GET_STATE_VALIDATOR
     beq     t0, t1, 3f
     li      t1, API_OP_PRODUCE_ATTESTATION_DATA
+    beq     t0, t1, 3f
+    li      t1, API_OP_GET_ATTESTER_DUTIES
     bne     t0, t1, 2f
 3:  ld      a1, NodeAction_data(s3)
     beqz    a1, 2f
@@ -2188,6 +2313,8 @@ LOCAL_FUNCTION node_api_run
     beq     s9, t2, 2f
     li      t2, API_OP_PRODUCE_ATTESTATION_DATA
     beq     s9, t2, 2f
+    li      t2, API_OP_GET_ATTESTER_DUTIES
+    beq     s9, t2, 2f
     li      t2, API_OP_GET_STATE_FORK
     bne     s9, t2, 8f
 2:  ld      t0, 0(s6)                       # the ApiView at the end of scratch, with the work's values
@@ -2247,7 +2374,32 @@ LOCAL_FUNCTION node_api_run
     beqz    a0, 5f
     sd      a0, NodeEvent_result(s7)
     j       9f
-25: li      t0, API_OP_GET_PROPOSER_DUTIES
+25: li      t0, API_OP_GET_ATTESTER_DUTIES
+    bne     s9, t0, 26f
+    beqz    s5, 41f                         # getAttesterDuties: lantern_node_attester_duties of its ids, its out at the end of scratch
+    ld      t0, 16(s5)
+    srli    t0, t0, 6
+    STQ     t0, s8, ApiView_ad_count
+    li      t1, 48
+    mul     t0, t0, t1
+    addi    t0, t0, 40
+    ld      t1, 0(s6)
+    bltu    t1, t0, 71f
+    sub     t1, t1, t0
+    sd      t1, 0(s6)
+    add     a4, s6, t1
+    STQ     a4, s8, ApiView_ad_out
+    mv      a0, s4
+    addi    a1, s1, Node_config
+    mv      a2, s5
+    mv      a3, s6
+    FORK_CALL node_attester_duties
+    li      t0, LANTERN_BUFFER_TOO_SMALL
+    beq     a0, t0, 71f
+    beqz    a0, 24f
+    sd      a0, NodeEvent_result(s7)
+    j       9f
+26: li      t0, API_OP_GET_PROPOSER_DUTIES
     bne     s9, t0, 23f
     mv      a0, s4                          # getProposerDuties: lantern_node_proposers
     addi    a1, s1, Node_config
@@ -2797,6 +2949,8 @@ LOCAL_FUNCTION node_api_encode
     li      t1, API_OP_GET_STATE_VALIDATOR
     beq     a0, t1, 4f
     li      t1, API_OP_PRODUCE_ATTESTATION_DATA
+    beq     a0, t1, 4f
+    li      t1, API_OP_GET_ATTESTER_DUTIES
     bne     a0, t1, 3f
 4:  mv      a3, t0
 3:  li      a0, NODE_WORK_API_ENCODE

@@ -1399,7 +1399,7 @@ LOCAL_FUNCTION api_body
     UNFRAME 16
     /* getProposerDuties: {"dependent_root":…,"execution_optimistic":…,"data":[{"pubkey":…,"validator_index":…,"slot":…},…]} */
 19: cmp     x28, #API_OP_GET_PROPOSER_DUTIES
-    b.ne    99f
+    b.ne    18f
     API_LIT api_u_root
     add     x0, x22, #ApiView_duties
     mov     x1, #32
@@ -1440,6 +1440,72 @@ LOCAL_FUNCTION api_body
     str     x9, [sp, #24]
     b       20b
 21: API_LIT api_v_end
+    UNFRAME 16
+    /* {"dependent_root":…,"execution_optimistic":…,"data":[{"pubkey":…,…,"slot":…},…]}, x21 the items written */
+18: cmp     x28, #API_OP_GET_ATTESTER_DUTIES
+    b.ne    99f
+    API_LIT api_u_root
+    LDQ     x0, x22, ApiView_ad_out
+    mov     x1, #32
+    bl      api_qhex
+    API_LIT api_u_optimistic
+    ldr     x0, [x22, #ApiView_is_optimistic]
+    bl      api_bool
+    API_LIT api_v_list
+    mov     x21, #0
+    str     xzr, [sp, #24]
+17: ldr     x9, [sp, #24]
+    LDQ     x10, x22, ApiView_ad_count
+    cmp     x9, x10
+    b.hs    16f
+    LDQ     x10, x22, ApiView_ad_out
+    mov     x11, #48
+    madd    x10, x9, x11, x10
+    add     x10, x10, #40
+    str     x10, [sp, #16]
+    ldr     x11, [x10]
+    cbz     x11, 15f
+    cbz     x21, 14f
+    API_LIT api_p_comma
+14: add     x21, x21, #1
+    API_LIT api_u_pubkey
+    ldr     x12, [x22, #ApiView_val_state]
+    PART    x9, x10, x12, NODE_STATE_VALIDATORS
+    ldr     x11, [sp, #16]
+    ldr     x11, [x11, #40]
+    add     x0, x9, x11, lsl #7             /* NODE_VALIDATOR_MEM: the pubkey first */
+    mov     x1, #48
+    bl      api_qhex
+    API_LIT api_u_index
+    ldr     x9, [sp, #16]
+    ldr     x0, [x9, #40]
+    bl      api_qdec
+    API_LIT api_t_committee_index
+    ldr     x9, [sp, #16]
+    ldr     x0, [x9, #16]
+    bl      api_qdec
+    API_LIT api_t_committee_length
+    ldr     x9, [sp, #16]
+    ldr     x0, [x9, #24]
+    bl      api_qdec
+    API_LIT api_t_committees_at_slot
+    LDQ     x9, x22, ApiView_ad_out
+    ldr     x0, [x9, #32]
+    bl      api_qdec
+    API_LIT api_t_validator_committee_index
+    ldr     x9, [sp, #16]
+    ldr     x0, [x9, #32]
+    bl      api_qdec
+    API_LIT api_c_slot
+    ldr     x9, [sp, #16]
+    ldr     x0, [x9, #8]
+    bl      api_qdec
+    API_LIT api_end1
+15: ldr     x9, [sp, #24]
+    add     x9, x9, #1
+    str     x9, [sp, #24]
+    b       17b
+16: API_LIT api_v_end
 99: UNFRAME 16
 END_FUNCTION api_body
 
@@ -1884,6 +1950,8 @@ LOCAL_FUNCTION node_api_event
     b.eq    63f
     cmp     x3, #API_OP_PRODUCE_ATTESTATION_DATA
     b.eq    59f
+    cmp     x3, #API_OP_GET_ATTESTER_DUTIES
+    b.eq    58f
     cmp     x3, #API_OP_EVENTSTREAM
     b.eq    61f
     cmp     x3, #API_OP_GET_POOL_VOLUNTARY_EXITS
@@ -1932,6 +2000,46 @@ LOCAL_FUNCTION node_api_event
     ldr     x0, [x25, #ApiRoute_op]
     cmp     x0, #API_OP_GET_STATE_VALIDATOR
     b.ne    64f
+    b       67f
+58: mov     x2, #503                        /* getAttesterDuties: 503 while syncing; 400 past the next epoch, with no index or a key */
+    ldr     x9, [x26, #ApiView_is_syncing]
+    cbnz    x9, 80f
+    mov     x2, #400
+    ldp     x10, x11, [x25, #ApiRoute_list]
+    cbz     x11, 80f
+    add     x10, x25, x10
+581: ldr    x12, [x10], #64
+    cmp     x12, #API_VALIDATOR_INDEX
+    b.ne    80f
+    subs    x11, x11, #1
+    b.ne    581b
+    mov     x0, x20
+    bl      node_store_slot
+    mov     x11, #SLOTS_PER_EPOCH
+    udiv    x9, x0, x11
+    add     x9, x9, #1
+    ldr     x10, [x25, #ApiRoute_epoch]
+    mov     x2, #400
+    cmp     x10, x9
+    b.hi    80f
+    mul     x10, x10, x11                   /* the state of the first slot, as getProposerDuties; none: 400 */
+    mov     x9, #API_ID_SLOT
+    cmp     x10, x0
+    b.ls    582f
+    mov     x9, #API_ID_HEAD
+582: stp    x9, x10, [x25, #ApiRoute_id_kind]
+    mov     x0, x25
+    mov     x1, x26
+    bl      node_api_state
+    mov     x2, #400
+    cbnz    x0, 80f
+    ldr     x9, [x25, #ApiRoute_id_slot]
+    str     x9, [x26, #ApiView_head_slot]
+    mov     x0, x26
+    bl      node_api_advance
+    mov     x0, x25                         /* its ids in the work's data */
+    bl      node_api_ids
+    str     x0, [x26, #ApiView_look_data]
     b       67f
 59: mov     x2, #503                        /* produceAttestationData: 503 while syncing; 400 past the store's slot */
     ldr     x9, [x26, #ApiView_is_syncing]
@@ -2059,8 +2167,10 @@ LOCAL_FUNCTION node_api_done
     ldr     x9, [x21, #NodeAction_arg]
     and     x10, x9, #255                   /* getStateValidator: its ids go; produceAttestationData its index */
     mov     x11, #API_OP_PRODUCE_ATTESTATION_DATA
+    mov     x12, #API_OP_GET_ATTESTER_DUTIES
     cmp     x10, #API_OP_GET_STATE_VALIDATOR
     ccmp    x10, x11, #4, ne
+    ccmp    x10, x12, #4, ne
     b.ne    2f
     ldr     x1, [x21, #NodeAction_data]
     cbz     x1, 2f
@@ -2163,6 +2273,8 @@ LOCAL_FUNCTION node_api_run
     b.eq    2f
     cmp     x27, #API_OP_PRODUCE_ATTESTATION_DATA
     b.eq    2f
+    cmp     x27, #API_OP_GET_ATTESTER_DUTIES
+    b.eq    2f
     cmp     x27, #API_OP_GET_STATE_FORK
     b.ne    8f
 2:  ldr     x9, [x24]                       /* the ApiView at the end of scratch, with the work's values */
@@ -2219,7 +2331,32 @@ LOCAL_FUNCTION node_api_run
     cbz     x0, 5f
     str     x0, [x25, #NodeEvent_result]
     b       9f
-25: cmp     x27, #API_OP_GET_PROPOSER_DUTIES
+25: cmp     x27, #API_OP_GET_ATTESTER_DUTIES
+    b.ne    26f
+    cbz     x23, 41f                        /* getAttesterDuties: lantern_node_attester_duties of its ids, its out at the end of scratch */
+    ldr     x9, [x23, #16]
+    lsr     x9, x9, #6
+    STQ     x9, x26, ApiView_ad_count
+    mov     x10, #48
+    mul     x9, x9, x10
+    add     x9, x9, #40
+    ldr     x10, [x24]
+    subs    x10, x10, x9
+    b.lo    71f
+    str     x10, [x24]
+    add     x4, x24, x10
+    STQ     x4, x26, ApiView_ad_out
+    mov     x0, x22
+    add     x1, x19, #Node_config
+    mov     x2, x23
+    mov     x3, x24
+    FORK_CALL node_attester_duties
+    cmp     x0, #LANTERN_BUFFER_TOO_SMALL
+    b.eq    71f
+    cbz     x0, 24f
+    str     x0, [x25, #NodeEvent_result]
+    b       9f
+26: cmp     x27, #API_OP_GET_PROPOSER_DUTIES
     b.ne    23f
     mov     x0, x22                         /* getProposerDuties: lantern_node_proposers */
     add     x1, x19, #Node_config
@@ -2869,8 +3006,10 @@ LOCAL_FUNCTION node_api_encode
     orr     x5, x5, x9, lsl #24
     ldr     x1, [x3, #ApiView_look_state]
     mov     x10, #API_OP_PRODUCE_ATTESTATION_DATA
+    mov     x11, #API_OP_GET_ATTESTER_DUTIES
     cmp     x0, #API_OP_GET_STATE_VALIDATOR
     ccmp    x0, x10, #4, ne
+    ccmp    x0, x11, #4, ne
     ldr     x9, [x3, #ApiView_look_data]
     csel    x3, x9, xzr, eq
 3:  mov     x0, #NODE_WORK_API_ENCODE
