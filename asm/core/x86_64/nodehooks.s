@@ -3903,3 +3903,257 @@ LOCAL_FUNCTION produce_contents
     UNFRAME 32
 END_FUNCTION produce_contents
 .endif
+
+/* ---------------------------------------------------------------- publishBlockV2 */
+
+.set PUB_BLOB_BYTES, FIELD_ELEMENTS_PER_BLOB * 32
+
+/*
+ * (body, json, scratch, out, facts): node.md, lantern_node_publish_decode. rbx body, rbp json,
+ * r12 scratch, r13 out, r14 the type then the facts, r15 the value's bytes. Locals: L a JsonFault
+ * (128), L+128 the facts, L+136 the scratch size.
+ */
+SPEC_FUNCTION node_publish_decode
+    ENTER 144
+    mov     %rdi, %rbx
+    mov     %rsi, %rbp
+    mov     %rdx, %r12
+    mov     %rcx, %r13
+    mov     %r8, (L + 128)(%rsp)
+    mov     (%r12), %rax
+    mov     %rax, (L + 136)(%rsp)
+.if FORK >= FORK_DENEB
+    ADDRESS %r14, lantern_type_SignedBlockContents
+.else
+    ADDRESS %r14, lantern_type_SignedBeaconBlock
+.endif
+    movq    $24, 8(%r13)
+    movq    $0, 16(%r13)
+    test    %rbp, %rbp
+    jz      1f
+    mov     %r14, %rdi                      # JSON: its SSZ bytes
+    mov     %rbx, %rsi
+    mov     %r12, %rdx
+    mov     %r13, %rcx
+    lea     L(%rsp), %r8
+    CALL_GLOBAL lantern_json_decode
+    mov     (L + 136)(%rsp), %rcx
+    mov     %rcx, (%r12)
+    cmp     $LANTERN_BUFFER_TOO_SMALL, %rax
+    je      9f
+    test    %rax, %rax
+    jnz     8f
+    jmp     2f
+1:  mov     8(%rbx), %rsi                   # SSZ: the bytes as they are
+    mov     16(%rbx), %rdx
+    lea     24(%rdx), %rax
+    cmp     (%r13), %rax
+    ja      9f
+    mov     %rdx, 16(%r13)
+    lea     24(%r13), %rdi
+    add     %rbx, %rsi
+    call    lantern_copy
+2:  mov     %r14, %rdi                      # a value of the type
+    mov     %r13, %rsi
+    mov     %r12, %rdx
+    call    node_decode
+    mov     (L + 136)(%rsp), %rcx
+    mov     %rcx, (%r12)
+    cmp     $1, %rax
+    je      9f
+    test    %rax, %rax
+    jnz     8f
+    lea     24(%r13), %r15
+    mov     (L + 128)(%rsp), %r14
+.if FORK >= FORK_DENEB
+    mov     (%r15), %esi                    # SignedBlockContents: the block [o0, o1), kzg_proofs [o1, o2), blobs [o2, n)
+    mov     4(%r15), %edi
+    mov     8(%r15), %r8d
+    mov     (%r15,%rsi), %eax               # the block's message, its body: offsets checked by the decode
+    add     %rsi, %rax
+    mov     80(%r15,%rax), %ecx
+    add     %rcx, %rax                      # the body's place
+    mov     PB_COMMITMENTS(%r15,%rax), %ecx # blob_kzg_commitments: [c0, c1) of the body
+.if FORK >= FORK_ELECTRA
+    mov     PB_REQUESTS(%r15,%rax), %r9d
+.else
+    mov     %rdi, %r9
+    sub     %rax, %r9
+.endif
+    sub     %rcx, %r9
+    mov     %r9, %rax
+    xor     %edx, %edx
+    mov     $48, %ecx
+    div     %rcx
+    mov     %rax, %r9                       # the blob count
+    mov     %r8, %rax                       # the proofs' count
+    sub     %rdi, %rax
+    xor     %edx, %edx
+    div     %rcx
+.if FORK >= FORK_FULU
+    imul    $CELLS_PER_EXT_BLOB, %r9, %rcx
+    cmp     %rcx, %rax
+.else
+    cmp     %r9, %rax
+.endif
+    jne     8f
+    mov     16(%r13), %rax                  # the blobs' count
+    sub     %r8, %rax
+    xor     %edx, %edx
+    mov     $PUB_BLOB_BYTES, %ecx
+    div     %rcx
+    cmp     %r9, %rax
+    jne     8f
+    mov     %r9, 8(%r14)
+    mov     %rdi, %rdx                      # the signed block to the front
+    sub     %rsi, %rdx
+    mov     %rdx, 16(%r13)
+    add     %r15, %rsi
+    mov     %r15, %rdi
+    call    lantern_copy
+.else
+    movq    $0, 8(%r14)
+.endif
+    mov     (%r15), %eax                    # facts: the slot, the blob count, 0
+    mov     (%r15,%rax), %rax
+    mov     %rax, (%r14)
+    movq    $0, 16(%r14)
+    xor     %eax, %eax
+    LEAVE 144
+8:  mov     $LANTERN_INVALID_ENCODING, %eax
+    LEAVE 144
+9:  mov     $LANTERN_BUFFER_TOO_SMALL, %eax
+    LEAVE 144
+SPEC_END node_publish_decode
+
+/*
+ * (gossip, block, sidecars, level, scratch): node.md, lantern_node_publish_check. rbx gossip,
+ * rbp block, r12 sidecars, r13 level, r14 scratch, r15 a sidecar. Locals: L a Result, L+8 a root
+ * (32), L+40 the sidecars' end, L+48 execution_valid 1, L+56 the scratch size.
+ */
+SPEC_FUNCTION node_publish_check
+    ENTER 64
+    mov     %rdi, %rbx
+    mov     %rsi, %rbp
+    mov     %rdx, %r12
+    mov     %rcx, %r13
+    mov     %r8, %r14
+    mov     (%r14), %rax
+    mov     %rax, (L + 56)(%rsp)
+    movq    $GOSSIP_BEACON_BLOCK, NodeGossip_topic(%rbx)    # the beacon_block topic's checks
+    movq    $0, NodeGossip_subnet(%rbx)
+    mov     %rbx, %rdi
+    mov     %rbp, %rsi
+    mov     %r14, %rdx
+    call    publish_gossip
+    test    %rax, %rax
+    jnz     99f
+.if FORK >= FORK_DENEB
+    test    %r12, %r12                      # each sidecar's, on its subnet
+    jz      5f
+    mov     8(%r12), %r15
+    add     %r12, %r15
+    mov     16(%r12), %rax
+    add     %r15, %rax
+    mov     %rax, (L + 40)(%rsp)
+1:  cmp     (L + 40)(%rsp), %r15
+    jae     5f
+    mov     8(%r15), %rax
+    mov     (%r15,%rax), %rax               # its index, at byte 0 of its bytes
+    mov     NodeGossip_config(%rbx), %rcx
+.if FORK >= FORK_FULU
+    mov     $GOSSIP_DATA_COLUMN_SIDECAR, %esi
+    mov     CONFIG_DATA_COLUMN_SIDECAR_SUBNET_COUNT(%rcx), %rcx
+.elseif FORK >= FORK_ELECTRA
+    mov     $GOSSIP_BLOB_SIDECAR, %esi
+    mov     CONFIG_BLOB_SIDECAR_SUBNET_COUNT_ELECTRA(%rcx), %rcx
+.else
+    mov     $GOSSIP_BLOB_SIDECAR, %esi
+    mov     CONFIG_BLOB_SIDECAR_SUBNET_COUNT(%rcx), %rcx
+.endif
+    test    %rcx, %rcx
+    jz      8f
+    xor     %edx, %edx
+    div     %rcx
+    mov     %rsi, NodeGossip_topic(%rbx)
+    mov     %rdx, NodeGossip_subnet(%rbx)
+    mov     %rbx, %rdi
+    mov     %r15, %rsi
+    mov     %r14, %rdx
+    call    publish_gossip
+    test    %rax, %rax
+    jnz     99f
+    add     (%r15), %r15
+    jmp     1b
+5:
+.endif
+    cmp     $2, %r13                        # consensus: process_block on the parent's post-state at the slot
+    jb      7f
+    ADDRESS %rdi, lantern_type_SignedBeaconBlock
+    mov     %rbp, %rsi
+    mov     %r14, %rdx
+    call    node_decode
+    cmp     $1, %rax
+    je      6f
+    ja      8f
+    mov     SignedBeaconBlock_message(%rdx), %rbp
+    add     %rdx, %rbp                      # the block, decoded
+    movq    $1, (L + 48)(%rsp)
+    mov     NodeGossip_proposer(%rbx), %rdi
+    mov     %rbp, %rsi
+    lea     (L + 48)(%rsp), %rdx
+    mov     NodeGossip_config(%rbx), %rcx
+    mov     %r14, %r8
+    lea     L(%rsp), %r9
+    call    lantern_process_block
+    test    %rax, %rax
+    jnz     4f
+    mov     L(%rsp), %rax
+    test    %rax, %rax
+    jnz     4f
+    mov     NodeGossip_proposer(%rbx), %rdi
+    mov     NodeGossip_config(%rbx), %rsi
+    mov     CONFIG_STATE_CACHE(%rsi), %rsi
+    mov     %r14, %rdx
+    lea     (L + 8)(%rsp), %rcx
+    call    lantern_state_root
+    test    %rax, %rax
+    jnz     4f
+    lea     BeaconBlock_state_root(%rbp), %rdi
+    lea     (L + 8)(%rsp), %rsi
+    NE32    %rdi, %rsi, 3f
+    jmp     7f
+3:  mov     $LANTERN_INVALID_STATE_ROOT, %eax
+4:  mov     (L + 56)(%rsp), %rcx
+    mov     %rcx, (%r14)
+    LEAVE 64
+7:  mov     (L + 56)(%rsp), %rcx
+    mov     %rcx, (%r14)
+    xor     %eax, %eax
+    LEAVE 64
+6:  mov     (L + 56)(%rsp), %rcx
+    mov     %rcx, (%r14)
+    mov     $LANTERN_BUFFER_TOO_SMALL, %eax
+    LEAVE 64
+8:  mov     (L + 56)(%rsp), %rcx
+    mov     %rcx, (%r14)
+    mov     $LANTERN_INVALID_ENCODING, %eax
+    LEAVE 64
+99: LEAVE 64
+SPEC_END node_publish_check
+
+/*
+ * L1: (gossip rdi, data rsi, scratch rdx) -> rax: LANTERN_OK when lantern_node_gossip of the data
+ * holds, else its status or its result. Locals: a Result, a root (32), an index.
+ */
+LOCAL_FUNCTION publish_gossip
+    FRAME 48
+    mov     %rsp, %rcx
+    lea     8(%rsp), %r8
+    lea     40(%rsp), %r9
+    call    lantern_node_gossip
+    test    %rax, %rax
+    jnz     9f
+    mov     (%rsp), %rax
+9:  UNFRAME 48
+END_FUNCTION publish_gossip

@@ -4488,9 +4488,15 @@ LOCAL_FUNCTION node_event
     cmp     $NODE_WORK_PRODUCE_FOLD, %rax
     je      708f
     cmp     $NODE_WORK_PRODUCE_BLOCK, %rax
-    jne     70f
+    jne     709f
 708: mov    %r12, %rdi
     call    node_produce_done
+    LEAVE 48
+709: lea    -NODE_WORK_PUBLISH_DECODE(%rax), %rcx    # the works of block publishing: their entry goes on
+    cmp     $(NODE_WORK_PUBLISH_SIDECAR - NODE_WORK_PUBLISH_DECODE), %rcx
+    ja      70f
+    mov     %r12, %rdi
+    call    node_publish_done
     LEAVE 48
 70: cmp     $NODE_WORK_ATTESTATION, %rax    # done with an attestation or a slashing: free its bytes
     je      71f
@@ -8443,7 +8449,38 @@ FUNCTION lantern_node_step
     imul    $NODE_ACT_WORK_SIZE, %rsi, %rsi
     add     %rsi, %r10
     jmp     22f
-204: cmp    $NODE_WORK_SERVE, %rsi
+204: lea    -NODE_WORK_PUBLISH_DECODE(%rsi), %rax   # the works of a publish: an API answer; of LANTERN_VALID, bytes inside
+    cmp     $(NODE_WORK_PUBLISH_SIDECAR - NODE_WORK_PUBLISH_DECODE), %rax
+    ja      2042f
+    incq    (L + 216)(%rsp)
+    cmp     $NODE_WORK_PUBLISH_CHECK, %rsi  # a block, or a blob, it may add
+    jne     2043f
+    inc     %r9
+2043: cmp   $NODE_WORK_PUBLISH_SIDECAR, %rsi
+    jne     2044f
+    incq    (L + 120)(%rsp)
+2044: cmpq  $0, NodeEvent_result(%rdi)
+    jne     22f
+    cmp     $NODE_WORK_PUBLISH_SIDECARS, %rsi
+    je      22f
+    cmp     $(NodeEvent_chunk + 24), %rcx   # its ByteList at NodeEvent_chunk
+    jb      7f
+    cmpq    $24, (NodeEvent_chunk + 8)(%rdi)
+    jne     7f
+    lea     -(NodeEvent_chunk + 24)(%rcx), %rax
+    cmp     %rax, (NodeEvent_chunk + 16)(%rdi)
+    ja      7f
+    add     %rcx, %r10                      # its bytes of actions
+    testq   $NODE_FLAG_SUBSCRIBED, Node_flags(%rbx) # subscribed: p2p_out for its publish, and scratch for it
+    jz      22f
+    lea     512(,%rcx,2), %rax
+    add     %rax, (L + 224)(%rsp)
+    lea     (SNAPPY_SCRATCH_COMPRESS + 192)(%rcx), %rax
+    cmp     (L + 208)(%rsp), %rax
+    jbe     22f
+    mov     %rax, (L + 208)(%rsp)
+    jmp     22f
+2042: cmp   $NODE_WORK_SERVE, %rsi
     je      202f
     cmp     $NODE_WORK_API_SUBMIT, %rsi     # API_SUBMIT: an API answer; of LANTERN_VALID, its records inside
     jne     2041f
@@ -8595,6 +8632,8 @@ FUNCTION lantern_node_step
     jmp     1b
 5:  call    node_column_count               # the columns sampled, for the blobs part
     mov     %rax, (L + 152)(%rsp)
+    call    node_api_publish_count          # an answer for each publishBlockV2 that waits
+    add     %rax, (L + 216)(%rsp)
     mov     %r8, S8(%rsp)
     mov     %r11, L(%rsp)
     call    node_api_event_count            # with event streams: NODE_API_SCRATCH of scratch, 1024 per event for each
@@ -8875,6 +8914,7 @@ FUNCTION lantern_node_step
     mov     %rdi, S9(%rsp)
     jmp     6b
 9:  call    node_head
+    call    node_publish_poll               # the answers of the published blocks whose import ended
     call    node_engine_next
     call    node_shed                       # the post-states the node can rebuild go
     call    node_api_head_events            # the head and finalized_checkpoint events, at a quiet point
@@ -9865,7 +9905,110 @@ FUNCTION lantern_node_run
     mov     %rax, (%rcx)
     xor     %eax, %eax
 8449: LEAVE 192
-8450:
+8450: cmp   $NODE_WORK_PUBLISH_DECODE, %rax
+    jne     8460f
+    test    %r14, %r14                      # PUBLISH_DECODE: lantern_node_publish_decode, the block as a ByteList at NodeEvent_chunk
+    jz      837b
+    cmpq    $(NodeEvent_chunk + 24), S9(%rsp)
+    jb      8419b
+    mov     S8(%rsp), %rcx
+    mov     S9(%rsp), %rax
+    sub     $NodeEvent_chunk, %rax
+    mov     %rax, NodeEvent_chunk(%rcx)
+    movq    $24, (NodeEvent_chunk + 8)(%rcx)
+    movq    $0, (NodeEvent_chunk + 16)(%rcx)
+    mov     NodeAction_arg(%r12), %rax
+    movzbl  %al, %r10d
+    shr     $8, %eax
+    and     $1, %eax
+    xor     $1, %eax
+    mov     %rax, %rsi                      # JSON without the SSZ bit
+    mov     %r14, %rdi
+    mov     %r15, %rdx
+    add     $NodeEvent_chunk, %rcx
+    lea     (L + 96)(%rsp), %r8             # facts: the slot, the blob count, 0
+    FORK_CALL node_publish_decode
+    cmp     $LANTERN_BUFFER_TOO_SMALL, %rax
+    je      8449b
+    test    %rax, %rax
+    jnz     8458f
+    mov     S8(%rsp), %rcx
+    mov     (L + 96)(%rsp), %rax
+    mov     %rax, NodeEvent_index(%rcx)
+    mov     (L + 104)(%rsp), %rax
+    mov     %rax, NodeEvent_checkpoint(%rcx)
+    movzbl  NodeAction_arg(%r12), %r10d     # its root
+    lea     NodeEvent_chunk(%rcx), %rdi
+    mov     %r15, %rsi
+    lea     NodeEvent_root(%rcx), %rdx
+    lea     (L + 112)(%rsp), %rcx
+    lea     (L + 120)(%rsp), %r8
+    FORK_CALL node_block_root
+    cmp     $LANTERN_BUFFER_TOO_SMALL, %rax
+    je      8449b
+    test    %rax, %rax
+    jnz     8458f
+    mov     (L + 112)(%rsp), %rax
+    test    %rax, %rax
+    jz      8441b
+8458: mov   S8(%rsp), %rcx                  # a failed check: the result, no bytes
+    mov     %rax, NodeEvent_result(%rcx)
+    xor     %eax, %eax
+    LEAVE 192
+8460: cmp   $NODE_WORK_PUBLISH_CHECK, %rax
+    jne     8470f
+    test    %r13, %r13                      # PUBLISH_CHECK: lantern_node_publish_check, then the block's bytes at NodeEvent_chunk
+    jz      837b
+    test    %r14, %r14
+    jz      837b
+    mov     (L + 80)(%rsp), %rcx
+    test    %rcx, %rcx
+    jz      837b
+    mov     16(%r14), %rax
+    add     $(NodeEvent_chunk + 24 + 7), %rax
+    cmp     %rax, S9(%rsp)
+    jb      8419b
+    mov     (L + 64)(%rsp), %rax            # a NodeGossip at L+96: seen, store, time_ms, topic, subnet,
+    mov     %rax, (L + 96)(%rsp)            # head, proposer, justified, settings, config
+    mov     %rbp, (L + 104)(%rsp)
+    mov     Node_time_ms(%rbx), %rax
+    mov     %rax, (L + 112)(%rsp)
+    movq    $0, (L + 120)(%rsp)
+    movq    $0, (L + 128)(%rsp)
+    mov     %rcx, (L + 136)(%rsp)
+    mov     %r13, (L + 144)(%rsp)
+    movq    $0, (L + 152)(%rsp)
+    mov     (L + 88)(%rsp), %rax
+    mov     %rax, (L + 160)(%rsp)
+    lea     Node_config(%rbx), %rax
+    mov     %rax, (L + 168)(%rsp)
+    mov     NODE_STATE_SLOT(%r13), %rdi
+    lea     Node_config(%rbx), %rsi
+    call    node_fork
+    mov     %rax, %r10
+    lea     (L + 96)(%rsp), %rdi
+    mov     %r14, %rsi
+    mov     (L + 72)(%rsp), %rdx
+    mov     NodeAction_arg(%r12), %rcx
+    mov     %r15, %r8
+    FORK_CALL node_publish_check
+    cmp     $LANTERN_BUFFER_TOO_SMALL, %rax
+    je      8449b
+    test    %rax, %rax
+    jnz     8458b
+    mov     S8(%rsp), %rcx                  # the block's bytes
+    mov     S9(%rsp), %rax
+    sub     $NodeEvent_chunk, %rax
+    mov     %rax, NodeEvent_chunk(%rcx)
+    movq    $24, (NodeEvent_chunk + 8)(%rcx)
+    mov     16(%r14), %rdx
+    mov     %rdx, (NodeEvent_chunk + 16)(%rcx)
+    lea     (NodeEvent_chunk + 24)(%rcx), %rdi
+    mov     8(%r14), %rsi
+    add     %r14, %rsi
+    call    lantern_copy
+    jmp     8441b
+8470:
 89: cmp     $NODE_WORK_SLOTS, %rax
     jne     90f
     mov     NODE_STATE_SLOT(%r13), %rdi     # SLOTS: process_slots of the fork of the state's slot, to arg

@@ -4557,9 +4557,15 @@ LOCAL_FUNCTION node_event
 707: cmp    x9, #NODE_WORK_PRODUCE_CHECK       /* the works of block production: their entry goes on */
     ccmp    x9, #NODE_WORK_PRODUCE_FOLD, #4, ne
     ccmp    x9, #NODE_WORK_PRODUCE_BLOCK, #4, ne
-    b.ne    70f
+    b.ne    708f
     mov     x0, x21
     bl      node_produce_done
+    LEAVE 48
+708: sub    x10, x9, #NODE_WORK_PUBLISH_DECODE /* the works of block publishing: their entry goes on */
+    cmp     x10, #(NODE_WORK_PUBLISH_SIDECAR - NODE_WORK_PUBLISH_DECODE)
+    b.hi    70f
+    mov     x0, x21
+    bl      node_publish_done
     LEAVE 48
 70: cmp     x9, #NODE_WORK_ATTESTATION         /* done with an attestation or a slashing: free its bytes */
     ccmp    x9, #NODE_WORK_ATTESTER_SLASHING, #4, ne
@@ -8375,7 +8381,48 @@ FUNCTION lantern_node_step
     mov     x16, #NODE_ACT_WORK_SIZE
     madd    x28, x15, x16, x28
     b       22f
-231: cmp    x14, #NODE_WORK_SERVE
+231: sub    x15, x14, #NODE_WORK_PUBLISH_DECODE /* the works of a publish: an API answer; of LANTERN_VALID, bytes inside */
+    cmp     x15, #(NODE_WORK_PUBLISH_SIDECAR - NODE_WORK_PUBLISH_DECODE)
+    b.hi    2312f
+    ldr     x15, [sp, #(L + 184)]
+    add     x15, x15, #1
+    str     x15, [sp, #(L + 184)]
+    cmp     x14, #NODE_WORK_PUBLISH_CHECK   /* a block, or a blob, it may add */
+    cinc    x27, x27, eq
+    cmp     x14, #NODE_WORK_PUBLISH_SIDECAR
+    b.ne    2313f
+    ldr     x15, [sp, #(L + 120)]
+    add     x15, x15, #1
+    str     x15, [sp, #(L + 120)]
+2313: ldr   x15, [x11, #NodeEvent_result]
+    cbnz    x15, 22f
+    cmp     x14, #NODE_WORK_PUBLISH_SIDECARS
+    b.eq    22f
+    cmp     x12, #(NodeEvent_chunk + 24)    /* its ByteList at NodeEvent_chunk */
+    b.lo    7f
+    add     x15, x11, #NodeEvent_chunk
+    ldp     x15, x16, [x15, #8]
+    cmp     x15, #24
+    b.ne    7f
+    sub     x15, x12, #(NodeEvent_chunk + 24)
+    cmp     x16, x15
+    b.hi    7f
+    add     x28, x28, x12                   /* its bytes of actions */
+    ldr     x9, [x19, #Node_flags]          /* subscribed: p2p_out for its publish, and scratch for it */
+    tbz     x9, #2, 22f
+    mov     x9, #512
+    add     x9, x9, x12, lsl #1
+    ldr     x10, [sp, #(L + 192)]
+    add     x10, x10, x9
+    str     x10, [sp, #(L + 192)]
+    MOVQ    x9, SNAPPY_SCRATCH_COMPRESS + 192
+    add     x9, x9, x12
+    ldr     x10, [sp, #(L + 176)]
+    cmp     x9, x10
+    csel    x10, x9, x10, hi
+    str     x10, [sp, #(L + 176)]
+    b       22f
+2312: cmp   x14, #NODE_WORK_SERVE
     b.eq    24f
     cmp     x14, #NODE_WORK_API_SUBMIT      /* API_SUBMIT: an API answer; of LANTERN_VALID, its records inside */
     b.ne    2310f
@@ -8543,6 +8590,10 @@ FUNCTION lantern_node_step
     b       1b
 5:  bl      node_column_count               /* the columns sampled, for the blobs part */
     str     x0, [sp, #(L + 152)]
+    bl      node_api_publish_count          /* an answer for each publishBlockV2 that waits */
+    ldr     x9, [sp, #(L + 184)]
+    add     x9, x9, x0
+    str     x9, [sp, #(L + 184)]
     bl      node_api_event_count            /* with event streams: NODE_API_SCRATCH of scratch, 1024 per event for each */
     cbz     x0, 58f
     ldr     x9, [sp, #(L + 176)]
@@ -8848,6 +8899,7 @@ FUNCTION lantern_node_step
     add     x27, x27, x9
     b       6b
 9:  bl      node_head
+    bl      node_publish_poll               /* the answers of the published blocks whose import ended */
     bl      node_engine_next
     bl      node_shed                       /* the post-states the node can rebuild go */
     bl      node_api_head_events            /* the head and finalized_checkpoint events, at a quiet point */
@@ -9769,7 +9821,94 @@ FUNCTION lantern_node_run
     str     x10, [x25]
     mov     x0, #LANTERN_OK
 8449: LEAVE 192
-8450:
+8450: cmp   x9, #NODE_WORK_PUBLISH_DECODE
+    b.ne    8460f
+    cbz     x23, 837b                       /* PUBLISH_DECODE: lantern_node_publish_decode, the block as a ByteList at NodeEvent_chunk */
+    cmp     x26, #(NodeEvent_chunk + 24)
+    b.lo    8419b
+    add     x9, x25, #NodeEvent_chunk
+    sub     x10, x26, #NodeEvent_chunk
+    mov     x11, #24
+    stp     x10, x11, [x9]
+    str     xzr, [x9, #16]
+    ldr     x9, [x21, #NodeAction_arg]
+    and     x15, x9, #255
+    ubfx    x9, x9, #8, #1
+    eor     x1, x9, #1                      /* JSON without the SSZ bit */
+    mov     x0, x23
+    mov     x2, x24
+    add     x3, x25, #NodeEvent_chunk
+    add     x4, sp, #(L + 96)               /* facts: the slot, the blob count, 0 */
+    FORK_CALL node_publish_decode
+    cmp     x0, #LANTERN_BUFFER_TOO_SMALL
+    b.eq    8449b
+    cbnz    x0, 8458f
+    ldr     x9, [sp, #(L + 96)]
+    str     x9, [x25, #NodeEvent_index]
+    ldr     x9, [sp, #(L + 104)]
+    str     x9, [x25, #NodeEvent_checkpoint]
+    ldr     x9, [x21, #NodeAction_arg]      /* its root */
+    and     x15, x9, #255
+    add     x0, x25, #NodeEvent_chunk
+    mov     x1, x24
+    add     x2, x25, #NodeEvent_root
+    add     x3, sp, #(L + 112)
+    add     x4, sp, #(L + 120)
+    FORK_CALL node_block_root
+    cmp     x0, #LANTERN_BUFFER_TOO_SMALL
+    b.eq    8449b
+    cbnz    x0, 8458f
+    ldr     x0, [sp, #(L + 112)]
+    cbnz    x0, 8458f
+    b       8441b
+8458: str   x0, [x25, #NodeEvent_result]    /* a failed check: the result, no bytes */
+    mov     x0, #LANTERN_OK
+    LEAVE 192
+8460: cmp   x9, #NODE_WORK_PUBLISH_CHECK
+    b.ne    8470f
+    cbz     x22, 837b                       /* PUBLISH_CHECK: lantern_node_publish_check, then the block's bytes at NodeEvent_chunk */
+    cbz     x23, 837b
+    ldr     x9, [sp, #(L + 80)]
+    cbz     x9, 837b
+    ldr     x10, [x23, #16]
+    add     x10, x10, #(NodeEvent_chunk + 24 + 7)
+    cmp     x26, x10
+    b.lo    8419b
+    ldr     x10, [sp, #(L + 64)]            /* a NodeGossip at L+96: seen, store, time_ms, topic, subnet, */
+    stp     x10, x20, [sp, #(L + 96)]       /* head, proposer, justified, settings, config */
+    ldr     x10, [x19, #Node_time_ms]
+    str     x10, [sp, #(L + 112)]
+    stp     xzr, xzr, [sp, #(L + 120)]
+    stp     x9, x22, [sp, #(L + 136)]
+    ldr     x10, [sp, #(L + 88)]
+    stp     xzr, x10, [sp, #(L + 152)]
+    add     x10, x19, #Node_config
+    str     x10, [sp, #(L + 168)]
+    ldr     x0, [x22, #NODE_STATE_SLOT]
+    add     x1, x19, #Node_config
+    bl      node_fork
+    mov     x15, x0
+    add     x0, sp, #(L + 96)
+    mov     x1, x23
+    ldr     x2, [sp, #(L + 72)]
+    ldr     x3, [x21, #NodeAction_arg]
+    mov     x4, x24
+    FORK_CALL node_publish_check
+    cmp     x0, #LANTERN_BUFFER_TOO_SMALL
+    b.eq    8449b
+    cbnz    x0, 8458b
+    add     x9, x25, #NodeEvent_chunk       /* the block's bytes */
+    sub     x10, x26, #NodeEvent_chunk
+    mov     x11, #24
+    stp     x10, x11, [x9]
+    ldr     x2, [x23, #16]
+    str     x2, [x9, #16]
+    add     x0, x9, #24
+    ldr     x10, [x23, #8]
+    add     x1, x23, x10
+    bl      lantern_copy
+    b       8441b
+8470:
 89: cmp     x9, #NODE_WORK_SLOTS
     b.ne    90f
     ldr     x0, [x22, #NODE_STATE_SLOT]     /* SLOTS: process_slots of the fork of the state's slot, to arg */

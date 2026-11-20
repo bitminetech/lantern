@@ -3922,3 +3922,236 @@ LOCAL_FUNCTION produce_contents
     UNFRAME 32
 END_FUNCTION produce_contents
 .endif
+
+/* ---------------------------------------------------------------- publishBlockV2 */
+
+.set PUB_BLOB_BYTES, FIELD_ELEMENTS_PER_BLOB * 32
+
+/*
+ * (body, json, scratch, out, facts): node.md, lantern_node_publish_decode. s1 body, s2 json, s3
+ * scratch, s4 out, s5 facts, s6 the type, s7 the value's bytes, s8 their count, s9 the scratch
+ * size. SSZ offsets have no alignment: byte loads. Locals: L a JsonFault (128).
+ */
+SPEC_FUNCTION node_publish_decode
+    ENTER 128
+    mv      s1, a0
+    mv      s2, a1
+    mv      s3, a2
+    mv      s4, a3
+    mv      s5, a4
+    ld      s9, 0(s3)
+.if FORK >= FORK_DENEB
+    ADDRESS s6, lantern_type_SignedBlockContents
+.else
+    ADDRESS s6, lantern_type_SignedBeaconBlock
+.endif
+    li      t0, 24
+    sd      t0, 8(s4)
+    sd      zero, 16(s4)
+    beqz    s2, 1f
+    mv      a0, s6                          # JSON: its SSZ bytes
+    mv      a1, s1
+    mv      a2, s3
+    mv      a3, s4
+    addi    a4, sp, L
+    CALL_GLOBAL lantern_json_decode
+    sd      s9, 0(s3)
+    li      t0, LANTERN_BUFFER_TOO_SMALL
+    beq     a0, t0, 9f
+    bnez    a0, 8f
+    j       2f
+1:  ld      t0, 8(s1)                       # SSZ: the bytes as they are
+    ld      t1, 16(s1)
+    ld      t2, 0(s4)
+    addi    t3, t1, 24
+    bltu    t2, t3, 9f
+    sd      t1, 16(s4)
+    addi    a0, s4, 24
+    add     a1, s1, t0
+    mv      a2, t1
+    call    lantern_copy
+2:  mv      a0, s6                          # a value of the type
+    mv      a1, s4
+    mv      a2, s3
+    call    node_decode
+    sd      s9, 0(s3)
+    li      t0, 1
+    beq     a0, t0, 9f
+    bnez    a0, 8f
+    addi    s7, s4, 24
+    ld      s8, 16(s4)
+.if FORK >= FORK_DENEB
+    LWB     t0, s7, 0, t6                   # SignedBlockContents: the block [o0, o1), kzg_proofs [o1, o2), blobs [o2, n)
+    LWB     t1, s7, 4, t6
+    LWB     t2, s7, 8, t6
+    add     t3, s7, t0
+    LWB     t4, t3, 0, t6                   # the block's message, its body: offsets checked by the decode
+    add     t4, t0, t4
+    add     t3, s7, t4
+    LWB     t5, t3, 80, t6
+    add     t4, t4, t5                      # the body's place
+    add     t3, s7, t4
+    LWB     t5, t3, PB_COMMITMENTS, t6      # blob_kzg_commitments: [c0, c1) of the body
+.if FORK >= FORK_ELECTRA
+    LWB     a5, t3, PB_REQUESTS, t6
+.else
+    sub     a5, t1, t4
+.endif
+    sub     a5, a5, t5
+    li      t6, 48
+    divu    a5, a5, t6                      # the blob count
+    sub     t5, t2, t1                      # the proofs' count
+    divu    t5, t5, t6
+.if FORK >= FORK_FULU
+    li      t6, CELLS_PER_EXT_BLOB
+    mul     t6, a5, t6
+    bne     t5, t6, 8f
+.else
+    bne     t5, a5, 8f
+.endif
+    sub     t5, s8, t2                      # the blobs' count
+    li      t6, PUB_BLOB_BYTES
+    divu    t5, t5, t6
+    bne     t5, a5, 8f
+    sd      a5, 8(s5)
+    sub     s8, t1, t0                      # the signed block to the front
+    sd      s8, 16(s4)
+    mv      a0, s7
+    add     a1, s7, t0
+    mv      a2, s8
+    call    lantern_copy
+.else
+    sd      zero, 8(s5)
+.endif
+    LWB     t0, s7, 0, t6                   # facts: the slot, the blob count, 0
+    add     t0, s7, t0
+    LDB     t1, t0, 0, t6, t2
+    sd      t1, 0(s5)
+    sd      zero, 16(s5)
+    li      a0, LANTERN_OK
+    LEAVE 128
+8:  li      a0, LANTERN_INVALID_ENCODING
+    LEAVE 128
+9:  li      a0, LANTERN_BUFFER_TOO_SMALL
+    LEAVE 128
+SPEC_END node_publish_decode
+
+/*
+ * (gossip, block, sidecars, level, scratch): node.md, lantern_node_publish_check. s1 gossip, s2
+ * block, s3 sidecars, s4 level, s5 scratch, s6 a sidecar, s7 their end, s8 the scratch size.
+ * Locals: L a Result, L+8 a root (32), L+48 execution_valid 1.
+ */
+SPEC_FUNCTION node_publish_check
+    ENTER 64
+    mv      s1, a0
+    mv      s2, a1
+    mv      s3, a2
+    mv      s4, a3
+    mv      s5, a4
+    ld      s8, 0(s5)
+    li      t0, GOSSIP_BEACON_BLOCK         # the beacon_block topic's checks
+    sd      t0, NodeGossip_topic(s1)
+    sd      zero, NodeGossip_subnet(s1)
+    mv      a0, s1
+    mv      a1, s2
+    mv      a2, s5
+    call    publish_gossip
+    bnez    a0, 99f
+.if FORK >= FORK_DENEB
+    beqz    s3, 5f                          # each sidecar's, on its subnet
+    ld      t0, 8(s3)
+    add     s6, s3, t0
+    ld      t0, 16(s3)
+    add     s7, s6, t0
+1:  bgeu    s6, s7, 5f
+    ld      t0, 8(s6)
+    add     t0, s6, t0
+    LDB     t1, t0, 0, t2, t3               # its index, at byte 0 of its bytes
+    ld      t2, NodeGossip_config(s1)
+.if FORK >= FORK_FULU
+    li      t4, GOSSIP_DATA_COLUMN_SIDECAR
+    LDQ     t3, t2, CONFIG_DATA_COLUMN_SIDECAR_SUBNET_COUNT
+.elseif FORK >= FORK_ELECTRA
+    li      t4, GOSSIP_BLOB_SIDECAR
+    LDQ     t3, t2, CONFIG_BLOB_SIDECAR_SUBNET_COUNT_ELECTRA
+.else
+    li      t4, GOSSIP_BLOB_SIDECAR
+    LDQ     t3, t2, CONFIG_BLOB_SIDECAR_SUBNET_COUNT
+.endif
+    beqz    t3, 8f
+    remu    t1, t1, t3
+    sd      t4, NodeGossip_topic(s1)
+    sd      t1, NodeGossip_subnet(s1)
+    mv      a0, s1
+    mv      a1, s6
+    mv      a2, s5
+    call    publish_gossip
+    bnez    a0, 99f
+    ld      t0, 0(s6)
+    add     s6, s6, t0
+    j       1b
+5:
+.endif
+    li      t0, 2                           # consensus: process_block on the parent's post-state at the slot
+    bltu    s4, t0, 7f
+    ADDRESS a0, lantern_type_SignedBeaconBlock
+    mv      a1, s2
+    mv      a2, s5
+    call    node_decode
+    li      t0, 1
+    beq     a0, t0, 6f
+    bnez    a0, 8f
+    LDQ     t0, a1, SignedBeaconBlock_message
+    add     s2, a1, t0                      # the block, decoded
+    li      t0, 1
+    sd      t0, (L + 48)(sp)
+    ld      a0, NodeGossip_proposer(s1)
+    mv      a1, s2
+    addi    a2, sp, (L + 48)
+    ld      a3, NodeGossip_config(s1)
+    mv      a4, s5
+    addi    a5, sp, L
+    call    lantern_process_block
+    bnez    a0, 4f
+    ld      a0, L(sp)
+    bnez    a0, 4f
+    ld      a0, NodeGossip_proposer(s1)
+    ld      a1, NodeGossip_config(s1)
+    LDQ     a1, a1, CONFIG_STATE_CACHE
+    mv      a2, s5
+    addi    a3, sp, (L + 8)
+    call    lantern_state_root
+    bnez    a0, 4f
+    ADDQ    t0, s2, BeaconBlock_state_root
+    addi    t1, sp, (L + 8)
+    NE32    t0, t1, 3f
+    j       7f
+3:  li      a0, LANTERN_INVALID_STATE_ROOT
+4:  sd      s8, 0(s5)
+    LEAVE 64
+7:  sd      s8, 0(s5)
+    li      a0, LANTERN_OK
+    LEAVE 64
+6:  sd      s8, 0(s5)
+    li      a0, LANTERN_BUFFER_TOO_SMALL
+    LEAVE 64
+8:  sd      s8, 0(s5)
+    li      a0, LANTERN_INVALID_ENCODING
+    LEAVE 64
+99: LEAVE 64
+SPEC_END node_publish_check
+
+/*
+ * L1: (gossip a0, data a1, scratch a2) -> a0: LANTERN_OK when lantern_node_gossip of the data
+ * holds, else its status or its result. Locals: a Result, a root (32), an index.
+ */
+LOCAL_FUNCTION publish_gossip
+    FRAME 48
+    mv      a3, sp
+    addi    a4, sp, 8
+    addi    a5, sp, 40
+    call    lantern_node_gossip
+    bnez    a0, 9f
+    ld      a0, 0(sp)
+9:  UNFRAME 48
+END_FUNCTION publish_gossip

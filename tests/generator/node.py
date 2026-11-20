@@ -454,8 +454,9 @@ def produce_cases(fork, preset):
         body.sync_aggregate = aggregate
         return reqs
 
-    def build(full, skip):
-        epoch0 = int(spec.config.SHARD_COMMITTEE_PERIOD) + ANCHOR_EPOCH if full else ANCHOR_EPOCH
+    def build(full, skip, epoch0=None):
+        if epoch0 is None:
+            epoch0 = int(spec.config.SHARD_COMMITTEE_PERIOD) + ANCHOR_EPOCH if full else ANCHOR_EPOCH
         extra = 2 * int(spec.SLOTS_PER_EPOCH) if full else 0  # committees of two and more
         state, anchor_block = (payload_anchor(spec, fork, epoch0, extra) if merged
                                else anchor(spec, fork, statuses=True, epoch=epoch0, extra=extra))
@@ -580,6 +581,109 @@ def produce_cases(fork, preset):
             "payload_id": bytes(range(1, 9)) if merged else b"",
             "result": result.encode() if result is not None else b"",
             "closes": 0,
+        }
+    # publishBlockV2: an anchor at epoch 0, so that on_block's shuffling dependent root is a block of the store
+    made = run(spec, schedule(fork), lambda: build(False, False, 0))
+    if made is None:
+        raise RuntimeError(f"node-publish {fork}: the spec refuses the block")
+    state, anchor_block, slot, _, block = made[:5]
+    yield from publish_cases(spec, fork, state, anchor_block, block,
+                             int(state.genesis_time) * 1000 + int(slot) * int(spec.config.SLOT_DURATION_MS))
+
+
+# ---------------------------------------------------------------- Block publishing (beacon-api.md, publishBlockV2)
+
+PUBLISH_CLOSES = 40  # more steps than a publishBlockV2 of a block with no blobs takes
+
+
+def publish_cases(spec, fork, state, anchor_block, block, time_ms):
+    """node-publish: publishBlockV2 at the start of its slot of the empty_pool block of produce_cases
+    on an anchor at epoch 0, signed with its proposer's test key, from deneb in a SignedBlockContents with no blobs; the spec's
+    gossip validation, state transition and on_block give each block's verdict. published: the block at
+    consensus_and_equivocation (200, the head), then again in SSZ (200, known). refused: the block
+    signed with another key, a consensus_version of the fork before, and the block with another
+    state root at consensus (each 400; the head stays). gossip: the block with another state root at
+    the default level (202 once its import fails). closed: the request with its connection closed
+    after each number of the node's steps up to PUBLISH_CLOSES, then answered."""
+    import dataclasses
+    import json_codec
+    import reqresp
+    from eth_consensus_specs.utils import bls, kzg
+    kzg.load_trusted_setup()  # on_block's data availability check of deneb and fulu
+    f = FORKS.index(fork)
+    to_json = json_codec.to_json
+    proposer = int(block.proposer_index)
+
+    def signed_of(message, key):
+        st = state.copy()
+        spec.process_slots(st, message.slot)
+        domain = spec.get_domain(st, spec.DOMAIN_BEACON_PROPOSER, spec.compute_epoch_at_slot(message.slot))
+        sig = bls.Sign(KEYS.privkeys[key], spec.compute_signing_root(message, domain))
+        return spec.SignedBeaconBlock(message=message, signature=sig)
+
+    good = run(spec, schedule(fork), lambda: signed_of(block, proposer))
+    bad_sig = run(spec, schedule(fork), lambda: signed_of(block, (proposer + 1) % len(state.validators)))
+    wrong = block.copy()
+    wrong.state_root = spec.Root(bytes([0x99]) * 32)
+    bad_root = run(spec, schedule(fork), lambda: signed_of(wrong, proposer))
+
+    def verdicts():
+        store = spec.get_forkchoice_store(state, anchor_block)
+        spec.on_tick(store, time_ms)
+        extra = ({},) if f >= FORKS.index("bellatrix") else ()
+        out = []
+        for sb in (good, bad_sig, bad_root):
+            seen = spec.Seen(**{x.name: (dict() if "dict" in str(x.type) else set()) for x in dataclasses.fields(spec.Seen)})
+            out.append(gossip_result(spec, spec.validate_beacon_block_gossip, seen, store, sb, time_ms, *extra))
+        return out
+    def imports(sb):
+        store = spec.get_forkchoice_store(state, anchor_block)
+        spec.on_tick(store, time_ms)
+        spec.on_block(store, sb)
+        return spec.get_head(store).root if hasattr(spec.get_head(store), "root") else spec.get_head(store)
+    gossip = run(spec, schedule(fork), verdicts)
+    moves = [run(spec, schedule(fork), lambda: spec.state_transition(state.copy(), sb, True) or True) for sb in (good, bad_root)]
+    heads = [run(spec, schedule(fork), lambda: imports(sb)) for sb in (good, bad_root)]
+    heads = [None if h is None else bytes(h) for h in heads]
+    if gossip != ["VALID", "REJECT", "VALID"] or moves != [True, None] or heads != [bytes(spec.hash_tree_root(block)), None]:
+        raise RuntimeError(f"node-publish {fork}: the spec's verdicts are {gossip}, {moves} and {heads}")
+
+    def bodies(signed):
+        value = reqresp.produce_types(spec, fork)["SignedBlockContents"](signed_block=signed) if f >= FORKS.index("deneb") else signed
+        return to_json(value).encode(), bytes(value.encode_bytes())
+
+    def post(body, version=fork, level=b"", ssz=False):
+        path = b"/eth/v2/beacon/blocks" + (b"?broadcast_validation=" + level if level else b"")
+        return (b"POST " + path + b" HTTP/1.1\r\nHost: lantern\r\nContent-Type: " +
+                (b"application/octet-stream" if ssz else b"application/json") + b"\r\nEth-Consensus-Version: " +
+                version.encode() + b"\r\nContent-Length: %d\r\n\r\n" % len(body) + body)
+
+    head = b"GET /eth/v1/beacon/blocks/head/root HTTP/1.1\r\nHost: lantern\r\n\r\n"
+
+    def at(root, finalized):
+        return response(200, b'{"execution_optimistic":false,"finalized":' + flag(finalized) + b',"data":{"root":' + qhex(root) + b"}}")
+    anchor_root, root = spec.hash_tree_root(anchor_block), spec.hash_tree_root(block)
+    good_json, good_ssz = bodies(good)
+    plans = [
+        ("published", [post(good_json, level=b"consensus_and_equivocation"), head, post(good_ssz, ssz=True)],
+         [response(200), at(root, False), response(200)], 0),
+        ("refused", [post(bodies(bad_sig)[0], level=b"consensus"), post(good_json, version=FORKS[f - 1], level=b"consensus"),
+                     post(bodies(bad_root)[0], level=b"consensus"), head],
+         [error(400), error(400), error(400), at(anchor_root, True)], 0),
+        ("gossip", [post(bodies(bad_root)[0]), head], [response(202), at(anchor_root, True)], 0),
+        ("closed", [post(good_json), head], [response(200), at(root, False)], PUBLISH_CLOSES),
+    ]
+    for name, reqs, resps, closes in plans:
+        yield "publish", name, {
+            "anchor_state": bytes(state.encode_bytes()),
+            "anchor_block": bytes(anchor_block.encode_bytes()),
+            "time_ms": time_ms,
+            "ticks": [time_ms] + [0] * (len(reqs) - 1),
+            "requests": reqs,
+            "responses": resps,
+            "payload_id": b"",
+            "result": b"",
+            "closes": closes,
         }
 
 
@@ -763,7 +867,7 @@ def run_strict(spec, config, f):
 
 # ---------------------------------------------------------------- The Beacon API (beacon-api.md, Common rules)
 
-REASONS = {200: b"OK", 206: b"Partial Content", 400: b"Bad Request", 404: b"Not Found", 405: b"Method Not Allowed",
+REASONS = {200: b"OK", 202: b"Accepted", 206: b"Partial Content", 400: b"Bad Request", 404: b"Not Found", 405: b"Method Not Allowed",
            406: b"Not Acceptable", 413: b"Content Too Large", 414: b"URI Too Long", 415: b"Unsupported Media Type",
            431: b"Request Header Fields Too Large", 500: b"Internal Server Error", 501: b"Not Implemented",
            503: b"Service Unavailable", 505: b"HTTP Version Not Supported"}
@@ -1917,6 +2021,9 @@ def api_requests(spec, fork, v, kind="main"):
                 want = answer(v, opname, route, offline, close, keep_alive, syncing)
             elif opname == "produceBlockV3":  # 503 while syncing; else the path's slot is at or below the head's: 400
                 assert int(route.slot) <= v["slot"]
+                want = error(503 if int(syncing) & 1 else 400, close=close, keep_alive=keep_alive)
+            elif opname == "publishBlockV2":  # 503 while syncing; else a body of no block: 400
+                assert not req["body"]
                 want = error(503 if int(syncing) & 1 else 400, close=close, keep_alive=keep_alive)
             else:
                 want = error(501, close=close, keep_alive=keep_alive)
