@@ -4517,9 +4517,15 @@ LOCAL_FUNCTION node_event
     li      t2, NODE_WORK_PRODUCE_FOLD
     beq     t0, t2, 708f
     li      t2, NODE_WORK_PRODUCE_BLOCK
-    bne     t0, t2, 70f
+    bne     t0, t2, 709f
 708: mv     a0, s3
     call    node_produce_done
+    LEAVE 48
+709: addi   t2, t0, -NODE_WORK_PUBLISH_DECODE   # the works of block publishing: their entry goes on
+    li      t1, NODE_WORK_PUBLISH_SIDECAR - NODE_WORK_PUBLISH_DECODE
+    bgtu    t2, t1, 70f
+    mv      a0, s3
+    call    node_publish_done
     LEAVE 48
 70: li      t2, NODE_WORK_ATTESTATION       # done with an attestation or a slashing: free its bytes
     beq     t0, t2, 71f
@@ -8425,7 +8431,48 @@ FUNCTION lantern_node_step
     mul     t4, t4, t3
     add     s10, s10, t4
     j       22f
-231: li     t6, NODE_WORK_SERVE             # SERVE, and NEW_PAYLOAD or FORKCHOICE of LANTERN_VALID: a ByteList of the chunk inside
+231: addi   t6, t4, -NODE_WORK_PUBLISH_DECODE   # the works of a publish: an API answer; of LANTERN_VALID, bytes inside
+    li      t3, NODE_WORK_PUBLISH_SIDECAR - NODE_WORK_PUBLISH_DECODE
+    bgtu    t6, t3, 2312f
+    ld      t6, (L + 192)(sp)
+    addi    t6, t6, 1
+    sd      t6, (L + 192)(sp)
+    li      t6, NODE_WORK_PUBLISH_CHECK     # a block, or a blob, it may add
+    bne     t4, t6, 2313f
+    addi    s9, s9, 1
+2313: li    t6, NODE_WORK_PUBLISH_SIDECAR
+    bne     t4, t6, 2314f
+    ld      t6, (L + 120)(sp)
+    addi    t6, t6, 1
+    sd      t6, (L + 120)(sp)
+2314: ld    t6, NodeEvent_result(t0)
+    bnez    t6, 22f
+    li      t6, NODE_WORK_PUBLISH_SIDECARS
+    beq     t4, t6, 22f
+    li      t6, NodeEvent_chunk + 24        # its ByteList at NodeEvent_chunk
+    bltu    t2, t6, 7f
+    ld      t6, (NodeEvent_chunk + 8)(t0)
+    li      t3, 24
+    bne     t6, t3, 7f
+    addi    t6, t2, -(NodeEvent_chunk + 24)
+    ld      t3, (NodeEvent_chunk + 16)(t0)
+    bgtu    t3, t6, 7f
+    add     s10, s10, t2                    # its bytes of actions
+    ld      t4, Node_flags(s1)              # subscribed: p2p_out for its publish, and scratch for it
+    andi    t4, t4, NODE_FLAG_SUBSCRIBED
+    beqz    t4, 22f
+    slli    t4, t2, 1
+    addi    t4, t4, 512
+    ld      t6, (L + 200)(sp)
+    add     t6, t6, t4
+    sd      t6, (L + 200)(sp)
+    li      t4, SNAPPY_SCRATCH_COMPRESS + 192
+    add     t4, t4, t2
+    ld      t6, (L + 184)(sp)
+    bgeu    t6, t4, 22f
+    sd      t4, (L + 184)(sp)
+    j       22f
+2312: li    t6, NODE_WORK_SERVE             # SERVE, and NEW_PAYLOAD or FORKCHOICE of LANTERN_VALID: a ByteList of the chunk inside
     beq     t4, t6, 25f
     li      t6, NODE_WORK_API_SUBMIT        # API_SUBMIT: an API answer; of LANTERN_VALID, its records inside
     bne     t4, t6, 2311f
@@ -8599,6 +8646,10 @@ FUNCTION lantern_node_step
 5:  sd      t5, L(sp)
     call    node_column_count               # the columns sampled, for the blobs part
     sd      a0, (L + 152)(sp)
+    call    node_api_publish_count          # an answer for each publishBlockV2 that waits
+    ld      t0, (L + 192)(sp)
+    add     t0, t0, a0
+    sd      t0, (L + 192)(sp)
     call    node_api_event_count            # with event streams: NODE_API_SCRATCH of scratch, 1024 per event for each
     beqz    a0, 58f
     ld      t0, (L + 184)(sp)
@@ -8897,6 +8948,7 @@ FUNCTION lantern_node_step
     add     s9, s9, t0
     j       6b
 9:  call    node_head
+    call    node_publish_poll               # the answers of the published blocks whose import ended
     call    node_engine_next
     call    node_shed                       # the post-states the node can rebuild go
     call    node_api_head_events            # the head and finalized_checkpoint events, at a quiet point
@@ -9819,7 +9871,99 @@ FUNCTION lantern_node_run
     sd      t0, 0(s7)
     li      a0, LANTERN_OK
 8449: LEAVE 192
-8450:
+8450: li    t1, NODE_WORK_PUBLISH_DECODE
+    bne     t0, t1, 8460f
+    beqz    s5, 837b                        # PUBLISH_DECODE: lantern_node_publish_decode, the block as a ByteList at NodeEvent_chunk
+    li      t0, NodeEvent_chunk + 24
+    bltu    s8, t0, 8419b
+    addi    t0, s7, NodeEvent_chunk
+    addi    t1, s8, -NodeEvent_chunk
+    sd      t1, 0(t0)
+    li      t1, 24
+    sd      t1, 8(t0)
+    sd      zero, 16(t0)
+    ld      t0, NodeAction_arg(s3)
+    andi    t6, t0, 255
+    srli    t0, t0, 8
+    andi    t0, t0, 1
+    xori    a1, t0, 1                       # JSON without the SSZ bit
+    mv      a0, s5
+    mv      a2, s6
+    addi    a3, s7, NodeEvent_chunk
+    addi    a4, sp, (L + 96)                # facts: the slot, the blob count, 0
+    FORK_CALL node_publish_decode
+    li      t0, LANTERN_BUFFER_TOO_SMALL
+    beq     a0, t0, 8449b
+    bnez    a0, 8458f
+    ld      t0, (L + 96)(sp)
+    sd      t0, NodeEvent_index(s7)
+    ld      t0, (L + 104)(sp)
+    sd      t0, NodeEvent_checkpoint(s7)
+    ld      t0, NodeAction_arg(s3)          # its root
+    andi    t6, t0, 255
+    addi    a0, s7, NodeEvent_chunk
+    mv      a1, s6
+    addi    a2, s7, NodeEvent_root
+    addi    a3, sp, (L + 112)
+    addi    a4, sp, (L + 120)
+    FORK_CALL node_block_root
+    li      t0, LANTERN_BUFFER_TOO_SMALL
+    beq     a0, t0, 8449b
+    bnez    a0, 8458f
+    ld      a0, (L + 112)(sp)
+    beqz    a0, 8441b
+8458: sd    a0, NodeEvent_result(s7)        # a failed check: the result, no bytes
+    li      a0, LANTERN_OK
+    LEAVE 192
+8460: li    t1, NODE_WORK_PUBLISH_CHECK
+    bne     t0, t1, 8470f
+    beqz    s4, 837b                        # PUBLISH_CHECK: lantern_node_publish_check, then the block's bytes at NodeEvent_chunk
+    beqz    s5, 837b
+    ld      t1, (L + 80)(sp)
+    beqz    t1, 837b
+    ld      t0, 16(s5)
+    addi    t0, t0, NodeEvent_chunk + 24 + 7
+    bltu    s8, t0, 8419b
+    ld      t0, (L + 64)(sp)                # a NodeGossip at L+96: seen, store, time_ms, topic, subnet,
+    sd      t0, (L + 96)(sp)                # head, proposer, justified, settings, config
+    sd      s2, (L + 104)(sp)
+    ld      t0, Node_time_ms(s1)
+    sd      t0, (L + 112)(sp)
+    sd      zero, (L + 120)(sp)
+    sd      zero, (L + 128)(sp)
+    sd      t1, (L + 136)(sp)
+    sd      s4, (L + 144)(sp)
+    sd      zero, (L + 152)(sp)
+    ld      t0, (L + 88)(sp)
+    sd      t0, (L + 160)(sp)
+    addi    t0, s1, Node_config
+    sd      t0, (L + 168)(sp)
+    ld      a0, NODE_STATE_SLOT(s4)
+    addi    a1, s1, Node_config
+    call    node_fork
+    mv      t6, a0
+    addi    a0, sp, (L + 96)
+    mv      a1, s5
+    ld      a2, (L + 72)(sp)
+    ld      a3, NodeAction_arg(s3)
+    mv      a4, s6
+    FORK_CALL node_publish_check
+    li      t0, LANTERN_BUFFER_TOO_SMALL
+    beq     a0, t0, 8449b
+    bnez    a0, 8458b
+    addi    t0, s7, NodeEvent_chunk         # the block's bytes
+    addi    t1, s8, -NodeEvent_chunk
+    sd      t1, 0(t0)
+    li      t1, 24
+    sd      t1, 8(t0)
+    ld      a2, 16(s5)
+    sd      a2, 16(t0)
+    addi    a0, t0, 24
+    ld      t1, 8(s5)
+    add     a1, s5, t1
+    call    lantern_copy
+    j       8441b
+8470:
 89: li      t1, NODE_WORK_SLOTS
     bne     t0, t1, 90f
     ld      a0, NODE_STATE_SLOT(s4)         # SLOTS: process_slots of the fork of the state's slot, to arg

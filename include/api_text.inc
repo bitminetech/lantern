@@ -41,6 +41,9 @@ api_none:
 api_r200:
     .ascii "OK"
 .set api_r200_len, 2
+api_r202:
+    .ascii "Accepted"
+.set api_r202_len, 8
 api_r206:
     .ascii "Partial Content"
 .set api_r206_len, 15
@@ -695,6 +698,7 @@ api_produce_kinds:
     .p2align 3
 api_codes:
     API_CODE 200, api_r200, api_none
+    API_CODE 202, api_r202, api_none
     API_CODE 206, api_r206, api_none
     API_CODE 400, api_r400, api_m400
     API_CODE 404, api_r404, api_m404

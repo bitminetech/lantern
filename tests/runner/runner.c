@@ -2536,7 +2536,7 @@ enum { WORK_IMPORT_BLOCK = 1, WORK_JUSTIFIED_STATE, WORK_TARGET_STATE, WORK_ATTE
        WORK_SYNC_BLOCK, WORK_BLOB, WORK_NEW_PAYLOAD, WORK_FORKCHOICE, WORK_SLOTS, WORK_UPGRADE, WORK_REPLAY, WORK_BACKFILL,
        WORK_BLOCK_ATTESTATION, WORK_BLOCK_SLASHING, WORK_GOSSIP_VOTE, WORK_API_ENCODE, WORK_API_CHUNK, WORK_API_LOOKUP, WORK_API_EVENT,
        WORK_API_SUBMIT, WORK_POOL_CHECK, WORK_PREPARE_PAYLOAD, WORK_PRODUCE_CHECK, WORK_GET_PAYLOAD, WORK_PRODUCE_FOLD,
-       WORK_PRODUCE_BLOCK };
+       WORK_PRODUCE_BLOCK, WORK_PUBLISH_DECODE, WORK_PUBLISH_SIDECARS, WORK_PUBLISH_CHECK, WORK_PUBLISH_SIDECAR };
 #define EV_API_BYTES (128 + 616) /* NodeEvent_api_bytes: the chunk's ByteList in the WORK_DONE of an API_CHUNK */
 #define NODE_API_CHUNK 65536
 #define NODE_API_PART (728 + CONFIG_SIZE + 936) /* Node_api: the PartRef of the NodeApi entries */
@@ -2547,6 +2547,19 @@ enum { WORK_IMPORT_BLOCK = 1, WORK_JUSTIFIED_STATE, WORK_TARGET_STATE, WORK_ATTE
 static uint64_t node_pool_held(const uint8_t *node) {
     uint64_t off = rd64(node + NODE_POOL_PART), count = rd64(node + NODE_POOL_PART + 8), held = 0;
     for (uint64_t i = 0; i < count; i++) held += rd64(node + off + NODE_POOL_MEM * i) != 0;
+    return held;
+}
+/* The runner buffers the node holds: each NodeBlock's bytes and post-state, each NodeBlob's bytes, each pool entry's. */
+static uint64_t node_held_ids(const uint8_t *node) {
+    uint64_t held = node_pool_held(node);
+    for (int part = 0; part < 2; part++) {
+        uint64_t at = part ? NODE_BLOBS : NODE_BLOCKS, mem = part ? NODE_BLOB_BYTES : NODE_BLOCK_BYTES;
+        uint64_t off = rd64(node + at), count = rd64(node + at + 8);
+        for (uint64_t i = 0; i < count; i++) {
+            const uint8_t *e = node + off + mem * i;
+            held += part ? rd64(e + 48) != 0 : (rd64(e + 72) != 0) + (rd64(e + NB_STATE_ID) != 0); /* data_id; data_id, state_id */
+        }
+    }
     return held;
 }
 static unsigned long node_replays; /* the REPLAY works the nodes ran: post-states they rebuilt */
@@ -2905,6 +2918,12 @@ static void shell_grow_node(struct node_shell *s, uint64_t field, const char **w
         *why = "lantern_node_size status";
         return;
     }
+    if (need > (uint64_t)1 << 31) {
+        static char msg[96];
+        snprintf(msg, sizeof msg, "lantern_node_step asks for a node past 2 GiB: NodeRoom field %llu", (unsigned long long)field);
+        *why = msg;
+        return;
+    }
     uint8_t *out = buffer(need);
     wr64(out, need);
     if (CALL(lantern_node_copy, s->node, room, out) != 0) *why = "lantern_node_copy status";
@@ -2981,6 +3000,7 @@ static void shell_work(fc_node *n, const uint8_t *work, const char **why) {
     /* API_SUBMIT: room for the records of its body, whose SSZ bytes are fewer than their JSON's */
     uint64_t ev_size = kind == WORK_API_CHUNK ? EV_API_BYTES + 24 + (s->api.room ? s->api.room : NODE_API_CHUNK)
                        : kind == WORK_API_SUBMIT && d ? (EV_WORK_DONE_SIZE + 2 * d->size + 256) & ~(uint64_t)7
+                       : (kind == WORK_PUBLISH_DECODE || kind == WORK_PUBLISH_CHECK) && d ? (EV_WORK_DONE_SIZE + d->size + 256) & ~(uint64_t)7
                                                       : EV_WORK_DONE_SIZE;
     uint8_t *ev = buffer(ev_size);
     uint64_t st = 1, growth = 2;
@@ -2998,6 +3018,13 @@ static void shell_work(fc_node *n, const uint8_t *work, const char **why) {
         free(sstore);
         free(sa);
         if (st != 1 || *why) break;
+        if (ev_size > (uint64_t)1 << 28 || (a && a->size > (uint64_t)1 << 31)) {
+            static char msg[96];
+            snprintf(msg, sizeof msg, "lantern_node_run: work kind %llu asks for room past 256 MiB of event or 2 GiB of state",
+                     (unsigned long long)kind);
+            *why = msg;
+            break;
+        }
         /* BUFFER_TOO_SMALL: the event of a SERVE, the store for a node or for the justified balances, else the state's lists. */
         if (kind == WORK_API_SUBMIT) { /* the event, and the Seen its gossip validation adds to */
             free(ev);
@@ -3008,10 +3035,20 @@ static void shell_work(fc_node *n, const uint8_t *work, const char **why) {
         } else if (kind == WORK_POOL_CHECK || kind == WORK_PRODUCE_CHECK || kind == WORK_PRODUCE_FOLD) {
             *why = "lantern_node_run: POOL_CHECK, PRODUCE_CHECK or PRODUCE_FOLD asks for room";
         } else if (kind == WORK_SERVE || kind == WORK_NEW_PAYLOAD || kind == WORK_FORKCHOICE || kind == WORK_API_ENCODE ||
-            kind == WORK_API_EVENT || kind == WORK_PREPARE_PAYLOAD || kind == WORK_GET_PAYLOAD || kind == WORK_PRODUCE_BLOCK) {
+            kind == WORK_API_EVENT || kind == WORK_PREPARE_PAYLOAD || kind == WORK_GET_PAYLOAD || kind == WORK_PRODUCE_BLOCK ||
+            kind == WORK_PUBLISH_DECODE || kind == WORK_PUBLISH_SIDECAR) {
             free(ev);
             ev_size *= 4;
             ev = buffer(ev_size);
+        } else if (kind == WORK_PUBLISH_CHECK) { /* its event holds the block from the start: the Seen, and the parent's state's lists */
+            for (int i = 0; i < 4; i++) s->seen_room[i] *= 2;
+            shell_seen(s, why);
+            if (a) {
+                a->b = regrow_slot(s, a->b, &a->size, growth, why);
+                growth *= 2;
+            }
+        } else if (kind == WORK_PUBLISH_SIDECARS) {
+            *why = "lantern_node_run: PUBLISH_SIDECARS asks for room";
         } else if (kind == WORK_GOSSIP) { /* the Seen, and the proposer state's lists */
             for (int i = 0; i < 4; i++) s->seen_room[i] *= 2;
             shell_seen(s, why);
@@ -3051,7 +3088,8 @@ static void shell_work(fc_node *n, const uint8_t *work, const char **why) {
                   memcmp(ev + 16, work + 16, 56) ||
                   (kind != WORK_SERVE && kind != WORK_NEW_PAYLOAD && kind != WORK_FORKCHOICE && kind != WORK_API_ENCODE &&
                    kind != WORK_API_CHUNK && kind != WORK_API_EVENT && kind != WORK_API_SUBMIT && kind != WORK_PREPARE_PAYLOAD &&
-                   kind != WORK_GET_PAYLOAD && kind != WORK_PRODUCE_BLOCK && esize != EV_WORK_DONE_SIZE)))
+                   kind != WORK_GET_PAYLOAD && kind != WORK_PRODUCE_BLOCK && kind != WORK_PUBLISH_DECODE && kind != WORK_PUBLISH_CHECK &&
+                   kind != WORK_PUBLISH_SIDECAR && esize != EV_WORK_DONE_SIZE)))
         *why = "lantern_node_run: the event is not the WORK_DONE of the work";
     if (!*why) {
         uint64_t result = rd64(ev + EV_RESULT);
@@ -3129,6 +3167,10 @@ static void shell_step(fc_node *n, const char **why) {
         if (count[2] == 2) { /* BUFFER_TOO_SMALL: the buffer that short names, and of the node the field room names */
             shell_grow_node(s, count[3], why);
         } else if (count[2] == 1) {
+            if (s->actions_size > (uint64_t)1 << 30) {
+                *why = "lantern_node_step asks for actions past 1 GiB";
+                break;
+            }
             free(s->actions);
             s->actions_size *= 2;
             s->actions = buffer(s->actions_size);
@@ -7329,7 +7371,8 @@ static void shell_api_ask(fc_node *n, const uint8_t *req, uint64_t len, uint64_t
  * shell_api_ask, with a NODE_EV_API_CLOSED of the connection after steps steps of the node (or once
  * it settled); after the step that takes the close, the node must send nothing more to it.
  */
-static void shell_api_ask_closing(fc_node *n, const uint8_t *req, uint64_t len, uint64_t conn, uint64_t steps, const char **why) {
+/* Returns the steps the node took before the close: below steps when it had no event left. */
+static uint64_t shell_api_ask_closing(fc_node *n, const uint8_t *req, uint64_t len, uint64_t conn, uint64_t steps, const char **why) {
     static const uint64_t limits[2] = {16384, 1048576};
     struct node_shell *s = n->shell;
     uint8_t *out = NULL;
@@ -7340,9 +7383,10 @@ static void shell_api_ask_closing(fc_node *n, const uint8_t *req, uint64_t len, 
     s->api.len = s->api.sends = s->api.lasts = s->api.closes = s->api.late = 0;
     s->api.gone = 0;
     s->api.nids = 0;
+    uint64_t k = 0;
     if (!*why) {
         shell_event(s, EV_API, conn, out, rd64(out));
-        for (uint64_t k = 0; k < steps && s->pending_len && !*why; k++) shell_step(n, why);
+        for (; k < steps && s->pending_len && !*why; k++) shell_step(n, why);
     }
     if (!*why) {
         shell_event(s, EV_API_CLOSED, conn, NULL, 0);
@@ -7353,6 +7397,7 @@ static void shell_api_ask_closing(fc_node *n, const uint8_t *req, uint64_t len, 
     if (!*why) shell_settle(n, why);
     if (!*why && s->api.late) *why = "an answer goes on after its connection closed";
     free(out);
+    return k;
 }
 
 /*
@@ -7450,7 +7495,10 @@ static const char *api_mismatch(const struct node_shell *s, const char *name, co
  * offline on, after a NODE_EV_ENGINE with arg 1. The sends must be the case's response, the last
  * with last 1 and no other, and one NODE_ACT_API_CLOSE after them when the case closes.
  */
-/* node-produce: lantern's cases of produceBlockV3 (node.md, Test vectors). */
+/*
+ * node-produce and node-publish: lantern's cases of produceBlockV3 and publishBlockV2 (node.md, Test
+ * vectors). Each request after its tick; the runner's buffers grow only by those the node holds.
+ */
 static void run_node_produce(const char *file, case_file *f) {
     for (uint64_t i = 0; i < f->count; i++) {
         const char *name, *why = NULL;
@@ -7483,9 +7531,11 @@ static void run_node_produce(const char *file, case_file *f) {
             }
             for (uint64_t c = 0; c < closes && !why; c++) {
                 size_t nbufs = s->nbufs;
-                shell_api_ask_closing(&n, req, rlen, 1000 + c, c, &why);
+                uint64_t held = node_held_ids(s->node);
+                uint64_t took = shell_api_ask_closing(&n, req, rlen, 1000 + c, c, &why);
+                if (!why && c + 1 == closes && took == c) why = "the case's closes end before the node settles";
                 if (!why) why = api_clean(s);
-                if (!why && s->nbufs != nbufs) why = "a produceBlockV3 whose connection closed leaves buffers";
+                if (!why && s->nbufs - nbufs != node_held_ids(s->node) - held) why = "a request whose connection closed leaves buffers";
                 if (why) {
                     static char msg[256];
                     snprintf(msg, sizeof msg, "the connection closed after %llu steps: %s", (unsigned long long)c, why);
@@ -7502,15 +7552,18 @@ static void run_node_produce(const char *file, case_file *f) {
                 if (why) break;
             }
             size_t nbufs = s->nbufs;
+            uint64_t held = node_held_ids(s->node);
             shell_api_ask(&n, req, rlen, (k + 1) | (uint64_t)7 << 32, &why);
-            if (!why && rlen > 4 && !memcmp(req, "GET ", 4) && s->nbufs != nbufs) why = "produceBlockV3 leaves buffers";
+            if (!why && s->nbufs - nbufs != node_held_ids(s->node) - held) why = "a request leaves buffers the node does not hold";
             uint8_t *got = why ? NULL : api_normalize(s, &glen, &why);
             if (!why && (glen != wlen || memcmp(got, want, (size_t)wlen))) {
                 free(s->api.b);
                 s->api.b = got;
                 s->api.len = s->api.cap = glen;
                 got = NULL;
-                why = api_mismatch(s, k + 2 < nreq ? "a pool POST" : k + 1 < nreq ? "produceBlockV3" : "produceBlockV3 (SSZ)", want, wlen);
+                static char label[32];
+                snprintf(label, sizeof label, "request %llu", (unsigned long long)k);
+                why = api_mismatch(s, label, want, wlen);
             }
             free(got);
             if (!why) why = api_clean(s);
@@ -9038,7 +9091,7 @@ int main(int argc, char **argv) {
         else if (!bls_off && !strcmp(kind, "app-options")) run_app_options(file, &f);
         else if (!bls_off && !strcmp(kind, "node-api")) run_node_api(file, &f);
         else if (!bls_off && !strcmp(kind, "node-payload")) run_node_payload(file, &f);
-        else if (!bls_off && !strcmp(kind, "node-produce")) run_node_produce(file, &f);
+        else if (!bls_off && (!strcmp(kind, "node-produce") || !strcmp(kind, "node-publish"))) run_node_produce(file, &f);
         else if (!bls_off && !strcmp(kind, "json-encode")) run_json_encode(file, &f);
         else if (!bls_off && !strcmp(kind, "json-decode")) run_json_decode(file, &f, 0);
         else if (!bls_off && !strcmp(kind, "json-engine_decode")) run_json_decode(file, &f, 1);

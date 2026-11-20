@@ -2781,6 +2781,8 @@ LOCAL_FUNCTION node_api_event
     je      60f
     cmp     $API_OP_PREPARE_BEACON_PROPOSER, %rcx
     je      60f
+    cmp     $API_OP_PUBLISH_BLOCK_V2, %rcx
+    je      545f
     mov     %rcx, %rdi
     call    node_submit_topic
     test    %rax, %rax
@@ -3075,6 +3077,19 @@ LOCAL_FUNCTION node_api_event
     mov     %r12, %rdx
     mov     S8(%rsp), %rcx
     call    node_api_pool_stream
+    mov     %rax, %rdx
+    test    %rax, %rax
+    jnz     80f
+    jmp     90f
+545: mov    $503, %edx                      # publishBlockV2: 503 while syncing; a work decodes its body
+    mov     S8(%rsp), %rax
+    cmpq    $0, ApiView_is_syncing(%rax)
+    jne     80f
+    mov     S9(%rsp), %rdi
+    mov     S7(%rsp), %rsi
+    mov     %r12, %rdx
+    mov     %r13, %rcx
+    call    node_api_publish
     mov     %rax, %rdx
     test    %rax, %rax
     jnz     80f
@@ -4697,6 +4712,370 @@ LOCAL_FUNCTION node_produce_answer
 END_FUNCTION node_produce_answer
 
 /*
+ * (connection rdi, route rsi, flags rdx, request rcx) -> rax: publishBlockV2 (node.md, Block
+ * publishing): a NodeApi entry in NODE_PUBLISH_DECODE, the body's bytes as its data, and a
+ * PUBLISH_DECODE work of them; 0 once it started, else the status of the error to answer. r12 the
+ * entry, r13 its index; S7 the route, S8 the request, S9 the connection, S10 the flags. Locals: L a
+ * ByteList view of the body.
+ */
+LOCAL_FUNCTION node_api_publish
+    ENTER 32
+    mov     %rdi, S9(%rsp)
+    mov     %rsi, S7(%rsp)
+    mov     %rdx, S10(%rsp)
+    mov     %rcx, S8(%rsp)
+    mov     HttpRequest_body(%rcx), %rax    # a body of no bytes: 400
+    mov     (HttpRequest_body + 8)(%rcx), %rdx
+    test    %rdx, %rdx
+    jz      8f
+    add     %rcx, %rax
+    lea     L(%rsp), %rsi
+    sub     %rsi, %rax
+    mov     %rdx, L(%rsp)
+    mov     %rax, (L + 8)(%rsp)
+    mov     %rdx, (L + 16)(%rsp)
+    call    node_api_new
+    mov     %rax, %r13
+    mov     %rdx, %r12
+    mov     %rdx, %rdi
+    mov     $NodeApi__mem, %esi
+    call    lantern_zero
+    mov     S9(%rsp), %rax
+    mov     %rax, NodeApi_connection(%r12)
+    movq    $API_OP_PUBLISH_BLOCK_V2, NodeApi_op(%r12)
+    mov     S10(%rsp), %rax
+    or      $API_STREAM_BUSY, %rax          # busy with its decode
+    mov     %rax, NodeApi_flags(%r12)
+    mov     S7(%rsp), %rsi
+    mov     ApiRoute_consensus_version(%rsi), %rax
+    mov     %rax, NodeApi_fork(%r12)
+    movq    $NODE_PUBLISH_DECODE, NodeApi_member(%r12)
+    mov     ApiRoute_broadcast_validation(%rsi), %rax   # the level, and 1 for a JSON body
+    mov     %rax, NodeApi_cursor(%r12)
+    xor     %eax, %eax
+    cmpq    $API_TYPE_SSZ, ApiRoute_body(%rsi)
+    setne   %al
+    mov     %rax, (NodeApi_cursor + 24)(%r12)
+    lea     L(%rsp), %rdi
+    call    node_put
+    mov     %rax, NodeApi_data(%r12)
+    mov     $NODE_WORK_PUBLISH_DECODE, %edi
+    xor     %esi, %esi
+    xor     %edx, %edx
+    mov     %rax, %rcx
+    mov     %r13, %r8
+    mov     (NodeApi_cursor + 24)(%r12), %r9
+    xor     $1, %r9
+    shl     $8, %r9
+    or      NodeApi_fork(%r12), %r9
+    call    node_work
+    xor     %eax, %eax
+    LEAVE 32
+8:  mov     $400, %eax
+    LEAVE 32
+END_FUNCTION node_api_publish
+
+/*
+ * The NODE_EV_WORK_DONE rdi of a work of block publishing (node.md, Block publishing): the
+ * publishBlockV2 entry at its target goes on, or answers. r12 the event, r13 the entry; S7 the
+ * block's index.
+ */
+LOCAL_FUNCTION node_publish_done
+    ENTER 0
+    mov     %rdi, %r12
+    mov     NodeAction_target(%r12), %rax
+    PART    %r13, %rcx, %rbx, Node_api
+    cmp     %rcx, %rax
+    jae     99f
+    imul    $NodeApi__mem, %rax, %rax
+    add     %rax, %r13
+    cmpq    $0, NodeApi_connection(%r13)    # an entry still there
+    je      99f
+    cmpq    $API_OP_PUBLISH_BLOCK_V2, NodeApi_op(%r13)
+    jne     99f
+    andq    $~API_STREAM_BUSY, NodeApi_flags(%r13)  # its work is done; the connection closed meanwhile: the entry ends,
+    testq   $API_STREAM_GONE, NodeApi_flags(%r13)   # but after a check that passed, or a sidecar, the publish goes on unanswered
+    jz      1f
+    mov     NodeAction_work_kind(%r12), %rax
+    cmp     $NODE_WORK_PUBLISH_CHECK, %rax
+    jb      2f
+    ja      1f
+    cmpq    $0, NodeEvent_result(%r12)
+    je      1f
+2:  mov     %r13, %rdi
+    call    node_publish_end
+    LEAVE 0
+1:  mov     $400, %esi                      # a check that fails: 400
+    cmpq    $0, NodeEvent_result(%r12)
+    jne     90f
+    mov     NodeAction_work_kind(%r12), %rax
+    cmp     $NODE_WORK_PUBLISH_DECODE, %rax
+    jne     20f
+    lea     NodeEvent_chunk(%r12), %rdi     # DECODE: the block's bytes, root, slot, blob count, parent
+    call    node_put
+    mov     %rax, NodeApi_filter_slot(%r13)
+    lea     NodeApi_root(%r13), %rdi
+    lea     NodeEvent_root(%r12), %rsi
+    COPY32  %rdi, %rsi
+    mov     NodeEvent_index(%r12), %rax
+    mov     %rax, NodeApi_slot(%r13)
+    mov     NodeEvent_checkpoint(%r12), %rax
+    mov     %rax, (NodeApi_cursor + 16)(%r13)
+    mov     (NodeEvent_chunk + 8)(%r12), %rsi
+    lea     (NodeEvent_chunk + 116)(%r12,%rsi), %rsi
+    lea     (NodeApi_cursor + 32)(%r13), %rdi
+    COPY32  %rdi, %rsi
+    mov     NodeApi_slot(%r13), %rdi        # a slot of another fork than consensus_version's: 400
+    lea     Node_config(%rbx), %rsi
+    call    node_fork
+    mov     $400, %esi
+    cmp     NodeApi_fork(%r13), %rax
+    jne     90f
+    lea     NodeApi_root(%r13), %rdi        # a block the node holds: 200
+    call    node_find_block
+    cmp     $-1, %rax
+    je      11f
+    mov     $200, %esi
+    cmpq    $NODE_BLOCK_INVALID, NodeBlock_status(%rdx)
+    jne     90f
+11: cmpq    $FORK_DENEB, NodeApi_fork(%r13) # from deneb with blobs: the sidecars, else the check
+    jb      30f
+    cmpq    $0, (NodeApi_cursor + 16)(%r13)
+    je      30f
+    mov     $501, %esi                      # the sidecars: not yet
+    jmp     90f
+20: cmp     $NODE_WORK_PUBLISH_CHECK, %rax
+    jne     99f
+    call    node_new_block                  # CHECK: the block's NodeBlock, before the publish
+    mov     %rax, S7(%rsp)
+    mov     %rdi, %rdx
+    lea     NodeBlock_root(%rdx), %rdi
+    lea     NodeApi_root(%r13), %rsi
+    COPY32  %rdi, %rsi
+    lea     NodeBlock_parent_root(%rdx), %rdi
+    lea     (NodeApi_cursor + 32)(%r13), %rsi
+    COPY32  %rdi, %rsi
+    mov     NodeApi_slot(%r13), %rax
+    mov     %rax, NodeBlock_slot(%rdx)
+    mov     NodeApi_filter_slot(%r13), %rax
+    mov     %rax, NodeBlock_data_id(%rdx)
+    movq    $0, NodeApi_filter_slot(%r13)
+    movq    $NODE_BLOCK_WAITING, NodeBlock_status(%rdx)
+    movq    $1, NodeBlock_data_available(%rdx)
+    mov     (NodeApi_cursor + 16)(%r13), %rax
+    mov     %rax, NodeBlock_blobs(%rdx)
+    mov     (NodeEvent_chunk + 16)(%r12), %rax
+    mov     %rax, NodeBlock_length(%rdx)
+    testq   $NODE_FLAG_SUBSCRIBED, Node_flags(%rbx)  # subscribed: the block out on beacon_block
+    jz      21f
+    mov     $GOSSIP_BEACON_BLOCK, %edi
+    lea     NodeEvent_chunk(%r12), %rsi
+    xor     %edx, %edx
+    call    node_publish
+21: movq    $NODE_PUBLISH_IMPORT, NodeApi_member(%r13)  # the import, then the answer
+    mov     %r13, %rdi
+    call    node_publish_drop
+    mov     S7(%rsp), %rdi
+    call    node_try_import
+    LEAVE 0
+30: mov     %r13, %rdi                      # the check
+    call    node_publish_check_work
+    test    %rax, %rax
+    jz      99f
+    mov     %rax, %rsi
+90: mov     %r13, %rdi
+    call    node_publish_answer
+99: LEAVE 0
+END_FUNCTION node_publish_done
+
+/*
+ * The PUBLISH_CHECK of the publishBlockV2 entry rdi (node.md, NODE_PUBLISH_CHECK): rax = 0 once
+ * it went, else 400 with no post-state of the parent, or 500 with no head post-state. r12 the
+ * entry, r13 the parent's entry; S7 the copy, S8 the head's state id.
+ */
+LOCAL_FUNCTION node_publish_check_work
+    ENTER 0
+    mov     %rdi, %r12
+    lea     Node_head_root(%rbx), %rdi
+    call    node_find_block
+    cmp     $-1, %rax
+    je      9f
+    mov     NodeBlock_state_id(%rdx), %rax
+    test    %rax, %rax
+    jz      9f
+    mov     %rax, S8(%rsp)
+    lea     (NodeApi_cursor + 32)(%r12), %rdi
+    call    node_find_block
+    cmp     $-1, %rax
+    je      8f
+    mov     %rdx, %r13
+    cmpq    $0, NodeBlock_state_id(%r13)
+    je      8f
+    movq    $NODE_PUBLISH_CHECK, NodeApi_member(%r12)
+    orq     $API_STREAM_BUSY, NodeApi_flags(%r12)
+    call    node_new_id                     # the copy, across the fork boundaries to the slot
+    mov     %rax, S7(%rsp)
+    mov     $NODE_ACT_STATE_COPY, %edi
+    mov     NodeBlock_state_id(%r13), %rsi
+    mov     %rax, %rdx
+    call    node_ids
+    mov     S7(%rsp), %rdi
+    mov     NodeBlock_state_id(%r13), %rsi
+    mov     NodeBlock_slot(%r13), %rdx
+    mov     NodeApi_slot(%r12), %rcx
+    call    node_cross
+    mov     %rax, S7(%rsp)
+    PART    %rcx, %rdx, %rbx, Node_api      # the entry's index
+    mov     %r12, %rax
+    sub     %rcx, %rax
+    xor     %edx, %edx
+    mov     $NodeApi__mem, %ecx
+    div     %rcx
+    mov     %rax, %r8
+    mov     $NODE_WORK_PUBLISH_CHECK, %edi
+    mov     S7(%rsp), %rsi
+    mov     NodeApi_filter_index(%r12), %rdx
+    mov     NodeApi_filter_slot(%r12), %rcx
+    mov     NodeApi_cursor(%r12), %r9
+    call    node_work
+    mov     S8(%rsp), %rcx
+    mov     %rcx, NodeAction_state_c(%rax)
+    mov     $NODE_ACT_STATE_FREE, %edi
+    mov     S7(%rsp), %rsi
+    xor     %edx, %edx
+    call    node_ids
+    xor     %eax, %eax
+    LEAVE 0
+8:  mov     $400, %eax
+    LEAVE 0
+9:  mov     $500, %eax
+    LEAVE 0
+END_FUNCTION node_publish_check_work
+
+/* The ids of the publishBlockV2 entry rdi but the block's bytes go: its body and sidecars. Locals: the entry. */
+LOCAL_FUNCTION node_publish_drop
+    FRAME 16
+    mov     %rdi, (%rsp)
+    mov     NodeApi_data(%rdi), %rsi        # each field cleared first: node_ids leaves an entry's own bytes to it
+    movq    $0, NodeApi_data(%rdi)
+    test    %rsi, %rsi
+    jz      1f
+    mov     $NODE_ACT_BYTES_FREE, %edi
+    xor     %edx, %edx
+    call    node_ids
+1:  mov     (%rsp), %rdi
+    mov     NodeApi_filter_index(%rdi), %rsi
+    movq    $0, NodeApi_filter_index(%rdi)
+    test    %rsi, %rsi
+    jz      2f
+    mov     $NODE_ACT_BYTES_FREE, %edi
+    xor     %edx, %edx
+    call    node_ids
+2:  UNFRAME 16
+END_FUNCTION node_publish_drop
+
+/* The end of the publishBlockV2 entry rdi, its ids with it. Locals: the entry. */
+LOCAL_FUNCTION node_publish_end
+    FRAME 16
+    mov     %rdi, (%rsp)
+    call    node_publish_drop
+    mov     (%rsp), %rdi
+    mov     NodeApi_filter_slot(%rdi), %rsi
+    movq    $0, NodeApi_filter_slot(%rdi)
+    test    %rsi, %rsi
+    jz      1f
+    mov     $NODE_ACT_BYTES_FREE, %edi
+    xor     %edx, %edx
+    call    node_ids
+1:  mov     (%rsp), %rdi
+    call    node_api_end
+    UNFRAME 16
+END_FUNCTION node_publish_end
+
+/*
+ * The answer rsi (200, 202, or an error) of the publishBlockV2 entry rdi, then its end; with
+ * API_STREAM_GONE no answer. Locals: the entry.
+ */
+LOCAL_FUNCTION node_publish_answer
+    FRAME 16
+    mov     %rdi, (%rsp)
+    mov     NodeApi_flags(%rdi), %rax
+    test    $API_STREAM_GONE, %rax          # the connection closed: no answer
+    jnz     2f
+    mov     %rsi, %rdx
+    mov     NodeApi_connection(%rdi), %rdi
+    xor     %esi, %esi
+    xor     %ecx, %ecx                      # 200 and 202: no body
+    mov     $API_BODY_ERROR, %r8d
+    cmp     $400, %rdx
+    cmovae  %r8, %rcx
+    mov     %rax, %r8
+    and     $API_R_CLOSE, %r8d              # API_STREAM_CLOSE is API_R_CLOSE; HTTP/1.0 kept open says so
+    jnz     1f
+    test    $API_STREAM_HTTP10, %rax
+    jz      1f
+    mov     $API_R_KEEP, %r8d
+1:  call    node_api_send
+2:  mov     (%rsp), %rdi
+    call    node_publish_end
+    UNFRAME 16
+END_FUNCTION node_publish_answer
+
+/*
+ * After the head (node.md, NODE_PUBLISH_IMPORT): each publishBlockV2 entry whose block's import
+ * ended answers, 200 for a block the node imported, 202 for another. r12 an entry, r13 the count.
+ */
+LOCAL_FUNCTION node_publish_poll
+    ENTER 0
+    PART    %r12, %r13, %rbx, Node_api
+1:  test    %r13, %r13
+    jz      9f
+    cmpq    $0, NodeApi_connection(%r12)
+    je      2f
+    cmpq    $API_OP_PUBLISH_BLOCK_V2, NodeApi_op(%r12)
+    jne     2f
+    cmpq    $NODE_PUBLISH_IMPORT, NodeApi_member(%r12)
+    jne     2f
+    testq   $API_STREAM_BUSY, NodeApi_flags(%r12)   # a work of it in flight
+    jnz     2f
+    lea     NodeApi_root(%r12), %rdi
+    call    node_find_block
+    mov     $202, %esi
+    cmp     $-1, %rax
+    je      3f
+    mov     NodeBlock_status(%rdx), %rax
+    cmp     $NODE_BLOCK_INVALID, %rax
+    je      3f
+    cmp     $NODE_BLOCK_IMPORTED, %rax
+    jne     2f
+    mov     $200, %esi
+3:  mov     %r12, %rdi
+    call    node_publish_answer
+2:  add     $NodeApi__mem, %r12
+    dec     %r13
+    jmp     1b
+9:  LEAVE 0
+END_FUNCTION node_publish_poll
+
+/* rax = the count of the publishBlockV2 entries. Uses rcx, rdx, rsi. */
+LOCAL_FUNCTION node_api_publish_count
+    UNWIND_END_PROLOGUE
+    xor     %eax, %eax
+    PART    %rcx, %rdx, %rbx, Node_api
+1:  test    %rdx, %rdx
+    jz      9f
+    cmpq    $0, NodeApi_connection(%rcx)
+    je      2f
+    cmpq    $API_OP_PUBLISH_BLOCK_V2, NodeApi_op(%rcx)
+    jne     2f
+    inc     %rax
+2:  add     $NodeApi__mem, %rcx
+    dec     %rdx
+    jmp     1b
+9:  ret
+END_FUNCTION node_api_publish_count
+
+/*
  * The next work of the produceBlockV3 entry rdi in NODE_PRODUCE_FOLD: a PRODUCE_FOLD of the next
  * kept pool entry of the kind at cursor + 144 from index filter_slot, the kinds in the order of
  * api_produce_kinds; after the last, NODE_PRODUCE_BUILD and its PRODUCE_BLOCK. r12 the entry, r13
@@ -5504,12 +5883,21 @@ LOCAL_FUNCTION node_api_closed
     jmp     9f
 1:  mov     %rdx, (%rsp)
     cmpq    $API_OP_PRODUCE_BLOCK_V3, NodeApi_op(%rdx)  # a produceBlockV3: its draft and engine result go too
-    jne     2f
+    jne     3f
     mov     %rdx, %rdi
     call    node_produce_release
 2:  mov     (%rsp), %rdi
     call    node_api_end
 9:  UNFRAME 16
+3:  cmpq    $API_OP_PUBLISH_BLOCK_V2, NodeApi_op(%rdx)  # a publishBlockV2: its ids; in NODE_PUBLISH_IMPORT it goes on unanswered
+    jne     2b
+    cmpq    $NODE_PUBLISH_IMPORT, NodeApi_member(%rdx)
+    jne     4f
+    orq     $API_STREAM_GONE, NodeApi_flags(%rdx)
+    UNFRAME 16
+4:  mov     %rdx, %rdi
+    call    node_publish_end
+    UNFRAME 16
 END_FUNCTION node_api_closed
 
 /*

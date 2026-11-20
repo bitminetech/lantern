@@ -967,6 +967,14 @@
 .set NODE_PRODUCE_PAYLOAD, 2
 .set NODE_PRODUCE_FOLD, 3
 .set NODE_PRODUCE_BUILD, 4
+.set NODE_WORK_PUBLISH_DECODE, 30      /* data: a publishBlockV2 body; target: its NodeApi index; arg: the fork + 2^8 for SSZ */
+.set NODE_WORK_PUBLISH_SIDECARS, 31    /* b: the sidecars' buffer; data: the body; target: the NodeApi index; arg: the fork + 2^8 for SSZ */
+.set NODE_WORK_PUBLISH_CHECK, 32       /* a: the parent's post-state at the slot; b: the sidecars, or 0; c: the head's post-state; data: the block; arg: the level */
+.set NODE_WORK_PUBLISH_SIDECAR, 33     /* b: the sidecars; target: the NodeApi index; arg: the sidecar's place */
+.set NODE_PUBLISH_DECODE, 1            /* NodeApi member of a publishBlockV2: its phase */
+.set NODE_PUBLISH_SIDECARS, 2
+.set NODE_PUBLISH_CHECK, 3
+.set NODE_PUBLISH_IMPORT, 4
 .set NODE_VOTES_MAX, 130               /* MAX_ATTESTATIONS + MAX_ATTESTER_SLASHINGS: the votes of a block the node takes */
 .set NodeEvent_root, NodeEvent_checkpoint + 8  /* GOSSIP of a valid beacon_block, SYNC_BLOCK: its root; of a valid blob_sidecar, BLOB: the root of its block header */
 .set NodeEvent_index, NodeEvent_root + 32      /* GOSSIP of a valid beacon_block, SYNC_BLOCK: its blob commitments; of a valid blob_sidecar: its index */
