@@ -2724,6 +2724,8 @@ LOCAL_FUNCTION node_api_event
     je      68f
     cmp     $API_OP_GET_POOL_ATTESTATIONS_V2, %rcx
     je      68f
+    cmp     $API_OP_GET_AGGREGATED_ATTESTATION_V2, %rcx
+    je      68f
     mov     %rcx, %rdi
     call    node_submit_topic
     test    %rax, %rax
@@ -2980,11 +2982,14 @@ LOCAL_FUNCTION node_api_event
     mov     %r12, %rdx
     call    node_api_headers_stream
     jmp     90f
-68: mov     S9(%rsp), %rdi                  # a pool GET: a stream of the pool
+68: mov     S9(%rsp), %rdi                  # a pool GET: a stream of the pool; getAggregatedAttestationV2 with none 404
     mov     S7(%rsp), %rsi
     mov     %r12, %rdx
     mov     S8(%rsp), %rcx
     call    node_api_pool_stream
+    mov     %rax, %rdx
+    test    %rax, %rax
+    jnz     80f
     jmp     90f
 60: mov     S9(%rsp), %rdi                  # a pool POST: a work checks its operations
     mov     S7(%rsp), %rsi
@@ -5285,7 +5290,40 @@ LOCAL_FUNCTION node_api_chunk_done
 5:  call    node_api_pool_advance
 3:  mov     NodeApi_flags(%r13), %rax
     mov     %rax, S7(%rsp)
-1:  mov     (NodeEvent_api_bytes + 16)(%r12), %rsi  # the chunk in a SEND
+1:  testq   $API_STREAM_FOLD, S7(%rsp)      # API_STREAM_FOLD: no send, and the next chunk at once
+    jz      11f
+    testq   $API_STREAM_DONE, S7(%rsp)      # the error that ends it goes
+    jnz     11f
+    cmpq    $0, NodeApi_data(%r13)
+    jne     12f                             # a fold
+    cmpq    $0, (NodeEvent_api_bytes + 16)(%r12)
+    jne     14f                             # the Attestation's bytes
+    cmpq    $0, (NodeApi_cursor + 32)(%r13) # the fold's end: optimistic for a NOT_VALIDATED block
+    je      12f
+    lea     (NodeApi_cursor + 48 + 16)(%r13), %rdi
+    call    node_store_find
+    cmp     $-1, %rax
+    je      12f
+    cmpq    $PAYLOAD_STATUS_NOT_VALIDATED, BlockNode_payload_status(%rdx)
+    jne     12f
+    orq     $API_STREAM_OPTIMISTIC, NodeApi_flags(%r13)
+    jmp     12f
+14: lea     NodeEvent_api_bytes(%r12), %rdi # they become the stream's own data; the answer from sent 0
+    call    node_put
+    mov     %rax, NodeApi_data(%r13)
+    mov     NodeApi_flags(%r13), %rax
+    and     $~API_STREAM_FOLD, %rax
+    or      $API_STREAM_OWN, %rax
+    mov     %rax, NodeApi_flags(%r13)
+    movq    $0, NodeApi_sent(%r13)
+    lea     NodeApi_cursor(%r13), %rdi
+    mov     $JSON_CURSOR_SIZE, %esi
+    call    lantern_zero
+12: mov     NodeAction_arg(%r12), %rax
+    mov     %r13, %rdx
+    call    node_api_chunk_work
+    jmp     99f
+11: mov     (NodeEvent_api_bytes + 16)(%r12), %rsi  # the chunk in a SEND
     add     $(56 + 7), %rsi
     and     $~7, %rsi
     mov     $NODE_ACT_API_SEND, %edi
@@ -5379,6 +5417,8 @@ LOCAL_FUNCTION api_stream_head
     je      21f
     cmpq    $API_OP_GET_POOL_ATTESTATIONS_V2, NodeApi_op(%rbx)
     je      21f
+    cmpq    $API_OP_GET_AGGREGATED_ATTESTATION_V2, NodeApi_op(%rbx)
+    je      21f
     cmpq    $API_OP_GET_BLOB_SIDECARS, NodeApi_op(%rbx)
     je      21f
     cmpq    $API_OP_GET_DEBUG_DATA_COLUMN_SIDECARS, NodeApi_op(%rbx)
@@ -5467,6 +5507,8 @@ LOCAL_FUNCTION api_stream_json
     UNFRAME 0
 31: cmpq    $API_OP_GET_BLOCK_V2, NodeApi_op(%rbx)  # the validator streams: their items, of the state rdi
     je      1f
+    cmpq    $API_OP_GET_AGGREGATED_ATTESTATION_V2, NodeApi_op(%rbx)
+    je      1f
     cmpq    $API_OP_GET_BLOCK_ATTESTATIONS_V2, NodeApi_op(%rbx)
     je      1f
     cmpq    $API_OP_GET_BLINDED_BLOCK, NodeApi_op(%rbx)
@@ -5498,7 +5540,10 @@ LOCAL_FUNCTION api_stream_json
 121: cmpq   $API_OP_GET_BLINDED_BLOCK, NodeApi_op(%rbx)
     jne     122f
     mov     $NODE_JSON_BLINDED_BLOCK, %edi
-122:
+122: cmpq   $API_OP_GET_AGGREGATED_ATTESTATION_V2, NodeApi_op(%rbx)
+    jne     123f
+    mov     $NODE_JSON_ATTESTATION, %edi
+123:
     lea     (NodeEvent_api + 16)(%rbp), %rdx
     lea     NodeEvent_api_bytes(%rbp), %rcx
     mov     NodeApi_fork(%rbx), %r10
@@ -5562,6 +5607,9 @@ LOCAL_FUNCTION node_api_chunk_run
     je      103f
     cmp     $API_OP_GET_POOL_BLS_TO_EXECUTION_CHANGES, %rax
     je      103f
+    mov     $7, %ecx                        # getAggregatedAttestationV2 (7): its fold, then its answer
+    cmp     $API_OP_GET_AGGREGATED_ATTESTATION_V2, %rax
+    je      103f
     mov     $6, %ecx                        # a sidecar stream (6): data 0 at its end
     cmp     $API_OP_GET_BLOB_SIDECARS, %rax
     je      103f
@@ -5608,6 +5656,8 @@ LOCAL_FUNCTION node_api_chunk_run
     test    %r8, %r8
     jz      105f
     cmp     $3, %r8
+    je      105f
+    cmp     $7, %r8
     jne     3f
 105: mov    $64, %ecx
 3:  cmp     %rcx, %rax
@@ -5621,6 +5671,8 @@ LOCAL_FUNCTION node_api_chunk_run
     cmpq    $5, (L + 56)(%rsp)
     je      5f
     cmpq    $6, (L + 56)(%rsp)
+    je      5f
+    cmpq    $7, (L + 56)(%rsp)
     je      5f
     mov     (L + 48)(%rsp), %rax            # the state at the entry's slot
     mov     NODE_STATE_SLOT(%rax), %rax
@@ -5731,6 +5783,8 @@ LOCAL_FUNCTION node_api_chunk_run
     je      69f
     cmpq    $6, (L + 56)(%rsp)
     je      6f
+    cmpq    $7, (L + 56)(%rsp)
+    je      70f
     mov     (L + 64)(%rsp), %rdi
     mov     (L + 48)(%rsp), %rsi
     cmpq    $2, (L + 56)(%rsp)
@@ -5851,7 +5905,43 @@ LOCAL_FUNCTION node_api_chunk_run
     ja      97f
     mov     %rdx, (L + 40)(%rsp)
     jmp     6f
-64: lea     NodeEvent_api_bytes(%rbp), %rsi # an index past the count: the error 400 is the answer
+70: testq   $API_STREAM_FOLD, (NodeEvent_api + 8)(%rbp)  # getAggregatedAttestationV2
+    jz      73f
+    mov     (L + 40)(%rsp), %rsi
+    test    %rsi, %rsi
+    jz      71f
+    mov     (L + 64)(%rsp), %rdi            # a fold of the entry: no bytes
+    call    node_api_fold
+    cmp     $1, %rax
+    je      96f
+    ja      97f
+    orq     $API_STREAM_ITEM_DONE, (NodeEvent_api + 8)(%rbp)
+    jmp     80f
+71: mov     $404, %eax                      # the fold's end: none 404, optimistic 503, else the Attestation's bytes
+    cmpq    $0, (NodeEvent_api + 16 + 32)(%rbp)
+    je      72f
+    mov     $503, %eax
+    testq   $API_STREAM_OPTIMISTIC, (NodeEvent_api + 8)(%rbp)
+    jnz     72f
+    mov     %r12, %rdi
+    call    node_api_aggregate
+    test    %rax, %rax
+    jnz     96f
+    add     %rdx, %r12
+    jmp     80f
+72: mov     %rax, (L + 32)(%rsp)
+    jmp     641f
+73: mov     (L + 40)(%rsp), %rax            # the answer: from the Attestation's bytes
+    test    %rax, %rax
+    jz      96f
+    mov     8(%rax), %rcx
+    add     %rax, %rcx
+    mov     %rcx, (L + 8)(%rsp)
+    mov     16(%rax), %rcx
+    mov     %rcx, (L + 16)(%rsp)
+    jmp     6f
+64: movq    $400, (L + 32)(%rsp)            # an index past the count: the error 400 is the answer
+641: lea    NodeEvent_api_bytes(%rbp), %rsi # the error of L + 32 is the answer
     mov     L(%rsp), %rax
     sub     %rsi, %rax
     mov     %rax, (%rsi)
@@ -5863,7 +5953,7 @@ LOCAL_FUNCTION node_api_chunk_run
     jz      65f
     mov     $API_R_KEEP, %r8d
 65: xor     %edi, %edi
-    mov     $400, %edx
+    mov     (L + 32)(%rsp), %rdx
     mov     $API_BODY_ERROR, %ecx
     call    api_respond
     test    %rax, %rax
@@ -5878,6 +5968,8 @@ LOCAL_FUNCTION node_api_chunk_run
     cmpq    $6, (L + 56)(%rsp)              # a sidecar stream: SSZ as a JSON answer
     je      30f
     cmpq    $4, (L + 56)(%rsp)              # a pending stream: its SSZ bytes as getStateV2's
+    je      601f
+    cmpq    $7, (L + 56)(%rsp)              # getAggregatedAttestationV2: the Attestation's SSZ bytes
     je      601f
     cmpq    $0, (L + 56)(%rsp)
     jne     60f
@@ -5932,7 +6024,14 @@ LOCAL_FUNCTION node_api_chunk_run
     jmp     392f
 393: cmpq   $4, (L + 56)(%rsp)
     je      392f
-    cmpq    $3, (L + 56)(%rsp)
+    cmpq    $7, (L + 56)(%rsp)              # getAggregatedAttestationV2: {"version":"<fork>","data":
+    jne     394f
+    API_LIT api_j_version
+    mov     NodeApi_fork(%rbx), %rdi
+    call    api_fork_name
+    API_LIT api_g_data
+    jmp     36f
+394: cmpq   $3, (L + 56)(%rsp)
     jne     38f
     cmpq    $API_OP_GET_POOL_ATTESTER_SLASHINGS_V2, NodeApi_op(%rbx)   # a pool stream: {"data":[, the V2 GETs {"version":"<fork>","data":[
     je      391f
@@ -6261,6 +6360,8 @@ LOCAL_FUNCTION node_pool_next
     mov     $GOSSIP_BEACON_ATTESTATION, %ecx
     cmp     $API_OP_GET_POOL_ATTESTATIONS_V2, %rax
     je      1f
+    cmp     $API_OP_GET_AGGREGATED_ATTESTATION_V2, %rax
+    je      1f
     mov     $GOSSIP_BLS_TO_EXECUTION_CHANGE, %ecx
 1:  xor     %r11d, %r11d
     cmpq    $FORK_ELECTRA, NodeApi_fork(%rsi)
@@ -6332,8 +6433,21 @@ LOCAL_FUNCTION node_api_pool_stream
     movq    $-1, NodeApi_filter_slot(%rdx)  # the filters: getPoolAttestationsV2's slot and committee_index
     movq    $-1, NodeApi_filter_index(%rdx)
     cmp     $API_OP_GET_POOL_ATTESTATIONS_V2, %rsi
+    je      4f
+    cmp     $API_OP_GET_AGGREGATED_ATTESTATION_V2, %rsi
     jne     2f
-    mov     8(%rsp), %rax
+    mov     8(%rsp), %rax                   # getAggregatedAttestationV2: a fold, SSZ, attestation_data_root in cursor
+    mov     NodeApi_flags(%rdx), %rcx
+    or      $API_STREAM_FOLD, %rcx
+    cmpq    $API_TYPE_SSZ, ApiRoute_response(%rax)
+    jne     5f
+    or      $API_STREAM_SSZ, %rcx
+5:  mov     %rcx, NodeApi_flags(%rdx)
+    movdqu  ApiRoute_root(%rax), %xmm0
+    movdqu  (ApiRoute_root + 16)(%rax), %xmm1
+    movdqu  %xmm0, NodeApi_cursor(%rdx)
+    movdqu  %xmm1, (NodeApi_cursor + 16)(%rdx)
+4:  mov     8(%rsp), %rax
     testq   $(1 << API_PARAM_SLOT), ApiRoute_present(%rax)
     jz      3f
     mov     ApiRoute_slot(%rax), %rcx
@@ -6355,9 +6469,16 @@ LOCAL_FUNCTION node_api_pool_stream
     mov     %rax, NodeApi_sent(%rcx)
     mov     NodePool_member(%rdx), %rax
     mov     %rax, NodeApi_member(%rcx)
-1:  mov     32(%rsp), %rax
+6:  mov     32(%rsp), %rax
     mov     40(%rsp), %rdx
     call    node_api_chunk_work
+    xor     %eax, %eax
+    UNFRAME 48
+1:  cmpq    $API_OP_GET_AGGREGATED_ATTESTATION_V2, NodeApi_op(%rcx)  # none: getAggregatedAttestationV2 404, and no stream
+    jne     6b
+    mov     %rcx, %rdi
+    call    node_api_end
+    mov     $404, %eax
     UNFRAME 48
 END_FUNCTION node_api_pool_stream
 
@@ -6841,10 +6962,12 @@ LOCAL_FUNCTION node_api_pool_advance
     mov     NodePool_data_id(%rdx), %r8
 1:  mov     %r8, NodeApi_data(%rcx)
     andq    $~API_STREAM_OWN, NodeApi_flags(%rcx)
+    testq   $API_STREAM_FOLD, NodeApi_flags(%rcx)   # API_STREAM_FOLD: the cursor holds the aggregate
+    jnz     2f
     lea     NodeApi_cursor(%rcx), %rdi
     mov     $JSON_CURSOR_SIZE, %esi
     call    lantern_zero
-    testq   $API_STREAM_OWN, 16(%rsp)       # API_STREAM_OWN: the old bytes go
+2:  testq   $API_STREAM_OWN, 16(%rsp)       # API_STREAM_OWN: the old bytes go
     jz      9f
     mov     $NODE_ACT_BYTES_FREE, %edi
     mov     8(%rsp), %rsi
@@ -6852,6 +6975,217 @@ LOCAL_FUNCTION node_api_pool_advance
     call    node_ids
 9:  UNFRAME 32
 END_FUNCTION node_api_pool_advance
+
+/*
+ * (scratch rdi, data rsi) -> rax: the pool entry's bytes data folded into the aggregate in the
+ * cursor at NodeEvent_api + 16 of the event rbp (node.md, getAggregatedAttestationV2), rbx the
+ * entry: of the fork in sent a SingleAttestation (place and length from member) or an Attestation
+ * (place its bit, length that of its bits); with data of the root at byte 0, a place not taken,
+ * and the length of the aggregate, its bit at byte 272 and its signature added at byte 176 by
+ * crypto_bls_aggregate; the first gives the length (40), data (48) and signature; byte 32 counts
+ * them. rax = 0; 1 for bytes that are no attestation or a signature crypto_bls_aggregate rejects;
+ * 2 for a short scratch. Locals: scratch, data, signature, length, place, the root (then the list).
+ */
+LOCAL_FUNCTION node_api_fold
+    FRAME 80
+    mov     %rdi, (%rsp)
+    mov     8(%rsi), %rax
+    add     %rsi, %rax                      # the bytes and their count
+    mov     16(%rsi), %rcx
+    cmpq    $FORK_ELECTRA, NodeApi_sent(%rbx)
+    jb      1f
+    cmp     $240, %rcx                      # a SingleAttestation: data at 16, signature at 144
+    jne     71f
+    lea     16(%rax), %rdx
+    lea     144(%rax), %rsi
+    mov     NodeApi_member(%rbx), %r8
+    movzwl  %r8w, %r9d
+    shr     $16, %r8
+    jmp     3f
+1:  cmp     $(228 + 1), %rcx                # an Attestation: offset 228, data at 4, signature at 132, its bits
+    jb      71f
+    cmp     $(228 + MAX_VALIDATORS_PER_COMMITTEE / 8 + 1), %rcx
+    ja      71f
+    cmpl    $228, (%rax)
+    jne     71f
+    lea     4(%rax), %rdx
+    lea     132(%rax), %rsi
+    lea     228(%rax), %rdi
+    lea     -229(%rcx), %r10                # the last byte: its highest bit is the length's
+    movzbl  (%rdi,%r10), %r11d
+    test    %r11d, %r11d
+    jz      71f
+    bsr     %r11d, %r11d
+    lea     (%r11,%r10,8), %r8
+    xor     %r9d, %r9d                      # the place: the first bit set
+2:  cmp     %r8, %r9
+    jae     71f
+    mov     %r9, %rcx
+    shr     $3, %rcx
+    movzbl  (%rdi,%rcx), %eax
+    mov     %r9d, %ecx
+    and     $7, %ecx
+    bt      %ecx, %eax
+    jc      3f
+    inc     %r9
+    jmp     2b
+3:  cmp     $MAX_VALIDATORS_PER_COMMITTEE, %r8
+    ja      71f
+    cmp     %r8, %r9
+    jae     71f
+    mov     %rdx, 8(%rsp)
+    mov     %rsi, 16(%rsp)
+    mov     %r8, 24(%rsp)
+    mov     %r9, 32(%rsp)
+    mov     %rdx, %rdi                      # the root of its data: that of the cursor, else not in the aggregate
+    mov     (%rsp), %rsi
+    lea     40(%rsp), %rdx
+    mov     NodeApi_fork(%rbx), %r10
+    FORK_CALL node_data_root
+    cmp     $LANTERN_BUFFER_TOO_SMALL, %rax
+    je      72f
+    test    %rax, %rax
+    jnz     71f
+    lea     40(%rsp), %rdi
+    lea     (NodeEvent_api + 16)(%rbp), %rsi
+    NE32    %rdi, %rsi, 70f
+    mov     24(%rsp), %r8
+    cmpq    $0, (NodeEvent_api + 16 + 32)(%rbp)
+    jne     4f
+    mov     %r8, (NodeEvent_api + 16 + 40)(%rbp)    # the first: its length, data and signature
+    lea     (NodeEvent_api + 16 + 48)(%rbp), %rdi
+    mov     8(%rsp), %rsi
+    mov     $128, %edx
+    call    lantern_copy
+    lea     (NodeEvent_api + 16 + 176)(%rbp), %rdi
+    mov     16(%rsp), %rsi
+    mov     $96, %edx
+    call    lantern_copy
+    jmp     6f
+4:  cmp     (NodeEvent_api + 16 + 40)(%rbp), %r8    # a later one: the same length, a place not taken
+    jne     70f
+    mov     32(%rsp), %r9
+    mov     %r9, %rcx
+    shr     $3, %rcx
+    movzbl  (NodeEvent_api + 16 + 272)(%rbp,%rcx), %eax
+    mov     %r9d, %ecx
+    and     $7, %ecx
+    bt      %ecx, %eax
+    jc      70f
+    mov     (%rsp), %rdi                    # the two signatures: a BlsSignatureList at the end of scratch
+    mov     (%rdi), %rax
+    cmp     $(24 + 2 * 96 + 8), %rax
+    jb      72f
+    sub     $(24 + 2 * 96), %rax
+    and     $~7, %rax
+    add     %rdi, %rax
+    mov     %rax, 40(%rsp)
+    movq    $(24 + 2 * 96), (%rax)
+    movq    $24, 8(%rax)
+    movq    $2, 16(%rax)
+    lea     24(%rax), %rdi
+    lea     (NodeEvent_api + 16 + 176)(%rbp), %rsi
+    mov     $96, %edx
+    call    lantern_copy
+    mov     40(%rsp), %rdi
+    add     $(24 + 96), %rdi
+    mov     16(%rsp), %rsi
+    mov     $96, %edx
+    call    lantern_copy
+    mov     40(%rsp), %rdi
+    lea     (NodeEvent_api + 16 + 176)(%rbp), %rsi
+    CALL_GLOBAL crypto_bls_aggregate
+    test    %rax, %rax
+    jnz     71f
+6:  mov     32(%rsp), %r9                   # its place's bit; one more
+    mov     %r9, %rdx
+    shr     $3, %rdx
+    lea     (NodeEvent_api + 16 + 272)(%rbp,%rdx), %rdx
+    mov     %r9d, %ecx
+    and     $7, %ecx
+    mov     $1, %eax
+    shl     %cl, %eax
+    or      %al, (%rdx)
+    incq    (NodeEvent_api + 16 + 32)(%rbp)
+70: xor     %eax, %eax
+    UNFRAME 80
+71: mov     $1, %eax
+    UNFRAME 80
+72: mov     $2, %eax
+    UNFRAME 80
+END_FUNCTION node_api_fold
+.if MAX_VALIDATORS_PER_COMMITTEE > 2048 || 48 + 128 + 96 + 2048 / 8 > JSON_CURSOR_SIZE
+.error "node_api_fold: the aggregate's bits fit the cursor from byte 272"
+.endif
+
+/*
+ * (out rdi) -> rax: the aggregate in the cursor at NodeEvent_api + 16 of the event rbp as the SSZ
+ * bytes of the Attestation of the fork of the entry rbx at out, rdx their count (node.md,
+ * getAggregatedAttestationV2): aggregation_bits of the cursor's length with its bits, data,
+ * signature; from electra committee_bits with the bit of filter_index. rax = 0; 1 for a committee
+ * index not below MAX_COMMITTEES_PER_SLOT. Locals: out, the fixed part's size, the count.
+ */
+LOCAL_FUNCTION node_api_aggregate
+    FRAME 32
+    mov     %rdi, (%rsp)
+    mov     $228, %ecx                      # the fixed part: 228 bytes, from electra with committee_bits
+    cmpq    $FORK_ELECTRA, NodeApi_fork(%rbx)
+    jb      1f
+    mov     $NODE_POOL_ATTESTATION_FIXED, %ecx
+1:  mov     %rcx, 8(%rsp)
+    mov     (NodeEvent_api + 16 + 40)(%rbp), %rax   # the bits' bytes, with the length's bit
+    shr     $3, %rax
+    lea     1(%rcx,%rax), %rsi
+    mov     %rsi, 16(%rsp)
+    call    lantern_zero
+    mov     (%rsp), %rdi
+    mov     8(%rsp), %rax
+    mov     %eax, (%rdi)                    # the offset of aggregation_bits, data and signature
+    add     $4, %rdi
+    lea     (NodeEvent_api + 16 + 48)(%rbp), %rsi
+    mov     $(128 + 96), %edx
+    call    lantern_copy
+    cmpq    $228, 8(%rsp)
+    je      2f
+    mov     NodeApi_filter_index(%rbx), %rax    # committee_bits
+    cmp     $MAX_COMMITTEES_PER_SLOT, %rax
+    jae     71f
+    mov     (%rsp), %rdx
+    mov     %rax, %rcx
+    shr     $3, %rcx
+    lea     228(%rdx,%rcx), %rdx
+    mov     %eax, %ecx
+    and     $7, %ecx
+    mov     $1, %eax
+    shl     %cl, %eax
+    or      %al, (%rdx)
+2:  mov     (%rsp), %rdi                    # the bits, then the length's bit
+    add     8(%rsp), %rdi
+    lea     (NodeEvent_api + 16 + 272)(%rbp), %rsi
+    mov     (NodeEvent_api + 16 + 40)(%rbp), %rdx
+    add     $7, %rdx
+    shr     $3, %rdx
+    call    lantern_copy
+    mov     (%rsp), %rdx
+    add     8(%rsp), %rdx
+    mov     (NodeEvent_api + 16 + 40)(%rbp), %rax
+    mov     %rax, %rcx
+    shr     $3, %rcx
+    add     %rcx, %rdx
+    mov     %eax, %ecx
+    and     $7, %ecx
+    mov     $1, %eax
+    shl     %cl, %eax
+    or      %al, (%rdx)
+    mov     16(%rsp), %rdx
+    xor     %eax, %eax
+    UNFRAME 32
+71: mov     $1, %eax
+    UNFRAME 32
+END_FUNCTION node_api_aggregate
+.if NODE_API_FIRST_ROOM < API_HEAD_ROOM + NODE_POOL_ATTESTATION_FIXED + MAX_VALIDATORS_PER_COMMITTEE / 8 + 1
+.error "node_api_aggregate: an Attestation of one committee fits the first chunk"
+.endif
 
 /*
  * A pool stream's JSON, as api_stream_json: with the bytes rdi, the JSON of the pool entry from

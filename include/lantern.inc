@@ -1052,6 +1052,7 @@
 .set API_STREAM_OWN_STATE, 4096        /* the stream frees its state at its end */
 .set API_STREAM_ITEMS, 8192            /* a pool stream wrote an entry */
 .set API_STREAM_ITEM_DONE, 16384       /* in a WORK_DONE only: the chunk ends a pool entry */
+.set API_STREAM_FOLD, 32768             /* getAggregatedAttestationV2: its chunks fold the pool's entries, sending nothing */
 .set API_VALUE_CANONICAL, 1              /* the values of a NODE_WORK_API_ENCODE's arg, times 2^16 */
 .set API_VALUE_FINALIZED, 2
 .set API_VALUE_OPTIMISTIC, 4

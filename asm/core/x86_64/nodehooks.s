@@ -189,6 +189,26 @@ SPEC_FUNCTION node_block_root
 SPEC_END node_block_root
 
 /*
+ * (data, scratch, root) -> status: hash_tree_root of the AttestationData at data, its 128 SSZ
+ * bytes, into root. scratch for ssz_hash_tree_root.
+ */
+SPEC_FUNCTION node_data_root
+    FRAME 0
+    mov     %rdx, %rcx
+    mov     %rsi, %rdx
+    mov     %rdi, %rsi
+    ADDRESS %rdi, lantern_type_AttestationData
+    CALL_GLOBAL ssz_hash_tree_root
+    cmp     $SSZ_BUFFER_TOO_SMALL, %rax
+    jne     1f
+    mov     $LANTERN_BUFFER_TOO_SMALL, %eax
+1:  UNFRAME 0
+SPEC_END node_data_root
+.if AttestationData__mem != 128 || AttestationData__ssz != 128
+.error "node_data_root: an AttestationData value is its 128 SSZ bytes"
+.endif
+
+/*
  * (data, scratch, out): the SignedBeaconBlockHeader of the SignedBeaconBlock in data: the message's
  * slot, proposer_index, parent_root, state_root, hash_tree_root of its body, and the signature.
  * rbp data, r12 scratch, r13 out, r14 the block, r15 its message, S8 the scratch size, restored.

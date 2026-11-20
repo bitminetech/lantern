@@ -2839,6 +2839,8 @@ LOCAL_FUNCTION node_api_event
     beq     a3, t0, 68f
     li      t0, API_OP_GET_POOL_ATTESTATIONS_V2
     beq     a3, t0, 68f
+    li      t0, API_OP_GET_AGGREGATED_ATTESTATION_V2
+    beq     a3, t0, 68f
     mv      a0, a3
     call    node_submit_topic
     bnez    a0, 60f
@@ -3065,11 +3067,13 @@ LOCAL_FUNCTION node_api_event
     mv      a2, s3
     call    node_api_headers_stream
     j       90f
-68: mv      a0, s9                          # a pool GET: a stream of the pool
+68: mv      a0, s9                          # a pool GET: a stream of the pool; getAggregatedAttestationV2 with none 404
     mv      a1, s7
     mv      a2, s3
     mv      a3, s8
     call    node_api_pool_stream
+    mv      a2, a0
+    bnez    a0, 80f
     j       90f
 60: mv      a0, s9                          # a pool POST: a work checks its operations
     mv      a1, s7
@@ -5295,7 +5299,45 @@ LOCAL_FUNCTION node_api_chunk_done
     j       3f
 5:  call    node_api_pool_advance
 3:  ld      s8, NodeApi_flags(s4)
-1:  ld      a1, (NodeEvent_api_bytes + 16)(s3)  # the chunk in a SEND
+1:  li      t0, API_STREAM_FOLD             # API_STREAM_FOLD: no send, and the next chunk at once
+    and     t0, s8, t0
+    beqz    t0, 11f
+    andi    t0, s8, API_STREAM_DONE         # the error that ends it goes
+    bnez    t0, 11f
+    ld      t0, NodeApi_data(s4)
+    bnez    t0, 12f                         # a fold
+    ld      t0, (NodeEvent_api_bytes + 16)(s3)
+    bnez    t0, 14f                         # the Attestation's bytes
+    ld      t0, (NodeApi_cursor + 32)(s4)   # the fold's end: optimistic for a NOT_VALIDATED block
+    beqz    t0, 12f
+    addi    a0, s4, (NodeApi_cursor + 48 + 16)
+    call    node_store_find
+    li      t0, -1
+    beq     a0, t0, 12f
+    ld      t0, BlockNode_payload_status(a1)
+    li      t1, PAYLOAD_STATUS_NOT_VALIDATED
+    bne     t0, t1, 12f
+    ld      t0, NodeApi_flags(s4)
+    ori     t0, t0, API_STREAM_OPTIMISTIC
+    sd      t0, NodeApi_flags(s4)
+    j       12f
+14: addi    a0, s3, NodeEvent_api_bytes     # they become the stream's own data; the answer from sent 0
+    call    node_put
+    sd      a0, NodeApi_data(s4)
+    ld      t0, NodeApi_flags(s4)
+    li      t1, ~API_STREAM_FOLD
+    and     t0, t0, t1
+    ori     t0, t0, API_STREAM_OWN
+    sd      t0, NodeApi_flags(s4)
+    sd      zero, NodeApi_sent(s4)
+    addi    a0, s4, NodeApi_cursor
+    li      a1, JSON_CURSOR_SIZE
+    call    lantern_zero
+12: ld      a0, NodeAction_arg(s3)
+    mv      a1, s4
+    call    node_api_chunk_work
+    j       99f
+11: ld      a1, (NodeEvent_api_bytes + 16)(s3)  # the chunk in a SEND
     addi    a1, a1, (56 + 7)
     andi    a1, a1, -8
     li      a0, NODE_ACT_API_SEND
@@ -5393,6 +5435,8 @@ LOCAL_FUNCTION api_stream_head
     beq     t0, t1, 21f
     li      t1, API_OP_GET_POOL_ATTESTATIONS_V2
     beq     t0, t1, 21f
+    li      t1, API_OP_GET_AGGREGATED_ATTESTATION_V2
+    beq     t0, t1, 21f
     li      t1, API_OP_GET_BLOB_SIDECARS
     beq     t0, t1, 21f
     li      t1, API_OP_GET_DEBUG_DATA_COLUMN_SIDECARS
@@ -5486,6 +5530,8 @@ LOCAL_FUNCTION api_stream_json
 31: ld      t0, NodeApi_op(s4)              # the validator streams: their items, of the state s3
     li      t1, API_OP_GET_BLOCK_V2
     beq     t0, t1, 1f
+    li      t1, API_OP_GET_AGGREGATED_ATTESTATION_V2
+    beq     t0, t1, 1f
     li      t1, API_OP_GET_BLOCK_ATTESTATIONS_V2
     beq     t0, t1, 1f
     li      t1, API_OP_GET_BLINDED_BLOCK
@@ -5516,7 +5562,10 @@ LOCAL_FUNCTION api_stream_json
 121: li     t2, API_OP_GET_BLINDED_BLOCK
     bne     t1, t2, 122f
     li      a0, NODE_JSON_BLINDED_BLOCK
-122:
+122: li     t2, API_OP_GET_AGGREGATED_ATTESTATION_V2
+    bne     t1, t2, 123f
+    li      a0, NODE_JSON_ATTESTATION
+123:
     mv      a1, s3
     addi    a2, s5, (NodeEvent_api + 16)
     addi    a3, s5, NodeEvent_api_bytes
@@ -5581,6 +5630,9 @@ LOCAL_FUNCTION node_api_chunk_run
     beq     t0, t1, 103f
     li      t1, API_OP_GET_POOL_BLS_TO_EXECUTION_CHANGES
     beq     t0, t1, 103f
+    li      t2, 7                           # getAggregatedAttestationV2 (7): its fold, then its answer
+    li      t1, API_OP_GET_AGGREGATED_ATTESTATION_V2
+    beq     t0, t1, 103f
     li      t2, 6                           # a sidecar stream (6): data 0 at its end
     li      t1, API_OP_GET_BLOB_SIDECARS
     beq     t0, t1, 103f
@@ -5624,6 +5676,8 @@ LOCAL_FUNCTION node_api_chunk_run
     ld      t2, (L + 40)(sp)                # a validator stream: an item in every chunk
     beqz    t2, 104f
     li      t3, 3
+    beq     t2, t3, 104f
+    li      t3, 7
     bne     t2, t3, 3f
 104: li     t1, 64
 3:  bltu    t0, t1, 97f
@@ -5637,6 +5691,8 @@ LOCAL_FUNCTION node_api_chunk_run
     li      t2, 5
     beq     t1, t2, 5f
     li      t2, 6
+    beq     t1, t2, 5f
+    li      t2, 7
     beq     t1, t2, 5f
     ld      t1, (L + 48)(sp)                # the state at the entry's slot
     ld      t1, NODE_STATE_SLOT(t1)
@@ -5748,6 +5804,8 @@ LOCAL_FUNCTION node_api_chunk_run
     beq     t0, t1, 69f
     li      t1, 6
     beq     t0, t1, 6f
+    li      t1, 7
+    beq     t0, t1, 70f
     ld      a0, (L + 56)(sp)
     ld      a1, (L + 48)(sp)
     li      t1, 2
@@ -5864,7 +5922,45 @@ LOCAL_FUNCTION node_api_chunk_run
     bgtu    a0, t0, 97f
     mv      s3, a1
     j       6f
-64: addi    a1, s5, NodeEvent_api_bytes     # an index past the count: the error 400 is the answer
+70: ld      t0, (NodeEvent_api + 8)(s5)     # getAggregatedAttestationV2
+    li      t1, API_STREAM_FOLD
+    and     t1, t0, t1
+    beqz    t1, 73f
+    beqz    s3, 71f
+    ld      a0, (L + 56)(sp)                # a fold of the entry: no bytes
+    mv      a1, s3
+    call    node_api_fold
+    li      t0, 1
+    beq     a0, t0, 96f
+    bgtu    a0, t0, 97f
+    ld      t0, (NodeEvent_api + 8)(s5)
+    li      t1, API_STREAM_ITEM_DONE
+    or      t0, t0, t1
+    sd      t0, (NodeEvent_api + 8)(s5)
+    j       80f
+71: li      t1, 404                         # the fold's end: none 404, optimistic 503, else the Attestation's bytes
+    ld      t2, (NodeEvent_api + 16 + 32)(s5)
+    beqz    t2, 72f
+    li      t1, 503
+    andi    t2, t0, API_STREAM_OPTIMISTIC
+    bnez    t2, 72f
+    mv      a0, s6
+    call    node_api_aggregate
+    bnez    a0, 96f
+    add     s6, s6, a1
+    j       80f
+72: sd      t1, (L + 32)(sp)
+    j       641f
+73: beqz    s3, 96f                         # the answer: from the Attestation's bytes
+    ld      t0, 8(s3)
+    add     t0, s3, t0
+    sd      t0, (L + 8)(sp)
+    ld      t0, 16(s3)
+    sd      t0, (L + 16)(sp)
+    j       6f
+64: li      t0, 400                         # an index past the count: the error 400 is the answer
+    sd      t0, (L + 32)(sp)
+641: addi   a1, s5, NodeEvent_api_bytes     # the error of L + 32 is the answer
     ld      t0, (L + 0)(sp)
     sub     t0, t0, a1
     sd      t0, 0(a1)
@@ -5875,7 +5971,7 @@ LOCAL_FUNCTION node_api_chunk_run
     beqz    t1, 65f
     li      a4, API_R_KEEP
 65: li      a0, 0
-    li      a2, 400
+    ld      a2, (L + 32)(sp)
     li      a3, API_BODY_ERROR
     call    api_respond
     bnez    a0, 97f
@@ -5892,6 +5988,8 @@ LOCAL_FUNCTION node_api_chunk_run
     li      t3, 6                           # a sidecar stream: SSZ as a JSON answer
     beq     t2, t3, 30f
     li      t3, 4                           # a pending stream: its SSZ bytes as getStateV2's
+    beq     t2, t3, 601f
+    li      t3, 7                           # getAggregatedAttestationV2: the Attestation's SSZ bytes
     beq     t2, t3, 601f
     bnez    t2, 60f
 601: andi   t1, t0, API_STREAM_STARTED
@@ -5947,7 +6045,14 @@ LOCAL_FUNCTION node_api_chunk_run
     j       392f
 393: li     t1, 4
     beq     t0, t1, 392f
-    li      t1, 3
+    li      t1, 7                           # getAggregatedAttestationV2: {"version":"<fork>","data":
+    bne     t0, t1, 394f
+    API_LIT api_j_version
+    ld      a0, NodeApi_fork(s4)
+    call    api_fork_name
+    API_LIT api_g_data
+    j       36f
+394: li     t1, 3
     bne     t0, t1, 38f
     ld      t0, NodeApi_op(s4)              # a pool stream: {"data":[, the V2 GETs {"version":"<fork>","data":[
     li      t1, API_OP_GET_POOL_ATTESTER_SLASHINGS_V2
@@ -6291,6 +6396,8 @@ LOCAL_FUNCTION node_pool_next
     li      t0, GOSSIP_BEACON_ATTESTATION
     li      t1, API_OP_GET_POOL_ATTESTATIONS_V2
     beq     t5, t1, 1f
+    li      t1, API_OP_GET_AGGREGATED_ATTESTATION_V2
+    beq     t5, t1, 1f
     li      t0, GOSSIP_BLS_TO_EXECUTION_CHANGE
 1:  ld      t5, NodeApi_filter_slot(a1)
     ld      t6, NodeApi_filter_index(a1)
@@ -6362,8 +6469,27 @@ LOCAL_FUNCTION node_api_pool_stream
     li      t2, -1                          # the filters: getPoolAttestationsV2's slot and committee_index
     li      t3, -1
     li      t4, API_OP_GET_POOL_ATTESTATIONS_V2
+    beq     a1, t4, 4f
+    li      t4, API_OP_GET_AGGREGATED_ATTESTATION_V2
     bne     a1, t4, 2f
-    ld      t1, 8(sp)
+    ld      t1, 8(sp)                       # getAggregatedAttestationV2: a fold, SSZ, attestation_data_root in cursor
+    ld      t4, NodeApi_flags(t0)
+    li      t5, API_STREAM_FOLD
+    or      t4, t4, t5
+    ld      t5, ApiRoute_response(t1)
+    li      t6, API_TYPE_SSZ
+    bne     t5, t6, 5f
+    ori     t4, t4, API_STREAM_SSZ
+5:  sd      t4, NodeApi_flags(t0)
+    ld      t4, ApiRoute_root(t1)
+    sd      t4, NodeApi_cursor(t0)
+    ld      t4, (ApiRoute_root + 8)(t1)
+    sd      t4, (NodeApi_cursor + 8)(t0)
+    ld      t4, (ApiRoute_root + 16)(t1)
+    sd      t4, (NodeApi_cursor + 16)(t0)
+    ld      t4, (ApiRoute_root + 24)(t1)
+    sd      t4, (NodeApi_cursor + 24)(t0)
+4:  ld      t1, 8(sp)
     ld      t4, ApiRoute_present(t1)
     andi    t5, t4, (1 << API_PARAM_SLOT)
     beqz    t5, 3f
@@ -6387,9 +6513,17 @@ LOCAL_FUNCTION node_api_pool_stream
     sd      t1, NodeApi_sent(t0)
     ld      t1, NodePool_member(a1)
     sd      t1, NodeApi_member(t0)
-1:  ld      a0, 32(sp)
+6:  ld      a0, 32(sp)
     ld      a1, 40(sp)
     call    node_api_chunk_work
+    li      a0, 0
+    UNFRAME 48
+1:  ld      t1, NodeApi_op(t0)              # none: getAggregatedAttestationV2 404, and no stream
+    li      t2, API_OP_GET_AGGREGATED_ATTESTATION_V2
+    bne     t1, t2, 6b
+    mv      a0, t0
+    call    node_api_end
+    li      a0, 404
     UNFRAME 48
 END_FUNCTION node_api_pool_stream
 
@@ -6875,10 +7009,13 @@ LOCAL_FUNCTION node_api_pool_advance
     ld      t1, NodeApi_flags(t0)
     andi    t1, t1, ~API_STREAM_OWN
     sd      t1, NodeApi_flags(t0)
+    li      t2, API_STREAM_FOLD             # API_STREAM_FOLD: the cursor holds the aggregate
+    and     t2, t1, t2
+    bnez    t2, 2f
     addi    a0, t0, NodeApi_cursor
     li      a1, JSON_CURSOR_SIZE
     call    lantern_zero
-    ld      t0, 16(sp)                      # API_STREAM_OWN: the old bytes go
+2:  ld      t0, 16(sp)                      # API_STREAM_OWN: the old bytes go
     andi    t0, t0, API_STREAM_OWN
     beqz    t0, 9f
     li      a0, NODE_ACT_BYTES_FREE
@@ -6887,6 +7024,230 @@ LOCAL_FUNCTION node_api_pool_advance
     call    node_ids
 9:  UNFRAME 32
 END_FUNCTION node_api_pool_advance
+
+/*
+ * (scratch a0, data a1) -> a0: the pool entry's bytes data folded into the aggregate in the cursor
+ * at NodeEvent_api + 16 of the event s5 (node.md, getAggregatedAttestationV2), s4 the entry: of
+ * the fork in sent a SingleAttestation (place and length from member) or an Attestation (place its
+ * bit, length that of its bits); with data of the root at byte 0, a place not taken, and the
+ * length of the aggregate, its bit at byte 272 and its signature added at byte 176 by
+ * crypto_bls_aggregate; the first gives the length (40), data (48) and signature; byte 32 counts
+ * them. a0 = 0; 1 for bytes that are no attestation or a signature crypto_bls_aggregate rejects;
+ * 2 for a short scratch. Locals: scratch, data, signature, length, place, the root (then the list).
+ */
+LOCAL_FUNCTION node_api_fold
+    FRAME 80
+    sd      a0, 0(sp)
+    ld      t0, 8(a1)
+    add     t0, a1, t0                      # the bytes and their count
+    ld      t1, 16(a1)
+    ld      t2, NodeApi_sent(s4)
+    li      t3, FORK_ELECTRA
+    bltu    t2, t3, 1f
+    li      t3, 240                         # a SingleAttestation: data at 16, signature at 144
+    bne     t1, t3, 71f
+    addi    a2, t0, 16
+    addi    a3, t0, 144
+    ld      a4, NodeApi_member(s4)
+    slli    a5, a4, 48
+    srli    a5, a5, 48
+    srli    a4, a4, 16
+    j       3f
+1:  li      t3, 228 + 1                     # an Attestation: offset 228, data at 4, signature at 132, its bits
+    bltu    t1, t3, 71f
+    li      t3, 228 + MAX_VALIDATORS_PER_COMMITTEE / 8 + 1
+    bgtu    t1, t3, 71f
+    lwu     t3, 0(t0)
+    li      t4, 228
+    bne     t3, t4, 71f
+    addi    a2, t0, 4
+    addi    a3, t0, 132
+    addi    t5, t0, 228                     # the bits
+    addi    t2, t1, -229                    # the last byte: its highest bit is the length's
+    add     t3, t5, t2
+    lbu     t3, 0(t3)
+    beqz    t3, 71f
+    li      t4, -1
+5:  addi    t4, t4, 1
+    srli    t3, t3, 1
+    bnez    t3, 5b
+    slli    a4, t2, 3
+    add     a4, a4, t4
+    li      a5, 0                           # the place: the first bit set
+2:  bgeu    a5, a4, 71f
+    srli    t3, a5, 3
+    add     t3, t5, t3
+    lbu     t3, 0(t3)
+    andi    t4, a5, 7
+    srl     t3, t3, t4
+    andi    t3, t3, 1
+    bnez    t3, 3f
+    addi    a5, a5, 1
+    j       2b
+3:  li      t3, MAX_VALIDATORS_PER_COMMITTEE
+    bgtu    a4, t3, 71f
+    bgeu    a5, a4, 71f
+    sd      a2, 8(sp)
+    sd      a3, 16(sp)
+    sd      a4, 24(sp)
+    sd      a5, 32(sp)
+    mv      a0, a2                          # the root of its data: that of the cursor, else not in the aggregate
+    ld      a1, 0(sp)
+    addi    a2, sp, 40
+    ld      t6, NodeApi_fork(s4)
+    FORK_CALL node_data_root
+    li      t0, LANTERN_BUFFER_TOO_SMALL
+    beq     a0, t0, 72f
+    bnez    a0, 71f
+    addi    t0, sp, 40
+    addi    t1, s5, (NodeEvent_api + 16)
+    NE32    t0, t1, 70f
+    ld      a4, 24(sp)
+    ld      t0, (NodeEvent_api + 16 + 32)(s5)
+    bnez    t0, 4f
+    sd      a4, (NodeEvent_api + 16 + 40)(s5)   # the first: its length, data and signature
+    addi    a0, s5, (NodeEvent_api + 16 + 48)
+    ld      a1, 8(sp)
+    li      a2, 128
+    call    lantern_copy
+    addi    a0, s5, (NodeEvent_api + 16 + 176)
+    ld      a1, 16(sp)
+    li      a2, 96
+    call    lantern_copy
+    j       6f
+4:  ld      t0, (NodeEvent_api + 16 + 40)(s5)   # a later one: the same length, a place not taken
+    bne     t0, a4, 70f
+    ld      a5, 32(sp)
+    srli    t0, a5, 3
+    add     t0, s5, t0
+    lbu     t0, (NodeEvent_api + 16 + 272)(t0)
+    andi    t1, a5, 7
+    srl     t0, t0, t1
+    andi    t0, t0, 1
+    bnez    t0, 70f
+    ld      a0, 0(sp)                       # the two signatures: a BlsSignatureList at the end of scratch
+    ld      t0, 0(a0)
+    li      t1, 24 + 2 * 96 + 8
+    bltu    t0, t1, 72f
+    addi    t0, t0, -(24 + 2 * 96)
+    andi    t0, t0, -8
+    add     t0, a0, t0
+    sd      t0, 40(sp)
+    li      t1, 24 + 2 * 96
+    sd      t1, 0(t0)
+    li      t1, 24
+    sd      t1, 8(t0)
+    li      t1, 2
+    sd      t1, 16(t0)
+    addi    a0, t0, 24
+    addi    a1, s5, (NodeEvent_api + 16 + 176)
+    li      a2, 96
+    call    lantern_copy
+    ld      a0, 40(sp)
+    addi    a0, a0, 24 + 96
+    ld      a1, 16(sp)
+    li      a2, 96
+    call    lantern_copy
+    ld      a0, 40(sp)
+    addi    a1, s5, (NodeEvent_api + 16 + 176)
+    CALL_GLOBAL crypto_bls_aggregate
+    bnez    a0, 71f
+6:  ld      a5, 32(sp)                      # its place's bit; one more
+    srli    t0, a5, 3
+    add     t0, s5, t0
+    lbu     t1, (NodeEvent_api + 16 + 272)(t0)
+    andi    t2, a5, 7
+    li      t3, 1
+    sll     t3, t3, t2
+    or      t1, t1, t3
+    sb      t1, (NodeEvent_api + 16 + 272)(t0)
+    ld      t0, (NodeEvent_api + 16 + 32)(s5)
+    addi    t0, t0, 1
+    sd      t0, (NodeEvent_api + 16 + 32)(s5)
+70: li      a0, 0
+    UNFRAME 80
+71: li      a0, 1
+    UNFRAME 80
+72: li      a0, 2
+    UNFRAME 80
+END_FUNCTION node_api_fold
+.if MAX_VALIDATORS_PER_COMMITTEE > 2048 || 48 + 128 + 96 + 2048 / 8 > JSON_CURSOR_SIZE
+.error "node_api_fold: the aggregate's bits fit the cursor from byte 272"
+.endif
+
+/*
+ * (out a0) -> a0: the aggregate in the cursor at NodeEvent_api + 16 of the event s5 as the SSZ
+ * bytes of the Attestation of the fork of the entry s4 at out, a1 their count (node.md,
+ * getAggregatedAttestationV2): aggregation_bits of the cursor's length with its bits, data,
+ * signature; from electra committee_bits with the bit of filter_index. a0 = 0; 1 for a committee
+ * index not below MAX_COMMITTEES_PER_SLOT. Locals: out, the fixed part's size, the count.
+ */
+LOCAL_FUNCTION node_api_aggregate
+    FRAME 32
+    sd      a0, 0(sp)
+    li      t0, 228                         # the fixed part: 228 bytes, from electra with committee_bits
+    ld      t1, NodeApi_fork(s4)
+    li      t2, FORK_ELECTRA
+    bltu    t1, t2, 1f
+    li      t0, NODE_POOL_ATTESTATION_FIXED
+1:  sd      t0, 8(sp)
+    ld      t1, (NodeEvent_api + 16 + 40)(s5)   # the bits' bytes, with the length's bit
+    srli    t1, t1, 3
+    add     a1, t0, t1
+    addi    a1, a1, 1
+    sd      a1, 16(sp)
+    call    lantern_zero
+    ld      a0, 0(sp)
+    ld      t0, 8(sp)
+    sw      t0, 0(a0)                       # the offset of aggregation_bits, data and signature
+    addi    a0, a0, 4
+    addi    a1, s5, (NodeEvent_api + 16 + 48)
+    li      a2, 128 + 96
+    call    lantern_copy
+    ld      t0, 8(sp)
+    li      t1, 228
+    beq     t0, t1, 2f
+    ld      t0, NodeApi_filter_index(s4)    # committee_bits
+    li      t1, MAX_COMMITTEES_PER_SLOT
+    bgeu    t0, t1, 71f
+    ld      t1, 0(sp)
+    srli    t2, t0, 3
+    add     t1, t1, t2
+    lbu     t2, 228(t1)
+    andi    t3, t0, 7
+    li      t4, 1
+    sll     t4, t4, t3
+    or      t2, t2, t4
+    sb      t2, 228(t1)
+2:  ld      a0, 0(sp)                       # the bits, then the length's bit
+    ld      t0, 8(sp)
+    add     a0, a0, t0
+    addi    a1, s5, (NodeEvent_api + 16 + 272)
+    ld      a2, (NodeEvent_api + 16 + 40)(s5)
+    addi    a2, a2, 7
+    srli    a2, a2, 3
+    call    lantern_copy
+    ld      t1, 0(sp)
+    ld      t0, 8(sp)
+    add     t1, t1, t0
+    ld      t0, (NodeEvent_api + 16 + 40)(s5)
+    srli    t2, t0, 3
+    add     t1, t1, t2
+    lbu     t2, 0(t1)
+    andi    t3, t0, 7
+    li      t4, 1
+    sll     t4, t4, t3
+    or      t2, t2, t4
+    sb      t2, 0(t1)
+    ld      a1, 16(sp)
+    li      a0, 0
+    UNFRAME 32
+71: li      a0, 1
+    UNFRAME 32
+END_FUNCTION node_api_aggregate
+.if NODE_API_FIRST_ROOM < API_HEAD_ROOM + NODE_POOL_ATTESTATION_FIXED + MAX_VALIDATORS_PER_COMMITTEE / 8 + 1
+.error "node_api_aggregate: an Attestation of one committee fits the first chunk"
+.endif
 
 /*
  * A pool stream's JSON, as api_stream_json: with the bytes s3, the JSON of the pool entry from

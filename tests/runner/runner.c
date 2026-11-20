@@ -231,6 +231,7 @@ ABI uint64_t LF(get_head)(const void *store, void *scratch, void *out);
 ABI uint64_t LF(get_filtered_node_tree)(const void *store, void *scratch, void *out);
 ABI uint64_t LF(get_weight)(const void *store, const void *node, void *out);
 ABI uint64_t LF(node_weights)(const void *store, void *scratch, void *out);
+ABI uint64_t LF(node_data_root)(const void *data, void *scratch, void *root);
 ABI uint64_t LF(on_block)(void *store, const void *signed_block, void *state, const void *options, void *scratch,
                               void *result);
 ABI uint64_t LF(validate_on_attestation)(const void *store, const void *attestation, const void *is_from_block);
@@ -776,6 +777,8 @@ static uint8_t *decode(const uint8_t *desc, const uint8_t *enc, uint64_t len, ui
     return value;
 }
 
+static uint8_t *fresh_scratch(void);
+
 /* ssz_static: decode, encode and root of one type, through lantern's descriptor. */
 static void run_ssz_static(const char *file, const char *type_name, case_file *f) {
     const uint8_t *desc = type_by_name(type_name);
@@ -802,6 +805,12 @@ static void run_ssz_static(const char *file, const char *type_name, case_file *f
                     why = "serialize bytes";
                 else if (ssz_hash_tree_root(desc, value, scr, got) != 0 || memcmp(got, root, 32))
                     why = "hash_tree_root";
+                else if (!strcmp(type_name, "AttestationData")) { /* lantern_node_data_root of the SSZ bytes */
+                    memset(got, FILL, sizeof got);
+                    if (CALL(LF(node_data_root), enc, fresh_scratch(), got) != 0 || memcmp(got, root, 32))
+                        why = "lantern_node_data_root";
+                    else if (!guard_ok(got, 32)) why = "lantern_node_data_root wrote out of bounds";
+                }
                 free(out);
             }
             free(scr);
@@ -7385,9 +7394,17 @@ static void run_node_api(const char *file, case_file *f) {
                 s->api.room = rooms[r];
                 size_t nbufs = s->nbufs;
                 uint64_t held = node_pool_held(s->node);
-                if (syncing[k]) wr64(s->node + NODE_FLAGS, rd64(s->node + NODE_FLAGS) | NODE_FLAG_SYNCING);
+                /* syncing bit 0: NODE_FLAG_SYNCING; bit 1: every node of the store NOT_VALIDATED, restored after */
+                uint64_t statuses[64], nodes = node_count(&n) < 64 ? node_count(&n) : 64;
+                if (syncing[k] & 1) wr64(s->node + NODE_FLAGS, rd64(s->node + NODE_FLAGS) | NODE_FLAG_SYNCING);
+                for (uint64_t i = 0; (syncing[k] & 2) && i < nodes; i++) {
+                    statuses[i] = rd64(node_at(&n, i) + NODE_PAYLOAD_STATUS);
+                    wr64((uint8_t *)node_at(&n, i) + NODE_PAYLOAD_STATUS, PAYLOAD_NOT_VALIDATED);
+                }
                 shell_api_ask(&n, req, rlen, (k + 1) | (uint64_t)(7 + r) << 32, &why);
-                if (syncing[k]) wr64(s->node + NODE_FLAGS, rd64(s->node + NODE_FLAGS) & ~(uint64_t)NODE_FLAG_SYNCING);
+                if (syncing[k] & 1) wr64(s->node + NODE_FLAGS, rd64(s->node + NODE_FLAGS) & ~(uint64_t)NODE_FLAG_SYNCING);
+                for (uint64_t i = 0; (syncing[k] & 2) && i < nodes; i++)
+                    wr64((uint8_t *)node_at(&n, i) + NODE_PAYLOAD_STATUS, statuses[i]);
                 /* the bytes of the operations the pool took stay */
                 if (!why && s->nbufs != nbufs + (node_pool_held(s->node) - held))
                     why = "the runner holds other buffers after the answer";

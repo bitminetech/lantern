@@ -608,6 +608,11 @@ api_p_data:
 api_p_version:
     .ascii "\",\"data\":["
 .set api_p_version_len, 10
+
+api_g_data:
+    .ascii "\",\"data\":"
+.set api_g_data_len, 9
+
 api_a_slot:
     .ascii "{\"data\":{\"slot\":"
 .set api_a_slot_len, 16

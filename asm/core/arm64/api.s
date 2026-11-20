@@ -2789,6 +2789,8 @@ LOCAL_FUNCTION node_api_event
     b.eq    68f
     cmp     x3, #API_OP_GET_POOL_ATTESTATIONS_V2
     b.eq    68f
+    cmp     x3, #API_OP_GET_AGGREGATED_ATTESTATION_V2
+    b.eq    68f
     mov     x0, x3
     bl      node_submit_topic
     cbnz    x0, 60f
@@ -3011,12 +3013,14 @@ LOCAL_FUNCTION node_api_event
     mov     x2, x21
     bl      node_api_headers_stream
     b       90f
-68: mov     x0, x27                         /* a pool GET: a stream of the pool */
+68: mov     x0, x27                         /* a pool GET: a stream of the pool; getAggregatedAttestationV2 with none 404 */
     mov     x1, x25
     mov     x2, x21
     mov     x3, x26
     bl      node_api_pool_stream
-    b       90f
+    cbz     x0, 90f
+    mov     x2, x0
+    b       80f
 60: mov     x0, x27                         /* a pool POST: a work checks its operations */
     mov     x1, x25
     mov     x2, x21
@@ -5212,7 +5216,39 @@ LOCAL_FUNCTION node_api_chunk_done
     b       3f
 5:  bl      node_api_pool_advance
 3:  ldr     x25, [x22, #NodeApi_flags]
-1:  ldr     x9, [x21, #(NodeEvent_api_bytes + 16)]  /* the chunk in a SEND */
+1:  tbz     x25, #15, 11f                   /* API_STREAM_FOLD: no send, and the next chunk at once */
+    tbnz    x25, #10, 11f                   /* the error that ends it goes */
+    ldr     x9, [x22, #NodeApi_data]
+    cbnz    x9, 12f                         /* a fold */
+    ldr     x9, [x21, #(NodeEvent_api_bytes + 16)]
+    cbnz    x9, 14f                         /* the Attestation's bytes */
+    ldr     x9, [x22, #(NodeApi_cursor + 32)]   /* the fold's end: optimistic for a NOT_VALIDATED block */
+    cbz     x9, 12f
+    add     x0, x22, #(NodeApi_cursor + 48 + 16)
+    bl      node_store_find
+    cmn     x0, #1
+    b.eq    12f
+    ldr     x9, [x1, #BlockNode_payload_status]
+    cmp     x9, #PAYLOAD_STATUS_NOT_VALIDATED
+    b.ne    12f
+    orr     x25, x25, #API_STREAM_OPTIMISTIC
+    str     x25, [x22, #NodeApi_flags]
+    b       12f
+14: add     x0, x21, #NodeEvent_api_bytes   /* they become the stream's own data; the answer from sent 0 */
+    bl      node_put
+    str     x0, [x22, #NodeApi_data]
+    and     x25, x25, #~API_STREAM_FOLD
+    orr     x25, x25, #API_STREAM_OWN
+    str     x25, [x22, #NodeApi_flags]
+    str     xzr, [x22, #NodeApi_sent]
+    add     x0, x22, #NodeApi_cursor
+    mov     x1, #JSON_CURSOR_SIZE
+    bl      lantern_zero
+12: ldr     x0, [x21, #NodeAction_arg]
+    mov     x1, x22
+    bl      node_api_chunk_work
+    b       99f
+11: ldr     x9, [x21, #(NodeEvent_api_bytes + 16)]  /* the chunk in a SEND */
     add     x1, x9, #(56 + 7)
     and     x1, x1, #~7
     mov     x0, #NODE_ACT_API_SEND
@@ -5303,6 +5339,8 @@ LOCAL_FUNCTION api_stream_head
     b.eq    21f
     cmp     x9, #API_OP_GET_POOL_ATTESTATIONS_V2
     b.eq    21f
+    cmp     x9, #API_OP_GET_AGGREGATED_ATTESTATION_V2
+    b.eq    21f
     cmp     x9, #API_OP_GET_BLOB_SIDECARS
     b.eq    21f
     cmp     x9, #API_OP_GET_DEBUG_DATA_COLUMN_SIDECARS
@@ -5392,6 +5430,8 @@ LOCAL_FUNCTION api_stream_json
     UNFRAME 0
 31: cmp     x9, #API_OP_GET_BLOCK_V2
     b.eq    1f
+    cmp     x9, #API_OP_GET_AGGREGATED_ATTESTATION_V2
+    b.eq    1f
     cmp     x9, #API_OP_GET_BLOCK_ATTESTATIONS_V2
     b.eq    1f
     cmp     x9, #API_OP_GET_BLINDED_BLOCK
@@ -5419,6 +5459,9 @@ LOCAL_FUNCTION api_stream_json
     csel    x0, x10, x0, eq
     cmp     x9, #API_OP_GET_BLINDED_BLOCK
     mov     x10, #NODE_JSON_BLINDED_BLOCK
+    csel    x0, x10, x0, eq
+    cmp     x9, #API_OP_GET_AGGREGATED_ATTESTATION_V2
+    mov     x10, #NODE_JSON_ATTESTATION
     csel    x0, x10, x0, eq
     mov     x1, x21
     add     x2, x23, #(NodeEvent_api + 16)
@@ -5485,6 +5528,9 @@ LOCAL_FUNCTION node_api_chunk_run
     b.eq    2f
     cmp     x10, #API_OP_GET_POOL_BLS_TO_EXECUTION_CHANGES
     b.eq    2f
+    mov     x9, #7                          /* getAggregatedAttestationV2 (7): its fold, then its answer */
+    cmp     x10, #API_OP_GET_AGGREGATED_ATTESTATION_V2
+    b.eq    2f
     mov     x9, #6                          /* a sidecar stream (6): data 0 at its end */
     cmp     x10, #API_OP_GET_BLOB_SIDECARS
     b.eq    2f
@@ -5530,6 +5576,8 @@ LOCAL_FUNCTION node_api_chunk_run
     cbz     x12, 3f
     cmp     x12, #3
     b.eq    3f
+    cmp     x12, #7
+    b.eq    3f
     mov     x11, #NODE_API_FIRST_ROOM
 3:  cmp     x10, x11
     b.lo    97f
@@ -5543,6 +5591,8 @@ LOCAL_FUNCTION node_api_chunk_run
     cmp     x9, #5
     b.eq    5f
     cmp     x9, #6
+    b.eq    5f
+    cmp     x9, #7
     b.eq    5f
     ldr     x11, [x20, #NODE_STATE_SLOT]    /* the state at the entry's slot */
     ldr     x12, [x22, #NodeApi_slot]
@@ -5654,6 +5704,8 @@ LOCAL_FUNCTION node_api_chunk_run
     b.eq    68f
     cmp     x9, #6
     b.eq    6f
+    cmp     x9, #7
+    b.eq    69f
     ldr     x0, [sp, #(L + 48)]
     cmp     x9, #2
     b.eq    63f
@@ -5675,6 +5727,36 @@ LOCAL_FUNCTION node_api_chunk_run
     b.eq    96f
     b.hi    97f
     mov     x21, x1
+    b       6f
+69: ldr     x9, [x23, #(NodeEvent_api + 8)] /* getAggregatedAttestationV2 */
+    tbz     x9, #15, 693f
+    cbz     x21, 691f
+    ldr     x0, [sp, #(L + 48)]             /* a fold of the entry: no bytes */
+    bl      node_api_fold
+    cmp     x0, #1
+    b.eq    96f
+    b.hi    97f
+    ldr     x9, [x23, #(NodeEvent_api + 8)]
+    orr     x9, x9, #API_STREAM_ITEM_DONE
+    str     x9, [x23, #(NodeEvent_api + 8)]
+    b       80f
+691: mov    x10, #404                       /* the fold's end: none 404, optimistic 503, else the Attestation's bytes */
+    ldr     x11, [x23, #(NodeEvent_api + 16 + 32)]
+    cbz     x11, 692f
+    mov     x10, #503
+    tbnz    x9, #8, 692f
+    mov     x0, x28
+    bl      node_api_aggregate
+    cbnz    x0, 96f
+    add     x24, x28, x1
+    b       80f
+692: str    x10, [sp, #(L + 32)]
+    b       641f
+693: cbz    x21, 96f                        /* the answer: from the Attestation's bytes */
+    ldr     x9, [x21, #8]
+    add     x9, x21, x9
+    ldr     x10, [x21, #16]
+    stp     x9, x10, [sp, #(L + 8)]
     b       6f
 67: mov     x0, x20                         /* a pending stream: its items; for SSZ their bytes and their count */
     ldr     x9, [x22, #NodeApi_op]
@@ -5753,7 +5835,9 @@ LOCAL_FUNCTION node_api_chunk_run
     b.eq    64f
     cbnz    x0, 97f
     b       6f
-64: add     x1, x23, #NodeEvent_api_bytes   /* an index past the count: the error 400 is the answer */
+64: mov     x9, #400                        /* an index past the count: the error 400 is the answer */
+    str     x9, [sp, #(L + 32)]
+641: add    x1, x23, #NodeEvent_api_bytes   /* the error of L + 32 is the answer */
     ldr     x9, [sp, #L]
     sub     x9, x9, x1
     str     x9, [x1]
@@ -5764,7 +5848,7 @@ LOCAL_FUNCTION node_api_chunk_run
     mov     x10, #API_R_KEEP
     csel    x4, x10, xzr, ne
 65: mov     x0, #0
-    mov     x2, #400
+    ldr     x2, [sp, #(L + 32)]
     mov     x3, #API_BODY_ERROR
     bl      api_respond
     cbnz    x0, 97f
@@ -5781,6 +5865,8 @@ LOCAL_FUNCTION node_api_chunk_run
     cmp     x10, #6                         /* a sidecar stream: SSZ as a JSON answer */
     b.eq    30f
     cmp     x10, #4                         /* a pending stream: its SSZ bytes as getStateV2's */
+    b.eq    601f
+    cmp     x10, #7                         /* getAggregatedAttestationV2: the Attestation's SSZ bytes */
     b.eq    601f
     cbnz    x10, 60f
 601: tbnz   x9, #6, 11f                     /* SSZ: the head first, with Content-Length */
@@ -5833,7 +5919,14 @@ LOCAL_FUNCTION node_api_chunk_run
     b       392f
 393: cmp    x9, #4
     b.eq    392f
-    cmp     x9, #3
+    cmp     x9, #7                          /* getAggregatedAttestationV2: {"version":"<fork>","data": */
+    b.ne    394f
+    API_LIT api_j_version
+    ldr     x0, [x22, #NodeApi_fork]
+    bl      api_fork_name
+    API_LIT api_g_data
+    b       36f
+394: cmp    x9, #3
     b.ne    37f                             /* getBlockHeaders: as the validator streams */
     ldr     x9, [x22, #NodeApi_op]          /* a pool stream: {"data":[, the V2 GETs {"version":"<fork>","data":[ */
     cmp     x9, #API_OP_GET_POOL_ATTESTER_SLASHINGS_V2
@@ -6158,6 +6251,8 @@ LOCAL_FUNCTION node_pool_next
     mov     x9, #GOSSIP_BEACON_ATTESTATION
     cmp     x10, #API_OP_GET_POOL_ATTESTATIONS_V2
     b.eq    1f
+    cmp     x10, #API_OP_GET_AGGREGATED_ATTESTATION_V2
+    b.eq    1f
     mov     x9, #GOSSIP_BLS_TO_EXECUTION_CHANGE
 1:  ldr     x13, [x1, #NodeApi_filter_slot]
     ldr     x14, [x1, #NodeApi_filter_index]
@@ -6230,8 +6325,22 @@ LOCAL_FUNCTION node_api_pool_stream
     mov     x12, #-1                        /* the filters: getPoolAttestationsV2's slot and committee_index */
     mov     x13, #-1
     cmp     x11, #API_OP_GET_POOL_ATTESTATIONS_V2
+    b.eq    21f
+    cmp     x11, #API_OP_GET_AGGREGATED_ATTESTATION_V2
     b.ne    2f
-    ldr     x9, [x10, #ApiRoute_present]
+    ldr     x9, [x1, #NodeApi_flags]        /* getAggregatedAttestationV2: a fold, SSZ, attestation_data_root in cursor */
+    orr     x9, x9, #API_STREAM_FOLD
+    ldr     x14, [x10, #ApiRoute_response]
+    cmp     x14, #API_TYPE_SSZ
+    orr     x14, x9, #API_STREAM_SSZ
+    csel    x9, x14, x9, eq
+    str     x9, [x1, #NodeApi_flags]
+    add     x14, x10, #ApiRoute_root
+    ldp     x15, x9, [x14]
+    stp     x15, x9, [x1, #NodeApi_cursor]
+    ldp     x15, x9, [x14, #16]
+    stp     x15, x9, [x1, #(NodeApi_cursor + 16)]
+21: ldr     x9, [x10, #ApiRoute_present]
     ldr     x14, [x10, #ApiRoute_slot]
     tst     x9, #(1 << API_PARAM_SLOT)
     csel    x12, x14, x12, ne
@@ -6252,8 +6361,16 @@ LOCAL_FUNCTION node_api_pool_stream
     str     x10, [x9, #NodeApi_sent]
     ldr     x10, [x1, #NodePool_member]
     str     x10, [x9, #NodeApi_member]
-1:  ldp     x0, x1, [sp, #48]
+3:  ldp     x0, x1, [sp, #48]
     bl      node_api_chunk_work
+    mov     x0, #0
+    UNFRAME 48
+1:  ldr     x10, [x9, #NodeApi_op]          /* none: getAggregatedAttestationV2 404, and no stream */
+    cmp     x10, #API_OP_GET_AGGREGATED_ATTESTATION_V2
+    b.ne    3b
+    mov     x0, x9
+    bl      node_api_end
+    mov     x0, #404
     UNFRAME 48
 END_FUNCTION node_api_pool_stream
 
@@ -6724,10 +6841,11 @@ LOCAL_FUNCTION node_api_pool_advance
     ldr     x10, [x9, #NodeApi_flags]
     and     x10, x10, #~API_STREAM_OWN
     str     x10, [x9, #NodeApi_flags]
+    tbnz    x10, #15, 2f                    /* API_STREAM_FOLD: the cursor holds the aggregate */
     add     x0, x9, #NodeApi_cursor
     mov     x1, #JSON_CURSOR_SIZE
     bl      lantern_zero
-    ldr     x10, [sp, #32]
+2:  ldr     x10, [sp, #32]
     tbz     x10, #3, 9f                     /* API_STREAM_OWN: the old bytes go */
     mov     x0, #NODE_ACT_BYTES_FREE
     ldr     x1, [sp, #24]
@@ -6793,6 +6911,225 @@ LOCAL_FUNCTION api_pool_json
 7:  mov     x0, #2
     UNFRAME 0
 END_FUNCTION api_pool_json
+
+/*
+ * L1: (scratch x0) -> x0: the pool entry's bytes x21 folded into the aggregate in the cursor at
+ * NodeEvent_api + 16 of the event x23 (node.md, getAggregatedAttestationV2), x22 the entry: of the
+ * fork in sent a SingleAttestation (place and length from member) or an Attestation (place its bit,
+ * length that of its bits); with data of the root at byte 0, a place not taken, and the length of
+ * the aggregate, its bit at byte 272 and its signature added at byte 176 by crypto_bls_aggregate;
+ * the first gives the length (40), data (48) and signature; byte 32 counts them. x0 = 0; 1 for
+ * bytes that are no attestation or a signature crypto_bls_aggregate rejects; 2 for a short scratch.
+ * Locals: scratch, data, signature, length, place, the root (then the list).
+ */
+LOCAL_FUNCTION node_api_fold
+    FRAME 80
+    str     x0, [sp, #16]
+    ldr     x9, [x21, #8]
+    add     x9, x21, x9                     /* the bytes and their count */
+    ldr     x10, [x21, #16]
+    ldr     x11, [x22, #NodeApi_sent]
+    cmp     x11, #FORK_ELECTRA
+    b.lo    1f
+    cmp     x10, #240                       /* a SingleAttestation: data at 16, signature at 144 */
+    b.ne    71f
+    add     x12, x9, #16
+    add     x13, x9, #144
+    ldr     x14, [x22, #NodeApi_member]
+    and     x15, x14, #0xffff
+    lsr     x14, x14, #16
+    b       3f
+1:  cmp     x10, #(228 + 1)                 /* an Attestation: offset 228, data at 4, signature at 132, its bits */
+    b.lo    71f
+    MOVQ    x11, 228 + MAX_VALIDATORS_PER_COMMITTEE / 8 + 1
+    cmp     x10, x11
+    b.hi    71f
+    ldr     w11, [x9]
+    cmp     x11, #228
+    b.ne    71f
+    add     x12, x9, #4
+    add     x13, x9, #132
+    add     x1, x9, #228
+    sub     x2, x10, #229                   /* the last byte: its highest bit is the length's */
+    ldrb    w3, [x1, x2]
+    cbz     w3, 71f
+    clz     w3, w3
+    mov     w4, #31
+    sub     w3, w4, w3
+    add     x14, x3, x2, lsl #3
+    mov     x15, #0                         /* the place: the first bit set */
+2:  cmp     x15, x14
+    b.hs    71f
+    lsr     x3, x15, #3
+    ldrb    w3, [x1, x3]
+    and     x4, x15, #7
+    lsr     w3, w3, w4
+    tbnz    w3, #0, 3f
+    add     x15, x15, #1
+    b       2b
+3:  MOVQ    x9, MAX_VALIDATORS_PER_COMMITTEE
+    cmp     x14, x9
+    b.hi    71f
+    cmp     x15, x14
+    b.hs    71f
+    stp     x12, x13, [sp, #24]
+    stp     x14, x15, [sp, #40]
+    mov     x0, x12                         /* the root of its data: that of the cursor, else not in the aggregate */
+    ldr     x1, [sp, #16]
+    add     x2, sp, #56
+    ldr     x15, [x22, #NodeApi_fork]
+    FORK_CALL node_data_root
+    cmp     x0, #LANTERN_BUFFER_TOO_SMALL
+    b.eq    72f
+    cbnz    x0, 71f
+    add     x9, x23, #(NodeEvent_api + 16)
+    ldp     x10, x11, [sp, #56]
+    ldp     x12, x13, [x9]
+    cmp     x10, x12
+    ccmp    x11, x13, #0, eq
+    b.ne    70f
+    ldp     x10, x11, [sp, #72]
+    ldp     x12, x13, [x9, #16]
+    cmp     x10, x12
+    ccmp    x11, x13, #0, eq
+    b.ne    70f
+    ldp     x14, x15, [sp, #40]
+    ldr     x10, [x9, #32]
+    cbnz    x10, 4f
+    str     x14, [x9, #40]                  /* the first: its length, data and signature */
+    add     x0, x9, #48
+    ldr     x1, [sp, #24]
+    mov     x2, #128
+    bl      lantern_copy
+    add     x0, x23, #(NodeEvent_api + 16 + 176)
+    ldr     x1, [sp, #32]
+    mov     x2, #96
+    bl      lantern_copy
+    b       6f
+4:  ldr     x11, [x9, #40]                  /* a later one: the same length, a place not taken */
+    cmp     x11, x14
+    b.ne    70f
+    add     x11, x9, #272
+    lsr     x12, x15, #3
+    ldrb    w12, [x11, x12]
+    and     x13, x15, #7
+    lsr     w12, w12, w13
+    tbnz    w12, #0, 70f
+    ldr     x0, [sp, #16]                   /* the two signatures: a BlsSignatureList at the end of scratch */
+    ldr     x10, [x0]
+    cmp     x10, #(24 + 2 * 96 + 8)
+    b.lo    72f
+    sub     x10, x10, #(24 + 2 * 96)
+    and     x10, x10, #~7
+    add     x10, x0, x10
+    str     x10, [sp, #56]
+    mov     x11, #(24 + 2 * 96)
+    mov     x12, #24
+    stp     x11, x12, [x10]
+    mov     x11, #2
+    str     x11, [x10, #16]
+    add     x0, x10, #24
+    add     x1, x23, #(NodeEvent_api + 16 + 176)
+    mov     x2, #96
+    bl      lantern_copy
+    ldr     x10, [sp, #56]
+    add     x0, x10, #(24 + 96)
+    ldr     x1, [sp, #32]
+    mov     x2, #96
+    bl      lantern_copy
+    ldr     x0, [sp, #56]
+    add     x1, x23, #(NodeEvent_api + 16 + 176)
+    CALL_GLOBAL crypto_bls_aggregate
+    cbnz    x0, 71f
+6:  add     x9, x23, #(NodeEvent_api + 16)  /* its place's bit; one more */
+    ldr     x15, [sp, #48]
+    add     x11, x9, #272
+    lsr     x12, x15, #3
+    ldrb    w13, [x11, x12]
+    and     x14, x15, #7
+    mov     x10, #1
+    lsl     x10, x10, x14
+    orr     w13, w13, w10
+    strb    w13, [x11, x12]
+    ldr     x10, [x9, #32]
+    add     x10, x10, #1
+    str     x10, [x9, #32]
+70: mov     x0, #0
+    UNFRAME 80
+71: mov     x0, #1
+    UNFRAME 80
+72: mov     x0, #2
+    UNFRAME 80
+END_FUNCTION node_api_fold
+.if MAX_VALIDATORS_PER_COMMITTEE > 2048 || 48 + 128 + 96 + 2048 / 8 > JSON_CURSOR_SIZE
+.error "node_api_fold: the aggregate's bits fit the cursor from byte 272"
+.endif
+
+/*
+ * L1: (out x0) -> x0: the aggregate in the cursor at NodeEvent_api + 16 of the event x23 as the
+ * SSZ bytes of the Attestation of the fork of the entry x22 at out, x1 their count (node.md,
+ * getAggregatedAttestationV2): aggregation_bits of the cursor's length with its bits, data,
+ * signature; from electra committee_bits with the bit of filter_index. x0 = 0; 1 for a committee
+ * index not below MAX_COMMITTEES_PER_SLOT. Locals: out, the fixed part's size, the count.
+ */
+LOCAL_FUNCTION node_api_aggregate
+    FRAME 32
+    str     x0, [sp, #16]
+    mov     x9, #228                        /* the fixed part: 228 bytes, from electra with committee_bits */
+    ldr     x10, [x22, #NodeApi_fork]
+    cmp     x10, #FORK_ELECTRA
+    mov     x11, #NODE_POOL_ATTESTATION_FIXED
+    csel    x9, x11, x9, hs
+    ldr     x13, [x23, #(NodeEvent_api + 16 + 40)]  /* the bits' bytes, with the length's bit */
+    lsr     x14, x13, #3
+    add     x14, x14, #1
+    add     x10, x9, x14
+    stp     x9, x10, [sp, #24]
+    mov     x1, x10
+    bl      lantern_zero
+    ldp     x0, x9, [sp, #16]
+    str     w9, [x0]                        /* the offset of aggregation_bits, data and signature */
+    add     x0, x0, #4
+    add     x1, x23, #(NodeEvent_api + 16 + 48)
+    mov     x2, #(128 + 96)
+    bl      lantern_copy
+    ldp     x15, x9, [sp, #16]
+    cmp     x9, #228
+    b.eq    1f
+    ldr     x10, [x22, #NodeApi_filter_index]   /* committee_bits */
+    cmp     x10, #MAX_COMMITTEES_PER_SLOT
+    b.hs    71f
+    add     x11, x15, #228
+    lsr     x12, x10, #3
+    and     x13, x10, #7
+    mov     x14, #1
+    lsl     x14, x14, x13
+    strb    w14, [x11, x12]
+1:  add     x0, x15, x9                     /* the bits, then the length's bit */
+    add     x1, x23, #(NodeEvent_api + 16 + 272)
+    ldr     x13, [x23, #(NodeEvent_api + 16 + 40)]
+    add     x2, x13, #7
+    lsr     x2, x2, #3
+    bl      lantern_copy
+    ldp     x15, x9, [sp, #16]
+    add     x11, x15, x9
+    ldr     x13, [x23, #(NodeEvent_api + 16 + 40)]
+    lsr     x12, x13, #3
+    and     x13, x13, #7
+    mov     x14, #1
+    lsl     x14, x14, x13
+    ldrb    w10, [x11, x12]
+    orr     w10, w10, w14
+    strb    w10, [x11, x12]
+    ldr     x1, [sp, #32]
+    mov     x0, #0
+    UNFRAME 32
+71: mov     x0, #1
+    UNFRAME 32
+END_FUNCTION node_api_aggregate
+.if NODE_API_FIRST_ROOM < API_HEAD_ROOM + NODE_POOL_ATTESTATION_FIXED + MAX_VALIDATORS_PER_COMMITTEE / 8 + 1
+.error "node_api_aggregate: an Attestation of one committee fits the first chunk"
+.endif
 
 /*
  * L1: the failures of the event x22 of a NODE_WORK_API_SUBMIT: {"index":<i>,"message":"REJECT"}

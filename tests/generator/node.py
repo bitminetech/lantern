@@ -1254,6 +1254,43 @@ def pool_requests(spec, fork, v, by_name, add):
         items = [a[2] for a in atts if (slot is None or a[0] == slot) and (index is None or a[1] == index)]
         add(f"pool_get_attestations_{name}", api_route.base(by_name["getPoolAttestationsV2"], query),
             want=listing(items, store_fork))
+    # getAggregatedAttestationV2: the aggregate of the first attestation's data in pool order, a place
+    # once, as JSON (HTTP/1.1 and 1.0) and SSZ; 404 for a root of no data and for a slot of none
+    agg_op = by_name["getAggregatedAttestationV2"]
+    first = atts[0][2]
+    data_root = spec.hash_tree_root(first.data)
+    length = len(first.aggregation_bits)
+    bits, sigs = spec.AggregationBits(data=[False] * length), []
+    for a_slot, a_index, a in atts:
+        if a_slot != first_slot or a_index != first_index or spec.hash_tree_root(a.data) != data_root:
+            continue
+        place = next(i for i, b in enumerate(a.aggregation_bits) if b)
+        if len(a.aggregation_bits) != length or bits[place]:
+            continue
+        bits[place] = True
+        sigs.append(a.signature)
+    if len(sigs) < 2:
+        raise RuntimeError("aggregate: the cases need two attestations of one data")
+    agg = spec.Attestation(aggregation_bits=bits, data=first.data, signature=bls.Aggregate(sigs))
+    if electra:
+        agg.committee_bits[first_index] = True
+    agg_body = b'{"version":"' + store_fork.encode() + b'","data":' + to_json(agg).encode() + b"}"
+
+    def agg_request(root, slot, index, accept=b""):
+        query = b"attestation_data_root=0x" + bytes(root).hex().encode() + b"&slot=%d&committee_index=%d" % (slot, index)
+        return api_route.request(agg_op["method"], api_route.fill(agg_op), query, accept=accept)
+    for http in (b"HTTP/1.1", b"HTTP/1.0"):
+        add(f"aggregate_{http.decode()[5:]}", agg_request(data_root, first_slot, first_index), version=http,
+            want=lambda c, k: streamed(store_fork, agg_body, close=c, keep_alive=k))
+    add("aggregate_ssz", agg_request(data_root, first_slot, first_index, accept=b"application/octet-stream"),
+        want=lambda c, k: streamed(store_fork, bytes(agg.encode_bytes()), ssz=True, close=c, keep_alive=k))
+    add("aggregate_other_root", agg_request(b"\x07" * 32, first_slot, first_index),
+        want=lambda c, k: error(404, close=c, keep_alive=k))
+    add("aggregate_other_slot", agg_request(data_root, first_slot + 1000, first_index),
+        want=lambda c, k: error(404, close=c, keep_alive=k))
+    # with the store's nodes NOT_VALIDATED (syncing bit 1): the aggregate's beacon_block_root, 503
+    add("aggregate_not_validated", agg_request(data_root, first_slot, first_index), syncing=2,
+        want=lambda c, k: error(503, close=c, keep_alive=k))
 
 
 def api_requests(spec, fork, v, kind="main"):
@@ -1289,6 +1326,8 @@ def api_requests(spec, fork, v, kind="main"):
                 want = streamed(pool_version, body, close=close, keep_alive=keep_alive)
             elif opname in POOL_POSTS and not req["body"]:  # a body of no operation
                 want = error(400, close=close, keep_alive=keep_alive)
+            elif opname == "getAggregatedAttestationV2":  # an empty pool: none
+                want = error(404, close=close, keep_alive=keep_alive)
             elif opname in ANSWERED:
                 want = answer(v, opname, route, offline, close, keep_alive, syncing)
             else:
@@ -1541,8 +1580,8 @@ def api_cases(fork, preset, epoch=ANCHOR_EPOCH):
     at another epoch, those of getEpochCommittees at its lowest epochs alone."""
     spec = module(fork, preset)
     # the late case's pool requests need committee members in the slots after the anchor's: about
-    # 4 a slot, which the mainnet preset's 32 slots an epoch take more validators for
-    extra = max(0, 4 * int(spec.SLOTS_PER_EPOCH) - 32) if epoch not in (ANCHOR_EPOCH, 0) else 0
+    # 4 a slot after the 8 first validators, so that a committee has two attestations of one data
+    extra = 4 * int(spec.SLOTS_PER_EPOCH) - 8 if epoch not in (ANCHOR_EPOCH, 0) else 0
     state, block = run(spec, schedule(fork), lambda: anchor(spec, fork, statuses=True, epoch=epoch, extra=extra))
     v = run(spec, schedule(fork), lambda: api_values(spec, fork, state, block))
     v["config_bodies"] = config_bodies(fork, preset)
@@ -1561,7 +1600,7 @@ def api_cases(fork, preset, epoch=ANCHOR_EPOCH):
         wants.append(want)
         closes.append(1 if close and not stream else 0)
         offline.append(off)
-        syncing.append(1 if sync else 0)
+        syncing.append(int(sync))  # bit 0 NODE_FLAG_SYNCING, bit 1 the store's nodes NOT_VALIDATED
         streams.append(1 if stream else 0)
     for name, raw, status in http_faults() if epoch == ANCHOR_EPOCH else []:
         names.append(name.encode())
