@@ -90,6 +90,34 @@ def engine_result_types(spec, fork):
     return t
 
 
+def produce_types(spec, fork):
+    """Lantern's containers of block production (node.md, produceBlockV3), by name: ProduceDraft,
+    the body draft of the pool's entries, and from deneb BlockContents, the block with the
+    bundle's proofs and blobs."""
+    f = FORKS.index(fork)
+
+    def limited(name, base, limit):
+        return type(name, (base,), {"LIMIT": int(limit), "__module__": spec.__name__})
+    electra = f >= FORKS.index("electra")
+    fields = [("proposer_slashings", limited("ProposerSlashings", List[spec.ProposerSlashing], spec.MAX_PROPOSER_SLASHINGS)),
+              ("attester_slashings", limited("AttesterSlashings", List[spec.AttesterSlashing],
+                                             spec.MAX_ATTESTER_SLASHINGS_ELECTRA if electra else spec.MAX_ATTESTER_SLASHINGS)),
+              ("attestations", limited("DraftAttestations", List[spec.Attestation],
+                                       int(spec.MAX_COMMITTEES_PER_SLOT) * int(spec.SLOTS_PER_EPOCH))),
+              ("voluntary_exits", limited("VoluntaryExits", List[spec.SignedVoluntaryExit], spec.MAX_VOLUNTARY_EXITS))]
+    if f >= FORKS.index("altair"):
+        fields.append(("sync_aggregate", spec.SyncAggregate))
+    if f >= FORKS.index("capella"):
+        fields.append(("bls_to_execution_changes", limited("BLSToExecutionChanges", List[spec.SignedBLSToExecutionChange],
+                                                           spec.MAX_BLS_TO_EXECUTION_CHANGES)))
+    t = {"ProduceDraft": container(spec, "ProduceDraft", fields)}
+    if f >= FORKS.index("deneb"):
+        bundle = engine_result_types(spec, fork)["BlobsBundle"].__annotations__
+        t["BlockContents"] = container(spec, "BlockContents", [("block", spec.BeaconBlock), ("kzg_proofs", bundle["proofs"]),
+                                                               ("blobs", bundle["blobs"])])
+    return t
+
+
 def message_types(spec, fork):
     """The req/resp message types of the fork, by name."""
     f = FORKS.index(fork)

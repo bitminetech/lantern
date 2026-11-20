@@ -21,6 +21,11 @@
  * list, or its first field record for a container.
  */
 .macro SSZ_NODES m
+    .if FORK >= FORK_DENEB
+    \m BlockContents, F_BlockContents
+    .endif
+    \m ProduceDraft, F_ProduceDraft
+    \m DraftAttestations, N_Attestation
     \m SignedBeaconBlock, F_SignedBeaconBlock
     \m BeaconBlock, F_BeaconBlock
     \m BeaconBlockBody, F_BeaconBlockBody
@@ -493,7 +498,9 @@
     \m Uint64
     .if FORK >= FORK_DENEB
     \m BlobKZGCommitments
+    \m BlockContents
     .endif
+    \m ProduceDraft
 .endm
 
 /* ------------------------------------------------------------ Plan: node, field and header indices */
