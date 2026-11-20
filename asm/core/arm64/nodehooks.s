@@ -654,6 +654,14 @@ LOCAL_FUNCTION node_type_of_kind
     cmp     x9, #NODE_JSON_BLS_CHANGE
     b.eq    9f
 .endif
+    ADDRESS x0, lantern_type_Attestation
+    cmp     x9, #NODE_JSON_ATTESTATION
+    b.eq    9f
+.if FORK >= FORK_ELECTRA
+    ADDRESS x0, lantern_type_SingleAttestation
+    cmp     x9, #NODE_JSON_SINGLE_ATTESTATION
+    b.eq    9f
+.endif
     mov     x0, #0
 9:  ret
 END_FUNCTION node_type_of_kind

@@ -4617,6 +4617,9 @@ LOCAL_FUNCTION node_submit_topic
     mov     x0, #GOSSIP_BLS_TO_EXECUTION_CHANGE
     cmp     x9, #API_OP_SUBMIT_POOL_BLS_TO_EXECUTION_CHANGE
     b.eq    9f
+    mov     x0, #GOSSIP_BEACON_ATTESTATION
+    cmp     x9, #API_OP_SUBMIT_POOL_ATTESTATIONS_V2
+    b.eq    9f
     mov     x0, #0
 9:  ret
 END_FUNCTION node_submit_topic
@@ -4844,9 +4847,9 @@ LOCAL_FUNCTION api_failures
     ldr     x12, [sp, #32]
     add     x12, x12, #1
     str     x12, [sp, #32]
-3:  ldr     x9, [sp, #16]                   /* the next record: its code, then its ByteList */
-    ldr     x12, [x9, #8]
-    add     x9, x9, #8
+3:  ldr     x9, [sp, #16]                   /* the next record: its code, its subnet, then its ByteList */
+    ldr     x12, [x9, #16]
+    add     x9, x9, #16
     add     x9, x9, x12
     str     x9, [sp, #16]
     ldr     x10, [sp, #24]
@@ -4867,8 +4870,15 @@ LOCAL_FUNCTION node_api_submit
     FRAME 80
     stp     x0, x2, [sp, #16]
     stp     x1, x4, [sp, #32]
-    ldr     x9, [x1, #ApiRoute_op]          /* getPoolAttesterSlashingsV2: the AttesterSlashing type of the store's fork */
+    ldr     x9, [x1, #ApiRoute_body]        /* an SSZ body: an answer flag */
+    cmp     x9, #API_TYPE_SSZ
+    b.ne    11f
+    orr     x2, x2, #API_ANSWER_SSZ
+    str     x2, [sp, #24]
+11: ldr     x9, [x1, #ApiRoute_op]          /* the AttesterSlashing or attestation type of the store's fork */
+    mov     x10, #API_OP_SUBMIT_POOL_ATTESTATIONS_V2
     cmp     x9, #API_OP_SUBMIT_POOL_ATTESTER_SLASHINGS_V2
+    ccmp    x9, x10, #4, ne
     b.ne    1f
     ldr     x10, [x1, #ApiRoute_consensus_version]
     ldr     x11, [x4, #ApiView_fork]
@@ -4937,23 +4947,23 @@ LOCAL_FUNCTION node_submit_check
     ldr     x14, [x0, #NodeEvent_index]
 1:  cbz     x14, 7f
     sub     x15, x13, x12
-    cmp     x15, #32
+    cmp     x15, #40
     b.lo    8f
-    ldp     x9, x10, [x12, #8]              /* size, offset */
+    ldp     x9, x10, [x12, #16]             /* size, offset of its ByteList after the code and the subnet */
     cmp     x10, #24
     b.ne    8f
     cmp     x9, #24
     b.lo    8f
     tst     x9, #7
     b.ne    8f
-    sub     x15, x15, #8
+    sub     x15, x15, #16
     cmp     x9, x15
     b.hi    8f
-    ldr     x10, [x12, #24]
+    ldr     x10, [x12, #32]
     sub     x15, x9, #24
     cmp     x10, x15
     b.hi    8f
-    add     x12, x12, #8
+    add     x12, x12, #16
     add     x12, x12, x9
     sub     x14, x14, #1
     b       1b
@@ -5002,12 +5012,21 @@ LOCAL_FUNCTION node_api_submit_done
     cmp     x9, #LANTERN_GOSSIP_REJECT
     cinc    x25, x25, eq
     cbnz    x9, 6f
-    add     x0, x22, #8                     /* valid: its bytes to a new id, kept by the pool when it has room */
+    cmp     x26, #GOSSIP_BEACON_ATTESTATION /* a valid attestation: out on its subnet, no pool */
+    b.ne    21f
+    ldr     x9, [x19, #Node_flags]
+    tbz     x9, #2, 6f
+    mov     x0, x26
+    add     x1, x22, #16
+    ldr     x2, [x22, #8]
+    bl      node_publish
+    b       6f
+21: add     x0, x22, #16                    /* valid: its bytes to a new id, kept by the pool when it has room */
     bl      node_put
     mov     x27, x0
     mov     x0, x26
     mov     x1, x27
-    ldr     x2, [x22, #24]
+    ldr     x2, [x22, #32]
     ldr     x3, [x21, #NodeAction_arg]
     lsr     x3, x3, #16
     bl      node_pool_add
@@ -5015,7 +5034,8 @@ LOCAL_FUNCTION node_api_submit_done
     ldr     x9, [x19, #Node_flags]
     tbz     x9, #2, 3f                      /* NODE_FLAG_SUBSCRIBED: out on its topic */
     mov     x0, x26
-    add     x1, x22, #8
+    add     x1, x22, #16
+    mov     x2, #0
     bl      node_publish
 3:  cmp     x26, #GOSSIP_ATTESTER_SLASHING  /* an attester slashing: on_attester_slashing with the justified root's state */
     b.ne    4f
@@ -5041,8 +5061,8 @@ LOCAL_FUNCTION node_api_submit_done
     mov     x1, x27
     mov     x2, #0
     bl      node_ids
-6:  ldr     x9, [x22, #8]
-    add     x22, x22, #8
+6:  ldr     x9, [x22, #16]
+    add     x22, x22, #16
     add     x22, x22, x9
     ldr     x9, [sp, #(L + 8)]
     sub     x9, x9, #1
@@ -5050,9 +5070,11 @@ LOCAL_FUNCTION node_api_submit_done
     b       2b
 70: ldr     x0, [x21, #NodeAction_target]   /* the answer: 200, or 400 with the failures */
     cbz     x25, 71f
-    ldr     x9, [x21, #NodeAction_arg]
+    ldr     x9, [x21, #NodeAction_arg]      /* a list: the failures */
     and     x9, x9, #255
+    mov     x10, #API_OP_SUBMIT_POOL_ATTESTATIONS_V2
     cmp     x9, #API_OP_SUBMIT_POOL_BLS_TO_EXECUTION_CHANGE
+    ccmp    x9, x10, #4, ne
     b.ne    80f
     mov     x1, x21
     mov     x2, #400
@@ -5076,7 +5098,7 @@ LOCAL_FUNCTION node_api_submit_done
 END_FUNCTION node_api_submit_done
 
 /*
- * L2: the publish of the SSZ bytes of the ByteList x1 on the gossip topic x0 (node.md, the
+ * L2: the publish of the SSZ bytes of the ByteList x1 on the gossip topic x0 of the subnet x2 (node.md, the
  * publish): a LIBP2P_EVENT_PUBLISH at the end of p2p_out; none when it does not fit. Its data
  * compresses in place, its ByteList head in the 24 bytes before the data. x21 the bytes, x22 the
  * event, x25 the topic's length, x26 the data's offset in the event, x27 the event's room.
@@ -5088,7 +5110,7 @@ LOCAL_FUNCTION node_publish
     mov     x21, x1
     ldr     w9, [x19, #Node_fork_digest]
     str     x9, [sp, #(L + GossipTopic_fork_digest)]
-    stp     x0, xzr, [sp, #(L + GossipTopic_name)]
+    stp     x0, x2, [sp, #(L + GossipTopic_name)]
     mov     x9, #(24 + 128)
     mov     x10, #24
     stp     x9, x10, [sp, #(L + 24)]
@@ -5183,8 +5205,8 @@ END_FUNCTION node_publish
 
 /*
  * L1: (text x0 to x1, kind x2, fork x3, fault x4) -> x0: the JSON text decoded by lantern_node_json_decode
- * into the record at x27 of node_api_submit_run (x24 its scratch, x26 the event's end): code 0,
- * then a ByteList of the SSZ bytes, its size to a multiple of 8; x27 then the next record. x0 = 0,
+ * into the record at x27 of node_api_submit_run (x24 its scratch, x26 the event's end): code and
+ * subnet 0, then a ByteList of the SSZ bytes, its size to a multiple of 8; x27 then the next record. x0 = 0,
  * 1 for a text that is no such value, 2 for too little room. Locals: a ByteList head of the text.
  */
 LOCAL_FUNCTION node_submit_decode
@@ -5194,33 +5216,33 @@ LOCAL_FUNCTION node_submit_decode
     sub     x11, x1, x0
     stp     x11, x10, [x9]
     str     x11, [x9, #16]
-    add     x10, x27, #32
+    add     x10, x27, #40
     cmp     x10, x26
     b.hi    8f
     sub     x10, x26, x27
-    sub     x10, x10, #8
-    str     x10, [x27, #8]
+    sub     x10, x10, #16
+    str     x10, [x27, #16]
     mov     x15, x3
     mov     x0, x2
     mov     x1, x9
     mov     x2, x24
-    add     x3, x27, #8
+    add     x3, x27, #16
     FORK_CALL node_json_decode
     cmp     x0, #LANTERN_BUFFER_TOO_SMALL
     b.eq    8f
     cbnz    x0, 7f
-    ldr     x10, [x27, #24]                 /* its size: the bytes to a multiple of 8, zero after them */
+    ldr     x10, [x27, #32]                 /* its size: the bytes to a multiple of 8, zero after them */
     add     x9, x10, #(24 + 7)
     and     x9, x9, #~7
-    str     x9, [x27, #8]
-    str     xzr, [x27]
-    add     x0, x27, #32
+    str     x9, [x27, #16]
+    stp     xzr, xzr, [x27]
+    add     x0, x27, #40
     add     x0, x0, x10
     sub     x1, x9, #24
     sub     x1, x1, x10
     bl      lantern_zero
-    ldr     x9, [x27, #8]
-    add     x27, x27, #8
+    ldr     x9, [x27, #16]
+    add     x27, x27, #16
     add     x27, x27, x9
     mov     x0, #0
     UNFRAME 32
@@ -5229,6 +5251,42 @@ LOCAL_FUNCTION node_submit_decode
 8:  mov     x0, #2
     UNFRAME 32
 END_FUNCTION node_submit_decode
+
+/*
+ * L1: (bytes x0, length x1) -> x0: the bytes as the record at x27 of node_api_submit_run (x26 the
+ * event's end): code and subnet 0, then a ByteList of them, its size to a multiple of 8; x27 then
+ * the next record. x0 = 0, or 2 for too little room. Locals: the record's size, the length.
+ */
+LOCAL_FUNCTION node_submit_copy
+    FRAME 16
+    add     x9, x1, #(16 + 24 + 7)
+    and     x9, x9, #~7
+    add     x10, x27, x9
+    cmp     x10, x26
+    b.hi    8f
+    stp     x9, x1, [sp, #16]
+    stp     xzr, xzr, [x27]
+    sub     x11, x9, #16
+    mov     x12, #24
+    stp     x11, x12, [x27, #16]
+    str     x1, [x27, #32]
+    mov     x2, x1
+    mov     x1, x0
+    add     x0, x27, #40
+    bl      lantern_copy
+    ldp     x9, x10, [sp, #16]
+    add     x0, x27, #40
+    add     x0, x0, x10
+    sub     x1, x9, #40
+    sub     x1, x1, x10
+    bl      lantern_zero
+    ldr     x9, [sp, #16]
+    add     x27, x27, x9
+    mov     x0, #0
+    UNFRAME 16
+8:  mov     x0, #2
+    UNFRAME 16
+END_FUNCTION node_submit_copy
 
 /*
  * (node x0, store x1, seen x2, work x3, state_a x4, data x5, scratch x6, event x7, room x8) -> status:
@@ -5257,14 +5315,24 @@ LOCAL_FUNCTION node_api_submit_run
     b.hi    98f
     str     x10, [sp, #(L + 24)]
     and     x0, x9, #255
+    mov     x10, #API_OP_SUBMIT_POOL_ATTESTATIONS_V2
     cmp     x0, #API_OP_SUBMIT_POOL_BLS_TO_EXECUTION_CHANGE
+    ccmp    x0, x10, #4, ne
     cset    x9, eq
     str     x9, [sp, #(L + 40)]
     bl      node_submit_topic
     cbz     x0, 98f
     str     x0, [sp, #(L + 16)]
-    bl      node_pool_kind
-    str     x0, [sp, #(L + 8)]
+    cmp     x0, #GOSSIP_BEACON_ATTESTATION  /* an attestation: of the fork's type */
+    b.ne    12f
+    ldr     x9, [sp, #(L + 24)]
+    cmp     x9, #FORK_ELECTRA
+    mov     x0, #NODE_JSON_ATTESTATION
+    mov     x10, #NODE_JSON_SINGLE_ATTESTATION
+    csel    x0, x10, x0, hs
+    b       13f
+12: bl      node_pool_kind
+13: str     x0, [sp, #(L + 8)]
     cbz     x22, 98f
     cbz     x23, 98f
     add     x9, x25, #NodeEvent_chunk       /* the records' ByteList */
@@ -5280,6 +5348,9 @@ LOCAL_FUNCTION node_api_submit_run
     ldp     x9, x10, [x23, #8]              /* the text */
     add     x0, x23, x9
     add     x28, x0, x10
+    ldr     x9, [x21, #NodeAction_arg]      /* an SSZ body: the list's items */
+    ubfx    x9, x9, #8, #8
+    tbnz    x9, #2, 40f
     ldr     x9, [sp, #(L + 40)]
     cbnz    x9, 20f
     mov     x1, x28                         /* one operation: the whole text */
@@ -5293,9 +5364,13 @@ LOCAL_FUNCTION node_api_submit_run
     mov     x9, #1
     str     x9, [sp, #(L + 32)]
     b       30f
-20: ldr     x9, [sp, #(L + 24)]             /* a JSON array, from capella */
+20: ldr     x9, [sp, #(L + 16)]             /* a JSON array; of BLS changes from capella */
+    cmp     x9, #GOSSIP_BLS_TO_EXECUTION_CHANGE
+    b.ne    201f
+    ldr     x9, [sp, #(L + 24)]
     cmp     x9, #FORK_CAPELLA
     b.lo    90f
+201:
     bl      submit_ws
     cmp     x0, x28
     b.hs    90f
@@ -5375,6 +5450,69 @@ LOCAL_FUNCTION node_api_submit_run
 28: bl      submit_ws                       /* then only white space */
     cmp     x0, x28
     b.ne    90f
+    b       30f
+40: sub     x10, x28, x0                    /* SSZ: from electra items of 240 bytes */
+    ldr     x9, [sp, #(L + 24)]
+    cmp     x9, #FORK_ELECTRA
+    b.lo    42f
+    mov     x11, #240
+    udiv    x12, x10, x11
+    msub    x13, x12, x11, x10
+    cbnz    x13, 90f
+    stp     x0, x12, [sp, #(L + 48)]
+41: ldp     x0, x12, [sp, #(L + 48)]
+    cbz     x12, 30f
+    mov     x1, #240
+    bl      node_submit_copy
+    cbnz    x0, 97f
+    ldp     x0, x12, [sp, #(L + 48)]
+    add     x0, x0, #240
+    sub     x12, x12, #1
+    stp     x0, x12, [sp, #(L + 48)]
+    ldr     x9, [sp, #(L + 32)]
+    add     x9, x9, #1
+    str     x9, [sp, #(L + 32)]
+    b       41b
+42: cbz     x10, 30f                        /* before electra: the items of the 4-byte offsets */
+    cmp     x10, #4
+    b.lo    90f
+    ldr     w11, [x0]
+    cbz     x11, 90f
+    tst     x11, #3
+    b.ne    90f
+    cmp     x11, x10
+    b.hi    90f
+    lsr     x12, x11, #2
+    str     x0, [sp, #(L + 48)]
+    str     x12, [sp, #(L + 312)]
+    str     xzr, [sp, #(L + 56)]
+43: ldr     x0, [sp, #(L + 48)]             /* the next item: from its offset to the next, or to the end */
+    ldr     x13, [sp, #(L + 56)]
+    ldr     x12, [sp, #(L + 312)]
+    cmp     x13, x12
+    b.hs    30f
+    ldr     w14, [x0, x13, lsl #2]
+    add     x15, x13, #1
+    sub     x9, x28, x0
+    cmp     x15, x12
+    b.hs    44f
+    ldr     w9, [x0, x15, lsl #2]
+44: cmp     x14, x9
+    b.hi    90f
+    sub     x10, x28, x0
+    cmp     x9, x10
+    b.hi    90f
+    add     x0, x0, x14
+    sub     x1, x9, x14
+    bl      node_submit_copy
+    cbnz    x0, 97f
+    ldr     x13, [sp, #(L + 56)]
+    add     x13, x13, #1
+    str     x13, [sp, #(L + 56)]
+    ldr     x9, [sp, #(L + 32)]
+    add     x9, x9, #1
+    str     x9, [sp, #(L + 32)]
+    b       43b
 30: add     x9, x25, #NodeEvent_chunk       /* the records: their bytes, their count */
     sub     x10, x27, x9
     str     x10, [x9]
@@ -5410,17 +5548,58 @@ LOCAL_FUNCTION node_api_submit_run
     add     x27, x25, #(NodeEvent_chunk + 24)
     ldr     x28, [sp, #(L + 32)]
 31: cbz     x28, 39f
+    str     xzr, [x27, #8]                  /* the subnet: 0, but an attestation's */
+    ldr     x9, [sp, #(L + 16)]
+    cmp     x9, #GOSSIP_BEACON_ATTESTATION
+    b.ne    33f
+    ldr     x10, [x27, #32]
+    add     x11, x27, #40
+    ldr     x12, [sp, #(L + 24)]
+    cmp     x12, #FORK_ELECTRA
+    b.lo    32f
+    cmp     x10, #240                       /* a SingleAttestation: committee_index 0, data.slot 16, data.target.epoch 104 */
+    b.lo    33f
+    ldr     x13, [x11]
+    ldr     x14, [x11, #16]
+    ldr     x9, [x11, #104]
+    b       34f
+32: cmp     x10, #228                       /* an Attestation: data.slot 4, data.index 12, data.target.epoch 92 */
+    b.lo    33f
+    ldur    x14, [x11, #4]
+    ldur    x13, [x11, #12]
+    ldur    x9, [x11, #92]
+34: stp     x13, x14, [sp, #(L + 48)]
+    str     x9, [sp, #(L + 280)]
+    mov     x0, x22
+    add     x1, sp, #(L + 280)
+    LDQ     x2, x19, Node_config + CONFIG_COMMITTEE_CACHE
+    mov     x3, x24
+    add     x4, sp, #(L + 312)
+    ldr     x15, [sp, #(L + 24)]
+    FORK_CALL get_committee_count_per_slot
+    cbnz    x0, 33f
+    ldr     x9, [sp, #(L + 312)]            /* compute_subnet_for_attestation */
+    ldp     x13, x14, [sp, #(L + 48)]
+    and     x14, x14, #(SLOTS_PER_EPOCH - 1)
+    madd    x9, x9, x14, x13
+    LDQ     x10, x19, Node_config + CONFIG_ATTESTATION_SUBNET_COUNT
+    cbz     x10, 33f
+    udiv    x11, x9, x10
+    msub    x9, x11, x10, x9
+    str     x9, [x27, #8]
+33: ldr     x9, [x27, #8]
+    str     x9, [sp, #(L + 64 + NodeGossip_subnet)]
     ldr     x15, [sp, #(L + 24)]
     add     x0, sp, #(L + 64)
-    add     x1, x27, #8
+    add     x1, x27, #16
     mov     x2, x24
     mov     x3, x27
     add     x4, sp, #(L + 280)
     add     x5, sp, #(L + 312)
     FORK_CALL node_gossip
     cbnz    x0, 99f
-    ldr     x9, [x27, #8]
-    add     x27, x27, #8
+    ldr     x9, [x27, #16]
+    add     x27, x27, #16
     add     x27, x27, x9
     sub     x28, x28, #1
     b       31b

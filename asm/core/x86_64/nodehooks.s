@@ -654,6 +654,14 @@ LOCAL_FUNCTION node_type_of_kind
     cmp     $NODE_JSON_BLS_CHANGE, %r10
     je      9f
 .endif
+    ADDRESS %rdi, lantern_type_Attestation
+    cmp     $NODE_JSON_ATTESTATION, %r10
+    je      9f
+.if FORK >= FORK_ELECTRA
+    ADDRESS %rdi, lantern_type_SingleAttestation
+    cmp     $NODE_JSON_SINGLE_ATTESTATION, %r10
+    je      9f
+.endif
     xor     %edi, %edi
 9:  ret
 END_FUNCTION node_type_of_kind

@@ -4704,6 +4704,9 @@ LOCAL_FUNCTION node_submit_topic
     li      a0, GOSSIP_BLS_TO_EXECUTION_CHANGE
     li      t1, API_OP_SUBMIT_POOL_BLS_TO_EXECUTION_CHANGE
     beq     t0, t1, 9f
+    li      a0, GOSSIP_BEACON_ATTESTATION
+    li      t1, API_OP_SUBMIT_POOL_ATTESTATIONS_V2
+    beq     t0, t1, 9f
     li      a0, 0
 9:  ret
 END_FUNCTION node_submit_topic
@@ -4941,9 +4944,9 @@ LOCAL_FUNCTION api_failures
     ld      t0, 16(sp)
     addi    t0, t0, 1
     sd      t0, 16(sp)
-3:  ld      t0, 0(sp)                       # the next record: its code, then its ByteList
-    ld      t1, 8(t0)
-    addi    t0, t0, 8
+3:  ld      t0, 0(sp)                       # the next record: its code, its subnet, then its ByteList
+    ld      t1, 16(t0)
+    addi    t0, t0, 16
     add     t0, t0, t1
     sd      t0, 0(sp)
     ld      t0, 8(sp)
@@ -4966,9 +4969,17 @@ LOCAL_FUNCTION node_api_submit
     sd      a2, 8(sp)
     sd      a1, 16(sp)
     sd      a4, 24(sp)
-    ld      t0, ApiRoute_op(a1)             # submitPoolAttesterSlashingsV2: the AttesterSlashing type of the store's fork
+    ld      t0, ApiRoute_body(a1)           # an SSZ body: an answer flag
+    li      t1, API_TYPE_SSZ
+    bne     t0, t1, 11f
+    ori     a2, a2, API_ANSWER_SSZ
+    sd      a2, 8(sp)
+11: ld      t0, ApiRoute_op(a1)             # the AttesterSlashing or attestation type of the store's fork
+    li      t1, API_OP_SUBMIT_POOL_ATTESTATIONS_V2
+    beq     t0, t1, 12f
     li      t1, API_OP_SUBMIT_POOL_ATTESTER_SLASHINGS_V2
     bne     t0, t1, 1f
+12:
     li      t2, FORK_ELECTRA
     ld      t0, ApiRoute_consensus_version(a1)
     sltu    t0, t0, t2
@@ -5037,21 +5048,21 @@ LOCAL_FUNCTION node_submit_check
     ld      a5, NodeEvent_index(a0)
 1:  beqz    a5, 7f
     sub     a6, a4, a3
-    li      a2, 32
+    li      a2, 40
     bltu    a6, a2, 8f
-    addi    a6, a6, -8
-    ld      a2, 8(a3)                       # size, offset, count
+    addi    a6, a6, -16
+    ld      a2, 16(a3)                      # size, offset, count of its ByteList, after the code and the subnet
     bgtu    a2, a6, 8f
     li      a1, 24
     bltu    a2, a1, 8f
     andi    a6, a2, 7
     bnez    a6, 8f
-    ld      a6, 16(a3)
-    bne     a6, a1, 8f
     ld      a6, 24(a3)
+    bne     a6, a1, 8f
+    ld      a6, 32(a3)
     addi    a1, a2, -24
     bgtu    a6, a1, 8f
-    addi    a3, a3, 8
+    addi    a3, a3, 16
     add     a3, a3, a2
     addi    a5, a5, -1
     j       1b
@@ -5102,12 +5113,22 @@ LOCAL_FUNCTION node_api_submit_done
     bne     t0, t1, 21f
     addi    s8, s8, 1
 21: bnez    t0, 6f
-    addi    a0, s4, 8                       # valid: its bytes to a new id, kept by the pool when it has room
+    li      t1, GOSSIP_BEACON_ATTESTATION   # a valid attestation: out on its subnet, no pool
+    bne     s9, t1, 22f
+    ld      t0, Node_flags(s1)
+    andi    t0, t0, NODE_FLAG_SUBSCRIBED
+    beqz    t0, 6f
+    mv      a0, s9
+    addi    a1, s4, 16
+    ld      a2, 8(s4)
+    call    node_publish
+    j       6f
+22: addi    a0, s4, 16                      # valid: its bytes to a new id, kept by the pool when it has room
     call    node_put
     mv      s10, a0
     mv      a0, s9
     mv      a1, s10
-    ld      a2, 24(s4)
+    ld      a2, 32(s4)
     ld      a3, NodeAction_arg(s3)
     srli    a3, a3, 16
     call    node_pool_add
@@ -5116,7 +5137,8 @@ LOCAL_FUNCTION node_api_submit_done
     andi    t0, t0, NODE_FLAG_SUBSCRIBED
     beqz    t0, 3f
     mv      a0, s9
-    addi    a1, s4, 8
+    addi    a1, s4, 16
+    li      a2, 0
     call    node_publish
 3:  li      t0, GOSSIP_ATTESTER_SLASHING    # an attester slashing: on_attester_slashing with the justified root's state
     bne     s9, t0, 4f
@@ -5142,18 +5164,20 @@ LOCAL_FUNCTION node_api_submit_done
     mv      a1, s10
     li      a2, 0
     call    node_ids
-6:  ld      t0, 8(s4)
-    addi    s4, s4, 8
+6:  ld      t0, 16(s4)
+    addi    s4, s4, 16
     add     s4, s4, t0
     addi    s7, s7, -1
     j       2b
 70: ld      a0, NodeAction_target(s3)       # the answer: 200, or 400 with the failures
     beqz    s8, 71f
-    ld      t0, NodeAction_arg(s3)
+    ld      t0, NodeAction_arg(s3)          # a list: the failures
     andi    t0, t0, 255
+    li      t1, API_OP_SUBMIT_POOL_ATTESTATIONS_V2
+    beq     t0, t1, 72f
     li      t1, API_OP_SUBMIT_POOL_BLS_TO_EXECUTION_CHANGE
     bne     t0, t1, 80f
-    mv      a1, s3
+72: mv      a1, s3
     li      a2, 400
     li      a3, API_OP_SUBMIT_POOL_BLS_TO_EXECUTION_CHANGE
     ld      a4, (L + 8)(sp)
@@ -5175,7 +5199,7 @@ LOCAL_FUNCTION node_api_submit_done
 END_FUNCTION node_api_submit_done
 
 /*
- * The publish of the SSZ bytes of the ByteList a1 on the gossip topic a0 (node.md, the publish):
+ * The publish of the SSZ bytes of the ByteList a1 on the gossip topic a0 of the subnet a2 (node.md, the publish):
  * a LIBP2P_EVENT_PUBLISH at the end of p2p_out; none when it does not fit. Its data compresses in
  * place, its ByteList head in the 24 bytes before the data. s1 the node, s2 the store, s5 the
  * scratch. s3 the bytes, then the data's length; s4 the event, s7 the topic's length, s8 the
@@ -5188,7 +5212,7 @@ LOCAL_FUNCTION node_publish
     lwu     t0, Node_fork_digest(s1)
     sd      t0, (L + GossipTopic_fork_digest)(sp)
     sd      a0, (L + GossipTopic_name)(sp)
-    sd      zero, (L + GossipTopic_subnet_id)(sp)
+    sd      a2, (L + GossipTopic_subnet_id)(sp)
     li      t0, 24 + 128
     sd      t0, (L + 24)(sp)
     li      t0, 24
@@ -5287,7 +5311,7 @@ END_FUNCTION node_publish
 /*
  * (text a0 to a1, kind a2, fork a3, fault a4, record a5, the event's end a6) -> a0: the JSON text
  * decoded by lantern_node_json_decode into the record a5 (s6 the scratch of
- * node_api_submit_run): code 0, then a ByteList of the SSZ bytes, its size to a multiple of 8;
+ * node_api_submit_run): code and subnet 0, then a ByteList of the SSZ bytes, its size to a multiple of 8;
  * a1 the next record. a0 = 0, 1 for a text that is no such value, 2 for too little room.
  * Locals: a ByteList head of the text, the record.
  */
@@ -5299,34 +5323,35 @@ LOCAL_FUNCTION node_submit_decode
     sub     t0, a0, sp
     sd      t0, 8(sp)
     sd      a1, 16(sp)
-    addi    t0, a5, 32
+    addi    t0, a5, 40
     bgtu    t0, a6, 8f
     sub     t0, a6, a5
-    addi    t0, t0, -8
-    sd      t0, 8(a5)
+    addi    t0, t0, -16
+    sd      t0, 16(a5)
     mv      t6, a3
     mv      a0, a2
     mv      a1, sp
     mv      a2, s6
-    addi    a3, a5, 8
+    addi    a3, a5, 16
     FORK_CALL node_json_decode
     li      t0, LANTERN_BUFFER_TOO_SMALL
     beq     a0, t0, 8f
     bnez    a0, 7f
     ld      a5, 24(sp)                      # its size: the bytes to a multiple of 8, zero after them
-    ld      t1, 24(a5)
+    ld      t1, 32(a5)
     addi    t0, t1, 24 + 7
     andi    t0, t0, -8
-    sd      t0, 8(a5)
+    sd      t0, 16(a5)
     sd      zero, 0(a5)
-    addi    a0, a5, 32
+    sd      zero, 8(a5)
+    addi    a0, a5, 40
     add     a0, a0, t1
     addi    a1, t0, -24
     sub     a1, a1, t1
     call    lantern_zero
     ld      a5, 24(sp)
-    ld      t0, 8(a5)
-    addi    a1, a5, 8
+    ld      t0, 16(a5)
+    addi    a1, a5, 16
     add     a1, a1, t0
     li      a0, 0
     UNFRAME 32
@@ -5335,6 +5360,48 @@ LOCAL_FUNCTION node_submit_decode
 8:  li      a0, 2
     UNFRAME 32
 END_FUNCTION node_submit_decode
+
+/*
+ * (bytes a0, length a1, record a5, the event's end a6) -> a0: the bytes as the record a5 of
+ * node_api_submit_run: code and subnet 0, then a ByteList of them, its size to a multiple of 8;
+ * a1 the next record. a0 = 0, or 2 for too little room. Locals: the record, its size, the length.
+ */
+LOCAL_FUNCTION node_submit_copy
+    FRAME 32
+    addi    t0, a1, 16 + 24 + 7
+    andi    t0, t0, -8
+    add     t1, a5, t0
+    bgtu    t1, a6, 8f
+    sd      a5, 0(sp)
+    sd      t0, 8(sp)
+    sd      a1, 16(sp)
+    sd      zero, 0(a5)
+    sd      zero, 8(a5)
+    addi    t1, t0, -16
+    sd      t1, 16(a5)
+    li      t1, 24
+    sd      t1, 24(a5)
+    sd      a1, 32(a5)
+    mv      a2, a1
+    mv      a1, a0
+    addi    a0, a5, 40
+    call    lantern_copy
+    ld      a5, 0(sp)
+    ld      t1, 16(sp)
+    addi    a0, a5, 40
+    add     a0, a0, t1
+    ld      a1, 8(sp)
+    addi    a1, a1, -40
+    sub     a1, a1, t1
+    call    lantern_zero
+    ld      a1, 0(sp)
+    ld      t0, 8(sp)
+    add     a1, a1, t0
+    li      a0, 0
+    UNFRAME 32
+8:  li      a0, 2
+    UNFRAME 32
+END_FUNCTION node_submit_copy
 
 /*
  * (node a0, store a1, seen a2, work a3, state_a a4, data a5, scratch a6, event a7, room t0) -> a0:
@@ -5366,12 +5433,24 @@ LOCAL_FUNCTION node_api_submit_run
     li      t2, API_OP_SUBMIT_POOL_BLS_TO_EXECUTION_CHANGE
     sub     t2, a0, t2
     seqz    t2, t2
+    li      t3, API_OP_SUBMIT_POOL_ATTESTATIONS_V2
+    sub     t3, a0, t3
+    seqz    t3, t3
+    or      t2, t2, t3
     sd      t2, (L + 40)(sp)
     call    node_submit_topic
     beqz    a0, 98f
     sd      a0, (L + 16)(sp)
-    call    node_pool_kind
-    sd      a0, (L + 8)(sp)
+    li      t0, GOSSIP_BEACON_ATTESTATION   # an attestation: of the fork's type
+    bne     a0, t0, 12f
+    ld      t0, (L + 24)(sp)
+    li      t1, FORK_ELECTRA
+    li      a0, NODE_JSON_ATTESTATION
+    bltu    t0, t1, 13f
+    li      a0, NODE_JSON_SINGLE_ATTESTATION
+    j       13f
+12: call    node_pool_kind
+13: sd      a0, (L + 8)(sp)
     beqz    s4, 98f
     beqz    s5, 98f
     addi    t0, s7, NodeEvent_chunk         # the records' ByteList
@@ -5388,6 +5467,10 @@ LOCAL_FUNCTION node_api_submit_run
     add     a0, s5, t0
     ld      t1, 16(s5)
     add     s10, a0, t1
+    ld      t0, NodeAction_arg(s3)          # an SSZ body: the list's items
+    srli    t0, t0, 8
+    andi    t0, t0, API_ANSWER_SSZ
+    bnez    t0, 40f
     ld      t0, (L + 40)(sp)
     bnez    t0, 20f
     mv      a1, s10                         # one operation: the whole text
@@ -5404,9 +5487,13 @@ LOCAL_FUNCTION node_api_submit_run
     li      t0, 1
     sd      t0, (L + 32)(sp)
     j       30f
-20: ld      t0, (L + 24)(sp)                # a JSON array, from capella
+20: ld      t0, (L + 16)(sp)                # a JSON array; of BLS changes from capella
+    li      t1, GOSSIP_BLS_TO_EXECUTION_CHANGE
+    bne     t0, t1, 201f
+    ld      t0, (L + 24)(sp)
     li      t1, FORK_CAPELLA
     bltu    t0, t1, 90f
+201:
     call    submit_ws
     bgeu    a0, s10, 90f
     lbu     t0, 0(a0)
@@ -5482,6 +5569,75 @@ LOCAL_FUNCTION node_api_submit_run
     bne     t0, t1, 90f
 28: call    submit_ws                       # then only white space
     bne     a0, s10, 90f
+    j       30f
+40: sd      a0, (L + 48)(sp)                # SSZ: from electra items of 240 bytes
+    sub     t0, s10, a0
+    ld      t1, (L + 24)(sp)
+    li      t2, FORK_ELECTRA
+    bltu    t1, t2, 42f
+    li      t1, 240
+    divu    t2, t0, t1
+    mul     t3, t2, t1
+    bne     t3, t0, 90f
+    sd      t2, (L + 56)(sp)
+41: ld      t2, (L + 56)(sp)
+    beqz    t2, 30f
+    ld      a0, (L + 48)(sp)
+    li      a1, 240
+    mv      a5, s9
+    mv      a6, s8
+    call    node_submit_copy
+    bnez    a0, 97f
+    mv      s9, a1
+    ld      t0, (L + 48)(sp)
+    addi    t0, t0, 240
+    sd      t0, (L + 48)(sp)
+    ld      t0, (L + 56)(sp)
+    addi    t0, t0, -1
+    sd      t0, (L + 56)(sp)
+    ld      t0, (L + 32)(sp)
+    addi    t0, t0, 1
+    sd      t0, (L + 32)(sp)
+    j       41b
+42: beqz    t0, 30f                         # before electra: the items of the 4-byte offsets
+    li      t1, 4
+    bltu    t0, t1, 90f
+    lwu     t1, 0(a0)
+    beqz    t1, 90f
+    andi    t2, t1, 3
+    bnez    t2, 90f
+    bgtu    t1, t0, 90f
+    srli    t1, t1, 2
+    sd      t1, (L + 304)(sp)
+    sd      zero, (L + 56)(sp)
+43: ld      t3, (L + 56)(sp)
+    ld      t1, (L + 304)(sp)
+    bgeu    t3, t1, 30f
+    ld      a0, (L + 48)(sp)
+    slli    t2, t3, 2
+    add     t2, a0, t2
+    lwu     t4, 0(t2)
+    sub     t5, s10, a0
+    addi    t3, t3, 1
+    bgeu    t3, t1, 44f
+    lwu     t5, 4(t2)
+44: bgtu    t4, t5, 90f
+    sub     t2, s10, a0
+    bgtu    t5, t2, 90f
+    add     a0, a0, t4
+    sub     a1, t5, t4
+    mv      a5, s9
+    mv      a6, s8
+    call    node_submit_copy
+    bnez    a0, 97f
+    mv      s9, a1
+    ld      t0, (L + 56)(sp)
+    addi    t0, t0, 1
+    sd      t0, (L + 56)(sp)
+    ld      t0, (L + 32)(sp)
+    addi    t0, t0, 1
+    sd      t0, (L + 32)(sp)
+    j       43b
 30: sub     t0, s9, s7                      # the records: their bytes, their count
     sd      t0, 0(s7)
     addi    t0, t0, -NodeEvent_chunk
@@ -5515,17 +5671,60 @@ LOCAL_FUNCTION node_api_submit_run
     addi    s9, s7, NodeEvent_chunk + 24
     ld      s10, (L + 32)(sp)
 31: beqz    s10, 39f
+    sd      zero, 8(s9)                     # the subnet: 0, but an attestation's
+    ld      t0, (L + 16)(sp)
+    li      t1, GOSSIP_BEACON_ATTESTATION
+    bne     t0, t1, 33f
+    ld      t0, 32(s9)
+    addi    t2, s9, 40
+    ld      t1, (L + 24)(sp)
+    li      t3, FORK_ELECTRA
+    bltu    t1, t3, 32f
+    li      t1, 240                         # a SingleAttestation: committee_index 0, data.slot 16, data.target.epoch 104
+    bltu    t0, t1, 33f
+    ld      t3, 0(t2)
+    ld      t4, 16(t2)
+    ld      t5, 104(t2)
+    j       34f
+32: li      t1, 228                         # an Attestation: data.slot 4, data.index 12, data.target.epoch 92
+    bltu    t0, t1, 33f
+    LDU64   t4, t2, 4, t1
+    LDU64   t3, t2, 12, t1
+    LDU64   t5, t2, 92, t1
+34: sd      t3, (L + 48)(sp)
+    sd      t4, (L + 56)(sp)
+    sd      t5, (L + 272)(sp)
+    mv      a0, s4
+    addi    a1, sp, L + 272
+    LDQ     a2, s1, Node_config + CONFIG_COMMITTEE_CACHE
+    mv      a3, s6
+    addi    a4, sp, L + 304
+    ld      t6, (L + 24)(sp)
+    FORK_CALL get_committee_count_per_slot
+    bnez    a0, 33f
+    ld      t0, (L + 304)(sp)               # compute_subnet_for_attestation
+    ld      t4, (L + 56)(sp)
+    andi    t4, t4, SLOTS_PER_EPOCH - 1
+    mul     t0, t0, t4
+    ld      t3, (L + 48)(sp)
+    add     t0, t0, t3
+    LDQ     t1, s1, Node_config + CONFIG_ATTESTATION_SUBNET_COUNT
+    beqz    t1, 33f
+    remu    t0, t0, t1
+    sd      t0, 8(s9)
+33: ld      t0, 8(s9)
+    sd      t0, (L + 64 + NodeGossip_subnet)(sp)
     ld      t6, (L + 24)(sp)
     addi    a0, sp, L + 64
-    addi    a1, s9, 8
+    addi    a1, s9, 16
     mv      a2, s6
     mv      a3, s9
     addi    a4, sp, L + 272
     addi    a5, sp, L + 304
     FORK_CALL node_gossip
     bnez    a0, 99f
-    ld      t0, 8(s9)
-    addi    s9, s9, 8
+    ld      t0, 16(s9)
+    addi    s9, s9, 16
     add     s9, s9, t0
     addi    s10, s10, -1
     j       31b

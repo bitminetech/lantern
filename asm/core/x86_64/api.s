@@ -4710,6 +4710,9 @@ LOCAL_FUNCTION node_submit_topic
     mov     $GOSSIP_BLS_TO_EXECUTION_CHANGE, %eax
     cmp     $API_OP_SUBMIT_POOL_BLS_TO_EXECUTION_CHANGE, %rdi
     je      9f
+    mov     $GOSSIP_BEACON_ATTESTATION, %eax
+    cmp     $API_OP_SUBMIT_POOL_ATTESTATIONS_V2, %rdi
+    je      9f
     xor     %eax, %eax
 9:  ret
 END_FUNCTION node_submit_topic
@@ -4939,9 +4942,9 @@ LOCAL_FUNCTION api_failures
     call    api_dec
     API_LIT api_f_reject
     incq    16(%rsp)
-3:  mov     (%rsp), %rax                    # the next record: its code, then its ByteList
-    mov     8(%rax), %rcx
-    lea     8(%rax,%rcx), %rax
+3:  mov     (%rsp), %rax                    # the next record: its code, its subnet, then its ByteList
+    mov     16(%rax), %rcx
+    lea     16(%rax,%rcx), %rax
     mov     %rax, (%rsp)
     incq    8(%rsp)
     jmp     1b
@@ -4961,8 +4964,14 @@ LOCAL_FUNCTION node_api_submit
     mov     %rdx, 8(%rsp)
     mov     %rsi, 16(%rsp)
     mov     %r8, 24(%rsp)
-    cmpq    $API_OP_SUBMIT_POOL_ATTESTER_SLASHINGS_V2, ApiRoute_op(%rsi)   # the AttesterSlashing type of the store's fork
+    cmpq    $API_TYPE_SSZ, ApiRoute_body(%rsi)  # an SSZ body: an answer flag
+    jne     11f
+    orq     $API_ANSWER_SSZ, 8(%rsp)
+11: cmpq    $API_OP_SUBMIT_POOL_ATTESTATIONS_V2, ApiRoute_op(%rsi)  # the AttesterSlashing or attestation type of the store's fork
+    je      12f
+    cmpq    $API_OP_SUBMIT_POOL_ATTESTER_SLASHINGS_V2, ApiRoute_op(%rsi)
     jne     1f
+12:
     xor     %eax, %eax
     cmpq    $FORK_ELECTRA, ApiRoute_consensus_version(%rsi)
     setae   %al
@@ -5036,23 +5045,23 @@ LOCAL_FUNCTION node_submit_check
     mov     (NodeEvent_chunk + 16)(%rdi), %rax  # the bytes left
     lea     (NodeEvent_chunk + 24)(%rdi,%rax), %rax
     sub     %rsi, %rax
-    cmp     $32, %rax
+    cmp     $40, %rax
     jb      8f
-    sub     $8, %rax
-    cmp     %rax, 8(%rsi)
+    sub     $16, %rax                       # its ByteList, after the code and the subnet
+    cmp     %rax, 16(%rsi)
     ja      8f
-    cmpq    $24, 16(%rsi)
+    cmpq    $24, 24(%rsi)
     jne     8f
-    mov     8(%rsi), %rax
+    mov     16(%rsi), %rax
     cmp     $24, %rax
     jb      8f
     test    $7, %al
     jnz     8f
     sub     $24, %rax
-    cmp     %rax, 24(%rsi)
+    cmp     %rax, 32(%rsi)
     ja      8f
-    mov     8(%rsi), %rax
-    lea     8(%rsi,%rax), %rsi
+    mov     16(%rsi), %rax
+    lea     16(%rsi,%rax), %rsi
     dec     %rdx
     jmp     1b
 7:  xor     %eax, %eax
@@ -5103,12 +5112,21 @@ LOCAL_FUNCTION node_api_submit_done
     incq    S8(%rsp)
 21: test    %rax, %rax
     jnz     6f
-    lea     8(%r13), %rdi                   # valid: its bytes to a new id, kept by the pool when it has room
+    cmpq    $GOSSIP_BEACON_ATTESTATION, S9(%rsp)    # a valid attestation: out on its subnet, no pool
+    jne     22f
+    testq   $NODE_FLAG_SUBSCRIBED, Node_flags(%rbx)
+    jz      6f
+    mov     S9(%rsp), %rdi
+    lea     16(%r13), %rsi
+    mov     8(%r13), %rdx
+    call    node_publish
+    jmp     6f
+22: lea     16(%r13), %rdi                  # valid: its bytes to a new id, kept by the pool when it has room
     call    node_put
     mov     %rax, S10(%rsp)
     mov     S9(%rsp), %rdi
     mov     %rax, %rsi
-    mov     24(%r13), %rdx
+    mov     32(%r13), %rdx
     mov     NodeAction_arg(%r12), %rcx
     shr     $16, %rcx
     call    node_pool_add
@@ -5116,7 +5134,8 @@ LOCAL_FUNCTION node_api_submit_done
     testq   $NODE_FLAG_SUBSCRIBED, Node_flags(%rbx) # NODE_FLAG_SUBSCRIBED: out on its topic
     jz      3f
     mov     S9(%rsp), %rdi
-    lea     8(%r13), %rsi
+    lea     16(%r13), %rsi
+    xor     %edx, %edx
     call    node_publish
 3:  cmpq    $GOSSIP_ATTESTER_SLASHING, S9(%rsp) # an attester slashing: on_attester_slashing with the justified root's state
     jne     4f
@@ -5142,17 +5161,19 @@ LOCAL_FUNCTION node_api_submit_done
     mov     S10(%rsp), %rsi
     xor     %edx, %edx
     call    node_ids
-6:  mov     8(%r13), %rax
-    lea     8(%r13,%rax), %r13
+6:  mov     16(%r13), %rax
+    lea     16(%r13,%rax), %r13
     decq    S7(%rsp)
     jmp     2b
 70: mov     NodeAction_target(%r12), %rdi   # the answer: 200, or 400 with the failures
     cmpq    $0, S8(%rsp)
     je      71f
-    movzbl  NodeAction_arg(%r12), %eax
+    movzbl  NodeAction_arg(%r12), %eax      # a list: the failures
+    cmp     $API_OP_SUBMIT_POOL_ATTESTATIONS_V2, %eax
+    je      72f
     cmp     $API_OP_SUBMIT_POOL_BLS_TO_EXECUTION_CHANGE, %eax
     jne     80f
-    mov     %r12, %rsi
+72: mov     %r12, %rsi
     mov     $400, %edx
     mov     $API_OP_SUBMIT_POOL_BLS_TO_EXECUTION_CHANGE, %ecx
     mov     (L + 8)(%rsp), %r8
@@ -5174,7 +5195,7 @@ LOCAL_FUNCTION node_api_submit_done
 END_FUNCTION node_api_submit_done
 
 /*
- * The publish of the SSZ bytes of the ByteList rsi on the gossip topic rdi (node.md, the
+ * The publish of the SSZ bytes of the ByteList rsi on the gossip topic rdi of the subnet rdx (node.md, the
  * publish): a LIBP2P_EVENT_PUBLISH at the end of p2p_out; none when it does not fit. Its data
  * compresses in place, its ByteList head in the 24 bytes before the data. rbx the node, rbp the
  * store, r14 the scratch. r12 the bytes, then the data's length; r13 the event. Locals: L a
@@ -5187,7 +5208,7 @@ LOCAL_FUNCTION node_publish
     mov     Node_fork_digest(%rbx), %eax
     mov     %rax, (L + GossipTopic_fork_digest)(%rsp)
     mov     %rdi, (L + GossipTopic_name)(%rsp)
-    movq    $0, (L + GossipTopic_subnet_id)(%rsp)
+    mov     %rdx, (L + GossipTopic_subnet_id)(%rsp)
     movq    $(24 + 128), (L + 24)(%rsp)
     movq    $24, (L + 32)(%rsp)
     movq    $0, (L + 40)(%rsp)
@@ -5294,7 +5315,7 @@ END_FUNCTION node_publish
 /*
  * (text rdi to rsi, kind rdx, fork rcx, fault r8, record r9, the event's end r10) -> rax: the
  * JSON text decoded by lantern_node_json_decode into the record r9 (r15 the scratch of
- * node_api_submit_run): code 0, then a ByteList of the SSZ bytes, its size to a multiple of 8;
+ * node_api_submit_run): code and subnet 0, then a ByteList of the SSZ bytes, its size to a multiple of 8;
  * rdx the next record. rax = 0, 1 for a text that is no such value, 2 for too little room.
  * Locals: a ByteList head of the text, the record.
  */
@@ -5307,36 +5328,37 @@ LOCAL_FUNCTION node_submit_decode
     sub     %rsp, %rax
     mov     %rax, 8(%rsp)
     mov     %rsi, 16(%rsp)
-    lea     32(%r9), %rax
+    lea     40(%r9), %rax
     cmp     %r10, %rax
     ja      8f
     mov     %r10, %rax
     sub     %r9, %rax
-    sub     $8, %rax
-    mov     %rax, 8(%r9)
+    sub     $16, %rax
+    mov     %rax, 16(%r9)
     mov     %rcx, %r10
     mov     %rdx, %rdi
     mov     %rsp, %rsi
     mov     %r15, %rdx
-    lea     8(%r9), %rcx
+    lea     16(%r9), %rcx
     FORK_CALL node_json_decode
     cmp     $LANTERN_BUFFER_TOO_SMALL, %rax
     je      8f
     test    %rax, %rax
     jnz     7f
     mov     24(%rsp), %r9                   # its size: the bytes to a multiple of 8, zero after them
-    mov     24(%r9), %rdx
+    mov     32(%r9), %rdx
     lea     (24 + 7)(%rdx), %rax
     and     $-8, %rax
-    mov     %rax, 8(%r9)
+    mov     %rax, 16(%r9)
     movq    $0, (%r9)
-    lea     32(%r9,%rdx), %rdi
+    movq    $0, 8(%r9)
+    lea     40(%r9,%rdx), %rdi
     lea     -24(%rax), %rsi
     sub     %rdx, %rsi
     call    lantern_zero
     mov     24(%rsp), %r9
-    mov     8(%r9), %rdx
-    lea     8(%r9,%rdx), %rdx
+    mov     16(%r9), %rdx
+    lea     16(%r9,%rdx), %rdx
     xor     %eax, %eax
     UNFRAME 32
 7:  mov     $1, %eax
@@ -5344,6 +5366,46 @@ LOCAL_FUNCTION node_submit_decode
 8:  mov     $2, %eax
     UNFRAME 32
 END_FUNCTION node_submit_decode
+
+/*
+ * (bytes rdi, length rsi, record r9, the event's end r10) -> rax: the bytes as the record r9 of
+ * node_api_submit_run: code and subnet 0, then a ByteList of them, its size to a multiple of 8;
+ * rdx the next record. rax = 0, or 2 for too little room. Locals: the record, its size, the length.
+ */
+LOCAL_FUNCTION node_submit_copy
+    FRAME 32
+    lea     (16 + 24 + 7)(%rsi), %rax
+    and     $-8, %rax
+    lea     (%r9,%rax), %rcx
+    cmp     %r10, %rcx
+    ja      8f
+    mov     %r9, (%rsp)
+    mov     %rax, 8(%rsp)
+    mov     %rsi, 16(%rsp)
+    movq    $0, (%r9)
+    movq    $0, 8(%r9)
+    lea     -16(%rax), %rcx
+    mov     %rcx, 16(%r9)
+    movq    $24, 24(%r9)
+    mov     %rsi, 32(%r9)
+    mov     %rsi, %rdx
+    mov     %rdi, %rsi
+    lea     40(%r9), %rdi
+    call    lantern_copy
+    mov     (%rsp), %r9
+    mov     16(%rsp), %rdx
+    lea     40(%r9,%rdx), %rdi
+    mov     8(%rsp), %rsi
+    sub     $40, %rsi
+    sub     %rdx, %rsi
+    call    lantern_zero
+    mov     (%rsp), %rdx
+    add     8(%rsp), %rdx
+    xor     %eax, %eax
+    UNFRAME 32
+8:  mov     $2, %eax
+    UNFRAME 32
+END_FUNCTION node_submit_copy
 
 /*
  * (node rdi, store rsi, seen rdx, work rcx, state_a r8, data r9, scratch r10, event r11, room rax)
@@ -5376,14 +5438,24 @@ LOCAL_FUNCTION node_api_submit_run
     xor     %eax, %eax
     cmp     $API_OP_SUBMIT_POOL_BLS_TO_EXECUTION_CHANGE, %edi
     sete    %al
+    cmp     $API_OP_SUBMIT_POOL_ATTESTATIONS_V2, %edi
+    sete    %cl
+    or      %cl, %al
     mov     %rax, (L + 40)(%rsp)
     call    node_submit_topic
     test    %rax, %rax
     jz      98f
     mov     %rax, (L + 16)(%rsp)
-    mov     %rax, %rdi
+    cmp     $GOSSIP_BEACON_ATTESTATION, %rax    # an attestation: of the fork's type
+    jne     12f
+    mov     $NODE_JSON_ATTESTATION, %eax
+    mov     $NODE_JSON_SINGLE_ATTESTATION, %ecx
+    cmpq    $FORK_ELECTRA, (L + 24)(%rsp)
+    cmovae  %rcx, %rax
+    jmp     13f
+12: mov     %rax, %rdi
     call    node_pool_kind
-    mov     %rax, (L + 8)(%rsp)
+13: mov     %rax, (L + 8)(%rsp)
     test    %r13, %r13
     jz      98f
     test    %r14, %r14
@@ -5405,6 +5477,8 @@ LOCAL_FUNCTION node_api_submit_run
     mov     16(%r14), %rax
     add     %rdi, %rax
     mov     %rax, S10(%rsp)
+    testb   $API_ANSWER_SSZ, (NodeAction_arg + 1)(%r12) # an SSZ body: the list's items
+    jnz     40f
     cmpq    $0, (L + 40)(%rsp)
     jne     20f
     mov     S10(%rsp), %rsi                 # one operation: the whole text
@@ -5420,8 +5494,11 @@ LOCAL_FUNCTION node_api_submit_run
     mov     %rdx, S9(%rsp)
     movq    $1, (L + 32)(%rsp)
     jmp     30f
-20: cmpq    $FORK_CAPELLA, (L + 24)(%rsp)   # a JSON array, from capella
+20: cmpq    $GOSSIP_BLS_TO_EXECUTION_CHANGE, (L + 16)(%rsp)   # a JSON array; of BLS changes from capella
+    jne     201f
+    cmpq    $FORK_CAPELLA, (L + 24)(%rsp)
     jb      90f
+201:
     mov     S10(%rsp), %rsi
     call    submit_ws
     cmp     %rsi, %rdi
@@ -5503,6 +5580,75 @@ LOCAL_FUNCTION node_api_submit_run
     call    submit_ws
     cmp     %rsi, %rdi
     jne     90f
+    jmp     30f
+40: mov     %rdi, (L + 48)(%rsp)            # SSZ: from electra items of 240 bytes
+    mov     S10(%rsp), %rax
+    sub     %rdi, %rax
+    cmpq    $FORK_ELECTRA, (L + 24)(%rsp)
+    jb      42f
+    xor     %edx, %edx
+    mov     $240, %ecx
+    div     %rcx
+    test    %rdx, %rdx
+    jnz     90f
+    mov     %rax, (L + 56)(%rsp)
+41: cmpq    $0, (L + 56)(%rsp)
+    je      30f
+    mov     (L + 48)(%rsp), %rdi
+    mov     $240, %esi
+    mov     S9(%rsp), %r9
+    mov     S8(%rsp), %r10
+    call    node_submit_copy
+    test    %rax, %rax
+    jnz     97f
+    mov     %rdx, S9(%rsp)
+    addq    $240, (L + 48)(%rsp)
+    decq    (L + 56)(%rsp)
+    incq    (L + 32)(%rsp)
+    jmp     41b
+42: test    %rax, %rax                      # before electra: the items of the 4-byte offsets
+    jz      30f
+    cmp     $4, %rax
+    jb      90f
+    mov     (%rdi), %ecx
+    test    %rcx, %rcx
+    jz      90f
+    test    $3, %cl
+    jnz     90f
+    cmp     %rax, %rcx
+    ja      90f
+    shr     $2, %rcx
+    mov     %rcx, (L + 304)(%rsp)
+    movq    $0, (L + 56)(%rsp)
+43: mov     (L + 56)(%rsp), %rcx
+    cmp     (L + 304)(%rsp), %rcx
+    jae     30f
+    mov     (L + 48)(%rsp), %rdi
+    mov     (%rdi,%rcx,4), %r8d
+    mov     S10(%rsp), %rax
+    sub     %rdi, %rax
+    lea     1(%rcx), %rdx
+    cmp     (L + 304)(%rsp), %rdx
+    jae     44f
+    mov     (%rdi,%rdx,4), %eax
+44: cmp     %rax, %r8
+    ja      90f
+    mov     S10(%rsp), %rdx
+    sub     %rdi, %rdx
+    cmp     %rdx, %rax
+    ja      90f
+    lea     (%rdi,%r8), %rdi
+    mov     %rax, %rsi
+    sub     %r8, %rsi
+    mov     S9(%rsp), %r9
+    mov     S8(%rsp), %r10
+    call    node_submit_copy
+    test    %rax, %rax
+    jnz     97f
+    mov     %rdx, S9(%rsp)
+    incq    (L + 56)(%rsp)
+    incq    (L + 32)(%rsp)
+    jmp     43b
 30: mov     S7(%rsp), %rdi                  # the records: their bytes, their count
     mov     S9(%rsp), %rax
     sub     %rdi, %rax
@@ -5539,10 +5685,56 @@ LOCAL_FUNCTION node_api_submit_run
     mov     %rax, S9(%rsp)
 31: cmpq    $0, (L + 32)(%rsp)
     je      39f
+    mov     S9(%rsp), %rcx                  # the subnet: 0, but an attestation's
+    movq    $0, 8(%rcx)
+    cmpq    $GOSSIP_BEACON_ATTESTATION, (L + 16)(%rsp)
+    jne     33f
+    mov     32(%rcx), %rax
+    lea     40(%rcx), %rdx
+    cmpq    $FORK_ELECTRA, (L + 24)(%rsp)
+    jb      32f
+    cmp     $240, %rax                      # a SingleAttestation: committee_index 0, data.slot 16, data.target.epoch 104
+    jb      33f
+    mov     (%rdx), %rax
+    mov     %rax, (L + 48)(%rsp)
+    mov     16(%rdx), %rax
+    mov     %rax, (L + 56)(%rsp)
+    mov     104(%rdx), %rax
+    jmp     34f
+32: cmp     $228, %rax                      # an Attestation: data.slot 4, data.index 12, data.target.epoch 92
+    jb      33f
+    mov     12(%rdx), %rax
+    mov     %rax, (L + 48)(%rsp)
+    mov     4(%rdx), %rax
+    mov     %rax, (L + 56)(%rsp)
+    mov     92(%rdx), %rax
+34: mov     %rax, (L + 272)(%rsp)
+    mov     %r13, %rdi
+    lea     (L + 272)(%rsp), %rsi
+    mov     (Node_config + CONFIG_COMMITTEE_CACHE)(%rbx), %rdx
+    mov     %r15, %rcx
+    lea     (L + 304)(%rsp), %r8
+    mov     (L + 24)(%rsp), %r10
+    FORK_CALL get_committee_count_per_slot
+    test    %rax, %rax
+    jnz     33f
+    mov     (L + 56)(%rsp), %rax            # compute_subnet_for_attestation
+    and     $(SLOTS_PER_EPOCH - 1), %eax
+    imul    (L + 304)(%rsp), %rax
+    add     (L + 48)(%rsp), %rax
+    mov     (Node_config + CONFIG_ATTESTATION_SUBNET_COUNT)(%rbx), %rcx
+    test    %rcx, %rcx
+    jz      33f
+    xor     %edx, %edx
+    div     %rcx
+    mov     S9(%rsp), %rcx
+    mov     %rdx, 8(%rcx)
+33: mov     S9(%rsp), %rcx
+    mov     8(%rcx), %rax
+    mov     %rax, (L + 64 + NodeGossip_subnet)(%rsp)
     mov     (L + 24)(%rsp), %r10
     lea     (L + 64)(%rsp), %rdi
-    mov     S9(%rsp), %rcx
-    lea     8(%rcx), %rsi
+    lea     16(%rcx), %rsi
     mov     %r15, %rdx
     lea     (L + 304)(%rsp), %r9
     lea     (L + 272)(%rsp), %r8
@@ -5550,8 +5742,8 @@ LOCAL_FUNCTION node_api_submit_run
     test    %rax, %rax
     jnz     99f
     mov     S9(%rsp), %rcx
-    mov     8(%rcx), %rax
-    lea     8(%rcx,%rax), %rcx
+    mov     16(%rcx), %rax
+    lea     16(%rcx,%rax), %rcx
     mov     %rcx, S9(%rsp)
     decq    (L + 32)(%rsp)
     jmp     31b

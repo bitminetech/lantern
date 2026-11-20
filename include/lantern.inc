@@ -1052,6 +1052,8 @@
 .set NODE_JSON_PROPOSER_SLASHING, 3      /* a ProposerSlashing */
 .set NODE_JSON_ATTESTER_SLASHING, 4      /* an AttesterSlashing */
 .set NODE_JSON_BLS_CHANGE, 5             /* a SignedBLSToExecutionChange, from capella */
+.set NODE_JSON_ATTESTATION, 6            /* an Attestation */
+.set NODE_JSON_SINGLE_ATTESTATION, 7     /* a SingleAttestation, from electra */
 .set NodePool_topic, 0                   /* NodePool (node.md): GOSSIP_* of the operation; 0 for a free entry */
 .set NodePool_state, 8                   /* NODE_POOL_* */
 .set NodePool_data_id, 16                /* the BufferId of its SSZ bytes */

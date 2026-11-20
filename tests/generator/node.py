@@ -357,7 +357,7 @@ VALIDATOR_OPS = ("getStateValidators", "postStateValidators", "getStateValidator
 POOL_GETS = ("getPoolVoluntaryExits", "getPoolProposerSlashings", "getPoolAttesterSlashingsV2",
              "getPoolBLSToExecutionChanges")
 POOL_POSTS = ("submitPoolVoluntaryExit", "submitPoolProposerSlashings", "submitPoolAttesterSlashingsV2",
-              "submitPoolBLSToExecutionChange")
+              "submitPoolBLSToExecutionChange", "submitPoolAttestationsV2")
 ANSWERED = ("getHealth", "getNetworkIdentity", "getNodeVersion", "getSyncingStatus", "getPeerCount", "getGenesis",
             "getBlockHeader", "getStateFinalityCheckpoints", "getBlockV2", "getStateV2", "getBlockRoot", "getStateRoot",
             "getStateFork", "getSpec", "getForkSchedule", "getDepositContract", "getEpochCommittees",
@@ -865,7 +865,7 @@ def pool_requests(spec, fork, v, by_name, add):
     epoch = int(spec.get_current_epoch(state))
     capella = FORKS.index(fork) >= FORKS.index("capella")
     electra = FORKS.index(fork) >= FORKS.index("electra")
-    pool = {"exit": [], "proposer": [], "attester": [], "bls": []}
+    pool = {"exit": [], "proposer": [], "attester": [], "bls": [], "attestation": []}
 
     def validate(kind, op):
         if kind == "exit":
@@ -874,6 +874,8 @@ def pool_requests(spec, fork, v, by_name, add):
             return gossip_result(spec, spec.validate_proposer_slashing_gossip, seen, store, op)
         if kind == "attester":
             return gossip_result(spec, spec.validate_attester_slashing_gossip, seen, store, op)
+        if kind == "attestation":
+            return gossip_result(spec, spec.validate_beacon_attestation_gossip, seen, store, op, time_ms, subnet_of(op))
         return gossip_result(spec, spec.validate_bls_to_execution_change_gossip, seen, store, op, time_ms)
 
     def bad_request(close, keep_alive, failures=None):
@@ -882,7 +884,7 @@ def pool_requests(spec, fork, v, by_name, add):
             body += b',"failures":[' + b",".join(b'{"index":%d,"message":"REJECT"}' % i for i in failures) + b"]"
         return response(400, body + b"}", close=close, keep_alive=keep_alive)
 
-    def submit(name, op_name, kind, ops, body, single=True, headers=None):
+    def submit(name, op_name, kind, ops, body, single=True, headers=None, content_type=b"application/json"):
         """ops: the decoded operations, or None for a body of none; run twice, as the runner does."""
         answers = []
         for _ in range(2):
@@ -891,7 +893,7 @@ def pool_requests(spec, fork, v, by_name, add):
                 continue
             results = [validate(kind, op) for op in ops]
             for op, r in zip(ops, results):
-                if r == "VALID":
+                if r == "VALID" and kind != "attestation":  # attestations go out, and no pool keeps them
                     pool[kind].append(op)
             failures = [i for i, r in enumerate(results) if r == "REJECT"]
             answers.append(("ok", None) if not failures else ("bad", None if single else failures))
@@ -901,7 +903,7 @@ def pool_requests(spec, fork, v, by_name, add):
         want = (lambda c, k: response(200, close=c, keep_alive=k)) if status == "ok" else \
             (lambda c, k: bad_request(c, k, failures))
         req = api_route.request(by_name[op_name]["method"], api_route.fill(by_name[op_name], None), b"",
-                                content_type=b"application/json", **(headers or {}))
+                                content_type=content_type, **(headers or {}))
         add(name, req, body=body, want=want)
 
     def exit_of(index, key_index):
@@ -967,6 +969,65 @@ def pool_requests(spec, fork, v, by_name, add):
         submit("pool_bls_bad_item", "submitPoolBLSToExecutionChange", "bls", None, bad, single=False)
     else:  # before capella the fork has no such type
         submit("pool_bls", "submitPoolBLSToExecutionChange", "bls", None, b"[]", single=False)
+    # attestations of the committees of the slots after the anchor's: valid, again, with another
+    # key's signature, of the other fork's type, of no attestation, and as SSZ
+    duties = []  # (slot, committee index, place, member, committee length)
+    for att_slot in range(v["slot"] + 1, v["slot"] + SLOTS_AHEAD + 1):
+        s_at = v["states"][att_slot]
+        for c in range(int(spec.get_committee_count_per_slot(s_at, spec.compute_epoch_at_slot(att_slot)))):
+            committee = list(spec.get_beacon_committee(s_at, spec.Slot(att_slot), spec.CommitteeIndex(c)))
+            duties += [(att_slot, c, p, m, len(committee)) for p, m in enumerate(committee)]
+
+    def subnet_of(att):
+        index = att.committee_index if electra else att.data.index
+        count = spec.get_committee_count_per_slot(state, att.data.target.epoch)
+        return spec.compute_subnet_for_attestation(count, att.data.slot, index)
+
+    def att_of(duty, key_index):
+        att_slot, c, place, member, length = duty
+        s_at = v["states"][att_slot]
+        att_epoch = spec.compute_epoch_at_slot(att_slot)
+        boundary = spec.compute_start_slot_at_epoch(att_epoch)
+        data = spec.AttestationData(slot=att_slot, index=0 if electra else c, beacon_block_root=v["root"],
+                                    source=s_at.current_justified_checkpoint,
+                                    target=spec.Checkpoint(epoch=att_epoch, root=v["root"] if boundary == att_slot
+                                                           else spec.get_block_root(s_at, att_epoch)))
+        domain = spec.get_domain(s_at, spec.DOMAIN_BEACON_ATTESTER, att_epoch)
+        sig = bls.Sign(KEYS.privkeys[key_index], spec.compute_signing_root(data, domain))
+        if electra:
+            return spec.SingleAttestation(committee_index=c, attester_index=member, data=data, signature=sig)
+        bits = spec.AggregationBits(data=[False] * length)
+        bits[place] = True
+        return spec.Attestation(aggregation_bits=bits, data=data, signature=sig)
+
+    def json_list(items):
+        return ("[" + ",".join(to_json(x) for x in items) + "]").encode()
+
+    def ssz_list(items):  # the SSZ list: fixed size items back to back, else 4-byte offsets first
+        parts = [bytes(x.encode_bytes()) for x in items]
+        if electra:
+            return b"".join(parts)
+        offsets, at = b"", 4 * len(parts)
+        for p in parts:
+            offsets += at.to_bytes(4, "little")
+            at += len(p)
+        return offsets + b"".join(parts)
+    att_version = {"version": fork.encode()}
+    two = [att_of(duties[0], duties[0][3]), att_of(duties[1], duties[1][3])]
+    submit("pool_attestations", "submitPoolAttestationsV2", "attestation", two, json_list(two), single=False,
+           headers=att_version)
+    submit("pool_attestations_again", "submitPoolAttestationsV2", "attestation", two[:1], json_list(two[:1]),
+           single=False, headers=att_version)
+    other_key = [att_of(duties[2], duties[3][3]), att_of(duties[3], duties[3][3])]
+    submit("pool_attestations_other_key", "submitPoolAttestationsV2", "attestation", other_key,
+           json_list(other_key), single=False, headers=att_version)
+    submit("pool_attestations_other_fork", "submitPoolAttestationsV2", "attestation", None, json_list(two),
+           single=False, headers={"version": other})
+    submit("pool_attestations_no_attestation", "submitPoolAttestationsV2", "attestation", None, b'[{"data":1}]',
+           single=False, headers=att_version)
+    ssz_body = ssz_list([att_of(duties[2], duties[2][3])])
+    submit("pool_attestations_ssz", "submitPoolAttestationsV2", "attestation", [att_of(duties[2], duties[2][3])], ssz_body,
+           single=False, headers=att_version, content_type=b"application/octet-stream")
     store_fork = fork
 
     def listing(items, version=None):
