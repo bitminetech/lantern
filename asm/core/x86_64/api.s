@@ -4529,9 +4529,9 @@ LOCAL_FUNCTION node_api_produce
     jne     1f
     or      $API_STREAM_SSZ, %rdx
 1:  mov     %rdx, S10(%rsp)
-    cmpq    $0, ApiView_look_copy(%rcx)     # the state: a copy at the slot
+    cmpq    $0, ApiView_look_copy(%rcx)     # the state: a copy at the slot; busy with its check
     je      8f
-    orq     $API_STREAM_OWN_STATE, S10(%rsp)
+    orq     $(API_STREAM_OWN_STATE | API_STREAM_BUSY), S10(%rsp)
     call    node_api_new
     mov     %rax, %r13
     mov     %rdx, %r12
@@ -4602,6 +4602,26 @@ LOCAL_FUNCTION node_produce_done
     jne     9f
     mov     NodeEvent_result(%r12), %rax
     mov     %rax, S7(%rsp)
+    andq    $~API_STREAM_BUSY, NodeApi_flags(%r13)  # its work is done
+    cmpq    $NODE_WORK_PRODUCE_FOLD, NodeAction_work_kind(%r12)  # a fold: the pool entry's bytes, when they left the pool meanwhile
+    jne     2f
+    testq   $API_STREAM_PRODUCE_OWN, NodeApi_flags(%r13)
+    jz      1f
+    andq    $~API_STREAM_PRODUCE_OWN, NodeApi_flags(%r13)
+    mov     NodeApi_root(%r13), %rsi
+    movq    $0, NodeApi_root(%r13)
+    mov     $NODE_ACT_BYTES_FREE, %edi
+    xor     %edx, %edx
+    call    node_ids
+1:  movq    $0, NodeApi_root(%r13)
+2:  testq   $API_STREAM_GONE, NodeApi_flags(%r13)  # the connection closed meanwhile: the entry ends
+    jz      3f
+    mov     %r13, %rdi
+    call    node_produce_release
+    mov     %r13, %rdi
+    call    node_api_end
+    LEAVE 0
+3:  mov     S7(%rsp), %rax
     mov     NodeAction_work_kind(%r12), %rcx
     cmp     $NODE_WORK_PRODUCE_CHECK, %rcx
     jne     20f
@@ -4632,17 +4652,8 @@ LOCAL_FUNCTION node_produce_done
     mov     %r13, %rdi
     call    node_produce_next
     LEAVE 0
-20: cmp     $NODE_WORK_PRODUCE_FOLD, %rcx
+20: cmp     $NODE_WORK_PRODUCE_FOLD, %rcx   # the draft holds the entry, or the rules left it out: the next
     jne     30f
-    testq   $API_STREAM_PRODUCE_OWN, NodeApi_flags(%r13)  # the pool entry's bytes, when they left the pool meanwhile
-    jz      21f
-    andq    $~API_STREAM_PRODUCE_OWN, NodeApi_flags(%r13)
-    mov     NodeApi_root(%r13), %rsi
-    movq    $0, NodeApi_root(%r13)
-    mov     $NODE_ACT_BYTES_FREE, %edi
-    xor     %edx, %edx
-    call    node_ids
-21: movq    $0, NodeApi_root(%r13)          # the draft holds the entry, or the rules left it out: the next
     mov     %r13, %rdi
     call    node_produce_next
     LEAVE 0
@@ -4701,6 +4712,7 @@ LOCAL_FUNCTION node_produce_next
     mov     $NodeApi__mem, %ecx
     div     %rcx
     mov     %rax, %r13
+    orq     $API_STREAM_BUSY, NodeApi_flags(%r12)  # busy with its next work
     cmpq    $0, NodeApi_data(%r12)          # the draft, before the first fold: a zeroed buffer
     jne     11f
     mov     $NODE_ACT_BYTES_NEW, %edi
@@ -4801,6 +4813,8 @@ LOCAL_FUNCTION node_produce_fail
     mov     %rdi, (%rsp)
     mov     %rsi, %rdx
     mov     NodeApi_flags(%rdi), %rax
+    test    $API_STREAM_GONE, %rax          # the connection closed: no answer
+    jnz     2f
     mov     NodeApi_connection(%rdi), %rdi
     xor     %esi, %esi
     mov     $API_BODY_ERROR, %ecx
@@ -4811,7 +4825,7 @@ LOCAL_FUNCTION node_produce_fail
     jz      1f
     mov     $API_R_KEEP, %r8d
 1:  call    node_api_send
-    mov     (%rsp), %rdi
+2:  mov     (%rsp), %rdi
     call    node_produce_release
     mov     (%rsp), %rdi
     call    node_api_end
@@ -5478,9 +5492,9 @@ LOCAL_FUNCTION node_api_event_done
 9:  UNFRAME 0
 END_FUNCTION node_api_event_done
 
-/* NODE_EV_API_CLOSED of the connection rdi: its stream ends, or with a chunk queued takes API_STREAM_GONE. */
+/* NODE_EV_API_CLOSED of the connection rdi: its stream ends, or with a chunk or work queued takes API_STREAM_GONE. Locals: the entry. */
 LOCAL_FUNCTION node_api_closed
-    FRAME 0
+    FRAME 16
     call    node_api_find
     cmp     $-1, %rax
     je      9f
@@ -5488,9 +5502,14 @@ LOCAL_FUNCTION node_api_closed
     jz      1f
     orq     $API_STREAM_GONE, NodeApi_flags(%rdx)
     jmp     9f
-1:  mov     %rdx, %rdi
+1:  mov     %rdx, (%rsp)
+    cmpq    $API_OP_PRODUCE_BLOCK_V3, NodeApi_op(%rdx)  # a produceBlockV3: its draft and engine result go too
+    jne     2f
+    mov     %rdx, %rdi
+    call    node_produce_release
+2:  mov     (%rsp), %rdi
     call    node_api_end
-9:  UNFRAME 0
+9:  UNFRAME 16
 END_FUNCTION node_api_closed
 
 /*

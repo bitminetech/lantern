@@ -303,6 +303,9 @@ def payload_cases(fork, preset):
 
 # ---------------------------------------------------------------- Block production (beacon-api.md, produceBlockV3)
 
+PRODUCE_CLOSES = 24  # more steps than a produceBlockV3 of an empty pool takes
+
+
 def produce_cases(fork, preset):
     """node-produce: produceBlockV3 of the first slot after the anchor's of a proposer not slashed,
     with a randao reveal of the proposer's test key, and from bellatrix an empty payload of the
@@ -313,7 +316,9 @@ def produce_cases(fork, preset):
     attester slashing of only the proposer slashing's validator, an exit of a validator the
     attester slashing slashes). skip_randao: skip_randao_verification with the point at infinity,
     the state root of process_block with no signature checks. bad_reveal: 400 for a reveal of
-    another key, and for skip_randao_verification with a reveal that is not the point at infinity."""
+    another key, and for skip_randao_verification with a reveal that is not the point at infinity.
+    closed: the request with its connection closed after each number of the node's steps up to
+    PRODUCE_CLOSES, then answered."""
     import json_codec
     import reqresp
     from eth_consensus_specs.utils import bls
@@ -546,9 +551,22 @@ def produce_cases(fork, preset):
             "responses": [response(200)] * len(pool_reqs) + [answer(body, False), answer(data_ssz, True)],
             "payload_id": bytes(range(1, 9)) if merged else b"",
             "result": result.encode() if result is not None else b"",
+            "closes": 0,
         }
         if name != "empty_pool":
             continue
+        # the connection closed after each number of the node's steps, then the request answered
+        yield "produce", "closed", {
+            "anchor_state": bytes(state.encode_bytes()),
+            "anchor_block": bytes(anchor_block.encode_bytes()),
+            "time_ms": time_ms,
+            "ticks": [time_ms],
+            "requests": [b"GET " + path + b" HTTP/1.1\r\nHost: lantern\r\n\r\n"],
+            "responses": [answer(body, False)],
+            "payload_id": bytes(range(1, 9)) if merged else b"",
+            "result": result.encode() if result is not None else b"",
+            "closes": PRODUCE_CLOSES,
+        }
         # 400 before any engine call: a reveal of another key; the skip flag with a reveal not the point at infinity
         bad = [b"/eth/v3/validator/blocks/%d?randao_reveal=0x%s" % (int(slot), other.hex().encode()),
                b"/eth/v3/validator/blocks/%d?randao_reveal=0x%s&skip_randao_verification=" % (int(slot), bytes(reveal).hex().encode())]
@@ -561,6 +579,7 @@ def produce_cases(fork, preset):
             "responses": [error(400), error(400)],
             "payload_id": bytes(range(1, 9)) if merged else b"",
             "result": result.encode() if result is not None else b"",
+            "closes": 0,
         }
 
 

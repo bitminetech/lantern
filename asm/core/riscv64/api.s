@@ -4546,9 +4546,9 @@ LOCAL_FUNCTION node_api_produce
     li      t1, API_TYPE_SSZ
     bne     t0, t1, 1f
     ori     s10, s10, API_STREAM_SSZ
-1:  ld      t0, ApiView_look_copy(s8)       # the state: a copy at the slot
+1:  ld      t0, ApiView_look_copy(s8)       # the state: a copy at the slot; busy with its check
     beqz    t0, 8f
-    li      t0, API_STREAM_OWN_STATE
+    li      t0, API_STREAM_OWN_STATE | API_STREAM_BUSY
     or      s10, s10, t0
     call    node_api_new
     mv      s4, a0
@@ -4617,7 +4617,33 @@ LOCAL_FUNCTION node_produce_done
     li      t1, API_OP_PRODUCE_BLOCK_V3
     bne     t0, t1, 9f
     ld      s7, NodeEvent_result(s3)
+    ld      t0, NodeApi_flags(s4)           # its work is done
+    andi    t0, t0, ~API_STREAM_BUSY
+    sd      t0, NodeApi_flags(s4)
     ld      t0, NodeAction_work_kind(s3)
+    li      t1, NODE_WORK_PRODUCE_FOLD      # a fold: the pool entry's bytes, when they left the pool meanwhile
+    bne     t0, t1, 2f
+    ld      t0, NodeApi_flags(s4)
+    li      t1, API_STREAM_PRODUCE_OWN
+    and     t2, t0, t1
+    beqz    t2, 1f
+    xor     t0, t0, t1
+    sd      t0, NodeApi_flags(s4)
+    ld      a1, NodeApi_root(s4)
+    sd      zero, NodeApi_root(s4)
+    li      a0, NODE_ACT_BYTES_FREE
+    li      a2, 0
+    call    node_ids
+1:  sd      zero, NodeApi_root(s4)
+2:  ld      t0, NodeApi_flags(s4)           # the connection closed meanwhile: the entry ends
+    andi    t0, t0, API_STREAM_GONE
+    beqz    t0, 3f
+    mv      a0, s4
+    call    node_produce_release
+    mv      a0, s4
+    call    node_api_end
+    LEAVE 0
+3:  ld      t0, NodeAction_work_kind(s3)
     li      t1, NODE_WORK_PRODUCE_CHECK
     bne     t0, t1, 20f
     li      a1, 400                         # the check: 400 for the reveal, 500 for another
@@ -4651,20 +4677,8 @@ LOCAL_FUNCTION node_produce_done
     mv      a0, s4
     call    node_produce_next
     LEAVE 0
-20: li      t1, NODE_WORK_PRODUCE_FOLD
+20: li      t1, NODE_WORK_PRODUCE_FOLD      # the draft holds the entry, or the rules left it out: the next
     bne     t0, t1, 30f
-    ld      t0, NodeApi_flags(s4)           # the pool entry's bytes, when they left the pool meanwhile
-    li      t1, API_STREAM_PRODUCE_OWN
-    and     t2, t0, t1
-    beqz    t2, 21f
-    xor     t0, t0, t1
-    sd      t0, NodeApi_flags(s4)
-    ld      a1, NodeApi_root(s4)
-    sd      zero, NodeApi_root(s4)
-    li      a0, NODE_ACT_BYTES_FREE
-    li      a2, 0
-    call    node_ids
-21: sd      zero, NodeApi_root(s4)          # the draft holds the entry, or the rules left it out: the next
     mv      a0, s4
     call    node_produce_next
     LEAVE 0
@@ -4719,6 +4733,9 @@ LOCAL_FUNCTION node_produce_next
     sub     s4, s3, t0
     li      t2, NodeApi__mem
     divu    s4, s4, t2
+    ld      t0, NodeApi_flags(s3)           # busy with its next work
+    ori     t0, t0, API_STREAM_BUSY
+    sd      t0, NodeApi_flags(s3)
     ld      t0, NodeApi_data(s3)            # the draft, before the first fold: a zeroed buffer
     bnez    t0, 11f
     li      a0, NODE_ACT_BYTES_NEW
@@ -4810,6 +4827,8 @@ LOCAL_FUNCTION node_produce_fail
     sd      a0, 0(sp)
     mv      a2, a1
     ld      t0, NodeApi_flags(a0)
+    andi    t1, t0, API_STREAM_GONE         # the connection closed: no answer
+    bnez    t1, 2f
     ld      a0, NodeApi_connection(a0)
     li      a1, 0
     li      a3, API_BODY_ERROR
@@ -4819,7 +4838,7 @@ LOCAL_FUNCTION node_produce_fail
     beqz    t1, 1f
     li      a4, API_R_KEEP
 1:  call    node_api_send
-    ld      a0, 0(sp)
+2:  ld      a0, 0(sp)
     call    node_produce_release
     ld      a0, 0(sp)
     call    node_api_end
@@ -5487,9 +5506,9 @@ LOCAL_FUNCTION node_api_event_run
     LEAVE 32
 END_FUNCTION node_api_event_run
 
-/* NODE_EV_API_CLOSED of the connection a0: its stream ends, or with a chunk queued takes API_STREAM_GONE. */
+/* NODE_EV_API_CLOSED of the connection a0: its stream ends, or with a chunk or work queued takes API_STREAM_GONE. Locals: F the entry. */
 LOCAL_FUNCTION node_api_closed
-    FRAME 0
+    FRAME 16
     call    node_api_find
     li      t0, -1
     beq     a0, t0, 9f
@@ -5499,9 +5518,15 @@ LOCAL_FUNCTION node_api_closed
     ori     t0, t0, API_STREAM_GONE
     sd      t0, NodeApi_flags(a1)
     j       9f
-1:  mv      a0, a1
+1:  sd      a1, 0(sp)
+    ld      t0, NodeApi_op(a1)              # a produceBlockV3: its draft and engine result go too
+    li      t1, API_OP_PRODUCE_BLOCK_V3
+    bne     t0, t1, 2f
+    mv      a0, a1
+    call    node_produce_release
+2:  ld      a0, 0(sp)
     call    node_api_end
-9:  UNFRAME 0
+9:  UNFRAME 16
 END_FUNCTION node_api_closed
 
 /*
