@@ -21,6 +21,7 @@
 - [`lantern_node_proposer_lookahead`](#function-lantern_node_proposer_lookahead): a state's `proposer_lookahead`, for one fork.
 - [`lantern_node_weights`](#function-lantern_node_weights): get_weight of each node of a store, for one fork.
 - [`lantern_node_sync_subnets`](#function-lantern_node_sync_subnets): compute_subnets_for_sync_committee of a validator, for one fork.
+- [`lantern_node_sync_positions`](#function-lantern_node_sync_positions): the places of a validator in that sync committee, for one fork.
 - [`lantern_node_data_root`](#function-lantern_node_data_root): hash_tree_root of an `AttestationData`'s SSZ bytes, for one fork.
 - [`lantern_node_pending`](#function-lantern_node_pending): the items of a pending list of a state, for one fork.
 - [`lantern_node_blinded_block`](#function-lantern_node_blinded_block): the blinded block of a block's SSZ bytes, for one fork.
@@ -460,7 +461,8 @@ lantern_node_step(node, store, p2p, tick, events, scratch, actions, result) -> s
   - A sidecar of a sidecar stream, from the index i on, below 128, of a bit of the filters: `member` i, `data` its bytes, the `NodeBlob` entry's in `NODE_BLOB_VALID` of `root` and index i, else, with `NODE_FLAG_DB`, the `NODE_DB_REF` of the `Db`'s sidecar record of `slot` and index i; `sent` 0 and `cursor` zero. With none, `data` 0.
   - An item of getBlockHeaders: `slot` 0 for the `Db`'s block, i + 1 for the `NodeBlock` at index i; its root at byte 0 of `cursor`; `member` 1 when it is on the chain; `data` the block's bytes, its `NodeBlock`'s, else the `NODE_DB_REF` of its `Db` record (lantern_db_find_root of its root); with none, `state` its post-state. With no item, `data` and `state` 0.
   - getAggregatedAttestationV2: a pool stream of the attestations of `slot` and `committee_index` (`filter_slot`, `filter_index`), with `attestation_data_root` at byte 0 of `cursor` and `API_STREAM_FOLD`, and `API_STREAM_SSZ` for an SSZ `response`; with no entry, the error 404 and no stream.
-  - A chunk of getAggregatedAttestationV2 with `API_STREAM_FOLD` and without `API_STREAM_DONE` sends nothing, and its next `NODE_WORK_API_CHUNK` goes at once. With `data`, it folded its entry into the aggregate in `cursor`, with `API_STREAM_ITEM_DONE`: the entry goes to its next pool entry, `cursor` kept. With `data` 0 and no bytes, the fold's end: `API_STREAM_OPTIMISTIC` is set when the `BlockNode` of the store's `blocks` with the aggregate's `beacon_block_root` (fork-choice.md) has `payload_status` `NOT_VALIDATED`. With `data` 0 and bytes, they are the `Attestation`'s SSZ bytes: a `NODE_ACT_BYTES_PUT` of them to a new id, which becomes `data`, with `API_STREAM_OWN`; `API_STREAM_FOLD` clears, `sent` is 0 and `cursor` zero, and the chunks after it are the answer.
+  - produceSyncCommitteeContribution: a pool stream of the sync committee messages of `slot` (`filter_slot`) valid on the subnet `subcommittee_index` (`filter_index`: bit `filter_index` of the entry's `index`), with `beacon_block_root` at byte 0 of `cursor`, `API_STREAM_FOLD`, and `state` the head's post-state; a `subcommittee_index` not below `SYNC_COMMITTEE_SUBNET_COUNT`, the error 400; a head with no post-state, the error 500; with no entry, the error 404; each with no stream.
+  - A chunk of getAggregatedAttestationV2 with `API_STREAM_FOLD` and without `API_STREAM_DONE` sends nothing, and its next `NODE_WORK_API_CHUNK` goes at once. With `data`, it folded its entry into the aggregate in `cursor`, with `API_STREAM_ITEM_DONE`: the entry goes to its next pool entry, `cursor` kept. With `data` 0 and no bytes, the fold's end: `API_STREAM_OPTIMISTIC` is set when the `BlockNode` of the store's `blocks` with the aggregate's `beacon_block_root` (fork-choice.md; a contribution's, at byte 0 of `cursor`) has `payload_status` `NOT_VALIDATED`. With `data` 0 and bytes, they are the `Attestation`'s SSZ bytes: a `NODE_ACT_BYTES_PUT` of them to a new id, which becomes `data`, with `API_STREAM_OWN`; `API_STREAM_FOLD` clears, `sent` is 0 and `cursor` zero, and the chunks after it are the answer.
   - The pool streams: `fork` the fork of the store's slot; `slot` the index of the pool's first entry the stream answers, `data` its bytes, `sent` its fork and `member` its member; with none, `data` 0. getPoolAttestationsV2: `filter_slot` the route's `slot` and `filter_index` its `committee_index`, each 2^64 - 1 when not given; the other pool streams: both 2^64 - 1.
   - The entries a pool stream answers: those of the operation's topic; for getPoolAttesterSlashingsV2, of an `AttesterSlashing` type that is that of `fork`; for getPoolAttestationsV2, of the attestation type of `fork` (electra's from electra, phase0's before), with `slot` equal to `filter_slot` and `index` equal to `filter_index` when those are not 2^64 - 1.
   - getEpochCommittees: `state` as for the validator streams, `data` 0; in `cursor`, the first slot (`slot`, else the epoch's first) at byte 0, the epoch at 24, `slot` at 40 and `index` at 48 (2^64 - 1 for one not given).
@@ -591,7 +593,8 @@ lantern_node_run(node, store, seen, work, state_a, state_b, state_c, data, setti
   - getAggregatedAttestationV2: the room of a pool stream's chunk. The aggregate in `cursor`: the root at byte 0, the count at 32, the committee length at 40, `data` at 48, `signature` at 176, the bits from 272.
   - With `API_STREAM_FOLD` and `data`: no bytes, and `API_STREAM_ITEM_DONE`. `data` is the pool entry's: of the fork `sent` from electra a `SingleAttestation` (240 bytes) with its place `member` % 2^16 and its committee's length `member` / 2^16, before electra an `Attestation` (the offset 228, at most 228 + MAX_VALIDATORS_PER_COMMITTEE / 8 + 1 bytes) with its first bit set as its place and its bits' length. The entry joins when lantern_node_data_root of the fork `fork` of its `data` is the root, and, after the first, its length is the aggregate's and its place's bit is clear: the first gives the length, `data` and `signature`; a later one's signature is added by crypto_bls_aggregate of a `BlsSignatureList` of the two at the end of `scratch`. Its place's bit is set and the count goes up. Bytes that are no such attestation, a length above `MAX_VALIDATORS_PER_COMMITTEE`, a place not below the length, and a signature crypto_bls_aggregate rejects give the result `LANTERN_INVALID_ENCODING`.
   - With `API_STREAM_FOLD` and `data` 0: a count of 0, the error 404; `API_STREAM_OPTIMISTIC`, the error 503; each as the whole answer, with `API_STREAM_DONE`. Else the chunk's bytes are the SSZ bytes of the `Attestation` of the fork `fork`: `aggregation_bits` of the length with the aggregate's bits, `data`, `signature`, from electra `committee_bits` with the bit of `filter_index` (one not below `MAX_COMMITTEES_PER_SLOT` gives the result `LANTERN_INVALID_ENCODING`); they fit the first chunk's room (the build checks it).
-  - Without `API_STREAM_FOLD`: the answer from `data`, as getBlockV2's: as SSZ its bytes with `Content-Length`; as JSON the head and `{"version":"<fork>","data":`, the JSON by lantern_node_json of the fork `fork` and `NODE_JSON_ATTESTATION` from `cursor`, and `}`. `data` 0 gives the result `LANTERN_INVALID_ENCODING`.
+  - produceSyncCommitteeContribution, with `API_STREAM_FOLD` and `data`: no bytes, and `API_STREAM_ITEM_DONE`. `data` is a `SyncCommitteeMessage` (144 bytes) whose `beacon_block_root` is that at byte 0 of `cursor`: its places in the subcommittee `filter_index` (lantern_node_sync_positions of the fork `fork` of `state_a` and its `validator_index`), when none is set in the bits at byte 144 of `cursor`, are set there, and for each its `signature` joins the one at byte 48 (the first is copied, a later one added by crypto_bls_aggregate of a `BlsSignatureList` of the two at the end of `scratch`); byte 32 counts the places. Bytes of another size, no `state_a`, and a signature crypto_bls_aggregate rejects give the result `LANTERN_INVALID_ENCODING`. With `data` 0, as for getAggregatedAttestationV2, the bytes of the `SyncCommitteeContribution`: `slot` `filter_slot`, the root, `subcommittee_index` `filter_index`, the bits, the signature.
+  - Without `API_STREAM_FOLD`: the answer from `data`, as getBlockV2's: as SSZ its bytes with `Content-Length`; as JSON the head and `{"version":"<fork>","data":`, the JSON by lantern_node_json of the fork `fork` and `NODE_JSON_ATTESTATION` from `cursor`, and `}`; produceSyncCommitteeContribution: `{"data":`, `NODE_JSON_SYNC_CONTRIBUTION`, and no `Eth-Consensus-Version`. `data` 0 gives the result `LANTERN_INVALID_ENCODING`.
 - Bytes too short for their type give the result `LANTERN_INVALID_ENCODING`.
 
 ## Function `lantern_node_protocols`
@@ -992,6 +995,37 @@ lantern_node_sync_subnets(state, validator_index, out) -> status
 ### ABI
 
 - Export: `lantern_<fork>_node_sync_subnets` of each fork object (asm/core/<ISA>/networking.s, beside the sync committee gossip checks).
+- Argument order: `state`, `validator_index`, `out`.
+
+## Function `lantern_node_sync_positions`
+
+The places of a validator in the sync committee that compute_subnets_for_sync_committee reads (altair validator.md; beacon-api.md, produceSyncCommitteeContribution).
+
+### Signature
+
+```
+lantern_node_sync_positions(state, validator_index, out) -> status
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `state` | input | `BeaconState` |
+| `validator_index` | input | u64 |
+| `out` | output | SYNC_COMMITTEE_SIZE / 8 bytes: bit p for place p |
+
+### Returns
+
+- `LANTERN_OK`: `out` holds bit p, of byte p / 8 at bit p % 8, for each place p of the validator's public key in the sync committee of lantern_node_sync_subnets; none for an index past the validators, and before altair.
+
+### Tests
+
+- The node-api cases of produceSyncCommitteeContribution: their answers come from the spec module's sync committee and the validator guide's rules.
+
+### ABI
+
+- Export: `lantern_<fork>_node_sync_positions` of each fork object (asm/core/<ISA>/networking.s).
 - Argument order: `state`, `validator_index`, `out`.
 
 ## Function `lantern_node_pending`
@@ -1636,7 +1670,7 @@ lantern_node_json(kind, ssz, cursor, out) -> status
 
 | Name | Role | Type |
 |---|---|---|
-| `kind` | input | u64: `NODE_JSON_BLOCK` (0) `SignedBeaconBlock`, `NODE_JSON_STATE` (1) `BeaconState`, `NODE_JSON_EXIT` (2) `SignedVoluntaryExit`, `NODE_JSON_PROPOSER_SLASHING` (3) `ProposerSlashing`, `NODE_JSON_ATTESTER_SLASHING` (4) `AttesterSlashing`, `NODE_JSON_BLS_CHANGE` (5) `SignedBLSToExecutionChange`, `NODE_JSON_ATTESTATION` (6) `Attestation`, `NODE_JSON_SINGLE_ATTESTATION` (7) `SingleAttestation`, `NODE_JSON_ATTESTATIONS` (8) `Attestations`, `NODE_JSON_BLINDED_BLOCK` (9) `SignedBlindedBeaconBlock` from bellatrix, `SignedBeaconBlock` before, `NODE_JSON_BLOB_SIDECAR` (10) `BlobSidecar` of deneb and electra, `NODE_JSON_DATA_COLUMN_SIDECAR` (11) `DataColumnSidecar` from fulu, `NODE_JSON_AGGREGATE_AND_PROOF` (12) `SignedAggregateAndProof`, `NODE_JSON_SYNC_COMMITTEE_MESSAGE` (13) `SyncCommitteeMessage` from altair |
+| `kind` | input | u64: `NODE_JSON_BLOCK` (0) `SignedBeaconBlock`, `NODE_JSON_STATE` (1) `BeaconState`, `NODE_JSON_EXIT` (2) `SignedVoluntaryExit`, `NODE_JSON_PROPOSER_SLASHING` (3) `ProposerSlashing`, `NODE_JSON_ATTESTER_SLASHING` (4) `AttesterSlashing`, `NODE_JSON_BLS_CHANGE` (5) `SignedBLSToExecutionChange`, `NODE_JSON_ATTESTATION` (6) `Attestation`, `NODE_JSON_SINGLE_ATTESTATION` (7) `SingleAttestation`, `NODE_JSON_ATTESTATIONS` (8) `Attestations`, `NODE_JSON_BLINDED_BLOCK` (9) `SignedBlindedBeaconBlock` from bellatrix, `SignedBeaconBlock` before, `NODE_JSON_BLOB_SIDECAR` (10) `BlobSidecar` of deneb and electra, `NODE_JSON_DATA_COLUMN_SIDECAR` (11) `DataColumnSidecar` from fulu, `NODE_JSON_AGGREGATE_AND_PROOF` (12) `SignedAggregateAndProof`, `NODE_JSON_SYNC_COMMITTEE_MESSAGE` (13) `SyncCommitteeMessage` from altair, `NODE_JSON_SYNC_CONTRIBUTION` (14) `SyncCommitteeContribution` from altair |
 | `ssz` | input | ByteList: a valid SSZ encoding of the type |
 | `cursor` | state | `JsonCursor` of [beacon-api.md](beacon-api.md#type-jsoncursor) |
 | `out` | output | ByteList |

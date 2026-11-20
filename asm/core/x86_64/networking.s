@@ -1800,6 +1800,47 @@ SPEC_LEAF node_sync_subnets
     ret
 SPEC_END node_sync_subnets
 
+/*
+ * (state rdi, validator_index rsi, out rdx) -> rax: the places of the validator's public key in
+ * the sync committee that compute_subnets_for_sync_committee reads (altair validator.md): bit p
+ * of the SYNC_COMMITTEE_SIZE / 8 bytes at out for place p; none for an index past the validators,
+ * and before altair.
+ */
+SPEC_LEAF node_sync_positions
+    xor     %eax, %eax
+1:  cmp     $(SYNC_COMMITTEE_SIZE / 8), %rax
+    jae     2f
+    movb    $0, (%rdx,%rax)
+    inc     %rax
+    jmp     1b
+2:
+.if FORK >= FORK_ALTAIR
+    mov     %rdx, %r8
+    mov     %rsi, %r9
+    SYNC_COMMITTEE_OF %rsi, %rdi
+    add     $SyncCommittee_pubkeys, %rsi
+    VALIDATOR_AT %r10, %rdi, %r9, 9f
+    add     $Validator_pubkey, %r10
+    xor     %edi, %edi
+3:  cmp     $SYNC_COMMITTEE_SIZE, %rdi
+    jae     9f
+    imul    $48, %rdi, %rax
+    add     %rsi, %rax
+    NE48    %rax, %r10, 4f
+    mov     %rdi, %rax
+    shr     $3, %rax
+    mov     %edi, %ecx
+    and     $7, %ecx
+    mov     $1, %edx
+    shl     %cl, %edx
+    or      %dl, (%r8,%rax)
+4:  inc     %rdi
+    jmp     3b
+.endif
+9:  xor     %eax, %eax
+    ret
+SPEC_END node_sync_positions
+
 /* ---------------------------------------------------------------- Gossip: attester slashings */
 
 /*
