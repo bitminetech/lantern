@@ -43,7 +43,7 @@ The answers of the node (node.md, `NODE_EV_API`) follow these rules.
   - CRLF, then the body.
 - The connection closes after the response when the request has `close`, or when lantern_http_request found it faulty.
 - Reason phrases: 200 `OK`, 206 `Partial Content`, 400 `Bad Request`, 404 `Not Found`, 405 `Method Not Allowed`, 406 `Not Acceptable`, 413 `Content Too Large`, 414 `URI Too Long`, 415 `Unsupported Media Type`, 431 `Request Header Fields Too Large`, 500 `Internal Server Error`, 501 `Not Implemented`, 505 `HTTP Version Not Supported`. The code of getHealth's `syncing_status` has none: the line ends with the space after the code.
-- An error is a status of 400 or more. Its body is `{"code":<code>,"message":"<message>"}`, with the code in decimal and the message of its status: 400 `BAD_REQUEST`, 404 `NOT_FOUND`, 405 `METHOD_NOT_ALLOWED`, 406 `NOT_ACCEPTABLE`, 413 `CONTENT_TOO_LARGE`, 414 `URI_TOO_LONG`, 415 `UNSUPPORTED_MEDIA_TYPE`, 431 `REQUEST_HEADER_FIELDS_TOO_LARGE`, 500 `INTERNAL_SERVER_ERROR`, 501 `NOT_IMPLEMENTED`, 505 `HTTP_VERSION_NOT_SUPPORTED`.
+- An error is a status of 400 or more. Its body is `{"code":<code>,"message":"<message>"}`, with the code in decimal and the message of its status: 400 `BAD_REQUEST`, 404 `NOT_FOUND`, 405 `METHOD_NOT_ALLOWED`, 406 `NOT_ACCEPTABLE`, 413 `CONTENT_TOO_LARGE`, 414 `URI_TOO_LONG`, 415 `UNSUPPORTED_MEDIA_TYPE`, 431 `REQUEST_HEADER_FIELDS_TOO_LARGE`, 500 `INTERNAL_SERVER_ERROR`, 501 `NOT_IMPLEMENTED`, 503 `SERVICE_UNAVAILABLE`, 505 `HTTP_VERSION_NOT_SUPPORTED`.
 - JSON has no white space and the fields in the order below. A number is a decimal string, a byte string `0x` and lower case hex, a text its bytes in quotes, a flag `true` or `false`.
 - The values:
   - `genesis_time`: the store's `genesis_time_ms` / 1000.
@@ -109,6 +109,12 @@ The answers of the node (node.md, `NODE_EV_API`) follow these rules.
   - With `slot`, 400 when the slot is not of the epoch. With `index`, 400 when it is get_committee_count_per_slot of the state and the epoch, or more. The checks go in that order.
   - An item for each slot of the epoch (or `slot`), in order, and in each for each index from 0 below get_committee_count_per_slot (or `index`): `{"index":…,"slot":…,"validators":[…]}`, the members of get_beacon_committee of the state, the slot and the index, in order.
   - Streamed, as getStateValidators: `{"execution_optimistic":…,"finalized":…,"data":[<the items, with , between>]}`, the values those of the state.
+- getProposerDuties: the proposers of `epoch`.
+  - 503 while the node syncs (`is_syncing`), beacon-APIs `CurrentlySyncing`; Lighthouse v8.3.3 refuses its duty operations then too.
+  - 400 for an epoch above the epoch of `current_slot` + 1.
+  - The state: that of the chain at the epoch's first slot, as for a `state_id` of that slot; a first slot past the store's slot (the next epoch) takes the head's post-state brought to it. With none: 404, as Lighthouse v8.3.3 answers when its state lookup of the slot finds none.
+  - `{"dependent_root":…,"execution_optimistic":…,"data":[…]}`, `execution_optimistic` that of the state; for each slot s of the epoch, in order, `{"pubkey":…,"validator_index":…,"slot":…}` of get_beacon_proposer_index of the state at s: from fulu `proposer_lookahead[s % SLOTS_PER_EPOCH]`; before, compute_proposer_index of the epoch's active validators with sha256(get_seed(state, epoch, DOMAIN_BEACON_PROPOSER) + uint_to_bytes(s)). These hold for any s of the epoch from the state at its first slot.
+  - `dependent_root`: get_block_root_at_slot(state, the first slot - 1); for epoch 0, the genesis block's root, hash_tree_root of the state's `latest_block_header` with the state's hash_tree_root as its `state_root`.
 - Every other operation: 501.
 
 ## Test vectors

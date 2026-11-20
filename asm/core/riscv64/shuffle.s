@@ -295,7 +295,7 @@ SPEC_FUNCTION compute_proposer_index
     LEAVE 96
 SPEC_END compute_proposer_index
 
-.if FORK >= FORK_FULU
+/* Every fork: fulu's spec function, and lantern_node_proposers before fulu (node.md). */
 /*
  * s1 state, s2 seed, s3 indices, s4 scratch, s5 out, s6 slot index, s7 start slot,
  * s8 scratch size. Locals: L start slot, L+8 the message (seed, slot), L+48 the slot seed.
@@ -341,9 +341,8 @@ SPEC_FUNCTION compute_proposer_indices
 6:  li      a0, LANTERN_INVALID_OVERFLOW
     LEAVE 80
 SPEC_END compute_proposer_indices
-.endif
 
-.if FORK >= FORK_FULU
+/* Every fork: fulu's spec function, and lantern_node_proposers before fulu (node.md). */
 /*
  * s1 state, s2 epoch, s3 scratch, s4 out, s5 validator count, s6 scratch size, s7 active list.
  * Locals: L domain type, L+8 seed.
@@ -383,7 +382,6 @@ SPEC_FUNCTION get_beacon_proposer_indices
 9:  li      a0, LANTERN_BUFFER_TOO_SMALL
     LEAVE 48
 SPEC_END get_beacon_proposer_indices
-.endif
 
 /* ---------------------------------------------------------------- Domains and signing roots */
 

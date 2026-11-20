@@ -1358,7 +1358,7 @@ LOCAL_FUNCTION api_body
     API_LIT api_end2
     UNFRAME 16
 18: li      t0, API_OP_GET_STATE_VALIDATOR   # {"execution_optimistic":…,"finalized":…,"data":<item>}
-    bne     s10, t0, 99f
+    bne     s10, t0, 19f
     API_LIT api_v_open
     ld      a0, ApiView_is_optimistic(s4)
     call    api_bool
@@ -1371,6 +1371,53 @@ LOCAL_FUNCTION api_body
     li      a2, 0
     call    api_validator_item
     API_LIT api_end1
+    UNFRAME 16
+    # getProposerDuties: {"dependent_root":…,"execution_optimistic":…,"data":[{"pubkey":…,"validator_index":…,"slot":…},…]}
+19: li      t0, API_OP_GET_PROPOSER_DUTIES
+    bne     s10, t0, 99f
+    API_LIT api_u_root
+    addi    a0, s4, ApiView_duties
+    li      a1, 32
+    call    api_qhex
+    API_LIT api_u_optimistic
+    ld      a0, ApiView_is_optimistic(s4)
+    call    api_bool
+    API_LIT api_v_list
+    sd      zero, 8(sp)                     # the slot's place in the epoch
+20: ld      t0, 8(sp)
+    li      t1, SLOTS_PER_EPOCH
+    bgeu    t0, t1, 21f
+    beqz    t0, 22f
+    API_LIT api_p_comma
+22: API_LIT api_u_pubkey
+    ld      a0, ApiView_val_state(s4)
+    PART    t0, t1, a0, NODE_STATE_VALIDATORS
+    ld      t2, 8(sp)
+    slli    t2, t2, 3
+    add     t2, t2, s4
+    ld      t2, (ApiView_duties + 32)(t2)
+    slli    t2, t2, 7                       # NODE_VALIDATOR_MEM: the pubkey first
+    add     a0, t0, t2
+    li      a1, 48
+    call    api_qhex
+    API_LIT api_u_index
+    ld      t2, 8(sp)
+    slli    t2, t2, 3
+    add     t2, t2, s4
+    ld      a0, (ApiView_duties + 32)(t2)
+    call    api_qdec
+    API_LIT api_c_slot
+    ld      t0, ApiView_val_state(s4)
+    ld      a0, NODE_STATE_SLOT(t0)
+    ld      t1, 8(sp)
+    add     a0, a0, t1
+    call    api_qdec
+    API_LIT api_end1
+    ld      t0, 8(sp)
+    addi    t0, t0, 1
+    sd      t0, 8(sp)
+    j       20b
+21: API_LIT api_v_end
 99: UNFRAME 16
 END_FUNCTION api_body
 
@@ -1808,6 +1855,8 @@ LOCAL_FUNCTION node_api_event
     beq     a3, t0, 66f
     li      t0, API_OP_GET_SPEC
     beq     a3, t0, 67f
+    li      t0, API_OP_GET_PROPOSER_DUTIES
+    beq     a3, t0, 63f
     addi    t0, a3, -API_OP_GET_STATE_VALIDATORS   # the six validator operations and getEpochCommittees: a state
     li      t1, API_OP_GET_EPOCH_COMMITTEES - API_OP_GET_STATE_VALIDATORS
     bleu    t0, t1, 66f
@@ -1842,6 +1891,33 @@ LOCAL_FUNCTION node_api_event
     ld      t0, ApiRoute_op(s7)
     li      t1, API_OP_GET_STATE_VALIDATOR
     bne     t0, t1, 64f
+    j       67f
+63: li      a2, 503                         # getProposerDuties: 503 while syncing; 400 past the next epoch
+    ld      t0, ApiView_is_syncing(s8)
+    bnez    t0, 80f
+    mv      a0, s2
+    call    node_store_slot
+    li      t1, SLOTS_PER_EPOCH
+    divu    t0, a0, t1
+    addi    t0, t0, 1
+    ld      t2, ApiRoute_epoch(s7)
+    li      a2, 400
+    bgtu    t2, t0, 80f
+    mul     t2, t2, t1                      # the first slot: as a state_id of it; past the store's slot, the head's post-state
+    sd      t2, ApiRoute_id_slot(s7)
+    li      t0, API_ID_SLOT
+    bleu    t2, a0, 62f
+    li      t0, API_ID_HEAD
+62: sd      t0, ApiRoute_id_kind(s7)
+    mv      a0, s7
+    mv      a1, s8
+    call    node_api_state
+    mv      a2, a0
+    bnez    a0, 80f
+    ld      t0, ApiRoute_id_slot(s7)        # brought to the first slot
+    sd      t0, ApiView_head_slot(s8)
+    mv      a0, s8
+    call    node_api_advance
     j       67f
 65: mv      a0, s7                          # a block: its lookup
     mv      a1, s8
@@ -1991,6 +2067,8 @@ LOCAL_FUNCTION node_api_run
     beq     s9, t2, 2f
     li      t2, API_OP_GET_STATE_ROOT
     beq     s9, t2, 2f
+    li      t2, API_OP_GET_PROPOSER_DUTIES
+    beq     s9, t2, 2f
     li      t2, API_OP_GET_STATE_FORK
     bne     s9, t2, 8f
 2:  ld      t0, 0(s6)                       # the ApiView at the end of scratch, with the work's values
@@ -2031,7 +2109,21 @@ LOCAL_FUNCTION node_api_run
     sd      s4, ApiView_val_state(s8)
     sd      a0, ApiView_val_index(s8)
     j       5f
-20: li      t0, API_OP_GET_STATE_FINALITY_CHECKPOINTS
+20: li      t0, API_OP_GET_PROPOSER_DUTIES
+    bne     s9, t0, 23f
+    mv      a0, s4                          # getProposerDuties: lantern_node_proposers
+    addi    a1, s1, Node_config
+    mv      a2, s6
+    addi    a3, s8, ApiView_duties
+    FORK_CALL node_proposers
+    li      t0, LANTERN_BUFFER_TOO_SMALL
+    beq     a0, t0, 71f
+    beqz    a0, 24f
+    sd      a0, NodeEvent_result(s7)
+    j       9f
+24: sd      s4, ApiView_val_state(s8)
+    j       5f
+23: li      t0, API_OP_GET_STATE_FINALITY_CHECKPOINTS
     bne     s9, t0, 21f
     mv      a0, s4                          # finality_checkpoints
     addi    a1, s8, ApiView_previous_justified

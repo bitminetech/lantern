@@ -1077,7 +1077,7 @@ lantern_compute_proposer_indices(state, epoch, seed, indices, scratch, out) -> s
 ### ABI
 
 - Argument order: `state`, `epoch`, `seed`, `indices`, `scratch`, `out`.
-- Forks: fulu.
+- Forks: fulu; every fork object exports it too, for lantern_node_proposers (node.md).
 
 ## Function `lantern_get_beacon_proposer_indices`
 
@@ -1107,7 +1107,7 @@ lantern_get_beacon_proposer_indices(state, epoch, scratch, out) -> status
 ### ABI
 
 - Argument order: `state`, `epoch`, `scratch`, `out`.
-- Forks: fulu.
+- Forks: fulu; every fork object exports it too, for lantern_node_proposers (node.md).
 
 ## Function `lantern_compute_fork_data_root`
 

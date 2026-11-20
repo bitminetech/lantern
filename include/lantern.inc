@@ -971,7 +971,8 @@
 .set ApiView_config, 1496               /* the address of the node's config */
 .set ApiView_val_state, 1504            /* getStateValidator: the state */
 .set ApiView_val_index, 1512            /* getStateValidator: the validator's index */
-.set ApiView__size, 1520
+.set ApiView_duties, 1520               /* getProposerDuties: lantern_node_proposers's out, 32 + 8 * SLOTS_PER_EPOCH bytes */
+.set ApiView__size, ApiView_duties + 32 + 8 * SLOTS_PER_EPOCH
 .set ApiIdentity_peer_id, 0              /* ApiIdentity (beacon-api.md): texts, each a length and its room */
 .set ApiIdentity_enr, 72
 .set ApiIdentity_p2p_address, 592

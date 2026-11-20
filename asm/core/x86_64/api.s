@@ -1305,7 +1305,7 @@ LOCAL_FUNCTION api_body
     API_LIT api_end2
     UNFRAME 16
 18: cmp     $API_OP_GET_STATE_VALIDATOR, %rsi   # {"execution_optimistic":…,"finalized":…,"data":<item>}
-    jne     99f
+    jne     19f
     API_LIT api_v_open
     mov     ApiView_is_optimistic(%rbp), %rdi
     call    api_bool
@@ -1318,6 +1318,47 @@ LOCAL_FUNCTION api_body
     xor     %edx, %edx
     call    api_validator_item
     API_LIT api_end1
+    UNFRAME 16
+    # getProposerDuties: {"dependent_root":…,"execution_optimistic":…,"data":[{"pubkey":…,"validator_index":…,"slot":…},…]}
+19: cmp     $API_OP_GET_PROPOSER_DUTIES, %rsi
+    jne     99f
+    API_LIT api_u_root
+    lea     ApiView_duties(%rbp), %rdi
+    mov     $32, %esi
+    call    api_qhex
+    API_LIT api_u_optimistic
+    mov     ApiView_is_optimistic(%rbp), %rdi
+    call    api_bool
+    API_LIT api_v_list
+    movq    $0, 8(%rsp)                     # the slot's place in the epoch
+20: mov     8(%rsp), %rax
+    cmp     $SLOTS_PER_EPOCH, %rax
+    jae     21f
+    test    %rax, %rax
+    jz      22f
+    API_LIT api_p_comma
+22: API_LIT api_u_pubkey
+    mov     ApiView_val_state(%rbp), %rdi
+    PART    %rax, %rcx, %rdi, NODE_STATE_VALIDATORS
+    mov     8(%rsp), %rcx
+    mov     (ApiView_duties + 32)(%rbp,%rcx,8), %rsi
+    shl     $7, %rsi                        # NODE_VALIDATOR_MEM: the pubkey first
+    lea     (%rax,%rsi), %rdi
+    mov     $48, %esi
+    call    api_qhex
+    API_LIT api_u_index
+    mov     8(%rsp), %rcx
+    mov     (ApiView_duties + 32)(%rbp,%rcx,8), %rdi
+    call    api_qdec
+    API_LIT api_c_slot
+    mov     ApiView_val_state(%rbp), %rax
+    mov     NODE_STATE_SLOT(%rax), %rdi
+    add     8(%rsp), %rdi
+    call    api_qdec
+    API_LIT api_end1
+    incq    8(%rsp)
+    jmp     20b
+21: API_LIT api_v_end
 99: UNFRAME 16
 END_FUNCTION api_body
 
@@ -1756,6 +1797,8 @@ LOCAL_FUNCTION node_api_event
     je      66f
     cmp     $API_OP_GET_SPEC, %rcx
     je      67f
+    cmp     $API_OP_GET_PROPOSER_DUTIES, %rcx
+    je      63f
     lea     -API_OP_GET_STATE_VALIDATORS(%rcx), %rax    # the six validator operations and getEpochCommittees: a state
     cmp     $(API_OP_GET_EPOCH_COMMITTEES - API_OP_GET_STATE_VALIDATORS), %rax
     jbe     66f
@@ -1794,6 +1837,39 @@ LOCAL_FUNCTION node_api_event
     mov     S7(%rsp), %rax
     cmpq    $API_OP_GET_STATE_VALIDATOR, ApiRoute_op(%rax)
     jne     64f
+    jmp     67f
+63: mov     $503, %edx                      # getProposerDuties: 503 while syncing; 400 past the next epoch
+    mov     S8(%rsp), %rax
+    cmpq    $0, ApiView_is_syncing(%rax)
+    jne     80f
+    mov     %rbp, %rdi
+    call    node_store_slot
+    mov     %rax, %rsi
+    xor     %edx, %edx
+    mov     $SLOTS_PER_EPOCH, %ecx
+    div     %rcx
+    inc     %rax
+    mov     S7(%rsp), %rdi
+    mov     ApiRoute_epoch(%rdi), %rcx
+    mov     $400, %edx
+    cmp     %rax, %rcx
+    ja      80f
+    imul    $SLOTS_PER_EPOCH, %rcx, %rcx    # the first slot: as a state_id of it; past the store's slot, the head's post-state
+    mov     %rcx, ApiRoute_id_slot(%rdi)
+    movq    $API_ID_SLOT, ApiRoute_id_kind(%rdi)
+    cmp     %rsi, %rcx
+    jbe     62f
+    movq    $API_ID_HEAD, ApiRoute_id_kind(%rdi)
+62: mov     S8(%rsp), %rsi
+    call    node_api_state
+    mov     %rax, %rdx
+    test    %rax, %rax
+    jnz     80f
+    mov     S7(%rsp), %rax                  # brought to the first slot
+    mov     ApiRoute_id_slot(%rax), %rax
+    mov     S8(%rsp), %rdi
+    mov     %rax, ApiView_head_slot(%rdi)
+    call    node_api_advance
     jmp     67f
 65: mov     S7(%rsp), %rdi                  # a block: its lookup
     mov     S8(%rsp), %rsi
@@ -1951,6 +2027,8 @@ LOCAL_FUNCTION node_api_run
     je      2f
     cmp     $API_OP_GET_STATE_ROOT, %eax
     je      2f
+    cmp     $API_OP_GET_PROPOSER_DUTIES, %eax
+    je      2f
     cmp     $API_OP_GET_STATE_FORK, %eax
     jne     8f
 2:  mov     (%r14), %rax                    # the ApiView at the end of scratch, with the work's values
@@ -1998,7 +2076,24 @@ LOCAL_FUNCTION node_api_run
     mov     %r13, ApiView_val_state(%rdi)
     mov     %rax, ApiView_val_index(%rdi)
     jmp     5f
-20: cmpq    $API_OP_GET_STATE_FINALITY_CHECKPOINTS, S9(%rsp)
+20: cmpq    $API_OP_GET_PROPOSER_DUTIES, S9(%rsp)
+    jne     23f
+    mov     %r13, %rdi                      # getProposerDuties: lantern_node_proposers
+    lea     Node_config(%rbx), %rsi
+    mov     %r14, %rdx
+    mov     S8(%rsp), %rcx
+    add     $ApiView_duties, %rcx
+    FORK_CALL node_proposers
+    cmp     $LANTERN_BUFFER_TOO_SMALL, %rax
+    je      71f
+    test    %rax, %rax
+    jz      24f
+    mov     %rax, NodeEvent_result(%r15)
+    jmp     9f
+24: mov     S8(%rsp), %rdi
+    mov     %r13, ApiView_val_state(%rdi)
+    jmp     5f
+23: cmpq    $API_OP_GET_STATE_FINALITY_CHECKPOINTS, S9(%rsp)
     jne     21f
     mov     %r13, %rdi                      # finality_checkpoints
     mov     S8(%rsp), %rsi

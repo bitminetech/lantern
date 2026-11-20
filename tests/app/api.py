@@ -18,6 +18,8 @@ the file GENESIS (genesis.ssz: altair, 4096 validators at slot 0). The checks:
   balance of GENESIS), postStateValidators of two ids, and getStateValidator of an index;
 - getEpochCommittees of head: 4 committees for each slot of epoch 0, in order, which hold each of
   the 4096 validators once;
+- getProposerDuties of epoch 0: the 8 slots of epoch 0 in order, each with a validator's index and
+  its pubkey in GENESIS, and as dependent_root the root of getBlockRoot of genesis;
 - a connection with no bytes closes within 31 s.
 Prints a PASS or FAIL line for each, and exits 1 when one fails.
 """
@@ -293,6 +295,25 @@ def main():
     validators("getEpochCommittees of head", request(b"GET", b"/eth/v1/beacon/states/head/committees"),
                lambda d, h: ([(x["slot"], x["index"]) for x in d] == [(str(s), str(i)) for s in range(8) for i in range(4)] and
                              sorted(int(v) for x in d for v in x["validators"]) == list(range(4096))))
+
+    name = "getProposerDuties of epoch 0"
+    u = connect(port)
+    ru = Reader(u)
+    try:
+        u.sendall(request(b"GET", b"/eth/v1/beacon/blocks/genesis/root"))
+        status, _, body = ru.response()
+        root = json.loads(body)["data"]["root"]
+        u.sendall(request(b"GET", b"/eth/v1/validator/duties/proposer/0"))
+        status2, _, body2 = ru.response()
+        d = json.loads(body2)
+        ok = (status == 200 and status2 == 200 and d["dependent_root"] == root and d["execution_optimistic"] is False and
+              [x["slot"] for x in d["data"]] == [str(s) for s in range(8)] and
+              all(0 <= int(x["validator_index"]) < 4096 and x["pubkey"] == pubkey(int(x["validator_index"])) for x in d["data"]))
+        check(name, ok, f"status {status} and {status2}: {body2[:300]!r}")
+    except (EOFError, OSError, ValueError, KeyError, IndexError) as x:
+        check(name, False, repr(x))
+    u.close()
+    time.sleep(1)
 
     f = connect(port)
     start = time.monotonic()

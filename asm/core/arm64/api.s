@@ -1339,7 +1339,7 @@ LOCAL_FUNCTION api_body
     API_LIT api_end2
     UNFRAME 16
 18: cmp     x28, #API_OP_GET_STATE_VALIDATOR    /* {"execution_optimistic":…,"finalized":…,"data":<item>} */
-    b.ne    99f
+    b.ne    19f
     API_LIT api_v_open
     ldr     x0, [x22, #ApiView_is_optimistic]
     bl      api_bool
@@ -1352,6 +1352,50 @@ LOCAL_FUNCTION api_body
     mov     x2, #0
     bl      api_validator_item
     API_LIT api_end1
+    UNFRAME 16
+    /* getProposerDuties: {"dependent_root":…,"execution_optimistic":…,"data":[{"pubkey":…,"validator_index":…,"slot":…},…]} */
+19: cmp     x28, #API_OP_GET_PROPOSER_DUTIES
+    b.ne    99f
+    API_LIT api_u_root
+    add     x0, x22, #ApiView_duties
+    mov     x1, #32
+    bl      api_qhex
+    API_LIT api_u_optimistic
+    ldr     x0, [x22, #ApiView_is_optimistic]
+    bl      api_bool
+    API_LIT api_v_list
+    str     xzr, [sp, #24]
+20: ldr     x9, [sp, #24]
+    cmp     x9, #SLOTS_PER_EPOCH
+    b.hs    21f
+    cbz     x9, 22f
+    API_LIT api_p_comma
+22: API_LIT api_u_pubkey
+    ldr     x9, [sp, #24]
+    add     x10, x22, #(ApiView_duties + 32)
+    ldr     x1, [x10, x9, lsl #3]
+    ldr     x0, [x22, #ApiView_val_state]
+    PART    x9, x10, x0, NODE_STATE_VALIDATORS
+    add     x0, x9, x1, lsl #7              /* NODE_VALIDATOR_MEM: the pubkey first */
+    mov     x1, #48
+    bl      api_qhex
+    API_LIT api_u_index
+    ldr     x9, [sp, #24]
+    add     x10, x22, #(ApiView_duties + 32)
+    ldr     x0, [x10, x9, lsl #3]
+    bl      api_qdec
+    API_LIT api_c_slot
+    ldr     x9, [x22, #ApiView_val_state]
+    ldr     x0, [x9, #NODE_STATE_SLOT]
+    ldr     x9, [sp, #24]
+    add     x0, x0, x9
+    bl      api_qdec
+    API_LIT api_end1
+    ldr     x9, [sp, #24]
+    add     x9, x9, #1
+    str     x9, [sp, #24]
+    b       20b
+21: API_LIT api_v_end
 99: UNFRAME 16
 END_FUNCTION api_body
 
@@ -1788,6 +1832,8 @@ LOCAL_FUNCTION node_api_event
     b.eq    66f
     cmp     x3, #API_OP_GET_SPEC
     b.eq    67f
+    cmp     x3, #API_OP_GET_PROPOSER_DUTIES
+    b.eq    63f
     sub     x9, x3, #API_OP_GET_STATE_VALIDATORS   /* the six validator operations and getEpochCommittees: a state */
     cmp     x9, #(API_OP_GET_EPOCH_COMMITTEES - API_OP_GET_STATE_VALIDATORS)
     b.ls    66f
@@ -1822,6 +1868,34 @@ LOCAL_FUNCTION node_api_event
     ldr     x0, [x25, #ApiRoute_op]
     cmp     x0, #API_OP_GET_STATE_VALIDATOR
     b.ne    64f
+    b       67f
+63: mov     x2, #503                        /* getProposerDuties: 503 while syncing; 400 past the next epoch */
+    ldr     x9, [x26, #ApiView_is_syncing]
+    cbnz    x9, 80f
+    mov     x0, x20
+    bl      node_store_slot
+    mov     x11, #SLOTS_PER_EPOCH
+    udiv    x9, x0, x11
+    add     x9, x9, #1
+    ldr     x10, [x25, #ApiRoute_epoch]
+    mov     x2, #400
+    cmp     x10, x9
+    b.hi    80f
+    mul     x10, x10, x11                   /* the first slot: as a state_id of it; past the store's slot, the head's post-state */
+    mov     x9, #API_ID_SLOT
+    cmp     x10, x0
+    b.ls    62f
+    mov     x9, #API_ID_HEAD
+62: stp     x9, x10, [x25, #ApiRoute_id_kind]
+    mov     x0, x25
+    mov     x1, x26
+    bl      node_api_state
+    mov     x2, x0
+    cbnz    x0, 80f
+    ldr     x9, [x25, #ApiRoute_id_slot]    /* brought to the first slot */
+    str     x9, [x26, #ApiView_head_slot]
+    mov     x0, x26
+    bl      node_api_advance
     b       67f
 65: mov     x0, x25                         /* a block: its lookup */
     mov     x1, x26
@@ -1970,6 +2044,8 @@ LOCAL_FUNCTION node_api_run
     b.eq    2f
     cmp     x27, #API_OP_GET_STATE_ROOT
     b.eq    2f
+    cmp     x27, #API_OP_GET_PROPOSER_DUTIES
+    b.eq    2f
     cmp     x27, #API_OP_GET_STATE_FORK
     b.ne    8f
 2:  ldr     x9, [x24]                       /* the ApiView at the end of scratch, with the work's values */
@@ -2008,7 +2084,21 @@ LOCAL_FUNCTION node_api_run
     str     x22, [x26, #ApiView_val_state]
     str     x0, [x26, #ApiView_val_index]
     b       5f
-20: cmp     x27, #API_OP_GET_STATE_FINALITY_CHECKPOINTS
+20: cmp     x27, #API_OP_GET_PROPOSER_DUTIES
+    b.ne    23f
+    mov     x0, x22                         /* getProposerDuties: lantern_node_proposers */
+    add     x1, x19, #Node_config
+    mov     x2, x24
+    add     x3, x26, #ApiView_duties
+    FORK_CALL node_proposers
+    cmp     x0, #LANTERN_BUFFER_TOO_SMALL
+    b.eq    71f
+    cbz     x0, 24f
+    str     x0, [x25, #NodeEvent_result]
+    b       9f
+24: str     x22, [x26, #ApiView_val_state]
+    b       5f
+23: cmp     x27, #API_OP_GET_STATE_FINALITY_CHECKPOINTS
     b.ne    21f
     mov     x0, x22                         /* finality_checkpoints */
     add     x1, x26, #ApiView_previous_justified

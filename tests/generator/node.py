@@ -99,6 +99,8 @@ def anchor(spec, fork, statuses=False, epoch=ANCHOR_EPOCH):
             state.previous_epoch_participation.append(0)
             state.current_epoch_participation.append(0)
             state.inactivity_scores.append(0)
+    if fork == "fulu":  # as at genesis and at the fork (fulu fork.md)
+        state.proposer_lookahead = spec.initialize_proposer_lookahead(state)
     block = spec.BeaconBlock(slot=slot, state_root=spec.hash_tree_root(state))
     return state, block
 
@@ -135,6 +137,7 @@ def cases(fork, preset):
     yield "api", "anchor_epoch_2", api_cases(fork, preset)
     late = int(spec.EPOCHS_PER_HISTORICAL_VECTOR) + 6  # the lowest epochs of getEpochCommittees
     yield "api", f"anchor_epoch_{late}", api_cases(fork, preset, epoch=late)
+    yield "api", "anchor_epoch_0", api_cases(fork, preset, epoch=0)
     yield "p2p", "anchor_epoch_2", {
         "anchor_state": bytes(state.encode_bytes()),
         "anchor_block": bytes(block.encode_bytes()),
@@ -171,18 +174,19 @@ def blob_cases(fork, preset, cases):
 REASONS = {200: b"OK", 206: b"Partial Content", 400: b"Bad Request", 404: b"Not Found", 405: b"Method Not Allowed",
            406: b"Not Acceptable", 413: b"Content Too Large", 414: b"URI Too Long", 415: b"Unsupported Media Type",
            431: b"Request Header Fields Too Large", 500: b"Internal Server Error", 501: b"Not Implemented",
-           505: b"HTTP Version Not Supported"}
+           503: b"Service Unavailable", 505: b"HTTP Version Not Supported"}
 MESSAGES = {400: b"BAD_REQUEST", 404: b"NOT_FOUND", 405: b"METHOD_NOT_ALLOWED", 406: b"NOT_ACCEPTABLE",
             413: b"CONTENT_TOO_LARGE", 414: b"URI_TOO_LONG", 415: b"UNSUPPORTED_MEDIA_TYPE",
             431: b"REQUEST_HEADER_FIELDS_TOO_LARGE", 500: b"INTERNAL_SERVER_ERROR", 501: b"NOT_IMPLEMENTED",
-            505: b"HTTP_VERSION_NOT_SUPPORTED"}
+            503: b"SERVICE_UNAVAILABLE", 505: b"HTTP_VERSION_NOT_SUPPORTED"}
 METHODS = {1: b"GET", 2: b"POST", 3: b"DELETE"}
 ALLOW = {1: b"GET", 2: b"POST", 3: b"GET, POST"}
 VALIDATOR_OPS = ("getStateValidators", "postStateValidators", "getStateValidator", "getStateValidatorBalances",
                  "postStateValidatorBalances", "postStateValidatorIdentities")
 ANSWERED = ("getHealth", "getNetworkIdentity", "getNodeVersion", "getSyncingStatus", "getPeerCount", "getGenesis",
             "getBlockHeader", "getStateFinalityCheckpoints", "getBlockV2", "getStateV2", "getBlockRoot", "getStateRoot",
-            "getStateFork", "getSpec", "getForkSchedule", "getDepositContract", "getEpochCommittees") + VALIDATOR_OPS
+            "getStateFork", "getSpec", "getForkSchedule", "getDepositContract", "getEpochCommittees",
+            "getProposerDuties") + VALIDATOR_OPS
 IDENTITY = (b"16Uiu2HAmPLe7Mzm8TsYUubgCAW1aJoeFScxrLj8ppHFivPo97bUZ",
             b"enr:-Iu4QLm7bZGdAhVwRqZ6Zf3LlnqKsBTnZGOByHQhPMQJ3pV4F3t8L9i5yJOZ0X0hiZ6q4D5V0jB7l8J3ZtYw1JDH9C4BgmlkgnY0gmlwhAoAAAGJc2VjcDI1NmsxoQPKY0yuDUmstAHYpMa2_oxVtw0RW_QAdpzBQA8yWM0xOIN0Y3CCIyg",
             b"/ip4/10.0.0.1/tcp/9000/p2p/16Uiu2HAmPLe7Mzm8TsYUubgCAW1aJoeFScxrLj8ppHFivPo97bUZ",
@@ -444,9 +448,40 @@ def committees_answer(v, route, s, values, kw):
     return streamed(None, values + b',"data":[' + b",".join(items) + b"]}", **kw)
 
 
-def answer(v, name, route, offline, close, keep_alive):
+def duties_answer(v, route, kw, syncing):
+    """The answer of getProposerDuties (beacon-api.md, Common rules)."""
+    spec = v["spec"]
+    if syncing:
+        return error(503, **kw)
+    spe = int(spec.SLOTS_PER_EPOCH)
+    store_slot = v["slot"] + SLOTS_AHEAD
+    epoch = route.epoch
+    if epoch > store_slot // spe + 1:
+        return error(400, **kw)
+    first = epoch * spe
+    if first > store_slot:  # the next epoch: the head's post-state brought to its first slot
+        s = v["states"][v["slot"]].copy()
+        spec.process_slots(s, first)
+    elif first in v["states"]:
+        s = v["states"][first]
+    else:
+        return error(404, **kw)
+    items = []
+    for slot in range(first, first + spe):
+        at = s.copy()
+        at.slot = slot
+        i = int(spec.get_beacon_proposer_index(at))
+        items.append(b'{"pubkey":' + qhex(s.validators[i].pubkey) + b',"validator_index":' + q(i) + b',"slot":' + q(slot) + b"}")
+    root = v["root"] if first == 0 else bytes(spec.get_block_root_at_slot(s, first - 1))
+    return response(200, b'{"dependent_root":' + qhex(root) + b',"execution_optimistic":false,"data":[' +
+                    b",".join(items) + b"]}", **kw)
+
+
+def answer(v, name, route, offline, close, keep_alive, syncing=False):
     """The response of an operation the node answers, with the route's ApiRoute."""
     kw = dict(close=close, keep_alive=keep_alive)
+    if name == "getProposerDuties":
+        return duties_answer(v, route, kw, syncing)
     current = v["slot"] + SLOTS_AHEAD
     if name == "getHealth":
         if not offline:
@@ -552,15 +587,16 @@ class Route:
         self.refs = [bytes(out[at + 64 * k:at + 64 * k + 64]) for k in range(count)]
 
 
-def api_requests(spec, fork, v, low=False):
-    """(name, request bytes, response, closes, offline) of each request of a node at its anchor; with
-    low, those of getEpochCommittees at the lowest epoch of the second case."""
+def api_requests(spec, fork, v, kind="main"):
+    """(name, request bytes, response, closes, offline, syncing) of each request of a node at its
+    anchor; kind "late", those of getEpochCommittees at its lowest epochs; kind "genesis", those of
+    getProposerDuties of an anchor at slot 0."""
     import api_route
     ops = api_route.operations(pathlib.Path(os.environ["BEACON_APIS"]))
     by_name = {op["name"]: op for op in ops}
     out = []
 
-    def add(name, req, offline=False, version=b"HTTP/1.1", connection=b"", extra=b"", body=None):
+    def add(name, req, offline=False, version=b"HTTP/1.1", connection=b"", extra=b"", body=None, syncing=False):
         if body is not None:
             req = dict(req, body=body)
             extra += b"Content-Length: %d\r\n" % len(body)
@@ -574,14 +610,20 @@ def api_requests(spec, fork, v, low=False):
             route = Route(r)
             opname = ops[route.op - 1]["name"]
             if opname in ANSWERED:
-                want = answer(v, opname, route, offline, close, keep_alive)
+                want = answer(v, opname, route, offline, close, keep_alive, syncing)
             else:
                 want = error(501, close=close, keep_alive=keep_alive)
-        out.append((name, raw, want, close, offline))
+        out.append((name, raw, want, close, offline, syncing))
 
     committees = by_name["getEpochCommittees"]
+    duties = by_name["getProposerDuties"]
     epoch = v["slot"] // int(spec.SLOTS_PER_EPOCH)
-    if low:  # the lowest epoch whose seed's RANDAO mix the state holds, and the one below
+    current = (v["slot"] + SLOTS_AHEAD) // int(spec.SLOTS_PER_EPOCH)
+    if kind == "genesis":
+        for e in range(0, 3):
+            add(f"duties_{e}", api_route.base(duties, path_values={"epoch": b"%d" % e}))
+        return out
+    if kind == "late":  # the lowest epoch whose seed's RANDAO mix the state holds, and the one below
         lowest = epoch + 1 - int(spec.EPOCHS_PER_HISTORICAL_VECTOR) + int(spec.MIN_SEED_LOOKAHEAD) + 1
         for e in (epoch, lowest, lowest - 1):
             add(f"committees_epoch_{e}", api_route.base(committees, [("epoch", b"%d" % e)]))
@@ -654,6 +696,9 @@ def api_requests(spec, fork, v, low=False):
         add(f"lookup_getStateV2_{state_id.decode()}", api_route.base(state, path_values={"state_id": state_id}))
     validators = by_name["getStateValidators"]
     add("ids_65_414", api_route.base(validators, [("id", b",".join(str(i).encode() for i in range(65)))]))
+    for e in range(epoch - 1, current + 3):
+        add(f"duties_{e}", api_route.base(duties, path_values={"epoch": b"%d" % e}))
+    add("duties_syncing", api_route.base(duties, path_values={"epoch": b"%d" % current}), syncing=True)
     first = epoch * int(spec.SLOTS_PER_EPOCH)
     for e in range(epoch - 1, epoch + 3):
         add(f"committees_epoch_{e}", api_route.base(committees, [("epoch", b"%d" % e)]))
@@ -718,28 +763,31 @@ def http_faults():
 
 
 def api_cases(fork, preset, epoch=ANCHOR_EPOCH):
-    """The api case of an anchor at the epoch; at another epoch than ANCHOR_EPOCH, the requests of
-    getEpochCommittees at its lowest epochs alone."""
+    """The api case of an anchor at the epoch; at epoch 0, the requests of getProposerDuties alone;
+    at another epoch, those of getEpochCommittees at its lowest epochs alone."""
     spec = module(fork, preset)
     state, block = run(spec, schedule(fork), lambda: anchor(spec, fork, statuses=True, epoch=epoch))
     v = run(spec, schedule(fork), lambda: api_values(spec, fork, state, block))
     v["config_bodies"] = config_bodies(fork, preset)
-    reqs = run(spec, schedule(fork), lambda: api_requests(spec, fork, v, low=epoch != ANCHOR_EPOCH))
+    kind = "main" if epoch == ANCHOR_EPOCH else "genesis" if epoch == 0 else "late"
+    reqs = run(spec, schedule(fork), lambda: api_requests(spec, fork, v, kind))
     if fork in ("altair",):  # no execution engine before bellatrix: el_offline stays false
         reqs = [r for r in reqs if not r[4]]
-    names, raws, wants, closes, offline = [], [], [], [], []
-    for name, raw, want, close, off in sorted(reqs, key=lambda r: r[4]):
+    names, raws, wants, closes, offline, syncing = [], [], [], [], [], []
+    for name, raw, want, close, off, sync in sorted(reqs, key=lambda r: r[4]):
         names.append(name.encode())
         raws.append(raw)
         wants.append(want)
         closes.append(1 if close else 0)
         offline.append(off)
+        syncing.append(1 if sync else 0)
     for name, raw, status in http_faults() if epoch == ANCHOR_EPOCH else []:
         names.append(name.encode())
         raws.append(raw)
         wants.append(error(status, close=True))
         closes.append(1)
         offline.append(offline[-1] if offline else False)
+        syncing.append(0)
     first_offline = offline.index(True) if True in offline else len(names)
     slot_ms = int(spec.config.SLOT_DURATION_MS) if hasattr(spec.config, "SLOT_DURATION_MS") else int(spec.config.SECONDS_PER_SLOT) * 1000
     return {
@@ -751,5 +799,6 @@ def api_cases(fork, preset, epoch=ANCHOR_EPOCH):
         "requests": raws,
         "responses": wants,
         "closes": bytes(closes),
+        "syncing": bytes(syncing),
         "offline": first_offline,
     }

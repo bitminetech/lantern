@@ -2488,6 +2488,8 @@ enum { ACT_BYTES_PUT = 1, ACT_STATE_COPY, ACT_STATE_FREE, ACT_BYTES_FREE, ACT_WO
 #define NODE_FLAG_DISCV5 64
 #define NODE_FLAG_DB 128
 #define NODE_FLAG_FEW_STATES 256
+#define NODE_FLAGS 112       /* include/lantern.inc: Node_flags */
+#define NODE_FLAG_SYNCING 8 /* the view's is_syncing: the api cases set it for their requests marked syncing */
 #define NODE_DB 464 /* Node_db: the PartRef of the node's Db */
 #define NODE_DB_REF (1ull << 63)
 #define NODE_DB_SIDECARS (1ull << 62)
@@ -7104,10 +7106,13 @@ static void run_node_api(const char *file, case_file *f) {
         fc_node n;
         uint8_t *anchor_block;
         struct node_shell *s = shell_open(&n, parts, &anchor_block, &why);
+        uint64_t slen;
         const uint8_t *identity = tv_bytes(tv_get(parts, "identity"), &ilen), *closes = tv_bytes(tv_get(parts, "closes"), &clen);
+        const uint8_t *syncing = tv_bytes(tv_get(parts, "syncing"), &slen);
         tv names = tv_get(parts, "names"), reqs = tv_get(parts, "requests"), resps = tv_get(parts, "responses");
         uint64_t count = rd64(reqs + 1), offline = tv_u64(tv_get(parts, "offline"));
-        if (!why && (rd64(names + 1) != count || rd64(resps + 1) != count || clen != count)) why = "the case's lists differ in length";
+        if (!why && (rd64(names + 1) != count || rd64(resps + 1) != count || clen != count || slen != count))
+            why = "the case's lists differ in length";
         if (!why) {
             shell_event(s, EV_TICK, tv_u64(tv_get(parts, "time_ms")), NULL, 0);
             shell_event(s, EV_API_IDENTITY, 0, identity, ilen);
@@ -7129,7 +7134,9 @@ static void run_node_api(const char *file, case_file *f) {
             for (int r = 0; r < 2 && !why; r++) {
                 s->api.room = rooms[r];
                 size_t nbufs = s->nbufs;
+                if (syncing[k]) wr64(s->node + NODE_FLAGS, rd64(s->node + NODE_FLAGS) | NODE_FLAG_SYNCING);
                 shell_api_ask(&n, req, rlen, (k + 1) | (uint64_t)(7 + r) << 32, &why);
+                if (syncing[k]) wr64(s->node + NODE_FLAGS, rd64(s->node + NODE_FLAGS) & ~(uint64_t)NODE_FLAG_SYNCING);
                 if (!why && s->nbufs != nbufs) why = "the runner holds other buffers after the answer";
                 uint64_t glen = 0;
                 uint8_t *got = why ? NULL : api_normalize(s, &glen, &why);

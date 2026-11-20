@@ -245,6 +245,89 @@ SPEC_FUNCTION node_state_checkpoints
     UNFRAME 0
 SPEC_END node_state_checkpoints
 
+/*
+ * (state, config, scratch, out): lantern_node_proposers (node.md): the dependent root of the epoch
+ * of the state's slot, then its proposers. s1 state, s2 config, s3 scratch, s4 out, s5 the scratch
+ * size, restored. Locals: L the epoch, L+8 the slot - 1, L+16 the latest_block_header (112).
+ */
+SPEC_FUNCTION node_proposers
+    ENTER 128
+    mv      s1, a0
+    mv      s2, a1
+    mv      s3, a2
+    mv      s4, a3
+    ld      s5, 0(s3)
+    LDQ     t0, s1, BeaconState_slot
+    li      a0, LANTERN_INVALID_SLOT
+    andi    t1, t0, SLOTS_PER_EPOCH - 1
+    bnez    t1, 99f
+    NEED_SCRATCH s3, s1, 2, 8f
+    LDQ     t0, s1, BeaconState_slot
+    srli    t1, t0, LOG2_SLOTS_PER_EPOCH
+    sd      t1, L(sp)
+    beqz    t0, 2f
+    addi    t0, t0, -1                      # get_block_root_at_slot(state, slot - 1)
+    sd      t0, (L + 8)(sp)
+    mv      a0, s1
+    addi    a1, sp, (L + 8)
+    mv      a2, s4
+    call    lantern_get_block_root_at_slot
+    bnez    a0, 99f
+    j       3f
+2:  addi    a0, sp, (L + 16)                # slot 0: hash_tree_root of the latest_block_header, its state_root the state's when zero
+    ADDQ    a1, s1, BeaconState_latest_block_header
+    li      a2, BeaconBlockHeader__mem
+    call    lantern_copy
+    ld      t0, (L + 16 + BeaconBlockHeader_state_root)(sp)
+    ld      t1, (L + 16 + BeaconBlockHeader_state_root + 8)(sp)
+    or      t0, t0, t1
+    ld      t1, (L + 16 + BeaconBlockHeader_state_root + 16)(sp)
+    or      t0, t0, t1
+    ld      t1, (L + 16 + BeaconBlockHeader_state_root + 24)(sp)
+    or      t0, t0, t1
+    bnez    t0, 21f
+    mv      a0, s1
+    LDQ     a1, s2, CONFIG_STATE_CACHE
+    mv      a2, s3
+    addi    a3, sp, (L + 16 + BeaconBlockHeader_state_root)
+    call    lantern_state_root
+    bnez    a0, 99f
+21: ADDRESS a0, lantern_type_BeaconBlockHeader
+    addi    a1, sp, (L + 16)
+    mv      a2, s3
+    mv      a3, s4
+    CALL_GLOBAL ssz_hash_tree_root
+    bnez    a0, 8f
+3:
+.if FORK >= FORK_FULU
+    addi    a0, s4, 32                      # the proposers: the first SLOTS_PER_EPOCH of proposer_lookahead
+    ADDQ    a1, s1, BeaconState_proposer_lookahead
+    li      a2, 8 * SLOTS_PER_EPOCH
+    call    lantern_copy
+    LDQ     t2, s1, BeaconState_validators + 8  # each names a validator
+    li      t0, 0
+    li      a0, LANTERN_INVALID_VALIDATOR_INDEX
+4:  slli    t1, t0, 3
+    add     t1, t1, s4
+    ld      t1, 32(t1)
+    bgeu    t1, t2, 99f
+    addi    t0, t0, 1
+    li      t1, SLOTS_PER_EPOCH
+    bltu    t0, t1, 4b
+    li      a0, LANTERN_OK
+.else
+    mv      a0, s1                          # the proposers: get_beacon_proposer_indices of the epoch
+    addi    a1, sp, L
+    mv      a2, s3
+    addi    a3, s4, 32
+    call    lantern_get_beacon_proposer_indices
+.endif
+    j       99f
+8:  li      a0, LANTERN_BUFFER_TOO_SMALL
+99: sd      s5, 0(s3)
+    LEAVE 128
+SPEC_END node_proposers
+
 .if BeaconState_state_roots != NODE_STATE_STATE_ROOTS || BeaconState_fork != NODE_STATE_FORK
 .error "nodehooks: NODE_STATE_STATE_ROOTS or NODE_STATE_FORK is not the state's"
 .endif

@@ -74,6 +74,9 @@ api_r500:
 api_r501:
     .ascii "Not Implemented"
 .set api_r501_len, 15
+api_r503:
+    .ascii "Service Unavailable"
+.set api_r503_len, 19
 api_r505:
     .ascii "HTTP Version Not Supported"
 .set api_r505_len, 26
@@ -107,6 +110,9 @@ api_m500:
 api_m501:
     .ascii "NOT_IMPLEMENTED"
 .set api_m501_len, 15
+api_m503:
+    .ascii "SERVICE_UNAVAILABLE"
+.set api_m503_len, 19
 api_m505:
     .ascii "HTTP_VERSION_NOT_SUPPORTED"
 .set api_m505_len, 26
@@ -347,6 +353,18 @@ api_c_slot:
 api_c_validators:
     .ascii ",\"validators\":["
 .set api_c_validators_len, 15
+api_u_root:
+    .ascii "{\"dependent_root\":"
+.set api_u_root_len, 18
+api_u_optimistic:
+    .ascii ",\"execution_optimistic\":"
+.set api_u_optimistic_len, 24
+api_u_pubkey:
+    .ascii "{\"pubkey\":"
+.set api_u_pubkey_len, 10
+api_u_index:
+    .ascii ",\"validator_index\":"
+.set api_u_index_len, 19
 api_v_statuses:                         /* the names of the statuses, API_STATUS_* order: 24 bytes each, the length first */
     .byte 19
     .ascii "pending_initialized"
@@ -437,6 +455,7 @@ api_codes:
     API_CODE 431, api_r431, api_m431
     API_CODE 500, api_r500, api_m500
     API_CODE 501, api_r501, api_m501
+    API_CODE 503, api_r503, api_m503
     API_CODE 505, api_r505, api_m505
 api_codes_end:
 .set API_CODE_ENTRY, 40
