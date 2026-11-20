@@ -389,7 +389,7 @@ VALIDATOR_OPS = ("getStateValidators", "postStateValidators", "getStateValidator
 POOL_GETS = ("getPoolVoluntaryExits", "getPoolProposerSlashings", "getPoolAttesterSlashingsV2",
              "getPoolBLSToExecutionChanges", "getPoolAttestationsV2")
 POOL_POSTS = ("submitPoolVoluntaryExit", "submitPoolProposerSlashings", "submitPoolAttesterSlashingsV2",
-              "submitPoolBLSToExecutionChange", "submitPoolAttestationsV2")
+              "submitPoolBLSToExecutionChange", "submitPoolAttestationsV2", "publishAggregateAndProofsV2")
 PENDING = {"getPendingDeposits": "pending_deposits", "getPendingPartialWithdrawals": "pending_partial_withdrawals",
            "getPendingConsolidations": "pending_consolidations"}
 ANSWERED = ("getHealth", "getNetworkIdentity", "getNodeVersion", "getSyncingStatus", "getPeerCount", "getGenesis",
@@ -1042,7 +1042,7 @@ def pool_requests(spec, fork, v, by_name, add):
     epoch = int(spec.get_current_epoch(state))
     capella = FORKS.index(fork) >= FORKS.index("capella")
     electra = FORKS.index(fork) >= FORKS.index("electra")
-    pool = {"exit": [], "proposer": [], "attester": [], "bls": [], "attestation": []}
+    pool = {"exit": [], "proposer": [], "attester": [], "bls": [], "attestation": [], "aggregate": []}
 
     def validate(kind, op):
         if kind == "exit":
@@ -1053,6 +1053,8 @@ def pool_requests(spec, fork, v, by_name, add):
             return gossip_result(spec, spec.validate_attester_slashing_gossip, seen, store, op)
         if kind == "attestation":
             return gossip_result(spec, spec.validate_beacon_attestation_gossip, seen, store, op, time_ms, subnet_of(op))
+        if kind == "aggregate":
+            return gossip_result(spec, spec.validate_beacon_aggregate_and_proof_gossip, seen, store, op, time_ms)
         return gossip_result(spec, spec.validate_bls_to_execution_change_gossip, seen, store, op, time_ms)
 
     def bad_request(close, keep_alive, failures=None):
@@ -1082,6 +1084,7 @@ def pool_requests(spec, fork, v, by_name, add):
         req = api_route.request(by_name[op_name]["method"], api_route.fill(by_name[op_name], None), b"",
                                 content_type=content_type, **(headers or {}))
         add(name, req, body=body, want=want)
+        return status, failures
 
     def exit_of(index, key_index):
         """Signed as the spec's test helpers sign: from deneb with capella's fork version (EIP-7044)."""
@@ -1288,6 +1291,44 @@ def pool_requests(spec, fork, v, by_name, add):
         want=lambda c, k: error(404, close=c, keep_alive=k))
     add("aggregate_other_slot", agg_request(data_root, first_slot + 1000, first_index),
         want=lambda c, k: error(404, close=c, keep_alive=k))
+
+    # publishAggregateAndProofsV2: the aggregate above by an aggregator of its committee (each member is
+    # one: committees below TARGET_AGGREGATORS_PER_COMMITTEE), again (seen), one signed with another
+    # key, with a fork of the other type, of no aggregate, and as SSZ the aggregate of another slot
+    def signed_aggregate(duty, aggregate, key_index):
+        s_at = v["states"][duty[0]]
+        proof = spec.get_aggregate_and_proof(s_at, duty[3], aggregate, KEYS.privkeys[key_index])
+        return spec.SignedAggregateAndProof(message=proof, signature=spec.get_aggregate_and_proof_signature(
+            s_at, proof, KEYS.privkeys[key_index]))
+
+    def ssz_offsets(items):  # the SSZ list of variable size items: 4-byte offsets, then the items
+        parts = [bytes(x.encode_bytes()) for x in items]
+        offsets, at = b"", 4 * len(parts)
+        for p in parts:
+            offsets += at.to_bytes(4, "little")
+            at += len(p)
+        return offsets + b"".join(parts)
+    first_duty = next(d for d in duties if d[0] == first_slot and d[1] == first_index)
+    good_agg = signed_aggregate(first_duty, agg, first_duty[3])
+    submit("aggregate_post", "publishAggregateAndProofsV2", "aggregate", [good_agg], json_list([good_agg]),
+           single=False, headers=att_version)
+    submit("aggregate_post_again", "publishAggregateAndProofsV2", "aggregate", [good_agg], json_list([good_agg]),
+           single=False, headers=att_version)
+    ssz_att = next(a[2] for a in atts if a[0] != first_slot)
+    ssz_agg_duty = next(d for d in duties if d[0] == int(ssz_att.data.slot) and
+                        d[1] == (next(i for i, b in enumerate(ssz_att.committee_bits) if b) if electra else int(ssz_att.data.index)))
+    other_agg = signed_aggregate(ssz_agg_duty, ssz_att, ssz_agg_duty[3] + 1)  # another key
+    rejected = submit("aggregate_post_other_key", "publishAggregateAndProofsV2", "aggregate", [other_agg], json_list([other_agg]),
+           single=False, headers=att_version)
+    submit("aggregate_post_other_fork", "publishAggregateAndProofsV2", "aggregate", None, json_list([good_agg]),
+           single=False, headers={"version": other})
+    submit("aggregate_post_no_aggregate", "publishAggregateAndProofsV2", "aggregate", None, b'[{"message":1}]',
+           single=False, headers=att_version)
+    ssz_good = signed_aggregate(ssz_agg_duty, ssz_att, ssz_agg_duty[3])
+    submit("aggregate_post_ssz", "publishAggregateAndProofsV2", "aggregate", [ssz_good], ssz_offsets([ssz_good]),
+           single=False, headers=att_version, content_type=b"application/octet-stream")
+    if rejected != ("bad", [0]) or len(pool["aggregate"]) != 2:
+        raise RuntimeError("aggregate POSTs: the cases need two valid aggregates and one rejected")
     # with the store's nodes NOT_VALIDATED (syncing bit 1): the aggregate's beacon_block_root, 503
     add("aggregate_not_validated", agg_request(data_root, first_slot, first_index), syncing=2,
         want=lambda c, k: error(503, close=c, keep_alive=k))

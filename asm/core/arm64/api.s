@@ -6213,6 +6213,9 @@ LOCAL_FUNCTION node_submit_topic
     mov     x0, #GOSSIP_BEACON_ATTESTATION
     cmp     x9, #API_OP_SUBMIT_POOL_ATTESTATIONS_V2
     b.eq    9f
+    mov     x0, #GOSSIP_BEACON_AGGREGATE_AND_PROOF
+    cmp     x9, #API_OP_PUBLISH_AGGREGATE_AND_PROOFS_V2
+    b.eq    9f
     mov     x0, #0
 9:  ret
 END_FUNCTION node_submit_topic
@@ -7189,9 +7192,11 @@ LOCAL_FUNCTION node_api_submit
     b.ne    11f
     orr     x2, x2, #API_ANSWER_SSZ
     str     x2, [sp, #24]
-11: ldr     x9, [x1, #ApiRoute_op]          /* the AttesterSlashing or attestation type of the store's fork */
+11: ldr     x9, [x1, #ApiRoute_op]          /* the AttesterSlashing, attestation or aggregate type of the store's fork */
     mov     x10, #API_OP_SUBMIT_POOL_ATTESTATIONS_V2
     cmp     x9, #API_OP_SUBMIT_POOL_ATTESTER_SLASHINGS_V2
+    ccmp    x9, x10, #4, ne
+    mov     x10, #API_OP_PUBLISH_AGGREGATE_AND_PROOFS_V2
     ccmp    x9, x10, #4, ne
     b.ne    1f
     ldr     x10, [x1, #ApiRoute_consensus_version]
@@ -7397,6 +7402,8 @@ LOCAL_FUNCTION node_api_submit_done
     and     x9, x9, #255
     mov     x10, #API_OP_SUBMIT_POOL_ATTESTATIONS_V2
     cmp     x9, #API_OP_SUBMIT_POOL_BLS_TO_EXECUTION_CHANGE
+    ccmp    x9, x10, #4, ne
+    mov     x10, #API_OP_PUBLISH_AGGREGATE_AND_PROOFS_V2
     ccmp    x9, x10, #4, ne
     b.ne    80f
     mov     x1, x21
@@ -7641,11 +7648,16 @@ LOCAL_FUNCTION node_api_submit_run
     mov     x10, #API_OP_SUBMIT_POOL_ATTESTATIONS_V2
     cmp     x0, #API_OP_SUBMIT_POOL_BLS_TO_EXECUTION_CHANGE
     ccmp    x0, x10, #4, ne
+    mov     x10, #API_OP_PUBLISH_AGGREGATE_AND_PROOFS_V2
+    ccmp    x0, x10, #4, ne
     cset    x9, eq
     str     x9, [sp, #(L + 40)]
     bl      node_submit_topic
     cbz     x0, 98f
     str     x0, [sp, #(L + 16)]
+    cmp     x0, #GOSSIP_BEACON_AGGREGATE_AND_PROOF  /* an aggregate: SignedAggregateAndProof */
+    mov     x9, #NODE_JSON_AGGREGATE_AND_PROOF
+    b.eq    14f
     cmp     x0, #GOSSIP_BEACON_ATTESTATION  /* an attestation: of the fork's type */
     b.ne    12f
     ldr     x9, [sp, #(L + 24)]
@@ -7655,6 +7667,8 @@ LOCAL_FUNCTION node_api_submit_run
     csel    x0, x10, x0, hs
     b       13f
 12: bl      node_pool_kind
+    b       13f
+14: mov     x0, x9
 13: str     x0, [sp, #(L + 8)]
     cbz     x22, 98f
     cbz     x23, 98f
@@ -7774,7 +7788,10 @@ LOCAL_FUNCTION node_api_submit_run
     cmp     x0, x28
     b.ne    90f
     b       30f
-40: sub     x10, x28, x0                    /* SSZ: from electra items of 240 bytes */
+40: sub     x10, x28, x0                    /* SSZ: attestations from electra items of 240 bytes */
+    ldr     x9, [sp, #(L + 16)]
+    cmp     x9, #GOSSIP_BEACON_AGGREGATE_AND_PROOF
+    b.eq    42f
     ldr     x9, [sp, #(L + 24)]
     cmp     x9, #FORK_ELECTRA
     b.lo    42f
@@ -7796,7 +7813,7 @@ LOCAL_FUNCTION node_api_submit_run
     add     x9, x9, #1
     str     x9, [sp, #(L + 32)]
     b       41b
-42: cbz     x10, 30f                        /* before electra: the items of the 4-byte offsets */
+42: cbz     x10, 30f                        /* before electra, and aggregates: the items of the 4-byte offsets */
     cmp     x10, #4
     b.lo    90f
     ldr     w11, [x0]

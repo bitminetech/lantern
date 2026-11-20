@@ -680,6 +680,9 @@ LOCAL_FUNCTION node_type_of_kind
     ADDRESS %rdi, lantern_type_Attestations
     cmp     $NODE_JSON_ATTESTATIONS, %r10
     je      9f
+    ADDRESS %rdi, lantern_type_SignedAggregateAndProof
+    cmp     $NODE_JSON_AGGREGATE_AND_PROOF, %r10
+    je      9f
 .if FORK >= FORK_BELLATRIX
     ADDRESS %rdi, lantern_type_SignedBlindedBeaconBlock
 .else

@@ -6357,6 +6357,9 @@ LOCAL_FUNCTION node_submit_topic
     li      a0, GOSSIP_BEACON_ATTESTATION
     li      t1, API_OP_SUBMIT_POOL_ATTESTATIONS_V2
     beq     t0, t1, 9f
+    li      a0, GOSSIP_BEACON_AGGREGATE_AND_PROOF
+    li      t1, API_OP_PUBLISH_AGGREGATE_AND_PROOFS_V2
+    beq     t0, t1, 9f
     li      a0, 0
 9:  ret
 END_FUNCTION node_submit_topic
@@ -7371,8 +7374,10 @@ LOCAL_FUNCTION node_api_submit
     bne     t0, t1, 11f
     ori     a2, a2, API_ANSWER_SSZ
     sd      a2, 8(sp)
-11: ld      t0, ApiRoute_op(a1)             # the AttesterSlashing or attestation type of the store's fork
+11: ld      t0, ApiRoute_op(a1)             # the AttesterSlashing, attestation or aggregate type of the store's fork
     li      t1, API_OP_SUBMIT_POOL_ATTESTATIONS_V2
+    beq     t0, t1, 12f
+    li      t1, API_OP_PUBLISH_AGGREGATE_AND_PROOFS_V2
     beq     t0, t1, 12f
     li      t1, API_OP_SUBMIT_POOL_ATTESTER_SLASHINGS_V2
     bne     t0, t1, 1f
@@ -7579,6 +7584,8 @@ LOCAL_FUNCTION node_api_submit_done
     ld      t0, NodeAction_arg(s3)          # a list: the failures
     andi    t0, t0, 255
     li      t1, API_OP_SUBMIT_POOL_ATTESTATIONS_V2
+    beq     t0, t1, 72f
+    li      t1, API_OP_PUBLISH_AGGREGATE_AND_PROOFS_V2
     beq     t0, t1, 72f
     li      t1, API_OP_SUBMIT_POOL_BLS_TO_EXECUTION_CHANGE
     bne     t0, t1, 80f
@@ -7842,11 +7849,19 @@ LOCAL_FUNCTION node_api_submit_run
     sub     t3, a0, t3
     seqz    t3, t3
     or      t2, t2, t3
+    li      t3, API_OP_PUBLISH_AGGREGATE_AND_PROOFS_V2
+    sub     t3, a0, t3
+    seqz    t3, t3
+    or      t2, t2, t3
     sd      t2, (L + 40)(sp)
     call    node_submit_topic
     beqz    a0, 98f
     sd      a0, (L + 16)(sp)
-    li      t0, GOSSIP_BEACON_ATTESTATION   # an attestation: of the fork's type
+    li      t0, GOSSIP_BEACON_AGGREGATE_AND_PROOF   # an aggregate: SignedAggregateAndProof
+    bne     a0, t0, 14f
+    li      a0, NODE_JSON_AGGREGATE_AND_PROOF
+    j       13f
+14: li      t0, GOSSIP_BEACON_ATTESTATION   # an attestation: of the fork's type
     bne     a0, t0, 12f
     ld      t0, (L + 24)(sp)
     li      t1, FORK_ELECTRA
@@ -7975,8 +7990,11 @@ LOCAL_FUNCTION node_api_submit_run
 28: call    submit_ws                       # then only white space
     bne     a0, s10, 90f
     j       30f
-40: sd      a0, (L + 48)(sp)                # SSZ: from electra items of 240 bytes
+40: sd      a0, (L + 48)(sp)                # SSZ: attestations from electra items of 240 bytes
     sub     t0, s10, a0
+    ld      t1, (L + 16)(sp)
+    li      t2, GOSSIP_BEACON_AGGREGATE_AND_PROOF
+    beq     t1, t2, 42f
     ld      t1, (L + 24)(sp)
     li      t2, FORK_ELECTRA
     bltu    t1, t2, 42f

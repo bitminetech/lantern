@@ -6322,6 +6322,9 @@ LOCAL_FUNCTION node_submit_topic
     mov     $GOSSIP_BEACON_ATTESTATION, %eax
     cmp     $API_OP_SUBMIT_POOL_ATTESTATIONS_V2, %rdi
     je      9f
+    mov     $GOSSIP_BEACON_AGGREGATE_AND_PROOF, %eax
+    cmp     $API_OP_PUBLISH_AGGREGATE_AND_PROOFS_V2, %rdi
+    je      9f
     xor     %eax, %eax
 9:  ret
 END_FUNCTION node_submit_topic
@@ -7299,7 +7302,9 @@ LOCAL_FUNCTION node_api_submit
     cmpq    $API_TYPE_SSZ, ApiRoute_body(%rsi)  # an SSZ body: an answer flag
     jne     11f
     orq     $API_ANSWER_SSZ, 8(%rsp)
-11: cmpq    $API_OP_SUBMIT_POOL_ATTESTATIONS_V2, ApiRoute_op(%rsi)  # the AttesterSlashing or attestation type of the store's fork
+11: cmpq    $API_OP_SUBMIT_POOL_ATTESTATIONS_V2, ApiRoute_op(%rsi)  # the AttesterSlashing, attestation or aggregate type of the store's fork
+    je      12f
+    cmpq    $API_OP_PUBLISH_AGGREGATE_AND_PROOFS_V2, ApiRoute_op(%rsi)
     je      12f
     cmpq    $API_OP_SUBMIT_POOL_ATTESTER_SLASHINGS_V2, ApiRoute_op(%rsi)
     jne     1f
@@ -7517,6 +7522,8 @@ LOCAL_FUNCTION node_api_submit_done
     je      71f
     movzbl  NodeAction_arg(%r12), %eax      # a list: the failures
     cmp     $API_OP_SUBMIT_POOL_ATTESTATIONS_V2, %eax
+    je      72f
+    cmp     $API_OP_PUBLISH_AGGREGATE_AND_PROOFS_V2, %eax
     je      72f
     cmp     $API_OP_SUBMIT_POOL_BLS_TO_EXECUTION_CHANGE, %eax
     jne     80f
@@ -7788,12 +7795,19 @@ LOCAL_FUNCTION node_api_submit_run
     cmp     $API_OP_SUBMIT_POOL_ATTESTATIONS_V2, %edi
     sete    %cl
     or      %cl, %al
+    cmp     $API_OP_PUBLISH_AGGREGATE_AND_PROOFS_V2, %edi
+    sete    %cl
+    or      %cl, %al
     mov     %rax, (L + 40)(%rsp)
     call    node_submit_topic
     test    %rax, %rax
     jz      98f
     mov     %rax, (L + 16)(%rsp)
-    cmp     $GOSSIP_BEACON_ATTESTATION, %rax    # an attestation: of the fork's type
+    cmp     $GOSSIP_BEACON_AGGREGATE_AND_PROOF, %rax    # an aggregate: SignedAggregateAndProof
+    jne     14f
+    mov     $NODE_JSON_AGGREGATE_AND_PROOF, %eax
+    jmp     13f
+14: cmp     $GOSSIP_BEACON_ATTESTATION, %rax    # an attestation: of the fork's type
     jne     12f
     mov     $NODE_JSON_ATTESTATION, %eax
     mov     $NODE_JSON_SINGLE_ATTESTATION, %ecx
@@ -7928,9 +7942,11 @@ LOCAL_FUNCTION node_api_submit_run
     cmp     %rsi, %rdi
     jne     90f
     jmp     30f
-40: mov     %rdi, (L + 48)(%rsp)            # SSZ: from electra items of 240 bytes
+40: mov     %rdi, (L + 48)(%rsp)            # SSZ: attestations from electra items of 240 bytes
     mov     S10(%rsp), %rax
     sub     %rdi, %rax
+    cmpq    $GOSSIP_BEACON_AGGREGATE_AND_PROOF, (L + 16)(%rsp)
+    je      42f
     cmpq    $FORK_ELECTRA, (L + 24)(%rsp)
     jb      42f
     xor     %edx, %edx

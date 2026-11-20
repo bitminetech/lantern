@@ -687,6 +687,9 @@ LOCAL_FUNCTION node_type_of_kind
     ADDRESS a0, lantern_type_Attestations
     li      t1, NODE_JSON_ATTESTATIONS
     beq     t0, t1, 9f
+    ADDRESS a0, lantern_type_SignedAggregateAndProof
+    li      t1, NODE_JSON_AGGREGATE_AND_PROOF
+    beq     t0, t1, 9f
 .if FORK >= FORK_BELLATRIX
     ADDRESS a0, lantern_type_SignedBlindedBeaconBlock
 .else
