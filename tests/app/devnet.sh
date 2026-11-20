@@ -18,7 +18,8 @@
 # "earliest slot" must fall below the checkpoint's slot (the backfill).
 # FORK=1: 6-second slots, electra at genesis and fulu at epoch 1 (no BPO fork); lantern's head must
 # reach the fork: slot 40 or later. ASSERTOOR=1: 6-second slots, SHARD_COMMITTEE_PERIOD 1 (exits from
-# epoch 1), and Assertoor with lantern as its one consensus endpoint (tests/kurtosis/main.star); after
+# epoch 1), 130 validators in genesis (two that no validator client runs), and Assertoor with lantern
+# as its one consensus endpoint (tests/kurtosis/main.star); after
 # lantern follows, Assertoor's test "lantern" must end in success within SECONDS, and each of its tasks
 # is printed.
 set -eu
@@ -54,7 +55,10 @@ EOF
 if [ "${RESTART:-0}" = 1 ] || [ "${CHECKPOINT:-0}" = 1 ] || [ "${FORK:-0}" = 1 ] || [ "${ASSERTOOR:-0}" = 1 ]; then
     printf 'network_params:\n  seconds_per_slot: 6\n' >> "$work/args.yaml"
 fi
-if [ "${ASSERTOOR:-0}" = 1 ]; then printf '  shard_committee_period: 1\n' >> "$work/args.yaml"; fi
+# Assertoor: exits at once (shard_committee_period 1), and two validators of the mnemonic past the
+# first client's 128 that no validator client runs (preregistered_validator_count 130), whose
+# attestations only Assertoor signs, through lantern's submitPoolAttestationsV2.
+if [ "${ASSERTOOR:-0}" = 1 ]; then printf '  shard_committee_period: 1\n  preregistered_validator_count: 130\n' >> "$work/args.yaml"; fi
 min_slot=8
 if [ "${FORK:-0}" = 1 ]; then
     printf '  electra_fork_epoch: 0\n  fulu_fork_epoch: 1\n' >> "$work/args.yaml"

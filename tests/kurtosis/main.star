@@ -18,7 +18,10 @@ ASSERTOOR_IMAGE = "ethpandaops/assertoor:v0.1.2@sha256:aba67ca18ea77bece68abe1cc
 # Its config: lantern as the one endpoint, the API without the frontend, and one test of the checks
 # that read the Beacon API (Assertoor's tasks of v0.1.2), each over lantern; then operations of the
 # validators of ethereum-package's default mnemonic (its DEFAULT_MNEMONIC, src/package_io/constants.star)
-# through lantern's pool POSTs, each awaited in a block: lantern publishes them, the client includes them.
+# through lantern's pool POSTs, each awaited in a block: lantern publishes them, the client includes them;
+# and attestations of the two validators that no validator client runs (tests/app/devnet.sh), from
+# their duties (getEpochCommittees) and lantern's produceAttestationData, through
+# submitPoolAttestationsV2. Those two never vote otherwise, so the target votes have a floor of 95%.
 ASSERTOOR_CONFIG = """endpoints:
 - name: "lantern"
   consensusUrl: "{{ .LanternURL }}"
@@ -82,7 +85,7 @@ tests:
       - name: check_consensus_attestation_stats
         title: "attestation stats, from the committees"
         config:
-          minTargetPercent: 98
+          minTargetPercent: 95
           minHeadPercent: 80
           minCheckedEpochs: 2
       - name: check_consensus_reorgs
@@ -140,6 +143,14 @@ tests:
           indexCount: 1
           clientPattern: "lantern"
           awaitInclusion: true
+      - name: generate_attestations
+        title: "attestations of two epochs of the validators no client runs"
+        config:
+          limitEpochs: 2
+          mnemonic: "MNEMONIC"
+          startIndex: 128
+          indexCount: 2
+          clientPattern: "lantern"
 """.replace("MNEMONIC", "giant issue aisle success illegal bike spike question tent bar rely arctic volcano long crawl hungry vocal artwork sniff fantasy very lucky have athlete")
 
 # The finalized block and its post-state of the Beacon API at URL, as SSZ, in /checkpoint.
