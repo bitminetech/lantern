@@ -396,7 +396,7 @@ ANSWERED = ("getHealth", "getNetworkIdentity", "getNodeVersion", "getSyncingStat
             "getBlockHeader", "getStateFinalityCheckpoints", "getBlockV2", "getStateV2", "getBlockRoot", "getStateRoot",
             "getStateFork", "getSpec", "getForkSchedule", "getDepositContract", "getEpochCommittees",
             "getProposerDuties", "produceAttestationData", "getAttesterDuties", "eventstream", "getStateRandao",
-            "getEpochSyncCommittees", "getProposerLookahead", "getBlockAttestationsV2", "getBlindedBlock") + tuple(PENDING) + VALIDATOR_OPS
+            "getEpochSyncCommittees", "getProposerLookahead", "getBlockAttestationsV2", "getBlindedBlock", "getDebugChainHeadsV2") + tuple(PENDING) + VALIDATOR_OPS
 STATE_READS = ("getStateRandao", "getEpochSyncCommittees", "getProposerLookahead")
 IDENTITY = (b"16Uiu2HAmPLe7Mzm8TsYUubgCAW1aJoeFScxrLj8ppHFivPo97bUZ",
             b"enr:-Iu4QLm7bZGdAhVwRqZ6Zf3LlnqKsBTnZGOByHQhPMQJ3pV4F3t8L9i5yJOZ0X0hiZ6q4D5V0jB7l8J3ZtYw1JDH9C4BgmlkgnY0gmlwhAoAAAGJc2VjcDI1NmsxoQPKY0yuDUmstAHYpMa2_oxVtw0RW_QAdpzBQA8yWM0xOIN0Y3CCIyg",
@@ -829,6 +829,9 @@ def answer(v, name, route, offline, close, keep_alive, syncing=False):
         return response(200, b'{"data":{"disconnected":"0","connecting":"0","connected":"0","disconnecting":"0"}}', **kw)
     if name in ("getSpec", "getForkSchedule", "getDepositContract"):
         return response(200, v["config_bodies"][name], **kw)
+    if name == "getDebugChainHeadsV2":  # the store holds the anchor alone: one leaf
+        return response(200, b'{"data":[{"root":' + qhex(v["root"]) + b',"slot":' + q(v["slot"]) +
+                        b',"execution_optimistic":false}]}', **kw)
     if name == "getGenesis":
         body = (b'{"data":{"genesis_time":' + q(v["genesis_time"]) + b',"genesis_validators_root":' + qhex(v["gvr"]) +
                 b',"genesis_fork_version":' + qhex(v["genesis_version"]) + b"}}")

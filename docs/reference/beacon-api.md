@@ -59,6 +59,7 @@ The answers of the node (node.md, `NODE_EV_API`) follow these rules.
 - getSyncingStatus: `{"data":{"head_slot":…,"sync_distance":…,"is_syncing":…,"is_optimistic":…,"el_offline":…}}`; `sync_distance` is `current_slot` minus `head_slot`, or 0 when it is below.
 - getPeerCount: `{"data":{"disconnected":"0","connecting":"0","connected":…,"disconnecting":"0"}}`.
 - getGenesis: `{"data":{"genesis_time":…,"genesis_validators_root":…,"genesis_fork_version":…}}`.
+- getDebugChainHeadsV2: `{"data":[{"root":…,"slot":…,"execution_optimistic":…},…]}`, the leaves of the fork choice tree: each node of the store's `blocks`, in their order, that no node names as its `parent`. A node whose payload is `INVALIDATED`, and each node below it, is out of the tree (fork-choice.md, optimistic sync: removed from fork choice). `execution_optimistic`: its `payload_status` is `NOT_VALIDATED`.
 - getSpec: `{"data":{…}}`, the keys and values of the node's config, the preset and the spec's constants:
   - Each key of `CONFIG_KEYS` and `BLOB_SCHEDULE`, in the order of the pinned configs/<preset>.yaml, with the node's values; and `SECONDS_PER_SLOT`, `SLOT_DURATION_MS` / 1000, right before `SLOT_DURATION_MS`, the key clients and tools read from configs before the spec gave the slot in milliseconds.
   - Then each key of the pinned presets/<preset>/phase0.yaml to fulu.yaml, in file order.

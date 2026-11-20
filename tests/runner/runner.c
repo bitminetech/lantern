@@ -7574,6 +7574,44 @@ static void api_streams_head(fc_node *n, const uint8_t *st, const char **why) {
 }
 
 /*
+ * Node mode, after the steps: getDebugChainHeadsV2 must answer the leaves of the node's store (beacon-api.md):
+ * each BlockNode, in order, that no node not out has as parent, where a node is out when its payload_status is
+ * PAYLOAD_STATUS_INVALIDATED (1) or its parent is out.
+ */
+static void api_heads_check(fc_node *n, const char **why) {
+    struct node_shell *s = n->shell;
+    static const char req[] = "GET /eth/v2/debug/beacon/heads HTTP/1.1\r\nHost: lantern\r\n\r\n";
+    const uint8_t *st = n->store;
+    uint64_t off = rd64(st + STORE_BLOCKS), cnt = rd64(st + STORE_BLOCKS + 8), k = 0, cap = 64 + 128 * cnt;
+    uint8_t *out = calloc(cnt + 1, 1), *child = calloc(cnt + 1, 1);
+    char *want = malloc(cap);
+    for (uint64_t i = 0; i < cnt; i++) {
+        const uint8_t *b = st + off + i * NODE_BYTES;
+        uint64_t p = rd64(b + 80);
+        out[i] = rd64(b + 208) == 1 || (p < cnt && out[p]);
+        if (!out[i] && p < cnt) child[p] = 1;
+    }
+    k += (uint64_t)snprintf(want + k, cap - k, "{\"data\":[");
+    for (uint64_t i = 0, first = 1; i < cnt; i++) {
+        const uint8_t *b = st + off + i * NODE_BYTES;
+        if (out[i] || child[i]) continue;
+        k += (uint64_t)snprintf(want + k, cap - k, "%s{\"root\":\"0x", first ? "" : ",");
+        for (int j = 0; j < 32; j++) k += (uint64_t)snprintf(want + k, cap - k, "%02x", b[j]);
+        k += (uint64_t)snprintf(want + k, cap - k, "\",\"slot\":\"%llu\",\"execution_optimistic\":%s}", (unsigned long long)rd64(b + 64),
+                                rd64(b + 208) == 2 ? "true" : "false");
+        first = 0;
+    }
+    k += (uint64_t)snprintf(want + k, cap - k, "]}");
+    shell_api_ask(n, (const uint8_t *)req, sizeof req - 1, 13, why);
+    if (!*why && (s->api.len < 17 + k || memcmp(s->api.b, "HTTP/1.1 200 OK\r\n", 17) ||
+                  memcmp(s->api.b + s->api.len - k, want, (size_t)k)))
+        *why = api_mismatch(s, "API getDebugChainHeadsV2", (const uint8_t *)want, k);
+    free(out);
+    free(child);
+    free(want);
+}
+
+/*
  * Node mode, after the steps: getBlockHeader of head must give 200 with the node's head_root as
  * root and its block's slot; getStateFinalityCheckpoints of head the checkpoints of the head's
  * post-state (docs/reference/node.md, Test vectors).
@@ -7613,6 +7651,7 @@ static void shell_api_head(fc_node *n, const char **why) {
     shell_api_ask(n, (const uint8_t *)freq, sizeof freq - 1, 2, why);
     if (!*why && (s->api.len < 17 || memcmp(s->api.b, "HTTP/1.1 200 OK\r\n", 17) || !find_bytes((const char *)s->api.b, s->api.len, want)))
         *why = api_mismatch(s, "API getStateFinalityCheckpoints of head", (const uint8_t *)want, strlen(want));
+    if (!*why) api_heads_check(n, why);
     if (!*why) api_streams_head(n, st, why);
 }
 

@@ -311,6 +311,12 @@ api_q_source:
 api_q_target:
     .ascii ",\"target_index\":"
 .set api_q_target_len, 16
+api_ch_root:
+    .ascii "{\"root\":"
+.set api_ch_root_len, 8
+api_ch_optimistic:
+    .ascii ",\"execution_optimistic\":"
+.set api_ch_optimistic_len, 24
 api_p_lbracket:
     .ascii "["
 .set api_p_lbracket_len, 1

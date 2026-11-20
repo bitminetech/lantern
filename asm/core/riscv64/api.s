@@ -1273,7 +1273,11 @@ LOCAL_FUNCTION api_body
     API_LIT api_f_list
     call    api_failures
     UNFRAME 16
-11: li      t0, API_OP_GET_STATE_RANDAO
+11: li      t0, API_OP_GET_DEBUG_CHAIN_HEADS_V2
+    bne     s10, t0, 110f
+    call    api_heads_body
+    UNFRAME 16
+110: li     t0, API_OP_GET_STATE_RANDAO
     beq     s10, t0, 113f
     li      t0, API_OP_GET_EPOCH_SYNC_COMMITTEES
     beq     s10, t0, 113f
@@ -1662,6 +1666,59 @@ LOCAL_FUNCTION api_duties_json
 9:  API_LIT api_v_end
     UNFRAME 32
 END_FUNCTION api_duties_json
+
+/*
+ * L1: the body of getDebugChainHeadsV2 (beacon-api.md): {"data":[{"root":…,"slot":…,"execution_optimistic":…},…]}
+ * of the store nodes at ApiView_val_state of the view s4 whose byte at ApiView_heads is 0. Locals: the
+ * index, 1 once an item is written, the node.
+ */
+LOCAL_FUNCTION api_heads_body
+    FRAME 32
+    API_LIT api_p_data
+    sd      zero, 0(sp)
+    sd      zero, 8(sp)
+1:  ld      t0, ApiView_val_state(s4)
+    ld      t1, (Store_blocks + 8)(t0)
+    ld      t2, 0(sp)
+    bgeu    t2, t1, 9f
+    LDQ     t3, s4, ApiView_heads
+    add     t3, t3, t2
+    lbu     t3, 0(t3)
+    bnez    t3, 8f
+    ld      t0, 8(sp)
+    beqz    t0, 2f
+    API_LIT api_p_comma
+2:  li      t0, 1
+    sd      t0, 8(sp)
+    API_LIT api_ch_root
+    ld      t0, ApiView_val_state(s4)
+    ld      t1, Store_blocks(t0)
+    add     t1, t0, t1
+    ld      t2, 0(sp)
+    li      t3, BlockNode__mem
+    mul     t2, t2, t3
+    add     a0, t1, t2
+    sd      a0, 16(sp)
+    li      a1, 32
+    call    api_qhex
+    API_LIT api_q_slot
+    ld      t0, 16(sp)
+    ld      a0, BlockNode_slot(t0)
+    call    api_qdec
+    API_LIT api_ch_optimistic
+    ld      t0, 16(sp)
+    ld      t0, BlockNode_payload_status(t0)
+    addi    t0, t0, -PAYLOAD_STATUS_NOT_VALIDATED
+    seqz    a0, t0
+    call    api_bool
+    API_LIT api_end1
+8:  ld      t0, 0(sp)
+    addi    t0, t0, 1
+    sd      t0, 0(sp)
+    j       1b
+9:  API_LIT api_v_end
+    UNFRAME 32
+END_FUNCTION api_heads_body
 
 /*
  * The bodies of getStateRandao, getEpochSyncCommittees and getProposerLookahead (beacon-api.md), as
@@ -2232,6 +2289,8 @@ LOCAL_FUNCTION node_api_event
     bleu    t1, t0, 66f
     li      t0, API_OP_GET_SPEC
     beq     a3, t0, 67f
+    li      t0, API_OP_GET_DEBUG_CHAIN_HEADS_V2
+    beq     a3, t0, 67f
     li      t0, API_OP_GET_PROPOSER_DUTIES
     beq     a3, t0, 63f
     li      t0, API_OP_PRODUCE_ATTESTATION_DATA
@@ -2581,7 +2640,9 @@ LOCAL_FUNCTION node_api_run
     beqz    t1, 8f
     beqz    s4, 8f
     j       2f
-1:  li      t2, API_OP_GET_SPEC             # getSpec: no state
+1:  li      t2, API_OP_GET_SPEC             # getSpec, getDebugChainHeadsV2: no state
+    beq     s9, t2, 2f
+    li      t2, API_OP_GET_DEBUG_CHAIN_HEADS_V2
     beq     s9, t2, 2f
     beqz    s4, 8f                          # a state's answer: a state
     li      t2, API_OP_GET_STATE_FINALITY_CHECKPOINTS
@@ -2628,6 +2689,8 @@ LOCAL_FUNCTION node_api_run
     beq     s9, t2, 3f
     li      t2, API_OP_GET_SPEC
     beq     s9, t2, 5f
+    li      t2, API_OP_GET_DEBUG_CHAIN_HEADS_V2
+    beq     s9, t2, 29f
     srli    t0, t0, 24                      # a state at the work's slot, else the work that brought it there failed
     ld      a0, NODE_STATE_SLOT(s4)
     bne     a0, t0, 42f
@@ -2892,6 +2955,41 @@ LOCAL_FUNCTION node_api_run
     addi    t0, t0, -NodeEvent_chunk
     sd      t0, NodeEvent_chunk(s7)
     j       9f
+    # getDebugChainHeadsV2: a byte for each store node at the end of scratch, 1 when it is out of the tree, 2 when a node not out has it as parent
+29: ld      t0, Store_blocks(s2)
+    add     t0, s2, t0
+    ld      t1, (Store_blocks + 8)(s2)
+    addi    t2, t1, 7
+    andi    t2, t2, -8
+    ld      t3, 0(s6)
+    bltu    t3, t2, 71f
+    sub     t3, t3, t2
+    sd      t3, 0(s6)
+    add     t3, s6, t3
+    STQ     t3, s8, ApiView_heads
+    sd      s2, ApiView_val_state(s8)
+    li      t2, 0
+291: bgeu   t2, t1, 5b
+    li      t4, BlockNode__mem
+    mul     t4, t2, t4
+    add     t4, t0, t4
+    ld      t5, BlockNode_payload_status(t4)
+    addi    t5, t5, -PAYLOAD_STATUS_INVALIDATED
+    seqz    t5, t5
+    ld      t6, BlockNode_parent(t4)
+    bgeu    t6, t1, 293f
+    add     t6, t3, t6
+    lbu     a0, 0(t6)
+    andi    a0, a0, 1
+    or      t5, t5, a0
+    bnez    t5, 293f
+    lbu     a0, 0(t6)
+    ori     a0, a0, 2
+    sb      a0, 0(t6)
+293: add    a0, t3, t2
+    sb      t5, 0(a0)
+    addi    t2, t2, 1
+    j       291b
 42: li      t0, LANTERN_INVALID_SLOT
     sd      t0, NodeEvent_result(s7)
     j       9f
@@ -3266,9 +3364,11 @@ LOCAL_FUNCTION node_api_encode
     slli    a2, a2, 8
     or      a5, a0, a2
     mv      a4, a1
-    li      t1, API_OP_GET_SPEC             # getSpec: no state, no bytes, no values
+    li      t1, API_OP_GET_SPEC             # getSpec, getDebugChainHeadsV2: no state, no bytes, no values
+    beq     a0, t1, 5f
+    li      t1, API_OP_GET_DEBUG_CHAIN_HEADS_V2
     bne     a0, t1, 1f
-    li      a1, 0
+5:  li      a1, 0
     li      a3, 0
     j       3f
 1:  or      a5, a5, t0

@@ -1261,7 +1261,11 @@ LOCAL_FUNCTION api_body
     API_LIT api_f_list
     bl      api_failures
     UNFRAME 16
-11: cmp     x28, #API_OP_GET_STATE_RANDAO
+11: cmp     x28, #API_OP_GET_DEBUG_CHAIN_HEADS_V2
+    b.ne    110f
+    bl      api_heads_body
+    UNFRAME 16
+110: cmp    x28, #API_OP_GET_STATE_RANDAO
     b.eq    111f
     cmp     x28, #API_OP_GET_EPOCH_SYNC_COMMITTEES
     b.eq    112f
@@ -1634,6 +1638,57 @@ LOCAL_FUNCTION api_body
 16: API_LIT api_v_end
 99: UNFRAME 16
 END_FUNCTION api_body
+
+/*
+ * L1: the body of getDebugChainHeadsV2 (beacon-api.md): {"data":[{"root":…,"slot":…,"execution_optimistic":…},…]}
+ * of the store nodes at ApiView_val_state of the view x22 whose byte at ApiView_heads is 0. Locals: the
+ * index, 1 once an item is written, the node.
+ */
+LOCAL_FUNCTION api_heads_body
+    FRAME 32
+    API_LIT api_p_data
+    stp     xzr, xzr, [sp, #16]
+1:  ldr     x9, [x22, #ApiView_val_state]
+    ldr     x10, [x9, #(Store_blocks + 8)]
+    ldr     x11, [sp, #16]
+    cmp     x11, x10
+    b.hs    9f
+    ldr     x12, [x22, #ApiView_heads]
+    ldrb    w12, [x12, x11]
+    cbnz    w12, 8f
+    ldr     x12, [sp, #24]
+    cbz     x12, 2f
+    API_LIT api_p_comma
+2:  mov     x12, #1
+    str     x12, [sp, #24]
+    API_LIT api_ch_root
+    ldr     x9, [x22, #ApiView_val_state]
+    ldr     x10, [x9, #Store_blocks]
+    add     x10, x9, x10
+    ldr     x11, [sp, #16]
+    mov     x12, #BlockNode__mem
+    madd    x0, x11, x12, x10
+    str     x0, [sp, #32]
+    mov     x1, #32
+    bl      api_qhex
+    API_LIT api_q_slot
+    ldr     x0, [sp, #32]
+    ldr     x0, [x0, #BlockNode_slot]
+    bl      api_qdec
+    API_LIT api_ch_optimistic
+    ldr     x0, [sp, #32]
+    ldr     x0, [x0, #BlockNode_payload_status]
+    cmp     x0, #PAYLOAD_STATUS_NOT_VALIDATED
+    cset    x0, eq
+    bl      api_bool
+    API_LIT api_end1
+8:  ldr     x11, [sp, #16]
+    add     x11, x11, #1
+    str     x11, [sp, #16]
+    b       1b
+9:  API_LIT api_v_end
+    UNFRAME 32
+END_FUNCTION api_heads_body
 
 /*
  * L1: the bodies of getStateRandao, getEpochSyncCommittees and getProposerLookahead (beacon-api.md),
@@ -2196,6 +2251,8 @@ LOCAL_FUNCTION node_api_event
     b.ls    66f
     cmp     x3, #API_OP_GET_SPEC
     b.eq    67f
+    cmp     x3, #API_OP_GET_DEBUG_CHAIN_HEADS_V2
+    b.eq    67f
     cmp     x3, #API_OP_GET_PROPOSER_DUTIES
     b.eq    63f
     cmp     x3, #API_OP_PRODUCE_ATTESTATION_DATA
@@ -2541,7 +2598,9 @@ LOCAL_FUNCTION node_api_run
     cbz     x10, 8f
     cbz     x22, 8f
     b       2f
-1:  cmp     x27, #API_OP_GET_SPEC           /* getSpec: no state */
+1:  cmp     x27, #API_OP_GET_SPEC           /* getSpec, getDebugChainHeadsV2: no state */
+    b.eq    2f
+    cmp     x27, #API_OP_GET_DEBUG_CHAIN_HEADS_V2
     b.eq    2f
     cbz     x22, 8f                         /* a state's answer: a state */
     cmp     x27, #API_OP_GET_STATE_FINALITY_CHECKPOINTS
@@ -2585,6 +2644,8 @@ LOCAL_FUNCTION node_api_run
     b.eq    3f
     cmp     x27, #API_OP_GET_SPEC
     b.eq    5f
+    cmp     x27, #API_OP_GET_DEBUG_CHAIN_HEADS_V2
+    b.eq    29f
     ldr     x0, [x22, #NODE_STATE_SLOT]     /* a state at the work's slot, else the work that brought it there failed */
     lsr     x9, x9, #24
     cmp     x0, x9
@@ -2840,6 +2901,41 @@ LOCAL_FUNCTION node_api_run
     sub     x9, x9, #NodeEvent_chunk
     str     x9, [x25, #NodeEvent_chunk]
     b       9f
+    /* getDebugChainHeadsV2: a byte for each store node at the end of scratch, 1 when it is out of the tree, 2 when a node not out has it as parent */
+29: ldr     x9, [x20, #Store_blocks]
+    add     x9, x20, x9
+    ldr     x10, [x20, #(Store_blocks + 8)]
+    ldr     x11, [x24]
+    add     x12, x10, #7
+    and     x12, x12, #~7
+    cmp     x11, x12
+    b.lo    71f
+    sub     x11, x11, x12
+    str     x11, [x24]
+    add     x13, x24, x11
+    str     x13, [x26, #ApiView_heads]
+    str     x20, [x26, #ApiView_val_state]
+    mov     x14, #0
+291: cmp    x14, x10
+    b.hs    5b
+    mov     x15, #BlockNode__mem
+    madd    x15, x14, x15, x9
+    ldr     x12, [x15, #BlockNode_payload_status]
+    cmp     x12, #PAYLOAD_STATUS_INVALIDATED
+    cset    w12, eq
+    ldr     x11, [x15, #BlockNode_parent]
+    cmp     x11, x10
+    b.hs    293f
+    ldrb    w16, [x13, x11]
+    and     w16, w16, #1
+    orr     w12, w12, w16
+    cbnz    w12, 293f
+    ldrb    w16, [x13, x11]
+    orr     w16, w16, #2
+    strb    w16, [x13, x11]
+293: strb   w12, [x13, x14]
+    add     x14, x14, #1
+    b       291b
 42: mov     x9, #LANTERN_INVALID_SLOT
     str     x9, [x25, #NodeEvent_result]
     b       9f
@@ -3327,7 +3423,9 @@ LOCAL_FUNCTION node_api_encode
     orr     x9, x9, x11, lsl #2
     orr     x5, x0, x2, lsl #8
     mov     x4, x1
-    cmp     x0, #API_OP_GET_SPEC            /* getSpec: no state, no bytes, no values */
+    cmp     x0, #API_OP_GET_SPEC            /* getSpec, getDebugChainHeadsV2: no state, no bytes, no values */
+    mov     x12, #API_OP_GET_DEBUG_CHAIN_HEADS_V2
+    ccmp    x0, x12, #4, ne
     b.ne    1f
     mov     x1, #0
     mov     x3, #0

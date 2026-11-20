@@ -1218,7 +1218,11 @@ LOCAL_FUNCTION api_body
     call    api_failures
     UNFRAME 16
 11: mov     8(%rsp), %rsi
-    cmp     $API_OP_GET_STATE_RANDAO, %rsi
+    cmp     $API_OP_GET_DEBUG_CHAIN_HEADS_V2, %rsi
+    jne     110f
+    call    api_heads_body
+    UNFRAME 16
+110: cmp    $API_OP_GET_STATE_RANDAO, %rsi
     je      113f
     cmp     $API_OP_GET_EPOCH_SYNC_COMMITTEES, %rsi
     je      113f
@@ -1592,6 +1596,53 @@ LOCAL_FUNCTION api_duties_json
 9:  API_LIT api_v_end
     UNFRAME 32
 END_FUNCTION api_duties_json
+
+/*
+ * L1: the body of getDebugChainHeadsV2 (beacon-api.md): {"data":[{"root":…,"slot":…,"execution_optimistic":…},…]}
+ * of the store nodes at ApiView_val_state of the view rbp whose byte at ApiView_heads is 0. Locals: the
+ * index, 1 once an item is written, the node.
+ */
+LOCAL_FUNCTION api_heads_body
+    FRAME 32
+    API_LIT api_p_data
+    movq    $0, (%rsp)
+    movq    $0, 8(%rsp)
+1:  mov     ApiView_val_state(%rbp), %rax
+    mov     (%rsp), %rcx
+    cmp     (Store_blocks + 8)(%rax), %rcx
+    jae     9f
+    mov     ApiView_heads(%rbp), %rdx
+    cmpb    $0, (%rdx,%rcx)
+    jne     8f
+    cmpq    $0, 8(%rsp)
+    je      2f
+    API_LIT api_p_comma
+2:  movq    $1, 8(%rsp)
+    API_LIT api_ch_root
+    mov     ApiView_val_state(%rbp), %rax
+    mov     Store_blocks(%rax), %rdi
+    add     %rax, %rdi
+    imul    $BlockNode__mem, (%rsp), %rcx
+    add     %rcx, %rdi
+    mov     %rdi, 16(%rsp)
+    mov     $32, %esi
+    call    api_qhex
+    API_LIT api_q_slot
+    mov     16(%rsp), %rax
+    mov     BlockNode_slot(%rax), %rdi
+    call    api_qdec
+    API_LIT api_ch_optimistic
+    mov     16(%rsp), %rax
+    xor     %edi, %edi
+    cmpq    $PAYLOAD_STATUS_NOT_VALIDATED, BlockNode_payload_status(%rax)
+    sete    %dil
+    call    api_bool
+    API_LIT api_end1
+8:  incq    (%rsp)
+    jmp     1b
+9:  API_LIT api_v_end
+    UNFRAME 32
+END_FUNCTION api_heads_body
 
 /*
  * The bodies of getStateRandao, getEpochSyncCommittees and getProposerLookahead (beacon-api.md), as
@@ -2150,6 +2201,8 @@ LOCAL_FUNCTION node_api_event
     jbe     66f
     cmp     $API_OP_GET_SPEC, %rcx
     je      67f
+    cmp     $API_OP_GET_DEBUG_CHAIN_HEADS_V2, %rcx
+    je      67f
     cmp     $API_OP_GET_PROPOSER_DUTIES, %rcx
     je      63f
     cmp     $API_OP_PRODUCE_ATTESTATION_DATA, %rcx
@@ -2531,7 +2584,9 @@ LOCAL_FUNCTION node_api_run
     test    %r13, %r13
     jz      8f
     jmp     2f
-1:  cmp     $API_OP_GET_SPEC, %eax          # getSpec: no state
+1:  cmp     $API_OP_GET_SPEC, %eax          # getSpec, getDebugChainHeadsV2: no state
+    je      2f
+    cmp     $API_OP_GET_DEBUG_CHAIN_HEADS_V2, %eax
     je      2f
     test    %r13, %r13                      # a state's answer: a state
     jz      8f
@@ -2583,6 +2638,8 @@ LOCAL_FUNCTION node_api_run
     je      3f
     cmpq    $API_OP_GET_SPEC, S9(%rsp)
     je      5f
+    cmpq    $API_OP_GET_DEBUG_CHAIN_HEADS_V2, S9(%rsp)
+    je      29f
     shr     $24, %rax                       # a state at the work's slot, else the work that brought it there failed
     mov     NODE_STATE_SLOT(%r13), %rdi
     cmp     %rax, %rdi
@@ -2871,6 +2928,39 @@ LOCAL_FUNCTION node_api_run
     sub     $NodeEvent_chunk, %rax
     mov     %rax, NodeEvent_chunk(%r15)
     jmp     9f
+    # getDebugChainHeadsV2: a byte for each store node at the end of scratch, 1 when it is out of the tree, 2 when a node not out has it as parent
+29: mov     Store_blocks(%rbp), %rsi
+    add     %rbp, %rsi
+    mov     (Store_blocks + 8)(%rbp), %rcx
+    lea     7(%rcx), %rdx
+    and     $~7, %rdx
+    mov     (%r14), %rax
+    sub     %rdx, %rax
+    jb      71f
+    mov     %rax, (%r14)
+    lea     (%r14,%rax), %rdi
+    mov     S8(%rsp), %rax
+    mov     %rdi, ApiView_heads(%rax)
+    mov     %rbp, ApiView_val_state(%rax)
+    xor     %edx, %edx
+291: cmp    %rcx, %rdx
+    jae     5b
+    imul    $BlockNode__mem, %rdx, %r8
+    add     %rsi, %r8
+    xor     %eax, %eax
+    cmpq    $PAYLOAD_STATUS_INVALIDATED, BlockNode_payload_status(%r8)
+    sete    %al
+    mov     BlockNode_parent(%r8), %r9
+    cmp     %rcx, %r9
+    jae     293f
+    movzbl  (%rdi,%r9), %r10d
+    and     $1, %r10d
+    or      %r10d, %eax
+    jnz     293f
+    orb     $2, (%rdi,%r9)
+293: mov    %al, (%rdi,%rdx)
+    inc     %rdx
+    jmp     291b
 42: movq    $LANTERN_INVALID_SLOT, NodeEvent_result(%r15)
     jmp     9f
 41: movq    $LANTERN_INVALID_ENCODING, NodeEvent_result(%r15)
@@ -3245,8 +3335,11 @@ LOCAL_FUNCTION node_api_encode
     FRAME 16
     mov     %rcx, (%rsp)
     mov     %rsi, %r8
-    cmp     $API_OP_GET_SPEC, %rdi          # getSpec: no state, no bytes, no values
+    cmp     $API_OP_GET_SPEC, %rdi          # getSpec, getDebugChainHeadsV2: no state, no bytes, no values
+    je      4f
+    cmp     $API_OP_GET_DEBUG_CHAIN_HEADS_V2, %rdi
     jne     1f
+4:
     shl     $8, %rdx
     lea     (%rdi,%rdx), %r9
     xor     %esi, %esi

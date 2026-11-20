@@ -997,7 +997,8 @@
 .set ApiView_sync_out, ApiView_att + 184     /* getEpochSyncCommittees: the address of lantern_node_sync_committee's out */
 .set ApiView_lookahead, ApiView_att + 192    /* getProposerLookahead: lantern_node_proposer_lookahead's out */
 .set API_LOOKAHEAD_SLOTS, (MIN_SEED_LOOKAHEAD + 1) * SLOTS_PER_EPOCH
-.set ApiView__size, ApiView_lookahead + 8 * API_LOOKAHEAD_SLOTS
+.set ApiView_heads, ApiView_lookahead + 8 * API_LOOKAHEAD_SLOTS  /* getDebugChainHeadsV2: a byte for each store node, at the end of scratch */
+.set ApiView__size, ApiView_heads + 8
 .set ApiIdentity_peer_id, 0              /* ApiIdentity (beacon-api.md): texts, each a length and its room */
 .set ApiIdentity_enr, 72
 .set ApiIdentity_p2p_address, 592
