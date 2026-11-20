@@ -611,7 +611,20 @@ LOCAL_FUNCTION node_ids
 1:  beqz    t1, 3f
     ld      t2, NodeApi_connection(t0)
     beqz    t2, 2f
-    ld      t2, NodeApi_data(t0)
+    ld      t2, NodeApi_op(t0)              # a produceBlockV3 in its folds: the pool bytes of its fold in flight
+    li      a7, API_OP_PRODUCE_BLOCK_V3
+    bne     t2, a7, 11f
+    ld      t2, NodeApi_member(t0)
+    li      a7, NODE_PRODUCE_FOLD
+    bne     t2, a7, 2f
+    ld      t2, NodeApi_root(t0)
+    bne     t2, a1, 2f
+    ld      t2, NodeApi_flags(t0)
+    li      a7, API_STREAM_PRODUCE_OWN
+    or      t2, t2, a7
+    sd      t2, NodeApi_flags(t0)
+    ret
+11: ld      t2, NodeApi_data(t0)
     bne     t2, a1, 2f
     ld      t2, NodeApi_flags(t0)
     andi    a7, t2, API_STREAM_OWN
@@ -1313,6 +1326,8 @@ LOCAL_FUNCTION node_engine_next
     mv      s7, a0
     ld      t0, Node_engine_wait(s1)
     bltu    s7, t0, 9f
+    call    node_produce_engine             # a produceBlockV3 waiting for its payload goes first
+    bnez    a0, 9f
     PART    s3, s4, s1, Node_blocks
     li      s8, 0
 1:  bgeu    s8, s4, 3f
@@ -1418,7 +1433,108 @@ LOCAL_FUNCTION node_prepare
     addi    t1, s1, Node_head_root
     NE32    t0, t1, 4f
     j       8f
-4:  STQ     s8, s1, Node_payload_slot
+4:  mv      a0, s8
+    li      a1, 0
+    call    node_prepare_go
+    LEAVE 0
+8:  li      a0, 0
+    LEAVE 0
+END_FUNCTION node_prepare
+
+/*
+ * L1: with no engine call in flight, the call of the first produceBlockV3 entry in
+ * NODE_PRODUCE_PAYLOAD (node.md, Block production): a GET_PAYLOAD of payload_id when the payload
+ * of its slot on the head is NODE_PAYLOAD_READY; else a forced preparation of its slot, once (a
+ * second that ends with no payloadId: 500). a0 = 1 when a call went. s3 an entry, s4 its index,
+ * s7 the count.
+ */
+LOCAL_FUNCTION node_produce_engine
+    ENTER 0
+    PART    s3, s7, s1, Node_api
+    li      s4, 0
+1:  bgeu    s4, s7, 8f
+    ld      t0, NodeApi_connection(s3)
+    beqz    t0, 2f
+    ld      t0, NodeApi_op(s3)
+    li      t1, API_OP_PRODUCE_BLOCK_V3
+    bne     t0, t1, 2f
+    ld      t0, NodeApi_member(s3)
+    li      t1, NODE_PRODUCE_PAYLOAD
+    beq     t0, t1, 3f
+2:  addi    s3, s3, NodeApi__mem
+    addi    s4, s4, 1
+    j       1b
+3:  LDQ     t0, s1, Node_payload_slot       # the payload of its slot on the head
+    ld      t1, NodeApi_slot(s3)
+    bne     t0, t1, 6f
+    ADDQ    t0, s1, Node_payload_root
+    addi    t1, s1, Node_head_root
+    NE32    t0, t1, 6f
+    LDQ     t0, s1, Node_payload_status
+    li      t1, NODE_PAYLOAD_READY
+    beq     t0, t1, 4f
+    ld      t0, NodeApi_flags(s3)           # no payloadId: a preparation of its own, else 500
+    li      t1, API_STREAM_PRODUCE_FORCED
+    and     t0, t0, t1
+    beqz    t0, 6f
+    mv      a0, s3
+    li      a1, 500
+    call    node_produce_fail
+    li      a0, 0
+    LEAVE 0
+4:  li      t0, ENGINE_METHOD_GET_PAYLOAD
+    sd      t0, Node_engine_method(s1)
+    sd      s4, Node_engine_target(s1)
+    ld      a5, Node_engine_id(s1)
+    addi    t0, a5, 1
+    sd      t0, Node_engine_id(s1)
+    li      a0, NODE_WORK_GET_PAYLOAD
+    li      a1, 0
+    li      a2, 0
+    li      a3, 0
+    mv      a4, s4
+    call    node_work
+    li      a0, 1
+    LEAVE 0
+6:  ld      t0, NodeApi_flags(s3)
+    li      t1, API_STREAM_PRODUCE_FORCED
+    or      t0, t0, t1
+    sd      t0, NodeApi_flags(s3)
+    ld      a0, NodeApi_slot(s3)
+    li      a1, 1
+    call    node_prepare_go
+    bnez    a0, 7f
+    mv      a0, s3
+    li      a1, 500
+    call    node_produce_fail
+    li      a0, 0
+    LEAVE 0
+7:  li      a0, 1
+    LEAVE 0
+8:  li      a0, 0
+    LEAVE 0
+END_FUNCTION node_produce_engine
+
+/*
+ * L1: the preparation of a payload for slot a0 on the head (node.md, Payload preparation), forced
+ * with a1 = 1 (a fee recipient of zero bytes when the proposer has none): a copy of the head's
+ * post-state at that slot, a PREPARE_PAYLOAD work of it with the next engine id and a1 as its
+ * target, and the copy's STATE_FREE; it is the call in flight. a0 = 1 when it went, 0 with no head
+ * post-state. s3 the head's entry, s4 the copy, s7 forced, s8 the slot, s9 the copy's slot, s10 a
+ * fork.
+ */
+LOCAL_FUNCTION node_prepare_go
+    ENTER 0
+    mv      s8, a0
+    mv      s7, a1
+    addi    a0, s1, Node_head_root
+    call    node_find_block
+    li      t0, -1
+    beq     a0, t0, 8f
+    mv      s3, a1
+    ld      t0, NodeBlock_state_id(s3)
+    beqz    t0, 8f
+    STQ     s8, s1, Node_payload_slot
     ADDQ    t0, s1, Node_payload_root
     addi    t1, s1, Node_head_root
     COPY32  t0, t1
@@ -1471,7 +1587,7 @@ LOCAL_FUNCTION node_prepare
     mv      a1, s4
     li      a2, 0
     li      a3, 0
-    li      a4, 0
+    mv      a4, s7
     call    node_work
     li      a0, NODE_ACT_STATE_FREE
     mv      a1, s4
@@ -1481,7 +1597,7 @@ LOCAL_FUNCTION node_prepare
     LEAVE 0
 8:  li      a0, 0
     LEAVE 0
-END_FUNCTION node_prepare
+END_FUNCTION node_prepare_go
 
 /*
  * The engine call in flight failed: an engine_newPayload's block takes NODE_BLOCK_PAYLOAD with
@@ -1506,12 +1622,109 @@ LOCAL_FUNCTION node_engine_failed
     STQ     zero, s1, Node_payload_slot
     STQ     zero, s1, Node_payload_status
     LEAVE 0
-1:  li      t1, ENGINE_METHOD_NEW_PAYLOAD
+1:  li      t1, ENGINE_METHOD_GET_PAYLOAD   # a getPayload's entry: 500
+    bne     t0, t1, 2f
+    ld      a0, Node_engine_target(s1)
+    call    node_produce_fail_at
+    LEAVE 0
+2:  li      t1, ENGINE_METHOD_NEW_PAYLOAD
     bne     t0, t1, 9f
     ld      a0, Node_engine_target(s1)
     call    node_payload_retry
 9:  LEAVE 0
 END_FUNCTION node_engine_failed
+
+/* L1: the produceBlockV3 entry at index a0, while it waits for its payload: 500. */
+LOCAL_FUNCTION node_produce_fail_at
+    FRAME 0
+    PART    t0, t1, s1, Node_api
+    bgeu    a0, t1, 9f
+    li      t1, NodeApi__mem
+    mul     a0, a0, t1
+    add     a0, t0, a0
+    ld      t1, NodeApi_connection(a0)
+    beqz    t1, 9f
+    ld      t1, NodeApi_op(a0)
+    li      t2, API_OP_PRODUCE_BLOCK_V3
+    bne     t1, t2, 9f
+    ld      t1, NodeApi_member(a0)
+    li      t2, NODE_PRODUCE_PAYLOAD
+    bne     t1, t2, 9f
+    li      a1, 500
+    call    node_produce_fail
+9:  UNFRAME 0
+END_FUNCTION node_produce_fail_at
+
+/*
+ * L2: the engine_getPayload body a0 (a ByteList in scratch s5, which stays short) with its
+ * EngineResponse a1, for the produceBlockV3 entry at engine_target in NODE_PRODUCE_PAYLOAD: its
+ * result decoded by lantern_node_payload_result into a BYTES_PUT action, whose id the entry keeps
+ * as filter_index before its fold; a result that does not decode: 500, and the action goes. s3
+ * the body, s4 the entry, s7 the action, s8 its size. Locals: L a JsonFault (128).
+ */
+LOCAL_FUNCTION node_produce_payload
+    ENTER 128
+    mv      s3, a0
+    ld      t0, Node_engine_target(s1)
+    PART    s4, t1, s1, Node_api
+    bgeu    t0, t1, 9f
+    li      t1, NodeApi__mem
+    mul     t0, t0, t1
+    add     s4, s4, t0
+    ld      t0, NodeApi_connection(s4)
+    beqz    t0, 9f
+    ld      t0, NodeApi_op(s4)
+    li      t1, API_OP_PRODUCE_BLOCK_V3
+    bne     t0, t1, 9f
+    ld      t0, NodeApi_member(s4)
+    li      t1, NODE_PRODUCE_PAYLOAD
+    bne     t0, t1, 9f
+    ld      t0, EngineResponse_result_offset(a1)    # the body becomes the result's bytes
+    ld      t1, EngineResponse_result_length(a1)
+    ld      t2, 8(s3)
+    add     t2, t2, t0
+    sd      t2, 8(s3)
+    sd      t1, 16(s3)
+    li      t0, (48 + 1024 + 7)             # the action: room for the SSZ bytes, at most the text's + 1024
+    add     s8, t1, t0
+    andi    s8, s8, -8
+    li      a0, NODE_ACT_BYTES_PUT
+    mv      a1, s8
+    call    node_act
+    mv      s7, a0
+    call    node_new_id
+    sd      a0, 16(s7)
+    addi    t0, s8, -24
+    sd      t0, 24(s7)
+    li      t0, 24
+    sd      t0, 32(s7)
+    sd      zero, 40(s7)
+    ld      a0, NodeApi_slot(s4)
+    addi    a1, s1, Node_config
+    call    node_fork
+    mv      t6, a0
+    mv      a0, s3
+    mv      a1, s5
+    addi    a2, s7, 24
+    addi    a3, sp, L
+    FORK_CALL_BELLATRIX node_payload_result
+    bnez    a0, 8f
+    ld      t0, 16(s7)                      # the entry keeps the result, then folds
+    sd      t0, NodeApi_filter_index(s4)
+    li      t0, NODE_PRODUCE_FOLD
+    sd      t0, NodeApi_member(s4)
+    sd      zero, NodeApi_filter_slot(s4)
+    mv      a0, s4
+    call    node_produce_next
+    LEAVE 128
+8:  ld      t0, 16(s6)                      # no result: the action goes, and 500
+    sub     t0, t0, s8
+    sd      t0, 16(s6)
+    mv      a0, s4
+    li      a1, 500
+    call    node_produce_fail
+9:  LEAVE 128
+END_FUNCTION node_produce_payload
 
 /* The block of index a0, if NODE_BLOCK_EXECUTING, takes NODE_BLOCK_PAYLOAD with retry the store's slot + 1. s3 the entry. */
 LOCAL_FUNCTION node_payload_retry
@@ -1651,7 +1864,15 @@ LOCAL_FUNCTION node_engine_read
     mv      a0, s3
     ld      a1, (L + 8)(sp)
     call    node_engine_consume
+    li      t0, ENGINE_METHOD_GET_PAYLOAD   # engine_getPayload: its result, decoded with the body still in scratch
+    bne     s4, t0, 44f
+    mv      a0, s8
+    addi    a1, sp, (L + 32)
+    call    node_produce_payload
     sd      s7, 0(s5)
+    sd      zero, Node_engine_method(s1)
+    j       9f
+44: sd      s7, 0(s5)
     sd      zero, Node_engine_method(s1)    # the call ends
     ld      s10, (L + 32 + EngineResponse_status)(sp)
     li      t0, ENGINE_METHOD_NEW_PAYLOAD
@@ -4183,6 +4404,8 @@ LOCAL_FUNCTION node_event
     li      t2, NODE_WORK_FORKCHOICE
     beq     t0, t2, 86f
     li      t2, NODE_WORK_PREPARE_PAYLOAD
+    beq     t0, t2, 86f
+    li      t2, NODE_WORK_GET_PAYLOAD
     bne     t0, t2, 701f
 86: bnez    t1, 87f
     li      t2, NODE_WORK_PREPARE_PAYLOAD   # a preparation: its proposer; its call updates the fork choice too
@@ -4214,8 +4437,13 @@ LOCAL_FUNCTION node_event
 87: sd      zero, Node_engine_method(s1)    # no request: the call ends
     ld      t0, NodeAction_work_kind(s3)
     li      t2, NODE_WORK_PREPARE_PAYLOAD
-    bne     t0, t2, 871f
+    bne     t0, t2, 870f
     STQ     zero, s1, Node_payload_status
+    LEAVE 48
+870: li     t2, NODE_WORK_GET_PAYLOAD
+    bne     t0, t2, 871f
+    ld      a0, NodeAction_target(s3)
+    call    node_produce_fail_at
     LEAVE 48
 871: li     t2, NODE_WORK_NEW_PAYLOAD
     bne     t0, t2, 79f
@@ -4267,9 +4495,18 @@ LOCAL_FUNCTION node_event
     call    node_api_submit_done
     LEAVE 48
 706: li     t2, NODE_WORK_POOL_CHECK        # POOL_CHECK: the entry stays, or goes
-    bne     t0, t2, 70f
+    bne     t0, t2, 707f
     mv      a0, s3
     call    node_pool_check_done
+    LEAVE 48
+707: li     t2, NODE_WORK_PRODUCE_CHECK     # the works of block production: their entry goes on
+    beq     t0, t2, 708f
+    li      t2, NODE_WORK_PRODUCE_FOLD
+    beq     t0, t2, 708f
+    li      t2, NODE_WORK_PRODUCE_BLOCK
+    bne     t0, t2, 70f
+708: mv     a0, s3
+    call    node_produce_done
     LEAVE 48
 70: li      t2, NODE_WORK_ATTESTATION       # done with an attestation or a slashing: free its bytes
     beq     t0, t2, 71f
@@ -8380,7 +8617,15 @@ FUNCTION lantern_node_step
     add     t1, t1, t2
     li      t2, 2048                        # and 2048 free: the crossing of a fork boundary takes 208
     add     t1, t1, t2
-    sd      t1, (L + 72)(sp)
+    ld      t2, Node_engine_method(s1)      # a getPayload in flight: its result's bytes, as engine_in holds them, and 1072
+    li      t3, ENGINE_METHOD_GET_PAYLOAD
+    bne     t2, t3, 581f
+    ld      t2, Node_engine_in(s1)
+    add     t2, s1, t2
+    ld      t2, 16(t2)
+    add     t1, t1, t2
+    addi    t1, t1, 1072
+581: sd     t1, (L + 72)(sp)
     ld      t2, (L + 16)(sp)
     beqz    t2, 51f
     li      t2, LIBP2P_ACTIONS_MIN + 24 + 16
@@ -9313,7 +9558,7 @@ FUNCTION lantern_node_run
     li      t2, SLOTS_PER_EPOCH
     divu    t0, t0, t2
     PART    t2, t3, s1, Node_proposers
-833: beqz   t3, 836f
+833: beqz   t3, 8335f
     ld      t4, NodeProposer_validator_index(t2)
     bne     t4, t1, 8331f
     ld      t4, NodeProposer_until_epoch(t2)
@@ -9322,6 +9567,15 @@ FUNCTION lantern_node_run
     addi    t3, t3, -1
     j       833b
 834: sd     t2, (L + 24)(sp)
+    j       8336f
+8335: ld    t0, NodeAction_target(s3)       # forced: a fee recipient of zero bytes, at L+40
+    beqz    t0, 836f
+    sd      zero, (L + 40)(sp)
+    sd      zero, (L + 48)(sp)
+    sd      zero, (L + 56)(sp)
+    addi    t0, sp, (L + 24)
+    sd      t0, (L + 24)(sp)
+8336:
     ADDQ    a0, s1, Node_payload_root       # the ForkchoiceState: the parent hash, safe (justified), finalized
     call    node_store_find
     li      t0, -1
@@ -9385,7 +9639,174 @@ FUNCTION lantern_node_run
     sd      t0, NodeEvent_result(s7)
     li      a0, LANTERN_OK
     LEAVE 192
-890:
+890: li     t1, NODE_WORK_PRODUCE_CHECK
+    bne     t0, t1, 8410f
+    beqz    s4, 837b                        # PRODUCE_CHECK: lantern_node_produce_check of the request in the entry's cursor
+    ld      a0, NODE_STATE_SLOT(s4)
+    addi    a1, s1, Node_config
+    call    node_fork
+    mv      t6, a0
+    ld      t0, NodeAction_target(s3)
+    PART    t1, t2, s1, Node_api
+    bgeu    t0, t2, 837b
+    li      t2, NodeApi__mem
+    mul     t0, t0, t2
+    add     a1, t1, t0
+    addi    a1, a1, NodeApi_cursor
+    mv      a0, s4
+    mv      a2, s6
+    addi    a3, s7, NodeEvent_index
+    FORK_CALL node_produce_check
+    li      t0, LANTERN_BUFFER_TOO_SMALL
+    beq     a0, t0, 8401f
+    sd      a0, NodeEvent_result(s7)
+    li      a0, LANTERN_OK
+8401: LEAVE 192
+8410: li    t1, NODE_WORK_GET_PAYLOAD
+    bne     t0, t1, 8420f
+    ld      t0, NodeAction_target(s3)       # GET_PAYLOAD: engine_getPayload of the fork of the entry's slot
+    PART    t1, t2, s1, Node_api
+    bgeu    t0, t2, 837b
+    li      t2, NodeApi__mem
+    mul     t0, t0, t2
+    add     t0, t1, t0
+    ld      a0, NodeApi_slot(t0)
+    addi    a1, s1, Node_config
+    call    node_fork
+    mv      s10, a0
+    li      t0, NodeEvent_chunk + 24
+    bltu    s8, t0, 8419f
+    ld      s9, 0(s6)                       # at the end of scratch: the JSON (536), the token (280), the host (88)
+    li      t0, 904 + 512
+    bltu    s9, t0, 8419f
+    addi    t0, s9, -904
+    sd      t0, 0(s6)
+    add     s4, s6, t0
+    li      t1, 24
+    li      t0, 536
+    sd      t0, 0(s4)
+    sd      t1, 8(s4)
+    sd      zero, 16(s4)
+    li      t0, 280
+    sd      t0, 536(s4)
+    sd      t1, (536 + 8)(s4)
+    sd      zero, (536 + 16)(s4)
+    li      t0, 88
+    sd      t0, 816(s4)
+    sd      t1, (816 + 8)(s4)
+    ld      a2, Node_engine_host_len(s1)
+    sd      a2, (816 + 16)(s4)
+    addi    a0, s4, (816 + 24)
+    addi    a1, s1, Node_engine_host
+    call    lantern_copy
+    ADDQ    a0, s1, Node_payload_id
+    addi    a1, s3, NodeAction_arg
+    mv      a2, s4
+    mv      t6, s10
+    FORK_CALL_BELLATRIX engine_get_payload
+    bnez    a0, 8418f
+    ld      t0, Node_time_ms(s1)            # the JWT at the time in seconds
+    li      t1, 1000
+    divu    t0, t0, t1
+    sd      t0, L(sp)
+    addi    a0, s1, Node_jwt_secret
+    addi    a1, sp, L
+    mv      a2, s6
+    addi    a3, s4, 536
+    call    lantern_jwt_token
+    bnez    a0, 8418f
+    addi    a3, s7, NodeEvent_chunk         # the HTTP request after the WORK_DONE fields
+    addi    t0, s8, -NodeEvent_chunk
+    sd      t0, 0(a3)
+    li      t0, 24
+    sd      t0, 8(a3)
+    sd      zero, 16(a3)
+    addi    a0, s4, 816
+    addi    a1, s4, 536
+    mv      a2, s4
+    call    lantern_http_post
+    bnez    a0, 8418f
+    sd      s9, 0(s6)
+    j       8441f
+8418: sd    s9, 0(s6)                       # a status, with the scratch's size back
+    LEAVE 192
+8419: li    a0, LANTERN_BUFFER_TOO_SMALL
+    LEAVE 192
+8420: li    t1, NODE_WORK_PRODUCE_FOLD
+    bne     t0, t1, 8430f
+    beqz    s4, 837b                        # PRODUCE_FOLD: lantern_node_produce_fold of the pool entry in state_b, into the draft in place
+    ld      t0, (L + 72)(sp)
+    beqz    t0, 837b
+    beqz    s5, 837b
+    ld      a0, NODE_STATE_SLOT(s4)
+    addi    a1, s1, Node_config
+    call    node_fork
+    mv      t6, a0
+    mv      a0, s4
+    ld      a1, (L + 72)(sp)
+    mv      a2, s5
+    ld      a3, NodeAction_arg(s3)
+    mv      a4, s6
+    FORK_CALL node_produce_fold
+    li      t0, LANTERN_BUFFER_TOO_SMALL
+    beq     a0, t0, 8449f
+    sd      a0, NodeEvent_result(s7)
+    li      a0, LANTERN_OK
+    LEAVE 192
+8430: li    t1, NODE_WORK_PRODUCE_BLOCK
+    bne     t0, t1, 8450f
+    beqz    s4, 837b                        # PRODUCE_BLOCK: lantern_node_produce_block, as a ByteList at NodeEvent_chunk
+    beqz    s5, 837b
+    li      t0, NodeEvent_chunk + 24
+    bltu    s8, t0, 8419b
+    addi    t0, s7, NodeEvent_chunk
+    addi    t1, s8, -NodeEvent_chunk
+    sd      t1, 0(t0)
+    li      t1, 24
+    sd      t1, 8(t0)
+    sd      zero, 16(t0)
+    ld      t0, NodeAction_target(s3)       # the request: the entry's cursor
+    PART    t1, t2, s1, Node_api
+    bgeu    t0, t2, 837b
+    li      t2, NodeApi__mem
+    mul     t0, t0, t2
+    add     t0, t1, t0
+    addi    t0, t0, NodeApi_cursor
+    sd      t0, (L + 96)(sp)                # ProduceParams at L+96: request, config, result, values
+    addi    t0, s1, Node_config
+    sd      t0, (L + 104)(sp)
+    ld      t0, (L + 72)(sp)
+    sd      t0, (L + 112)(sp)
+    addi    t0, s7, NodeEvent_root
+    sd      t0, (L + 120)(sp)
+    addi    t0, s7, NodeEvent_index
+    sd      t0, (L + 128)(sp)
+    ld      a0, NODE_STATE_SLOT(s4)
+    addi    a1, s1, Node_config
+    call    node_fork
+    mv      t6, a0
+    mv      a0, s4
+    mv      a1, s5
+    addi    a2, sp, (L + 96)
+    mv      a3, s6
+    addi    a4, s7, NodeEvent_chunk
+    FORK_CALL node_produce_block
+8440: li    t0, LANTERN_BUFFER_TOO_SMALL
+    beq     a0, t0, 8449f
+    beqz    a0, 8441f
+    sd      a0, NodeEvent_result(s7)        # a failed check: the result, no bytes
+    li      a0, LANTERN_OK
+    LEAVE 192
+8441: addi  t1, s7, NodeEvent_chunk         # the sizes of the list and the event
+    ld      t0, 16(t1)
+    addi    t0, t0, 24 + 7
+    andi    t0, t0, -8
+    sd      t0, 0(t1)
+    addi    t0, t0, NodeEvent_chunk
+    sd      t0, 0(s7)
+    li      a0, LANTERN_OK
+8449: LEAVE 192
+8450:
 89: li      t1, NODE_WORK_SLOTS
     bne     t0, t1, 90f
     ld      a0, NODE_STATE_SLOT(s4)         # SLOTS: process_slots of the fork of the state's slot, to arg

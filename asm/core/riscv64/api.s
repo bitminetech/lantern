@@ -67,6 +67,58 @@ LOCAL_FUNCTION api_dec
     UNFRAME 32
 END_FUNCTION api_dec
 
+/*
+ * The decimal digits of the 256-bit little-endian number at a0 join the response. Locals: its
+ * eight 32-bit words, then the digits from the end.
+ */
+LOCAL_FUNCTION api_dec256
+    FRAME 128
+    ld      t0, 0(a0)
+    sd      t0, 0(sp)
+    ld      t0, 8(a0)
+    sd      t0, 8(sp)
+    ld      t0, 16(a0)
+    sd      t0, 16(sp)
+    ld      t0, 24(a0)
+    sd      t0, 24(sp)
+    addi    t2, sp, 128
+    li      t3, 10
+1:  li      t4, 0                           # divide by 10, from the top word down
+    li      t5, 7
+    li      t6, 0
+2:  slli    a2, t5, 2
+    add     a2, sp, a2
+    lwu     a3, 0(a2)
+    slli    a4, t4, 32
+    or      a3, a3, a4
+    divu    a4, a3, t3
+    remu    t4, a3, t3
+    sw      a4, 0(a2)
+    or      t6, t6, a4
+    addi    t5, t5, -1
+    bgez    t5, 2b
+    addi    t4, t4, 0x30
+    addi    t2, t2, -1
+    sb      t4, 0(t2)
+    bnez    t6, 1b
+    mv      a0, t2
+    addi    a1, sp, 128
+    sub     a1, a1, t2
+    call    api_put
+    UNFRAME 128
+END_FUNCTION api_dec256
+
+/* The Gwei a0 in Wei, decimal digits, join the response. Locals: a0. */
+LOCAL_FUNCTION api_wei
+    FRAME 16
+    sd      a0, 0(sp)
+    call    api_dec
+    ld      a0, 0(sp)
+    beqz    a0, 1f
+    API_LIT api_nines
+1:  UNFRAME 16
+END_FUNCTION api_wei
+
 /* The decimal digits of a0, in quotes. Locals: a0. */
 LOCAL_FUNCTION api_qdec
     FRAME 16
@@ -2823,6 +2875,8 @@ LOCAL_FUNCTION node_api_event
     beq     a3, t0, 63f
     li      t0, API_OP_PRODUCE_ATTESTATION_DATA
     beq     a3, t0, 59f
+    li      t0, API_OP_PRODUCE_BLOCK_V3
+    beq     a3, t0, 540f
     li      t0, API_OP_GET_ATTESTER_DUTIES
     beq     a3, t0, 58f
     li      t0, API_OP_GET_SYNC_COMMITTEE_DUTIES
@@ -3016,6 +3070,35 @@ LOCAL_FUNCTION node_api_event
     call    node_api_ids
     sd      a0, ApiView_look_data(s8)
     j       67f
+540: li     a2, 503                         # produceBlockV3: 503 while syncing; 400 at or below the head's slot, or past the store's slot + 1
+    ld      t0, ApiView_is_syncing(s8)
+    bnez    t0, 80f
+    mv      a0, s2
+    call    node_store_slot
+    ld      t1, ApiRoute_slot(s7)
+    li      a2, 400
+    addi    a0, a0, 1
+    bgtu    t1, a0, 80f
+    ld      t0, ApiView_head_slot(s8)
+    bleu    t1, t0, 80f
+    li      t0, API_ID_SLOT                 # the head's post-state brought to the slot
+    sd      t0, ApiRoute_id_kind(s7)
+    sd      t1, ApiRoute_id_slot(s7)
+    mv      a0, s7
+    mv      a1, s8
+    call    node_api_state
+    li      a2, 500
+    bnez    a0, 80f
+    mv      a0, s8
+    call    node_api_advance
+    mv      a0, s9
+    mv      a1, s7
+    mv      a2, s3
+    mv      a3, s8
+    call    node_api_produce
+    mv      a2, a0
+    bnez    a0, 80f
+    j       90f
 59: li      a2, 503                         # produceAttestationData: 503 while syncing; 400 past the store's slot
     ld      t0, ApiView_is_syncing(s8)
     bnez    t0, 80f
@@ -4446,6 +4529,303 @@ LOCAL_FUNCTION node_api_find
     ret
 END_FUNCTION node_api_find
 
+/*
+ * L2: (connection a0, route a1, flags a2, view a3) -> a0: produceBlockV3 (node.md, Block
+ * production): a NodeApi entry in NODE_PRODUCE_STATE that owns the state of the view, a copy at
+ * the slot, with the request in its cursor, and a PRODUCE_CHECK work of it; 0 once it started,
+ * else the status of the error to answer. s3 the entry, s4 its index, s7 the route, s8 the view,
+ * s9 the connection, s10 the flags.
+ */
+LOCAL_FUNCTION node_api_produce
+    ENTER 0
+    mv      s9, a0
+    mv      s7, a1
+    mv      s10, a2
+    mv      s8, a3
+    ld      t0, ApiRoute_response(s7)       # SSZ, else JSON
+    li      t1, API_TYPE_SSZ
+    bne     t0, t1, 1f
+    ori     s10, s10, API_STREAM_SSZ
+1:  ld      t0, ApiView_look_copy(s8)       # the state: a copy at the slot
+    beqz    t0, 8f
+    li      t0, API_STREAM_OWN_STATE
+    or      s10, s10, t0
+    call    node_api_new
+    mv      s4, a0
+    mv      s3, a1
+    mv      a0, s3
+    li      a1, NodeApi__mem
+    call    lantern_zero
+    sd      s9, NodeApi_connection(s3)
+    li      t0, API_OP_PRODUCE_BLOCK_V3
+    sd      t0, NodeApi_op(s3)
+    sd      s10, NodeApi_flags(s3)
+    ld      t0, ApiView_look_state(s8)
+    sd      t0, NodeApi_state(s3)
+    ld      a0, ApiRoute_slot(s7)
+    sd      a0, NodeApi_slot(s3)
+    ADDQ    a1, s1, Node_config
+    call    node_fork
+    sd      a0, NodeApi_fork(s3)
+    li      t0, NODE_PRODUCE_STATE
+    sd      t0, NodeApi_member(s3)
+    addi    a0, s3, NodeApi_cursor          # the request: randao_reveal, graffiti, the skip flag
+    addi    a1, s7, ApiRoute_randao_reveal
+    li      a2, 96
+    call    lantern_copy
+    ld      t0, ApiRoute_present(s7)
+    srli    t0, t0, API_PARAM_GRAFFITI
+    andi    t0, t0, 1
+    beqz    t0, 2f
+    addi    a0, s3, (NodeApi_cursor + 96)
+    addi    a1, s7, ApiRoute_graffiti
+    COPY32  a0, a1
+2:  ld      t0, ApiRoute_present(s7)
+    srli    t0, t0, API_PARAM_SKIP_RANDAO_VERIFICATION
+    andi    t0, t0, 1
+    sd      t0, (NodeApi_cursor + 128)(s3)
+    li      a0, NODE_WORK_PRODUCE_CHECK
+    ld      a1, NodeApi_state(s3)
+    li      a2, 0
+    li      a3, 0
+    mv      a4, s4
+    li      a5, 0
+    call    node_work
+    li      a0, 0
+    LEAVE 0
+8:  li      a0, 500
+    LEAVE 0
+END_FUNCTION node_api_produce
+
+/*
+ * L2: the NODE_EV_WORK_DONE a0 of a work of block production (node.md, Block production): the
+ * produceBlockV3 entry at its target goes on, or answers its error. s3 the event, s4 the entry,
+ * s7 the result.
+ */
+LOCAL_FUNCTION node_produce_done
+    ENTER 0
+    mv      s3, a0
+    ld      t0, NodeAction_target(s3)
+    PART    s4, t1, s1, Node_api
+    bgeu    t0, t1, 9f
+    li      t1, NodeApi__mem
+    mul     t0, t0, t1
+    add     s4, s4, t0
+    ld      t0, NodeApi_connection(s4)      # an entry still there
+    beqz    t0, 9f
+    ld      t0, NodeApi_op(s4)
+    li      t1, API_OP_PRODUCE_BLOCK_V3
+    bne     t0, t1, 9f
+    ld      s7, NodeEvent_result(s3)
+    ld      t0, NodeAction_work_kind(s3)
+    li      t1, NODE_WORK_PRODUCE_CHECK
+    bne     t0, t1, 20f
+    li      a1, 400                         # the check: 400 for the reveal, 500 for another
+    li      t1, LANTERN_INVALID_RANDAO_REVEAL
+    beq     s7, t1, 8f
+    li      a1, 500
+    bnez    s7, 8f
+    ld      a0, NodeApi_slot(s4)            # from bellatrix with a head of a payload: the engine's payload first
+    ADDQ    a1, s1, Node_config
+    call    node_fork
+    li      t0, FORK_BELLATRIX
+    bltu    a0, t0, 10f
+    addi    a0, s1, Node_head_root
+    call    node_store_find
+    li      t0, -1
+    beq     a0, t0, 10f
+    ld      t0, BlockNode_block_hash(a1)
+    ld      t1, (BlockNode_block_hash + 8)(a1)
+    or      t0, t0, t1
+    ld      t1, (BlockNode_block_hash + 16)(a1)
+    or      t0, t0, t1
+    ld      t1, (BlockNode_block_hash + 24)(a1)
+    or      t0, t0, t1
+    beqz    t0, 10f
+    li      t0, NODE_PRODUCE_PAYLOAD
+    sd      t0, NodeApi_member(s4)
+    LEAVE 0
+10: li      t0, NODE_PRODUCE_FOLD
+    sd      t0, NodeApi_member(s4)
+    sd      zero, NodeApi_filter_slot(s4)
+    mv      a0, s4
+    call    node_produce_next
+    LEAVE 0
+20: li      t1, NODE_WORK_PRODUCE_FOLD
+    bne     t0, t1, 30f
+    ld      t0, NodeApi_flags(s4)           # the pool entry's bytes, when they left the pool meanwhile
+    li      t1, API_STREAM_PRODUCE_OWN
+    and     t2, t0, t1
+    beqz    t2, 21f
+    xor     t0, t0, t1
+    sd      t0, NodeApi_flags(s4)
+    ld      a1, NodeApi_root(s4)
+    sd      zero, NodeApi_root(s4)
+    li      a0, NODE_ACT_BYTES_FREE
+    li      a2, 0
+    call    node_ids
+21: sd      zero, NodeApi_root(s4)          # the draft holds the entry, or the rules left it out: the next
+    mv      a0, s4
+    call    node_produce_next
+    LEAVE 0
+30: li      a1, 500                         # PRODUCE_BLOCK: the block's bytes, answered as a block's
+    bnez    s7, 8f
+    mv      a0, s4
+    call    node_produce_release
+    addi    a0, s3, NodeEvent_chunk
+    call    node_put
+    sd      a0, NodeApi_data(s4)
+    ld      t0, NodeApi_flags(s4)
+    ori     t0, t0, API_STREAM_OWN
+    sd      t0, NodeApi_flags(s4)
+    addi    a0, s4, NodeApi_root            # the values: execution_payload_value at root, consensus_block_value at filter_slot
+    addi    a1, s3, NodeEvent_root
+    COPY32  a0, a1
+    ld      t0, NodeEvent_index(s3)
+    sd      t0, NodeApi_filter_slot(s4)
+    addi    a0, s4, NodeApi_cursor          # the request goes: the cursor is the answer's JsonCursor
+    li      a1, (NodeApi_slot - NodeApi_cursor)
+    call    lantern_zero
+    mv      a0, s4
+    call    node_produce_answer
+    LEAVE 0
+8:  mv      a0, s4
+    call    node_produce_fail
+9:  LEAVE 0
+END_FUNCTION node_produce_done
+
+/* L1: the answer of the produceBlockV3 entry a0, whose block's bytes are its data: its first chunk. Uses t0-t2, a7. */
+LOCAL_FUNCTION node_produce_answer
+    FRAME 0
+    mv      a1, a0
+    PART    t0, t1, s1, Node_api
+    sub     a0, a1, t0
+    li      t2, NodeApi__mem
+    divu    a0, a0, t2
+    call    node_api_chunk_work
+    UNFRAME 0
+END_FUNCTION node_produce_answer
+
+/*
+ * L2: the next work of the produceBlockV3 entry a0 in NODE_PRODUCE_FOLD: a PRODUCE_FOLD of the
+ * next kept pool entry of the kind at cursor + 144 from index filter_slot, the kinds in the order
+ * of api_produce_kinds; after the last, NODE_PRODUCE_BUILD and its PRODUCE_BLOCK. s3 the entry,
+ * s4 its index, s7 a pool entry, s8 the pool index, s9 the kind's index, s10 its topic.
+ */
+LOCAL_FUNCTION node_produce_next
+    ENTER 0
+    mv      s3, a0
+    PART    t0, t1, s1, Node_api
+    sub     s4, s3, t0
+    li      t2, NodeApi__mem
+    divu    s4, s4, t2
+    ld      t0, NodeApi_data(s3)            # the draft, before the first fold: a zeroed buffer
+    bnez    t0, 11f
+    li      a0, NODE_ACT_BYTES_NEW
+    li      a1, NODE_ACT_BYTES_NEW_SIZE
+    call    node_act
+    mv      s7, a0
+    call    node_new_id
+    sd      a0, 16(s7)
+    sd      a0, NodeApi_data(s3)
+    li      t0, ProduceDraft__size + 24
+    sd      t0, 24(s7)
+11: ld      s8, NodeApi_filter_slot(s3)
+    ld      s9, (NodeApi_cursor + 144)(s3)  # the kind: its index in api_produce_kinds
+1:  li      t0, API_PRODUCE_KINDS
+    bgeu    s9, t0, 5f
+    ADDRESS t0, api_produce_kinds
+    add     t0, t0, s9
+    lbu     s10, 0(t0)
+2:  PART    t0, t1, s1, Node_pool
+    bgeu    s8, t1, 3f
+    li      t2, NodePool__mem
+    mul     s7, s8, t2
+    add     s7, t0, s7
+    addi    s8, s8, 1
+    ld      t0, NodePool_topic(s7)
+    bne     t0, s10, 2b
+    ld      t0, NodePool_state(s7)
+    li      t1, NODE_POOL_KEPT
+    bne     t0, t1, 2b
+    sd      s8, NodeApi_filter_slot(s3)
+    sd      s9, (NodeApi_cursor + 144)(s3)
+    ld      t0, NodePool_data_id(s7)
+    sd      t0, NodeApi_root(s3)
+    ld      a5, NodePool_topic(s7)          # arg: the topic, the fork << 8, the member << 16
+    ld      t0, NodePool_fork(s7)
+    slli    t0, t0, 8
+    or      a5, a5, t0
+    ld      t0, NodePool_member(s7)
+    slli    t0, t0, 16
+    or      a5, a5, t0
+    li      a0, NODE_WORK_PRODUCE_FOLD
+    ld      a1, NodeApi_state(s3)
+    ld      a2, NodePool_data_id(s7)
+    ld      a3, NodeApi_data(s3)
+    mv      a4, s4
+    call    node_work
+    LEAVE 0
+3:  addi    s9, s9, 1                       # the next kind, from the pool's first entry
+    li      s8, 0
+    j       1b
+5:  li      t0, NODE_PRODUCE_BUILD
+    sd      t0, NodeApi_member(s3)
+    li      a0, NODE_WORK_PRODUCE_BLOCK
+    ld      a1, NodeApi_state(s3)
+    ld      a2, NodeApi_filter_index(s3)
+    ld      a3, NodeApi_data(s3)
+    mv      a4, s4
+    li      a5, 0
+    call    node_work
+    LEAVE 0
+END_FUNCTION node_produce_next
+
+/* L1: the draft and the engine's result of the produceBlockV3 entry a0 go. Locals: F the entry. */
+LOCAL_FUNCTION node_produce_release
+    FRAME 16
+    sd      a0, 0(sp)
+    ld      a1, NodeApi_data(a0)            # each field cleared first: node_ids leaves an entry's own bytes to it
+    sd      zero, NodeApi_data(a0)
+    beqz    a1, 1f
+    li      a0, NODE_ACT_BYTES_FREE
+    li      a2, 0
+    call    node_ids
+1:  ld      a0, 0(sp)
+    ld      a1, NodeApi_filter_index(a0)
+    sd      zero, NodeApi_filter_index(a0)
+    beqz    a1, 2f
+    li      a0, NODE_ACT_BYTES_FREE
+    li      a2, 0
+    call    node_ids
+2:  UNFRAME 16
+END_FUNCTION node_produce_release
+
+/*
+ * L2: the error a1 to the produceBlockV3 entry a0, then its end: its draft and engine result go,
+ * and its state with API_STREAM_OWN_STATE. Locals: F the entry.
+ */
+LOCAL_FUNCTION node_produce_fail
+    FRAME 16
+    sd      a0, 0(sp)
+    mv      a2, a1
+    ld      t0, NodeApi_flags(a0)
+    ld      a0, NodeApi_connection(a0)
+    li      a1, 0
+    li      a3, API_BODY_ERROR
+    andi    a4, t0, API_R_CLOSE             # API_STREAM_CLOSE is API_R_CLOSE; HTTP/1.0 kept open says so
+    bnez    a4, 1f
+    andi    t1, t0, API_STREAM_HTTP10
+    beqz    t1, 1f
+    li      a4, API_R_KEEP
+1:  call    node_api_send
+    ld      a0, 0(sp)
+    call    node_produce_release
+    ld      a0, 0(sp)
+    call    node_api_end
+    UNFRAME 16
+END_FUNCTION node_produce_fail
+
 /* a0 = the index of a free NodeApi entry (the first free, else the next; the step checked one is free), a1 = the entry. Uses t0-t2, a7. */
 LOCAL_FUNCTION node_api_new
     UNWIND_END_PROLOGUE
@@ -5436,6 +5816,8 @@ LOCAL_FUNCTION api_stream_head
     j       2f
 1:  API_LIT api_type
 2:  ld      t0, NodeApi_op(s4)              # Eth-Consensus-Version: of getBlockV2 and getStateV2
+    li      t1, API_OP_PRODUCE_BLOCK_V3
+    beq     t0, t1, 23f
     li      t1, API_OP_GET_BLOCK_V2
     beq     t0, t1, 21f
     li      t1, API_OP_GET_BLOCK_ATTESTATIONS_V2
@@ -5460,6 +5842,19 @@ LOCAL_FUNCTION api_stream_head
 21: API_LIT api_version
     ld      a0, NodeApi_fork(s4)
     call    api_fork_name
+    API_LIT api_crlf
+    j       22f
+    /* produceBlockV3: and its three headers */
+23: API_LIT api_version
+    ld      a0, NodeApi_fork(s4)
+    call    api_fork_name
+    API_LIT api_crlf
+    API_LIT api_h_blinded
+    addi    a0, s4, NodeApi_root
+    call    api_dec256
+    API_LIT api_h_block_value
+    ld      a0, NodeApi_filter_slot(s4)
+    call    api_wei
     API_LIT api_crlf
 22: ld      a0, 0(sp)
     li      t0, -1
@@ -5543,6 +5938,8 @@ LOCAL_FUNCTION api_stream_json
 31: ld      t0, NodeApi_op(s4)              # the validator streams: their items, of the state s3
     li      t1, API_OP_GET_BLOCK_V2
     beq     t0, t1, 1f
+    li      t1, API_OP_PRODUCE_BLOCK_V3
+    beq     t0, t1, 1f
     li      t1, API_OP_GET_AGGREGATED_ATTESTATION_V2
     beq     t0, t1, 1f
     li      t1, API_OP_PRODUCE_SYNC_COMMITTEE_CONTRIBUTION
@@ -5583,7 +5980,14 @@ LOCAL_FUNCTION api_stream_json
 123: li     t2, API_OP_PRODUCE_SYNC_COMMITTEE_CONTRIBUTION
     bne     t1, t2, 124f
     li      a0, NODE_JSON_SYNC_CONTRIBUTION
-124:
+124: li     t2, API_OP_PRODUCE_BLOCK_V3      # produceBlockV3: the block, from deneb its BlockContents
+    bne     t1, t2, 125f
+    li      a0, NODE_JSON_BEACON_BLOCK
+    ld      t2, NodeApi_fork(s4)
+    li      t3, FORK_DENEB
+    bltu    t2, t3, 125f
+    li      a0, NODE_JSON_BLOCK_CONTENTS
+125:
     mv      a1, s3
     addi    a2, s5, (NodeEvent_api + 16)
     addi    a3, s5, NodeEvent_api_bytes
@@ -5634,6 +6038,8 @@ LOCAL_FUNCTION node_api_chunk_run
     li      t1, API_OP_GET_BLOCK_ATTESTATIONS_V2
     beq     t0, t1, 1f
     li      t1, API_OP_GET_BLINDED_BLOCK
+    beq     t0, t1, 1f
+    li      t1, API_OP_PRODUCE_BLOCK_V3
     beq     t0, t1, 1f
     li      t1, API_OP_GET_STATE_V2
     beq     t0, t1, 1f
@@ -5724,11 +6130,21 @@ LOCAL_FUNCTION node_api_chunk_run
     sd      t0, (L + 8)(sp)
     ld      t0, 16(s3)
     sd      t0, (L + 16)(sp)
-    li      t1, 40                          # their slot: a state's at byte 40, a block's at 100
+    li      t1, 40                          # their slot: a state's at byte 40, a signed block's at 100
     ld      t2, NodeApi_op(s4)
     li      t3, API_OP_GET_STATE_V2
     beq     t2, t3, 4f
     li      t1, 100
+    li      t3, API_OP_PRODUCE_BLOCK_V3     # produceBlockV3: a block's at 0, from deneb at the BlockContents' offset of its block
+    bne     t2, t3, 4f
+    li      t1, 0
+    ld      t3, NodeApi_fork(s4)
+    li      t2, FORK_DENEB
+    bltu    t3, t2, 4f
+    li      t2, 4
+    bltu    t0, t2, 96f
+    ld      t2, (L + 8)(sp)
+    lwu     t1, 0(t2)
 4:  addi    t2, t1, 8
     bltu    t0, t2, 96f
     ld      t2, (L + 8)(sp)
@@ -6063,7 +6479,11 @@ LOCAL_FUNCTION node_api_chunk_run
 30: andi    t1, t0, API_STREAM_STARTED      # JSON, the first chunk: the body after room for the head
     bnez    t1, 40f
     addi    s6, s10, API_HEAD_ROOM
-    sd      s6, (L + 24)(sp)
+    ld      t1, NodeApi_op(s4)
+    li      t2, API_OP_PRODUCE_BLOCK_V3
+    bne     t1, t2, 301f
+    addi    s6, s6, API_PRODUCE_HEAD_ROOM
+301: sd     s6, (L + 24)(sp)
     ld      s8, (L + 0)(sp)
     addi    s8, s8, -7                      # room for CRLF and the last chunk
     ld      t0, (L + 40)(sp)
@@ -6133,7 +6553,21 @@ LOCAL_FUNCTION node_api_chunk_run
     API_LIT api_v_list
     j       36f
     /* {"version":"<fork>","execution_optimistic":…,"finalized":…,"data": */
-35: API_LIT api_j_version
+35: ld      t0, NodeApi_op(s4)              # produceBlockV3: {"version":…,"execution_payload_blinded":false,…,"data":
+    li      t1, API_OP_PRODUCE_BLOCK_V3
+    bne     t0, t1, 351f
+    API_LIT api_j_version
+    ld      a0, NodeApi_fork(s4)
+    call    api_fork_name
+    API_LIT api_pb_head
+    addi    a0, s4, NodeApi_root
+    call    api_dec256
+    API_LIT api_pb_block_value
+    ld      a0, NodeApi_filter_slot(s4)
+    call    api_wei
+    API_LIT api_g_data
+    j       36f
+351: API_LIT api_j_version
     ld      a0, NodeApi_fork(s4)
     call    api_fork_name
     API_LIT api_j_optimistic

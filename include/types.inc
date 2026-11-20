@@ -810,26 +810,7 @@ SSZ_FIELD GetPayloadResult, execution_requests, ExecutionRequestsList
 SSZ_END GetPayloadResult
 .endif
 
-/*
- * Block production (node.md, produceBlockV3): the body draft that NODE_WORK_PRODUCE_FOLD grows one
- * pool entry at a time, its attestations one aggregate for each data and committee of the
- * inclusion window; and from deneb BlockContents, the block with the bundle's proofs and blobs.
- */
-SSZ_LIST DraftAttestations, Attestation, MAX_COMMITTEES_PER_SLOT * SLOTS_PER_EPOCH
-
-SSZ_CONTAINER ProduceDraft, 1
-SSZ_FIELD ProduceDraft, proposer_slashings, ProposerSlashings
-SSZ_FIELD ProduceDraft, attester_slashings, AttesterSlashings
-SSZ_FIELD ProduceDraft, attestations, DraftAttestations
-SSZ_FIELD ProduceDraft, voluntary_exits, VoluntaryExits
-.if TYPES_FORK >= FORK_ALTAIR
-SSZ_FIELD ProduceDraft, sync_aggregate, SyncAggregate
-.endif
-.if TYPES_FORK >= FORK_CAPELLA
-SSZ_FIELD ProduceDraft, bls_to_execution_changes, BLSToExecutionChanges
-.endif
-SSZ_END ProduceDraft
-
+/* Block production (node.md, produceBlockV3): from deneb BlockContents, the block with the bundle's proofs and blobs. */
 .if TYPES_FORK >= FORK_DENEB
 SSZ_CONTAINER BlockContents, 1
 SSZ_FIELD BlockContents, block, BeaconBlock

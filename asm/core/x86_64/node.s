@@ -592,7 +592,15 @@ LOCAL_FUNCTION node_ids
     jz      3f
     cmpq    $0, NodeApi_connection(%rax)
     je      2f
-    cmp     %rsi, NodeApi_data(%rax)
+    cmpq    $API_OP_PRODUCE_BLOCK_V3, NodeApi_op(%rax)  # a produceBlockV3 in its folds: the pool bytes of its fold in flight
+    jne     11f
+    cmpq    $NODE_PRODUCE_FOLD, NodeApi_member(%rax)
+    jne     2f
+    cmp     %rsi, NodeApi_root(%rax)
+    jne     2f
+    orq     $API_STREAM_PRODUCE_OWN, NodeApi_flags(%rax)
+    ret
+11: cmp     %rsi, NodeApi_data(%rax)
     jne     2f
     mov     NodeApi_flags(%rax), %r11
     test    $API_STREAM_OWN, %r11
@@ -1295,6 +1303,9 @@ LOCAL_FUNCTION node_engine_next
     mov     %rax, S7(%rsp)
     cmp     Node_engine_wait(%rbx), %rax
     jb      9f
+    call    node_produce_engine             # a produceBlockV3 waiting for its payload goes first
+    test    %rax, %rax
+    jnz     9f
     PART    %r12, %rax, %rbx, Node_blocks
     mov     %rax, S8(%rsp)
     xor     %r13d, %r13d
@@ -1401,7 +1412,101 @@ LOCAL_FUNCTION node_prepare
     lea     Node_head_root(%rbx), %rsi
     NE32    %rdi, %rsi, 4f
     jmp     8f
-4:  mov     S10(%rsp), %rax
+4:  mov     S10(%rsp), %rdi
+    xor     %esi, %esi
+    call    node_prepare_go
+    LEAVE 0
+8:  xor     %eax, %eax
+    LEAVE 0
+END_FUNCTION node_prepare
+
+/*
+ * With no engine call in flight, the call of the first produceBlockV3 entry in
+ * NODE_PRODUCE_PAYLOAD (node.md, Block production): a GET_PAYLOAD of payload_id when the payload
+ * of its slot on the head is NODE_PAYLOAD_READY; else a forced preparation of its slot, once (a
+ * second that ends with no payloadId: 500). rax = 1 when a call went. r12 an entry, r13 its index,
+ * S7 the count.
+ */
+LOCAL_FUNCTION node_produce_engine
+    ENTER 0
+    PART    %r12, %rax, %rbx, Node_api
+    mov     %rax, S7(%rsp)
+    xor     %r13d, %r13d
+1:  cmp     S7(%rsp), %r13
+    jae     8f
+    cmpq    $0, NodeApi_connection(%r12)
+    je      2f
+    cmpq    $API_OP_PRODUCE_BLOCK_V3, NodeApi_op(%r12)
+    jne     2f
+    cmpq    $NODE_PRODUCE_PAYLOAD, NodeApi_member(%r12)
+    je      3f
+2:  add     $NodeApi__mem, %r12
+    inc     %r13
+    jmp     1b
+3:  mov     NodeApi_slot(%r12), %rax        # the payload of its slot on the head
+    cmp     %rax, Node_payload_slot(%rbx)
+    jne     6f
+    lea     Node_payload_root(%rbx), %rdi
+    lea     Node_head_root(%rbx), %rsi
+    NE32    %rdi, %rsi, 6f
+    cmpq    $NODE_PAYLOAD_READY, Node_payload_status(%rbx)
+    je      4f
+    testq   $API_STREAM_PRODUCE_FORCED, NodeApi_flags(%r12)  # no payloadId: a preparation of its own, else 500
+    jz      6f
+    mov     %r12, %rdi
+    mov     $500, %esi
+    call    node_produce_fail
+    xor     %eax, %eax
+    LEAVE 0
+4:  movq    $ENGINE_METHOD_GET_PAYLOAD, Node_engine_method(%rbx)
+    mov     %r13, Node_engine_target(%rbx)
+    mov     Node_engine_id(%rbx), %r9
+    incq    Node_engine_id(%rbx)
+    mov     $NODE_WORK_GET_PAYLOAD, %edi
+    xor     %esi, %esi
+    xor     %edx, %edx
+    xor     %ecx, %ecx
+    mov     %r13, %r8
+    call    node_work
+    mov     $1, %eax
+    LEAVE 0
+6:  orq     $API_STREAM_PRODUCE_FORCED, NodeApi_flags(%r12)
+    mov     NodeApi_slot(%r12), %rdi
+    mov     $1, %esi
+    call    node_prepare_go
+    test    %rax, %rax
+    jnz     7f
+    mov     %r12, %rdi
+    mov     $500, %esi
+    call    node_produce_fail
+    xor     %eax, %eax
+    LEAVE 0
+7:  mov     $1, %eax
+    LEAVE 0
+8:  xor     %eax, %eax
+    LEAVE 0
+END_FUNCTION node_produce_engine
+
+/*
+ * The preparation of a payload for slot rdi on the head (node.md, Payload preparation), forced
+ * with rsi = 1 (a fee recipient of zero bytes when the proposer has none): a copy of the head's
+ * post-state at that slot, a PREPARE_PAYLOAD work of it with the next engine id and rsi as its
+ * target, and the copy's STATE_FREE; it is the call in flight. rax = 1 when it went, 0 with no
+ * head post-state. r12 the head's entry, r13 the copy; S7 the copy's slot, S8 a fork, S9 forced,
+ * S10 the slot.
+ */
+LOCAL_FUNCTION node_prepare_go
+    ENTER 0
+    mov     %rdi, S10(%rsp)
+    mov     %rsi, S9(%rsp)
+    lea     Node_head_root(%rbx), %rdi
+    call    node_find_block
+    cmp     $-1, %rax
+    je      8f
+    mov     %rdx, %r12
+    cmpq    $0, NodeBlock_state_id(%r12)
+    je      8f
+    mov     S10(%rsp), %rax
     mov     %rax, Node_payload_slot(%rbx)
     lea     Node_payload_root(%rbx), %rdi
     lea     Node_head_root(%rbx), %rsi
@@ -1453,7 +1558,7 @@ LOCAL_FUNCTION node_prepare
     mov     %r13, %rsi
     xor     %edx, %edx
     xor     %ecx, %ecx
-    xor     %r8d, %r8d
+    mov     S9(%rsp), %r8
     call    node_work
     mov     $NODE_ACT_STATE_FREE, %edi
     mov     %r13, %rsi
@@ -1463,7 +1568,7 @@ LOCAL_FUNCTION node_prepare
     LEAVE 0
 8:  xor     %eax, %eax
     LEAVE 0
-END_FUNCTION node_prepare
+END_FUNCTION node_prepare_go
 
 /*
  * The engine call in flight failed: an engine_newPayload's block takes NODE_BLOCK_PAYLOAD with
@@ -1486,12 +1591,104 @@ LOCAL_FUNCTION node_engine_failed
     movq    $0, Node_payload_slot(%rbx)
     movq    $0, Node_payload_status(%rbx)
     LEAVE 0
-1:  cmp     $ENGINE_METHOD_NEW_PAYLOAD, %rax
+1:  cmp     $ENGINE_METHOD_GET_PAYLOAD, %rax  # a getPayload's entry: 500
+    jne     2f
+    mov     Node_engine_target(%rbx), %rdi
+    call    node_produce_fail_at
+    LEAVE 0
+2:  cmp     $ENGINE_METHOD_NEW_PAYLOAD, %rax
     jne     9f
     mov     Node_engine_target(%rbx), %rdi
     call    node_payload_retry
 9:  LEAVE 0
 END_FUNCTION node_engine_failed
+
+/* The produceBlockV3 entry at index rdi, while it waits for its payload: 500. */
+LOCAL_FUNCTION node_produce_fail_at
+    FRAME 0
+    PART    %rcx, %rax, %rbx, Node_api
+    cmp     %rax, %rdi
+    jae     9f
+    imul    $NodeApi__mem, %rdi, %rdi
+    add     %rcx, %rdi
+    cmpq    $0, NodeApi_connection(%rdi)
+    je      9f
+    cmpq    $API_OP_PRODUCE_BLOCK_V3, NodeApi_op(%rdi)
+    jne     9f
+    cmpq    $NODE_PRODUCE_PAYLOAD, NodeApi_member(%rdi)
+    jne     9f
+    mov     $500, %esi
+    call    node_produce_fail
+9:  UNFRAME 0
+END_FUNCTION node_produce_fail_at
+
+/*
+ * The engine_getPayload body rdi (a ByteList in scratch r14, which stays short) with its
+ * EngineResponse rsi, for the produceBlockV3 entry at engine_target in NODE_PRODUCE_PAYLOAD: its
+ * result decoded by lantern_node_payload_result into a BYTES_PUT action, whose id the entry keeps
+ * as filter_index before its fold; a result that does not decode: 500, and the action goes. r12
+ * the body, r13 the entry; S7 the action, S8 its size. Locals: L a JsonFault (128).
+ */
+LOCAL_FUNCTION node_produce_payload
+    ENTER 128
+    mov     %rdi, %r12
+    mov     Node_engine_target(%rbx), %rax
+    PART    %r13, %rcx, %rbx, Node_api
+    cmp     %rcx, %rax
+    jae     9f
+    imul    $NodeApi__mem, %rax, %rax
+    add     %rax, %r13
+    cmpq    $0, NodeApi_connection(%r13)
+    je      9f
+    cmpq    $API_OP_PRODUCE_BLOCK_V3, NodeApi_op(%r13)
+    jne     9f
+    cmpq    $NODE_PRODUCE_PAYLOAD, NodeApi_member(%r13)
+    jne     9f
+    mov     EngineResponse_result_offset(%rsi), %rax     # the body becomes the result's bytes
+    mov     EngineResponse_result_length(%rsi), %rcx
+    add     %rax, 8(%r12)
+    mov     %rcx, 16(%r12)
+    lea     (48 + 1024 + 7)(%rcx), %rsi     # the action: room for the SSZ bytes, at most the text's + 1024
+    and     $-8, %rsi
+    mov     %rsi, S8(%rsp)
+    mov     $NODE_ACT_BYTES_PUT, %edi
+    call    node_act
+    mov     %rax, S7(%rsp)
+    call    node_new_id
+    mov     S7(%rsp), %rcx
+    mov     %rax, 16(%rcx)
+    mov     S8(%rsp), %rax
+    sub     $24, %rax
+    mov     %rax, 24(%rcx)
+    movq    $24, 32(%rcx)
+    movq    $0, 40(%rcx)
+    mov     NodeApi_slot(%r13), %rdi
+    lea     Node_config(%rbx), %rsi
+    call    node_fork
+    mov     %rax, %r10
+    mov     %r12, %rdi
+    mov     %r14, %rsi
+    mov     S7(%rsp), %rdx
+    add     $24, %rdx
+    lea     L(%rsp), %rcx
+    FORK_CALL_BELLATRIX node_payload_result
+    test    %rax, %rax
+    jnz     8f
+    mov     S7(%rsp), %rcx                  # the entry keeps the result, then folds
+    mov     16(%rcx), %rax
+    mov     %rax, NodeApi_filter_index(%r13)
+    movq    $NODE_PRODUCE_FOLD, NodeApi_member(%r13)
+    movq    $0, NodeApi_filter_slot(%r13)
+    mov     %r13, %rdi
+    call    node_produce_next
+    LEAVE 128
+8:  mov     S8(%rsp), %rax                  # no result: the action goes, and 500
+    sub     %rax, 16(%r15)
+    mov     %r13, %rdi
+    mov     $500, %esi
+    call    node_produce_fail
+9:  LEAVE 128
+END_FUNCTION node_produce_payload
 
 /* The block of index rdi, if NODE_BLOCK_EXECUTING, takes NODE_BLOCK_PAYLOAD with retry the store's slot + 1. r12 the entry. */
 LOCAL_FUNCTION node_payload_retry
@@ -1630,7 +1827,16 @@ LOCAL_FUNCTION node_engine_read
     mov     %r12, %rdi
     mov     (L + 8)(%rsp), %rsi
     call    node_engine_consume
+    cmp     $ENGINE_METHOD_GET_PAYLOAD, %r13  # engine_getPayload: its result, decoded with the body still in scratch
+    jne     44f
+    mov     S8(%rsp), %rdi
+    lea     (L + 32)(%rsp), %rsi
+    call    node_produce_payload
     mov     S7(%rsp), %rax
+    mov     %rax, (%r14)
+    movq    $0, Node_engine_method(%rbx)
+    jmp     9f
+44: mov     S7(%rsp), %rax
     mov     %rax, (%r14)
     movq    $0, Node_engine_method(%rbx)    # the call ends
     mov     (L + 32 + EngineResponse_status)(%rsp), %rax
@@ -4179,6 +4385,8 @@ LOCAL_FUNCTION node_event
     cmp     $NODE_WORK_FORKCHOICE, %rax
     je      86f
     cmp     $NODE_WORK_PREPARE_PAYLOAD, %rax
+    je      86f
+    cmp     $NODE_WORK_GET_PAYLOAD, %rax
     jne     701f
 86: test    %rcx, %rcx
     jnz     87f
@@ -4206,8 +4414,13 @@ LOCAL_FUNCTION node_event
     LEAVE 48
 87: movq    $0, Node_engine_method(%rbx)    # no request: the call ends
     cmpq    $NODE_WORK_PREPARE_PAYLOAD, NodeAction_work_kind(%r12)
-    jne     871f
+    jne     870f
     movq    $0, Node_payload_status(%rbx)
+    LEAVE 48
+870: cmpq   $NODE_WORK_GET_PAYLOAD, NodeAction_work_kind(%r12)
+    jne     871f
+    mov     NodeAction_target(%r12), %rdi
+    call    node_produce_fail_at
     LEAVE 48
 871: cmpq   $NODE_WORK_NEW_PAYLOAD, NodeAction_work_kind(%r12)
     jne     79f
@@ -4257,9 +4470,18 @@ LOCAL_FUNCTION node_event
     call    node_api_submit_done
     LEAVE 48
 706: cmp    $NODE_WORK_POOL_CHECK, %rax     # POOL_CHECK: the entry stays, or goes
-    jne     70f
+    jne     707f
     mov     %r12, %rdi
     call    node_pool_check_done
+    LEAVE 48
+707: cmp    $NODE_WORK_PRODUCE_CHECK, %rax  # the works of block production: their entry goes on
+    je      708f
+    cmp     $NODE_WORK_PRODUCE_FOLD, %rax
+    je      708f
+    cmp     $NODE_WORK_PRODUCE_BLOCK, %rax
+    jne     70f
+708: mov    %r12, %rdi
+    call    node_produce_done
     LEAVE 48
 70: cmp     $NODE_WORK_ATTESTATION, %rax    # done with an attestation or a slashing: free its bytes
     je      71f
@@ -8391,7 +8613,12 @@ FUNCTION lantern_node_step
     shl     $5, %rdx
     add     %rdx, %rcx
     add     $2048, %rcx                     # and 2048 free: the crossing of a fork boundary takes 208
-    mov     %rcx, (L + 72)(%rsp)
+    cmpq    $ENGINE_METHOD_GET_PAYLOAD, Node_engine_method(%rbx)  # a getPayload in flight: its result's bytes, as engine_in holds them, and 1072
+    jne     581f
+    mov     Node_engine_in(%rbx), %rdx
+    add     16(%rbx,%rdx), %rcx
+    add     $1072, %rcx
+581: mov    %rcx, (L + 72)(%rsp)
     cmpq    $0, (L + 16)(%rsp)
     je      51f
     add     $(LIBP2P_ACTIONS_MIN + 24 + 16), %rcx
@@ -9365,7 +9592,7 @@ FUNCTION lantern_node_run
     mov     (L + 16)(%rsp), %rdx
     PART    %rsi, %rcx, %rbx, Node_proposers
 833: test   %rcx, %rcx
-    jz      836f
+    jz      8335f
     cmp     %rdx, NodeProposer_validator_index(%rsi)
     jne     8331f
     cmp     %rax, NodeProposer_until_epoch(%rsi)
@@ -9374,6 +9601,15 @@ FUNCTION lantern_node_run
     dec     %rcx
     jmp     833b
 834: mov    %rsi, (L + 24)(%rsp)
+    jmp     8336f
+8335: cmpq  $0, NodeAction_target(%r12)     # forced: a fee recipient of zero bytes, at L+40
+    je      836f
+    xorps   %xmm0, %xmm0
+    movdqu  %xmm0, (L + 40)(%rsp)
+    movq    $0, (L + 56)(%rsp)
+    lea     (L + 24)(%rsp), %rax
+    mov     %rax, (L + 24)(%rsp)
+8336:
     lea     Node_payload_root(%rbx), %rdi   # the ForkchoiceState: the parent hash, safe (justified), finalized
     call    node_store_find
     cmp     $-1, %rax
@@ -9438,7 +9674,189 @@ FUNCTION lantern_node_run
     movq    $LANTERN_INVALID_UNKNOWN_BLOCK, NodeEvent_result(%rcx)
     xor     %eax, %eax
     LEAVE 192
-890:
+890: cmp    $NODE_WORK_PRODUCE_CHECK, %rax
+    jne     8410f
+    test    %r13, %r13                      # PRODUCE_CHECK: lantern_node_produce_check of the request in the entry's cursor
+    jz      837b
+    mov     NODE_STATE_SLOT(%r13), %rdi
+    lea     Node_config(%rbx), %rsi
+    call    node_fork
+    mov     %rax, %r10
+    mov     NodeAction_target(%r12), %rax
+    PART    %rsi, %rcx, %rbx, Node_api
+    cmp     %rcx, %rax
+    jae     837b
+    imul    $NodeApi__mem, %rax, %rax
+    lea     NodeApi_cursor(%rsi,%rax), %rsi
+    mov     %r13, %rdi
+    mov     %r15, %rdx
+    mov     S8(%rsp), %rcx
+    add     $NodeEvent_index, %rcx
+    FORK_CALL node_produce_check
+    cmp     $LANTERN_BUFFER_TOO_SMALL, %rax
+    je      8401f
+    mov     S8(%rsp), %rcx
+    mov     %rax, NodeEvent_result(%rcx)
+    xor     %eax, %eax
+8401: LEAVE 192
+8410: cmp   $NODE_WORK_GET_PAYLOAD, %rax
+    jne     8420f
+    mov     NodeAction_target(%r12), %rax   # GET_PAYLOAD: engine_getPayload of the fork of the entry's slot
+    PART    %rsi, %rcx, %rbx, Node_api
+    cmp     %rcx, %rax
+    jae     837b
+    imul    $NodeApi__mem, %rax, %rax
+    mov     NodeApi_slot(%rsi,%rax), %rdi
+    lea     Node_config(%rbx), %rsi
+    call    node_fork
+    mov     %rax, S7(%rsp)
+    cmpq    $(NodeEvent_chunk + 24), S9(%rsp)
+    jb      8419f
+    mov     (%r15), %rax                    # at the end of scratch: the JSON (536), the token (280), the host (88)
+    mov     %rax, S10(%rsp)
+    cmp     $(904 + 512), %rax
+    jb      8419f
+    sub     $904, %rax
+    mov     %rax, (%r15)
+    lea     (%r15,%rax), %r13
+    movq    $536, (%r13)
+    movq    $24, 8(%r13)
+    movq    $0, 16(%r13)
+    movq    $280, 536(%r13)
+    movq    $24, (536 + 8)(%r13)
+    movq    $0, (536 + 16)(%r13)
+    movq    $88, 816(%r13)
+    movq    $24, (816 + 8)(%r13)
+    mov     Node_engine_host_len(%rbx), %rdx
+    mov     %rdx, (816 + 16)(%r13)
+    lea     (816 + 24)(%r13), %rdi
+    lea     Node_engine_host(%rbx), %rsi
+    call    lantern_copy
+    lea     Node_payload_id(%rbx), %rdi
+    lea     NodeAction_arg(%r12), %rsi
+    mov     %r13, %rdx
+    mov     S7(%rsp), %r10
+    FORK_CALL_BELLATRIX engine_get_payload
+    test    %rax, %rax
+    jnz     8418f
+    mov     Node_time_ms(%rbx), %rax        # the JWT at the time in seconds
+    xor     %edx, %edx
+    mov     $1000, %ecx
+    div     %rcx
+    mov     %rax, L(%rsp)
+    lea     Node_jwt_secret(%rbx), %rdi
+    lea     L(%rsp), %rsi
+    mov     %r15, %rdx
+    lea     536(%r13), %rcx
+    call    lantern_jwt_token
+    test    %rax, %rax
+    jnz     8418f
+    mov     S8(%rsp), %rcx                  # the HTTP request after the WORK_DONE fields
+    lea     NodeEvent_chunk(%rcx), %rcx
+    mov     S9(%rsp), %rax
+    sub     $NodeEvent_chunk, %rax
+    mov     %rax, (%rcx)
+    movq    $24, 8(%rcx)
+    movq    $0, 16(%rcx)
+    lea     816(%r13), %rdi
+    lea     536(%r13), %rsi
+    mov     %r13, %rdx
+    call    lantern_http_post
+    test    %rax, %rax
+    jnz     8418f
+    mov     S10(%rsp), %rax
+    mov     %rax, (%r15)
+    jmp     8441f
+8418: mov   S10(%rsp), %rcx                 # a status, with the scratch's size back
+    mov     %rcx, (%r15)
+    LEAVE 192
+8419: mov   $LANTERN_BUFFER_TOO_SMALL, %eax
+    LEAVE 192
+8420: cmp   $NODE_WORK_PRODUCE_FOLD, %rax
+    jne     8430f
+    test    %r13, %r13                      # PRODUCE_FOLD: lantern_node_produce_fold of the pool entry in state_b, into the draft in place
+    jz      837b
+    cmpq    $0, (L + 72)(%rsp)
+    je      837b
+    test    %r14, %r14
+    jz      837b
+    mov     NODE_STATE_SLOT(%r13), %rdi
+    lea     Node_config(%rbx), %rsi
+    call    node_fork
+    mov     %rax, %r10
+    mov     %r13, %rdi
+    mov     (L + 72)(%rsp), %rsi
+    mov     %r14, %rdx
+    mov     NodeAction_arg(%r12), %rcx
+    mov     %r15, %r8
+    FORK_CALL node_produce_fold
+    cmp     $LANTERN_BUFFER_TOO_SMALL, %rax
+    je      8449f
+    mov     S8(%rsp), %rcx
+    mov     %rax, NodeEvent_result(%rcx)
+    xor     %eax, %eax
+    LEAVE 192
+8430: cmp   $NODE_WORK_PRODUCE_BLOCK, %rax
+    jne     8450f
+    test    %r13, %r13                      # PRODUCE_BLOCK: lantern_node_produce_block, as a ByteList at NodeEvent_chunk
+    jz      837b
+    test    %r14, %r14
+    jz      837b
+    cmpq    $(NodeEvent_chunk + 24), S9(%rsp)
+    jb      8419b
+    mov     S8(%rsp), %rcx
+    mov     S9(%rsp), %rax
+    sub     $NodeEvent_chunk, %rax
+    mov     %rax, NodeEvent_chunk(%rcx)
+    movq    $24, (NodeEvent_chunk + 8)(%rcx)
+    movq    $0, (NodeEvent_chunk + 16)(%rcx)
+    mov     NodeAction_target(%r12), %rax   # the request: the entry's cursor
+    PART    %rsi, %rcx, %rbx, Node_api
+    cmp     %rcx, %rax
+    jae     837b
+    imul    $NodeApi__mem, %rax, %rax
+    lea     NodeApi_cursor(%rsi,%rax), %rax
+    mov     %rax, (L + 96)(%rsp)            # ProduceParams at L+96: request, config, result, values
+    lea     Node_config(%rbx), %rax
+    mov     %rax, (L + 104)(%rsp)
+    mov     (L + 72)(%rsp), %rax
+    mov     %rax, (L + 112)(%rsp)
+    mov     S8(%rsp), %rcx
+    lea     NodeEvent_root(%rcx), %rax
+    mov     %rax, (L + 120)(%rsp)
+    lea     NodeEvent_index(%rcx), %rax
+    mov     %rax, (L + 128)(%rsp)
+    mov     NODE_STATE_SLOT(%r13), %rdi
+    lea     Node_config(%rbx), %rsi
+    call    node_fork
+    mov     %rax, %r10
+    mov     %r13, %rdi
+    mov     %r14, %rsi
+    lea     (L + 96)(%rsp), %rdx
+    mov     %r15, %rcx
+    mov     S8(%rsp), %r8
+    add     $NodeEvent_chunk, %r8
+    FORK_CALL node_produce_block
+8440: cmp   $LANTERN_BUFFER_TOO_SMALL, %rax
+    je      8449f
+    test    %rax, %rax
+    jz      8441f
+    mov     S8(%rsp), %rcx                  # a failed check: the result, no bytes
+    mov     %rax, NodeEvent_result(%rcx)
+    xor     %eax, %eax
+    LEAVE 192
+8441: mov   S8(%rsp), %r8                   # the sizes of the list and the event
+    lea     NodeEvent_chunk(%r8), %r8
+    mov     16(%r8), %rax
+    add     $(24 + 7), %rax
+    and     $-8, %rax
+    mov     %rax, (%r8)
+    add     $NodeEvent_chunk, %rax
+    mov     S8(%rsp), %rcx
+    mov     %rax, (%rcx)
+    xor     %eax, %eax
+8449: LEAVE 192
+8450:
 89: cmp     $NODE_WORK_SLOTS, %rax
     jne     90f
     mov     NODE_STATE_SLOT(%r13), %rdi     # SLOTS: process_slots of the fork of the state's slot, to arg

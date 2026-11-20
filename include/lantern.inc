@@ -375,6 +375,30 @@
 .set ENGINE_METHOD_EXCHANGE_CAPABILITIES, 3
 .set ENGINE_METHOD_GET_PAYLOAD, 4
 
+/* ProduceDraft (node.md): the body draft of a produceBlockV3, filled in place by its fold works */
+.set ProduceDraft_aggregates, 0
+.set ProduceDraft_ops, 8
+.set ProduceDraft_sync_set, 16
+.set ProduceDraft_sync_bits, 24
+.set ProduceDraft_sync_signature, 24 + SYNC_COMMITTEE_SIZE / 8
+.set PRODUCE_DRAFT_AGGREGATES, (24 + SYNC_COMMITTEE_SIZE / 8 + 96 + 7) / 8 * 8
+.set PRODUCE_DRAFT_AGGREGATE_COUNT, MAX_COMMITTEES_PER_SLOT * SLOTS_PER_EPOCH
+.set DraftAggregate_data, 0
+.set DraftAggregate_committee_index, 128
+.set DraftAggregate_length, 136
+.set DraftAggregate_order, 144
+.set DraftAggregate_bits, 152
+.set DraftAggregate_signature, 152 + MAX_VALIDATORS_PER_COMMITTEE / 8
+.set DraftAggregate__mem, 248 + MAX_VALIDATORS_PER_COMMITTEE / 8
+.set PRODUCE_DRAFT_OPS, PRODUCE_DRAFT_AGGREGATES + PRODUCE_DRAFT_AGGREGATE_COUNT * DraftAggregate__mem
+.set PRODUCE_SLASHINGS_ROOM, MAX_ATTESTER_SLASHINGS * (24 + 8 + 2 * (232 + 8 * MAX_VALIDATORS_PER_COMMITTEE))
+.set PRODUCE_SLASHINGS_ROOM_ELECTRA, MAX_ATTESTER_SLASHINGS_ELECTRA * (24 + 8 + 2 * (232 + 8 * MAX_VALIDATORS_PER_COMMITTEE * MAX_COMMITTEES_PER_SLOT))
+.if PRODUCE_SLASHINGS_ROOM_ELECTRA > PRODUCE_SLASHINGS_ROOM
+.set PRODUCE_SLASHINGS_ROOM, PRODUCE_SLASHINGS_ROOM_ELECTRA
+.endif
+.set PRODUCE_DRAFT_OPS_ROOM, MAX_PROPOSER_SLASHINGS * (24 + 416) + PRODUCE_SLASHINGS_ROOM + MAX_VOLUNTARY_EXITS * (24 + 112) + MAX_BLS_TO_EXECUTION_CHANGES * (24 + 176)
+.set ProduceDraft__size, PRODUCE_DRAFT_OPS + PRODUCE_DRAFT_OPS_ROOM
+
 /* PayloadAttributes (engine-api.md) */
 .set PayloadAttributes_timestamp, 0
 .set PayloadAttributes_prev_randao, 8
@@ -895,6 +919,8 @@
 .set NODE_ACT_API_CLOSE_SIZE, 24
 .set NODE_ACT_STATE_BYTES, 14         /* 16 a state's id, 24 a new id: the shell keeps the state's SSZ bytes as it */
 .set NODE_ACT_STATE_BYTES_SIZE, 32
+.set NODE_ACT_BYTES_NEW, 15            /* 16 a new id, 24 a size: the shell keeps a ByteList of that size, offset 24, its bytes zero */
+.set NODE_ACT_BYTES_NEW_SIZE, 32
 .set NODE_DB_REF, 1 << 63              /* a BufferId of a Db record: bit 62 a sidecar segment, segment << 48, the offset below */
 .set NODE_DB_SIDECARS, 1 << 62
 .set DB_SEGMENT_SHIFT, 13              /* slot >> DB_SEGMENT_SHIFT: its segment */
@@ -933,6 +959,14 @@
 .set NODE_WORK_API_SUBMIT, 23          /* a: the head's post-state; data: a request's body; target: the connection; arg: op + 256 * flags + 65536 * fork */
 .set NODE_WORK_POOL_CHECK, 24          /* a: the head's post-state; data: a pool entry's bytes; target: its index; arg: its topic */
 .set NODE_WORK_PREPARE_PAYLOAD, 25     /* a: the head's post-state at the next slot; arg: the engine id */
+.set NODE_WORK_PRODUCE_CHECK, 26       /* a: the state of a produceBlockV3; target: its NodeApi index */
+.set NODE_WORK_GET_PAYLOAD, 27         /* target: the NodeApi index of a produceBlockV3; arg: the engine id */
+.set NODE_WORK_PRODUCE_FOLD, 28        /* a: the state; b: a pool entry's bytes; data: the draft, or 0; target: the NodeApi index */
+.set NODE_WORK_PRODUCE_BLOCK, 29       /* a: the state; b: the engine's result, or 0; data: the draft; target: the NodeApi index */
+.set NODE_PRODUCE_STATE, 1             /* NodeApi member of a produceBlockV3: its phase */
+.set NODE_PRODUCE_PAYLOAD, 2
+.set NODE_PRODUCE_FOLD, 3
+.set NODE_PRODUCE_BUILD, 4
 .set NODE_VOTES_MAX, 130               /* MAX_ATTESTATIONS + MAX_ATTESTER_SLASHINGS: the votes of a block the node takes */
 .set NodeEvent_root, NodeEvent_checkpoint + 8  /* GOSSIP of a valid beacon_block, SYNC_BLOCK: its root; of a valid blob_sidecar, BLOB: the root of its block header */
 .set NodeEvent_index, NodeEvent_root + 32      /* GOSSIP of a valid beacon_block, SYNC_BLOCK: its blob commitments; of a valid blob_sidecar: its index */
@@ -1090,6 +1124,8 @@
 .set API_STREAM_ITEMS, 8192            /* a pool stream wrote an entry */
 .set API_STREAM_ITEM_DONE, 16384       /* in a WORK_DONE only: the chunk ends a pool entry */
 .set API_STREAM_FOLD, 32768             /* getAggregatedAttestationV2: its chunks fold the pool's entries, sending nothing */
+.set API_STREAM_PRODUCE_OWN, 65536     /* produceBlockV3: the pool entry bytes of its fold in flight (root) are its to free */
+.set API_STREAM_PRODUCE_FORCED, 131072  /* produceBlockV3: it made a preparation of its slot */
 .set API_VALUE_CANONICAL, 1              /* the values of a NODE_WORK_API_ENCODE's arg, times 2^16 */
 .set API_VALUE_FINALIZED, 2
 .set API_VALUE_OPTIMISTIC, 4
@@ -1125,6 +1161,8 @@
 .set NODE_JSON_COMMITTEE_SUBSCRIPTION, 16 /* lantern's BeaconCommitteeSubscription */
 .set NODE_JSON_SYNC_SUBSCRIPTION, 17     /* lantern's SyncCommitteeSubscription, from altair */
 .set NODE_JSON_PROPOSER_PREPARATION, 18  /* lantern's ProposerPreparation */
+.set NODE_JSON_BEACON_BLOCK, 19          /* a BeaconBlock (produceBlockV3 before deneb) */
+.set NODE_JSON_BLOCK_CONTENTS, 20        /* lantern's BlockContents, from deneb */
 .set NodePool_topic, 0                   /* NodePool (node.md): GOSSIP_* of the operation; 0 for a free entry */
 .set NodePool_state, 8                   /* NODE_POOL_* */
 .set NodePool_data_id, 16                /* the BufferId of its SSZ bytes */

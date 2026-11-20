@@ -2395,11 +2395,27 @@ LOCAL_FUNCTION app_actions
     call    app_state_bytes
     j       8f
 13: li      t1, NODE_ACT_BYTES_PUT
-    bne     t0, t1, 2f
+    bne     t0, t1, 131f
     addi    a0, s2, 24                      # BYTES_PUT: a copy of the ByteList
     ld      a1, 24(s2)
     call    app_dup
     beqz    a0, 8f
+    mv      a1, a0
+    ld      a0, 16(s2)
+    ld      a2, 24(s2)
+    call    app_buf_add
+    j       8f
+131: li     t1, NODE_ACT_BYTES_NEW
+    bne     t0, t1, 2f
+    ld      a0, 24(s2)                      # BYTES_NEW: a ByteList of the size, its bytes zero
+    call    app_map
+    beqz    a0, 8f
+    ld      t1, 24(s2)
+    sd      t1, 0(a0)
+    li      t2, 24
+    sd      t2, 8(a0)
+    addi    t1, t1, -24
+    sd      t1, 16(a0)
     mv      a1, a0
     ld      a0, 16(s2)
     ld      a2, 24(s2)

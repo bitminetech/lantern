@@ -2415,12 +2415,28 @@ LOCAL_FUNCTION app_actions
     call    app_state_bytes
     jmp     8f
 13: cmp     $NODE_ACT_BYTES_PUT, %rax
-    jne     2f
+    jne     131f
     lea     24(%rbp), %rdi                  # BYTES_PUT: a copy of the ByteList
     mov     24(%rbp), %rsi
     call    app_dup
     test    %rax, %rax
     jz      8f
+    mov     %rax, %rsi
+    mov     16(%rbp), %rdi
+    mov     24(%rbp), %rdx
+    call    app_buf_add
+    jmp     8f
+131: cmp    $NODE_ACT_BYTES_NEW, %rax
+    jne     2f
+    mov     24(%rbp), %rdi                  # BYTES_NEW: a ByteList of the size, its bytes zero
+    call    app_map
+    test    %rax, %rax
+    jz      8f
+    mov     24(%rbp), %rcx
+    mov     %rcx, (%rax)
+    movq    $24, 8(%rax)
+    sub     $24, %rcx
+    mov     %rcx, 16(%rax)
     mov     %rax, %rsi
     mov     16(%rbp), %rdi
     mov     24(%rbp), %rdx

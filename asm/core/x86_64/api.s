@@ -70,6 +70,51 @@ LOCAL_FUNCTION api_dec
     UNFRAME 32
 END_FUNCTION api_dec
 
+/* The decimal digits of the 256-bit little-endian number at rdi join the response. Locals: its four words, then the digits from the end. */
+LOCAL_FUNCTION api_dec256
+    FRAME 128
+    mov     (%rdi), %rax
+    mov     %rax, (%rsp)
+    mov     8(%rdi), %rax
+    mov     %rax, 8(%rsp)
+    mov     16(%rdi), %rax
+    mov     %rax, 16(%rsp)
+    mov     24(%rdi), %rax
+    mov     %rax, 24(%rsp)
+    lea     128(%rsp), %r8
+    mov     $10, %ecx
+1:  xor     %edx, %edx                      # divide by 10, from the top word down
+    xor     %r9d, %r9d
+    mov     $3, %r10d
+2:  mov     (%rsp,%r10,8), %rax
+    div     %rcx
+    mov     %rax, (%rsp,%r10,8)
+    or      %rax, %r9
+    dec     %r10
+    jns     2b
+    add     $0x30, %dl
+    dec     %r8
+    mov     %dl, (%r8)
+    test    %r9, %r9
+    jnz     1b
+    mov     %r8, %rdi
+    lea     128(%rsp), %rsi
+    sub     %r8, %rsi
+    call    api_put
+    UNFRAME 128
+END_FUNCTION api_dec256
+
+/* The Gwei rdi in Wei, decimal digits, join the response. Locals: rdi. */
+LOCAL_FUNCTION api_wei
+    FRAME 16
+    mov     %rdi, (%rsp)
+    call    api_dec
+    cmpq    $0, (%rsp)
+    je      1f
+    API_LIT api_nines
+1:  UNFRAME 16
+END_FUNCTION api_wei
+
 /* The decimal digits of rdi, in quotes. Locals: rdi. */
 LOCAL_FUNCTION api_qdec
     FRAME 16
@@ -2708,6 +2753,8 @@ LOCAL_FUNCTION node_api_event
     je      63f
     cmp     $API_OP_PRODUCE_ATTESTATION_DATA, %rcx
     je      59f
+    cmp     $API_OP_PRODUCE_BLOCK_V3, %rcx
+    je      540f
     cmp     $API_OP_GET_ATTESTER_DUTIES, %rcx
     je      58f
     cmp     $API_OP_GET_SYNC_COMMITTEE_DUTIES, %rcx
@@ -2926,6 +2973,39 @@ LOCAL_FUNCTION node_api_event
     mov     S8(%rsp), %rcx
     mov     %rax, ApiView_look_data(%rcx)
     jmp     67f
+540: mov    $503, %edx                      # produceBlockV3: 503 while syncing; 400 at or below the head's slot, or past the store's slot + 1
+    mov     S8(%rsp), %rax
+    cmpq    $0, ApiView_is_syncing(%rax)
+    jne     80f
+    mov     %rbp, %rdi
+    call    node_store_slot
+    mov     S7(%rsp), %rdi
+    mov     ApiRoute_slot(%rdi), %rcx
+    mov     $400, %edx
+    inc     %rax
+    cmp     %rax, %rcx
+    ja      80f
+    mov     S8(%rsp), %rax
+    cmp     ApiView_head_slot(%rax), %rcx
+    jbe     80f
+    movq    $API_ID_SLOT, ApiRoute_id_kind(%rdi)    # the head's post-state brought to the slot
+    mov     %rcx, ApiRoute_id_slot(%rdi)
+    mov     S8(%rsp), %rsi
+    call    node_api_state
+    mov     $500, %edx
+    test    %rax, %rax
+    jnz     80f
+    mov     S8(%rsp), %rdi
+    call    node_api_advance
+    mov     S9(%rsp), %rdi
+    mov     S7(%rsp), %rsi
+    mov     %r12, %rdx
+    mov     S8(%rsp), %rcx
+    call    node_api_produce
+    mov     %rax, %rdx
+    test    %rax, %rax
+    jnz     80f
+    jmp     90f
 59: mov     $503, %edx                      # produceAttestationData: 503 while syncing; 400 past the store's slot
     mov     S8(%rsp), %rax
     cmpq    $0, ApiView_is_syncing(%rax)
@@ -4433,6 +4513,311 @@ LOCAL_FUNCTION node_api_find
 4:  ret
 END_FUNCTION node_api_find
 
+/*
+ * (connection rdi, route rsi, flags rdx, view rcx) -> rax: produceBlockV3 (node.md, Block
+ * production): a NodeApi entry in NODE_PRODUCE_STATE that owns the state of the view, a copy at
+ * the slot, with the request in its cursor, and a PRODUCE_CHECK work of it; 0 once it started,
+ * else the status of the error to answer. r12 the entry, r13 its index; S7 the route, S8 the view,
+ * S9 the connection, S10 the flags.
+ */
+LOCAL_FUNCTION node_api_produce
+    ENTER 0
+    mov     %rdi, S9(%rsp)
+    mov     %rsi, S7(%rsp)
+    mov     %rcx, S8(%rsp)
+    cmpq    $API_TYPE_SSZ, ApiRoute_response(%rsi)  # SSZ, else JSON
+    jne     1f
+    or      $API_STREAM_SSZ, %rdx
+1:  mov     %rdx, S10(%rsp)
+    cmpq    $0, ApiView_look_copy(%rcx)     # the state: a copy at the slot
+    je      8f
+    orq     $API_STREAM_OWN_STATE, S10(%rsp)
+    call    node_api_new
+    mov     %rax, %r13
+    mov     %rdx, %r12
+    mov     %rdx, %rdi
+    mov     $NodeApi__mem, %esi
+    call    lantern_zero
+    mov     S9(%rsp), %rax
+    mov     %rax, NodeApi_connection(%r12)
+    movq    $API_OP_PRODUCE_BLOCK_V3, NodeApi_op(%r12)
+    mov     S10(%rsp), %rax
+    mov     %rax, NodeApi_flags(%r12)
+    mov     S8(%rsp), %rax
+    mov     ApiView_look_state(%rax), %rax
+    mov     %rax, NodeApi_state(%r12)
+    mov     S7(%rsp), %rax
+    mov     ApiRoute_slot(%rax), %rdi
+    mov     %rdi, NodeApi_slot(%r12)
+    lea     Node_config(%rbx), %rsi
+    call    node_fork
+    mov     %rax, NodeApi_fork(%r12)
+    movq    $NODE_PRODUCE_STATE, NodeApi_member(%r12)
+    lea     NodeApi_cursor(%r12), %rdi      # the request: randao_reveal, graffiti, the skip flag
+    mov     S7(%rsp), %rsi
+    add     $ApiRoute_randao_reveal, %rsi
+    mov     $96, %edx
+    call    lantern_copy
+    mov     S7(%rsp), %rsi
+    testq   $(1 << API_PARAM_GRAFFITI), ApiRoute_present(%rsi)
+    jz      2f
+    add     $ApiRoute_graffiti, %rsi
+    lea     (NodeApi_cursor + 96)(%r12), %rdi
+    COPY32  %rdi, %rsi
+2:  mov     S7(%rsp), %rsi
+    mov     ApiRoute_present(%rsi), %rax
+    shr     $API_PARAM_SKIP_RANDAO_VERIFICATION, %rax
+    and     $1, %eax
+    mov     %rax, (NodeApi_cursor + 128)(%r12)
+    mov     $NODE_WORK_PRODUCE_CHECK, %edi
+    mov     NodeApi_state(%r12), %rsi
+    xor     %edx, %edx
+    xor     %ecx, %ecx
+    mov     %r13, %r8
+    xor     %r9d, %r9d
+    call    node_work
+    xor     %eax, %eax
+    LEAVE 0
+8:  mov     $500, %eax
+    LEAVE 0
+END_FUNCTION node_api_produce
+
+/*
+ * The NODE_EV_WORK_DONE rdi of a work of block production (node.md, Block production): the
+ * produceBlockV3 entry at its target goes on, or answers its error. r12 the event, r13 the entry;
+ * S7 the result.
+ */
+LOCAL_FUNCTION node_produce_done
+    ENTER 0
+    mov     %rdi, %r12
+    mov     NodeAction_target(%r12), %rax
+    PART    %r13, %rcx, %rbx, Node_api
+    cmp     %rcx, %rax
+    jae     9f
+    imul    $NodeApi__mem, %rax, %rax
+    add     %rax, %r13
+    cmpq    $0, NodeApi_connection(%r13)    # an entry still there
+    je      9f
+    cmpq    $API_OP_PRODUCE_BLOCK_V3, NodeApi_op(%r13)
+    jne     9f
+    mov     NodeEvent_result(%r12), %rax
+    mov     %rax, S7(%rsp)
+    mov     NodeAction_work_kind(%r12), %rcx
+    cmp     $NODE_WORK_PRODUCE_CHECK, %rcx
+    jne     20f
+    mov     $400, %esi                      # the check: 400 for the reveal, 500 for another
+    cmp     $LANTERN_INVALID_RANDAO_REVEAL, %rax
+    je      8f
+    mov     $500, %esi
+    test    %rax, %rax
+    jnz     8f
+    mov     NodeApi_slot(%r13), %rdi        # from bellatrix with a head of a payload: the engine's payload first
+    lea     Node_config(%rbx), %rsi
+    call    node_fork
+    cmp     $FORK_BELLATRIX, %rax
+    jb      10f
+    lea     Node_head_root(%rbx), %rdi
+    call    node_store_find
+    cmp     $-1, %rax
+    je      10f
+    mov     BlockNode_block_hash(%rdx), %rax
+    or      (BlockNode_block_hash + 8)(%rdx), %rax
+    or      (BlockNode_block_hash + 16)(%rdx), %rax
+    or      (BlockNode_block_hash + 24)(%rdx), %rax
+    jz      10f
+    movq    $NODE_PRODUCE_PAYLOAD, NodeApi_member(%r13)
+    LEAVE 0
+10: movq    $NODE_PRODUCE_FOLD, NodeApi_member(%r13)
+    movq    $0, NodeApi_filter_slot(%r13)
+    mov     %r13, %rdi
+    call    node_produce_next
+    LEAVE 0
+20: cmp     $NODE_WORK_PRODUCE_FOLD, %rcx
+    jne     30f
+    testq   $API_STREAM_PRODUCE_OWN, NodeApi_flags(%r13)  # the pool entry's bytes, when they left the pool meanwhile
+    jz      21f
+    andq    $~API_STREAM_PRODUCE_OWN, NodeApi_flags(%r13)
+    mov     NodeApi_root(%r13), %rsi
+    movq    $0, NodeApi_root(%r13)
+    mov     $NODE_ACT_BYTES_FREE, %edi
+    xor     %edx, %edx
+    call    node_ids
+21: movq    $0, NodeApi_root(%r13)          # the draft holds the entry, or the rules left it out: the next
+    mov     %r13, %rdi
+    call    node_produce_next
+    LEAVE 0
+30: mov     $500, %esi                      # PRODUCE_BLOCK: the block's bytes, answered as a block's
+    cmpq    $0, S7(%rsp)
+    jne     8f
+    mov     %r13, %rdi
+    call    node_produce_release
+    lea     NodeEvent_chunk(%r12), %rdi
+    call    node_put
+    mov     %rax, NodeApi_data(%r13)
+    orq     $API_STREAM_OWN, NodeApi_flags(%r13)
+    lea     NodeApi_root(%r13), %rdi        # the values: execution_payload_value at root, consensus_block_value at filter_slot
+    lea     NodeEvent_root(%r12), %rsi
+    COPY32  %rdi, %rsi
+    mov     NodeEvent_index(%r12), %rax
+    mov     %rax, NodeApi_filter_slot(%r13)
+    lea     NodeApi_cursor(%r13), %rdi      # the request goes: the cursor is the answer's JsonCursor
+    mov     $(NodeApi_slot - NodeApi_cursor), %esi
+    call    lantern_zero
+    mov     %r13, %rdi
+    call    node_produce_answer
+    LEAVE 0
+8:  mov     %r13, %rdi
+    call    node_produce_fail
+9:  LEAVE 0
+END_FUNCTION node_produce_done
+
+/* The answer of the produceBlockV3 entry rdi, whose block's bytes are its data: its first chunk. Uses rax, rcx, rdx, r10. */
+LOCAL_FUNCTION node_produce_answer
+    FRAME 0
+    PART    %rcx, %r10, %rbx, Node_api
+    mov     %rdi, %rax
+    sub     %rcx, %rax
+    xor     %edx, %edx
+    mov     $NodeApi__mem, %ecx
+    div     %rcx
+    mov     %rdi, %rdx
+    call    node_api_chunk_work
+    UNFRAME 0
+END_FUNCTION node_produce_answer
+
+/*
+ * The next work of the produceBlockV3 entry rdi in NODE_PRODUCE_FOLD: a PRODUCE_FOLD of the next
+ * kept pool entry of the kind at cursor + 144 from index filter_slot, the kinds in the order of
+ * api_produce_kinds; after the last, NODE_PRODUCE_BUILD and its PRODUCE_BLOCK. r12 the entry, r13
+ * its index; S7 the draft's action, S8 the pool index, S9 the kind's index, S10 its topic.
+ */
+LOCAL_FUNCTION node_produce_next
+    ENTER 0
+    mov     %rdi, %r12
+    PART    %rcx, %r10, %rbx, Node_api
+    mov     %r12, %rax
+    sub     %rcx, %rax
+    xor     %edx, %edx
+    mov     $NodeApi__mem, %ecx
+    div     %rcx
+    mov     %rax, %r13
+    cmpq    $0, NodeApi_data(%r12)          # the draft, before the first fold: a zeroed buffer
+    jne     11f
+    mov     $NODE_ACT_BYTES_NEW, %edi
+    mov     $NODE_ACT_BYTES_NEW_SIZE, %esi
+    call    node_act
+    mov     %rax, S7(%rsp)
+    call    node_new_id
+    mov     S7(%rsp), %rcx
+    mov     %rax, 16(%rcx)
+    mov     %rax, NodeApi_data(%r12)
+    MOVQ    %rax, ProduceDraft__size + 24
+    mov     %rax, 24(%rcx)
+11: mov     NodeApi_filter_slot(%r12), %rax
+    mov     %rax, S8(%rsp)
+    mov     (NodeApi_cursor + 144)(%r12), %rax  # the kind: its index in api_produce_kinds
+    mov     %rax, S9(%rsp)
+1:  mov     S9(%rsp), %rax
+    cmp     $API_PRODUCE_KINDS, %rax
+    jae     5f
+    lea     api_produce_kinds(%rip), %rcx
+    movzbl  (%rcx,%rax), %eax
+    mov     %rax, S10(%rsp)
+2:  PART    %rcx, %rdx, %rbx, Node_pool
+    mov     S8(%rsp), %rax
+    cmp     %rdx, %rax
+    jae     3f
+    imul    $NodePool__mem, %rax, %rsi
+    add     %rcx, %rsi
+    inc     %rax
+    mov     %rax, S8(%rsp)
+    mov     NodePool_topic(%rsi), %rax
+    cmp     S10(%rsp), %rax
+    jne     2b
+    cmpq    $NODE_POOL_KEPT, NodePool_state(%rsi)
+    jne     2b
+    mov     S8(%rsp), %rax
+    mov     %rax, NodeApi_filter_slot(%r12)
+    mov     S9(%rsp), %rax
+    mov     %rax, (NodeApi_cursor + 144)(%r12)
+    mov     NodePool_data_id(%rsi), %rax
+    mov     %rax, NodeApi_root(%r12)
+    mov     NodePool_topic(%rsi), %r9       # arg: the topic, the fork << 8, the member << 16
+    mov     NodePool_fork(%rsi), %rax
+    shl     $8, %rax
+    or      %rax, %r9
+    mov     NodePool_member(%rsi), %rax
+    shl     $16, %rax
+    or      %rax, %r9
+    mov     $NODE_WORK_PRODUCE_FOLD, %edi
+    mov     NodePool_data_id(%rsi), %rdx
+    mov     NodeApi_data(%r12), %rcx
+    mov     %r13, %r8
+    mov     NodeApi_state(%r12), %rsi
+    call    node_work
+    LEAVE 0
+3:  incq    S9(%rsp)                        # the next kind, from the pool's first entry
+    movq    $0, S8(%rsp)
+    jmp     1b
+5:  movq    $NODE_PRODUCE_BUILD, NodeApi_member(%r12)
+    mov     $NODE_WORK_PRODUCE_BLOCK, %edi
+    mov     NodeApi_state(%r12), %rsi
+    mov     NodeApi_filter_index(%r12), %rdx
+    mov     NodeApi_data(%r12), %rcx
+    mov     %r13, %r8
+    xor     %r9d, %r9d
+    call    node_work
+    LEAVE 0
+END_FUNCTION node_produce_next
+
+/* The draft and the engine's result of the produceBlockV3 entry rdi go. Locals: the entry. */
+LOCAL_FUNCTION node_produce_release
+    FRAME 16
+    mov     %rdi, (%rsp)
+    mov     NodeApi_data(%rdi), %rsi        # each field cleared first: node_ids leaves an entry's own bytes to it
+    movq    $0, NodeApi_data(%rdi)
+    test    %rsi, %rsi
+    jz      1f
+    mov     $NODE_ACT_BYTES_FREE, %edi
+    xor     %edx, %edx
+    call    node_ids
+1:  mov     (%rsp), %rdi
+    mov     NodeApi_filter_index(%rdi), %rsi
+    movq    $0, NodeApi_filter_index(%rdi)
+    test    %rsi, %rsi
+    jz      2f
+    mov     $NODE_ACT_BYTES_FREE, %edi
+    xor     %edx, %edx
+    call    node_ids
+2:  UNFRAME 16
+END_FUNCTION node_produce_release
+
+/*
+ * The error rsi to the produceBlockV3 entry rdi, then its end: its draft and engine result go,
+ * and its state with API_STREAM_OWN_STATE. Locals: the entry.
+ */
+LOCAL_FUNCTION node_produce_fail
+    FRAME 16
+    mov     %rdi, (%rsp)
+    mov     %rsi, %rdx
+    mov     NodeApi_flags(%rdi), %rax
+    mov     NodeApi_connection(%rdi), %rdi
+    xor     %esi, %esi
+    mov     $API_BODY_ERROR, %ecx
+    mov     %rax, %r8
+    and     $API_R_CLOSE, %r8d              # API_STREAM_CLOSE is API_R_CLOSE; HTTP/1.0 kept open says so
+    jnz     1f
+    test    $API_STREAM_HTTP10, %rax
+    jz      1f
+    mov     $API_R_KEEP, %r8d
+1:  call    node_api_send
+    mov     (%rsp), %rdi
+    call    node_produce_release
+    mov     (%rsp), %rdi
+    call    node_api_end
+    UNFRAME 16
+END_FUNCTION node_produce_fail
+
 /* rax = the index of a free NodeApi entry (the first free, else the next; the step checked one is free), rdx = the entry. Uses r10. */
 LOCAL_FUNCTION node_api_new
     UNWIND_END_PROLOGUE
@@ -5416,7 +5801,9 @@ LOCAL_FUNCTION api_stream_head
     API_LIT api_octet
     jmp     2f
 1:  API_LIT api_type
-2:  cmpq    $API_OP_GET_BLOCK_V2, NodeApi_op(%rbx)  # Eth-Consensus-Version: of getBlockV2 and getStateV2
+2:  cmpq    $API_OP_PRODUCE_BLOCK_V3, NodeApi_op(%rbx)
+    je      23f
+    cmpq    $API_OP_GET_BLOCK_V2, NodeApi_op(%rbx)  # Eth-Consensus-Version: of getBlockV2 and getStateV2
     je      21f
     cmpq    $API_OP_GET_BLOCK_ATTESTATIONS_V2, NodeApi_op(%rbx)
     je      21f
@@ -5441,6 +5828,19 @@ LOCAL_FUNCTION api_stream_head
 21: API_LIT api_version
     mov     NodeApi_fork(%rbx), %rdi
     call    api_fork_name
+    API_LIT api_crlf
+    jmp     22f
+    /* produceBlockV3: and its three headers */
+23: API_LIT api_version
+    mov     NodeApi_fork(%rbx), %rdi
+    call    api_fork_name
+    API_LIT api_crlf
+    API_LIT api_h_blinded
+    lea     NodeApi_root(%rbx), %rdi
+    call    api_dec256
+    API_LIT api_h_block_value
+    mov     NodeApi_filter_slot(%rbx), %rdi
+    call    api_wei
     API_LIT api_crlf
 22: mov     (%rsp), %rdi
     cmp     $-1, %rdi
@@ -5518,6 +5918,8 @@ LOCAL_FUNCTION api_stream_json
     UNFRAME 0
 31: cmpq    $API_OP_GET_BLOCK_V2, NodeApi_op(%rbx)  # the validator streams: their items, of the state rdi
     je      1f
+    cmpq    $API_OP_PRODUCE_BLOCK_V3, NodeApi_op(%rbx)
+    je      1f
     cmpq    $API_OP_GET_AGGREGATED_ATTESTATION_V2, NodeApi_op(%rbx)
     je      1f
     cmpq    $API_OP_PRODUCE_SYNC_COMMITTEE_CONTRIBUTION, NodeApi_op(%rbx)
@@ -5559,7 +5961,13 @@ LOCAL_FUNCTION api_stream_json
 123: cmpq   $API_OP_PRODUCE_SYNC_COMMITTEE_CONTRIBUTION, NodeApi_op(%rbx)
     jne     124f
     mov     $NODE_JSON_SYNC_CONTRIBUTION, %edi
-124:
+124: cmpq   $API_OP_PRODUCE_BLOCK_V3, NodeApi_op(%rbx)  # produceBlockV3: the block, from deneb its BlockContents
+    jne     125f
+    mov     $NODE_JSON_BEACON_BLOCK, %edi
+    cmpq    $FORK_DENEB, NodeApi_fork(%rbx)
+    jb      125f
+    mov     $NODE_JSON_BLOCK_CONTENTS, %edi
+125:
     lea     (NodeEvent_api + 16)(%rbp), %rdx
     lea     NodeEvent_api_bytes(%rbp), %rcx
     mov     NodeApi_fork(%rbx), %r10
@@ -5609,6 +6017,8 @@ LOCAL_FUNCTION node_api_chunk_run
     cmp     $API_OP_GET_BLOCK_ATTESTATIONS_V2, %rax
     je      1f
     cmp     $API_OP_GET_BLINDED_BLOCK, %rax
+    je      1f
+    cmp     $API_OP_PRODUCE_BLOCK_V3, %rax
     je      1f
     cmp     $API_OP_GET_STATE_V2, %rax
     je      1f
@@ -5702,10 +6112,19 @@ LOCAL_FUNCTION node_api_chunk_run
     mov     %rax, (L + 8)(%rsp)
     mov     16(%rdx), %rax
     mov     %rax, (L + 16)(%rsp)
-    mov     $40, %ecx                       # their slot: a state's at byte 40, a block's at 100
+    mov     $40, %ecx                       # their slot: a state's at byte 40, a signed block's at 100
     cmpq    $API_OP_GET_STATE_V2, NodeApi_op(%rbx)
     je      4f
     mov     $100, %ecx
+    cmpq    $API_OP_PRODUCE_BLOCK_V3, NodeApi_op(%rbx)  # produceBlockV3: a block's at 0, from deneb at the BlockContents' offset of its block
+    jne     4f
+    xor     %ecx, %ecx
+    cmpq    $FORK_DENEB, NodeApi_fork(%rbx)
+    jb      4f
+    cmp     $4, %rax
+    jb      96f
+    mov     (L + 8)(%rsp), %rsi
+    mov     (%rsi), %ecx
 4:  lea     8(%rcx), %rsi
     cmp     %rsi, %rax
     jb      96f
@@ -6039,7 +6458,10 @@ LOCAL_FUNCTION node_api_chunk_run
 30: test    $API_STREAM_STARTED, %eax       # JSON, the first chunk: the body after room for the head
     jnz     40f
     lea     (NodeEvent_api_bytes + 24 + API_HEAD_ROOM)(%rbp), %r12
-    mov     %r12, (L + 24)(%rsp)
+    cmpq    $API_OP_PRODUCE_BLOCK_V3, NodeApi_op(%rbx)
+    jne     301f
+    add     $API_PRODUCE_HEAD_ROOM, %r12
+301: mov    %r12, (L + 24)(%rsp)
     mov     L(%rsp), %r14
     sub     $7, %r14                        # room for CRLF and the last chunk
     cmpq    $0, (L + 56)(%rsp)
@@ -6106,7 +6528,20 @@ LOCAL_FUNCTION node_api_chunk_run
     API_LIT api_v_list
     jmp     36f
     /* {"version":"<fork>","execution_optimistic":…,"finalized":…,"data": */
-35: API_LIT api_j_version
+35: cmpq    $API_OP_PRODUCE_BLOCK_V3, NodeApi_op(%rbx)  # produceBlockV3: {"version":…,"execution_payload_blinded":false,…,"data":
+    jne     351f
+    API_LIT api_j_version
+    mov     NodeApi_fork(%rbx), %rdi
+    call    api_fork_name
+    API_LIT api_pb_head
+    lea     NodeApi_root(%rbx), %rdi
+    call    api_dec256
+    API_LIT api_pb_block_value
+    mov     NodeApi_filter_slot(%rbx), %rdi
+    call    api_wei
+    API_LIT api_g_data
+    jmp     36f
+351: API_LIT api_j_version
     mov     NodeApi_fork(%rbx), %rdi
     call    api_fork_name
     API_LIT api_j_optimistic

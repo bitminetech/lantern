@@ -703,6 +703,14 @@ LOCAL_FUNCTION node_type_of_kind
     ADDRESS x0, lantern_type_ProposerPreparation
     cmp     x9, #NODE_JSON_PROPOSER_PREPARATION
     b.eq    9f
+    ADDRESS x0, lantern_type_BeaconBlock
+    cmp     x9, #NODE_JSON_BEACON_BLOCK
+    b.eq    9f
+.if FORK >= FORK_DENEB
+    ADDRESS x0, lantern_type_BlockContents
+    cmp     x9, #NODE_JSON_BLOCK_CONTENTS
+    b.eq    9f
+.endif
 .if FORK >= FORK_BELLATRIX
     ADDRESS x0, lantern_type_SignedBlindedBeaconBlock
 .else
@@ -2317,4 +2325,1525 @@ SPEC_FUNCTION node_new_payload
 99: str     x28, [x21]
     LEAVE 16
 SPEC_END node_new_payload
+.endif
+
+/*
+ * (state, request, scratch, out): node.md, lantern_node_produce_check. x19 state, x20 request, x21
+ * scratch, x22 out, x23 the scratch size, x24 the proposer's Validator. Locals: L epoch, L+8 the
+ * proposer, L+16 domain type, L+24 domain (32), L+56 the signing root after a ByteList header (56).
+ */
+SPEC_FUNCTION node_produce_check
+    ENTER 112
+    mov     x19, x0
+    mov     x20, x1
+    mov     x21, x2
+    mov     x22, x3
+.if FORK >= FORK_FULU
+    NEED_SCRATCH x21, x19, 0, 9f
+.else
+    NEED_SCRATCH x21, x19, 2, 9f                /* get_beacon_proposer_index takes S(2) */
+.endif
+    ldr     x23, [x21]
+    mov     x0, x19
+    add     x1, sp, #L
+    bl      lantern_get_current_epoch
+    mov     x0, x19
+.if FORK >= FORK_FULU
+    add     x1, sp, #(L + 8)
+    bl      lantern_get_beacon_proposer_index
+.else
+    mov     x1, x21
+    add     x2, sp, #(L + 8)
+    bl      lantern_get_beacon_proposer_index
+    str     x23, [x21]
+.endif
+    cbnz    x0, 7f
+    ldr     x9, [sp, #(L + 8)]
+    str     x9, [x22]
+    ldr     x9, [x20, #128]                 /* skip_randao_verification: the point at infinity */
+    cbz     x9, 1f
+    ldrb    w9, [x20]
+    cmp     w9, #0xc0
+    b.ne    5f
+    mov     x10, #1
+2:  ldrb    w9, [x20, x10]
+    cbnz    w9, 5f
+    add     x10, x10, #1
+    cmp     x10, #96
+    b.lo    2b
+    b       3f
+1:  ldr     x9, [sp, #(L + 8)]              /* else the check of process_randao, no mix */
+    PART    x24, x10, x19, BeaconState_validators
+    cmp     x9, x10
+    mov     x0, #LANTERN_INVALID_VALIDATOR_INDEX
+    b.hs    7f
+    add     x24, x24, x9, lsl #7
+    mov     w9, #DOMAIN_RANDAO
+    str     w9, [sp, #(L + 16)]
+    mov     x0, x19
+    add     x1, sp, #(L + 16)
+    add     x2, sp, #L
+    mov     x3, x21
+    add     x4, sp, #(L + 24)
+    bl      lantern_get_domain
+    cbnz    x0, 7f
+    ADDRESS x0, lantern_type_Uint64
+    add     x1, sp, #L
+    add     x2, sp, #(L + 24)
+    mov     x3, x21
+    add     x4, sp, #(L + 80)
+    bl      lantern_compute_signing_root
+    cbnz    x0, 7f
+    add     x0, x24, #Validator_pubkey
+    mov     x1, x20
+    add     x2, sp, #(L + 56)
+    mov     x3, x21
+    bl      verify_root_signature
+    cbnz    x0, 7f
+    cbz     x1, 5f
+3:
+.if FORK < FORK_ELECTRA
+    LDQ     x9, x19, BeaconState_eth1_data + Eth1Data_deposit_count     /* deposits the block would need */
+    LDQ     x10, x19, BeaconState_eth1_deposit_index
+    cmp     x9, x10
+    b.hi    6f
+.elseif FORK == FORK_ELECTRA
+    LDQ     x9, x19, BeaconState_eth1_data + Eth1Data_deposit_count     /* get_eth1_pending_deposit_count */
+    LDQ     x11, x19, BeaconState_deposit_requests_start_index
+    cmp     x9, x11
+    csel    x9, x9, x11, lo
+    LDQ     x10, x19, BeaconState_eth1_deposit_index
+    cmp     x10, x9
+    b.lo    6f
+.endif
+    mov     x0, #LANTERN_OK
+7:  LEAVE 112
+5:  mov     x0, #LANTERN_INVALID_RANDAO_REVEAL
+    LEAVE 112
+6:  mov     x0, #LANTERN_INVALID_DEPOSITS
+    LEAVE 112
+9:  mov     x0, #LANTERN_BUFFER_TOO_SMALL
+    LEAVE 112
+SPEC_END node_produce_check
+
+.if FORK >= FORK_BELLATRIX
+/* (json, scratch, out, fault): node.md, lantern_node_payload_result. */
+SPEC_FUNCTION node_payload_result
+    FRAME 0
+    mov     x4, x3
+    mov     x3, x2
+    mov     x2, x1
+    mov     x1, x0
+.if FORK == FORK_BELLATRIX
+    ADDRESS x0, lantern_type_ExecutionPayload
+.else
+    ADDRESS x0, lantern_type_GetPayloadResult
+.endif
+    CALL_GLOBAL lantern_engine_json_decode
+    UNFRAME 0
+SPEC_END node_payload_result
+.endif
+
+/*
+ * (state, entry, draft, arg, scratch): node.md, lantern_node_produce_fold. x19 state, x20 the
+ * entry's bytes, x21 their count, x22 the draft, x23 arg, x24 scratch, x25 the topic, x26 the
+ * entry's fork, x27 an aggregate, x28 the place. Locals: L data, L+8 signature, L+16 length,
+ * L+24 the committee index, L+32 the list of two signatures, L+40 the parent root (32).
+ */
+SPEC_FUNCTION node_produce_fold
+    ENTER 96
+    mov     x19, x0
+    ldp     x9, x21, [x1, #8]
+    add     x20, x1, x9
+    ldr     x9, [x2, #8]
+    add     x22, x2, x9
+    mov     x23, x3
+    mov     x24, x4
+    and     x25, x23, #0xff
+    ubfx    x26, x23, #8, #8
+    cmp     x25, #GOSSIP_BEACON_ATTESTATION
+    b.eq    100f
+.if FORK >= FORK_ALTAIR
+    cmp     x25, #GOSSIP_SYNC_COMMITTEE
+    b.eq    200f
+.endif
+    mov     x10, #MAX_VOLUNTARY_EXITS       /* an operation: a record, while its kind has room */
+    cmp     x25, #GOSSIP_VOLUNTARY_EXIT
+    b.eq    1f
+    mov     x10, #MAX_PROPOSER_SLASHINGS
+    cmp     x25, #GOSSIP_PROPOSER_SLASHING
+    b.eq    1f
+.if FORK >= FORK_CAPELLA
+    mov     x10, #MAX_BLS_TO_EXECUTION_CHANGES
+    cmp     x25, #GOSSIP_BLS_TO_EXECUTION_CHANGE
+    b.eq    1f
+.endif
+    cmp     x25, #GOSSIP_ATTESTER_SLASHING
+    b.ne    8f
+    cmp     x26, #FORK_ELECTRA              /* an attester slashing of the fork's type */
+.if FORK >= FORK_ELECTRA
+    b.lo    8f
+    mov     x10, #MAX_ATTESTER_SLASHINGS_ELECTRA
+.else
+    b.hs    8f
+    mov     x10, #MAX_ATTESTER_SLASHINGS
+.endif
+1:  ldr     x11, [x22, #ProduceDraft_ops]
+    ADDQ    x12, x22, PRODUCE_DRAFT_OPS
+    add     x13, x12, x11                   /* the end of the records */
+    mov     x14, #0
+2:  cmp     x12, x13                        /* the records of the topic */
+    b.hs    3f
+    ldp     x9, x15, [x12]
+    cmp     x9, x25
+    cinc    x14, x14, eq
+    add     x15, x15, #(16 + 7)
+    and     x15, x15, #~7
+    add     x12, x12, x15
+    b       2b
+3:  cmp     x14, x10
+    b.hs    8f
+    cmp     x25, #GOSSIP_ATTESTER_SLASHING  /* the clashes, with the kinds folded before */
+    b.ne    4f
+    mov     x0, x20
+    mov     x1, x21
+    ADDQ    x2, x22, PRODUCE_DRAFT_OPS
+    mov     x3, x13
+    bl      produce_takes_slashing
+    cbz     x0, 8f
+4:  cmp     x25, #GOSSIP_VOLUNTARY_EXIT
+    b.ne    5f
+    ldr     x0, [x20, #8]
+    ADDQ    x1, x22, PRODUCE_DRAFT_OPS
+    ldr     x2, [x22, #ProduceDraft_ops]
+    add     x2, x1, x2
+    bl      produce_slashed
+    cbnz    x0, 8f
+5:  ldr     x11, [x22, #ProduceDraft_ops]
+    ADDQ    x12, x22, PRODUCE_DRAFT_OPS
+    add     x13, x12, x11
+    add     x9, x21, #(16 + 7)
+    and     x9, x9, #~7
+    add     x10, x11, x9
+    MOVQ    x14, PRODUCE_DRAFT_OPS_ROOM
+    cmp     x10, x14
+    b.hi    8f
+    stp     x25, x21, [x13]
+    str     x10, [x22, #ProduceDraft_ops]
+    add     x0, x13, #16
+    mov     x1, x20
+    mov     x2, x21
+    bl      lantern_copy
+    mov     x0, #LANTERN_OK
+    LEAVE 96
+8:  mov     x0, #LANTERN_INVALID_ENCODING   /* left out */
+    LEAVE 96
+9:  mov     x0, #LANTERN_BUFFER_TOO_SMALL
+    LEAVE 96
+
+    /* An attestation of the fork's type: its data, signature, committee, length and place. */
+100: cmp    x26, #FORK_ELECTRA
+.if FORK >= FORK_ELECTRA
+    b.lo    8b
+    cmp     x21, #240                       /* a SingleAttestation: committee_index 0, data at 16, signature at 144 */
+    b.ne    8b
+    add     x9, x20, #16
+    add     x10, x20, #144
+    stp     x9, x10, [sp, #L]
+    ldr     x9, [x20]
+    str     x9, [sp, #(L + 24)]
+    lsr     x9, x23, #16                    /* member: the place, + 2^16 x the length */
+    and     x28, x9, #0xffff
+    lsr     x9, x9, #16
+    str     x9, [sp, #(L + 16)]
+    ldr     x9, [x20, #(16 + 8)]            /* data.index 0 */
+    cbnz    x9, 8b
+.else
+    b.hs    8b
+    cmp     x21, #(228 + 1)                 /* an Attestation: offset 228, data at 4, signature at 132, its bits */
+    b.lo    8b
+    MOVQ    x11, 228 + MAX_VALIDATORS_PER_COMMITTEE / 8 + 1
+    cmp     x21, x11
+    b.hi    8b
+    ldr     w11, [x20]
+    cmp     x11, #228
+    b.ne    8b
+    add     x9, x20, #4
+    add     x10, x20, #132
+    stp     x9, x10, [sp, #L]
+    ldr     x9, [x20, #(4 + 8)]
+    str     x9, [sp, #(L + 24)]
+    add     x1, x20, #228
+    sub     x2, x21, #229                   /* the last byte: its highest bit is the length's */
+    ldrb    w3, [x1, x2]
+    cbz     w3, 8b
+    clz     w3, w3
+    mov     w4, #31
+    sub     w3, w4, w3
+    add     x14, x3, x2, lsl #3
+    str     x14, [sp, #(L + 16)]
+    mov     x28, #0                         /* the place: the first bit set */
+101: cmp    x28, x14
+    b.hs    8b
+    lsr     x3, x28, #3
+    ldrb    w3, [x1, x3]
+    and     x4, x28, #7
+    lsr     w3, w3, w4
+    tbnz    w3, #0, 102f
+    add     x28, x28, #1
+    b       101b
+102:
+.endif
+    ldr     x14, [sp, #(L + 16)]
+    MOVQ    x9, MAX_VALIDATORS_PER_COMMITTEE
+    cmp     x14, x9
+    b.hi    8b
+    cmp     x28, x14
+    b.hs    8b
+    ldr     x12, [sp, #L]                   /* process_attestation's checks of slot, target and source */
+    ldr     x13, [x12]                      /* data.slot */
+    ldr     x14, [x12, #88]                 /* target.epoch */
+    LDQ     x15, x19, BeaconState_slot
+    mov     x9, #SLOTS_PER_EPOCH
+    udiv    x10, x15, x9                    /* the current epoch */
+    udiv    x11, x13, x9
+    cmp     x11, x14
+    b.ne    8b
+    cmp     x14, x10
+    b.eq    103f
+    sub     x11, x10, #1
+    cbz     x10, 8b
+    cmp     x14, x11
+    b.ne    8b
+103: add    x11, x13, #MIN_ATTESTATION_INCLUSION_DELAY
+    cmp     x11, x15
+    b.hi    8b
+.if FORK < FORK_DENEB
+    add     x11, x13, #SLOTS_PER_EPOCH
+    cmp     x15, x11
+    b.hi    8b
+.endif
+    ADDQ    x11, x19, BeaconState_current_justified_checkpoint
+    cmp     x14, x10
+    b.eq    104f
+    ADDQ    x11, x19, BeaconState_previous_justified_checkpoint
+104: add    x12, x12, #48                   /* source: epoch, root */
+    ldr     x13, [x12]
+    ldr     x9, [x11]
+    cmp     x13, x9
+    b.ne    8b
+    ldp     x13, x9, [x12, #8]
+    ldp     x10, x15, [x11, #8]
+    cmp     x13, x10
+    ccmp    x9, x15, #0, eq
+    b.ne    8b
+    ldp     x13, x9, [x12, #24]
+    ldp     x10, x15, [x11, #24]
+    cmp     x13, x10
+    ccmp    x9, x15, #0, eq
+    b.ne    8b
+    ADDQ    x27, x22, PRODUCE_DRAFT_AGGREGATES  /* its aggregate: of the same data and committee */
+    ldr     x10, [x22, #ProduceDraft_aggregates]
+    mov     x11, #0
+105: cmp    x11, x10
+    b.hs    110f
+    ldr     x9, [x27, #DraftAggregate_committee_index]
+    ldr     x12, [sp, #(L + 24)]
+    cmp     x9, x12
+    b.ne    107f
+    ldr     x1, [sp, #L]
+    mov     x2, #0
+106: ldr    x9, [x27, x2]
+    ldr     x12, [x1, x2]
+    cmp     x9, x12
+    b.ne    107f
+    add     x2, x2, #8
+    cmp     x2, #128
+    b.lo    106b
+    b       120f
+107: add    x27, x27, #DraftAggregate__mem
+    add     x11, x11, #1
+    b       105b
+110: MOVQ   x9, PRODUCE_DRAFT_AGGREGATE_COUNT  /* a new aggregate: its data, committee, length, order, signature */
+    cmp     x10, x9
+    b.hs    8b
+    add     x9, x10, #1
+    str     x9, [x22, #ProduceDraft_aggregates]
+    mov     x0, x27
+    ldr     x1, [sp, #L]
+    mov     x2, #128
+    bl      lantern_copy
+    ldr     x9, [sp, #(L + 24)]
+    str     x9, [x27, #DraftAggregate_committee_index]
+    ldr     x9, [sp, #(L + 16)]
+    str     x9, [x27, #DraftAggregate_length]
+    ldr     x9, [x22, #ProduceDraft_aggregates]
+    sub     x9, x9, #1
+    str     x9, [x27, #DraftAggregate_order]
+    ADDQ    x0, x27, DraftAggregate_signature
+    ldr     x1, [sp, #(L + 8)]
+    mov     x2, #96
+    bl      lantern_copy
+    b       130f
+120: ldr    x9, [x27, #DraftAggregate_length]  /* the same length, a place not taken, the signatures added */
+    ldr     x10, [sp, #(L + 16)]
+    cmp     x9, x10
+    b.ne    8b
+    add     x11, x27, #DraftAggregate_bits
+    lsr     x12, x28, #3
+    ldrb    w12, [x11, x12]
+    and     x13, x28, #7
+    lsr     w12, w12, w13
+    tbnz    w12, #0, 8b
+    ADDQ    x0, x27, DraftAggregate_signature
+    ldr     x1, [sp, #(L + 8)]
+    mov     x2, x24
+    bl      produce_add_signature
+    cmp     x0, #LANTERN_BUFFER_TOO_SMALL
+    b.eq    9b
+    cbnz    x0, 8b
+130: add    x11, x27, #DraftAggregate_bits     /* its place's bit */
+    lsr     x12, x28, #3
+    ldrb    w13, [x11, x12]
+    and     x14, x28, #7
+    mov     x10, #1
+    lsl     x10, x10, x14
+    orr     w13, w13, w10
+    strb    w13, [x11, x12]
+    mov     x0, #LANTERN_OK
+    LEAVE 96
+
+.if FORK >= FORK_ALTAIR
+    /*
+     * A SyncCommitteeMessage of the state's slot - 1 and the block's parent root: each place of its
+     * validator's public key in the state's current_sync_committee not set yet, its signature added.
+     */
+200: cmp    x21, #144
+    b.ne    8b
+    ldr     x9, [x20]
+    add     x9, x9, #1
+    LDQ     x10, x19, BeaconState_slot
+    cmp     x9, x10
+    b.ne    8b
+    ADDRESS x0, lantern_type_BeaconBlockHeader  /* the parent root: hash_tree_root(state.latest_block_header) */
+    ADDQ    x1, x19, BeaconState_latest_block_header
+    mov     x2, x24
+    add     x3, sp, #(L + 40)
+    CALL_GLOBAL ssz_hash_tree_root
+    cbnz    x0, 9b
+    ldp     x9, x10, [x20, #8]
+    ldp     x11, x12, [sp, #(L + 40)]
+    cmp     x9, x11
+    ccmp    x10, x12, #0, eq
+    b.ne    8b
+    ldp     x9, x10, [x20, #24]
+    ldp     x11, x12, [sp, #(L + 56)]
+    cmp     x9, x11
+    ccmp    x10, x12, #0, eq
+    b.ne    8b
+    ldr     x9, [x20, #40]                  /* its validator's public key */
+    PART    x10, x11, x19, BeaconState_validators
+    cmp     x9, x11
+    b.hs    8b
+    add     x27, x10, x9, lsl #7
+    add     x27, x27, #Validator_pubkey
+    ADDQ    x26, x19, BeaconState_current_sync_committee + SyncCommittee_pubkeys
+    mov     x28, #0
+201: cmp    x28, #SYNC_COMMITTEE_SIZE
+    b.hs    209f
+    mov     x10, #48
+    madd    x10, x28, x10, x26
+    mov     x11, #0
+202: ldr    x12, [x10, x11]
+    ldr     x13, [x27, x11]
+    cmp     x12, x13
+    b.ne    208f
+    add     x11, x11, #8
+    cmp     x11, #48
+    b.lo    202b
+    add     x11, x22, #ProduceDraft_sync_bits   /* a place: set, the signature added */
+    lsr     x12, x28, #3
+    ldrb    w13, [x11, x12]
+    and     x14, x28, #7
+    lsr     w15, w13, w14
+    tbnz    w15, #0, 208f
+    mov     x10, #1
+    lsl     x10, x10, x14
+    orr     w13, w13, w10
+    strb    w13, [x11, x12]
+    ldr     x9, [x22, #ProduceDraft_sync_set]
+    cbnz    x9, 203f
+    mov     x9, #1
+    str     x9, [x22, #ProduceDraft_sync_set]
+    ADDQ    x0, x22, ProduceDraft_sync_signature
+    add     x1, x20, #48
+    mov     x2, #96
+    bl      lantern_copy
+    b       208f
+203: ADDQ   x0, x22, ProduceDraft_sync_signature
+    add     x1, x20, #48
+    mov     x2, x24
+    bl      produce_add_signature
+    cmp     x0, #LANTERN_BUFFER_TOO_SMALL
+    b.eq    9b
+208: add    x28, x28, #1
+    b       201b
+209: mov    x0, #LANTERN_OK
+    LEAVE 96
+.endif
+SPEC_END node_produce_fold
+
+/*
+ * L1: the signature x1 added to the aggregate x0 with crypto_bls_aggregate, through a list of the
+ * two at the end of scratch x2: x0 = LANTERN_OK, a status of crypto_bls_aggregate, or
+ * LANTERN_BUFFER_TOO_SMALL. Locals: L the aggregate, L+8 the signature, L+16 the list.
+ */
+LOCAL_FUNCTION produce_add_signature
+    FRAME 32
+    stp     x0, x1, [sp, #16]
+    ldr     x10, [x2]
+    cmp     x10, #(24 + 2 * 96 + 8)
+    b.lo    9f
+    sub     x10, x10, #(24 + 2 * 96)
+    and     x10, x10, #~7
+    add     x10, x2, x10
+    str     x10, [sp, #32]
+    mov     x11, #(24 + 2 * 96)
+    mov     x12, #24
+    stp     x11, x12, [x10]
+    mov     x11, #2
+    str     x11, [x10, #16]
+    add     x0, x10, #24
+    ldr     x1, [sp, #16]
+    mov     x2, #96
+    bl      lantern_copy
+    ldr     x10, [sp, #32]
+    add     x0, x10, #(24 + 96)
+    ldr     x1, [sp, #24]
+    mov     x2, #96
+    bl      lantern_copy
+    ldr     x0, [sp, #32]
+    ldr     x1, [sp, #16]
+    CALL_GLOBAL crypto_bls_aggregate
+    UNFRAME 32
+9:  mov     x0, #LANTERN_BUFFER_TOO_SMALL
+    UNFRAME 32
+END_FUNCTION produce_add_signature
+
+/* ---------------------------------------------------------------- produceBlockV3: the block */
+
+.if Eth1Data_block_hash != 40 || Eth1Data__mem != 72
+.error "node_produce_block copies Eth1Data as its 72 SSZ bytes"
+.endif
+.set PB_FIXED, 84                               /* BeaconBlock: slot, proposer_index, parent_root, state_root, the body's offset */
+.set PB_SYNC, 220                               /* the body's offsets: proposer_slashings at 200 to voluntary_exits at 216 */
+.if FORK >= FORK_ALTAIR
+.set PB_PAYLOAD, PB_SYNC + SYNC_COMMITTEE_SIZE / 8 + 96
+.else
+.set PB_PAYLOAD, PB_SYNC
+.endif
+.if FORK >= FORK_BELLATRIX
+.set PB_BLS, PB_PAYLOAD + 4
+.else
+.set PB_BLS, PB_PAYLOAD
+.endif
+.if FORK >= FORK_CAPELLA
+.set PB_COMMITMENTS, PB_BLS + 4
+.else
+.set PB_COMMITMENTS, PB_BLS
+.endif
+.if FORK >= FORK_DENEB
+.set PB_REQUESTS, PB_COMMITMENTS + 4
+.else
+.set PB_REQUESTS, PB_COMMITMENTS
+.endif
+.if FORK >= FORK_ELECTRA
+.set PB_BODY_FIXED, PB_REQUESTS + 4
+.set PB_MAX_ATTESTATIONS, MAX_ATTESTATIONS_ELECTRA
+.else
+.set PB_BODY_FIXED, PB_REQUESTS
+.set PB_MAX_ATTESTATIONS, MAX_ATTESTATIONS
+.endif
+
+/* The offset of the body's field at pos: the write position x24 from the body x26. Uses x9. */
+.macro PB_OFFSET pos
+    sub     x9, x24, x26
+    str     w9, [x26, #\pos]
+.endm
+
+/*
+ * (state, draft, params, scratch, out): node.md, lantern_node_produce_block. x19 state, x20 the
+ * draft, x21 params, x22 scratch, x23 out, x24 the write position, x25 the block, x26 the body,
+ * x27 and x28 work. Locals: L proposer, L+8 the result's bytes, L+16 their count, L+24 the
+ * payload, L+32 its count, L+40 the bundle, L+48 its count, L+56 balance before, L+64 1, L+72 a
+ * Result, L+80 the scratch size, L+88 a ByteList view of the request lists (electra), L+256 24
+ * bytes kept aside.
+ */
+SPEC_FUNCTION node_produce_block
+    ENTER 288
+    mov     x19, x0
+    ldr     x9, [x1, #8]
+    add     x20, x1, x9
+    mov     x21, x2
+    mov     x22, x3
+    mov     x23, x4
+    ldr     x9, [x22]
+    str     x9, [sp, #(L + 80)]
+    mov     x9, #1
+    str     x9, [sp, #(L + 64)]
+    ldp     x9, x10, [x23]                  /* out: the block from offset 24, as large as its room */
+    mov     x11, #24
+    str     x11, [x23, #8]
+    str     xzr, [x23, #16]
+    add     x25, x23, #24
+    mov     x0, x19                         /* the proposer */
+.if FORK >= FORK_FULU
+    add     x1, sp, #L
+    bl      lantern_get_beacon_proposer_index
+.else
+    mov     x1, x22
+    add     x2, sp, #L
+    bl      lantern_get_beacon_proposer_index
+    ldr     x9, [sp, #(L + 80)]
+    str     x9, [x22]
+.endif
+    cbnz    x0, 99f
+    ldr     x9, [sp, #L]                    /* its balance before */
+    PART    x10, x11, x19, BeaconState_balances
+    cmp     x9, x11
+    b.hs    97f
+    ldr     x10, [x10, x9, lsl #3]
+    str     x10, [sp, #(L + 56)]
+    stp     xzr, xzr, [sp, #(L + 8)]        /* the engine's result: the payload, and from deneb the bundle */
+    stp     xzr, xzr, [sp, #(L + 24)]
+    stp     xzr, xzr, [sp, #(L + 40)]
+    ldr     x1, [x21, #16]
+    cbz     x1, 5f
+    ldp     x9, x10, [x1, #8]
+    add     x9, x1, x9
+    stp     x9, x10, [sp, #(L + 8)]
+.if FORK == FORK_BELLATRIX
+    stp     x9, x10, [sp, #(L + 24)]        /* the result is the payload */
+.else
+    cmp     x10, #(4 + 32)                  /* GetPayloadResult: the payload's offset, block_value at 4 */
+    b.lo    96f
+    ldr     w11, [x9]
+.if FORK >= FORK_DENEB
+    ldr     w12, [x9, #36]                  /* blobs_bundle's offset */
+.else
+    mov     x12, x10
+.endif
+    cmp     x11, x12
+    b.hi    96f
+    cmp     x12, x10
+    b.hi    96f
+    add     x13, x9, x11
+    sub     x14, x12, x11
+    stp     x13, x14, [sp, #(L + 24)]
+.if FORK >= FORK_DENEB
+.if FORK >= FORK_ELECTRA
+    ldr     w13, [x9, #41]                  /* execution_requests' offset: the bundle up to it */
+.else
+    mov     x13, x10
+.endif
+    cmp     x12, x13
+    b.hi    96f
+    cmp     x13, x10
+    b.hi    96f
+    add     x14, x9, x12
+    sub     x15, x13, x12
+    stp     x14, x15, [sp, #(L + 40)]
+.endif
+.endif
+5:  ldp     x9, x10, [x23]                  /* room: the fixed parts of the block and the body */
+    MOVQ    x11, PB_FIXED + PB_BODY_FIXED + 24
+    cmp     x9, x11
+    b.lo    98f
+    ldr     x9, [x19, #BeaconState_slot]
+    str     x9, [x25]
+    ldr     x9, [sp, #L]
+    str     x9, [x25, #8]
+    ADDRESS x0, lantern_type_BeaconBlockHeader  /* parent_root: hash_tree_root(state.latest_block_header) */
+    ADDQ    x1, x19, BeaconState_latest_block_header
+    mov     x2, x22
+    add     x3, x25, #16
+    CALL_GLOBAL ssz_hash_tree_root
+    cbnz    x0, 99f
+    stp     xzr, xzr, [x25, #48]            /* state_root, written last */
+    stp     xzr, xzr, [x25, #64]
+    mov     w9, #PB_FIXED
+    str     w9, [x25, #80]
+    add     x26, x25, #PB_FIXED
+    ldr     x9, [x21]                       /* randao_reveal, eth1_data (an empty eth1 chain's vote), graffiti */
+    mov     x0, x26
+    mov     x1, x9
+    mov     x2, #96
+    bl      lantern_copy
+    add     x0, x26, #96
+    ADDQ    x1, x19, BeaconState_eth1_data
+    mov     x2, #72
+    bl      lantern_copy
+    add     x0, x26, #168
+    ldr     x9, [x21]
+    add     x1, x9, #96
+    mov     x2, #32
+    bl      lantern_copy
+.if FORK >= FORK_ALTAIR
+    add     x0, x26, #PB_SYNC               /* the draft's sync aggregate; with none, no bit and the point at infinity */
+    add     x1, x20, #ProduceDraft_sync_bits
+    mov     x2, #(SYNC_COMMITTEE_SIZE / 8 + 96)
+    bl      lantern_copy
+    ldr     x9, [x20, #ProduceDraft_sync_set]
+    cbnz    x9, 6f
+    add     x0, x26, #(PB_SYNC + SYNC_COMMITTEE_SIZE / 8)
+    mov     x1, #96
+    bl      lantern_zero
+    mov     w9, #0xc0
+    strb    w9, [x26, #(PB_SYNC + SYNC_COMMITTEE_SIZE / 8)]
+6:
+.endif
+    add     x24, x26, #PB_BODY_FIXED
+    /* proposer_slashings, attester_slashings: the draft's records, which the folds kept free of clashes */
+    PB_OFFSET 200
+    mov     x0, #GOSSIP_PROPOSER_SLASHING
+    mov     x1, x24
+    bl      produce_records
+    mov     x24, x1
+    cbnz    x0, 98f
+    PB_OFFSET 204
+    mov     x0, x24
+    bl      produce_attester_slashings
+    mov     x24, x1
+    cbnz    x0, 98f
+    /* attestations: the draft's aggregates */
+    PB_OFFSET 208
+    add     x0, sp, #L
+    mov     x1, x24
+    bl      produce_attestations
+    mov     x24, x1
+    cmp     x0, #LANTERN_BUFFER_TOO_SMALL
+    b.eq    98f
+    cbnz    x0, 99f
+    /* deposits: none; voluntary_exits */
+    PB_OFFSET 212
+    PB_OFFSET 216
+    mov     x0, #GOSSIP_VOLUNTARY_EXIT
+    mov     x1, x24
+    bl      produce_records
+    mov     x24, x1
+    cbnz    x0, 98f
+.if FORK >= FORK_BELLATRIX
+    PB_OFFSET PB_PAYLOAD                    /* the payload, the empty one before the merge */
+    ldp     x1, x2, [sp, #(L + 24)]
+    cbnz    x1, 7f
+.if FORK == FORK_BELLATRIX
+    mov     x0, x24                         /* ExecutionPayload.empty(): the offsets of extra_data and transactions at 508 */
+    mov     x1, #508
+    bl      produce_room
+    cbnz    x0, 98f
+    mov     x0, x24
+    mov     x1, #508
+    bl      lantern_zero
+    mov     w9, #508
+    str     w9, [x24, #436]
+    str     w9, [x24, #504]
+    add     x24, x24, #508
+    b       71f
+.else
+    b       96f
+.endif
+7:  mov     x1, x2
+    mov     x0, x24
+    bl      produce_room
+    cbnz    x0, 98f
+    mov     x0, x24
+    ldp     x1, x2, [sp, #(L + 24)]
+    add     x24, x24, x2
+    bl      lantern_copy
+71:
+.endif
+.if FORK >= FORK_CAPELLA
+    PB_OFFSET PB_BLS
+    mov     x0, #GOSSIP_BLS_TO_EXECUTION_CHANGE
+    mov     x1, x24
+    bl      produce_records
+    mov     x24, x1
+    cbnz    x0, 98f
+.endif
+.if FORK >= FORK_DENEB
+    PB_OFFSET PB_COMMITMENTS                /* the bundle's commitments */
+    ldp     x9, x10, [sp, #(L + 40)]
+    cmp     x10, #12
+    b.lo    96f
+    ldp     w11, w12, [x9]
+    cmp     x11, x12
+    b.hi    96f
+    cmp     x12, x10
+    b.hi    96f
+    sub     x0, x12, x11
+    add     x1, x9, x11
+    str     x1, [sp, #(L + 8)]
+    str     x0, [sp, #(L + 16)]
+    mov     x1, x0
+    mov     x0, x24
+    bl      produce_room
+    cbnz    x0, 98f
+    mov     x0, x24
+    ldp     x1, x2, [sp, #(L + 8)]
+    add     x24, x24, x2
+    bl      lantern_copy
+.endif
+.if FORK >= FORK_ELECTRA
+    PB_OFFSET PB_REQUESTS                   /* lantern_get_execution_requests of the result's request lists */
+    ldr     x9, [x21, #16]
+    ldp     x10, x11, [x9, #8]
+    add     x10, x9, x10
+    ldr     w12, [x10, #41]
+    cmp     x12, x11
+    b.hi    96f
+    add     x13, sp, #(L + 112)             /* a ByteList view of them in the locals */
+    mov     x14, x12                        /* its offset: from the view to the list */
+    add     x15, x10, x12
+    sub     x14, x15, x13
+    sub     x15, x11, x12
+    add     x16, x14, x15
+    stp     x16, x14, [x13, #-24]
+    str     x15, [x13, #-8]
+    ldr     x9, [x23]                       /* the requests' room: the rest of out, as a ByteList at the write position less 24 */
+    sub     x9, x9, #24
+    add     x10, x23, x9
+    ldp     x11, x12, [x24, #-24]
+    stp     x11, x12, [sp, #(L + 256)]
+    ldr     x11, [x24, #-8]
+    str     x11, [sp, #(L + 272)]
+    sub     x0, x24, #24
+    sub     x9, x10, x0
+    mov     x11, #24
+    stp     x9, x11, [x0]
+    str     xzr, [x0, #16]
+    sub     x0, x13, #24
+    sub     x1, x24, #24
+    bl      lantern_get_execution_requests
+    ldr     x12, [x24, #-8]                 /* the bytes written; the 24 bytes before them back */
+    ldp     x9, x10, [sp, #(L + 256)]
+    stp     x9, x10, [x24, #-24]
+    ldr     x9, [sp, #(L + 272)]
+    str     x9, [x24, #-8]
+    cmp     x0, #LANTERN_BUFFER_TOO_SMALL
+    b.eq    98f
+    cbnz    x0, 96f
+    add     x24, x24, x12
+.endif
+    sub     x9, x24, x25                    /* the block's bytes */
+    str     x9, [x23, #16]
+    ADDRESS x0, lantern_type_BeaconBlock    /* the state root: process_block of the decoded block, then the state's root */
+    mov     x1, x23
+    mov     x2, x22
+    bl      node_decode
+    cmp     x0, #1
+    b.eq    98f
+    b.hi    96f
+    mov     x0, x19
+    add     x2, sp, #(L + 64)
+    ldr     x3, [x21, #8]
+    mov     x4, x22
+    add     x5, sp, #(L + 72)
+    bl      lantern_process_block
+    ldr     x9, [sp, #(L + 80)]
+    str     x9, [x22]
+    cbnz    x0, 99f
+    ldr     x0, [sp, #(L + 72)]
+    cbnz    x0, 99f
+    mov     x0, x19
+    mov     x1, #0
+    mov     x2, x22
+    add     x3, x25, #48
+    bl      lantern_state_root
+    cbnz    x0, 99f
+    ldr     x9, [sp, #L]                    /* consensus_block_value: the balance after less before, plus the proposer's withdrawals */
+    PART    x10, x11, x19, BeaconState_balances
+    ldr     x10, [x10, x9, lsl #3]
+    ldr     x11, [sp, #(L + 56)]
+    sub     x12, x10, x11
+.if FORK >= FORK_CAPELLA
+    ldp     x13, x14, [sp, #(L + 24)]       /* the payload's withdrawals: from the offset at 508, 44 bytes each */
+    cbz     x13, 81f
+    ldr     w15, [x13, #508]
+    cmp     x15, x14
+    b.hi    81f
+80: add     x16, x15, #44
+    cmp     x16, x14
+    b.hi    81f
+    add     x16, x13, x15
+    ldr     x10, [x16, #8]
+    cmp     x10, x9
+    b.ne    801f
+    ldr     x10, [x16, #36]
+    add     x12, x12, x10
+801: add    x15, x15, #44
+    b       80b
+81:
+.endif
+    cmp     x12, #0
+    csel    x12, xzr, x12, lt
+    ldr     x9, [x21, #32]
+    str     x12, [x9]
+    ldr     x9, [x21, #24]                  /* execution_payload_value: the result's block_value, else 0 */
+    stp     xzr, xzr, [x9]
+    stp     xzr, xzr, [x9, #16]
+.if FORK >= FORK_CAPELLA
+    ldr     x1, [sp, #(L + 8)]
+    cbz     x1, 82f
+    ldr     x9, [x21, #16]
+    ldp     x10, x11, [x9, #8]
+    add     x1, x9, x10
+    add     x1, x1, #4
+    ldr     x0, [x21, #24]
+    mov     x2, #32
+    bl      lantern_copy
+82:
+.endif
+.if FORK >= FORK_DENEB
+    add     x0, sp, #L                      /* BlockContents: the block, the bundle's proofs and blobs */
+    bl      produce_contents
+    cbnz    x0, 98f
+.endif
+    mov     x0, #LANTERN_OK
+99: LEAVE 288
+96: mov     x0, #LANTERN_INVALID_ENCODING
+    LEAVE 288
+97: mov     x0, #LANTERN_INVALID_VALIDATOR_INDEX
+    LEAVE 288
+98: ldr     x9, [sp, #(L + 80)]
+    str     x9, [x22]
+    mov     x0, #LANTERN_BUFFER_TOO_SMALL
+    LEAVE 288
+SPEC_END node_produce_block
+
+/* L0: x0 = 0 when x1 bytes from x0 fit in the ByteList x23, else 1. Uses x16, x17. */
+LOCAL_FUNCTION produce_room
+    UNWIND_END_PROLOGUE
+    ldr     x16, [x23]
+    add     x16, x23, x16
+    add     x17, x0, x1
+    cmp     x17, x16
+    cset    x0, hi
+    ret
+END_FUNCTION produce_room
+
+/*
+ * L0: (index x0, record x1) -> x0 = 1 when the index is in both attestations of the attester
+ * slashing whose SSZ bytes follow the draft record x1, else 0. Uses x7, x9-x15.
+ */
+LOCAL_FUNCTION produce_in_slashing
+    UNWIND_END_PROLOGUE
+    ldr     x9, [x1, #8]                    /* its length */
+    add     x1, x1, #16
+    cmp     x9, #8
+    b.lo    9f
+    ldp     w10, w11, [x1]                  /* the attestations: [o1, o2), then [o2, end) */
+    mov     x12, x10
+    mov     x13, x11
+    mov     x7, #0
+1:  cmp     x12, x13
+    b.hs    9f
+    add     x14, x1, x12
+    ldr     w15, [x14]                      /* its indices, from its offset */
+    add     x15, x12, x15
+2:  add     x14, x15, #8
+    cmp     x14, x13
+    b.hi    9f
+    ldr     x14, [x1, x15]
+    cmp     x14, x0
+    b.eq    3f
+    add     x15, x15, #8
+    b       2b
+3:  cbnz    x7, 4f                          /* in the first: then the second */
+    mov     x7, #1
+    mov     x12, x11
+    mov     x13, x9
+    b       1b
+4:  mov     x0, #1
+    ret
+9:  mov     x0, #0
+    ret
+END_FUNCTION produce_in_slashing
+
+/*
+ * L2: (topic x0, write position x1) -> x0 = 0, or 1 for a short out; x1 = the write position. The
+ * SSZ bytes of the draft's records of the topic in their order, back to back. x21 a record, x22
+ * the records' end, x25 the topic, x27 the position.
+ */
+LOCAL_FUNCTION produce_records
+    ENTER 0
+    mov     x25, x0
+    mov     x27, x1
+    ldr     x9, [x20, #ProduceDraft_ops]
+    ADDQ    x21, x20, PRODUCE_DRAFT_OPS
+    add     x22, x21, x9
+1:  cmp     x21, x22
+    b.hs    8f
+    ldp     x9, x1, [x21]
+    cmp     x9, x25
+    b.ne    5f
+    mov     x0, x27
+    bl      produce_room
+    cbnz    x0, 9f
+    mov     x0, x27
+    add     x1, x21, #16
+    ldr     x2, [x21, #8]
+    add     x27, x27, x2
+    bl      lantern_copy
+5:  ldr     x10, [x21, #8]
+    add     x10, x10, #(16 + 7)
+    and     x10, x10, #~7
+    add     x21, x21, x10
+    b       1b
+8:  mov     x0, #0
+    mov     x1, x27
+    LEAVE 0
+9:  mov     x0, #1
+    mov     x1, x27
+    LEAVE 0
+END_FUNCTION produce_records
+
+/*
+ * L2: (write position x0) -> x0 = 0, or 1 for a short out; x1 = the write position. The draft's
+ * attester slashing records as an SSZ list: their offsets, then their bytes. x21 a record, x22 the
+ * end, x25 their count, x26 the next offset, x27 the position, x28 the next offset's place.
+ */
+LOCAL_FUNCTION produce_attester_slashings
+    ENTER 0
+    mov     x27, x0
+    ldr     x9, [x20, #ProduceDraft_ops]
+    ADDQ    x21, x20, PRODUCE_DRAFT_OPS
+    add     x22, x21, x9
+    mov     x25, #0
+    mov     x9, x21
+1:  cmp     x9, x22
+    b.hs    2f
+    ldp     x10, x11, [x9]
+    cmp     x10, #GOSSIP_ATTESTER_SLASHING
+    cinc    x25, x25, eq
+    add     x11, x11, #(16 + 7)
+    and     x11, x11, #~7
+    add     x9, x9, x11
+    b       1b
+2:  lsl     x26, x25, #2                    /* the offsets, the first slashing after them */
+    mov     x0, x27
+    mov     x1, x26
+    bl      produce_room
+    cbnz    x0, 9f
+    mov     x28, x27
+    add     x27, x27, x26
+3:  cmp     x21, x22
+    b.hs    8f
+    ldp     x9, x10, [x21]
+    cmp     x9, #GOSSIP_ATTESTER_SLASHING
+    b.ne    4f
+    str     w26, [x28], #4
+    add     x26, x26, x10
+    mov     x0, x27
+    mov     x1, x10
+    bl      produce_room
+    cbnz    x0, 9f
+    mov     x0, x27
+    add     x1, x21, #16
+    ldr     x2, [x21, #8]
+    add     x27, x27, x2
+    bl      lantern_copy
+4:  ldr     x10, [x21, #8]
+    add     x10, x10, #(16 + 7)
+    and     x10, x10, #~7
+    add     x21, x21, x10
+    b       3b
+8:  mov     x0, #0
+    mov     x1, x27
+    LEAVE 0
+9:  mov     x0, #1
+    mov     x1, x27
+    LEAVE 0
+END_FUNCTION produce_attester_slashings
+
+/*
+ * L1: (index x0, records x1, their end x2) -> x0 = 1 when a proposer slashing record of [x1, x2)
+ * has the index as its proposer, or an attester slashing record has it in both attestations;
+ * else 0. x19 the index, x20 a record, x21 the end.
+ */
+LOCAL_FUNCTION produce_slashed
+    ENTER 0
+    mov     x19, x0
+    mov     x20, x1
+    mov     x21, x2
+1:  cmp     x20, x21
+    b.hs    8f
+    ldr     x9, [x20]
+    cmp     x9, #GOSSIP_PROPOSER_SLASHING
+    b.ne    2f
+    ldr     x10, [x20, #(16 + 8)]           /* signed_header_1.message.proposer_index */
+    cmp     x10, x19
+    b.eq    9f
+    b       3f
+2:  cmp     x9, #GOSSIP_ATTESTER_SLASHING
+    b.ne    3f
+    mov     x0, x19
+    mov     x1, x20
+    bl      produce_in_slashing
+    cbnz    x0, 9f
+3:  ldr     x10, [x20, #8]
+    add     x10, x10, #(16 + 7)
+    and     x10, x10, #~7
+    add     x20, x20, x10
+    b       1b
+8:  mov     x0, #0
+    LEAVE 0
+9:  mov     x0, #1
+    LEAVE 0
+END_FUNCTION produce_slashed
+
+/*
+ * L0: (the attester slashing's bytes x0, their count x1, records x2, their end x3) -> x0 = 1 when
+ * an index is in both attestations (whose indices are sorted, as is_valid_indexed_attestation
+ * holds them) and no proposer slashing record of [x2, x3) has it as its proposer; else 0. x4 a
+ * place in the first list, x5 its end, x6 a place in the second, x7 its end. Uses x9-x13.
+ */
+LOCAL_FUNCTION produce_takes_slashing
+    UNWIND_END_PROLOGUE
+    cmp     x1, #8
+    b.lo    8f
+    ldp     w9, w10, [x0]                   /* the attestations: [o1, o2), [o2, count) */
+    cmp     x9, x10
+    b.hi    8f
+    cmp     x10, x1
+    b.hi    8f
+    add     x11, x9, #228
+    cmp     x11, x10
+    b.hi    8f
+    add     x11, x10, #228
+    cmp     x11, x1
+    b.hi    8f
+    ldr     w11, [x0, x9]                   /* each one's indices: from its offset to its end */
+    add     x4, x9, x11
+    mov     x5, x10
+    ldr     w11, [x0, x10]
+    add     x6, x10, x11
+    mov     x7, x1
+1:  add     x9, x4, #8
+    cmp     x9, x5
+    b.hi    8f
+    add     x9, x6, #8
+    cmp     x9, x7
+    b.hi    8f
+    ldr     x9, [x0, x4]
+    ldr     x10, [x0, x6]
+    cmp     x9, x10
+    b.lo    2f
+    b.hi    3f
+    mov     x11, x2                         /* in both: a proposer slashing's proposer? */
+4:  cmp     x11, x3
+    b.hs    9f
+    ldp     x12, x13, [x11]
+    cmp     x12, #GOSSIP_PROPOSER_SLASHING
+    b.ne    5f
+    ldr     x12, [x11, #(16 + 8)]
+    cmp     x12, x9
+    b.eq    6f
+5:  add     x13, x13, #(16 + 7)
+    and     x13, x13, #~7
+    add     x11, x11, x13
+    b       4b
+6:  add     x6, x6, #8
+2:  add     x4, x4, #8
+    b       1b
+3:  add     x6, x6, #8
+    b       1b
+8:  mov     x0, #0
+    ret
+9:  mov     x0, #1
+    ret
+END_FUNCTION produce_takes_slashing
+
+.set PB_COMMITTEE_BITS, (MAX_COMMITTEES_PER_SLOT + 7) / 8
+/* An Attestation's fixed bytes: the bits' offset, data, signature, and from electra committee_bits */
+.if FORK >= FORK_ELECTRA
+.set PB_ATT_COMMITTEE, PB_COMMITTEE_BITS
+.else
+.set PB_ATT_COMMITTEE, 0
+.endif
+.set PB_ATT_FIXED, 228 + PB_ATT_COMMITTEE
+
+/* L0: x0 = 1 when the 128 bytes at x0 and x1 are equal, else 0. Uses x9-x12. */
+LOCAL_FUNCTION produce_same_data
+    UNWIND_END_PROLOGUE
+    mov     x9, #0
+1:  ldr     x10, [x0, x9]
+    ldr     x11, [x1, x9]
+    cmp     x10, x11
+    b.ne    2f
+    add     x9, x9, #8
+    cmp     x9, #128
+    b.lo    1b
+    mov     x0, #1
+    ret
+2:  mov     x0, #0
+    ret
+END_FUNCTION produce_same_data
+
+/*
+ * L2: (the block's locals x0, write position x1) -> x0 = 0, 1 for a short out or scratch, or a
+ * status of crypto_bls_aggregate; x1 = the write position. The draft's aggregates chosen by
+ * data.slot descending, then order, at most the fork's limit; before electra an Attestation of
+ * each, from electra one Attestation for each data of the aggregates of every committee
+ * (compute_on_chain_aggregate). The list: offsets, then the attestations. x21 the aggregates, x25
+ * their count, x26 the chosen indices (in scratch, after a flag byte for each aggregate), x27 the
+ * position, x28 the chosen count. Locals: L the scratch size, L+8 an index, L+16 the bits' cursor.
+ */
+LOCAL_FUNCTION produce_attestations
+    ENTER 32
+    mov     x27, x1
+    ldr     x25, [x20, #ProduceDraft_aggregates]
+    ADDQ    x21, x20, PRODUCE_DRAFT_AGGREGATES
+    ldr     x9, [x22]                       /* the flags and the chosen at the end of scratch */
+    str     x9, [sp, #L]
+    add     x10, x25, #(8 * PB_MAX_ATTESTATIONS + 7)
+    and     x10, x10, #~7
+    add     x11, x10, #1024
+    cmp     x9, x11
+    b.lo    97f
+    sub     x9, x9, x10
+    str     x9, [x22]
+    add     x26, x22, x9
+    mov     x0, x26
+    mov     x1, x25
+    bl      lantern_zero
+    add     x26, x26, x25                   /* the chosen indices after the flags */
+    add     x26, x26, #7
+    and     x26, x26, #~7
+    mov     x28, #0
+1:  cmp     x28, #PB_MAX_ATTESTATIONS       /* the next: of the highest slot, then the lowest order */
+    b.hs    3f
+    mov     x10, #-1
+    mov     x11, #0
+    mov     x12, #0                         /* the best's slot */
+2:  cmp     x11, x25
+    b.hs    21f
+    sub     x13, x26, x25                   /* its flag: the flags end where the chosen start, rounded */
+    ldr     x9, [sp, #L]
+    ldr     x14, [x22]
+    add     x14, x22, x14                   /* the flags */
+    ldrb    w15, [x14, x11]
+    cbnz    w15, 22f
+    mov     x13, #DraftAggregate__mem
+    madd    x13, x11, x13, x21
+    ldr     x14, [x13]                      /* data.slot */
+    cmn     x10, #1
+    b.eq    23f
+    cmp     x14, x12
+    b.ls    22f
+23: mov     x10, x11
+    mov     x12, x14
+22: add     x11, x11, #1
+    b       2b
+21: cmn     x10, #1
+    b.eq    3f
+    str     x10, [x26, x28, lsl #3]
+    add     x28, x28, #1
+    ldr     x14, [x22]                      /* chosen: its flag, from electra those of its data too */
+    add     x14, x22, x14
+    mov     w15, #1
+    strb    w15, [x14, x10]
+.if FORK >= FORK_ELECTRA
+    mov     x13, #DraftAggregate__mem
+    madd    x0, x10, x13, x21
+    str     x0, [sp, #(L + 8)]
+    mov     x11, #0
+24: cmp     x11, x25
+    b.hs    1b
+    mov     x13, #DraftAggregate__mem
+    madd    x1, x11, x13, x21
+    ldr     x0, [sp, #(L + 8)]
+    str     x11, [sp, #(L + 16)]
+    bl      produce_same_data
+    ldr     x11, [sp, #(L + 16)]
+    cbz     x0, 25f
+    ldr     x14, [x22]
+    add     x14, x22, x14
+    mov     w15, #1
+    strb    w15, [x14, x11]
+25: add     x11, x11, #1
+    b       24b
+.else
+    b       1b
+.endif
+3:  lsl     x9, x28, #2                     /* the offsets: the size of each attestation */
+    mov     x0, x27
+    mov     x1, x9
+    bl      produce_room
+    cbnz    x0, 98f
+    mov     x10, x9
+    mov     x11, #0
+4:  cmp     x11, x28
+    b.hs    5f
+    str     w10, [x27, x11, lsl #2]
+    ldr     x12, [x26, x11, lsl #3]
+    mov     x0, x12
+    bl      produce_att_bits
+    add     x13, x0, #(8 + 7)               /* the bits: as many as the length, and the end bit */
+    lsr     x13, x13, #3
+    add     x10, x10, x13
+    add     x10, x10, #(PB_ATT_FIXED)
+    add     x11, x11, #1
+    b       4b
+5:  add     x27, x27, x9
+    mov     x11, #0
+6:  cmp     x11, x28                        /* each attestation */
+    b.hs    8f
+    str     x11, [sp, #(L + 16)]
+    ldr     x12, [x26, x11, lsl #3]
+    mov     x13, #DraftAggregate__mem
+    madd    x24, x12, x13, x21              /* the chosen aggregate (the caller keeps its own position) */
+    mov     x0, x12
+    bl      produce_att_bits
+    add     x13, x0, #(8 + 7)
+    lsr     x13, x13, #3
+    add     x1, x13, #(PB_ATT_FIXED)
+    mov     x0, x27
+    bl      produce_room
+    cbnz    x0, 98f
+    mov     w9, #(PB_ATT_FIXED)
+    str     w9, [x27]
+    add     x0, x27, #4                     /* data */
+    mov     x1, x24
+    mov     x2, #128
+    bl      lantern_copy
+    add     x0, x27, #132                   /* signature: the first's */
+    ADDQ    x1, x24, DraftAggregate_signature
+    mov     x2, #96
+    bl      lantern_copy
+    add     x0, x27, #228                   /* from electra the committee bits; the aggregation bits, zero */
+    ldr     x0, [sp, #(L + 16)]
+    ldr     x0, [x26, x0, lsl #3]
+    bl      produce_att_bits
+    add     x1, x0, #(8 + 7)
+    lsr     x1, x1, #3
+    add     x1, x1, #(PB_ATT_COMMITTEE)
+    add     x0, x27, #228
+    bl      lantern_zero
+    str     xzr, [sp, #(L + 8)]             /* the bits' cursor */
+.if FORK >= FORK_ELECTRA
+    mov     x11, #0                         /* each committee in order: its aggregate of the data */
+61: cmp     x11, #MAX_COMMITTEES_PER_SLOT
+    b.hs    7f
+    mov     x12, #0
+62: cmp     x12, x25
+    b.hs    66f
+    mov     x13, #DraftAggregate__mem
+    madd    x13, x12, x13, x21
+    ldr     x14, [x13, #DraftAggregate_committee_index]
+    cmp     x14, x11
+    b.ne    65f
+    stp     x11, x12, [sp, #(L + 16)]
+    mov     x0, x24
+    mov     x1, x13
+    bl      produce_same_data
+    ldp     x11, x12, [sp, #(L + 16)]
+    cbz     x0, 65f
+    mov     x13, #DraftAggregate__mem
+    madd    x13, x12, x13, x21
+    lsr     x9, x11, #3                     /* its committee's bit */
+    and     x10, x11, #7
+    add     x14, x27, #228
+    ldrb    w15, [x14, x9]
+    mov     w16, #1
+    lsl     w16, w16, w10
+    orr     w15, w15, w16
+    strb    w15, [x14, x9]
+    cmp     x13, x24                        /* its signature, after the first's */
+    b.eq    63f
+    stp     x11, x12, [sp, #(L + 16)]
+    add     x0, x27, #132
+    ADDQ    x1, x13, DraftAggregate_signature
+    mov     x2, x22
+    bl      produce_add_signature
+    mov     x9, x0
+    ldp     x11, x12, [sp, #(L + 16)]
+    cmp     x9, #LANTERN_BUFFER_TOO_SMALL
+    b.eq    97f
+    cbnz    x9, 96f
+    mov     x13, #DraftAggregate__mem
+    madd    x13, x12, x13, x21
+63: add     x0, x27, #(228 + PB_COMMITTEE_BITS)  /* its bits at the cursor */
+    mov     x1, x13
+    ldr     x2, [sp, #(L + 8)]
+    bl      produce_copy_bits
+    str     x0, [sp, #(L + 8)]
+    b       66f
+65: add     x12, x12, #1
+    b       62b
+66: add     x11, x11, #1
+    b       61b
+.else
+    add     x0, x27, #228
+    mov     x1, x24
+    mov     x2, #0
+    bl      produce_copy_bits
+    str     x0, [sp, #(L + 8)]
+.endif
+7:  ldr     x9, [sp, #(L + 8)]              /* the end bit */
+    add     x10, x27, #(PB_ATT_FIXED)
+    lsr     x11, x9, #3
+    and     x12, x9, #7
+    ldrb    w13, [x10, x11]
+    mov     w14, #1
+    lsl     w14, w14, w12
+    orr     w13, w13, w14
+    strb    w13, [x10, x11]
+    add     x11, x11, #1
+    add     x27, x10, x11
+    ldr     x11, [sp, #(L + 16)]
+    add     x11, x11, #1
+    b       6b
+8:  ldr     x9, [sp, #L]
+    str     x9, [x22]
+    mov     x0, #0
+    mov     x1, x27
+    LEAVE 32
+96: ldr     x10, [sp, #L]
+    str     x10, [x22]
+    mov     x0, x9
+    mov     x1, x27
+    LEAVE 32
+97: ldr     x9, [sp, #L]
+    str     x9, [x22]
+98: mov     x0, #1
+    mov     x1, x27
+    LEAVE 32
+END_FUNCTION produce_attestations
+
+/*
+ * L0: (index x0) -> x0: the aggregation bits of the attestation of the draft's aggregate x0, x21
+ * the aggregates, x25 their count: its length; from electra the lengths of the aggregates of its
+ * data. Uses x1-x4, x13-x15: its callers keep x9-x12.
+ */
+LOCAL_FUNCTION produce_att_bits
+    UNWIND_END_PROLOGUE
+    mov     x13, #DraftAggregate__mem
+    madd    x14, x0, x13, x21
+.if FORK >= FORK_ELECTRA
+    mov     x0, #0
+    mov     x15, #0
+1:  cmp     x15, x25
+    b.hs    3f
+    madd    x1, x15, x13, x21
+    mov     x2, #0
+2:  ldr     x3, [x14, x2]
+    ldr     x4, [x1, x2]
+    cmp     x3, x4
+    b.ne    4f
+    add     x2, x2, #8
+    cmp     x2, #128
+    b.lo    2b
+    ldr     x3, [x1, #DraftAggregate_length]
+    add     x0, x0, x3
+4:  add     x15, x15, #1
+    b       1b
+3:  ret
+.else
+    ldr     x0, [x14, #DraftAggregate_length]
+    ret
+.endif
+END_FUNCTION produce_att_bits
+
+/* L0: (bits x0, aggregate x1, cursor x2) -> x0: the aggregate's length bits set at bit x2 of x0 on; the cursor after them. Uses x9-x15. */
+LOCAL_FUNCTION produce_copy_bits
+    UNWIND_END_PROLOGUE
+    ldr     x9, [x1, #DraftAggregate_length]
+    add     x10, x1, #DraftAggregate_bits
+    mov     x11, #0
+1:  cmp     x11, x9
+    b.hs    2f
+    lsr     x12, x11, #3
+    ldrb    w12, [x10, x12]
+    and     x13, x11, #7
+    lsr     w12, w12, w13
+    tbz     w12, #0, 3f
+    add     x13, x2, x11
+    lsr     x14, x13, #3
+    and     x15, x13, #7
+    ldrb    w12, [x0, x14]
+    mov     w13, #1
+    lsl     w13, w13, w15
+    orr     w12, w12, w13
+    strb    w12, [x0, x14]
+3:  add     x11, x11, #1
+    b       1b
+2:  add     x0, x2, x9
+    ret
+END_FUNCTION produce_copy_bits
+
+.if FORK >= FORK_DENEB
+/*
+ * L1: (the block's locals x0) -> x0 = 0, or 1 for a short out: out x23 holds the block from offset
+ * 24; it becomes the BlockContents: the block moved 12 bytes on, the three offsets, the bundle's
+ * proofs and blobs (the bundle at locals + 40, its bytes at + 48). Uses x1-x15.
+ */
+LOCAL_FUNCTION produce_contents
+    FRAME 32
+    ldp     x9, x10, [x0, #40]              /* the bundle: its offsets of commitments, proofs, blobs */
+    cmp     x10, #12
+    b.lo    9f
+    ldp     w11, w12, [x9, #4]
+    cmp     x11, x12
+    b.hi    9f
+    cmp     x12, x10
+    b.hi    9f
+    sub     x13, x12, x11                   /* the proofs' bytes, then the blobs' */
+    sub     x14, x10, x12
+    ldr     x15, [x23, #16]                 /* the block's */
+    add     x1, x15, #12
+    add     x1, x1, x13
+    add     x1, x1, x14
+    ldr     x2, [x23]
+    sub     x2, x2, #24
+    cmp     x1, x2
+    b.hi    9f
+    str     x1, [x23, #16]
+    add     x3, x23, #24                    /* the block on by 12, from its end */
+    mov     x4, x15
+1:  cbz     x4, 2f
+    sub     x4, x4, #1
+    ldrb    w5, [x3, x4]
+    add     x6, x4, #12
+    strb    w5, [x3, x6]
+    b       1b
+2:  mov     w5, #12
+    str     w5, [x3]
+    add     w5, w5, w15
+    str     w5, [x3, #4]
+    add     w5, w5, w13
+    str     w5, [x3, #8]
+    add     x0, x3, #12                     /* the proofs, then the blobs */
+    add     x0, x0, x15
+    add     x1, x9, x11
+    mov     x2, x13
+    stp     x0, x13, [sp, #16]
+    stp     x9, x12, [sp, #32]
+    bl      lantern_copy
+    ldp     x0, x13, [sp, #16]
+    add     x0, x0, x13
+    ldp     x9, x12, [sp, #32]
+    add     x1, x9, x12
+    ldr     x10, [x23, #16]
+    sub     x10, x10, #12
+    ldr     x11, [x23, #16]
+    mov     x2, x0
+    add     x2, x23, #24
+    add     x2, x2, x11
+    sub     x2, x2, x0
+    bl      lantern_copy
+    mov     x0, #0
+    UNFRAME 32
+9:  mov     x0, #1
+    UNFRAME 32
+END_FUNCTION produce_contents
 .endif
