@@ -254,6 +254,45 @@ api_f_epoch:
 api_f_root:
     .ascii ",\"root\":"
 .set api_f_root_len, 8
+api_p_open:
+    .ascii "{\"data\":{\""
+.set api_p_open_len, 10
+api_p_next:
+    .ascii ",\""
+.set api_p_next_len, 2
+api_p_key:
+    .ascii "\":"
+.set api_p_key_len, 2
+api_p_comma:
+    .ascii ","
+.set api_p_comma_len, 1
+api_p_lbracket:
+    .ascii "["
+.set api_p_lbracket_len, 1
+api_p_rbracket:
+    .ascii "]"
+.set api_p_rbracket_len, 1
+api_p_epoch:
+    .ascii "{\"EPOCH\":"
+.set api_p_epoch_len, 9
+api_p_max:
+    .ascii ",\"MAX_BLOBS_PER_BLOCK\":"
+.set api_p_max_len, 23
+api_o_open:
+    .ascii "{\"data\":["
+.set api_o_open_len, 9
+api_o_entry:
+    .ascii "{\"previous_version\":"
+.set api_o_entry_len, 20
+api_o_end:
+    .ascii "]}"
+.set api_o_end_len, 2
+api_d_chain:
+    .ascii "{\"data\":{\"chain_id\":"
+.set api_d_chain_len, 20
+api_d_address:
+    .ascii ",\"address\":"
+.set api_d_address_len, 11
 api_hex:
     .ascii "0123456789abcdef"
 .set api_hex_len, 16

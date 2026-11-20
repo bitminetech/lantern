@@ -59,6 +59,13 @@ The answers of the node (node.md, `NODE_EV_API`) follow these rules.
 - getSyncingStatus: `{"data":{"head_slot":…,"sync_distance":…,"is_syncing":…,"is_optimistic":…,"el_offline":…}}`; `sync_distance` is `current_slot` minus `head_slot`, or 0 when it is below.
 - getPeerCount: `{"data":{"disconnected":"0","connecting":"0","connected":…,"disconnecting":"0"}}`.
 - getGenesis: `{"data":{"genesis_time":…,"genesis_validators_root":…,"genesis_fork_version":…}}`.
+- getSpec: `{"data":{…}}`, the keys and values of the node's config, the preset and the spec's constants:
+  - Each key of `CONFIG_KEYS` and `BLOB_SCHEDULE`, in the order of the pinned configs/<preset>.yaml, with the node's values; and `SECONDS_PER_SLOT`, `SLOT_DURATION_MS` / 1000, right before `SLOT_DURATION_MS`, the key clients and tools read from configs before the spec gave the slot in milliseconds.
+  - Then each key of the pinned presets/<preset>/phase0.yaml to fulu.yaml, in file order.
+  - Then each row of the Constants tables of beacon-chain.md of phase0 to fulu, in table order.
+  - Values: a number in quotes, decimal; a Version, a DomainType, a Hash32, an Address and other byte strings `0x` and lower case hex; a text in quotes; `BLOB_SCHEDULE` `[{"EPOCH":…,"MAX_BLOBS_PER_BLOCK":…},…]` in the config's order; a list of numbers `[…]`, each a number in quotes.
+- getForkSchedule: `{"data":[{"previous_version":…,"current_version":…,"epoch":…},…]}`: phase0, with `GENESIS_FORK_VERSION` as both versions and epoch 0; then each fork from altair to fulu whose epoch in the node's config is below 2^64 - 1, with the version of the fork before it in the list as `previous_version`.
+- getDepositContract: `{"data":{"chain_id":…,"address":…}}`: `DEPOSIT_CHAIN_ID` and `DEPOSIT_CONTRACT_ADDRESS` of the node's config.
 - The block of a `block_id`, on the chain: the head's `NodeBlock` and its ancestors by `parent_root` among the node's imported blocks, then, below the lowest of them, the blocks of the `Db`:
   - `head`: the head. `finalized`: the block of the store's finalized checkpoint root. `genesis`: as the slot 0.
   - A slot: the block of that slot on the chain; none for a slot with no block on the chain, or past the head's slot.

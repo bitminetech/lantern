@@ -143,7 +143,7 @@ METHODS = {1: b"GET", 2: b"POST", 3: b"DELETE"}
 ALLOW = {1: b"GET", 2: b"POST", 3: b"GET, POST"}
 ANSWERED = ("getHealth", "getNetworkIdentity", "getNodeVersion", "getSyncingStatus", "getPeerCount", "getGenesis",
             "getBlockHeader", "getStateFinalityCheckpoints", "getBlockV2", "getStateV2", "getBlockRoot", "getStateRoot",
-            "getStateFork")
+            "getStateFork", "getSpec", "getForkSchedule", "getDepositContract")
 IDENTITY = (b"16Uiu2HAmPLe7Mzm8TsYUubgCAW1aJoeFScxrLj8ppHFivPo97bUZ",
             b"enr:-Iu4QLm7bZGdAhVwRqZ6Zf3LlnqKsBTnZGOByHQhPMQJ3pV4F3t8L9i5yJOZ0X0hiZ6q4D5V0jB7l8J3ZtYw1JDH9C4BgmlkgnY0gmlwhAoAAAGJc2VjcDI1NmsxoQPKY0yuDUmstAHYpMa2_oxVtw0RW_QAdpzBQA8yWM0xOIN0Y3CCIyg",
             b"/ip4/10.0.0.1/tcp/9000/p2p/16Uiu2HAmPLe7Mzm8TsYUubgCAW1aJoeFScxrLj8ppHFivPo97bUZ",
@@ -215,6 +215,85 @@ def http(req, version=b"HTTP/1.1", connection=b"", extra=b""):
     return out + extra + b"\r\n"
 
 
+def constants(path):
+    """The names of the rows of the Constants tables of a beacon-chain.md, in order."""
+    names, on = [], False
+    for line in path.read_text().split("\n"):
+        if line.startswith("## "):
+            on = line.strip() == "## Constants"
+        elif on and line.startswith("|") and not line.startswith("| Name") and not set(line) <= set("|-: "):
+            names.append(line.strip("|").split("|")[0].strip().strip("`"))
+    return names
+
+
+def config_bodies(fork, preset):
+    """The bodies of getSpec, getForkSchedule and getDepositContract (beacon-api.md, Common rules): the
+    pinned config with the fork epochs of schedule(fork), the presets, and the constants of the fulu
+    module. The config keys and their kinds: CONFIG_KEYS of include/lantern.inc (config.md)."""
+    import re
+    from ruamel.yaml import YAML
+    root = pathlib.Path(os.environ["CONSENSUS_SPECS"])
+    inc = (pathlib.Path(__file__).resolve().parents[2] / "include" / "lantern.inc").read_text()
+    kinds = {}
+    for line in re.search(r"\.macro CONFIG_KEYS m\n(.*?)\.endm", inc, re.S).group(1).splitlines():
+        name, _, kind = [x.strip() for x in line.strip()[2:].split(",")]
+        kinds[name] = kind
+    text = (root / "configs" / f"{preset}.yaml").read_text()
+    config = dict(YAML(typ="safe").load(text))
+    config.update(schedule(fork))
+    sizes = {"CONFIG_KIND_VERSION": 4, "CONFIG_KIND_HASH32": 32, "CONFIG_KIND_ADDRESS": 20}
+
+    def value(name):
+        v, kind = config[name], kinds[name]
+        if kind in sizes:
+            return qhex(int(v).to_bytes(sizes[kind], "big"))
+        if kind == "CONFIG_KIND_TEXT":
+            return b'"' + str(v).encode() + b'"'
+        return q(int(v))
+
+    pairs = []
+    for name in re.findall(r"^([A-Z_0-9]+):", text, re.M):
+        if name == "SLOT_DURATION_MS":
+            pairs.append((b"SECONDS_PER_SLOT", q(int(config[name]) // 1000)))
+        if name == "BLOB_SCHEDULE":
+            pairs.append((b"BLOB_SCHEDULE", b"[" + b",".join(b'{"EPOCH":' + q(e["EPOCH"]) + b',"MAX_BLOBS_PER_BLOCK":' +
+                                                            q(e["MAX_BLOBS_PER_BLOCK"]) + b"}" for e in config[name] or []) + b"]"))
+        elif name in kinds:
+            pairs.append((name.encode(), value(name)))
+    assert len(pairs) == len(kinds) + 2
+    for f in FORKS:
+        for name, v in YAML(typ="safe").load((root / "presets" / preset / f"{f}.yaml").read_text()).items():
+            assert isinstance(v, int)
+            pairs.append((name.encode(), q(v)))
+    last = module("fulu", preset)
+    for f in FORKS:
+        for name in constants(root / "specs" / f / "beacon-chain.md"):
+            v = getattr(last, name)
+            if isinstance(v, bytes):
+                out = qhex(v)
+            elif isinstance(v, str):
+                out = b'"' + v.encode() + b'"'
+            elif isinstance(v, list):
+                out = b"[" + b",".join(q(int(x)) for x in v) + b"]"
+            else:
+                out = q(int(v))
+            pairs.append((name.encode(), out))
+    assert len({k for k, _ in pairs}) == len(pairs)
+    spec_body = b'{"data":{' + b",".join(b'"' + k + b'":' + v for k, v in pairs) + b"}}"
+    version = int(config["GENESIS_FORK_VERSION"]).to_bytes(4, "big")
+    forks = [(version, version, 0)]
+    for f in FORKS[1:]:
+        epoch = int(config[f"{f.upper()}_FORK_EPOCH"])
+        if epoch != U64:
+            current = int(config[f"{f.upper()}_FORK_VERSION"]).to_bytes(4, "big")
+            forks.append((forks[-1][1], current, epoch))
+    schedule_body = b'{"data":[' + b",".join(b'{"previous_version":' + qhex(p) + b',"current_version":' + qhex(c) +
+                                             b',"epoch":' + q(e) + b"}" for p, c, e in forks) + b"]}"
+    deposit_body = (b'{"data":{"chain_id":' + q(int(config["DEPOSIT_CHAIN_ID"])) + b',"address":' +
+                    value("DEPOSIT_CONTRACT_ADDRESS") + b"}}")
+    return {"getSpec": spec_body, "getForkSchedule": schedule_body, "getDepositContract": deposit_body}
+
+
 def api_values(spec, fork, state, block):
     """The values of beacon-api.md for the node at its anchor."""
     store = spec.get_forkchoice_store(state, block)
@@ -267,6 +346,8 @@ def answer(v, name, route, offline, close, keep_alive):
         return response(200, body, **kw)
     if name == "getPeerCount":
         return response(200, b'{"data":{"disconnected":"0","connecting":"0","connected":"0","disconnecting":"0"}}', **kw)
+    if name in ("getSpec", "getForkSchedule", "getDepositContract"):
+        return response(200, v["config_bodies"][name], **kw)
     if name == "getGenesis":
         body = (b'{"data":{"genesis_time":' + q(v["genesis_time"]) + b',"genesis_validators_root":' + qhex(v["gvr"]) +
                 b',"genesis_fork_version":' + qhex(v["genesis_version"]) + b"}}")
@@ -386,6 +467,9 @@ def api_requests(spec, fork, v):
     add("http10_keep_alive", api_route.base(version), version=b"HTTP/1.0", connection=b"keep-alive")
     add("http10_keep_alive_identity", api_route.base(by_name["getNetworkIdentity"]), version=b"HTTP/1.0", connection=b"keep-alive")
     add("http10_header_404", api_route.base(header, path_values={"block_id": b"genesis"}), version=b"HTTP/1.0")
+    add("spec_http10", api_route.base(by_name["getSpec"]), version=b"HTTP/1.0")
+    add("spec_close", api_route.base(by_name["getSpec"]), connection=b"close")
+    add("fork_schedule_http10", api_route.base(by_name["getForkSchedule"]), version=b"HTTP/1.0")
     add("unknown_path", api_route.request(1, b"/eth/v1/node/bogus"))
     add("post_on_get", api_route.request(2, b"/eth/v1/node/version"))
     add("get_on_post", api_route.request(1, b"/eth/v1/validator/prepare_beacon_proposer"))
@@ -447,6 +531,7 @@ def api_cases(fork, preset):
     spec = module(fork, preset)
     state, block = run(spec, schedule(fork), lambda: anchor(spec, fork))
     v = run(spec, schedule(fork), lambda: api_values(spec, fork, state, block))
+    v["config_bodies"] = config_bodies(fork, preset)
     reqs = run(spec, schedule(fork), lambda: api_requests(spec, fork, v))
     if fork in ("altair",):  # no execution engine before bellatrix: el_offline stays false
         reqs = [r for r in reqs if not r[4]]

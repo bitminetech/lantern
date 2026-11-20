@@ -9,6 +9,19 @@
 
     RODATA
 .include "api_text.inc"
+.include "api_spec.inc"
+
+/* A record of API_SPEC_KEYS: the name's length, its kind, its value, then the name in CONFIG_KEY_NAME_MAX bytes. */
+.set API_SPEC_BYTES, 24 + CONFIG_KEY_NAME_MAX
+.macro API_SPEC_RECORD name, kind, value
+    .quad 72f - 71f, \kind, \value
+71: .ascii "\name"
+72: .space CONFIG_KEY_NAME_MAX - (72b - 71b)
+.endm
+    .p2align 3
+api_spec_keys:
+    API_SPEC_KEYS API_SPEC_RECORD
+api_spec_keys_end:
 
 /* The text at label joins the response. */
 .macro API_LIT label
@@ -173,6 +186,227 @@ END_FUNCTION api_code_text
  * The body of the kind rsi for the view rbp: an error body of the status at (rdi), or the JSON of
  * an operation (beacon-api.md, Common rules). Locals: rdi, rsi.
  */
+/* The decimal digits of the Uint256 at rdi, little endian, in quotes. Locals: its eight 32-bit words, then the text from its end. */
+LOCAL_FUNCTION api_qdec256
+    FRAME 128
+    mov     (%rdi), %rax
+    mov     %rax, (%rsp)
+    mov     8(%rdi), %rax
+    mov     %rax, 8(%rsp)
+    mov     16(%rdi), %rax
+    mov     %rax, 16(%rsp)
+    mov     24(%rdi), %rax
+    mov     %rax, 24(%rsp)
+    lea     128(%rsp), %r8                  # the closing quote, then the digits backwards
+    dec     %r8
+    movb    $0x22, (%r8)
+    mov     $10, %ecx
+1:  xor     %edx, %edx                      # divide by 10, from the top word down
+    mov     $7, %r9
+    xor     %r10d, %r10d                    # any word not zero
+2:  mov     (%rsp,%r9,4), %eax
+    div     %ecx
+    mov     %eax, (%rsp,%r9,4)
+    or      %eax, %r10d
+    dec     %r9
+    jns     2b
+    add     $0x30, %dl
+    dec     %r8
+    mov     %dl, (%r8)
+    test    %r10d, %r10d
+    jnz     1b
+    dec     %r8
+    movb    $0x22, (%r8)
+    mov     %r8, %rdi
+    lea     128(%rsp), %rsi
+    sub     %r8, %rsi
+    call    api_put
+    UNFRAME 128
+END_FUNCTION api_qdec256
+
+/*
+ * The body of getSpec (beacon-api.md, Common rules): each key of API_SPEC_KEYS, with the config
+ * of the view rbp. Locals: the record, an index, 32 bytes of a value, a count.
+ */
+LOCAL_FUNCTION api_spec
+    FRAME 64
+    lea     api_spec_keys(%rip), %rax
+    mov     %rax, (%rsp)
+    API_LIT api_p_open
+    jmp     2f
+1:  mov     (%rsp), %rax                    # the next record
+    add     $API_SPEC_BYTES, %rax
+    mov     %rax, (%rsp)
+    lea     api_spec_keys_end(%rip), %rcx
+    cmp     %rcx, %rax
+    jae     9f
+    API_LIT api_p_next
+2:  mov     (%rsp), %rax                    # "<name>":
+    mov     (%rax), %rsi
+    lea     24(%rax), %rdi
+    call    api_put
+    API_LIT api_p_key
+    mov     (%rsp), %rax
+    mov     8(%rax), %rcx                   # the kind, the value
+    mov     16(%rax), %rdi
+    mov     %rcx, %rdx                      # the kind's arg
+    shr     $8, %rdx
+    and     $255, %ecx
+    mov     %rdi, 16(%rsp)                  # the value's bytes, then zero bytes
+    movq    $0, 24(%rsp)
+    movq    $0, 32(%rsp)
+    movq    $0, 40(%rsp)
+    mov     %rdx, 48(%rsp)
+    cmp     $SPEC_NUMBER, %ecx
+    jne     3f
+    call    api_qdec
+    jmp     1b
+3:  cmp     $SPEC_HEX, %ecx
+    jne     4f
+    lea     16(%rsp), %rdi
+    mov     %rdx, %rsi
+    call    api_qhex
+    jmp     1b
+4:  cmp     $SPEC_TEXT, %ecx
+    jne     5f
+    API_LIT api_quote
+    lea     16(%rsp), %rdi
+    mov     48(%rsp), %rsi
+    call    api_put
+    API_LIT api_quote
+    jmp     1b
+5:  cmp     $SPEC_LIST, %ecx
+    jne     6f
+    API_LIT api_p_lbracket
+    movq    $0, 8(%rsp)
+51: mov     8(%rsp), %rax
+    cmp     48(%rsp), %rax
+    jae     52f
+    test    %rax, %rax
+    jz      53f
+    API_LIT api_p_comma
+53: mov     8(%rsp), %rax
+    movzbl  16(%rsp,%rax), %edi
+    inc     %rax
+    mov     %rax, 8(%rsp)
+    call    api_qdec
+    jmp     51b
+52: API_LIT api_p_rbracket
+    jmp     1b
+6:  add     ApiView_config(%rbp), %rdi      # the config's field
+    cmp     $SPEC_SECONDS, %ecx
+    jne     7f
+    mov     (%rdi), %rax
+    xor     %edx, %edx
+    mov     $1000, %ecx
+    div     %rcx
+    mov     %rax, %rdi
+    call    api_qdec
+    jmp     1b
+7:  cmp     $SPEC_CONFIG, %ecx
+    jne     8f
+    cmp     $CONFIG_KIND_U64, %rdx
+    jne     71f
+    mov     (%rdi), %rdi
+    call    api_qdec
+    jmp     1b
+71: cmp     $CONFIG_KIND_UINT256, %rdx
+    jne     72f
+    call    api_qdec256
+    jmp     1b
+72: cmp     $CONFIG_KIND_TEXT, %rdx
+    jne     73f
+    call    api_text                        # in quotes
+    jmp     1b
+73: mov     $4, %esi                        # Version: 4 bytes; Hash32: 32; Address: 20
+    mov     $32, %eax
+    cmp     $CONFIG_KIND_HASH32, %rdx
+    cmove   %eax, %esi
+    mov     $20, %eax
+    cmp     $CONFIG_KIND_ADDRESS, %rdx
+    cmove   %eax, %esi
+    call    api_qhex
+    jmp     1b
+    # SPEC_SCHEDULE: [{"EPOCH":…,"MAX_BLOBS_PER_BLOCK":…},…]
+8:  API_LIT api_p_lbracket
+    movq    $0, 8(%rsp)
+81: mov     8(%rsp), %rax
+    mov     ApiView_config(%rbp), %rcx
+    cmp     CONFIG_BLOB_SCHEDULE_COUNT(%rcx), %rax
+    jae     82f
+    test    %rax, %rax
+    jz      83f
+    API_LIT api_p_comma
+83: API_LIT api_p_epoch
+    mov     8(%rsp), %rax
+    shl     $4, %rax
+    add     ApiView_config(%rbp), %rax
+    mov     CONFIG_BLOB_SCHEDULE(%rax), %rdi
+    call    api_qdec
+    API_LIT api_p_max
+    mov     8(%rsp), %rax
+    shl     $4, %rax
+    add     ApiView_config(%rbp), %rax
+    mov     (CONFIG_BLOB_SCHEDULE + 8)(%rax), %rdi
+    call    api_qdec
+    API_LIT api_end1
+    incq    8(%rsp)
+    jmp     81b
+82: API_LIT api_p_rbracket
+    jmp     1b
+9:  API_LIT api_end2
+    UNFRAME 64
+END_FUNCTION api_spec
+
+/*
+ * The body of getForkSchedule (beacon-api.md, Common rules), with the config of the view rbp:
+ * phase0, then each fork to fulu whose epoch is below 2^64 - 1. Locals: the fork, the previous
+ * version, the version, the epoch.
+ */
+LOCAL_FUNCTION api_fork_schedule
+    FRAME 32
+    API_LIT api_o_open
+    mov     ApiView_config(%rbp), %rax
+    mov     CONFIG_GENESIS_FORK_VERSION(%rax), %rax
+    movq    $0, (%rsp)
+    mov     %rax, 8(%rsp)
+    mov     %rax, 16(%rsp)
+    movq    $0, 24(%rsp)
+    jmp     2f
+1:  mov     (%rsp), %rax                    # the next fork: its version at 16 * fork - 8, its epoch at 16 * fork
+    inc     %rax
+    mov     %rax, (%rsp)
+    cmp     $FORK_FULU, %rax
+    ja      9f
+    shl     $4, %rax
+    add     ApiView_config(%rbp), %rax
+    mov     -8(%rax), %rcx
+    mov     (%rax), %rdx
+    cmp     $-1, %rdx
+    je      1b
+    mov     %rcx, 16(%rsp)
+    mov     %rdx, 24(%rsp)
+    API_LIT api_p_comma
+    # {"previous_version":…,"current_version":…,"epoch":…}
+2:  API_LIT api_o_entry
+    lea     8(%rsp), %rdi
+    mov     $4, %esi
+    call    api_qhex
+    API_LIT api_k_current
+    lea     16(%rsp), %rdi
+    mov     $4, %esi
+    call    api_qhex
+    API_LIT api_k_epoch
+    mov     24(%rsp), %rdi
+    call    api_qdec
+    API_LIT api_end1
+    mov     16(%rsp), %rax                  # the next fork's previous version
+    mov     %rax, 8(%rsp)
+    jmp     1b
+9:  API_LIT api_o_end
+    UNFRAME 32
+END_FUNCTION api_fork_schedule
+
 LOCAL_FUNCTION api_body
     FRAME 16
     mov     %rdi, (%rsp)
@@ -347,7 +581,7 @@ LOCAL_FUNCTION api_body
     cmp     $API_OP_GET_STATE_ROOT, %rsi
     je      10f
     cmp     $API_OP_GET_STATE_FORK, %rsi
-    jne     99f
+    jne     12f
 10: mov     %rsi, 8(%rsp)
     API_LIT api_x_optimistic
     mov     ApiView_is_optimistic(%rbp), %rdi
@@ -376,6 +610,27 @@ LOCAL_FUNCTION api_body
     API_LIT api_k_epoch
     mov     (ApiView_state_fork + 8)(%rbp), %rdi
     call    api_qdec
+    API_LIT api_end2
+    UNFRAME 16
+12: cmp     $API_OP_GET_SPEC, %rsi
+    jne     13f
+    call    api_spec
+    UNFRAME 16
+13: cmp     $API_OP_GET_FORK_SCHEDULE, %rsi
+    jne     17f
+    call    api_fork_schedule
+    UNFRAME 16
+17: cmp     $API_OP_GET_DEPOSIT_CONTRACT, %rsi  # {"data":{"chain_id":…,"address":…}}
+    jne     99f
+    API_LIT api_d_chain
+    mov     ApiView_config(%rbp), %rax
+    mov     CONFIG_DEPOSIT_CHAIN_ID(%rax), %rdi
+    call    api_qdec
+    API_LIT api_d_address
+    mov     ApiView_config(%rbp), %rdi
+    add     $CONFIG_DEPOSIT_CONTRACT_ADDRESS, %rdi
+    mov     $20, %esi
+    call    api_qhex
     API_LIT api_end2
 99: UNFRAME 16
 END_FUNCTION api_body
@@ -488,6 +743,8 @@ LOCAL_FUNCTION node_api_view
     COPY32  %rax, %rcx
     mov     (Node_config + CONFIG_GENESIS_FORK_VERSION)(%rbx), %rax
     mov     %rax, ApiView_genesis_fork_version(%rdi)
+    lea     Node_config(%rbx), %rax
+    mov     %rax, ApiView_config(%rdi)
     lea     Node_head_root(%rbx), %rdi      # the head
     call    node_find_block
     cmp     $-1, %rax
@@ -784,6 +1041,10 @@ LOCAL_FUNCTION node_api_event
     je      81f
     cmp     $API_OP_GET_GENESIS, %rcx
     je      81f
+    cmp     $API_OP_GET_FORK_SCHEDULE, %rcx
+    je      81f
+    cmp     $API_OP_GET_DEPOSIT_CONTRACT, %rcx
+    je      81f
     mov     $404, %edx
     xor     %r12d, %r12d                    # r12: the answer flags of a work or a stream
     testq   $API_R_CLOSE, S10(%rsp)
@@ -804,6 +1065,8 @@ LOCAL_FUNCTION node_api_event
     je      66f
     cmp     $API_OP_GET_STATE_FINALITY_CHECKPOINTS, %rcx
     je      66f
+    cmp     $API_OP_GET_SPEC, %rcx
+    je      67f
     cmp     $API_OP_GET_STATE_V2, %rcx
     jne     7f
 66: mov     S7(%rsp), %rax                  # a state root: a work finds its slot first
@@ -966,7 +1229,9 @@ LOCAL_FUNCTION node_api_run
     test    %r13, %r13
     jz      8f
     jmp     2f
-1:  test    %r13, %r13                      # a state's answer: a state
+1:  cmp     $API_OP_GET_SPEC, %eax          # getSpec: no state
+    je      2f
+    test    %r13, %r13                      # a state's answer: a state
     jz      8f
     cmp     $API_OP_GET_STATE_FINALITY_CHECKPOINTS, %eax
     je      2f
@@ -999,6 +1264,8 @@ LOCAL_FUNCTION node_api_run
     mov     %rcx, ApiView_is_optimistic(%rdi)
     cmpq    $API_OP_GET_BLOCK_HEADER, S9(%rsp)
     je      3f
+    cmpq    $API_OP_GET_SPEC, S9(%rsp)
+    je      5f
     shr     $24, %rax                       # a state at the work's slot, else the work that brought it there failed
     mov     NODE_STATE_SLOT(%r13), %rdi
     cmp     %rax, %rdi
@@ -1512,7 +1779,15 @@ END_FUNCTION node_api_advance
 LOCAL_FUNCTION node_api_encode
     FRAME 16
     mov     %rcx, (%rsp)
-    mov     ApiView_canonical(%rcx), %r9
+    mov     %rsi, %r8
+    cmp     $API_OP_GET_SPEC, %rdi          # getSpec: no state, no bytes, no values
+    jne     1f
+    shl     $8, %rdx
+    lea     (%rdi,%rdx), %r9
+    xor     %esi, %esi
+    xor     %ecx, %ecx
+    jmp     3f
+1:  mov     ApiView_canonical(%rcx), %r9
     mov     ApiView_head_finalized(%rcx), %rax
     lea     (%r9,%rax,2), %r9
     mov     ApiView_is_optimistic(%rcx), %rax
@@ -1521,7 +1796,6 @@ LOCAL_FUNCTION node_api_encode
     shl     $8, %rdx
     or      %rdx, %r9
     or      %rdi, %r9
-    mov     %rsi, %r8
     cmp     $API_OP_GET_BLOCK_HEADER, %rdi
     jne     2f
     mov     ApiView_look_index(%rcx), %rax  # getBlockHeader: the block's index + 1, its bytes or post-state

@@ -9,6 +9,19 @@
 
     RODATA
 .include "api_text.inc"
+.include "api_spec.inc"
+
+/* A record of API_SPEC_KEYS: the name's length, its kind, its value, then the name in CONFIG_KEY_NAME_MAX bytes. */
+.set API_SPEC_BYTES, 24 + CONFIG_KEY_NAME_MAX
+.macro API_SPEC_RECORD name, kind, value
+    .quad 72f - 71f, \kind, \value
+71: .ascii "\name"
+72: .space CONFIG_KEY_NAME_MAX - (72b - 71b)
+.endm
+    .p2align 3
+api_spec_keys:
+    API_SPEC_KEYS API_SPEC_RECORD
+api_spec_keys_end:
 
 /* The text at label joins the response. */
 .macro API_LIT label
@@ -159,6 +172,221 @@ LOCAL_FUNCTION api_code_text
     bl      api_put
 9:  UNFRAME 0
 END_FUNCTION api_code_text
+
+/* L1: the decimal digits of the Uint256 at x0, little endian, in quotes. Locals: its eight 32-bit words, then the text from its end. */
+LOCAL_FUNCTION api_qdec256
+    FRAME 128
+    ldp     x10, x11, [x0]
+    stp     x10, x11, [sp, #16]
+    ldp     x10, x11, [x0, #16]
+    stp     x10, x11, [sp, #32]
+    add     x9, sp, #(16 + 128)             /* the closing quote, then the digits backwards */
+    mov     w10, #0x22
+    strb    w10, [x9, #-1]!
+    add     x7, sp, #16
+    mov     x10, #10
+1:  mov     x4, #0                          /* divide by 10, from the top word down */
+    mov     x5, #7
+    mov     x6, #0                          /* any word not zero */
+2:  ldr     w11, [x7, x5, lsl #2]
+    orr     x11, x11, x4, lsl #32
+    udiv    x12, x11, x10
+    msub    x4, x12, x10, x11
+    str     w12, [x7, x5, lsl #2]
+    orr     x6, x6, x12
+    subs    x5, x5, #1
+    b.hs    2b
+    add     x4, x4, #0x30
+    strb    w4, [x9, #-1]!
+    cbnz    x6, 1b
+    mov     w10, #0x22
+    strb    w10, [x9, #-1]!
+    mov     x0, x9
+    add     x1, sp, #(16 + 128)
+    sub     x1, x1, x9
+    bl      api_put
+    UNFRAME 128
+END_FUNCTION api_qdec256
+
+/*
+ * L2: the body of getSpec (beacon-api.md, Common rules): each key of API_SPEC_KEYS, with the
+ * config of the view x22. Locals: L the record, L+8 an index, L+16 32 bytes of a value, L+48 a count.
+ */
+LOCAL_FUNCTION api_spec
+    FRAME 64
+    ADDRESS x9, api_spec_keys
+    str     x9, [sp, #16]
+    API_LIT api_p_open
+    b       2f
+1:  ldr     x9, [sp, #16]                   /* the next record */
+    add     x9, x9, #API_SPEC_BYTES
+    str     x9, [sp, #16]
+    ADDRESS x10, api_spec_keys_end
+    cmp     x9, x10
+    b.hs    9f
+    API_LIT api_p_next
+2:  ldr     x9, [sp, #16]                   /* "<name>": */
+    ldr     x1, [x9]
+    add     x0, x9, #24
+    bl      api_put
+    API_LIT api_p_key
+    ldr     x9, [sp, #16]
+    ldp     x10, x0, [x9, #8]               /* the kind, the value */
+    lsr     x12, x10, #8                    /* the kind's arg */
+    and     x10, x10, #255
+    stp     x0, xzr, [sp, #32]              /* the value's bytes, then zero bytes */
+    stp     xzr, xzr, [sp, #48]
+    str     x12, [sp, #64]
+    cmp     x10, #SPEC_NUMBER
+    b.ne    3f
+    bl      api_qdec
+    b       1b
+3:  cmp     x10, #SPEC_HEX
+    b.ne    4f
+    add     x0, sp, #32
+    mov     x1, x12
+    bl      api_qhex
+    b       1b
+4:  cmp     x10, #SPEC_TEXT
+    b.ne    5f
+    API_LIT api_quote
+    add     x0, sp, #32
+    ldr     x1, [sp, #64]
+    bl      api_put
+    API_LIT api_quote
+    b       1b
+5:  cmp     x10, #SPEC_LIST
+    b.ne    6f
+    API_LIT api_p_lbracket
+    str     xzr, [sp, #24]
+51: ldr     x9, [sp, #24]
+    ldr     x10, [sp, #64]
+    cmp     x9, x10
+    b.hs    52f
+    cbz     x9, 53f
+    API_LIT api_p_comma
+53: ldr     x9, [sp, #24]
+    add     x10, sp, #32
+    ldrb    w0, [x10, x9]
+    add     x9, x9, #1
+    str     x9, [sp, #24]
+    bl      api_qdec
+    b       51b
+52: API_LIT api_p_rbracket
+    b       1b
+6:  ldr     x9, [x22, #ApiView_config]
+    add     x0, x9, x0                      /* the config's field */
+    cmp     x10, #SPEC_SECONDS
+    b.ne    7f
+    ldr     x0, [x0]
+    mov     x9, #1000
+    udiv    x0, x0, x9
+    bl      api_qdec
+    b       1b
+7:  cmp     x10, #SPEC_CONFIG
+    b.ne    8f
+    cmp     x12, #CONFIG_KIND_U64
+    b.ne    71f
+    ldr     x0, [x0]
+    bl      api_qdec
+    b       1b
+71: cmp     x12, #CONFIG_KIND_UINT256
+    b.ne    72f
+    bl      api_qdec256
+    b       1b
+72: cmp     x12, #CONFIG_KIND_TEXT
+    b.ne    73f
+    bl      api_text                        /* in quotes */
+    b       1b
+73: mov     x1, #4                          /* Version: 4 bytes; Hash32: 32; Address: 20 */
+    cmp     x12, #CONFIG_KIND_HASH32
+    mov     x9, #32
+    csel    x1, x9, x1, eq
+    cmp     x12, #CONFIG_KIND_ADDRESS
+    mov     x9, #20
+    csel    x1, x9, x1, eq
+    bl      api_qhex
+    b       1b
+    /* SPEC_SCHEDULE: [{"EPOCH":…,"MAX_BLOBS_PER_BLOCK":…},…] */
+8:  API_LIT api_p_lbracket
+    str     xzr, [sp, #24]
+81: ldr     x9, [sp, #24]
+    ldr     x11, [x22, #ApiView_config]
+    LDQ     x10, x11, CONFIG_BLOB_SCHEDULE_COUNT
+    cmp     x9, x10
+    b.hs    82f
+    cbz     x9, 83f
+    API_LIT api_p_comma
+83: API_LIT api_p_epoch
+    ldr     x9, [sp, #24]
+    ldr     x11, [x22, #ApiView_config]
+    add     x11, x11, #CONFIG_BLOB_SCHEDULE
+    add     x11, x11, x9, lsl #4
+    ldr     x0, [x11]
+    bl      api_qdec
+    API_LIT api_p_max
+    ldr     x9, [sp, #24]
+    ldr     x11, [x22, #ApiView_config]
+    add     x11, x11, #(CONFIG_BLOB_SCHEDULE + 8)
+    add     x11, x11, x9, lsl #4
+    ldr     x0, [x11]
+    bl      api_qdec
+    API_LIT api_end1
+    ldr     x9, [sp, #24]
+    add     x9, x9, #1
+    str     x9, [sp, #24]
+    b       81b
+82: API_LIT api_p_rbracket
+    b       1b
+9:  API_LIT api_end2
+    UNFRAME 64
+END_FUNCTION api_spec
+
+/*
+ * L2: the body of getForkSchedule (beacon-api.md, Common rules), with the config of the view x22:
+ * phase0, then each fork to fulu whose epoch is below 2^64 - 1. Locals: L the fork, L+8 the
+ * previous version, L+16 the version, L+24 the epoch.
+ */
+LOCAL_FUNCTION api_fork_schedule
+    FRAME 32
+    API_LIT api_o_open
+    ldr     x9, [x22, #ApiView_config]
+    ldr     x10, [x9, #CONFIG_GENESIS_FORK_VERSION]
+    stp     xzr, x10, [sp, #16]
+    stp     x10, xzr, [sp, #32]
+    b       2f
+1:  ldr     x9, [sp, #16]                   /* the next fork: its version at 16 * fork - 8, its epoch at 16 * fork */
+    add     x9, x9, #1
+    str     x9, [sp, #16]
+    cmp     x9, #FORK_FULU
+    b.hi    9f
+    ldr     x10, [x22, #ApiView_config]
+    add     x10, x10, x9, lsl #4
+    ldur    x11, [x10, #-8]
+    ldr     x12, [x10]
+    cmn     x12, #1
+    b.eq    1b
+    stp     x11, x12, [sp, #32]
+    API_LIT api_p_comma
+    /* {"previous_version":…,"current_version":…,"epoch":…} */
+2:  API_LIT api_o_entry
+    add     x0, sp, #24
+    mov     x1, #4
+    bl      api_qhex
+    API_LIT api_k_current
+    add     x0, sp, #32
+    mov     x1, #4
+    bl      api_qhex
+    API_LIT api_k_epoch
+    ldr     x0, [sp, #40]
+    bl      api_qdec
+    API_LIT api_end1
+    ldr     x9, [sp, #32]                   /* the next fork's previous version */
+    str     x9, [sp, #24]
+    b       1b
+9:  API_LIT api_o_end
+    UNFRAME 32
+END_FUNCTION api_fork_schedule
 
 /*
  * L1: the body of the kind x28 for the view x22: an error body of the status at [x0], or the
@@ -338,7 +566,7 @@ LOCAL_FUNCTION api_body
     cmp     x28, #API_OP_GET_STATE_ROOT
     b.eq    10f
     cmp     x28, #API_OP_GET_STATE_FORK
-    b.ne    99f
+    b.ne    12f
 10: API_LIT api_x_optimistic
     ldr     x0, [x22, #ApiView_is_optimistic]
     bl      api_bool
@@ -366,6 +594,27 @@ LOCAL_FUNCTION api_body
     API_LIT api_k_epoch
     LDQ     x0, x22, ApiView_state_fork + 8
     bl      api_qdec
+    API_LIT api_end2
+    UNFRAME 16
+12: cmp     x28, #API_OP_GET_SPEC
+    b.ne    13f
+    bl      api_spec
+    UNFRAME 16
+13: cmp     x28, #API_OP_GET_FORK_SCHEDULE
+    b.ne    17f
+    bl      api_fork_schedule
+    UNFRAME 16
+17: cmp     x28, #API_OP_GET_DEPOSIT_CONTRACT   /* {"data":{"chain_id":…,"address":…}} */
+    b.ne    99f
+    API_LIT api_d_chain
+    ldr     x9, [x22, #ApiView_config]
+    LDQ     x0, x9, CONFIG_DEPOSIT_CHAIN_ID
+    bl      api_qdec
+    API_LIT api_d_address
+    ldr     x9, [x22, #ApiView_config]
+    ADDQ    x0, x9, CONFIG_DEPOSIT_CONTRACT_ADDRESS
+    mov     x1, #20
+    bl      api_qhex
     API_LIT api_end2
 99: UNFRAME 16
 END_FUNCTION api_body
@@ -471,6 +720,8 @@ LOCAL_FUNCTION node_api_view
     ldr     x0, [sp, #16]
     LDQ     x9, x19, Node_config + CONFIG_GENESIS_FORK_VERSION
     str     x9, [x0, #ApiView_genesis_fork_version]
+    add     x9, x19, #Node_config
+    STQ     x9, x0, ApiView_config
     add     x0, x19, #Node_head_root        /* the head */
     bl      node_find_block
     cmn     x0, #1
@@ -774,6 +1025,10 @@ LOCAL_FUNCTION node_api_event
     b.eq    81f
     cmp     x3, #API_OP_GET_GENESIS
     b.eq    81f
+    cmp     x3, #API_OP_GET_FORK_SCHEDULE
+    b.eq    81f
+    cmp     x3, #API_OP_GET_DEPOSIT_CONTRACT
+    b.eq    81f
     mov     x2, #404
     ldr     x9, [x22, #HttpRequest_version] /* x21: the answer flags of a work or a stream */
     cmp     x9, #10
@@ -793,6 +1048,8 @@ LOCAL_FUNCTION node_api_event
     b.eq    66f
     cmp     x3, #API_OP_GET_STATE_FINALITY_CHECKPOINTS
     b.eq    66f
+    cmp     x3, #API_OP_GET_SPEC
+    b.eq    67f
     cmp     x3, #API_OP_GET_STATE_V2
     b.ne    7f
 66: ldr     x9, [x25, #ApiRoute_id_kind]    /* a state root: a work finds its slot first */
@@ -945,7 +1202,9 @@ LOCAL_FUNCTION node_api_run
     cbz     x10, 8f
     cbz     x22, 8f
     b       2f
-1:  cbz     x22, 8f                         /* a state's answer: a state */
+1:  cmp     x27, #API_OP_GET_SPEC           /* getSpec: no state */
+    b.eq    2f
+    cbz     x22, 8f                         /* a state's answer: a state */
     cmp     x27, #API_OP_GET_STATE_FINALITY_CHECKPOINTS
     b.eq    2f
     cmp     x27, #API_OP_GET_STATE_ROOT
@@ -970,6 +1229,8 @@ LOCAL_FUNCTION node_api_run
     str     x10, [x26, #ApiView_is_optimistic]
     cmp     x27, #API_OP_GET_BLOCK_HEADER
     b.eq    3f
+    cmp     x27, #API_OP_GET_SPEC
+    b.eq    5f
     ldr     x0, [x22, #NODE_STATE_SLOT]     /* a state at the work's slot, else the work that brought it there failed */
     lsr     x9, x9, #24
     cmp     x0, x9
@@ -1470,8 +1731,13 @@ LOCAL_FUNCTION node_api_encode
     orr     x9, x9, x10, lsl #1
     orr     x9, x9, x11, lsl #2
     orr     x5, x0, x2, lsl #8
-    orr     x5, x5, x9, lsl #16
     mov     x4, x1
+    cmp     x0, #API_OP_GET_SPEC            /* getSpec: no state, no bytes, no values */
+    b.ne    1f
+    mov     x1, #0
+    mov     x3, #0
+    b       3f
+1:  orr     x5, x5, x9, lsl #16
     cmp     x0, #API_OP_GET_BLOCK_HEADER
     b.ne    2f
     ldr     x9, [x3, #ApiView_look_index]   /* getBlockHeader: the block's index + 1, its bytes or post-state */

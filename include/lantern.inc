@@ -968,7 +968,8 @@
 .set ApiView_look_state_slot, 1464       /* lookup: that state's slot */
 .set ApiView_look_copy, 1472             /* lookup: 1 when look_state is a copy that goes after its use */
 .set ApiView_state_fork, 1480            /* getStateFork: the Fork, 16 bytes */
-.set ApiView__size, 1496
+.set ApiView_config, 1496               /* the address of the node's config */
+.set ApiView__size, 1504
 .set ApiIdentity_peer_id, 0              /* ApiIdentity (beacon-api.md): texts, each a length and its room */
 .set ApiIdentity_enr, 72
 .set ApiIdentity_p2p_address, 592

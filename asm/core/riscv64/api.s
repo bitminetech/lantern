@@ -9,6 +9,19 @@
 
     RODATA
 .include "api_text.inc"
+.include "api_spec.inc"
+
+/* A record of API_SPEC_KEYS: the name's length, its kind, its value, then the name in CONFIG_KEY_NAME_MAX bytes. */
+.set API_SPEC_BYTES, 24 + CONFIG_KEY_NAME_MAX
+.macro API_SPEC_RECORD name, kind, value
+    .quad 72f - 71f, \kind, \value
+71: .ascii "\name"
+72: .space CONFIG_KEY_NAME_MAX - (72b - 71b)
+.endm
+    .p2align 3
+api_spec_keys:
+    API_SPEC_KEYS API_SPEC_RECORD
+api_spec_keys_end:
 
 /* The text at label joins the response. */
 .macro API_LIT label
@@ -170,6 +183,232 @@ END_FUNCTION api_code_text
  * The body of the kind s10 for the view s4: an error body of the status at (a0), or the JSON of
  * an operation (beacon-api.md, Common rules). Locals: a0.
  */
+/* The decimal digits of the Uint256 at a0, little endian, in quotes. Locals: its eight 32-bit words, then the text from its end. */
+LOCAL_FUNCTION api_qdec256
+    FRAME 128
+    ld      t0, 0(a0)
+    sd      t0, 0(sp)
+    ld      t0, 8(a0)
+    sd      t0, 8(sp)
+    ld      t0, 16(a0)
+    sd      t0, 16(sp)
+    ld      t0, 24(a0)
+    sd      t0, 24(sp)
+    addi    t2, sp, 127                     # the closing quote, then the digits backwards
+    li      t0, 0x22
+    sb      t0, 0(t2)
+    li      t3, 10
+1:  li      t4, 0                           # divide by 10, from the top word down
+    li      t5, 28                          # the word's offset
+    li      a2, 0                           # any word not zero
+2:  add     a1, sp, t5
+    lwu     t0, 0(a1)
+    slli    t4, t4, 32
+    or      t0, t0, t4
+    divu    t1, t0, t3
+    remu    t4, t0, t3
+    sw      t1, 0(a1)
+    or      a2, a2, t1
+    addi    t5, t5, -4
+    bgez    t5, 2b
+    addi    t4, t4, 0x30
+    addi    t2, t2, -1
+    sb      t4, 0(t2)
+    bnez    a2, 1b
+    addi    t2, t2, -1
+    li      t0, 0x22
+    sb      t0, 0(t2)
+    mv      a0, t2
+    addi    a1, sp, 128
+    sub     a1, a1, t2
+    call    api_put
+    UNFRAME 128
+END_FUNCTION api_qdec256
+
+/*
+ * The body of getSpec (beacon-api.md, Common rules): each key of API_SPEC_KEYS, with the config
+ * of the view s4. Locals: the record, an index, 32 bytes of a value, a count.
+ */
+LOCAL_FUNCTION api_spec
+    FRAME 64
+    ADDRESS t0, api_spec_keys
+    sd      t0, 0(sp)
+    API_LIT api_p_open
+    j       2f
+1:  ld      t0, 0(sp)                       # the next record
+    addi    t0, t0, API_SPEC_BYTES
+    sd      t0, 0(sp)
+    ADDRESS t1, api_spec_keys_end
+    bgeu    t0, t1, 9f
+    API_LIT api_p_next
+2:  ld      t0, 0(sp)                       # "<name>":
+    ld      a1, 0(t0)
+    addi    a0, t0, 24
+    call    api_put
+    API_LIT api_p_key
+    ld      t0, 0(sp)
+    ld      t1, 8(t0)                       # the kind, the value
+    ld      a0, 16(t0)
+    srli    t2, t1, 8                       # the kind's arg
+    andi    t1, t1, 255
+    sd      a0, 16(sp)                      # the value's bytes, then zero bytes
+    sd      zero, 24(sp)
+    sd      zero, 32(sp)
+    sd      zero, 40(sp)
+    sd      t2, 48(sp)
+    li      t0, SPEC_NUMBER
+    bne     t1, t0, 3f
+    call    api_qdec
+    j       1b
+3:  li      t0, SPEC_HEX
+    bne     t1, t0, 4f
+    addi    a0, sp, 16
+    mv      a1, t2
+    call    api_qhex
+    j       1b
+4:  li      t0, SPEC_TEXT
+    bne     t1, t0, 5f
+    API_LIT api_quote
+    addi    a0, sp, 16
+    ld      a1, 48(sp)
+    call    api_put
+    API_LIT api_quote
+    j       1b
+5:  li      t0, SPEC_LIST
+    bne     t1, t0, 6f
+    API_LIT api_p_lbracket
+    sd      zero, 8(sp)
+51: ld      t0, 8(sp)
+    ld      t1, 48(sp)
+    bgeu    t0, t1, 52f
+    beqz    t0, 53f
+    API_LIT api_p_comma
+53: ld      t0, 8(sp)
+    add     t1, sp, t0
+    lbu     a0, 16(t1)
+    addi    t0, t0, 1
+    sd      t0, 8(sp)
+    call    api_qdec
+    j       51b
+52: API_LIT api_p_rbracket
+    j       1b
+6:  ld      t0, ApiView_config(s4)          # the config's field
+    add     a0, t0, a0
+    li      t0, SPEC_SECONDS
+    bne     t1, t0, 7f
+    ld      a0, 0(a0)
+    li      t0, 1000
+    divu    a0, a0, t0
+    call    api_qdec
+    j       1b
+7:  li      t0, SPEC_CONFIG
+    bne     t1, t0, 8f
+    li      t0, CONFIG_KIND_U64
+    bne     t2, t0, 71f
+    ld      a0, 0(a0)
+    call    api_qdec
+    j       1b
+71: li      t0, CONFIG_KIND_UINT256
+    bne     t2, t0, 72f
+    call    api_qdec256
+    j       1b
+72: li      t0, CONFIG_KIND_TEXT
+    bne     t2, t0, 73f
+    call    api_text                        # in quotes
+    j       1b
+73: li      a1, 4                           # Version: 4 bytes; Hash32: 32; Address: 20
+    li      t0, CONFIG_KIND_HASH32
+    bne     t2, t0, 74f
+    li      a1, 32
+74: li      t0, CONFIG_KIND_ADDRESS
+    bne     t2, t0, 75f
+    li      a1, 20
+75: call    api_qhex
+    j       1b
+    # SPEC_SCHEDULE: [{"EPOCH":…,"MAX_BLOBS_PER_BLOCK":…},…]
+8:  API_LIT api_p_lbracket
+    sd      zero, 8(sp)
+81: ld      t0, 8(sp)
+    ld      t1, ApiView_config(s4)
+    ld      t1, CONFIG_BLOB_SCHEDULE_COUNT(t1)
+    bgeu    t0, t1, 82f
+    beqz    t0, 83f
+    API_LIT api_p_comma
+83: API_LIT api_p_epoch
+    ld      t0, 8(sp)
+    slli    t0, t0, 4
+    ld      t1, ApiView_config(s4)
+    add     t0, t0, t1
+    ld      a0, CONFIG_BLOB_SCHEDULE(t0)
+    call    api_qdec
+    API_LIT api_p_max
+    ld      t0, 8(sp)
+    slli    t0, t0, 4
+    ld      t1, ApiView_config(s4)
+    add     t0, t0, t1
+    ld      a0, (CONFIG_BLOB_SCHEDULE + 8)(t0)
+    call    api_qdec
+    API_LIT api_end1
+    ld      t0, 8(sp)
+    addi    t0, t0, 1
+    sd      t0, 8(sp)
+    j       81b
+82: API_LIT api_p_rbracket
+    j       1b
+9:  API_LIT api_end2
+    UNFRAME 64
+END_FUNCTION api_spec
+
+/*
+ * The body of getForkSchedule (beacon-api.md, Common rules), with the config of the view s4:
+ * phase0, then each fork to fulu whose epoch is below 2^64 - 1. Locals: the fork, the previous
+ * version, the version, the epoch.
+ */
+LOCAL_FUNCTION api_fork_schedule
+    FRAME 32
+    API_LIT api_o_open
+    ld      t0, ApiView_config(s4)
+    ld      t0, CONFIG_GENESIS_FORK_VERSION(t0)
+    sd      zero, 0(sp)
+    sd      t0, 8(sp)
+    sd      t0, 16(sp)
+    sd      zero, 24(sp)
+    j       2f
+1:  ld      t0, 0(sp)                       # the next fork: its version at 16 * fork - 8, its epoch at 16 * fork
+    addi    t0, t0, 1
+    sd      t0, 0(sp)
+    li      t1, FORK_FULU
+    bgtu    t0, t1, 9f
+    slli    t0, t0, 4
+    ld      t1, ApiView_config(s4)
+    add     t0, t0, t1
+    ld      t1, -8(t0)
+    ld      t2, 0(t0)
+    li      t3, -1
+    beq     t2, t3, 1b
+    sd      t1, 16(sp)
+    sd      t2, 24(sp)
+    API_LIT api_p_comma
+    # {"previous_version":…,"current_version":…,"epoch":…}
+2:  API_LIT api_o_entry
+    addi    a0, sp, 8
+    li      a1, 4
+    call    api_qhex
+    API_LIT api_k_current
+    addi    a0, sp, 16
+    li      a1, 4
+    call    api_qhex
+    API_LIT api_k_epoch
+    ld      a0, 24(sp)
+    call    api_qdec
+    API_LIT api_end1
+    ld      t0, 16(sp)                      # the next fork's previous version
+    sd      t0, 8(sp)
+    j       1b
+9:  API_LIT api_o_end
+    UNFRAME 32
+END_FUNCTION api_fork_schedule
+
 LOCAL_FUNCTION api_body
     FRAME 16
     sd      a0, 0(sp)
@@ -345,7 +584,7 @@ LOCAL_FUNCTION api_body
     li      t0, API_OP_GET_STATE_ROOT
     beq     s10, t0, 10f
     li      t0, API_OP_GET_STATE_FORK
-    bne     s10, t0, 99f
+    bne     s10, t0, 12f
 10: API_LIT api_x_optimistic
     ld      a0, ApiView_is_optimistic(s4)
     call    api_bool
@@ -373,6 +612,27 @@ LOCAL_FUNCTION api_body
     API_LIT api_k_epoch
     ld      a0, (ApiView_state_fork + 8)(s4)
     call    api_qdec
+    API_LIT api_end2
+    UNFRAME 16
+12: li      t0, API_OP_GET_SPEC
+    bne     s10, t0, 13f
+    call    api_spec
+    UNFRAME 16
+13: li      t0, API_OP_GET_FORK_SCHEDULE
+    bne     s10, t0, 17f
+    call    api_fork_schedule
+    UNFRAME 16
+17: li      t0, API_OP_GET_DEPOSIT_CONTRACT  # {"data":{"chain_id":…,"address":…}}
+    bne     s10, t0, 99f
+    API_LIT api_d_chain
+    ld      t0, ApiView_config(s4)
+    ld      a0, CONFIG_DEPOSIT_CHAIN_ID(t0)
+    call    api_qdec
+    API_LIT api_d_address
+    ld      t0, ApiView_config(s4)
+    addi    a0, t0, CONFIG_DEPOSIT_CONTRACT_ADDRESS
+    li      a1, 20
+    call    api_qhex
     API_LIT api_end2
 99: UNFRAME 16
 END_FUNCTION api_body
@@ -484,6 +744,8 @@ LOCAL_FUNCTION node_api_view
     COPY32  t0, t1
     LDQ     t0, s1, Node_config + CONFIG_GENESIS_FORK_VERSION
     sd      t0, ApiView_genesis_fork_version(a0)
+    addi    t0, s1, Node_config
+    sd      t0, ApiView_config(a0)
     addi    a0, s1, Node_head_root          # the head
     call    node_find_block
     li      t0, -1
@@ -780,6 +1042,10 @@ LOCAL_FUNCTION node_api_event
     beq     a3, t0, 81f
     li      t0, API_OP_GET_GENESIS
     beq     a3, t0, 81f
+    li      t0, API_OP_GET_FORK_SCHEDULE
+    beq     a3, t0, 81f
+    li      t0, API_OP_GET_DEPOSIT_CONTRACT
+    beq     a3, t0, 81f
     li      a2, 404
     andi    s3, s10, API_R_CLOSE            # s3: the answer flags of a work or a stream
     snez    s3, s3
@@ -800,6 +1066,8 @@ LOCAL_FUNCTION node_api_event
     beq     a3, t0, 66f
     li      t0, API_OP_GET_STATE_FINALITY_CHECKPOINTS
     beq     a3, t0, 66f
+    li      t0, API_OP_GET_SPEC
+    beq     a3, t0, 67f
     li      t0, API_OP_GET_STATE_V2
     bne     a3, t0, 7f
 66: ld      t0, ApiRoute_id_kind(s7)        # a state root: a work finds its slot first
@@ -953,7 +1221,9 @@ LOCAL_FUNCTION node_api_run
     beqz    t1, 8f
     beqz    s4, 8f
     j       2f
-1:  beqz    s4, 8f                          # a state's answer: a state
+1:  li      t2, API_OP_GET_SPEC             # getSpec: no state
+    beq     s9, t2, 2f
+    beqz    s4, 8f                          # a state's answer: a state
     li      t2, API_OP_GET_STATE_FINALITY_CHECKPOINTS
     beq     s9, t2, 2f
     li      t2, API_OP_GET_STATE_ROOT
@@ -981,6 +1251,8 @@ LOCAL_FUNCTION node_api_run
     sd      t1, ApiView_is_optimistic(s8)
     li      t2, API_OP_GET_BLOCK_HEADER
     beq     s9, t2, 3f
+    li      t2, API_OP_GET_SPEC
+    beq     s9, t2, 5f
     srli    t0, t0, 24                      # a state at the work's slot, else the work that brought it there failed
     ld      a0, NODE_STATE_SLOT(s4)
     bne     a0, t0, 42f
@@ -1483,8 +1755,13 @@ LOCAL_FUNCTION node_api_encode
     slli    t0, t0, 16
     slli    a2, a2, 8
     or      a5, a0, a2
-    or      a5, a5, t0
     mv      a4, a1
+    li      t1, API_OP_GET_SPEC             # getSpec: no state, no bytes, no values
+    bne     a0, t1, 1f
+    li      a1, 0
+    li      a3, 0
+    j       3f
+1:  or      a5, a5, t0
     li      t0, API_OP_GET_BLOCK_HEADER
     bne     a0, t0, 2f
     ld      t0, ApiView_look_index(a3)      # getBlockHeader: the block's index + 1, its bytes or post-state

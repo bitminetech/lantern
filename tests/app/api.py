@@ -13,11 +13,13 @@ the file GENESIS (genesis.ssz: altair, 4096 validators at slot 0). The checks:
   bytes of GENESIS with Eth-Consensus-Version: altair;
 - getStateV2 of head as JSON over HTTP/1.1 (chunked) and over HTTP/1.0 (closed after the body):
   version altair, data.slot "0", 4096 validators, the genesis_validators_root of GENESIS;
+- getSpec, getForkSchedule and getDepositContract: the values of the config.yaml beside GENESIS;
 - a connection with no bytes closes within 31 s.
 Prints a PASS or FAIL line for each, and exits 1 when one fails.
 """
 
 import json
+import os
 import socket
 import sys
 import time
@@ -109,6 +111,18 @@ class Reader:
             except OSError:  # a reset closes it too
                 return not self.buf
         return False
+
+
+def config_values(path):
+    """The top-level scalar values of a config.yaml, as texts: quotes and comments dropped."""
+    values = {}
+    for line in open(path, encoding="utf-8"):
+        if line[:1].isalpha() and ":" in line:
+            key, value = line.split(":", 1)
+            value = value.split("#", 1)[0].strip().strip("'\"")
+            if value:
+                values[key.strip()] = value
+    return values
 
 
 def request(method, path, extra=b""):
@@ -210,6 +224,30 @@ def main():
 
     state_json("getStateV2 JSON, chunked", b"HTTP/1.1")
     state_json("getStateV2 JSON over HTTP/1.0, closed after the body", b"HTTP/1.0")
+
+    config = config_values(os.path.join(os.path.dirname(sys.argv[2]), "config.yaml"))
+    k = connect(port)
+    rk = Reader(k)
+    try:  # three answers of the node's config on one connection
+        k.sendall(request(b"GET", b"/eth/v1/config/spec") + request(b"GET", b"/eth/v1/config/fork_schedule") +
+                  request(b"GET", b"/eth/v1/config/deposit_contract"))
+        got = [rk.response() for _ in range(3)]
+        spec, forks, deposit = (json.loads(body)["data"] for _, _, body in got)
+        genesis_version, altair_version = config["GENESIS_FORK_VERSION"].lower(), config["ALTAIR_FORK_VERSION"].lower()
+        ok = (all(status == 200 for status, _, _ in got) and spec["CONFIG_NAME"] == config["CONFIG_NAME"] and
+              spec["GENESIS_FORK_VERSION"] == genesis_version and spec["DEPOSIT_CHAIN_ID"] == config["DEPOSIT_CHAIN_ID"] and
+              spec["SECONDS_PER_SLOT"] == str(int(config["SLOT_DURATION_MS"]) // 1000) and spec["SLOTS_PER_EPOCH"] == "8")
+        check("getSpec", ok, repr({key: spec.get(key) for key in ("CONFIG_NAME", "GENESIS_FORK_VERSION", "DEPOSIT_CHAIN_ID",
+                                                                   "SECONDS_PER_SLOT", "SLOTS_PER_EPOCH")}))
+        want = [{"previous_version": genesis_version, "current_version": genesis_version, "epoch": "0"},
+                {"previous_version": genesis_version, "current_version": altair_version, "epoch": "0"}]
+        check("getForkSchedule", forks == want, repr(forks))
+        want = {"chain_id": config["DEPOSIT_CHAIN_ID"], "address": config["DEPOSIT_CONTRACT_ADDRESS"].lower()}
+        check("getDepositContract", deposit == want, repr(deposit))
+    except (EOFError, OSError, ValueError, KeyError) as x:
+        check("getSpec, getForkSchedule and getDepositContract", False, repr(x))
+    k.close()
+    time.sleep(1)
 
     f = connect(port)
     start = time.monotonic()
