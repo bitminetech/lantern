@@ -552,10 +552,29 @@ LOCAL_FUNCTION node_work
     ret
 END_FUNCTION node_work
 
-/* An action of kind a0 with the two ids a1 and a2 (STATE_COPY: source, new; the FREE kinds: a1). Uses t0-t2. */
+/* An action of kind a0 with the two ids a1 and a2 (STATE_COPY: source, new; the FREE kinds: a1). Uses t0-t2, a7. */
 LOCAL_FUNCTION node_ids
     UNWIND_END_PROLOGUE
-    li      t0, NODE_ACT_BYTES_FREE         # a BYTES_FREE of bytes a NodeApi entry sends goes to the entry: API_STREAM_OWN
+    li      t0, NODE_ACT_STATE_FREE         # a STATE_FREE of the state a validator stream reads goes to the entry: API_STREAM_OWN_STATE
+    bne     a0, t0, 5f
+    PART    t0, t1, s1, Node_api
+4:  beqz    t1, 3f
+    ld      t2, NodeApi_connection(t0)
+    beqz    t2, 41f
+    ld      t2, NodeApi_state(t0)
+    bne     t2, a1, 41f
+    ld      t2, NodeApi_flags(t0)
+    srli    a7, t2, 12
+    andi    a7, a7, 1
+    bnez    a7, 41f                         # API_STREAM_OWN_STATE: its own state already
+    li      a7, API_STREAM_OWN_STATE
+    or      t2, t2, a7
+    sd      t2, NodeApi_flags(t0)
+    ret
+41: addi    t0, t0, NodeApi__mem
+    addi    t1, t1, -1
+    j       4b
+5:  li      t0, NODE_ACT_BYTES_FREE         # a BYTES_FREE of bytes a NodeApi entry sends goes to the entry: API_STREAM_OWN
     bne     a0, t0, 3f
     PART    t0, t1, s1, Node_api
 1:  beqz    t1, 3f
@@ -7745,6 +7764,11 @@ FUNCTION lantern_node_step
     ld      t4, (L + 192)(sp)
     addi    t4, t4, 1
     sd      t4, (L + 192)(sp)
+    ld      t4, (NodeEvent_bytes + 24 + HttpRequest_status)(t0)  # API: 16 bytes of actions for each byte of the body, its ids
+    bnez    t4, 4f
+    ld      t4, (NodeEvent_bytes + 24 + HttpRequest_body + 8)(t0)
+    slli    t4, t4, 4
+    add     s10, s10, t4
     j       4f
 34: li      t4, NODE_EV_BLOCK
     beq     t3, t4, 31f
@@ -8771,6 +8795,7 @@ FUNCTION lantern_node_run
     mv      a3, s6
     mv      a4, s7
     mv      a5, s8
+    mv      a6, s4
     call    node_api_chunk_run
     LEAVE 192
 977: li     t1, NODE_WORK_API_LOOKUP

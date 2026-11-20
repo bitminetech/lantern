@@ -969,7 +969,9 @@
 .set ApiView_look_copy, 1472             /* lookup: 1 when look_state is a copy that goes after its use */
 .set ApiView_state_fork, 1480            /* getStateFork: the Fork, 16 bytes */
 .set ApiView_config, 1496               /* the address of the node's config */
-.set ApiView__size, 1504
+.set ApiView_val_state, 1504            /* getStateValidator: the state */
+.set ApiView_val_index, 1512            /* getStateValidator: the validator's index */
+.set ApiView__size, 1520
 .set ApiIdentity_peer_id, 0              /* ApiIdentity (beacon-api.md): texts, each a length and its room */
 .set ApiIdentity_enr, 72
 .set ApiIdentity_p2p_address, 592
@@ -989,7 +991,10 @@
 .set NodeApi_sent, 40                    /* SSZ: the bytes of data sent */
 .set NodeApi_cursor, 48                  /* JSON: a JsonCursor */
 .set NodeApi_slot, 648                   /* the slot of the block or the state */
-.set NodeApi__mem, 656
+.set NodeApi_state, 656                  /* the validator streams: the id of their state */
+.set NodeApi__mem, 664
+.set NodeApi_position, NodeApi_cursor    /* the validator streams: the next index */
+.set NodeApi_statuses, NodeApi_cursor + 8   /* the validator streams: the status bits */
 .set API_STREAM_CLOSE, 1
 .set API_STREAM_HTTP10, 2
 .set API_STREAM_SSZ, 4
@@ -1002,10 +1007,21 @@
 .set API_STREAM_FINALIZED, 512
 .set API_STREAM_DONE, 1024
 .set API_STREAM_LOOKUP, 2048           /* the entry waits for a NODE_WORK_API_LOOKUP */
+.set API_STREAM_OWN_STATE, 4096        /* the stream frees its state at its end */
 .set API_VALUE_CANONICAL, 1              /* the values of a NODE_WORK_API_ENCODE's arg, times 2^16 */
 .set API_VALUE_FINALIZED, 2
 .set API_VALUE_OPTIMISTIC, 4
 .set NODE_STATE_FORK, 56               /* BeaconState.fork in the value of every fork */
+.set NODE_STATE_VALIDATORS, 296 + 64 * SLOTS_PER_HISTORICAL_ROOT   /* BeaconState.validators, a PartRef, in every fork */
+.set NODE_STATE_BALANCES, NODE_STATE_VALIDATORS + 16                /* BeaconState.balances, a PartRef of u64 */
+.set NODE_VALIDATOR_MEM, 128           /* a Validator in a state's value: its fields at these offsets */
+.set NODE_VALIDATOR_CREDENTIALS, 48
+.set NODE_VALIDATOR_EFFECTIVE_BALANCE, 80
+.set NODE_VALIDATOR_SLASHED, 88
+.set NODE_VALIDATOR_ELIGIBILITY, 96
+.set NODE_VALIDATOR_ACTIVATION, 104
+.set NODE_VALIDATOR_EXIT, 112
+.set NODE_VALIDATOR_WITHDRAWABLE, 120
 .set NODE_STATE_STATE_ROOTS, 184 + 32 * SLOTS_PER_HISTORICAL_ROOT  /* BeaconState.state_roots in the value of every fork */
 .set NODE_JSON_BLOCK, 0                  /* lantern_node_json: a SignedBeaconBlock */
 .set NODE_JSON_STATE, 1                  /* a BeaconState */

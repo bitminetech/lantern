@@ -293,6 +293,82 @@ api_d_chain:
 api_d_address:
     .ascii ",\"address\":"
 .set api_d_address_len, 11
+api_v_index:
+    .ascii "{\"index\":"
+.set api_v_index_len, 9
+api_v_balance:
+    .ascii ",\"balance\":"
+.set api_v_balance_len, 11
+api_v_status:
+    .ascii ",\"status\":\""
+.set api_v_status_len, 11
+api_v_validator:
+    .ascii "\",\"validator\":{\"pubkey\":"
+.set api_v_validator_len, 24
+api_v_credentials:
+    .ascii ",\"withdrawal_credentials\":"
+.set api_v_credentials_len, 26
+api_v_effective:
+    .ascii ",\"effective_balance\":"
+.set api_v_effective_len, 21
+api_v_slashed:
+    .ascii ",\"slashed\":"
+.set api_v_slashed_len, 11
+api_v_eligibility:
+    .ascii ",\"activation_eligibility_epoch\":"
+.set api_v_eligibility_len, 32
+api_v_activation:
+    .ascii ",\"activation_epoch\":"
+.set api_v_activation_len, 20
+api_v_exit:
+    .ascii ",\"exit_epoch\":"
+.set api_v_exit_len, 14
+api_v_withdrawable:
+    .ascii ",\"withdrawable_epoch\":"
+.set api_v_withdrawable_len, 22
+api_v_pubkey:
+    .ascii ",\"pubkey\":"
+.set api_v_pubkey_len, 10
+api_v_data:
+    .ascii ",\"data\":"
+.set api_v_data_len, 8
+api_v_open:
+    .ascii "{\"execution_optimistic\":"
+.set api_v_open_len, 24
+api_v_list:
+    .ascii ",\"data\":["
+.set api_v_list_len, 9
+api_v_end:
+    .ascii "]}"
+.set api_v_end_len, 2
+api_v_statuses:                         /* the names of the statuses, API_STATUS_* order: 24 bytes each, the length first */
+    .byte 19
+    .ascii "pending_initialized"
+    .space 4
+    .byte 14
+    .ascii "pending_queued"
+    .space 9
+    .byte 14
+    .ascii "active_ongoing"
+    .space 9
+    .byte 14
+    .ascii "active_exiting"
+    .space 9
+    .byte 14
+    .ascii "active_slashed"
+    .space 9
+    .byte 16
+    .ascii "exited_unslashed"
+    .space 7
+    .byte 14
+    .ascii "exited_slashed"
+    .space 9
+    .byte 19
+    .ascii "withdrawal_possible"
+    .space 4
+    .byte 15
+    .ascii "withdrawal_done"
+    .space 8
 api_hex:
     .ascii "0123456789abcdef"
 .set api_hex_len, 16

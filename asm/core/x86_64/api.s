@@ -407,6 +407,439 @@ LOCAL_FUNCTION api_fork_schedule
     UNFRAME 32
 END_FUNCTION api_fork_schedule
 
+# ---------------------------------------------------------------- Validators (beacon-api.md, Common rules)
+
+.set API_ITEM_MAX, 576                      # the most bytes of an item and its comma
+
+# rax = the API_STATUS_* of the validator at rdi at the epoch rsi. A leaf. Uses rax, rcx, rdx.
+LOCAL_FUNCTION api_validator_status
+    UNWIND_END_PROLOGUE
+    cmp     %rsi, NODE_VALIDATOR_WITHDRAWABLE(%rdi)
+    ja      1f
+    mov     $API_STATUS_WITHDRAWAL_POSSIBLE, %eax
+    mov     $API_STATUS_WITHDRAWAL_DONE, %ecx
+    cmpq    $0, NODE_VALIDATOR_EFFECTIVE_BALANCE(%rdi)
+    cmove   %ecx, %eax
+    ret
+1:  movzbl  NODE_VALIDATOR_SLASHED(%rdi), %edx
+    mov     NODE_VALIDATOR_EXIT(%rdi), %rcx
+    cmp     %rsi, %rcx
+    ja      2f
+    mov     $API_STATUS_EXITED_UNSLASHED, %eax
+    test    %edx, %edx
+    jz      9f
+    mov     $API_STATUS_EXITED_SLASHED, %eax
+    ret
+2:  cmp     %rsi, NODE_VALIDATOR_ACTIVATION(%rdi)
+    ja      4f
+    mov     $API_STATUS_ACTIVE_ONGOING, %eax
+    cmp     $-1, %rcx                       # active: exiting with an exit epoch below FAR_FUTURE_EPOCH
+    je      9f
+    mov     $API_STATUS_ACTIVE_EXITING, %eax
+    test    %edx, %edx
+    jz      9f
+    mov     $API_STATUS_ACTIVE_SLASHED, %eax
+    ret
+4:  mov     $API_STATUS_PENDING_QUEUED, %eax
+    cmpq    $-1, NODE_VALIDATOR_ELIGIBILITY(%rdi)
+    jne     9f
+    mov     $API_STATUS_PENDING_INITIALIZED, %eax
+9:  ret
+END_FUNCTION api_validator_status
+
+# The item of the validator rsi of the state rdi: rdx 0 for getStateValidators, 1 for the balances,
+# 2 for the identities, 3 for their SSZ (64 bytes). Locals: the validator, the index, the kind, the
+# balance, the epoch, then an SSZ item at 48.
+LOCAL_FUNCTION api_validator_item
+    FRAME 112
+    mov     %rsi, 8(%rsp)
+    mov     %rdx, 16(%rsp)
+    PART    %rax, %rcx, %rdi, NODE_STATE_BALANCES
+    mov     (%rax,%rsi,8), %rax
+    mov     %rax, 24(%rsp)
+    mov     NODE_STATE_SLOT(%rdi), %rax
+    xor     %edx, %edx
+    mov     $SLOTS_PER_EPOCH, %ecx
+    div     %rcx
+    mov     %rax, 32(%rsp)
+    PART    %rax, %rcx, %rdi, NODE_STATE_VALIDATORS
+    mov     8(%rsp), %rcx
+    shl     $7, %rcx                        # NODE_VALIDATOR_MEM
+    add     %rcx, %rax
+    mov     %rax, (%rsp)
+    cmpq    $3, 16(%rsp)
+    jne     1f
+    mov     8(%rsp), %rcx                   # SSZ: index, pubkey, activation_epoch
+    mov     %rcx, 48(%rsp)
+    lea     56(%rsp), %rdi
+    mov     %rax, %rsi
+    mov     $48, %edx
+    call    lantern_copy
+    mov     (%rsp), %rax
+    mov     NODE_VALIDATOR_ACTIVATION(%rax), %rax
+    mov     %rax, 104(%rsp)
+    lea     48(%rsp), %rdi
+    mov     $64, %esi
+    call    api_put
+    UNFRAME 112
+1:  API_LIT api_v_index
+    mov     8(%rsp), %rdi
+    call    api_qdec
+    cmpq    $2, 16(%rsp)
+    je      2f
+    API_LIT api_v_balance
+    mov     24(%rsp), %rdi
+    call    api_qdec
+    cmpq    $0, 16(%rsp)
+    jne     9f
+    API_LIT api_v_status
+    mov     (%rsp), %rdi
+    mov     32(%rsp), %rsi
+    call    api_validator_status
+    lea     api_v_statuses(%rip), %rdi
+    imul    $24, %rax, %rax
+    add     %rax, %rdi
+    movzbl  (%rdi), %esi
+    inc     %rdi
+    call    api_put
+    API_LIT api_v_validator
+    mov     (%rsp), %rdi
+    mov     $48, %esi
+    call    api_qhex
+    API_LIT api_v_credentials
+    mov     (%rsp), %rdi
+    add     $NODE_VALIDATOR_CREDENTIALS, %rdi
+    mov     $32, %esi
+    call    api_qhex
+    API_LIT api_v_effective
+    mov     (%rsp), %rax
+    mov     NODE_VALIDATOR_EFFECTIVE_BALANCE(%rax), %rdi
+    call    api_qdec
+    API_LIT api_v_slashed
+    mov     (%rsp), %rax
+    movzbl  NODE_VALIDATOR_SLASHED(%rax), %edi
+    call    api_bool
+    API_LIT api_v_eligibility
+    mov     (%rsp), %rax
+    mov     NODE_VALIDATOR_ELIGIBILITY(%rax), %rdi
+    call    api_qdec
+    API_LIT api_v_activation
+    mov     (%rsp), %rax
+    mov     NODE_VALIDATOR_ACTIVATION(%rax), %rdi
+    call    api_qdec
+    API_LIT api_v_exit
+    mov     (%rsp), %rax
+    mov     NODE_VALIDATOR_EXIT(%rax), %rdi
+    call    api_qdec
+    API_LIT api_v_withdrawable
+    mov     (%rsp), %rax
+    mov     NODE_VALIDATOR_WITHDRAWABLE(%rax), %rdi
+    call    api_qdec
+    API_LIT api_end2
+    UNFRAME 112
+    # identities
+2:  API_LIT api_v_pubkey
+    mov     (%rsp), %rdi
+    mov     $48, %esi
+    call    api_qhex
+    API_LIT api_v_activation
+    mov     (%rsp), %rax
+    mov     NODE_VALIDATOR_ACTIVATION(%rax), %rdi
+    call    api_qdec
+9:  API_LIT api_end1
+    UNFRAME 112
+END_FUNCTION api_validator_item
+
+# rax = the index of the validator of the ValidatorRef in the ByteList rsi in the state rdi, or 2^64 - 1. A leaf. Uses rax, rcx, rdx, rsi, r8, r9.
+LOCAL_FUNCTION node_api_find_validator
+    UNWIND_END_PROLOGUE
+    cmpq    $64, 16(%rsi)
+    jne     8f
+    add     8(%rsi), %rsi
+    PART    %r8, %r9, %rdi, NODE_STATE_VALIDATORS
+    cmpq    $API_VALIDATOR_INDEX, (%rsi)
+    jne     2f
+    mov     8(%rsi), %rax
+    cmp     %r9, %rax
+    jae     8f
+    ret
+2:  xor     %eax, %eax
+3:  cmp     %r9, %rax
+    jae     8f
+    xor     %edx, %edx
+31: mov     (%r8,%rdx), %rcx
+    cmp     ValidatorRef_pubkey(%rsi,%rdx), %rcx
+    jne     4f
+    add     $8, %rdx
+    cmp     $48, %rdx
+    jb      31b
+    ret
+4:  add     $NODE_VALIDATOR_MEM, %r8
+    inc     %rax
+    jmp     3b
+8:  mov     $-1, %rax
+    ret
+END_FUNCTION node_api_find_validator
+
+# The selection of a chunk of a validator stream (node.md, NODE_WORK_API_CHUNK), at the cursor at
+# NodeEvent_api + 16 of the event rbp: +16 a bitmap, in the scratch rdi, of the validators of the
+# state rsi that the ValidatorRef items of data rdx name (0 with no data); +24 the epoch of the
+# state's slot; +40 the count of the validators selected. rax = 0, or LANTERN_BUFFER_TOO_SMALL.
+# Locals: the scratch's next byte, its end, the validators, their count, the items, their count, the
+# table of the public keys, its mask.
+LOCAL_FUNCTION node_api_validators_prep
+    FRAME 64
+    mov     (%rdi), %rax
+    add     %rdi, %rax
+    lea     16(%rdi), %rcx
+    mov     %rcx, (%rsp)
+    mov     %rax, 8(%rsp)
+    mov     %rdx, %r8
+    mov     NODE_STATE_SLOT(%rsi), %rax     # the epoch
+    xor     %edx, %edx
+    mov     $SLOTS_PER_EPOCH, %ecx
+    div     %rcx
+    mov     %rax, (NodeEvent_api + 16 + 24)(%rbp)
+    PART    %rax, %rcx, %rsi, NODE_STATE_VALIDATORS
+    mov     %rax, 16(%rsp)
+    mov     %rcx, 24(%rsp)
+    mov     %rcx, (NodeEvent_api + 16 + 40)(%rbp)   # no items: every validator
+    movq    $0, (NodeEvent_api + 16 + 16)(%rbp)
+    test    %r8, %r8
+    jz      90f
+    mov     8(%r8), %rax                    # the items
+    add     %r8, %rax
+    mov     %rax, 32(%rsp)
+    mov     16(%r8), %rax
+    shr     $6, %rax
+    mov     %rax, 40(%rsp)
+    mov     24(%rsp), %rsi                  # the bitmap: a bit for each validator
+    add     $63, %rsi
+    shr     $6, %rsi
+    shl     $3, %rsi
+    mov     (%rsp), %rdi
+    lea     (%rdi,%rsi), %rax
+    cmp     8(%rsp), %rax
+    ja      97f
+    mov     %rax, (%rsp)
+    mov     %rdi, (NodeEvent_api + 16 + 16)(%rbp)
+    call    lantern_zero
+    mov     (NodeEvent_api + 16 + 16)(%rbp), %r11   # index items: their bits; then count the public keys
+    mov     32(%rsp), %r8
+    mov     40(%rsp), %r9
+    mov     24(%rsp), %r10
+    xor     %ecx, %ecx
+1:  test    %r9, %r9
+    jz      3f
+    cmpq    $API_VALIDATOR_INDEX, (%r8)
+    jne     2f
+    mov     8(%r8), %rax
+    cmp     %r10, %rax
+    jae     21f
+    bts     %rax, (%r11)
+    jmp     21f
+2:  inc     %rcx
+21: add     $64, %r8
+    dec     %r9
+    jmp     1b
+3:  test    %rcx, %rcx
+    jz      80f
+    shl     $1, %rcx                        # the table: the least power of two at least twice the keys
+    mov     $1, %eax
+31: cmp     %rcx, %rax
+    jae     32f
+    shl     $1, %rax
+    jmp     31b
+32: lea     -1(%rax), %rcx
+    mov     %rcx, 56(%rsp)
+    mov     (%rsp), %rdi
+    lea     0(,%rax,8), %rsi
+    lea     (%rdi,%rsi), %rax
+    cmp     8(%rsp), %rax
+    ja      97f
+    mov     %rdi, 48(%rsp)
+    call    lantern_zero
+    mov     32(%rsp), %r8                   # each public key item: its number + 1, at bytes 8 to 16 of the key
+    mov     40(%rsp), %r9
+    mov     48(%rsp), %r10
+    mov     56(%rsp), %r11
+    xor     %ecx, %ecx
+4:  cmp     %r9, %rcx
+    jae     5f
+    cmpq    $API_VALIDATOR_PUBKEY, (%r8)
+    jne     42f
+    mov     (ValidatorRef_pubkey + 8)(%r8), %rax
+41: and     %r11, %rax
+    cmpq    $0, (%r10,%rax,8)
+    je      43f
+    inc     %rax
+    jmp     41b
+43: lea     1(%rcx), %rdx
+    mov     %rdx, (%r10,%rax,8)
+42: add     $64, %r8
+    inc     %rcx
+    jmp     4b
+5:  mov     16(%rsp), %r8                   # each validator whose key the table holds: its bit
+    xor     %ecx, %ecx
+    mov     (NodeEvent_api + 16 + 16)(%rbp), %rsi
+51: cmp     24(%rsp), %rcx
+    jae     80f
+    mov     8(%r8), %rax
+52: and     %r11, %rax
+    mov     (%r10,%rax,8), %rdx
+    test    %rdx, %rdx
+    jz      59f
+    dec     %rdx
+    shl     $6, %rdx
+    add     32(%rsp), %rdx
+    xor     %edi, %edi
+53: mov     (%r8,%rdi), %r9
+    cmp     ValidatorRef_pubkey(%rdx,%rdi), %r9
+    jne     58f
+    add     $8, %rdi
+    cmp     $48, %rdi
+    jb      53b
+    bts     %rcx, (%rsi)
+    jmp     59f
+58: inc     %rax
+    jmp     52b
+59: add     $NODE_VALIDATOR_MEM, %r8
+    inc     %rcx
+    jmp     51b
+80: mov     24(%rsp), %rcx                  # the count: the bits set
+    add     $63, %rcx
+    shr     $6, %rcx
+    mov     (NodeEvent_api + 16 + 16)(%rbp), %rsi
+    xor     %edx, %edx
+81: test    %rcx, %rcx
+    jz      83f
+    mov     (%rsi), %rax
+    add     $8, %rsi
+82: test    %rax, %rax
+    jz      84f
+    lea     -1(%rax), %rdi
+    and     %rdi, %rax
+    inc     %rdx
+    jmp     82b
+84: dec     %rcx
+    jmp     81b
+83: mov     %rdx, (NodeEvent_api + 16 + 40)(%rbp)
+90: xor     %eax, %eax
+    UNFRAME 64
+97: mov     $LANTERN_BUFFER_TOO_SMALL, %eax
+    UNFRAME 64
+END_FUNCTION node_api_validators_prep
+
+# The items of the validator stream of the entry rbx, of the state rdi, from the cursor at
+# NodeEvent_api + 16 of the event rbp (+0 the next index, +8 the status bits, +16 the bitmap, +24
+# the epoch, +32 the items written), at the writer's cursor r12 up to r14; then ]} for JSON once they
+# are all written. rax = 1 when whole, else 0. Locals: the state, the kind, the validators' count.
+LOCAL_FUNCTION api_validators_json
+    FRAME 32
+    mov     %rdi, (%rsp)
+    xor     %eax, %eax                      # the kind: 0, 1 the balances, 2 the identities, 3 their SSZ
+    mov     NodeApi_op(%rbx), %rcx
+    cmp     $API_OP_GET_STATE_VALIDATOR_BALANCES, %rcx
+    je      11f
+    cmp     $API_OP_POST_STATE_VALIDATOR_BALANCES, %rcx
+    jne     12f
+11: mov     $1, %eax
+12: cmp     $API_OP_POST_STATE_VALIDATOR_IDENTITIES, %rcx
+    jne     13f
+    mov     $2, %eax
+    testq   $API_STREAM_SSZ, NodeApi_flags(%rbx)
+    jz      13f
+    mov     $3, %eax
+13: mov     %rax, 8(%rsp)
+    mov     (NODE_STATE_VALIDATORS + 8)(%rdi), %rax
+    mov     %rax, 16(%rsp)
+2:  mov     (NodeEvent_api + 16)(%rbp), %rcx
+    cmp     16(%rsp), %rcx
+    jae     8f
+    mov     (NodeEvent_api + 16 + 16)(%rbp), %rdx   # with a bitmap: the next validator it names
+    test    %rdx, %rdx
+    jz      3f
+    mov     %rcx, %rax
+    shr     $6, %rax
+    mov     (%rdx,%rax,8), %rax
+    shr     %cl, %rax
+    test    %rax, %rax
+    jnz     21f
+    add     $64, %rcx
+    and     $~63, %rcx
+    mov     %rcx, (NodeEvent_api + 16)(%rbp)
+    jmp     2b
+21: bsf     %rax, %rax
+    add     %rax, %rcx
+    mov     %rcx, (NodeEvent_api + 16)(%rbp)
+3:  cmpq    $0, (NodeEvent_api + 16 + 8)(%rbp)       # with status bits: its status has its bit
+    je      4f
+    mov     (%rsp), %rdi
+    PART    %rax, %rdx, %rdi, NODE_STATE_VALIDATORS
+    shl     $7, %rcx
+    lea     (%rax,%rcx), %rdi
+    mov     (NodeEvent_api + 16 + 24)(%rbp), %rsi
+    call    api_validator_status
+    mov     (NodeEvent_api + 16 + 8)(%rbp), %rdx
+    bt      %rax, %rdx
+    jc      4f
+    incq    (NodeEvent_api + 16)(%rbp)
+    jmp     2b
+4:  mov     %r14, %rax                      # room for one more item
+    sub     %r12, %rax
+    cmp     $API_ITEM_MAX, %rax
+    jb      9f
+    cmpq    $3, 8(%rsp)
+    je      5f
+    cmpq    $0, (NodeEvent_api + 16 + 32)(%rbp)
+    je      5f
+    API_LIT api_p_comma
+5:  incq    (NodeEvent_api + 16 + 32)(%rbp)
+    mov     (%rsp), %rdi
+    mov     (NodeEvent_api + 16)(%rbp), %rsi
+    mov     8(%rsp), %rdx
+    call    api_validator_item
+    incq    (NodeEvent_api + 16)(%rbp)
+    jmp     2b
+8:  cmpq    $3, 8(%rsp)                     # all: ]} for JSON
+    je      81f
+    mov     %r14, %rax
+    sub     %r12, %rax
+    cmp     $2, %rax
+    jb      9f
+    API_LIT api_v_end
+81: mov     $1, %eax
+    UNFRAME 32
+9:  xor     %eax, %eax
+    UNFRAME 32
+END_FUNCTION api_validators_json
+
+# rax = the new id of a NODE_ACT_BYTES_PUT of the ValidatorRef items of the validator operation of
+# the route rdi (getStateValidator: its validator_id), or 0 with none (node.md, NODE_EV_API).
+# Locals: a ByteList head whose offset reaches the items.
+LOCAL_FUNCTION node_api_ids
+    FRAME 32
+    cmpq    $API_OP_GET_STATE_VALIDATOR, ApiRoute_op(%rdi)
+    jne     1f
+    lea     ApiRoute_validator(%rdi), %rax
+    mov     $64, %ecx
+    jmp     2f
+1:  mov     ApiRoute_list(%rdi), %rax
+    add     %rdi, %rax
+    mov     (ApiRoute_list + 8)(%rdi), %rcx
+    shl     $6, %rcx
+    jnz     2f
+    xor     %eax, %eax
+    UNFRAME 32
+2:  mov     %rsp, %rdi
+    sub     %rdi, %rax
+    mov     %rcx, (%rdi)
+    mov     %rax, 8(%rdi)
+    mov     %rcx, 16(%rdi)
+    call    node_put
+    UNFRAME 32
+END_FUNCTION node_api_ids
+
 LOCAL_FUNCTION api_body
     FRAME 16
     mov     %rdi, (%rsp)
@@ -621,7 +1054,7 @@ LOCAL_FUNCTION api_body
     call    api_fork_schedule
     UNFRAME 16
 17: cmp     $API_OP_GET_DEPOSIT_CONTRACT, %rsi  # {"data":{"chain_id":…,"address":…}}
-    jne     99f
+    jne     18f
     API_LIT api_d_chain
     mov     ApiView_config(%rbp), %rax
     mov     CONFIG_DEPOSIT_CHAIN_ID(%rax), %rdi
@@ -632,6 +1065,21 @@ LOCAL_FUNCTION api_body
     mov     $20, %esi
     call    api_qhex
     API_LIT api_end2
+    UNFRAME 16
+18: cmp     $API_OP_GET_STATE_VALIDATOR, %rsi   # {"execution_optimistic":…,"finalized":…,"data":<item>}
+    jne     99f
+    API_LIT api_v_open
+    mov     ApiView_is_optimistic(%rbp), %rdi
+    call    api_bool
+    API_LIT api_x_finalized
+    mov     ApiView_head_finalized(%rbp), %rdi
+    call    api_bool
+    API_LIT api_v_data
+    mov     ApiView_val_state(%rbp), %rdi
+    mov     ApiView_val_index(%rbp), %rsi
+    xor     %edx, %edx
+    call    api_validator_item
+    API_LIT api_end1
 99: UNFRAME 16
 END_FUNCTION api_body
 
@@ -1070,6 +1518,9 @@ LOCAL_FUNCTION node_api_event
     je      66f
     cmp     $API_OP_GET_SPEC, %rcx
     je      67f
+    lea     -API_OP_GET_STATE_VALIDATORS(%rcx), %rax    # the six validator operations: a state
+    cmp     $(API_OP_POST_STATE_VALIDATOR_IDENTITIES - API_OP_GET_STATE_VALIDATORS), %rax
+    jbe     66f
     cmp     $API_OP_GET_STATE_V2, %rcx
     jne     7f
 66: mov     S7(%rsp), %rax                  # a state root: a work finds its slot first
@@ -1092,8 +1543,19 @@ LOCAL_FUNCTION node_api_event
     mov     S8(%rsp), %rdi
     call    node_api_advance
     mov     S7(%rsp), %rax
-    cmpq    $API_OP_GET_STATE_V2, ApiRoute_op(%rax)
+    mov     ApiRoute_op(%rax), %rcx
+    cmp     $API_OP_GET_STATE_V2, %rcx
     je      64f
+    sub     $API_OP_GET_STATE_VALIDATORS, %rcx
+    cmp     $(API_OP_POST_STATE_VALIDATOR_IDENTITIES - API_OP_GET_STATE_VALIDATORS), %rcx
+    ja      67f
+    mov     %rax, %rdi                      # the validator operations: their ids; getStateValidator a work, the others a stream
+    call    node_api_ids
+    mov     S8(%rsp), %rcx
+    mov     %rax, ApiView_look_data(%rcx)
+    mov     S7(%rsp), %rax
+    cmpq    $API_OP_GET_STATE_VALIDATOR, ApiRoute_op(%rax)
+    jne     64f
     jmp     67f
 65: mov     S7(%rsp), %rdi                  # a block: its lookup
     mov     S8(%rsp), %rsi
@@ -1146,7 +1608,16 @@ END_FUNCTION node_api_event
 LOCAL_FUNCTION node_api_done
     ENTER 0
     mov     %rdi, %r12
-    mov     NodeAction_arg(%r12), %rax
+    movzbl  NodeAction_arg(%r12), %eax      # getStateValidator: its ids go
+    cmp     $API_OP_GET_STATE_VALIDATOR, %eax
+    jne     2f
+    mov     NodeAction_data(%r12), %rsi
+    test    %rsi, %rsi
+    jz      2f
+    mov     $NODE_ACT_BYTES_FREE, %edi
+    xor     %edx, %edx
+    call    node_ids
+2:  mov     NodeAction_arg(%r12), %rax
     shr     $8, %rax
     movzbl  %al, %eax
     mov     %rax, %rcx
@@ -1238,6 +1709,8 @@ LOCAL_FUNCTION node_api_run
     jz      8f
     cmp     $API_OP_GET_STATE_FINALITY_CHECKPOINTS, %eax
     je      2f
+    cmp     $API_OP_GET_STATE_VALIDATOR, %eax
+    je      2f
     cmp     $API_OP_GET_STATE_ROOT, %eax
     je      2f
     cmp     $API_OP_GET_STATE_FORK, %eax
@@ -1276,7 +1749,18 @@ LOCAL_FUNCTION node_api_run
     lea     Node_config(%rbx), %rsi
     call    node_fork
     mov     %rax, %r10
-    cmpq    $API_OP_GET_STATE_FINALITY_CHECKPOINTS, S9(%rsp)
+    cmpq    $API_OP_GET_STATE_VALIDATOR, S9(%rsp)
+    jne     20f
+    mov     %r13, %rdi                      # getStateValidator: the validator of its ids
+    mov     S7(%rsp), %rsi
+    test    %rsi, %rsi
+    jz      8f
+    call    node_api_find_validator
+    mov     S8(%rsp), %rdi
+    mov     %r13, ApiView_val_state(%rdi)
+    mov     %rax, ApiView_val_index(%rdi)
+    jmp     5f
+20: cmpq    $API_OP_GET_STATE_FINALITY_CHECKPOINTS, S9(%rsp)
     jne     21f
     mov     %r13, %rdi                      # finality_checkpoints
     mov     S8(%rsp), %rsi
@@ -1399,7 +1883,13 @@ LOCAL_FUNCTION node_api_run
     lea     NodeEvent_chunk(%r15), %rsi
     mov     $200, %edx
     mov     S9(%rsp), %rcx
-    call    api_respond
+    cmp     $API_OP_GET_STATE_VALIDATOR, %rcx   # no such validator: 404
+    jne     52f
+    cmpq    $-1, ApiView_val_index(%rdi)
+    jne     52f
+    mov     $404, %edx
+    mov     $API_BODY_ERROR, %ecx
+52: call    api_respond
     test    %rax, %rax
     jnz     71f
     mov     (NodeEvent_chunk + 16)(%r15), %rax  # the event's size covers the chunk
@@ -1815,11 +2305,14 @@ LOCAL_FUNCTION node_api_encode
     jnz     3f
     mov     $404, %eax
     UNFRAME 16
-2:  mov     ApiView_head_slot(%rcx), %rax   # the others: the state at its slot
+2:  mov     ApiView_head_slot(%rcx), %rax   # the others: the state at its slot; getStateValidator its ids
     shl     $24, %rax
     or      %rax, %r9
     mov     ApiView_look_state(%rcx), %rsi
+    mov     ApiView_look_data(%rcx), %rax
     xor     %ecx, %ecx
+    cmp     $API_OP_GET_STATE_VALIDATOR, %rdi
+    cmove   %rax, %rcx
 3:  mov     $NODE_WORK_API_ENCODE, %edi
     xor     %edx, %edx
     call    node_work
@@ -1872,7 +2365,23 @@ LOCAL_FUNCTION node_api_lookup
     lea     NodeApi_cursor(%r13), %rax
     lea     ApiRoute_id_root(%r12), %rcx
     COPY32  %rax, %rcx
-    mov     $NODE_WORK_API_LOOKUP, %edi
+    mov     ApiRoute_op(%r12), %rax         # the validator operations: statuses, validator_id and ids
+    sub     $API_OP_GET_STATE_VALIDATORS, %rax
+    cmp     $(API_OP_POST_STATE_VALIDATOR_IDENTITIES - API_OP_GET_STATE_VALIDATORS), %rax
+    ja      2f
+    mov     ApiRoute_statuses(%r12), %rax
+    mov     %rax, (NodeApi_cursor + 32)(%r13)
+    lea     (NodeApi_cursor + 40)(%r13), %rdi
+    lea     ApiRoute_validator(%r12), %rsi
+    mov     $64, %edx
+    call    lantern_copy
+    mov     %r12, %rdi
+    call    node_api_ids
+    mov     %rax, NodeApi_data(%r13)
+    test    %rax, %rax
+    jz      2f
+    orq     $API_STREAM_OWN, NodeApi_flags(%r13)
+2:  mov     $NODE_WORK_API_LOOKUP, %edi
     mov     S8(%rsp), %rsi
     xor     %edx, %edx
     xor     %ecx, %ecx
@@ -1892,7 +2401,7 @@ END_FUNCTION node_api_lookup
  * connection, S10 the operation. Locals: L the scratch's size.
  */
 LOCAL_FUNCTION node_api_lookup_done
-    ENTER 16
+    ENTER 96
     mov     %rdi, %r12
     mov     NodeAction_arg(%r12), %rax
     PART    %rdi, %rcx, %rbx, Node_api
@@ -1910,13 +2419,26 @@ LOCAL_FUNCTION node_api_lookup_done
     test    $API_STREAM_LOOKUP, %eax
     jz      99f
     mov     %rax, S7(%rsp)
+    mov     NodeApi_op(%rdi), %rcx
+    mov     %rcx, S10(%rsp)
+    test    $API_STREAM_GONE, %eax
+    jz      1f
+    call    node_api_end                    # API_STREAM_GONE: the entry ends, its ids with it
+    jmp     99f
+1:  mov     NodeApi_data(%rdi), %rcx        # its ids, statuses and validator_id go to the answer
+    mov     %rcx, (L + 16)(%rsp)
+    mov     (NodeApi_cursor + 32)(%rdi), %rcx
+    mov     %rcx, (L + 24)(%rsp)
+    mov     %rdi, %r13
+    lea     (L + 32)(%rsp), %rdi
+    lea     (NodeApi_cursor + 40)(%r13), %rsi
+    mov     $64, %edx
+    call    lantern_copy
+    mov     %r13, %rdi
+    mov     S7(%rsp), %rax
     and     $~API_STREAM_OWN, %rax          # the entry ends; it owns no bytes
     mov     %rax, NodeApi_flags(%rdi)
-    mov     NodeApi_op(%rdi), %rax
-    mov     %rax, S10(%rsp)
     call    node_api_end
-    testq   $API_STREAM_GONE, S7(%rsp)
-    jnz     99f
     mov     (%r14), %rax                    # the ApiView, then an ApiRoute, at the end of scratch
     mov     %rax, L(%rsp)
     sub     $(ApiView__size + API_ROUTE_FIXED), %rax
@@ -1938,6 +2460,12 @@ LOCAL_FUNCTION node_api_lookup_done
     jz      1f
     mov     $API_TYPE_SSZ, %eax
 1:  mov     %rax, ApiRoute_response(%r13)
+    mov     (L + 24)(%rsp), %rax
+    mov     %rax, ApiRoute_statuses(%r13)
+    lea     ApiRoute_validator(%r13), %rdi
+    lea     (L + 32)(%rsp), %rsi
+    mov     $64, %edx
+    call    lantern_copy
     movq    $API_ID_SLOT, ApiRoute_id_kind(%r13)
     mov     NodeEvent_index(%r12), %rax
     mov     %rax, ApiRoute_id_slot(%r13)
@@ -1954,9 +2482,19 @@ LOCAL_FUNCTION node_api_lookup_done
     call    node_api_advance
     mov     S7(%rsp), %rdx
     and     $(API_STREAM_CLOSE | API_STREAM_HTTP10), %edx
-    cmpq    $API_OP_GET_STATE_V2, S10(%rsp)
-    jne     2f
-    mov     S9(%rsp), %rdi                  # getStateV2: a stream
+    mov     S8(%rsp), %rax                  # the ids go to the answer
+    mov     (L + 16)(%rsp), %rcx
+    mov     %rcx, ApiView_look_data(%rax)
+    movq    $0, (L + 16)(%rsp)
+    mov     S10(%rsp), %rax
+    cmp     $API_OP_GET_STATE_V2, %rax
+    je      3f
+    cmp     $API_OP_GET_STATE_VALIDATOR, %rax
+    je      2f
+    sub     $API_OP_GET_STATE_VALIDATORS, %rax
+    cmp     $(API_OP_POST_STATE_VALIDATOR_IDENTITIES - API_OP_GET_STATE_VALIDATORS), %rax
+    ja      2f
+3:  mov     S9(%rsp), %rdi                  # getStateV2 and the validator streams: a stream
     mov     %r13, %rsi
     mov     S8(%rsp), %rcx
     call    node_api_stream
@@ -1971,7 +2509,15 @@ LOCAL_FUNCTION node_api_lookup_done
     mov     %rax, %rdx
     test    %rax, %rax
     jz      90f
-80: mov     S9(%rsp), %rdi                  # an error: with close, or keep-alive for HTTP/1.0
+80: mov     (L + 16)(%rsp), %rsi            # ids no answer took: they go
+    test    %rsi, %rsi
+    jz      82f
+    mov     %rdx, (L + 24)(%rsp)
+    mov     $NODE_ACT_BYTES_FREE, %edi
+    xor     %edx, %edx
+    call    node_ids
+    mov     (L + 24)(%rsp), %rdx
+82: mov     S9(%rsp), %rdi                  # an error: with close, or keep-alive for HTTP/1.0
     xor     %esi, %esi
     mov     $API_BODY_ERROR, %ecx
     mov     S7(%rsp), %r8
@@ -1983,7 +2529,7 @@ LOCAL_FUNCTION node_api_lookup_done
 81: call    node_api_send
 90: mov     L(%rsp), %rax
     mov     %rax, (%r14)
-99: LEAVE 16
+99: LEAVE 96
 END_FUNCTION node_api_lookup_done
 
 /*
@@ -2114,8 +2660,9 @@ END_FUNCTION node_api_new
  * gives to another entry that sends the same bytes.
  */
 LOCAL_FUNCTION node_api_end
-    UNWIND_END_PROLOGUE
+    FRAME 16
     movq    $0, NodeApi_connection(%rdi)
+    mov     %rdi, (%rsp)
     PART    %rcx, %r10, %rbx, Node_api
 1:  test    %r10, %r10
     jz      2f
@@ -2126,12 +2673,19 @@ LOCAL_FUNCTION node_api_end
     jmp     1b
 2:  mov     %r10, (Node_api + 8)(%rbx)
     testq   $API_STREAM_OWN, NodeApi_flags(%rdi)
-    jz      9f
+    jz      8f
     mov     NodeApi_data(%rdi), %rsi
     mov     $NODE_ACT_BYTES_FREE, %edi
     xor     %edx, %edx
-    jmp     node_ids
-9:  ret
+    call    node_ids
+8:  mov     (%rsp), %rdi
+    testq   $API_STREAM_OWN_STATE, NodeApi_flags(%rdi)
+    jz      9f
+    mov     NodeApi_state(%rdi), %rsi
+    mov     $NODE_ACT_STATE_FREE, %edi
+    xor     %edx, %edx
+    call    node_ids
+9:  UNFRAME 16
 END_FUNCTION node_api_end
 
 /* A NODE_WORK_API_CHUNK of the NodeApi entry rdx at index rax, which takes API_STREAM_BUSY. */
@@ -2141,8 +2695,8 @@ LOCAL_FUNCTION node_api_chunk_work
     mov     %rax, %r9
     mov     NodeApi_data(%rdx), %rcx
     mov     NodeApi_connection(%rdx), %r8
+    mov     NodeApi_state(%rdx), %rsi       # a validator stream's state
     mov     $NODE_WORK_API_CHUNK, %edi
-    xor     %esi, %esi
     xor     %edx, %edx
     jmp     node_work
 END_FUNCTION node_api_chunk_work
@@ -2175,14 +2729,15 @@ LOCAL_FUNCTION node_api_closed
 END_FUNCTION node_api_closed
 
 /*
- * (connection rdi, route rsi, flags rdx, view rcx) -> rax: a stream of getBlockV2 or getStateV2 of
+ * (connection rdi, route rsi, flags rdx, view rcx) -> rax: a stream of getBlockV2, getStateV2 or a validator operation of
  * the lookup in the view (node.md, NODE_EV_API): 0 once it started, else the status of the error to
  * answer. flags: API_STREAM_CLOSE and API_STREAM_HTTP10. rbx the node, r15 the actions. r12 the
  * data, S7 the route, S8 the view, S9 the connection, S10 the flags. Locals: L the entry's index,
  * L+8 the entry.
  */
 LOCAL_FUNCTION node_api_stream
-    ENTER 16
+    ENTER 32
+    movq    $0, (L + 16)(%rsp)
     mov     %rdi, S9(%rsp)
     mov     %rsi, S7(%rsp)
     mov     %rdx, S10(%rsp)
@@ -2198,7 +2753,19 @@ LOCAL_FUNCTION node_api_stream
     orq     $API_STREAM_FINALIZED, S10(%rsp)
 3:  cmpq    $API_OP_GET_STATE_V2, ApiRoute_op(%rsi)
     je      5f
-    mov     ApiView_look_data(%rcx), %r12   # getBlockV2: the block's bytes
+    cmpq    $API_OP_GET_BLOCK_V2, ApiRoute_op(%rsi)
+    je      4f
+    mov     ApiView_look_data(%rcx), %r12   # a validator stream: its ids, and its state
+    test    %r12, %r12
+    jz      31f
+    orq     $API_STREAM_OWN, S10(%rsp)
+31: cmpq    $0, ApiView_look_copy(%rcx)
+    je      32f
+    orq     $API_STREAM_OWN_STATE, S10(%rsp)
+32: mov     ApiView_look_state(%rcx), %rax
+    mov     %rax, (L + 16)(%rsp)
+    jmp     6f
+4:  mov     ApiView_look_data(%rcx), %r12   # getBlockV2: the block's bytes
     test    %r12, %r12
     jz      80f
     jmp     6f
@@ -2240,12 +2807,17 @@ LOCAL_FUNCTION node_api_stream
     mov     S10(%rsp), %rax
     mov     %rax, NodeApi_flags(%rdx)
     mov     %r12, NodeApi_data(%rdx)
+    mov     (L + 16)(%rsp), %rax            # a validator stream: its state and status bits
+    mov     %rax, NodeApi_state(%rdx)
+    mov     S7(%rsp), %rax
+    mov     ApiRoute_statuses(%rax), %rax
+    mov     %rax, NodeApi_statuses(%rdx)
     mov     L(%rsp), %rax
     call    node_api_chunk_work
     xor     %eax, %eax
-    LEAVE 16
+    LEAVE 32
 80: mov     $404, %eax
-    LEAVE 16
+    LEAVE 32
 END_FUNCTION node_api_stream
 
 /*
@@ -2368,11 +2940,15 @@ LOCAL_FUNCTION api_stream_head
     API_LIT api_octet
     jmp     2f
 1:  API_LIT api_type
-2:  API_LIT api_version
+2:  cmpq    $API_OP_GET_BLOCK_V2, NodeApi_op(%rbx)  # Eth-Consensus-Version: of getBlockV2 and getStateV2
+    je      21f
+    cmpq    $API_OP_GET_STATE_V2, NodeApi_op(%rbx)
+    jne     22f
+21: API_LIT api_version
     mov     NodeApi_fork(%rbx), %rdi
     call    api_fork_name
     API_LIT api_crlf
-    mov     (%rsp), %rdi
+22: mov     (%rsp), %rdi
     cmp     $-1, %rdi
     je      3f
     API_LIT api_length
@@ -2417,7 +2993,13 @@ END_FUNCTION api_hex4
  */
 LOCAL_FUNCTION api_stream_json
     FRAME 0
-    lea     NodeEvent_api_bytes(%rbp), %rsi # the ByteList: its room to r14 - 1, its bytes to r12
+    cmpq    $API_OP_GET_BLOCK_V2, NodeApi_op(%rbx)  # the validator streams: their items, of the state rdi
+    je      1f
+    cmpq    $API_OP_GET_STATE_V2, NodeApi_op(%rbx)
+    je      1f
+    call    api_validators_json
+    UNFRAME 0
+1:  lea     NodeEvent_api_bytes(%rbp), %rsi # the ByteList: its room to r14 - 1, its bytes to r12
     lea     -1(%r14), %rax
     sub     %rsi, %rax
     mov     %rax, (%rsi)
@@ -2450,15 +3032,19 @@ LOCAL_FUNCTION api_stream_json
 END_FUNCTION api_stream_json
 
 /*
- * (node rdi, work rsi, data rdx, scratch rcx, event r8, room r9) -> rax: a NODE_WORK_API_CHUNK of
- * lantern_node_run (node.md): the next chunk of the NodeApi entry at the work's arg, from the SSZ
- * bytes in data, at NodeEvent_api of the event, whose buffer has room bytes. rbx the entry, rbp
- * the event; the writer's r12-r15 (api_put). Locals: L the end of the chunk's room, L+8 the SSZ
- * bytes, L+16 their count, L+24 the body's start, L+32 the head's bytes, L+40 data.
+ * (node rdi, work rsi, data rdx, scratch rcx, event r8, room r9, state_a r10) -> rax: a
+ * NODE_WORK_API_CHUNK of lantern_node_run (node.md): the next chunk of the NodeApi entry at the
+ * work's arg, from the SSZ bytes in data, or for a validator stream from state_a and the ids in
+ * data, at NodeEvent_api of the event, whose buffer has room bytes. rbx the entry, rbp the event;
+ * the writer's r12-r15 (api_put). Locals: L the end of the chunk's room, L+8 the SSZ bytes, L+16
+ * their count, L+24 the body's start, L+32 the head's bytes, L+40 data (a validator stream's state
+ * once its selection is made), L+48 state_a, L+56 1 for a validator stream, L+64 the scratch.
  */
 LOCAL_FUNCTION node_api_chunk_run
-    ENTER 48
+    ENTER 80
     mov     %rdx, (L + 40)(%rsp)
+    mov     %r10, (L + 48)(%rsp)
+    mov     %rcx, (L + 64)(%rsp)
     mov     %r8, %rbp
     mov     NodeAction_arg(%rsi), %rax      # the entry
     PART    %rbx, %rcx, %rdi, Node_api
@@ -2472,10 +3058,20 @@ LOCAL_FUNCTION node_api_chunk_run
     cmp     $API_OP_GET_BLOCK_V2, %rax
     je      1f
     cmp     $API_OP_GET_STATE_V2, %rax
-    jne     98f
+    je      1f
+    cmp     $API_OP_GET_STATE_VALIDATOR, %rax       # a validator stream: a state
+    je      98f
+    sub     $API_OP_GET_STATE_VALIDATORS, %rax
+    cmp     $(API_OP_POST_STATE_VALIDATOR_IDENTITIES - API_OP_GET_STATE_VALIDATORS), %rax
+    ja      98f
+    cmpq    $0, (L + 48)(%rsp)
+    je      98f
+    movq    $1, (L + 56)(%rsp)
+    jmp     101f
 1:  test    %rdx, %rdx
     jz      98f
-    mov     %r9, %rax                       # the chunk's room: at most NODE_API_CHUNK
+    movq    $0, (L + 56)(%rsp)
+101: mov    %r9, %rax                       # the chunk's room: at most NODE_API_CHUNK
     sub     $(NodeEvent_api_bytes + 24), %rax
     jb      97f
     and     $~7, %rax
@@ -2485,12 +3081,21 @@ LOCAL_FUNCTION node_api_chunk_run
 2:  mov     $NODE_API_FIRST_ROOM, %ecx
     testq   $API_STREAM_STARTED, NodeApi_flags(%rbx)
     jz      3f
+    cmpq    $0, (L + 56)(%rsp)              # a validator stream: an item in every chunk
+    jne     3f
     mov     $64, %ecx
 3:  cmp     %rcx, %rax
     jb      97f
     lea     (NodeEvent_api_bytes + 24)(%rbp,%rax), %rax
     mov     %rax, L(%rsp)
-    mov     8(%rdx), %rax                   # the SSZ bytes
+    cmpq    $0, (L + 56)(%rsp)
+    je      102f
+    mov     (L + 48)(%rsp), %rax            # the state at the entry's slot
+    mov     NODE_STATE_SLOT(%rax), %rax
+    cmp     NodeApi_slot(%rbx), %rax
+    jne     95f
+    jmp     5f
+102: mov    8(%rdx), %rax                   # the SSZ bytes
     add     %rdx, %rax
     mov     %rax, (L + 8)(%rsp)
     mov     16(%rdx), %rax
@@ -2506,7 +3111,7 @@ LOCAL_FUNCTION node_api_chunk_run
     mov     (%rsi,%rcx), %rsi
     cmp     NodeApi_slot(%rbx), %rsi
     jne     96f
-    mov     NodeApi_sent(%rbx), %rax        # the entry's sent, flags and cursor go on in the event
+5:  mov     NodeApi_sent(%rbx), %rax        # the entry's sent, flags and cursor go on in the event
     mov     %rax, NodeEvent_api(%rbp)
     mov     NodeApi_flags(%rbx), %rax
     mov     %rax, (NodeEvent_api + 8)(%rbp)
@@ -2518,9 +3123,21 @@ LOCAL_FUNCTION node_api_chunk_run
     mov     $1, %r13d
     mov     L(%rsp), %r14
     xor     %r15d, %r15d
-    mov     (NodeEvent_api + 8)(%rbp), %rax
+    cmpq    $0, (L + 56)(%rsp)              # a validator stream: its selection; then the state is what api_stream_json reads
+    je      6f
+    mov     (L + 64)(%rsp), %rdi
+    mov     (L + 48)(%rsp), %rsi
+    mov     (L + 40)(%rsp), %rdx
+    call    node_api_validators_prep
+    test    %rax, %rax
+    jnz     97f
+    mov     (L + 48)(%rsp), %rax
+    mov     %rax, (L + 40)(%rsp)
+6:  mov     (NodeEvent_api + 8)(%rbp), %rax
     test    $API_STREAM_SSZ, %eax
     jz      30f
+    cmpq    $0, (L + 56)(%rsp)
+    jne     60f
     test    $API_STREAM_STARTED, %eax
     jnz     11f
     mov     (L + 16)(%rsp), %rdi            # SSZ: the head first, with Content-Length
@@ -2545,14 +3162,41 @@ LOCAL_FUNCTION node_api_chunk_run
     jne     80f
     orq     $API_STREAM_DONE, (NodeEvent_api + 8)(%rbp)
     jmp     80f
+60: test    $API_STREAM_STARTED, %eax       # the identities as SSZ: Content-Length of 64 bytes each
+    jnz     61f
+    mov     (NodeEvent_api + 16 + 40)(%rbp), %rdi
+    shl     $6, %rdi
+    call    api_stream_head
+61: mov     (L + 40)(%rsp), %rdi
+    call    api_validators_json
+    orq     $API_STREAM_STARTED, (NodeEvent_api + 8)(%rbp)
+    test    %rax, %rax
+    jz      80f
+    orq     $API_STREAM_DONE, (NodeEvent_api + 8)(%rbp)
+    jmp     80f
 30: test    $API_STREAM_STARTED, %eax       # JSON, the first chunk: the body after room for the head
     jnz     40f
     lea     (NodeEvent_api_bytes + 24 + API_HEAD_ROOM)(%rbp), %r12
     mov     %r12, (L + 24)(%rsp)
     mov     L(%rsp), %r14
     sub     $7, %r14                        # room for CRLF and the last chunk
+    cmpq    $0, (L + 56)(%rsp)
+    je      35f
+    /* the validator streams: {"execution_optimistic":…,"finalized":…,"data":[ */
+    API_LIT api_v_open
+    mov     (NodeEvent_api + 8)(%rbp), %rdi
+    shr     $8, %rdi
+    and     $1, %edi
+    call    api_bool
+    API_LIT api_x_finalized
+    mov     (NodeEvent_api + 8)(%rbp), %rdi
+    shr     $9, %rdi
+    and     $1, %edi
+    call    api_bool
+    API_LIT api_v_list
+    jmp     36f
     /* {"version":"<fork>","execution_optimistic":…,"finalized":…,"data": */
-    API_LIT api_j_version
+35: API_LIT api_j_version
     mov     NodeApi_fork(%rbx), %rdi
     call    api_fork_name
     API_LIT api_j_optimistic
@@ -2566,7 +3210,7 @@ LOCAL_FUNCTION node_api_chunk_run
     and     $1, %edi
     call    api_bool
     API_LIT api_j_data
-    mov     (L + 40)(%rsp), %rdi
+36: mov     (L + 40)(%rsp), %rdi
     call    api_stream_json
     cmp     $2, %rax
     je      96f
@@ -2608,7 +3252,7 @@ LOCAL_FUNCTION node_api_chunk_run
     mov     (L + 32)(%rsp), %rdi
     call    api_stream_head
     testq   $API_STREAM_CHUNKED, (NodeEvent_api + 8)(%rbp)
-    jz      35f
+    jz      37f
     mov     (L + 16)(%rsp), %rdi            # chunked: the size line, then CRLF after the bytes
     mov     %r12, %rsi
     call    api_hex4
@@ -2616,7 +3260,7 @@ LOCAL_FUNCTION node_api_chunk_run
     mov     (L + 24)(%rsp), %r12
     API_LIT api_crlf
     jmp     80f
-35: mov     (L + 24)(%rsp), %r12
+37: mov     (L + 24)(%rsp), %r12
     jmp     80f
 40: test    $API_STREAM_CHUNKED, %eax       # JSON, a later chunk; chunked: a size line, the bytes, CRLF
     jz      45f
@@ -2663,15 +3307,17 @@ LOCAL_FUNCTION node_api_chunk_run
     sub     %rcx, %rsi
     call    lantern_zero
     xor     %eax, %eax
-    LEAVE 48
+    LEAVE 80
+95: movq    $LANTERN_INVALID_SLOT, NodeEvent_result(%rbp)       # a state at another slot
+    jmp     94f
 96: movq    $LANTERN_INVALID_ENCODING, NodeEvent_result(%rbp)   # bytes that are no encoding of the type
-    movq    $NODE_EV_WORK_DONE_SIZE, (%rbp)
+94: movq    $NODE_EV_WORK_DONE_SIZE, (%rbp)
     xor     %eax, %eax
-    LEAVE 48
+    LEAVE 80
 97: mov     $LANTERN_BUFFER_TOO_SMALL, %eax
-    LEAVE 48
+    LEAVE 80
 98: mov     $LANTERN_INVALID_EVENT, %eax
-    LEAVE 48
+    LEAVE 80
 END_FUNCTION node_api_chunk_run
 
     RODATA

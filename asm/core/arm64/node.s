@@ -555,12 +555,30 @@ END_FUNCTION node_work
 
 /*
  * L0: an action of kind x0 with the two ids x1 and x2 (STATE_COPY: source, new; the FREE kinds: x1).
- * A BYTES_FREE of bytes a NodeApi entry sends goes to the entry instead: API_STREAM_OWN.
+ * A BYTES_FREE of bytes a NodeApi entry sends goes to the entry instead: API_STREAM_OWN; so does a
+ * STATE_FREE of the state a validator stream reads: API_STREAM_OWN_STATE.
  */
 LOCAL_FUNCTION node_ids
     FRAME 32
     stp     x1, x2, [sp, #16]
-    cmp     x0, #NODE_ACT_BYTES_FREE
+    cmp     x0, #NODE_ACT_STATE_FREE
+    b.ne    5f
+    PART    x9, x10, x19, Node_api
+4:  cbz     x10, 3f
+    ldr     x11, [x9, #NodeApi_connection]
+    cbz     x11, 41f
+    ldr     x12, [x9, #NodeApi_state]
+    cmp     x12, x1
+    b.ne    41f
+    ldr     x11, [x9, #NodeApi_flags]
+    tbnz    x11, #12, 41f                   /* API_STREAM_OWN_STATE: its own state already */
+    orr     x11, x11, #API_STREAM_OWN_STATE
+    str     x11, [x9, #NodeApi_flags]
+    UNFRAME 32
+41: add     x9, x9, #NodeApi__mem
+    sub     x10, x10, #1
+    b       4b
+5:  cmp     x0, #NODE_ACT_BYTES_FREE
     b.ne    3f
     PART    x9, x10, x19, Node_api
 1:  cbz     x10, 3f
@@ -7682,6 +7700,12 @@ FUNCTION lantern_node_step
     cmp     x13, #NODE_EV_API
     cinc    x10, x10, eq
     stp     x9, x10, [sp, #(L + 176)]
+    b.ne    4f
+    add     x14, x11, #(NodeEvent_bytes + 24)   /* API: 16 bytes of actions for each byte of the body, its ids */
+    ldr     x15, [x14, #HttpRequest_status]
+    cbnz    x15, 4f
+    ldr     x15, [x14, #(HttpRequest_body + 8)]
+    add     x28, x28, x15, lsl #4
     b       4f
 32: cmp     x13, #NODE_EV_BLOCK
     cinc    x27, x27, eq
@@ -8704,6 +8728,7 @@ FUNCTION lantern_node_run
     mov     x3, x24
     mov     x4, x25
     mov     x5, x26
+    mov     x6, x22
     bl      node_api_chunk_run
     LEAVE 192
 977: cmp    x9, #NODE_WORK_API_LOOKUP

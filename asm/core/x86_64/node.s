@@ -530,11 +530,30 @@ END_FUNCTION node_work
 
 /*
  * An action of kind rdi with the two ids rsi and rdx (STATE_COPY: source, new; the FREE kinds: rsi).
- * A BYTES_FREE of bytes a NodeApi entry sends goes to the entry instead: API_STREAM_OWN. Uses rax, r10, r11.
+ * A BYTES_FREE of bytes a NodeApi entry sends goes to the entry instead: API_STREAM_OWN; so does a
+ * STATE_FREE of the state a validator stream reads: API_STREAM_OWN_STATE. Uses rax, r10, r11.
  */
 LOCAL_FUNCTION node_ids
     UNWIND_END_PROLOGUE
-    cmp     $NODE_ACT_BYTES_FREE, %rdi
+    cmp     $NODE_ACT_STATE_FREE, %rdi
+    jne     5f
+    PART    %rax, %r10, %rbx, Node_api
+4:  test    %r10, %r10
+    jz      3f
+    cmpq    $0, NodeApi_connection(%rax)
+    je      41f
+    cmp     %rsi, NodeApi_state(%rax)
+    jne     41f
+    mov     NodeApi_flags(%rax), %r11
+    test    $API_STREAM_OWN_STATE, %r11
+    jnz     41f                             # API_STREAM_OWN_STATE: its own state already
+    or      $API_STREAM_OWN_STATE, %r11
+    mov     %r11, NodeApi_flags(%rax)
+    ret
+41: add     $NodeApi__mem, %rax
+    dec     %r10
+    jmp     4b
+5:  cmp     $NODE_ACT_BYTES_FREE, %rdi
     jne     3f
     PART    %rax, %r10, %rbx, Node_api
 1:  test    %r10, %r10
@@ -7781,6 +7800,11 @@ FUNCTION lantern_node_step
 35: cmpq    $NODE_EV_API, 8(%rdi)
     jne     4f
     incq    (L + 216)(%rsp)
+    cmpq    $0, (NodeEvent_bytes + 24 + HttpRequest_status)(%rdi)  # API: 16 bytes of actions for each byte of the body, its ids
+    jne     4f
+    mov     (NodeEvent_bytes + 24 + HttpRequest_body + 8)(%rdi), %rax
+    shl     $4, %rax
+    add     %rax, %r10
     jmp     4f
 34: cmp     $NODE_EV_BLOCK, %rdx
     je      31f
@@ -8834,6 +8858,7 @@ FUNCTION lantern_node_run
     mov     %r15, %rcx
     mov     S8(%rsp), %r8
     mov     S9(%rsp), %r9
+    mov     %r13, %r10
     call    node_api_chunk_run
     LEAVE 192
 977: cmp    $NODE_WORK_API_LOOKUP, %rax

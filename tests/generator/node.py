@@ -36,8 +36,23 @@ def schedule(fork):
     return config
 
 
-def anchor(spec, fork):
-    """A state at the first slot of epoch ANCHOR_EPOCH with 8 validators, and its block."""
+# Validators of each status but active_ongoing at ANCHOR_EPOCH, for the API cases: activation_eligibility_epoch,
+# activation_epoch, exit_epoch, withdrawable_epoch, slashed, effective balance in increments (None: FAR_FUTURE_EPOCH).
+STATUS_VALIDATORS = [
+    (None, None, None, None, False, 1),   # pending_initialized
+    (1, None, None, None, False, 32),     # pending_queued
+    (0, 0, 5, 300, False, 32),            # active_exiting
+    (0, 0, 5, 300, True, 31),             # active_slashed
+    (0, 0, 1, 300, False, 32),            # exited_unslashed
+    (0, 0, 1, 300, True, 30),             # exited_slashed
+    (0, 0, 0, 1, False, 32),              # withdrawal_possible
+    (0, 0, 0, 1, False, 0),               # withdrawal_done
+]
+
+
+def anchor(spec, fork, statuses=False):
+    """A state at the first slot of epoch ANCHOR_EPOCH with 8 validators (and those of STATUS_VALIDATORS
+    after them with statuses), and its block."""
     slot = spec.Slot(ANCHOR_EPOCH * spec.SLOTS_PER_EPOCH)
     version = spec.config.GENESIS_FORK_VERSION if fork == "phase0" else getattr(spec.config, f"{fork.upper()}_FORK_VERSION")
     state = spec.BeaconState(
@@ -60,6 +75,26 @@ def anchor(spec, fork):
             )
         )
         state.balances.append(spec.MAX_EFFECTIVE_BALANCE)
+        if fork != "phase0":
+            state.previous_epoch_participation.append(0)
+            state.current_epoch_participation.append(0)
+            state.inactivity_scores.append(0)
+    far = spec.FAR_FUTURE_EPOCH
+    for k, (eligible, active, exit_, withdrawable, slashed, inc) in enumerate(STATUS_VALIDATORS if statuses else []):
+        i = 8 + k
+        state.validators.append(
+            spec.Validator(
+                pubkey=spec.BLSPubkey(bytes([i + 1]) * 48),
+                withdrawal_credentials=spec.Bytes32(bytes([i]) * 32),
+                effective_balance=inc * spec.EFFECTIVE_BALANCE_INCREMENT,
+                slashed=slashed,
+                activation_eligibility_epoch=far if eligible is None else eligible,
+                activation_epoch=far if active is None else active,
+                exit_epoch=far if exit_ in (None,) else exit_,
+                withdrawable_epoch=far if withdrawable is None else withdrawable,
+            )
+        )
+        state.balances.append(inc * spec.EFFECTIVE_BALANCE_INCREMENT + 1000 * i)
         if fork != "phase0":
             state.previous_epoch_participation.append(0)
             state.current_epoch_participation.append(0)
@@ -141,9 +176,11 @@ MESSAGES = {400: b"BAD_REQUEST", 404: b"NOT_FOUND", 405: b"METHOD_NOT_ALLOWED", 
             505: b"HTTP_VERSION_NOT_SUPPORTED"}
 METHODS = {1: b"GET", 2: b"POST", 3: b"DELETE"}
 ALLOW = {1: b"GET", 2: b"POST", 3: b"GET, POST"}
+VALIDATOR_OPS = ("getStateValidators", "postStateValidators", "getStateValidator", "getStateValidatorBalances",
+                 "postStateValidatorBalances", "postStateValidatorIdentities")
 ANSWERED = ("getHealth", "getNetworkIdentity", "getNodeVersion", "getSyncingStatus", "getPeerCount", "getGenesis",
             "getBlockHeader", "getStateFinalityCheckpoints", "getBlockV2", "getStateV2", "getBlockRoot", "getStateRoot",
-            "getStateFork", "getSpec", "getForkSchedule", "getDepositContract")
+            "getStateFork", "getSpec", "getForkSchedule", "getDepositContract") + VALIDATOR_OPS
 IDENTITY = (b"16Uiu2HAmPLe7Mzm8TsYUubgCAW1aJoeFScxrLj8ppHFivPo97bUZ",
             b"enr:-Iu4QLm7bZGdAhVwRqZ6Zf3LlnqKsBTnZGOByHQhPMQJ3pV4F3t8L9i5yJOZ0X0hiZ6q4D5V0jB7l8J3ZtYw1JDH9C4BgmlkgnY0gmlwhAoAAAGJc2VjcDI1NmsxoQPKY0yuDUmstAHYpMa2_oxVtw0RW_QAdpzBQA8yWM0xOIN0Y3CCIyg",
             b"/ip4/10.0.0.1/tcp/9000/p2p/16Uiu2HAmPLe7Mzm8TsYUubgCAW1aJoeFScxrLj8ppHFivPo97bUZ",
@@ -177,9 +214,12 @@ def response(code, body=b"", close=False, keep_alive=False, allow=0, reason=True
 
 
 def streamed(fork, body, ssz=False, close=False, keep_alive=False):
-    """A streamed answer (beacon-api.md, Common rules) in its form with Content-Length."""
+    """A streamed answer (beacon-api.md, Common rules) in its form with Content-Length; with fork None, no
+    Eth-Consensus-Version."""
     out = b"HTTP/1.1 200 OK\r\nContent-Type: " + (b"application/octet-stream" if ssz else b"application/json") + b"\r\n"
-    out += b"Eth-Consensus-Version: " + fork.encode() + b"\r\nContent-Length: %d\r\n" % len(body)
+    if fork is not None:
+        out += b"Eth-Consensus-Version: " + fork.encode() + b"\r\n"
+    out += b"Content-Length: %d\r\n" % len(body)
     if close:
         out += b"Connection: close\r\n"
     elif keep_alive:
@@ -321,6 +361,63 @@ def api_values(spec, fork, state, block):
                 checkpoints=[state.previous_justified_checkpoint, state.current_justified_checkpoint, state.finalized_checkpoint])
 
 
+def status_of(spec, val, epoch):
+    """The status of a validator at an epoch (beacon-api.md, Common rules)."""
+    if val.withdrawable_epoch <= epoch:
+        return "withdrawal_done" if val.effective_balance == 0 else "withdrawal_possible"
+    if val.exit_epoch <= epoch:
+        return "exited_slashed" if val.slashed else "exited_unslashed"
+    if val.activation_epoch <= epoch:
+        if val.exit_epoch < spec.FAR_FUTURE_EPOCH:
+            return "active_slashed" if val.slashed else "active_exiting"
+        return "active_ongoing"
+    return "pending_initialized" if val.activation_eligibility_epoch == spec.FAR_FUTURE_EPOCH else "pending_queued"
+
+
+def ref_matches(state, ref):
+    """The indices of a ValidatorRef's validators in a state."""
+    import struct
+    kind, index = struct.unpack_from("<QQ", ref)
+    if kind == 1:
+        return [index] if index < len(state.validators) else []
+    return [i for i, val in enumerate(state.validators) if bytes(val.pubkey) == bytes(ref[16:64])]
+
+
+def validator_item(spec, state, i, name):
+    import api_route
+    from json_codec import to_json
+    val, epoch = state.validators[i], spec.compute_epoch_at_slot(state.slot)
+    if name in ("getStateValidatorBalances", "postStateValidatorBalances"):
+        return b'{"index":' + q(i) + b',"balance":' + q(state.balances[i]) + b"}"
+    if name == "postStateValidatorIdentities":
+        return b'{"index":' + q(i) + b',"pubkey":' + qhex(val.pubkey) + b',"activation_epoch":' + q(val.activation_epoch) + b"}"
+    return (b'{"index":' + q(i) + b',"balance":' + q(state.balances[i]) + b',"status":"' +
+            status_of(spec, val, epoch).encode() + b'","validator":' + to_json(val).encode() + b"}")
+
+
+def validators_answer(v, name, route, s, values, kw):
+    """The answer of a validator operation for the state s."""
+    import api_route
+    import struct
+    spec = v["spec"]
+    if name == "getStateValidator":
+        found = ref_matches(s, route.validator)
+        if not found:
+            return error(404, **kw)
+        return response(200, values + b',"data":' + validator_item(spec, s, found[0], name) + b"}", **kw)
+    picked = sorted({i for r in route.refs for i in ref_matches(s, r)}) if route.refs else range(len(s.validators))
+    epoch = spec.compute_epoch_at_slot(s.slot)
+    if route.statuses:
+        picked = [i for i in picked
+                  if route.statuses >> api_route.STATUSES.index(status_of(spec, s.validators[i], epoch)) & 1]
+    if name == "postStateValidatorIdentities" and route.response == 2:
+        body = b"".join(struct.pack("<Q", i) + bytes(s.validators[i].pubkey) + struct.pack("<Q", s.validators[i].activation_epoch)
+                        for i in picked)
+        return streamed(None, body, ssz=True, **kw)
+    body = values + b',"data":[' + b",".join(validator_item(spec, s, i, name) for i in picked) + b"]}"
+    return streamed(None, body, **kw)
+
+
 def answer(v, name, route, offline, close, keep_alive):
     """The response of an operation the node answers, with the route's ApiRoute."""
     kw = dict(close=close, keep_alive=keep_alive)
@@ -366,7 +463,7 @@ def answer(v, name, route, offline, close, keep_alive):
                 b',"parent_root":' + qhex(h.parent_root) + b',"state_root":' + qhex(h.state_root) + b',"body_root":' +
                 qhex(h.body_root) + b'},"signature":' + qhex(bytes(96)) + b"}}}")
         return response(200, body, **kw)
-    if name in ("getStateRoot", "getStateFork", "getStateFinalityCheckpoints", "getStateV2"):
+    if name in ("getStateRoot", "getStateFork", "getStateFinalityCheckpoints", "getStateV2") + VALIDATOR_OPS:
         if route.id_kind in v["checkpoint_slots"]:
             slot = v["checkpoint_slots"][route.id_kind]
         elif route.id_kind == 5 or (route.id_kind == 2):
@@ -387,6 +484,8 @@ def answer(v, name, route, offline, close, keep_alive):
             return error(404, **kw)
         s, spec = v["states"][slot], v["spec"]
         values = b'{"execution_optimistic":false,"finalized":' + flag(slot <= v["finalized_slot"])
+        if name in VALIDATOR_OPS:
+            return validators_answer(v, name, route, s, values, kw)
         if name == "getStateRoot":
             return response(200, values + b',"data":{"root":' + qhex(spec.hash_tree_root(s)) + b"}}", **kw)
         if name == "getStateFork":
@@ -417,6 +516,10 @@ class Route:
         self.id_slot = struct.unpack_from("<Q", out, 80)[0]
         self.id_root = bytes(out[88:120])
         self.syncing_status = struct.unpack_from("<Q", out, 240)[0]
+        self.validator = bytes(out[120:184])
+        self.statuses = struct.unpack_from("<Q", out, 264)[0]
+        at, count = struct.unpack_from("<QQ", out, 456)
+        self.refs = [bytes(out[at + 64 * k:at + 64 * k + 64]) for k in range(count)]
 
 
 def api_requests(spec, fork, v):
@@ -426,8 +529,11 @@ def api_requests(spec, fork, v):
     by_name = {op["name"]: op for op in ops}
     out = []
 
-    def add(name, req, offline=False, version=b"HTTP/1.1", connection=b"", extra=b""):
-        raw = http(req, version, connection, extra)
+    def add(name, req, offline=False, version=b"HTTP/1.1", connection=b"", extra=b"", body=None):
+        if body is not None:
+            req = dict(req, body=body)
+            extra += b"Content-Length: %d\r\n" % len(body)
+        raw = http(req, version, connection, extra) + (body or b"")
         close = connection.lower() == b"close" or (version == b"HTTP/1.0" and connection.lower() != b"keep-alive")
         keep_alive = version == b"HTTP/1.0" and not close
         status, r = api_route.route(ops, req, 1 << 24)
@@ -508,6 +614,39 @@ def api_requests(spec, fork, v):
         add(f"lookup_getStateV2_{state_id.decode()}", api_route.base(state, path_values={"state_id": state_id}))
     validators = by_name["getStateValidators"]
     add("ids_65_414", api_route.base(validators, [("id", b",".join(str(i).encode() for i in range(65)))]))
+
+    def pk(i):
+        return b"0x" + (bytes([i + 1]) * 48).hex().encode()
+
+    add("validators_ids", api_route.base(validators, [("id", b"0,3,15,99,3," + pk(9) + b"," + pk(200))]))
+    for k, s in enumerate(api_route.STATUSES + tuple(api_route.GROUPS)):
+        add(f"validators_status_{s}", api_route.base(validators, [("status", s.encode())]))
+    add("validators_ids_status", api_route.base(validators, [("id", b"10,11,12," + pk(13)), ("status", b"active,exited_slashed")]))
+    for state_id in (b"finalized", b"%d" % (v["slot"] + 2), qhex(v["state_roots"][1])[1:-1], other_root):
+        add(f"validators_{state_id.decode()[:12]}", api_route.base(validators, [("status", b"pending")],
+                                                                    path_values={"state_id": state_id}))
+    add("validators_http10", api_route.base(validators), version=b"HTTP/1.0")
+    add("validators_close", api_route.base(validators), connection=b"close")
+    post = by_name["postStateValidators"]
+    for k, body in enumerate([b"{}", b'{"ids":["1","' + pk(12) + b'"],"statuses":["exited"]}', b'{"statuses":["withdrawal"]}',
+                              b'{"ids":["' + pk(15) + b'","' + pk(15) + b'"]}', b'{"ids":["7"]}x']):
+        add(f"post_validators_{k}", api_route.base(post), body=body)
+    add("post_validators_root", api_route.base(post, path_values={"state_id": qhex(v["state_roots"][0])[1:-1]}),
+        body=b'{"ids":["2","9"]}')
+    one = by_name["getStateValidator"]
+    for k, vid in enumerate([b"3", pk(14), b"99", pk(250), b"16"]):
+        add(f"validator_{k}", api_route.base(one, path_values={"validator_id": vid}))
+    add("validator_finalized", api_route.base(one, path_values={"validator_id": b"11", "state_id": b"finalized"}))
+    add("validator_root", api_route.base(one, path_values={"validator_id": pk(10), "state_id": qhex(v["state_roots"][1])[1:-1]}))
+    balances = by_name["getStateValidatorBalances"]
+    add("balances_ids", api_route.base(balances, [("id", b"1,2,15,77," + pk(4))]))
+    post_balances = by_name["postStateValidatorBalances"]
+    for k, body in enumerate([b'["0","' + pk(5) + b'"]', b"[]", b"null"]):
+        add(f"post_balances_{k}", api_route.base(post_balances), body=body)
+    identities = by_name["postStateValidatorIdentities"]
+    for k, body in enumerate([None, b'["8","9","' + pk(1) + b'"]']):
+        add(f"identities_{k}", api_route.base(identities), body=body)
+        add(f"identities_{k}_ssz", api_route.base(identities, accept=octet), body=body)
     publish = by_name["publishBlockV2"]
     add("content_type_415", api_route.base(publish, content_type=b"text/plain"), extra=b"Content-Length: 0\r\n")
     add("version_missing_400", dict(api_route.base(publish), consensus_version=b""))
@@ -529,7 +668,7 @@ def http_faults():
 
 def api_cases(fork, preset):
     spec = module(fork, preset)
-    state, block = run(spec, schedule(fork), lambda: anchor(spec, fork))
+    state, block = run(spec, schedule(fork), lambda: anchor(spec, fork, statuses=True))
     v = run(spec, schedule(fork), lambda: api_values(spec, fork, state, block))
     v["config_bodies"] = config_bodies(fork, preset)
     reqs = run(spec, schedule(fork), lambda: api_requests(spec, fork, v))

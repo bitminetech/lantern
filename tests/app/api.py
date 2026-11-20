@@ -14,6 +14,8 @@ the file GENESIS (genesis.ssz: altair, 4096 validators at slot 0). The checks:
 - getStateV2 of head as JSON over HTTP/1.1 (chunked) and over HTTP/1.0 (closed after the body):
   version altair, data.slot "0", 4096 validators, the genesis_validators_root of GENESIS;
 - getSpec, getForkSchedule and getDepositContract: the values of the config.yaml beside GENESIS;
+- getStateValidators of head (chunked, 4096 validators, each active_ongoing with the pubkey and
+  balance of GENESIS), postStateValidators of two ids, and getStateValidator of an index;
 - a connection with no bytes closes within 31 s.
 Prints a PASS or FAIL line for each, and exits 1 when one fails.
 """
@@ -248,6 +250,44 @@ def main():
         check("getSpec, getForkSchedule and getDepositContract", False, repr(x))
     k.close()
     time.sleep(1)
+
+    def validators(name, raw, check_data):
+        v = connect(port)
+        rv = Reader(v)
+        try:
+            v.sendall(raw)
+            status, headers, body = rv.response()
+            data = json.loads(body)["data"]
+            ok = status == 200 and check_data(data, headers)
+            check(name, ok, f"status {status}, {headers}, {len(body)} bytes")
+        except (EOFError, OSError, ValueError, KeyError, IndexError) as x:
+            check(name, False, repr(x))
+        v.close()
+        time.sleep(1)
+
+    # The validators of GENESIS, a minimal altair BeaconState: the offsets of validators and balances
+    # after the fixed fields before them (64 block and state roots); each Validator is 121 bytes, pubkey first.
+    vals_at = int.from_bytes(genesis[8 + 32 + 8 + 16 + 112 + 2 * 32 * 64 + 4 + 72 + 4 + 8:][:4], "little")
+    bals_at = int.from_bytes(genesis[8 + 32 + 8 + 16 + 112 + 2 * 32 * 64 + 4 + 72 + 4 + 8 + 4:][:4], "little")
+
+    def pubkey(i):
+        return "0x" + genesis[vals_at + 121 * i:vals_at + 121 * i + 48].hex()
+
+    def balance(i):
+        return str(int.from_bytes(genesis[bals_at + 8 * i:bals_at + 8 * i + 8], "little"))
+
+    validators("getStateValidators of head, chunked", request(b"GET", b"/eth/v1/beacon/states/head/validators"),
+               lambda d, h: (h.get(b"transfer-encoding") == b"chunked" and len(d) == 4096 and
+                             all(x["index"] == str(i) and x["status"] == "active_ongoing" and
+                                 x["validator"]["pubkey"] == pubkey(i) and x["balance"] == balance(i)
+                                 for i, x in enumerate(d))))
+    body = json.dumps({"ids": [pubkey(4095), "7"]}).encode()
+    validators("postStateValidators of two ids",
+               request(b"POST", b"/eth/v1/beacon/states/head/validators",
+                       b"Content-Type: application/json\r\nContent-Length: %d\r\n" % len(body)) + body,
+               lambda d, h: [x["index"] for x in d] == ["7", "4095"])
+    validators("getStateValidator of an index", request(b"GET", b"/eth/v1/beacon/states/head/validators/12"),
+               lambda d, h: d["index"] == "12" and d["validator"]["pubkey"] == pubkey(12))
 
     f = connect(port)
     start = time.monotonic()

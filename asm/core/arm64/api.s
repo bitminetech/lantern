@@ -388,6 +388,480 @@ LOCAL_FUNCTION api_fork_schedule
     UNFRAME 32
 END_FUNCTION api_fork_schedule
 
+/* ---------------------------------------------------------------- Validators (beacon-api.md, Common rules) */
+
+.set API_ITEM_MAX, 576                      /* the most bytes of an item and its comma */
+
+/* L0: x0 = the API_STATUS_* of the validator at x0 at the epoch x1. A leaf. Uses x9-x12. */
+LOCAL_FUNCTION api_validator_status
+    UNWIND_END_PROLOGUE
+    ldr     x9, [x0, #NODE_VALIDATOR_WITHDRAWABLE]
+    cmp     x9, x1
+    b.hi    1f
+    ldr     x9, [x0, #NODE_VALIDATOR_EFFECTIVE_BALANCE]
+    cmp     x9, #0
+    mov     x10, #API_STATUS_WITHDRAWAL_DONE
+    mov     x11, #API_STATUS_WITHDRAWAL_POSSIBLE
+    csel    x0, x10, x11, eq
+    ret
+1:  ldrb    w12, [x0, #NODE_VALIDATOR_SLASHED]
+    ldr     x9, [x0, #NODE_VALIDATOR_EXIT]
+    cmp     x9, x1
+    b.hi    2f
+    cmp     w12, #0
+    mov     x10, #API_STATUS_EXITED_SLASHED
+    mov     x11, #API_STATUS_EXITED_UNSLASHED
+    csel    x0, x10, x11, ne
+    ret
+2:  ldr     x10, [x0, #NODE_VALIDATOR_ACTIVATION]
+    cmp     x10, x1
+    b.hi    4f
+    cmn     x9, #1                          /* active: exiting with an exit epoch below FAR_FUTURE_EPOCH */
+    b.eq    3f
+    cmp     w12, #0
+    mov     x10, #API_STATUS_ACTIVE_SLASHED
+    mov     x11, #API_STATUS_ACTIVE_EXITING
+    csel    x0, x10, x11, ne
+    ret
+3:  mov     x0, #API_STATUS_ACTIVE_ONGOING
+    ret
+4:  ldr     x9, [x0, #NODE_VALIDATOR_ELIGIBILITY]
+    cmn     x9, #1
+    mov     x10, #API_STATUS_PENDING_INITIALIZED
+    mov     x11, #API_STATUS_PENDING_QUEUED
+    csel    x0, x10, x11, eq
+    ret
+END_FUNCTION api_validator_status
+
+/*
+ * L1: the item of the validator x1 of the state x0: x2 0 for getStateValidators, 1 for the
+ * balances, 2 for the identities, 3 for their SSZ (64 bytes). Locals: L the validator, L+8 the
+ * index, L+16 the kind, L+24 the balance, L+32 the epoch, L+48 an SSZ item.
+ */
+LOCAL_FUNCTION api_validator_item
+    FRAME 112
+    stp     x1, x2, [sp, #24]
+    PART    x9, x10, x0, NODE_STATE_BALANCES
+    ldr     x10, [x9, x1, lsl #3]
+    str     x10, [sp, #40]
+    ldr     x11, [x0, #NODE_STATE_SLOT]
+    mov     x12, #SLOTS_PER_EPOCH
+    udiv    x11, x11, x12
+    str     x11, [sp, #48]
+    PART    x9, x10, x0, NODE_STATE_VALIDATORS
+    add     x9, x9, x1, lsl #7              /* NODE_VALIDATOR_MEM */
+    str     x9, [sp, #16]
+    cmp     x2, #3
+    b.ne    1f
+    str     x1, [sp, #64]                   /* SSZ: index, pubkey, activation_epoch */
+    add     x0, sp, #72
+    mov     x1, x9
+    mov     x2, #48
+    bl      lantern_copy
+    ldr     x9, [sp, #16]
+    ldr     x10, [x9, #NODE_VALIDATOR_ACTIVATION]
+    str     x10, [sp, #120]
+    add     x0, sp, #64
+    mov     x1, #64
+    bl      api_put
+    UNFRAME 112
+1:  API_LIT api_v_index
+    ldr     x0, [sp, #24]
+    bl      api_qdec
+    ldr     x9, [sp, #32]
+    cmp     x9, #2
+    b.eq    2f
+    API_LIT api_v_balance
+    ldr     x0, [sp, #40]
+    bl      api_qdec
+    ldr     x9, [sp, #32]
+    cbnz    x9, 9f
+    API_LIT api_v_status
+    ldr     x0, [sp, #16]
+    ldr     x1, [sp, #48]
+    bl      api_validator_status
+    ADDRESS x9, api_v_statuses
+    mov     x10, #24
+    madd    x9, x0, x10, x9
+    ldrb    w1, [x9], #1
+    mov     x0, x9
+    bl      api_put
+    API_LIT api_v_validator
+    ldr     x0, [sp, #16]
+    mov     x1, #48
+    bl      api_qhex
+    API_LIT api_v_credentials
+    ldr     x0, [sp, #16]
+    add     x0, x0, #NODE_VALIDATOR_CREDENTIALS
+    mov     x1, #32
+    bl      api_qhex
+    API_LIT api_v_effective
+    ldr     x9, [sp, #16]
+    ldr     x0, [x9, #NODE_VALIDATOR_EFFECTIVE_BALANCE]
+    bl      api_qdec
+    API_LIT api_v_slashed
+    ldr     x9, [sp, #16]
+    ldrb    w0, [x9, #NODE_VALIDATOR_SLASHED]
+    bl      api_bool
+    API_LIT api_v_eligibility
+    ldr     x9, [sp, #16]
+    ldr     x0, [x9, #NODE_VALIDATOR_ELIGIBILITY]
+    bl      api_qdec
+    API_LIT api_v_activation
+    ldr     x9, [sp, #16]
+    ldr     x0, [x9, #NODE_VALIDATOR_ACTIVATION]
+    bl      api_qdec
+    API_LIT api_v_exit
+    ldr     x9, [sp, #16]
+    ldr     x0, [x9, #NODE_VALIDATOR_EXIT]
+    bl      api_qdec
+    API_LIT api_v_withdrawable
+    ldr     x9, [sp, #16]
+    ldr     x0, [x9, #NODE_VALIDATOR_WITHDRAWABLE]
+    bl      api_qdec
+    API_LIT api_end2
+    UNFRAME 112
+    /* identities */
+2:  API_LIT api_v_pubkey
+    ldr     x0, [sp, #16]
+    mov     x1, #48
+    bl      api_qhex
+    API_LIT api_v_activation
+    ldr     x9, [sp, #16]
+    ldr     x0, [x9, #NODE_VALIDATOR_ACTIVATION]
+    bl      api_qdec
+9:  API_LIT api_end1
+    UNFRAME 112
+END_FUNCTION api_validator_item
+
+/* L0: x0 = the index of the validator of the ValidatorRef in the ByteList x1 in the state x0, or 2^64 - 1. A leaf. Uses x0-x5, x9-x16. */
+LOCAL_FUNCTION node_api_find_validator
+    UNWIND_END_PROLOGUE
+    ldr     x9, [x1, #16]
+    cmp     x9, #64
+    b.ne    8f
+    ldr     x9, [x1, #8]
+    add     x1, x1, x9
+    PART    x10, x11, x0, NODE_STATE_VALIDATORS
+    ldr     x9, [x1]
+    cmp     x9, #API_VALIDATOR_INDEX
+    b.ne    2f
+    ldr     x0, [x1, #8]
+    cmp     x0, x11
+    b.hs    8f
+    ret
+2:  ldp     x12, x13, [x1, #ValidatorRef_pubkey]
+    ldp     x14, x15, [x1, #(ValidatorRef_pubkey + 16)]
+    ldp     x2, x3, [x1, #(ValidatorRef_pubkey + 32)]
+    mov     x0, #0
+3:  cmp     x0, x11
+    b.hs    8f
+    ldp     x4, x5, [x10]
+    cmp     x4, x12
+    ccmp    x5, x13, #0, eq
+    b.ne    4f
+    ldp     x4, x5, [x10, #16]
+    cmp     x4, x14
+    ccmp    x5, x15, #0, eq
+    b.ne    4f
+    ldp     x4, x5, [x10, #32]
+    cmp     x4, x2
+    ccmp    x5, x3, #0, eq
+    b.eq    9f
+4:  add     x10, x10, #NODE_VALIDATOR_MEM
+    add     x0, x0, #1
+    b       3b
+8:  mov     x0, #-1
+9:  ret
+END_FUNCTION node_api_find_validator
+
+/*
+ * L1: the selection of a chunk of a validator stream (node.md, NODE_WORK_API_CHUNK), at the cursor
+ * at NodeEvent_api + 16 of the event x23: +16 a bitmap, in the scratch x0, of the validators of the
+ * state x20 that the ValidatorRef items of data x21 name (0 with no data); +24 the epoch of the
+ * state's slot; +40 the count of the validators selected. x0 = 0, or LANTERN_BUFFER_TOO_SMALL.
+ * Locals: L the scratch's next byte, L+8 its end, L+16 the validators, L+24 their count, L+32 the
+ * items, L+40 their count, L+48 the table of the public keys, L+56 its mask.
+ */
+LOCAL_FUNCTION node_api_validators_prep
+    FRAME 64
+    ldr     x9, [x0]
+    add     x10, x0, x9
+    add     x9, x0, #16
+    stp     x9, x10, [sp, #16]
+    add     x11, x23, #(NodeEvent_api + 16)
+    ldr     x9, [x20, #NODE_STATE_SLOT]
+    mov     x10, #SLOTS_PER_EPOCH
+    udiv    x9, x9, x10
+    str     x9, [x11, #24]
+    PART    x9, x10, x20, NODE_STATE_VALIDATORS
+    stp     x9, x10, [sp, #32]
+    str     x10, [x11, #40]                 /* no items: every validator */
+    str     xzr, [x11, #16]
+    cbz     x21, 90f
+    ldr     x9, [x21, #8]
+    add     x9, x21, x9
+    ldr     x10, [x21, #16]
+    lsr     x10, x10, #6
+    stp     x9, x10, [sp, #48]
+    ldr     x12, [sp, #40]                  /* the bitmap: a bit for each validator */
+    add     x12, x12, #63
+    lsr     x12, x12, #6
+    lsl     x1, x12, #3
+    ldp     x0, x13, [sp, #16]
+    add     x14, x0, x1
+    cmp     x14, x13
+    b.hi    97f
+    str     x14, [sp, #16]
+    add     x11, x23, #(NodeEvent_api + 16)
+    str     x0, [x11, #16]
+    bl      lantern_zero
+    add     x11, x23, #(NodeEvent_api + 16)  /* index items: their bits; then count the public keys */
+    ldr     x11, [x11, #16]
+    ldp     x9, x10, [sp, #48]
+    ldr     x12, [sp, #40]
+    mov     x13, #0
+1:  cbz     x10, 3f
+    ldr     x14, [x9]
+    cmp     x14, #API_VALIDATOR_INDEX
+    b.ne    2f
+    ldr     x14, [x9, #8]
+    cmp     x14, x12
+    b.hs    21f
+    lsr     x15, x14, #6
+    ldr     x16, [x11, x15, lsl #3]
+    mov     x17, #1
+    lsl     x17, x17, x14
+    orr     x16, x16, x17
+    str     x16, [x11, x15, lsl #3]
+    b       21f
+2:  add     x13, x13, #1
+21: add     x9, x9, #64
+    sub     x10, x10, #1
+    b       1b
+3:  cbz     x13, 80f
+    lsl     x13, x13, #1                    /* the table: the least power of two at least twice the keys */
+    mov     x14, #1
+31: cmp     x14, x13
+    b.hs    32f
+    lsl     x14, x14, #1
+    b       31b
+32: sub     x15, x14, #1
+    str     x15, [sp, #72]
+    ldp     x0, x13, [sp, #16]
+    lsl     x1, x14, #3
+    add     x14, x0, x1
+    cmp     x14, x13
+    b.hi    97f
+    str     x0, [sp, #64]
+    bl      lantern_zero
+    ldp     x9, x10, [sp, #48]              /* each public key item: its number + 1, at bytes 8 to 16 of the key */
+    ldp     x11, x12, [sp, #64]
+    mov     x13, #0
+4:  cmp     x13, x10
+    b.hs    5f
+    ldr     x14, [x9]
+    cmp     x14, #API_VALIDATOR_PUBKEY
+    b.ne    42f
+    ldr     x14, [x9, #(ValidatorRef_pubkey + 8)]
+41: and     x14, x14, x12
+    ldr     x15, [x11, x14, lsl #3]
+    cbz     x15, 43f
+    add     x14, x14, #1
+    b       41b
+43: add     x15, x13, #1
+    str     x15, [x11, x14, lsl #3]
+42: add     x9, x9, #64
+    add     x13, x13, #1
+    b       4b
+5:  ldp     x9, x10, [sp, #32]              /* each validator whose key the table holds: its bit */
+    mov     x13, #0
+    add     x16, x23, #(NodeEvent_api + 16)
+    ldr     x16, [x16, #16]
+51: cmp     x13, x10
+    b.hs    80f
+    ldr     x14, [x9, #8]
+    ldp     x11, x12, [sp, #64]
+52: and     x14, x14, x12
+    ldr     x15, [x11, x14, lsl #3]
+    cbz     x15, 59f
+    sub     x15, x15, #1
+    ldr     x17, [sp, #48]
+    add     x17, x17, x15, lsl #6
+    add     x17, x17, #ValidatorRef_pubkey
+    ldp     x0, x1, [x9]
+    ldp     x2, x3, [x17]
+    cmp     x0, x2
+    ccmp    x1, x3, #0, eq
+    b.ne    58f
+    ldp     x0, x1, [x9, #16]
+    ldp     x2, x3, [x17, #16]
+    cmp     x0, x2
+    ccmp    x1, x3, #0, eq
+    b.ne    58f
+    ldp     x0, x1, [x9, #32]
+    ldp     x2, x3, [x17, #32]
+    cmp     x0, x2
+    ccmp    x1, x3, #0, eq
+    b.ne    58f
+    lsr     x15, x13, #6
+    ldr     x0, [x16, x15, lsl #3]
+    mov     x1, #1
+    lsl     x1, x1, x13
+    orr     x0, x0, x1
+    str     x0, [x16, x15, lsl #3]
+    b       59f
+58: add     x14, x14, #1
+    b       52b
+59: add     x9, x9, #NODE_VALIDATOR_MEM
+    add     x13, x13, #1
+    b       51b
+80: ldr     x9, [sp, #40]                   /* the count: the bits set */
+    add     x9, x9, #63
+    lsr     x9, x9, #6
+    add     x16, x23, #(NodeEvent_api + 16)
+    ldr     x10, [x16, #16]
+    mov     x11, #0
+81: cbz     x9, 83f
+    ldr     x12, [x10], #8
+82: cbz     x12, 84f
+    sub     x13, x12, #1
+    and     x12, x12, x13
+    add     x11, x11, #1
+    b       82b
+84: sub     x9, x9, #1
+    b       81b
+83: str     x11, [x16, #40]
+90: mov     x0, #0
+    UNFRAME 64
+97: mov     x0, #LANTERN_BUFFER_TOO_SMALL
+    UNFRAME 64
+END_FUNCTION node_api_validators_prep
+
+/*
+ * L1: the items of the validator stream of the entry x22, of the state x20, from the cursor at
+ * NodeEvent_api + 16 of the event x23 (+0 the next index, +8 the status bits, +16 the bitmap,
+ * +24 the epoch, +32 the items written), at the writer's cursor x24 up to x26; then ]} for JSON
+ * once they are all written. x0 = 1 when whole, else 0. Locals: L the cursor, L+8 the kind of
+ * the items, L+16 the validators' count.
+ */
+LOCAL_FUNCTION api_validators_json
+    FRAME 32
+    add     x9, x23, #(NodeEvent_api + 16)
+    str     x9, [sp, #16]
+    ldr     x10, [x22, #NodeApi_op]         /* the kind: 0, 1 the balances, 2 the identities, 3 their SSZ */
+    mov     x11, #0
+    mov     x12, #1
+    cmp     x10, #API_OP_GET_STATE_VALIDATOR_BALANCES
+    csel    x11, x12, x11, eq
+    cmp     x10, #API_OP_POST_STATE_VALIDATOR_BALANCES
+    csel    x11, x12, x11, eq
+    cmp     x10, #API_OP_POST_STATE_VALIDATOR_IDENTITIES
+    b.ne    1f
+    ldr     x9, [x22, #NodeApi_flags]
+    tst     x9, #API_STREAM_SSZ
+    mov     x11, #2
+    mov     x12, #3
+    csel    x11, x12, x11, ne
+1:  str     x11, [sp, #24]
+    LDQ     x9, x20, NODE_STATE_VALIDATORS + 8
+    str     x9, [sp, #32]
+2:  ldr     x9, [sp, #16]
+    ldr     x10, [x9]
+    ldr     x11, [sp, #32]
+    cmp     x10, x11
+    b.hs    8f
+    ldr     x12, [x9, #16]                  /* with a bitmap: the next validator it names */
+    cbz     x12, 3f
+    lsr     x13, x10, #6
+    ldr     x14, [x12, x13, lsl #3]
+    lsr     x14, x14, x10
+    cbnz    x14, 21f
+    add     x10, x10, #64
+    and     x10, x10, #~63
+    str     x10, [x9]
+    b       2b
+21: rbit    x14, x14
+    clz     x14, x14
+    add     x10, x10, x14
+    str     x10, [x9]
+3:  ldr     x12, [x9, #8]                   /* with status bits: the validator's status has its bit */
+    cbz     x12, 4f
+    PART    x13, x14, x20, NODE_STATE_VALIDATORS
+    add     x0, x13, x10, lsl #7
+    ldr     x1, [x9, #24]
+    bl      api_validator_status
+    ldr     x9, [sp, #16]
+    ldr     x12, [x9, #8]
+    lsr     x12, x12, x0
+    tbnz    x12, #0, 4f
+    ldr     x10, [x9]
+    add     x10, x10, #1
+    str     x10, [x9]
+    b       2b
+4:  sub     x9, x26, x24                    /* room for one more item */
+    cmp     x9, #API_ITEM_MAX
+    b.lo    9f
+    ldr     x9, [sp, #16]
+    ldr     x10, [x9, #32]
+    ldr     x11, [sp, #24]
+    cmp     x11, #3
+    b.eq    5f
+    cbz     x10, 5f
+    API_LIT api_p_comma
+5:  ldr     x9, [sp, #16]
+    ldr     x10, [x9, #32]
+    add     x10, x10, #1
+    str     x10, [x9, #32]
+    mov     x0, x20
+    ldr     x1, [x9]
+    ldr     x2, [sp, #24]
+    bl      api_validator_item
+    ldr     x9, [sp, #16]
+    ldr     x10, [x9]
+    add     x10, x10, #1
+    str     x10, [x9]
+    b       2b
+8:  ldr     x11, [sp, #24]                  /* all: ]} for JSON */
+    cmp     x11, #3
+    b.eq    81f
+    sub     x9, x26, x24
+    cmp     x9, #2
+    b.lo    9f
+    API_LIT api_v_end
+81: mov     x0, #1
+    UNFRAME 32
+9:  mov     x0, #0
+    UNFRAME 32
+END_FUNCTION api_validators_json
+
+/*
+ * L1: the ids of the validator operation of the route x0 (node.md, NODE_EV_API): x0 = the new id
+ * of a NODE_ACT_BYTES_PUT of its ValidatorRef items (getStateValidator: its validator_id), or 0
+ * with none. Locals: a ByteList head whose offset reaches the items.
+ */
+LOCAL_FUNCTION node_api_ids
+    FRAME 32
+    ldr     x9, [x0, #ApiRoute_op]
+    cmp     x9, #API_OP_GET_STATE_VALIDATOR
+    b.ne    1f
+    add     x10, x0, #ApiRoute_validator
+    mov     x11, #64
+    b       2f
+1:  ldp     x10, x11, [x0, #ApiRoute_list]
+    add     x10, x0, x10
+    mov     x0, #0
+    cbz     x11, 9f
+    lsl     x11, x11, #6
+2:  add     x12, sp, #16
+    sub     x13, x10, x12
+    stp     x11, x13, [x12]
+    str     x11, [x12, #16]
+    mov     x0, x12
+    bl      node_put
+9:  UNFRAME 32
+END_FUNCTION node_api_ids
+
 /*
  * L1: the body of the kind x28 for the view x22: an error body of the status at [x0], or the
  * JSON of an operation (beacon-api.md, Common rules). Locals: x0.
@@ -605,7 +1079,7 @@ LOCAL_FUNCTION api_body
     bl      api_fork_schedule
     UNFRAME 16
 17: cmp     x28, #API_OP_GET_DEPOSIT_CONTRACT   /* {"data":{"chain_id":…,"address":…}} */
-    b.ne    99f
+    b.ne    18f
     API_LIT api_d_chain
     ldr     x9, [x22, #ApiView_config]
     LDQ     x0, x9, CONFIG_DEPOSIT_CHAIN_ID
@@ -616,6 +1090,21 @@ LOCAL_FUNCTION api_body
     mov     x1, #20
     bl      api_qhex
     API_LIT api_end2
+    UNFRAME 16
+18: cmp     x28, #API_OP_GET_STATE_VALIDATOR    /* {"execution_optimistic":…,"finalized":…,"data":<item>} */
+    b.ne    99f
+    API_LIT api_v_open
+    ldr     x0, [x22, #ApiView_is_optimistic]
+    bl      api_bool
+    API_LIT api_x_finalized
+    LDQ     x0, x22, ApiView_head_finalized
+    bl      api_bool
+    API_LIT api_v_data
+    ldr     x0, [x22, #ApiView_val_state]
+    ldr     x1, [x22, #ApiView_val_index]
+    mov     x2, #0
+    bl      api_validator_item
+    API_LIT api_end1
 99: UNFRAME 16
 END_FUNCTION api_body
 
@@ -1052,6 +1541,9 @@ LOCAL_FUNCTION node_api_event
     b.eq    66f
     cmp     x3, #API_OP_GET_SPEC
     b.eq    67f
+    sub     x9, x3, #API_OP_GET_STATE_VALIDATORS   /* the six validator operations: a state */
+    cmp     x9, #(API_OP_POST_STATE_VALIDATOR_IDENTITIES - API_OP_GET_STATE_VALIDATORS)
+    b.ls    66f
     cmp     x3, #API_OP_GET_STATE_V2
     b.ne    7f
 66: ldr     x9, [x25, #ApiRoute_id_kind]    /* a state root: a work finds its slot first */
@@ -1074,6 +1566,15 @@ LOCAL_FUNCTION node_api_event
     ldr     x0, [x25, #ApiRoute_op]
     cmp     x0, #API_OP_GET_STATE_V2
     b.eq    64f
+    sub     x9, x0, #API_OP_GET_STATE_VALIDATORS
+    cmp     x9, #(API_OP_POST_STATE_VALIDATOR_IDENTITIES - API_OP_GET_STATE_VALIDATORS)
+    b.hi    67f
+    mov     x0, x25                         /* the validator operations: their ids; getStateValidator a work, the others a stream */
+    bl      node_api_ids
+    str     x0, [x26, #ApiView_look_data]
+    ldr     x0, [x25, #ApiRoute_op]
+    cmp     x0, #API_OP_GET_STATE_VALIDATOR
+    b.ne    64f
     b       67f
 65: mov     x0, x25                         /* a block: its lookup */
     mov     x1, x26
@@ -1122,7 +1623,16 @@ LOCAL_FUNCTION node_api_done
     ENTER 0
     mov     x21, x0
     ldr     x9, [x21, #NodeAction_arg]
-    ubfx    x10, x9, #8, #8
+    and     x10, x9, #255                   /* getStateValidator: its ids go */
+    cmp     x10, #API_OP_GET_STATE_VALIDATOR
+    b.ne    2f
+    ldr     x1, [x21, #NodeAction_data]
+    cbz     x1, 2f
+    mov     x0, #NODE_ACT_BYTES_FREE
+    mov     x2, #0
+    bl      node_ids
+    ldr     x9, [x21, #NodeAction_arg]
+2:  ubfx    x10, x9, #8, #8
     and     x25, x10, #API_ANSWER_CLOSE     /* API_R_CLOSE, or API_R_KEEP for HTTP/1.0 kept open */
     cbnz    x25, 1f
     tst     x10, #API_ANSWER_HTTP10
@@ -1209,6 +1719,8 @@ LOCAL_FUNCTION node_api_run
     cbz     x22, 8f                         /* a state's answer: a state */
     cmp     x27, #API_OP_GET_STATE_FINALITY_CHECKPOINTS
     b.eq    2f
+    cmp     x27, #API_OP_GET_STATE_VALIDATOR
+    b.eq    2f
     cmp     x27, #API_OP_GET_STATE_ROOT
     b.eq    2f
     cmp     x27, #API_OP_GET_STATE_FORK
@@ -1240,7 +1752,16 @@ LOCAL_FUNCTION node_api_run
     add     x1, x19, #Node_config
     bl      node_fork
     mov     x15, x0
-    cmp     x27, #API_OP_GET_STATE_FINALITY_CHECKPOINTS
+    cmp     x27, #API_OP_GET_STATE_VALIDATOR
+    b.ne    20f
+    mov     x0, x22                         /* getStateValidator: the validator of its ids */
+    mov     x1, x23
+    cbz     x1, 8f
+    bl      node_api_find_validator
+    str     x22, [x26, #ApiView_val_state]
+    str     x0, [x26, #ApiView_val_index]
+    b       5f
+20: cmp     x27, #API_OP_GET_STATE_FINALITY_CHECKPOINTS
     b.ne    21f
     mov     x0, x22                         /* finality_checkpoints */
     add     x1, x26, #ApiView_previous_justified
@@ -1347,7 +1868,14 @@ LOCAL_FUNCTION node_api_run
     add     x1, x25, #NodeEvent_chunk
     mov     x2, #200
     mov     x3, x27
-    bl      api_respond
+    cmp     x27, #API_OP_GET_STATE_VALIDATOR    /* no such validator: 404 */
+    b.ne    52f
+    ldr     x9, [x26, #ApiView_val_index]
+    cmn     x9, #1
+    b.ne    52f
+    mov     x2, #404
+    mov     x3, #API_BODY_ERROR
+52: bl      api_respond
     cbnz    x0, 71f
     ldr     x9, [x25, #(NodeEvent_chunk + 16)]  /* the event's size covers the chunk */
     add     x9, x9, #(NodeEvent_chunk + 24 + 7)
@@ -1753,10 +2281,12 @@ LOCAL_FUNCTION node_api_encode
     cbnz    x1, 3f
     mov     x0, #404
     UNFRAME 16
-2:  ldr     x9, [x3, #ApiView_head_slot]    /* the others: the state at its slot */
+2:  ldr     x9, [x3, #ApiView_head_slot]    /* the others: the state at its slot; getStateValidator its ids */
     orr     x5, x5, x9, lsl #24
     ldr     x1, [x3, #ApiView_look_state]
-    mov     x3, #0
+    cmp     x0, #API_OP_GET_STATE_VALIDATOR
+    ldr     x9, [x3, #ApiView_look_data]
+    csel    x3, x9, xzr, eq
 3:  mov     x0, #NODE_WORK_API_ENCODE
     mov     x2, #0
     bl      node_work
@@ -1806,7 +2336,26 @@ LOCAL_FUNCTION node_api_lookup
     add     x0, x1, #NodeApi_cursor
     add     x1, x21, #ApiRoute_id_root
     bl      lantern_copy_root
-    add     x0, x19, #Node_head_root
+    ldr     x9, [x21, #ApiRoute_op]         /* the validator operations: statuses, validator_id and ids */
+    sub     x9, x9, #API_OP_GET_STATE_VALIDATORS
+    cmp     x9, #(API_OP_POST_STATE_VALIDATOR_IDENTITIES - API_OP_GET_STATE_VALIDATORS)
+    b.hi    2f
+    ldr     x1, [sp, #(L + 8)]
+    ldr     x9, [x21, #ApiRoute_statuses]
+    str     x9, [x1, #(NodeApi_cursor + 32)]
+    add     x0, x1, #(NodeApi_cursor + 40)
+    add     x1, x21, #ApiRoute_validator
+    mov     x2, #64
+    bl      lantern_copy
+    mov     x0, x21
+    bl      node_api_ids
+    ldr     x1, [sp, #(L + 8)]
+    str     x0, [x1, #NodeApi_data]
+    cbz     x0, 2f
+    ldr     x9, [x1, #NodeApi_flags]
+    orr     x9, x9, #API_STREAM_OWN
+    str     x9, [x1, #NodeApi_flags]
+2:  add     x0, x19, #Node_head_root
     bl      node_find_block
     ldr     x1, [x1, #NodeBlock_state_id]
     mov     x0, #NODE_WORK_API_LOOKUP
@@ -1828,7 +2377,7 @@ END_FUNCTION node_api_lookup
  * connection, x28 the operation. Locals: L the scratch's size, L+8 the route.
  */
 LOCAL_FUNCTION node_api_lookup_done
-    ENTER 16
+    ENTER 96
     mov     x21, x0
     ldr     x9, [x21, #NodeAction_arg]
     PART    x10, x11, x19, Node_api
@@ -1845,11 +2394,22 @@ LOCAL_FUNCTION node_api_lookup_done
     tst     x25, #API_STREAM_LOOKUP
     b.eq    99f
     ldr     x28, [x22, #NodeApi_op]
+    tbz     x25, #5, 1f                     /* API_STREAM_GONE: the entry ends, its ids with it */
+    mov     x0, x22
+    bl      node_api_end
+    b       99f
+1:  ldr     x9, [x22, #NodeApi_data]        /* its ids, statuses and validator_id go to the answer */
+    str     x9, [sp, #(L + 16)]
+    ldr     x9, [x22, #(NodeApi_cursor + 32)]
+    str     x9, [sp, #(L + 24)]
+    add     x0, sp, #(L + 32)
+    add     x1, x22, #(NodeApi_cursor + 40)
+    mov     x2, #64
+    bl      lantern_copy
     and     x9, x25, #~API_STREAM_OWN       /* the entry ends; it owns no bytes */
     str     x9, [x22, #NodeApi_flags]
     mov     x0, x22
     bl      node_api_end
-    tbnz    x25, #5, 99f                    /* API_STREAM_GONE */
     ldr     x9, [x23]                       /* the ApiView, then an ApiRoute, at the end of scratch */
     str     x9, [sp, #L]
     MOVQ    x10, ApiView__size + API_ROUTE_FIXED
@@ -1872,6 +2432,13 @@ LOCAL_FUNCTION node_api_lookup_done
     mov     x10, #API_TYPE_JSON
     csel    x9, x9, x10, ne
     str     x9, [x0, #ApiRoute_response]
+    ldr     x9, [sp, #(L + 24)]
+    str     x9, [x0, #ApiRoute_statuses]
+    add     x0, x0, #ApiRoute_validator
+    add     x1, sp, #(L + 32)
+    mov     x2, #64
+    bl      lantern_copy
+    ldr     x0, [sp, #(L + 8)]
     mov     x9, #API_ID_SLOT
     str     x9, [x0, #ApiRoute_id_kind]
     ldr     x9, [x21, #NodeEvent_index]
@@ -1886,9 +2453,17 @@ LOCAL_FUNCTION node_api_lookup_done
     mov     x0, x26
     bl      node_api_advance
     and     x2, x25, #(API_STREAM_CLOSE | API_STREAM_HTTP10)
+    ldr     x9, [sp, #(L + 16)]             /* the ids go to the answer */
+    str     x9, [x26, #ApiView_look_data]
+    str     xzr, [sp, #(L + 16)]
     cmp     x28, #API_OP_GET_STATE_V2
-    b.ne    1f
-    mov     x0, x27                         /* getStateV2: a stream */
+    b.eq    2f
+    cmp     x28, #API_OP_GET_STATE_VALIDATOR
+    b.eq    1f
+    sub     x9, x28, #API_OP_GET_STATE_VALIDATORS
+    cmp     x9, #(API_OP_POST_STATE_VALIDATOR_IDENTITIES - API_OP_GET_STATE_VALIDATORS)
+    b.hi    1f
+2:  mov     x0, x27                         /* getStateV2 and the validator streams: a stream */
     ldr     x1, [sp, #(L + 8)]
     mov     x3, x26
     bl      node_api_stream
@@ -1901,7 +2476,14 @@ LOCAL_FUNCTION node_api_lookup_done
     bl      node_api_encode
     mov     x2, x0
     cbz     x0, 90f
-80: mov     x0, x27                         /* an error: with close, or keep-alive for HTTP/1.0 */
+80: ldr     x1, [sp, #(L + 16)]             /* ids no answer took: they go */
+    cbz     x1, 82f
+    str     x2, [sp, #(L + 24)]
+    mov     x0, #NODE_ACT_BYTES_FREE
+    mov     x2, #0
+    bl      node_ids
+    ldr     x2, [sp, #(L + 24)]
+82: mov     x0, x27                         /* an error: with close, or keep-alive for HTTP/1.0 */
     mov     x1, #0
     mov     x3, #API_BODY_ERROR
     and     x4, x25, #API_R_CLOSE
@@ -1912,7 +2494,7 @@ LOCAL_FUNCTION node_api_lookup_done
 81: bl      node_api_send
 90: ldr     x9, [sp, #L]
     str     x9, [x23]
-99: LEAVE 16
+99: LEAVE 96
 END_FUNCTION node_api_lookup_done
 
 /*
@@ -2069,6 +2651,8 @@ LOCAL_FUNCTION node_api_end
     FRAME 32
     ldp     x9, x10, [x0, #NodeApi_flags]
     stp     x10, x9, [sp, #16]
+    ldr     x9, [x0, #NodeApi_state]
+    str     x9, [sp, #32]
     str     xzr, [x0, #NodeApi_connection]
     PART    x9, x10, x19, Node_api
 1:  cbz     x10, 2f
@@ -2081,9 +2665,15 @@ LOCAL_FUNCTION node_api_end
     b       1b
 2:  STQ     x10, x19, Node_api + 8
     ldr     x9, [sp, #24]
-    tbz     x9, #3, 9f                      /* API_STREAM_OWN */
+    tbz     x9, #3, 8f                      /* API_STREAM_OWN */
     mov     x0, #NODE_ACT_BYTES_FREE
     ldr     x1, [sp, #16]
+    mov     x2, #0
+    bl      node_ids
+8:  ldr     x9, [sp, #24]
+    tbz     x9, #12, 9f                     /* API_STREAM_OWN_STATE */
+    mov     x0, #NODE_ACT_STATE_FREE
+    ldr     x1, [sp, #32]
     mov     x2, #0
     bl      node_ids
 9:  UNFRAME 32
@@ -2098,8 +2688,8 @@ LOCAL_FUNCTION node_api_chunk_work
     mov     x5, x0
     ldr     x3, [x1, #NodeApi_data]
     ldr     x4, [x1, #NodeApi_connection]
+    ldr     x1, [x1, #NodeApi_state]        /* a validator stream's state */
     mov     x0, #NODE_WORK_API_CHUNK
-    mov     x1, #0
     mov     x2, #0
     bl      node_work
     UNFRAME 0
@@ -2134,14 +2724,15 @@ LOCAL_FUNCTION node_api_closed
 END_FUNCTION node_api_closed
 
 /*
- * L2: (connection x0, route x1, flags x2, view x3) -> x0: a stream of getBlockV2 or getStateV2 of
+ * L2: (connection x0, route x1, flags x2, view x3) -> x0: a stream of getBlockV2, getStateV2 or a validator operation of
  * the lookup in the view (node.md, NODE_EV_API): 0 once it started, else the status of the error to
  * answer. flags: API_STREAM_CLOSE and API_STREAM_HTTP10. x19 the node, x24 the actions. x21 the
  * data, x25 the route, x26 the view, x27 the connection, x28 the flags. Locals: L the entry's
  * index, L+8 the entry.
  */
 LOCAL_FUNCTION node_api_stream
-    ENTER 16
+    ENTER 32
+    str     xzr, [sp, #(L + 16)]
     mov     x27, x0
     mov     x25, x1
     mov     x28, x2
@@ -2159,7 +2750,18 @@ LOCAL_FUNCTION node_api_stream
 3:  ldr     x9, [x25, #ApiRoute_op]
     cmp     x9, #API_OP_GET_STATE_V2
     b.eq    5f
-    ldr     x21, [x26, #ApiView_look_data]  /* getBlockV2: the block's bytes */
+    cmp     x9, #API_OP_GET_BLOCK_V2
+    b.eq    4f
+    ldr     x21, [x26, #ApiView_look_data]  /* a validator stream: its ids, and its state */
+    cbz     x21, 31f
+    orr     x28, x28, #API_STREAM_OWN
+31: ldr     x9, [x26, #ApiView_look_copy]
+    cbz     x9, 32f
+    orr     x28, x28, #API_STREAM_OWN_STATE
+32: ldr     x9, [x26, #ApiView_look_state]
+    str     x9, [sp, #(L + 16)]
+    b       6f
+4:  ldr     x21, [x26, #ApiView_look_data]  /* getBlockV2: the block's bytes */
     cbz     x21, 80f
     b       6f
 5:  bl      node_new_id                     /* getStateV2: the state's SSZ bytes, as a new id the stream owns */
@@ -2192,12 +2794,16 @@ LOCAL_FUNCTION node_api_stream
     ldr     x9, [x25, #ApiRoute_op]
     str     x9, [x1, #NodeApi_op]
     stp     x28, x21, [x1, #NodeApi_flags]
+    ldr     x9, [sp, #(L + 16)]             /* a validator stream: its state and status bits */
+    str     x9, [x1, #NodeApi_state]
+    ldr     x9, [x25, #ApiRoute_statuses]
+    str     x9, [x1, #NodeApi_statuses]
     ldr     x0, [sp, #L]
     bl      node_api_chunk_work
     mov     x0, #0
-    LEAVE 16
+    LEAVE 32
 80: mov     x0, #404
-    LEAVE 16
+    LEAVE 32
 END_FUNCTION node_api_stream
 
 /*
@@ -2313,11 +2919,16 @@ LOCAL_FUNCTION api_stream_head
     API_LIT api_octet
     b       2f
 1:  API_LIT api_type
-2:  API_LIT api_version
+2:  ldr     x9, [x22, #NodeApi_op]          /* Eth-Consensus-Version: of getBlockV2 and getStateV2 */
+    cmp     x9, #API_OP_GET_BLOCK_V2
+    b.eq    21f
+    cmp     x9, #API_OP_GET_STATE_V2
+    b.ne    22f
+21: API_LIT api_version
     ldr     x0, [x22, #NodeApi_fork]
     bl      api_fork_name
     API_LIT api_crlf
-    ldr     x0, [sp, #16]
+22: ldr     x0, [sp, #16]
     cmn     x0, #1
     b.eq    3f
     API_LIT api_length
@@ -2365,7 +2976,14 @@ END_FUNCTION api_hex4
  */
 LOCAL_FUNCTION api_stream_json
     FRAME 0
-    add     x9, x23, #NodeEvent_api_bytes   /* the ByteList: its room to x26 - 1, its bytes to x24 */
+    ldr     x9, [x22, #NodeApi_op]          /* the validator streams: their items */
+    cmp     x9, #API_OP_GET_BLOCK_V2
+    b.eq    1f
+    cmp     x9, #API_OP_GET_STATE_V2
+    b.eq    1f
+    bl      api_validators_json
+    UNFRAME 0
+1:  add     x9, x23, #NodeEvent_api_bytes   /* the ByteList: its room to x26 - 1, its bytes to x24 */
     sub     x10, x26, #1
     sub     x10, x10, x9
     mov     x11, #24
@@ -2395,20 +3013,23 @@ LOCAL_FUNCTION api_stream_json
 END_FUNCTION api_stream_json
 
 /*
- * (node, work, data, scratch, event, room) -> status: a NODE_WORK_API_CHUNK of lantern_node_run
- * (node.md): the next chunk of the NodeApi entry at the work's arg, from the SSZ bytes in data,
- * at NodeEvent_api of the event, whose buffer has room bytes. x19 the node, x20 the work, x21
- * data, x22 the entry, x23 the event; the writer's x24-x27 (api_put); x28 where the chunk's bytes
- * start. Locals: L the end of the chunk's room, L+8 the SSZ bytes, L+16 their count, L+24 the
- * body's start, L+32 the head's bytes.
+ * (node, work, data, scratch, event, room, state_a) -> status: a NODE_WORK_API_CHUNK of
+ * lantern_node_run (node.md): the next chunk of the NodeApi entry at the work's arg, from the SSZ
+ * bytes in data, or for a validator stream from state_a and the ids in data, at NodeEvent_api of
+ * the event, whose buffer has room bytes. x19 the node, x20 state_a, x21 data, x22 the entry, x23
+ * the event; the writer's x24-x27 (api_put); x28 where the chunk's bytes start. Locals: L the end
+ * of the chunk's room, L+8 the SSZ bytes, L+16 their count, L+24 the body's start, L+32 the head's
+ * bytes, L+40 1 for a validator stream, L+48 the scratch.
  */
 LOCAL_FUNCTION node_api_chunk_run
-    ENTER 48
+    ENTER 64
     mov     x19, x0
     mov     x20, x1
     mov     x21, x2
     mov     x23, x4
+    str     x3, [sp, #(L + 48)]
     ldr     x9, [x20, #NodeAction_arg]      /* the entry */
+    mov     x20, x6                         /* x20: the state of a validator stream */
     PART    x10, x11, x19, Node_api
     cmp     x9, x11
     b.hs    98f
@@ -2420,9 +3041,18 @@ LOCAL_FUNCTION node_api_chunk_run
     cmp     x9, #API_OP_GET_BLOCK_V2
     b.eq    1f
     cmp     x9, #API_OP_GET_STATE_V2
-    b.ne    98f
-1:
-    cbz     x21, 98f
+    b.eq    1f
+    sub     x10, x9, #API_OP_GET_STATE_VALIDATORS   /* a validator stream: a state */
+    cmp     x10, #(API_OP_POST_STATE_VALIDATOR_IDENTITIES - API_OP_GET_STATE_VALIDATORS)
+    b.hi    98f
+    cmp     x9, #API_OP_GET_STATE_VALIDATOR
+    b.eq    98f
+    cbz     x20, 98f
+    mov     x9, #1
+    b       2f
+1:  cbz     x21, 98f
+    mov     x9, #0
+2:  str     x9, [sp, #(L + 40)]
     mov     x9, #(NodeEvent_api_bytes + 24) /* the chunk's room: at most NODE_API_CHUNK */
     subs    x10, x5, x9
     b.lo    97f
@@ -2435,12 +3065,22 @@ LOCAL_FUNCTION node_api_chunk_run
     mov     x11, #NODE_API_FIRST_ROOM
     mov     x12, #64
     csel    x11, x12, x11, ne
-    cmp     x10, x11
+    ldr     x12, [sp, #(L + 40)]            /* a validator stream: an item in every chunk */
+    cbz     x12, 3f
+    mov     x11, #NODE_API_FIRST_ROOM
+3:  cmp     x10, x11
     b.lo    97f
     add     x28, x23, #(NodeEvent_api_bytes + 24)
     add     x9, x28, x10
     str     x9, [sp, #L]
-    ldr     x9, [x21, #8]                   /* the SSZ bytes */
+    ldr     x9, [sp, #(L + 40)]
+    cbz     x9, 4f
+    ldr     x11, [x20, #NODE_STATE_SLOT]    /* the state at the entry's slot */
+    ldr     x12, [x22, #NodeApi_slot]
+    cmp     x11, x12
+    b.ne    95f
+    b       5f
+4:  ldr     x9, [x21, #8]                   /* the SSZ bytes */
     add     x9, x21, x9
     ldr     x10, [x21, #16]
     stp     x9, x10, [sp, #(L + 8)]
@@ -2456,7 +3096,7 @@ LOCAL_FUNCTION node_api_chunk_run
     ldr     x12, [x22, #NodeApi_slot]
     cmp     x11, x12
     b.ne    96f
-    ldr     x9, [x22, #NodeApi_sent]        /* the entry's sent, flags and cursor go on in the event */
+5:  ldr     x9, [x22, #NodeApi_sent]        /* the entry's sent, flags and cursor go on in the event */
     str     x9, [x23, #NodeEvent_api]
     ldr     x9, [x22, #NodeApi_flags]
     str     x9, [x23, #(NodeEvent_api + 8)]
@@ -2468,8 +3108,15 @@ LOCAL_FUNCTION node_api_chunk_run
     mov     x25, #1
     ldr     x26, [sp, #L]
     mov     x27, #0
-    ldr     x9, [x23, #(NodeEvent_api + 8)]
+    ldr     x9, [sp, #(L + 40)]             /* a validator stream: its selection */
+    cbz     x9, 6f
+    ldr     x0, [sp, #(L + 48)]
+    bl      node_api_validators_prep
+    cbnz    x0, 97f
+6:  ldr     x9, [x23, #(NodeEvent_api + 8)]
     tbz     x9, #2, 30f
+    ldr     x10, [sp, #(L + 40)]
+    cbnz    x10, 60f
     tbnz    x9, #6, 11f                     /* SSZ: the head first, with Content-Length */
     ldr     x0, [sp, #(L + 16)]
     bl      api_stream_head
@@ -2494,13 +3141,38 @@ LOCAL_FUNCTION node_api_chunk_run
     orr     x11, x11, #API_STREAM_DONE
 12: str     x11, [x23, #(NodeEvent_api + 8)]
     b       80f
+60: tbnz    x9, #6, 61f                     /* the identities as SSZ: Content-Length of 64 bytes each */
+    add     x9, x23, #(NodeEvent_api + 16)
+    ldr     x0, [x9, #40]
+    lsl     x0, x0, #6
+    bl      api_stream_head
+61: bl      api_validators_json
+    ldr     x11, [x23, #(NodeEvent_api + 8)]
+    orr     x11, x11, #API_STREAM_STARTED
+    cbz     x0, 62f
+    orr     x11, x11, #API_STREAM_DONE
+62: str     x11, [x23, #(NodeEvent_api + 8)]
+    b       80f
 30: tbnz    x9, #6, 40f                     /* JSON, the first chunk: the body after room for the head */
     add     x24, x28, #API_HEAD_ROOM
     str     x24, [sp, #(L + 24)]
     ldr     x9, [sp, #L]
     sub     x26, x9, #7                     /* room for CRLF and the last chunk */
+    ldr     x9, [sp, #(L + 40)]
+    cbz     x9, 35f
+    /* the validator streams: {"execution_optimistic":…,"finalized":…,"data":[ */
+    API_LIT api_v_open
+    ldr     x9, [x23, #(NodeEvent_api + 8)]
+    ubfx    x0, x9, #8, #1
+    bl      api_bool
+    API_LIT api_x_finalized
+    ldr     x9, [x23, #(NodeEvent_api + 8)]
+    ubfx    x0, x9, #9, #1
+    bl      api_bool
+    API_LIT api_v_list
+    b       36f
     /* {"version":"<fork>","execution_optimistic":…,"finalized":…,"data": */
-    API_LIT api_j_version
+35: API_LIT api_j_version
     ldr     x0, [x22, #NodeApi_fork]
     bl      api_fork_name
     API_LIT api_j_optimistic
@@ -2512,7 +3184,7 @@ LOCAL_FUNCTION node_api_chunk_run
     ubfx    x0, x9, #9, #1
     bl      api_bool
     API_LIT api_j_data
-    bl      api_stream_json
+36: bl      api_stream_json
     cmp     x0, #2
     b.eq    96f
     ldr     x9, [x23, #(NodeEvent_api + 8)]
@@ -2605,17 +3277,19 @@ LOCAL_FUNCTION node_api_chunk_run
     sub     x1, x1, x9
     bl      lantern_zero
     mov     x0, #LANTERN_OK
-    LEAVE 48
+    LEAVE 64
+95: mov     x9, #LANTERN_INVALID_SLOT       /* a state at another slot */
+    b       94f
 96: mov     x9, #LANTERN_INVALID_ENCODING   /* bytes that are no encoding of the type */
-    str     x9, [x23, #NodeEvent_result]
+94: str     x9, [x23, #NodeEvent_result]
     mov     x9, #NODE_EV_WORK_DONE_SIZE
     str     x9, [x23]
     mov     x0, #LANTERN_OK
-    LEAVE 48
+    LEAVE 64
 97: mov     x0, #LANTERN_BUFFER_TOO_SMALL
-    LEAVE 48
+    LEAVE 64
 98: mov     x0, #LANTERN_INVALID_EVENT
-    LEAVE 48
+    LEAVE 64
 END_FUNCTION node_api_chunk_run
 
     RODATA

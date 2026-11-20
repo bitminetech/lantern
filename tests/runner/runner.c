@@ -7052,8 +7052,9 @@ static uint8_t *api_normalize(const struct node_shell *s, uint64_t *len, const c
         *len = k + body;
         return out;
     }
-    if (ecv && !find_bytes(b, head, "\r\nContent-Length: ")) { /* HTTP/1.0: the body ends with the connection */
-        const char *eol = find_bytes(ecv + 2, head - (uint64_t)(ecv + 2 - b), "\r\n");
+    const char *ct = ecv ? ecv : find_bytes(b, head, "\r\nContent-Type: ");
+    if (ct && !find_bytes(b, head, "\r\nContent-Length: ")) { /* HTTP/1.0: the body ends with the connection */
+        const char *eol = find_bytes(ct + 2, head - (uint64_t)(ct + 2 - b), "\r\n");
         uint64_t pre = (uint64_t)(eol - b) + 2, body = s->api.len - head;
         if (!s->api.closes) *why = "a body with no length, and the connection stays open";
         memcpy(out, b, (size_t)pre);

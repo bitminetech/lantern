@@ -257,6 +257,15 @@ SPEC_END node_state_checkpoints
 .if BeaconState_state_roots != NODE_STATE_STATE_ROOTS || BeaconState_fork != NODE_STATE_FORK
 .error "nodehooks: NODE_STATE_STATE_ROOTS or NODE_STATE_FORK is not the state's"
 .endif
+.if BeaconState_validators != NODE_STATE_VALIDATORS || BeaconState_balances != NODE_STATE_BALANCES || Validator__mem != NODE_VALIDATOR_MEM
+.error "nodehooks: NODE_STATE_VALIDATORS, NODE_STATE_BALANCES or NODE_VALIDATOR_MEM is not the state's"
+.endif
+.if Validator_withdrawal_credentials != NODE_VALIDATOR_CREDENTIALS || Validator_effective_balance != NODE_VALIDATOR_EFFECTIVE_BALANCE || Validator_slashed != NODE_VALIDATOR_SLASHED
+.error "nodehooks: a NODE_VALIDATOR_* offset is not the Validator's"
+.endif
+.if Validator_activation_eligibility_epoch != NODE_VALIDATOR_ELIGIBILITY || Validator_activation_epoch != NODE_VALIDATOR_ACTIVATION || Validator_exit_epoch != NODE_VALIDATOR_EXIT || Validator_withdrawable_epoch != NODE_VALIDATOR_WITHDRAWABLE
+.error "nodehooks: a NODE_VALIDATOR_* epoch offset is not the Validator's"
+.endif
 
 /* (kind, ssz, cursor, out): lantern_json_encode_ssz with the fork's SignedBeaconBlock (kind 0) or BeaconState (kind 1). */
 SPEC_FUNCTION node_json

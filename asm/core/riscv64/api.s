@@ -409,6 +409,473 @@ LOCAL_FUNCTION api_fork_schedule
     UNFRAME 32
 END_FUNCTION api_fork_schedule
 
+/* ---------------------------------------------------------------- Validators (beacon-api.md, Common rules) */
+
+.set API_ITEM_MAX, 576                      # the most bytes of an item and its comma
+
+/* a0 = the API_STATUS_* of the validator at a0 at the epoch a1. A leaf. Uses t0-t3. */
+LOCAL_FUNCTION api_validator_status
+    UNWIND_END_PROLOGUE
+    ld      t0, NODE_VALIDATOR_WITHDRAWABLE(a0)
+    bgtu    t0, a1, 1f
+    ld      t0, NODE_VALIDATOR_EFFECTIVE_BALANCE(a0)
+    li      a0, API_STATUS_WITHDRAWAL_POSSIBLE
+    bnez    t0, 9f
+    li      a0, API_STATUS_WITHDRAWAL_DONE
+    ret
+1:  lbu     t2, NODE_VALIDATOR_SLASHED(a0)
+    ld      t1, NODE_VALIDATOR_EXIT(a0)
+    bgtu    t1, a1, 2f
+    li      a0, API_STATUS_EXITED_UNSLASHED
+    beqz    t2, 9f
+    li      a0, API_STATUS_EXITED_SLASHED
+    ret
+2:  ld      t0, NODE_VALIDATOR_ACTIVATION(a0)
+    bgtu    t0, a1, 4f
+    li      t3, -1                          # active: exiting with an exit epoch below FAR_FUTURE_EPOCH
+    li      a0, API_STATUS_ACTIVE_ONGOING
+    beq     t1, t3, 9f
+    li      a0, API_STATUS_ACTIVE_EXITING
+    beqz    t2, 9f
+    li      a0, API_STATUS_ACTIVE_SLASHED
+    ret
+4:  ld      t0, NODE_VALIDATOR_ELIGIBILITY(a0)
+    li      t3, -1
+    li      a0, API_STATUS_PENDING_QUEUED
+    bne     t0, t3, 9f
+    li      a0, API_STATUS_PENDING_INITIALIZED
+9:  ret
+END_FUNCTION api_validator_status
+
+/*
+ * The item of the validator a1 of the state a0: a2 0 for getStateValidators, 1 for the balances,
+ * 2 for the identities, 3 for their SSZ (64 bytes). Locals: the validator, the index, the kind, the
+ * balance, the epoch, then an SSZ item at 48.
+ */
+LOCAL_FUNCTION api_validator_item
+    FRAME 112
+    sd      a1, 8(sp)
+    sd      a2, 16(sp)
+    PART    t0, t1, a0, NODE_STATE_BALANCES
+    slli    t2, a1, 3
+    add     t0, t0, t2
+    ld      t0, 0(t0)
+    sd      t0, 24(sp)
+    ld      t0, NODE_STATE_SLOT(a0)
+    li      t1, SLOTS_PER_EPOCH
+    divu    t0, t0, t1
+    sd      t0, 32(sp)
+    PART    t0, t1, a0, NODE_STATE_VALIDATORS
+    slli    t2, a1, 7                       # NODE_VALIDATOR_MEM
+    add     t0, t0, t2
+    sd      t0, 0(sp)
+    li      t1, 3
+    bne     a2, t1, 1f
+    sd      a1, 48(sp)                      # SSZ: index, pubkey, activation_epoch
+    addi    a0, sp, 56
+    mv      a1, t0
+    li      a2, 48
+    call    lantern_copy
+    ld      t0, 0(sp)
+    ld      t0, NODE_VALIDATOR_ACTIVATION(t0)
+    sd      t0, 104(sp)
+    addi    a0, sp, 48
+    li      a1, 64
+    call    api_put
+    UNFRAME 112
+1:  API_LIT api_v_index
+    ld      a0, 8(sp)
+    call    api_qdec
+    ld      t0, 16(sp)
+    li      t1, 2
+    beq     t0, t1, 2f
+    API_LIT api_v_balance
+    ld      a0, 24(sp)
+    call    api_qdec
+    ld      t0, 16(sp)
+    bnez    t0, 9f
+    API_LIT api_v_status
+    ld      a0, 0(sp)
+    ld      a1, 32(sp)
+    call    api_validator_status
+    ADDRESS t0, api_v_statuses
+    li      t1, 24
+    mul     t1, a0, t1
+    add     t0, t0, t1
+    lbu     a1, 0(t0)
+    addi    a0, t0, 1
+    call    api_put
+    API_LIT api_v_validator
+    ld      a0, 0(sp)
+    li      a1, 48
+    call    api_qhex
+    API_LIT api_v_credentials
+    ld      a0, 0(sp)
+    addi    a0, a0, NODE_VALIDATOR_CREDENTIALS
+    li      a1, 32
+    call    api_qhex
+    API_LIT api_v_effective
+    ld      t0, 0(sp)
+    ld      a0, NODE_VALIDATOR_EFFECTIVE_BALANCE(t0)
+    call    api_qdec
+    API_LIT api_v_slashed
+    ld      t0, 0(sp)
+    lbu     a0, NODE_VALIDATOR_SLASHED(t0)
+    call    api_bool
+    API_LIT api_v_eligibility
+    ld      t0, 0(sp)
+    ld      a0, NODE_VALIDATOR_ELIGIBILITY(t0)
+    call    api_qdec
+    API_LIT api_v_activation
+    ld      t0, 0(sp)
+    ld      a0, NODE_VALIDATOR_ACTIVATION(t0)
+    call    api_qdec
+    API_LIT api_v_exit
+    ld      t0, 0(sp)
+    ld      a0, NODE_VALIDATOR_EXIT(t0)
+    call    api_qdec
+    API_LIT api_v_withdrawable
+    ld      t0, 0(sp)
+    ld      a0, NODE_VALIDATOR_WITHDRAWABLE(t0)
+    call    api_qdec
+    API_LIT api_end2
+    UNFRAME 112
+    # identities
+2:  API_LIT api_v_pubkey
+    ld      a0, 0(sp)
+    li      a1, 48
+    call    api_qhex
+    API_LIT api_v_activation
+    ld      t0, 0(sp)
+    ld      a0, NODE_VALIDATOR_ACTIVATION(t0)
+    call    api_qdec
+9:  API_LIT api_end1
+    UNFRAME 112
+END_FUNCTION api_validator_item
+
+/* a0 = the index of the validator of the ValidatorRef in the ByteList a1 in the state a0, or 2^64 - 1. A leaf. Uses t0-t6, a1, a7. */
+LOCAL_FUNCTION node_api_find_validator
+    UNWIND_END_PROLOGUE
+    ld      t0, 16(a1)
+    li      t1, 64
+    bne     t0, t1, 8f
+    ld      t0, 8(a1)
+    add     a1, a1, t0
+    PART    t2, t3, a0, NODE_STATE_VALIDATORS
+    ld      t0, 0(a1)
+    li      t1, API_VALIDATOR_INDEX
+    bne     t0, t1, 2f
+    ld      a0, 8(a1)
+    bgeu    a0, t3, 8f
+    ret
+2:  li      a0, 0
+3:  bgeu    a0, t3, 8f
+    li      t4, 0
+31: add     t5, t2, t4
+    ld      t5, 0(t5)
+    add     t6, a1, t4
+    ld      t6, ValidatorRef_pubkey(t6)
+    bne     t5, t6, 4f
+    addi    t4, t4, 8
+    li      t0, 48
+    bltu    t4, t0, 31b
+    ret
+4:  addi    t2, t2, NODE_VALIDATOR_MEM
+    addi    a0, a0, 1
+    j       3b
+8:  li      a0, -1
+    ret
+END_FUNCTION node_api_find_validator
+
+/*
+ * The selection of a chunk of a validator stream (node.md, NODE_WORK_API_CHUNK), at the cursor at
+ * NodeEvent_api + 16 of the event s5: +16 a bitmap, in the scratch a0, of the validators of the
+ * state a1 that the ValidatorRef items of data a2 name (0 with no data); +24 the epoch of the
+ * state's slot; +40 the count of the validators selected. a0 = 0, or LANTERN_BUFFER_TOO_SMALL.
+ * Locals: the scratch's next byte, its end, the validators, their count, the items, their count, the
+ * table of the public keys, its mask.
+ */
+LOCAL_FUNCTION node_api_validators_prep
+    FRAME 64
+    ld      t0, 0(a0)
+    add     t0, a0, t0
+    addi    t1, a0, 16
+    sd      t1, 0(sp)
+    sd      t0, 8(sp)
+    ld      t0, NODE_STATE_SLOT(a1)         # the epoch
+    li      t1, SLOTS_PER_EPOCH
+    divu    t0, t0, t1
+    sd      t0, (NodeEvent_api + 16 + 24)(s5)
+    PART    t0, t1, a1, NODE_STATE_VALIDATORS
+    sd      t0, 16(sp)
+    sd      t1, 24(sp)
+    sd      t1, (NodeEvent_api + 16 + 40)(s5)   # no items: every validator
+    sd      zero, (NodeEvent_api + 16 + 16)(s5)
+    beqz    a2, 90f
+    ld      t0, 8(a2)                       # the items
+    add     t0, a2, t0
+    sd      t0, 32(sp)
+    ld      t0, 16(a2)
+    srli    t0, t0, 6
+    sd      t0, 40(sp)
+    ld      a1, 24(sp)                      # the bitmap: a bit for each validator
+    addi    a1, a1, 63
+    srli    a1, a1, 6
+    slli    a1, a1, 3
+    ld      a0, 0(sp)
+    add     t0, a0, a1
+    ld      t1, 8(sp)
+    bgtu    t0, t1, 97f
+    sd      t0, 0(sp)
+    sd      a0, (NodeEvent_api + 16 + 16)(s5)
+    call    lantern_zero
+    ld      t4, (NodeEvent_api + 16 + 16)(s5)   # index items: their bits; then count the public keys
+    ld      t0, 32(sp)
+    ld      t1, 40(sp)
+    ld      t2, 24(sp)
+    li      t3, 0
+1:  beqz    t1, 3f
+    ld      t5, 0(t0)
+    li      t6, API_VALIDATOR_INDEX
+    bne     t5, t6, 2f
+    ld      t5, 8(t0)
+    bgeu    t5, t2, 21f
+    srli    t6, t5, 6
+    slli    t6, t6, 3
+    add     t6, t4, t6
+    ld      a0, 0(t6)
+    li      a1, 1
+    sll     a1, a1, t5
+    or      a0, a0, a1
+    sd      a0, 0(t6)
+    j       21f
+2:  addi    t3, t3, 1
+21: addi    t0, t0, 64
+    addi    t1, t1, -1
+    j       1b
+3:  beqz    t3, 80f
+    slli    t3, t3, 1                       # the table: the least power of two at least twice the keys
+    li      t0, 1
+31: bgeu    t0, t3, 32f
+    slli    t0, t0, 1
+    j       31b
+32: addi    t1, t0, -1
+    sd      t1, 56(sp)
+    ld      a0, 0(sp)
+    slli    a1, t0, 3
+    add     t0, a0, a1
+    ld      t1, 8(sp)
+    bgtu    t0, t1, 97f
+    sd      a0, 48(sp)
+    call    lantern_zero
+    ld      t0, 32(sp)                      # each public key item: its number + 1, at bytes 8 to 16 of the key
+    ld      t1, 40(sp)
+    ld      t2, 48(sp)
+    ld      t3, 56(sp)
+    li      t4, 0
+4:  bgeu    t4, t1, 5f
+    ld      t5, 0(t0)
+    li      t6, API_VALIDATOR_PUBKEY
+    bne     t5, t6, 42f
+    ld      t5, (ValidatorRef_pubkey + 8)(t0)
+41: and     t5, t5, t3
+    slli    t6, t5, 3
+    add     t6, t2, t6
+    ld      a0, 0(t6)
+    beqz    a0, 43f
+    addi    t5, t5, 1
+    j       41b
+43: addi    a0, t4, 1
+    sd      a0, 0(t6)
+42: addi    t0, t0, 64
+    addi    t4, t4, 1
+    j       4b
+5:  ld      t0, 16(sp)                      # each validator whose key the table holds: its bit
+    li      t1, 0
+    ld      t4, (NodeEvent_api + 16 + 16)(s5)
+    ld      a3, 24(sp)
+51: bgeu    t1, a3, 80f
+    ld      t5, 8(t0)
+52: and     t5, t5, t3
+    slli    t6, t5, 3
+    add     t6, t2, t6
+    ld      a0, 0(t6)
+    beqz    a0, 59f
+    addi    a0, a0, -1
+    slli    a0, a0, 6
+    ld      a1, 32(sp)
+    add     a0, a1, a0
+    addi    a0, a0, ValidatorRef_pubkey
+    li      a1, 0
+53: add     a2, t0, a1
+    ld      a2, 0(a2)
+    add     a4, a0, a1
+    ld      a4, 0(a4)
+    bne     a2, a4, 58f
+    addi    a1, a1, 8
+    li      a2, 48
+    bltu    a1, a2, 53b
+    srli    a2, t1, 6
+    slli    a2, a2, 3
+    add     a2, t4, a2
+    ld      a4, 0(a2)
+    li      a5, 1
+    sll     a5, a5, t1
+    or      a4, a4, a5
+    sd      a4, 0(a2)
+    j       59f
+58: addi    t5, t5, 1
+    j       52b
+59: addi    t0, t0, NODE_VALIDATOR_MEM
+    addi    t1, t1, 1
+    j       51b
+80: ld      t0, 24(sp)                      # the count: the bits set
+    addi    t0, t0, 63
+    srli    t0, t0, 6
+    ld      t1, (NodeEvent_api + 16 + 16)(s5)
+    li      t2, 0
+81: beqz    t0, 83f
+    ld      t3, 0(t1)
+    addi    t1, t1, 8
+82: beqz    t3, 84f
+    addi    t4, t3, -1
+    and     t3, t3, t4
+    addi    t2, t2, 1
+    j       82b
+84: addi    t0, t0, -1
+    j       81b
+83: sd      t2, (NodeEvent_api + 16 + 40)(s5)
+90: li      a0, 0
+    UNFRAME 64
+97: li      a0, LANTERN_BUFFER_TOO_SMALL
+    UNFRAME 64
+END_FUNCTION node_api_validators_prep
+
+/*
+ * The items of the validator stream of the entry s4, of the state s3, from the cursor at
+ * NodeEvent_api + 16 of the event s5 (+0 the next index, +8 the status bits, +16 the bitmap, +24
+ * the epoch, +32 the items written), at the writer's cursor s6 up to s8; then ]} for JSON once they
+ * are all written. a0 = 1 when whole, else 0. Locals: the kind, the validators' count.
+ */
+LOCAL_FUNCTION api_validators_json
+    FRAME 32
+    li      t0, 0                           # the kind: 0, 1 the balances, 2 the identities, 3 their SSZ
+    ld      t1, NodeApi_op(s4)
+    li      t2, API_OP_GET_STATE_VALIDATOR_BALANCES
+    beq     t1, t2, 11f
+    li      t2, API_OP_POST_STATE_VALIDATOR_BALANCES
+    bne     t1, t2, 12f
+11: li      t0, 1
+12: li      t2, API_OP_POST_STATE_VALIDATOR_IDENTITIES
+    bne     t1, t2, 13f
+    li      t0, 2
+    ld      t2, NodeApi_flags(s4)
+    andi    t2, t2, API_STREAM_SSZ
+    beqz    t2, 13f
+    li      t0, 3
+13: sd      t0, 0(sp)
+    LDQ     t0, s3, NODE_STATE_VALIDATORS + 8
+    sd      t0, 8(sp)
+2:  ld      t1, (NodeEvent_api + 16)(s5)
+    ld      t0, 8(sp)
+    bgeu    t1, t0, 8f
+    ld      t2, (NodeEvent_api + 16 + 16)(s5)   # with a bitmap: the next validator it names
+    beqz    t2, 3f
+    srli    t3, t1, 6
+    slli    t3, t3, 3
+    add     t3, t2, t3
+    ld      t3, 0(t3)
+    srl     t3, t3, t1
+    bnez    t3, 21f
+    addi    t1, t1, 64
+    andi    t1, t1, -64
+    sd      t1, (NodeEvent_api + 16)(s5)
+    j       2b
+21: li      t4, 0                           # its lowest set bit
+22: andi    t5, t3, 1
+    bnez    t5, 23f
+    srli    t3, t3, 1
+    addi    t4, t4, 1
+    j       22b
+23: add     t1, t1, t4
+    sd      t1, (NodeEvent_api + 16)(s5)
+3:  ld      t2, (NodeEvent_api + 16 + 8)(s5)    # with status bits: its status has its bit
+    beqz    t2, 4f
+    PART    t3, t4, s3, NODE_STATE_VALIDATORS
+    slli    t5, t1, 7
+    add     a0, t3, t5
+    ld      a1, (NodeEvent_api + 16 + 24)(s5)
+    call    api_validator_status
+    ld      t2, (NodeEvent_api + 16 + 8)(s5)
+    srl     t2, t2, a0
+    andi    t2, t2, 1
+    bnez    t2, 4f
+    ld      t1, (NodeEvent_api + 16)(s5)
+    addi    t1, t1, 1
+    sd      t1, (NodeEvent_api + 16)(s5)
+    j       2b
+4:  sub     t0, s8, s6                      # room for one more item
+    li      t1, API_ITEM_MAX
+    bltu    t0, t1, 9f
+    ld      t0, 0(sp)
+    li      t1, 3
+    beq     t0, t1, 5f
+    ld      t0, (NodeEvent_api + 16 + 32)(s5)
+    beqz    t0, 5f
+    API_LIT api_p_comma
+5:  ld      t0, (NodeEvent_api + 16 + 32)(s5)
+    addi    t0, t0, 1
+    sd      t0, (NodeEvent_api + 16 + 32)(s5)
+    mv      a0, s3
+    ld      a1, (NodeEvent_api + 16)(s5)
+    ld      a2, 0(sp)
+    call    api_validator_item
+    ld      t1, (NodeEvent_api + 16)(s5)
+    addi    t1, t1, 1
+    sd      t1, (NodeEvent_api + 16)(s5)
+    j       2b
+8:  ld      t0, 0(sp)                       # all: ]} for JSON
+    li      t1, 3
+    beq     t0, t1, 81f
+    sub     t0, s8, s6
+    li      t1, 2
+    bltu    t0, t1, 9f
+    API_LIT api_v_end
+81: li      a0, 1
+    UNFRAME 32
+9:  li      a0, 0
+    UNFRAME 32
+END_FUNCTION api_validators_json
+
+/*
+ * a0 = the new id of a NODE_ACT_BYTES_PUT of the ValidatorRef items of the validator operation of
+ * the route a0 (getStateValidator: its validator_id), or 0 with none (node.md, NODE_EV_API).
+ * Locals: a ByteList head whose offset reaches the items.
+ */
+LOCAL_FUNCTION node_api_ids
+    FRAME 32
+    ld      t0, ApiRoute_op(a0)
+    li      t1, API_OP_GET_STATE_VALIDATOR
+    bne     t0, t1, 1f
+    addi    t0, a0, ApiRoute_validator
+    li      t1, 64
+    j       2f
+1:  ld      t0, ApiRoute_list(a0)
+    add     t0, a0, t0
+    ld      t1, (ApiRoute_list + 8)(a0)
+    slli    t1, t1, 6
+    bnez    t1, 2f
+    li      a0, 0
+    UNFRAME 32
+2:  sub     t0, t0, sp
+    sd      t1, 0(sp)
+    sd      t0, 8(sp)
+    sd      t1, 16(sp)
+    mv      a0, sp
+    call    node_put
+    UNFRAME 32
+END_FUNCTION node_api_ids
+
 LOCAL_FUNCTION api_body
     FRAME 16
     sd      a0, 0(sp)
@@ -623,7 +1090,7 @@ LOCAL_FUNCTION api_body
     call    api_fork_schedule
     UNFRAME 16
 17: li      t0, API_OP_GET_DEPOSIT_CONTRACT  # {"data":{"chain_id":…,"address":…}}
-    bne     s10, t0, 99f
+    bne     s10, t0, 18f
     API_LIT api_d_chain
     ld      t0, ApiView_config(s4)
     ld      a0, CONFIG_DEPOSIT_CHAIN_ID(t0)
@@ -634,6 +1101,21 @@ LOCAL_FUNCTION api_body
     li      a1, 20
     call    api_qhex
     API_LIT api_end2
+    UNFRAME 16
+18: li      t0, API_OP_GET_STATE_VALIDATOR   # {"execution_optimistic":…,"finalized":…,"data":<item>}
+    bne     s10, t0, 99f
+    API_LIT api_v_open
+    ld      a0, ApiView_is_optimistic(s4)
+    call    api_bool
+    API_LIT api_x_finalized
+    ld      a0, ApiView_head_finalized(s4)
+    call    api_bool
+    API_LIT api_v_data
+    ld      a0, ApiView_val_state(s4)
+    ld      a1, ApiView_val_index(s4)
+    li      a2, 0
+    call    api_validator_item
+    API_LIT api_end1
 99: UNFRAME 16
 END_FUNCTION api_body
 
@@ -1071,6 +1553,9 @@ LOCAL_FUNCTION node_api_event
     beq     a3, t0, 66f
     li      t0, API_OP_GET_SPEC
     beq     a3, t0, 67f
+    addi    t0, a3, -API_OP_GET_STATE_VALIDATORS   # the six validator operations: a state
+    li      t1, API_OP_POST_STATE_VALIDATOR_IDENTITIES - API_OP_GET_STATE_VALIDATORS
+    bleu    t0, t1, 66f
     li      t0, API_OP_GET_STATE_V2
     bne     a3, t0, 7f
 66: ld      t0, ApiRoute_id_kind(s7)        # a state root: a work finds its slot first
@@ -1093,6 +1578,15 @@ LOCAL_FUNCTION node_api_event
     ld      t0, ApiRoute_op(s7)
     li      t1, API_OP_GET_STATE_V2
     beq     t0, t1, 64f
+    addi    t0, t0, -API_OP_GET_STATE_VALIDATORS
+    li      t1, API_OP_POST_STATE_VALIDATOR_IDENTITIES - API_OP_GET_STATE_VALIDATORS
+    bgtu    t0, t1, 67f
+    mv      a0, s7                          # the validator operations: their ids; getStateValidator a work, the others a stream
+    call    node_api_ids
+    sd      a0, ApiView_look_data(s8)
+    ld      t0, ApiRoute_op(s7)
+    li      t1, API_OP_GET_STATE_VALIDATOR
+    bne     t0, t1, 64f
     j       67f
 65: mv      a0, s7                          # a block: its lookup
     mv      a1, s8
@@ -1140,7 +1634,16 @@ END_FUNCTION node_api_event
 LOCAL_FUNCTION node_api_done
     ENTER 0
     mv      s3, a0
-    ld      t0, NodeAction_arg(s3)
+    ld      t0, NodeAction_arg(s3)          # getStateValidator: its ids go
+    andi    t0, t0, 255
+    li      t1, API_OP_GET_STATE_VALIDATOR
+    bne     t0, t1, 2f
+    ld      a1, NodeAction_data(s3)
+    beqz    a1, 2f
+    li      a0, NODE_ACT_BYTES_FREE
+    li      a2, 0
+    call    node_ids
+2:  ld      t0, NodeAction_arg(s3)
     srli    t0, t0, 8
     andi    t0, t0, 255
     andi    s7, t0, API_ANSWER_CLOSE        # API_R_CLOSE, or API_R_KEEP for HTTP/1.0 kept open
@@ -1229,6 +1732,8 @@ LOCAL_FUNCTION node_api_run
     beqz    s4, 8f                          # a state's answer: a state
     li      t2, API_OP_GET_STATE_FINALITY_CHECKPOINTS
     beq     s9, t2, 2f
+    li      t2, API_OP_GET_STATE_VALIDATOR
+    beq     s9, t2, 2f
     li      t2, API_OP_GET_STATE_ROOT
     beq     s9, t2, 2f
     li      t2, API_OP_GET_STATE_FORK
@@ -1262,7 +1767,16 @@ LOCAL_FUNCTION node_api_run
     addi    a1, s1, Node_config
     call    node_fork
     mv      t6, a0
-    li      t0, API_OP_GET_STATE_FINALITY_CHECKPOINTS
+    li      t0, API_OP_GET_STATE_VALIDATOR
+    bne     s9, t0, 20f
+    mv      a0, s4                          # getStateValidator: the validator of its ids
+    mv      a1, s5
+    beqz    a1, 8f
+    call    node_api_find_validator
+    sd      s4, ApiView_val_state(s8)
+    sd      a0, ApiView_val_index(s8)
+    j       5f
+20: li      t0, API_OP_GET_STATE_FINALITY_CHECKPOINTS
     bne     s9, t0, 21f
     mv      a0, s4                          # finality_checkpoints
     addi    a1, s8, ApiView_previous_justified
@@ -1376,7 +1890,14 @@ LOCAL_FUNCTION node_api_run
     addi    a1, s7, NodeEvent_chunk
     li      a2, 200
     mv      a3, s9
-    call    api_respond
+    li      t0, API_OP_GET_STATE_VALIDATOR  # no such validator: 404
+    bne     s9, t0, 52f
+    ld      t0, ApiView_val_index(s8)
+    li      t1, -1
+    bne     t0, t1, 52f
+    li      a2, 404
+    li      a3, API_BODY_ERROR
+52: call    api_respond
     bnez    a0, 71f
     ld      t0, (NodeEvent_chunk + 16)(s7)  # the event's size covers the chunk
     addi    t0, t0, (NodeEvent_chunk + 24 + 7)
@@ -1779,11 +2300,15 @@ LOCAL_FUNCTION node_api_encode
     bnez    a1, 3f
     li      a0, 404
     UNFRAME 16
-2:  ld      t0, ApiView_head_slot(a3)       # the others: the state at its slot
+2:  ld      t0, ApiView_head_slot(a3)       # the others: the state at its slot; getStateValidator its ids
     slli    t0, t0, 24
     or      a5, a5, t0
     ld      a1, ApiView_look_state(a3)
+    ld      t0, ApiView_look_data(a3)
     li      a3, 0
+    li      t1, API_OP_GET_STATE_VALIDATOR
+    bne     a0, t1, 3f
+    mv      a3, t0
 3:  li      a0, NODE_WORK_API_ENCODE
     li      a2, 0
     call    node_work
@@ -1833,7 +2358,24 @@ LOCAL_FUNCTION node_api_lookup
     addi    t0, s4, NodeApi_cursor
     addi    t1, s3, ApiRoute_id_root
     COPY32  t0, t1
-    li      a0, NODE_WORK_API_LOOKUP
+    ld      t0, ApiRoute_op(s3)             # the validator operations: statuses, validator_id and ids
+    addi    t0, t0, -API_OP_GET_STATE_VALIDATORS
+    li      t1, API_OP_POST_STATE_VALIDATOR_IDENTITIES - API_OP_GET_STATE_VALIDATORS
+    bgtu    t0, t1, 2f
+    ld      t0, ApiRoute_statuses(s3)
+    sd      t0, (NodeApi_cursor + 32)(s4)
+    addi    a0, s4, (NodeApi_cursor + 40)
+    addi    a1, s3, ApiRoute_validator
+    li      a2, 64
+    call    lantern_copy
+    mv      a0, s3
+    call    node_api_ids
+    sd      a0, NodeApi_data(s4)
+    beqz    a0, 2f
+    ld      t0, NodeApi_flags(s4)
+    ori     t0, t0, API_STREAM_OWN
+    sd      t0, NodeApi_flags(s4)
+2:  li      a0, NODE_WORK_API_LOOKUP
     mv      a1, s8
     li      a2, 0
     li      a3, 0
@@ -1853,7 +2395,7 @@ END_FUNCTION node_api_lookup
  * operation. Locals: L the scratch's size.
  */
 LOCAL_FUNCTION node_api_lookup_done
-    ENTER 16
+    ENTER 96
     mv      s3, a0
     ld      t0, NodeAction_arg(s3)
     PART    t1, t2, s1, Node_api
@@ -1870,11 +2412,23 @@ LOCAL_FUNCTION node_api_lookup_done
     and     t0, s7, t0
     beqz    t0, 99f
     ld      s10, NodeApi_op(a0)
+    andi    t0, s7, API_STREAM_GONE
+    beqz    t0, 1f
+    call    node_api_end                    # API_STREAM_GONE: the entry ends, its ids with it
+    j       99f
+1:  ld      t0, NodeApi_data(a0)            # its ids, statuses and validator_id go to the answer
+    sd      t0, (L + 16)(sp)
+    ld      t0, (NodeApi_cursor + 32)(a0)
+    sd      t0, (L + 24)(sp)
+    mv      s4, a0
+    addi    a0, sp, (L + 32)
+    addi    a1, s4, (NodeApi_cursor + 40)
+    li      a2, 64
+    call    lantern_copy
+    mv      a0, s4
     andi    t0, s7, ~API_STREAM_OWN         # the entry ends; it owns no bytes
     sd      t0, NodeApi_flags(a0)
     call    node_api_end
-    andi    t0, s7, API_STREAM_GONE
-    bnez    t0, 99f
     ld      t0, 0(s5)                       # the ApiView, then an ApiRoute, at the end of scratch
     sd      t0, L(sp)
     li      t1, ApiView__size + API_ROUTE_FIXED
@@ -1896,6 +2450,12 @@ LOCAL_FUNCTION node_api_lookup_done
     beqz    t1, 1f
     li      t0, API_TYPE_SSZ
 1:  sd      t0, ApiRoute_response(s4)
+    ld      t0, (L + 24)(sp)
+    sd      t0, ApiRoute_statuses(s4)
+    addi    a0, s4, ApiRoute_validator
+    addi    a1, sp, (L + 32)
+    li      a2, 64
+    call    lantern_copy
     li      t0, API_ID_SLOT
     sd      t0, ApiRoute_id_kind(s4)
     ld      t0, NodeEvent_index(s3)
@@ -1911,9 +2471,17 @@ LOCAL_FUNCTION node_api_lookup_done
     mv      a0, s8
     call    node_api_advance
     andi    a2, s7, (API_STREAM_CLOSE | API_STREAM_HTTP10)
+    ld      t0, (L + 16)(sp)                # the ids go to the answer
+    sd      t0, ApiView_look_data(s8)
+    sd      zero, (L + 16)(sp)
     li      t0, API_OP_GET_STATE_V2
-    bne     s10, t0, 2f
-    mv      a0, s9                          # getStateV2: a stream
+    beq     s10, t0, 3f
+    li      t0, API_OP_GET_STATE_VALIDATOR
+    beq     s10, t0, 2f
+    addi    t0, s10, -API_OP_GET_STATE_VALIDATORS
+    li      t1, API_OP_POST_STATE_VALIDATOR_IDENTITIES - API_OP_GET_STATE_VALIDATORS
+    bgtu    t0, t1, 2f
+3:  mv      a0, s9                          # getStateV2 and the validator streams: a stream
     mv      a1, s4
     mv      a3, s8
     call    node_api_stream
@@ -1926,7 +2494,14 @@ LOCAL_FUNCTION node_api_lookup_done
     call    node_api_encode
     mv      a2, a0
     beqz    a0, 90f
-80: mv      a0, s9                          # an error: with close, or keep-alive for HTTP/1.0
+80: ld      a1, (L + 16)(sp)                # ids no answer took: they go
+    beqz    a1, 82f
+    sd      a2, (L + 24)(sp)
+    li      a0, NODE_ACT_BYTES_FREE
+    li      a2, 0
+    call    node_ids
+    ld      a2, (L + 24)(sp)
+82: mv      a0, s9                          # an error: with close, or keep-alive for HTTP/1.0
     li      a1, 0
     li      a3, API_BODY_ERROR
     andi    a4, s7, API_R_CLOSE
@@ -1937,7 +2512,7 @@ LOCAL_FUNCTION node_api_lookup_done
 81: call    node_api_send
 90: ld      t0, L(sp)
     sd      t0, 0(s5)
-99: LEAVE 16
+99: LEAVE 96
 END_FUNCTION node_api_lookup_done
 
 /*
@@ -2070,8 +2645,9 @@ END_FUNCTION node_api_new
  * gives to another entry that sends the same bytes. Uses t0-t3, a0-a2, a7.
  */
 LOCAL_FUNCTION node_api_end
-    UNWIND_END_PROLOGUE
+    FRAME 16
     sd      zero, NodeApi_connection(a0)
+    sd      a0, 0(sp)
     PART    t0, t1, s1, Node_api
     li      t3, NodeApi__mem
 1:  beqz    t1, 2f
@@ -2083,14 +2659,24 @@ LOCAL_FUNCTION node_api_end
     addi    t1, t1, -1
     j       1b
 2:  STQ     t1, s1, Node_api + 8
+    ld      a0, 0(sp)
     ld      t0, NodeApi_flags(a0)
     andi    t0, t0, API_STREAM_OWN
-    beqz    t0, 9f
+    beqz    t0, 8f
     ld      a1, NodeApi_data(a0)
     li      a0, NODE_ACT_BYTES_FREE
     li      a2, 0
-    j       node_ids
-9:  ret
+    call    node_ids
+8:  ld      a0, 0(sp)
+    ld      t0, NodeApi_flags(a0)
+    srli    t0, t0, 12                      # API_STREAM_OWN_STATE
+    andi    t0, t0, 1
+    beqz    t0, 9f
+    ld      a1, NodeApi_state(a0)
+    li      a0, NODE_ACT_STATE_FREE
+    li      a2, 0
+    call    node_ids
+9:  UNFRAME 16
 END_FUNCTION node_api_end
 
 /* A NODE_WORK_API_CHUNK of the NodeApi entry a1 at index a0, which takes API_STREAM_BUSY. */
@@ -2102,9 +2688,9 @@ LOCAL_FUNCTION node_api_chunk_work
     mv      a5, a0
     ld      a3, NodeApi_data(a1)
     ld      a4, NodeApi_connection(a1)
+    ld      a1, NodeApi_state(a1)           # a validator stream's state
     li      a0, NODE_WORK_API_CHUNK
     li      a2, 0
-    li      a1, 0
     j       node_work
 END_FUNCTION node_api_chunk_work
 
@@ -2139,14 +2725,15 @@ LOCAL_FUNCTION node_api_closed
 END_FUNCTION node_api_closed
 
 /*
- * (connection a0, route a1, flags a2, view a3) -> a0: a stream of getBlockV2 or getStateV2 of the
+ * (connection a0, route a1, flags a2, view a3) -> a0: a stream of getBlockV2, getStateV2 or a validator operation of the
  * lookup in the view (node.md, NODE_EV_API): 0 once it started, else the status of the error to
  * answer. flags: API_STREAM_CLOSE and API_STREAM_HTTP10. s1 the node, s6 the actions. s3 the data,
  * s7 the route, s8 the view, s9 the connection, s10 the flags. Locals: L the entry's index, L+8 the
  * entry.
  */
 LOCAL_FUNCTION node_api_stream
-    ENTER 16
+    ENTER 32
+    sd      zero, (L + 16)(sp)
     mv      s9, a0
     mv      s7, a1
     mv      s10, a2
@@ -2164,7 +2751,19 @@ LOCAL_FUNCTION node_api_stream
 3:  ld      t0, ApiRoute_op(s7)
     li      t1, API_OP_GET_STATE_V2
     beq     t0, t1, 5f
-    ld      s3, ApiView_look_data(s8)       # getBlockV2: the block's bytes
+    li      t1, API_OP_GET_BLOCK_V2
+    beq     t0, t1, 4f
+    ld      s3, ApiView_look_data(s8)       # a validator stream: its ids, and its state
+    beqz    s3, 31f
+    ori     s10, s10, API_STREAM_OWN
+31: ld      t0, ApiView_look_copy(s8)
+    beqz    t0, 32f
+    li      t0, API_STREAM_OWN_STATE
+    or      s10, s10, t0
+32: ld      t0, ApiView_look_state(s8)
+    sd      t0, (L + 16)(sp)
+    j       6f
+4:  ld      s3, ApiView_look_data(s8)       # getBlockV2: the block's bytes
     beqz    s3, 80f
     j       6f
 5:  call    node_new_id                     # getStateV2: the state's SSZ bytes, as a new id the stream owns
@@ -2200,12 +2799,16 @@ LOCAL_FUNCTION node_api_stream
     sd      t0, NodeApi_op(a1)
     sd      s10, NodeApi_flags(a1)
     sd      s3, NodeApi_data(a1)
+    ld      t0, (L + 16)(sp)                # a validator stream: its state and status bits
+    sd      t0, NodeApi_state(a1)
+    ld      t0, ApiRoute_statuses(s7)
+    sd      t0, NodeApi_statuses(a1)
     ld      a0, (L + 0)(sp)
     call    node_api_chunk_work
     li      a0, 0
-    LEAVE 16
+    LEAVE 32
 80: li      a0, 404
-    LEAVE 16
+    LEAVE 32
 END_FUNCTION node_api_stream
 
 /*
@@ -2328,11 +2931,16 @@ LOCAL_FUNCTION api_stream_head
     API_LIT api_octet
     j       2f
 1:  API_LIT api_type
-2:  API_LIT api_version
+2:  ld      t0, NodeApi_op(s4)              # Eth-Consensus-Version: of getBlockV2 and getStateV2
+    li      t1, API_OP_GET_BLOCK_V2
+    beq     t0, t1, 21f
+    li      t1, API_OP_GET_STATE_V2
+    bne     t0, t1, 22f
+21: API_LIT api_version
     ld      a0, NodeApi_fork(s4)
     call    api_fork_name
     API_LIT api_crlf
-    ld      a0, 0(sp)
+22: ld      a0, 0(sp)
     li      t0, -1
     beq     a0, t0, 3f
     API_LIT api_length
@@ -2380,7 +2988,14 @@ END_FUNCTION api_hex4
  */
 LOCAL_FUNCTION api_stream_json
     FRAME 0
-    addi    t0, s5, NodeEvent_api_bytes     # the ByteList: its room to s8 - 1, its bytes to s6
+    ld      t0, NodeApi_op(s4)              # the validator streams: their items, of the state s3
+    li      t1, API_OP_GET_BLOCK_V2
+    beq     t0, t1, 1f
+    li      t1, API_OP_GET_STATE_V2
+    beq     t0, t1, 1f
+    call    api_validators_json
+    UNFRAME 0
+1:  addi    t0, s5, NodeEvent_api_bytes     # the ByteList: its room to s8 - 1, its bytes to s6
     addi    t1, s8, -1
     sub     t1, t1, t0
     sd      t1, 0(t0)
@@ -2411,17 +3026,21 @@ LOCAL_FUNCTION api_stream_json
 END_FUNCTION api_stream_json
 
 /*
- * (node a0, work a1, data a2, scratch a3, event a4, room a5) -> a0: a NODE_WORK_API_CHUNK of
- * lantern_node_run (node.md): the next chunk of the NodeApi entry at the work's arg, from the SSZ
- * bytes in data, at NodeEvent_api of the event, whose buffer has room bytes. s3 data, s4 the
- * entry, s5 the event; the writer's s6-s9 (api_put); s10 where the chunk's bytes start. Locals: L
- * the end of the chunk's room, L+8 the SSZ bytes, L+16 their count, L+24 the body's start, L+32
- * the head's bytes.
+ * (node a0, work a1, data a2, scratch a3, event a4, room a5, state_a a6) -> a0: a
+ * NODE_WORK_API_CHUNK of lantern_node_run (node.md): the next chunk of the NodeApi entry at the
+ * work's arg, from the SSZ bytes in data, or for a validator stream from state_a and the ids in
+ * data, at NodeEvent_api of the event, whose buffer has room bytes. s3 data (a validator stream's
+ * state once its selection is made), s4 the entry, s5 the event; the writer's s6-s9 (api_put); s10
+ * where the chunk's bytes start. Locals: L the end of the chunk's room, L+8 the SSZ bytes, L+16
+ * their count, L+24 the body's start, L+32 the head's bytes, L+40 1 for a validator stream, L+48
+ * state_a, L+56 the scratch.
  */
 LOCAL_FUNCTION node_api_chunk_run
-    ENTER 48
+    ENTER 80
     mv      s3, a2
     mv      s5, a4
+    sd      a6, (L + 48)(sp)
+    sd      a3, (L + 56)(sp)
     ld      t0, NodeAction_arg(a1)          # the entry
     PART    t1, t2, a0, Node_api
     bgeu    t0, t2, 98f
@@ -2434,9 +3053,20 @@ LOCAL_FUNCTION node_api_chunk_run
     li      t1, API_OP_GET_BLOCK_V2
     beq     t0, t1, 1f
     li      t1, API_OP_GET_STATE_V2
-    bne     t0, t1, 98f
+    beq     t0, t1, 1f
+    li      t1, API_OP_GET_STATE_VALIDATOR  # a validator stream: a state
+    beq     t0, t1, 98f
+    addi    t0, t0, -API_OP_GET_STATE_VALIDATORS
+    li      t1, API_OP_POST_STATE_VALIDATOR_IDENTITIES - API_OP_GET_STATE_VALIDATORS
+    bgtu    t0, t1, 98f
+    ld      t0, (L + 48)(sp)
+    beqz    t0, 98f
+    li      t0, 1
+    sd      t0, (L + 40)(sp)
+    j       101f
 1:  beqz    s3, 98f
-    li      t0, NodeEvent_api_bytes + 24    # the chunk's room: at most NODE_API_CHUNK
+    sd      zero, (L + 40)(sp)
+101: li     t0, NodeEvent_api_bytes + 24    # the chunk's room: at most NODE_API_CHUNK
     bltu    a5, t0, 97f
     sub     t0, a5, t0
     andi    t0, t0, -8
@@ -2447,12 +3077,21 @@ LOCAL_FUNCTION node_api_chunk_run
     andi    t2, t2, API_STREAM_STARTED
     li      t1, NODE_API_FIRST_ROOM
     beqz    t2, 3f
+    ld      t2, (L + 40)(sp)                # a validator stream: an item in every chunk
+    bnez    t2, 3f
     li      t1, 64
 3:  bltu    t0, t1, 97f
     addi    s10, s5, (NodeEvent_api_bytes + 24)
     add     t0, s10, t0
     sd      t0, (L + 0)(sp)
-    ld      t0, 8(s3)                       # the SSZ bytes
+    ld      t1, (L + 40)(sp)
+    beqz    t1, 102f
+    ld      t1, (L + 48)(sp)                # the state at the entry's slot
+    ld      t1, NODE_STATE_SLOT(t1)
+    ld      t2, NodeApi_slot(s4)
+    bne     t1, t2, 95f
+    j       5f
+102: ld     t0, 8(s3)                       # the SSZ bytes
     add     t0, s3, t0
     sd      t0, (L + 8)(sp)
     ld      t0, 16(s3)
@@ -2472,7 +3111,7 @@ LOCAL_FUNCTION node_api_chunk_run
     or      t2, t2, t3
     ld      t3, NodeApi_slot(s4)
     bne     t2, t3, 96f
-    ld      t0, NodeApi_sent(s4)            # the entry's sent, flags and cursor go on in the event
+5:  ld      t0, NodeApi_sent(s4)            # the entry's sent, flags and cursor go on in the event
     sd      t0, NodeEvent_api(s5)
     ld      t0, NodeApi_flags(s4)
     sd      t0, (NodeEvent_api + 8)(s5)
@@ -2484,9 +3123,19 @@ LOCAL_FUNCTION node_api_chunk_run
     li      s7, 1
     ld      s8, (L + 0)(sp)
     li      s9, 0
-    ld      t0, (NodeEvent_api + 8)(s5)
+    ld      t0, (L + 40)(sp)                # a validator stream: its selection; then api_stream_json reads the state
+    beqz    t0, 6f
+    ld      a0, (L + 56)(sp)
+    ld      a1, (L + 48)(sp)
+    mv      a2, s3
+    call    node_api_validators_prep
+    bnez    a0, 97f
+    ld      s3, (L + 48)(sp)
+6:  ld      t0, (NodeEvent_api + 8)(s5)
     andi    t1, t0, API_STREAM_SSZ
     beqz    t1, 30f
+    ld      t2, (L + 40)(sp)
+    bnez    t2, 60f
     andi    t1, t0, API_STREAM_STARTED
     bnez    t1, 11f
     ld      a0, (L + 16)(sp)                # SSZ: the head first, with Content-Length
@@ -2512,14 +3161,41 @@ LOCAL_FUNCTION node_api_chunk_run
     ori     t0, t0, API_STREAM_DONE
 13: sd      t0, (NodeEvent_api + 8)(s5)
     j       80f
+60: andi    t1, t0, API_STREAM_STARTED      # the identities as SSZ: Content-Length of 64 bytes each
+    bnez    t1, 61f
+    ld      a0, (NodeEvent_api + 16 + 40)(s5)
+    slli    a0, a0, 6
+    call    api_stream_head
+61: call    api_validators_json
+    ld      t0, (NodeEvent_api + 8)(s5)
+    ori     t0, t0, API_STREAM_STARTED
+    beqz    a0, 62f
+    ori     t0, t0, API_STREAM_DONE
+62: sd      t0, (NodeEvent_api + 8)(s5)
+    j       80f
 30: andi    t1, t0, API_STREAM_STARTED      # JSON, the first chunk: the body after room for the head
     bnez    t1, 40f
     addi    s6, s10, API_HEAD_ROOM
     sd      s6, (L + 24)(sp)
     ld      s8, (L + 0)(sp)
     addi    s8, s8, -7                      # room for CRLF and the last chunk
+    ld      t0, (L + 40)(sp)
+    beqz    t0, 35f
+    /* the validator streams: {"execution_optimistic":…,"finalized":…,"data":[ */
+    API_LIT api_v_open
+    ld      a0, (NodeEvent_api + 8)(s5)
+    srli    a0, a0, 8
+    andi    a0, a0, 1
+    call    api_bool
+    API_LIT api_x_finalized
+    ld      a0, (NodeEvent_api + 8)(s5)
+    srli    a0, a0, 9
+    andi    a0, a0, 1
+    call    api_bool
+    API_LIT api_v_list
+    j       36f
     /* {"version":"<fork>","execution_optimistic":…,"finalized":…,"data": */
-    API_LIT api_j_version
+35: API_LIT api_j_version
     ld      a0, NodeApi_fork(s4)
     call    api_fork_name
     API_LIT api_j_optimistic
@@ -2533,7 +3209,7 @@ LOCAL_FUNCTION node_api_chunk_run
     andi    a0, a0, 1
     call    api_bool
     API_LIT api_j_data
-    call    api_stream_json
+36: call    api_stream_json
     li      t0, 2
     beq     a0, t0, 96f
     ld      t0, (NodeEvent_api + 8)(s5)
@@ -2575,7 +3251,7 @@ LOCAL_FUNCTION node_api_chunk_run
     call    api_stream_head
     ld      t0, (NodeEvent_api + 8)(s5)
     andi    t0, t0, API_STREAM_CHUNKED
-    beqz    t0, 35f
+    beqz    t0, 37f
     ld      a0, (L + 16)(sp)                # chunked: the size line, then CRLF after the bytes
     mv      a1, s6
     call    api_hex4
@@ -2586,7 +3262,7 @@ LOCAL_FUNCTION node_api_chunk_run
     ld      s6, (L + 24)(sp)
     API_LIT api_crlf
     j       80f
-35: ld      s6, (L + 24)(sp)
+37: ld      s6, (L + 24)(sp)
     j       80f
 40: andi    t1, t0, API_STREAM_CHUNKED      # JSON, a later chunk; chunked: a size line, the bytes, CRLF
     beqz    t1, 45f
@@ -2632,17 +3308,19 @@ LOCAL_FUNCTION node_api_chunk_run
     sub     a1, a1, t0
     call    lantern_zero
     li      a0, LANTERN_OK
-    LEAVE 48
+    LEAVE 80
+95: li      t0, LANTERN_INVALID_SLOT        # a state at another slot
+    j       94f
 96: li      t0, LANTERN_INVALID_ENCODING    # bytes that are no encoding of the type
-    sd      t0, NodeEvent_result(s5)
+94: sd      t0, NodeEvent_result(s5)
     li      t0, NODE_EV_WORK_DONE_SIZE
     sd      t0, 0(s5)
     li      a0, LANTERN_OK
-    LEAVE 48
+    LEAVE 80
 97: li      a0, LANTERN_BUFFER_TOO_SMALL
-    LEAVE 48
+    LEAVE 80
 98: li      a0, LANTERN_INVALID_EVENT
-    LEAVE 48
+    LEAVE 80
 END_FUNCTION node_api_chunk_run
 
     RODATA
