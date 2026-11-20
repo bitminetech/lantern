@@ -7100,7 +7100,9 @@ static void run_node_api(const char *file, case_file *f) {
                 shell_event(s, EV_ENGINE, 1, NULL, 0);
                 shell_settle(&n, &why);
             }
-            static const uint64_t rooms[2] = {0, 2048}; /* NODE_API_CHUNK, then many small chunks */
+            /* NODE_API_CHUNK, then many small chunks: 2048 bytes, or a 512th of the response, so that a
+               mainnet state goes in some hundreds of chunks */
+            uint64_t rooms[2] = {0, wlen / 512 > 2048 ? (wlen / 512) & ~(uint64_t)7 : 2048};
             for (int r = 0; r < 2 && !why; r++) {
                 s->api.room = rooms[r];
                 shell_api_ask(&n, req, rlen, (k + 1) | (uint64_t)(7 + r) << 32, &why);
@@ -7180,7 +7182,8 @@ static void api_streams_head(fc_node *n, const uint8_t *st, const char **why) {
     for (int q = 0; q < 4 && !*why; q++)
         for (int r = 0; r < 2 && !*why; r++) {
             static char msg[160];
-            s->api.room = r ? 2048 : 0;
+            uint64_t small = (need - 24) / 128 > 2048 ? ((need - 24) / 128) & ~(uint64_t)7 : 2048; /* some hundreds of chunks */
+            s->api.room = r ? small : 0;
             shell_api_ask(n, (const uint8_t *)reqs[q], strlen(reqs[q]), (uint64_t)(3 + 2 * q + r), why);
             uint64_t glen = 0;
             uint8_t *g = *why ? NULL : api_normalize(s, &glen, why);
