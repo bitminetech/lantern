@@ -1477,11 +1477,11 @@ END_FUNCTION node_engine_consume
 /*
  * The bytes of engine_in: a whole HTTP response of the call in flight ends it. s3 engine_in, s4
  * the method, s7 the scratch size, restored on return, s8 the body's ByteList, s9 a block entry.
- * Locals: L an HttpResponse (16), L+16 eof, L+24 the method, L+32 an EngineResponse (96), L+128 a
- * node, L+136 a status.
+ * Locals: L an HttpResponse (16), L+16 eof, L+24 the method, L+32 an EngineResponse (112), L+144 a
+ * node, L+152 a status.
  */
 LOCAL_FUNCTION node_engine_read
-    ENTER 144
+    ENTER 160
     ld      s3, Node_engine_in(s1)
     add     s3, s1, s3
     ld      s4, Node_engine_method(s1)
@@ -1598,14 +1598,14 @@ LOCAL_FUNCTION node_engine_read
     call    node_store_find
     li      t0, -1
     beq     a0, t0, 9f
-    sd      a0, (L + 128)(sp)
+    sd      a0, (L + 144)(sp)
     li      t0, ENGINE_STATUS_VALID
     bne     s10, t0, 41f
     li      t0, PAYLOAD_STATUS_VALID
-    sd      t0, (L + 136)(sp)
+    sd      t0, (L + 152)(sp)
     mv      a0, s2
-    addi    a1, sp, L + 128
-    addi    a2, sp, L + 136
+    addi    a1, sp, L + 144
+    addi    a2, sp, L + 152
     addi    a3, sp, L + 16
     call    lantern_store_payload_status
     j       9f
@@ -1613,16 +1613,16 @@ LOCAL_FUNCTION node_engine_read
     beq     s10, t0, 42f
     li      t0, ENGINE_STATUS_INVALID_BLOCK_HASH
     bne     s10, t0, 9f
-42: ld      a0, (L + 128)(sp)
+42: ld      a0, (L + 144)(sp)
     mv      a2, a0
     ld      t0, (L + 32 + EngineResponse_has_latest_valid_hash)(sp)
     li      a1, 0
     beqz    t0, 43f
     addi    a1, sp, L + 32 + EngineResponse_latest_valid_hash
 43: call    node_lvh
-9:  LEAVE 144
+9:  LEAVE 160
 6:  sd      s7, 0(s5)                       # part of a response: more bytes
-    LEAVE 144
+    LEAVE 160
 70: mv      a0, s3                          # a failed call, its response read
     ld      a1, (L + 8)(sp)
     call    node_engine_consume
@@ -1631,7 +1631,7 @@ LOCAL_FUNCTION node_engine_read
 8:  ld      t0, Node_engine_in(s1)          # the bytes left go
     add     t0, s1, t0
     sd      zero, 16(t0)
-    LEAVE 144
+    LEAVE 160
 END_FUNCTION node_engine_read
 
 /* The import of each waiting block whose parent is the block of the entry a0. s3 the root, s4 index. */
@@ -9080,8 +9080,9 @@ FUNCTION lantern_node_run
     addi    a1, s1, Node_engine_host
     call    lantern_copy
     addi    a0, sp, L + 96
-    addi    a1, s3, NodeAction_arg
-    mv      a2, s4
+    li      a1, 0                           # no payload attributes
+    addi    a2, s3, NodeAction_arg
+    mv      a3, s4
     mv      t6, s10
     FORK_CALL_BELLATRIX engine_forkchoice_updated
     bnez    a0, 85f

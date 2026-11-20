@@ -367,10 +367,23 @@
 .set EngineResponse_has_payload_id, 72
 .set EngineResponse_payload_id, 80
 .set EngineResponse_capabilities, 88
-.set EngineResponse__mem, 96
+.set EngineResponse_result_offset, 96
+.set EngineResponse_result_length, 104
+.set EngineResponse__mem, 112
 .set ENGINE_METHOD_NEW_PAYLOAD, 1
 .set ENGINE_METHOD_FORKCHOICE_UPDATED, 2
 .set ENGINE_METHOD_EXCHANGE_CAPABILITIES, 3
+.set ENGINE_METHOD_GET_PAYLOAD, 4
+
+/* PayloadAttributes (engine-api.md) */
+.set PayloadAttributes_timestamp, 0
+.set PayloadAttributes_prev_randao, 8
+.set PayloadAttributes_suggested_fee_recipient, 40
+.set PayloadAttributes_parent_beacon_block_root, 64
+.set PayloadAttributes_withdrawals, 96
+.set PAYLOAD_ATTRIBUTES_WITHDRAWAL, 104
+.set PAYLOAD_ATTRIBUTES_WITHDRAWAL_SIZE, 44
+.set PayloadAttributes__mem, 104 + 44 * MAX_WITHDRAWALS_PER_PAYLOAD
 .set ENGINE_STATUS_VALID, 1
 .set ENGINE_STATUS_INVALID, 2
 .set ENGINE_STATUS_SYNCING, 3
@@ -915,7 +928,7 @@
 .set NodeEvent_api, NodeEvent_chunk           /* API_CHUNK: sent, flags, a JsonCursor, after the chunk */
 .set NodeEvent_api_bytes, NodeEvent_api + 616 /* API_CHUNK: a ByteList of the chunk's bytes */
 .set LANTERN_NEED_TARGET_STATE, 55     /* lantern_node_run: an attestation needs its target checkpoint state */
-.set LANTERN_INVALID_ENCODING, 56     /* lantern_node_run, the node hooks: the bytes are not an SSZ encoding of the type */
+.set LANTERN_INVALID_ENCODING, 56     /* lantern_node_run, the node hooks: the bytes are not an SSZ encoding of the type; lantern_get_execution_requests: a list the spec rejects */
 .set LANTERN_INVALID_EVENT, 57        /* lantern_node_step: an event breaks the rules of its kind */
 .set LANTERN_INVALID_BLOB_SIDECAR, 58  /* lantern_node_blob_sidecar: the index, the inclusion proof or the KZG proof fails */
 .set LANTERN_NO_PAYLOAD, 59            /* lantern_node_new_payload: the block has no execution payload to send */

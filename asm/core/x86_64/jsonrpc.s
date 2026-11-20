@@ -206,8 +206,10 @@ LOCAL_FUNCTION jliteral
 END_FUNCTION jliteral
 
 /*
- * L0: any value at the cursor rdi: rdi = the cursor after it. Brackets nest to 64 levels, their
- * kinds in r13 (1 for an object), the depth in r14. Uses rax, rcx, rdx, rsi, r8, r9.
+ * L0: any value at the cursor rdi, as RFC 8259 writes it: rdi = the cursor after it. Brackets nest
+ * to 64 levels, their kinds in r13 (1 for an object), the depth in r14; r10 what comes next: 0 a
+ * value, 1 a value or the array's end, 2 a name, 3 a name or the object's end. Uses rax, rcx, rdx,
+ * rsi, r8, r9, r10.
  */
 LOCAL_FUNCTION jskip
     push    %r13
@@ -217,11 +219,37 @@ LOCAL_FUNCTION jskip
     UNWIND_END_PROLOGUE
     xor     %r13d, %r13d
     xor     %r14d, %r14d
+    xor     %r10d, %r10d
 1:  call    jws
     cmp     %rbx, %rdi
     jae     9f
     movzbl  (%rdi), %eax
-    cmp     $'"', %eax
+    cmp     $2, %r10
+    jb      30f
+    cmp     $'}', %eax                      # a name and a colon, or the end of an empty object
+    jne     31f
+    cmp     $3, %r10
+    je      5f
+    jmp     9f
+31: cmp     $'"', %eax
+    jne     9f
+    call    jstring
+    test    %rdi, %rdi
+    jz      9f
+    call    jws
+    cmp     %rbx, %rdi
+    jae     9f
+    cmpb    $':', (%rdi)
+    jne     9f
+    inc     %rdi
+    xor     %r10d, %r10d
+    jmp     1b
+30: cmp     $']', %eax                      # a value, or the end of an empty array
+    jne     32f
+    cmp     $1, %r10
+    je      5f
+    jmp     9f
+32: cmp     $'"', %eax
     jne     2f
     call    jstring
     test    %rdi, %rdi
@@ -230,44 +258,41 @@ LOCAL_FUNCTION jskip
 2:  cmp     $'{', %eax
     je      3f
     cmp     $'[', %eax
-    jne     4f
+    jne     7f
 3:  cmp     $64, %r14
     jae     9f
     shl     $1, %r13
+    mov     $1, %r10d
     cmp     $'{', %eax
     jne     14f
     or      $1, %r13
+    mov     $3, %r10d
 14: inc     %r14
     inc     %rdi
     jmp     1b
-4:  cmp     $'}', %eax                      # a closing bracket of the kind opened
-    je      5f
-    cmp     $']', %eax
-    jne     7f
-5:  test    %r14, %r14
-    jz      9f
-    mov     %r13, %rcx
-    and     $1, %ecx
-    xor     %edx, %edx
-    cmp     $'}', %eax
-    sete    %dl
-    cmp     %rdx, %rcx
-    jne     9f
-    shr     $1, %r13
+5:  shr     $1, %r13                        # the end of the container
     dec     %r14
     inc     %rdi
 6:  test    %r14, %r14                      # a whole value at depth 0
     jz      8f
-    call    jws                             # in a container: a comma or a colon, or its end
+    call    jws                             # in a container: a comma, or the end of its kind
     cmp     %rbx, %rdi
     jae     9f
     movzbl  (%rdi), %eax
+    mov     %r13, %rcx
+    and     $1, %ecx
     cmp     $',', %eax
-    je      10f
-    cmp     $':', %eax
-    jne     1b
-10: inc     %rdi
+    jne     33f
+    inc     %rdi
+    lea     (%rcx,%rcx), %r10
     jmp     1b
+33: mov     $']', %edx
+    test    %ecx, %ecx
+    jz      34f
+    mov     $'}', %edx
+34: cmp     %edx, %eax
+    je      5b
+    jmp     9f
 7:  cmp     $'t', %eax                      # true, false, null, or a number
     jne     11f
     lea     json_true(%rip), %rsi
@@ -492,7 +517,7 @@ LOCAL_FUNCTION jpayload_status
     LEAVE 0
 END_FUNCTION jpayload_status
 
-/* L0: the result of the method in r12 at the cursor rdi: rdi = the cursor after it. */
+/* L0: the result of the method in r12 at the cursor rdi, r15 the body's first byte: rdi = the cursor after it. */
 LOCAL_FUNCTION jresult
     ENTER 0
     cmp     $ENGINE_METHOD_NEW_PAYLOAD, %r12
@@ -542,7 +567,24 @@ LOCAL_FUNCTION jresult
 4:  test    %r14, %r14
     jz      9f
     LEAVE 0
-5:  cmp     %rbx, %rdi                      # exchangeCapabilities: an array of strings
+5:  cmp     $ENGINE_METHOD_GET_PAYLOAD, %r12
+    jne     17f
+    cmp     %rbx, %rdi                      # getPayload: an object, its bytes kept
+    jae     9f
+    cmpb    $'{', (%rdi)
+    jne     9f
+    mov     %rdi, %rax
+    sub     %r15, %rax
+    mov     %rax, EngineResponse_result_offset(%rbp)
+    call    jskip
+    test    %rdi, %rdi
+    jz      9f
+    mov     %rdi, %rax
+    sub     %r15, %rax
+    sub     EngineResponse_result_offset(%rbp), %rax
+    mov     %rax, EngineResponse_result_length(%rbp)
+    LEAVE 0
+17: cmp     %rbx, %rdi                      # exchangeCapabilities: an array of strings
     jae     9f
     cmpb    $'[', (%rdi)
     jne     9f
@@ -645,13 +687,17 @@ LOCAL_FUNCTION jerror
     LEAVE 0
 END_FUNCTION jerror
 
-/* (body, method, out): rbx the end, rbp out, r12 method, r13 1 when id is seen, r14 1 for an error, 2 for a result. */
+/*
+ * (body, method, out): rbx the end, rbp out, r12 method, r13 1 when id is seen, r14 1 for an
+ * error, 2 for a result, r15 the body's first byte.
+ */
 FUNCTION lantern_engine_parse_response
     ENTER 0
     mov     8(%rdi), %rax
     mov     16(%rdi), %rbx
     add     %rax, %rdi
     add     %rdi, %rbx
+    mov     %rdi, %r15
     mov     (%rsi), %r12
     mov     %rdx, %rbp
     xor     %eax, %eax                      # out: zero
@@ -676,20 +722,20 @@ FUNCTION lantern_engine_parse_response
     JIS     json_id
     test    %eax, %eax
     jz      4f
-    mov     %rdi, %r15                      # id: digits, at most 2^64 - 1
+    mov     %rdi, %r11                      # id: digits, at most 2^64 - 1
     call    jnumber
     test    %rdi, %rdi
     jz      9f
     test    %rsi, %rsi
     jz      9f
-    cmpb    $'-', (%r15)
+    cmpb    $'-', (%r11)
     je      9f
     xor     %eax, %eax
     mov     $10, %ecx
-3:  cmp     %rdi, %r15
+3:  cmp     %rdi, %r11
     jae     5f
-    movzbl  (%r15), %r8d
-    inc     %r15
+    movzbl  (%r11), %r8d
+    inc     %r11
     sub     $'0', %r8d
     mul     %rcx
     jc      9f

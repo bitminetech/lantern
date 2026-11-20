@@ -227,6 +227,114 @@ SPEC_FUNCTION get_execution_requests_list
 7:  li      a0, LANTERN_BUFFER_TOO_SMALL
     LEAVE 0
 SPEC_END get_execution_requests_list
+
+/*
+ * (list, out): s1 the list's bytes, s2 their count, s3 out, s4 the item, s5 the items, s6 the
+ * lowest type the item may have. Locals: L, L+16, L+32 the data of each type, its address and its
+ * bytes.
+ */
+SPEC_FUNCTION get_execution_requests
+    ENTER 48
+    ld      t0, 8(a0)
+    ld      s2, 16(a0)
+    add     s1, a0, t0
+    mv      s3, a1
+    sd      zero, (L + 0)(sp)
+    sd      zero, (L + 8)(sp)
+    sd      zero, (L + 16)(sp)
+    sd      zero, (L + 24)(sp)
+    sd      zero, (L + 32)(sp)
+    sd      zero, (L + 40)(sp)
+    beqz    s2, 5f                          # the SSZ list: no item, or the first offset, 4 an item, at most 3
+    li      t0, 4
+    bltu    s2, t0, 9f
+    lwu     t0, 0(s1)
+    andi    t1, t0, 3
+    bnez    t1, 9f
+    beqz    t0, 9f
+    li      t1, 12
+    bgtu    t0, t1, 9f
+    bgtu    t0, s2, 9f
+    srli    s5, t0, 2
+    li      s4, 0
+    li      s6, 0
+1:  slli    t1, s4, 2                       # item s4: from its offset to the next, or to the end
+    add     t1, s1, t1
+    lwu     t0, 0(t1)
+    mv      t2, s2
+    addi    t3, s4, 1
+    bgeu    t3, s5, 2f
+    lwu     t2, 4(t1)
+2:  bgtu    t0, t2, 9f
+    bgtu    t2, s2, 9f
+    sub     t2, t2, t0                      # a type in ascending order, and data
+    li      t3, 2
+    bltu    t2, t3, 9f
+    add     t1, s1, t0
+    lbu     t3, 0(t1)
+    bltu    t3, s6, 9f
+    li      t4, 3
+    bgeu    t3, t4, 9f
+    addi    s6, t3, 1
+    addi    t2, t2, -1
+    addi    t1, t1, 1
+    li      t4, DEPOSIT_REQUEST_SSZ         # the data: whole requests of the type, at most its limit
+    li      t5, DEPOSIT_REQUEST_SSZ * MAX_DEPOSIT_REQUESTS_PER_PAYLOAD
+    beqz    t3, 6f
+    li      t4, WITHDRAWAL_REQUEST_SSZ
+    li      t5, WITHDRAWAL_REQUEST_SSZ * MAX_WITHDRAWAL_REQUESTS_PER_PAYLOAD
+    li      t6, 1
+    beq     t3, t6, 6f
+    li      t4, CONSOLIDATION_REQUEST_SSZ
+    li      t5, CONSOLIDATION_REQUEST_SSZ * MAX_CONSOLIDATION_REQUESTS_PER_PAYLOAD
+6:  bgtu    t2, t5, 9f
+    remu    t6, t2, t4
+    bnez    t6, 9f
+    slli    t3, t3, 4
+    add     t3, sp, t3
+    sd      t1, (L + 0)(t3)
+    sd      t2, (L + 8)(t3)
+    addi    s4, s4, 1
+    bltu    s4, s5, 1b
+5:  ld      t0, (L + 8)(sp)                 # ExecutionRequests: three offsets, then the data of each type
+    ld      t1, (L + 24)(sp)
+    ld      t2, (L + 40)(sp)
+    add     t3, t0, t1
+    add     t3, t3, t2
+    addi    t3, t3, 12
+    ld      t4, 0(s3)
+    li      t5, 24
+    bltu    t4, t5, 8f
+    addi    t4, t4, -24
+    bltu    t4, t3, 8f
+    sd      t5, 8(s3)
+    sd      t3, 16(s3)
+    addi    s1, s3, 24
+    li      t3, 12
+    sw      t3, 0(s1)
+    add     t3, t3, t0
+    sw      t3, 4(s1)
+    add     t3, t3, t1
+    sw      t3, 8(s1)
+    addi    s1, s1, 12
+    li      s4, 0
+7:  slli    t0, s4, 4
+    add     t0, sp, t0
+    ld      a1, (L + 0)(t0)
+    ld      a2, (L + 8)(t0)
+    mv      a0, s1
+    add     s1, s1, a2
+    call    lantern_copy
+    addi    s4, s4, 1
+    li      t0, 3
+    bltu    s4, t0, 7b
+    li      a0, LANTERN_OK
+    LEAVE 48
+8:  li      a0, LANTERN_BUFFER_TOO_SMALL
+    LEAVE 48
+9:  li      a0, LANTERN_INVALID_ENCODING
+    LEAVE 48
+SPEC_END get_execution_requests
 .endif
 
 /* (block, out): the bound of engine-api.md. t0 the bound; t1-t6, a2-a5 work. */
@@ -460,15 +568,24 @@ SPEC_FUNCTION engine_new_payload
     LEAVE 48
 SPEC_END engine_new_payload
 
-/* (state, id, out): s1 state, s2 id, s3 out. */
+/* (state, attributes, id, out): s1 state, s2 id, s3 out, s4 attributes, s5 a withdrawal, s6 those left. */
 SPEC_FUNCTION engine_forkchoice_updated
     ENTER 0
     mv      s1, a0
-    ld      s2, 0(a1)
-    mv      s3, a2
-    ld      t0, 0(s3)
+    mv      s4, a1
+    ld      s2, 0(a2)
+    mv      s3, a3
+    ld      t0, 0(s3)                       # the room: 512 bytes, or 1024 and 192 a withdrawal
     li      t1, 24 + 512
-    bltu    t0, t1, 8f
+    beqz    s4, 1f
+    li      t1, 24 + 1024
+.if FORK >= FORK_CAPELLA
+    ld      t2, PayloadAttributes_withdrawals(s4)
+    li      t3, 192
+    mul     t2, t2, t3
+    add     t1, t1, t2
+.endif
+1:  bltu    t0, t1, 8f
     addi    a2, s3, 24
     JTEXT   j_open
     mv      a0, s2
@@ -488,8 +605,44 @@ SPEC_FUNCTION engine_forkchoice_updated
     JDATA   s1, 32, 32
     JTEXT   j_finalized
     JDATA   s1, 64, 32
+    bnez    s4, 2f
     JTEXT   j_fcu_close
-    addi    t0, s3, 24
+    j       7f
+    # the PayloadAttributes
+2:  JTEXT   j_attr_open
+    JQ64    s4, PayloadAttributes_timestamp
+    JTEXT   j_prev_randao
+    JDATA   s4, PayloadAttributes_prev_randao, 32
+    JTEXT   j_attr_fee_recipient
+    JDATA   s4, PayloadAttributes_suggested_fee_recipient, 20
+.if FORK >= FORK_CAPELLA
+    # each withdrawal: its 44 SSZ bytes
+    JTEXT   j_attr_withdrawals
+    addi    s5, s4, PAYLOAD_ATTRIBUTES_WITHDRAWAL
+    ld      s6, PayloadAttributes_withdrawals(s4)
+    beqz    s6, 4f
+3:  JTEXT   j_w_index
+    JQ64    s5, 0
+    JTEXT   j_w_validator
+    JQ64    s5, 8
+    JTEXT   j_w_address
+    JDATA   s5, 16, 20
+    JTEXT   j_w_amount
+    JQ64    s5, 36
+    JCHAR   125
+    addi    s5, s5, PAYLOAD_ATTRIBUTES_WITHDRAWAL_SIZE
+    addi    s6, s6, -1
+    beqz    s6, 4f
+    JCHAR   44
+    j       3b
+4:  JCHAR   93
+.endif
+.if FORK >= FORK_DENEB
+    JTEXT   j_attr_parent_root
+    JDATA   s4, PayloadAttributes_parent_beacon_block_root, 32
+.endif
+    JTEXT   j_attr_close
+7:  addi    t0, s3, 24
     sub     t0, a2, t0
     li      t1, 24
     sd      t1, 8(s3)
@@ -499,5 +652,44 @@ SPEC_FUNCTION engine_forkchoice_updated
 8:  li      a0, LANTERN_BUFFER_TOO_SMALL
     LEAVE 0
 SPEC_END engine_forkchoice_updated
+
+/* (payload_id, id, out): s1 payload_id, s2 id, s3 out. */
+SPEC_FUNCTION engine_get_payload
+    ENTER 0
+    mv      s1, a0
+    ld      s2, 0(a1)
+    mv      s3, a2
+    ld      t0, 0(s3)
+    li      t1, 24 + 256
+    bltu    t0, t1, 8f
+    addi    a2, s3, 24
+    JTEXT   j_open
+    mv      a0, s2
+    call    jdecimal
+    JTEXT   j_method_gp
+.if FORK == FORK_BELLATRIX
+    JCHAR   49
+.elseif FORK == FORK_CAPELLA
+    JCHAR   50
+.elseif FORK == FORK_DENEB
+    JCHAR   51
+.elseif FORK == FORK_ELECTRA
+    JCHAR   52
+.else
+    JCHAR   53
+.endif
+    JTEXT   j_params
+    JDATA   s1, 0, 8
+    JTEXT   j_close
+    addi    t0, s3, 24
+    sub     t0, a2, t0
+    li      t1, 24
+    sd      t1, 8(s3)
+    sd      t0, 16(s3)
+    li      a0, LANTERN_OK
+    LEAVE 0
+8:  li      a0, LANTERN_BUFFER_TOO_SMALL
+    LEAVE 0
+SPEC_END engine_get_payload
 
 .endif

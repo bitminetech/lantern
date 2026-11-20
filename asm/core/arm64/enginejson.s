@@ -215,6 +215,116 @@ SPEC_FUNCTION get_execution_requests_list
 7:  mov     x0, #LANTERN_BUFFER_TOO_SMALL
     LEAVE 0
 SPEC_END get_execution_requests_list
+
+/*
+ * (list, out): x19 the list's bytes, x20 their count, x21 out, x22 the write position, x23 the
+ * item, x24 the items, x25 the lowest type the item may have. Locals: L, L+16, L+32 the data of
+ * each type, its address and its bytes.
+ */
+SPEC_FUNCTION get_execution_requests
+    ENTER 48
+    ldp     x9, x20, [x0, #8]
+    add     x19, x0, x9
+    mov     x21, x1
+    stp     xzr, xzr, [sp, #L]
+    stp     xzr, xzr, [sp, #(L + 16)]
+    stp     xzr, xzr, [sp, #(L + 32)]
+    cbz     x20, 5f                         /* the SSZ list: no item, or the first offset, 4 an item, at most 3 */
+    cmp     x20, #4
+    b.lo    9f
+    ldr     w9, [x19]
+    tst     x9, #3
+    b.ne    9f
+    cbz     x9, 9f
+    cmp     x9, #12
+    b.hi    9f
+    cmp     x9, x20
+    b.hi    9f
+    lsr     x24, x9, #2
+    mov     x23, #0
+    mov     x25, #0
+1:  ldr     w10, [x19, x23, lsl #2]         /* item x23: from its offset to the next, or to the end */
+    mov     x12, x20
+    add     x11, x23, #1
+    cmp     x11, x24
+    b.hs    2f
+    ldr     w12, [x19, x11, lsl #2]
+2:  cmp     x10, x12
+    b.hi    9f
+    cmp     x12, x20
+    b.hi    9f
+    sub     x13, x12, x10                   /* a type in ascending order, and data */
+    cmp     x13, #2
+    b.lo    9f
+    ldrb    w14, [x19, x10]
+    cmp     x14, x25
+    b.lo    9f
+    cmp     x14, #3
+    b.hs    9f
+    add     x25, x14, #1
+    sub     x13, x13, #1
+    add     x10, x10, #1
+    add     x10, x19, x10
+    cmp     x14, #1                         /* the data: whole requests of the type, at most its limit */
+    b.eq    3f
+    b.hi    4f
+    mov     x15, #DEPOSIT_REQUEST_SSZ
+    MOVQ    x16, DEPOSIT_REQUEST_SSZ * MAX_DEPOSIT_REQUESTS_PER_PAYLOAD
+    b       6f
+3:  mov     x15, #WITHDRAWAL_REQUEST_SSZ
+    MOVQ    x16, WITHDRAWAL_REQUEST_SSZ * MAX_WITHDRAWAL_REQUESTS_PER_PAYLOAD
+    b       6f
+4:  mov     x15, #CONSOLIDATION_REQUEST_SSZ
+    MOVQ    x16, CONSOLIDATION_REQUEST_SSZ * MAX_CONSOLIDATION_REQUESTS_PER_PAYLOAD
+6:  cmp     x13, x16
+    b.hi    9f
+    udiv    x9, x13, x15
+    msub    x9, x9, x15, x13
+    cbnz    x9, 9f
+    add     x9, sp, #L
+    add     x9, x9, x14, lsl #4
+    stp     x10, x13, [x9]
+    add     x23, x23, #1
+    cmp     x23, x24
+    b.lo    1b
+5:  ldr     x9, [sp, #(L + 8)]              /* ExecutionRequests: three offsets, then the data of each type */
+    ldr     x10, [sp, #(L + 24)]
+    ldr     x11, [sp, #(L + 40)]
+    add     x12, x9, x10
+    add     x12, x12, x11
+    add     x12, x12, #12
+    ldr     x13, [x21]
+    subs    x13, x13, #24
+    b.lo    8f
+    cmp     x13, x12
+    b.lo    8f
+    mov     x13, #24
+    stp     x13, x12, [x21, #8]
+    add     x22, x21, #24
+    mov     w12, #12
+    str     w12, [x22]
+    add     w12, w12, w9
+    str     w12, [x22, #4]
+    add     w12, w12, w10
+    str     w12, [x22, #8]
+    add     x22, x22, #12
+    mov     x23, #0
+7:  add     x9, sp, #L
+    add     x9, x9, x23, lsl #4
+    ldp     x1, x2, [x9]
+    mov     x0, x22
+    add     x22, x22, x2
+    bl      lantern_copy
+    add     x23, x23, #1
+    cmp     x23, #3
+    b.lo    7b
+    mov     x0, #LANTERN_OK
+    LEAVE 48
+8:  mov     x0, #LANTERN_BUFFER_TOO_SMALL
+    LEAVE 48
+9:  mov     x0, #LANTERN_INVALID_ENCODING
+    LEAVE 48
+SPEC_END get_execution_requests
 .endif
 
 /* (block, out): the bound of engine-api.md. x9 the bound; x10-x15 work. */
@@ -430,14 +540,23 @@ SPEC_FUNCTION engine_new_payload
     LEAVE 48
 SPEC_END engine_new_payload
 
-/* (state, id, out): x19 state, x20 id, x21 out. */
+/* (state, attributes, id, out): x19 state, x20 id, x21 out, x22 attributes, x23 a withdrawal, x24 those left. */
 SPEC_FUNCTION engine_forkchoice_updated
     ENTER 0
     mov     x19, x0
-    ldr     x20, [x1]
-    mov     x21, x2
-    ldr     x9, [x21]
-    cmp     x9, #(24 + 512)
+    mov     x22, x1
+    ldr     x20, [x2]
+    mov     x21, x3
+    ldr     x9, [x21]                       /* the room: 512 bytes, or 1024 and 192 a withdrawal */
+    mov     x10, #(24 + 512)
+    cbz     x22, 1f
+    mov     x10, #(24 + 1024)
+.if FORK >= FORK_CAPELLA
+    ldr     x11, [x22, #PayloadAttributes_withdrawals]
+    mov     x12, #192
+    madd    x10, x11, x12, x10
+.endif
+1:  cmp     x9, x10
     b.lo    8f
     add     x2, x21, #24
     JTEXT   j_open
@@ -458,8 +577,44 @@ SPEC_FUNCTION engine_forkchoice_updated
     JDATA   x19, 32, 32
     JTEXT   j_finalized
     JDATA   x19, 64, 32
+    cbnz    x22, 2f
     JTEXT   j_fcu_close
-    add     x9, x21, #24
+    b       7f
+    /* the PayloadAttributes */
+2:  JTEXT   j_attr_open
+    JQ64    x22, PayloadAttributes_timestamp
+    JTEXT   j_prev_randao
+    JDATA   x22, PayloadAttributes_prev_randao, 32
+    JTEXT   j_attr_fee_recipient
+    JDATA   x22, PayloadAttributes_suggested_fee_recipient, 20
+.if FORK >= FORK_CAPELLA
+    /* each withdrawal: its 44 SSZ bytes */
+    JTEXT   j_attr_withdrawals
+    add     x23, x22, #PAYLOAD_ATTRIBUTES_WITHDRAWAL
+    ldr     x24, [x22, #PayloadAttributes_withdrawals]
+    cbz     x24, 4f
+3:  JTEXT   j_w_index
+    JQ64    x23, 0
+    JTEXT   j_w_validator
+    JQ64    x23, 8
+    JTEXT   j_w_address
+    JDATA   x23, 16, 20
+    JTEXT   j_w_amount
+    JQ64    x23, 36
+    JCHAR   125
+    add     x23, x23, #PAYLOAD_ATTRIBUTES_WITHDRAWAL_SIZE
+    subs    x24, x24, #1
+    b.eq    4f
+    JCHAR   44
+    b       3b
+4:  JCHAR   93
+.endif
+.if FORK >= FORK_DENEB
+    JTEXT   j_attr_parent_root
+    JDATA   x22, PayloadAttributes_parent_beacon_block_root, 32
+.endif
+    JTEXT   j_attr_close
+7:  add     x9, x21, #24
     sub     x9, x2, x9
     mov     x10, #24
     stp     x10, x9, [x21, #8]
@@ -468,5 +623,43 @@ SPEC_FUNCTION engine_forkchoice_updated
 8:  mov     x0, #LANTERN_BUFFER_TOO_SMALL
     LEAVE 0
 SPEC_END engine_forkchoice_updated
+
+/* (payload_id, id, out): x19 payload_id, x20 id, x21 out. */
+SPEC_FUNCTION engine_get_payload
+    ENTER 0
+    mov     x19, x0
+    ldr     x20, [x1]
+    mov     x21, x2
+    ldr     x9, [x21]
+    cmp     x9, #(24 + 256)
+    b.lo    8f
+    add     x2, x21, #24
+    JTEXT   j_open
+    mov     x0, x20
+    bl      jdecimal
+    JTEXT   j_method_gp
+.if FORK == FORK_BELLATRIX
+    JCHAR   49
+.elseif FORK == FORK_CAPELLA
+    JCHAR   50
+.elseif FORK == FORK_DENEB
+    JCHAR   51
+.elseif FORK == FORK_ELECTRA
+    JCHAR   52
+.else
+    JCHAR   53
+.endif
+    JTEXT   j_params
+    JDATA   x19, 0, 8
+    JTEXT   j_close
+    add     x9, x21, #24
+    sub     x9, x2, x9
+    mov     x10, #24
+    stp     x10, x9, [x21, #8]
+    mov     x0, #LANTERN_OK
+    LEAVE 0
+8:  mov     x0, #LANTERN_BUFFER_TOO_SMALL
+    LEAVE 0
+SPEC_END engine_get_payload
 
 .endif

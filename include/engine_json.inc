@@ -213,3 +213,45 @@ j_close_end:
 .if j_close_end - j_close != j_close_len
 .error "the length of j_close is wrong"
 .endif
+j_method_gp:
+    .ascii  ",\"method\":\"engine_getPayloadV"
+j_method_gp_end:
+.set j_method_gp_len, 29
+.if j_method_gp_end - j_method_gp != j_method_gp_len
+.error "the length of j_method_gp is wrong"
+.endif
+j_attr_open:
+    .ascii  "},{\"timestamp\":"
+j_attr_open_end:
+.set j_attr_open_len, 15
+.if j_attr_open_end - j_attr_open != j_attr_open_len
+.error "the length of j_attr_open is wrong"
+.endif
+j_attr_fee_recipient:
+    .ascii  ",\"suggestedFeeRecipient\":"
+j_attr_fee_recipient_end:
+.set j_attr_fee_recipient_len, 25
+.if j_attr_fee_recipient_end - j_attr_fee_recipient != j_attr_fee_recipient_len
+.error "the length of j_attr_fee_recipient is wrong"
+.endif
+j_attr_withdrawals:
+    .ascii  ",\"withdrawals\":["
+j_attr_withdrawals_end:
+.set j_attr_withdrawals_len, 16
+.if j_attr_withdrawals_end - j_attr_withdrawals != j_attr_withdrawals_len
+.error "the length of j_attr_withdrawals is wrong"
+.endif
+j_attr_parent_root:
+    .ascii  ",\"parentBeaconBlockRoot\":"
+j_attr_parent_root_end:
+.set j_attr_parent_root_len, 25
+.if j_attr_parent_root_end - j_attr_parent_root != j_attr_parent_root_len
+.error "the length of j_attr_parent_root is wrong"
+.endif
+j_attr_close:
+    .ascii  "}]}"
+j_attr_close_end:
+.set j_attr_close_len, 3
+.if j_attr_close_end - j_attr_close != j_attr_close_len
+.error "the length of j_attr_close is wrong"
+.endif

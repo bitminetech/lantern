@@ -430,10 +430,12 @@ ABI uint64_t lantern_engine_parse_response(const void *body, const void *method,
 #if FORK >= FORK_BELLATRIX
 ABI uint64_t LF(engine_new_payload_size)(const void *block, void *out);
 ABI uint64_t LF(engine_new_payload)(const void *block, const void *id, void *scratch, void *out);
-ABI uint64_t LF(engine_forkchoice_updated)(const void *state, const void *id, void *out);
+ABI uint64_t LF(engine_forkchoice_updated)(const void *state, const void *attributes, const void *id, void *out);
+ABI uint64_t LF(engine_get_payload)(const void *payload_id, const void *id, void *out);
 #endif
 #if FORK >= FORK_ELECTRA
 ABI uint64_t LF(get_execution_requests_list)(const void *requests, void *out);
+ABI uint64_t LF(get_execution_requests)(const void *list, void *out);
 #endif
 
 /* ---------------------------------------------------------------- ABI check */
@@ -8535,12 +8537,17 @@ static void run_engine(const char *file, const char *handler, case_file *f) {
         tv parts = next_case(f, &name, &len);
         tv in = tv_get(parts, "input"), want = tv_get(parts, "output");
         if (!strcmp(handler, "exchange_capabilities") || !strcmp(handler, "forkchoice_updated") || !strcmp(handler, "new_payload") ||
-            !strcmp(handler, "get_execution_requests_list")) {
-            uint64_t wl, need = 24 + 512, id = tv_get(in, "id") ? tv_u64(tv_get(in, "id")) : 0;
-            const uint8_t *w = tv_bytes(want, &wl);
+            !strcmp(handler, "get_execution_requests_list") || !strcmp(handler, "get_payload")) {
+            uint64_t wl, need = 24 + 512, id = tv_get(in, "id") ? tv_u64(tv_get(in, "id")) : 0, alen = 0;
+            const uint8_t *w = tv_bytes(want, &wl), *attributes = NULL;
             uint8_t *value = NULL;
             const char *dwhy = NULL;
             (void)w;
+            if (!strcmp(handler, "forkchoice_updated")) {
+                attributes = tv_bytes(tv_get(in, "attributes"), &alen);
+                if (alen) need = 24 + 1024 + 192 * rd64(attributes + 96);
+                else attributes = NULL;
+            } else if (!strcmp(handler, "get_payload")) need = 24 + 256;
             if (!strcmp(handler, "new_payload") || !strcmp(handler, "get_execution_requests_list")) {
                 int np = !strcmp(handler, "new_payload");
                 const uint8_t *enc = tv_bytes(tv_get(in, np ? "block" : "execution_requests"), &blen);
@@ -8572,8 +8579,12 @@ static void run_engine(const char *file, const char *handler, case_file *f) {
 #if FORK >= FORK_BELLATRIX
                 else if (!strcmp(handler, "forkchoice_updated")) {
                     const uint8_t *state = tv_bytes(tv_get(in, "state"), &blen);
-                    st = CALL(LF(engine_forkchoice_updated), state, &id, out);
-                    st2 = CALL(LF(engine_forkchoice_updated), state, &id, small);
+                    st = CALL(LF(engine_forkchoice_updated), state, attributes, &id, out);
+                    st2 = CALL(LF(engine_forkchoice_updated), state, attributes, &id, small);
+                } else if (!strcmp(handler, "get_payload")) {
+                    const uint8_t *pid = tv_bytes(tv_get(in, "payload_id"), &blen);
+                    st = CALL(LF(engine_get_payload), pid, &id, out);
+                    st2 = CALL(LF(engine_get_payload), pid, &id, small);
                 } else if (!strcmp(handler, "new_payload")) {
                     st = CALL(LF(engine_new_payload), value, &id, fresh_scratch(), out);
                     st2 = CALL(LF(engine_new_payload), value, &id, fresh_scratch(), small);
@@ -8594,9 +8605,32 @@ static void run_engine(const char *file, const char *handler, case_file *f) {
             free(value);
             free(out);
             free(small);
+        } else if (!strcmp(handler, "get_execution_requests")) {
+#if FORK >= FORK_ELECTRA
+            uint64_t lsize, wl = 0;
+            uint8_t *list = byte_list(tv_get(in, "list"), &lsize);
+            if (!is_text(want, "invalid")) tv_bytes(want, &wl);
+            size = 24 + (wl ? wl : 12 + lsize);
+            uint8_t *out = buffer(size), *small = buffer(size - 1);
+            wr64(out, size);
+            wr64(small, size - 1);
+            st = CALL(LF(get_execution_requests), list, out);
+            if (is_text(want, "invalid")) {
+                if (st != 56) why = "status";
+            } else if (st) why = "status";
+            else if (!list_holds(out, want)) why = "requests differ";
+            else if (!guard_ok(out, size)) why = "wrote past out";
+            else if (CALL(LF(get_execution_requests), list, small) != 1) why = "short out accepted";
+            if (!why && !guard_ok(list, lsize)) why = "wrote past list";
+            free(list);
+            free(out);
+            free(small);
+#else
+            why = "no such handler";
+#endif
         } else if (!strcmp(handler, "parse_response")) {
             uint64_t method = tv_u64(tv_get(in, "method")), bsize;
-            uint8_t *body = byte_list(tv_get(in, "body"), &bsize), *out = buffer(96);
+            uint8_t *body = byte_list(tv_get(in, "body"), &bsize), *out = buffer(112);
             st = CALL(lantern_engine_parse_response, body, &method, out);
             if (is_text(want, "invalid")) {
                 if (st != 54) why = "status";
@@ -8613,8 +8647,10 @@ static void run_engine(const char *file, const char *handler, case_file *f) {
                 else if (!rd64(out + 8) && method == 2 && rd64(out + 72) != (uint64_t)(*pv == T_BYTES)) why = "payload id presence differs";
                 else if (!rd64(out + 8) && *pv == T_BYTES && memcmp(out + 80, tv_bytes(pv, &blen), 8)) why = "payload id differs";
                 else if (!rd64(out + 8) && method == 3 && rd64(out + 88) != tv_u64(tv_get(want, "capabilities"))) why = "capabilities differ";
+                else if (!rd64(out + 8) && method == 4 && (rd64(out + 96) != tv_u64(tv_get(want, "result_offset")) ||
+                                                          rd64(out + 104) != tv_u64(tv_get(want, "result_length")))) why = "result place differs";
             }
-            if (!why && !guard_ok(out, 96)) why = "wrote past out";
+            if (!why && !guard_ok(out, 112)) why = "wrote past out";
             if (!why && !guard_ok(body, bsize)) why = "wrote past body";
             free(body);
             free(out);

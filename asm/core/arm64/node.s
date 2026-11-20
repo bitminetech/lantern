@@ -3275,11 +3275,11 @@ END_FUNCTION node_lvh
 /*
  * L0: the bytes of engine_in: a whole HTTP response of the call in flight ends it. x21 engine_in,
  * x22 the method, x25 the scratch size, restored on return, x26 the body's ByteList, x27 a block
- * entry. Locals: L an HttpResponse (16), L+16 eof, L+24 the method, L+32 an EngineResponse (96),
- * L+128 a status, L+136 a result.
+ * entry. Locals: L an HttpResponse (16), L+16 eof, L+24 the method, L+32 an EngineResponse (112),
+ * L+144 a status, L+152 a result.
  */
 LOCAL_FUNCTION node_engine_read
-    ENTER 144
+    ENTER 160
     ldr     x21, [x19, #Node_engine_in]
     add     x21, x19, x21
     ldr     x22, [x19, #Node_engine_method]
@@ -3397,12 +3397,12 @@ LOCAL_FUNCTION node_engine_read
     ldr     x9, [sp, #(L + 32 + EngineResponse_status)]
     cmp     x9, #ENGINE_STATUS_VALID
     b.ne    41f
-    str     x27, [sp, #(L + 128)]
+    str     x27, [sp, #(L + 144)]
     mov     x9, #PAYLOAD_STATUS_VALID
-    str     x9, [sp, #(L + 136)]
+    str     x9, [sp, #(L + 152)]
     mov     x0, x20
-    add     x1, sp, #(L + 128)
-    add     x2, sp, #(L + 136)
+    add     x1, sp, #(L + 144)
+    add     x2, sp, #(L + 152)
     add     x3, sp, #(L + 16)
     bl      lantern_store_payload_status
     b       9f
@@ -3416,9 +3416,9 @@ LOCAL_FUNCTION node_engine_read
     mov     x0, x27
     mov     x2, x27
     bl      node_lvh
-9:  LEAVE 144
+9:  LEAVE 160
 6:  str     x25, [x23]                      /* part of a response: more bytes */
-    LEAVE 144
+    LEAVE 160
 70: mov     x0, x21                         /* a failed call, its response read */
     ldr     x1, [sp, #(L + 8)]
     bl      node_engine_consume
@@ -3427,7 +3427,7 @@ LOCAL_FUNCTION node_engine_read
 8:  ldr     x21, [x19, #Node_engine_in]     /* the bytes left go */
     add     x21, x19, x21
     str     xzr, [x21, #16]
-    LEAVE 144
+    LEAVE 160
 END_FUNCTION node_engine_read
 
 /* L0: the first x1 bytes of the ByteList x0 (engine_in) leave it. */
@@ -9014,8 +9014,9 @@ FUNCTION lantern_node_run
     add     x1, x19, #Node_engine_host
     bl      lantern_copy
     add     x0, sp, #(L + 96)
-    add     x1, x21, #NodeAction_arg
-    mov     x2, x22
+    mov     x1, #0                          /* no payload attributes */
+    add     x2, x21, #NodeAction_arg
+    mov     x3, x22
     mov     x15, x28
     FORK_CALL_BELLATRIX engine_forkchoice_updated
     cbnz    x0, 85f

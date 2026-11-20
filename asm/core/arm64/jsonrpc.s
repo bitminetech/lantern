@@ -204,19 +204,47 @@ LOCAL_FUNCTION jliteral
 END_FUNCTION jliteral
 
 /*
- * L0: any value at the cursor x0: x0 = the cursor after it. Brackets nest to 64 levels, their
- * kinds in x21 (1 for an object), the depth in x22. Uses x1-x3, x9-x13.
+ * L0: any value at the cursor x0, as RFC 8259 writes it: x0 = the cursor after it. Brackets nest
+ * to 64 levels, their kinds in x21 (1 for an object), the depth in x22; x12 what comes next: 0 a
+ * value, 1 a value or the array's end, 2 a name, 3 a name or the object's end. Uses x1-x3,
+ * x9-x12.
  */
 LOCAL_FUNCTION jskip
     FRAME 16
     stp     x21, x22, [sp, #16]
     mov     x21, #0
     mov     x22, #0
+    mov     x12, #0
 1:  bl      jws
     cmp     x0, x19
     b.hs    9f
     ldrb    w9, [x0]
-    cmp     w9, #'"'
+    cmp     x12, #2
+    b.lo    30f
+    cmp     w9, #'}'                        /* a name and a colon, or the end of an empty object */
+    b.ne    31f
+    cmp     x12, #3
+    b.eq    5f
+    b       9f
+31: cmp     w9, #'"'
+    b.ne    9f
+    bl      jstring
+    cbz     x0, 9f
+    bl      jws
+    cmp     x0, x19
+    b.hs    9f
+    ldrb    w9, [x0]
+    cmp     w9, #':'
+    b.ne    9f
+    add     x0, x0, #1
+    mov     x12, #0
+    b       1b
+30: cmp     w9, #']'                        /* a value, or the end of an empty array */
+    b.ne    32f
+    cmp     x12, #1
+    b.eq    5f
+    b       9f
+32: cmp     w9, #'"'
     b.ne    2f
     bl      jstring
     cbz     x0, 9f
@@ -224,39 +252,40 @@ LOCAL_FUNCTION jskip
 2:  cmp     w9, #'{'
     b.eq    3f
     cmp     w9, #'['
-    b.ne    4f
+    b.ne    7f
 3:  cmp     x22, #64
     b.hs    9f
     lsl     x21, x21, #1
     cmp     w9, #'{'
     cinc    x21, x21, eq
+    mov     x12, #1
+    mov     x9, #3
+    csel    x12, x9, x12, eq
     add     x22, x22, #1
     add     x0, x0, #1
     b       1b
-4:  cmp     w9, #'}'                        /* a closing bracket of the kind opened */
-    b.eq    5f
-    cmp     w9, #']'
-    b.ne    7f
-5:  cbz     x22, 9f
-    and     x10, x21, #1
-    cmp     w9, #'}'
-    cset    x11, eq
-    cmp     x10, x11
-    b.ne    9f
-    lsr     x21, x21, #1
+5:  lsr     x21, x21, #1                    /* the end of the container */
     sub     x22, x22, #1
     add     x0, x0, #1
 6:  cbz     x22, 8f                         /* a whole value at depth 0 */
-    bl      jws                             /* in a container: a comma or a colon, or its end */
+    bl      jws                             /* in a container: a comma, or the end of its kind */
     cmp     x0, x19
     b.hs    9f
     ldrb    w9, [x0]
+    and     x10, x21, #1
     cmp     w9, #','
-    b.eq    10f
-    cmp     w9, #':'
-    b.ne    1b
-10: add     x0, x0, #1
+    b.ne    33f
+    add     x0, x0, #1
+    lsl     x12, x10, #1
     b       1b
+33: mov     w11, #']'
+    mov     w9, #'}'
+    cmp     x10, #0
+    csel    w11, w9, w11, ne
+    ldrb    w9, [x0]
+    cmp     w9, w11
+    b.eq    5b
+    b       9f
 7:  cmp     w9, #'t'                        /* true, false, null, or a number */
     b.ne    11f
     ADDRESS x1, json_true
@@ -490,7 +519,23 @@ LOCAL_FUNCTION jresult
     b       2b
 4:  cbz     x28, 9f
     LEAVE 0
-5:  cmp     x0, x19                         /* exchangeCapabilities: an array of strings */
+5:  cmp     x21, #ENGINE_METHOD_GET_PAYLOAD
+    b.ne    17f
+    cmp     x0, x19                         /* getPayload: an object, its bytes kept */
+    b.hs    9f
+    ldrb    w9, [x0]
+    cmp     w9, #'{'
+    b.ne    9f
+    sub     x9, x0, x24
+    str     x9, [x20, #EngineResponse_result_offset]
+    bl      jskip
+    cbz     x0, 9f
+    sub     x9, x0, x24
+    ldr     x10, [x20, #EngineResponse_result_offset]
+    sub     x9, x9, x10
+    str     x9, [x20, #EngineResponse_result_length]
+    LEAVE 0
+17: cmp     x0, x19                         /* exchangeCapabilities: an array of strings */
     b.hs    9f
     ldrb    w9, [x0], #1
     cmp     w9, #'['
