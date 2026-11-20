@@ -4244,13 +4244,20 @@ LOCAL_FUNCTION app_api_action
     beqz    a0, 99f
     mv      s4, a0
     ld      t0, 8(s4)
-    li      t1, APP_API_CLOSING
-    beq     t0, t1, 99f
+    li      t1, APP_API_CLOSING             # closing or draining: no more actions
+    bgeu    t0, t1, 99f
     ld      t0, 8(s2)
     li      t1, NODE_ACT_API_CLOSE
     bne     t0, t1, 1f
+    ld      t0, 32(s4)                      # CLOSE: at once with no bytes in flight, else after them
+    bnez    t0, 2f
     ld      a0, 16(s2)
     call    app_api_close
+    j       99f
+2:  li      t0, APP_API_DRAINING
+    sd      t0, 8(s4)
+    LDQ     t0, s1, (APP_TICK + LIBP2P_TICK_NOW)
+    sd      t0, 24(s4)
     j       99f
 1:  ld      t0, 48(s2)                      # SEND: size, kind, connection, count, the bytes
     addi    a0, t0, (LIBP2P_ACT_SEND_DATA + 7)
@@ -4392,8 +4399,9 @@ END_FUNCTION app_state_bytes
 
 /*
  * L2: the Beacon API's sockets, without waiting: ACCEPTED takes a free slot (ADOPT) or a REFUSE,
- * RECEIVED joins its slot's buffer and the slot reads it, CLOSED frees the slot; a slot that waits
- * for no answer with no bytes for APP_API_IDLE_MS closes; then the shell actions go out. s2 the
+ * RECEIVED joins its slot's buffer and the slot reads it, SENT ends a slot's draining once its bytes
+ * are out, CLOSED frees the slot; a slot that waits for no answer with no bytes for
+ * APP_API_IDLE_MS closes, as does a draining one; then the shell actions go out. s2 the
  * next event, s3 the end, s4 a slot, s5 an index, s6 the connection. Locals: L the wait.
  */
 LOCAL_FUNCTION app_api_poll
@@ -4466,7 +4474,16 @@ LOCAL_FUNCTION app_api_poll
     bgeu    t0, t1, 301f
     li      t2, 0
 301: sd     t2, 32(a0)
-    mv      a1, s6
+    ld      t0, 8(a0)
+    li      t1, APP_API_DRAINING
+    bne     t0, t1, 302f
+    LDQ     t1, s1, (APP_TICK + LIBP2P_TICK_NOW)    # draining: bytes went out; with none left, the close
+    sd      t1, 24(a0)
+    bnez    t2, 79f
+    mv      a0, s6
+    call    app_api_close
+    j       79f
+302: mv     a1, s6
     call    app_api_due
     j       79f
 30: li      t1, LIBP2P_EVENT_RECEIVED
@@ -4487,9 +4504,9 @@ LOCAL_FUNCTION app_api_poll
     sd      zero, 8(s4)
     sd      zero, 16(s4)
     j       79f
-4:  ld      t0, 8(s4)                       # RECEIVED, unless closing: the bytes join the buffer
+4:  ld      t0, 8(s4)                       # RECEIVED, unless closing or draining: the bytes join the buffer
     li      t1, APP_API_CLOSING
-    beq     t0, t1, 79f
+    bgeu    t0, t1, 79f
     LDQ     t1, s1, (APP_TICK + LIBP2P_TICK_NOW)
     sd      t1, 24(s4)
     slli    s5, s6, 32
@@ -4526,10 +4543,12 @@ LOCAL_FUNCTION app_api_poll
     li      s5, 0
 81: LDQ     t0, s1, (APP_OPTIONS + AppOptions_http_max_connections)
     bgeu    s5, t0, 85f
-    ld      t0, 8(s4)
+    ld      t0, 8(s4)                       # reading, or draining, with no bytes for APP_API_IDLE_MS
     li      t1, APP_API_READING
+    beq     t0, t1, 82f
+    li      t1, APP_API_DRAINING
     bne     t0, t1, 84f
-    ld      t0, 24(s4)
+82: ld      t0, 24(s4)
     li      t1, APP_API_IDLE_MS
     add     t0, t0, t1
     LDQ     t1, s1, (APP_TICK + LIBP2P_TICK_NOW)

@@ -4232,12 +4232,18 @@ LOCAL_FUNCTION app_api_action
     test    %rax, %rax
     jz      99f
     mov     %rax, %r12
-    cmpq    $APP_API_CLOSING, 8(%r12)
-    je      99f
+    cmpq    $APP_API_CLOSING, 8(%r12)       # closing or draining: no more actions
+    jae     99f
     cmpq    $NODE_ACT_API_CLOSE, 8(%rbp)
     jne     1f
+    cmpq    $0, 32(%r12)                    # CLOSE: at once with no bytes in flight, else after them
+    jne     2f
     mov     16(%rbp), %rdi
     call    app_api_close
+    jmp     99f
+2:  movq    $APP_API_DRAINING, 8(%r12)
+    mov     (APP_TICK + LIBP2P_TICK_NOW)(%rbx), %rax
+    mov     %rax, 24(%r12)
     jmp     99f
 1:  mov     48(%rbp), %rdi                  # SEND: size, kind, connection, count, the bytes
     add     $(LIBP2P_ACT_SEND_DATA + 7), %rdi
@@ -4372,8 +4378,9 @@ END_FUNCTION app_state_bytes
 
 /*
  * L2: the Beacon API's sockets, without waiting: ACCEPTED takes a free slot (ADOPT) or a REFUSE,
- * RECEIVED joins its slot's buffer and the slot reads it, CLOSED frees the slot; a slot that waits
- * for no answer with no bytes for APP_API_IDLE_MS closes; then the shell actions go out. rbp the
+ * RECEIVED joins its slot's buffer and the slot reads it, SENT ends a slot's draining once its bytes
+ * are out, CLOSED frees the slot; a slot that waits for no answer with no bytes for
+ * APP_API_IDLE_MS closes, as does a draining one; then the shell actions go out. rbp the
  * next event, r12 the end, r13 a slot, r14 an index, r15 the connection. Locals: L the wait.
  */
 LOCAL_FUNCTION app_api_poll
@@ -4445,7 +4452,16 @@ LOCAL_FUNCTION app_api_poll
     jae     301f
     xor     %ecx, %ecx
 301: mov    %rcx, 32(%rax)
-    mov     %rax, %rdi
+    cmpq    $APP_API_DRAINING, 8(%rax)
+    jne     302f
+    mov     (APP_TICK + LIBP2P_TICK_NOW)(%rbx), %rdx    # draining: bytes went out; with none left, the close
+    mov     %rdx, 24(%rax)
+    test    %rcx, %rcx
+    jnz     79f
+    mov     %r15, %rdi
+    call    app_api_close
+    jmp     79f
+302: mov    %rax, %rdi
     mov     %r15, %rsi
     call    app_api_due
     jmp     79f
@@ -4467,8 +4483,8 @@ LOCAL_FUNCTION app_api_poll
     movq    $0, 8(%r13)
     movq    $0, 16(%r13)
     jmp     79f
-4:  cmpq    $APP_API_CLOSING, 8(%r13)       # RECEIVED, unless closing: the bytes join the buffer
-    je      79f
+4:  cmpq    $APP_API_CLOSING, 8(%r13)       # RECEIVED, unless closing or draining: the bytes join the buffer
+    jae     79f
     mov     (APP_TICK + LIBP2P_TICK_NOW)(%rbx), %rax
     mov     %rax, 24(%r13)
     mov     %r15d, %r14d
@@ -4501,9 +4517,11 @@ LOCAL_FUNCTION app_api_poll
     xor     %r14d, %r14d
 81: cmp     (APP_OPTIONS + AppOptions_http_max_connections)(%rbx), %r14
     jae     85f
-    cmpq    $APP_API_READING, 8(%r13)
+    cmpq    $APP_API_READING, 8(%r13)       # reading, or draining, with no bytes for APP_API_IDLE_MS
+    je      82f
+    cmpq    $APP_API_DRAINING, 8(%r13)
     jne     84f
-    mov     24(%r13), %rax
+82: mov     24(%r13), %rax
     add     $APP_API_IDLE_MS, %rax
     cmp     (APP_TICK + LIBP2P_TICK_NOW)(%rbx), %rax
     ja      84f

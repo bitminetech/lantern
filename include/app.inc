@@ -103,6 +103,7 @@
 .set APP_API_READING, 1                     /* no answer pending: its bytes are read */
 .set APP_API_ANSWERING, 2                   /* a NODE_EV_API went; the answer's last bytes have not */
 .set APP_API_CLOSING, 3                     /* closed, until the shell's CLOSED */
+.set APP_API_DRAINING, 4                    /* the node closed it: its bytes in flight go out, then the CLOSE */
 .set APP_API_IDLE_MS, 30000
 .set APP_API_SEND_WINDOW, 1 << 17
 .set APP_API_EVENT_BYTES, 1 << 20
