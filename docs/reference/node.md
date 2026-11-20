@@ -1618,6 +1618,14 @@ The actions of one step: a ByteList whose bytes are `NodeAction` entries one aft
 | ARM64 |  |  |  |  |
 | RISC-V |  |  |  |  |
 
+### `lantern_node_proposers`
+
+| ISA | Linux | Windows | macOS | `equal` |
+|---|---|---|---|---|
+| x86-64 |  |  |  |  |
+| ARM64 |  |  |  |  |
+| RISC-V |  |  |  |  |
+
 ### `lantern_node_attestation`
 
 | ISA | Linux | Windows | macOS | `equal` |
@@ -1739,14 +1747,6 @@ The actions of one step: a ByteList whose bytes are `NodeAction` entries one aft
 | RISC-V |  |  |  |  |
 
 ### `lantern_node_json`
-
-| ISA | Linux | Windows | macOS | `equal` |
-|---|---|---|---|---|
-| x86-64 |  |  |  |  |
-| ARM64 |  |  |  |  |
-| RISC-V |  |  |  |  |
-
-### `lantern_node_proposers`
 
 | ISA | Linux | Windows | macOS | `equal` |
 |---|---|---|---|---|
