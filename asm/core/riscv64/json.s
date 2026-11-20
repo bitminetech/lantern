@@ -988,6 +988,8 @@ LOCAL_FUNCTION jd_value
     ld      t1, SSZ_NODE_KIND(t0)
     li      t2, SSZ_KIND_UINT
     bne     t1, t2, 400f
+    lbu     t2, -8(s3)                      # the Engine API: a QUANTITY
+    bnez    t2, 150f
     beqz    a5, 860f                        # uint: 1 to 78 digits, below 2^(8 width)
     li      t2, 78
     bgtu    a5, t2, 860f
@@ -1018,6 +1020,52 @@ LOCAL_FUNCTION jd_value
     bltu    t3, t5, 2b
     bnez    t4, 860f
     j       1b
+150: li     t2, 3                           # QUANTITY: 0x, then 0 alone or hex digits from a non-zero one; its value below 2^256
+    bltu    a5, t2, 860f
+    lbu     t2, 0(a3)
+    li      t3, 0x30
+    bne     t2, t3, 860f
+    lbu     t2, 1(a3)
+    li      t3, 0x78
+    bne     t2, t3, 860f
+    lbu     t2, 2(a3)
+    li      t3, 0x30
+    bne     t2, t3, 151f
+    li      t2, 3
+    bne     a5, t2, 860f
+151: addi   a3, a3, 2
+    sd      zero, 112(sp)
+    sd      zero, 120(sp)
+    sd      zero, 128(sp)
+    sd      zero, 136(sp)
+152: bgeu   a3, a4, 3f
+    lbu     a0, 0(a3)
+    addi    a3, a3, 1
+    call    jd_hexdigit
+    li      t2, 16
+    bgeu    a0, t2, 860f
+    ld      t2, 136(sp)                     # the 256-bit number times 16, plus the digit
+    srli    t3, t2, 60
+    bnez    t3, 860f
+    ld      t3, 128(sp)
+    slli    t2, t2, 4
+    srli    t4, t3, 60
+    or      t2, t2, t4
+    sd      t2, 136(sp)
+    ld      t2, 120(sp)
+    slli    t3, t3, 4
+    srli    t4, t2, 60
+    or      t3, t3, t4
+    sd      t3, 128(sp)
+    ld      t3, 112(sp)
+    slli    t2, t2, 4
+    srli    t4, t3, 60
+    or      t2, t2, t4
+    sd      t2, 120(sp)
+    slli    t3, t3, 4
+    or      t3, t3, a0
+    sd      t3, 112(sp)
+    j       152b
 3:  ld      t0, 80(sp)
     ld      t1, SSZ_NODE_LENGTH(t0)         # the width: bytes past it zero
     mv      t2, t1
@@ -1189,6 +1237,8 @@ LOCAL_FUNCTION jd_value
     ld      t1, SSZ_NODE_LENGTH(t0)
     ld      t2, SSZ_NODE_ELEMENT(t0)
     li      t3, 0
+    lbu     t4, -8(s3)                      # the Engine API: camelCase names, others skipped
+    bnez    t4, 117f
 111: bgeu   t3, t1, 890f
     add     t4, t2, t3
     slli    t4, t4, 5
@@ -1241,7 +1291,7 @@ LOCAL_FUNCTION jd_value
     addi    a2, a2, 1
     call    jd_skip
     bnez    a1, 899f
-    call    jd_ws
+119: call   jd_ws
     ld      a2, 8(sp)
     bgeu    a0, s2, 880f
     lbu     t0, 0(a0)
@@ -1256,6 +1306,54 @@ LOCAL_FUNCTION jd_value
     bne     t0, t1, 880f
     addi    a0, a0, 1
     sd      a0, 24(sp)
+    j       130f
+117: bgeu   t3, t1, 118f                    # field t3's name, each _x as X: the member's name?
+    add     t4, t2, t3
+    slli    t4, t4, 5
+    add     t4, s9, t4
+    mv      t5, a3
+    li      a5, 0
+1171: li    t6, 32
+    bgeu    a5, t6, 1173f
+    add     t6, t4, a5
+    lbu     t6, 0(t6)
+    beqz    t6, 1173f
+    li      a6, 0x5f
+    bne     t6, a6, 1172f
+    addi    a5, a5, 1
+    li      t6, 32
+    bgeu    a5, t6, 1174f
+    add     t6, t4, a5
+    lbu     t6, 0(t6)
+    addi    t6, t6, -0x20
+1172: bgeu  t5, a4, 1174f
+    lbu     a6, 0(t5)
+    bne     t6, a6, 1174f
+    addi    t5, t5, 1
+    addi    a5, a5, 1
+    j       1171b
+1173: beq   t5, a4, 115b
+1174: addi  t3, t3, 1
+    j       117b
+118: ld     a0, 88(sp)                      # a member of no field: its value skipped
+    call    jd_ws
+    ld      a2, 8(sp)
+    bgeu    a0, s2, 880f
+    lbu     t0, 0(a0)
+    li      t1, 0x3a
+    bne     t0, t1, 880f
+    addi    a0, a0, 1
+    call    jd_ws
+    ld      a2, 8(sp)                       # its faults at the path of the field count
+    ld      t0, 80(sp)
+    ld      t1, SSZ_NODE_LENGTH(t0)
+    slli    t2, a2, 3
+    add     t2, s10, t2
+    sd      t1, JsonFault_path(t2)
+    addi    a2, a2, 1
+    call    jd_skip
+    bnez    a1, 899f
+    j       119b
 130: ld     t0, 80(sp)                      # each field given
     ld      t1, SSZ_NODE_LENGTH(t0)
     ld      t2, 64(sp)
@@ -1475,10 +1573,31 @@ LOCAL_FUNCTION jd_value
 899: UNFRAME 160
 END_FUNCTION jd_value
 
-/* (type, json, scratch, out, fault): docs/reference/beacon-api.md. Locals: L out, L+8 the root. */
+/* (type, json, scratch, out, fault): docs/reference/beacon-api.md. */
 FUNCTION lantern_json_decode
-    ENTER 16
+    FRAME 0
+    li      a5, 0
+    call    json_decode_mode
+    UNFRAME 0
+END_FUNCTION lantern_json_decode
+
+/* (type, json, scratch, out, fault): docs/reference/engine-api.md, the Engine API's JSON. */
+FUNCTION lantern_engine_json_decode
+    FRAME 0
+    li      a5, 1
+    call    json_decode_mode
+    UNFRAME 0
+END_FUNCTION lantern_engine_json_decode
+
+/*
+ * L2: (type, json, scratch, out, fault, mode): lantern_json_decode for mode 0, of the Beacon API's
+ * JSON; lantern_engine_json_decode for mode 1, of the Engine API's: the mode at byte 56 of scratch,
+ * before the field tables. Locals: L out, L+8 the root, L+16 the mode.
+ */
+LOCAL_FUNCTION json_decode_mode
+    ENTER 32
     sd      a3, (L + 0)(sp)
+    sd      a5, (L + 16)(sp)
     mv      s10, a4
     mv      s1, a0                          # the type, the text and scratch, a moment
     mv      s2, a1
@@ -1489,6 +1608,8 @@ FUNCTION lantern_json_decode
     ld      t0, 0(s3)
     li      t1, JSON_DECODE_SCRATCH
     bltu    t0, t1, 97f
+    ld      t0, (L + 16)(sp)
+    sb      t0, 56(s3)
     ld      t0, 8(s1)
     add     s7, s1, t0
     ld      t0, 24(s1)
@@ -1527,17 +1648,17 @@ FUNCTION lantern_json_decode
     li      a2, 0
     call    jd_value
     li      a0, LANTERN_OK
-    LEAVE 16
+    LEAVE 32
 95: sd      s5, JsonFault_size(s10)
 97: li      a0, LANTERN_BUFFER_TOO_SMALL
-    LEAVE 16
+    LEAVE 32
 96: mv      a1, a0
     li      a0, JSON_FAULT_SYNTAX
     li      a2, 0
     call    jd_fault
 98: li      a0, LANTERN_INVALID_JSON
-    LEAVE 16
-END_FUNCTION lantern_json_decode
+    LEAVE 32
+END_FUNCTION json_decode_mode
 
     RODATA
 jd_null:

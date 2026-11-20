@@ -293,6 +293,26 @@ SSZ_DFIELD N_SyncCommitteeBits, SyncAggregate, sync_committee_bits
 SSZ_DFIELD N_Bytes96, SyncAggregate, sync_committee_signature
 .endif
 
+.if FORK >= FORK_CAPELLA
+SSZ_FIELDS GetPayloadResult
+SSZ_DFIELD N_ExecutionPayload, GetPayloadResult, execution_payload
+SSZ_DFIELD N_Uint256, GetPayloadResult, block_value
+.if FORK >= FORK_DENEB
+SSZ_DFIELD N_BlobsBundle, GetPayloadResult, blobs_bundle
+SSZ_DFIELD N_Boolean, GetPayloadResult, should_override_builder
+.endif
+.if FORK >= FORK_ELECTRA
+SSZ_DFIELD N_ExecutionRequestsList, GetPayloadResult, execution_requests
+.endif
+.endif
+
+.if FORK >= FORK_DENEB
+SSZ_FIELDS BlobsBundle
+SSZ_DFIELD N_BlobKZGCommitments, BlobsBundle, commitments
+SSZ_DFIELD N_BundleProofs, BlobsBundle, proofs
+SSZ_DFIELD N_BundleBlobs, BlobsBundle, blobs
+.endif
+
 .if FORK >= FORK_BELLATRIX
 SSZ_FIELDS ExecutionPayload
 SSZ_DFIELD N_Bytes32, ExecutionPayload, parent_hash

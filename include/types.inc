@@ -47,7 +47,7 @@ SSZ_BYTE_VECTOR LogsBloom, BYTES_PER_LOGS_BLOOM
 SSZ_BYTE_LIST ExtraData, MAX_EXTRA_DATA_BYTES
 SSZ_BYTE_LIST Transaction, MAX_BYTES_PER_TRANSACTION
 .endif
-.if TYPES_FORK == FORK_DENEB || TYPES_FORK == FORK_ELECTRA
+.if TYPES_FORK >= FORK_DENEB
 SSZ_BYTE_VECTOR Blob, BYTES_PER_FIELD_ELEMENT * FIELD_ELEMENTS_PER_BLOB
 .endif
 .if TYPES_FORK >= FORK_FULU
@@ -768,3 +768,44 @@ SSZ_CONTAINER ProposerPreparation, 0
 SSZ_FIELD ProposerPreparation, validator_index, Uint64
 SSZ_FIELD ProposerPreparation, fee_recipient, Bytes20
 SSZ_END ProposerPreparation
+
+/*
+ * Engine API results (execution-apis 981aa66), lantern's containers of the result of
+ * engine_getPayload, decoded by lantern_engine_json_decode: GetPayloadResult from capella (the
+ * result of engine_getPayloadV1 is the ExecutionPayload), with a BlobsBundle from deneb
+ * (BlobsBundleV1; V2 in fulu, CELLS_PER_EXT_BLOB proofs a blob) and the request list from electra
+ * (each item a request type and its data; a deposit list is the longest).
+ */
+.if TYPES_FORK >= FORK_DENEB
+.if TYPES_FORK >= FORK_FULU
+SSZ_LIST BundleProofs, Bytes48, MAX_BLOB_COMMITMENTS_PER_BLOCK * CELLS_PER_EXT_BLOB
+.else
+SSZ_LIST BundleProofs, Bytes48, MAX_BLOB_COMMITMENTS_PER_BLOCK
+.endif
+SSZ_LIST BundleBlobs, Blob, MAX_BLOB_COMMITMENTS_PER_BLOCK
+
+SSZ_CONTAINER BlobsBundle, 1
+SSZ_FIELD BlobsBundle, commitments, BlobKZGCommitments
+SSZ_FIELD BlobsBundle, proofs, BundleProofs
+SSZ_FIELD BlobsBundle, blobs, BundleBlobs
+SSZ_END BlobsBundle
+.endif
+
+.if TYPES_FORK >= FORK_ELECTRA
+SSZ_BYTE_LIST RequestBytes, 1 + 192 * MAX_DEPOSIT_REQUESTS_PER_PAYLOAD
+SSZ_LIST ExecutionRequestsList, RequestBytes, 3
+.endif
+
+.if TYPES_FORK >= FORK_CAPELLA
+SSZ_CONTAINER GetPayloadResult, 1
+SSZ_FIELD GetPayloadResult, execution_payload, ExecutionPayload
+SSZ_FIELD GetPayloadResult, block_value, Uint256
+.if TYPES_FORK >= FORK_DENEB
+SSZ_FIELD GetPayloadResult, blobs_bundle, BlobsBundle
+SSZ_FIELD GetPayloadResult, should_override_builder, Boolean
+.endif
+.if TYPES_FORK >= FORK_ELECTRA
+SSZ_FIELD GetPayloadResult, execution_requests, ExecutionRequestsList
+.endif
+SSZ_END GetPayloadResult
+.endif
