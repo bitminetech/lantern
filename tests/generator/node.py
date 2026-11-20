@@ -21,6 +21,7 @@ commitments than blobs gives the sidecars of the indices that have all three.
 """
 
 import hashlib
+import json
 import os
 import pathlib
 
@@ -184,6 +185,8 @@ def cases(fork, preset):
     late = int(spec.EPOCHS_PER_HISTORICAL_VECTOR) + 6  # the lowest epochs of getEpochCommittees
     yield "api", f"anchor_epoch_{late}", api_cases(fork, preset, epoch=late)
     yield "api", "anchor_epoch_0", api_cases(fork, preset, epoch=0)
+    if FORKS.index(fork) >= FORKS.index("bellatrix"):
+        yield from payload_cases(fork, preset)
     yield "p2p", "anchor_epoch_2", {
         "anchor_state": bytes(state.encode_bytes()),
         "anchor_block": bytes(block.encode_bytes()),
@@ -192,6 +195,109 @@ def cases(fork, preset):
         "status_version": 2 if fork == "fulu" else 1,
         "metadata_version": 3 if fork == "fulu" else 2,
     }
+
+
+# ---------------------------------------------------------------- Payload preparation (node.md)
+
+PAYLOAD_HASH = bytes([0x11]) * 32  # the anchor payload's block hash
+
+
+def payload_anchor(spec, fork):
+    """The api anchor with an execution payload in its block and its header in the state, so the
+    merge is complete; from capella validators 2 and 3 have 0x01 credentials, 2 a balance past the
+    maximum (a partial withdrawal) and 3 a withdrawable epoch of 0 (a full one)."""
+    state, block = anchor(spec, fork, statuses=True)
+    if FORKS.index(fork) >= FORKS.index("capella"):  # a partial withdrawal of validator 2, a full one of validator 3
+        for i in (2, 3):
+            state.validators[i].withdrawal_credentials = spec.Bytes32(spec.ETH1_ADDRESS_WITHDRAWAL_PREFIX + bytes(11) + bytes([0xa0 + i]) * 20)
+        state.balances[2] = spec.MAX_EFFECTIVE_BALANCE + 2_000_000_000
+        state.validators[3].exit_epoch = 0
+        state.validators[3].withdrawable_epoch = 0
+    payload = spec.ExecutionPayload(parent_hash=spec.Hash32(bytes([0x22]) * 32), fee_recipient=spec.ExecutionAddress(bytes([0x33]) * 20),
+                                    block_number=7, gas_limit=30_000_000, timestamp=spec.compute_time_at_slot(state.genesis_time, state.slot),
+                                    prev_randao=spec.get_randao_mix(state, spec.get_current_epoch(state)),
+                                    block_hash=spec.Hash32(PAYLOAD_HASH))
+    fields = {}
+    header = spec.ExecutionPayloadHeader
+    names = header.model_fields if hasattr(header, "model_fields") else header.fields()
+    for name in names:
+        if name == "transactions_root":
+            fields[name] = spec.hash_tree_root(payload.transactions)
+        elif name == "withdrawals_root":
+            fields[name] = spec.hash_tree_root(payload.withdrawals)
+        else:
+            fields[name] = getattr(payload, name)
+    state.latest_execution_payload_header = spec.ExecutionPayloadHeader(**fields)
+    body = spec.BeaconBlockBody(execution_payload=payload)
+    state.latest_block_header.body_root = spec.hash_tree_root(body)
+    block = spec.BeaconBlock(slot=state.slot, body=body, state_root=spec.hash_tree_root(state))
+    return state, block
+
+
+def payload_cases(fork, preset):
+    """node-payload: a prepareBeaconProposer of the proposer of slot S + 1, or of another validator,
+    then a tick at or after the attestation due time of slot S; the engine_forkchoiceUpdated the
+    node must make, from the spec's prepare_execution_payload of the anchor state at S + 1."""
+    import engine
+    spec = module(fork, preset)
+    state, block = run(spec, schedule(fork), lambda: payload_anchor(spec, fork))
+    root = spec.hash_tree_root(block)
+    slot_ms = int(spec.config.SLOT_DURATION_MS)
+    due_ms = slot_ms * int(spec.config.ATTESTATION_DUE_BPS) // 10000
+    start = lambda slot: int(state.genesis_time) * 1000 + int(slot) * slot_ms
+    a = int(state.slot)
+    fcu = 1 if fork == "bellatrix" else 2 if fork == "capella" else 3
+
+    def expected(s, fee):
+        """The proposer of S + 1 and the tail of the request, from ',"method":' on."""
+        def f():
+            st = state.copy()
+            spec.process_slots(st, spec.Slot(s + 1))
+            proposer = int(spec.get_beacon_proposer_index(st))
+
+            class Engine:
+                def notify_forkchoice_updated(self, head_block_hash, safe_block_hash, finalized_block_hash, payload_attributes):
+                    self.call = (head_block_hash, safe_block_hash, finalized_block_hash, payload_attributes)
+            e = Engine()
+            spec.prepare_execution_payload(st, spec.Hash32(PAYLOAD_HASH), spec.Hash32(PAYLOAD_HASH), spec.ExecutionAddress(fee), e)
+            head, safe, fin, attrs = e.call
+            fcs = {"headBlockHash": engine.d(head), "safeBlockHash": engine.d(safe), "finalizedBlockHash": engine.d(fin)}
+            text = b',"method":"engine_forkchoiceUpdatedV%d","params":' % fcu
+            return proposer, text + json.dumps([fcs, engine.attribute_json(fork, attrs)], separators=(",", ":")).encode() + b"}"
+        return run(spec, schedule(fork), f)
+
+    def prepare(index, fee):
+        body = b'[{"validator_index":"%d","fee_recipient":"0x%s"}]' % (index, fee.hex().encode())
+        return (b"POST /eth/v1/validator/prepare_beacon_proposer HTTP/1.1\r\nHost: lantern\r\nContent-Type: application/json\r\n"
+                b"Content-Length: %d\r\n\r\n" % len(body) + body)
+
+    epoch_slots = int(spec.SLOTS_PER_EPOCH)
+    # (name, S, the first tick, the second tick, the proposer's or another's, the engine's payloadId)
+    plans = [("head_of_slot", a, start(a), start(a) + 1, True, bytes(range(1, 9))),
+             ("due_time", a + 1, start(a + 1), start(a + 1) + due_ms, True, bytes(range(9, 17))),
+             ("null_payload_id", a + 1, start(a + 1), start(a + 1) + due_ms + 5, True, b""),
+             ("epoch_boundary", a + epoch_slots - 1, start(a + epoch_slots - 1), start(a + epoch_slots - 1) + due_ms, True, bytes(8)),
+             ("before_due_time", a + 1, start(a + 1), start(a + 1) + due_ms - 1, None, b""),
+             ("another_validator", a + 1, start(a + 1), start(a + 1) + due_ms, False, b"")]
+    for name, s, t0, t1, mine, pid in plans:
+        fee = bytes([0x40 + len(name)]) * 20
+        proposer, tail = expected(s, fee)
+        index = proposer if mine is not False else (proposer + 1) % len(state.validators)
+        due, prepared = mine is not None, mine is True  # due: the node runs the preparation
+        yield "payload", name, {
+            "anchor_state": bytes(state.encode_bytes()),
+            "anchor_block": bytes(block.encode_bytes()),
+            "time0": t0,
+            "time1": t1,
+            "request": prepare(index, fee),
+            "response": response(200),
+            "tail": tail if prepared else b"",
+            "payload_id": pid,
+            "payload_slot": s + 1 if due else 0,
+            "payload_root": bytes(root) if due else bytes(32),
+            "payload_status": (3 if pid else 0) if prepared else 0,
+            "payload_proposer": proposer if prepared else 0,
+        }
 
 
 def blob_cases(fork, preset, cases):

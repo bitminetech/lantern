@@ -226,6 +226,18 @@ def payload_attributes(spec, fork, rng):
         yield raw, o
 
 
+def attribute_json(fork, a):
+    """The PayloadAttributesVn JSON of the spec's PayloadAttributes a."""
+    f = FORKS.index(fork)
+    o = {"timestamp": q(a.timestamp), "prevRandao": d(a.prev_randao), "suggestedFeeRecipient": d(a.suggested_fee_recipient)}
+    if f >= FORKS.index("capella"):
+        o["withdrawals"] = [{"index": q(w.index), "validatorIndex": q(w.validator_index), "address": d(w.address),
+                             "amount": q(w.amount)} for w in a.withdrawals]
+    if f >= FORKS.index("deneb"):
+        o["parentBeaconBlockRoot"] = d(a.parent_beacon_block_root)
+    return o
+
+
 def attribute_raw(spec, fork, a):
     """The PayloadAttributes bytes of engine-api.md for the spec's PayloadAttributes a."""
     f = FORKS.index(fork)
