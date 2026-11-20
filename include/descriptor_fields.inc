@@ -3,6 +3,25 @@
  * container T, then one SSZ_DFIELD for each field. descriptors.inc includes it twice: once for the
  * TypeField records, once for the name of each field.
  */
+.if FORK >= FORK_DENEB
+SSZ_FIELDS BlockContents
+SSZ_DFIELD N_BeaconBlock, BlockContents, block
+SSZ_DFIELD N_BundleProofs, BlockContents, kzg_proofs
+SSZ_DFIELD N_BundleBlobs, BlockContents, blobs
+.endif
+
+SSZ_FIELDS ProduceDraft
+SSZ_DFIELD N_ProposerSlashings, ProduceDraft, proposer_slashings
+SSZ_DFIELD N_AttesterSlashings, ProduceDraft, attester_slashings
+SSZ_DFIELD N_DraftAttestations, ProduceDraft, attestations
+SSZ_DFIELD N_VoluntaryExits, ProduceDraft, voluntary_exits
+.if FORK >= FORK_ALTAIR
+SSZ_DFIELD N_SyncAggregate, ProduceDraft, sync_aggregate
+.endif
+.if FORK >= FORK_CAPELLA
+SSZ_DFIELD N_BLSToExecutionChanges, ProduceDraft, bls_to_execution_changes
+.endif
+
 SSZ_FIELDS SignedBeaconBlock
 SSZ_DFIELD N_BeaconBlock, SignedBeaconBlock, message
 SSZ_DFIELD N_Bytes96, SignedBeaconBlock, signature
