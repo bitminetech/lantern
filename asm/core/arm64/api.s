@@ -4967,8 +4967,9 @@ END_FUNCTION node_submit_check
  * L2: the NODE_EV_WORK_DONE x0 of a NODE_WORK_API_SUBMIT (node.md, lantern_node_step): the body's
  * bytes go; each valid operation joins the pool, goes out on its topic with NODE_FLAG_SUBSCRIBED,
  * and an attester slashing to fork choice; then the answer to the connection. x19 the node, x20
- * the store, x24 the actions. x21 the event, x22 the record, x23 the records left, x25 the
- * failures, x26 the topic, x27 the new id, x28 the answer's flags. Locals: L 1 when the pool keeps it.
+ * the store, x23 the scratch, x24 the actions. x21 the event, x22 the record, x25 the failures, x26
+ * the topic, x27 the new id, x28 the answer's flags. Locals: L 1 when the pool keeps it, L+8 the
+ * records left.
  */
 LOCAL_FUNCTION node_api_submit_done
     ENTER 16
@@ -4990,11 +4991,13 @@ LOCAL_FUNCTION node_api_submit_done
     ldr     x9, [x21, #NodeEvent_result]
     cbnz    x9, 80f
     mov     x25, #0
-    ldr     x23, [x21, #NodeEvent_index]
+    ldr     x9, [x21, #NodeEvent_index]
+    str     x9, [sp, #(L + 8)]
     add     x9, x21, #NodeEvent_chunk
     ldr     x10, [x9, #8]
     add     x22, x9, x10
-2:  cbz     x23, 70f
+2:  ldr     x9, [sp, #(L + 8)]
+    cbz     x9, 70f
     ldr     x9, [x22]                       /* its code */
     cmp     x9, #LANTERN_GOSSIP_REJECT
     cinc    x25, x25, eq
@@ -5041,7 +5044,9 @@ LOCAL_FUNCTION node_api_submit_done
 6:  ldr     x9, [x22, #8]
     add     x22, x22, #8
     add     x22, x22, x9
-    sub     x23, x23, #1
+    ldr     x9, [sp, #(L + 8)]
+    sub     x9, x9, #1
+    str     x9, [sp, #(L + 8)]
     b       2b
 70: ldr     x0, [x21, #NodeAction_target]   /* the answer: 200, or 400 with the failures */
     cbz     x25, 71f

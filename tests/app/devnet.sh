@@ -70,6 +70,7 @@ cleanup() {
     $kurtosis service logs -a $enclave lantern > "$work/lantern.log" 2>&1 || true
     grep -v "record enr" "$work/lantern.log" | grep -v " INFO  slot " | head -40 || true
     grep " INFO  slot " "$work/lantern.log" | tail -10 || true
+    grep -E " (WARN|ERROR) " "$work/lantern.log" | tail -20 || true
     if [ "${ASSERTOOR:-0}" = 1 ]; then
         echo "== assertoor"
         $kurtosis service logs -a $enclave assertoor 2>&1 | grep -i "error\|fail\|warn" | tail -40 || true
