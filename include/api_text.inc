@@ -609,6 +609,21 @@ api_p_version:
     .ascii "\",\"data\":["
 .set api_p_version_len, 10
 
+api_h_blinded:
+    .ascii "Eth-Execution-Payload-Blinded: false\r\nEth-Execution-Payload-Value: "
+.set api_h_blinded_len, 67
+api_h_block_value:
+    .ascii "\r\nEth-Consensus-Block-Value: "
+.set api_h_block_value_len, 29
+api_nines:
+    .ascii "000000000"
+.set api_nines_len, 9
+api_pb_head:
+    .ascii "\",\"execution_payload_blinded\":false,\"execution_payload_value\":\""
+.set api_pb_head_len, 63
+api_pb_block_value:
+    .ascii "\",\"consensus_block_value\":\""
+.set api_pb_block_value_len, 27
 api_g_data:
     .ascii "\",\"data\":"
 .set api_g_data_len, 9
@@ -664,7 +679,14 @@ api_forks:
     API_FORK deneb
     API_FORK electra
     API_FORK fulu
+/* produceBlockV3's folds: the pool's entries of each kind in this order (node.md, Block production) */
+api_produce_kinds:
+    .byte GOSSIP_PROPOSER_SLASHING, GOSSIP_ATTESTER_SLASHING, GOSSIP_VOLUNTARY_EXIT, GOSSIP_BLS_TO_EXECUTION_CHANGE
+    .byte GOSSIP_BEACON_ATTESTATION, GOSSIP_SYNC_COMMITTEE
+.set API_PRODUCE_KINDS, 6
 .set API_HEAD_ROOM, 168                     /* a streamed answer's head and a chunk's size line, at most */
+/* produceBlockV3's three headers more, at most: 67 + 78 digits + 29 + 29 digits (Wei of a u64 Gwei) + CRLF */
+.set API_PRODUCE_HEAD_ROOM, api_h_blinded_len + 78 + api_h_block_value_len + 29 + 2
 
 /* Each status: its code, then its reason phrase and its error message, each an offset from api_texts and a length. */
 .macro API_CODE code, reason, message

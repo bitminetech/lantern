@@ -703,6 +703,14 @@ LOCAL_FUNCTION node_type_of_kind
     ADDRESS %rdi, lantern_type_ProposerPreparation
     cmp     $NODE_JSON_PROPOSER_PREPARATION, %r10
     je      9f
+    ADDRESS %rdi, lantern_type_BeaconBlock
+    cmp     $NODE_JSON_BEACON_BLOCK, %r10
+    je      9f
+.if FORK >= FORK_DENEB
+    ADDRESS %rdi, lantern_type_BlockContents
+    cmp     $NODE_JSON_BLOCK_CONTENTS, %r10
+    je      9f
+.endif
 .if FORK >= FORK_BELLATRIX
     ADDRESS %rdi, lantern_type_SignedBlindedBeaconBlock
 .else
@@ -2356,4 +2364,1539 @@ SPEC_FUNCTION node_new_payload
     mov     %rcx, (%r12)
     LEAVE 16
 SPEC_END node_new_payload
+.endif
+
+/*
+ * (state, request, scratch, out): node.md, lantern_node_produce_check. rbx state, rbp request, r12
+ * scratch, r13 out, r14 the scratch size, r15 the proposer's Validator. Locals: L epoch, L+8 the
+ * proposer, L+16 domain type, L+24 domain (32), L+56 the signing root after a ByteList header (56).
+ */
+SPEC_FUNCTION node_produce_check
+    ENTER 112
+    mov     %rdi, %rbx
+    mov     %rsi, %rbp
+    mov     %rdx, %r12
+    mov     %rcx, %r13
+.if FORK >= FORK_FULU
+    NEED_SCRATCH %r12, %rbx, 0, 9f
+.else
+    NEED_SCRATCH %r12, %rbx, 2, 9f              # get_beacon_proposer_index takes S(2)
+.endif
+    mov     (%r12), %r14
+    mov     %rbx, %rdi
+    lea     L(%rsp), %rsi
+    call    lantern_get_current_epoch
+    mov     %rbx, %rdi
+.if FORK >= FORK_FULU
+    lea     (L + 8)(%rsp), %rsi
+    call    lantern_get_beacon_proposer_index
+.else
+    mov     %r12, %rsi
+    lea     (L + 8)(%rsp), %rdx
+    call    lantern_get_beacon_proposer_index
+    mov     %r14, (%r12)
+.endif
+    test    %rax, %rax
+    jnz     7f
+    mov     (L + 8)(%rsp), %rax
+    mov     %rax, (%r13)
+    cmpq    $0, 128(%rbp)                   # skip_randao_verification: the point at infinity
+    je      1f
+    cmpb    $0xc0, (%rbp)
+    jne     5f
+    mov     $1, %ecx
+2:  cmpb    $0, (%rbp,%rcx)
+    jne     5f
+    inc     %rcx
+    cmp     $96, %rcx
+    jb      2b
+    jmp     3f
+1:  mov     (L + 8)(%rsp), %rcx             # else the check of process_randao, no mix
+    PART    %r15, %rdx, %rbx, BeaconState_validators
+    mov     $LANTERN_INVALID_VALIDATOR_INDEX, %eax
+    cmp     %rdx, %rcx
+    jae     7f
+    shl     $7, %rcx
+    add     %rcx, %r15
+    movl    $DOMAIN_RANDAO, (L + 16)(%rsp)
+    mov     %rbx, %rdi
+    lea     (L + 16)(%rsp), %rsi
+    lea     L(%rsp), %rdx
+    mov     %r12, %rcx
+    lea     (L + 24)(%rsp), %r8
+    call    lantern_get_domain
+    test    %rax, %rax
+    jnz     7f
+    ADDRESS %rdi, lantern_type_Uint64
+    lea     L(%rsp), %rsi
+    lea     (L + 24)(%rsp), %rdx
+    mov     %r12, %rcx
+    lea     (L + 80)(%rsp), %r8
+    call    lantern_compute_signing_root
+    test    %rax, %rax
+    jnz     7f
+    lea     Validator_pubkey(%r15), %rdi
+    mov     %rbp, %rsi
+    lea     (L + 56)(%rsp), %rdx
+    mov     %r12, %rcx
+    call    verify_root_signature
+    test    %rax, %rax
+    jnz     7f
+    test    %rdx, %rdx
+    jz      5f
+3:
+.if FORK < FORK_ELECTRA
+    mov     (BeaconState_eth1_data + Eth1Data_deposit_count)(%rbx), %rcx    # deposits the block would need
+    cmp     BeaconState_eth1_deposit_index(%rbx), %rcx
+    ja      6f
+.elseif FORK == FORK_ELECTRA
+    mov     (BeaconState_eth1_data + Eth1Data_deposit_count)(%rbx), %rcx    # get_eth1_pending_deposit_count
+    mov     BeaconState_deposit_requests_start_index(%rbx), %rdx
+    cmp     %rdx, %rcx
+    cmovae  %rdx, %rcx
+    cmp     %rcx, BeaconState_eth1_deposit_index(%rbx)
+    jb      6f
+.endif
+    xor     %eax, %eax
+7:  LEAVE 112
+5:  mov     $LANTERN_INVALID_RANDAO_REVEAL, %eax
+    LEAVE 112
+6:  mov     $LANTERN_INVALID_DEPOSITS, %eax
+    LEAVE 112
+9:  mov     $LANTERN_BUFFER_TOO_SMALL, %eax
+    LEAVE 112
+SPEC_END node_produce_check
+
+.if FORK >= FORK_BELLATRIX
+/* (json, scratch, out, fault): node.md, lantern_node_payload_result. */
+SPEC_FUNCTION node_payload_result
+    FRAME 0
+    mov     %rcx, %r8
+    mov     %rdx, %rcx
+    mov     %rsi, %rdx
+    mov     %rdi, %rsi
+.if FORK == FORK_BELLATRIX
+    ADDRESS %rdi, lantern_type_ExecutionPayload
+.else
+    ADDRESS %rdi, lantern_type_GetPayloadResult
+.endif
+    CALL_GLOBAL lantern_engine_json_decode
+    UNFRAME 0
+SPEC_END node_payload_result
+.endif
+
+/*
+ * (state, entry, draft, arg, scratch): node.md, lantern_node_produce_fold. rbx state, rbp the
+ * entry's bytes, r12 their count, r13 the draft, r14 arg, r15 scratch; S7 the topic, S8 the entry's
+ * fork, S9 an aggregate, S10 the place. Locals: L data, L+8 signature, L+16 length, L+24 the
+ * committee index, L+40 the parent root (32).
+ */
+SPEC_FUNCTION node_produce_fold
+    ENTER 96
+    mov     %rdi, %rbx
+    mov     8(%rsi), %rax
+    mov     16(%rsi), %r12
+    lea     (%rsi,%rax), %rbp
+    mov     8(%rdx), %rax
+    lea     (%rdx,%rax), %r13
+    mov     %rcx, %r14
+    mov     %r8, %r15
+    movzbl  %r14b, %eax
+    mov     %rax, S7(%rsp)
+    mov     %r14, %rcx
+    shr     $8, %rcx
+    movzbl  %cl, %ecx
+    mov     %rcx, S8(%rsp)
+    cmp     $GOSSIP_BEACON_ATTESTATION, %rax
+    je      100f
+.if FORK >= FORK_ALTAIR
+    cmp     $GOSSIP_SYNC_COMMITTEE, %rax
+    je      200f
+.endif
+    mov     $MAX_VOLUNTARY_EXITS, %r9d      # an operation: a record, while its kind has room
+    cmp     $GOSSIP_VOLUNTARY_EXIT, %rax
+    je      1f
+    mov     $MAX_PROPOSER_SLASHINGS, %r9d
+    cmp     $GOSSIP_PROPOSER_SLASHING, %rax
+    je      1f
+.if FORK >= FORK_CAPELLA
+    mov     $MAX_BLS_TO_EXECUTION_CHANGES, %r9d
+    cmp     $GOSSIP_BLS_TO_EXECUTION_CHANGE, %rax
+    je      1f
+.endif
+    cmp     $GOSSIP_ATTESTER_SLASHING, %rax
+    jne     8f
+    cmpq    $FORK_ELECTRA, S8(%rsp)         # an attester slashing of the fork's type
+.if FORK >= FORK_ELECTRA
+    jb      8f
+    mov     $MAX_ATTESTER_SLASHINGS_ELECTRA, %r9d
+.else
+    jae     8f
+    mov     $MAX_ATTESTER_SLASHINGS, %r9d
+.endif
+1:  mov     ProduceDraft_ops(%r13), %rcx
+    lea     PRODUCE_DRAFT_OPS(%r13), %rdx
+    lea     (%rdx,%rcx), %rsi               # the end of the records
+    xor     %r8d, %r8d
+2:  cmp     %rsi, %rdx                      # the records of the topic
+    jae     3f
+    mov     (%rdx), %rax
+    cmp     S7(%rsp), %rax
+    jne     21f
+    inc     %r8
+21: mov     8(%rdx), %rax
+    add     $(16 + 7), %rax
+    and     $-8, %rax
+    add     %rax, %rdx
+    jmp     2b
+3:  cmp     %r9, %r8
+    jae     8f
+    cmpq    $GOSSIP_ATTESTER_SLASHING, S7(%rsp)  # the clashes, with the kinds folded before
+    jne     4f
+    mov     %rsi, %rcx
+    lea     PRODUCE_DRAFT_OPS(%r13), %rdx
+    mov     %rbp, %rdi
+    mov     %r12, %rsi
+    call    produce_takes_slashing
+    test    %rax, %rax
+    jz      8f
+4:  cmpq    $GOSSIP_VOLUNTARY_EXIT, S7(%rsp)
+    jne     5f
+    mov     8(%rbp), %rdi
+    lea     PRODUCE_DRAFT_OPS(%r13), %rsi
+    mov     ProduceDraft_ops(%r13), %rdx
+    add     %rsi, %rdx
+    call    produce_slashed
+    test    %rax, %rax
+    jnz     8f
+5:  mov     ProduceDraft_ops(%r13), %rcx
+    lea     PRODUCE_DRAFT_OPS(%r13,%rcx), %rsi
+    lea     (16 + 7)(%r12), %rax
+    and     $-8, %rax
+    add     %rcx, %rax
+    MOVQ    %rdx, PRODUCE_DRAFT_OPS_ROOM
+    cmp     %rdx, %rax
+    ja      8f
+    mov     S7(%rsp), %rdx
+    mov     %rdx, (%rsi)
+    mov     %r12, 8(%rsi)
+    mov     %rax, ProduceDraft_ops(%r13)
+    lea     16(%rsi), %rdi
+    mov     %rbp, %rsi
+    mov     %r12, %rdx
+    call    lantern_copy
+    xor     %eax, %eax
+    LEAVE 96
+8:  mov     $LANTERN_INVALID_ENCODING, %eax  # left out
+    LEAVE 96
+9:  mov     $LANTERN_BUFFER_TOO_SMALL, %eax
+    LEAVE 96
+
+    /* An attestation of the fork's type: its data, signature, committee, length and place. */
+100: cmpq   $FORK_ELECTRA, S8(%rsp)
+.if FORK >= FORK_ELECTRA
+    jb      8b
+    cmp     $240, %r12                      # a SingleAttestation: committee_index 0, data at 16, signature at 144
+    jne     8b
+    lea     16(%rbp), %rax
+    mov     %rax, L(%rsp)
+    lea     144(%rbp), %rax
+    mov     %rax, (L + 8)(%rsp)
+    mov     (%rbp), %rax
+    mov     %rax, (L + 24)(%rsp)
+    mov     %r14, %rax                      # member: the place, + 2^16 x the length
+    shr     $16, %rax
+    movzwl  %ax, %ecx
+    mov     %rcx, S10(%rsp)
+    shr     $16, %rax
+    mov     %rax, (L + 16)(%rsp)
+    cmpq    $0, (16 + 8)(%rbp)              # data.index 0
+    jne     8b
+.else
+    jae     8b
+    cmp     $(228 + 1), %r12                # an Attestation: offset 228, data at 4, signature at 132, its bits
+    jb      8b
+    cmp     $(228 + MAX_VALIDATORS_PER_COMMITTEE / 8 + 1), %r12
+    ja      8b
+    cmpl    $228, (%rbp)
+    jne     8b
+    lea     4(%rbp), %rax
+    mov     %rax, L(%rsp)
+    lea     132(%rbp), %rax
+    mov     %rax, (L + 8)(%rsp)
+    mov     (4 + 8)(%rbp), %rax
+    mov     %rax, (L + 24)(%rsp)
+    lea     228(%rbp), %rsi
+    lea     -229(%r12), %rdx                # the last byte: its highest bit is the length's
+    movzbl  (%rsi,%rdx), %ecx
+    test    %ecx, %ecx
+    jz      8b
+    bsr     %ecx, %ecx
+    lea     (%rcx,%rdx,8), %r8
+    mov     %r8, (L + 16)(%rsp)
+    xor     %ecx, %ecx                      # the place: the first bit set
+101: cmp    %r8, %rcx
+    jae     8b
+    bt      %rcx, (%rsi)
+    jc      102f
+    inc     %rcx
+    jmp     101b
+102: mov    %rcx, S10(%rsp)
+.endif
+    mov     (L + 16)(%rsp), %r8
+    cmp     $MAX_VALIDATORS_PER_COMMITTEE, %r8
+    ja      8b
+    cmp     %r8, S10(%rsp)
+    jae     8b
+    mov     L(%rsp), %rsi                   # process_attestation's checks of slot, target and source
+    mov     (%rsi), %r8                     # data.slot
+    mov     88(%rsi), %r9                   # target.epoch
+    mov     BeaconState_slot(%rbx), %rdi
+    mov     %rdi, %rax
+    xor     %edx, %edx
+    mov     $SLOTS_PER_EPOCH, %ecx
+    div     %rcx
+    mov     %rax, %r10                      # the current epoch
+    mov     %r8, %rax
+    xor     %edx, %edx
+    div     %rcx
+    cmp     %r9, %rax
+    jne     8b
+    cmp     %r10, %r9
+    je      103f
+    test    %r10, %r10
+    jz      8b
+    lea     -1(%r10), %rax
+    cmp     %rax, %r9
+    jne     8b
+103: lea    MIN_ATTESTATION_INCLUSION_DELAY(%r8), %rax
+    cmp     %rdi, %rax
+    ja      8b
+.if FORK < FORK_DENEB
+    lea     SLOTS_PER_EPOCH(%r8), %rax
+    cmp     %rax, %rdi
+    ja      8b
+.endif
+    lea     BeaconState_current_justified_checkpoint(%rbx), %rcx
+    cmp     %r10, %r9
+    je      104f
+    lea     BeaconState_previous_justified_checkpoint(%rbx), %rcx
+104: mov    48(%rsi), %rax                  # source: epoch, root
+    cmp     (%rcx), %rax
+    jne     8b
+    lea     56(%rsi), %rdx
+    lea     8(%rcx), %rax
+    NE32    %rdx, %rax, 8b
+    lea     PRODUCE_DRAFT_AGGREGATES(%r13), %rax  # its aggregate: of the same data and committee
+    mov     %rax, S9(%rsp)
+    xor     %ecx, %ecx
+105: cmp    ProduceDraft_aggregates(%r13), %rcx
+    jae     110f
+    mov     S9(%rsp), %rdi
+    mov     DraftAggregate_committee_index(%rdi), %rax
+    cmp     (L + 24)(%rsp), %rax
+    jne     107f
+    mov     L(%rsp), %rsi
+    xor     %edx, %edx
+106: mov    (%rdi,%rdx), %rax
+    cmp     (%rsi,%rdx), %rax
+    jne     107f
+    add     $8, %rdx
+    cmp     $128, %rdx
+    jb      106b
+    jmp     120f
+107: addq   $DraftAggregate__mem, S9(%rsp)
+    inc     %rcx
+    jmp     105b
+110: mov    ProduceDraft_aggregates(%r13), %rax  # a new aggregate: its data, committee, length, order, signature
+    cmp     $PRODUCE_DRAFT_AGGREGATE_COUNT, %rax
+    jae     8b
+    lea     1(%rax), %rcx
+    mov     %rcx, ProduceDraft_aggregates(%r13)
+    mov     S9(%rsp), %rdi
+    mov     L(%rsp), %rsi
+    mov     $128, %edx
+    call    lantern_copy
+    mov     S9(%rsp), %rdi
+    mov     (L + 24)(%rsp), %rax
+    mov     %rax, DraftAggregate_committee_index(%rdi)
+    mov     (L + 16)(%rsp), %rax
+    mov     %rax, DraftAggregate_length(%rdi)
+    mov     ProduceDraft_aggregates(%r13), %rax
+    dec     %rax
+    mov     %rax, DraftAggregate_order(%rdi)
+    add     $DraftAggregate_signature, %rdi
+    mov     (L + 8)(%rsp), %rsi
+    mov     $96, %edx
+    call    lantern_copy
+    jmp     130f
+120: mov    S9(%rsp), %rdi                  # the same length, a place not taken, the signatures added
+    mov     DraftAggregate_length(%rdi), %rax
+    cmp     (L + 16)(%rsp), %rax
+    jne     8b
+    mov     S10(%rsp), %rcx
+    bt      %rcx, DraftAggregate_bits(%rdi)
+    jc      8b
+    add     $DraftAggregate_signature, %rdi
+    mov     (L + 8)(%rsp), %rsi
+    mov     %r15, %rdx
+    call    produce_add_signature
+    cmp     $LANTERN_BUFFER_TOO_SMALL, %rax
+    je      9b
+    test    %rax, %rax
+    jnz     8b
+130: mov    S9(%rsp), %rdi                  # its place's bit
+    mov     S10(%rsp), %rcx
+    bts     %rcx, DraftAggregate_bits(%rdi)
+    xor     %eax, %eax
+    LEAVE 96
+
+.if FORK >= FORK_ALTAIR
+    /*
+     * A SyncCommitteeMessage of the state's slot - 1 and the block's parent root: each place of its
+     * validator's public key in the state's current_sync_committee not set yet, its signature added.
+     */
+200: cmp    $144, %r12
+    jne     8b
+    mov     (%rbp), %rax
+    inc     %rax
+    cmp     BeaconState_slot(%rbx), %rax
+    jne     8b
+    ADDRESS %rdi, lantern_type_BeaconBlockHeader  # the parent root: hash_tree_root(state.latest_block_header)
+    lea     BeaconState_latest_block_header(%rbx), %rsi
+    mov     %r15, %rdx
+    lea     (L + 40)(%rsp), %rcx
+    CALL_GLOBAL ssz_hash_tree_root
+    test    %rax, %rax
+    jnz     9b
+    lea     8(%rbp), %rax
+    lea     (L + 40)(%rsp), %rcx
+    NE32    %rax, %rcx, 8b
+    mov     40(%rbp), %rcx                  # its validator's public key
+    PART    %rdx, %rax, %rbx, BeaconState_validators
+    cmp     %rax, %rcx
+    jae     8b
+    shl     $7, %rcx
+    lea     Validator_pubkey(%rdx,%rcx), %rax
+    mov     %rax, S9(%rsp)
+    lea     (BeaconState_current_sync_committee + SyncCommittee_pubkeys)(%rbx), %rax
+    mov     %rax, S8(%rsp)
+    movq    $0, S10(%rsp)
+201: mov    S10(%rsp), %rcx
+    cmp     $SYNC_COMMITTEE_SIZE, %rcx
+    jae     209f
+    imul    $48, %rcx, %rsi
+    add     S8(%rsp), %rsi
+    mov     S9(%rsp), %rdi
+    xor     %edx, %edx
+202: mov    (%rsi,%rdx), %rax
+    cmp     (%rdi,%rdx), %rax
+    jne     208f
+    add     $8, %rdx
+    cmp     $48, %rdx
+    jb      202b
+    bt      %rcx, ProduceDraft_sync_bits(%r13)  # a place: set, the signature added
+    jc      208f
+    bts     %rcx, ProduceDraft_sync_bits(%r13)
+    cmpq    $0, ProduceDraft_sync_set(%r13)
+    jne     203f
+    movq    $1, ProduceDraft_sync_set(%r13)
+    lea     ProduceDraft_sync_signature(%r13), %rdi
+    lea     48(%rbp), %rsi
+    mov     $96, %edx
+    call    lantern_copy
+    jmp     208f
+203: lea    ProduceDraft_sync_signature(%r13), %rdi
+    lea     48(%rbp), %rsi
+    mov     %r15, %rdx
+    call    produce_add_signature
+    cmp     $LANTERN_BUFFER_TOO_SMALL, %rax
+    je      9b
+208: incq   S10(%rsp)
+    jmp     201b
+209: xor    %eax, %eax
+    LEAVE 96
+.endif
+SPEC_END node_produce_fold
+
+/*
+ * L1: the signature rsi added to the aggregate rdi with crypto_bls_aggregate, through a list of the
+ * two at the end of scratch rdx: rax = LANTERN_OK, a status of crypto_bls_aggregate, or
+ * LANTERN_BUFFER_TOO_SMALL. Locals: rsp+0 the aggregate, +8 the signature, +16 the list.
+ */
+LOCAL_FUNCTION produce_add_signature
+    FRAME 32
+    mov     %rdi, (%rsp)
+    mov     %rsi, 8(%rsp)
+    mov     (%rdx), %rax
+    cmp     $(24 + 2 * 96 + 8), %rax
+    jb      9f
+    sub     $(24 + 2 * 96), %rax
+    and     $-8, %rax
+    add     %rdx, %rax
+    mov     %rax, 16(%rsp)
+    movq    $(24 + 2 * 96), (%rax)
+    movq    $24, 8(%rax)
+    movq    $2, 16(%rax)
+    lea     24(%rax), %rdi
+    mov     (%rsp), %rsi
+    mov     $96, %edx
+    call    lantern_copy
+    mov     16(%rsp), %rdi
+    add     $(24 + 96), %rdi
+    mov     8(%rsp), %rsi
+    mov     $96, %edx
+    call    lantern_copy
+    mov     16(%rsp), %rdi
+    mov     (%rsp), %rsi
+    CALL_GLOBAL crypto_bls_aggregate
+    UNFRAME 32
+9:  mov     $LANTERN_BUFFER_TOO_SMALL, %eax
+    UNFRAME 32
+END_FUNCTION produce_add_signature
+
+/* ---------------------------------------------------------------- produceBlockV3: the block */
+
+.if Eth1Data_block_hash != 40 || Eth1Data__mem != 72
+.error "node_produce_block copies Eth1Data as its 72 SSZ bytes"
+.endif
+.set PB_FIXED, 84                               /* BeaconBlock: slot, proposer_index, parent_root, state_root, the body's offset */
+.set PB_SYNC, 220                               /* the body's offsets: proposer_slashings at 200 to voluntary_exits at 216 */
+.if FORK >= FORK_ALTAIR
+.set PB_PAYLOAD, PB_SYNC + SYNC_COMMITTEE_SIZE / 8 + 96
+.else
+.set PB_PAYLOAD, PB_SYNC
+.endif
+.if FORK >= FORK_BELLATRIX
+.set PB_BLS, PB_PAYLOAD + 4
+.else
+.set PB_BLS, PB_PAYLOAD
+.endif
+.if FORK >= FORK_CAPELLA
+.set PB_COMMITMENTS, PB_BLS + 4
+.else
+.set PB_COMMITMENTS, PB_BLS
+.endif
+.if FORK >= FORK_DENEB
+.set PB_REQUESTS, PB_COMMITMENTS + 4
+.else
+.set PB_REQUESTS, PB_COMMITMENTS
+.endif
+.if FORK >= FORK_ELECTRA
+.set PB_BODY_FIXED, PB_REQUESTS + 4
+.set PB_MAX_ATTESTATIONS, MAX_ATTESTATIONS_ELECTRA
+.else
+.set PB_BODY_FIXED, PB_REQUESTS
+.set PB_MAX_ATTESTATIONS, MAX_ATTESTATIONS
+.endif
+
+/* The offset of the body's field at pos: the write position r15 from the body S8. Uses rax, rcx. */
+.macro PB_OFFSET pos
+    mov     S8(%rsp), %rcx
+    mov     %r15, %rax
+    sub     %rcx, %rax
+    mov     %eax, \pos(%rcx)
+.endm
+
+/*
+ * (state, draft, params, scratch, out): node.md, lantern_node_produce_block. rbx state, rbp the
+ * draft, r12 params, r13 scratch, r14 out, r15 the write position; S7 the block, S8 the body.
+ * Locals: L proposer, L+8 the result's bytes, L+16 their count, L+24 the payload, L+32 its count,
+ * L+40 the bundle, L+48 its count, L+56 balance before, L+64 1, L+72 a Result, L+80 the scratch
+ * size, L+88 a ByteList view of the request lists (electra), L+256 24 bytes kept aside.
+ */
+SPEC_FUNCTION node_produce_block
+    ENTER 288
+    mov     %rdi, %rbx
+    mov     8(%rsi), %rax
+    lea     (%rsi,%rax), %rbp
+    mov     %rdx, %r12
+    mov     %rcx, %r13
+    mov     %r8, %r14
+    mov     (%r13), %rax
+    mov     %rax, (L + 80)(%rsp)
+    movq    $1, (L + 64)(%rsp)
+    movq    $24, 8(%r14)                    # out: the block from offset 24, as large as its room
+    movq    $0, 16(%r14)
+    lea     24(%r14), %rax
+    mov     %rax, S7(%rsp)
+    mov     %rbx, %rdi                      # the proposer
+.if FORK >= FORK_FULU
+    lea     L(%rsp), %rsi
+    call    lantern_get_beacon_proposer_index
+.else
+    mov     %r13, %rsi
+    lea     L(%rsp), %rdx
+    call    lantern_get_beacon_proposer_index
+    mov     (L + 80)(%rsp), %rcx
+    mov     %rcx, (%r13)
+.endif
+    test    %rax, %rax
+    jnz     99f
+    mov     L(%rsp), %rcx                   # its balance before
+    PART    %rdx, %rax, %rbx, BeaconState_balances
+    cmp     %rax, %rcx
+    jae     97f
+    mov     (%rdx,%rcx,8), %rax
+    mov     %rax, (L + 56)(%rsp)
+    xor     %eax, %eax                      # the engine's result: the payload, and from deneb the bundle
+    mov     %rax, (L + 8)(%rsp)
+    mov     %rax, (L + 16)(%rsp)
+    mov     %rax, (L + 24)(%rsp)
+    mov     %rax, (L + 32)(%rsp)
+    mov     %rax, (L + 40)(%rsp)
+    mov     %rax, (L + 48)(%rsp)
+    mov     16(%r12), %rsi
+    test    %rsi, %rsi
+    jz      5f
+    mov     8(%rsi), %rcx
+    add     %rsi, %rcx
+    mov     16(%rsi), %rdx
+    mov     %rcx, (L + 8)(%rsp)
+    mov     %rdx, (L + 16)(%rsp)
+.if FORK == FORK_BELLATRIX
+    mov     %rcx, (L + 24)(%rsp)            # the result is the payload
+    mov     %rdx, (L + 32)(%rsp)
+.else
+    cmp     $(4 + 32), %rdx                 # GetPayloadResult: the payload's offset, block_value at 4
+    jb      96f
+    mov     (%rcx), %r8d
+.if FORK >= FORK_DENEB
+    mov     36(%rcx), %r9d                  # blobs_bundle's offset
+.else
+    mov     %rdx, %r9
+.endif
+    cmp     %r9, %r8
+    ja      96f
+    cmp     %rdx, %r9
+    ja      96f
+    lea     (%rcx,%r8), %rax
+    mov     %rax, (L + 24)(%rsp)
+    mov     %r9, %rax
+    sub     %r8, %rax
+    mov     %rax, (L + 32)(%rsp)
+.if FORK >= FORK_DENEB
+.if FORK >= FORK_ELECTRA
+    mov     41(%rcx), %r10d                 # execution_requests' offset: the bundle up to it
+.else
+    mov     %rdx, %r10
+.endif
+    cmp     %r10, %r9
+    ja      96f
+    cmp     %rdx, %r10
+    ja      96f
+    lea     (%rcx,%r9), %rax
+    mov     %rax, (L + 40)(%rsp)
+    mov     %r10, %rax
+    sub     %r9, %rax
+    mov     %rax, (L + 48)(%rsp)
+.endif
+.endif
+5:  mov     (%r14), %rax                    # room: the fixed parts of the block and the body
+    cmp     $(PB_FIXED + PB_BODY_FIXED + 24), %rax
+    jb      98f
+    mov     S7(%rsp), %rdi
+    mov     BeaconState_slot(%rbx), %rax
+    mov     %rax, (%rdi)
+    mov     L(%rsp), %rax
+    mov     %rax, 8(%rdi)
+    ADDRESS %rdi, lantern_type_BeaconBlockHeader  # parent_root: hash_tree_root(state.latest_block_header)
+    lea     BeaconState_latest_block_header(%rbx), %rsi
+    mov     %r13, %rdx
+    mov     S7(%rsp), %rcx
+    add     $16, %rcx
+    CALL_GLOBAL ssz_hash_tree_root
+    test    %rax, %rax
+    jnz     99f
+    mov     S7(%rsp), %rdi
+    xorps   %xmm0, %xmm0                    # state_root, written last
+    movdqu  %xmm0, 48(%rdi)
+    movdqu  %xmm0, 64(%rdi)
+    movl    $PB_FIXED, 80(%rdi)
+    lea     PB_FIXED(%rdi), %rax
+    mov     %rax, S8(%rsp)
+    mov     %rax, %rdi                      # randao_reveal, eth1_data (an empty eth1 chain's vote), graffiti
+    mov     (%r12), %rsi
+    mov     $96, %edx
+    call    lantern_copy
+    mov     S8(%rsp), %rdi
+    add     $96, %rdi
+    lea     BeaconState_eth1_data(%rbx), %rsi
+    mov     $72, %edx
+    call    lantern_copy
+    mov     S8(%rsp), %rdi
+    add     $168, %rdi
+    mov     (%r12), %rsi
+    add     $96, %rsi
+    mov     $32, %edx
+    call    lantern_copy
+.if FORK >= FORK_ALTAIR
+    mov     S8(%rsp), %rdi                  # the draft's sync aggregate; with none, no bit and the point at infinity
+    add     $PB_SYNC, %rdi
+    lea     ProduceDraft_sync_bits(%rbp), %rsi
+    mov     $(SYNC_COMMITTEE_SIZE / 8 + 96), %edx
+    call    lantern_copy
+    cmpq    $0, ProduceDraft_sync_set(%rbp)
+    jne     6f
+    mov     S8(%rsp), %rdi
+    add     $(PB_SYNC + SYNC_COMMITTEE_SIZE / 8), %rdi
+    mov     $96, %esi
+    call    lantern_zero
+    mov     S8(%rsp), %rdi
+    movb    $0xc0, (PB_SYNC + SYNC_COMMITTEE_SIZE / 8)(%rdi)
+6:
+.endif
+    mov     S8(%rsp), %r15
+    add     $PB_BODY_FIXED, %r15
+    /* proposer_slashings, attester_slashings: the draft's records, which the folds kept free of clashes */
+    PB_OFFSET 200
+    mov     $GOSSIP_PROPOSER_SLASHING, %edi
+    mov     %r15, %rsi
+    call    produce_records
+    mov     %rdx, %r15
+    test    %rax, %rax
+    jnz     98f
+    PB_OFFSET 204
+    mov     %r15, %rdi
+    call    produce_attester_slashings
+    mov     %rdx, %r15
+    test    %rax, %rax
+    jnz     98f
+    /* attestations: the draft's aggregates */
+    PB_OFFSET 208
+    lea     L(%rsp), %rdi
+    mov     %r15, %rsi
+    call    produce_attestations
+    mov     %rdx, %r15
+    cmp     $LANTERN_BUFFER_TOO_SMALL, %rax
+    je      98f
+    test    %rax, %rax
+    jnz     99f
+    /* deposits: none; voluntary_exits */
+    PB_OFFSET 212
+    PB_OFFSET 216
+    mov     $GOSSIP_VOLUNTARY_EXIT, %edi
+    mov     %r15, %rsi
+    call    produce_records
+    mov     %rdx, %r15
+    test    %rax, %rax
+    jnz     98f
+.if FORK >= FORK_BELLATRIX
+    PB_OFFSET PB_PAYLOAD                    /* the payload, the empty one before the merge */
+    cmpq    $0, (L + 24)(%rsp)
+    jne     7f
+.if FORK == FORK_BELLATRIX
+    mov     %r15, %rdi                      # ExecutionPayload.empty(): the offsets of extra_data and transactions at 508
+    mov     $508, %esi
+    call    produce_room
+    test    %rax, %rax
+    jnz     98f
+    mov     %r15, %rdi
+    mov     $508, %esi
+    call    lantern_zero
+    movl    $508, 436(%r15)
+    movl    $508, 504(%r15)
+    add     $508, %r15
+    jmp     71f
+.else
+    jmp     96f
+.endif
+7:  mov     %r15, %rdi
+    mov     (L + 32)(%rsp), %rsi
+    call    produce_room
+    test    %rax, %rax
+    jnz     98f
+    mov     %r15, %rdi
+    mov     (L + 24)(%rsp), %rsi
+    mov     (L + 32)(%rsp), %rdx
+    add     %rdx, %r15
+    call    lantern_copy
+71:
+.endif
+.if FORK >= FORK_CAPELLA
+    PB_OFFSET PB_BLS
+    mov     $GOSSIP_BLS_TO_EXECUTION_CHANGE, %edi
+    mov     %r15, %rsi
+    call    produce_records
+    mov     %rdx, %r15
+    test    %rax, %rax
+    jnz     98f
+.endif
+.if FORK >= FORK_DENEB
+    PB_OFFSET PB_COMMITMENTS                /* the bundle's commitments */
+    mov     (L + 40)(%rsp), %rcx
+    mov     (L + 48)(%rsp), %rdx
+    cmp     $12, %rdx
+    jb      96f
+    mov     (%rcx), %r8d
+    mov     4(%rcx), %r9d
+    cmp     %r9, %r8
+    ja      96f
+    cmp     %rdx, %r9
+    ja      96f
+    lea     (%rcx,%r8), %rax
+    mov     %rax, (L + 8)(%rsp)
+    sub     %r8, %r9
+    mov     %r9, (L + 16)(%rsp)
+    mov     %r15, %rdi
+    mov     %r9, %rsi
+    call    produce_room
+    test    %rax, %rax
+    jnz     98f
+    mov     %r15, %rdi
+    mov     (L + 8)(%rsp), %rsi
+    mov     (L + 16)(%rsp), %rdx
+    add     %rdx, %r15
+    call    lantern_copy
+.endif
+.if FORK >= FORK_ELECTRA
+    PB_OFFSET PB_REQUESTS                   /* lantern_get_execution_requests of the result's request lists */
+    mov     16(%r12), %rcx
+    mov     8(%rcx), %rdx
+    mov     16(%rcx), %r8
+    add     %rcx, %rdx
+    mov     41(%rdx), %r9d
+    cmp     %r8, %r9
+    ja      96f
+    lea     (L + 112)(%rsp), %rsi           # a ByteList view of them in the locals
+    lea     (%rdx,%r9), %rax
+    sub     %rsi, %rax                      # its offset: from the view to the lists
+    mov     %r8, %rcx
+    sub     %r9, %rcx                       # their count
+    mov     %rax, -16(%rsi)
+    mov     %rcx, -8(%rsi)
+    add     %rcx, %rax
+    mov     %rax, -24(%rsi)
+    mov     -24(%r15), %rax                 # the requests' room: the rest of out, as a ByteList at the write position less 24
+    mov     %rax, (L + 256)(%rsp)
+    mov     -16(%r15), %rax
+    mov     %rax, (L + 264)(%rsp)
+    mov     -8(%r15), %rax
+    mov     %rax, (L + 272)(%rsp)
+    mov     (%r14), %rax
+    add     %r14, %rax
+    sub     $24, %rax
+    lea     -24(%r15), %rsi
+    sub     %rsi, %rax
+    mov     %rax, (%rsi)
+    movq    $24, 8(%rsi)
+    movq    $0, 16(%rsi)
+    lea     (L + 88)(%rsp), %rdi
+    call    lantern_get_execution_requests
+    mov     -8(%r15), %rcx                  # the bytes written; the 24 bytes before them back
+    mov     (L + 256)(%rsp), %rdx
+    mov     %rdx, -24(%r15)
+    mov     (L + 264)(%rsp), %rdx
+    mov     %rdx, -16(%r15)
+    mov     (L + 272)(%rsp), %rdx
+    mov     %rdx, -8(%r15)
+    cmp     $LANTERN_BUFFER_TOO_SMALL, %rax
+    je      98f
+    test    %rax, %rax
+    jnz     96f
+    add     %rcx, %r15
+.endif
+    mov     %r15, %rax                      # the block's bytes
+    sub     S7(%rsp), %rax
+    mov     %rax, 16(%r14)
+    ADDRESS %rdi, lantern_type_BeaconBlock  # the state root: process_block of the decoded block, then the state's root
+    mov     %r14, %rsi
+    mov     %r13, %rdx
+    call    node_decode
+    cmp     $1, %rax
+    je      98f
+    ja      96f
+    mov     %rbx, %rdi
+    mov     %rdx, %rsi
+    lea     (L + 64)(%rsp), %rdx
+    mov     8(%r12), %rcx
+    mov     %r13, %r8
+    lea     (L + 72)(%rsp), %r9
+    call    lantern_process_block
+    mov     (L + 80)(%rsp), %rcx
+    mov     %rcx, (%r13)
+    test    %rax, %rax
+    jnz     99f
+    mov     (L + 72)(%rsp), %rax
+    test    %rax, %rax
+    jnz     99f
+    mov     %rbx, %rdi
+    xor     %esi, %esi
+    mov     %r13, %rdx
+    mov     S7(%rsp), %rcx
+    add     $48, %rcx
+    call    lantern_state_root
+    test    %rax, %rax
+    jnz     99f
+    mov     L(%rsp), %rcx                   # consensus_block_value: the balance after less before, plus the proposer's withdrawals
+    PART    %rdx, %rax, %rbx, BeaconState_balances
+    mov     (%rdx,%rcx,8), %r8
+    sub     (L + 56)(%rsp), %r8
+.if FORK >= FORK_CAPELLA
+    mov     (L + 24)(%rsp), %rsi            # the payload's withdrawals: from the offset at 508, 44 bytes each
+    test    %rsi, %rsi
+    jz      81f
+    mov     (L + 32)(%rsp), %rdi
+    mov     508(%rsi), %edx
+    cmp     %rdi, %rdx
+    ja      81f
+80: lea     44(%rdx), %rax
+    cmp     %rdi, %rax
+    ja      81f
+    cmp     %rcx, 8(%rsi,%rdx)
+    jne     801f
+    add     36(%rsi,%rdx), %r8
+801: add    $44, %rdx
+    jmp     80b
+81:
+.endif
+    xor     %eax, %eax
+    test    %r8, %r8
+    cmovs   %rax, %r8
+    mov     32(%r12), %rax
+    mov     %r8, (%rax)
+    mov     24(%r12), %rdi                  # execution_payload_value: the result's block_value, else 0
+    xorps   %xmm0, %xmm0
+    movdqu  %xmm0, (%rdi)
+    movdqu  %xmm0, 16(%rdi)
+.if FORK >= FORK_CAPELLA
+    cmpq    $0, (L + 8)(%rsp)
+    je      82f
+    mov     16(%r12), %rsi
+    mov     8(%rsi), %rax
+    lea     4(%rsi,%rax), %rsi
+    COPY32  %rdi, %rsi
+82:
+.endif
+.if FORK >= FORK_DENEB
+    lea     L(%rsp), %rdi                   # BlockContents: the block, the bundle's proofs and blobs
+    call    produce_contents
+    test    %rax, %rax
+    jnz     98f
+.endif
+    xor     %eax, %eax
+99: LEAVE 288
+96: mov     $LANTERN_INVALID_ENCODING, %eax
+    LEAVE 288
+97: mov     $LANTERN_INVALID_VALIDATOR_INDEX, %eax
+    LEAVE 288
+98: mov     (L + 80)(%rsp), %rcx
+    mov     %rcx, (%r13)
+    mov     $LANTERN_BUFFER_TOO_SMALL, %eax
+    LEAVE 288
+SPEC_END node_produce_block
+
+/* L0: rax = 0 when rsi bytes from rdi fit in the ByteList r14, else 1. Uses rcx. */
+LOCAL_FUNCTION produce_room
+    UNWIND_END_PROLOGUE
+    mov     (%r14), %rcx
+    add     %r14, %rcx
+    lea     (%rdi,%rsi), %rax
+    cmp     %rcx, %rax
+    seta    %al
+    movzbl  %al, %eax
+    ret
+END_FUNCTION produce_room
+
+/*
+ * L0: (index rdi, record rsi) -> rax = 1 when the index is in both attestations of the attester
+ * slashing whose SSZ bytes follow the draft record rsi, else 0. Uses rcx, rdx, rsi, r8-r11.
+ */
+LOCAL_FUNCTION produce_in_slashing
+    UNWIND_END_PROLOGUE
+    mov     8(%rsi), %r8                    # its length
+    add     $16, %rsi
+    cmp     $8, %r8
+    jb      9f
+    mov     (%rsi), %ecx                    # the attestations: [o1, o2), then [o2, end)
+    mov     4(%rsi), %r10d
+    mov     %r10, %rdx
+    xor     %r11d, %r11d
+1:  cmp     %rdx, %rcx
+    jae     9f
+    mov     (%rsi,%rcx), %eax               # its indices, from its offset
+    add     %rcx, %rax
+2:  lea     8(%rax), %rcx
+    cmp     %rdx, %rcx
+    ja      9f
+    cmp     %rdi, (%rsi,%rax)
+    je      3f
+    add     $8, %rax
+    jmp     2b
+3:  test    %r11, %r11                      # in the first: then the second
+    jnz     4f
+    mov     $1, %r11d
+    mov     %r10, %rcx
+    mov     %r8, %rdx
+    jmp     1b
+4:  mov     $1, %eax
+    ret
+9:  xor     %eax, %eax
+    ret
+END_FUNCTION produce_in_slashing
+
+/*
+ * L2: (topic rdi, write position rsi) -> rax = 0, or 1 for a short out; rdx = the write position.
+ * The SSZ bytes of the draft's records of the topic in their order, back to back. rbx the topic,
+ * r12 a record, r13 the records' end, r15 the position.
+ */
+LOCAL_FUNCTION produce_records
+    ENTER 0
+    mov     %rdi, %rbx
+    mov     %rsi, %r15
+    mov     ProduceDraft_ops(%rbp), %rax
+    lea     PRODUCE_DRAFT_OPS(%rbp), %r12
+    lea     (%r12,%rax), %r13
+1:  cmp     %r13, %r12
+    jae     8f
+    cmp     %rbx, (%r12)
+    jne     5f
+    mov     %r15, %rdi
+    mov     8(%r12), %rsi
+    call    produce_room
+    test    %rax, %rax
+    jnz     9f
+    mov     %r15, %rdi
+    lea     16(%r12), %rsi
+    mov     8(%r12), %rdx
+    add     %rdx, %r15
+    call    lantern_copy
+5:  mov     8(%r12), %rax
+    add     $(16 + 7), %rax
+    and     $-8, %rax
+    add     %rax, %r12
+    jmp     1b
+8:  xor     %eax, %eax
+    mov     %r15, %rdx
+    LEAVE 0
+9:  mov     $1, %eax
+    mov     %r15, %rdx
+    LEAVE 0
+END_FUNCTION produce_records
+
+/*
+ * L2: (write position rdi) -> rax = 0, or 1 for a short out; rdx = the write position. The draft's
+ * attester slashing records as an SSZ list: their offsets, then their bytes. rbx the next offset,
+ * r12 a record, r13 the end, r15 the position; S7 the next offset's place.
+ */
+LOCAL_FUNCTION produce_attester_slashings
+    ENTER 0
+    mov     %rdi, %r15
+    mov     ProduceDraft_ops(%rbp), %rax
+    lea     PRODUCE_DRAFT_OPS(%rbp), %r12
+    lea     (%r12,%rax), %r13
+    xor     %ebx, %ebx                      # their count
+    mov     %r12, %rcx
+1:  cmp     %r13, %rcx
+    jae     2f
+    cmpq    $GOSSIP_ATTESTER_SLASHING, (%rcx)
+    jne     11f
+    inc     %rbx
+11: mov     8(%rcx), %rax
+    add     $(16 + 7), %rax
+    and     $-8, %rax
+    add     %rax, %rcx
+    jmp     1b
+2:  shl     $2, %rbx                        # the offsets, the first slashing after them
+    mov     %r15, %rdi
+    mov     %rbx, %rsi
+    call    produce_room
+    test    %rax, %rax
+    jnz     9f
+    mov     %r15, S7(%rsp)
+    add     %rbx, %r15
+3:  cmp     %r13, %r12
+    jae     8f
+    cmpq    $GOSSIP_ATTESTER_SLASHING, (%r12)
+    jne     4f
+    mov     S7(%rsp), %rax
+    mov     %ebx, (%rax)
+    addq    $4, S7(%rsp)
+    add     8(%r12), %rbx
+    mov     %r15, %rdi
+    mov     8(%r12), %rsi
+    call    produce_room
+    test    %rax, %rax
+    jnz     9f
+    mov     %r15, %rdi
+    lea     16(%r12), %rsi
+    mov     8(%r12), %rdx
+    add     %rdx, %r15
+    call    lantern_copy
+4:  mov     8(%r12), %rax
+    add     $(16 + 7), %rax
+    and     $-8, %rax
+    add     %rax, %r12
+    jmp     3b
+8:  xor     %eax, %eax
+    mov     %r15, %rdx
+    LEAVE 0
+9:  mov     $1, %eax
+    mov     %r15, %rdx
+    LEAVE 0
+END_FUNCTION produce_attester_slashings
+
+/*
+ * L1: (index rdi, records rsi, their end rdx) -> rax = 1 when a proposer slashing record of
+ * [rsi, rdx) has the index as its proposer, or an attester slashing record has it in both
+ * attestations; else 0. rbx the index, rbp a record, r12 the end.
+ */
+LOCAL_FUNCTION produce_slashed
+    ENTER 0
+    mov     %rdi, %rbx
+    mov     %rsi, %rbp
+    mov     %rdx, %r12
+1:  cmp     %r12, %rbp
+    jae     8f
+    mov     (%rbp), %rax
+    cmp     $GOSSIP_PROPOSER_SLASHING, %rax
+    jne     2f
+    cmp     %rbx, (16 + 8)(%rbp)            # signed_header_1.message.proposer_index
+    je      9f
+    jmp     3f
+2:  cmp     $GOSSIP_ATTESTER_SLASHING, %rax
+    jne     3f
+    mov     %rbx, %rdi
+    mov     %rbp, %rsi
+    call    produce_in_slashing
+    test    %rax, %rax
+    jnz     9f
+3:  mov     8(%rbp), %rax
+    add     $(16 + 7), %rax
+    and     $-8, %rax
+    add     %rax, %rbp
+    jmp     1b
+8:  xor     %eax, %eax
+    LEAVE 0
+9:  mov     $1, %eax
+    LEAVE 0
+END_FUNCTION produce_slashed
+
+/*
+ * L1: (the attester slashing's bytes rdi, their count rsi, records rdx, their end rcx) -> rax = 1
+ * when an index is in both attestations (whose indices are sorted, as is_valid_indexed_attestation
+ * holds them) and no proposer slashing record of [rdx, rcx) has it as its proposer; else 0. rbx
+ * the bytes, rbp a place in the first list, r12 its end, r13 a place in the second, rsi its end,
+ * r14 the records, r15 their end.
+ */
+LOCAL_FUNCTION produce_takes_slashing
+    ENTER 0
+    mov     %rdi, %rbx
+    mov     %rdx, %r14
+    mov     %rcx, %r15
+    cmp     $8, %rsi
+    jb      8f
+    mov     (%rbx), %eax                    # the attestations: [o1, o2), [o2, count)
+    mov     4(%rbx), %ecx
+    cmp     %rcx, %rax
+    ja      8f
+    cmp     %rsi, %rcx
+    ja      8f
+    lea     228(%rax), %rdx
+    cmp     %rcx, %rdx
+    ja      8f
+    lea     228(%rcx), %rdx
+    cmp     %rsi, %rdx
+    ja      8f
+    mov     (%rbx,%rax), %edx               # each one's indices: from its offset to its end
+    lea     (%rax,%rdx), %rbp
+    mov     %rcx, %r12
+    mov     (%rbx,%rcx), %edx
+    lea     (%rcx,%rdx), %r13
+1:  lea     8(%rbp), %rax
+    cmp     %r12, %rax
+    ja      8f
+    lea     8(%r13), %rax
+    cmp     %rsi, %rax
+    ja      8f
+    mov     (%rbx,%rbp), %rax
+    mov     (%rbx,%r13), %rdx
+    cmp     %rdx, %rax
+    jb      2f
+    ja      3f
+    mov     %r14, %rcx                      # in both: a proposer slashing's proposer?
+4:  cmp     %r15, %rcx
+    jae     9f
+    cmpq    $GOSSIP_PROPOSER_SLASHING, (%rcx)
+    jne     5f
+    cmp     %rax, (16 + 8)(%rcx)
+    je      6f
+5:  mov     8(%rcx), %rdx
+    add     $(16 + 7), %rdx
+    and     $-8, %rdx
+    add     %rdx, %rcx
+    jmp     4b
+6:  add     $8, %r13
+2:  add     $8, %rbp
+    jmp     1b
+3:  add     $8, %r13
+    jmp     1b
+8:  xor     %eax, %eax
+    LEAVE 0
+9:  mov     $1, %eax
+    LEAVE 0
+END_FUNCTION produce_takes_slashing
+
+.set PB_COMMITTEE_BITS, (MAX_COMMITTEES_PER_SLOT + 7) / 8
+/* An Attestation's fixed bytes: the bits' offset, data, signature, and from electra committee_bits */
+.if FORK >= FORK_ELECTRA
+.set PB_ATT_COMMITTEE, PB_COMMITTEE_BITS
+.else
+.set PB_ATT_COMMITTEE, 0
+.endif
+.set PB_ATT_FIXED, 228 + PB_ATT_COMMITTEE
+
+/* L0: rax = 1 when the 128 bytes at rdi and rsi are equal, else 0. Uses rcx, rdx. */
+LOCAL_FUNCTION produce_same_data
+    UNWIND_END_PROLOGUE
+    xor     %ecx, %ecx
+1:  mov     (%rdi,%rcx), %rdx
+    cmp     (%rsi,%rcx), %rdx
+    jne     2f
+    add     $8, %rcx
+    cmp     $128, %rcx
+    jb      1b
+    mov     $1, %eax
+    ret
+2:  xor     %eax, %eax
+    ret
+END_FUNCTION produce_same_data
+
+/*
+ * L2: (the block's locals rdi, write position rsi) -> rax = 0, 1 for a short out or scratch, or a
+ * status of crypto_bls_aggregate; rdx = the write position. The draft's aggregates chosen by
+ * data.slot descending, then order, at most the fork's limit; before electra an Attestation of
+ * each, from electra one Attestation for each data of the aggregates of every committee
+ * (compute_on_chain_aggregate). The list: offsets, then the attestations. rbx the aggregates'
+ * count, r12 the aggregates, r13 scratch, r15 the position; S7 the chosen indices (in scratch,
+ * after a flag byte for each aggregate), S8 the chosen count, S9 the chosen aggregate, S10 an
+ * aggregate. Locals: L the scratch size, L+8 an index, L+16 the bits' cursor, L+24 a committee.
+ */
+LOCAL_FUNCTION produce_attestations
+    ENTER 32
+    mov     %rsi, %r15
+    mov     ProduceDraft_aggregates(%rbp), %rbx
+    lea     PRODUCE_DRAFT_AGGREGATES(%rbp), %r12
+    mov     (%r13), %rax                    # the flags and the chosen at the end of scratch
+    mov     %rax, L(%rsp)
+    lea     (8 * PB_MAX_ATTESTATIONS + 7)(%rbx), %rcx
+    and     $-8, %rcx
+    lea     1024(%rcx), %rdx
+    cmp     %rdx, %rax
+    jb      97f
+    sub     %rcx, %rax
+    mov     %rax, (%r13)
+    lea     (%r13,%rax), %rdi
+    mov     %rdi, S7(%rsp)
+    mov     %rbx, %rsi
+    call    lantern_zero
+    mov     S7(%rsp), %rax                  # the chosen indices after the flags
+    add     %rbx, %rax
+    add     $7, %rax
+    and     $-8, %rax
+    mov     %rax, S7(%rsp)
+    movq    $0, S8(%rsp)
+1:  cmpq    $PB_MAX_ATTESTATIONS, S8(%rsp)  # the next: of the highest slot, then the lowest order
+    jae     3f
+    mov     $-1, %r8
+    xor     %ecx, %ecx
+    xor     %r9d, %r9d                      # the best's slot
+    mov     (%r13), %rsi
+    add     %r13, %rsi                      # the flags
+2:  cmp     %rbx, %rcx
+    jae     21f
+    cmpb    $0, (%rsi,%rcx)
+    jne     22f
+    imul    $DraftAggregate__mem, %rcx, %rdx
+    mov     (%r12,%rdx), %rax               # data.slot
+    cmp     $-1, %r8
+    je      23f
+    cmp     %r9, %rax
+    jbe     22f
+23: mov     %rcx, %r8
+    mov     %rax, %r9
+22: inc     %rcx
+    jmp     2b
+21: cmp     $-1, %r8
+    je      3f
+    mov     S7(%rsp), %rax
+    mov     S8(%rsp), %rcx
+    mov     %r8, (%rax,%rcx,8)
+    incq    S8(%rsp)
+    movb    $1, (%rsi,%r8)                  # chosen: its flag, from electra those of its data too
+.if FORK >= FORK_ELECTRA
+    imul    $DraftAggregate__mem, %r8, %rdi
+    add     %r12, %rdi
+    mov     %rdi, (L + 8)(%rsp)
+    xor     %ecx, %ecx
+24: cmp     %rbx, %rcx
+    jae     1b
+    imul    $DraftAggregate__mem, %rcx, %rsi
+    add     %r12, %rsi
+    mov     (L + 8)(%rsp), %rdi
+    mov     %rcx, (L + 16)(%rsp)
+    call    produce_same_data
+    mov     (L + 16)(%rsp), %rcx
+    test    %rax, %rax
+    jz      25f
+    mov     (%r13), %rsi
+    add     %r13, %rsi
+    movb    $1, (%rsi,%rcx)
+25: inc     %rcx
+    jmp     24b
+.else
+    jmp     1b
+.endif
+3:  mov     S8(%rsp), %rax                  # the offsets: the size of each attestation
+    shl     $2, %rax
+    mov     %rax, (L + 24)(%rsp)
+    mov     %r15, %rdi
+    mov     %rax, %rsi
+    call    produce_room
+    test    %rax, %rax
+    jnz     98f
+    mov     (L + 24)(%rsp), %rax
+    mov     %rax, (L + 16)(%rsp)            # the next offset
+    movq    $0, (L + 8)(%rsp)
+4:  mov     (L + 8)(%rsp), %rcx
+    cmp     S8(%rsp), %rcx
+    jae     5f
+    mov     (L + 16)(%rsp), %rax
+    mov     %eax, (%r15,%rcx,4)
+    mov     S7(%rsp), %rax
+    mov     (%rax,%rcx,8), %rdi
+    call    produce_att_bits
+    add     $(8 + 7), %rax                  # the bits: as many as the length, and the end bit
+    shr     $3, %rax
+    add     $PB_ATT_FIXED, %rax
+    add     %rax, (L + 16)(%rsp)
+    incq    (L + 8)(%rsp)
+    jmp     4b
+5:  add     (L + 24)(%rsp), %r15
+    movq    $0, (L + 8)(%rsp)
+6:  mov     (L + 8)(%rsp), %rcx             # each attestation
+    cmp     S8(%rsp), %rcx
+    jae     8f
+    mov     S7(%rsp), %rax
+    mov     (%rax,%rcx,8), %rdi
+    imul    $DraftAggregate__mem, %rdi, %rax
+    add     %r12, %rax
+    mov     %rax, S9(%rsp)                  # the chosen aggregate
+    call    produce_att_bits
+    add     $(8 + 7), %rax
+    shr     $3, %rax
+    add     $PB_ATT_FIXED, %rax
+    mov     %r15, %rdi
+    mov     %rax, %rsi
+    call    produce_room
+    test    %rax, %rax
+    jnz     98f
+    movl    $PB_ATT_FIXED, (%r15)
+    lea     4(%r15), %rdi                   # data
+    mov     S9(%rsp), %rsi
+    mov     $128, %edx
+    call    lantern_copy
+    lea     132(%r15), %rdi                 # signature: the first's
+    mov     S9(%rsp), %rsi
+    add     $DraftAggregate_signature, %rsi
+    mov     $96, %edx
+    call    lantern_copy
+    mov     (L + 8)(%rsp), %rcx             # from electra the committee bits; the aggregation bits, zero
+    mov     S7(%rsp), %rax
+    mov     (%rax,%rcx,8), %rdi
+    call    produce_att_bits
+    lea     (8 + 7)(%rax), %rsi
+    shr     $3, %rsi
+    add     $PB_ATT_COMMITTEE, %rsi
+    lea     228(%r15), %rdi
+    call    lantern_zero
+    movq    $0, (L + 16)(%rsp)              # the bits' cursor
+.if FORK >= FORK_ELECTRA
+    movq    $0, (L + 24)(%rsp)              # each committee in order: its aggregate of the data
+61: cmpq    $MAX_COMMITTEES_PER_SLOT, (L + 24)(%rsp)
+    jae     7f
+    movq    $0, S10(%rsp)
+62: mov     S10(%rsp), %r8
+    cmp     %rbx, %r8
+    jae     66f
+    imul    $DraftAggregate__mem, %r8, %rsi
+    add     %r12, %rsi
+    mov     (L + 24)(%rsp), %rcx
+    cmp     %rcx, DraftAggregate_committee_index(%rsi)
+    jne     65f
+    mov     S9(%rsp), %rdi
+    call    produce_same_data
+    test    %rax, %rax
+    jz      65f
+    mov     S10(%rsp), %r8
+    imul    $DraftAggregate__mem, %r8, %rsi
+    add     %r12, %rsi
+    mov     (L + 24)(%rsp), %rcx            # its committee's bit
+    bts     %rcx, 228(%r15)
+    cmp     S9(%rsp), %rsi                  # its signature, after the first's
+    je      63f
+    mov     %rsi, S10(%rsp)
+    lea     132(%r15), %rdi
+    add     $DraftAggregate_signature, %rsi
+    mov     %r13, %rdx
+    call    produce_add_signature
+    cmp     $LANTERN_BUFFER_TOO_SMALL, %rax
+    je      97f
+    test    %rax, %rax
+    jnz     96f
+    mov     S10(%rsp), %rsi
+63: lea     (228 + PB_COMMITTEE_BITS)(%r15), %rdi  # its bits at the cursor
+    mov     (L + 16)(%rsp), %rdx
+    call    produce_copy_bits
+    mov     %rax, (L + 16)(%rsp)
+    jmp     66f
+65: incq    S10(%rsp)
+    jmp     62b
+66: incq    (L + 24)(%rsp)
+    jmp     61b
+.else
+    lea     228(%r15), %rdi
+    mov     S9(%rsp), %rsi
+    xor     %edx, %edx
+    call    produce_copy_bits
+    mov     %rax, (L + 16)(%rsp)
+.endif
+7:  mov     (L + 16)(%rsp), %rcx            # the end bit
+    lea     PB_ATT_FIXED(%r15), %rdi
+    bts     %rcx, (%rdi)
+    shr     $3, %rcx
+    lea     1(%rdi,%rcx), %r15
+    incq    (L + 8)(%rsp)
+    jmp     6b
+8:  mov     L(%rsp), %rax
+    mov     %rax, (%r13)
+    xor     %eax, %eax
+    mov     %r15, %rdx
+    LEAVE 32
+96: mov     L(%rsp), %rcx
+    mov     %rcx, (%r13)
+    mov     %r15, %rdx
+    LEAVE 32
+97: mov     L(%rsp), %rax
+    mov     %rax, (%r13)
+98: mov     $1, %eax
+    mov     %r15, %rdx
+    LEAVE 32
+END_FUNCTION produce_attestations
+
+/*
+ * L0: (index rdi) -> rax: the aggregation bits of the attestation of the draft's aggregate rdi, r12
+ * the aggregates, rbx their count: its length; from electra the lengths of the aggregates of its
+ * data. Uses rcx, rdx, rsi, r8, r9.
+ */
+LOCAL_FUNCTION produce_att_bits
+    UNWIND_END_PROLOGUE
+    imul    $DraftAggregate__mem, %rdi, %rsi
+    add     %r12, %rsi
+.if FORK >= FORK_ELECTRA
+    xor     %eax, %eax
+    xor     %ecx, %ecx
+1:  cmp     %rbx, %rcx
+    jae     3f
+    imul    $DraftAggregate__mem, %rcx, %r8
+    add     %r12, %r8
+    xor     %edx, %edx
+2:  mov     (%rsi,%rdx), %r9
+    cmp     (%r8,%rdx), %r9
+    jne     4f
+    add     $8, %rdx
+    cmp     $128, %rdx
+    jb      2b
+    add     DraftAggregate_length(%r8), %rax
+4:  inc     %rcx
+    jmp     1b
+3:  ret
+.else
+    mov     DraftAggregate_length(%rsi), %rax
+    ret
+.endif
+END_FUNCTION produce_att_bits
+
+/* L0: (bits rdi, aggregate rsi, cursor rdx) -> rax: the aggregate's length bits set at bit rdx of rdi on; the cursor after them. Uses rcx, r8. */
+LOCAL_FUNCTION produce_copy_bits
+    UNWIND_END_PROLOGUE
+    mov     DraftAggregate_length(%rsi), %r8
+    xor     %ecx, %ecx
+1:  cmp     %r8, %rcx
+    jae     2f
+    bt      %rcx, DraftAggregate_bits(%rsi)
+    jnc     3f
+    lea     (%rdx,%rcx), %rax
+    bts     %rax, (%rdi)
+3:  inc     %rcx
+    jmp     1b
+2:  lea     (%rdx,%r8), %rax
+    ret
+END_FUNCTION produce_copy_bits
+
+.if FORK >= FORK_DENEB
+/*
+ * L1: (the block's locals rdi) -> rax = 0, or 1 for a short out: out r14 holds the block from
+ * offset 24; it becomes the BlockContents: the block moved 12 bytes on, the three offsets, the
+ * bundle's proofs and blobs (the bundle at locals + 40, its bytes at + 48). Locals: rsp+0 the
+ * bundle, +8 the blobs' offset, +16 the proofs' bytes, +24 the blobs' bytes.
+ */
+LOCAL_FUNCTION produce_contents
+    FRAME 32
+    mov     40(%rdi), %rsi                  # the bundle: its offsets of commitments, proofs, blobs
+    mov     48(%rdi), %rdx
+    cmp     $12, %rdx
+    jb      9f
+    mov     4(%rsi), %r8d
+    mov     8(%rsi), %r9d
+    cmp     %r9, %r8
+    ja      9f
+    cmp     %rdx, %r9
+    ja      9f
+    mov     %rsi, (%rsp)
+    mov     %r9, 8(%rsp)
+    mov     %r9, %r10                       # the proofs' bytes, then the blobs'
+    sub     %r8, %r10
+    mov     %r10, 16(%rsp)
+    mov     %rdx, %r11
+    sub     %r9, %r11
+    mov     %r11, 24(%rsp)
+    mov     16(%r14), %rcx                  # the block's
+    lea     12(%rcx,%r10), %rax
+    add     %r11, %rax
+    mov     (%r14), %rdx
+    sub     $24, %rdx
+    cmp     %rdx, %rax
+    ja      9f
+    mov     %rax, 16(%r14)
+    lea     24(%r14), %rdi                  # the block on by 12, from its end
+    mov     %rcx, %rax
+1:  test    %rax, %rax
+    jz      2f
+    dec     %rax
+    movzbl  (%rdi,%rax), %edx
+    mov     %dl, 12(%rdi,%rax)
+    jmp     1b
+2:  movl    $12, (%rdi)
+    lea     12(%rcx), %rax
+    mov     %eax, 4(%rdi)
+    add     16(%rsp), %rax
+    mov     %eax, 8(%rdi)
+    lea     12(%rdi,%rcx), %rdi             # the proofs, then the blobs
+    mov     (%rsp), %rsi
+    add     %r8, %rsi
+    mov     16(%rsp), %rdx
+    call    lantern_copy
+    mov     16(%r14), %rcx
+    lea     24(%r14,%rcx), %rdi
+    sub     24(%rsp), %rdi
+    mov     (%rsp), %rsi
+    add     8(%rsp), %rsi
+    mov     24(%rsp), %rdx
+    call    lantern_copy
+    xor     %eax, %eax
+    UNFRAME 32
+9:  mov     $1, %eax
+    UNFRAME 32
+END_FUNCTION produce_contents
 .endif
