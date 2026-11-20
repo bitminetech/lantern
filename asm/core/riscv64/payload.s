@@ -253,8 +253,9 @@ SPEC_FUNCTION process_execution_payload
     li      a0, LANTERN_INVALID_BLOB_COUNT
     bgtu    t0, t1, 6f
 .endif
-    ld      t0, 0(s3)                       # assert execution_engine.verify_and_notify_new_payload(...)
+    ld      t0, 0(s3)                       # assert execution_engine.verify_and_notify_new_payload(...): bit 0
     li      a0, LANTERN_INVALID_PAYLOAD
+    andi    t0, t0, 1
     beqz    t0, 6f
     # The new header, built in scratch before the state changes.
     li      t0, HEADER_ROOM

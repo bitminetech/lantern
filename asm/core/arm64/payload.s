@@ -257,9 +257,9 @@ SPEC_FUNCTION process_execution_payload
     mov     x0, #LANTERN_INVALID_BLOB_COUNT
     b.hi    6f
 .endif
-    ldr     x9, [x21]                       /* assert execution_engine.verify_and_notify_new_payload(...) */
+    ldr     x9, [x21]                       /* assert execution_engine.verify_and_notify_new_payload(...): bit 0 */
     mov     x0, #LANTERN_INVALID_PAYLOAD
-    cbz     x9, 6f
+    tbz     x9, #0, 6f
     /* The new header, built in scratch before the state changes. */
     MOVQ    x9, HEADER_ROOM
     sub     x9, x27, x9
