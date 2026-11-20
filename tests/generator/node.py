@@ -390,7 +390,7 @@ POOL_GETS = ("getPoolVoluntaryExits", "getPoolProposerSlashings", "getPoolAttest
              "getPoolBLSToExecutionChanges", "getPoolAttestationsV2")
 POOL_POSTS = ("submitPoolVoluntaryExit", "submitPoolProposerSlashings", "submitPoolAttesterSlashingsV2",
               "submitPoolBLSToExecutionChange", "submitPoolAttestationsV2", "publishAggregateAndProofsV2",
-              "submitPoolSyncCommitteeSignatures")
+              "submitPoolSyncCommitteeSignatures", "publishContributionAndProofs")
 PENDING = {"getPendingDeposits": "pending_deposits", "getPendingPartialWithdrawals": "pending_partial_withdrawals",
            "getPendingConsolidations": "pending_consolidations"}
 ANSWERED = ("getHealth", "getNetworkIdentity", "getNodeVersion", "getSyncingStatus", "getPeerCount", "getGenesis",
@@ -1043,7 +1043,8 @@ def pool_requests(spec, fork, v, by_name, add):
     epoch = int(spec.get_current_epoch(state))
     capella = FORKS.index(fork) >= FORKS.index("capella")
     electra = FORKS.index(fork) >= FORKS.index("electra")
-    pool = {"exit": [], "proposer": [], "attester": [], "bls": [], "attestation": [], "aggregate": [], "sync": []}
+    pool = {"exit": [], "proposer": [], "attester": [], "bls": [], "attestation": [], "aggregate": [], "sync": [],
+            "contribution": []}
 
     def validate(kind, op):
         if kind == "exit":
@@ -1056,6 +1057,9 @@ def pool_requests(spec, fork, v, by_name, add):
             return gossip_result(spec, spec.validate_beacon_attestation_gossip, seen, store, op, time_ms, subnet_of(op))
         if kind == "aggregate":
             return gossip_result(spec, spec.validate_beacon_aggregate_and_proof_gossip, seen, store, op, time_ms)
+        if kind == "contribution":
+            return gossip_result(spec, spec.validate_sync_committee_contribution_and_proof_gossip, seen, store, op,
+                                 time_ms)
         if kind == "sync":  # each subnet of compute_subnets_for_sync_committee, else subnet 0 (beacon-api.md)
             head = spec.get_head(store)
             hs = store.block_states[getattr(head, "root", head)]
@@ -1414,6 +1418,30 @@ def pool_requests(spec, fork, v, by_name, add):
             want=lambda c, k: error(503, close=c, keep_alive=k))
         add("contribution_subcommittee_past", contrib_request(msg_slot, int(spec.SYNC_COMMITTEE_SUBNET_COUNT), v["root"]),
             want=lambda c, k: error(400, close=c, keep_alive=k))
+
+        # publishContributionAndProofs: that contribution by an aggregator of its subcommittee (its
+        # selection proof passes is_sync_committee_aggregator), first signed with another key, then
+        # valid, then again (seen); and of no contribution
+        sub_members = list(dict.fromkeys(by_key[bytes(k)] for p, k in enumerate(committee.pubkeys)
+                                         if p // sub_size == sc))
+        aggregator = next(i for i in sub_members if spec.is_sync_committee_aggregator(
+            spec.get_sync_committee_selection_proof(hs, msg_slot, sc, KEYS.privkeys[i])))
+
+        def signed_contribution(key_index):
+            cp = spec.get_contribution_and_proof(hs, aggregator, contribution, KEYS.privkeys[aggregator])
+            return spec.SignedContributionAndProof(message=cp, signature=spec.get_contribution_and_proof_signature(
+                hs, cp, KEYS.privkeys[key_index]))
+        bad_c, good_c = signed_contribution(aggregator + 1), signed_contribution(aggregator)
+        r3 = submit("contribution_post_other_key", "publishContributionAndProofs", "contribution", [bad_c],
+                    json_list([bad_c]), single=False)
+        submit("contribution_post", "publishContributionAndProofs", "contribution", [good_c], json_list([good_c]),
+               single=False)
+        submit("contribution_post_again", "publishContributionAndProofs", "contribution", [good_c],
+               json_list([good_c]), single=False)
+        submit("contribution_post_no_contribution", "publishContributionAndProofs", "contribution", None,
+               b'[{"message":1}]', single=False)
+        if r3 != ("bad", [0]) or len(pool["contribution"]) != 1:
+            raise RuntimeError("contribution POSTs: the cases need one valid contribution and one rejected")
     # with the store's nodes NOT_VALIDATED (syncing bit 1): the aggregate's beacon_block_root, 503
     add("aggregate_not_validated", agg_request(data_root, first_slot, first_index), syncing=2,
         want=lambda c, k: error(503, close=c, keep_alive=k))
