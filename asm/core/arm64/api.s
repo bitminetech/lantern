@@ -4598,9 +4598,10 @@ LOCAL_FUNCTION node_api_produce
     cmp     x9, #API_TYPE_SSZ
     b.ne    1f
     orr     x28, x28, #API_STREAM_SSZ
-1:  ldr     x9, [x26, #ApiView_look_copy]   /* the state: a copy at the slot */
+1:  ldr     x9, [x26, #ApiView_look_copy]   /* the state: a copy at the slot; busy with its check */
     cbz     x9, 8f
     orr     x28, x28, #API_STREAM_OWN_STATE
+    orr     x28, x28, #API_STREAM_BUSY
     bl      node_api_new
     mov     x22, x0
     mov     x21, x1
@@ -4665,7 +4666,30 @@ LOCAL_FUNCTION node_produce_done
     cmp     x9, #API_OP_PRODUCE_BLOCK_V3
     b.ne    9f
     ldr     x25, [x21, #NodeEvent_result]
+    ldr     x9, [x22, #NodeApi_flags]       /* its work is done */
+    and     x9, x9, #~API_STREAM_BUSY
+    str     x9, [x22, #NodeApi_flags]
     ldr     x9, [x21, #NodeAction_work_kind]
+    cmp     x9, #NODE_WORK_PRODUCE_FOLD     /* a fold: the pool entry's bytes, when they left the pool meanwhile */
+    b.ne    2f
+    ldr     x9, [x22, #NodeApi_flags]
+    tbz     x9, #16, 1f                     /* API_STREAM_PRODUCE_OWN */
+    and     x9, x9, #~API_STREAM_PRODUCE_OWN
+    str     x9, [x22, #NodeApi_flags]
+    ldr     x1, [x22, #NodeApi_root]
+    str     xzr, [x22, #NodeApi_root]
+    mov     x0, #NODE_ACT_BYTES_FREE
+    mov     x2, #0
+    bl      node_ids
+1:  str     xzr, [x22, #NodeApi_root]
+2:  ldr     x9, [x22, #NodeApi_flags]       /* the connection closed meanwhile: the entry ends */
+    tbz     x9, #5, 3f                      /* API_STREAM_GONE */
+    mov     x0, x22
+    bl      node_produce_release
+    mov     x0, x22
+    bl      node_api_end
+    LEAVE 0
+3:  ldr     x9, [x21, #NodeAction_work_kind]
     cmp     x9, #NODE_WORK_PRODUCE_CHECK
     b.ne    20f
     mov     x1, #400                        /* the check: 400 for the reveal, 500 for another */
@@ -4697,18 +4721,8 @@ LOCAL_FUNCTION node_produce_done
     mov     x0, x22
     bl      node_produce_next
     LEAVE 0
-20: cmp     x9, #NODE_WORK_PRODUCE_FOLD
+20: cmp     x9, #NODE_WORK_PRODUCE_FOLD     /* the draft holds the entry, or the rules left it out: the next */
     b.ne    30f
-    ldr     x9, [x22, #NodeApi_flags]       /* the pool entry's bytes, when they left the pool meanwhile */
-    tbz     x9, #16, 21f                    /* API_STREAM_PRODUCE_OWN */
-    and     x9, x9, #~API_STREAM_PRODUCE_OWN
-    str     x9, [x22, #NodeApi_flags]
-    ldr     x1, [x22, #NodeApi_root]
-    str     xzr, [x22, #NodeApi_root]
-    mov     x0, #NODE_ACT_BYTES_FREE
-    mov     x2, #0
-    bl      node_ids
-21: str     xzr, [x22, #NodeApi_root]      /* the draft holds the entry, or the rules left it out: the next */
     mov     x0, x22
     bl      node_produce_next
     LEAVE 0
@@ -4763,6 +4777,9 @@ LOCAL_FUNCTION node_produce_next
     sub     x22, x21, x9
     mov     x11, #NodeApi__mem
     udiv    x22, x22, x11
+    ldr     x9, [x21, #NodeApi_flags]       /* busy with its next work */
+    orr     x9, x9, #API_STREAM_BUSY
+    str     x9, [x21, #NodeApi_flags]
     ldr     x9, [x21, #NodeApi_data]        /* the draft, before the first fold: a zeroed buffer */
     cbnz    x9, 11f
     mov     x0, #NODE_ACT_BYTES_NEW
@@ -4852,6 +4869,7 @@ LOCAL_FUNCTION node_produce_fail
     str     x0, [sp, #16]
     mov     x2, x1
     ldr     x9, [x0, #NodeApi_flags]
+    tbnz    x9, #5, 2f                      /* API_STREAM_GONE: the connection closed, no answer */
     ldr     x0, [x0, #NodeApi_connection]
     mov     x1, #0
     mov     x3, #API_BODY_ERROR
@@ -4861,7 +4879,7 @@ LOCAL_FUNCTION node_produce_fail
     mov     x10, #API_R_KEEP
     csel    x4, x10, xzr, ne
 1:  bl      node_api_send
-    ldr     x0, [sp, #16]
+2:  ldr     x0, [sp, #16]
     bl      node_produce_release
     ldr     x0, [sp, #16]
     bl      node_api_end
@@ -5397,9 +5415,9 @@ LOCAL_FUNCTION node_api_event_done
 9:  UNFRAME 0
 END_FUNCTION node_api_event_done
 
-/* L1: NODE_EV_API_CLOSED of the connection x0: its stream ends, or with a chunk queued takes API_STREAM_GONE. */
+/* L1: NODE_EV_API_CLOSED of the connection x0: its stream ends, or with a chunk or work queued takes API_STREAM_GONE. Locals: L the entry. */
 LOCAL_FUNCTION node_api_closed
-    FRAME 0
+    FRAME 16
     bl      node_api_find
     cmn     x0, #1
     b.eq    9f
@@ -5408,9 +5426,15 @@ LOCAL_FUNCTION node_api_closed
     orr     x9, x9, #API_STREAM_GONE
     str     x9, [x1, #NodeApi_flags]
     b       9f
-1:  mov     x0, x1
+1:  str     x1, [sp, #16]
+    ldr     x9, [x1, #NodeApi_op]           /* a produceBlockV3: its draft and engine result go too */
+    cmp     x9, #API_OP_PRODUCE_BLOCK_V3
+    b.ne    2f
+    mov     x0, x1
+    bl      node_produce_release
+2:  ldr     x0, [sp, #16]
     bl      node_api_end
-9:  UNFRAME 0
+9:  UNFRAME 16
 END_FUNCTION node_api_closed
 
 /*

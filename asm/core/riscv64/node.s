@@ -1482,7 +1482,10 @@ LOCAL_FUNCTION node_produce_engine
     call    node_produce_fail
     li      a0, 0
     LEAVE 0
-4:  li      t0, ENGINE_METHOD_GET_PAYLOAD
+4:  ld      t0, NodeApi_flags(s3)           # busy with its getPayload
+    ori     t0, t0, API_STREAM_BUSY
+    sd      t0, NodeApi_flags(s3)
+    li      t0, ENGINE_METHOD_GET_PAYLOAD
     sd      t0, Node_engine_method(s1)
     sd      s4, Node_engine_target(s1)
     ld      a5, Node_engine_id(s1)
@@ -1679,7 +1682,17 @@ LOCAL_FUNCTION node_produce_payload
     ld      t0, NodeApi_member(s4)
     li      t1, NODE_PRODUCE_PAYLOAD
     bne     t0, t1, 9f
-    ld      t0, EngineResponse_result_offset(a1)    # the body becomes the result's bytes
+    ld      t0, NodeApi_flags(s4)           # its call is done; the connection closed meanwhile: the entry ends
+    andi    t0, t0, ~API_STREAM_BUSY
+    sd      t0, NodeApi_flags(s4)
+    andi    t0, t0, API_STREAM_GONE
+    beqz    t0, 1f
+    mv      a0, s4
+    call    node_produce_release
+    mv      a0, s4
+    call    node_api_end
+    LEAVE 128
+1:  ld      t0, EngineResponse_result_offset(a1)    # the body becomes the result's bytes
     ld      t1, EngineResponse_result_length(a1)
     ld      t2, 8(s3)
     add     t2, t2, t0
