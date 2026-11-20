@@ -20,9 +20,9 @@ route_t_any:
     .ascii  "*/*"
 .set api_t_any_len, 3
 route_k_ids:
-    .ascii  "\"ids\""
+    .ascii  "ids"
 route_k_statuses:
-    .ascii  "\"statuses\""
+    .ascii  "statuses"
 route_k_null:
     .ascii  "null"
 
@@ -503,6 +503,112 @@ LOCAL_FUNCTION route_lit
 END_FUNCTION route_lit
 
 /*
+ * L0: the JSON string at x21 (before x25), RFC 8259 section 7: its value, each escape decoded (a \u
+ * of 0x80 or more as the byte 0x80), into the 200 bytes at x22 + 192; x21 then past it. x0 = 0, or
+ * 1 when it breaks the rules; x1 = the value's length, 201 when it is longer than 200. A leaf. Uses
+ * x9-x13.
+ */
+LOCAL_FUNCTION route_string
+    UNWIND_END_PROLOGUE
+    cmp     x21, x25
+    b.hs    8f
+    ldrb    w9, [x21], #1
+    cmp     w9, #34                         /* " */
+    b.ne    8f
+    add     x10, x22, #192
+    mov     x1, #0
+1:  cmp     x21, x25
+    b.hs    8f
+    ldrb    w9, [x21], #1
+    cmp     w9, #34
+    b.eq    9f
+    cmp     w9, #32
+    b.lo    8f
+    cmp     w9, #92                         /* \ */
+    b.ne    5f
+    cmp     x21, x25                        /* an escape */
+    b.hs    8f
+    ldrb    w9, [x21], #1
+    mov     w11, #34
+    cmp     w9, #34
+    b.eq    4f
+    mov     w11, #92
+    cmp     w9, #92
+    b.eq    4f
+    mov     w11, #47
+    cmp     w9, #47
+    b.eq    4f
+    mov     w11, #8
+    cmp     w9, #'b'
+    b.eq    4f
+    mov     w11, #12
+    cmp     w9, #'f'
+    b.eq    4f
+    mov     w11, #10
+    cmp     w9, #'n'
+    b.eq    4f
+    mov     w11, #13
+    cmp     w9, #'r'
+    b.eq    4f
+    mov     w11, #9
+    cmp     w9, #'t'
+    b.eq    4f
+    cmp     w9, #'u'
+    b.ne    8f
+    sub     x12, x25, x21                   /* \u and 4 hex digits */
+    cmp     x12, #4
+    b.lo    8f
+    mov     w11, #0
+    mov     x13, #4
+2:  ldrb    w9, [x21], #1
+    ROUTE_HEX w9, w12, 8f
+    orr     w11, w9, w11, lsl #4
+    subs    x13, x13, #1
+    b.ne    2b
+    cmp     w11, #0x80
+    mov     w12, #0x80
+    csel    w11, w12, w11, hs
+4:  mov     w9, w11
+5:  cmp     x1, #200                        /* the byte joins the value */
+    b.hs    6f
+    strb    w9, [x10, x1]
+6:  add     x1, x1, #1
+    b       1b
+9:  cmp     x1, #200
+    mov     x9, #201
+    csel    x1, x9, x1, hi
+    mov     x0, #0
+    ret
+8:  mov     x0, #1
+    ret
+END_FUNCTION route_string
+
+/* L0: x0 = API_PARAM_ID when the x1 bytes at x22 + 192 are ids, API_PARAM_STATUS when they are statuses, else 0. A leaf. Uses x9-x13. */
+LOCAL_FUNCTION route_key
+    UNWIND_END_PROLOGUE
+    ADDRESS x9, route_k_ids
+    mov     x10, #3
+    mov     x0, #API_PARAM_ID
+    cmp     x1, #3
+    b.eq    1f
+    ADDRESS x9, route_k_statuses
+    mov     x10, #8
+    mov     x0, #API_PARAM_STATUS
+    cmp     x1, #8
+    b.ne    8f
+1:  add     x11, x22, #192
+2:  ldrb    w12, [x9], #1
+    ldrb    w13, [x11], #1
+    cmp     w12, w13
+    b.ne    8f
+    subs    x10, x10, #1
+    b.ne    2b
+    ret
+8:  mov     x0, #0
+    ret
+END_FUNCTION route_key
+
+/*
  * L1: null, or an array of strings, at x21 of a body that ends at x25: each string an item of the
  * parameter x0 (API_PARAM_ID: into the list of out x20, x27 items; API_PARAM_STATUS: its bits), its
  * bit of present (x26) set; x21 then past the value. x0 = 0, or the fault + 1. x22 the locals of
@@ -529,29 +635,16 @@ LOCAL_FUNCTION route_ids_array
     b.ne    2f
     add     x21, x21, #1
     b       7f
-2:  bl      route_ws                        /* a string: no \, no byte below 0x20 */
-    cmp     x21, x25
-    b.hs    8f
-    ldrb    w9, [x21], #1
-    cmp     w9, #34                         /* " */
-    b.ne    8f
-    str     x21, [sp, #24]
-3:  cmp     x21, x25
-    b.hs    8f
-    ldrb    w9, [x21]
-    cmp     w9, #34                         /* " */
-    b.eq    4f
-    cmp     w9, #92                         /* \ */
-    b.eq    8f
-    cmp     w9, #32
-    b.lo    8f
-    add     x21, x21, #1
-    b       3b
-4:  mov     x0, x20                         /* the item */
-    ldp     x1, x2, [sp, #16]
-    sub     x3, x21, x2
+2:  bl      route_ws                        /* a string: its value is the item */
+    bl      route_string
+    cbnz    x0, 8f
+    cmp     x1, #200
+    b.hi    9f
+    mov     x3, x1
+    mov     x0, x20
+    ldr     x1, [sp, #16]
+    add     x2, x22, #192
     add     x4, x22, #128
-    add     x21, x21, #1
     bl      route_value
     cbnz    x0, 9f
     ldr     x9, [sp, #16]
@@ -1091,18 +1184,15 @@ FUNCTION lantern_api_route
     add     x21, x21, #1
     b       58f
 52: bl      route_ws                        /* a member: its key, once */
-    ADDRESS x0, route_k_ids
-    mov     x1, #5
-    bl      route_lit
-    mov     x28, #API_PARAM_ID
+    bl      route_string
+    cbnz    x0, 400f
+    bl      route_key
+    mov     x28, x0
+    cbz     x28, 400f
+    cmp     x28, #API_PARAM_ID
     mov     x12, #1
-    cbnz    x0, 53f
-    ADDRESS x0, route_k_statuses
-    mov     x1, #10
-    bl      route_lit
-    cbz     x0, 400f
-    mov     x28, #API_PARAM_STATUS
-    mov     x12, #2
+    mov     x9, #2
+    csel    x12, x12, x9, eq
 53: ldr     x9, [sp, #(L + 96)]
     tst     x9, x12
     b.ne    400f

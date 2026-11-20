@@ -20,9 +20,9 @@ route_t_any:
     .ascii  "*/*"
 .set route_t_any_len, 3
 route_k_ids:
-    .ascii  "\"ids\""
+    .ascii  "ids"
 route_k_statuses:
-    .ascii  "\"statuses\""
+    .ascii  "statuses"
 route_k_null:
     .ascii  "null"
 
@@ -509,6 +509,116 @@ LOCAL_FUNCTION route_lit
     ret
 END_FUNCTION route_lit
 
+# L0: the JSON string at r12 (before r13), RFC 8259 section 7: its value, each escape decoded (a \u of
+# 0x80 or more as the byte 0x80), into the 200 bytes at r15 + L + 192; r12 then past it. eax = 0, or
+# 1 when it breaks the rules; rcx = the value's length, 201 when it is longer than 200. A leaf. Uses
+# rax, rcx, rdx, rsi, r8.
+LOCAL_FUNCTION route_string
+    UNWIND_END_PROLOGUE
+    cmp     %r13, %r12
+    jae     8f
+    movzbl  (%r12), %eax
+    inc     %r12
+    cmp     $0x22, %eax
+    jne     8f
+    xor     %ecx, %ecx
+1:  cmp     %r13, %r12
+    jae     8f
+    movzbl  (%r12), %eax
+    inc     %r12
+    cmp     $0x22, %eax
+    je      9f
+    cmp     $32, %eax
+    jb      8f
+    cmp     $0x5c, %eax
+    jne     5f
+    cmp     %r13, %r12                      # an escape
+    jae     8f
+    movzbl  (%r12), %eax
+    inc     %r12
+    mov     $0x22, %edx
+    cmp     $0x22, %eax
+    je      4f
+    mov     $0x5c, %edx
+    cmp     $0x5c, %eax
+    je      4f
+    mov     $0x2f, %edx
+    cmp     $0x2f, %eax
+    je      4f
+    mov     $8, %edx
+    cmp     $'b', %eax
+    je      4f
+    mov     $12, %edx
+    cmp     $'f', %eax
+    je      4f
+    mov     $10, %edx
+    cmp     $'n', %eax
+    je      4f
+    mov     $13, %edx
+    cmp     $'r', %eax
+    je      4f
+    mov     $9, %edx
+    cmp     $'t', %eax
+    je      4f
+    cmp     $'u', %eax
+    jne     8f
+    mov     %r13, %rsi                      # \u and 4 hex digits
+    sub     %r12, %rsi
+    cmp     $4, %rsi
+    jb      8f
+    xor     %edx, %edx
+    mov     $4, %r8d
+2:  movzbl  (%r12), %eax
+    inc     %r12
+    ROUTE_HEX %eax, %esi, 8f
+    shl     $4, %edx
+    or      %eax, %edx
+    dec     %r8d
+    jnz     2b
+    cmp     $0x80, %edx
+    jb      4f
+    mov     $0x80, %edx
+4:  mov     %edx, %eax
+5:  cmp     $200, %rcx                      # the byte joins the value
+    jae     6f
+    mov     %al, (L + 192)(%r15,%rcx)
+6:  inc     %rcx
+    jmp     1b
+9:  cmp     $200, %rcx
+    jbe     91f
+    mov     $201, %ecx
+91: xor     %eax, %eax
+    ret
+8:  mov     $1, %eax
+    ret
+END_FUNCTION route_string
+
+# L0: eax = API_PARAM_ID when the rcx bytes at r15 + L + 192 are ids, API_PARAM_STATUS when they are statuses, else 0. A leaf. Uses rax, rdx, rsi, rdi, r8.
+LOCAL_FUNCTION route_key
+    UNWIND_END_PROLOGUE
+    lea     route_k_ids(%rip), %rsi
+    mov     $3, %edx
+    mov     $API_PARAM_ID, %eax
+    cmp     $3, %rcx
+    je      1f
+    lea     route_k_statuses(%rip), %rsi
+    mov     $8, %edx
+    mov     $API_PARAM_STATUS, %eax
+    cmp     $8, %rcx
+    jne     8f
+1:  lea     (L + 192)(%r15), %rdi
+2:  movzbl  (%rsi), %r8d
+    cmp     (%rdi), %r8b
+    jne     8f
+    inc     %rsi
+    inc     %rdi
+    dec     %edx
+    jnz     2b
+    ret
+8:  xor     %eax, %eax
+    ret
+END_FUNCTION route_key
+
 # L1: null, or an array of strings, at r12 of a body that ends at r13: each string an item of the
 # parameter rdi (API_PARAM_ID: into the list of out rbp; API_PARAM_STATUS: its bits), its bit of
 # present set; r12 then past the value. rax = 0, or the fault + 1. r15 the rsp of
@@ -535,32 +645,16 @@ LOCAL_FUNCTION route_ids_array
     jne     2f
     inc     %r12
     jmp     7f
-2:  call    route_ws                        # a string: no backslash, no byte below 0x20
-    cmp     %r13, %r12
-    jae     8f
-    movzbl  (%r12), %eax
-    inc     %r12
-    cmp     $0x22, %eax
-    jne     8f
-    mov     %r12, 8(%rsp)
-3:  cmp     %r13, %r12
-    jae     8f
-    movzbl  (%r12), %eax
-    cmp     $0x22, %eax
-    je      4f
-    cmp     $0x5c, %eax
-    je      8f
-    cmp     $32, %eax
-    jb      8f
-    inc     %r12
-    jmp     3b
-4:  mov     %rbp, %rdi                      # the item
+2:  call    route_ws                        # a string: its value is the item
+    call    route_string
+    test    %eax, %eax
+    jnz     8f
+    cmp     $200, %rcx
+    ja      9f
+    mov     %rbp, %rdi
     mov     (%rsp), %rsi
-    mov     8(%rsp), %rdx
-    mov     %r12, %rcx
-    sub     %rdx, %rcx
+    lea     (L + 192)(%r15), %rdx
     lea     (L + 128)(%r15), %r8
-    inc     %r12
     call    route_value
     test    %eax, %eax
     jnz     9f
@@ -1137,19 +1231,16 @@ FUNCTION lantern_api_route
     inc     %r12
     jmp     58f
 52: call    route_ws                        # a member: its key, once
-    lea     route_k_ids(%rip), %rdi
-    mov     $5, %esi
-    call    route_lit
-    movq    $API_PARAM_ID, S10(%rsp)
-    mov     $1, %ecx
+    call    route_string
     test    %eax, %eax
-    jnz     53f
-    lea     route_k_statuses(%rip), %rdi
-    mov     $10, %esi
-    call    route_lit
+    jnz     400f
+    call    route_key
     test    %eax, %eax
     jz      400f
-    movq    $API_PARAM_STATUS, S10(%rsp)
+    mov     %rax, S10(%rsp)
+    mov     $1, %ecx
+    cmp     $API_PARAM_ID, %eax
+    je      53f
     mov     $2, %ecx
 53: test    %rcx, (L + 96)(%rsp)
     jnz     400f

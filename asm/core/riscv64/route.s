@@ -20,9 +20,9 @@ route_t_any:
     .ascii  "*/*"
 .set route_t_any_len, 3
 route_k_ids:
-    .ascii  "\"ids\""
+    .ascii  "ids"
 route_k_statuses:
-    .ascii  "\"statuses\""
+    .ascii  "statuses"
 route_k_null:
     .ascii  "null"
 
@@ -659,6 +659,112 @@ LOCAL_FUNCTION route_lit
 END_FUNCTION route_lit
 
 /*
+ * L0: the JSON string at s3 (before s4), RFC 8259 section 7: its value, each escape decoded (a \u
+ * of 0x80 or more as the byte 0x80), into the 200 bytes at s6 + L + 192; s3 then past it. a0 = 0,
+ * or 1 when it breaks the rules; a1 = the value's length, 201 when it is longer than 200. A leaf.
+ * Uses t0-t3.
+ */
+LOCAL_FUNCTION route_string
+    UNWIND_END_PROLOGUE
+    bgeu    s3, s4, 8f
+    lbu     t0, 0(s3)
+    addi    s3, s3, 1
+    li      t1, 0x22
+    bne     t0, t1, 8f
+    li      a1, 0
+1:  bgeu    s3, s4, 8f
+    lbu     t0, 0(s3)
+    addi    s3, s3, 1
+    li      t1, 0x22
+    beq     t0, t1, 9f
+    li      t1, 32
+    bltu    t0, t1, 8f
+    li      t1, 0x5c
+    bne     t0, t1, 5f
+    bgeu    s3, s4, 8f                      # an escape
+    lbu     t0, 0(s3)
+    addi    s3, s3, 1
+    li      t2, 0x22
+    beq     t0, t2, 4f
+    li      t2, 0x5c
+    beq     t0, t2, 4f
+    li      t2, 0x2f
+    beq     t0, t2, 4f
+    li      t2, 8
+    li      t1, 'b'
+    beq     t0, t1, 4f
+    li      t2, 12
+    li      t1, 'f'
+    beq     t0, t1, 4f
+    li      t2, 10
+    li      t1, 'n'
+    beq     t0, t1, 4f
+    li      t2, 13
+    li      t1, 'r'
+    beq     t0, t1, 4f
+    li      t2, 9
+    li      t1, 't'
+    beq     t0, t1, 4f
+    li      t1, 'u'
+    bne     t0, t1, 8f
+    sub     t1, s4, s3                      # \u and 4 hex digits
+    li      t2, 4
+    bltu    t1, t2, 8f
+    li      t2, 0
+    li      t3, 4
+2:  lbu     t0, 0(s3)
+    addi    s3, s3, 1
+    ROUTE_HEX t0, t1, a0, 8f
+    slli    t2, t2, 4
+    or      t2, t2, t0
+    addi    t3, t3, -1
+    bnez    t3, 2b
+    li      t1, 0x80
+    bltu    t2, t1, 4f
+    mv      t2, t1
+4:  mv      t0, t2
+5:  li      t1, 200                         # the byte joins the value
+    bgeu    a1, t1, 6f
+    add     t1, s6, a1
+    sb      t0, (L + 192)(t1)
+6:  addi    a1, a1, 1
+    j       1b
+9:  li      t1, 200
+    bleu    a1, t1, 91f
+    li      a1, 201
+91: li      a0, 0
+    ret
+8:  li      a0, 1
+    ret
+END_FUNCTION route_string
+
+/* L0: a0 = API_PARAM_ID when the a1 bytes at s6 + L + 192 are ids, API_PARAM_STATUS when they are statuses, else 0. A leaf. Uses t0-t3, a2. */
+LOCAL_FUNCTION route_key
+    UNWIND_END_PROLOGUE
+    lla     t0, route_k_ids
+    li      t1, 3
+    li      a0, API_PARAM_ID
+    li      t2, 3
+    beq     a1, t2, 1f
+    lla     t0, route_k_statuses
+    li      t1, 8
+    li      a0, API_PARAM_STATUS
+    li      t2, 8
+    bne     a1, t2, 8f
+1:  addi    t2, s6, (L + 192)
+2:  lbu     t3, 0(t0)
+    lbu     a2, 0(t2)
+    bne     t3, a2, 8f
+    addi    t0, t0, 1
+    addi    t2, t2, 1
+    addi    t1, t1, -1
+    bnez    t1, 2b
+    ret
+8:  li      a0, 0
+    ret
+END_FUNCTION route_key
+
+/*
  * L1: null, or an array of strings, at s3 of a body that ends at s4: each string an item of the
  * parameter a0 (API_PARAM_ID: into the list of out s2, s9 items; API_PARAM_STATUS: its bits), its
  * bit of present (s8) set; s3 then past the value. a0 = 0, or the fault + 1. s6 the sp of
@@ -684,29 +790,16 @@ LOCAL_FUNCTION route_ids_array
     bne     t0, t1, 2f
     addi    s3, s3, 1
     j       7f
-2:  call    route_ws                        # a string: no backslash, no byte below 0x20
-    bgeu    s3, s4, 8f
-    lbu     t0, 0(s3)
-    addi    s3, s3, 1
-    li      t1, 0x22
-    bne     t0, t1, 8f
-    sd      s3, 8(sp)
-3:  bgeu    s3, s4, 8f
-    lbu     t0, 0(s3)
-    li      t1, 0x22
-    beq     t0, t1, 4f
-    li      t1, 0x5c
-    beq     t0, t1, 8f
-    li      t1, 32
-    bltu    t0, t1, 8f
-    addi    s3, s3, 1
-    j       3b
-4:  mv      a0, s2                          # the item
+2:  call    route_ws                        # a string: its value is the item
+    call    route_string
+    bnez    a0, 8f
+    li      t0, 200
+    bgtu    a1, t0, 9f
+    mv      a3, a1
+    mv      a0, s2
     ld      a1, 0(sp)
-    ld      a2, 8(sp)
-    sub     a3, s3, a2
+    addi    a2, s6, (L + 192)
     addi    a4, s6, (L + 128)
-    addi    s3, s3, 1
     call    route_value
     bnez    a0, 9f
     ld      t0, 0(sp)
@@ -1118,17 +1211,14 @@ FUNCTION lantern_api_route
     addi    s3, s3, 1
     j       58f
 52: call    route_ws                        # a member: its key, once
-    lla     a0, route_k_ids
-    li      a1, 5
-    call    route_lit
-    li      s10, API_PARAM_ID
-    li      s7, 1
-    bnez    a0, 53f
-    lla     a0, route_k_statuses
-    li      a1, 10
-    call    route_lit
+    call    route_string
+    bnez    a0, 400f
+    call    route_key
     beqz    a0, 400f
-    li      s10, API_PARAM_STATUS
+    mv      s10, a0
+    li      s7, 1
+    li      t0, API_PARAM_ID
+    beq     a0, t0, 53f
     li      s7, 2
 53: ld      t0, (L + 96)(sp)
     and     t1, t0, s7

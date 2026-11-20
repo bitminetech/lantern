@@ -218,6 +218,9 @@ def identifier(v, justified):
     return None
 
 
+ESCAPES = {0x22: 0x22, 0x5C: 0x5C, 0x2F: 0x2F, 0x62: 8, 0x66: 12, 0x6E: 10, 0x72: 13, 0x74: 9}
+
+
 def ids_body(body, obj):
     """(ids, statuses) of a body of ids (beacon-api.md): ValidatorRef items and status bits; raises
     ValueError(0) for a body that breaks the JSON rules, ValueError(param) for a bad item."""
@@ -229,18 +232,30 @@ def ids_body(body, obj):
             i += 1
 
     def text():
+        """A string of RFC 8259 section 7: its value, each escape decoded (a \\u of 0x80 or more as 0x80)."""
         nonlocal i
         if i >= len(body) or body[i] != 0x22:
             raise ValueError(0)
-        j = i + 1
-        while j < len(body) and body[j] != 0x22:
-            if body[j] == 0x5C or body[j] < 0x20:
+        i += 1
+        out = bytearray()
+        while True:
+            if i >= len(body) or body[i] < 0x20:
                 raise ValueError(0)
-            j += 1
-        if j >= len(body):
-            raise ValueError(0)
-        s, i = body[i + 1:j], j + 1
-        return s
+            c = body[i]
+            if c == 0x22:
+                i += 1
+                return bytes(out)
+            if c != 0x5C:
+                out.append(c)
+                i += 1
+            elif i + 1 < len(body) and body[i + 1] in ESCAPES:
+                out.append(ESCAPES[body[i + 1]])
+                i += 2
+            elif body[i + 1:i + 2] == b"u" and len(body[i + 2:i + 6]) == 4 and all(x in HEX for x in body[i + 2:i + 6]):
+                out.append(min(int(body[i + 2:i + 6], 16), 0x80))
+                i += 6
+            else:
+                raise ValueError(0)
 
     def array(param):
         nonlocal i
@@ -665,12 +680,17 @@ ID_BODIES_ARRAY = [b"", b"[]", b" [ ] ", b'["1"]', b'["0","18446744073709551615"
                    b'["' + PUBKEY.upper().replace(b"0X", b"0x") + b'","7","7"]', IDS_100, b"null"]
 ID_BODIES_OBJECT = [b"{}", b' { } ', b'{"ids":null,"statuses":null}', b'{"ids":[],"statuses":[]}', b'{"ids":["1","2"]}',
                     b'{"statuses":["active","withdrawal_done"]}', b'{"statuses":["pending_queued"],"ids":["' + PUBKEY + b'"]}',
-                    b'{ "ids" : [ "3" ] , "statuses" : [ "exited" , "pending" ] }', b'{"ids":' + IDS_100 + b"}"]
+                    b'{ "ids" : [ "3" ] , "statuses" : [ "exited" , "pending" ] }', b'{"ids":' + IDS_100 + b"}",
+                    b'{"\\u0069ds":["\\u0031\\u0032","0\\u0078' + PUBKEY[2:] + b'"],"st\\u0061tuses":["active"]}',
+                    b'{"ids":["\\u00311"]}', b'{"statuses":["\\u0061ctive"]}']
 BAD_BODIES = [b'{"ids":["1"', b'{"ids":["1",]}', b'{"ids":[1]}', b'{"ids":["x"]}', b'{"ids":[""]}', b'{"ids":["0x12"]}',
               b'{"ids":["18446744073709551616"]}', b'{"ids":["1"]}x', b'{"ids":["1"]} {}', b'{"ids":["\\u0031"]}',
               b'{"ids":["1\t"]}', b'{"ids":["1"],"ids":["2"]}', b'{"other":[]}', b'{"ids":"1"}', b'{"ids":[["1"]]}',
               b'{"ids":nul}', b'{"statuses":["bogus"]}', b'{"statuses":["Active"]}', b'{"ids":["1"],}', b'{"ids":["1"];',
-              b' ', b'[', b'"1"', b'{"ids":["x"],"statuses":["bogus"]}', b'{"statuses":["bogus"],"ids":["x"]}']
+              b' ', b'[', b'"1"', b'{"ids":["x"],"statuses":["bogus"]}', b'{"statuses":["bogus"],"ids":["x"]}',
+              b'{"ids":["\\x"]}', b'{"ids":["\\u12G4"]}', b'{"ids":["\\u003"]}', b'{"ids":["\\u00e9"]}', b'{"ids":["1\\n"]}',
+              b'{"ids":["\\\\"]}', b'{"ids":["\\"]}', b'{"\\u0069d":["1"]}', b'{"ids":["' + b"1" * 201 + b'"]}',
+              b'{"ids":["\\/1"]}']
 
 
 def cases():
