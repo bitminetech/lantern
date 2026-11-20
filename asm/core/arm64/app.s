@@ -1360,16 +1360,25 @@ LOCAL_FUNCTION app_work
     ccmn    x23, #1, #4, ne
     ccmn    x24, #1, #4, ne
     b.eq    90f
-    cmp     x26, #NODE_WORK_API_CHUNK       /* API_CHUNK: room for a whole chunk */
-    b.ne    1f
-    ldr     x9, [x19, #(APP_WORK_EVENT + 8)]
     MOVQ    x10, NodeEvent_api_bytes + 24 + NODE_API_CHUNK
+    cmp     x26, #NODE_WORK_API_CHUNK       /* API_CHUNK: room for a whole chunk */
+    b.eq    15f
+    cmp     x26, #NODE_WORK_PUBLISH_DECODE  /* PUBLISH_DECODE and PUBLISH_CHECK: room for the bytes of data */
+    b.eq    16f
+    cmp     x26, #NODE_WORK_PUBLISH_CHECK
+    b.ne    1f
+16: cbz     x24, 1f
+    ldr     x10, [x24, #16]
+    add     x10, x10, #(NodeEvent_chunk + 7)
+    and     x10, x10, #~7
+15: ldr     x9, [x19, #(APP_WORK_EVENT + 8)]
     cmp     x9, x10
     b.hs    1f
+    str     x10, [sp, #-16]!
     mov     x0, #APP_WORK_EVENT
     bl      app_unmap
+    ldr     x1, [sp], #16
     mov     x0, #APP_WORK_EVENT
-    MOVQ    x1, NodeEvent_api_bytes + 24 + NODE_API_CHUNK
     bl      app_alloc
     cbz     x0, 91f
 1:  ldr     x9, [x19, #APP_WORK_EVENT]      /* the event's room */
@@ -1418,6 +1427,18 @@ LOCAL_FUNCTION app_work
     b.eq    2f
     cmp     x26, #NODE_WORK_API_EVENT
     b.eq    2f
+    cmp     x26, #NODE_WORK_PREPARE_PAYLOAD
+    b.eq    2f
+    cmp     x26, #NODE_WORK_GET_PAYLOAD
+    b.eq    2f
+    cmp     x26, #NODE_WORK_PRODUCE_BLOCK
+    b.eq    2f
+    cmp     x26, #NODE_WORK_PUBLISH_DECODE
+    b.eq    2f
+    cmp     x26, #NODE_WORK_PUBLISH_SIDECAR
+    b.eq    2f
+    cmp     x26, #NODE_WORK_PUBLISH_CHECK   /* PUBLISH_CHECK: the Seen, and the parent's state */
+    b.eq    31f
     cmp     x26, #NODE_WORK_API_SUBMIT      /* API_SUBMIT: the Seen, and a larger event */
     b.eq    7f
     cmp     x26, #NODE_WORK_GOSSIP          /* GOSSIP: the Seen, and the proposer state */
@@ -1461,6 +1482,10 @@ LOCAL_FUNCTION app_work
     bl      app_regrow
     cbnz    x0, 91f
     b       1b
+31: mov     x0, #2
+    mov     x1, #-1
+    bl      app_grow
+    cbnz    x0, 91f
 4:  cbz     x21, 91f
     mov     x0, x21
     bl      app_regrow

@@ -1466,14 +1466,25 @@ LOCAL_FUNCTION app_work
     je      90f
     cmp     $-1, %r15
     je      90f
+    mov     $(NodeEvent_api_bytes + 24 + NODE_API_CHUNK), %eax
     cmpq    $NODE_WORK_API_CHUNK, S8(%rsp)  # API_CHUNK: room for a whole chunk
+    je      15f
+    cmpq    $NODE_WORK_PUBLISH_DECODE, S8(%rsp)  # PUBLISH_DECODE and PUBLISH_CHECK: room for the bytes of data
+    je      16f
+    cmpq    $NODE_WORK_PUBLISH_CHECK, S8(%rsp)
     jne     1f
-    cmpq    $(NodeEvent_api_bytes + 24 + NODE_API_CHUNK), (APP_WORK_EVENT + 8)(%rbx)
-    jae     1f
+16: test    %r15, %r15
+    jz      1f
+    mov     16(%r15), %rax
+    add     $(NodeEvent_chunk + 7), %rax
+    and     $-8, %rax
+15: cmp     (APP_WORK_EVENT + 8)(%rbx), %rax
+    jbe     1f
+    mov     %rax, S9(%rsp)
     mov     $APP_WORK_EVENT, %edi
     call    app_unmap
     mov     $APP_WORK_EVENT, %edi
-    mov     $(NodeEvent_api_bytes + 24 + NODE_API_CHUNK), %esi
+    mov     S9(%rsp), %rsi
     call    app_alloc
     test    %rax, %rax
     jz      91f
@@ -1531,6 +1542,18 @@ LOCAL_FUNCTION app_work
     je      2f
     cmp     $NODE_WORK_API_EVENT, %rcx
     je      2f
+    cmp     $NODE_WORK_PREPARE_PAYLOAD, %rcx
+    je      2f
+    cmp     $NODE_WORK_GET_PAYLOAD, %rcx
+    je      2f
+    cmp     $NODE_WORK_PRODUCE_BLOCK, %rcx
+    je      2f
+    cmp     $NODE_WORK_PUBLISH_DECODE, %rcx
+    je      2f
+    cmp     $NODE_WORK_PUBLISH_SIDECAR, %rcx
+    je      2f
+    cmp     $NODE_WORK_PUBLISH_CHECK, %rcx  # PUBLISH_CHECK: the Seen, and the parent's state
+    je      31f
     cmp     $NODE_WORK_API_SUBMIT, %rcx     # API_SUBMIT: the Seen, and a larger event
     je      7f
     cmp     $NODE_WORK_GOSSIP, %rcx         # GOSSIP: the Seen, and the proposer state
@@ -1578,6 +1601,11 @@ LOCAL_FUNCTION app_work
     test    %rax, %rax
     jnz     91f
     jmp     1b
+31: mov     $2, %edi
+    mov     $-1, %rsi
+    call    app_grow
+    test    %rax, %rax
+    jnz     91f
 4:  test    %r12, %r12
     jz      91f
     mov     %r12, %rdi
