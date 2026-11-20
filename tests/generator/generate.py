@@ -268,10 +268,10 @@ def main():
                 count, digest = write_file(out / file, list(json_codec.decode_cases(fork, preset, items)))
                 manifest.append((file, count, digest))
                 print(f"{file}: {count} cases")
-                engine = list(json_codec.engine_decode_cases(fork, preset))
-                if engine:
+                engine_items = list(json_codec.engine_decode_cases(fork, preset))
+                if engine_items:
                     file = f"{preset}-{fork}-json-engine_decode.bin"
-                    count, digest = write_file(out / file, engine)
+                    count, digest = write_file(out / file, engine_items)
                     manifest.append((file, count, digest))
                     print(f"{file}: {count} cases")
         count, digest = write_config(out / f"{preset}-config.bin", preset)
