@@ -988,7 +988,8 @@
 .set ApiView_event_state, ApiView_event_slot + 56
 .set ApiView_event_previous, ApiView_event_slot + 88
 .set ApiView_event_current, ApiView_event_slot + 120
-.set ApiView__size, ApiView_event_slot + 152
+.set ApiView_att, ApiView_event_slot + 152      /* produceAttestationData: lantern_node_attestation_data's out, 128 bytes */
+.set ApiView__size, ApiView_att + 128
 .set ApiIdentity_peer_id, 0              /* ApiIdentity (beacon-api.md): texts, each a length and its room */
 .set ApiIdentity_enr, 72
 .set ApiIdentity_p2p_address, 592
@@ -997,6 +998,7 @@
 .set API_IDENTITY_SIZE, 936
 .set API_ANSWER_CLOSE, 1                 /* the answer flags of a NODE_WORK_API_ENCODE's arg, times 256 */
 .set API_ANSWER_HTTP10, 2
+.set API_ANSWER_SSZ, 4                   /* produceAttestationData: the answer is SSZ */
 .set NODE_API_SCRATCH, 8192              /* the step's scratch for a NODE_EV_API, and 4 bytes per byte of its query */
 .set NODE_API_CHUNK, 65536               /* the most bytes of a NODE_ACT_API_SEND of a stream */
 .set NODE_API_FIRST_ROOM, 1024           /* the least room for the first chunk of a stream */

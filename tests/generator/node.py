@@ -361,7 +361,7 @@ POOL_POSTS = ("submitPoolVoluntaryExit", "submitPoolProposerSlashings", "submitP
 ANSWERED = ("getHealth", "getNetworkIdentity", "getNodeVersion", "getSyncingStatus", "getPeerCount", "getGenesis",
             "getBlockHeader", "getStateFinalityCheckpoints", "getBlockV2", "getStateV2", "getBlockRoot", "getStateRoot",
             "getStateFork", "getSpec", "getForkSchedule", "getDepositContract", "getEpochCommittees",
-            "getProposerDuties", "eventstream") + VALIDATOR_OPS
+            "getProposerDuties", "produceAttestationData", "eventstream") + VALIDATOR_OPS
 IDENTITY = (b"16Uiu2HAmPLe7Mzm8TsYUubgCAW1aJoeFScxrLj8ppHFivPo97bUZ",
             b"enr:-Iu4QLm7bZGdAhVwRqZ6Zf3LlnqKsBTnZGOByHQhPMQJ3pV4F3t8L9i5yJOZ0X0hiZ6q4D5V0jB7l8J3ZtYw1JDH9C4BgmlkgnY0gmlwhAoAAAGJc2VjcDI1NmsxoQPKY0yuDUmstAHYpMa2_oxVtw0RW_QAdpzBQA8yWM0xOIN0Y3CCIyg",
             b"/ip4/10.0.0.1/tcp/9000/p2p/16Uiu2HAmPLe7Mzm8TsYUubgCAW1aJoeFScxrLj8ppHFivPo97bUZ",
@@ -380,10 +380,10 @@ def identity_bytes():
     return out
 
 
-def response(code, body=b"", close=False, keep_alive=False, allow=0, reason=True):
+def response(code, body=b"", close=False, keep_alive=False, allow=0, reason=True, ssz=False):
     out = b"HTTP/1.1 %d " % code + (REASONS[code] if reason else b"") + b"\r\n"
     if body:
-        out += b"Content-Type: application/json\r\n"
+        out += b"Content-Type: " + (b"application/octet-stream" if ssz else b"application/json") + b"\r\n"
     out += b"Content-Length: %d\r\n" % len(body)
     if code == 405:
         out += b"Allow: " + ALLOW[allow] + b"\r\n"
@@ -652,6 +652,27 @@ def duties_answer(v, route, kw, syncing):
                     b",".join(items) + b"]}", **kw)
 
 
+def att_data_answer(v, route, kw, syncing):
+    """The answer of produceAttestationData (beacon-api.md): of the state of the chain at the slot."""
+    import api_route
+    from json_codec import to_json
+    spec = v["spec"]
+    if syncing:
+        return error(503, **kw)
+    if route.slot > v["slot"] + SLOTS_AHEAD or route.slot not in v["states"]:
+        return error(400, **kw)
+    s = v["states"][route.slot]
+    epoch = spec.compute_epoch_at_slot(route.slot)
+    root = v["root"]  # the chain is the anchor alone: the state's block
+    target = root if spec.compute_start_slot_at_epoch(epoch) == route.slot else spec.get_block_root(s, epoch)
+    electra = FORKS.index(v["fork"]) >= FORKS.index("electra")
+    data = spec.AttestationData(slot=route.slot, index=0 if electra else route.committee_index, beacon_block_root=root,
+                                source=s.current_justified_checkpoint, target=spec.Checkpoint(epoch=epoch, root=target))
+    if route.response == api_route.SSZ:
+        return response(200, bytes(data.encode_bytes()), ssz=True, **kw)
+    return response(200, b'{"data":' + to_json(data).encode() + b"}", **kw)
+
+
 def stream_head(version, connection):
     """The head of an eventstream answer (beacon-api.md, eventstream)."""
     out = b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nCache-Control: no-cache\r\n"
@@ -665,6 +686,8 @@ def answer(v, name, route, offline, close, keep_alive, syncing=False):
     kw = dict(close=close, keep_alive=keep_alive)
     if name == "getProposerDuties":
         return duties_answer(v, route, kw, syncing)
+    if name == "produceAttestationData":
+        return att_data_answer(v, route, kw, syncing)
 
     current = v["slot"] + SLOTS_AHEAD
     if name == "getHealth":
@@ -765,7 +788,7 @@ class Route:
         self.syncing_status = struct.unpack_from("<Q", out, 240)[0]
         self.validator = bytes(out[120:184])
         self.present = struct.unpack_from("<Q", out, 40)[0]
-        self.epoch, self.slot, self.index = struct.unpack_from("<QQQ", out, 184)
+        self.epoch, self.slot, self.index, self.committee_index = struct.unpack_from("<QQQQ", out, 184)
         self.statuses = struct.unpack_from("<Q", out, 264)[0]
         at, count = struct.unpack_from("<QQ", out, 456)
         self.refs = [bytes(out[at + 64 * k:at + 64 * k + 64]) for k in range(count)]
@@ -1047,6 +1070,16 @@ def api_requests(spec, fork, v, kind="main"):
     for e in range(epoch - 1, current + 3):
         add(f"duties_{e}", api_route.base(duties, path_values={"epoch": b"%d" % e}))
     add("duties_syncing", api_route.base(duties, path_values={"epoch": b"%d" % current}), syncing=True)
+    att = by_name["produceAttestationData"]
+
+    def att_data(slot, index=1, **headers):
+        return api_route.request(att["method"], api_route.fill(att), b"slot=%d&committee_index=%d" % (slot, index), **headers)
+    for slot in range(v["slot"] - 1, v["slot"] + SLOTS_AHEAD + 2):  # below the anchor, each slot to the store's, one past it
+        add(f"att_data_{slot}", att_data(slot))
+    add("att_data_index_max", att_data(v["slot"] + 1, 2**64 - 1))
+    add("att_data_ssz", att_data(v["slot"] + 2, 0, accept=b"application/octet-stream"))
+    add("att_data_http10", att_data(v["slot"] + 2), version=b"HTTP/1.0")
+    add("att_data_syncing", att_data(v["slot"]), syncing=True)
     first = epoch * int(spec.SLOTS_PER_EPOCH)
     for e in range(epoch - 1, epoch + 3):
         add(f"committees_epoch_{e}", api_route.base(committees, [("epoch", b"%d" % e)]))
@@ -1120,6 +1153,7 @@ def api_cases(fork, preset, epoch=ANCHOR_EPOCH):
     kind = "main" if epoch == ANCHOR_EPOCH else "genesis" if epoch == 0 else "late"
     slot_ms0 = int(spec.config.SLOT_DURATION_MS) if hasattr(spec.config, "SLOT_DURATION_MS") else int(spec.config.SECONDS_PER_SLOT) * 1000
     v["block"] = block
+    v["fork"] = fork
     v["time_ms"] = v["genesis_time"] * 1000 + (v["slot"] + SLOTS_AHEAD) * slot_ms0
     reqs = run(spec, schedule(fork), lambda: api_requests(spec, fork, v, kind))
     if fork in ("altair",):  # no execution engine before bellatrix: el_offline stays false

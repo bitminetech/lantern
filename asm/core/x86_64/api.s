@@ -1116,7 +1116,35 @@ LOCAL_FUNCTION api_body
     call    api_failures
     UNFRAME 16
 11: mov     8(%rsp), %rsi
-    cmp     $API_OP_GET_NETWORK_IDENTITY, %rsi
+    cmp     $API_OP_PRODUCE_ATTESTATION_DATA, %rsi
+    jne     12f
+    mov     (%rsp), %rax                    # SSZ: its 128 bytes
+    testq   $API_R_SSZ, 8(%rax)
+    jz      13f
+    lea     ApiView_att(%rbp), %rdi
+    mov     $128, %esi
+    call    api_put
+    UNFRAME 16
+    # {"data":{"slot":…,"index":…,"beacon_block_root":…,"source":…,"target":…}}
+13: API_LIT api_a_slot
+    mov     ApiView_att(%rbp), %rdi
+    call    api_qdec
+    API_LIT api_a_index
+    mov     (ApiView_att + 8)(%rbp), %rdi
+    call    api_qdec
+    API_LIT api_a_root
+    lea     (ApiView_att + 16)(%rbp), %rdi
+    mov     $32, %esi
+    call    api_qhex
+    API_LIT api_a_source
+    lea     (ApiView_att + 48)(%rbp), %rdi
+    call    api_checkpoint
+    API_LIT api_a_target
+    lea     (ApiView_att + 88)(%rbp), %rdi
+    call    api_checkpoint
+    API_LIT api_end2
+    UNFRAME 16
+12: cmp     $API_OP_GET_NETWORK_IDENTITY, %rsi
     jne     2f
     API_LIT api_i_peer_id
     lea     ApiView_peer_id(%rbp), %rdi
@@ -1423,7 +1451,11 @@ LOCAL_FUNCTION api_respond
 2:  API_LIT api_crlf
     cmpq    $0, (L + 16)(%rsp)
     je      3f
+    testq   $API_R_SSZ, (L + 8)(%rsp)
+    jnz     21f
     API_LIT api_type
+    jmp     3f
+21: API_LIT api_octet
 3:  API_LIT api_length
     mov     (L + 16)(%rsp), %rdi
     call    api_dec
@@ -1817,6 +1849,8 @@ LOCAL_FUNCTION node_api_event
     je      67f
     cmp     $API_OP_GET_PROPOSER_DUTIES, %rcx
     je      63f
+    cmp     $API_OP_PRODUCE_ATTESTATION_DATA, %rcx
+    je      59f
     cmp     $API_OP_EVENTSTREAM, %rcx
     je      61f
     cmp     $API_OP_GET_POOL_VOLUNTARY_EXITS, %rcx
@@ -1871,6 +1905,39 @@ LOCAL_FUNCTION node_api_event
     mov     S7(%rsp), %rax
     cmpq    $API_OP_GET_STATE_VALIDATOR, ApiRoute_op(%rax)
     jne     64f
+    jmp     67f
+59: mov     $503, %edx                      # produceAttestationData: 503 while syncing; 400 past the store's slot
+    mov     S8(%rsp), %rax
+    cmpq    $0, ApiView_is_syncing(%rax)
+    jne     80f
+    mov     %rbp, %rdi
+    call    node_store_slot
+    mov     S7(%rsp), %rdi
+    mov     ApiRoute_slot(%rdi), %rcx
+    mov     $400, %edx
+    cmp     %rax, %rcx
+    ja      80f
+    movq    $API_ID_SLOT, ApiRoute_id_kind(%rdi)    # the state of the slot, as a state_id of it; none: 400
+    mov     %rcx, ApiRoute_id_slot(%rdi)
+    mov     S8(%rsp), %rsi
+    call    node_api_state
+    mov     $400, %edx
+    test    %rax, %rax
+    jnz     80f
+    mov     $503, %edx                      # an optimistic block: 503
+    mov     S8(%rsp), %rdi
+    cmpq    $0, ApiView_is_optimistic(%rdi)
+    jne     80f
+    call    node_api_advance
+    mov     S7(%rsp), %rdi                  # its committee index in the work's data
+    add     $ApiRoute_committee_index, %rdi
+    call    node_api_put8
+    mov     S8(%rsp), %rcx
+    mov     %rax, ApiView_look_data(%rcx)
+    mov     S7(%rsp), %rax                  # SSZ: an answer flag
+    cmpq    $API_TYPE_SSZ, ApiRoute_response(%rax)
+    jne     67f
+    or      $API_ANSWER_SSZ, %r12
     jmp     67f
 68: mov     S9(%rsp), %rdi                  # a pool GET: a stream of the pool
     mov     S7(%rsp), %rsi
@@ -1977,10 +2044,12 @@ END_FUNCTION node_api_event
 LOCAL_FUNCTION node_api_done
     ENTER 0
     mov     %rdi, %r12
-    movzbl  NodeAction_arg(%r12), %eax      # getStateValidator: its ids go
+    movzbl  NodeAction_arg(%r12), %eax      # getStateValidator: its ids go; produceAttestationData its index
     cmp     $API_OP_GET_STATE_VALIDATOR, %eax
+    je      3f
+    cmp     $API_OP_PRODUCE_ATTESTATION_DATA, %eax
     jne     2f
-    mov     NodeAction_data(%r12), %rsi
+3:  mov     NodeAction_data(%r12), %rsi
     test    %rsi, %rsi
     jz      2f
     mov     $NODE_ACT_BYTES_FREE, %edi
@@ -2084,6 +2153,8 @@ LOCAL_FUNCTION node_api_run
     je      2f
     cmp     $API_OP_GET_PROPOSER_DUTIES, %eax
     je      2f
+    cmp     $API_OP_PRODUCE_ATTESTATION_DATA, %eax
+    je      2f
     cmp     $API_OP_GET_STATE_FORK, %eax
     jne     8f
 2:  mov     (%r14), %rax                    # the ApiView at the end of scratch, with the work's values
@@ -2131,7 +2202,28 @@ LOCAL_FUNCTION node_api_run
     mov     %r13, ApiView_val_state(%rdi)
     mov     %rax, ApiView_val_index(%rdi)
     jmp     5f
-20: cmpq    $API_OP_GET_PROPOSER_DUTIES, S9(%rsp)
+20: cmpq    $API_OP_PRODUCE_ATTESTATION_DATA, S9(%rsp)
+    jne     25f
+    mov     S7(%rsp), %rax                  # produceAttestationData: lantern_node_attestation_data, its index in data
+    test    %rax, %rax
+    jz      41f
+    cmpq    $8, 16(%rax)
+    jb      41f
+    mov     8(%rax), %rdx
+    mov     (%rax,%rdx), %rdx
+    mov     %r13, %rdi
+    lea     Node_config(%rbx), %rsi
+    mov     %r14, %rcx
+    mov     S8(%rsp), %r8
+    add     $ApiView_att, %r8
+    FORK_CALL node_attestation_data
+    cmp     $LANTERN_BUFFER_TOO_SMALL, %rax
+    je      71f
+    test    %rax, %rax
+    jz      5f
+    mov     %rax, NodeEvent_result(%r15)
+    jmp     9f
+25: cmpq    $API_OP_GET_PROPOSER_DUTIES, S9(%rsp)
     jne     23f
     mov     %r13, %rdi                      # getProposerDuties: lantern_node_proposers
     lea     Node_config(%rbx), %rsi
@@ -2261,7 +2353,11 @@ LOCAL_FUNCTION node_api_run
     test    $API_ANSWER_HTTP10, %al
     jz      51f
     mov     $API_R_KEEP, %r8d
-51: mov     S10(%rsp), %rax
+51: mov     %r8, %rcx                       # SSZ: API_R_SSZ
+    or      $API_R_SSZ, %rcx
+    test    $API_ANSWER_SSZ, %al
+    cmovnz  %rcx, %r8
+    mov     S10(%rsp), %rax
     sub     $NodeEvent_chunk, %rax
     and     $~7, %rax
     cmp     $24, %rax
@@ -2700,6 +2796,8 @@ LOCAL_FUNCTION node_api_encode
     mov     ApiView_look_data(%rcx), %rax
     xor     %ecx, %ecx
     cmp     $API_OP_GET_STATE_VALIDATOR, %rdi
+    cmove   %rax, %rcx
+    cmp     $API_OP_PRODUCE_ATTESTATION_DATA, %rdi
     cmove   %rax, %rcx
 3:  mov     $NODE_WORK_API_ENCODE, %edi
     xor     %edx, %edx
@@ -4424,6 +4522,19 @@ LOCAL_FUNCTION node_api_chunk_run
 END_FUNCTION node_api_chunk_run
 
 /* ------------------------------------------------------------ The pools (beacon-api.md, node.md) */
+
+/* rax = the new id of a NODE_ACT_BYTES_PUT of the 8 bytes at rdi. Locals: a ByteList head whose offset reaches them. */
+LOCAL_FUNCTION node_api_put8
+    FRAME 32
+    mov     %rdi, %rax
+    sub     %rsp, %rax
+    movq    $8, (%rsp)
+    mov     %rax, 8(%rsp)
+    movq    $8, 16(%rsp)
+    mov     %rsp, %rdi
+    call    node_put
+    UNFRAME 32
+END_FUNCTION node_api_put8
 
 /* rax = the gossip topic of the pool POST rdi, or 0. */
 LOCAL_FUNCTION node_submit_topic

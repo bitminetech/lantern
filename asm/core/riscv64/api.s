@@ -1165,7 +1165,36 @@ LOCAL_FUNCTION api_body
     API_LIT api_f_list
     call    api_failures
     UNFRAME 16
-11: li      t0, API_OP_GET_NETWORK_IDENTITY
+11: li      t0, API_OP_PRODUCE_ATTESTATION_DATA
+    bne     s10, t0, 12f
+    ld      t0, 0(sp)                       # SSZ: its 128 bytes
+    ld      t0, 8(t0)
+    andi    t0, t0, API_R_SSZ
+    beqz    t0, 13f
+    ADDQ    a0, s4, ApiView_att
+    li      a1, 128
+    call    api_put
+    UNFRAME 16
+    # {"data":{"slot":…,"index":…,"beacon_block_root":…,"source":…,"target":…}}
+13: API_LIT api_a_slot
+    LDQ     a0, s4, ApiView_att
+    call    api_qdec
+    API_LIT api_a_index
+    LDQ     a0, s4, ApiView_att + 8
+    call    api_qdec
+    API_LIT api_a_root
+    ADDQ    a0, s4, ApiView_att + 16
+    li      a1, 32
+    call    api_qhex
+    API_LIT api_a_source
+    ADDQ    a0, s4, ApiView_att + 48
+    call    api_checkpoint
+    API_LIT api_a_target
+    ADDQ    a0, s4, ApiView_att + 88
+    call    api_checkpoint
+    API_LIT api_end2
+    UNFRAME 16
+12: li      t0, API_OP_GET_NETWORK_IDENTITY
     bne     s10, t0, 2f
     API_LIT api_i_peer_id
     addi    a0, s4, ApiView_peer_id
@@ -1478,7 +1507,12 @@ LOCAL_FUNCTION api_respond
 2:  API_LIT api_crlf
     ld      t0, (L + 16)(sp)
     beqz    t0, 3f
+    ld      t0, (L + 8)(sp)
+    andi    t0, t0, API_R_SSZ
+    bnez    t0, 21f
     API_LIT api_type
+    j       3f
+21: API_LIT api_octet
 3:  API_LIT api_length
     ld      a0, (L + 16)(sp)
     call    api_dec
@@ -1797,8 +1831,9 @@ LOCAL_FUNCTION node_api_event
     sub     t0, t0, a1
     sd      t0, 0(s5)
     add     s8, s5, t0
-    addi    s7, s8, ApiView__size
-    addi    t0, a1, -ApiView__size
+    ADDQ    s7, s8, ApiView__size
+    li      t0, ApiView__size
+    sub     t0, a1, t0
     sd      t0, 0(s7)
     mv      a0, s8
     call    node_api_view
@@ -1873,6 +1908,8 @@ LOCAL_FUNCTION node_api_event
     beq     a3, t0, 67f
     li      t0, API_OP_GET_PROPOSER_DUTIES
     beq     a3, t0, 63f
+    li      t0, API_OP_PRODUCE_ATTESTATION_DATA
+    beq     a3, t0, 59f
     li      t0, API_OP_EVENTSTREAM
     beq     a3, t0, 61f
     li      t0, API_OP_GET_POOL_VOLUNTARY_EXITS
@@ -1920,6 +1957,35 @@ LOCAL_FUNCTION node_api_event
     ld      t0, ApiRoute_op(s7)
     li      t1, API_OP_GET_STATE_VALIDATOR
     bne     t0, t1, 64f
+    j       67f
+59: li      a2, 503                         # produceAttestationData: 503 while syncing; 400 past the store's slot
+    ld      t0, ApiView_is_syncing(s8)
+    bnez    t0, 80f
+    mv      a0, s2
+    call    node_store_slot
+    ld      t1, ApiRoute_slot(s7)
+    li      a2, 400
+    bgtu    t1, a0, 80f
+    li      t0, API_ID_SLOT                 # the state of the slot, as a state_id of it; none: 400
+    sd      t0, ApiRoute_id_kind(s7)
+    sd      t1, ApiRoute_id_slot(s7)
+    mv      a0, s7
+    mv      a1, s8
+    call    node_api_state
+    li      a2, 400
+    bnez    a0, 80f
+    li      a2, 503                         # an optimistic block: 503
+    ld      t0, ApiView_is_optimistic(s8)
+    bnez    t0, 80f
+    mv      a0, s8
+    call    node_api_advance
+    addi    a0, s7, ApiRoute_committee_index    # its committee index in the work's data
+    call    node_api_put8
+    sd      a0, ApiView_look_data(s8)
+    ld      t0, ApiRoute_response(s7)       # SSZ: an answer flag
+    li      t1, API_TYPE_SSZ
+    bne     t0, t1, 67f
+    ori     s3, s3, API_ANSWER_SSZ
     j       67f
 68: mv      a0, s9                          # a pool GET: a stream of the pool
     mv      a1, s7
@@ -2014,11 +2080,13 @@ END_FUNCTION node_api_event
 LOCAL_FUNCTION node_api_done
     ENTER 0
     mv      s3, a0
-    ld      t0, NodeAction_arg(s3)          # getStateValidator: its ids go
+    ld      t0, NodeAction_arg(s3)          # getStateValidator: its ids go; produceAttestationData its index
     andi    t0, t0, 255
     li      t1, API_OP_GET_STATE_VALIDATOR
+    beq     t0, t1, 3f
+    li      t1, API_OP_PRODUCE_ATTESTATION_DATA
     bne     t0, t1, 2f
-    ld      a1, NodeAction_data(s3)
+3:  ld      a1, NodeAction_data(s3)
     beqz    a1, 2f
     li      a0, NODE_ACT_BYTES_FREE
     li      a2, 0
@@ -2118,6 +2186,8 @@ LOCAL_FUNCTION node_api_run
     beq     s9, t2, 2f
     li      t2, API_OP_GET_PROPOSER_DUTIES
     beq     s9, t2, 2f
+    li      t2, API_OP_PRODUCE_ATTESTATION_DATA
+    beq     s9, t2, 2f
     li      t2, API_OP_GET_STATE_FORK
     bne     s9, t2, 8f
 2:  ld      t0, 0(s6)                       # the ApiView at the end of scratch, with the work's values
@@ -2158,7 +2228,26 @@ LOCAL_FUNCTION node_api_run
     sd      s4, ApiView_val_state(s8)
     sd      a0, ApiView_val_index(s8)
     j       5f
-20: li      t0, API_OP_GET_PROPOSER_DUTIES
+20: li      t0, API_OP_PRODUCE_ATTESTATION_DATA
+    bne     s9, t0, 25f
+    beqz    s5, 41f                         # produceAttestationData: lantern_node_attestation_data, its index in data
+    ld      t0, 16(s5)
+    li      t1, 8
+    bltu    t0, t1, 41f
+    ld      t0, 8(s5)
+    add     t0, s5, t0
+    ld      a2, 0(t0)
+    mv      a0, s4
+    addi    a1, s1, Node_config
+    mv      a3, s6
+    ADDQ    a4, s8, ApiView_att
+    FORK_CALL node_attestation_data
+    li      t0, LANTERN_BUFFER_TOO_SMALL
+    beq     a0, t0, 71f
+    beqz    a0, 5f
+    sd      a0, NodeEvent_result(s7)
+    j       9f
+25: li      t0, API_OP_GET_PROPOSER_DUTIES
     bne     s9, t0, 23f
     mv      a0, s4                          # getProposerDuties: lantern_node_proposers
     addi    a1, s1, Node_config
@@ -2277,7 +2366,10 @@ LOCAL_FUNCTION node_api_run
     andi    t1, t0, API_ANSWER_HTTP10
     beqz    t1, 51f
     li      a4, API_R_KEEP
-51: addi    t0, s10, -NodeEvent_chunk
+51: andi    t1, t0, API_ANSWER_SSZ          # SSZ: API_R_SSZ
+    beqz    t1, 53f
+    ori     a4, a4, API_R_SSZ
+53: addi    t0, s10, -NodeEvent_chunk
     andi    t0, t0, -8
     li      t1, 24
     bltu    t0, t1, 71f
@@ -2703,8 +2795,10 @@ LOCAL_FUNCTION node_api_encode
     ld      t0, ApiView_look_data(a3)
     li      a3, 0
     li      t1, API_OP_GET_STATE_VALIDATOR
+    beq     a0, t1, 4f
+    li      t1, API_OP_PRODUCE_ATTESTATION_DATA
     bne     a0, t1, 3f
-    mv      a3, t0
+4:  mv      a3, t0
 3:  li      a0, NODE_WORK_API_ENCODE
     li      a2, 0
     call    node_work
@@ -4426,6 +4520,19 @@ LOCAL_FUNCTION node_api_chunk_run
 END_FUNCTION node_api_chunk_run
 
 # ---------------------------------------------------------------- The pools (beacon-api.md, node.md)
+
+/* a0 = the new id of a NODE_ACT_BYTES_PUT of the 8 bytes at a0. Locals: a ByteList head whose offset reaches them. */
+LOCAL_FUNCTION node_api_put8
+    FRAME 32
+    sub     t0, a0, sp
+    li      t1, 8
+    sd      t1, 0(sp)
+    sd      t0, 8(sp)
+    sd      t1, 16(sp)
+    mv      a0, sp
+    call    node_put
+    UNFRAME 32
+END_FUNCTION node_api_put8
 
 /* a0 = the gossip topic of the pool POST a0, or 0. Uses t0, t1. */
 LOCAL_FUNCTION node_submit_topic

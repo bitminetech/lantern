@@ -474,6 +474,21 @@ api_p_data:
 api_p_version:
     .ascii "\",\"data\":["
 .set api_p_version_len, 10
+api_a_slot:
+    .ascii "{\"data\":{\"slot\":"
+.set api_a_slot_len, 16
+api_a_index:
+    .ascii ",\"index\":"
+.set api_a_index_len, 9
+api_a_root:
+    .ascii ",\"beacon_block_root\":"
+.set api_a_root_len, 21
+api_a_source:
+    .ascii ",\"source\":"
+.set api_a_source_len, 10
+api_a_target:
+    .ascii ",\"target\":"
+.set api_a_target_len, 10
 api_f_list:
     .ascii "\",\"failures\":["
 .set api_f_list_len, 14
@@ -526,3 +541,4 @@ api_codes_end:
 .set API_R_CLOSE, 1                         /* the flags of api_respond; the allow bits from bit 8 */
 .set API_R_KEEP, 2
 .set API_R_NO_REASON, 4
+.set API_R_SSZ, 8                           /* the body is SSZ: Content-Type: application/octet-stream */

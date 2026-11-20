@@ -426,6 +426,51 @@ SPEC_END node_event_roots
 .error "nodehooks: a NODE_VALIDATOR_* epoch offset is not the Validator's"
 .endif
 
+/*
+ * (state, config, index, scratch, out) -> status: the AttestationData of the state's slot, its 128
+ * SSZ bytes in out (node.md, lantern_node_attestation_data). x19 the state, x20 the index, x21 out.
+ * Locals: L lantern_node_event_roots's out (128).
+ */
+SPEC_FUNCTION node_attestation_data
+    ENTER 128
+    mov     x19, x0
+    mov     x20, x2
+    mov     x21, x4
+    mov     x2, x3
+    add     x3, sp, #L
+    bl      lantern_node_event_roots
+    cbnz    x0, 9f
+    LDQ     x9, x19, BeaconState_slot       /* slot, index */
+    str     x9, [x21]
+.if FORK >= FORK_ELECTRA
+    mov     x20, #0
+.endif
+    str     x20, [x21, #8]
+    add     x0, x21, #16                    /* beacon_block_root */
+    add     x1, sp, #L
+    mov     x2, #32
+    bl      lantern_copy
+    add     x0, x21, #48                    /* source: current_justified_checkpoint */
+    ADDQ    x1, x19, BeaconState_current_justified_checkpoint
+    mov     x2, #40
+    bl      lantern_copy
+    LDQ     x9, x19, BeaconState_slot       /* target: the epoch, and its boundary block's root */
+    lsr     x10, x9, #LOG2_SLOTS_PER_EPOCH
+    str     x10, [x21, #88]
+    lsl     x11, x10, #LOG2_SLOTS_PER_EPOCH
+    add     x1, sp, #L
+    cmp     x11, x9
+    b.eq    1f
+    and     x11, x11, #(SLOTS_PER_HISTORICAL_ROOT - 1)
+    ADDQ    x1, x19, BeaconState_block_roots
+    add     x1, x1, x11, lsl #5
+1:  add     x0, x21, #96
+    mov     x2, #32
+    bl      lantern_copy
+    mov     x0, #LANTERN_OK
+9:  LEAVE 128
+SPEC_END node_attestation_data
+
 /* L0: x0 = the fork's TypeDescriptor of the NODE_JSON_* kind x9, or 0. Uses x0. */
 LOCAL_FUNCTION node_type_of_kind
     UNWIND_END_PROLOGUE

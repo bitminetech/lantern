@@ -14,6 +14,7 @@
 - [`lantern_node_block_root`](#function-lantern_node_block_root): the root of a block's SSZ bytes, for one fork.
 - [`lantern_node_proposers`](#function-lantern_node_proposers): the proposers of an epoch and its dependent root, from the state at its first slot, for one fork.
 - [`lantern_node_event_roots`](#function-lantern_node_event_roots): the block root, state root and dependent roots of a block's post-state, for one fork.
+- [`lantern_node_attestation_data`](#function-lantern_node_attestation_data): the `AttestationData` of a state's slot, for one fork.
 - [`lantern_node_attestation`](#function-lantern_node_attestation): on_attestation of an attestation's SSZ bytes, for one fork.
 - [`lantern_node_attester_slashing`](#function-lantern_node_attester_slashing): on_attester_slashing of a slashing's SSZ bytes, for one fork.
 - [`lantern_node_gossip`](#function-lantern_node_gossip): the gossip validation of a message's SSZ bytes, for one fork.
@@ -155,6 +156,7 @@
   - eventstream of `head,block,finalized_checkpoint` over HTTP/1.1, with and without `Connection: close`, and of `block` over HTTP/1.0, with and without `keep-alive`, and a topic of no name (400). For the two streams, the case's `streams` byte of the request is 1: the sends must be the head with `last` 0 and no close; then the runner gives a `NODE_EV_API_CLOSED` of the connection, and the node must hold no `NodeApi` entry.
   - The pools, in the case of the anchor at epoch EPOCHS_PER_HISTORICAL_VECTOR + 6 (past `SHARD_COMMITTEE_PERIOD`), whose validators have the keys of the spec's test helpers and some the BLS withdrawal credentials of other keys of them: submitPoolVoluntaryExit of a valid exit, of it again (seen: 200), of one with another key's signature (400) and of a body of no exit (400); submitPoolProposerSlashings of a valid slashing and of one of two equal headers (400); submitPoolAttesterSlashingsV2 of a valid slashing, and with a fork of another `AttesterSlashing` type (400); submitPoolBLSToExecutionChange of three changes whose second has another key's signature (400, its failure), and of a list with an item of no change (400); then the four pool GETs, each over HTTP/1.1 and HTTP/1.0. The answers come from the gossip validation of the spec module, with a `Seen` the case's requests fill in order, as each request runs twice (the two rooms of the runner). The runner gives the store the node's fork epochs, as the spec module has them, and after each answer holds no other buffers than those of the operations the pool took.
   - getProposerDuties: the epochs from the anchor's epoch - 1 to the epoch of the store's slot + 2, and one while the runner holds `NODE_FLAG_SYNCING` (the case's `syncing` byte of the request); in a third case, an anchor at slot 0, the epochs 0 to 2.
+  - produceAttestationData: each slot from the anchor's - 1 to the store's + 1 with `committee_index` 1, one with `committee_index` 2^64 - 1, as SSZ, over HTTP/1.0, and one while the runner holds `NODE_FLAG_SYNCING`.
   - getEpochCommittees: of `head` with no query, each `epoch` from the state's epoch - 1 to its epoch + 2, a `slot` of the epoch and one of another, `index` 0 and 1, a `slot` with an `index`, over HTTP/1.0, and with a `state_id` of `finalized`, of a slot and of a root; and in a second case, an anchor at epoch EPOCHS_PER_HISTORICAL_VECTOR + 6, the lowest epoch beacon-api.md takes and the one below it.
   - The six validator operations, of an anchor state with 8 more validators, one of each status but `active_ongoing`: each status and group of `status`; `id` items of indices and public keys, known, unknown and given twice; the bodies of the three POSTs; getStateValidator of an index and of a key, and of ones no validator has (404); the identities as SSZ; over HTTP/1.0 and with `Connection: close`; and with a `state_id` of a state root.
   - getSpec, getForkSchedule and getDepositContract, from the pinned config, presets and the spec module's constants, with the node's fork epochs; getSpec also over HTTP/1.0 and with `Connection: close`, and getForkSchedule over HTTP/1.0.
@@ -421,6 +423,7 @@ lantern_node_step(node, store, p2p, tick, events, scratch, actions, result) -> s
   - getPoolVoluntaryExits, getPoolBLSToExecutionChanges, getPoolProposerSlashings and getPoolAttesterSlashingsV2: a stream (below) of the pool.
   - submitPoolVoluntaryExit, submitPoolProposerSlashings, submitPoolAttesterSlashingsV2 and submitPoolBLSToExecutionChange: a `NODE_ACT_BYTES_PUT` of the request's body to a new id, and a `NODE_WORK_API_SUBMIT` with the head's post-state as `state_a`, that id as `data`, the connection as `target`, and as `arg` the operation + 2^8 times the answer flags + 2^16 times the fork of the store's slot. submitPoolAttesterSlashingsV2 whose `consensus_version` names a fork of another `AttesterSlashing` type than the fork of the store's slot (electra's from electra on, phase0's before): the error 400, and no work. A body of no bytes: the error 400, and no work. A head with no post-state: the error 500, and no work.
   - getProposerDuties: 503 with `NODE_FLAG_SYNCING`; 400 for an epoch above the epoch of the store's slot + 1; then the state of the epoch's first slot, as for a `state_id` of that slot, or past the store's slot the head's post-state brought to it; a `NODE_WORK_API_ENCODE` of it, `arg` as for the state operations with that slot.
+  - produceAttestationData: 503 with `NODE_FLAG_SYNCING`; 400 for a `slot` past the store's slot; then the state of `slot`, as for a `state_id` of that slot (none: 400); 503 when it is optimistic; a `NODE_ACT_BYTES_PUT` of `committee_index` (8 bytes) to a new id, and a `NODE_WORK_API_ENCODE` of the state as `state_a` and that id as `data`, `arg` as for the state operations with that slot, and `API_ANSWER_SSZ` (4) among the answer flags for an SSZ `response`; after its `NODE_EV_WORK_DONE`, a `NODE_ACT_BYTES_FREE` of the id.
   - A `state_id` of a root: a `NodeApi` entry with `API_STREAM_LOOKUP`, the connection, the operation, the answer flags and `API_STREAM_SSZ` for `response` `API_TYPE_SSZ`, the root in the first 32 bytes of its `cursor`, the route's `statuses` at byte 32 of it, its `validator` at byte 40, and its `epoch`, `slot`, `index` and `present` at bytes 104, 112, 120 and 128; for the six validator operations the ids as for their stream (below), as `data` with `API_STREAM_OWN`; and a `NODE_WORK_API_LOOKUP` with the head's post-state as `state_a`, the connection as `target` and the entry's index as `arg`.
 - `NODE_EV_WORK_DONE` of `NODE_WORK_API_LOOKUP`, of the `NodeApi` entry at index `arg`: the entry ends. Without `API_STREAM_GONE`: with a slot at `NodeEvent_index`, the answer of the entry's operation for the `state_id` of that slot, as for a `NODE_EV_API` with its answer flags, `statuses`, `validator`, `epoch`, `slot`, `index`, `present` and ids, whose `data` the answer takes; with 2^64 - 1 there, the error 404 (and the ids' `NODE_ACT_BYTES_FREE`).
   - Every other operation: 501.
@@ -517,6 +520,7 @@ lantern_node_run(node, store, seen, work, state_a, state_b, state_c, data, setti
   - getStateRoot: lantern_state_root of the fork of the state's slot, with the `StateCache` of the node's config. getStateFork: the state's `fork`. getStateFinalityCheckpoints: lantern_node_state_checkpoints of `state_a`.
   - getSpec: of the node's config, the preset and the constants (include/api_spec.inc); it reads no state.
   - getProposerDuties: lantern_node_proposers of the fork of the state's slot, of `state_a`, with the node's config.
+  - produceAttestationData: lantern_node_attestation_data of the fork of the state's slot, of `state_a` and the u64 at byte 0 of `data`, with the node's config; `data` of fewer than 8 bytes gives `LANTERN_INVALID_ENCODING`.
   - getStateValidator: the validator of the `ValidatorRef` in `data`, in `state_a`: the one of its index, or the first whose `pubkey` is its public key; with none, the error 404 in place of the response.
   - A `state_a` of these three whose slot is not `arg` / 2^24 gives the result `LANTERN_INVALID_SLOT`: the work that brought it to that slot failed.
 - `NODE_WORK_API_SUBMIT`: the operations of the body in `data` (beacon-api.md, the pool POSTs), as a ByteList at `NodeEvent_chunk` of the event, the event's `size` covering it, and their count at `NodeEvent_index`.
@@ -664,6 +668,44 @@ lantern_node_proposers(state, config, scratch, out) -> status
 
 - Export: `lantern_<fork>_node_proposers` of each fork object.
 - Argument order: `state`, `config`, `scratch`, `out`.
+
+## Function `lantern_node_attestation_data`
+
+The `AttestationData` that a validator of the state's slot makes (beacon-api.md, produceAttestationData).
+
+### Signature
+
+```
+lantern_node_attestation_data(state, config, index, scratch, out) -> status
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `state` | input | `BeaconState` of the fork: the state of the chain at the assigned slot |
+| `config` | input | `Config`: its `StateCache` |
+| `index` | input | u64: the committee index |
+| `scratch` | scratch | `Scratch` |
+| `out` | output | 128 bytes: the SSZ encoding of the `AttestationData` |
+
+### Returns
+
+- `LANTERN_OK`: `out` holds it.
+- `LANTERN_BUFFER_TOO_SMALL`: `scratch` has fewer than S(2) bytes.
+- The statuses of lantern_node_event_roots.
+
+### Function does
+
+- `slot`: the state's slot. `index`: `index` before electra, 0 from electra.
+- `beacon_block_root`: the block root of lantern_node_event_roots of the state.
+- `source`: the state's `current_justified_checkpoint`.
+- `target`: the epoch of the state's slot; its root the block root when the slot is the epoch's first, else get_block_root(state, epoch), the `block_roots` entry of the epoch's first slot.
+
+### ABI
+
+- Export: `lantern_<fork>_node_attestation_data` of each fork object.
+- Argument order: `state`, `config`, `index`, `scratch`, `out`.
 
 ## Function `lantern_node_event_roots`
 

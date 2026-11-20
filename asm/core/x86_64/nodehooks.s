@@ -426,6 +426,53 @@ SPEC_END node_event_roots
 .error "nodehooks: a NODE_VALIDATOR_* epoch offset is not the Validator's"
 .endif
 
+/*
+ * (state, config, index, scratch, out) -> rax: the AttestationData of the state's slot, its 128 SSZ
+ * bytes in out (node.md, lantern_node_attestation_data). rbx the state, r12 the index, r13 out.
+ * Locals: L lantern_node_event_roots's out (128).
+ */
+SPEC_FUNCTION node_attestation_data
+    ENTER 128
+    mov     %rdi, %rbx
+    mov     %rdx, %r12
+    mov     %r8, %r13
+    mov     %rcx, %rdx
+    lea     L(%rsp), %rcx
+    call    lantern_node_event_roots
+    test    %rax, %rax
+    jnz     9f
+    mov     BeaconState_slot(%rbx), %rax    # slot, index
+    mov     %rax, (%r13)
+.if FORK >= FORK_ELECTRA
+    xor     %r12d, %r12d
+.endif
+    mov     %r12, 8(%r13)
+    lea     16(%r13), %rdi                  # beacon_block_root
+    lea     L(%rsp), %rsi
+    mov     $32, %edx
+    call    lantern_copy
+    lea     48(%r13), %rdi                  # source: current_justified_checkpoint
+    lea     BeaconState_current_justified_checkpoint(%rbx), %rsi
+    mov     $40, %edx
+    call    lantern_copy
+    mov     BeaconState_slot(%rbx), %rax    # target: the epoch, and its boundary block's root
+    mov     %rax, %rcx
+    shr     $LOG2_SLOTS_PER_EPOCH, %rcx
+    mov     %rcx, 88(%r13)
+    shl     $LOG2_SLOTS_PER_EPOCH, %rcx
+    lea     L(%rsp), %rsi
+    cmp     %rax, %rcx
+    je      1f
+    and     $(SLOTS_PER_HISTORICAL_ROOT - 1), %ecx
+    shl     $5, %rcx
+    lea     BeaconState_block_roots(%rbx,%rcx), %rsi
+1:  lea     96(%r13), %rdi
+    mov     $32, %edx
+    call    lantern_copy
+    xor     %eax, %eax
+9:  LEAVE 128
+SPEC_END node_attestation_data
+
 /* rdi = the fork's TypeDescriptor of the NODE_JSON_* kind r10, or 0. Uses rdi. */
 LOCAL_FUNCTION node_type_of_kind
     UNWIND_END_PROLOGUE
