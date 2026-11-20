@@ -1346,7 +1346,9 @@ LOCAL_FUNCTION node_engine_next
 2:  add     x21, x21, #NodeBlock__mem
     add     x26, x26, #1
     b       1b
-3:  ldr     x9, [x19, #Node_flags]
+3:  bl      node_prepare                    /* a payload's preparation, when it is due */
+    cbnz    x0, 9f
+    ldr     x9, [x19, #Node_flags]
     tbz     x9, #5, 9f                      /* NODE_FLAG_FCU */
     mov     x0, x25
     add     x1, x19, #Node_config
@@ -1358,6 +1360,7 @@ LOCAL_FUNCTION node_engine_next
     str     x9, [x19, #Node_flags]
     mov     x9, #ENGINE_METHOD_FORKCHOICE_UPDATED
     str     x9, [x19, #Node_engine_method]
+    str     xzr, [x19, #Node_engine_target]
     ldr     x5, [x19, #Node_engine_id]
     add     x9, x5, #1
     str     x9, [x19, #Node_engine_id]
@@ -1369,6 +1372,134 @@ LOCAL_FUNCTION node_engine_next
     bl      node_work
 9:  LEAVE 0
 END_FUNCTION node_engine_next
+
+/*
+ * L1: with the store's slot x25, the preparation of a payload for slot x25 + 1 when it is due
+ * (node.md, Payload preparation): a copy of the head's post-state at that slot, a PREPARE_PAYLOAD
+ * work of it with the next engine id, and the copy's STATE_FREE. x0 = 1 when it went, else 0.
+ * x21 the head's entry, x22 the copy, x26 the slot, x27 the copy's slot, x28 a fork.
+ */
+LOCAL_FUNCTION node_prepare
+    ENTER 0
+    add     x26, x25, #1
+    mov     x0, x26
+    add     x1, x19, #Node_config
+    bl      node_fork
+    cmp     x0, #FORK_BELLATRIX
+    b.lo    8f
+    mov     x9, #SLOTS_PER_EPOCH            /* a proposers entry past the store's epoch */
+    udiv    x10, x25, x9
+    PART    x11, x12, x19, Node_proposers
+1:  cbz     x12, 8f
+    ldr     x13, [x11, #NodeProposer_until_epoch]
+    cmp     x13, x10
+    b.hi    2f
+    add     x11, x11, #NodeProposer__mem
+    sub     x12, x12, #1
+    b       1b
+2:  add     x0, x19, #Node_head_root        /* the head's block, with its post-state */
+    bl      node_find_block
+    cmn     x0, #1
+    b.eq    8f
+    mov     x21, x1
+    ldr     x9, [x21, #NodeBlock_state_id]
+    cbz     x9, 8f
+    ldr     x9, [x21, #NodeBlock_slot]      /* a head of the slot, or the slot's attestation due time */
+    cmp     x9, x25
+    b.eq    3f
+    LDQ     x9, x19, Node_config + CONFIG_SLOT_DURATION_MS
+    LDQ     x11, x19, Node_config + CONFIG_ATTESTATION_DUE_BPS
+    mul     x10, x25, x9
+    mul     x11, x9, x11
+    mov     x12, #10000
+    udiv    x11, x11, x12
+    add     x10, x10, x11
+    ldr     x12, [x20, #Store_genesis_time_ms]
+    add     x10, x10, x12
+    ldr     x9, [x19, #Node_time_ms]
+    cmp     x9, x10
+    b.lo    8f
+3:  LDQ     x9, x19, Node_payload_slot      /* not this slot on this head yet */
+    cmp     x9, x26
+    b.ne    4f
+    ADDQ    x9, x19, Node_payload_root
+    add     x10, x19, #Node_head_root
+    ldp     x11, x12, [x9]
+    ldp     x13, x14, [x10]
+    cmp     x11, x13
+    ccmp    x12, x14, #0, eq
+    b.ne    4f
+    ldp     x11, x12, [x9, #16]
+    ldp     x13, x14, [x10, #16]
+    cmp     x11, x13
+    ccmp    x12, x14, #0, eq
+    b.eq    8f
+4:  STQ     x26, x19, Node_payload_slot
+    ADDQ    x0, x19, Node_payload_root
+    add     x1, x19, #Node_head_root
+    bl      lantern_copy_root
+    mov     x9, #NODE_PAYLOAD_PREPARING
+    STQ     x9, x19, Node_payload_status
+    mov     x9, #ENGINE_METHOD_FORKCHOICE_UPDATED
+    str     x9, [x19, #Node_engine_method]
+    mov     x9, #1
+    str     x9, [x19, #Node_engine_target]
+    bl      node_new_id                     /* the copy, across the fork boundaries to the slot */
+    mov     x22, x0
+    mov     x2, x0
+    mov     x0, #NODE_ACT_STATE_COPY
+    ldr     x1, [x21, #NodeBlock_state_id]
+    bl      node_ids
+    mov     x0, x22
+    ldr     x1, [x21, #NodeBlock_state_id]
+    ldr     x2, [x21, #NodeBlock_slot]
+    mov     x3, x26
+    bl      node_cross
+    mov     x22, x0
+    ldr     x27, [x21, #NodeBlock_slot]     /* its slot: the first of the slot's fork, when it crossed one */
+    mov     x0, x27
+    add     x1, x19, #Node_config
+    bl      node_fork
+    mov     x28, x0
+    mov     x0, x26
+    add     x1, x19, #Node_config
+    bl      node_fork
+    cmp     x0, x28
+    b.ls    5f
+    add     x9, x19, #Node_config
+    add     x9, x9, x0, lsl #4
+    ldr     x9, [x9]
+    mov     x10, #SLOTS_PER_EPOCH
+    mul     x9, x9, x10
+    cmp     x9, x27
+    csel    x27, x9, x27, hi
+5:  cmp     x26, x27
+    b.ls    6f
+    mov     x0, #NODE_WORK_SLOTS
+    mov     x1, x22
+    mov     x2, #0
+    mov     x3, #0
+    mov     x4, #0
+    mov     x5, x26
+    bl      node_work
+6:  ldr     x5, [x19, #Node_engine_id]      /* the work, of the call's id */
+    add     x9, x5, #1
+    str     x9, [x19, #Node_engine_id]
+    mov     x0, #NODE_WORK_PREPARE_PAYLOAD
+    mov     x1, x22
+    mov     x2, #0
+    mov     x3, #0
+    mov     x4, #0
+    bl      node_work
+    mov     x0, #NODE_ACT_STATE_FREE
+    mov     x1, x22
+    mov     x2, #0
+    bl      node_ids
+    mov     x0, #1
+    LEAVE 0
+8:  mov     x0, #0
+    LEAVE 0
+END_FUNCTION node_prepare
 
 /* L0: the import of each waiting block whose parent is the block of the entry x0. x21 the root, x22 index, x25 count. */
 LOCAL_FUNCTION node_children
@@ -3185,6 +3316,10 @@ LOCAL_FUNCTION node_engine_failed
     ldr     x9, [x19, #Node_flags]
     orr     x9, x9, #NODE_FLAG_FCU
     str     x9, [x19, #Node_flags]
+    ldr     x9, [x19, #Node_engine_target]  /* a preparation's: again */
+    cbz     x9, 9f
+    STQ     xzr, x19, Node_payload_slot
+    STQ     xzr, x19, Node_payload_status
     LEAVE 0
 1:  cmp     x9, #ENGINE_METHOD_NEW_PAYLOAD
     b.ne    9f
@@ -3389,7 +3524,16 @@ LOCAL_FUNCTION node_engine_read
     mov     x2, #-1
     bl      node_lvh
     b       9f
-40: add     x0, x19, #Node_head_root        /* engine_forkchoiceUpdated: of the head */
+40: ldr     x10, [x19, #Node_engine_target]  /* engine_forkchoiceUpdated of a preparation: its payloadId */
+    cbz     x10, 42f
+    ldr     x10, [sp, #(L + 32 + EngineResponse_has_payload_id)]
+    mov     x11, #NODE_PAYLOAD_NONE
+    cbz     x10, 43f
+    ldr     x12, [sp, #(L + 32 + EngineResponse_payload_id)]
+    STQ     x12, x19, Node_payload_id
+    mov     x11, #NODE_PAYLOAD_READY
+43: STQ     x11, x19, Node_payload_status
+42: add     x0, x19, #Node_head_root        /* engine_forkchoiceUpdated: of the head */
     bl      node_store_find
     cmn     x0, #1
     b.eq    9f
@@ -4076,10 +4220,21 @@ LOCAL_FUNCTION node_event
     bl      node_ids
     str     xzr, [x22, #NodeBlob_data_id]
     LEAVE 48
-85: cmp     x9, #NODE_WORK_NEW_PAYLOAD         /* NEW_PAYLOAD, FORKCHOICE: the request to the execution engine */
+85: cmp     x9, #NODE_WORK_NEW_PAYLOAD         /* NEW_PAYLOAD, FORKCHOICE, PREPARE_PAYLOAD: the request to the execution engine */
     ccmp    x9, #NODE_WORK_FORKCHOICE, #4, ne
+    ccmp    x9, #NODE_WORK_PREPARE_PAYLOAD, #4, ne
     b.ne    701f
     cbnz    x10, 87f
+    cmp     x9, #NODE_WORK_PREPARE_PAYLOAD     /* a preparation: its proposer; its call updates the fork choice too */
+    b.ne    851f
+    ldr     x11, [x19, #Node_flags]
+    bic     x11, x11, #NODE_FLAG_FCU
+    str     x11, [x19, #Node_flags]
+    ldr     x11, [x21, #NodeEvent_index]
+    STQ     x11, x19, Node_payload_proposer
+    mov     x11, #NODE_PAYLOAD_SENT
+    STQ     x11, x19, Node_payload_status
+851:
     ldr     x25, [x21, #(NodeEvent_chunk + 16)]
     add     x1, x25, #(48 + 7)
     and     x1, x1, #~7
@@ -4098,7 +4253,11 @@ LOCAL_FUNCTION node_event
     LEAVE 48
 87: str     xzr, [x19, #Node_engine_method]    /* no request: the call ends */
     ldr     x9, [x21, #NodeAction_work_kind]
-    cmp     x9, #NODE_WORK_NEW_PAYLOAD
+    cmp     x9, #NODE_WORK_PREPARE_PAYLOAD
+    b.ne    871f
+    STQ     xzr, x19, Node_payload_status
+    LEAVE 48
+871: cmp    x9, #NODE_WORK_NEW_PAYLOAD
     b.ne    79f
     ldr     x0, [x21, #NodeAction_target]
     PART    x22, x11, x19, Node_blocks
@@ -8953,7 +9112,7 @@ FUNCTION lantern_node_run
     cbnz    x9, 99b
     b       84f
 83: cmp     x9, #NODE_WORK_FORKCHOICE
-    b.ne    89f
+    b.ne    830f
     mov     x0, x20                         /* FORKCHOICE: of the fork of the store's slot */
     bl      node_store_slot
     add     x1, x19, #Node_config
@@ -8988,33 +9147,45 @@ FUNCTION lantern_node_run
     orr     x11, x11, x12
     orr     x9, x9, x11
     cbz     x9, 86f
-    cmp     x26, #(NodeEvent_chunk + 24)
-    b.lo    7f
-    ldr     x27, [x24]                      /* at the end of scratch: the JSON (536), the token (280), the host (88) */
-    MOVQ    x9, 904 + 512
-    cmp     x27, x9
-    b.lo    7f
-    sub     x10, x27, #904
+    mov     x23, #0                         /* no payload attributes */
+    ldr     x27, [x24]
+    /*
+     * The request of the ForkchoiceState at L+96 and the attributes x23 (or 0), with x27 the
+     * scratch's size to give back. At the end of scratch: the JSON (536, or FCU_JSON_ATTRIBUTES
+     * with attributes), the token (280), the host (88); L+8 the JSON's room.
+     */
+831: cmp    x26, #(NodeEvent_chunk + 24)
+    b.lo    832f
+    ldr     x10, [x24]
+    mov     x11, #(536 + 368)
+    MOVQ    x12, FCU_JSON_ATTRIBUTES + 368
+    cmp     x23, #0
+    csel    x11, x11, x12, eq
+    add     x9, x11, #512
+    cmp     x10, x9
+    b.lo    832f
+    sub     x10, x10, x11
     str     x10, [x24]
     add     x22, x24, x10
+    sub     x13, x11, #368
+    str     x13, [sp, #(L + 8)]
     mov     x11, #24
-    mov     x9, #536
-    stp     x9, x11, [x22]
+    stp     x13, x11, [x22]
     str     xzr, [x22, #16]
     mov     x9, #280
-    add     x12, x22, #536
+    add     x12, x22, x13
     stp     x9, x11, [x12]
     str     xzr, [x12, #16]
     mov     x9, #88
-    add     x12, x22, #816
+    add     x12, x12, #280
     stp     x9, x11, [x12]
     ldr     x2, [x19, #Node_engine_host_len]
     str     x2, [x12, #16]
-    add     x0, x22, #(816 + 24)
+    add     x0, x12, #24
     add     x1, x19, #Node_engine_host
     bl      lantern_copy
     add     x0, sp, #(L + 96)
-    mov     x1, #0                          /* no payload attributes */
+    mov     x1, x23
     add     x2, x21, #NodeAction_arg
     mov     x3, x22
     mov     x15, x28
@@ -9027,7 +9198,8 @@ FUNCTION lantern_node_run
     add     x0, x19, #Node_jwt_secret
     add     x1, sp, #L
     mov     x2, x24
-    add     x3, x22, #536
+    ldr     x3, [sp, #(L + 8)]
+    add     x3, x22, x3
     bl      lantern_jwt_token
     cbnz    x0, 85f
     add     x3, x25, #NodeEvent_chunk       /* the HTTP request after the WORK_DONE fields */
@@ -9035,8 +9207,9 @@ FUNCTION lantern_node_run
     mov     x10, #24
     stp     x9, x10, [x3]
     str     xzr, [x3, #16]
-    add     x0, x22, #816
-    add     x1, x22, #536
+    ldr     x1, [sp, #(L + 8)]
+    add     x1, x22, x1
+    add     x0, x1, #280
     mov     x2, x22
     bl      lantern_http_post
     cbnz    x0, 85f
@@ -9052,6 +9225,9 @@ FUNCTION lantern_node_run
     LEAVE 192
 85: str     x27, [x24]                      /* a status, with the scratch's size back */
     LEAVE 192
+832: str    x27, [x24]                      /* too little room, with the scratch's size back */
+    mov     x0, #LANTERN_BUFFER_TOO_SMALL
+    LEAVE 192
 86: mov     x9, #LANTERN_NO_PAYLOAD
     str     x9, [x25, #NodeEvent_result]
     mov     x0, #LANTERN_OK
@@ -9060,6 +9236,101 @@ FUNCTION lantern_node_run
     str     x9, [x25, #NodeEvent_result]
     mov     x0, #LANTERN_OK
     LEAVE 192
+830: cmp    x9, #NODE_WORK_PREPARE_PAYLOAD
+    b.ne    890f
+    cbz     x22, 837f                       /* PREPARE_PAYLOAD: of the fork of the state's slot */
+    ldr     x0, [x22, #NODE_STATE_SLOT]
+    add     x1, x19, #Node_config
+    bl      node_fork
+    mov     x28, x0
+    cmp     x28, #FORK_BELLATRIX
+    b.lo    836f
+    mov     x0, x22                         /* the proposer: (state, out) in fulu, (state, scratch, out) before */
+    add     x2, sp, #(L + 16)
+    cmp     x28, #FORK_FULU
+    csel    x1, x2, x24, hs
+    mov     x15, x28
+    FORK_CALL get_beacon_proposer_index
+    cbnz    x0, 838f
+    ldr     x9, [sp, #(L + 16)]
+    str     x9, [x25, #NodeEvent_index]
+    ldr     x10, [x22, #NODE_STATE_SLOT]    /* its fee recipient: an entry past the state's epoch */
+    mov     x11, #SLOTS_PER_EPOCH
+    udiv    x10, x10, x11
+    PART    x12, x13, x19, Node_proposers
+833: cbz    x13, 836f
+    ldr     x14, [x12, #NodeProposer_validator_index]
+    ldr     x15, [x12, #NodeProposer_until_epoch]
+    cmp     x14, x9
+    ccmp    x15, x10, #0, eq
+    b.hi    834f
+    add     x12, x12, #NodeProposer__mem
+    sub     x13, x13, #1
+    b       833b
+834: str    x12, [sp, #(L + 24)]
+    ADDQ    x0, x19, Node_payload_root      /* the ForkchoiceState: the parent hash, safe (justified), finalized */
+    bl      node_store_find
+    cmn     x0, #1
+    b.eq    839f
+    add     x9, sp, #(L + 96)
+    add     x10, x1, #BlockNode_block_hash
+    COPY32  x9, x10
+    add     x0, x20, #(Store_justified_checkpoint + 8)
+    bl      node_store_find
+    cmn     x0, #1
+    b.eq    839f
+    add     x9, sp, #(L + 128)
+    add     x10, x1, #BlockNode_block_hash
+    COPY32  x9, x10
+    add     x0, x20, #(Store_finalized_checkpoint + 8)
+    bl      node_store_find
+    cmn     x0, #1
+    b.eq    839f
+    add     x9, sp, #(L + 160)
+    add     x10, x1, #BlockNode_block_hash
+    COPY32  x9, x10
+    ldp     x9, x10, [sp, #(L + 96)]        /* a parent of no payload: no call */
+    ldp     x11, x12, [sp, #(L + 112)]
+    orr     x9, x9, x10
+    orr     x11, x11, x12
+    orr     x9, x9, x11
+    cbz     x9, 836f
+    ldr     x27, [x24]                      /* the attributes at the end of scratch */
+    MOVQ    x9, PAYLOAD_ATTRIBUTES_ROOM + 512
+    cmp     x27, x9
+    b.lo    832b
+    MOVQ    x9, PAYLOAD_ATTRIBUTES_ROOM
+    sub     x10, x27, x9
+    str     x10, [x24]
+    add     x23, x24, x10
+    mov     x0, x22
+    ldr     x1, [sp, #(L + 24)]
+    add     x1, x1, #NodeProposer_fee_recipient
+    add     x2, x19, #Node_config
+    mov     x3, x24
+    mov     x4, x23
+    mov     x15, x28
+    FORK_CALL_BELLATRIX get_payload_attributes
+    cbz     x0, 831b
+    cmp     x0, #LANTERN_BUFFER_TOO_SMALL
+    b.eq    835f
+    str     x27, [x24]
+838: str    x0, [x25, #NodeEvent_result]     /* a failed check: the result */
+    mov     x0, #LANTERN_OK
+    LEAVE 192
+836: mov    x9, #LANTERN_NO_PAYLOAD
+    str     x9, [x25, #NodeEvent_result]
+    mov     x0, #LANTERN_OK
+    LEAVE 192
+837: mov    x0, #LANTERN_INVALID_EVENT
+    LEAVE 192
+835: str    x27, [x24]                      /* a status, with the scratch's size back */
+    LEAVE 192
+839: mov    x9, #LANTERN_INVALID_UNKNOWN_BLOCK
+    str     x9, [x25, #NodeEvent_result]
+    mov     x0, #LANTERN_OK
+    LEAVE 192
+890:
 89: cmp     x9, #NODE_WORK_SLOTS
     b.ne    90f
     ldr     x0, [x22, #NODE_STATE_SLOT]     /* SLOTS: process_slots of the fork of the state's slot, to arg */

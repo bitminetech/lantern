@@ -1320,7 +1320,11 @@ LOCAL_FUNCTION node_engine_next
 2:  add     $NodeBlock__mem, %r12
     inc     %r13
     jmp     1b
-3:  testq   $NODE_FLAG_FCU, Node_flags(%rbx)
+3:  mov     S7(%rsp), %rdi                  # a payload's preparation, when it is due
+    call    node_prepare
+    test    %rax, %rax
+    jnz     9f
+    testq   $NODE_FLAG_FCU, Node_flags(%rbx)
     jz      9f
     mov     S7(%rsp), %rdi
     lea     Node_config(%rbx), %rsi
@@ -1329,6 +1333,7 @@ LOCAL_FUNCTION node_engine_next
     jb      9f
     andq    $~NODE_FLAG_FCU, Node_flags(%rbx)
     movq    $ENGINE_METHOD_FORKCHOICE_UPDATED, Node_engine_method(%rbx)
+    movq    $0, Node_engine_target(%rbx)
     mov     Node_engine_id(%rbx), %r9
     incq    Node_engine_id(%rbx)
     mov     $NODE_WORK_FORKCHOICE, %edi
@@ -1339,6 +1344,126 @@ LOCAL_FUNCTION node_engine_next
     call    node_work
 9:  LEAVE 0
 END_FUNCTION node_engine_next
+
+/*
+ * The preparation of a payload for slot rdi + 1, rdi the store's slot, when it is due (node.md,
+ * Payload preparation): a copy of the head's post-state at that slot, a PREPARE_PAYLOAD work of
+ * it with the next engine id, and the copy's STATE_FREE. rax = 1 when it went, else 0. r12 the
+ * head's entry, r13 the copy, S7 the copy's slot, S8 a fork, S9 the store's slot, S10 the slot.
+ */
+LOCAL_FUNCTION node_prepare
+    ENTER 0
+    mov     %rdi, S9(%rsp)
+    inc     %rdi
+    mov     %rdi, S10(%rsp)
+    lea     Node_config(%rbx), %rsi
+    call    node_fork
+    cmp     $FORK_BELLATRIX, %rax
+    jb      8f
+    mov     S9(%rsp), %rax                  # a proposers entry past the store's epoch
+    xor     %edx, %edx
+    mov     $SLOTS_PER_EPOCH, %ecx
+    div     %rcx
+    PART    %rsi, %rcx, %rbx, Node_proposers
+1:  test    %rcx, %rcx
+    jz      8f
+    cmp     %rax, NodeProposer_until_epoch(%rsi)
+    ja      2f
+    add     $NodeProposer__mem, %rsi
+    dec     %rcx
+    jmp     1b
+2:  lea     Node_head_root(%rbx), %rdi      # the head's block, with its post-state
+    call    node_find_block
+    cmp     $-1, %rax
+    je      8f
+    mov     %rdx, %r12
+    cmpq    $0, NodeBlock_state_id(%r12)
+    je      8f
+    mov     S9(%rsp), %rax                  # a head of the slot, or the slot's attestation due time
+    cmp     %rax, NodeBlock_slot(%r12)
+    je      3f
+    mov     (Node_config + CONFIG_SLOT_DURATION_MS)(%rbx), %rcx
+    mul     %rcx
+    mov     %rax, %r8
+    mov     (Node_config + CONFIG_ATTESTATION_DUE_BPS)(%rbx), %rax
+    mul     %rcx
+    mov     $10000, %ecx
+    xor     %edx, %edx
+    div     %rcx
+    add     %r8, %rax
+    add     Store_genesis_time_ms(%rbp), %rax
+    cmp     %rax, Node_time_ms(%rbx)
+    jb      8f
+3:  mov     S10(%rsp), %rax                 # not this slot on this head yet
+    cmp     %rax, Node_payload_slot(%rbx)
+    jne     4f
+    lea     Node_payload_root(%rbx), %rdi
+    lea     Node_head_root(%rbx), %rsi
+    NE32    %rdi, %rsi, 4f
+    jmp     8f
+4:  mov     S10(%rsp), %rax
+    mov     %rax, Node_payload_slot(%rbx)
+    lea     Node_payload_root(%rbx), %rdi
+    lea     Node_head_root(%rbx), %rsi
+    COPY32  %rdi, %rsi
+    movq    $NODE_PAYLOAD_PREPARING, Node_payload_status(%rbx)
+    movq    $ENGINE_METHOD_FORKCHOICE_UPDATED, Node_engine_method(%rbx)
+    movq    $1, Node_engine_target(%rbx)
+    call    node_new_id                     # the copy, across the fork boundaries to the slot
+    mov     %rax, %r13
+    mov     $NODE_ACT_STATE_COPY, %edi
+    mov     NodeBlock_state_id(%r12), %rsi
+    mov     %r13, %rdx
+    call    node_ids
+    mov     %r13, %rdi
+    mov     NodeBlock_state_id(%r12), %rsi
+    mov     NodeBlock_slot(%r12), %rdx
+    mov     S10(%rsp), %rcx
+    call    node_cross
+    mov     %rax, %r13
+    mov     NodeBlock_slot(%r12), %rax      # its slot: the first of the slot's fork, when it crossed one
+    mov     %rax, S7(%rsp)
+    mov     %rax, %rdi
+    lea     Node_config(%rbx), %rsi
+    call    node_fork
+    mov     %rax, S8(%rsp)
+    mov     S10(%rsp), %rdi
+    lea     Node_config(%rbx), %rsi
+    call    node_fork
+    cmp     S8(%rsp), %rax
+    jbe     5f
+    shl     $4, %rax
+    mov     Node_config(%rbx,%rax), %rax
+    imul    $SLOTS_PER_EPOCH, %rax, %rax
+    cmp     S7(%rsp), %rax
+    jbe     5f
+    mov     %rax, S7(%rsp)
+5:  mov     S10(%rsp), %r9
+    cmp     S7(%rsp), %r9
+    jbe     6f
+    mov     $NODE_WORK_SLOTS, %edi
+    mov     %r13, %rsi
+    xor     %edx, %edx
+    xor     %ecx, %ecx
+    xor     %r8d, %r8d
+    call    node_work
+6:  mov     Node_engine_id(%rbx), %r9       # the work, of the call's id
+    incq    Node_engine_id(%rbx)
+    mov     $NODE_WORK_PREPARE_PAYLOAD, %edi
+    mov     %r13, %rsi
+    xor     %edx, %edx
+    xor     %ecx, %ecx
+    xor     %r8d, %r8d
+    call    node_work
+    mov     $NODE_ACT_STATE_FREE, %edi
+    mov     %r13, %rsi
+    xor     %edx, %edx
+    call    node_ids
+    mov     $1, %eax
+    LEAVE 0
+8:  xor     %eax, %eax
+    LEAVE 0
+END_FUNCTION node_prepare
 
 /*
  * The engine call in flight failed: an engine_newPayload's block takes NODE_BLOCK_PAYLOAD with
@@ -1356,6 +1481,10 @@ LOCAL_FUNCTION node_engine_failed
     cmp     $ENGINE_METHOD_FORKCHOICE_UPDATED, %rax
     jne     1f
     orq     $NODE_FLAG_FCU, Node_flags(%rbx)
+    cmpq    $0, Node_engine_target(%rbx)    # a preparation's: again
+    je      9f
+    movq    $0, Node_payload_slot(%rbx)
+    movq    $0, Node_payload_status(%rbx)
     LEAVE 0
 1:  cmp     $ENGINE_METHOD_NEW_PAYLOAD, %rax
     jne     9f
@@ -1570,7 +1699,16 @@ LOCAL_FUNCTION node_engine_read
     mov     $-1, %rdx
     call    node_lvh
     jmp     9f
-40: lea     Node_head_root(%rbx), %rdi      # engine_forkchoiceUpdated: of the head
+40: cmpq    $0, Node_engine_target(%rbx)    # engine_forkchoiceUpdated of a preparation: its payloadId
+    je      42f
+    mov     $NODE_PAYLOAD_NONE, %eax
+    cmpq    $0, (L + 32 + EngineResponse_has_payload_id)(%rsp)
+    je      43f
+    mov     (L + 32 + EngineResponse_payload_id)(%rsp), %rcx
+    mov     %rcx, Node_payload_id(%rbx)
+    mov     $NODE_PAYLOAD_READY, %eax
+43: mov     %rax, Node_payload_status(%rbx)
+42: lea     Node_head_root(%rbx), %rdi      # engine_forkchoiceUpdated: of the head
     call    node_store_find
     cmp     $-1, %rax
     je      9f
@@ -4036,13 +4174,21 @@ LOCAL_FUNCTION node_event
     call    node_ids
     movq    $0, NodeBlob_data_id(%r13)
     LEAVE 48
-85: cmp     $NODE_WORK_NEW_PAYLOAD, %rax    # NEW_PAYLOAD, FORKCHOICE: the request to the execution engine
+85: cmp     $NODE_WORK_NEW_PAYLOAD, %rax    # NEW_PAYLOAD, FORKCHOICE, PREPARE_PAYLOAD: the request to the execution engine
     je      86f
     cmp     $NODE_WORK_FORKCHOICE, %rax
+    je      86f
+    cmp     $NODE_WORK_PREPARE_PAYLOAD, %rax
     jne     701f
 86: test    %rcx, %rcx
     jnz     87f
-    mov     (NodeEvent_chunk + 16)(%r12), %r13
+    cmp     $NODE_WORK_PREPARE_PAYLOAD, %rax  # a preparation: its proposer; its call updates the fork choice too
+    jne     851f
+    andq    $~NODE_FLAG_FCU, Node_flags(%rbx)
+    mov     NodeEvent_index(%r12), %rdx
+    mov     %rdx, Node_payload_proposer(%rbx)
+    movq    $NODE_PAYLOAD_SENT, Node_payload_status(%rbx)
+851: mov    (NodeEvent_chunk + 16)(%r12), %r13
     lea     (48 + 7)(%r13), %rsi
     and     $-8, %rsi
     mov     $NODE_ACT_ENGINE, %edi
@@ -4059,7 +4205,11 @@ LOCAL_FUNCTION node_event
     call    lantern_copy
     LEAVE 48
 87: movq    $0, Node_engine_method(%rbx)    # no request: the call ends
-    cmpq    $NODE_WORK_NEW_PAYLOAD, NodeAction_work_kind(%r12)
+    cmpq    $NODE_WORK_PREPARE_PAYLOAD, NodeAction_work_kind(%r12)
+    jne     871f
+    movq    $0, Node_payload_status(%rbx)
+    LEAVE 48
+871: cmpq   $NODE_WORK_NEW_PAYLOAD, NodeAction_work_kind(%r12)
     jne     79f
     mov     NodeAction_target(%r12), %rdi
     PART    %r13, %rdx, %rbx, Node_blocks
@@ -9051,7 +9201,7 @@ FUNCTION lantern_node_run
     jne     99b
     jmp     84f
 83: cmp     $NODE_WORK_FORKCHOICE, %rax
-    jne     89f
+    jne     830f
     mov     %rbp, %rdi                      # FORKCHOICE: of the fork of the store's slot
     call    node_store_slot
     mov     %rax, %rdi
@@ -9086,30 +9236,43 @@ FUNCTION lantern_node_run
     or      (L + 112)(%rsp), %rax
     or      (L + 120)(%rsp), %rax
     jz      86f
-    cmpq    $(NodeEvent_chunk + 24), S9(%rsp)
-    jb      7f
-    mov     (%r15), %rax                    # at the end of scratch: the JSON (536), the token (280), the host (88)
+    xor     %r14d, %r14d                    # no payload attributes
+    mov     (%r15), %rax
     mov     %rax, S10(%rsp)
-    cmp     $(904 + 512), %rax
-    jb      7f
-    sub     $904, %rax
+    # The request of the ForkchoiceState at L+96 and the attributes r14 (or 0), with S10 the
+    # scratch's size to give back. At the end of scratch: the JSON (536, or FCU_JSON_ATTRIBUTES
+    # with attributes), the token (280), the host (88); L+8 the JSON's room.
+831: cmpq   $(NodeEvent_chunk + 24), S9(%rsp)
+    jb      832f
+    mov     $536, %ecx
+    mov     $FCU_JSON_ATTRIBUTES, %edx
+    test    %r14, %r14
+    cmovnz  %rdx, %rcx
+    mov     %rcx, (L + 8)(%rsp)
+    lea     368(%rcx), %rdx
+    mov     (%r15), %rax
+    lea     512(%rdx), %rsi
+    cmp     %rsi, %rax
+    jb      832f
+    sub     %rdx, %rax
     mov     %rax, (%r15)
     lea     (%r15,%rax), %r13
-    movq    $536, (%r13)
+    mov     %rcx, (%r13)
     movq    $24, 8(%r13)
     movq    $0, 16(%r13)
-    movq    $280, 536(%r13)
-    movq    $24, (536 + 8)(%r13)
-    movq    $0, (536 + 16)(%r13)
-    movq    $88, 816(%r13)
-    movq    $24, (816 + 8)(%r13)
+    lea     (%r13,%rcx), %rsi               # the token, then the host
+    movq    $280, (%rsi)
+    movq    $24, 8(%rsi)
+    movq    $0, 16(%rsi)
+    movq    $88, 280(%rsi)
+    movq    $24, (280 + 8)(%rsi)
     mov     Node_engine_host_len(%rbx), %rdx
-    mov     %rdx, (816 + 16)(%r13)
-    lea     (816 + 24)(%r13), %rdi
+    mov     %rdx, (280 + 16)(%rsi)
+    lea     (280 + 24)(%rsi), %rdi
     lea     Node_engine_host(%rbx), %rsi
     call    lantern_copy
     lea     (L + 96)(%rsp), %rdi
-    xor     %esi, %esi                      # no payload attributes
+    mov     %r14, %rsi
     lea     NodeAction_arg(%r12), %rdx
     mov     %r13, %rcx
     mov     S7(%rsp), %r10
@@ -9124,7 +9287,8 @@ FUNCTION lantern_node_run
     lea     Node_jwt_secret(%rbx), %rdi
     lea     L(%rsp), %rsi
     mov     %r15, %rdx
-    lea     536(%r13), %rcx
+    mov     (L + 8)(%rsp), %rcx
+    add     %r13, %rcx
     call    lantern_jwt_token
     test    %rax, %rax
     jnz     85f
@@ -9135,8 +9299,9 @@ FUNCTION lantern_node_run
     mov     %rax, (%rcx)
     movq    $24, 8(%rcx)
     movq    $0, 16(%rcx)
-    lea     816(%r13), %rdi
-    lea     536(%r13), %rsi
+    mov     (L + 8)(%rsp), %rsi
+    add     %r13, %rsi
+    lea     280(%rsi), %rdi
     mov     %r13, %rdx
     call    lantern_http_post
     test    %rax, %rax
@@ -9159,6 +9324,10 @@ FUNCTION lantern_node_run
 85: mov     S10(%rsp), %rcx                 # a status, with the scratch's size back
     mov     %rcx, (%r15)
     LEAVE 192
+832: mov    S10(%rsp), %rcx                 # too little room, with the scratch's size back
+    mov     %rcx, (%r15)
+    mov     $LANTERN_BUFFER_TOO_SMALL, %eax
+    LEAVE 192
 86: mov     S8(%rsp), %rcx
     movq    $LANTERN_NO_PAYLOAD, NodeEvent_result(%rcx)
     xor     %eax, %eax
@@ -9167,6 +9336,109 @@ FUNCTION lantern_node_run
     movq    $LANTERN_INVALID_UNKNOWN_BLOCK, NodeEvent_result(%rcx)
     xor     %eax, %eax
     LEAVE 192
+830: cmp    $NODE_WORK_PREPARE_PAYLOAD, %rax
+    jne     890f
+    test    %r13, %r13                      # PREPARE_PAYLOAD: of the fork of the state's slot
+    jz      837f
+    mov     NODE_STATE_SLOT(%r13), %rdi
+    lea     Node_config(%rbx), %rsi
+    call    node_fork
+    mov     %rax, S7(%rsp)
+    cmp     $FORK_BELLATRIX, %rax
+    jb      836f
+    mov     %r13, %rdi                      # the proposer: (state, out) in fulu, (state, scratch, out) before
+    lea     (L + 16)(%rsp), %rdx
+    mov     %r15, %rsi
+    cmp     $FORK_FULU, %rax
+    cmovae  %rdx, %rsi
+    mov     %rax, %r10
+    FORK_CALL get_beacon_proposer_index
+    test    %rax, %rax
+    jnz     838f
+    mov     (L + 16)(%rsp), %rdx
+    mov     S8(%rsp), %rcx
+    mov     %rdx, NodeEvent_index(%rcx)
+    mov     NODE_STATE_SLOT(%r13), %rax     # its fee recipient: an entry past the state's epoch
+    xor     %edx, %edx
+    mov     $SLOTS_PER_EPOCH, %ecx
+    div     %rcx
+    mov     (L + 16)(%rsp), %rdx
+    PART    %rsi, %rcx, %rbx, Node_proposers
+833: test   %rcx, %rcx
+    jz      836f
+    cmp     %rdx, NodeProposer_validator_index(%rsi)
+    jne     8331f
+    cmp     %rax, NodeProposer_until_epoch(%rsi)
+    ja      834f
+8331: add   $NodeProposer__mem, %rsi
+    dec     %rcx
+    jmp     833b
+834: mov    %rsi, (L + 24)(%rsp)
+    lea     Node_payload_root(%rbx), %rdi   # the ForkchoiceState: the parent hash, safe (justified), finalized
+    call    node_store_find
+    cmp     $-1, %rax
+    je      839f
+    lea     (L + 96)(%rsp), %rdi
+    lea     BlockNode_block_hash(%rdx), %rsi
+    COPY32  %rdi, %rsi
+    lea     (Store_justified_checkpoint + 8)(%rbp), %rdi
+    call    node_store_find
+    cmp     $-1, %rax
+    je      839f
+    lea     (L + 128)(%rsp), %rdi
+    lea     BlockNode_block_hash(%rdx), %rsi
+    COPY32  %rdi, %rsi
+    lea     (Store_finalized_checkpoint + 8)(%rbp), %rdi
+    call    node_store_find
+    cmp     $-1, %rax
+    je      839f
+    lea     (L + 160)(%rsp), %rdi
+    lea     BlockNode_block_hash(%rdx), %rsi
+    COPY32  %rdi, %rsi
+    mov     (L + 96)(%rsp), %rax            # a parent of no payload: no call
+    or      (L + 104)(%rsp), %rax
+    or      (L + 112)(%rsp), %rax
+    or      (L + 120)(%rsp), %rax
+    jz      836f
+    mov     (%r15), %rax                    # the attributes at the end of scratch
+    mov     %rax, S10(%rsp)
+    cmp     $(PAYLOAD_ATTRIBUTES_ROOM + 512), %rax
+    jb      832b
+    sub     $PAYLOAD_ATTRIBUTES_ROOM, %rax
+    mov     %rax, (%r15)
+    lea     (%r15,%rax), %r14
+    mov     %r13, %rdi
+    mov     (L + 24)(%rsp), %rsi
+    add     $NodeProposer_fee_recipient, %rsi
+    lea     Node_config(%rbx), %rdx
+    mov     %r15, %rcx
+    mov     %r14, %r8
+    mov     S7(%rsp), %r10
+    FORK_CALL_BELLATRIX get_payload_attributes
+    test    %rax, %rax
+    jz      831b
+    cmp     $LANTERN_BUFFER_TOO_SMALL, %rax
+    je      835f
+    mov     S10(%rsp), %rcx
+    mov     %rcx, (%r15)
+838: mov    S8(%rsp), %rcx                  # a failed check: the result
+    mov     %rax, NodeEvent_result(%rcx)
+    xor     %eax, %eax
+    LEAVE 192
+836: mov    S8(%rsp), %rcx
+    movq    $LANTERN_NO_PAYLOAD, NodeEvent_result(%rcx)
+    xor     %eax, %eax
+    LEAVE 192
+837: mov    $LANTERN_INVALID_EVENT, %eax
+    LEAVE 192
+835: mov    S10(%rsp), %rcx                 # a status, with the scratch's size back
+    mov     %rcx, (%r15)
+    LEAVE 192
+839: mov    S8(%rsp), %rcx
+    movq    $LANTERN_INVALID_UNKNOWN_BLOCK, NodeEvent_result(%rcx)
+    xor     %eax, %eax
+    LEAVE 192
+890:
 89: cmp     $NODE_WORK_SLOTS, %rax
     jne     90f
     mov     NODE_STATE_SLOT(%r13), %rdi     # SLOTS: process_slots of the fork of the state's slot, to arg

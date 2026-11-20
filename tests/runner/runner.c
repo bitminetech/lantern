@@ -1910,6 +1910,11 @@ typedef struct {
     uint8_t *pow[16];  /* the pow_block steps: PowBlock values */
     size_t npow;
     struct node_shell *shell; /* node mode: the store is the node's, and the node keeps the states */
+    /* node-payload: with watch, each engine call counts, and must be the forkchoiceUpdated whose text
+       from ',"method":' on is tail; its answer's payloadId is pid (8 bytes), else null */
+    int watch;
+    uint64_t engine_calls, tail_len, pid_len;
+    const uint8_t *tail, *pid;
 } fc_node;
 
 #if FORK >= FORK_BELLATRIX
@@ -2526,7 +2531,7 @@ enum { ACT_BYTES_PUT = 1, ACT_STATE_COPY, ACT_STATE_FREE, ACT_BYTES_FREE, ACT_WO
 enum { WORK_IMPORT_BLOCK = 1, WORK_JUSTIFIED_STATE, WORK_TARGET_STATE, WORK_ATTESTATION, WORK_ATTESTER_SLASHING, WORK_SERVE, WORK_GOSSIP,
        WORK_SYNC_BLOCK, WORK_BLOB, WORK_NEW_PAYLOAD, WORK_FORKCHOICE, WORK_SLOTS, WORK_UPGRADE, WORK_REPLAY, WORK_BACKFILL,
        WORK_BLOCK_ATTESTATION, WORK_BLOCK_SLASHING, WORK_GOSSIP_VOTE, WORK_API_ENCODE, WORK_API_CHUNK, WORK_API_LOOKUP, WORK_API_EVENT,
-       WORK_API_SUBMIT, WORK_POOL_CHECK };
+       WORK_API_SUBMIT, WORK_POOL_CHECK, WORK_PREPARE_PAYLOAD };
 #define EV_API_BYTES (128 + 616) /* NodeEvent_api_bytes: the chunk's ByteList in the WORK_DONE of an API_CHUNK */
 #define NODE_API_CHUNK 65536
 #define NODE_API_PART (728 + CONFIG_SIZE + 936) /* Node_api: the PartRef of the NodeApi entries */
@@ -2998,7 +3003,7 @@ static void shell_work(fc_node *n, const uint8_t *work, const char **why) {
         } else if (kind == WORK_POOL_CHECK) {
             *why = "lantern_node_run: POOL_CHECK asks for room";
         } else if (kind == WORK_SERVE || kind == WORK_NEW_PAYLOAD || kind == WORK_FORKCHOICE || kind == WORK_API_ENCODE ||
-            kind == WORK_API_EVENT) {
+            kind == WORK_API_EVENT || kind == WORK_PREPARE_PAYLOAD) {
             free(ev);
             ev_size *= 4;
             ev = buffer(ev_size);
@@ -3040,7 +3045,8 @@ static void shell_work(fc_node *n, const uint8_t *work, const char **why) {
     if (!*why && (esize < EV_WORK_DONE_SIZE || esize > ev_size || esize % 8 || rd64(ev + 8) != EV_WORK_DONE ||
                   memcmp(ev + 16, work + 16, 56) ||
                   (kind != WORK_SERVE && kind != WORK_NEW_PAYLOAD && kind != WORK_FORKCHOICE && kind != WORK_API_ENCODE &&
-                   kind != WORK_API_CHUNK && kind != WORK_API_EVENT && kind != WORK_API_SUBMIT && esize != EV_WORK_DONE_SIZE)))
+                   kind != WORK_API_CHUNK && kind != WORK_API_EVENT && kind != WORK_API_SUBMIT && kind != WORK_PREPARE_PAYLOAD &&
+                   esize != EV_WORK_DONE_SIZE)))
         *why = "lantern_node_run: the event is not the WORK_DONE of the work";
     if (!*why) {
         uint64_t result = rd64(ev + EV_RESULT);
@@ -3337,6 +3343,18 @@ static void shell_engine(fc_node *n, const uint8_t *req, uint64_t len, const cha
         *why = "engine: no id or block hash";
         return;
     }
+    if (n->watch) {
+        const char *m = find_bytes(body, blen, ",\"method\":");
+        n->engine_calls++;
+        if (!n->tail_len) *why = "engine: a call the case does not make";
+        else if (!m || (uint64_t)(body + blen - m) != n->tail_len || memcmp(m, n->tail, (size_t)n->tail_len)) {
+            static char msg[1400];
+            snprintf(msg, sizeof msg, "engine: the forkchoiceUpdated differs from the case's: got %.600s want %.600s",
+                     m ? m : body, (const char *)n->tail);
+            *why = msg;
+        }
+        if (*why) return;
+    }
     unsigned long long id = 0; /* the digits after "id": within the body */
     for (const char *d = idp + 5; d < body + blen && *d >= '0' && *d <= '9'; d++) id = id * 10 + (unsigned long long)(*d - '0');
     uint64_t el = 1, has_latest = 1;
@@ -3354,7 +3372,13 @@ static void shell_engine(fc_node *n, const uint8_t *req, uint64_t len, const cha
         strcat(lvh, "\"");
     }
     snprintf(status, sizeof status, "{\"status\":\"%s\",\"latestValidHash\":%s,\"validationError\":null}", names[el - 1], lvh);
-    if (fcu) snprintf(json, sizeof json, "{\"jsonrpc\":\"2.0\",\"id\":%llu,\"result\":{\"payloadStatus\":%s,\"payloadId\":null}}", id, status);
+    char pid[24] = "null";
+    if (n->watch && n->pid_len == 8) {
+        strcpy(pid, "\"0x");
+        for (int i = 0; i < 8; i++) snprintf(pid + 3 + 2 * i, 3, "%02x", n->pid[i]);
+        strcat(pid, "\"");
+    }
+    if (fcu) snprintf(json, sizeof json, "{\"jsonrpc\":\"2.0\",\"id\":%llu,\"result\":{\"payloadStatus\":%s,\"payloadId\":%s}}", id, status, pid);
     else snprintf(json, sizeof json, "{\"jsonrpc\":\"2.0\",\"id\":%llu,\"result\":%s}", id, status);
     int hl = snprintf(http, sizeof http, "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: %zu\r\n\r\n%s",
                       strlen(json), json);
@@ -7360,6 +7384,58 @@ static const char *api_mismatch(const struct node_shell *s, const char *name, co
  * offline on, after a NODE_EV_ENGINE with arg 1. The sends must be the case's response, the last
  * with last 1 and no other, and one NODE_ACT_API_CLOSE after them when the case closes.
  */
+/* node-payload: lantern's cases of payload preparation (node.md, Test vectors). */
+#define NODE_PAYLOAD_SLOT (NODE_API_PART + 664) /* Node_payload_slot: past the proposers PartRef */
+static void run_node_payload(const char *file, case_file *f) {
+    for (uint64_t i = 0; i < f->count; i++) {
+        const char *name, *why = NULL;
+        uint64_t len, rlen, wlen, plen, hlen;
+        tv parts = next_case(f, &name, &len);
+        if (skip_case(parts)) continue;
+        fc_node n;
+        uint8_t *anchor_block;
+        struct node_shell *s = shell_open(&n, parts, &anchor_block, &why);
+        const uint8_t *req = tv_bytes(tv_get(parts, "request"), &rlen), *want = tv_bytes(tv_get(parts, "response"), &wlen);
+        const uint8_t *root = tv_bytes(tv_get(parts, "payload_root"), &hlen);
+        n.tail = tv_bytes(tv_get(parts, "tail"), &n.tail_len);
+        n.pid = tv_bytes(tv_get(parts, "payload_id"), &plen);
+        n.pid_len = plen;
+        if (!why) {
+            for (uint64_t fk = FORK_ALTAIR; fk <= FORK_FULU; fk++)
+                wr64(n.store + STORE_CONFIG + 16 * fk, rd64(s->ncfg + 16 * fk));
+            shell_event(s, EV_TICK, tv_u64(tv_get(parts, "time0")), NULL, 0); /* the anchor's forkchoiceUpdated, answered */
+            shell_settle(&n, &why);
+        }
+        if (!why) { /* the prepareBeaconProposer, then the tick: each engine call counts from here */
+            n.watch = 1;
+            n.engine_calls = 0;
+            shell_api_ask(&n, req, rlen, 1 | (uint64_t)7 << 32, &why);
+            uint64_t glen = 0;
+            uint8_t *got = why ? NULL : api_normalize(s, &glen, &why);
+            if (!why && (glen != wlen || memcmp(got, want, (size_t)wlen))) why = "prepareBeaconProposer: the response differs";
+            free(got);
+            if (!why) why = api_clean(s);
+        }
+        if (!why) {
+            shell_event(s, EV_TICK, tv_u64(tv_get(parts, "time1")), NULL, 0);
+            shell_settle(&n, &why);
+        }
+        if (!why && n.engine_calls != (n.tail_len ? 1u : 0u)) why = n.tail_len ? "no forkchoiceUpdated with the attributes" : "an engine call";
+        if (!why) {
+            const uint8_t *nd = s->node + NODE_PAYLOAD_SLOT;
+            uint64_t status = rd64(nd + 48);
+            if (rd64(nd) != tv_u64(tv_get(parts, "payload_slot"))) why = "payload_slot differs";
+            else if (hlen != 32 || memcmp(nd + 8, root, 32)) why = "payload_root differs";
+            else if (status != tv_u64(tv_get(parts, "payload_status"))) why = "payload_status differs";
+            else if (status == 3 && (plen != 8 || memcmp(nd + 40, n.pid, 8))) why = "payload_id differs";
+            else if (rd64(nd + 56) != tv_u64(tv_get(parts, "payload_proposer"))) why = "payload_proposer differs";
+        }
+        n.watch = 0;
+        shell_close(&n, anchor_block);
+        report(file, name, len, why == NULL, why);
+    }
+}
+
 static void run_node_api(const char *file, case_file *f) {
     for (uint64_t i = 0; i < f->count; i++) {
         const char *name, *why = NULL;
@@ -8824,6 +8900,7 @@ int main(int argc, char **argv) {
         else if (!bls_off && !strcmp(kind, "config-parse")) run_config_parse(file, &f);
         else if (!bls_off && !strcmp(kind, "app-options")) run_app_options(file, &f);
         else if (!bls_off && !strcmp(kind, "node-api")) run_node_api(file, &f);
+        else if (!bls_off && !strcmp(kind, "node-payload")) run_node_payload(file, &f);
         else if (!bls_off && !strcmp(kind, "json-encode")) run_json_encode(file, &f);
         else if (!bls_off && !strcmp(kind, "json-decode")) run_json_decode(file, &f, 0);
         else if (!bls_off && !strcmp(kind, "json-engine_decode")) run_json_decode(file, &f, 1);

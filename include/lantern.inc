@@ -384,6 +384,8 @@
 .set PAYLOAD_ATTRIBUTES_WITHDRAWAL, 104
 .set PAYLOAD_ATTRIBUTES_WITHDRAWAL_SIZE, 44
 .set PayloadAttributes__mem, 104 + 44 * MAX_WITHDRAWALS_PER_PAYLOAD
+.set PAYLOAD_ATTRIBUTES_ROOM, (PayloadAttributes__mem + 7) / 8 * 8   /* its bytes in scratch */
+.set FCU_JSON_ATTRIBUTES, 24 + 1024 + 192 * MAX_WITHDRAWALS_PER_PAYLOAD  /* the room of an engine_forkchoiceUpdated with attributes */
 .set ENGINE_STATUS_VALID, 1
 .set ENGINE_STATUS_INVALID, 2
 .set ENGINE_STATUS_SYNCING, 3
@@ -667,7 +669,16 @@
 .set Node_sync_until, Node_api + 104       /* SYNC_COMMITTEE_SUBNET_COUNT u64: each sync subnet stays below this epoch */
 .set Node_subnet_until, Node_sync_until + 8 * SYNC_COMMITTEE_SUBNET_COUNT  /* ATTESTATION_SUBNET_COUNT u64: each subnet stays below this slot */
 .set Node_proposers, Node_subnet_until + 8 * ATTESTATION_SUBNET_COUNT   /* PartRef: NodeProposer entries */
-.set NODE_FIXED, Node_proposers + 16
+.set Node_payload_slot, Node_proposers + 16  /* the slot of the last payload preparation, or 0 */
+.set Node_payload_root, Node_proposers + 24  /* Root: the head it built on */
+.set Node_payload_id, Node_proposers + 56    /* 8 bytes: the payloadId, with NODE_PAYLOAD_READY */
+.set Node_payload_status, Node_proposers + 64    /* NODE_PAYLOAD_* */
+.set Node_payload_proposer, Node_proposers + 72  /* the proposer's validator index */
+.set NODE_FIXED, Node_proposers + 80
+.set NODE_PAYLOAD_NONE, 0
+.set NODE_PAYLOAD_PREPARING, 1             /* its PREPARE_PAYLOAD work is queued */
+.set NODE_PAYLOAD_SENT, 2                  /* its engine_forkchoiceUpdated is in flight */
+.set NODE_PAYLOAD_READY, 3                 /* payload_id holds the engine's payloadId */
 .set NODE_LOOKUP_MS, 10000             /* the least time between two lookups of the node */
 .set NODE_STATUS_MS, 12000             /* the least time between two Status requests of node_sync */
 .set NODE_SUBSCRIBE_AHEAD, 2           /* epochs: the topics of a new ForkDigest join this early, the old ones leave this late */
@@ -921,6 +932,7 @@
 .set NODE_WORK_API_EVENT, 22           /* a: a block's post-state, or 0; data: its bytes, or 0; arg: topic + 256 * values + 65536 * epoch */
 .set NODE_WORK_API_SUBMIT, 23          /* a: the head's post-state; data: a request's body; target: the connection; arg: op + 256 * flags + 65536 * fork */
 .set NODE_WORK_POOL_CHECK, 24          /* a: the head's post-state; data: a pool entry's bytes; target: its index; arg: its topic */
+.set NODE_WORK_PREPARE_PAYLOAD, 25     /* a: the head's post-state at the next slot; arg: the engine id */
 .set NODE_VOTES_MAX, 130               /* MAX_ATTESTATIONS + MAX_ATTESTER_SLASHINGS: the votes of a block the node takes */
 .set NodeEvent_root, NodeEvent_checkpoint + 8  /* GOSSIP of a valid beacon_block, SYNC_BLOCK: its root; of a valid blob_sidecar, BLOB: the root of its block header */
 .set NodeEvent_index, NodeEvent_root + 32      /* GOSSIP of a valid beacon_block, SYNC_BLOCK: its blob commitments; of a valid blob_sidecar: its index */
