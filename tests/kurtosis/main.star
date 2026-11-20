@@ -7,8 +7,90 @@
 # args.lantern_data_dir: a directory for lantern's history (--data-dir), or none (default);
 # args.lantern_checkpoint: true to start lantern from the finalized block of the first client and
 # its post-state (--checkpoint-block, --checkpoint-state), taken from its Beacon API once its
-# finalized epoch is 1 or more (default false).
+# finalized epoch is 1 or more (default false); args.lantern_assertoor: true to run Assertoor with
+# lantern as its one consensus endpoint, beside the first client's geth, and the test "lantern" of
+# ASSERTOOR_TESTS at its start (default false).
 ethereum = import_module("github.com/ethpandaops/ethereum-package/main.star")
+
+# Assertoor v0.1.2, its latest release, pinned by digest.
+ASSERTOOR_IMAGE = "ethpandaops/assertoor:v0.1.2@sha256:aba67ca18ea77bece68abe1cca171642d9212c2c399d18740969105ae3442078"
+
+# Its config: lantern as the one endpoint, the API without the frontend, and one test of the checks
+# that read the Beacon API (Assertoor's tasks of v0.1.2), each over lantern.
+ASSERTOOR_CONFIG = """endpoints:
+- name: "lantern"
+  consensusUrl: "LANTERN_URL"
+  executionUrl: "EL_URL"
+web:
+  server:
+    host: "0.0.0.0"
+    port: "8080"
+  frontend:
+    enabled: false
+  api:
+    enabled: true
+database:
+  engine: "sqlite"
+  sqlite:
+    file: "/app/assertoor-database.sqlite"
+tests:
+- id: lantern
+  name: "lantern answers Assertoor's Beacon API reads"
+  timeout: 1h
+  schedule:
+    startup: true
+  tasks:
+  - name: check_clients_are_healthy
+    title: "lantern is ready"
+    timeout: 15m
+    config:
+      clientPattern: "lantern"
+      minClientCount: 1
+  - name: check_consensus_sync_status
+    title: "lantern is synced"
+    timeout: 20m
+    config:
+      clientPattern: "lantern"
+  - name: check_consensus_identity
+    title: "lantern's identity"
+    timeout: 5m
+    config:
+      clientPattern: "lantern"
+      minClientCount: 1
+  - name: run_tasks_concurrent
+    title: "the chain through lantern"
+    timeout: 40m
+    config:
+      tasks:
+      - name: check_consensus_slot_range
+        title: "the chain reaches epoch 3"
+        config:
+          minEpochNumber: 3
+      - name: check_consensus_block_proposals
+        title: "blocks arrive through the event stream"
+        config:
+          blockCount: 2
+      - name: check_consensus_proposer_duty
+        title: "proposer duties"
+      - name: check_consensus_finality
+        title: "finality"
+        config:
+          minFinalizedEpochs: 2
+          maxUnfinalizedEpochs: 3
+      - name: check_consensus_attestation_stats
+        title: "attestation stats, from the committees"
+        config:
+          minTargetPercent: 98
+          minHeadPercent: 80
+          minCheckedEpochs: 2
+      - name: check_consensus_reorgs
+        title: "reorgs"
+        config:
+          maxReorgsPerEpoch: 2
+          minCheckEpochCount: 1
+      - name: check_consensus_forks
+        title: "forks"
+"""
 
 # The finalized block and its post-state of the Beacon API at URL, as SSZ, in /checkpoint.
 CHECKPOINT_SH = """mkdir -p /checkpoint
@@ -27,7 +109,8 @@ def run(plan, args={}):
     lantern_delay = args.get("lantern_delay", 0)
     lantern_data_dir = args.get("lantern_data_dir", "")
     lantern_checkpoint = args.get("lantern_checkpoint", False)
-    network_args = {key: value for key, value in args.items() if key not in ("lantern_image", "lantern_max_cpu", "lantern_delay", "lantern_data_dir", "lantern_checkpoint")}
+    lantern_assertoor = args.get("lantern_assertoor", False)
+    network_args = {key: value for key, value in args.items() if key not in ("lantern_image", "lantern_max_cpu", "lantern_delay", "lantern_data_dir", "lantern_checkpoint", "lantern_assertoor")}
     out = ethereum.run(plan, network_args)
     if lantern_delay > 0:
         plan.run_sh(run="sleep {0}".format(lantern_delay), wait="{0}s".format(lantern_delay + 60))
@@ -44,7 +127,7 @@ def run(plan, args={}):
         )
         files["/checkpoint"] = "lantern_checkpoint"
         extra_args += ["--checkpoint-state", "/checkpoint/state.ssz", "--checkpoint-block", "/checkpoint/block.ssz"]
-    plan.add_service(
+    lantern = plan.add_service(
         name="lantern",
         config=ServiceConfig(
             image=lantern_image,
@@ -71,4 +154,20 @@ def run(plan, args={}):
             },
         ),
     )
+    if lantern_assertoor:
+        config = ASSERTOOR_CONFIG.replace("LANTERN_URL", "http://{0}:5052".format(lantern.ip_address))
+        config = config.replace("EL_URL", out.all_participants[0].el_context.rpc_http_url)
+        files = plan.render_templates(
+            config={"assertoor.yaml": struct(template=config, data={})},
+            name="lantern_assertoor_config",
+        )
+        plan.add_service(
+            name="assertoor",
+            config=ServiceConfig(
+                image=ASSERTOOR_IMAGE,
+                cmd=["--config", "/config/assertoor.yaml"],
+                files={"/config": files},
+                ports={"http": PortSpec(number=8080, application_protocol="http", wait="5m")},
+            ),
+        )
     return out
