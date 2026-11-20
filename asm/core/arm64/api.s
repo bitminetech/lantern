@@ -4993,7 +4993,14 @@ LOCAL_FUNCTION node_publish_done
     LEAVE 16
 1:  ldr     x25, [x21, #NodeEvent_result]
     ldr     x26, [x21, #NodeAction_work_kind]
-    mov     x1, #400                        /* a check that fails: 400 */
+    cmp     x26, #NODE_WORK_PUBLISH_SIDECAR /* a sidecar past the last, or one that is not there: the sidecars end */
+    b.ne    12f
+    cbz     x25, 12f
+    str     xzr, [x22, #(NodeApi_cursor + 40)]
+    mov     x0, x22
+    bl      node_publish_drop
+    LEAVE 16
+12: mov     x1, #400                        /* a check that fails: 400 */
     cbnz    x25, 90f
     add     x27, x21, #NodeEvent_chunk
     cmp     x26, #NODE_WORK_PUBLISH_DECODE
@@ -5028,14 +5035,20 @@ LOCAL_FUNCTION node_publish_done
     cmp     x9, #NODE_BLOCK_INVALID
     mov     x1, #200
     b.ne    90f
-11: ldr     x9, [x22, #NodeApi_fork]        /* from deneb with blobs: the sidecars, else the check */
-    cmp     x9, #FORK_DENEB
-    b.lo    30f
-    ldr     x9, [x22, #(NodeApi_cursor + 16)]
+11: ldr     x9, [x22, #(NodeApi_cursor + 16)]   /* with blobs: the sidecars, else the check */
     cbz     x9, 30f
-    mov     x1, #501                        /* the sidecars: not yet */
-    b       90f
-20: cmp     x26, #NODE_WORK_PUBLISH_CHECK
+    mov     x0, x22
+    bl      node_publish_sidecars_work
+    LEAVE 16
+20: cmp     x26, #NODE_WORK_PUBLISH_SIDECARS    /* SIDECARS: the check */
+    b.eq    30f
+    cmp     x26, #NODE_WORK_PUBLISH_SIDECAR
+    b.ne    22f
+    mov     x0, x22                         /* SIDECAR: it goes out and stays, then the next */
+    mov     x1, x21
+    bl      node_publish_sidecar_done
+    LEAVE 16
+22: cmp     x26, #NODE_WORK_PUBLISH_CHECK
     b.ne    99f
     bl      node_new_block                  /* CHECK: the block's NodeBlock, before the publish */
     str     x0, [sp, #L]
@@ -5064,11 +5077,17 @@ LOCAL_FUNCTION node_publish_done
     mov     x1, x27
     mov     x2, #0
     bl      node_publish
-21: mov     x9, #NODE_PUBLISH_IMPORT        /* the import, then the answer */
+21: mov     x9, #NODE_PUBLISH_IMPORT        /* the import, the sidecars one at a time, then the answer */
     str     x9, [x22, #NodeApi_member]
+    ldr     x9, [x22, #NodeApi_filter_index]
+    cbz     x9, 23f
+    str     xzr, [x22, #(NodeApi_cursor + 40)]
     mov     x0, x22
+    bl      node_publish_sidecar_work
+    b       24f
+23: mov     x0, x22
     bl      node_publish_drop
-    ldr     x0, [sp, #L]
+24: ldr     x0, [sp, #L]
     bl      node_try_import
     LEAVE 16
 30: mov     x0, x22                         /* the check */
@@ -5081,9 +5100,165 @@ LOCAL_FUNCTION node_publish_done
 END_FUNCTION node_publish_done
 
 /*
+ * L1: the PUBLISH_SIDECARS of the publishBlockV2 entry x0 (node.md, NODE_PUBLISH_SIDECARS): a
+ * BYTES_NEW of the sidecars' room, its id the entry's filter_index, then the work. Locals: the
+ * entry, the room, the action.
+ */
+LOCAL_FUNCTION node_publish_sidecars_work
+    FRAME 32
+    str     x0, [sp, #16]
+    ldr     x9, [x0, #(NodeApi_cursor + 16)]    /* the blob count */
+    ldr     x10, [x0, #NodeApi_fork]
+    cmp     x10, #FORK_FULU
+    b.hs    1f
+    MOVQ    x11, PUB_BLOB_SIDECAR + 24      /* deneb and electra: a BlobSidecar for each blob */
+    mul     x11, x9, x11
+    b       2f
+1:  MOVQ    x11, PUB_CELL_BYTES + 96        /* fulu: NUMBER_OF_COLUMNS column sidecars of the count */
+    MOVQ    x12, PUB_COLUMN_FIXED + 24 + 7
+    madd    x11, x9, x11, x12
+    and     x11, x11, #~7
+    mov     x12, #NUMBER_OF_COLUMNS
+    mul     x11, x11, x12
+2:  add     x11, x11, #24
+    str     x11, [sp, #24]
+    mov     x0, #NODE_ACT_BYTES_NEW
+    mov     x1, #NODE_ACT_BYTES_NEW_SIZE
+    bl      node_act
+    str     x0, [sp, #32]
+    bl      node_new_id
+    ldr     x9, [sp, #32]
+    str     x0, [x9, #16]
+    ldr     x10, [sp, #24]
+    str     x10, [x9, #24]
+    ldr     x9, [sp, #16]
+    str     x0, [x9, #NodeApi_filter_index]
+    mov     x10, #NODE_PUBLISH_SIDECARS
+    str     x10, [x9, #NodeApi_member]
+    ldr     x10, [x9, #NodeApi_flags]
+    orr     x10, x10, #API_STREAM_BUSY
+    str     x10, [x9, #NodeApi_flags]
+    mov     x2, x0                          /* the work: the sidecars as state_b, the body as data */
+    ldr     x3, [x9, #NodeApi_data]
+    PART    x10, x11, x19, Node_api
+    sub     x4, x9, x10
+    mov     x11, #NodeApi__mem
+    udiv    x4, x4, x11
+    ldr     x5, [x9, #NodeApi_fork]
+    ldr     x10, [x9, #(NodeApi_cursor + 24)]   /* 2^8 for SSZ */
+    eor     x10, x10, #1
+    orr     x5, x5, x10, lsl #8
+    mov     x0, #NODE_WORK_PUBLISH_SIDECARS
+    mov     x1, #0
+    bl      node_work
+    UNFRAME 32
+END_FUNCTION node_publish_sidecars_work
+
+/*
+ * L1: the PUBLISH_SIDECAR of the next sidecar (cursor + 40) of the publishBlockV2 entry x0 in
+ * NODE_PUBLISH_IMPORT. Locals: the entry.
+ */
+LOCAL_FUNCTION node_publish_sidecar_work
+    FRAME 16
+    str     x0, [sp, #16]
+    ldr     x10, [x0, #NodeApi_flags]
+    orr     x10, x10, #API_STREAM_BUSY
+    str     x10, [x0, #NodeApi_flags]
+    ldr     x2, [x0, #NodeApi_filter_index]
+    PART    x10, x11, x19, Node_api
+    sub     x4, x0, x10
+    mov     x11, #NodeApi__mem
+    udiv    x4, x4, x11
+    ldr     x5, [x0, #(NodeApi_cursor + 40)]
+    mov     x0, #NODE_WORK_PUBLISH_SIDECAR
+    mov     x1, #0
+    mov     x3, #0
+    bl      node_work
+    UNFRAME 16
+END_FUNCTION node_publish_sidecar_work
+
+/*
+ * L2: the WORK_DONE x1 of a valid PUBLISH_SIDECAR of the publishBlockV2 entry x0: the sidecar
+ * stays as a NodeBlob when the node keeps it (each blob sidecar; the column sidecars it samples),
+ * goes out on its subnet's topic with NODE_FLAG_SUBSCRIBED, then the next. x21 the entry, x22 the
+ * event, x25 the sidecar's ByteList, x26 its id. Step code keeps x23 and x24.
+ */
+LOCAL_FUNCTION node_publish_sidecar_done
+    ENTER 0
+    mov     x21, x0
+    mov     x22, x1
+    add     x25, x22, #NodeEvent_chunk
+    ldr     x9, [x21, #NodeApi_fork]
+    cmp     x9, #FORK_FULU
+    b.lo    1f
+    ldr     x0, [x22, #NodeEvent_index]     /* a column the node samples */
+    bl      node_sampled
+    cbz     x0, 3f
+1:  add     x0, x22, #NodeEvent_root        /* one the node does not hold yet */
+    ldr     x1, [x22, #NodeEvent_index]
+    bl      node_blob_held
+    cbnz    x0, 3f
+    mov     x0, x25
+    bl      node_put
+    mov     x26, x0
+    bl      node_new_blob
+    add     x0, x1, #NodeBlob_block_root
+    add     x9, x22, #NodeEvent_root
+    COPY32  x0, x9
+    ldr     x9, [x22, #NodeEvent_index]
+    str     x9, [x1, #NodeBlob_index]
+    ldr     x9, [x22, #NodeEvent_checkpoint]
+    str     x9, [x1, #NodeBlob_slot]
+    str     x26, [x1, #NodeBlob_data_id]
+    mov     x9, #NODE_BLOB_VALID
+    str     x9, [x1, #NodeBlob_status]
+    ldr     x9, [x25, #16]
+    str     x9, [x1, #NodeBlob_length]
+    add     x0, x22, #NodeEvent_root
+    bl      node_blob_added
+3:  ldr     x9, [x19, #Node_flags]          /* subscribed: out on its subnet's topic */
+    tbz     x9, #2, 4f
+    ldr     x10, [x22, #NodeEvent_index]
+    ldr     x9, [x21, #NodeApi_fork]
+    add     x11, x19, #Node_config
+    cmp     x9, #FORK_FULU
+    b.lo    31f
+    mov     x0, #GOSSIP_DATA_COLUMN_SIDECAR
+    ldr     x12, [x11, #CONFIG_DATA_COLUMN_SIDECAR_SUBNET_COUNT]
+    b       33f
+31: mov     x0, #GOSSIP_BLOB_SIDECAR
+    cmp     x9, #FORK_ELECTRA
+    b.lo    32f
+    LDQ     x12, x11, CONFIG_BLOB_SIDECAR_SUBNET_COUNT_ELECTRA
+    b       33f
+32: LDQ     x12, x11, CONFIG_BLOB_SIDECAR_SUBNET_COUNT
+33: cbz     x12, 4f
+    udiv    x13, x10, x12
+    msub    x2, x13, x12, x10
+    mov     x1, x25
+    bl      node_publish
+4:  ldr     x9, [x21, #(NodeApi_cursor + 40)]   /* the next sidecar; after the last, the body and the sidecars go */
+    add     x9, x9, #1
+    str     x9, [x21, #(NodeApi_cursor + 40)]
+    ldr     x10, [x21, #(NodeApi_cursor + 16)]
+    ldr     x11, [x21, #NodeApi_fork]
+    cmp     x11, #FORK_FULU
+    mov     x11, #NUMBER_OF_COLUMNS
+    csel    x10, x11, x10, hs
+    mov     x0, x21
+    cmp     x9, x10
+    b.hs    5f
+    bl      node_publish_sidecar_work
+    LEAVE 0
+5:  bl      node_publish_drop
+    LEAVE 0
+END_FUNCTION node_publish_sidecar_done
+
+/*
  * L2: the PUBLISH_CHECK of the publishBlockV2 entry x0 (node.md, NODE_PUBLISH_CHECK): x0 = 0 once
  * it went, else 400 with no post-state of the parent, or 500 with no head post-state. x21 the
- * entry, x22 the parent's entry, x25 the copy, x26 the head's state id.
+ * entry, x22 the parent's entry, x25 the copy, x26 the head's state id, x27 the copy's slot, x28
+ * the parent's fork.
  */
 LOCAL_FUNCTION node_publish_check_work
     ENTER 0
@@ -5118,7 +5293,33 @@ LOCAL_FUNCTION node_publish_check_work
     ldr     x3, [x21, #NodeApi_slot]
     bl      node_cross
     mov     x25, x0
-    PART    x9, x10, x19, Node_api
+    ldr     x0, [x22, #NodeBlock_slot]      /* the copy's slot: the parent's, or the first of the block's fork after an upgrade */
+    add     x1, x19, #Node_config
+    bl      node_fork
+    mov     x28, x0
+    ldr     x0, [x21, #NodeApi_slot]
+    add     x1, x19, #Node_config
+    bl      node_fork
+    ldr     x27, [x22, #NodeBlock_slot]
+    cmp     x0, x28
+    b.ls    1f
+    add     x9, x19, #Node_config
+    add     x9, x9, x0, lsl #4
+    ldr     x9, [x9]
+    mov     x10, #SLOTS_PER_EPOCH
+    mul     x9, x9, x10
+    cmp     x9, x27
+    csel    x27, x9, x27, hi
+1:  ldr     x5, [x21, #NodeApi_slot]        /* then process_slots to the block's slot, as a lookup's */
+    cmp     x5, x27
+    b.ls    2f
+    mov     x0, #NODE_WORK_SLOTS
+    mov     x1, x25
+    mov     x2, #0
+    mov     x3, #0
+    mov     x4, #0
+    bl      node_work
+2:  PART    x9, x10, x19, Node_api
     sub     x4, x21, x9
     mov     x10, #NodeApi__mem
     udiv    x4, x4, x10

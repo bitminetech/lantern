@@ -3853,7 +3853,6 @@ END_FUNCTION produce_contents
 
 /* ---------------------------------------------------------------- publishBlockV2 */
 
-.set PUB_BLOB_BYTES, FIELD_ELEMENTS_PER_BLOB * 32
 
 /*
  * (body, json, scratch, out, facts): node.md, lantern_node_publish_decode. x19 body, x20 json,
@@ -3966,16 +3965,26 @@ SPEC_END node_publish_decode
 /*
  * (gossip, block, sidecars, level, scratch): node.md, lantern_node_publish_check. x19 gossip,
  * x20 block, x21 sidecars, x22 level, x23 scratch, x24 a sidecar, x25 their end, x26 the scratch
- * size. Locals: L a Result, L+8 a root (32), L+40 an index, L+48 execution_valid 1.
+ * size. Locals: L a Result, L+8 a root (32), L+40 an index, L+48 execution_valid 1, L+64 the
+ * counts of seen's parts (40).
  */
 SPEC_FUNCTION node_publish_check
-    ENTER 64
+    ENTER 112
     mov     x19, x0
     mov     x20, x1
     mov     x21, x2
     mov     x22, x3
     mov     x23, x4
     ldr     x26, [x23]
+    ldr     x9, [x19, #NodeGossip_seen]     /* the counts of seen's parts, for a check that fails */
+    ldr     x10, [x9, #(Seen_keys + 8)]
+    ldr     x11, [x9, #(Seen_bits + 8)]
+    stp     x10, x11, [sp, #(L + 64)]
+    ldr     x10, [x9, #(Seen_blocks + 8)]
+    ldr     x11, [x9, #(Seen_headers + 8)]
+    stp     x10, x11, [sp, #(L + 80)]
+    ldr     x10, [x9, #Seen_header_bytes]
+    str     x10, [sp, #(L + 96)]
     mov     x9, #GOSSIP_BEACON_BLOCK        /* the beacon_block topic's checks */
     str     x9, [x19, #NodeGossip_topic]
     str     xzr, [x19, #NodeGossip_subnet]
@@ -4062,17 +4071,25 @@ SPEC_FUNCTION node_publish_check
     b.eq    7f
 3:  mov     x0, #LANTERN_INVALID_STATE_ROOT
 4:  str     x26, [x23]
-    LEAVE 64
+    b       9f
 7:  str     x26, [x23]
     mov     x0, #LANTERN_OK
-    LEAVE 64
+    LEAVE 112
 6:  str     x26, [x23]
     mov     x0, #LANTERN_BUFFER_TOO_SMALL
-    LEAVE 64
+    b       9f
 8:  str     x26, [x23]
     mov     x0, #LANTERN_INVALID_ENCODING
-    LEAVE 64
-9:  LEAVE 64
+9:  ldr     x9, [x19, #NodeGossip_seen]     /* a check that fails, or no room: seen as it was */
+    ldp     x10, x11, [sp, #(L + 64)]
+    str     x10, [x9, #(Seen_keys + 8)]
+    str     x11, [x9, #(Seen_bits + 8)]
+    ldp     x10, x11, [sp, #(L + 80)]
+    str     x10, [x9, #(Seen_blocks + 8)]
+    str     x11, [x9, #(Seen_headers + 8)]
+    ldr     x10, [sp, #(L + 96)]
+    str     x10, [x9, #Seen_header_bytes]
+    LEAVE 112
 SPEC_END node_publish_check
 
 /*
@@ -4089,3 +4106,282 @@ LOCAL_FUNCTION publish_gossip
     ldr     x0, [sp, #16]
 9:  UNFRAME 48
 END_FUNCTION publish_gossip
+
+.if FORK >= FORK_DENEB
+
+/*
+ * (body, json, scratch, out): node.md, lantern_node_publish_sidecars. x19 body, x20 json, x21
+ * scratch, x22 out, x23 the SignedBlockContents value, x24 its block's body, x25 the blob count,
+ * x26 a sidecar, x27 a counter, x28 the scratch size. Locals: L the signed header (208), L+208 a
+ * GeneralizedIndex, L+216 a JsonFault (128), then a Branch of the commitments' list (24 + 128),
+ * L+368 the KzgScratch, L+376 the cells, L+384 the stride.
+ */
+SPEC_FUNCTION node_publish_sidecars
+    ENTER 400
+    mov     x19, x0
+    mov     x20, x1
+    mov     x21, x2
+    mov     x22, x3
+    ldr     x28, [x21]
+    ldr     x9, [x19, #16]                  /* the SSZ bytes at the end of scratch: 24 + the body's length */
+    add     x9, x9, #(24 + 7)
+    and     x9, x9, #~7
+    add     x10, x9, #64
+    cmp     x10, x28
+    b.hs    8f
+    sub     x10, x28, x9
+    str     x10, [x21]
+    add     x23, x21, x10
+    mov     x11, #24
+    stp     x9, x11, [x23]
+    str     xzr, [x23, #16]
+    cbz     x20, 1f
+    ADDRESS x0, lantern_type_SignedBlockContents    /* JSON: its SSZ bytes */
+    mov     x1, x19
+    mov     x2, x21
+    mov     x3, x23
+    add     x4, sp, #(L + 216)
+    CALL_GLOBAL lantern_json_decode
+    cmp     x0, #LANTERN_BUFFER_TOO_SMALL
+    b.eq    8f
+    cbnz    x0, 9f
+    b       2f
+1:  ldp     x9, x10, [x19, #8]              /* SSZ: the bytes as they are */
+    str     x10, [x23, #16]
+    add     x0, x23, #24
+    add     x1, x19, x9
+    mov     x2, x10
+    bl      lantern_copy
+2:  ADDRESS x0, lantern_type_SignedBlockContents    /* its value */
+    mov     x1, x23
+    mov     x2, x21
+    bl      node_decode
+    cmp     x0, #1
+    b.eq    8f
+    b.hi    9f
+    mov     x23, x1
+    PART    x9, x10, x23, SignedBlockContents_signed_block  /* compute_signed_block_header */
+    PART    x11, x10, x9, SignedBeaconBlock_message
+    ldr     x12, [x11, #BeaconBlock_slot]
+    ldr     x13, [x11, #BeaconBlock_proposer_index]
+    stp     x12, x13, [sp, #L]
+    PART    x24, x10, x11, BeaconBlock_body
+    add     x0, sp, #(L + 16)
+    add     x1, x11, #BeaconBlock_parent_root
+    COPY32  x0, x1
+    add     x0, sp, #(L + 48)
+    add     x1, x11, #BeaconBlock_state_root
+    COPY32  x0, x1
+    add     x0, sp, #(L + 112)
+    add     x1, x9, #SignedBeaconBlock_signature
+    mov     x2, #96
+    bl      lantern_copy
+    ADDRESS x0, lantern_type_BeaconBlockBody
+    mov     x1, x24
+    mov     x2, x21
+    add     x3, sp, #(L + 80)
+    CALL_GLOBAL ssz_hash_tree_root
+    cbnz    x0, 8f
+    PART    x9, x25, x24, BeaconBlockBody_blob_kzg_commitments
+.if FORK >= FORK_FULU
+    MOVQ    x9, PUB_CELL_BYTES + 96         /* the stride: a ByteList of a column sidecar of the count */
+    MOVQ    x10, PUB_COLUMN_FIXED + 24 + 7
+    madd    x9, x25, x9, x10
+    and     x9, x9, #~7
+    str     x9, [sp, #(L + 384)]
+    mov     x10, #NUMBER_OF_COLUMNS
+    mul     x10, x9, x10
+    add     x10, x10, #24
+    ldr     x11, [x22]
+    cmp     x10, x11
+    b.hi    8f
+    mov     x9, #PUB_COMMITMENTS_GINDEX     /* the commitments' branch, the same for each column */
+    str     x9, [sp, #(L + 208)]
+    mov     x9, #(24 + 32 * KZG_COMMITMENTS_INCLUSION_PROOF_DEPTH)
+    str     x9, [sp, #(L + 216)]
+    ADDRESS x0, lantern_type_BeaconBlockBody
+    mov     x1, x24
+    add     x2, sp, #(L + 208)
+    mov     x3, x21
+    add     x4, sp, #(L + 216)
+    CALL_GLOBAL ssz_build_proof
+    cmp     x0, #SSZ_BUFFER_TOO_SMALL
+    b.eq    8f
+    cbnz    x0, 9f
+    mov     x27, #0                         /* each column: its fixed part, the commitments and its proofs */
+    add     x26, x22, #24
+3:  cmp     x27, #NUMBER_OF_COLUMNS
+    b.hs    4f
+    ldr     x9, [sp, #(L + 384)]
+    MOVQ    x10, PUB_CELL_BYTES + 96
+    MOVQ    x11, PUB_COLUMN_FIXED
+    madd    x10, x25, x10, x11              /* its length */
+    mov     x11, #24
+    stp     x9, x11, [x26]
+    str     x10, [x26, #16]
+    str     x27, [x26, #24]                 /* index */
+    MOVQ    x9, PUB_COLUMN_FIXED            /* the offsets of column, kzg_commitments, kzg_proofs */
+    str     w9, [x26, #(24 + 8)]
+    MOVQ    x10, PUB_CELL_BYTES
+    madd    x9, x25, x10, x9
+    str     w9, [x26, #(24 + 12)]
+    mov     x10, #48
+    madd    x9, x25, x10, x9
+    str     w9, [x26, #(24 + 16)]
+    add     x0, x26, #(24 + 20)             /* signed_block_header */
+    add     x1, sp, #L
+    mov     x2, #PUB_HEADER_BYTES
+    bl      lantern_copy
+    add     x0, x26, #(24 + 20 + PUB_HEADER_BYTES)  /* kzg_commitments_inclusion_proof */
+    add     x1, sp, #(L + 216 + 24)
+    mov     x2, #(32 * KZG_COMMITMENTS_INCLUSION_PROOF_DEPTH)
+    bl      lantern_copy
+    ldr     w9, [x26, #(24 + 12)]           /* kzg_commitments: the body's */
+    add     x0, x26, #24
+    add     x0, x0, x9
+    PART    x1, x9, x24, BeaconBlockBody_blob_kzg_commitments
+    mov     x10, #48
+    mul     x2, x25, x10
+    bl      lantern_copy
+    mov     x13, #0                         /* kzg_proofs: proof c of each blob */
+31: cmp     x13, x25
+    b.hs    32f
+    ldr     w9, [x26, #(24 + 16)]
+    add     x0, x26, #24
+    add     x0, x0, x9
+    mov     x10, #48
+    madd    x0, x13, x10, x0
+    PART    x1, x9, x23, SignedBlockContents_kzg_proofs
+    mov     x10, #CELLS_PER_EXT_BLOB
+    madd    x10, x13, x10, x27
+    mov     x11, #48
+    madd    x1, x10, x11, x1
+    ldp     x9, x10, [x1]
+    stp     x9, x10, [x0]
+    ldp     x9, x10, [x1, #16]
+    stp     x9, x10, [x0, #16]
+    ldp     x9, x10, [x1, #32]
+    stp     x9, x10, [x0, #32]
+    add     x13, x13, #1
+    b       31b
+32: ldr     x9, [sp, #(L + 384)]
+    add     x26, x26, x9
+    add     x27, x27, #1
+    b       3b
+4:  ldr     x9, [x21]                       /* the cells of each blob: a KzgScratch and the cells at the end of scratch */
+    MOVQ    x10, CRYPTO_KZG_SCRATCH + CELLS_PER_EXT_BLOB * PUB_CELL_BYTES + 64
+    cmp     x9, x10
+    b.lo    8f
+    sub     x9, x9, x10
+    str     x9, [x21]
+    add     x9, x21, x9
+    add     x9, x9, #63
+    and     x9, x9, #~63
+    MOVQ    x10, CRYPTO_KZG_SCRATCH
+    str     x10, [x9]
+    str     x9, [sp, #(L + 368)]
+    add     x9, x9, x10
+    str     x9, [sp, #(L + 376)]
+    mov     x27, #0                         /* blob b: its cells, then cell c to column c's place b */
+5:  cmp     x27, x25
+    b.hs    7f
+    PART    x0, x9, x23, SignedBlockContents_blobs
+    MOVQ    x10, PUB_BLOB_BYTES
+    madd    x0, x27, x10, x0
+    ldr     x1, [sp, #(L + 368)]
+    ldr     x2, [sp, #(L + 376)]
+    CALL_GLOBAL crypto_kzg_compute_cells
+    cmp     x0, #CRYPTO_BUFFER_TOO_SMALL
+    b.eq    8f
+    cbnz    x0, 9f
+    mov     x26, #0
+6:  cmp     x26, #NUMBER_OF_COLUMNS
+    b.hs    61f
+    ldr     x9, [sp, #(L + 384)]
+    add     x0, x22, #24
+    madd    x0, x26, x9, x0
+    MOVQ    x9, PUB_COLUMN_FIXED + 24
+    add     x0, x0, x9
+    MOVQ    x9, PUB_CELL_BYTES
+    madd    x0, x27, x9, x0
+    ldr     x1, [sp, #(L + 376)]
+    madd    x1, x26, x9, x1
+    mov     x2, x9
+    bl      lantern_copy
+    add     x26, x26, #1
+    b       6b
+61: add     x27, x27, #1
+    b       5b
+7:  ldr     x9, [sp, #(L + 384)]
+    mov     x10, #NUMBER_OF_COLUMNS
+    mul     x9, x9, x10
+    str     x9, [x22, #16]
+.else
+    MOVQ    x9, PUB_BLOB_SIDECAR + 24       /* a BlobSidecar for each blob */
+    mul     x9, x25, x9
+    add     x9, x9, #24
+    ldr     x10, [x22]
+    cmp     x9, x10
+    b.hi    8f
+    mov     x27, #0
+    add     x26, x22, #24
+3:  cmp     x27, x25
+    b.hs    7f
+    MOVQ    x9, PUB_BLOB_SIDECAR + 24
+    mov     x10, #24
+    stp     x9, x10, [x26]
+    MOVQ    x9, PUB_BLOB_SIDECAR
+    str     x9, [x26, #16]
+    str     x27, [x26, #24]                 /* index */
+    add     x0, x26, #(24 + 8)              /* blob */
+    PART    x1, x9, x23, SignedBlockContents_blobs
+    MOVQ    x2, PUB_BLOB_BYTES
+    madd    x1, x27, x2, x1
+    bl      lantern_copy
+    ADDQ    x0, x26, 24 + 8 + PUB_BLOB_BYTES    /* kzg_commitment */
+    PART    x1, x9, x24, BeaconBlockBody_blob_kzg_commitments
+    mov     x2, #48
+    madd    x1, x27, x2, x1
+    bl      lantern_copy
+    ADDQ    x0, x26, 24 + 8 + PUB_BLOB_BYTES + 48   /* kzg_proof */
+    PART    x1, x9, x23, SignedBlockContents_kzg_proofs
+    mov     x2, #48
+    madd    x1, x27, x2, x1
+    bl      lantern_copy
+    MOVQ    x9, PUB_COMMITMENTS_GINDEX << 13    /* the inclusion proof, its Branch header in the header's place */
+    add     x9, x9, x27
+    str     x9, [sp, #(L + 208)]
+    ADDQ    x4, x26, 24 + 8 + PUB_BLOB_BYTES + 96 + PUB_HEADER_BYTES - 24
+    mov     x9, #(24 + 32 * KZG_COMMITMENT_INCLUSION_PROOF_DEPTH)
+    str     x9, [x4]
+    ADDRESS x0, lantern_type_BeaconBlockBody
+    mov     x1, x24
+    add     x2, sp, #(L + 208)
+    mov     x3, x21
+    CALL_GLOBAL ssz_build_proof
+    cmp     x0, #SSZ_BUFFER_TOO_SMALL
+    b.eq    8f
+    cbnz    x0, 9f
+    ADDQ    x0, x26, 24 + 8 + PUB_BLOB_BYTES + 96   /* signed_block_header, over the Branch header */
+    add     x1, sp, #L
+    mov     x2, #PUB_HEADER_BYTES
+    bl      lantern_copy
+    MOVQ    x9, PUB_BLOB_SIDECAR + 24
+    add     x26, x26, x9
+    add     x27, x27, #1
+    b       3b
+7:  MOVQ    x9, PUB_BLOB_SIDECAR + 24
+    mul     x9, x25, x9
+    str     x9, [x22, #16]
+.endif
+    str     x28, [x21]
+    mov     x0, #LANTERN_OK
+    LEAVE 400
+8:  str     x28, [x21]
+    mov     x0, #LANTERN_BUFFER_TOO_SMALL
+    LEAVE 400
+9:  str     x28, [x21]
+    mov     x0, #LANTERN_INVALID_ENCODING
+    LEAVE 400
+SPEC_END node_publish_sidecars
+.endif

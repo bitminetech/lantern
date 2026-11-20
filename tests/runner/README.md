@@ -49,6 +49,7 @@ build/linux-x86_64/runner-minimal-fulu ~/.cache/lantern/vectors minimal-fulu-ope
 
 - `SCRATCH_BYTES` is more than any call of the vectors needs. The largest need is a KZG check of a column: 2 MiB of asm-crypto scratch plus about 10 KB per blob. Refilling the scratch is most of the runner's own time, so it is not larger.
 - `-DSCRATCH_BYTES=<bytes>` sets another size, for example when new vectors need more.
+- A node step that asks for scratch (`NODE_SHORT_SCRATCH`) runs again with twice the room, as the app grows it: the step's room rule asks 16 bytes for each byte of a request's body, and a publishBlockV2 body with blobs passes 4 MiB. That larger buffer is kept for the next such step and refilled only for it.
 
 ## Call check
 

@@ -3925,7 +3925,6 @@ END_FUNCTION produce_contents
 
 /* ---------------------------------------------------------------- publishBlockV2 */
 
-.set PUB_BLOB_BYTES, FIELD_ELEMENTS_PER_BLOB * 32
 
 /*
  * (body, json, scratch, out, facts): node.md, lantern_node_publish_decode. s1 body, s2 json, s3
@@ -4039,16 +4038,27 @@ SPEC_END node_publish_decode
 /*
  * (gossip, block, sidecars, level, scratch): node.md, lantern_node_publish_check. s1 gossip, s2
  * block, s3 sidecars, s4 level, s5 scratch, s6 a sidecar, s7 their end, s8 the scratch size.
- * Locals: L a Result, L+8 a root (32), L+48 execution_valid 1.
+ * Locals: L a Result, L+8 a root (32), L+48 execution_valid 1, L+64 the counts of seen's parts (40).
  */
 SPEC_FUNCTION node_publish_check
-    ENTER 64
+    ENTER 112
     mv      s1, a0
     mv      s2, a1
     mv      s3, a2
     mv      s4, a3
     mv      s5, a4
     ld      s8, 0(s5)
+    ld      t0, NodeGossip_seen(s1)         # the counts of seen's parts, for a check that fails
+    ld      t1, (Seen_keys + 8)(t0)
+    sd      t1, (L + 64)(sp)
+    ld      t1, (Seen_bits + 8)(t0)
+    sd      t1, (L + 72)(sp)
+    ld      t1, (Seen_blocks + 8)(t0)
+    sd      t1, (L + 80)(sp)
+    ld      t1, (Seen_headers + 8)(t0)
+    sd      t1, (L + 88)(sp)
+    ld      t1, Seen_header_bytes(t0)
+    sd      t1, (L + 96)(sp)
     li      t0, GOSSIP_BEACON_BLOCK         # the beacon_block topic's checks
     sd      t0, NodeGossip_topic(s1)
     sd      zero, NodeGossip_subnet(s1)
@@ -4128,17 +4138,27 @@ SPEC_FUNCTION node_publish_check
     j       7f
 3:  li      a0, LANTERN_INVALID_STATE_ROOT
 4:  sd      s8, 0(s5)
-    LEAVE 64
+    j       99f
 7:  sd      s8, 0(s5)
     li      a0, LANTERN_OK
-    LEAVE 64
+    LEAVE 112
 6:  sd      s8, 0(s5)
     li      a0, LANTERN_BUFFER_TOO_SMALL
-    LEAVE 64
+    j       99f
 8:  sd      s8, 0(s5)
     li      a0, LANTERN_INVALID_ENCODING
-    LEAVE 64
-99: LEAVE 64
+99: ld      t0, NodeGossip_seen(s1)         # a check that fails, or no room: seen as it was
+    ld      t1, (L + 64)(sp)
+    sd      t1, (Seen_keys + 8)(t0)
+    ld      t1, (L + 72)(sp)
+    sd      t1, (Seen_bits + 8)(t0)
+    ld      t1, (L + 80)(sp)
+    sd      t1, (Seen_blocks + 8)(t0)
+    ld      t1, (L + 88)(sp)
+    sd      t1, (Seen_headers + 8)(t0)
+    ld      t1, (L + 96)(sp)
+    sd      t1, Seen_header_bytes(t0)
+    LEAVE 112
 SPEC_END node_publish_check
 
 /*
@@ -4155,3 +4175,291 @@ LOCAL_FUNCTION publish_gossip
     ld      a0, 0(sp)
 9:  UNFRAME 48
 END_FUNCTION publish_gossip
+
+.if FORK >= FORK_DENEB
+/*
+ * (body, json, scratch, out): node.md, lantern_node_publish_sidecars. s1 body, s2 json, s3 scratch,
+ * s4 out, s5 the SignedBlockContents value, s6 its block's body, s7 the blob count, s8 a sidecar or
+ * a column, s9 the scratch size, s10 the stride, s2 a counter after the decode (ENTER keeps s1-s10). SSZ positions in a sidecar are not
+ * all 8-aligned: lantern_copy writes them. Locals: L the signed header (208), L+208 a
+ * GeneralizedIndex, L+216 a JsonFault (128), then a Branch of the commitments' list (24 + 128),
+ * L+368 the KzgScratch, L+376 the cells, L+384 a blob's place.
+ */
+SPEC_FUNCTION node_publish_sidecars
+    ENTER 400
+    mv      s1, a0
+    mv      s2, a1
+    mv      s3, a2
+    mv      s4, a3
+    ld      s9, 0(s3)
+    ld      t0, 16(s1)                      # the SSZ bytes at the end of scratch: 24 + the body's length
+    addi    t0, t0, 24 + 7
+    andi    t0, t0, -8
+    addi    t1, t0, 64
+    bgeu    t1, s9, 8f
+    sub     t1, s9, t0
+    sd      t1, 0(s3)
+    add     s5, s3, t1
+    sd      t0, 0(s5)
+    li      t1, 24
+    sd      t1, 8(s5)
+    sd      zero, 16(s5)
+    beqz    s2, 1f
+    ADDRESS a0, lantern_type_SignedBlockContents    # JSON: its SSZ bytes
+    mv      a1, s1
+    mv      a2, s3
+    mv      a3, s5
+    addi    a4, sp, (L + 216)
+    CALL_GLOBAL lantern_json_decode
+    li      t0, LANTERN_BUFFER_TOO_SMALL
+    beq     a0, t0, 8f
+    bnez    a0, 9f
+    j       2f
+1:  ld      t0, 8(s1)                       # SSZ: the bytes as they are
+    ld      a2, 16(s1)
+    sd      a2, 16(s5)
+    addi    a0, s5, 24
+    add     a1, s1, t0
+    call    lantern_copy
+2:  ADDRESS a0, lantern_type_SignedBlockContents    # its value
+    mv      a1, s5
+    mv      a2, s3
+    call    node_decode
+    li      t0, 1
+    beq     a0, t0, 8f
+    bnez    a0, 9f
+    mv      s5, a1
+    PART    t0, t1, s5, SignedBlockContents_signed_block    # compute_signed_block_header
+    PART    t2, t1, t0, SignedBeaconBlock_message
+    ld      t1, BeaconBlock_slot(t2)
+    sd      t1, L(sp)
+    ld      t1, BeaconBlock_proposer_index(t2)
+    sd      t1, (L + 8)(sp)
+    PART    s6, t1, t2, BeaconBlock_body
+    addi    a0, sp, (L + 16)
+    ADDQ    a1, t2, BeaconBlock_parent_root
+    COPY32  a0, a1
+    addi    a0, sp, (L + 48)
+    ADDQ    a1, t2, BeaconBlock_state_root
+    COPY32  a0, a1
+    addi    a0, sp, (L + 112)
+    ADDQ    a1, t0, SignedBeaconBlock_signature
+    li      a2, 96
+    call    lantern_copy
+    ADDRESS a0, lantern_type_BeaconBlockBody
+    mv      a1, s6
+    mv      a2, s3
+    addi    a3, sp, (L + 80)
+    CALL_GLOBAL ssz_hash_tree_root
+    bnez    a0, 8f
+    LDQ     s7, s6, BeaconBlockBody_blob_kzg_commitments + 8   # the blob count
+.if FORK >= FORK_FULU
+    li      t0, PUB_CELL_BYTES + 96         # the stride: a ByteList of a column sidecar of the count
+    mul     t0, s7, t0
+    li      t1, PUB_COLUMN_FIXED + 24 + 7
+    add     t0, t0, t1
+    andi    s10, t0, -8
+    li      t0, NUMBER_OF_COLUMNS
+    mul     t0, s10, t0
+    addi    t0, t0, 24
+    ld      t1, 0(s4)
+    bltu    t1, t0, 8f
+    li      t0, PUB_COMMITMENTS_GINDEX      # the commitments' branch, the same for each column
+    sd      t0, (L + 208)(sp)
+    li      t0, 24 + 32 * KZG_COMMITMENTS_INCLUSION_PROOF_DEPTH
+    sd      t0, (L + 216)(sp)
+    ADDRESS a0, lantern_type_BeaconBlockBody
+    mv      a1, s6
+    addi    a2, sp, (L + 208)
+    mv      a3, s3
+    addi    a4, sp, (L + 216)
+    CALL_GLOBAL ssz_build_proof
+    li      t0, SSZ_BUFFER_TOO_SMALL
+    beq     a0, t0, 8f
+    bnez    a0, 9f
+    li      s2, 0                          # each column: its fixed part, the commitments and its proofs
+3:  li      t0, NUMBER_OF_COLUMNS
+    bgeu    s2, t0, 4f
+    mul     t0, s2, s10
+    add     s8, s4, t0
+    addi    s8, s8, 24
+    sd      s10, 0(s8)
+    li      t0, 24
+    sd      t0, 8(s8)
+    li      t0, PUB_CELL_BYTES + 96
+    mul     t0, s7, t0
+    li      t1, PUB_COLUMN_FIXED
+    add     t0, t0, t1
+    sd      t0, 16(s8)
+    sd      s2, 24(s8)                     # index
+    li      t0, PUB_COLUMN_FIXED            # the offsets of column, kzg_commitments, kzg_proofs
+    sw      t0, 32(s8)
+    li      t1, PUB_CELL_BYTES
+    mul     t1, s7, t1
+    add     t0, t0, t1
+    sw      t0, 36(s8)
+    li      t1, 48
+    mul     t1, s7, t1
+    add     t0, t0, t1
+    sw      t0, 40(s8)
+    addi    a0, s8, 44                      # signed_block_header
+    addi    a1, sp, L
+    li      a2, PUB_HEADER_BYTES
+    call    lantern_copy
+    addi    a0, s8, 44 + PUB_HEADER_BYTES   # kzg_commitments_inclusion_proof
+    addi    a1, sp, (L + 216 + 24)
+    li      a2, 32 * KZG_COMMITMENTS_INCLUSION_PROOF_DEPTH
+    call    lantern_copy
+    lwu     t0, 36(s8)                      # kzg_commitments: the body's
+    add     a0, s8, t0
+    addi    a0, a0, 24
+    PART    a1, t1, s6, BeaconBlockBody_blob_kzg_commitments
+    li      t1, 48
+    mul     a2, s7, t1
+    call    lantern_copy
+    sd      zero, (L + 384)(sp)             # kzg_proofs: proof c of each blob
+31: ld      t0, (L + 384)(sp)
+    bgeu    t0, s7, 32f
+    lwu     t1, 40(s8)
+    add     a0, s8, t1
+    addi    a0, a0, 24
+    li      t2, 48
+    mul     t3, t0, t2
+    add     a0, a0, t3
+    PART    a1, t1, s5, SignedBlockContents_kzg_proofs
+    li      t2, CELLS_PER_EXT_BLOB
+    mul     t3, t0, t2
+    add     t3, t3, s2
+    li      t2, 48
+    mul     t3, t3, t2
+    add     a1, a1, t3
+    li      a2, 48
+    call    lantern_copy
+    ld      t0, (L + 384)(sp)
+    addi    t0, t0, 1
+    sd      t0, (L + 384)(sp)
+    j       31b
+32: addi    s2, s2, 1
+    j       3b
+4:  ld      t0, 0(s3)                       # the cells of each blob: a KzgScratch and the cells at the end of scratch
+    li      t1, CRYPTO_KZG_SCRATCH + CELLS_PER_EXT_BLOB * PUB_CELL_BYTES + 64
+    bltu    t0, t1, 8f
+    sub     t0, t0, t1
+    sd      t0, 0(s3)
+    add     t0, s3, t0
+    addi    t0, t0, 63
+    andi    t0, t0, -64
+    li      t1, CRYPTO_KZG_SCRATCH
+    sd      t1, 0(t0)
+    sd      t0, (L + 368)(sp)
+    add     t0, t0, t1
+    sd      t0, (L + 376)(sp)
+    li      s2, 0                          # blob b: its cells, then cell c to column c's place b
+5:  bgeu    s2, s7, 7f
+    PART    a0, t1, s5, SignedBlockContents_blobs
+    li      t0, PUB_BLOB_BYTES
+    mul     t0, s2, t0
+    add     a0, a0, t0
+    ld      a1, (L + 368)(sp)
+    ld      a2, (L + 376)(sp)
+    CALL_GLOBAL crypto_kzg_compute_cells
+    li      t0, CRYPTO_BUFFER_TOO_SMALL
+    beq     a0, t0, 8f
+    bnez    a0, 9f
+    li      s8, 0
+6:  li      t0, NUMBER_OF_COLUMNS
+    bgeu    s8, t0, 61f
+    mul     t0, s8, s10
+    add     a0, s4, t0
+    li      t1, 24 + 24 + PUB_COLUMN_FIXED
+    add     a0, a0, t1
+    li      t1, PUB_CELL_BYTES
+    mul     t2, s2, t1
+    add     a0, a0, t2
+    mul     t2, s8, t1
+    ld      a1, (L + 376)(sp)
+    add     a1, a1, t2
+    li      a2, PUB_CELL_BYTES
+    call    lantern_copy
+    addi    s8, s8, 1
+    j       6b
+61: addi    s2, s2, 1
+    j       5b
+7:  li      t0, NUMBER_OF_COLUMNS
+    mul     t0, s10, t0
+    sd      t0, 16(s4)
+.else
+    li      t0, PUB_BLOB_SIDECAR + 24       # a BlobSidecar for each blob
+    mul     t0, s7, t0
+    addi    t0, t0, 24
+    ld      t1, 0(s4)
+    bltu    t1, t0, 8f
+    li      s2, 0
+3:  bgeu    s2, s7, 7f
+    li      t0, PUB_BLOB_SIDECAR + 24
+    mul     t0, s2, t0
+    add     s8, s4, t0
+    addi    s8, s8, 24
+    li      t0, PUB_BLOB_SIDECAR + 24
+    sd      t0, 0(s8)
+    li      t0, 24
+    sd      t0, 8(s8)
+    li      t0, PUB_BLOB_SIDECAR
+    sd      t0, 16(s8)
+    sd      s2, 24(s8)                     # index
+    addi    a0, s8, 32                      # blob
+    PART    a1, t1, s5, SignedBlockContents_blobs
+    li      t0, PUB_BLOB_BYTES
+    mul     t0, s2, t0
+    add     a1, a1, t0
+    li      a2, PUB_BLOB_BYTES
+    call    lantern_copy
+    ADDQ    a0, s8, 32 + PUB_BLOB_BYTES     # kzg_commitment
+    PART    a1, t1, s6, BeaconBlockBody_blob_kzg_commitments
+    li      t0, 48
+    mul     t0, s2, t0
+    add     a1, a1, t0
+    li      a2, 48
+    call    lantern_copy
+    ADDQ    a0, s8, 32 + PUB_BLOB_BYTES + 48    # kzg_proof
+    PART    a1, t1, s5, SignedBlockContents_kzg_proofs
+    li      t0, 48
+    mul     t0, s2, t0
+    add     a1, a1, t0
+    li      a2, 48
+    call    lantern_copy
+    li      t0, PUB_COMMITMENTS_GINDEX << 13    # the inclusion proof, its Branch header in the header's place
+    add     t0, t0, s2
+    sd      t0, (L + 208)(sp)
+    ADDQ    a4, s8, 32 + PUB_BLOB_BYTES + 96 + PUB_HEADER_BYTES - 24
+    li      t0, 24 + 32 * KZG_COMMITMENT_INCLUSION_PROOF_DEPTH
+    sd      t0, 0(a4)
+    ADDRESS a0, lantern_type_BeaconBlockBody
+    mv      a1, s6
+    addi    a2, sp, (L + 208)
+    mv      a3, s3
+    CALL_GLOBAL ssz_build_proof
+    li      t0, SSZ_BUFFER_TOO_SMALL
+    beq     a0, t0, 8f
+    bnez    a0, 9f
+    ADDQ    a0, s8, 32 + PUB_BLOB_BYTES + 96    # signed_block_header, over the Branch header
+    addi    a1, sp, L
+    li      a2, PUB_HEADER_BYTES
+    call    lantern_copy
+    addi    s2, s2, 1
+    j       3b
+7:  li      t0, PUB_BLOB_SIDECAR + 24
+    mul     t0, s7, t0
+    sd      t0, 16(s4)
+.endif
+    sd      s9, 0(s3)
+    li      a0, LANTERN_OK
+    LEAVE 400
+8:  sd      s9, 0(s3)
+    li      a0, LANTERN_BUFFER_TOO_SMALL
+    LEAVE 400
+9:  sd      s9, 0(s3)
+    li      a0, LANTERN_INVALID_ENCODING
+    LEAVE 400
+SPEC_END node_publish_sidecars
+.endif
