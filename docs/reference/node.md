@@ -16,6 +16,9 @@
 - [`lantern_node_event_roots`](#function-lantern_node_event_roots): the block root, state root and dependent roots of a block's post-state, for one fork.
 - [`lantern_node_attestation_data`](#function-lantern_node_attestation_data): the `AttestationData` of a state's slot, for one fork.
 - [`lantern_node_attester_duties`](#function-lantern_node_attester_duties): the committee assignments of validators in an epoch, for one fork.
+- [`lantern_node_randao`](#function-lantern_node_randao): the RANDAO mix of an epoch in a state, for one fork.
+- [`lantern_node_sync_committee`](#function-lantern_node_sync_committee): the validator indices of a state's sync committee of an epoch, for one fork.
+- [`lantern_node_proposer_lookahead`](#function-lantern_node_proposer_lookahead): a state's `proposer_lookahead`, for one fork.
 - [`lantern_node_attestation`](#function-lantern_node_attestation): on_attestation of an attestation's SSZ bytes, for one fork.
 - [`lantern_node_attester_slashing`](#function-lantern_node_attester_slashing): on_attester_slashing of a slashing's SSZ bytes, for one fork.
 - [`lantern_node_gossip`](#function-lantern_node_gossip): the gossip validation of a message's SSZ bytes, for one fork.
@@ -162,7 +165,7 @@
   - getEpochCommittees: of `head` with no query, each `epoch` from the state's epoch - 1 to its epoch + 2, a `slot` of the epoch and one of another, `index` 0 and 1, a `slot` with an `index`, over HTTP/1.0, and with a `state_id` of `finalized`, of a slot and of a root; and in a second case, an anchor at epoch EPOCHS_PER_HISTORICAL_VECTOR + 6, the lowest epoch beacon-api.md takes and the one below it.
   - The six validator operations, of an anchor state with 8 more validators, one of each status but `active_ongoing`: each status and group of `status`; `id` items of indices and public keys, known, unknown and given twice; the bodies of the three POSTs; getStateValidator of an index and of a key, and of ones no validator has (404); the identities as SSZ; over HTTP/1.0 and with `Connection: close`; and with a `state_id` of a state root.
   - getSpec, getForkSchedule and getDepositContract, from the pinned config, presets and the spec module's constants, with the node's fork epochs; getSpec also over HTTP/1.0 and with `Connection: close`, and getForkSchedule over HTTP/1.0.
-  - Lookup requests, the states from process_slots of the anchor state: getBlockRoot, getBlockHeader and getBlockV2 of `head`, `finalized`, `genesis`, the anchor's slot and the slots before and after it, the anchor's root and another root; getStateRoot, getStateFork and getStateFinalityCheckpoints of `head`, `finalized`, `justified`, `genesis`, the anchor's slot, each slot after it to the store's slot and the slot after that, the anchor state's root, the root of the state of the anchor's slot + 1, and another root; getStateV2 as JSON of `finalized` and of the anchor's slot + 2.
+  - Lookup requests, the states from process_slots of the anchor state: getBlockRoot, getBlockHeader and getBlockV2 of `head`, `finalized`, `genesis`, the anchor's slot and the slots before and after it, the anchor's root and another root; getStateRoot, getStateFork and getStateFinalityCheckpoints of `head`, `finalized`, `justified`, `genesis`, the anchor's slot, each slot after it to the store's slot and the slot after that, the anchor state's root, the root of the state of the anchor's slot + 1, and another root; getStateV2 as JSON of `finalized` and of the anchor's slot + 2; getStateRandao, getEpochSyncCommittees and getProposerLookahead of `head`, `finalized`, `genesis`, another root, the root of the state of the anchor's slot + 1 and that slot, getProposerLookahead of `head` as SSZ, getStateRandao of `head` at the epochs 0, the anchor's epoch - 1, it, + 1 and + EPOCHS_PER_HISTORICAL_VECTOR, and getEpochSyncCommittees of `head` at the epochs 0, the anchor's, and the first of the next two sync committee periods. The anchor state has the sync committees of genesis (both get_next_sync_committee) from altair.
   - getStateV2 of `head` as SSZ with the small event, and a `NODE_EV_API_CLOSED` of the connection after its first chunk: the connection must get no more actions, and the node must hold no `NodeApi` entry and must free the state's bytes.
 - The `fork_choice-get_head` and `fork_choice-on_block` cases in node mode, after their steps: getBlockHeader of `head` must answer 200 with the node's `head_root` as `root` and the slot of its block, and getStateFinalityCheckpoints of `head` with the checkpoints of the post-state the node keeps for the head.
   - The chain: the case's valid blocks from the node's `head_root` by `parent_root`. For each slot after the anchor's to the head's, getBlockRoot of the slot must answer the root of the chain's block of that slot, or 404 for a slot with none.
@@ -416,8 +419,9 @@ lantern_node_step(node, store, p2p, tick, events, scratch, actions, result) -> s
   - The block of a `block_id` and the state of a `state_id`, as beacon-api.md gives them: the walk of the chain by `parent_root` from the head's `NodeBlock`; below its lowest block, the `Db`'s `DbSlot` of a slot or lantern_db_find_root of a root; the bytes of a `Db` block a `NODE_DB_REF` of its record.
   - A state at a slot past its post-state's, or past its `NodeCheckpoint`'s: a `NODE_ACT_STATE_COPY` of it, the copy across the fork boundaries to the slot (the crossing), then a `NODE_WORK_SLOTS` of the copy to the slot when it is below it; after the copy's last use, a `NODE_ACT_STATE_FREE` of it.
   - getBlockRoot: the answer at once.
-  - getBlockHeader, getStateRoot, getStateFork and getStateFinalityCheckpoints: a `NODE_WORK_API_ENCODE`, the connection as `target`, and as `arg` the operation + 2^8 times the answer flags (`API_ANSWER_CLOSE` 1, `API_ANSWER_HTTP10` 2) + 2^16 times the values (`API_VALUE_CANONICAL` 1, `API_VALUE_FINALIZED` 2, `API_VALUE_OPTIMISTIC` 4) + 2^24 times: for getBlockHeader the block's `NodeBlock` index + 1, or 0 for a block of the `Db`; for the others the state's slot. getBlockHeader: the block's bytes as `data`, or 0; with none, its post-state as `state_a`. The others: the state as `state_a`.
+  - getBlockHeader, getStateRoot, getStateFork, getStateFinalityCheckpoints, getStateRandao, getEpochSyncCommittees and getProposerLookahead: a `NODE_WORK_API_ENCODE`, the connection as `target`, and as `arg` the operation + 2^8 times the answer flags (`API_ANSWER_CLOSE` 1, `API_ANSWER_HTTP10` 2) + 2^16 times the values (`API_VALUE_CANONICAL` 1, `API_VALUE_FINALIZED` 2, `API_VALUE_OPTIMISTIC` 4) + 2^24 times: for getBlockHeader the block's `NodeBlock` index + 1, or 0 for a block of the `Db`; for the others the state's slot. getBlockHeader: the block's bytes as `data`, or 0; with none, its post-state as `state_a`. The others: the state as `state_a`.
   - getBlockV2 and getStateV2: a stream (below).
+  - getStateRandao and getEpochSyncCommittees: as `data` a `NODE_ACT_BYTES_PUT` of the route's `epoch` (8 bytes; 2^64 - 1 when it is not given) to a new id; after the `NODE_EV_WORK_DONE`, a `NODE_ACT_BYTES_FREE` of the id. getProposerLookahead: `API_ANSWER_SSZ` among the answer flags for an SSZ `response`.
   - getStateValidator: a `NODE_ACT_BYTES_PUT` of the route's `validator` (a `ValidatorRef`) to a new id; a `NODE_WORK_API_ENCODE` as above with the state as `state_a` and that id as `data`; after its `NODE_EV_WORK_DONE`, a `NODE_ACT_BYTES_FREE` of the id.
   - getStateValidators, postStateValidators, getStateValidatorBalances, postStateValidatorBalances and postStateValidatorIdentities: a stream (below) of the state.
   - getEpochCommittees: the error 400 for an epoch or a slot that beacon-api.md refuses, from the state's slot; else a stream (below) of the state.
@@ -523,6 +527,7 @@ lantern_node_run(node, store, seen, work, state_a, state_b, state_c, data, setti
 - `NODE_WORK_API_ENCODE`: the response of the operation in `arg` (beacon-api.md, Common rules), with the answer flags and the values of `arg`, as a ByteList at `NodeEvent_chunk` of the event; the event's `size` then covers it.
   - getBlockHeader: the header of the block in `data` with lantern_node_block_header of the fork of its slot; with no `data`, the `latest_block_header` of `state_a`, its `state_root` lantern_state_root of the fork of the state's slot (with the `StateCache` of the node's config) when it is zero, and a zero signature. The root: that of the `NodeBlock` at index `arg` / 2^24 - 1, else lantern_node_block_root of `data`. Bytes that do not hold a block give the result `LANTERN_INVALID_ENCODING`.
   - getStateRoot: lantern_state_root of the fork of the state's slot, with the `StateCache` of the node's config. getStateFork: the state's `fork`. getStateFinalityCheckpoints: lantern_node_state_checkpoints of `state_a`.
+  - getStateRandao: lantern_node_randao of the fork of the state's slot, of `state_a` and the u64 at byte 0 of `data`. getEpochSyncCommittees: lantern_node_sync_committee of the fork of the state's slot, of `state_a` and the u64 at byte 0 of `data`, into `scratch`. getProposerLookahead: lantern_node_proposer_lookahead of the fork of the state's slot, of `state_a`; the answer's version the fork of the state's slot. `LANTERN_NO_STATE_ANSWER` of any of them: the error 400 as the answer. `data` of fewer than 8 bytes gives `LANTERN_INVALID_ENCODING`.
   - getSpec: of the node's config, the preset and the constants (include/api_spec.inc); it reads no state.
   - getProposerDuties: lantern_node_proposers of the fork of the state's slot, of `state_a`, with the node's config.
   - produceAttestationData: lantern_node_attestation_data of the fork of the state's slot, of `state_a` and the u64 at byte 0 of `data`, with the node's config; `data` of fewer than 8 bytes gives `LANTERN_INVALID_ENCODING`.
@@ -753,6 +758,101 @@ lantern_node_attester_duties(state, config, ids, scratch, out) -> status
 
 - Export: `lantern_<fork>_node_attester_duties` of each fork object.
 - Argument order: `state`, `config`, `ids`, `scratch`, `out`.
+
+## Function `lantern_node_randao`
+
+The RANDAO mix of an epoch in a state (beacon-api.md, getStateRandao).
+
+### Signature
+
+```
+lantern_node_randao(state, epoch, out) -> status
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `state` | input | `BeaconState` of the fork |
+| `epoch` | input | u64: the epoch, or 2^64 - 1 for the epoch of the state's slot |
+| `out` | output | 32 bytes: the mix |
+
+### Returns
+
+- `LANTERN_OK`: `out` holds get_randao_mix(state, epoch).
+- `LANTERN_NO_STATE_ANSWER`: the epoch is above the state's epoch, or EPOCHS_PER_HISTORICAL_VECTOR or more below it.
+
+### Function does
+
+- get_randao_mix reads `randao_mixes[epoch % EPOCHS_PER_HISTORICAL_VECTOR]`, which holds the mix of `epoch` only from the state's epoch - EPOCHS_PER_HISTORICAL_VECTOR + 1 to the state's epoch; Lighthouse v8.3.3 takes the same range (get_randao_mix_index).
+
+### ABI
+
+- Export: `lantern_<fork>_node_randao` of each fork object.
+- Argument order: `state`, `epoch`, `out`.
+
+## Function `lantern_node_sync_committee`
+
+The validator indices of a state's sync committee of an epoch (beacon-api.md, getEpochSyncCommittees).
+
+### Signature
+
+```
+lantern_node_sync_committee(state, epoch, scratch, out) -> status
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `state` | input | `BeaconState` of the fork |
+| `epoch` | input | u64: the epoch, or 2^64 - 1 for the epoch of the state's slot |
+| `scratch` | scratch | `Scratch` |
+| `out` | output | SYNC_COMMITTEE_SIZE u64: the index of each member, in the committee's order |
+
+### Returns
+
+- `LANTERN_OK`: `out` holds them.
+- `LANTERN_NO_STATE_ANSWER`: the fork is phase0, or the epoch's sync committee period is neither that of the state's epoch nor the next.
+- `LANTERN_INVALID_ENCODING`: a member's key is the key of no validator of the state.
+- `LANTERN_BUFFER_TOO_SMALL`: `scratch` has fewer than the bytes of the key table below.
+
+### Function does
+
+- The committee: `current_sync_committee` for the period of the state's epoch, `next_sync_committee` for the next (compute_sync_committee_period); Lighthouse v8.3.3 takes the same two (get_built_sync_committee).
+- Each member's index: all_pubkeys.index(pubkey), the first validator with the key, as process_sync_aggregate finds it (block-processing.md), with the key table at the end of `scratch`.
+
+### ABI
+
+- Export: `lantern_<fork>_node_sync_committee` of each fork object.
+- Argument order: `state`, `epoch`, `scratch`, `out`.
+
+## Function `lantern_node_proposer_lookahead`
+
+A state's `proposer_lookahead` (beacon-api.md, getProposerLookahead).
+
+### Signature
+
+```
+lantern_node_proposer_lookahead(state, out) -> status
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `state` | input | `BeaconState` of the fork |
+| `out` | output | (MIN_SEED_LOOKAHEAD + 1) * SLOTS_PER_EPOCH u64: the proposer of each slot from the state's epoch's first |
+
+### Returns
+
+- `LANTERN_OK`: `out` holds them.
+- `LANTERN_NO_STATE_ANSWER`: the fork is before fulu, whose `BeaconState` has no `proposer_lookahead`.
+
+### ABI
+
+- Export: `lantern_<fork>_node_proposer_lookahead` of each fork object.
+- Argument order: `state`, `out`.
 
 ## Function `lantern_node_event_roots`
 

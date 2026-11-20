@@ -1116,7 +1116,16 @@ LOCAL_FUNCTION api_body
     call    api_failures
     UNFRAME 16
 11: mov     8(%rsp), %rsi
-    cmp     $API_OP_PRODUCE_ATTESTATION_DATA, %rsi
+    cmp     $API_OP_GET_STATE_RANDAO, %rsi
+    je      113f
+    cmp     $API_OP_GET_EPOCH_SYNC_COMMITTEES, %rsi
+    je      113f
+    cmp     $API_OP_GET_PROPOSER_LOOKAHEAD, %rsi
+    jne     114f
+113: mov    (%rsp), %rdi                    # the state reads
+    call    api_state_read_body
+    UNFRAME 16
+114: cmp    $API_OP_PRODUCE_ATTESTATION_DATA, %rsi
     jne     12f
     mov     (%rsp), %rax                    # SSZ: its 128 bytes
     testq   $API_R_SSZ, 8(%rax)
@@ -1483,6 +1492,105 @@ LOCAL_FUNCTION api_duties_json
 END_FUNCTION api_duties_json
 
 /*
+ * The bodies of getStateRandao, getEpochSyncCommittees and getProposerLookahead (beacon-api.md), as
+ * api_body: rdi its locals (flags at 8), rsi the kind, rbp the view. Locals: those, an index, the kind.
+ */
+LOCAL_FUNCTION api_state_read_body
+    FRAME 32
+    mov     %rdi, (%rsp)
+    mov     %rsi, 16(%rsp)
+    cmp     $API_OP_GET_PROPOSER_LOOKAHEAD, %rsi
+    je      30f
+    # {"execution_optimistic":…,"finalized":…,"data":{
+    API_LIT api_x_optimistic
+    mov     ApiView_is_optimistic(%rbp), %rdi
+    call    api_bool
+    API_LIT api_x_finalized
+    mov     ApiView_head_finalized(%rbp), %rdi
+    call    api_bool
+    API_LIT api_x_data
+    cmpq    $API_OP_GET_STATE_RANDAO, 16(%rsp)
+    jne     10f
+    # "randao":…}}
+    API_LIT api_r_randao
+    lea     ApiView_randao(%rbp), %rdi
+    mov     $32, %esi
+    call    api_qhex
+    API_LIT api_end2
+    UNFRAME 32
+    # "validators":[…],"validator_aggregates":[[…],…]}}
+10: API_LIT api_s_validators
+    movq    $0, 8(%rsp)
+11: mov     8(%rsp), %rax
+    cmp     $SYNC_COMMITTEE_SIZE, %rax
+    jae     13f
+    test    %rax, %rax
+    jz      12f
+    API_LIT api_p_comma
+12: mov     8(%rsp), %rax
+    mov     ApiView_sync_out(%rbp), %rcx
+    mov     (%rcx,%rax,8), %rdi
+    call    api_qdec
+    incq    8(%rsp)
+    jmp     11b
+13: API_LIT api_s_aggregates
+    movq    $0, 8(%rsp)
+14: mov     8(%rsp), %rax
+    cmp     $SYNC_COMMITTEE_SIZE, %rax
+    jae     18f
+    test    $(SYNC_COMMITTEE_SIZE / SYNC_COMMITTEE_SUBNET_COUNT - 1), %eax
+    jnz     16f
+    test    %rax, %rax
+    jz      15f
+    API_LIT api_p_rbracket
+    API_LIT api_p_comma
+15: API_LIT api_p_lbracket
+    jmp     17f
+16: API_LIT api_p_comma
+17: mov     8(%rsp), %rax
+    mov     ApiView_sync_out(%rbp), %rcx
+    mov     (%rcx,%rax,8), %rdi
+    call    api_qdec
+    incq    8(%rsp)
+    jmp     14b
+18: API_LIT api_p_rbracket
+    API_LIT api_s_end
+    UNFRAME 32
+30: mov     (%rsp), %rax                    # getProposerLookahead: SSZ, its bytes
+    testq   $API_R_SSZ, 8(%rax)
+    jz      31f
+    lea     ApiView_lookahead(%rbp), %rdi
+    mov     $(8 * API_LOOKAHEAD_SLOTS), %esi
+    call    api_put
+    UNFRAME 32
+    # {"version":"<fork>","execution_optimistic":…,"finalized":…,"data":[…]}
+31: API_LIT api_j_version
+    mov     ApiView_fork(%rbp), %rdi
+    call    api_fork_name
+    API_LIT api_j_optimistic
+    mov     ApiView_is_optimistic(%rbp), %rdi
+    call    api_bool
+    API_LIT api_x_finalized
+    mov     ApiView_head_finalized(%rbp), %rdi
+    call    api_bool
+    API_LIT api_v_list
+    movq    $0, 8(%rsp)
+32: mov     8(%rsp), %rax
+    cmp     $API_LOOKAHEAD_SLOTS, %rax
+    jae     34f
+    test    %rax, %rax
+    jz      33f
+    API_LIT api_p_comma
+33: mov     8(%rsp), %rax
+    mov     ApiView_lookahead(%rbp,%rax,8), %rdi
+    call    api_qdec
+    incq    8(%rsp)
+    jmp     32b
+34: API_LIT api_v_end
+    UNFRAME 32
+END_FUNCTION api_state_read_body
+
+/*
  * (view rdi, out rsi, status rdx, body rcx, flags r8) -> rax: the HTTP response of beacon-api.md,
  * Common rules, into the ByteList out, its count set: the status line, its fields, then the body
  * of the kind body (0 none, API_BODY_ERROR, or an API_OP_*) from the ApiView view. flags:
@@ -1528,8 +1636,14 @@ LOCAL_FUNCTION api_respond
     testq   $API_R_SSZ, (L + 8)(%rsp)
     jnz     21f
     API_LIT api_type
-    jmp     3f
+    jmp     22f
 21: API_LIT api_octet
+22: testq   $API_R_VERSION, (L + 8)(%rsp)   # Eth-Consensus-Version of the view's fork
+    jz      3f
+    API_LIT api_version
+    mov     ApiView_fork(%rbp), %rdi
+    call    api_fork_name
+    API_LIT api_crlf
 3:  API_LIT api_length
     mov     (L + 16)(%rsp), %rdi
     call    api_dec
@@ -1919,6 +2033,12 @@ LOCAL_FUNCTION node_api_event
     je      66f
     cmp     $API_OP_GET_STATE_FINALITY_CHECKPOINTS, %rcx
     je      66f
+    cmp     $API_OP_GET_STATE_RANDAO, %rcx
+    je      66f
+    cmp     $API_OP_GET_EPOCH_SYNC_COMMITTEES, %rcx
+    je      66f
+    cmp     $API_OP_GET_PROPOSER_LOOKAHEAD, %rcx
+    je      66f
     cmp     $API_OP_GET_SPEC, %rcx
     je      67f
     cmp     $API_OP_GET_PROPOSER_DUTIES, %rcx
@@ -1973,7 +2093,25 @@ LOCAL_FUNCTION node_api_event
     mov     ApiRoute_op(%rax), %rcx
     cmp     $API_OP_GET_STATE_V2, %rcx
     je      64f
-    sub     $API_OP_GET_STATE_VALIDATORS, %rcx
+    cmp     $API_OP_GET_STATE_RANDAO, %rcx  # getStateRandao, getEpochSyncCommittees: the epoch in the work's data
+    je      692f
+    cmp     $API_OP_GET_EPOCH_SYNC_COMMITTEES, %rcx
+    je      692f
+    cmp     $API_OP_GET_PROPOSER_LOOKAHEAD, %rcx    # getProposerLookahead: SSZ, an answer flag
+    jne     693f
+    cmpq    $API_TYPE_SSZ, ApiRoute_response(%rax)
+    jne     67f
+    or      $API_ANSWER_SSZ, %r12
+    jmp     67f
+692: testq  $(1 << API_PARAM_EPOCH), ApiRoute_present(%rax)
+    jnz     694f
+    movq    $-1, ApiRoute_epoch(%rax)
+694: lea    ApiRoute_epoch(%rax), %rdi
+    call    node_api_put8
+    mov     S8(%rsp), %rcx
+    mov     %rax, ApiView_look_data(%rcx)
+    jmp     67f
+693: sub    $API_OP_GET_STATE_VALIDATORS, %rcx
     cmp     $(API_OP_GET_EPOCH_COMMITTEES - API_OP_GET_STATE_VALIDATORS), %rcx
     ja      67f
     mov     %rax, %rdi                      # the validator operations: their ids; getStateValidator a work, the others a stream
@@ -2176,6 +2314,10 @@ LOCAL_FUNCTION node_api_done
     je      3f
     cmp     $API_OP_PRODUCE_ATTESTATION_DATA, %eax
     je      3f
+    cmp     $API_OP_GET_STATE_RANDAO, %eax
+    je      3f
+    cmp     $API_OP_GET_EPOCH_SYNC_COMMITTEES, %eax
+    je      3f
     cmp     $API_OP_GET_ATTESTER_DUTIES, %eax
     jne     2f
 3:  mov     NodeAction_data(%r12), %rsi
@@ -2286,6 +2428,12 @@ LOCAL_FUNCTION node_api_run
     je      2f
     cmp     $API_OP_GET_ATTESTER_DUTIES, %eax
     je      2f
+    cmp     $API_OP_GET_STATE_RANDAO, %eax
+    je      2f
+    cmp     $API_OP_GET_EPOCH_SYNC_COMMITTEES, %eax
+    je      2f
+    cmp     $API_OP_GET_PROPOSER_LOOKAHEAD, %eax
+    je      2f
     cmp     $API_OP_GET_STATE_FORK, %eax
     jne     8f
 2:  mov     (%r14), %rax                    # the ApiView at the end of scratch, with the work's values
@@ -2311,6 +2459,7 @@ LOCAL_FUNCTION node_api_run
     shr     $18, %rcx
     and     $1, %ecx
     mov     %rcx, ApiView_is_optimistic(%rdi)
+    movq    $0, ApiView_status(%rdi)
     cmpq    $API_OP_GET_BLOCK_HEADER, S9(%rsp)
     je      3f
     cmpq    $API_OP_GET_SPEC, S9(%rsp)
@@ -2323,7 +2472,7 @@ LOCAL_FUNCTION node_api_run
     call    node_fork
     mov     %rax, %r10
     cmpq    $API_OP_GET_STATE_VALIDATOR, S9(%rsp)
-    jne     20f
+    jne     271f
     mov     %r13, %rdi                      # getStateValidator: the validator of its ids
     mov     S7(%rsp), %rsi
     test    %rsi, %rsi
@@ -2333,6 +2482,58 @@ LOCAL_FUNCTION node_api_run
     mov     %r13, ApiView_val_state(%rdi)
     mov     %rax, ApiView_val_index(%rdi)
     jmp     5f
+271: cmpq   $API_OP_GET_STATE_RANDAO, S9(%rsp)   # getStateRandao: lantern_node_randao of the epoch in data
+    jne     272f
+    mov     S7(%rsp), %rax
+    test    %rax, %rax
+    jz      41f
+    cmpq    $8, 16(%rax)
+    jb      41f
+    mov     8(%rax), %rsi
+    mov     (%rax,%rsi), %rsi
+    mov     %r13, %rdi
+    mov     S8(%rsp), %rdx
+    add     $ApiView_randao, %rdx
+    FORK_CALL node_randao
+    jmp     275f
+272: cmpq   $API_OP_GET_EPOCH_SYNC_COMMITTEES, S9(%rsp)  # lantern_node_sync_committee of the epoch in data, its out at the end of scratch
+    jne     273f
+    mov     S7(%rsp), %rax
+    test    %rax, %rax
+    jz      41f
+    cmpq    $8, 16(%rax)
+    jb      41f
+    mov     8(%rax), %rsi
+    mov     (%rax,%rsi), %rsi
+    mov     (%r14), %rcx
+    sub     $(8 * SYNC_COMMITTEE_SIZE), %rcx
+    jb      71f
+    mov     %rcx, (%r14)
+    add     %r14, %rcx
+    mov     S8(%rsp), %rax
+    mov     %rcx, ApiView_sync_out(%rax)
+    mov     %r13, %rdi
+    mov     %r14, %rdx
+    FORK_CALL node_sync_committee
+    jmp     275f
+273: cmpq   $API_OP_GET_PROPOSER_LOOKAHEAD, S9(%rsp)     # lantern_node_proposer_lookahead; the version the state's fork
+    jne     20f
+    mov     S8(%rsp), %rsi
+    mov     %r10, ApiView_fork(%rsi)
+    add     $ApiView_lookahead, %rsi
+    mov     %r13, %rdi
+    FORK_CALL node_proposer_lookahead
+275: cmp    $LANTERN_BUFFER_TOO_SMALL, %rax
+    je      71f
+    cmp     $LANTERN_NO_STATE_ANSWER, %rax  # no answer in the state: 400
+    jne     276f
+    mov     S8(%rsp), %rdi
+    movq    $400, ApiView_status(%rdi)
+    jmp     5f
+276: test   %rax, %rax
+    jz      5f
+    mov     %rax, NodeEvent_result(%r15)
+    jmp     9f
 20: cmpq    $API_OP_PRODUCE_ATTESTATION_DATA, S9(%rsp)
     jne     25f
     mov     S7(%rsp), %rax                  # produceAttestationData: lantern_node_attestation_data, its index in data
@@ -2532,7 +2733,16 @@ LOCAL_FUNCTION node_api_run
     jne     52f
     mov     $404, %edx
     mov     $API_BODY_ERROR, %ecx
-52: call    api_respond
+52: cmpq    $0, ApiView_status(%rdi)        # an error status of the work
+    je      53f
+    mov     ApiView_status(%rdi), %rdx
+    mov     $API_BODY_ERROR, %ecx
+    and     $~API_R_SSZ, %r8
+    jmp     54f
+53: cmpq    $API_OP_GET_PROPOSER_LOOKAHEAD, S9(%rsp)    # Eth-Consensus-Version of getProposerLookahead
+    jne     54f
+    or      $API_R_VERSION, %r8
+54: call    api_respond
     test    %rax, %rax
     jnz     71f
     mov     (NodeEvent_chunk + 16)(%r15), %rax  # the event's size covers the chunk
@@ -2959,6 +3169,10 @@ LOCAL_FUNCTION node_api_encode
     cmp     $API_OP_PRODUCE_ATTESTATION_DATA, %rdi
     cmove   %rax, %rcx
     cmp     $API_OP_GET_ATTESTER_DUTIES, %rdi
+    cmove   %rax, %rcx
+    cmp     $API_OP_GET_STATE_RANDAO, %rdi
+    cmove   %rax, %rcx
+    cmp     $API_OP_GET_EPOCH_SYNC_COMMITTEES, %rdi
     cmove   %rax, %rcx
 3:  mov     $NODE_WORK_API_ENCODE, %edi
     xor     %edx, %edx

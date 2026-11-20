@@ -131,6 +131,9 @@ def anchor(spec, fork, statuses=False, epoch=ANCHOR_EPOCH, extra=0):
             state.inactivity_scores.append(0)
     for i in BLS_VALIDATORS:
         state.validators[i].withdrawal_credentials = spec.BLS_WITHDRAWAL_PREFIX + hashlib.sha256(KEYS.pubkeys[8191 - i]).digest()[1:]
+    if fork != "phase0":  # as at genesis (altair beacon-chain.md, initialize_beacon_state_from_eth1)
+        state.current_sync_committee = spec.get_next_sync_committee(state)
+        state.next_sync_committee = spec.get_next_sync_committee(state)
     if fork == "fulu":  # as at genesis and at the fork (fulu fork.md)
         state.proposer_lookahead = spec.initialize_proposer_lookahead(state)
     block = spec.BeaconBlock(slot=slot, state_root=spec.hash_tree_root(state))
@@ -379,7 +382,9 @@ POOL_POSTS = ("submitPoolVoluntaryExit", "submitPoolProposerSlashings", "submitP
 ANSWERED = ("getHealth", "getNetworkIdentity", "getNodeVersion", "getSyncingStatus", "getPeerCount", "getGenesis",
             "getBlockHeader", "getStateFinalityCheckpoints", "getBlockV2", "getStateV2", "getBlockRoot", "getStateRoot",
             "getStateFork", "getSpec", "getForkSchedule", "getDepositContract", "getEpochCommittees",
-            "getProposerDuties", "produceAttestationData", "getAttesterDuties", "eventstream") + VALIDATOR_OPS
+            "getProposerDuties", "produceAttestationData", "getAttesterDuties", "eventstream", "getStateRandao",
+            "getEpochSyncCommittees", "getProposerLookahead") + VALIDATOR_OPS
+STATE_READS = ("getStateRandao", "getEpochSyncCommittees", "getProposerLookahead")
 IDENTITY = (b"16Uiu2HAmPLe7Mzm8TsYUubgCAW1aJoeFScxrLj8ppHFivPo97bUZ",
             b"enr:-Iu4QLm7bZGdAhVwRqZ6Zf3LlnqKsBTnZGOByHQhPMQJ3pV4F3t8L9i5yJOZ0X0hiZ6q4D5V0jB7l8J3ZtYw1JDH9C4BgmlkgnY0gmlwhAoAAAGJc2VjcDI1NmsxoQPKY0yuDUmstAHYpMa2_oxVtw0RW_QAdpzBQA8yWM0xOIN0Y3CCIyg",
             b"/ip4/10.0.0.1/tcp/9000/p2p/16Uiu2HAmPLe7Mzm8TsYUubgCAW1aJoeFScxrLj8ppHFivPo97bUZ",
@@ -617,6 +622,41 @@ def validators_answer(v, name, route, s, values, kw):
     return streamed(None, body, **kw)
 
 
+def state_read_answer(v, name, route, s, slot, values, kw):
+    """getStateRandao, getEpochSyncCommittees, getProposerLookahead of the state s (beacon-api.md)."""
+    import api_route
+    spec, fork = v["spec"], v["fork"]  # the case's states are all of its fork
+    current = int(spec.get_current_epoch(s))
+    epoch = route.epoch if route.present >> api_route.P["epoch"] & 1 else current
+    if name == "getStateRandao":
+        n = int(spec.EPOCHS_PER_HISTORICAL_VECTOR)
+        if epoch > current or current - epoch >= n:
+            return error(400, **kw)
+        return response(200, values + b',"data":{"randao":' + qhex(s.randao_mixes[epoch % n]) + b"}}", **kw)
+    if name == "getEpochSyncCommittees":
+        if not hasattr(s, "current_sync_committee"):
+            return error(400, **kw)
+        period = epoch // int(spec.EPOCHS_PER_SYNC_COMMITTEE_PERIOD)
+        own = current // int(spec.EPOCHS_PER_SYNC_COMMITTEE_PERIOD)
+        if period not in (own, own + 1):
+            return error(400, **kw)
+        committee = s.current_sync_committee if period == own else s.next_sync_committee
+        keys = [bytes(val.pubkey) for val in s.validators]
+        indices = [keys.index(bytes(k)) for k in committee.pubkeys]
+        size = len(indices) // int(spec.SYNC_COMMITTEE_SUBNET_COUNT)
+        aggregates = [indices[i:i + size] for i in range(0, len(indices), size)]
+        body = (values + b',"data":{"validators":[' + b",".join(q(i) for i in indices) + b'],"validator_aggregates":[' +
+                b",".join(b"[" + b",".join(q(i) for i in a) + b"]" for a in aggregates) + b"]}}")
+        return response(200, body, **kw)
+    if not hasattr(s, "proposer_lookahead"):
+        return error(400, **kw)
+    if route.response == 2:
+        return streamed(fork, b"".join(int(i).to_bytes(8, "little") for i in s.proposer_lookahead), ssz=True, **kw)
+    body = (b'{"version":"' + fork.encode() + b'",' + values[1:] + b',"data":[' +
+            b",".join(q(i) for i in s.proposer_lookahead) + b"]}")
+    return streamed(fork, body, **kw)
+
+
 def committees_answer(v, route, s, values, kw):
     """The answer of getEpochCommittees for the state s (beacon-api.md, Common rules)."""
     import api_route
@@ -794,7 +834,8 @@ def answer(v, name, route, offline, close, keep_alive, syncing=False):
                 b',"parent_root":' + qhex(h.parent_root) + b',"state_root":' + qhex(h.state_root) + b',"body_root":' +
                 qhex(h.body_root) + b'},"signature":' + qhex(bytes(96)) + b"}}}")
         return response(200, body, **kw)
-    if name in ("getStateRoot", "getStateFork", "getStateFinalityCheckpoints", "getStateV2", "getEpochCommittees") + VALIDATOR_OPS:
+    if name in ("getStateRoot", "getStateFork", "getStateFinalityCheckpoints", "getStateV2", "getEpochCommittees") + VALIDATOR_OPS + \
+            STATE_READS:
         if route.id_kind in v["checkpoint_slots"]:
             slot = v["checkpoint_slots"][route.id_kind]
         elif route.id_kind == 5 or (route.id_kind == 2):
@@ -819,6 +860,8 @@ def answer(v, name, route, offline, close, keep_alive, syncing=False):
             return validators_answer(v, name, route, s, values, kw)
         if name == "getEpochCommittees":
             return committees_answer(v, route, s, values, kw)
+        if name in STATE_READS:
+            return state_read_answer(v, name, route, s, slot, values, kw)
         if name == "getStateRoot":
             return response(200, values + b',"data":{"root":' + qhex(spec.hash_tree_root(s)) + b"}}", **kw)
         if name == "getStateFork":
@@ -1216,6 +1259,21 @@ def api_requests(spec, fork, v, kind="main"):
             add(f"lookup_{op}_{state_id.decode()[:12]}", api_route.base(by_name[op], path_values={"state_id": state_id}))
     for state_id in (b"finalized", b"%d" % (v["slot"] + 2)):
         add(f"lookup_getStateV2_{state_id.decode()}", api_route.base(state, path_values={"state_id": state_id}))
+    # the state reads: of the state ids above; randao and sync committees of their epochs
+    spec_v = v["spec"]
+    period = int(getattr(spec_v, "EPOCHS_PER_SYNC_COMMITTEE_PERIOD", 1))  # phase0 has none: its answers are 400
+    for op in STATE_READS:
+        for state_id in (b"head", b"finalized", b"genesis", other_root, qhex(v["state_roots"][1])[1:-1],
+                         b"%d" % (v["slot"] + 1)):
+            add(f"read_{op}_{state_id.decode()[:12]}", api_route.base(by_name[op], path_values={"state_id": state_id}))
+    add("read_getProposerLookahead_ssz", api_route.base(by_name["getProposerLookahead"], path_values={"state_id": b"head"},
+                                                        accept=b"application/octet-stream"))
+    for e in (0, epoch - 1, epoch, epoch + 1, epoch + int(spec_v.EPOCHS_PER_HISTORICAL_VECTOR)):
+        add(f"read_randao_epoch_{e}", api_route.base(by_name["getStateRandao"], [("epoch", b"%d" % e)],
+                                                     path_values={"state_id": b"head"}))
+    for e in (0, epoch, (epoch // period + 1) * period, (epoch // period + 2) * period):
+        add(f"read_sync_epoch_{e}", api_route.base(by_name["getEpochSyncCommittees"], [("epoch", b"%d" % e)],
+                                                   path_values={"state_id": b"head"}))
     validators = by_name["getStateValidators"]
     add("ids_65_414", api_route.base(validators, [("id", b",".join(str(i).encode() for i in range(65)))]))
     events = by_name["eventstream"]

@@ -1165,7 +1165,16 @@ LOCAL_FUNCTION api_body
     API_LIT api_f_list
     call    api_failures
     UNFRAME 16
-11: li      t0, API_OP_PRODUCE_ATTESTATION_DATA
+11: li      t0, API_OP_GET_STATE_RANDAO
+    beq     s10, t0, 113f
+    li      t0, API_OP_GET_EPOCH_SYNC_COMMITTEES
+    beq     s10, t0, 113f
+    li      t0, API_OP_GET_PROPOSER_LOOKAHEAD
+    bne     s10, t0, 114f
+113: ld     a0, 0(sp)                       # the state reads
+    call    api_state_read_body
+    UNFRAME 16
+114: li     t0, API_OP_PRODUCE_ATTESTATION_DATA
     bne     s10, t0, 12f
     ld      t0, 0(sp)                       # SSZ: its 128 bytes
     ld      t0, 8(t0)
@@ -1547,6 +1556,115 @@ LOCAL_FUNCTION api_duties_json
 END_FUNCTION api_duties_json
 
 /*
+ * The bodies of getStateRandao, getEpochSyncCommittees and getProposerLookahead (beacon-api.md), as
+ * api_body: a0 its locals (flags at 8), s10 the kind, s4 the view. Locals: those, an index.
+ */
+LOCAL_FUNCTION api_state_read_body
+    FRAME 16
+    sd      a0, 0(sp)
+    li      t0, API_OP_GET_PROPOSER_LOOKAHEAD
+    beq     s10, t0, 30f
+    # {"execution_optimistic":…,"finalized":…,"data":{
+    API_LIT api_x_optimistic
+    ld      a0, ApiView_is_optimistic(s4)
+    call    api_bool
+    API_LIT api_x_finalized
+    ld      a0, ApiView_head_finalized(s4)
+    call    api_bool
+    API_LIT api_x_data
+    li      t0, API_OP_GET_STATE_RANDAO
+    bne     s10, t0, 10f
+    # "randao":…}}
+    API_LIT api_r_randao
+    ADDQ    a0, s4, ApiView_randao
+    li      a1, 32
+    call    api_qhex
+    API_LIT api_end2
+    UNFRAME 16
+    # "validators":[…],"validator_aggregates":[[…],…]}}
+10: API_LIT api_s_validators
+    sd      zero, 8(sp)
+11: ld      t0, 8(sp)
+    li      t1, SYNC_COMMITTEE_SIZE
+    bgeu    t0, t1, 13f
+    beqz    t0, 12f
+    API_LIT api_p_comma
+12: ld      t0, 8(sp)
+    LDQ     t1, s4, ApiView_sync_out
+    slli    t0, t0, 3
+    add     t1, t1, t0
+    ld      a0, 0(t1)
+    call    api_qdec
+    ld      t0, 8(sp)
+    addi    t0, t0, 1
+    sd      t0, 8(sp)
+    j       11b
+13: API_LIT api_s_aggregates
+    sd      zero, 8(sp)
+14: ld      t0, 8(sp)
+    li      t1, SYNC_COMMITTEE_SIZE
+    bgeu    t0, t1, 18f
+    andi    t1, t0, SYNC_COMMITTEE_SIZE / SYNC_COMMITTEE_SUBNET_COUNT - 1
+    bnez    t1, 16f
+    beqz    t0, 15f
+    API_LIT api_p_rbracket
+    API_LIT api_p_comma
+15: API_LIT api_p_lbracket
+    j       17f
+16: API_LIT api_p_comma
+17: ld      t0, 8(sp)
+    LDQ     t1, s4, ApiView_sync_out
+    slli    t0, t0, 3
+    add     t1, t1, t0
+    ld      a0, 0(t1)
+    call    api_qdec
+    ld      t0, 8(sp)
+    addi    t0, t0, 1
+    sd      t0, 8(sp)
+    j       14b
+18: API_LIT api_p_rbracket
+    API_LIT api_s_end
+    UNFRAME 16
+30: ld      t0, 0(sp)                       # getProposerLookahead: SSZ, its bytes
+    ld      t0, 8(t0)
+    andi    t0, t0, API_R_SSZ
+    beqz    t0, 31f
+    ADDQ    a0, s4, ApiView_lookahead
+    li      a1, 8 * API_LOOKAHEAD_SLOTS
+    call    api_put
+    UNFRAME 16
+    # {"version":"<fork>","execution_optimistic":…,"finalized":…,"data":[…]}
+31: API_LIT api_j_version
+    ld      a0, ApiView_fork(s4)
+    call    api_fork_name
+    API_LIT api_j_optimistic
+    ld      a0, ApiView_is_optimistic(s4)
+    call    api_bool
+    API_LIT api_x_finalized
+    ld      a0, ApiView_head_finalized(s4)
+    call    api_bool
+    API_LIT api_v_list
+    sd      zero, 8(sp)
+32: ld      t0, 8(sp)
+    li      t1, API_LOOKAHEAD_SLOTS
+    bgeu    t0, t1, 34f
+    beqz    t0, 33f
+    API_LIT api_p_comma
+33: ld      t0, 8(sp)
+    ADDQ    t1, s4, ApiView_lookahead
+    slli    t0, t0, 3
+    add     t1, t1, t0
+    ld      a0, 0(t1)
+    call    api_qdec
+    ld      t0, 8(sp)
+    addi    t0, t0, 1
+    sd      t0, 8(sp)
+    j       32b
+34: API_LIT api_v_end
+    UNFRAME 16
+END_FUNCTION api_state_read_body
+
+/*
  * (view a0, out a1, status a2, body a3, flags a4) -> a0: the HTTP response of beacon-api.md,
  * Common rules, into the ByteList out, its count set: the status line, its fields, then the body
  * of the kind body (0 none, API_BODY_ERROR, or an API_OP_*) from the ApiView view. flags:
@@ -1591,8 +1709,15 @@ LOCAL_FUNCTION api_respond
     andi    t0, t0, API_R_SSZ
     bnez    t0, 21f
     API_LIT api_type
-    j       3f
+    j       22f
 21: API_LIT api_octet
+22: ld      t0, (L + 8)(sp)                 # API_R_VERSION: Eth-Consensus-Version of the view's fork
+    andi    t0, t0, API_R_VERSION
+    beqz    t0, 3f
+    API_LIT api_version
+    ld      a0, ApiView_fork(s4)
+    call    api_fork_name
+    API_LIT api_crlf
 3:  API_LIT api_length
     ld      a0, (L + 16)(sp)
     call    api_dec
@@ -1984,6 +2109,12 @@ LOCAL_FUNCTION node_api_event
     beq     a3, t0, 66f
     li      t0, API_OP_GET_STATE_FINALITY_CHECKPOINTS
     beq     a3, t0, 66f
+    li      t0, API_OP_GET_STATE_RANDAO
+    beq     a3, t0, 66f
+    li      t0, API_OP_GET_EPOCH_SYNC_COMMITTEES
+    beq     a3, t0, 66f
+    li      t0, API_OP_GET_PROPOSER_LOOKAHEAD
+    beq     a3, t0, 66f
     li      t0, API_OP_GET_SPEC
     beq     a3, t0, 67f
     li      t0, API_OP_GET_PROPOSER_DUTIES
@@ -2032,7 +2163,27 @@ LOCAL_FUNCTION node_api_event
     ld      t0, ApiRoute_op(s7)
     li      t1, API_OP_GET_STATE_V2
     beq     t0, t1, 64f
-    addi    t0, t0, -API_OP_GET_STATE_VALIDATORS
+    li      t1, API_OP_GET_STATE_RANDAO     # getStateRandao, getEpochSyncCommittees: the epoch in the work's data
+    beq     t0, t1, 692f
+    li      t1, API_OP_GET_EPOCH_SYNC_COMMITTEES
+    beq     t0, t1, 692f
+    li      t1, API_OP_GET_PROPOSER_LOOKAHEAD   # getProposerLookahead: SSZ, an answer flag
+    bne     t0, t1, 693f
+    ld      t1, ApiRoute_response(s7)
+    li      t2, API_TYPE_SSZ
+    bne     t1, t2, 67f
+    ori     s3, s3, API_ANSWER_SSZ
+    j       67f
+692: ld     t1, ApiRoute_present(s7)
+    andi    t1, t1, (1 << API_PARAM_EPOCH)
+    bnez    t1, 694f
+    li      t1, -1
+    sd      t1, ApiRoute_epoch(s7)
+694: addi   a0, s7, ApiRoute_epoch
+    call    node_api_put8
+    sd      a0, ApiView_look_data(s8)
+    j       67f
+693: addi   t0, t0, -API_OP_GET_STATE_VALIDATORS
     li      t1, API_OP_GET_EPOCH_COMMITTEES - API_OP_GET_STATE_VALIDATORS
     bgtu    t0, t1, 67f
     mv      a0, s7                          # the validator operations: their ids; getStateValidator a work, the others a stream
@@ -2211,6 +2362,10 @@ LOCAL_FUNCTION node_api_done
     beq     t0, t1, 3f
     li      t1, API_OP_PRODUCE_ATTESTATION_DATA
     beq     t0, t1, 3f
+    li      t1, API_OP_GET_STATE_RANDAO
+    beq     t0, t1, 3f
+    li      t1, API_OP_GET_EPOCH_SYNC_COMMITTEES
+    beq     t0, t1, 3f
     li      t1, API_OP_GET_ATTESTER_DUTIES
     bne     t0, t1, 2f
 3:  ld      a1, NodeAction_data(s3)
@@ -2317,6 +2472,12 @@ LOCAL_FUNCTION node_api_run
     beq     s9, t2, 2f
     li      t2, API_OP_GET_ATTESTER_DUTIES
     beq     s9, t2, 2f
+    li      t2, API_OP_GET_STATE_RANDAO
+    beq     s9, t2, 2f
+    li      t2, API_OP_GET_EPOCH_SYNC_COMMITTEES
+    beq     s9, t2, 2f
+    li      t2, API_OP_GET_PROPOSER_LOOKAHEAD
+    beq     s9, t2, 2f
     li      t2, API_OP_GET_STATE_FORK
     bne     s9, t2, 8f
 2:  ld      t0, 0(s6)                       # the ApiView at the end of scratch, with the work's values
@@ -2338,6 +2499,7 @@ LOCAL_FUNCTION node_api_run
     srli    t1, t0, 18
     andi    t1, t1, 1
     sd      t1, ApiView_is_optimistic(s8)
+    STQ     zero, s8, ApiView_status
     li      t2, API_OP_GET_BLOCK_HEADER
     beq     s9, t2, 3f
     li      t2, API_OP_GET_SPEC
@@ -2349,7 +2511,7 @@ LOCAL_FUNCTION node_api_run
     call    node_fork
     mv      t6, a0
     li      t0, API_OP_GET_STATE_VALIDATOR
-    bne     s9, t0, 20f
+    bne     s9, t0, 271f
     mv      a0, s4                          # getStateValidator: the validator of its ids
     mv      a1, s5
     beqz    a1, 8f
@@ -2357,6 +2519,55 @@ LOCAL_FUNCTION node_api_run
     sd      s4, ApiView_val_state(s8)
     sd      a0, ApiView_val_index(s8)
     j       5f
+271: li     t0, API_OP_GET_STATE_RANDAO     # getStateRandao: lantern_node_randao of the epoch in data
+    bne     s9, t0, 272f
+    beqz    s5, 41f
+    ld      t0, 16(s5)
+    li      t1, 8
+    bltu    t0, t1, 41f
+    ld      t0, 8(s5)
+    add     t0, s5, t0
+    ld      a1, 0(t0)
+    mv      a0, s4
+    ADDQ    a2, s8, ApiView_randao
+    FORK_CALL node_randao
+    j       275f
+272: li     t0, API_OP_GET_EPOCH_SYNC_COMMITTEES    # lantern_node_sync_committee of the epoch in data, its out at the end of scratch
+    bne     s9, t0, 273f
+    beqz    s5, 41f
+    ld      t0, 16(s5)
+    li      t1, 8
+    bltu    t0, t1, 41f
+    ld      t0, 8(s5)
+    add     t0, s5, t0
+    ld      a1, 0(t0)
+    ld      t0, 0(s6)
+    li      t1, 8 * SYNC_COMMITTEE_SIZE
+    bltu    t0, t1, 71f
+    sub     t0, t0, t1
+    sd      t0, 0(s6)
+    add     a3, s6, t0
+    STQ     a3, s8, ApiView_sync_out
+    mv      a0, s4
+    mv      a2, s6
+    FORK_CALL node_sync_committee
+    j       275f
+273: li     t0, API_OP_GET_PROPOSER_LOOKAHEAD       # lantern_node_proposer_lookahead; the version the state's fork
+    bne     s9, t0, 20f
+    sd      t6, ApiView_fork(s8)
+    mv      a0, s4
+    ADDQ    a1, s8, ApiView_lookahead
+    FORK_CALL node_proposer_lookahead
+275: li     t0, LANTERN_BUFFER_TOO_SMALL
+    beq     a0, t0, 71f
+    li      t0, LANTERN_NO_STATE_ANSWER     # no answer in the state: 400
+    bne     a0, t0, 276f
+    li      t0, 400
+    STQ     t0, s8, ApiView_status
+    j       5f
+276: beqz   a0, 5f
+    sd      a0, NodeEvent_result(s7)
+    j       9f
 20: li      t0, API_OP_PRODUCE_ATTESTATION_DATA
     bne     s9, t0, 25f
     beqz    s5, 41f                         # produceAttestationData: lantern_node_attestation_data, its index in data
@@ -2539,7 +2750,16 @@ LOCAL_FUNCTION node_api_run
     bne     t0, t1, 52f
     li      a2, 404
     li      a3, API_BODY_ERROR
-52: call    api_respond
+52: LDQ     t0, s8, ApiView_status          # an error status of the work
+    beqz    t0, 54f
+    mv      a2, t0
+    li      a3, API_BODY_ERROR
+    andi    a4, a4, ~API_R_SSZ
+    j       56f
+54: li      t0, API_OP_GET_PROPOSER_LOOKAHEAD   # Eth-Consensus-Version of getProposerLookahead
+    bne     s9, t0, 56f
+    ori     a4, a4, API_R_VERSION
+56: call    api_respond
     bnez    a0, 71f
     ld      t0, (NodeEvent_chunk + 16)(s7)  # the event's size covers the chunk
     addi    t0, t0, (NodeEvent_chunk + 24 + 7)
@@ -2951,6 +3171,10 @@ LOCAL_FUNCTION node_api_encode
     li      t1, API_OP_GET_STATE_VALIDATOR
     beq     a0, t1, 4f
     li      t1, API_OP_PRODUCE_ATTESTATION_DATA
+    beq     a0, t1, 4f
+    li      t1, API_OP_GET_STATE_RANDAO
+    beq     a0, t1, 4f
+    li      t1, API_OP_GET_EPOCH_SYNC_COMMITTEES
     beq     a0, t1, 4f
     li      t1, API_OP_GET_ATTESTER_DUTIES
     bne     a0, t1, 3f

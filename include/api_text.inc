@@ -272,6 +272,18 @@ api_p_key:
 api_p_comma:
     .ascii ","
 .set api_p_comma_len, 1
+api_r_randao:
+    .ascii "\"randao\":"
+.set api_r_randao_len, 9
+api_s_validators:
+    .ascii "\"validators\":["
+.set api_s_validators_len, 14
+api_s_aggregates:
+    .ascii "],\"validator_aggregates\":["
+.set api_s_aggregates_len, 26
+api_s_end:
+    .ascii "]}}"
+.set api_s_end_len, 3
 api_p_lbracket:
     .ascii "["
 .set api_p_lbracket_len, 1
@@ -554,3 +566,4 @@ api_codes_end:
 .set API_R_KEEP, 2
 .set API_R_NO_REASON, 4
 .set API_R_SSZ, 8                           /* the body is SSZ: Content-Type: application/octet-stream */
+.set API_R_VERSION, 16                      /* Eth-Consensus-Version of the view's fork */

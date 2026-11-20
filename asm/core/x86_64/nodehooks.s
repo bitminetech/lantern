@@ -1314,6 +1314,105 @@ SPEC_FUNCTION node_attester_slashing
 SPEC_END node_attester_slashing
 
 /*
+ * (state rdi, epoch rsi, out rdx) -> rax: get_randao_mix of the epoch (2^64 - 1: the state's
+ * epoch) when the state holds it, from the state's epoch - EPOCHS_PER_HISTORICAL_VECTOR + 1 to its
+ * epoch; else LANTERN_NO_STATE_ANSWER (node.md, lantern_node_randao).
+ */
+SPEC_FUNCTION node_randao
+    FRAME 0
+    mov     BeaconState_slot(%rdi), %rax
+    shr     $LOG2_SLOTS_PER_EPOCH, %rax
+    cmp     $-1, %rsi
+    cmove   %rax, %rsi
+    cmp     %rax, %rsi
+    ja      8f
+    sub     %rsi, %rax
+    cmp     $EPOCHS_PER_HISTORICAL_VECTOR, %rax
+    jae     8f
+    and     $(EPOCHS_PER_HISTORICAL_VECTOR - 1), %rsi
+    shl     $5, %rsi
+    lea     BeaconState_randao_mixes(%rdi,%rsi), %rsi
+    mov     %rdx, %rdi
+    mov     $32, %edx
+    call    lantern_copy
+    xor     %eax, %eax
+    UNFRAME 0
+8:  mov     $LANTERN_NO_STATE_ANSWER, %eax
+    UNFRAME 0
+SPEC_END node_randao
+.if EPOCHS_PER_HISTORICAL_VECTOR & (EPOCHS_PER_HISTORICAL_VECTOR - 1)
+.error "lantern_node_randao takes EPOCHS_PER_HISTORICAL_VECTOR as a power of two"
+.endif
+
+/*
+ * (state rdi, epoch rsi, scratch rdx, out rcx) -> rax: the index of each member of the state's
+ * sync committee of the epoch (2^64 - 1: the state's epoch), current_sync_committee for the
+ * period of the state's epoch, next_sync_committee for the next, by find_pubkeys with its table at
+ * the end of scratch (node.md, lantern_node_sync_committee). Before altair, or another period:
+ * LANTERN_NO_STATE_ANSWER.
+ */
+SPEC_FUNCTION node_sync_committee
+    FRAME 0
+.if FORK >= FORK_ALTAIR
+    mov     %rdx, %r8
+    mov     BeaconState_slot(%rdi), %rax
+    shr     $LOG2_SLOTS_PER_EPOCH, %rax
+    cmp     $-1, %rsi
+    cmove   %rax, %rsi
+    mov     $EPOCHS_PER_SYNC_COMMITTEE_PERIOD, %r9d
+    xor     %edx, %edx
+    div     %r9
+    mov     %rax, %r10
+    mov     %rsi, %rax
+    xor     %edx, %edx
+    div     %r9
+    mov     $(BeaconState_current_sync_committee + SyncCommittee_pubkeys), %esi
+    cmp     %r10, %rax
+    je      1f
+    inc     %r10
+    cmp     %r10, %rax
+    jne     8f
+    mov     $(BeaconState_next_sync_committee + SyncCommittee_pubkeys), %esi
+1:  mov     (%r8), %rax                     # the key table at the end of scratch
+    sub     $(SYNC_TABLE_BYTES + 24), %rax
+    jb      9f
+    add     %rdi, %rsi
+    mov     %rcx, %rdx
+    lea     (%r8,%rax), %rcx
+    call    find_pubkeys
+    test    %rax, %rax
+    jnz     7f
+    UNFRAME 0
+7:  mov     $LANTERN_INVALID_ENCODING, %eax
+    UNFRAME 0
+9:  mov     $LANTERN_BUFFER_TOO_SMALL, %eax
+    UNFRAME 0
+8:
+.endif
+    mov     $LANTERN_NO_STATE_ANSWER, %eax
+    UNFRAME 0
+SPEC_END node_sync_committee
+
+/*
+ * (state rdi, out rsi) -> rax: the state's proposer_lookahead, (MIN_SEED_LOOKAHEAD + 1) *
+ * SLOTS_PER_EPOCH u64; before fulu LANTERN_NO_STATE_ANSWER (node.md, lantern_node_proposer_lookahead).
+ */
+SPEC_FUNCTION node_proposer_lookahead
+    FRAME 0
+.if FORK >= FORK_FULU
+    mov     %rsi, %rax
+    lea     BeaconState_proposer_lookahead(%rdi), %rsi
+    mov     %rax, %rdi
+    mov     $(8 * API_LOOKAHEAD_SLOTS), %edx
+    call    lantern_copy
+    xor     %eax, %eax
+.else
+    mov     $LANTERN_NO_STATE_ANSWER, %eax
+.endif
+    UNFRAME 0
+SPEC_END node_proposer_lookahead
+
+/*
  * rax = a status: in the root r14 of lantern_node_gossip for the valid beacon_attestation rbp,
  * its data.slot, its committee index, its member and 0 (node.md): from electra, the member is the
  * place of attester_index in lantern_get_beacon_committee of the head state of the args rbx, +

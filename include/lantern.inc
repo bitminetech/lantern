@@ -908,6 +908,7 @@
 .set LANTERN_INVALID_OPTION, 61        /* lantern_app_options: a faulty argument */
 .set LANTERN_INVALID_COLUMN_SIDECAR, 62 /* lantern_node_column_sidecar: verify_data_column_sidecar, the inclusion proof or the KZG proofs fail */
 .set LANTERN_INVALID_RECORD, 63        /* lantern_db_add: a record breaks a rule of docs/reference/db.md */
+.set LANTERN_NO_STATE_ANSWER, 66       /* lantern_node_randao, lantern_node_sync_committee, lantern_node_proposer_lookahead: the state holds no answer */
 
 /* Db: the index of the stored history (docs/reference/db.md) */
 .set Db_first_slot, 8
@@ -991,7 +992,12 @@
 .set ApiView_att, ApiView_event_slot + 152      /* produceAttestationData: lantern_node_attestation_data's out, 128 bytes */
 .set ApiView_ad_out, ApiView_att + 128       /* getAttesterDuties: lantern_node_attester_duties's out */
 .set ApiView_ad_count, ApiView_att + 136     /* its items */
-.set ApiView__size, ApiView_att + 144
+.set ApiView_status, ApiView_att + 144       /* a work's answer: 0 for 200, else its error status */
+.set ApiView_randao, ApiView_att + 152       /* getStateRandao: lantern_node_randao's out, 32 bytes */
+.set ApiView_sync_out, ApiView_att + 184     /* getEpochSyncCommittees: the address of lantern_node_sync_committee's out */
+.set ApiView_lookahead, ApiView_att + 192    /* getProposerLookahead: lantern_node_proposer_lookahead's out */
+.set API_LOOKAHEAD_SLOTS, (MIN_SEED_LOOKAHEAD + 1) * SLOTS_PER_EPOCH
+.set ApiView__size, ApiView_lookahead + 8 * API_LOOKAHEAD_SLOTS
 .set ApiIdentity_peer_id, 0              /* ApiIdentity (beacon-api.md): texts, each a length and its room */
 .set ApiIdentity_enr, 72
 .set ApiIdentity_p2p_address, 592
