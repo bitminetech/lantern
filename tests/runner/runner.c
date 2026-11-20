@@ -403,6 +403,7 @@ ABI uint64_t lantern_api_route(const void *request, void *out);
 ABI uint64_t lantern_json_encode(const void *type, const void *value, void *cursor, void *out);
 ABI uint64_t lantern_json_encode_ssz(const void *type, const void *ssz, void *cursor, void *out);
 ABI uint64_t lantern_json_decode(const void *type, const void *json, void *scratch, void *out, void *fault);
+ABI uint64_t lantern_engine_json_decode(const void *type, const void *json, void *scratch, void *out, void *fault);
 
 /* Application: docs/reference/app.md. */
 ABI uint64_t lantern_app_options(const void *args, void *options, void *fault);
@@ -7162,9 +7163,10 @@ static void run_json_encode(const char *file, case_file *f) {
  * type of this fork's type table of the case's name, when lantern has it: the SSZ bytes of a valid
  * text, else LANTERN_INVALID_JSON and the case's JsonFault (kind, offset, path); a valid text with
  * one byte less of room gives LANTERN_BUFFER_TOO_SMALL and its size, and so does a scratch one
- * byte short.
+ * byte short. json-engine_decode: the same with lantern_engine_json_decode (the Engine API's JSON).
  */
-static void run_json_decode(const char *file, case_file *f) {
+static void run_json_decode(const char *file, case_file *f, int engine) {
+    ABI uint64_t (*decode_fn)(const void *, const void *, void *, void *, void *) = engine ? lantern_engine_json_decode : lantern_json_decode;
     for (uint64_t i = 0; i < f->count; i++) {
         const char *name, *why = NULL;
         uint64_t len, tlen, jlen, slen = 0, lsize;
@@ -7184,7 +7186,7 @@ static void run_json_decode(const char *file, case_file *f) {
         uint8_t *out = buffer(osize);
         wr64(scratch, JSON_DECODE_SCRATCH);
         wr64(out, osize);
-        uint64_t st = CALL(lantern_json_decode, desc, l, scratch, out, fault);
+        uint64_t st = CALL(decode_fn, desc, l, scratch, out, fault);
         if (!guard_ok(out, osize) || !guard_ok(fault, JSON_FAULT_BYTES) || !guard_ok(scratch, JSON_DECODE_SCRATCH) || !guard_ok(l, lsize))
             why = "lantern_json_decode wrote out of bounds";
         else if (ssz) {
@@ -7204,13 +7206,13 @@ static void run_json_decode(const char *file, case_file *f) {
             if (!why && slen) { /* one byte less of room */
                 wr64(out, 24 + slen - 1);
                 wr64(scratch, JSON_DECODE_SCRATCH);
-                if (CALL(lantern_json_decode, desc, l, scratch, out, fault) != 1 || rd64(fault + 16) != slen)
+                if (CALL(decode_fn, desc, l, scratch, out, fault) != 1 || rd64(fault + 16) != slen)
                     why = "one byte less of room is not LANTERN_BUFFER_TOO_SMALL with the encoding's size";
             }
             if (!why) { /* a scratch one byte short */
                 wr64(out, osize);
                 wr64(scratch, JSON_DECODE_SCRATCH - 1);
-                if (CALL(lantern_json_decode, desc, l, scratch, out, fault) != 1) why = "a short scratch is not LANTERN_BUFFER_TOO_SMALL";
+                if (CALL(decode_fn, desc, l, scratch, out, fault) != 1) why = "a short scratch is not LANTERN_BUFFER_TOO_SMALL";
             }
         } else {
             tv path = tv_get(parts, "fault_path");
@@ -8762,7 +8764,8 @@ int main(int argc, char **argv) {
         else if (!bls_off && !strcmp(kind, "app-options")) run_app_options(file, &f);
         else if (!bls_off && !strcmp(kind, "node-api")) run_node_api(file, &f);
         else if (!bls_off && !strcmp(kind, "json-encode")) run_json_encode(file, &f);
-        else if (!bls_off && !strcmp(kind, "json-decode")) run_json_decode(file, &f);
+        else if (!bls_off && !strcmp(kind, "json-decode")) run_json_decode(file, &f, 0);
+        else if (!bls_off && !strcmp(kind, "json-engine_decode")) run_json_decode(file, &f, 1);
         else if (!bls_off && !strcmp(kind, "http-request")) run_http_request(file, &f);
         else if (!bls_off && !strcmp(kind, "api-route")) run_api_route(file, &f);
         else if (!bls_off && !strcmp(kind, "db-index")) run_db_index(file, &f);

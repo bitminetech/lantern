@@ -80,6 +80,12 @@
     .if FORK >= FORK_ALTAIR
     \m SyncAggregate, F_SyncAggregate
     .endif
+    .if FORK >= FORK_CAPELLA
+    \m GetPayloadResult, F_GetPayloadResult
+    .endif
+    .if FORK >= FORK_DENEB
+    \m BlobsBundle, F_BlobsBundle
+    .endif
     .if FORK >= FORK_BELLATRIX
     \m ExecutionPayload, F_ExecutionPayload
     .endif
@@ -243,6 +249,11 @@
     \m AttestingIndices, N_Uint64
     .if FORK >= FORK_DENEB
     \m BlobKZGCommitments, N_Bytes48
+    \m BundleProofs, N_Bytes48
+    \m BundleBlobs, N_Blob
+    .endif
+    .if FORK >= FORK_ELECTRA
+    \m ExecutionRequestsList, N_RequestBytes
     .endif
     .if FORK >= FORK_FULU
     \m DataColumn, N_Cell
@@ -262,11 +273,14 @@
     .if FORK >= FORK_FULU
     \m Cell
     .endif
-    .if FORK == FORK_DENEB || FORK == FORK_ELECTRA
+    .if FORK >= FORK_DENEB
     \m Blob
     .endif
     .if FORK >= FORK_BELLATRIX
     \m ExtraData
+    .endif
+    .if FORK >= FORK_ELECTRA
+    \m RequestBytes
     .endif
     \m JustificationBits
     \m Attnets
@@ -348,6 +362,9 @@
     \m VoluntaryExit
     .if FORK >= FORK_ALTAIR
     \m SyncAggregate
+    .endif
+    .if FORK >= FORK_CAPELLA
+    \m GetPayloadResult
     .endif
     .if FORK >= FORK_BELLATRIX
     \m ExecutionPayload

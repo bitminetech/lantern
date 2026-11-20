@@ -957,6 +957,8 @@ LOCAL_FUNCTION jd_value
     sub     x5, x4, x3                      /* the content's bytes */
     cmp     x10, #SSZ_KIND_UINT
     b.ne    400f
+    ldrb    w9, [x21, #-8]                  /* the Engine API: a QUANTITY */
+    cbnz    w9, 150f
     cbz     x5, 860f                        /* uint: 1 to 78 digits, below 2^(8 width) */
     cmp     x5, #78
     b.hi    860f
@@ -984,6 +986,41 @@ LOCAL_FUNCTION jd_value
     b.lo    2b
     cbnz    x14, 860f
     b       1b
+150: cmp    x5, #3                          /* QUANTITY: 0x, then 0 alone or hex digits from a non-zero one; its value below 2^256 */
+    b.lo    860f
+    ldrb    w12, [x3]
+    cmp     w12, #0x30
+    b.ne    860f
+    ldrb    w12, [x3, #1]
+    cmp     w12, #0x78
+    b.ne    860f
+    ldrb    w12, [x3, #2]
+    cmp     w12, #0x30
+    b.ne    151f
+    cmp     x5, #3
+    b.ne    860f
+151: add    x3, x3, #2
+    stp     xzr, xzr, [sp, #104]
+    stp     xzr, xzr, [sp, #120]
+152: cmp    x3, x4
+    b.hs    3f
+    ldrb    w0, [x3], #1
+    bl      jd_hexdigit
+    cmp     x0, #16
+    b.hs    860f
+    ldr     x10, [sp, #128]                 /* the 256-bit number times 16, plus the digit */
+    lsr     x11, x10, #60
+    cbnz    x11, 860f
+    ldp     x11, x12, [sp, #104]
+    ldr     x13, [sp, #120]
+    extr    x10, x10, x13, #60
+    extr    x13, x13, x12, #60
+    extr    x12, x12, x11, #60
+    lsl     x11, x11, #4
+    orr     x11, x11, x0
+    stp     x11, x12, [sp, #104]
+    stp     x13, x10, [sp, #120]
+    b       152b
 3:  ldr     x9, [sp, #96]
     ldr     x10, [x9, #SSZ_NODE_LENGTH]     /* the width: bytes past it zero */
     add     x11, sp, #104
@@ -1141,6 +1178,8 @@ LOCAL_FUNCTION jd_value
     ldr     x10, [x9, #SSZ_NODE_LENGTH]
     ldr     x11, [x9, #SSZ_NODE_ELEMENT]
     mov     x12, #0
+    ldrb    w9, [x21, #-8]                  /* the Engine API: camelCase names, others skipped */
+    cbnz    w9, 117f
 111: cmp    x12, x10
     b.hs    890f
     add     x13, x11, x12
@@ -1188,7 +1227,7 @@ LOCAL_FUNCTION jd_value
     add     x2, x2, #1
     bl      jd_skip
     cbnz    x1, 899f
-    bl      jd_ws
+119: bl     jd_ws
     ldr     x2, [sp, #24]
     cmp     x0, x20
     b.hs    880f
@@ -1205,6 +1244,54 @@ LOCAL_FUNCTION jd_value
     b.ne    880f
     add     x0, x0, #1
     str     x0, [sp, #40]
+    b       130f
+117: cmp    x12, x10                        /* field x12's name, each _x as X: the member's name? */
+    b.hs    118f
+    add     x13, x11, x12
+    add     x13, x27, x13, lsl #5
+    mov     x14, x3
+    mov     x15, #0
+1171: cmp   x15, #32
+    b.hs    1173f
+    ldrb    w6, [x13, x15]
+    cbz     w6, 1173f
+    cmp     w6, #0x5f
+    b.ne    1172f
+    add     x15, x15, #1
+    cmp     x15, #32
+    b.hs    1174f
+    ldrb    w6, [x13, x15]
+    sub     w6, w6, #0x20
+1172: cmp   x14, x4
+    b.hs    1174f
+    ldrb    w7, [x14], #1
+    cmp     w6, w7
+    b.ne    1174f
+    add     x15, x15, #1
+    b       1171b
+1173: cmp   x14, x4
+    b.eq    115b
+1174: add   x12, x12, #1
+    b       117b
+118: ldr    x0, [sp, #120]                  /* a member of no field: its value skipped */
+    bl      jd_ws
+    ldr     x2, [sp, #24]
+    cmp     x0, x20
+    b.hs    880f
+    ldrb    w9, [x0]
+    cmp     w9, #0x3a
+    b.ne    880f
+    add     x0, x0, #1
+    bl      jd_ws
+    ldr     x2, [sp, #24]                   /* its faults at the path of the field count */
+    ldr     x9, [sp, #96]
+    ldr     x10, [x9, #SSZ_NODE_LENGTH]
+    add     x9, x28, #JsonFault_path
+    str     x10, [x9, x2, lsl #3]
+    add     x2, x2, #1
+    bl      jd_skip
+    cbnz    x1, 899f
+    b       119b
 130: ldr    x9, [sp, #96]                   /* each field given */
     ldr     x10, [x9, #SSZ_NODE_LENGTH]
     ldr     x11, [sp, #80]
@@ -1416,10 +1503,31 @@ LOCAL_FUNCTION jd_value
 899: UNFRAME 160
 END_FUNCTION jd_value
 
-/* (type, json, scratch, out, fault): docs/reference/beacon-api.md. Locals: L out. */
+/* (type, json, scratch, out, fault): docs/reference/beacon-api.md. */
 FUNCTION lantern_json_decode
-    ENTER 16
+    FRAME 0
+    mov     x5, #0
+    bl      json_decode_mode
+    UNFRAME 0
+END_FUNCTION lantern_json_decode
+
+/* (type, json, scratch, out, fault): docs/reference/engine-api.md, the Engine API's JSON. */
+FUNCTION lantern_engine_json_decode
+    FRAME 0
+    mov     x5, #1
+    bl      json_decode_mode
+    UNFRAME 0
+END_FUNCTION lantern_engine_json_decode
+
+/*
+ * L2: (type, json, scratch, out, fault, mode): lantern_json_decode for mode 0, of the Beacon API's
+ * JSON; lantern_engine_json_decode for mode 1, of the Engine API's: the mode at byte 56 of scratch,
+ * before the field tables. Locals: L out, L+8 the root node, L+16 the mode.
+ */
+LOCAL_FUNCTION json_decode_mode
+    ENTER 32
     str     x3, [sp, #L]
+    str     x5, [sp, #(L + 16)]
     mov     x28, x4
     mov     x19, x0                         /* the type, the text and scratch, a moment */
     mov     x20, x1
@@ -1434,6 +1542,8 @@ FUNCTION lantern_json_decode
     MOVQ    x11, JSON_DECODE_SCRATCH
     cmp     x10, x11
     b.lo    97f
+    ldr     x10, [sp, #(L + 16)]
+    strb    w10, [x2, #56]
     add     x21, x2, #64                    /* the field tables: 512 bytes a level */
     ldp     x10, x11, [x1, #8]
     add     x19, x1, x10
@@ -1471,17 +1581,17 @@ FUNCTION lantern_json_decode
     mov     x2, #0
     bl      jd_value
     mov     x0, #LANTERN_OK
-    LEAVE 16
+    LEAVE 32
 95: str     x23, [x28, #JsonFault_size]
 97: mov     x0, #LANTERN_BUFFER_TOO_SMALL
-    LEAVE 16
+    LEAVE 32
 96: mov     x1, x0
     mov     x0, #JSON_FAULT_SYNTAX
     mov     x2, #0
     bl      jd_fault
 98: mov     x0, #LANTERN_INVALID_JSON
-    LEAVE 16
-END_FUNCTION lantern_json_decode
+    LEAVE 32
+END_FUNCTION json_decode_mode
 
     RODATA
 jd_null:

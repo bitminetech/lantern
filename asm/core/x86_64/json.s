@@ -992,6 +992,9 @@ LOCAL_FUNCTION jd_value
     mov     80(%rsp), %rax
     cmpq    $SSZ_KIND_UINT, SSZ_NODE_KIND(%rax)
     jne     400f
+    mov     JD_TABLES(%rbx), %rax           # the Engine API: a QUANTITY
+    cmpb    $0, -8(%rax)
+    jne     150f
     test    %r10, %r10                      # uint: 1 to 78 digits, below 2^(8 width)
     jz      860f
     cmp     $78, %r10
@@ -1021,6 +1024,40 @@ LOCAL_FUNCTION jd_value
     test    %r11, %r11
     jnz     860f
     jmp     1b
+150: cmp    $3, %r10                        # QUANTITY: 0x, then 0 alone or hex digits from a non-zero one; its value below 2^256
+    jb      860f
+    cmpb    $0x30, (%r8)
+    jne     860f
+    cmpb    $0x78, 1(%r8)
+    jne     860f
+    cmpb    $0x30, 2(%r8)
+    jne     151f
+    cmp     $3, %r10
+    jne     860f
+151: add    $2, %r8
+    pxor    %xmm0, %xmm0
+    movdqu  %xmm0, 112(%rsp)
+    movdqu  %xmm0, 128(%rsp)
+152: cmp    %r9, %r8
+    jae     3f
+    movzbl  (%r8), %edi
+    inc     %r8
+    call    jd_hexdigit
+    cmp     $16, %eax
+    jae     860f
+    mov     136(%rsp), %rcx                 # the 256-bit number times 16, plus the digit
+    shr     $60, %rcx
+    jnz     860f
+    mov     128(%rsp), %rcx
+    shld    $4, %rcx, 136(%rsp)
+    mov     120(%rsp), %rcx
+    shld    $4, %rcx, 128(%rsp)
+    mov     112(%rsp), %rcx
+    shld    $4, %rcx, 120(%rsp)
+    shl     $4, %rcx
+    or      %rax, %rcx
+    mov     %rcx, 112(%rsp)
+    jmp     152b
 3:  mov     80(%rsp), %rax
     mov     SSZ_NODE_LENGTH(%rax), %rsi     # the width: bytes past it zero
     mov     %rsi, %rcx
@@ -1184,6 +1221,9 @@ LOCAL_FUNCTION jd_value
     mov     SSZ_NODE_LENGTH(%rax), %r10
     mov     SSZ_NODE_ELEMENT(%rax), %r11
     xor     %esi, %esi
+    mov     JD_TABLES(%rbx), %rax           # the Engine API: camelCase names, others skipped
+    cmpb    $0, -8(%rax)
+    jne     117f
 111: cmp    %r10, %rsi
     jae     890f
     lea     (%r11,%rsi), %rax
@@ -1235,7 +1275,7 @@ LOCAL_FUNCTION jd_value
     call    jd_skip
     test    %rax, %rax
     jnz     899f
-    call    jd_ws
+119: call   jd_ws
     mov     %rax, %rdi
     mov     8(%rsp), %rdx
     cmp     %r12, %rdi
@@ -1253,6 +1293,58 @@ LOCAL_FUNCTION jd_value
     jne     880f
     inc     %rdi
     mov     %rdi, 24(%rsp)
+    jmp     130f
+117: cmp    %r10, %rsi                      # field rsi's name, each _x as X: the member's name?
+    jae     118f
+    lea     (%r11,%rsi), %rax
+    shl     $5, %rax
+    add     JD_NAMES(%rbx), %rax
+    mov     %r8, %rcx
+    xor     %edx, %edx
+1171: cmp   $32, %rdx
+    jae     1173f
+    movzbl  (%rax,%rdx), %edi
+    test    %edi, %edi
+    jz      1173f
+    cmp     $0x5f, %edi
+    jne     1172f
+    inc     %rdx
+    cmp     $32, %rdx
+    jae     1174f
+    movzbl  (%rax,%rdx), %edi
+    sub     $0x20, %edi
+1172: cmp   %r9, %rcx
+    jae     1174f
+    cmpb    %dil, (%rcx)
+    jne     1174f
+    inc     %rcx
+    inc     %rdx
+    jmp     1171b
+1173: cmp   %r9, %rcx
+    je      115b
+1174: inc   %rsi
+    jmp     117b
+118: mov    88(%rsp), %rdi                  # a member of no field: its value skipped
+    call    jd_ws
+    mov     %rax, %rdi
+    mov     8(%rsp), %rdx
+    cmp     %r12, %rdi
+    jae     880f
+    cmpb    $0x3a, (%rdi)
+    jne     880f
+    inc     %rdi
+    call    jd_ws
+    mov     %rax, %rdi
+    mov     8(%rsp), %rdx                   # its faults at the path of the field count
+    mov     80(%rsp), %rax
+    mov     SSZ_NODE_LENGTH(%rax), %rsi
+    mov     JD_FAULT(%rbx), %rax
+    mov     %rsi, JsonFault_path(%rax,%rdx,8)
+    inc     %rdx
+    call    jd_skip
+    test    %rax, %rax
+    jnz     899f
+    jmp     119b
 130: mov    80(%rsp), %rax                  # each field given
     mov     SSZ_NODE_LENGTH(%rax), %r10
     mov     64(%rsp), %r11
@@ -1458,10 +1550,31 @@ LOCAL_FUNCTION jd_value
 899: UNFRAME 160
 END_FUNCTION jd_value
 
-/* (type, json, scratch, out, fault): docs/reference/beacon-api.md. Locals: L the context, L+40 out, L+48 the root. */
+/* (type, json, scratch, out, fault): docs/reference/beacon-api.md. */
 FUNCTION lantern_json_decode
+    FRAME 0
+    xor     %r9d, %r9d
+    call    json_decode_mode
+    UNFRAME 0
+END_FUNCTION lantern_json_decode
+
+/* (type, json, scratch, out, fault): docs/reference/engine-api.md, the Engine API's JSON. */
+FUNCTION lantern_engine_json_decode
+    FRAME 0
+    mov     $1, %r9d
+    call    json_decode_mode
+    UNFRAME 0
+END_FUNCTION lantern_engine_json_decode
+
+/*
+ * L2: (type, json, scratch, out, fault, mode): lantern_json_decode for mode 0, of the Beacon API's
+ * JSON; lantern_engine_json_decode for mode 1, of the Engine API's: the mode at byte 56 of scratch,
+ * before the field tables. Locals: L the context, L+40 out, L+48 the root, L+56 the mode.
+ */
+LOCAL_FUNCTION json_decode_mode
     ENTER 64
     mov     %rcx, (L + 40)(%rsp)
+    mov     %r9, (L + 56)(%rsp)
     lea     L(%rsp), %rbx
     mov     %r8, JD_FAULT(%rbx)
     mov     %rdi, %r9
@@ -1473,6 +1586,8 @@ FUNCTION lantern_json_decode
     rep stosb
     cmpq    $JSON_DECODE_SCRATCH, (%r11)
     jb      97f
+    mov     (L + 56)(%rsp), %rax
+    mov     %al, 56(%r11)
     lea     64(%r11), %rax                  # the field tables: 512 bytes a level
     mov     %rax, JD_TABLES(%rbx)
     mov     8(%r10), %rbp
@@ -1528,7 +1643,7 @@ FUNCTION lantern_json_decode
     call    jd_fault
 98: mov     $LANTERN_INVALID_JSON, %eax
     LEAVE 64
-END_FUNCTION lantern_json_decode
+END_FUNCTION json_decode_mode
 
     RODATA
 jd_null:

@@ -76,12 +76,20 @@ class Fault(Exception):
         self.kind, self.offset, self.path = kind, offset, list(path)
 
 
-class Decoder:
-    """The rules of lantern_json_decode, written apart from the assembly."""
+def camel(name):
+    """A field's Engine API name: each _ and the letter after it as that letter in upper case."""
+    parts = name.split("_")
+    return parts[0] + "".join(p[:1].upper() + p[1:] for p in parts[1:])
 
-    def __init__(self, text):
+
+class Decoder:
+    """The rules of lantern_json_decode, written apart from the assembly; with engine, those of
+    lantern_engine_json_decode (docs/reference/engine-api.md)."""
+
+    def __init__(self, text, engine=False):
         self.t = text
         self.n = len(text)
+        self.engine = engine
 
     def ws(self, i):
         while i < self.n and self.t[i] in WS:
@@ -200,6 +208,7 @@ class Decoder:
             if c != 0x7B:
                 raise Fault(TYPE, i, path)
             names = list(typ.model_fields)
+            keys = [camel(n) for n in names] if self.engine else names
             seen = {}
             j = self.ws(i + 1)
             if self.at(j, path) == 0x7D:
@@ -210,14 +219,21 @@ class Decoder:
                         raise Fault(SYNTAX, j, path)
                     name, k = self.string(j, path)
                     key = name.decode("latin-1")
-                    if key not in names or key in seen:
-                        raise Fault(FIELD, j, path)
-                    k = self.ws(k)
-                    if self.at(k, path) != 0x3A:
-                        raise Fault(SYNTAX, k, path)
-                    vstart = self.ws(k + 1)
-                    seen[key] = vstart
-                    j = self.ws(self.skip(vstart, path + [names.index(key)]))
+                    if self.engine and key not in keys:  # another member: its value skipped
+                        k = self.ws(k)
+                        if self.at(k, path) != 0x3A:
+                            raise Fault(SYNTAX, k, path)
+                        j = self.ws(self.skip(self.ws(k + 1), path + [len(names)]))
+                    else:
+                        if key not in keys or names[keys.index(key)] in seen:
+                            raise Fault(FIELD, j, path)
+                        key = names[keys.index(key)]
+                        k = self.ws(k)
+                        if self.at(k, path) != 0x3A:
+                            raise Fault(SYNTAX, k, path)
+                        vstart = self.ws(k + 1)
+                        seen[key] = vstart
+                        j = self.ws(self.skip(vstart, path + [names.index(key)]))
                     c = self.at(j, path)
                     if c == 0x2C:
                         j = self.ws(j + 1)
@@ -275,6 +291,13 @@ class Decoder:
         if c != 0x22:
             raise Fault(TYPE, i, path)
         content, end = self.string(i, path)
+        if issubclass(typ, BaseUint) and self.engine:  # a QUANTITY
+            w = typ.BYTE_LENGTH
+            ok = len(content) >= 3 and content[:2] == b"0x" and all(ch in HEXDIGITS for ch in content[2:])
+            ok = ok and (content[2:] == b"0" or content[2:3] != b"0")
+            if not ok or int(content[2:], 16) >= 1 << (8 * w):
+                raise Fault(NUMBER, i, path)
+            return int(content[2:], 16).to_bytes(w, "little"), end
         if issubclass(typ, BaseUint):
             w = typ.BYTE_LENGTH
             if not 1 <= len(content) <= 78 or any(ch not in DIGITS for ch in content) or int(content) >= 1 << (8 * w):
@@ -420,4 +443,78 @@ def decode_cases(fork, preset, encode_cases):
                 yield f"{tname}_{mname}_valid", {"type": parts["type"], "json": text, "ssz": enc}
             except Fault as f:
                 yield f"{tname}_{mname}", {"type": parts["type"], "json": text, "fault_kind": f.kind, "fault_offset": f.offset,
+                                          "fault_path": [int(p) for p in f.path]}
+
+
+# ---------------------------------------------------------------- lantern_engine_json_decode
+
+
+def to_engine_json(value):
+    """The Engine API's JSON (execution-apis common.md): QUANTITY, DATA, camelCase names."""
+    if isinstance(value, Boolean):
+        return "true" if value else "false"
+    if isinstance(value, BaseUint):
+        return '"0x%x"' % int(value)
+    if isinstance(value, (ByteList, ByteVector)):
+        return '"0x' + bytes(value).hex() + '"'
+    if isinstance(value, (List, Vector)):
+        return "[" + ",".join(to_engine_json(item) for item in value) + "]"
+    if isinstance(value, Container):
+        return "{" + ",".join('"%s":%s' % (camel(n), to_engine_json(getattr(value, n))) for n in type(value).model_fields) + "}"
+    raise TypeError(type(value))
+
+
+def engine_mutations(text):
+    """(name, text): the texts of the Engine API that break one rule each, or that it takes."""
+    import re as pyre
+    out = [("unknown_member", text.replace(b"{", b'{"validationError":null,"x":{"a":[1,"b"]},', 1)),
+           ("unknown_member_bad", text.replace(b"{", b'{"x":[1,},', 1)),
+           ("upper_hex", pyre.sub(rb'"0x([0-9a-f]+)"', lambda m: b'"0x' + m.group(1).upper() + b'"', text))]
+    m = pyre.search(rb'"([a-zA-Z]+)":"0x([0-9a-f]+)"', text)
+    if m:
+        s, e = m.span(2)
+        out += [("leading_zero", text[:s] + b"0" + text[s:]), ("no_digit", text[:s] + text[e:]),
+                ("decimal", text[:s - 2] + b"12" + text[e:]), ("odd", text[:s] + text[s + 1:] if e - s > 1 else text)]
+    m = pyre.search(rb'"(gasLimit|timestamp|blockNumber)":"0x([0-9a-f]+)"', text)
+    if m:
+        s, e = m.span(2)
+        out += [("past_width", text[:s] + b"1" + b"0" * 16 + text[e:]), ("zero_alone", text[:s] + b"0" + text[e:])]
+    m = pyre.search(rb'"(parentHash|stateRoot)":"0x([0-9a-f]+)"', text)
+    if m:
+        s, e = m.span(2)
+        out += [("data_odd", text[:s] + text[s + 1:]), ("data_short", text[:s] + text[s + 2:])]
+        whole = text[m.start():e + 1]
+        out += [("missing", text.replace(whole + b",", b"", 1)), ("duplicate", text.replace(whole, whole + b"," + whole, 1))]
+    return out
+
+
+def engine_decode_cases(fork, preset):
+    """(name, parts) of lantern_engine_json_decode, from bellatrix: the result of engine_getPayload of
+    the fork (its ExecutionPayload in bellatrix, else lantern's GetPayloadResult), random values in
+    the modes zero, one_count and random with lists of at most 3 items, as JSON and with the changes
+    of engine_mutations."""
+    import reqresp
+    spec = module(fork, preset)
+    if fork in ("phase0", "altair"):
+        return
+    types = reqresp.engine_result_types(spec, fork)
+    tname = "GetPayloadResult" if "GetPayloadResult" in types else "ExecutionPayload"
+    t = types.get(tname) or spec.ExecutionPayload
+    for mode in ("zero", "one_count", "random"):
+        rng = Random(f"engine-{fork}-{mode}")
+        value = get_random_ssz_object(rng, t, 64, 3, getattr(RandomizationMode, "mode_" + mode), False)
+        text = to_engine_json(value).encode()
+        ssz = bytes(value.encode_bytes())
+        for variant, v in (("", text), ("_spaced", spaced(text)), ("_reversed", reversed_fields(text))):
+            enc = Decoder(v, engine=True).root(t)
+            assert enc == ssz, (mode, variant)
+            yield f"{tname}_{mode}{variant}", {"type": tname.encode(), "json": v, "ssz": enc}
+        if mode != "random":
+            continue
+        for mname, v in engine_mutations(text):
+            try:
+                enc = Decoder(v, engine=True).root(t)
+                yield f"{tname}_{mname}_valid", {"type": tname.encode(), "json": v, "ssz": enc}
+            except Fault as f:
+                yield f"{tname}_{mname}", {"type": tname.encode(), "json": v, "fault_kind": f.kind, "fault_offset": f.offset,
                                           "fault_path": [int(p) for p in f.path]}

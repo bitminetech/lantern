@@ -63,6 +63,33 @@ def api_body_types(spec, fork):
     return t
 
 
+def engine_result_types(spec, fork):
+    """Lantern's containers of the result of engine_getPayload (execution-apis 981aa66), by name:
+    GetPayloadResult from capella, BlobsBundle from deneb (BlobsBundleV2 in fulu), the request
+    list from electra."""
+    f = FORKS.index(fork)
+    t = {}
+    if f < FORKS.index("capella"):
+        return t
+
+    def limited(name, base, limit):
+        return type(name, (base,), {"LIMIT": int(limit), "__module__": spec.__name__})
+    fields = [("execution_payload", spec.ExecutionPayload), ("block_value", spec.Uint256)]
+    if f >= FORKS.index("deneb"):
+        per_blob = int(spec.CELLS_PER_EXT_BLOB) if f >= FORKS.index("fulu") else 1
+        bundle = container(spec, "BlobsBundle", [
+            ("commitments", spec.BlobKZGCommitments),
+            ("proofs", limited("BundleProofs", List[spec.KZGProof], int(spec.MAX_BLOB_COMMITMENTS_PER_BLOCK) * per_blob)),
+            ("blobs", limited("BundleBlobs", List[spec.Blob], spec.MAX_BLOB_COMMITMENTS_PER_BLOCK))])
+        t["BlobsBundle"] = bundle
+        fields += [("blobs_bundle", bundle), ("should_override_builder", Boolean)]
+    if f >= FORKS.index("electra"):
+        request = limited("RequestBytes", ByteList, 1 + 192 * int(spec.MAX_DEPOSIT_REQUESTS_PER_PAYLOAD))
+        fields += [("execution_requests", limited("ExecutionRequestsList", List[request], 3))]
+    t["GetPayloadResult"] = container(spec, "GetPayloadResult", fields)
+    return t
+
+
 def message_types(spec, fork):
     """The req/resp message types of the fork, by name."""
     f = FORKS.index(fork)

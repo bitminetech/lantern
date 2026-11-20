@@ -7,7 +7,10 @@
 - [`lantern_get_execution_requests_list`](#function-lantern_get_execution_requests_list): the request lists of a block, as the execution layer takes them.
 - [`lantern_engine_new_payload_size`](#function-lantern_engine_new_payload_size): the room lantern_engine_new_payload needs.
 - [`lantern_engine_new_payload`](#function-lantern_engine_new_payload): the JSON-RPC request of engine_newPayload for a block.
-- [`lantern_engine_forkchoice_updated`](#function-lantern_engine_forkchoice_updated): the JSON-RPC request of engine_forkchoiceUpdated.
+- [`lantern_engine_forkchoice_updated`](#function-lantern_engine_forkchoice_updated): the JSON-RPC request of engine_forkchoiceUpdated, with or without payload attributes.
+- [`lantern_engine_get_payload`](#function-lantern_engine_get_payload): the JSON-RPC request of engine_getPayload.
+- [`lantern_engine_json_decode`](#function-lantern_engine_json_decode): the SSZ encoding of a value from its Engine API JSON.
+- [`lantern_get_execution_requests`](#function-lantern_get_execution_requests): the `ExecutionRequests` of the request lists of an engine_getPayload result.
 - [`lantern_engine_exchange_capabilities`](#function-lantern_engine_exchange_capabilities): the JSON-RPC request of engine_exchangeCapabilities.
 - [`lantern_engine_parse_response`](#function-lantern_engine_parse_response): the result of a JSON-RPC response.
 - [`lantern_jwt_token`](#function-lantern_jwt_token): the JWT of an Engine API request.
@@ -17,6 +20,8 @@
 ### Types
 
 - [`ForkchoiceState`](#type-forkchoicestate): the three block hashes of engine_forkchoiceUpdated.
+- [`PayloadAttributes`](#type-payloadattributes): the attributes of a payload to build.
+- The results of engine_getPayload: the `ExecutionPayload` in bellatrix; from capella lantern's containers of include/types.inc, `GetPayloadResult` and `BlobsBundle`, decoded by lantern_engine_json_decode (below).
 - [`EngineResponse`](#type-engineresponse): the result of a JSON-RPC response.
 - [`HttpResponse`](#type-httpresponse): the parts of an HTTP/1.1 response.
 
@@ -29,8 +34,8 @@
 ## Common rules
 
 - As in [helpers.md](helpers.md#common-rules).
-- A beacon node without validators calls three methods: engine_exchangeCapabilities, engine_newPayload and engine_forkchoiceUpdated, the latter with null payload attributes.
-- The versions follow the fork of the block: bellatrix engine_newPayloadV1 and engine_forkchoiceUpdatedV1; capella V2 and V2; deneb V3 and V3; electra and fulu engine_newPayloadV4 and engine_forkchoiceUpdatedV3.
+- The node calls four methods: engine_exchangeCapabilities, engine_newPayload, engine_forkchoiceUpdated (with null payload attributes, or with them for a payload it builds for a proposer) and engine_getPayload.
+- The versions follow the fork of the block: bellatrix engine_newPayloadV1, engine_forkchoiceUpdatedV1 (`PayloadAttributesV1`) and engine_getPayloadV1; capella V2, V2 (`PayloadAttributesV2`) and V2; deneb V3, V3 (`PayloadAttributesV3`) and V3; electra engine_newPayloadV4, engine_forkchoiceUpdatedV3 and engine_getPayloadV4; fulu engine_newPayloadV4, engine_forkchoiceUpdatedV3 and engine_getPayloadV5 (osaka.md: `BlobsBundleV2`).
 - JSON is written compact, with no spaces, in the field order of the spec's lists. A `QUANTITY` is lowercase hex with no leading zeros, `0x0` for zero; `DATA` is lowercase hex, two digits a byte.
 - lantern_get_execution_requests_list, lantern_engine_new_payload_size, lantern_engine_new_payload and lantern_engine_forkchoice_updated read the fork's layouts, and are in the objects of bellatrix and later (electra and later for the first). lantern_engine_exchange_capabilities, lantern_engine_parse_response, lantern_jwt_token, lantern_http_post and lantern_http_parse_response read no fork's layouts. Each is in the common object of the core (asm/core/<ISA>/common.s), and its symbol is its name.
 
@@ -39,6 +44,9 @@
 - Lantern's cases, `<preset>-<fork>-engine-<function>.bin` of phase0 to fulu, made by tests/generator/engine.py: no official cases test these functions.
   - Requests: random blocks of the fork from the spec's `debug/random_value.py`, in each of its modes, and the JSON that the encoding rules of `common.md` give for them, with `kzg_commitment_to_versioned_hash` and `get_execution_requests_list` of the spec module.
   - Responses: JSON-RPC responses of each method that Python's `json` module writes with several spacings and member orders, with members the parser ignores, and with values the spec does not allow.
+  - Payload attributes: random `PayloadAttributes` of the fork, as engine_forkchoiceUpdated requests with the fork's `PayloadAttributesVn`.
+  - getPayload results: random `GetPayloadResult` values of the fork in the JSON of `common.md` (`QUANTITY` and `DATA`, camelCase names), with several spacings, member orders and members the decoder skips; and texts it refuses: a `QUANTITY` with a leading zero, of no digit or past its width, a `DATA` of odd length, a missing or repeated field.
+  - Request lists: the `get_execution_requests_list` of random `ExecutionRequests`, and lists the spec's asserts of get_execution_requests reject.
   - JWTs: the token of RFC 7519 with Python's `hmac`, `hashlib` and `base64` modules.
   - HTTP responses: messages that follow RFC 9112, split at every byte to test the `LANTERN_HTTP_MORE` results, and malformed ones.
 
@@ -123,12 +131,12 @@ lantern_engine_new_payload(block, id, scratch, out) -> status
 
 ## Function `lantern_engine_forkchoice_updated`
 
-The JSON-RPC request `{"jsonrpc":"2.0","id":id,"method":"engine_forkchoiceUpdatedVn","params":[{"headBlockHash":...,"safeBlockHash":...,"finalizedBlockHash":...},null]}`: V1 for bellatrix, V2 for capella, V3 for deneb and later.
+The JSON-RPC request `{"jsonrpc":"2.0","id":id,"method":"engine_forkchoiceUpdatedVn","params":[{"headBlockHash":...,"safeBlockHash":...,"finalizedBlockHash":...},attributes]}`: V1 for bellatrix, V2 for capella, V3 for deneb and later.
 
 ### Signature
 
 ```
-lantern_engine_forkchoice_updated(state, id, out) -> status
+lantern_engine_forkchoice_updated(state, attributes, id, out) -> status
 ```
 
 ### Arguments
@@ -136,22 +144,115 @@ lantern_engine_forkchoice_updated(state, id, out) -> status
 | Name | Role | Type |
 |---|---|---|
 | `state` | input | `ForkchoiceState` |
+| `attributes` | input | `PayloadAttributes`, or 0 for none |
 | `id` | input | u64 |
 | `out` | output | `ByteList`, its `size` set by the caller |
 
 ### Returns
 
 - `LANTERN_OK`: `out` holds the request.
-- `LANTERN_BUFFER_TOO_SMALL`: `out` has room for fewer than 512 bytes.
+- `LANTERN_BUFFER_TOO_SMALL`: `out` has room for fewer than 1024 bytes + 192 for each withdrawal of `attributes`.
+
+### Function does
+
+- With `attributes` 0: `null`. Else `{"timestamp":…,"prevRandao":…,"suggestedFeeRecipient":…}`, from capella with `"withdrawals":[…]` of `WithdrawalV1` objects (`index`, `validatorIndex`, `address`, `amount`), from deneb with `"parentBeaconBlockRoot":…` (paris.md, shanghai.md, cancun.md).
 
 ### ABI
 
-- Argument order: `state`, `id`, `out`.
+- Argument order: `state`, `attributes`, `id`, `out`.
 - Forks: bellatrix and later.
+
+## Function `lantern_engine_get_payload`
+
+The JSON-RPC request `{"jsonrpc":"2.0","id":id,"method":"engine_getPayloadVn","params":["0x<payload id>"]}`: V1 for bellatrix, V2 for capella, V3 for deneb, V4 for electra, V5 for fulu.
+
+### Signature
+
+```
+lantern_engine_get_payload(payload_id, id, out) -> status
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `payload_id` | input | 8 bytes: the `payloadId` of engine_forkchoiceUpdated |
+| `id` | input | u64 |
+| `out` | output | `ByteList`, its `size` set by the caller |
+
+### Returns
+
+- `LANTERN_OK`: `out` holds the request.
+- `LANTERN_BUFFER_TOO_SMALL`: `out` has room for fewer than 256 bytes.
+
+### ABI
+
+- Argument order: `payload_id`, `id`, `out`.
+- Forks: bellatrix and later.
+
+## Function `lantern_engine_json_decode`
+
+Reads one value of an SSZ type from its Engine API JSON (common.md, Encoding), and writes the value's SSZ encoding: the `result` of engine_getPayload as the fork's `ExecutionPayload` (bellatrix) or `GetPayloadResult`.
+
+### Signature
+
+```
+lantern_engine_json_decode(type, json, scratch, out, fault) -> status
+```
+
+### Arguments
+
+As lantern_json_decode ([beacon-api.md](beacon-api.md#function-lantern_json_decode)).
+
+### Returns
+
+As lantern_json_decode.
+
+### Function does
+
+- As lantern_json_decode, with these changes:
+  - A uint of w bytes: a `QUANTITY`, a string matching `^0x(?:0|(?:[a-fA-F1-9][a-fA-F0-9]*))$`, its big-endian value below 2^(8w).
+  - A byte string: a `DATA`, `0x` and pairs of hex digits of either case, as lantern_json_decode takes it.
+  - A container's names: each field's name with each `_` and the letter after it turned into that letter in upper case (`parent_hash` is `parentHash`, `blob_gas_used` is `blobGasUsed`); a member of another name is skipped with only the checks of the text, so the Engine API's later members do not break it.
+- Each field's name still once, and none missing.
+
+### ABI
+
+- Role: L1.
+- Symbol: `lantern_engine_json_decode` (`_lantern_engine_json_decode` on macOS).
+- Argument order: `type`, `json`, `scratch`, `out`, `fault`.
+
+## Function `lantern_get_execution_requests`
+
+get_execution_requests of electra `validator.md`: the `ExecutionRequests` of the request lists of engine_getPayloadV4 and V5.
+
+### Signature
+
+```
+lantern_get_execution_requests(list, out) -> status
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `list` | input | ByteList: the SSZ bytes of the `execution_requests` of a `GetPayloadResult` |
+| `out` | output | ByteList, its `size` set: the SSZ bytes of the fork's `ExecutionRequests` |
+
+### Returns
+
+- `LANTERN_OK`: `out` holds the requests.
+- `LANTERN_INVALID_ENCODING`: `list` is no SSZ encoding of `ExecutionRequestsList`, or the spec's asserts reject it: a type of no request, a request with no data, types out of ascending order, data that is no SSZ encoding of the type's request list. `out` is not valid.
+- `LANTERN_BUFFER_TOO_SMALL`: `out` has room for fewer bytes than the requests.
+
+### ABI
+
+- Argument order: `list`, `out`.
+- Forks: electra and later.
 
 ## Function `lantern_engine_exchange_capabilities`
 
-The JSON-RPC request of engine_exchangeCapabilities with the methods lantern calls: engine_newPayloadV1 to V4 and engine_forkchoiceUpdatedV1 to V3.
+The JSON-RPC request of engine_exchangeCapabilities with the methods lantern calls: engine_newPayloadV1 to V4, engine_forkchoiceUpdatedV1 to V3 and engine_getPayloadV1 to V5.
 
 ### Signature
 
@@ -183,7 +284,7 @@ lantern_engine_parse_response(body, method, out) -> status
 | Name | Role | Type |
 |---|---|---|
 | `body` | input | `ByteList`: the HTTP body |
-| `method` | input | u64: `ENGINE_METHOD_*` of include/lantern.inc, the method called |
+| `method` | input | u64: `ENGINE_METHOD_*` of include/lantern.inc, the method called: `ENGINE_METHOD_NEW_PAYLOAD` (1), `ENGINE_METHOD_FORKCHOICE_UPDATED` (2), `ENGINE_METHOD_EXCHANGE_CAPABILITIES` (3), `ENGINE_METHOD_GET_PAYLOAD` (4) |
 | `out` | output | `EngineResponse` |
 
 ### Returns
@@ -199,6 +300,7 @@ lantern_engine_parse_response(body, method, out) -> status
 - engine_newPayload: `result` is a `PayloadStatusV1`: `status` is one of the five strings, and `latestValidHash` is a 32 byte `DATA`, or null, or absent.
 - engine_forkchoiceUpdated: `result` has a `PayloadStatusV1` in `payloadStatus`, and `payloadId` is an 8 byte `DATA`, or null, or absent.
 - engine_exchangeCapabilities: `result` is an array of strings; each name of the methods lantern calls sets its bit, and other names are ignored.
+- engine_getPayload: `result` is an object, its text checked as for an ignored member; `result_offset` and `result_length` give its bytes in the body, for lantern_engine_json_decode with the fork's result type.
 - Takes a later member of the same name over an earlier one.
 - Compares names and strings byte for byte: a string with an escape matches no name.
 
@@ -312,6 +414,19 @@ lantern_http_parse_response(input, eof, body, out) -> status
 | 32 | `safe_block_hash` | Hash32 | Of the safe block |
 | 64 | `finalized_block_hash` | Hash32 | Of the finalized block |
 
+## Type `PayloadAttributes`
+
+| Offset | Field | Type | Meaning |
+|---|---|---|---|
+| 0 | `timestamp` | u64 | |
+| 8 | `prev_randao` | Bytes32 | |
+| 40 | `suggested_fee_recipient` | ExecutionAddress | 20 bytes, then 4 zero bytes |
+| 64 | `parent_beacon_block_root` | Root | From deneb |
+| 96 | `withdrawals` | u64 | From capella: the count of withdrawals, at most `MAX_WITHDRAWALS_PER_PAYLOAD` |
+| 104 | the withdrawals | | Each the 44 SSZ bytes of a `Withdrawal` |
+
+- `PayloadAttributes__mem` (104 + 44 * `MAX_WITHDRAWALS_PER_PAYLOAD`) bytes.
+
 ## Type `EngineResponse`
 
 | Offset | Field | Type | Meaning |
@@ -324,9 +439,11 @@ lantern_http_parse_response(input, eof, body, out) -> status
 | 40 | `latest_valid_hash` | Hash32 | |
 | 72 | `has_payload_id` | u64 | 1 when `payloadId` is not null |
 | 80 | `payload_id` | 8 bytes | |
-| 88 | `capabilities` | u64 | Bits 0 to 3: engine_newPayloadV1 to V4; bits 4 to 6: engine_forkchoiceUpdatedV1 to V3 |
+| 88 | `capabilities` | u64 | Bits 0 to 3: engine_newPayloadV1 to V4; bits 4 to 6: engine_forkchoiceUpdatedV1 to V3; bits 7 to 11: engine_getPayloadV1 to V5 |
+| 96 | `result_offset` | u64 | engine_getPayload: the offset of the `result` object from the body's first byte |
+| 104 | `result_length` | u64 | engine_getPayload: the bytes of the `result` object |
 
-- `EngineResponse__mem` (96) bytes.
+- `EngineResponse__mem` (112) bytes.
 
 | Status | `status` |
 |---|---|

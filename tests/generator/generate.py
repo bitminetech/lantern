@@ -201,6 +201,8 @@ def write_descriptors(path, fork, preset):
         types[name] = descriptor.build(t)
     for name, t in reqresp.api_body_types(spec, fork).items():  # lantern's Beacon API request bodies
         types[name] = descriptor.build(t)
+    for name, t in reqresp.engine_result_types(spec, fork).items():  # lantern's engine_getPayload results
+        types[name] = descriptor.build(t)
     return write_file(path, [(name, {"descriptor": d}) for name, d in types.items()])
 
 
@@ -266,6 +268,12 @@ def main():
                 count, digest = write_file(out / file, list(json_codec.decode_cases(fork, preset, items)))
                 manifest.append((file, count, digest))
                 print(f"{file}: {count} cases")
+                engine = list(json_codec.engine_decode_cases(fork, preset))
+                if engine:
+                    file = f"{preset}-{fork}-json-engine_decode.bin"
+                    count, digest = write_file(out / file, engine)
+                    manifest.append((file, count, digest))
+                    print(f"{file}: {count} cases")
         count, digest = write_config(out / f"{preset}-config.bin", preset)
         manifest.append((f"{preset}-config.bin", count, digest))
         if not runners or "config" in runners:
