@@ -933,6 +933,9 @@ LOCAL_FUNCTION node_api_check
     jne     71f
     mov     (HttpRequest_query + 8)(%rsi), %rax
     lea     (%rdx,%rax,4), %rdx
+    mov     (HttpRequest_body + 8)(%rsi), %rax   # 16 bytes per byte of the body: its ids
+    shl     $4, %rax
+    add     %rax, %rdx
 71: xor     %eax, %eax
     ret
 8:  mov     $1, %eax

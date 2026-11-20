@@ -921,6 +921,8 @@ LOCAL_FUNCTION node_api_check
     cbnz    x12, 71f
     ldr     x12, [x11, #(HttpRequest_query + 8)]
     add     x1, x1, x12, lsl #2
+    ldr     x12, [x11, #(HttpRequest_body + 8)]   /* 16 bytes per byte of the body: its ids */
+    add     x1, x1, x12, lsl #4
 71: mov     x0, #0
     ret
 8:  mov     x0, #1

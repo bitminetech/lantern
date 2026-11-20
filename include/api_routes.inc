@@ -154,6 +154,8 @@
 .set API_FLAG_SSZ_BODY, 2            /* 415: Content-Type chooses JSON or SSZ */
 .set API_FLAG_VERSION, 4             /* Eth-Consensus-Version is required */
 .set API_FLAG_ID_MAX, 8              /* 414: at most 64 ids */
+.set API_FLAG_IDS_OBJECT, 16         /* the body: {"ids":[…],"statuses":[…]} */
+.set API_FLAG_IDS_ARRAY, 32          /* the body: an array of ids */
 
 /* Kinds of parameter (api_params). */
 .set API_KIND_NUMBER, 1
@@ -194,11 +196,11 @@ api_routes:
     .quad   api_t_2 - api_route_text, 28 + (1 << 16) + (0 << 24), 0x0, 0x0   /* getStateFork */
     .quad   api_t_3 - api_route_text, 44 + (1 << 16) + (0 << 24), 0x0, 0x0   /* getStateFinalityCheckpoints */
     .quad   api_t_4 - api_route_text, 34 + (1 << 16) + (8 << 24), 0x300, 0x0   /* getStateValidators */
-    .quad   api_t_4 - api_route_text, 34 + (2 << 16) + (0 << 24), 0x0, 0x0   /* postStateValidators */
+    .quad   api_t_4 - api_route_text, 34 + (2 << 16) + (16 << 24), 0x0, 0x0   /* postStateValidators */
     .quad   api_t_5 - api_route_text, 36 + (1 << 16) + (0 << 24), 0x0, 0x0   /* getStateValidator */
     .quad   api_t_6 - api_route_text, 42 + (1 << 16) + (8 << 24), 0x100, 0x0   /* getStateValidatorBalances */
-    .quad   api_t_6 - api_route_text, 42 + (2 << 16) + (0 << 24), 0x0, 0x0   /* postStateValidatorBalances */
-    .quad   api_t_7 - api_route_text, 44 + (2 << 16) + (1 << 24), 0x0, 0x0   /* postStateValidatorIdentities */
+    .quad   api_t_6 - api_route_text, 42 + (2 << 16) + (32 << 24), 0x0, 0x0   /* postStateValidatorBalances */
+    .quad   api_t_7 - api_route_text, 44 + (2 << 16) + (33 << 24), 0x0, 0x0   /* postStateValidatorIdentities */
     .quad   api_t_8 - api_route_text, 34 + (1 << 16) + (0 << 24), 0x4c0, 0x0   /* getEpochCommittees */
     .quad   api_t_9 - api_route_text, 39 + (1 << 16) + (0 << 24), 0x40, 0x0   /* getEpochSyncCommittees */
     .quad   api_t_10 - api_route_text, 30 + (1 << 16) + (0 << 24), 0x40, 0x0   /* getStateRandao */
@@ -216,9 +218,9 @@ api_routes:
     .quad   api_t_22 - api_route_text, 30 + (1 << 16) + (1 << 24), 0x4000, 0x0   /* getBlobSidecars */
     .quad   api_t_23 - api_route_text, 22 + (1 << 16) + (1 << 24), 0x8000, 0x0   /* getBlobs */
     .quad   api_t_24 - api_route_text, 43 + (1 << 16) + (1 << 24), 0x4000, 0x0   /* getDebugDataColumnSidecars */
-    .quad   api_t_25 - api_route_text, 39 + (2 << 16) + (0 << 24), 0x0, 0x0   /* getSyncCommitteeRewards */
+    .quad   api_t_25 - api_route_text, 39 + (2 << 16) + (32 << 24), 0x0, 0x0   /* getSyncCommitteeRewards */
     .quad   api_t_26 - api_route_text, 31 + (1 << 16) + (0 << 24), 0x0, 0x0   /* getBlockRewards */
-    .quad   api_t_27 - api_route_text, 37 + (2 << 16) + (0 << 24), 0x0, 0x0   /* getAttestationsRewards */
+    .quad   api_t_27 - api_route_text, 37 + (2 << 16) + (32 << 24), 0x0, 0x0   /* getAttestationsRewards */
     .quad   api_t_28 - api_route_text, 31 + (1 << 16) + (1 << 24), 0x0, 0x0   /* getBlindedBlock */
     .quad   api_t_29 - api_route_text, 39 + (1 << 16) + (1 << 24), 0x0, 0x0   /* getLightClientBootstrap */
     .quad   api_t_30 - api_route_text, 35 + (1 << 16) + (1 << 24), 0x60000, 0x60000   /* getLightClientUpdatesByRange */

@@ -48,7 +48,10 @@ TOPICS = ("head", "block", "block_gossip", "attestation", "single_attestation", 
           "light_client_optimistic_update", "payload_attributes", "blob_sidecar", "data_column_sidecar")
 BROADCAST = {b"gossip": 1, b"consensus": 2, b"consensus_and_equivocation": 3}
 # Flags of an operation in include/api_routes.inc.
-F_SSZ_RESPONSE, F_SSZ_BODY, F_VERSION, F_ID_MAX = 1, 2, 4, 8
+F_SSZ_RESPONSE, F_SSZ_BODY, F_VERSION, F_ID_MAX, F_IDS_OBJECT, F_IDS_ARRAY = 1, 2, 4, 8, 16, 32
+IDS_BODIES = {"postStateValidators": F_IDS_OBJECT, "postStateValidatorBalances": F_IDS_ARRAY,
+              "postStateValidatorIdentities": F_IDS_ARRAY, "getSyncCommitteeRewards": F_IDS_ARRAY,
+              "getAttestationsRewards": F_IDS_ARRAY}
 
 
 def sets():
@@ -148,6 +151,16 @@ def operations(spec):
                 if resolve([p for p in op["parameters"] if resolve(p, file)[0]["name"] == "id"][0], file)[0]["schema"]["maxItems"] != 64:
                     fail(f"{name}: 414 without 64 ids")
                 flags |= F_ID_MAX
+            if "requestBody" in op:  # a body of ids: an object of ids and statuses, or an array of ids
+                schema, sbase = resolve(op["requestBody"]["content"]["application/json"]["schema"], file)
+                item = resolve(schema.get("items", {}), sbase)[0]
+                if schema.get("type") == "object" and set(schema.get("properties", {})) == {"ids", "statuses"}:
+                    flags |= F_IDS_OBJECT
+                elif (schema.get("type") == "array" and item.get("type") == "string" and
+                      "public key" in item.get("description", "") and "validator index" in item.get("description", "")):
+                    flags |= F_IDS_ARRAY
+            if flags & (F_IDS_OBJECT | F_IDS_ARRAY) != IDS_BODIES.get(name, 0):
+                fail(f"{name}: body of ids {flags}")
             template = path.encode()
             for pname in PARAMS:
                 template = template.replace(b"{" + pname.encode() + b"}", bytes([P[pname]]))
@@ -203,6 +216,104 @@ def identifier(v, justified):
     if hexbytes(v, 32) is not None:
         return ID_ROOT, 0, hexbytes(v, 32)
     return None
+
+
+def ids_body(body, obj):
+    """(ids, statuses) of a body of ids (beacon-api.md): ValidatorRef items and status bits; raises
+    ValueError(0) for a body that breaks the JSON rules, ValueError(param) for a bad item."""
+    i = 0
+
+    def ws():
+        nonlocal i
+        while i < len(body) and body[i] in b" \t\n\r":
+            i += 1
+
+    def text():
+        nonlocal i
+        if i >= len(body) or body[i] != 0x22:
+            raise ValueError(0)
+        j = i + 1
+        while j < len(body) and body[j] != 0x22:
+            if body[j] == 0x5C or body[j] < 0x20:
+                raise ValueError(0)
+            j += 1
+        if j >= len(body):
+            raise ValueError(0)
+        s, i = body[i + 1:j], j + 1
+        return s
+
+    def array(param):
+        nonlocal i
+        out = []
+        if body[i:i + 4] == b"null":
+            i += 4
+            return out
+        if i >= len(body) or body[i] != 0x5B:
+            raise ValueError(0)
+        i += 1
+        ws()
+        if i < len(body) and body[i] == 0x5D:
+            i += 1
+            return out
+        while True:
+            ws()
+            s = text()
+            got = validator(s) if param == "id" else SETS["status"].get(s)
+            if got is None:
+                raise ValueError(P[param])
+            out.append(got)
+            ws()
+            if i < len(body) and body[i] == 0x2C:
+                i += 1
+                continue
+            if i < len(body) and body[i] == 0x5D:
+                i += 1
+                return out
+            raise ValueError(0)
+
+    ids, statuses = [], 0
+    if not obj and body == b"":
+        return ids, statuses
+    ws()
+    if obj:
+        if i >= len(body) or body[i] != 0x7B:
+            raise ValueError(0)
+        i += 1
+        ws()
+        seen = set()
+        if i < len(body) and body[i] == 0x7D:
+            i += 1
+        else:
+            while True:
+                ws()
+                key = text()
+                if key not in (b"ids", b"statuses") or key in seen:
+                    raise ValueError(0)
+                seen.add(key)
+                ws()
+                if i >= len(body) or body[i] != 0x3A:
+                    raise ValueError(0)
+                i += 1
+                ws()
+                if key == b"ids":
+                    ids = array("id")
+                else:
+                    for bits in array("status"):
+                        statuses |= bits
+                ws()
+                if i < len(body) and body[i] == 0x2C:
+                    i += 1
+                    continue
+                if i < len(body) and body[i] == 0x7D:
+                    i += 1
+                    break
+                raise ValueError(0)
+    else:
+        ids = array("id")
+    ws()
+    if i != len(body):
+        raise ValueError(0)
+    return ids, statuses
 
 
 def validator(v):
@@ -399,6 +510,14 @@ def route_checked(ops, req, size):
                 body = SSZ
             elif t != b"application/json":
                 raise Fault(415, 0, n, allow)
+    if op["flags"] & (F_IDS_OBJECT | F_IDS_ARRAY):
+        try:
+            ids, statuses = ids_body(req.get("body", b""), op["flags"] & F_IDS_OBJECT)
+        except ValueError as e:
+            raise Fault(400, e.args[0], n, allow)
+        lst += ids
+        f["statuses"] |= statuses
+        f["present"] |= (1 << P["id"] if ids else 0) | (1 << P["status"] if statuses else 0)
     response = JSON
     if op["flags"] & F_SSZ_RESPONSE and req["accept"]:
         j, s = weight(req["accept"], b"json"), weight(req["accept"], b"octet-stream")
@@ -516,9 +635,9 @@ class Cases:
         return name, parts
 
 
-def request(method, path, query=b"", accept=b"", content_type=b"", version=b""):
+def request(method, path, query=b"", accept=b"", content_type=b"", version=b"", body=b""):
     return {"method": method, "path": path, "query": query, "accept": accept, "content_type": content_type,
-            "consensus_version": version}
+            "consensus_version": version, "body": body}
 
 
 def fill(op, values=None):
@@ -539,6 +658,19 @@ def base(op, query_items=(), **headers):
     if op["flags"] & F_VERSION and "version" not in headers:
         headers["version"] = b"fulu"
     return request(op["method"], fill(op, headers.pop("path_values", None)), query, **headers)
+
+
+IDS_100 = b"[" + b",".join(b'"%d"' % i for i in range(100)) + b"]"
+ID_BODIES_ARRAY = [b"", b"[]", b" [ ] ", b'["1"]', b'["0","18446744073709551615"]', b'[ "5" ,\n\t"' + PUBKEY + b'"\r\n]',
+                   b'["' + PUBKEY.upper().replace(b"0X", b"0x") + b'","7","7"]', IDS_100, b"null"]
+ID_BODIES_OBJECT = [b"{}", b' { } ', b'{"ids":null,"statuses":null}', b'{"ids":[],"statuses":[]}', b'{"ids":["1","2"]}',
+                    b'{"statuses":["active","withdrawal_done"]}', b'{"statuses":["pending_queued"],"ids":["' + PUBKEY + b'"]}',
+                    b'{ "ids" : [ "3" ] , "statuses" : [ "exited" , "pending" ] }', b'{"ids":' + IDS_100 + b"}"]
+BAD_BODIES = [b'{"ids":["1"', b'{"ids":["1",]}', b'{"ids":[1]}', b'{"ids":["x"]}', b'{"ids":[""]}', b'{"ids":["0x12"]}',
+              b'{"ids":["18446744073709551616"]}', b'{"ids":["1"]}x', b'{"ids":["1"]} {}', b'{"ids":["\\u0031"]}',
+              b'{"ids":["1\t"]}', b'{"ids":["1"],"ids":["2"]}', b'{"other":[]}', b'{"ids":"1"}', b'{"ids":[["1"]]}',
+              b'{"ids":nul}', b'{"statuses":["bogus"]}', b'{"statuses":["Active"]}', b'{"ids":["1"],}', b'{"ids":["1"];',
+              b' ', b'[', b'"1"', b'{"ids":["x"],"statuses":["bogus"]}', b'{"statuses":["bogus"],"ids":["x"]}']
 
 
 def cases():
@@ -601,6 +733,12 @@ def cases():
             yield c.case(f"{name}_ids_65_split", base(op, [("id", b",".join(ids[:40])), ("id", b",".join(ids[40:] + [b"x"]))]))
             yield c.case(f"{name}_ids_encoded", base(op, [("id", b"1%2C2%2c" + PUBKEY)]))
             yield c.case(f"{name}_ids_and_bad_status", base(op, [("id", b"1"), ("status", b"bogus")]))
+        if op["flags"] & (F_IDS_OBJECT | F_IDS_ARRAY):
+            obj = op["flags"] & F_IDS_OBJECT
+            for k, v in enumerate(ID_BODIES_OBJECT if obj else ID_BODIES_ARRAY):
+                yield c.case(f"{name}_body_{k}", dict(base(op), body=v))
+            for k, v in enumerate(BAD_BODIES):
+                yield c.case(f"{name}_body_bad_{k}", dict(base(op), body=v if obj else v.replace(b'{"ids":', b"")))
     health = [o for o in ops if o["name"] == "getHealth"][0]
     for k, path in enumerate([b"/", b"/eth", b"/eth/v1/node/health/", b"/eth/v1/node", b"/eth/v1/node/health/x",
                               b"/eth//v1/node/health", b"/eth/v1/node/healt", b"/eth/v1/node/healthz", b"/ETH/v1/node/health",

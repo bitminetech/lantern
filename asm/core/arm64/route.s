@@ -19,6 +19,12 @@ route_t_any_application:
 route_t_any:
     .ascii  "*/*"
 .set api_t_any_len, 3
+route_k_ids:
+    .ascii  "\"ids\""
+route_k_statuses:
+    .ascii  "\"statuses\""
+route_k_null:
+    .ascii  "null"
 
 /* reg = the value of the hex digit in reg (either case), else branch to bad. Uses tmp. */
 .macro ROUTE_HEX reg, tmp, bad
@@ -454,6 +460,140 @@ LOCAL_FUNCTION route_value
 98: mov     x0, #1
     LEAVE 0
 END_FUNCTION route_value
+
+/* L0: x21 past the JSON white space (space, tab, LF, CR) before x25. A leaf. Uses x9. */
+LOCAL_FUNCTION route_ws
+    UNWIND_END_PROLOGUE
+1:  cmp     x21, x25
+    b.hs    9f
+    ldrb    w9, [x21]
+    cmp     w9, #32
+    b.eq    2f
+    cmp     w9, #9
+    b.eq    2f
+    cmp     w9, #10
+    b.eq    2f
+    cmp     w9, #13
+    b.ne    9f
+2:  add     x21, x21, #1
+    b       1b
+9:  ret
+END_FUNCTION route_ws
+
+/* L0: x0 = 1 when the x1 bytes at x0 start the bytes at x21 (before x25), x21 then past them; else 0. A leaf. Uses x9-x11. */
+LOCAL_FUNCTION route_lit
+    UNWIND_END_PROLOGUE
+    sub     x9, x25, x21
+    cmp     x9, x1
+    b.lo    8f
+    mov     x9, #0
+1:  cmp     x9, x1
+    b.hs    2f
+    ldrb    w10, [x0, x9]
+    ldrb    w11, [x21, x9]
+    cmp     w10, w11
+    b.ne    8f
+    add     x9, x9, #1
+    b       1b
+2:  add     x21, x21, x1
+    mov     x0, #1
+    ret
+8:  mov     x0, #0
+    ret
+END_FUNCTION route_lit
+
+/*
+ * L1: null, or an array of strings, at x21 of a body that ends at x25: each string an item of the
+ * parameter x0 (API_PARAM_ID: into the list of out x20, x27 items; API_PARAM_STATUS: its bits), its
+ * bit of present (x26) set; x21 then past the value. x0 = 0, or the fault + 1. x22 the locals of
+ * lantern_api_route: +56 1 when the list has no room, +128 an item. Locals: the parameter, an
+ * item's start.
+ */
+LOCAL_FUNCTION route_ids_array
+    FRAME 16
+    str     x0, [sp, #16]
+    ADDRESS x0, route_k_null
+    mov     x1, #4
+    bl      route_lit
+    cbnz    x0, 7f
+    cmp     x21, x25                        /* [ */
+    b.hs    8f
+    ldrb    w9, [x21], #1
+    cmp     w9, #'['
+    b.ne    8f
+    bl      route_ws
+    cmp     x21, x25
+    b.hs    8f
+    ldrb    w9, [x21]
+    cmp     w9, #']'
+    b.ne    2f
+    add     x21, x21, #1
+    b       7f
+2:  bl      route_ws                        /* a string: no \, no byte below 0x20 */
+    cmp     x21, x25
+    b.hs    8f
+    ldrb    w9, [x21], #1
+    cmp     w9, #34                         /* " */
+    b.ne    8f
+    str     x21, [sp, #24]
+3:  cmp     x21, x25
+    b.hs    8f
+    ldrb    w9, [x21]
+    cmp     w9, #34                         /* " */
+    b.eq    4f
+    cmp     w9, #92                         /* \ */
+    b.eq    8f
+    cmp     w9, #32
+    b.lo    8f
+    add     x21, x21, #1
+    b       3b
+4:  mov     x0, x20                         /* the item */
+    ldp     x1, x2, [sp, #16]
+    sub     x3, x21, x2
+    add     x4, x22, #128
+    add     x21, x21, #1
+    bl      route_value
+    cbnz    x0, 9f
+    ldr     x9, [sp, #16]
+    cmp     x9, #API_PARAM_STATUS
+    b.eq    5f
+    mov     x9, #64                         /* an id: into out, while there is room */
+    madd    x10, x27, x9, x9
+    add     x10, x10, #API_ROUTE_FIXED
+    ldr     x11, [x20]
+    cmp     x10, x11
+    b.ls    41f
+    mov     x11, #1
+    str     x11, [x22, #56]
+    b       42f
+41: sub     x10, x10, x9
+    add     x10, x20, x10
+    add     x11, x22, #128
+411: ldr    x12, [x11], #8
+    str     x12, [x10], #8
+    subs    x9, x9, #8
+    b.ne    411b
+42: add     x27, x27, #1
+5:  ldr     x9, [sp, #16]                   /* the parameter is given */
+    mov     x10, #1
+    lsl     x10, x10, x9
+    orr     x26, x26, x10
+    bl      route_ws                        /* then , or ] */
+    cmp     x21, x25
+    b.hs    8f
+    ldrb    w9, [x21], #1
+    cmp     w9, #','
+    b.eq    2b
+    cmp     w9, #']'
+    b.ne    8f
+7:  mov     x0, #0
+    UNFRAME 16
+8:  mov     x0, #1
+    UNFRAME 16
+9:  ldr     x0, [sp, #16]
+    add     x0, x0, #1
+    UNFRAME 16
+END_FUNCTION route_ids_array
 
 /*
  * L0: the weight, 0 to 1000, that the Accept value of x1 bytes at x0 gives the media type of x3
@@ -917,7 +1057,82 @@ FUNCTION lantern_api_route
     mov     x3, #api_t_json_len
     bl      http_same
     cbz     x0, 415f
-44: mov     x9, #API_TYPE_JSON              /* Accept */
+44: ldr     x11, [x23, #8]                  /* the JSON body of ids */
+    tst     x11, #((API_FLAG_IDS_OBJECT | API_FLAG_IDS_ARRAY) << 24)
+    b.eq    45f
+    ldp     x9, x10, [x19, #HttpRequest_body]
+    add     x24, x19, x9
+    add     x25, x24, x10
+    mov     x21, x24
+    add     x22, sp, #L
+    mov     x9, #64
+    str     x9, [sp, #(L + 64)]
+    tst     x11, #(API_FLAG_IDS_OBJECT << 24)
+    b.ne    51f
+    cbz     x10, 45f                        /* an array: no body, null, or the ids */
+    bl      route_ws
+    mov     x0, #API_PARAM_ID
+    bl      route_ids_array
+    cbnz    x0, 59f
+    b       58f
+51: bl      route_ws                        /* an object: {"ids":…,"statuses":…} */
+    cmp     x21, x25
+    b.hs    400f
+    ldrb    w9, [x21], #1
+    cmp     w9, #'{'
+    b.ne    400f
+    str     xzr, [sp, #(L + 96)]            /* the members seen: 1 ids, 2 statuses */
+    bl      route_ws
+    cmp     x21, x25
+    b.hs    400f
+    ldrb    w9, [x21]
+    cmp     w9, #'}'
+    b.ne    52f
+    add     x21, x21, #1
+    b       58f
+52: bl      route_ws                        /* a member: its key, once */
+    ADDRESS x0, route_k_ids
+    mov     x1, #5
+    bl      route_lit
+    mov     x28, #API_PARAM_ID
+    mov     x12, #1
+    cbnz    x0, 53f
+    ADDRESS x0, route_k_statuses
+    mov     x1, #10
+    bl      route_lit
+    cbz     x0, 400f
+    mov     x28, #API_PARAM_STATUS
+    mov     x12, #2
+53: ldr     x9, [sp, #(L + 96)]
+    tst     x9, x12
+    b.ne    400f
+    orr     x9, x9, x12
+    str     x9, [sp, #(L + 96)]
+    bl      route_ws
+    cmp     x21, x25
+    b.hs    400f
+    ldrb    w9, [x21], #1
+    cmp     w9, #':'
+    b.ne    400f
+    bl      route_ws
+    mov     x0, x28
+    bl      route_ids_array
+    cbnz    x0, 59f
+    bl      route_ws                        /* then , or } */
+    cmp     x21, x25
+    b.hs    400f
+    ldrb    w9, [x21], #1
+    cmp     w9, #','
+    b.eq    52b
+    cmp     w9, #'}'
+    b.ne    400f
+58: bl      route_ws                        /* nothing after the value */
+    cmp     x21, x25
+    b.ne    400f
+    b       45f
+59: sub     x28, x0, #1                     /* the fault */
+    b       401f
+45: mov     x9, #API_TYPE_JSON              /* Accept */
     str     x9, [x20, #ApiRoute_response]
     ldr     x11, [x23, #8]
     tst     x11, #(API_FLAG_SSZ_RESPONSE << 24)

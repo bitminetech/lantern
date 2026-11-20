@@ -19,6 +19,12 @@ route_t_any_application:
 route_t_any:
     .ascii  "*/*"
 .set route_t_any_len, 3
+route_k_ids:
+    .ascii  "\"ids\""
+route_k_statuses:
+    .ascii  "\"statuses\""
+route_k_null:
+    .ascii  "null"
 
 # reg = the value of the hex digit in reg (either case), else jump to bad. 32-bit registers. Uses tmp.
 .macro ROUTE_HEX reg, tmp, bad
@@ -461,6 +467,145 @@ LOCAL_FUNCTION route_value
 98: mov     $1, %eax
     LEAVE 0
 END_FUNCTION route_value
+
+# L0: r12 past the JSON white space (space, tab, LF, CR) before r13. A leaf. Uses rax.
+LOCAL_FUNCTION route_ws
+    UNWIND_END_PROLOGUE
+1:  cmp     %r13, %r12
+    jae     9f
+    movzbl  (%r12), %eax
+    cmp     $32, %eax
+    je      2f
+    cmp     $9, %eax
+    je      2f
+    cmp     $10, %eax
+    je      2f
+    cmp     $13, %eax
+    jne     9f
+2:  inc     %r12
+    jmp     1b
+9:  ret
+END_FUNCTION route_ws
+
+# L0: eax = 1 when the rsi bytes at rdi start the bytes at r12 (before r13), r12 then past them; else 0. A leaf. Uses rax, rcx.
+LOCAL_FUNCTION route_lit
+    UNWIND_END_PROLOGUE
+    mov     %r13, %rax
+    sub     %r12, %rax
+    cmp     %rsi, %rax
+    jb      8f
+    xor     %ecx, %ecx
+1:  cmp     %rsi, %rcx
+    jae     2f
+    movzbl  (%rdi,%rcx), %eax
+    cmp     (%r12,%rcx), %al
+    jne     8f
+    inc     %rcx
+    jmp     1b
+2:  add     %rsi, %r12
+    mov     $1, %eax
+    ret
+8:  xor     %eax, %eax
+    ret
+END_FUNCTION route_lit
+
+# L1: null, or an array of strings, at r12 of a body that ends at r13: each string an item of the
+# parameter rdi (API_PARAM_ID: into the list of out rbp; API_PARAM_STATUS: its bits), its bit of
+# present set; r12 then past the value. rax = 0, or the fault + 1. r15 the rsp of
+# lantern_api_route: S8 present, S9 the list's items, L+56 1 when the list has no room, L+128 an
+# item. Locals: the parameter, an item's start.
+LOCAL_FUNCTION route_ids_array
+    FRAME 16
+    mov     %rdi, (%rsp)
+    lea     route_k_null(%rip), %rdi
+    mov     $4, %esi
+    call    route_lit
+    test    %eax, %eax
+    jnz     7f
+    cmp     %r13, %r12                      # [
+    jae     8f
+    movzbl  (%r12), %eax
+    inc     %r12
+    cmp     $0x5b, %eax
+    jne     8f
+    call    route_ws
+    cmp     %r13, %r12
+    jae     8f
+    cmpb    $0x5d, (%r12)
+    jne     2f
+    inc     %r12
+    jmp     7f
+2:  call    route_ws                        # a string: no backslash, no byte below 0x20
+    cmp     %r13, %r12
+    jae     8f
+    movzbl  (%r12), %eax
+    inc     %r12
+    cmp     $0x22, %eax
+    jne     8f
+    mov     %r12, 8(%rsp)
+3:  cmp     %r13, %r12
+    jae     8f
+    movzbl  (%r12), %eax
+    cmp     $0x22, %eax
+    je      4f
+    cmp     $0x5c, %eax
+    je      8f
+    cmp     $32, %eax
+    jb      8f
+    inc     %r12
+    jmp     3b
+4:  mov     %rbp, %rdi                      # the item
+    mov     (%rsp), %rsi
+    mov     8(%rsp), %rdx
+    mov     %r12, %rcx
+    sub     %rdx, %rcx
+    lea     (L + 128)(%r15), %r8
+    inc     %r12
+    call    route_value
+    test    %eax, %eax
+    jnz     9f
+    cmpq    $API_PARAM_STATUS, (%rsp)
+    je      5f
+    mov     S9(%r15), %rax                  # an id: into out, while there is room
+    inc     %rax
+    shl     $6, %rax
+    add     $API_ROUTE_FIXED, %rax
+    cmp     (%rbp), %rax
+    jbe     41f
+    movq    $1, (L + 56)(%r15)
+    jmp     42f
+41: sub     $64, %rax
+    add     %rbp, %rax
+    lea     (L + 128)(%r15), %rsi
+    mov     $64, %ecx
+411: mov    (%rsi), %rdx
+    mov     %rdx, (%rax)
+    add     $8, %rsi
+    add     $8, %rax
+    sub     $8, %ecx
+    jnz     411b
+42: incq    S9(%r15)
+5:  mov     (%rsp), %rcx                    # the parameter is given
+    mov     S8(%r15), %rax
+    bts     %rcx, %rax
+    mov     %rax, S8(%r15)
+    call    route_ws                        # then , or ]
+    cmp     %r13, %r12
+    jae     8f
+    movzbl  (%r12), %eax
+    inc     %r12
+    cmp     $0x2c, %eax
+    je      2b
+    cmp     $0x5d, %eax
+    jne     8f
+7:  xor     %eax, %eax
+    UNFRAME 16
+8:  mov     $1, %eax
+    UNFRAME 16
+9:  mov     (%rsp), %rax
+    inc     %rax
+    UNFRAME 16
+END_FUNCTION route_ids_array
 
 # L0: the weight, 0 to 1000, that the Accept value of rsi bytes at rdi gives the media type of rcx
 # lower case bytes at rdx (lantern_api_route's rules). rbx bytes, rbp length, r12 media, r13 its
@@ -958,7 +1103,86 @@ FUNCTION lantern_api_route
     call    http_same
     test    %eax, %eax
     jz      415f
-44: movq    $API_TYPE_JSON, ApiRoute_response(%rbp)  # Accept
+44: testl   $((API_FLAG_IDS_OBJECT | API_FLAG_IDS_ARRAY) << 24), 8(%r14)  # the JSON body of ids
+    jz      45f
+    mov     HttpRequest_body(%rbx), %r12
+    add     %rbx, %r12
+    mov     (HttpRequest_body + 8)(%rbx), %r13
+    add     %r12, %r13
+    mov     %rsp, %r15
+    movq    $64, (L + 64)(%rsp)
+    testl   $(API_FLAG_IDS_OBJECT << 24), 8(%r14)
+    jnz     51f
+    cmp     %r12, %r13                      # an array: no body, null, or the ids
+    je      45f
+    call    route_ws
+    mov     $API_PARAM_ID, %edi
+    call    route_ids_array
+    test    %rax, %rax
+    jnz     59f
+    jmp     58f
+51: call    route_ws                        # an object: {"ids":…,"statuses":…}
+    cmp     %r13, %r12
+    jae     400f
+    movzbl  (%r12), %eax
+    inc     %r12
+    cmp     $0x7b, %eax
+    jne     400f
+    movq    $0, (L + 96)(%rsp)              # the members seen: 1 ids, 2 statuses
+    call    route_ws
+    cmp     %r13, %r12
+    jae     400f
+    cmpb    $0x7d, (%r12)
+    jne     52f
+    inc     %r12
+    jmp     58f
+52: call    route_ws                        # a member: its key, once
+    lea     route_k_ids(%rip), %rdi
+    mov     $5, %esi
+    call    route_lit
+    movq    $API_PARAM_ID, S10(%rsp)
+    mov     $1, %ecx
+    test    %eax, %eax
+    jnz     53f
+    lea     route_k_statuses(%rip), %rdi
+    mov     $10, %esi
+    call    route_lit
+    test    %eax, %eax
+    jz      400f
+    movq    $API_PARAM_STATUS, S10(%rsp)
+    mov     $2, %ecx
+53: test    %rcx, (L + 96)(%rsp)
+    jnz     400f
+    or      %rcx, (L + 96)(%rsp)
+    call    route_ws
+    cmp     %r13, %r12
+    jae     400f
+    movzbl  (%r12), %eax
+    inc     %r12
+    cmp     $0x3a, %eax
+    jne     400f
+    call    route_ws
+    mov     S10(%rsp), %rdi
+    call    route_ids_array
+    test    %rax, %rax
+    jnz     59f
+    call    route_ws                        # then , or }
+    cmp     %r13, %r12
+    jae     400f
+    movzbl  (%r12), %eax
+    inc     %r12
+    cmp     $0x2c, %eax
+    je      52b
+    cmp     $0x7d, %eax
+    jne     400f
+58: call    route_ws                        # nothing after the value
+    cmp     %r13, %r12
+    jne     400f
+    jmp     45f
+59: dec     %rax                            # the fault
+    mov     %rax, S10(%rsp)
+    jmp     401f
+45: movq    $API_TYPE_JSON, ApiRoute_response(%rbp)  # Accept
     testl   $(API_FLAG_SSZ_RESPONSE << 24), 8(%r14)
     jz      46f
     mov     (HttpRequest_accept + 8)(%rbx), %r13

@@ -936,6 +936,9 @@ LOCAL_FUNCTION node_api_check
     ld      t3, (HttpRequest_query + 8)(t2)
     slli    t3, t3, 2
     add     a1, a1, t3
+    ld      t3, (HttpRequest_body + 8)(t2)  # 16 bytes per byte of the body: its ids
+    slli    t3, t3, 4
+    add     a1, a1, t3
 71: li      a0, 0
     ret
 8:  li      a0, 1

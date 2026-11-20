@@ -172,6 +172,12 @@ lantern_api_route(request, out) -> status
   - Each item of `indices`: a number.
   - Sets, a bit for each name: `status` (the nine `ValidatorStatus` names; `pending`, `active`, `exited` and `withdrawal` set the bits of their statuses), `state` and `direction` of getPeers, `topics` of eventstream (`API_STATUS_*`, `API_PEER_*`, `API_DIRECTION_*`, `API_TOPIC_*`).
   - `id` of getStateValidators and getStateValidatorBalances: more than 64 items give 414, `fault` `API_PARAM_ID`.
+- The JSON body of postStateValidators, postStateValidatorBalances, postStateValidatorIdentities, getSyncCommitteeRewards and getAttestationsRewards gives `id` and `status` items as a query does, with no limit on the count of `id` items:
+  - postStateValidators (`API_FLAG_IDS_OBJECT`): an object whose members are `ids` and `statuses`, each at most once, each `null` or an array of strings. Each string of `ids` is an `id` item; each of `statuses` a `status` item. Lighthouse v8.3.3 takes this body with the same rule (`deny_unknown_fields`).
+  - The other four (`API_FLAG_IDS_ARRAY`), whose bodies the spec gives as arrays of strings, each a public key or a validator index: no body, `null`, or an array of strings, each an `id` item.
+  - JSON white space (space, tab, LF and CR) may stand before and after each token. A string is the bytes between two `"`, with no `\` and no byte below 0x20 among them.
+  - An empty array, `null` or a missing member gives no item: the parameter counts as not given.
+  - Any other body, or bytes after its value: 400, `fault` 0. An item that breaks its type: 400, `fault` `API_PARAM_ID` or `API_PARAM_STATUS`. The first fault in the body's order is the one given.
 - `Eth-Consensus-Version`, on the five operations that require it (publishBlindedBlockV2, publishBlockV2, submitPoolAttestationsV2, submitPoolAttesterSlashingsV2, publishAggregateAndProofsV2): a fork name from `phase0` to `fulu`, which sets `consensus_version` to its `FORK_*`. Missing or another value: 400, `fault` `API_PARAM_CONSENSUS_VERSION`.
 - `Accept`, on the operations that can answer with SSZ (those whose responses list 406):
   - No `Accept`: JSON.
@@ -190,7 +196,7 @@ lantern_api_route(request, out) -> status
   4. The path parameters, in the order of the path.
   5. The query items, in their order; within a list or a set, its items in order. The 65th `id` gives 414 before it is read.
   6. Required query parameters: the missing one of lowest `API_PARAM_*`.
-  7. `Eth-Consensus-Version`, then `Content-Type`, then `Accept`.
+  7. `Eth-Consensus-Version`, then `Content-Type`, then the JSON body of the five operations above, then `Accept`.
   8. The room of `out`.
 - On `LANTERN_OK`, every field of `out` is written; a parameter that is not given is zero, its bit of `present` clear, apart from `broadcast_validation`, which is 1 when the operation takes it. The list, then the peer id, follow the fixed part, each at a multiple of 8 bytes, with zero bytes between.
 - On `LANTERN_INVALID_ROUTE`, `status`, `fault`, `allow` and `op` are written: `allow` once the path matches, `op` once its method matches too, else zero; `fault` the parameter for 400 and 414, else zero.
@@ -485,7 +491,7 @@ The operation of one request and its parameters, by lantern_api_route.
 | 296 | `root` | Root | `parent_root`, `attestation_data_root` or `beacon_block_root` |
 | 328 | `randao_reveal` | BLSSignature | |
 | 424 | `graffiti` | Bytes32 | |
-| 456 | `list` | PartRef | `id`: `ValidatorRef` items; `indices`: u64 items; `versioned_hashes`: Root items |
+| 456 | `list` | PartRef | `id` of the query or the body: `ValidatorRef` items; `indices`: u64 items; `versioned_hashes`: Root items |
 | 472 | `peer_id` | PartRef | The bytes of `peer_id` |
 
 ### Rules

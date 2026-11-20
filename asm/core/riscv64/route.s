@@ -19,6 +19,12 @@ route_t_any_application:
 route_t_any:
     .ascii  "*/*"
 .set route_t_any_len, 3
+route_k_ids:
+    .ascii  "\"ids\""
+route_k_statuses:
+    .ascii  "\"statuses\""
+route_k_null:
+    .ascii  "null"
 
 /* reg = the value of the hex digit in reg (either case), else branch to bad. Uses tmp and tmp2. */
 .macro ROUTE_HEX reg, tmp, tmp2, bad
@@ -613,6 +619,139 @@ LOCAL_FUNCTION route_weight
 91: LEAVE 16
 END_FUNCTION route_weight
 
+/* L0: s3 past the JSON white space (space, tab, LF, CR) before s4. A leaf. Uses t0, t1. */
+LOCAL_FUNCTION route_ws
+    UNWIND_END_PROLOGUE
+1:  bgeu    s3, s4, 9f
+    lbu     t0, 0(s3)
+    li      t1, 32
+    beq     t0, t1, 2f
+    li      t1, 9
+    beq     t0, t1, 2f
+    li      t1, 10
+    beq     t0, t1, 2f
+    li      t1, 13
+    bne     t0, t1, 9f
+2:  addi    s3, s3, 1
+    j       1b
+9:  ret
+END_FUNCTION route_ws
+
+/* L0: a0 = 1 when the a1 bytes at a0 start the bytes at s3 (before s4), s3 then past them; else 0. A leaf. Uses t0-t2. */
+LOCAL_FUNCTION route_lit
+    UNWIND_END_PROLOGUE
+    sub     t0, s4, s3
+    bltu    t0, a1, 8f
+    li      t0, 0
+1:  bgeu    t0, a1, 2f
+    add     t1, a0, t0
+    lbu     t1, 0(t1)
+    add     t2, s3, t0
+    lbu     t2, 0(t2)
+    bne     t1, t2, 8f
+    addi    t0, t0, 1
+    j       1b
+2:  add     s3, s3, a1
+    li      a0, 1
+    ret
+8:  li      a0, 0
+    ret
+END_FUNCTION route_lit
+
+/*
+ * L1: null, or an array of strings, at s3 of a body that ends at s4: each string an item of the
+ * parameter a0 (API_PARAM_ID: into the list of out s2, s9 items; API_PARAM_STATUS: its bits), its
+ * bit of present (s8) set; s3 then past the value. a0 = 0, or the fault + 1. s6 the sp of
+ * lantern_api_route: L+56 1 when the list has no room, L+128 an item. Locals: the parameter, an
+ * item's start.
+ */
+LOCAL_FUNCTION route_ids_array
+    FRAME 16
+    sd      a0, 0(sp)
+    lla     a0, route_k_null
+    li      a1, 4
+    call    route_lit
+    bnez    a0, 7f
+    bgeu    s3, s4, 8f                      # [
+    lbu     t0, 0(s3)
+    addi    s3, s3, 1
+    li      t1, 0x5b
+    bne     t0, t1, 8f
+    call    route_ws
+    bgeu    s3, s4, 8f
+    lbu     t0, 0(s3)
+    li      t1, 0x5d
+    bne     t0, t1, 2f
+    addi    s3, s3, 1
+    j       7f
+2:  call    route_ws                        # a string: no backslash, no byte below 0x20
+    bgeu    s3, s4, 8f
+    lbu     t0, 0(s3)
+    addi    s3, s3, 1
+    li      t1, 0x22
+    bne     t0, t1, 8f
+    sd      s3, 8(sp)
+3:  bgeu    s3, s4, 8f
+    lbu     t0, 0(s3)
+    li      t1, 0x22
+    beq     t0, t1, 4f
+    li      t1, 0x5c
+    beq     t0, t1, 8f
+    li      t1, 32
+    bltu    t0, t1, 8f
+    addi    s3, s3, 1
+    j       3b
+4:  mv      a0, s2                          # the item
+    ld      a1, 0(sp)
+    ld      a2, 8(sp)
+    sub     a3, s3, a2
+    addi    a4, s6, (L + 128)
+    addi    s3, s3, 1
+    call    route_value
+    bnez    a0, 9f
+    ld      t0, 0(sp)
+    li      t1, API_PARAM_STATUS
+    beq     t0, t1, 5f
+    addi    t1, s9, 1                       # an id: into out, while there is room
+    slli    t1, t1, 6
+    addi    t1, t1, API_ROUTE_FIXED
+    ld      t2, 0(s2)
+    bleu    t1, t2, 41f
+    li      t2, 1
+    sd      t2, (L + 56)(s6)
+    j       42f
+41: addi    t1, t1, -64
+    add     t1, s2, t1
+    addi    t2, s6, (L + 128)
+    li      t0, 64
+411: ld     t3, 0(t2)
+    sd      t3, 0(t1)
+    addi    t2, t2, 8
+    addi    t1, t1, 8
+    addi    t0, t0, -8
+    bnez    t0, 411b
+42: addi    s9, s9, 1
+5:  ld      t0, 0(sp)                       # the parameter is given
+    li      t1, 1
+    sll     t1, t1, t0
+    or      s8, s8, t1
+    call    route_ws                        # then , or ]
+    bgeu    s3, s4, 8f
+    lbu     t0, 0(s3)
+    addi    s3, s3, 1
+    li      t1, 0x2c
+    beq     t0, t1, 2b
+    li      t1, 0x5d
+    bne     t0, t1, 8f
+7:  li      a0, 0
+    UNFRAME 16
+8:  li      a0, 1
+    UNFRAME 16
+9:  ld      a0, 0(sp)
+    addi    a0, a0, 1
+    UNFRAME 16
+END_FUNCTION route_ids_array
+
 /*
  * s1 the request, s2 out, s3 a path parameter's entry or a query item's start, s4 their count or
  * the item's end, s5 the operation's entry of api_routes, s6 the query, s7 its length, s8 present,
@@ -944,7 +1083,82 @@ FUNCTION lantern_api_route
     li      a3, route_t_json_len
     call    http_same
     beqz    a0, 415f
-44: li      t0, API_TYPE_JSON               # Accept
+44: ld      t0, 8(s5)                       # the JSON body of ids
+    li      t1, ((API_FLAG_IDS_OBJECT | API_FLAG_IDS_ARRAY) << 24)
+    and     t1, t0, t1
+    beqz    t1, 45f
+    ld      t1, HttpRequest_body(s1)
+    add     s3, s1, t1
+    ld      t1, (HttpRequest_body + 8)(s1)
+    add     s4, s3, t1
+    mv      s6, sp
+    li      t2, 64
+    sd      t2, (L + 64)(sp)
+    li      t2, (API_FLAG_IDS_OBJECT << 24)
+    and     t2, t0, t2
+    bnez    t2, 51f
+    beqz    t1, 45f                         # an array: no body, null, or the ids
+    call    route_ws
+    li      a0, API_PARAM_ID
+    call    route_ids_array
+    bnez    a0, 59f
+    j       58f
+51: call    route_ws                        # an object: {"ids":…,"statuses":…}
+    bgeu    s3, s4, 400f
+    lbu     t0, 0(s3)
+    addi    s3, s3, 1
+    li      t1, 0x7b
+    bne     t0, t1, 400f
+    sd      zero, (L + 96)(sp)              # the members seen: 1 ids, 2 statuses
+    call    route_ws
+    bgeu    s3, s4, 400f
+    lbu     t0, 0(s3)
+    li      t1, 0x7d
+    bne     t0, t1, 52f
+    addi    s3, s3, 1
+    j       58f
+52: call    route_ws                        # a member: its key, once
+    lla     a0, route_k_ids
+    li      a1, 5
+    call    route_lit
+    li      s10, API_PARAM_ID
+    li      s7, 1
+    bnez    a0, 53f
+    lla     a0, route_k_statuses
+    li      a1, 10
+    call    route_lit
+    beqz    a0, 400f
+    li      s10, API_PARAM_STATUS
+    li      s7, 2
+53: ld      t0, (L + 96)(sp)
+    and     t1, t0, s7
+    bnez    t1, 400f
+    or      t0, t0, s7
+    sd      t0, (L + 96)(sp)
+    call    route_ws
+    bgeu    s3, s4, 400f
+    lbu     t0, 0(s3)
+    addi    s3, s3, 1
+    li      t1, 0x3a
+    bne     t0, t1, 400f
+    call    route_ws
+    mv      a0, s10
+    call    route_ids_array
+    bnez    a0, 59f
+    call    route_ws                        # then , or }
+    bgeu    s3, s4, 400f
+    lbu     t0, 0(s3)
+    addi    s3, s3, 1
+    li      t1, 0x2c
+    beq     t0, t1, 52b
+    li      t1, 0x7d
+    bne     t0, t1, 400f
+58: call    route_ws                        # nothing after the value
+    bne     s3, s4, 400f
+    j       45f
+59: addi    s10, a0, -1                     # the fault
+    j       401f
+45: li      t0, API_TYPE_JSON               # Accept
     sd      t0, ApiRoute_response(s2)
     ld      t0, 8(s5)
     li      t1, (API_FLAG_SSZ_RESPONSE << 24)

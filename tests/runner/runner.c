@@ -7509,15 +7509,18 @@ static void run_http_request(const char *file, case_file *f) {
 #define ROUTE_INVALID_STATUS 64
 #define API_ROUTE_FIXED 488
 
-/* An HttpRequest of the case's method and parts path, query, accept, content_type and consensus_version, with no body. */
+/* An HttpRequest of the case's method and parts path, query, accept, content_type, consensus_version and body (none when the case has no body part). */
 static uint8_t *route_request(tv parts, uint64_t *size) {
     static const char *const names[5] = {"path", "query", "accept", "content_type", "consensus_version"};
     const uint8_t *b[5];
-    uint64_t lens[5], n = HTTP_REQUEST_FIXED;
+    uint64_t lens[5], n = HTTP_REQUEST_FIXED, blen = 0;
     for (int k = 0; k < 5; k++) {
         b[k] = tv_bytes(tv_get(parts, names[k]), &lens[k]);
         n += (lens[k] + 7) / 8 * 8;
     }
+    tv bv = tv_get(parts, "body");
+    const uint8_t *bb = bv ? tv_bytes(bv, &blen) : NULL;
+    n += (blen + 7) / 8 * 8;
     uint8_t *r = buffer(n);
     wr64(r, n);
     wr64(r + 8, 0);
@@ -7533,7 +7536,8 @@ static uint8_t *route_request(tv parts, uint64_t *size) {
         at += (lens[k] + 7) / 8 * 8;
     }
     wr64(r + 128, at);
-    wr64(r + 136, 0);
+    wr64(r + 136, blen);
+    if (blen) memcpy(r + at, bb, (size_t)blen);
     *size = n;
     return r;
 }
