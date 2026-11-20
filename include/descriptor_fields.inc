@@ -8,6 +8,10 @@ SSZ_FIELDS BlockContents
 SSZ_DFIELD N_BeaconBlock, BlockContents, block
 SSZ_DFIELD N_BundleProofs, BlockContents, kzg_proofs
 SSZ_DFIELD N_BundleBlobs, BlockContents, blobs
+SSZ_FIELDS SignedBlockContents
+SSZ_DFIELD N_SignedBeaconBlock, SignedBlockContents, signed_block
+SSZ_DFIELD N_BundleProofs, SignedBlockContents, kzg_proofs
+SSZ_DFIELD N_BundleBlobs, SignedBlockContents, blobs
 .endif
 
 SSZ_FIELDS SignedBeaconBlock

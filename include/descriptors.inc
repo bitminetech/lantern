@@ -23,6 +23,7 @@
 .macro SSZ_NODES m
     .if FORK >= FORK_DENEB
     \m BlockContents, F_BlockContents
+    \m SignedBlockContents, F_SignedBlockContents
     .endif
     \m SignedBeaconBlock, F_SignedBeaconBlock
     \m BeaconBlock, F_BeaconBlock
@@ -497,6 +498,7 @@
     .if FORK >= FORK_DENEB
     \m BlobKZGCommitments
     \m BlockContents
+    \m SignedBlockContents
     .endif
 .endm
 

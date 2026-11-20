@@ -91,11 +91,14 @@ def engine_result_types(spec, fork):
 
 
 def produce_types(spec, fork):
-    """Lantern's containers of block production (node.md, produceBlockV3), by name: from deneb
-    BlockContents, the block with the bundle's proofs and blobs."""
+    """Lantern's containers of block production and publishing (node.md, produceBlockV3 and
+    publishBlockV2), by name: from deneb BlockContents, the block with the bundle's proofs and
+    blobs, and SignedBlockContents, the signed block with them."""
     t = {}
     if FORKS.index(fork) >= FORKS.index("deneb"):
         bundle = engine_result_types(spec, fork)["BlobsBundle"].__annotations__
+        t["SignedBlockContents"] = container(spec, "SignedBlockContents", [("signed_block", spec.SignedBeaconBlock),
+                                                                           ("kzg_proofs", bundle["proofs"]), ("blobs", bundle["blobs"])])
         t["BlockContents"] = container(spec, "BlockContents", [("block", spec.BeaconBlock), ("kzg_proofs", bundle["proofs"]),
                                                                ("blobs", bundle["blobs"])])
     return t

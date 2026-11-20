@@ -817,4 +817,11 @@ SSZ_FIELD BlockContents, block, BeaconBlock
 SSZ_FIELD BlockContents, kzg_proofs, BundleProofs
 SSZ_FIELD BlockContents, blobs, BundleBlobs
 SSZ_END BlockContents
+
+/* Block publishing (node.md, publishBlockV2): from deneb SignedBlockContents, the signed block with its proofs and blobs. */
+SSZ_CONTAINER SignedBlockContents, 1
+SSZ_FIELD SignedBlockContents, signed_block, SignedBeaconBlock
+SSZ_FIELD SignedBlockContents, kzg_proofs, BundleProofs
+SSZ_FIELD SignedBlockContents, blobs, BundleBlobs
+SSZ_END SignedBlockContents
 .endif
