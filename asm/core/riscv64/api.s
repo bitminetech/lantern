@@ -6394,6 +6394,9 @@ LOCAL_FUNCTION node_submit_topic
     li      a0, GOSSIP_SYNC_COMMITTEE
     li      t1, API_OP_SUBMIT_POOL_SYNC_COMMITTEE_SIGNATURES
     beq     t0, t1, 9f
+    li      a0, GOSSIP_SYNC_COMMITTEE_CONTRIBUTION_AND_PROOF
+    li      t1, API_OP_PUBLISH_CONTRIBUTION_AND_PROOFS
+    beq     t0, t1, 9f
     li      a0, 0
 9:  ret
 END_FUNCTION node_submit_topic
@@ -7861,6 +7864,8 @@ LOCAL_FUNCTION node_api_submit_done
     beq     t0, t1, 72f
     li      t1, API_OP_SUBMIT_POOL_SYNC_COMMITTEE_SIGNATURES
     beq     t0, t1, 72f
+    li      t1, API_OP_PUBLISH_CONTRIBUTION_AND_PROOFS
+    beq     t0, t1, 72f
     li      t1, API_OP_SUBMIT_POOL_BLS_TO_EXECUTION_CHANGE
     bne     t0, t1, 80f
 72: mv      a1, s3
@@ -8131,6 +8136,10 @@ LOCAL_FUNCTION node_api_submit_run
     sub     t3, a0, t3
     seqz    t3, t3
     or      t2, t2, t3
+    li      t3, API_OP_PUBLISH_CONTRIBUTION_AND_PROOFS
+    sub     t3, a0, t3
+    seqz    t3, t3
+    or      t2, t2, t3
     sd      t2, (L + 40)(sp)
     call    node_submit_topic
     beqz    a0, 98f
@@ -8140,8 +8149,12 @@ LOCAL_FUNCTION node_api_submit_run
     li      a0, NODE_JSON_AGGREGATE_AND_PROOF
     j       13f
 14: li      t0, GOSSIP_SYNC_COMMITTEE       # a sync message: SyncCommitteeMessage
-    bne     a0, t0, 15f
+    bne     a0, t0, 16f
     li      a0, NODE_JSON_SYNC_COMMITTEE_MESSAGE
+    j       13f
+16: li      t0, GOSSIP_SYNC_COMMITTEE_CONTRIBUTION_AND_PROOF   # a contribution: SignedContributionAndProof
+    bne     a0, t0, 15f
+    li      a0, NODE_JSON_CONTRIBUTION_AND_PROOF
     j       13f
 15: li      t0, GOSSIP_BEACON_ATTESTATION   # an attestation: of the fork's type
     bne     a0, t0, 12f

@@ -201,6 +201,9 @@ The answers of the node (node.md, `NODE_EV_API`) follow these rules.
   - Each message, in order: the gossip validation of sync_committee of each subnet of compute_subnets_for_sync_committee(the head's post-state, its `validator_index`) (altair validator.md; lantern_node_sync_subnets), with the node's `Seen`; with no such subnet (an index past the validators, or a validator outside the sync committee), that of subnet 0, which rejects it or ignores it.
   - Valid on a subnet: it joins the pool and goes out on each subnet where it is valid (the spec's description: the node "MUST publish that sync committee signature on all applicable subnets"). Else rejected on a subnet: a failure. Else nothing more.
   - The answer: 200 with no body when none fails; else 400 with the IndexedErrorMessage of the failures, as for submitPoolBLSToExecutionChange.
+- publishContributionAndProofs, from altair: a JSON array of `SignedContributionAndProof`. A body that is no such list: 400 `{"code":400,"message":"BAD_REQUEST"}`.
+  - Each, in order: the gossip validation of sync_committee_contribution_and_proof, with the node's `Seen`. Valid: it goes out on its topic; it joins no pool, as an aggregate. Rejected: a failure; ignored: nothing more.
+  - The answer: 200 with no body when none fails; else 400 with the IndexedErrorMessage of the failures, as for submitPoolBLSToExecutionChange.
 - Every other operation: 501.
 
 ## Test vectors

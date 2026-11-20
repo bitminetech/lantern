@@ -6248,6 +6248,9 @@ LOCAL_FUNCTION node_submit_topic
     mov     x0, #GOSSIP_SYNC_COMMITTEE
     cmp     x9, #API_OP_SUBMIT_POOL_SYNC_COMMITTEE_SIGNATURES
     b.eq    9f
+    mov     x0, #GOSSIP_SYNC_COMMITTEE_CONTRIBUTION_AND_PROOF
+    cmp     x9, #API_OP_PUBLISH_CONTRIBUTION_AND_PROOFS
+    b.eq    9f
     mov     x0, #0
 9:  ret
 END_FUNCTION node_submit_topic
@@ -7672,6 +7675,8 @@ LOCAL_FUNCTION node_api_submit_done
     ccmp    x9, x10, #4, ne
     mov     x10, #API_OP_SUBMIT_POOL_SYNC_COMMITTEE_SIGNATURES
     ccmp    x9, x10, #4, ne
+    mov     x10, #API_OP_PUBLISH_CONTRIBUTION_AND_PROOFS
+    ccmp    x9, x10, #4, ne
     b.ne    80f
     mov     x1, x21
     mov     x2, #400
@@ -7919,6 +7924,8 @@ LOCAL_FUNCTION node_api_submit_run
     ccmp    x0, x10, #4, ne
     mov     x10, #API_OP_SUBMIT_POOL_SYNC_COMMITTEE_SIGNATURES
     ccmp    x0, x10, #4, ne
+    mov     x10, #API_OP_PUBLISH_CONTRIBUTION_AND_PROOFS
+    ccmp    x0, x10, #4, ne
     cset    x9, eq
     str     x9, [sp, #(L + 40)]
     bl      node_submit_topic
@@ -7929,6 +7936,9 @@ LOCAL_FUNCTION node_api_submit_run
     b.eq    14f
     cmp     x0, #GOSSIP_SYNC_COMMITTEE      /* a sync message: SyncCommitteeMessage */
     mov     x9, #NODE_JSON_SYNC_COMMITTEE_MESSAGE
+    b.eq    14f
+    cmp     x0, #GOSSIP_SYNC_COMMITTEE_CONTRIBUTION_AND_PROOF  /* a contribution: SignedContributionAndProof */
+    mov     x9, #NODE_JSON_CONTRIBUTION_AND_PROOF
     b.eq    14f
     cmp     x0, #GOSSIP_BEACON_ATTESTATION  /* an attestation: of the fork's type */
     b.ne    12f

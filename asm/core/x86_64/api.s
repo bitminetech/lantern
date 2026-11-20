@@ -6354,6 +6354,9 @@ LOCAL_FUNCTION node_submit_topic
     mov     $GOSSIP_SYNC_COMMITTEE, %eax
     cmp     $API_OP_SUBMIT_POOL_SYNC_COMMITTEE_SIGNATURES, %rdi
     je      9f
+    mov     $GOSSIP_SYNC_COMMITTEE_CONTRIBUTION_AND_PROOF, %eax
+    cmp     $API_OP_PUBLISH_CONTRIBUTION_AND_PROOFS, %rdi
+    je      9f
     xor     %eax, %eax
 9:  ret
 END_FUNCTION node_submit_topic
@@ -7776,6 +7779,8 @@ LOCAL_FUNCTION node_api_submit_done
     je      72f
     cmp     $API_OP_SUBMIT_POOL_SYNC_COMMITTEE_SIGNATURES, %eax
     je      72f
+    cmp     $API_OP_PUBLISH_CONTRIBUTION_AND_PROOFS, %eax
+    je      72f
     cmp     $API_OP_SUBMIT_POOL_BLS_TO_EXECUTION_CHANGE, %eax
     jne     80f
 72: mov     %r12, %rsi
@@ -8052,6 +8057,9 @@ LOCAL_FUNCTION node_api_submit_run
     cmp     $API_OP_SUBMIT_POOL_SYNC_COMMITTEE_SIGNATURES, %edi
     sete    %cl
     or      %cl, %al
+    cmp     $API_OP_PUBLISH_CONTRIBUTION_AND_PROOFS, %edi
+    sete    %cl
+    or      %cl, %al
     mov     %rax, (L + 40)(%rsp)
     call    node_submit_topic
     test    %rax, %rax
@@ -8062,8 +8070,12 @@ LOCAL_FUNCTION node_api_submit_run
     mov     $NODE_JSON_AGGREGATE_AND_PROOF, %eax
     jmp     13f
 14: cmp     $GOSSIP_SYNC_COMMITTEE, %rax    # a sync message: SyncCommitteeMessage
-    jne     15f
+    jne     16f
     mov     $NODE_JSON_SYNC_COMMITTEE_MESSAGE, %eax
+    jmp     13f
+16: cmp     $GOSSIP_SYNC_COMMITTEE_CONTRIBUTION_AND_PROOF, %rax  # a contribution: SignedContributionAndProof
+    jne     15f
+    mov     $NODE_JSON_CONTRIBUTION_AND_PROOF, %eax
     jmp     13f
 15: cmp     $GOSSIP_BEACON_ATTESTATION, %rax    # an attestation: of the fork's type
     jne     12f
