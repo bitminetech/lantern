@@ -2131,6 +2131,8 @@ LOCAL_FUNCTION node_api_event
     je      65f
     cmp     $API_OP_GET_BLOCK_ATTESTATIONS_V2, %rcx
     je      65f
+    cmp     $API_OP_GET_BLINDED_BLOCK, %rcx
+    je      65f
     cmp     $API_OP_GET_STATE_ROOT, %rcx
     je      66f
     cmp     $API_OP_GET_STATE_FORK, %rcx
@@ -2385,6 +2387,8 @@ LOCAL_FUNCTION node_api_event
     cmp     $API_OP_GET_BLOCK_V2, %rcx
     je      64f
     cmp     $API_OP_GET_BLOCK_ATTESTATIONS_V2, %rcx
+    je      64f
+    cmp     $API_OP_GET_BLINDED_BLOCK, %rcx
     je      64f
 67: mov     S7(%rsp), %rax                  # a work
     mov     ApiRoute_op(%rax), %rdi
@@ -4338,6 +4342,8 @@ LOCAL_FUNCTION node_api_stream
     je      4f
     cmpq    $API_OP_GET_BLOCK_ATTESTATIONS_V2, ApiRoute_op(%rsi)
     je      4f
+    cmpq    $API_OP_GET_BLINDED_BLOCK, ApiRoute_op(%rsi)
+    je      4f
     mov     ApiView_look_data(%rcx), %r12   # a validator stream: its ids, and its state
     test    %r12, %r12
     jz      31f
@@ -4569,6 +4575,8 @@ LOCAL_FUNCTION api_stream_head
     je      21f
     cmpq    $API_OP_GET_BLOCK_ATTESTATIONS_V2, NodeApi_op(%rbx)
     je      21f
+    cmpq    $API_OP_GET_BLINDED_BLOCK, NodeApi_op(%rbx)
+    je      21f
     cmpq    $API_OP_GET_STATE_V2, NodeApi_op(%rbx)
     je      21f
     cmpq    $API_OP_GET_POOL_ATTESTER_SLASHINGS_V2, NodeApi_op(%rbx)
@@ -4651,6 +4659,8 @@ LOCAL_FUNCTION api_stream_json
     je      1f
     cmpq    $API_OP_GET_BLOCK_ATTESTATIONS_V2, NodeApi_op(%rbx)
     je      1f
+    cmpq    $API_OP_GET_BLINDED_BLOCK, NodeApi_op(%rbx)
+    je      1f
     cmpq    $API_OP_GET_STATE_V2, NodeApi_op(%rbx)
     je      1f
     cmpq    $API_OP_GET_EPOCH_COMMITTEES, NodeApi_op(%rbx)
@@ -4675,7 +4685,10 @@ LOCAL_FUNCTION api_stream_json
     cmpq    $API_OP_GET_BLOCK_ATTESTATIONS_V2, NodeApi_op(%rbx)
     jne     121f
     mov     $NODE_JSON_ATTESTATIONS, %edi
-121:
+121: cmpq   $API_OP_GET_BLINDED_BLOCK, NodeApi_op(%rbx)
+    jne     122f
+    mov     $NODE_JSON_BLINDED_BLOCK, %edi
+122:
     lea     (NodeEvent_api + 16)(%rbp), %rdx
     lea     NodeEvent_api_bytes(%rbp), %rcx
     mov     NodeApi_fork(%rbx), %r10
@@ -4723,6 +4736,8 @@ LOCAL_FUNCTION node_api_chunk_run
     cmp     $API_OP_GET_BLOCK_V2, %rax
     je      1f
     cmp     $API_OP_GET_BLOCK_ATTESTATIONS_V2, %rax
+    je      1f
+    cmp     $API_OP_GET_BLINDED_BLOCK, %rax
     je      1f
     cmp     $API_OP_GET_STATE_V2, %rax
     je      1f
@@ -4806,6 +4821,8 @@ LOCAL_FUNCTION node_api_chunk_run
     mov     (%rsi,%rcx), %rsi
     cmp     NodeApi_slot(%rbx), %rsi
     jne     96f
+    cmpq    $API_OP_GET_BLINDED_BLOCK, NodeApi_op(%rbx)
+    je      52f
     cmpq    $API_OP_GET_BLOCK_ATTESTATIONS_V2, NodeApi_op(%rbx)  # getBlockAttestationsV2: the body's attestations, a ByteList at the end of scratch
     jne     5f
     mov     (L + 8)(%rsp), %rsi
@@ -4843,6 +4860,33 @@ LOCAL_FUNCTION node_api_chunk_run
     lea     24(%rax), %rdi
     add     %rcx, %rsi
     call    lantern_copy
+    jmp     5f
+52: mov     (L + 64)(%rsp), %rsi            # getBlindedBlock: lantern_node_blinded_block into a ByteList at the end of scratch, then its bytes
+    mov     (%rsi), %rcx
+    mov     (L + 16)(%rsp), %rax
+    lea     (24 + 1024 + 7)(%rax), %rax
+    and     $~7, %rax
+    lea     64(%rax), %rdx
+    cmp     %rdx, %rcx
+    jb      97f
+    sub     %rax, %rcx
+    mov     %rcx, (%rsi)
+    lea     (%rsi,%rcx), %rdx
+    mov     %rax, (%rdx)
+    mov     (L + 40)(%rsp), %rdi
+    mov     %rdx, (L + 40)(%rsp)
+    mov     NodeApi_fork(%rbx), %r10
+    FORK_CALL node_blinded_block
+    cmp     $LANTERN_BUFFER_TOO_SMALL, %rax
+    je      97f
+    test    %rax, %rax
+    jnz     96f
+    mov     (L + 40)(%rsp), %rax
+    mov     8(%rax), %rcx
+    add     %rax, %rcx
+    mov     %rcx, (L + 8)(%rsp)
+    mov     16(%rax), %rcx
+    mov     %rcx, (L + 16)(%rsp)
 5:  mov     NodeApi_sent(%rbx), %rax        # the entry's sent, flags and cursor go on in the event
     mov     %rax, NodeEvent_api(%rbp)
     mov     NodeApi_flags(%rbx), %rax

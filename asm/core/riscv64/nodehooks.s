@@ -660,6 +660,13 @@ LOCAL_FUNCTION node_type_of_kind
     ADDRESS a0, lantern_type_Attestations
     li      t1, NODE_JSON_ATTESTATIONS
     beq     t0, t1, 9f
+.if FORK >= FORK_BELLATRIX
+    ADDRESS a0, lantern_type_SignedBlindedBeaconBlock
+.else
+    ADDRESS a0, lantern_type_SignedBeaconBlock
+.endif
+    li      t1, NODE_JSON_BLINDED_BLOCK
+    beq     t0, t1, 9f
 .if FORK >= FORK_ELECTRA
     ADDRESS a0, lantern_type_SingleAttestation
     li      t1, NODE_JSON_SINGLE_ATTESTATION
@@ -1382,6 +1389,173 @@ SPEC_FUNCTION node_sync_committee
     li      a0, LANTERN_NO_STATE_ANSWER
     UNFRAME 0
 SPEC_END node_sync_committee
+
+/* lantern_node_blinded_block: the end of the offsets in a body's fixed part, the last of them that of the last variable field */
+.if FORK >= FORK_BELLATRIX
+.if FORK >= FORK_ELECTRA
+.set BLINDED_BODY_OFFSETS_END, BeaconBlockBody_execution_requests__ssz + 4
+.elseif FORK >= FORK_DENEB
+.set BLINDED_BODY_OFFSETS_END, BeaconBlockBody_blob_kzg_commitments__ssz + 4
+.elseif FORK >= FORK_CAPELLA
+.set BLINDED_BODY_OFFSETS_END, BeaconBlockBody_bls_to_execution_changes__ssz + 4
+.else
+.set BLINDED_BODY_OFFSETS_END, BeaconBlockBody_execution_payload__ssz + 4
+.endif
+.endif
+
+/*
+ * (block a0, scratch a1, out a2) -> a0: the SSZ bytes of the SignedBlindedBeaconBlock of the
+ * SignedBeaconBlock in the ByteList block, in the ByteList out (node.md,
+ * lantern_node_blinded_block); before bellatrix the bytes of block. s1 the block's bytes, s2 their
+ * count, s3 out, s4 the body's place in them, s5 scratch, s6 the payload's place, s7 the payload's
+ * value, s8 the payload's end, s9 the scratch's size after the decoded block (s5, s7 and s9 as
+ * build_payload_header takes them). Locals: L the scratch's size, L+8 the header's SSZ ByteList,
+ * L+16 block, L+24 the header's bytes less the payload's, L+40 the header's value.
+ */
+SPEC_FUNCTION node_blinded_block
+    ENTER 48
+    sd      a0, (L + 16)(sp)
+    ld      t0, 8(a0)
+    add     s1, a0, t0
+    ld      s2, 16(a0)
+    mv      s3, a2
+    mv      s5, a1
+    ld      t0, 0(s5)
+    sd      t0, L(sp)
+.if FORK < FORK_BELLATRIX
+    ld      t0, 0(s3)                       # before bellatrix: the block's bytes
+    addi    t1, s2, 24
+    bgtu    t1, t0, 8f
+    li      t0, 24
+    sd      t0, 8(s3)
+    sd      s2, 16(s3)
+    addi    a0, s3, 24
+    mv      a1, s1
+    mv      a2, s2
+    call    lantern_copy
+    j       7f
+.else
+    li      t0, 100                         # the message at the offset at byte 0, its body at the offset in it
+    bltu    s2, t0, 91f
+    lwu     t0, 0(s1)
+    addi    t1, t0, 84
+    bgtu    t1, s2, 91f
+    add     t1, s1, t0
+    lwu     t2, BeaconBlock_body__ssz(t1)
+    add     s4, t0, t2
+    li      t1, BLINDED_BODY_OFFSETS_END
+    add     t1, s4, t1
+    bgtu    t1, s2, 91f
+    add     t1, s1, s4                      # the payload: from its offset to the next field's, else to the end
+    lwu     t2, BeaconBlockBody_execution_payload__ssz(t1)
+    add     s6, s4, t2
+.if FORK >= FORK_CAPELLA
+    lwu     t2, BeaconBlockBody_bls_to_execution_changes__ssz(t1)
+    add     s8, s4, t2
+.else
+    mv      s8, s2
+.endif
+    bgtu    s6, s8, 91f
+    bgtu    s8, s2, 91f
+    ADDRESS a0, lantern_type_SignedBeaconBlock  # the decoded block's payload
+    ld      a1, (L + 16)(sp)
+    mv      a2, s5
+    call    node_decode
+    li      t0, 1
+    beq     a0, t0, 8f
+    bgtu    a0, t0, 91f
+    PART    t1, t2, a1, SignedBeaconBlock_message
+    PART    t3, t2, t1, BeaconBlock_body
+    PART    s7, t2, t3, BeaconBlockBody_execution_payload
+    ld      s9, 0(s5)                       # its header, as process_execution_payload builds it
+    TX_BYTES t1, s7, t2
+    li      t2, LANTERN_SCRATCH_FIXED + HEADER_ROOM + 24 + PAYLOAD_WLIST_BYTES + 1024
+    add     t1, t1, t2
+    bltu    s9, t1, 8f
+    li      t0, HEADER_ROOM
+    sub     t0, s9, t0
+    add     a0, s5, t0
+    sd      a0, (L + 40)(sp)
+    call    build_payload_header
+    bnez    a0, 6f
+    ld      t0, (L + 40)(sp)                # its SSZ bytes, in a ByteList of 1024 bytes below it
+    sub     t0, t0, s5
+    addi    t0, t0, -1024
+    add     a3, s5, t0
+    li      t1, 1024
+    sd      t1, 0(a3)
+    sd      a3, (L + 8)(sp)
+    sd      t0, 0(s5)
+    ADDRESS a0, lantern_type_ExecutionPayloadHeader
+    ld      a1, (L + 40)(sp)
+    mv      a2, s5
+    CALL_GLOBAL ssz_serialize
+    bnez    a0, 6f
+    ld      t0, (L + 8)(sp)                 # out: the block's bytes to the payload, the header's, the block's after the payload
+    ld      t1, 16(t0)
+    sub     t2, s8, s6
+    sub     t3, t1, t2
+    sd      t3, (L + 24)(sp)
+    add     t4, s2, t3
+    ld      t5, 0(s3)
+    addi    t6, t4, 24
+    bgtu    t6, t5, 8f
+    li      t5, 24
+    sd      t5, 8(s3)
+    sd      t4, 16(s3)
+    addi    a0, s3, 24
+    mv      a1, s1
+    mv      a2, s6
+    call    lantern_copy
+    ld      t0, (L + 8)(sp)
+    addi    a0, s3, 24
+    add     a0, a0, s6
+    ld      t1, 8(t0)
+    add     a1, t0, t1
+    ld      a2, 16(t0)
+    call    lantern_copy
+    ld      t0, (L + 8)(sp)
+    ld      t0, 16(t0)
+    addi    a0, s3, 24
+    add     a0, a0, s6
+    add     a0, a0, t0
+    add     a1, s1, s8
+    sub     a2, s2, s8
+    call    lantern_copy
+.if FORK >= FORK_CAPELLA
+    ld      t3, (L + 24)(sp)                # the offsets after the payload's grow by the header's bytes less the payload's
+    addi    t0, s3, 24
+    add     t0, t0, s4
+    lwu     t1, BeaconBlockBody_bls_to_execution_changes__ssz(t0)
+    addw    t1, t1, t3
+    sw      t1, BeaconBlockBody_bls_to_execution_changes__ssz(t0)
+.if FORK >= FORK_DENEB
+    lwu     t1, BeaconBlockBody_blob_kzg_commitments__ssz(t0)
+    addw    t1, t1, t3
+    sw      t1, BeaconBlockBody_blob_kzg_commitments__ssz(t0)
+.endif
+.if FORK >= FORK_ELECTRA
+    lwu     t1, BeaconBlockBody_execution_requests__ssz(t0)
+    addw    t1, t1, t3
+    sw      t1, BeaconBlockBody_execution_requests__ssz(t0)
+.endif
+.endif
+.endif
+7:  ld      t0, L(sp)
+    sd      t0, 0(s5)
+    li      a0, LANTERN_OK
+    LEAVE 48
+6:  li      t0, SSZ_BUFFER_TOO_SMALL
+    beq     a0, t0, 8f
+91: ld      t0, L(sp)
+    sd      t0, 0(s5)
+    li      a0, LANTERN_INVALID_ENCODING
+    LEAVE 48
+8:  ld      t0, L(sp)
+    sd      t0, 0(s5)
+    li      a0, LANTERN_BUFFER_TOO_SMALL
+    LEAVE 48
+SPEC_END node_blinded_block
 
 /*
  * (state a0, kind a1, out a2) -> a0: the address of the first item, the count and the bytes of an

@@ -509,6 +509,49 @@ SSZ_FIELD SignedBeaconBlock, message, BeaconBlock
 SSZ_FIELD SignedBeaconBlock, signature, Bytes96
 SSZ_END SignedBeaconBlock
 
+/*
+ * The blinded blocks of beacon-APIs v4.0.0 (Bellatrix to Electra BlindedBeaconBlockBody,
+ * BlindedBeaconBlock, SignedBlindedBeaconBlock): BeaconBlockBody's fields in their order, with
+ * execution_payload_header in the place of execution_payload, so that a block and its blinded
+ * block have one hash_tree_root.
+ */
+.if TYPES_FORK >= FORK_BELLATRIX
+SSZ_CONTAINER BlindedBeaconBlockBody, 1
+SSZ_FIELD BlindedBeaconBlockBody, randao_reveal, Bytes96
+SSZ_FIELD BlindedBeaconBlockBody, eth1_data, Eth1Data
+SSZ_FIELD BlindedBeaconBlockBody, graffiti, Bytes32
+SSZ_FIELD BlindedBeaconBlockBody, proposer_slashings, ProposerSlashings
+SSZ_FIELD BlindedBeaconBlockBody, attester_slashings, AttesterSlashings
+SSZ_FIELD BlindedBeaconBlockBody, attestations, Attestations
+SSZ_FIELD BlindedBeaconBlockBody, deposits, Deposits
+SSZ_FIELD BlindedBeaconBlockBody, voluntary_exits, VoluntaryExits
+SSZ_FIELD BlindedBeaconBlockBody, sync_aggregate, SyncAggregate
+SSZ_FIELD BlindedBeaconBlockBody, execution_payload_header, ExecutionPayloadHeader
+.if TYPES_FORK >= FORK_CAPELLA
+SSZ_FIELD BlindedBeaconBlockBody, bls_to_execution_changes, BLSToExecutionChanges
+.endif
+.if TYPES_FORK >= FORK_DENEB
+SSZ_FIELD BlindedBeaconBlockBody, blob_kzg_commitments, BlobKZGCommitments
+.endif
+.if TYPES_FORK >= FORK_ELECTRA
+SSZ_FIELD BlindedBeaconBlockBody, execution_requests, ExecutionRequests
+.endif
+SSZ_END BlindedBeaconBlockBody
+
+SSZ_CONTAINER BlindedBeaconBlock, 1
+SSZ_FIELD BlindedBeaconBlock, slot, Uint64
+SSZ_FIELD BlindedBeaconBlock, proposer_index, Uint64
+SSZ_FIELD BlindedBeaconBlock, parent_root, Bytes32
+SSZ_FIELD BlindedBeaconBlock, state_root, Bytes32
+SSZ_FIELD BlindedBeaconBlock, body, BlindedBeaconBlockBody
+SSZ_END BlindedBeaconBlock
+
+SSZ_CONTAINER SignedBlindedBeaconBlock, 1
+SSZ_FIELD SignedBlindedBeaconBlock, message, BlindedBeaconBlock
+SSZ_FIELD SignedBlindedBeaconBlock, signature, Bytes96
+SSZ_END SignedBlindedBeaconBlock
+.endif
+
 SSZ_CONTAINER BeaconState, 1
 SSZ_FIELD BeaconState, genesis_time, Uint64
 SSZ_FIELD BeaconState, genesis_validators_root, Bytes32

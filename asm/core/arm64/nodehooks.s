@@ -660,6 +660,13 @@ LOCAL_FUNCTION node_type_of_kind
     ADDRESS x0, lantern_type_Attestations
     cmp     x9, #NODE_JSON_ATTESTATIONS
     b.eq    9f
+.if FORK >= FORK_BELLATRIX
+    ADDRESS x0, lantern_type_SignedBlindedBeaconBlock
+.else
+    ADDRESS x0, lantern_type_SignedBeaconBlock
+.endif
+    cmp     x9, #NODE_JSON_BLINDED_BLOCK
+    b.eq    9f
 .if FORK >= FORK_ELECTRA
     ADDRESS x0, lantern_type_SingleAttestation
     cmp     x9, #NODE_JSON_SINGLE_ATTESTATION
@@ -1374,6 +1381,177 @@ SPEC_FUNCTION node_sync_committee
     mov     x0, #LANTERN_NO_STATE_ANSWER
     UNFRAME 0
 SPEC_END node_sync_committee
+
+/* lantern_node_blinded_block: the end of the offsets in a body's fixed part, the last of them that of the last variable field */
+.if FORK >= FORK_BELLATRIX
+.if FORK >= FORK_ELECTRA
+.set BLINDED_BODY_OFFSETS_END, BeaconBlockBody_execution_requests__ssz + 4
+.elseif FORK >= FORK_DENEB
+.set BLINDED_BODY_OFFSETS_END, BeaconBlockBody_blob_kzg_commitments__ssz + 4
+.elseif FORK >= FORK_CAPELLA
+.set BLINDED_BODY_OFFSETS_END, BeaconBlockBody_bls_to_execution_changes__ssz + 4
+.else
+.set BLINDED_BODY_OFFSETS_END, BeaconBlockBody_execution_payload__ssz + 4
+.endif
+.endif
+
+/*
+ * (block, scratch, out) -> status: the SSZ bytes of the SignedBlindedBeaconBlock of the
+ * SignedBeaconBlock in the ByteList block, in the ByteList out (node.md,
+ * lantern_node_blinded_block); before bellatrix the bytes of block. x19 the block's bytes, x20
+ * their count, x21 the body's place in them, x22 out, x23 scratch, x24 the payload's place, x25
+ * the payload's value, x26 the header's value, x27 the scratch's size after the decoded block,
+ * x28 the payload's end. Locals: L the scratch's size, L+8 the header's SSZ ByteList, L+16 block,
+ * L+24 the header's bytes less the payload's.
+ */
+SPEC_FUNCTION node_blinded_block
+    ENTER 32
+    str     x0, [sp, #(L + 16)]
+    ldr     x9, [x0, #8]
+    add     x19, x0, x9
+    ldr     x20, [x0, #16]
+    mov     x22, x2
+    mov     x23, x1
+    ldr     x9, [x23]
+    str     x9, [sp, #L]
+.if FORK < FORK_BELLATRIX
+    ldr     x9, [x22]                       /* before bellatrix: the block's bytes */
+    add     x10, x20, #24
+    cmp     x10, x9
+    b.hi    8f
+    mov     x9, #24
+    stp     x9, x20, [x22, #8]
+    add     x0, x22, #24
+    mov     x1, x19
+    mov     x2, x20
+    bl      lantern_copy
+    b       7f
+.else
+    cmp     x20, #100                       /* the message at the offset at byte 0, its body at the offset in it */
+    b.lo    91f
+    ldr     w9, [x19]
+    add     x10, x9, #84
+    cmp     x10, x20
+    b.hi    91f
+    add     x10, x19, x9
+    ldr     w11, [x10, #BeaconBlock_body__ssz]
+    add     x21, x9, x11
+    MOVQ    x10, BLINDED_BODY_OFFSETS_END
+    add     x10, x21, x10
+    cmp     x10, x20
+    b.hi    91f
+    add     x10, x19, x21                   /* the payload: from its offset to the next field's, else to the end */
+    ldr     w11, [x10, #BeaconBlockBody_execution_payload__ssz]
+    add     x24, x21, x11
+.if FORK >= FORK_CAPELLA
+    ldr     w12, [x10, #BeaconBlockBody_bls_to_execution_changes__ssz]
+    add     x28, x21, x12
+.else
+    mov     x28, x20
+.endif
+    cmp     x24, x28
+    b.hi    91f
+    cmp     x28, x20
+    b.hi    91f
+    ADDRESS x0, lantern_type_SignedBeaconBlock  /* the decoded block's payload */
+    ldr     x1, [sp, #(L + 16)]
+    mov     x2, x23
+    bl      node_decode
+    cmp     x0, #1
+    b.eq    8f
+    b.hi    91f
+    PART    x9, x10, x1, SignedBeaconBlock_message
+    PART    x11, x10, x9, BeaconBlock_body
+    PART    x25, x10, x11, BeaconBlockBody_execution_payload
+    ldr     x27, [x23]                      /* its header, as process_execution_payload builds it */
+    TX_BYTES x11, x25, x12
+    MOVQ    x9, LANTERN_SCRATCH_FIXED + HEADER_ROOM + 24 + PAYLOAD_WLIST_BYTES + 1024
+    add     x9, x9, x11
+    cmp     x27, x9
+    b.lo    8f
+    MOVQ    x9, HEADER_ROOM
+    sub     x9, x27, x9
+    add     x26, x23, x9
+    mov     x0, x26
+    bl      build_payload_header
+    cbnz    x0, 6f
+    MOVQ    x9, HEADER_ROOM + 1024          /* its SSZ bytes, in a ByteList of 1024 bytes below it */
+    sub     x9, x27, x9
+    add     x3, x23, x9
+    mov     x10, #1024
+    str     x10, [x3]
+    str     x3, [sp, #(L + 8)]
+    str     x9, [x23]
+    ADDRESS x0, lantern_type_ExecutionPayloadHeader
+    mov     x1, x26
+    mov     x2, x23
+    CALL_GLOBAL ssz_serialize
+    cbnz    x0, 6f
+    ldr     x9, [sp, #(L + 8)]              /* out: the block's bytes to the payload, the header's, the block's after the payload */
+    ldr     x13, [x9, #16]
+    sub     x14, x28, x24
+    sub     x15, x13, x14
+    str     x15, [sp, #(L + 24)]
+    add     x10, x20, x15
+    ldr     x11, [x22]
+    add     x12, x10, #24
+    cmp     x12, x11
+    b.hi    8f
+    mov     x11, #24
+    stp     x11, x10, [x22, #8]
+    add     x0, x22, #24
+    mov     x1, x19
+    mov     x2, x24
+    bl      lantern_copy
+    ldr     x9, [sp, #(L + 8)]
+    add     x0, x22, #24
+    add     x0, x0, x24
+    ldr     x10, [x9, #8]
+    add     x1, x9, x10
+    ldr     x2, [x9, #16]
+    bl      lantern_copy
+    ldr     x9, [sp, #(L + 8)]
+    ldr     x9, [x9, #16]
+    add     x0, x22, #24
+    add     x0, x0, x24
+    add     x0, x0, x9
+    add     x1, x19, x28
+    sub     x2, x20, x28
+    bl      lantern_copy
+.if FORK >= FORK_CAPELLA
+    ldr     x15, [sp, #(L + 24)]            /* the offsets after the payload's grow by the header's bytes less the payload's */
+    add     x10, x22, #24
+    add     x10, x10, x21
+    ldr     w11, [x10, #BeaconBlockBody_bls_to_execution_changes__ssz]
+    add     w11, w11, w15
+    str     w11, [x10, #BeaconBlockBody_bls_to_execution_changes__ssz]
+.if FORK >= FORK_DENEB
+    ldr     w11, [x10, #BeaconBlockBody_blob_kzg_commitments__ssz]
+    add     w11, w11, w15
+    str     w11, [x10, #BeaconBlockBody_blob_kzg_commitments__ssz]
+.endif
+.if FORK >= FORK_ELECTRA
+    ldr     w11, [x10, #BeaconBlockBody_execution_requests__ssz]
+    add     w11, w11, w15
+    str     w11, [x10, #BeaconBlockBody_execution_requests__ssz]
+.endif
+.endif
+.endif
+7:  ldr     x9, [sp, #L]
+    str     x9, [x23]
+    mov     x0, #LANTERN_OK
+    LEAVE 32
+6:  cmp     x0, #SSZ_BUFFER_TOO_SMALL
+    b.eq    8f
+91: ldr     x9, [sp, #L]
+    str     x9, [x23]
+    mov     x0, #LANTERN_INVALID_ENCODING
+    LEAVE 32
+8:  ldr     x9, [sp, #L]
+    str     x9, [x23]
+    mov     x0, #LANTERN_BUFFER_TOO_SMALL
+    LEAVE 32
+SPEC_END node_blinded_block
 
 /*
  * (state, kind, out) -> status: the address of the first item, the count and the bytes of an item

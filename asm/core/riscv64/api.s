@@ -2213,6 +2213,8 @@ LOCAL_FUNCTION node_api_event
     beq     a3, t0, 65f
     li      t0, API_OP_GET_BLOCK_ATTESTATIONS_V2
     beq     a3, t0, 65f
+    li      t0, API_OP_GET_BLINDED_BLOCK
+    beq     a3, t0, 65f
     li      t0, API_OP_GET_STATE_ROOT
     beq     a3, t0, 66f
     li      t0, API_OP_GET_STATE_FORK
@@ -2440,6 +2442,8 @@ LOCAL_FUNCTION node_api_event
     li      t0, API_OP_GET_BLOCK_V2
     beq     a3, t0, 64f
     li      t0, API_OP_GET_BLOCK_ATTESTATIONS_V2
+    beq     a3, t0, 64f
+    li      t0, API_OP_GET_BLINDED_BLOCK
     beq     a3, t0, 64f
 67: ld      a0, ApiRoute_op(s7)             # a work
     mv      a1, s9
@@ -4341,6 +4345,8 @@ LOCAL_FUNCTION node_api_stream
     beq     t0, t1, 4f
     li      t1, API_OP_GET_BLOCK_ATTESTATIONS_V2
     beq     t0, t1, 4f
+    li      t1, API_OP_GET_BLINDED_BLOCK
+    beq     t0, t1, 4f
     ld      s3, ApiView_look_data(s8)       # a validator stream: its ids, and its state
     beqz    s3, 31f
     ori     s10, s10, API_STREAM_OWN
@@ -4566,6 +4572,8 @@ LOCAL_FUNCTION api_stream_head
     beq     t0, t1, 21f
     li      t1, API_OP_GET_BLOCK_ATTESTATIONS_V2
     beq     t0, t1, 21f
+    li      t1, API_OP_GET_BLINDED_BLOCK
+    beq     t0, t1, 21f
     li      t1, API_OP_GET_STATE_V2
     beq     t0, t1, 21f
     li      t1, API_OP_GET_POOL_ATTESTER_SLASHINGS_V2
@@ -4651,6 +4659,8 @@ LOCAL_FUNCTION api_stream_json
     beq     t0, t1, 1f
     li      t1, API_OP_GET_BLOCK_ATTESTATIONS_V2
     beq     t0, t1, 1f
+    li      t1, API_OP_GET_BLINDED_BLOCK
+    beq     t0, t1, 1f
     li      t1, API_OP_GET_STATE_V2
     beq     t0, t1, 1f
     li      t1, API_OP_GET_EPOCH_COMMITTEES
@@ -4674,7 +4684,10 @@ LOCAL_FUNCTION api_stream_json
     li      t2, API_OP_GET_BLOCK_ATTESTATIONS_V2
     bne     t1, t2, 121f
     li      a0, NODE_JSON_ATTESTATIONS
-121:
+121: li     t2, API_OP_GET_BLINDED_BLOCK
+    bne     t1, t2, 122f
+    li      a0, NODE_JSON_BLINDED_BLOCK
+122:
     mv      a1, s3
     addi    a2, s5, (NodeEvent_api + 16)
     addi    a3, s5, NodeEvent_api_bytes
@@ -4723,6 +4736,8 @@ LOCAL_FUNCTION node_api_chunk_run
     li      t1, API_OP_GET_BLOCK_V2
     beq     t0, t1, 1f
     li      t1, API_OP_GET_BLOCK_ATTESTATIONS_V2
+    beq     t0, t1, 1f
+    li      t1, API_OP_GET_BLINDED_BLOCK
     beq     t0, t1, 1f
     li      t1, API_OP_GET_STATE_V2
     beq     t0, t1, 1f
@@ -4808,6 +4823,8 @@ LOCAL_FUNCTION node_api_chunk_run
     ld      t3, NodeApi_slot(s4)
     bne     t2, t3, 96f
     ld      t0, NodeApi_op(s4)              # getBlockAttestationsV2: the body's attestations, a ByteList at the end of scratch
+    li      t1, API_OP_GET_BLINDED_BLOCK
+    beq     t0, t1, 52f
     li      t1, API_OP_GET_BLOCK_ATTESTATIONS_V2
     bne     t0, t1, 5f
     ld      t4, (L + 8)(sp)
@@ -4844,6 +4861,30 @@ LOCAL_FUNCTION node_api_chunk_run
     add     a1, t4, t2
     mv      a2, t3
     call    lantern_copy
+    j       5f
+52: ld      a1, (L + 56)(sp)                # getBlindedBlock: lantern_node_blinded_block into a ByteList at the end of scratch, then its bytes
+    ld      t0, 0(a1)
+    ld      t1, (L + 16)(sp)
+    addi    t1, t1, 24 + 1024 + 7
+    andi    t1, t1, -8
+    addi    t2, t1, 64
+    bltu    t0, t2, 97f
+    sub     t0, t0, t1
+    sd      t0, 0(a1)
+    add     a2, a1, t0
+    sd      t1, 0(a2)
+    mv      a0, s3
+    mv      s3, a2
+    ld      t6, NodeApi_fork(s4)
+    FORK_CALL node_blinded_block
+    li      t0, LANTERN_BUFFER_TOO_SMALL
+    beq     a0, t0, 97f
+    bnez    a0, 96f
+    ld      t0, 8(s3)
+    add     t0, s3, t0
+    sd      t0, (L + 8)(sp)
+    ld      t0, 16(s3)
+    sd      t0, (L + 16)(sp)
 5:  ld      t0, NodeApi_sent(s4)            # the entry's sent, flags and cursor go on in the event
     sd      t0, NodeEvent_api(s5)
     ld      t0, NodeApi_flags(s4)

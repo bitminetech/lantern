@@ -660,6 +660,13 @@ LOCAL_FUNCTION node_type_of_kind
     ADDRESS %rdi, lantern_type_Attestations
     cmp     $NODE_JSON_ATTESTATIONS, %r10
     je      9f
+.if FORK >= FORK_BELLATRIX
+    ADDRESS %rdi, lantern_type_SignedBlindedBeaconBlock
+.else
+    ADDRESS %rdi, lantern_type_SignedBeaconBlock
+.endif
+    cmp     $NODE_JSON_BLINDED_BLOCK, %r10
+    je      9f
 .if FORK >= FORK_ELECTRA
     ADDRESS %rdi, lantern_type_SingleAttestation
     cmp     $NODE_JSON_SINGLE_ATTESTATION, %r10
@@ -1395,6 +1402,166 @@ SPEC_FUNCTION node_sync_committee
     mov     $LANTERN_NO_STATE_ANSWER, %eax
     UNFRAME 0
 SPEC_END node_sync_committee
+
+/* lantern_node_blinded_block: the end of the offsets in a body's fixed part, the last of them that of the last variable field */
+.if FORK >= FORK_BELLATRIX
+.if FORK >= FORK_ELECTRA
+.set BLINDED_BODY_OFFSETS_END, BeaconBlockBody_execution_requests__ssz + 4
+.elseif FORK >= FORK_DENEB
+.set BLINDED_BODY_OFFSETS_END, BeaconBlockBody_blob_kzg_commitments__ssz + 4
+.elseif FORK >= FORK_CAPELLA
+.set BLINDED_BODY_OFFSETS_END, BeaconBlockBody_bls_to_execution_changes__ssz + 4
+.else
+.set BLINDED_BODY_OFFSETS_END, BeaconBlockBody_execution_payload__ssz + 4
+.endif
+.endif
+
+/*
+ * (block rdi, scratch rsi, out rdx) -> rax: the SSZ bytes of the SignedBlindedBeaconBlock of the
+ * SignedBeaconBlock in the ByteList block, in the ByteList out (node.md,
+ * lantern_node_blinded_block); before bellatrix the bytes of block. rbx the block's bytes, rbp
+ * their count, r12 the body's place in them, r13 out, r14 scratch, r15 the payload's place.
+ * Locals: L the scratch's size, L+8 the header's SSZ ByteList, L+16 block, L+24 the header's
+ * bytes less the payload's, L+32 the payload's end, L+40 the header's value.
+ */
+SPEC_FUNCTION node_blinded_block
+    ENTER 48
+    mov     %rdi, (L + 16)(%rsp)
+    mov     8(%rdi), %rbx
+    add     %rdi, %rbx
+    mov     16(%rdi), %rbp
+    mov     %rdx, %r13
+    mov     %rsi, %r14
+    mov     (%r14), %rax
+    mov     %rax, L(%rsp)
+.if FORK < FORK_BELLATRIX
+    lea     24(%rbp), %rax                  # before bellatrix: the block's bytes
+    cmp     (%r13), %rax
+    ja      8f
+    movq    $24, 8(%r13)
+    mov     %rbp, 16(%r13)
+    lea     24(%r13), %rdi
+    mov     %rbx, %rsi
+    mov     %rbp, %rdx
+    call    lantern_copy
+    jmp     7f
+.else
+    cmp     $100, %rbp                      # the message at the offset at byte 0, its body at the offset in it
+    jb      91f
+    mov     (%rbx), %eax
+    lea     84(%rax), %rcx
+    cmp     %rbp, %rcx
+    ja      91f
+    mov     BeaconBlock_body__ssz(%rbx,%rax), %ecx
+    lea     (%rax,%rcx), %r12
+    lea     BLINDED_BODY_OFFSETS_END(%r12), %rcx
+    cmp     %rbp, %rcx
+    ja      91f
+    mov     BeaconBlockBody_execution_payload__ssz(%rbx,%r12), %eax  # the payload: from its offset to the next field's, else to the end
+    lea     (%r12,%rax), %r15
+.if FORK >= FORK_CAPELLA
+    mov     BeaconBlockBody_bls_to_execution_changes__ssz(%rbx,%r12), %eax
+    add     %r12, %rax
+.else
+    mov     %rbp, %rax
+.endif
+    mov     %rax, (L + 32)(%rsp)
+    cmp     %rax, %r15
+    ja      91f
+    cmp     %rbp, %rax
+    ja      91f
+    ADDRESS %rdi, lantern_type_SignedBeaconBlock    # the decoded block's payload
+    mov     (L + 16)(%rsp), %rsi
+    mov     %r14, %rdx
+    call    node_decode
+    cmp     $1, %rax
+    je      8f
+    ja      91f
+    PART    %rax, %rcx, %rdx, SignedBeaconBlock_message
+    PART    %rsi, %rcx, %rax, BeaconBlock_body
+    PART    %rax, %rcx, %rsi, BeaconBlockBody_execution_payload
+    mov     (%r14), %rcx                    # its header, as process_execution_payload builds it
+    TX_BYTES %rdx, %rax
+    add     $(LANTERN_SCRATCH_FIXED + HEADER_ROOM + 24 + PAYLOAD_WLIST_BYTES + 1024), %rdx
+    cmp     %rdx, %rcx
+    jb      8f
+    lea     -HEADER_ROOM(%r14,%rcx), %rdi
+    mov     %rdi, (L + 40)(%rsp)
+    mov     %rax, %rsi
+    mov     %r14, %rdx
+    call    build_payload_header
+    test    %rax, %rax
+    jnz     6f
+    mov     (L + 40)(%rsp), %rax            # its SSZ bytes, in a ByteList of 1024 bytes below it
+    sub     %r14, %rax
+    sub     $1024, %rax
+    lea     (%r14,%rax), %rcx
+    movq    $1024, (%rcx)
+    mov     %rcx, (L + 8)(%rsp)
+    mov     %rax, (%r14)
+    ADDRESS %rdi, lantern_type_ExecutionPayloadHeader
+    mov     (L + 40)(%rsp), %rsi
+    mov     %r14, %rdx
+    CALL_GLOBAL ssz_serialize
+    test    %rax, %rax
+    jnz     6f
+    mov     (L + 8)(%rsp), %rax             # out: the block's bytes to the payload, the header's, the block's after the payload
+    mov     16(%rax), %rcx
+    mov     (L + 32)(%rsp), %rdx
+    sub     %r15, %rdx
+    sub     %rdx, %rcx
+    mov     %rcx, (L + 24)(%rsp)
+    lea     (%rbp,%rcx), %rax
+    lea     24(%rax), %rdx
+    cmp     (%r13), %rdx
+    ja      8f
+    movq    $24, 8(%r13)
+    mov     %rax, 16(%r13)
+    lea     24(%r13), %rdi
+    mov     %rbx, %rsi
+    mov     %r15, %rdx
+    call    lantern_copy
+    mov     (L + 8)(%rsp), %rax
+    lea     24(%r13,%r15), %rdi
+    mov     8(%rax), %rsi
+    add     %rax, %rsi
+    mov     16(%rax), %rdx
+    call    lantern_copy
+    mov     (L + 8)(%rsp), %rax
+    lea     24(%r13,%r15), %rdi
+    add     16(%rax), %rdi
+    mov     (L + 32)(%rsp), %rsi
+    mov     %rbp, %rdx
+    sub     %rsi, %rdx
+    add     %rbx, %rsi
+    call    lantern_copy
+.if FORK >= FORK_CAPELLA
+    mov     (L + 24)(%rsp), %rcx            # the offsets after the payload's grow by the header's bytes less the payload's
+    lea     24(%r13,%r12), %rax
+    add     %ecx, BeaconBlockBody_bls_to_execution_changes__ssz(%rax)
+.if FORK >= FORK_DENEB
+    add     %ecx, BeaconBlockBody_blob_kzg_commitments__ssz(%rax)
+.endif
+.if FORK >= FORK_ELECTRA
+    add     %ecx, BeaconBlockBody_execution_requests__ssz(%rax)
+.endif
+.endif
+.endif
+7:  mov     L(%rsp), %rax
+    mov     %rax, (%r14)
+    xor     %eax, %eax
+    LEAVE 48
+6:  cmp     $SSZ_BUFFER_TOO_SMALL, %rax
+    je      8f
+91: mov     L(%rsp), %rax
+    mov     %rax, (%r14)
+    mov     $LANTERN_INVALID_ENCODING, %eax
+    LEAVE 48
+8:  mov     L(%rsp), %rax
+    mov     %rax, (%r14)
+    mov     $LANTERN_BUFFER_TOO_SMALL, %eax
+    LEAVE 48
+SPEC_END node_blinded_block
 
 /*
  * (state rdi, kind rsi, out rdx) -> rax: the address of the first item, the count and the bytes of

@@ -24,6 +24,11 @@
     \m SignedBeaconBlock, F_SignedBeaconBlock
     \m BeaconBlock, F_BeaconBlock
     \m BeaconBlockBody, F_BeaconBlockBody
+    .if FORK >= FORK_BELLATRIX
+    \m SignedBlindedBeaconBlock, F_SignedBlindedBeaconBlock
+    \m BlindedBeaconBlock, F_BlindedBeaconBlock
+    \m BlindedBeaconBlockBody, F_BlindedBeaconBlockBody
+    .endif
     \m BeaconState, F_BeaconState
     .if FORK == FORK_PHASE0
     \m PendingAttestations, N_PendingAttestation
@@ -291,6 +296,10 @@
     \m SignedBeaconBlock
     \m BeaconBlock
     \m BeaconBlockBody
+    .if FORK >= FORK_BELLATRIX
+    \m SignedBlindedBeaconBlock
+    \m BlindedBeaconBlock
+    .endif
     \m BeaconState
     .if FORK == FORK_PHASE0
     \m PendingAttestation

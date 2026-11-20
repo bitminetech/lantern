@@ -39,6 +39,40 @@ SSZ_DFIELD N_BlobKZGCommitments, BeaconBlockBody, blob_kzg_commitments
 SSZ_DFIELD N_ExecutionRequests, BeaconBlockBody, execution_requests
 .endif
 
+.if FORK >= FORK_BELLATRIX
+SSZ_FIELDS SignedBlindedBeaconBlock
+SSZ_DFIELD N_BlindedBeaconBlock, SignedBlindedBeaconBlock, message
+SSZ_DFIELD N_Bytes96, SignedBlindedBeaconBlock, signature
+
+SSZ_FIELDS BlindedBeaconBlock
+SSZ_DFIELD N_Uint64, BlindedBeaconBlock, slot
+SSZ_DFIELD N_Uint64, BlindedBeaconBlock, proposer_index
+SSZ_DFIELD N_Bytes32, BlindedBeaconBlock, parent_root
+SSZ_DFIELD N_Bytes32, BlindedBeaconBlock, state_root
+SSZ_DFIELD N_BlindedBeaconBlockBody, BlindedBeaconBlock, body
+
+SSZ_FIELDS BlindedBeaconBlockBody
+SSZ_DFIELD N_Bytes96, BlindedBeaconBlockBody, randao_reveal
+SSZ_DFIELD N_Eth1Data, BlindedBeaconBlockBody, eth1_data
+SSZ_DFIELD N_Bytes32, BlindedBeaconBlockBody, graffiti
+SSZ_DFIELD N_ProposerSlashings, BlindedBeaconBlockBody, proposer_slashings
+SSZ_DFIELD N_AttesterSlashings, BlindedBeaconBlockBody, attester_slashings
+SSZ_DFIELD N_Attestations, BlindedBeaconBlockBody, attestations
+SSZ_DFIELD N_Deposits, BlindedBeaconBlockBody, deposits
+SSZ_DFIELD N_VoluntaryExits, BlindedBeaconBlockBody, voluntary_exits
+SSZ_DFIELD N_SyncAggregate, BlindedBeaconBlockBody, sync_aggregate
+SSZ_DFIELD N_ExecutionPayloadHeader, BlindedBeaconBlockBody, execution_payload_header
+.if FORK >= FORK_CAPELLA
+SSZ_DFIELD N_BLSToExecutionChanges, BlindedBeaconBlockBody, bls_to_execution_changes
+.endif
+.if FORK >= FORK_DENEB
+SSZ_DFIELD N_BlobKZGCommitments, BlindedBeaconBlockBody, blob_kzg_commitments
+.endif
+.if FORK >= FORK_ELECTRA
+SSZ_DFIELD N_ExecutionRequests, BlindedBeaconBlockBody, execution_requests
+.endif
+.endif
+
 SSZ_FIELDS BeaconState
 SSZ_DFIELD N_Uint64, BeaconState, genesis_time
 SSZ_DFIELD N_Bytes32, BeaconState, genesis_validators_root

@@ -1064,6 +1064,7 @@
 .set NODE_JSON_ATTESTATION, 6            /* an Attestation */
 .set NODE_JSON_SINGLE_ATTESTATION, 7     /* a SingleAttestation, from electra */
 .set NODE_JSON_ATTESTATIONS, 8           /* an Attestations list, a block body's */
+.set NODE_JSON_BLINDED_BLOCK, 9          /* a SignedBlindedBeaconBlock from bellatrix, a SignedBeaconBlock before */
 .set NodePool_topic, 0                   /* NodePool (node.md): GOSSIP_* of the operation; 0 for a free entry */
 .set NodePool_state, 8                   /* NODE_POOL_* */
 .set NodePool_data_id, 16                /* the BufferId of its SSZ bytes */

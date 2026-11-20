@@ -7445,23 +7445,37 @@ static int body_attestations(const uint8_t *b, uint64_t n, uint64_t *at, uint64_
  * bytes of a block whose root is the head's, and as JSON, a data that lantern_json_decode gives as
  * those bytes; getStateV2 of head as SSZ, lantern_node_state_bytes of the head's post-state st, and
  * as JSON the same way; getBlockAttestationsV2 of head, a data that lantern_json_decode of the
- * fork's Attestations gives as the bytes of the block body's attestations; each in NODE_API_CHUNK
- * and in chunks of 2048 bytes. A head that is the anchor has no block bytes: 404.
+ * fork's Attestations gives as the bytes of the block body's attestations; getBlindedBlock of head
+ * as SSZ, a SignedBlindedBeaconBlock (a SignedBeaconBlock before bellatrix) whose message has the
+ * head's root and whose signature is the block's, and as JSON a data that lantern_json_decode
+ * gives as those bytes; each in NODE_API_CHUNK and in chunks of 2048 bytes. A head that is the
+ * anchor has no block bytes: 404.
  */
+#if FORK >= FORK_BELLATRIX
+#define BLINDED_TYPE "SignedBlindedBeaconBlock"
+#define BLINDED_MESSAGE "BlindedBeaconBlock"
+#else
+#define BLINDED_TYPE "SignedBeaconBlock"
+#define BLINDED_MESSAGE "BeaconBlock"
+#endif
 static unsigned long api_heads_streamed; /* the heads whose block and state went as streams */
 static void api_streams_head(fc_node *n, const uint8_t *st, const char **why) {
-    static const char *const reqs[5] = {
+    static const char *const reqs[7] = {
         "GET /eth/v2/beacon/blocks/head HTTP/1.1\r\nHost: lantern\r\nAccept: application/octet-stream\r\n\r\n",
         "GET /eth/v2/beacon/blocks/head HTTP/1.1\r\nHost: lantern\r\n\r\n",
         "GET /eth/v2/debug/beacon/states/head HTTP/1.1\r\nHost: lantern\r\nAccept: application/octet-stream\r\n\r\n",
         "GET /eth/v2/debug/beacon/states/head HTTP/1.1\r\nHost: lantern\r\n\r\n",
-        "GET /eth/v2/beacon/blocks/head/attestations HTTP/1.1\r\nHost: lantern\r\n\r\n"};
-    static const char *const types[3] = {"SignedBeaconBlock", "BeaconState", "Attestations"};
+        "GET /eth/v2/beacon/blocks/head/attestations HTTP/1.1\r\nHost: lantern\r\n\r\n",
+        "GET /eth/v1/beacon/blinded_blocks/head HTTP/1.1\r\nHost: lantern\r\nAccept: application/octet-stream\r\n\r\n",
+        "GET /eth/v1/beacon/blinded_blocks/head HTTP/1.1\r\nHost: lantern\r\n\r\n"};
+    static const char *const types[7] = {"SignedBeaconBlock", "SignedBeaconBlock", "BeaconState", "BeaconState", "Attestations",
+                                          BLINDED_TYPE, BLINDED_TYPE};
     struct node_shell *s = n->shell;
     const uint8_t *head = s->node + NODE_HEAD_ROOT;
     int anchor = !memcmp(head, s->anchor, 32);
     uint64_t need = 0, got = 0, blen = 0;
-    uint8_t small[24] = {0}, *sb = NULL, *block = NULL;
+    uint8_t small[24] = {0}, *sb = NULL, *block = NULL, *blinded = NULL;
+    uint64_t bnlen = 0;
     wr64(small, 24);
     if (CALL(LF(node_state_bytes), st, fresh_scratch(), small, &need) != 1 || need <= 24) {
         *why = "lantern_node_state_bytes: no size";
@@ -7472,7 +7486,7 @@ static void api_streams_head(fc_node *n, const uint8_t *st, const char **why) {
     if (CALL(LF(node_state_bytes), st, fresh_scratch(), sb, &got) != 0) *why = "lantern_node_state_bytes: status";
     char version[64];
     snprintf(version, sizeof version, "\r\nEth-Consensus-Version: %s\r\n", STR(FORK_NAME));
-    for (int q = 0; q < 5 && !*why; q++)
+    for (int q = 0; q < 7 && !*why; q++)
         for (int r = 0; r < 2 && !*why; r++) {
             static char msg[160];
             uint64_t small = (need - 24) / 128 > 2048 ? ((need - 24) / 128) & ~(uint64_t)7 : 2048; /* some hundreds of chunks */
@@ -7482,12 +7496,12 @@ static void api_streams_head(fc_node *n, const uint8_t *st, const char **why) {
             uint8_t *g = *why ? NULL : api_normalize(s, &glen, why);
             const char *gb = (const char *)g, *end = g ? find_bytes(gb, glen, "\r\n\r\n") : NULL;
             if (*why) break;
-            if ((q < 2 || q == 4) && anchor) {
+            if ((q < 2 || q >= 4) && anchor) {
                 if (glen < 13 || memcmp(g, "HTTP/1.1 404 ", 13)) *why = "API getBlockV2 of an anchor head is not 404";
             } else if (!end || glen < 17 || memcmp(g, "HTTP/1.1 200 OK\r\n", 17) || !find_bytes(gb, (uint64_t)(end - gb) + 2, version) ||
                        s->api.lasts != 1 || s->api.late) {
                 snprintf(msg, sizeof msg, "API %s of head: not a 200 answer with Eth-Consensus-Version %s",
-                         q < 2 ? "getBlockV2" : q < 4 ? "getStateV2" : "getBlockAttestationsV2", STR(FORK_NAME));
+                         q < 2 ? "getBlockV2" : q < 4 ? "getStateV2" : q == 4 ? "getBlockAttestationsV2" : "getBlindedBlock", STR(FORK_NAME));
                 *why = msg;
             } else {
                 const uint8_t *body = (const uint8_t *)end + 4;
@@ -7506,12 +7520,26 @@ static void api_streams_head(fc_node *n, const uint8_t *st, const char **why) {
                     }
                 } else if (q == 2) {
                     if (len != need - 24 || memcmp(body, sb + 24, (size_t)len)) *why = "API getStateV2 of head as SSZ: not the state's bytes";
+                } else if (q == 5) { /* the blinded block's bytes: their message's root is the head, their signature the block's */
+                    uint64_t vsize = 0;
+                    uint8_t root[32];
+                    uint8_t *v = len > 100 ? decode(type_by_name(BLINDED_MESSAGE), body + 100, len - 100, &vsize, why) : NULL;
+                    if (!v) *why = "API getBlindedBlock of head as SSZ: not a blinded block";
+                    else root_of(BLINDED_MESSAGE, v, root, why);
+                    if (!*why && memcmp(root, head, 32)) *why = "API getBlindedBlock of head as SSZ: another root than the head's";
+                    if (!*why && (!block || blen < 100 || memcmp(body + 4, block + 4, 96)))
+                        *why = "API getBlindedBlock of head as SSZ: another signature than the block's";
+                    free(v);
+                    if (!*why && r == 0) {
+                        blinded = copy_of(body, len);
+                        bnlen = len;
+                    }
                 } else { /* JSON: the data decodes as the SSZ answer */
                     char pre[64];
                     int pl = snprintf(pre, sizeof pre, "{\"version\":\"%s\",\"execution_optimistic\":", STR(FORK_NAME));
                     const char *d = len > (uint64_t)pl ? find_bytes((const char *)body, len, ",\"data\":") : NULL;
-                    const uint8_t *ssz = q == 1 ? block : sb + 24;
-                    uint64_t slen = q == 1 ? blen : need - 24, aat = 0;
+                    const uint8_t *ssz = q == 1 ? block : q == 6 ? blinded : sb + 24;
+                    uint64_t slen = q == 1 ? blen : q == 6 ? bnlen : need - 24, aat = 0;
                     if (q == 4 && (!block || !body_attestations(block, blen, &aat, &slen))) ssz = NULL; /* the body's attestations */
                     else if (q == 4) ssz = block + aat;
                     if (!d || memcmp(body, pre, (size_t)pl) || body[len - 1] != '}' || !ssz) {
@@ -7522,9 +7550,9 @@ static void api_streams_head(fc_node *n, const uint8_t *st, const char **why) {
                         uint8_t *out = buffer(osize), *fault = buffer(JSON_FAULT_BYTES);
                         wr64(scr, JSON_DECODE_SCRATCH);
                         wr64(out, osize);
-                        uint64_t js = CALL(lantern_json_decode, type_by_name(types[q == 4 ? 2 : q / 2]), l, scr, out, fault);
+                        uint64_t js = CALL(lantern_json_decode, type_by_name(types[q]), l, scr, out, fault);
                         if (js != 0 || rd64(out + 16) != slen || memcmp(out + 24, ssz, (size_t)slen)) {
-                            snprintf(msg, sizeof msg, "API JSON of head %s: lantern_json_decode status %llu, fault at %llu", types[q == 4 ? 2 : q / 2],
+                            snprintf(msg, sizeof msg, "API JSON of head %s: lantern_json_decode status %llu, fault at %llu", types[q],
                                      (unsigned long long)js, (unsigned long long)rd64(fault + 8));
                             *why = msg;
                         }
@@ -7542,6 +7570,7 @@ static void api_streams_head(fc_node *n, const uint8_t *st, const char **why) {
     if (!*why) api_heads_streamed++;
     free(sb);
     free(block);
+    free(blinded);
 }
 
 /*
