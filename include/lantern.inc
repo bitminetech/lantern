@@ -647,7 +647,8 @@
 .set Node_event_slot, Node_api + 48        /* its block's slot */
 .set Node_event_epoch, Node_api + 56       /* the store's finalized epoch at the last finalized_checkpoint event */
 .set Node_event_votes, Node_api + 64       /* BLOCK_ATTESTATION and BLOCK_SLASHING works queued and not done */
-.set NODE_FIXED, 728 + CONFIG_SIZE + 936 + 72
+.set Node_pool, Node_api + 72              /* PartRef: NodePool entries, the pool */
+.set NODE_FIXED, 728 + CONFIG_SIZE + 936 + 88
 .set NODE_LOOKUP_MS, 10000             /* the least time between two lookups of the node */
 .set NODE_STATUS_MS, 12000             /* the least time between two Status requests of node_sync */
 .set NODE_SUBSCRIBE_AHEAD, 2           /* epochs: the topics of a new ForkDigest join this early, the old ones leave this late */
@@ -801,7 +802,8 @@
 .set NodeRoom_db_slots, 80             /* a DbRoom: the slots of the Db */
 .set NodeRoom_db_roots, 88             /* its root table, a power of two */
 .set NodeRoom_api_streams, 96          /* NodeApi entries: answers the node streams */
-.set NODE_ROOM_FIELDS, 13
+.set NodeRoom_pool, 104                /* NodePool entries: the pool's operations */
+.set NODE_ROOM_FIELDS, 14
 
 /* NodeStepResult: the output of lantern_node_step */
 .set NodeStepResult_accepted, 0        /* events handled, from the first */
@@ -889,6 +891,8 @@
 .set NODE_WORK_API_CHUNK, 20           /* data: the SSZ bytes, or a NODE_DB_REF; target: the connection; arg: the NodeApi index */
 .set NODE_WORK_API_LOOKUP, 21          /* a: the head's post-state; target: the connection; arg: the NodeApi index */
 .set NODE_WORK_API_EVENT, 22           /* a: a block's post-state, or 0; data: its bytes, or 0; arg: topic + 256 * values + 65536 * epoch */
+.set NODE_WORK_API_SUBMIT, 23          /* a: the head's post-state; data: a request's body; target: the connection; arg: op + 256 * flags + 65536 * fork */
+.set NODE_WORK_POOL_CHECK, 24          /* a: the head's post-state; data: a pool entry's bytes; target: its index; arg: its topic */
 .set NODE_VOTES_MAX, 130               /* MAX_ATTESTATIONS + MAX_ATTESTER_SLASHINGS: the votes of a block the node takes */
 .set NodeEvent_root, NodeEvent_checkpoint + 8  /* GOSSIP of a valid beacon_block, SYNC_BLOCK: its root; of a valid blob_sidecar, BLOB: the root of its block header */
 .set NodeEvent_index, NodeEvent_root + 32      /* GOSSIP of a valid beacon_block, SYNC_BLOCK: its blob commitments; of a valid blob_sidecar: its index */
@@ -1021,6 +1025,8 @@
 .set API_STREAM_DONE, 1024
 .set API_STREAM_LOOKUP, 2048           /* the entry waits for a NODE_WORK_API_LOOKUP */
 .set API_STREAM_OWN_STATE, 4096        /* the stream frees its state at its end */
+.set API_STREAM_ITEMS, 8192            /* a pool stream wrote an entry */
+.set API_STREAM_ITEM_DONE, 16384       /* in a WORK_DONE only: the chunk ends a pool entry */
 .set API_VALUE_CANONICAL, 1              /* the values of a NODE_WORK_API_ENCODE's arg, times 2^16 */
 .set API_VALUE_FINALIZED, 2
 .set API_VALUE_OPTIMISTIC, 4
@@ -1038,6 +1044,18 @@
 .set NODE_STATE_STATE_ROOTS, 184 + 32 * SLOTS_PER_HISTORICAL_ROOT  /* BeaconState.state_roots in the value of every fork */
 .set NODE_JSON_BLOCK, 0                  /* lantern_node_json: a SignedBeaconBlock */
 .set NODE_JSON_STATE, 1                  /* a BeaconState */
+.set NODE_JSON_EXIT, 2                   /* a SignedVoluntaryExit */
+.set NODE_JSON_PROPOSER_SLASHING, 3      /* a ProposerSlashing */
+.set NODE_JSON_ATTESTER_SLASHING, 4      /* an AttesterSlashing */
+.set NODE_JSON_BLS_CHANGE, 5             /* a SignedBLSToExecutionChange, from capella */
+.set NodePool_topic, 0                   /* NodePool (node.md): GOSSIP_* of the operation; 0 for a free entry */
+.set NodePool_state, 8                   /* NODE_POOL_* */
+.set NodePool_data_id, 16                /* the BufferId of its SSZ bytes */
+.set NodePool_length, 24
+.set NodePool_fork, 32                   /* FORK_* of the type it was decoded with */
+.set NodePool__mem, 40
+.set NODE_POOL_KEPT, 1
+.set NODE_POOL_CHECKING, 2               /* its NODE_WORK_POOL_CHECK is queued */
 
 /* HttpLimits and HttpRequest (docs/reference/beacon-api.md): lantern_http_request. */
 .set HttpLimits_head_max, 0

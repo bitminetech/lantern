@@ -87,6 +87,7 @@ FUNCTION lantern_node_size
     NODE_SIZE_ADD messages, NodeMessage__mem
     NODE_SIZE_ADD blobs, NodeBlob__mem
     NODE_SIZE_ADD api_streams, NodeApi__mem
+    NODE_SIZE_ADD pool, NodePool__mem
     ld      t0, NodeRoom_p2p_out(a0)        # a ByteList
     addi    t1, t0, 24 + 7
     bltu    t1, t0, 9f
@@ -156,6 +157,7 @@ LOCAL_FUNCTION node_layout
     NODE_PART messages, messages, NodeMessage__mem
     NODE_PART blobs, blobs, NodeBlob__mem
     NODE_PART api, api_streams, NodeApi__mem
+    NODE_PART pool, pool, NodePool__mem
     sd      t0, Node_p2p_out(a0)            # one ByteList, empty
     li      t1, 1
     sd      t1, (Node_p2p_out + 8)(a0)
@@ -391,6 +393,7 @@ FUNCTION lantern_node_copy
     NODE_COPY_ROOM messages, Node_messages
     NODE_COPY_ROOM blobs, Node_blobs
     NODE_COPY_ROOM api_streams, Node_api
+    NODE_COPY_ROOM pool, Node_pool
     ld      t0, NodeRoom_p2p_out(s2)        # the queued bytes fit
     ld      t1, Node_p2p_out(s1)
     add     t1, s1, t1
@@ -427,6 +430,7 @@ FUNCTION lantern_node_copy
     NODE_COPY_PART Node_messages, NodeMessage__mem
     NODE_COPY_PART Node_blobs, NodeBlob__mem
     NODE_COPY_PART Node_api, NodeApi__mem
+    NODE_COPY_PART Node_pool, NodePool__mem
     ld      a1, Node_p2p_out(s1)            # the queued bytes
     add     a1, s1, a1
     ld      a2, 16(a1)
@@ -589,7 +593,17 @@ LOCAL_FUNCTION node_ids
     j       4b
 5:  li      t0, NODE_ACT_BYTES_FREE         # a BYTES_FREE of bytes a NodeApi entry sends goes to the entry: API_STREAM_OWN
     bne     a0, t0, 3f
-    PART    t0, t1, s1, Node_api
+    PART    t0, t1, s1, Node_pool           # bytes a pool entry keeps stay
+6:  beqz    t1, 7f
+    ld      t2, NodePool_topic(t0)
+    beqz    t2, 61f
+    ld      t2, NodePool_data_id(t0)
+    bne     t2, a1, 61f
+    ret
+61: addi    t0, t0, NodePool__mem
+    addi    t1, t1, -1
+    j       6b
+7:  PART    t0, t1, s1, Node_api
 1:  beqz    t1, 3f
     ld      t2, NodeApi_connection(t0)
     beqz    t2, 2f
@@ -618,6 +632,142 @@ LOCAL_FUNCTION node_ids
     sd      a2, 24(t2)
     ret
 END_FUNCTION node_ids
+
+/* ------------------------------------------------------------ the pool (node.md) */
+
+/*
+ * a0 = 1 when the bytes a1 (a2 bytes) of the topic a0, of the fork a3, join the pool: a
+ * voluntary_exit, proposer_slashing, attester_slashing or bls_to_execution_change, in the first
+ * free entry; else 0. Uses t0-t3, a7.
+ */
+LOCAL_FUNCTION node_pool_add
+    UNWIND_END_PROLOGUE
+    li      t0, GOSSIP_VOLUNTARY_EXIT
+    beq     a0, t0, 1f
+    li      t0, GOSSIP_PROPOSER_SLASHING
+    beq     a0, t0, 1f
+    li      t0, GOSSIP_ATTESTER_SLASHING
+    beq     a0, t0, 1f
+    li      t0, GOSSIP_BLS_TO_EXECUTION_CHANGE
+    bne     a0, t0, 8f
+1:  PART    t0, t1, s1, Node_pool
+    li      t2, 0
+2:  bgeu    t2, t1, 3f
+    ld      t3, NodePool_topic(t0)
+    beqz    t3, 4f
+    addi    t0, t0, NodePool__mem
+    addi    t2, t2, 1
+    j       2b
+3:  ld      t2, Node_p2p_out(s1)            # past the count: one more within the capacity
+    LDQ     t3, s1, Node_pool
+    sub     t2, t2, t3
+    addi    t3, t1, 1
+    li      a7, NodePool__mem
+    mul     t3, t3, a7
+    bltu    t2, t3, 8f
+    addi    t1, t1, 1
+    STQ     t1, s1, Node_pool + 8
+4:  sd      a0, NodePool_topic(t0)
+    li      t3, NODE_POOL_KEPT
+    sd      t3, NodePool_state(t0)
+    sd      a1, NodePool_data_id(t0)
+    sd      a2, NodePool_length(t0)
+    sd      a3, NodePool_fork(t0)
+    li      a0, 1
+    ret
+8:  li      a0, 0
+    ret
+END_FUNCTION node_pool_add
+
+/*
+ * The pool entry a0 goes: it is free (topic 0), the pool's count drops past the free entries at
+ * its end, and its bytes get a NODE_ACT_BYTES_FREE.
+ */
+LOCAL_FUNCTION node_pool_drop
+    FRAME 0
+    ld      a1, NodePool_data_id(a0)
+    sd      zero, NodePool_topic(a0)
+    PART    t0, t1, s1, Node_pool
+1:  beqz    t1, 2f
+    addi    t2, t1, -1
+    li      t3, NodePool__mem
+    mul     t3, t2, t3
+    add     t3, t0, t3
+    ld      t3, NodePool_topic(t3)
+    bnez    t3, 2f
+    mv      t1, t2
+    j       1b
+2:  STQ     t1, s1, Node_pool + 8
+    li      a0, NODE_ACT_BYTES_FREE
+    li      a2, 0
+    call    node_ids
+    UNFRAME 0
+END_FUNCTION node_pool_drop
+
+/*
+ * At a new head, each pool entry in NODE_POOL_KEPT gets a NODE_WORK_POOL_CHECK with the head's
+ * post-state a0, and takes NODE_POOL_CHECKING; with a0 = 0, none. Locals: the state, the index.
+ */
+LOCAL_FUNCTION node_pool_checks
+    FRAME 16
+    beqz    a0, 9f
+    sd      a0, 0(sp)
+    sd      zero, 8(sp)
+1:  ld      a4, 8(sp)
+    PART    t0, t1, s1, Node_pool
+    bgeu    a4, t1, 9f
+    li      t2, NodePool__mem
+    mul     t2, a4, t2
+    add     t0, t0, t2
+    ld      t2, NodePool_topic(t0)
+    beqz    t2, 2f
+    ld      t2, NodePool_state(t0)
+    li      t3, NODE_POOL_KEPT
+    bne     t2, t3, 2f
+    li      t3, NODE_POOL_CHECKING
+    sd      t3, NodePool_state(t0)
+    li      a0, NODE_WORK_POOL_CHECK
+    ld      a1, 0(sp)
+    li      a2, 0
+    ld      a3, NodePool_data_id(t0)
+    ld      a5, NodePool_topic(t0)
+    call    node_work
+2:  ld      t0, 8(sp)
+    addi    t0, t0, 1
+    sd      t0, 8(sp)
+    j       1b
+9:  UNFRAME 16
+END_FUNCTION node_pool_checks
+
+/*
+ * The NODE_EV_WORK_DONE a0 of a NODE_WORK_POOL_CHECK, of the entry at index target in
+ * NODE_POOL_CHECKING with its bytes: LANTERN_VALID, it takes NODE_POOL_KEPT; else it goes.
+ */
+LOCAL_FUNCTION node_pool_check_done
+    FRAME 0
+    ld      t2, NodeAction_target(a0)
+    PART    t0, t1, s1, Node_pool
+    bgeu    t2, t1, 9f
+    li      t1, NodePool__mem
+    mul     t2, t2, t1
+    add     t0, t0, t2
+    ld      t1, NodePool_topic(t0)
+    beqz    t1, 9f
+    ld      t1, NodePool_state(t0)
+    li      t2, NODE_POOL_CHECKING
+    bne     t1, t2, 9f
+    ld      t1, NodePool_data_id(t0)
+    ld      t2, NodeAction_data(a0)
+    bne     t1, t2, 9f
+    ld      t1, NodeEvent_result(a0)
+    bnez    t1, 1f
+    li      t1, NODE_POOL_KEPT
+    sd      t1, NodePool_state(t0)
+    j       9f
+1:  mv      a0, t0
+    call    node_pool_drop
+9:  UNFRAME 0
+END_FUNCTION node_pool_check_done
 
 /* a0 = the slot of the block of the store's finalized root, or 2^64 - 1 when the node keeps none. Uses t0-t2, a6, a7. */
 LOCAL_FUNCTION node_f_slot
@@ -3623,7 +3773,23 @@ LOCAL_FUNCTION node_event
     mv      s4, a1
     li      t0, LIBP2P_ACCEPT
     bne     s7, t0, 65f
+    mv      a0, s2                          # an operation of the pool keeps its bytes there too
+    call    node_store_slot
+    addi    a1, s1, Node_config
+    call    node_fork
+    mv      a3, a0
+    ld      a0, NodeMessage_topic(s4)
+    ld      a1, NodeAction_data(s3)
+    ld      a2, NodeMessage_length(s4)
+    call    node_pool_add
+    beqz    a0, 639f
     ld      t0, NodeMessage_topic(s4)
+    li      t1, GOSSIP_ATTESTER_SLASHING
+    beq     t0, t1, 639f
+    mv      a0, s4
+    call    node_drop_message
+    LEAVE 48
+639: ld     t0, NodeMessage_topic(s4)
     li      t1, GOSSIP_BEACON_AGGREGATE_AND_PROOF
     bne     t0, t1, 640f
     ld      t1, Node_blobs(s1)              # a valid aggregate: kept for its vote, with half the part free
@@ -3872,9 +4038,19 @@ LOCAL_FUNCTION node_event
     call    node_api_lookup_done
     LEAVE 48
 704: li     t2, NODE_WORK_API_EVENT         # API_EVENT: the text to the streams of its topic
-    bne     t0, t2, 70f
+    bne     t0, t2, 705f
     mv      a0, s3
     call    node_api_event_done
+    LEAVE 48
+705: li     t2, NODE_WORK_API_SUBMIT        # API_SUBMIT: the operations to the pool and out, then the answer
+    bne     t0, t2, 706f
+    mv      a0, s3
+    call    node_api_submit_done
+    LEAVE 48
+706: li     t2, NODE_WORK_POOL_CHECK        # POOL_CHECK: the entry stays, or goes
+    bne     t0, t2, 70f
+    mv      a0, s3
+    call    node_pool_check_done
     LEAVE 48
 70: li      t2, NODE_WORK_ATTESTATION       # done with an attestation or a slashing: free its bytes
     beq     t0, t2, 71f
@@ -6515,7 +6691,7 @@ LOCAL_FUNCTION node_response
     li      a0, NODE_BLOB_BYTES + 48 + NODE_ACT_WORK_SIZE + 7
 45: call    node_room
     beqz    a0, 95f
-    ld      t0, Node_p2p_out(s1)
+    LDQ     t0, s1, Node_api                # the blobs' capacity: up to the api part
     ld      t1, Node_blobs(s1)
     sub     t0, t0, t1
     li      t1, NodeBlob__mem
@@ -7615,6 +7791,7 @@ FUNCTION lantern_node_step
     sd      zero, (L + 144)(sp)
     sd      zero, (L + 184)(sp)              # API: the largest scratch, and the API events
     sd      zero, (L + 192)(sp)
+    sd      zero, (L + 200)(sp)             # the p2p_out bytes of the pool POSTs' publishes
     mv      t0, s3
 1:  bgeu    t0, s4, 5f
     sub     t1, s4, t0
@@ -7670,6 +7847,35 @@ FUNCTION lantern_node_step
     j       22f
 231: li     t6, NODE_WORK_SERVE             # SERVE, and NEW_PAYLOAD or FORKCHOICE of LANTERN_VALID: a ByteList of the chunk inside
     beq     t4, t6, 25f
+    li      t6, NODE_WORK_API_SUBMIT        # API_SUBMIT: an API answer; of LANTERN_VALID, its records inside
+    bne     t4, t6, 2311f
+    ld      t4, (L + 192)(sp)
+    addi    t4, t4, 1
+    sd      t4, (L + 192)(sp)
+    ld      t6, NodeEvent_result(t0)
+    bnez    t6, 22f
+    mv      a0, t0
+    mv      a1, t2
+    call    node_submit_check
+    bnez    a0, 7f
+    add     s10, s10, t2                    # twice its bytes of actions
+    ld      t4, Node_flags(s1)              # subscribed: p2p_out for its publishes, and scratch for one
+    andi    t4, t4, NODE_FLAG_SUBSCRIBED
+    beqz    t4, 22f
+    ld      t4, NodeEvent_index(t0)
+    slli    t4, t4, 9
+    slli    t6, t2, 1
+    add     t4, t4, t6
+    ld      t6, (L + 200)(sp)
+    add     t6, t6, t4
+    sd      t6, (L + 200)(sp)
+    li      t4, SNAPPY_SCRATCH_COMPRESS + 192
+    add     t4, t4, t2
+    ld      t6, (L + 184)(sp)
+    bgeu    t6, t4, 22f
+    sd      t4, (L + 184)(sp)
+    j       22f
+2311:
     li      t6, NODE_WORK_API_LOOKUP        # API_LOOKUP: an API answer's scratch and actions
     bne     t4, t6, 233f
     ld      t4, (L + 184)(sp)
@@ -7824,6 +8030,10 @@ FUNCTION lantern_node_step
     mul     t1, s8, t1                      # room: actions, node parts, scratch
     add     t1, t1, s10
     addi    t1, t1, 2 * NODE_ACT_WORK_SIZE
+    LDQ     t2, s1, Node_pool + 8           # a POOL_CHECK for each pool entry
+    li      t3, NODE_ACT_WORK_SIZE
+    mul     t2, t2, t3
+    add     t1, t1, t2
     ld      t2, (L + 192)(sp)               # 2048 for each API answer
     slli    t2, t2, 11
     add     t1, t1, t2
@@ -7865,7 +8075,7 @@ FUNCTION lantern_node_step
     beqz    t2, 1f
     addi    t1, t1, NODE_SYNC_BATCH
 1:  bltu    t0, t1, 85f
-    ld      t0, Node_p2p_out(s1)            # blobs: one for each GOSSIP WORK_DONE event, and with p2p a batch's sidecars
+    LDQ     t0, s1, Node_api                # blobs: one for each GOSSIP WORK_DONE event, and with p2p a batch's sidecars
     ld      t1, Node_blobs(s1)
     sub     t0, t0, t1
     li      t1, NodeBlob__mem
@@ -7963,7 +8173,9 @@ FUNCTION lantern_node_step
     addi    t0, t0, -24
     sub     t0, t0, t1
     ld      t1, (L + 56)(sp)
-    bltu    t0, t1, 90f
+    ld      t2, (L + 200)(sp)               # and for the publishes of the pool POSTs
+    add     t2, t2, t1
+    bltu    t0, t2, 90f
     add     t3, t3, t1
     li      t0, LIBP2P_SCRATCH_SIZE
     add     t3, t3, t0
@@ -8845,7 +9057,102 @@ FUNCTION lantern_node_run
     mv      a6, s8
     call    node_api_event_run
     LEAVE 192
-978: li     t1, NODE_WORK_API_LOOKUP
+978: li     t1, NODE_WORK_API_SUBMIT
+    bne     t0, t1, 979f
+    mv      a0, s1                          # API_SUBMIT: the operations of a body, checked
+    mv      a1, s2
+    ld      a2, (L + 64)(sp)
+    mv      a3, s3
+    mv      a4, s4
+    mv      a5, s5
+    mv      a6, s6
+    mv      a7, s7
+    mv      t0, s8
+    call    node_api_submit_run
+    LEAVE 192
+979: li     t1, NODE_WORK_POOL_CHECK
+    bne     t0, t1, 9780f
+    beqz    s4, 8f                          # POOL_CHECK: the gossip validation of the bytes, with an empty Seen
+    beqz    s5, 8f
+    ld      t0, NodeAction_arg(s3)
+    li      t1, GOSSIP_VOLUNTARY_EXIT
+    beq     t0, t1, 9785f
+    li      t1, GOSSIP_PROPOSER_SLASHING
+    beq     t0, t1, 9785f
+    li      t1, GOSSIP_ATTESTER_SLASHING
+    beq     t0, t1, 9785f
+    li      t1, GOSSIP_BLS_TO_EXECUTION_CHANGE
+    bne     t0, t1, 8f
+9785: ld    t0, 16(s5)                      # its SeenRoom: a key for each 8 bytes, and 1
+    srli    t0, t0, 3
+    addi    t0, t0, 1
+    sd      t0, (L + 16)(sp)
+    sd      zero, (L + 24)(sp)
+    sd      zero, (L + 32)(sp)
+    sd      zero, (L + 40)(sp)
+    addi    a0, sp, L + 16
+    addi    a1, sp, L
+    call    lantern_seen_size
+    bnez    a0, 9781f
+    ld      t0, 0(s6)                       # the Seen at the end of scratch, with LANTERN_SCRATCH_FIXED before it
+    sd      t0, (L + 8)(sp)
+    ld      t1, (L)(sp)
+    bltu    t0, t1, 9781f
+    sub     t0, t0, t1
+    li      t2, LANTERN_SCRATCH_FIXED + 8
+    bltu    t0, t2, 9781f
+    andi    t0, t0, -8
+    sd      t0, 0(s6)
+    add     s9, s6, t0
+    sd      t1, 0(s9)
+    addi    a0, sp, L + 16
+    mv      a1, s9
+    call    lantern_seen_init
+    bnez    a0, 9782f
+    mv      a0, s2
+    call    node_store_slot
+    addi    a1, s1, Node_config
+    call    node_fork
+    mv      s10, a0
+    ld      a0, NODE_STATE_SLOT(s4)         # a head state of another fork: IGNORE, as for gossip
+    addi    a1, s1, Node_config
+    call    node_fork
+    bne     a0, s10, 9782f
+    sd      s9, (L + 96 + NodeGossip_seen)(sp)
+    sd      s2, (L + 96 + NodeGossip_store)(sp)
+    ld      t0, Node_time_ms(s1)
+    sd      t0, (L + 96 + NodeGossip_time_ms)(sp)
+    ld      t0, NodeAction_arg(s3)
+    sd      t0, (L + 96 + NodeGossip_topic)(sp)
+    sd      zero, (L + 96 + NodeGossip_subnet)(sp)
+    sd      s4, (L + 96 + NodeGossip_head)(sp)
+    sd      zero, (L + 96 + NodeGossip_proposer)(sp)
+    sd      zero, (L + 96 + NodeGossip_justified)(sp)
+    sd      zero, (L + 96 + NodeGossip_settings)(sp)
+    addi    t0, s1, Node_config
+    sd      t0, (L + 96 + NodeGossip_config)(sp)
+    mv      t6, s10
+    addi    a0, sp, L + 96
+    mv      a1, s5
+    mv      a2, s6
+    addi    a3, s7, NodeEvent_result
+    addi    a4, s7, NodeEvent_root
+    addi    a5, s7, NodeEvent_index
+    FORK_CALL node_gossip
+    ld      t0, (L + 8)(sp)                 # scratch whole again; a short one: IGNORE
+    sd      t0, 0(s6)
+    beqz    a0, 9783f
+    li      t0, LANTERN_BUFFER_TOO_SMALL
+    bne     a0, t0, 9784f
+    j       9781f
+9782: ld    t0, (L + 8)(sp)
+    sd      t0, 0(s6)
+9781: li    t0, LANTERN_GOSSIP_IGNORE
+    sd      t0, NodeEvent_result(s7)
+9783: li    a0, LANTERN_OK
+9784: LEAVE 192
+9780: ld    t0, NodeAction_work_kind(s3)
+    li      t1, NODE_WORK_API_LOOKUP
     bne     t0, t1, 8f
     mv      a0, s1                          # API_LOOKUP: the slot of a state root
     mv      a1, s3

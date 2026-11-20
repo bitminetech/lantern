@@ -420,20 +420,59 @@ SPEC_END node_event_roots
 .error "nodehooks: a NODE_VALIDATOR_* epoch offset is not the Validator's"
 .endif
 
-/* (kind, ssz, cursor, out): lantern_json_encode_ssz with the fork's SignedBeaconBlock (kind 0) or BeaconState (kind 1). */
+/* a0 = the fork's TypeDescriptor of the NODE_JSON_* kind t0, or 0. Uses t1. */
+LOCAL_FUNCTION node_type_of_kind
+    UNWIND_END_PROLOGUE
+    ADDRESS a0, lantern_type_SignedBeaconBlock
+    li      t1, NODE_JSON_BLOCK
+    beq     t0, t1, 9f
+    ADDRESS a0, lantern_type_BeaconState
+    li      t1, NODE_JSON_STATE
+    beq     t0, t1, 9f
+    ADDRESS a0, lantern_type_SignedVoluntaryExit
+    li      t1, NODE_JSON_EXIT
+    beq     t0, t1, 9f
+    ADDRESS a0, lantern_type_ProposerSlashing
+    li      t1, NODE_JSON_PROPOSER_SLASHING
+    beq     t0, t1, 9f
+    ADDRESS a0, lantern_type_AttesterSlashing
+    li      t1, NODE_JSON_ATTESTER_SLASHING
+    beq     t0, t1, 9f
+.if FORK >= FORK_CAPELLA
+    ADDRESS a0, lantern_type_SignedBLSToExecutionChange
+    li      t1, NODE_JSON_BLS_CHANGE
+    beq     t0, t1, 9f
+.endif
+    li      a0, 0
+9:  ret
+END_FUNCTION node_type_of_kind
+
+/* (kind, ssz, cursor, out): lantern_json_encode_ssz with the fork's type of the NODE_JSON_* kind. */
 SPEC_FUNCTION node_json
     FRAME 0
-    li      t0, NODE_JSON_STATE
-    bgtu    a0, t0, 8f
-    beq     a0, t0, 1f
-    ADDRESS a0, lantern_type_SignedBeaconBlock
-    j       2f
-1:  ADDRESS a0, lantern_type_BeaconState
-2:  CALL_GLOBAL lantern_json_encode_ssz
+    mv      t0, a0
+    call    node_type_of_kind
+    beqz    a0, 8f
+    CALL_GLOBAL lantern_json_encode_ssz
     UNFRAME 0
 8:  li      a0, LANTERN_INVALID_EVENT
     UNFRAME 0
 SPEC_END node_json
+
+/*
+ * (kind, json, scratch, out, fault): lantern_json_decode with the fork's type of the NODE_JSON_*
+ * kind (node.md, NODE_WORK_API_SUBMIT); LANTERN_INVALID_JSON for a kind of no type in the fork.
+ */
+SPEC_FUNCTION node_json_decode
+    FRAME 0
+    mv      t0, a0
+    call    node_type_of_kind
+    beqz    a0, 8f
+    CALL_GLOBAL lantern_json_decode
+    UNFRAME 0
+8:  li      a0, LANTERN_INVALID_JSON
+    UNFRAME 0
+SPEC_END node_json_decode
 
 /* The u32 \val at \addr, a byte at a time: the place may not be aligned. Uses \tmp. */
 .macro NODE_STORE_U32 val, addr, tmp

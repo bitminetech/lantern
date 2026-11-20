@@ -20,6 +20,7 @@ validator.md) of the block and the step's blobs and proofs. A step with fewer pr
 commitments than blobs gives the sidecars of the indices that have all three.
 """
 
+import hashlib
 import os
 import pathlib
 
@@ -50,6 +51,17 @@ STATUS_VALIDATORS = [
 ]
 
 
+class _Keys:
+    """The keys of the spec's test helpers, loaded once: validator i has pubkeys[i]."""
+    def __getattr__(self, name):
+        from eth_consensus_specs.test.helpers import keys
+        return getattr(keys, name)
+
+
+KEYS = _Keys()
+BLS_VALIDATORS = (1, 3, 7)  # BLS withdrawal credentials of the key pubkeys[8191 - i], as the helpers sign changes
+
+
 def anchor(spec, fork, statuses=False, epoch=ANCHOR_EPOCH):
     """A state at the first slot of the epoch (ANCHOR_EPOCH) with 8 validators (and those of
     STATUS_VALIDATORS after them with statuses), and its block."""
@@ -65,7 +77,7 @@ def anchor(spec, fork, statuses=False, epoch=ANCHOR_EPOCH):
     for i in range(8):
         state.validators.append(
             spec.Validator(
-                pubkey=spec.BLSPubkey(bytes([i + 1]) * 48),
+                pubkey=spec.BLSPubkey(KEYS.pubkeys[i]),
                 withdrawal_credentials=spec.Bytes32(bytes([i]) * 32),
                 effective_balance=spec.MAX_EFFECTIVE_BALANCE,
                 activation_eligibility_epoch=0,
@@ -84,7 +96,7 @@ def anchor(spec, fork, statuses=False, epoch=ANCHOR_EPOCH):
         i = 8 + k
         state.validators.append(
             spec.Validator(
-                pubkey=spec.BLSPubkey(bytes([i + 1]) * 48),
+                pubkey=spec.BLSPubkey(KEYS.pubkeys[i]),
                 withdrawal_credentials=spec.Bytes32(bytes([i]) * 32),
                 effective_balance=inc * spec.EFFECTIVE_BALANCE_INCREMENT,
                 slashed=slashed,
@@ -99,6 +111,8 @@ def anchor(spec, fork, statuses=False, epoch=ANCHOR_EPOCH):
             state.previous_epoch_participation.append(0)
             state.current_epoch_participation.append(0)
             state.inactivity_scores.append(0)
+    for i in BLS_VALIDATORS:
+        state.validators[i].withdrawal_credentials = spec.BLS_WITHDRAWAL_PREFIX + hashlib.sha256(KEYS.pubkeys[8191 - i]).digest()[1:]
     if fork == "fulu":  # as at genesis and at the fork (fulu fork.md)
         state.proposer_lookahead = spec.initialize_proposer_lookahead(state)
     block = spec.BeaconBlock(slot=slot, state_root=spec.hash_tree_root(state))
@@ -340,6 +354,10 @@ METHODS = {1: b"GET", 2: b"POST", 3: b"DELETE"}
 ALLOW = {1: b"GET", 2: b"POST", 3: b"GET, POST"}
 VALIDATOR_OPS = ("getStateValidators", "postStateValidators", "getStateValidator", "getStateValidatorBalances",
                  "postStateValidatorBalances", "postStateValidatorIdentities")
+POOL_GETS = ("getPoolVoluntaryExits", "getPoolProposerSlashings", "getPoolAttesterSlashingsV2",
+             "getPoolBLSToExecutionChanges")
+POOL_POSTS = ("submitPoolVoluntaryExit", "submitPoolProposerSlashings", "submitPoolAttesterSlashingsV2",
+              "submitPoolBLSToExecutionChange")
 ANSWERED = ("getHealth", "getNetworkIdentity", "getNodeVersion", "getSyncingStatus", "getPeerCount", "getGenesis",
             "getBlockHeader", "getStateFinalityCheckpoints", "getBlockV2", "getStateV2", "getBlockRoot", "getStateRoot",
             "getStateFork", "getSpec", "getForkSchedule", "getDepositContract", "getEpochCommittees",
@@ -753,6 +771,150 @@ class Route:
         self.refs = [bytes(out[at + 64 * k:at + 64 * k + 64]) for k in range(count)]
 
 
+def gossip_result(spec, fn, *args):
+    """VALID, IGNORE or REJECT of a gossip validation of the spec module."""
+    try:
+        fn(*args)
+    except spec.GossipIgnore:
+        return "IGNORE"
+    except spec.GossipReject:
+        return "REJECT"
+    return "VALID"
+
+
+def pool_requests(spec, fork, v, by_name, add):
+    """The pool POSTs and GETs (beacon-api.md, The pools) of a node at the anchor of v: the answers from
+    the spec's gossip validation with a Seen the requests fill, each request run twice."""
+    import dataclasses
+    import api_route
+    from json_codec import to_json
+    from eth_consensus_specs.utils import bls
+    state = v["states"][v["slot"]].copy()
+    store = spec.get_forkchoice_store(state, v["block"])
+    spec.on_tick(store, v["time_ms"])
+    seen = spec.Seen(**{f.name: (dict() if "dict" in str(f.type) else set()) for f in dataclasses.fields(spec.Seen)})
+    time_ms = v["time_ms"]
+    epoch = int(spec.get_current_epoch(state))
+    capella = FORKS.index(fork) >= FORKS.index("capella")
+    electra = FORKS.index(fork) >= FORKS.index("electra")
+    pool = {"exit": [], "proposer": [], "attester": [], "bls": []}
+
+    def validate(kind, op):
+        if kind == "exit":
+            return gossip_result(spec, spec.validate_voluntary_exit_gossip, seen, store, op, time_ms)
+        if kind == "proposer":
+            return gossip_result(spec, spec.validate_proposer_slashing_gossip, seen, store, op)
+        if kind == "attester":
+            return gossip_result(spec, spec.validate_attester_slashing_gossip, seen, store, op)
+        return gossip_result(spec, spec.validate_bls_to_execution_change_gossip, seen, store, op, time_ms)
+
+    def bad_request(close, keep_alive, failures=None):
+        body = b'{"code":400,"message":"BAD_REQUEST"'
+        if failures is not None:
+            body += b',"failures":[' + b",".join(b'{"index":%d,"message":"REJECT"}' % i for i in failures) + b"]"
+        return response(400, body + b"}", close=close, keep_alive=keep_alive)
+
+    def submit(name, op_name, kind, ops, body, single=True, headers=None):
+        """ops: the decoded operations, or None for a body of none; run twice, as the runner does."""
+        answers = []
+        for _ in range(2):
+            if ops is None:
+                answers.append(("bad", None))
+                continue
+            results = [validate(kind, op) for op in ops]
+            for op, r in zip(ops, results):
+                if r == "VALID":
+                    pool[kind].append(op)
+            failures = [i for i, r in enumerate(results) if r == "REJECT"]
+            answers.append(("ok", None) if not failures else ("bad", None if single else failures))
+        if answers[0] != answers[1]:
+            raise RuntimeError(f"{name}: the two runs answer differently")
+        status, failures = answers[0]
+        want = (lambda c, k: response(200, close=c, keep_alive=k)) if status == "ok" else \
+            (lambda c, k: bad_request(c, k, failures))
+        req = api_route.request(by_name[op_name]["method"], api_route.fill(by_name[op_name], None), b"",
+                                content_type=b"application/json", **(headers or {}))
+        add(name, req, body=body, want=want)
+
+    def exit_of(index, key_index):
+        """Signed as the spec's test helpers sign: from deneb with capella's fork version (EIP-7044)."""
+        ex = spec.VoluntaryExit(epoch=epoch, validator_index=index)
+        if FORKS.index(fork) >= FORKS.index("deneb"):
+            domain = spec.compute_domain(spec.DOMAIN_VOLUNTARY_EXIT, spec.config.CAPELLA_FORK_VERSION,
+                                         state.genesis_validators_root)
+        else:
+            domain = spec.get_domain(state, spec.DOMAIN_VOLUNTARY_EXIT, ex.epoch)
+        return spec.SignedVoluntaryExit(message=ex, signature=bls.Sign(KEYS.privkeys[key_index],
+                                                                       spec.compute_signing_root(ex, domain)))
+
+    def header_of(index, body):
+        h = spec.BeaconBlockHeader(slot=state.slot, proposer_index=index, parent_root=b"\x03" * 32,
+                                   state_root=b"\x04" * 32, body_root=body)
+        domain = spec.get_domain(state, spec.DOMAIN_BEACON_PROPOSER, spec.compute_epoch_at_slot(h.slot))
+        return spec.SignedBeaconBlockHeader(message=h, signature=bls.Sign(KEYS.privkeys[index],
+                                                                          spec.compute_signing_root(h, domain)))
+
+    def indexed_of(indices, root):
+        data = spec.AttestationData(slot=state.slot, index=0, beacon_block_root=root,
+                                    source=state.current_justified_checkpoint,
+                                    target=spec.Checkpoint(epoch=epoch, root=root))
+        domain = spec.get_domain(state, spec.DOMAIN_BEACON_ATTESTER, data.target.epoch)
+        sr = spec.compute_signing_root(data, domain)
+        ia = spec.IndexedAttestation(data=data, signature=bls.Aggregate([bls.Sign(KEYS.privkeys[i], sr) for i in indices]))
+        for i in indices:
+            ia.attesting_indices.append(i)
+        return ia
+
+    def change_of(index, key_index):
+        c = spec.BLSToExecutionChange(validator_index=index, from_bls_pubkey=KEYS.pubkeys[8191 - index],
+                                      to_execution_address=b"\x42" * 20)
+        domain = spec.compute_domain(spec.DOMAIN_BLS_TO_EXECUTION_CHANGE, genesis_validators_root=state.genesis_validators_root)
+        return spec.SignedBLSToExecutionChange(message=c, signature=bls.Sign(KEYS.privkeys[key_index],
+                                                                             spec.compute_signing_root(c, domain)))
+
+    good_exit = exit_of(2, 2)
+    submit("pool_exit", "submitPoolVoluntaryExit", "exit", [good_exit], to_json(good_exit).encode())
+    submit("pool_exit_again", "submitPoolVoluntaryExit", "exit", [good_exit], to_json(good_exit).encode())
+    bad_exit = exit_of(3, 4)
+    submit("pool_exit_other_key", "submitPoolVoluntaryExit", "exit", [bad_exit], to_json(bad_exit).encode())
+    submit("pool_exit_no_exit", "submitPoolVoluntaryExit", "exit", None, b'{"message":{"epoch":"1"}}')
+    ps = spec.ProposerSlashing(signed_header_1=header_of(4, b"\x01" * 32), signed_header_2=header_of(4, b"\x02" * 32))
+    submit("pool_proposer", "submitPoolProposerSlashings", "proposer", [ps], to_json(ps).encode())
+    same = spec.ProposerSlashing(signed_header_1=header_of(0, b"\x01" * 32), signed_header_2=header_of(0, b"\x01" * 32))
+    submit("pool_proposer_equal", "submitPoolProposerSlashings", "proposer", [same], to_json(same).encode())
+    ats = spec.AttesterSlashing(attestation_1=indexed_of([5, 6], b"\x05" * 32), attestation_2=indexed_of([5, 6], b"\x06" * 32))
+    submit("pool_attester", "submitPoolAttesterSlashingsV2", "attester", [ats], to_json(ats).encode(),
+           headers={"version": fork.encode()})
+    other = b"deneb" if electra else b"electra"
+    submit("pool_attester_other_fork", "submitPoolAttesterSlashingsV2", "attester", None, to_json(ats).encode(),
+           headers={"version": other})
+    if capella:
+        c1 = change_of(1, 8191 - 1)
+        c3 = change_of(3, 8191 - 1)  # another key's signature
+        c7 = change_of(7, 8191 - 7)
+        changes = [c1, c3, c7]
+        body = ("[" + ",".join(to_json(c) for c in changes) + "]").encode()
+        submit("pool_bls", "submitPoolBLSToExecutionChange", "bls", changes, body, single=False)
+        bad = ("[" + to_json(c1) + ',{"message":1}]').encode()
+        submit("pool_bls_bad_item", "submitPoolBLSToExecutionChange", "bls", None, bad, single=False)
+    else:  # before capella the fork has no such type
+        submit("pool_bls", "submitPoolBLSToExecutionChange", "bls", None, b"[]", single=False)
+    store_fork = fork
+
+    def listing(items, version=None):
+        body = b'{"data":[' + b",".join(to_json(x).encode() for x in items) + b"]}"
+        if version:
+            body = b'{"version":"' + version.encode() + b'",' + body[1:]
+        return lambda c, k: streamed(version, body, close=c, keep_alive=k)
+
+    for name, op_name, items, version in (("pool_get_exits", "getPoolVoluntaryExits", pool["exit"], None),
+                                          ("pool_get_proposer", "getPoolProposerSlashings", pool["proposer"], None),
+                                          ("pool_get_attester", "getPoolAttesterSlashingsV2", pool["attester"], store_fork),
+                                          ("pool_get_bls", "getPoolBLSToExecutionChanges", pool["bls"], None)):
+        for http in (b"HTTP/1.1", b"HTTP/1.0"):
+            add(f"{name}_{http.decode()[5:]}", api_route.base(by_name[op_name]), version=http, want=listing(items, version))
+
+
 def api_requests(spec, fork, v, kind="main"):
     """(name, request bytes, response, closes, offline, syncing) of each request of a node at its
     anchor; kind "late", those of getEpochCommittees at its lowest epochs; kind "genesis", those of
@@ -762,7 +924,7 @@ def api_requests(spec, fork, v, kind="main"):
     by_name = {op["name"]: op for op in ops}
     out = []
 
-    def add(name, req, offline=False, version=b"HTTP/1.1", connection=b"", extra=b"", body=None, syncing=False):
+    def add(name, req, offline=False, version=b"HTTP/1.1", connection=b"", extra=b"", body=None, syncing=False, want=None):
         if body is not None:
             req = dict(req, body=body)
             extra += b"Content-Length: %d\r\n" % len(body)
@@ -776,8 +938,16 @@ def api_requests(spec, fork, v, kind="main"):
         else:
             route = Route(r)
             opname = ops[route.op - 1]["name"]
-            if opname == "eventstream":  # the head; the stream stays open
+            if want is not None:
+                want = want(close, keep_alive)
+            elif opname == "eventstream":  # the head; the stream stays open
                 want, stream = stream_head(version, connection), True
+            elif opname in POOL_GETS:  # an empty pool
+                pool_version = fork if opname == "getPoolAttesterSlashingsV2" else None
+                body = b'{"data":[]}' if pool_version is None else b'{"version":"%s","data":[]}' % fork.encode()
+                want = streamed(pool_version, body, close=close, keep_alive=keep_alive)
+            elif opname in POOL_POSTS and not req["body"]:  # a body of no operation
+                want = error(400, close=close, keep_alive=keep_alive)
             elif opname in ANSWERED:
                 want = answer(v, opname, route, offline, close, keep_alive, syncing)
             else:
@@ -798,6 +968,7 @@ def api_requests(spec, fork, v, kind="main"):
             add(f"committees_epoch_{e}", api_route.base(committees, [("epoch", b"%d" % e)]))
         add("committees_low_slot", api_route.base(committees, [("epoch", b"%d" % lowest),
                                                               ("slot", b"%d" % (lowest * int(spec.SLOTS_PER_EPOCH) + 3))]))
+        pool_requests(spec, fork, v, by_name, add)
         return out
     for op in ops:
         add(op["name"], api_route.base(op))
@@ -947,6 +1118,9 @@ def api_cases(fork, preset, epoch=ANCHOR_EPOCH):
     v = run(spec, schedule(fork), lambda: api_values(spec, fork, state, block))
     v["config_bodies"] = config_bodies(fork, preset)
     kind = "main" if epoch == ANCHOR_EPOCH else "genesis" if epoch == 0 else "late"
+    slot_ms0 = int(spec.config.SLOT_DURATION_MS) if hasattr(spec.config, "SLOT_DURATION_MS") else int(spec.config.SECONDS_PER_SLOT) * 1000
+    v["block"] = block
+    v["time_ms"] = v["genesis_time"] * 1000 + (v["slot"] + SLOTS_AHEAD) * slot_ms0
     reqs = run(spec, schedule(fork), lambda: api_requests(spec, fork, v, kind))
     if fork in ("altair",):  # no execution engine before bellatrix: el_offline stays false
         reqs = [r for r in reqs if not r[4]]

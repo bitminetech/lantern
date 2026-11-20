@@ -426,19 +426,59 @@ SPEC_END node_event_roots
 .error "nodehooks: a NODE_VALIDATOR_* epoch offset is not the Validator's"
 .endif
 
-/* (kind, ssz, cursor, out): lantern_json_encode_ssz with the fork's SignedBeaconBlock (kind 0) or BeaconState (kind 1). */
+/* L0: x0 = the fork's TypeDescriptor of the NODE_JSON_* kind x9, or 0. Uses x0. */
+LOCAL_FUNCTION node_type_of_kind
+    UNWIND_END_PROLOGUE
+    ADDRESS x0, lantern_type_SignedBeaconBlock
+    cmp     x9, #NODE_JSON_BLOCK
+    b.eq    9f
+    ADDRESS x0, lantern_type_BeaconState
+    cmp     x9, #NODE_JSON_STATE
+    b.eq    9f
+    ADDRESS x0, lantern_type_SignedVoluntaryExit
+    cmp     x9, #NODE_JSON_EXIT
+    b.eq    9f
+    ADDRESS x0, lantern_type_ProposerSlashing
+    cmp     x9, #NODE_JSON_PROPOSER_SLASHING
+    b.eq    9f
+    ADDRESS x0, lantern_type_AttesterSlashing
+    cmp     x9, #NODE_JSON_ATTESTER_SLASHING
+    b.eq    9f
+.if FORK >= FORK_CAPELLA
+    ADDRESS x0, lantern_type_SignedBLSToExecutionChange
+    cmp     x9, #NODE_JSON_BLS_CHANGE
+    b.eq    9f
+.endif
+    mov     x0, #0
+9:  ret
+END_FUNCTION node_type_of_kind
+
+/* (kind, ssz, cursor, out): lantern_json_encode_ssz with the fork's type of the NODE_JSON_* kind. */
 SPEC_FUNCTION node_json
     FRAME 0
     mov     x9, x0
-    mov     x0, #LANTERN_INVALID_EVENT
-    cmp     x9, #NODE_JSON_STATE
-    b.hi    9f
-    ADDRESS x0, lantern_type_SignedBeaconBlock
-    b.ne    1f
-    ADDRESS x0, lantern_type_BeaconState
-1:  CALL_GLOBAL lantern_json_encode_ssz
-9:  UNFRAME 0
+    bl      node_type_of_kind
+    cbz     x0, 8f
+    CALL_GLOBAL lantern_json_encode_ssz
+    UNFRAME 0
+8:  mov     x0, #LANTERN_INVALID_EVENT
+    UNFRAME 0
 SPEC_END node_json
+
+/*
+ * (kind, json, scratch, out, fault): lantern_json_decode with the fork's type of the NODE_JSON_*
+ * kind (node.md, NODE_WORK_API_SUBMIT); LANTERN_INVALID_JSON for a kind of no type in the fork.
+ */
+SPEC_FUNCTION node_json_decode
+    FRAME 0
+    mov     x9, x0
+    bl      node_type_of_kind
+    cbz     x0, 8f
+    CALL_GLOBAL lantern_json_decode
+    UNFRAME 0
+8:  mov     x0, #LANTERN_INVALID_JSON
+    UNFRAME 0
+SPEC_END node_json_decode
 
 /*
  * L0: x0 = the bytes of the SSZ default value of the type node x1 of the TypeDescriptor x0, written

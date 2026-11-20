@@ -468,6 +468,21 @@ api_j_data:
 api_last_chunk:
     .ascii "0\r\n\r\n"
 .set api_last_chunk_len, 5
+api_p_data:
+    .ascii "{\"data\":["
+.set api_p_data_len, 9
+api_p_version:
+    .ascii "\",\"data\":["
+.set api_p_version_len, 10
+api_f_list:
+    .ascii "\",\"failures\":["
+.set api_f_list_len, 14
+api_f_index:
+    .ascii "{\"index\":"
+.set api_f_index_len, 9
+api_f_reject:
+    .ascii ",\"message\":\"REJECT\"}"
+.set api_f_reject_len, 20
 
 /* The name of each fork, FORK_PHASE0 to FORK_FULU: 16 bytes each, its length, then its bytes. */
 .macro API_FORK name

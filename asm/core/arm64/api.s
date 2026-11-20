@@ -1131,7 +1131,23 @@ LOCAL_FUNCTION api_body
     bl      api_code_text
     API_LIT api_e_end
     UNFRAME 16
-1:  cmp     x28, #API_OP_GET_NETWORK_IDENTITY
+1:  cmp     x28, #API_OP_SUBMIT_POOL_BLS_TO_EXECUTION_CHANGE
+    b.ne    11f
+    /* {"code":400,"message":"BAD_REQUEST","failures":[…]}: x22 the event of the work */
+    API_LIT api_e_code
+    ldr     x9, [sp, #16]
+    ldr     x0, [x9]
+    bl      api_dec
+    API_LIT api_e_message
+    ldr     x9, [sp, #16]
+    ldr     x0, [x9]
+    bl      api_code
+    mov     x1, #24
+    bl      api_code_text
+    API_LIT api_f_list
+    bl      api_failures
+    UNFRAME 16
+11: cmp     x28, #API_OP_GET_NETWORK_IDENTITY
     b.ne    2f
     API_LIT api_i_peer_id
     add     x0, x22, #ApiView_peer_id
@@ -1836,6 +1852,18 @@ LOCAL_FUNCTION node_api_event
     b.eq    63f
     cmp     x3, #API_OP_EVENTSTREAM
     b.eq    61f
+    cmp     x3, #API_OP_GET_POOL_VOLUNTARY_EXITS
+    b.eq    68f
+    cmp     x3, #API_OP_GET_POOL_PROPOSER_SLASHINGS
+    b.eq    68f
+    cmp     x3, #API_OP_GET_POOL_ATTESTER_SLASHINGS_V2
+    b.eq    68f
+    cmp     x3, #API_OP_GET_POOL_BLS_TO_EXECUTION_CHANGES
+    b.eq    68f
+    mov     x0, x3
+    bl      node_submit_topic
+    cbnz    x0, 60f
+    ldr     x3, [x25, #ApiRoute_op]
     sub     x9, x3, #API_OP_GET_STATE_VALIDATORS   /* the six validator operations and getEpochCommittees: a state */
     cmp     x9, #(API_OP_GET_EPOCH_COMMITTEES - API_OP_GET_STATE_VALIDATORS)
     b.ls    66f
@@ -1871,6 +1899,21 @@ LOCAL_FUNCTION node_api_event
     cmp     x0, #API_OP_GET_STATE_VALIDATOR
     b.ne    64f
     b       67f
+68: mov     x0, x27                         /* a pool GET: a stream of the pool */
+    mov     x1, x25
+    mov     x2, x21
+    mov     x3, x26
+    bl      node_api_pool_stream
+    b       90f
+60: mov     x0, x27                         /* a pool POST: a work checks its operations */
+    mov     x1, x25
+    mov     x2, x21
+    mov     x3, x22
+    mov     x4, x26
+    bl      node_api_submit
+    mov     x2, x0
+    cbnz    x0, 80f
+    b       90f
 61: mov     x0, x27                         /* eventstream: an entry, and the head */
     mov     x1, x25
     mov     x2, x21
@@ -3056,7 +3099,7 @@ END_FUNCTION node_api_same_root
 LOCAL_FUNCTION node_api_free
     UNWIND_END_PROLOGUE
     PART    x9, x10, x19, Node_api
-    LDQ     x11, x19, Node_p2p_out
+    LDQ     x11, x19, Node_pool
     LDQ     x12, x19, Node_api
     sub     x11, x11, x12
     mov     x12, #NodeApi__mem
@@ -3565,6 +3608,8 @@ LOCAL_FUNCTION node_api_head_events
     ADDQ    x0, x19, Node_event_head
     add     x1, x21, #NodeBlock_root
     bl      lantern_copy_root
+    ldr     x0, [x21, #NodeBlock_state_id]  /* the pool's checks at the new head */
+    bl      node_pool_checks
     mov     x0, #API_TOPIC_HEAD
     bl      node_api_subscribed
     cbz     x0, 5f
@@ -3777,7 +3822,13 @@ LOCAL_FUNCTION node_api_chunk_done
     add     x1, x21, #(NodeEvent_api + 16)
     mov     x2, #JSON_CURSOR_SIZE
     bl      lantern_copy
-    ldr     x9, [x21, #(NodeEvent_api_bytes + 16)]  /* the chunk in a SEND */
+    tbz     x25, #14, 1f                    /* API_STREAM_ITEM_DONE: the pool stream's next entry */
+    and     x25, x25, #~API_STREAM_ITEM_DONE
+    str     x25, [x22, #NodeApi_flags]
+    mov     x0, x22
+    bl      node_api_pool_advance
+    ldr     x25, [x22, #NodeApi_flags]
+1:  ldr     x9, [x21, #(NodeEvent_api_bytes + 16)]  /* the chunk in a SEND */
     add     x1, x9, #(56 + 7)
     and     x1, x1, #~7
     mov     x0, #NODE_ACT_API_SEND
@@ -3859,6 +3910,8 @@ LOCAL_FUNCTION api_stream_head
     cmp     x9, #API_OP_GET_BLOCK_V2
     b.eq    21f
     cmp     x9, #API_OP_GET_STATE_V2
+    b.eq    21f
+    cmp     x9, #API_OP_GET_POOL_ATTESTER_SLASHINGS_V2
     b.ne    22f
 21: API_LIT api_version
     ldr     x0, [x22, #NodeApi_fork]
@@ -3913,7 +3966,17 @@ END_FUNCTION api_hex4
 LOCAL_FUNCTION api_stream_json
     FRAME 0
     ldr     x9, [x22, #NodeApi_op]          /* the validator streams: their items */
-    cmp     x9, #API_OP_GET_BLOCK_V2
+    cmp     x9, #API_OP_GET_POOL_VOLUNTARY_EXITS
+    b.eq    4f
+    cmp     x9, #API_OP_GET_POOL_PROPOSER_SLASHINGS
+    b.eq    4f
+    cmp     x9, #API_OP_GET_POOL_ATTESTER_SLASHINGS_V2
+    b.eq    4f
+    cmp     x9, #API_OP_GET_POOL_BLS_TO_EXECUTION_CHANGES
+    b.ne    3f
+4:  bl      api_pool_json
+    UNFRAME 0
+3:  cmp     x9, #API_OP_GET_BLOCK_V2
     b.eq    1f
     cmp     x9, #API_OP_GET_STATE_V2
     b.eq    1f
@@ -3982,6 +4045,17 @@ LOCAL_FUNCTION node_api_chunk_run
     b.eq    1f
     cmp     x9, #API_OP_GET_STATE_V2
     b.eq    1f
+    mov     x10, x9                         /* a pool stream (3): data 0 at its end */
+    mov     x9, #3
+    cmp     x10, #API_OP_GET_POOL_VOLUNTARY_EXITS
+    b.eq    2f
+    cmp     x10, #API_OP_GET_POOL_PROPOSER_SLASHINGS
+    b.eq    2f
+    cmp     x10, #API_OP_GET_POOL_ATTESTER_SLASHINGS_V2
+    b.eq    2f
+    cmp     x10, #API_OP_GET_POOL_BLS_TO_EXECUTION_CHANGES
+    b.eq    2f
+    mov     x9, x10
     sub     x10, x9, #API_OP_GET_STATE_VALIDATORS   /* a validator stream (1) or getEpochCommittees (2): a state */
     cmp     x10, #(API_OP_GET_EPOCH_COMMITTEES - API_OP_GET_STATE_VALIDATORS)
     b.hi    98f
@@ -4010,6 +4084,8 @@ LOCAL_FUNCTION node_api_chunk_run
     csel    x11, x12, x11, ne
     ldr     x12, [sp, #(L + 40)]            /* a validator stream: an item in every chunk */
     cbz     x12, 3f
+    cmp     x12, #3
+    b.eq    3f
     mov     x11, #NODE_API_FIRST_ROOM
 3:  cmp     x10, x11
     b.lo    97f
@@ -4018,6 +4094,8 @@ LOCAL_FUNCTION node_api_chunk_run
     str     x9, [sp, #L]
     ldr     x9, [sp, #(L + 40)]
     cbz     x9, 4f
+    cmp     x9, #3
+    b.eq    5f
     ldr     x11, [x20, #NODE_STATE_SLOT]    /* the state at the entry's slot */
     ldr     x12, [x22, #NodeApi_slot]
     cmp     x11, x12
@@ -4053,6 +4131,8 @@ LOCAL_FUNCTION node_api_chunk_run
     mov     x27, #0
     ldr     x9, [sp, #(L + 40)]             /* a validator stream: its selection; getEpochCommittees its count */
     cbz     x9, 6f
+    cmp     x9, #3
+    b.eq    6f
     ldr     x0, [sp, #(L + 48)]
     cmp     x9, #2
     b.eq    63f
@@ -4133,8 +4213,20 @@ LOCAL_FUNCTION node_api_chunk_run
     sub     x26, x9, #7                     /* room for CRLF and the last chunk */
     ldr     x9, [sp, #(L + 40)]
     cbz     x9, 35f
+    cmp     x9, #3
+    b.ne    37f
+    ldr     x9, [x22, #NodeApi_op]          /* a pool stream: {"data":[, getPoolAttesterSlashingsV2 {"version":"<fork>","data":[ */
+    cmp     x9, #API_OP_GET_POOL_ATTESTER_SLASHINGS_V2
+    b.ne    38f
+    API_LIT api_j_version
+    ldr     x0, [x22, #NodeApi_fork]
+    bl      api_fork_name
+    API_LIT api_p_version
+    b       36f
+38: API_LIT api_p_data
+    b       36f
     /* the validator streams: {"execution_optimistic":…,"finalized":…,"data":[ */
-    API_LIT api_v_open
+37: API_LIT api_v_open
     ldr     x9, [x23, #(NodeEvent_api + 8)]
     ubfx    x0, x9, #8, #1
     bl      api_bool
@@ -4264,6 +4356,856 @@ LOCAL_FUNCTION node_api_chunk_run
 98: mov     x0, #LANTERN_INVALID_EVENT
     LEAVE 64
 END_FUNCTION node_api_chunk_run
+
+/* ------------------------------------------------------------ The pools (beacon-api.md, node.md) */
+
+/* L0: x0 = the gossip topic of the pool POST x0, or 0. Uses x9. */
+LOCAL_FUNCTION node_submit_topic
+    UNWIND_END_PROLOGUE
+    mov     x9, x0
+    mov     x0, #GOSSIP_VOLUNTARY_EXIT
+    cmp     x9, #API_OP_SUBMIT_POOL_VOLUNTARY_EXIT
+    b.eq    9f
+    mov     x0, #GOSSIP_PROPOSER_SLASHING
+    cmp     x9, #API_OP_SUBMIT_POOL_PROPOSER_SLASHINGS
+    b.eq    9f
+    mov     x0, #GOSSIP_ATTESTER_SLASHING
+    cmp     x9, #API_OP_SUBMIT_POOL_ATTESTER_SLASHINGS_V2
+    b.eq    9f
+    mov     x0, #GOSSIP_BLS_TO_EXECUTION_CHANGE
+    cmp     x9, #API_OP_SUBMIT_POOL_BLS_TO_EXECUTION_CHANGE
+    b.eq    9f
+    mov     x0, #0
+9:  ret
+END_FUNCTION node_submit_topic
+
+/* L0: x0 = the lantern_node_json kind of the pool operation of the gossip topic x0. Uses x9. */
+LOCAL_FUNCTION node_pool_kind
+    UNWIND_END_PROLOGUE
+    cmp     x0, #GOSSIP_BLS_TO_EXECUTION_CHANGE
+    mov     x9, #NODE_JSON_BLS_CHANGE
+    sub     x0, x0, #(GOSSIP_VOLUNTARY_EXIT - NODE_JSON_EXIT)
+    csel    x0, x9, x0, eq
+    ret
+END_FUNCTION node_pool_kind
+.if GOSSIP_PROPOSER_SLASHING - GOSSIP_VOLUNTARY_EXIT != NODE_JSON_PROPOSER_SLASHING - NODE_JSON_EXIT || GOSSIP_ATTESTER_SLASHING - GOSSIP_VOLUNTARY_EXIT != NODE_JSON_ATTESTER_SLASHING - NODE_JSON_EXIT
+.error "node_pool_kind: the kinds follow the topics"
+.endif
+
+/*
+ * L0: x0 = the index of the first pool entry from the index x0 that the pool GET x1 of the fork x2
+ * answers (node.md, NODE_EV_API): of its topic, and for getPoolAttesterSlashingsV2 of that fork's
+ * AttesterSlashing type; else 2^64 - 1. x1 = the entry. Uses x9-x12.
+ */
+LOCAL_FUNCTION node_pool_next
+    UNWIND_END_PROLOGUE
+    mov     x9, #GOSSIP_VOLUNTARY_EXIT
+    cmp     x1, #API_OP_GET_POOL_VOLUNTARY_EXITS
+    b.eq    1f
+    mov     x9, #GOSSIP_PROPOSER_SLASHING
+    cmp     x1, #API_OP_GET_POOL_PROPOSER_SLASHINGS
+    b.eq    1f
+    mov     x9, #GOSSIP_ATTESTER_SLASHING
+    cmp     x1, #API_OP_GET_POOL_ATTESTER_SLASHINGS_V2
+    b.eq    1f
+    mov     x9, #GOSSIP_BLS_TO_EXECUTION_CHANGE
+1:  cmp     x2, #FORK_ELECTRA
+    cset    x2, hs
+    PART    x10, x11, x19, Node_pool
+    mov     x12, #NodePool__mem
+    madd    x10, x0, x12, x10
+2:  cmp     x0, x11
+    b.hs    8f
+    ldr     x12, [x10, #NodePool_topic]
+    cmp     x12, x9
+    b.ne    3f
+    cmp     x9, #GOSSIP_ATTESTER_SLASHING
+    b.ne    4f
+    ldr     x12, [x10, #NodePool_fork]
+    cmp     x12, #FORK_ELECTRA
+    cset    x12, hs
+    cmp     x12, x2
+    b.eq    4f
+3:  add     x10, x10, #NodePool__mem
+    add     x0, x0, #1
+    b       2b
+4:  mov     x1, x10
+    ret
+8:  mov     x0, #-1
+    ret
+END_FUNCTION node_pool_next
+
+/*
+ * L1: (connection x0, route x1, flags x2, view x3): a stream of a pool GET (node.md, NODE_EV_API):
+ * fork the store's; slot the first entry it answers, data its bytes, sent its fork; data 0 with
+ * none. flags: API_STREAM_CLOSE and API_STREAM_HTTP10. Locals: the connection, the route, the
+ * flags, the fork, the entry's index and address.
+ */
+LOCAL_FUNCTION node_api_pool_stream
+    FRAME 48
+    stp     x0, x1, [sp, #16]
+    str     x2, [sp, #32]
+    ldr     x9, [x3, #ApiView_fork]
+    str     x9, [sp, #40]
+    bl      node_api_new
+    stp     x0, x1, [sp, #48]
+    mov     x0, x1
+    mov     x1, #NodeApi__mem
+    bl      lantern_zero
+    ldr     x1, [sp, #56]
+    ldp     x9, x10, [sp, #16]
+    str     x9, [x1, #NodeApi_connection]
+    ldr     x11, [x10, #ApiRoute_op]
+    str     x11, [x1, #NodeApi_op]
+    ldr     x9, [sp, #32]
+    str     x9, [x1, #NodeApi_flags]
+    ldr     x2, [sp, #40]
+    str     x2, [x1, #NodeApi_fork]
+    mov     x0, #0
+    mov     x1, x11
+    bl      node_pool_next
+    ldr     x9, [sp, #56]
+    cmn     x0, #1
+    b.eq    1f
+    str     x0, [x9, #NodeApi_slot]
+    ldr     x10, [x1, #NodePool_data_id]
+    str     x10, [x9, #NodeApi_data]
+    ldr     x10, [x1, #NodePool_fork]
+    str     x10, [x9, #NodeApi_sent]
+1:  ldp     x0, x1, [sp, #48]
+    bl      node_api_chunk_work
+    UNFRAME 48
+END_FUNCTION node_api_pool_stream
+
+/*
+ * L1: the pool stream of the NodeApi entry x0 goes to its next entry after slot (node.md,
+ * NODE_WORK_API_CHUNK): its slot, data and sent, a zero cursor; data 0 with none. Bytes it owned
+ * get a NODE_ACT_BYTES_FREE, and API_STREAM_OWN clears. Locals: the entry, the old data, the flags.
+ */
+LOCAL_FUNCTION node_api_pool_advance
+    FRAME 32
+    str     x0, [sp, #16]
+    ldr     x9, [x0, #NodeApi_data]
+    ldr     x10, [x0, #NodeApi_flags]
+    stp     x9, x10, [sp, #24]
+    ldr     x9, [x0, #NodeApi_slot]
+    ldr     x1, [x0, #NodeApi_op]
+    ldr     x2, [x0, #NodeApi_fork]
+    add     x0, x9, #1
+    bl      node_pool_next
+    ldr     x9, [sp, #16]
+    mov     x10, #0
+    cmn     x0, #1
+    b.eq    1f
+    str     x0, [x9, #NodeApi_slot]
+    ldr     x11, [x1, #NodePool_fork]
+    str     x11, [x9, #NodeApi_sent]
+    ldr     x10, [x1, #NodePool_data_id]
+1:  str     x10, [x9, #NodeApi_data]
+    ldr     x10, [x9, #NodeApi_flags]
+    and     x10, x10, #~API_STREAM_OWN
+    str     x10, [x9, #NodeApi_flags]
+    add     x0, x9, #NodeApi_cursor
+    mov     x1, #JSON_CURSOR_SIZE
+    bl      lantern_zero
+    ldr     x10, [sp, #32]
+    tbz     x10, #3, 9f                     /* API_STREAM_OWN: the old bytes go */
+    mov     x0, #NODE_ACT_BYTES_FREE
+    ldr     x1, [sp, #24]
+    mov     x2, #0
+    bl      node_ids
+9:  UNFRAME 32
+END_FUNCTION node_api_pool_advance
+
+/*
+ * L1: a pool stream's JSON, as api_stream_json: with the bytes x21, the JSON of the pool entry
+ * from the cursor at NodeEvent_api + 16, by lantern_node_json of the fork in sent (NodeEvent_api)
+ * and the kind of the GET, after , when API_STREAM_ITEMS is set and the cursor is at its start;
+ * once whole, API_STREAM_ITEMS and API_STREAM_ITEM_DONE in the event. With x21 = 0: ]}. x0 = 1
+ * when the answer is whole, 0 when more is to come, 2 for bytes that are no encoding.
+ */
+LOCAL_FUNCTION api_pool_json
+    FRAME 0
+    cbnz    x21, 1f
+    API_LIT api_v_end
+    mov     x0, #1
+    UNFRAME 0
+1:  ldr     x9, [x23, #(NodeEvent_api + 16)]    /* the cursor's depth: 0 before the first byte */
+    cbnz    x9, 2f
+    ldr     x9, [x23, #(NodeEvent_api + 8)]
+    tbz     x9, #13, 2f
+    API_LIT api_p_comma
+2:  ldr     x9, [x22, #NodeApi_op]          /* the kind of the GET's operation */
+    mov     x0, #NODE_JSON_EXIT
+    cmp     x9, #API_OP_GET_POOL_VOLUNTARY_EXITS
+    b.eq    3f
+    mov     x0, #NODE_JSON_PROPOSER_SLASHING
+    cmp     x9, #API_OP_GET_POOL_PROPOSER_SLASHINGS
+    b.eq    3f
+    mov     x0, #NODE_JSON_ATTESTER_SLASHING
+    cmp     x9, #API_OP_GET_POOL_ATTESTER_SLASHINGS_V2
+    b.eq    3f
+    mov     x0, #NODE_JSON_BLS_CHANGE
+3:  add     x9, x23, #NodeEvent_api_bytes   /* the ByteList: its room to x26 - 1, its bytes to x24 */
+    sub     x10, x26, #1
+    sub     x10, x10, x9
+    mov     x11, #24
+    stp     x10, x11, [x9]
+    sub     x10, x24, x28
+    str     x10, [x9, #16]
+    mov     x1, x21
+    add     x2, x23, #(NodeEvent_api + 16)
+    add     x3, x23, #NodeEvent_api_bytes
+    ldr     x15, [x23, #NodeEvent_api]
+    FORK_CALL node_json
+    ldr     x9, [x23, #(NodeEvent_api_bytes + 16)]
+    add     x24, x28, x9
+    cmp     x0, #LANTERN_JSON_MORE
+    b.eq    8f
+    cbnz    x0, 7f
+    ldr     x9, [x23, #(NodeEvent_api + 8)] /* whole: the entry is done */
+    orr     x9, x9, #(API_STREAM_ITEMS | API_STREAM_ITEM_DONE)
+    str     x9, [x23, #(NodeEvent_api + 8)]
+8:  mov     x0, #0
+    UNFRAME 0
+7:  mov     x0, #2
+    UNFRAME 0
+END_FUNCTION api_pool_json
+
+/*
+ * L1: the failures of the event x22 of a NODE_WORK_API_SUBMIT: {"index":<i>,"message":"REJECT"}
+ * for each record of LANTERN_GOSSIP_REJECT, with , between, then ]}. Locals: the record, its
+ * index, the failures written.
+ */
+LOCAL_FUNCTION api_failures
+    FRAME 32
+    add     x10, x22, #NodeEvent_chunk
+    ldr     x9, [x10, #8]
+    add     x9, x10, x9
+    stp     x9, xzr, [sp, #16]
+    str     xzr, [sp, #32]
+1:  ldr     x10, [sp, #24]
+    ldr     x11, [x22, #NodeEvent_index]
+    cmp     x10, x11
+    b.hs    9f
+    ldr     x9, [sp, #16]
+    ldr     x12, [x9]
+    cmp     x12, #LANTERN_GOSSIP_REJECT
+    b.ne    3f
+    ldr     x12, [sp, #32]
+    cbz     x12, 2f
+    API_LIT api_p_comma
+2:  API_LIT api_f_index
+    ldr     x0, [sp, #24]
+    bl      api_dec
+    API_LIT api_f_reject
+    ldr     x12, [sp, #32]
+    add     x12, x12, #1
+    str     x12, [sp, #32]
+3:  ldr     x9, [sp, #16]                   /* the next record: its code, then its ByteList */
+    ldr     x12, [x9, #8]
+    add     x9, x9, #8
+    add     x9, x9, x12
+    str     x9, [sp, #16]
+    ldr     x10, [sp, #24]
+    add     x10, x10, #1
+    str     x10, [sp, #24]
+    b       1b
+9:  API_LIT api_v_end
+    UNFRAME 32
+END_FUNCTION api_failures
+
+/*
+ * L1: (connection x0, route x1, flags x2, request x3, view x4) -> x0: a pool POST (node.md,
+ * NODE_EV_API): a NODE_ACT_BYTES_PUT of the body and a NODE_WORK_API_SUBMIT; 0 once queued, else
+ * the status of the error to answer. Locals: the connection, the flags, the route, the view, the
+ * head's post-state, a ByteList head whose offset reaches the body.
+ */
+LOCAL_FUNCTION node_api_submit
+    FRAME 80
+    stp     x0, x2, [sp, #16]
+    stp     x1, x4, [sp, #32]
+    ldr     x9, [x1, #ApiRoute_op]          /* getPoolAttesterSlashingsV2: the AttesterSlashing type of the store's fork */
+    cmp     x9, #API_OP_SUBMIT_POOL_ATTESTER_SLASHINGS_V2
+    b.ne    1f
+    ldr     x10, [x1, #ApiRoute_consensus_version]
+    ldr     x11, [x4, #ApiView_fork]
+    cmp     x10, #FORK_ELECTRA
+    cset    x10, hs
+    cmp     x11, #FORK_ELECTRA
+    cset    x11, hs
+    cmp     x10, x11
+    b.ne    80f
+1:  ldp     x10, x11, [x3, #HttpRequest_body]   /* a body of no bytes: 400 */
+    cbz     x11, 80f
+    add     x10, x3, x10
+    add     x12, sp, #64
+    sub     x13, x10, x12
+    stp     x11, x13, [x12]
+    str     x11, [x12, #16]
+    add     x0, x19, #Node_head_root        /* the head's post-state, else 500 */
+    bl      node_find_block
+    cmn     x0, #1
+    b.eq    81f
+    ldr     x9, [x1, #NodeBlock_state_id]
+    cbz     x9, 81f
+    str     x9, [sp, #48]
+    add     x0, sp, #64
+    bl      node_put
+    mov     x3, x0
+    mov     x0, #NODE_WORK_API_SUBMIT
+    ldr     x1, [sp, #48]
+    mov     x2, #0
+    ldr     x4, [sp, #16]
+    ldr     x9, [sp, #32]
+    ldr     x5, [x9, #ApiRoute_op]
+    ldr     x10, [sp, #24]
+    orr     x5, x5, x10, lsl #8
+    ldr     x10, [sp, #40]
+    ldr     x10, [x10, #ApiView_fork]
+    orr     x5, x5, x10, lsl #16
+    bl      node_work
+    mov     x0, #0
+    UNFRAME 80
+80: mov     x0, #400
+    UNFRAME 80
+81: mov     x0, #500
+    UNFRAME 80
+END_FUNCTION node_api_submit
+
+/*
+ * L0: x0 = 0 when the NODE_EV_WORK_DONE x0 of x1 bytes of a valid NODE_WORK_API_SUBMIT holds its
+ * records inside it (node.md): a ByteList at NodeEvent_chunk of offset 24, and NodeEvent_index
+ * records in its bytes, each a code and a ByteList of offset 24 whose size is a multiple of 8;
+ * else 1. Uses x9-x15.
+ */
+LOCAL_FUNCTION node_submit_check
+    UNWIND_END_PROLOGUE
+    cmp     x1, #(NodeEvent_chunk + 24)
+    b.lo    8f
+    add     x9, x0, #NodeEvent_chunk
+    ldp     x10, x11, [x9, #8]
+    cmp     x10, #24
+    b.ne    8f
+    sub     x12, x1, #(NodeEvent_chunk + 24)
+    cmp     x11, x12
+    b.hi    8f
+    add     x12, x9, #24                    /* the first record, and the end */
+    add     x13, x12, x11
+    ldr     x14, [x0, #NodeEvent_index]
+1:  cbz     x14, 7f
+    sub     x15, x13, x12
+    cmp     x15, #32
+    b.lo    8f
+    ldp     x9, x10, [x12, #8]              /* size, offset */
+    cmp     x10, #24
+    b.ne    8f
+    cmp     x9, #24
+    b.lo    8f
+    tst     x9, #7
+    b.ne    8f
+    sub     x15, x15, #8
+    cmp     x9, x15
+    b.hi    8f
+    ldr     x10, [x12, #24]
+    sub     x15, x9, #24
+    cmp     x10, x15
+    b.hi    8f
+    add     x12, x12, #8
+    add     x12, x12, x9
+    sub     x14, x14, #1
+    b       1b
+7:  mov     x0, #0
+    ret
+8:  mov     x0, #1
+    ret
+END_FUNCTION node_submit_check
+
+/*
+ * L2: the NODE_EV_WORK_DONE x0 of a NODE_WORK_API_SUBMIT (node.md, lantern_node_step): the body's
+ * bytes go; each valid operation joins the pool, goes out on its topic with NODE_FLAG_SUBSCRIBED,
+ * and an attester slashing to fork choice; then the answer to the connection. x19 the node, x20
+ * the store, x24 the actions. x21 the event, x22 the record, x23 the records left, x25 the
+ * failures, x26 the topic, x27 the new id, x28 the answer's flags. Locals: L 1 when the pool keeps it.
+ */
+LOCAL_FUNCTION node_api_submit_done
+    ENTER 16
+    mov     x21, x0
+    mov     x0, #NODE_ACT_BYTES_FREE
+    ldr     x1, [x21, #NodeAction_data]
+    mov     x2, #0
+    bl      node_ids
+    ldr     x9, [x21, #NodeAction_arg]      /* the answer's flags: API_STREAM_CLOSE (1), API_STREAM_HTTP10 (2) */
+    ubfx    x10, x9, #8, #8
+    mov     x28, #API_R_CLOSE
+    tbnz    x10, #0, 1f
+    tst     x10, #API_STREAM_HTTP10
+    mov     x11, #API_R_KEEP
+    csel    x28, x11, xzr, ne
+1:  and     x0, x9, #255
+    bl      node_submit_topic
+    mov     x26, x0
+    ldr     x9, [x21, #NodeEvent_result]
+    cbnz    x9, 80f
+    mov     x25, #0
+    ldr     x23, [x21, #NodeEvent_index]
+    add     x9, x21, #NodeEvent_chunk
+    ldr     x10, [x9, #8]
+    add     x22, x9, x10
+2:  cbz     x23, 70f
+    ldr     x9, [x22]                       /* its code */
+    cmp     x9, #LANTERN_GOSSIP_REJECT
+    cinc    x25, x25, eq
+    cbnz    x9, 6f
+    add     x0, x22, #8                     /* valid: its bytes to a new id, kept by the pool when it has room */
+    bl      node_put
+    mov     x27, x0
+    mov     x0, x26
+    mov     x1, x27
+    ldr     x2, [x22, #24]
+    ldr     x3, [x21, #NodeAction_arg]
+    lsr     x3, x3, #16
+    bl      node_pool_add
+    str     x0, [sp, #L]
+    ldr     x9, [x19, #Node_flags]
+    tbz     x9, #2, 3f                      /* NODE_FLAG_SUBSCRIBED: out on its topic */
+    mov     x0, x26
+    add     x1, x22, #8
+    bl      node_publish
+3:  cmp     x26, #GOSSIP_ATTESTER_SLASHING  /* an attester slashing: on_attester_slashing with the justified root's state */
+    b.ne    4f
+    add     x0, x20, #(Store_justified_checkpoint + 8)
+    bl      node_find_block
+    cmn     x0, #1
+    b.eq    4f
+    ldr     x9, [x1, #NodeBlock_status]
+    cmp     x9, #NODE_BLOCK_IMPORTED
+    b.ne    4f
+    ldr     x1, [x1, #NodeBlock_state_id]
+    cbz     x1, 4f
+    mov     x0, #NODE_WORK_ATTESTER_SLASHING
+    mov     x2, #0
+    mov     x3, x27
+    mov     x4, #0
+    mov     x5, #0
+    bl      node_work
+    b       6f
+4:  ldr     x9, [sp, #L]                    /* bytes no entry keeps and no work reads go */
+    cbnz    x9, 6f
+    mov     x0, #NODE_ACT_BYTES_FREE
+    mov     x1, x27
+    mov     x2, #0
+    bl      node_ids
+6:  ldr     x9, [x22, #8]
+    add     x22, x22, #8
+    add     x22, x22, x9
+    sub     x23, x23, #1
+    b       2b
+70: ldr     x0, [x21, #NodeAction_target]   /* the answer: 200, or 400 with the failures */
+    cbz     x25, 71f
+    ldr     x9, [x21, #NodeAction_arg]
+    and     x9, x9, #255
+    cmp     x9, #API_OP_SUBMIT_POOL_BLS_TO_EXECUTION_CHANGE
+    b.ne    80f
+    mov     x1, x21
+    mov     x2, #400
+    mov     x3, #API_OP_SUBMIT_POOL_BLS_TO_EXECUTION_CHANGE
+    mov     x4, x28
+    bl      node_api_send
+    LEAVE 16
+71: mov     x1, #0
+    mov     x2, #200
+    mov     x3, #0
+    mov     x4, x28
+    bl      node_api_send
+    LEAVE 16
+80: ldr     x0, [x21, #NodeAction_target]
+    mov     x1, #0
+    mov     x2, #400
+    mov     x3, #API_BODY_ERROR
+    mov     x4, x28
+    bl      node_api_send
+    LEAVE 16
+END_FUNCTION node_api_submit_done
+
+/*
+ * L2: the publish of the SSZ bytes of the ByteList x1 on the gossip topic x0 (node.md, the
+ * publish): a LIBP2P_EVENT_PUBLISH at the end of p2p_out; none when it does not fit. Its data
+ * compresses in place, its ByteList head in the 24 bytes before the data. x21 the bytes, x22 the
+ * event, x25 the topic's length, x26 the data's offset in the event, x27 the event's room.
+ * Locals: L a GossipTopic, L+24 the topic's ByteList (24 + 128), L+176 a size, L+184 the
+ * message-id (24).
+ */
+LOCAL_FUNCTION node_publish
+    ENTER 208
+    mov     x21, x1
+    ldr     w9, [x19, #Node_fork_digest]
+    str     x9, [sp, #(L + GossipTopic_fork_digest)]
+    stp     x0, xzr, [sp, #(L + GossipTopic_name)]
+    mov     x9, #(24 + 128)
+    mov     x10, #24
+    stp     x9, x10, [sp, #(L + 24)]
+    str     xzr, [sp, #(L + 40)]
+    add     x0, sp, #L
+    add     x1, sp, #(L + 24)
+    bl      lantern_gossip_topic
+    cbnz    x0, 9f
+    ldr     x25, [sp, #(L + 40)]
+    add     x26, x25, #(LIBP2P_EV_PUB_TOPIC + 7)
+    and     x26, x26, #~7
+    mov     x0, x21
+    add     x1, sp, #(L + 176)
+    CALL_GLOBAL snappy_compress_size
+    cbnz    x0, 9f
+    ldr     x9, [sp, #(L + 176)]            /* the room: the data's offset, then at most size - 24 bytes */
+    sub     x9, x9, #24
+    add     x27, x26, x9
+    add     x27, x27, #7
+    and     x27, x27, #~7
+    mov     x0, x27
+    bl      node_out
+    cbz     x0, 9f
+    mov     x22, x0
+    add     x2, x22, x26                    /* the data's ByteList head before it: its room to the event's end */
+    sub     x2, x2, #24
+    sub     x9, x27, x26
+    add     x9, x9, #24
+    str     x9, [x2]
+    mov     x0, x21
+    mov     x1, x23
+    CALL_GLOBAL snappy_compress
+    cbnz    x0, 8f
+    mov     x0, x20                         /* the message-id: of the fork of the store's slot */
+    bl      node_store_slot
+    add     x1, x19, #Node_config
+    bl      node_fork
+    mov     x15, x0
+    add     x0, sp, #(L + 24)
+    add     x1, x22, x26
+    sub     x1, x1, #24
+    add     x2, x19, #Node_config
+    mov     x3, x23
+    add     x4, sp, #(L + 184)
+    FORK_CALL compute_message_id
+    cbnz    x0, 8f
+    add     x9, x22, x26                    /* the data's length; the event to its bytes */
+    ldur    x21, [x9, #-8]
+    add     x12, x26, x21
+    add     x12, x12, #7
+    and     x12, x12, #~7
+    ldr     x13, [x19, #Node_p2p_out]
+    add     x13, x19, x13
+    ldr     x14, [x13, #16]
+    sub     x14, x14, x27
+    add     x14, x14, x12
+    str     x14, [x13, #16]
+    mov     x27, x12
+    mov     x10, #LIBP2P_EVENT_PUBLISH
+    stp     x12, x10, [x22]
+    mov     x10, #20
+    str     x10, [x22, #LIBP2P_EV_PUB_ID_LEN]
+    stp     xzr, xzr, [x22, #(LIBP2P_EV_PUB_ID + 16)]
+    add     x0, x22, #LIBP2P_EV_PUB_ID
+    add     x1, sp, #(L + 184)
+    mov     x2, #20
+    bl      lantern_copy
+    str     x25, [x22, #LIBP2P_EV_PUB_TOPIC_LEN]
+    str     x21, [x22, #LIBP2P_EV_PUB_DATA_LEN]
+    add     x0, x22, #LIBP2P_EV_PUB_TOPIC
+    add     x1, sp, #(L + 48)
+    mov     x2, x25
+    bl      lantern_copy
+    add     x0, x22, #LIBP2P_EV_PUB_TOPIC   /* zero bytes after the topic and after the data */
+    add     x0, x0, x25
+    sub     x1, x26, #LIBP2P_EV_PUB_TOPIC
+    sub     x1, x1, x25
+    bl      lantern_zero
+    add     x0, x22, x26
+    add     x0, x0, x21
+    sub     x1, x27, x26
+    sub     x1, x1, x21
+    bl      lantern_zero
+9:  LEAVE 208
+8:  ldr     x13, [x19, #Node_p2p_out]       /* no publish: the room goes back */
+    add     x13, x19, x13
+    ldr     x14, [x13, #16]
+    sub     x14, x14, x27
+    str     x14, [x13, #16]
+    LEAVE 208
+END_FUNCTION node_publish
+
+/*
+ * L1: (text x0 to x1, kind x2, fork x3, fault x4) -> x0: the JSON text decoded by lantern_node_json_decode
+ * into the record at x27 of node_api_submit_run (x24 its scratch, x26 the event's end): code 0,
+ * then a ByteList of the SSZ bytes, its size to a multiple of 8; x27 then the next record. x0 = 0,
+ * 1 for a text that is no such value, 2 for too little room. Locals: a ByteList head of the text.
+ */
+LOCAL_FUNCTION node_submit_decode
+    FRAME 32
+    add     x9, sp, #16
+    sub     x10, x0, x9
+    sub     x11, x1, x0
+    stp     x11, x10, [x9]
+    str     x11, [x9, #16]
+    add     x10, x27, #32
+    cmp     x10, x26
+    b.hi    8f
+    sub     x10, x26, x27
+    sub     x10, x10, #8
+    str     x10, [x27, #8]
+    mov     x15, x3
+    mov     x0, x2
+    mov     x1, x9
+    mov     x2, x24
+    add     x3, x27, #8
+    FORK_CALL node_json_decode
+    cmp     x0, #LANTERN_BUFFER_TOO_SMALL
+    b.eq    8f
+    cbnz    x0, 7f
+    ldr     x10, [x27, #24]                 /* its size: the bytes to a multiple of 8, zero after them */
+    add     x9, x10, #(24 + 7)
+    and     x9, x9, #~7
+    str     x9, [x27, #8]
+    str     xzr, [x27]
+    add     x0, x27, #32
+    add     x0, x0, x10
+    sub     x1, x9, #24
+    sub     x1, x1, x10
+    bl      lantern_zero
+    ldr     x9, [x27, #8]
+    add     x27, x27, #8
+    add     x27, x27, x9
+    mov     x0, #0
+    UNFRAME 32
+7:  mov     x0, #1
+    UNFRAME 32
+8:  mov     x0, #2
+    UNFRAME 32
+END_FUNCTION node_submit_decode
+
+/*
+ * (node x0, store x1, seen x2, work x3, state_a x4, data x5, scratch x6, event x7, room x8) -> status:
+ * a NODE_WORK_API_SUBMIT of lantern_node_run (node.md): the operations of the body decoded as
+ * records at NodeEvent_chunk of the event, then each checked by lantern_node_gossip of the fork
+ * arg / 2^16 with seen. x19 node, x20 store, x21 work, x22 state_a, x23 data, x24 scratch, x25
+ * event, x26 the event's end, x27 the next record, x28 the text's end, then the records left.
+ * Locals: L seen, L+8 the kind, L+16 the topic, L+24 the fork, L+32 the operations, L+40 1 for
+ * a list, L+48 where the text goes on, L+56 an item's start, L+64 a NodeGossip, L+152 a JsonFault,
+ * L+280 a root, L+312 an index.
+ */
+LOCAL_FUNCTION node_api_submit_run
+    ENTER 320
+    mov     x19, x0
+    mov     x20, x1
+    str     x2, [sp, #L]
+    mov     x21, x3
+    mov     x22, x4
+    mov     x23, x5
+    mov     x24, x6
+    mov     x25, x7
+    add     x26, x7, x8
+    ldr     x9, [x21, #NodeAction_arg]      /* the operation's kind and topic; the fork */
+    lsr     x10, x9, #16
+    cmp     x10, #FORK_FULU
+    b.hi    98f
+    str     x10, [sp, #(L + 24)]
+    and     x0, x9, #255
+    cmp     x0, #API_OP_SUBMIT_POOL_BLS_TO_EXECUTION_CHANGE
+    cset    x9, eq
+    str     x9, [sp, #(L + 40)]
+    bl      node_submit_topic
+    cbz     x0, 98f
+    str     x0, [sp, #(L + 16)]
+    bl      node_pool_kind
+    str     x0, [sp, #(L + 8)]
+    cbz     x22, 98f
+    cbz     x23, 98f
+    add     x9, x25, #NodeEvent_chunk       /* the records' ByteList */
+    add     x10, x9, #24
+    cmp     x10, x26
+    b.hi    97f
+    sub     x11, x26, x9
+    mov     x12, #24
+    stp     x11, x12, [x9]
+    str     xzr, [x9, #16]
+    mov     x27, x10
+    str     xzr, [sp, #(L + 32)]
+    ldp     x9, x10, [x23, #8]              /* the text */
+    add     x0, x23, x9
+    add     x28, x0, x10
+    ldr     x9, [sp, #(L + 40)]
+    cbnz    x9, 20f
+    mov     x1, x28                         /* one operation: the whole text */
+    ldp     x2, x3, [sp, #(L + 8)]
+    ldr     x3, [sp, #(L + 24)]
+    add     x4, sp, #(L + 152)
+    bl      node_submit_decode
+    cmp     x0, #1
+    b.eq    90f
+    b.hi    97f
+    mov     x9, #1
+    str     x9, [sp, #(L + 32)]
+    b       30f
+20: ldr     x9, [sp, #(L + 24)]             /* a JSON array, from capella */
+    cmp     x9, #FORK_CAPELLA
+    b.lo    90f
+    bl      submit_ws
+    cmp     x0, x28
+    b.hs    90f
+    ldrb    w9, [x0]
+    cmp     w9, #'['
+    b.ne    90f
+    add     x0, x0, #1
+    bl      submit_ws
+    cmp     x0, x28
+    b.hs    90f
+    ldrb    w9, [x0]
+    cmp     w9, #']'
+    b.ne    23f
+    add     x0, x0, #1
+    b       28f
+23: str     x0, [sp, #(L + 56)]             /* an item: to a , or ] outside strings, arrays and objects */
+    mov     x10, #0
+24: cmp     x0, x28
+    b.hs    90f
+    ldrb    w9, [x0]
+    cmp     w9, #'"'
+    b.ne    25f
+253: add    x0, x0, #1
+    cmp     x0, x28
+    b.hs    90f
+    ldrb    w9, [x0]
+    cmp     w9, #'\\'
+    b.ne    252f
+    add     x0, x0, #1
+    b       253b
+252: cmp    w9, #'"'
+    b.ne    253b
+    add     x0, x0, #1
+    b       24b
+25: cmp     w9, #'{'
+    b.eq    251f
+    cmp     w9, #'['
+    b.ne    26f
+251:
+    add     x10, x10, #1
+    add     x0, x0, #1
+    b       24b
+26: cmp     w9, #'}'
+    b.eq    261f
+    cmp     w9, #']'
+    b.ne    27f
+261:
+    cbz     x10, 271f
+    sub     x10, x10, #1
+    add     x0, x0, #1
+    b       24b
+27: cmp     w9, #','
+    b.ne    272f
+    cbz     x10, 271f
+272: add    x0, x0, #1
+    b       24b
+271: str    x0, [sp, #(L + 48)]
+    mov     x1, x0
+    ldr     x0, [sp, #(L + 56)]
+    ldr     x2, [sp, #(L + 8)]
+    ldr     x3, [sp, #(L + 24)]
+    add     x4, sp, #(L + 152)
+    bl      node_submit_decode
+    cmp     x0, #1
+    b.eq    90f
+    b.hi    97f
+    ldr     x9, [sp, #(L + 32)]
+    add     x9, x9, #1
+    str     x9, [sp, #(L + 32)]
+    ldr     x0, [sp, #(L + 48)]
+    ldrb    w9, [x0]
+    add     x0, x0, #1
+    cmp     w9, #','
+    b.eq    23b
+    cmp     w9, #']'
+    b.ne    90f
+28: bl      submit_ws                       /* then only white space */
+    cmp     x0, x28
+    b.ne    90f
+30: add     x9, x25, #NodeEvent_chunk       /* the records: their bytes, their count */
+    sub     x10, x27, x9
+    str     x10, [x9]
+    sub     x10, x10, #24
+    str     x10, [x9, #16]
+    ldr     x10, [sp, #(L + 32)]
+    str     x10, [x25, #NodeEvent_index]
+    sub     x9, x27, x25
+    str     x9, [x25]
+    ldr     x9, [sp, #L]                    /* seen has a key free for each operation */
+    ldp     x10, x11, [x9, #Seen_keys]
+    ldr     x12, [x9, #Seen_bits]
+    sub     x12, x12, x10
+    lsr     x12, x12, #5
+    sub     x12, x12, x11
+    ldr     x10, [sp, #(L + 32)]
+    cmp     x12, x10
+    b.lo    97f
+    ldr     x9, [sp, #L]                    /* the NodeGossip of the operations */
+    str     x9, [sp, #(L + 64 + NodeGossip_seen)]
+    str     x20, [sp, #(L + 64 + NodeGossip_store)]
+    ldr     x9, [x19, #Node_time_ms]
+    str     x9, [sp, #(L + 64 + NodeGossip_time_ms)]
+    ldr     x9, [sp, #(L + 16)]
+    str     x9, [sp, #(L + 64 + NodeGossip_topic)]
+    str     xzr, [sp, #(L + 64 + NodeGossip_subnet)]
+    str     x22, [sp, #(L + 64 + NodeGossip_head)]
+    str     xzr, [sp, #(L + 64 + NodeGossip_proposer)]
+    str     xzr, [sp, #(L + 64 + NodeGossip_justified)]
+    str     xzr, [sp, #(L + 64 + NodeGossip_settings)]
+    add     x9, x19, #Node_config
+    str     x9, [sp, #(L + 64 + NodeGossip_config)]
+    add     x27, x25, #(NodeEvent_chunk + 24)
+    ldr     x28, [sp, #(L + 32)]
+31: cbz     x28, 39f
+    ldr     x15, [sp, #(L + 24)]
+    add     x0, sp, #(L + 64)
+    add     x1, x27, #8
+    mov     x2, x24
+    mov     x3, x27
+    add     x4, sp, #(L + 280)
+    add     x5, sp, #(L + 312)
+    FORK_CALL node_gossip
+    cbnz    x0, 99f
+    ldr     x9, [x27, #8]
+    add     x27, x27, #8
+    add     x27, x27, x9
+    sub     x28, x28, #1
+    b       31b
+39: mov     x0, #LANTERN_OK
+    LEAVE 320
+90: mov     x9, #LANTERN_INVALID_ENCODING   /* a body that is no such text */
+    str     x9, [x25, #NodeEvent_result]
+    mov     x9, #NODE_EV_WORK_DONE_SIZE
+    str     x9, [x25]
+    mov     x0, #LANTERN_OK
+    LEAVE 320
+97: mov     x0, #LANTERN_BUFFER_TOO_SMALL
+    LEAVE 320
+98: mov     x0, #LANTERN_INVALID_EVENT
+99: LEAVE 320
+END_FUNCTION node_api_submit_run
+
+/* L0: x0 = x0 past the JSON white space (space, tab, LF, CR) before x28. Uses x9. */
+LOCAL_FUNCTION submit_ws
+    UNWIND_END_PROLOGUE
+1:  cmp     x0, x28
+    b.hs    9f
+    ldrb    w9, [x0]
+    cmp     w9, #' '
+    ccmp    w9, #9, #4, ne
+    ccmp    w9, #10, #4, ne
+    ccmp    w9, #13, #4, ne
+    b.ne    9f
+    add     x0, x0, #1
+    b       1b
+9:  ret
+END_FUNCTION submit_ws
 
     RODATA
     .p2align 3

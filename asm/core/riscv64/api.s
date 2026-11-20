@@ -1149,7 +1149,23 @@ LOCAL_FUNCTION api_body
     call    api_code_text
     API_LIT api_e_end
     UNFRAME 16
-1:  li      t0, API_OP_GET_NETWORK_IDENTITY
+1:  li      t0, API_OP_SUBMIT_POOL_BLS_TO_EXECUTION_CHANGE
+    bne     s10, t0, 11f
+    # {"code":400,"message":"BAD_REQUEST","failures":[…]}: s4 the event of the work
+    API_LIT api_e_code
+    ld      t0, 0(sp)
+    ld      a0, 0(t0)
+    call    api_dec
+    API_LIT api_e_message
+    ld      t0, 0(sp)
+    ld      a0, 0(t0)
+    call    api_code
+    li      a1, 24
+    call    api_code_text
+    API_LIT api_f_list
+    call    api_failures
+    UNFRAME 16
+11: li      t0, API_OP_GET_NETWORK_IDENTITY
     bne     s10, t0, 2f
     API_LIT api_i_peer_id
     addi    a0, s4, ApiView_peer_id
@@ -1859,6 +1875,17 @@ LOCAL_FUNCTION node_api_event
     beq     a3, t0, 63f
     li      t0, API_OP_EVENTSTREAM
     beq     a3, t0, 61f
+    li      t0, API_OP_GET_POOL_VOLUNTARY_EXITS
+    beq     a3, t0, 68f
+    li      t0, API_OP_GET_POOL_PROPOSER_SLASHINGS
+    beq     a3, t0, 68f
+    li      t0, API_OP_GET_POOL_ATTESTER_SLASHINGS_V2
+    beq     a3, t0, 68f
+    li      t0, API_OP_GET_POOL_BLS_TO_EXECUTION_CHANGES
+    beq     a3, t0, 68f
+    mv      a0, a3
+    call    node_submit_topic
+    bnez    a0, 60f
     addi    t0, a3, -API_OP_GET_STATE_VALIDATORS   # the six validator operations and getEpochCommittees: a state
     li      t1, API_OP_GET_EPOCH_COMMITTEES - API_OP_GET_STATE_VALIDATORS
     bleu    t0, t1, 66f
@@ -1894,6 +1921,21 @@ LOCAL_FUNCTION node_api_event
     li      t1, API_OP_GET_STATE_VALIDATOR
     bne     t0, t1, 64f
     j       67f
+68: mv      a0, s9                          # a pool GET: a stream of the pool
+    mv      a1, s7
+    mv      a2, s3
+    mv      a3, s8
+    call    node_api_pool_stream
+    j       90f
+60: mv      a0, s9                          # a pool POST: a work checks its operations
+    mv      a1, s7
+    mv      a2, s3
+    mv      a3, s4
+    mv      a4, s8
+    call    node_api_submit
+    mv      a2, a0
+    bnez    a0, 80f
+    j       90f
 61: mv      a0, s9                          # eventstream: an entry, and the head
     mv      a1, s7
     mv      a2, s3
@@ -2962,7 +3004,7 @@ END_FUNCTION node_api_lookup_run
 LOCAL_FUNCTION node_api_free
     UNWIND_END_PROLOGUE
     PART    t0, t1, s1, Node_api
-    ld      t2, Node_p2p_out(s1)
+    LDQ     t2, s1, Node_pool
     LDQ     t3, s1, Node_api
     sub     t2, t2, t3
     li      t3, NodeApi__mem
@@ -3486,6 +3528,8 @@ LOCAL_FUNCTION node_api_head_events
     STQ     t0, s1, Node_event_slot
     ADDQ    t0, s1, Node_event_head
     COPY32  t0, s3
+    ld      a0, NodeBlock_state_id(s3)      # the pool's checks at the new head
+    call    node_pool_checks
     li      a0, API_TOPIC_HEAD
     call    node_api_subscribed
     beqz    a0, 5f
@@ -3818,7 +3862,16 @@ LOCAL_FUNCTION node_api_chunk_done
     addi    a1, s3, (NodeEvent_api + 16)
     li      a2, JSON_CURSOR_SIZE
     call    lantern_copy
-    ld      a1, (NodeEvent_api_bytes + 16)(s3)  # the chunk in a SEND
+    li      t0, API_STREAM_ITEM_DONE        # API_STREAM_ITEM_DONE: the pool stream's next entry
+    and     t0, s8, t0
+    beqz    t0, 1f
+    li      t0, ~API_STREAM_ITEM_DONE
+    and     s8, s8, t0
+    sd      s8, NodeApi_flags(s4)
+    mv      a0, s4
+    call    node_api_pool_advance
+    ld      s8, NodeApi_flags(s4)
+1:  ld      a1, (NodeEvent_api_bytes + 16)(s3)  # the chunk in a SEND
     addi    a1, a1, (56 + 7)
     andi    a1, a1, -8
     li      a0, NODE_ACT_API_SEND
@@ -3907,6 +3960,8 @@ LOCAL_FUNCTION api_stream_head
     li      t1, API_OP_GET_BLOCK_V2
     beq     t0, t1, 21f
     li      t1, API_OP_GET_STATE_V2
+    beq     t0, t1, 21f
+    li      t1, API_OP_GET_POOL_ATTESTER_SLASHINGS_V2
     bne     t0, t1, 22f
 21: API_LIT api_version
     ld      a0, NodeApi_fork(s4)
@@ -3960,7 +4015,18 @@ END_FUNCTION api_hex4
  */
 LOCAL_FUNCTION api_stream_json
     FRAME 0
-    ld      t0, NodeApi_op(s4)              # the validator streams: their items, of the state s3
+    ld      t0, NodeApi_op(s4)              # a pool stream: its entries
+    li      t1, API_OP_GET_POOL_VOLUNTARY_EXITS
+    beq     t0, t1, 4f
+    li      t1, API_OP_GET_POOL_PROPOSER_SLASHINGS
+    beq     t0, t1, 4f
+    li      t1, API_OP_GET_POOL_ATTESTER_SLASHINGS_V2
+    beq     t0, t1, 4f
+    li      t1, API_OP_GET_POOL_BLS_TO_EXECUTION_CHANGES
+    bne     t0, t1, 3f
+4:  call    api_pool_json
+    UNFRAME 0
+3:  ld      t0, NodeApi_op(s4)              # the validator streams: their items, of the state s3
     li      t1, API_OP_GET_BLOCK_V2
     beq     t0, t1, 1f
     li      t1, API_OP_GET_STATE_V2
@@ -4031,6 +4097,15 @@ LOCAL_FUNCTION node_api_chunk_run
     beq     t0, t1, 1f
     li      t1, API_OP_GET_STATE_V2
     beq     t0, t1, 1f
+    li      t2, 3                           # a pool stream (3): data 0 at its end
+    li      t1, API_OP_GET_POOL_VOLUNTARY_EXITS
+    beq     t0, t1, 103f
+    li      t1, API_OP_GET_POOL_PROPOSER_SLASHINGS
+    beq     t0, t1, 103f
+    li      t1, API_OP_GET_POOL_ATTESTER_SLASHINGS_V2
+    beq     t0, t1, 103f
+    li      t1, API_OP_GET_POOL_BLS_TO_EXECUTION_CHANGES
+    beq     t0, t1, 103f
     li      t1, API_OP_GET_STATE_VALIDATOR  # a validator stream: a state
     beq     t0, t1, 98f
     addi    t0, t0, -API_OP_GET_STATE_VALIDATORS
@@ -4057,14 +4132,18 @@ LOCAL_FUNCTION node_api_chunk_run
     li      t1, NODE_API_FIRST_ROOM
     beqz    t2, 3f
     ld      t2, (L + 40)(sp)                # a validator stream: an item in every chunk
-    bnez    t2, 3f
-    li      t1, 64
+    beqz    t2, 104f
+    li      t3, 3
+    bne     t2, t3, 3f
+104: li     t1, 64
 3:  bltu    t0, t1, 97f
     addi    s10, s5, (NodeEvent_api_bytes + 24)
     add     t0, s10, t0
     sd      t0, (L + 0)(sp)
     ld      t1, (L + 40)(sp)
     beqz    t1, 102f
+    li      t2, 3
+    beq     t1, t2, 5f
     ld      t1, (L + 48)(sp)                # the state at the entry's slot
     ld      t1, NODE_STATE_SLOT(t1)
     ld      t2, NodeApi_slot(s4)
@@ -4104,6 +4183,8 @@ LOCAL_FUNCTION node_api_chunk_run
     li      s9, 0
     ld      t0, (L + 40)(sp)                # a validator stream: its selection; getEpochCommittees its count; then api_stream_json reads the state
     beqz    t0, 6f
+    li      t1, 3
+    beq     t0, t1, 6f
     ld      a0, (L + 56)(sp)
     ld      a1, (L + 48)(sp)
     li      t1, 2
@@ -4190,8 +4271,20 @@ LOCAL_FUNCTION node_api_chunk_run
     addi    s8, s8, -7                      # room for CRLF and the last chunk
     ld      t0, (L + 40)(sp)
     beqz    t0, 35f
+    li      t1, 3
+    bne     t0, t1, 38f
+    ld      t0, NodeApi_op(s4)              # a pool stream: {"data":[, getPoolAttesterSlashingsV2 {"version":"<fork>","data":[
+    li      t1, API_OP_GET_POOL_ATTESTER_SLASHINGS_V2
+    bne     t0, t1, 39f
+    API_LIT api_j_version
+    ld      a0, NodeApi_fork(s4)
+    call    api_fork_name
+    API_LIT api_p_version
+    j       36f
+39: API_LIT api_p_data
+    j       36f
     /* the validator streams: {"execution_optimistic":…,"finalized":…,"data":[ */
-    API_LIT api_v_open
+38: API_LIT api_v_open
     ld      a0, (NodeEvent_api + 8)(s5)
     srli    a0, a0, 8
     andi    a0, a0, 1
@@ -4331,6 +4424,881 @@ LOCAL_FUNCTION node_api_chunk_run
 98: li      a0, LANTERN_INVALID_EVENT
     LEAVE 80
 END_FUNCTION node_api_chunk_run
+
+# ---------------------------------------------------------------- The pools (beacon-api.md, node.md)
+
+/* a0 = the gossip topic of the pool POST a0, or 0. Uses t0, t1. */
+LOCAL_FUNCTION node_submit_topic
+    UNWIND_END_PROLOGUE
+    mv      t0, a0
+    li      a0, GOSSIP_VOLUNTARY_EXIT
+    li      t1, API_OP_SUBMIT_POOL_VOLUNTARY_EXIT
+    beq     t0, t1, 9f
+    li      a0, GOSSIP_PROPOSER_SLASHING
+    li      t1, API_OP_SUBMIT_POOL_PROPOSER_SLASHINGS
+    beq     t0, t1, 9f
+    li      a0, GOSSIP_ATTESTER_SLASHING
+    li      t1, API_OP_SUBMIT_POOL_ATTESTER_SLASHINGS_V2
+    beq     t0, t1, 9f
+    li      a0, GOSSIP_BLS_TO_EXECUTION_CHANGE
+    li      t1, API_OP_SUBMIT_POOL_BLS_TO_EXECUTION_CHANGE
+    beq     t0, t1, 9f
+    li      a0, 0
+9:  ret
+END_FUNCTION node_submit_topic
+
+/* a0 = the lantern_node_json kind of the pool operation of the gossip topic a0. Uses t0. */
+LOCAL_FUNCTION node_pool_kind
+    UNWIND_END_PROLOGUE
+    li      t0, GOSSIP_BLS_TO_EXECUTION_CHANGE
+    beq     a0, t0, 1f
+    addi    a0, a0, -(GOSSIP_VOLUNTARY_EXIT - NODE_JSON_EXIT)
+    ret
+1:  li      a0, NODE_JSON_BLS_CHANGE
+    ret
+END_FUNCTION node_pool_kind
+.if GOSSIP_PROPOSER_SLASHING - GOSSIP_VOLUNTARY_EXIT != NODE_JSON_PROPOSER_SLASHING - NODE_JSON_EXIT || GOSSIP_ATTESTER_SLASHING - GOSSIP_VOLUNTARY_EXIT != NODE_JSON_ATTESTER_SLASHING - NODE_JSON_EXIT
+.error "node_pool_kind: the kinds follow the topics"
+.endif
+
+/*
+ * a0 = the index of the first pool entry from the index a0 that the pool GET a1 of the fork a2
+ * answers (node.md, NODE_EV_API): of its topic, and for getPoolAttesterSlashingsV2 of that
+ * fork's AttesterSlashing type; else 2^64 - 1. a1 = the entry. s1 the node. Uses t0-t4, a7.
+ */
+LOCAL_FUNCTION node_pool_next
+    UNWIND_END_PROLOGUE
+    li      t0, GOSSIP_VOLUNTARY_EXIT
+    li      t1, API_OP_GET_POOL_VOLUNTARY_EXITS
+    beq     a1, t1, 1f
+    li      t0, GOSSIP_PROPOSER_SLASHING
+    li      t1, API_OP_GET_POOL_PROPOSER_SLASHINGS
+    beq     a1, t1, 1f
+    li      t0, GOSSIP_ATTESTER_SLASHING
+    li      t1, API_OP_GET_POOL_ATTESTER_SLASHINGS_V2
+    beq     a1, t1, 1f
+    li      t0, GOSSIP_BLS_TO_EXECUTION_CHANGE
+1:  li      t1, FORK_ELECTRA
+    sltu    t4, a2, t1
+    xori    t4, t4, 1
+    PART    t1, t2, s1, Node_pool
+    li      t3, NodePool__mem
+    mul     t3, a0, t3
+    add     t1, t1, t3
+2:  bgeu    a0, t2, 8f
+    ld      t3, NodePool_topic(t1)
+    bne     t3, t0, 3f
+    li      t3, GOSSIP_ATTESTER_SLASHING
+    bne     t0, t3, 4f
+    ld      t3, NodePool_fork(t1)
+    li      a7, FORK_ELECTRA
+    sltu    t3, t3, a7
+    xori    t3, t3, 1
+    beq     t3, t4, 4f
+3:  addi    t1, t1, NodePool__mem
+    addi    a0, a0, 1
+    j       2b
+4:  mv      a1, t1
+    ret
+8:  li      a0, -1
+    ret
+END_FUNCTION node_pool_next
+
+/*
+ * (connection a0, route a1, flags a2, view a3): a stream of a pool GET (node.md, NODE_EV_API):
+ * fork the store's; slot the first entry it answers, data its bytes, sent its fork; data 0 with
+ * none. flags: API_STREAM_CLOSE and API_STREAM_HTTP10. Locals: the connection, the route, the
+ * flags, the fork, the entry's index and address.
+ */
+LOCAL_FUNCTION node_api_pool_stream
+    FRAME 48
+    sd      a0, 0(sp)
+    sd      a1, 8(sp)
+    sd      a2, 16(sp)
+    ld      t0, ApiView_fork(a3)
+    sd      t0, 24(sp)
+    call    node_api_new
+    sd      a0, 32(sp)
+    sd      a1, 40(sp)
+    mv      a0, a1
+    li      a1, NodeApi__mem
+    call    lantern_zero
+    ld      t0, 40(sp)
+    ld      t1, 0(sp)
+    sd      t1, NodeApi_connection(t0)
+    ld      t1, 8(sp)
+    ld      a1, ApiRoute_op(t1)
+    sd      a1, NodeApi_op(t0)
+    ld      t1, 16(sp)
+    sd      t1, NodeApi_flags(t0)
+    ld      a2, 24(sp)
+    sd      a2, NodeApi_fork(t0)
+    li      a0, 0
+    call    node_pool_next
+    ld      t0, 40(sp)
+    li      t1, -1
+    beq     a0, t1, 1f
+    sd      a0, NodeApi_slot(t0)
+    ld      t1, NodePool_data_id(a1)
+    sd      t1, NodeApi_data(t0)
+    ld      t1, NodePool_fork(a1)
+    sd      t1, NodeApi_sent(t0)
+1:  ld      a0, 32(sp)
+    ld      a1, 40(sp)
+    call    node_api_chunk_work
+    UNFRAME 48
+END_FUNCTION node_api_pool_stream
+
+/*
+ * The pool stream of the NodeApi entry a0 goes to its next entry after slot (node.md,
+ * NODE_WORK_API_CHUNK): its slot, data and sent, a zero cursor; data 0 with none. Bytes it owned
+ * get a NODE_ACT_BYTES_FREE, and API_STREAM_OWN clears. Locals: the entry, the old data, the flags.
+ */
+LOCAL_FUNCTION node_api_pool_advance
+    FRAME 32
+    sd      a0, 0(sp)
+    ld      t0, NodeApi_data(a0)
+    sd      t0, 8(sp)
+    ld      t0, NodeApi_flags(a0)
+    sd      t0, 16(sp)
+    ld      a1, NodeApi_op(a0)
+    ld      a2, NodeApi_fork(a0)
+    ld      t0, NodeApi_slot(a0)
+    addi    a0, t0, 1
+    call    node_pool_next
+    ld      t0, 0(sp)
+    li      t2, 0
+    li      t1, -1
+    beq     a0, t1, 1f
+    sd      a0, NodeApi_slot(t0)
+    ld      t1, NodePool_fork(a1)
+    sd      t1, NodeApi_sent(t0)
+    ld      t2, NodePool_data_id(a1)
+1:  sd      t2, NodeApi_data(t0)
+    ld      t1, NodeApi_flags(t0)
+    andi    t1, t1, ~API_STREAM_OWN
+    sd      t1, NodeApi_flags(t0)
+    addi    a0, t0, NodeApi_cursor
+    li      a1, JSON_CURSOR_SIZE
+    call    lantern_zero
+    ld      t0, 16(sp)                      # API_STREAM_OWN: the old bytes go
+    andi    t0, t0, API_STREAM_OWN
+    beqz    t0, 9f
+    li      a0, NODE_ACT_BYTES_FREE
+    ld      a1, 8(sp)
+    li      a2, 0
+    call    node_ids
+9:  UNFRAME 32
+END_FUNCTION node_api_pool_advance
+
+/*
+ * A pool stream's JSON, as api_stream_json: with the bytes s3, the JSON of the pool entry from
+ * the cursor at NodeEvent_api + 16, by lantern_node_json of the fork in sent (NodeEvent_api) and
+ * the kind of the GET, after , when API_STREAM_ITEMS is set and the cursor is at its start; once
+ * whole, API_STREAM_ITEMS and API_STREAM_ITEM_DONE in the event. With s3 = 0: ]}. a0 = 1 when the
+ * answer is whole, 0 when more is to come, 2 for bytes that are no encoding.
+ */
+LOCAL_FUNCTION api_pool_json
+    FRAME 0
+    bnez    s3, 1f
+    API_LIT api_v_end
+    li      a0, 1
+    UNFRAME 0
+1:  ld      t0, (NodeEvent_api + 16)(s5)    # the cursor's depth: 0 before the first byte
+    bnez    t0, 2f
+    ld      t0, (NodeEvent_api + 8)(s5)
+    li      t1, API_STREAM_ITEMS
+    and     t0, t0, t1
+    beqz    t0, 2f
+    API_LIT api_p_comma
+2:  ld      t0, NodeApi_op(s4)              # the kind of the GET's operation
+    li      a0, NODE_JSON_EXIT
+    li      t1, API_OP_GET_POOL_VOLUNTARY_EXITS
+    beq     t0, t1, 3f
+    li      a0, NODE_JSON_PROPOSER_SLASHING
+    li      t1, API_OP_GET_POOL_PROPOSER_SLASHINGS
+    beq     t0, t1, 3f
+    li      a0, NODE_JSON_ATTESTER_SLASHING
+    li      t1, API_OP_GET_POOL_ATTESTER_SLASHINGS_V2
+    beq     t0, t1, 3f
+    li      a0, NODE_JSON_BLS_CHANGE
+3:  addi    t0, s5, NodeEvent_api_bytes     # the ByteList: its room to s8 - 1, its bytes to s6
+    addi    t1, s8, -1
+    sub     t1, t1, t0
+    sd      t1, 0(t0)
+    li      t1, 24
+    sd      t1, 8(t0)
+    sub     t1, s6, s10
+    sd      t1, 16(t0)
+    mv      a1, s3
+    addi    a2, s5, (NodeEvent_api + 16)
+    addi    a3, s5, NodeEvent_api_bytes
+    ld      t6, NodeEvent_api(s5)
+    FORK_CALL node_json
+    ld      t0, (NodeEvent_api_bytes + 16)(s5)
+    add     s6, s10, t0
+    li      t0, LANTERN_JSON_MORE
+    beq     a0, t0, 8f
+    bnez    a0, 7f
+    ld      t0, (NodeEvent_api + 8)(s5)     # whole: the entry is done
+    li      t1, API_STREAM_ITEMS | API_STREAM_ITEM_DONE
+    or      t0, t0, t1
+    sd      t0, (NodeEvent_api + 8)(s5)
+8:  li      a0, 0
+    UNFRAME 0
+7:  li      a0, 2
+    UNFRAME 0
+END_FUNCTION api_pool_json
+
+/*
+ * The failures of the event s4 of a NODE_WORK_API_SUBMIT: {"index":<i>,"message":"REJECT"} for
+ * each record of LANTERN_GOSSIP_REJECT, with , between, then ]}. Locals: the record, its index,
+ * the failures written.
+ */
+LOCAL_FUNCTION api_failures
+    FRAME 32
+    ld      t0, (NodeEvent_chunk + 8)(s4)
+    addi    t1, s4, NodeEvent_chunk
+    add     t0, t1, t0
+    sd      t0, 0(sp)
+    sd      zero, 8(sp)
+    sd      zero, 16(sp)
+1:  ld      t0, 8(sp)
+    ld      t1, NodeEvent_index(s4)
+    bgeu    t0, t1, 9f
+    ld      t0, 0(sp)
+    ld      t1, 0(t0)
+    li      t2, LANTERN_GOSSIP_REJECT
+    bne     t1, t2, 3f
+    ld      t0, 16(sp)
+    beqz    t0, 2f
+    API_LIT api_p_comma
+2:  API_LIT api_f_index
+    ld      a0, 8(sp)
+    call    api_dec
+    API_LIT api_f_reject
+    ld      t0, 16(sp)
+    addi    t0, t0, 1
+    sd      t0, 16(sp)
+3:  ld      t0, 0(sp)                       # the next record: its code, then its ByteList
+    ld      t1, 8(t0)
+    addi    t0, t0, 8
+    add     t0, t0, t1
+    sd      t0, 0(sp)
+    ld      t0, 8(sp)
+    addi    t0, t0, 1
+    sd      t0, 8(sp)
+    j       1b
+9:  API_LIT api_v_end
+    UNFRAME 32
+END_FUNCTION api_failures
+
+/*
+ * (connection a0, route a1, flags a2, request a3, view a4) -> a0: a pool POST (node.md,
+ * NODE_EV_API): a NODE_ACT_BYTES_PUT of the body and a NODE_WORK_API_SUBMIT; 0 once queued, else
+ * the status of the error to answer. Locals: the connection, the flags, the route, the view, the
+ * head's post-state, a ByteList head whose offset reaches the body.
+ */
+LOCAL_FUNCTION node_api_submit
+    FRAME 64
+    sd      a0, 0(sp)
+    sd      a2, 8(sp)
+    sd      a1, 16(sp)
+    sd      a4, 24(sp)
+    ld      t0, ApiRoute_op(a1)             # submitPoolAttesterSlashingsV2: the AttesterSlashing type of the store's fork
+    li      t1, API_OP_SUBMIT_POOL_ATTESTER_SLASHINGS_V2
+    bne     t0, t1, 1f
+    li      t2, FORK_ELECTRA
+    ld      t0, ApiRoute_consensus_version(a1)
+    sltu    t0, t0, t2
+    ld      t1, ApiView_fork(a4)
+    sltu    t1, t1, t2
+    bne     t0, t1, 80f
+1:  ld      t0, (HttpRequest_body + 8)(a3)  # a body of no bytes: 400
+    beqz    t0, 80f
+    ld      t1, HttpRequest_body(a3)
+    add     t1, a3, t1
+    addi    t2, sp, 40
+    sub     t1, t1, t2
+    sd      t0, 40(sp)
+    sd      t1, 48(sp)
+    sd      t0, 56(sp)
+    addi    a0, s1, Node_head_root          # the head's post-state, else 500
+    call    node_find_block
+    li      t0, -1
+    beq     a0, t0, 81f
+    ld      t0, NodeBlock_state_id(a1)
+    beqz    t0, 81f
+    sd      t0, 32(sp)
+    addi    a0, sp, 40
+    call    node_put
+    mv      a3, a0
+    li      a0, NODE_WORK_API_SUBMIT
+    ld      a1, 32(sp)
+    li      a2, 0
+    ld      a4, 0(sp)
+    ld      t0, 16(sp)
+    ld      a5, ApiRoute_op(t0)
+    ld      t0, 8(sp)
+    slli    t0, t0, 8
+    or      a5, a5, t0
+    ld      t0, 24(sp)
+    ld      t0, ApiView_fork(t0)
+    slli    t0, t0, 16
+    or      a5, a5, t0
+    call    node_work
+    li      a0, 0
+    UNFRAME 64
+80: li      a0, 400
+    UNFRAME 64
+81: li      a0, 500
+    UNFRAME 64
+END_FUNCTION node_api_submit
+
+/*
+ * a0 = 0 when the NODE_EV_WORK_DONE a0 of a1 bytes of a valid NODE_WORK_API_SUBMIT holds its
+ * records inside it (node.md): a ByteList at NodeEvent_chunk of offset 24, and NodeEvent_index
+ * records in its bytes, each a code and a ByteList of offset 24 whose size is a multiple of 8;
+ * else 1. Uses a1-a6.
+ */
+LOCAL_FUNCTION node_submit_check
+    UNWIND_END_PROLOGUE
+    li      a2, NodeEvent_chunk + 24
+    bltu    a1, a2, 8f
+    ld      a2, (NodeEvent_chunk + 8)(a0)
+    li      a3, 24
+    bne     a2, a3, 8f
+    ld      a2, (NodeEvent_chunk + 16)(a0)
+    addi    a3, a1, -(NodeEvent_chunk + 24)
+    bgtu    a2, a3, 8f
+    addi    a3, a0, NodeEvent_chunk + 24    # the first record, and the end
+    add     a4, a3, a2
+    ld      a5, NodeEvent_index(a0)
+1:  beqz    a5, 7f
+    sub     a6, a4, a3
+    li      a2, 32
+    bltu    a6, a2, 8f
+    addi    a6, a6, -8
+    ld      a2, 8(a3)                       # size, offset, count
+    bgtu    a2, a6, 8f
+    li      a1, 24
+    bltu    a2, a1, 8f
+    andi    a6, a2, 7
+    bnez    a6, 8f
+    ld      a6, 16(a3)
+    bne     a6, a1, 8f
+    ld      a6, 24(a3)
+    addi    a1, a2, -24
+    bgtu    a6, a1, 8f
+    addi    a3, a3, 8
+    add     a3, a3, a2
+    addi    a5, a5, -1
+    j       1b
+7:  li      a0, 0
+    ret
+8:  li      a0, 1
+    ret
+END_FUNCTION node_submit_check
+
+/*
+ * The NODE_EV_WORK_DONE a0 of a NODE_WORK_API_SUBMIT (node.md, lantern_node_step): the body's
+ * bytes go; each valid operation joins the pool, goes out on its topic with NODE_FLAG_SUBSCRIBED,
+ * and an attester slashing to fork choice; then the answer to the connection. s1 the node, s2 the
+ * store, s6 the actions. s3 the event, s4 the record, s7 the records left, s8 the failures, s9 the
+ * topic, s10 the new id. Locals: L 1 when the pool keeps it, L+8 the answer's flags.
+ */
+LOCAL_FUNCTION node_api_submit_done
+    ENTER 16
+    mv      s3, a0
+    li      a0, NODE_ACT_BYTES_FREE
+    ld      a1, NodeAction_data(s3)
+    li      a2, 0
+    call    node_ids
+    ld      t0, NodeAction_arg(s3)          # the answer's flags: API_STREAM_CLOSE (1), API_STREAM_HTTP10 (2)
+    srli    t0, t0, 8
+    li      t1, API_R_CLOSE
+    andi    t2, t0, API_STREAM_CLOSE
+    bnez    t2, 1f
+    li      t1, 0
+    andi    t2, t0, API_STREAM_HTTP10
+    beqz    t2, 1f
+    li      t1, API_R_KEEP
+1:  sd      t1, (L + 8)(sp)
+    ld      a0, NodeAction_arg(s3)
+    andi    a0, a0, 255
+    call    node_submit_topic
+    mv      s9, a0
+    ld      t0, NodeEvent_result(s3)
+    bnez    t0, 80f
+    li      s8, 0
+    ld      s7, NodeEvent_index(s3)
+    ld      t0, (NodeEvent_chunk + 8)(s3)
+    addi    s4, s3, NodeEvent_chunk
+    add     s4, s4, t0
+2:  beqz    s7, 70f
+    ld      t0, 0(s4)                       # its code
+    li      t1, LANTERN_GOSSIP_REJECT
+    bne     t0, t1, 21f
+    addi    s8, s8, 1
+21: bnez    t0, 6f
+    addi    a0, s4, 8                       # valid: its bytes to a new id, kept by the pool when it has room
+    call    node_put
+    mv      s10, a0
+    mv      a0, s9
+    mv      a1, s10
+    ld      a2, 24(s4)
+    ld      a3, NodeAction_arg(s3)
+    srli    a3, a3, 16
+    call    node_pool_add
+    sd      a0, (L + 0)(sp)
+    ld      t0, Node_flags(s1)              # NODE_FLAG_SUBSCRIBED: out on its topic
+    andi    t0, t0, NODE_FLAG_SUBSCRIBED
+    beqz    t0, 3f
+    mv      a0, s9
+    addi    a1, s4, 8
+    call    node_publish
+3:  li      t0, GOSSIP_ATTESTER_SLASHING    # an attester slashing: on_attester_slashing with the justified root's state
+    bne     s9, t0, 4f
+    addi    a0, s2, Store_justified_checkpoint + 8
+    call    node_find_block
+    li      t0, -1
+    beq     a0, t0, 4f
+    ld      t0, NodeBlock_status(a1)
+    li      t1, NODE_BLOCK_IMPORTED
+    bne     t0, t1, 4f
+    ld      a1, NodeBlock_state_id(a1)
+    beqz    a1, 4f
+    li      a0, NODE_WORK_ATTESTER_SLASHING
+    li      a2, 0
+    mv      a3, s10
+    li      a4, 0
+    li      a5, 0
+    call    node_work
+    j       6f
+4:  ld      t0, (L + 0)(sp)                 # bytes no entry keeps and no work reads go
+    bnez    t0, 6f
+    li      a0, NODE_ACT_BYTES_FREE
+    mv      a1, s10
+    li      a2, 0
+    call    node_ids
+6:  ld      t0, 8(s4)
+    addi    s4, s4, 8
+    add     s4, s4, t0
+    addi    s7, s7, -1
+    j       2b
+70: ld      a0, NodeAction_target(s3)       # the answer: 200, or 400 with the failures
+    beqz    s8, 71f
+    ld      t0, NodeAction_arg(s3)
+    andi    t0, t0, 255
+    li      t1, API_OP_SUBMIT_POOL_BLS_TO_EXECUTION_CHANGE
+    bne     t0, t1, 80f
+    mv      a1, s3
+    li      a2, 400
+    li      a3, API_OP_SUBMIT_POOL_BLS_TO_EXECUTION_CHANGE
+    ld      a4, (L + 8)(sp)
+    call    node_api_send
+    LEAVE 16
+71: li      a1, 0
+    li      a2, 200
+    li      a3, 0
+    ld      a4, (L + 8)(sp)
+    call    node_api_send
+    LEAVE 16
+80: ld      a0, NodeAction_target(s3)
+    li      a1, 0
+    li      a2, 400
+    li      a3, API_BODY_ERROR
+    ld      a4, (L + 8)(sp)
+    call    node_api_send
+    LEAVE 16
+END_FUNCTION node_api_submit_done
+
+/*
+ * The publish of the SSZ bytes of the ByteList a1 on the gossip topic a0 (node.md, the publish):
+ * a LIBP2P_EVENT_PUBLISH at the end of p2p_out; none when it does not fit. Its data compresses in
+ * place, its ByteList head in the 24 bytes before the data. s1 the node, s2 the store, s5 the
+ * scratch. s3 the bytes, then the data's length; s4 the event, s7 the topic's length, s8 the
+ * data's offset in the event, s9 the event's room. Locals: L a GossipTopic, L+24 the topic's
+ * ByteList (24 + 128), L+176 a size, L+184 the message-id (24).
+ */
+LOCAL_FUNCTION node_publish
+    ENTER 208
+    mv      s3, a1
+    lwu     t0, Node_fork_digest(s1)
+    sd      t0, (L + GossipTopic_fork_digest)(sp)
+    sd      a0, (L + GossipTopic_name)(sp)
+    sd      zero, (L + GossipTopic_subnet_id)(sp)
+    li      t0, 24 + 128
+    sd      t0, (L + 24)(sp)
+    li      t0, 24
+    sd      t0, (L + 32)(sp)
+    sd      zero, (L + 40)(sp)
+    addi    a0, sp, L
+    addi    a1, sp, L + 24
+    call    lantern_gossip_topic
+    bnez    a0, 9f
+    ld      s7, (L + 40)(sp)
+    addi    s8, s7, LIBP2P_EV_PUB_TOPIC + 7
+    andi    s8, s8, -8
+    mv      a0, s3
+    addi    a1, sp, L + 176
+    CALL_GLOBAL snappy_compress_size
+    bnez    a0, 9f
+    ld      t0, (L + 176)(sp)               # the room: the data's offset, then at most size - 24 bytes
+    addi    t0, t0, -24
+    add     t0, t0, s8
+    addi    t0, t0, 7
+    andi    s9, t0, -8
+    mv      a0, s9
+    call    node_out
+    beqz    a0, 9f
+    mv      s4, a0
+    add     a2, s4, s8                      # the data's ByteList head before it: its room to the event's end
+    addi    a2, a2, -24
+    sub     t0, s9, s8
+    addi    t0, t0, 24
+    sd      t0, 0(a2)
+    mv      a0, s3
+    mv      a1, s5
+    CALL_GLOBAL snappy_compress
+    bnez    a0, 8f
+    mv      a0, s2                          # the message-id: of the fork of the store's slot
+    call    node_store_slot
+    addi    a1, s1, Node_config
+    call    node_fork
+    mv      t6, a0
+    addi    a0, sp, L + 24
+    add     a1, s4, s8
+    addi    a1, a1, -24
+    addi    a2, s1, Node_config
+    mv      a3, s5
+    addi    a4, sp, L + 184
+    FORK_CALL compute_message_id
+    bnez    a0, 8f
+    add     t0, s4, s8                      # the data's length; the event to its bytes
+    ld      s3, -8(t0)
+    add     t0, s8, s3
+    addi    t0, t0, 7
+    andi    t0, t0, -8
+    ld      t1, Node_p2p_out(s1)
+    add     t1, s1, t1
+    ld      t2, 16(t1)
+    sub     t2, t2, s9
+    add     t2, t2, t0
+    sd      t2, 16(t1)
+    mv      s9, t0
+    sd      t0, 0(s4)
+    li      t0, LIBP2P_EVENT_PUBLISH
+    sd      t0, 8(s4)
+    li      t0, 20
+    sd      t0, LIBP2P_EV_PUB_ID_LEN(s4)
+    sd      zero, (LIBP2P_EV_PUB_ID + 16)(s4)
+    sd      zero, (LIBP2P_EV_PUB_ID + 24)(s4)
+    addi    a0, s4, LIBP2P_EV_PUB_ID
+    addi    a1, sp, L + 184
+    li      a2, 20
+    call    lantern_copy
+    sd      s7, LIBP2P_EV_PUB_TOPIC_LEN(s4)
+    sd      s3, LIBP2P_EV_PUB_DATA_LEN(s4)
+    addi    a0, s4, LIBP2P_EV_PUB_TOPIC
+    addi    a1, sp, L + 48
+    mv      a2, s7
+    call    lantern_copy
+    addi    a0, s4, LIBP2P_EV_PUB_TOPIC     # zero bytes after the topic and after the data
+    add     a0, a0, s7
+    addi    a1, s8, -LIBP2P_EV_PUB_TOPIC
+    sub     a1, a1, s7
+    call    lantern_zero
+    add     a0, s4, s8
+    add     a0, a0, s3
+    sub     a1, s9, s8
+    sub     a1, a1, s3
+    call    lantern_zero
+9:  LEAVE 208
+8:  ld      t1, Node_p2p_out(s1)            # no publish: the room goes back
+    add     t1, s1, t1
+    ld      t2, 16(t1)
+    sub     t2, t2, s9
+    sd      t2, 16(t1)
+    LEAVE 208
+END_FUNCTION node_publish
+
+/*
+ * (text a0 to a1, kind a2, fork a3, fault a4, record a5, the event's end a6) -> a0: the JSON text
+ * decoded by lantern_node_json_decode into the record a5 (s6 the scratch of
+ * node_api_submit_run): code 0, then a ByteList of the SSZ bytes, its size to a multiple of 8;
+ * a1 the next record. a0 = 0, 1 for a text that is no such value, 2 for too little room.
+ * Locals: a ByteList head of the text, the record.
+ */
+LOCAL_FUNCTION node_submit_decode
+    FRAME 32
+    sd      a5, 24(sp)
+    sub     a1, a1, a0
+    sd      a1, 0(sp)
+    sub     t0, a0, sp
+    sd      t0, 8(sp)
+    sd      a1, 16(sp)
+    addi    t0, a5, 32
+    bgtu    t0, a6, 8f
+    sub     t0, a6, a5
+    addi    t0, t0, -8
+    sd      t0, 8(a5)
+    mv      t6, a3
+    mv      a0, a2
+    mv      a1, sp
+    mv      a2, s6
+    addi    a3, a5, 8
+    FORK_CALL node_json_decode
+    li      t0, LANTERN_BUFFER_TOO_SMALL
+    beq     a0, t0, 8f
+    bnez    a0, 7f
+    ld      a5, 24(sp)                      # its size: the bytes to a multiple of 8, zero after them
+    ld      t1, 24(a5)
+    addi    t0, t1, 24 + 7
+    andi    t0, t0, -8
+    sd      t0, 8(a5)
+    sd      zero, 0(a5)
+    addi    a0, a5, 32
+    add     a0, a0, t1
+    addi    a1, t0, -24
+    sub     a1, a1, t1
+    call    lantern_zero
+    ld      a5, 24(sp)
+    ld      t0, 8(a5)
+    addi    a1, a5, 8
+    add     a1, a1, t0
+    li      a0, 0
+    UNFRAME 32
+7:  li      a0, 1
+    UNFRAME 32
+8:  li      a0, 2
+    UNFRAME 32
+END_FUNCTION node_submit_decode
+
+/*
+ * (node a0, store a1, seen a2, work a3, state_a a4, data a5, scratch a6, event a7, room t0) -> a0:
+ * a NODE_WORK_API_SUBMIT of lantern_node_run (node.md): the operations of the body decoded as
+ * records at NodeEvent_chunk of the event, then each checked by lantern_node_gossip of the fork
+ * arg / 2^16 with seen. s1 node, s2 store, s3 work, s4 state_a, s5 data, s6 scratch, s7 the event,
+ * s8 its end, s9 the next record, s10 the text's end, then the records left. Locals: L seen, L+8
+ * the kind, L+16 the topic, L+24 the fork, L+32 the operations, L+40 1 for a list, L+48 where the
+ * text goes on, L+56 an item's start, L+64 a NodeGossip, L+144 a JsonFault, L+272 a root, L+304
+ * an index.
+ */
+LOCAL_FUNCTION node_api_submit_run
+    ENTER 320
+    mv      s1, a0
+    mv      s2, a1
+    sd      a2, (L + 0)(sp)
+    mv      s3, a3
+    mv      s4, a4
+    mv      s5, a5
+    mv      s6, a6
+    mv      s7, a7
+    add     s8, a7, t0
+    ld      t0, NodeAction_arg(s3)          # the operation's kind and topic; the fork
+    srli    t1, t0, 16
+    li      t2, FORK_FULU
+    bgtu    t1, t2, 98f
+    sd      t1, (L + 24)(sp)
+    andi    a0, t0, 255
+    li      t2, API_OP_SUBMIT_POOL_BLS_TO_EXECUTION_CHANGE
+    sub     t2, a0, t2
+    seqz    t2, t2
+    sd      t2, (L + 40)(sp)
+    call    node_submit_topic
+    beqz    a0, 98f
+    sd      a0, (L + 16)(sp)
+    call    node_pool_kind
+    sd      a0, (L + 8)(sp)
+    beqz    s4, 98f
+    beqz    s5, 98f
+    addi    t0, s7, NodeEvent_chunk         # the records' ByteList
+    addi    t1, t0, 24
+    bgtu    t1, s8, 97f
+    sub     t2, s8, t0
+    sd      t2, 0(t0)
+    li      t2, 24
+    sd      t2, 8(t0)
+    sd      zero, 16(t0)
+    mv      s9, t1
+    sd      zero, (L + 32)(sp)
+    ld      t0, 8(s5)                       # the text
+    add     a0, s5, t0
+    ld      t1, 16(s5)
+    add     s10, a0, t1
+    ld      t0, (L + 40)(sp)
+    bnez    t0, 20f
+    mv      a1, s10                         # one operation: the whole text
+    ld      a2, (L + 8)(sp)
+    ld      a3, (L + 24)(sp)
+    addi    a4, sp, L + 144
+    mv      a5, s9
+    mv      a6, s8
+    call    node_submit_decode
+    li      t0, 1
+    beq     a0, t0, 90f
+    bgtu    a0, t0, 97f
+    mv      s9, a1
+    li      t0, 1
+    sd      t0, (L + 32)(sp)
+    j       30f
+20: ld      t0, (L + 24)(sp)                # a JSON array, from capella
+    li      t1, FORK_CAPELLA
+    bltu    t0, t1, 90f
+    call    submit_ws
+    bgeu    a0, s10, 90f
+    lbu     t0, 0(a0)
+    li      t1, '['
+    bne     t0, t1, 90f
+    addi    a0, a0, 1
+    call    submit_ws
+    bgeu    a0, s10, 90f
+    lbu     t0, 0(a0)
+    li      t1, ']'
+    bne     t0, t1, 23f
+    addi    a0, a0, 1
+    j       28f
+23: sd      a0, (L + 56)(sp)                # an item: to a , or ] outside strings, arrays and objects
+    li      t2, 0
+24: bgeu    a0, s10, 90f
+    lbu     t0, 0(a0)
+    li      t1, '"'
+    bne     t0, t1, 25f
+253: addi   a0, a0, 1
+    bgeu    a0, s10, 90f
+    lbu     t0, 0(a0)
+    li      t1, '\\'
+    bne     t0, t1, 252f
+    addi    a0, a0, 1
+    j       253b
+252: li     t1, '"'
+    bne     t0, t1, 253b
+    addi    a0, a0, 1
+    j       24b
+25: li      t1, '{'
+    beq     t0, t1, 251f
+    li      t1, '['
+    bne     t0, t1, 26f
+251: addi   t2, t2, 1
+    addi    a0, a0, 1
+    j       24b
+26: li      t1, '}'
+    beq     t0, t1, 261f
+    li      t1, ']'
+    bne     t0, t1, 27f
+261: beqz   t2, 271f
+    addi    t2, t2, -1
+    addi    a0, a0, 1
+    j       24b
+27: li      t1, ','
+    bne     t0, t1, 272f
+    beqz    t2, 271f
+272: addi   a0, a0, 1
+    j       24b
+271: sd     a0, (L + 48)(sp)
+    mv      a1, a0
+    ld      a0, (L + 56)(sp)
+    ld      a2, (L + 8)(sp)
+    ld      a3, (L + 24)(sp)
+    addi    a4, sp, L + 144
+    mv      a5, s9
+    mv      a6, s8
+    call    node_submit_decode
+    li      t0, 1
+    beq     a0, t0, 90f
+    bgtu    a0, t0, 97f
+    mv      s9, a1
+    ld      t0, (L + 32)(sp)
+    addi    t0, t0, 1
+    sd      t0, (L + 32)(sp)
+    ld      a0, (L + 48)(sp)
+    lbu     t0, 0(a0)
+    addi    a0, a0, 1
+    li      t1, ','
+    beq     t0, t1, 23b
+    li      t1, ']'
+    bne     t0, t1, 90f
+28: call    submit_ws                       # then only white space
+    bne     a0, s10, 90f
+30: sub     t0, s9, s7                      # the records: their bytes, their count
+    sd      t0, 0(s7)
+    addi    t0, t0, -NodeEvent_chunk
+    sd      t0, NodeEvent_chunk(s7)
+    addi    t0, t0, -24
+    sd      t0, (NodeEvent_chunk + 16)(s7)
+    ld      t0, (L + 32)(sp)
+    sd      t0, NodeEvent_index(s7)
+    ld      t1, (L + 0)(sp)                 # seen has a key free for each operation
+    ld      t2, Seen_bits(t1)
+    ld      t3, Seen_keys(t1)
+    sub     t2, t2, t3
+    srli    t2, t2, 5
+    ld      t3, (Seen_keys + 8)(t1)
+    sub     t2, t2, t3
+    bltu    t2, t0, 97f
+    ld      t0, (L + 0)(sp)                 # the NodeGossip of the operations
+    sd      t0, (L + 64 + NodeGossip_seen)(sp)
+    sd      s2, (L + 64 + NodeGossip_store)(sp)
+    ld      t0, Node_time_ms(s1)
+    sd      t0, (L + 64 + NodeGossip_time_ms)(sp)
+    ld      t0, (L + 16)(sp)
+    sd      t0, (L + 64 + NodeGossip_topic)(sp)
+    sd      zero, (L + 64 + NodeGossip_subnet)(sp)
+    sd      s4, (L + 64 + NodeGossip_head)(sp)
+    sd      zero, (L + 64 + NodeGossip_proposer)(sp)
+    sd      zero, (L + 64 + NodeGossip_justified)(sp)
+    sd      zero, (L + 64 + NodeGossip_settings)(sp)
+    addi    t0, s1, Node_config
+    sd      t0, (L + 64 + NodeGossip_config)(sp)
+    addi    s9, s7, NodeEvent_chunk + 24
+    ld      s10, (L + 32)(sp)
+31: beqz    s10, 39f
+    ld      t6, (L + 24)(sp)
+    addi    a0, sp, L + 64
+    addi    a1, s9, 8
+    mv      a2, s6
+    mv      a3, s9
+    addi    a4, sp, L + 272
+    addi    a5, sp, L + 304
+    FORK_CALL node_gossip
+    bnez    a0, 99f
+    ld      t0, 8(s9)
+    addi    s9, s9, 8
+    add     s9, s9, t0
+    addi    s10, s10, -1
+    j       31b
+39: li      a0, LANTERN_OK
+    LEAVE 320
+90: li      t0, LANTERN_INVALID_ENCODING    # a body that is no such text
+    sd      t0, NodeEvent_result(s7)
+    li      t0, NODE_EV_WORK_DONE_SIZE
+    sd      t0, 0(s7)
+    li      a0, LANTERN_OK
+    LEAVE 320
+97: li      a0, LANTERN_BUFFER_TOO_SMALL
+    LEAVE 320
+98: li      a0, LANTERN_INVALID_EVENT
+99: LEAVE 320
+END_FUNCTION node_api_submit_run
+
+/* a0 = a0 past the JSON white space (space, tab, LF, CR) before s10. Uses t0, t1. */
+LOCAL_FUNCTION submit_ws
+    UNWIND_END_PROLOGUE
+1:  bgeu    a0, s10, 9f
+    lbu     t0, 0(a0)
+    li      t1, ' '
+    beq     t0, t1, 2f
+    li      t1, 9
+    beq     t0, t1, 2f
+    li      t1, 10
+    beq     t0, t1, 2f
+    li      t1, 13
+    bne     t0, t1, 9f
+2:  addi    a0, a0, 1
+    j       1b
+9:  ret
+END_FUNCTION submit_ws
 
     RODATA
     .p2align 3

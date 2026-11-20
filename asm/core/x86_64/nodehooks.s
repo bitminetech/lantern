@@ -426,19 +426,61 @@ SPEC_END node_event_roots
 .error "nodehooks: a NODE_VALIDATOR_* epoch offset is not the Validator's"
 .endif
 
-/* (kind, ssz, cursor, out): lantern_json_encode_ssz with the fork's SignedBeaconBlock (kind 0) or BeaconState (kind 1). */
+/* rdi = the fork's TypeDescriptor of the NODE_JSON_* kind r10, or 0. Uses rdi. */
+LOCAL_FUNCTION node_type_of_kind
+    UNWIND_END_PROLOGUE
+    ADDRESS %rdi, lantern_type_SignedBeaconBlock
+    cmp     $NODE_JSON_BLOCK, %r10
+    je      9f
+    ADDRESS %rdi, lantern_type_BeaconState
+    cmp     $NODE_JSON_STATE, %r10
+    je      9f
+    ADDRESS %rdi, lantern_type_SignedVoluntaryExit
+    cmp     $NODE_JSON_EXIT, %r10
+    je      9f
+    ADDRESS %rdi, lantern_type_ProposerSlashing
+    cmp     $NODE_JSON_PROPOSER_SLASHING, %r10
+    je      9f
+    ADDRESS %rdi, lantern_type_AttesterSlashing
+    cmp     $NODE_JSON_ATTESTER_SLASHING, %r10
+    je      9f
+.if FORK >= FORK_CAPELLA
+    ADDRESS %rdi, lantern_type_SignedBLSToExecutionChange
+    cmp     $NODE_JSON_BLS_CHANGE, %r10
+    je      9f
+.endif
+    xor     %edi, %edi
+9:  ret
+END_FUNCTION node_type_of_kind
+
+/* (kind, ssz, cursor, out): lantern_json_encode_ssz with the fork's type of the NODE_JSON_* kind. */
 SPEC_FUNCTION node_json
     FRAME 0
-    mov     $LANTERN_INVALID_EVENT, %eax
-    cmp     $NODE_JSON_STATE, %rdi
-    ja      9f
-    je      1f
-    ADDRESS %rdi, lantern_type_SignedBeaconBlock
-    jmp     2f
-1:  ADDRESS %rdi, lantern_type_BeaconState
-2:  CALL_GLOBAL lantern_json_encode_ssz
-9:  UNFRAME 0
+    mov     %rdi, %r10
+    call    node_type_of_kind
+    test    %rdi, %rdi
+    jz      8f
+    CALL_GLOBAL lantern_json_encode_ssz
+    UNFRAME 0
+8:  mov     $LANTERN_INVALID_EVENT, %eax
+    UNFRAME 0
 SPEC_END node_json
+
+/*
+ * (kind, json, scratch, out, fault): lantern_json_decode with the fork's type of the NODE_JSON_*
+ * kind (node.md, NODE_WORK_API_SUBMIT); LANTERN_INVALID_JSON for a kind of no type in the fork.
+ */
+SPEC_FUNCTION node_json_decode
+    FRAME 0
+    mov     %rdi, %r10
+    call    node_type_of_kind
+    test    %rdi, %rdi
+    jz      8f
+    CALL_GLOBAL lantern_json_decode
+    UNFRAME 0
+8:  mov     $LANTERN_INVALID_JSON, %eax
+    UNFRAME 0
+SPEC_END node_json_decode
 
 /*
  * rax = the bytes of the SSZ default value of the type node rsi of the TypeDescriptor rdi, written

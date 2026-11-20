@@ -1531,6 +1531,8 @@ LOCAL_FUNCTION app_work
     je      2f
     cmp     $NODE_WORK_API_EVENT, %rcx
     je      2f
+    cmp     $NODE_WORK_API_SUBMIT, %rcx     # API_SUBMIT: the Seen, and a larger event
+    je      7f
     cmp     $NODE_WORK_GOSSIP, %rcx         # GOSSIP: the Seen, and the proposer state
     je      3f
     cmp     $NODE_WORK_TARGET_STATE, %rcx   # TARGET_STATE, SLOTS, and IMPORT_BLOCK with store room: state_a
@@ -1590,6 +1592,12 @@ LOCAL_FUNCTION app_work
     test    %rax, %rax
     jnz     91f
     jmp     1b
+7:  mov     $2, %edi
+    mov     $-1, %rsi
+    call    app_grow
+    test    %rax, %rax
+    jnz     91f
+    jmp     2b
 8:  mov     S8(%rsp), %rdi
     mov     %r15, %rsi
     call    app_log_work

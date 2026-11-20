@@ -1418,6 +1418,8 @@ LOCAL_FUNCTION app_work
     b.eq    2f
     cmp     x26, #NODE_WORK_API_EVENT
     b.eq    2f
+    cmp     x26, #NODE_WORK_API_SUBMIT      /* API_SUBMIT: the Seen, and a larger event */
+    b.eq    7f
     cmp     x26, #NODE_WORK_GOSSIP          /* GOSSIP: the Seen, and the proposer state */
     b.eq    3f
     cmp     x26, #NODE_WORK_TARGET_STATE    /* TARGET_STATE, SLOTS, and IMPORT_BLOCK with store room: state_a */
@@ -1469,6 +1471,11 @@ LOCAL_FUNCTION app_work
     bl      app_regrow
     cbnz    x0, 91f
     b       1b
+7:  mov     x0, #2
+    mov     x1, #-1
+    bl      app_grow
+    cbnz    x0, 91f
+    b       2b
 8:  bl      app_log_work
     ldr     x0, [x19, #APP_WORK_EVENT]      /* the WORK_DONE event */
     ldr     x1, [x0]

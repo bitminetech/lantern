@@ -80,6 +80,7 @@ FUNCTION lantern_node_size
     NODE_SIZE_ADD messages, NodeMessage__mem
     NODE_SIZE_ADD blobs, NodeBlob__mem
     NODE_SIZE_ADD api_streams, NodeApi__mem
+    NODE_SIZE_ADD pool, NodePool__mem
     ldr     x10, [x0, #NodeRoom_p2p_out] /* a ByteList */
     adds    x10, x10, #(24 + 7)
     b.cs    9f
@@ -149,6 +150,7 @@ LOCAL_FUNCTION node_layout
     NODE_PART messages, messages, NodeMessage__mem
     NODE_PART blobs, blobs, NodeBlob__mem
     NODE_PART api, api_streams, NodeApi__mem
+    NODE_PART pool, pool, NodePool__mem
     str     x9, [x0, #Node_p2p_out]         /* one ByteList, empty */
     mov     x10, #1
     str     x10, [x0, #(Node_p2p_out + 8)]
@@ -375,6 +377,7 @@ FUNCTION lantern_node_copy
     NODE_COPY_ROOM messages, Node_messages
     NODE_COPY_ROOM blobs, Node_blobs
     NODE_COPY_ROOM api_streams, Node_api
+    NODE_COPY_ROOM pool, Node_pool
     ldr     x9, [x20, #NodeRoom_p2p_out]    /* the queued bytes fit */
     ldr     x10, [x19, #Node_p2p_out]
     add     x10, x19, x10
@@ -414,6 +417,7 @@ FUNCTION lantern_node_copy
     NODE_COPY_PART Node_messages, NodeMessage__mem
     NODE_COPY_PART Node_blobs, NodeBlob__mem
     NODE_COPY_PART Node_api, NodeApi__mem
+    NODE_COPY_PART Node_pool, NodePool__mem
     ldr     x1, [x19, #Node_p2p_out]        /* the queued bytes */
     add     x1, x19, x1
     ldr     x2, [x1, #16]
@@ -592,7 +596,18 @@ LOCAL_FUNCTION node_ids
     b       4b
 5:  cmp     x0, #NODE_ACT_BYTES_FREE
     b.ne    3f
-    PART    x9, x10, x19, Node_api
+    PART    x9, x10, x19, Node_pool         /* bytes a pool entry keeps stay */
+6:  cbz     x10, 7f
+    ldr     x11, [x9, #NodePool_topic]
+    cbz     x11, 61f
+    ldr     x11, [x9, #NodePool_data_id]
+    cmp     x11, x1
+    b.ne    61f
+    UNFRAME 32
+61: add     x9, x9, #NodePool__mem
+    sub     x10, x10, #1
+    b       6b
+7:  PART    x9, x10, x19, Node_api
 1:  cbz     x10, 3f
     ldr     x11, [x9, #NodeApi_connection]
     cbz     x11, 2f
@@ -613,6 +628,142 @@ LOCAL_FUNCTION node_ids
     stp     x9, x10, [x0, #16]
     UNFRAME 32
 END_FUNCTION node_ids
+
+/* ------------------------------------------------------------ the pool (node.md) */
+
+/*
+ * L0: x0 = 1 when the bytes x1 (x2 bytes) of the topic x0, of the fork x3, join the pool: a
+ * voluntary_exit, proposer_slashing, attester_slashing or bls_to_execution_change, in the first
+ * free entry; else 0. Uses x9-x13.
+ */
+LOCAL_FUNCTION node_pool_add
+    UNWIND_END_PROLOGUE
+    cmp     x0, #GOSSIP_VOLUNTARY_EXIT
+    ccmp    x0, #GOSSIP_PROPOSER_SLASHING, #4, ne
+    ccmp    x0, #GOSSIP_ATTESTER_SLASHING, #4, ne
+    ccmp    x0, #GOSSIP_BLS_TO_EXECUTION_CHANGE, #4, ne
+    b.ne    8f
+    PART    x9, x10, x19, Node_pool
+    mov     x11, #0
+1:  cmp     x11, x10
+    b.hs    2f
+    ldr     x12, [x9, #NodePool_topic]
+    cbz     x12, 3f
+    add     x9, x9, #NodePool__mem
+    add     x11, x11, #1
+    b       1b
+2:  LDQ     x12, x19, Node_p2p_out          /* past the count: one more within the capacity */
+    LDQ     x13, x19, Node_pool
+    sub     x12, x12, x13
+    mov     x13, #NodePool__mem
+    udiv    x12, x12, x13
+    cmp     x10, x12
+    b.hs    8f
+    add     x10, x10, #1
+    STQ     x10, x19, Node_pool + 8
+3:  str     x0, [x9, #NodePool_topic]
+    mov     x12, #NODE_POOL_KEPT
+    str     x12, [x9, #NodePool_state]
+    str     x1, [x9, #NodePool_data_id]
+    str     x2, [x9, #NodePool_length]
+    str     x3, [x9, #NodePool_fork]
+    mov     x0, #1
+    ret
+8:  mov     x0, #0
+    ret
+END_FUNCTION node_pool_add
+
+/*
+ * L1: the pool entry x0 goes: it is free (topic 0), the pool's count drops past the free entries
+ * at its end, and its bytes get a NODE_ACT_BYTES_FREE. Locals: its bytes.
+ */
+LOCAL_FUNCTION node_pool_drop
+    FRAME 16
+    ldr     x9, [x0, #NodePool_data_id]
+    str     x9, [sp, #16]
+    str     xzr, [x0, #NodePool_topic]
+    PART    x9, x10, x19, Node_pool
+1:  cbz     x10, 2f
+    sub     x11, x10, #1
+    mov     x12, #NodePool__mem
+    madd    x12, x11, x12, x9
+    ldr     x12, [x12, #NodePool_topic]
+    cbnz    x12, 2f
+    mov     x10, x11
+    b       1b
+2:  STQ     x10, x19, Node_pool + 8
+    mov     x0, #NODE_ACT_BYTES_FREE
+    ldr     x1, [sp, #16]
+    mov     x2, #0
+    bl      node_ids
+    UNFRAME 16
+END_FUNCTION node_pool_drop
+
+/*
+ * L1: at a new head, each pool entry in NODE_POOL_KEPT gets a NODE_WORK_POOL_CHECK with the head's
+ * post-state x0, and takes NODE_POOL_CHECKING; with x0 = 0, none. Locals: the state, the index.
+ */
+LOCAL_FUNCTION node_pool_checks
+    FRAME 16
+    cbz     x0, 9f
+    str     x0, [sp, #16]
+    mov     x9, #0
+1:  str     x9, [sp, #24]
+    PART    x10, x11, x19, Node_pool
+    cmp     x9, x11
+    b.hs    9f
+    mov     x12, #NodePool__mem
+    madd    x10, x9, x12, x10
+    ldr     x12, [x10, #NodePool_topic]
+    cbz     x12, 2f
+    ldr     x12, [x10, #NodePool_state]
+    cmp     x12, #NODE_POOL_KEPT
+    b.ne    2f
+    mov     x12, #NODE_POOL_CHECKING
+    str     x12, [x10, #NodePool_state]
+    mov     x0, #NODE_WORK_POOL_CHECK
+    ldr     x1, [sp, #16]
+    mov     x2, #0
+    ldr     x3, [x10, #NodePool_data_id]
+    mov     x4, x9
+    ldr     x5, [x10, #NodePool_topic]
+    bl      node_work
+2:  ldr     x9, [sp, #24]
+    add     x9, x9, #1
+    b       1b
+9:  UNFRAME 16
+END_FUNCTION node_pool_checks
+
+/*
+ * L1: the NODE_EV_WORK_DONE x0 of a NODE_WORK_POOL_CHECK, of the entry at index target in
+ * NODE_POOL_CHECKING with its bytes: LANTERN_VALID, it takes NODE_POOL_KEPT; else it goes.
+ */
+LOCAL_FUNCTION node_pool_check_done
+    FRAME 0
+    ldr     x9, [x0, #NodeAction_target]
+    PART    x10, x11, x19, Node_pool
+    cmp     x9, x11
+    b.hs    9f
+    mov     x12, #NodePool__mem
+    madd    x10, x9, x12, x10
+    ldr     x12, [x10, #NodePool_topic]
+    cbz     x12, 9f
+    ldr     x12, [x10, #NodePool_state]
+    cmp     x12, #NODE_POOL_CHECKING
+    b.ne    9f
+    ldr     x12, [x10, #NodePool_data_id]
+    ldr     x13, [x0, #NodeAction_data]
+    cmp     x12, x13
+    b.ne    9f
+    ldr     x12, [x0, #NodeEvent_result]
+    cbnz    x12, 1f
+    mov     x12, #NODE_POOL_KEPT
+    str     x12, [x10, #NodePool_state]
+    b       9f
+1:  mov     x0, x10
+    bl      node_pool_drop
+9:  UNFRAME 0
+END_FUNCTION node_pool_check_done
 
 /* L0: x0 = the slot of the block of the store's finalized root, or 2^64 - 1 when the node keeps none. Uses x9-x15. */
 LOCAL_FUNCTION node_f_slot
@@ -3653,7 +3804,23 @@ LOCAL_FUNCTION node_event
     mov     x22, x1
     cmp     x25, #LIBP2P_ACCEPT
     b.ne    65f
+    mov     x0, x20                         /* an operation of the pool keeps its bytes there too */
+    bl      node_store_slot
+    add     x1, x19, #Node_config
+    bl      node_fork
+    mov     x3, x0
+    ldr     x0, [x22, #NodeMessage_topic]
+    ldr     x1, [x21, #NodeAction_data]
+    ldr     x2, [x22, #NodeMessage_length]
+    bl      node_pool_add
+    cbz     x0, 639f
     ldr     x9, [x22, #NodeMessage_topic]
+    cmp     x9, #GOSSIP_ATTESTER_SLASHING
+    b.eq    639f
+    mov     x0, x22
+    bl      node_drop_message
+    LEAVE 48
+639: ldr    x9, [x22, #NodeMessage_topic]
     cmp     x9, #GOSSIP_BEACON_AGGREGATE_AND_PROOF
     b.ne    640f
     PART    x10, x11, x19, Node_messages    /* a valid aggregate: kept for its vote, with half the part free */
@@ -3903,9 +4070,19 @@ LOCAL_FUNCTION node_event
     bl      node_api_lookup_done
     LEAVE 48
 704: cmp    x9, #NODE_WORK_API_EVENT           /* API_EVENT: the text to the streams of its topic */
-    b.ne    70f
+    b.ne    705f
     mov     x0, x21
     bl      node_api_event_done
+    LEAVE 48
+705: cmp    x9, #NODE_WORK_API_SUBMIT          /* API_SUBMIT: the operations to the pool and out, then the answer */
+    b.ne    706f
+    mov     x0, x21
+    bl      node_api_submit_done
+    LEAVE 48
+706: cmp    x9, #NODE_WORK_POOL_CHECK          /* POOL_CHECK: the entry stays, or goes */
+    b.ne    70f
+    mov     x0, x21
+    bl      node_pool_check_done
     LEAVE 48
 70: cmp     x9, #NODE_WORK_ATTESTATION         /* done with an attestation or a slashing: free its bytes */
     ccmp    x9, #NODE_WORK_ATTESTER_SLASHING, #4, ne
@@ -6493,7 +6670,7 @@ LOCAL_FUNCTION node_response
 45: bl      node_room
     cbz     x0, 95f
     ldr     x10, [x19, #(Node_blobs + 8)]
-    ldr     x11, [x19, #Node_p2p_out]
+    ldr     x11, [x19, #Node_api]           /* the blobs' capacity: up to the api part */
     ldr     x12, [x19, #Node_blobs]
     sub     x11, x11, x12
     mov     x12, #NodeBlob__mem
@@ -7535,7 +7712,7 @@ END_FUNCTION node_block_entry
  * L+144 the POW_BLOCK events.
  */
 FUNCTION lantern_node_step
-    ENTER 192
+    ENTER 208
     mov     x19, x0
     mov     x20, x1
     stp     x2, x3, [sp, #(L + 16)]
@@ -7555,6 +7732,7 @@ FUNCTION lantern_node_step
     str     xzr, [sp, #(L + 144)]
     stp     xzr, xzr, [sp, #(L + 56)]
     stp     xzr, xzr, [sp, #(L + 176)]       /* API: the largest scratch, and the API events */
+    str     xzr, [sp, #(L + 192)]
     mov     x11, x21
 1:  cmp     x11, x22
     b.hs    5f
@@ -7610,6 +7788,37 @@ FUNCTION lantern_node_step
     b       22f
 231: cmp    x14, #NODE_WORK_SERVE
     b.eq    24f
+    cmp     x14, #NODE_WORK_API_SUBMIT      /* API_SUBMIT: an API answer; of LANTERN_VALID, its records inside */
+    b.ne    2310f
+    ldr     x15, [sp, #(L + 184)]
+    add     x15, x15, #1
+    str     x15, [sp, #(L + 184)]
+    ldr     x15, [x11, #NodeEvent_result]
+    cbnz    x15, 22f
+    stp     x11, x12, [sp, #(L + 160)]
+    mov     x0, x11
+    mov     x1, x12
+    bl      node_submit_check
+    ldp     x11, x12, [sp, #(L + 160)]
+    cbnz    x0, 7f
+    add     x28, x28, x12                   /* twice its bytes of actions */
+    ldr     x9, [x19, #Node_flags]          /* subscribed: p2p_out for its publishes, and scratch for one */
+    tbz     x9, #2, 22f
+    ldr     x9, [x11, #NodeEvent_index]
+    mov     x10, #512
+    mul     x9, x9, x10
+    add     x9, x9, x12, lsl #1
+    ldr     x10, [sp, #(L + 192)]
+    add     x10, x10, x9
+    str     x10, [sp, #(L + 192)]
+    MOVQ    x9, SNAPPY_SCRATCH_COMPRESS + 192
+    add     x9, x9, x12
+    ldr     x10, [sp, #(L + 176)]
+    cmp     x9, x10
+    csel    x10, x9, x10, hi
+    str     x10, [sp, #(L + 176)]
+    b       22f
+2310:
     cmp     x14, #NODE_WORK_API_LOOKUP      /* API_LOOKUP: an API answer's scratch and actions */
     b.ne    234f
     ldp     x9, x10, [sp, #(L + 176)]
@@ -7758,6 +7967,9 @@ FUNCTION lantern_node_step
     mov     x12, x0                         /* room: actions, node parts, scratch */
     madd    x12, x26, x12, x28
     add     x12, x12, #(2 * NODE_ACT_WORK_SIZE)
+    LDQ     x13, x19, Node_pool + 8         /* a POOL_CHECK for each pool entry */
+    mov     x14, #NODE_ACT_WORK_SIZE
+    madd    x12, x13, x14, x12
     ldr     x13, [sp, #(L + 184)]           /* 2048 for each API answer */
     mov     x14, #2048
     madd    x12, x13, x14, x12
@@ -7797,7 +8009,7 @@ FUNCTION lantern_node_step
     add     x10, x27, x12
     cmp     x9, x10
     b.lo    85f
-    ldr     x9, [x19, #Node_p2p_out]        /* blobs: one for each GOSSIP WORK_DONE event, and with p2p a batch's sidecars */
+    ldr     x9, [x19, #Node_api]            /* blobs: one for each GOSSIP WORK_DONE event, and with p2p a batch's sidecars */
     ldr     x10, [x19, #Node_blobs]
     sub     x9, x9, x10
     mov     x10, #NodeBlob__mem
@@ -7904,7 +8116,9 @@ FUNCTION lantern_node_step
     sub     x9, x9, #24
     sub     x9, x9, x10
     ldr     x10, [sp, #(L + 56)]
-    cmp     x9, x10
+    ldr     x14, [sp, #(L + 192)]           /* and for the publishes of the pool POSTs */
+    add     x14, x14, x10
+    cmp     x9, x14
     b.lo    90f
     add     x12, x12, x10
     MOVQ    x9, LIBP2P_SCRATCH_SIZE
@@ -8094,12 +8308,12 @@ FUNCTION lantern_node_step
     ldr     x9, [sp, #(L + 80)]
     stp     x26, x9, [x25]
     mov     x0, #LANTERN_OK
-    LEAVE 192
+    LEAVE 208
 14: ldr     x9, [sp, #(L + 8)]              /* a status before any change */
     str     x9, [x23]
-    LEAVE 192
+    LEAVE 208
 7:  mov     x0, #LANTERN_INVALID_EVENT
-    LEAVE 192
+    LEAVE 208
 81: mov     x9, #NODE_SHORT_ACTIONS         /* the buffer with too little room */
     b       84f
 85: mov     x10, #NodeRoom_blocks           /* a part of the node: the NodeRoom field of its capacity */
@@ -8125,7 +8339,7 @@ FUNCTION lantern_node_step
 83: mov     x9, #NODE_SHORT_SCRATCH
 84: str     x9, [x25, #NodeStepResult_short]
 8:  mov     x0, #LANTERN_BUFFER_TOO_SMALL
-    LEAVE 192
+    LEAVE 208
 END_FUNCTION lantern_node_step
 
 /*
@@ -8779,7 +8993,98 @@ FUNCTION lantern_node_run
     mov     x6, x26
     bl      node_api_event_run
     LEAVE 192
-978: cmp    x9, #NODE_WORK_API_LOOKUP
+978: cmp    x9, #NODE_WORK_API_SUBMIT
+    b.ne    979f
+    mov     x0, x19                         /* API_SUBMIT: the operations of a body, checked */
+    mov     x1, x20
+    ldr     x2, [sp, #(L + 64)]
+    mov     x3, x21
+    mov     x4, x22
+    mov     x5, x23
+    mov     x6, x24
+    mov     x7, x25
+    mov     x8, x26
+    bl      node_api_submit_run
+    LEAVE 192
+979: cmp    x9, #NODE_WORK_POOL_CHECK
+    b.ne    9780f
+    cbz     x22, 8f                         /* POOL_CHECK: the gossip validation of the bytes, with an empty Seen */
+    cbz     x23, 8f
+    ldr     x9, [x21, #NodeAction_arg]
+    cmp     x9, #GOSSIP_VOLUNTARY_EXIT
+    ccmp    x9, #GOSSIP_PROPOSER_SLASHING, #4, ne
+    ccmp    x9, #GOSSIP_ATTESTER_SLASHING, #4, ne
+    ccmp    x9, #GOSSIP_BLS_TO_EXECUTION_CHANGE, #4, ne
+    b.ne    8f
+    ldr     x9, [x23, #16]                  /* its SeenRoom: a key for each 8 bytes, and 1 */
+    lsr     x9, x9, #3
+    add     x9, x9, #1
+    stp     x9, xzr, [sp, #(L + 16)]
+    stp     xzr, xzr, [sp, #(L + 32)]
+    add     x0, sp, #(L + 16)
+    add     x1, sp, #L
+    bl      lantern_seen_size
+    cbnz    x0, 9781f
+    ldr     x9, [x24]                       /* the Seen at the end of scratch, with LANTERN_SCRATCH_FIXED before it */
+    str     x9, [sp, #(L + 8)]
+    ldr     x10, [sp, #L]
+    subs    x11, x9, x10
+    b.lo    9781f
+    MOVQ    x12, LANTERN_SCRATCH_FIXED + 8
+    cmp     x11, x12
+    b.lo    9781f
+    and     x11, x11, #~7
+    str     x11, [x24]
+    add     x27, x24, x11
+    str     x10, [x27]
+    add     x0, sp, #(L + 16)
+    mov     x1, x27
+    bl      lantern_seen_init
+    cbnz    x0, 9782f
+    mov     x0, x20
+    bl      node_store_slot
+    add     x1, x19, #Node_config
+    bl      node_fork
+    mov     x28, x0
+    ldr     x0, [x22, #NODE_STATE_SLOT]     /* a head state of another fork: IGNORE, as for gossip */
+    add     x1, x19, #Node_config
+    bl      node_fork
+    cmp     x0, x28
+    b.ne    9782f
+    str     x27, [sp, #(L + 96 + NodeGossip_seen)]
+    str     x20, [sp, #(L + 96 + NodeGossip_store)]
+    ldr     x9, [x19, #Node_time_ms]
+    str     x9, [sp, #(L + 96 + NodeGossip_time_ms)]
+    ldr     x9, [x21, #NodeAction_arg]
+    str     x9, [sp, #(L + 96 + NodeGossip_topic)]
+    str     xzr, [sp, #(L + 96 + NodeGossip_subnet)]
+    str     x22, [sp, #(L + 96 + NodeGossip_head)]
+    str     xzr, [sp, #(L + 96 + NodeGossip_proposer)]
+    str     xzr, [sp, #(L + 96 + NodeGossip_justified)]
+    str     xzr, [sp, #(L + 96 + NodeGossip_settings)]
+    add     x9, x19, #Node_config
+    str     x9, [sp, #(L + 96 + NodeGossip_config)]
+    mov     x15, x28
+    add     x0, sp, #(L + 96)
+    mov     x1, x23
+    mov     x2, x24
+    add     x3, x25, #NodeEvent_result
+    add     x4, x25, #NodeEvent_root
+    add     x5, x25, #NodeEvent_index
+    FORK_CALL node_gossip
+    ldr     x9, [sp, #(L + 8)]              /* scratch whole again; a short one: IGNORE */
+    str     x9, [x24]
+    cbz     x0, 9783f
+    cmp     x0, #LANTERN_BUFFER_TOO_SMALL
+    b.ne    9784f
+    b       9781f
+9782: ldr   x9, [sp, #(L + 8)]
+    str     x9, [x24]
+9781: mov   x9, #LANTERN_GOSSIP_IGNORE
+    str     x9, [x25, #NodeEvent_result]
+9783: mov   x0, #LANTERN_OK
+9784: LEAVE 192
+9780: cmp   x9, #NODE_WORK_API_LOOKUP
     b.ne    8f
     mov     x0, x19                         /* API_LOOKUP: the slot of a state root */
     mov     x1, x21

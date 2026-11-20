@@ -1820,6 +1820,7 @@ static void run_rewards(const char *file, case_file *f) {
 #define STORE_BOOST_ROOT 184
 #define STORE_BLOCKS 264
 #define STORE_VALIDATORS 280
+#define STORE_CONFIG 296 /* include/lantern.inc: Store_config */
 #define NODE_BYTES 216
 #define NODE_PARENT 80
 #define NODE_BLOCK_HASH 176
@@ -2496,10 +2497,20 @@ enum { ACT_BYTES_PUT = 1, ACT_STATE_COPY, ACT_STATE_FREE, ACT_BYTES_FREE, ACT_WO
 #define NODE_DB_SEGMENTS 256 /* the segments one node's runner keeps */
 enum { WORK_IMPORT_BLOCK = 1, WORK_JUSTIFIED_STATE, WORK_TARGET_STATE, WORK_ATTESTATION, WORK_ATTESTER_SLASHING, WORK_SERVE, WORK_GOSSIP,
        WORK_SYNC_BLOCK, WORK_BLOB, WORK_NEW_PAYLOAD, WORK_FORKCHOICE, WORK_SLOTS, WORK_UPGRADE, WORK_REPLAY, WORK_BACKFILL,
-       WORK_BLOCK_ATTESTATION, WORK_BLOCK_SLASHING, WORK_GOSSIP_VOTE, WORK_API_ENCODE, WORK_API_CHUNK, WORK_API_LOOKUP, WORK_API_EVENT };
+       WORK_BLOCK_ATTESTATION, WORK_BLOCK_SLASHING, WORK_GOSSIP_VOTE, WORK_API_ENCODE, WORK_API_CHUNK, WORK_API_LOOKUP, WORK_API_EVENT,
+       WORK_API_SUBMIT, WORK_POOL_CHECK };
 #define EV_API_BYTES (128 + 616) /* NodeEvent_api_bytes: the chunk's ByteList in the WORK_DONE of an API_CHUNK */
 #define NODE_API_CHUNK 65536
 #define NODE_API_PART (728 + CONFIG_SIZE + 936) /* Node_api: the PartRef of the NodeApi entries */
+#define NODE_POOL_PART (NODE_API_PART + 72)    /* Node_pool: the PartRef of the NodePool entries */
+#define NODE_POOL_MEM 40
+
+/* The pool entries in use (topic not 0) of the node: each keeps a buffer. */
+static uint64_t node_pool_held(const uint8_t *node) {
+    uint64_t off = rd64(node + NODE_POOL_PART), count = rd64(node + NODE_POOL_PART + 8), held = 0;
+    for (uint64_t i = 0; i < count; i++) held += rd64(node + off + NODE_POOL_MEM * i) != 0;
+    return held;
+}
 static unsigned long node_replays; /* the REPLAY works the nodes ran: post-states they rebuilt */
 #define EV_RESULT 72
 #define EV_WORK_DONE_SIZE 128
@@ -2512,7 +2523,7 @@ typedef struct {
     uint8_t *b;
 } shell_buf;
 
-#define NODE_ROOM_FIELDS 13 /* NodeRoom: blocks, checkpoints, pow_blocks, peers, streams, request_bytes, p2p_out, messages, blobs, engine_bytes, db_slots, db_roots, api_streams */
+#define NODE_ROOM_FIELDS 14 /* NodeRoom: blocks, checkpoints, pow_blocks, peers, streams, request_bytes, p2p_out, messages, blobs, engine_bytes, db_slots, db_roots, api_streams, pool */
 
 struct p2p_net;
 
@@ -2929,7 +2940,10 @@ static void shell_work(fc_node *n, const uint8_t *work, const char **why) {
 #if FORK >= FORK_DENEB
     settings = kzg_settings;
 #endif
-    uint64_t ev_size = kind == WORK_API_CHUNK ? EV_API_BYTES + 24 + (s->api.room ? s->api.room : NODE_API_CHUNK) : EV_WORK_DONE_SIZE;
+    /* API_SUBMIT: room for the records of its body, whose SSZ bytes are fewer than their JSON's */
+    uint64_t ev_size = kind == WORK_API_CHUNK ? EV_API_BYTES + 24 + (s->api.room ? s->api.room : NODE_API_CHUNK)
+                       : kind == WORK_API_SUBMIT && d ? (EV_WORK_DONE_SIZE + 2 * d->size + 256) & ~(uint64_t)7
+                                                      : EV_WORK_DONE_SIZE;
     uint8_t *ev = buffer(ev_size);
     uint64_t st = 1, growth = 2;
     for (int t = 0; t < 32 && st == 1 && !*why; t++) {
@@ -2947,7 +2961,15 @@ static void shell_work(fc_node *n, const uint8_t *work, const char **why) {
         free(sa);
         if (st != 1 || *why) break;
         /* BUFFER_TOO_SMALL: the event of a SERVE, the store for a node or for the justified balances, else the state's lists. */
-        if (kind == WORK_SERVE || kind == WORK_NEW_PAYLOAD || kind == WORK_FORKCHOICE || kind == WORK_API_ENCODE ||
+        if (kind == WORK_API_SUBMIT) { /* the event, and the Seen its gossip validation adds to */
+            free(ev);
+            ev_size *= 4;
+            ev = buffer(ev_size);
+            for (int i = 0; i < 4; i++) s->seen_room[i] *= 2;
+            shell_seen(s, why);
+        } else if (kind == WORK_POOL_CHECK) {
+            *why = "lantern_node_run: POOL_CHECK asks for room";
+        } else if (kind == WORK_SERVE || kind == WORK_NEW_PAYLOAD || kind == WORK_FORKCHOICE || kind == WORK_API_ENCODE ||
             kind == WORK_API_EVENT) {
             free(ev);
             ev_size *= 4;
@@ -2990,7 +3012,7 @@ static void shell_work(fc_node *n, const uint8_t *work, const char **why) {
     if (!*why && (esize < EV_WORK_DONE_SIZE || esize > ev_size || esize % 8 || rd64(ev + 8) != EV_WORK_DONE ||
                   memcmp(ev + 16, work + 16, 56) ||
                   (kind != WORK_SERVE && kind != WORK_NEW_PAYLOAD && kind != WORK_FORKCHOICE && kind != WORK_API_ENCODE &&
-                   kind != WORK_API_CHUNK && kind != WORK_API_EVENT && esize != EV_WORK_DONE_SIZE)))
+                   kind != WORK_API_CHUNK && kind != WORK_API_EVENT && kind != WORK_API_SUBMIT && esize != EV_WORK_DONE_SIZE)))
         *why = "lantern_node_run: the event is not the WORK_DONE of the work";
     if (!*why) {
         uint64_t result = rd64(ev + EV_RESULT);
@@ -3514,6 +3536,7 @@ static struct node_shell *shell_open(fc_node *n, tv parts, uint8_t **anchor_bloc
         for (int i = 0; i < NODE_ROOM_FIELDS; i++) s->room[i] = 2;
         s->room[2] = 1;
         s->room[9] = 4096; /* the execution engine's answers */
+        s->room[13] = 16;  /* the pool: every operation of a case's pool requests */
         if (drop_room) { /* the drop check: a Db of three segments */
             s->room[10] = 3 * 8192;
             s->room[11] = 64;
@@ -3848,6 +3871,7 @@ static void transition_node_case(tv parts, uint64_t fork_epoch, int *ran, const 
         for (int i = 0; i < NODE_ROOM_FIELDS; i++) s->room[i] = 2;
         s->room[2] = 1;
         s->room[9] = 4096;
+        s->room[13] = 16;
         memset(anchor + 72, 0x42, 32);
         s->seen_room[0] = s->seen_room[1] = s->seen_room[2] = 1;
         s->seen_room[3] = 64;
@@ -7312,6 +7336,9 @@ static void run_node_api(const char *file, case_file *f) {
         if (!why && (rd64(names + 1) != count || rd64(resps + 1) != count || clen != count || slen != count || stlen != count))
             why = "the case's lists differ in length";
         if (!why) {
+            /* the store's fork epochs: the node's, as the generator's spec has them (the pools' gossip checks read them) */
+            for (uint64_t fk = FORK_ALTAIR; fk <= FORK_FULU; fk++)
+                wr64(n.store + STORE_CONFIG + 16 * fk, rd64(s->ncfg + 16 * fk));
             shell_event(s, EV_TICK, tv_u64(tv_get(parts, "time_ms")), NULL, 0);
             shell_event(s, EV_API_IDENTITY, 0, identity, ilen);
             shell_settle(&n, &why);
@@ -7332,10 +7359,13 @@ static void run_node_api(const char *file, case_file *f) {
             for (int r = 0; r < 2 && !why; r++) {
                 s->api.room = rooms[r];
                 size_t nbufs = s->nbufs;
+                uint64_t held = node_pool_held(s->node);
                 if (syncing[k]) wr64(s->node + NODE_FLAGS, rd64(s->node + NODE_FLAGS) | NODE_FLAG_SYNCING);
                 shell_api_ask(&n, req, rlen, (k + 1) | (uint64_t)(7 + r) << 32, &why);
                 if (syncing[k]) wr64(s->node + NODE_FLAGS, rd64(s->node + NODE_FLAGS) & ~(uint64_t)NODE_FLAG_SYNCING);
-                if (!why && s->nbufs != nbufs) why = "the runner holds other buffers after the answer";
+                /* the bytes of the operations the pool took stay */
+                if (!why && s->nbufs != nbufs + (node_pool_held(s->node) - held))
+                    why = "the runner holds other buffers after the answer";
                 if (!why && streams[k]) { /* an event stream: its head with last 0, no close; then the client goes */
                     if (s->api.len != wlen || memcmp(s->api.b, want, (size_t)wlen) || s->api.lasts || s->api.closes || s->api.late)
                         why = api_mismatch(s, rname, want, wlen);

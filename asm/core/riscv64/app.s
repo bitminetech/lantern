@@ -1502,6 +1502,8 @@ LOCAL_FUNCTION app_work
     beq     s8, t0, 2f
     li      t0, NODE_WORK_API_EVENT
     beq     s8, t0, 2f
+    li      t0, NODE_WORK_API_SUBMIT        # API_SUBMIT: the Seen, and a larger event
+    beq     s8, t0, 7f
     li      t0, NODE_WORK_GOSSIP            # GOSSIP: the Seen, and the proposer state
     beq     s8, t0, 3f
     li      t0, NODE_WORK_TARGET_STATE      # TARGET_STATE, SLOTS, and IMPORT_BLOCK with store room: state_a
@@ -1551,6 +1553,11 @@ LOCAL_FUNCTION app_work
     call    app_regrow
     bnez    a0, 91f
     j       1b
+7:  li      a0, 2
+    li      a1, -1
+    call    app_grow
+    bnez    a0, 91f
+    j       2b
 8:  mv      a0, s8
     mv      a1, s6
     call    app_log_work

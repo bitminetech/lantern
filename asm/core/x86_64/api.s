@@ -1098,7 +1098,25 @@ LOCAL_FUNCTION api_body
     call    api_code_text
     API_LIT api_e_end
     UNFRAME 16
-1:  cmp     $API_OP_GET_NETWORK_IDENTITY, %rsi
+1:  cmp     $API_OP_SUBMIT_POOL_BLS_TO_EXECUTION_CHANGE, %rsi
+    jne     11f
+    # {"code":400,"message":"BAD_REQUEST","failures":[…]}: rbp the event of the work
+    API_LIT api_e_code
+    mov     (%rsp), %rax
+    mov     (%rax), %rdi
+    call    api_dec
+    API_LIT api_e_message
+    mov     (%rsp), %rax
+    mov     (%rax), %rdi
+    call    api_code
+    mov     %rax, %rdi
+    mov     $24, %esi
+    call    api_code_text
+    API_LIT api_f_list
+    call    api_failures
+    UNFRAME 16
+11: mov     8(%rsp), %rsi
+    cmp     $API_OP_GET_NETWORK_IDENTITY, %rsi
     jne     2f
     API_LIT api_i_peer_id
     lea     ApiView_peer_id(%rbp), %rdi
@@ -1801,6 +1819,20 @@ LOCAL_FUNCTION node_api_event
     je      63f
     cmp     $API_OP_EVENTSTREAM, %rcx
     je      61f
+    cmp     $API_OP_GET_POOL_VOLUNTARY_EXITS, %rcx
+    je      68f
+    cmp     $API_OP_GET_POOL_PROPOSER_SLASHINGS, %rcx
+    je      68f
+    cmp     $API_OP_GET_POOL_ATTESTER_SLASHINGS_V2, %rcx
+    je      68f
+    cmp     $API_OP_GET_POOL_BLS_TO_EXECUTION_CHANGES, %rcx
+    je      68f
+    mov     %rcx, %rdi
+    call    node_submit_topic
+    test    %rax, %rax
+    jnz     60f
+    mov     S7(%rsp), %rax
+    mov     ApiRoute_op(%rax), %rcx
     lea     -API_OP_GET_STATE_VALIDATORS(%rcx), %rax    # the six validator operations and getEpochCommittees: a state
     cmp     $(API_OP_GET_EPOCH_COMMITTEES - API_OP_GET_STATE_VALIDATORS), %rax
     jbe     66f
@@ -1840,6 +1872,22 @@ LOCAL_FUNCTION node_api_event
     cmpq    $API_OP_GET_STATE_VALIDATOR, ApiRoute_op(%rax)
     jne     64f
     jmp     67f
+68: mov     S9(%rsp), %rdi                  # a pool GET: a stream of the pool
+    mov     S7(%rsp), %rsi
+    mov     %r12, %rdx
+    mov     S8(%rsp), %rcx
+    call    node_api_pool_stream
+    jmp     90f
+60: mov     S9(%rsp), %rdi                  # a pool POST: a work checks its operations
+    mov     S7(%rsp), %rsi
+    mov     %r12, %rdx
+    mov     %r13, %rcx
+    mov     S8(%rsp), %r8
+    call    node_api_submit
+    mov     %rax, %rdx
+    test    %rax, %rax
+    jnz     80f
+    jmp     90f
 61: mov     S9(%rsp), %rdi                  # eventstream: an entry, and the head
     mov     S7(%rsp), %rsi
     mov     %r12, %rdx
@@ -2963,7 +3011,7 @@ END_FUNCTION node_api_lookup_run
 LOCAL_FUNCTION node_api_free
     UNWIND_END_PROLOGUE
     PART    %rsi, %r10, %rbx, Node_api
-    mov     Node_p2p_out(%rbx), %rax
+    mov     Node_pool(%rbx), %rax
     sub     Node_api(%rbx), %rax
     xor     %edx, %edx
     mov     $NodeApi__mem, %ecx
@@ -3596,6 +3644,8 @@ LOCAL_FUNCTION node_api_head_events
     mov     %rax, Node_event_slot(%rbx)
     lea     Node_event_head(%rbx), %rax
     COPY32  %rax, %r12
+    mov     NodeBlock_state_id(%r12), %rdi  # the pool's checks at the new head
+    call    node_pool_checks
     mov     $API_TOPIC_HEAD, %edi
     call    node_api_subscribed
     test    %rax, %rax
@@ -3824,7 +3874,14 @@ LOCAL_FUNCTION node_api_chunk_done
     lea     (NodeEvent_api + 16)(%r12), %rsi
     mov     $JSON_CURSOR_SIZE, %edx
     call    lantern_copy
-    mov     (NodeEvent_api_bytes + 16)(%r12), %rsi  # the chunk in a SEND
+    testq   $API_STREAM_ITEM_DONE, S7(%rsp) # API_STREAM_ITEM_DONE: the pool stream's next entry
+    jz      1f
+    andq    $~API_STREAM_ITEM_DONE, NodeApi_flags(%r13)
+    mov     %r13, %rdi
+    call    node_api_pool_advance
+    mov     NodeApi_flags(%r13), %rax
+    mov     %rax, S7(%rsp)
+1:  mov     (NodeEvent_api_bytes + 16)(%r12), %rsi  # the chunk in a SEND
     add     $(56 + 7), %rsi
     and     $~7, %rsi
     mov     $NODE_ACT_API_SEND, %edi
@@ -3909,6 +3966,8 @@ LOCAL_FUNCTION api_stream_head
 2:  cmpq    $API_OP_GET_BLOCK_V2, NodeApi_op(%rbx)  # Eth-Consensus-Version: of getBlockV2 and getStateV2
     je      21f
     cmpq    $API_OP_GET_STATE_V2, NodeApi_op(%rbx)
+    je      21f
+    cmpq    $API_OP_GET_POOL_ATTESTER_SLASHINGS_V2, NodeApi_op(%rbx)
     jne     22f
 21: API_LIT api_version
     mov     NodeApi_fork(%rbx), %rdi
@@ -3959,7 +4018,18 @@ END_FUNCTION api_hex4
  */
 LOCAL_FUNCTION api_stream_json
     FRAME 0
-    cmpq    $API_OP_GET_BLOCK_V2, NodeApi_op(%rbx)  # the validator streams: their items, of the state rdi
+    mov     NodeApi_op(%rbx), %rax          # a pool stream: its entries
+    cmp     $API_OP_GET_POOL_VOLUNTARY_EXITS, %rax
+    je      4f
+    cmp     $API_OP_GET_POOL_PROPOSER_SLASHINGS, %rax
+    je      4f
+    cmp     $API_OP_GET_POOL_ATTESTER_SLASHINGS_V2, %rax
+    je      4f
+    cmp     $API_OP_GET_POOL_BLS_TO_EXECUTION_CHANGES, %rax
+    jne     3f
+4:  call    api_pool_json
+    UNFRAME 0
+3:  cmpq    $API_OP_GET_BLOCK_V2, NodeApi_op(%rbx)  # the validator streams: their items, of the state rdi
     je      1f
     cmpq    $API_OP_GET_STATE_V2, NodeApi_op(%rbx)
     je      1f
@@ -4030,6 +4100,15 @@ LOCAL_FUNCTION node_api_chunk_run
     je      1f
     cmp     $API_OP_GET_STATE_V2, %rax
     je      1f
+    mov     $3, %ecx                        # a pool stream (3): data 0 at its end
+    cmp     $API_OP_GET_POOL_VOLUNTARY_EXITS, %rax
+    je      103f
+    cmp     $API_OP_GET_POOL_PROPOSER_SLASHINGS, %rax
+    je      103f
+    cmp     $API_OP_GET_POOL_ATTESTER_SLASHINGS_V2, %rax
+    je      103f
+    cmp     $API_OP_GET_POOL_BLS_TO_EXECUTION_CHANGES, %rax
+    je      103f
     cmp     $API_OP_GET_STATE_VALIDATOR, %rax       # a validator stream: a state
     je      98f
     sub     $API_OP_GET_STATE_VALIDATORS, %rax
@@ -4056,15 +4135,20 @@ LOCAL_FUNCTION node_api_chunk_run
 2:  mov     $NODE_API_FIRST_ROOM, %ecx
     testq   $API_STREAM_STARTED, NodeApi_flags(%rbx)
     jz      3f
-    cmpq    $0, (L + 56)(%rsp)              # a validator stream: an item in every chunk
+    mov     (L + 56)(%rsp), %r8             # a validator stream: an item in every chunk
+    test    %r8, %r8
+    jz      105f
+    cmp     $3, %r8
     jne     3f
-    mov     $64, %ecx
+105: mov    $64, %ecx
 3:  cmp     %rcx, %rax
     jb      97f
     lea     (NodeEvent_api_bytes + 24)(%rbp,%rax), %rax
     mov     %rax, L(%rsp)
     cmpq    $0, (L + 56)(%rsp)
     je      102f
+    cmpq    $3, (L + 56)(%rsp)
+    je      5f
     mov     (L + 48)(%rsp), %rax            # the state at the entry's slot
     mov     NODE_STATE_SLOT(%rax), %rax
     cmp     NodeApi_slot(%rbx), %rax
@@ -4099,6 +4183,8 @@ LOCAL_FUNCTION node_api_chunk_run
     mov     L(%rsp), %r14
     xor     %r15d, %r15d
     cmpq    $0, (L + 56)(%rsp)              # a validator stream: its selection; getEpochCommittees its count; then the state is what api_stream_json reads
+    je      6f
+    cmpq    $3, (L + 56)(%rsp)
     je      6f
     mov     (L + 64)(%rsp), %rdi
     mov     (L + 48)(%rsp), %rsi
@@ -4188,8 +4274,19 @@ LOCAL_FUNCTION node_api_chunk_run
     sub     $7, %r14                        # room for CRLF and the last chunk
     cmpq    $0, (L + 56)(%rsp)
     je      35f
+    cmpq    $3, (L + 56)(%rsp)
+    jne     38f
+    cmpq    $API_OP_GET_POOL_ATTESTER_SLASHINGS_V2, NodeApi_op(%rbx)   # a pool stream: {"data":[, getPoolAttesterSlashingsV2 {"version":"<fork>","data":[
+    jne     39f
+    API_LIT api_j_version
+    mov     NodeApi_fork(%rbx), %rdi
+    call    api_fork_name
+    API_LIT api_p_version
+    jmp     36f
+39: API_LIT api_p_data
+    jmp     36f
     /* the validator streams: {"execution_optimistic":…,"finalized":…,"data":[ */
-    API_LIT api_v_open
+38: API_LIT api_v_open
     mov     (NodeEvent_api + 8)(%rbp), %rdi
     shr     $8, %rdi
     and     $1, %edi
@@ -4325,6 +4422,900 @@ LOCAL_FUNCTION node_api_chunk_run
 98: mov     $LANTERN_INVALID_EVENT, %eax
     LEAVE 80
 END_FUNCTION node_api_chunk_run
+
+/* ------------------------------------------------------------ The pools (beacon-api.md, node.md) */
+
+/* rax = the gossip topic of the pool POST rdi, or 0. */
+LOCAL_FUNCTION node_submit_topic
+    UNWIND_END_PROLOGUE
+    mov     $GOSSIP_VOLUNTARY_EXIT, %eax
+    cmp     $API_OP_SUBMIT_POOL_VOLUNTARY_EXIT, %rdi
+    je      9f
+    mov     $GOSSIP_PROPOSER_SLASHING, %eax
+    cmp     $API_OP_SUBMIT_POOL_PROPOSER_SLASHINGS, %rdi
+    je      9f
+    mov     $GOSSIP_ATTESTER_SLASHING, %eax
+    cmp     $API_OP_SUBMIT_POOL_ATTESTER_SLASHINGS_V2, %rdi
+    je      9f
+    mov     $GOSSIP_BLS_TO_EXECUTION_CHANGE, %eax
+    cmp     $API_OP_SUBMIT_POOL_BLS_TO_EXECUTION_CHANGE, %rdi
+    je      9f
+    xor     %eax, %eax
+9:  ret
+END_FUNCTION node_submit_topic
+
+/* rax = the lantern_node_json kind of the pool operation of the gossip topic rdi. */
+LOCAL_FUNCTION node_pool_kind
+    UNWIND_END_PROLOGUE
+    lea     -(GOSSIP_VOLUNTARY_EXIT - NODE_JSON_EXIT)(%rdi), %rax
+    cmp     $GOSSIP_BLS_TO_EXECUTION_CHANGE, %rdi
+    jne     9f
+    mov     $NODE_JSON_BLS_CHANGE, %eax
+9:  ret
+END_FUNCTION node_pool_kind
+.if GOSSIP_PROPOSER_SLASHING - GOSSIP_VOLUNTARY_EXIT != NODE_JSON_PROPOSER_SLASHING - NODE_JSON_EXIT || GOSSIP_ATTESTER_SLASHING - GOSSIP_VOLUNTARY_EXIT != NODE_JSON_ATTESTER_SLASHING - NODE_JSON_EXIT
+.error "node_pool_kind: the kinds follow the topics"
+.endif
+
+/*
+ * rax = the index of the first pool entry from the index rdi that the pool GET rsi of the fork
+ * rdx answers (node.md, NODE_EV_API): of its topic, and for getPoolAttesterSlashingsV2 of that
+ * fork's AttesterSlashing type; else 2^64 - 1. rdx = the entry. rbx the node. Uses rcx, r8, r10, r11.
+ */
+LOCAL_FUNCTION node_pool_next
+    UNWIND_END_PROLOGUE
+    mov     $GOSSIP_VOLUNTARY_EXIT, %ecx
+    cmp     $API_OP_GET_POOL_VOLUNTARY_EXITS, %rsi
+    je      1f
+    mov     $GOSSIP_PROPOSER_SLASHING, %ecx
+    cmp     $API_OP_GET_POOL_PROPOSER_SLASHINGS, %rsi
+    je      1f
+    mov     $GOSSIP_ATTESTER_SLASHING, %ecx
+    cmp     $API_OP_GET_POOL_ATTESTER_SLASHINGS_V2, %rsi
+    je      1f
+    mov     $GOSSIP_BLS_TO_EXECUTION_CHANGE, %ecx
+1:  xor     %r11d, %r11d
+    cmp     $FORK_ELECTRA, %rdx
+    setae   %r11b
+    mov     %rdi, %rax
+    PART    %rdx, %r10, %rbx, Node_pool
+    imul    $NodePool__mem, %rax, %r8
+    add     %r8, %rdx
+2:  cmp     %r10, %rax
+    jae     8f
+    cmp     %rcx, NodePool_topic(%rdx)
+    jne     3f
+    cmp     $GOSSIP_ATTESTER_SLASHING, %rcx
+    jne     4f
+    xor     %r8d, %r8d
+    cmpq    $FORK_ELECTRA, NodePool_fork(%rdx)
+    setae   %r8b
+    cmp     %r11, %r8
+    je      4f
+3:  add     $NodePool__mem, %rdx
+    inc     %rax
+    jmp     2b
+4:  ret
+8:  mov     $-1, %rax
+    ret
+END_FUNCTION node_pool_next
+
+/*
+ * (connection rdi, route rsi, flags rdx, view rcx): a stream of a pool GET (node.md, NODE_EV_API):
+ * fork the store's; slot the first entry it answers, data its bytes, sent its fork; data 0 with
+ * none. flags: API_STREAM_CLOSE and API_STREAM_HTTP10. Locals: the connection, the route, the
+ * flags, the fork, the entry's index and address.
+ */
+LOCAL_FUNCTION node_api_pool_stream
+    FRAME 48
+    mov     %rdi, (%rsp)
+    mov     %rsi, 8(%rsp)
+    mov     %rdx, 16(%rsp)
+    mov     ApiView_fork(%rcx), %rax
+    mov     %rax, 24(%rsp)
+    call    node_api_new
+    mov     %rax, 32(%rsp)
+    mov     %rdx, 40(%rsp)
+    mov     %rdx, %rdi
+    mov     $NodeApi__mem, %esi
+    call    lantern_zero
+    mov     40(%rsp), %rdx
+    mov     (%rsp), %rax
+    mov     %rax, NodeApi_connection(%rdx)
+    mov     8(%rsp), %rax
+    mov     ApiRoute_op(%rax), %rsi
+    mov     %rsi, NodeApi_op(%rdx)
+    mov     16(%rsp), %rax
+    mov     %rax, NodeApi_flags(%rdx)
+    mov     24(%rsp), %rax
+    mov     %rax, NodeApi_fork(%rdx)
+    xor     %edi, %edi
+    mov     %rax, %rdx
+    call    node_pool_next
+    mov     40(%rsp), %rcx
+    cmp     $-1, %rax
+    je      1f
+    mov     %rax, NodeApi_slot(%rcx)
+    mov     NodePool_data_id(%rdx), %rax
+    mov     %rax, NodeApi_data(%rcx)
+    mov     NodePool_fork(%rdx), %rax
+    mov     %rax, NodeApi_sent(%rcx)
+1:  mov     32(%rsp), %rax
+    mov     40(%rsp), %rdx
+    call    node_api_chunk_work
+    UNFRAME 48
+END_FUNCTION node_api_pool_stream
+
+/*
+ * The pool stream of the NodeApi entry rdi goes to its next entry after slot (node.md,
+ * NODE_WORK_API_CHUNK): its slot, data and sent, a zero cursor; data 0 with none. Bytes it owned
+ * get a NODE_ACT_BYTES_FREE, and API_STREAM_OWN clears. Locals: the entry, the old data, the flags.
+ */
+LOCAL_FUNCTION node_api_pool_advance
+    FRAME 32
+    mov     %rdi, (%rsp)
+    mov     NodeApi_data(%rdi), %rax
+    mov     %rax, 8(%rsp)
+    mov     NodeApi_flags(%rdi), %rax
+    mov     %rax, 16(%rsp)
+    mov     NodeApi_op(%rdi), %rsi
+    mov     NodeApi_fork(%rdi), %rdx
+    mov     NodeApi_slot(%rdi), %rdi
+    inc     %rdi
+    call    node_pool_next
+    mov     (%rsp), %rcx
+    xor     %r8d, %r8d
+    cmp     $-1, %rax
+    je      1f
+    mov     %rax, NodeApi_slot(%rcx)
+    mov     NodePool_fork(%rdx), %rax
+    mov     %rax, NodeApi_sent(%rcx)
+    mov     NodePool_data_id(%rdx), %r8
+1:  mov     %r8, NodeApi_data(%rcx)
+    andq    $~API_STREAM_OWN, NodeApi_flags(%rcx)
+    lea     NodeApi_cursor(%rcx), %rdi
+    mov     $JSON_CURSOR_SIZE, %esi
+    call    lantern_zero
+    testq   $API_STREAM_OWN, 16(%rsp)       # API_STREAM_OWN: the old bytes go
+    jz      9f
+    mov     $NODE_ACT_BYTES_FREE, %edi
+    mov     8(%rsp), %rsi
+    xor     %edx, %edx
+    call    node_ids
+9:  UNFRAME 32
+END_FUNCTION node_api_pool_advance
+
+/*
+ * A pool stream's JSON, as api_stream_json: with the bytes rdi, the JSON of the pool entry from
+ * the cursor at NodeEvent_api + 16, by lantern_node_json of the fork in sent (NodeEvent_api) and
+ * the kind of the GET, after , when API_STREAM_ITEMS is set and the cursor is at its start; once
+ * whole, API_STREAM_ITEMS and API_STREAM_ITEM_DONE in the event. With rdi = 0: ]}. rax = 1 when
+ * the answer is whole, 0 when more is to come, 2 for bytes that are no encoding. Locals: the bytes.
+ */
+LOCAL_FUNCTION api_pool_json
+    FRAME 16
+    mov     %rdi, (%rsp)
+    test    %rdi, %rdi
+    jnz     1f
+    API_LIT api_v_end
+    mov     $1, %eax
+    UNFRAME 16
+1:  cmpq    $0, (NodeEvent_api + 16)(%rbp)  # the cursor's depth: 0 before the first byte
+    jne     2f
+    testq   $API_STREAM_ITEMS, (NodeEvent_api + 8)(%rbp)
+    jz      2f
+    API_LIT api_p_comma
+2:  mov     NodeApi_op(%rbx), %rax          # the kind of the GET's operation
+    mov     $NODE_JSON_EXIT, %edi
+    cmp     $API_OP_GET_POOL_VOLUNTARY_EXITS, %rax
+    je      3f
+    mov     $NODE_JSON_PROPOSER_SLASHING, %edi
+    cmp     $API_OP_GET_POOL_PROPOSER_SLASHINGS, %rax
+    je      3f
+    mov     $NODE_JSON_ATTESTER_SLASHING, %edi
+    cmp     $API_OP_GET_POOL_ATTESTER_SLASHINGS_V2, %rax
+    je      3f
+    mov     $NODE_JSON_BLS_CHANGE, %edi
+3:  lea     NodeEvent_api_bytes(%rbp), %rsi # the ByteList: its room to r14 - 1, its bytes to r12
+    lea     -1(%r14), %rax
+    sub     %rsi, %rax
+    mov     %rax, (%rsi)
+    movq    $24, 8(%rsi)
+    mov     %r12, %rax
+    sub     %rsi, %rax
+    sub     $24, %rax
+    mov     %rax, 16(%rsi)
+    mov     (%rsp), %rsi
+    lea     (NodeEvent_api + 16)(%rbp), %rdx
+    lea     NodeEvent_api_bytes(%rbp), %rcx
+    mov     NodeEvent_api(%rbp), %r10
+    FORK_CALL node_json
+    mov     (NodeEvent_api_bytes + 16)(%rbp), %r12
+    lea     (NodeEvent_api_bytes + 24)(%rbp,%r12), %r12
+    cmp     $LANTERN_JSON_MORE, %rax
+    je      8f
+    test    %rax, %rax
+    jnz     7f
+    orq     $(API_STREAM_ITEMS | API_STREAM_ITEM_DONE), (NodeEvent_api + 8)(%rbp)   # whole: the entry is done
+8:  xor     %eax, %eax
+    UNFRAME 16
+7:  mov     $2, %eax
+    UNFRAME 16
+END_FUNCTION api_pool_json
+
+/*
+ * The failures of the event rbp of a NODE_WORK_API_SUBMIT: {"index":<i>,"message":"REJECT"} for
+ * each record of LANTERN_GOSSIP_REJECT, with , between, then ]}. Locals: the record, its index,
+ * the failures written.
+ */
+LOCAL_FUNCTION api_failures
+    FRAME 32
+    mov     (NodeEvent_chunk + 8)(%rbp), %rax
+    lea     NodeEvent_chunk(%rbp,%rax), %rax
+    mov     %rax, (%rsp)
+    movq    $0, 8(%rsp)
+    movq    $0, 16(%rsp)
+1:  mov     8(%rsp), %rax
+    cmp     NodeEvent_index(%rbp), %rax
+    jae     9f
+    mov     (%rsp), %rax
+    cmpq    $LANTERN_GOSSIP_REJECT, (%rax)
+    jne     3f
+    cmpq    $0, 16(%rsp)
+    je      2f
+    API_LIT api_p_comma
+2:  API_LIT api_f_index
+    mov     8(%rsp), %rdi
+    call    api_dec
+    API_LIT api_f_reject
+    incq    16(%rsp)
+3:  mov     (%rsp), %rax                    # the next record: its code, then its ByteList
+    mov     8(%rax), %rcx
+    lea     8(%rax,%rcx), %rax
+    mov     %rax, (%rsp)
+    incq    8(%rsp)
+    jmp     1b
+9:  API_LIT api_v_end
+    UNFRAME 32
+END_FUNCTION api_failures
+
+/*
+ * (connection rdi, route rsi, flags rdx, request rcx, view r8) -> rax: a pool POST (node.md,
+ * NODE_EV_API): a NODE_ACT_BYTES_PUT of the body and a NODE_WORK_API_SUBMIT; 0 once queued, else
+ * the status of the error to answer. Locals: the connection, the flags, the route, the view, the
+ * head's post-state, a ByteList head whose offset reaches the body.
+ */
+LOCAL_FUNCTION node_api_submit
+    FRAME 64
+    mov     %rdi, (%rsp)
+    mov     %rdx, 8(%rsp)
+    mov     %rsi, 16(%rsp)
+    mov     %r8, 24(%rsp)
+    cmpq    $API_OP_SUBMIT_POOL_ATTESTER_SLASHINGS_V2, ApiRoute_op(%rsi)   # the AttesterSlashing type of the store's fork
+    jne     1f
+    xor     %eax, %eax
+    cmpq    $FORK_ELECTRA, ApiRoute_consensus_version(%rsi)
+    setae   %al
+    xor     %edx, %edx
+    cmpq    $FORK_ELECTRA, ApiView_fork(%r8)
+    setae   %dl
+    cmp     %rax, %rdx
+    jne     80f
+1:  mov     (HttpRequest_body + 8)(%rcx), %rax  # a body of no bytes: 400
+    test    %rax, %rax
+    jz      80f
+    mov     HttpRequest_body(%rcx), %rdx
+    add     %rcx, %rdx
+    lea     40(%rsp), %rdi
+    sub     %rdi, %rdx
+    mov     %rax, 40(%rsp)
+    mov     %rdx, 48(%rsp)
+    mov     %rax, 56(%rsp)
+    lea     Node_head_root(%rbx), %rdi      # the head's post-state, else 500
+    call    node_find_block
+    cmp     $-1, %rax
+    je      81f
+    mov     NodeBlock_state_id(%rdx), %rax
+    test    %rax, %rax
+    jz      81f
+    mov     %rax, 32(%rsp)
+    lea     40(%rsp), %rdi
+    call    node_put
+    mov     %rax, %rcx
+    mov     $NODE_WORK_API_SUBMIT, %edi
+    mov     32(%rsp), %rsi
+    xor     %edx, %edx
+    mov     (%rsp), %r8
+    mov     16(%rsp), %rax
+    mov     ApiRoute_op(%rax), %r9
+    mov     8(%rsp), %rax
+    shl     $8, %rax
+    or      %rax, %r9
+    mov     24(%rsp), %rax
+    mov     ApiView_fork(%rax), %rax
+    shl     $16, %rax
+    or      %rax, %r9
+    call    node_work
+    xor     %eax, %eax
+    UNFRAME 64
+80: mov     $400, %eax
+    UNFRAME 64
+81: mov     $500, %eax
+    UNFRAME 64
+END_FUNCTION node_api_submit
+
+/*
+ * rax = 0 when the NODE_EV_WORK_DONE rdi of rcx bytes of a valid NODE_WORK_API_SUBMIT holds its
+ * records inside it (node.md): a ByteList at NodeEvent_chunk of offset 24, and NodeEvent_index
+ * records in its bytes, each a code and a ByteList of offset 24 whose size is a multiple of 8;
+ * else 1. Uses rdx, rsi.
+ */
+LOCAL_FUNCTION node_submit_check
+    UNWIND_END_PROLOGUE
+    cmp     $(NodeEvent_chunk + 24), %rcx
+    jb      8f
+    cmpq    $24, (NodeEvent_chunk + 8)(%rdi)
+    jne     8f
+    lea     -(NodeEvent_chunk + 24)(%rcx), %rax
+    cmp     %rax, (NodeEvent_chunk + 16)(%rdi)
+    ja      8f
+    lea     (NodeEvent_chunk + 24)(%rdi), %rsi  # the first record
+    mov     NodeEvent_index(%rdi), %rdx
+1:  test    %rdx, %rdx
+    jz      7f
+    mov     (NodeEvent_chunk + 16)(%rdi), %rax  # the bytes left
+    lea     (NodeEvent_chunk + 24)(%rdi,%rax), %rax
+    sub     %rsi, %rax
+    cmp     $32, %rax
+    jb      8f
+    sub     $8, %rax
+    cmp     %rax, 8(%rsi)
+    ja      8f
+    cmpq    $24, 16(%rsi)
+    jne     8f
+    mov     8(%rsi), %rax
+    cmp     $24, %rax
+    jb      8f
+    test    $7, %al
+    jnz     8f
+    sub     $24, %rax
+    cmp     %rax, 24(%rsi)
+    ja      8f
+    mov     8(%rsi), %rax
+    lea     8(%rsi,%rax), %rsi
+    dec     %rdx
+    jmp     1b
+7:  xor     %eax, %eax
+    ret
+8:  mov     $1, %eax
+    ret
+END_FUNCTION node_submit_check
+
+/*
+ * The NODE_EV_WORK_DONE rdi of a NODE_WORK_API_SUBMIT (node.md, lantern_node_step): the body's
+ * bytes go; each valid operation joins the pool, goes out on its topic with NODE_FLAG_SUBSCRIBED,
+ * and an attester slashing to fork choice; then the answer to the connection. rbx the node, rbp
+ * the store, r15 the actions. r12 the event, r13 the record, S7 the records left, S8 the failures,
+ * S9 the topic, S10 the new id. Locals: L 1 when the pool keeps it, L+8 the answer's flags.
+ */
+LOCAL_FUNCTION node_api_submit_done
+    ENTER 16
+    mov     %rdi, %r12
+    mov     $NODE_ACT_BYTES_FREE, %edi
+    mov     NodeAction_data(%r12), %rsi
+    xor     %edx, %edx
+    call    node_ids
+    mov     NodeAction_arg(%r12), %rax      # the answer's flags: API_STREAM_CLOSE (1), API_STREAM_HTTP10 (2)
+    shr     $8, %rax
+    mov     $API_R_CLOSE, %ecx
+    test    $API_STREAM_CLOSE, %al
+    jnz     1f
+    xor     %ecx, %ecx
+    test    $API_STREAM_HTTP10, %al
+    jz      1f
+    mov     $API_R_KEEP, %ecx
+1:  mov     %rcx, (L + 8)(%rsp)
+    movzbl  NodeAction_arg(%r12), %edi
+    call    node_submit_topic
+    mov     %rax, S9(%rsp)
+    cmpq    $0, NodeEvent_result(%r12)
+    jne     80f
+    movq    $0, S8(%rsp)
+    mov     NodeEvent_index(%r12), %rax
+    mov     %rax, S7(%rsp)
+    mov     (NodeEvent_chunk + 8)(%r12), %r13
+    lea     NodeEvent_chunk(%r12,%r13), %r13
+2:  cmpq    $0, S7(%rsp)
+    je      70f
+    mov     (%r13), %rax                    # its code
+    cmp     $LANTERN_GOSSIP_REJECT, %rax
+    jne     21f
+    incq    S8(%rsp)
+21: test    %rax, %rax
+    jnz     6f
+    lea     8(%r13), %rdi                   # valid: its bytes to a new id, kept by the pool when it has room
+    call    node_put
+    mov     %rax, S10(%rsp)
+    mov     S9(%rsp), %rdi
+    mov     %rax, %rsi
+    mov     24(%r13), %rdx
+    mov     NodeAction_arg(%r12), %rcx
+    shr     $16, %rcx
+    call    node_pool_add
+    mov     %rax, L(%rsp)
+    testq   $NODE_FLAG_SUBSCRIBED, Node_flags(%rbx) # NODE_FLAG_SUBSCRIBED: out on its topic
+    jz      3f
+    mov     S9(%rsp), %rdi
+    lea     8(%r13), %rsi
+    call    node_publish
+3:  cmpq    $GOSSIP_ATTESTER_SLASHING, S9(%rsp) # an attester slashing: on_attester_slashing with the justified root's state
+    jne     4f
+    lea     (Store_justified_checkpoint + 8)(%rbp), %rdi
+    call    node_find_block
+    cmp     $-1, %rax
+    je      4f
+    cmpq    $NODE_BLOCK_IMPORTED, NodeBlock_status(%rdx)
+    jne     4f
+    mov     NodeBlock_state_id(%rdx), %rsi
+    test    %rsi, %rsi
+    jz      4f
+    mov     $NODE_WORK_ATTESTER_SLASHING, %edi
+    xor     %edx, %edx
+    mov     S10(%rsp), %rcx
+    xor     %r8d, %r8d
+    xor     %r9d, %r9d
+    call    node_work
+    jmp     6f
+4:  cmpq    $0, L(%rsp)                     # bytes no entry keeps and no work reads go
+    jne     6f
+    mov     $NODE_ACT_BYTES_FREE, %edi
+    mov     S10(%rsp), %rsi
+    xor     %edx, %edx
+    call    node_ids
+6:  mov     8(%r13), %rax
+    lea     8(%r13,%rax), %r13
+    decq    S7(%rsp)
+    jmp     2b
+70: mov     NodeAction_target(%r12), %rdi   # the answer: 200, or 400 with the failures
+    cmpq    $0, S8(%rsp)
+    je      71f
+    movzbl  NodeAction_arg(%r12), %eax
+    cmp     $API_OP_SUBMIT_POOL_BLS_TO_EXECUTION_CHANGE, %eax
+    jne     80f
+    mov     %r12, %rsi
+    mov     $400, %edx
+    mov     $API_OP_SUBMIT_POOL_BLS_TO_EXECUTION_CHANGE, %ecx
+    mov     (L + 8)(%rsp), %r8
+    call    node_api_send
+    LEAVE 16
+71: xor     %esi, %esi
+    mov     $200, %edx
+    xor     %ecx, %ecx
+    mov     (L + 8)(%rsp), %r8
+    call    node_api_send
+    LEAVE 16
+80: mov     NodeAction_target(%r12), %rdi
+    xor     %esi, %esi
+    mov     $400, %edx
+    mov     $API_BODY_ERROR, %ecx
+    mov     (L + 8)(%rsp), %r8
+    call    node_api_send
+    LEAVE 16
+END_FUNCTION node_api_submit_done
+
+/*
+ * The publish of the SSZ bytes of the ByteList rsi on the gossip topic rdi (node.md, the
+ * publish): a LIBP2P_EVENT_PUBLISH at the end of p2p_out; none when it does not fit. Its data
+ * compresses in place, its ByteList head in the 24 bytes before the data. rbx the node, rbp the
+ * store, r14 the scratch. r12 the bytes, then the data's length; r13 the event. Locals: L a
+ * GossipTopic, L+24 the topic's ByteList (24 + 128), L+176 a size, L+184 the message-id (24),
+ * L+208 the topic's length, L+216 the data's offset in the event, L+224 the event's room.
+ */
+LOCAL_FUNCTION node_publish
+    ENTER 240
+    mov     %rsi, %r12
+    mov     Node_fork_digest(%rbx), %eax
+    mov     %rax, (L + GossipTopic_fork_digest)(%rsp)
+    mov     %rdi, (L + GossipTopic_name)(%rsp)
+    movq    $0, (L + GossipTopic_subnet_id)(%rsp)
+    movq    $(24 + 128), (L + 24)(%rsp)
+    movq    $24, (L + 32)(%rsp)
+    movq    $0, (L + 40)(%rsp)
+    lea     L(%rsp), %rdi
+    lea     (L + 24)(%rsp), %rsi
+    call    lantern_gossip_topic
+    test    %rax, %rax
+    jnz     9f
+    mov     (L + 40)(%rsp), %rax
+    mov     %rax, (L + 208)(%rsp)
+    add     $(LIBP2P_EV_PUB_TOPIC + 7), %rax
+    and     $-8, %rax
+    mov     %rax, (L + 216)(%rsp)
+    mov     %r12, %rdi
+    lea     (L + 176)(%rsp), %rsi
+    CALL_GLOBAL snappy_compress_size
+    test    %rax, %rax
+    jnz     9f
+    mov     (L + 176)(%rsp), %rax           # the room: the data's offset, then at most size - 24 bytes
+    sub     $24, %rax
+    add     (L + 216)(%rsp), %rax
+    add     $7, %rax
+    and     $-8, %rax
+    mov     %rax, (L + 224)(%rsp)
+    mov     %rax, %rdi
+    call    node_out
+    test    %rax, %rax
+    jz      9f
+    mov     %rax, %r13
+    mov     (L + 216)(%rsp), %rdx           # the data's ByteList head before it: its room to the event's end
+    lea     -24(%r13,%rdx), %rdx
+    mov     (L + 224)(%rsp), %rax
+    sub     (L + 216)(%rsp), %rax
+    add     $24, %rax
+    mov     %rax, (%rdx)
+    mov     %r12, %rdi
+    mov     %r14, %rsi
+    CALL_GLOBAL snappy_compress
+    test    %rax, %rax
+    jnz     8f
+    mov     %rbp, %rdi                      # the message-id: of the fork of the store's slot
+    call    node_store_slot
+    mov     %rax, %rdi
+    lea     Node_config(%rbx), %rsi
+    call    node_fork
+    mov     %rax, %r10
+    lea     (L + 24)(%rsp), %rdi
+    mov     (L + 216)(%rsp), %rsi
+    lea     -24(%r13,%rsi), %rsi
+    lea     Node_config(%rbx), %rdx
+    mov     %r14, %rcx
+    lea     (L + 184)(%rsp), %r8
+    FORK_CALL compute_message_id
+    test    %rax, %rax
+    jnz     8f
+    mov     (L + 216)(%rsp), %rax           # the data's length; the event to its bytes
+    mov     -8(%r13,%rax), %r12
+    lea     7(%rax,%r12), %rcx
+    and     $-8, %rcx
+    mov     Node_p2p_out(%rbx), %rdx
+    add     %rbx, %rdx
+    mov     16(%rdx), %rax
+    sub     (L + 224)(%rsp), %rax
+    add     %rcx, %rax
+    mov     %rax, 16(%rdx)
+    mov     %rcx, (L + 224)(%rsp)
+    mov     %rcx, (%r13)
+    movq    $LIBP2P_EVENT_PUBLISH, 8(%r13)
+    movq    $20, LIBP2P_EV_PUB_ID_LEN(%r13)
+    movq    $0, (LIBP2P_EV_PUB_ID + 16)(%r13)
+    movq    $0, (LIBP2P_EV_PUB_ID + 24)(%r13)
+    lea     LIBP2P_EV_PUB_ID(%r13), %rdi
+    lea     (L + 184)(%rsp), %rsi
+    mov     $20, %edx
+    call    lantern_copy
+    mov     (L + 208)(%rsp), %rax
+    mov     %rax, LIBP2P_EV_PUB_TOPIC_LEN(%r13)
+    mov     %r12, LIBP2P_EV_PUB_DATA_LEN(%r13)
+    lea     LIBP2P_EV_PUB_TOPIC(%r13), %rdi
+    lea     (L + 48)(%rsp), %rsi
+    mov     (L + 208)(%rsp), %rdx
+    call    lantern_copy
+    mov     (L + 208)(%rsp), %rax           # zero bytes after the topic and after the data
+    lea     LIBP2P_EV_PUB_TOPIC(%r13,%rax), %rdi
+    mov     (L + 216)(%rsp), %rsi
+    sub     $LIBP2P_EV_PUB_TOPIC, %rsi
+    sub     %rax, %rsi
+    call    lantern_zero
+    mov     (L + 216)(%rsp), %rax
+    add     %r12, %rax
+    lea     (%r13,%rax), %rdi
+    mov     (L + 224)(%rsp), %rsi
+    sub     %rax, %rsi
+    call    lantern_zero
+9:  LEAVE 240
+8:  mov     Node_p2p_out(%rbx), %rdx        # no publish: the room goes back
+    add     %rbx, %rdx
+    mov     16(%rdx), %rax
+    sub     (L + 224)(%rsp), %rax
+    mov     %rax, 16(%rdx)
+    LEAVE 240
+END_FUNCTION node_publish
+
+/*
+ * (text rdi to rsi, kind rdx, fork rcx, fault r8, record r9, the event's end r10) -> rax: the
+ * JSON text decoded by lantern_node_json_decode into the record r9 (r15 the scratch of
+ * node_api_submit_run): code 0, then a ByteList of the SSZ bytes, its size to a multiple of 8;
+ * rdx the next record. rax = 0, 1 for a text that is no such value, 2 for too little room.
+ * Locals: a ByteList head of the text, the record.
+ */
+LOCAL_FUNCTION node_submit_decode
+    FRAME 32
+    mov     %r9, 24(%rsp)
+    sub     %rdi, %rsi
+    mov     %rsi, (%rsp)
+    mov     %rdi, %rax
+    sub     %rsp, %rax
+    mov     %rax, 8(%rsp)
+    mov     %rsi, 16(%rsp)
+    lea     32(%r9), %rax
+    cmp     %r10, %rax
+    ja      8f
+    mov     %r10, %rax
+    sub     %r9, %rax
+    sub     $8, %rax
+    mov     %rax, 8(%r9)
+    mov     %rcx, %r10
+    mov     %rdx, %rdi
+    mov     %rsp, %rsi
+    mov     %r15, %rdx
+    lea     8(%r9), %rcx
+    FORK_CALL node_json_decode
+    cmp     $LANTERN_BUFFER_TOO_SMALL, %rax
+    je      8f
+    test    %rax, %rax
+    jnz     7f
+    mov     24(%rsp), %r9                   # its size: the bytes to a multiple of 8, zero after them
+    mov     24(%r9), %rdx
+    lea     (24 + 7)(%rdx), %rax
+    and     $-8, %rax
+    mov     %rax, 8(%r9)
+    movq    $0, (%r9)
+    lea     32(%r9,%rdx), %rdi
+    lea     -24(%rax), %rsi
+    sub     %rdx, %rsi
+    call    lantern_zero
+    mov     24(%rsp), %r9
+    mov     8(%r9), %rdx
+    lea     8(%r9,%rdx), %rdx
+    xor     %eax, %eax
+    UNFRAME 32
+7:  mov     $1, %eax
+    UNFRAME 32
+8:  mov     $2, %eax
+    UNFRAME 32
+END_FUNCTION node_submit_decode
+
+/*
+ * (node rdi, store rsi, seen rdx, work rcx, state_a r8, data r9, scratch r10, event r11, room rax)
+ * -> rax: a NODE_WORK_API_SUBMIT of lantern_node_run (node.md): the operations of the body decoded
+ * as records at NodeEvent_chunk of the event, then each checked by lantern_node_gossip of the fork
+ * arg / 2^16 with seen. rbx node, rbp store, r12 work, r13 state_a, r14 data, r15 scratch, S7 the
+ * event, S8 its end, S9 the next record, S10 the text's end. Locals: L seen, L+8 the kind, L+16
+ * the topic, L+24 the fork, L+32 the operations, L+40 1 for a list, L+48 where the text goes on,
+ * L+56 an item's start, L+64 a NodeGossip, L+144 a JsonFault, L+272 a root, L+304 an index.
+ */
+LOCAL_FUNCTION node_api_submit_run
+    ENTER 320
+    mov     %rdi, %rbx
+    mov     %rsi, %rbp
+    mov     %rdx, L(%rsp)
+    mov     %rcx, %r12
+    mov     %r8, %r13
+    mov     %r9, %r14
+    mov     %r10, %r15
+    mov     %r11, S7(%rsp)
+    add     %r11, %rax
+    mov     %rax, S8(%rsp)
+    mov     NodeAction_arg(%r12), %rax      # the operation's kind and topic; the fork
+    mov     %rax, %rcx
+    shr     $16, %rcx
+    cmp     $FORK_FULU, %rcx
+    ja      98f
+    mov     %rcx, (L + 24)(%rsp)
+    movzbl  %al, %edi
+    xor     %eax, %eax
+    cmp     $API_OP_SUBMIT_POOL_BLS_TO_EXECUTION_CHANGE, %edi
+    sete    %al
+    mov     %rax, (L + 40)(%rsp)
+    call    node_submit_topic
+    test    %rax, %rax
+    jz      98f
+    mov     %rax, (L + 16)(%rsp)
+    mov     %rax, %rdi
+    call    node_pool_kind
+    mov     %rax, (L + 8)(%rsp)
+    test    %r13, %r13
+    jz      98f
+    test    %r14, %r14
+    jz      98f
+    mov     S7(%rsp), %rdi                  # the records' ByteList
+    lea     (NodeEvent_chunk + 24)(%rdi), %rax
+    cmp     S8(%rsp), %rax
+    ja      97f
+    mov     S8(%rsp), %rcx
+    sub     %rdi, %rcx
+    sub     $NodeEvent_chunk, %rcx
+    mov     %rcx, NodeEvent_chunk(%rdi)
+    movq    $24, (NodeEvent_chunk + 8)(%rdi)
+    movq    $0, (NodeEvent_chunk + 16)(%rdi)
+    mov     %rax, S9(%rsp)
+    movq    $0, (L + 32)(%rsp)
+    mov     8(%r14), %rdi                   # the text
+    add     %r14, %rdi
+    mov     16(%r14), %rax
+    add     %rdi, %rax
+    mov     %rax, S10(%rsp)
+    cmpq    $0, (L + 40)(%rsp)
+    jne     20f
+    mov     S10(%rsp), %rsi                 # one operation: the whole text
+    mov     (L + 8)(%rsp), %rdx
+    mov     (L + 24)(%rsp), %rcx
+    lea     (L + 144)(%rsp), %r8
+    mov     S9(%rsp), %r9
+    mov     S8(%rsp), %r10
+    call    node_submit_decode
+    cmp     $1, %rax
+    je      90f
+    ja      97f
+    mov     %rdx, S9(%rsp)
+    movq    $1, (L + 32)(%rsp)
+    jmp     30f
+20: cmpq    $FORK_CAPELLA, (L + 24)(%rsp)   # a JSON array, from capella
+    jb      90f
+    mov     S10(%rsp), %rsi
+    call    submit_ws
+    cmp     %rsi, %rdi
+    jae     90f
+    cmpb    $'[', (%rdi)
+    jne     90f
+    inc     %rdi
+    call    submit_ws
+    cmp     %rsi, %rdi
+    jae     90f
+    cmpb    $']', (%rdi)
+    jne     23f
+    inc     %rdi
+    jmp     28f
+23: mov     %rdi, (L + 56)(%rsp)            # an item: to a , or ] outside strings, arrays and objects
+    xor     %ecx, %ecx
+24: cmp     %rsi, %rdi
+    jae     90f
+    movzbl  (%rdi), %eax
+    cmp     $'"', %eax
+    jne     25f
+253: inc    %rdi
+    cmp     %rsi, %rdi
+    jae     90f
+    movzbl  (%rdi), %eax
+    cmp     $'\\', %eax
+    jne     252f
+    inc     %rdi
+    jmp     253b
+252: cmp    $'"', %eax
+    jne     253b
+    inc     %rdi
+    jmp     24b
+25: cmp     $'{', %eax
+    je      251f
+    cmp     $'[', %eax
+    jne     26f
+251: inc    %rcx
+    inc     %rdi
+    jmp     24b
+26: cmp     $'}', %eax
+    je      261f
+    cmp     $']', %eax
+    jne     27f
+261: test   %rcx, %rcx
+    jz      271f
+    dec     %rcx
+    inc     %rdi
+    jmp     24b
+27: cmp     $',', %eax
+    jne     272f
+    test    %rcx, %rcx
+    jz      271f
+272: inc    %rdi
+    jmp     24b
+271: mov    %rdi, (L + 48)(%rsp)
+    mov     %rdi, %rsi
+    mov     (L + 56)(%rsp), %rdi
+    mov     (L + 8)(%rsp), %rdx
+    mov     (L + 24)(%rsp), %rcx
+    lea     (L + 144)(%rsp), %r8
+    mov     S9(%rsp), %r9
+    mov     S8(%rsp), %r10
+    call    node_submit_decode
+    cmp     $1, %rax
+    je      90f
+    ja      97f
+    mov     %rdx, S9(%rsp)
+    incq    (L + 32)(%rsp)
+    mov     (L + 48)(%rsp), %rdi
+    mov     S10(%rsp), %rsi
+    movzbl  (%rdi), %eax
+    inc     %rdi
+    cmp     $',', %eax
+    je      23b
+    cmp     $']', %eax
+    jne     90f
+28: mov     S10(%rsp), %rsi                 # then only white space
+    call    submit_ws
+    cmp     %rsi, %rdi
+    jne     90f
+30: mov     S7(%rsp), %rdi                  # the records: their bytes, their count
+    mov     S9(%rsp), %rax
+    sub     %rdi, %rax
+    mov     %rax, (%rdi)
+    sub     $NodeEvent_chunk, %rax
+    mov     %rax, NodeEvent_chunk(%rdi)
+    sub     $24, %rax
+    mov     %rax, (NodeEvent_chunk + 16)(%rdi)
+    mov     (L + 32)(%rsp), %rax
+    mov     %rax, NodeEvent_index(%rdi)
+    mov     L(%rsp), %rdi                   # seen has a key free for each operation
+    mov     Seen_bits(%rdi), %rax
+    sub     Seen_keys(%rdi), %rax
+    shr     $5, %rax
+    sub     (Seen_keys + 8)(%rdi), %rax
+    cmp     (L + 32)(%rsp), %rax
+    jb      97f
+    mov     L(%rsp), %rax                   # the NodeGossip of the operations
+    mov     %rax, (L + 64 + NodeGossip_seen)(%rsp)
+    mov     %rbp, (L + 64 + NodeGossip_store)(%rsp)
+    mov     Node_time_ms(%rbx), %rax
+    mov     %rax, (L + 64 + NodeGossip_time_ms)(%rsp)
+    mov     (L + 16)(%rsp), %rax
+    mov     %rax, (L + 64 + NodeGossip_topic)(%rsp)
+    movq    $0, (L + 64 + NodeGossip_subnet)(%rsp)
+    mov     %r13, (L + 64 + NodeGossip_head)(%rsp)
+    movq    $0, (L + 64 + NodeGossip_proposer)(%rsp)
+    movq    $0, (L + 64 + NodeGossip_justified)(%rsp)
+    movq    $0, (L + 64 + NodeGossip_settings)(%rsp)
+    lea     Node_config(%rbx), %rax
+    mov     %rax, (L + 64 + NodeGossip_config)(%rsp)
+    mov     S7(%rsp), %rax
+    add     $(NodeEvent_chunk + 24), %rax
+    mov     %rax, S9(%rsp)
+31: cmpq    $0, (L + 32)(%rsp)
+    je      39f
+    mov     (L + 24)(%rsp), %r10
+    lea     (L + 64)(%rsp), %rdi
+    mov     S9(%rsp), %rcx
+    lea     8(%rcx), %rsi
+    mov     %r15, %rdx
+    lea     (L + 304)(%rsp), %r9
+    lea     (L + 272)(%rsp), %r8
+    FORK_CALL node_gossip
+    test    %rax, %rax
+    jnz     99f
+    mov     S9(%rsp), %rcx
+    mov     8(%rcx), %rax
+    lea     8(%rcx,%rax), %rcx
+    mov     %rcx, S9(%rsp)
+    decq    (L + 32)(%rsp)
+    jmp     31b
+39: xor     %eax, %eax
+    LEAVE 320
+90: mov     S7(%rsp), %rcx                  # a body that is no such text
+    movq    $LANTERN_INVALID_ENCODING, NodeEvent_result(%rcx)
+    movq    $NODE_EV_WORK_DONE_SIZE, (%rcx)
+    xor     %eax, %eax
+    LEAVE 320
+97: mov     $LANTERN_BUFFER_TOO_SMALL, %eax
+    LEAVE 320
+98: mov     $LANTERN_INVALID_EVENT, %eax
+99: LEAVE 320
+END_FUNCTION node_api_submit_run
+
+/* rdi = rdi past the JSON white space (space, tab, LF, CR) before rsi. Uses rax. */
+LOCAL_FUNCTION submit_ws
+    UNWIND_END_PROLOGUE
+1:  cmp     %rsi, %rdi
+    jae     9f
+    movzbl  (%rdi), %eax
+    cmp     $' ', %eax
+    je      2f
+    cmp     $9, %eax
+    je      2f
+    cmp     $10, %eax
+    je      2f
+    cmp     $13, %eax
+    jne     9f
+2:  inc     %rdi
+    jmp     1b
+9:  ret
+END_FUNCTION submit_ws
 
     RODATA
     .p2align 3
