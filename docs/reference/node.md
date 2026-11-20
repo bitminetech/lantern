@@ -13,6 +13,7 @@
 - [`lantern_node_import`](#function-lantern_node_import): on_block of a block's SSZ bytes, for one fork.
 - [`lantern_node_block_root`](#function-lantern_node_block_root): the root of a block's SSZ bytes, for one fork.
 - [`lantern_node_proposers`](#function-lantern_node_proposers): the proposers of an epoch and its dependent root, from the state at its first slot, for one fork.
+- [`lantern_node_event_roots`](#function-lantern_node_event_roots): the block root, state root and dependent roots of a block's post-state, for one fork.
 - [`lantern_node_attestation`](#function-lantern_node_attestation): on_attestation of an attestation's SSZ bytes, for one fork.
 - [`lantern_node_attester_slashing`](#function-lantern_node_attester_slashing): on_attester_slashing of a slashing's SSZ bytes, for one fork.
 - [`lantern_node_gossip`](#function-lantern_node_gossip): the gossip validation of a message's SSZ bytes, for one fork.
@@ -151,6 +152,7 @@
   - Each request runs twice: with an event of `NodeEvent_api_bytes` + 24 + `NODE_API_CHUNK` bytes for each `NODE_WORK_API_CHUNK`, then with 2048 bytes after the chunk's ByteList header, or a 512th of the case's response when that is more, so that a large answer goes in some hundreds of chunks.
   - A response with `Transfer-Encoding: chunked` counts as the response with `Content-Length` of its chunks' bytes in place of that field and those bytes as its body; its chunks must keep RFC 9112 section 7.1. A JSON response over HTTP/1.0 with neither field counts as the response with `Content-Length` of its bytes after `Eth-Consensus-Version`, or after `Content-Type` with no `Eth-Consensus-Version`, and the connection must get a `NODE_ACT_API_CLOSE`.
   - After each answer the node must hold no `NodeApi` entry, each id of a `NODE_ACT_STATE_BYTES` must have had its `NODE_ACT_BYTES_FREE`, and the runner must hold the buffers it held before the request.
+  - eventstream of `head,block,finalized_checkpoint` over HTTP/1.1, with and without `Connection: close`, and of `block` over HTTP/1.0, with and without `keep-alive`, and a topic of no name (400). For the two streams, the case's `streams` byte of the request is 1: the sends must be the head with `last` 0 and no close; then the runner gives a `NODE_EV_API_CLOSED` of the connection, and the node must hold no `NodeApi` entry.
   - getProposerDuties: the epochs from the anchor's epoch - 1 to the epoch of the store's slot + 2, and one while the runner holds `NODE_FLAG_SYNCING` (the case's `syncing` byte of the request); in a third case, an anchor at slot 0, the epochs 0 to 2.
   - getEpochCommittees: of `head` with no query, each `epoch` from the state's epoch - 1 to its epoch + 2, a `slot` of the epoch and one of another, `index` 0 and 1, a `slot` with an `index`, over HTTP/1.0, and with a `state_id` of `finalized`, of a slot and of a root; and in a second case, an anchor at epoch EPOCHS_PER_HISTORICAL_VECTOR + 6, the lowest epoch beacon-api.md takes and the one below it.
   - The six validator operations, of an anchor state with 8 more validators, one of each status but `active_ongoing`: each status and group of `status`; `id` items of indices and public keys, known, unknown and given twice; the bodies of the three POSTs; getStateValidator of an index and of a key, and of ones no validator has (404); the identities as SSZ; over HTTP/1.0 and with `Connection: close`; and with a `state_id` of a state root.
@@ -165,6 +167,11 @@
   - getBlockV2 of `head` as SSZ must answer 200 with the SSZ bytes of the case's head block, and as JSON with `version` the name of the fork of its slot and a `data` that lantern_json_decode of the fork's `SignedBeaconBlock` gives as those bytes. A head that is the case's anchor must answer 404.
   - getStateV2 of `head` as SSZ must answer 200 with lantern_node_state_bytes of the post-state the node keeps for the head, and as JSON with a `data` that lantern_json_decode of the fork's `BeaconState` gives as those bytes.
   - Each a second time with 2048 bytes of room for each chunk, or a 128th of the state's SSZ bytes when that is more.
+- Lantern's cases `<preset>-<fork>-node-events.bin` of altair to fulu, made by tests/generator/node.py with the pinned spec: one for each `fork_choice-get_head` and `fork_choice-on_block` case, named after its handler and its name, `get_head/` or `on_block/` and the case's name. Its part `events` is a list with the text of the events (beacon-api.md, eventstream) the node must send in each step of the case, from a replay of the steps with the spec module:
+  - get_forkchoice_store of the anchor state and block; a tick: on_tick of the step's seconds times 1000; a valid block: on_block, then on_attestation with `is_from_block` true of each attestation of its body and on_attester_slashing of each attester slashing, with the step's blobs and proofs (deneb, electra) or columns (fulu) as the data of retrieve_blobs_and_proofs or retrieve_column_sidecars; an attestation and an attester slashing: on_attestation and on_attester_slashing; a step with `valid` false, or a block the store holds already, as the node skips it: no change. A valid step the spec module refuses, or a `checks` step whose head is not the replay's, stops the generator.
+  - The texts of a step: a block event for a valid block; then a head event when get_head is not the head of the last head event (at first the anchor's root); then a finalized_checkpoint event when the store's finalized epoch is above that of the last one (at first the anchor store's).
+  - `execution_optimistic`: true for a block from bellatrix whose payload has a nonzero `block_hash` and whose last `payload_status` step before its block step, of that hash, is `SYNCING` or `ACCEPTED`.
+  - The runner runs the case in node mode with three event streams, opened after the anchor: of `head,block,finalized_checkpoint` over HTTP/1.1, and of `block,chain_reorg` over HTTP/1.0, each with a `NODE_EV_API_SENT` after each send; and of `finalized_checkpoint,head,block` over HTTP/1.1 with none. After each step, the bytes of each stream's sends in the step, the chunks of HTTP/1.1 decoded, must be the step's texts of its topics; the third must get a `NODE_ACT_API_CLOSE` in place of the event whose bytes, with the head's and those of the events before it, would pass `NODE_API_CHUNK`, and no more actions. After the case, a `NODE_EV_API_CLOSED` of each stream: the node must hold no `NodeApi` entry.
 - Lantern's cases `<preset>-<fork>-node-blobs.bin` of deneb and electra, made by tests/generator/node.py with the pinned spec: one for each `fork_choice-on_block` case whose block steps have blobs, of the same name.
   - Each part is named after a block file of the case and holds the `BlobSidecar` SSZ bytes of get_blob_sidecars of the block and the step's blobs and proofs, as a list.
   - A step with fewer proofs than blobs gives the sidecars of the indices that have both.
@@ -294,7 +301,7 @@ lantern_node_step(node, store, p2p, tick, events, scratch, actions, result) -> s
 
 ### Function does
 
-- Room: `actions` has the event bytes + 512 per event + `NODE_ACT_WORK_SIZE` per vote of each `NODE_EV_WORK_DONE` of a valid `NODE_WORK_IMPORT_BLOCK` (its `NodeEvent_index` + `NodeEvent_root` counts) + 384 per known block + 160 per `NodeBlob` entry + 32 per `NodeCheckpoint` entry + 2048 bytes free (the crossing of a fork boundary takes 208), and `LIBP2P_ACTIONS_MIN` + 40 more with `p2p`; with `p2p`, `p2p_out` has room for the libp2p events of the `NODE_EV_P2P` events, and `scratch` holds as many bytes again and `LIBP2P_SCRATCH_SIZE`; the blocks part has an entry free per `NODE_EV_BLOCK` and per `NODE_EV_WORK_DONE` of `NODE_WORK_GOSSIP`, and `NODE_SYNC_BATCH` more with `p2p`; the blobs part has an entry free per `NODE_EV_WORK_DONE` of `NODE_WORK_GOSSIP`, and with `p2p` `NODE_SYNC_BATCH` times the largest of `MAX_BLOBS_PER_BLOCK`, `MAX_BLOBS_PER_BLOCK_ELECTRA` and the count of `columns` more; the checkpoints part has 2 free per `NODE_EV_WORK_DONE`, and 2; the pow blocks part has an entry free per `NODE_EV_POW_BLOCK`; `engine_in` has room for the bytes of the `NODE_EV_ENGINE` events; `scratch` has `LANTERN_SCRATCH_FIXED` + 64 + 16 bytes per store node + 8 per `NodeBlock` entry, and `DISCV5_ENR_SIZE` + `DISCV5_ENR_SCRATCH` more with a `NODE_EV_ENR`, and `NODE_API_SCRATCH` (8192) + 4 bytes per byte of the `query` and 16 per byte of the `body` of the largest request more with a `NODE_EV_API`; `actions` has 2048 more, and 16 per byte of its `body`, per `NODE_EV_API`; the api part has an entry free per `NODE_EV_API`; `scratch` has `NODE_API_SCRATCH` more, and `actions` 2048 more, per `NODE_EV_WORK_DONE` of `NODE_WORK_API_LOOKUP`.
+- Room: `actions` has the event bytes + 512 per event + `NODE_ACT_WORK_SIZE` per vote of each `NODE_EV_WORK_DONE` of a valid `NODE_WORK_IMPORT_BLOCK` (its `NodeEvent_index` + `NodeEvent_root` counts) + 384 per known block + 160 per `NodeBlob` entry + 32 per `NodeCheckpoint` entry + 2048 bytes free (the crossing of a fork boundary takes 208), and `LIBP2P_ACTIONS_MIN` + 40 more with `p2p`; with `p2p`, `p2p_out` has room for the libp2p events of the `NODE_EV_P2P` events, and `scratch` holds as many bytes again and `LIBP2P_SCRATCH_SIZE`; the blocks part has an entry free per `NODE_EV_BLOCK` and per `NODE_EV_WORK_DONE` of `NODE_WORK_GOSSIP`, and `NODE_SYNC_BATCH` more with `p2p`; the blobs part has an entry free per `NODE_EV_WORK_DONE` of `NODE_WORK_GOSSIP`, and with `p2p` `NODE_SYNC_BATCH` times the largest of `MAX_BLOBS_PER_BLOCK`, `MAX_BLOBS_PER_BLOCK_ELECTRA` and the count of `columns` more; the checkpoints part has 2 free per `NODE_EV_WORK_DONE`, and 2; the pow blocks part has an entry free per `NODE_EV_POW_BLOCK`; `engine_in` has room for the bytes of the `NODE_EV_ENGINE` events; `scratch` has `LANTERN_SCRATCH_FIXED` + 64 + 16 bytes per store node + 8 per `NodeBlock` entry, and `DISCV5_ENR_SIZE` + `DISCV5_ENR_SCRATCH` more with a `NODE_EV_ENR`, and `NODE_API_SCRATCH` (8192) + 4 bytes per byte of the `query` and 16 per byte of the `body` of the largest request more with a `NODE_EV_API`; `actions` has 2048 more, and 16 per byte of its `body`, per `NODE_EV_API`; the api part has an entry free per `NODE_EV_API`; `scratch` has `NODE_API_SCRATCH` more, and `actions` 2048 more, per `NODE_EV_WORK_DONE` of `NODE_WORK_API_LOOKUP`; `actions` has 1024 more per event for each `NodeApi` entry of eventstream, and 2 times `NODE_ACT_WORK_SIZE` more.
 - Before any change: the root of each `NODE_EV_BLOCK`, with lantern_node_block_root of the fork of its slot. A status of that call is the step's.
 - On `LANTERN_BUFFER_TOO_SMALL`, `short`: `NODE_SHORT_ACTIONS` for the room of `actions`, and for `LIBP2P_BUFFER_TOO_SMALL` of libp2p_step (its scratch is the step's own); `NODE_SHORT_NODE` for a part of the node, with `room` the byte offset in `NodeRoom` of its capacity (`blocks`, `checkpoints`, `pow_blocks`, `p2p_out`, `blobs`, `engine_bytes` or `api_streams`); `NODE_SHORT_SCRATCH` for `scratch`, and for `LANTERN_BUFFER_TOO_SMALL` of lantern_node_block_root.
 - The prune, after libp2p's first round and before the node's events, when the store's finalized epoch is above `pruned_epoch`: lantern_store_prune with the step's scratch; on its success `pruned_epoch` takes that epoch, and with F the block of the finalized root:
@@ -320,14 +327,21 @@ lantern_node_step(node, store, p2p, tick, events, scratch, actions, result) -> s
 - With `NODE_FLAG_ENGINE`, a waiting block of bellatrix or later whose parent is imported takes `NODE_BLOCK_PAYLOAD` instead, with `retry` 0: its import waits for the execution engine's answer.
 - `NODE_EV_ATTESTATION`: a `NODE_ACT_BYTES_PUT` of the bytes and a `NODE_WORK_ATTESTATION` with the target checkpoint state, or 0 when the node has none.
 - `NODE_EV_ATTESTER_SLASHING`: a `NODE_ACT_BYTES_PUT` of the bytes and a `NODE_WORK_ATTESTER_SLASHING` with the post-state of the justified root.
-- The votes of an imported block (phase0 `fork-choice.md`: on_attestation and on_attester_slashing run whenever an attestation or an attester slashing is received, those of a block too): for each attestation of its body, by index, a `NODE_WORK_BLOCK_ATTESTATION` with the block's bytes and the index as `arg`; then for each attester slashing of its body, by index, a `NODE_WORK_BLOCK_SLASHING` with the block's bytes, the index as `arg` and the post-state of the justified root. The counts are those of the import's event: attestations at `NodeEvent_index`, attester slashings at `NodeEvent_root`.
+- The votes of an imported block (phase0 `fork-choice.md`: on_attestation and on_attester_slashing run whenever an attestation or an attester slashing is received, those of a block too): for each attestation of its body, by index, a `NODE_WORK_BLOCK_ATTESTATION` with the block's bytes and the index as `arg`; then for each attester slashing of its body, by index, a `NODE_WORK_BLOCK_SLASHING` with the block's bytes, the index as `arg` and the post-state of the justified root. The counts are those of the import's event: attestations at `NodeEvent_index`, attester slashings at `NodeEvent_root`. Each of these works adds 1 to `event_votes`, and its `NODE_EV_WORK_DONE` takes 1 off.
 - `NODE_EV_WORK_DONE` of `NODE_WORK_BLOCK_ATTESTATION` with `LANTERN_NEED_TARGET_STATE`: the target checkpoint state, then the same work again with it. The block's bytes stay.
 - `NODE_EV_POW_BLOCK`: adds the `PowBlock` to the node.
-- `NODE_EV_WORK_DONE` of `NODE_WORK_IMPORT_BLOCK`: valid, the block is `NODE_BLOCK_IMPORTED`, its votes go to fork choice, and its waiting children are imported; `LANTERN_NEED_JUSTIFIED_STATE`, a `NODE_WORK_JUSTIFIED_STATE` and the same import again; else `NODE_BLOCK_INVALID` and a `NODE_ACT_STATE_FREE` of its state.
+- `NODE_EV_WORK_DONE` of `NODE_WORK_IMPORT_BLOCK`: valid, the block is `NODE_BLOCK_IMPORTED`, a block event goes (the events, below), its votes go to fork choice, and its waiting children are imported; `LANTERN_NEED_JUSTIFIED_STATE`, a `NODE_WORK_JUSTIFIED_STATE` and the same import again; else `NODE_BLOCK_INVALID` and a `NODE_ACT_STATE_FREE` of its state.
 - `NODE_EV_WORK_DONE` of `NODE_WORK_ATTESTATION` with `LANTERN_NEED_TARGET_STATE`: the target checkpoint state, then the same attestation again with it.
 - A checkpoint state the node does not have: a `NODE_ACT_STATE_COPY` of the post-state of the checkpoint's root, a `NodeCheckpoint`, and a `NODE_WORK_TARGET_STATE`. A root's block with no post-state above F's slot gets it again first. When the fork of the checkpoint epoch's first slot is later than that of the root's slot, the copy first crosses each fork boundary between them, and the `NodeCheckpoint` and the work get the last state.
 - An attestation or slashing done: a `NODE_ACT_BYTES_FREE` of its bytes.
 - The head: get_head of the fork of the store's slot into `head_root`, or a `NODE_WORK_JUSTIFIED_STATE` when it returns `LANTERN_NEED_JUSTIFIED_STATE`.
+- The events (beacon-api.md, eventstream), each to the `NodeApi` entries of eventstream whose topics have its bit (`API_TOPIC_*`):
+  - block: at the import of a block, its text: the block's slot and root, `execution_optimistic` from its `payload_status`.
+  - head and finalized_checkpoint at a quiet point: after the head, once the head's post-state is back (the rule of the post-states the node lets go, above), with `event_votes` 0, so that the votes of each block the node imports are in fork choice first.
+  - head: at a quiet point, when `head_root` is not `event_head`: `event_head` and `event_slot` take the head's root and slot; with an entry of the topic, a `NODE_WORK_API_EVENT` with the head's post-state as `state_a` and as `arg` `API_TOPIC_HEAD` + 2^8 times the values: 1 `epoch_transition` (the epoch of the head's slot above that of the old `event_slot`), 2 `execution_optimistic`.
+  - finalized_checkpoint: then, when the store's finalized epoch is above `event_epoch`: `event_epoch` takes it; with an entry of the topic, a `NODE_WORK_API_EVENT` with the bytes of the finalized root's block as `data` (its `NODE_DB_REF` when the `Db` holds them), else its post-state as `state_a`, and as `arg` `API_TOPIC_FINALIZED_CHECKPOINT` + 2^8 times the values (2 `execution_optimistic`) + 2^16 times the epoch. A block with neither gives no event.
+  - `NODE_EV_WORK_DONE` of `NODE_WORK_API_EVENT`: `LANTERN_VALID`, the text at `NodeEvent_chunk` goes to the entries of the topic of `arg` % 2^8. Another result: no event.
+  - To an entry: a `NODE_ACT_API_SEND` of the text with `last` 0, in one chunk of RFC 9112 section 7.1 with `API_STREAM_CHUNKED`; its `sent` grows by the bytes sent. When `sent` would pass `NODE_API_CHUNK`, the stream falls behind: a `NODE_ACT_API_CLOSE` of the connection in its place, and the stream ends.
 - libp2p first, before the node's events: libp2p_step with the queued events, then the `NODE_EV_P2P` events, after them in the queue. The first libp2p_step takes at most half the action room left, when that half is enough, so the notices have room. When it accepts k of n P2P events, with k < n, the P2P events it did not take leave the queue, the step handles the node's events before the next P2P event, and gives that count as `accepted`. A status of libp2p_step leaves the queue as it was.
 - `PEER_CONNECTED`: a `NodePeer`, or a `DISCONNECT` when the peers part is full. `PEER_DISCONNECTED`: the peer and its streams go.
 - `PEER_CONNECTED` and `DIAL_FAILED` of a tag with `NODE_DIAL_TAG`: `dialing` takes 1 less. A `PEER_CONNECTED` of `LIBP2P_OUTBOUND` that gets a `NodePeer`: a Status request (v2 from fulu, v1 before) with the node's Status, as a request of the node.
@@ -402,6 +416,7 @@ lantern_node_step(node, store, p2p, tick, events, scratch, actions, result) -> s
   - getStateValidator: a `NODE_ACT_BYTES_PUT` of the route's `validator` (a `ValidatorRef`) to a new id; a `NODE_WORK_API_ENCODE` as above with the state as `state_a` and that id as `data`; after its `NODE_EV_WORK_DONE`, a `NODE_ACT_BYTES_FREE` of the id.
   - getStateValidators, postStateValidators, getStateValidatorBalances, postStateValidatorBalances and postStateValidatorIdentities: a stream (below) of the state.
   - getEpochCommittees: the error 400 for an epoch or a slot that beacon-api.md refuses, from the state's slot; else a stream (below) of the state.
+  - eventstream: the first free `NodeApi` entry, else the next, with the connection, the operation, `API_STREAM_STARTED`, `API_STREAM_CHUNKED` over HTTP/1.1 (and `API_STREAM_CLOSE` with `Connection: close`), `API_STREAM_CLOSE` and `API_STREAM_HTTP10` over HTTP/1.0, the route's `topics` at byte 0 of `cursor`; a `NODE_ACT_API_SEND` of the head (beacon-api.md, eventstream) with `last` 0, and `sent` its bytes. The entry stays to the stream's end.
   - getProposerDuties: 503 with `NODE_FLAG_SYNCING`; 400 for an epoch above the epoch of the store's slot + 1; then the state of the epoch's first slot, as for a `state_id` of that slot, or past the store's slot the head's post-state brought to it; a `NODE_WORK_API_ENCODE` of it, `arg` as for the state operations with that slot.
   - A `state_id` of a root: a `NodeApi` entry with `API_STREAM_LOOKUP`, the connection, the operation, the answer flags and `API_STREAM_SSZ` for `response` `API_TYPE_SSZ`, the root in the first 32 bytes of its `cursor`, the route's `statuses` at byte 32 of it, its `validator` at byte 40, and its `epoch`, `slot`, `index` and `present` at bytes 104, 112, 120 and 128; for the six validator operations the ids as for their stream (below), as `data` with `API_STREAM_OWN`; and a `NODE_WORK_API_LOOKUP` with the head's post-state as `state_a`, the connection as `target` and the entry's index as `arg`.
 - `NODE_EV_WORK_DONE` of `NODE_WORK_API_LOOKUP`, of the `NodeApi` entry at index `arg`: the entry ends. Without `API_STREAM_GONE`: with a slot at `NodeEvent_index`, the answer of the entry's operation for the `state_id` of that slot, as for a `NODE_EV_API` with its answer flags, `statuses`, `validator`, `epoch`, `slot`, `index`, `present` and ids, whose `data` the answer takes; with 2^64 - 1 there, the error 404 (and the ids' `NODE_ACT_BYTES_FREE`).
@@ -415,7 +430,7 @@ lantern_node_step(node, store, p2p, tick, events, scratch, actions, result) -> s
   - With `API_STREAM_GONE`: the stream ends.
   - `LANTERN_VALID`: the entry takes `sent`, `flags` and `cursor` of the event; a `NODE_ACT_API_SEND` of the chunk at `NodeEvent_api_bytes` to the connection, with `last` 1 when `API_STREAM_DONE` is set, else 0. With `API_STREAM_DONE`: a `NODE_ACT_API_CLOSE` after it when `API_STREAM_CLOSE` is set, and the stream ends.
   - Another result: before `API_STREAM_STARTED`, the error 500 to the connection; after it, a `NODE_ACT_API_CLOSE` of the connection (the answer stops short). The stream ends.
-- `NODE_EV_API_SENT` of the connection of a `NodeApi` entry without `API_STREAM_BUSY`: a `NODE_WORK_API_CHUNK` of it, and `API_STREAM_BUSY`. Another `NODE_EV_API_SENT` is skipped.
+- `NODE_EV_API_SENT` of the connection of a `NodeApi` entry of eventstream: its `sent` is 0. Of another entry without `API_STREAM_BUSY`: a `NODE_WORK_API_CHUNK` of it, and `API_STREAM_BUSY`. Another `NODE_EV_API_SENT` is skipped.
 - `NODE_EV_API_CLOSED` of the connection of a `NodeApi` entry: with `API_STREAM_BUSY`, the entry takes `API_STREAM_GONE`; else the stream ends. Another is skipped.
 - The end of a stream: with `API_STREAM_OWN`, a `NODE_ACT_BYTES_FREE` of its `data`; with `API_STREAM_OWN_STATE`, a `NODE_ACT_STATE_FREE` of its `state`; its entry is free (connection 0), and the api part's count drops past the free entries at its end.
 - A `NODE_ACT_BYTES_FREE` of an id that a `NodeApi` entry has as `data` without `API_STREAM_OWN` does not go: the entry takes `API_STREAM_OWN`, and frees the bytes at its end. So with a `NODE_ACT_STATE_FREE` of an id that an entry has as `state` without `API_STREAM_OWN_STATE`: the entry takes `API_STREAM_OWN_STATE`. The node changes no state it keeps, so the entry reads the same state to its end.
@@ -457,7 +472,7 @@ lantern_node_run(node, store, seen, work, state_a, state_b, state_c, data, setti
 
 - `LANTERN_OK`: `event` holds the work's fields and its `result`.
 - `LANTERN_BUFFER_TOO_SMALL`: the store, `state_a`, `scratch` or `event` has too little room. Nothing is changed.
-- `LANTERN_INVALID_EVENT`: the work is of no kind, or names no `NodeCheckpoint`; a `NODE_WORK_API_ENCODE` of another operation, of a block index past the blocks part, getBlockHeader with neither `data` nor `state_a` or with neither `data` nor a block index, another but getSpec with no `state_a`; a `NODE_WORK_API_CHUNK` of an index past the api part, of a free entry or one of another operation, with no `data` for getBlockV2 and getStateV2, or with no `state_a` for the validator streams; a `NODE_WORK_API_LOOKUP` with no `state_a`.
+- `LANTERN_INVALID_EVENT`: the work is of no kind, or names no `NodeCheckpoint`; a `NODE_WORK_API_ENCODE` of another operation, of a block index past the blocks part, getBlockHeader with neither `data` nor `state_a` or with neither `data` nor a block index, another but getSpec with no `state_a`; a `NODE_WORK_API_CHUNK` of an index past the api part, of a free entry or one of another operation, with no `data` for getBlockV2 and getStateV2, or with no `state_a` for the validator streams; a `NODE_WORK_API_LOOKUP` with no `state_a`; a `NODE_WORK_API_EVENT` of another topic, of head with no `state_a`, or of finalized_checkpoint with neither `data` nor `state_a`.
 
 ### Caller must
 
@@ -490,6 +505,9 @@ lantern_node_run(node, store, seen, work, state_a, state_b, state_c, data, setti
   - getProposerDuties: lantern_node_proposers of the fork of the state's slot, of `state_a`, with the node's config.
   - getStateValidator: the validator of the `ValidatorRef` in `data`, in `state_a`: the one of its index, or the first whose `pubkey` is its public key; with none, the error 404 in place of the response.
   - A `state_a` of these three whose slot is not `arg` / 2^24 gives the result `LANTERN_INVALID_SLOT`: the work that brought it to that slot failed.
+- `NODE_WORK_API_EVENT`: the text of the event of the topic `arg` % 2^8 (beacon-api.md, eventstream), `event: <topic>` LF `data: <JSON>` LF LF, as a ByteList at `NodeEvent_chunk` of the event; the event's `size` then covers it.
+  - head: lantern_node_event_roots of the fork of the slot of `state_a`, with the node's config: `block`, `state` and the two dependent roots; `slot` the state's; `epoch_transition` and `execution_optimistic` from `arg` / 2^8 (1 and 2).
+  - finalized_checkpoint: with `data`, the block's root by lantern_node_block_root of the fork of its slot and its message's `state_root`; else the block root and state root of lantern_node_event_roots of `state_a`. `epoch` `arg` / 2^16; `execution_optimistic` from `arg` / 2^8 % 2^8 (2). Bytes that do not hold a block give `LANTERN_INVALID_ENCODING`.
 - `NODE_WORK_API_LOOKUP`: the slot whose state on the chain of `state_a` has the root in the first 32 bytes of the `cursor` of the `NodeApi` entry at index `arg`, at `NodeEvent_index`: the slot of `state_a` when it is lantern_state_root of the fork of its slot (with the `StateCache` of the node's config), else the slot s below it, at most `SLOTS_PER_HISTORICAL_ROOT` below, whose entry s % `SLOTS_PER_HISTORICAL_ROOT` of its `state_roots` it is, the highest; else 2^64 - 1. An index past the api part, or of an entry without `API_STREAM_LOOKUP`, gives 2^64 - 1.
 - `NODE_WORK_API_CHUNK`: the next chunk of the answer of the `NodeApi` entry at index `arg` (beacon-api.md, Common rules, the streamed answers), from the SSZ bytes in `data`, at `NodeEvent_api` of the event: the entry's `sent` and `flags` and its `cursor` after the chunk, then a ByteList of the chunk's bytes at `NodeEvent_api_bytes`, offset 24; the event's `size` then covers it.
   - A chunk is at most `NODE_API_CHUNK` (65536) bytes, and at most the room of the event after the ByteList's header. With less than `NODE_API_FIRST_ROOM` (1024) bytes of room for the first chunk, or 64 for a later one (1024 for a validator stream, which writes an item in each chunk): `LANTERN_BUFFER_TOO_SMALL`.
@@ -625,6 +643,42 @@ lantern_node_proposers(state, config, scratch, out) -> status
 ### ABI
 
 - Export: `lantern_<fork>_node_proposers` of each fork object.
+- Argument order: `state`, `config`, `scratch`, `out`.
+
+## Function `lantern_node_event_roots`
+
+The roots of a head event (beacon-api.md, eventstream) of a block's post-state.
+
+### Signature
+
+```
+lantern_node_event_roots(state, config, scratch, out) -> status
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `state` | input | `BeaconState` of the fork: a block's post-state |
+| `config` | input | `Config`: its `StateCache` |
+| `scratch` | scratch | `Scratch` |
+| `out` | output | 4 roots of 32 bytes: the block root, the state root, the previous and the current duty dependent roots |
+
+### Returns
+
+- `LANTERN_OK`: `out` holds them.
+- `LANTERN_BUFFER_TOO_SMALL`: `scratch` has fewer than S(2) bytes.
+- The statuses of lantern_get_block_root_at_slot and lantern_state_root.
+
+### Function does
+
+- The state root: the `state_root` of `latest_block_header`; when it is zero, lantern_state_root of the state.
+- The block root: hash_tree_root of `latest_block_header` with the state root as `state_root`.
+- With e the epoch of the state's slot: get_block_root_at_slot(state, compute_start_slot_at_epoch(e - 1) - 1) and get_block_root_at_slot(state, compute_start_slot_at_epoch(e) - 1). Each that underflows is the genesis block root: get_block_root_at_slot(state, 0) when the state's slot is above 0, else the block root.
+
+### ABI
+
+- Export: `lantern_<fork>_node_event_roots` of each fork object.
 - Argument order: `state`, `config`, `scratch`, `out`.
 
 ## Function `lantern_node_attestation`
@@ -1251,10 +1305,14 @@ The state of the node: a value with parts.
 | 728 | `config` | `Config` | |
 | 728 + `CONFIG_SIZE` | `api_identity` | `ApiIdentity` of [beacon-api.md](beacon-api.md#type-apiidentity) | Of the last `NODE_EV_API_IDENTITY`; its texts empty at the start |
 | 728 + `CONFIG_SIZE` + `API_IDENTITY_SIZE` | `api` | PartRef | `NodeApi` entries |
+| 728 + `CONFIG_SIZE` + `API_IDENTITY_SIZE` + 16 | `event_head` | Root | The head of the last head event; the anchor's root at the start |
+| 728 + `CONFIG_SIZE` + `API_IDENTITY_SIZE` + 48 | `event_slot` | u64 | The slot of `event_head`'s block |
+| 728 + `CONFIG_SIZE` + `API_IDENTITY_SIZE` + 56 | `event_epoch` | u64 | The store's finalized epoch at the last finalized_checkpoint event; the anchor's finalized epoch at the start |
+| 728 + `CONFIG_SIZE` + `API_IDENTITY_SIZE` + 64 | `event_votes` | u64 | The `NODE_WORK_BLOCK_ATTESTATION` and `NODE_WORK_BLOCK_SLASHING` works queued and not done |
 
 ### Rules
 
-- `NODE_FIXED` (728 + `CONFIG_SIZE` + `API_IDENTITY_SIZE` + 16) bytes of fixed fields; the parts follow in the order blocks, checkpoints, pow_blocks, peers, streams, messages, blobs, api, p2p_out, engine_in, db.
+- `NODE_FIXED` (728 + `CONFIG_SIZE` + `API_IDENTITY_SIZE` + 72) bytes of fixed fields; the parts follow in the order blocks, checkpoints, pow_blocks, peers, streams, messages, blobs, api, p2p_out, engine_in, db.
 - The `Db` has the capacities of the `NodeRoom` fields `db_slots` and `db_roots`, and its `first_slot` is the lowest of the anchor's `history_slot`, its slot and the first slot of the epoch max(0, the epoch of its slot - compute_min_epochs_for_block_requests), rounded down to a multiple of `DB_SEGMENT_SLOTS`: the backfill's blocks fit in it.
 - The backfill at the start: `backfill_root` the anchor's root, `backfill_slot` and `backfill_next` its slot + 1 (the anchor block's bytes come from a peer too), `backfill_segment`, `backfill_sidecar_segment` and `backfill_start` 2^64 - 1, and `backfill_handle`, `backfill_end`, `backfill_ms`, `backfill_peer` and `backfill_got` 0.
 - The capacity of a part is its bytes up to the next part over its entry's bytes; `p2p_out` is the last part.
@@ -1419,12 +1477,12 @@ A Beacon API answer the node sends in chunks.
 | Offset | Field | Type | Meaning |
 |---|---|---|---|
 | 0 | `connection` | u64 | The connection; 0 for a free entry |
-| 8 | `op` | u64 | `API_OP_GET_BLOCK_V2`, `API_OP_GET_STATE_V2`, or one of the five validator streams |
+| 8 | `op` | u64 | `API_OP_GET_BLOCK_V2`, `API_OP_GET_STATE_V2`, one of the five validator streams, `API_OP_GET_EPOCH_COMMITTEES`, or `API_OP_EVENTSTREAM` |
 | 16 | `flags` | u64 | `API_STREAM_*` |
 | 24 | `data` | u64 | The `BufferId` of the SSZ bytes, or a `NODE_DB_REF`; the validator streams: of the `ValidatorRef` items, or 0 |
 | 32 | `fork` | u64 | `FORK_*` of the block's or the state's slot |
-| 40 | `sent` | u64 | SSZ: the bytes of `data` sent |
-| 48 | `cursor` | `JsonCursor` | JSON: where lantern_json_encode_ssz goes on; the validator streams: the next index at 0, the status bits at 8 |
+| 40 | `sent` | u64 | SSZ: the bytes of `data` sent; eventstream: the bytes sent since the last `NODE_EV_API_SENT` |
+| 48 | `cursor` | `JsonCursor` | JSON: where lantern_json_encode_ssz goes on; the validator streams: the next index at 0, the status bits at 8; eventstream: the topic bits at 0 |
 | 648 | `slot` | u64 | The slot of the block or the state |
 | 656 | `state` | u64 | The validator streams: the id of the state they read |
 
@@ -1619,6 +1677,14 @@ The actions of one step: a ByteList whose bytes are `NodeAction` entries one aft
 | RISC-V |  |  |  |  |
 
 ### `lantern_node_proposers`
+
+| ISA | Linux | Windows | macOS | `equal` |
+|---|---|---|---|---|
+| x86-64 |  |  |  |  |
+| ARM64 |  |  |  |  |
+| RISC-V |  |  |  |  |
+
+### `lantern_node_event_roots`
 
 | ISA | Linux | Windows | macOS | `equal` |
 |---|---|---|---|---|

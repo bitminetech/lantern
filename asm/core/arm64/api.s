@@ -1834,6 +1834,8 @@ LOCAL_FUNCTION node_api_event
     b.eq    67f
     cmp     x3, #API_OP_GET_PROPOSER_DUTIES
     b.eq    63f
+    cmp     x3, #API_OP_EVENTSTREAM
+    b.eq    61f
     sub     x9, x3, #API_OP_GET_STATE_VALIDATORS   /* the six validator operations and getEpochCommittees: a state */
     cmp     x9, #(API_OP_GET_EPOCH_COMMITTEES - API_OP_GET_STATE_VALIDATORS)
     b.ls    66f
@@ -1869,6 +1871,11 @@ LOCAL_FUNCTION node_api_event
     cmp     x0, #API_OP_GET_STATE_VALIDATOR
     b.ne    64f
     b       67f
+61: mov     x0, x27                         /* eventstream: an entry, and the head */
+    mov     x1, x25
+    mov     x2, x21
+    bl      node_api_subscribe
+    b       90f
 63: mov     x2, #503                        /* getProposerDuties: 503 while syncing; 400 past the next epoch */
     ldr     x9, [x26, #ApiView_is_syncing]
     cbnz    x9, 80f
@@ -2237,6 +2244,115 @@ LOCAL_FUNCTION node_api_run
 7:  mov     x0, #LANTERN_BUFFER_TOO_SMALL
     LEAVE 32
 END_FUNCTION node_api_run
+
+/*
+ * (node, work, state_a, data, scratch, event, room) -> status: a NODE_WORK_API_EVENT of
+ * lantern_node_run (node.md): the event's text at NodeEvent_chunk of the event, whose buffer has
+ * room bytes. x19 the node, x21 the work, x22 state_a, x23 data, x24 the scratch, x25 the event,
+ * x26 the ApiView at the end of scratch, x27 the topic, x28 the room. Locals: L the scratch's
+ * size, L+8 a Result, L+16 a blob count.
+ */
+LOCAL_FUNCTION node_api_event_run
+    ENTER 32
+    mov     x19, x0
+    mov     x21, x1
+    mov     x22, x2
+    mov     x23, x3
+    mov     x24, x4
+    mov     x25, x5
+    mov     x28, x6
+    ldr     x9, [x21, #NodeAction_arg]
+    and     x27, x9, #255
+    ldr     x9, [x24]                       /* the ApiView at the end of scratch, with the work's values */
+    str     x9, [sp, #L]
+    MOVQ    x10, ApiView__size
+    subs    x9, x9, x10
+    b.lo    7f
+    str     x9, [x24]
+    add     x26, x24, x9
+    ldr     x9, [x21, #NodeAction_arg]
+    ubfx    x10, x9, #8, #8
+    str     x10, [x26, #ApiView_event_flags]
+    lsr     x10, x9, #16
+    str     x10, [x26, #ApiView_event_epoch]
+    cmp     x27, #API_TOPIC_HEAD
+    b.eq    1f
+    cmp     x27, #API_TOPIC_FINALIZED_CHECKPOINT
+    b.ne    8f
+    cbnz    x23, 3f
+1:  cbz     x22, 8f                         /* of a post-state: lantern_node_event_roots */
+    ldr     x0, [x22, #NODE_STATE_SLOT]
+    str     x0, [x26, #ApiView_event_slot]
+    add     x1, x19, #Node_config
+    bl      node_fork
+    mov     x15, x0
+    mov     x0, x22
+    add     x1, x19, #Node_config
+    mov     x2, x24
+    add     x3, x26, #ApiView_event_block
+    FORK_CALL node_event_roots
+    cmp     x0, #LANTERN_BUFFER_TOO_SMALL
+    b.eq    71f
+    cbz     x0, 5f
+    str     x0, [x25, #NodeEvent_result]
+    b       9f
+3:  ldr     x9, [x23, #16]                  /* of a block's bytes: its root and its state_root */
+    cmp     x9, #(100 + 84)
+    b.lo    41f
+    ldr     x9, [x23, #8]
+    add     x9, x23, x9
+    ldr     x0, [x9, #100]
+    add     x1, x19, #Node_config
+    bl      node_fork
+    mov     x15, x0
+    ldr     x9, [x23, #8]
+    add     x9, x23, x9
+    add     x1, x9, #(100 + 48)
+    add     x0, x26, #ApiView_event_state
+    bl      lantern_copy_root
+    mov     x0, x23
+    mov     x1, x24
+    add     x2, x26, #ApiView_event_block
+    add     x3, sp, #(L + 8)
+    add     x4, sp, #(L + 16)
+    FORK_CALL node_block_root
+    cmp     x0, #LANTERN_BUFFER_TOO_SMALL
+    b.eq    71f
+    cbnz    x0, 41f
+    ldr     x9, [sp, #(L + 8)]
+    cbnz    x9, 41f
+5:  sub     x9, x28, #NodeEvent_chunk       /* the text, in the event */
+    and     x9, x9, #~7
+    cmp     x9, #24
+    b.lo    71f
+    str     x9, [x25, #NodeEvent_chunk]
+    mov     x0, x26
+    add     x1, x25, #NodeEvent_chunk
+    mov     x2, x27
+    bl      api_event_text
+    cbnz    x0, 71f
+    ldr     x9, [x25, #(NodeEvent_chunk + 16)]  /* the event's size covers the text */
+    add     x9, x9, #(NodeEvent_chunk + 24 + 7)
+    and     x9, x9, #~7
+    str     x9, [x25]
+    sub     x9, x9, #NodeEvent_chunk
+    str     x9, [x25, #NodeEvent_chunk]
+    b       9f
+41: mov     x9, #LANTERN_INVALID_ENCODING
+    str     x9, [x25, #NodeEvent_result]
+9:  ldr     x9, [sp, #L]
+    str     x9, [x24]
+    mov     x0, #LANTERN_OK
+    LEAVE 32
+8:  ldr     x9, [sp, #L]
+    str     x9, [x24]
+    mov     x0, #LANTERN_INVALID_EVENT
+    LEAVE 32
+71: ldr     x9, [sp, #L]
+    str     x9, [x24]
+7:  mov     x0, #LANTERN_BUFFER_TOO_SMALL
+    LEAVE 32
+END_FUNCTION node_api_event_run
 
 /* ---------------------------------------------------------------- Lookup (beacon-api.md, Common rules) */
 
@@ -3049,17 +3165,460 @@ LOCAL_FUNCTION node_api_chunk_work
     UNFRAME 0
 END_FUNCTION node_api_chunk_work
 
-/* L1: NODE_EV_API_SENT of the connection x0: the next chunk of its stream, unless one is queued. */
+/* L1: NODE_EV_API_SENT of the connection x0: an event stream's sent is 0; another stream's next chunk, unless one is queued. */
 LOCAL_FUNCTION node_api_sent
     FRAME 0
     bl      node_api_find
     cmn     x0, #1
     b.eq    9f
-    ldr     x9, [x1, #NodeApi_flags]
+    ldr     x9, [x1, #NodeApi_op]
+    cmp     x9, #API_OP_EVENTSTREAM
+    b.ne    1f
+    str     xzr, [x1, #NodeApi_sent]
+    b       9f
+1:  ldr     x9, [x1, #NodeApi_flags]
     tbnz    x9, #4, 9f                      /* API_STREAM_BUSY */
     bl      node_api_chunk_work
 9:  UNFRAME 0
 END_FUNCTION node_api_sent
+
+/* ---------------------------------------------------------------- Events (beacon-api.md, eventstream) */
+
+/*
+ * L1: (out x0, answer flags x1) -> x0: the head of an eventstream answer into the ByteList out, its
+ * count set; LANTERN_OK, or LANTERN_BUFFER_TOO_SMALL. The writer's registers.
+ */
+LOCAL_FUNCTION api_sse_head
+    ENTER 0
+    mov     x23, x0
+    mov     x28, x1
+    mov     x25, #1
+    mov     x27, #0
+    add     x24, x23, #24
+    ldr     x9, [x23]
+    add     x26, x23, x9
+    API_LIT api_ev_head
+    tbnz    x28, #1, 1f                     /* API_ANSWER_HTTP10: closed after the body */
+    API_LIT api_ev_chunked
+    tbz     x28, #0, 2f                     /* API_ANSWER_CLOSE */
+1:  API_LIT api_ev_close
+2:  API_LIT api_crlf
+    cbnz    x27, 9f
+    add     x9, x23, #24
+    sub     x9, x24, x9
+    mov     x10, #24
+    stp     x10, x9, [x23, #8]
+    mov     x0, #LANTERN_OK
+    LEAVE 0
+9:  mov     x0, #LANTERN_BUFFER_TOO_SMALL
+    LEAVE 0
+END_FUNCTION api_sse_head
+
+/*
+ * L1: (view x0, out x1, topic x2) -> x0: the text of the event of the topic, from the view's event
+ * fields, into the ByteList out, its count set; LANTERN_OK, or LANTERN_BUFFER_TOO_SMALL. The
+ * writer's registers; x28 the topic.
+ */
+LOCAL_FUNCTION api_event_text
+    ENTER 0
+    mov     x22, x0
+    mov     x23, x1
+    mov     x28, x2
+    mov     x25, #1
+    mov     x27, #0
+    add     x24, x23, #24
+    ldr     x9, [x23]
+    add     x26, x23, x9
+    API_LIT api_ev_event
+    cmp     x28, #API_TOPIC_HEAD
+    b.ne    1f
+    API_LIT api_ev_t_head
+    b       3f
+1:  cmp     x28, #API_TOPIC_BLOCK
+    b.ne    2f
+    API_LIT api_ev_t_block
+    b       3f
+2:  API_LIT api_ev_t_finalized
+3:  API_LIT api_ev_data
+    cmp     x28, #API_TOPIC_FINALIZED_CHECKPOINT
+    b.eq    5f
+    /* block and head: {"slot":…,"block":… */
+    API_LIT api_ev_slot
+    ldr     x0, [x22, #ApiView_event_slot]
+    bl      api_qdec
+    API_LIT api_ev_block
+    add     x0, x22, #ApiView_event_block
+    mov     x1, #32
+    bl      api_qhex
+    cmp     x28, #API_TOPIC_HEAD
+    b.ne    6f
+    /* head: state, epoch_transition and the dependent roots */
+    API_LIT api_ev_state
+    add     x0, x22, #ApiView_event_state
+    mov     x1, #32
+    bl      api_qhex
+    API_LIT api_ev_transition
+    ldr     x0, [x22, #ApiView_event_flags]
+    and     x0, x0, #1
+    bl      api_bool
+    API_LIT api_ev_previous
+    add     x0, x22, #ApiView_event_previous
+    mov     x1, #32
+    bl      api_qhex
+    API_LIT api_ev_current
+    add     x0, x22, #ApiView_event_current
+    mov     x1, #32
+    bl      api_qhex
+    b       6f
+    /* finalized_checkpoint: {"block":…,"state":…,"epoch":… */
+5:  API_LIT api_ev_block1
+    add     x0, x22, #ApiView_event_block
+    mov     x1, #32
+    bl      api_qhex
+    API_LIT api_ev_state
+    add     x0, x22, #ApiView_event_state
+    mov     x1, #32
+    bl      api_qhex
+    API_LIT api_k_epoch
+    ldr     x0, [x22, #ApiView_event_epoch]
+    bl      api_qdec
+6:  API_LIT api_u_optimistic
+    ldr     x0, [x22, #ApiView_event_flags]
+    ubfx    x0, x0, #1, #1
+    bl      api_bool
+    API_LIT api_ev_end
+    cbnz    x27, 9f
+    add     x9, x23, #24
+    sub     x9, x24, x9
+    mov     x10, #24
+    stp     x10, x9, [x23, #8]
+    mov     x0, #LANTERN_OK
+    LEAVE 0
+9:  mov     x0, #LANTERN_BUFFER_TOO_SMALL
+    LEAVE 0
+END_FUNCTION api_event_text
+
+/* L0: x0 = 1 when a NodeApi entry of eventstream has the topic x0, else 0. Uses x9-x13. */
+LOCAL_FUNCTION node_api_subscribed
+    UNWIND_END_PROLOGUE
+    PART    x9, x10, x19, Node_api
+1:  cbz     x10, 8f
+    ldr     x11, [x9, #NodeApi_connection]
+    cbz     x11, 2f
+    ldr     x11, [x9, #NodeApi_op]
+    cmp     x11, #API_OP_EVENTSTREAM
+    b.ne    2f
+    ldr     x11, [x9, #NodeApi_cursor]
+    lsr     x11, x11, x0
+    tbnz    x11, #0, 9f
+2:  add     x9, x9, #NodeApi__mem
+    sub     x10, x10, #1
+    b       1b
+8:  mov     x0, #0
+    ret
+9:  mov     x0, #1
+    ret
+END_FUNCTION node_api_subscribed
+
+/* L0: x0 = the NodeApi entries of eventstream. Uses x9-x12. */
+LOCAL_FUNCTION node_api_event_count
+    UNWIND_END_PROLOGUE
+    mov     x0, #0
+    PART    x9, x10, x19, Node_api
+1:  cbz     x10, 9f
+    ldr     x11, [x9, #NodeApi_connection]
+    ldr     x12, [x9, #NodeApi_op]
+    cmp     x12, #API_OP_EVENTSTREAM
+    ccmp    x11, #0, #4, eq
+    cinc    x0, x0, ne
+    add     x9, x9, #NodeApi__mem
+    sub     x10, x10, #1
+    b       1b
+9:  ret
+END_FUNCTION node_api_event_count
+
+/*
+ * L1: eventstream of the connection x0 with the route x1 and the answer flags x2 (node.md,
+ * NODE_EV_API): a NodeApi entry of the route's topics, and a SEND of the head with last 0, its
+ * bytes the entry's sent. Locals: L the entry, L+8 the action.
+ */
+LOCAL_FUNCTION node_api_subscribe
+    ENTER 16
+    mov     x21, x0
+    mov     x22, x1
+    mov     x25, x2
+    bl      node_api_new
+    str     x1, [sp, #L]
+    mov     x0, x1
+    mov     x1, #NodeApi__mem
+    bl      lantern_zero
+    ldr     x1, [sp, #L]
+    str     x21, [x1, #NodeApi_connection]
+    mov     x9, #API_OP_EVENTSTREAM
+    str     x9, [x1, #NodeApi_op]
+    mov     x9, #API_STREAM_STARTED
+    tbnz    x25, #1, 1f                     /* API_ANSWER_HTTP10 */
+    orr     x9, x9, #API_STREAM_CHUNKED
+    tbz     x25, #0, 2f                     /* API_ANSWER_CLOSE */
+    orr     x9, x9, #API_STREAM_CLOSE
+    b       2f
+1:  orr     x9, x9, #(API_STREAM_CLOSE | API_STREAM_HTTP10)
+2:  str     x9, [x1, #NodeApi_flags]
+    ldr     x9, [x22, #ApiRoute_topics]
+    str     x9, [x1, #NodeApi_cursor]
+    mov     x0, #NODE_ACT_API_SEND          /* the head: 56 + 128 bytes of room */
+    mov     x1, #(56 + 128)
+    bl      node_act
+    str     x0, [sp, #(L + 8)]
+    add     x0, x0, #16
+    mov     x1, #(56 + 128 - 16)
+    bl      lantern_zero
+    ldr     x0, [sp, #(L + 8)]
+    str     x21, [x0, #16]
+    mov     x9, #(128 + 24)
+    str     x9, [x0, #32]
+    add     x0, x0, #32
+    mov     x1, x25
+    bl      api_sse_head
+    ldr     x0, [sp, #(L + 8)]
+    ldr     x9, [x0, #48]
+    ldr     x1, [sp, #L]
+    str     x9, [x1, #NodeApi_sent]
+    LEAVE 16
+END_FUNCTION node_api_subscribe
+
+/*
+ * L1: the event text of the ByteList x0, of the topic x1, to each NodeApi entry of eventstream of
+ * the topic (node.md, The events): a SEND of it, in one chunk with API_STREAM_CHUNKED, its bytes
+ * added to the entry's sent; an entry whose sent would pass NODE_API_CHUNK gets a CLOSE and ends.
+ * x21 the text, x22 the topic, x25 the entry, x26 its index, x27 the bytes sent, x28 the action.
+ */
+LOCAL_FUNCTION node_api_events
+    ENTER 0
+    mov     x21, x0
+    mov     x22, x1
+    mov     x26, #0
+1:  PART    x9, x10, x19, Node_api
+    cmp     x26, x10
+    b.hs    9f
+    mov     x11, #NodeApi__mem
+    madd    x25, x26, x11, x9
+    ldr     x9, [x25, #NodeApi_connection]
+    cbz     x9, 8f
+    ldr     x9, [x25, #NodeApi_op]
+    cmp     x9, #API_OP_EVENTSTREAM
+    b.ne    8f
+    ldr     x9, [x25, #NodeApi_cursor]
+    lsr     x9, x9, x22
+    tbz     x9, #0, 8f
+    ldr     x27, [x21, #16]
+    ldr     x9, [x25, #NodeApi_flags]
+    tst     x9, #API_STREAM_CHUNKED
+    add     x10, x27, #8                    /* a chunk: 4 hex digits, CRLF, the text, CRLF */
+    csel    x27, x10, x27, ne
+    ldr     x9, [x25, #NodeApi_sent]
+    add     x9, x9, x27
+    mov     x10, #NODE_API_CHUNK
+    cmp     x9, x10
+    b.hi    5f
+    str     x9, [x25, #NodeApi_sent]
+    add     x1, x27, #(56 + 7)
+    and     x1, x1, #~7
+    mov     x0, #NODE_ACT_API_SEND
+    bl      node_act
+    mov     x28, x0
+    add     x0, x28, #16
+    ldr     x1, [x28]
+    sub     x1, x1, #16
+    bl      lantern_zero
+    ldr     x9, [x25, #NodeApi_connection]
+    str     x9, [x28, #16]
+    ldr     x9, [x28]
+    sub     x9, x9, #32
+    mov     x10, #24
+    stp     x9, x10, [x28, #32]
+    str     x27, [x28, #48]
+    add     x0, x28, #56
+    ldr     x9, [x25, #NodeApi_flags]
+    tbz     x9, #7, 3f                      /* API_STREAM_CHUNKED: the size in 4 lower case hex digits, CRLF */
+    ldr     x10, [x21, #16]
+    mov     x11, #12
+2:  lsr     x12, x10, x11
+    and     x12, x12, #15
+    cmp     x12, #10
+    add     x13, x12, #0x30
+    add     x12, x12, #(0x61 - 10)
+    csel    x12, x13, x12, lo
+    strb    w12, [x0], #1
+    subs    x11, x11, #4
+    b.pl    2b
+    mov     w12, #0x0a0d
+    strh    w12, [x0], #2
+3:  add     x1, x21, #24
+    ldr     x2, [x21, #16]
+    bl      lantern_copy
+    ldr     x9, [x25, #NodeApi_flags]
+    tbz     x9, #7, 8f
+    ldr     x9, [x21, #16]                  /* and CRLF after the text */
+    add     x9, x9, x28
+    mov     w12, #0x0a0d
+    strh    w12, [x9, #(56 + 6)]
+    b       8f
+5:  mov     x0, #NODE_ACT_API_CLOSE         /* the stream falls behind: a CLOSE, and it ends */
+    mov     x1, #NODE_ACT_API_CLOSE_SIZE
+    bl      node_act
+    ldr     x9, [x25, #NodeApi_connection]
+    str     x9, [x0, #16]
+    mov     x0, x25
+    bl      node_api_end
+8:  add     x26, x26, #1
+    b       1b
+9:  LEAVE 0
+END_FUNCTION node_api_events
+
+/*
+ * L1: the block event of the NodeBlock entry x0 (node.md, The events), with an entry of the topic:
+ * its text in a ByteList at the end of scratch, after the ApiView of its values. x21 the block, x22
+ * the view, x26 the ByteList. Locals: L the scratch's size.
+ */
+LOCAL_FUNCTION node_api_block_event
+    ENTER 16
+    mov     x21, x0
+    mov     x0, #API_TOPIC_BLOCK
+    bl      node_api_subscribed
+    cbz     x0, 9f
+    ldr     x9, [x23]
+    str     x9, [sp, #L]
+    MOVQ    x10, ApiView__size + 1024
+    subs    x9, x9, x10
+    b.lo    9f
+    str     x9, [x23]
+    add     x22, x23, x9
+    ADDQ    x26, x22, ApiView__size
+    mov     x9, #1024
+    mov     x10, #24
+    stp     x9, x10, [x26]
+    str     xzr, [x26, #16]
+    ldr     x9, [x21, #NodeBlock_slot]
+    str     x9, [x22, #ApiView_event_slot]
+    add     x0, x22, #ApiView_event_block
+    add     x1, x21, #NodeBlock_root
+    bl      lantern_copy_root
+    ldr     x9, [x21, #NodeBlock_payload_status]
+    cmp     x9, #PAYLOAD_STATUS_NOT_VALIDATED
+    cset    x9, eq
+    lsl     x9, x9, #1
+    str     x9, [x22, #ApiView_event_flags]
+    mov     x0, x22
+    mov     x1, x26
+    mov     x2, #API_TOPIC_BLOCK
+    bl      api_event_text
+    cbnz    x0, 8f
+    mov     x0, x26
+    mov     x1, #API_TOPIC_BLOCK
+    bl      node_api_events
+8:  ldr     x9, [sp, #L]
+    str     x9, [x23]
+9:  LEAVE 16
+END_FUNCTION node_api_block_event
+
+/*
+ * L1: the head and finalized_checkpoint events at a quiet point (node.md, The events): with no
+ * block vote queued, a head other than event_head, then a finalized epoch above event_epoch; each
+ * a NODE_WORK_API_EVENT when an entry has its topic. x21 the block, x22 the values.
+ */
+.if API_TOPIC_HEAD
+.error "node_api_head_events: the arg of a head event takes API_TOPIC_HEAD as 0"
+.endif
+LOCAL_FUNCTION node_api_head_events
+    ENTER 0
+    LDQ     x9, x19, Node_event_votes
+    cbnz    x9, 9f
+    add     x0, x19, #Node_head_root
+    ADDQ    x1, x19, Node_event_head
+    ldp     x9, x10, [x0]
+    ldp     x11, x12, [x1]
+    cmp     x9, x11
+    ccmp    x10, x12, #0, eq
+    b.ne    1f
+    ldp     x9, x10, [x0, #16]
+    ldp     x11, x12, [x1, #16]
+    cmp     x9, x11
+    ccmp    x10, x12, #0, eq
+    b.eq    5f
+1:  bl      node_find_block
+    cmn     x0, #1
+    b.eq    5f
+    mov     x21, x1
+    ldr     x9, [x21, #NodeBlock_slot]      /* epoch_transition, execution_optimistic */
+    LDQ     x10, x19, Node_event_slot
+    mov     x11, #SLOTS_PER_EPOCH
+    udiv    x12, x9, x11
+    udiv    x13, x10, x11
+    cmp     x12, x13
+    cset    x22, hi
+    ldr     x10, [x21, #NodeBlock_payload_status]
+    cmp     x10, #PAYLOAD_STATUS_NOT_VALIDATED
+    cset    x10, eq
+    orr     x22, x22, x10, lsl #1
+    STQ     x9, x19, Node_event_slot
+    ADDQ    x0, x19, Node_event_head
+    add     x1, x21, #NodeBlock_root
+    bl      lantern_copy_root
+    mov     x0, #API_TOPIC_HEAD
+    bl      node_api_subscribed
+    cbz     x0, 5f
+    ldr     x1, [x21, #NodeBlock_state_id]
+    cbz     x1, 5f
+    mov     x0, #NODE_WORK_API_EVENT
+    mov     x2, #0
+    mov     x3, #0
+    mov     x4, #0
+    lsl     x5, x22, #8                     /* API_TOPIC_HEAD is 0 */
+    bl      node_work
+5:  ldr     x9, [x20, #Store_finalized_checkpoint]
+    LDQ     x10, x19, Node_event_epoch
+    cmp     x9, x10
+    b.ls    9f
+    STQ     x9, x19, Node_event_epoch
+    mov     x0, #API_TOPIC_FINALIZED_CHECKPOINT
+    bl      node_api_subscribed
+    cbz     x0, 9f
+    add     x0, x20, #(Store_finalized_checkpoint + 8)
+    bl      node_find_block
+    cmn     x0, #1
+    b.eq    9f
+    ldr     x9, [x1, #NodeBlock_payload_status]
+    cmp     x9, #PAYLOAD_STATUS_NOT_VALIDATED
+    cset    x9, eq
+    ldr     x5, [x20, #Store_finalized_checkpoint]
+    lsl     x5, x5, #16
+    orr     x5, x5, x9, lsl #9
+    add     x5, x5, #API_TOPIC_FINALIZED_CHECKPOINT
+    ldr     x3, [x1, #NodeBlock_data_id]    /* the block's bytes, else its post-state */
+    ldr     x1, [x1, #NodeBlock_state_id]
+    cmp     x3, #0
+    csel    x1, x1, xzr, eq
+    orr     x9, x1, x3
+    cbz     x9, 9f
+    mov     x0, #NODE_WORK_API_EVENT
+    mov     x2, #0
+    mov     x4, #0
+    bl      node_work
+9:  LEAVE 0
+END_FUNCTION node_api_head_events
+
+/* L1: NODE_EV_WORK_DONE x0 of a NODE_WORK_API_EVENT: LANTERN_VALID, its text to the entries of its topic. */
+LOCAL_FUNCTION node_api_event_done
+    FRAME 0
+    ldr     x9, [x0, #NodeEvent_result]
+    cbnz    x9, 9f
+    ldr     x1, [x0, #NodeAction_arg]
+    and     x1, x1, #255
+    add     x0, x0, #NodeEvent_chunk
+    bl      node_api_events
+9:  UNFRAME 0
+END_FUNCTION node_api_event_done
 
 /* L1: NODE_EV_API_CLOSED of the connection x0: its stream ends, or with a chunk queued takes API_STREAM_GONE. */
 LOCAL_FUNCTION node_api_closed

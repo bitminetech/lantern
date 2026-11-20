@@ -2551,6 +2551,12 @@ struct node_shell {
         uint64_t ids[16];  /* the ids of the NODE_ACT_STATE_BYTES actions */
         size_t nids;
     } api;
+    struct { /* the event streams of a node-events case: the bytes of each connection's sends */
+        uint64_t conn, len, cap, seen, sends, lasts, closes, late, total; /* seen: the bytes checked; total: sent with no SENT */
+        uint8_t *b;
+        int nosent, gone, closed; /* nosent: no NODE_EV_API_SENT; closed: the node closed it, as it must */
+    } ev[3];
+    int nev;
 };
 
 /* The records the nodes archived, and the works that served one from the Db: printed as a NOTE. */
@@ -2803,6 +2809,13 @@ static void shell_event(struct node_shell *s, uint64_t kind, uint64_t arg, const
         wr64(e + 40, len);
         memcpy(e + 48, bytes, (size_t)len);
     }
+}
+
+/* The index of the event stream of the connection, or -1. */
+static int shell_ev_of(const struct node_shell *s, uint64_t conn) {
+    for (int e = 0; e < s->nev; e++)
+        if (s->ev[e].conn == conn) return e;
+    return -1;
 }
 
 /* The node's entry of the block root, or NULL. */
@@ -3143,7 +3156,23 @@ static void shell_step(fc_node *n, const char **why) {
         else if (kind == ACT_API_SEND && size >= 56 && rd64(act + 24) <= 1 && rd64(act + 32) == size - 32 && rd64(act + 40) == 24 &&
                  rd64(act + 48) <= size - 56) {
             uint64_t n = rd64(act + 48);
-            if (rd64(act + 16) != s->api.conn) *why = "API_SEND of another connection";
+            int e = shell_ev_of(s, rd64(act + 16));
+            if (e >= 0) { /* an event stream */
+                if (s->ev[e].closes || s->ev[e].gone || rd64(act + 24)) s->ev[e].late++;
+                if (s->ev[e].len + n > s->ev[e].cap) {
+                    s->ev[e].cap = 2 * (s->ev[e].len + n) + 4096;
+                    s->ev[e].b = realloc(s->ev[e].b, (size_t)s->ev[e].cap);
+                    if (!s->ev[e].b) {
+                        fprintf(stderr, "out of memory\n");
+                        exit(2);
+                    }
+                }
+                memcpy(s->ev[e].b + s->ev[e].len, act + 56, (size_t)n);
+                s->ev[e].len += n;
+                s->ev[e].sends++;
+                s->ev[e].lasts += rd64(act + 24);
+                if (!s->ev[e].nosent && !s->ev[e].gone) shell_event(s, EV_API_SENT, s->ev[e].conn, NULL, 0);
+            } else if (rd64(act + 16) != s->api.conn) *why = "API_SEND of another connection";
             else {
                 if (s->api.closes || s->api.lasts) s->api.late++;
                 if (s->api.len + n > s->api.cap) {
@@ -3166,7 +3195,11 @@ static void shell_step(fc_node *n, const char **why) {
                     shell_event(s, EV_API_SENT, s->api.conn, NULL, 0);
             }
         } else if (kind == ACT_API_CLOSE && size == 24) {
-            if (rd64(act + 16) != s->api.conn) *why = "API_CLOSE of another connection";
+            int e = shell_ev_of(s, rd64(act + 16));
+            if (e >= 0) {
+                if (s->ev[e].closes || s->ev[e].gone) s->ev[e].late++;
+                s->ev[e].closes++;
+            } else if (rd64(act + 16) != s->api.conn) *why = "API_CLOSE of another connection";
             else {
                 if (s->api.closes || !s->api.lasts || s->api.gone) s->api.late++;
                 s->api.closes++;
@@ -3522,6 +3555,7 @@ static struct node_shell *shell_open(fc_node *n, tv parts, uint8_t **anchor_bloc
 static void shell_close(fc_node *n, uint8_t *anchor_block) {
     struct node_shell *s = n->shell;
     free(s->api.b);
+    for (int e = 0; e < s->nev; e++) free(s->ev[e].b);
     free(s->seen);
     for (size_t k = 0; k < s->nbufs; k++) free(s->bufs[k].b);
     free(s->bufs);
@@ -3541,6 +3575,135 @@ static void shell_api_head(fc_node *n, const char **why);
 static void api_lookup_checks(fc_node *n, tv parts, const char **why);
 static void drop_check(tv parts, const char **why);
 
+static uint64_t http_request_call(const uint8_t *b, uint64_t len, const uint64_t *limits, uint64_t osize, uint8_t **out,
+                                  uint64_t *http, const char **why);
+static tv case_events; /* the node-events case of the fork choice case that runs, or NULL */
+#define HTTP_REQUEST_FIXED 144
+
+/* The event streams of a node-events case (docs/reference/node.md, Test vectors): the request and head of each. */
+static const char *const ev_requests[3] = {
+    "GET /eth/v1/events?topics=head,block,finalized_checkpoint HTTP/1.1\r\nHost: lantern\r\nAccept: text/event-stream\r\n\r\n",
+    "GET /eth/v1/events?topics=block,chain_reorg HTTP/1.0\r\nHost: lantern\r\n\r\n",
+    "GET /eth/v1/events?topics=finalized_checkpoint,head,block HTTP/1.1\r\nHost: lantern\r\n\r\n"};
+static const char *const ev_heads[3] = {
+    "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nCache-Control: no-cache\r\nTransfer-Encoding: chunked\r\n\r\n",
+    "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nCache-Control: no-cache\r\nConnection: close\r\n\r\n",
+    "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nCache-Control: no-cache\r\nTransfer-Encoding: chunked\r\n\r\n"};
+
+/* The three event streams opened: each must get its head, with last 0. */
+static void ev_open(fc_node *n, const char **why) {
+    static const uint64_t limits[2] = {16384, 1048576};
+    struct node_shell *s = n->shell;
+    for (int e = 0; e < 3 && !*why; e++) {
+        uint64_t len = strlen(ev_requests[e]), http = 0, osize = (HTTP_REQUEST_FIXED + 2 * len + 64 + 7) & ~(uint64_t)7;
+        uint8_t *out = NULL;
+        memset(&s->ev[e], 0, sizeof s->ev[e]);
+        s->ev[e].conn = (uint64_t)(0x100 + e) | (uint64_t)99 << 32;
+        s->ev[e].nosent = e == 2;
+        s->nev = e + 1;
+        if (http_request_call((const uint8_t *)ev_requests[e], len, limits, osize, &out, &http, why) != 0 && !*why)
+            *why = "an event stream: lantern_http_request";
+        if (!*why) {
+            shell_event(s, EV_API, s->ev[e].conn, out, rd64(out));
+            shell_settle(n, why);
+        }
+        free(out);
+        uint64_t hlen = strlen(ev_heads[e]);
+        if (!*why && (s->ev[e].len != hlen || memcmp(s->ev[e].b, ev_heads[e], (size_t)hlen) || s->ev[e].lasts || s->ev[e].closes ||
+                      s->ev[e].late))
+            *why = "an event stream: not its head, with last 0";
+        s->ev[e].seen = s->ev[e].total = s->ev[e].len;
+    }
+}
+
+/* The topic of the event text at t: its name after "event: ". */
+static int ev_topic_is(const uint8_t *t, uint64_t len, const char *topic) {
+    size_t k = strlen(topic);
+    return len > 7 + k && !memcmp(t, "event: ", 7) && !memcmp(t + 7, topic, k) && t[7 + k] == '\n';
+}
+
+/* Each stream's bytes of a step: the step's texts of its topics, each in one chunk over HTTP/1.1; the third closes when its bytes would pass NODE_API_CHUNK. */
+static void ev_step_check(struct node_shell *s, tv texts, const char **why) {
+    uint64_t tlen;
+    const uint8_t *t = tv_bytes(texts, &tlen);
+    for (int e = 0; e < s->nev && !*why; e++) {
+        uint8_t *want = buffer(tlen + 1), *got = buffer(s->ev[e].len - s->ev[e].seen + 1);
+        uint64_t wlen = 0, glen = 0, close_now = 0;
+        for (uint64_t at = 0; at < tlen && !s->ev[e].closed;) { /* the step's texts, each to its "\n\n" */
+            uint64_t end = at;
+            while (end + 1 < tlen && !(t[end] == '\n' && t[end + 1] == '\n')) end++;
+            end += 2;
+            const uint8_t *x = t + at;
+            uint64_t xl = end - at;
+            at = end;
+            if (e == 1 && !ev_topic_is(x, xl, "block")) continue;
+            if (e == 2 && s->ev[e].total + xl + 8 > NODE_API_CHUNK) { /* falls behind: a close in place of it */
+                close_now = 1;
+                s->ev[e].closed = 1;
+                break;
+            }
+            if (e == 2) s->ev[e].total += xl + 8;
+            memcpy(want + wlen, x, (size_t)xl);
+            wlen += xl;
+        }
+        const uint8_t *b = s->ev[e].b + s->ev[e].seen;
+        uint64_t blen = s->ev[e].len - s->ev[e].seen;
+        if (e == 1) { /* HTTP/1.0: the bytes as they are */
+            memcpy(got, b, (size_t)blen);
+            glen = blen;
+        } else
+            for (uint64_t at = 0; at < blen && !*why;) { /* a chunk: 4 lower case hex digits, CRLF, the bytes, CRLF */
+                uint64_t size = 0;
+                for (int d = 0; d < 4; d++) {
+                    uint8_t c = at + (uint64_t)d < blen ? b[at + (uint64_t)d] : 0;
+                    if (c >= '0' && c <= '9') size = size * 16 + (uint64_t)(c - '0');
+                    else if (c >= 'a' && c <= 'f') size = size * 16 + (uint64_t)(c - 'a' + 10);
+                    else *why = "an event stream: a chunk's size is not 4 lower case hex digits";
+                }
+                if (!*why && (at + 6 + size + 2 > blen || memcmp(b + at + 4, "\r\n", 2) || memcmp(b + at + 6 + size, "\r\n", 2) || !size))
+                    *why = "an event stream: a broken chunk";
+                if (!*why) {
+                    memcpy(got + glen, b + at + 6, (size_t)size);
+                    glen += size;
+                }
+                at += 6 + size + 2;
+            }
+        if (!*why && (glen != wlen || memcmp(got, want, (size_t)wlen))) {
+            static char msg[1400];
+            uint64_t k = 0;
+            while (k < glen && k < wlen && got[k] == want[k]) k++;
+            snprintf(msg, sizeof msg, "event stream %d: the step's events differ at byte %llu (got %llu, want %llu): got %.*s want %.*s", e,
+                     (unsigned long long)k, (unsigned long long)glen, (unsigned long long)wlen, (int)(glen - k < 500 ? glen - k : 500),
+                     (const char *)got + k, (int)(wlen - k < 500 ? wlen - k : 500), (const char *)want + k);
+            *why = msg;
+        }
+        if (!*why && (s->ev[e].lasts || s->ev[e].late || s->ev[e].closes != (uint64_t)s->ev[e].closed))
+            *why = close_now ? "event stream 2: no close where it falls behind" : "event stream: a last, a late action or a close";
+        s->ev[e].seen = s->ev[e].len;
+        free(want);
+        free(got);
+    }
+}
+
+/* After the case: each stream's client goes; the node must hold no NodeApi entry and send nothing more. */
+static void ev_close(fc_node *n, const char **why) {
+    struct node_shell *s = n->shell;
+    for (int e = 0; e < s->nev; e++)
+        if (!s->ev[e].closed) {
+            shell_event(s, EV_API_CLOSED, s->ev[e].conn, NULL, 0);
+            s->ev[e].gone = 1;
+        }
+    shell_settle(n, why);
+    for (int e = 0; e < s->nev && !*why; e++)
+        if (s->ev[e].len != s->ev[e].seen || s->ev[e].late) *why = "an event stream: an action after its end";
+    if (!*why && rd64(s->node + NODE_API_PART + 8)) *why = "the node holds a NodeApi entry after its event streams end";
+    s->nev = 0;
+    for (int e = 0; e < 3; e++) {
+        free(s->ev[e].b);
+        memset(&s->ev[e], 0, sizeof s->ev[e]);
+    }
+}
+
 /* One case through the node: the shell's buffers, then each step as events; with serve, then fc_serve_check. */
 static void fc_node_case(tv parts, int serve, const char **why) {
     fc_node n;
@@ -3548,6 +3711,15 @@ static void fc_node_case(tv parts, int serve, const char **why) {
     struct node_shell *s = shell_open(&n, parts, &anchor_block, why);
     tv steps = tv_get(parts, "steps");
     tv st = steps ? steps + 9 : NULL;
+    tv evs = NULL; /* the texts of each step, from the node-events case */
+    if (case_events && !*why) {
+        tv list = tv_get(case_events, "events");
+        if (!list || rd64(list + 1) != (steps ? rd64(steps + 1) : 0)) *why = "the node-events case has not a text for each step";
+        else {
+            evs = list + 9;
+            ev_open(&n, why);
+        }
+    }
     for (uint64_t k = 0, c = steps ? rd64(steps + 1) : 0; k < c && !*why; k++, st = tv_skip(st)) {
         tv v = tv_get(st, "valid");
         int valid = !v || (*v == T_BOOL && v[1]);
@@ -3580,12 +3752,17 @@ static void fc_node_case(tv parts, int serve, const char **why) {
             *why = "unknown step";
         }
         if (!*why && !guard_ok(scratch_buf, SCRATCH_BYTES)) *why = "wrote past the scratch";
+        if (evs && !*why) {
+            ev_step_check(s, evs, why);
+            evs = tv_skip(evs);
+        }
         if (*why) {
-            static char msg[192];
+            static char msg[1600];
             snprintf(msg, sizeof msg, "step %llu: %s", (unsigned long long)k, *why);
             *why = msg;
         }
     }
+    if (s->nev && !*why) ev_close(&n, why);
     if (!*why) shell_db_rescan(n.shell, why);
     if (serve && !*why) shell_api_head(&n, why);
     if (serve && !*why) api_lookup_checks(&n, parts, why);
@@ -5655,11 +5832,27 @@ static void run_fork_choice(const char *file, const char *dir, case_file *f, int
         exit(2);
     }
 #endif
+    case_file events = {0}; /* the node-events cases: "get_head/" or "on_block/" and the case's name */
+    const char *handler = strstr(file, "fork_choice-get_head") ? "get_head/" : "on_block/";
+#if FORK > FORK_PHASE0
+    if (serve && !read_file(dir, PRESET "-" STR(FORK_NAME) "-node-events.bin", &events)) {
+        fprintf(stderr, "%s/%s-%s-node-events.bin: missing\n", dir, PRESET, STR(FORK_NAME));
+        exit(2);
+    }
+#endif
     for (uint64_t i = 0; i < f->count; i++) {
         const char *name, *why = NULL;
         uint64_t len, vsize;
         tv parts = next_case(f, &name, &len);
         if (skip_case(parts)) continue;
+        case_events = NULL;
+        events.at = 16;
+        for (uint64_t b = 0; b < events.count && !case_events; b++) {
+            const char *ename;
+            uint64_t elen, hl = strlen(handler);
+            tv eparts = next_case(&events, &ename, &elen);
+            if (elen == hl + len && !memcmp(ename, handler, (size_t)hl) && !memcmp(ename + hl, name, (size_t)len)) case_events = eparts;
+        }
         case_blobs = NULL; /* the node-blobs case of the same name */
         blobs.at = 16;
         for (uint64_t b = 0; b < blobs.count && !case_blobs; b++) {
@@ -5739,7 +5932,9 @@ static void run_fork_choice(const char *file, const char *dir, case_file *f, int
             char nname[256];
             int nlen = snprintf(nname, sizeof nname, "%.*s (node)", (int)len, name);
             const char *nwhy = NULL;
-            fc_node_case(parts, serve, &nwhy);
+            if (serve && FORK > FORK_PHASE0 && !case_events) nwhy = "no node-events case of the case";
+            else fc_node_case(parts, serve, &nwhy);
+            case_events = NULL;
             report(file, nname, (uint64_t)nlen, nwhy == NULL, nwhy);
             int ran = 0;
             const char *gwhy = NULL;
@@ -5761,7 +5956,9 @@ static void run_fork_choice(const char *file, const char *dir, case_file *f, int
         }
     }
     case_blobs = NULL;
+    case_events = NULL;
     free(blobs.data);
+    free(events.data);
 }
 
 /* ---------------------------------------------------------------- Merkle proofs */
@@ -7106,12 +7303,12 @@ static void run_node_api(const char *file, case_file *f) {
         fc_node n;
         uint8_t *anchor_block;
         struct node_shell *s = shell_open(&n, parts, &anchor_block, &why);
-        uint64_t slen;
+        uint64_t slen, stlen;
         const uint8_t *identity = tv_bytes(tv_get(parts, "identity"), &ilen), *closes = tv_bytes(tv_get(parts, "closes"), &clen);
-        const uint8_t *syncing = tv_bytes(tv_get(parts, "syncing"), &slen);
+        const uint8_t *syncing = tv_bytes(tv_get(parts, "syncing"), &slen), *streams = tv_bytes(tv_get(parts, "streams"), &stlen);
         tv names = tv_get(parts, "names"), reqs = tv_get(parts, "requests"), resps = tv_get(parts, "responses");
         uint64_t count = rd64(reqs + 1), offline = tv_u64(tv_get(parts, "offline"));
-        if (!why && (rd64(names + 1) != count || rd64(resps + 1) != count || clen != count || slen != count))
+        if (!why && (rd64(names + 1) != count || rd64(resps + 1) != count || clen != count || slen != count || stlen != count))
             why = "the case's lists differ in length";
         if (!why) {
             shell_event(s, EV_TICK, tv_u64(tv_get(parts, "time_ms")), NULL, 0);
@@ -7138,6 +7335,18 @@ static void run_node_api(const char *file, case_file *f) {
                 shell_api_ask(&n, req, rlen, (k + 1) | (uint64_t)(7 + r) << 32, &why);
                 if (syncing[k]) wr64(s->node + NODE_FLAGS, rd64(s->node + NODE_FLAGS) & ~(uint64_t)NODE_FLAG_SYNCING);
                 if (!why && s->nbufs != nbufs) why = "the runner holds other buffers after the answer";
+                if (!why && streams[k]) { /* an event stream: its head with last 0, no close; then the client goes */
+                    if (s->api.len != wlen || memcmp(s->api.b, want, (size_t)wlen) || s->api.lasts || s->api.closes || s->api.late)
+                        why = api_mismatch(s, rname, want, wlen);
+                    else {
+                        shell_event(s, EV_API_CLOSED, s->api.conn, NULL, 0);
+                        s->api.gone = 1;
+                        shell_settle(&n, &why);
+                    }
+                    if (!why && (s->api.len != wlen || s->api.closes)) why = "an event stream: an action after its connection closed";
+                    if (!why) why = api_clean(s);
+                    continue;
+                }
                 uint64_t glen = 0;
                 uint8_t *got = why ? NULL : api_normalize(s, &glen, &why);
                 if (why && got) { /* a broken framing: the bytes as they came */

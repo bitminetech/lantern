@@ -336,6 +336,83 @@ SPEC_FUNCTION node_proposers
     LEAVE 128
 SPEC_END node_proposers
 
+/*
+ * (state, config, scratch, out): lantern_node_event_roots (node.md): the block root, the state root,
+ * and the previous and current duty dependent roots of a block's post-state. rbx state, rbp config,
+ * r12 scratch, r13 out, r14 which dependent root, r15 the scratch size, restored. Locals: L a slot,
+ * L+8 its place, L+16 the latest_block_header (112).
+ */
+SPEC_FUNCTION node_event_roots
+    ENTER 128
+    mov     %rdi, %rbx
+    mov     %rsi, %rbp
+    mov     %rdx, %r12
+    mov     %rcx, %r13
+    mov     (%r12), %r15
+    NEED_SCRATCH %r12, %rbx, 2, 8f
+    lea     (L + 16)(%rsp), %rdi            # the header, its state_root the state's when zero
+    lea     BeaconState_latest_block_header(%rbx), %rsi
+    mov     $BeaconBlockHeader__mem, %edx
+    call    lantern_copy
+    mov     (L + 16 + BeaconBlockHeader_state_root)(%rsp), %rax
+    or      (L + 16 + BeaconBlockHeader_state_root + 8)(%rsp), %rax
+    or      (L + 16 + BeaconBlockHeader_state_root + 16)(%rsp), %rax
+    or      (L + 16 + BeaconBlockHeader_state_root + 24)(%rsp), %rax
+    jnz     1f
+    mov     %rbx, %rdi
+    mov     CONFIG_STATE_CACHE(%rbp), %rsi
+    mov     %r12, %rdx
+    lea     (L + 16 + BeaconBlockHeader_state_root)(%rsp), %rcx
+    call    lantern_state_root
+    test    %rax, %rax
+    jnz     99f
+1:  lea     32(%r13), %rdi
+    lea     (L + 16 + BeaconBlockHeader_state_root)(%rsp), %rsi
+    COPY32  %rdi, %rsi
+    ADDRESS %rdi, lantern_type_BeaconBlockHeader    # the block root
+    lea     (L + 16)(%rsp), %rsi
+    mov     %r12, %rdx
+    mov     %r13, %rcx
+    CALL_GLOBAL ssz_hash_tree_root
+    test    %rax, %rax
+    jnz     8f
+    xor     %r14d, %r14d                    # each dependent root: of the epoch before the state's (0), then of its epoch (1)
+2:  mov     BeaconState_slot(%rbx), %rax
+    shr     $LOG2_SLOTS_PER_EPOCH, %rax
+    add     %r14, %rax
+    mov     %r14, %rcx
+    shl     $5, %rcx
+    lea     64(%r13,%rcx), %rcx
+    mov     %rcx, (L + 8)(%rsp)
+    cmp     $2, %rax                        # get_block_root_at_slot(state, compute_start_slot_at_epoch(e) - 1), e = rax - 1
+    jb      3f
+    dec     %rax
+    shl     $LOG2_SLOTS_PER_EPOCH, %rax
+    dec     %rax
+    mov     %rax, L(%rsp)
+    jmp     31f
+3:  cmpq    $0, BeaconState_slot(%rbx)      # on underflow, the genesis block root
+    je      32f
+    movq    $0, L(%rsp)
+31: mov     %rbx, %rdi
+    lea     L(%rsp), %rsi
+    mov     (L + 8)(%rsp), %rdx
+    call    lantern_get_block_root_at_slot
+    test    %rax, %rax
+    jnz     99f
+    jmp     4f
+32: mov     (L + 8)(%rsp), %rdi
+    COPY32  %rdi, %r13
+4:  inc     %r14
+    cmp     $2, %r14
+    jb      2b
+    xor     %eax, %eax
+    jmp     99f
+8:  mov     $LANTERN_BUFFER_TOO_SMALL, %eax
+99: mov     %r15, (%r12)
+    LEAVE 128
+SPEC_END node_event_roots
+
 .if BeaconState_state_roots != NODE_STATE_STATE_ROOTS || BeaconState_fork != NODE_STATE_FORK
 .error "nodehooks: NODE_STATE_STATE_ROOTS or NODE_STATE_FORK is not the state's"
 .endif

@@ -20,6 +20,8 @@ the file GENESIS (genesis.ssz: altair, 4096 validators at slot 0). The checks:
   the 4096 validators once;
 - getProposerDuties of epoch 0: the 8 slots of epoch 0 in order, each with a validator's index and
   its pubkey in GENESIS, and as dependent_root the root of getBlockRoot of genesis;
+- an event stream of head, block and finalized_checkpoint: its head, and the connection stays open
+  with no bytes through the check below;
 - a connection with no bytes closes within 31 s.
 Prints a PASS or FAIL line for each, and exits 1 when one fails.
 """
@@ -315,11 +317,35 @@ def main():
     u.close()
     time.sleep(1)
 
+    head = (b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nCache-Control: no-cache\r\n"
+            b"Transfer-Encoding: chunked\r\n\r\n")
+    ev = connect(port)
+    rev = Reader(ev)
+    try:
+        ev.sendall(request(b"GET", b"/eth/v1/events?topics=head,block,finalized_checkpoint", b"Accept: text/event-stream\r\n"))
+        while len(rev.buf) < len(head) and rev.more():
+            pass
+        check("an event stream: its head", rev.buf == head, repr(rev.buf[:200]))
+    except OSError as x:
+        check("an event stream: its head", False, repr(x))
+
     f = connect(port)
     start = time.monotonic()
     closed = Reader(f).closes(31)
     check("a connection with no bytes closes within 31 s", closed, f"open after {time.monotonic() - start:.1f} s")
     f.close()
+    try:
+        ev.settimeout(1)
+        rev.buf = b""
+        open_ = False
+        try:
+            open_ = rev.more() and False
+        except socket.timeout:
+            open_ = True
+        check("the event stream stays open with no bytes", open_ and not rev.buf, f"bytes {rev.buf[:200]!r}, eof {rev.eof}")
+    except OSError as x:
+        check("the event stream stays open with no bytes", False, repr(x))
+    ev.close()
     sys.exit(0 if all(results) else 1)
 
 

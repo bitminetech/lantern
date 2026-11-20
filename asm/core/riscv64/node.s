@@ -232,6 +232,12 @@ FUNCTION lantern_node_init
     sd      s4, Node_earliest_slot(s6)
     addi    t0, s6, Node_head_root
     COPY32  t0, s3
+    ADDQ    t0, s6, Node_event_head         # the events: the anchor's head and finalized epoch
+    COPY32  t0, s3
+    STQ     s4, s6, Node_event_slot
+    li      t0, SLOTS_PER_EPOCH
+    divu    t0, s4, t0
+    STQ     t0, s6, Node_event_epoch
     addi    t0, s6, Node_genesis_validators_root
     addi    t1, s3, NodeAnchor_genesis_validators_root
     COPY32  t0, t1
@@ -531,7 +537,14 @@ END_FUNCTION node_find_checkpoint
 /* a0 = a WORK action: kind a0, state_a a1, state_b a2, data a3, target a4, arg a5; state_c 0. Uses t0-t2. */
 LOCAL_FUNCTION node_work
     UNWIND_END_PROLOGUE
-    ld      t0, 8(s6)
+    li      t0, NODE_WORK_BLOCK_ATTESTATION     # a block's vote: event_votes takes 1 more
+    beq     a0, t0, 1f
+    li      t0, NODE_WORK_BLOCK_SLASHING
+    bne     a0, t0, 2f
+1:  LDQ     t0, s1, Node_event_votes
+    addi    t0, t0, 1
+    STQ     t0, s1, Node_event_votes
+2:  ld      t0, 8(s6)
     ld      t1, 16(s6)
     add     t2, s6, t0
     add     t2, t2, t1
@@ -3418,7 +3431,14 @@ LOCAL_FUNCTION node_event
     call    node_api_closed
     LEAVE 48
 50: ld      t0, NodeAction_work_kind(s3)    # WORK_DONE
-    ld      t1, NodeEvent_result(s3)
+    li      t2, NODE_WORK_BLOCK_ATTESTATION     # a block's vote done: event_votes takes 1 off
+    beq     t0, t2, 501f
+    li      t2, NODE_WORK_BLOCK_SLASHING
+    bne     t0, t2, 502f
+501: LDQ    t2, s1, Node_event_votes
+    addi    t2, t2, -1
+    STQ     t2, s1, Node_event_votes
+502: ld     t1, NodeEvent_result(s3)
     li      t2, NODE_WORK_IMPORT_BLOCK
     bne     t0, t2, 60f
     ld      a0, NodeAction_target(s3)
@@ -3442,8 +3462,10 @@ LOCAL_FUNCTION node_event
     sd      t0, NodeAction_state_c(a0)
     LEAVE 48
 51: bnez    t1, 52f
-    li      t0, NODE_BLOCK_IMPORTED         # imported: its votes, then its waiting children
+    li      t0, NODE_BLOCK_IMPORTED         # imported: the block event, its votes, then its waiting children
     sd      t0, NodeBlock_status(s4)
+    mv      a0, s4
+    call    node_api_block_event
     mv      a0, s4
     ld      a1, NodeEvent_index(s3)
     ld      a2, NodeEvent_root(s3)
@@ -3845,9 +3867,14 @@ LOCAL_FUNCTION node_event
     call    node_api_chunk_done
     LEAVE 48
 703: li     t2, NODE_WORK_API_LOOKUP        # API_LOOKUP: the answer for the slot it found
-    bne     t0, t2, 70f
+    bne     t0, t2, 704f
     mv      a0, s3
     call    node_api_lookup_done
+    LEAVE 48
+704: li     t2, NODE_WORK_API_EVENT         # API_EVENT: the text to the streams of its topic
+    bne     t0, t2, 70f
+    mv      a0, s3
+    call    node_api_event_done
     LEAVE 48
 70: li      t2, NODE_WORK_ATTESTATION       # done with an attestation or a slashing: free its bytes
     beq     t0, t2, 71f
@@ -7786,9 +7813,17 @@ FUNCTION lantern_node_step
 5:  sd      t5, L(sp)
     call    node_column_count               # the columns sampled, for the blobs part
     sd      a0, (L + 152)(sp)
-    li      t1, 512                         # room: actions, node parts, scratch
-    mul     t1, s8, t1
+    call    node_api_event_count            # with event streams: NODE_API_SCRATCH of scratch, 1024 per event for each
+    beqz    a0, 58f
+    ld      t0, (L + 184)(sp)
+    li      t1, NODE_API_SCRATCH
+    bgeu    t0, t1, 58f
+    sd      t1, (L + 184)(sp)
+58: slli    t1, a0, 10
+    addi    t1, t1, 512
+    mul     t1, s8, t1                      # room: actions, node parts, scratch
     add     t1, t1, s10
+    addi    t1, t1, 2 * NODE_ACT_WORK_SIZE
     ld      t2, (L + 192)(sp)               # 2048 for each API answer
     slli    t2, t2, 11
     add     t1, t1, t2
@@ -8064,6 +8099,7 @@ FUNCTION lantern_node_step
 9:  call    node_head
     call    node_engine_next
     call    node_shed                       # the post-states the node can rebuild go
+    call    node_api_head_events            # the head and finalized_checkpoint events, at a quiet point
     call    node_backfill_link              # the backfill's blocks of the chain join the Db
     call    node_drop_sidecars              # the sidecars the node no longer serves go
     sd      zero, (L + 112)(sp)
@@ -8798,7 +8834,18 @@ FUNCTION lantern_node_run
     mv      a6, s4
     call    node_api_chunk_run
     LEAVE 192
-977: li     t1, NODE_WORK_API_LOOKUP
+977: li     t1, NODE_WORK_API_EVENT
+    bne     t0, t1, 978f
+    mv      a0, s1                          # API_EVENT: the text of an event
+    mv      a1, s3
+    mv      a2, s4
+    mv      a3, s5
+    mv      a4, s6
+    mv      a5, s7
+    mv      a6, s8
+    call    node_api_event_run
+    LEAVE 192
+978: li     t1, NODE_WORK_API_LOOKUP
     bne     t0, t1, 8f
     mv      a0, s1                          # API_LOOKUP: the slot of a state root
     mv      a1, s3

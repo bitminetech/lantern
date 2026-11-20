@@ -218,6 +218,12 @@ FUNCTION lantern_node_init
     str     x22, [x24, #Node_earliest_slot]
     add     x9, x24, #Node_head_root
     COPY32  x9, x21
+    ADDQ    x9, x24, Node_event_head        /* the events: the anchor's head and finalized epoch */
+    COPY32  x9, x21
+    STQ     x22, x24, Node_event_slot
+    mov     x9, #SLOTS_PER_EPOCH
+    udiv    x9, x22, x9
+    STQ     x9, x24, Node_event_epoch
     add     x9, x24, #Node_genesis_validators_root
     add     x10, x21, #NodeAnchor_genesis_validators_root
     COPY32  x9, x10
@@ -536,7 +542,13 @@ END_FUNCTION node_find_checkpoint
 /* L0: x0 = a WORK action: kind x0, state_a x1, state_b x2, data x3, target x4, arg x5; state_c 0. */
 LOCAL_FUNCTION node_work
     FRAME 48
-    stp     x0, x1, [sp, #16]
+    cmp     x0, #NODE_WORK_BLOCK_ATTESTATION     /* a block's vote: event_votes takes 1 more */
+    ccmp    x0, #NODE_WORK_BLOCK_SLASHING, #4, ne
+    b.ne    1f
+    LDQ     x9, x19, Node_event_votes
+    add     x9, x9, #1
+    STQ     x9, x19, Node_event_votes
+1:  stp     x0, x1, [sp, #16]
     stp     x2, x3, [sp, #32]
     stp     x4, x5, [sp, #48]
     mov     x0, #NODE_ACT_WORK
@@ -3455,7 +3467,13 @@ LOCAL_FUNCTION node_event
     bl      node_api_closed
     LEAVE 48
 50: ldr     x9, [x21, #NodeAction_work_kind]    /* WORK_DONE */
-    ldr     x10, [x21, #NodeEvent_result]
+    cmp     x9, #NODE_WORK_BLOCK_ATTESTATION     /* a block's vote done: event_votes takes 1 off */
+    ccmp    x9, #NODE_WORK_BLOCK_SLASHING, #4, ne
+    b.ne    501f
+    LDQ     x10, x19, Node_event_votes
+    sub     x10, x10, #1
+    STQ     x10, x19, Node_event_votes
+501: ldr    x10, [x21, #NodeEvent_result]
     cmp     x9, #NODE_WORK_IMPORT_BLOCK
     b.ne    60f
     ldr     x0, [x21, #NodeAction_target]
@@ -3477,8 +3495,10 @@ LOCAL_FUNCTION node_event
     str     x9, [x0, #NodeAction_state_c]
     LEAVE 48
 51: cbnz    x10, 52f
-    mov     x9, #NODE_BLOCK_IMPORTED        /* imported: its votes, then its waiting children */
+    mov     x9, #NODE_BLOCK_IMPORTED        /* imported: the block event, its votes, then its waiting children */
     str     x9, [x22, #NodeBlock_status]
+    mov     x0, x22
+    bl      node_api_block_event
     mov     x0, x22
     ldr     x1, [x21, #NodeEvent_index]
     ldr     x2, [x21, #NodeEvent_root]
@@ -3878,9 +3898,14 @@ LOCAL_FUNCTION node_event
     bl      node_api_chunk_done
     LEAVE 48
 703: cmp    x9, #NODE_WORK_API_LOOKUP          /* API_LOOKUP: the answer for the slot it found */
-    b.ne    70f
+    b.ne    704f
     mov     x0, x21
     bl      node_api_lookup_done
+    LEAVE 48
+704: cmp    x9, #NODE_WORK_API_EVENT           /* API_EVENT: the text to the streams of its topic */
+    b.ne    70f
+    mov     x0, x21
+    bl      node_api_event_done
     LEAVE 48
 70: cmp     x9, #NODE_WORK_ATTESTATION         /* done with an attestation or a slashing: free its bytes */
     ccmp    x9, #NODE_WORK_ATTESTER_SLASHING, #4, ne
@@ -7720,8 +7745,19 @@ FUNCTION lantern_node_step
     b       1b
 5:  bl      node_column_count               /* the columns sampled, for the blobs part */
     str     x0, [sp, #(L + 152)]
-    mov     x12, #512                       /* room: actions, node parts, scratch */
+    bl      node_api_event_count            /* with event streams: NODE_API_SCRATCH of scratch, 1024 per event for each */
+    cbz     x0, 58f
+    ldr     x9, [sp, #(L + 176)]
+    mov     x10, #NODE_API_SCRATCH
+    cmp     x9, x10
+    csel    x9, x10, x9, lo
+    str     x9, [sp, #(L + 176)]
+58: mov     x12, #1024
+    mul     x0, x0, x12
+    add     x0, x0, #512
+    mov     x12, x0                         /* room: actions, node parts, scratch */
     madd    x12, x26, x12, x28
+    add     x12, x12, #(2 * NODE_ACT_WORK_SIZE)
     ldr     x13, [sp, #(L + 184)]           /* 2048 for each API answer */
     mov     x14, #2048
     madd    x12, x13, x14, x12
@@ -8003,6 +8039,7 @@ FUNCTION lantern_node_step
 9:  bl      node_head
     bl      node_engine_next
     bl      node_shed                       /* the post-states the node can rebuild go */
+    bl      node_api_head_events            /* the head and finalized_checkpoint events, at a quiet point */
     bl      node_backfill_link              /* the backfill's blocks of the chain join the Db */
     bl      node_drop_sidecars              /* the sidecars the node no longer serves go */
     str     xzr, [sp, #(L + 112)]
@@ -8731,7 +8768,18 @@ FUNCTION lantern_node_run
     mov     x6, x22
     bl      node_api_chunk_run
     LEAVE 192
-977: cmp    x9, #NODE_WORK_API_LOOKUP
+977: cmp    x9, #NODE_WORK_API_EVENT
+    b.ne    978f
+    mov     x0, x19                         /* API_EVENT: the text of an event */
+    mov     x1, x21
+    mov     x2, x22
+    mov     x3, x23
+    mov     x4, x24
+    mov     x5, x25
+    mov     x6, x26
+    bl      node_api_event_run
+    LEAVE 192
+978: cmp    x9, #NODE_WORK_API_LOOKUP
     b.ne    8f
     mov     x0, x19                         /* API_LOOKUP: the slot of a state root */
     mov     x1, x21

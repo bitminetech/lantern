@@ -212,6 +212,14 @@ FUNCTION lantern_node_init
     mov     %r13, Node_earliest_slot(%r15)
     lea     Node_head_root(%r15), %rdi
     COPY32  %rdi, %r12
+    lea     Node_event_head(%r15), %rdi     # the events: the anchor's head and finalized epoch
+    COPY32  %rdi, %r12
+    mov     %r13, Node_event_slot(%r15)
+    mov     %r13, %rax
+    xor     %edx, %edx
+    mov     $SLOTS_PER_EPOCH, %ecx
+    div     %rcx
+    mov     %rax, Node_event_epoch(%r15)
     lea     Node_genesis_validators_root(%r15), %rdi
     lea     NodeAnchor_genesis_validators_root(%r12), %rsi
     COPY32  %rdi, %rsi
@@ -510,7 +518,12 @@ END_FUNCTION node_find_checkpoint
 /* rax = a WORK action: kind rdi, state_a rsi, state_b rdx, data rcx, target r8, arg r9; state_c 0. Uses r10. */
 LOCAL_FUNCTION node_work
     UNWIND_END_PROLOGUE
-    mov     8(%r15), %rax
+    cmp     $NODE_WORK_BLOCK_ATTESTATION, %rdi  # a block's vote: event_votes takes 1 more
+    je      1f
+    cmp     $NODE_WORK_BLOCK_SLASHING, %rdi
+    jne     2f
+1:  incq    Node_event_votes(%rbx)
+2:  mov     8(%r15), %rax
     add     %r15, %rax
     mov     16(%r15), %r10
     add     %r10, %rax
@@ -3414,7 +3427,12 @@ LOCAL_FUNCTION node_event
     call    node_api_closed
     LEAVE 48
 50: mov     NodeAction_work_kind(%r12), %rax        # WORK_DONE
-    mov     NodeEvent_result(%r12), %rcx
+    cmp     $NODE_WORK_BLOCK_ATTESTATION, %rax  # a block's vote done: event_votes takes 1 off
+    je      501f
+    cmp     $NODE_WORK_BLOCK_SLASHING, %rax
+    jne     502f
+501: decq   Node_event_votes(%rbx)
+502: mov    NodeEvent_result(%r12), %rcx
     cmp     $NODE_WORK_IMPORT_BLOCK, %rax
     jne     60f
     mov     NodeAction_target(%r12), %rdi
@@ -3439,7 +3457,9 @@ LOCAL_FUNCTION node_event
     LEAVE 48
 51: test    %rcx, %rcx
     jnz     52f
-    movq    $NODE_BLOCK_IMPORTED, NodeBlock_status(%r13)    # imported: its votes, then its waiting children
+    movq    $NODE_BLOCK_IMPORTED, NodeBlock_status(%r13)    # imported: the block event, its votes, then its waiting children
+    mov     %r13, %rdi
+    call    node_api_block_event
     mov     %r13, %rdi
     mov     NodeEvent_index(%r12), %rsi
     mov     NodeEvent_root(%r12), %rdx
@@ -3837,9 +3857,14 @@ LOCAL_FUNCTION node_event
     call    node_api_chunk_done
     LEAVE 48
 703: cmp    $NODE_WORK_API_LOOKUP, %rax     # API_LOOKUP: the answer for the slot it found
-    jne     70f
+    jne     704f
     mov     %r12, %rdi
     call    node_api_lookup_done
+    LEAVE 48
+704: cmp    $NODE_WORK_API_EVENT, %rax      # API_EVENT: the text to the streams of its topic
+    jne     70f
+    mov     %r12, %rdi
+    call    node_api_event_done
     LEAVE 48
 70: cmp     $NODE_WORK_ATTESTATION, %rax    # done with an attestation or a slashing: free its bytes
     je      71f
@@ -7821,8 +7846,18 @@ FUNCTION lantern_node_step
     mov     %rax, (L + 152)(%rsp)
     mov     %r8, S8(%rsp)
     mov     %r11, L(%rsp)
-    imul    $512, %r8, %rcx                 # room: actions, node parts, scratch
+    call    node_api_event_count            # with event streams: NODE_API_SCRATCH of scratch, 1024 per event for each
+    test    %rax, %rax
+    jz      58f
+    cmpq    $NODE_API_SCRATCH, (L + 208)(%rsp)
+    jae     58f
+    movq    $NODE_API_SCRATCH, (L + 208)(%rsp)
+58: shl     $10, %rax
+    add     $512, %rax
+    imul    %r8, %rax
+    mov     %rax, %rcx                      # room: actions, node parts, scratch
     add     %r10, %rcx
+    add     $(2 * NODE_ACT_WORK_SIZE), %rcx
     mov     (L + 216)(%rsp), %rdx           # 2048 for each API answer
     shl     $11, %rdx
     add     %rdx, %rcx
@@ -8082,6 +8117,7 @@ FUNCTION lantern_node_step
 9:  call    node_head
     call    node_engine_next
     call    node_shed                       # the post-states the node can rebuild go
+    call    node_api_head_events            # the head and finalized_checkpoint events, at a quiet point
     call    node_backfill_link              # the backfill's blocks of the chain join the Db
     call    node_drop_sidecars              # the sidecars the node no longer serves go
     movq    $0, (L + 112)(%rsp)
@@ -8861,7 +8897,18 @@ FUNCTION lantern_node_run
     mov     %r13, %r10
     call    node_api_chunk_run
     LEAVE 192
-977: cmp    $NODE_WORK_API_LOOKUP, %rax
+977: cmp    $NODE_WORK_API_EVENT, %rax
+    jne     978f
+    mov     %rbx, %rdi                      # API_EVENT: the text of an event
+    mov     %r12, %rsi
+    mov     %r13, %rdx
+    mov     %r14, %rcx
+    mov     %r15, %r8
+    mov     S8(%rsp), %r9
+    mov     S9(%rsp), %r10
+    call    node_api_event_run
+    LEAVE 192
+978: cmp    $NODE_WORK_API_LOOKUP, %rax
     jne     8f
     mov     %rbx, %rdi                      # API_LOOKUP: the slot of a state root
     mov     %r12, %rsi

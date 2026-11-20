@@ -365,6 +365,54 @@ api_u_pubkey:
 api_u_index:
     .ascii ",\"validator_index\":"
 .set api_u_index_len, 19
+api_ev_head:                            /* eventstream (beacon-api.md) */
+    .ascii "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nCache-Control: no-cache\r\n"
+.set api_ev_head_len, 75
+api_ev_chunked:
+    .ascii "Transfer-Encoding: chunked\r\n"
+.set api_ev_chunked_len, 28
+api_ev_close:
+    .ascii "Connection: close\r\n"
+.set api_ev_close_len, 19
+api_ev_event:
+    .ascii "event: "
+.set api_ev_event_len, 7
+api_ev_t_head:
+    .ascii "head"
+.set api_ev_t_head_len, 4
+api_ev_t_block:
+    .ascii "block"
+.set api_ev_t_block_len, 5
+api_ev_t_finalized:
+    .ascii "finalized_checkpoint"
+.set api_ev_t_finalized_len, 20
+api_ev_data:
+    .ascii "\ndata: "
+.set api_ev_data_len, 7
+api_ev_slot:
+    .ascii "{\"slot\":"
+.set api_ev_slot_len, 8
+api_ev_block:
+    .ascii ",\"block\":"
+.set api_ev_block_len, 9
+api_ev_block1:
+    .ascii "{\"block\":"
+.set api_ev_block1_len, 9
+api_ev_state:
+    .ascii ",\"state\":"
+.set api_ev_state_len, 9
+api_ev_transition:
+    .ascii ",\"epoch_transition\":"
+.set api_ev_transition_len, 20
+api_ev_previous:
+    .ascii ",\"previous_duty_dependent_root\":"
+.set api_ev_previous_len, 32
+api_ev_current:
+    .ascii ",\"current_duty_dependent_root\":"
+.set api_ev_current_len, 31
+api_ev_end:
+    .ascii "}\n\n"
+.set api_ev_end_len, 3
 api_v_statuses:                         /* the names of the statuses, API_STATUS_* order: 24 bytes each, the length first */
     .byte 19
     .ascii "pending_initialized"

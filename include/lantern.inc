@@ -643,7 +643,11 @@
 .set Node_config, 728
 .set Node_api_identity, 728 + CONFIG_SIZE  /* ApiIdentity of the last NODE_EV_API_IDENTITY */
 .set Node_api, 728 + CONFIG_SIZE + 936     /* PartRef: NodeApi entries */
-.set NODE_FIXED, 728 + CONFIG_SIZE + 936 + 16
+.set Node_event_head, Node_api + 16        /* the head of the last head event */
+.set Node_event_slot, Node_api + 48        /* its block's slot */
+.set Node_event_epoch, Node_api + 56       /* the store's finalized epoch at the last finalized_checkpoint event */
+.set Node_event_votes, Node_api + 64       /* BLOCK_ATTESTATION and BLOCK_SLASHING works queued and not done */
+.set NODE_FIXED, 728 + CONFIG_SIZE + 936 + 72
 .set NODE_LOOKUP_MS, 10000             /* the least time between two lookups of the node */
 .set NODE_STATUS_MS, 12000             /* the least time between two Status requests of node_sync */
 .set NODE_SUBSCRIBE_AHEAD, 2           /* epochs: the topics of a new ForkDigest join this early, the old ones leave this late */
@@ -884,6 +888,7 @@
 .set NODE_WORK_API_ENCODE, 19          /* a: the block's post-state; data: its bytes, a NODE_DB_REF or 0; target: the connection; arg: op + 256 * flags + 65536 * NodeBlock index */
 .set NODE_WORK_API_CHUNK, 20           /* data: the SSZ bytes, or a NODE_DB_REF; target: the connection; arg: the NodeApi index */
 .set NODE_WORK_API_LOOKUP, 21          /* a: the head's post-state; target: the connection; arg: the NodeApi index */
+.set NODE_WORK_API_EVENT, 22           /* a: a block's post-state, or 0; data: its bytes, or 0; arg: topic + 256 * values + 65536 * epoch */
 .set NODE_VOTES_MAX, 130               /* MAX_ATTESTATIONS + MAX_ATTESTER_SLASHINGS: the votes of a block the node takes */
 .set NodeEvent_root, NodeEvent_checkpoint + 8  /* GOSSIP of a valid beacon_block, SYNC_BLOCK: its root; of a valid blob_sidecar, BLOB: the root of its block header */
 .set NodeEvent_index, NodeEvent_root + 32      /* GOSSIP of a valid beacon_block, SYNC_BLOCK: its blob commitments; of a valid blob_sidecar: its index */
@@ -972,7 +977,14 @@
 .set ApiView_val_state, 1504            /* getStateValidator: the state */
 .set ApiView_val_index, 1512            /* getStateValidator: the validator's index */
 .set ApiView_duties, 1520               /* getProposerDuties: lantern_node_proposers's out, 32 + 8 * SLOTS_PER_EPOCH bytes */
-.set ApiView__size, ApiView_duties + 32 + 8 * SLOTS_PER_EPOCH
+.set ApiView_event_slot, ApiView_duties + 32 + 8 * SLOTS_PER_EPOCH  /* an event (beacon-api.md, eventstream): its slot */
+.set ApiView_event_epoch, ApiView_event_slot + 8
+.set ApiView_event_flags, ApiView_event_slot + 16   /* 1 epoch_transition, 2 execution_optimistic */
+.set ApiView_event_block, ApiView_event_slot + 24   /* lantern_node_event_roots's out: block, state, previous, current */
+.set ApiView_event_state, ApiView_event_slot + 56
+.set ApiView_event_previous, ApiView_event_slot + 88
+.set ApiView_event_current, ApiView_event_slot + 120
+.set ApiView__size, ApiView_event_slot + 152
 .set ApiIdentity_peer_id, 0              /* ApiIdentity (beacon-api.md): texts, each a length and its room */
 .set ApiIdentity_enr, 72
 .set ApiIdentity_p2p_address, 592

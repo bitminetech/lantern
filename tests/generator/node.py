@@ -169,6 +169,163 @@ def blob_cases(fork, preset, cases):
             yield "blobs", name, out
 
 
+# ---------------------------------------------------------------- The events of a fork choice case (node.md, Test vectors)
+
+def sse(topic, data):
+    """The text of an event (beacon-api.md, eventstream)."""
+    return b"event: " + topic + b"\ndata: " + data + b"\n\n"
+
+
+def event_texts(spec, fork, parts):
+    """The texts of the events of each step of a fork_choice case: a list of bytes, one for each step."""
+    from eth_consensus_specs.utils import bls, kzg
+    kzg.load_trusted_setup()  # the data availability checks of deneb and fulu
+    bls_active = bls.bls_active
+    bls.bls_active = False  # the case's signatures hold; the node checks them itself
+    try:
+        return replay(spec, fork, parts)
+    finally:
+        bls.bls_active = bls_active
+
+
+def replay(spec, fork, parts):
+    anchor_state = spec.BeaconState.decode_bytes(parts["anchor_state"])
+    anchor_block = spec.BeaconBlock.decode_bytes(parts["anchor_block"])
+    store = spec.get_forkchoice_store(anchor_state, anchor_block)
+    spe = int(spec.SLOTS_PER_EPOCH)
+    later = FORKS.index(fork) >= FORKS.index("bellatrix")
+    statuses = {}   # block_hash: the status of its last payload_status step
+    optimistic = {}  # block root: execution_optimistic of its import
+    pow_blocks = {}
+
+    def head_root():
+        head = spec.get_head(store)
+        return bytes(getattr(head, "root", head))
+
+    def genesis_root(state):
+        if int(state.slot) > 0:
+            return bytes(spec.get_block_root_at_slot(state, 0))
+        header = state.latest_block_header.copy()
+        if header.state_root == spec.Bytes32():
+            header.state_root = spec.hash_tree_root(state)
+        return bytes(spec.hash_tree_root(header))
+
+    def dependent(state, epoch):
+        """get_block_root_at_slot(state, compute_start_slot_at_epoch(epoch) - 1), the genesis root on underflow."""
+        if epoch < 1:
+            return genesis_root(state)
+        return bytes(spec.get_block_root_at_slot(state, epoch * spe - 1))
+
+    def flag(v):
+        return b"true" if v else b"false"
+
+    if later:
+        spec.get_pow_block = lambda h: pow_blocks[bytes(h)]
+    last_head = head_root()
+    last_slot = int(store.blocks[last_head].slot)
+    last_epoch = int(store.finalized_checkpoint.epoch)
+    out = []
+    for step in parts["steps"]:
+        texts = b""
+        valid = step.get("valid", True)
+        if "tick" in step:
+            spec.on_tick(store, int(step["tick"]) * 1000)
+        elif "block" in step:
+            block = spec.SignedBeaconBlock.decode_bytes(parts[step["block"]])
+            if valid and spec.hash_tree_root(block.message) not in store.blocks:  # the node skips a block it holds
+                patch = {}
+                if "blobs" in step:
+                    blobs = list(spec.Blobs.decode_bytes(parts[step["blobs"]]))
+                    proofs = [spec.KZGProof(bytes.fromhex(p[2:])) for p in step.get("proofs") or []]
+                    patch["retrieve_blobs_and_proofs"] = lambda _r, b=blobs, q=proofs: (b, q)
+                if "columns" in step:
+                    sidecars = [spec.DataColumnSidecar.decode_bytes(parts[c]) for c in step["columns"]]
+
+                    def columns(_r, c=sidecars):
+                        assert len(c) > 0
+                        return c
+                    patch["retrieve_column_sidecars"] = columns
+                saved = {k: getattr(spec, k) for k in patch}
+                for k, v in patch.items():
+                    setattr(spec, k, v)
+                try:
+                    spec.on_block(store, block)
+                finally:
+                    for k, v in saved.items():
+                        setattr(spec, k, v)
+                for attestation in block.message.body.attestations:
+                    spec.on_attestation(store, attestation, is_from_block=True)
+                for slashing in block.message.body.attester_slashings:
+                    spec.on_attester_slashing(store, slashing)
+                root = bytes(spec.hash_tree_root(block.message))
+                opt = False
+                if later:
+                    h = bytes(block.message.body.execution_payload.block_hash)
+                    opt = h != bytes(32) and statuses.get(h) in ("SYNCING", "ACCEPTED")
+                optimistic[root] = opt
+                texts += sse(b"block", b'{"slot":' + q(block.message.slot) + b',"block":' + qhex(root) +
+                             b',"execution_optimistic":' + flag(opt) + b"}")
+        elif "attestation" in step:
+            if valid:
+                spec.on_attestation(store, spec.Attestation.decode_bytes(parts[step["attestation"]]), is_from_block=False)
+        elif "attester_slashing" in step:
+            if valid:
+                spec.on_attester_slashing(store, spec.AttesterSlashing.decode_bytes(parts[step["attester_slashing"]]))
+        elif "pow_block" in step:
+            pb = spec.PowBlock.decode_bytes(parts[step["pow_block"]])
+            pow_blocks[bytes(pb.block_hash)] = pb
+        elif "payload_status" in step:
+            statuses[bytes.fromhex(step["block_hash"][2:])] = step["payload_status"]["status"]
+        elif "checks" in step:
+            if "head" in step["checks"]:
+                want = step["checks"]["head"]
+                assert head_root() == bytes.fromhex(want["root"][2:]), "replay: the head of a checks step"
+        head = head_root()
+        if head != last_head:
+            state = store.block_states[head]
+            slot = int(state.slot)
+            epoch = slot // spe
+            texts += sse(b"head", b'{"slot":' + q(slot) + b',"block":' + qhex(head) + b',"state":' +
+                         qhex(spec.hash_tree_root(state)) + b',"epoch_transition":' + flag(epoch > last_slot // spe) +
+                         b',"previous_duty_dependent_root":' + qhex(dependent(state, epoch - 1)) +
+                         b',"current_duty_dependent_root":' + qhex(dependent(state, epoch)) +
+                         b',"execution_optimistic":' + flag(optimistic.get(head, False)) + b"}")
+            last_head, last_slot = head, slot
+        cp = store.finalized_checkpoint
+        if int(cp.epoch) > last_epoch:
+            last_epoch = int(cp.epoch)
+            root = bytes(cp.root)
+            texts += sse(b"finalized_checkpoint", b'{"block":' + qhex(root) + b',"state":' +
+                         qhex(store.blocks[root].state_root) + b',"epoch":' + q(cp.epoch) +
+                         b',"execution_optimistic":' + flag(optimistic.get(root, False)) + b"}")
+        out.append(texts)
+    return out
+
+
+def event_cases(fork, preset, cases):
+    """cases: (handler, name, parts) of the spec's fork_choice get_head and on_block cases of the fork."""
+    if fork == "phase0":  # the node runs altair to fulu
+        return
+    spec = module(fork, preset)
+    for handler, name, parts in cases:
+        texts = run_strict(spec, schedule(fork), lambda: event_texts(spec, fork, parts))
+        yield "events", f"{handler}/{name}", {"events": texts}
+
+
+def run_strict(spec, config, f):
+    """f() with the config changed as run does, its exceptions raised."""
+    base = spec.config
+    values = dict(base._asdict())
+    for key, value in config.items():
+        if key in values:
+            values[key] = type(values[key])(value)
+    spec.config = base.__class__(**values)
+    try:
+        return f()
+    finally:
+        spec.config = base
+
+
 # ---------------------------------------------------------------- The Beacon API (beacon-api.md, Common rules)
 
 REASONS = {200: b"OK", 206: b"Partial Content", 400: b"Bad Request", 404: b"Not Found", 405: b"Method Not Allowed",
@@ -186,7 +343,7 @@ VALIDATOR_OPS = ("getStateValidators", "postStateValidators", "getStateValidator
 ANSWERED = ("getHealth", "getNetworkIdentity", "getNodeVersion", "getSyncingStatus", "getPeerCount", "getGenesis",
             "getBlockHeader", "getStateFinalityCheckpoints", "getBlockV2", "getStateV2", "getBlockRoot", "getStateRoot",
             "getStateFork", "getSpec", "getForkSchedule", "getDepositContract", "getEpochCommittees",
-            "getProposerDuties") + VALIDATOR_OPS
+            "getProposerDuties", "eventstream") + VALIDATOR_OPS
 IDENTITY = (b"16Uiu2HAmPLe7Mzm8TsYUubgCAW1aJoeFScxrLj8ppHFivPo97bUZ",
             b"enr:-Iu4QLm7bZGdAhVwRqZ6Zf3LlnqKsBTnZGOByHQhPMQJ3pV4F3t8L9i5yJOZ0X0hiZ6q4D5V0jB7l8J3ZtYw1JDH9C4BgmlkgnY0gmlwhAoAAAGJc2VjcDI1NmsxoQPKY0yuDUmstAHYpMa2_oxVtw0RW_QAdpzBQA8yWM0xOIN0Y3CCIyg",
             b"/ip4/10.0.0.1/tcp/9000/p2p/16Uiu2HAmPLe7Mzm8TsYUubgCAW1aJoeFScxrLj8ppHFivPo97bUZ",
@@ -477,11 +634,20 @@ def duties_answer(v, route, kw, syncing):
                     b",".join(items) + b"]}", **kw)
 
 
+def stream_head(version, connection):
+    """The head of an eventstream answer (beacon-api.md, eventstream)."""
+    out = b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nCache-Control: no-cache\r\n"
+    if version == b"HTTP/1.0":
+        return out + b"Connection: close\r\n\r\n"
+    return out + b"Transfer-Encoding: chunked\r\n" + (b"Connection: close\r\n" if connection.lower() == b"close" else b"") + b"\r\n"
+
+
 def answer(v, name, route, offline, close, keep_alive, syncing=False):
     """The response of an operation the node answers, with the route's ApiRoute."""
     kw = dict(close=close, keep_alive=keep_alive)
     if name == "getProposerDuties":
         return duties_answer(v, route, kw, syncing)
+
     current = v["slot"] + SLOTS_AHEAD
     if name == "getHealth":
         if not offline:
@@ -604,16 +770,19 @@ def api_requests(spec, fork, v, kind="main"):
         close = connection.lower() == b"close" or (version == b"HTTP/1.0" and connection.lower() != b"keep-alive")
         keep_alive = version == b"HTTP/1.0" and not close
         status, r = api_route.route(ops, req, 1 << 24)
+        stream = False
         if status != api_route.OK:
             want = error(r.http, close=close, keep_alive=keep_alive, allow=r.allow)
         else:
             route = Route(r)
             opname = ops[route.op - 1]["name"]
-            if opname in ANSWERED:
+            if opname == "eventstream":  # the head; the stream stays open
+                want, stream = stream_head(version, connection), True
+            elif opname in ANSWERED:
                 want = answer(v, opname, route, offline, close, keep_alive, syncing)
             else:
                 want = error(501, close=close, keep_alive=keep_alive)
-        out.append((name, raw, want, close, offline, syncing))
+        out.append((name, raw, want, close, offline, syncing, stream))
 
     committees = by_name["getEpochCommittees"]
     duties = by_name["getProposerDuties"]
@@ -696,6 +865,14 @@ def api_requests(spec, fork, v, kind="main"):
         add(f"lookup_getStateV2_{state_id.decode()}", api_route.base(state, path_values={"state_id": state_id}))
     validators = by_name["getStateValidators"]
     add("ids_65_414", api_route.base(validators, [("id", b",".join(str(i).encode() for i in range(65)))]))
+    events = by_name["eventstream"]
+    for name, version, connection, topics in (("events", b"HTTP/1.1", b"", b"head,block,finalized_checkpoint"),
+                                              ("events_close", b"HTTP/1.1", b"close", b"head,block,finalized_checkpoint"),
+                                              ("events_http10", b"HTTP/1.0", b"", b"block"),
+                                              ("events_http10_keep_alive", b"HTTP/1.0", b"keep-alive", b"block"),
+                                              ("events_no_name", b"HTTP/1.1", b"", b"head,,block")):
+        add(name, api_route.request(events["method"], api_route.fill(events, None), b"topics=" + topics),
+            version=version, connection=connection)
     for e in range(epoch - 1, current + 3):
         add(f"duties_{e}", api_route.base(duties, path_values={"epoch": b"%d" % e}))
     add("duties_syncing", api_route.base(duties, path_values={"epoch": b"%d" % current}), syncing=True)
@@ -773,14 +950,15 @@ def api_cases(fork, preset, epoch=ANCHOR_EPOCH):
     reqs = run(spec, schedule(fork), lambda: api_requests(spec, fork, v, kind))
     if fork in ("altair",):  # no execution engine before bellatrix: el_offline stays false
         reqs = [r for r in reqs if not r[4]]
-    names, raws, wants, closes, offline, syncing = [], [], [], [], [], []
-    for name, raw, want, close, off, sync in sorted(reqs, key=lambda r: r[4]):
+    names, raws, wants, closes, offline, syncing, streams = [], [], [], [], [], [], []
+    for name, raw, want, close, off, sync, stream in sorted(reqs, key=lambda r: r[4]):
         names.append(name.encode())
         raws.append(raw)
         wants.append(want)
-        closes.append(1 if close else 0)
+        closes.append(1 if close and not stream else 0)
         offline.append(off)
         syncing.append(1 if sync else 0)
+        streams.append(1 if stream else 0)
     for name, raw, status in http_faults() if epoch == ANCHOR_EPOCH else []:
         names.append(name.encode())
         raws.append(raw)
@@ -788,6 +966,7 @@ def api_cases(fork, preset, epoch=ANCHOR_EPOCH):
         closes.append(1)
         offline.append(offline[-1] if offline else False)
         syncing.append(0)
+        streams.append(0)
     first_offline = offline.index(True) if True in offline else len(names)
     slot_ms = int(spec.config.SLOT_DURATION_MS) if hasattr(spec.config, "SLOT_DURATION_MS") else int(spec.config.SECONDS_PER_SLOT) * 1000
     return {
@@ -800,5 +979,6 @@ def api_cases(fork, preset, epoch=ANCHOR_EPOCH):
         "responses": wants,
         "closes": bytes(closes),
         "syncing": bytes(syncing),
+        "streams": bytes(streams),
         "offline": first_offline,
     }
