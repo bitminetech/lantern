@@ -390,7 +390,8 @@ POOL_GETS = ("getPoolVoluntaryExits", "getPoolProposerSlashings", "getPoolAttest
              "getPoolBLSToExecutionChanges", "getPoolAttestationsV2")
 POOL_POSTS = ("submitPoolVoluntaryExit", "submitPoolProposerSlashings", "submitPoolAttesterSlashingsV2",
               "submitPoolBLSToExecutionChange", "submitPoolAttestationsV2", "publishAggregateAndProofsV2",
-              "submitPoolSyncCommitteeSignatures", "publishContributionAndProofs")
+              "submitPoolSyncCommitteeSignatures", "publishContributionAndProofs", "prepareBeaconCommitteeSubnet",
+              "prepareSyncCommitteeSubnets")
 PENDING = {"getPendingDeposits": "pending_deposits", "getPendingPartialWithdrawals": "pending_partial_withdrawals",
            "getPendingConsolidations": "pending_consolidations"}
 ANSWERED = ("getHealth", "getNetworkIdentity", "getNodeVersion", "getSyncingStatus", "getPeerCount", "getGenesis",
@@ -1442,6 +1443,42 @@ def pool_requests(spec, fork, v, by_name, add):
                b'[{"message":1}]', single=False)
         if r3 != ("bad", [0]) or len(pool["contribution"]) != 1:
             raise RuntimeError("contribution POSTs: the cases need one valid contribution and one rejected")
+
+    # the subscriptions (beacon-api.md): valid ones 200; a committee index not below committees_at_slot,
+    # committees_at_slot 0 or past MAX_COMMITTEES_PER_SLOT, a sync committee index not below
+    # SYNC_COMMITTEE_SIZE, an item of no subscription: 400
+    def subscription(name, op_name, body, status):
+        req = api_route.request(by_name[op_name]["method"], api_route.fill(by_name[op_name], None), b"",
+                                content_type=b"application/json")
+        add(name, req, body=body, want=(lambda c, k: response(200, close=c, keep_alive=k)) if status == 200
+            else (lambda c, k: error(400, close=c, keep_alive=k)))
+
+    def committee_sub(index, committee, count, slot, aggregator):
+        return (b'{"validator_index":"%d","committee_index":"%d","committees_at_slot":"%d","slot":"%d",'
+                b'"is_aggregator":%s}' % (index, committee, count, slot, b"true" if aggregator else b"false"))
+    cur_slot = int(spec.get_current_slot(store))
+    max_committees = int(spec.MAX_COMMITTEES_PER_SLOT)
+    subscription("subscribe_committee", "prepareBeaconCommitteeSubnet",
+                 b"[" + committee_sub(1, 0, 1, cur_slot + 1, True) + b"," + committee_sub(2, 1, 2, cur_slot, False) + b"]",
+                 200)
+    subscription("subscribe_committee_empty", "prepareBeaconCommitteeSubnet", b"[]", 200)
+    subscription("subscribe_committee_index_past", "prepareBeaconCommitteeSubnet",
+                 b"[" + committee_sub(1, 1, 1, cur_slot, True) + b"]", 400)
+    subscription("subscribe_committee_none", "prepareBeaconCommitteeSubnet",
+                 b"[" + committee_sub(1, 0, 0, cur_slot, True) + b"]", 400)
+    subscription("subscribe_committee_too_many", "prepareBeaconCommitteeSubnet",
+                 b"[" + committee_sub(1, 0, max_committees + 1, cur_slot, True) + b"]", 400)
+    subscription("subscribe_committee_no_item", "prepareBeaconCommitteeSubnet", b'[{"slot":"1"}]', 400)
+    if FORKS.index(fork) >= FORKS.index("altair"):
+        epoch_now = cur_slot // int(spec.SLOTS_PER_EPOCH)
+        size = int(spec.SYNC_COMMITTEE_SIZE)
+        subscription("subscribe_sync", "prepareSyncCommitteeSubnets",
+                     b'[{"validator_index":"1","sync_committee_indices":["0","%d"],"until_epoch":"%d"}]'
+                     % (size - 1, epoch_now + 2), 200)
+        subscription("subscribe_sync_index_past", "prepareSyncCommitteeSubnets",
+                     b'[{"validator_index":"1","sync_committee_indices":["%d"],"until_epoch":"%d"}]'
+                     % (size, epoch_now + 2), 400)
+        subscription("subscribe_sync_no_item", "prepareSyncCommitteeSubnets", b'[{"until_epoch":"1"}]', 400)
     # with the store's nodes NOT_VALIDATED (syncing bit 1): the aggregate's beacon_block_root, 503
     add("aggregate_not_validated", agg_request(data_root, first_slot, first_index), syncing=2,
         want=lambda c, k: error(503, close=c, keep_alive=k))

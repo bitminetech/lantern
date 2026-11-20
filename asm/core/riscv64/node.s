@@ -4608,6 +4608,8 @@ LOCAL_FUNCTION node_request
     sd      t0, (L + 64)(sp)
     ld      t0, Node_attnets(s1)
     sd      t0, (L + 72)(sp)
+    LDQ     t0, s1, Node_syncnets
+    sb      t0, (L + 80)(sp)
     LDQ     t0, s1, Node_config + CONFIG_CUSTODY_REQUIREMENT
     sd      t0, (L + 56)(sp)
     addi    a0, sp, L + 64 + 17
@@ -5550,7 +5552,9 @@ LOCAL_FUNCTION node_enr_entries
     addi    s7, s7, 56
     li      t0, FORK_ALTAIR
     bltu    s3, t0, 8f
-    ENR_ENTRY 56, 8, 0x7374656e636e7973, 1  # syncnets: no subnet
+    ENR_ENTRY 56, 8, 0x7374656e636e7973, 1  # syncnets: the bits of the sync subnets the node keeps
+    LDQ     t0, s1, Node_syncnets
+    sd      t0, 48(s7)
     addi    s7, s7, 56
     li      t0, FORK_FULU
     bltu    s3, t0, 8f
@@ -5835,10 +5839,10 @@ LOCAL_FUNCTION node_topics
     ld      a3, (L + 8)(sp)
     call    node_sub
     .endr
-    li      s4, 0                           # beacon_attestation of each subnet of attnets
+    li      s4, 0                           # beacon_attestation of each subnet the node keeps
 10: li      t0, ATTESTATION_SUBNET_COUNT
     bgeu    s4, t0, 12f
-    ld      t0, Node_attnets(s1)
+    LDQ     t0, s1, Node_subnets
     srl     t0, t0, s4
     andi    t0, t0, 1
     beqz    t0, 11f
@@ -5857,7 +5861,21 @@ LOCAL_FUNCTION node_topics
     ld      a2, L(sp)
     ld      a3, (L + 8)(sp)
     call    node_sub
-    li      t0, FORK_CAPELLA
+    li      s4, 0                           # sync_committee of each sync subnet the node keeps
+13: li      t0, SYNC_COMMITTEE_SUBNET_COUNT
+    bgeu    s4, t0, 14f
+    LDQ     t0, s1, Node_syncnets
+    srl     t0, t0, s4
+    andi    t0, t0, 1
+    beqz    t0, 15f
+    li      a0, GOSSIP_SYNC_COMMITTEE
+    mv      a1, s4
+    ld      a2, L(sp)
+    ld      a3, (L + 8)(sp)
+    call    node_sub
+15: addi    s4, s4, 1
+    j       13b
+14: li      t0, FORK_CAPELLA
     bltu    s3, t0, 9f
     li      a0, GOSSIP_BLS_TO_EXECUTION_CHANGE
     li      a1, 0
@@ -5969,34 +5987,87 @@ LOCAL_FUNCTION node_attnets_set
 END_FUNCTION node_attnets_set
 
 /*
- * L0: an event a1 (SUBSCRIBE or UNSUBSCRIBE) of beacon_attestation of each subnet of a0, at
- * fork_digest and at next_digest when it is not 0. s3 the subnets, s4 the event, s7 a subnet.
+ * L0: an event a1 (SUBSCRIBE or UNSUBSCRIBE) of the topic a2 (beacon_attestation or
+ * sync_committee) of each subnet of a0, at fork_digest and at next_digest when it is not 0. s3 the
+ * subnets, s4 the event, s5 the topic, s7 a subnet.
  */
-LOCAL_FUNCTION node_attnets_topics
+LOCAL_FUNCTION node_subnet_topics
     ENTER 0
     mv      s3, a0
     mv      s4, a1
+    mv      s5, a2
     li      s7, 0
-1:  li      t0, ATTESTATION_SUBNET_COUNT
+1:  li      t0, 64
     bgeu    s7, t0, 9f
     srl     t0, s3, s7
     andi    t0, t0, 1
     beqz    t0, 3f
-    li      a0, GOSSIP_BEACON_ATTESTATION
+    mv      a0, s5
     mv      a1, s7
     ld      a2, Node_fork_digest(s1)
     mv      a3, s4
     call    node_sub
     ld      a2, Node_next_digest(s1)
     beqz    a2, 3f
-    li      a0, GOSSIP_BEACON_ATTESTATION
+    mv      a0, s5
     mv      a1, s7
     mv      a3, s4
     call    node_sub
 3:  addi    s7, s7, 1
     j       1b
 9:  LEAVE 0
-END_FUNCTION node_attnets_topics
+END_FUNCTION node_subnet_topics
+
+/*
+ * L0: a0 = the beacon_attestation subnets the node keeps: those of attnets, and each whose
+ * subnet_until is above the store s2's slot (an aggregator's subscription).
+ */
+LOCAL_FUNCTION node_subnets_want
+    FRAME 0
+    mv      a0, s2
+    call    node_store_slot
+    ld      t1, Node_attnets(s1)
+    ADDQ    t2, s1, Node_subnet_until
+    li      t3, 0
+1:  li      t0, ATTESTATION_SUBNET_COUNT
+    bgeu    t3, t0, 9f
+    slli    t4, t3, 3
+    add     t4, t2, t4
+    ld      t4, 0(t4)
+    bleu    t4, a0, 2f
+    li      t5, 1
+    sll     t5, t5, t3
+    or      t1, t1, t5
+2:  addi    t3, t3, 1
+    j       1b
+9:  mv      a0, t1
+    UNFRAME 0
+END_FUNCTION node_subnets_want
+
+/* L0: a0 = the sync_committee subnets the node keeps: each whose sync_until is above the epoch of the store s2's slot. */
+LOCAL_FUNCTION node_syncnets_want
+    FRAME 0
+    mv      a0, s2
+    call    node_store_slot
+    li      t0, SLOTS_PER_EPOCH
+    divu    a0, a0, t0
+    li      t1, 0
+    ADDQ    t2, s1, Node_sync_until
+    li      t3, 0
+1:  li      t0, SYNC_COMMITTEE_SUBNET_COUNT
+    bgeu    t3, t0, 9f
+    slli    t4, t3, 3
+    add     t4, t2, t4
+    ld      t4, 0(t4)
+    bleu    t4, a0, 2f
+    li      t5, 1
+    sll     t5, t5, t3
+    or      t1, t1, t5
+2:  addi    t3, t3, 1
+    j       1b
+9:  mv      a0, t1
+    UNFRAME 0
+END_FUNCTION node_syncnets_want
 
 /*
  * The node's gossip topics (node.md; altair p2p-interface.md, Transitioning the gossip), one change
@@ -6056,8 +6127,10 @@ LOCAL_FUNCTION node_subscribe
     ld      t0, Node_flags(s1)
     ori     t0, t0, NODE_FLAG_SUBSCRIBED
     sd      t0, Node_flags(s1)
-    mv      a0, s3                          # the subnets of the epoch
+    mv      a0, s3                          # the subnets of the epoch, then those the node keeps
     call    node_attnets_set
+    call    node_subnets_want
+    STQ     a0, s1, Node_subnets
     addi    a0, sp, L                       # the record entries of the new digest
     mv      a1, s4
     call    node_enr_entries
@@ -6095,21 +6168,53 @@ LOCAL_FUNCTION node_subscribe
     li      a2, LIBP2P_EVENT_SUBSCRIBE
     call    node_topics
     j       9f
-30: mv      a0, s3                          # the subnets of the epoch, when they changed
+30: mv      a0, s3                          # the subnets of the epoch, when they changed: attnets and the record
     call    node_attnets
     ld      s9, Node_attnets(s1)
-    beq     a0, s9, 31f
+    beq     a0, s9, 32f
+    mv      a0, s3
+    call    node_attnets_set
+    sd      s3, L(sp)
+    addi    a0, sp, L
+    mv      a1, s4
+    call    node_enr_entries
+    j       9f
+32: call    node_subnets_want               # the subnets the node keeps, when they changed
+    LDQ     s9, s1, Node_subnets
+    beq     a0, s9, 33f
     mv      s8, a0
     not     a0, s8                          # those that go, then those that come
     and     a0, a0, s9
     li      a1, LIBP2P_EVENT_UNSUBSCRIBE
-    call    node_attnets_topics
+    li      a2, GOSSIP_BEACON_ATTESTATION
+    call    node_subnet_topics
     not     a0, s9
     and     a0, a0, s8
     li      a1, LIBP2P_EVENT_SUBSCRIBE
-    call    node_attnets_topics
-    mv      a0, s3
-    call    node_attnets_set
+    li      a2, GOSSIP_BEACON_ATTESTATION
+    call    node_subnet_topics
+    STQ     s8, s1, Node_subnets
+    j       9f
+33: li      t0, FORK_ALTAIR                 # the sync subnets the node keeps, when they changed: the MetaData and the record
+    bltu    s4, t0, 31f
+    call    node_syncnets_want
+    LDQ     s9, s1, Node_syncnets
+    beq     a0, s9, 31f
+    mv      s8, a0
+    not     a0, s8
+    and     a0, a0, s9
+    li      a1, LIBP2P_EVENT_UNSUBSCRIBE
+    li      a2, GOSSIP_SYNC_COMMITTEE
+    call    node_subnet_topics
+    not     a0, s9
+    and     a0, a0, s8
+    li      a1, LIBP2P_EVENT_SUBSCRIBE
+    li      a2, GOSSIP_SYNC_COMMITTEE
+    call    node_subnet_topics
+    STQ     s8, s1, Node_syncnets
+    ld      t0, Node_metadata_seq(s1)
+    addi    t0, t0, 1
+    sd      t0, Node_metadata_seq(s1)
     sd      s3, L(sp)
     addi    a0, sp, L
     mv      a1, s4

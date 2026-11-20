@@ -2728,6 +2728,10 @@ LOCAL_FUNCTION node_api_event
     je      68f
     cmp     $API_OP_PRODUCE_SYNC_COMMITTEE_CONTRIBUTION, %rcx
     je      68f
+    cmp     $API_OP_PREPARE_BEACON_COMMITTEE_SUBNET, %rcx  # the subscriptions: as a pool POST
+    je      60f
+    cmp     $API_OP_PREPARE_SYNC_COMMITTEE_SUBNETS, %rcx
+    je      60f
     mov     %rcx, %rdi
     call    node_submit_topic
     test    %rax, %rax
@@ -7677,6 +7681,8 @@ LOCAL_FUNCTION node_api_submit_done
     incq    S8(%rsp)
 21: test    %rax, %rax
     jnz     6f
+    cmpq    $0, S9(%rsp)                    # no topic: a subscription
+    je      40f
     lea     16(%r13), %rdi                  # valid: its bytes to a new id, kept by the pool when it has room
     call    node_put
     mov     %rax, S10(%rsp)
@@ -7769,6 +7775,40 @@ LOCAL_FUNCTION node_api_submit_done
     lea     16(%r13,%rax), %r13
     decq    S7(%rsp)
     jmp     2b
+40: mov     24(%r13), %rax                  # a subscription: an aggregator's subnet kept to its slot, sync subnets to an epoch
+    lea     16(%r13,%rax), %rax
+    movzbl  NodeAction_arg(%r12), %ecx
+    cmp     $API_OP_PREPARE_SYNC_COMMITTEE_SUBNETS, %ecx
+    je      42f
+    cmpb    $0, 32(%rax)                    # is_aggregator: subnet_until of compute_subnet_for_attestation, the slot + 1 at least
+    je      6b
+    mov     24(%rax), %rsi
+    mov     %rsi, %rcx
+    and     $(SLOTS_PER_EPOCH - 1), %ecx
+    imul    16(%rax), %rcx
+    add     8(%rax), %rcx
+    and     $(ATTESTATION_SUBNET_COUNT - 1), %ecx
+    inc     %rsi
+    cmp     Node_subnet_until(%rbx,%rcx,8), %rsi
+    jbe     6b
+    mov     %rsi, Node_subnet_until(%rbx,%rcx,8)
+    jmp     6b
+42: mov     12(%rax), %rsi                  # until_epoch: sync_until of the subnet of each index, that epoch at least
+    mov     32(%r13), %rdi
+    sub     $20, %rdi
+    lea     20(%rax), %r8
+43: test    %rdi, %rdi
+    jz      6b
+    mov     (%r8), %rax
+    xor     %edx, %edx
+    mov     $(SYNC_COMMITTEE_SIZE / SYNC_COMMITTEE_SUBNET_COUNT), %ecx
+    div     %rcx
+    cmp     Node_sync_until(%rbx,%rax,8), %rsi
+    jbe     44f
+    mov     %rsi, Node_sync_until(%rbx,%rax,8)
+44: add     $8, %r8
+    sub     $8, %rdi
+    jmp     43b
 70: mov     NodeAction_target(%r12), %rdi   # the answer: 200, or 400 with the failures
     cmpq    $0, S8(%rsp)
     je      71f
@@ -8060,11 +8100,27 @@ LOCAL_FUNCTION node_api_submit_run
     cmp     $API_OP_PUBLISH_CONTRIBUTION_AND_PROOFS, %edi
     sete    %cl
     or      %cl, %al
+    cmp     $API_OP_PREPARE_BEACON_COMMITTEE_SUBNET, %edi
+    sete    %cl
+    or      %cl, %al
+    cmp     $API_OP_PREPARE_SYNC_COMMITTEE_SUBNETS, %edi
+    sete    %cl
+    or      %cl, %al
     mov     %rax, (L + 40)(%rsp)
+    mov     %rdi, (L + 48)(%rsp)
     call    node_submit_topic
-    test    %rax, %rax
-    jz      98f
     mov     %rax, (L + 16)(%rsp)
+    test    %rax, %rax
+    jnz     17f
+    mov     (L + 48)(%rsp), %rdi            # no topic: a subscription's type, else no such work
+    mov     $NODE_JSON_COMMITTEE_SUBSCRIPTION, %eax
+    cmp     $API_OP_PREPARE_BEACON_COMMITTEE_SUBNET, %edi
+    je      13f
+    mov     $NODE_JSON_SYNC_SUBSCRIPTION, %eax
+    cmp     $API_OP_PREPARE_SYNC_COMMITTEE_SUBNETS, %edi
+    je      13f
+    jmp     98f
+17: mov     (L + 16)(%rsp), %rax
     cmp     $GOSSIP_BEACON_AGGREGATE_AND_PROOF, %rax    # an aggregate: SignedAggregateAndProof
     jne     14f
     mov     $NODE_JSON_AGGREGATE_AND_PROOF, %eax
@@ -8292,6 +8348,8 @@ LOCAL_FUNCTION node_api_submit_run
     mov     %rax, (NodeEvent_chunk + 16)(%rdi)
     mov     (L + 32)(%rsp), %rax
     mov     %rax, NodeEvent_index(%rdi)
+    cmpq    $0, (L + 16)(%rsp)              # the subscriptions: their checks, no gossip validation
+    je      50f
     mov     L(%rsp), %rdi                   # seen has a key free for each operation, for a sync message one a subnet
     mov     Seen_bits(%rdi), %rax
     sub     Seen_keys(%rdi), %rax
@@ -8454,6 +8512,46 @@ LOCAL_FUNCTION node_api_submit_run
     jmp     35b
 39: xor     %eax, %eax
     LEAVE 320
+50: mov     S7(%rsp), %rcx                  # each subscription valid, else the result LANTERN_INVALID_ENCODING
+    add     $(NodeEvent_chunk + 24), %rcx
+51: cmpq    $0, (L + 32)(%rsp)
+    je      39b
+    movq    $0, (%rcx)
+    movq    $0, 8(%rcx)
+    mov     32(%rcx), %rax
+    lea     40(%rcx), %rdx
+    movzbl  NodeAction_arg(%r12), %esi
+    cmp     $API_OP_PREPARE_SYNC_COMMITTEE_SUBNETS, %esi
+    je      53f
+    cmp     $33, %rax                       # BeaconCommitteeSubscription: committees_at_slot 1 to MAX_COMMITTEES_PER_SLOT, committee_index below it
+    jne     90f
+    mov     16(%rdx), %rsi
+    test    %rsi, %rsi
+    jz      90f
+    cmp     $MAX_COMMITTEES_PER_SLOT, %rsi
+    ja      90f
+    cmp     %rsi, 8(%rdx)
+    jae     90f
+    jmp     54f
+53: cmp     $20, %rax                       # SyncCommitteeSubscription: offset 20, indices below SYNC_COMMITTEE_SIZE
+    jb      90f
+    cmpl    $20, 8(%rdx)
+    jne     90f
+    sub     $20, %rax
+    test    $7, %al
+    jnz     90f
+    add     $20, %rdx
+52: test    %rax, %rax
+    jz      54f
+    cmpq    $SYNC_COMMITTEE_SIZE, (%rdx)
+    jae     90f
+    add     $8, %rdx
+    sub     $8, %rax
+    jmp     52b
+54: mov     16(%rcx), %rax
+    lea     16(%rcx,%rax), %rcx
+    decq    (L + 32)(%rsp)
+    jmp     51b
 90: mov     S7(%rsp), %rcx                  # a body that is no such text
     movq    $LANTERN_INVALID_ENCODING, NodeEvent_result(%rcx)
     movq    $NODE_EV_WORK_DONE_SIZE, (%rcx)

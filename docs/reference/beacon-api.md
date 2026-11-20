@@ -204,6 +204,12 @@ The answers of the node (node.md, `NODE_EV_API`) follow these rules.
 - publishContributionAndProofs, from altair: a JSON array of `SignedContributionAndProof`. A body that is no such list: 400 `{"code":400,"message":"BAD_REQUEST"}`.
   - Each, in order: the gossip validation of sync_committee_contribution_and_proof, with the node's `Seen`. Valid: it goes out on its topic; it joins no pool, as an aggregate. Rejected: a failure; ignored: nothing more.
   - The answer: 200 with no body when none fails; else 400 with the IndexedErrorMessage of the failures, as for submitPoolBLSToExecutionChange.
+- prepareBeaconCommitteeSubnet: a JSON array of the spec's items, decoded as lantern's `BeaconCommitteeSubscription` (`validator_index`, `committee_index`, `committees_at_slot`, `slot`, `is_aggregator`). An item whose `committees_at_slot` is 0 or above `MAX_COMMITTEES_PER_SLOT`, or whose `committee_index` is not below it, or a body of no such list: 400 `{"code":400,"message":"BAD_REQUEST"}`, and none applies.
+  - Each item with `is_aggregator`: the node joins beacon_attestation of compute_subnet_for_attestation(`committees_at_slot`, `slot`, `committee_index`) (phase0 validator.md) and keeps it until the store's slot is past `slot` (node.md, the subscriptions); the pool keeps the subnet's attestations, which getAggregatedAttestationV2 aggregates (the spec: "announce subnet topic subscription on gossipsub" and "aggregate attestations received on that subnet"). An item without it changes nothing.
+  - The answer: 200 with no body.
+- prepareSyncCommitteeSubnets, from altair: a JSON array of `SyncCommitteeSubscription`, lantern's container of the spec's type (`sync_committee_indices` at most `SYNC_COMMITTEE_SIZE`). An index not below `SYNC_COMMITTEE_SIZE`, or a body of no such list: 400 `{"code":400,"message":"BAD_REQUEST"}`, and none applies.
+  - Each index i of each item: the node joins sync_committee of the subnet i / (SYNC_COMMITTEE_SIZE / SYNC_COMMITTEE_SUBNET_COUNT) and keeps it while the store's epoch is below `until_epoch` (the spec: "The final epoch (exclusive value)"); its MetaData's and record's `syncnets` are those subnets (altair p2p-interface.md).
+  - The answer: 200 with no body.
 - Every other operation: 501.
 
 ## Test vectors

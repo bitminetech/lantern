@@ -739,3 +739,32 @@ SSZ_FIELD ENRForkID, fork_digest, Bytes4
 SSZ_FIELD ENRForkID, next_fork_version, Bytes4
 SSZ_FIELD ENRForkID, next_fork_epoch, Uint64
 SSZ_END ENRForkID
+
+/*
+ * Beacon API request bodies (beacon-APIs v4.0.0), lantern's containers of their JSON objects, so
+ * that lantern_json_decode reads them: the items of prepareBeaconCommitteeSubnet,
+ * prepareSyncCommitteeSubnets (its list's limit: a validator has at most SYNC_COMMITTEE_SIZE
+ * places) and prepareBeaconProposer.
+ */
+SSZ_CONTAINER BeaconCommitteeSubscription, 0
+SSZ_FIELD BeaconCommitteeSubscription, validator_index, Uint64
+SSZ_FIELD BeaconCommitteeSubscription, committee_index, Uint64
+SSZ_FIELD BeaconCommitteeSubscription, committees_at_slot, Uint64
+SSZ_FIELD BeaconCommitteeSubscription, slot, Uint64
+SSZ_FIELD BeaconCommitteeSubscription, is_aggregator, Boolean
+SSZ_END BeaconCommitteeSubscription
+
+.if TYPES_FORK >= FORK_ALTAIR
+SSZ_LIST SyncCommitteeIndices, Uint64, SYNC_COMMITTEE_SIZE
+
+SSZ_CONTAINER SyncCommitteeSubscription, 1
+SSZ_FIELD SyncCommitteeSubscription, validator_index, Uint64
+SSZ_FIELD SyncCommitteeSubscription, sync_committee_indices, SyncCommitteeIndices
+SSZ_FIELD SyncCommitteeSubscription, until_epoch, Uint64
+SSZ_END SyncCommitteeSubscription
+.endif
+
+SSZ_CONTAINER ProposerPreparation, 0
+SSZ_FIELD ProposerPreparation, validator_index, Uint64
+SSZ_FIELD ProposerPreparation, fee_recipient, Bytes20
+SSZ_END ProposerPreparation

@@ -589,3 +589,21 @@ SSZ_FIELDS DepositMessage
 SSZ_DFIELD N_Bytes48, DepositMessage, pubkey
 SSZ_DFIELD N_Bytes32, DepositMessage, withdrawal_credentials
 SSZ_DFIELD N_Uint64, DepositMessage, amount
+
+SSZ_FIELDS BeaconCommitteeSubscription
+SSZ_DFIELD N_Uint64, BeaconCommitteeSubscription, validator_index
+SSZ_DFIELD N_Uint64, BeaconCommitteeSubscription, committee_index
+SSZ_DFIELD N_Uint64, BeaconCommitteeSubscription, committees_at_slot
+SSZ_DFIELD N_Uint64, BeaconCommitteeSubscription, slot
+SSZ_DFIELD N_Boolean, BeaconCommitteeSubscription, is_aggregator
+
+.if FORK >= FORK_ALTAIR
+SSZ_FIELDS SyncCommitteeSubscription
+SSZ_DFIELD N_Uint64, SyncCommitteeSubscription, validator_index
+SSZ_DFIELD N_SyncCommitteeIndices, SyncCommitteeSubscription, sync_committee_indices
+SSZ_DFIELD N_Uint64, SyncCommitteeSubscription, until_epoch
+.endif
+
+SSZ_FIELDS ProposerPreparation
+SSZ_DFIELD N_Uint64, ProposerPreparation, validator_index
+SSZ_DFIELD N_Bytes20, ProposerPreparation, fee_recipient

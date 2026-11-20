@@ -2793,6 +2793,10 @@ LOCAL_FUNCTION node_api_event
     b.eq    68f
     cmp     x3, #API_OP_PRODUCE_SYNC_COMMITTEE_CONTRIBUTION
     b.eq    68f
+    cmp     x3, #API_OP_PREPARE_BEACON_COMMITTEE_SUBNET    /* the subscriptions: as a pool POST */
+    b.eq    60f
+    cmp     x3, #API_OP_PREPARE_SYNC_COMMITTEE_SUBNETS
+    b.eq    60f
     mov     x0, x3
     bl      node_submit_topic
     cbnz    x0, 60f
@@ -7574,6 +7578,7 @@ LOCAL_FUNCTION node_api_submit_done
     cmp     x9, #LANTERN_GOSSIP_REJECT
     cinc    x25, x25, eq
     cbnz    x9, 6f
+    cbz     x26, 40f                        /* no topic: a subscription */
     add     x0, x22, #16                    /* valid: its bytes to a new id, kept by the pool when it has room */
     bl      node_put
     mov     x27, x0
@@ -7664,6 +7669,44 @@ LOCAL_FUNCTION node_api_submit_done
     sub     x9, x9, #1
     str     x9, [sp, #(L + 8)]
     b       2b
+40: ldr     x9, [x22, #24]                  /* a subscription: an aggregator's subnet kept to its slot, sync subnets to an epoch */
+    add     x9, x22, x9
+    add     x9, x9, #16
+    ldr     x10, [x21, #NodeAction_arg]
+    and     x10, x10, #255
+    cmp     x10, #API_OP_PREPARE_SYNC_COMMITTEE_SUBNETS
+    b.eq    42f
+    ldrb    w10, [x9, #32]                  /* is_aggregator: subnet_until of compute_subnet_for_attestation, the slot + 1 at least */
+    cbz     w10, 6b
+    ldr     x11, [x9, #24]
+    ldr     x12, [x9, #16]
+    ldr     x13, [x9, #8]
+    and     x14, x11, #(SLOTS_PER_EPOCH - 1)
+    madd    x12, x12, x14, x13
+    and     x12, x12, #(ATTESTATION_SUBNET_COUNT - 1)
+    add     x11, x11, #1
+    ADDQ    x13, x19, Node_subnet_until
+    ldr     x14, [x13, x12, lsl #3]
+    cmp     x11, x14
+    csel    x11, x11, x14, hi
+    str     x11, [x13, x12, lsl #3]
+    b       6b
+42: ldur    x11, [x9, #12]                  /* until_epoch: sync_until of the subnet of each index, that epoch at least */
+    ldr     w12, [x9, #8]
+    ldr     x13, [x22, #32]
+    sub     x13, x13, x12
+    add     x14, x9, x12
+    ADDQ    x15, x19, Node_sync_until
+43: cbz     x13, 6b
+    ldr     x10, [x14], #8
+    mov     x12, #(SYNC_COMMITTEE_SIZE / SYNC_COMMITTEE_SUBNET_COUNT)
+    udiv    x10, x10, x12
+    ldr     x12, [x15, x10, lsl #3]
+    cmp     x11, x12
+    csel    x12, x11, x12, hi
+    str     x12, [x15, x10, lsl #3]
+    sub     x13, x13, #8
+    b       43b
 70: ldr     x0, [x21, #NodeAction_target]   /* the answer: 200, or 400 with the failures */
     cbz     x25, 71f
     ldr     x9, [x21, #NodeAction_arg]      /* a list: the failures */
@@ -7926,11 +7969,25 @@ LOCAL_FUNCTION node_api_submit_run
     ccmp    x0, x10, #4, ne
     mov     x10, #API_OP_PUBLISH_CONTRIBUTION_AND_PROOFS
     ccmp    x0, x10, #4, ne
+    mov     x10, #API_OP_PREPARE_BEACON_COMMITTEE_SUBNET
+    ccmp    x0, x10, #4, ne
+    mov     x10, #API_OP_PREPARE_SYNC_COMMITTEE_SUBNETS
+    ccmp    x0, x10, #4, ne
     cset    x9, eq
     str     x9, [sp, #(L + 40)]
     bl      node_submit_topic
-    cbz     x0, 98f
     str     x0, [sp, #(L + 16)]
+    cbnz    x0, 15f
+    ldr     x9, [x21, #NodeAction_arg]      /* no topic: a subscription's type, else no such work */
+    and     x9, x9, #255
+    mov     x0, #NODE_JSON_COMMITTEE_SUBSCRIPTION
+    cmp     x9, #API_OP_PREPARE_BEACON_COMMITTEE_SUBNET
+    b.eq    13f
+    mov     x0, #NODE_JSON_SYNC_SUBSCRIPTION
+    cmp     x9, #API_OP_PREPARE_SYNC_COMMITTEE_SUBNETS
+    b.eq    13f
+    b       98f
+15:
     cmp     x0, #GOSSIP_BEACON_AGGREGATE_AND_PROOF  /* an aggregate: SignedAggregateAndProof */
     mov     x9, #NODE_JSON_AGGREGATE_AND_PROOF
     b.eq    14f
@@ -8144,6 +8201,8 @@ LOCAL_FUNCTION node_api_submit_run
     str     x10, [x25, #NodeEvent_index]
     sub     x9, x27, x25
     str     x9, [x25]
+    ldr     x9, [sp, #(L + 16)]             /* the subscriptions: their checks, no gossip validation */
+    cbz     x9, 50f
     ldr     x9, [sp, #L]                    /* seen has a key free for each operation, for a sync message one a subnet */
     ldp     x10, x11, [x9, #Seen_keys]
     ldr     x12, [x9, #Seen_bits]
@@ -8299,6 +8358,46 @@ LOCAL_FUNCTION node_api_submit_run
     b       35b
 39: mov     x0, #LANTERN_OK
     LEAVE 320
+50: add     x27, x25, #(NodeEvent_chunk + 24)   /* each subscription valid, else the result LANTERN_INVALID_ENCODING */
+    ldr     x28, [sp, #(L + 32)]
+51: cbz     x28, 39b
+    stp     xzr, xzr, [x27]
+    ldr     x10, [x27, #32]
+    add     x11, x27, #40
+    ldr     x9, [x21, #NodeAction_arg]
+    and     x9, x9, #255
+    cmp     x9, #API_OP_PREPARE_SYNC_COMMITTEE_SUBNETS
+    b.eq    53f
+    cmp     x10, #33                        /* BeaconCommitteeSubscription: committees_at_slot 1 to MAX_COMMITTEES_PER_SLOT, committee_index below it */
+    b.ne    90f
+    ldr     x12, [x11, #16]
+    cbz     x12, 90f
+    cmp     x12, #MAX_COMMITTEES_PER_SLOT
+    b.hi    90f
+    ldr     x13, [x11, #8]
+    cmp     x13, x12
+    b.hs    90f
+    b       54f
+53: cmp     x10, #20                        /* SyncCommitteeSubscription: offset 20, indices below SYNC_COMMITTEE_SIZE */
+    b.lo    90f
+    ldr     w12, [x11, #8]
+    cmp     x12, #20
+    b.ne    90f
+    sub     x13, x10, #20
+    tst     x13, #7
+    b.ne    90f
+    add     x14, x11, #20
+52: cbz     x13, 54f
+    ldr     x15, [x14], #8
+    cmp     x15, #SYNC_COMMITTEE_SIZE
+    b.hs    90f
+    sub     x13, x13, #8
+    b       52b
+54: ldr     x9, [x27, #16]
+    add     x27, x27, #16
+    add     x27, x27, x9
+    sub     x28, x28, #1
+    b       51b
 90: mov     x9, #LANTERN_INVALID_ENCODING   /* a body that is no such text */
     str     x9, [x25, #NodeEvent_result]
     mov     x9, #NODE_EV_WORK_DONE_SIZE

@@ -45,6 +45,24 @@ def container(spec, name, fields):
     return type(name, (Container,), {"__annotations__": dict(fields), "__module__": spec.__name__})
 
 
+def api_body_types(spec, fork):
+    """Lantern's containers of the JSON objects of Beacon API request bodies (beacon-APIs v4.0.0), by
+    name: the items of prepareBeaconCommitteeSubnet, prepareSyncCommitteeSubnets (from altair; a
+    validator has at most SYNC_COMMITTEE_SIZE places) and prepareBeaconProposer."""
+    t = {"BeaconCommitteeSubscription": container(spec, "BeaconCommitteeSubscription", [
+        ("validator_index", spec.ValidatorIndex), ("committee_index", spec.CommitteeIndex),
+        ("committees_at_slot", spec.Uint64), ("slot", spec.Slot), ("is_aggregator", Boolean)])}
+    if FORKS.index(fork) >= FORKS.index("altair"):
+        indices = type("SyncCommitteeIndices", (List[spec.Uint64],),
+                       {"LIMIT": int(spec.SYNC_COMMITTEE_SIZE), "__module__": spec.__name__})
+        t["SyncCommitteeSubscription"] = container(spec, "SyncCommitteeSubscription", [
+            ("validator_index", spec.ValidatorIndex), ("sync_committee_indices", indices),
+            ("until_epoch", spec.Epoch)])
+    t["ProposerPreparation"] = container(spec, "ProposerPreparation", [
+        ("validator_index", spec.ValidatorIndex), ("fee_recipient", spec.ExecutionAddress)])
+    return t
+
+
 def message_types(spec, fork):
     """The req/resp message types of the fork, by name."""
     f = FORKS.index(fork)

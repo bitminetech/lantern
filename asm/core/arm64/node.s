@@ -4627,6 +4627,8 @@ LOCAL_FUNCTION node_request
     ldr     x9, [x19, #Node_metadata_seq]
     ldr     x10, [x19, #Node_attnets]
     stp     x9, x10, [sp, #(L + 64)]
+    LDQ     x9, x19, Node_syncnets
+    strb    w9, [sp, #(L + 64 + 16)]
     LDQ     x9, x19, Node_config + CONFIG_CUSTODY_REQUIREMENT
     str     x9, [sp, #(L + 56)]
     add     x0, sp, #(L + 64 + 17)
@@ -5526,7 +5528,7 @@ LOCAL_FUNCTION node_enr_entries
     add     x25, x25, #56
     cmp     x21, #FORK_ALTAIR
     b.lo    8f
-    mov     x9, #56                         /* syncnets: no subnet */
+    mov     x9, #56                         /* syncnets: the bits of the sync subnets the node keeps */
     mov     x10, #DISCV5_EVENT_SET_ENTRY
     stp     x9, x10, [x25]
     mov     x9, #8
@@ -5534,7 +5536,8 @@ LOCAL_FUNCTION node_enr_entries
     stp     x9, x10, [x25, #16]
     mov     x9, #1
     stp     xzr, x9, [x25, #32]
-    str     xzr, [x25, #48]
+    LDQ     x9, x19, Node_syncnets
+    str     x9, [x25, #48]
     add     x25, x25, #56
     cmp     x21, #FORK_FULU
     b.lo    8f
@@ -5820,10 +5823,10 @@ LOCAL_FUNCTION node_topics
     ldp     x2, x3, [sp, #L]
     bl      node_sub
     .endr
-    mov     x22, #0                         /* beacon_attestation of each subnet of attnets */
+    mov     x22, #0                         /* beacon_attestation of each subnet the node keeps */
 10: cmp     x22, #ATTESTATION_SUBNET_COUNT
     b.hs    12f
-    ldr     x9, [x19, #Node_attnets]
+    LDQ     x9, x19, Node_subnets
     lsr     x9, x9, x22
     tbz     x9, #0, 11f
     mov     x0, #GOSSIP_BEACON_ATTESTATION
@@ -5839,7 +5842,19 @@ LOCAL_FUNCTION node_topics
     mov     x1, #0
     ldp     x2, x3, [sp, #L]
     bl      node_sub
-    cmp     x21, #FORK_CAPELLA
+    mov     x22, #0                         /* sync_committee of each sync subnet the node keeps */
+13: cmp     x22, #SYNC_COMMITTEE_SUBNET_COUNT
+    b.hs    14f
+    LDQ     x9, x19, Node_syncnets
+    lsr     x9, x9, x22
+    tbz     x9, #0, 15f
+    mov     x0, #GOSSIP_SYNC_COMMITTEE
+    mov     x1, x22
+    ldp     x2, x3, [sp, #L]
+    bl      node_sub
+15: add     x22, x22, #1
+    b       13b
+14: cmp     x21, #FORK_CAPELLA
     b.lo    9f
     mov     x0, #GOSSIP_BLS_TO_EXECUTION_CHANGE
     mov     x1, #0
@@ -5952,33 +5967,90 @@ LOCAL_FUNCTION node_attnets_set
 END_FUNCTION node_attnets_set
 
 /*
- * L0: an event x1 (SUBSCRIBE or UNSUBSCRIBE) of beacon_attestation of each subnet of x0, at
- * fork_digest and at next_digest when it is not 0. x21 the subnets, x22 the event, x25 a subnet.
+ * L0: an event x1 (SUBSCRIBE or UNSUBSCRIBE) of the topic x2 (beacon_attestation or
+ * sync_committee) of each subnet of x0, at fork_digest and at next_digest when it is not 0. x21
+ * the subnets, x22 the event, x25 a subnet, x26 the topic.
  */
-LOCAL_FUNCTION node_attnets_topics
+LOCAL_FUNCTION node_subnet_topics
     ENTER 0
     mov     x21, x0
     mov     x22, x1
+    mov     x26, x2
     mov     x25, #0
-1:  cmp     x25, #ATTESTATION_SUBNET_COUNT
+1:  cmp     x25, #64
     b.hs    9f
     lsr     x9, x21, x25
     tbz     x9, #0, 3f
-    mov     x0, #GOSSIP_BEACON_ATTESTATION
+    mov     x0, x26
     mov     x1, x25
     ldr     x2, [x19, #Node_fork_digest]
     mov     x3, x22
     bl      node_sub
     ldr     x2, [x19, #Node_next_digest]
     cbz     x2, 3f
-    mov     x0, #GOSSIP_BEACON_ATTESTATION
+    mov     x0, x26
     mov     x1, x25
     mov     x3, x22
     bl      node_sub
 3:  add     x25, x25, #1
     b       1b
 9:  LEAVE 0
-END_FUNCTION node_attnets_topics
+END_FUNCTION node_subnet_topics
+
+/*
+ * L0: x0 = the beacon_attestation subnets the node keeps: those of attnets, and each whose
+ * subnet_until is above the store x20's slot (an aggregator's subscription). Uses x9-x14.
+ */
+LOCAL_FUNCTION node_subnets_want
+    FRAME 0
+    mov     x0, x20
+    bl      node_store_slot
+    ldr     x9, [x19, #Node_attnets]
+    ADDQ    x10, x19, Node_subnet_until
+    mov     x11, #0
+1:  cmp     x11, #ATTESTATION_SUBNET_COUNT
+    b.hs    9f
+    ldr     x12, [x10, x11, lsl #3]
+    cmp     x12, x0
+    b.ls    2f
+    mov     x13, #1
+    lsl     x13, x13, x11
+    orr     x9, x9, x13
+2:  add     x11, x11, #1
+    b       1b
+9:  mov     x0, x9
+    UNFRAME 0
+END_FUNCTION node_subnets_want
+
+/*
+ * L0: x0 = the sync_committee subnets the node keeps: each whose sync_until is above the epoch of
+ * the store x20's slot. Uses x9-x14.
+ */
+LOCAL_FUNCTION node_syncnets_want
+    FRAME 0
+    mov     x0, x20
+    bl      node_store_slot
+    mov     x9, #SLOTS_PER_EPOCH
+    udiv    x0, x0, x9
+    mov     x9, #0
+    ADDQ    x10, x19, Node_sync_until
+    mov     x11, #0
+1:  cmp     x11, #SYNC_COMMITTEE_SUBNET_COUNT
+    b.hs    9f
+    ldr     x12, [x10, x11, lsl #3]
+    cmp     x12, x0
+    b.ls    2f
+    mov     x13, #1
+    lsl     x13, x13, x11
+    orr     x9, x9, x13
+2:  add     x11, x11, #1
+    b       1b
+9:  mov     x0, x9
+    UNFRAME 0
+END_FUNCTION node_syncnets_want
+.if ATTESTATION_SUBNET_COUNT > 64 || SYNC_COMMITTEE_SUBNET_COUNT > 8
+.error "node_subnets_want: the subnets fit a u64, the sync subnets the MetaData's syncnets byte"
+.endif
 
 /*
  * L0: the node's gossip topics (node.md; altair p2p-interface.md, Transitioning the gossip), one
@@ -6039,8 +6111,10 @@ LOCAL_FUNCTION node_subscribe
 1:  str     x25, [x19, #Node_fork_digest]
     orr     x9, x9, #NODE_FLAG_SUBSCRIBED
     str     x9, [x19, #Node_flags]
-    mov     x0, x21                         /* the subnets of the epoch */
+    mov     x0, x21                         /* the subnets of the epoch, then those the node keeps */
     bl      node_attnets_set
+    bl      node_subnets_want
+    STQ     x0, x19, Node_subnets
     add     x0, sp, #L                      /* the record entries of the new digest */
     mov     x1, x22
     bl      node_enr_entries
@@ -6081,20 +6155,52 @@ LOCAL_FUNCTION node_subscribe
     mov     x2, #LIBP2P_EVENT_SUBSCRIBE
     bl      node_topics
     b       9f
-30: mov     x0, x21                         /* the subnets of the epoch, when they changed */
+30: mov     x0, x21                         /* the subnets of the epoch, when they changed: attnets and the record */
     bl      node_attnets
     ldr     x27, [x19, #Node_attnets]
     cmp     x0, x27
-    b.eq    31f
+    b.eq    32f
+    mov     x0, x21
+    bl      node_attnets_set
+    str     x21, [sp, #L]
+    add     x0, sp, #L
+    mov     x1, x22
+    bl      node_enr_entries
+    b       9f
+32: bl      node_subnets_want               /* the subnets the node keeps, when they changed */
+    LDQ     x27, x19, Node_subnets
+    cmp     x0, x27
+    b.eq    33f
     mov     x26, x0
     bic     x0, x27, x26                    /* those that go, then those that come */
     mov     x1, #LIBP2P_EVENT_UNSUBSCRIBE
-    bl      node_attnets_topics
+    mov     x2, #GOSSIP_BEACON_ATTESTATION
+    bl      node_subnet_topics
     bic     x0, x26, x27
     mov     x1, #LIBP2P_EVENT_SUBSCRIBE
-    bl      node_attnets_topics
-    mov     x0, x21
-    bl      node_attnets_set
+    mov     x2, #GOSSIP_BEACON_ATTESTATION
+    bl      node_subnet_topics
+    STQ     x26, x19, Node_subnets
+    b       9f
+33: cmp     x22, #FORK_ALTAIR               /* the sync subnets the node keeps, when they changed: the MetaData and the record */
+    b.lo    31f
+    bl      node_syncnets_want
+    LDQ     x27, x19, Node_syncnets
+    cmp     x0, x27
+    b.eq    31f
+    mov     x26, x0
+    bic     x0, x27, x26
+    mov     x1, #LIBP2P_EVENT_UNSUBSCRIBE
+    mov     x2, #GOSSIP_SYNC_COMMITTEE
+    bl      node_subnet_topics
+    bic     x0, x26, x27
+    mov     x1, #LIBP2P_EVENT_SUBSCRIBE
+    mov     x2, #GOSSIP_SYNC_COMMITTEE
+    bl      node_subnet_topics
+    STQ     x26, x19, Node_syncnets
+    ldr     x9, [x19, #Node_metadata_seq]
+    add     x9, x9, #1
+    str     x9, [x19, #Node_metadata_seq]
     str     x21, [sp, #L]
     add     x0, sp, #L
     mov     x1, x22

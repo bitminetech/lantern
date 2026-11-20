@@ -2843,6 +2843,10 @@ LOCAL_FUNCTION node_api_event
     beq     a3, t0, 68f
     li      t0, API_OP_PRODUCE_SYNC_COMMITTEE_CONTRIBUTION
     beq     a3, t0, 68f
+    li      t0, API_OP_PREPARE_BEACON_COMMITTEE_SUBNET     # the subscriptions: as a pool POST
+    beq     a3, t0, 60f
+    li      t0, API_OP_PREPARE_SYNC_COMMITTEE_SUBNETS
+    beq     a3, t0, 60f
     mv      a0, a3
     call    node_submit_topic
     bnez    a0, 60f
@@ -7764,6 +7768,7 @@ LOCAL_FUNCTION node_api_submit_done
     bne     t0, t1, 21f
     addi    s8, s8, 1
 21: bnez    t0, 6f
+    beqz    s9, 40f                         # no topic: a subscription
     addi    a0, s4, 16                      # valid: its bytes to a new id, kept by the pool when it has room
     call    node_put
     mv      s10, a0
@@ -7854,6 +7859,53 @@ LOCAL_FUNCTION node_api_submit_done
     add     s4, s4, t0
     addi    s7, s7, -1
     j       2b
+40: ld      t0, 24(s4)                      # a subscription: an aggregator's subnet kept to its slot, sync subnets to an epoch
+    add     t0, s4, t0
+    addi    t0, t0, 16
+    ld      t1, NodeAction_arg(s3)
+    andi    t1, t1, 255
+    li      t2, API_OP_PREPARE_SYNC_COMMITTEE_SUBNETS
+    beq     t1, t2, 42f
+    lbu     t1, 32(t0)                      # is_aggregator: subnet_until of compute_subnet_for_attestation, the slot + 1 at least
+    beqz    t1, 6b
+    ld      t1, 24(t0)
+    ld      t2, 16(t0)
+    ld      t3, 8(t0)
+    andi    t4, t1, SLOTS_PER_EPOCH - 1
+    mul     t2, t2, t4
+    add     t2, t2, t3
+    andi    t2, t2, ATTESTATION_SUBNET_COUNT - 1
+    addi    t1, t1, 1
+    ADDQ    t3, s1, Node_subnet_until
+    slli    t2, t2, 3
+    add     t3, t3, t2
+    ld      t4, 0(t3)
+    bleu    t1, t4, 6b
+    sd      t1, 0(t3)
+    j       6b
+42: lwu     t1, 12(t0)                      # until_epoch: sync_until of the subnet of each index, that epoch at least
+    lwu     t2, 16(t0)
+    slli    t2, t2, 32
+    or      t1, t1, t2
+    ld      t2, 32(s4)
+    addi    t2, t2, -20
+    addi    t3, t0, 20
+    ADDQ    t4, s1, Node_sync_until
+43: beqz    t2, 6b
+    lwu     t5, 0(t3)
+    lwu     t6, 4(t3)
+    slli    t6, t6, 32
+    or      t5, t5, t6
+    li      t6, SYNC_COMMITTEE_SIZE / SYNC_COMMITTEE_SUBNET_COUNT
+    divu    t5, t5, t6
+    slli    t5, t5, 3
+    add     t5, t4, t5
+    ld      t6, 0(t5)
+    bleu    t1, t6, 44f
+    sd      t1, 0(t5)
+44: addi    t3, t3, 8
+    addi    t2, t2, -8
+    j       43b
 70: ld      a0, NodeAction_target(s3)       # the answer: 200, or 400 with the failures
     beqz    s8, 71f
     ld      t0, NodeAction_arg(s3)          # a list: the failures
@@ -8140,10 +8192,28 @@ LOCAL_FUNCTION node_api_submit_run
     sub     t3, a0, t3
     seqz    t3, t3
     or      t2, t2, t3
+    li      t3, API_OP_PREPARE_BEACON_COMMITTEE_SUBNET
+    sub     t3, a0, t3
+    seqz    t3, t3
+    or      t2, t2, t3
+    li      t3, API_OP_PREPARE_SYNC_COMMITTEE_SUBNETS
+    sub     t3, a0, t3
+    seqz    t3, t3
+    or      t2, t2, t3
     sd      t2, (L + 40)(sp)
+    sd      a0, (L + 48)(sp)
     call    node_submit_topic
-    beqz    a0, 98f
     sd      a0, (L + 16)(sp)
+    bnez    a0, 17f
+    ld      t1, (L + 48)(sp)                # no topic: a subscription's type, else no such work
+    li      a0, NODE_JSON_COMMITTEE_SUBSCRIPTION
+    li      t0, API_OP_PREPARE_BEACON_COMMITTEE_SUBNET
+    beq     t1, t0, 13f
+    li      a0, NODE_JSON_SYNC_SUBSCRIPTION
+    li      t0, API_OP_PREPARE_SYNC_COMMITTEE_SUBNETS
+    beq     t1, t0, 13f
+    j       98f
+17: ld      a0, (L + 16)(sp)
     li      t0, GOSSIP_BEACON_AGGREGATE_AND_PROOF   # an aggregate: SignedAggregateAndProof
     bne     a0, t0, 14f
     li      a0, NODE_JSON_AGGREGATE_AND_PROOF
@@ -8364,6 +8434,8 @@ LOCAL_FUNCTION node_api_submit_run
     sd      t0, (NodeEvent_chunk + 16)(s7)
     ld      t0, (L + 32)(sp)
     sd      t0, NodeEvent_index(s7)
+    ld      t1, (L + 16)(sp)                # the subscriptions: their checks, no gossip validation
+    beqz    t1, 50f
     ld      t1, (L + 0)(sp)                 # seen has a key free for each operation, for a sync message one a subnet
     ld      t2, Seen_bits(t1)
     ld      t3, Seen_keys(t1)
@@ -8524,6 +8596,49 @@ LOCAL_FUNCTION node_api_submit_run
     j       35b
 39: li      a0, LANTERN_OK
     LEAVE 320
+50: addi    s9, s7, NodeEvent_chunk + 24    # each subscription valid, else the result LANTERN_INVALID_ENCODING
+    ld      s10, (L + 32)(sp)
+51: beqz    s10, 39b
+    sd      zero, 0(s9)
+    sd      zero, 8(s9)
+    ld      t0, 32(s9)
+    addi    t1, s9, 40
+    ld      t2, NodeAction_arg(s3)
+    andi    t2, t2, 255
+    li      t3, API_OP_PREPARE_SYNC_COMMITTEE_SUBNETS
+    beq     t2, t3, 53f
+    li      t3, 33                          # BeaconCommitteeSubscription: committees_at_slot 1 to MAX_COMMITTEES_PER_SLOT, committee_index below it
+    bne     t0, t3, 90f
+    ld      t4, 16(t1)
+    beqz    t4, 90f
+    li      t3, MAX_COMMITTEES_PER_SLOT
+    bgtu    t4, t3, 90f
+    ld      t5, 8(t1)
+    bgeu    t5, t4, 90f
+    j       54f
+53: li      t3, 20                          # SyncCommitteeSubscription: offset 20, indices below SYNC_COMMITTEE_SIZE
+    bltu    t0, t3, 90f
+    lwu     t4, 8(t1)
+    bne     t4, t3, 90f
+    addi    t0, t0, -20
+    andi    t4, t0, 7
+    bnez    t4, 90f
+    addi    t1, t1, 20
+    li      t3, SYNC_COMMITTEE_SIZE
+52: beqz    t0, 54f
+    lwu     t4, 0(t1)
+    lwu     t5, 4(t1)
+    slli    t5, t5, 32
+    or      t4, t4, t5
+    bgeu    t4, t3, 90f
+    addi    t1, t1, 8
+    addi    t0, t0, -8
+    j       52b
+54: ld      t0, 16(s9)
+    addi    s9, s9, 16
+    add     s9, s9, t0
+    addi    s10, s10, -1
+    j       51b
 90: li      t0, LANTERN_INVALID_ENCODING    # a body that is no such text
     sd      t0, NodeEvent_result(s7)
     li      t0, NODE_EV_WORK_DONE_SIZE
