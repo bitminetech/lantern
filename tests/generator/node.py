@@ -62,9 +62,9 @@ KEYS = _Keys()
 BLS_VALIDATORS = (1, 3, 7)  # BLS withdrawal credentials of the key pubkeys[8191 - i], as the helpers sign changes
 
 
-def anchor(spec, fork, statuses=False, epoch=ANCHOR_EPOCH):
+def anchor(spec, fork, statuses=False, epoch=ANCHOR_EPOCH, extra=0):
     """A state at the first slot of the epoch (ANCHOR_EPOCH) with 8 validators (and those of
-    STATUS_VALIDATORS after them with statuses), and its block."""
+    STATUS_VALIDATORS after them with statuses, then `extra` more active ones), and its block."""
     slot = spec.Slot(epoch * spec.SLOTS_PER_EPOCH)
     version = spec.config.GENESIS_FORK_VERSION if fork == "phase0" else getattr(spec.config, f"{fork.upper()}_FORK_VERSION")
     state = spec.BeaconState(
@@ -107,6 +107,24 @@ def anchor(spec, fork, statuses=False, epoch=ANCHOR_EPOCH):
             )
         )
         state.balances.append(inc * spec.EFFECTIVE_BALANCE_INCREMENT + 1000 * i)
+        if fork != "phase0":
+            state.previous_epoch_participation.append(0)
+            state.current_epoch_participation.append(0)
+            state.inactivity_scores.append(0)
+    for k in range(extra):
+        i = len(state.validators)
+        state.validators.append(
+            spec.Validator(
+                pubkey=spec.BLSPubkey(KEYS.pubkeys[i]),
+                withdrawal_credentials=spec.Bytes32(bytes([i % 256]) * 32),
+                effective_balance=spec.MAX_EFFECTIVE_BALANCE,
+                activation_eligibility_epoch=0,
+                activation_epoch=0,
+                exit_epoch=spec.FAR_FUTURE_EPOCH,
+                withdrawable_epoch=spec.FAR_FUTURE_EPOCH,
+            )
+        )
+        state.balances.append(spec.MAX_EFFECTIVE_BALANCE)
         if fork != "phase0":
             state.previous_epoch_participation.append(0)
             state.current_epoch_participation.append(0)
@@ -1302,7 +1320,10 @@ def api_cases(fork, preset, epoch=ANCHOR_EPOCH):
     """The api case of an anchor at the epoch; at epoch 0, the requests of getProposerDuties alone;
     at another epoch, those of getEpochCommittees at its lowest epochs alone."""
     spec = module(fork, preset)
-    state, block = run(spec, schedule(fork), lambda: anchor(spec, fork, statuses=True, epoch=epoch))
+    # the late case's pool requests need committee members in the slots after the anchor's: about
+    # 4 a slot, which the mainnet preset's 32 slots an epoch take more validators for
+    extra = max(0, 4 * int(spec.SLOTS_PER_EPOCH) - 32) if epoch not in (ANCHOR_EPOCH, 0) else 0
+    state, block = run(spec, schedule(fork), lambda: anchor(spec, fork, statuses=True, epoch=epoch, extra=extra))
     v = run(spec, schedule(fork), lambda: api_values(spec, fork, state, block))
     v["config_bodies"] = config_bodies(fork, preset)
     kind = "main" if epoch == ANCHOR_EPOCH else "genesis" if epoch == 0 else "late"
