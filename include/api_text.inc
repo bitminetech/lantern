@@ -284,6 +284,33 @@ api_s_aggregates:
 api_s_end:
     .ascii "]}}"
 .set api_s_end_len, 3
+api_q_pubkey:
+    .ascii "{\"pubkey\":"
+.set api_q_pubkey_len, 10
+api_q_credentials:
+    .ascii ",\"withdrawal_credentials\":"
+.set api_q_credentials_len, 26
+api_q_amount:
+    .ascii ",\"amount\":"
+.set api_q_amount_len, 10
+api_q_signature:
+    .ascii ",\"signature\":"
+.set api_q_signature_len, 13
+api_q_slot:
+    .ascii ",\"slot\":"
+.set api_q_slot_len, 8
+api_q_validator:
+    .ascii "{\"validator_index\":"
+.set api_q_validator_len, 19
+api_q_withdrawable:
+    .ascii ",\"withdrawable_epoch\":"
+.set api_q_withdrawable_len, 22
+api_q_source:
+    .ascii "{\"source_index\":"
+.set api_q_source_len, 16
+api_q_target:
+    .ascii ",\"target_index\":"
+.set api_q_target_len, 16
 api_p_lbracket:
     .ascii "["
 .set api_p_lbracket_len, 1
@@ -567,3 +594,6 @@ api_codes_end:
 .set API_R_NO_REASON, 4
 .set API_R_SSZ, 8                           /* the body is SSZ: Content-Type: application/octet-stream */
 .set API_R_VERSION, 16                      /* Eth-Consensus-Version of the view's fork */
+.if API_OP_GET_PENDING_DEPOSITS != API_OP_GET_PENDING_CONSOLIDATIONS + 1 || API_OP_GET_PENDING_PARTIAL_WITHDRAWALS != API_OP_GET_PENDING_CONSOLIDATIONS + 2
+.error "the pending lists: their operations follow getPendingConsolidations"
+.endif

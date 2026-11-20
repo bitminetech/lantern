@@ -134,6 +134,17 @@ def anchor(spec, fork, statuses=False, epoch=ANCHOR_EPOCH, extra=0):
     if fork != "phase0":  # as at genesis (altair beacon-chain.md, initialize_beacon_state_from_eth1)
         state.current_sync_committee = spec.get_next_sync_committee(state)
         state.next_sync_committee = spec.get_next_sync_committee(state)
+    if FORKS.index(fork) >= FORKS.index("electra"):
+        # pending items the epochs keep: deposits of slots past the finalized one, partial
+        # withdrawals that only blocks take, consolidations of a source that is not withdrawable
+        for k in range(3):
+            state.pending_deposits.append(spec.PendingDeposit(
+                pubkey=spec.BLSPubkey(KEYS.pubkeys[200 + k]), withdrawal_credentials=spec.Bytes32(b"\x01" + bytes(11) + bytes([k]) * 20),
+                amount=spec.Gwei(32_000_000_000 + k), signature=spec.BLSSignature(bytes([7 + k]) * 96), slot=spec.Slot(1 + k)))
+        for k in range(2):
+            state.pending_partial_withdrawals.append(spec.PendingPartialWithdrawal(
+                validator_index=k, amount=spec.Gwei(1_000_000_000 + k), withdrawable_epoch=epoch + 10 + k))
+            state.pending_consolidations.append(spec.PendingConsolidation(source_index=1 + k, target_index=4 + k))
     if fork == "fulu":  # as at genesis and at the fork (fulu fork.md)
         state.proposer_lookahead = spec.initialize_proposer_lookahead(state)
     block = spec.BeaconBlock(slot=slot, state_root=spec.hash_tree_root(state))
@@ -379,11 +390,13 @@ POOL_GETS = ("getPoolVoluntaryExits", "getPoolProposerSlashings", "getPoolAttest
              "getPoolBLSToExecutionChanges", "getPoolAttestationsV2")
 POOL_POSTS = ("submitPoolVoluntaryExit", "submitPoolProposerSlashings", "submitPoolAttesterSlashingsV2",
               "submitPoolBLSToExecutionChange", "submitPoolAttestationsV2")
+PENDING = {"getPendingDeposits": "pending_deposits", "getPendingPartialWithdrawals": "pending_partial_withdrawals",
+           "getPendingConsolidations": "pending_consolidations"}
 ANSWERED = ("getHealth", "getNetworkIdentity", "getNodeVersion", "getSyncingStatus", "getPeerCount", "getGenesis",
             "getBlockHeader", "getStateFinalityCheckpoints", "getBlockV2", "getStateV2", "getBlockRoot", "getStateRoot",
             "getStateFork", "getSpec", "getForkSchedule", "getDepositContract", "getEpochCommittees",
             "getProposerDuties", "produceAttestationData", "getAttesterDuties", "eventstream", "getStateRandao",
-            "getEpochSyncCommittees", "getProposerLookahead") + VALIDATOR_OPS
+            "getEpochSyncCommittees", "getProposerLookahead") + tuple(PENDING) + VALIDATOR_OPS
 STATE_READS = ("getStateRandao", "getEpochSyncCommittees", "getProposerLookahead")
 IDENTITY = (b"16Uiu2HAmPLe7Mzm8TsYUubgCAW1aJoeFScxrLj8ppHFivPo97bUZ",
             b"enr:-Iu4QLm7bZGdAhVwRqZ6Zf3LlnqKsBTnZGOByHQhPMQJ3pV4F3t8L9i5yJOZ0X0hiZ6q4D5V0jB7l8J3ZtYw1JDH9C4BgmlkgnY0gmlwhAoAAAGJc2VjcDI1NmsxoQPKY0yuDUmstAHYpMa2_oxVtw0RW_QAdpzBQA8yWM0xOIN0Y3CCIyg",
@@ -835,7 +848,7 @@ def answer(v, name, route, offline, close, keep_alive, syncing=False):
                 qhex(h.body_root) + b'},"signature":' + qhex(bytes(96)) + b"}}}")
         return response(200, body, **kw)
     if name in ("getStateRoot", "getStateFork", "getStateFinalityCheckpoints", "getStateV2", "getEpochCommittees") + VALIDATOR_OPS + \
-            STATE_READS:
+            STATE_READS + tuple(PENDING):
         if route.id_kind in v["checkpoint_slots"]:
             slot = v["checkpoint_slots"][route.id_kind]
         elif route.id_kind == 5 or (route.id_kind == 2):
@@ -862,6 +875,16 @@ def answer(v, name, route, offline, close, keep_alive, syncing=False):
             return committees_answer(v, route, s, values, kw)
         if name in STATE_READS:
             return state_read_answer(v, name, route, s, slot, values, kw)
+        if name in PENDING:
+            if not hasattr(s, PENDING[name]):
+                return error(400, **kw)
+            items = list(getattr(s, PENDING[name]))
+            if route.response == 2:
+                return streamed(v["fork"], b"".join(bytes(x.encode_bytes()) for x in items), ssz=True, **kw)
+            from json_codec import to_json
+            body = (b'{"version":"' + v["fork"].encode() + b'",' + values[1:] + b',"data":[' +
+                    b",".join(to_json(x).encode() for x in items) + b"]}")
+            return streamed(v["fork"], body, **kw)
         if name == "getStateRoot":
             return response(200, values + b',"data":{"root":' + qhex(spec.hash_tree_root(s)) + b"}}", **kw)
         if name == "getStateFork":
@@ -1268,6 +1291,13 @@ def api_requests(spec, fork, v, kind="main"):
             add(f"read_{op}_{state_id.decode()[:12]}", api_route.base(by_name[op], path_values={"state_id": state_id}))
     add("read_getProposerLookahead_ssz", api_route.base(by_name["getProposerLookahead"], path_values={"state_id": b"head"},
                                                         accept=b"application/octet-stream"))
+    for op in PENDING:  # the pending lists: of the state ids above, as SSZ, and over HTTP/1.0
+        for state_id in (b"head", b"finalized", b"genesis", other_root, qhex(v["state_roots"][1])[1:-1],
+                         b"%d" % (v["slot"] + 1)):
+            add(f"pending_{op}_{state_id.decode()[:12]}", api_route.base(by_name[op], path_values={"state_id": state_id}))
+        add(f"pending_{op}_ssz", api_route.base(by_name[op], path_values={"state_id": b"head"},
+                                                accept=b"application/octet-stream"))
+        add(f"pending_{op}_http10", api_route.base(by_name[op], path_values={"state_id": b"head"}), version=b"HTTP/1.0")
     for e in (0, epoch - 1, epoch, epoch + 1, epoch + int(spec_v.EPOCHS_PER_HISTORICAL_VECTOR)):
         add(f"read_randao_epoch_{e}", api_route.base(by_name["getStateRandao"], [("epoch", b"%d" % e)],
                                                      path_values={"state_id": b"head"}))

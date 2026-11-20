@@ -739,6 +739,120 @@ LOCAL_FUNCTION node_api_validators_prep
 END_FUNCTION node_api_validators_prep
 
 /*
+ * L1: the items of the pending stream of the entry x22, of the state x20 (node.md,
+ * NODE_WORK_API_CHUNK), from the index at NodeEvent_api + 16 of the event x23, at the writer's
+ * cursor x24 up to x26, with , between; then ]} once they are all written. x0 = 1 when whole, 0
+ * when more is to come, 2 when the state has no such list. Locals: L the cursor, L+8
+ * lantern_node_pending's out, L+32 the kind.
+ */
+LOCAL_FUNCTION api_pending_json
+    FRAME 48
+    add     x9, x23, #(NodeEvent_api + 16)
+    str     x9, [sp, #16]
+    ldr     x9, [x22, #NodeApi_op]          /* the kind: 0 deposits, 1 partial withdrawals, 2 consolidations */
+    sub     x1, x9, #API_OP_GET_PENDING_DEPOSITS
+    cmp     x9, #API_OP_GET_PENDING_CONSOLIDATIONS
+    mov     x10, #2
+    csel    x1, x10, x1, eq
+    str     x1, [sp, #48]
+    mov     x0, x20
+    add     x2, sp, #24
+    ldr     x15, [x22, #NodeApi_fork]
+    FORK_CALL node_pending
+    cbnz    x0, 7f
+1:  ldr     x9, [sp, #16]
+    ldr     x10, [x9]
+    ldr     x11, [sp, #32]
+    cmp     x10, x11
+    b.hs    8f
+    sub     x12, x26, x24                   /* room for one more item */
+    cmp     x12, #API_ITEM_MAX
+    b.lo    9f
+    cbz     x10, 2f
+    API_LIT api_p_comma
+2:  ldr     x9, [sp, #16]
+    ldr     x10, [x9]
+    ldr     x11, [sp, #24]
+    ldr     x12, [sp, #40]
+    madd    x0, x10, x12, x11
+    ldr     x1, [sp, #48]
+    bl      api_pending_item
+    ldr     x9, [sp, #16]
+    ldr     x10, [x9]
+    add     x10, x10, #1
+    str     x10, [x9]
+    b       1b
+8:  API_LIT api_v_end
+    mov     x0, #1
+    UNFRAME 48
+9:  mov     x0, #0
+    UNFRAME 48
+7:  mov     x0, #2
+    UNFRAME 48
+END_FUNCTION api_pending_json
+
+/*
+ * L1: the JSON of the pending item at x0 of the kind x1 (lantern_node_pending): a PendingDeposit,
+ * a PendingPartialWithdrawal or a PendingConsolidation, from its SSZ fields. Locals: the item.
+ */
+LOCAL_FUNCTION api_pending_item
+    FRAME 16
+    str     x0, [sp, #16]
+    cmp     x1, #1
+    b.eq    20f
+    b.hi    30f
+    /* {"pubkey":…,"withdrawal_credentials":…,"amount":…,"signature":…,"slot":…} */
+    API_LIT api_q_pubkey
+    ldr     x0, [sp, #16]
+    mov     x1, #48
+    bl      api_qhex
+    API_LIT api_q_credentials
+    ldr     x0, [sp, #16]
+    add     x0, x0, #48
+    mov     x1, #32
+    bl      api_qhex
+    API_LIT api_q_amount
+    ldr     x9, [sp, #16]
+    ldr     x0, [x9, #80]
+    bl      api_qdec
+    API_LIT api_q_signature
+    ldr     x0, [sp, #16]
+    add     x0, x0, #88
+    mov     x1, #96
+    bl      api_qhex
+    API_LIT api_q_slot
+    ldr     x9, [sp, #16]
+    ldr     x0, [x9, #184]
+    bl      api_qdec
+    b       9f
+    /* {"validator_index":…,"amount":…,"withdrawable_epoch":…} */
+20: API_LIT api_q_validator
+    ldr     x9, [sp, #16]
+    ldr     x0, [x9]
+    bl      api_qdec
+    API_LIT api_q_amount
+    ldr     x9, [sp, #16]
+    ldr     x0, [x9, #8]
+    bl      api_qdec
+    API_LIT api_q_withdrawable
+    ldr     x9, [sp, #16]
+    ldr     x0, [x9, #16]
+    bl      api_qdec
+    b       9f
+    /* {"source_index":…,"target_index":…} */
+30: API_LIT api_q_source
+    ldr     x9, [sp, #16]
+    ldr     x0, [x9]
+    bl      api_qdec
+    API_LIT api_q_target
+    ldr     x9, [sp, #16]
+    ldr     x0, [x9, #8]
+    bl      api_qdec
+9:  API_LIT api_end1
+    UNFRAME 16
+END_FUNCTION api_pending_item
+
+/*
  * L1: the items of the validator stream of the entry x22, of the state x20, from the cursor at
  * NodeEvent_api + 16 of the event x23 (+0 the next index, +8 the status bits, +16 the bitmap,
  * +24 the epoch, +32 the items written), at the writer's cursor x24 up to x26; then ]} for JSON
@@ -2073,6 +2187,9 @@ LOCAL_FUNCTION node_api_event
     b.eq    66f
     cmp     x3, #API_OP_GET_PROPOSER_LOOKAHEAD
     b.eq    66f
+    sub     x9, x3, #API_OP_GET_PENDING_CONSOLIDATIONS
+    cmp     x9, #2
+    b.ls    66f
     cmp     x3, #API_OP_GET_SPEC
     b.eq    67f
     cmp     x3, #API_OP_GET_PROPOSER_DUTIES
@@ -2122,7 +2239,12 @@ LOCAL_FUNCTION node_api_event
     ldr     x0, [x25, #ApiRoute_op]
     cmp     x0, #API_OP_GET_STATE_V2
     b.eq    64f
-    cmp     x0, #API_OP_GET_STATE_RANDAO    /* getStateRandao, getEpochSyncCommittees: the epoch in the work's data */
+    sub     x9, x0, #API_OP_GET_PENDING_CONSOLIDATIONS  /* the pending lists: a stream of the state, no data */
+    cmp     x9, #2
+    b.hi    695f
+    str     xzr, [x26, #ApiView_look_data]
+    b       64f
+695: cmp    x0, #API_OP_GET_STATE_RANDAO    /* getStateRandao, getEpochSyncCommittees: the epoch in the work's data */
     ccmp    x0, #API_OP_GET_EPOCH_SYNC_COMMITTEES, #4, ne
     b.ne    691f
     ldr     x9, [x25, #ApiRoute_present]
@@ -4165,14 +4287,23 @@ LOCAL_FUNCTION node_api_stream
     str     x9, [sp, #(L + 16)]
     ldr     x9, [x25, #ApiRoute_op]         /* getEpochCommittees: its epoch, else 400 and no stream */
     cmp     x9, #API_OP_GET_EPOCH_COMMITTEES
-    b.ne    6f
+    b.ne    34f
     mov     x0, x25
     mov     x1, x26
     bl      node_api_committees_check
     str     x0, [sp, #(L + 24)]
     cmn     x0, #1
     b.ne    6f
-    ldr     x9, [x26, #ApiView_look_copy]
+    b       331f
+34: sub     x10, x9, #API_OP_GET_PENDING_CONSOLIDATIONS /* the pending lists: 400 for a state before electra, and no stream */
+    cmp     x10, #2
+    b.hi    6f
+    ldr     x0, [x26, #ApiView_head_slot]
+    add     x1, x19, #Node_config
+    bl      node_fork
+    cmp     x0, #FORK_ELECTRA
+    b.hs    6f
+331: ldr    x9, [x26, #ApiView_look_copy]
     cbz     x9, 33f
     mov     x0, #NODE_ACT_STATE_FREE
     ldr     x1, [x26, #ApiView_look_state]
@@ -4359,7 +4490,10 @@ LOCAL_FUNCTION api_stream_head
     cmp     x9, #API_OP_GET_POOL_ATTESTER_SLASHINGS_V2
     b.eq    21f
     cmp     x9, #API_OP_GET_POOL_ATTESTATIONS_V2
-    b.ne    22f
+    b.eq    21f
+    sub     x10, x9, #API_OP_GET_PENDING_CONSOLIDATIONS    /* and of the pending lists */
+    cmp     x10, #2
+    b.hi    22f
 21: API_LIT api_version
     ldr     x0, [x22, #NodeApi_fork]
     bl      api_fork_name
@@ -4425,7 +4559,12 @@ LOCAL_FUNCTION api_stream_json
     b.ne    3f
 4:  bl      api_pool_json
     UNFRAME 0
-3:  cmp     x9, #API_OP_GET_BLOCK_V2
+3:  sub     x10, x9, #API_OP_GET_PENDING_CONSOLIDATIONS /* the pending streams: their items */
+    cmp     x10, #2
+    b.hi    31f
+    bl      api_pending_json
+    UNFRAME 0
+31: cmp     x9, #API_OP_GET_BLOCK_V2
     b.eq    1f
     cmp     x9, #API_OP_GET_STATE_V2
     b.eq    1f
@@ -4507,7 +4646,13 @@ LOCAL_FUNCTION node_api_chunk_run
     cmp     x10, #API_OP_GET_POOL_BLS_TO_EXECUTION_CHANGES
     b.eq    2f
     mov     x9, x10
-    sub     x10, x9, #API_OP_GET_STATE_VALIDATORS   /* a validator stream (1) or getEpochCommittees (2): a state */
+    sub     x11, x9, #API_OP_GET_PENDING_CONSOLIDATIONS /* a pending stream (4): a state */
+    cmp     x11, #2
+    b.hi    241f
+    cbz     x20, 98f
+    mov     x9, #4
+    b       2f
+241: sub    x10, x9, #API_OP_GET_STATE_VALIDATORS   /* a validator stream (1) or getEpochCommittees (2): a state */
     cmp     x10, #(API_OP_GET_EPOCH_COMMITTEES - API_OP_GET_STATE_VALIDATORS)
     b.hi    98f
     cmp     x9, #API_OP_GET_STATE_VALIDATOR
@@ -4584,6 +4729,8 @@ LOCAL_FUNCTION node_api_chunk_run
     cbz     x9, 6f
     cmp     x9, #3
     b.eq    66f
+    cmp     x9, #4
+    b.eq    67f
     ldr     x0, [sp, #(L + 48)]
     cmp     x9, #2
     b.eq    63f
@@ -4605,6 +4752,20 @@ LOCAL_FUNCTION node_api_chunk_run
     b.eq    96f
     b.hi    97f
     mov     x21, x1
+    b       6f
+67: mov     x0, x20                         /* a pending stream: its items; for SSZ their bytes and their count */
+    ldr     x9, [x22, #NodeApi_op]
+    sub     x1, x9, #API_OP_GET_PENDING_DEPOSITS
+    cmp     x9, #API_OP_GET_PENDING_CONSOLIDATIONS
+    mov     x10, #2
+    csel    x1, x10, x1, eq
+    add     x2, sp, #(L + 8)
+    ldr     x15, [x22, #NodeApi_fork]
+    FORK_CALL node_pending
+    cbnz    x0, 96f
+    ldp     x9, x10, [sp, #(L + 16)]
+    mul     x9, x9, x10
+    str     x9, [sp, #(L + 16)]
     b       6f
 63: bl      node_api_committees_prep
     cmp     x0, #400
@@ -4636,8 +4797,10 @@ LOCAL_FUNCTION node_api_chunk_run
 6:  ldr     x9, [x23, #(NodeEvent_api + 8)]
     tbz     x9, #2, 30f
     ldr     x10, [sp, #(L + 40)]
+    cmp     x10, #4                         /* a pending stream: its SSZ bytes as getStateV2's */
+    b.eq    601f
     cbnz    x10, 60f
-    tbnz    x9, #6, 11f                     /* SSZ: the head first, with Content-Length */
+601: tbnz   x9, #6, 11f                     /* SSZ: the head first, with Content-Length */
     ldr     x0, [sp, #(L + 16)]
     bl      api_stream_head
 11: ldp     x1, x10, [sp, #(L + 8)]         /* then the bytes from sent, as many as fit */
@@ -4680,6 +4843,8 @@ LOCAL_FUNCTION node_api_chunk_run
     sub     x26, x9, #7                     /* room for CRLF and the last chunk */
     ldr     x9, [sp, #(L + 40)]
     cbz     x9, 35f
+    cmp     x9, #4
+    b.eq    392f
     cmp     x9, #3
     b.ne    37f
     ldr     x9, [x22, #NodeApi_op]          /* a pool stream: {"data":[, the V2 GETs {"version":"<fork>","data":[ */
@@ -4697,6 +4862,20 @@ LOCAL_FUNCTION node_api_chunk_run
     b       36f
     /* the validator streams: {"execution_optimistic":…,"finalized":…,"data":[ */
 37: API_LIT api_v_open
+    ldr     x9, [x23, #(NodeEvent_api + 8)]
+    ubfx    x0, x9, #8, #1
+    bl      api_bool
+    API_LIT api_x_finalized
+    ldr     x9, [x23, #(NodeEvent_api + 8)]
+    ubfx    x0, x9, #9, #1
+    bl      api_bool
+    API_LIT api_v_list
+    b       36f
+    /* the pending streams: {"version":"<fork>","execution_optimistic":…,"finalized":…,"data":[ */
+392: API_LIT api_j_version
+    ldr     x0, [x22, #NodeApi_fork]
+    bl      api_fork_name
+    API_LIT api_j_optimistic
     ldr     x9, [x23, #(NodeEvent_api + 8)]
     ubfx    x0, x9, #8, #1
     bl      api_bool

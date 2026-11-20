@@ -730,6 +730,108 @@ LOCAL_FUNCTION node_api_validators_prep
     UNFRAME 64
 END_FUNCTION node_api_validators_prep
 
+# The items of the pending stream of the entry rbx, of the state rdi (node.md, NODE_WORK_API_CHUNK),
+# from the index at NodeEvent_api + 16 of the event rbp, at the writer's cursor r12 up to r14, with
+# , between; then ]} once they are all written. rax = 1 when whole, 0 when more is to come, 2 when
+# the state has no such list. Locals: lantern_node_pending's out, the kind.
+LOCAL_FUNCTION api_pending_json
+    FRAME 32
+    mov     NodeApi_op(%rbx), %rax          # the kind: 0 deposits, 1 partial withdrawals, 2 consolidations
+    lea     -API_OP_GET_PENDING_DEPOSITS(%rax), %rsi
+    mov     $2, %ecx
+    cmp     $API_OP_GET_PENDING_CONSOLIDATIONS, %rax
+    cmove   %rcx, %rsi
+    mov     %rsi, 24(%rsp)
+    mov     %rsp, %rdx
+    mov     NodeApi_fork(%rbx), %r10
+    FORK_CALL node_pending
+    test    %rax, %rax
+    jnz     7f
+1:  mov     (NodeEvent_api + 16)(%rbp), %rax
+    cmp     8(%rsp), %rax
+    jae     8f
+    mov     %r14, %rcx                      # room for one more item
+    sub     %r12, %rcx
+    cmp     $API_ITEM_MAX, %rcx
+    jb      9f
+    test    %rax, %rax
+    jz      2f
+    API_LIT api_p_comma
+2:  mov     (NodeEvent_api + 16)(%rbp), %rdi
+    imul    16(%rsp), %rdi
+    add     (%rsp), %rdi
+    mov     24(%rsp), %rsi
+    call    api_pending_item
+    incq    (NodeEvent_api + 16)(%rbp)
+    jmp     1b
+8:  API_LIT api_v_end
+    mov     $1, %eax
+    UNFRAME 32
+9:  xor     %eax, %eax
+    UNFRAME 32
+7:  mov     $2, %eax
+    UNFRAME 32
+END_FUNCTION api_pending_json
+
+# The JSON of the pending item at rdi of the kind rsi (lantern_node_pending): a PendingDeposit, a
+# PendingPartialWithdrawal or a PendingConsolidation, from its SSZ fields. Locals: the item.
+LOCAL_FUNCTION api_pending_item
+    FRAME 16
+    mov     %rdi, (%rsp)
+    cmp     $1, %rsi
+    je      20f
+    ja      30f
+    # {"pubkey":…,"withdrawal_credentials":…,"amount":…,"signature":…,"slot":…}
+    API_LIT api_q_pubkey
+    mov     (%rsp), %rdi
+    mov     $48, %esi
+    call    api_qhex
+    API_LIT api_q_credentials
+    mov     (%rsp), %rdi
+    add     $48, %rdi
+    mov     $32, %esi
+    call    api_qhex
+    API_LIT api_q_amount
+    mov     (%rsp), %rax
+    mov     80(%rax), %rdi
+    call    api_qdec
+    API_LIT api_q_signature
+    mov     (%rsp), %rdi
+    add     $88, %rdi
+    mov     $96, %esi
+    call    api_qhex
+    API_LIT api_q_slot
+    mov     (%rsp), %rax
+    mov     184(%rax), %rdi
+    call    api_qdec
+    jmp     9f
+    # {"validator_index":…,"amount":…,"withdrawable_epoch":…}
+20: API_LIT api_q_validator
+    mov     (%rsp), %rax
+    mov     (%rax), %rdi
+    call    api_qdec
+    API_LIT api_q_amount
+    mov     (%rsp), %rax
+    mov     8(%rax), %rdi
+    call    api_qdec
+    API_LIT api_q_withdrawable
+    mov     (%rsp), %rax
+    mov     16(%rax), %rdi
+    call    api_qdec
+    jmp     9f
+    # {"source_index":…,"target_index":…}
+30: API_LIT api_q_source
+    mov     (%rsp), %rax
+    mov     (%rax), %rdi
+    call    api_qdec
+    API_LIT api_q_target
+    mov     (%rsp), %rax
+    mov     8(%rax), %rdi
+    call    api_qdec
+9:  API_LIT api_end1
+    UNFRAME 16
+END_FUNCTION api_pending_item
+
 # The items of the validator stream of the entry rbx, of the state rdi, from the cursor at
 # NodeEvent_api + 16 of the event rbp (+0 the next index, +8 the status bits, +16 the bitmap, +24
 # the epoch, +32 the items written), at the writer's cursor r12 up to r14; then ]} for JSON once they
@@ -2039,6 +2141,9 @@ LOCAL_FUNCTION node_api_event
     je      66f
     cmp     $API_OP_GET_PROPOSER_LOOKAHEAD, %rcx
     je      66f
+    lea     -API_OP_GET_PENDING_CONSOLIDATIONS(%rcx), %rax
+    cmp     $2, %rax
+    jbe     66f
     cmp     $API_OP_GET_SPEC, %rcx
     je      67f
     cmp     $API_OP_GET_PROPOSER_DUTIES, %rcx
@@ -2093,7 +2198,13 @@ LOCAL_FUNCTION node_api_event
     mov     ApiRoute_op(%rax), %rcx
     cmp     $API_OP_GET_STATE_V2, %rcx
     je      64f
-    cmp     $API_OP_GET_STATE_RANDAO, %rcx  # getStateRandao, getEpochSyncCommittees: the epoch in the work's data
+    lea     -API_OP_GET_PENDING_CONSOLIDATIONS(%rcx), %rdx  # the pending lists: a stream of the state, no data
+    cmp     $2, %rdx
+    ja      695f
+    mov     S8(%rsp), %rdx
+    movq    $0, ApiView_look_data(%rdx)
+    jmp     64f
+695: cmp    $API_OP_GET_STATE_RANDAO, %rcx  # getStateRandao, getEpochSyncCommittees: the epoch in the work's data
     je      692f
     cmp     $API_OP_GET_EPOCH_SYNC_COMMITTEES, %rcx
     je      692f
@@ -4231,14 +4342,26 @@ LOCAL_FUNCTION node_api_stream
 32: mov     ApiView_look_state(%rcx), %rax
     mov     %rax, (L + 16)(%rsp)
     cmpq    $API_OP_GET_EPOCH_COMMITTEES, ApiRoute_op(%rsi)   # getEpochCommittees: its epoch, else 400 and no stream
-    jne     6f
+    jne     34f
     mov     %rsi, %rdi
     mov     %rcx, %rsi
     call    node_api_committees_check
     mov     %rax, (L + 24)(%rsp)
     cmp     $-1, %rax
     jne     6f
+    jmp     331f
+34: mov     ApiRoute_op(%rsi), %rax         # the pending lists: 400 for a state before electra, and no stream
+    sub     $API_OP_GET_PENDING_CONSOLIDATIONS, %rax
+    cmp     $2, %rax
+    ja      6f
+    mov     ApiView_head_slot(%rcx), %rdi
+    lea     Node_config(%rbx), %rsi
+    call    node_fork
+    mov     S7(%rsp), %rsi
     mov     S8(%rsp), %rcx
+    cmp     $FORK_ELECTRA, %rax
+    jae     6f
+331: mov    S8(%rsp), %rcx
     cmpq    $0, ApiView_look_copy(%rcx)
     je      33f
     mov     $NODE_ACT_STATE_FREE, %edi
@@ -4443,7 +4566,11 @@ LOCAL_FUNCTION api_stream_head
     cmpq    $API_OP_GET_POOL_ATTESTER_SLASHINGS_V2, NodeApi_op(%rbx)
     je      21f
     cmpq    $API_OP_GET_POOL_ATTESTATIONS_V2, NodeApi_op(%rbx)
-    jne     22f
+    je      21f
+    mov     NodeApi_op(%rbx), %rax          # and of the pending lists
+    sub     $API_OP_GET_PENDING_CONSOLIDATIONS, %rax
+    cmp     $2, %rax
+    ja      22f
 21: API_LIT api_version
     mov     NodeApi_fork(%rbx), %rdi
     call    api_fork_name
@@ -4506,7 +4633,13 @@ LOCAL_FUNCTION api_stream_json
     jne     3f
 4:  call    api_pool_json
     UNFRAME 0
-3:  cmpq    $API_OP_GET_BLOCK_V2, NodeApi_op(%rbx)  # the validator streams: their items, of the state rdi
+3:  mov     NodeApi_op(%rbx), %rax          # the pending streams: their items, of the state rdi
+    sub     $API_OP_GET_PENDING_CONSOLIDATIONS, %rax
+    cmp     $2, %rax
+    ja      31f
+    call    api_pending_json
+    UNFRAME 0
+31: cmpq    $API_OP_GET_BLOCK_V2, NodeApi_op(%rbx)  # the validator streams: their items, of the state rdi
     je      1f
     cmpq    $API_OP_GET_STATE_V2, NodeApi_op(%rbx)
     je      1f
@@ -4588,7 +4721,15 @@ LOCAL_FUNCTION node_api_chunk_run
     je      103f
     cmp     $API_OP_GET_POOL_BLS_TO_EXECUTION_CHANGES, %rax
     je      103f
-    cmp     $API_OP_GET_STATE_VALIDATOR, %rax       # a validator stream: a state
+    mov     $4, %ecx                        # a pending stream (4): a state
+    mov     %rax, %r8
+    sub     $API_OP_GET_PENDING_CONSOLIDATIONS, %r8
+    cmp     $2, %r8
+    ja      104f
+    cmpq    $0, (L + 48)(%rsp)
+    je      98f
+    jmp     103f
+104: cmp    $API_OP_GET_STATE_VALIDATOR, %rax       # a validator stream: a state
     je      98f
     sub     $API_OP_GET_STATE_VALIDATORS, %rax
     cmp     $(API_OP_GET_EPOCH_COMMITTEES - API_OP_GET_STATE_VALIDATORS), %rax
@@ -4665,6 +4806,8 @@ LOCAL_FUNCTION node_api_chunk_run
     je      6f
     cmpq    $3, (L + 56)(%rsp)
     je      67f
+    cmpq    $4, (L + 56)(%rsp)
+    je      68f
     mov     (L + 64)(%rsp), %rdi
     mov     (L + 48)(%rsp), %rsi
     cmpq    $2, (L + 56)(%rsp)
@@ -4674,6 +4817,23 @@ LOCAL_FUNCTION node_api_chunk_run
     test    %rax, %rax
     jnz     97f
     jmp     66f
+68: mov     NodeApi_op(%rbx), %rax          # a pending stream: its items; for SSZ their bytes and their count
+    lea     -API_OP_GET_PENDING_DEPOSITS(%rax), %rsi
+    mov     $2, %ecx
+    cmp     $API_OP_GET_PENDING_CONSOLIDATIONS, %rax
+    cmove   %rcx, %rsi
+    mov     (L + 48)(%rsp), %rdi
+    lea     (L + 8)(%rsp), %rdx
+    mov     NodeApi_fork(%rbx), %r10
+    FORK_CALL node_pending
+    test    %rax, %rax
+    jnz     96f
+    mov     (L + 16)(%rsp), %rax
+    imul    (L + 24)(%rsp), %rax
+    mov     %rax, (L + 16)(%rsp)
+    mov     (L + 48)(%rsp), %rax            # the state is what api_stream_json reads
+    mov     %rax, (L + 40)(%rsp)
+    jmp     6f
 63: mov     (L + 72)(%rsp), %rdx
     call    node_api_committees_prep
     cmp     $400, %rax
@@ -4722,9 +4882,11 @@ LOCAL_FUNCTION node_api_chunk_run
 6:  mov     (NodeEvent_api + 8)(%rbp), %rax
     test    $API_STREAM_SSZ, %eax
     jz      30f
+    cmpq    $4, (L + 56)(%rsp)              # a pending stream: its SSZ bytes as getStateV2's
+    je      601f
     cmpq    $0, (L + 56)(%rsp)
     jne     60f
-    test    $API_STREAM_STARTED, %eax
+601: test   $API_STREAM_STARTED, %eax
     jnz     11f
     mov     (L + 16)(%rsp), %rdi            # SSZ: the head first, with Content-Length
     call    api_stream_head
@@ -4768,6 +4930,8 @@ LOCAL_FUNCTION node_api_chunk_run
     sub     $7, %r14                        # room for CRLF and the last chunk
     cmpq    $0, (L + 56)(%rsp)
     je      35f
+    cmpq    $4, (L + 56)(%rsp)
+    je      392f
     cmpq    $3, (L + 56)(%rsp)
     jne     38f
     cmpq    $API_OP_GET_POOL_ATTESTER_SLASHINGS_V2, NodeApi_op(%rbx)   # a pool stream: {"data":[, the V2 GETs {"version":"<fork>","data":[
@@ -4783,6 +4947,22 @@ LOCAL_FUNCTION node_api_chunk_run
     jmp     36f
     /* the validator streams: {"execution_optimistic":…,"finalized":…,"data":[ */
 38: API_LIT api_v_open
+    mov     (NodeEvent_api + 8)(%rbp), %rdi
+    shr     $8, %rdi
+    and     $1, %edi
+    call    api_bool
+    API_LIT api_x_finalized
+    mov     (NodeEvent_api + 8)(%rbp), %rdi
+    shr     $9, %rdi
+    and     $1, %edi
+    call    api_bool
+    API_LIT api_v_list
+    jmp     36f
+    /* the pending streams: {"version":"<fork>","execution_optimistic":…,"finalized":…,"data":[ */
+392: API_LIT api_j_version
+    mov     NodeApi_fork(%rbx), %rdi
+    call    api_fork_name
+    API_LIT api_j_optimistic
     mov     (NodeEvent_api + 8)(%rbp), %rdi
     shr     $8, %rdi
     and     $1, %edi

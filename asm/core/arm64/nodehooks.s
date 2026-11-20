@@ -1373,6 +1373,42 @@ SPEC_FUNCTION node_sync_committee
 SPEC_END node_sync_committee
 
 /*
+ * (state, kind, out) -> status: the address of the first item, the count and the bytes of an item
+ * of the state's pending_deposits (kind 0), pending_partial_withdrawals (1) or
+ * pending_consolidations (2); before electra LANTERN_NO_STATE_ANSWER (node.md, lantern_node_pending).
+ */
+SPEC_FUNCTION node_pending
+    FRAME 0
+.if FORK >= FORK_ELECTRA
+    cmp     x1, #1
+    b.eq    1f
+    b.hi    2f
+    PART    x9, x10, x0, BeaconState_pending_deposits
+    mov     x11, #PendingDeposit__mem
+    b       5f
+1:  PART    x9, x10, x0, BeaconState_pending_partial_withdrawals
+    mov     x11, #PendingPartialWithdrawal__mem
+    b       5f
+2:  cmp     x1, #2
+    b.ne    8f
+    PART    x9, x10, x0, BeaconState_pending_consolidations
+    mov     x11, #PendingConsolidation__mem
+5:  stp     x9, x10, [x2]
+    str     x11, [x2, #16]
+    mov     x0, #LANTERN_OK
+    UNFRAME 0
+8:
+.endif
+    mov     x0, #LANTERN_NO_STATE_ANSWER
+    UNFRAME 0
+SPEC_END node_pending
+.if FORK >= FORK_ELECTRA
+.if PendingDeposit__mem != 192 || PendingPartialWithdrawal__mem != 24 || PendingConsolidation__mem != 16
+.error "lantern_node_pending: an item is its SSZ encoding"
+.endif
+.endif
+
+/*
  * (state, out) -> status: the state's proposer_lookahead, (MIN_SEED_LOOKAHEAD + 1) *
  * SLOTS_PER_EPOCH u64; before fulu LANTERN_NO_STATE_ANSWER (node.md, lantern_node_proposer_lookahead).
  */
