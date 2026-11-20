@@ -694,6 +694,9 @@ LOCAL_FUNCTION node_type_of_kind
     ADDRESS a0, lantern_type_SyncCommitteeMessage
     li      t1, NODE_JSON_SYNC_COMMITTEE_MESSAGE
     beq     t0, t1, 9f
+    ADDRESS a0, lantern_type_SyncCommitteeContribution
+    li      t1, NODE_JSON_SYNC_CONTRIBUTION
+    beq     t0, t1, 9f
 .endif
 .if FORK >= FORK_BELLATRIX
     ADDRESS a0, lantern_type_SignedBlindedBeaconBlock

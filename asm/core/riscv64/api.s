@@ -2841,6 +2841,8 @@ LOCAL_FUNCTION node_api_event
     beq     a3, t0, 68f
     li      t0, API_OP_GET_AGGREGATED_ATTESTATION_V2
     beq     a3, t0, 68f
+    li      t0, API_OP_PRODUCE_SYNC_COMMITTEE_CONTRIBUTION
+    beq     a3, t0, 68f
     mv      a0, a3
     call    node_submit_topic
     bnez    a0, 60f
@@ -5310,7 +5312,12 @@ LOCAL_FUNCTION node_api_chunk_done
     bnez    t0, 14f                         # the Attestation's bytes
     ld      t0, (NodeApi_cursor + 32)(s4)   # the fold's end: optimistic for a NOT_VALIDATED block
     beqz    t0, 12f
-    addi    a0, s4, (NodeApi_cursor + 48 + 16)
+    addi    a0, s4, (NodeApi_cursor + 48 + 16)  # the aggregate's data.beacon_block_root, a contribution's at byte 0
+    ld      t0, NodeApi_op(s4)
+    li      t1, API_OP_PRODUCE_SYNC_COMMITTEE_CONTRIBUTION
+    bne     t0, t1, 15f
+    addi    a0, s4, NodeApi_cursor
+15:
     call    node_store_find
     li      t0, -1
     beq     a0, t0, 12f
@@ -5532,6 +5539,8 @@ LOCAL_FUNCTION api_stream_json
     beq     t0, t1, 1f
     li      t1, API_OP_GET_AGGREGATED_ATTESTATION_V2
     beq     t0, t1, 1f
+    li      t1, API_OP_PRODUCE_SYNC_COMMITTEE_CONTRIBUTION
+    beq     t0, t1, 1f
     li      t1, API_OP_GET_BLOCK_ATTESTATIONS_V2
     beq     t0, t1, 1f
     li      t1, API_OP_GET_BLINDED_BLOCK
@@ -5565,7 +5574,10 @@ LOCAL_FUNCTION api_stream_json
 122: li     t2, API_OP_GET_AGGREGATED_ATTESTATION_V2
     bne     t1, t2, 123f
     li      a0, NODE_JSON_ATTESTATION
-123:
+123: li     t2, API_OP_PRODUCE_SYNC_COMMITTEE_CONTRIBUTION
+    bne     t1, t2, 124f
+    li      a0, NODE_JSON_SYNC_CONTRIBUTION
+124:
     mv      a1, s3
     addi    a2, s5, (NodeEvent_api + 16)
     addi    a3, s5, NodeEvent_api_bytes
@@ -5630,8 +5642,10 @@ LOCAL_FUNCTION node_api_chunk_run
     beq     t0, t1, 103f
     li      t1, API_OP_GET_POOL_BLS_TO_EXECUTION_CHANGES
     beq     t0, t1, 103f
-    li      t2, 7                           # getAggregatedAttestationV2 (7): its fold, then its answer
+    li      t2, 7                           # getAggregatedAttestationV2 and produceSyncCommitteeContribution (7): their fold, then their answer
     li      t1, API_OP_GET_AGGREGATED_ATTESTATION_V2
+    beq     t0, t1, 103f
+    li      t1, API_OP_PRODUCE_SYNC_COMMITTEE_CONTRIBUTION
     beq     t0, t1, 103f
     li      t2, 6                           # a sidecar stream (6): data 0 at its end
     li      t1, API_OP_GET_BLOB_SIDECARS
@@ -5929,8 +5943,14 @@ LOCAL_FUNCTION node_api_chunk_run
     beqz    s3, 71f
     ld      a0, (L + 56)(sp)                # a fold of the entry: no bytes
     mv      a1, s3
+    ld      t0, NodeApi_op(s4)
+    li      t1, API_OP_PRODUCE_SYNC_COMMITTEE_CONTRIBUTION
+    beq     t0, t1, 74f
     call    node_api_fold
-    li      t0, 1
+    j       75f
+74: ld      a2, (L + 48)(sp)
+    call    node_api_sync_fold
+75: li      t0, 1
     beq     a0, t0, 96f
     bgtu    a0, t0, 97f
     ld      t0, (NodeEvent_api + 8)(s5)
@@ -5945,8 +5965,13 @@ LOCAL_FUNCTION node_api_chunk_run
     andi    t2, t0, API_STREAM_OPTIMISTIC
     bnez    t2, 72f
     mv      a0, s6
+    ld      t0, NodeApi_op(s4)
+    li      t1, API_OP_PRODUCE_SYNC_COMMITTEE_CONTRIBUTION
+    beq     t0, t1, 76f
     call    node_api_aggregate
-    bnez    a0, 96f
+    j       77f
+76: call    node_api_contribution
+77: bnez    a0, 96f
     add     s6, s6, a1
     j       80f
 72: sd      t1, (L + 32)(sp)
@@ -6047,7 +6072,13 @@ LOCAL_FUNCTION node_api_chunk_run
     beq     t0, t1, 392f
     li      t1, 7                           # getAggregatedAttestationV2: {"version":"<fork>","data":
     bne     t0, t1, 394f
-    API_LIT api_j_version
+    ld      t1, NodeApi_op(s4)
+    li      t2, API_OP_PRODUCE_SYNC_COMMITTEE_CONTRIBUTION
+    bne     t1, t2, 395f
+    # produceSyncCommitteeContribution: {"data":
+    API_LIT api_pe_data
+    j       36f
+395: API_LIT api_j_version
     ld      a0, NodeApi_fork(s4)
     call    api_fork_name
     API_LIT api_g_data
@@ -6404,6 +6435,9 @@ LOCAL_FUNCTION node_pool_next
     beq     t5, t1, 1f
     li      t1, API_OP_GET_AGGREGATED_ATTESTATION_V2
     beq     t5, t1, 1f
+    li      t0, GOSSIP_SYNC_COMMITTEE
+    li      t1, API_OP_PRODUCE_SYNC_COMMITTEE_CONTRIBUTION
+    beq     t5, t1, 1f
     li      t0, GOSSIP_BLS_TO_EXECUTION_CHANGE
 1:  ld      t5, NodeApi_filter_slot(a1)
     ld      t6, NodeApi_filter_index(a1)
@@ -6420,6 +6454,8 @@ LOCAL_FUNCTION node_pool_next
     bne     t3, t0, 3f
     li      t3, GOSSIP_ATTESTER_SLASHING
     beq     t0, t3, 21f
+    li      t3, GOSSIP_SYNC_COMMITTEE
+    beq     t0, t3, 22f
     li      t3, GOSSIP_BEACON_ATTESTATION
     bne     t0, t3, 4f
     li      a7, -1                          # an attestation: of the filters
@@ -6437,6 +6473,12 @@ LOCAL_FUNCTION node_pool_next
 3:  addi    t1, t1, NodePool__mem
     addi    a0, a0, 1
     j       2b
+22: ld      t3, NodePool_slot(t1)           # a sync message: of the slot, valid on the subnet
+    bne     t3, t5, 3b
+    ld      t3, NodePool_index(t1)
+    srl     t3, t3, t6
+    andi    t3, t3, 1
+    beqz    t3, 3b
 4:  mv      a1, t1
     ret
 8:  li      a0, -1
@@ -6476,6 +6518,8 @@ LOCAL_FUNCTION node_api_pool_stream
     li      t3, -1
     li      t4, API_OP_GET_POOL_ATTESTATIONS_V2
     beq     a1, t4, 4f
+    li      t4, API_OP_PRODUCE_SYNC_COMMITTEE_CONTRIBUTION
+    beq     a1, t4, 23f
     li      t4, API_OP_GET_AGGREGATED_ATTESTATION_V2
     bne     a1, t4, 2f
     ld      t1, 8(sp)                       # getAggregatedAttestationV2: a fold, SSZ, attestation_data_root in cursor
@@ -6524,12 +6568,50 @@ LOCAL_FUNCTION node_api_pool_stream
     call    node_api_chunk_work
     li      a0, 0
     UNFRAME 48
-1:  ld      t1, NodeApi_op(t0)              # none: getAggregatedAttestationV2 404, and no stream
+1:  ld      t1, NodeApi_op(t0)              # none: the folds 404, and no stream
     li      t2, API_OP_GET_AGGREGATED_ATTESTATION_V2
+    beq     t1, t2, 7f
+    li      t2, API_OP_PRODUCE_SYNC_COMMITTEE_CONTRIBUTION
     bne     t1, t2, 6b
-    mv      a0, t0
+7:  mv      a0, t0
     call    node_api_end
     li      a0, 404
+    UNFRAME 48
+23: ld      t1, 8(sp)                       # produceSyncCommitteeContribution: a fold of slot and subcommittee_index,
+    ld      t3, ApiRoute_subcommittee_index(t1)     # beacon_block_root in cursor, the head's post-state; 400, 500
+    li      t4, SYNC_COMMITTEE_SUBNET_COUNT
+    bgeu    t3, t4, 25f
+    ld      t4, NodeApi_flags(t0)
+    li      t5, API_STREAM_FOLD
+    or      t4, t4, t5
+    sd      t4, NodeApi_flags(t0)
+    ld      t4, ApiRoute_root(t1)
+    sd      t4, NodeApi_cursor(t0)
+    ld      t4, (ApiRoute_root + 8)(t1)
+    sd      t4, (NodeApi_cursor + 8)(t0)
+    ld      t4, (ApiRoute_root + 16)(t1)
+    sd      t4, (NodeApi_cursor + 16)(t0)
+    ld      t4, (ApiRoute_root + 24)(t1)
+    sd      t4, (NodeApi_cursor + 24)(t0)
+    addi    a0, s1, Node_head_root
+    call    node_find_block
+    li      t0, -1
+    beq     a0, t0, 26f
+    ld      t1, NodeBlock_state_id(a1)
+    beqz    t1, 26f
+    ld      t0, 40(sp)
+    sd      t1, NodeApi_state(t0)
+    ld      t1, 8(sp)
+    ld      t2, ApiRoute_slot(t1)
+    ld      t3, ApiRoute_subcommittee_index(t1)
+    j       2b
+25: ld      a0, 40(sp)
+    call    node_api_end
+    li      a0, 400
+    UNFRAME 48
+26: ld      a0, 40(sp)
+    call    node_api_end
+    li      a0, 500
     UNFRAME 48
 END_FUNCTION node_api_pool_stream
 
@@ -7180,6 +7262,166 @@ END_FUNCTION node_api_fold
 .if MAX_VALIDATORS_PER_COMMITTEE > 2048 || 48 + 128 + 96 + 2048 / 8 > JSON_CURSOR_SIZE
 .error "node_api_fold: the aggregate's bits fit the cursor from byte 272"
 .endif
+
+.set API_SYNC_SUBCOMMITTEE_SIZE, SYNC_COMMITTEE_SIZE / SYNC_COMMITTEE_SUBNET_COUNT
+
+/*
+ * (scratch a0, data a1, state a2) -> a0: the pool entry's bytes data, a SyncCommitteeMessage,
+ * folded into the contribution in the cursor at NodeEvent_api + 16 of the event s5 (node.md,
+ * produceSyncCommitteeContribution), s4 the entry, state the head's post-state: with the
+ * beacon_block_root at byte 0, and none of its places in the subcommittee filter_index
+ * (lantern_node_sync_positions of the fork `fork`) set in the bits at byte 144, each of them is
+ * set and its signature added at byte 48 once for each (crypto_bls_aggregate); byte 32 counts
+ * them. a0 = 0; 1 for bytes of another size, no state, or a signature crypto_bls_aggregate
+ * rejects; 2 for a short scratch. Locals: scratch, the state, the bytes, the places
+ * (SYNC_COMMITTEE_SIZE / 8 bytes), the subcommittee's places, the place, the list.
+ */
+LOCAL_FUNCTION node_api_sync_fold
+    FRAME 128
+    sd      a0, 0(sp)
+    ld      t0, 16(a1)
+    li      t1, 144
+    bne     t0, t1, 71f
+    beqz    a2, 71f
+    sd      a2, 8(sp)
+    ld      t0, 8(a1)
+    add     t0, a1, t0
+    sd      t0, 16(sp)
+    addi    t1, t0, 8                       # its beacon_block_root: the contribution's, else not in it
+    addi    t2, s5, (NodeEvent_api + 16)
+    NE32W   t1, t2, 70f
+    ld      a0, 8(sp)                       # its places
+    ld      t0, 16(sp)
+    ld      a1, 40(t0)
+    addi    a2, sp, 32
+    ld      t6, NodeApi_fork(s4)
+    FORK_CALL node_sync_positions
+    bnez    a0, 71f
+    ld      t0, NodeApi_filter_index(s4)    # those of the subcommittee: none taken, one at least
+    li      t1, API_SYNC_SUBCOMMITTEE_SIZE / 8
+    mul     t0, t0, t1
+    addi    t0, t0, 32
+    add     t0, sp, t0
+    sd      t0, 96(sp)
+    addi    t2, s5, (NodeEvent_api + 16 + 144)
+    li      t1, 0
+    li      t3, 0
+1:  li      t4, API_SYNC_SUBCOMMITTEE_SIZE / 8
+    bgeu    t1, t4, 2f
+    add     t4, t0, t1
+    lbu     t4, 0(t4)
+    add     t5, t2, t1
+    lbu     t5, 0(t5)
+    and     t5, t4, t5
+    bnez    t5, 70f
+    or      t3, t3, t4
+    addi    t1, t1, 1
+    j       1b
+2:  beqz    t3, 70f
+    sd      zero, 104(sp)
+3:  ld      t1, 104(sp)                     # each place: its bit, its signature once more
+    li      t0, API_SYNC_SUBCOMMITTEE_SIZE
+    bgeu    t1, t0, 70f
+    ld      t0, 96(sp)
+    srli    t2, t1, 3
+    add     t2, t0, t2
+    lbu     t2, 0(t2)
+    andi    t3, t1, 7
+    srl     t2, t2, t3
+    andi    t2, t2, 1
+    beqz    t2, 6f
+    srli    t2, t1, 3
+    add     t2, s5, t2
+    lbu     t4, (NodeEvent_api + 16 + 144)(t2)
+    li      t5, 1
+    sll     t5, t5, t3
+    or      t4, t4, t5
+    sb      t4, (NodeEvent_api + 16 + 144)(t2)
+    ld      t0, (NodeEvent_api + 16 + 32)(s5)
+    bnez    t0, 4f
+    addi    a0, s5, (NodeEvent_api + 16 + 48)  # the first: its signature
+    ld      a1, 16(sp)
+    addi    a1, a1, 48
+    li      a2, 96
+    call    lantern_copy
+    j       5f
+4:  ld      a0, 0(sp)                       # else the two signatures: a BlsSignatureList at the end of scratch
+    ld      t0, 0(a0)
+    li      t1, 24 + 2 * 96 + 8
+    bltu    t0, t1, 72f
+    addi    t0, t0, -(24 + 2 * 96)
+    andi    t0, t0, -8
+    add     t0, a0, t0
+    sd      t0, 112(sp)
+    li      t1, 24 + 2 * 96
+    sd      t1, 0(t0)
+    li      t1, 24
+    sd      t1, 8(t0)
+    li      t1, 2
+    sd      t1, 16(t0)
+    addi    a0, t0, 24
+    addi    a1, s5, (NodeEvent_api + 16 + 48)
+    li      a2, 96
+    call    lantern_copy
+    ld      a0, 112(sp)
+    addi    a0, a0, 24 + 96
+    ld      a1, 16(sp)
+    addi    a1, a1, 48
+    li      a2, 96
+    call    lantern_copy
+    ld      a0, 112(sp)
+    addi    a1, s5, (NodeEvent_api + 16 + 48)
+    CALL_GLOBAL crypto_bls_aggregate
+    bnez    a0, 71f
+5:  ld      t0, (NodeEvent_api + 16 + 32)(s5)
+    addi    t0, t0, 1
+    sd      t0, (NodeEvent_api + 16 + 32)(s5)
+6:  ld      t1, 104(sp)
+    addi    t1, t1, 1
+    sd      t1, 104(sp)
+    j       3b
+70: li      a0, 0
+    UNFRAME 128
+71: li      a0, 1
+    UNFRAME 128
+72: li      a0, 2
+    UNFRAME 128
+END_FUNCTION node_api_sync_fold
+.if SYNC_COMMITTEE_SIZE / 8 > 64 || API_SYNC_SUBCOMMITTEE_SIZE % 8 || 144 + API_SYNC_SUBCOMMITTEE_SIZE / 8 > JSON_CURSOR_SIZE
+.error "node_api_sync_fold: the places fit its locals, a subcommittee's places are whole bytes"
+.endif
+
+/*
+ * (out a0) -> a0: the contribution in the cursor at NodeEvent_api + 16 of the event s5 as the SSZ
+ * bytes of a SyncCommitteeContribution at out, a1 their count (node.md,
+ * produceSyncCommitteeContribution): slot filter_slot, the beacon_block_root, subcommittee_index
+ * filter_index of the entry s4, the bits, the signature. a0 = 0. Locals: out.
+ */
+LOCAL_FUNCTION node_api_contribution
+    FRAME 16
+    sd      a0, 0(sp)
+    ld      t0, NodeApi_filter_slot(s4)
+    sd      t0, 0(a0)
+    addi    a0, a0, 8
+    addi    a1, s5, (NodeEvent_api + 16)
+    li      a2, 32
+    call    lantern_copy
+    ld      a0, 0(sp)
+    ld      t0, NodeApi_filter_index(s4)
+    sd      t0, 40(a0)
+    addi    a0, a0, 48
+    addi    a1, s5, (NodeEvent_api + 16 + 144)
+    li      a2, API_SYNC_SUBCOMMITTEE_SIZE / 8
+    call    lantern_copy
+    ld      a0, 0(sp)
+    addi    a0, a0, 48 + API_SYNC_SUBCOMMITTEE_SIZE / 8
+    addi    a1, s5, (NodeEvent_api + 16 + 48)
+    li      a2, 96
+    call    lantern_copy
+    li      a1, 48 + API_SYNC_SUBCOMMITTEE_SIZE / 8 + 96
+    li      a0, 0
+    UNFRAME 16
+END_FUNCTION node_api_contribution
 
 /*
  * (out a0) -> a0: the aggregate in the cursor at NodeEvent_api + 16 of the event s5 as the SSZ

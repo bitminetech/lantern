@@ -1371,6 +1371,49 @@ def pool_requests(spec, fork, v, by_name, add):
                single=False)
         if r1 != ("bad", [0]) or r2 != ("bad", [0]) or len(pool["sync"]) != 3:
             raise RuntimeError("sync POSTs: the cases need three valid messages and two rejected")
+
+        # produceSyncCommitteeContribution: the pool's messages of the slot and root in the subcommittee
+        # of the first message's first subnet, each place once, a signature per place (altair
+        # validator.md); another root, a slot of none (404); NOT_VALIDATED nodes (503); a
+        # subcommittee index past SYNC_COMMITTEE_SUBNET_COUNT (400)
+        sub_size = int(spec.SYNC_COMMITTEE_SIZE) // int(spec.SYNC_COMMITTEE_SUBNET_COUNT)
+        same_period = spec.compute_sync_committee_period(spec.get_current_epoch(hs)) == \
+            spec.compute_sync_committee_period(spec.compute_epoch_at_slot(hs.slot + 1))
+        committee = hs.current_sync_committee if same_period else hs.next_sync_committee
+        sc = min(spec.compute_subnets_for_sync_committee(hs, members[0]))
+        cbits = spec.SyncCommitteeContribution().aggregation_bits
+        csigs = []
+        for m in pool["sync"]:
+            if m.slot != msg_slot or bytes(m.beacon_block_root) != bytes(v["root"]):
+                continue
+            key = bytes(hs.validators[m.validator_index].pubkey)
+            places = [p - sc * sub_size for p, k in enumerate(committee.pubkeys)
+                      if bytes(k) == key and p // sub_size == sc]
+            if not places or any(cbits[p] for p in places):
+                continue
+            for p in places:
+                cbits[p] = True
+                csigs.append(m.signature)
+        contribution = spec.SyncCommitteeContribution(slot=msg_slot, beacon_block_root=v["root"],
+                                                      subcommittee_index=sc, aggregation_bits=cbits,
+                                                      signature=bls.Aggregate(csigs))
+        contrib_op = by_name["produceSyncCommitteeContribution"]
+        contrib_body = b'{"data":' + to_json(contribution).encode() + b"}"
+
+        def contrib_request(slot, index, root):
+            query = b"slot=%d&subcommittee_index=%d&beacon_block_root=0x" % (slot, index) + bytes(root).hex().encode()
+            return api_route.request(contrib_op["method"], api_route.fill(contrib_op), query)
+        for http in (b"HTTP/1.1", b"HTTP/1.0"):
+            add(f"contribution_{http.decode()[5:]}", contrib_request(msg_slot, sc, v["root"]), version=http,
+                want=lambda c, k: streamed(None, contrib_body, close=c, keep_alive=k))
+        add("contribution_other_root", contrib_request(msg_slot, sc, b"\x07" * 32),
+            want=lambda c, k: error(404, close=c, keep_alive=k))
+        add("contribution_other_slot", contrib_request(msg_slot + 1, sc, v["root"]),
+            want=lambda c, k: error(404, close=c, keep_alive=k))
+        add("contribution_not_validated", contrib_request(msg_slot, sc, v["root"]), syncing=2,
+            want=lambda c, k: error(503, close=c, keep_alive=k))
+        add("contribution_subcommittee_past", contrib_request(msg_slot, int(spec.SYNC_COMMITTEE_SUBNET_COUNT), v["root"]),
+            want=lambda c, k: error(400, close=c, keep_alive=k))
     # with the store's nodes NOT_VALIDATED (syncing bit 1): the aggregate's beacon_block_root, 503
     add("aggregate_not_validated", agg_request(data_root, first_slot, first_index), syncing=2,
         want=lambda c, k: error(503, close=c, keep_alive=k))
@@ -1409,7 +1452,7 @@ def api_requests(spec, fork, v, kind="main"):
                 want = streamed(pool_version, body, close=close, keep_alive=keep_alive)
             elif opname in POOL_POSTS and not req["body"]:  # a body of no operation
                 want = error(400, close=close, keep_alive=keep_alive)
-            elif opname == "getAggregatedAttestationV2":  # an empty pool: none
+            elif opname in ("getAggregatedAttestationV2", "produceSyncCommitteeContribution"):  # an empty pool: none
                 want = error(404, close=close, keep_alive=keep_alive)
             elif opname in ANSWERED:
                 want = answer(v, opname, route, offline, close, keep_alive, syncing)

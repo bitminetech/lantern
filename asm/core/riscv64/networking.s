@@ -1736,6 +1736,48 @@ SPEC_LEAF node_sync_subnets
     ret
 SPEC_END node_sync_subnets
 
+/*
+ * (state a0, validator_index a1, out a2) -> a0: the places of the validator's public key in the
+ * sync committee that compute_subnets_for_sync_committee reads (altair validator.md): bit p of
+ * the SYNC_COMMITTEE_SIZE / 8 bytes at out for place p; none for an index past the validators,
+ * and before altair.
+ */
+SPEC_LEAF node_sync_positions
+    li      t0, 0
+1:  li      t1, SYNC_COMMITTEE_SIZE / 8
+    bgeu    t0, t1, 2f
+    add     t1, a2, t0
+    sb      zero, 0(t1)
+    addi    t0, t0, 1
+    j       1b
+2:
+.if FORK >= FORK_ALTAIR
+    SYNC_COMMITTEE_OF t5, a0
+    addi    t5, t5, SyncCommittee_pubkeys
+    VALIDATOR_AT t6, a0, a1, 9f
+    addi    t6, t6, Validator_pubkey
+    li      a4, 0
+3:  li      t0, SYNC_COMMITTEE_SIZE
+    bgeu    a4, t0, 9f
+    li      t0, 48
+    mul     t0, a4, t0
+    add     t0, t5, t0
+    NE48W   t0, t6, 4f
+    srli    t0, a4, 3
+    add     t0, a2, t0
+    lbu     t1, 0(t0)
+    andi    t2, a4, 7
+    li      t3, 1
+    sll     t3, t3, t2
+    or      t1, t1, t3
+    sb      t1, 0(t0)
+4:  addi    a4, a4, 1
+    j       3b
+.endif
+9:  li      a0, LANTERN_OK
+    ret
+SPEC_END node_sync_positions
+
 /* ---------------------------------------------------------------- Gossip: attester slashings */
 
 /*

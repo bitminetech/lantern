@@ -2726,6 +2726,8 @@ LOCAL_FUNCTION node_api_event
     je      68f
     cmp     $API_OP_GET_AGGREGATED_ATTESTATION_V2, %rcx
     je      68f
+    cmp     $API_OP_PRODUCE_SYNC_COMMITTEE_CONTRIBUTION, %rcx
+    je      68f
     mov     %rcx, %rdi
     call    node_submit_topic
     test    %rax, %rax
@@ -5300,8 +5302,11 @@ LOCAL_FUNCTION node_api_chunk_done
     jne     14f                             # the Attestation's bytes
     cmpq    $0, (NodeApi_cursor + 32)(%r13) # the fold's end: optimistic for a NOT_VALIDATED block
     je      12f
-    lea     (NodeApi_cursor + 48 + 16)(%r13), %rdi
-    call    node_store_find
+    lea     (NodeApi_cursor + 48 + 16)(%r13), %rdi  # the aggregate's data.beacon_block_root, a contribution's at byte 0
+    cmpq    $API_OP_PRODUCE_SYNC_COMMITTEE_CONTRIBUTION, NodeApi_op(%r13)
+    jne     15f
+    lea     NodeApi_cursor(%r13), %rdi
+15: call    node_store_find
     cmp     $-1, %rax
     je      12f
     cmpq    $PAYLOAD_STATUS_NOT_VALIDATED, BlockNode_payload_status(%rdx)
@@ -5509,6 +5514,8 @@ LOCAL_FUNCTION api_stream_json
     je      1f
     cmpq    $API_OP_GET_AGGREGATED_ATTESTATION_V2, NodeApi_op(%rbx)
     je      1f
+    cmpq    $API_OP_PRODUCE_SYNC_COMMITTEE_CONTRIBUTION, NodeApi_op(%rbx)
+    je      1f
     cmpq    $API_OP_GET_BLOCK_ATTESTATIONS_V2, NodeApi_op(%rbx)
     je      1f
     cmpq    $API_OP_GET_BLINDED_BLOCK, NodeApi_op(%rbx)
@@ -5543,7 +5550,10 @@ LOCAL_FUNCTION api_stream_json
 122: cmpq   $API_OP_GET_AGGREGATED_ATTESTATION_V2, NodeApi_op(%rbx)
     jne     123f
     mov     $NODE_JSON_ATTESTATION, %edi
-123:
+123: cmpq   $API_OP_PRODUCE_SYNC_COMMITTEE_CONTRIBUTION, NodeApi_op(%rbx)
+    jne     124f
+    mov     $NODE_JSON_SYNC_CONTRIBUTION, %edi
+124:
     lea     (NodeEvent_api + 16)(%rbp), %rdx
     lea     NodeEvent_api_bytes(%rbp), %rcx
     mov     NodeApi_fork(%rbx), %r10
@@ -5607,8 +5617,10 @@ LOCAL_FUNCTION node_api_chunk_run
     je      103f
     cmp     $API_OP_GET_POOL_BLS_TO_EXECUTION_CHANGES, %rax
     je      103f
-    mov     $7, %ecx                        # getAggregatedAttestationV2 (7): its fold, then its answer
+    mov     $7, %ecx                        # getAggregatedAttestationV2 and produceSyncCommitteeContribution (7): their fold, then their answer
     cmp     $API_OP_GET_AGGREGATED_ATTESTATION_V2, %rax
+    je      103f
+    cmp     $API_OP_PRODUCE_SYNC_COMMITTEE_CONTRIBUTION, %rax
     je      103f
     mov     $6, %ecx                        # a sidecar stream (6): data 0 at its end
     cmp     $API_OP_GET_BLOB_SIDECARS, %rax
@@ -5911,8 +5923,13 @@ LOCAL_FUNCTION node_api_chunk_run
     test    %rsi, %rsi
     jz      71f
     mov     (L + 64)(%rsp), %rdi            # a fold of the entry: no bytes
+    cmpq    $API_OP_PRODUCE_SYNC_COMMITTEE_CONTRIBUTION, NodeApi_op(%rbx)
+    je      74f
     call    node_api_fold
-    cmp     $1, %rax
+    jmp     75f
+74: mov     (L + 48)(%rsp), %rdx
+    call    node_api_sync_fold
+75: cmp     $1, %rax
     je      96f
     ja      97f
     orq     $API_STREAM_ITEM_DONE, (NodeEvent_api + 8)(%rbp)
@@ -5924,8 +5941,12 @@ LOCAL_FUNCTION node_api_chunk_run
     testq   $API_STREAM_OPTIMISTIC, (NodeEvent_api + 8)(%rbp)
     jnz     72f
     mov     %r12, %rdi
+    cmpq    $API_OP_PRODUCE_SYNC_COMMITTEE_CONTRIBUTION, NodeApi_op(%rbx)
+    je      76f
     call    node_api_aggregate
-    test    %rax, %rax
+    jmp     77f
+76: call    node_api_contribution
+77: test    %rax, %rax
     jnz     96f
     add     %rdx, %r12
     jmp     80f
@@ -6026,7 +6047,12 @@ LOCAL_FUNCTION node_api_chunk_run
     je      392f
     cmpq    $7, (L + 56)(%rsp)              # getAggregatedAttestationV2: {"version":"<fork>","data":
     jne     394f
-    API_LIT api_j_version
+    cmpq    $API_OP_PRODUCE_SYNC_COMMITTEE_CONTRIBUTION, NodeApi_op(%rbx)
+    jne     395f
+    # produceSyncCommitteeContribution: {"data":
+    API_LIT api_pe_data
+    jmp     36f
+395: API_LIT api_j_version
     mov     NodeApi_fork(%rbx), %rdi
     call    api_fork_name
     API_LIT api_g_data
@@ -6368,6 +6394,9 @@ LOCAL_FUNCTION node_pool_next
     je      1f
     cmp     $API_OP_GET_AGGREGATED_ATTESTATION_V2, %rax
     je      1f
+    mov     $GOSSIP_SYNC_COMMITTEE, %ecx
+    cmp     $API_OP_PRODUCE_SYNC_COMMITTEE_CONTRIBUTION, %rax
+    je      1f
     mov     $GOSSIP_BLS_TO_EXECUTION_CHANGE, %ecx
 1:  xor     %r11d, %r11d
     cmpq    $FORK_ELECTRA, NodeApi_fork(%rsi)
@@ -6383,6 +6412,8 @@ LOCAL_FUNCTION node_pool_next
     jne     3f
     cmp     $GOSSIP_ATTESTER_SLASHING, %rcx
     je      21f
+    cmp     $GOSSIP_SYNC_COMMITTEE, %rcx
+    je      22f
     cmp     $GOSSIP_BEACON_ATTESTATION, %rcx
     jne     4f
     cmp     $-1, %r9                        # an attestation: of the filters
@@ -6402,6 +6433,11 @@ LOCAL_FUNCTION node_pool_next
 3:  add     $NodePool__mem, %rdx
     inc     %rax
     jmp     2b
+22: cmp     %r9, NodePool_slot(%rdx)       # a sync message: of the slot, valid on the subnet
+    jne     3b
+    mov     NodeApi_filter_index(%rsi), %r8
+    bt      %r8, NodePool_index(%rdx)
+    jnc     3b
 4:  ret
 8:  mov     $-1, %rax
     ret
@@ -6440,6 +6476,8 @@ LOCAL_FUNCTION node_api_pool_stream
     movq    $-1, NodeApi_filter_index(%rdx)
     cmp     $API_OP_GET_POOL_ATTESTATIONS_V2, %rsi
     je      4f
+    cmp     $API_OP_PRODUCE_SYNC_COMMITTEE_CONTRIBUTION, %rsi
+    je      23f
     cmp     $API_OP_GET_AGGREGATED_ATTESTATION_V2, %rsi
     jne     2f
     mov     8(%rsp), %rax                   # getAggregatedAttestationV2: a fold, SSZ, attestation_data_root in cursor
@@ -6480,11 +6518,43 @@ LOCAL_FUNCTION node_api_pool_stream
     call    node_api_chunk_work
     xor     %eax, %eax
     UNFRAME 48
-1:  cmpq    $API_OP_GET_AGGREGATED_ATTESTATION_V2, NodeApi_op(%rcx)  # none: getAggregatedAttestationV2 404, and no stream
+1:  cmpq    $API_OP_GET_AGGREGATED_ATTESTATION_V2, NodeApi_op(%rcx)  # none: the folds 404, and no stream
+    je      7f
+    cmpq    $API_OP_PRODUCE_SYNC_COMMITTEE_CONTRIBUTION, NodeApi_op(%rcx)
     jne     6b
-    mov     %rcx, %rdi
+7:  mov     %rcx, %rdi
     call    node_api_end
     mov     $404, %eax
+    UNFRAME 48
+23: mov     8(%rsp), %rax                   # produceSyncCommitteeContribution: a fold of slot and subcommittee_index,
+    mov     ApiRoute_subcommittee_index(%rax), %rcx     # beacon_block_root in cursor, the head's post-state; 400, 500
+    cmp     $SYNC_COMMITTEE_SUBNET_COUNT, %rcx
+    jae     25f
+    mov     %rcx, NodeApi_filter_index(%rdx)
+    mov     ApiRoute_slot(%rax), %rcx
+    mov     %rcx, NodeApi_filter_slot(%rdx)
+    orq     $API_STREAM_FOLD, NodeApi_flags(%rdx)
+    movdqu  ApiRoute_root(%rax), %xmm0
+    movdqu  (ApiRoute_root + 16)(%rax), %xmm1
+    movdqu  %xmm0, NodeApi_cursor(%rdx)
+    movdqu  %xmm1, (NodeApi_cursor + 16)(%rdx)
+    lea     Node_head_root(%rbx), %rdi
+    call    node_find_block
+    cmp     $-1, %rax
+    je      26f
+    mov     NodeBlock_state_id(%rdx), %rax
+    test    %rax, %rax
+    jz      26f
+    mov     40(%rsp), %rdx
+    mov     %rax, NodeApi_state(%rdx)
+    jmp     2b
+25: mov     40(%rsp), %rdi
+    call    node_api_end
+    mov     $400, %eax
+    UNFRAME 48
+26: mov     40(%rsp), %rdi
+    call    node_api_end
+    mov     $500, %eax
     UNFRAME 48
 END_FUNCTION node_api_pool_stream
 
@@ -7123,6 +7193,157 @@ END_FUNCTION node_api_fold
 .if MAX_VALIDATORS_PER_COMMITTEE > 2048 || 48 + 128 + 96 + 2048 / 8 > JSON_CURSOR_SIZE
 .error "node_api_fold: the aggregate's bits fit the cursor from byte 272"
 .endif
+
+.set API_SYNC_SUBCOMMITTEE_SIZE, SYNC_COMMITTEE_SIZE / SYNC_COMMITTEE_SUBNET_COUNT
+
+/*
+ * (scratch rdi, data rsi, state rdx) -> rax: the pool entry's bytes data, a SyncCommitteeMessage,
+ * folded into the contribution in the cursor at NodeEvent_api + 16 of the event rbp (node.md,
+ * produceSyncCommitteeContribution), rbx the entry, state the head's post-state: with the
+ * beacon_block_root at byte 0, and none of its places in the subcommittee filter_index
+ * (lantern_node_sync_positions of the fork `fork`) set in the bits at byte 144, each of them is
+ * set and its signature added at byte 48 once for each (crypto_bls_aggregate); byte 32 counts
+ * them. rax = 0; 1 for bytes of another size, no state, or a signature crypto_bls_aggregate
+ * rejects; 2 for a short scratch. Locals: scratch, the state, the bytes, the places
+ * (SYNC_COMMITTEE_SIZE / 8 bytes), the subcommittee's places, the place, the list.
+ */
+LOCAL_FUNCTION node_api_sync_fold
+    FRAME 128
+    mov     %rdi, (%rsp)
+    cmpq    $144, 16(%rsi)
+    jne     71f
+    test    %rdx, %rdx
+    jz      71f
+    mov     %rdx, 8(%rsp)
+    mov     8(%rsi), %rax
+    add     %rsi, %rax
+    mov     %rax, 16(%rsp)
+    lea     8(%rax), %rdi                   # its beacon_block_root: the contribution's, else not in it
+    lea     (NodeEvent_api + 16)(%rbp), %rsi
+    NE32    %rdi, %rsi, 70f
+    mov     8(%rsp), %rdi                   # its places
+    mov     16(%rsp), %rax
+    mov     40(%rax), %rsi
+    lea     32(%rsp), %rdx
+    mov     NodeApi_fork(%rbx), %r10
+    FORK_CALL node_sync_positions
+    test    %rax, %rax
+    jnz     71f
+    mov     NodeApi_filter_index(%rbx), %rax    # those of the subcommittee: none taken, one at least
+    imul    $(API_SYNC_SUBCOMMITTEE_SIZE / 8), %rax, %rax
+    lea     32(%rsp,%rax), %rax
+    mov     %rax, 96(%rsp)
+    xor     %ecx, %ecx
+    xor     %edx, %edx
+1:  cmp     $(API_SYNC_SUBCOMMITTEE_SIZE / 8), %rcx
+    jae     2f
+    movzbl  (%rax,%rcx), %r8d
+    movzbl  (NodeEvent_api + 16 + 144)(%rbp,%rcx), %r9d
+    test    %r8d, %r9d
+    jnz     70f
+    or      %r8d, %edx
+    inc     %rcx
+    jmp     1b
+2:  test    %edx, %edx
+    jz      70f
+    movq    $0, 104(%rsp)
+3:  mov     104(%rsp), %rcx                 # each place: its bit, its signature once more
+    cmp     $API_SYNC_SUBCOMMITTEE_SIZE, %rcx
+    jae     70f
+    mov     96(%rsp), %rax
+    mov     %rcx, %rdx
+    shr     $3, %rdx
+    movzbl  (%rax,%rdx), %eax
+    and     $7, %ecx
+    shr     %cl, %eax
+    test    $1, %al
+    jz      6f
+    mov     104(%rsp), %rcx
+    mov     %rcx, %rdx
+    shr     $3, %rdx
+    and     $7, %ecx
+    mov     $1, %eax
+    shl     %cl, %eax
+    or      %al, (NodeEvent_api + 16 + 144)(%rbp,%rdx)
+    cmpq    $0, (NodeEvent_api + 16 + 32)(%rbp)
+    jne     4f
+    lea     (NodeEvent_api + 16 + 48)(%rbp), %rdi   # the first: its signature
+    mov     16(%rsp), %rsi
+    add     $48, %rsi
+    mov     $96, %edx
+    call    lantern_copy
+    jmp     5f
+4:  mov     (%rsp), %rdi                    # else the two signatures: a BlsSignatureList at the end of scratch
+    mov     (%rdi), %rax
+    cmp     $(24 + 2 * 96 + 8), %rax
+    jb      72f
+    sub     $(24 + 2 * 96), %rax
+    and     $~7, %rax
+    add     %rdi, %rax
+    mov     %rax, 112(%rsp)
+    movq    $(24 + 2 * 96), (%rax)
+    movq    $24, 8(%rax)
+    movq    $2, 16(%rax)
+    lea     24(%rax), %rdi
+    lea     (NodeEvent_api + 16 + 48)(%rbp), %rsi
+    mov     $96, %edx
+    call    lantern_copy
+    mov     112(%rsp), %rdi
+    add     $(24 + 96), %rdi
+    mov     16(%rsp), %rsi
+    add     $48, %rsi
+    mov     $96, %edx
+    call    lantern_copy
+    mov     112(%rsp), %rdi
+    lea     (NodeEvent_api + 16 + 48)(%rbp), %rsi
+    CALL_GLOBAL crypto_bls_aggregate
+    test    %rax, %rax
+    jnz     71f
+5:  incq    (NodeEvent_api + 16 + 32)(%rbp)
+6:  incq    104(%rsp)
+    jmp     3b
+70: xor     %eax, %eax
+    UNFRAME 128
+71: mov     $1, %eax
+    UNFRAME 128
+72: mov     $2, %eax
+    UNFRAME 128
+END_FUNCTION node_api_sync_fold
+.if SYNC_COMMITTEE_SIZE / 8 > 64 || API_SYNC_SUBCOMMITTEE_SIZE % 8 || 144 + API_SYNC_SUBCOMMITTEE_SIZE / 8 > JSON_CURSOR_SIZE
+.error "node_api_sync_fold: the places fit its locals, a subcommittee's places are whole bytes"
+.endif
+
+/*
+ * (out rdi) -> rax: the contribution in the cursor at NodeEvent_api + 16 of the event rbp as the
+ * SSZ bytes of a SyncCommitteeContribution at out, rdx their count (node.md,
+ * produceSyncCommitteeContribution): slot filter_slot, the beacon_block_root, subcommittee_index
+ * filter_index of the entry rbx, the bits, the signature. rax = 0. Locals: out.
+ */
+LOCAL_FUNCTION node_api_contribution
+    FRAME 16
+    mov     %rdi, (%rsp)
+    mov     NodeApi_filter_slot(%rbx), %rax
+    mov     %rax, (%rdi)
+    add     $8, %rdi
+    lea     (NodeEvent_api + 16)(%rbp), %rsi
+    mov     $32, %edx
+    call    lantern_copy
+    mov     (%rsp), %rdi
+    mov     NodeApi_filter_index(%rbx), %rax
+    mov     %rax, 40(%rdi)
+    add     $48, %rdi
+    lea     (NodeEvent_api + 16 + 144)(%rbp), %rsi
+    mov     $(API_SYNC_SUBCOMMITTEE_SIZE / 8), %edx
+    call    lantern_copy
+    mov     (%rsp), %rdi
+    add     $(48 + API_SYNC_SUBCOMMITTEE_SIZE / 8), %rdi
+    lea     (NodeEvent_api + 16 + 48)(%rbp), %rsi
+    mov     $96, %edx
+    call    lantern_copy
+    mov     $(48 + API_SYNC_SUBCOMMITTEE_SIZE / 8 + 96), %edx
+    xor     %eax, %eax
+    UNFRAME 16
+END_FUNCTION node_api_contribution
 
 /*
  * (out rdi) -> rax: the aggregate in the cursor at NodeEvent_api + 16 of the event rbp as the SSZ
