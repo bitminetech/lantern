@@ -1458,7 +1458,8 @@ LOCAL_FUNCTION node_produce_engine
     call    node_produce_fail
     xor     %eax, %eax
     LEAVE 0
-4:  movq    $ENGINE_METHOD_GET_PAYLOAD, Node_engine_method(%rbx)
+4:  orq     $API_STREAM_BUSY, NodeApi_flags(%r12)  # busy with its getPayload
+    movq    $ENGINE_METHOD_GET_PAYLOAD, Node_engine_method(%rbx)
     mov     %r13, Node_engine_target(%rbx)
     mov     Node_engine_id(%rbx), %r9
     incq    Node_engine_id(%rbx)
@@ -1644,7 +1645,15 @@ LOCAL_FUNCTION node_produce_payload
     jne     9f
     cmpq    $NODE_PRODUCE_PAYLOAD, NodeApi_member(%r13)
     jne     9f
-    mov     EngineResponse_result_offset(%rsi), %rax     # the body becomes the result's bytes
+    andq    $~API_STREAM_BUSY, NodeApi_flags(%r13)  # its call is done; the connection closed meanwhile: the entry ends
+    testq   $API_STREAM_GONE, NodeApi_flags(%r13)
+    jz      1f
+    mov     %r13, %rdi
+    call    node_produce_release
+    mov     %r13, %rdi
+    call    node_api_end
+    LEAVE 128
+1:  mov     EngineResponse_result_offset(%rsi), %rax     # the body becomes the result's bytes
     mov     EngineResponse_result_length(%rsi), %rcx
     add     %rax, 8(%r12)
     mov     %rcx, 16(%r12)

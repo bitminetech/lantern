@@ -7326,6 +7326,36 @@ static void shell_api_ask(fc_node *n, const uint8_t *req, uint64_t len, uint64_t
 }
 
 /*
+ * shell_api_ask, with a NODE_EV_API_CLOSED of the connection after steps steps of the node (or once
+ * it settled); after the step that takes the close, the node must send nothing more to it.
+ */
+static void shell_api_ask_closing(fc_node *n, const uint8_t *req, uint64_t len, uint64_t conn, uint64_t steps, const char **why) {
+    static const uint64_t limits[2] = {16384, 1048576};
+    struct node_shell *s = n->shell;
+    uint8_t *out = NULL;
+    uint64_t http = 0, osize = (HTTP_REQUEST_FIXED + 2 * len + 64 + 7) & ~(uint64_t)7;
+    uint64_t st = http_request_call(req, len, limits, osize, &out, &http, why);
+    if (!*why && st != 0) *why = "lantern_http_request: status is not LANTERN_OK";
+    s->api.conn = conn;
+    s->api.len = s->api.sends = s->api.lasts = s->api.closes = s->api.late = 0;
+    s->api.gone = 0;
+    s->api.nids = 0;
+    if (!*why) {
+        shell_event(s, EV_API, conn, out, rd64(out));
+        for (uint64_t k = 0; k < steps && s->pending_len && !*why; k++) shell_step(n, why);
+    }
+    if (!*why) {
+        shell_event(s, EV_API_CLOSED, conn, NULL, 0);
+        shell_step(n, why);
+        s->api.gone = 1;
+        s->api.late = 0;
+    }
+    if (!*why) shell_settle(n, why);
+    if (!*why && s->api.late) *why = "an answer goes on after its connection closed";
+    free(out);
+}
+
+/*
  * The connection's bytes in the form with Content-Length (docs/reference/node.md, Test vectors): a
  * chunked body, each chunk's size in 4 lower case hex digits, decoded, with Content-Length in place
  * of Transfer-Encoding; a body with neither field, after Eth-Consensus-Version, with Content-Length
@@ -7442,8 +7472,27 @@ static void run_node_produce(const char *file, case_file *f) {
             shell_settle(&n, &why);
         }
         tv rq = reqs + 9, rs = resps + 9, tk = tv_get(parts, "ticks") + 9;
-        uint64_t nreq = rd64(reqs + 1);
+        uint64_t nreq = rd64(reqs + 1), closes = tv_u64(tv_get(parts, "closes"));
         if (rd64(tv_get(parts, "ticks") + 1) != nreq) why = "the case's ticks are not one for each request";
+        if (!why && closes) { /* the first request, its connection closed after each number of steps up to closes */
+            uint64_t rlen, at = tv_u64(tk);
+            const uint8_t *req = tv_bytes(rq, &rlen);
+            if (at) {
+                shell_event(s, EV_TICK, at, NULL, 0);
+                shell_settle(&n, &why);
+            }
+            for (uint64_t c = 0; c < closes && !why; c++) {
+                size_t nbufs = s->nbufs;
+                shell_api_ask_closing(&n, req, rlen, 1000 + c, c, &why);
+                if (!why) why = api_clean(s);
+                if (!why && s->nbufs != nbufs) why = "a produceBlockV3 whose connection closed leaves buffers";
+                if (why) {
+                    static char msg[256];
+                    snprintf(msg, sizeof msg, "the connection closed after %llu steps: %s", (unsigned long long)c, why);
+                    why = msg;
+                }
+            }
+        }
         for (uint64_t k = 0; k < nreq && !why; k++, rq = tv_skip(rq), rs = tv_skip(rs), tk = tv_skip(tk)) {
             uint64_t rlen, wlen, glen = 0, at = tv_u64(tk);
             const uint8_t *req = tv_bytes(rq, &rlen), *want = tv_bytes(rs, &wlen);
@@ -7452,7 +7501,9 @@ static void run_node_produce(const char *file, case_file *f) {
                 shell_settle(&n, &why);
                 if (why) break;
             }
+            size_t nbufs = s->nbufs;
             shell_api_ask(&n, req, rlen, (k + 1) | (uint64_t)7 << 32, &why);
+            if (!why && rlen > 4 && !memcmp(req, "GET ", 4) && s->nbufs != nbufs) why = "produceBlockV3 leaves buffers";
             uint8_t *got = why ? NULL : api_normalize(s, &glen, &why);
             if (!why && (glen != wlen || memcmp(got, want, (size_t)wlen))) {
                 free(s->api.b);
