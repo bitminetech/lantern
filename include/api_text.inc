@@ -317,6 +317,53 @@ api_ch_root:
 api_ch_optimistic:
     .ascii ",\"execution_optimistic\":"
 .set api_ch_optimistic_len, 24
+api_pe_open:
+    .ascii "{\"peer_id\":\""
+.set api_pe_open_len, 12
+api_pe_enr:
+    .ascii "\",\"enr\":null,\"last_seen_p2p_address\":\""
+.set api_pe_enr_len, 38
+api_pe_ip4:
+    .ascii "/ip4/"
+.set api_pe_ip4_len, 5
+api_pe_ip6:
+    .ascii "/ip6/"
+.set api_pe_ip6_len, 5
+api_pe_dot:
+    .ascii "."
+.set api_pe_dot_len, 1
+api_pe_colon:
+    .ascii ":"
+.set api_pe_colon_len, 1
+api_pe_tcp:
+    .ascii "/tcp/"
+.set api_pe_tcp_len, 5
+api_pe_udp:
+    .ascii "/udp/"
+.set api_pe_udp_len, 5
+api_pe_quic:
+    .ascii "/quic-v1"
+.set api_pe_quic_len, 8
+api_pe_p2p:
+    .ascii "/p2p/"
+.set api_pe_p2p_len, 5
+api_pe_state:
+    .ascii "\",\"state\":\"connected\",\"direction\":\""
+.set api_pe_state_len, 35
+api_pe_inbound:
+    .ascii "inbound\"}"
+.set api_pe_inbound_len, 9
+api_pe_outbound:
+    .ascii "outbound\"}"
+.set api_pe_outbound_len, 10
+api_pe_meta:
+    .ascii "],\"meta\":{\"count\":"
+.set api_pe_meta_len, 18
+api_pe_data:
+    .ascii "{\"data\":"
+.set api_pe_data_len, 8
+api_base58_digits:
+    .ascii "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
 api_fc_justified:
     .ascii "{\"justified_checkpoint\":"
 .set api_fc_justified_len, 24

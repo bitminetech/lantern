@@ -724,7 +724,9 @@
 .set NodePeer_id_len, 120
 .set NodePeer_id, 128                  /* the peer ID, at most 48 bytes */
 .set NodePeer_custody, 176             /* with NODE_PEER_METADATA: the columns it custodies, as Node_columns */
-.set NodePeer__mem, 192
+.set NodePeer_address, 192             /* PEER_CONNECTED: the asm-libp2p Address of its connection */
+.set NodePeer_transport, 224           /* PEER_CONNECTED: LIBP2P_TCP or LIBP2P_QUIC */
+.set NodePeer__mem, 232
 
 /* NodeStream: an open req/resp stream; the request bytes follow the fixed fields */
 .set NodeStream_handle, 0              /* the libp2p stream Handle */
@@ -1000,7 +1002,11 @@
 .set API_LOOKAHEAD_SLOTS, (MIN_SEED_LOOKAHEAD + 1) * SLOTS_PER_EPOCH
 .set ApiView_heads, ApiView_lookahead + 8 * API_LOOKAHEAD_SLOTS  /* getDebugChainHeadsV2: a byte for each store node, at the end of scratch */
 .set ApiView_weights, ApiView_heads + 8   /* getDebugForkChoice: lantern_node_weights's out, at the end of scratch */
-.set ApiView__size, ApiView_weights + 8
+.set ApiView_peer_states, ApiView_weights + 8      /* getPeers: the state set, all bits with none */
+.set ApiView_peer_directions, ApiView_weights + 16 /* getPeers: the direction set, all bits with none */
+.set ApiView_peer, ApiView_weights + 24            /* getPeer: its NodePeer */
+.set ApiView_node, ApiView_weights + 32            /* getPeers: the Node */
+.set ApiView__size, ApiView_weights + 40
 .set ApiIdentity_peer_id, 0              /* ApiIdentity (beacon-api.md): texts, each a length and its room */
 .set ApiIdentity_enr, 72
 .set ApiIdentity_p2p_address, 592

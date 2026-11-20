@@ -1218,6 +1218,18 @@ LOCAL_FUNCTION api_body
     call    api_failures
     UNFRAME 16
 11: mov     8(%rsp), %rsi
+    cmp     $API_OP_GET_PEERS, %rsi
+    jne     116f
+    call    api_peers_body
+    UNFRAME 16
+116: cmp    $API_OP_GET_PEER, %rsi
+    jne     117f
+    API_LIT api_pe_data
+    mov     ApiView_peer(%rbp), %rdi
+    call    api_peer_item
+    API_LIT api_end1
+    UNFRAME 16
+117: mov    8(%rsp), %rsi
     cmp     $API_OP_GET_DEBUG_CHAIN_HEADS_V2, %rsi
     jne     110f
     call    api_heads_body
@@ -1784,6 +1796,263 @@ LOCAL_FUNCTION api_headers_json
 END_FUNCTION api_headers_json
 
 /*
+ * L2: rax = the base58btc text of the rsi bytes at rdi (at most 48), written at rdx: a 1 for each
+ * leading zero byte, then the digits. rcx: a work area of 72 bytes. r12 the bytes, r13 their count,
+ * r14 the text, r15 the work area, rbp the leading zero bytes.
+ */
+LOCAL_FUNCTION api_base58
+    ENTER 0
+    mov     %rdi, %r12
+    mov     %rsi, %r13
+    mov     %rdx, %r14
+    mov     %rcx, %r15
+    mov     $58, %r11d
+    xor     %ebp, %ebp                      # the leading zero bytes
+1:  cmp     %r13, %rbp
+    jae     2f
+    cmpb    $0, (%r12,%rbp)
+    jne     2f
+    inc     %rbp
+    jmp     1b
+2:  xor     %r8d, %r8d                      # the digits so far, least significant at r15 + 71
+    mov     %rbp, %r9
+3:  cmp     %r13, %r9                       # each byte: digits * 256 + byte
+    jae     6f
+    movzbl  (%r12,%r9), %eax
+    xor     %r10d, %r10d
+4:  cmp     %r8, %r10
+    jae     5f
+    mov     $71, %ecx
+    sub     %r10, %rcx
+    movzbl  (%r15,%rcx), %esi
+    shl     $8, %esi
+    add     %rsi, %rax
+    xor     %edx, %edx
+    div     %r11
+    mov     %dl, (%r15,%rcx)
+    inc     %r10
+    jmp     4b
+5:  test    %rax, %rax
+    jz      51f
+    xor     %edx, %edx
+    div     %r11
+    mov     $71, %ecx
+    sub     %r8, %rcx
+    mov     %dl, (%r15,%rcx)
+    inc     %r8
+    jmp     5b
+51: inc     %r9
+    jmp     3b
+6:  xor     %eax, %eax                      # the text: the ones, then the digits
+    ADDRESS %rsi, api_base58_digits
+7:  test    %rbp, %rbp
+    jz      8f
+    movzbl  (%rsi), %ecx
+    mov     %cl, (%r14,%rax)
+    inc     %rax
+    dec     %rbp
+    jmp     7b
+8:  test    %r8, %r8
+    jz      9f
+    mov     $72, %ecx
+    sub     %r8, %rcx
+    movzbl  (%r15,%rcx), %ecx
+    movzbl  (%rsi,%rcx), %ecx
+    mov     %cl, (%r14,%rax)
+    inc     %rax
+    dec     %r8
+    jmp     8b
+9:  LEAVE 0
+END_FUNCTION api_base58
+
+# A peer of getPeers and getPeer (beacon-api.md): {"peer_id":…,"enr":null,"last_seen_p2p_address":…,
+# "state":"connected","direction":…} of the NodePeer rdi. Locals: the peer, the text's length, an
+# index, the text (72 bytes), base58's work area (72 bytes).
+LOCAL_FUNCTION api_peer_item
+    FRAME 176
+    mov     %rdi, (%rsp)
+    lea     NodePeer_id(%rdi), %rdi
+    mov     (%rsp), %rax
+    mov     NodePeer_id_len(%rax), %rsi
+    lea     24(%rsp), %rdx
+    lea     96(%rsp), %rcx
+    call    api_base58
+    mov     %rax, 8(%rsp)
+    API_LIT api_pe_open
+    lea     24(%rsp), %rdi
+    mov     8(%rsp), %rsi
+    call    api_put
+    API_LIT api_pe_enr
+    mov     (%rsp), %rax
+    cmpq    $6, NodePeer_address(%rax)      # the family
+    je      3f
+    # IPv4: 4 bytes in decimal, . between
+    API_LIT api_pe_ip4
+    movq    $0, 16(%rsp)
+1:  mov     (%rsp), %rax
+    mov     16(%rsp), %rcx
+    movzbl  (NodePeer_address + 16)(%rax,%rcx), %edi
+    call    api_dec
+    incq    16(%rsp)
+    cmpq    $4, 16(%rsp)
+    jae     5f
+    API_LIT api_pe_dot
+    jmp     1b
+    # IPv6: 8 groups of 16 bits, lower case hex with no leading zeros, : between
+3:  API_LIT api_pe_ip6
+    movq    $0, 16(%rsp)
+4:  mov     (%rsp), %rax
+    mov     16(%rsp), %rcx
+    movzbl  (NodePeer_address + 16)(%rax,%rcx,2), %edi
+    shl     $8, %edi
+    movzbl  (NodePeer_address + 17)(%rax,%rcx,2), %edx
+    or      %edx, %edi
+    call    api_hex16
+    incq    16(%rsp)
+    cmpq    $8, 16(%rsp)
+    jae     5f
+    API_LIT api_pe_colon
+    jmp     4b
+5:  mov     (%rsp), %rax                    # the transport and its port
+    cmpq    $LIBP2P_QUIC, NodePeer_transport(%rax)
+    je      6f
+    API_LIT api_pe_tcp
+    mov     (%rsp), %rax
+    mov     (NodePeer_address + 8)(%rax), %rdi
+    call    api_dec
+    jmp     7f
+6:  API_LIT api_pe_udp
+    mov     (%rsp), %rax
+    mov     (NodePeer_address + 8)(%rax), %rdi
+    call    api_dec
+    API_LIT api_pe_quic
+7:  API_LIT api_pe_p2p
+    lea     24(%rsp), %rdi
+    mov     8(%rsp), %rsi
+    call    api_put
+    API_LIT api_pe_state
+    mov     (%rsp), %rax
+    cmpq    $LIBP2P_OUTBOUND, NodePeer_direction(%rax)
+    je      8f
+    API_LIT api_pe_inbound
+    UNFRAME 176
+8:  API_LIT api_pe_outbound
+    UNFRAME 176
+END_FUNCTION api_peer_item
+
+# The lower case hex digits of the 16 bits rdi, with no leading zeros, join the response. Locals: rdi, a shift.
+LOCAL_FUNCTION api_hex16
+    FRAME 16
+    mov     %rdi, (%rsp)
+    mov     $12, %ecx
+1:  test    %ecx, %ecx                      # the leading zero digits but the last
+    jz      2f
+    mov     %rdi, %rax
+    shr     %cl, %rax
+    test    %rax, %rax
+    jnz     2f
+    sub     $4, %ecx
+    jmp     1b
+2:  mov     %rcx, 8(%rsp)
+3:  mov     (%rsp), %rax
+    mov     8(%rsp), %rcx
+    shr     %cl, %rax
+    and     $15, %eax
+    ADDRESS %rdi, api_hex
+    add     %rax, %rdi
+    mov     $1, %esi
+    call    api_put
+    mov     8(%rsp), %rcx
+    test    %rcx, %rcx
+    jz      9f
+    sub     $4, %rcx
+    mov     %rcx, 8(%rsp)
+    jmp     3b
+9:  UNFRAME 16
+END_FUNCTION api_hex16
+
+# getPeers' body (beacon-api.md): {"data":[<peer>,…],"meta":{"count":…}} of the NodePeers of the
+# Node at ApiView_node of the view rbp whose state and direction are in the sets at
+# ApiView_peer_states and ApiView_peer_directions. Locals: the index, the count, the peer.
+LOCAL_FUNCTION api_peers_body
+    FRAME 32
+    API_LIT api_p_data
+    movq    $0, (%rsp)
+    movq    $0, 8(%rsp)
+1:  mov     ApiView_node(%rbp), %rax
+    PART    %rcx, %rdx, %rax, Node_peers
+    mov     (%rsp), %rax
+    cmp     %rdx, %rax
+    jae     9f
+    imul    $NodePeer__mem, %rax, %rax
+    add     %rcx, %rax
+    incq    (%rsp)
+    testq   $(1 << API_PEER_CONNECTED), ApiView_peer_states(%rbp)  # connected
+    jz      1b
+    mov     NodePeer_direction(%rax), %rcx
+    mov     ApiView_peer_directions(%rbp), %rdx
+    shr     %cl, %rdx
+    test    $1, %edx
+    jz      1b
+    mov     %rax, 16(%rsp)
+    cmpq    $0, 8(%rsp)
+    je      2f
+    API_LIT api_p_comma
+2:  incq    8(%rsp)
+    mov     16(%rsp), %rdi
+    call    api_peer_item
+    jmp     1b
+9:  API_LIT api_pe_meta
+    mov     8(%rsp), %rdi
+    call    api_dec
+    API_LIT api_end2
+    UNFRAME 32
+END_FUNCTION api_peers_body
+.if API_DIRECTION_INBOUND != LIBP2P_INBOUND || API_DIRECTION_OUTBOUND != LIBP2P_OUTBOUND
+.error "api_peers_body: the direction bits are the libp2p directions"
+.endif
+
+# (route rdi) -> rax: the NodePeer whose peer ID's base58btc text is the route's peer_id, or 0. rbx
+# the node. Locals: the route, the index, the text (72 bytes), base58's work area (72 bytes).
+LOCAL_FUNCTION node_api_find_peer
+    FRAME 176
+    mov     %rdi, (%rsp)
+    movq    $0, 8(%rsp)
+1:  PART    %rcx, %rdx, %rbx, Node_peers
+    mov     8(%rsp), %rax
+    cmp     %rdx, %rax
+    jae     8f
+    imul    $NodePeer__mem, %rax, %rax
+    add     %rcx, %rax
+    incq    8(%rsp)
+    lea     NodePeer_id(%rax), %rdi
+    mov     NodePeer_id_len(%rax), %rsi
+    lea     24(%rsp), %rdx
+    lea     96(%rsp), %rcx
+    call    api_base58
+    mov     (%rsp), %rdi
+    PART    %rsi, %rdx, %rdi, ApiRoute_peer_id
+    cmp     %rdx, %rax
+    jne     1b
+    xor     %ecx, %ecx
+2:  cmp     %rdx, %rcx
+    jae     3f
+    movzbl  24(%rsp,%rcx), %eax
+    cmpb    %al, (%rsi,%rcx)
+    jne     1b
+    inc     %rcx
+    jmp     2b
+3:  PART    %rcx, %rdx, %rbx, Node_peers    # that peer
+    mov     8(%rsp), %rax
+    dec     %rax
+    imul    $NodePeer__mem, %rax, %rax
+    add     %rcx, %rax
+    UNFRAME 176
+8:  xor     %eax, %eax
+    UNFRAME 176
+END_FUNCTION node_api_find_peer
+
+/*
  * The bodies of getStateRandao, getEpochSyncCommittees and getProposerLookahead (beacon-api.md), as
  * api_body: rdi its locals (flags at 8), rsi the kind, rbp the view. Locals: those, an index, the kind.
  */
@@ -2299,6 +2568,10 @@ LOCAL_FUNCTION node_api_event
     je      81f
     cmp     $API_OP_GET_PEER_COUNT, %rcx
     je      81f
+    cmp     $API_OP_GET_PEERS, %rcx
+    je      56f
+    cmp     $API_OP_GET_PEER, %rcx
+    je      55f
     cmp     $API_OP_GET_GENESIS, %rcx
     je      81f
     cmp     $API_OP_GET_FORK_SCHEDULE, %rcx
@@ -2515,6 +2788,32 @@ LOCAL_FUNCTION node_api_event
     jne     67f
     or      $API_ANSWER_SSZ, %r12
     jmp     67f
+56: mov     S7(%rsp), %rax                  # getPeers: its state and direction sets, all bits with none
+    mov     S8(%rsp), %rsi
+    mov     $-1, %rcx
+    testq   $(1 << API_PARAM_STATE), ApiRoute_present(%rax)
+    jz      561f
+    mov     ApiRoute_peer_states(%rax), %rcx
+561: mov    %rcx, ApiView_peer_states(%rsi)
+    mov     $-1, %rcx
+    testq   $(1 << API_PARAM_DIRECTION), ApiRoute_present(%rax)
+    jz      562f
+    mov     ApiRoute_peer_directions(%rax), %rcx
+562: mov    %rcx, ApiView_peer_directions(%rsi)
+    mov     %rbx, ApiView_node(%rsi)
+    mov     $200, %edx
+    mov     $API_OP_GET_PEERS, %ecx
+    jmp     81f
+55: mov     S7(%rsp), %rdi                  # getPeer: the peer of its peer_id, else 404
+    call    node_api_find_peer
+    mov     $404, %edx
+    test    %rax, %rax
+    jz      80f
+    mov     S8(%rsp), %rsi
+    mov     %rax, ApiView_peer(%rsi)
+    mov     $200, %edx
+    mov     $API_OP_GET_PEER, %ecx
+    jmp     81f
 57: mov     S9(%rsp), %rdi                  # getBlockHeaders: a stream of the blocks of its query
     mov     S7(%rsp), %rsi
     mov     %r12, %rdx

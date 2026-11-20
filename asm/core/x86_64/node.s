@@ -7457,6 +7457,12 @@ LOCAL_FUNCTION node_notice
     mov     %rax, NodePeer_handle(%r13)
     mov     LIBP2P_ACT_PC_DIRECTION(%r12), %rax
     mov     %rax, NodePeer_direction(%r13)
+    lea     NodePeer_address(%r13), %rdi    # its connection's address and transport
+    lea     LIBP2P_ACT_PC_ADDR(%r12), %rsi
+    mov     $32, %edx
+    call    lantern_copy
+    mov     LIBP2P_ACT_PC_TRANSPORT(%r12), %rax
+    mov     %rax, NodePeer_transport(%r13)
     mov     LIBP2P_ACT_PC_ID_LEN(%r12), %rdx
     cmp     $48, %rdx
     jbe     2f

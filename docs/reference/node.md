@@ -129,6 +129,7 @@
   - The runner plays the network between the node's libp2p state and a bare asm-libp2p peer, as tests/runner of asm-libp2p does. The peer dials the node and opens one stream for each request.
   - Status (v2 in fulu, v1 before) and MetaData (v3 in fulu, v2 before) must be the case's, the MetaData with the bits of the node's subnets as `attnets` and a `seq_number` above 0 with them; Ping must give 0; Goodbye must close with no answer.
   - The node's peer entry must hold the peer's ID and the Status it sent.
+  - After each connection of the runner's network: getPeers, with no query, with `state` `connected`, with `state` `disconnected,connecting`, with each `direction`, and with both sets, must answer the peer as beacon-api.md gives it, with its connection's address (the peer's 10.0.0.1 and TCP port 40001 when the peer dials the node, the record's 10.0.0.2 and 9000 when the node dials it), or no peer; getPeer of its peer ID text must answer it, and of another, 404.
   - The node has `NODE_FLAG_DISCV5`: its `NODE_ACT_DISCV5` actions must set `eth2` to lantern_compute_enr_fork_id at the anchor's epoch, `attnets` to the bits of the node's subnets at that epoch (lantern_compute_subscribed_subnets of its node ID), from altair `syncnets` to 1 zero byte, in fulu `cgc` to `CUSTODY_REQUIREMENT` and `nfd` to lantern_compute_next_fork_digest, and ask for a lookup.
 - The `fork_choice-get_head` and `fork_choice-on_block` cases in node mode, after their steps: the runner opens the same network, and the node serves the chain of the case's last checked head, which the runner builds from the case's valid blocks by `parent_root`.
   - BeaconBlocksByRange v2 from the anchor's slot to the head's must give each block of the chain, in slot order.
@@ -357,7 +358,7 @@ lantern_node_step(node, store, p2p, tick, events, scratch, actions, result) -> s
   - `NODE_EV_WORK_DONE` of `NODE_WORK_API_EVENT`: `LANTERN_VALID`, the text at `NodeEvent_chunk` goes to the entries of the topic of `arg` % 2^8. Another result: no event.
   - To an entry: a `NODE_ACT_API_SEND` of the text with `last` 0, in one chunk of RFC 9112 section 7.1 with `API_STREAM_CHUNKED`; its `sent` grows by the bytes sent. When `sent` would pass `NODE_API_CHUNK`, the stream falls behind: a `NODE_ACT_API_CLOSE` of the connection in its place, and the stream ends.
 - libp2p first, before the node's events: libp2p_step with the queued events, then the `NODE_EV_P2P` events, after them in the queue. The first libp2p_step takes at most half the action room left, when that half is enough, so the notices have room. When it accepts k of n P2P events, with k < n, the P2P events it did not take leave the queue, the step handles the node's events before the next P2P event, and gives that count as `accepted`. A status of libp2p_step leaves the queue as it was.
-- `PEER_CONNECTED`: a `NodePeer`, or a `DISCONNECT` when the peers part is full. `PEER_DISCONNECTED`: the peer and its streams go.
+- `PEER_CONNECTED`: a `NodePeer` with the notice's handle, direction, peer ID, address and transport, or a `DISCONNECT` when the peers part is full. `PEER_DISCONNECTED`: the peer and its streams go.
 - `PEER_CONNECTED` and `DIAL_FAILED` of a tag with `NODE_DIAL_TAG`: `dialing` takes 1 less. A `PEER_CONNECTED` of `LIBP2P_OUTBOUND` that gets a `NodePeer`: a Status request (v2 from fulu, v1 before) with the node's Status, as a request of the node.
 - `NODE_EV_ENR`, with `p2p`: the record of discv5_enr_decode, with an `ip`, a `tcp` pair of 1 or 2 bytes, an `eth2` pair whose first 4 bytes are compute_fork_digest of the store's epoch, and a `secp256k1` key whose peer ID (the identity multihash of the protobuf secp256k1 public key) no `NodePeer` has, gets a `DIAL` over TCP to that address with that peer ID and a tag with `NODE_DIAL_TAG`, when `dialing` + the peers are below the capacity of the peers part and `p2p_out` has room; `dialing` takes 1 more. Another record changes nothing.
 - With `NODE_FLAG_DISCV5`, at each subscription to a new `fork_digest`: a `NODE_ACT_DISCV5` of `SET_ENTRY` events: `eth2`, lantern_compute_enr_fork_id at the store's epoch; `attnets`, the bits of `attnets` (bit i of byte i / 8 for subnet i); from altair `syncnets`, 1 zero byte; from fulu `cgc`, `CUSTODY_REQUIREMENT` in big-endian bytes with no leading zero, and `nfd`, lantern_compute_next_fork_digest.
@@ -420,7 +421,7 @@ lantern_node_step(node, store, p2p, tick, events, scratch, actions, result) -> s
 - `NODE_EV_API` (beacon-api.md, Common rules): the answer to the request, in one `NODE_ACT_API_SEND` of its connection with `last` 1, then a `NODE_ACT_API_CLOSE` of it when the connection closes after the answer.
   - An `HttpRequest` with a `status`: the error of that status.
   - Else lantern_api_route of the request, its `ApiRoute` in `scratch`. `LANTERN_INVALID_ROUTE`: the error of its `status`.
-  - getHealth, getNetworkIdentity, getNodeVersion, getSyncingStatus, getPeerCount, getGenesis, getForkSchedule and getDepositContract: the answer of the node, the store and the config.
+  - getHealth, getNetworkIdentity, getNodeVersion, getSyncingStatus, getPeerCount, getPeers, getPeer, getGenesis, getForkSchedule and getDepositContract: the answer of the node, the store and the config.
   - getSpec, getDebugChainHeadsV2 and getDebugForkChoice: a `NODE_WORK_API_ENCODE` with no state and no `data`, the connection as `target`, and as `arg` the operation + 2^8 times the answer flags.
   - The block of a `block_id` and the state of a `state_id`, as beacon-api.md gives them: the walk of the chain by `parent_root` from the head's `NodeBlock`; below its lowest block, the `Db`'s `DbSlot` of a slot or lantern_db_find_root of a root; the bytes of a `Db` block a `NODE_DB_REF` of its record.
   - A state at a slot past its post-state's, or past its `NodeCheckpoint`'s: a `NODE_ACT_STATE_COPY` of it, the copy across the fork boundaries to the slot (the crossing), then a `NODE_WORK_SLOTS` of the copy to the slot when it is below it; after the copy's last use, a `NODE_ACT_STATE_FREE` of it.
@@ -1761,10 +1762,12 @@ An operation of the pool (beacon-api.md, the pools).
 | 120 | `id_len` | u64 | |
 | 128 | `id` | 48 bytes | The peer ID |
 | 176 | `custody` | 16 bytes | With `NODE_PEER_METADATA`, the columns the peer custodies, as `columns` of `Node` |
+| 192 | `address` | asm-libp2p `Address` | The address of its connection, of `PEER_CONNECTED` |
+| 224 | `transport` | u64 | `LIBP2P_TCP` or `LIBP2P_QUIC`, of `PEER_CONNECTED` |
 
 ### Rules
 
-- `NodePeer__mem` (192) bytes.
+- `NodePeer__mem` (232) bytes.
 
 ## Type `NodeStream`
 

@@ -7357,6 +7357,12 @@ LOCAL_FUNCTION node_notice
     str     x9, [x22, #NodePeer_handle]
     ldr     x9, [x21, #LIBP2P_ACT_PC_DIRECTION]
     str     x9, [x22, #NodePeer_direction]
+    add     x0, x22, #NodePeer_address      /* its connection's address and transport */
+    add     x1, x21, #LIBP2P_ACT_PC_ADDR
+    mov     x2, #32
+    bl      lantern_copy
+    ldr     x9, [x21, #LIBP2P_ACT_PC_TRANSPORT]
+    str     x9, [x22, #NodePeer_transport]
     ldr     x2, [x21, #LIBP2P_ACT_PC_ID_LEN]
     cmp     x2, #48
     b.ls    2f

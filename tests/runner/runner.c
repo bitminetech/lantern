@@ -4029,7 +4029,7 @@ enum { P2P_ACT_DIAL = 1, P2P_ACT_ADOPT, P2P_ACT_REFUSE, P2P_ACT_SEND, P2P_ACT_CL
        P2P_ACT_PEER_DISCONNECTED, P2P_ACT_DIAL_FAILED, P2P_ACT_STREAM_INBOUND, P2P_ACT_STREAM_OPENED, P2P_ACT_STREAM_FAILED,
        P2P_ACT_STREAM_DATA, P2P_ACT_STREAM_EOF, P2P_ACT_STREAM_RESET, P2P_ACT_SEND_DATAGRAM = 23 };
 #define NODE_PEERS 120          /* include/lantern.inc: Node_peers */
-#define NODE_PEER_BYTES 192     /* NodePeer__mem */
+#define NODE_PEER_BYTES 232     /* NodePeer__mem */
 #define P2P_STREAMS 8
 #define P2P_PEER_ACTIONS (P2P_ACTIONS_MIN + (4u << 20))
 
@@ -4555,6 +4555,7 @@ static uint64_t node_attnets(const uint8_t *node_id, uint64_t epoch, const char 
 static void p2p_open_record(fc_node *n, struct p2p_net *net, const uint8_t *record, uint64_t rlen, const uint8_t *status,
                             uint64_t slen, const char **why);
 static void p2p_open(fc_node *n, struct p2p_net *net, const char **why) { p2p_open_record(n, net, NULL, 0, NULL, 0, why); }
+static void api_peers_check(fc_node *n, struct p2p_net *net, int outbound, const char **why);
 
 /*
  * The network of a node, as p2p_open: with a record, the node gets it in a NODE_EV_ENR and must
@@ -4630,6 +4631,7 @@ static void p2p_open_record(fc_node *n, struct p2p_net *net, const uint8_t *reco
         if (rd64(peer + 120) != idlen || memcmp(peer + 128, net->state[1] + P2P_ST_PEER_ID, (size_t)idlen))
             *why = "the node's peer entry: not the peer's ID";
     }
+    if (!*why) api_peers_check(n, net, record != NULL, why);
 }
 
 static void p2p_close(struct p2p_net *net) {
@@ -7813,6 +7815,70 @@ static void api_headers_query(fc_node *n, const hd_block *hb, size_t nh, const c
     free(want);
 }
 
+/* The base58btc text of the n bytes at in, into out with a 0 after it; returns its length. */
+static size_t base58_text(const uint8_t *in, size_t n, char *out) {
+    static const char digits[] = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
+    uint8_t d[128] = {0}; /* the digits, least significant first */
+    size_t len = 0, zeros = 0, k = 0;
+    while (zeros < n && in[zeros] == 0) zeros++;
+    for (size_t i = zeros; i < n; i++) {
+        unsigned carry = in[i];
+        for (size_t j = 0; j < len; j++) {
+            carry += (unsigned)d[j] << 8;
+            d[j] = (uint8_t)(carry % 58);
+            carry /= 58;
+        }
+        while (carry) {
+            d[len++] = (uint8_t)(carry % 58);
+            carry /= 58;
+        }
+    }
+    for (size_t i = 0; i < zeros; i++) out[k++] = '1';
+    for (size_t i = len; i > 0; i--) out[k++] = digits[d[i - 1]];
+    out[k] = 0;
+    return k;
+}
+
+/*
+ * getPeers and getPeer after a connection of the runner's network (beacon-api.md): the peer, connected, with its
+ * ID in base58btc, its connection's address (outbound: the record's 10.0.0.2 and TCP 9000; inbound: the peer's
+ * 10.0.0.1 and 40001) and its direction, under each filter; getPeer of its ID text, and of another (404).
+ */
+static unsigned long api_peers_checked[2]; /* the peers checks of inbound and outbound connections */
+static void api_peers_check(fc_node *n, struct p2p_net *net, int outbound, const char **why) {
+    static const struct { const char *query; int match; } qs[6] = {
+        {"", 1}, {"?state=connected", 1}, {"?state=disconnected,connecting", 0}, {"?direction=inbound", 2}, {"?direction=outbound", 3},
+        {"?state=connected&direction=inbound,outbound", 1}};
+    struct node_shell *s = n->shell;
+    char id[128], item[512], want[768], req[256];
+    size_t idn = base58_text(net->state[1] + P2P_ST_PEER_ID, (size_t)rd64(net->state[1] + P2P_ST_PEER_ID_LEN), id);
+    snprintf(item, sizeof item,
+             "{\"peer_id\":\"%s\",\"enr\":null,\"last_seen_p2p_address\":\"/ip4/%s/tcp/%s/p2p/%s\",\"state\":\"connected\",\"direction\":\"%s\"}",
+             id, outbound ? "10.0.0.2" : "10.0.0.1", outbound ? "9000" : "40001", id, outbound ? "outbound" : "inbound");
+    for (size_t q = 0; q < 7 && !*why; q++) {
+        int match = q == 6 || qs[q].match == 1 || (qs[q].match == 2 && !outbound) || (qs[q].match == 3 && outbound);
+        if (q < 6) {
+            snprintf(want, sizeof want, "{\"data\":[%s],\"meta\":{\"count\":%d}}", match ? item : "", match);
+            snprintf(req, sizeof req, "GET /eth/v1/node/peers%s HTTP/1.1\r\nHost: lantern\r\n\r\n", qs[q].query);
+        } else {
+            snprintf(want, sizeof want, "{\"data\":%s}", item);
+            snprintf(req, sizeof req, "GET /eth/v1/node/peers/%s HTTP/1.1\r\nHost: lantern\r\n\r\n", id);
+        }
+        shell_api_ask(n, (const uint8_t *)req, strlen(req), 300 + q, why);
+        size_t k = strlen(want);
+        if (!*why && (s->api.len < 17 + k || memcmp(s->api.b, "HTTP/1.1 200 OK\r\n", 17) || memcmp(s->api.b + s->api.len - k, want, k)))
+            *why = api_mismatch(s, q < 6 ? "API getPeers" : "API getPeer", (const uint8_t *)want, k);
+    }
+    if (!*why && idn > 2) { /* another ID: its last digit changed */
+        id[idn - 1] = id[idn - 1] == 'z' ? 'y' : 'z';
+        snprintf(req, sizeof req, "GET /eth/v1/node/peers/%s HTTP/1.1\r\nHost: lantern\r\n\r\n", id);
+        shell_api_ask(n, (const uint8_t *)req, strlen(req), 307, why);
+        if (!*why && (s->api.len < 13 || memcmp(s->api.b, "HTTP/1.1 404 ", 13))) *why = "API getPeer of another peer ID: not 404";
+    }
+    if (!*why) *why = api_clean(s);
+    if (!*why) api_peers_checked[outbound]++;
+}
+
 /*
  * getBlockHeaders of the Db's blocks (beacon-api.md), in a node whose Db holds the chain below its anchor, the
  * chain's last block: of each slot of a block below the anchor, and of the root of each block below the anchor's
@@ -8488,6 +8554,9 @@ int main(int argc, char **argv) {
     }
     if (node_settles_finalized) printf("NOTE: %lu node settles past a finalized epoch\n", node_settles_finalized);
     if (api_heads_streamed) printf("NOTE: %lu heads served as getBlockV2 and getStateV2 streams\n", api_heads_streamed);
+    if (api_peers_checked[0] || api_peers_checked[1])
+        printf("NOTE: getPeers and getPeer checked after %lu inbound and %lu outbound connections\n", api_peers_checked[0],
+               api_peers_checked[1]);
     if (api_headers_asked) printf("NOTE: %lu getBlockHeaders answers checked, %lu with a Db block\n", api_headers_asked, api_headers_db);
     if (api_fork_choice_200 || api_fork_choice_500)
         printf("NOTE: getDebugForkChoice answered 200 %lu times, 500 %lu times\n", api_fork_choice_200, api_fork_choice_500);

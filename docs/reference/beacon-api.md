@@ -58,6 +58,12 @@ The answers of the node (node.md, `NODE_EV_API`) follow these rules.
 - getNodeVersion: `{"data":{"version":…}}`.
 - getSyncingStatus: `{"data":{"head_slot":…,"sync_distance":…,"is_syncing":…,"is_optimistic":…,"el_offline":…}}`; `sync_distance` is `current_slot` minus `head_slot`, or 0 when it is below.
 - getPeerCount: `{"data":{"disconnected":"0","connecting":"0","connected":…,"disconnecting":"0"}}`.
+- getPeers: `{"data":[<peer>,…],"meta":{"count":…}}`, each `NodePeer` in order whose state, `connected`, is in the `state` set and whose direction is in the `direction` set, of the sets given; `count` the items, a JSON number.
+- getPeer: the `NodePeer` whose `peer_id` text is the route's `peer_id`: `{"data":<peer>}`; with none, 404.
+- A peer: `{"peer_id":…,"enr":null,"last_seen_p2p_address":…,"state":"connected","direction":…}`.
+  - `peer_id`: base58btc of its peer ID.
+  - `last_seen_p2p_address`: the multiaddr of its connection's address: `/ip4/` and the 4 bytes in decimal with `.` between, or `/ip6/` and the 8 groups of 16 bits in lower case hex with no leading zeros and `:` between; then `/tcp/` and the port for TCP, or `/udp/`, the port and `/quic-v1` for QUIC; then `/p2p/` and its `peer_id`.
+  - `direction`: `inbound` or `outbound`.
 - getGenesis: `{"data":{"genesis_time":…,"genesis_validators_root":…,"genesis_fork_version":…}}`.
 - getDebugChainHeadsV2: `{"data":[{"root":…,"slot":…,"execution_optimistic":…},…]}`, the leaves of the fork choice tree: each node of the store's `blocks`, in their order, that no node names as its `parent`. A node whose payload is `INVALIDATED`, and each node below it, is out of the tree (fork-choice.md, optimistic sync: removed from fork choice). `execution_optimistic`: its `payload_status` is `NOT_VALIDATED`.
 - getDebugForkChoice: `{"justified_checkpoint":…,"finalized_checkpoint":…,"fork_choice_nodes":[…]}`, the store's checkpoints and each node of its `blocks`, in their order: `{"slot":…,"block_root":…,"parent_root":…,"justified_epoch":…,"finalized_epoch":…,"weight":…,"validity":…,"execution_block_hash":…}`.

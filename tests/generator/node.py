@@ -396,7 +396,7 @@ ANSWERED = ("getHealth", "getNetworkIdentity", "getNodeVersion", "getSyncingStat
             "getBlockHeader", "getStateFinalityCheckpoints", "getBlockV2", "getStateV2", "getBlockRoot", "getStateRoot",
             "getStateFork", "getSpec", "getForkSchedule", "getDepositContract", "getEpochCommittees",
             "getProposerDuties", "produceAttestationData", "getAttesterDuties", "eventstream", "getStateRandao",
-            "getEpochSyncCommittees", "getProposerLookahead", "getBlockAttestationsV2", "getBlindedBlock", "getDebugChainHeadsV2", "getDebugForkChoice", "getBlockHeaders") + tuple(PENDING) + VALIDATOR_OPS
+            "getEpochSyncCommittees", "getProposerLookahead", "getBlockAttestationsV2", "getBlindedBlock", "getDebugChainHeadsV2", "getDebugForkChoice", "getBlockHeaders", "getPeers", "getPeer") + tuple(PENDING) + VALIDATOR_OPS
 STATE_READS = ("getStateRandao", "getEpochSyncCommittees", "getProposerLookahead")
 IDENTITY = (b"16Uiu2HAmPLe7Mzm8TsYUubgCAW1aJoeFScxrLj8ppHFivPo97bUZ",
             b"enr:-Iu4QLm7bZGdAhVwRqZ6Zf3LlnqKsBTnZGOByHQhPMQJ3pV4F3t8L9i5yJOZ0X0hiZ6q4D5V0jB7l8J3ZtYw1JDH9C4BgmlkgnY0gmlwhAoAAAGJc2VjcDI1NmsxoQPKY0yuDUmstAHYpMa2_oxVtw0RW_QAdpzBQA8yWM0xOIN0Y3CCIyg",
@@ -840,6 +840,10 @@ def answer(v, name, route, offline, close, keep_alive, syncing=False):
         return response(200, b'{"data":{"disconnected":"0","connecting":"0","connected":"0","disconnecting":"0"}}', **kw)
     if name in ("getSpec", "getForkSchedule", "getDepositContract"):
         return response(200, v["config_bodies"][name], **kw)
+    if name == "getPeers":  # the node has no peers
+        return response(200, b'{"data":[],"meta":{"count":0}}', **kw)
+    if name == "getPeer":
+        return error(404, **kw)
     if name == "getBlockHeaders":  # the node holds the anchor alone, with no bytes: its header as getBlockHeader's
         h = v["header"]
         slot_given, root_given = route.present >> 7 & 1, route.present >> 13 & 1
@@ -1313,6 +1317,12 @@ def api_requests(spec, fork, v, kind="main"):
                        ("slot_above_parent", [("slot", b"%d" % (v["slot"] + 1)), ("parent_root", parent)])):
         add(f"headers_{key}", api_route.base(headers, query))
     add("headers_http10", api_route.base(headers), version=b"HTTP/1.0")
+    peers = by_name["getPeers"]
+    for key, query in (("connected", [("state", b"connected")]), ("states", [("state", b"disconnected,connecting")]),
+                       ("inbound", [("direction", b"inbound")]),
+                       ("both", [("state", b"connected"), ("direction", b"inbound,outbound")])):
+        add(f"peers_{key}", api_route.base(peers, query))
+    add("peer_identity", api_route.base(by_name["getPeer"], path_values={"peer_id": IDENTITY[0]}))
     add("headers_close", api_route.base(headers), connection=b"close")
     for op in ("getStateRoot", "getStateFork", "getStateFinalityCheckpoints"):
         ids = [b"head", b"finalized", b"justified", b"genesis", other_root, qhex(v["state_roots"][0])[1:-1],

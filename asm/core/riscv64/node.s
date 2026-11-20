@@ -7409,6 +7409,12 @@ LOCAL_FUNCTION node_notice
     sd      t0, NodePeer_handle(s4)
     ld      t0, LIBP2P_ACT_PC_DIRECTION(s3)
     sd      t0, NodePeer_direction(s4)
+    addi    a0, s4, NodePeer_address        # its connection's address and transport
+    addi    a1, s3, LIBP2P_ACT_PC_ADDR
+    li      a2, 32
+    call    lantern_copy
+    ld      t0, LIBP2P_ACT_PC_TRANSPORT(s3)
+    sd      t0, NodePeer_transport(s4)
     ld      a2, LIBP2P_ACT_PC_ID_LEN(s3)
     li      t0, 48
     bleu    a2, t0, 2f

@@ -1261,7 +1261,18 @@ LOCAL_FUNCTION api_body
     API_LIT api_f_list
     bl      api_failures
     UNFRAME 16
-11: cmp     x28, #API_OP_GET_DEBUG_CHAIN_HEADS_V2
+11: cmp     x28, #API_OP_GET_PEERS
+    b.ne    116f
+    bl      api_peers_body
+    UNFRAME 16
+116: cmp    x28, #API_OP_GET_PEER
+    b.ne    117f
+    API_LIT api_pe_data
+    ldr     x0, [x22, #ApiView_peer]
+    bl      api_peer_item
+    API_LIT api_end1
+    UNFRAME 16
+117: cmp    x28, #API_OP_GET_DEBUG_CHAIN_HEADS_V2
     b.ne    110f
     bl      api_heads_body
     UNFRAME 16
@@ -1835,6 +1846,270 @@ LOCAL_FUNCTION api_headers_json
 END_FUNCTION api_headers_json
 
 /*
+ * L0: x0 = the base58btc text of the x1 bytes at x0 (at most 48), written at x2: a 1 for each
+ * leading zero byte, then the digits. x3: a work area of 72 bytes. Uses x4, x9-x15.
+ */
+LOCAL_FUNCTION api_base58
+    UNWIND_END_PROLOGUE
+    mov     x9, #0                          /* the leading zero bytes */
+1:  cmp     x9, x1
+    b.hs    2f
+    ldrb    w10, [x0, x9]
+    cbnz    w10, 2f
+    add     x9, x9, #1
+    b       1b
+2:  mov     x15, x9
+    mov     x11, #0                         /* the digits so far, least significant at x3 + 71 */
+    mov     x12, x9
+3:  cmp     x12, x1                         /* each byte: digits * 256 + byte */
+    b.hs    6f
+    ldrb    w13, [x0, x12]
+    mov     x14, #0
+4:  cmp     x14, x11
+    b.hs    5f
+    mov     x10, #71
+    sub     x10, x10, x14
+    ldrb    w9, [x3, x10]
+    add     x13, x13, x9, lsl #8
+    mov     x9, #58
+    udiv    x4, x13, x9
+    msub    x9, x4, x9, x13
+    strb    w9, [x3, x10]
+    mov     x13, x4
+    add     x14, x14, #1
+    b       4b
+5:  cbz     x13, 51f
+    mov     x9, #58
+    udiv    x4, x13, x9
+    msub    x9, x4, x9, x13
+    mov     x10, #71
+    sub     x10, x10, x11
+    strb    w9, [x3, x10]
+    add     x11, x11, #1
+    mov     x13, x4
+    b       5b
+51: add     x12, x12, #1
+    b       3b
+6:  mov     x0, #0                          /* the text: the ones, then the digits */
+    ADDRESS x13, api_base58_digits
+7:  cbz     x15, 8f
+    ldrb    w9, [x13]
+    strb    w9, [x2, x0]
+    add     x0, x0, #1
+    sub     x15, x15, #1
+    b       7b
+8:  cbz     x11, 9f
+    mov     x10, #72
+    sub     x10, x10, x11
+    ldrb    w9, [x3, x10]
+    ldrb    w9, [x13, x9]
+    strb    w9, [x2, x0]
+    add     x0, x0, #1
+    sub     x11, x11, #1
+    b       8b
+9:  ret
+END_FUNCTION api_base58
+
+/*
+ * L1: a peer of getPeers and getPeer (beacon-api.md): {"peer_id":…,"enr":null,"last_seen_p2p_address":…,
+ * "state":"connected","direction":…} of the NodePeer x0. Locals: the peer, the text's length, an
+ * index, the text (72 bytes), base58's work area (72 bytes).
+ */
+LOCAL_FUNCTION api_peer_item
+    FRAME 176
+    str     x0, [sp, #16]
+    add     x0, x0, #NodePeer_id
+    ldr     x9, [sp, #16]
+    ldr     x1, [x9, #NodePeer_id_len]
+    add     x2, sp, #40
+    add     x3, sp, #112
+    bl      api_base58
+    str     x0, [sp, #24]
+    API_LIT api_pe_open
+    add     x0, sp, #40
+    ldr     x1, [sp, #24]
+    bl      api_put
+    API_LIT api_pe_enr
+    ldr     x9, [sp, #16]
+    ldr     x10, [x9, #NodePeer_address]    /* the family */
+    cmp     x10, #6
+    b.eq    3f
+    /* IPv4: 4 bytes in decimal, . between */
+    API_LIT api_pe_ip4
+    str     xzr, [sp, #32]
+1:  ldr     x9, [sp, #16]
+    ldr     x10, [sp, #32]
+    add     x9, x9, x10
+    ldrb    w0, [x9, #(NodePeer_address + 16)]
+    bl      api_dec
+    ldr     x10, [sp, #32]
+    add     x10, x10, #1
+    str     x10, [sp, #32]
+    cmp     x10, #4
+    b.hs    5f
+    API_LIT api_pe_dot
+    b       1b
+    /* IPv6: 8 groups of 16 bits, lower case hex with no leading zeros, : between */
+3:  API_LIT api_pe_ip6
+    str     xzr, [sp, #32]
+4:  ldr     x9, [sp, #16]
+    ldr     x10, [sp, #32]
+    add     x9, x9, x10, lsl #1
+    ldrb    w11, [x9, #(NodePeer_address + 16)]
+    ldrb    w12, [x9, #(NodePeer_address + 17)]
+    orr     x0, x12, x11, lsl #8
+    bl      api_hex16
+    ldr     x10, [sp, #32]
+    add     x10, x10, #1
+    str     x10, [sp, #32]
+    cmp     x10, #8
+    b.hs    5f
+    API_LIT api_pe_colon
+    b       4b
+5:  ldr     x9, [sp, #16]                   /* the transport and its port */
+    ldr     x10, [x9, #NodePeer_transport]
+    cmp     x10, #LIBP2P_QUIC
+    b.eq    6f
+    API_LIT api_pe_tcp
+    ldr     x9, [sp, #16]
+    ldr     x0, [x9, #(NodePeer_address + 8)]
+    bl      api_dec
+    b       7f
+6:  API_LIT api_pe_udp
+    ldr     x9, [sp, #16]
+    ldr     x0, [x9, #(NodePeer_address + 8)]
+    bl      api_dec
+    API_LIT api_pe_quic
+7:  API_LIT api_pe_p2p
+    add     x0, sp, #40
+    ldr     x1, [sp, #24]
+    bl      api_put
+    API_LIT api_pe_state
+    ldr     x9, [sp, #16]
+    ldr     x10, [x9, #NodePeer_direction]
+    cmp     x10, #LIBP2P_OUTBOUND
+    b.eq    8f
+    API_LIT api_pe_inbound
+    UNFRAME 176
+8:  API_LIT api_pe_outbound
+    UNFRAME 176
+END_FUNCTION api_peer_item
+
+/* L1: the lower case hex digits of the 16 bits x0, with no leading zeros, join the response. Locals: x0, a shift. */
+LOCAL_FUNCTION api_hex16
+    FRAME 16
+    str     x0, [sp, #16]
+    mov     x9, #12
+1:  cbz     x9, 2f                          /* the leading zero digits but the last */
+    lsr     x10, x0, x9
+    cbnz    x10, 2f
+    sub     x9, x9, #4
+    b       1b
+2:  str     x9, [sp, #24]
+3:  ldr     x10, [sp, #16]
+    lsr     x10, x10, x9
+    and     x10, x10, #15
+    ADDRESS x0, api_hex
+    add     x0, x0, x10
+    mov     x1, #1
+    bl      api_put
+    ldr     x9, [sp, #24]
+    cbz     x9, 9f
+    sub     x9, x9, #4
+    str     x9, [sp, #24]
+    b       3b
+9:  UNFRAME 16
+END_FUNCTION api_hex16
+
+/*
+ * L1: getPeers' body (beacon-api.md): {"data":[<peer>,…],"meta":{"count":…}} of the NodePeers of the
+ * Node at ApiView_node of the view x22 whose state and direction are in the sets at
+ * ApiView_peer_states and ApiView_peer_directions. Locals: the index, the count, the peer.
+ */
+LOCAL_FUNCTION api_peers_body
+    FRAME 32
+    API_LIT api_p_data
+    stp     xzr, xzr, [sp, #16]
+1:  ldr     x13, [x22, #ApiView_node]
+    PART    x10, x11, x13, Node_peers
+    ldr     x9, [sp, #16]
+    cmp     x9, x11
+    b.hs    9f
+    mov     x12, #NodePeer__mem
+    madd    x0, x9, x12, x10
+    add     x9, x9, #1
+    str     x9, [sp, #16]
+    ldr     x9, [x22, #ApiView_peer_states] /* connected */
+    tbz     x9, #API_PEER_CONNECTED, 1b
+    ldr     x10, [x0, #NodePeer_direction]
+    ldr     x9, [x22, #ApiView_peer_directions]
+    lsr     x9, x9, x10
+    tbz     x9, #0, 1b
+    str     x0, [sp, #32]
+    ldr     x9, [sp, #24]
+    cbz     x9, 2f
+    API_LIT api_p_comma
+2:  ldr     x9, [sp, #24]
+    add     x9, x9, #1
+    str     x9, [sp, #24]
+    ldr     x0, [sp, #32]
+    bl      api_peer_item
+    b       1b
+9:  API_LIT api_pe_meta
+    ldr     x0, [sp, #24]
+    bl      api_dec
+    API_LIT api_end2
+    UNFRAME 32
+END_FUNCTION api_peers_body
+.if API_DIRECTION_INBOUND != LIBP2P_INBOUND || API_DIRECTION_OUTBOUND != LIBP2P_OUTBOUND
+.error "api_peers_body: the direction bits are the libp2p directions"
+.endif
+
+/*
+ * L1: (route x0) -> x0: the NodePeer whose peer ID's base58btc text is the route's peer_id, or 0.
+ * Locals: the route, the index, the text (72 bytes), base58's work area (72 bytes).
+ */
+LOCAL_FUNCTION node_api_find_peer
+    FRAME 176
+    stp     x0, xzr, [sp, #16]
+1:  PART    x10, x11, x19, Node_peers
+    ldr     x9, [sp, #24]
+    cmp     x9, x11
+    b.hs    8f
+    mov     x12, #NodePeer__mem
+    madd    x13, x9, x12, x10
+    add     x9, x9, #1
+    str     x9, [sp, #24]
+    add     x0, x13, #NodePeer_id
+    ldr     x1, [x13, #NodePeer_id_len]
+    add     x2, sp, #40
+    add     x3, sp, #112
+    bl      api_base58
+    ldr     x9, [sp, #16]
+    PART    x10, x11, x9, ApiRoute_peer_id
+    cmp     x0, x11
+    b.ne    1b
+    mov     x12, #0
+2:  cmp     x12, x11
+    b.hs    3f
+    add     x13, sp, #40
+    ldrb    w14, [x13, x12]
+    ldrb    w15, [x10, x12]
+    cmp     w14, w15
+    b.ne    1b
+    add     x12, x12, #1
+    b       2b
+3:  PART    x10, x11, x19, Node_peers       /* that peer */
+    ldr     x9, [sp, #24]
+    sub     x9, x9, #1
+    mov     x12, #NodePeer__mem
+    madd    x0, x9, x12, x10
+    UNFRAME 176
+8:  mov     x0, #0
+    UNFRAME 176
+END_FUNCTION node_api_find_peer
+
+/*
  * L1: the bodies of getStateRandao, getEpochSyncCommittees and getProposerLookahead (beacon-api.md),
  * as api_body: x22 the view, the local at x0 + 8 the flags. Locals: an index.
  */
@@ -2355,6 +2630,10 @@ LOCAL_FUNCTION node_api_event
     b.eq    81f
     cmp     x3, #API_OP_GET_PEER_COUNT
     b.eq    81f
+    cmp     x3, #API_OP_GET_PEERS
+    b.eq    56f
+    cmp     x3, #API_OP_GET_PEER
+    b.eq    55f
     cmp     x3, #API_OP_GET_GENESIS
     b.eq    81f
     cmp     x3, #API_OP_GET_FORK_SCHEDULE
@@ -2550,6 +2829,29 @@ LOCAL_FUNCTION node_api_event
     b.ne    67f
     orr     x21, x21, #API_ANSWER_SSZ
     b       67f
+56: ldr     x9, [x25, #ApiRoute_present]    /* getPeers: its state and direction sets, all bits with none */
+    mov     x10, #-1
+    ldr     x11, [x25, #ApiRoute_peer_states]
+    tst     x9, #(1 << API_PARAM_STATE)
+    csel    x10, x11, x10, ne
+    str     x10, [x26, #ApiView_peer_states]
+    mov     x10, #-1
+    ldr     x11, [x25, #ApiRoute_peer_directions]
+    tst     x9, #(1 << API_PARAM_DIRECTION)
+    csel    x10, x11, x10, ne
+    str     x10, [x26, #ApiView_peer_directions]
+    str     x19, [x26, #ApiView_node]
+    mov     x2, #200
+    mov     x3, #API_OP_GET_PEERS
+    b       81f
+55: mov     x0, x25                         /* getPeer: the peer of its peer_id, else 404 */
+    bl      node_api_find_peer
+    mov     x2, #404
+    cbz     x0, 80f
+    str     x0, [x26, #ApiView_peer]
+    mov     x2, #200
+    mov     x3, #API_OP_GET_PEER
+    b       81f
 57: mov     x0, x27                         /* getBlockHeaders: a stream of the blocks of its query */
     mov     x1, x25
     mov     x2, x21
