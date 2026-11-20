@@ -209,9 +209,21 @@ api_x_data:
 api_h_root:
     .ascii "\"root\":"
 .set api_h_root_len, 7
+api_h_canonical:
+    .ascii ",\"canonical\":"
+.set api_h_canonical_len, 13
 api_h_slot:
-    .ascii ",\"canonical\":true,\"header\":{\"message\":{\"slot\":"
-.set api_h_slot_len, 46
+    .ascii ",\"header\":{\"message\":{\"slot\":"
+.set api_h_slot_len, 29
+api_k_previous:
+    .ascii "\"previous_version\":"
+.set api_k_previous_len, 19
+api_k_current:
+    .ascii ",\"current_version\":"
+.set api_k_current_len, 19
+api_k_epoch:
+    .ascii ",\"epoch\":"
+.set api_k_epoch_len, 9
 api_h_proposer:
     .ascii ",\"proposer_index\":"
 .set api_h_proposer_len, 18

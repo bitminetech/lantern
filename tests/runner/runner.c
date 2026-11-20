@@ -3516,6 +3516,7 @@ static void shell_close(fc_node *n, uint8_t *anchor_block) {
 static void fc_serve_check(fc_node *n, tv parts, const char **why);
 static void fc_sync_check(tv parts, const char **why);
 static void shell_api_head(fc_node *n, const char **why);
+static void api_lookup_checks(fc_node *n, tv parts, const char **why);
 static void drop_check(tv parts, const char **why);
 
 /* One case through the node: the shell's buffers, then each step as events; with serve, then fc_serve_check. */
@@ -3565,6 +3566,7 @@ static void fc_node_case(tv parts, int serve, const char **why) {
     }
     if (!*why) shell_db_rescan(n.shell, why);
     if (serve && !*why) shell_api_head(&n, why);
+    if (serve && !*why) api_lookup_checks(&n, parts, why);
     if (serve && !*why) fc_serve_check(&n, parts, why);
     if (serve && !*why) fc_sync_check(parts, why);
     static int dropped; /* once in each process */
@@ -7105,7 +7107,9 @@ static void run_node_api(const char *file, case_file *f) {
             uint64_t rooms[2] = {0, wlen / 512 > 2048 ? (wlen / 512) & ~(uint64_t)7 : 2048};
             for (int r = 0; r < 2 && !why; r++) {
                 s->api.room = rooms[r];
+                size_t nbufs = s->nbufs;
                 shell_api_ask(&n, req, rlen, (k + 1) | (uint64_t)(7 + r) << 32, &why);
+                if (!why && s->nbufs != nbufs) why = "the runner holds other buffers after the answer";
                 uint64_t glen = 0;
                 uint8_t *got = why ? NULL : api_normalize(s, &glen, &why);
                 if (why && got) { /* a broken framing: the bytes as they came */
@@ -7290,6 +7294,105 @@ static void shell_api_head(fc_node *n, const char **why) {
     if (!*why && (s->api.len < 17 || memcmp(s->api.b, "HTTP/1.1 200 OK\r\n", 17) || !find_bytes((const char *)s->api.b, s->api.len, want)))
         *why = api_mismatch(s, "API getStateFinalityCheckpoints of head", (const uint8_t *)want, strlen(want));
     if (!*why) api_streams_head(n, st, why);
+}
+
+/* The root of a JSON answer's "root":"0x…" into out; 0 when it has none. */
+static int api_root_of(const struct node_shell *s, uint8_t *out) {
+    return s->api.len > 17 && !memcmp(s->api.b, "HTTP/1.1 200 OK\r\n", 17) &&
+           find_hash((const char *)s->api.b, s->api.len, "\"root\":\"0x", out);
+}
+
+/*
+ * Node mode, after the steps (docs/reference/node.md, Test vectors): the chain is the case's valid
+ * blocks from the node's head_root by parent_root. getBlockRoot of each slot after the anchor's to
+ * the head's: the chain's block of that slot, else 404. getStateRoot of each slot from the head's to
+ * the store's, at most an epoch and a slot past the head's: the hash_tree_root of the head's
+ * post-state processed to the slot. getBlockHeader of the root of each valid block the node holds:
+ * 200, canonical when it is on the chain.
+ */
+static unsigned long api_lookups;
+static void api_lookup_checks(fc_node *n, tv parts, const char **why) {
+    struct node_shell *s = n->shell;
+    case_block *blocks = NULL, **chain = NULL;
+    size_t nchain = case_chain(parts, &blocks, &chain, why), nblocks = 0;
+    const uint8_t *head = s->node + NODE_HEAD_ROOT, *e = shell_block(s, head), *st = shell_state_of(n, head);
+    uint64_t anchor_slot = rd64(s->anchor + 32), head_slot = e ? rd64(e + 64) : 0, conn = 100; /* NodeBlock_slot */
+    char req[192], msg[192];
+    uint8_t got[32];
+    if (*why || !e || !st || (nchain && memcmp(chain[nchain - 1]->root, head, 32))) goto done; /* the chain must end at the head */
+    for (uint64_t slot = anchor_slot + 1; slot <= head_slot && !*why; slot++) {
+        const uint8_t *want = NULL;
+        for (size_t k = 0; k < nchain; k++)
+            if (chain[k]->slot == slot) want = chain[k]->root;
+        snprintf(req, sizeof req, "GET /eth/v1/beacon/blocks/%llu/root HTTP/1.1\r\nHost: lantern\r\n\r\n", (unsigned long long)slot);
+        shell_api_ask(n, (const uint8_t *)req, strlen(req), conn++, why);
+        if (*why) break;
+        int ok = want ? api_root_of(s, got) && !memcmp(got, want, 32) : s->api.len > 13 && !memcmp(s->api.b, "HTTP/1.1 404 ", 13);
+        if (!ok) {
+            snprintf(msg, sizeof msg, "API getBlockRoot of slot %llu: not %s", (unsigned long long)slot, want ? "the chain's block" : "404");
+            *why = msg;
+        }
+        api_lookups++;
+    }
+    uint64_t store_slot = (rd64(n->store + STORE_TIME_MS) - rd64(n->store + STORE_GENESIS_TIME_MS)) / rd64(config + 104);
+    uint64_t last = store_slot < head_slot + SLOTS_PER_EPOCH_RUNNER + 1 ? store_slot : head_slot + SLOTS_PER_EPOCH_RUNNER + 1;
+    uint64_t size = 0;
+    for (size_t b = 0; b < s->nbufs; b++)
+        if (s->bufs[b].b == st) size = s->bufs[b].size;
+    uint8_t *copy = size ? copy_of(st, size) : NULL;
+    for (uint64_t slot = head_slot; copy && slot <= last && !*why; slot++) {
+        uint64_t result = 0, status, growth = 2;
+        uint8_t root[32];
+        if (slot > head_slot)
+            while ((status = CALL(LF(process_slots), copy, &slot, config, fresh_scratch(), &result)) == 1 && !*why)
+                copy = regrow(copy, &size, growth *= 2, why);
+        else
+            status = 0;
+        if (*why || status != 0 || result != 0) break; /* a slot lantern does not reach alone: the rest is skipped */
+        root_of("BeaconState", copy, root, why);
+        snprintf(req, sizeof req, "GET /eth/v1/beacon/states/%llu/root HTTP/1.1\r\nHost: lantern\r\n\r\n", (unsigned long long)slot);
+        if (!*why) shell_api_ask(n, (const uint8_t *)req, strlen(req), conn++, why);
+        if (!*why && !(api_root_of(s, got) && !memcmp(got, root, 32))) {
+            snprintf(msg, sizeof msg, "API getStateRoot of slot %llu: not the head's post-state at that slot", (unsigned long long)slot);
+            *why = msg;
+        }
+        if (!*why) *why = api_clean(s);
+        api_lookups++;
+    }
+    free(copy);
+    tv steps = tv_get(parts, "steps");
+    for (tv stp = steps ? steps + 9 : NULL; stp && nblocks < rd64(steps + 1) && !*why; stp = tv_skip(stp), nblocks++) {
+        tv v = tv_get(stp, "valid"), bname = tv_get(stp, "block");
+        if (!bname || (v && !(*v == T_BOOL && v[1]))) continue;
+        char key[128];
+        uint64_t len, vsize;
+        uint8_t root[32];
+        snprintf(key, sizeof key, "%.*s", (int)rd64(bname + 1), (const char *)(bname + 9));
+        const uint8_t *bytes = tv_bytes(tv_get(parts, key), &len);
+        uint8_t *sb = decode(type_by_name("SignedBeaconBlock"), bytes, len, &vsize, why);
+        if (!sb) break;
+        root_of("BeaconBlock", nested(sb, field_offset("SignedBeaconBlock", 0)), root, why);
+        free(sb);
+        const uint8_t *be = shell_block(s, root);
+        if (*why || !be || rd64(be + NB_STATUS) != NB_IMPORTED) continue;
+        int on = 0;
+        for (size_t k = 0; k < nchain; k++)
+            if (!memcmp(chain[k]->root, root, 32)) on = 1;
+        int k = snprintf(req, sizeof req, "GET /eth/v1/beacon/headers/0x");
+        for (int b = 0; b < 32; b++) k += snprintf(req + k, sizeof req - (size_t)k, "%02x", root[b]);
+        snprintf(req + k, sizeof req - (size_t)k, " HTTP/1.1\r\nHost: lantern\r\n\r\n");
+        shell_api_ask(n, (const uint8_t *)req, strlen(req), conn++, why);
+        if (!*why && !(api_root_of(s, got) && !memcmp(got, root, 32) &&
+                       find_bytes((const char *)s->api.b, s->api.len, on ? "\"canonical\":true" : "\"canonical\":false"))) {
+            snprintf(msg, sizeof msg, "API getBlockHeader of a block %s the chain: not 200 with canonical %s", on ? "on" : "off",
+                     on ? "true" : "false");
+            *why = msg;
+        }
+        api_lookups++;
+    }
+done:
+    free(chain);
+    free(blocks);
 }
 
 /*
@@ -7728,6 +7831,7 @@ int main(int argc, char **argv) {
     }
     if (node_settles_finalized) printf("NOTE: %lu node settles past a finalized epoch\n", node_settles_finalized);
     if (api_heads_streamed) printf("NOTE: %lu heads served as getBlockV2 and getStateV2 streams\n", api_heads_streamed);
+    if (api_lookups) printf("NOTE: %lu lookups of a block or a state by slot or root\n", api_lookups);
     if (node_replays) printf("NOTE: %lu post-states the nodes rebuilt by replay\n", node_replays);
     if (gossip_votes) printf("NOTE: %lu of %lu valid attestations went to fork choice as gossip aggregates\n", gossip_votes_applied, gossip_votes);
     if (drop_ran) printf("NOTE: the sidecar drop check passed\n");

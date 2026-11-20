@@ -142,7 +142,8 @@ MESSAGES = {400: b"BAD_REQUEST", 404: b"NOT_FOUND", 405: b"METHOD_NOT_ALLOWED", 
 METHODS = {1: b"GET", 2: b"POST", 3: b"DELETE"}
 ALLOW = {1: b"GET", 2: b"POST", 3: b"GET, POST"}
 ANSWERED = ("getHealth", "getNetworkIdentity", "getNodeVersion", "getSyncingStatus", "getPeerCount", "getGenesis",
-            "getBlockHeader", "getStateFinalityCheckpoints", "getBlockV2", "getStateV2")
+            "getBlockHeader", "getStateFinalityCheckpoints", "getBlockV2", "getStateV2", "getBlockRoot", "getStateRoot",
+            "getStateFork")
 IDENTITY = (b"16Uiu2HAmPLe7Mzm8TsYUubgCAW1aJoeFScxrLj8ppHFivPo97bUZ",
             b"enr:-Iu4QLm7bZGdAhVwRqZ6Zf3LlnqKsBTnZGOByHQhPMQJ3pV4F3t8L9i5yJOZ0X0hiZ6q4D5V0jB7l8J3ZtYw1JDH9C4BgmlkgnY0gmlwhAoAAAGJc2VjcDI1NmsxoQPKY0yuDUmstAHYpMa2_oxVtw0RW_QAdpzBQA8yWM0xOIN0Y3CCIyg",
             b"/ip4/10.0.0.1/tcp/9000/p2p/16Uiu2HAmPLe7Mzm8TsYUubgCAW1aJoeFScxrLj8ppHFivPo97bUZ",
@@ -224,8 +225,16 @@ def api_values(spec, fork, state, block):
         header.state_root = state_root
     assert spec.hash_tree_root(header) == root
     from json_codec import to_json
+    states = {int(block.slot): state}  # the anchor state processed to each slot to the store's
+    for slot in range(int(block.slot) + 1, int(block.slot) + SLOTS_AHEAD + 1):
+        s = state.copy()
+        spec.process_slots(s, slot)
+        states[slot] = s
     return dict(fork=fork, finalized=store.finalized_checkpoint.root == root, state_ssz=bytes(state.encode_bytes()),
-                state_json=to_json(state).encode(),
+                state_json=to_json(state).encode(), states=states, spec=spec,
+                finalized_slot=int(store.finalized_checkpoint.epoch) * int(spec.SLOTS_PER_EPOCH),
+                checkpoint_slots={1: int(block.slot), 3: int(store.finalized_checkpoint.epoch) * int(spec.SLOTS_PER_EPOCH),
+                                  4: int(store.justified_checkpoint.epoch) * int(spec.SLOTS_PER_EPOCH)},
                 genesis_time=int(store.genesis_time_ms) // 1000, gvr=bytes(state.genesis_validators_root),
                 genesis_version=bytes(spec.config.GENESIS_FORK_VERSION), root=bytes(root), slot=int(block.slot),
                 header=header, cgc=int(spec.config.CUSTODY_REQUIREMENT) if fork == "fulu" else None,
@@ -261,32 +270,47 @@ def answer(v, name, route, offline, close, keep_alive):
         body = (b'{"data":{"genesis_time":' + q(v["genesis_time"]) + b',"genesis_validators_root":' + qhex(v["gvr"]) +
                 b',"genesis_fork_version":' + qhex(v["genesis_version"]) + b"}}")
         return response(200, body, **kw)
-    if name == "getBlockHeader":
-        if not (route.id_kind == 1 or (route.id_kind == 6 and route.id_root == v["root"])):
+    if name in ("getBlockHeader", "getBlockRoot", "getBlockV2"):
+        # The chain is the anchor alone: head, finalized, its slot and its root name it.
+        found = (route.id_kind in (1, 3) or (route.id_kind == 5 and route.id_slot == v["slot"]) or
+                 (route.id_kind == 2 and v["slot"] == 0) or (route.id_kind == 6 and route.id_root == v["root"]))
+        if not found or name == "getBlockV2":  # the anchor block's bytes are not the node's
             return error(404, **kw)
+        values = b'{"execution_optimistic":false,"finalized":true,"data":{"root":' + qhex(v["root"])
+        if name == "getBlockRoot":
+            return response(200, values + b"}}", **kw)
         h = v["header"]
-        body = (b'{"execution_optimistic":false,"finalized":' + flag(v["finalized"]) + b',"data":{"root":' + qhex(v["root"]) +
-                b',"canonical":true,"header":{"message":{"slot":' + q(h.slot) + b',"proposer_index":' + q(h.proposer_index) +
+        body = (values + b',"canonical":true,"header":{"message":{"slot":' + q(h.slot) + b',"proposer_index":' + q(h.proposer_index) +
                 b',"parent_root":' + qhex(h.parent_root) + b',"state_root":' + qhex(h.state_root) + b',"body_root":' +
                 qhex(h.body_root) + b'},"signature":' + qhex(bytes(96)) + b"}}}")
         return response(200, body, **kw)
-    if name == "getStateFinalityCheckpoints":
-        if route.id_kind != 1:
+    if name in ("getStateRoot", "getStateFork", "getStateFinalityCheckpoints", "getStateV2"):
+        if route.id_kind in v["checkpoint_slots"]:
+            slot = v["checkpoint_slots"][route.id_kind]
+        elif route.id_kind == 5 or (route.id_kind == 2):
+            slot = route.id_slot if route.id_kind == 5 else 0
+        else:  # a state root: none in this version
             return error(404, **kw)
-        c = v["checkpoints"]
-        body = (b'{"execution_optimistic":false,"finalized":' + flag(v["finalized"]) + b',"data":{"previous_justified":{"epoch":' + q(c[0].epoch) +
-                b',"root":' + qhex(c[0].root) + b'},"current_justified":{"epoch":' + q(c[1].epoch) + b',"root":' +
-                qhex(c[1].root) + b'},"finalized":{"epoch":' + q(c[2].epoch) + b',"root":' + qhex(c[2].root) + b"}}}")
-        return response(200, body, **kw)
-    if name == "getBlockV2":  # the anchor block's bytes are not the node's
-        return error(404, **kw)
-    if name == "getStateV2":
-        if route.id_kind != 1:
+        if slot not in v["states"]:
             return error(404, **kw)
+        s, spec = v["states"][slot], v["spec"]
+        values = b'{"execution_optimistic":false,"finalized":' + flag(slot <= v["finalized_slot"])
+        if name == "getStateRoot":
+            return response(200, values + b',"data":{"root":' + qhex(spec.hash_tree_root(s)) + b"}}", **kw)
+        if name == "getStateFork":
+            f = s.fork
+            return response(200, values + b',"data":{"previous_version":' + qhex(f.previous_version) + b',"current_version":' +
+                            qhex(f.current_version) + b',"epoch":' + q(f.epoch) + b"}}", **kw)
+        if name == "getStateFinalityCheckpoints":
+            c = [s.previous_justified_checkpoint, s.current_justified_checkpoint, s.finalized_checkpoint]
+            body = (values + b',"data":{"previous_justified":{"epoch":' + q(c[0].epoch) +
+                    b',"root":' + qhex(c[0].root) + b'},"current_justified":{"epoch":' + q(c[1].epoch) + b',"root":' +
+                    qhex(c[1].root) + b'},"finalized":{"epoch":' + q(c[2].epoch) + b',"root":' + qhex(c[2].root) + b"}}}")
+            return response(200, body, **kw)
         if route.response == 2:
-            return streamed(v["fork"], v["state_ssz"], ssz=True, **kw)
-        body = (b'{"version":"' + v["fork"].encode() + b'","execution_optimistic":false,"finalized":' +
-                flag(v["finalized"]) + b',"data":' + v["state_json"] + b"}")
+            return streamed(v["fork"], bytes(s.encode_bytes()), ssz=True, **kw)
+        from json_codec import to_json
+        body = (b'{"version":"' + v["fork"].encode() + b'",' + values[1:] + b',"data":' + to_json(s).encode() + b"}")
         return streamed(v["fork"], body, **kw)
     raise AssertionError(name)
 
@@ -298,6 +322,7 @@ class Route:
         self.op = struct.unpack_from("<Q", out, 16)[0]
         self.response = struct.unpack_from("<Q", out, 48)[0]
         self.id_kind = struct.unpack_from("<Q", out, 72)[0]
+        self.id_slot = struct.unpack_from("<Q", out, 80)[0]
         self.id_root = bytes(out[88:120])
         self.syncing_status = struct.unpack_from("<Q", out, 240)[0]
 
@@ -373,6 +398,18 @@ def api_requests(spec, fork, v):
     for block_id in (b"head", qhex(v["root"])[1:-1], b"finalized"):
         add(f"block_{block_id.decode()[:10]}", api_route.base(block, path_values={"block_id": block_id}))
         add(f"block_{block_id.decode()[:10]}_ssz", api_route.base(block, path_values={"block_id": block_id}, accept=octet))
+    root_id, other_root = qhex(v["root"])[1:-1], b"0x" + bytes(range(32)).hex().encode()
+    for op in ("getBlockRoot", "getBlockHeader", "getBlockV2"):
+        for block_id in (b"head", b"finalized", b"genesis", b"%d" % (v["slot"] - 1), b"%d" % v["slot"], b"%d" % (v["slot"] + 1),
+                         root_id, other_root):
+            add(f"lookup_{op}_{block_id.decode()[:12]}", api_route.base(by_name[op], path_values={"block_id": block_id}))
+    for op in ("getStateRoot", "getStateFork", "getStateFinalityCheckpoints"):
+        ids = [b"head", b"finalized", b"justified", b"genesis", other_root]
+        ids += [b"%d" % s for s in range(v["slot"], v["slot"] + SLOTS_AHEAD + 2)]
+        for state_id in ids:
+            add(f"lookup_{op}_{state_id.decode()[:12]}", api_route.base(by_name[op], path_values={"state_id": state_id}))
+    for state_id in (b"finalized", b"%d" % (v["slot"] + 2)):
+        add(f"lookup_getStateV2_{state_id.decode()}", api_route.base(state, path_values={"state_id": state_id}))
     validators = by_name["getStateValidators"]
     add("ids_65_414", api_route.base(validators, [("id", b",".join(str(i).encode() for i in range(65)))]))
     publish = by_name["publishBlockV2"]

@@ -1718,6 +1718,18 @@ END_FUNCTION node_prune
     add     \dst, t0, \dst
 .endm
 
+/* a0 = the DbSlot of slot a0 in the node's Db when it holds a block of that slot, else 0. Uses t0-t3. */
+LOCAL_FUNCTION node_db_slot
+    UNWIND_END_PROLOGUE
+    DB_SLOT t3, a0, 9f
+    ld      t0, DbSlot_block(t3)
+    beqz    t0, 9f
+    mv      a0, t3
+    ret
+9:  li      a0, 0
+    ret
+END_FUNCTION node_db_slot
+
 /* a0 = the NODE_DB_REF of the Db record of the block of slot a0, or 0. Uses t0-t3. */
 LOCAL_FUNCTION node_db_block
     UNWIND_END_PROLOGUE

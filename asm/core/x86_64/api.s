@@ -295,6 +295,9 @@ LOCAL_FUNCTION api_body
     lea     ApiView_head_root(%rbp), %rdi
     mov     $32, %esi
     call    api_qhex
+    API_LIT api_h_canonical
+    mov     ApiView_canonical(%rbp), %rdi
+    call    api_bool
     API_LIT api_h_slot
     mov     ApiView_head_slot(%rbp), %rdi
     call    api_qdec
@@ -338,7 +341,43 @@ LOCAL_FUNCTION api_body
     lea     ApiView_finalized(%rbp), %rdi
     call    api_checkpoint
     API_LIT api_end2
-9:  UNFRAME 16
+    UNFRAME 16
+9:  cmp     $API_OP_GET_BLOCK_ROOT, %rsi    # getBlockRoot, getStateRoot: {"execution_optimistic":…,"finalized":…,"data":{"root":…}}
+    je      10f
+    cmp     $API_OP_GET_STATE_ROOT, %rsi
+    je      10f
+    cmp     $API_OP_GET_STATE_FORK, %rsi
+    jne     99f
+10: mov     %rsi, 8(%rsp)
+    API_LIT api_x_optimistic
+    mov     ApiView_is_optimistic(%rbp), %rdi
+    call    api_bool
+    API_LIT api_x_finalized
+    mov     ApiView_head_finalized(%rbp), %rdi
+    call    api_bool
+    API_LIT api_x_data
+    cmpq    $API_OP_GET_STATE_FORK, 8(%rsp)
+    je      11f
+    API_LIT api_h_root
+    lea     ApiView_head_root(%rbp), %rdi
+    mov     $32, %esi
+    call    api_qhex
+    API_LIT api_end2
+    UNFRAME 16
+    # getStateFork: {"previous_version":…,"current_version":…,"epoch":…}
+11: API_LIT api_k_previous
+    lea     ApiView_state_fork(%rbp), %rdi
+    mov     $4, %esi
+    call    api_qhex
+    API_LIT api_k_current
+    lea     (ApiView_state_fork + 4)(%rbp), %rdi
+    mov     $4, %esi
+    call    api_qhex
+    API_LIT api_k_epoch
+    mov     (ApiView_state_fork + 8)(%rbp), %rdi
+    call    api_qdec
+    API_LIT api_end2
+99: UNFRAME 16
 END_FUNCTION api_body
 
 /*
@@ -746,77 +785,65 @@ LOCAL_FUNCTION node_api_event
     cmp     $API_OP_GET_GENESIS, %rcx
     je      81f
     mov     $404, %edx
-    mov     S7(%rsp), %rax
-    cmp     $API_OP_GET_STATE_FINALITY_CHECKPOINTS, %rcx
-    jne     5f
-    cmpq    $API_ID_HEAD, ApiRoute_id_kind(%rax)    # finality_checkpoints: of head
-    jne     80f
-    jmp     60f
-5:  cmp     $API_OP_GET_BLOCK_HEADER, %rcx
-    jne     62f
-    cmpq    $API_ID_HEAD, ApiRoute_id_kind(%rax)    # headers: of head, or of the head's root
-    je      60f
-    cmpq    $API_ID_ROOT, ApiRoute_id_kind(%rax)
-    jne     80f
-    lea     ApiRoute_id_root(%rax), %rsi
-    lea     Node_head_root(%rbx), %rdi
-    NE32    %rsi, %rdi, 80f
-60: lea     Node_head_root(%rbx), %rdi      # a work with the head's post-state and bytes
-    call    node_find_block
-    mov     %rdx, %r12
-    mov     $500, %edx
-    cmp     $-1, %rax
-    je      80f
-    mov     %rax, S8(%rsp)
-    mov     NodeBlock_data_id(%r12), %rax
-    test    %rax, %rax
-    jnz     61f
-    mov     %r12, %rdi
-    call    node_api_db_ref
-61: mov     %rax, %rcx
-    mov     S7(%rsp), %rax                  # arg: the operation, the answer flags, the block's index
-    mov     ApiRoute_op(%rax), %r9
-    xor     %eax, %eax
+    xor     %r12d, %r12d                    # r12: the answer flags of a work or a stream
     testq   $API_R_CLOSE, S10(%rsp)
-    setnz   %al
-    xor     %edx, %edx
-    cmpq    $10, HttpRequest_version(%r13)
-    sete    %dl
-    lea     (%rax,%rdx,2), %rax
-    shl     $8, %rax
-    or      %rax, %r9
-    mov     S8(%rsp), %rax
-    shl     $16, %rax
-    or      %rax, %r9
-    mov     $NODE_WORK_API_ENCODE, %edi
-    mov     NodeBlock_state_id(%r12), %rsi
-    xor     %edx, %edx
-    mov     S9(%rsp), %r8
-    call    node_work
-    jmp     90f
-62: cmp     $API_OP_GET_STATE_V2, %rcx       # getStateV2: of head
-    jne     63f
-    cmpq    $API_ID_HEAD, ApiRoute_id_kind(%rax)
-    jne     80f
-    jmp     64f
-63: cmp     $API_OP_GET_BLOCK_V2, %rcx       # getBlockV2: of head, or of the head's root
-    jne     7f
-    cmpq    $API_ID_HEAD, ApiRoute_id_kind(%rax)
-    je      64f
-    cmpq    $API_ID_ROOT, ApiRoute_id_kind(%rax)
-    jne     80f
-    lea     ApiRoute_id_root(%rax), %rsi
-    lea     Node_head_root(%rbx), %rdi
-    NE32    %rsi, %rdi, 80f
-64: mov     S9(%rsp), %rdi                  # a stream of the answer
-    mov     S7(%rsp), %rsi
-    xor     %edx, %edx
-    testq   $API_R_CLOSE, S10(%rsp)
-    setnz   %dl
+    setnz   %r12b
     xor     %eax, %eax
     cmpq    $10, HttpRequest_version(%r13)
     sete    %al
-    lea     (%rdx,%rax,2), %rdx
+    lea     (%r12,%rax,2), %r12
+    cmp     $API_OP_GET_BLOCK_ROOT, %rcx
+    je      65f
+    cmp     $API_OP_GET_BLOCK_HEADER, %rcx
+    je      65f
+    cmp     $API_OP_GET_BLOCK_V2, %rcx
+    je      65f
+    cmp     $API_OP_GET_STATE_ROOT, %rcx
+    je      66f
+    cmp     $API_OP_GET_STATE_FORK, %rcx
+    je      66f
+    cmp     $API_OP_GET_STATE_FINALITY_CHECKPOINTS, %rcx
+    je      66f
+    cmp     $API_OP_GET_STATE_V2, %rcx
+    jne     7f
+66: mov     S7(%rsp), %rdi                  # a state: its lookup, then the state at its slot
+    mov     S8(%rsp), %rsi
+    call    node_api_state
+    mov     %rax, %rdx
+    test    %rax, %rax
+    jnz     80f
+    mov     S8(%rsp), %rdi
+    call    node_api_advance
+    mov     S7(%rsp), %rax
+    cmpq    $API_OP_GET_STATE_V2, ApiRoute_op(%rax)
+    je      64f
+    jmp     67f
+65: mov     S7(%rsp), %rdi                  # a block: its lookup
+    mov     S8(%rsp), %rsi
+    call    node_api_block
+    mov     %rax, %rdx
+    test    %rax, %rax
+    jnz     80f
+    mov     S7(%rsp), %rax
+    mov     ApiRoute_op(%rax), %rcx
+    mov     $200, %edx
+    cmp     $API_OP_GET_BLOCK_ROOT, %rcx    # getBlockRoot: the answer at once
+    je      81f
+    cmp     $API_OP_GET_BLOCK_V2, %rcx
+    je      64f
+67: mov     S7(%rsp), %rax                  # a work
+    mov     ApiRoute_op(%rax), %rdi
+    mov     S9(%rsp), %rsi
+    mov     %r12, %rdx
+    mov     S8(%rsp), %rcx
+    call    node_api_encode
+    mov     %rax, %rdx
+    test    %rax, %rax
+    jnz     80f
+    jmp     90f
+64: mov     S9(%rsp), %rdi                  # a stream of the answer
+    mov     S7(%rsp), %rsi
+    mov     %r12, %rdx
     mov     S8(%rsp), %rcx
     call    node_api_stream
     test    %rax, %rax
@@ -900,11 +927,11 @@ END_FUNCTION node_api_done
  * (node rdi, store rsi, work rdx, state_a rcx, data r8, scratch r9, event r10, room r11) -> rax:
  * a NODE_WORK_API_ENCODE of lantern_node_run (node.md): the response at NodeEvent_chunk of the
  * event, whose buffer has room bytes. rbx the node, rbp the store, r12 the work, r13 state_a, r14
- * the scratch, r15 the event, S7 data, S8 the ApiView at the end of scratch, S9 the block's entry,
- * S10 the room. Locals: L the scratch's size, L+8 a kept word.
+ * the scratch, r15 the event, S7 data, S8 the ApiView at the end of scratch, S9 the operation, S10
+ * the room. Locals: L the scratch's size, L+8 the fork, L+16 a Result, L+24 a blob count.
  */
 LOCAL_FUNCTION node_api_run
-    ENTER 16
+    ENTER 32
     mov     %rdi, %rbx
     mov     %rsi, %rbp
     mov     %rdx, %r12
@@ -913,17 +940,30 @@ LOCAL_FUNCTION node_api_run
     mov     %r9, %r14
     mov     %r10, %r15
     mov     %r11, S10(%rsp)
-    mov     NodeAction_arg(%r12), %rax      # the block's entry
-    shr     $16, %rax
-    PART    %rcx, %rdx, %rbx, Node_blocks
-    cmp     %rdx, %rax
-    jae     8f
+    movzbl  NodeAction_arg(%r12), %eax      # the operation; a block index past the blocks part
+    mov     %rax, S9(%rsp)
+    mov     NodeAction_arg(%r12), %rcx
+    shr     $24, %rcx
+    cmp     $API_OP_GET_BLOCK_HEADER, %eax
+    jne     1f
+    cmp     (Node_blocks + 8)(%rbx), %rcx
+    ja      8f
+    cmpq    $0, S7(%rsp)                    # a header: bytes, or a block of the node with a post-state
+    jne     2f
+    test    %rcx, %rcx
+    jz      8f
     test    %r13, %r13
     jz      8f
-    imul    $NodeBlock__mem, %rax, %rax
-    add     %rcx, %rax
-    mov     %rax, S9(%rsp)
-    mov     (%r14), %rax                    # the ApiView at the end of scratch
+    jmp     2f
+1:  test    %r13, %r13                      # a state's answer: a state
+    jz      8f
+    cmp     $API_OP_GET_STATE_FINALITY_CHECKPOINTS, %eax
+    je      2f
+    cmp     $API_OP_GET_STATE_ROOT, %eax
+    je      2f
+    cmp     $API_OP_GET_STATE_FORK, %eax
+    jne     8f
+2:  mov     (%r14), %rax                    # the ApiView at the end of scratch, with the work's values
     mov     %rax, L(%rsp)
     sub     $ApiView__size, %rax
     jb      7f
@@ -932,34 +972,58 @@ LOCAL_FUNCTION node_api_run
     mov     %rax, S8(%rsp)
     mov     %rax, %rdi
     call    node_api_view
-    mov     S8(%rsp), %rdi                  # the block's root and slot
-    mov     S9(%rsp), %rsi
-    mov     NodeBlock_slot(%rsi), %rax
-    mov     %rax, ApiView_head_slot(%rdi)
-    lea     ApiView_head_root(%rdi), %rax
-    COPY32  %rax, %rsi
-    xor     %eax, %eax
-    cmpq    $PAYLOAD_STATUS_NOT_VALIDATED, NodeBlock_payload_status(%rsi)
-    sete    %al
-    mov     %rax, ApiView_is_optimistic(%rdi)
-    call    api_view_finalized
-    movzbl  NodeAction_arg(%r12), %eax
-    cmp     $API_OP_GET_STATE_FINALITY_CHECKPOINTS, %eax
-    jne     2f
-    mov     NODE_STATE_SLOT(%r13), %rdi     # finality_checkpoints: the state's
+    mov     S8(%rsp), %rdi
+    mov     NodeAction_arg(%r12), %rax
+    mov     %rax, %rcx
+    shr     $16, %rcx
+    and     $1, %ecx
+    mov     %rcx, ApiView_canonical(%rdi)
+    mov     %rax, %rcx
+    shr     $17, %rcx
+    and     $1, %ecx
+    mov     %rcx, ApiView_head_finalized(%rdi)
+    mov     %rax, %rcx
+    shr     $18, %rcx
+    and     $1, %ecx
+    mov     %rcx, ApiView_is_optimistic(%rdi)
+    cmpq    $API_OP_GET_BLOCK_HEADER, S9(%rsp)
+    je      3f
+    shr     $24, %rax                       # a state at the work's slot, else the work that brought it there failed
+    mov     NODE_STATE_SLOT(%r13), %rdi
+    cmp     %rax, %rdi
+    jne     42f
     lea     Node_config(%rbx), %rsi
     call    node_fork
     mov     %rax, %r10
-    mov     %r13, %rdi
+    cmpq    $API_OP_GET_STATE_FINALITY_CHECKPOINTS, S9(%rsp)
+    jne     21f
+    mov     %r13, %rdi                      # finality_checkpoints
     mov     S8(%rsp), %rsi
     add     $ApiView_previous_justified, %rsi
     FORK_CALL node_state_checkpoints
     jmp     5f
-2:  cmp     $API_OP_GET_BLOCK_HEADER, %eax
-    jne     6f
-    mov     S7(%rsp), %rdi
+21: cmpq    $API_OP_GET_STATE_FORK, S9(%rsp)
+    jne     22f
+    mov     S8(%rsp), %rdi                  # fork
+    add     $ApiView_state_fork, %rdi
+    lea     NODE_STATE_FORK(%r13), %rsi
+    mov     $16, %edx
+    call    lantern_copy
+    jmp     5f
+22: mov     %r13, %rdi                      # root
+    mov     (Node_config + CONFIG_STATE_CACHE)(%rbx), %rsi
+    mov     %r14, %rdx
+    mov     S8(%rsp), %rcx
+    add     $ApiView_head_root, %rcx
+    FORK_CALL state_root
+    cmp     $LANTERN_BUFFER_TOO_SMALL, %rax
+    je      71f
+    test    %rax, %rax
+    jnz     41f
+    jmp     5f
+3:  mov     S7(%rsp), %rdi
     test    %rdi, %rdi
-    jz      3f
+    jz      33f
     cmpq    $(100 + 84), 16(%rdi)           # header: of the bytes, at the fork of their slot
     jb      41f
     mov     8(%rdi), %rax
@@ -968,32 +1032,49 @@ LOCAL_FUNCTION node_api_run
     lea     Node_config(%rbx), %rsi
     call    node_fork
     mov     %rax, %r10
-    mov     S8(%rsp), %rdx                  # the header's slot lands on the root's last 8 bytes: kept
-    mov     (ApiView_proposer_index - 8)(%rdx), %rax
     mov     %rax, (L + 8)(%rsp)
-    add     $(ApiView_proposer_index - 8), %rdx
     mov     S7(%rsp), %rdi
     mov     %r14, %rsi
+    mov     S8(%rsp), %rdx                  # the header's slot lands on the root's last 8 bytes
+    add     $(ApiView_proposer_index - 8), %rdx
     FORK_CALL node_block_header
-    mov     S8(%rsp), %rdx
-    mov     (L + 8)(%rsp), %rcx
-    mov     %rcx, (ApiView_proposer_index - 8)(%rdx)
     cmp     $LANTERN_BUFFER_TOO_SMALL, %rax
     je      71f
     test    %rax, %rax
     jnz     41f
+    mov     S8(%rsp), %rdx
+    mov     (ApiView_proposer_index - 8)(%rdx), %rax
+    mov     %rax, ApiView_head_slot(%rdx)
+    mov     NodeAction_arg(%r12), %rax      # the root: the node's block's, else of the bytes
+    shr     $24, %rax
+    jnz     34f
+    mov     (L + 8)(%rsp), %r10
+    mov     S7(%rsp), %rdi
+    mov     %r14, %rsi
+    add     $ApiView_head_root, %rdx
+    lea     (L + 16)(%rsp), %rcx
+    lea     (L + 24)(%rsp), %r8
+    FORK_CALL node_block_root
+    cmp     $LANTERN_BUFFER_TOO_SMALL, %rax
+    je      71f
+    test    %rax, %rax
+    jnz     41f
+    cmpq    $0, (L + 16)(%rsp)
+    jne     41f
     jmp     5f
-3:  mov     S8(%rsp), %rdi                  # no bytes: the state's latest_block_header, a zero signature
+33: mov     S8(%rsp), %rdi                  # no bytes: the state's latest_block_header, a zero signature
     add     $ApiView_proposer_index, %rdi
     lea     (NODE_STATE_HEADER + 8)(%r13), %rsi
     mov     $(112 - 8), %edx
     call    lantern_copy
     mov     S8(%rsp), %rdi
+    mov     NODE_STATE_HEADER(%r13), %rax
+    mov     %rax, ApiView_head_slot(%rdi)
     mov     ApiView_state_root(%rdi), %rax
     or      (ApiView_state_root + 8)(%rdi), %rax
     or      (ApiView_state_root + 16)(%rdi), %rax
     or      (ApiView_state_root + 24)(%rdi), %rax
-    jnz     5f
+    jnz     34f
     mov     NODE_STATE_SLOT(%r13), %rdi     # a zero state_root: the state's root
     lea     Node_config(%rbx), %rsi
     call    node_fork
@@ -1008,8 +1089,17 @@ LOCAL_FUNCTION node_api_run
     je      71f
     test    %rax, %rax
     jnz     41f
+34: mov     NodeAction_arg(%r12), %rax      # the root of the node's block, index - 1
+    shr     $24, %rax
+    jz      5f
+    dec     %rax
+    imul    $NodeBlock__mem, %rax, %rax
+    add     Node_blocks(%rbx), %rax
+    add     %rbx, %rax
+    mov     S8(%rsp), %rdi
+    add     $ApiView_head_root, %rdi
+    COPY32  %rdi, %rax
 5:  mov     NodeAction_arg(%r12), %rax      # the response, in the event
-    movzbl  %al, %ecx
     shr     $8, %rax
     movzbl  %al, %eax
     mov     %rax, %r8
@@ -1027,6 +1117,7 @@ LOCAL_FUNCTION node_api_run
     mov     S8(%rsp), %rdi
     lea     NodeEvent_chunk(%r15), %rsi
     mov     $200, %edx
+    mov     S9(%rsp), %rcx
     call    api_respond
     test    %rax, %rax
     jnz     71f
@@ -1037,20 +1128,423 @@ LOCAL_FUNCTION node_api_run
     sub     $NodeEvent_chunk, %rax
     mov     %rax, NodeEvent_chunk(%r15)
     jmp     9f
+42: movq    $LANTERN_INVALID_SLOT, NodeEvent_result(%r15)
+    jmp     9f
 41: movq    $LANTERN_INVALID_ENCODING, NodeEvent_result(%r15)
 9:  mov     L(%rsp), %rax
     mov     %rax, (%r14)
     xor     %eax, %eax
-    LEAVE 16
-6:  mov     L(%rsp), %rax
-    mov     %rax, (%r14)
+    LEAVE 32
 8:  mov     $LANTERN_INVALID_EVENT, %eax
-    LEAVE 16
+    LEAVE 32
 71: mov     L(%rsp), %rax
     mov     %rax, (%r14)
 7:  mov     $LANTERN_BUFFER_TOO_SMALL, %eax
-    LEAVE 16
+    LEAVE 32
 END_FUNCTION node_api_run
+
+/* ---------------------------------------------------------------- Lookup (beacon-api.md, Common rules) */
+
+/* rax = the NodeBlock index of the imported parent of the entry rdi, or 2^64 - 1; rdx = its entry. Uses rcx, r11, xmm0-xmm2. */
+LOCAL_FUNCTION node_api_parent
+    FRAME 0
+    add     $NodeBlock_parent_root, %rdi
+    call    node_find_block
+    cmp     $-1, %rax
+    je      9f
+    cmpq    $NODE_BLOCK_IMPORTED, NodeBlock_status(%rdx)
+    je      9f
+    mov     $-1, %rax
+9:  UNFRAME 0
+END_FUNCTION node_api_parent
+
+/*
+ * The block of the chain at or below the slot rdi: rax = its NodeBlock index, rdx = its entry; or
+ * rax = 2^64 - 1 when the lowest block of the chain the node keeps, rdx (0 with no head), is above
+ * the slot. Locals: the slot, an entry.
+ */
+LOCAL_FUNCTION node_api_below
+    FRAME 16
+    mov     %rdi, (%rsp)
+    lea     Node_head_root(%rbx), %rdi
+    call    node_find_block
+    cmp     $-1, %rax
+    jne     1f
+    xor     %edx, %edx
+    UNFRAME 16
+1:  mov     (%rsp), %rcx
+    cmp     %rcx, NodeBlock_slot(%rdx)
+    jbe     9f
+    mov     %rdx, 8(%rsp)
+    mov     %rdx, %rdi
+    call    node_api_parent
+    cmp     $-1, %rax
+    jne     1b
+    mov     8(%rsp), %rdx
+9:  UNFRAME 16
+END_FUNCTION node_api_below
+
+/* rax = 1 when the block entry rdi is on the chain, else 0. Locals: the entry. */
+LOCAL_FUNCTION node_api_on_chain
+    FRAME 16
+    mov     %rdi, (%rsp)
+    mov     NodeBlock_slot(%rdi), %rdi
+    call    node_api_below
+    cmp     $-1, %rax
+    je      8f
+    xor     %eax, %eax
+    cmp     (%rsp), %rdx
+    sete    %al
+    UNFRAME 16
+8:  xor     %eax, %eax
+    UNFRAME 16
+END_FUNCTION node_api_on_chain
+
+/* rax = 1 when the slot rdi is at most that of the block of the store's finalized root, else 0. Locals: rdi. */
+LOCAL_FUNCTION node_api_final_block
+    FRAME 16
+    mov     %rdi, (%rsp)
+    call    node_f_slot
+    cmp     $-1, %rax
+    je      8f
+    mov     (%rsp), %rcx
+    cmp     %rax, %rcx
+    setbe   %al
+    movzbl  %al, %eax
+    UNFRAME 16
+8:  xor     %eax, %eax
+    UNFRAME 16
+END_FUNCTION node_api_final_block
+
+/*
+ * The block of the block_id of the ApiRoute rdi into the ApiView rsi (beacon-api.md, Common rules):
+ * head_root, head_slot, canonical, head_finalized, is_optimistic, look_index, look_data, and for a
+ * block the node keeps look_state and look_state_slot. rax = 0, or 404 for none. rbx the node, rbp
+ * the store. r12 the route, r13 the view, S7 the entry, S8 the slot. Locals: L the Db's slot.
+ */
+LOCAL_FUNCTION node_api_block
+    ENTER 16
+    mov     %rdi, %r12
+    mov     %rsi, %r13
+    movq    $-1, ApiView_look_index(%r13)
+    movq    $0, ApiView_look_data(%r13)
+    movq    $0, ApiView_look_state(%r13)
+    movq    $0, ApiView_look_copy(%r13)
+    mov     ApiRoute_id_kind(%r12), %rax
+    lea     Node_head_root(%rbx), %rdi      # head
+    cmp     $API_ID_HEAD, %rax
+    je      4f
+    lea     (Store_finalized_checkpoint + 8)(%rbp), %rdi    # finalized
+    cmp     $API_ID_FINALIZED, %rax
+    je      4f
+    cmp     $API_ID_ROOT, %rax
+    jne     3f
+    lea     ApiRoute_id_root(%r12), %rdi    # a root: the node's imported block, else the Db's
+    call    node_find_block
+    cmp     $-1, %rax
+    je      1f
+    cmpq    $NODE_BLOCK_IMPORTED, NodeBlock_status(%rdx)
+    je      5f
+1:  testq   $NODE_FLAG_DB, Node_flags(%rbx)
+    jz      80f
+    mov     Node_db(%rbx), %rdi
+    add     %rbx, %rdi
+    lea     ApiRoute_id_root(%r12), %rsi
+    lea     L(%rsp), %rdx
+    call    lantern_db_find_root
+    mov     L(%rsp), %rax
+    cmp     $-1, %rax
+    je      80f
+    mov     %rax, S8(%rsp)
+    lea     ApiRoute_id_root(%r12), %rax
+    jmp     6f
+3:  xor     %ecx, %ecx                      # genesis: the slot 0; a slot
+    cmp     $API_ID_SLOT, %rax
+    jne     31f
+    mov     ApiRoute_id_slot(%r12), %rcx
+31: mov     %rcx, S8(%rsp)
+    mov     %rcx, %rdi
+    call    node_api_below
+    cmp     $-1, %rax
+    je      32f
+    mov     S8(%rsp), %rcx
+    cmp     %rcx, NodeBlock_slot(%rdx)
+    jne     80f                             # an empty slot, or past the head
+    jmp     5f
+32: testq   $NODE_FLAG_DB, Node_flags(%rbx) # below the chain's blocks the node keeps: the Db's
+    jz      80f
+    mov     S8(%rsp), %rdi
+    call    node_db_slot
+    test    %rax, %rax
+    jz      80f
+    jmp     6f                              # DbSlot_root is at 0
+4:  call    node_find_block                 # head, finalized: the block of that root
+    cmp     $-1, %rax
+    je      80f
+5:  mov     %rdx, S7(%rsp)                  # a block the node keeps
+    mov     %rax, ApiView_look_index(%r13)
+    lea     ApiView_head_root(%r13), %rax
+    COPY32  %rax, %rdx
+    mov     NodeBlock_slot(%rdx), %rax
+    mov     %rax, S8(%rsp)
+    mov     %rax, ApiView_head_slot(%r13)
+    mov     %rax, ApiView_look_state_slot(%r13)
+    xor     %eax, %eax
+    cmpq    $PAYLOAD_STATUS_NOT_VALIDATED, NodeBlock_payload_status(%rdx)
+    sete    %al
+    mov     %rax, ApiView_is_optimistic(%r13)
+    mov     NodeBlock_state_id(%rdx), %rax
+    mov     %rax, ApiView_look_state(%r13)
+    mov     NodeBlock_data_id(%rdx), %rax
+    test    %rax, %rax
+    jnz     51f
+    mov     %rdx, %rdi
+    call    node_api_db_ref
+51: mov     %rax, ApiView_look_data(%r13)
+    mov     S7(%rsp), %rdi
+    call    node_api_on_chain
+    mov     %rax, ApiView_canonical(%r13)
+    test    %rax, %rax
+    jz      52f
+    mov     S8(%rsp), %rdi
+    call    node_api_final_block
+52: mov     %rax, ApiView_head_finalized(%r13)
+    xor     %eax, %eax
+    LEAVE 16
+6:  lea     ApiView_head_root(%r13), %rcx   # a block of the Db: its root at rax, its slot S8
+    COPY32  %rcx, %rax
+    mov     S8(%rsp), %rdi
+    mov     %rdi, ApiView_head_slot(%r13)
+    movq    $0, ApiView_is_optimistic(%r13)
+    movq    $1, ApiView_canonical(%r13)
+    call    node_db_block
+    mov     %rax, ApiView_look_data(%r13)
+    mov     S8(%rsp), %rdi
+    call    node_api_final_block
+    mov     %rax, ApiView_head_finalized(%r13)
+    xor     %eax, %eax
+    LEAVE 16
+80: mov     $404, %eax
+    LEAVE 16
+END_FUNCTION node_api_block
+
+/*
+ * The state of the state_id of the ApiRoute rdi into the ApiView rsi (beacon-api.md, Common
+ * rules): look_state, a state the node keeps, at look_state_slot; head_slot the slot it goes to;
+ * head_finalized and is_optimistic. rax = 0, or 404 for none. rbx the node, rbp the store, r14 the
+ * scratch, r15 the actions. r12 the route, r13 the view, S7 the block's entry, S8 the slot, S9 the
+ * checkpoint.
+ */
+LOCAL_FUNCTION node_api_state
+    ENTER 0
+    mov     %rdi, %r12
+    mov     %rsi, %r13
+    movq    $0, ApiView_look_state(%r13)
+    movq    $0, ApiView_look_copy(%r13)
+    movq    $-1, ApiView_look_index(%r13)
+    mov     ApiRoute_id_kind(%r12), %rax
+    cmp     $API_ID_HEAD, %rax
+    jne     1f
+    lea     Node_head_root(%rbx), %rdi      # head: its post-state at its slot
+    call    node_find_block
+    cmp     $-1, %rax
+    je      80f
+    mov     NodeBlock_slot(%rdx), %rax
+    mov     %rax, S8(%rsp)
+    jmp     5f
+1:  lea     Store_finalized_checkpoint(%rbp), %rcx
+    cmp     $API_ID_FINALIZED, %rax
+    je      2f
+    lea     Store_justified_checkpoint(%rbp), %rcx
+    cmp     $API_ID_JUSTIFIED, %rax
+    jne     3f
+2:  mov     %rcx, S9(%rsp)                  # a checkpoint: at the first slot of its epoch
+    mov     (%rcx), %rax
+    imul    $SLOTS_PER_EPOCH, %rax, %rax
+    mov     %rax, S8(%rsp)
+    lea     8(%rcx), %rdi                   # the optimistic status of its block
+    call    node_find_block
+    xor     %ecx, %ecx
+    cmp     $-1, %rax
+    je      21f
+    cmpq    $PAYLOAD_STATUS_NOT_VALIDATED, NodeBlock_payload_status(%rdx)
+    sete    %cl
+21: mov     %rcx, ApiView_is_optimistic(%r13)
+    mov     S9(%rsp), %rsi                  # its NodeCheckpoint's state, else its block's post-state
+    mov     (%rsi), %rdi
+    add     $8, %rsi
+    call    node_find_checkpoint
+    cmp     $-1, %rax
+    je      22f
+    mov     NodeCheckpoint_state_id(%rdx), %rax
+    test    %rax, %rax
+    jz      22f
+    mov     %rax, ApiView_look_state(%r13)
+    mov     S8(%rsp), %rax
+    mov     %rax, ApiView_look_state_slot(%r13)
+    jmp     7f
+22: mov     S9(%rsp), %rdi
+    add     $8, %rdi
+    call    node_find_block
+    cmp     $-1, %rax
+    je      80f
+    jmp     5f
+3:  cmp     $API_ID_ROOT, %rax              # a state root: none in this version
+    je      80f
+    xor     %ecx, %ecx                      # genesis: the slot 0; a slot, at most the store's
+    cmp     $API_ID_SLOT, %rax
+    jne     31f
+    mov     ApiRoute_id_slot(%r12), %rcx
+31: mov     %rcx, S8(%rsp)
+    mov     %rbp, %rdi
+    call    node_store_slot
+    cmp     %rax, S8(%rsp)
+    ja      80f
+    mov     S8(%rsp), %rdi
+    call    node_api_below
+    cmp     $-1, %rax
+    je      80f
+5:  mov     %rdx, S7(%rsp)                  # the block's post-state, again when the node let it go
+    xor     %eax, %eax
+    cmpq    $PAYLOAD_STATUS_NOT_VALIDATED, NodeBlock_payload_status(%rdx)
+    sete    %al
+    mov     %rax, ApiView_is_optimistic(%r13)
+    mov     NodeBlock_state_id(%rdx), %rax
+    test    %rax, %rax
+    jnz     6f
+    call    node_f_slot
+    cmp     $-1, %rax
+    je      80f
+    mov     S7(%rsp), %rdi
+    cmp     %rax, NodeBlock_slot(%rdi)
+    jbe     80f
+    call    node_rebuild
+    test    %rax, %rax
+    jz      80f
+6:  mov     %rax, ApiView_look_state(%r13)
+    mov     S7(%rsp), %rdx
+    mov     NodeBlock_slot(%rdx), %rax
+    mov     %rax, ApiView_look_state_slot(%r13)
+7:  mov     S8(%rsp), %rax                  # finalized: at most the first slot of the finalized epoch
+    mov     %rax, ApiView_head_slot(%r13)
+    mov     Store_finalized_checkpoint(%rbp), %rcx
+    imul    $SLOTS_PER_EPOCH, %rcx, %rcx
+    xor     %edx, %edx
+    cmp     %rcx, %rax
+    setbe   %dl
+    mov     %rdx, ApiView_head_finalized(%r13)
+    xor     %eax, %eax
+    LEAVE 0
+80: mov     $404, %eax
+    LEAVE 0
+END_FUNCTION node_api_state
+
+/*
+ * The state of the ApiView rdi at its slot (node.md, NODE_EV_API): when head_slot is past
+ * look_state_slot, a STATE_COPY of look_state, the copy across the fork boundaries to head_slot,
+ * and a SLOTS work of it to head_slot when it is below it; look_state is the copy, look_copy 1.
+ * r12 the view, r13 the copy, S7 the copy's slot, S8 the fork of look_state_slot.
+ */
+LOCAL_FUNCTION node_api_advance
+    ENTER 0
+    mov     %rdi, %r12
+    mov     ApiView_head_slot(%r12), %rax
+    cmp     ApiView_look_state_slot(%r12), %rax
+    jbe     9f
+    call    node_new_id
+    mov     %rax, %r13
+    mov     $NODE_ACT_STATE_COPY, %edi
+    mov     ApiView_look_state(%r12), %rsi
+    mov     %r13, %rdx
+    call    node_ids
+    mov     %r13, %rdi
+    mov     ApiView_look_state(%r12), %rsi
+    mov     ApiView_look_state_slot(%r12), %rdx
+    mov     ApiView_head_slot(%r12), %rcx
+    call    node_cross
+    mov     %rax, %r13
+    mov     ApiView_look_state_slot(%r12), %rdi     # the copy's slot: the first of the target's fork, when it crossed one
+    mov     %rdi, S7(%rsp)
+    lea     Node_config(%rbx), %rsi
+    call    node_fork
+    mov     %rax, S8(%rsp)
+    mov     ApiView_head_slot(%r12), %rdi
+    lea     Node_config(%rbx), %rsi
+    call    node_fork
+    cmp     S8(%rsp), %rax
+    jbe     1f
+    shl     $4, %rax
+    mov     Node_config(%rbx,%rax), %rax
+    imul    $SLOTS_PER_EPOCH, %rax, %rax
+    cmp     S7(%rsp), %rax
+    jbe     1f
+    mov     %rax, S7(%rsp)
+1:  mov     ApiView_head_slot(%r12), %r9
+    cmp     S7(%rsp), %r9
+    jbe     2f
+    mov     $NODE_WORK_SLOTS, %edi
+    mov     %r13, %rsi
+    xor     %edx, %edx
+    xor     %ecx, %ecx
+    xor     %r8d, %r8d
+    call    node_work
+2:  mov     %r13, ApiView_look_state(%r12)
+    movq    $1, ApiView_look_copy(%r12)
+9:  LEAVE 0
+END_FUNCTION node_api_advance
+
+/*
+ * A NODE_WORK_API_ENCODE of the operation rdi for the connection rsi with the answer flags rdx,
+ * from the lookup in the ApiView rcx (node.md, NODE_EV_API); then a STATE_FREE of the state when it
+ * is a copy. rax = 0, or 404 for a header with neither bytes nor a post-state. Locals: the view.
+ */
+LOCAL_FUNCTION node_api_encode
+    FRAME 16
+    mov     %rcx, (%rsp)
+    mov     ApiView_canonical(%rcx), %r9
+    mov     ApiView_head_finalized(%rcx), %rax
+    lea     (%r9,%rax,2), %r9
+    mov     ApiView_is_optimistic(%rcx), %rax
+    lea     (%r9,%rax,4), %r9
+    shl     $16, %r9
+    shl     $8, %rdx
+    or      %rdx, %r9
+    or      %rdi, %r9
+    mov     %rsi, %r8
+    cmp     $API_OP_GET_BLOCK_HEADER, %rdi
+    jne     2f
+    mov     ApiView_look_index(%rcx), %rax  # getBlockHeader: the block's index + 1, its bytes or post-state
+    inc     %rax
+    shl     $24, %rax
+    or      %rax, %r9
+    xor     %esi, %esi
+    mov     ApiView_look_data(%rcx), %rcx
+    test    %rcx, %rcx
+    jnz     3f
+    mov     (%rsp), %rax
+    mov     ApiView_look_state(%rax), %rsi
+    test    %rsi, %rsi
+    jnz     3f
+    mov     $404, %eax
+    UNFRAME 16
+2:  mov     ApiView_head_slot(%rcx), %rax   # the others: the state at its slot
+    shl     $24, %rax
+    or      %rax, %r9
+    mov     ApiView_look_state(%rcx), %rsi
+    xor     %ecx, %ecx
+3:  mov     $NODE_WORK_API_ENCODE, %edi
+    xor     %edx, %edx
+    call    node_work
+    mov     (%rsp), %rax                    # a copy goes after the work
+    cmpq    $0, ApiView_look_copy(%rax)
+    je      9f
+    mov     $NODE_ACT_STATE_FREE, %edi
+    mov     ApiView_look_state(%rax), %rsi
+    xor     %edx, %edx
+    call    node_ids
+9:  xor     %eax, %eax
+    UNFRAME 16
+END_FUNCTION node_api_encode
 
 /* ---------------------------------------------------------------- Streams (node.md, NodeApi) */
 
@@ -1177,10 +1671,10 @@ END_FUNCTION node_api_closed
 
 /*
  * (connection rdi, route rsi, flags rdx, view rcx) -> rax: a stream of getBlockV2 or getStateV2 of
- * the head (node.md, NODE_EV_API): 0 once it started, else the status of the error to answer.
- * flags: API_STREAM_CLOSE and API_STREAM_HTTP10. rbx the node, r15 the actions. r12 the data,
- * r13 the head's entry, S7 the route, S8 the view, S9 the connection, S10 the flags. Locals: L the
- * entry's index, L+8 the entry.
+ * the lookup in the view (node.md, NODE_EV_API): 0 once it started, else the status of the error to
+ * answer. flags: API_STREAM_CLOSE and API_STREAM_HTTP10. rbx the node, r15 the actions. r12 the
+ * data, S7 the route, S8 the view, S9 the connection, S10 the flags. Locals: L the entry's index,
+ * L+8 the entry.
  */
 LOCAL_FUNCTION node_api_stream
     ENTER 16
@@ -1188,52 +1682,47 @@ LOCAL_FUNCTION node_api_stream
     mov     %rsi, S7(%rsp)
     mov     %rdx, S10(%rsp)
     mov     %rcx, S8(%rsp)
-    lea     Node_head_root(%rbx), %rdi
-    call    node_find_block
-    cmp     $-1, %rax
-    je      80f
-    mov     %rdx, %r13
-    mov     S7(%rsp), %rax                  # SSZ, else JSON; the values of the JSON
-    cmpq    $API_TYPE_SSZ, ApiRoute_response(%rax)
+    cmpq    $API_TYPE_SSZ, ApiRoute_response(%rsi)  # SSZ, else JSON; the values of the JSON
     jne     1f
     orq     $API_STREAM_SSZ, S10(%rsp)
-1:  mov     S8(%rsp), %rax
-    cmpq    $0, ApiView_is_optimistic(%rax)
+1:  cmpq    $0, ApiView_is_optimistic(%rcx)
     je      2f
     orq     $API_STREAM_OPTIMISTIC, S10(%rsp)
-2:  cmpq    $0, ApiView_head_finalized(%rax)
+2:  cmpq    $0, ApiView_head_finalized(%rcx)
     je      3f
     orq     $API_STREAM_FINALIZED, S10(%rsp)
-3:  mov     S7(%rsp), %rax
-    cmpq    $API_OP_GET_STATE_V2, ApiRoute_op(%rax)
+3:  cmpq    $API_OP_GET_STATE_V2, ApiRoute_op(%rsi)
     je      5f
-    mov     NodeBlock_data_id(%r13), %r12   # getBlockV2: the head's bytes, or its Db record
-    test    %r12, %r12
-    jnz     6f
-    mov     %r13, %rdi
-    call    node_api_db_ref
-    mov     %rax, %r12
+    mov     ApiView_look_data(%rcx), %r12   # getBlockV2: the block's bytes
     test    %r12, %r12
     jz      80f
     jmp     6f
-5:  cmpq    $0, NodeBlock_state_id(%r13)    # getStateV2: the post-state's SSZ bytes, as a new id the stream owns
-    je      80f
-    call    node_new_id
+5:  call    node_new_id                     # getStateV2: the state's SSZ bytes, as a new id the stream owns
     mov     %rax, %r12
     mov     $NODE_ACT_STATE_BYTES, %edi
     mov     $NODE_ACT_STATE_BYTES_SIZE, %esi
     call    node_act
-    mov     NodeBlock_state_id(%r13), %rcx
-    mov     %rcx, 16(%rax)
+    mov     S8(%rsp), %rcx
+    mov     ApiView_look_state(%rcx), %rdx
+    mov     %rdx, 16(%rax)
     mov     %r12, 24(%rax)
     orq     $API_STREAM_OWN, S10(%rsp)
+    cmpq    $0, ApiView_look_copy(%rcx)     # a copy goes after its bytes
+    je      6f
+    mov     $NODE_ACT_STATE_FREE, %edi
+    mov     ApiView_look_state(%rcx), %rsi
+    xor     %edx, %edx
+    call    node_ids
 6:  call    node_api_new                    # the entry
     mov     %rax, L(%rsp)
     mov     %rdx, (L + 8)(%rsp)
     mov     %rdx, %rdi
     mov     $NodeApi__mem, %esi
     call    lantern_zero
-    mov     NodeBlock_slot(%r13), %rdi
+    mov     S8(%rsp), %rax
+    mov     ApiView_head_slot(%rax), %rdi
+    mov     (L + 8)(%rsp), %rdx
+    mov     %rdi, NodeApi_slot(%rdx)
     lea     Node_config(%rbx), %rsi
     call    node_fork
     mov     (L + 8)(%rsp), %rdx
@@ -1501,8 +1990,17 @@ LOCAL_FUNCTION node_api_chunk_run
     mov     %rax, (L + 8)(%rsp)
     mov     16(%rdx), %rax
     mov     %rax, (L + 16)(%rsp)
-    test    %rax, %rax
-    jz      96f
+    mov     $40, %ecx                       # their slot: a state's at byte 40, a block's at 100
+    cmpq    $API_OP_GET_STATE_V2, NodeApi_op(%rbx)
+    je      4f
+    mov     $100, %ecx
+4:  lea     8(%rcx), %rsi
+    cmp     %rsi, %rax
+    jb      96f
+    mov     (L + 8)(%rsp), %rsi
+    mov     (%rsi,%rcx), %rsi
+    cmp     NodeApi_slot(%rbx), %rsi
+    jne     96f
     mov     NodeApi_sent(%rbx), %rax        # the entry's sent, flags and cursor go on in the event
     mov     %rax, NodeEvent_api(%rbp)
     mov     NodeApi_flags(%rbx), %rax

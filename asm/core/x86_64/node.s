@@ -1694,6 +1694,18 @@ END_FUNCTION node_prune
     lea     (%rax,%rcx), \dst
 .endm
 
+/* rax = the DbSlot of slot rdi in the node's Db when it holds a block of that slot, else 0. Uses rcx, rdx. */
+LOCAL_FUNCTION node_db_slot
+    UNWIND_END_PROLOGUE
+    DB_SLOT %rdx, %rdi, 9f
+    cmpq    $0, DbSlot_block(%rdx)
+    je      9f
+    mov     %rdx, %rax
+    ret
+9:  xor     %eax, %eax
+    ret
+END_FUNCTION node_db_slot
+
 /* rax = the NODE_DB_REF of the Db record of the block of slot rdi, or 0. Uses rcx, rsi. */
 LOCAL_FUNCTION node_db_block
     UNWIND_END_PROLOGUE

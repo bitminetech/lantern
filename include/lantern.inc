@@ -940,8 +940,15 @@
 .set ApiView_p2p_address, 1080           /* 128 */
 .set ApiView_discovery_address, 1216     /* 128 */
 .set ApiView_version, 1352               /* 64 */
-.set ApiView_head_finalized, 1424        /* 1 when head_root is the store's finalized root */
-.set ApiView__size, 1432
+.set ApiView_head_finalized, 1424        /* 1 when the block or the state is finalized (beacon-api.md) */
+.set ApiView_canonical, 1432             /* lookup: 1 when the block is on the chain */
+.set ApiView_look_index, 1440            /* lookup: the block's NodeBlock index, or 2^64 - 1 */
+.set ApiView_look_data, 1448             /* lookup: the block's bytes (BufferId or NODE_DB_REF), or 0 */
+.set ApiView_look_state, 1456            /* lookup: the state's id (the block's post-state, a checkpoint state, a copy), or 0 */
+.set ApiView_look_state_slot, 1464       /* lookup: that state's slot */
+.set ApiView_look_copy, 1472             /* lookup: 1 when look_state is a copy that goes after its use */
+.set ApiView_state_fork, 1480            /* getStateFork: the Fork, 16 bytes */
+.set ApiView__size, 1496
 .set ApiIdentity_peer_id, 0              /* ApiIdentity (beacon-api.md): texts, each a length and its room */
 .set ApiIdentity_enr, 72
 .set ApiIdentity_p2p_address, 592
@@ -960,7 +967,8 @@
 .set NodeApi_fork, 32
 .set NodeApi_sent, 40                    /* SSZ: the bytes of data sent */
 .set NodeApi_cursor, 48                  /* JSON: a JsonCursor */
-.set NodeApi__mem, 648
+.set NodeApi_slot, 648                   /* the slot of the block or the state */
+.set NodeApi__mem, 656
 .set API_STREAM_CLOSE, 1
 .set API_STREAM_HTTP10, 2
 .set API_STREAM_SSZ, 4
@@ -972,6 +980,10 @@
 .set API_STREAM_OPTIMISTIC, 256
 .set API_STREAM_FINALIZED, 512
 .set API_STREAM_DONE, 1024
+.set API_VALUE_CANONICAL, 1              /* the values of a NODE_WORK_API_ENCODE's arg, times 2^16 */
+.set API_VALUE_FINALIZED, 2
+.set API_VALUE_OPTIMISTIC, 4
+.set NODE_STATE_FORK, 56               /* BeaconState.fork in the value of every fork */
 .set NODE_JSON_BLOCK, 0                  /* lantern_node_json: a SignedBeaconBlock */
 .set NODE_JSON_STATE, 1                  /* a BeaconState */
 

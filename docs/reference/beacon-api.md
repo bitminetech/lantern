@@ -48,7 +48,7 @@ The answers of the node (node.md, `NODE_EV_API`) follow these rules.
 - The values:
   - `genesis_time`: the store's `genesis_time_ms` / 1000.
   - `genesis_validators_root`: the node's. `genesis_fork_version`: `GENESIS_FORK_VERSION` of the node's config.
-  - The head: the `NodeBlock` of `head_root`. `head_slot`: its slot. `is_optimistic` and `execution_optimistic`: its `payload_status` is `PAYLOAD_STATUS_NOT_VALIDATED`. `finalized`: its root is the root of the store's finalized checkpoint.
+  - The head: the `NodeBlock` of `head_root`. `head_slot`: its slot. `is_optimistic`: its `payload_status` is `PAYLOAD_STATUS_NOT_VALIDATED`.
   - `current_slot`: the store's slot. `is_syncing`: `NODE_FLAG_SYNCING`. `el_offline`: `NODE_FLAG_EL_OFFLINE`.
   - `connected`: the `NodePeer` entries.
   - The MetaData: `seq_number` the node's `metadata_seq`; `attnets` the 8 bytes of the node's `attnets` (bit i of byte i / 8 for subnet i); from altair `syncnets` 1 zero byte; from fulu `custody_group_count` `CUSTODY_REQUIREMENT` of the node's config. The fork is that of the store's slot.
@@ -59,18 +59,36 @@ The answers of the node (node.md, `NODE_EV_API`) follow these rules.
 - getSyncingStatus: `{"data":{"head_slot":…,"sync_distance":…,"is_syncing":…,"is_optimistic":…,"el_offline":…}}`; `sync_distance` is `current_slot` minus `head_slot`, or 0 when it is below.
 - getPeerCount: `{"data":{"disconnected":"0","connecting":"0","connected":…,"disconnecting":"0"}}`.
 - getGenesis: `{"data":{"genesis_time":…,"genesis_validators_root":…,"genesis_fork_version":…}}`.
-- getBlockHeader of the head: `block_id` `head`, or the head's root; another gives 404.
-  - The header: lantern_node_block_header of the head's bytes, or of its record when its bytes went to the `Db`. With neither, the `latest_block_header` of its post-state, with the post-state's hash_tree_root as `state_root` when that is zero, and a zero signature.
-  - `{"execution_optimistic":…,"finalized":…,"data":{"root":…,"canonical":true,"header":{"message":{"slot":…,"proposer_index":…,"parent_root":…,"state_root":…,"body_root":…},"signature":…}}}`.
-- getStateFinalityCheckpoints of `head`: lantern_node_state_checkpoints of the head's post-state; another `state_id` gives 404.
-  - `{"execution_optimistic":…,"finalized":…,"data":{"previous_justified":{"epoch":…,"root":…},"current_justified":{…},"finalized":{…}}}`.
-- getBlockV2 of the head: `block_id` `head`, or the head's root; another gives 404. The head's SSZ bytes, or those of its `Db` record; with neither, 404.
-- getStateV2 of `head`: the SSZ bytes of the head's post-state, by lantern_node_state_bytes; another `state_id`, or a head with no post-state, gives 404.
+- The block of a `block_id`, on the chain: the head's `NodeBlock` and its ancestors by `parent_root` among the node's imported blocks, then, below the lowest of them, the blocks of the `Db`:
+  - `head`: the head. `finalized`: the block of the store's finalized checkpoint root. `genesis`: as the slot 0.
+  - A slot: the block of that slot on the chain; none for a slot with no block on the chain, or past the head's slot.
+  - A root: the node's imported block of that root, on the chain or not; else the `Db`'s block of that root.
+  - None: 404.
+  - `canonical`: the block is on the chain. `finalized`: on the chain, at most at the slot of the block of the store's finalized checkpoint root. `execution_optimistic`: its `payload_status` is `PAYLOAD_STATUS_NOT_VALIDATED`; false for a block of the `Db`.
+  - Its bytes: those of its `NodeBlock`, or its `Db` record; the anchor's block has none until the backfill takes it.
+- The state of a `state_id`: a state the node keeps, at a slot:
+  - `head`: the head's post-state, at the head's slot. `genesis`: as the slot 0.
+  - `finalized` and `justified`: the store's finalized checkpoint, or its current justified checkpoint: the state of its `NodeCheckpoint` when the node keeps one, else the post-state of the block of its root, at the first slot of its epoch.
+  - A slot: the post-state of the block of the chain at or below that slot, at that slot; none past the store's slot.
+  - A root: none in this version.
+  - A block above F's slot with no post-state gets it again first (node.md, the rebuild); a block at or below F's slot with none: 404.
+  - None: 404.
+  - At a slot past the post-state's: a copy of it, across the fork boundaries to that slot (node.md, the crossing), then process_slots to that slot.
+  - `finalized`: its slot is at most the first slot of the epoch of the store's finalized checkpoint. `execution_optimistic`: that of the block of its post-state or checkpoint.
+- getBlockRoot: the block of `block_id`: `{"execution_optimistic":…,"finalized":…,"data":{"root":…}}`.
+- getBlockHeader: the block of `block_id`.
+  - The header: lantern_node_block_header of the block's bytes. With none, the `latest_block_header` of its post-state, with the post-state's hash_tree_root as `state_root` when that is zero, and a zero signature; with no post-state either, 404.
+  - `{"execution_optimistic":…,"finalized":…,"data":{"root":…,"canonical":…,"header":{"message":{"slot":…,"proposer_index":…,"parent_root":…,"state_root":…,"body_root":…},"signature":…}}}`.
+- getBlockV2: the bytes of the block of `block_id`; with none, 404.
+- getStateRoot: the hash_tree_root of the state of `state_id`: `{"execution_optimistic":…,"finalized":…,"data":{"root":…}}`.
+- getStateFork: the `fork` of the state of `state_id`: `{"execution_optimistic":…,"finalized":…,"data":{"previous_version":…,"current_version":…,"epoch":…}}`.
+- getStateFinalityCheckpoints: lantern_node_state_checkpoints of the state of `state_id`: `{"execution_optimistic":…,"finalized":…,"data":{"previous_justified":{"epoch":…,"root":…},"current_justified":{…},"finalized":{…}}}`.
+- getStateV2: the SSZ bytes of the state of `state_id`, by lantern_node_state_bytes.
 - The answer of getBlockV2 and getStateV2 is streamed (node.md, `NodeApi`): it goes in chunks, from the SSZ bytes of the block or the state.
   - The fork: that of the slot of the block or the state, by its name: `phase0`, `altair`, `bellatrix`, `capella`, `deneb`, `electra` or `fulu`.
   - After the status line: `Content-Type: application/octet-stream` CRLF for SSZ (`response` `API_TYPE_SSZ`), else `Content-Type: application/json` CRLF; `Eth-Consensus-Version: ` and the fork's name, CRLF; then `Content-Length`, `Transfer-Encoding: chunked` CRLF, or neither, as below; then `Connection` as for a response in one piece; CRLF.
   - SSZ: `Content-Length` of the SSZ bytes; the body is the bytes.
-  - JSON: the body is `{"version":"<fork>","execution_optimistic":…,"finalized":…,"data":<data>}`, its data the JSON of the SSZ bytes by lantern_json_encode_ssz with the fork's `SignedBeaconBlock` or `BeaconState`; the values those of the head.
+  - JSON: the body is `{"version":"<fork>","execution_optimistic":…,"finalized":…,"data":<data>}`, its data the JSON of the SSZ bytes by lantern_json_encode_ssz with the fork's `SignedBeaconBlock` or `BeaconState`; the values those of the block or the state.
   - JSON whose whole body is in the first chunk: `Content-Length`. Else, over HTTP/1.1, `Transfer-Encoding: chunked`: each chunk of the stream holds the body's bytes in one chunk of RFC 9112 section 7.1, its size in 4 lower case hex digits, CRLF, the bytes, CRLF; the last also `0` CRLF CRLF. Over HTTP/1.0, neither field and `Connection: close`: the connection closes after the body.
 - Every other operation: 501.
 

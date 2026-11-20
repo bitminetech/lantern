@@ -1464,6 +1464,19 @@ END_FUNCTION node_prune
     madd    \dst, x10, x11, x9
 .endm
 
+/* L0: x0 = the DbSlot of slot x0 in the node's Db when it holds a block of that slot, else 0. Uses x9-x13. */
+LOCAL_FUNCTION node_db_slot
+    UNWIND_END_PROLOGUE
+    mov     x12, x0
+    DB_SLOT x13, x12, 9f
+    ldr     x9, [x13, #DbSlot_block]
+    cbz     x9, 9f
+    mov     x0, x13
+    ret
+9:  mov     x0, #0
+    ret
+END_FUNCTION node_db_slot
+
 /* L0: x0 = the NODE_DB_REF of the Db record of the block of slot x0, or 0. Uses x9-x13. */
 LOCAL_FUNCTION node_db_block
     UNWIND_END_PROLOGUE
