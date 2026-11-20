@@ -251,6 +251,10 @@ SPEC_FUNCTION node_state_checkpoints
     UNFRAME 16
 SPEC_END node_state_checkpoints
 
+.if BeaconState_state_roots != NODE_STATE_STATE_ROOTS || BeaconState_fork != NODE_STATE_FORK
+.error "nodehooks: NODE_STATE_STATE_ROOTS or NODE_STATE_FORK is not the state's"
+.endif
+
 /* (kind, ssz, cursor, out): lantern_json_encode_ssz with the fork's SignedBeaconBlock (kind 0) or BeaconState (kind 1). */
 SPEC_FUNCTION node_json
     FRAME 0

@@ -3813,9 +3813,14 @@ LOCAL_FUNCTION node_event
     call    node_api_done
     LEAVE 48
 702: cmp    $NODE_WORK_API_CHUNK, %rax      # API_CHUNK: the chunk to its connection
-    jne     70f
+    jne     703f
     mov     %r12, %rdi
     call    node_api_chunk_done
+    LEAVE 48
+703: cmp    $NODE_WORK_API_LOOKUP, %rax     # API_LOOKUP: the answer for the slot it found
+    jne     70f
+    mov     %r12, %rdi
+    call    node_api_lookup_done
     LEAVE 48
 70: cmp     $NODE_WORK_ATTESTATION, %rax    # done with an attestation or a slashing: free its bytes
     je      71f
@@ -7665,7 +7670,14 @@ FUNCTION lantern_node_step
     jmp     22f
 204: cmp    $NODE_WORK_SERVE, %rsi
     je      202f
-    cmp     $NODE_WORK_API_CHUNK, %rsi      # API_CHUNK of LANTERN_VALID: its ByteList at NodeEvent_api_bytes
+    cmp     $NODE_WORK_API_LOOKUP, %rsi     # API_LOOKUP: an API answer's scratch and actions
+    jne     208f
+    cmpq    $NODE_API_SCRATCH, (L + 208)(%rsp)
+    jae     209f
+    movq    $NODE_API_SCRATCH, (L + 208)(%rsp)
+209: incq   (L + 216)(%rsp)
+    jmp     22f
+208: cmp    $NODE_WORK_API_CHUNK, %rsi      # API_CHUNK of LANTERN_VALID: its ByteList at NodeEvent_api_bytes
     jne     207f
     cmpq    $0, NodeEvent_result(%rdi)
     jne     22f
@@ -8815,7 +8827,7 @@ FUNCTION lantern_node_run
     call    node_api_run
     LEAVE 192
 976: cmp    $NODE_WORK_API_CHUNK, %rax
-    jne     8f
+    jne     977f
     mov     %rbx, %rdi                      # API_CHUNK: the next chunk of a stream
     mov     %r12, %rsi
     mov     %r14, %rdx
@@ -8823,6 +8835,15 @@ FUNCTION lantern_node_run
     mov     S8(%rsp), %r8
     mov     S9(%rsp), %r9
     call    node_api_chunk_run
+    LEAVE 192
+977: cmp    $NODE_WORK_API_LOOKUP, %rax
+    jne     8f
+    mov     %rbx, %rdi                      # API_LOOKUP: the slot of a state root
+    mov     %r12, %rsi
+    mov     %r13, %rdx
+    mov     %r15, %rcx
+    mov     S8(%rsp), %r8
+    call    node_api_lookup_run
     LEAVE 192
 8:  mov     $LANTERN_INVALID_EVENT, %eax
     LEAVE 192

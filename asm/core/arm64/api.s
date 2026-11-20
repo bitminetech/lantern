@@ -795,7 +795,17 @@ LOCAL_FUNCTION node_api_event
     b.eq    66f
     cmp     x3, #API_OP_GET_STATE_V2
     b.ne    7f
-66: mov     x0, x25                         /* a state: its lookup, then the state at its slot */
+66: ldr     x9, [x25, #ApiRoute_id_kind]    /* a state root: a work finds its slot first */
+    cmp     x9, #API_ID_ROOT
+    b.ne    69f
+    mov     x0, x27
+    mov     x1, x25
+    mov     x2, x21
+    bl      node_api_lookup
+    mov     x2, x0
+    cbnz    x0, 80f
+    b       90f
+69: mov     x0, x25                         /* a state: its lookup, then the state at its slot */
     mov     x1, x26
     bl      node_api_state
     mov     x2, x0
@@ -1492,6 +1502,233 @@ LOCAL_FUNCTION node_api_encode
 9:  mov     x0, #0
     UNFRAME 16
 END_FUNCTION node_api_encode
+
+/*
+ * L2: (connection x0, route x1, answer flags x2) -> x0: a state_id of a root (node.md, NODE_EV_API):
+ * a NodeApi entry with API_STREAM_LOOKUP and a NODE_WORK_API_LOOKUP with the head's post-state;
+ * 0, or 404 with no head post-state. x21 the route, x25 the flags, x27 the connection. Locals: L
+ * the entry's index, L+8 the entry.
+ */
+LOCAL_FUNCTION node_api_lookup
+    ENTER 16
+    mov     x27, x0
+    mov     x21, x1
+    orr     x25, x2, #API_STREAM_LOOKUP
+    orr     x25, x25, #API_STREAM_BUSY
+    ldr     x9, [x21, #ApiRoute_response]
+    cmp     x9, #API_TYPE_SSZ
+    b.ne    1f
+    orr     x25, x25, #API_STREAM_SSZ
+1:  add     x0, x19, #Node_head_root
+    bl      node_find_block
+    cmn     x0, #1
+    b.eq    80f
+    ldr     x9, [x1, #NodeBlock_state_id]
+    cbz     x9, 80f
+    bl      node_api_new
+    stp     x0, x1, [sp, #L]
+    mov     x0, x1
+    mov     x1, #NodeApi__mem
+    bl      lantern_zero
+    ldr     x1, [sp, #(L + 8)]
+    str     x27, [x1, #NodeApi_connection]
+    ldr     x9, [x21, #ApiRoute_op]
+    str     x9, [x1, #NodeApi_op]
+    str     x25, [x1, #NodeApi_flags]
+    add     x0, x1, #NodeApi_cursor
+    add     x1, x21, #ApiRoute_id_root
+    bl      lantern_copy_root
+    add     x0, x19, #Node_head_root
+    bl      node_find_block
+    ldr     x1, [x1, #NodeBlock_state_id]
+    mov     x0, #NODE_WORK_API_LOOKUP
+    mov     x2, #0
+    mov     x3, #0
+    mov     x4, x27
+    ldr     x5, [sp, #L]
+    bl      node_work
+    mov     x0, #0
+    LEAVE 16
+80: mov     x0, #404
+    LEAVE 16
+END_FUNCTION node_api_lookup
+
+/*
+ * L2: the NODE_EV_WORK_DONE x0 of a NODE_WORK_API_LOOKUP (node.md, lantern_node_step): the entry
+ * ends; the answer for the state_id of the slot found, or 404. x19 the node, x20 the store, x23 the
+ * scratch, x24 the actions. x21 the event, x22 the entry, x25 the flags, x26 the view, x27 the
+ * connection, x28 the operation. Locals: L the scratch's size, L+8 the route.
+ */
+LOCAL_FUNCTION node_api_lookup_done
+    ENTER 16
+    mov     x21, x0
+    ldr     x9, [x21, #NodeAction_arg]
+    PART    x10, x11, x19, Node_api
+    cmp     x9, x11
+    b.hs    99f
+    mov     x12, #NodeApi__mem
+    madd    x22, x9, x12, x10
+    ldr     x27, [x22, #NodeApi_connection]
+    cbz     x27, 99f
+    ldr     x10, [x21, #NodeAction_target]
+    cmp     x27, x10
+    b.ne    99f
+    ldr     x25, [x22, #NodeApi_flags]
+    tst     x25, #API_STREAM_LOOKUP
+    b.eq    99f
+    ldr     x28, [x22, #NodeApi_op]
+    and     x9, x25, #~API_STREAM_OWN       /* the entry ends; it owns no bytes */
+    str     x9, [x22, #NodeApi_flags]
+    mov     x0, x22
+    bl      node_api_end
+    tbnz    x25, #5, 99f                    /* API_STREAM_GONE */
+    ldr     x9, [x23]                       /* the ApiView, then an ApiRoute, at the end of scratch */
+    str     x9, [sp, #L]
+    MOVQ    x10, ApiView__size + API_ROUTE_FIXED
+    sub     x9, x9, x10
+    str     x9, [x23]
+    add     x26, x23, x9
+    mov     x0, x26
+    bl      node_api_view
+    MOVQ    x9, ApiView__size
+    add     x0, x26, x9
+    str     x0, [sp, #(L + 8)]
+    mov     x1, #API_ROUTE_FIXED
+    bl      lantern_zero
+    ldr     x0, [sp, #(L + 8)]
+    mov     x9, #API_ROUTE_FIXED
+    str     x9, [x0]
+    str     x28, [x0, #ApiRoute_op]
+    tst     x25, #API_STREAM_SSZ
+    mov     x9, #API_TYPE_SSZ
+    mov     x10, #API_TYPE_JSON
+    csel    x9, x9, x10, ne
+    str     x9, [x0, #ApiRoute_response]
+    mov     x9, #API_ID_SLOT
+    str     x9, [x0, #ApiRoute_id_kind]
+    ldr     x9, [x21, #NodeEvent_index]
+    str     x9, [x0, #ApiRoute_id_slot]
+    mov     x2, #404
+    cmn     x9, #1
+    b.eq    80f
+    mov     x1, x26
+    bl      node_api_state
+    mov     x2, x0
+    cbnz    x0, 80f
+    mov     x0, x26
+    bl      node_api_advance
+    and     x2, x25, #(API_STREAM_CLOSE | API_STREAM_HTTP10)
+    cmp     x28, #API_OP_GET_STATE_V2
+    b.ne    1f
+    mov     x0, x27                         /* getStateV2: a stream */
+    ldr     x1, [sp, #(L + 8)]
+    mov     x3, x26
+    bl      node_api_stream
+    mov     x2, x0
+    cbnz    x0, 80f
+    b       90f
+1:  mov     x0, x28                         /* the others: a work */
+    mov     x1, x27
+    mov     x3, x26
+    bl      node_api_encode
+    mov     x2, x0
+    cbz     x0, 90f
+80: mov     x0, x27                         /* an error: with close, or keep-alive for HTTP/1.0 */
+    mov     x1, #0
+    mov     x3, #API_BODY_ERROR
+    and     x4, x25, #API_R_CLOSE
+    cbnz    x4, 81f
+    tst     x25, #API_STREAM_HTTP10
+    mov     x9, #API_R_KEEP
+    csel    x4, x9, xzr, ne
+81: bl      node_api_send
+90: ldr     x9, [sp, #L]
+    str     x9, [x23]
+99: LEAVE 16
+END_FUNCTION node_api_lookup_done
+
+/*
+ * (node, work, state_a, scratch, event) -> status: a NODE_WORK_API_LOOKUP of lantern_node_run
+ * (node.md): at NodeEvent_index of the event, the slot whose state on the chain of state_a has the
+ * root of the NodeApi entry at the work's arg, or 2^64 - 1. x19 the node, x21 the work, x22 the
+ * state, x23 the event, x24 the root, x25 the slot, x26 the lowest slot.
+ */
+LOCAL_FUNCTION node_api_lookup_run
+    ENTER 0
+    mov     x19, x0
+    mov     x21, x1
+    mov     x22, x2
+    mov     x23, x4
+    mov     x9, #-1
+    str     x9, [x23, #NodeEvent_index]
+    cbz     x22, 98f
+    ldr     x9, [x21, #NodeAction_arg]
+    PART    x10, x11, x19, Node_api
+    cmp     x9, x11
+    b.hs    90f
+    mov     x12, #NodeApi__mem
+    madd    x10, x9, x12, x10
+    ldr     x11, [x10, #NodeApi_flags]
+    tst     x11, #API_STREAM_LOOKUP
+    b.eq    90f
+    add     x24, x10, #NodeApi_cursor
+    ldr     x0, [x22, #NODE_STATE_SLOT]     /* the state's own root */
+    add     x1, x19, #Node_config
+    bl      node_fork
+    mov     x15, x0
+    mov     x0, x22
+    LDQ     x1, x19, Node_config + CONFIG_STATE_CACHE
+    mov     x2, x3
+    add     x3, x23, #NodeEvent_root
+    FORK_CALL state_root
+    cbnz    x0, 97f
+    ldr     x25, [x22, #NODE_STATE_SLOT]
+    add     x0, x23, #NodeEvent_root
+    mov     x1, x24
+    bl      node_api_same_root
+    cbnz    x0, 80f
+    subs    x26, x25, #SLOTS_PER_HISTORICAL_ROOT    /* then its state_roots, from the slot below it down */
+    csel    x26, xzr, x26, lo
+1:  cmp     x25, x26
+    b.ls    90f
+    sub     x25, x25, #1
+    and     x9, x25, #(SLOTS_PER_HISTORICAL_ROOT - 1)
+    ADDQ    x0, x22, NODE_STATE_STATE_ROOTS
+    add     x0, x0, x9, lsl #5
+    mov     x1, x24
+    bl      node_api_same_root
+    cbz     x0, 1b
+80: str     x25, [x23, #NodeEvent_index]
+90: mov     x0, #LANTERN_OK
+    LEAVE 0
+97: cmp     x0, #LANTERN_BUFFER_TOO_SMALL
+    b.eq    96f
+    mov     x9, #LANTERN_INVALID_ENCODING   /* a state lantern_state_root does not take */
+    str     x9, [x23, #NodeEvent_result]
+    b       90f
+96: mov     x0, #LANTERN_BUFFER_TOO_SMALL
+    LEAVE 0
+98: mov     x0, #LANTERN_INVALID_EVENT
+    LEAVE 0
+END_FUNCTION node_api_lookup_run
+
+/* L0: x0 = 1 when the 32 bytes at x0 and x1 are the same, else 0. Uses x9-x12. */
+LOCAL_FUNCTION node_api_same_root
+    UNWIND_END_PROLOGUE
+    ldp     x9, x10, [x0]
+    ldp     x11, x12, [x1]
+    cmp     x9, x11
+    ccmp    x10, x12, #0, eq
+    b.ne    8f
+    ldp     x9, x10, [x0, #16]
+    ldp     x11, x12, [x1, #16]
+    cmp     x9, x11
+    ccmp    x10, x12, #0, eq
+    cset    x0, eq
+    ret
+8:  mov     x0, #0
+    ret
+END_FUNCTION node_api_same_root
 
 /* ---------------------------------------------------------------- Streams (node.md, NodeApi) */
 

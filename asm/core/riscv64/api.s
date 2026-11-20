@@ -802,7 +802,17 @@ LOCAL_FUNCTION node_api_event
     beq     a3, t0, 66f
     li      t0, API_OP_GET_STATE_V2
     bne     a3, t0, 7f
-66: mv      a0, s7                          # a state: its lookup, then the state at its slot
+66: ld      t0, ApiRoute_id_kind(s7)        # a state root: a work finds its slot first
+    li      t1, API_ID_ROOT
+    bne     t0, t1, 69f
+    mv      a0, s9
+    mv      a1, s7
+    mv      a2, s3
+    call    node_api_lookup
+    mv      a2, a0
+    bnez    a0, 80f
+    j       90f
+69: mv      a0, s7                          # a state: its lookup, then the state at its slot
     mv      a1, s8
     call    node_api_state
     mv      a2, a0
@@ -1507,6 +1517,215 @@ LOCAL_FUNCTION node_api_encode
 9:  li      a0, 0
     UNFRAME 16
 END_FUNCTION node_api_encode
+
+/*
+ * (connection a0, route a1, answer flags a2) -> a0: a state_id of a root (node.md, NODE_EV_API): a
+ * NodeApi entry with API_STREAM_LOOKUP and a NODE_WORK_API_LOOKUP with the head's post-state; 0,
+ * or 404 with no head post-state. s1 the node, s6 the actions. s3 the route, s7 the flags, s8 the
+ * head's post-state, s9 the connection. Locals: L the entry's index.
+ */
+LOCAL_FUNCTION node_api_lookup
+    ENTER 16
+    mv      s9, a0
+    mv      s3, a1
+    li      t0, API_STREAM_LOOKUP | API_STREAM_BUSY
+    or      s7, a2, t0
+    ld      t0, ApiRoute_response(s3)
+    li      t1, API_TYPE_SSZ
+    bne     t0, t1, 1f
+    ori     s7, s7, API_STREAM_SSZ
+1:  addi    a0, s1, Node_head_root
+    call    node_find_block
+    li      t0, -1
+    beq     a0, t0, 80f
+    ld      s8, NodeBlock_state_id(a1)
+    beqz    s8, 80f
+    call    node_api_new
+    sd      a0, L(sp)
+    mv      s4, a1
+    mv      a0, a1
+    li      a1, NodeApi__mem
+    call    lantern_zero
+    sd      s9, NodeApi_connection(s4)
+    ld      t0, ApiRoute_op(s3)
+    sd      t0, NodeApi_op(s4)
+    sd      s7, NodeApi_flags(s4)
+    addi    t0, s4, NodeApi_cursor
+    addi    t1, s3, ApiRoute_id_root
+    COPY32  t0, t1
+    li      a0, NODE_WORK_API_LOOKUP
+    mv      a1, s8
+    li      a2, 0
+    li      a3, 0
+    mv      a4, s9
+    ld      a5, L(sp)
+    call    node_work
+    li      a0, 0
+    LEAVE 16
+80: li      a0, 404
+    LEAVE 16
+END_FUNCTION node_api_lookup
+
+/*
+ * The NODE_EV_WORK_DONE a0 of a NODE_WORK_API_LOOKUP (node.md, lantern_node_step): the entry ends;
+ * the answer for the state_id of the slot found, or 404. s1 the node, s2 the store, s5 the scratch,
+ * s6 the actions. s3 the event, s4 the route, s7 the flags, s8 the view, s9 the connection, s10 the
+ * operation. Locals: L the scratch's size.
+ */
+LOCAL_FUNCTION node_api_lookup_done
+    ENTER 16
+    mv      s3, a0
+    ld      t0, NodeAction_arg(s3)
+    PART    t1, t2, s1, Node_api
+    bgeu    t0, t2, 99f
+    li      t2, NodeApi__mem
+    mul     t0, t0, t2
+    add     a0, t1, t0
+    ld      s9, NodeApi_connection(a0)
+    beqz    s9, 99f
+    ld      t0, NodeAction_target(s3)
+    bne     s9, t0, 99f
+    ld      s7, NodeApi_flags(a0)
+    li      t0, API_STREAM_LOOKUP
+    and     t0, s7, t0
+    beqz    t0, 99f
+    ld      s10, NodeApi_op(a0)
+    andi    t0, s7, ~API_STREAM_OWN         # the entry ends; it owns no bytes
+    sd      t0, NodeApi_flags(a0)
+    call    node_api_end
+    andi    t0, s7, API_STREAM_GONE
+    bnez    t0, 99f
+    ld      t0, 0(s5)                       # the ApiView, then an ApiRoute, at the end of scratch
+    sd      t0, L(sp)
+    li      t1, ApiView__size + API_ROUTE_FIXED
+    sub     t0, t0, t1
+    sd      t0, 0(s5)
+    add     s8, s5, t0
+    mv      a0, s8
+    call    node_api_view
+    li      t0, ApiView__size
+    add     s4, s8, t0
+    mv      a0, s4
+    li      a1, API_ROUTE_FIXED
+    call    lantern_zero
+    li      t0, API_ROUTE_FIXED
+    sd      t0, 0(s4)
+    sd      s10, ApiRoute_op(s4)
+    li      t0, API_TYPE_JSON
+    andi    t1, s7, API_STREAM_SSZ
+    beqz    t1, 1f
+    li      t0, API_TYPE_SSZ
+1:  sd      t0, ApiRoute_response(s4)
+    li      t0, API_ID_SLOT
+    sd      t0, ApiRoute_id_kind(s4)
+    ld      t0, NodeEvent_index(s3)
+    sd      t0, ApiRoute_id_slot(s4)
+    li      a2, 404
+    li      t1, -1
+    beq     t0, t1, 80f
+    mv      a0, s4
+    mv      a1, s8
+    call    node_api_state
+    mv      a2, a0
+    bnez    a0, 80f
+    mv      a0, s8
+    call    node_api_advance
+    andi    a2, s7, (API_STREAM_CLOSE | API_STREAM_HTTP10)
+    li      t0, API_OP_GET_STATE_V2
+    bne     s10, t0, 2f
+    mv      a0, s9                          # getStateV2: a stream
+    mv      a1, s4
+    mv      a3, s8
+    call    node_api_stream
+    mv      a2, a0
+    bnez    a0, 80f
+    j       90f
+2:  mv      a0, s10                         # the others: a work
+    mv      a1, s9
+    mv      a3, s8
+    call    node_api_encode
+    mv      a2, a0
+    beqz    a0, 90f
+80: mv      a0, s9                          # an error: with close, or keep-alive for HTTP/1.0
+    li      a1, 0
+    li      a3, API_BODY_ERROR
+    andi    a4, s7, API_R_CLOSE
+    bnez    a4, 81f
+    andi    t0, s7, API_STREAM_HTTP10
+    beqz    t0, 81f
+    li      a4, API_R_KEEP
+81: call    node_api_send
+90: ld      t0, L(sp)
+    sd      t0, 0(s5)
+99: LEAVE 16
+END_FUNCTION node_api_lookup_done
+
+/*
+ * (node a0, work a1, state_a a2, scratch a3, event a4) -> a0: a NODE_WORK_API_LOOKUP of
+ * lantern_node_run (node.md): at NodeEvent_index of the event, the slot whose state on the chain of
+ * state_a has the root of the NodeApi entry at the work's arg, or 2^64 - 1. s1 the node, s3 the
+ * state, s4 the event, s5 the root, s7 the slot, s8 the lowest slot.
+ */
+LOCAL_FUNCTION node_api_lookup_run
+    ENTER 0
+    mv      s1, a0
+    mv      s3, a2
+    mv      s4, a4
+    li      t0, -1
+    sd      t0, NodeEvent_index(s4)
+    beqz    s3, 98f
+    ld      t0, NodeAction_arg(a1)
+    PART    t1, t2, s1, Node_api
+    bgeu    t0, t2, 90f
+    li      t2, NodeApi__mem
+    mul     t0, t0, t2
+    add     t1, t1, t0
+    ld      t0, NodeApi_flags(t1)
+    li      t2, API_STREAM_LOOKUP
+    and     t0, t0, t2
+    beqz    t0, 90f
+    addi    s5, t1, NodeApi_cursor
+    mv      s8, a3
+    ld      a0, NODE_STATE_SLOT(s3)         # the state's own root
+    addi    a1, s1, Node_config
+    call    node_fork
+    mv      t6, a0
+    mv      a0, s3
+    LDQ     a1, s1, Node_config + CONFIG_STATE_CACHE
+    mv      a2, s8
+    addi    a3, s4, NodeEvent_root
+    FORK_CALL state_root
+    bnez    a0, 97f
+    ld      s7, NODE_STATE_SLOT(s3)
+    addi    t0, s4, NodeEvent_root
+    NE32    t0, s5, 1f
+    j       80f
+1:  li      t0, SLOTS_PER_HISTORICAL_ROOT   # then its state_roots, from the slot below it down
+    li      s8, 0
+    bltu    s7, t0, 3f
+    sub     s8, s7, t0
+3:  bleu    s7, s8, 90f
+    addi    s7, s7, -1
+    li      t0, SLOTS_PER_HISTORICAL_ROOT - 1
+    and     t0, s7, t0
+    slli    t0, t0, 5
+    li      t1, NODE_STATE_STATE_ROOTS
+    add     t0, t0, t1
+    add     t0, s3, t0
+    NE32    t0, s5, 3b
+80: sd      s7, NodeEvent_index(s4)
+90: li      a0, LANTERN_OK
+    LEAVE 0
+97: li      t0, LANTERN_BUFFER_TOO_SMALL
+    beq     a0, t0, 96f
+    li      t0, LANTERN_INVALID_ENCODING    # a state lantern_state_root does not take
+    sd      t0, NodeEvent_result(s4)
+    j       90f
+96: li      a0, LANTERN_BUFFER_TOO_SMALL
+    LEAVE 0
+98: li      a0, LANTERN_INVALID_EVENT
+    LEAVE 0
+END_FUNCTION node_api_lookup_run
 
 /* ---------------------------------------------------------------- Streams (node.md, NodeApi) */
 

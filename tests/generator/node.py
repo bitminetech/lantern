@@ -232,6 +232,7 @@ def api_values(spec, fork, state, block):
         states[slot] = s
     return dict(fork=fork, finalized=store.finalized_checkpoint.root == root, state_ssz=bytes(state.encode_bytes()),
                 state_json=to_json(state).encode(), states=states, spec=spec,
+                state_roots=[bytes(spec.hash_tree_root(states[s])) for s in (int(block.slot), int(block.slot) + 1)],
                 finalized_slot=int(store.finalized_checkpoint.epoch) * int(spec.SLOTS_PER_EPOCH),
                 checkpoint_slots={1: int(block.slot), 3: int(store.finalized_checkpoint.epoch) * int(spec.SLOTS_PER_EPOCH),
                                   4: int(store.justified_checkpoint.epoch) * int(spec.SLOTS_PER_EPOCH)},
@@ -289,8 +290,18 @@ def answer(v, name, route, offline, close, keep_alive):
             slot = v["checkpoint_slots"][route.id_kind]
         elif route.id_kind == 5 or (route.id_kind == 2):
             slot = route.id_slot if route.id_kind == 5 else 0
-        else:  # a state root: none in this version
-            return error(404, **kw)
+        else:  # a state root: the head state's own, else the highest slot of its state_roots below it
+            spec, head = v["spec"], v["states"][v["slot"]]
+            n, slot = int(spec.SLOTS_PER_HISTORICAL_ROOT), None
+            if bytes(spec.hash_tree_root(head)) == route.id_root:
+                slot = v["slot"]
+            else:
+                for s in range(v["slot"] - 1, max(0, v["slot"] - n) - 1, -1):
+                    if bytes(head.state_roots[s % n]) == route.id_root:
+                        slot = s
+                        break
+            if slot is None:
+                return error(404, **kw)
         if slot not in v["states"]:
             return error(404, **kw)
         s, spec = v["states"][slot], v["spec"]
@@ -404,7 +415,8 @@ def api_requests(spec, fork, v):
                          root_id, other_root):
             add(f"lookup_{op}_{block_id.decode()[:12]}", api_route.base(by_name[op], path_values={"block_id": block_id}))
     for op in ("getStateRoot", "getStateFork", "getStateFinalityCheckpoints"):
-        ids = [b"head", b"finalized", b"justified", b"genesis", other_root]
+        ids = [b"head", b"finalized", b"justified", b"genesis", other_root, qhex(v["state_roots"][0])[1:-1],
+               qhex(v["state_roots"][1])[1:-1]]
         ids += [b"%d" % s for s in range(v["slot"], v["slot"] + SLOTS_AHEAD + 2)]
         for state_id in ids:
             add(f"lookup_{op}_{state_id.decode()[:12]}", api_route.base(by_name[op], path_values={"state_id": state_id}))

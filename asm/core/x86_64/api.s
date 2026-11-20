@@ -806,7 +806,18 @@ LOCAL_FUNCTION node_api_event
     je      66f
     cmp     $API_OP_GET_STATE_V2, %rcx
     jne     7f
-66: mov     S7(%rsp), %rdi                  # a state: its lookup, then the state at its slot
+66: mov     S7(%rsp), %rax                  # a state root: a work finds its slot first
+    cmpq    $API_ID_ROOT, ApiRoute_id_kind(%rax)
+    jne     69f
+    mov     S9(%rsp), %rdi
+    mov     %rax, %rsi
+    mov     %r12, %rdx
+    call    node_api_lookup
+    mov     %rax, %rdx
+    test    %rax, %rax
+    jnz     80f
+    jmp     90f
+69: mov     S7(%rsp), %rdi                  # a state: its lookup, then the state at its slot
     mov     S8(%rsp), %rsi
     call    node_api_state
     mov     %rax, %rdx
@@ -1545,6 +1556,223 @@ LOCAL_FUNCTION node_api_encode
 9:  xor     %eax, %eax
     UNFRAME 16
 END_FUNCTION node_api_encode
+
+/*
+ * (connection rdi, route rsi, answer flags rdx) -> rax: a state_id of a root (node.md, NODE_EV_API):
+ * a NodeApi entry with API_STREAM_LOOKUP and a NODE_WORK_API_LOOKUP with the head's post-state; 0,
+ * or 404 with no head post-state. rbx the node, r15 the actions. r12 the route, S7 the flags, S9
+ * the connection, S8 the head's post-state. Locals: L the entry's index.
+ */
+LOCAL_FUNCTION node_api_lookup
+    ENTER 16
+    mov     %rdi, S9(%rsp)
+    mov     %rsi, %r12
+    or      $(API_STREAM_LOOKUP | API_STREAM_BUSY), %rdx
+    cmpq    $API_TYPE_SSZ, ApiRoute_response(%r12)
+    jne     1f
+    or      $API_STREAM_SSZ, %rdx
+1:  mov     %rdx, S7(%rsp)
+    lea     Node_head_root(%rbx), %rdi
+    call    node_find_block
+    cmp     $-1, %rax
+    je      80f
+    mov     NodeBlock_state_id(%rdx), %rax
+    test    %rax, %rax
+    jz      80f
+    mov     %rax, S8(%rsp)
+    call    node_api_new
+    mov     %rax, L(%rsp)
+    mov     %rdx, %r13
+    mov     %rdx, %rdi
+    mov     $NodeApi__mem, %esi
+    call    lantern_zero
+    mov     S9(%rsp), %rax
+    mov     %rax, NodeApi_connection(%r13)
+    mov     ApiRoute_op(%r12), %rax
+    mov     %rax, NodeApi_op(%r13)
+    mov     S7(%rsp), %rax
+    mov     %rax, NodeApi_flags(%r13)
+    lea     NodeApi_cursor(%r13), %rax
+    lea     ApiRoute_id_root(%r12), %rcx
+    COPY32  %rax, %rcx
+    mov     $NODE_WORK_API_LOOKUP, %edi
+    mov     S8(%rsp), %rsi
+    xor     %edx, %edx
+    xor     %ecx, %ecx
+    mov     S9(%rsp), %r8
+    mov     L(%rsp), %r9
+    call    node_work
+    xor     %eax, %eax
+    LEAVE 16
+80: mov     $404, %eax
+    LEAVE 16
+END_FUNCTION node_api_lookup
+
+/*
+ * The NODE_EV_WORK_DONE rdi of a NODE_WORK_API_LOOKUP (node.md, lantern_node_step): the entry
+ * ends; the answer for the state_id of the slot found, or 404. rbx the node, rbp the store, r14 the
+ * scratch, r15 the actions. r12 the event, r13 the route, S7 the flags, S8 the view, S9 the
+ * connection, S10 the operation. Locals: L the scratch's size.
+ */
+LOCAL_FUNCTION node_api_lookup_done
+    ENTER 16
+    mov     %rdi, %r12
+    mov     NodeAction_arg(%r12), %rax
+    PART    %rdi, %rcx, %rbx, Node_api
+    cmp     %rcx, %rax
+    jae     99f
+    imul    $NodeApi__mem, %rax, %rax
+    add     %rax, %rdi
+    mov     NodeApi_connection(%rdi), %rax
+    test    %rax, %rax
+    jz      99f
+    cmp     NodeAction_target(%r12), %rax
+    jne     99f
+    mov     %rax, S9(%rsp)
+    mov     NodeApi_flags(%rdi), %rax
+    test    $API_STREAM_LOOKUP, %eax
+    jz      99f
+    mov     %rax, S7(%rsp)
+    and     $~API_STREAM_OWN, %rax          # the entry ends; it owns no bytes
+    mov     %rax, NodeApi_flags(%rdi)
+    mov     NodeApi_op(%rdi), %rax
+    mov     %rax, S10(%rsp)
+    call    node_api_end
+    testq   $API_STREAM_GONE, S7(%rsp)
+    jnz     99f
+    mov     (%r14), %rax                    # the ApiView, then an ApiRoute, at the end of scratch
+    mov     %rax, L(%rsp)
+    sub     $(ApiView__size + API_ROUTE_FIXED), %rax
+    mov     %rax, (%r14)
+    add     %r14, %rax
+    mov     %rax, S8(%rsp)
+    mov     %rax, %rdi
+    call    node_api_view
+    mov     S8(%rsp), %r13
+    add     $ApiView__size, %r13
+    mov     %r13, %rdi
+    mov     $API_ROUTE_FIXED, %esi
+    call    lantern_zero
+    movq    $API_ROUTE_FIXED, (%r13)
+    mov     S10(%rsp), %rax
+    mov     %rax, ApiRoute_op(%r13)
+    mov     $API_TYPE_JSON, %eax
+    testq   $API_STREAM_SSZ, S7(%rsp)
+    jz      1f
+    mov     $API_TYPE_SSZ, %eax
+1:  mov     %rax, ApiRoute_response(%r13)
+    movq    $API_ID_SLOT, ApiRoute_id_kind(%r13)
+    mov     NodeEvent_index(%r12), %rax
+    mov     %rax, ApiRoute_id_slot(%r13)
+    mov     $404, %edx
+    cmp     $-1, %rax
+    je      80f
+    mov     %r13, %rdi
+    mov     S8(%rsp), %rsi
+    call    node_api_state
+    mov     %rax, %rdx
+    test    %rax, %rax
+    jnz     80f
+    mov     S8(%rsp), %rdi
+    call    node_api_advance
+    mov     S7(%rsp), %rdx
+    and     $(API_STREAM_CLOSE | API_STREAM_HTTP10), %edx
+    cmpq    $API_OP_GET_STATE_V2, S10(%rsp)
+    jne     2f
+    mov     S9(%rsp), %rdi                  # getStateV2: a stream
+    mov     %r13, %rsi
+    mov     S8(%rsp), %rcx
+    call    node_api_stream
+    mov     %rax, %rdx
+    test    %rax, %rax
+    jnz     80f
+    jmp     90f
+2:  mov     S10(%rsp), %rdi                 # the others: a work
+    mov     S9(%rsp), %rsi
+    mov     S8(%rsp), %rcx
+    call    node_api_encode
+    mov     %rax, %rdx
+    test    %rax, %rax
+    jz      90f
+80: mov     S9(%rsp), %rdi                  # an error: with close, or keep-alive for HTTP/1.0
+    xor     %esi, %esi
+    mov     $API_BODY_ERROR, %ecx
+    mov     S7(%rsp), %r8
+    and     $API_R_CLOSE, %r8d
+    jnz     81f
+    testq   $API_STREAM_HTTP10, S7(%rsp)
+    jz      81f
+    mov     $API_R_KEEP, %r8d
+81: call    node_api_send
+90: mov     L(%rsp), %rax
+    mov     %rax, (%r14)
+99: LEAVE 16
+END_FUNCTION node_api_lookup_done
+
+/*
+ * (node rdi, work rsi, state_a rdx, scratch rcx, event r8) -> rax: a NODE_WORK_API_LOOKUP of
+ * lantern_node_run (node.md): at NodeEvent_index of the event, the slot whose state on the chain of
+ * state_a has the root of the NodeApi entry at the work's arg, or 2^64 - 1. rbx the node, r12 the
+ * state, r13 the event, r14 the root, r15 the slot, S7 the lowest slot.
+ */
+LOCAL_FUNCTION node_api_lookup_run
+    ENTER 0
+    mov     %rdi, %rbx
+    mov     %rdx, %r12
+    mov     %r8, %r13
+    movq    $-1, NodeEvent_index(%r13)
+    test    %r12, %r12
+    jz      98f
+    mov     NodeAction_arg(%rsi), %rax
+    PART    %rdi, %rdx, %rbx, Node_api
+    cmp     %rdx, %rax
+    jae     90f
+    imul    $NodeApi__mem, %rax, %rax
+    add     %rax, %rdi
+    testq   $API_STREAM_LOOKUP, NodeApi_flags(%rdi)
+    jz      90f
+    lea     NodeApi_cursor(%rdi), %r14
+    mov     %rcx, S8(%rsp)
+    mov     NODE_STATE_SLOT(%r12), %rdi     # the state's own root
+    lea     Node_config(%rbx), %rsi
+    call    node_fork
+    mov     %rax, %r10
+    mov     %r12, %rdi
+    mov     (Node_config + CONFIG_STATE_CACHE)(%rbx), %rsi
+    mov     S8(%rsp), %rdx
+    lea     NodeEvent_root(%r13), %rcx
+    FORK_CALL state_root
+    test    %rax, %rax
+    jnz     97f
+    mov     NODE_STATE_SLOT(%r12), %r15
+    lea     NodeEvent_root(%r13), %rax
+    NE32    %rax, %r14, 1f
+    jmp     80f
+1:  mov     %r15, %rax                      # then its state_roots, from the slot below it down
+    sub     $SLOTS_PER_HISTORICAL_ROOT, %rax
+    jae     2f
+    xor     %eax, %eax
+2:  mov     %rax, S7(%rsp)
+3:  cmp     S7(%rsp), %r15
+    jbe     90f
+    dec     %r15
+    mov     %r15, %rax
+    and     $(SLOTS_PER_HISTORICAL_ROOT - 1), %eax
+    shl     $5, %rax
+    lea     NODE_STATE_STATE_ROOTS(%r12,%rax), %rax
+    NE32    %rax, %r14, 3b
+80: mov     %r15, NodeEvent_index(%r13)
+90: xor     %eax, %eax
+    LEAVE 0
+97: cmp     $LANTERN_BUFFER_TOO_SMALL, %rax
+    je      96f
+    movq    $LANTERN_INVALID_ENCODING, NodeEvent_result(%r13)   # a state lantern_state_root does not take
+    jmp     90f
+96: mov     $LANTERN_BUFFER_TOO_SMALL, %eax
+    LEAVE 0
+98: mov     $LANTERN_INVALID_EVENT, %eax
+    LEAVE 0
+END_FUNCTION node_api_lookup_run
 
 /* ---------------------------------------------------------------- Streams (node.md, NodeApi) */
 

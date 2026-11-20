@@ -864,6 +864,7 @@
 .set NODE_WORK_GOSSIP_VOTE, 18         /* a: the target checkpoint state, or 0; data: a valid SignedAggregateAndProof; target: its message Handle */
 .set NODE_WORK_API_ENCODE, 19          /* a: the block's post-state; data: its bytes, a NODE_DB_REF or 0; target: the connection; arg: op + 256 * flags + 65536 * NodeBlock index */
 .set NODE_WORK_API_CHUNK, 20           /* data: the SSZ bytes, or a NODE_DB_REF; target: the connection; arg: the NodeApi index */
+.set NODE_WORK_API_LOOKUP, 21          /* a: the head's post-state; target: the connection; arg: the NodeApi index */
 .set NODE_VOTES_MAX, 130               /* MAX_ATTESTATIONS + MAX_ATTESTER_SLASHINGS: the votes of a block the node takes */
 .set NodeEvent_root, NodeEvent_checkpoint + 8  /* GOSSIP of a valid beacon_block, SYNC_BLOCK: its root; of a valid blob_sidecar, BLOB: the root of its block header */
 .set NodeEvent_index, NodeEvent_root + 32      /* GOSSIP of a valid beacon_block, SYNC_BLOCK: its blob commitments; of a valid blob_sidecar: its index */
@@ -980,10 +981,12 @@
 .set API_STREAM_OPTIMISTIC, 256
 .set API_STREAM_FINALIZED, 512
 .set API_STREAM_DONE, 1024
+.set API_STREAM_LOOKUP, 2048           /* the entry waits for a NODE_WORK_API_LOOKUP */
 .set API_VALUE_CANONICAL, 1              /* the values of a NODE_WORK_API_ENCODE's arg, times 2^16 */
 .set API_VALUE_FINALIZED, 2
 .set API_VALUE_OPTIMISTIC, 4
 .set NODE_STATE_FORK, 56               /* BeaconState.fork in the value of every fork */
+.set NODE_STATE_STATE_ROOTS, 184 + 32 * SLOTS_PER_HISTORICAL_ROOT  /* BeaconState.state_roots in the value of every fork */
 .set NODE_JSON_BLOCK, 0                  /* lantern_node_json: a SignedBeaconBlock */
 .set NODE_JSON_STATE, 1                  /* a BeaconState */
 

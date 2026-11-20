@@ -3821,9 +3821,14 @@ LOCAL_FUNCTION node_event
     call    node_api_done
     LEAVE 48
 702: li     t2, NODE_WORK_API_CHUNK         # API_CHUNK: the chunk to its connection
-    bne     t0, t2, 70f
+    bne     t0, t2, 703f
     mv      a0, s3
     call    node_api_chunk_done
+    LEAVE 48
+703: li     t2, NODE_WORK_API_LOOKUP        # API_LOOKUP: the answer for the slot it found
+    bne     t0, t2, 70f
+    mv      a0, s3
+    call    node_api_lookup_done
     LEAVE 48
 70: li      t2, NODE_WORK_ATTESTATION       # done with an attestation or a slashing: free its bytes
     beq     t0, t2, 71f
@@ -7619,7 +7624,17 @@ FUNCTION lantern_node_step
     j       22f
 231: li     t6, NODE_WORK_SERVE             # SERVE, and NEW_PAYLOAD or FORKCHOICE of LANTERN_VALID: a ByteList of the chunk inside
     beq     t4, t6, 25f
-    li      t6, NODE_WORK_API_CHUNK         # API_CHUNK of LANTERN_VALID: its ByteList at NodeEvent_api_bytes
+    li      t6, NODE_WORK_API_LOOKUP        # API_LOOKUP: an API answer's scratch and actions
+    bne     t4, t6, 233f
+    ld      t4, (L + 184)(sp)
+    li      t6, NODE_API_SCRATCH
+    bgeu    t4, t6, 234f
+    sd      t6, (L + 184)(sp)
+234: ld     t4, (L + 192)(sp)
+    addi    t4, t4, 1
+    sd      t4, (L + 192)(sp)
+    j       22f
+233: li     t6, NODE_WORK_API_CHUNK         # API_CHUNK of LANTERN_VALID: its ByteList at NodeEvent_api_bytes
     bne     t4, t6, 232f
     ld      t6, NodeEvent_result(t0)
     bnez    t6, 22f
@@ -8749,7 +8764,7 @@ FUNCTION lantern_node_run
     call    node_api_run
     LEAVE 192
 976: li     t1, NODE_WORK_API_CHUNK
-    bne     t0, t1, 8f
+    bne     t0, t1, 977f
     mv      a0, s1                          # API_CHUNK: the next chunk of a stream
     mv      a1, s3
     mv      a2, s5
@@ -8757,6 +8772,15 @@ FUNCTION lantern_node_run
     mv      a4, s7
     mv      a5, s8
     call    node_api_chunk_run
+    LEAVE 192
+977: li     t1, NODE_WORK_API_LOOKUP
+    bne     t0, t1, 8f
+    mv      a0, s1                          # API_LOOKUP: the slot of a state root
+    mv      a1, s3
+    mv      a2, s4
+    mv      a3, s6
+    mv      a4, s7
+    call    node_api_lookup_run
     LEAVE 192
 8:  li      a0, LANTERN_INVALID_EVENT
     LEAVE 192

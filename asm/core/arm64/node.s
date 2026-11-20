@@ -3855,9 +3855,14 @@ LOCAL_FUNCTION node_event
     bl      node_api_done
     LEAVE 48
 702: cmp    x9, #NODE_WORK_API_CHUNK           /* API_CHUNK: the chunk to its connection */
-    b.ne    70f
+    b.ne    703f
     mov     x0, x21
     bl      node_api_chunk_done
+    LEAVE 48
+703: cmp    x9, #NODE_WORK_API_LOOKUP          /* API_LOOKUP: the answer for the slot it found */
+    b.ne    70f
+    mov     x0, x21
+    bl      node_api_lookup_done
     LEAVE 48
 70: cmp     x9, #NODE_WORK_ATTESTATION         /* done with an attestation or a slashing: free its bytes */
     ccmp    x9, #NODE_WORK_ATTESTER_SLASHING, #4, ne
@@ -7562,7 +7567,16 @@ FUNCTION lantern_node_step
     b       22f
 231: cmp    x14, #NODE_WORK_SERVE
     b.eq    24f
-    cmp     x14, #NODE_WORK_API_CHUNK       /* API_CHUNK of LANTERN_VALID: its ByteList at NodeEvent_api_bytes */
+    cmp     x14, #NODE_WORK_API_LOOKUP      /* API_LOOKUP: an API answer's scratch and actions */
+    b.ne    234f
+    ldp     x9, x10, [sp, #(L + 176)]
+    MOVQ    x15, NODE_API_SCRATCH
+    cmp     x15, x9
+    csel    x9, x15, x9, hi
+    add     x10, x10, #1
+    stp     x9, x10, [sp, #(L + 176)]
+    b       22f
+234: cmp    x14, #NODE_WORK_API_CHUNK       /* API_CHUNK of LANTERN_VALID: its ByteList at NodeEvent_api_bytes */
     b.ne    232f
     ldr     x15, [x11, #NodeEvent_result]
     cbnz    x15, 22f
@@ -8683,7 +8697,7 @@ FUNCTION lantern_node_run
     bl      node_api_run
     LEAVE 192
 976: cmp    x9, #NODE_WORK_API_CHUNK
-    b.ne    8f
+    b.ne    977f
     mov     x0, x19                         /* API_CHUNK: the next chunk of a stream */
     mov     x1, x21
     mov     x2, x23
@@ -8691,6 +8705,15 @@ FUNCTION lantern_node_run
     mov     x4, x25
     mov     x5, x26
     bl      node_api_chunk_run
+    LEAVE 192
+977: cmp    x9, #NODE_WORK_API_LOOKUP
+    b.ne    8f
+    mov     x0, x19                         /* API_LOOKUP: the slot of a state root */
+    mov     x1, x21
+    mov     x2, x22
+    mov     x3, x24
+    mov     x4, x25
+    bl      node_api_lookup_run
     LEAVE 192
 8:  mov     x0, #LANTERN_INVALID_EVENT
     LEAVE 192
