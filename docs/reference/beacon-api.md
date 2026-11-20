@@ -210,6 +210,9 @@ The answers of the node (node.md, `NODE_EV_API`) follow these rules.
 - prepareSyncCommitteeSubnets, from altair: a JSON array of `SyncCommitteeSubscription`, lantern's container of the spec's type (`sync_committee_indices` at most `SYNC_COMMITTEE_SIZE`). An index not below `SYNC_COMMITTEE_SIZE`, or a body of no such list: 400 `{"code":400,"message":"BAD_REQUEST"}`, and none applies.
   - Each index i of each item: the node joins sync_committee of the subnet i / (SYNC_COMMITTEE_SIZE / SYNC_COMMITTEE_SUBNET_COUNT) and keeps it while the store's epoch is below `until_epoch` (the spec: "The final epoch (exclusive value)"); its MetaData's and record's `syncnets` are those subnets (altair p2p-interface.md).
   - The answer: 200 with no body.
+- prepareBeaconProposer: a JSON array of the spec's items, decoded as lantern's `ProposerPreparation` (`validator_index`, `fee_recipient`). A body of no such list: 400 `{"code":400,"message":"BAD_REQUEST"}`, and none applies.
+  - Each item: the node's `NodeProposer` entry of its `validator_index` takes its `fee_recipient` until the store's epoch + 3, exclusive (the spec: it persists "through the epoch in which the call is submitted and for a further two epochs after that"); an index the node does not know is kept too (the spec: such requests "will be accepted"). With no entry of its index: a free entry, one past its epoch, else a new one while the part has room; else the item is dropped.
+  - The answer: 200 with no body.
 - Every other operation: 501.
 
 ## Test vectors

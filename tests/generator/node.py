@@ -391,7 +391,7 @@ POOL_GETS = ("getPoolVoluntaryExits", "getPoolProposerSlashings", "getPoolAttest
 POOL_POSTS = ("submitPoolVoluntaryExit", "submitPoolProposerSlashings", "submitPoolAttesterSlashingsV2",
               "submitPoolBLSToExecutionChange", "submitPoolAttestationsV2", "publishAggregateAndProofsV2",
               "submitPoolSyncCommitteeSignatures", "publishContributionAndProofs", "prepareBeaconCommitteeSubnet",
-              "prepareSyncCommitteeSubnets")
+              "prepareSyncCommitteeSubnets", "prepareBeaconProposer")
 PENDING = {"getPendingDeposits": "pending_deposits", "getPendingPartialWithdrawals": "pending_partial_withdrawals",
            "getPendingConsolidations": "pending_consolidations"}
 ANSWERED = ("getHealth", "getNetworkIdentity", "getNodeVersion", "getSyncingStatus", "getPeerCount", "getGenesis",
@@ -1479,6 +1479,11 @@ def pool_requests(spec, fork, v, by_name, add):
                      b'[{"validator_index":"1","sync_committee_indices":["%d"],"until_epoch":"%d"}]'
                      % (size, epoch_now + 2), 400)
         subscription("subscribe_sync_no_item", "prepareSyncCommitteeSubnets", b'[{"until_epoch":"1"}]', 400)
+    # prepareBeaconProposer: fee recipients of validators known or not (200); an item of no preparation (400)
+    subscription("prepare_proposer", "prepareBeaconProposer",
+                 b'[{"validator_index":"1","fee_recipient":"0x' + b"42" * 20 + b'"},'
+                 b'{"validator_index":"9999999","fee_recipient":"0x' + b"07" * 20 + b'"}]', 200)
+    subscription("prepare_proposer_no_item", "prepareBeaconProposer", b'[{"validator_index":"1"}]', 400)
     # with the store's nodes NOT_VALIDATED (syncing bit 1): the aggregate's beacon_block_root, 503
     add("aggregate_not_validated", agg_request(data_root, first_slot, first_index), syncing=2,
         want=lambda c, k: error(503, close=c, keep_alive=k))

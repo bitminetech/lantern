@@ -127,8 +127,9 @@ app_builtin_config_text:
 app_builtin_config_end:
     .p2align 3
 .set APP_POOL, 4096                         /* NodeRoom pool: the pool's operations */
+.set APP_PROPOSERS, 4096                    /* NodeRoom proposers: the fee recipients of a validator client's validators */
 app_node_room:                              /* NodeRoom; peers from --target-peers, api_streams from --http-max-connections */
-    .quad 1024, 64, 1, 64, 512, 8192, 1 << 20, 4096, 1024, 1 << 20, 0, 1, 64, APP_POOL
+    .quad 1024, 64, 1, 64, 512, 8192, 1 << 20, 4096, 1024, 1 << 20, 0, 1, 64, APP_POOL, APP_PROPOSERS
 app_seen_room:                              /* SeenRoom */
     .quad 65536, 65536, 4096, 1 << 20
 app_state_room:                             /* StateRoom */

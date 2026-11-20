@@ -653,7 +653,8 @@
 .set Node_syncnets, Node_api + 96          /* the sync_committee subnets the node is subscribed to */
 .set Node_sync_until, Node_api + 104       /* SYNC_COMMITTEE_SUBNET_COUNT u64: each sync subnet stays below this epoch */
 .set Node_subnet_until, Node_sync_until + 8 * SYNC_COMMITTEE_SUBNET_COUNT  /* ATTESTATION_SUBNET_COUNT u64: each subnet stays below this slot */
-.set NODE_FIXED, Node_subnet_until + 8 * ATTESTATION_SUBNET_COUNT
+.set Node_proposers, Node_subnet_until + 8 * ATTESTATION_SUBNET_COUNT   /* PartRef: NodeProposer entries */
+.set NODE_FIXED, Node_proposers + 16
 .set NODE_LOOKUP_MS, 10000             /* the least time between two lookups of the node */
 .set NODE_STATUS_MS, 12000             /* the least time between two Status requests of node_sync */
 .set NODE_SUBSCRIBE_AHEAD, 2           /* epochs: the topics of a new ForkDigest join this early, the old ones leave this late */
@@ -810,7 +811,14 @@
 .set NodeRoom_db_roots, 88             /* its root table, a power of two */
 .set NodeRoom_api_streams, 96          /* NodeApi entries: answers the node streams */
 .set NodeRoom_pool, 104                /* NodePool entries: the pool's operations */
-.set NODE_ROOM_FIELDS, 14
+.set NodeRoom_proposers, 112           /* NodeProposer entries: the fee recipients of prepareBeaconProposer */
+.set NODE_ROOM_FIELDS, 15
+
+/* NodeProposer: a validator's fee recipient (beacon-api.md, prepareBeaconProposer) */
+.set NodeProposer_validator_index, 0
+.set NodeProposer_until_epoch, 8          /* the entry holds while the store's epoch is below it; 0 for a free entry */
+.set NodeProposer_fee_recipient, 16       /* ExecutionAddress: 20 bytes */
+.set NodeProposer__mem, 40
 
 /* NodeStepResult: the output of lantern_node_step */
 .set NodeStepResult_accepted, 0        /* events handled, from the first */
@@ -1091,6 +1099,7 @@
 .set NODE_JSON_CONTRIBUTION_AND_PROOF, 15 /* a SignedContributionAndProof, from altair */
 .set NODE_JSON_COMMITTEE_SUBSCRIPTION, 16 /* lantern's BeaconCommitteeSubscription */
 .set NODE_JSON_SYNC_SUBSCRIPTION, 17     /* lantern's SyncCommitteeSubscription, from altair */
+.set NODE_JSON_PROPOSER_PREPARATION, 18  /* lantern's ProposerPreparation */
 .set NodePool_topic, 0                   /* NodePool (node.md): GOSSIP_* of the operation; 0 for a free entry */
 .set NodePool_state, 8                   /* NODE_POOL_* */
 .set NodePool_data_id, 16                /* the BufferId of its SSZ bytes */

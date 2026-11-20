@@ -2797,6 +2797,8 @@ LOCAL_FUNCTION node_api_event
     b.eq    60f
     cmp     x3, #API_OP_PREPARE_SYNC_COMMITTEE_SUBNETS
     b.eq    60f
+    cmp     x3, #API_OP_PREPARE_BEACON_PROPOSER
+    b.eq    60f
     mov     x0, x3
     bl      node_submit_topic
     cbnz    x0, 60f
@@ -7540,6 +7542,64 @@ LOCAL_FUNCTION node_submit_check
 END_FUNCTION node_submit_check
 
 /*
+ * L1: the ProposerPreparation at x0 (beacon-api.md, prepareBeaconProposer): the NodeProposer of its
+ * validator_index takes its fee_recipient and the store x20's epoch + 3 as until_epoch; with none,
+ * the first entry whose until_epoch is at most that epoch, else a new one when the part has room;
+ * else none. Locals: the item, the epoch.
+ */
+LOCAL_FUNCTION node_proposer_put
+    FRAME 16
+    str     x0, [sp, #16]
+    mov     x0, x20
+    bl      node_store_slot
+    mov     x9, #SLOTS_PER_EPOCH
+    udiv    x0, x0, x9
+    str     x0, [sp, #24]
+    ldr     x13, [sp, #16]
+    ldr     x14, [x13]                      /* validator_index */
+    PART    x9, x10, x19, Node_proposers
+    mov     x11, #0
+    mov     x15, #0                         /* the first free entry, or 0 */
+1:  cmp     x11, x10
+    b.hs    3f
+    ldr     x12, [x9, #NodeProposer_validator_index]
+    cmp     x12, x14
+    b.eq    5f
+    cbnz    x15, 2f
+    ldr     x12, [x9, #NodeProposer_until_epoch]
+    cmp     x12, x0
+    b.hi    2f
+    mov     x15, x9
+2:  add     x9, x9, #NodeProposer__mem
+    add     x11, x11, #1
+    b       1b
+3:  mov     x9, x15                         /* none of its index: a free entry, else a new one */
+    cbnz    x9, 5f
+    LDQ     x12, x19, Node_proposers        /* the capacity: up to the next part */
+    LDQ     x13, x19, Node_p2p_out
+    sub     x13, x13, x12
+    mov     x12, #NodeProposer__mem
+    udiv    x13, x13, x12
+    cmp     x10, x13
+    b.hs    9f
+    PART    x9, x11, x19, Node_proposers
+    mov     x12, #NodeProposer__mem
+    madd    x9, x10, x12, x9
+    add     x10, x10, #1
+    STQ     x10, x19, Node_proposers + 8
+5:  str     x14, [x9, #NodeProposer_validator_index]
+    ldr     x0, [sp, #24]
+    add     x0, x0, #3
+    str     x0, [x9, #NodeProposer_until_epoch]
+    add     x0, x9, #NodeProposer_fee_recipient
+    ldr     x1, [sp, #16]
+    add     x1, x1, #8
+    mov     x2, #20
+    bl      lantern_copy
+9:  UNFRAME 16
+END_FUNCTION node_proposer_put
+
+/*
  * L2: the NODE_EV_WORK_DONE x0 of a NODE_WORK_API_SUBMIT (node.md, lantern_node_step): the body's
  * bytes go; each valid operation joins the pool, goes out on its topic with NODE_FLAG_SUBSCRIBED,
  * and an attester slashing to fork choice; then the answer to the connection. x19 the node, x20
@@ -7676,6 +7736,8 @@ LOCAL_FUNCTION node_api_submit_done
     and     x10, x10, #255
     cmp     x10, #API_OP_PREPARE_SYNC_COMMITTEE_SUBNETS
     b.eq    42f
+    cmp     x10, #API_OP_PREPARE_BEACON_PROPOSER
+    b.eq    45f
     ldrb    w10, [x9, #32]                  /* is_aggregator: subnet_until of compute_subnet_for_attestation, the slot + 1 at least */
     cbz     w10, 6b
     ldr     x11, [x9, #24]
@@ -7707,6 +7769,9 @@ LOCAL_FUNCTION node_api_submit_done
     str     x12, [x15, x10, lsl #3]
     sub     x13, x13, #8
     b       43b
+45: mov     x0, x9                          /* a fee recipient: through the store's epoch + 2 */
+    bl      node_proposer_put
+    b       6b
 70: ldr     x0, [x21, #NodeAction_target]   /* the answer: 200, or 400 with the failures */
     cbz     x25, 71f
     ldr     x9, [x21, #NodeAction_arg]      /* a list: the failures */
@@ -7973,6 +8038,8 @@ LOCAL_FUNCTION node_api_submit_run
     ccmp    x0, x10, #4, ne
     mov     x10, #API_OP_PREPARE_SYNC_COMMITTEE_SUBNETS
     ccmp    x0, x10, #4, ne
+    mov     x10, #API_OP_PREPARE_BEACON_PROPOSER
+    ccmp    x0, x10, #4, ne
     cset    x9, eq
     str     x9, [sp, #(L + 40)]
     bl      node_submit_topic
@@ -7985,6 +8052,9 @@ LOCAL_FUNCTION node_api_submit_run
     b.eq    13f
     mov     x0, #NODE_JSON_SYNC_SUBSCRIPTION
     cmp     x9, #API_OP_PREPARE_SYNC_COMMITTEE_SUBNETS
+    b.eq    13f
+    mov     x0, #NODE_JSON_PROPOSER_PREPARATION
+    cmp     x9, #API_OP_PREPARE_BEACON_PROPOSER
     b.eq    13f
     b       98f
 15:
@@ -8368,7 +8438,12 @@ LOCAL_FUNCTION node_api_submit_run
     and     x9, x9, #255
     cmp     x9, #API_OP_PREPARE_SYNC_COMMITTEE_SUBNETS
     b.eq    53f
-    cmp     x10, #33                        /* BeaconCommitteeSubscription: committees_at_slot 1 to MAX_COMMITTEES_PER_SLOT, committee_index below it */
+    cmp     x9, #API_OP_PREPARE_BEACON_PROPOSER
+    b.ne    55f
+    cmp     x10, #28                        /* ProposerPreparation: its 28 bytes */
+    b.ne    90f
+    b       54f
+55: cmp     x10, #33                        /* BeaconCommitteeSubscription: committees_at_slot 1 to MAX_COMMITTEES_PER_SLOT, committee_index below it */
     b.ne    90f
     ldr     x12, [x11, #16]
     cbz     x12, 90f

@@ -88,6 +88,7 @@ FUNCTION lantern_node_size
     NODE_SIZE_ADD blobs, NodeBlob__mem
     NODE_SIZE_ADD api_streams, NodeApi__mem
     NODE_SIZE_ADD pool, NodePool__mem
+    NODE_SIZE_ADD proposers, NodeProposer__mem
     ld      t0, NodeRoom_p2p_out(a0)        # a ByteList
     addi    t1, t0, 24 + 7
     bltu    t1, t0, 9f
@@ -158,6 +159,7 @@ LOCAL_FUNCTION node_layout
     NODE_PART blobs, blobs, NodeBlob__mem
     NODE_PART api, api_streams, NodeApi__mem
     NODE_PART pool, pool, NodePool__mem
+    NODE_PART proposers, proposers, NodeProposer__mem
     sd      t0, Node_p2p_out(a0)            # one ByteList, empty
     li      t1, 1
     sd      t1, (Node_p2p_out + 8)(a0)
@@ -394,6 +396,7 @@ FUNCTION lantern_node_copy
     NODE_COPY_ROOM blobs, Node_blobs
     NODE_COPY_ROOM api_streams, Node_api
     NODE_COPY_ROOM pool, Node_pool
+    NODE_COPY_ROOM proposers, Node_proposers
     ld      t0, NodeRoom_p2p_out(s2)        # the queued bytes fit
     ld      t1, Node_p2p_out(s1)
     add     t1, s1, t1
@@ -431,6 +434,7 @@ FUNCTION lantern_node_copy
     NODE_COPY_PART Node_blobs, NodeBlob__mem
     NODE_COPY_PART Node_api, NodeApi__mem
     NODE_COPY_PART Node_pool, NodePool__mem
+    NODE_COPY_PART Node_proposers, NodeProposer__mem
     ld      a1, Node_p2p_out(s1)            # the queued bytes
     add     a1, s1, a1
     ld      a2, 16(a1)
