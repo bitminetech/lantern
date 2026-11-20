@@ -396,7 +396,7 @@ ANSWERED = ("getHealth", "getNetworkIdentity", "getNodeVersion", "getSyncingStat
             "getBlockHeader", "getStateFinalityCheckpoints", "getBlockV2", "getStateV2", "getBlockRoot", "getStateRoot",
             "getStateFork", "getSpec", "getForkSchedule", "getDepositContract", "getEpochCommittees",
             "getProposerDuties", "produceAttestationData", "getAttesterDuties", "eventstream", "getStateRandao",
-            "getEpochSyncCommittees", "getProposerLookahead", "getBlockAttestationsV2", "getBlindedBlock", "getDebugChainHeadsV2", "getDebugForkChoice", "getBlockHeaders", "getPeers", "getPeer") + tuple(PENDING) + VALIDATOR_OPS
+            "getEpochSyncCommittees", "getProposerLookahead", "getBlockAttestationsV2", "getBlindedBlock", "getDebugChainHeadsV2", "getDebugForkChoice", "getBlockHeaders", "getPeers", "getPeer", "getBlobSidecars", "getDebugDataColumnSidecars") + tuple(PENDING) + VALIDATOR_OPS
 STATE_READS = ("getStateRandao", "getEpochSyncCommittees", "getProposerLookahead")
 IDENTITY = (b"16Uiu2HAmPLe7Mzm8TsYUubgCAW1aJoeFScxrLj8ppHFivPo97bUZ",
             b"enr:-Iu4QLm7bZGdAhVwRqZ6Zf3LlnqKsBTnZGOByHQhPMQJ3pV4F3t8L9i5yJOZ0X0hiZ6q4D5V0jB7l8J3ZtYw1JDH9C4BgmlkgnY0gmlwhAoAAAGJc2VjcDI1NmsxoQPKY0yuDUmstAHYpMa2_oxVtw0RW_QAdpzBQA8yWM0xOIN0Y3CCIyg",
@@ -840,6 +840,17 @@ def answer(v, name, route, offline, close, keep_alive, syncing=False):
         return response(200, b'{"data":{"disconnected":"0","connecting":"0","connected":"0","disconnecting":"0"}}', **kw)
     if name in ("getSpec", "getForkSchedule", "getDepositContract"):
         return response(200, v["config_bodies"][name], **kw)
+    if name in ("getBlobSidecars", "getDebugDataColumnSidecars"):  # the anchor block, of no sidecars the node holds
+        found = (route.id_kind in (1, 3) or (route.id_kind == 5 and route.id_slot == v["slot"]) or
+                 (route.id_kind == 2 and v["slot"] == 0) or (route.id_kind == 6 and route.id_root == v["root"]))
+        if not found:
+            return error(404, **kw)
+        blobs, fork = name == "getBlobSidecars", v["fork"]
+        if (blobs and fork not in ("deneb", "electra")) or (not blobs and fork != "fulu"):
+            return error(400, **kw)
+        if route.response == 2:
+            return streamed(fork, b"", ssz=True, **kw)
+        return streamed(fork, b'{"version":"' + fork.encode() + b'","execution_optimistic":false,"finalized":true,"data":[]}', **kw)
     if name == "getPeers":  # the node has no peers
         return response(200, b'{"data":[],"meta":{"count":0}}', **kw)
     if name == "getPeer":
@@ -1317,6 +1328,12 @@ def api_requests(spec, fork, v, kind="main"):
                        ("slot_above_parent", [("slot", b"%d" % (v["slot"] + 1)), ("parent_root", parent)])):
         add(f"headers_{key}", api_route.base(headers, query))
     add("headers_http10", api_route.base(headers), version=b"HTTP/1.0")
+    for op in ("getBlobSidecars", "getDebugDataColumnSidecars"):
+        for block_id in (b"head", root_id, other_root, b"%d" % v["slot"]):
+            add(f"sidecars_{op}_{block_id.decode()[:12]}", api_route.base(by_name[op], path_values={"block_id": block_id}))
+        add(f"sidecars_{op}_ssz", api_route.base(by_name[op], path_values={"block_id": b"head"}, accept=octet))
+        add(f"sidecars_{op}_indices", api_route.base(by_name[op], [("indices", b"0,3")], path_values={"block_id": b"head"}))
+        add(f"sidecars_{op}_http10", api_route.base(by_name[op], path_values={"block_id": b"head"}), version=b"HTTP/1.0")
     peers = by_name["getPeers"]
     for key, query in (("connected", [("state", b"connected")]), ("states", [("state", b"disconnected,connecting")]),
                        ("inbound", [("direction", b"inbound")]),

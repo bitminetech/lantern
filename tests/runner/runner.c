@@ -5016,6 +5016,8 @@ static int p2p_blobs_wait(struct p2p_net *net, int arg) {
     return e && rd64(e + NB_STATUS) == NB_BLOBS;
 }
 
+static void api_sidecar_checks(fc_node *n, tv parts, case_block **chain, size_t nchain, const uint8_t *cols, const char **why);
+
 /*
  * After a sync with sidecars, the node serves them: BlobSidecarsByRange of the anchor's slot to the
  * head's gives every sidecar of the chain in (slot, index) order, and BlobSidecarsByRoot of the
@@ -5185,6 +5187,9 @@ static void sync_once(tv parts, case_block **chain, size_t nchain, uint64_t last
                 for (uint64_t i = 0, c = chain[b]->sidecars ? rd64(chain[b]->sidecars + 1) : 0; i < c; i++)
                     if (!shell_has_blob(s, chain[b]->root, i)) *why = "sync: a sidecar the peer sent is not a valid NodeBlob";
             if (!*why) sync_serve_blobs(&m, &net, chain, nchain, why);
+#if FORK < FORK_FULU
+            if (!*why) api_sidecar_checks(&m, parts, chain, nchain, NULL, why);
+#endif
 #if FORK >= FORK_FULU
             for (size_t b = 0; b < nchain && !*why; b++) /* each column sidecar of its columns the peer sent */
                 for (uint64_t c = 0, len; c < 128 && !*why; c++)
@@ -5192,6 +5197,7 @@ static void sync_once(tv parts, case_block **chain, size_t nchain, uint64_t last
                         !shell_has_blob(s, chain[b]->root, c))
                         *why = "sync: a column sidecar the peer sent is not a valid NodeBlob";
             if (!*why) sync_serve_columns(&m, &net, parts, chain, nchain, cols, why);
+            if (!*why) api_sidecar_checks(&m, parts, chain, nchain, cols, why);
 #endif
         }
 #if FORK >= FORK_FULU
@@ -7880,6 +7886,132 @@ static void api_peers_check(fc_node *n, struct p2p_net *net, int outbound, const
 }
 
 /*
+ * After a sync, the node's sidecars through the Beacon API (beacon-api.md): getBlobSidecars (deneb, electra) or
+ * getDebugDataColumnSidecars (fulu, the node's columns cols) of the root of each block of the chain with sidecars:
+ * as SSZ the block's sidecars the node holds, by index, one after another; as JSON items that lantern_json_decode
+ * of BlobSidecar or DataColumnSidecar gives as those sidecars' bytes; with indices of the first and last of them,
+ * as SSZ, those two.
+ */
+static unsigned long api_sidecars_checked; /* the blocks whose sidecars were checked */
+static void api_sidecar_checks(fc_node *n, tv parts, case_block **chain, size_t nchain, const uint8_t *cols, const char **why) {
+#if FORK >= FORK_DENEB
+    struct node_shell *s = n->shell;
+    static char msg[256];
+    static uint64_t conn = 400;
+    const char *path = FORK >= FORK_FULU ? "/eth/v1/debug/beacon/data_column_sidecars/0x" : "/eth/v1/beacon/blob_sidecars/0x";
+    const char *type = FORK >= FORK_FULU ? "DataColumnSidecar" : "BlobSidecar";
+    (void)cols;
+    (void)parts;
+    for (size_t b = 0; b < nchain && !*why; b++) {
+        const uint8_t *sc[128];
+        uint64_t sclen[128], total = 0, nsc = 0;
+#if FORK >= FORK_FULU
+        for (uint64_t c = 0, len; c < 128; c++) {
+            const uint8_t *col = (cols[c / 8] >> (c % 8) & 1) ? case_column(parts, chain[b]->columns, c, &len) : NULL;
+            if (col) {
+                sc[nsc] = col;
+                sclen[nsc++] = len;
+            }
+        }
+#else
+        tv e = chain[b]->sidecars ? chain[b]->sidecars + 9 : NULL;
+        for (uint64_t i = 0, c = chain[b]->sidecars ? rd64(chain[b]->sidecars + 1) : 0; i < c && nsc < 128; i++, e = tv_skip(e)) {
+            sc[nsc] = tv_bytes(e, &sclen[nsc]);
+            nsc++;
+        }
+#endif
+        if (!nsc) continue;
+        for (uint64_t i = 0; i < nsc; i++) total += sclen[i];
+        char hex[65];
+        for (int k = 0; k < 32; k++) snprintf(hex + 2 * k, 3, "%02x", chain[b]->root[k]);
+        for (int form = 0; form < 3 && !*why; form++) { /* SSZ, JSON, SSZ of the first and last indices */
+            char req[384];
+            if (form == 2)
+                snprintf(req, sizeof req, "GET %s%s?indices=%llu,%llu HTTP/1.1\r\nHost: lantern\r\nAccept: application/octet-stream\r\n\r\n", path,
+                         hex, (unsigned long long)rd64(sc[0]), (unsigned long long)rd64(sc[nsc - 1]));
+            else
+                snprintf(req, sizeof req, "GET %s%s HTTP/1.1\r\nHost: lantern\r\n%s\r\n", path, hex,
+                         form == 0 ? "Accept: application/octet-stream\r\n" : "");
+            shell_api_ask(n, (const uint8_t *)req, strlen(req), conn++, why);
+            uint64_t glen = 0;
+            uint8_t *g = *why ? NULL : api_normalize(s, &glen, why);
+            const char *gb = (const char *)g, *end = g ? find_bytes(gb, glen, "\r\n\r\n") : NULL;
+            if (*why) break;
+            const uint8_t *body = end ? (const uint8_t *)end + 4 : NULL;
+            uint64_t blen = body ? glen - (uint64_t)(body - g) : 0;
+            if (!end || glen < 17 || memcmp(g, "HTTP/1.1 200 OK\r\n", 17) || s->api.lasts != 1 || s->api.late) {
+                snprintf(msg, sizeof msg, "API sidecars of a block (form %d): not a 200 answer", form);
+                *why = msg;
+            } else if (form == 0) {
+                uint64_t k = 0;
+                int ok = blen == total;
+                for (uint64_t i = 0; ok && i < nsc; k += sclen[i], i++) ok = !memcmp(body + k, sc[i], (size_t)sclen[i]);
+                if (!ok) {
+                    snprintf(msg, sizeof msg, "API sidecars as SSZ: not the block's %llu sidecars, one after another (%llu bytes, not %llu)",
+                             (unsigned long long)nsc, (unsigned long long)blen, (unsigned long long)total);
+                    *why = msg;
+                }
+            } else if (form == 2) {
+                int ok = nsc == 1 ? blen == sclen[0] && !memcmp(body, sc[0], (size_t)sclen[0])
+                                  : blen == sclen[0] + sclen[nsc - 1] && !memcmp(body, sc[0], (size_t)sclen[0]) &&
+                                        !memcmp(body + sclen[0], sc[nsc - 1], (size_t)sclen[nsc - 1]);
+                if (!ok) *why = "API sidecars with indices: not those sidecars";
+            } else { /* JSON: each item decodes as its sidecar */
+                char pre[64];
+                int pl = snprintf(pre, sizeof pre, "{\"version\":\"%s\",\"execution_optimistic\":", STR(FORK_NAME));
+                const char *d = blen > (uint64_t)pl ? find_bytes((const char *)body, blen, ",\"data\":[") : NULL;
+                if (!d || memcmp(body, pre, (size_t)pl) || blen < 2 || memcmp(body + blen - 2, "]}", 2)) {
+                    *why = "API sidecars as JSON: not {version, execution_optimistic, finalized, data}";
+                } else {
+                    uint64_t i = 0, p = (uint64_t)(d - (const char *)body) + 9, stop = blen - 2;
+                    while (!*why && p < stop) {
+                        uint64_t q = p;
+                        int depth = 0, in = 0;
+                        for (; q < stop; q++) { /* the item's end: its closing } at depth 0 */
+                            char c = (char)body[q];
+                            if (in) {
+                                if (c == '"') in = 0;
+                            } else if (c == '"') in = 1;
+                            else if (c == '{' || c == '[') depth++;
+                            else if ((c == '}' || c == ']') && --depth == 0) {
+                                q++;
+                                break;
+                            }
+                        }
+                        uint64_t lsize, osize = 24 + (i < nsc ? sclen[i] : 0) + 64;
+                        uint8_t *l = list_of(body + p, q - p, 0, 8, &lsize), *scr = buffer(JSON_DECODE_SCRATCH);
+                        uint8_t *out = buffer(osize), *fault = buffer(JSON_FAULT_BYTES);
+                        wr64(scr, JSON_DECODE_SCRATCH);
+                        wr64(out, osize);
+                        if (i >= nsc || CALL(lantern_json_decode, type_by_name(type), l, scr, out, fault) != 0 || rd64(out + 16) != sclen[i] ||
+                            memcmp(out + 24, sc[i], (size_t)sclen[i]))
+                            *why = "API sidecars as JSON: an item that is not the block's sidecar";
+                        free(l);
+                        free(scr);
+                        free(out);
+                        free(fault);
+                        i++;
+                        p = q < stop && body[q] == ',' ? q + 1 : q;
+                    }
+                    if (!*why && i != nsc) *why = "API sidecars as JSON: not one item for each sidecar";
+                }
+            }
+            if (!*why) *why = api_clean(s);
+            free(g);
+        }
+        if (!*why) api_sidecars_checked++;
+    }
+#else
+    (void)n;
+    (void)parts;
+    (void)chain;
+    (void)nchain;
+    (void)cols;
+    (void)why;
+#endif
+}
+
+/*
  * getBlockHeaders of the Db's blocks (beacon-api.md), in a node whose Db holds the chain below its anchor, the
  * chain's last block: of each slot of a block below the anchor, and of the root of each block below the anchor's
  * parent as parent_root; each answer the Db's block alone.
@@ -8557,6 +8689,7 @@ int main(int argc, char **argv) {
     if (api_peers_checked[0] || api_peers_checked[1])
         printf("NOTE: getPeers and getPeer checked after %lu inbound and %lu outbound connections\n", api_peers_checked[0],
                api_peers_checked[1]);
+    if (api_sidecars_checked) printf("NOTE: the sidecars of %lu blocks checked through the Beacon API\n", api_sidecars_checked);
     if (api_headers_asked) printf("NOTE: %lu getBlockHeaders answers checked, %lu with a Db block\n", api_headers_asked, api_headers_db);
     if (api_fork_choice_200 || api_fork_choice_500)
         printf("NOTE: getDebugForkChoice answered 200 %lu times, 500 %lu times\n", api_fork_choice_200, api_fork_choice_500);

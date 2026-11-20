@@ -2704,6 +2704,10 @@ LOCAL_FUNCTION node_api_event
     beq     a3, t0, 65f
     li      t0, API_OP_GET_BLINDED_BLOCK
     beq     a3, t0, 65f
+    li      t0, API_OP_GET_BLOB_SIDECARS
+    beq     a3, t0, 65f
+    li      t0, API_OP_GET_DEBUG_DATA_COLUMN_SIDECARS
+    beq     a3, t0, 65f
     li      t0, API_OP_GET_STATE_ROOT
     beq     a3, t0, 66f
     li      t0, API_OP_GET_STATE_FORK
@@ -2970,6 +2974,10 @@ LOCAL_FUNCTION node_api_event
     beq     a3, t0, 64f
     li      t0, API_OP_GET_BLINDED_BLOCK
     beq     a3, t0, 64f
+    li      t0, API_OP_GET_BLOB_SIDECARS
+    beq     a3, t0, 54f
+    li      t0, API_OP_GET_DEBUG_DATA_COLUMN_SIDECARS
+    beq     a3, t0, 54f
 67: ld      a0, ApiRoute_op(s7)             # a work
     mv      a1, s9
     mv      a2, s3
@@ -2978,6 +2986,14 @@ LOCAL_FUNCTION node_api_event
     mv      a2, a0
     bnez    a0, 80f
     j       90f
+54: mv      a0, s9                          # a sidecar stream of the block
+    mv      a1, s7
+    mv      a2, s3
+    mv      a3, s8
+    call    node_api_sidecar_stream
+    beqz    a0, 90f
+    mv      a2, a0
+    j       80f
 64: mv      a0, s9                          # a stream of the answer
     mv      a1, s7
     mv      a2, s3
@@ -5083,7 +5099,15 @@ LOCAL_FUNCTION node_api_chunk_done
     addi    a1, a1, 1
     call    node_headers_next
     j       3f
-2:  call    node_api_pool_advance
+2:  li      t1, API_OP_GET_BLOB_SIDECARS    # a sidecar stream: its sidecar from member + 1 on
+    beq     t0, t1, 4f
+    li      t1, API_OP_GET_DEBUG_DATA_COLUMN_SIDECARS
+    bne     t0, t1, 5f
+4:  ld      a1, NodeApi_member(s4)
+    addi    a1, a1, 1
+    call    node_sidecar_next
+    j       3f
+5:  call    node_api_pool_advance
 3:  ld      s8, NodeApi_flags(s4)
 1:  ld      a1, (NodeEvent_api_bytes + 16)(s3)  # the chunk in a SEND
     addi    a1, a1, (56 + 7)
@@ -5183,6 +5207,10 @@ LOCAL_FUNCTION api_stream_head
     beq     t0, t1, 21f
     li      t1, API_OP_GET_POOL_ATTESTATIONS_V2
     beq     t0, t1, 21f
+    li      t1, API_OP_GET_BLOB_SIDECARS
+    beq     t0, t1, 21f
+    li      t1, API_OP_GET_DEBUG_DATA_COLUMN_SIDECARS
+    beq     t0, t1, 21f
     addi    t1, t0, -API_OP_GET_PENDING_CONSOLIDATIONS  # and of the pending lists
     li      t2, 2
     bgtu    t1, t2, 22f
@@ -5256,7 +5284,14 @@ LOCAL_FUNCTION api_stream_json
     bne     t0, t1, 32f
     call    api_headers_json
     UNFRAME 0
-32: ld      t0, NodeApi_op(s4)              # the pending streams: their items, of the state s3
+32: ld      t0, NodeApi_op(s4)
+    li      t1, API_OP_GET_BLOB_SIDECARS
+    beq     t0, t1, 33f
+    li      t1, API_OP_GET_DEBUG_DATA_COLUMN_SIDECARS
+    bne     t0, t1, 34f
+33: call    api_sidecar_body
+    UNFRAME 0
+34: ld      t0, NodeApi_op(s4)              # the pending streams: their items, of the state s3
     addi    t1, t0, -API_OP_GET_PENDING_CONSOLIDATIONS
     li      t2, 2
     bgtu    t1, t2, 31f
@@ -5360,6 +5395,11 @@ LOCAL_FUNCTION node_api_chunk_run
     beq     t0, t1, 103f
     li      t1, API_OP_GET_POOL_BLS_TO_EXECUTION_CHANGES
     beq     t0, t1, 103f
+    li      t2, 6                           # a sidecar stream (6): data 0 at its end
+    li      t1, API_OP_GET_BLOB_SIDECARS
+    beq     t0, t1, 103f
+    li      t1, API_OP_GET_DEBUG_DATA_COLUMN_SIDECARS
+    beq     t0, t1, 103f
     li      t2, 5                           # getBlockHeaders (5): an item of data or state, none at its end
     li      t1, API_OP_GET_BLOCK_HEADERS
     beq     t0, t1, 103f
@@ -5409,6 +5449,8 @@ LOCAL_FUNCTION node_api_chunk_run
     li      t2, 3
     beq     t1, t2, 5f
     li      t2, 5
+    beq     t1, t2, 5f
+    li      t2, 6
     beq     t1, t2, 5f
     ld      t1, (L + 48)(sp)                # the state at the entry's slot
     ld      t1, NODE_STATE_SLOT(t1)
@@ -5518,6 +5560,8 @@ LOCAL_FUNCTION node_api_chunk_run
     beq     t0, t1, 68f
     li      t1, 5
     beq     t0, t1, 69f
+    li      t1, 6
+    beq     t0, t1, 6f
     ld      a0, (L + 56)(sp)
     ld      a1, (L + 48)(sp)
     li      t1, 2
@@ -5659,6 +5703,8 @@ LOCAL_FUNCTION node_api_chunk_run
     andi    t1, t0, API_STREAM_SSZ
     beqz    t1, 30f
     ld      t2, (L + 40)(sp)
+    li      t3, 6                           # a sidecar stream: SSZ as a JSON answer
+    beq     t2, t3, 30f
     li      t3, 4                           # a pending stream: its SSZ bytes as getStateV2's
     beq     t2, t3, 601f
     bnez    t2, 60f
@@ -5707,7 +5753,13 @@ LOCAL_FUNCTION node_api_chunk_run
     addi    s8, s8, -7                      # room for CRLF and the last chunk
     ld      t0, (L + 40)(sp)
     beqz    t0, 35f
-    li      t1, 4
+    li      t1, 6                           # a sidecar stream: as JSON the pending streams' head; as SSZ none
+    bne     t0, t1, 393f
+    ld      t2, (NodeEvent_api + 8)(s5)
+    andi    t2, t2, API_STREAM_SSZ
+    bnez    t2, 36f
+    j       392f
+393: li     t1, 4
     beq     t0, t1, 392f
     li      t1, 3
     bne     t0, t1, 38f
@@ -5831,7 +5883,15 @@ LOCAL_FUNCTION node_api_chunk_run
     li      t0, 2
     beq     a0, t0, 96f
     sd      a0, (L + 32)(sp)
-    sub     a0, s6, s10
+    sub     t0, s6, s10                     # no bytes: no chunk of them, the last chunk alone
+    li      t1, 6
+    bne     t0, t1, 41f
+    mv      s6, s10
+    ld      s8, (L + 0)(sp)
+    beqz    a0, 80f
+    API_LIT api_last_chunk
+    j       44f
+41: sub     a0, s6, s10
     addi    a0, a0, -6
     mv      a1, s10
     call    api_hex4
@@ -6368,6 +6428,236 @@ LOCAL_FUNCTION node_api_headers_stream
     call    node_api_chunk_work
     UNFRAME 48
 END_FUNCTION node_api_headers_stream
+
+/*
+ * The sidecar of the sidecar stream a0 from the index a1 on (node.md, NODE_EV_API, a sidecar of a
+ * sidecar stream): member, data, sent 0 and cursor zero; a0 = 1, or 0 with data 0 for none. s1 the
+ * node. s9 the entry, s3 the index.
+ */
+LOCAL_FUNCTION node_sidecar_next
+    ENTER 0
+    mv      s9, a0
+    mv      s3, a1
+1:  li      t0, 128
+    bgeu    s3, t0, 8f
+    ld      t0, NodeApi_filter_slot(s9)
+    mv      t1, s3
+    li      t2, 64
+    bltu    s3, t2, 2f
+    ld      t0, NodeApi_filter_index(s9)
+    addi    t1, s3, -64
+2:  srl     t0, t0, t1
+    andi    t0, t0, 1
+    beqz    t0, 7f
+    addi    a0, s9, NodeApi_root            # the node's NODE_BLOB_VALID entry, else the Db's record
+    mv      a1, s3
+    call    node_blob_held
+    beqz    a0, 3f
+    ld      a0, NodeBlob_data_id(a0)
+    j       5f
+3:  ld      t0, Node_flags(s1)
+    andi    t0, t0, NODE_FLAG_DB
+    beqz    t0, 7f
+    ld      a0, NodeApi_slot(s9)
+    mv      a1, s3
+    call    node_db_sidecar
+    beqz    a0, 7f
+5:  sd      a0, NodeApi_data(s9)
+    sd      s3, NodeApi_member(s9)
+    sd      zero, NodeApi_sent(s9)
+    addi    a0, s9, NodeApi_cursor
+    li      a1, JSON_CURSOR_SIZE
+    call    lantern_zero
+    li      a0, 1
+    LEAVE 0
+7:  addi    s3, s3, 1
+    j       1b
+8:  sd      zero, NodeApi_data(s9)
+    li      a0, 0
+    LEAVE 0
+END_FUNCTION node_sidecar_next
+
+/*
+ * (connection a0, route a1, flags a2, view a3) -> a0: the sidecar stream of the block of the view
+ * (node.md, NODE_EV_API): 0, or 400 for a block whose slot's fork is not the operation's. s1 the
+ * node. Locals: the connection, the route, the flags, the view, the fork, the entry's index and
+ * address.
+ */
+LOCAL_FUNCTION node_api_sidecar_stream
+    FRAME 64
+    sd      a0, 0(sp)
+    sd      a1, 8(sp)
+    sd      a2, 16(sp)
+    sd      a3, 24(sp)
+    ld      a0, ApiView_head_slot(a3)
+    addi    a1, s1, Node_config
+    call    node_fork
+    sd      a0, 32(sp)
+    ld      t0, 8(sp)
+    ld      t0, ApiRoute_op(t0)
+    li      t1, API_OP_GET_BLOB_SIDECARS
+    bne     t0, t1, 1f
+    li      t1, FORK_DENEB                  # getBlobSidecars: deneb and electra
+    bltu    a0, t1, 8f
+    li      t1, FORK_FULU
+    bgeu    a0, t1, 8f
+    j       2f
+1:  li      t1, FORK_FULU                   # getDebugDataColumnSidecars: fulu and later
+    bltu    a0, t1, 8f
+2:  call    node_api_new
+    sd      a0, 40(sp)
+    sd      a1, 48(sp)
+    mv      a0, a1
+    li      a1, NodeApi__mem
+    call    lantern_zero
+    ld      a1, 48(sp)
+    ld      t0, 0(sp)
+    sd      t0, NodeApi_connection(a1)
+    ld      t2, 8(sp)
+    ld      t0, ApiRoute_op(t2)
+    sd      t0, NodeApi_op(a1)
+    ld      t0, 16(sp)                      # the answer flags, SSZ, and the block's values
+    ld      t1, ApiRoute_response(t2)
+    li      t3, API_TYPE_SSZ
+    bne     t1, t3, 3f
+    ori     t0, t0, API_STREAM_SSZ
+3:  ld      t3, 24(sp)
+    ld      t1, ApiView_is_optimistic(t3)
+    beqz    t1, 31f
+    ori     t0, t0, API_STREAM_OPTIMISTIC
+31: LDQ     t1, t3, ApiView_head_finalized
+    beqz    t1, 32f
+    ori     t0, t0, API_STREAM_FINALIZED
+32: sd      t0, NodeApi_flags(a1)
+    ld      t0, 32(sp)
+    sd      t0, NodeApi_fork(a1)
+    ld      t0, ApiView_head_slot(t3)
+    sd      t0, NodeApi_slot(a1)
+    addi    t0, a1, NodeApi_root
+    addi    t1, t3, ApiView_head_root
+    COPY32  t0, t1
+    li      t4, -1                          # the indices: their bits, all with none
+    li      t5, -1
+    ld      t2, 8(sp)
+    ld      t0, ApiRoute_present(t2)
+    li      t1, 1 << API_PARAM_INDICES
+    and     t0, t0, t1
+    beqz    t0, 6f
+    li      t4, 0
+    li      t5, 0
+    PART    a2, a3, t2, ApiRoute_list
+5:  beqz    a3, 6f
+    ld      t0, 0(a2)
+    addi    a2, a2, 8
+    addi    a3, a3, -1
+    li      t1, 128
+    bgeu    t0, t1, 5b
+    li      t1, 1
+    li      t3, 64
+    bgeu    t0, t3, 51f
+    sll     t1, t1, t0
+    or      t4, t4, t1
+    j       5b
+51: addi    t0, t0, -64
+    sll     t1, t1, t0
+    or      t5, t5, t1
+    j       5b
+6:  sd      t4, NodeApi_filter_slot(a1)
+    sd      t5, NodeApi_filter_index(a1)
+    mv      a0, a1
+    li      a1, 0
+    call    node_sidecar_next
+    ld      a0, 40(sp)
+    ld      a1, 48(sp)
+    call    node_api_chunk_work
+    li      a0, 0
+    UNFRAME 64
+8:  li      a0, 400
+    UNFRAME 64
+END_FUNCTION node_api_sidecar_stream
+
+/*
+ * A sidecar stream's body, as api_stream_json (node.md, NODE_WORK_API_CHUNK, the sidecar streams):
+ * with the bytes s3, as JSON the JSON of the sidecar from the cursor at NodeEvent_api + 16 by
+ * lantern_node_json of the entry's fork and the kind of the operation, after , when API_STREAM_ITEMS
+ * is set and the cursor is at its start; as SSZ its bytes from sent (NodeEvent_api), as many as fit;
+ * at the sidecar's end API_STREAM_ITEMS and API_STREAM_ITEM_DONE in the event. With s3 = 0: ]} as
+ * JSON, nothing as SSZ. a0 = 1 when the answer is whole, 0 when more is to come, 2 for bytes that
+ * are no encoding.
+ */
+LOCAL_FUNCTION api_sidecar_body
+    FRAME 0
+    ld      t0, (NodeEvent_api + 8)(s5)
+    bnez    s3, 1f
+    andi    t1, t0, API_STREAM_SSZ
+    bnez    t1, 9f
+    API_LIT api_v_end
+9:  li      a0, 1
+    UNFRAME 0
+1:  andi    t1, t0, API_STREAM_SSZ
+    beqz    t1, 3f
+    ld      t0, 8(s3)                       # SSZ: the bytes from sent, as many as fit
+    add     a1, s3, t0
+    ld      t1, 16(s3)
+    ld      t2, NodeEvent_api(s5)
+    sub     a2, t1, t2
+    sub     t3, s8, s6
+    bleu    a2, t3, 11f
+    mv      a2, t3
+11: add     a1, a1, t2
+    add     t2, t2, a2
+    sd      t2, NodeEvent_api(s5)
+    mv      a0, s6
+    add     s6, s6, a2
+    call    lantern_copy
+    ld      t2, NodeEvent_api(s5)
+    ld      t1, 16(s3)
+    bne     t2, t1, 2f
+    ld      t0, (NodeEvent_api + 8)(s5)
+    li      t1, API_STREAM_ITEMS | API_STREAM_ITEM_DONE
+    or      t0, t0, t1
+    sd      t0, (NodeEvent_api + 8)(s5)
+2:  li      a0, 0
+    UNFRAME 0
+3:  ld      t0, (NodeEvent_api + 16)(s5)    # JSON: the cursor's depth, 0 before the first byte
+    bnez    t0, 4f
+    ld      t0, (NodeEvent_api + 8)(s5)
+    li      t1, API_STREAM_ITEMS
+    and     t0, t0, t1
+    beqz    t0, 4f
+    API_LIT api_p_comma
+4:  ld      t0, NodeApi_op(s4)
+    li      a0, NODE_JSON_BLOB_SIDECAR
+    li      t1, API_OP_GET_BLOB_SIDECARS
+    beq     t0, t1, 5f
+    li      a0, NODE_JSON_DATA_COLUMN_SIDECAR
+5:  addi    t0, s5, NodeEvent_api_bytes     # the ByteList: its room to s8 - 1, its bytes to s6
+    addi    t1, s8, -1
+    sub     t1, t1, t0
+    sd      t1, 0(t0)
+    li      t1, 24
+    sd      t1, 8(t0)
+    sub     t1, s6, s10
+    sd      t1, 16(t0)
+    mv      a1, s3
+    addi    a2, s5, (NodeEvent_api + 16)
+    addi    a3, s5, NodeEvent_api_bytes
+    ld      t6, NodeApi_fork(s4)
+    FORK_CALL node_json
+    ld      t0, (NodeEvent_api_bytes + 16)(s5)
+    add     s6, s10, t0
+    li      t0, LANTERN_JSON_MORE
+    beq     a0, t0, 8f
+    bnez    a0, 7f
+    ld      t0, (NodeEvent_api + 8)(s5)
+    li      t1, API_STREAM_ITEMS | API_STREAM_ITEM_DONE
+    or      t0, t0, t1
+    sd      t0, (NodeEvent_api + 8)(s5)
+8:  li      a0, 0
+    UNFRAME 0
+7:  li      a0, 2
+    UNFRAME 0
+END_FUNCTION api_sidecar_body
 
 /*
  * The pool stream of the NodeApi entry a0 goes to its next entry after slot (node.md,

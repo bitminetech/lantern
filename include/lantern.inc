@@ -1031,7 +1031,8 @@
 .set NodeApi_member, 664                 /* a pool stream: the member of the entry at slot */
 .set NodeApi_filter_slot, 672            /* a pool stream: the slot of its entries, or 2^64 - 1 */
 .set NodeApi_filter_index, 680           /* a pool stream: the committee index of its entries, or 2^64 - 1 */
-.set NodeApi__mem, 688
+.set NodeApi_root, 688                   /* a sidecar stream: the block's root */
+.set NodeApi__mem, 720
 .set NodeApi_position, NodeApi_cursor    /* the validator streams: the next index */
 .set NodeApi_statuses, NodeApi_cursor + 8   /* the validator streams: the status bits */
 .set API_STREAM_CLOSE, 1
@@ -1074,6 +1075,8 @@
 .set NODE_JSON_SINGLE_ATTESTATION, 7     /* a SingleAttestation, from electra */
 .set NODE_JSON_ATTESTATIONS, 8           /* an Attestations list, a block body's */
 .set NODE_JSON_BLINDED_BLOCK, 9          /* a SignedBlindedBeaconBlock from bellatrix, a SignedBeaconBlock before */
+.set NODE_JSON_BLOB_SIDECAR, 10          /* a BlobSidecar, of deneb and electra */
+.set NODE_JSON_DATA_COLUMN_SIDECAR, 11   /* a DataColumnSidecar, from fulu */
 .set NodePool_topic, 0                   /* NodePool (node.md): GOSSIP_* of the operation; 0 for a free entry */
 .set NodePool_state, 8                   /* NODE_POOL_* */
 .set NodePool_data_id, 16                /* the BufferId of its SSZ bytes */

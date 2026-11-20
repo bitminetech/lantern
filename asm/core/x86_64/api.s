@@ -2596,6 +2596,10 @@ LOCAL_FUNCTION node_api_event
     je      65f
     cmp     $API_OP_GET_BLINDED_BLOCK, %rcx
     je      65f
+    cmp     $API_OP_GET_BLOB_SIDECARS, %rcx
+    je      65f
+    cmp     $API_OP_GET_DEBUG_DATA_COLUMN_SIDECARS, %rcx
+    je      65f
     cmp     $API_OP_GET_STATE_ROOT, %rcx
     je      66f
     cmp     $API_OP_GET_STATE_FORK, %rcx
@@ -2890,6 +2894,10 @@ LOCAL_FUNCTION node_api_event
     je      64f
     cmp     $API_OP_GET_BLINDED_BLOCK, %rcx
     je      64f
+    cmp     $API_OP_GET_BLOB_SIDECARS, %rcx
+    je      54f
+    cmp     $API_OP_GET_DEBUG_DATA_COLUMN_SIDECARS, %rcx
+    je      54f
 67: mov     S7(%rsp), %rax                  # a work
     mov     ApiRoute_op(%rax), %rdi
     mov     S9(%rsp), %rsi
@@ -2900,6 +2908,15 @@ LOCAL_FUNCTION node_api_event
     test    %rax, %rax
     jnz     80f
     jmp     90f
+54: mov     S9(%rsp), %rdi                  # a sidecar stream of the block
+    mov     S7(%rsp), %rsi
+    mov     %r12, %rdx
+    mov     S8(%rsp), %rcx
+    call    node_api_sidecar_stream
+    test    %rax, %rax
+    jz      90f
+    mov     %rax, %rdx
+    jmp     80f
 64: mov     S9(%rsp), %rdi                  # a stream of the answer
     mov     S7(%rsp), %rsi
     mov     %r12, %rdx
@@ -5065,7 +5082,15 @@ LOCAL_FUNCTION node_api_chunk_done
     inc     %rsi
     call    node_headers_next
     jmp     3f
-2:  call    node_api_pool_advance
+2:  cmpq    $API_OP_GET_BLOB_SIDECARS, NodeApi_op(%r13)    # a sidecar stream: its sidecar from member + 1 on
+    je      4f
+    cmpq    $API_OP_GET_DEBUG_DATA_COLUMN_SIDECARS, NodeApi_op(%r13)
+    jne     5f
+4:  mov     NodeApi_member(%r13), %rsi
+    inc     %rsi
+    call    node_sidecar_next
+    jmp     3f
+5:  call    node_api_pool_advance
 3:  mov     NodeApi_flags(%r13), %rax
     mov     %rax, S7(%rsp)
 1:  mov     (NodeEvent_api_bytes + 16)(%r12), %rsi  # the chunk in a SEND
@@ -5162,6 +5187,10 @@ LOCAL_FUNCTION api_stream_head
     je      21f
     cmpq    $API_OP_GET_POOL_ATTESTATIONS_V2, NodeApi_op(%rbx)
     je      21f
+    cmpq    $API_OP_GET_BLOB_SIDECARS, NodeApi_op(%rbx)
+    je      21f
+    cmpq    $API_OP_GET_DEBUG_DATA_COLUMN_SIDECARS, NodeApi_op(%rbx)
+    je      21f
     mov     NodeApi_op(%rbx), %rax          # and of the pending lists
     sub     $API_OP_GET_PENDING_CONSOLIDATIONS, %rax
     cmp     $2, %rax
@@ -5232,7 +5261,13 @@ LOCAL_FUNCTION api_stream_json
     jne     32f
     call    api_headers_json
     UNFRAME 0
-32: mov     NodeApi_op(%rbx), %rax          # the pending streams: their items, of the state rdi
+32: cmpq    $API_OP_GET_BLOB_SIDECARS, NodeApi_op(%rbx)
+    je      33f
+    cmpq    $API_OP_GET_DEBUG_DATA_COLUMN_SIDECARS, NodeApi_op(%rbx)
+    jne     34f
+33: call    api_sidecar_body
+    UNFRAME 0
+34: mov     NodeApi_op(%rbx), %rax          # the pending streams: their items, of the state rdi
     sub     $API_OP_GET_PENDING_CONSOLIDATIONS, %rax
     cmp     $2, %rax
     ja      31f
@@ -5335,6 +5370,11 @@ LOCAL_FUNCTION node_api_chunk_run
     je      103f
     cmp     $API_OP_GET_POOL_BLS_TO_EXECUTION_CHANGES, %rax
     je      103f
+    mov     $6, %ecx                        # a sidecar stream (6): data 0 at its end
+    cmp     $API_OP_GET_BLOB_SIDECARS, %rax
+    je      103f
+    cmp     $API_OP_GET_DEBUG_DATA_COLUMN_SIDECARS, %rax
+    je      103f
     mov     $5, %ecx                        # getBlockHeaders (5): an item of data or state, none at its end
     cmp     $API_OP_GET_BLOCK_HEADERS, %rax
     je      103f
@@ -5387,6 +5427,8 @@ LOCAL_FUNCTION node_api_chunk_run
     cmpq    $3, (L + 56)(%rsp)
     je      5f
     cmpq    $5, (L + 56)(%rsp)
+    je      5f
+    cmpq    $6, (L + 56)(%rsp)
     je      5f
     mov     (L + 48)(%rsp), %rax            # the state at the entry's slot
     mov     NODE_STATE_SLOT(%rax), %rax
@@ -5495,6 +5537,8 @@ LOCAL_FUNCTION node_api_chunk_run
     je      68f
     cmpq    $5, (L + 56)(%rsp)
     je      69f
+    cmpq    $6, (L + 56)(%rsp)
+    je      6f
     mov     (L + 64)(%rsp), %rdi
     mov     (L + 48)(%rsp), %rsi
     cmpq    $2, (L + 56)(%rsp)
@@ -5639,6 +5683,8 @@ LOCAL_FUNCTION node_api_chunk_run
 6:  mov     (NodeEvent_api + 8)(%rbp), %rax
     test    $API_STREAM_SSZ, %eax
     jz      30f
+    cmpq    $6, (L + 56)(%rsp)              # a sidecar stream: SSZ as a JSON answer
+    je      30f
     cmpq    $4, (L + 56)(%rsp)              # a pending stream: its SSZ bytes as getStateV2's
     je      601f
     cmpq    $0, (L + 56)(%rsp)
@@ -5687,7 +5733,12 @@ LOCAL_FUNCTION node_api_chunk_run
     sub     $7, %r14                        # room for CRLF and the last chunk
     cmpq    $0, (L + 56)(%rsp)
     je      35f
-    cmpq    $4, (L + 56)(%rsp)
+    cmpq    $6, (L + 56)(%rsp)              # a sidecar stream: as JSON the pending streams' head; as SSZ none
+    jne     393f
+    testq   $API_STREAM_SSZ, (NodeEvent_api + 8)(%rbp)
+    jnz     36f
+    jmp     392f
+393: cmpq   $4, (L + 56)(%rsp)
     je      392f
     cmpq    $3, (L + 56)(%rsp)
     jne     38f
@@ -5808,7 +5859,16 @@ LOCAL_FUNCTION node_api_chunk_run
     cmp     $2, %rax
     je      96f
     mov     %rax, (L + 32)(%rsp)
-    lea     (NodeEvent_api_bytes + 24)(%rbp), %rsi
+    lea     (NodeEvent_api_bytes + 24 + 6)(%rbp), %rcx  # no bytes: no chunk of them, the last chunk alone
+    cmp     %rcx, %r12
+    jne     41f
+    lea     (NodeEvent_api_bytes + 24)(%rbp), %r12
+    mov     L(%rsp), %r14
+    test    %rax, %rax
+    jz      80f
+    API_LIT api_last_chunk
+    jmp     44f
+41: lea     (NodeEvent_api_bytes + 24)(%rbp), %rsi
     mov     %r12, %rdi
     sub     %rsi, %rdi
     sub     $6, %rdi
@@ -6335,6 +6395,231 @@ LOCAL_FUNCTION node_api_headers_stream
     call    node_api_chunk_work
     UNFRAME 48
 END_FUNCTION node_api_headers_stream
+
+/*
+ * The sidecar of the sidecar stream rdi from the index rsi on (node.md, NODE_EV_API, a sidecar of a
+ * sidecar stream): member, data, sent 0 and cursor zero; rax = 1, or 0 with data 0 for none. rbx
+ * the node. r12 the entry, r13 the index.
+ */
+LOCAL_FUNCTION node_sidecar_next
+    ENTER 0
+    mov     %rdi, %r12
+    mov     %rsi, %r13
+1:  cmp     $128, %r13
+    jae     8f
+    mov     NodeApi_filter_slot(%r12), %rax
+    mov     %r13, %rcx
+    cmp     $64, %r13
+    jb      2f
+    mov     NodeApi_filter_index(%r12), %rax
+    lea     -64(%r13), %rcx
+2:  shr     %cl, %rax
+    test    $1, %eax
+    jz      7f
+    lea     NodeApi_root(%r12), %rdi        # the node's NODE_BLOB_VALID entry, else the Db's record
+    mov     %r13, %rsi
+    call    node_blob_held
+    test    %rax, %rax
+    jz      3f
+    mov     NodeBlob_data_id(%rax), %rax
+    jmp     5f
+3:  testq   $NODE_FLAG_DB, Node_flags(%rbx)
+    jz      7f
+    mov     NodeApi_slot(%r12), %rdi
+    mov     %r13, %rsi
+    call    node_db_sidecar
+    test    %rax, %rax
+    jz      7f
+5:  mov     %rax, NodeApi_data(%r12)
+    mov     %r13, NodeApi_member(%r12)
+    movq    $0, NodeApi_sent(%r12)
+    lea     NodeApi_cursor(%r12), %rdi
+    mov     $JSON_CURSOR_SIZE, %esi
+    call    lantern_zero
+    mov     $1, %eax
+    LEAVE 0
+7:  inc     %r13
+    jmp     1b
+8:  movq    $0, NodeApi_data(%r12)
+    xor     %eax, %eax
+    LEAVE 0
+END_FUNCTION node_sidecar_next
+
+/*
+ * (connection rdi, route rsi, flags rdx, view rcx) -> rax: the sidecar stream of the block of the
+ * view (node.md, NODE_EV_API): 0, or 400 for a block whose slot's fork is not the operation's. rbx
+ * the node. Locals: the connection, the route, the flags, the view, the fork, the entry's index and
+ * address.
+ */
+LOCAL_FUNCTION node_api_sidecar_stream
+    FRAME 64
+    mov     %rdi, (%rsp)
+    mov     %rsi, 8(%rsp)
+    mov     %rdx, 16(%rsp)
+    mov     %rcx, 24(%rsp)
+    mov     ApiView_head_slot(%rcx), %rdi
+    lea     Node_config(%rbx), %rsi
+    call    node_fork
+    mov     %rax, 32(%rsp)
+    mov     8(%rsp), %rcx
+    cmpq    $API_OP_GET_BLOB_SIDECARS, ApiRoute_op(%rcx)
+    jne     1f
+    cmp     $FORK_DENEB, %rax               # getBlobSidecars: deneb and electra
+    jb      8f
+    cmp     $FORK_FULU, %rax
+    jae     8f
+    jmp     2f
+1:  cmp     $FORK_FULU, %rax                # getDebugDataColumnSidecars: fulu and later
+    jb      8f
+2:  call    node_api_new
+    mov     %rax, 40(%rsp)
+    mov     %rdx, 48(%rsp)
+    mov     %rdx, %rdi
+    mov     $NodeApi__mem, %esi
+    call    lantern_zero
+    mov     48(%rsp), %rdx
+    mov     (%rsp), %rax
+    mov     %rax, NodeApi_connection(%rdx)
+    mov     8(%rsp), %rsi
+    mov     ApiRoute_op(%rsi), %rax
+    mov     %rax, NodeApi_op(%rdx)
+    mov     16(%rsp), %rax                  # the answer flags, SSZ, and the block's values
+    cmpq    $API_TYPE_SSZ, ApiRoute_response(%rsi)
+    jne     3f
+    or      $API_STREAM_SSZ, %rax
+3:  mov     24(%rsp), %rcx
+    cmpq    $0, ApiView_is_optimistic(%rcx)
+    je      31f
+    or      $API_STREAM_OPTIMISTIC, %rax
+31: cmpq    $0, ApiView_head_finalized(%rcx)
+    je      32f
+    or      $API_STREAM_FINALIZED, %rax
+32: mov     %rax, NodeApi_flags(%rdx)
+    mov     32(%rsp), %rax
+    mov     %rax, NodeApi_fork(%rdx)
+    mov     ApiView_head_slot(%rcx), %rax
+    mov     %rax, NodeApi_slot(%rdx)
+    lea     NodeApi_root(%rdx), %rdi
+    lea     ApiView_head_root(%rcx), %rsi
+    COPY32  %rdi, %rsi
+    mov     8(%rsp), %rsi                   # the indices: their bits, all with none
+    mov     $-1, %r8
+    mov     $-1, %r9
+    testq   $(1 << API_PARAM_INDICES), ApiRoute_present(%rsi)
+    jz      6f
+    xor     %r8d, %r8d
+    xor     %r9d, %r9d
+    PART    %r10, %r11, %rsi, ApiRoute_list
+5:  test    %r11, %r11
+    jz      6f
+    mov     (%r10), %rcx
+    add     $8, %r10
+    dec     %r11
+    cmp     $128, %rcx
+    jae     5b
+    mov     $1, %eax
+    cmp     $64, %rcx
+    jae     51f
+    shl     %cl, %rax
+    or      %rax, %r8
+    jmp     5b
+51: sub     $64, %rcx
+    shl     %cl, %rax
+    or      %rax, %r9
+    jmp     5b
+6:  mov     %r8, NodeApi_filter_slot(%rdx)
+    mov     %r9, NodeApi_filter_index(%rdx)
+    mov     %rdx, %rdi
+    xor     %esi, %esi
+    call    node_sidecar_next
+    mov     40(%rsp), %rax
+    mov     48(%rsp), %rdx
+    call    node_api_chunk_work
+    xor     %eax, %eax
+    UNFRAME 64
+8:  mov     $400, %eax
+    UNFRAME 64
+END_FUNCTION node_api_sidecar_stream
+
+/*
+ * A sidecar stream's body, as api_stream_json (node.md, NODE_WORK_API_CHUNK, the sidecar streams):
+ * with the bytes rdi, as JSON the JSON of the sidecar from the cursor at NodeEvent_api + 16 by
+ * lantern_node_json of the entry's fork and the kind of the operation, after , when API_STREAM_ITEMS
+ * is set and the cursor is at its start; as SSZ its bytes from sent (NodeEvent_api), as many as fit;
+ * at the sidecar's end API_STREAM_ITEMS and API_STREAM_ITEM_DONE in the event. With rdi = 0: ]} as
+ * JSON, nothing as SSZ. rax = 1 when the answer is whole, 0 when more is to come, 2 for bytes that
+ * are no encoding. Locals: the bytes.
+ */
+LOCAL_FUNCTION api_sidecar_body
+    FRAME 16
+    mov     %rdi, (%rsp)
+    test    %rdi, %rdi
+    jnz     1f
+    testq   $API_STREAM_SSZ, (NodeEvent_api + 8)(%rbp)
+    jnz     9f
+    API_LIT api_v_end
+9:  mov     $1, %eax
+    UNFRAME 16
+1:  testq   $API_STREAM_SSZ, (NodeEvent_api + 8)(%rbp)
+    jz      3f
+    mov     8(%rdi), %rsi                   # SSZ: the bytes from sent, as many as fit
+    add     %rdi, %rsi
+    mov     16(%rdi), %rdx
+    mov     NodeEvent_api(%rbp), %rax
+    sub     %rax, %rdx
+    mov     %r14, %rcx
+    sub     %r12, %rcx
+    cmp     %rcx, %rdx
+    jbe     11f
+    mov     %rcx, %rdx
+11: add     %rax, %rsi
+    add     %rdx, %rax
+    mov     %rax, NodeEvent_api(%rbp)
+    mov     %r12, %rdi
+    add     %rdx, %r12
+    call    lantern_copy
+    mov     (%rsp), %rdi
+    mov     NodeEvent_api(%rbp), %rax
+    cmp     16(%rdi), %rax
+    jne     2f
+    orq     $(API_STREAM_ITEMS | API_STREAM_ITEM_DONE), (NodeEvent_api + 8)(%rbp)
+2:  xor     %eax, %eax
+    UNFRAME 16
+3:  cmpq    $0, (NodeEvent_api + 16)(%rbp)  # JSON: the cursor's depth, 0 before the first byte
+    jne     4f
+    testq   $API_STREAM_ITEMS, (NodeEvent_api + 8)(%rbp)
+    jz      4f
+    API_LIT api_p_comma
+4:  mov     $NODE_JSON_BLOB_SIDECAR, %edi
+    cmpq    $API_OP_GET_BLOB_SIDECARS, NodeApi_op(%rbx)
+    je      5f
+    mov     $NODE_JSON_DATA_COLUMN_SIDECAR, %edi
+5:  lea     NodeEvent_api_bytes(%rbp), %rsi # the ByteList: its room to r14 - 1, its bytes to r12
+    lea     -1(%r14), %rax
+    sub     %rsi, %rax
+    mov     %rax, (%rsi)
+    movq    $24, 8(%rsi)
+    mov     %r12, %rax
+    sub     %rsi, %rax
+    sub     $24, %rax
+    mov     %rax, 16(%rsi)
+    mov     (%rsp), %rsi
+    lea     (NodeEvent_api + 16)(%rbp), %rdx
+    lea     NodeEvent_api_bytes(%rbp), %rcx
+    mov     NodeApi_fork(%rbx), %r10
+    FORK_CALL node_json
+    mov     (NodeEvent_api_bytes + 16)(%rbp), %r12
+    lea     (NodeEvent_api_bytes + 24)(%rbp,%r12), %r12
+    cmp     $LANTERN_JSON_MORE, %rax
+    je      8f
+    test    %rax, %rax
+    jnz     7f
+    orq     $(API_STREAM_ITEMS | API_STREAM_ITEM_DONE), (NodeEvent_api + 8)(%rbp)
+8:  xor     %eax, %eax
+    UNFRAME 16
+7:  mov     $2, %eax
+    UNFRAME 16
+END_FUNCTION api_sidecar_body
 
 /*
  * The pool stream of the NodeApi entry rdi goes to its next entry after slot (node.md,

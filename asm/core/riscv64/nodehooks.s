@@ -672,6 +672,16 @@ LOCAL_FUNCTION node_type_of_kind
     li      t1, NODE_JSON_SINGLE_ATTESTATION
     beq     t0, t1, 9f
 .endif
+.if FORK >= FORK_DENEB && FORK < FORK_FULU
+    ADDRESS a0, lantern_type_BlobSidecar
+    li      t1, NODE_JSON_BLOB_SIDECAR
+    beq     t0, t1, 9f
+.endif
+.if FORK >= FORK_FULU
+    ADDRESS a0, lantern_type_DataColumnSidecar
+    li      t1, NODE_JSON_DATA_COLUMN_SIDECAR
+    beq     t0, t1, 9f
+.endif
     li      a0, 0
 9:  ret
 END_FUNCTION node_type_of_kind
