@@ -37,7 +37,7 @@
 - The node calls four methods: engine_exchangeCapabilities, engine_newPayload, engine_forkchoiceUpdated (with null payload attributes, or with them for a payload it builds for a proposer) and engine_getPayload.
 - The versions follow the fork of the block: bellatrix engine_newPayloadV1, engine_forkchoiceUpdatedV1 (`PayloadAttributesV1`) and engine_getPayloadV1; capella V2, V2 (`PayloadAttributesV2`) and V2; deneb V3, V3 (`PayloadAttributesV3`) and V3; electra engine_newPayloadV4, engine_forkchoiceUpdatedV3 and engine_getPayloadV4; fulu engine_newPayloadV4, engine_forkchoiceUpdatedV3 and engine_getPayloadV5 (osaka.md: `BlobsBundleV2`).
 - JSON is written compact, with no spaces, in the field order of the spec's lists. A `QUANTITY` is lowercase hex with no leading zeros, `0x0` for zero; `DATA` is lowercase hex, two digits a byte.
-- lantern_get_execution_requests_list, lantern_engine_new_payload_size, lantern_engine_new_payload and lantern_engine_forkchoice_updated read the fork's layouts, and are in the objects of bellatrix and later (electra and later for the first). lantern_engine_exchange_capabilities, lantern_engine_parse_response, lantern_jwt_token, lantern_http_post and lantern_http_parse_response read no fork's layouts. Each is in the common object of the core (asm/core/<ISA>/common.s), and its symbol is its name.
+- lantern_get_execution_requests_list, lantern_get_execution_requests, lantern_engine_new_payload_size, lantern_engine_new_payload, lantern_engine_forkchoice_updated and lantern_engine_get_payload read the fork's layouts, and are in the objects of bellatrix and later (electra and later for the first two). lantern_engine_exchange_capabilities, lantern_engine_parse_response, lantern_jwt_token, lantern_http_post and lantern_http_parse_response read no fork's layouts. Each is in the common object of the core (asm/core/<ISA>/common.s), and its symbol is its name.
 
 ## Test vectors
 
@@ -151,7 +151,7 @@ lantern_engine_forkchoice_updated(state, attributes, id, out) -> status
 ### Returns
 
 - `LANTERN_OK`: `out` holds the request.
-- `LANTERN_BUFFER_TOO_SMALL`: `out` has room for fewer than 1024 bytes + 192 for each withdrawal of `attributes`.
+- `LANTERN_BUFFER_TOO_SMALL`: `out` has room for fewer than 512 bytes, or with `attributes` fewer than 1024 bytes + 192 for each withdrawal.
 
 ### Function does
 

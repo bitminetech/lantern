@@ -154,9 +154,7 @@ def request_cases(fork, preset):
     from eth_consensus_specs.debug import random_value as rv
     spec = __import__(f"eth_consensus_specs.{fork}.{preset}", fromlist=["*"])
     f = FORKS.index(fork)
-    yield "exchange_capabilities", "id_7", {"input": {"id": 7}, "output": rpc(7, "engine_exchangeCapabilities", [[
-        "engine_newPayloadV1", "engine_newPayloadV2", "engine_newPayloadV3", "engine_newPayloadV4",
-        "engine_forkchoiceUpdatedV1", "engine_forkchoiceUpdatedV2", "engine_forkchoiceUpdatedV3"]])}
+    yield "exchange_capabilities", "id_7", {"input": {"id": 7}, "output": rpc(7, "engine_exchangeCapabilities", [METHODS])}
     if f < FORKS.index("bellatrix"):
         return
     rng = random.Random(f"{fork}-{preset}")
@@ -166,8 +164,21 @@ def request_cases(fork, preset):
         if k == 0:
             hashes[1] = hashes[2] = bytes(32)
         state = {"headBlockHash": d(hashes[0]), "safeBlockHash": d(hashes[1]), "finalizedBlockHash": d(hashes[2])}
-        yield "forkchoice_updated", f"fcu_{k}", {"input": {"state": b"".join(hashes), "id": id_},
+        yield "forkchoice_updated", f"fcu_{k}", {"input": {"state": b"".join(hashes), "attributes": b"", "id": id_},
                                                   "output": rpc(id_, f"engine_forkchoiceUpdatedV{fcu}", [state, None])}
+    for k, (raw, attrs) in enumerate(payload_attributes(spec, fork, rng)):
+        hashes = [bytes(rng.getrandbits(8) for _ in range(32)) for _ in range(3)]
+        state = {"headBlockHash": d(hashes[0]), "safeBlockHash": d(hashes[1]), "finalizedBlockHash": d(hashes[2])}
+        id_ = rng.choice([0, 1, 12345, U64])
+        yield "forkchoice_updated", f"attributes_{k}", {"input": {"state": b"".join(hashes), "attributes": raw, "id": id_},
+                                                         "output": rpc(id_, f"engine_forkchoiceUpdatedV{fcu}", [state, attrs])}
+    gp = f - FORKS.index("bellatrix") + 1
+    for k, id_ in enumerate((0, 1, 255, U64)):
+        pid = bytes(rng.getrandbits(8) for _ in range(8)) if k else bytes(8)
+        yield "get_payload", f"id_{k}", {"input": {"payload_id": pid, "id": id_},
+                                         "output": rpc(id_, f"engine_getPayloadV{gp}", [d(pid)])}
+    if f >= FORKS.index("electra"):
+        yield from request_list_cases(spec, rng)
     modes = [rv.RandomizationMode.mode_random, rv.RandomizationMode.mode_zero, rv.RandomizationMode.mode_max,
              rv.RandomizationMode.mode_nil_count, rv.RandomizationMode.mode_one_count, rv.RandomizationMode.mode_max_count]
     for m, mode in enumerate(modes):
@@ -183,9 +194,110 @@ def request_cases(fork, preset):
                     "input": {"execution_requests": block.body.execution_requests.encode_bytes()}, "output": out}
 
 
+def payload_attributes(spec, fork, rng):
+    """(the PayloadAttributes bytes of engine-api.md, the JSON of PayloadAttributesVn) for random
+    values of the spec's PayloadAttributes (deneb's in electra and fulu): no withdrawal, one, and
+    MAX_WITHDRAWALS_PER_PAYLOAD from capella."""
+    f = FORKS.index(fork)
+    pa = spec if hasattr(spec, "PayloadAttributes") else __import__(spec.__name__.replace(fork, "deneb"), fromlist=["*"])
+    counts = [0] if f < FORKS.index("capella") else [0, 1, int(spec.MAX_WITHDRAWALS_PER_PAYLOAD)]
+    for c, n in enumerate(counts + [n for n in counts if n]):
+        withdrawals = [spec.Withdrawal(index=rng.getrandbits(64), validator_index=rng.getrandbits(64),
+                                       address=bytes(rng.getrandbits(8) for _ in range(20)), amount=rng.getrandbits(64))
+                       for _ in range(n)]
+        if c == 1:  # the extremes of each field
+            withdrawals[0] = spec.Withdrawal(index=0, validator_index=U64, address=bytes(20), amount=0)
+        fields = {"timestamp": rng.choice([0, 1, rng.getrandbits(64), U64]), "prev_randao": bytes(rng.getrandbits(8) for _ in range(32)),
+                  "suggested_fee_recipient": bytes(rng.getrandbits(8) for _ in range(20))}
+        if f >= FORKS.index("capella"):
+            fields["withdrawals"] = withdrawals
+        if f >= FORKS.index("deneb"):
+            fields["parent_beacon_block_root"] = bytes(rng.getrandbits(8) for _ in range(32))
+        a = pa.PayloadAttributes(**fields)
+        raw = (int(a.timestamp).to_bytes(8, "little") + bytes(a.prev_randao) + bytes(a.suggested_fee_recipient) + bytes(4)
+               + (bytes(a.parent_beacon_block_root) if f >= FORKS.index("deneb") else bytes(32))
+               + len(withdrawals).to_bytes(8, "little") + b"".join(w.encode_bytes() for w in withdrawals))
+        o = {"timestamp": q(a.timestamp), "prevRandao": d(a.prev_randao), "suggestedFeeRecipient": d(a.suggested_fee_recipient)}
+        if f >= FORKS.index("capella"):
+            o["withdrawals"] = [{"index": q(w.index), "validatorIndex": q(w.validator_index), "address": d(w.address),
+                                 "amount": q(w.amount)} for w in a.withdrawals]
+        if f >= FORKS.index("deneb"):
+            o["parentBeaconBlockRoot"] = d(a.parent_beacon_block_root)
+        yield raw, o
+
+
+def ssz_list(items):
+    """The SSZ bytes of a list of variable size items: an offset each, then the items."""
+    head = 4 * len(items)
+    out, at = b"", head
+    for item in items:
+        out += at.to_bytes(4, "little")
+        at += len(item)
+    return out + b"".join(items)
+
+
+def request_list_cases(spec, rng):
+    """get_execution_requests: the request lists of random ExecutionRequests, as the SSZ bytes of
+    lantern's ExecutionRequestsList, and lists that are no such encoding or that the spec's asserts
+    reject."""
+    from eth_consensus_specs.debug import random_value as rv
+    modes = [rv.RandomizationMode.mode_random, rv.RandomizationMode.mode_zero, rv.RandomizationMode.mode_max,
+             rv.RandomizationMode.mode_nil_count, rv.RandomizationMode.mode_one_count, rv.RandomizationMode.mode_max_count]
+    for m, mode in enumerate(modes):
+        for k in range(3 if m == 0 else 1):
+            reqs = rv.get_random_ssz_object(rng, spec.ExecutionRequests, 3000, 3, mode, k == 2)
+            items = [bytes(r) for r in spec.get_execution_requests_list(reqs)]
+            back = spec.get_execution_requests(items)
+            assert back == reqs
+            yield "get_execution_requests", f"{mode.name}_{k}", {"input": {"list": ssz_list(items)}, "output": back.encode_bytes()}
+    dep, wd, con = (spec.DepositRequest(), spec.WithdrawalRequest(), spec.ConsolidationRequest())
+    one = [b"\x00" + dep.encode_bytes(), b"\x01" + wd.encode_bytes(), b"\x02" + con.encode_bytes()]
+    rejected = {
+        "type_3": [b"\x03" + con.encode_bytes()],
+        "type_255": [b"\xff\x00"],
+        "no_data": [b"\x00"],
+        "no_type": [b""],
+        "descending": [one[1], one[0]],
+        "repeated": [one[0], one[0]],
+        "repeated_last": [one[0], one[2], one[2]],
+        "partial_deposit": [b"\x00" + dep.encode_bytes()[:-1]],
+        "partial_withdrawal": [b"\x01" + wd.encode_bytes() + b"\x00"],
+        "partial_consolidation": [b"\x02" + con.encode_bytes()[:100]],
+        "withdrawals_over_limit": [b"\x01" + wd.encode_bytes() * (int(spec.MAX_WITHDRAWAL_REQUESTS_PER_PAYLOAD) + 1)],
+        "consolidations_over_limit": [b"\x02" + con.encode_bytes() * (int(spec.MAX_CONSOLIDATION_REQUESTS_PER_PAYLOAD) + 1)],
+    }
+    for name, items in rejected.items():
+        try:
+            spec.get_execution_requests(items)
+        except Exception:
+            pass
+        else:
+            raise RuntimeError(f"the spec takes the request list {name}")
+        yield "get_execution_requests", name, {"input": {"list": ssz_list(items)}, "output": "invalid"}
+    deposits = [b"\x00" + dep.encode_bytes() * (int(spec.MAX_DEPOSIT_REQUESTS_PER_PAYLOAD) + 1)]
+    try:
+        spec.get_execution_requests(deposits)
+    except Exception:
+        yield "get_execution_requests", "deposits_over_limit", {"input": {"list": ssz_list(deposits)}, "output": "invalid"}
+    else:
+        raise RuntimeError("the spec takes too many deposit requests")
+    good = ssz_list(one)
+    yield "get_execution_requests", "one_each", {"input": {"list": good}, "output": spec.get_execution_requests(one).encode_bytes()}
+    yield "get_execution_requests", "empty", {"input": {"list": b""}, "output": spec.ExecutionRequests().encode_bytes()}
+    broken = {  # no SSZ encoding of a list of at most 3 byte lists
+        "short_offset": good[:3], "offset_not_4": b"\x05\x00\x00\x00" + good[4:], "offset_zero": b"\x00\x00\x00\x00" + good[4:],
+        "offset_past_end": (len(good) + 1).to_bytes(4, "little") + good[4:],
+        "offsets_descending": good[:4] + (int.from_bytes(good[8:12], "little")).to_bytes(4, "little") + good[4:8] + good[12:],
+        "four_items": ssz_list(one + [b"\x03\x00"]),
+    }
+    for name, data in broken.items():
+        yield "get_execution_requests", name, {"input": {"list": data}, "output": "invalid"}
+
+
 STATUSES = ["VALID", "INVALID", "SYNCING", "ACCEPTED", "INVALID_BLOCK_HASH"]
 METHODS = ["engine_newPayloadV1", "engine_newPayloadV2", "engine_newPayloadV3", "engine_newPayloadV4",
-           "engine_forkchoiceUpdatedV1", "engine_forkchoiceUpdatedV2", "engine_forkchoiceUpdatedV3"]
+           "engine_forkchoiceUpdatedV1", "engine_forkchoiceUpdatedV2", "engine_forkchoiceUpdatedV3",
+           "engine_getPayloadV1", "engine_getPayloadV2", "engine_getPayloadV3", "engine_getPayloadV4", "engine_getPayloadV5"]
 
 
 def response_cases():
@@ -193,9 +305,10 @@ def response_cases():
     h = "0x" + "ab" * 32
     out = []
 
-    def want(id_, status=0, latest=None, payload_id=None, caps=0, error=None):
+    def want(id_, status=0, latest=None, payload_id=None, caps=0, error=None, place=(0, 0)):
         return {"id": id_, "error": 0 if error is None else 1, "error_code": 0 if error is None else error,
-                "status": status, "latest_valid_hash": latest, "payload_id": payload_id, "capabilities": caps}
+                "status": status, "latest_valid_hash": latest, "payload_id": payload_id, "capabilities": caps,
+                "result_offset": place[0], "result_length": place[1]}
 
     styles = [dict(separators=(",", ":")), dict(indent=2), dict(separators=(", ", ": ")), dict(indent="\t")]
     for k, st in enumerate(STATUSES):
@@ -218,7 +331,19 @@ def response_cases():
         out.append((f"fcu_{pid}", 2, json.dumps(r).encode(),
                     want(9, 1, bytes.fromhex(h[2:]), None if pid is None else bytes.fromhex(pid[2:]))))
     out.append(("fcu_no_payload_id", 2, b'{"id":9,"result":{"payloadStatus":{"status":"SYNCING","latestValidHash":null}}}', want(9, 3)))
-    for k, names in enumerate([[], METHODS, ["engine_newPayloadV1", "engine_getPayloadV5", "engine_forkchoiceUpdatedV3", "x"], ["engine_newPayloadV4"]]):
+    result = {"executionPayload": {"parentHash": h, "transactions": ["0x", "0x01"], "withdrawals": [{"index": "0x0"}]},
+              "blockValue": "0x1", "blobsBundle": {"commitments": [], "proofs": [], "blobs": []},
+              "shouldOverrideBuilder": False, "executionRequests": ["0x00" + "ab" * 192], "extra": [[[{"a": None}]]]}
+    for s, style in enumerate(styles):
+        text = json.dumps(result, **style)
+        for k, (head, tail) in enumerate([('{"jsonrpc":"2.0","id":5,"result":', '}'), (' {\n  "result" : ', ' ,\n "id" : 5 }\n'),
+                                          ('{"id":5,"result":{"a":[1]},"result":', ',"jsonrpc":"2.0"}')]):
+            body = (head + text + tail).encode()
+            out.append((f"gp_{s}_{k}", 4, body, want(5, place=(len(head.encode()), len(text.encode())))))
+    out.append(("gp_empty", 4, b'{"id":6,"result":{}}', want(6, place=(len(b'{"id":6,"result":'), 2))))
+    out.append(("gp_error", 4, b'{"id":6,"error":{"code":-38001,"message":"Unknown payload"}}', want(6, error=-38001)))
+    for k, names in enumerate([[], METHODS, ["engine_newPayloadV1", "engine_getPayloadV5", "engine_forkchoiceUpdatedV3", "x"], ["engine_newPayloadV4"],
+                               ["engine_getPayloadV1", "engine_getPayloadV2", "engine_getPayloadV6", "engine_getPayloadV3", "engine_getPayloadV4"]]):
         mask = sum(1 << METHODS.index(n) for n in names if n in METHODS)
         r = {"jsonrpc": "2.0", "id": k, "result": names}
         out.append((f"caps_{k}", 3, json.dumps(r).encode(), want(k, caps=mask)))
@@ -238,9 +363,23 @@ def response_cases():
         (1, b'{"id":1,"x":01,"result":{"status":"VALID"}}'), (1, b'{"id":01,"result":{"status":"VALID"}}'),
         (2, b'{"id":1,"result":{"status":"VALID"}}'), (2, b'{"id":1,"result":{"payloadStatus":{"status":"VALID"},"payloadId":"0x01"}}'),
         (3, b'{"id":1,"result":{"status":"VALID"}}'), (3, b'{"id":1,"result":["engine_newPayloadV1",1]}'),
+        (4, b'{"id":1,"result":null}'), (4, b'{"id":1,"result":[]}'), (4, b'{"id":1,"result":"0x"}'), (4, b'{"id":1}'),
+        (4, b'{"id":1,"result":{"a":}}'), (4, b'{"id":1,"result":{"a":1}'), (4, b'{"id":1,"result":{"a":[1}]}}'),
     ]
     for k, (method, body) in enumerate(bad):
         out.append((f"bad_{k}", method, body, "invalid"))
+    # an ignored member's value that breaks RFC 8259
+    for k, value in enumerate([b"[1,]", b'{"a" 1}', b"{1:2}", b"[1:2]", b'{"a":}', b"{,}", b"[,1]", b'{"a":1,}', b"[1 2]",
+                               b'{"a":1 "b":2}', b'{"a"::1}', b"[1,,2]", b"{]", b"[}", b'{"a":[}]}', b'["a":1]', b"[[[]]", b"{{}}"]):
+        body = b'{"id":1,"x":' + value + b',"result":{"status":"VALID"}}'
+        try:
+            json.loads(body)
+        except ValueError:
+            out.append((f"bad_member_{k}", 1, body, "invalid"))
+        else:
+            raise RuntimeError(f"Python's json takes {body!r}")
+    body = b'{"id":1,"x":[[],{},[{}],{"a":[]},{"b":{"c":[1,{"d":null}]}}],"result":{"status":"VALID"}}'
+    out.append(("np_nested_members", 1, body, want(1, 1)))
     return out
 
 

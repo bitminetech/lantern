@@ -190,8 +190,9 @@ LOCAL_FUNCTION jliteral
 END_FUNCTION jliteral
 
 /*
- * L0: any value at the cursor a0: a0 = the cursor after it. Brackets nest to 64 levels, their
- * kinds in s4 (1 for an object), the depth in s5. Uses a1-a3, t0-t4.
+ * L0: any value at the cursor a0, as RFC 8259 writes it: a0 = the cursor after it. Brackets nest
+ * to 64 levels, their kinds in s4 (1 for an object), the depth in s5; t5 what comes next: 0 a
+ * value, 1 a value or the array's end, 2 a name, 3 a name or the object's end. Uses a1-a3, t0-t5.
  */
 LOCAL_FUNCTION jskip
     FRAME 16
@@ -199,10 +200,35 @@ LOCAL_FUNCTION jskip
     sd      s5, F + 8(sp)
     li      s4, 0
     li      s5, 0
+    li      t5, 0
 1:  call    jws
     bgeu    a0, s1, 9f
     lbu     t0, 0(a0)
-    li      t1, '"'
+    li      t1, 2
+    bltu    t5, t1, 30f
+    li      t1, '}'                         # a name and a colon, or the end of an empty object
+    bne     t0, t1, 31f
+    li      t1, 3
+    beq     t5, t1, 5f
+    j       9f
+31: li      t1, '"'
+    bne     t0, t1, 9f
+    call    jstring
+    beqz    a0, 9f
+    call    jws
+    bgeu    a0, s1, 9f
+    lbu     t0, 0(a0)
+    li      t1, ':'
+    bne     t0, t1, 9f
+    addi    a0, a0, 1
+    li      t5, 0
+    j       1b
+30: li      t1, ']'                         # a value, or the end of an empty array
+    bne     t0, t1, 32f
+    li      t1, 1
+    beq     t5, t1, 5f
+    j       9f
+32: li      t1, '"'
     bne     t0, t1, 2f
     call    jstring
     beqz    a0, 9f
@@ -210,39 +236,36 @@ LOCAL_FUNCTION jskip
 2:  li      t1, '{'
     beq     t0, t1, 3f
     li      t1, '['
-    bne     t0, t1, 4f
+    bne     t0, t1, 7f
 3:  li      t2, 64
     bgeu    s5, t2, 9f
     slli    s4, s4, 1
+    li      t5, 1
     li      t1, '{'
     bne     t0, t1, 14f
     ori     s4, s4, 1
+    li      t5, 3
 14: addi    s5, s5, 1
     addi    a0, a0, 1
     j       1b
-4:  li      t1, '}'                         # a closing bracket of the kind opened
-    beq     t0, t1, 5f
-    li      t1, ']'
-    bne     t0, t1, 7f
-5:  beqz    s5, 9f
-    andi    t2, s4, 1
-    li      t1, '}'
-    sub     t3, t0, t1
-    seqz    t3, t3
-    bne     t2, t3, 9f
-    srli    s4, s4, 1
+5:  srli    s4, s4, 1                       # the end of the container
     addi    s5, s5, -1
     addi    a0, a0, 1
 6:  beqz    s5, 8f                          # a whole value at depth 0
-    call    jws                             # in a container: a comma or a colon, or its end
+    call    jws                             # in a container: a comma, or the end of its kind
     bgeu    a0, s1, 9f
     lbu     t0, 0(a0)
+    andi    t4, s4, 1
     li      t1, ','
-    beq     t0, t1, 10f
-    li      t1, ':'
-    bne     t0, t1, 1b
-10: addi    a0, a0, 1
+    bne     t0, t1, 33f
+    addi    a0, a0, 1
+    slli    t5, t4, 1
     j       1b
+33: li      t1, ']'
+    beqz    t4, 34f
+    li      t1, '}'
+34: beq     t0, t1, 5b
+    j       9f
 7:  li      t1, 't'                         # true, false, null, or a number
     bne     t0, t1, 11f
     ADDRESS a1, json_true
@@ -448,7 +471,7 @@ LOCAL_FUNCTION jpayload_status
     LEAVE 0
 END_FUNCTION jpayload_status
 
-/* L0: the result of the method in s3 at the cursor a0: a0 = the cursor after it. */
+/* L0: the result of the method in s3 at the cursor a0, s8 the body's first byte: a0 = the cursor after it. */
 LOCAL_FUNCTION jresult
     ENTER 0
     li      t0, ENGINE_METHOD_NEW_PAYLOAD
@@ -490,7 +513,22 @@ LOCAL_FUNCTION jresult
     j       2b
 4:  beqz    s7, 9f
     LEAVE 0
-5:  bgeu    a0, s1, 9f                      # exchangeCapabilities: an array of strings
+5:  li      t0, ENGINE_METHOD_GET_PAYLOAD
+    bne     s3, t0, 17f
+    bgeu    a0, s1, 9f                      # getPayload: an object, its bytes kept
+    lbu     t0, 0(a0)
+    li      t1, '{'
+    bne     t0, t1, 9f
+    sub     t0, a0, s8
+    sd      t0, EngineResponse_result_offset(s2)
+    call    jskip
+    beqz    a0, 9f
+    sub     t0, a0, s8
+    ld      t1, EngineResponse_result_offset(s2)
+    sub     t0, t0, t1
+    sd      t0, EngineResponse_result_length(s2)
+    LEAVE 0
+17: bgeu    a0, s1, 9f                      # exchangeCapabilities: an array of strings
     lbu     t0, 0(a0)
     li      t1, '['
     bne     t0, t1, 9f
@@ -585,13 +623,17 @@ LOCAL_FUNCTION jerror
     LEAVE 0
 END_FUNCTION jerror
 
-/* (body, method, out): s1 the end, s2 out, s3 method, s4 1 when id is seen, s5 1 for an error, 2 for a result. */
+/*
+ * (body, method, out): s1 the end, s2 out, s3 method, s4 1 when id is seen, s5 1 for an error, 2
+ * for a result, s8 the body's first byte.
+ */
 FUNCTION lantern_engine_parse_response
     ENTER 0
     ld      t0, 8(a0)
     ld      t1, 16(a0)
     add     a0, a0, t0
     add     s1, a0, t1
+    mv      s8, a0
     ld      s3, 0(a1)
     mv      s2, a2
     li      t0, 0                           # out: zero

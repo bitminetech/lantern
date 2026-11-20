@@ -1449,11 +1449,11 @@ END_FUNCTION node_engine_consume
 /*
  * The bytes of engine_in: a whole HTTP response of the call in flight ends it. r12 engine_in, r13
  * the method, S7 the scratch size, restored on return, S8 the body's ByteList, S9 a block entry.
- * Locals: L an HttpResponse (16), L+16 eof, L+24 the method, L+32 an EngineResponse (96), L+128 a
- * node, L+136 a status.
+ * Locals: L an HttpResponse (16), L+16 eof, L+24 the method, L+32 an EngineResponse (112), L+144 a
+ * node, L+152 a status.
  */
 LOCAL_FUNCTION node_engine_read
-    ENTER 144
+    ENTER 160
     mov     Node_engine_in(%rbx), %r12
     add     %rbx, %r12
     mov     Node_engine_method(%rbx), %r13
@@ -1574,14 +1574,14 @@ LOCAL_FUNCTION node_engine_read
     call    node_store_find
     cmp     $-1, %rax
     je      9f
-    mov     %rax, (L + 128)(%rsp)
+    mov     %rax, (L + 144)(%rsp)
     mov     (L + 32 + EngineResponse_status)(%rsp), %rcx
     cmp     $ENGINE_STATUS_VALID, %rcx
     jne     41f
-    movq    $PAYLOAD_STATUS_VALID, (L + 136)(%rsp)
+    movq    $PAYLOAD_STATUS_VALID, (L + 152)(%rsp)
     mov     %rbp, %rdi
-    lea     (L + 128)(%rsp), %rsi
-    lea     (L + 136)(%rsp), %rdx
+    lea     (L + 144)(%rsp), %rsi
+    lea     (L + 152)(%rsp), %rdx
     lea     (L + 16)(%rsp), %rcx
     call    lantern_store_payload_status
     jmp     9f
@@ -1589,17 +1589,17 @@ LOCAL_FUNCTION node_engine_read
     je      42f
     cmp     $ENGINE_STATUS_INVALID_BLOCK_HASH, %rcx
     jne     9f
-42: mov     (L + 128)(%rsp), %rdi
+42: mov     (L + 144)(%rsp), %rdi
     mov     %rdi, %rdx
     lea     (L + 32 + EngineResponse_latest_valid_hash)(%rsp), %rsi
     xor     %ecx, %ecx
     cmpq    $0, (L + 32 + EngineResponse_has_latest_valid_hash)(%rsp)
     cmove   %rcx, %rsi
     call    node_lvh
-9:  LEAVE 144
+9:  LEAVE 160
 6:  mov     S7(%rsp), %rax                  # part of a response: more bytes
     mov     %rax, (%r14)
-    LEAVE 144
+    LEAVE 160
 70: mov     %r12, %rdi                      # a failed call, its response read
     mov     (L + 8)(%rsp), %rsi
     call    node_engine_consume
@@ -1608,7 +1608,7 @@ LOCAL_FUNCTION node_engine_read
     call    node_engine_failed
 8:  mov     Node_engine_in(%rbx), %rax      # the bytes left go
     movq    $0, 16(%rbx,%rax)
-    LEAVE 144
+    LEAVE 160
 END_FUNCTION node_engine_read
 
 /* The import of each waiting block whose parent is the block of the entry rdi. r12 the root, r13 index. */
@@ -9109,8 +9109,9 @@ FUNCTION lantern_node_run
     lea     Node_engine_host(%rbx), %rsi
     call    lantern_copy
     lea     (L + 96)(%rsp), %rdi
-    lea     NodeAction_arg(%r12), %rsi
-    mov     %r13, %rdx
+    xor     %esi, %esi                      # no payload attributes
+    lea     NodeAction_arg(%r12), %rdx
+    mov     %r13, %rcx
     mov     S7(%rsp), %r10
     FORK_CALL_BELLATRIX engine_forkchoice_updated
     test    %rax, %rax

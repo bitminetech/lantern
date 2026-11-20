@@ -110,6 +110,16 @@ json_methods:
     .ascii  "engine_forkchoiceUpdatedV2"
     .byte   26
     .ascii  "engine_forkchoiceUpdatedV3"
+    .byte   19
+    .ascii  "engine_getPayloadV1"
+    .byte   19
+    .ascii  "engine_getPayloadV2"
+    .byte   19
+    .ascii  "engine_getPayloadV3"
+    .byte   19
+    .ascii  "engine_getPayloadV4"
+    .byte   19
+    .ascii  "engine_getPayloadV5"
     .byte   0
 .if ENGINE_STATUS_VALID != 1 || ENGINE_STATUS_INVALID_BLOCK_HASH != 5
 .error "json_statuses lists the statuses in ENGINE_STATUS_* order"

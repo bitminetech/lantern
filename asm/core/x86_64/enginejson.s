@@ -214,6 +214,118 @@ SPEC_FUNCTION get_execution_requests_list
 7:  mov     $LANTERN_BUFFER_TOO_SMALL, %eax
     LEAVE 0
 SPEC_END get_execution_requests_list
+
+/*
+ * (list, out): rbx the list's bytes, rbp their count, r12 out, r13 the item, r14 the items, r15 the
+ * lowest type the item may have. Locals: L, L+16, L+32 the data of each type, its address and its
+ * bytes.
+ */
+SPEC_FUNCTION get_execution_requests
+    ENTER 48
+    mov     8(%rdi), %rax
+    mov     16(%rdi), %rbp
+    lea     (%rdi,%rax), %rbx
+    mov     %rsi, %r12
+    pxor    %xmm0, %xmm0
+    movdqu  %xmm0, L(%rsp)
+    movdqu  %xmm0, (L + 16)(%rsp)
+    movdqu  %xmm0, (L + 32)(%rsp)
+    test    %rbp, %rbp                      # the SSZ list: no item, or the first offset, 4 an item, at most 3
+    jz      5f
+    cmp     $4, %rbp
+    jb      9f
+    mov     (%rbx), %eax
+    test    $3, %eax
+    jnz     9f
+    test    %eax, %eax
+    jz      9f
+    cmp     $12, %eax
+    ja      9f
+    cmp     %rbp, %rax
+    ja      9f
+    shr     $2, %eax
+    mov     %rax, %r14
+    xor     %r13d, %r13d
+    xor     %r15d, %r15d
+1:  mov     (%rbx,%r13,4), %eax             # item r13: from its offset to the next, or to the end
+    mov     %rbp, %rcx
+    lea     1(%r13), %rdx
+    cmp     %r14, %rdx
+    jae     2f
+    mov     (%rbx,%rdx,4), %ecx
+2:  cmp     %rcx, %rax
+    ja      9f
+    cmp     %rbp, %rcx
+    ja      9f
+    sub     %rax, %rcx                      # a type in ascending order, and data
+    cmp     $2, %rcx
+    jb      9f
+    movzbl  (%rbx,%rax), %edx
+    cmp     %r15, %rdx
+    jb      9f
+    cmp     $3, %rdx
+    jae     9f
+    lea     1(%rdx), %r15
+    dec     %rcx
+    lea     1(%rbx,%rax), %rsi
+    mov     $DEPOSIT_REQUEST_SSZ, %r8d      # the data: whole requests of the type, at most its limit
+    mov     $(DEPOSIT_REQUEST_SSZ * MAX_DEPOSIT_REQUESTS_PER_PAYLOAD), %r9d
+    cmp     $1, %edx
+    jb      6f
+    mov     $WITHDRAWAL_REQUEST_SSZ, %r8d
+    mov     $(WITHDRAWAL_REQUEST_SSZ * MAX_WITHDRAWAL_REQUESTS_PER_PAYLOAD), %r9d
+    je      6f
+    mov     $CONSOLIDATION_REQUEST_SSZ, %r8d
+    mov     $(CONSOLIDATION_REQUEST_SSZ * MAX_CONSOLIDATION_REQUESTS_PER_PAYLOAD), %r9d
+6:  cmp     %r9, %rcx
+    ja      9f
+    mov     %rdx, %r10
+    mov     %rcx, %rax
+    xor     %edx, %edx
+    div     %r8
+    test    %rdx, %rdx
+    jnz     9f
+    shl     $4, %r10
+    mov     %rsi, L(%rsp,%r10)
+    mov     %rcx, (L + 8)(%rsp,%r10)
+    inc     %r13
+    cmp     %r14, %r13
+    jb      1b
+5:  mov     (L + 8)(%rsp), %rax             # ExecutionRequests: three offsets, then the data of each type
+    add     (L + 24)(%rsp), %rax
+    add     (L + 40)(%rsp), %rax
+    add     $12, %rax
+    mov     (%r12), %rcx
+    sub     $24, %rcx
+    jb      8f
+    cmp     %rax, %rcx
+    jb      8f
+    movq    $24, 8(%r12)
+    mov     %rax, 16(%r12)
+    lea     24(%r12), %rdi
+    mov     $12, %eax
+    mov     %eax, (%rdi)
+    add     (L + 8)(%rsp), %eax
+    mov     %eax, 4(%rdi)
+    add     (L + 24)(%rsp), %eax
+    mov     %eax, 8(%rdi)
+    add     $12, %rdi
+    xor     %r13d, %r13d
+7:  mov     %r13, %rax
+    shl     $4, %rax
+    mov     L(%rsp,%rax), %rsi
+    mov     (L + 8)(%rsp,%rax), %rcx
+    rep movsb
+    inc     %r13
+    cmp     $3, %r13
+    jb      7b
+    xor     %eax, %eax
+    LEAVE 48
+8:  mov     $LANTERN_BUFFER_TOO_SMALL, %eax
+    LEAVE 48
+9:  mov     $LANTERN_INVALID_ENCODING, %eax
+    LEAVE 48
+SPEC_END get_execution_requests
 .endif
 
 /* (block, out): the bound of engine-api.md. rax the bound; rcx, rdx, r8-r11 work. */
@@ -442,13 +554,22 @@ SPEC_FUNCTION engine_new_payload
     LEAVE 48
 SPEC_END engine_new_payload
 
-/* (state, id, out): rbx state, rbp id, r12 out. */
+/* (state, attributes, id, out): rbx state, rbp id, r12 out, r13 attributes, r14 a withdrawal, r15 those left. */
 SPEC_FUNCTION engine_forkchoice_updated
     ENTER 0
     mov     %rdi, %rbx
-    mov     (%rsi), %rbp
-    mov     %rdx, %r12
-    cmpq    $(24 + 512), (%r12)
+    mov     %rsi, %r13
+    mov     (%rdx), %rbp
+    mov     %rcx, %r12
+    mov     $(24 + 512), %eax               # the room: 512 bytes, or 1024 and 192 a withdrawal
+    test    %r13, %r13
+    jz      1f
+    mov     $(24 + 1024), %eax
+.if FORK >= FORK_CAPELLA
+    imul    $192, PayloadAttributes_withdrawals(%r13), %rcx
+    add     %rcx, %rax
+.endif
+1:  cmp     %rax, (%r12)
     jb      8f
     lea     24(%r12), %rdi
     JTEXT   j_open
@@ -469,8 +590,46 @@ SPEC_FUNCTION engine_forkchoice_updated
     JDATA   %rbx, 32, 32
     JTEXT   j_finalized
     JDATA   %rbx, 64, 32
+    test    %r13, %r13
+    jnz     2f
     JTEXT   j_fcu_close
-    lea     24(%r12), %rax
+    jmp     7f
+    # the PayloadAttributes
+2:  JTEXT   j_attr_open
+    JQ64    %r13, PayloadAttributes_timestamp
+    JTEXT   j_prev_randao
+    JDATA   %r13, PayloadAttributes_prev_randao, 32
+    JTEXT   j_attr_fee_recipient
+    JDATA   %r13, PayloadAttributes_suggested_fee_recipient, 20
+.if FORK >= FORK_CAPELLA
+    # each withdrawal: its 44 SSZ bytes
+    JTEXT   j_attr_withdrawals
+    lea     PAYLOAD_ATTRIBUTES_WITHDRAWAL(%r13), %r14
+    mov     PayloadAttributes_withdrawals(%r13), %r15
+    test    %r15, %r15
+    jz      4f
+3:  JTEXT   j_w_index
+    JQ64    %r14, 0
+    JTEXT   j_w_validator
+    JQ64    %r14, 8
+    JTEXT   j_w_address
+    JDATA   %r14, 16, 20
+    JTEXT   j_w_amount
+    JQ64    %r14, 36
+    JCHAR   125
+    add     $PAYLOAD_ATTRIBUTES_WITHDRAWAL_SIZE, %r14
+    dec     %r15
+    jz      4f
+    JCHAR   44
+    jmp     3b
+4:  JCHAR   93
+.endif
+.if FORK >= FORK_DENEB
+    JTEXT   j_attr_parent_root
+    JDATA   %r13, PayloadAttributes_parent_beacon_block_root, 32
+.endif
+    JTEXT   j_attr_close
+7:  lea     24(%r12), %rax
     sub     %rax, %rdi
     movq    $24, 8(%r12)
     mov     %rdi, 16(%r12)
@@ -479,5 +638,42 @@ SPEC_FUNCTION engine_forkchoice_updated
 8:  mov     $LANTERN_BUFFER_TOO_SMALL, %eax
     LEAVE 0
 SPEC_END engine_forkchoice_updated
+
+/* (payload_id, id, out): rbx payload_id, rbp id, r12 out. */
+SPEC_FUNCTION engine_get_payload
+    ENTER 0
+    mov     %rdi, %rbx
+    mov     (%rsi), %rbp
+    mov     %rdx, %r12
+    cmpq    $(24 + 256), (%r12)
+    jb      8f
+    lea     24(%r12), %rdi
+    JTEXT   j_open
+    mov     %rbp, %rax
+    call    jdecimal
+    JTEXT   j_method_gp
+.if FORK == FORK_BELLATRIX
+    JCHAR   49
+.elseif FORK == FORK_CAPELLA
+    JCHAR   50
+.elseif FORK == FORK_DENEB
+    JCHAR   51
+.elseif FORK == FORK_ELECTRA
+    JCHAR   52
+.else
+    JCHAR   53
+.endif
+    JTEXT   j_params
+    JDATA   %rbx, 0, 8
+    JTEXT   j_close
+    lea     24(%r12), %rax
+    sub     %rax, %rdi
+    movq    $24, 8(%r12)
+    mov     %rdi, 16(%r12)
+    xor     %eax, %eax
+    LEAVE 0
+8:  mov     $LANTERN_BUFFER_TOO_SMALL, %eax
+    LEAVE 0
+SPEC_END engine_get_payload
 
 .endif

@@ -10,9 +10,9 @@ j_caps_open_end:
 .error "the length of j_caps_open is wrong"
 .endif
 j_caps_close:
-    .ascii  ",\"method\":\"engine_exchangeCapabilities\",\"params\":[[\"engine_newPayloadV1\",\"engine_newPayloadV2\",\"engine_newPayloadV3\",\"engine_newPayloadV4\",\"engine_forkchoiceUpdatedV1\",\"engine_forkchoiceUpdatedV2\",\"engine_forkchoiceUpdatedV3\"]]}"
+    .ascii  ",\"method\":\"engine_exchangeCapabilities\",\"params\":[[\"engine_newPayloadV1\",\"engine_newPayloadV2\",\"engine_newPayloadV3\",\"engine_newPayloadV4\",\"engine_forkchoiceUpdatedV1\",\"engine_forkchoiceUpdatedV2\",\"engine_forkchoiceUpdatedV3\",\"engine_getPayloadV1\",\"engine_getPayloadV2\",\"engine_getPayloadV3\",\"engine_getPayloadV4\",\"engine_getPayloadV5\"]]}"
 j_caps_close_end:
-.set j_caps_close_len, 228
+.set j_caps_close_len, 338
 .if j_caps_close_end - j_caps_close != j_caps_close_len
 .error "the length of j_caps_close is wrong"
 .endif
