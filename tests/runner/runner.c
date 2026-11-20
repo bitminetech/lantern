@@ -813,7 +813,7 @@ static void run_ssz_static(const char *file, const char *type_name, case_file *f
 /* ---------------------------------------------------------------- Config */
 
 /* include/lantern.inc: CONFIG_* offsets. Kind 0: a u64; kind 1: a 4-byte Version. */
-/* A config value: kind 0 a u64, 1 a Version, 2 a Uint256, 3 a Hash32. */
+/* A config value: kind 0 a u64, 1 a Version, 2 a Uint256, 3 a Hash32, 4 an Address, 5 a text. */
 static const struct {
     const char *name;
     uint64_t offset;
@@ -880,6 +880,14 @@ static const struct {
     {"MAX_REQUEST_BLOCKS", 392 + 16 * 32 + 128, 0},
     {"MESSAGE_DOMAIN_INVALID_SNAPPY", 392 + 16 * 32 + 136, 1},
     {"MESSAGE_DOMAIN_VALID_SNAPPY", 392 + 16 * 32 + 144, 1},
+    {"SECONDS_PER_ETH1_BLOCK", 392 + 16 * 32 + 176, 0},
+    {"ETH1_FOLLOW_DISTANCE", 392 + 16 * 32 + 184, 0},
+    {"DEPOSIT_CHAIN_ID", 392 + 16 * 32 + 192, 0},
+    {"DEPOSIT_NETWORK_ID", 392 + 16 * 32 + 200, 0},
+    {"ATTESTATION_SUBNET_COUNT", 392 + 16 * 32 + 208, 0},
+    {"DEPOSIT_CONTRACT_ADDRESS", 392 + 16 * 32 + 216, 4},
+    {"PRESET_BASE", 392 + 16 * 32 + 248, 5},
+    {"CONFIG_NAME", 392 + 16 * 32 + 320, 5},
 };
 #define CONFIG_BLOB_SCHEDULE_COUNT 384
 #define CONFIG_SUBNETS_PER_NODE 336
@@ -887,7 +895,7 @@ static const struct {
 #define CONFIG_STATE_CACHE (392 + 16 * 32 + 152)
 #define CONFIG_COMMITTEE_CACHE (392 + 16 * 32 + 160)
 #define CONFIG_PUBKEY_CACHE (392 + 16 * 32 + 168)
-#define CONFIG_SIZE (392 + 16 * 32 + 176)
+#define CONFIG_SIZE (392 + 16 * 32 + 392)
 
 static uint8_t config[CONFIG_SIZE];
 
@@ -916,7 +924,9 @@ static void config_from_map(tv map, int overrides) {
             memset(dst, 0, 32);
             if (*v == T_UINT256) memcpy(dst, v + 1, 32);
             else wr64(dst, tv_u64(v));
-        } else if (CONFIG_FIELDS[i].kind == 3) { /* an unquoted 0x... hash reads as a number: its bytes, big endian */
+        } else if (CONFIG_FIELDS[i].kind == 3 || CONFIG_FIELDS[i].kind == 4) {
+            /* an unquoted 0x... hash or address reads as a number: its bytes, big endian */
+            int n = CONFIG_FIELDS[i].kind == 3 ? 32 : 20;
             uint8_t le[32] = {0};
             memset(dst, 0, 32);
             if (*v == T_UINT256) memcpy(le, v + 1, 32);
@@ -924,10 +934,20 @@ static void config_from_map(tv map, int overrides) {
             else {
                 uint64_t len;
                 const uint8_t *b = tv_bytes(v, &len);
-                memcpy(dst, b, len < 32 ? len : 32);
+                memcpy(dst, b, len < (uint64_t)n ? len : (uint64_t)n);
                 continue;
             }
-            for (int b = 0; b < 32; b++) dst[b] = le[31 - b];
+            for (int b = 0; b < n; b++) dst[b] = le[n - 1 - b];
+        } else if (CONFIG_FIELDS[i].kind == 5) { /* a text: its length, then 64 bytes */
+            if (*v != T_STRING && *v != T_BYTES) {
+                fprintf(stderr, "config: %s is no text\n", CONFIG_FIELDS[i].name);
+                exit(2);
+            }
+            uint64_t len = rd64(v + 1);
+            const uint8_t *b = v + 9;
+            memset(dst, 0, 72);
+            wr64(dst, len);
+            memcpy(dst + 8, b, len < 64 ? len : 64);
         } else {
             wr64(config + CONFIG_FIELDS[i].offset, tv_u64(v));
         }

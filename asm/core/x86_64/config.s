@@ -238,11 +238,68 @@ LOCAL_FUNCTION config_value
     mov     %r13, %rdx
     call    config_uint256
     jmp     9f
-3:  mov     %r13, %rdx                      # Hash32
+3:  cmp     $CONFIG_KIND_HASH32, %r12
+    jne     4f
+    mov     %r13, %rdx                      # Hash32
     mov     $32, %ecx
     call    config_hex_bytes
+    jmp     9f
+4:  cmp     $CONFIG_KIND_ADDRESS, %r12
+    jne     5f
+    xorps   %xmm0, %xmm0                    # Address: 20 bytes, then 12 zero bytes
+    movups  %xmm0, (%r13)
+    movups  %xmm0, 16(%r13)
+    mov     %r13, %rdx
+    mov     $20, %ecx
+    call    config_hex_bytes
+    jmp     9f
+5:  mov     %r13, %rdx                      # Text: to r13, when it is not 0
+    call    config_text
 9:  LEAVE 0
 END_FUNCTION config_value
+
+/*
+ * rax = 0 when the bytes rdi to rsi are a text (0 to CONFIG_TEXT_MAX bytes, each 0x20 to 0x7e but
+ * " and \); then, when rdx is not 0, at rdx its count and CONFIG_TEXT_MAX bytes: its bytes, then
+ * zero bytes. Else rax = 1. Uses rcx, r8, r9.
+ */
+LOCAL_FUNCTION config_text
+    UNWIND_END_PROLOGUE
+    mov     %rsi, %rcx
+    sub     %rdi, %rcx
+    cmp     $CONFIG_TEXT_MAX, %rcx
+    ja      9f
+    mov     %rdi, %r8
+1:  cmp     %rsi, %r8
+    jae     2f
+    movzbl  (%r8), %eax
+    inc     %r8
+    lea     -0x20(%rax), %r9d
+    cmp     $(0x7e - 0x20), %r9d
+    ja      9f
+    cmp     $0x22, %eax
+    je      9f
+    cmp     $0x5c, %eax
+    je      9f
+    jmp     1b
+2:  test    %rdx, %rdx
+    jz      8f
+    mov     %rcx, (%rdx)
+    xor     %r8d, %r8d
+3:  cmp     $CONFIG_TEXT_MAX, %r8
+    jae     8f
+    xor     %eax, %eax
+    cmp     %rcx, %r8
+    jae     4f
+    movzbl  (%rdi,%r8), %eax
+4:  mov     %al, 8(%rdx,%r8)
+    inc     %r8
+    jmp     3b
+8:  xor     %eax, %eax
+    ret
+9:  mov     $1, %eax
+    ret
+END_FUNCTION config_text
 
 /*
  * In config_scan: close the open entry of the schedule: to 80f (a fault at its line) without
@@ -427,12 +484,22 @@ LOCAL_FUNCTION config_scan
     mov     (L + 72)(%rsp), %rsi
     mov     %r15, %rdx
     lea     (L + 40)(%rsp), %rcx
-    call    config_value
+    cmp     $CONFIG_KIND_TEXT, %rdi         # a text: straight into the config, when it writes
+    jne     280f
+    xor     %ecx, %ecx
+    cmpq    $0, S10(%rsp)
+    je      280f
+    mov     8(%rax), %rcx
+    add     %rbx, %rcx
+280: call   config_value
     test    %rax, %rax
     jnz     89f
     cmpq    $0, S10(%rsp)
     je      29f
-    mov     S7(%rsp), %rax                  # 8 bytes, or 32 for a Uint256 or a Hash32
+    mov     S7(%rsp), %rax
+    cmpq    $CONFIG_KIND_TEXT, 16(%rax)
+    je      29f
+    mov     S7(%rsp), %rax                  # 8 bytes, or 32 for a Uint256, a Hash32 or an Address
     mov     8(%rax), %rdi
     add     %rbx, %rdi
     mov     (L + 40)(%rsp), %rcx

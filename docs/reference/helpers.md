@@ -1238,7 +1238,7 @@ The config values of the network, read at run time. Layout: the `CONFIG_*` offse
 
 ### Rules
 
-- Each value is a u64, little endian, except `CONFIG_TERMINAL_TOTAL_DIFFICULTY`, a Uint256 of 32 bytes, little endian, and `CONFIG_TERMINAL_BLOCK_HASH`, a Hash32.
+- Each value is a u64, little endian, except `CONFIG_TERMINAL_TOTAL_DIFFICULTY`, a Uint256 of 32 bytes, little endian; `CONFIG_TERMINAL_BLOCK_HASH`, a Hash32; `CONFIG_DEPOSIT_CONTRACT_ADDRESS`, 20 bytes then 12 zero bytes; and `CONFIG_PRESET_BASE` and `CONFIG_CONFIG_NAME`, a text: its length as a u64, then 64 bytes, its bytes and zero bytes after them.
 - A Version takes the low 4 bytes of its u64; the other 4 bytes are 0.
 - `CONFIG_BLOB_SCHEDULE` holds `CONFIG_BLOB_SCHEDULE_COUNT` entries of (EPOCH, MAX_BLOBS_PER_BLOCK), at most 32, in ascending EPOCH.
 - `CONFIG_STATE_CACHE` holds the address of a [`StateCache`](state.md#type-statecache) that the caller keeps for every state root of the calls with this config, or 0. It is no value of the config file.

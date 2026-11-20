@@ -225,11 +225,64 @@ LOCAL_FUNCTION config_value
     mov     x2, x20
     bl      config_uint256
     b       9f
-3:  mov     x2, x20                         /* Hash32 */
+3:  cmp     x19, #CONFIG_KIND_HASH32
+    b.ne    4f
+    mov     x2, x20                         /* Hash32 */
     mov     x3, #32
     bl      config_hex_bytes
+    b       9f
+4:  cmp     x19, #CONFIG_KIND_ADDRESS
+    b.ne    5f
+    stp     xzr, xzr, [x20]                 /* Address: 20 bytes, then 12 zero bytes */
+    stp     xzr, xzr, [x20, #16]
+    mov     x2, x20
+    mov     x3, #20
+    bl      config_hex_bytes
+    b       9f
+5:  mov     x2, x20                         /* Text: to x20, when it is not 0 */
+    bl      config_text
 9:  LEAVE 0
 END_FUNCTION config_value
+
+/*
+ * L0: x0 = 0 when the bytes x0 to x1 are a text (0 to CONFIG_TEXT_MAX bytes, each 0x20 to 0x7e but
+ * " and \); then, when x2 is not 0, at x2 its count and CONFIG_TEXT_MAX bytes: its bytes, then zero
+ * bytes. Else x0 = 1. Uses x9-x12.
+ */
+LOCAL_FUNCTION config_text
+    UNWIND_END_PROLOGUE
+    sub     x9, x1, x0
+    cmp     x9, #CONFIG_TEXT_MAX
+    b.hi    9f
+    mov     x10, x0
+1:  cmp     x10, x1
+    b.hs    2f
+    ldrb    w11, [x10], #1
+    sub     w12, w11, #0x20
+    cmp     w12, #(0x7e - 0x20)
+    b.hi    9f
+    cmp     w11, #0x22
+    b.eq    9f
+    cmp     w11, #0x5c
+    b.eq    9f
+    b       1b
+2:  cbz     x2, 8f
+    str     x9, [x2], #8
+    mov     x10, #0
+3:  cmp     x10, #CONFIG_TEXT_MAX
+    b.hs    8f
+    mov     w11, #0
+    cmp     x10, x9
+    b.hs    4f
+    ldrb    w11, [x0, x10]
+4:  strb    w11, [x2, x10]
+    add     x10, x10, #1
+    b       3b
+8:  mov     x0, #0
+    ret
+9:  mov     x0, #1
+    ret
+END_FUNCTION config_text
 
 /*
  * In config_scan: close the open entry of the schedule: to 80f (a fault at its line) without
@@ -408,10 +461,19 @@ LOCAL_FUNCTION config_scan
     ldr     x1, [sp, #(L + 72)]
     mov     x2, x26
     add     x3, sp, #(L + 40)
-    bl      config_value
+    cmp     x0, #CONFIG_KIND_TEXT           /* a text: straight into the config, when it writes */
+    b.ne    280f
+    mov     x3, #0
+    cbz     x20, 280f
+    ldr     x3, [x24, #8]
+    add     x3, x19, x3
+280: bl     config_value
     cbnz    x0, 89f
     cbz     x20, 29f
-    ldr     x9, [x24, #8]                   /* 8 bytes, or 32 for a Uint256 or a Hash32 */
+    ldr     x10, [x24, #16]
+    cmp     x10, #CONFIG_KIND_TEXT
+    b.eq    29f
+    ldr     x9, [x24, #8]                   /* 8 bytes, or 32 for a Uint256, a Hash32 or an Address */
     add     x9, x19, x9
     ldr     x10, [x24, #16]
     ldp     x11, x12, [sp, #(L + 40)]

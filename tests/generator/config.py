@@ -30,7 +30,14 @@ HAND = [
      b"DEPOSIT_CONTRACT_ADDRESS: 0x4242424242424242424242424242424242424242\nGAS_LIMIT_SCHEDULE: []\n"
      b"SOME_MAP:\n  A: 1\n  B:\n    - x\n    - {y: 2}\nCONFIG_NAME: testnet\nGLOAS_FORK_EPOCH: 18446744073709551616\n"
      b"EJECTION_BALANCE: 16000000000\n",
-     {"EJECTION_BALANCE": 16000000000}),
+     {"EJECTION_BALANCE": 16000000000, "DEPOSIT_CONTRACT_ADDRESS": bytes.fromhex("42" * 20), "CONFIG_NAME": "testnet"}),
+    ("deposit_and_names",
+     b"DEPOSIT_CONTRACT_ADDRESS: 0x00000000219ab540356cBB839Cbe05303d7705Fa\nCONFIG_NAME: \"a # b\"\nPRESET_BASE: ''\n"
+     b"DEPOSIT_CHAIN_ID: 17000\nDEPOSIT_NETWORK_ID: 17000\nETH1_FOLLOW_DISTANCE: 16\nSECONDS_PER_ETH1_BLOCK: 12\n"
+     b"ATTESTATION_SUBNET_COUNT: 64\n",
+     {"DEPOSIT_CONTRACT_ADDRESS": bytes.fromhex("00000000219ab540356cBB839Cbe05303d7705Fa"), "CONFIG_NAME": "a # b",
+      "PRESET_BASE": "", "DEPOSIT_CHAIN_ID": 17000, "DEPOSIT_NETWORK_ID": 17000, "ETH1_FOLLOW_DISTANCE": 16,
+      "SECONDS_PER_ETH1_BLOCK": 12, "ATTESTATION_SUBNET_COUNT": 64}),
     ("blob_schedule_sorted",
      b"BLOB_SCHEDULE:\n  - EPOCH: 20\n    MAX_BLOBS_PER_BLOCK: 21\n  - MAX_BLOBS_PER_BLOCK: 9\n    EPOCH: 5   # first\n"
      b"  -   EPOCH: 12\n        MAX_BLOBS_PER_BLOCK: 15\n  - EPOCH: 12\n    MAX_BLOBS_PER_BLOCK: 16\nDENEB_FORK_EPOCH: 1\n",
@@ -49,7 +56,7 @@ HAND = [
     ("empty", b"", {}),
 ]
 HAND_VALUES = {"comments_and_quotes": {
-    "SLOT_DURATION_MS": 6000, "ALTAIR_FORK_EPOCH": 5, "BELLATRIX_FORK_EPOCH": 7,
+    "SLOT_DURATION_MS": 6000, "ALTAIR_FORK_EPOCH": 5, "BELLATRIX_FORK_EPOCH": 7, "CONFIG_NAME": "my # net",
     "GENESIS_FORK_VERSION": bytes.fromhex("10000038")}}
 
 SCHEDULE_33 = b"BLOB_SCHEDULE:\n" + b"".join(b"  - EPOCH: %d\n    MAX_BLOBS_PER_BLOCK: 6\n" % i for i in range(33))
@@ -62,6 +69,10 @@ FAULTS = [
      b"TERMINAL_TOTAL_DIFFICULTY: 115792089237316195423570985008687907853269984665640564039457584007913129639936\n", 1),
     ("version_3_bytes", b"SLOT_DURATION_MS: 1\nGENESIS_FORK_VERSION: 0x000000\n", 2),
     ("hash_31_bytes", b"TERMINAL_BLOCK_HASH: 0x" + b"00" * 31 + b"\n", 1),
+    ("address_19_bytes", b"SLOT_DURATION_MS: 1\nDEPOSIT_CONTRACT_ADDRESS: 0x" + b"11" * 19 + b"\n", 2),
+    ("text_65_bytes", b"CONFIG_NAME: " + b"a" * 65 + b"\n", 1),
+    ("text_quote_inside", b"CONFIG_NAME: 'a\"b'\n", 1),
+    ("text_backslash", b"PRESET_BASE: a\\b\n", 1),
     ("empty_value", b"SLOT_DURATION_MS:\n", 1),
     ("quote_no_end", b"SLOT_DURATION_MS: '12000\n", 1),
     ("quotes_differ", b"SLOT_DURATION_MS: '12000\"\n", 1),

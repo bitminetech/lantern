@@ -231,11 +231,67 @@ LOCAL_FUNCTION config_value
     mv      a2, s2
     call    config_uint256
     j       9f
-3:  mv      a2, s2                          # Hash32
+3:  li      t0, CONFIG_KIND_HASH32
+    bne     s1, t0, 4f
+    mv      a2, s2                          # Hash32
     li      a3, 32
     call    config_hex_bytes
+    j       9f
+4:  li      t0, CONFIG_KIND_ADDRESS
+    bne     s1, t0, 5f
+    sd      zero, 0(s2)                     # Address: 20 bytes, then 12 zero bytes
+    sd      zero, 8(s2)
+    sd      zero, 16(s2)
+    sd      zero, 24(s2)
+    mv      a2, s2
+    li      a3, 20
+    call    config_hex_bytes
+    j       9f
+5:  mv      a2, s2                          # Text: to s2, when it is not 0
+    call    config_text
 9:  LEAVE 0
 END_FUNCTION config_value
+
+/*
+ * a0 = 0 when the bytes a0 to a1 are a text (0 to CONFIG_TEXT_MAX bytes, each 0x20 to 0x7e but
+ * " and \); then, when a2 is not 0, at a2 its count and CONFIG_TEXT_MAX bytes: its bytes, then
+ * zero bytes. Else a0 = 1. Uses t0-t3.
+ */
+LOCAL_FUNCTION config_text
+    UNWIND_END_PROLOGUE
+    sub     t0, a1, a0
+    li      t1, CONFIG_TEXT_MAX
+    bgtu    t0, t1, 9f
+    mv      t1, a0
+1:  bgeu    t1, a1, 2f
+    lbu     t2, 0(t1)
+    addi    t1, t1, 1
+    addi    t3, t2, -0x20
+    sltiu   t3, t3, (0x7e - 0x20 + 1)
+    beqz    t3, 9f
+    li      t3, 0x22
+    beq     t2, t3, 9f
+    li      t3, 0x5c
+    beq     t2, t3, 9f
+    j       1b
+2:  beqz    a2, 8f
+    sd      t0, 0(a2)
+    li      t1, 0
+3:  li      t2, CONFIG_TEXT_MAX
+    bgeu    t1, t2, 8f
+    li      t2, 0
+    bgeu    t1, t0, 4f
+    add     t3, a0, t1
+    lbu     t2, 0(t3)
+4:  add     t3, a2, t1
+    sb      t2, 8(t3)
+    addi    t1, t1, 1
+    j       3b
+8:  li      a0, 0
+    ret
+9:  li      a0, 1
+    ret
+END_FUNCTION config_text
 
 /*
  * In config_scan: close the open entry of the schedule: to 80f (a fault at its line) without
@@ -404,10 +460,19 @@ LOCAL_FUNCTION config_scan
     ld      a1, (L + 72)(sp)
     mv      a2, s8
     addi    a3, sp, L + 40
-    call    config_value
+    li      t0, CONFIG_KIND_TEXT            # a text: straight into the config, when it writes
+    bne     a0, t0, 280f
+    li      a3, 0
+    beqz    s2, 280f
+    ld      a3, 8(s6)
+    add     a3, s1, a3
+280: call   config_value
     bnez    a0, 89f
     beqz    s2, 29f
-    ld      t0, 8(s6)                       # 8 bytes, or 32 for a Uint256 or a Hash32
+    ld      t2, 16(s6)
+    li      t3, CONFIG_KIND_TEXT
+    beq     t2, t3, 29f
+    ld      t0, 8(s6)                       # 8 bytes, or 32 for a Uint256, a Hash32 or an Address
     add     t0, s1, t0
     ld      t1, (L + 40)(sp)
     sd      t1, 0(t0)

@@ -20,7 +20,8 @@
   - Keys lantern does not read, with nested lists and maps under them.
   - A `BLOB_SCHEDULE` out of EPOCH order, which must come out sorted, and `BLOB_SCHEDULE: []`.
   - A text with a few keys, which must leave every other value of the config as it was.
-  - Faults: a value that is not a number, a u64 above 2^64 - 1, a Version of 3 bytes, a Hash32 of 31 bytes, 33 schedule entries, a schedule entry without `MAX_BLOBS_PER_BLOCK`, a line that is not a key, a quote with no end, and an indentation with a tab.
+  - `DEPOSIT_CONTRACT_ADDRESS` in mixed case, and `CONFIG_NAME` and `PRESET_BASE` quoted, with a `#` inside quotes, and empty.
+  - Faults: a value that is not a number, a u64 above 2^64 - 1, a Version of 3 bytes, a Hash32 of 31 bytes, an Address of 19 bytes, a Text of 65 bytes, a Text with a `"` inside `'`, 33 schedule entries, a schedule entry without `MAX_BLOBS_PER_BLOCK`, a line that is not a key, a quote with no end, and an indentation with a tab.
 - File: `<preset>-phase0-config-parse.bin`.
 
 ## Function `lantern_config_parse`
@@ -67,6 +68,8 @@ lantern_config_parse(text, config, line) -> status
   - Version: `0x` and 8 hex digits: the 4 bytes in that order, then 4 zero bytes.
   - Uint256: decimal digits of a number below 2^256, little endian.
   - Hash32: `0x` and 64 hex digits: the 32 bytes in that order.
+  - Address: `0x` and 40 hex digits of either case: the 20 bytes in that order, then 12 zero bytes.
+  - Text: 0 to 64 bytes, each 0x20 to 0x7e but `"` and `\`: their count as a u64, then the bytes, then zero bytes to 64.
 - Reads the keys of [`Config`](helpers.md#type-config): each `CONFIG_*` name of include/lantern.inc whose key is that name, by the kinds of `CONFIG_KEYS`.
 - Reads `BLOB_SCHEDULE` as `[]`, or as nothing followed by indented entries. An entry starts with a line `- EPOCH: n` or `- MAX_BLOBS_PER_BLOCK: n`; a line indented past its `-` gives its other field; each entry has both, u64 values. The entries replace the schedule, sorted by EPOCH, keeping the file order for equal EPOCH values.
 - With a key given twice, keeps the last value.

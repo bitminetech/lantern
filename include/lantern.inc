@@ -151,7 +151,16 @@
 .set CONFIG_STATE_CACHE, 392 + 16 * 32 + 152    /* the address of a StateCache, or 0 (docs/reference/state.md) */
 .set CONFIG_COMMITTEE_CACHE, 392 + 16 * 32 + 160    /* the address of a CommitteeCache, or 0 (block-processing.md) */
 .set CONFIG_PUBKEY_CACHE, 392 + 16 * 32 + 168   /* the address of a PubkeyCache, or 0 (block-processing.md) */
-.set CONFIG_SIZE, 392 + 16 * 32 + 176
+.set CONFIG_SECONDS_PER_ETH1_BLOCK, 392 + 16 * 32 + 176
+.set CONFIG_ETH1_FOLLOW_DISTANCE, 392 + 16 * 32 + 184
+.set CONFIG_DEPOSIT_CHAIN_ID, 392 + 16 * 32 + 192
+.set CONFIG_DEPOSIT_NETWORK_ID, 392 + 16 * 32 + 200
+.set CONFIG_ATTESTATION_SUBNET_COUNT, 392 + 16 * 32 + 208
+.set CONFIG_DEPOSIT_CONTRACT_ADDRESS, 392 + 16 * 32 + 216    /* 20 bytes, then 12 zero bytes */
+.set CONFIG_PRESET_BASE, 392 + 16 * 32 + 248                 /* a text: its length, then 64 bytes */
+.set CONFIG_CONFIG_NAME, 392 + 16 * 32 + 320                 /* a text: its length, then 64 bytes */
+.set CONFIG_TEXT_MAX, 64
+.set CONFIG_SIZE, 392 + 16 * 32 + 392
 
 
 /* CommitteeCache and CommitteeEntry (docs/reference/block-processing.md). */
@@ -200,6 +209,8 @@
 .set CONFIG_KIND_VERSION, 1           /* 0x and 8 hex digits: 4 bytes, then 4 zero bytes */
 .set CONFIG_KIND_UINT256, 2           /* decimal, little endian */
 .set CONFIG_KIND_HASH32, 3            /* 0x and 64 hex digits */
+.set CONFIG_KIND_ADDRESS, 4           /* 0x and 40 hex digits: 20 bytes, then 12 zero bytes */
+.set CONFIG_KIND_TEXT, 5              /* 0 to 64 bytes 0x20 to 0x7e but " and \: the count, then 64 bytes */
 .set CONFIG_KEY_NAME_MAX, 48
 .macro CONFIG_KEYS m
     \m GENESIS_FORK_VERSION, CONFIG_GENESIS_FORK_VERSION, CONFIG_KIND_VERSION
@@ -263,6 +274,14 @@
     \m MAX_REQUEST_BLOCKS, CONFIG_MAX_REQUEST_BLOCKS, CONFIG_KIND_U64
     \m MESSAGE_DOMAIN_INVALID_SNAPPY, CONFIG_MESSAGE_DOMAIN_INVALID_SNAPPY, CONFIG_KIND_VERSION
     \m MESSAGE_DOMAIN_VALID_SNAPPY, CONFIG_MESSAGE_DOMAIN_VALID_SNAPPY, CONFIG_KIND_VERSION
+    \m SECONDS_PER_ETH1_BLOCK, CONFIG_SECONDS_PER_ETH1_BLOCK, CONFIG_KIND_U64
+    \m ETH1_FOLLOW_DISTANCE, CONFIG_ETH1_FOLLOW_DISTANCE, CONFIG_KIND_U64
+    \m DEPOSIT_CHAIN_ID, CONFIG_DEPOSIT_CHAIN_ID, CONFIG_KIND_U64
+    \m DEPOSIT_NETWORK_ID, CONFIG_DEPOSIT_NETWORK_ID, CONFIG_KIND_U64
+    \m ATTESTATION_SUBNET_COUNT, CONFIG_ATTESTATION_SUBNET_COUNT, CONFIG_KIND_U64
+    \m DEPOSIT_CONTRACT_ADDRESS, CONFIG_DEPOSIT_CONTRACT_ADDRESS, CONFIG_KIND_ADDRESS
+    \m PRESET_BASE, CONFIG_PRESET_BASE, CONFIG_KIND_TEXT
+    \m CONFIG_NAME, CONFIG_CONFIG_NAME, CONFIG_KIND_TEXT
 .endm
 
 /* ------------------------------------------------------------ Results of spec checks */
