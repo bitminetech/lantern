@@ -651,16 +651,20 @@ LOCAL_FUNCTION node_pool_add
     beq     a0, t0, 1f
     li      t0, GOSSIP_BEACON_ATTESTATION
     beq     a0, t0, 1f
+    li      t0, GOSSIP_SYNC_COMMITTEE
+    beq     a0, t0, 1f
     li      t0, GOSSIP_BLS_TO_EXECUTION_CHANGE
     bne     a0, t0, 8f
-1:  ld      t4, Node_p2p_out(s1)            # the capacity, for an attestation 3/4 of it
+1:  ld      t4, Node_p2p_out(s1)            # the capacity, for an attestation or a sync message 3/4 of it
     LDQ     t3, s1, Node_pool
     sub     t4, t4, t3
     li      a7, NodePool__mem
     divu    t4, t4, a7
     li      t0, GOSSIP_BEACON_ATTESTATION
+    beq     a0, t0, 12f
+    li      t0, GOSSIP_SYNC_COMMITTEE
     bne     a0, t0, 11f
-    slli    t3, t4, 1
+12: slli    t3, t4, 1
     add     t4, t4, t3
     srli    t4, t4, 2
 11: PART    t0, t1, s1, Node_pool
@@ -684,9 +688,11 @@ LOCAL_FUNCTION node_pool_add
     sd      zero, NodePool_slot(t0)
     sd      zero, NodePool_index(t0)
     sd      zero, NodePool_member(t0)
-    li      t3, GOSSIP_BEACON_ATTESTATION   # an attestation's slot, index and member
+    li      t3, GOSSIP_BEACON_ATTESTATION   # an attestation's or a sync message's slot, index and member
+    beq     a0, t3, 6f
+    li      t3, GOSSIP_SYNC_COMMITTEE
     bne     a0, t3, 5f
-    sd      a4, NodePool_slot(t0)
+6:  sd      a4, NodePool_slot(t0)
     sd      a5, NodePool_index(t0)
     sd      a6, NodePool_member(t0)
 5:  li      a0, 1
@@ -722,15 +728,17 @@ END_FUNCTION node_pool_drop
 
 /*
  * At a new head, each attestation of the pool whose slot's epoch + 1 is below the epoch of the
- * store s2's slot goes; then each other entry in NODE_POOL_KEPT gets a NODE_WORK_POOL_CHECK with
- * the head's post-state a0, and takes NODE_POOL_CHECKING; with a0 = 0, none. Locals: the state,
- * the index, the epoch.
+ * store s2's slot goes, and each sync committee message whose slot + 1 is below that slot; then
+ * each other entry in NODE_POOL_KEPT gets a NODE_WORK_POOL_CHECK with the head's post-state a0,
+ * and takes NODE_POOL_CHECKING; with a0 = 0, none. Locals: the state, the index, the epoch, the
+ * slot.
  */
 LOCAL_FUNCTION node_pool_checks
     FRAME 32
     sd      a0, 0(sp)
     mv      a0, s2
     call    node_store_slot
+    sd      a0, 24(sp)
     li      t0, SLOTS_PER_EPOCH
     divu    t0, a0, t0
     sd      t0, 16(sp)
@@ -742,7 +750,15 @@ LOCAL_FUNCTION node_pool_checks
     mul     t2, a4, t2
     add     a0, t0, t2
     ld      t2, NodePool_topic(a0)
-    li      t3, GOSSIP_BEACON_ATTESTATION
+    li      t3, GOSSIP_SYNC_COMMITTEE       # a sync message: its slot + 1 below the store's slot
+    bne     t2, t3, 71f
+    ld      t2, NodePool_slot(a0)
+    addi    t2, t2, 1
+    ld      t3, 24(sp)
+    bgeu    t2, t3, 7f
+    call    node_pool_drop
+    j       7f
+71: li      t3, GOSSIP_BEACON_ATTESTATION
     bne     t2, t3, 7f
     ld      t2, NodePool_slot(a0)
     li      t3, SLOTS_PER_EPOCH
@@ -767,6 +783,8 @@ LOCAL_FUNCTION node_pool_checks
     ld      t2, NodePool_topic(t0)
     beqz    t2, 2f
     li      t3, GOSSIP_BEACON_ATTESTATION
+    beq     t2, t3, 2f
+    li      t3, GOSSIP_SYNC_COMMITTEE
     beq     t2, t3, 2f
     ld      t2, NodePool_state(t0)
     li      t3, NODE_POOL_KEPT

@@ -690,6 +690,11 @@ LOCAL_FUNCTION node_type_of_kind
     ADDRESS a0, lantern_type_SignedAggregateAndProof
     li      t1, NODE_JSON_AGGREGATE_AND_PROOF
     beq     t0, t1, 9f
+.if FORK >= FORK_ALTAIR
+    ADDRESS a0, lantern_type_SyncCommitteeMessage
+    li      t1, NODE_JSON_SYNC_COMMITTEE_MESSAGE
+    beq     t0, t1, 9f
+.endif
 .if FORK >= FORK_BELLATRIX
     ADDRESS a0, lantern_type_SignedBlindedBeaconBlock
 .else
@@ -1972,7 +1977,18 @@ SPEC_FUNCTION node_gossip
     mv      a6, s3
     mv      a7, s4
     call    lantern_validate_sync_committee_message_gossip
-    j       98f
+    bnez    a0, 98f
+    ld      t0, 0(s4)                       # a valid message: its slot and its subnet's bit
+    bnez    t0, 99f
+    ld      t0, SyncCommitteeMessage_slot(s2)
+    sd      t0, 0(s5)
+    ld      t1, NodeGossip_subnet(s1)
+    li      t0, 1
+    sll     t0, t0, t1
+    sd      t0, 8(s5)
+    sd      zero, 16(s5)
+    sd      zero, 24(s5)
+    j       99f
 37:
 .endif
 .if FORK >= FORK_CAPELLA

@@ -1766,6 +1766,40 @@ SPEC_FUNCTION validate_sync_committee_contribution_and_proof_gossip
 SPEC_END validate_sync_committee_contribution_and_proof_gossip
 .endif
 
+/*
+ * (state rdi, validator_index rsi, out rdx) -> rax: compute_subnets_for_sync_committee of the
+ * state for the validator (altair validator.md), bit i of the u64 out for subnet i; 0 for an index
+ * past the validators, and before altair.
+ */
+SPEC_LEAF node_sync_subnets
+    movq    $0, (%rdx)
+.if FORK >= FORK_ALTAIR
+    mov     %rdx, %r8
+    mov     %rsi, %r9
+    SYNC_COMMITTEE_OF %rsi, %rdi
+    add     $SyncCommittee_pubkeys, %rsi
+    VALIDATOR_AT %rcx, %rdi, %r9, 9f
+    add     $Validator_pubkey, %rcx
+    xor     %r10d, %r10d
+    xor     %edi, %edi
+1:  cmp     $SYNC_COMMITTEE_SIZE, %rdi
+    jae     8f
+    imul    $48, %rdi, %rax
+    add     %rsi, %rax
+    NE48    %rax, %rcx, 3f
+    mov     %rdi, %rax
+    xor     %edx, %edx
+    mov     $SYNC_SUBCOMMITTEE_SIZE, %r11d
+    div     %r11
+    bts     %rax, %r10
+3:  inc     %rdi
+    jmp     1b
+8:  mov     %r10, (%r8)
+.endif
+9:  xor     %eax, %eax
+    ret
+SPEC_END node_sync_subnets
+
 /* ---------------------------------------------------------------- Gossip: attester slashings */
 
 /*

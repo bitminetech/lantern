@@ -20,6 +20,7 @@
 - [`lantern_node_sync_committee`](#function-lantern_node_sync_committee): the validator indices of a state's sync committee of an epoch, for one fork.
 - [`lantern_node_proposer_lookahead`](#function-lantern_node_proposer_lookahead): a state's `proposer_lookahead`, for one fork.
 - [`lantern_node_weights`](#function-lantern_node_weights): get_weight of each node of a store, for one fork.
+- [`lantern_node_sync_subnets`](#function-lantern_node_sync_subnets): compute_subnets_for_sync_committee of a validator, for one fork.
 - [`lantern_node_data_root`](#function-lantern_node_data_root): hash_tree_root of an `AttestationData`'s SSZ bytes, for one fork.
 - [`lantern_node_pending`](#function-lantern_node_pending): the items of a pending list of a state, for one fork.
 - [`lantern_node_blinded_block`](#function-lantern_node_blinded_block): the blinded block of a block's SSZ bytes, for one fork.
@@ -476,8 +477,8 @@ lantern_node_step(node, store, p2p, tick, events, scratch, actions, result) -> s
   - Another result: nothing.
   - Then the answer (beacon-api.md, the pool POSTs) to the connection, with the answer flags of `arg`: 200, or 400 with the failures.
 - The pool: the `NodePool` entries, each a voluntary_exit, proposer_slashing, attester_slashing, bls_to_execution_change or beacon_attestation that passed its gossip validation; a new entry takes the first free entry. A `NODE_ACT_BYTES_FREE` of an id a pool entry has as `data` does not go: the entry keeps the bytes until it goes.
-  - An attestation takes a free entry only at an index below 3/4 of the pool's capacity, so that the other operations always have the last quarter.
-  - At the quiet point of a head event (above), when `head_root` changes: an attestation entry whose slot's epoch + 1 is below the epoch of the store's slot goes (as at a check that fails, below); then each other entry in `NODE_POOL_KEPT` gets a `NODE_WORK_POOL_CHECK` with the head's post-state as `state_a`, its bytes as `data`, its index as `target` and its topic as `arg`, and takes `NODE_POOL_CHECKING`; with no head post-state, none. An attestation gets no check: its gossip validation holds for its epoch and the next only (`ATTESTATION_PROPAGATION_SLOT_RANGE`, the current or previous epoch), and the pool keeps it that long.
+  - An attestation or a sync committee message takes a free entry only at an index below 3/4 of the pool's capacity, so that the other operations always have the last quarter.
+  - At the quiet point of a head event (above), when `head_root` changes: an attestation entry whose slot's epoch + 1 is below the epoch of the store's slot goes (as at a check that fails, below), and a sync committee message entry whose slot + 1 is below the store's slot (its gossip validation holds for the current slot only); then each other entry in `NODE_POOL_KEPT` gets a `NODE_WORK_POOL_CHECK` with the head's post-state as `state_a`, its bytes as `data`, its index as `target` and its topic as `arg`, and takes `NODE_POOL_CHECKING`; with no head post-state, none. An attestation gets no check: its gossip validation holds for its epoch and the next only (`ATTESTATION_PROPAGATION_SLOT_RANGE`, the current or previous epoch), and the pool keeps it that long.
   - `NODE_EV_WORK_DONE` of `NODE_WORK_POOL_CHECK`, of the entry at index `target` in `NODE_POOL_CHECKING`: `LANTERN_VALID`, it takes `NODE_POOL_KEPT`; else a `NODE_ACT_BYTES_FREE` of its bytes, and it is free (topic 0).
 - The publish of SSZ bytes on a topic, with `NODE_FLAG_SUBSCRIBED` (phase0 `p2p-interface.md`, Topics and messages: the data of a message is the SSZ bytes compressed with Snappy's block format): a `LIBP2P_EVENT_PUBLISH` at the end of `p2p_out`, the topic lantern_gossip_topic of `fork_digest` and the topic's name, the data snappy_compress of the bytes, and the ID compute_message_id of the fork of the store's slot of that topic and the bytes; none when `p2p_out` has no room for it. libp2p's `LIBP2P_ACTION_PUBLISHED` that answers it changes nothing.
 - `NODE_EV_API_SENT` of the connection of a `NodeApi` entry of eventstream: its `sent` is 0. Of another entry without `API_STREAM_BUSY`: a `NODE_WORK_API_CHUNK` of it, and `API_STREAM_BUSY`. Another `NODE_EV_API_SENT` is skipped.
@@ -566,7 +567,7 @@ lantern_node_run(node, store, seen, work, state_a, state_b, state_c, data, setti
   - submitPoolAttestationsV2 and publishAggregateAndProofsV2: with `API_ANSWER_SSZ`, the SSZ list of the body: attestations from electra items of 240 bytes, the size of `SingleAttestation`; attestations before electra, and `SignedAggregateAndProof` items, found by the 4-byte offsets of the list (the first offset, a multiple of 4, gives the count; each at most the next and the body's length). A body that is no such list: `LANTERN_INVALID_ENCODING`. Else a JSON array, each item decoded as `Attestation` before electra and `SingleAttestation` from electra, or as the fork's `SignedAggregateAndProof` (`NODE_JSON_AGGREGATE_AND_PROOF`).
   - Each operation in order: lantern_node_gossip of the fork `arg` / 2^16, with a `NodeGossip` of `seen`, the store, `time_ms`, the operation's topic, its subnet, `state_a` as head, no proposer or justified state, and the node's config. Its record: the result's code (u64), the subnet + 2^32 times the member (u64; the member at byte 16 of lantern_node_gossip's `root` for a valid attestation, else 0), then a ByteList of its SSZ bytes (offset 24, `size` 24 + the bytes to a multiple of 8, zero bytes after them).
   - The subnet: 0, but for an attestation compute_subnet_for_attestation(get_committee_count_per_slot(`state_a`, `data.target.epoch`), `data.slot`, the committee index: `data.index` before electra, `committee_index` from electra), as phase0 validator.md places it; an item whose bytes do not hold those fields has subnet 0, and its gossip validation rejects it.
-  - Before the first: `seen` with fewer free `keys` entries than the operations gives `LANTERN_BUFFER_TOO_SMALL`, so that no check of a list adds to `seen` before one is short.
+  - Before the first: `seen` with fewer free `keys` entries than the operations (sync committee messages: `SYNC_COMMITTEE_SUBNET_COUNT` times their count) gives `LANTERN_BUFFER_TOO_SMALL`, so that no check of a list adds to `seen` before one is short.
 - `NODE_WORK_POOL_CHECK`: lantern_node_gossip of the fork of the store's slot of the topic `arg` for the bytes in `data`, as for `NODE_WORK_API_SUBMIT`, with an empty `Seen` at the end of `scratch` (lantern_seen_init of a `SeenRoom` of `keys` the bytes' length / 8 + 1, and no other room): its result's code is the event's result. A `scratch` without room for that `Seen` and `LANTERN_SCRATCH_FIXED` bytes before it, a lantern_node_gossip of `LANTERN_BUFFER_TOO_SMALL`, and a `state_a` of another fork than the store's slot give `LANTERN_GOSSIP_IGNORE`.
 - `NODE_WORK_API_EVENT`: the text of the event of the topic `arg` % 2^8 (beacon-api.md, eventstream), `event: <topic>` LF `data: <JSON>` LF LF, as a ByteList at `NodeEvent_chunk` of the event; the event's `size` then covers it.
   - head: lantern_node_event_roots of the fork of the slot of `state_a`, with the node's config: `block`, `state` and the two dependent roots; `slot` the state's; `epoch_transition` and `execution_optimistic` from `arg` / 2^8 (1 and 2).
@@ -962,6 +963,37 @@ lantern_node_data_root(data, scratch, root) -> status
 - Export: `lantern_<fork>_node_data_root` of each fork object.
 - Argument order: `data`, `scratch`, `root`.
 
+## Function `lantern_node_sync_subnets`
+
+compute_subnets_for_sync_committee (altair validator.md) of a validator (beacon-api.md, submitPoolSyncCommitteeSignatures).
+
+### Signature
+
+```
+lantern_node_sync_subnets(state, validator_index, out) -> status
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `state` | input | `BeaconState` |
+| `validator_index` | input | u64 |
+| `out` | output | u64: bit i for subnet i |
+
+### Returns
+
+- `LANTERN_OK`: `out` holds the subnets: the sync committee is `current_sync_committee` when the period of the state's epoch is that of the epoch of its slot + 1, else `next_sync_committee`; subnet i for each place p of the validator's public key in its `pubkeys` with p / (SYNC_COMMITTEE_SIZE / SYNC_COMMITTEE_SUBNET_COUNT) = i. 0 for an index past the validators, and before altair.
+
+### Tests
+
+- The node-api cases of submitPoolSyncCommitteeSignatures: their answers and publishes come from the spec module's compute_subnets_for_sync_committee.
+
+### ABI
+
+- Export: `lantern_<fork>_node_sync_subnets` of each fork object (asm/core/<ISA>/networking.s, beside the sync committee gossip checks).
+- Argument order: `state`, `validator_index`, `out`.
+
 ## Function `lantern_node_pending`
 
 The items of a pending list of a state (beacon-api.md, getPendingDeposits, getPendingPartialWithdrawals, getPendingConsolidations).
@@ -1158,6 +1190,7 @@ lantern_node_gossip(args, data, scratch, result, root, index) -> status
 - Bellatrix beacon_block: the justified state, or the head state with none.
 - A valid beacon_block: hash_tree_root of its message in `root`, the length of its body's `blob_kzg_commitments` (0 before deneb) in `index`.
 - A valid blob_sidecar or data_column_sidecar: hash_tree_root of its `signed_block_header.message` in `root`, its `index` in `index`.
+- A valid sync_committee message: in `root` four u64, its `slot`, 2^`subnet`, 0 and 0.
 - A valid beacon_attestation: in `root` four u64, its `data.slot`, its committee index (`data.index` before electra, `committee_index` from electra), its member and 0. The member, from electra: the place of `attester_index` in lantern_get_beacon_committee of the head state, that slot and that committee index (with the `CommitteeCache` of the config) + 2^16 times the committee's length; before electra 0. The spec's validation reads that committee of the head state too.
 - Decodes into the end of `scratch`; the scratch `size` is restored on return.
 
@@ -1603,7 +1636,7 @@ lantern_node_json(kind, ssz, cursor, out) -> status
 
 | Name | Role | Type |
 |---|---|---|
-| `kind` | input | u64: `NODE_JSON_BLOCK` (0) `SignedBeaconBlock`, `NODE_JSON_STATE` (1) `BeaconState`, `NODE_JSON_EXIT` (2) `SignedVoluntaryExit`, `NODE_JSON_PROPOSER_SLASHING` (3) `ProposerSlashing`, `NODE_JSON_ATTESTER_SLASHING` (4) `AttesterSlashing`, `NODE_JSON_BLS_CHANGE` (5) `SignedBLSToExecutionChange`, `NODE_JSON_ATTESTATION` (6) `Attestation`, `NODE_JSON_SINGLE_ATTESTATION` (7) `SingleAttestation`, `NODE_JSON_ATTESTATIONS` (8) `Attestations`, `NODE_JSON_BLINDED_BLOCK` (9) `SignedBlindedBeaconBlock` from bellatrix, `SignedBeaconBlock` before, `NODE_JSON_BLOB_SIDECAR` (10) `BlobSidecar` of deneb and electra, `NODE_JSON_DATA_COLUMN_SIDECAR` (11) `DataColumnSidecar` from fulu, `NODE_JSON_AGGREGATE_AND_PROOF` (12) `SignedAggregateAndProof` |
+| `kind` | input | u64: `NODE_JSON_BLOCK` (0) `SignedBeaconBlock`, `NODE_JSON_STATE` (1) `BeaconState`, `NODE_JSON_EXIT` (2) `SignedVoluntaryExit`, `NODE_JSON_PROPOSER_SLASHING` (3) `ProposerSlashing`, `NODE_JSON_ATTESTER_SLASHING` (4) `AttesterSlashing`, `NODE_JSON_BLS_CHANGE` (5) `SignedBLSToExecutionChange`, `NODE_JSON_ATTESTATION` (6) `Attestation`, `NODE_JSON_SINGLE_ATTESTATION` (7) `SingleAttestation`, `NODE_JSON_ATTESTATIONS` (8) `Attestations`, `NODE_JSON_BLINDED_BLOCK` (9) `SignedBlindedBeaconBlock` from bellatrix, `SignedBeaconBlock` before, `NODE_JSON_BLOB_SIDECAR` (10) `BlobSidecar` of deneb and electra, `NODE_JSON_DATA_COLUMN_SIDECAR` (11) `DataColumnSidecar` from fulu, `NODE_JSON_AGGREGATE_AND_PROOF` (12) `SignedAggregateAndProof`, `NODE_JSON_SYNC_COMMITTEE_MESSAGE` (13) `SyncCommitteeMessage` from altair |
 | `ssz` | input | ByteList: a valid SSZ encoding of the type |
 | `cursor` | state | `JsonCursor` of [beacon-api.md](beacon-api.md#type-jsoncursor) |
 | `out` | output | ByteList |
@@ -1742,13 +1775,13 @@ An operation of the pool (beacon-api.md, the pools).
 
 | Offset | Field | Type | Meaning |
 |---|---|---|---|
-| 0 | `topic` | u64 | `GOSSIP_VOLUNTARY_EXIT`, `GOSSIP_PROPOSER_SLASHING`, `GOSSIP_ATTESTER_SLASHING`, `GOSSIP_BLS_TO_EXECUTION_CHANGE` or `GOSSIP_BEACON_ATTESTATION`; 0 for a free entry |
+| 0 | `topic` | u64 | `GOSSIP_VOLUNTARY_EXIT`, `GOSSIP_PROPOSER_SLASHING`, `GOSSIP_ATTESTER_SLASHING`, `GOSSIP_BLS_TO_EXECUTION_CHANGE`, `GOSSIP_BEACON_ATTESTATION` or `GOSSIP_SYNC_COMMITTEE`; 0 for a free entry |
 | 8 | `state` | u64 | `NODE_POOL_KEPT` (1), or `NODE_POOL_CHECKING` (2) while its `NODE_WORK_POOL_CHECK` is queued |
 | 16 | `data_id` | u64 | `BufferId` of its SSZ bytes |
 | 24 | `length` | u64 | The bytes of its SSZ bytes |
 | 32 | `fork` | u64 | `FORK_*` of the type it was decoded with |
-| 40 | `slot` | u64 | An attestation: its `data.slot`; else 0 |
-| 48 | `index` | u64 | An attestation: its committee index; else 0 |
+| 40 | `slot` | u64 | An attestation: its `data.slot`; a sync committee message: its `slot`; else 0 |
+| 48 | `index` | u64 | An attestation: its committee index; a sync committee message: bit i for each subnet i it is valid on; else 0 |
 | 56 | `member` | u64 | A `SingleAttestation`: the attester's place in its committee + 2^16 times the committee's length; else 0 |
 
 ### Rules

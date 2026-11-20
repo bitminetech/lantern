@@ -644,13 +644,15 @@ LOCAL_FUNCTION node_pool_add
     ccmp    x0, #GOSSIP_ATTESTER_SLASHING, #4, ne
     ccmp    x0, #GOSSIP_BLS_TO_EXECUTION_CHANGE, #4, ne
     ccmp    x0, #GOSSIP_BEACON_ATTESTATION, #4, ne
+    ccmp    x0, #GOSSIP_SYNC_COMMITTEE, #4, ne
     b.ne    8f
-    LDQ     x12, x19, Node_p2p_out          /* the capacity, for an attestation 3/4 of it */
+    LDQ     x12, x19, Node_p2p_out          /* the capacity, for an attestation or a sync message 3/4 of it */
     LDQ     x13, x19, Node_pool
     sub     x12, x12, x13
     mov     x13, #NodePool__mem
     udiv    x14, x12, x13
     cmp     x0, #GOSSIP_BEACON_ATTESTATION
+    ccmp    x0, #GOSSIP_SYNC_COMMITTEE, #4, ne
     b.ne    11f
     add     x14, x14, x14, lsl #1
     lsr     x14, x14, #2
@@ -675,7 +677,8 @@ LOCAL_FUNCTION node_pool_add
     str     x1, [x9, #NodePool_data_id]
     str     x2, [x9, #NodePool_length]
     str     x3, [x9, #NodePool_fork]
-    cmp     x0, #GOSSIP_BEACON_ATTESTATION  /* an attestation's slot, index and member; else 0 */
+    cmp     x0, #GOSSIP_BEACON_ATTESTATION  /* an attestation's or a sync message's slot, index and member; else 0 */
+    ccmp    x0, #GOSSIP_SYNC_COMMITTEE, #4, ne
     csel    x12, x4, xzr, eq
     str     x12, [x9, #NodePool_slot]
     csel    x12, x5, xzr, eq
@@ -716,15 +719,17 @@ END_FUNCTION node_pool_drop
 
 /*
  * L1: at a new head, each attestation of the pool whose slot's epoch + 1 is below the epoch of
- * the store x20's slot goes; then each other entry in NODE_POOL_KEPT gets a NODE_WORK_POOL_CHECK
- * with the head's post-state x0, and takes NODE_POOL_CHECKING; with x0 = 0, none. Locals: the
- * state, the index, the epoch.
+ * the store x20's slot goes, and each sync committee message whose slot + 1 is below that slot;
+ * then each other entry in NODE_POOL_KEPT gets a NODE_WORK_POOL_CHECK with the head's post-state
+ * x0, and takes NODE_POOL_CHECKING; with x0 = 0, none. Locals: the state, the index, the epoch,
+ * the slot.
  */
 LOCAL_FUNCTION node_pool_checks
     FRAME 32
     str     x0, [sp, #16]
     mov     x0, x20
     bl      node_store_slot
+    str     x0, [sp, #40]
     mov     x10, #SLOTS_PER_EPOCH
     udiv    x9, x0, x10
     str     x9, [sp, #32]
@@ -736,7 +741,16 @@ LOCAL_FUNCTION node_pool_checks
     mov     x12, #NodePool__mem
     madd    x0, x9, x12, x10
     ldr     x12, [x0, #NodePool_topic]
-    cmp     x12, #GOSSIP_BEACON_ATTESTATION
+    cmp     x12, #GOSSIP_SYNC_COMMITTEE     /* a sync message: its slot + 1 below the store's slot */
+    b.ne    71f
+    ldr     x12, [x0, #NodePool_slot]
+    add     x12, x12, #1
+    ldr     x13, [sp, #40]
+    cmp     x12, x13
+    b.hs    7f
+    bl      node_pool_drop
+    b       7f
+71: cmp     x12, #GOSSIP_BEACON_ATTESTATION
     b.ne    7f
     ldr     x12, [x0, #NodePool_slot]
     mov     x13, #SLOTS_PER_EPOCH
@@ -761,6 +775,8 @@ LOCAL_FUNCTION node_pool_checks
     ldr     x12, [x10, #NodePool_topic]
     cbz     x12, 2f
     cmp     x12, #GOSSIP_BEACON_ATTESTATION
+    b.eq    2f
+    cmp     x12, #GOSSIP_SYNC_COMMITTEE
     b.eq    2f
     ldr     x12, [x10, #NodePool_state]
     cmp     x12, #NODE_POOL_KEPT

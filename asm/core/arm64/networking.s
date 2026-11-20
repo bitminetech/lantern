@@ -1696,6 +1696,39 @@ SPEC_FUNCTION validate_sync_committee_contribution_and_proof_gossip
 SPEC_END validate_sync_committee_contribution_and_proof_gossip
 .endif
 
+/*
+ * (state, validator_index, out) -> status: compute_subnets_for_sync_committee of the state for the
+ * validator (altair validator.md), bit i of the u64 out for subnet i; 0 for an index past the
+ * validators, and before altair.
+ */
+SPEC_LEAF node_sync_subnets
+    str     xzr, [x2]
+.if FORK >= FORK_ALTAIR
+    SYNC_COMMITTEE_OF x15, x0
+    add     x15, x15, #SyncCommittee_pubkeys
+    VALIDATOR_AT x14, x0, x1, 9f
+    add     x14, x14, #Validator_pubkey
+    mov     x3, #0
+    mov     x4, #0
+1:  cmp     x4, #SYNC_COMMITTEE_SIZE
+    b.hs    8f
+    mov     x9, #48
+    madd    x9, x4, x9, x15
+    EQ48    x9, x14, 2f
+    b       3f
+2:  mov     x9, #SYNC_SUBCOMMITTEE_SIZE
+    udiv    x9, x4, x9
+    mov     x10, #1
+    lsl     x10, x10, x9
+    orr     x3, x3, x10
+3:  add     x4, x4, #1
+    b       1b
+8:  str     x3, [x2]
+.endif
+9:  mov     x0, #LANTERN_OK
+    ret
+SPEC_END node_sync_subnets
+
 /* ---------------------------------------------------------------- Gossip: attester slashings */
 
 /*

@@ -6325,6 +6325,9 @@ LOCAL_FUNCTION node_submit_topic
     mov     $GOSSIP_BEACON_AGGREGATE_AND_PROOF, %eax
     cmp     $API_OP_PUBLISH_AGGREGATE_AND_PROOFS_V2, %rdi
     je      9f
+    mov     $GOSSIP_SYNC_COMMITTEE, %eax
+    cmp     $API_OP_SUBMIT_POOL_SYNC_COMMITTEE_SIGNATURES, %rdi
+    je      9f
     xor     %eax, %eax
 9:  ret
 END_FUNCTION node_submit_topic
@@ -7458,7 +7461,17 @@ LOCAL_FUNCTION node_api_submit_done
     mov     %rax, (L + 32)(%rsp)
     movq    $0, (L + 16)(%rsp)
     movq    $0, (L + 24)(%rsp)
-    cmpq    $GOSSIP_BEACON_ATTESTATION, S9(%rsp)
+    cmpq    $GOSSIP_SYNC_COMMITTEE, S9(%rsp)    # a sync message: its slot, its subnets
+    jne     24f
+    mov     24(%r13), %rax
+    lea     16(%r13,%rax), %rax
+    mov     (%rax), %rcx
+    mov     %rcx, (L + 16)(%rsp)
+    mov     8(%r13), %ecx
+    mov     %rcx, (L + 24)(%rsp)
+    movq    $0, (L + 32)(%rsp)
+    jmp     22f
+24: cmpq    $GOSSIP_BEACON_ATTESTATION, S9(%rsp)
     jne     22f
     mov     24(%r13), %rax
     lea     16(%r13,%rax), %rax
@@ -7485,10 +7498,25 @@ LOCAL_FUNCTION node_api_submit_done
     mov     %rax, L(%rsp)
     testq   $NODE_FLAG_SUBSCRIBED, Node_flags(%rbx) # NODE_FLAG_SUBSCRIBED: out on its topic, an attestation on its subnet
     jz      3f
+    cmpq    $GOSSIP_SYNC_COMMITTEE, S9(%rsp)
+    je      25f
     mov     S9(%rsp), %rdi
     lea     16(%r13), %rsi
     mov     8(%r13), %edx
     call    node_publish
+    jmp     3f
+25: movq    $0, (L + 40)(%rsp)              # a sync message: on each of its subnets
+26: mov     (L + 40)(%rsp), %rdx
+    cmp     $SYNC_COMMITTEE_SUBNET_COUNT, %rdx
+    jae     3f
+    mov     8(%r13), %eax
+    bt      %edx, %eax
+    jnc     27f
+    mov     S9(%rsp), %rdi
+    lea     16(%r13), %rsi
+    call    node_publish
+27: incq    (L + 40)(%rsp)
+    jmp     26b
 3:  cmpq    $GOSSIP_ATTESTER_SLASHING, S9(%rsp) # an attester slashing: on_attester_slashing with the justified root's state
     jne     4f
     lea     (Store_justified_checkpoint + 8)(%rbp), %rdi
@@ -7524,6 +7552,8 @@ LOCAL_FUNCTION node_api_submit_done
     cmp     $API_OP_SUBMIT_POOL_ATTESTATIONS_V2, %eax
     je      72f
     cmp     $API_OP_PUBLISH_AGGREGATE_AND_PROOFS_V2, %eax
+    je      72f
+    cmp     $API_OP_SUBMIT_POOL_SYNC_COMMITTEE_SIGNATURES, %eax
     je      72f
     cmp     $API_OP_SUBMIT_POOL_BLS_TO_EXECUTION_CHANGE, %eax
     jne     80f
@@ -7798,6 +7828,9 @@ LOCAL_FUNCTION node_api_submit_run
     cmp     $API_OP_PUBLISH_AGGREGATE_AND_PROOFS_V2, %edi
     sete    %cl
     or      %cl, %al
+    cmp     $API_OP_SUBMIT_POOL_SYNC_COMMITTEE_SIGNATURES, %edi
+    sete    %cl
+    or      %cl, %al
     mov     %rax, (L + 40)(%rsp)
     call    node_submit_topic
     test    %rax, %rax
@@ -7807,7 +7840,11 @@ LOCAL_FUNCTION node_api_submit_run
     jne     14f
     mov     $NODE_JSON_AGGREGATE_AND_PROOF, %eax
     jmp     13f
-14: cmp     $GOSSIP_BEACON_ATTESTATION, %rax    # an attestation: of the fork's type
+14: cmp     $GOSSIP_SYNC_COMMITTEE, %rax    # a sync message: SyncCommitteeMessage
+    jne     15f
+    mov     $NODE_JSON_SYNC_COMMITTEE_MESSAGE, %eax
+    jmp     13f
+15: cmp     $GOSSIP_BEACON_ATTESTATION, %rax    # an attestation: of the fork's type
     jne     12f
     mov     $NODE_JSON_ATTESTATION, %eax
     mov     $NODE_JSON_SINGLE_ATTESTATION, %ecx
@@ -8022,12 +8059,16 @@ LOCAL_FUNCTION node_api_submit_run
     mov     %rax, (NodeEvent_chunk + 16)(%rdi)
     mov     (L + 32)(%rsp), %rax
     mov     %rax, NodeEvent_index(%rdi)
-    mov     L(%rsp), %rdi                   # seen has a key free for each operation
+    mov     L(%rsp), %rdi                   # seen has a key free for each operation, for a sync message one a subnet
     mov     Seen_bits(%rdi), %rax
     sub     Seen_keys(%rdi), %rax
     shr     $5, %rax
     sub     (Seen_keys + 8)(%rdi), %rax
-    cmp     (L + 32)(%rsp), %rax
+    mov     (L + 32)(%rsp), %rcx
+    cmpq    $GOSSIP_SYNC_COMMITTEE, (L + 16)(%rsp)
+    jne     301f
+    imul    $SYNC_COMMITTEE_SUBNET_COUNT, %rcx, %rcx
+301: cmp    %rcx, %rax
     jb      97f
     mov     L(%rsp), %rax                   # the NodeGossip of the operations
     mov     %rax, (L + 64 + NodeGossip_seen)(%rsp)
@@ -8050,6 +8091,8 @@ LOCAL_FUNCTION node_api_submit_run
     je      39f
     mov     S9(%rsp), %rcx                  # the subnet: 0, but an attestation's
     movq    $0, 8(%rcx)
+    cmpq    $GOSSIP_SYNC_COMMITTEE, (L + 16)(%rsp)
+    je      36f
     cmpq    $GOSSIP_BEACON_ATTESTATION, (L + 16)(%rsp)
     jne     33f
     mov     32(%rcx), %rax
@@ -8117,6 +8160,65 @@ LOCAL_FUNCTION node_api_submit_run
     mov     %rcx, S9(%rsp)
     decq    (L + 32)(%rsp)
     jmp     31b
+36: mov     $-1, %rsi                       # a sync message: its check on each subnet of compute_subnets_for_sync_committee
+    cmpq    $144, 32(%rcx)
+    jne     361f
+    mov     (40 + 40)(%rcx), %rsi           # validator_index
+361: mov    %r13, %rdi
+    lea     (L + 48)(%rsp), %rdx
+    mov     (L + 24)(%rsp), %r10
+    FORK_CALL node_sync_subnets
+    test    %rax, %rax
+    jnz     99f
+    movq    $0, (L + 144)(%rsp)             # the valid subnets, a reject, the subnet
+    movq    $0, (L + 152)(%rsp)
+    movq    $0, (L + 160)(%rsp)
+    cmpq    $0, (L + 48)(%rsp)
+    jne     37f
+    movq    $1, (L + 48)(%rsp)              # none: the check on subnet 0, which it fails
+37: mov     (L + 160)(%rsp), %rax
+    cmp     $SYNC_COMMITTEE_SUBNET_COUNT, %rax
+    jae     38f
+    mov     (L + 48)(%rsp), %rdx
+    bt      %rax, %rdx
+    jnc     371f
+    mov     %rax, (L + 64 + NodeGossip_subnet)(%rsp)
+    mov     (L + 24)(%rsp), %r10
+    lea     (L + 64)(%rsp), %rdi
+    mov     S9(%rsp), %rcx
+    lea     16(%rcx), %rsi
+    mov     %r15, %rdx
+    lea     (L + 304)(%rsp), %r9
+    lea     (L + 272)(%rsp), %r8
+    FORK_CALL node_gossip
+    test    %rax, %rax
+    jnz     99f
+    mov     S9(%rsp), %rcx
+    mov     (%rcx), %rax
+    test    %rax, %rax
+    jnz     372f
+    mov     (L + 160)(%rsp), %rdx           # valid: its bit
+    mov     (L + 144)(%rsp), %rax
+    bts     %rdx, %rax
+    mov     %rax, (L + 144)(%rsp)
+    jmp     371f
+372: cmp    $LANTERN_GOSSIP_REJECT, %rax
+    jne     371f
+    mov     %rax, (L + 152)(%rsp)
+371: incq   (L + 160)(%rsp)
+    jmp     37b
+38: mov     S9(%rsp), %rcx                  # valid on a subnet; else a reject; else the last code
+    mov     (L + 144)(%rsp), %rax
+    mov     %rax, 8(%rcx)
+    test    %rax, %rax
+    jz      381f
+    movq    $0, (%rcx)
+    jmp     35b
+381: mov    (L + 152)(%rsp), %rax
+    test    %rax, %rax
+    jz      35b
+    mov     %rax, (%rcx)
+    jmp     35b
 39: xor     %eax, %eax
     LEAVE 320
 90: mov     S7(%rsp), %rcx                  # a body that is no such text

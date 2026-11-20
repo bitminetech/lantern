@@ -389,7 +389,8 @@ VALIDATOR_OPS = ("getStateValidators", "postStateValidators", "getStateValidator
 POOL_GETS = ("getPoolVoluntaryExits", "getPoolProposerSlashings", "getPoolAttesterSlashingsV2",
              "getPoolBLSToExecutionChanges", "getPoolAttestationsV2")
 POOL_POSTS = ("submitPoolVoluntaryExit", "submitPoolProposerSlashings", "submitPoolAttesterSlashingsV2",
-              "submitPoolBLSToExecutionChange", "submitPoolAttestationsV2", "publishAggregateAndProofsV2")
+              "submitPoolBLSToExecutionChange", "submitPoolAttestationsV2", "publishAggregateAndProofsV2",
+              "submitPoolSyncCommitteeSignatures")
 PENDING = {"getPendingDeposits": "pending_deposits", "getPendingPartialWithdrawals": "pending_partial_withdrawals",
            "getPendingConsolidations": "pending_consolidations"}
 ANSWERED = ("getHealth", "getNetworkIdentity", "getNodeVersion", "getSyncingStatus", "getPeerCount", "getGenesis",
@@ -1042,7 +1043,7 @@ def pool_requests(spec, fork, v, by_name, add):
     epoch = int(spec.get_current_epoch(state))
     capella = FORKS.index(fork) >= FORKS.index("capella")
     electra = FORKS.index(fork) >= FORKS.index("electra")
-    pool = {"exit": [], "proposer": [], "attester": [], "bls": [], "attestation": [], "aggregate": []}
+    pool = {"exit": [], "proposer": [], "attester": [], "bls": [], "attestation": [], "aggregate": [], "sync": []}
 
     def validate(kind, op):
         if kind == "exit":
@@ -1055,6 +1056,14 @@ def pool_requests(spec, fork, v, by_name, add):
             return gossip_result(spec, spec.validate_beacon_attestation_gossip, seen, store, op, time_ms, subnet_of(op))
         if kind == "aggregate":
             return gossip_result(spec, spec.validate_beacon_aggregate_and_proof_gossip, seen, store, op, time_ms)
+        if kind == "sync":  # each subnet of compute_subnets_for_sync_committee, else subnet 0 (beacon-api.md)
+            head = spec.get_head(store)
+            hs = store.block_states[getattr(head, "root", head)]
+            subnets = sorted(spec.compute_subnets_for_sync_committee(hs, op.validator_index)) \
+                if op.validator_index < len(hs.validators) else []
+            results = [gossip_result(spec, spec.validate_sync_committee_message_gossip, seen, store, op, time_ms, n)
+                       for n in subnets or [0]]
+            return "VALID" if "VALID" in results else "REJECT" if "REJECT" in results else results[-1]
         return gossip_result(spec, spec.validate_bls_to_execution_change_gossip, seen, store, op, time_ms)
 
     def bad_request(close, keep_alive, failures=None):
@@ -1329,6 +1338,39 @@ def pool_requests(spec, fork, v, by_name, add):
            single=False, headers=att_version, content_type=b"application/octet-stream")
     if rejected != ("bad", [0]) or len(pool["aggregate"]) != 2:
         raise RuntimeError("aggregate POSTs: the cases need two valid aggregates and one rejected")
+
+    # submitPoolSyncCommitteeSignatures, from altair: messages of the store's slot for the head of
+    # members of the head state's sync committee: two valid, one again (seen), one with another key's
+    # signature and a valid one, one of a validator outside the committee, and of no message
+    if FORKS.index(fork) >= FORKS.index("altair"):
+        head = spec.get_head(store)
+        hs = store.block_states[getattr(head, "root", head)]
+        msg_slot = int(spec.get_current_slot(store))
+        by_key = {bytes(val.pubkey): i for i, val in enumerate(hs.validators)}
+        members = list(dict.fromkeys(by_key[bytes(k)] for k in hs.current_sync_committee.pubkeys))
+        outside = next(i for i in range(len(hs.validators)) if i not in members)
+        domain = spec.get_domain(hs, spec.DOMAIN_SYNC_COMMITTEE, spec.compute_epoch_at_slot(msg_slot))
+
+        def sync_msg(index, key_index):
+            sig = bls.Sign(KEYS.privkeys[key_index], spec.compute_signing_root(spec.Root(v["root"]), domain))
+            return spec.SyncCommitteeMessage(slot=msg_slot, beacon_block_root=v["root"], validator_index=index,
+                                             signature=sig)
+        if len(members) < 4:
+            raise RuntimeError("sync POSTs: the cases need four members of the sync committee")
+        two_sync = [sync_msg(members[0], members[0]), sync_msg(members[1], members[1])]
+        submit("sync_post", "submitPoolSyncCommitteeSignatures", "sync", two_sync, json_list(two_sync), single=False)
+        submit("sync_post_again", "submitPoolSyncCommitteeSignatures", "sync", two_sync[:1], json_list(two_sync[:1]),
+               single=False)
+        bad_sync = [sync_msg(members[2], members[3]), sync_msg(members[3], members[3])]
+        r1 = submit("sync_post_other_key", "submitPoolSyncCommitteeSignatures", "sync", bad_sync, json_list(bad_sync),
+                    single=False)
+        out_sync = [sync_msg(outside, outside)]
+        r2 = submit("sync_post_outside", "submitPoolSyncCommitteeSignatures", "sync", out_sync, json_list(out_sync),
+                    single=False)
+        submit("sync_post_no_message", "submitPoolSyncCommitteeSignatures", "sync", None, b'[{"slot":"1"}]',
+               single=False)
+        if r1 != ("bad", [0]) or r2 != ("bad", [0]) or len(pool["sync"]) != 3:
+            raise RuntimeError("sync POSTs: the cases need three valid messages and two rejected")
     # with the store's nodes NOT_VALIDATED (syncing bit 1): the aggregate's beacon_block_root, 503
     add("aggregate_not_validated", agg_request(data_root, first_slot, first_index), syncing=2,
         want=lambda c, k: error(503, close=c, keep_alive=k))
