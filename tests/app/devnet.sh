@@ -29,7 +29,10 @@
 # block headers must have a proposer index of 64 or more (blocks lantern produced). CLIENT: lighthouse,
 # prysm, teku, nimbus or lodestar. DIFF=1: 6-second slots; after lantern follows, once the client's
 # finalized epoch is 2 or more and lantern's has reached it, tests/app/differential.py compares their
-# reads of the client's finalized block.
+# reads of the client's finalized block. SYNC=1: 6-second slots, lantern with --supernode; 600 s after
+# it starts, a geth and a lighthouse beacon node whose one boot node is lantern's multiaddr
+# (tests/kurtosis/main.star); that lighthouse must sync from genesis to within 2 slots of the client's
+# head, on a block of the client's chain, within SECONDS, with lantern its one peer at every check.
 set -eu
 root=$(cd "$(dirname "$0")/../.." && pwd)
 client=$1
@@ -67,7 +70,7 @@ lantern_image: $image
 lantern_max_cpu: ${LANTERN_MAX_CPU:-0}
 lantern_delay: ${LANTERN_DELAY:-0}
 EOF
-if [ "${RESTART:-0}" = 1 ] || [ "${CHECKPOINT:-0}" = 1 ] || [ "${FORK:-0}" = 1 ] || [ "${ASSERTOOR:-0}" = 1 ] || [ "$vc" = 1 ] || [ "${DIFF:-0}" = 1 ]; then
+if [ "${RESTART:-0}" = 1 ] || [ "${CHECKPOINT:-0}" = 1 ] || [ "${FORK:-0}" = 1 ] || [ "${ASSERTOOR:-0}" = 1 ] || [ "$vc" = 1 ] || [ "${DIFF:-0}" = 1 ] || [ "${SYNC:-0}" = 1 ]; then
     printf 'network_params:\n  seconds_per_slot: 6\n' >> "$work/args.yaml"
 fi
 # Assertoor: exits at once (shard_committee_period 1), and two validators of the mnemonic past the
@@ -85,6 +88,9 @@ fi
 if [ "${RESTART:-0}" = 1 ] || [ "${CHECKPOINT:-0}" = 1 ]; then printf 'lantern_data_dir: /data\n' >> "$work/args.yaml"; fi
 if [ "${CHECKPOINT:-0}" = 1 ]; then printf 'lantern_checkpoint: true\n' >> "$work/args.yaml"; fi
 if [ "${ASSERTOOR:-0}" = 1 ]; then printf 'lantern_assertoor: true\n' >> "$work/args.yaml"; fi
+if [ "${SYNC:-0}" = 1 ]; then
+    printf 'lantern_sync: true\nlantern_sync_el_image: %s\nlantern_sync_cl_image: %s\n' "$geth_image" "$(client_image lighthouse)" >> "$work/args.yaml"
+fi
 if [ "$vc" = 1 ]; then printf 'lantern_vc: %s\nlantern_vc_image: %s\n' "$client" "$(validator_image "$client")" >> "$work/args.yaml"; fi
 
 cleanup() {
@@ -96,6 +102,11 @@ cleanup() {
     if [ "${ASSERTOOR:-0}" = 1 ]; then
         echo "== assertoor"
         $kurtosis service logs -a $enclave assertoor 2>&1 | grep -i "error\|fail\|warn" | tail -40 || true
+    fi
+    if [ "${SYNC:-0}" = 1 ]; then
+        echo "== sync-cl"
+        $kurtosis service logs -a $enclave sync-cl 2>&1 | grep -i "error\|crit\|warn" | tail -30 || true
+        $kurtosis service logs -a $enclave sync-cl 2>&1 | tail -15 || true
     fi
     if [ "$vc" = 1 ]; then
         echo "== lantern-vc"
@@ -222,6 +233,33 @@ if [ $status -eq 0 ] && [ "${DIFF:-0}" = 1 ]; then
     else
         echo "FAIL no finalized epoch 2 on both nodes"
     fi
+fi
+if [ $status -eq 0 ] && [ "${SYNC:-0}" = 1 ]; then
+    # the lighthouse that syncs from lantern alone: its peers, its head against the client's
+    lantern_id=$(curl -s --max-time 5 "$lantern/eth/v1/node/identity" | python3 -c 'import json, sys; print(json.load(sys.stdin)["data"]["peer_id"])')
+    status=1
+    waited=0
+    while [ $waited -lt "$secs" ]; do
+        sync=$(url sync-cl 2>/dev/null || true)
+        if [ -n "$sync" ]; then
+            others=$(curl -s --max-time 5 "$sync/eth/v1/node/peers?state=connected" | python3 -c '
+import json, sys
+try:
+    print(" ".join(p["peer_id"] for p in json.load(sys.stdin)["data"] if p["peer_id"] != sys.argv[1]))
+except Exception:
+    pass' "$lantern_id")
+            [ -z "$others" ] || { echo "FAIL the syncing lighthouse has peers other than lantern: $others"; break; }
+            set -- $(node_head "$sync") $(node_head "$peer")
+            if [ $# -eq 4 ]; then
+                echo "syncing lighthouse slot $1, $client slot $3"
+                if [ $(($3 - $1)) -le 2 ] && [ "$(curl -s -o /dev/null -w '%{http_code}' --max-time 3 "$peer/eth/v1/beacon/headers/$2")" = 200 ]; then
+                    status=0; break
+                fi
+            fi
+        fi
+        sleep 30; waited=$((waited + 30))
+    done
+    if [ $status -eq 0 ]; then echo "PASS lighthouse syncs from lantern alone"; else echo "FAIL lighthouse does not sync from lantern alone"; fi
 fi
 if [ $status -eq 0 ] && [ "$vc" = 1 ]; then
     # finality, which needs the attestations of lantern's validators; then the blocks they proposed
