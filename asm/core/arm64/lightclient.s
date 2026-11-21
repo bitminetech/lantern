@@ -679,3 +679,74 @@ SPEC_FUNCTION lc_object
     LEAVE 0
 .endif
 SPEC_END lc_object
+
+/*
+ * (block, scratch, out) -> status: the LightClientHeader of a BeaconBlock value (light-client.md): its
+ * SSZ bytes as the message of a SignedBeaconBlock with a zero signature at the end of scratch, then
+ * lantern_block_to_light_client_header. x19 block, x20 scratch, x21 out, x22 the scratch's size on
+ * entry, x23 the SignedBeaconBlock ByteList, x24 the block's SSZ bytes. Locals: L the serialized size.
+ */
+SPEC_FUNCTION lc_anchor_header
+    ENTER 16
+    mov     x19, x0
+    mov     x20, x1
+    mov     x21, x2
+    ldr     x22, [x20]
+    ADDRESS x0, lantern_type_BeaconBlock
+    mov     x1, x19
+    mov     x2, x20
+    add     x3, sp, #L
+    CALL_GLOBAL ssz_serialize_size
+    str     x22, [x20]
+    cmp     x0, #SSZ_BUFFER_TOO_SMALL
+    b.eq    98f
+    cbnz    x0, 96f
+    ldr     x9, [sp, #L]                    /* the SignedBeaconBlock at the end of scratch: 104 bytes, then the serialized ByteList */
+    add     x9, x9, #(104 + 7)
+    and     x9, x9, #~7
+    subs    x10, x22, x9
+    b.lo    98f
+    cmp     x10, #4096
+    b.lo    98f
+    add     x23, x20, x10
+    str     x10, [x20]
+    add     x3, x23, #104
+    ldr     x9, [sp, #L]
+    str     x9, [x3]
+    ADDRESS x0, lantern_type_BeaconBlock
+    mov     x1, x19
+    mov     x2, x20
+    CALL_GLOBAL ssz_serialize
+    cbnz    x0, 97f
+    ldr     x24, [x23, #(104 + 16)]         /* its bytes down 4, after the 100 of the fixed part */
+    add     x0, x23, #124
+    add     x1, x23, #128
+    mov     x2, x24
+    bl      lantern_copy
+    add     x0, x23, #28
+    mov     x1, #96
+    bl      lantern_zero
+    mov     w9, #100
+    str     w9, [x23, #24]
+    add     x9, x24, #(24 + 100)
+    mov     x10, #24
+    add     x11, x24, #100
+    stp     x9, x10, [x23]
+    str     x11, [x23, #16]
+    mov     x0, x23
+    mov     x1, x20
+    mov     x2, x21
+    bl      lantern_block_to_light_client_header
+    str     x22, [x20]
+    LEAVE 16
+96: mov     x0, #LANTERN_INVALID_ENCODING
+    LEAVE 16
+97: str     x22, [x20]
+    cmp     x0, #SSZ_BUFFER_TOO_SMALL
+    b.eq    98f
+    mov     x0, #LANTERN_INVALID_ENCODING
+    LEAVE 16
+98: str     x22, [x20]
+    mov     x0, #LANTERN_BUFFER_TOO_SMALL
+    LEAVE 16
+SPEC_END lc_anchor_header

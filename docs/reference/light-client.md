@@ -10,6 +10,7 @@
 - [`lantern_block_to_light_client_header`](#function-lantern_block_to_light_client_header): the `LightClientHeader` of a block.
 - [`lantern_upgrade_lc_header`](#function-lantern_upgrade_lc_header): a `LightClientHeader` of an earlier fork as one of the fork.
 - [`lantern_lc_object`](#function-lantern_lc_object): the SSZ bytes of a light client object from its parts.
+- [`lantern_lc_anchor_header`](#function-lantern_lc_anchor_header): the `LightClientHeader` of a block's value.
 - [`lantern_lc_store_size`](#function-lantern_lc_store_size): the bytes of an `LcStore`.
 - [`lantern_lc_store_init`](#function-lantern_lc_store_init): an `LcStore` at an anchor.
 - [`lantern_lc_store_copy`](#function-lantern_lc_store_copy): an `LcStore` in a new buffer.
@@ -317,6 +318,44 @@ lantern_lc_object(kind, parts, out) -> status
 - Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
 - Argument order: `kind`, `parts`, `out`.
 
+## Function `lantern_lc_anchor_header`
+
+The `LightClientHeader` of a `BeaconBlock` value: lantern_block_to_light_client_header of the `SignedBeaconBlock` of the block with a zero signature.
+
+### Signature
+
+```
+lantern_lc_anchor_header(block, scratch, out) -> status
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `block` | input | `BeaconBlock` of the fork |
+| `scratch` | scratch | `Scratch` |
+| `out` | output | ByteList: as lantern_block_to_light_client_header's |
+
+### Returns
+
+- As lantern_block_to_light_client_header; `LANTERN_BUFFER_TOO_SMALL` also when `scratch` cannot hold the block's SSZ bytes with those of lantern_block_to_light_client_header.
+
+### Function does
+
+- ssz_serialize of the fork's `BeaconBlock` at the end of `scratch`, after the 100 bytes of a `SignedBeaconBlock`'s fixed part (the offset 100, a zero signature), then lantern_block_to_light_client_header of those bytes with the rest of `scratch`. The signature is no field of the header.
+- Restores the `size` field of `scratch`.
+
+### Function never
+
+- Writes outside `scratch`, `out` and its own stack.
+
+### ABI
+
+- Role: L1.
+- Symbol: `lantern_<fork>_lc_anchor_header` of each fork object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- Argument order: `block`, `scratch`, `out`.
+
 ## Function `lantern_lc_store_size`
 
 The bytes of an `LcStore` whose parts have the capacities of an `LcRoom`.
@@ -362,7 +401,7 @@ lantern_lc_store_init(room, config, state, block, scratch, lc) -> status
 | `room` | input | `LcRoom` |
 | `config` | input | `Config` |
 | `state` | input | `BeaconState` of the fork of its slot: the anchor state |
-| `block` | input | ByteList: the SSZ bytes of a `SignedBeaconBlock` of the same fork, whose message is the anchor state's block |
+| `block` | input | `BeaconBlock` of the same fork: the anchor state's block, as lantern_node_anchor or lantern_node_anchor_block gives it |
 | `scratch` | scratch | `Scratch` |
 | `lc` | output | `LcStore`, its `size` set by the caller |
 
@@ -370,14 +409,13 @@ lantern_lc_store_init(room, config, state, block, scratch, lc) -> status
 
 - `LANTERN_OK`: `lc` holds the store.
 - `LANTERN_BUFFER_TOO_SMALL`: `lc` is below lantern_lc_store_size of `room`, a capacity of `room` is below 2, or `scratch` is short (as lantern_lc_on_block).
-- `LANTERN_INVALID_ENCODING`: `block` is no SSZ encoding of the type.
 - `LANTERN_INVALID_OVERFLOW`: as lantern_lc_store_size.
 
 ### Function does
 
 - `tail_slot`: the higher of the state's slot and the first slot of `ALTAIR_FORK_EPOCH`. `historical_tail_slot`: the state's slot.
 - `latest_finalized_epoch`: the epoch of the state's `finalized_checkpoint`; `latest_finalized_slot`: that epoch's first slot; `latest_finalized_root`: its root. `latest`: none.
-- The block's `LcBlock`, as lantern_lc_on_block makes one, and an `LcFinalized` of its slot and root.
+- The block's `LcBlock`, as lantern_lc_on_block makes one, its header lantern_lc_anchor_header of the fork of the state's slot, and an `LcFinalized` of its slot and root.
 - From altair: the entry's data from the state (its branches, committees and `finalized_slot`), no best update, `latest_signature_slot` `GENESIS_SLOT`; and its `LcBootstrap`.
 - Every record of the other capacities is `LC_FREE`.
 
@@ -770,6 +808,7 @@ An update, or a finality update.
   - `new_block`: the block's state transition on its parent's post-state, the state crossing each fork boundary before it (process_slots to the fork's first slot, then lantern_node_upgrade); then lantern_lc_on_block.
   - `new_head`: lantern_lc_on_head with the `finalized_checkpoint` of the head's post-state; then the checks: lantern_lc_read of each bootstrap's root and each period of `best_updates`, and of the latest finality and optimistic updates, must give the case's bytes, or `LANTERN_NO_STATE_ANSWER` where the case has none; each object's fork must be that of its `fork_digest`; `latest_finalized_epoch` and `latest_finalized_root` must be `latest_finalized_checkpoint`.
   - The runner starts with capacities of 2 and grows a part with lantern_lc_store_copy when a function gives `LANTERN_BUFFER_TOO_SMALL`, then calls it again; the store must hold the same data after it.
+  - After the steps, a node of the case's anchor serves a copy of the store (node.md, `NODE_WORK_LC_SERVE`) to the runner's peer: the light client checks of node.md's test vectors, with the bootstraps of the anchor's root and of up to 7 blocks of the case.
 - Not run: `light_client/sync`, the light client's own sync (lantern is a beacon node).
 
 ## Results

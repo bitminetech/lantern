@@ -728,7 +728,10 @@ LOCAL_FUNCTION lc_add_block
     jae     98f
     cmpq    $LC_COMPARE_SCRATCH, (%r15)
     jb      98f
-    mov     8(%r13), %rax                   # the block's slot, for its fork
+    mov     NODE_STATE_SLOT(%r12), %rdi     # the anchor: the fork of the state's slot
+    cmpq    $0, L(%rsp)
+    jne     5f
+    mov     8(%r13), %rax                   # else the block's slot, for its fork
     add     %r13, %rax
     mov     16(%r13), %rcx
     cmp     $4, %rcx
@@ -738,8 +741,7 @@ LOCAL_FUNCTION lc_add_block
     cmp     %rcx, %rsi
     ja      96f
     mov     (%rax,%rdx), %rdi
-    mov     %rdi, (L + 8)(%rsp)
-    mov     %rbp, %rsi
+5:  mov     %rbp, %rsi
     call    node_fork
     mov     %rax, S8(%rsp)
     mov     %rbx, %rdi                      # the header
@@ -761,14 +763,20 @@ LOCAL_FUNCTION lc_add_block
     mov     %r13, %rdi
     mov     %r15, %rsi
     mov     S8(%rsp), %r10
+    cmpq    $0, L(%rsp)
+    jne     6f
     FORK_CALL block_to_light_client_header
-    test    %rax, %rax
+    jmp     7f
+6:  FORK_CALL lc_anchor_header              # the anchor: of its block's value
+7:  test    %rax, %rax
     jnz     90f
-    mov     (L + 72)(%rsp), %rax            # the root: of the header's beacon
+    mov     (L + 72)(%rsp), %rax            # the root: of the header's beacon; the slot its slot
     add     $LcHeader_header, %rax
     mov     8(%rax), %rcx
     lea     (%rax,%rcx), %rdi
     mov     %rdi, (L + 16)(%rsp)
+    mov     (%rdi), %rcx
+    mov     %rcx, (L + 8)(%rsp)
     lea     (L + 24)(%rsp), %rsi
     call    lc_beacon_root
     mov     %rbx, %rdi
@@ -801,7 +809,9 @@ LOCAL_FUNCTION lc_add_block
     mov     S7(%rsp), %rdi
     mov     %rax, LcBlock_parent(%rdi)
     mov     %rax, (L + 56)(%rsp)
-    cmpq    $FORK_ALTAIR, S8(%rsp)          # from altair: the body's sync_aggregate
+    cmpq    $0, L(%rsp)                     # from altair, but the anchor: the body's sync_aggregate
+    jne     10f
+    cmpq    $FORK_ALTAIR, S8(%rsp)
     jb      10f
     mov     8(%r13), %rax
     add     %r13, %rax

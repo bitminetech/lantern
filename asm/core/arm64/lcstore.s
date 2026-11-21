@@ -757,7 +757,10 @@ LOCAL_FUNCTION lc_add_block
     MOVQ    x10, LC_COMPARE_SCRATCH
     cmp     x9, x10
     b.lo    98f
-    ldr     x9, [x22, #8]                   /* the block's slot, for its fork */
+    ldr     x0, [x21, #NODE_STATE_SLOT]     /* the anchor: the fork of the state's slot */
+    ldr     x9, [sp, #L]
+    cbnz    x9, 5f
+    ldr     x9, [x22, #8]                   /* else the block's slot, for its fork */
     add     x9, x22, x9
     ldr     x10, [x22, #16]
     cmp     x10, #4
@@ -767,8 +770,7 @@ LOCAL_FUNCTION lc_add_block
     cmp     x12, x10
     b.hi    96f
     ldr     x0, [x9, x11]
-    str     x0, [sp, #(L + 8)]
-    mov     x1, x20
+5:  mov     x1, x20
     bl      node_fork
     mov     x26, x0
     mov     x0, x19                         /* the header */
@@ -790,13 +792,19 @@ LOCAL_FUNCTION lc_add_block
     mov     x0, x22
     mov     x1, x24
     mov     x15, x26
+    ldr     x9, [sp, #L]
+    cbnz    x9, 6f
     FORK_CALL block_to_light_client_header
-    cbnz    x0, 90f
-    ldr     x9, [sp, #(L + 72)]             /* the root: of the header's beacon */
+    b       7f
+6:  FORK_CALL lc_anchor_header              /* the anchor: of its block's value */
+7:  cbnz    x0, 90f
+    ldr     x9, [sp, #(L + 72)]             /* the root: of the header's beacon; the slot its slot */
     add     x9, x9, #LcHeader_header
     ldr     x10, [x9, #8]
     add     x0, x9, x10
     str     x0, [sp, #(L + 16)]
+    ldr     x9, [x0]
+    str     x9, [sp, #(L + 8)]
     add     x1, sp, #(L + 24)
     bl      lc_beacon_root
     mov     x0, x19
@@ -825,7 +833,9 @@ LOCAL_FUNCTION lc_add_block
     bl      lc_find_block
     str     x0, [x25, #LcBlock_parent]
     str     x0, [sp, #(L + 56)]
-    cmp     x26, #FORK_ALTAIR               /* from altair: the body's sync_aggregate */
+    ldr     x9, [sp, #L]                    /* from altair, but the anchor: the body's sync_aggregate */
+    cbnz    x9, 10f
+    cmp     x26, #FORK_ALTAIR
     b.lo    10f
     ldr     x9, [x22, #8]
     add     x9, x22, x9

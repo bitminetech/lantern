@@ -732,7 +732,10 @@ LOCAL_FUNCTION lc_add_block
     ld      t0, 0(s6)
     li      t1, LC_COMPARE_SCRATCH
     bltu    t0, t1, 98f
-    ld      t0, 8(s4)                       # the block's slot, for its fork
+    ld      a0, NODE_STATE_SLOT(s3)         # the anchor: the fork of the state's slot
+    ld      t0, L(sp)
+    bnez    t0, 5f
+    ld      t0, 8(s4)                       # else the block's slot, for its fork
     add     t0, s4, t0
     ld      t1, 16(s4)
     li      t2, 4
@@ -742,8 +745,7 @@ LOCAL_FUNCTION lc_add_block
     bltu    t1, t3, 96f
     add     t0, t0, t2
     LCS_LD64 a0, t0
-    sd      a0, (L + 8)(sp)
-    mv      a1, s2
+5:  mv      a1, s2
     call    node_fork
     mv      s8, a0
     mv      a0, s1                          # the header
@@ -766,13 +768,19 @@ LOCAL_FUNCTION lc_add_block
     mv      a0, s4
     mv      a1, s6
     mv      t6, s8
+    ld      t0, L(sp)
+    bnez    t0, 6f
     FORK_CALL block_to_light_client_header
-    bnez    a0, 90f
-    ld      t0, (L + 72)(sp)                # the root: of the header's beacon
+    j       7f
+6:  FORK_CALL lc_anchor_header              # the anchor: of its block's value
+7:  bnez    a0, 90f
+    ld      t0, (L + 72)(sp)                # the root: of the header's beacon; the slot its slot
     addi    t0, t0, LcHeader_header
     ld      t1, 8(t0)
     add     a0, t0, t1
     sd      a0, (L + 16)(sp)
+    ld      t1, 0(a0)
+    sd      t1, (L + 8)(sp)
     addi    a1, sp, (L + 24)
     call    lc_beacon_root
     mv      a0, s1
@@ -800,7 +808,9 @@ LOCAL_FUNCTION lc_add_block
     call    lc_find_block
     sd      a0, LcBlock_parent(s7)
     sd      a0, (L + 56)(sp)
-    li      t0, FORK_ALTAIR                 # from altair: the body's sync_aggregate
+    ld      t0, L(sp)                       # from altair, but the anchor: the body's sync_aggregate
+    bnez    t0, 10f
+    li      t0, FORK_ALTAIR
     bltu    s8, t0, 10f
     ld      t0, 8(s4)
     add     t0, s4, t0

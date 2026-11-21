@@ -228,7 +228,7 @@ FUNCTION lantern_node_init
     addi    a0, s6, 8                       # the fixed fields: zero, then set
     li      a1, NODE_FIXED - 8
     call    lantern_zero
-    li      t0, 2
+    li      t0, 3                           # 1 the anchor state, 2 the light client store
     sd      t0, Node_next_id(s6)
     li      t0, 1
     sd      t0, Node_anchor_state_id(s6)
@@ -4054,10 +4054,19 @@ LOCAL_FUNCTION node_event
     sd      t0, NodeAction_state_c(a0)
     LEAVE 48
 51: bnez    t1, 52f
-    li      t0, NODE_BLOCK_IMPORTED         # imported: the block event, its votes, then its waiting children
+    li      t0, NODE_BLOCK_IMPORTED         # imported: the block event, its light client data, its votes, then its waiting children
     sd      t0, NodeBlock_status(s4)
     mv      a0, s4
     call    node_api_block_event
+    li      a0, NODE_WORK_LC_BLOCK
+    ld      a1, NodeBlock_state_id(s4)
+    li      a2, 0
+    ld      a3, NodeBlock_data_id(s4)
+    li      a4, 0
+    li      a5, 0
+    call    node_work
+    li      t0, NODE_LC_ID
+    sd      t0, NodeAction_state_c(a0)
     mv      a0, s4
     ld      a1, NodeEvent_index(s3)
     ld      a2, NodeEvent_root(s3)
@@ -4073,7 +4082,18 @@ LOCAL_FUNCTION node_event
     call    node_ids
     sd      zero, NodeBlock_state_id(s4)
 59: LEAVE 48
-60: li      t2, NODE_WORK_JUSTIFIED_STATE
+60: li      t2, NODE_WORK_LC_HEAD           # the light client events of a new latest update
+    bne     t0, t2, 601f
+    call    node_lc_head_done
+    LEAVE 48
+601: li     t2, NODE_WORK_LC_BLOCK
+    bne     t0, t2, 603f
+    LEAVE 48
+603: li     t2, NODE_WORK_LC_SERVE          # the light client answer to its stream
+    bne     t0, t2, 602f
+    call    node_lc_served
+    LEAVE 48
+602: li     t2, NODE_WORK_JUSTIFIED_STATE
     bne     t0, t2, 61f
     ld      t0, Node_flags(s1)
     andi    t0, t0, ~NODE_FLAG_JUSTIFIED_PENDING
@@ -4899,7 +4919,18 @@ LOCAL_FUNCTION node_request
     bne     s4, t0, 211f
     li      s7, 40
     j       21f
-211: li     t0, REQRESP_DATA_COLUMN_SIDECARS_BY_RANGE   # column sidecars, from fulu on: sizes below
+211: li     s7, 32                          # the light client methods: 32 bytes, 16, or none
+    li      t0, REQRESP_LIGHT_CLIENT_BOOTSTRAP
+    beq     s4, t0, 3f
+    li      s7, 16
+    li      t0, REQRESP_LIGHT_CLIENT_UPDATES_BY_RANGE
+    beq     s4, t0, 3f
+    li      s7, 0
+    li      t0, REQRESP_LIGHT_CLIENT_FINALITY_UPDATE
+    beq     s4, t0, 55f
+    li      t0, REQRESP_LIGHT_CLIENT_OPTIMISTIC_UPDATE
+    beq     s4, t0, 55f
+    li      t0, REQRESP_DATA_COLUMN_SIDECARS_BY_RANGE   # column sidecars, from fulu on: sizes below
     beq     s4, t0, 21f
     li      t0, REQRESP_DATA_COLUMN_SIDECARS_BY_ROOT
     bne     s4, t0, 92f
@@ -5011,6 +5042,10 @@ LOCAL_FUNCTION node_request
     beq     s4, t0, 86f
     li      t0, REQRESP_BEACON_BLOCKS_BY_HEAD
     beq     s4, t0, 94f
+    li      t0, REQRESP_LIGHT_CLIENT_BOOTSTRAP
+    beq     s4, t0, 55f
+    li      t0, REQRESP_LIGHT_CLIENT_UPDATES_BY_RANGE
+    beq     s4, t0, 55f
     li      t0, REQRESP_GOODBYE
     bne     s4, t0, 10f
     li      a0, LIBP2P_EVENT_STREAM_CLOSE   # Goodbye: a close
@@ -5668,6 +5703,11 @@ LOCAL_FUNCTION node_request
     li      a3, 0
     call    node_respond
 99: LEAVE 208
+55: mv      a0, s3                          # a light client method: its work
+    mv      a1, s9
+    mv      a2, s7
+    call    node_lc_request
+    LEAVE 208
 END_FUNCTION node_request
 
 /*
@@ -8468,6 +8508,7 @@ FUNCTION lantern_node_step
     bleu    t6, t3, 233f
     mv      t6, t3
 233: add    t4, t4, t6
+    addi    t4, t4, 1                       # and its light client work
     li      t3, NODE_ACT_WORK_SIZE
     mul     t4, t4, t3
     add     s10, s10, t4
@@ -9124,7 +9165,31 @@ FUNCTION lantern_node_run
     li      a1, NODE_EV_WORK_DONE_SIZE - NodeEvent_result
     call    lantern_zero
     ld      t0, NodeAction_work_kind(s3)
-    li      t1, NODE_WORK_IMPORT_BLOCK
+    li      t1, NODE_WORK_LC_SERVE          # LC_SERVE: the answer of a light client method, in the event's room
+    bne     t0, t1, 4f
+    mv      a0, s1
+    mv      a1, s3
+    mv      a2, s5
+    ld      a3, (L + 80)(sp)
+    mv      a4, s6
+    mv      a5, s7
+    mv      a6, s8
+    call    node_run_lc_serve
+    LEAVE 192
+4:  addi    t1, t0, -NODE_WORK_LC_BLOCK     # the light client works: of the light client store, state_c
+    li      t2, NODE_WORK_LC_HEAD - NODE_WORK_LC_BLOCK
+    bltu    t2, t1, 5f
+    mv      a0, s1
+    mv      a1, s2
+    mv      a2, s3
+    mv      a3, s4
+    mv      a4, s5
+    ld      a5, (L + 80)(sp)
+    mv      a6, s6
+    mv      a7, s7
+    call    node_run_lc
+    LEAVE 192
+5:  li      t1, NODE_WORK_IMPORT_BLOCK
     bne     t0, t1, 10f
     ld      t0, Node_flags(s1)              # IMPORT_BLOCK: the options, then the fork's on_block
     andi    t0, t0, NODE_FLAG_OPTIMISTIC
@@ -10229,6 +10294,7 @@ FUNCTION lantern_node_run
     mv      a4, s6
     mv      a5, s7
     mv      a6, s8
+    ld      a7, (L + 80)(sp)
     call    node_api_event_run
     LEAVE 192
 978: li     t1, NODE_WORK_API_SUBMIT

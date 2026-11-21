@@ -210,7 +210,7 @@ FUNCTION lantern_node_init
     lea     8(%r15), %rdi                   # the fixed fields: zero, then set
     MOVQ    %rsi, NODE_FIXED - 8
     call    lantern_zero
-    movq    $2, Node_next_id(%r15)
+    movq    $3, Node_next_id(%r15)          # 1 the anchor state, 2 the light client store
     movq    $1, Node_anchor_state_id(%r15)
     mov     %r14, Node_flags(%r15)
     mov     %r13, Node_earliest_slot(%r15)
@@ -4033,9 +4033,17 @@ LOCAL_FUNCTION node_event
     LEAVE 48
 51: test    %rcx, %rcx
     jnz     52f
-    movq    $NODE_BLOCK_IMPORTED, NodeBlock_status(%r13)    # imported: the block event, its votes, then its waiting children
+    movq    $NODE_BLOCK_IMPORTED, NodeBlock_status(%r13)    # imported: the block event, its light client data, its votes, then its waiting children
     mov     %r13, %rdi
     call    node_api_block_event
+    mov     $NODE_WORK_LC_BLOCK, %edi
+    mov     NodeBlock_state_id(%r13), %rsi
+    xor     %edx, %edx
+    mov     NodeBlock_data_id(%r13), %rcx
+    xor     %r8d, %r8d
+    xor     %r9d, %r9d
+    call    node_work
+    movq    $NODE_LC_ID, NodeAction_state_c(%rax)
     mov     %r13, %rdi
     mov     NodeEvent_index(%r12), %rsi
     mov     NodeEvent_root(%r12), %rdx
@@ -4050,7 +4058,18 @@ LOCAL_FUNCTION node_event
     call    node_ids
     movq    $0, NodeBlock_state_id(%r13)
 59: LEAVE 48
-60: cmp     $NODE_WORK_JUSTIFIED_STATE, %rax
+60: cmp     $NODE_WORK_LC_HEAD, %rax         # the light client events of a new latest update
+    jne     601f
+    call    node_lc_head_done
+    LEAVE 48
+601: cmp    $NODE_WORK_LC_BLOCK, %rax
+    jne     603f
+    LEAVE 48
+603: cmp    $NODE_WORK_LC_SERVE, %rax        # the light client answer to its stream
+    jne     602f
+    call    node_lc_served
+    LEAVE 48
+602: cmp    $NODE_WORK_JUSTIFIED_STATE, %rax
     jne     61f
     andq    $~NODE_FLAG_JUSTIFIED_PENDING, Node_flags(%rbx)
     LEAVE 48
@@ -4871,6 +4890,17 @@ LOCAL_FUNCTION node_request
     movq    $40, (L + 160)(%rsp)            # blocks by head, from fulu on: 40 bytes
     cmp     $REQRESP_BEACON_BLOCKS_BY_HEAD, %r13
     je      21f
+    movq    $32, (L + 160)(%rsp)            # the light client methods: 32 bytes, 16, or none
+    cmp     $REQRESP_LIGHT_CLIENT_BOOTSTRAP, %r13
+    je      3f
+    movq    $16, (L + 160)(%rsp)
+    cmp     $REQRESP_LIGHT_CLIENT_UPDATES_BY_RANGE, %r13
+    je      3f
+    movq    $0, (L + 160)(%rsp)
+    cmp     $REQRESP_LIGHT_CLIENT_FINALITY_UPDATE, %r13
+    je      55f
+    cmp     $REQRESP_LIGHT_CLIENT_OPTIMISTIC_UPDATE, %r13
+    je      55f
     movq    $0, (L + 160)(%rsp)
     cmp     $REQRESP_DATA_COLUMN_SIDECARS_BY_RANGE, %r13    # column sidecars, from fulu on: sizes below
     je      21f
@@ -4998,6 +5028,10 @@ LOCAL_FUNCTION node_request
     je      86f
     cmp     $REQRESP_BEACON_BLOCKS_BY_HEAD, %r13
     je      94f
+    cmp     $REQRESP_LIGHT_CLIENT_BOOTSTRAP, %r13
+    je      55f
+    cmp     $REQRESP_LIGHT_CLIENT_UPDATES_BY_RANGE, %r13
+    je      55f
     cmp     $REQRESP_GOODBYE, %r13
     jne     10f
     mov     $LIBP2P_EVENT_STREAM_CLOSE, %edi        # Goodbye: a close
@@ -5672,6 +5706,11 @@ LOCAL_FUNCTION node_request
     xor     %ecx, %ecx
     call    node_respond
 99: LEAVE 176
+55: mov     %r12, %rdi                      # a light client method: its work
+    mov     S9(%rsp), %rsi
+    mov     (L + 160)(%rsp), %rdx
+    call    node_lc_request
+    LEAVE 176
 END_FUNCTION node_request
 
 /*
@@ -8481,6 +8520,7 @@ FUNCTION lantern_node_step
     jbe     206f
     mov     $2, %edx
 206: add    %rdx, %rsi
+    inc     %rsi                            # and its light client work
     imul    $NODE_ACT_WORK_SIZE, %rsi, %rsi
     add     %rsi, %r10
     jmp     22f
@@ -9084,7 +9124,31 @@ FUNCTION lantern_node_run
     mov     $(NODE_EV_WORK_DONE_SIZE - NodeEvent_result), %esi
     call    lantern_zero
     mov     NodeAction_work_kind(%r12), %rax
-    cmp     $NODE_WORK_IMPORT_BLOCK, %rax
+    cmp     $NODE_WORK_LC_SERVE, %rax       # LC_SERVE: the answer of a light client method, in the event's room
+    jne     4f
+    mov     %rbx, %rdi
+    mov     %r12, %rsi
+    mov     %r14, %rdx
+    mov     (L + 80)(%rsp), %rcx
+    mov     %r15, %r8
+    mov     S8(%rsp), %r9
+    mov     S9(%rsp), %r10
+    call    node_run_lc_serve
+    LEAVE 192
+4:  lea     -NODE_WORK_LC_BLOCK(%rax), %rcx # the light client works: of the light client store, state_c
+    cmp     $(NODE_WORK_LC_HEAD - NODE_WORK_LC_BLOCK), %rcx
+    ja      5f
+    mov     %rbx, %rdi
+    mov     %rbp, %rsi
+    mov     %r12, %rdx
+    mov     %r13, %rcx
+    mov     %r14, %r8
+    mov     (L + 80)(%rsp), %r9
+    mov     %r15, %r10
+    mov     S8(%rsp), %r11
+    call    node_run_lc
+    LEAVE 192
+5:  cmp     $NODE_WORK_IMPORT_BLOCK, %rax
     jne     10f
     mov     $PAYLOAD_STATUS_VALID, %eax     # IMPORT_BLOCK: the options, then the fork's on_block
     mov     $PAYLOAD_STATUS_NOT_VALIDATED, %ecx
@@ -10274,6 +10338,7 @@ FUNCTION lantern_node_run
     mov     %r15, %r8
     mov     S8(%rsp), %r9
     mov     S9(%rsp), %r10
+    mov     (L + 80)(%rsp), %r11
     call    node_api_event_run
     LEAVE 192
 978: cmp    $NODE_WORK_API_SUBMIT, %rax

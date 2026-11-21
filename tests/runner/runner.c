@@ -268,6 +268,7 @@ ABI uint64_t lantern_lc_on_block(void *lc, const void *config, const void *state
                                  void *scratch);
 ABI uint64_t lantern_lc_on_head(void *lc, const void *config, const void *head, const void *checkpoint, void *scratch);
 ABI uint64_t lantern_lc_read(const void *lc, uint64_t kind, uint64_t key, void *out, void *fork);
+#define LC_NO_ANSWER 66 /* LANTERN_NO_STATE_ANSWER */
 
 /* The node core: docs/reference/node.md. */
 ABI uint64_t lantern_node_size(const void *room, void *size);
@@ -2662,7 +2663,8 @@ enum { WORK_IMPORT_BLOCK = 1, WORK_JUSTIFIED_STATE, WORK_TARGET_STATE, WORK_ATTE
        WORK_SYNC_BLOCK, WORK_BLOB, WORK_NEW_PAYLOAD, WORK_FORKCHOICE, WORK_SLOTS, WORK_UPGRADE, WORK_REPLAY, WORK_BACKFILL,
        WORK_BLOCK_ATTESTATION, WORK_BLOCK_SLASHING, WORK_GOSSIP_VOTE, WORK_API_ENCODE, WORK_API_CHUNK, WORK_API_LOOKUP, WORK_API_EVENT,
        WORK_API_SUBMIT, WORK_POOL_CHECK, WORK_PREPARE_PAYLOAD, WORK_PRODUCE_CHECK, WORK_GET_PAYLOAD, WORK_PRODUCE_FOLD,
-       WORK_PRODUCE_BLOCK, WORK_PUBLISH_DECODE, WORK_PUBLISH_SIDECARS, WORK_PUBLISH_CHECK, WORK_PUBLISH_SIDECAR };
+       WORK_PRODUCE_BLOCK, WORK_PUBLISH_DECODE, WORK_PUBLISH_SIDECARS, WORK_PUBLISH_CHECK, WORK_PUBLISH_SIDECAR,
+       WORK_LC_BLOCK, WORK_LC_HEAD, WORK_LC_SERVE };
 #define EV_API_BYTES (128 + 616) /* NodeEvent_api_bytes: the chunk's ByteList in the WORK_DONE of an API_CHUNK */
 #define NODE_API_CHUNK 65536
 #define NODE_API_PART (728 + CONFIG_SIZE + 936) /* Node_api: the PartRef of the NodeApi entries */
@@ -2958,6 +2960,55 @@ static void shell_keep(struct node_shell *s, uint64_t id, uint8_t *b, uint64_t s
     s->nbufs++;
 }
 
+/*
+ * The light client store of the node, as BufferId 2 (node.md, lantern_node_init: Caller must): an LcStore of
+ * lantern_lc_store_init of the anchor state and block, with capacities of 2, so that it grows through
+ * lantern_lc_store_copy.
+ */
+static void shell_lc(struct node_shell *s, const uint8_t *state, const uint8_t *block, const char **why) {
+    uint64_t room[7] = {2, 2, 2, 2, 2, 2, 2}, need = 0, st;
+    if (CALL(lantern_lc_store_size, room, &need) != 0) {
+        *why = "lantern_lc_store_size status";
+        return;
+    }
+    uint8_t *lc = buffer(need);
+    wr64(lc, need);
+    if ((st = CALL(lantern_lc_store_init, room, s->ncfg, state, block, fresh_scratch(), lc)) != 0) {
+        static char msg[64];
+        snprintf(msg, sizeof msg, "lantern_lc_store_init: status %llu", (unsigned long long)st);
+        *why = msg;
+        free(lc);
+        return;
+    }
+    if (!guard_ok(lc, need)) {
+        *why = "lantern_lc_store_init wrote out of bounds";
+        free(lc);
+        return;
+    }
+    shell_keep(s, 2, lc, need, why);
+}
+
+/* The light client store c with twice the capacities of each part: lantern_lc_store_copy. */
+static void shell_lc_grow(shell_buf *c, const char **why) {
+    uint64_t room[7], need = 0;
+    for (int k = 0; k < 7; k++) room[k] = 2 * rd64(c->b + 80 + 8 * k); /* LcStore room */
+    if (CALL(lantern_lc_store_size, room, &need) != 0) {
+        *why = "lantern_lc_store_size status";
+        return;
+    }
+    uint8_t *out = buffer(need);
+    wr64(out, need);
+    if (CALL(lantern_lc_store_copy, c->b, room, out) != 0) *why = "lantern_lc_store_copy status";
+    else if (!guard_ok(out, need)) *why = "lantern_lc_store_copy wrote out of bounds";
+    if (*why) {
+        free(out);
+        return;
+    }
+    free(c->b);
+    c->b = out;
+    c->size = need;
+}
+
 static void shell_drop(struct node_shell *s, uint64_t id, const char **why) {
     shell_buf *b = shell_find(s, id);
     if (!b) {
@@ -3165,7 +3216,7 @@ static void shell_work(fc_node *n, const uint8_t *work, const char **why) {
             shell_seen(s, why);
         } else if (kind == WORK_POOL_CHECK || kind == WORK_PRODUCE_CHECK || kind == WORK_PRODUCE_FOLD) {
             *why = "lantern_node_run: POOL_CHECK, PRODUCE_CHECK or PRODUCE_FOLD asks for room";
-        } else if (kind == WORK_SERVE || kind == WORK_NEW_PAYLOAD || kind == WORK_FORKCHOICE || kind == WORK_API_ENCODE ||
+        } else if (kind == WORK_SERVE || kind == WORK_LC_SERVE || kind == WORK_NEW_PAYLOAD || kind == WORK_FORKCHOICE || kind == WORK_API_ENCODE ||
             kind == WORK_API_EVENT || kind == WORK_PREPARE_PAYLOAD || kind == WORK_GET_PAYLOAD || kind == WORK_PRODUCE_BLOCK ||
             kind == WORK_PUBLISH_DECODE || kind == WORK_PUBLISH_SIDECAR) {
             free(ev);
@@ -3194,6 +3245,9 @@ static void shell_work(fc_node *n, const uint8_t *work, const char **why) {
             }
         } else if (kind == WORK_BLOB) {
             *why = "lantern_node_run: BLOB asks for room";
+        } else if (kind == WORK_LC_BLOCK || kind == WORK_LC_HEAD) { /* the light client store */
+            if (!c) *why = "lantern_node_run: a light client work asks for room with no store";
+            else shell_lc_grow(c, why);
         } else if (kind == WORK_API_CHUNK) {
             *why = "lantern_node_run: API_CHUNK asks for room past NODE_API_FIRST_ROOM";
         } else if ((kind == WORK_IMPORT_BLOCK && node_count(n) < node_capacity(n->store)) || kind == WORK_TARGET_STATE ||
@@ -3208,8 +3262,9 @@ static void shell_work(fc_node *n, const uint8_t *work, const char **why) {
             grow_store(n, why);
     }
     if (!*why && st != 0) {
-        static char msg[64];
-        snprintf(msg, sizeof msg, "lantern_node_run: status %llu", (unsigned long long)st);
+        static char msg[112];
+        snprintf(msg, sizeof msg, "lantern_node_run: work kind %llu, arg %llu, status %llu", (unsigned long long)kind,
+                 (unsigned long long)rd64(work + 64), (unsigned long long)st);
         *why = msg;
     }
     if (!*why && kind == WORK_REPLAY) {
@@ -3222,7 +3277,7 @@ static void shell_work(fc_node *n, const uint8_t *work, const char **why) {
     uint64_t esize = *why ? 0 : rd64(ev);
     if (!*why && (esize < EV_WORK_DONE_SIZE || esize > ev_size || esize % 8 || rd64(ev + 8) != EV_WORK_DONE ||
                   memcmp(ev + 16, work + 16, 56) ||
-                  (kind != WORK_SERVE && kind != WORK_NEW_PAYLOAD && kind != WORK_FORKCHOICE && kind != WORK_API_ENCODE &&
+                  (kind != WORK_SERVE && kind != WORK_LC_SERVE && kind != WORK_NEW_PAYLOAD && kind != WORK_FORKCHOICE && kind != WORK_API_ENCODE &&
                    kind != WORK_API_CHUNK && kind != WORK_API_EVENT && kind != WORK_API_SUBMIT && kind != WORK_PREPARE_PAYLOAD &&
                    kind != WORK_GET_PAYLOAD && kind != WORK_PRODUCE_BLOCK && kind != WORK_PUBLISH_DECODE && kind != WORK_PUBLISH_CHECK &&
                    kind != WORK_PUBLISH_SIDECAR && esize != EV_WORK_DONE_SIZE)))
@@ -3842,6 +3897,7 @@ static struct node_shell *shell_open(fc_node *n, tv parts, uint8_t **anchor_bloc
         s->actions = buffer(s->actions_size);
         wr64(s->actions, s->actions_size);
         if (!*why) shell_keep(s, 1, copy_of(n->anchor, n->anchor_size), n->anchor_size, why);
+        if (!*why) shell_lc(s, n->anchor, *anchor_block, why);
     }
     return s;
 }
@@ -4205,6 +4261,7 @@ static void transition_node_case(tv parts, uint64_t fork_epoch, int *ran, const 
         s->actions = buffer(s->actions_size);
         wr64(s->actions, s->actions_size);
         if (!*why) shell_keep(s, 1, copy_of(state, need), need, why);
+        if (!*why) shell_lc(s, state, block, why);
     }
     tv meta = tv_get(parts, "meta");
     uint64_t blocks = tv_u64(tv_get(meta, "blocks_count")), genesis = rd64(state + field_offset("BeaconState", 0));
@@ -4334,6 +4391,7 @@ enum { P2P_ACT_DIAL = 1, P2P_ACT_ADOPT, P2P_ACT_REFUSE, P2P_ACT_SEND, P2P_ACT_CL
 /* The network: side 0 is the node's libp2p state, side 1 the peer's. */
 /* SLOTS_PER_EPOCH of the preset (presets/<preset>/phase0.yaml). */
 #define SLOTS_PER_EPOCH_RUNNER (strcmp(PRESET, "minimal") ? 32u : 8u)
+#define MAX_REQUEST_LIGHT_CLIENT_UPDATES_RUNNER 128 /* MAX_REQUEST_LIGHT_CLIENT_UPDATES, of both presets */
 
 /* A block of a case: its root, parent root, slot and SSZ bytes. */
 typedef struct {
@@ -5114,9 +5172,14 @@ static size_t case_chain(tv parts, case_block **blocks_out, case_block ***chain_
     return nchain;
 }
 
+#if FORK >= FORK_ALTAIR
+static void p2p_lc_serve_check(fc_node *n, struct p2p_net *net, const uint8_t *const *roots, size_t nroots, const uint8_t *gvr,
+                               const char **why);
+#endif
+
 /*
  * Node mode, after the steps of a case whose checks name a head: the node serves the chain of that
- * head, from the case's valid blocks, with BlocksByRange and BlocksByRoot.
+ * head, from the case's valid blocks, with BlocksByRange and BlocksByRoot; and its light client data.
  */
 static void fc_serve_check(fc_node *n, tv parts, const char **why) {
     case_block *blocks, **chain;
@@ -5154,6 +5217,12 @@ static void fc_serve_check(fc_node *n, tv parts, const char **why) {
             int k = p2p_request(n, &net, 2, "beacon_blocks_by_head", 1, req, 40, why);
             if (!*why) p2p_check_blocks(&net, k, want, nchain, gvr, "blocks_by_head", why);
             free(want);
+        }
+#endif
+#if FORK >= FORK_ALTAIR
+        if (!*why) { /* the light client data: bootstraps of the anchor's root, the chain's first block and its head */
+            const uint8_t *roots[3] = {chain[0]->parent, chain[0]->root, chain[nchain - 1]->root};
+            p2p_lc_serve_check(n, &net, roots, 3, gvr, why);
         }
 #endif
         if (!*why && rd64(n->shell->node + 136 + 8)) *why = "the node keeps a stream at the end"; /* Node_streams */
@@ -6781,7 +6850,6 @@ static const struct {
     const void *slots, *transition, *copy_size, *copy, *upgrade_size, *upgrade, *digest;
 } lcf[7] = {{0}, LCF_ENTRY(altair), LCF_ENTRY(bellatrix), LCF_ENTRY(capella), LCF_ENTRY(deneb), LCF_ENTRY(electra), LCF_ENTRY(fulu)};
 
-#define LC_NO_ANSWER 66 /* LANTERN_NO_STATE_ANSWER */
 #define LC_KINDS 4
 
 /* The fork of a slot with the case's config: the last fork whose epoch is at most the slot's. */
@@ -6871,6 +6939,124 @@ static void lc_digest(lc_run *r, uint64_t fork, uint64_t epoch, uint8_t out[4]) 
     uint8_t d[8] = {0};
     CALL(lcf[fork].digest, r->gvr, &epoch, config, fresh_scratch(), d);
     memcpy(out, d, 4);
+}
+
+/* An object of the light client store lc: lantern_lc_read of the kind and key into a new buffer, its fork in *fork; NULL with none. */
+static uint8_t *lc_object(const uint8_t *lc, uint64_t kind, uint64_t key, uint64_t *fork, const char **why) {
+    uint64_t room = 24 + 65536;
+    uint8_t *out = buffer(room);
+    wr64(out, room);
+    uint64_t st = CALL(lantern_lc_read, lc, (const void *)(uintptr_t)kind, (const void *)(uintptr_t)key, out, fork);
+    if (st == 0) return out;
+    if (st != LC_NO_ANSWER) *why = "lantern_lc_read status";
+    free(out);
+    return NULL;
+}
+
+/*
+ * The chunks of light client stream k: one for each object of want (ByteLists of lantern_lc_read,
+ * forks[b] the fork of each), with result 0, the ForkDigest of the epoch of the object's first header's
+ * beacon slot as context (compute_fork_digest of that fork), and its SSZ bytes; with none and single, one chunk of result 3 and no
+ * payload; then no more bytes.
+ */
+static void p2p_check_lc(struct p2p_net *net, int k, uint8_t **want, const uint64_t *forks, size_t nwant, int single,
+                         const uint8_t *gvr, const char *what, const char **why) {
+    static char msg[128];
+    uint8_t ncfg[CONFIG_SIZE];
+    node_config(ncfg);
+    uint64_t at = 0, total = net->st[k].len;
+    size_t chunks = nwant ? nwant : (size_t)single;
+    msg[0] = 0;
+    for (size_t b = 0; b < chunks && !msg[0]; b++) {
+        const uint8_t *w = nwant ? want[b] + rd64(want[b] + 8) : NULL;
+        uint64_t wlen = nwant ? rd64(want[b] + 16) : 0, header[6] = {1, 4, 0, 0, 0, 0}, consumed = 0, eof = 1;
+        uint8_t digest[8] = {0};
+        if (w) {
+            uint64_t off = forks[b] >= FORK_CAPELLA ? (uint64_t)(w[0] | w[1] << 8 | w[2] << 16 | (uint64_t)w[3] << 24) : 0;
+            uint64_t epoch = rd64(w + off) / SLOTS_PER_EPOCH_RUNNER;
+            if (forks[b] >= 1 && forks[b] <= 6) CALL(lcf[forks[b]].digest, gvr, &epoch, ncfg, fresh_scratch(), digest);
+            else CALL(LF(compute_fork_digest), gvr, &epoch, ncfg, fresh_scratch(), digest);
+        }
+        uint8_t *input = serialized(net->st[k].data + at, total - at, &(uint64_t){0}), *out = buffer(24 + wlen + 8);
+        wr64(out, 24 + wlen + 8);
+        if (at >= total) snprintf(msg, sizeof msg, "%s: %zu chunks, %zu wanted", what, b, chunks);
+        else if (CALL(lantern_reqresp_read_header, input, header) != 0) snprintf(msg, sizeof msg, "%s: chunk %zu: no header", what, b);
+        else if (header[2] != (w ? 0u : 3u)) snprintf(msg, sizeof msg, "%s: chunk %zu: result %llu", what, b, (unsigned long long)header[2]);
+        else if (w && memcmp(&header[3], digest, 4)) snprintf(msg, sizeof msg, "%s: chunk %zu: context bytes", what, b);
+        else if (header[4] != wlen) snprintf(msg, sizeof msg, "%s: chunk %zu: length %llu", what, b, (unsigned long long)header[4]);
+        else if (CALL(lantern_reqresp_read_payload, input, &header[5], &header[4], &eof, fresh_scratch(), out, &consumed) != 0)
+            snprintf(msg, sizeof msg, "%s: chunk %zu: payload status", what, b);
+        else if (wlen && memcmp(out + 24, w, (size_t)wlen)) snprintf(msg, sizeof msg, "%s: chunk %zu: bytes", what, b);
+        at += header[5] + consumed;
+        free(input);
+        free(out);
+    }
+    if (!msg[0] && at != total) snprintf(msg, sizeof msg, "%s: bytes after the last chunk", what);
+    if (msg[0]) *why = msg;
+}
+
+/* Stream k of the peer, emptied for a new request. */
+static void p2p_reuse(struct p2p_net *net, int k) {
+    free(net->st[k].data);
+    memset(&net->st[k], 0, sizeof net->st[k]);
+}
+
+/*
+ * The light client methods of the peer (node.md, NODE_WORK_LC_SERVE): each answer must be that of the
+ * node's light client store (BufferId 2), as lantern_lc_read gives its objects. Bootstraps of the
+ * roots, and of a root the node does not know; the finality and optimistic updates; the updates of
+ * the periods from 0, with a count past the limit; none for a count of 0.
+ */
+static void p2p_lc_serve_check(fc_node *n, struct p2p_net *net, const uint8_t *const *roots, size_t nroots, const uint8_t *gvr,
+                               const char **why) {
+#define LC_STORE (shell_find(n->shell, 2)->b) /* again before each read: the table of buffers moves as the node adds one */
+    if (!shell_find(n->shell, 2)) {
+        *why = "no light client store";
+        return;
+    }
+    static const struct {
+        const char *name;
+        uint64_t kind;
+    } latest[2] = {{"light_client_finality_update", 2}, {"light_client_optimistic_update", 3}};
+    for (int i = 0; i < 2 && !*why; i++) {
+        uint64_t fork = 0;
+        uint8_t *o = lc_object(LC_STORE, latest[i].kind, 0, &fork, why);
+        p2p_reuse(net, 3);
+        if (!*why) p2p_request(n, net, 3, latest[i].name, 1, NULL, 0, why);
+        if (!*why) p2p_check_lc(net, 3, &o, &fork, o ? 1 : 0, 1, gvr, latest[i].name, why);
+        free(o);
+    }
+    uint8_t unknown[32];
+    memset(unknown, 0xEE, 32);
+    for (size_t i = 0; i <= nroots && !*why; i++) {
+        const uint8_t *root = i < nroots ? roots[i] : unknown;
+        uint64_t fork = 0;
+        uint8_t *o = lc_object(LC_STORE, 0, (uint64_t)(uintptr_t)root, &fork, why);
+        p2p_reuse(net, 3);
+        if (!*why) p2p_request(n, net, 3, "light_client_bootstrap", 1, root, 32, why);
+        if (!*why) p2p_check_lc(net, 3, &o, &fork, o ? 1 : 0, 1, gvr, "light_client_bootstrap", why);
+        free(o);
+    }
+    static const uint64_t ranges[2][2] = {{0, 200}, {0, 0}};
+    for (int i = 0; i < 2 && !*why; i++) {
+        uint8_t *want[MAX_REQUEST_LIGHT_CLIENT_UPDATES_RUNNER];
+        uint64_t forks[MAX_REQUEST_LIGHT_CLIENT_UPDATES_RUNNER], count = ranges[i][1];
+        size_t nwant = 0;
+        if (count > MAX_REQUEST_LIGHT_CLIENT_UPDATES_RUNNER) count = MAX_REQUEST_LIGHT_CLIENT_UPDATES_RUNNER;
+        for (uint64_t p = ranges[i][0]; p < ranges[i][0] + count && !*why; p++) { /* from the first update held to the first period of none */
+            uint8_t *o = lc_object(LC_STORE, 1, p, &forks[nwant], why);
+            if (o) want[nwant++] = o;
+            else if (nwant) break;
+        }
+        uint8_t req[16];
+        wr64(req, ranges[i][0]);
+        wr64(req + 8, ranges[i][1]);
+        p2p_reuse(net, 3);
+        if (!*why) p2p_request(n, net, 3, "light_client_updates_by_range", 1, req, 16, why);
+        if (!*why) p2p_check_lc(net, 3, want, forks, nwant, 0, gvr, "light_client_updates_by_range", why);
+        for (size_t b = 0; b < nwant; b++) free(want[b]);
+    }
+#undef LC_STORE
 }
 
 /* The post-state of the block at enc on its parent's, kept by the block's root; the root in root. */
@@ -7011,8 +7197,40 @@ static void lc_check_object(lc_run *r, tv parts, uint64_t kind, uint64_t key, tv
 }
 
 /*
+ * The case's store at its end, served by a node (node.md, NODE_WORK_LC_SERVE): a node of the case's
+ * anchor state and block whose light client store (BufferId 2) is a copy of it, and the requests of
+ * p2p_lc_serve_check; bootstraps of the anchor's root and of up to 7 blocks of the case.
+ */
+static void lc_serve_store(lc_run *r, const uint8_t *block, const char **why) {
+    fc_node m;
+    uint8_t *anchor_block = NULL;
+    bf_state = r->states[0].state;
+    bf_state_size = r->states[0].size;
+    bf_block = block;
+    struct node_shell *s = shell_open(&m, NULL, &anchor_block, why);
+    bf_state = NULL;
+    bf_block = NULL;
+    shell_buf *c = *why ? NULL : shell_find(s, 2);
+    if (!*why && !c) *why = "lc serve: no light client store";
+    if (!*why) {
+        free(c->b);
+        c->size = rd64(r->b);
+        c->b = copy_of(r->b, c->size);
+        const uint8_t *roots[8];
+        size_t nroots = 0;
+        for (uint64_t k = 0; k < r->nstates && nroots < 8; k += r->nstates / 8 + 1) roots[nroots++] = r->states[k].root;
+        struct p2p_net net;
+        p2p_open(&m, &net, why);
+        if (!*why) p2p_lc_serve_check(&m, &net, roots, nroots, r->gvr, why);
+        if (!*why && rd64(s->node + 136 + 8)) *why = "lc serve: the node keeps a stream at the end"; /* Node_streams */
+        p2p_close(&net);
+    }
+    if (s) shell_close(&m, anchor_block);
+}
+
+/*
  * light_client-data_collection (light-client.md, Test vectors): the steps of the case through the
- * LcStore functions, with the post-states of the runner.
+ * LcStore functions, with the post-states of the runner; then its store served by a node.
  */
 static void run_lc_data_collection(const char *file, case_file *f) {
     for (uint64_t i = 0; i < f->count; i++) {
@@ -7026,32 +7244,25 @@ static void run_lc_data_collection(const char *file, case_file *f) {
         const uint8_t *enc = tv_bytes(tv_get(parts, "initial_state"), &slen);
         uint8_t *anchor = load_state(enc, slen, &size, &why), *block = NULL;
         if (anchor) memcpy(r.gvr, anchor + 16, 32);
-        if (anchor) { /* the anchor block: lantern_node_anchor's, as a SignedBeaconBlock */
-            uint64_t sroom[8] = {64, 64, 4, 9000, 64, 64, 4, 4096}, need = 0, lsize, blen = 0;
+        if (anchor) { /* the anchor block: lantern_node_anchor's value, the model's genesis block */
+            uint64_t sroom[8] = {64, 64, 4, 9000, 64, 64, 4, 4096}, need = 0, lsize;
             CALL(LF(beacon_state_copy_size), anchor, sroom, &need);
-            uint8_t *data = list_of(enc, slen, 0, 0, &lsize), *st2 = buffer(need), *bv = buffer(ANCHOR_BLOCK_BYTES);
+            uint8_t *data = list_of(enc, slen, 0, 0, &lsize), *st2 = buffer(need);
+            block = buffer(ANCHOR_BLOCK_BYTES);
             wr64(st2, need);
-            wr64(bv, ANCHOR_BLOCK_BYTES);
-            if (CALL(LF(node_anchor), data, sroom, fresh_scratch(), st2, bv) != 0) why = "lantern_node_anchor: status";
-            uint8_t *e = why ? NULL : encoded("BeaconBlock", bv, &blen, &why);
-            if (e) {
-                uint8_t *sb = calloc(1, (size_t)(100 + blen));
-                sb[0] = 100;
-                memcpy(sb + 100, e + 24, (size_t)blen);
-                block = list_of(sb, 100 + blen, 0, 0, &lsize);
-                free(sb);
+            wr64(block, ANCHOR_BLOCK_BYTES);
+            if (CALL(LF(node_anchor), data, sroom, fresh_scratch(), st2, block) != 0) why = "lantern_node_anchor: status";
+            else {
                 r.states = calloc(1, sizeof *r.states);
                 r.nstates = 1;
                 r.states[0].fork = FORK;
                 r.states[0].state = anchor;
                 r.states[0].size = size;
                 anchor = NULL;
-                root_of("BeaconBlock", bv, r.states[0].root, &why);
+                root_of("BeaconBlock", block, r.states[0].root, &why);
             }
-            free(e);
             free(data);
             free(st2);
-            free(bv);
         }
         if (!why) {
             uint64_t need = 0;
@@ -7061,7 +7272,6 @@ static void run_lc_data_collection(const char *file, case_file *f) {
             uint64_t st = CALL(lantern_lc_store_init, r.room, config, r.states[0].state, block, fresh_scratch(), r.b);
             if (!why && st != 0) why = "lantern_lc_store_init: status";
         }
-        free(block);
         free(anchor);
         tv steps = tv_get(tv_get(parts, "steps"), "steps") ? tv_get(tv_get(parts, "steps"), "steps") : tv_get(parts, "steps");
         tv s = steps && *steps == T_LIST ? steps + 9 : NULL;
@@ -7136,9 +7346,11 @@ static void run_lc_data_collection(const char *file, case_file *f) {
                 }
             } else why = "a step lantern does not know";
         }
+        if (!why) lc_serve_store(&r, block, &why);
         for (uint64_t k = 0; k < r.nstates; k++) free(r.states[k].state);
         free(r.states);
         free(r.b);
+        free(block);
         report(file, name, len, why == NULL, why);
     }
 }

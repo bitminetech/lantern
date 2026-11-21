@@ -1084,6 +1084,9 @@ LOCAL_FUNCTION app_start
     mov     %rcx, 16(%rax)
     movq    $1, (APP_BUFS + 8)(%rbx)
     movq    $APP_BUFS_CAP, (APP_BUFS + 16)(%rbx)
+    call    app_lc_start                    # BufferId 2: the light client store
+    test    %rax, %rax
+    jnz     97f
     mov     $APP_ACTIONS, %edi              # the queues of a step
     mov     $APP_QUEUE_BYTES, %esi
     call    app_alloc
@@ -1440,6 +1443,102 @@ LOCAL_FUNCTION app_regrow
 END_FUNCTION app_regrow
 
 /*
+ * L2: rax = 0 with the light client store as BufferId 2 (node.md, lantern_node_init: Caller must):
+ * lantern_lc_store_init of the anchor state and block with the APP_LC_* capacities; else 1. r12
+ * the store, r13 its size. APP_TMP: the LcRoom, then the size.
+ */
+LOCAL_FUNCTION app_lc_start
+    ENTER 0
+    lea     APP_TMP(%rbx), %rdi
+    movq    $APP_LC_BLOCKS, (%rdi)
+    movq    $APP_LC_FINALIZED, 8(%rdi)
+    movq    $APP_LC_PERIODS, 16(%rdi)
+    movq    $APP_LC_BOOTSTRAPS, 24(%rdi)
+    movq    $APP_LC_HEADERS, 32(%rdi)
+    movq    $APP_LC_COMMITTEES, 40(%rdi)
+    movq    $APP_LC_UPDATES, 48(%rdi)
+    lea     LcRoom__mem(%rdi), %rsi
+    CALL_GLOBAL lantern_lc_store_size
+    test    %rax, %rax
+    jnz     9f
+    mov     (APP_TMP + LcRoom__mem)(%rbx), %r13
+    mov     %r13, %rdi
+    call    app_map
+    test    %rax, %rax
+    jz      9f
+    mov     %rax, %r12
+    mov     %r13, (%r12)
+    lea     APP_TMP(%rbx), %rdi
+    lea     APP_CONFIG(%rbx), %rsi
+    mov     APP_STATE(%rbx), %rdx
+    mov     APP_BLOCK(%rbx), %rcx
+    SCRATCH %r8
+    mov     %r12, %r9
+    CALL_GLOBAL lantern_lc_store_init
+    test    %rax, %rax
+    jnz     9f
+    mov     $NODE_LC_ID, %edi
+    mov     %r12, %rsi
+    mov     %r13, %rdx
+    call    app_buf_add
+    test    %rax, %rax
+    jnz     9f
+    LEAVE 0
+9:  mov     $1, %eax
+    LEAVE 0
+END_FUNCTION app_lc_start
+
+/*
+ * L2: rax = 0 when the light client store of the table entry rdi is in a new buffer with twice the
+ * capacities of each part (lantern_lc_store_copy); else 1. r12 the entry, r13 the new buffer, r14
+ * its size. APP_TMP: the LcRoom, then the size. Locals: L the new buffer and its size.
+ */
+LOCAL_FUNCTION app_lc_grow
+    ENTER 16
+    mov     %rdi, %r12
+    mov     8(%r12), %rax
+    xor     %ecx, %ecx
+1:  mov     LcStore_room(%rax,%rcx,8), %rdx
+    shl     $1, %rdx
+    mov     %rdx, APP_TMP(%rbx,%rcx,8)
+    inc     %rcx
+    cmp     $7, %rcx
+    jb      1b
+    lea     APP_TMP(%rbx), %rdi
+    lea     LcRoom__mem(%rdi), %rsi
+    CALL_GLOBAL lantern_lc_store_size
+    test    %rax, %rax
+    jnz     9f
+    mov     (APP_TMP + LcRoom__mem)(%rbx), %r14
+    mov     %r14, %rdi
+    call    app_map
+    test    %rax, %rax
+    jz      9f
+    mov     %rax, %r13
+    mov     %r14, (%r13)
+    mov     8(%r12), %rdi
+    lea     APP_TMP(%rbx), %rsi
+    mov     %r13, %rdx
+    CALL_GLOBAL lantern_lc_store_copy
+    test    %rax, %rax
+    jnz     8f
+    lea     8(%r12), %rdi                   # the old buffer goes
+    lea     16(%r12), %rsi
+    CALL_GLOBAL lantern_shell_unmap
+    mov     %r13, 8(%r12)
+    mov     %r14, 16(%r12)
+    xor     %eax, %eax
+    LEAVE 16
+8:  mov     %r13, L(%rsp)                   # the new one goes
+    mov     %r14, (L + 8)(%rsp)
+    lea     L(%rsp), %rdi
+    lea     (L + 8)(%rsp), %rsi
+    CALL_GLOBAL lantern_shell_unmap
+9:  mov     $1, %eax
+    LEAVE 16
+END_FUNCTION app_lc_grow
+
+/*
  * L2: the WORK action rdi, by lantern_node_run with its buffers, again with more room while it asks
  * for it; then its WORK_DONE event joins the next step's. rbp the action, r12-r15 the entries of
  * state_a, state_b, state_c and data (or 0), S7 the tries, S8 the kind, S9 a size.
@@ -1536,6 +1635,8 @@ LOCAL_FUNCTION app_work
     mov     S8(%rsp), %rcx
     cmp     $NODE_WORK_SERVE, %rcx          # SERVE, NEW_PAYLOAD, FORKCHOICE: a larger event
     je      2f
+    cmp     $NODE_WORK_LC_SERVE, %rcx
+    je      2f
     cmp     $NODE_WORK_NEW_PAYLOAD, %rcx
     je      2f
     cmp     $NODE_WORK_FORKCHOICE, %rcx
@@ -1570,6 +1671,10 @@ LOCAL_FUNCTION app_work
     je      4f
     cmp     $NODE_WORK_UPGRADE, %rcx        # UPGRADE: state_b, the upgrade's buffer
     je      6f
+    cmp     $NODE_WORK_LC_BLOCK, %rcx       # the light client works: state_c, the light client store
+    je      17f
+    cmp     $NODE_WORK_LC_HEAD, %rcx
+    je      17f
     cmp     $NODE_WORK_IMPORT_BLOCK, %rcx
     jne     5f
     mov     APP_STORE(%rbx), %rcx
@@ -1621,6 +1726,13 @@ LOCAL_FUNCTION app_work
     jz      91f
     mov     %r13, %rdi
     call    app_regrow
+    test    %rax, %rax
+    jnz     91f
+    jmp     1b
+17: test    %r14, %r14
+    jz      91f
+    mov     %r14, %rdi
+    call    app_lc_grow
     test    %rax, %rax
     jnz     91f
     jmp     1b

@@ -1067,6 +1067,8 @@ LOCAL_FUNCTION app_start
     STQ     t0, s1, (APP_BUFS + 8)
     li      t1, APP_BUFS_CAP
     STQ     t1, s1, (APP_BUFS + 16)
+    call    app_lc_start                    # BufferId 2: the light client store
+    bnez    a0, 97f
     li      a0, APP_ACTIONS                 # the queues of a step
     li      a1, APP_QUEUE_BYTES
     call    app_alloc
@@ -1422,6 +1424,110 @@ LOCAL_FUNCTION app_regrow
 END_FUNCTION app_regrow
 
 /*
+ * L2: a0 = 0 with the light client store as BufferId 2 (node.md, lantern_node_init: Caller must):
+ * lantern_lc_store_init of the anchor state and block with the APP_LC_* capacities; else 1. s2 the
+ * store, s3 its size, s4 APP_TMP: the LcRoom, then the size.
+ */
+LOCAL_FUNCTION app_lc_start
+    ENTER 0
+    li      t0, APP_TMP
+    add     s4, s1, t0
+    li      t0, APP_LC_BLOCKS
+    sd      t0, 0(s4)
+    li      t0, APP_LC_FINALIZED
+    sd      t0, 8(s4)
+    li      t0, APP_LC_PERIODS
+    sd      t0, 16(s4)
+    li      t0, APP_LC_BOOTSTRAPS
+    sd      t0, 24(s4)
+    li      t0, APP_LC_HEADERS
+    sd      t0, 32(s4)
+    li      t0, APP_LC_COMMITTEES
+    sd      t0, 40(s4)
+    li      t0, APP_LC_UPDATES
+    sd      t0, 48(s4)
+    mv      a0, s4
+    addi    a1, s4, LcRoom__mem
+    CALL_GLOBAL lantern_lc_store_size
+    bnez    a0, 9f
+    ld      s3, LcRoom__mem(s4)
+    mv      a0, s3
+    call    app_map
+    beqz    a0, 9f
+    mv      s2, a0
+    sd      s3, 0(s2)
+    mv      a0, s4
+    li      t0, APP_CONFIG
+    add     a1, s1, t0
+    LDQ     a2, s1, APP_STATE
+    LDQ     a3, s1, APP_BLOCK
+    SCRATCH a4
+    mv      a5, s2
+    CALL_GLOBAL lantern_lc_store_init
+    bnez    a0, 9f
+    li      a0, NODE_LC_ID
+    mv      a1, s2
+    mv      a2, s3
+    call    app_buf_add
+    bnez    a0, 9f
+    LEAVE 0
+9:  li      a0, 1
+    LEAVE 0
+END_FUNCTION app_lc_start
+
+/*
+ * L2: a0 = 0 when the light client store of the table entry a0 is in a new buffer with twice the
+ * capacities of each part (lantern_lc_store_copy); else 1. s2 the entry, s3 the new buffer, s4 its
+ * size, s5 APP_TMP: the LcRoom, then the size. Locals: L the new buffer and its size.
+ */
+LOCAL_FUNCTION app_lc_grow
+    ENTER 16
+    mv      s2, a0
+    li      t0, APP_TMP
+    add     s5, s1, t0
+    ld      t0, 8(s2)
+    li      t1, 0
+1:  slli    t2, t1, 3
+    add     t3, t0, t2
+    ld      t3, LcStore_room(t3)
+    slli    t3, t3, 1
+    add     t2, s5, t2
+    sd      t3, 0(t2)
+    addi    t1, t1, 1
+    li      t2, 7
+    bltu    t1, t2, 1b
+    mv      a0, s5
+    addi    a1, s5, LcRoom__mem
+    CALL_GLOBAL lantern_lc_store_size
+    bnez    a0, 9f
+    ld      s4, LcRoom__mem(s5)
+    mv      a0, s4
+    call    app_map
+    beqz    a0, 9f
+    mv      s3, a0
+    sd      s4, 0(s3)
+    ld      a0, 8(s2)
+    mv      a1, s5
+    mv      a2, s3
+    CALL_GLOBAL lantern_lc_store_copy
+    bnez    a0, 8f
+    addi    a0, s2, 8                       # the old buffer goes
+    addi    a1, s2, 16
+    CALL_GLOBAL lantern_shell_unmap
+    sd      s3, 8(s2)
+    sd      s4, 16(s2)
+    li      a0, 0
+    LEAVE 16
+8:  sd      s3, L(sp)                       # the new one goes
+    sd      s4, (L + 8)(sp)
+    addi    a0, sp, L
+    addi    a1, sp, (L + 8)
+    CALL_GLOBAL lantern_shell_unmap
+9:  li      a0, 1
+    LEAVE 16
+END_FUNCTION app_lc_grow
+
+/*
  * L2: the WORK action a0, by lantern_node_run with its buffers, again with more room while it asks
  * for it; then its WORK_DONE event joins the next step's. s2 the action, s3-s6 the entries of
  * state_a, state_b, state_c and data (or 0), s7 the tries, s8 the kind, s9 a size.
@@ -1504,6 +1610,8 @@ LOCAL_FUNCTION app_work
     bgeu    s7, t0, 91f
     li      t0, NODE_WORK_SERVE             # SERVE, NEW_PAYLOAD, FORKCHOICE: a larger event
     beq     s8, t0, 2f
+    li      t0, NODE_WORK_LC_SERVE
+    beq     s8, t0, 2f
     li      t0, NODE_WORK_NEW_PAYLOAD
     beq     s8, t0, 2f
     li      t0, NODE_WORK_FORKCHOICE
@@ -1538,6 +1646,10 @@ LOCAL_FUNCTION app_work
     beq     s8, t0, 4f
     li      t0, NODE_WORK_UPGRADE           # UPGRADE: state_b, the upgrade's buffer
     beq     s8, t0, 6f
+    li      t0, NODE_WORK_LC_BLOCK          # the light client works: state_c, the light client store
+    beq     s8, t0, 17f
+    li      t0, NODE_WORK_LC_HEAD
+    beq     s8, t0, 17f
     li      t0, NODE_WORK_IMPORT_BLOCK
     bne     s8, t0, 5f
     LDQ     t0, s1, APP_STORE
@@ -1579,6 +1691,11 @@ LOCAL_FUNCTION app_work
 6:  beqz    s4, 91f
     mv      a0, s4
     call    app_regrow
+    bnez    a0, 91f
+    j       1b
+17: beqz    s5, 91f
+    mv      a0, s5
+    call    app_lc_grow
     bnez    a0, 91f
     j       1b
 7:  li      a0, 2

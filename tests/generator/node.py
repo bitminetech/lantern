@@ -1879,7 +1879,8 @@ ANSWERED = ("getHealth", "getNetworkIdentity", "getNodeVersion", "getSyncingStat
             "getBlockHeader", "getStateFinalityCheckpoints", "getBlockV2", "getStateV2", "getBlockRoot", "getStateRoot",
             "getStateFork", "getSpec", "getForkSchedule", "getDepositContract", "getEpochCommittees",
             "getProposerDuties", "produceAttestationData", "getAttesterDuties", "eventstream", "getStateRandao",
-            "getEpochSyncCommittees", "getProposerLookahead", "getBlockAttestationsV2", "getBlindedBlock", "getDebugChainHeadsV2", "getDebugForkChoice", "getBlockHeaders", "getPeers", "getPeer", "getBlobSidecars", "getDebugDataColumnSidecars", "getBlobs", "getSyncCommitteeDuties", "getLiveness") + tuple(PENDING) + VALIDATOR_OPS
+            "getEpochSyncCommittees", "getProposerLookahead", "getBlockAttestationsV2", "getBlindedBlock", "getDebugChainHeadsV2", "getDebugForkChoice", "getBlockHeaders", "getPeers", "getPeer", "getBlobSidecars", "getDebugDataColumnSidecars", "getBlobs", "getSyncCommitteeDuties", "getLiveness", "getLightClientBootstrap",
+            "getLightClientUpdatesByRange", "getLightClientFinalityUpdate", "getLightClientOptimisticUpdate") + tuple(PENDING) + VALIDATOR_OPS
 STATE_READS = ("getStateRandao", "getEpochSyncCommittees", "getProposerLookahead")
 IDENTITY = (b"16Uiu2HAmPLe7Mzm8TsYUubgCAW1aJoeFScxrLj8ppHFivPo97bUZ",
             b"enr:-Iu4QLm7bZGdAhVwRqZ6Zf3LlnqKsBTnZGOByHQhPMQJ3pV4F3t8L9i5yJOZ0X0hiZ6q4D5V0jB7l8J3ZtYw1JDH9C4BgmlkgnY0gmlwhAoAAAGJc2VjcDI1NmsxoQPKY0yuDUmstAHYpMa2_oxVtw0RW_QAdpzBQA8yWM0xOIN0Y3CCIyg",
@@ -2054,6 +2055,13 @@ def api_values(spec, fork, state, block):
         b',"parent_root":' + qhex(block.parent_root) + b',"justified_epoch":' + q(state.current_justified_checkpoint.epoch) +
         b',"finalized_epoch":' + q(state.finalized_checkpoint.epoch) + b',"weight":' + q(spec.get_weight(store, root)) +
         b',"validity":"valid","execution_block_hash":' + qhex(payload.block_hash if payload is not None else bytes(32)) + b"}]}")
+    lc_bootstrap = None  # the LcStore's bootstrap of the anchor (light-client.md, lantern_lc_store_init), from altair
+    if fork != "phase0":
+        lc_header = spec.block_to_light_client_header(spec.SignedBeaconBlock(message=block))
+        branch = spec.compute_merkle_proof(state, spec.current_sync_committee_gindex_at_slot(state.slot))
+        boot = spec.LightClientBootstrap(header=lc_header, current_sync_committee=state.current_sync_committee,
+                                         current_sync_committee_branch=spec.CurrentSyncCommitteeBranch(data=branch))
+        lc_bootstrap = (bytes(boot.encode_bytes()), to_json(boot).encode())
     states = {int(block.slot): state}  # the anchor state processed to each slot to the store's
     for slot in range(int(block.slot) + 1, int(block.slot) + SLOTS_AHEAD + 1):
         s = state.copy()
@@ -2069,7 +2077,7 @@ def api_values(spec, fork, state, block):
                 genesis_version=bytes(spec.config.GENESIS_FORK_VERSION), root=bytes(root), slot=int(block.slot),
                 header=header, cgc=int(spec.config.CUSTODY_REQUIREMENT) if fork == "fulu" else None,
                 checkpoints=[state.previous_justified_checkpoint, state.current_justified_checkpoint, state.finalized_checkpoint],
-                fork_choice_body=fork_choice_body)
+                fork_choice_body=fork_choice_body, lc_bootstrap=lc_bootstrap)
 
 
 def status_of(spec, val, epoch):
@@ -2446,6 +2454,19 @@ def answer(v, name, route, offline, close, keep_alive, syncing=False):
         if route.response == 2:
             return streamed(None, b"", ssz=True, **kw)
         return streamed(None, b'{"execution_optimistic":false,"finalized":true,"data":[]}', **kw)
+    if name == "getLightClientBootstrap":  # the LcStore holds the anchor's bootstrap alone, from altair
+        if v["lc_bootstrap"] is None or route.id_root != v["root"]:
+            return error(404, **kw)
+        ssz, text = v["lc_bootstrap"]
+        if route.response == 2:
+            return streamed(v["fork"], ssz, ssz=True, **kw)
+        return streamed(v["fork"], b'{"version":"' + v["fork"].encode() + b'","data":' + text + b"}", **kw)
+    if name in ("getLightClientFinalityUpdate", "getLightClientOptimisticUpdate"):  # no block imported: none
+        return error(404, **kw)
+    if name == "getLightClientUpdatesByRange":  # no best update of any period
+        if route.response == 2:
+            return response(200, b"", ssz=True, **kw)
+        return response(200, b"[]", **kw)
     if name == "getPeers":  # the node has no peers
         return response(200, b'{"data":[],"meta":{"count":0}}', **kw)
     if name == "getPeer":
@@ -3154,6 +3175,16 @@ def api_requests(spec, fork, v, kind="main"):
     health = by_name["getHealth"]
     add("health_syncing_status", api_route.base(health, [("syncing_status", b"500")]))
     add("health_syncing_status_offline", api_route.base(health, [("syncing_status", b"299")]), offline=True)
+    boot = by_name["getLightClientBootstrap"]  # the light client reads (light-client.md, beacon-api.md)
+    add("lc_bootstrap_anchor", api_route.base(boot, path_values={"block_root": qhex(v["root"])[1:-1]}))
+    add("lc_bootstrap_anchor_ssz", api_route.base(boot, path_values={"block_root": qhex(v["root"])[1:-1]},
+                                                  accept=b"application/octet-stream"))
+    add("lc_bootstrap_other", api_route.base(boot, path_values={"block_root": b"0x" + bytes(32).hex().encode()}))
+    for lc_name in ("getLightClientFinalityUpdate", "getLightClientOptimisticUpdate"):
+        add(f"lc_{lc_name[14:]}_ssz", api_route.base(by_name[lc_name], accept=b"application/octet-stream"))
+    lc_range = by_name["getLightClientUpdatesByRange"]
+    add("lc_updates_ssz", api_route.request(lc_range["method"], api_route.fill(lc_range), b"start_period=1&count=200",
+                                            accept=b"application/octet-stream"))
     header = by_name["getBlockHeader"]
     add("header_head", api_route.base(header, path_values={"block_id": b"head"}))
     add("header_root", api_route.base(header, path_values={"block_id": qhex(v["root"])[1:-1]}))

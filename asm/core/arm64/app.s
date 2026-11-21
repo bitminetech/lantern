@@ -989,6 +989,8 @@ LOCAL_FUNCTION app_start
     mov     x10, #APP_BUFS_CAP
     add     x12, x19, #(APP_BUFS + 8)
     stp     x9, x10, [x12]
+    bl      app_lc_start                    /* BufferId 2: the light client store */
+    cbnz    x0, 97f
     mov     x0, #APP_ACTIONS                /* the queues of a step */
     mov     x1, #APP_QUEUE_BYTES
     bl      app_alloc
@@ -1338,6 +1340,102 @@ LOCAL_FUNCTION app_regrow
 END_FUNCTION app_regrow
 
 /*
+ * L2: x0 = 0 with the light client store as BufferId 2 (node.md, lantern_node_init: Caller must):
+ * lantern_lc_store_init of the anchor state and block with the APP_LC_* capacities; else 1. x20
+ * the store, x21 its size. APP_TMP: the LcRoom, then the size.
+ */
+LOCAL_FUNCTION app_lc_start
+    ENTER 0
+    add     x9, x19, #APP_TMP
+    mov     x10, #APP_LC_BLOCKS
+    mov     x11, #APP_LC_FINALIZED
+    stp     x10, x11, [x9]
+    mov     x10, #APP_LC_PERIODS
+    mov     x11, #APP_LC_BOOTSTRAPS
+    stp     x10, x11, [x9, #16]
+    mov     x10, #APP_LC_HEADERS
+    mov     x11, #APP_LC_COMMITTEES
+    stp     x10, x11, [x9, #32]
+    mov     x10, #APP_LC_UPDATES
+    str     x10, [x9, #48]
+    mov     x0, x9
+    add     x1, x9, #LcRoom__mem
+    CALL_GLOBAL lantern_lc_store_size
+    cbnz    x0, 9f
+    ldr     x21, [x19, #(APP_TMP + LcRoom__mem)]
+    mov     x0, x21
+    bl      app_map
+    cbz     x0, 9f
+    mov     x20, x0
+    str     x21, [x20]
+    add     x0, x19, #APP_TMP
+    add     x1, x19, #APP_CONFIG
+    ldr     x2, [x19, #APP_STATE]
+    ldr     x3, [x19, #APP_BLOCK]
+    SCRATCH x4
+    mov     x5, x20
+    CALL_GLOBAL lantern_lc_store_init
+    cbnz    x0, 9f
+    mov     x0, #NODE_LC_ID
+    mov     x1, x20
+    mov     x2, x21
+    bl      app_buf_add
+    cbnz    x0, 9f
+    LEAVE 0
+9:  mov     x0, #1
+    LEAVE 0
+END_FUNCTION app_lc_start
+
+/*
+ * L2: x0 = 0 when the light client store of the table entry x0 is in a new buffer with twice the
+ * capacities of each part (lantern_lc_store_copy); else 1. x20 the entry, x21 the new buffer, x22
+ * its size. APP_TMP: the LcRoom, then the size.
+ */
+LOCAL_FUNCTION app_lc_grow
+    ENTER 0
+    mov     x20, x0
+    ldr     x9, [x20, #8]
+    add     x10, x19, #APP_TMP
+    mov     x11, #0
+1:  add     x12, x9, #LcStore_room
+    ldr     x12, [x12, x11, lsl #3]
+    lsl     x12, x12, #1
+    str     x12, [x10, x11, lsl #3]
+    add     x11, x11, #1
+    cmp     x11, #7
+    b.lo    1b
+    mov     x0, x10
+    add     x1, x10, #LcRoom__mem
+    CALL_GLOBAL lantern_lc_store_size
+    cbnz    x0, 9f
+    ldr     x22, [x19, #(APP_TMP + LcRoom__mem)]
+    mov     x0, x22
+    bl      app_map
+    cbz     x0, 9f
+    mov     x21, x0
+    str     x22, [x21]
+    ldr     x0, [x20, #8]
+    add     x1, x19, #APP_TMP
+    mov     x2, x21
+    CALL_GLOBAL lantern_lc_store_copy
+    cbnz    x0, 8f
+    add     x0, x20, #8                     /* the old buffer goes */
+    add     x1, x20, #16
+    CALL_GLOBAL lantern_shell_unmap
+    stp     x21, x22, [x20, #8]
+    mov     x0, #0
+    LEAVE 0
+8:  str     x21, [sp, #-16]!                /* the new one goes */
+    str     x22, [sp, #8]
+    mov     x0, sp
+    add     x1, sp, #8
+    CALL_GLOBAL lantern_shell_unmap
+    add     sp, sp, #16
+9:  mov     x0, #1
+    LEAVE 0
+END_FUNCTION app_lc_grow
+
+/*
  * L2: the WORK action x0, by lantern_node_run with its buffers, again with more room while it asks
  * for it; then its WORK_DONE event joins the next step's. x20 the action, x21-x24 the entries of
  * state_a, state_b, state_c and data (or 0), x25 the tries, x26 the kind.
@@ -1421,6 +1519,8 @@ LOCAL_FUNCTION app_work
     b.hs    91f
     cmp     x26, #NODE_WORK_SERVE           /* SERVE, NEW_PAYLOAD, FORKCHOICE: a larger event */
     b.eq    2f
+    cmp     x26, #NODE_WORK_LC_SERVE
+    b.eq    2f
     cmp     x26, #NODE_WORK_NEW_PAYLOAD
     b.eq    2f
     cmp     x26, #NODE_WORK_FORKCHOICE
@@ -1455,6 +1555,10 @@ LOCAL_FUNCTION app_work
     b.eq    4f
     cmp     x26, #NODE_WORK_UPGRADE         /* UPGRADE: state_b, the upgrade's buffer */
     b.eq    6f
+    cmp     x26, #NODE_WORK_LC_BLOCK        /* the light client works: state_c, the light client store */
+    b.eq    17f
+    cmp     x26, #NODE_WORK_LC_HEAD
+    b.eq    17f
     cmp     x26, #NODE_WORK_IMPORT_BLOCK
     b.ne    5f
     ldr     x9, [x19, #APP_STORE]
@@ -1498,6 +1602,11 @@ LOCAL_FUNCTION app_work
 6:  cbz     x22, 91f
     mov     x0, x22
     bl      app_regrow
+    cbnz    x0, 91f
+    b       1b
+17: cbz     x23, 91f
+    mov     x0, x23
+    bl      app_lc_grow
     cbnz    x0, 91f
     b       1b
 7:  mov     x0, #2
