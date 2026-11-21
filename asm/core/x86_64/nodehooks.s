@@ -651,6 +651,171 @@ SPEC_FUNCTION node_attester_duties
     LEAVE 192
 SPEC_END node_attester_duties
 
+/* Set the byte of each index of a phase0 epoch list of PendingAttestation values: of the part at ref of the state. */
+.macro LIVE_PENDING ref
+    MOVQ    %rax, \ref
+    mov     (%rbx,%rax), %rcx               # the part's offset and count
+    mov     8(%rbx,%rax), %rdx
+    mov     %rcx, (L + 16)(%rsp)
+    mov     %rdx, (L + 24)(%rsp)
+71: mov     (L + 16)(%rsp), %rcx
+    mov     (L + 24)(%rsp), %rdx
+    test    %rdx, %rdx
+    jz      74f
+    mov     (%rbx,%rcx), %rax               # the next value starts after this one's size
+    add     %rcx, %rax
+    mov     %rax, (L + 16)(%rsp)
+    dec     %rdx
+    mov     %rdx, (L + 24)(%rsp)
+    mov     S10(%rsp), %rax                 # the bytes and the indices at the end, S(4) before them
+    SCRATCH_GIVE %r13, %rax, 2, %r15
+    mov     %rbx, %rdi
+    lea     (%rbx,%rcx), %rsi
+    mov     (L + 32)(%rsp), %rdx
+    mov     %r13, %rcx
+    mov     S10(%rsp), %rax
+    SCRATCH_LIST %r8, %r13, %rax, 1, %r15
+    call    lantern_get_attesting_indices
+    mov     S10(%rsp), %rcx
+    mov     %rcx, (%r13)
+    test    %rax, %rax
+    jnz     99f
+    mov     S10(%rsp), %rax
+    SCRATCH_LIST %rdi, %r13, %rax, 1, %r15
+    mov     LIST_COUNT(%rdi), %rcx
+    add     $LIST_FIXED, %rdi
+72: test    %rcx, %rcx
+    jz      71b
+    mov     (%rdi), %rax
+    movb    $1, (%r14,%rax)
+    add     $8, %rdi
+    dec     %rcx
+    jmp     72b
+74:
+.endm
+
+/* Set the byte of each validator whose participation flags, of the part at ref of the state, are not 0. */
+.macro LIVE_FLAGS ref
+    PART    %rsi, %rcx, %rbx, \ref
+    cmp     %r15, %rcx
+    cmova   %r15, %rcx
+    xor     %eax, %eax
+75: cmp     %rcx, %rax
+    jae     77f
+    cmpb    $0, (%rsi,%rax)
+    je      76f
+    movb    $1, (%r14,%rax)
+76: inc     %rax
+    jmp     75b
+77:
+.endm
+
+/*
+ * (state, config, seen, ids, epoch, scratch, out) -> rax: whether the validator of each item was
+ * seen live in the epoch (node.md, lantern_node_liveness). rbx the state, rbp the seen, r12 the
+ * items, r13 scratch, r14 a byte for each validator (list 0 of scratch), r15 the validator count;
+ * S7 out, S8 the items' count, S9 the epoch, S10 the scratch's size. Locals: L the previous epoch,
+ * L+8 the current epoch, L+16 the next value and the count left of an epoch list, L+32 the
+ * CommitteeCache.
+ */
+SPEC_FUNCTION node_liveness
+    ENTER 48
+    mov     %rdi, %rbx
+    mov     CONFIG_COMMITTEE_CACHE(%rsi), %rax
+    mov     %rax, (L + 32)(%rsp)
+    mov     %rdx, %rbp
+    mov     8(%rcx), %r12
+    add     %rcx, %r12
+    mov     16(%rcx), %rax
+    shr     $6, %rax
+    mov     %rax, S8(%rsp)
+    mov     %r8, S9(%rsp)
+    mov     %r9, %r13
+    mov     (48 + 96)(%rsp), %rax           # the seventh argument
+    mov     %rax, S7(%rsp)
+.if FORK == FORK_PHASE0
+    NEED_SCRATCH %r13, %rbx, 6, 98f
+.else
+    NEED_SCRATCH %r13, %rbx, 1, 98f
+.endif
+    mov     (BeaconState_validators + 8)(%rbx), %r15
+    mov     (%r13), %rax
+    mov     %rax, S10(%rsp)
+    SCRATCH_LIST %r14, %r13, %rax, 0, %r15
+    add     $LIST_FIXED, %r14               # a byte for each validator, 0
+    mov     %r14, %rdi
+    mov     %r15, %rsi
+    call    lantern_zero
+    mov     %rbx, %rdi
+    lea     L(%rsp), %rsi
+    call    lantern_get_previous_epoch
+    mov     %rbx, %rdi
+    lea     (L + 8)(%rsp), %rsi
+    call    lantern_get_current_epoch
+    mov     S9(%rsp), %rax                  # in the beacon chain: the current epoch's list
+    cmp     (L + 8)(%rsp), %rax
+    jne     1f
+.if FORK == FORK_PHASE0
+    LIVE_PENDING BeaconState_current_epoch_attestations
+.else
+    LIVE_FLAGS BeaconState_current_epoch_participation
+.endif
+1:  mov     S9(%rsp), %rax                  # the previous epoch's list
+    cmp     L(%rsp), %rax
+    jne     2f
+.if FORK == FORK_PHASE0
+    LIVE_PENDING BeaconState_previous_epoch_attestations
+.else
+    LIVE_FLAGS BeaconState_previous_epoch_participation
+.endif
+2:  PART    %rsi, %rcx, %rbp, Seen_keys     # on the network and from the API: the Seen's keys
+    mov     S9(%rsp), %r8
+3:  test    %rcx, %rcx
+    jz      6f
+    mov     (%rsi), %rax                    # kind, a, b: the index
+    mov     8(%rsi), %rdx
+    mov     16(%rsi), %rdi
+    add     $SeenKey__mem, %rsi
+    dec     %rcx
+    cmp     %r15, %rdi
+    jae     3b
+    cmp     $SEEN_ATTESTATION, %rax         # an epoch's keys
+    je      4f
+    cmp     $SEEN_AGGREGATOR_EPOCH, %rax
+    je      4f
+    cmp     $SEEN_PROPOSER_SLOT, %rax       # a slot's keys
+    je      31f
+    cmp     $SEEN_SYNC_MESSAGE, %rax
+    je      31f
+    cmp     $SEEN_SYNC_CONTRIBUTION, %rax
+    jne     3b
+31: shr     $LOG2_SLOTS_PER_EPOCH, %rdx
+4:  cmp     %r8, %rdx
+    jne     3b
+    movb    $1, (%r14,%rdi)
+    jmp     3b
+6:  xor     %ecx, %ecx                      # each item: the byte of its index
+    mov     S7(%rsp), %rdi
+7:  cmp     S8(%rsp), %rcx
+    jae     8f
+    mov     %rcx, %rax
+    shl     $6, %rax
+    mov     8(%r12,%rax), %rax
+    xor     %edx, %edx
+    cmp     %r15, %rax
+    jae     79f
+    movzbl  (%r14,%rax), %edx
+79: mov     %dl, (%rdi,%rcx)
+    inc     %rcx
+    jmp     7b
+8:  xor     %eax, %eax
+99: mov     S10(%rsp), %rcx
+    mov     %rcx, (%r13)
+    LEAVE 48
+98: mov     $LANTERN_BUFFER_TOO_SMALL, %eax
+    LEAVE 48
+SPEC_END node_liveness
+
 /* rdi = the fork's TypeDescriptor of the NODE_JSON_* kind r10, or 0. Uses rdi. */
 LOCAL_FUNCTION node_type_of_kind
     UNWIND_END_PROLOGUE

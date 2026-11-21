@@ -502,6 +502,12 @@ api_u_pubkey:
 api_u_index:
     .ascii ",\"validator_index\":"
 .set api_u_index_len, 19
+api_l_index:                            /* getLiveness (beacon-api.md) */
+    .ascii "{\"index\":"
+.set api_l_index_len, 9
+api_l_live:
+    .ascii ",\"is_live\":"
+.set api_l_live_len, 11
 api_ev_head:                            /* eventstream (beacon-api.md) */
     .ascii "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nCache-Control: no-cache\r\n"
 .set api_ev_head_len, 75

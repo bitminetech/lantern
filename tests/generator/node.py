@@ -148,6 +148,10 @@ def anchor(spec, fork, statuses=False, epoch=ANCHOR_EPOCH, extra=0):
             state.pending_consolidations.append(spec.PendingConsolidation(source_index=1 + k, target_index=4 + k))
     if fork == "fulu":  # as at genesis and at the fork (fulu fork.md)
         state.proposer_lookahead = spec.initialize_proposer_lookahead(state)
+    if statuses and fork != "phase0":  # validators live in the beacon chain, for getLiveness (node.md, node-api)
+        state.current_epoch_participation[2] = 1
+        state.current_epoch_participation[6] = 4
+        state.previous_epoch_participation[5] = 7
     block = spec.BeaconBlock(slot=slot, state_root=spec.hash_tree_root(state))
     return state, block
 
@@ -175,7 +179,73 @@ def answers(spec, fork, state, block):
     return bytes(status.encode_bytes()), bytes(metadata.encode_bytes())
 
 
+SEEN_SETS = {1: "proposer_slots", 2: "aggregator_epochs", 3: "voluntary_exit_indices", 4: "proposer_slashing_indices",
+             5: "attester_slashing_indices", 6: "attestation_validator_epochs", 7: "sync_contribution_aggregator_slots",
+             8: "sync_message_validator_slots", 9: "bls_to_execution_change_indices", 10: "data_column_sidecar_tuples",
+             11: "blob_sidecar_tuples"}  # SEEN_* of networking.md, SeenKey, and the spec's set of each
+
+
+def pending_marks(spec, state):
+    """Phase0: two attestations in each epoch list, of the first slots of the epoch whose committee 0 has
+    members: in the current list all the bits of the first, in the previous list the first bit; the second
+    of each with no bit."""
+    spe = int(spec.SLOTS_PER_EPOCH)
+    lists = ((spec.get_current_epoch(state), state.current_epoch_attestations, True),
+             (spec.get_previous_epoch(state), state.previous_epoch_attestations, False))
+    for epoch, atts, every in lists:
+        added = 0
+        for slot in range(int(epoch) * spe, (int(epoch) + 1) * spe):
+            committee = spec.get_beacon_committee(state, spec.Slot(slot), spec.CommitteeIndex(0))
+            if len(committee) == 0:
+                continue
+            bits = [added == 0 and (every or k == 0) for k in range(len(committee))]
+            atts.append(spec.PendingAttestation(
+                aggregation_bits=spec.AggregationBits(data=bits),
+                data=spec.AttestationData(slot=slot, index=0, target=spec.Checkpoint(epoch=epoch)),
+                inclusion_delay=1, proposer_index=0))
+            added += 1
+            if added == 2:
+                break
+
+
+def liveness_cases(fork, preset):
+    """lantern_node_liveness (node.md, node-liveness): a state, the SeenKey entries of a Seen, the indices
+    of ids, an epoch, and the byte of each index."""
+    import struct
+    spec = module(fork, preset)
+    spe = int(spec.SLOTS_PER_EPOCH)
+    for e0 in (0, ANCHOR_EPOCH):
+        state, _ = run(spec, schedule(fork), lambda: anchor(spec, fork, statuses=True, epoch=e0))
+        if fork == "phase0":
+            run(spec, schedule(fork), lambda: pending_marks(spec, state))
+        cur, prev = int(spec.get_current_epoch(state)), int(spec.get_previous_epoch(state))
+        n = len(state.validators)
+        keys = [(6, cur, 3, 0), (6, cur + 1, 4, 0), (6, prev, 9, 0), (2, cur, 7, 0), (2, cur + 1, 10, 0),
+                (1, cur * spe + 1, 8, 0), (1, (cur + 1) * spe, 11, 0), (1, prev * spe + spe - 1, 12, 0),
+                (3, cur, 13, 0), (4, cur, 14, 0), (5, cur, 15, 0), (9, cur, 13, 0), (10, cur * spe, 14, 2),
+                (11, cur * spe, 15, 1), (6, cur, n + 3, 0)]
+        if fork != "phase0":
+            keys += [(8, cur * spe + 2, 1, 3), (7, prev * spe + 3, 0, 1), (8, (cur + 1) * spe + 1, 15, 0)]
+        seen = empty_seen(spec)
+        for kind, a, b, c in keys:
+            if not hasattr(seen, SEEN_SETS[kind]):
+                continue
+            entry = (a,) if kind in (3, 4, 5, 9) else (a, b) if kind in (1, 2, 6) else (a, b, c)
+            getattr(seen, SEEN_SETS[kind]).add(entry if len(entry) > 1 else entry[0])
+        ids = list(range(n + 2)) + [3, n + 3]
+        for e in sorted({cur, prev, cur + 1, cur + 5}):
+            out = run(spec, schedule(fork), lambda: bytes(1 if is_live(spec, fork, state, seen, e, i) else 0 for i in ids))
+            yield "liveness", f"state_epoch_{e0}_at_{e}", {
+                "state": bytes(state.encode_bytes()),
+                "keys": b"".join(struct.pack("<4Q", *k) for k in keys),
+                "ids": b"".join(struct.pack("<Q", i) for i in ids),
+                "epoch": e,
+                "out": out,
+            }
+
+
 def cases(fork, preset):
+    yield from liveness_cases(fork, preset)
     if fork == "phase0":  # the node runs altair to fulu, as the fork choice cases do
         return
     spec = module(fork, preset)
@@ -989,7 +1059,7 @@ ANSWERED = ("getHealth", "getNetworkIdentity", "getNodeVersion", "getSyncingStat
             "getBlockHeader", "getStateFinalityCheckpoints", "getBlockV2", "getStateV2", "getBlockRoot", "getStateRoot",
             "getStateFork", "getSpec", "getForkSchedule", "getDepositContract", "getEpochCommittees",
             "getProposerDuties", "produceAttestationData", "getAttesterDuties", "eventstream", "getStateRandao",
-            "getEpochSyncCommittees", "getProposerLookahead", "getBlockAttestationsV2", "getBlindedBlock", "getDebugChainHeadsV2", "getDebugForkChoice", "getBlockHeaders", "getPeers", "getPeer", "getBlobSidecars", "getDebugDataColumnSidecars", "getSyncCommitteeDuties") + tuple(PENDING) + VALIDATOR_OPS
+            "getEpochSyncCommittees", "getProposerLookahead", "getBlockAttestationsV2", "getBlindedBlock", "getDebugChainHeadsV2", "getDebugForkChoice", "getBlockHeaders", "getPeers", "getPeer", "getBlobSidecars", "getDebugDataColumnSidecars", "getSyncCommitteeDuties", "getLiveness") + tuple(PENDING) + VALIDATOR_OPS
 STATE_READS = ("getStateRandao", "getEpochSyncCommittees", "getProposerLookahead")
 IDENTITY = (b"16Uiu2HAmPLe7Mzm8TsYUubgCAW1aJoeFScxrLj8ppHFivPo97bUZ",
             b"enr:-Iu4QLm7bZGdAhVwRqZ6Zf3LlnqKsBTnZGOByHQhPMQJ3pV4F3t8L9i5yJOZ0X0hiZ6q4D5V0jB7l8J3ZtYw1JDH9C4BgmlkgnY0gmlwhAoAAAGJc2VjcDI1NmsxoQPKY0yuDUmstAHYpMa2_oxVtw0RW_QAdpzBQA8yWM0xOIN0Y3CCIyg",
@@ -1438,6 +1508,59 @@ def attester_duties_answer(v, route, kw, syncing):
                     b",".join(items) + b"]}", **kw)
 
 
+def empty_seen(spec):
+    """The spec's Seen with every set and dict empty, as lantern_seen_init makes it."""
+    import dataclasses
+    return spec.Seen(**{f.name: (dict() if "dict" in str(f.type) else set()) for f in dataclasses.fields(spec.Seen)})
+
+
+def is_live(spec, fork, state, seen, epoch, index):
+    """getLiveness (beacon-api.md): in the beacon chain by the state's epoch lists, on the network and from
+    the API by the Seen's keys of the epoch or of its slots."""
+    if index >= len(state.validators):
+        return False
+    cur, prev = int(spec.get_current_epoch(state)), int(spec.get_previous_epoch(state))
+    if fork == "phase0":
+        for e, atts in ((cur, state.current_epoch_attestations), (prev, state.previous_epoch_attestations)):
+            if epoch == e and any(index in spec.get_attesting_indices(state, a) for a in atts):
+                return True
+    else:
+        if epoch == cur and state.current_epoch_participation[index] != 0:
+            return True
+        if epoch == prev and state.previous_epoch_participation[index] != 0:
+            return True
+    for keys in (seen.attestation_validator_epochs, seen.aggregator_epochs):
+        if any(int(k[0]) == epoch and int(k[1]) == index for k in keys):
+            return True
+    spe = int(spec.SLOTS_PER_EPOCH)
+    slot_sets = [seen.proposer_slots]
+    if fork != "phase0":
+        slot_sets += [seen.sync_message_validator_slots, seen.sync_contribution_aggregator_slots]
+    return any(int(k[1]) == index and int(k[0]) // spe == epoch for keys in slot_sets for k in keys)
+
+
+def liveness_answer(v, epoch, refs, kw, syncing, seen=None):
+    """The answer of getLiveness (beacon-api.md) for the body's ValidatorRef items, with the head's
+    post-state, the anchor state at its slot."""
+    import struct
+    spec = v["spec"]
+    if syncing:
+        return error(503, **kw)
+    store_epoch = (v["slot"] + SLOTS_AHEAD) // int(spec.SLOTS_PER_EPOCH)
+    if epoch < max(store_epoch - 1, 0) or epoch > store_epoch + 1:
+        return error(400, **kw)
+    if not refs or any(struct.unpack_from("<Q", r, 0)[0] != 1 for r in refs):
+        return error(400, **kw)
+    state = v["states"][v["slot"]]
+    seen = seen if seen is not None else empty_seen(spec)
+    items = []
+    for r in refs:
+        i = struct.unpack_from("<Q", r, 8)[0]
+        live = is_live(spec, v["fork"], state, seen, epoch, i)
+        items.append(b'{"index":' + q(i) + b',"is_live":' + (b"true" if live else b"false") + b"}")
+    return response(200, b'{"data":[' + b",".join(items) + b"]}", **kw)
+
+
 def stream_head(version, connection):
     """The head of an eventstream answer (beacon-api.md, eventstream)."""
     out = b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nCache-Control: no-cache\r\n"
@@ -1457,6 +1580,8 @@ def answer(v, name, route, offline, close, keep_alive, syncing=False):
         return attester_duties_answer(v, route, kw, syncing)
     if name == "getSyncCommitteeDuties":
         return sync_duties_answer(v, route, kw, syncing)
+    if name == "getLiveness":
+        return liveness_answer(v, route.epoch, route.refs, kw, syncing)
 
     current = v["slot"] + SLOTS_AHEAD
     if name == "getHealth":
@@ -2078,6 +2203,18 @@ def pool_requests(spec, fork, v, by_name, add):
     # with the store's nodes NOT_VALIDATED (syncing bit 1): the aggregate's beacon_block_root, 503
     add("aggregate_not_validated", agg_request(data_root, first_slot, first_index), syncing=2,
         want=lambda c, k: error(503, close=c, keep_alive=k))
+    # getLiveness after the POSTs, of every index: the attesters, aggregators and sync committee members they named
+    import struct
+    live_op = by_name["getLiveness"]
+    every = list(range(len(state.validators) + 2))
+    live_body = b"[" + b",".join(b'"%d"' % i for i in every) + b"]"
+    live_refs = [struct.pack("<QQ", 1, i) + bytes(48) for i in every]
+    store_epoch = (v["slot"] + SLOTS_AHEAD) // int(spec.SLOTS_PER_EPOCH)
+    for e in (store_epoch - 1, store_epoch, store_epoch + 1):
+        req = api_route.request(live_op["method"], api_route.fill(live_op, {"epoch": b"%d" % e}), b"",
+                                content_type=b"application/json")
+        add(f"liveness_pools_{e}", req, body=live_body,
+            want=lambda c, k, e=e: liveness_answer(v, e, live_refs, dict(close=c, keep_alive=k), False, seen))
 
 
 def api_requests(spec, fork, v, kind="main"):
@@ -2131,9 +2268,27 @@ def api_requests(spec, fork, v, kind="main"):
     duties = by_name["getProposerDuties"]
     epoch = v["slot"] // int(spec.SLOTS_PER_EPOCH)
     current = (v["slot"] + SLOTS_AHEAD) // int(spec.SLOTS_PER_EPOCH)
+
+    def liveness_requests():
+        """getLiveness of the epochs around the store's, with validators the anchor marks live (anchor)."""
+        live_op = by_name["getLiveness"]
+        n = len(v["states"][v["slot"]].validators)
+
+        def live(e, body, **headers):
+            return api_route.request(live_op["method"], api_route.fill(live_op, {"epoch": b"%d" % e}), b"", body=body,
+                                     content_type=b"application/json", **headers)
+        marked = b'["2","5","6","0","%d","%d","2"]' % (n - 1, n + 4)
+        for e in range(max(current - 2, 0), current + 3):
+            add(f"liveness_{e}", live(e, marked), body=marked)
+        for name, body in (("liveness_none", b""), ("liveness_empty", b"[]"),
+                           ("liveness_pubkey", b'["0x' + bytes(48).hex().encode() + b'"]')):
+            add(name, live(current, body), body=body if body else None)
+        add("liveness_http10", live(current, marked), body=marked, version=b"HTTP/1.0")
+        add("liveness_syncing", live(current, marked), body=marked, syncing=True)
     if kind == "genesis":
         for e in range(0, 3):
             add(f"duties_{e}", api_route.base(duties, path_values={"epoch": b"%d" % e}))
+        liveness_requests()
         return out
     if kind == "late":  # the lowest epoch whose seed's RANDAO mix the state holds, and the one below
         lowest = epoch + 1 - int(spec.EPOCHS_PER_HISTORICAL_VECTOR) + int(spec.MIN_SEED_LOOKAHEAD) + 1
@@ -2305,6 +2460,7 @@ def api_requests(spec, fork, v, kind="main"):
     add("sync_duties_http10", sd(current, some), body=some, version=b"HTTP/1.0")
     add("sync_duties_syncing", sd(current, some), body=some, syncing=True)
     add("att_duties_syncing", att_duties(current, some), body=some, syncing=True)
+    liveness_requests()
     first = epoch * int(spec.SLOTS_PER_EPOCH)
     for e in range(epoch - 1, epoch + 3):
         add(f"committees_epoch_{e}", api_route.base(committees, [("epoch", b"%d" % e)]))

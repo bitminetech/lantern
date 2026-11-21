@@ -1636,10 +1636,54 @@ LOCAL_FUNCTION api_body
     call    api_sync_duties_body
     UNFRAME 16
 181: li     t0, API_OP_GET_ATTESTER_DUTIES
-    bne     s10, t0, 99f
+    bne     s10, t0, 182f
     call    api_duties_json
+    UNFRAME 16
+182: li     t0, API_OP_GET_LIVENESS        # getLiveness: {"data":[{"index":…,"is_live":…},…]}
+    bne     s10, t0, 99f
+    call    api_liveness_body
 99: UNFRAME 16
 END_FUNCTION api_body
+
+/*
+ * The body of getLiveness (beacon-api.md) from the view s4: {"data":[{"index":…,"is_live":…},…]}
+ * of the ValidatorRef items at ApiView_sd_ids, each by its byte at ApiView_live_out. Locals: the
+ * item's index.
+ */
+LOCAL_FUNCTION api_liveness_body
+    FRAME 16
+    API_LIT api_p_data
+    sd      zero, 0(sp)
+1:  LDQ     t0, s4, ApiView_sd_ids
+    ld      t1, 16(t0)
+    srli    t1, t1, 6
+    ld      t2, 0(sp)
+    bgeu    t2, t1, 9f
+    beqz    t2, 2f
+    API_LIT api_p_comma
+2:  API_LIT api_l_index
+    LDQ     t0, s4, ApiView_sd_ids
+    ld      t1, 8(t0)
+    add     t1, t0, t1
+    ld      t2, 0(sp)
+    slli    t2, t2, 6
+    add     t1, t1, t2
+    ld      a0, 8(t1)
+    call    api_qdec
+    API_LIT api_l_live
+    LDQ     t0, s4, ApiView_live_out
+    ld      t2, 0(sp)
+    add     t0, t0, t2
+    lbu     a0, 0(t0)
+    call    api_bool
+    API_LIT api_end1
+    ld      t2, 0(sp)
+    addi    t2, t2, 1
+    sd      t2, 0(sp)
+    j       1b
+9:  API_LIT api_v_end
+    UNFRAME 16
+END_FUNCTION api_liveness_body
 
 /*
  * The JSON of getAttesterDuties from the view s4: {"dependent_root":…,"execution_optimistic":…,
@@ -2881,6 +2925,8 @@ LOCAL_FUNCTION node_api_event
     beq     a3, t0, 58f
     li      t0, API_OP_GET_SYNC_COMMITTEE_DUTIES
     beq     a3, t0, 53f
+    li      t0, API_OP_GET_LIVENESS
+    beq     a3, t0, 52f
     li      t0, API_OP_EVENTSTREAM
     beq     a3, t0, 61f
     li      t0, API_OP_GET_POOL_VOLUNTARY_EXITS
@@ -3031,6 +3077,44 @@ LOCAL_FUNCTION node_api_event
     ld      t2, ApiRoute_epoch(s7)
     li      t1, SLOTS_PER_EPOCH
     j       583f
+52: li      a2, 503                         # getLiveness: 503 while syncing; 400 outside the previous to the next epoch, with no index or a key
+    ld      t0, ApiView_is_syncing(s8)
+    bnez    t0, 80f
+    li      a2, 400
+    ld      t0, ApiRoute_list(s7)
+    ld      t1, (ApiRoute_list + 8)(s7)
+    beqz    t1, 80f
+    add     t0, s7, t0
+521: ld     t2, 0(t0)
+    li      t3, API_VALIDATOR_INDEX
+    bne     t2, t3, 80f
+    addi    t0, t0, 64
+    addi    t1, t1, -1
+    bnez    t1, 521b
+    mv      a0, s2
+    call    node_store_slot
+    li      t1, SLOTS_PER_EPOCH
+    divu    t0, a0, t1                      # the store's epoch
+    ld      t2, ApiRoute_epoch(s7)
+    li      a2, 400
+    addi    t1, t0, 1
+    bgtu    t2, t1, 80f
+    beqz    t0, 522f
+    addi    t0, t0, -1
+    bltu    t2, t0, 80f
+522: li     t0, API_ID_HEAD                 # the head's post-state at its slot; none: 500
+    sd      t0, ApiRoute_id_kind(s7)
+    mv      a0, s7
+    mv      a1, s8
+    call    node_api_state
+    li      a2, 500
+    bnez    a0, 80f
+    ld      t0, ApiRoute_epoch(s7)          # the epoch in the work's arg, in place of the slot
+    sd      t0, ApiView_head_slot(s8)
+    mv      a0, s7                          # its ids in the work's data
+    call    node_api_ids
+    sd      a0, ApiView_look_data(s8)
+    j       67f
 58: li      a2, 503                         # getAttesterDuties: 503 while syncing; 400 past the next epoch, with no index or a key
     ld      t0, ApiView_is_syncing(s8)
     bnez    t0, 80f
@@ -3294,6 +3378,8 @@ LOCAL_FUNCTION node_api_done
     beq     t0, t1, 3f
     li      t1, API_OP_GET_SYNC_COMMITTEE_DUTIES
     beq     t0, t1, 3f
+    li      t1, API_OP_GET_LIVENESS
+    beq     t0, t1, 3f
     li      t1, API_OP_GET_ATTESTER_DUTIES
     bne     t0, t1, 2f
 3:  ld      a1, NodeAction_data(s3)
@@ -3358,14 +3444,15 @@ LOCAL_FUNCTION node_api_done
 END_FUNCTION node_api_done
 
 /*
- * (node, store, work, state_a, data, scratch, event, room) -> a0: a NODE_WORK_API_ENCODE of
- * lantern_node_run (node.md): the response at NodeEvent_chunk of the event, whose buffer has room
- * bytes. s1 the node, s2 the store, s3 the work, s4 state_a, s5 data, s6 the scratch, s7 the
- * event, s8 the ApiView at the end of scratch, s9 the operation, s10 the room. Locals: L the
- * scratch's size, L+8 the fork, L+16 a Result, L+24 a blob count.
+ * (node, store, work, state_a, data, scratch, event, room; the seen in t0) -> a0: a
+ * NODE_WORK_API_ENCODE of lantern_node_run (node.md): the response at NodeEvent_chunk of the
+ * event, whose buffer has room bytes. s1 the node, s2 the store, s3 the work, s4 state_a, s5 data,
+ * s6 the scratch, s7 the event, s8 the ApiView at the end of scratch, s9 the operation, s10 the
+ * room. Locals: L the scratch's size, L+8 the fork, L+16 a Result, L+24 a blob count, L+32 the seen.
  */
 LOCAL_FUNCTION node_api_run
-    ENTER 32
+    ENTER 48
+    sd      t0, (L + 32)(sp)
     mv      s1, a0
     mv      s2, a1
     mv      s3, a2
@@ -3412,6 +3499,8 @@ LOCAL_FUNCTION node_api_run
     beq     s9, t2, 2f
     li      t2, API_OP_GET_PROPOSER_LOOKAHEAD
     beq     s9, t2, 2f
+    li      t2, API_OP_GET_LIVENESS
+    beq     s9, t2, 2f
     li      t2, API_OP_GET_STATE_FORK
     bne     s9, t2, 8f
 2:  ld      t0, 0(s6)                       # the ApiView at the end of scratch, with the work's values
@@ -3444,8 +3533,10 @@ LOCAL_FUNCTION node_api_run
     beq     s9, t2, 28f
     srli    t0, t0, 24                      # a state at the work's slot, else the work that brought it there failed
     ld      a0, NODE_STATE_SLOT(s4)
+    li      t1, API_OP_GET_LIVENESS         # getLiveness: the state at its own slot, the epoch in arg
+    beq     s9, t1, 43f
     bne     a0, t0, 42f
-    addi    a1, s1, Node_config
+43: addi    a1, s1, Node_config
     call    node_fork
     mv      t6, a0
     li      t0, API_OP_GET_STATE_VALIDATOR
@@ -3550,7 +3641,7 @@ LOCAL_FUNCTION node_api_run
     sd      a0, NodeEvent_result(s7)
     j       9f
 25: li      t0, API_OP_GET_ATTESTER_DUTIES
-    bne     s9, t0, 26f
+    bne     s9, t0, 251f
     beqz    s5, 41f                         # getAttesterDuties: lantern_node_attester_duties of its ids, its out at the end of scratch
     ld      t0, 16(s5)
     srli    t0, t0, 6
@@ -3569,6 +3660,34 @@ LOCAL_FUNCTION node_api_run
     mv      a2, s5
     mv      a3, s6
     FORK_CALL node_attester_duties
+    li      t0, LANTERN_BUFFER_TOO_SMALL
+    beq     a0, t0, 71f
+    beqz    a0, 24f
+    sd      a0, NodeEvent_result(s7)
+    j       9f
+251: li     t0, API_OP_GET_LIVENESS
+    bne     s9, t0, 26f
+    beqz    s5, 41f                         # getLiveness: lantern_node_liveness of its ids and the epoch, its out at the end of scratch
+    STQ     s5, s8, ApiView_sd_ids
+    ld      t0, 16(s5)
+    srli    t0, t0, 6
+    addi    t0, t0, 7
+    andi    t0, t0, -8
+    ld      t1, 0(s6)
+    bltu    t1, t0, 71f
+    sub     t1, t1, t0
+    sd      t1, 0(s6)
+    add     t2, s6, t1
+    STQ     t2, s8, ApiView_live_out
+    mv      a0, s4
+    addi    a1, s1, Node_config
+    ld      a2, (L + 32)(sp)
+    mv      a3, s5
+    ld      a4, NodeAction_arg(s3)
+    srli    a4, a4, 24
+    mv      a5, s6
+    mv      a6, t2
+    FORK_CALL node_liveness
     li      t0, LANTERN_BUFFER_TOO_SMALL
     beq     a0, t0, 71f
     beqz    a0, 24f
@@ -3797,13 +3916,13 @@ LOCAL_FUNCTION node_api_run
 9:  ld      t0, (L + 0)(sp)
     sd      t0, 0(s6)
     li      a0, LANTERN_OK
-    LEAVE 32
+    LEAVE 48
 8:  li      a0, LANTERN_INVALID_EVENT
-    LEAVE 32
+    LEAVE 48
 71: ld      t0, (L + 0)(sp)
     sd      t0, 0(s6)
 7:  li      a0, LANTERN_BUFFER_TOO_SMALL
-    LEAVE 32
+    LEAVE 48
 END_FUNCTION node_api_run
 
 /* ---------------------------------------------------------------- Lookup (beacon-api.md, Common rules) */
@@ -4205,6 +4324,8 @@ LOCAL_FUNCTION node_api_encode
     li      t1, API_OP_GET_EPOCH_SYNC_COMMITTEES
     beq     a0, t1, 4f
     li      t1, API_OP_GET_SYNC_COMMITTEE_DUTIES
+    beq     a0, t1, 4f
+    li      t1, API_OP_GET_LIVENESS
     beq     a0, t1, 4f
     li      t1, API_OP_GET_ATTESTER_DUTIES
     bne     a0, t1, 3f

@@ -10063,7 +10063,7 @@ FUNCTION lantern_node_run
     LEAVE 192
 975: cmp    x9, #NODE_WORK_API_ENCODE
     b.ne    976f
-    mov     x0, x19                         /* API_ENCODE: the response of an answer */
+    mov     x0, x19                         /* API_ENCODE: the response of an answer; the seen in x8 */
     mov     x1, x20
     mov     x2, x21
     mov     x3, x22
@@ -10071,6 +10071,7 @@ FUNCTION lantern_node_run
     mov     x5, x24
     mov     x6, x25
     mov     x7, x26
+    ldr     x8, [sp, #(L + 64)]
     bl      node_api_run
     LEAVE 192
 976: cmp    x9, #NODE_WORK_API_CHUNK

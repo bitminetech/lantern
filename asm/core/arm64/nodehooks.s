@@ -651,6 +651,151 @@ SPEC_FUNCTION node_attester_duties
     LEAVE 192
 SPEC_END node_attester_duties
 
+/* Set the byte of each index of a phase0 epoch list of PendingAttestation values: of the part at ref of the state. */
+.macro LIVE_PENDING ref
+    MOVQ    x9, \ref
+    add     x9, x19, x9
+    ldp     x12, x13, [x9]                  /* the part's offset and count */
+    stp     x12, x13, [sp, #(L + 16)]
+71: ldp     x12, x13, [sp, #(L + 16)]
+    cbz     x13, 74f
+    ldr     x15, [x19, x12]                 /* the next value starts after this one's size */
+    add     x14, x12, x15
+    sub     x13, x13, #1
+    stp     x14, x13, [sp, #(L + 16)]
+    SCRATCH_GIVE x22, x28, 2, x27           /* the bytes and the indices at the end, S(4) before them */
+    mov     x0, x19
+    add     x1, x19, x12
+    ldr     x2, [sp, #(L + 32)]
+    mov     x3, x22
+    SCRATCH_LIST x4, x22, x28, 1, x27
+    bl      lantern_get_attesting_indices
+    str     x28, [x22]
+    cbnz    x0, 99f
+    SCRATCH_LIST x9, x22, x28, 1, x27
+    ldr     x10, [x9, #LIST_COUNT]
+    add     x9, x9, #LIST_FIXED
+    mov     w12, #1
+72: cbz     x10, 71b
+    ldr     x11, [x9], #8
+    strb    w12, [x26, x11]
+    sub     x10, x10, #1
+    b       72b
+74:
+.endm
+
+/* Set the byte of each validator whose participation flags, of the part at ref of the state, are not 0. */
+.macro LIVE_FLAGS ref
+    PART    x9, x10, x19, \ref
+    cmp     x10, x27
+    csel    x10, x10, x27, lo
+    mov     x11, #0
+    mov     w13, #1
+75: cmp     x11, x10
+    b.hs    77f
+    ldrb    w12, [x9, x11]
+    cbz     w12, 76f
+    strb    w13, [x26, x11]
+76: add     x11, x11, #1
+    b       75b
+77:
+.endm
+
+/*
+ * (state, config, seen, ids, epoch, scratch, out) -> status: whether the validator of each item was
+ * seen live in the epoch (node.md, lantern_node_liveness). x19 the state, x20 the seen, x21 the items,
+ * x22 scratch, x23 out, x24 the items' count, x25 the epoch, x26 a byte for each validator (list 0
+ * of scratch), x27 the validator count, x28 the scratch's size. Locals: L the previous epoch, L+8 the
+ * current epoch, L+16 the next value and the count left of an epoch list, L+32 the CommitteeCache.
+ */
+SPEC_FUNCTION node_liveness
+    ENTER 48
+    mov     x19, x0
+    LDQ     x9, x1, CONFIG_COMMITTEE_CACHE
+    str     x9, [sp, #(L + 32)]
+    mov     x20, x2
+    ldr     x9, [x3, #8]
+    add     x21, x3, x9
+    ldr     x24, [x3, #16]
+    lsr     x24, x24, #6
+    mov     x25, x4
+    mov     x22, x5
+    mov     x23, x6
+.if FORK == FORK_PHASE0
+    NEED_SCRATCH x22, x19, 6, 98f
+.else
+    NEED_SCRATCH x22, x19, 1, 98f
+.endif
+    LDQ     x27, x19, BeaconState_validators + 8
+    ldr     x28, [x22]
+    SCRATCH_LIST x26, x22, x28, 0, x27
+    add     x26, x26, #LIST_FIXED           /* a byte for each validator, 0 */
+    mov     x0, x26
+    mov     x1, x27
+    bl      lantern_zero
+    mov     x0, x19
+    add     x1, sp, #L
+    bl      lantern_get_previous_epoch
+    mov     x0, x19
+    add     x1, sp, #(L + 8)
+    bl      lantern_get_current_epoch
+    ldr     x9, [sp, #(L + 8)]              /* in the beacon chain: the current epoch's list */
+    cmp     x25, x9
+    b.ne    1f
+.if FORK == FORK_PHASE0
+    LIVE_PENDING BeaconState_current_epoch_attestations
+.else
+    LIVE_FLAGS BeaconState_current_epoch_participation
+.endif
+1:  ldr     x9, [sp, #L]                    /* the previous epoch's list */
+    cmp     x25, x9
+    b.ne    2f
+.if FORK == FORK_PHASE0
+    LIVE_PENDING BeaconState_previous_epoch_attestations
+.else
+    LIVE_FLAGS BeaconState_previous_epoch_participation
+.endif
+2:  PART    x9, x10, x20, Seen_keys         /* on the network and from the API: the Seen's keys */
+    mov     w13, #1
+3:  cbz     x10, 6f
+    ldp     x11, x12, [x9]                  /* kind, a */
+    ldr     x14, [x9, #16]                  /* b: the index */
+    add     x9, x9, #SeenKey__mem
+    sub     x10, x10, #1
+    cmp     x14, x27
+    b.hs    3b
+    cmp     x11, #SEEN_ATTESTATION          /* an epoch's keys */
+    ccmp    x11, #SEEN_AGGREGATOR_EPOCH, #4, ne
+    b.eq    4f
+    cmp     x11, #SEEN_PROPOSER_SLOT        /* a slot's keys */
+    ccmp    x11, #SEEN_SYNC_MESSAGE, #4, ne
+    ccmp    x11, #SEEN_SYNC_CONTRIBUTION, #4, ne
+    b.ne    3b
+    lsr     x12, x12, #LOG2_SLOTS_PER_EPOCH
+4:  cmp     x12, x25
+    b.ne    3b
+    strb    w13, [x26, x14]
+    b       3b
+6:  mov     x9, #0                          /* each item: the byte of its index */
+7:  cmp     x9, x24
+    b.hs    8f
+    lsl     x10, x9, #6
+    add     x10, x21, x10
+    ldr     x10, [x10, #8]
+    mov     w11, #0
+    cmp     x10, x27
+    b.hs    79f
+    ldrb    w11, [x26, x10]
+79: strb    w11, [x23, x9]
+    add     x9, x9, #1
+    b       7b
+8:  mov     x0, #LANTERN_OK
+99: str     x28, [x22]
+    LEAVE 48
+98: mov     x0, #LANTERN_BUFFER_TOO_SMALL
+    LEAVE 48
+SPEC_END node_liveness
+
 /* L0: x0 = the fork's TypeDescriptor of the NODE_JSON_* kind x9, or 0. Uses x0. */
 LOCAL_FUNCTION node_type_of_kind
     UNWIND_END_PROLOGUE

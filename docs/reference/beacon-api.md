@@ -161,6 +161,16 @@ The answers of the node (node.md, `NODE_EV_API`) follow these rules.
   - The state: the head's post-state when its fork is altair or later and the epoch's sync committee period is that of the head's slot or the next; else, as for getAttesterDuties, that of the epoch's first slot (none: 400).
   - The committee: lantern_node_sync_committee of the state and the epoch; with no answer, as for a state before altair, 400.
   - `{"execution_optimistic":…,"data":[…]}`, `execution_optimistic` that of the state; for each item of the body in order whose validator is in the committee, `{"pubkey":…,"validator_index":…,"validator_sync_committee_indices":[…]}`: its places in the committee, ascending. An index the state does not have, or of a validator not in the committee, gives no item.
+- getLiveness: whether each validator of the body was seen live in `epoch`, from its messages "on the network, in the beacon chain, from its API" (the spec's description).
+  - 503 while the node syncs, as getProposerDuties.
+  - 400 for an epoch below the previous epoch of `current_slot`, or above its next epoch: the spec asks a node to "support the current and previous epoch"; the next epoch answers too, so that a client whose clock is ahead at an epoch's edge gets an answer.
+  - 400 for a body of no item, or with an item that is a public key: the spec's body is an array of at least one validator index.
+  - The state: the head's post-state at the head's slot, as for a `state_id` of `head` (none: 500).
+  - `{"data":[…]}`: for each item of the body in order, `{"index":…,"is_live":…}`.
+  - `is_live` is false for an index the state does not have. Else it is true when one of these holds:
+    - In the beacon chain, for `epoch` the state's current epoch: from altair, the validator's `current_epoch_participation` flags are not 0; in phase0, the index is among get_attesting_indices of an attestation of `current_epoch_attestations`.
+    - In the beacon chain, for `epoch` the state's previous epoch: the same of `previous_epoch_participation` or `previous_epoch_attestations`.
+    - On the network and from the API: the node's `Seen` holds a `SEEN_ATTESTATION` or `SEEN_AGGREGATOR_EPOCH` key of `epoch` and the index, or a `SEEN_PROPOSER_SLOT`, `SEEN_SYNC_MESSAGE` or `SEEN_SYNC_CONTRIBUTION` key of a slot of `epoch` and the index (networking.md, `SeenKey`). The gossip checks of a message, from the network or from a pool POST, add these keys.
 - produceBlockV3: an unsigned block of `slot` for its proposer (validator.md of each fork, Block proposal), with the payload of the node's execution engine; the node has no builder, so the block is never blinded and `builder_boost_factor` changes nothing (the spec: without a builder the node "MUST respond with a full block").
   - 503 while the node syncs (`is_syncing`), beacon-APIs `CurrentlySyncing`, as getProposerDuties.
   - 400: a `slot` at or below the head's slot, or above `current_slot` + 1; a `randao_reveal` that is no `Signature`; with `skip_randao_verification`, a `randao_reveal` other than the point at infinity (`0xc0` and 95 zero bytes, the spec's parameter); without it, a `randao_reveal` that fails the check of process_randao for the proposer of `slot` in the state below; a `graffiti` that is no 32-byte `Bytes32`; a `builder_boost_factor` past 2^64 - 1.

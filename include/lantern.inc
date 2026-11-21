@@ -1095,8 +1095,9 @@
 .set ApiView_peer, ApiView_weights + 24            /* getPeer: its NodePeer */
 .set ApiView_node, ApiView_weights + 32            /* getPeers: the Node */
 .set ApiView_next_period, ApiView_weights + 40     /* getSyncCommitteeDuties: 1, API_VALUE_NEXT_PERIOD of the work */
-.set ApiView_sd_ids, ApiView_weights + 48          /* getSyncCommitteeDuties: the address of the work's ValidatorRef items */
-.set ApiView__size, ApiView_weights + 56
+.set ApiView_sd_ids, ApiView_weights + 48          /* getSyncCommitteeDuties, getLiveness: the address of the work's ValidatorRef items */
+.set ApiView_live_out, ApiView_weights + 56        /* getLiveness: lantern_node_liveness's out, a byte for each item */
+.set ApiView__size, ApiView_weights + 64
 .set ApiIdentity_peer_id, 0              /* ApiIdentity (beacon-api.md): texts, each a length and its room */
 .set ApiIdentity_enr, 72
 .set ApiIdentity_p2p_address, 592
