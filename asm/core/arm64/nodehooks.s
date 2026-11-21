@@ -2411,6 +2411,50 @@ SPEC_FUNCTION node_anchor
 SPEC_END node_anchor
 
 /*
+ * (state, node, epoch, count): node.md, lantern_node_custody: get_validators_custody_requirement of
+ * the state and the validators of the node's NodeProposer entries live at the epoch; 0 with none.
+ * A leaf: uses x9-x17.
+ */
+SPEC_FUNCTION node_custody
+    UNWIND_END_PROLOGUE
+    ldr     x9, [x2]
+    PART    x10, x11, x1, Node_proposers
+    PART    x12, x13, x0, BeaconState_validators
+    mov     x14, #0                         /* the balance, then the count */
+    mov     x17, #0                         /* the validators */
+1:  cbz     x11, 3f
+    ldr     x15, [x10, #NodeProposer_until_epoch]
+    cmp     x15, x9
+    b.ls    2f
+    add     x17, x17, #1
+    ldr     x15, [x10, #NodeProposer_validator_index]
+    cmp     x15, x13
+    b.hs    2f
+    add     x15, x12, x15, lsl #7
+    ldr     x15, [x15, #Validator_effective_balance]
+    add     x14, x14, x15
+2:  add     x10, x10, #NodeProposer__mem
+    sub     x11, x11, #1
+    b       1b
+3:  cbz     x17, 8f
+    LDQ     x9, x1, Node_config + CONFIG_BALANCE_PER_ADDITIONAL_CUSTODY_GROUP
+    LDQ     x15, x1, Node_config + CONFIG_NUMBER_OF_CUSTODY_GROUPS
+    mov     x16, x15
+    cbz     x9, 4f
+    udiv    x16, x14, x9
+4:  LDQ     x9, x1, Node_config + CONFIG_VALIDATOR_CUSTODY_REQUIREMENT
+    cmp     x16, x9
+    csel    x16, x9, x16, lo
+    cmp     x16, x15
+    csel    x14, x15, x16, hi
+    b       9f
+8:  mov     x14, #0
+9:  str     x14, [x3]
+    mov     x0, #LANTERN_OK
+    ret
+SPEC_END node_custody
+
+/*
  * (bytes, room, scratch, state): node.md, NODE_WORK_ARCHIVE_LOAD: the BeaconState of the SSZ bytes,
  * decoded as node_anchor_block decodes its state, into state with room; nothing changed when it
  * is short. x20 room, x21 scratch, x22 state, x24 the decoded state, x25 the bytes, x28 the

@@ -2995,12 +2995,8 @@ LOCAL_FUNCTION node_api_view
     sd      t0, ApiView_seq_number(t3)
     ld      t0, Node_attnets(s1)
     sd      t0, ApiView_attnets(t3)
-    LDQ     t0, s1, Node_config + CONFIG_CUSTODY_REQUIREMENT  # the custody group count
-    ld      t1, Node_flags(s1)
-    andi    t1, t1, NODE_FLAG_SUPERNODE
-    beqz    t1, 1f
-    LDQ     t0, s1, Node_config + CONFIG_NUMBER_OF_CUSTODY_GROUPS
-1:  sd      t0, ApiView_custody_group_count(t3)
+    LDQ     t0, s1, Node_custody_count      # the custody group count
+    sd      t0, ApiView_custody_group_count(t3)
     addi    a0, t3, ApiView_peer_id         # the identity's texts
     ADDQ    a1, s1, Node_api_identity
     li      a2, API_IDENTITY_SIZE

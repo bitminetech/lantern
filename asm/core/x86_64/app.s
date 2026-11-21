@@ -1820,6 +1820,8 @@ LOCAL_FUNCTION app_db_start
     jb      1b
     movq    $0, AppDb_next_map(%r15)
     movq    $-1, AppDb_anchor_slot(%r15)
+    movq    $0, AppDb_custody(%r15)
+    movq    $0, (AppDb_custody + 8)(%r15)
     mov     (APP_ANCHOR + 32)(%rbx), %rax   # the Db from the anchor's slot
     mov     %rax, (APP_ANCHOR + NodeAnchor_history_slot)(%rbx)
     mov     (APP_OPTIONS + AppOptions_data_dir + 8)(%rbx), %r12
@@ -1845,8 +1847,112 @@ LOCAL_FUNCTION app_db_start
     mov     %r13, %rdi
     lea     AppDb_op(%r15), %rsi
     CALL_GLOBAL lantern_shell_mkdir
+    ADDRESS %rdi, app_custody_name          # custody.bin: the anchor's custody_count and custody_slot
+    mov     $app_custody_name_len, %esi
+    lea     APP_PATH(%rbx), %rdx
+    call    app_db_file
+    lea     APP_PATH(%rbx), %rdi
+    lea     AppDb_op(%r15), %rsi
+    CALL_GLOBAL lantern_shell_read_file
+    cmpq    $0, AppDb_op(%r15)
+    jne     9f
+    cmpq    $16, (AppDb_op + 16)(%r15)
+    jne     8f
+    mov     (AppDb_op + 8)(%r15), %rcx
+    mov     (%rcx), %rax
+    mov     %rax, (APP_ANCHOR + NodeAnchor_custody_count)(%rbx)
+    mov     %rax, AppDb_custody(%r15)
+    mov     8(%rcx), %rax
+    mov     %rax, (APP_ANCHOR + NodeAnchor_custody_slot)(%rbx)
+    mov     %rax, (AppDb_custody + 8)(%r15)
+8:  lea     (AppDb_op + 8)(%r15), %rdi
+    lea     (AppDb_op + 24)(%r15), %rsi
+    CALL_GLOBAL lantern_shell_unmap_file
 9:  LEAVE 0
 END_FUNCTION app_db_start
+
+/*
+ * L1: the custody_count and custody_slot of the NODE_ACT_DB_STATE rdi, when they are not those of
+ * AppDb_custody: <dir>/custody.bin gets them, 16 bytes, synced, and AppDb_custody takes them; a
+ * failure gives a cannot write line. rbp the action, r15 the AppDb. Locals: L a ByteList header,
+ * L+24 a u64, L+32 a file.
+ */
+LOCAL_FUNCTION app_db_custody
+    ENTER 48
+    mov     %rdi, %rbp
+    lea     APP_DB(%rbx), %r15
+    mov     40(%rbp), %rax
+    cmp     AppDb_custody(%r15), %rax
+    jne     1f
+    mov     48(%rbp), %rax
+    cmp     (AppDb_custody + 8)(%r15), %rax
+    je      99f
+1:  ADDRESS %rdi, app_custody_name
+    mov     $app_custody_name_len, %esi
+    lea     APP_PATH(%rbx), %rdx
+    call    app_db_file
+    movq    $1, (L + 24)(%rsp)
+    lea     APP_PATH(%rbx), %rdi
+    lea     (L + 24)(%rsp), %rsi
+    lea     AppDb_op(%r15), %rdx
+    CALL_GLOBAL lantern_shell_open
+    cmpq    $0, AppDb_op(%r15)
+    jne     90f
+    mov     (AppDb_op + 8)(%r15), %rax
+    mov     %rax, (L + 32)(%rsp)
+    movq    $0, (L + 24)(%rsp)
+    lea     (L + 32)(%rsp), %rdi
+    lea     (L + 24)(%rsp), %rsi
+    lea     AppDb_op(%r15), %rdx
+    CALL_GLOBAL lantern_shell_truncate
+    cmpq    $0, AppDb_op(%r15)
+    jne     89f
+    lea     40(%rbp), %rax                  # the 16 bytes, a ByteList in place
+    lea     L(%rsp), %rcx
+    sub     %rcx, %rax
+    movq    $24, L(%rsp)
+    mov     %rax, (L + 8)(%rsp)
+    movq    $16, (L + 16)(%rsp)
+    lea     (L + 32)(%rsp), %rdi
+    lea     L(%rsp), %rsi
+    lea     AppDb_op(%r15), %rdx
+    CALL_GLOBAL lantern_shell_append
+    cmpq    $0, AppDb_op(%r15)
+    jne     89f
+    lea     (L + 32)(%rsp), %rdi
+    lea     AppDb_op(%r15), %rsi
+    CALL_GLOBAL lantern_shell_sync
+    cmpq    $0, AppDb_op(%r15)
+    jne     89f
+    lea     (L + 32)(%rsp), %rdi
+    CALL_GLOBAL lantern_shell_close
+    mov     40(%rbp), %rax
+    mov     %rax, AppDb_custody(%r15)
+    mov     48(%rbp), %rax
+    mov     %rax, (AppDb_custody + 8)(%r15)
+99: LEAVE 48
+89: mov     AppDb_op(%r15), %rax
+    mov     %rax, (L + 24)(%rsp)
+    lea     (L + 32)(%rsp), %rdi
+    CALL_GLOBAL lantern_shell_close
+    mov     (L + 24)(%rsp), %rax
+    mov     %rax, AppDb_op(%r15)
+90: mov     AppDb_op(%r15), %rax            # cannot write <path>: error <n>
+    mov     %rax, (L + 24)(%rsp)
+    call    app_line_start
+    ADDRESS %rdi, app_m_write
+    mov     $app_m_write_len, %esi
+    call    app_line_text
+    call    app_line_path
+    ADDRESS %rdi, app_m_error
+    mov     $app_m_error_len, %esi
+    call    app_line_text
+    mov     (L + 24)(%rsp), %rdi
+    call    app_line_u64
+    mov     $APP_LOG_ERROR, %edi
+    call    app_line_end
+    LEAVE 48
+END_FUNCTION app_db_custody
 
 /* L1: the path of segment rsi of blocks (rdi 0), sidecars (1) or states (2) in the data directory, <dir>/b<n>.seg, <dir>/s<n>.seg or <dir>/a<n>.seg: a ByteList at APP_PATH. rbp the kind, r12 the segment, r13 the next byte. Locals: L 24 digits. */
 LOCAL_FUNCTION app_db_path
@@ -2777,7 +2883,9 @@ LOCAL_FUNCTION app_actions
     jmp     8f
 12: cmp     $NODE_ACT_DB_STATE, %rax
     jne     120f
-    mov     %rbp, %rdi                      # DB_STATE: anchor.ssz
+    mov     %rbp, %rdi                      # DB_STATE: custody.bin, anchor.ssz
+    call    app_db_custody
+    mov     %rbp, %rdi
     call    app_db_state
     jmp     8f
 120: cmp    $NODE_ACT_DB_ARCHIVE, %rax

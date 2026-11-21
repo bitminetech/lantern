@@ -254,11 +254,19 @@ FUNCTION lantern_node_init
     mov     x1, x20
     MOVQ    x2, CONFIG_SIZE
     bl      lantern_copy
-    LDQ     x9, x20, CONFIG_SAMPLES_PER_SLOT  /* the columns: of max(SAMPLES_PER_SLOT, the custody group count) groups */
-    LDQ     x10, x20, CONFIG_CUSTODY_REQUIREMENT
+    LDQ     x10, x20, CONFIG_CUSTODY_REQUIREMENT  /* custody_count: the higher of CUSTODY_REQUIREMENT and the anchor's, at most every group */
+    ldr     x12, [x21, #NodeAnchor_custody_count]
+    cmp     x12, x10
+    csel    x10, x12, x10, hi
     LDQ     x11, x20, CONFIG_NUMBER_OF_CUSTODY_GROUPS
+    cmp     x10, x11
+    csel    x10, x11, x10, hi
     tst     x23, #NODE_FLAG_SUPERNODE       /* a supernode: every group */
     csel    x10, x11, x10, ne
+    STQ     x10, x24, Node_custody_count
+    ldr     x12, [x21, #NodeAnchor_custody_slot]
+    STQ     x12, x24, Node_custody_slot
+    LDQ     x9, x20, CONFIG_SAMPLES_PER_SLOT  /* the columns: of max(SAMPLES_PER_SLOT, the custody group count) groups */
     cmp     x9, x10
     csel    x1, x9, x10, hs
     add     x0, x21, #NodeAnchor_node_id
@@ -3139,6 +3147,9 @@ LOCAL_FUNCTION node_archive
     ldr     x10, [x26, #NodeBlock_data_id]
     stp     x9, x10, [x0, #16]
     str     x28, [x0, #32]
+    LDQ     x9, x19, Node_custody_count
+    LDQ     x10, x19, Node_custody_slot
+    stp     x9, x10, [x0, #40]
     mov     x0, x26                         /* and the archive's state record */
     mov     x1, x28
     bl      node_archive_queue
@@ -4934,7 +4945,15 @@ LOCAL_FUNCTION node_event
     ldr     x9, [x21, #NodeEvent_checkpoint]
     STQ     x9, x19, Node_eth1_deposit_index
     LEAVE 48
-7081: cmp   x9, #NODE_WORK_ARCHIVE_LOAD       /* ARCHIVE_LOAD of the replay's copy: the replay goes on, or ends (2) */
+7081: cmp   x9, #NODE_WORK_CUSTODY          /* CUSTODY: custody_need, when more */
+    b.ne    7084f
+    ldr     x9, [x21, #NodeEvent_index]
+    LDQ     x10, x19, Node_custody_need
+    cmp     x9, x10
+    b.ls    7085f
+    STQ     x9, x19, Node_custody_need
+7085: LEAVE 48
+7084: cmp   x9, #NODE_WORK_ARCHIVE_LOAD       /* ARCHIVE_LOAD of the replay's copy: the replay goes on, or ends (2) */
     b.ne    7082f
     ldr     x9, [x21, #NodeAction_state_a]
     LDQ     x10, x19, Node_replay_copy
@@ -5449,11 +5468,7 @@ LOCAL_FUNCTION node_request
     stp     x9, x10, [sp, #(L + 64)]
     LDQ     x9, x19, Node_syncnets
     strb    w9, [sp, #(L + 64 + 16)]
-    LDQ     x9, x19, Node_config + CONFIG_CUSTODY_REQUIREMENT  /* the custody group count */
-    LDQ     x10, x19, Node_config + CONFIG_NUMBER_OF_CUSTODY_GROUPS
-    ldr     x11, [x19, #Node_flags]
-    tst     x11, #NODE_FLAG_SUPERNODE
-    csel    x9, x10, x9, ne
+    LDQ     x9, x19, Node_custody_count     /* the custody group count */
     str     x9, [sp, #(L + 56)]
     add     x0, sp, #(L + 64 + 17)
     add     x1, sp, #(L + 56)
@@ -6299,8 +6314,25 @@ LOCAL_FUNCTION node_status_bytes
     add     x1, sp, #(L + 16)
     mov     x2, #8
     bl      lantern_copy
-    add     x0, x21, #84                    /* earliest_available_slot: Status v2 */
-    add     x1, x19, #Node_earliest_slot
+    ldr     x9, [x19, #Node_earliest_slot]  /* earliest_available_slot: Status v2; custody_slot above it and the column window's start */
+    LDQ     x10, x19, Node_custody_slot
+    cmp     x10, x9
+    b.ls    2f
+    mov     x0, x20
+    bl      node_store_slot
+    mov     x11, #SLOTS_PER_EPOCH
+    udiv    x0, x0, x11
+    LDQ     x12, x19, Node_config + CONFIG_MIN_EPOCHS_FOR_DATA_COLUMN_SIDECARS_REQUESTS
+    subs    x0, x0, x12
+    csel    x0, xzr, x0, lo
+    mul     x0, x0, x11
+    ldr     x9, [x19, #Node_earliest_slot]
+    LDQ     x10, x19, Node_custody_slot
+    cmp     x10, x0
+    csel    x9, x10, x9, hi
+2:  str     x9, [sp, #(L + 16)]
+    add     x0, x21, #84
+    add     x1, sp, #(L + 16)
     mov     x2, #8
     bl      lantern_copy
     LEAVE 32
@@ -6378,11 +6410,7 @@ LOCAL_FUNCTION node_enr_entries
     stp     x9, x10, [x25, #16]
     str     xzr, [x25, #32]
     str     xzr, [x25, #48]
-    LDQ     x11, x19, Node_config + CONFIG_CUSTODY_REQUIREMENT
-    LDQ     x12, x19, Node_config + CONFIG_NUMBER_OF_CUSTODY_GROUPS
-    ldr     x13, [x19, #Node_flags]
-    tst     x13, #NODE_FLAG_SUPERNODE
-    csel    x11, x12, x11, ne
+    LDQ     x11, x19, Node_custody_count
     clz     x12, x11                        /* n bytes: 8 - its leading zero bytes */
     lsr     x12, x12, #3
     mov     x13, #8
@@ -6894,6 +6922,118 @@ END_FUNCTION node_syncnets_want
 .endif
 
 /*
+ * L0: a SUBSCRIBE of data_column_sidecar of each subnet of a column of columns that no column of
+ * the 16 bytes at x0 (the columns before) had, at fork_digest and at next_digest when it is not 0.
+ * x21 the old subnets below 64, x22 from 64, x25 the new ones below 64, x26 from 64, x27 a column.
+ */
+LOCAL_FUNCTION node_column_raise_topics
+    ENTER 0
+    mov     x21, #0
+    mov     x22, #0
+    mov     x25, #0
+    mov     x26, #0
+    LDQ     x9, x19, Node_config + CONFIG_DATA_COLUMN_SIDECAR_SUBNET_COUNT
+    cbz     x9, 9f
+    mov     x27, #0
+1:  cmp     x27, #128                       /* the subnets of the columns before and now */
+    b.hs    5f
+    udiv    x10, x27, x9
+    msub    x10, x10, x9, x27
+    mov     x11, #1
+    lsl     x11, x11, x10
+    lsr     x12, x27, #3
+    ldrb    w13, [x0, x12]
+    and     x14, x27, #7
+    lsr     x13, x13, x14
+    tbz     x13, #0, 2f
+    cmp     x10, #64
+    b.hs    11f
+    orr     x21, x21, x11
+    b       2f
+11: orr     x22, x22, x11
+2:  add     x12, x19, x12
+    ldrb    w13, [x12, #Node_columns]
+    lsr     x13, x13, x14
+    tbz     x13, #0, 3f
+    cmp     x10, #64
+    b.hs    21f
+    orr     x25, x25, x11
+    b       3f
+21: orr     x26, x26, x11
+3:  add     x27, x27, #1
+    b       1b
+5:  bic     x25, x25, x21                   /* the new ones */
+    bic     x26, x26, x22
+    mov     x27, #0
+6:  cmp     x27, #128
+    b.hs    9f
+    cmp     x27, #64
+    b.hs    61f
+    lsr     x9, x25, x27
+    b       62f
+61: sub     x9, x27, #64
+    lsr     x9, x26, x9
+62: tbz     x9, #0, 7f
+    mov     x0, #GOSSIP_DATA_COLUMN_SIDECAR
+    mov     x1, x27
+    ldr     x2, [x19, #Node_fork_digest]
+    mov     x3, #LIBP2P_EVENT_SUBSCRIBE
+    bl      node_sub
+    ldr     x2, [x19, #Node_next_digest]
+    cbz     x2, 7f
+    mov     x0, #GOSSIP_DATA_COLUMN_SIDECAR
+    mov     x1, x27
+    mov     x3, #LIBP2P_EVENT_SUBSCRIBE
+    bl      node_sub
+7:  add     x27, x27, #1
+    b       6b
+9:  LEAVE 0
+END_FUNCTION node_column_raise_topics
+
+/*
+ * L1: validator custody (node.md), from fulu: once each store epoch, with a NodeProposer entry
+ * whose until_epoch is above the store's epoch and F's post-state held, a NODE_WORK_CUSTODY of it.
+ * x21 the epoch, x22 the epoch + 1.
+ */
+LOCAL_FUNCTION node_custody_due
+    ENTER 0
+    mov     x0, x20
+    bl      node_store_slot
+    mov     x9, #SLOTS_PER_EPOCH
+    udiv    x21, x0, x9
+    add     x1, x19, #Node_config
+    bl      node_fork
+    cmp     x0, #FORK_FULU
+    b.lo    9f
+    add     x22, x21, #1
+    LDQ     x9, x19, Node_custody_epoch
+    cmp     x22, x9
+    b.ls    9f
+    PART    x9, x10, x19, Node_proposers    /* a live preparation */
+1:  cbz     x10, 9f
+    ldr     x11, [x9, #NodeProposer_until_epoch]
+    cmp     x11, x21
+    b.hi    2f
+    add     x9, x9, #NodeProposer__mem
+    sub     x10, x10, #1
+    b       1b
+2:  add     x0, x20, #(Store_finalized_checkpoint + 8)
+    bl      node_find_block
+    cmn     x0, #1
+    b.eq    9f
+    ldr     x1, [x1, #NodeBlock_state_id]
+    cbz     x1, 9f
+    STQ     x22, x19, Node_custody_epoch
+    mov     x0, #NODE_WORK_CUSTODY
+    mov     x2, #0
+    mov     x3, #0
+    mov     x4, #0
+    mov     x5, #0
+    bl      node_work
+9:  LEAVE 0
+END_FUNCTION node_custody_due
+
+/*
  * L0: the node's gossip topics (node.md; altair p2p-interface.md, Transitioning the gossip), one
  * change a step, when p2p_out has room: the topics of the fork of the store's epoch at its
  * ForkDigest, once for each digest, with the record entries; else those of the epoch
@@ -6902,7 +7042,7 @@ END_FUNCTION node_syncnets_want
  * digest, x26 a fork, x27 a digest. Locals: L an epoch, L+8 a ForkDigest.
  */
 LOCAL_FUNCTION node_subscribe
-    ENTER 16
+    ENTER 32
     P2P_OUT x9
     ldr     x11, [x9]
     ldr     x10, [x9, #16]
@@ -7024,11 +7164,11 @@ LOCAL_FUNCTION node_subscribe
     STQ     x26, x19, Node_subnets
     b       9f
 33: cmp     x22, #FORK_ALTAIR               /* the sync subnets the node keeps, when they changed: the MetaData and the record */
-    b.lo    31f
+    b.lo    34f
     bl      node_syncnets_want
     LDQ     x27, x19, Node_syncnets
     cmp     x0, x27
-    b.eq    31f
+    b.eq    34f
     mov     x26, x0
     bic     x0, x27, x26
     mov     x1, #LIBP2P_EVENT_UNSUBSCRIBE
@@ -7047,6 +7187,35 @@ LOCAL_FUNCTION node_subscribe
     mov     x1, x22
     bl      node_enr_entries
     b       9f
+34: cmp     x22, #FORK_FULU                 /* validator custody: a raise of custody_count, its columns, topics, MetaData and record */
+    b.lo    31f
+    LDQ     x26, x19, Node_custody_need
+    LDQ     x27, x19, Node_custody_count
+    cmp     x26, x27
+    b.ls    31f
+    STQ     x26, x19, Node_custody_count
+    mov     x0, x20
+    bl      node_store_slot
+    STQ     x0, x19, Node_custody_slot
+    ldp     x9, x10, [x19, #Node_columns]
+    stp     x9, x10, [sp, #(L + 16)]
+    LDQ     x9, x19, Node_config + CONFIG_SAMPLES_PER_SLOT
+    cmp     x9, x26
+    csel    x1, x9, x26, hs
+    add     x0, x19, #Node_node_id
+    add     x2, x19, #Node_config
+    add     x3, x19, #Node_columns
+    bl      node_custody_columns
+    add     x0, sp, #(L + 16)
+    bl      node_column_raise_topics
+    ldr     x9, [x19, #Node_metadata_seq]
+    add     x9, x9, #1
+    str     x9, [x19, #Node_metadata_seq]
+    str     x21, [sp, #L]
+    add     x0, sp, #L
+    mov     x1, x22
+    bl      node_enr_entries
+    b       9f
 31: ldr     x9, [x19, #Node_old_digest]     /* the old digest's topics leave */
     cbz     x9, 9f
     ldr     x10, [x19, #Node_old_epoch]
@@ -7057,7 +7226,7 @@ LOCAL_FUNCTION node_subscribe
     mov     x1, x9
     mov     x2, #LIBP2P_EVENT_UNSUBSCRIBE
     bl      node_topics
-9:  LEAVE 16
+9:  LEAVE 32
 END_FUNCTION node_subscribe
 
 /*
@@ -9390,6 +9559,7 @@ FUNCTION lantern_node_step
 9:  bl      node_head
     bl      node_publish_poll               /* the answers of the published blocks whose import ended */
     bl      node_eth1_check_due             /* the eth1 follower's check, each store epoch */
+    bl      node_custody_due                /* validator custody's check, each store epoch */
     bl      node_engine_next
     bl      node_shed                       /* the post-states the node can rebuild go */
     bl      node_api_head_events            /* the head and finalized_checkpoint events, at a quiet point */
@@ -10346,7 +10516,7 @@ FUNCTION lantern_node_run
     mov     x0, #LANTERN_OK
     LEAVE 192
 8427: cmp   x9, #NODE_WORK_ARCHIVE_LOAD
-    b.ne    8430f
+    b.ne    8428f
     cbz     x22, 837b                       /* ARCHIVE_LOAD: the state of a Db state record into state_a */
     cbz     x23, 837b
     mov     x0, x22
@@ -10358,6 +10528,27 @@ FUNCTION lantern_node_run
     cmp     x0, #LANTERN_BUFFER_TOO_SMALL
     b.eq    8449f
     str     x0, [x25, #NodeEvent_result]
+    mov     x0, #LANTERN_OK
+    LEAVE 192
+8428: cmp   x9, #NODE_WORK_CUSTODY
+    b.ne    8430f
+    cbz     x22, 837b                       /* CUSTODY: lantern_node_custody with the store's epoch, its count at NodeEvent_index */
+    mov     x0, x20
+    bl      node_store_slot
+    mov     x9, #SLOTS_PER_EPOCH
+    udiv    x0, x0, x9
+    str     x0, [sp, #(L + 96)]
+    ldr     x0, [x22, #NODE_STATE_SLOT]
+    add     x1, x19, #Node_config
+    bl      node_fork
+    mov     x15, x0
+    mov     x0, x22
+    mov     x1, x19
+    add     x2, sp, #(L + 96)
+    add     x3, sp, #(L + 104)
+    FORK_CALL node_custody
+    ldr     x9, [sp, #(L + 104)]
+    str     x9, [x25, #NodeEvent_index]
     mov     x0, #LANTERN_OK
     LEAVE 192
 8430: cmp   x9, #NODE_WORK_PRODUCE_BLOCK

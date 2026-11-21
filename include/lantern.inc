@@ -762,7 +762,11 @@
 .set Node_archive_end, Node_base_slot + 1264     /* its bytes */
 .set Node_archive_busy, Node_base_slot + 1272    /* 1 while a NODE_ACT_DB_ARCHIVE waits for its NODE_EV_DB_ARCHIVE */
 .set Node_replay_loading, Node_base_slot + 1280  /* 1 while the replay's NODE_WORK_ARCHIVE_LOAD is out */
-.set NODE_FIXED, Node_base_slot + 1288
+.set Node_custody_count, Node_base_slot + 1288  /* the custody group count (fulu validator custody): it never falls */
+.set Node_custody_slot, Node_base_slot + 1296   /* the store's slot at its last raise, or the anchor's */
+.set Node_custody_need, Node_base_slot + 1304   /* the count of the node's validators at the last CUSTODY work */
+.set Node_custody_epoch, Node_base_slot + 1312  /* the store's epoch + 1 at the last CUSTODY work, or 0 */
+.set NODE_FIXED, Node_base_slot + 1320
 .set Eth1Count_number, 0               /* Eth1Count (node.md) */
 .set Eth1Count_count, 8
 .set Eth1Count_root, 16
@@ -919,7 +923,9 @@
 .set NodeAnchor_builder_host_len, 216  /* with NODE_FLAG_BUILDER, at most NODE_ENGINE_HOST_MAX */
 .set NodeAnchor_builder_host, 224
 .set NodeAnchor_archive_slots, 288    /* with NODE_FLAG_DB: a state record each run of this many slots of F; 0 none */
-.set NodeAnchor__mem, 296
+.set NodeAnchor_custody_count, 296   /* the custody group count advertised last, 0 for none */
+.set NodeAnchor_custody_slot, 304
+.set NodeAnchor__mem, 312
 .set NODE_P2P_ROUNDS, 8                /* libp2p steps of one node step for the node's own events, at most */
 
 /* NodeRoom: the capacities of a Node */
@@ -999,7 +1005,7 @@
 .set NODE_ACT_DB_APPEND, 9             /* 16 BufferId, 24 segment, 32 sidecars, 40 offset, 48 DbRecord: the shell appends the record */
 .set NODE_ACT_DB_APPEND_SIZE, 128
 .set NODE_ACT_DB_STATE, 10              /* 16 a state's BufferId, 24 its block's BufferId, 32 the slot: the finalized block, for a restart */
-.set NODE_ACT_DB_STATE_SIZE, 40
+.set NODE_ACT_DB_STATE_SIZE, 56
 .set NODE_ACT_DB_DROP, 11              /* 16 a segment, 24 1 for a sidecar segment: the shell deletes its file */
 .set NODE_ACT_DB_DROP_SIZE, 32
 .set NODE_ACT_API_SEND, 12             /* 16 the connection, 24 last, 32 a ByteList of the bytes */
@@ -1076,6 +1082,7 @@
 .set NODE_WORK_ETH1_CHECK, 40          /* a: the head's post-state */
 .set NODE_WORK_PRODUCE_ETH1, 41        /* a: the state of a produceBlockV3; b: its Eth1Snapshot; data: its draft; target: the NodeApi index */
 .set NODE_WORK_ARCHIVE_LOAD, 42        /* a: the state to write; b: with a diff, the full record's NODE_DB_REF; data: the record's NODE_DB_REF */
+.set NODE_WORK_CUSTODY, 43             /* a: F's post-state: the custody group count of the node's validators */
 .set NODE_LC_ID, 2                     /* the BufferId of the light client store (lantern_node_init: Caller must) */
 .set NODE_PUBLISH_DECODE, 1            /* NodeApi member of a publishBlockV2: its phase */
 .set NODE_PUBLISH_SIDECARS, 2

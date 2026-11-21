@@ -2507,6 +2507,50 @@ SPEC_FUNCTION node_anchor
 SPEC_END node_anchor
 
 /*
+ * (state, node, epoch, count): node.md, lantern_node_custody: get_validators_custody_requirement of
+ * the state and the validators of the node's NodeProposer entries live at the epoch; 0 with none.
+ * A leaf: uses t0-t6, a4-a7.
+ */
+SPEC_FUNCTION node_custody
+    UNWIND_END_PROLOGUE
+    ld      t0, 0(a2)                       # the epoch
+    PART    t1, t2, a1, Node_proposers
+    PART    t3, t4, a0, BeaconState_validators
+    li      t5, 0                           # the balance
+    li      t6, 0                           # the validators
+1:  beqz    t2, 3f
+    ld      a4, NodeProposer_until_epoch(t1)
+    bleu    a4, t0, 2f
+    addi    t6, t6, 1
+    ld      a4, NodeProposer_validator_index(t1)
+    bgeu    a4, t4, 2f
+    slli    a4, a4, 7
+    add     a4, t3, a4
+    ld      a4, Validator_effective_balance(a4)
+    add     t5, t5, a4
+2:  addi    t1, t1, NodeProposer__mem
+    addi    t2, t2, -1
+    j       1b
+3:  beqz    t6, 8f
+    LDQ     a5, a1, Node_config + CONFIG_NUMBER_OF_CUSTODY_GROUPS
+    LDQ     a4, a1, Node_config + CONFIG_BALANCE_PER_ADDITIONAL_CUSTODY_GROUP
+    mv      a6, a5
+    beqz    a4, 4f
+    divu    a6, t5, a4
+4:  LDQ     a4, a1, Node_config + CONFIG_VALIDATOR_CUSTODY_REQUIREMENT
+    bgeu    a6, a4, 5f
+    mv      a6, a4
+5:  bleu    a6, a5, 6f
+    mv      a6, a5
+6:  sd      a6, 0(a3)
+    li      a0, LANTERN_OK
+    ret
+8:  sd      zero, 0(a3)
+    li      a0, LANTERN_OK
+    ret
+SPEC_END node_custody
+
+/*
  * (bytes, room, scratch, state): node.md, NODE_WORK_ARCHIVE_LOAD: the BeaconState of the SSZ bytes,
  * decoded as node_anchor_block decodes its state, into state with room; nothing changed when it
  * is short. s1 the bytes, s2 room, s3 scratch, s4 state, s6 the decoded state, s8 the scratch's

@@ -2584,6 +2584,57 @@ SPEC_FUNCTION node_anchor
 SPEC_END node_anchor
 
 /*
+ * (state, node, epoch, count): node.md, lantern_node_custody: get_validators_custody_requirement of
+ * the state and the validators of the node's NodeProposer entries live at the epoch; 0 with none.
+ * A leaf: uses rax, r8-r11, and the argument registers.
+ */
+SPEC_FUNCTION node_custody
+    UNWIND_END_PROLOGUE
+    mov     (%rdx), %r8                     # the epoch
+    mov     Node_proposers(%rsi), %r9
+    add     %rsi, %r9
+    mov     (Node_proposers + 8)(%rsi), %r10
+    xor     %eax, %eax                      # the balance
+    xor     %r11d, %r11d                    # the validators
+1:  test    %r10, %r10
+    jz      3f
+    cmp     NodeProposer_until_epoch(%r9), %r8
+    jae     2f
+    inc     %r11
+    mov     NodeProposer_validator_index(%r9), %rdx
+    cmp     (BeaconState_validators + 8)(%rdi), %rdx
+    jae     2f
+    shl     $7, %rdx
+    add     BeaconState_validators(%rdi), %rdx
+    add     %rdi, %rdx
+    add     Validator_effective_balance(%rdx), %rax
+2:  add     $NodeProposer__mem, %r9
+    dec     %r10
+    jmp     1b
+3:  test    %r11, %r11
+    jz      8f
+    mov     (Node_config + CONFIG_NUMBER_OF_CUSTODY_GROUPS)(%rsi), %r10
+    mov     (Node_config + CONFIG_BALANCE_PER_ADDITIONAL_CUSTODY_GROUP)(%rsi), %r9
+    mov     %r10, %r11
+    test    %r9, %r9
+    jz      4f
+    xor     %edx, %edx
+    div     %r9
+    mov     %rax, %r11
+4:  mov     (Node_config + CONFIG_VALIDATOR_CUSTODY_REQUIREMENT)(%rsi), %r9
+    cmp     %r9, %r11
+    cmovb   %r9, %r11
+    cmp     %r10, %r11
+    cmova   %r10, %r11
+    mov     %r11, (%rcx)
+    xor     %eax, %eax
+    ret
+8:  movq    $0, (%rcx)
+    xor     %eax, %eax
+    ret
+SPEC_END node_custody
+
+/*
  * (bytes, room, scratch, state): node.md, NODE_WORK_ARCHIVE_LOAD: the BeaconState of the SSZ bytes,
  * decoded as node_anchor_block decodes its state, into state with room; nothing changed when it
  * is short. rbp room, r12 scratch, r13 state, r15 the decoded state, S8 the scratch's size,

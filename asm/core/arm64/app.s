@@ -1687,6 +1687,7 @@ LOCAL_FUNCTION app_db_start
     b.lo    1b
     str     xzr, [x27, #AppDb_next_map]
     str     x9, [x27, #AppDb_anchor_slot]
+    stp     xzr, xzr, [x27, #AppDb_custody]
     ldr     x10, [x19, #(APP_ANCHOR + 32)]  /* the Db from the anchor's slot */
     str     x10, [x19, #(APP_ANCHOR + NodeAnchor_history_slot)]
     ldr     x21, [x19, #(APP_OPTIONS + AppOptions_data_dir + 8)]
@@ -1716,8 +1717,110 @@ LOCAL_FUNCTION app_db_start
     mov     x0, x22
     add     x1, x27, #AppDb_op
     CALL_GLOBAL lantern_shell_mkdir
+    ADDRESS x0, app_custody_name            /* custody.bin: the anchor's custody_count and custody_slot */
+    mov     x1, #app_custody_name_len
+    ADDQ    x2, x19, APP_PATH
+    bl      app_db_file
+    ADDQ    x0, x19, APP_PATH
+    add     x1, x27, #AppDb_op
+    CALL_GLOBAL lantern_shell_read_file
+    ldr     x9, [x27, #AppDb_op]
+    cbnz    x9, 9f
+    ldr     x9, [x27, #(AppDb_op + 16)]
+    cmp     x9, #16
+    b.ne    8f
+    ldr     x10, [x27, #(AppDb_op + 8)]
+    ldp     x11, x12, [x10]
+    ADDQ    x13, x19, APP_ANCHOR
+    stp     x11, x12, [x13, #NodeAnchor_custody_count]
+    stp     x11, x12, [x27, #AppDb_custody]
+8:  add     x0, x27, #(AppDb_op + 8)
+    add     x1, x27, #(AppDb_op + 24)
+    CALL_GLOBAL lantern_shell_unmap_file
 9:  LEAVE 0
 END_FUNCTION app_db_start
+
+/*
+ * L1: the custody_count and custody_slot of the NODE_ACT_DB_STATE x0, when they are not those of
+ * AppDb_custody: <dir>/custody.bin gets them, 16 bytes, synced, and AppDb_custody takes them; a
+ * failure gives a cannot write line. x20 the action, x27 the AppDb. Locals: L a ByteList header,
+ * L+24 a u64, L+32 a file.
+ */
+LOCAL_FUNCTION app_db_custody
+    ENTER 48
+    mov     x20, x0
+    ADDQ    x27, x19, APP_DB
+    ldp     x9, x10, [x20, #40]
+    ldp     x11, x12, [x27, #AppDb_custody]
+    cmp     x9, x11
+    ccmp    x10, x12, #0, eq
+    b.eq    99f
+    ADDRESS x0, app_custody_name
+    mov     x1, #app_custody_name_len
+    ADDQ    x2, x19, APP_PATH
+    bl      app_db_file
+    mov     x9, #1
+    str     x9, [sp, #(L + 24)]
+    ADDQ    x0, x19, APP_PATH
+    add     x1, sp, #(L + 24)
+    add     x2, x27, #AppDb_op
+    CALL_GLOBAL lantern_shell_open
+    ldr     x9, [x27, #AppDb_op]
+    cbnz    x9, 90f
+    ldr     x9, [x27, #(AppDb_op + 8)]
+    str     x9, [sp, #(L + 32)]
+    str     xzr, [sp, #(L + 24)]
+    add     x0, sp, #(L + 32)
+    add     x1, sp, #(L + 24)
+    add     x2, x27, #AppDb_op
+    CALL_GLOBAL lantern_shell_truncate
+    ldr     x9, [x27, #AppDb_op]
+    cbnz    x9, 89f
+    add     x9, x20, #40                    /* the 16 bytes, a ByteList in place */
+    add     x10, sp, #L
+    sub     x9, x9, x10
+    mov     x11, #24
+    stp     x11, x9, [x10]
+    mov     x11, #16
+    str     x11, [x10, #16]
+    add     x0, sp, #(L + 32)
+    add     x1, sp, #L
+    add     x2, x27, #AppDb_op
+    CALL_GLOBAL lantern_shell_append
+    ldr     x9, [x27, #AppDb_op]
+    cbnz    x9, 89f
+    add     x0, sp, #(L + 32)
+    add     x1, x27, #AppDb_op
+    CALL_GLOBAL lantern_shell_sync
+    ldr     x9, [x27, #AppDb_op]
+    cbnz    x9, 89f
+    add     x0, sp, #(L + 32)
+    CALL_GLOBAL lantern_shell_close
+    ldp     x9, x10, [x20, #40]
+    stp     x9, x10, [x27, #AppDb_custody]
+99: LEAVE 48
+89: ldr     x9, [x27, #AppDb_op]
+    str     x9, [sp, #(L + 24)]
+    add     x0, sp, #(L + 32)
+    CALL_GLOBAL lantern_shell_close
+    ldr     x9, [sp, #(L + 24)]
+    str     x9, [x27, #AppDb_op]
+90: ldr     x9, [x27, #AppDb_op]            /* cannot write <path>: error <n> */
+    str     x9, [sp, #(L + 24)]
+    bl      app_line_start
+    ADDRESS x0, app_m_write
+    mov     x1, #app_m_write_len
+    bl      app_line_text
+    bl      app_line_path
+    ADDRESS x0, app_m_error
+    mov     x1, #app_m_error_len
+    bl      app_line_text
+    ldr     x0, [sp, #(L + 24)]
+    bl      app_line_u64
+    mov     x0, #APP_LOG_ERROR
+    bl      app_line_end
+    LEAVE 48
+END_FUNCTION app_db_custody
 
 /* L1: the path of segment x1 of blocks (x0 0), sidecars (1) or states (2) in the data directory, <dir>/b<n>.seg, <dir>/s<n>.seg or <dir>/a<n>.seg: a ByteList at APP_PATH. x20 the kind, x21 the segment, x22 the next byte. Locals: L 24 digits. */
 LOCAL_FUNCTION app_db_path
@@ -2627,7 +2730,9 @@ LOCAL_FUNCTION app_actions
     b       8f
 12: cmp     x9, #NODE_ACT_DB_STATE
     b.ne    120f
-    mov     x0, x20                         /* DB_STATE: anchor.ssz */
+    mov     x0, x20                         /* DB_STATE: custody.bin, anchor.ssz */
+    bl      app_db_custody
+    mov     x0, x20
     bl      app_db_state
     b       8f
 120: cmp    x9, #NODE_ACT_DB_ARCHIVE
