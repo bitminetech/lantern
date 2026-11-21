@@ -10175,7 +10175,7 @@ FUNCTION lantern_node_run
     LEAVE 192
 975: cmp    $NODE_WORK_API_ENCODE, %rax
     jne     976f
-    mov     %rbx, %rdi                      # API_ENCODE: the response of an answer
+    mov     %rbx, %rdi                      # API_ENCODE: the response of an answer; the seen in rax
     mov     %rbp, %rsi
     mov     %r12, %rdx
     mov     %r13, %rcx
@@ -10183,6 +10183,7 @@ FUNCTION lantern_node_run
     mov     %r15, %r9
     mov     S8(%rsp), %r10
     mov     S9(%rsp), %r11
+    mov     (L + 64)(%rsp), %rax
     call    node_api_run
     LEAVE 192
 976: cmp    $NODE_WORK_API_CHUNK, %rax

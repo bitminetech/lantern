@@ -231,6 +231,8 @@ ABI uint64_t LF(get_head)(const void *store, void *scratch, void *out);
 ABI uint64_t LF(get_filtered_node_tree)(const void *store, void *scratch, void *out);
 ABI uint64_t LF(get_weight)(const void *store, const void *node, void *out);
 ABI uint64_t LF(node_weights)(const void *store, void *scratch, void *out);
+ABI uint64_t LF(node_liveness)(const void *state, const void *config, const void *seen, const void *ids, uint64_t epoch,
+                               void *scratch, void *out);
 ABI uint64_t LF(node_data_root)(const void *data, void *scratch, void *root);
 ABI uint64_t LF(on_block)(void *store, const void *signed_block, void *state, const void *options, void *scratch,
                               void *result);
@@ -7653,6 +7655,53 @@ static void run_node_produce(const char *file, const char *dir, case_file *f) {
 
 /* node-payload: lantern's cases of payload preparation (node.md, Test vectors). */
 #define NODE_PAYLOAD_SLOT (NODE_API_PART + 664) /* Node_payload_slot: past the proposers PartRef */
+/* lantern_node_liveness (node.md, node-liveness): a Seen of the case's keys, its ids, the byte of each. */
+static void run_node_liveness(const char *file, case_file *f) {
+    for (uint64_t i = 0; i < f->count; i++) {
+        const char *name, *why = NULL;
+        uint64_t len, slen, klen, ilen, wlen, size = 0;
+        tv parts = next_case(f, &name, &len);
+        if (skip_case(parts)) continue;
+        uint8_t *state = load_state(tv_bytes(tv_get(parts, "state"), &slen), slen, &size, &why);
+        const uint8_t *keys = tv_bytes(tv_get(parts, "keys"), &klen), *ids = tv_bytes(tv_get(parts, "ids"), &ilen);
+        const uint8_t *want = tv_bytes(tv_get(parts, "out"), &wlen);
+        uint64_t epoch = tv_u64(tv_get(parts, "epoch")), count = ilen / 8;
+        seen_buf seen = {NULL, 0, {klen / 32 + 1, 1, 1, 64}};
+        if (!why) seen_make(&seen, &why);
+        if (!why) { /* the keys, in order, after those of lantern_seen_init */
+            uint64_t off = rd64(seen.b + 8), n = rd64(seen.b + 16);
+            memcpy(seen.b + off + 32 * n, keys, (size_t)klen);
+            wr64(seen.b + 16, n + klen / 32);
+        }
+        uint8_t *list = buffer(24 + 64 * count), *out = buffer(count + 8);
+        wr64(list, 24 + 64 * count);
+        wr64(list + 8, 24);
+        wr64(list + 16, 64 * count);
+        memset(list + 24, 0, (size_t)(64 * count));
+        for (uint64_t k = 0; k < count; k++) {
+            wr64(list + 24 + 64 * k, 1); /* API_VALIDATOR_INDEX */
+            wr64(list + 24 + 64 * k + 8, rd64(ids + 8 * k));
+        }
+        memset(out, FILL, (size_t)(count + 8 + GUARD));
+        uint8_t *state0 = state ? copy_of(state, size) : NULL, *seen0 = seen.b ? copy_of(seen.b, seen.size) : NULL;
+        if (!why) {
+            uint64_t st = CALL(LF(node_liveness), state, config, seen.b, list, (const void *)(uintptr_t)epoch, fresh_scratch(), out);
+            if (st != 0) why = "status";
+            else if (wlen != count || memcmp(out, want, (size_t)count)) why = "out differs";
+            else if (!guard_ok(out, count)) why = "wrote past out";
+            else if (memcmp(state, state0, (size_t)size)) why = "changed the state";
+            else if (memcmp(seen.b, seen0, (size_t)seen.size)) why = "changed the seen";
+        }
+        free(state0);
+        free(seen0);
+        free(list);
+        free(out);
+        free(state);
+        free(seen.b);
+        report(file, name, len, why == NULL, why);
+    }
+}
+
 static void run_node_payload(const char *file, case_file *f) {
     for (uint64_t i = 0; i < f->count; i++) {
         const char *name, *why = NULL;
@@ -9168,6 +9217,7 @@ int main(int argc, char **argv) {
         else if (!bls_off && !strcmp(kind, "app-options")) run_app_options(file, &f);
         else if (!bls_off && !strcmp(kind, "node-api")) run_node_api(file, &f);
         else if (!bls_off && !strcmp(kind, "node-payload")) run_node_payload(file, &f);
+        else if (!bls_off && !strcmp(kind, "node-liveness")) run_node_liveness(file, &f);
         else if (!bls_off && (!strcmp(kind, "node-produce") || !strcmp(kind, "node-publish"))) run_node_produce(file, argv[1], &f);
         else if (!bls_off && !strcmp(kind, "json-encode")) run_json_encode(file, &f);
         else if (!bls_off && !strcmp(kind, "json-decode")) run_json_decode(file, &f, 0);

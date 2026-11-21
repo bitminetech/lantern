@@ -658,6 +658,160 @@ SPEC_FUNCTION node_attester_duties
     LEAVE 192
 SPEC_END node_attester_duties
 
+/* Set the byte of each index of a phase0 epoch list of PendingAttestation values: of the part at ref of the state. */
+.macro LIVE_PENDING ref
+    li      t0, \ref
+    add     t0, s1, t0
+    ld      t1, 0(t0)                       # the part's offset and count
+    ld      t2, 8(t0)
+    sd      t1, (L + 16)(sp)
+    sd      t2, (L + 24)(sp)
+71: ld      t1, (L + 16)(sp)
+    ld      t2, (L + 24)(sp)
+    beqz    t2, 74f
+    add     t0, s1, t1
+    ld      t3, 0(t0)                       # the next value starts after this one's size
+    add     t3, t1, t3
+    sd      t3, (L + 16)(sp)
+    addi    t2, t2, -1
+    sd      t2, (L + 24)(sp)
+    SCRATCH_GIVE s4, s10, 2, s9             # the bytes and the indices at the end, S(4) before them
+    mv      a0, s1
+    add     a1, s1, t1
+    ld      a2, (L + 32)(sp)
+    mv      a3, s4
+    SCRATCH_LIST a4, s4, s10, 1, s9
+    call    lantern_get_attesting_indices
+    sd      s10, 0(s4)
+    bnez    a0, 99f
+    SCRATCH_LIST t0, s4, s10, 1, s9
+    ld      t1, LIST_COUNT(t0)
+    addi    t0, t0, LIST_FIXED
+    li      t6, 1
+72: beqz    t1, 71b
+    ld      t2, 0(t0)
+    add     t2, s8, t2
+    sb      t6, 0(t2)
+    addi    t0, t0, 8
+    addi    t1, t1, -1
+    j       72b
+74:
+.endm
+
+/* Set the byte of each validator whose participation flags, of the part at ref of the state, are not 0. */
+.macro LIVE_FLAGS ref
+    PART    t2, t3, s1, \ref
+    bleu    t3, s9, 70f
+    mv      t3, s9
+70: li      t0, 0
+    li      t6, 1
+75: bgeu    t0, t3, 77f
+    add     t1, t2, t0
+    lbu     t1, 0(t1)
+    beqz    t1, 76f
+    add     t1, s8, t0
+    sb      t6, 0(t1)
+76: addi    t0, t0, 1
+    j       75b
+77:
+.endm
+
+/*
+ * (state, config, seen, ids, epoch, scratch, out) -> a0: whether the validator of each item was
+ * seen live in the epoch (node.md, lantern_node_liveness). s1 the state, s2 the seen, s3 the items,
+ * s4 scratch, s5 out, s6 the items' count, s7 the epoch, s8 a byte for each validator (list 0 of
+ * scratch), s9 the validator count, s10 the scratch's size. Locals: L the previous epoch, L+8 the
+ * current epoch, L+16 the next value and the count left of an epoch list, L+32 the CommitteeCache.
+ */
+SPEC_FUNCTION node_liveness
+    ENTER 48
+    mv      s5, a6                          # out first: the macros below use a6 and a7
+    mv      s1, a0
+    LDQ     t0, a1, CONFIG_COMMITTEE_CACHE
+    sd      t0, (L + 32)(sp)
+    mv      s2, a2
+    ld      t0, 8(a3)
+    add     s3, a3, t0
+    ld      s6, 16(a3)
+    srli    s6, s6, 6
+    mv      s7, a4
+    mv      s4, a5
+.if FORK == FORK_PHASE0
+    NEED_SCRATCH s4, s1, 6, 98f
+.else
+    NEED_SCRATCH s4, s1, 1, 98f
+.endif
+    LDQ     s9, s1, BeaconState_validators + 8
+    ld      s10, 0(s4)
+    SCRATCH_LIST s8, s4, s10, 0, s9
+    addi    s8, s8, LIST_FIXED              # a byte for each validator, 0
+    mv      a0, s8
+    mv      a1, s9
+    call    lantern_zero
+    mv      a0, s1
+    addi    a1, sp, L + 0
+    call    lantern_get_previous_epoch
+    mv      a0, s1
+    addi    a1, sp, L + 8
+    call    lantern_get_current_epoch
+    ld      t0, (L + 8)(sp)                 # in the beacon chain: the current epoch's list
+    bne     s7, t0, 1f
+.if FORK == FORK_PHASE0
+    LIVE_PENDING BeaconState_current_epoch_attestations
+.else
+    LIVE_FLAGS BeaconState_current_epoch_participation
+.endif
+1:  ld      t0, (L + 0)(sp)                 # the previous epoch's list
+    bne     s7, t0, 2f
+.if FORK == FORK_PHASE0
+    LIVE_PENDING BeaconState_previous_epoch_attestations
+.else
+    LIVE_FLAGS BeaconState_previous_epoch_participation
+.endif
+2:  PART    t2, t3, s2, Seen_keys           # on the network and from the API: the Seen's keys
+    li      t6, 1
+3:  beqz    t3, 6f
+    ld      t0, 0(t2)                       # kind, a, b: the index
+    ld      t1, 8(t2)
+    ld      t4, 16(t2)
+    addi    t2, t2, SeenKey__mem
+    addi    t3, t3, -1
+    bgeu    t4, s9, 3b
+    li      t5, SEEN_ATTESTATION            # an epoch's keys
+    beq     t0, t5, 4f
+    li      t5, SEEN_AGGREGATOR_EPOCH
+    beq     t0, t5, 4f
+    li      t5, SEEN_PROPOSER_SLOT          # a slot's keys
+    beq     t0, t5, 31f
+    li      t5, SEEN_SYNC_MESSAGE
+    beq     t0, t5, 31f
+    li      t5, SEEN_SYNC_CONTRIBUTION
+    bne     t0, t5, 3b
+31: srli    t1, t1, LOG2_SLOTS_PER_EPOCH
+4:  bne     t1, s7, 3b
+    add     t5, s8, t4
+    sb      t6, 0(t5)
+    j       3b
+6:  li      t0, 0                           # each item: the byte of its index
+7:  bgeu    t0, s6, 8f
+    slli    t1, t0, 6
+    add     t1, s3, t1
+    ld      t1, 8(t1)
+    li      t2, 0
+    bgeu    t1, s9, 79f
+    add     t1, s8, t1
+    lbu     t2, 0(t1)
+79: add     t1, s5, t0
+    sb      t2, 0(t1)
+    addi    t0, t0, 1
+    j       7b
+8:  li      a0, LANTERN_OK
+99: sd      s10, 0(s4)
+    LEAVE 48
+98: li      a0, LANTERN_BUFFER_TOO_SMALL
+    LEAVE 48
+SPEC_END node_liveness
+
 /* a0 = the fork's TypeDescriptor of the NODE_JSON_* kind t0, or 0. Uses t1. */
 LOCAL_FUNCTION node_type_of_kind
     UNWIND_END_PROLOGUE

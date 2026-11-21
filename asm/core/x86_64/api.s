@@ -1566,10 +1566,52 @@ LOCAL_FUNCTION api_body
     call    api_sync_duties_body
     UNFRAME 16
 181: cmp    $API_OP_GET_ATTESTER_DUTIES, %rsi
-    jne     99f
+    jne     182f
     call    api_duties_json
+    UNFRAME 16
+182: cmp    $API_OP_GET_LIVENESS, %rsi      # getLiveness: {"data":[{"index":…,"is_live":…},…]}
+    jne     99f
+    call    api_liveness_body
 99: UNFRAME 16
 END_FUNCTION api_body
+
+/*
+ * The body of getLiveness (beacon-api.md) from the view rbp: {"data":[{"index":…,"is_live":…},…]}
+ * of the ValidatorRef items at ApiView_sd_ids, each by its byte at ApiView_live_out. Locals: the
+ * item's index.
+ */
+LOCAL_FUNCTION api_liveness_body
+    FRAME 16
+    API_LIT api_p_data
+    movq    $0, (%rsp)
+1:  mov     ApiView_sd_ids(%rbp), %rax
+    mov     16(%rax), %rcx
+    shr     $6, %rcx
+    mov     (%rsp), %rdx
+    cmp     %rcx, %rdx
+    jae     9f
+    test    %rdx, %rdx
+    jz      2f
+    API_LIT api_p_comma
+2:  API_LIT api_l_index
+    mov     ApiView_sd_ids(%rbp), %rax
+    mov     8(%rax), %rcx
+    add     %rax, %rcx
+    mov     (%rsp), %rdx
+    shl     $6, %rdx
+    mov     8(%rcx,%rdx), %rdi
+    call    api_qdec
+    API_LIT api_l_live
+    mov     ApiView_live_out(%rbp), %rax
+    mov     (%rsp), %rdx
+    movzbl  (%rax,%rdx), %edi
+    call    api_bool
+    API_LIT api_end1
+    incq    (%rsp)
+    jmp     1b
+9:  API_LIT api_v_end
+    UNFRAME 16
+END_FUNCTION api_liveness_body
 
 /*
  * The JSON of getAttesterDuties from the view rbp: {"dependent_root":…,"execution_optimistic":…,
@@ -2759,6 +2801,8 @@ LOCAL_FUNCTION node_api_event
     je      58f
     cmp     $API_OP_GET_SYNC_COMMITTEE_DUTIES, %rcx
     je      53f
+    cmp     $API_OP_GET_LIVENESS, %rcx
+    je      52f
     cmp     $API_OP_EVENTSTREAM, %rcx
     je      61f
     cmp     $API_OP_GET_POOL_VOLUNTARY_EXITS, %rcx
@@ -2926,6 +2970,52 @@ LOCAL_FUNCTION node_api_event
     mov     S7(%rsp), %rdi
     mov     ApiRoute_epoch(%rdi), %rcx
     jmp     583f
+52: mov     $503, %edx                      # getLiveness: 503 while syncing; 400 outside the previous to the next epoch, with no index or a key
+    mov     S8(%rsp), %rax
+    cmpq    $0, ApiView_is_syncing(%rax)
+    jne     80f
+    mov     $400, %edx
+    mov     S7(%rsp), %rdi
+    mov     ApiRoute_list(%rdi), %rax
+    mov     (ApiRoute_list + 8)(%rdi), %rcx
+    test    %rcx, %rcx
+    jz      80f
+    add     %rdi, %rax
+521: cmpq   $API_VALIDATOR_INDEX, (%rax)
+    jne     80f
+    add     $64, %rax
+    dec     %rcx
+    jnz     521b
+    mov     %rbp, %rdi
+    call    node_store_slot
+    xor     %edx, %edx
+    mov     $SLOTS_PER_EPOCH, %ecx
+    div     %rcx                            # the store's epoch
+    mov     S7(%rsp), %rdi
+    mov     ApiRoute_epoch(%rdi), %rcx
+    mov     $400, %edx
+    lea     1(%rax), %rsi
+    cmp     %rsi, %rcx
+    ja      80f
+    test    %rax, %rax
+    jz      522f
+    dec     %rax
+    cmp     %rax, %rcx
+    jb      80f
+522: movq   $API_ID_HEAD, ApiRoute_id_kind(%rdi)  # the head's post-state at its slot; none: 500
+    mov     S8(%rsp), %rsi
+    call    node_api_state
+    mov     $500, %edx
+    test    %rax, %rax
+    jnz     80f
+    mov     S7(%rsp), %rdi                  # the epoch in the work's arg, in place of the slot
+    mov     ApiRoute_epoch(%rdi), %rax
+    mov     S8(%rsp), %rcx
+    mov     %rax, ApiView_head_slot(%rcx)
+    call    node_api_ids                    # its ids in the work's data
+    mov     S8(%rsp), %rcx
+    mov     %rax, ApiView_look_data(%rcx)
+    jmp     67f
 58: mov     $503, %edx                      # getAttesterDuties: 503 while syncing; 400 past the next epoch, with no index or a key
     mov     S8(%rsp), %rax
     cmpq    $0, ApiView_is_syncing(%rax)
@@ -3221,6 +3311,8 @@ LOCAL_FUNCTION node_api_done
     je      3f
     cmp     $API_OP_GET_SYNC_COMMITTEE_DUTIES, %eax
     je      3f
+    cmp     $API_OP_GET_LIVENESS, %eax
+    je      3f
     cmp     $API_OP_GET_ATTESTER_DUTIES, %eax
     jne     2f
 3:  mov     NodeAction_data(%r12), %rsi
@@ -3284,14 +3376,16 @@ LOCAL_FUNCTION node_api_done
 END_FUNCTION node_api_done
 
 /*
- * (node rdi, store rsi, work rdx, state_a rcx, data r8, scratch r9, event r10, room r11) -> rax:
- * a NODE_WORK_API_ENCODE of lantern_node_run (node.md): the response at NodeEvent_chunk of the
- * event, whose buffer has room bytes. rbx the node, rbp the store, r12 the work, r13 state_a, r14
- * the scratch, r15 the event, S7 data, S8 the ApiView at the end of scratch, S9 the operation, S10
- * the room. Locals: L the scratch's size, L+8 the fork, L+16 a Result, L+24 a blob count.
+ * (node rdi, store rsi, work rdx, state_a rcx, data r8, scratch r9, event r10, room r11, seen rax)
+ * -> rax: a NODE_WORK_API_ENCODE of lantern_node_run (node.md): the response at NodeEvent_chunk of
+ * the event, whose buffer has room bytes. rbx the node, rbp the store, r12 the work, r13 state_a,
+ * r14 the scratch, r15 the event, S7 data, S8 the ApiView at the end of scratch, S9 the operation,
+ * S10 the room. Locals: L the scratch's size, L+8 the fork, L+16 a Result, L+24 a blob count, L+32
+ * the seen.
  */
 LOCAL_FUNCTION node_api_run
-    ENTER 32
+    ENTER 48
+    mov     %rax, (L + 32)(%rsp)
     mov     %rdi, %rbx
     mov     %rsi, %rbp
     mov     %rdx, %r12
@@ -3343,6 +3437,8 @@ LOCAL_FUNCTION node_api_run
     je      2f
     cmp     $API_OP_GET_PROPOSER_LOOKAHEAD, %eax
     je      2f
+    cmp     $API_OP_GET_LIVENESS, %eax
+    je      2f
     cmp     $API_OP_GET_STATE_FORK, %eax
     jne     8f
 2:  mov     (%r14), %rax                    # the ApiView at the end of scratch, with the work's values
@@ -3379,9 +3475,11 @@ LOCAL_FUNCTION node_api_run
     je      28f
     shr     $24, %rax                       # a state at the work's slot, else the work that brought it there failed
     mov     NODE_STATE_SLOT(%r13), %rdi
+    cmpq    $API_OP_GET_LIVENESS, S9(%rsp)  # getLiveness: the state at its own slot, the epoch in arg
+    je      43f
     cmp     %rax, %rdi
     jne     42f
-    lea     Node_config(%rbx), %rsi
+43: lea     Node_config(%rbx), %rsi
     call    node_fork
     mov     %rax, %r10
     cmpq    $API_OP_GET_STATE_VALIDATOR, S9(%rsp)
@@ -3496,7 +3594,7 @@ LOCAL_FUNCTION node_api_run
     mov     %rax, NodeEvent_result(%r15)
     jmp     9f
 25: cmpq    $API_OP_GET_ATTESTER_DUTIES, S9(%rsp)
-    jne     26f
+    jne     251f
     mov     S7(%rsp), %rax                  # getAttesterDuties: lantern_node_attester_duties of its ids, its out at the end of scratch
     test    %rax, %rax
     jz      41f
@@ -3517,6 +3615,40 @@ LOCAL_FUNCTION node_api_run
     mov     S7(%rsp), %rdx
     mov     %r14, %rcx
     FORK_CALL node_attester_duties
+    cmp     $LANTERN_BUFFER_TOO_SMALL, %rax
+    je      71f
+    test    %rax, %rax
+    jz      24f
+    mov     %rax, NodeEvent_result(%r15)
+    jmp     9f
+251: cmpq   $API_OP_GET_LIVENESS, S9(%rsp)
+    jne     26f
+    mov     S7(%rsp), %rax                  # getLiveness: lantern_node_liveness of its ids and the epoch, its out at the end of scratch
+    test    %rax, %rax
+    jz      41f
+    mov     S8(%rsp), %rdi
+    mov     %rax, ApiView_sd_ids(%rdi)
+    mov     16(%rax), %rax
+    shr     $6, %rax
+    add     $7, %rax
+    and     $-8, %rax
+    mov     (%r14), %rcx
+    sub     %rax, %rcx
+    jb      71f
+    mov     %rcx, (%r14)
+    lea     (%r14,%rcx), %rax
+    mov     %rax, ApiView_live_out(%rdi)
+    mov     %r13, %rdi
+    lea     Node_config(%rbx), %rsi
+    mov     (L + 32)(%rsp), %rdx
+    mov     S7(%rsp), %rcx
+    mov     NodeAction_arg(%r12), %r8
+    shr     $24, %r8
+    mov     %r14, %r9
+    sub     $16, %rsp                       # the seventh argument: out
+    mov     %rax, (%rsp)
+    FORK_CALL node_liveness
+    add     $16, %rsp
     cmp     $LANTERN_BUFFER_TOO_SMALL, %rax
     je      71f
     test    %rax, %rax
@@ -3758,13 +3890,13 @@ LOCAL_FUNCTION node_api_run
 9:  mov     L(%rsp), %rax
     mov     %rax, (%r14)
     xor     %eax, %eax
-    LEAVE 32
+    LEAVE 48
 8:  mov     $LANTERN_INVALID_EVENT, %eax
-    LEAVE 32
+    LEAVE 48
 71: mov     L(%rsp), %rax
     mov     %rax, (%r14)
 7:  mov     $LANTERN_BUFFER_TOO_SMALL, %eax
-    LEAVE 32
+    LEAVE 48
 END_FUNCTION node_api_run
 
 /* ---------------------------------------------------------------- Lookup (beacon-api.md, Common rules) */
@@ -4182,6 +4314,8 @@ LOCAL_FUNCTION node_api_encode
     cmp     $API_OP_GET_STATE_RANDAO, %rdi
     cmove   %rax, %rcx
     cmp     $API_OP_GET_EPOCH_SYNC_COMMITTEES, %rdi
+    cmove   %rax, %rcx
+    cmp     $API_OP_GET_LIVENESS, %rdi
     cmove   %rax, %rcx
 3:  mov     $NODE_WORK_API_ENCODE, %edi
     xor     %edx, %edx

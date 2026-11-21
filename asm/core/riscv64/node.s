@@ -10122,7 +10122,7 @@ FUNCTION lantern_node_run
     LEAVE 192
 975: li     t1, NODE_WORK_API_ENCODE
     bne     t0, t1, 976f
-    mv      a0, s1                          # API_ENCODE: the response of an answer
+    mv      a0, s1                          # API_ENCODE: the response of an answer; the seen in t0
     mv      a1, s2
     mv      a2, s3
     mv      a3, s4
@@ -10130,6 +10130,7 @@ FUNCTION lantern_node_run
     mv      a5, s6
     mv      a6, s7
     mv      a7, s8
+    ld      t0, (L + 64)(sp)
     call    node_api_run
     LEAVE 192
 976: li     t1, NODE_WORK_API_CHUNK

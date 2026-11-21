@@ -1616,7 +1616,7 @@ LOCAL_FUNCTION api_body
     bl      api_sync_duties_body
     UNFRAME 16
 181: cmp    x28, #API_OP_GET_ATTESTER_DUTIES
-    b.ne    99f
+    b.ne    182f
     API_LIT api_u_root
     LDQ     x0, x22, ApiView_ad_out
     mov     x1, #32
@@ -1679,8 +1679,52 @@ LOCAL_FUNCTION api_body
     str     x9, [sp, #24]
     b       17b
 16: API_LIT api_v_end
+    UNFRAME 16
+    /* getLiveness: {"data":[{"index":…,"is_live":…},…]} */
+182: cmp    x28, #API_OP_GET_LIVENESS
+    b.ne    99f
+    bl      api_liveness_body
 99: UNFRAME 16
 END_FUNCTION api_body
+
+/*
+ * L1: the body of getLiveness (beacon-api.md): {"data":[{"index":…,"is_live":…},…]} of the
+ * ValidatorRef items at ApiView_sd_ids of the view x22, each by its byte at ApiView_live_out.
+ * Locals: the item's index.
+ */
+LOCAL_FUNCTION api_liveness_body
+    FRAME 16
+    API_LIT api_p_data
+    str     xzr, [sp, #16]
+1:  LDQ     x9, x22, ApiView_sd_ids
+    ldr     x10, [x9, #16]
+    lsr     x10, x10, #6
+    ldr     x11, [sp, #16]
+    cmp     x11, x10
+    b.hs    9f
+    cbz     x11, 2f
+    API_LIT api_p_comma
+2:  API_LIT api_l_index
+    LDQ     x9, x22, ApiView_sd_ids
+    ldr     x10, [x9, #8]
+    add     x10, x9, x10
+    ldr     x11, [sp, #16]
+    add     x10, x10, x11, lsl #6
+    ldr     x0, [x10, #8]
+    bl      api_qdec
+    API_LIT api_l_live
+    LDQ     x9, x22, ApiView_live_out
+    ldr     x11, [sp, #16]
+    ldrb    w0, [x9, x11]
+    bl      api_bool
+    API_LIT api_end1
+    ldr     x9, [sp, #16]
+    add     x9, x9, #1
+    str     x9, [sp, #16]
+    b       1b
+9:  API_LIT api_v_end
+    UNFRAME 16
+END_FUNCTION api_liveness_body
 
 /*
  * L1: the body of getSyncCommitteeDuties (beacon-api.md): {"execution_optimistic":…,"data":[{"pubkey":…,
@@ -2824,6 +2868,8 @@ LOCAL_FUNCTION node_api_event
     b.eq    58f
     cmp     x3, #API_OP_GET_SYNC_COMMITTEE_DUTIES
     b.eq    53f
+    cmp     x3, #API_OP_GET_LIVENESS
+    b.eq    52f
     cmp     x3, #API_OP_EVENTSTREAM
     b.eq    61f
     cmp     x3, #API_OP_GET_POOL_VOLUNTARY_EXITS
@@ -2973,6 +3019,44 @@ LOCAL_FUNCTION node_api_event
     ldr     x10, [x25, #ApiRoute_epoch]
     mov     x11, #SLOTS_PER_EPOCH
     b       583f
+52: mov     x2, #503                        /* getLiveness: 503 while syncing; 400 outside the previous to the next epoch, with no index or a key */
+    ldr     x9, [x26, #ApiView_is_syncing]
+    cbnz    x9, 80f
+    mov     x2, #400
+    ldp     x10, x11, [x25, #ApiRoute_list]
+    cbz     x11, 80f
+    add     x10, x25, x10
+521: ldr    x12, [x10], #64
+    cmp     x12, #API_VALIDATOR_INDEX
+    b.ne    80f
+    subs    x11, x11, #1
+    b.ne    521b
+    mov     x0, x20
+    bl      node_store_slot
+    mov     x11, #SLOTS_PER_EPOCH
+    udiv    x9, x0, x11                     /* the store's epoch */
+    ldr     x10, [x25, #ApiRoute_epoch]
+    mov     x2, #400
+    add     x11, x9, #1
+    cmp     x10, x11
+    b.hi    80f
+    cbz     x9, 522f
+    sub     x9, x9, #1
+    cmp     x10, x9
+    b.lo    80f
+522: mov    x9, #API_ID_HEAD                /* the head's post-state at its slot; none: 500 */
+    str     x9, [x25, #ApiRoute_id_kind]
+    mov     x0, x25
+    mov     x1, x26
+    bl      node_api_state
+    mov     x2, #500
+    cbnz    x0, 80f
+    ldr     x9, [x25, #ApiRoute_epoch]      /* the epoch in the work's arg, in place of the slot */
+    str     x9, [x26, #ApiView_head_slot]
+    mov     x0, x25                         /* its ids in the work's data */
+    bl      node_api_ids
+    str     x0, [x26, #ApiView_look_data]
+    b       67f
 58: mov     x2, #503                        /* getAttesterDuties: 503 while syncing; 400 past the next epoch, with no index or a key */
     ldr     x9, [x26, #ApiView_is_syncing]
     cbnz    x9, 80f
@@ -3234,6 +3318,8 @@ LOCAL_FUNCTION node_api_done
     ccmp    x10, x13, #4, ne
     ccmp    x10, #API_OP_GET_STATE_RANDAO, #4, ne
     ccmp    x10, #API_OP_GET_EPOCH_SYNC_COMMITTEES, #4, ne
+    mov     x14, #API_OP_GET_LIVENESS
+    ccmp    x10, x14, #4, ne
     b.ne    2f
     ldr     x1, [x21, #NodeAction_data]
     cbz     x1, 2f
@@ -3293,14 +3379,15 @@ LOCAL_FUNCTION node_api_done
 END_FUNCTION node_api_done
 
 /*
- * (node, store, work, state_a, data, scratch, event, room) -> status: a NODE_WORK_API_ENCODE of
- * lantern_node_run (node.md): the response at NodeEvent_chunk of the event, whose buffer has room
- * bytes. x19 the node, x20 the store, x21 the work, x22 state_a, x23 data, x24 the scratch, x25
- * the event, x26 the ApiView at the end of scratch, x27 the operation, x28 the room. Locals: L the
- * scratch's size, L+8 a kept word, L+16 a Result, L+24 a blob count.
+ * (node, store, work, state_a, data, scratch, event, room; the seen in x8) -> status: a
+ * NODE_WORK_API_ENCODE of lantern_node_run (node.md): the response at NodeEvent_chunk of the event,
+ * whose buffer has room bytes. x19 the node, x20 the store, x21 the work, x22 state_a, x23 data, x24
+ * the scratch, x25 the event, x26 the ApiView at the end of scratch, x27 the operation, x28 the room.
+ * Locals: L the scratch's size, L+8 a kept word, L+16 a Result, L+24 a blob count, L+32 the seen.
  */
 LOCAL_FUNCTION node_api_run
-    ENTER 32
+    ENTER 48
+    str     x8, [sp, #(L + 32)]             /* the seen */
     mov     x19, x0
     mov     x20, x1
     mov     x21, x2
@@ -3350,6 +3437,8 @@ LOCAL_FUNCTION node_api_run
     b.eq    2f
     cmp     x27, #API_OP_GET_PROPOSER_LOOKAHEAD
     b.eq    2f
+    cmp     x27, #API_OP_GET_LIVENESS
+    b.eq    2f
     cmp     x27, #API_OP_GET_STATE_FORK
     b.ne    8f
 2:  ldr     x9, [x24]                       /* the ApiView at the end of scratch, with the work's values */
@@ -3379,9 +3468,11 @@ LOCAL_FUNCTION node_api_run
     b.eq    28f
     ldr     x0, [x22, #NODE_STATE_SLOT]     /* a state at the work's slot, else the work that brought it there failed */
     lsr     x9, x9, #24
+    cmp     x27, #API_OP_GET_LIVENESS       /* getLiveness: the state at its own slot, the epoch in arg */
+    b.eq    43f
     cmp     x0, x9
     b.ne    42f
-    add     x1, x19, #Node_config
+43: add     x1, x19, #Node_config
     bl      node_fork
     mov     x15, x0
     cmp     x27, #API_OP_GET_STATE_VALIDATOR
@@ -3482,7 +3573,7 @@ LOCAL_FUNCTION node_api_run
     str     x0, [x25, #NodeEvent_result]
     b       9f
 25: cmp     x27, #API_OP_GET_ATTESTER_DUTIES
-    b.ne    26f
+    b.ne    251f
     cbz     x23, 41f                        /* getAttesterDuties: lantern_node_attester_duties of its ids, its out at the end of scratch */
     ldr     x9, [x23, #16]
     lsr     x9, x9, #6
@@ -3501,6 +3592,33 @@ LOCAL_FUNCTION node_api_run
     mov     x2, x23
     mov     x3, x24
     FORK_CALL node_attester_duties
+    cmp     x0, #LANTERN_BUFFER_TOO_SMALL
+    b.eq    71f
+    cbz     x0, 24f
+    str     x0, [x25, #NodeEvent_result]
+    b       9f
+251: cmp    x27, #API_OP_GET_LIVENESS
+    b.ne    26f
+    cbz     x23, 41f                        /* getLiveness: lantern_node_liveness of its ids and the epoch, its out at the end of scratch */
+    STQ     x23, x26, ApiView_sd_ids
+    ldr     x9, [x23, #16]
+    lsr     x9, x9, #6
+    add     x9, x9, #7
+    and     x9, x9, #~7
+    ldr     x10, [x24]
+    subs    x10, x10, x9
+    b.lo    71f
+    str     x10, [x24]
+    add     x6, x24, x10
+    STQ     x6, x26, ApiView_live_out
+    mov     x0, x22
+    add     x1, x19, #Node_config
+    ldr     x2, [sp, #(L + 32)]
+    mov     x3, x23
+    ldr     x4, [x21, #NodeAction_arg]
+    lsr     x4, x4, #24
+    mov     x5, x24
+    FORK_CALL node_liveness
     cmp     x0, #LANTERN_BUFFER_TOO_SMALL
     b.eq    71f
     cbz     x0, 24f
@@ -3723,13 +3841,13 @@ LOCAL_FUNCTION node_api_run
 9:  ldr     x9, [sp, #L]
     str     x9, [x24]
     mov     x0, #LANTERN_OK
-    LEAVE 32
+    LEAVE 48
 8:  mov     x0, #LANTERN_INVALID_EVENT
-    LEAVE 32
+    LEAVE 48
 71: ldr     x9, [sp, #L]
     str     x9, [x24]
 7:  mov     x0, #LANTERN_BUFFER_TOO_SMALL
-    LEAVE 32
+    LEAVE 48
 END_FUNCTION node_api_run
 
 /*
@@ -4239,6 +4357,8 @@ LOCAL_FUNCTION node_api_encode
     ccmp    x0, x12, #4, ne
     ccmp    x0, #API_OP_GET_STATE_RANDAO, #4, ne
     ccmp    x0, #API_OP_GET_EPOCH_SYNC_COMMITTEES, #4, ne
+    mov     x13, #API_OP_GET_LIVENESS
+    ccmp    x0, x13, #4, ne
     ldr     x9, [x3, #ApiView_look_data]
     csel    x3, x9, xzr, eq
 3:  mov     x0, #NODE_WORK_API_ENCODE
