@@ -4904,7 +4904,24 @@ LOCAL_FUNCTION node_event
     ld      t0, NodeEvent_checkpoint(s3)
     STQ     t0, s1, Node_eth1_deposit_index
     LEAVE 48
-7091: li    t2, NODE_WORK_CUSTODY           # CUSTODY: custody_need, when more
+7091: li    t2, NODE_WORK_RECONSTRUCT       # RECONSTRUCT: its sidecars go out, or it failed
+    bne     t0, t2, 7096f
+    ld      t1, NodeEvent_result(s3)
+    bnez    t1, 7097f
+    li      t1, 2
+    STQ     t1, s1, Node_recon_state
+    STQ     zero, s1, Node_recon_next
+    LEAVE 48
+7097: li    a0, NODE_ACT_BYTES_FREE
+    LDQ     a1, s1, Node_recon_buffer
+    li      a2, 0
+    call    node_ids
+    ADDQ    a0, s1, Node_recon_failed
+    ADDQ    a1, s1, Node_recon_root
+    COPY32  a0, a1
+    STQ     zero, s1, Node_recon_state
+    LEAVE 48
+7096: li    t2, NODE_WORK_CUSTODY           # CUSTODY: custody_need, when more
     bne     t0, t2, 7094f
     ld      t1, NodeEvent_index(s3)
     LDQ     t2, s1, Node_custody_need
@@ -7000,6 +7017,403 @@ LOCAL_FUNCTION node_column_raise_topics
     j       6b
 9:  LEAVE 0
 END_FUNCTION node_column_raise_topics
+
+/* L0: a0 = the NODE_BLOB_VALID entries of the root at a0. Uses t0-t4, a6, a7. */
+LOCAL_FUNCTION node_recon_count
+    UNWIND_END_PROLOGUE
+    PART    t0, t1, s1, Node_blobs
+    li      t2, 0
+1:  beqz    t1, 9f
+    ld      t3, NodeBlob_status(t0)
+    li      t4, NODE_BLOB_VALID
+    bne     t3, t4, 2f
+    NE32    t0, a0, 2f
+    addi    t2, t2, 1
+2:  addi    t0, t0, NodeBlob__mem
+    addi    t1, t1, -1
+    j       1b
+9:  mv      a0, t2
+    ret
+END_FUNCTION node_recon_count
+
+/*
+ * L1: the reconstruction (node.md), at the quiet point: with recon_state 0, the first root of
+ * NODE_BLOB_VALID column sidecars of a fulu slot, NUMBER_OF_COLUMNS / 2 or more and fewer than
+ * NUMBER_OF_COLUMNS, not recon_failed, a third of its slot past: the join of their bytes, the
+ * buffer of all sidecars, the work; with recon_state 2, a PUBLISH_SIDECAR of the next column the
+ * node lacks, or the end. s3 an entry, s4 the entries left, s7 the count, s8 the root's entry,
+ * s9 a column, s10 the joined id. Locals: 0 the join action, 8 the ids written.
+ */
+LOCAL_FUNCTION node_reconstruct_due
+    ENTER 16
+    LDQ     t0, s1, Node_recon_state
+    li      t1, 2
+    beq     t0, t1, 50f
+    bnez    t0, 99f
+    PART    s3, s4, s1, Node_blobs
+1:  beqz    s4, 99f
+    ld      t0, NodeBlob_status(s3)
+    li      t1, NODE_BLOB_VALID
+    bne     t0, t1, 3f
+    ld      a0, NodeBlob_slot(s3)
+    addi    a1, s1, Node_config
+    call    node_fork
+    li      t0, FORK_FULU
+    bltu    a0, t0, 3f
+    ADDQ    t0, s1, Node_recon_failed
+    NE32    t0, s3, 11f
+    j       3f
+11: mv      a0, s3
+    call    node_recon_count
+    li      t0, NUMBER_OF_COLUMNS / 2
+    bltu    a0, t0, 3f
+    li      t0, NUMBER_OF_COLUMNS
+    bgeu    a0, t0, 3f
+    mv      s7, a0
+    ld      t0, NodeBlob_slot(s3)           # a third of its slot past
+    LDQ     t1, s1, Node_config + CONFIG_SLOT_DURATION_MS
+    LDQ     t2, s2, Store_genesis_time_ms
+    mul     t0, t0, t1
+    add     t2, t2, t0
+    li      t3, 3
+    divu    t3, t1, t3
+    add     t2, t2, t3
+    LDQ     t0, s1, Node_time_ms
+    bltu    t0, t2, 3f
+    slli    a0, s7, 3
+    addi    a0, a0, 1024
+    call    node_room
+    beqz    a0, 99f
+    j       20f
+3:  addi    s3, s3, NodeBlob__mem
+    addi    s4, s4, -1
+    j       1b
+20: mv      s8, s3
+    call    node_new_id                     # the join of the held sidecars, by index
+    mv      s10, a0
+    li      a0, NODE_ACT_BYTES_JOIN
+    slli    a1, s7, 3
+    addi    a1, a1, 32
+    call    node_act
+    sd      s10, 16(a0)
+    sd      s7, 24(a0)
+    sd      a0, 0(sp)
+    sd      zero, 8(sp)
+    li      s9, 0
+21: li      t0, NUMBER_OF_COLUMNS
+    bgeu    s9, t0, 22f
+    addi    a0, s8, NodeBlob_block_root
+    mv      a1, s9
+    call    node_blob_held
+    beqz    a0, 23f
+    ld      t0, 8(sp)
+    bgeu    t0, s7, 23f
+    ld      t1, NodeBlob_data_id(a0)
+    ld      t2, 0(sp)
+    slli    t3, t0, 3
+    add     t2, t2, t3
+    sd      t1, 32(t2)
+    addi    t0, t0, 1
+    sd      t0, 8(sp)
+23: addi    s9, s9, 1
+    j       21b
+22: call    node_new_id                     # the buffer of every sidecar
+    STQ     a0, s1, Node_recon_buffer
+    li      a0, NODE_ACT_BYTES_NEW
+    li      a1, NODE_ACT_BYTES_NEW_SIZE
+    call    node_act
+    LDQ     t0, s1, Node_recon_buffer
+    ld      t1, NodeBlob_length(s8)
+    addi    t1, t1, 24 + 7
+    andi    t1, t1, -8
+    li      t2, NUMBER_OF_COLUMNS
+    mul     t1, t1, t2
+    addi    t1, t1, 24
+    sd      t0, 16(a0)
+    sd      t1, 24(a0)
+    li      a0, NODE_WORK_RECONSTRUCT
+    li      a1, 0
+    LDQ     a2, s1, Node_recon_buffer
+    mv      a3, s10
+    li      a4, 0
+    li      a5, 0
+    call    node_work
+    li      a0, NODE_ACT_BYTES_FREE
+    mv      a1, s10
+    li      a2, 0
+    call    node_ids
+    ADDQ    a0, s1, Node_recon_root
+    addi    a1, s8, NodeBlob_block_root
+    COPY32  a0, a1
+    ld      t0, NodeBlob_slot(s8)
+    STQ     t0, s1, Node_recon_slot
+    li      t0, 1
+    STQ     t0, s1, Node_recon_state
+    j       99f
+50: LDQ     s9, s1, Node_recon_next         # the next column the node lacks
+51: li      t0, NUMBER_OF_COLUMNS
+    bgeu    s9, t0, 59f
+    ADDQ    a0, s1, Node_recon_root
+    mv      a1, s9
+    call    node_blob_held
+    beqz    a0, 52f
+    addi    s9, s9, 1
+    j       51b
+52: li      a0, NODE_ACT_WORK_SIZE
+    call    node_room
+    beqz    a0, 99f
+    li      a0, NODE_WORK_PUBLISH_SIDECAR
+    li      a1, 0
+    LDQ     a2, s1, Node_recon_buffer
+    li      a3, 0
+    li      a4, -1
+    mv      a5, s9
+    call    node_work
+    addi    t0, s9, 1
+    STQ     t0, s1, Node_recon_next
+    li      t0, 3
+    STQ     t0, s1, Node_recon_state
+    j       99f
+59: li      a0, NODE_ACT_BYTES_FREE         # none left: the buffer goes
+    LDQ     a1, s1, Node_recon_buffer
+    li      a2, 0
+    call    node_ids
+    STQ     zero, s1, Node_recon_state
+99: LEAVE 16
+END_FUNCTION node_reconstruct_due
+
+/*
+ * (data, settings, scratch, out): node.md, lantern_node_reconstruct: for each blob,
+ * crypto_kzg_recover_cells_and_kzg_proofs of the held cells, then every column's sidecar. s1
+ * scratch, s2 settings, s3 out, s4 the held sidecars, s5 the blobs, s6 a sidecar's length, s7 an
+ * out ByteList's size, s8 a row or a column, s9 an entry or a column, s10 the first sidecar's
+ * bytes. Locals: 0 the data's end, 8 the KzgScratch, 16 the CellIndexList, 24 the CellList, 32 the
+ * recovered cells, 40 their proofs, 48 the held sidecars' bytes.
+ */
+.set RECON_KZG, 64
+.set RECON_INDICES, RECON_KZG + CRYPTO_KZG_SCRATCH
+.set RECON_CELLS, RECON_INDICES + 1056
+.set RECON_OUT_CELLS, RECON_CELLS + 24 + 128 * 2048
+.set RECON_OUT_PROOFS, RECON_OUT_CELLS + 128 * 2048
+.set RECON_HELD, RECON_OUT_PROOFS + 128 * 48
+.set RECON_SCRATCH, RECON_HELD + 128 * 8
+.set RECON_FIXED, 356                       # a DataColumnSidecar's fixed part
+.set RECON_ROW, 2048 + 48 + 48              # its bytes for each blob: a cell, a commitment, a proof
+.if RECON_SCRATCH > CRYPTO_KZG_SCRATCH + 540672
+.error "the reconstruction's scratch is past its documented need"
+.endif
+FUNCTION lantern_node_reconstruct
+    ENTER 64
+    mv      s2, a1
+    mv      s1, a2
+    mv      s3, a3
+    ld      t0, 0(s1)
+    li      t1, CRYPTO_KZG_SCRATCH + 540672
+    bltu    t0, t1, 8f
+    li      t0, RECON_KZG
+    add     t0, s1, t0
+    sd      t0, 8(sp)
+    li      t0, RECON_INDICES
+    add     t0, s1, t0
+    sd      t0, 16(sp)
+    li      t0, RECON_CELLS
+    add     t0, s1, t0
+    sd      t0, 24(sp)
+    li      t0, RECON_OUT_CELLS
+    add     t0, s1, t0
+    sd      t0, 32(sp)
+    li      t0, RECON_OUT_PROOFS
+    add     t0, s1, t0
+    sd      t0, 40(sp)
+    li      t0, RECON_HELD
+    add     t0, s1, t0
+    sd      t0, 48(sp)
+    ld      t0, 8(a0)                       # the held sidecars: ByteLists at multiples of 8
+    ld      t1, 16(a0)
+    add     s9, a0, t0
+    add     t1, s9, t1
+    sd      t1, 0(sp)
+    li      s4, 0
+1:  ld      t1, 0(sp)
+    bgeu    s9, t1, 2f
+    addi    t0, s9, 24
+    bltu    t1, t0, 7f
+    ld      t2, 0(s9)
+    ld      t3, 8(s9)
+    ld      t4, 16(s9)
+    li      t5, 24
+    bne     t3, t5, 7f
+    addi    t5, t4, 24
+    bltu    t2, t5, 7f
+    add     t5, s9, t2
+    bltu    t1, t5, 7f
+    li      t5, NUMBER_OF_COLUMNS
+    bgeu    s4, t5, 7f
+    addi    t6, s9, 24
+    bnez    s4, 11f
+    mv      s6, t4                          # the first: the length and the blob count
+    mv      s10, t6
+    li      t5, RECON_FIXED
+    bltu    s6, t5, 7f
+    sub     t5, s6, t5
+    li      t3, RECON_ROW
+    divu    s5, t5, t3
+    remu    t3, t5, t3
+    bnez    t3, 7f
+    beqz    s5, 7f
+11: bne     t4, s6, 7f                      # each of that length, with the offsets of n blobs
+    lwu     t3, 8(t6)
+    li      t5, RECON_FIXED
+    bne     t3, t5, 7f
+    slli    t5, s5, 11
+    addi    t5, t5, RECON_FIXED
+    lwu     t3, 12(t6)
+    bne     t3, t5, 7f
+    li      t3, 48
+    mul     t3, s5, t3
+    add     t5, t5, t3
+    lwu     t3, 16(t6)
+    bne     t3, t5, 7f
+    ld      t3, 0(t6)                       # its index, ascending, below NUMBER_OF_COLUMNS
+    li      t5, NUMBER_OF_COLUMNS
+    bgeu    t3, t5, 7f
+    ld      t5, 16(sp)
+    addi    t5, t5, 24
+    beqz    s4, 12f
+    slli    t4, s4, 3
+    add     t4, t5, t4
+    ld      t4, -8(t4)
+    bleu    t3, t4, 7f
+12: slli    t4, s4, 3
+    add     t4, t5, t4
+    sd      t3, 0(t4)
+    ld      t5, 48(sp)
+    slli    t4, s4, 3
+    add     t4, t5, t4
+    sd      t6, 0(t4)
+    addi    s4, s4, 1
+    addi    t2, t2, 7
+    andi    t2, t2, -8
+    add     s9, s9, t2
+    j       1b
+2:  li      t0, NUMBER_OF_COLUMNS / 2
+    bltu    s4, t0, 7f
+    addi    s7, s6, 24 + 7                  # the out sidecars' room
+    andi    s7, s7, -8
+    li      t0, NUMBER_OF_COLUMNS
+    mul     t0, t0, s7
+    ld      t1, 0(s3)
+    li      t2, 24
+    bltu    t1, t2, 8f
+    sub     t1, t1, t2
+    bltu    t1, t0, 8f
+    sd      t2, 8(s3)
+    sd      t0, 16(s3)
+    li      s8, 0                           # each sidecar: its ByteList, index, the first's fixed part and commitments
+3:  li      t0, NUMBER_OF_COLUMNS
+    bgeu    s8, t0, 4f
+    mul     s9, s8, s7
+    add     s9, s9, s3
+    addi    s9, s9, 24
+    sd      s7, 0(s9)
+    li      t0, 24
+    sd      t0, 8(s9)
+    sd      s6, 16(s9)
+    addi    a0, s9, 24 + 8
+    addi    a1, s10, 8
+    li      a2, RECON_FIXED - 8
+    call    lantern_copy
+    sd      s8, 24(s9)
+    slli    t0, s5, 11
+    addi    t0, t0, RECON_FIXED
+    addi    a0, s9, 24
+    add     a0, a0, t0
+    add     a1, s10, t0
+    li      t1, 48
+    mul     a2, s5, t1
+    call    lantern_copy
+    addi    s8, s8, 1
+    j       3b
+4:  li      s8, 0                           # each blob: recover its row, then its cells and proofs into the sidecars
+5:  bgeu    s8, s5, 9f
+    ld      t0, 24(sp)
+    li      t1, 24 + 128 * 2048
+    sd      t1, 0(t0)
+    li      t2, 24
+    sd      t2, 8(t0)
+    sd      s4, 16(t0)
+    ld      t0, 16(sp)
+    li      t1, 24 + 128 * 8
+    sd      t1, 0(t0)
+    sd      t2, 8(t0)
+    sd      s4, 16(t0)
+    li      s9, 0
+51: bgeu    s9, s4, 52f
+    ld      a0, 24(sp)
+    addi    a0, a0, 24
+    slli    t0, s9, 11
+    add     a0, a0, t0
+    ld      t1, 48(sp)
+    slli    t0, s9, 3
+    add     t1, t1, t0
+    ld      a1, 0(t1)
+    addi    a1, a1, RECON_FIXED
+    slli    t0, s8, 11
+    add     a1, a1, t0
+    li      a2, 2048
+    call    lantern_copy
+    addi    s9, s9, 1
+    j       51b
+52: ld      t0, 8(sp)
+    li      t1, CRYPTO_KZG_SCRATCH
+    sd      t1, 0(t0)
+    mv      a0, s2
+    ld      a1, 16(sp)
+    ld      a2, 24(sp)
+    ld      a3, 8(sp)
+    ld      a4, 32(sp)
+    ld      a5, 40(sp)
+    CALL_GLOBAL crypto_kzg_recover_cells_and_kzg_proofs
+    bnez    a0, 7f
+    li      s9, 0
+53: li      t0, NUMBER_OF_COLUMNS
+    bgeu    s9, t0, 54f
+    mul     a0, s9, s7                      # sidecar c's cell r
+    add     a0, a0, s3
+    addi    a0, a0, 24 + 24 + RECON_FIXED
+    slli    t0, s8, 11
+    add     a0, a0, t0
+    ld      a1, 32(sp)
+    slli    t0, s9, 11
+    add     a1, a1, t0
+    li      a2, 2048
+    call    lantern_copy
+    mul     a0, s9, s7                      # and its proof r
+    add     a0, a0, s3
+    addi    a0, a0, 24 + 24
+    li      t0, 2048 + 48
+    mul     t0, s5, t0
+    addi    t0, t0, RECON_FIXED
+    add     a0, a0, t0
+    li      t1, 48
+    mul     t0, s8, t1
+    add     a0, a0, t0
+    ld      a1, 40(sp)
+    mul     t0, s9, t1
+    add     a1, a1, t0
+    li      a2, 48
+    call    lantern_copy
+    addi    s9, s9, 1
+    j       53b
+54: addi    s8, s8, 1
+    j       5b
+9:  li      a0, LANTERN_OK
+    LEAVE 64
+8:  li      a0, LANTERN_BUFFER_TOO_SMALL
+    LEAVE 64
+7:  li      a0, LANTERN_INVALID_ENCODING
+    LEAVE 64
+END_FUNCTION lantern_node_reconstruct
 
 /*
  * Validator custody (node.md), from fulu: once each store epoch, with a NodeProposer entry whose
@@ -9623,6 +10037,7 @@ FUNCTION lantern_node_step
     call    node_lc_due                     # the light client updates due on gossip
     call    node_produce_due                # the produceBlockV3 entries whose bid is late
     call    node_replay_due                 # the replay in flight: its next blocks
+    call    node_reconstruct_due            # the reconstruction of a block's columns, and its sidecars
     call    node_backfill_link              # the backfill's blocks of the chain join the Db
     call    node_drop_sidecars              # the sidecars the node no longer serves go
     sd      zero, (L + 112)(sp)
@@ -10615,7 +11030,7 @@ FUNCTION lantern_node_run
     li      a0, LANTERN_OK
     LEAVE 192
 8428: li    t1, NODE_WORK_CUSTODY
-    bne     t0, t1, 8430f
+    bne     t0, t1, 8429f
     beqz    s4, 837b                        # CUSTODY: lantern_node_custody with the store's epoch, its count at NodeEvent_index
     mv      a0, s2
     call    node_store_slot
@@ -10633,6 +11048,20 @@ FUNCTION lantern_node_run
     FORK_CALL node_custody
     ld      t0, (L + 104)(sp)
     sd      t0, NodeEvent_index(s7)
+    li      a0, LANTERN_OK
+    LEAVE 192
+8429: li    t1, NODE_WORK_RECONSTRUCT
+    bne     t0, t1, 8430f
+    beqz    s5, 837b                        # RECONSTRUCT: lantern_node_reconstruct of data into state_b
+    ld      a3, (L + 72)(sp)
+    beqz    a3, 837b
+    mv      a0, s5
+    ld      a1, (L + 88)(sp)
+    mv      a2, s6
+    call    lantern_node_reconstruct
+    li      t0, LANTERN_BUFFER_TOO_SMALL
+    beq     a0, t0, 8449f
+    sd      a0, NodeEvent_result(s7)
     li      a0, LANTERN_OK
     LEAVE 192
 8430: li    t1, NODE_WORK_PRODUCE_BLOCK
@@ -10926,8 +11355,16 @@ FUNCTION lantern_node_run
     addi    t0, s9, NodeEvent_chunk + 24 + 7
     bltu    s8, t0, 8419b
     sd      t4, (L + 96)(sp)
-    ld      t0, NodeAction_target(s3)       # its block's root and slot: the entry's
-    PART    t1, t2, s1, Node_api
+    ld      t0, NodeAction_target(s3)       # its block's root and slot: the entry's, or with no entry the reconstruction's
+    li      t1, -1
+    bne     t0, t1, 8484f
+    addi    a0, s7, NodeEvent_root
+    ADDQ    a1, s1, Node_recon_root
+    COPY32  a0, a1
+    LDQ     t0, s1, Node_recon_slot
+    sd      t0, NodeEvent_checkpoint(s7)
+    j       8485f
+8484: PART  t1, t2, s1, Node_api
     bgeu    t0, t2, 837b
     li      t2, NodeApi__mem
     mul     t0, t0, t2
@@ -10937,6 +11374,7 @@ FUNCTION lantern_node_run
     COPY32  a0, a1
     ld      t0, NodeApi_slot(t1)
     sd      t0, NodeEvent_checkpoint(s7)
+8485:
     ld      t4, (L + 96)(sp)
     ld      t0, 8(t4)                       # its index: the u64 at byte 0 of its bytes
     add     t0, t4, t0

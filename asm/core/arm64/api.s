@@ -6505,7 +6505,11 @@ LOCAL_FUNCTION node_publish_done
     ENTER 16
     mov     x21, x0
     ldr     x9, [x21, #NodeAction_target]
-    PART    x22, x10, x19, Node_api
+    cmn     x9, #1                          /* a sidecar of the reconstruction */
+    b.ne    100f
+    bl      node_recon_sidecar_done
+    LEAVE 16
+100: PART   x22, x10, x19, Node_api
     cmp     x9, x10
     b.hs    99f
     mov     x11, #NodeApi__mem
@@ -6728,6 +6732,64 @@ LOCAL_FUNCTION node_publish_sidecar_work
     bl      node_work
     UNFRAME 16
 END_FUNCTION node_publish_sidecar_work
+
+/*
+ * L2: the WORK_DONE x0 of a PUBLISH_SIDECAR of the reconstruction (node.md): recon_state 2; a
+ * valid one stays as a NodeBlob when the node lacks it, and goes out on its subnet's topic with
+ * NODE_FLAG_SUBSCRIBED, a column of columns and recon_slot above F's slot. x22 the event, x25 the
+ * sidecar's ByteList.
+ */
+LOCAL_FUNCTION node_recon_sidecar_done
+    ENTER 0
+    mov     x22, x0
+    mov     x9, #2
+    STQ     x9, x19, Node_recon_state
+    ldr     x9, [x22, #NodeEvent_result]
+    cbnz    x9, 9f
+    add     x25, x22, #NodeEvent_chunk
+    add     x0, x22, #NodeEvent_root
+    ldr     x1, [x22, #NodeEvent_index]
+    bl      node_blob_held
+    cbnz    x0, 3f
+    mov     x0, x25
+    bl      node_put
+    mov     x26, x0
+    bl      node_new_blob
+    add     x0, x1, #NodeBlob_block_root
+    add     x9, x22, #NodeEvent_root
+    COPY32  x0, x9
+    ldr     x9, [x22, #NodeEvent_index]
+    str     x9, [x1, #NodeBlob_index]
+    ldr     x9, [x22, #NodeEvent_checkpoint]
+    str     x9, [x1, #NodeBlob_slot]
+    str     x26, [x1, #NodeBlob_data_id]
+    mov     x9, #NODE_BLOB_VALID
+    str     x9, [x1, #NodeBlob_status]
+    ldr     x9, [x25, #16]
+    str     x9, [x1, #NodeBlob_length]
+    add     x0, x22, #NodeEvent_root
+    bl      node_blob_added
+3:  ldr     x9, [x19, #Node_flags]          /* subscribed: out on its subnet's topic */
+    tbz     x9, #2, 9f
+    ldr     x0, [x22, #NodeEvent_index]
+    bl      node_sampled
+    cbz     x0, 9f
+    ldr     x9, [x20, #Store_finalized_checkpoint]
+    mov     x10, #SLOTS_PER_EPOCH
+    mul     x9, x9, x10
+    LDQ     x10, x19, Node_recon_slot
+    cmp     x10, x9
+    b.ls    9f
+    LDQ     x12, x19, Node_config + CONFIG_DATA_COLUMN_SIDECAR_SUBNET_COUNT
+    cbz     x12, 9f
+    ldr     x10, [x22, #NodeEvent_index]
+    udiv    x13, x10, x12
+    msub    x2, x13, x12, x10
+    mov     x0, #GOSSIP_DATA_COLUMN_SIDECAR
+    mov     x1, x25
+    bl      node_publish
+9:  LEAVE 0
+END_FUNCTION node_recon_sidecar_done
 
 /*
  * L2: the WORK_DONE x1 of a valid PUBLISH_SIDECAR of the publishBlockV2 entry x0: the sidecar

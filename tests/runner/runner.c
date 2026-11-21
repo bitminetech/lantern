@@ -2673,6 +2673,8 @@ static int force_supernode; /* set: the next node has NODE_FLAG_SUPERNODE */
 #define NODE_DB_STATES (1ull << 61)
 #define NODE_ARCHIVE (728 + CONFIG_SIZE + 936 + 1624 + 8 * (4 + 64)) /* Node_archive_slots, then archive_slot, archive_first, archive_segment, archive_end */
 #define WORK_ARCHIVE_LOAD 42
+#define WORK_RECONSTRUCT 44
+#define ACT_BYTES_JOIN 18
 #define ACT_DB_ARCHIVE 17
 #define EV_DB_ARCHIVE 16
 #define NODE_ANCHOR_SIZE 312
@@ -2859,6 +2861,7 @@ static uint64_t shell_state_bytes(const struct node_shell *s, const uint8_t *sta
 
 static uint8_t *shell_append(struct node_shell *s, uint64_t size);
 static unsigned long node_db_archives, node_db_loads;
+static unsigned long node_recons; /* the reconstructions of valid result */
 
 /*
  * NODE_ACT_DB_ARCHIVE: at its state segment's end, of a state of the record's slot, a DB_STATE at
@@ -3402,6 +3405,10 @@ static void shell_work(fc_node *n, const uint8_t *work, const char **why) {
         node_replays++;
         if (rd64(ev + EV_RESULT) != 0) *why = "lantern_node_run: a REPLAY of a block the node imported is not valid";
     }
+    if (!*why && kind == WORK_RECONSTRUCT) {
+        if (rd64(ev + EV_RESULT) != 0) *why = "lantern_node_run: a RECONSTRUCT of valid column sidecars is not valid";
+        else node_recons++;
+    }
     if (!*why && kind == WORK_ARCHIVE_LOAD) {
         node_db_loads++;
         if (rd64(ev + EV_RESULT) != 0) *why = "lantern_node_run: an ARCHIVE_LOAD of a state record the node wrote is not valid";
@@ -3572,6 +3579,31 @@ static void shell_step(fc_node *n, const char **why) {
             shell_db_append(s, act, why);
         else if (kind == ACT_DB_ARCHIVE && size == 120)
             shell_db_archive(s, act, why);
+        else if (kind == ACT_BYTES_JOIN && size >= 32 && size == 32 + 8 * rd64(act + 24)) { /* the ByteLists of the ids, at multiples of 8 */
+            uint64_t n = rd64(act + 24), total = 0;
+            for (uint64_t i = 0; i < n && !*why; i++) {
+                shell_buf *src = shell_find(s, rd64(act + 32 + 8 * i));
+                if (!src) *why = "BYTES_JOIN names no buffer";
+                else total += (24 + rd64(src->b + 16) + 7) & ~7ull;
+            }
+            if (!*why) {
+                uint8_t *out = buffer(24 + total), *w = out + 24;
+                memset(out, 0, (size_t)(24 + total));
+                wr64(out, 24 + total);
+                wr64(out + 8, 24);
+                wr64(out + 16, total);
+                for (uint64_t i = 0; i < n; i++) {
+                    shell_buf *src = shell_find(s, rd64(act + 32 + 8 * i));
+                    uint64_t len = rd64(src->b + 16);
+                    wr64(w, 24 + len);
+                    wr64(w + 8, 24);
+                    wr64(w + 16, len);
+                    memcpy(w + 24, src->b + rd64(src->b + 8), (size_t)len);
+                    w += (24 + len + 7) & ~7ull;
+                }
+                shell_keep(s, rd64(act + 16), out, 24 + total, why);
+            }
+        }
         else if (kind == ACT_DB_DROP && size == 32) { /* the segment goes */
             uint64_t sidecars = rd64(act + 24), number = rd64(act + 16);
             size_t k = 0;
@@ -4714,6 +4746,7 @@ struct p2p_net {
     case_block **chain; /* with a chain, the peer serves BeaconBlocksByRange and BlobSidecarsByRange of it */
     size_t nchain;
     int no_blobs;          /* the peer answers BlobSidecarsByRange and DataColumnSidecarsByRange with no sidecar */
+    int half_columns;      /* the peer answers DataColumnSidecarsByRange with the even columns only */
     uint64_t blobs_sent;   /* the sidecars it sent */
     tv parts;              /* fulu: the case, whose parts hold the column sidecars */
     uint64_t peer_cgc;     /* the custody_group_count of the peer's MetaData */
@@ -5015,7 +5048,7 @@ static void p2p_serve(struct p2p_net *net, const char **why) {
                         uint64_t slen;
                         snprintf(key, sizeof key, "%.*s", (int)rd64(e + 1), (const char *)(e + 9));
                         const uint8_t *sb = tv_bytes(tv_get(net->parts, key), &slen);
-                        if (!sb || slen < 8 || rd64(sb) != c) continue;
+                        if (!sb || slen < 8 || rd64(sb) != c || (net->half_columns && c % 2)) continue;
                         p2p_chunk(net, k, cb->slot, sb, slen, 4, why);
                         net->blobs_sent++;
                     }
@@ -5843,6 +5876,7 @@ static void peer_record(const uint8_t *gvr, uint64_t epoch, uint8_t *out, const 
  * each sidecar the peer sent.
  */
 static int sync_supernode; /* set: the sync's node has NODE_FLAG_SUPERNODE */
+static int sync_half; /* set: the peer serves the even columns only, so the supernode rebuilds the others */
 static void sync_once(tv parts, case_block **chain, size_t nchain, uint64_t last_ms, int no_blobs, uint8_t **head_state,
                       uint64_t *head_size, const char **why) {
     fc_node m;
@@ -5851,8 +5885,8 @@ static void sync_once(tv parts, case_block **chain, size_t nchain, uint64_t last
     struct node_shell *s = shell_open(&m, parts, &anchor_block, why);
     force_supernode = 0;
     uint64_t genesis_ms = *why ? 0 : rd64(m.store + STORE_GENESIS_TIME_MS);
-    if (!*why) {
-        shell_event(s, EV_TICK, last_ms, NULL, 0);
+    if (!*why) { /* with half the columns, a slot later: the node waits a third of a block's slot before it rebuilds */
+        shell_event(s, EV_TICK, last_ms + (sync_half ? rd64(config + 104) : 0), NULL, 0);
         shell_settle(&m, why);
     }
     struct p2p_net net;
@@ -5873,6 +5907,7 @@ static void sync_once(tv parts, case_block **chain, size_t nchain, uint64_t last
         net.chain = chain;
         net.nchain = nchain;
         net.no_blobs = no_blobs;
+        net.half_columns = sync_half;
         net.parts = parts;
         memcpy(net.gvr, gvr, 32);
 #if FORK >= FORK_FULU
@@ -5913,6 +5948,23 @@ static void sync_once(tv parts, case_block **chain, size_t nchain, uint64_t last
                         !shell_has_blob(s, chain[b]->root, c))
                         *why = "sync: a column sidecar the peer sent is not a valid NodeBlob";
             if (sync_supernode) { /* a supernode: its custody group count, and the blobs of its columns */
+                for (size_t b = 0; b < nchain && sync_half && !*why; b++) /* its rebuilt columns: the case's sidecars */
+                    for (uint64_t c = 1, len; c < 128 && !*why; c += 2) {
+                        const uint8_t *want = case_column(parts, chain[b]->columns, c, &len);
+                        if (!want) continue;
+                        const uint8_t *e = s->node + rd64(s->node + NODE_BLOBS), *got = NULL;
+                        uint64_t glen = 0;
+                        for (uint64_t i = 0, n = rd64(s->node + NODE_BLOBS + 8); i < n && !got; i++, e += NODE_BLOB_BYTES)
+                            if (!memcmp(e, chain[b]->root, 32) && rd64(e + 32) == c && rd64(e + 56) == NBLOB_VALID) {
+                                shell_buf *bb = shell_find(s, rd64(e + 48));
+                                if (bb) {
+                                    got = bb->b + rd64(bb->b + 8);
+                                    glen = rd64(bb->b + 16);
+                                }
+                            }
+                        if (!got || glen != len || memcmp(got, want, (size_t)len))
+                            *why = "sync with half the columns: a rebuilt column sidecar is not the case's";
+                    }
                 if (!*why) api_supernode_identity(&m, why);
                 if (!*why) api_blob_checks(&m, parts, chain, nchain, 1, why);
             } else {
@@ -6192,6 +6244,9 @@ static void fc_sync_check(tv parts, const char **why) {
         if (!*why && columns) {
             sync_supernode = 1;
             sync_once(parts, chain, nchain, last_ms, 0, NULL, NULL, why);
+            sync_half = 1; /* and with the even columns only: it rebuilds the others */
+            if (!*why) sync_once(parts, chain, nchain, last_ms, 0, NULL, NULL, why);
+            sync_half = 0;
             sync_supernode = 0;
         }
 #endif
@@ -11674,6 +11729,7 @@ int main(int argc, char **argv) {
 #if FORK >= FORK_FULU
     if (custody_raises) printf("NOTE: %lu custody raises checked\n", custody_raises);
 #endif
+    if (node_recons) printf("NOTE: %lu blocks of columns rebuilt from half of them\n", node_recons);
     if (node_db_archives) printf("NOTE: %lu state records archived, %lu states loaded from them, %lu old states asked after them\n", node_db_archives, node_db_loads, api_archive_states);
     printf("%s: %d passed, %d failed\n", failures ? "FAIL" : "PASS", passes, failures);
     return failures ? 1 : 0;

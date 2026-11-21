@@ -1094,6 +1094,72 @@ LOCAL_FUNCTION app_buf_add
     UNFRAME 32
 END_FUNCTION app_buf_add
 
+/*
+ * L1: NODE_ACT_BYTES_JOIN x0 (app.md): new memory with the ByteLists of the ids one after another,
+ * each at a multiple of 8, kept as the new id's; with no memory or an id with no bytes, a ByteList
+ * of no bytes. x20 the action, x21 the count, x22 the bytes, x23 an index, x24 the memory, x25 the
+ * place, x26 a ByteList.
+ */
+LOCAL_FUNCTION app_bytes_join
+    ENTER 0
+    mov     x20, x0
+    ldr     x21, [x20, #24]
+    mov     x22, #0
+    mov     x23, #0
+1:  cmp     x23, x21
+    b.hs    2f
+    add     x9, x20, #32
+    ldr     x0, [x9, x23, lsl #3]
+    bl      app_buf_find
+    cbz     x0, 5f
+    ldr     x9, [x0, #8]
+    ldr     x9, [x9, #16]
+    add     x9, x9, #(24 + 7)
+    and     x9, x9, #~7
+    add     x22, x22, x9
+    add     x23, x23, #1
+    b       1b
+5:  mov     x22, #0                         /* an id with no bytes: none */
+    mov     x21, #0
+2:  add     x0, x22, #24
+    bl      app_map
+    cbz     x0, 9f
+    mov     x24, x0
+    add     x9, x22, #24
+    mov     x10, #24
+    stp     x9, x10, [x24]
+    str     x22, [x24, #16]
+    add     x25, x24, #24
+    mov     x23, #0
+3:  cmp     x23, x21
+    b.hs    4f
+    add     x9, x20, #32
+    ldr     x0, [x9, x23, lsl #3]
+    bl      app_buf_find
+    ldr     x26, [x0, #8]
+    ldr     x9, [x26, #16]
+    add     x10, x9, #24
+    mov     x11, #24
+    stp     x10, x11, [x25]
+    str     x9, [x25, #16]
+    add     x0, x25, #24
+    ldr     x10, [x26, #8]
+    add     x1, x26, x10
+    mov     x2, x9
+    bl      lantern_copy
+    ldr     x9, [x26, #16]
+    add     x9, x9, #(24 + 7)
+    and     x9, x9, #~7
+    add     x25, x25, x9
+    add     x23, x23, #1
+    b       3b
+4:  ldr     x0, [x20, #16]
+    mov     x1, x24
+    add     x2, x22, #24
+    bl      app_buf_add
+9:  LEAVE 0
+END_FUNCTION app_bytes_join
+
 /* L1: the buffer of the id x0 goes back to the OS, and the last entry takes its place. */
 LOCAL_FUNCTION app_buf_drop
     FRAME 16
@@ -1576,6 +1642,8 @@ LOCAL_FUNCTION app_work
     b.eq    6f
     cmp     x26, #NODE_WORK_ARCHIVE_LOAD    /* ARCHIVE_LOAD: state_a, and twice the scratch */
     b.eq    18f
+    cmp     x26, #NODE_WORK_RECONSTRUCT     /* RECONSTRUCT: twice the scratch */
+    b.eq    181f
     cmp     x26, #NODE_WORK_LC_BLOCK        /* the light client works: state_c, the light client store */
     b.eq    17f
     cmp     x26, #NODE_WORK_LC_HEAD
@@ -1634,7 +1702,7 @@ LOCAL_FUNCTION app_work
     mov     x0, x21
     bl      app_regrow
     cbnz    x0, 91f
-    ldr     x9, [x19, #(APP_SCRATCH + 8)]
+181: ldr    x9, [x19, #(APP_SCRATCH + 8)]
     lsl     x9, x9, #1
     str     x9, [sp, #-16]!
     mov     x0, #APP_SCRATCH
@@ -2757,7 +2825,7 @@ LOCAL_FUNCTION app_actions
     bl      app_buf_add
     b       8f
 131: cmp    x9, #NODE_ACT_BYTES_NEW
-    b.ne    2f
+    b.ne    132f
     ldr     x0, [x20, #24]                  /* BYTES_NEW: a ByteList of the size, its bytes zero */
     bl      app_map
     cbz     x0, 8f
@@ -2770,6 +2838,11 @@ LOCAL_FUNCTION app_actions
     ldr     x0, [x20, #16]
     ldr     x2, [x20, #24]
     bl      app_buf_add
+    b       8f
+132: cmp    x9, #NODE_ACT_BYTES_JOIN
+    b.ne    2f
+    mov     x0, x20                         /* BYTES_JOIN: the ByteLists of the ids, one after another */
+    bl      app_bytes_join
     b       8f
 2:  cmp     x9, #NODE_ACT_STATE_COPY
     b.ne    3f

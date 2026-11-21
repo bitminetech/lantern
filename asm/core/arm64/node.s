@@ -4945,7 +4945,24 @@ LOCAL_FUNCTION node_event
     ldr     x9, [x21, #NodeEvent_checkpoint]
     STQ     x9, x19, Node_eth1_deposit_index
     LEAVE 48
-7081: cmp   x9, #NODE_WORK_CUSTODY          /* CUSTODY: custody_need, when more */
+7081: cmp   x9, #NODE_WORK_RECONSTRUCT      /* RECONSTRUCT: its sidecars go out, or it failed */
+    b.ne    7086f
+    ldr     x9, [x21, #NodeEvent_result]
+    cbnz    x9, 7087f
+    mov     x9, #2
+    STQ     x9, x19, Node_recon_state
+    STQ     xzr, x19, Node_recon_next
+    LEAVE 48
+7087: mov   x0, #NODE_ACT_BYTES_FREE
+    LDQ     x1, x19, Node_recon_buffer
+    mov     x2, #0
+    bl      node_ids
+    ADDQ    x0, x19, Node_recon_failed
+    ADDQ    x1, x19, Node_recon_root
+    COPY32  x0, x1
+    STQ     xzr, x19, Node_recon_state
+    LEAVE 48
+7086: cmp   x9, #NODE_WORK_CUSTODY          /* CUSTODY: custody_need, when more */
     b.ne    7084f
     ldr     x9, [x21, #NodeEvent_index]
     LDQ     x10, x19, Node_custody_need
@@ -6989,6 +7006,400 @@ LOCAL_FUNCTION node_column_raise_topics
     b       6b
 9:  LEAVE 0
 END_FUNCTION node_column_raise_topics
+
+/* L0: x0 = the NODE_BLOB_VALID entries of the root at x0. Uses x9-x15. */
+LOCAL_FUNCTION node_recon_count
+    UNWIND_END_PROLOGUE
+    PART    x9, x10, x19, Node_blobs
+    mov     x11, #0
+1:  cbz     x10, 9f
+    ldr     x12, [x9, #NodeBlob_status]
+    cmp     x12, #NODE_BLOB_VALID
+    b.ne    2f
+    ldp     x12, x13, [x9]
+    ldp     x14, x15, [x0]
+    cmp     x12, x14
+    ccmp    x13, x15, #0, eq
+    b.ne    2f
+    ldp     x12, x13, [x9, #16]
+    ldp     x14, x15, [x0, #16]
+    cmp     x12, x14
+    ccmp    x13, x15, #0, eq
+    b.ne    2f
+    add     x11, x11, #1
+2:  add     x9, x9, #NodeBlob__mem
+    sub     x10, x10, #1
+    b       1b
+9:  mov     x0, x11
+    ret
+END_FUNCTION node_recon_count
+
+/*
+ * L1: the reconstruction (node.md), at the quiet point: with recon_state 0, the first root of
+ * NODE_BLOB_VALID column sidecars of a fulu slot, NUMBER_OF_COLUMNS / 2 or more and fewer than
+ * NUMBER_OF_COLUMNS, not recon_failed, a third of its slot past: the join of their bytes, the
+ * buffer of all sidecars, the work; with recon_state 2, a PUBLISH_SIDECAR of the next column the
+ * node lacks, or the end. x21 an entry, x22 the entries left, x25 the count, x26 the root's entry,
+ * x27 a column, x28 the joined id. Locals: L the join action, L+8 the ids written.
+ */
+LOCAL_FUNCTION node_reconstruct_due
+    ENTER 16
+    LDQ     x9, x19, Node_recon_state
+    cmp     x9, #2
+    b.eq    50f
+    cbnz    x9, 99f
+    PART    x21, x22, x19, Node_blobs
+1:  cbz     x22, 99f
+    ldr     x9, [x21, #NodeBlob_status]
+    cmp     x9, #NODE_BLOB_VALID
+    b.ne    3f
+    ldr     x0, [x21, #NodeBlob_slot]
+    add     x1, x19, #Node_config
+    bl      node_fork
+    cmp     x0, #FORK_FULU
+    b.lo    3f
+    ADDQ    x9, x19, Node_recon_failed
+    NE32    x9, x21, 11f
+    b       3f
+11: mov     x0, x21
+    bl      node_recon_count
+    cmp     x0, #(NUMBER_OF_COLUMNS / 2)
+    b.lo    3f
+    cmp     x0, #NUMBER_OF_COLUMNS
+    b.hs    3f
+    mov     x25, x0
+    ldr     x9, [x21, #NodeBlob_slot]       /* a third of its slot past */
+    LDQ     x10, x19, Node_config + CONFIG_SLOT_DURATION_MS
+    ldr     x11, [x20, #Store_genesis_time_ms]
+    madd    x11, x9, x10, x11
+    mov     x12, #3
+    udiv    x12, x10, x12
+    add     x11, x11, x12
+    ldr     x9, [x19, #Node_time_ms]
+    cmp     x9, x11
+    b.lo    3f
+    mov     x0, #1024
+    add     x0, x0, x25, lsl #3
+    bl      node_room
+    cbz     x0, 99f
+    b       20f
+3:  add     x21, x21, #NodeBlob__mem
+    sub     x22, x22, #1
+    b       1b
+20: mov     x26, x21
+    bl      node_new_id                     /* the join of the held sidecars, by index */
+    mov     x28, x0
+    mov     x0, #NODE_ACT_BYTES_JOIN
+    lsl     x1, x25, #3
+    add     x1, x1, #32
+    bl      node_act
+    stp     x28, x25, [x0, #16]
+    str     x0, [sp, #L]
+    str     xzr, [sp, #(L + 8)]
+    mov     x27, #0
+21: cmp     x27, #NUMBER_OF_COLUMNS
+    b.hs    22f
+    add     x0, x26, #NodeBlob_block_root
+    mov     x1, x27
+    bl      node_blob_held
+    cbz     x0, 23f
+    ldr     x9, [sp, #(L + 8)]
+    cmp     x9, x25
+    b.hs    23f
+    ldr     x10, [x0, #NodeBlob_data_id]
+    ldr     x11, [sp, #L]
+    add     x11, x11, #32
+    str     x10, [x11, x9, lsl #3]
+    add     x9, x9, #1
+    str     x9, [sp, #(L + 8)]
+23: add     x27, x27, #1
+    b       21b
+22: bl      node_new_id                     /* the buffer of every sidecar */
+    STQ     x0, x19, Node_recon_buffer
+    mov     x0, #NODE_ACT_BYTES_NEW
+    mov     x1, #NODE_ACT_BYTES_NEW_SIZE
+    bl      node_act
+    LDQ     x9, x19, Node_recon_buffer
+    ldr     x10, [x26, #NodeBlob_length]
+    add     x10, x10, #(24 + 7)
+    and     x10, x10, #~7
+    mov     x11, #NUMBER_OF_COLUMNS
+    mul     x10, x10, x11
+    add     x10, x10, #24
+    stp     x9, x10, [x0, #16]
+    mov     x0, #NODE_WORK_RECONSTRUCT
+    mov     x1, #0
+    LDQ     x2, x19, Node_recon_buffer
+    mov     x3, x28
+    mov     x4, #0
+    mov     x5, #0
+    bl      node_work
+    mov     x0, #NODE_ACT_BYTES_FREE
+    mov     x1, x28
+    mov     x2, #0
+    bl      node_ids
+    ADDQ    x0, x19, Node_recon_root
+    add     x1, x26, #NodeBlob_block_root
+    COPY32  x0, x1
+    ldr     x9, [x26, #NodeBlob_slot]
+    STQ     x9, x19, Node_recon_slot
+    mov     x9, #1
+    STQ     x9, x19, Node_recon_state
+    b       99f
+50: LDQ     x27, x19, Node_recon_next       /* the next column the node lacks */
+51: cmp     x27, #NUMBER_OF_COLUMNS
+    b.hs    59f
+    ADDQ    x0, x19, Node_recon_root
+    mov     x1, x27
+    bl      node_blob_held
+    cbz     x0, 52f
+    add     x27, x27, #1
+    b       51b
+52: mov     x0, #NODE_ACT_WORK_SIZE
+    bl      node_room
+    cbz     x0, 99f
+    mov     x0, #NODE_WORK_PUBLISH_SIDECAR
+    mov     x1, #0
+    LDQ     x2, x19, Node_recon_buffer
+    mov     x3, #0
+    mov     x4, #-1
+    mov     x5, x27
+    bl      node_work
+    add     x9, x27, #1
+    STQ     x9, x19, Node_recon_next
+    mov     x9, #3
+    STQ     x9, x19, Node_recon_state
+    b       99f
+59: mov     x0, #NODE_ACT_BYTES_FREE        /* none left: the buffer goes */
+    LDQ     x1, x19, Node_recon_buffer
+    mov     x2, #0
+    bl      node_ids
+    STQ     xzr, x19, Node_recon_state
+99: LEAVE 16
+END_FUNCTION node_reconstruct_due
+
+/*
+ * (data, settings, scratch, out): node.md, lantern_node_reconstruct: for each blob,
+ * crypto_kzg_recover_cells_and_kzg_proofs of the held cells, then every column's sidecar. x19
+ * scratch, x20 settings, x21 out, x22 the held sidecars, x23 the blobs, x24 a sidecar's length,
+ * x25 an out ByteList's size, x26 a row or a column, x27 an entry or a column, x28 the first
+ * sidecar's bytes. Locals: L the data's end, L+8 the KzgScratch, L+16 the CellIndexList, L+24 the
+ * CellList, L+32 the recovered cells, L+40 their proofs, L+48 the held sidecars' bytes.
+ */
+.set RECON_KZG, 64
+.set RECON_INDICES, RECON_KZG + CRYPTO_KZG_SCRATCH
+.set RECON_CELLS, RECON_INDICES + 1056
+.set RECON_OUT_CELLS, RECON_CELLS + 24 + 128 * 2048
+.set RECON_OUT_PROOFS, RECON_OUT_CELLS + 128 * 2048
+.set RECON_HELD, RECON_OUT_PROOFS + 128 * 48
+.set RECON_SCRATCH, RECON_HELD + 128 * 8
+.set RECON_FIXED, 356                       /* a DataColumnSidecar's fixed part */
+.set RECON_ROW, 2048 + 48 + 48              /* its bytes for each blob: a cell, a commitment, a proof */
+.if RECON_SCRATCH > CRYPTO_KZG_SCRATCH + 540672
+.error "the reconstruction's scratch is past its documented need"
+.endif
+FUNCTION lantern_node_reconstruct
+    ENTER 64
+    mov     x20, x1
+    mov     x19, x2
+    mov     x21, x3
+    ldr     x9, [x19]
+    MOVQ    x10, CRYPTO_KZG_SCRATCH + 540672
+    cmp     x9, x10
+    b.lo    8f
+    MOVQ    x9, RECON_KZG
+    add     x9, x19, x9
+    str     x9, [sp, #(L + 8)]
+    MOVQ    x9, RECON_INDICES
+    add     x9, x19, x9
+    str     x9, [sp, #(L + 16)]
+    MOVQ    x9, RECON_CELLS
+    add     x9, x19, x9
+    str     x9, [sp, #(L + 24)]
+    MOVQ    x9, RECON_OUT_CELLS
+    add     x9, x19, x9
+    str     x9, [sp, #(L + 32)]
+    MOVQ    x9, RECON_OUT_PROOFS
+    add     x9, x19, x9
+    str     x9, [sp, #(L + 40)]
+    MOVQ    x9, RECON_HELD
+    add     x9, x19, x9
+    str     x9, [sp, #(L + 48)]
+    ldp     x9, x10, [x0, #8]               /* the held sidecars: ByteLists at multiples of 8 */
+    add     x27, x0, x9
+    add     x10, x27, x10
+    str     x10, [sp, #L]
+    mov     x22, #0
+1:  ldr     x10, [sp, #L]
+    cmp     x27, x10
+    b.hs    2f
+    add     x9, x27, #24
+    cmp     x9, x10
+    b.hi    7f
+    ldp     x11, x12, [x27]
+    ldr     x13, [x27, #16]
+    cmp     x12, #24
+    b.ne    7f
+    add     x14, x13, #24
+    cmp     x14, x11
+    b.hi    7f
+    add     x14, x27, x11
+    cmp     x14, x10
+    b.hi    7f
+    cmp     x22, #NUMBER_OF_COLUMNS
+    b.hs    7f
+    add     x15, x27, #24
+    cbnz    x22, 11f
+    mov     x24, x13                        /* the first: the length and the blob count */
+    mov     x28, x15
+    subs    x16, x24, #RECON_FIXED
+    b.lo    7f
+    MOVQ    x9, RECON_ROW
+    udiv    x23, x16, x9
+    msub    x17, x23, x9, x16
+    cbnz    x17, 7f
+    cbz     x23, 7f
+11: cmp     x13, x24                        /* each of that length, with the offsets of n blobs */
+    b.ne    7f
+    ldr     w9, [x15, #8]
+    cmp     x9, #RECON_FIXED
+    b.ne    7f
+    MOVQ    x10, 2048
+    mov     x16, #RECON_FIXED
+    madd    x16, x23, x10, x16
+    ldr     w9, [x15, #12]
+    cmp     x9, x16
+    b.ne    7f
+    mov     x10, #48
+    madd    x16, x23, x10, x16
+    ldr     w9, [x15, #16]
+    cmp     x9, x16
+    b.ne    7f
+    ldr     x9, [x15]                       /* its index, ascending, below NUMBER_OF_COLUMNS */
+    cmp     x9, #NUMBER_OF_COLUMNS
+    b.hs    7f
+    ldr     x10, [sp, #(L + 16)]
+    add     x10, x10, #24
+    cbz     x22, 12f
+    sub     x12, x22, #1
+    ldr     x12, [x10, x12, lsl #3]
+    cmp     x9, x12
+    b.ls    7f
+12: str     x9, [x10, x22, lsl #3]
+    ldr     x10, [sp, #(L + 48)]
+    str     x15, [x10, x22, lsl #3]
+    add     x22, x22, #1
+    add     x11, x11, #7
+    and     x11, x11, #~7
+    add     x27, x27, x11
+    b       1b
+2:  cmp     x22, #(NUMBER_OF_COLUMNS / 2)
+    b.lo    7f
+    add     x25, x24, #(24 + 7)             /* the out sidecars' room */
+    and     x25, x25, #~7
+    mov     x9, #NUMBER_OF_COLUMNS
+    mul     x9, x9, x25
+    ldr     x10, [x21]
+    subs    x10, x10, #24
+    b.lo    8f
+    cmp     x9, x10
+    b.hi    8f
+    mov     x10, #24
+    stp     x10, x9, [x21, #8]
+    mov     x26, #0                         /* each sidecar: its ByteList, index, the first's fixed part and commitments */
+3:  cmp     x26, #NUMBER_OF_COLUMNS
+    b.hs    4f
+    madd    x27, x26, x25, x21
+    add     x27, x27, #24
+    mov     x9, #24
+    stp     x25, x9, [x27]
+    str     x24, [x27, #16]
+    add     x0, x27, #(24 + 8)
+    add     x1, x28, #8
+    mov     x2, #(RECON_FIXED - 8)
+    bl      lantern_copy
+    str     x26, [x27, #24]
+    MOVQ    x10, 2048
+    mov     x9, #RECON_FIXED
+    madd    x10, x23, x10, x9
+    add     x0, x27, #24
+    add     x0, x0, x10
+    add     x1, x28, x10
+    mov     x9, #48
+    mul     x2, x23, x9
+    bl      lantern_copy
+    add     x26, x26, #1
+    b       3b
+4:  mov     x26, #0                         /* each blob: recover its row, then its cells and proofs into the sidecars */
+5:  cmp     x26, x23
+    b.hs    9f
+    ldr     x9, [sp, #(L + 24)]
+    MOVQ    x10, 24 + 128 * 2048
+    mov     x11, #24
+    stp     x10, x11, [x9]
+    str     x22, [x9, #16]
+    ldr     x9, [sp, #(L + 16)]
+    MOVQ    x10, 24 + 128 * 8
+    stp     x10, x11, [x9]
+    str     x22, [x9, #16]
+    mov     x27, #0
+51: cmp     x27, x22
+    b.hs    52f
+    ldr     x0, [sp, #(L + 24)]
+    add     x0, x0, #24
+    add     x0, x0, x27, lsl #11
+    ldr     x1, [sp, #(L + 48)]
+    ldr     x1, [x1, x27, lsl #3]
+    add     x1, x1, #RECON_FIXED
+    add     x1, x1, x26, lsl #11
+    MOVQ    x2, 2048
+    bl      lantern_copy
+    add     x27, x27, #1
+    b       51b
+52: ldr     x9, [sp, #(L + 8)]
+    MOVQ    x10, CRYPTO_KZG_SCRATCH
+    str     x10, [x9]
+    mov     x0, x20
+    ldr     x1, [sp, #(L + 16)]
+    ldr     x2, [sp, #(L + 24)]
+    ldr     x3, [sp, #(L + 8)]
+    ldr     x4, [sp, #(L + 32)]
+    ldr     x5, [sp, #(L + 40)]
+    CALL_GLOBAL crypto_kzg_recover_cells_and_kzg_proofs
+    cbnz    x0, 7f
+    mov     x27, #0
+53: cmp     x27, #NUMBER_OF_COLUMNS
+    b.hs    54f
+    madd    x0, x27, x25, x21               /* sidecar c's cell r */
+    add     x0, x0, #(24 + 24 + RECON_FIXED)
+    add     x0, x0, x26, lsl #11
+    ldr     x1, [sp, #(L + 32)]
+    add     x1, x1, x27, lsl #11
+    MOVQ    x2, 2048
+    bl      lantern_copy
+    madd    x0, x27, x25, x21               /* and its proof r */
+    add     x0, x0, #(24 + 24)
+    MOVQ    x9, 2048 + 48
+    mov     x10, #RECON_FIXED
+    madd    x9, x23, x9, x10
+    add     x0, x0, x9
+    mov     x10, #48
+    madd    x0, x26, x10, x0
+    ldr     x1, [sp, #(L + 40)]
+    madd    x1, x27, x10, x1
+    mov     x2, #48
+    bl      lantern_copy
+    add     x27, x27, #1
+    b       53b
+54: add     x26, x26, #1
+    b       5b
+9:  mov     x0, #LANTERN_OK
+    LEAVE 64
+8:  mov     x0, #LANTERN_BUFFER_TOO_SMALL
+    LEAVE 64
+7:  mov     x0, #LANTERN_INVALID_ENCODING
+    LEAVE 64
+END_FUNCTION lantern_node_reconstruct
 
 /*
  * L1: validator custody (node.md), from fulu: once each store epoch, with a NodeProposer entry
@@ -9566,6 +9977,7 @@ FUNCTION lantern_node_step
     bl      node_lc_due                     /* the light client updates due on gossip */
     bl      node_produce_due                /* the produceBlockV3 entries whose bid is late */
     bl      node_replay_due                 /* the replay in flight: its next blocks */
+    bl      node_reconstruct_due            /* the reconstruction of a block's columns, and its sidecars */
     bl      node_backfill_link              /* the backfill's blocks of the chain join the Db */
     bl      node_drop_sidecars              /* the sidecars the node no longer serves go */
     str     xzr, [sp, #(L + 112)]
@@ -10531,7 +10943,7 @@ FUNCTION lantern_node_run
     mov     x0, #LANTERN_OK
     LEAVE 192
 8428: cmp   x9, #NODE_WORK_CUSTODY
-    b.ne    8430f
+    b.ne    8429f
     cbz     x22, 837b                       /* CUSTODY: lantern_node_custody with the store's epoch, its count at NodeEvent_index */
     mov     x0, x20
     bl      node_store_slot
@@ -10549,6 +10961,20 @@ FUNCTION lantern_node_run
     FORK_CALL node_custody
     ldr     x9, [sp, #(L + 104)]
     str     x9, [x25, #NodeEvent_index]
+    mov     x0, #LANTERN_OK
+    LEAVE 192
+8429: cmp   x9, #NODE_WORK_RECONSTRUCT
+    b.ne    8430f
+    cbz     x23, 837b                       /* RECONSTRUCT: lantern_node_reconstruct of data into state_b */
+    ldr     x3, [sp, #(L + 72)]
+    cbz     x3, 837b
+    mov     x0, x23
+    ldr     x1, [sp, #(L + 88)]
+    mov     x2, x24
+    bl      lantern_node_reconstruct
+    cmp     x0, #LANTERN_BUFFER_TOO_SMALL
+    b.eq    8449f
+    str     x0, [x25, #NodeEvent_result]
     mov     x0, #LANTERN_OK
     LEAVE 192
 8430: cmp   x9, #NODE_WORK_PRODUCE_BLOCK
@@ -10824,8 +11250,16 @@ FUNCTION lantern_node_run
     add     x15, x14, #(NodeEvent_chunk + 24 + 7)
     cmp     x26, x15
     b.lo    8419b
-    ldr     x9, [x21, #NodeAction_target]   /* its block's root and slot: the entry's */
-    PART    x10, x11, x19, Node_api
+    ldr     x9, [x21, #NodeAction_target]   /* its block's root and slot: the entry's, or with no entry the reconstruction's */
+    cmn     x9, #1
+    b.ne    8484f
+    add     x0, x25, #NodeEvent_root
+    ADDQ    x1, x19, Node_recon_root
+    COPY32  x0, x1
+    LDQ     x10, x19, Node_recon_slot
+    str     x10, [x25, #NodeEvent_checkpoint]
+    b       8485f
+8484: PART  x10, x11, x19, Node_api
     cmp     x9, x11
     b.hs    837b
     mov     x11, #NodeApi__mem
@@ -10835,6 +11269,7 @@ FUNCTION lantern_node_run
     COPY32  x0, x1
     ldr     x10, [x9, #NodeApi_slot]
     str     x10, [x25, #NodeEvent_checkpoint]
+8485:
     ldr     x10, [x12, #8]                  /* its index: the u64 at byte 0 of its bytes */
     ldr     x10, [x12, x10]
     str     x10, [x25, #NodeEvent_index]

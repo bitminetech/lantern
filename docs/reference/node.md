@@ -35,6 +35,7 @@
 - [`lantern_node_produce_check`](#function-lantern_node_produce_check): the proposer of a state's slot, its randao reveal checked, for one fork.
 - [`lantern_node_payload_result`](#function-lantern_node_payload_result): the SSZ bytes of an engine_getPayload result, for one fork.
 - [`lantern_node_produce_fold`](#function-lantern_node_produce_fold): a pool entry added to the body draft of a block to produce, for one fork.
+- [`lantern_node_reconstruct`](#function-lantern_node_reconstruct): every column sidecar of a block from half of them (fulu reconstruction).
 - [`lantern_node_custody`](#function-lantern_node_custody): the custody group count of the node's validators (fulu validator custody).
 - [`lantern_node_eth1_check`](#function-lantern_node_eth1_check): whether a state still takes votes on the deposit contract's chain, for one fork.
 - [`lantern_node_produce_eth1`](#function-lantern_node_produce_eth1): the eth1 vote and the deposits of a block to produce, for one fork.
@@ -93,6 +94,7 @@
 - `das-core.md` of fulu, Custody sampling: the node samples the columns of the groups of get_custody_groups(node_id, max(`SAMPLES_PER_SLOT`, custody_group_count)); its custody groups are the first custody_group_count of them. Column gossip: the node joins the subnets of the columns it samples. A node may custody more than `CUSTODY_REQUIREMENT` groups, "up to `NUMBER_OF_CUSTODY_GROUPS`, indicating a super-full node": with `NODE_FLAG_SUPERNODE`, lantern's custody_group_count is `NUMBER_OF_CUSTODY_GROUPS`, so it samples every column.
 - `p2p-interface.md` of fulu, DataColumnSidecarsByRange v1 and DataColumnSidecarsByRoot v1: the reader checks each sidecar's format, inclusion proof and KZG proofs before the next chunk; the server sends the sidecars of the head's chain in (slot, column index) order, or of the requested identifiers in their order, at most compute_max_request_data_column_sidecars. GetMetaData v3: the peer's `custody_group_count`.
 - `validator.md` of fulu, Validator custody: a node with validators attached custodies get_validators_custody_requirement of the latest finalized state and their indices, advertises that count in its MetaData and record, never advertises a lower one, keeps it across restarts, and its Status v2 `earliest_available_slot` is the slot from which it serves all its sidecars (`p2p-interface.md` of fulu, Status v2).
+- `das-core.md` of fulu, Reconstruction and cross-seeding: with 50% or more of the columns of a block the node rebuilds the others (recover_matrix with recover_cells_and_kzg_proofs), after a delay the spec allows, keeps and serves them as if received, and sends those of its subnets on gossip.
 - The node ID of a secp256k1 key: keccak256 of the key's 64-byte uncompressed point (x then y), the discv5 identity scheme "v4" (EIP-778). get_custody_groups reads those 32 bytes as a big-endian number, as Lighthouse does (`U256::from_be_slice` in consensus/types/src/data/data_column_custody_group.rs); a `NodeID` holds them in reverse order.
 - `p2p-interface.md` of phase0 to fulu, The discovery domain: discv5: the ENR keys `eth2` (`ENRForkID`), `attnets`, `syncnets` (altair), `cgc` and `nfd` (fulu); peers whose `eth2` fork digest is the node's. The Req/Resp domain, Status: the dialing client MUST send a Status request upon connection.
 - `optimistic-sync.md` of bellatrix: optimistic import, the optimistic candidate, how to apply `latestValidHash`, execution engine errors.
@@ -188,6 +190,7 @@
   - Then, through the Beacon API, getDebugDataColumnSidecars of the root of each block of the chain with columns must answer, as SSZ, its sidecars of the node's columns one after another; as JSON, items that lantern_json_decode of `DataColumnSidecar` gives as those sidecars; with `indices` of the first and last of them, as SSZ, those two.
   - getBlobs of the root of each block of the chain with columns must answer 404: the node holds fewer than half of the columns.
   - A fulu case with column sidecars syncs again with a new node with `NODE_FLAG_SUPERNODE`. Each DataColumnSidecarsByRange of the node must ask for every column, in ascending order, and each block of the chain must be `NODE_BLOCK_IMPORTED`. getNetworkIdentity must give `custody_group_count` `NUMBER_OF_CUSTODY_GROUPS`. getBlobs of the root of each block of the chain with columns must answer, as SSZ, a blob for each of the sidecars' `kzg_commitments`, whose crypto_kzg_blob_to_kzg_commitment of asm-crypto gives that commitment; as JSON, `data` items whose hex gives those blobs; with `versioned_hashes` of its first and last commitments, as SSZ, those two blobs.
+  - Then a supernode once more, at a time one slot later, with the peer's DataColumnSidecarsByRange answers holding the even columns only: the node must rebuild the others (the reconstruction, above), each block of the chain must be `NODE_BLOCK_IMPORTED`, and the node's odd column sidecars must be the case's byte for byte.
   - A fulu case with column sidecars syncs again with a new node and a peer whose MetaData gives `CUSTODY_REQUIREMENT` custody groups and whose answers hold no sidecars: each DataColumnSidecarsByRange of the node must ask for the columns of get_custody_groups(the peer's node ID, `CUSTODY_REQUIREMENT`), in ascending order, and no block of the chain with blob commitments, and no later one, may be `NODE_BLOCK_IMPORTED`.
 - Lantern's cases `<preset>-<fork>-node-api.bin` of altair to fulu, made by tests/generator/node.py with the pinned spec: the anchor of the `p2p` cases, an `ApiIdentity`, a time, and requests with the response of each, written by the rules of [beacon-api.md](beacon-api.md#common-rules) from the spec's values.
   - The runner gives the node a `NODE_EV_TICK` of the time and a `NODE_EV_API_IDENTITY`, then each request on its own connection: lantern_http_request with `head_max` 16384 and `body_max` 1048576, then a `NODE_EV_API` of its `HttpRequest`, of `LANTERN_OK` or `LANTERN_INVALID_HTTP`; it plays the shell until the node settles.
@@ -450,6 +453,10 @@ lantern_node_step(node, store, p2p, tick, events, scratch, actions, result) -> s
   - Once `replay_next` is past `replay_slot`: `replay_state` takes the copy and `replay_copy` 0. Then each `NodeApi` entry with `API_STREAM_REPLAY` runs again (below).
   - A block of the path the node does not hold (no `DbSlot` block and no `NodeBlock` with bytes at the next slot of the path): the replay ends, `replay_copy` freed and 0, `replay_root` zero; each waiting entry runs again with no replay: 404.
 - `NODE_EV_WORK_DONE` of `NODE_WORK_ARCHIVE_LOAD` of `replay_copy`: `replay_loading` takes 0; a result other than `LANTERN_VALID` ends the replay as a block the node does not hold does.
+- The reconstruction (fulu `das-core.md`), at the quiet point after the replay, when `recon_state` is 0: the first root, by the order of the `NodeBlob` entries, whose `NODE_BLOB_VALID` entries are column sidecars of a slot of fulu or later, `NUMBER_OF_COLUMNS` / 2 or more and fewer than `NUMBER_OF_COLUMNS`, and not `recon_failed`, when `time_ms` is at least the slot's start + `SLOT_DURATION_MS` / 3, and the actions have room for 1024 bytes and 8 for each of those entries: a `NODE_ACT_BYTES_JOIN` of their bytes by index into a new id, a `NODE_ACT_BYTES_NEW` of `NUMBER_OF_COLUMNS` times 24 + their length (each a ByteList, a multiple of 8) as `recon_buffer`, a `NODE_WORK_RECONSTRUCT` with the joined bytes as `data` and `recon_buffer` as `state_b`, and a `NODE_ACT_BYTES_FREE` of the joined bytes; `recon_root` and `recon_slot` take the root and slot, `recon_state` 1.
+  - `NODE_EV_WORK_DONE` of `NODE_WORK_RECONSTRUCT`: `LANTERN_VALID`, `recon_state` 2 and `recon_next` 0; else a `NODE_ACT_BYTES_FREE` of `recon_buffer`, `recon_failed` the root and `recon_state` 0.
+  - `recon_state` 2, at the same point: the first column c from `recon_next` with no `NODE_BLOB_VALID` entry of `recon_root`: a `NODE_WORK_PUBLISH_SIDECAR` of `recon_buffer` as `state_b`, `arg` c and `target` 2^64 - 1; `recon_next` c + 1, `recon_state` 3. With none left: a `NODE_ACT_BYTES_FREE` of `recon_buffer` and `recon_state` 0.
+  - `NODE_EV_WORK_DONE` of a `NODE_WORK_PUBLISH_SIDECAR` of `target` 2^64 - 1, `LANTERN_VALID`: a `NODE_ACT_BYTES_PUT` of its bytes as a `NodeBlob` in `NODE_BLOB_VALID` of `recon_root`, its index and `recon_slot`, when the blobs part has room; with `NODE_FLAG_SUBSCRIBED`, a column of `columns` and `recon_slot` above F's slot, the publish of them on the topic of its subnet (the publish of SSZ bytes, below). `recon_state` 2.
 - A waiting block whose parent is imported: a `NODE_ACT_STATE_COPY` of the parent's post-state and a `NODE_WORK_IMPORT_BLOCK`; the block is `NODE_BLOCK_IMPORTING`. A parent with no post-state above F's slot gets it again first; one at or below F's slot is an ancestor of F, as below. When the fork of the block's slot is later than that of the parent's slot, the copy first crosses each fork boundary between them, and the import gets the last state.
 - The crossing of a fork boundary by a state copy `a` of a fork to the next fork: a `NODE_WORK_SLOTS` of `a` to the next fork's first slot, when `a` is before it; a `NODE_ACT_STATE_COPY` of the copied state as `b`, a buffer for the upgrade; a `NODE_WORK_UPGRADE` of `a` into `b` with the next fork as `arg`; a `NODE_ACT_STATE_FREE` of `a`. Then `b` is the copy. The shell does the actions in order, so a work reads what the works before it wrote. A waiting block whose parent is invalid becomes `NODE_BLOCK_INVALID`.
 - With `NODE_FLAG_ENGINE`, a waiting block of bellatrix or later whose parent is imported takes `NODE_BLOCK_PAYLOAD` instead, with `retry` 0: its import waits for the execution engine's answer.
@@ -751,6 +758,7 @@ lantern_node_run(node, store, seen, work, state_a, state_b, state_c, data, setti
 - `NODE_WORK_PRODUCE_CHECK`: lantern_node_produce_check of the fork of the slot of `state_a`, for the `NodeApi` entry at `target`: get_beacon_proposer_index of the state at `NodeEvent_root`, and at byte 8 of it 1 when the chain is healthy, else 0; with `skip_randao_verification` a `randao_reveal` that is not the point at infinity, else one that fails process_randao's check for that proposer: the result `LANTERN_INVALID_RANDAO_REVEAL` (400).
 - `NODE_WORK_ETH1_CHECK`: lantern_node_eth1_check of the fork of the slot of `state_a`: its two u64 at `NodeEvent_index` and `NodeEvent_checkpoint`.
 - `NODE_WORK_CUSTODY`: lantern_node_custody of the fork of the slot of `state_a`, with the store's epoch: its count at `NodeEvent_index`.
+- `NODE_WORK_RECONSTRUCT`: lantern_node_reconstruct of `data` into the ByteList `state_b` in place, with `settings`; its status for a short `scratch`, else the result.
 - `NODE_WORK_PRODUCE_ETH1`: lantern_node_produce_eth1 of the fork of the slot of `state_a`, with the draft `data`, the snapshot `state_b` and the node's config; its status is the result.
 - `NODE_WORK_PRODUCE_FOLD`: lantern_node_produce_fold of the fork of the slot of `state_a`: the pool entry `state_b` joins the draft `data` in place when the rules of beacon-api.md take it at `state_a`; `arg` its topic, + 2^8 times its `NodePool` `fork`, + 2^16 times its `member`.
 - `NODE_WORK_PRODUCE_BLOCK`: lantern_node_produce_block of the fork of the slot of `state_a`, from the draft `data`, the engine's result `state_b` and the bid `state_c` (a ByteList, or 0), with the request of the entry at `target` and the node's config: the fork's `BeaconBlock`, `BlockContents` or `BlindedBeaconBlock` in SSZ bytes as a ByteList at `NodeEvent_chunk`, execution_payload_value at `NodeEvent_root` (32 bytes), consensus_block_value in Gwei at `NodeEvent_index`, and 1 at `NodeEvent_checkpoint` for a blinded block, else 0.
@@ -758,7 +766,7 @@ lantern_node_run(node, store, seen, work, state_a, state_b, state_c, data, setti
 - `NODE_WORK_PUBLISH_DECODE`: lantern_node_publish_decode of the fork `arg` & 255, of the body in `data`, JSON or with `arg` bit 8 SSZ, with bit 9 a blinded block: the `SignedBeaconBlock` in SSZ bytes as a ByteList at `NodeEvent_chunk`, its hash_tree_root of the message at `NodeEvent_root`, its slot at `NodeEvent_index`, and from deneb the count of its body's `blob_kzg_commitments` at `NodeEvent_checkpoint`. `LANTERN_INVALID_ENCODING` for a body that is no value of the fork's type, or whose counts do not match (beacon-api.md).
 - `NODE_WORK_PUBLISH_SIDECARS`: lantern_node_publish_sidecars of the fork of the entry, of the body in `data`, into the ByteList `state_b` in place: the sidecars of beacon-api.md, each a ByteList, back to back.
 - `NODE_WORK_PUBLISH_CHECK`: lantern_node_publish_check of the fork of the slot of `state_a`: the checks of the level `arg` & 255 (beacon-api.md) of the block `data` and the sidecars `state_b`, with `state_a` the parent's post-state at the slot (process_block runs on it), `state_c` the head's, `seen` and the store, as lantern_node_gossip has them, and with `arg` bit 8 of a blinded block; its result, and with `LANTERN_VALID` the block's bytes as a ByteList at `NodeEvent_chunk`; for a blinded block its JSON there (lantern_node_json of `NODE_JSON_BLINDED_BLOCK`).
-- `NODE_WORK_PUBLISH_SIDECAR`: the sidecar `arg` of the sidecars `state_b`, as a ByteList at `NodeEvent_chunk`, its block root at `NodeEvent_root`, its index at `NodeEvent_index` and its slot at `NodeEvent_checkpoint`; `LANTERN_INVALID_EVENT` past the last.
+- `NODE_WORK_PUBLISH_SIDECAR`: the sidecar `arg` of the sidecars `state_b`, as a ByteList at `NodeEvent_chunk`, its block root at `NodeEvent_root`, its index at `NodeEvent_index` and its slot at `NodeEvent_checkpoint`; `LANTERN_INVALID_EVENT` past the last. With `target` 2^64 - 1, the block root and slot are `recon_root` and `recon_slot` (the reconstruction).
 - `NODE_WORK_FORKCHOICE`: engine_forkchoiceUpdated of the fork of the store's slot with the `block_hash` of the store's nodes of `head_root`, the justified checkpoint's root (safe) and the finalized checkpoint's root, in an HTTP POST to `engine_host` with a JWT of `jwt_secret` and the time `time_ms` / 1000, a ByteList at `NodeEvent_chunk`; `LANTERN_INVALID_UNKNOWN_BLOCK` when the store has no node of one of those roots, `LANTERN_NO_PAYLOAD` before bellatrix or when the head's `block_hash` is zero (no call).
 - `NODE_WORK_BLOB`: with `arg` 0, a `BlobSidecar`: lantern_node_blob_sidecar of the fork of its slot when it is deneb or electra; with `arg` 1, a `DataColumnSidecar`: lantern_node_column_sidecar when the fork of its slot is fulu. Each with the node's config and `settings`, the root at `NodeEvent_root`; a slot of another fork gives the result `LANTERN_INVALID_ENCODING`.
 - `NODE_WORK_GOSSIP`: lantern_node_gossip of the fork of the store's slot, with a `NodeGossip` of `seen`, the store, `time_ms`, the topic and subnet of `arg`, `state_a` as head, `state_b` as proposer, `state_c` as justified, `settings` and the node's config, its `root` at `NodeEvent_root` and its `index` at `NodeEvent_index`. A proposer or justified state whose slot's fork is not that of the store's slot is passed as 0; a head state whose slot's fork is not that of the store's slot gives the result `LANTERN_GOSSIP_IGNORE`, as at a fork's first slots, before the node imports a block of the new fork.
@@ -1690,6 +1698,41 @@ lantern_node_produce_fold(state, entry, draft, arg, scratch) -> status
 
 - Export: `lantern_<fork>_node_produce_fold` of each fork object (asm/core/<ISA>/nodehooks.s).
 - Argument order: `state`, `entry`, `draft`, `arg`, `scratch`.
+
+## Function `lantern_node_reconstruct`
+
+Every column sidecar of a block from half of them or more (fulu `das-core.md`, recover_matrix).
+
+### Signature
+
+```
+lantern_node_reconstruct(data, settings, scratch, out) -> status
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `data` | input | ByteList: ByteLists one after another, each at a multiple of 8, of the SSZ bytes of valid `DataColumnSidecar`s of one block, by ascending index |
+| `settings` | input | asm-crypto `KzgSettings` |
+| `scratch` | scratch | `Scratch` |
+| `out` | output | ByteList: room for `NUMBER_OF_COLUMNS` ByteLists of the sidecars' size |
+
+### Returns
+
+- `LANTERN_OK`: `out` holds the `NUMBER_OF_COLUMNS` sidecars, by index, each a ByteList whose `size` is 24 + its length rounded up to a multiple of 8.
+- `LANTERN_BUFFER_TOO_SMALL`: `scratch` holds fewer than `CRYPTO_KZG_SCRATCH` + 540672 bytes, or `out` has no room for the sidecars.
+- `LANTERN_INVALID_ENCODING`: fewer than `NUMBER_OF_COLUMNS` / 2 sidecars, sidecars of other sizes, indices not ascending or of `NUMBER_OF_COLUMNS` or more, or bytes of no `DataColumnSidecar`; or recover_cells_and_kzg_proofs fails.
+
+### Function does
+
+- The blob count n: the length of the first sidecar's `kzg_commitments`; each sidecar must have n cells and n proofs.
+- For each blob r, crypto_kzg_recover_cells_and_kzg_proofs of the held sidecars' indices and their cell r: the 128 cells and proofs of row r.
+- Sidecar c: `index` c, `column` cell c of each row, `kzg_commitments`, `signed_block_header` and `kzg_commitments_inclusion_proof` of the first sidecar, `kzg_proofs` proof c of each row.
+
+### ABI
+
+- Export: `lantern_node_reconstruct` of the common object.
 
 ## Function `lantern_node_custody`
 
@@ -2788,10 +2831,16 @@ The state of the node: a value with parts.
 | 728 + `CONFIG_SIZE` + `API_IDENTITY_SIZE` + 1688 + 8 * (`SYNC_COMMITTEE_SUBNET_COUNT` + `ATTESTATION_SUBNET_COUNT`) | `custody_slot` | u64 | The store's slot at its last raise, or the anchor's |
 | 728 + `CONFIG_SIZE` + `API_IDENTITY_SIZE` + 1696 + 8 * (`SYNC_COMMITTEE_SUBNET_COUNT` + `ATTESTATION_SUBNET_COUNT`) | `custody_need` | u64 | The custody group count of the node's validators at the last `NODE_WORK_CUSTODY`, or 0 |
 | 728 + `CONFIG_SIZE` + `API_IDENTITY_SIZE` + 1704 + 8 * (`SYNC_COMMITTEE_SUBNET_COUNT` + `ATTESTATION_SUBNET_COUNT`) | `custody_epoch` | u64 | The store's epoch + 1 at the last `NODE_WORK_CUSTODY`, or 0 |
+| 728 + `CONFIG_SIZE` + `API_IDENTITY_SIZE` + 1712 + 8 * (`SYNC_COMMITTEE_SUBNET_COUNT` + `ATTESTATION_SUBNET_COUNT`) | `recon_root` | Root | The block root of the reconstruction |
+| 728 + `CONFIG_SIZE` + `API_IDENTITY_SIZE` + 1744 + 8 * (`SYNC_COMMITTEE_SUBNET_COUNT` + `ATTESTATION_SUBNET_COUNT`) | `recon_slot` | u64 | Its slot |
+| 728 + `CONFIG_SIZE` + `API_IDENTITY_SIZE` + 1752 + 8 * (`SYNC_COMMITTEE_SUBNET_COUNT` + `ATTESTATION_SUBNET_COUNT`) | `recon_state` | u64 | 0 none, 1 its `NODE_WORK_RECONSTRUCT` queued, 2 its sidecars due, 3 a `NODE_WORK_PUBLISH_SIDECAR` of them queued |
+| 728 + `CONFIG_SIZE` + `API_IDENTITY_SIZE` + 1760 + 8 * (`SYNC_COMMITTEE_SUBNET_COUNT` + `ATTESTATION_SUBNET_COUNT`) | `recon_buffer` | u64 | The `BufferId` of the rebuilt sidecars |
+| 728 + `CONFIG_SIZE` + `API_IDENTITY_SIZE` + 1768 + 8 * (`SYNC_COMMITTEE_SUBNET_COUNT` + `ATTESTATION_SUBNET_COUNT`) | `recon_next` | u64 | The column from which the next missing one is looked for |
+| 728 + `CONFIG_SIZE` + `API_IDENTITY_SIZE` + 1776 + 8 * (`SYNC_COMMITTEE_SUBNET_COUNT` + `ATTESTATION_SUBNET_COUNT`) | `recon_failed` | Root | The root of the last reconstruction that failed, or zero |
 
 ### Rules
 
-- `NODE_FIXED` (728 + `CONFIG_SIZE` + `API_IDENTITY_SIZE` + 1712 + 8 * (`SYNC_COMMITTEE_SUBNET_COUNT` + `ATTESTATION_SUBNET_COUNT`)) bytes of fixed fields; the parts follow in the order blocks, checkpoints, pow_blocks, peers, streams, messages, blobs, api, pool, proposers, p2p_out, engine_in, db, eth1_blocks, eth1_deposits, eth1_leaves, eth1_counts.
+- `NODE_FIXED` (728 + `CONFIG_SIZE` + `API_IDENTITY_SIZE` + 1808 + 8 * (`SYNC_COMMITTEE_SUBNET_COUNT` + `ATTESTATION_SUBNET_COUNT`)) bytes of fixed fields; the parts follow in the order blocks, checkpoints, pow_blocks, peers, streams, messages, blobs, api, pool, proposers, p2p_out, engine_in, db, eth1_blocks, eth1_deposits, eth1_leaves, eth1_counts.
 - The `Db` has the capacities of the `NodeRoom` fields `db_slots` and `db_roots`, and its `first_slot` is the lowest of the anchor's `history_slot`, its slot and the first slot of the epoch max(0, the epoch of its slot - compute_min_epochs_for_block_requests), rounded down to a multiple of `DB_SEGMENT_SLOTS`: the backfill's blocks fit in it.
 - The backfill at the start: `backfill_root` the anchor's root, `backfill_slot` and `backfill_next` its slot + 1 (the anchor block's bytes come from a peer too), `backfill_segment`, `backfill_sidecar_segment` and `backfill_start` 2^64 - 1, and `backfill_handle`, `backfill_end`, `backfill_ms`, `backfill_peer` and `backfill_got` 0.
 - The capacity of a part is its bytes up to the next part over its entry's bytes; `p2p_out` is the last part.
@@ -3216,6 +3265,7 @@ The actions of one step: a ByteList whose bytes are `NodeAction` entries one aft
 - `NODE_ACT_DB_STATE` (`NODE_ACT_DB_STATE_SIZE`, 56 bytes): 16 the `BufferId` of a finalized block's post-state, 24 the `BufferId` of the block's SSZ bytes, 32 its slot, 40 `custody_count`, 48 `custody_slot`. The shell may keep them, so that a later start has an anchor whose blocks the `Db` holds.
 - `NODE_ACT_DB_ARCHIVE` (17, `NODE_ACT_DB_ARCHIVE_SIZE`, 120 bytes): 16 the `BufferId` of a state, 24 a state segment's number, 32 an offset, 40 a `DbRecord` with `bytes` and `length` 0. Write the state's record at the offset of the state segment's file, its end: its bytes are lantern_node_state_bytes of the fork of the state's slot, at offset 0, else the diff of them against the segment's full state (lantern_db_state_diff with the record at offset 0, db.md); the `DbRecord` with the ByteList header and `length` of those bytes, the bytes, and zero bytes to a multiple of 8. The first record of a segment that a run writes truncates the file to its offset first. Then a `NODE_EV_DB_ARCHIVE` of the segment, the offset and the record, or of kind 0 when it could not.
 - `NODE_ACT_DB_DROP` (`NODE_ACT_DB_DROP_SIZE`, 32 bytes): 16 a segment, 24 1 for a sidecar segment, else 0. The shell deletes the segment's file; a later record of that segment starts a new file.
+- `NODE_ACT_BYTES_JOIN` (18): 16 a new id, 24 a count, then that many ids, 8 bytes each: keep a ByteList whose bytes are the ByteLists of those ids one after another, each at a multiple of 8, as `NODE_ACT_BYTES_PUT` keeps bytes; with no room for them, a ByteList of no bytes.
 - `NODE_ACT_BUILDER` (16): 16 a builder call, 24 a ByteList of an HTTP request (offset 24). The shell opens a new connection to the builder, writes the bytes, and reads to the connection's end (the request has `Connection: close`), then passes the bytes it read in a `NODE_EV_BUILDER` of the call; a connection that fails before it reads any byte gives a `NODE_EV_BUILDER` with the failure bit.
 - A `NODE_DB_REF` is a `BufferId` with bit 63 set: bit 62 set for a sidecar segment, bit 61 for a state segment, the segment's number in bits 44 to 60, and the offset of a record in bits 0 to 43. As the `data` of a SERVE, API_ENCODE, API_CHUNK, REPLAY or ARCHIVE_LOAD work, or the `state_b` of an ARCHIVE_LOAD work, it names the SSZ bytes of that record: the shell gives lantern_node_run the record's ByteList at its byte 56, in place in the segment's memory.
 - `NODE_ACT_API_SEND`: 16 the connection, 24 `last`, 1 when the bytes end the answer, else 0; a ByteList at 32, offset 24: write its bytes to the connection, after those before. The shell reads the next request of the connection after the bytes of `last` 1.

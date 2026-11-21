@@ -6106,7 +6106,11 @@ LOCAL_FUNCTION node_publish_done
     ENTER 0
     mov     %rdi, %r12
     mov     NodeAction_target(%r12), %rax
-    PART    %r13, %rcx, %rbx, Node_api
+    cmp     $-1, %rax                       # a sidecar of the reconstruction
+    jne     100f
+    call    node_recon_sidecar_done
+    LEAVE 0
+100: PART   %r13, %rcx, %rbx, Node_api
     cmp     %rcx, %rax
     jae     99f
     imul    $NodeApi__mem, %rax, %rax
@@ -6324,6 +6328,64 @@ LOCAL_FUNCTION node_publish_sidecar_work
     call    node_work
     UNFRAME 0
 END_FUNCTION node_publish_sidecar_work
+
+/*
+ * The WORK_DONE rdi of a PUBLISH_SIDECAR of the reconstruction (node.md): recon_state 2; a valid
+ * one stays as a NodeBlob when the node lacks it, and goes out on its subnet's topic with
+ * NODE_FLAG_SUBSCRIBED, a column of columns and recon_slot above F's slot. r13 the event, S7 the
+ * sidecar's id.
+ */
+LOCAL_FUNCTION node_recon_sidecar_done
+    ENTER 0
+    mov     %rdi, %r13
+    movq    $2, Node_recon_state(%rbx)
+    cmpq    $0, NodeEvent_result(%r13)
+    jne     9f
+    lea     NodeEvent_root(%r13), %rdi
+    mov     NodeEvent_index(%r13), %rsi
+    call    node_blob_held
+    test    %rax, %rax
+    jnz     3f
+    lea     NodeEvent_chunk(%r13), %rdi
+    call    node_put
+    mov     %rax, S7(%rsp)
+    call    node_new_blob
+    mov     %rdi, %rdx
+    lea     NodeBlob_block_root(%rdx), %rdi
+    lea     NodeEvent_root(%r13), %rsi
+    COPY32  %rdi, %rsi
+    mov     NodeEvent_index(%r13), %rax
+    mov     %rax, NodeBlob_index(%rdx)
+    mov     NodeEvent_checkpoint(%r13), %rax
+    mov     %rax, NodeBlob_slot(%rdx)
+    mov     S7(%rsp), %rax
+    mov     %rax, NodeBlob_data_id(%rdx)
+    movq    $NODE_BLOB_VALID, NodeBlob_status(%rdx)
+    mov     (NodeEvent_chunk + 16)(%r13), %rax
+    mov     %rax, NodeBlob_length(%rdx)
+    lea     NodeEvent_root(%r13), %rdi
+    call    node_blob_added
+3:  testq   $NODE_FLAG_SUBSCRIBED, Node_flags(%rbx)  # subscribed: out on its subnet's topic
+    jz      9f
+    mov     NodeEvent_index(%r13), %rdi
+    call    node_sampled
+    test    %rax, %rax
+    jz      9f
+    mov     Store_finalized_checkpoint(%rbp), %rax
+    imul    $SLOTS_PER_EPOCH, %rax, %rax
+    cmp     Node_recon_slot(%rbx), %rax
+    jae     9f
+    mov     (Node_config + CONFIG_DATA_COLUMN_SIDECAR_SUBNET_COUNT)(%rbx), %rcx
+    test    %rcx, %rcx
+    jz      9f
+    mov     NodeEvent_index(%r13), %rax
+    xor     %edx, %edx
+    div     %rcx
+    mov     $GOSSIP_DATA_COLUMN_SIDECAR, %edi
+    lea     NodeEvent_chunk(%r13), %rsi
+    call    node_publish
+9:  LEAVE 0
+END_FUNCTION node_recon_sidecar_done
 
 /*
  * The WORK_DONE rsi of a valid PUBLISH_SIDECAR of the publishBlockV2 entry rdi: the sidecar stays
