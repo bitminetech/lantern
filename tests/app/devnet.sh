@@ -237,7 +237,7 @@ if [ $status -eq 0 ] && [ "${DIFF:-0}" = 1 ]; then
         sleep 30; waited=$((waited + 30))
     done
     if [ $status -eq 0 ]; then
-        python3 "$root/tests/app/differential.py" "$lantern" "$peer" || status=1
+        python3 "$root/tests/app/differential.py" "$lantern" "$peer" "$client" || status=1
         if [ $status -eq 0 ]; then echo "PASS lantern's reads agree with $client's"; else echo "FAIL lantern's reads differ from $client's"; fi
     else
         echo "FAIL no finalized epoch 2 on both nodes"
