@@ -46,9 +46,12 @@ ARCHIVES = {  # SHA-256 of each archive of consensus-specs v1.7.0-beta.4 (aa16bb
 COMPTESTS = ("comptests.tar.gz", "minimal", "ccb3149d29e4179e852499f1a3d121424dbac22745375908cd9059350aece746")
 # The forks of lantern's core, in order (include/forks.inc).
 FORKS = ("phase0", "altair", "bellatrix", "capella", "deneb", "electra", "fulu")
-# Spec test runners outside lantern's scope: it serves no light clients and
-# has no fast confirmation.
-SKIP = {"light_client", "fast_confirmation"}
+# Spec test runners outside lantern's scope: it has no fast confirmation.
+SKIP = {"fast_confirmation"}
+# Spec test handlers outside its scope: light_client/sync is the light client's own
+# sync (lantern is a beacon node); light_client/data_collection waits for the node's
+# light client data (docs/reference/light-client.md, Test vectors).
+SKIP_HANDLERS = {("light_client", "sync"), ("light_client", "data_collection")}
 # The spec writes the shuffling cases for phase0 only; every later fork keeps
 # its functions, so each fork's file holds them.
 EVERY_FORK = {("phase0", "shuffling")}
@@ -127,7 +130,7 @@ def read_cases(archive, forks, runners):
     with tarfile.open(archive, "r:gz") as tar:
         for member in tar:
             m = CASE.search(member.name) if member.isfile() else None
-            if not m or m.group(3) in SKIP or (runners and m.group(3) not in runners):
+            if not m or m.group(3) in SKIP or (m.group(3), m.group(4)) in SKIP_HANDLERS or (runners and m.group(3) not in runners):
                 continue
             if m.group(2) not in forks and (m.group(2), m.group(3)) not in EVERY_FORK:
                 continue
@@ -206,6 +209,14 @@ def write_descriptors(path, fork, preset):
     for name, t in reqresp.produce_types(spec, fork).items():  # lantern's block production values
         types[name] = descriptor.build(t)
     return write_file(path, [(name, {"descriptor": d}) for name, d in types.items()])
+
+
+def update_ranking_answers(fork, preset, parts):
+    """is_better_update of the spec module for each ordered pair (i, j) of a case's updates, at i * count + j."""
+    spec = __import__(f"eth_consensus_specs.{fork}.{preset}", fromlist=["*"])
+    n = int(parts["meta"]["updates_count"])
+    updates = [spec.LightClientUpdate.decode_bytes(parts[f"updates_{i}"]) for i in range(n)]
+    return [int(bool(spec.is_better_update(a, b))) for a in updates for b in updates]
 
 
 def write_kzg_setup(path, preset):
@@ -322,6 +333,8 @@ def main():
                     files[file] = CaseFile(out / file)
                 name = f"{suite}/{case}"
                 parts = case_parts(name, data)
+                if (runner, handler) == ("light_client", "update_ranking"):
+                    parts["better"] = update_ranking_answers(fork, preset, parts)
                 files[file].add(name, parts)
                 if (runner, handler) == ("fork_choice", "on_block") and any(k.startswith("blobs_") for k in parts):
                     on_block.setdefault(fork, []).append((name, parts))

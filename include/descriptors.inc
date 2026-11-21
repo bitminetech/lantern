@@ -21,6 +21,18 @@
  * list, or its first field record for a container.
  */
 .macro SSZ_NODES m
+    .if FORK >= FORK_ALTAIR
+    \m LightClientBootstrap, F_LightClientBootstrap
+    \m LightClientUpdate, F_LightClientUpdate
+    \m LightClientFinalityUpdate, F_LightClientFinalityUpdate
+    \m LightClientOptimisticUpdate, F_LightClientOptimisticUpdate
+    \m LightClientHeader, F_LightClientHeader
+    \m SyncCommitteeBranch, N_Bytes32
+    \m FinalityBranch, N_Bytes32
+    .endif
+    .if FORK >= FORK_CAPELLA
+    \m ExecutionBranch, N_Bytes32
+    .endif
     .if FORK >= FORK_DENEB
     \m BlockContents, F_BlockContents
     \m SignedBlockContents, F_SignedBlockContents
@@ -319,6 +331,13 @@
 
 /* The root types, each with its own header, in header order. */
 .macro SSZ_ROOTS m
+    .if FORK >= FORK_ALTAIR
+    \m LightClientBootstrap
+    \m LightClientUpdate
+    \m LightClientFinalityUpdate
+    \m LightClientOptimisticUpdate
+    \m LightClientHeader
+    .endif
     \m SignedBeaconBlock
     \m BeaconBlock
     \m BeaconBlockBody
