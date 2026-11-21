@@ -556,6 +556,30 @@ api_ev_current:
 api_ev_end:
     .ascii "}\n\n"
 .set api_ev_end_len, 3
+api_ev_lf2:                             /* the operation topics (beacon-api.md, eventstream) */
+    .ascii "\n\n"
+.set api_ev_lf2_len, 2
+api_ev_t_attestation:
+    .ascii "attestation"
+.set api_ev_t_attestation_len, 11
+api_ev_t_single:
+    .ascii "single_attestation"
+.set api_ev_t_single_len, 18
+api_ev_t_exit:
+    .ascii "voluntary_exit"
+.set api_ev_t_exit_len, 14
+api_ev_t_bls:
+    .ascii "bls_to_execution_change"
+.set api_ev_t_bls_len, 23
+api_ev_t_proposer:
+    .ascii "proposer_slashing"
+.set api_ev_t_proposer_len, 17
+api_ev_t_attester:
+    .ascii "attester_slashing"
+.set api_ev_t_attester_len, 17
+api_ev_t_contribution:
+    .ascii "contribution_and_proof"
+.set api_ev_t_contribution_len, 22
 api_v_statuses:                         /* the names of the statuses, API_STATUS_* order: 24 bytes each, the length first */
     .byte 19
     .ascii "pending_initialized"

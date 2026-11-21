@@ -5756,6 +5756,136 @@ LOCAL_FUNCTION api_event_text
     LEAVE 0
 END_FUNCTION api_event_text
 
+/*
+ * (out a0, topic a1, kind a2, ssz a3, cursor a4; the fork in t6) -> a0: the text of the event of an
+ * operation topic (beacon-api.md, eventstream): event: <topic> LF data: <lantern_node_json of the
+ * kind and the ssz> LF LF, into the ByteList out, its count set; LANTERN_OK, LANTERN_BUFFER_TOO_SMALL,
+ * or LANTERN_INVALID_ENCODING. The writer's registers; s5 out, s10 the topic, s1 the kind, s2 the
+ * ssz, s3 the cursor, s4 the fork.
+ */
+LOCAL_FUNCTION api_op_event_text
+    ENTER 0
+    mv      s5, a0
+    mv      s10, a1
+    mv      s1, a2
+    mv      s2, a3
+    mv      s3, a4
+    mv      s4, t6
+    li      s7, 1
+    li      s9, 0
+    addi    s6, s5, 24
+    ld      t0, 0(s5)
+    add     s8, s5, t0
+    API_LIT api_ev_event
+    li      t0, API_TOPIC_ATTESTATION
+    bne     s10, t0, 1f
+    API_LIT api_ev_t_attestation
+    j       7f
+1:  li      t0, API_TOPIC_SINGLE_ATTESTATION
+    bne     s10, t0, 2f
+    API_LIT api_ev_t_single
+    j       7f
+2:  li      t0, API_TOPIC_VOLUNTARY_EXIT
+    bne     s10, t0, 3f
+    API_LIT api_ev_t_exit
+    j       7f
+3:  li      t0, API_TOPIC_BLS_TO_EXECUTION_CHANGE
+    bne     s10, t0, 4f
+    API_LIT api_ev_t_bls
+    j       7f
+4:  li      t0, API_TOPIC_PROPOSER_SLASHING
+    bne     s10, t0, 5f
+    API_LIT api_ev_t_proposer
+    j       7f
+5:  li      t0, API_TOPIC_ATTESTER_SLASHING
+    bne     s10, t0, 6f
+    API_LIT api_ev_t_attester
+    j       7f
+6:  API_LIT api_ev_t_contribution
+7:  API_LIT api_ev_data
+    bnez    s9, 9f
+    addi    t0, s5, 24                      # the JSON after the bytes so far
+    sub     t0, s6, t0
+    li      t1, 24
+    sd      t1, 8(s5)
+    sd      t0, 16(s5)
+    mv      a0, s3
+    li      a1, JSON_CURSOR_SIZE
+    call    lantern_zero
+    mv      t6, s4
+    mv      a0, s1
+    mv      a1, s2
+    mv      a2, s3
+    mv      a3, s5
+    FORK_CALL node_json
+    li      t0, LANTERN_JSON_MORE           # the text passes the event's room
+    beq     a0, t0, 9f
+    li      t0, LANTERN_BUFFER_TOO_SMALL
+    beq     a0, t0, 9f
+    bnez    a0, 8f
+    ld      t0, 16(s5)
+    addi    s6, s5, 24
+    add     s6, s6, t0
+    API_LIT api_ev_lf2
+    bnez    s9, 9f
+    addi    t0, s5, 24
+    sub     t0, s6, t0
+    li      t1, 24
+    sd      t1, 8(s5)
+    sd      t0, 16(s5)
+    li      a0, LANTERN_OK
+    LEAVE 0
+8:  li      a0, LANTERN_INVALID_ENCODING
+    LEAVE 0
+9:  li      a0, LANTERN_BUFFER_TOO_SMALL
+    LEAVE 0
+END_FUNCTION api_op_event_text
+
+/*
+ * The event of a valid operation of the gossip topic a0, its bytes a1, of the fork a2 (node.md, The
+ * events): a NODE_WORK_API_EVENT of its event topic when an entry has the topic. Locals: the bytes,
+ * the work's arg.
+ */
+LOCAL_FUNCTION node_op_event
+    FRAME 16
+    sd      a1, 0(sp)
+    li      t1, GOSSIP_VOLUNTARY_EXIT
+    li      t0, API_TOPIC_VOLUNTARY_EXIT
+    beq     a0, t1, 1f
+    li      t1, GOSSIP_BLS_TO_EXECUTION_CHANGE
+    li      t0, API_TOPIC_BLS_TO_EXECUTION_CHANGE
+    beq     a0, t1, 1f
+    li      t1, GOSSIP_PROPOSER_SLASHING
+    li      t0, API_TOPIC_PROPOSER_SLASHING
+    beq     a0, t1, 1f
+    li      t1, GOSSIP_ATTESTER_SLASHING
+    li      t0, API_TOPIC_ATTESTER_SLASHING
+    beq     a0, t1, 1f
+    li      t1, GOSSIP_SYNC_COMMITTEE_CONTRIBUTION_AND_PROOF
+    li      t0, API_TOPIC_CONTRIBUTION_AND_PROOF
+    beq     a0, t1, 1f
+    li      t1, GOSSIP_BEACON_ATTESTATION
+    bne     a0, t1, 9f
+    li      t0, API_TOPIC_ATTESTATION       # beacon_attestation: SingleAttestation from electra
+    li      t1, FORK_ELECTRA
+    bltu    a2, t1, 1f
+    li      t0, API_TOPIC_SINGLE_ATTESTATION
+1:  slli    t1, a2, 16
+    or      t0, t0, t1
+    sd      t0, 8(sp)
+    andi    a0, t0, 255
+    call    node_api_subscribed
+    beqz    a0, 9f
+    li      a0, NODE_WORK_API_EVENT
+    li      a1, 0
+    li      a2, 0
+    ld      a3, 0(sp)
+    li      a4, 0
+    ld      a5, 8(sp)
+    call    node_work
+9:  UNFRAME 16
+END_FUNCTION node_op_event
+
 /* a0 = 1 when a NodeApi entry of eventstream has the topic a0, else 0. Uses t0-t3, a7. */
 LOCAL_FUNCTION node_api_subscribed
     UNWIND_END_PROLOGUE
@@ -6124,7 +6254,7 @@ LOCAL_FUNCTION node_api_event_run
     li      t0, API_TOPIC_HEAD
     beq     s8, t0, 1f
     li      t0, API_TOPIC_FINALIZED_CHECKPOINT
-    bne     s8, t0, 8f
+    bne     s8, t0, 10f
     bnez    s4, 3f
 1:  beqz    s3, 8f                          # of a post-state: lantern_node_event_roots
     ld      a0, NODE_STATE_SLOT(s3)
@@ -6181,13 +6311,56 @@ LOCAL_FUNCTION node_api_event_run
     mv      a2, s8
     call    api_event_text
     bnez    a0, 71f
-    ld      t0, (NodeEvent_chunk + 16)(s6)  # the event's size covers the text
+55: ld      t0, (NodeEvent_chunk + 16)(s6)  # the event's size covers the text
     addi    t0, t0, NodeEvent_chunk + 24 + 7
     andi    t0, t0, -8
     sd      t0, 0(s6)
     addi    t0, t0, -NodeEvent_chunk
     sd      t0, NodeEvent_chunk(s6)
     j       9f
+10: li      t0, API_TOPIC_VOLUNTARY_EXIT    # an operation topic: the JSON of its bytes, lantern_node_json of the fork in arg
+    li      a2, NODE_JSON_EXIT
+    beq     s8, t0, 11f
+    li      t0, API_TOPIC_BLS_TO_EXECUTION_CHANGE
+    li      a2, NODE_JSON_BLS_CHANGE
+    beq     s8, t0, 11f
+    li      t0, API_TOPIC_PROPOSER_SLASHING
+    li      a2, NODE_JSON_PROPOSER_SLASHING
+    beq     s8, t0, 11f
+    li      t0, API_TOPIC_ATTESTER_SLASHING
+    li      a2, NODE_JSON_ATTESTER_SLASHING
+    beq     s8, t0, 11f
+    li      t0, API_TOPIC_ATTESTATION
+    li      a2, NODE_JSON_ATTESTATION
+    beq     s8, t0, 11f
+    li      t0, API_TOPIC_SINGLE_ATTESTATION
+    li      a2, NODE_JSON_SINGLE_ATTESTATION
+    beq     s8, t0, 11f
+    li      t0, API_TOPIC_CONTRIBUTION_AND_PROOF
+    li      a2, NODE_JSON_CONTRIBUTION_AND_PROOF
+    bne     s8, t0, 8f
+11: beqz    s4, 41f
+    ld      t0, 0(s5)                       # a JsonCursor at the end of scratch
+    li      t1, JSON_CURSOR_SIZE
+    bltu    t0, t1, 71f
+    sub     t0, t0, t1
+    sd      t0, 0(s5)
+    add     a4, s5, t0
+    ld      t0, NodeAction_arg(s2)
+    srli    t6, t0, 16
+    andi    t6, t6, 255
+    addi    t0, s9, -NodeEvent_chunk        # the text, in the event
+    andi    t0, t0, -8
+    li      t1, 64
+    bltu    t0, t1, 71f
+    sd      t0, NodeEvent_chunk(s6)
+    addi    a0, s6, NodeEvent_chunk
+    mv      a1, s8
+    mv      a3, s4
+    call    api_op_event_text
+    li      t0, LANTERN_BUFFER_TOO_SMALL
+    beq     a0, t0, 71f
+    beqz    a0, 55b
 41: li      t0, LANTERN_INVALID_ENCODING
     sd      t0, NodeEvent_result(s6)
 9:  ld      t0, L(sp)
@@ -8998,6 +9171,11 @@ LOCAL_FUNCTION node_api_submit_done
     addi    a0, s4, 16                      # valid: its bytes to a new id, kept by the pool when it has room
     call    node_put
     mv      s10, a0
+    mv      a0, s9                          # its event (node.md, The events), before its bytes go
+    mv      a1, s10
+    ld      a2, NodeAction_arg(s3)
+    srli    a2, a2, 16
+    call    node_op_event
     li      a4, 0                           # an attestation: its slot and committee index, its member
     li      a5, 0
     ld      a6, 8(s4)

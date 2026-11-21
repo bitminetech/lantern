@@ -3883,7 +3883,7 @@ LOCAL_FUNCTION node_api_event_run
     cmp     x27, #API_TOPIC_HEAD
     b.eq    1f
     cmp     x27, #API_TOPIC_FINALIZED_CHECKPOINT
-    b.ne    8f
+    b.ne    10f
     cbnz    x23, 3f
 1:  cbz     x22, 8f                         /* of a post-state: lantern_node_event_roots */
     ldr     x0, [x22, #NODE_STATE_SLOT]
@@ -3936,13 +3936,55 @@ LOCAL_FUNCTION node_api_event_run
     mov     x2, x27
     bl      api_event_text
     cbnz    x0, 71f
-    ldr     x9, [x25, #(NodeEvent_chunk + 16)]  /* the event's size covers the text */
+55: ldr     x9, [x25, #(NodeEvent_chunk + 16)]  /* the event's size covers the text */
     add     x9, x9, #(NodeEvent_chunk + 24 + 7)
     and     x9, x9, #~7
     str     x9, [x25]
     sub     x9, x9, #NodeEvent_chunk
     str     x9, [x25, #NodeEvent_chunk]
     b       9f
+10: mov     x14, #NODE_JSON_EXIT            /* an operation topic: the JSON of its bytes, lantern_node_json of the fork in arg */
+    cmp     x27, #API_TOPIC_VOLUNTARY_EXIT
+    b.eq    11f
+    mov     x14, #NODE_JSON_BLS_CHANGE
+    cmp     x27, #API_TOPIC_BLS_TO_EXECUTION_CHANGE
+    b.eq    11f
+    mov     x14, #NODE_JSON_PROPOSER_SLASHING
+    cmp     x27, #API_TOPIC_PROPOSER_SLASHING
+    b.eq    11f
+    mov     x14, #NODE_JSON_ATTESTER_SLASHING
+    cmp     x27, #API_TOPIC_ATTESTER_SLASHING
+    b.eq    11f
+    mov     x14, #NODE_JSON_ATTESTATION
+    cmp     x27, #API_TOPIC_ATTESTATION
+    b.eq    11f
+    mov     x14, #NODE_JSON_SINGLE_ATTESTATION
+    cmp     x27, #API_TOPIC_SINGLE_ATTESTATION
+    b.eq    11f
+    mov     x14, #NODE_JSON_CONTRIBUTION_AND_PROOF
+    cmp     x27, #API_TOPIC_CONTRIBUTION_AND_PROOF
+    b.ne    8f
+11: cbz     x23, 41f
+    ldr     x10, [x24]                      /* a JsonCursor at the end of scratch */
+    subs    x10, x10, #JSON_CURSOR_SIZE
+    b.lo    71f
+    str     x10, [x24]
+    add     x4, x24, x10
+    ldr     x10, [x21, #NodeAction_arg]
+    ubfx    x15, x10, #16, #8
+    sub     x10, x28, #NodeEvent_chunk      /* the text, in the event */
+    and     x10, x10, #~7
+    cmp     x10, #64
+    b.lo    71f
+    str     x10, [x25, #NodeEvent_chunk]
+    add     x0, x25, #NodeEvent_chunk
+    mov     x1, x27
+    mov     x2, x14
+    mov     x3, x23
+    bl      api_op_event_text
+    cmp     x0, #LANTERN_BUFFER_TOO_SMALL
+    b.eq    71f
+    cbz     x0, 55b
 41: mov     x9, #LANTERN_INVALID_ENCODING
     str     x9, [x25, #NodeEvent_result]
 9:  ldr     x9, [sp, #L]
@@ -5785,6 +5827,133 @@ LOCAL_FUNCTION api_event_text
 9:  mov     x0, #LANTERN_BUFFER_TOO_SMALL
     LEAVE 0
 END_FUNCTION api_event_text
+
+/*
+ * L1: (out x0, topic x1, kind x2, ssz x3, cursor x4; the fork in x15) -> x0: the text of the event of
+ * an operation topic (beacon-api.md, eventstream): event: <topic> LF data: <lantern_node_json of the
+ * kind and the ssz> LF LF, into the ByteList out, its count set; LANTERN_OK, LANTERN_BUFFER_TOO_SMALL,
+ * or LANTERN_INVALID_ENCODING. The writer's registers; x19 the kind, x20 the ssz, x21 the cursor,
+ * x22 the fork, x23 out, x28 the topic.
+ */
+LOCAL_FUNCTION api_op_event_text
+    ENTER 0
+    mov     x23, x0
+    mov     x28, x1
+    mov     x19, x2
+    mov     x20, x3
+    mov     x21, x4
+    mov     x22, x15
+    mov     x25, #1
+    mov     x27, #0
+    add     x24, x23, #24
+    ldr     x9, [x23]
+    add     x26, x23, x9
+    API_LIT api_ev_event
+    cmp     x28, #API_TOPIC_ATTESTATION
+    b.ne    1f
+    API_LIT api_ev_t_attestation
+    b       7f
+1:  cmp     x28, #API_TOPIC_SINGLE_ATTESTATION
+    b.ne    2f
+    API_LIT api_ev_t_single
+    b       7f
+2:  cmp     x28, #API_TOPIC_VOLUNTARY_EXIT
+    b.ne    3f
+    API_LIT api_ev_t_exit
+    b       7f
+3:  cmp     x28, #API_TOPIC_BLS_TO_EXECUTION_CHANGE
+    b.ne    4f
+    API_LIT api_ev_t_bls
+    b       7f
+4:  cmp     x28, #API_TOPIC_PROPOSER_SLASHING
+    b.ne    5f
+    API_LIT api_ev_t_proposer
+    b       7f
+5:  cmp     x28, #API_TOPIC_ATTESTER_SLASHING
+    b.ne    6f
+    API_LIT api_ev_t_attester
+    b       7f
+6:  API_LIT api_ev_t_contribution
+7:  API_LIT api_ev_data
+    cbnz    x27, 9f
+    add     x9, x23, #24                    /* the JSON after the bytes so far */
+    sub     x9, x24, x9
+    mov     x10, #24
+    stp     x10, x9, [x23, #8]
+    mov     x0, x21
+    mov     x1, #JSON_CURSOR_SIZE
+    bl      lantern_zero
+    mov     x15, x22
+    mov     x0, x19
+    mov     x1, x20
+    mov     x2, x21
+    mov     x3, x23
+    FORK_CALL node_json
+    cmp     x0, #LANTERN_JSON_MORE          /* the text passes the event's room */
+    b.eq    9f
+    cmp     x0, #LANTERN_BUFFER_TOO_SMALL
+    b.eq    9f
+    cbnz    x0, 8f
+    ldr     x9, [x23, #16]
+    add     x24, x23, #24
+    add     x24, x24, x9
+    API_LIT api_ev_lf2
+    cbnz    x27, 9f
+    add     x9, x23, #24
+    sub     x9, x24, x9
+    mov     x10, #24
+    stp     x10, x9, [x23, #8]
+    mov     x0, #LANTERN_OK
+    LEAVE 0
+8:  mov     x0, #LANTERN_INVALID_ENCODING
+    LEAVE 0
+9:  mov     x0, #LANTERN_BUFFER_TOO_SMALL
+    LEAVE 0
+END_FUNCTION api_op_event_text
+
+/*
+ * L1: the event of a valid operation of the gossip topic x0, its bytes x1, of the fork x2 (node.md,
+ * The events): a NODE_WORK_API_EVENT of its event topic when an entry has the topic. Locals: the
+ * bytes, the work's arg.
+ */
+LOCAL_FUNCTION node_op_event
+    FRAME 16
+    str     x1, [sp, #16]
+    mov     x9, #API_TOPIC_VOLUNTARY_EXIT
+    cmp     x0, #GOSSIP_VOLUNTARY_EXIT
+    b.eq    1f
+    mov     x9, #API_TOPIC_BLS_TO_EXECUTION_CHANGE
+    cmp     x0, #GOSSIP_BLS_TO_EXECUTION_CHANGE
+    b.eq    1f
+    mov     x9, #API_TOPIC_PROPOSER_SLASHING
+    cmp     x0, #GOSSIP_PROPOSER_SLASHING
+    b.eq    1f
+    mov     x9, #API_TOPIC_ATTESTER_SLASHING
+    cmp     x0, #GOSSIP_ATTESTER_SLASHING
+    b.eq    1f
+    mov     x9, #API_TOPIC_CONTRIBUTION_AND_PROOF
+    cmp     x0, #GOSSIP_SYNC_COMMITTEE_CONTRIBUTION_AND_PROOF
+    b.eq    1f
+    cmp     x0, #GOSSIP_BEACON_ATTESTATION
+    b.ne    9f
+    mov     x9, #API_TOPIC_ATTESTATION      /* beacon_attestation: SingleAttestation from electra */
+    mov     x10, #API_TOPIC_SINGLE_ATTESTATION
+    cmp     x2, #FORK_ELECTRA
+    csel    x9, x10, x9, hs
+1:  orr     x9, x9, x2, lsl #16
+    str     x9, [sp, #24]
+    and     x0, x9, #255
+    bl      node_api_subscribed
+    cbz     x0, 9f
+    mov     x0, #NODE_WORK_API_EVENT
+    mov     x1, #0
+    mov     x2, #0
+    ldr     x3, [sp, #16]
+    mov     x4, #0
+    ldr     x5, [sp, #24]
+    bl      node_work
+9:  UNFRAME 16
+END_FUNCTION node_op_event
 
 /* L0: x0 = 1 when a NodeApi entry of eventstream has the topic x0, else 0. Uses x9-x13. */
 LOCAL_FUNCTION node_api_subscribed
@@ -8791,6 +8960,11 @@ LOCAL_FUNCTION node_api_submit_done
     add     x0, x22, #16                    /* valid: its bytes to a new id, kept by the pool when it has room */
     bl      node_put
     mov     x27, x0
+    mov     x0, x26                         /* its event (node.md, The events), before its bytes go */
+    mov     x1, x27
+    ldr     x2, [x21, #NodeAction_arg]
+    lsr     x2, x2, #16
+    bl      node_op_event
     mov     x4, #0                          /* an attestation: its slot and committee index, its member */
     mov     x5, #0
     ldr     x6, [x22, #8]

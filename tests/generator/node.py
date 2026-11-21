@@ -244,6 +244,39 @@ def liveness_cases(fork, preset):
             }
 
 
+def op_event_messages(spec, state):
+    """A valid proposer slashing and a valid attester slashing of the anchor's validators, signed with the
+    test helpers' keys; and the stream of their operation events (beacon-api.md): its head, then a chunk each."""
+    from eth_consensus_specs.utils import bls
+    from json_codec import to_json
+    epoch = spec.get_current_epoch(state)
+
+    def header_of(index, body):  # as the pools' (pool_requests)
+        h = spec.BeaconBlockHeader(slot=state.slot, proposer_index=index, parent_root=b"\x03" * 32,
+                                   state_root=b"\x04" * 32, body_root=body)
+        domain = spec.get_domain(state, spec.DOMAIN_BEACON_PROPOSER, spec.compute_epoch_at_slot(h.slot))
+        return spec.SignedBeaconBlockHeader(message=h, signature=bls.Sign(KEYS.privkeys[index],
+                                                                          spec.compute_signing_root(h, domain)))
+
+    def indexed_of(indices, root):
+        data = spec.AttestationData(slot=state.slot, index=0, beacon_block_root=root,
+                                    source=state.current_justified_checkpoint,
+                                    target=spec.Checkpoint(epoch=epoch, root=root))
+        domain = spec.get_domain(state, spec.DOMAIN_BEACON_ATTESTER, data.target.epoch)
+        sr = spec.compute_signing_root(data, domain)
+        ia = spec.IndexedAttestation(data=data, signature=bls.Aggregate([bls.Sign(KEYS.privkeys[i], sr) for i in indices]))
+        for i in indices:
+            ia.attesting_indices.append(i)
+        return ia
+    ps = spec.ProposerSlashing(signed_header_1=header_of(4, b"\x01" * 32), signed_header_2=header_of(4, b"\x02" * 32))
+    ats = spec.AttesterSlashing(attestation_1=indexed_of([5, 6], b"\x05" * 32), attestation_2=indexed_of([5, 6], b"\x06" * 32))
+    stream = stream_head(b"HTTP/1.1", b"")
+    for topic, op in (("proposer_slashing", ps), ("attester_slashing", ats)):
+        text = b"event: " + topic.encode() + b"\ndata: " + to_json(op).encode() + b"\n\n"
+        stream += b"%04x\r\n" % len(text) + text + b"\r\n"
+    return bytes(ps.encode_bytes()), bytes(ats.encode_bytes()), stream
+
+
 def cases(fork, preset):
     yield from liveness_cases(fork, preset)
     if fork == "phase0":  # the node runs altair to fulu, as the fork choice cases do
@@ -251,6 +284,7 @@ def cases(fork, preset):
     spec = module(fork, preset)
     state, block = run(spec, schedule(fork), lambda: anchor(spec, fork))
     status, metadata = run(spec, schedule(fork), lambda: answers(spec, fork, state, block))
+    proposer_slashing, attester_slashing, op_events = run(spec, schedule(fork), lambda: op_event_messages(spec, state))
     yield "api", "anchor_epoch_2", api_cases(fork, preset)
     late = int(spec.EPOCHS_PER_HISTORICAL_VECTOR) + 6  # the lowest epochs of getEpochCommittees
     yield "api", f"anchor_epoch_{late}", api_cases(fork, preset, epoch=late)
@@ -265,6 +299,9 @@ def cases(fork, preset):
         "metadata": metadata,
         "status_version": 2 if fork == "fulu" else 1,
         "metadata_version": 3 if fork == "fulu" else 2,
+        "proposer_slashing": proposer_slashing,
+        "attester_slashing": attester_slashing,
+        "op_events": op_events,
     }
 
 
@@ -1793,10 +1830,20 @@ def pool_requests(spec, fork, v, by_name, add):
             body += b',"failures":[' + b",".join(b'{"index":%d,"message":"REJECT"}' % i for i in failures) + b"]"
         return response(400, body + b"}", close=close, keep_alive=keep_alive)
 
+    # the operation events (beacon-api.md): a stream open from here to the case's end, its bytes in a box
+    event_topics = {"exit": "voluntary_exit", "proposer": "proposer_slashing", "attester": "attester_slashing",
+                    "bls": "bls_to_execution_change", "contribution": "contribution_and_proof",
+                    "attestation": "single_attestation" if FORKS.index(fork) >= FORKS.index("electra") else "attestation"}
+    events_box = [stream_head(b"HTTP/1.1", b"")]
+    topics_query = b"topics=attestation,single_attestation,voluntary_exit,bls_to_execution_change,proposer_slashing," \
+                   b"attester_slashing,contribution_and_proof"
+    add("events_operations", api_route.request(by_name["eventstream"]["method"], api_route.fill(by_name["eventstream"], None),
+                                               topics_query), want=lambda c, k: events_box, stream=2)
+
     def submit(name, op_name, kind, ops, body, single=True, headers=None, content_type=b"application/json"):
         """ops: the decoded operations, or None for a body of none; run twice, as the runner does."""
         answers = []
-        for _ in range(2):
+        for run_index in range(2):
             if ops is None:
                 answers.append(("bad", None))
                 continue
@@ -1804,6 +1851,9 @@ def pool_requests(spec, fork, v, by_name, add):
             for op, r in zip(ops, results):
                 if r == "VALID":
                     pool[kind].append(pool_form(op) if kind == "attestation" else op)
+                    if run_index == 0 and kind in event_topics:
+                        text = b"event: " + event_topics[kind].encode() + b"\ndata: " + to_json(op).encode() + b"\n\n"
+                        events_box[0] += b"%04x\r\n" % len(text) + text + b"\r\n"
             failures = [i for i, r in enumerate(results) if r == "REJECT"]
             answers.append(("ok", None) if not failures else ("bad", None if single else failures))
         if answers[0] != answers[1]:
@@ -2226,7 +2276,8 @@ def api_requests(spec, fork, v, kind="main"):
     by_name = {op["name"]: op for op in ops}
     out = []
 
-    def add(name, req, offline=False, version=b"HTTP/1.1", connection=b"", extra=b"", body=None, syncing=False, want=None):
+    def add(name, req, offline=False, version=b"HTTP/1.1", connection=b"", extra=b"", body=None, syncing=False, want=None,
+            stream=0):
         if body is not None:
             req = dict(req, body=body)
             extra += b"Content-Length: %d\r\n" % len(body)
@@ -2234,7 +2285,7 @@ def api_requests(spec, fork, v, kind="main"):
         close = connection.lower() == b"close" or (version == b"HTTP/1.0" and connection.lower() != b"keep-alive")
         keep_alive = version == b"HTTP/1.0" and not close
         status, r = api_route.route(ops, req, 1 << 24)
-        stream = False
+        stream = int(stream)
         if status != api_route.OK:
             want = error(r.http, close=close, keep_alive=keep_alive, allow=r.allow)
         else:
@@ -2243,7 +2294,7 @@ def api_requests(spec, fork, v, kind="main"):
             if want is not None:
                 want = want(close, keep_alive)
             elif opname == "eventstream":  # the head; the stream stays open
-                want, stream = stream_head(version, connection), True
+                want, stream = stream_head(version, connection), 1
             elif opname in POOL_GETS:  # an empty pool
                 pool_version = fork if opname in ("getPoolAttesterSlashingsV2", "getPoolAttestationsV2") else None
                 body = b'{"data":[]}' if pool_version is None else b'{"version":"%s","data":[]}' % fork.encode()
@@ -2546,11 +2597,11 @@ def api_cases(fork, preset, epoch=ANCHOR_EPOCH):
     for name, raw, want, close, off, sync, stream in sorted(reqs, key=lambda r: r[4]):
         names.append(name.encode())
         raws.append(raw)
-        wants.append(want)
+        wants.append(want[0] if isinstance(want, list) else want)  # a box: an open stream's bytes at the case's end
         closes.append(1 if close and not stream else 0)
         offline.append(off)
         syncing.append(int(sync))  # bit 0 NODE_FLAG_SYNCING, bit 1 the store's nodes NOT_VALIDATED
-        streams.append(1 if stream else 0)
+        streams.append(stream)
     for name, raw, status in http_faults() if epoch == ANCHOR_EPOCH else []:
         names.append(name.encode())
         raws.append(raw)
