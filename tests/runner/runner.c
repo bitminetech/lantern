@@ -2737,6 +2737,8 @@ struct node_shell {
     uint64_t bld_len, bld_cap, bld_calls;
     tv bids;                                /* node-produce: the case's answers to the getHeader calls, or NULL */
     uint64_t nbids, bid_calls;              /* their count; the getHeader calls so far */
+    tv submits;                             /* node-publish: the case's answers to the blinded_blocks calls, or NULL */
+    uint64_t nsubmits, submit_calls;
     uint64_t flags, db_states;              /* its flags; the NODE_ACT_DB_STATE actions */
     uint64_t drops[16];                     /* the NODE_ACT_DB_DROP actions: bit 63 for sidecars, the segment */
     size_t ndrops;
@@ -3184,6 +3186,7 @@ static void shell_work(fc_node *n, const uint8_t *work, const char **why) {
     /* API_SUBMIT: room for the records of its body, whose SSZ bytes are fewer than their JSON's */
     uint64_t ev_size = kind == WORK_API_CHUNK ? EV_API_BYTES + 24 + (s->api.room ? s->api.room : NODE_API_CHUNK)
                        : kind == WORK_API_SUBMIT && d ? (EV_WORK_DONE_SIZE + 2 * d->size + 256) & ~(uint64_t)7
+                       : kind == WORK_PUBLISH_CHECK && d && rd64(work + 64) >> 8 & 1 ? (EV_WORK_DONE_SIZE + 4 * d->size + 4096 + 8192) & ~(uint64_t)7
                        : (kind == WORK_PUBLISH_DECODE || kind == WORK_PUBLISH_CHECK) && d ? (EV_WORK_DONE_SIZE + d->size + 256) & ~(uint64_t)7
                                                       : EV_WORK_DONE_SIZE;
     uint8_t *ev = buffer(ev_size);
@@ -3482,12 +3485,16 @@ static void shell_step(fc_node *n, const char **why) {
                 memcpy(s->bld + s->bld_len, act + 48, (size_t)blen);
                 s->bld_len += blen;
                 s->bld_calls++;
-                static const char hdr[] = "GET /eth/v1/builder/header/";
-                if (s->bids && s->nbids && blen >= sizeof hdr - 1 && !memcmp(act + 48, hdr, sizeof hdr - 1)) {
-                    /* getHeader: the case's k-th answer, its last past them; an empty one is no answer */
-                    tv b = s->bids + 9;
-                    for (uint64_t k = 0; k < s->bid_calls && k + 1 < s->nbids; k++) b = tv_skip(b);
-                    s->bid_calls++;
+                static const char hdr[] = "GET /eth/v1/builder/header/", sub[] = "POST /eth/v2/builder/blinded_blocks ";
+                int is_hdr = blen >= sizeof hdr - 1 && !memcmp(act + 48, hdr, sizeof hdr - 1);
+                int is_sub = blen >= sizeof sub - 1 && !memcmp(act + 48, sub, sizeof sub - 1);
+                tv list = is_hdr ? s->bids : is_sub ? s->submits : NULL;
+                uint64_t n = is_hdr ? s->nbids : is_sub ? s->nsubmits : 0, *calls = is_hdr ? &s->bid_calls : &s->submit_calls;
+                if (list && n) {
+                    /* getHeader, submitBlindedBlockV2: the case's k-th answer, its last past them; an empty one is no answer */
+                    tv b = list + 9;
+                    for (uint64_t k = 0; k < *calls && k + 1 < n; k++) b = tv_skip(b);
+                    (*calls)++;
                     uint64_t alen;
                     const uint8_t *ans = tv_bytes(b, &alen);
                     if (alen) shell_event(s, EV_BUILDER, rd64(act + 16), ans, alen);
@@ -8977,7 +8984,9 @@ static void run_node_produce(const char *file, const char *dir, case_file *f) {
         if (builder) {
             s->bids = tv_get(parts, "bids");
             s->nbids = s->bids ? rd64(s->bids + 1) : 0;
-            s->bid_calls = s->bld_len = s->bld_calls = 0;
+            s->submits = tv_get(parts, "submits");
+            s->nsubmits = s->submits ? rd64(s->submits + 1) : 0;
+            s->bid_calls = s->submit_calls = s->bld_len = s->bld_calls = 0;
         }
         tv reqs = tv_get(parts, "requests"), resps = tv_get(parts, "responses");
         n.produce = 1;

@@ -32,6 +32,7 @@
 - [`lantern_seen_copy`](#function-lantern_seen_copy): copies a `Seen` into a buffer with more capacity.
 - [`lantern_seen_add_block`](#function-lantern_seen_add_block): records a block that is known but has no post-state.
 - [`lantern_validate_beacon_block_gossip`](#gossip-validation-functions): topic `beacon_block`.
+- [`lantern_validate_blinded_block_gossip`](#gossip-validation-functions): the checks of topic `beacon_block` on a blinded block (beacon-api.md, publishBlindedBlockV2), from bellatrix.
 - [`lantern_validate_beacon_aggregate_and_proof_gossip`](#gossip-validation-functions): topic `beacon_aggregate_and_proof`.
 - [`lantern_validate_beacon_attestation_gossip`](#gossip-validation-functions): topic `beacon_attestation_{subnet_id}`.
 - [`lantern_validate_voluntary_exit_gossip`](#gossip-validation-functions): topic `voluntary_exit`.
@@ -808,6 +809,7 @@ Each function is the spec function of its name, for one message of its topic.
 
 ```
 lantern_validate_beacon_block_gossip(seen, store, signed_beacon_block, current_time_ms, head_state, proposer_state, scratch, result) -> status
+lantern_validate_blinded_block_gossip(seen, store, signed_blinded_beacon_block, current_time_ms, head_state, proposer_state, scratch, result) -> status
 lantern_validate_beacon_aggregate_and_proof_gossip(seen, store, signed_aggregate_and_proof, current_time_ms, head_state, scratch, result) -> status
 lantern_validate_beacon_attestation_gossip(seen, store, attestation, current_time_ms, subnet_id, head_state, scratch, result) -> status
 lantern_validate_voluntary_exit_gossip(seen, store, signed_voluntary_exit, current_time_ms, head_state, scratch, result) -> status
@@ -821,7 +823,7 @@ lantern_validate_data_column_sidecar_gossip(seen, store, sidecar, current_time_m
 lantern_validate_partial_data_column_sidecar_gossip(seen, store, sidecar, current_time_ms, group_id, column_index, head_state, proposer_state, settings, scratch, result) -> status
 ```
 
-- Bellatrix: lantern_validate_beacon_block_gossip takes `justified_state` after `proposer_state`: (seen, store, signed_beacon_block, current_time_ms, head_state, proposer_state, justified_state, scratch, result).
+- Bellatrix: lantern_validate_beacon_block_gossip and lantern_validate_blinded_block_gossip take `justified_state` after `proposer_state`: (seen, store, signed_beacon_block, current_time_ms, head_state, proposer_state, justified_state, scratch, result).
 
 ### Arguments
 
@@ -859,6 +861,7 @@ lantern_validate_partial_data_column_sidecar_gossip(seen, store, sidecar, curren
 - The attester slashing intersection works on sorted copies of the two index lists in scratch.
 - `beacon_block`, a parent with no post-state: phase0 and altair give `LANTERN_GOSSIP_REJECT`. Bellatrix decides by is_execution_enabled(justified_state, block.body), then the parent's payload status. Capella and later decide by the parent's payload status.
 - `beacon_block`, bellatrix: the payload timestamp check and the `INVALIDATED` parent check run only when is_execution_enabled(head_state, block.body) holds. Capella and later run them always.
+- lantern_validate_blinded_block_gossip: the checks of `beacon_block` in the same order on a `SignedBlindedBeaconBlock`: the signature of the hash_tree_root of its `BlindedBeaconBlock` (that of the full block), the timestamp of its `execution_payload_header`, the count of its `blob_kzg_commitments`. Its execution is enabled: a blinded block has a payload. Phase0 and altair have no blinded block: `LANTERN_INVALID_EVENT`.
 - `beacon_block`, the commitment limit: `MAX_BLOBS_PER_BLOCK` (deneb), `MAX_BLOBS_PER_BLOCK_ELECTRA` (electra), the `max_blobs_per_block` of get_blob_parameters at the block's epoch (fulu).
 - `beacon_attestation_{subnet_id}` and `beacon_aggregate_and_proof`, phase0 to capella: the slot is within `ATTESTATION_PROPAGATION_SLOT_RANGE` of the current slot (is_within_slot_range). Deneb and later: the slot is not in the future and its epoch is the current or previous epoch.
 - `beacon_attestation_{subnet_id}`, phase0 to deneb: the message is an `Attestation`. It has exactly one aggregation bit set and as many bits as the committee; the participant is the committee member at the set bit, and is_valid_indexed_attestation checks its one signature.

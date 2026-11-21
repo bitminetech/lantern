@@ -139,6 +139,8 @@ def builder_types(spec, fork):
         t["BlindedBeaconBlock"] = container(spec, "BlindedBeaconBlock", [
             ("slot", spec.Slot), ("proposer_index", spec.ValidatorIndex), ("parent_root", spec.Root), ("state_root", spec.Root),
             ("body", blinded_body)])
+        t["SignedBlindedBeaconBlock"] = container(spec, "SignedBlindedBeaconBlock", [
+            ("message", t["BlindedBeaconBlock"]), ("signature", spec.BLSSignature)])
     return t
 
 

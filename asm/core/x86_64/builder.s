@@ -52,6 +52,20 @@ bld_get_http_len = . - bld_get_http
 bld_get_end:
     .ascii  "\r\nAccept: application/json\r\nConnection: close\r\n\r\n"
 bld_get_end_len = . - bld_get_end
+bld_post_blinded:
+    .ascii  "POST /eth/v2/builder/blinded_blocks HTTP/1.1\r\nHost: "
+bld_post_blinded_len = . - bld_post_blinded
+bld_submit_1:
+    .ascii  "\r\nAccept: application/json\r\nConnection: close\r\nEth-Consensus-Version: "
+bld_submit_1_len = . - bld_submit_1
+bld_submit_2:
+    .ascii  "\r\nContent-Type: application/json\r\nContent-Length: "
+bld_submit_2_len = . - bld_submit_2
+/* The bytes of a submitBlindedBlockV2 request's head other than the host, the fork's name and Content-Length's digits. */
+.set BLD_SUBMIT_FIXED, 176
+.if bld_post_blinded_len + bld_submit_1_len + bld_submit_2_len + bld_head_end_len != BLD_SUBMIT_FIXED
+.error "the submitBlindedBlockV2 request's length is wrong"
+.endif
 bld_version:
     .ascii  "version"
 bld_data:
@@ -163,6 +177,7 @@ END_FUNCTION node_builder_call
 # NodeApi entry.
 LOCAL_FUNCTION node_builder_event
     ENTER 0
+    mov     %r14, S9(%rsp)                  # the step's scratch
     mov     16(%r12), %rax
     movzbl  %al, %r13d
     shr     $8, %eax
@@ -173,7 +188,7 @@ LOCAL_FUNCTION node_builder_event
     imul    $NODE_BUILDER_CALL_SIZE, %r13, %rax
     lea     Node_builder_calls(%rbx,%rax), %r14
     cmpq    $NODE_BUILDER_HEADER, (%r14)    # a header call: to its entry, when that waits for it
-    jne     8f
+    jne     20f
     mov     8(%r14), %rax
     PART    %rcx, %rdx, %rbx, Node_api
     cmp     %rdx, %rax
@@ -200,9 +215,169 @@ LOCAL_FUNCTION node_builder_event
     call    node_put
     mov     S8(%rsp), %rcx
     mov     %rax, (NodeApi_cursor + PRODUCE_BID)(%rcx)
+    jmp     8f
+20: cmpq    $NODE_BUILDER_SUBMIT, (%r14)    # a submit call: to its publish entry, when that waits for it
+    jne     8f
+    mov     8(%r14), %rax
+    PART    %rcx, %rdx, %rbx, Node_api
+    cmp     %rdx, %rax
+    jae     8f
+    imul    $NodeApi__mem, %rax, %rax
+    add     %rax, %rcx
+    mov     %rcx, S8(%rsp)
+    cmpq    $0, NodeApi_connection(%rcx)
+    je      8f
+    cmpq    $API_OP_PUBLISH_BLOCK_V2, NodeApi_op(%rcx)
+    jne     8f
+    lea     1(%r13), %rax
+    cmp     %rax, (NodeApi_cursor + PUBLISH_CALL)(%rcx)
+    jne     8f
+    movq    $0, (NodeApi_cursor + PUBLISH_CALL)(%rcx)
+    movq    $0, (%r14)
+    mov     $500, %esi                      # the builder's 202: 200; else 500
+    cmpq    $0, S7(%rsp)
+    jne     22f
+    lea     24(%r12), %rdi
+    mov     S9(%rsp), %rsi
+    call    bld_status
+    mov     $500, %esi
+    mov     $200, %ecx
+    cmp     $202, %rax
+    cmove   %ecx, %esi
+22: mov     S8(%rsp), %rdi
+    call    node_publish_answer
+    LEAVE 0
 8:  movq    $0, (%r14)
 9:  LEAVE 0
 END_FUNCTION node_builder_event
+
+# L2: rax = the status of the HTTP answer in the ByteList rdi (lantern_http_parse_response with eof
+# 1, its body at the end of the scratch rsi), or 0 when it is none. rbx the answer, rbp scratch.
+# Locals: L the HttpResponse (16), L+16 eof, L+24 the scratch size.
+LOCAL_FUNCTION bld_status
+    ENTER 32
+    mov     %rdi, %rbx
+    mov     %rsi, %rbp
+    mov     16(%rbx), %rax                  # the body: at most the answer's bytes
+    add     $(24 + 7), %rax
+    and     $-8, %rax
+    mov     (%rbp), %rcx
+    mov     %rcx, (L + 24)(%rsp)
+    sub     %rax, %rcx
+    jb      8f
+    mov     %rcx, (%rbp)
+    lea     (%rbp,%rcx), %rdx
+    mov     %rax, (%rdx)
+    movq    $24, 8(%rdx)
+    movq    $0, 16(%rdx)
+    movq    $1, (L + 16)(%rsp)
+    mov     %rbx, %rdi
+    lea     (L + 16)(%rsp), %rsi
+    lea     L(%rsp), %rcx
+    call    lantern_http_parse_response
+    mov     (L + 24)(%rsp), %rcx
+    mov     %rcx, (%rbp)
+    test    %rax, %rax
+    jnz     8f
+    mov     L(%rsp), %rax
+    LEAVE 32
+8:  xor     %eax, %eax
+    LEAVE 32
+END_FUNCTION bld_status
+
+# L2: (entry rdi, JSON rsi) -> rax: the submitBlindedBlockV2 call of the publishBlindedBlockV2 entry
+# rdi (node.md, NODE_PUBLISH_SUBMIT), the block's JSON in the ByteList rsi: 0 once it went, the entry
+# in NODE_PUBLISH_SUBMIT with the call + 1 at PUBLISH_CALL; 500 with no builder, no free call or no
+# room. rbx the node, r15 the actions; r12 the entry, r13 the JSON, r14 its bytes, rbp the fork's
+# name; S7 the request's bytes, S8 the call.
+LOCAL_FUNCTION node_publish_submit
+    ENTER 16
+    mov     %rdi, %r12
+    mov     %rsi, %r13
+    testq   $NODE_FLAG_BUILDER, Node_flags(%rbx)
+    jz      8f
+    mov     16(%r13), %r14
+    mov     %r14, %rdi
+    call    bld_digits
+    add     Node_builder_host_len(%rbx), %rax
+    add     $BLD_SUBMIT_FIXED, %rax
+    add     %r14, %rax
+    mov     NodeApi_fork(%r12), %rcx        # the fork's name: its length, then its bytes
+    shl     $4, %rcx
+    ADDRESS %rbp, api_forks
+    add     %rcx, %rbp
+    movzbl  (%rbp), %ecx
+    add     %rcx, %rax
+    mov     %rax, S7(%rsp)
+    lea     (48 + 7)(%rax), %rdi
+    call    node_room
+    test    %rax, %rax
+    jz      8f
+    PART    %rcx, %rdx, %rbx, Node_api
+    mov     %r12, %rax
+    sub     %rcx, %rax
+    xor     %edx, %edx
+    mov     $NodeApi__mem, %ecx
+    div     %rcx
+    mov     %rax, %rsi
+    mov     $NODE_BUILDER_SUBMIT, %edi
+    call    node_builder_call
+    cmp     $-1, %rax
+    je      8f
+    mov     %rax, S8(%rsp)
+    inc     %rax
+    mov     %rax, (NodeApi_cursor + PUBLISH_CALL)(%r12)
+    movq    $NODE_PUBLISH_SUBMIT, NodeApi_member(%r12)
+    mov     S7(%rsp), %rsi
+    add     $(48 + 7), %rsi
+    and     $-8, %rsi
+    mov     $NODE_ACT_BUILDER, %edi
+    call    node_act
+    mov     S8(%rsp), %rcx
+    mov     %rcx, 16(%rax)
+    mov     (%rax), %rcx
+    sub     $24, %rcx
+    mov     %rcx, 24(%rax)
+    movq    $24, 32(%rax)
+    mov     S7(%rsp), %rcx
+    mov     %rcx, 40(%rax)
+    lea     48(%rax), %rdi
+    ADDRESS %rsi, bld_post_blinded
+    mov     $bld_post_blinded_len, %edx
+    call    bld_put
+    mov     %rax, %rdi
+    lea     Node_builder_host(%rbx), %rsi
+    mov     Node_builder_host_len(%rbx), %rdx
+    call    bld_put
+    mov     %rax, %rdi
+    ADDRESS %rsi, bld_submit_1
+    mov     $bld_submit_1_len, %edx
+    call    bld_put
+    mov     %rax, %rdi
+    lea     1(%rbp), %rsi
+    movzbl  (%rbp), %edx
+    call    bld_put
+    mov     %rax, %rdi
+    ADDRESS %rsi, bld_submit_2
+    mov     $bld_submit_2_len, %edx
+    call    bld_put
+    mov     %rax, %rdi
+    mov     %r14, %rsi
+    call    bld_dec
+    mov     %rax, %rdi
+    ADDRESS %rsi, bld_head_end
+    mov     $bld_head_end_len, %edx
+    call    bld_put
+    mov     %rax, %rdi
+    mov     8(%r13), %rsi
+    add     %r13, %rsi
+    mov     %r14, %rdx
+    call    bld_put
+    xor     %eax, %eax
+    LEAVE 16
+8:  mov     $500, %eax
+    LEAVE 16
+END_FUNCTION node_publish_submit
 
 # L2: on the way into NODE_PRODUCE_PAYLOAD of the produceBlockV3 entry rdi (node.md, Block
 # production), the event rsi of its PRODUCE_CHECK and the head's block_hash at rdx: with

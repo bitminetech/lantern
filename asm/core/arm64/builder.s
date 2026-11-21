@@ -52,6 +52,20 @@ bld_get_http_len = . - bld_get_http
 bld_get_end:
     .ascii  "\r\nAccept: application/json\r\nConnection: close\r\n\r\n"
 bld_get_end_len = . - bld_get_end
+bld_post_blinded:
+    .ascii  "POST /eth/v2/builder/blinded_blocks HTTP/1.1\r\nHost: "
+bld_post_blinded_len = . - bld_post_blinded
+bld_submit_1:
+    .ascii  "\r\nAccept: application/json\r\nConnection: close\r\nEth-Consensus-Version: "
+bld_submit_1_len = . - bld_submit_1
+bld_submit_2:
+    .ascii  "\r\nContent-Type: application/json\r\nContent-Length: "
+bld_submit_2_len = . - bld_submit_2
+/* The bytes of a submitBlindedBlockV2 request's head other than the host, the fork's name and Content-Length's digits. */
+.set BLD_SUBMIT_FIXED, 176
+.if bld_post_blinded_len + bld_submit_1_len + bld_submit_2_len + bld_head_end_len != BLD_SUBMIT_FIXED
+.error "the submitBlindedBlockV2 request's length is wrong"
+.endif
 bld_version:
     .ascii  "version"
 bld_data:
@@ -157,11 +171,12 @@ END_FUNCTION node_builder_call
  * L2: the NODE_EV_BUILDER x21 (node.md, the builder calls): a header call still awaited by its
  * produceBlockV3 entry ends there, the answer's bytes in a NODE_ACT_BYTES_PUT to a new id at
  * PRODUCE_BID when the call did not fail and the actions have room; then the call's entry goes
- * free. x19 the node, x24 the actions; x22 the call, x23 the failure bit, x25 the call's entry,
- * x26 the NodeApi entry.
+ * free; a submit call answers its publish entry. x19 the node, x23 scratch, x24 the actions;
+ * x22 the call, x23 then the failure bit, x25 the call's entry, x26 the NodeApi entry, x27 scratch.
  */
 LOCAL_FUNCTION node_builder_event
     ENTER 0
+    mov     x27, x23                        /* the step's scratch */
     ldr     x9, [x21, #16]
     and     x22, x9, #255
     ubfx    x23, x9, #8, #1
@@ -172,7 +187,7 @@ LOCAL_FUNCTION node_builder_event
     madd    x25, x22, x11, x10
     ldr     x9, [x25]                       /* a header call: to its entry, when that waits for it */
     cmp     x9, #NODE_BUILDER_HEADER
-    b.ne    8f
+    b.ne    20f
     ldr     x9, [x25, #8]
     PART    x10, x11, x19, Node_api
     cmp     x9, x11
@@ -197,9 +212,160 @@ LOCAL_FUNCTION node_builder_event
     add     x0, x21, #24
     bl      node_put
     str     x0, [x26, #(NodeApi_cursor + PRODUCE_BID)]
+    b       8f
+20: cmp     x9, #NODE_BUILDER_SUBMIT        /* a submit call: to its publish entry, when that waits for it */
+    b.ne    8f
+    ldr     x9, [x25, #8]
+    PART    x10, x11, x19, Node_api
+    cmp     x9, x11
+    b.hs    8f
+    mov     x12, #NodeApi__mem
+    madd    x26, x9, x12, x10
+    ldr     x9, [x26, #NodeApi_connection]
+    cbz     x9, 8f
+    ldr     x9, [x26, #NodeApi_op]
+    cmp     x9, #API_OP_PUBLISH_BLOCK_V2
+    b.ne    8f
+    ldr     x9, [x26, #(NodeApi_cursor + PUBLISH_CALL)]
+    add     x10, x22, #1
+    cmp     x9, x10
+    b.ne    8f
+    str     xzr, [x26, #(NodeApi_cursor + PUBLISH_CALL)]
+    str     xzr, [x25]
+    mov     x1, #500                        /* the builder's 202: 200; else 500 */
+    cbnz    x23, 22f
+    add     x0, x21, #24
+    mov     x1, x27
+    bl      bld_status
+    cmp     x0, #202
+    mov     x1, #500
+    mov     x9, #200
+    csel    x1, x9, x1, eq
+22: mov     x0, x26
+    bl      node_publish_answer
+    LEAVE 0
 8:  str     xzr, [x25]
 9:  LEAVE 0
 END_FUNCTION node_builder_event
+
+/*
+ * L2: x0 = the status of the HTTP answer in the ByteList x0 (lantern_http_parse_response with eof
+ * 1, its body at the end of the scratch x1), or 0 when it is none. Locals: L the HttpResponse
+ * (16), L+16 eof, L+24 the scratch size.
+ */
+LOCAL_FUNCTION bld_status
+    ENTER 32
+    mov     x20, x0
+    mov     x21, x1
+    ldr     x9, [x20, #16]                  /* the body: at most the answer's bytes */
+    add     x9, x9, #(24 + 7)
+    and     x9, x9, #~7
+    ldr     x10, [x21]
+    str     x10, [sp, #(L + 24)]
+    subs    x10, x10, x9
+    b.lo    8f
+    str     x10, [x21]
+    add     x2, x21, x10
+    mov     x11, #24
+    stp     x9, x11, [x2]
+    str     xzr, [x2, #16]
+    mov     x9, #1
+    str     x9, [sp, #(L + 16)]
+    mov     x0, x20
+    add     x1, sp, #(L + 16)
+    add     x3, sp, #L
+    bl      lantern_http_parse_response
+    ldr     x9, [sp, #(L + 24)]
+    str     x9, [x21]
+    cbnz    x0, 8f
+    ldr     x0, [sp, #L]
+    LEAVE 32
+8:  mov     x0, #0
+    LEAVE 32
+END_FUNCTION bld_status
+
+/*
+ * L2: (entry x0, JSON x1) -> x0: the submitBlindedBlockV2 call of the publishBlindedBlockV2 entry
+ * x0 (node.md, NODE_PUBLISH_SUBMIT), the block's JSON in the ByteList x1: 0 once it went, the
+ * entry in NODE_PUBLISH_SUBMIT with the call + 1 at PUBLISH_CALL; 500 with no builder, no free
+ * call or no room. x21 the entry, x22 the JSON, x25 its bytes, x26 the fork's name, x27 the
+ * request's bytes. Locals: L the call.
+ */
+LOCAL_FUNCTION node_publish_submit
+    ENTER 16
+    mov     x21, x0
+    mov     x22, x1
+    ldr     x9, [x19, #Node_flags]
+    tbz     x9, #11, 8f                     /* NODE_FLAG_BUILDER */
+    ldr     x25, [x22, #16]
+    mov     x0, x25
+    bl      bld_digits
+    LDQ     x9, x19, Node_builder_host_len
+    add     x27, x0, x9
+    add     x27, x27, #BLD_SUBMIT_FIXED
+    add     x27, x27, x25
+    ldr     x9, [x21, #NodeApi_fork]        /* the fork's name: its length, then its bytes */
+    ADDRESS x26, api_forks
+    add     x26, x26, x9, lsl #4
+    ldrb    w9, [x26]
+    add     x27, x27, x9
+    add     x0, x27, #(48 + 7)
+    bl      node_room
+    cbz     x0, 8f
+    PART    x9, x10, x19, Node_api
+    sub     x1, x21, x9
+    mov     x10, #NodeApi__mem
+    udiv    x1, x1, x10
+    mov     x0, #NODE_BUILDER_SUBMIT
+    bl      node_builder_call
+    cmn     x0, #1
+    b.eq    8f
+    str     x0, [sp, #L]
+    add     x9, x0, #1
+    str     x9, [x21, #(NodeApi_cursor + PUBLISH_CALL)]
+    mov     x9, #NODE_PUBLISH_SUBMIT
+    str     x9, [x21, #NodeApi_member]
+    add     x1, x27, #(48 + 7)
+    and     x1, x1, #~7
+    mov     x0, #NODE_ACT_BUILDER
+    bl      node_act
+    ldr     x9, [sp, #L]
+    str     x9, [x0, #16]
+    ldr     x9, [x0]
+    sub     x9, x9, #24
+    mov     x10, #24
+    stp     x9, x10, [x0, #24]
+    str     x27, [x0, #40]
+    add     x0, x0, #48
+    ADDRESS x1, bld_post_blinded
+    mov     x2, #bld_post_blinded_len
+    bl      bld_put
+    ADDQ    x1, x19, Node_builder_host
+    LDQ     x2, x19, Node_builder_host_len
+    bl      bld_put
+    ADDRESS x1, bld_submit_1
+    mov     x2, #bld_submit_1_len
+    bl      bld_put
+    add     x1, x26, #1
+    ldrb    w2, [x26]
+    bl      bld_put
+    ADDRESS x1, bld_submit_2
+    mov     x2, #bld_submit_2_len
+    bl      bld_put
+    mov     x1, x25
+    bl      bld_dec
+    ADDRESS x1, bld_head_end
+    mov     x2, #bld_head_end_len
+    bl      bld_put
+    ldr     x9, [x22, #8]
+    add     x1, x22, x9
+    mov     x2, x25
+    bl      bld_put
+    mov     x0, #0
+    LEAVE 16
+8:  mov     x0, #500
+    LEAVE 16
+END_FUNCTION node_publish_submit
 
 /*
  * L2: on the way into NODE_PRODUCE_PAYLOAD of the produceBlockV3 entry x0 (node.md, Block

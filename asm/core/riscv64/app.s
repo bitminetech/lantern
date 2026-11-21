@@ -1565,7 +1565,15 @@ LOCAL_FUNCTION app_work
     bne     s8, t0, 1f
 16: beqz    s6, 1f
     ld      t1, 16(s6)
-    addi    t1, t1, NodeEvent_chunk + 7
+    li      t0, NODE_WORK_PUBLISH_CHECK     # a blinded block's check: room for its JSON and a cursor
+    bne     s8, t0, 161f
+    LDQ     t0, s2, NodeAction_arg
+    andi    t0, t0, 256
+    beqz    t0, 161f
+    slli    t1, t1, 2
+    li      t0, (4096 + JSON_CURSOR_SIZE + 24)
+    add     t1, t1, t0
+161: addi   t1, t1, NodeEvent_chunk + 7
     andi    t1, t1, -8
 15: LDQ     t0, s1, (APP_WORK_EVENT + 8)
     bgeu    t0, t1, 1f

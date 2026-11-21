@@ -718,6 +718,10 @@
 .set NODE_BUILDER_CALL_SIZE, 24
 .set NODE_BUILDER_REGISTER, 1          /* registerValidator: POST /eth/v1/builder/validators */
 .set NODE_BUILDER_HEADER, 2            /* getHeader: GET /eth/v1/builder/header/<slot>/<parent_hash>/<pubkey> */
+.set NODE_BUILDER_SUBMIT, 3            /* submitBlindedBlockV2: POST /eth/v2/builder/blinded_blocks */
+.set GOSSIP_BLINDED_BLOCK, 64          /* lantern_node_gossip: publishBlindedBlockV2's checks, no gossip topic */
+.set PUBLISH_BLINDED, 64               /* the cursor of a publish entry: 1 for a blinded block */
+.set PUBLISH_CALL, 72                  /* its NODE_BUILDER_SUBMIT call + 1 while in flight, else 0 */
 .set DOMAIN_APPLICATION_BUILDER, 0x01000000  /* builder-specs bellatrix builder.md: DomainType('0x00000001'), its bytes as a little endian u32 */
 .set BUILDER_PROPOSAL_DELAY_TOLERANCE_MS, 1000  /* builder-specs bellatrix validator.md: 1 second */
 .set BUILDER_FALLBACK_SKIPS, 3         /* the liveness failsafe (beacon-api.md, produceBlockV3): Lighthouse v8.3.3's defaults */
@@ -1021,6 +1025,7 @@
 .set NODE_PUBLISH_SIDECARS, 2
 .set NODE_PUBLISH_CHECK, 3
 .set NODE_PUBLISH_IMPORT, 4
+.set NODE_PUBLISH_SUBMIT, 5            /* a blinded block: its submitBlindedBlockV2 call in flight */
 .set PUB_BLOB_BYTES, FIELD_ELEMENTS_PER_BLOB * BYTES_PER_FIELD_ELEMENT    /* a Blob */
 .set PUB_CELL_BYTES, FIELD_ELEMENTS_PER_CELL * BYTES_PER_FIELD_ELEMENT    /* a Cell */
 .set PUB_HEADER_BYTES, 208             /* a SignedBeaconBlockHeader */

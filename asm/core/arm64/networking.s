@@ -1982,7 +1982,8 @@ SPEC_END validate_attester_slashing_gossip
  * Locals: L blob parameters (16), L+16 expected proposer, L+24 epoch, L+32 time, L+40 parent payload status,
  * L+48 a predicate, L+56 bellatrix: the justified checkpoint state.
  */
-SPEC_FUNCTION validate_beacon_block_gossip
+.macro BEACON_BLOCK_GOSSIP name, blinded, msg, sig, type, payload, timestamp, commitments
+SPEC_FUNCTION \name
     ENTER 64
     mov     x19, x0
     mov     x20, x1
@@ -2004,7 +2005,7 @@ SPEC_FUNCTION validate_beacon_block_gossip
 .else
     NEED_SCRATCH x25, x24, 2, 9f            /* get_beacon_proposer_index of the proposer state takes S(2) */
 .endif
-    PART    x27, x9, x21, SignedBeaconBlock_message
+    PART    x27, x9, x21, \msg
     mov     x0, x19                         /* [IGNORE] the first block for (slot, proposer) */
     mov     x1, #SEEN_PROPOSER_SLOT
     ldr     x2, [x27, #BeaconBlock_slot]
@@ -2036,12 +2037,14 @@ SPEC_FUNCTION validate_beacon_block_gossip
     b       4f
 .elseif FORK == FORK_BELLATRIX
     str     x2, [sp, #(L + 40)]
+.if \blinded == 0
     ldr     x0, [sp, #(L + 56)]             /* no post-state: is_execution_enabled(justified checkpoint state, block.body) */
     PART    x1, x9, x27, BeaconBlock_body
     add     x2, sp, #(L + 48)
     bl      lantern_is_execution_enabled
     ldr     x9, [sp, #(L + 48)]
     cbz     x9, 5f                          /* [REJECT] the parent failed validation, execution not enabled */
+.endif
     ldr     x2, [sp, #(L + 40)]
     cmp     x2, #PAYLOAD_STATUS_NOT_VALIDATED   /* [REJECT] with an optimistic payload, else [IGNORE] */
     b.eq    5f
@@ -2062,15 +2065,15 @@ SPEC_FUNCTION validate_beacon_block_gossip
     mov     w1, #DOMAIN_BEACON_PROPOSER
     ldr     x2, [x27, #BeaconBlock_slot]
     lsr     x2, x2, #LOG2_SLOTS_PER_EPOCH
-    ADDRESS x3, lantern_type_BeaconBlock
+    ADDRESS x3, \type
     mov     x4, x27
     add     x5, x10, #Validator_pubkey
-    add     x6, x21, #SignedBeaconBlock_signature
+    add     x6, x21, #\sig
     mov     x7, x25
     bl      verify_signed
     cbnz    x0, 7f
     cbz     x1, 5f
-.if FORK == FORK_BELLATRIX
+.if FORK == FORK_BELLATRIX && \blinded == 0
     mov     x0, x23                         /* if is_execution_enabled(state, block.body): */
     PART    x1, x9, x27, BeaconBlock_body
     add     x2, sp, #(L + 48)
@@ -2086,8 +2089,8 @@ SPEC_FUNCTION validate_beacon_block_gossip
     bl      lantern_compute_time_at_slot
     CHECK_STATUS x26, 7f, 8f
     PART    x9, x10, x27, BeaconBlock_body
-    PART    x11, x10, x9, BeaconBlockBody_execution_payload
-    ldr     x11, [x11, #ExecutionPayload_timestamp]
+    PART    x11, x10, x9, \payload
+    ldr     x11, [x11, #\timestamp]
     ldr     x12, [sp, #(L + 32)]
     cmp     x11, x12
     b.ne    5f
@@ -2124,7 +2127,7 @@ SPEC_FUNCTION validate_beacon_block_gossip
 .endif
 .if FORK >= FORK_DENEB
     PART    x9, x10, x27, BeaconBlock_body
-    LDQ     x10, x9, BeaconBlockBody_blob_kzg_commitments + 8
+    LDQ     x10, x9, \commitments + 8
     cmp     x10, x11
     b.hi    5f
 .endif
@@ -2159,7 +2162,28 @@ SPEC_FUNCTION validate_beacon_block_gossip
 7:  LEAVE 64
 9:  mov     x0, #LANTERN_BUFFER_TOO_SMALL
     LEAVE 64
-SPEC_END validate_beacon_block_gossip
+SPEC_END \name
+.endm
+
+BEACON_BLOCK_GOSSIP validate_beacon_block_gossip, 0, SignedBeaconBlock_message, SignedBeaconBlock_signature, lantern_type_BeaconBlock, BeaconBlockBody_execution_payload, ExecutionPayload_timestamp, BeaconBlockBody_blob_kzg_commitments
+
+/*
+ * The same checks of a SignedBlindedBeaconBlock (networking.md, lantern_validate_blinded_block_gossip):
+ * its header's timestamp, its commitments, the root of its BlindedBeaconBlock; execution is enabled.
+ */
+.if FORK >= FORK_BELLATRIX
+.if (SignedBlindedBeaconBlock_message != SignedBeaconBlock_message) || (BlindedBeaconBlock_slot != BeaconBlock_slot) || (BlindedBeaconBlock_proposer_index != BeaconBlock_proposer_index) || (BlindedBeaconBlock_parent_root != BeaconBlock_parent_root) || (BlindedBeaconBlock_body != BeaconBlock_body)
+.error "the blinded block's fields are not those of the block"
+.endif
+BEACON_BLOCK_GOSSIP validate_blinded_block_gossip, 1, SignedBlindedBeaconBlock_message, SignedBlindedBeaconBlock_signature, lantern_type_BlindedBeaconBlock, BlindedBeaconBlockBody_execution_payload_header, ExecutionPayloadHeader_timestamp, BlindedBeaconBlockBody_blob_kzg_commitments
+.else
+/* Before bellatrix: no blinded block. */
+SPEC_FUNCTION validate_blinded_block_gossip
+    FRAME 0
+    mov     x0, #LANTERN_INVALID_EVENT
+    UNFRAME 0
+SPEC_END validate_blinded_block_gossip
+.endif
 
 /* ---------------------------------------------------------------- Columns */
 

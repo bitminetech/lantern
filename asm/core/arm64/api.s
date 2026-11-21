@@ -3306,6 +3306,8 @@ LOCAL_FUNCTION node_api_event
     b.eq    60f
     cmp     x3, #API_OP_PUBLISH_BLOCK_V2
     b.eq    545f
+    cmp     x3, #API_OP_PUBLISH_BLINDED_BLOCK_V2
+    b.eq    545f
     mov     x0, x3
     bl      node_submit_topic
     cbnz    x0, 60f
@@ -3641,7 +3643,7 @@ LOCAL_FUNCTION node_api_event
     mov     x2, x0
     cbnz    x0, 80f
     b       90f
-545: mov    x2, #503                        /* publishBlockV2: 503 while syncing; a work decodes its body */
+545: mov    x2, #503                        /* publishBlockV2 and publishBlindedBlockV2: 503 while syncing; a work decodes its body */
     ldr     x9, [x26, #ApiView_is_syncing]
     cbnz    x9, 80f
     mov     x0, x27
@@ -6070,6 +6072,13 @@ LOCAL_FUNCTION node_api_publish
     cmp     x9, #API_TYPE_SSZ
     cset    x10, ne
     str     x10, [x21, #(NodeApi_cursor + 24)]
+    ldr     x9, [x25, #ApiRoute_op]         /* publishBlindedBlockV2 from bellatrix: a blinded block */
+    cmp     x9, #API_OP_PUBLISH_BLINDED_BLOCK_V2
+    cset    x9, eq
+    ldr     x10, [x25, #ApiRoute_consensus_version]
+    cmp     x10, #FORK_BELLATRIX
+    csel    x9, xzr, x9, lo
+    str     x9, [x21, #(NodeApi_cursor + PUBLISH_BLINDED)]
     add     x0, sp, #L
     bl      node_put
     str     x0, [x21, #NodeApi_data]
@@ -6082,6 +6091,8 @@ LOCAL_FUNCTION node_api_publish
     ldr     x9, [x21, #(NodeApi_cursor + 24)]
     eor     x9, x9, #1
     orr     x5, x5, x9, lsl #8
+    ldr     x9, [x21, #(NodeApi_cursor + PUBLISH_BLINDED)]
+    orr     x5, x5, x9, lsl #9
     bl      node_work
     mov     x0, #0
     LEAVE 32
@@ -6165,7 +6176,9 @@ LOCAL_FUNCTION node_publish_done
     cmp     x9, #NODE_BLOCK_INVALID
     mov     x1, #200
     b.ne    90f
-11: ldr     x9, [x22, #(NodeApi_cursor + 16)]   /* with blobs: the sidecars, else the check */
+11: ldr     x9, [x22, #(NodeApi_cursor + PUBLISH_BLINDED)]   /* a blinded block: no sidecars */
+    cbnz    x9, 30f
+    ldr     x9, [x22, #(NodeApi_cursor + 16)]   /* with blobs: the sidecars, else the check */
     cbz     x9, 30f
     mov     x0, x22
     bl      node_publish_sidecars_work
@@ -6180,7 +6193,15 @@ LOCAL_FUNCTION node_publish_done
     LEAVE 16
 22: cmp     x26, #NODE_WORK_PUBLISH_CHECK
     b.ne    99f
-    bl      node_new_block                  /* CHECK: the block's NodeBlock, before the publish */
+    ldr     x9, [x22, #(NodeApi_cursor + PUBLISH_BLINDED)]   /* a blinded block: to the builder */
+    cbz     x9, 25f
+    mov     x0, x22
+    mov     x1, x27
+    bl      node_publish_submit
+    cbz     x0, 99f
+    mov     x1, x0
+    b       90f
+25: bl      node_new_block                  /* CHECK: the block's NodeBlock, before the publish */
     str     x0, [sp, #L]
     add     x0, x1, #NodeBlock_root
     add     x9, x22, #NodeApi_root
@@ -6492,6 +6513,8 @@ LOCAL_FUNCTION node_publish_check_work
     ldr     x2, [x21, #NodeApi_filter_index]
     ldr     x3, [x21, #NodeApi_filter_slot]
     ldr     x5, [x21, #NodeApi_cursor]
+    ldr     x9, [x21, #(NodeApi_cursor + PUBLISH_BLINDED)]   /* a blinded block's check */
+    orr     x5, x5, x9, lsl #8
     bl      node_work
     str     x26, [x0, #NodeAction_state_c]
     mov     x0, #NODE_ACT_STATE_FREE
@@ -6526,10 +6549,20 @@ LOCAL_FUNCTION node_publish_drop
 2:  UNFRAME 16
 END_FUNCTION node_publish_drop
 
-/* L1: the end of the publishBlockV2 entry x0, its ids with it. Locals: the entry. */
+/* L1: the end of the publishBlockV2 entry x0, its ids with it; its builder call in flight answers no entry. Locals: the entry. */
 LOCAL_FUNCTION node_publish_end
     FRAME 16
     str     x0, [sp, #16]
+    ldr     x9, [x0, #(NodeApi_cursor + PUBLISH_CALL)]
+    str     xzr, [x0, #(NodeApi_cursor + PUBLISH_CALL)]
+    cbz     x9, 1f
+    sub     x9, x9, #1
+    ADDQ    x10, x19, Node_builder_calls
+    mov     x11, #NODE_BUILDER_CALL_SIZE
+    madd    x10, x9, x11, x10
+    mov     x11, #-1
+    str     x11, [x10, #8]
+1:  ldr     x0, [sp, #16]
     bl      node_publish_drop
     ldr     x0, [sp, #16]
     ldr     x1, [x0, #NodeApi_filter_slot]

@@ -1473,7 +1473,14 @@ LOCAL_FUNCTION app_work
     b.ne    1f
 16: cbz     x24, 1f
     ldr     x10, [x24, #16]
-    add     x10, x10, #(NodeEvent_chunk + 7)
+    cmp     x26, #NODE_WORK_PUBLISH_CHECK   /* a blinded block's check: room for its JSON and a cursor */
+    b.ne    161f
+    ldr     x9, [x20, #NodeAction_arg]
+    tbz     x9, #8, 161f
+    lsl     x10, x10, #2
+    MOVQ    x9, 4096 + JSON_CURSOR_SIZE + 24
+    add     x10, x10, x9
+161: add    x10, x10, #(NodeEvent_chunk + 7)
     and     x10, x10, #~7
 15: ldr     x9, [x19, #(APP_WORK_EVENT + 8)]
     cmp     x9, x10
