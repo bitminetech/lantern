@@ -25,6 +25,7 @@ import json
 import os
 import pathlib
 import re
+import struct
 
 from p2p import FORKS, U64, module, run
 from reqresp import message_types
@@ -924,12 +925,15 @@ def produce_cases(fork, preset):
         body.sync_aggregate = aggregate
         return reqs
 
-    def build(full, skip, epoch0=None, recent=False):
+    def build(full, skip, epoch0=None, recent=False, eth1=None):
         if epoch0 is None:
             epoch0 = int(spec.config.SHARD_COMMITTEE_PERIOD) + ANCHOR_EPOCH if full else ANCHOR_EPOCH
         extra = 2 * int(spec.SLOTS_PER_EPOCH) if full else 0  # committees of two and more
         state, anchor_block = (payload_anchor(spec, fork, epoch0, extra, recent) if merged
                                else anchor(spec, fork, statuses=True, epoch=epoch0, extra=extra, recent=recent))
+        if eth1:  # the deposit bridge's state, then the anchor block of that state
+            eth1["prep"](state)
+            anchor_block = spec.BeaconBlock(slot=anchor_block.slot, body=anchor_block.body, state_root=spec.hash_tree_root(state))
         slot, st = state.slot, None
         while st is None or st.validators[proposer].slashed:  # the first slot after the anchor's of a proposer not slashed
             slot += 1
@@ -944,6 +948,8 @@ def produce_cases(fork, preset):
         if f >= FORKS.index("altair"):
             body.sync_aggregate = spec.SyncAggregate(sync_committee_signature=spec.G2_POINT_AT_INFINITY)
         reqs = pool_of(st, state, anchor_block, slot, proposer, body) if full else []
+        if eth1:  # the vote and the deposits of the follower's chain
+            eth1["body"](st, body)
         result = None
         if merged:
             class Engine:
@@ -1054,6 +1060,8 @@ def produce_cases(fork, preset):
         }
     if merged:
         yield from builder_produce_cases(spec, fork, build, graffiti, block_value)
+    if f < FORKS.index("fulu"):  # fulu deprecates get_eth1_vote
+        yield from eth1_produce_cases(spec, fork, build, graffiti, block_value)
     # publishBlockV2: an anchor at epoch 0, so that on_block's shuffling dependent root is a block of the store
     made = run(spec, schedule(fork), lambda: build(False, False, 0))
     if made is None:
@@ -1061,6 +1069,131 @@ def produce_cases(fork, preset):
     state, anchor_block, slot, _, block = made[:5]
     yield from publish_cases(spec, fork, state, anchor_block, block,
                              int(state.genesis_time) * 1000 + int(slot) * int(spec.config.SLOT_DURATION_MS))
+
+
+def eth1_produce_cases(spec, fork, build, graffiti, block_value):
+    """node-produce with the eth1 follower (node.md, the eth1 follower; phase0 and electra
+    validator.md): the runner is the node's execution engine for eth_getBlockByNumber and eth_getLogs,
+    with NODE_FLAG_ETH1, over a chain of 3 * ETH1_FOLLOW_DISTANCE + 1 blocks SECONDS_PER_ETH1_BLOCK
+    apart, the last at the voting period's start; 8 deposits in blocks 1 to 8 and 4 in blocks F + 2
+    to F + 5. The anchor's eth1_data is that of block 8, its eth1_deposit_index 5 (from electra
+    deposit_requests_start_index unset). eth1_vote: no votes, the vote is the last candidate's and
+    the deposits 5 to 7 prove against the anchor's eth1_data. eth1_majority: half the period's votes
+    for block F + 3 and 2 for block F + 5: its vote wins the majority, and the deposits 5 to 9 prove
+    against its data. The answer of the spec's get_eth1_vote with eth1_chain the blocks up to the
+    follow head, get_eth1_data of a block its deposit root, count and hash."""
+    import eth1 as eth1mod
+    import json_codec
+    import reqresp
+    f = FORKS.index(fork)
+    merged = f >= FORKS.index("bellatrix")
+    capella = f >= FORKS.index("capella")
+    to_json = json_codec.to_json
+    S, F = int(spec.config.SECONDS_PER_ETH1_BLOCK), int(spec.config.ETH1_FOLLOW_DISTANCE)
+    period = int(spec.EPOCHS_PER_ETH1_VOTING_PERIOD) * int(spec.SLOTS_PER_EPOCH)
+    depth = int(spec.DEPOSIT_CONTRACT_TREE_DEPTH)
+    datas = []
+    for k in range(12):
+        pk, wc, _, sig = eth1mod.deposit(5000 + k)
+        datas.append(spec.DepositData(pubkey=spec.BLSPubkey(pk), withdrawal_credentials=spec.Bytes32(wc),
+                                      amount=spec.Gwei(32_000_000_000), signature=spec.BLSSignature(sig)))
+    leaves = [bytes(spec.hash_tree_root(d)) for d in datas]
+    dep_block = list(range(1, 9)) + [F + 2, F + 3, F + 4, F + 5]  # the block of each deposit
+
+    def root_at(n):
+        return spec.hash_tree_root(spec.DepositDataList(data=datas[:n]))
+
+    for name, majority in (("eth1_vote", False), ("eth1_majority", True)):
+        made_chain = {}
+
+        def chain_of(st):
+            """The eth1 chain of the period of the state's slot: number, timestamp, hash, deposit count and root."""
+            slot = int(st.slot)
+            start = (int(st.genesis_time) * 1000 + (slot - slot % period) * int(spec.config.SLOT_DURATION_MS)) // 1000
+            t0 = start - 3 * S * F
+            blocks = []
+            for b in range(3 * F + 1):
+                n = sum(1 for x in dep_block if x <= b)
+                blocks.append((b, t0 + b * S, eth1mod.made("eth1", b), n, bytes(root_at(n))))
+            return blocks
+
+        def data_of(blk):
+            return spec.Eth1Data(deposit_root=spec.Root(blk[4]), deposit_count=blk[3], block_hash=spec.Hash32(blk[2]))
+
+        def prep(state, majority=majority):
+            chain = chain_of(state)
+            made_chain["chain"] = chain
+            state.eth1_data = data_of(chain[8])
+            state.eth1_deposit_index = 5
+            if f >= FORKS.index("electra"):
+                state.deposit_requests_start_index = spec.UNSET_DEPOSIT_REQUESTS_START_INDEX
+            if majority:
+                for _ in range(period // 2):
+                    state.eth1_data_votes.append(data_of(chain[F + 3]))
+                for _ in range(2):
+                    state.eth1_data_votes.append(data_of(chain[F + 5]))
+
+        def body_of(st, body):
+            chain = made_chain["chain"]
+            follow = 3 * F - F  # the follow head: the head less ETH1_FOLLOW_DISTANCE
+
+            class Block:
+                def __init__(self, blk):
+                    self.number, self.timestamp, self.hash, self.deposit_count, self.deposit_root = blk
+            seen = [Block(b) for b in chain[:follow + 1]]
+            old = spec.get_eth1_data
+            spec.get_eth1_data = lambda b: spec.Eth1Data(deposit_root=spec.Root(b.deposit_root), deposit_count=b.deposit_count,
+                                                         block_hash=spec.Hash32(b.hash))
+            try:
+                vote = spec.get_eth1_vote(st, seen)
+            finally:
+                spec.get_eth1_data = old
+            body.eth1_data = vote
+            after = vote if (list(st.eth1_data_votes).count(vote) + 1) * 2 > period else st.eth1_data
+            count = int(after.deposit_count)
+            n = min(int(spec.MAX_DEPOSITS), count - int(st.eth1_deposit_index))
+            deps = []
+            for i in range(int(st.eth1_deposit_index), int(st.eth1_deposit_index) + n):
+                proof = eth1mod.proof_of(leaves[:count], i, depth)
+                if not spec.is_valid_merkle_branch(spec.hash_tree_root(datas[i]), [spec.Bytes32(p) for p in proof], depth + 1, i, after.deposit_root):
+                    raise AssertionError("node-produce eth1: a proof the spec does not take")
+                deps.append(spec.Deposit(proof=spec.DepositProof(data=[spec.Bytes32(p) for p in proof]), data=datas[i]))
+            body.deposits = type(body.deposits)(data=deps)
+
+        made = run(spec, schedule(fork), lambda: build(False, False, eth1={"prep": prep, "body": body_of}))
+        if made is None:
+            raise RuntimeError(f"node-produce {fork} {name}: the spec refuses the block")
+        state, anchor_block, slot, reveal, block, result, gwei, _, _, _ = made
+        slot_ms = int(spec.config.SLOT_DURATION_MS)
+        time_ms = int(state.genesis_time) * 1000 + int(slot) * slot_ms
+        payload_value = block_value if capella else 0
+        wei = b"%d" % gwei + (b"000000000" if gwei else b"")
+        if f >= FORKS.index("deneb"):
+            data_json = to_json(reqresp.produce_types(spec, fork)["BlockContents"](block=block)).encode()
+        else:
+            data_json = to_json(block).encode()
+        head = (b"Eth-Consensus-Version: " + fork.encode() + b"\r\nEth-Execution-Payload-Blinded: false\r\n"
+                b"Eth-Execution-Payload-Value: %d\r\nEth-Consensus-Block-Value: %s\r\n" % (payload_value, wei))
+        body = (b'{"version":"' + fork.encode() + b'","execution_payload_blinded":false,"execution_payload_value":"%d",'
+                b'"consensus_block_value":"%s","data":' % (payload_value, wei) + data_json + b"}")
+        answer = (b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n" + head + b"Content-Length: %d\r\n\r\n" % len(body) + body)
+        path = b"/eth/v3/validator/blocks/%d?randao_reveal=0x%s&graffiti=0x%s" % (int(slot), bytes(reveal).hex().encode(), graffiti.hex().encode())
+        chain = made_chain["chain"]
+        yield "produce", name, {
+            "anchor_state": bytes(state.encode_bytes()),
+            "anchor_block": bytes(anchor_block.encode_bytes()),
+            "time_ms": time_ms,
+            "ticks": [time_ms],
+            "requests": [b"GET " + path + b" HTTP/1.1\r\nHost: lantern\r\n\r\n"],
+            "responses": [answer],
+            "payload_id": bytes(range(1, 9)) if merged else b"",
+            "result": result.encode() if result is not None else b"",
+            "closes": 0,
+            "eth1": 1,
+            "eth1_blocks": b"".join(struct.pack("<QQ", b[0], b[1]) + b[2] for b in chain),
+            "eth1_deposits": b"".join(struct.pack("<QQ", dep_block[k], k) + bytes(datas[k].encode_bytes()) for k in range(12)),
+            "eth1_contract": bytes(spec.config.DEPOSIT_CONTRACT_ADDRESS),
+        }
 
 
 BUILDER_CLOSES = 40  # more steps than a produceBlockV3 with a builder's bid takes

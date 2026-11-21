@@ -567,7 +567,22 @@ LOCAL_FUNCTION jresult
 4:  test    %r14, %r14
     jz      9f
     LEAVE 0
-5:  cmp     $ENGINE_METHOD_GET_PAYLOAD, %r12
+5:  cmp     $ENGINE_METHOD_ETH_BLOCK, %r12  # the eth_ methods: any value, its bytes kept
+    je      51f
+    cmp     $ENGINE_METHOD_ETH_LOGS, %r12
+    jne     52f
+51: mov     %rdi, %rax
+    sub     %r15, %rax
+    mov     %rax, EngineResponse_result_offset(%rbp)
+    call    jskip
+    test    %rdi, %rdi
+    jz      9f
+    mov     %rdi, %rax
+    sub     %r15, %rax
+    sub     EngineResponse_result_offset(%rbp), %rax
+    mov     %rax, EngineResponse_result_length(%rbp)
+    LEAVE 0
+52: cmp     $ENGINE_METHOD_GET_PAYLOAD, %r12
     jne     17f
     cmp     %rbx, %rdi                      # getPayload: an object, its bytes kept
     jae     9f

@@ -89,6 +89,8 @@ FUNCTION lantern_node_size
     NODE_SIZE_ADD api_streams, NodeApi__mem
     NODE_SIZE_ADD pool, NodePool__mem
     NODE_SIZE_ADD proposers, NodeProposer__mem
+    NODE_SIZE_ADD eth1_blocks, Eth1Block__mem
+    NODE_SIZE_ADD eth1_deposits, Eth1Deposit__mem + 32 + Eth1Count__mem   # the deposits, their leaves and counts
     mov     NodeRoom_p2p_out(%rdi), %rax    # a ByteList
     add     $(24 + 7), %rax
     jc      9f
@@ -180,6 +182,11 @@ LOCAL_FUNCTION node_layout
     mov     NodeRoom_db_roots(%rsi), %rdx
     lea     DB_FIXED(%rcx,%rdx,8), %rcx
     mov     %rcx, (%rdi,%rax)
+    add     %rcx, %rax
+    NODE_PART eth1_blocks, eth1_blocks, Eth1Block__mem
+    NODE_PART eth1_deposits, eth1_deposits, Eth1Deposit__mem
+    NODE_PART eth1_leaves, eth1_deposits, 32
+    NODE_PART eth1_counts, eth1_deposits, Eth1Count__mem
     ret
 END_FUNCTION node_layout
 
@@ -390,6 +397,9 @@ FUNCTION lantern_node_copy
     NODE_COPY_ROOM api_streams, Node_api
     NODE_COPY_ROOM pool, Node_pool
     NODE_COPY_ROOM proposers, Node_proposers
+    NODE_COPY_ROOM eth1_blocks, Node_eth1_blocks
+    NODE_COPY_ROOM eth1_deposits, Node_eth1_deposits
+    NODE_COPY_ROOM eth1_deposits, Node_eth1_counts
     mov     Node_p2p_out(%rbx), %rax        # the queued bytes fit
     mov     16(%rbx,%rax), %rax
     cmp     %rax, NodeRoom_p2p_out(%rbp)
@@ -428,6 +438,10 @@ FUNCTION lantern_node_copy
     NODE_COPY_PART Node_api, NodeApi__mem
     NODE_COPY_PART Node_pool, NodePool__mem
     NODE_COPY_PART Node_proposers, NodeProposer__mem
+    NODE_COPY_PART Node_eth1_blocks, Eth1Block__mem
+    NODE_COPY_PART Node_eth1_deposits, Eth1Deposit__mem
+    NODE_COPY_PART Node_eth1_leaves, 32
+    NODE_COPY_PART Node_eth1_counts, Eth1Count__mem
     mov     Node_p2p_out(%rbx), %rsi        # the queued bytes
     add     %rbx, %rsi
     mov     16(%rsi), %rdx
@@ -1352,12 +1366,12 @@ LOCAL_FUNCTION node_engine_next
     test    %rax, %rax
     jnz     9f
     testq   $NODE_FLAG_FCU, Node_flags(%rbx)
-    jz      9f
+    jz      50f
     mov     S7(%rsp), %rdi
     lea     Node_config(%rbx), %rsi
     call    node_fork
     cmp     $FORK_BELLATRIX, %rax
-    jb      9f
+    jb      50f
     andq    $~NODE_FLAG_FCU, Node_flags(%rbx)
     movq    $ENGINE_METHOD_FORKCHOICE_UPDATED, Node_engine_method(%rbx)
     movq    $0, Node_engine_target(%rbx)
@@ -1369,6 +1383,8 @@ LOCAL_FUNCTION node_engine_next
     xor     %ecx, %ecx
     xor     %r8d, %r8d
     call    node_work
+    LEAVE 0
+50: call    node_eth1_next                  # then the eth1 follower's call
 9:  LEAVE 0
 END_FUNCTION node_engine_next
 
@@ -1598,7 +1614,16 @@ END_FUNCTION node_prepare_go
  */
 LOCAL_FUNCTION node_engine_failed
     ENTER 0
-    mov     %rbp, %rdi
+    mov     Node_engine_method(%rbx), %rax  # an eth1 call: the follower waits for the next head poll
+    cmp     $ENGINE_METHOD_ETH_BLOCK, %rax
+    je      10f
+    cmp     $ENGINE_METHOD_ETH_LOGS, %rax
+    jne     11f
+10: movq    $0, Node_engine_method(%rbx)
+    mov     Node_time_ms(%rbx), %rax
+    mov     %rax, Node_eth1_head_ms(%rbx)
+    LEAVE 0
+11: mov     %rbp, %rdi
     call    node_store_slot
     inc     %rax
     mov     %rax, Node_engine_wait(%rbx)
@@ -1856,7 +1881,18 @@ LOCAL_FUNCTION node_engine_read
     mov     %r12, %rdi
     mov     (L + 8)(%rsp), %rsi
     call    node_engine_consume
-    cmp     $ENGINE_METHOD_GET_PAYLOAD, %r13  # engine_getPayload: its result, decoded with the body still in scratch
+    cmp     $ENGINE_METHOD_ETH_BLOCK, %r13  # the eth1 follower's calls: their result, with the body still in scratch
+    je      43f
+    cmp     $ENGINE_METHOD_ETH_LOGS, %r13
+    jne     45f
+43: mov     S8(%rsp), %rdi
+    lea     (L + 32)(%rsp), %rsi
+    call    node_eth1_answer
+    mov     S7(%rsp), %rax
+    mov     %rax, (%r14)
+    movq    $0, Node_engine_method(%rbx)
+    jmp     9f
+45: cmp     $ENGINE_METHOD_GET_PAYLOAD, %r13  # engine_getPayload: its result, decoded with the body still in scratch
     jne     44f
     mov     S8(%rsp), %rdi
     lea     (L + 32)(%rsp), %rsi
@@ -4566,11 +4602,23 @@ LOCAL_FUNCTION node_event
     cmp     $NODE_WORK_PRODUCE_BLOCK, %rax
     je      708f
     cmp     $NODE_WORK_PRODUCE_BID, %rax
+    je      708f
+    cmp     $NODE_WORK_PRODUCE_ETH1, %rax
     jne     709f
 708: mov    %r12, %rdi
     call    node_produce_done
     LEAVE 48
-709: lea    -NODE_WORK_PUBLISH_DECODE(%rax), %rcx    # the works of block publishing: their entry goes on
+709: cmp    $NODE_WORK_ETH1_CHECK, %rax     # ETH1_CHECK: the follower runs while the bridge is open
+    jne     7091f
+    mov     $2, %ecx
+    mov     $1, %edx
+    cmpq    $0, NodeEvent_index(%r12)
+    cmovne  %rdx, %rcx
+    mov     %rcx, Node_eth1_state(%rbx)
+    mov     NodeEvent_checkpoint(%r12), %rcx
+    mov     %rcx, Node_eth1_deposit_index(%rbx)
+    LEAVE 48
+7091: lea   -NODE_WORK_PUBLISH_DECODE(%rax), %rcx    # the works of block publishing: their entry goes on
     cmp     $(NODE_WORK_PUBLISH_SIDECAR - NODE_WORK_PUBLISH_DECODE), %rcx
     ja      70f
     mov     %r12, %rdi
@@ -8815,7 +8863,14 @@ FUNCTION lantern_node_step
     mov     Node_engine_in(%rbx), %rdx
     add     16(%rbx,%rdx), %rcx
     add     $1072, %rcx
-581: mov    %rcx, (L + 72)(%rsp)
+581: cmpq   $1, Node_eth1_state(%rbx)    # the eth1 follower: its snapshot and its call
+    jne     582f
+    mov     %rcx, (L + 72)(%rsp)
+    call    node_eth1_snapshot_size
+    mov     (L + 72)(%rsp), %rcx
+    add     %rax, %rcx
+    add     $2048, %rcx
+582: mov    %rcx, (L + 72)(%rsp)
     cmpq    $0, (L + 16)(%rsp)
     je      51f
     add     $(LIBP2P_ACTIONS_MIN + 24 + 16), %rcx
@@ -8909,7 +8964,17 @@ FUNCTION lantern_node_step
     call    node_api_free
     cmp     (L + 216)(%rsp), %rax
     jb      95f
-57:
+57: cmpq    $1, Node_eth1_state(%rbx)    # eth1_deposits: NODE_ETH1_ROOM entries free while the follower runs
+    jne     571f
+    mov     Node_eth1_leaves(%rbx), %rax
+    sub     Node_eth1_deposits(%rbx), %rax
+    xor     %edx, %edx
+    mov     $Eth1Deposit__mem, %ecx
+    div     %rcx
+    sub     (Node_eth1_deposits + 8)(%rbx), %rax
+    cmp     $NODE_ETH1_ROOM, %rax
+    jb      9601f
+571:
     mov     Node_peers(%rbx), %rax          # pow blocks: one for each POW_BLOCK event
     sub     Node_pow_blocks(%rbx), %rax
     xor     %edx, %edx
@@ -9064,6 +9129,7 @@ FUNCTION lantern_node_step
     jmp     6b
 9:  call    node_head
     call    node_publish_poll               # the answers of the published blocks whose import ended
+    call    node_eth1_check_due             # the eth1 follower's check, each store epoch
     call    node_engine_next
     call    node_shed                       # the post-states the node can rebuild go
     call    node_api_head_events            # the head and finalized_checkpoint events, at a quiet point
@@ -9145,6 +9211,8 @@ FUNCTION lantern_node_step
 94: mov     $NodeRoom_db_roots, %ecx
     jmp     82f
 95: mov     $NodeRoom_api_streams, %ecx
+    jmp     82f
+9601: mov   $NodeRoom_eth1_deposits, %ecx
     jmp     82f
 90: mov     $NodeRoom_p2p_out, %ecx
 82: mov     S7(%rsp), %rdx
@@ -10043,7 +10111,7 @@ FUNCTION lantern_node_run
 8419: mov   $LANTERN_BUFFER_TOO_SMALL, %eax
     LEAVE 192
 8420: cmp   $NODE_WORK_PRODUCE_FOLD, %rax
-    jne     8430f
+    jne     8425f
     test    %r13, %r13                      # PRODUCE_FOLD: lantern_node_produce_fold of the pool entry in state_b, into the draft in place
     jz      837b
     cmpq    $0, (L + 72)(%rsp)
@@ -10064,6 +10132,48 @@ FUNCTION lantern_node_run
     je      8449f
     mov     S8(%rsp), %rcx
     mov     %rax, NodeEvent_result(%rcx)
+    xor     %eax, %eax
+    LEAVE 192
+8425: cmp   $NODE_WORK_PRODUCE_ETH1, %rax
+    jne     8426f
+    test    %r13, %r13                      # PRODUCE_ETH1: lantern_node_produce_eth1 into the draft, from the snapshot in state_b
+    jz      837b
+    test    %r14, %r14
+    jz      837b
+    cmpq    $0, (L + 72)(%rsp)
+    je      837b
+    mov     NODE_STATE_SLOT(%r13), %rdi
+    lea     Node_config(%rbx), %rsi
+    call    node_fork
+    mov     %rax, %r10
+    mov     %r13, %rdi
+    mov     %r14, %rsi
+    mov     (L + 72)(%rsp), %rdx
+    lea     Node_config(%rbx), %rcx
+    mov     %r15, %r8
+    FORK_CALL node_produce_eth1
+    cmp     $LANTERN_BUFFER_TOO_SMALL, %rax
+    je      8449f
+    mov     S8(%rsp), %rcx
+    mov     %rax, NodeEvent_result(%rcx)
+    xor     %eax, %eax
+    LEAVE 192
+8426: cmp   $NODE_WORK_ETH1_CHECK, %rax
+    jne     8430f
+    test    %r13, %r13                      # ETH1_CHECK: lantern_node_eth1_check, its two words at index and checkpoint
+    jz      837b
+    mov     NODE_STATE_SLOT(%r13), %rdi
+    lea     Node_config(%rbx), %rsi
+    call    node_fork
+    mov     %rax, %r10
+    mov     %r13, %rdi
+    lea     (L + 96)(%rsp), %rsi
+    FORK_CALL node_eth1_check
+    mov     S8(%rsp), %rcx
+    mov     (L + 96)(%rsp), %rax
+    mov     %rax, NodeEvent_index(%rcx)
+    mov     (L + 104)(%rsp), %rax
+    mov     %rax, NodeEvent_checkpoint(%rcx)
     xor     %eax, %eax
     LEAVE 192
 8430: cmp   $NODE_WORK_PRODUCE_BLOCK, %rax

@@ -4044,24 +4044,9 @@ SPEC_FUNCTION node_produce_check
     call    verify_root_signature
     bnez    a0, 7f
     beqz    a1, 5f
-3:
-.if FORK < FORK_ELECTRA
-    LDQ     t0, s1, BeaconState_eth1_data + Eth1Data_deposit_count     # deposits the block would need
-    LDQ     t1, s1, BeaconState_eth1_deposit_index
-    bgtu    t0, t1, 6f
-.elseif FORK == FORK_ELECTRA
-    LDQ     t0, s1, BeaconState_eth1_data + Eth1Data_deposit_count     # get_eth1_pending_deposit_count
-    LDQ     t2, s1, BeaconState_deposit_requests_start_index
-    bltu    t0, t2, 31f
-    mv      t0, t2
-31: LDQ     t1, s1, BeaconState_eth1_deposit_index
-    bltu    t1, t0, 6f
-.endif
-    li      a0, LANTERN_OK
+3:  li      a0, LANTERN_OK                  # the deposits are the eth1 phase's (lantern_node_produce_eth1)
 7:  LEAVE 112
 5:  li      a0, LANTERN_INVALID_RANDAO_REVEAL
-    LEAVE 112
-6:  li      a0, LANTERN_INVALID_DEPOSITS
     LEAVE 112
 9:  li      a0, LANTERN_BUFFER_TOO_SMALL
     LEAVE 112
@@ -5285,9 +5270,12 @@ SPEC_FUNCTION node_produce_block
     ld      a1, 0(s3)
     li      a2, 96
     call    lantern_copy
-    addi    a0, s8, 96
+    addi    a0, s8, 96                      # the draft's vote with eth1_set, else the state's eth1_data
     ADDQ    a1, s1, BeaconState_eth1_data
-    li      a2, 72
+    LDQ     t0, s2, PRODUCE_DRAFT_ETH1
+    beqz    t0, 1f
+    ADDQ    a1, s2, PRODUCE_DRAFT_ETH1 + 8
+1:  li      a2, 72
     call    lantern_copy
     addi    a0, s8, 168
     ld      a1, 0(s3)
@@ -5330,9 +5318,24 @@ SPEC_FUNCTION node_produce_block
     li      t0, LANTERN_BUFFER_TOO_SMALL
     beq     a0, t0, 98f
     bnez    a0, 99f
-    /* deposits: none; voluntary_exits */
+    /* deposits: the draft's with eth1_set; voluntary_exits */
     PB_OFFSET 212
-    PB_OFFSET 216
+    LDQ     t0, s2, PRODUCE_DRAFT_ETH1
+    beqz    t0, 2f
+    LDQ     t0, s2, PRODUCE_DRAFT_ETH1 + 80
+    li      t1, PRODUCE_DRAFT_DEPOSIT
+    mul     a1, t0, t1
+    mv      a0, s6
+    call    produce_room
+    bnez    a0, 98f
+    LDQ     t0, s2, PRODUCE_DRAFT_ETH1 + 80
+    li      t1, PRODUCE_DRAFT_DEPOSIT
+    mul     a2, t0, t1
+    mv      a0, s6
+    ADDQ    a1, s2, PRODUCE_DRAFT_ETH1 + 88
+    add     s6, s6, a2
+    call    lantern_copy
+2:  PB_OFFSET 216
     li      a0, GOSSIP_VOLUNTARY_EXIT
     mv      a1, s6
     call    produce_records
@@ -5584,6 +5587,345 @@ SPEC_FUNCTION node_produce_block
     li      a0, LANTERN_BUFFER_TOO_SMALL
     LEAVE 288
 SPEC_END node_produce_block
+
+/* (state, out): node.md, lantern_node_eth1_check. */
+SPEC_FUNCTION node_eth1_check
+    ENTER 0
+    LDQ     t0, a0, BeaconState_eth1_deposit_index
+    li      t1, 1                           # open before electra; in electra while the index is not deposit_requests_start_index; never from fulu
+.if FORK >= FORK_FULU
+    li      t1, 0
+.elseif FORK >= FORK_ELECTRA
+    LDQ     t2, a0, BeaconState_deposit_requests_start_index
+    sub     t1, t0, t2
+    snez    t1, t1
+.endif
+    sd      t1, 0(a1)
+    sd      t0, 8(a1)
+    li      a0, LANTERN_OK
+    LEAVE 0
+SPEC_END node_eth1_check
+
+# L0: a0 = 1 when the Eth1Data at a0 is get_eth1_data of the Eth1Block at a1, else 0. Uses t0-t3.
+LOCAL_FUNCTION e1v_match
+    UNWIND_END_PROLOGUE
+    ld      t0, Eth1Data_deposit_count(a0)
+    ld      t1, Eth1Block_deposit_count(a1)
+    bne     t0, t1, 9f
+    li      t2, 0
+1:  add     t3, a0, t2                      # deposit_root
+    ld      t0, 0(t3)
+    add     t3, a1, t2
+    ld      t1, Eth1Block_deposit_root(t3)
+    bne     t0, t1, 9f
+    add     t3, a0, t2                      # block_hash
+    ld      t0, Eth1Data_block_hash(t3)
+    add     t3, a1, t2
+    ld      t1, Eth1Block_hash(t3)
+    bne     t0, t1, 9f
+    addi    t2, t2, 8
+    li      t3, 32
+    bltu    t2, t3, 1b
+    li      a0, 1
+    ret
+9:  li      a0, 0
+    ret
+END_FUNCTION e1v_match
+
+# L0: a0 = 1 when the 72 bytes at a0 and a1 are equal, else 0. Uses t0-t3.
+LOCAL_FUNCTION e1v_same
+    UNWIND_END_PROLOGUE
+    li      t2, 0
+1:  add     t3, a0, t2
+    ld      t0, 0(t3)
+    add     t3, a1, t2
+    ld      t1, 0(t3)
+    bne     t0, t1, 9f
+    addi    t2, t2, 8
+    li      t3, Eth1Data__mem
+    bltu    t2, t3, 1b
+    li      a0, 1
+    ret
+9:  li      a0, 0
+    ret
+END_FUNCTION e1v_same
+
+# L1: a0 = 1 when the Eth1Data at a0 is the data of a block of votes_to_consider (phase0
+# get_eth1_vote): a candidate block (its timestamp + S * F at most the period start, + 2 * S * F at
+# least it) whose deposit_count is at least the state's. The blocks at a1, their count a2, the
+# period start and S * F at a3, the state's deposit_count a4. Uses t0-t5.
+LOCAL_FUNCTION e1v_consider
+    FRAME 48
+    sd      a0, 0(sp)
+    sd      a1, 8(sp)
+    sd      a2, 16(sp)
+    sd      a3, 24(sp)
+    sd      a4, 32(sp)
+1:  ld      t4, 16(sp)
+    beqz    t4, 8f
+    ld      a1, 8(sp)
+    ld      t5, 24(sp)
+    ld      t0, Eth1Block_timestamp(a1)
+    ld      t1, 8(t5)
+    ld      t2, 0(t5)
+    add     t0, t0, t1
+    bgtu    t0, t2, 2f
+    add     t0, t0, t1
+    bltu    t0, t2, 2f
+    ld      t0, Eth1Block_deposit_count(a1)
+    ld      t1, 32(sp)
+    bltu    t0, t1, 2f
+    ld      a0, 0(sp)
+    call    e1v_match
+    bnez    a0, 9f
+2:  ld      t0, 8(sp)
+    addi    t0, t0, Eth1Block__mem
+    sd      t0, 8(sp)
+    ld      t0, 16(sp)
+    addi    t0, t0, -1
+    sd      t0, 16(sp)
+    j       1b
+8:  li      a0, 0
+9:  UNFRAME 48
+END_FUNCTION e1v_consider
+
+# (state, draft, snapshot, config, scratch): node.md, lantern_node_produce_eth1. s1 state, s2 the
+# draft, s3 the snapshot, s4 config, s7 the vote, s8 the votes, s9 their count, s10 an index.
+# Locals: L the period start, L+8 S * F, L+16 the best count, L+24 a count, L+32 an index, L+40
+# the scratch, L+48 the default vote (72), L+120 the vote's data after it (72), L+192 the leaves'
+# ByteList (24), L+216 the deposits, L+224 the count, L+232 a saved index.
+SPEC_FUNCTION node_produce_eth1
+    ENTER 240
+    mv      s1, a0
+    ld      t0, 8(a1)
+    add     s2, a1, t0
+    ld      t0, 8(a2)
+    add     s3, a2, t0
+    mv      s4, a3
+    sd      a4, (L + 40)(sp)
+    ADDQ    s7, s1, BeaconState_eth1_data   # the vote: the state's eth1_data unless the votes give another
+.if FORK >= FORK_FULU
+    j       20f                             # fulu deprecates get_eth1_vote: the state's
+.elseif FORK >= FORK_ELECTRA
+    LDQ     t0, s1, BeaconState_eth1_deposit_index      # the bridge closed: the state's
+    LDQ     t1, s1, BeaconState_deposit_requests_start_index
+    beq     t0, t1, 20f
+.endif
+    LDQ     t0, s1, BeaconState_slot        # the period start: voting_period_start_time
+    li      t1, EPOCHS_PER_ETH1_VOTING_PERIOD * SLOTS_PER_EPOCH
+    divu    t2, t0, t1
+    mul     t2, t2, t1
+    LDQ     t3, s4, CONFIG_SLOT_DURATION_MS
+    mul     t2, t2, t3
+    LDQ     t3, s1, BeaconState_genesis_time
+    li      t1, 1000
+    mul     t3, t3, t1
+    add     t2, t2, t3
+    divu    t2, t2, t1
+    sd      t2, L(sp)
+    LDQ     t0, s4, CONFIG_SECONDS_PER_ETH1_BLOCK
+    LDQ     t1, s4, CONFIG_ETH1_FOLLOW_DISTANCE
+    mul     t0, t0, t1
+    sd      t0, (L + 8)(sp)
+    addi    a0, sp, (L + 48)                # default_vote: the last of votes_to_consider, else the state's
+    mv      a1, s7
+    li      a2, Eth1Data__mem
+    call    lantern_copy
+    ld      s10, Eth1Snapshot_blocks(s3)
+1:  beqz    s10, 3f
+    addi    s10, s10, -1
+    li      t0, Eth1Block__mem
+    mul     t0, s10, t0
+    addi    t1, s3, Eth1Snapshot__fixed
+    add     t5, t1, t0
+    ld      t0, Eth1Block_timestamp(t5)
+    ld      t1, (L + 8)(sp)
+    ld      t2, L(sp)
+    add     t0, t0, t1
+    bgtu    t0, t2, 1b
+    add     t0, t0, t1
+    bltu    t0, t2, 1b
+    ld      t0, Eth1Block_deposit_count(t5)
+    LDQ     t1, s1, BeaconState_eth1_data + Eth1Data_deposit_count
+    bltu    t0, t1, 1b
+    addi    a0, sp, (L + 48)                # get_eth1_data of it
+    addi    a1, t5, Eth1Block_deposit_root
+    COPY32  a0, a1
+    ld      t0, Eth1Block_deposit_count(t5)
+    sd      t0, (L + 48 + Eth1Data_deposit_count)(sp)
+    addi    a0, sp, (L + 48 + Eth1Data_block_hash)
+    addi    a1, t5, Eth1Block_hash
+    COPY32  a0, a1
+3:  addi    s7, sp, (L + 48)
+    sd      zero, (L + 16)(sp)              # the valid votes: the most often, then the first
+    PART    s8, s9, s1, BeaconState_eth1_data_votes
+    li      s10, 0
+4:  bgeu    s10, s9, 20f
+    li      t0, Eth1Data__mem
+    mul     t0, s10, t0
+    add     a0, s8, t0
+    addi    a1, s3, Eth1Snapshot__fixed
+    ld      a2, Eth1Snapshot_blocks(s3)
+    addi    a3, sp, L
+    LDQ     a4, s1, BeaconState_eth1_data + Eth1Data_deposit_count
+    call    e1v_consider                    # a valid vote
+    beqz    a0, 7f
+    sd      zero, (L + 32)(sp)              # its first: no equal vote before it
+5:  ld      t0, (L + 32)(sp)
+    bgeu    t0, s10, 51f
+    li      t1, Eth1Data__mem
+    mul     t0, t0, t1
+    add     a0, s8, t0
+    mul     t2, s10, t1
+    add     a1, s8, t2
+    call    e1v_same
+    bnez    a0, 7f
+    ld      t0, (L + 32)(sp)
+    addi    t0, t0, 1
+    sd      t0, (L + 32)(sp)
+    j       5b
+51: sd      s10, (L + 32)(sp)               # its count among the votes from it on
+    sd      zero, (L + 24)(sp)
+6:  ld      t0, (L + 32)(sp)
+    bgeu    t0, s9, 61f
+    li      t1, Eth1Data__mem
+    mul     t0, t0, t1
+    add     a0, s8, t0
+    mul     t2, s10, t1
+    add     a1, s8, t2
+    call    e1v_same
+    ld      t0, (L + 24)(sp)
+    add     t0, t0, a0
+    sd      t0, (L + 24)(sp)
+    ld      t0, (L + 32)(sp)
+    addi    t0, t0, 1
+    sd      t0, (L + 32)(sp)
+    j       6b
+61: ld      t0, (L + 24)(sp)                # more than the best so far: the vote
+    ld      t1, (L + 16)(sp)
+    bleu    t0, t1, 7f
+    sd      t0, (L + 16)(sp)
+    li      t1, Eth1Data__mem
+    mul     t1, s10, t1
+    add     s7, s8, t1
+7:  addi    s10, s10, 1
+    j       4b
+20: ADDQ    a0, s2, PRODUCE_DRAFT_ETH1 + 8  # the draft's vote
+    mv      a1, s7
+    li      a2, Eth1Data__mem
+    call    lantern_copy
+    ADDQ    s7, s2, PRODUCE_DRAFT_ETH1 + 8
+    PART    s8, s9, s1, BeaconState_eth1_data_votes  # the data after it: the vote's count + 1, times 2, above the period's slots
+    li      t0, 1
+    sd      t0, (L + 24)(sp)
+8:  beqz    s9, 81f
+    mv      a0, s8
+    mv      a1, s7
+    call    e1v_same
+    ld      t0, (L + 24)(sp)
+    add     t0, t0, a0
+    sd      t0, (L + 24)(sp)
+    addi    s8, s8, Eth1Data__mem
+    addi    s9, s9, -1
+    j       8b
+81: ld      t0, (L + 24)(sp)
+    slli    t0, t0, 1
+    addi    a0, sp, (L + 120)
+    mv      a1, s7
+    li      t1, EPOCHS_PER_ETH1_VOTING_PERIOD * SLOTS_PER_EPOCH
+    bgtu    t0, t1, 82f
+    ADDQ    a1, s1, BeaconState_eth1_data
+82: li      a2, Eth1Data__mem
+    call    lantern_copy
+    li      t0, 0                           # the deposits' count
+.if FORK < FORK_ELECTRA
+    ld      t1, (L + 120 + Eth1Data_deposit_count)(sp)
+    LDQ     t2, s1, BeaconState_eth1_deposit_index
+    bltu    t1, t2, 83f
+    sub     t0, t1, t2
+83:
+.elseif FORK == FORK_ELECTRA
+    ld      t1, (L + 120 + Eth1Data_deposit_count)(sp)  # get_eth1_pending_deposit_count
+    LDQ     t3, s1, BeaconState_deposit_requests_start_index
+    bleu    t1, t3, 831f
+    mv      t1, t3
+831: LDQ    t2, s1, BeaconState_eth1_deposit_index
+    bltu    t1, t2, 83f
+    sub     t0, t1, t2
+83:
+.endif
+    li      t1, MAX_DEPOSITS
+    bleu    t0, t1, 84f
+    mv      t0, t1
+84: STQ     t0, s2, PRODUCE_DRAFT_ETH1 + 80
+    sd      t0, (L + 224)(sp)
+    beqz    t0, 90f
+    ld      t0, Eth1Snapshot_leaves(s3)     # the leaves: at least the deposit count
+    ld      t1, (L + 120 + Eth1Data_deposit_count)(sp)
+    bltu    t0, t1, 97f
+    ld      t0, Eth1Snapshot_blocks(s3)     # the deposits, then the leaves' ByteList
+    li      t1, Eth1Block__mem
+    mul     t0, t0, t1
+    addi    t0, t0, Eth1Snapshot__fixed
+    add     t0, s3, t0
+    sd      t0, (L + 216)(sp)
+    ld      t1, Eth1Snapshot_deposits(s3)
+    li      t2, Eth1Deposit__mem
+    mul     t1, t1, t2
+    add     t0, t0, t1
+    addi    t2, sp, (L + 192)
+    sub     t0, t0, t2
+    sd      t0, 8(t2)
+    ld      t1, Eth1Snapshot_leaves(s3)
+    slli    t1, t1, 5
+    sd      t1, 16(t2)
+    add     t0, t0, t1
+    sd      t0, 0(t2)
+    li      s10, 0                          # each deposit: its proof, then its data
+9:  ld      t0, (L + 224)(sp)
+    bgeu    s10, t0, 90f
+    LDQ     t0, s1, BeaconState_eth1_deposit_index
+    add     t0, t0, s10
+    sd      t0, (L + 232)(sp)
+    ld      t1, Eth1Snapshot_deposits(s3)   # the snapshot's deposit of that index
+    beqz    t1, 97f
+    ld      t2, (L + 216)(sp)
+    ld      t3, Eth1Deposit_index(t2)
+    bltu    t0, t3, 97f
+    sub     t0, t0, t3
+    bgeu    t0, t1, 97f
+    li      t3, Eth1Deposit__mem
+    mul     t0, t0, t3
+    add     s8, t2, t0
+    li      t0, PRODUCE_DRAFT_DEPOSIT
+    mul     t0, s10, t0
+    li      t1, PRODUCE_DRAFT_ETH1 + 88
+    add     t0, t0, t1
+    add     s9, s2, t0
+    addi    a0, sp, (L + 192)
+    addi    a1, sp, (L + 120 + Eth1Data_deposit_count)
+    addi    a2, sp, (L + 232)
+    ld      a3, (L + 40)(sp)
+    mv      a4, s9
+    CALL_GLOBAL lantern_deposit_proof
+    li      t0, LANTERN_BUFFER_TOO_SMALL
+    beq     a0, t0, 99f
+    bnez    a0, 97f
+    addi    a0, s9, (33 * 32)
+    addi    a1, s8, Eth1Deposit_data
+    li      a2, 184
+    call    lantern_copy
+    addi    s10, s10, 1
+    j       9b
+90: li      t0, 1
+    STQ     t0, s2, PRODUCE_DRAFT_ETH1
+    li      a0, LANTERN_OK
+    LEAVE 240
+97: li      a0, LANTERN_INVALID_DEPOSITS
+    LEAVE 240
+99: li      a0, LANTERN_BUFFER_TOO_SMALL
+    LEAVE 240
+SPEC_END node_produce_eth1
 
 /* L0: a0 = 0 when a1 bytes from a0 fit in the ByteList s5, else 1. Uses t5, t6. */
 LOCAL_FUNCTION produce_room

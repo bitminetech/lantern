@@ -82,6 +82,8 @@ FUNCTION lantern_node_size
     NODE_SIZE_ADD api_streams, NodeApi__mem
     NODE_SIZE_ADD pool, NodePool__mem
     NODE_SIZE_ADD proposers, NodeProposer__mem
+    NODE_SIZE_ADD eth1_blocks, Eth1Block__mem
+    NODE_SIZE_ADD eth1_deposits, Eth1Deposit__mem + 32 + Eth1Count__mem   /* the deposits, their leaves and counts */
     ldr     x10, [x0, #NodeRoom_p2p_out] /* a ByteList */
     adds    x10, x10, #(24 + 7)
     b.cs    9f
@@ -184,6 +186,11 @@ LOCAL_FUNCTION node_layout
     add     x10, x10, x11, lsl #3
     add     x10, x10, #DB_FIXED
     str     x10, [x0, x9]
+    add     x9, x9, x10
+    NODE_PART eth1_blocks, eth1_blocks, Eth1Block__mem
+    NODE_PART eth1_deposits, eth1_deposits, Eth1Deposit__mem
+    NODE_PART eth1_leaves, eth1_deposits, 32
+    NODE_PART eth1_counts, eth1_deposits, Eth1Count__mem
     ret
 END_FUNCTION node_layout
 
@@ -393,6 +400,9 @@ FUNCTION lantern_node_copy
     NODE_COPY_ROOM api_streams, Node_api
     NODE_COPY_ROOM pool, Node_pool
     NODE_COPY_ROOM proposers, Node_proposers
+    NODE_COPY_ROOM eth1_blocks, Node_eth1_blocks
+    NODE_COPY_ROOM eth1_deposits, Node_eth1_deposits
+    NODE_COPY_ROOM eth1_deposits, Node_eth1_counts
     ldr     x9, [x20, #NodeRoom_p2p_out]    /* the queued bytes fit */
     ldr     x10, [x19, #Node_p2p_out]
     add     x10, x19, x10
@@ -434,6 +444,10 @@ FUNCTION lantern_node_copy
     NODE_COPY_PART Node_api, NodeApi__mem
     NODE_COPY_PART Node_pool, NodePool__mem
     NODE_COPY_PART Node_proposers, NodeProposer__mem
+    NODE_COPY_PART Node_eth1_blocks, Eth1Block__mem
+    NODE_COPY_PART Node_eth1_deposits, Eth1Deposit__mem
+    NODE_COPY_PART Node_eth1_leaves, 32
+    NODE_COPY_PART Node_eth1_counts, Eth1Count__mem
     ldr     x1, [x19, #Node_p2p_out]        /* the queued bytes */
     add     x1, x19, x1
     ldr     x2, [x1, #16]
@@ -1380,12 +1394,12 @@ LOCAL_FUNCTION node_engine_next
 3:  bl      node_prepare                    /* a payload's preparation, when it is due */
     cbnz    x0, 9f
     ldr     x9, [x19, #Node_flags]
-    tbz     x9, #5, 9f                      /* NODE_FLAG_FCU */
+    tbz     x9, #5, 50f                     /* NODE_FLAG_FCU */
     mov     x0, x25
     add     x1, x19, #Node_config
     bl      node_fork
     cmp     x0, #FORK_BELLATRIX
-    b.lo    9f
+    b.lo    50f
     ldr     x9, [x19, #Node_flags]
     bic     x9, x9, #NODE_FLAG_FCU
     str     x9, [x19, #Node_flags]
@@ -1401,6 +1415,8 @@ LOCAL_FUNCTION node_engine_next
     mov     x3, #0
     mov     x4, #0
     bl      node_work
+    LEAVE 0
+50: bl      node_eth1_next                  /* then the eth1 follower's call */
 9:  LEAVE 0
 END_FUNCTION node_engine_next
 
@@ -3451,7 +3467,15 @@ END_FUNCTION node_await
  */
 LOCAL_FUNCTION node_engine_failed
     ENTER 0
-    mov     x0, x20
+    ldr     x9, [x19, #Node_engine_method]  /* an eth1 call: the follower waits for the next head poll */
+    cmp     x9, #ENGINE_METHOD_ETH_BLOCK
+    ccmp    x9, #ENGINE_METHOD_ETH_LOGS, #4, ne
+    b.ne    10f
+    str     xzr, [x19, #Node_engine_method]
+    ldr     x9, [x19, #Node_time_ms]
+    STQ     x9, x19, Node_eth1_head_ms
+    LEAVE 0
+10: mov     x0, x20
     bl      node_store_slot
     add     x21, x0, #1
     str     x21, [x19, #Node_engine_wait]
@@ -3710,7 +3734,16 @@ LOCAL_FUNCTION node_engine_read
     mov     x0, x21
     ldr     x1, [sp, #(L + 8)]
     bl      node_engine_consume
-    cmp     x22, #ENGINE_METHOD_GET_PAYLOAD /* engine_getPayload: its result, decoded with the body still in scratch */
+    cmp     x22, #ENGINE_METHOD_ETH_BLOCK   /* the eth1 follower's calls: their result, with the body still in scratch */
+    ccmp    x22, #ENGINE_METHOD_ETH_LOGS, #4, ne
+    b.ne    43f
+    mov     x0, x26
+    add     x1, sp, #(L + 32)
+    bl      node_eth1_answer
+    str     x25, [x23]
+    str     xzr, [x19, #Node_engine_method]
+    b       9f
+43: cmp     x22, #ENGINE_METHOD_GET_PAYLOAD /* engine_getPayload: its result, decoded with the body still in scratch */
     b.ne    44f
     mov     x0, x26
     add     x1, sp, #(L + 32)
@@ -4637,12 +4670,25 @@ LOCAL_FUNCTION node_event
     ccmp    x9, #NODE_WORK_PRODUCE_BLOCK, #4, ne
     b.eq    7071f
     cmp     x9, #NODE_WORK_PRODUCE_BID
+    b.eq    7071f
+    cmp     x9, #NODE_WORK_PRODUCE_ETH1
     b.ne    708f
 7071:
     mov     x0, x21
     bl      node_produce_done
     LEAVE 48
-708: sub    x10, x9, #NODE_WORK_PUBLISH_DECODE /* the works of block publishing: their entry goes on */
+708: cmp    x9, #NODE_WORK_ETH1_CHECK         /* ETH1_CHECK: the follower runs while the bridge is open */
+    b.ne    7081f
+    ldr     x9, [x21, #NodeEvent_index]
+    mov     x10, #2
+    mov     x11, #1
+    cmp     x9, #0
+    csel    x10, x11, x10, ne
+    STQ     x10, x19, Node_eth1_state
+    ldr     x9, [x21, #NodeEvent_checkpoint]
+    STQ     x9, x19, Node_eth1_deposit_index
+    LEAVE 48
+7081: sub   x10, x9, #NODE_WORK_PUBLISH_DECODE /* the works of block publishing: their entry goes on */
     cmp     x10, #(NODE_WORK_PUBLISH_SIDECAR - NODE_WORK_PUBLISH_DECODE)
     b.hi    70f
     mov     x0, x21
@@ -8787,7 +8833,15 @@ FUNCTION lantern_node_step
     ldr     x9, [x9, #16]
     add     x12, x12, x9
     add     x12, x12, #1072
-581: str    x12, [sp, #(L + 72)]
+581: LDQ    x9, x19, Node_eth1_state    /* the eth1 follower: its snapshot and its call */
+    cmp     x9, #1
+    b.ne    582f
+    str     x12, [sp, #(L + 72)]
+    bl      node_eth1_snapshot_size
+    ldr     x12, [sp, #(L + 72)]
+    add     x12, x12, x0
+    add     x12, x12, #2048
+582: str    x12, [sp, #(L + 72)]
     ldr     x9, [sp, #(L + 16)]
     cbz     x9, 51f
     MOVQ    x9, LIBP2P_ACTIONS_MIN + 24 + 16
@@ -8900,7 +8954,19 @@ FUNCTION lantern_node_step
     ldr     x9, [sp, #(L + 184)]
     cmp     x0, x9
     b.lo    95f
-57:
+57: LDQ     x9, x19, Node_eth1_state        /* eth1_deposits: NODE_ETH1_ROOM entries free while the follower runs */
+    cmp     x9, #1
+    b.ne    571f
+    ldr     x9, [x19, #Node_eth1_leaves]
+    ldr     x10, [x19, #Node_eth1_deposits]
+    sub     x9, x9, x10
+    mov     x10, #Eth1Deposit__mem
+    udiv    x9, x9, x10
+    ldr     x10, [x19, #(Node_eth1_deposits + 8)]
+    sub     x9, x9, x10
+    cmp     x9, #NODE_ETH1_ROOM
+    b.lo    9601f
+571:
     ldr     x9, [x19, #Node_peers]          /* pow blocks: one for each POW_BLOCK event */
     ldr     x10, [x19, #Node_pow_blocks]
     sub     x9, x9, x10
@@ -9057,6 +9123,7 @@ FUNCTION lantern_node_step
     b       6b
 9:  bl      node_head
     bl      node_publish_poll               /* the answers of the published blocks whose import ended */
+    bl      node_eth1_check_due             /* the eth1 follower's check, each store epoch */
     bl      node_engine_next
     bl      node_shed                       /* the post-states the node can rebuild go */
     bl      node_api_head_events            /* the head and finalized_checkpoint events, at a quiet point */
@@ -9140,6 +9207,8 @@ FUNCTION lantern_node_step
 94: mov     x10, #NodeRoom_db_roots
     b       82f
 95: mov     x10, #NodeRoom_api_streams
+    b       82f
+9601: mov   x10, #NodeRoom_eth1_deposits
     b       82f
 90: mov     x10, #NodeRoom_p2p_out
 82: str     x10, [x25, #NodeStepResult_room]
@@ -9954,7 +10023,7 @@ FUNCTION lantern_node_run
 8419: mov   x0, #LANTERN_BUFFER_TOO_SMALL
     LEAVE 192
 8420: cmp   x9, #NODE_WORK_PRODUCE_FOLD
-    b.ne    8430f
+    b.ne    8425f
     cbz     x22, 837b                       /* PRODUCE_FOLD: lantern_node_produce_fold of the pool entry in state_b, into the draft in place */
     ldr     x9, [sp, #(L + 72)]
     cbz     x9, 837b
@@ -9972,6 +10041,42 @@ FUNCTION lantern_node_run
     cmp     x0, #LANTERN_BUFFER_TOO_SMALL
     b.eq    8449f
     str     x0, [x25, #NodeEvent_result]
+    mov     x0, #LANTERN_OK
+    LEAVE 192
+8425: cmp   x9, #NODE_WORK_PRODUCE_ETH1
+    b.ne    8426f
+    cbz     x22, 837b                       /* PRODUCE_ETH1: lantern_node_produce_eth1 into the draft, from the snapshot in state_b */
+    cbz     x23, 837b
+    ldr     x9, [sp, #(L + 72)]
+    cbz     x9, 837b
+    ldr     x0, [x22, #NODE_STATE_SLOT]
+    add     x1, x19, #Node_config
+    bl      node_fork
+    mov     x15, x0
+    mov     x0, x22
+    mov     x1, x23
+    ldr     x2, [sp, #(L + 72)]
+    add     x3, x19, #Node_config
+    mov     x4, x24
+    FORK_CALL node_produce_eth1
+    cmp     x0, #LANTERN_BUFFER_TOO_SMALL
+    b.eq    8449f
+    str     x0, [x25, #NodeEvent_result]
+    mov     x0, #LANTERN_OK
+    LEAVE 192
+8426: cmp   x9, #NODE_WORK_ETH1_CHECK
+    b.ne    8430f
+    cbz     x22, 837b                       /* ETH1_CHECK: lantern_node_eth1_check, its two words at index and checkpoint */
+    ldr     x0, [x22, #NODE_STATE_SLOT]
+    add     x1, x19, #Node_config
+    bl      node_fork
+    mov     x15, x0
+    mov     x0, x22
+    add     x1, sp, #(L + 96)
+    FORK_CALL node_eth1_check
+    ldp     x9, x10, [sp, #(L + 96)]
+    str     x9, [x25, #NodeEvent_index]
+    str     x10, [x25, #NodeEvent_checkpoint]
     mov     x0, #LANTERN_OK
     LEAVE 192
 8430: cmp   x9, #NODE_WORK_PRODUCE_BLOCK

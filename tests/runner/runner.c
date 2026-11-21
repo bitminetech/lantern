@@ -2706,6 +2706,8 @@ static unsigned long node_replays; /* the REPLAY works the nodes ran: post-state
 #define ENGINE_HOST "localhost:8551" /* the node's execution engine: the runner */
 #define BUILDER_HOST "localhost:18550" /* the node's builder, with NODE_FLAG_BUILDER: the runner */
 #define NODE_FLAG_BUILDER 2048
+#define NODE_FLAG_ETH1 4096
+static int force_eth1; /* set: the next node has NODE_FLAG_ENGINE and NODE_FLAG_ETH1, with room for the eth1 follower */
 static int force_builder; /* set: the next node has NODE_FLAG_BUILDER */
 
 typedef struct {
@@ -2713,7 +2715,7 @@ typedef struct {
     uint8_t *b;
 } shell_buf;
 
-#define NODE_ROOM_FIELDS 15 /* NodeRoom: blocks, checkpoints, pow_blocks, peers, streams, request_bytes, p2p_out, messages, blobs, engine_bytes, db_slots, db_roots, api_streams, pool, proposers */
+#define NODE_ROOM_FIELDS 17 /* NodeRoom: blocks, checkpoints, pow_blocks, peers, streams, request_bytes, p2p_out, messages, blobs, engine_bytes, db_slots, db_roots, api_streams, pool, proposers, eth1_blocks, eth1_deposits */
 
 struct p2p_net;
 
@@ -2747,6 +2749,8 @@ struct node_shell {
     uint64_t nbids, bid_calls;              /* their count; the getHeader calls so far */
     tv submits;                             /* node-publish: the case's answers to the blinded_blocks calls, or NULL */
     uint64_t nsubmits, submit_calls;
+    const uint8_t *eth1_blocks, *eth1_deposits, *eth1_contract; /* node-eth1: the chain (number, timestamp, hash), its deposits */
+    uint64_t eth1_nblocks, eth1_ndeposits, eth1_calls;
     uint64_t flags, db_states;              /* its flags; the NODE_ACT_DB_STATE actions */
     uint64_t drops[16];                     /* the NODE_ACT_DB_DROP actions: bit 63 for sidecars, the segment */
     size_t ndrops;
@@ -3614,6 +3618,117 @@ static int find_hash(const char *body, uint64_t len, const char *key, uint8_t *o
  * answer is the payloadStatus of the case's last payload_status step of the payload's hash (the
  * head's for forkchoiceUpdated), else VALID, in two NODE_EV_ENGINE events.
  */
+/* The u64 of the hex digits after "0x" at p, its end at *e; 2^64 - 1 for none. */
+static uint64_t hex_u64(const char *p, const char *end, const char **e) {
+    uint64_t v = 0;
+    int k = 0;
+    if (p + 2 > end || p[0] != '0' || p[1] != 'x') return UINT64_MAX;
+    for (p += 2; p < end && k < 16; p++, k++) {
+        int d = *p >= '0' && *p <= '9' ? *p - '0' : *p >= 'a' && *p <= 'f' ? *p - 'a' + 10 : -1;
+        if (d < 0) break;
+        v = v << 4 | (uint64_t)d;
+    }
+    if (e) *e = p;
+    return k ? v : UINT64_MAX;
+}
+
+static int hex_out(char *o, const uint8_t *b, uint64_t n) {
+    for (uint64_t i = 0; i < n; i++) sprintf(o + 2 * i, "%02x", b[i]);
+    return (int)(2 * n);
+}
+
+/*
+ * node-eth1: the runner as the execution engine of the eth1 follower: eth_getBlockByNumber of the
+ * case's chain ("latest" its last block, a number past it null), eth_getLogs of the deposit
+ * contract's DepositEvent logs of the case's deposits in the block range, each the contract's ABI
+ * encoding. The request's address must be the case's contract.
+ */
+static void shell_eth1(fc_node *n, const char *body, uint64_t blen, const char **why) {
+    struct node_shell *s = n->shell;
+    const char *bend = body + blen, *idp = find_bytes(body, blen, "\"id\":");
+    unsigned long long id = 0;
+    for (const char *d = idp ? idp + 5 : bend; d < bend && *d >= '0' && *d <= '9'; d++) id = id * 10 + (unsigned long long)(*d - '0');
+    if (!s->eth1_blocks || !s->eth1_nblocks) {
+        *why = "engine: an eth_ call with no eth1 chain";
+        return;
+    }
+    s->eth1_calls++;
+    size_t cap = 4096 + (size_t)s->eth1_ndeposits * 1600, k;
+    char *json = malloc(cap), *http = malloc(cap + 128);
+    if (!json || !http) {
+        fprintf(stderr, "out of memory\n");
+        exit(2);
+    }
+    k = (size_t)snprintf(json, cap, "{\"jsonrpc\":\"2.0\",\"id\":%llu,\"result\":", id);
+    if (find_bytes(body, blen, "\"method\":\"eth_getBlockByNumber\"")) {
+        const char *pp = find_bytes(body, blen, "\"params\":[\"");
+        uint64_t num = UINT64_MAX;
+        if (!pp) {
+            *why = "engine: eth_getBlockByNumber with no params";
+        } else if (!strncmp(pp + 11, "latest\"", 7)) {
+            num = rd64(s->eth1_blocks + 48 * (s->eth1_nblocks - 1));
+        } else {
+            num = hex_u64(pp + 11, bend, NULL);
+            if (num == UINT64_MAX) *why = "engine: eth_getBlockByNumber of no number";
+        }
+        const uint8_t *b = NULL;
+        for (uint64_t i = 0; i < s->eth1_nblocks; i++)
+            if (rd64(s->eth1_blocks + 48 * i) == num) b = s->eth1_blocks + 48 * i;
+        if (!b) k += (size_t)snprintf(json + k, cap - k, "null");
+        else {
+            k += (size_t)snprintf(json + k, cap - k, "{\"number\":\"0x%llx\",\"hash\":\"0x", (unsigned long long)rd64(b));
+            k += (size_t)hex_out(json + k, b + 16, 32);
+            k += (size_t)snprintf(json + k, cap - k, "\",\"timestamp\":\"0x%llx\",\"transactions\":[]}", (unsigned long long)rd64(b + 8));
+        }
+    } else {
+        const char *ap = find_bytes(body, blen, "\"address\":\"0x"), *fp = find_bytes(body, blen, "\"fromBlock\":\""),
+                   *tp = find_bytes(body, blen, "\"toBlock\":\"");
+        uint8_t addr[20];
+        int ok = ap && fp && tp;
+        for (int i = 0; ok && i < 20; i++) {
+            unsigned v;
+            if (sscanf(ap + 13 + 2 * i, "%2x", &v) != 1) ok = 0;
+            addr[i] = (uint8_t)v;
+        }
+        if (!ok) *why = "engine: eth_getLogs without an address and a block range";
+        else if (!s->eth1_contract || memcmp(addr, s->eth1_contract, 20)) *why = "engine: eth_getLogs of another address than the deposit contract";
+        else if (!find_bytes(body, blen, "\"topics\":[\"0x649bbc62d0e31342afea4e5cd82d4049e7e1ee912fc0889aa790803be39038c5\"]"))
+            *why = "engine: eth_getLogs of another topic than DepositEvent";
+        uint64_t from = ok ? hex_u64(fp + 13, bend, NULL) : 0, to = ok ? hex_u64(tp + 11, bend, NULL) : 0;
+        json[k++] = '[';
+        int first = 1;
+        for (uint64_t i = 0; i < s->eth1_ndeposits && !*why; i++) {
+            const uint8_t *d = s->eth1_deposits + 200 * i, *dd = d + 16;
+            uint64_t bn = rd64(d);
+            if (bn < from || bn > to) continue;
+            uint8_t abi[576] = {0};
+            abi[31] = 0xa0, abi[62] = 1, abi[94] = 1, abi[95] = 0x40, abi[126] = 1, abi[127] = 0x80, abi[158] = 2;
+            abi[191] = 48, abi[287] = 32, abi[351] = 8, abi[415] = 96, abi[543] = 8;
+            memcpy(abi + 192, dd, 48);
+            memcpy(abi + 288, dd + 48, 32);
+            memcpy(abi + 352, dd + 80, 8);
+            memcpy(abi + 416, dd + 88, 96);
+            memcpy(abi + 544, d + 8, 8);
+            if (!first) json[k++] = ',';
+            first = 0;
+            k += (size_t)snprintf(json + k, cap - k, "{\"address\":\"0x");
+            k += (size_t)hex_out(json + k, s->eth1_contract, 20);
+            k += (size_t)snprintf(json + k, cap - k,
+                                  "\",\"topics\":[\"0x649bbc62d0e31342afea4e5cd82d4049e7e1ee912fc0889aa790803be39038c5\"],\"data\":\"0x");
+            k += (size_t)hex_out(json + k, abi, 576);
+            k += (size_t)snprintf(json + k, cap - k, "\",\"blockNumber\":\"0x%llx\",\"logIndex\":\"0x0\",\"removed\":false}", (unsigned long long)bn);
+        }
+        json[k++] = ']';
+    }
+    json[k++] = '}';
+    size_t hl = (size_t)snprintf(http, 128, "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: %d\r\n\r\n", (int)k);
+    memcpy(http + hl, json, k);
+    hl += k;
+    if (!*why) shell_event(s, EV_ENGINE, 0, (const uint8_t *)http, (uint64_t)hl);
+    free(json);
+    free(http);
+}
+
 static void shell_engine(fc_node *n, const uint8_t *req, uint64_t len, const char **why) {
     static const char *const names[5] = {"VALID", "INVALID", "SYNCING", "ACCEPTED", "INVALID_BLOCK_HASH"};
     struct node_shell *s = n->shell;
@@ -3635,6 +3750,10 @@ static void shell_engine(fc_node *n, const uint8_t *req, uint64_t len, const cha
     if (*why) return;
     const char *body = end + 4;
     uint64_t blen = len - (uint64_t)(body - r);
+    if (find_bytes(body, blen, "\"method\":\"eth_getBlockByNumber\"") || find_bytes(body, blen, "\"method\":\"eth_getLogs\"")) {
+        shell_eth1(n, body, blen, why);
+        return;
+    }
     int fcu = find_bytes(body, blen, "\"method\":\"engine_forkchoiceUpdatedV") != NULL;
     if (n->produce && find_bytes(body, blen, "\"method\":\"engine_getPayloadV")) { /* the case's result */
         const char *ip = find_bytes(body, blen, "\"id\":");
@@ -3921,6 +4040,11 @@ static struct node_shell *shell_open(fc_node *n, tv parts, uint8_t **anchor_bloc
         memset(anchor + 72, 0x42, 32);
         wr64(anchor + 104, strlen(ENGINE_HOST));
         memcpy(anchor + 112, ENGINE_HOST, strlen(ENGINE_HOST));
+        if (force_eth1) { /* the eth1 follower on the runner's chain, with the room of its window */
+            flags |= NODE_FLAG_ENGINE | NODE_FLAG_ETH1;
+            s->room[15] = 8192;
+            s->room[16] = 2048;
+        }
         if (force_builder) { /* the runner is the node's builder too */
             flags |= NODE_FLAG_BUILDER;
             wr64(anchor + 216, strlen(BUILDER_HOST));
@@ -9108,8 +9232,21 @@ static void run_node_produce(const char *file, const char *dir, case_file *f) {
         tv bflag = tv_get(parts, "builder");
         int builder = bflag && tv_u64(bflag);
         force_builder = builder; /* the builder cases: the runner is the node's builder, its bids the case's */
+        tv eflag = tv_get(parts, "eth1");
+        force_eth1 = eflag && tv_u64(eflag); /* the eth1 cases: the runner is the node's eth1 chain too */
         struct node_shell *s = shell_open(&n, parts, &anchor_block, &why);
         force_builder = 0;
+        if (force_eth1 && s) {
+            uint64_t bl, dl, cl;
+            s->eth1_blocks = tv_bytes(tv_get(parts, "eth1_blocks"), &bl);
+            s->eth1_deposits = tv_bytes(tv_get(parts, "eth1_deposits"), &dl);
+            s->eth1_contract = tv_bytes(tv_get(parts, "eth1_contract"), &cl);
+            s->eth1_nblocks = bl / 48;
+            s->eth1_ndeposits = dl / 200;
+            s->eth1_calls = 0;
+            if (cl != 20) why = "the eth1 case's contract is not 20 bytes";
+        }
+        force_eth1 = 0;
         if (builder) {
             s->bids = tv_get(parts, "bids");
             s->nbids = s->bids ? rd64(s->bids + 1) : 0;

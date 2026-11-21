@@ -6536,9 +6536,21 @@ LOCAL_FUNCTION node_produce_done
     call    node_produce_next
     LEAVE 0
 20: li      t1, NODE_WORK_PRODUCE_FOLD      # the draft holds the entry, or the rules left it out: the next
-    bne     t0, t1, 30f
+    bne     t0, t1, 25f
     mv      a0, s4
     call    node_produce_next
+    LEAVE 0
+25: li      t1, NODE_WORK_PRODUCE_ETH1      # PRODUCE_ETH1: the snapshot goes; then the header call's wait, at the quiet point
+    bne     t0, t1, 30f
+    ld      a1, (NodeApi_cursor + PRODUCE_ETH1_SNAP)(s4)
+    sd      zero, (NodeApi_cursor + PRODUCE_ETH1_SNAP)(s4)
+    li      a0, NODE_ACT_BYTES_FREE
+    li      a2, 0
+    call    node_ids
+    li      a1, 500
+    bnez    s7, 8f
+    li      t0, NODE_PRODUCE_BID
+    sd      t0, NodeApi_member(s4)
     LEAVE 0
 30: li      t1, NODE_WORK_PRODUCE_BID       # PRODUCE_BID: the answer goes, a valid bid stays; then the build
     bne     t0, t1, 31f
@@ -6662,11 +6674,17 @@ LOCAL_FUNCTION node_produce_next
 3:  addi    s9, s9, 1                       # the next kind, from the pool's first entry
     li      s8, 0
     j       1b
-5:  li      t0, NODE_PRODUCE_BID            # after the last fold: the header call's wait, at the quiet point
+5:  li      t0, NODE_PRODUCE_ETH1           # after the last fold: the eth1 vote and deposits from the follower's snapshot
     sd      t0, NodeApi_member(s3)
-    ld      t0, NodeApi_flags(s3)
-    andi    t0, t0, ~API_STREAM_BUSY
-    sd      t0, NodeApi_flags(s3)
+    call    node_eth1_snapshot
+    sd      a0, (NodeApi_cursor + PRODUCE_ETH1_SNAP)(s3)
+    mv      a2, a0
+    li      a0, NODE_WORK_PRODUCE_ETH1
+    ld      a1, NodeApi_state(s3)
+    ld      a3, NodeApi_data(s3)
+    mv      a4, s4
+    li      a5, 0
+    call    node_work
     LEAVE 0
 END_FUNCTION node_produce_next
 
@@ -6793,7 +6811,14 @@ LOCAL_FUNCTION node_produce_release
     li      a0, NODE_ACT_BYTES_FREE
     li      a2, 0
     call    node_ids
-2:  ld      a0, 0(sp)                       # the builder's answer or bid
+2:  ld      a0, 0(sp)                       # the eth1 snapshot of a work in flight
+    ld      a1, (NodeApi_cursor + PRODUCE_ETH1_SNAP)(a0)
+    sd      zero, (NodeApi_cursor + PRODUCE_ETH1_SNAP)(a0)
+    beqz    a1, 21f
+    li      a0, NODE_ACT_BYTES_FREE
+    li      a2, 0
+    call    node_ids
+21: ld      a0, 0(sp)                       # the builder's answer or bid
     ld      a1, (NodeApi_cursor + PRODUCE_BID)(a0)
     sd      zero, (NodeApi_cursor + PRODUCE_BID)(a0)
     beqz    a1, 3f

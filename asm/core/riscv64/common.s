@@ -42,3 +42,4 @@
 .include "builder.s"
 .include "db.s"
 .include "eth1.s"
+.include "eth1node.s"

@@ -3249,6 +3249,8 @@ LOCAL_FUNCTION app_engine_conf
     call    app_file_free
     LDQ     t0, s1, APP_FLAGS
     ori     t0, t0, NODE_FLAG_ENGINE
+    li      t1, NODE_FLAG_ETH1              # and the eth1 follower on its connection
+    or      t0, t0, t1
     STQ     t0, s1, APP_FLAGS
 8:  li      a0, 0
     LEAVE 0

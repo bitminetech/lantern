@@ -35,6 +35,8 @@
 - [`lantern_node_produce_check`](#function-lantern_node_produce_check): the proposer of a state's slot, its randao reveal checked, for one fork.
 - [`lantern_node_payload_result`](#function-lantern_node_payload_result): the SSZ bytes of an engine_getPayload result, for one fork.
 - [`lantern_node_produce_fold`](#function-lantern_node_produce_fold): a pool entry added to the body draft of a block to produce, for one fork.
+- [`lantern_node_eth1_check`](#function-lantern_node_eth1_check): whether a state still takes votes on the deposit contract's chain, for one fork.
+- [`lantern_node_produce_eth1`](#function-lantern_node_produce_eth1): the eth1 vote and the deposits of a block to produce, for one fork.
 - [`lantern_node_produce_block`](#function-lantern_node_produce_block): the block of produceBlockV3 from its draft and the engine's payload, or blinded with the builder's bid, for one fork.
 - [`lantern_node_produce_bid`](#function-lantern_node_produce_bid): the valid bid of a builder's getHeader answer, for one fork.
 - [`lantern_node_publish_decode`](#function-lantern_node_publish_decode): the signed block of a publishBlockV2 body, for one fork.
@@ -410,7 +412,7 @@ lantern_node_step(node, store, p2p, tick, events, scratch, actions, result) -> s
 
 ### Function does
 
-- Room: `actions` has the event bytes + 512 per event + `NODE_ACT_WORK_SIZE` per vote of each `NODE_EV_WORK_DONE` of a valid `NODE_WORK_IMPORT_BLOCK` (its `NodeEvent_index` + `NodeEvent_root` counts) + 384 per known block + 160 per `NodeBlob` entry + 32 per `NodeCheckpoint` entry + 2048 bytes free (the crossing of a fork boundary takes 208), with an engine_getPayload in flight the bytes `engine_in` holds + 1072 more (the `NODE_ACT_BYTES_PUT` of its result), and `LIBP2P_ACTIONS_MIN` + 40 more with `p2p`; with `p2p`, `p2p_out` has room for the libp2p events of the `NODE_EV_P2P` events, and `scratch` holds as many bytes again and `LIBP2P_SCRATCH_SIZE`; the blocks part has an entry free per `NODE_EV_BLOCK` and per `NODE_EV_WORK_DONE` of `NODE_WORK_GOSSIP` or `NODE_WORK_PUBLISH_CHECK`, and `NODE_SYNC_BATCH` more with `p2p`; the blobs part has an entry free per `NODE_EV_WORK_DONE` of `NODE_WORK_GOSSIP` or `NODE_WORK_PUBLISH_SIDECAR`, and with `p2p` `NODE_SYNC_BATCH` times the largest of `MAX_BLOBS_PER_BLOCK`, `MAX_BLOBS_PER_BLOCK_ELECTRA` and the count of `columns` more; the checkpoints part has 2 free per `NODE_EV_WORK_DONE`, and 2; the pow blocks part has an entry free per `NODE_EV_POW_BLOCK`; `engine_in` has room for the bytes of the `NODE_EV_ENGINE` events; `scratch` has `LANTERN_SCRATCH_FIXED` + 64 + 16 bytes per store node + 8 per `NodeBlock` entry, and `DISCV5_ENR_SIZE` + `DISCV5_ENR_SCRATCH` more with a `NODE_EV_ENR`, and `NODE_API_SCRATCH` (8192) + 4 bytes per byte of the `query` and 16 per byte of the `body` of the largest request more with a `NODE_EV_API`; `actions` has 2048 more, and 16 per byte of its `body`, per `NODE_EV_API`; the api part has an entry free per `NODE_EV_API`; `scratch` has `NODE_API_SCRATCH` more, and `actions` 2048 more, per `NODE_EV_WORK_DONE` of `NODE_WORK_API_LOOKUP`; `actions` has 1024 more per event for each `NodeApi` entry of eventstream, and 2 times `NODE_ACT_WORK_SIZE` more, and `NODE_ACT_WORK_SIZE` more for each pool entry; per `NODE_EV_WORK_DONE` of `NODE_WORK_API_SUBMIT`, `NODE_WORK_PUBLISH_CHECK` or `NODE_WORK_PUBLISH_SIDECAR`, `actions` has 2048 more and, of `LANTERN_VALID`, its bytes once more, and the api part an entry free; with `NODE_FLAG_SUBSCRIBED` and `p2p`, `p2p_out` has room for 2 times its bytes and 512 more per operation, and `scratch` the largest of `SNAPPY_SCRATCH_COMPRESS` + 192 + its bytes more; the pool part asks for no room: a full pool keeps no more operations, and those still go out.
+- Room: `actions` has the event bytes + 512 per event + `NODE_ACT_WORK_SIZE` per vote of each `NODE_EV_WORK_DONE` of a valid `NODE_WORK_IMPORT_BLOCK` (its `NodeEvent_index` + `NodeEvent_root` counts) + 384 per known block + 160 per `NodeBlob` entry + 32 per `NodeCheckpoint` entry + 2048 bytes free (the crossing of a fork boundary takes 208), with an engine_getPayload in flight the bytes `engine_in` holds + 1072 more (the `NODE_ACT_BYTES_PUT` of its result), with `eth1_state` 1 the bytes of an `Eth1Snapshot` of the follower + 2048 more (the snapshot and the eth1 call), and `LIBP2P_ACTIONS_MIN` + 40 more with `p2p`; with `p2p`, `p2p_out` has room for the libp2p events of the `NODE_EV_P2P` events, and `scratch` holds as many bytes again and `LIBP2P_SCRATCH_SIZE`; the blocks part has an entry free per `NODE_EV_BLOCK` and per `NODE_EV_WORK_DONE` of `NODE_WORK_GOSSIP` or `NODE_WORK_PUBLISH_CHECK`, and `NODE_SYNC_BATCH` more with `p2p`; the blobs part has an entry free per `NODE_EV_WORK_DONE` of `NODE_WORK_GOSSIP` or `NODE_WORK_PUBLISH_SIDECAR`, and with `p2p` `NODE_SYNC_BATCH` times the largest of `MAX_BLOBS_PER_BLOCK`, `MAX_BLOBS_PER_BLOCK_ELECTRA` and the count of `columns` more; the checkpoints part has 2 free per `NODE_EV_WORK_DONE`, and 2; the pow blocks part has an entry free per `NODE_EV_POW_BLOCK`; `engine_in` has room for the bytes of the `NODE_EV_ENGINE` events; `scratch` has `LANTERN_SCRATCH_FIXED` + 64 + 16 bytes per store node + 8 per `NodeBlock` entry, and `DISCV5_ENR_SIZE` + `DISCV5_ENR_SCRATCH` more with a `NODE_EV_ENR`, and `NODE_API_SCRATCH` (8192) + 4 bytes per byte of the `query` and 16 per byte of the `body` of the largest request more with a `NODE_EV_API`; `actions` has 2048 more, and 16 per byte of its `body`, per `NODE_EV_API`; the api part has an entry free per `NODE_EV_API`; `scratch` has `NODE_API_SCRATCH` more, and `actions` 2048 more, per `NODE_EV_WORK_DONE` of `NODE_WORK_API_LOOKUP`; `actions` has 1024 more per event for each `NodeApi` entry of eventstream, and 2 times `NODE_ACT_WORK_SIZE` more, and `NODE_ACT_WORK_SIZE` more for each pool entry; per `NODE_EV_WORK_DONE` of `NODE_WORK_API_SUBMIT`, `NODE_WORK_PUBLISH_CHECK` or `NODE_WORK_PUBLISH_SIDECAR`, `actions` has 2048 more and, of `LANTERN_VALID`, its bytes once more, and the api part an entry free; with `NODE_FLAG_SUBSCRIBED` and `p2p`, `p2p_out` has room for 2 times its bytes and 512 more per operation, and `scratch` the largest of `SNAPPY_SCRATCH_COMPRESS` + 192 + its bytes more; the pool part asks for no room: a full pool keeps no more operations, and those still go out.
 - Before any change: the root of each `NODE_EV_BLOCK`, with lantern_node_block_root of the fork of its slot. A status of that call is the step's.
 - On `LANTERN_BUFFER_TOO_SMALL`, `short`: `NODE_SHORT_ACTIONS` for the room of `actions`, and for `LIBP2P_BUFFER_TOO_SMALL` of libp2p_step (its scratch is the step's own); `NODE_SHORT_NODE` for a part of the node, with `room` the byte offset in `NodeRoom` of its capacity (`blocks`, `checkpoints`, `pow_blocks`, `p2p_out`, `blobs`, `engine_bytes` or `api_streams`); `NODE_SHORT_SCRATCH` for `scratch`, and for `LANTERN_BUFFER_TOO_SMALL` of lantern_node_block_root.
 - The prune, after libp2p's first round and before the node's events, when the store's finalized epoch is above `pruned_epoch`: lantern_store_prune with the step's scratch; on its success `pruned_epoch` takes that epoch, and with F the block of the finalized root:
@@ -550,7 +552,8 @@ lantern_node_step(node, store, p2p, tick, events, scratch, actions, result) -> s
   - `NODE_PRODUCE_PAYLOAD` (2), from bellatrix when the head's store node has a `block_hash` that is not zero. On the way in, with `NODE_FLAG_BUILDER`: a `NODE_BUILDER_HEADER` call for the entry, of `slot`, that `block_hash` and the `pubkey` of the proposer's `NodeProposer` entry, when `builder_boost_factor` is not 0, that entry has `registered` 1, the head's `NodeBlock` has a `payload_status` other than `PAYLOAD_STATUS_NOT_VALIDATED`, and the chain is healthy; the entry keeps the call and the registration's fee recipient. Then, with no engine call in flight, first of all engine calls: when `payload_status` is `NODE_PAYLOAD_READY` with `payload_slot` `slot` and `payload_root` `head_root`, a `NODE_WORK_GET_PAYLOAD` of `payload_id` with the id `engine_id`, the call `ENGINE_METHOD_GET_PAYLOAD` with `engine_target` the entry's index; else the preparation of `slot` (as above) with 1 in its work's `target`, which takes the fee recipient zero when the proposer has no `NodeProposer` entry. A preparation that ends with no `payloadId`: 500.
   - `NODE_PRODUCE_FOLD` (3): a `NODE_ACT_BYTES_NEW` of `ProduceDraft__size` bytes, the draft; then one `NODE_WORK_PRODUCE_FOLD` at a time for each kept pool entry, with the draft as `data` and the entry's bytes as `state_b`: each work adds the entry to the draft in place. The kinds in turn (proposer slashings, attester slashings, voluntary exits, BLS changes, attestations, sync committee messages), the entries of each in the pool's order; `cursor` keeps the kind's turn at byte 144 and `filter_slot` the next pool index.
   - While a work of the entry, or its engine_getPayload, is in flight, the entry has `API_STREAM_BUSY`; when it is done, `API_STREAM_BUSY` clears, and with `API_STREAM_GONE` the entry ends with its draft, engine result and state, and answers nothing.
-  - `NODE_PRODUCE_BID` (5), after the last fold, while the header call is in flight: the entry waits, with no work.
+  - `NODE_PRODUCE_ETH1` (6), after the last fold: a `NODE_ACT_BYTES_PUT` of an `Eth1Snapshot` to a new id: with `eth1_state` 1 the `eth1_blocks` entries, the `eth1_deposits` entries from `eth1_deposit_index`, at most `MAX_DEPOSITS`, and every `eth1_leaves` root; else none. Then a `NODE_WORK_PRODUCE_ETH1` of the copy as `state_a`, the draft as `data` and the snapshot as `state_b`. When it is done the snapshot's bytes go; its result `LANTERN_INVALID_DEPOSITS`: 500; else the entry goes on to `NODE_PRODUCE_BID` or the build.
+  - `NODE_PRODUCE_BID` (5), after the eth1 phase, while the header call is in flight: the entry waits, with no work.
     - `NODE_EV_BUILDER` of the call: its index + 1 at byte 152 becomes 0; without the failure bit and with room in the actions, a `NODE_ACT_BYTES_PUT` of the answer's bytes to a new id, at byte 160.
     - After the head, each entry in `NODE_PRODUCE_BID` with no work in flight: when its call is in flight and `time_ms` is at least the call's `time_ms` + `BUILDER_PROPOSAL_DELAY_TOLERANCE` (1000 ms), the call answers no entry (its `NodeApi` index 2^64 - 1) and byte 152 becomes 0; then, with no call in flight and room in the actions for two works and 4096 bytes, the entry goes on.
     - Going on: with an answer at byte 160, a `NODE_WORK_PRODUCE_BID` of the copy as `state_a` and the answer as `data`. Its result `LANTERN_OK`: the bid, the event's bytes, in a `NODE_ACT_BYTES_PUT` to a new id at byte 160; another result: 0 there. Then the answer's bytes go (`NODE_ACT_BYTES_FREE`). Then the build; with no answer, the build at once.
@@ -573,6 +576,16 @@ lantern_node_step(node, store, p2p, tick, events, scratch, actions, result) -> s
 - A failed engine_newPayload: the block takes `NODE_BLOCK_PAYLOAD` with `retry` the store's slot + 1 (optimistic-sync.md: no optimistic import, the block MAY be queued). A failed call makes `engine_wait` the store's slot + 1; a failed engine_forkchoiceUpdated sets `NODE_FLAG_FCU` again, and of a preparation makes `payload_slot` 0 and `payload_status` `NODE_PAYLOAD_NONE`. The call ends.
 - engine_newPayload answered: `VALID`, the block is imported with `PAYLOAD_STATUS_VALID`. `SYNCING` or `ACCEPTED`, the block is imported with `PAYLOAD_STATUS_NOT_VALIDATED` when it is an optimistic candidate: its parent's `BlockNode.block_hash` is not zero, or its slot + `SAFE_SLOTS_TO_IMPORT_OPTIMISTICALLY` is at most the store's slot; else it takes `NODE_BLOCK_PAYLOAD` with `retry` the store's slot + 1. `INVALID` or `INVALID_BLOCK_HASH`, the block is `NODE_BLOCK_INVALID`, its bytes go, and `latestValidHash` applies from its parent. The call ends.
 - engine_forkchoiceUpdated answered: of a preparation (`engine_target` 1), a `payloadId` sets `payload_id` and `payload_status` `NODE_PAYLOAD_READY`, and a null one `payload_status` `NODE_PAYLOAD_NONE`. `VALID`, lantern_store_payload_status of the head's node with `PAYLOAD_STATUS_VALID`; `INVALID` or `INVALID_BLOCK_HASH`, `latestValidHash` applies from the head, the head included. The call ends.
+- The eth1 follower (eth1.md; phase0 `validator.md`, Eth1 Data; electra `validator.md`), with `NODE_FLAG_ENGINE` and `NODE_FLAG_ETH1`:
+  - The check: after the head, when the store's epoch + 1 is above `eth1_check_epoch` and the head's post-state is held, a `NODE_WORK_ETH1_CHECK` of it, and `eth1_check_epoch` takes the epoch + 1. Its event: `NodeEvent_index` 1 when the deposit bridge is open, then `eth1_state` 1, else 2; `NodeEvent_checkpoint` the state's `eth1_deposit_index`, then `eth1_deposit_index`.
+  - The calls: with `eth1_state` 1, after the engine's calls (above) when none is in flight, the first of these goes out, its JSON-RPC request with the id `engine_id` in lantern_http_post with the JWT of lantern_jwt_token of `time_ms` / 1000, in a `NODE_ACT_ENGINE`; `engine_method` `ENGINE_METHOD_ETH_BLOCK` or `ENGINE_METHOD_ETH_LOGS`:
+    - `eth1_head_ms` 0, or `time_ms` at least `eth1_head_ms` + `SECONDS_PER_ETH1_BLOCK` * 1000: eth_getBlockByNumber of the latest block, `eth1_call` 2^64 - 1.
+    - With F the follow head, `eth1_head` - `ETH1_FOLLOW_DISTANCE` (none when below it): `eth1_logs_to` at most F: eth_getLogs of the deposit contract's address (the config's `DEPOSIT_CONTRACT_ADDRESS`) from `eth1_logs_to` to the lower of F and `eth1_logs_to` + `NODE_ETH1_LOG_BLOCKS` (1000) - 1, `eth1_call` that last block.
+    - With no `eth1_blocks` entry: eth_getBlockByNumber of F. With its highest entry below F: of the one after it. With its lowest entry above 0 whose timestamp + 2 * `SECONDS_PER_ETH1_BLOCK` * `ETH1_FOLLOW_DISTANCE` is at least the start of the voting period of the store's slot (phase0 voting_period_start_time: with P the slot less its rest modulo `EPOCHS_PER_ETH1_VOTING_PERIOD` * `SLOTS_PER_EPOCH`, (genesis_time * 1000 + P * `SLOT_DURATION_MS`) / 1000): of the one before it. `eth1_call` the number.
+  - eth_getBlockByNumber answered, lantern_eth1_block of the `result`: for the latest, `eth1_head` its number and `eth1_head_ms` `time_ms`. Else an `Eth1Block` entry of its number, hash and timestamp, its `deposit_count` and `deposit_root` those of the last `eth1_counts` entry at or below its number, else 0 and the root of no deposits; one after the highest entry, or before the lowest. Then, while the second entry's timestamp + 2 * `SECONDS_PER_ETH1_BLOCK` * `ETH1_FOLLOW_DISTANCE` is below the period's start, the lowest goes: one entry below the window stays, as its floor.
+  - eth_getLogs answered, lantern_eth1_deposit_logs of the `result` at the end of `scratch`: each deposit in order whose `index` is the count of `eth1_deposits` joins it (one below it is skipped: a range asked again), its leaf (lantern_deposit_leaf of its `DepositData`) joins `eth1_leaves` and goes in `eth1_tree` (lantern_deposit_tree_push); after the last deposit of each block number, an `eth1_counts` entry of the number, the tree's count and lantern_deposit_tree_root. A deposit above that index ends the answer there, and the call fails. Then `eth1_logs_to` takes the range's last block + 1.
+  - A failed eth1 call: a status other than 200, a body that is no answer, a JSON-RPC error, another id, a result lantern_eth1_block or lantern_eth1_deposit_logs refuses, a block of another number than asked, or `engine_in` failing. `eth1_head_ms` takes `time_ms`, so the calls wait for the next head poll; `engine_wait` stays. The call ends.
+  - The room: while `eth1_state` is 1, before any change, `eth1_deposits` has room for `NODE_ETH1_ROOM` (1024) entries more, else `LANTERN_BUFFER_TOO_SMALL` with `NODE_SHORT_NODE` and `room` the offset of `eth1_deposits` in `NodeRoom`. A logs answer with more deposits than the room left, or than the scratch holds, fails. No room in `eth1_blocks`: the lowest entry goes first.
 - `latestValidHash` applies from a block of the store: up the chain from it, by `parent_root`, each block whose `block_hash` is not `latestValidHash` gets lantern_store_payload_status with `PAYLOAD_STATUS_INVALIDATED`, until the block whose `block_hash` is `latestValidHash`. A zero hash stops at the first block whose `block_hash` is zero. With null, or a hash no block of the chain has, only the block in question (a block of the store) gets it.
 - `NODE_EV_WORK_DONE` of `NODE_WORK_GOSSIP`: a `VALIDATION` of `LIBP2P_ACCEPT` for `LANTERN_VALID`, `LIBP2P_REJECT` for `LANTERN_GOSSIP_REJECT`, else `LIBP2P_IGNORE`; a `NODE_ACT_STATE_FREE` of the proposer state. A valid beacon_block of a root the node does not know keeps its bytes as a `NodeBlock` with the blob count at `NodeEvent_index`, which waits for its blobs. A valid blob_sidecar keeps its bytes as a `NodeBlob` in `NODE_BLOB_VALID` of the root at `NodeEvent_root`, the index at `NodeEvent_index` and the message's slot, when the node holds no `NODE_BLOB_VALID` entry of that root and index. A valid data_column_sidecar of a column of `columns` keeps its bytes as a `NodeBlob` in `NODE_BLOB_VALID` of the root at `NodeEvent_root`, the index at `NodeEvent_index` and the message's slot, when the node holds no `NODE_BLOB_VALID` entry of that root and index. A valid attester_slashing with a justified state keeps its bytes for a `NODE_WORK_ATTESTER_SLASHING` with that state. A valid voluntary_exit, proposer_slashing, attester_slashing or bls_to_execution_change keeps its bytes as a `NodePool` entry too (the pool, below), when the pool has an entry free. A valid beacon_attestation keeps its bytes as a `NodePool` entry with the slot, the committee index and the member at `NodeEvent_root`, when the pool has an entry free for it. A valid beacon_aggregate_and_proof keeps its bytes and its entry, in `NODE_MESSAGE_VOTE`, for fork choice from the slot after its aggregate's (phase0 `fork-choice.md`: an attestation affects the fork choice of later slots only), when the messages part has more than half its capacity free after it. Else the bytes go. The entry goes, but an entry kept for its vote.
 
@@ -724,7 +737,9 @@ lantern_node_run(node, store, seen, work, state_a, state_b, state_c, data, setti
 - `NODE_WORK_NEW_PAYLOAD`: lantern_node_new_payload of the fork of the block's slot (bellatrix and later; before it `LANTERN_NO_PAYLOAD`), its request a ByteList at `NodeEvent_chunk`. The event's `size` then covers it.
 - `NODE_WORK_PREPARE_PAYLOAD`: of the fork of the slot of `state_a`: the `proposers` entry of get_beacon_proposer_index of `state_a` whose `until_epoch` is above the epoch of the state's slot, else the result `LANTERN_NO_PAYLOAD`; lantern_get_payload_attributes of `state_a` with its `fee_recipient` and the node's config; then engine_forkchoiceUpdated with those attributes and the id `arg`, its head the `block_hash` of the store's node of `payload_root` (the state's `latest_execution_payload_header.block_hash`, prepare_execution_payload's `parent_hash`; `LANTERN_INVALID_UNKNOWN_BLOCK` when the store has no such node, `LANTERN_NO_PAYLOAD` when it is zero), its safe and finalized hashes as for `NODE_WORK_FORKCHOICE`, as a ByteList at `NodeEvent_chunk` in an HTTP POST as `NODE_WORK_FORKCHOICE` writes it; the proposer's index at `NodeEvent_index`. With 2 in `target`: after the request's ByteList, at its size rounded up to 8, the text of the payload_attributes event (beacon-api.md, eventstream) as a ByteList, its parent block number and hash from lantern_node_payload_parent of the fork of the state's slot. The event's `size` then covers the request and the text. With 1 in `target`, a proposer with no `proposers` entry takes a fee recipient of zero bytes.
 - `NODE_WORK_GET_PAYLOAD`: lantern_engine_get_payload of the fork of the slot of the `NodeApi` entry at `target` with `payload_id` and the id `arg`, in an HTTP POST as `NODE_WORK_FORKCHOICE` writes it, as a ByteList at `NodeEvent_chunk`.
-- `NODE_WORK_PRODUCE_CHECK`: lantern_node_produce_check of the fork of the slot of `state_a`, for the `NodeApi` entry at `target`: get_beacon_proposer_index of the state at `NodeEvent_root`, and at byte 8 of it 1 when the chain is healthy, else 0; with `skip_randao_verification` a `randao_reveal` that is not the point at infinity, else one that fails process_randao's check for that proposer: the result `LANTERN_INVALID_RANDAO_REVEAL` (400); an expected deposit count above 0 (beacon-api.md): `LANTERN_INVALID_DEPOSITS` (500).
+- `NODE_WORK_PRODUCE_CHECK`: lantern_node_produce_check of the fork of the slot of `state_a`, for the `NodeApi` entry at `target`: get_beacon_proposer_index of the state at `NodeEvent_root`, and at byte 8 of it 1 when the chain is healthy, else 0; with `skip_randao_verification` a `randao_reveal` that is not the point at infinity, else one that fails process_randao's check for that proposer: the result `LANTERN_INVALID_RANDAO_REVEAL` (400).
+- `NODE_WORK_ETH1_CHECK`: lantern_node_eth1_check of the fork of the slot of `state_a`: its two u64 at `NodeEvent_index` and `NodeEvent_checkpoint`.
+- `NODE_WORK_PRODUCE_ETH1`: lantern_node_produce_eth1 of the fork of the slot of `state_a`, with the draft `data`, the snapshot `state_b` and the node's config; its status is the result.
 - `NODE_WORK_PRODUCE_FOLD`: lantern_node_produce_fold of the fork of the slot of `state_a`: the pool entry `state_b` joins the draft `data` in place when the rules of beacon-api.md take it at `state_a`; `arg` its topic, + 2^8 times its `NodePool` `fork`, + 2^16 times its `member`.
 - `NODE_WORK_PRODUCE_BLOCK`: lantern_node_produce_block of the fork of the slot of `state_a`, from the draft `data`, the engine's result `state_b` and the bid `state_c` (a ByteList, or 0), with the request of the entry at `target` and the node's config: the fork's `BeaconBlock`, `BlockContents` or `BlindedBeaconBlock` in SSZ bytes as a ByteList at `NodeEvent_chunk`, execution_payload_value at `NodeEvent_root` (32 bytes), consensus_block_value in Gwei at `NodeEvent_index`, and 1 at `NodeEvent_checkpoint` for a blinded block, else 0.
 - `NODE_WORK_PRODUCE_BID`: of the builder's answer `data` (beacon-api.md, produceBlockV3, the builder): lantern_http_parse_response with `eof` 1, its body unchunked at the end of `scratch` (`LANTERN_INVALID_HTTP` when it gives no response); a status other than 200, the result `LANTERN_NO_BID`; the body an object whose first member `version` is a string and whose first member `data` is a value, other members skipped (else `LANTERN_INVALID_JSON`); `version` the name of the fork of the slot of `state_a` (else `LANTERN_INVALID_BID`). Then lantern_node_produce_bid of that fork, of the text of `data`, with the request of the entry at `target` and the node's config: the `SignedBuilderBid` in SSZ bytes as a ByteList at `NodeEvent_chunk`.
@@ -1576,7 +1591,6 @@ lantern_node_produce_check(state, request, scratch, out) -> status
 
 - `LANTERN_OK`: `out` holds the proposer and the health.
 - `LANTERN_INVALID_RANDAO_REVEAL`: with skip 1, a reveal other than the point at infinity (`0xc0` and 95 zero bytes); with skip 0, a reveal that fails the bls.Verify of process_randao for the proposer, the state's current epoch and get_domain(state, DOMAIN_RANDAO).
-- `LANTERN_INVALID_DEPOSITS`: the block would need deposits: before electra min(`MAX_DEPOSITS`, `eth1_data.deposit_count` - `eth1_deposit_index`) above 0 (phase0 validator.md), in electra get_eth1_pending_deposit_count above 0; never from fulu, whose process_operations takes no deposit.
 - `LANTERN_BUFFER_TOO_SMALL`: `scratch` is short.
 - Another `LANTERN_INVALID_*` code: a check of a callee failed.
 
@@ -1665,6 +1679,71 @@ lantern_node_produce_fold(state, entry, draft, arg, scratch) -> status
 - Export: `lantern_<fork>_node_produce_fold` of each fork object (asm/core/<ISA>/nodehooks.s).
 - Argument order: `state`, `entry`, `draft`, `arg`, `scratch`.
 
+## Function `lantern_node_eth1_check`
+
+Whether the deposit bridge of a state is open, so the eth1 follower runs (electra `validator.md`: clients may stop the Eth1Data polling once `eth1_deposit_index` equals `deposit_requests_start_index`).
+
+### Signature
+
+```
+lantern_node_eth1_check(state, out) -> status
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `state` | input | `BeaconState` |
+| `out` | output | 16 bytes: u64 1 when the bridge is open, else 0; then the state's `eth1_deposit_index` |
+
+### Returns
+
+- `LANTERN_OK`: `out` holds them.
+
+### Function does
+
+- Open: before electra always; in electra while `eth1_deposit_index` is not `deposit_requests_start_index`; never from fulu, whose pinned spec deprecates get_eth1_vote and get_eth1_pending_deposit_count (pysetup's fulu builder).
+
+### ABI
+
+- Export: `lantern_<fork>_node_eth1_check` of each fork object.
+
+## Function `lantern_node_produce_eth1`
+
+The `eth1_data` vote and the `deposits` of a block to produce (phase0 and electra `validator.md`), into its draft.
+
+### Signature
+
+```
+lantern_node_produce_eth1(state, draft, snapshot, config, scratch) -> status
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `state` | input | `BeaconState`: at the slot of the block |
+| `draft` | state | ByteList: a `ProduceDraft` from offset 24 |
+| `snapshot` | input | ByteList: an `Eth1Snapshot` from offset 24 |
+| `config` | input | `Config` |
+| `scratch` | scratch | `Scratch` |
+
+### Returns
+
+- `LANTERN_OK`: the draft holds the vote and the deposits, `eth1_set` 1.
+- `LANTERN_INVALID_DEPOSITS`: the block needs a deposit the snapshot lacks: one of `eth1_deposit_index` to the expected count is not among its deposits, or its leaves are fewer than the deposit count.
+- `LANTERN_BUFFER_TOO_SMALL`: `scratch` is short.
+
+### Function does
+
+- The vote: get_eth1_vote of the fork (phase0; electra's in electra) with `eth1_chain` the snapshot's blocks in number order and get_eth1_data of a block its `deposit_root`, `deposit_count` and `hash`. From fulu, which deprecates get_eth1_vote, the state's `eth1_data`.
+- The deposit data after the vote: the vote's when its count in `eth1_data_votes`, plus 1, times 2 is above `EPOCHS_PER_ETH1_VOTING_PERIOD` * `SLOTS_PER_EPOCH` (process_eth1_data), else the state's `eth1_data`.
+- The deposits: their count, with that deposit data, phase0's min(`MAX_DEPOSITS`, `deposit_count` - `eth1_deposit_index`), electra's get_eth1_pending_deposit_count, none from fulu; each the snapshot's deposit of index `eth1_deposit_index` + i, its proof lantern_deposit_proof of the snapshot's leaves, `deposit_count` and its index.
+
+### ABI
+
+- Export: `lantern_<fork>_node_produce_eth1` of each fork object.
+
 ## Function `lantern_node_produce_block`
 
 The block of produceBlockV3 (beacon-api.md) from a state at its slot, its `ProduceDraft` and the engine's payload, or with a builder's bid that wins the choice the blinded block.
@@ -1694,6 +1773,7 @@ lantern_node_produce_block(state, draft, params, scratch, out) -> status
 ### Function does
 
 - The body of beacon-api.md: the operations in the draft's record order; the attestations of the draft's aggregates by `data.slot` descending, then `order`, at most the fork's limit, from electra those of one data joined; the draft's sync aggregate; the payload, commitments and requests of the result (bellatrix: the result is the payload; with no result, before the merge, the empty payload).
+- `eth1_data` and `deposits`: the draft's when its `eth1_set` is 1, else the state's `eth1_data` and none.
 - `state_root`: hash_tree_root of the state after process_block with an execution_valid of 1, or 3 with `skip_randao_verification` (no check of the reveal's signature).
 - `execution_payload_value`: the result's `block_value`, 0 in bellatrix. `consensus_block_value`: the proposer's balance after less before, plus the payload's withdrawals to the proposer, at least 0.
 - With a `bid` (from bellatrix): the choice of beacon-api.md, from the result's `block_value` (0 in bellatrix), the request's `builder_boost_factor` and the bid's `value`. The local block as above; else the blinded block:
@@ -2640,10 +2720,22 @@ The state of the node: a value with parts.
 | 728 + `CONFIG_SIZE` + `API_IDENTITY_SIZE` + 448 + 8 * (`SYNC_COMMITTEE_SUBNET_COUNT` + `ATTESTATION_SUBNET_COUNT`) | `replay_copy` | u64 | The copy the replay in flight brings forward, or 0 for none |
 | 728 + `CONFIG_SIZE` + `API_IDENTITY_SIZE` + 456 + 8 * (`SYNC_COMMITTEE_SUBNET_COUNT` + `ATTESTATION_SUBNET_COUNT`) | `replay_copy_slot` | u64 | Its slot |
 | 728 + `CONFIG_SIZE` + `API_IDENTITY_SIZE` + 464 + 8 * (`SYNC_COMMITTEE_SUBNET_COUNT` + `ATTESTATION_SUBNET_COUNT`) | `replay_next` | u64 | The slot from which the replay in flight queues its next block |
+| 728 + `CONFIG_SIZE` + `API_IDENTITY_SIZE` + 472 + 8 * (`SYNC_COMMITTEE_SUBNET_COUNT` + `ATTESTATION_SUBNET_COUNT`) | `eth1_state` | u64 | The eth1 follower: 0 before the first check, 1 it runs (the deposit bridge is open), 2 it waits (closed) |
+| 728 + `CONFIG_SIZE` + `API_IDENTITY_SIZE` + 480 + 8 * (`SYNC_COMMITTEE_SUBNET_COUNT` + `ATTESTATION_SUBNET_COUNT`) | `eth1_head` | u64 | The number of the eth1 chain's latest block |
+| 728 + `CONFIG_SIZE` + `API_IDENTITY_SIZE` + 488 + 8 * (`SYNC_COMMITTEE_SUBNET_COUNT` + `ATTESTATION_SUBNET_COUNT`) | `eth1_head_ms` | u64 | The time `eth1_head` was read, or 0 |
+| 728 + `CONFIG_SIZE` + `API_IDENTITY_SIZE` + 496 + 8 * (`SYNC_COMMITTEE_SUBNET_COUNT` + `ATTESTATION_SUBNET_COUNT`) | `eth1_logs_to` | u64 | The deposit logs of the blocks below this number are in |
+| 728 + `CONFIG_SIZE` + `API_IDENTITY_SIZE` + 504 + 8 * (`SYNC_COMMITTEE_SUBNET_COUNT` + `ATTESTATION_SUBNET_COUNT`) | `eth1_call` | u64 | The eth1 call in flight: the block number asked, 2^64 - 1 for the latest, or the last block of the logs asked |
+| 728 + `CONFIG_SIZE` + `API_IDENTITY_SIZE` + 512 + 8 * (`SYNC_COMMITTEE_SUBNET_COUNT` + `ATTESTATION_SUBNET_COUNT`) | `eth1_deposit_index` | u64 | `eth1_deposit_index` of the head's post-state at the last check |
+| 728 + `CONFIG_SIZE` + `API_IDENTITY_SIZE` + 520 + 8 * (`SYNC_COMMITTEE_SUBNET_COUNT` + `ATTESTATION_SUBNET_COUNT`) | `eth1_tree` | `DepositTree` of [eth1.md](eth1.md#type-deposittree) | The deposit contract's tree of the deposits in `eth1_deposits` |
+| 728 + `CONFIG_SIZE` + `API_IDENTITY_SIZE` + 1552 + 8 * (`SYNC_COMMITTEE_SUBNET_COUNT` + `ATTESTATION_SUBNET_COUNT`) | `eth1_blocks` | PartRef | `Eth1Block` entries of eth1.md: the window of the voting period, by number, one after another |
+| 728 + `CONFIG_SIZE` + `API_IDENTITY_SIZE` + 1568 + 8 * (`SYNC_COMMITTEE_SUBNET_COUNT` + `ATTESTATION_SUBNET_COUNT`) | `eth1_deposits` | PartRef | `Eth1Deposit` entries of eth1.md, by index from 0 |
+| 728 + `CONFIG_SIZE` + `API_IDENTITY_SIZE` + 1584 + 8 * (`SYNC_COMMITTEE_SUBNET_COUNT` + `ATTESTATION_SUBNET_COUNT`) | `eth1_leaves` | PartRef | Roots: the leaf of each deposit of `eth1_deposits` |
+| 728 + `CONFIG_SIZE` + `API_IDENTITY_SIZE` + 1600 + 8 * (`SYNC_COMMITTEE_SUBNET_COUNT` + `ATTESTATION_SUBNET_COUNT`) | `eth1_counts` | PartRef | `Eth1Count` entries: the deposit count and root after each block with deposits, by number |
+| 728 + `CONFIG_SIZE` + `API_IDENTITY_SIZE` + 1616 + 8 * (`SYNC_COMMITTEE_SUBNET_COUNT` + `ATTESTATION_SUBNET_COUNT`) | `eth1_check_epoch` | u64 | The store's epoch + 1 at the last `NODE_WORK_ETH1_CHECK`, or 0 |
 
 ### Rules
 
-- `NODE_FIXED` (728 + `CONFIG_SIZE` + `API_IDENTITY_SIZE` + 472 + 8 * (`SYNC_COMMITTEE_SUBNET_COUNT` + `ATTESTATION_SUBNET_COUNT`)) bytes of fixed fields; the parts follow in the order blocks, checkpoints, pow_blocks, peers, streams, messages, blobs, api, pool, proposers, p2p_out, engine_in, db.
+- `NODE_FIXED` (728 + `CONFIG_SIZE` + `API_IDENTITY_SIZE` + 1624 + 8 * (`SYNC_COMMITTEE_SUBNET_COUNT` + `ATTESTATION_SUBNET_COUNT`)) bytes of fixed fields; the parts follow in the order blocks, checkpoints, pow_blocks, peers, streams, messages, blobs, api, pool, proposers, p2p_out, engine_in, db, eth1_blocks, eth1_deposits, eth1_leaves, eth1_counts.
 - The `Db` has the capacities of the `NodeRoom` fields `db_slots` and `db_roots`, and its `first_slot` is the lowest of the anchor's `history_slot`, its slot and the first slot of the epoch max(0, the epoch of its slot - compute_min_epochs_for_block_requests), rounded down to a multiple of `DB_SEGMENT_SLOTS`: the backfill's blocks fit in it.
 - The backfill at the start: `backfill_root` the anchor's root, `backfill_slot` and `backfill_next` its slot + 1 (the anchor block's bytes come from a peer too), `backfill_segment`, `backfill_sidecar_segment` and `backfill_start` 2^64 - 1, and `backfill_handle`, `backfill_end`, `backfill_ms`, `backfill_peer` and `backfill_got` 0.
 - The capacity of a part is its bytes up to the next part over its entry's bytes; `p2p_out` is the last part.
@@ -2654,6 +2746,7 @@ The state of the node: a value with parts.
 - `NODE_FLAG_ENGINE`: the node drives an execution engine; `NODE_FLAG_FCU`: an engine_forkchoiceUpdated is due.
 - `NODE_FLAG_DISCV5`: the shell runs asm-discv5 for the node.
 - `NODE_FLAG_DB`: the node archives the finalized history in its `Db`, and the shell keeps the segment files: it does each `NODE_ACT_DB_APPEND` and gives the bytes of a `NODE_DB_REF`.
+- `NODE_FLAG_ETH1` (4096): with `NODE_FLAG_ENGINE`, the node follows the deposit contract's chain through the execution engine's connection (the eth1 follower).
 - `NODE_FLAG_EL_OFFLINE`: the last connection to the execution engine failed or closed before an answer, and no answer came since.
 - `NODE_FLAG_FEW_STATES`: the node keeps the post-states of the head, the justified root, F and the blocks with no child, and rebuilds the others when it needs them.
 - `NODE_FLAG_SUPERNODE`: the node custodies every custody group: `columns` holds every column, and its MetaData and ENR give `NUMBER_OF_CUSTODY_GROUPS` (lantern_node_init).
@@ -2681,6 +2774,21 @@ The state of the node: a value with parts.
 | 96 | `api_streams` | u64 | Capacity of `api` |
 | 104 | `pool` | u64 | Capacity of `pool` |
 | 112 | `proposers` | u64 | Capacity of `proposers` |
+| 120 | `eth1_blocks` | u64 | Capacity of `eth1_blocks` |
+| 128 | `eth1_deposits` | u64 | Capacity of `eth1_deposits`, `eth1_leaves` and `eth1_counts` |
+
+## Type `Eth1Count`
+
+The deposits of the contract after an eth1 block with deposits (the eth1 follower).
+
+### Layout
+
+| Offset | Field | Type | Meaning |
+|---|---|---|---|
+| 0 | `number` | u64 | The block's number |
+| 8 | `count` | u64 | The deposits after it |
+| 16 | `root` | Root | get_deposit_root after it |
+| 48 | | | Size |
 
 ## Type `NodeProposer`
 
@@ -2719,10 +2827,28 @@ The body draft of a produceBlockV3 (beacon-api.md), which the fold works fill in
 | 24 + `SYNC_COMMITTEE_SIZE` / 8 | `sync_signature` | 96 bytes | Their signature |
 | `PRODUCE_DRAFT_AGGREGATES` | | `DraftAggregate` entries | `MAX_COMMITTEES_PER_SLOT` * `SLOTS_PER_EPOCH` of them |
 | `PRODUCE_DRAFT_OPS` | | `PRODUCE_DRAFT_OPS_ROOM` bytes | The operations, each a record: its topic (u64), its length (u64), its SSZ bytes, then zero bytes to a multiple of 8 |
+| `PRODUCE_DRAFT_ETH1` | `eth1_set` | u64 | 1 once lantern_node_produce_eth1 wrote the vote and the deposits |
+| `PRODUCE_DRAFT_ETH1` + 8 | `eth1_data` | `Eth1Data` | 72 bytes: the vote |
+| `PRODUCE_DRAFT_ETH1` + 80 | `deposit_count` | u64 | The deposits after it |
+| `PRODUCE_DRAFT_ETH1` + 88 | `deposits` | `MAX_DEPOSITS` `Deposit` values | Each in SSZ: its proof (33 roots), then its `DepositData` (184 bytes) |
 
 ### Rules
 
 - `PRODUCE_DRAFT_AGGREGATES`: 24 + `SYNC_COMMITTEE_SIZE` / 8 + 96, to a multiple of 8. `PRODUCE_DRAFT_OPS`: that + the entries' bytes. `PRODUCE_DRAFT_OPS_ROOM`: the SSZ bytes of `MAX_PROPOSER_SLASHINGS` proposer slashings, `MAX_ATTESTER_SLASHINGS` (electra: `MAX_ATTESTER_SLASHINGS_ELECTRA`) attester slashings at their largest, `MAX_VOLUNTARY_EXITS` exits and `MAX_BLS_TO_EXECUTION_CHANGES` changes, and 24 bytes for each. `ProduceDraft__size`: the operations area's end.
+- `PRODUCE_DRAFT_ETH1`: `PRODUCE_DRAFT_OPS` + `PRODUCE_DRAFT_OPS_ROOM`. `ProduceDraft__size`: that + 88 + `MAX_DEPOSITS` * 1240.
+
+## Type `Eth1Snapshot`
+
+What the eth1 follower holds for a block to produce (lantern_node_produce_eth1).
+
+### Layout
+
+| Offset | Field | Type | Meaning |
+|---|---|---|---|
+| 0 | `blocks` | u64 | The `Eth1Block` entries (eth1.md) |
+| 8 | `deposits` | u64 | The `Eth1Deposit` entries (eth1.md), of consecutive indices |
+| 16 | `leaves` | u64 | The leaves, from deposit 0 |
+| 24 | | | The blocks, then the deposits, then the leaves (32 bytes each) |
 
 ## Type `DraftAggregate`
 

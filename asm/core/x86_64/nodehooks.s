@@ -4131,24 +4131,9 @@ SPEC_FUNCTION node_produce_check
     jnz     7f
     test    %rdx, %rdx
     jz      5f
-3:
-.if FORK < FORK_ELECTRA
-    mov     (BeaconState_eth1_data + Eth1Data_deposit_count)(%rbx), %rcx    # deposits the block would need
-    cmp     BeaconState_eth1_deposit_index(%rbx), %rcx
-    ja      6f
-.elseif FORK == FORK_ELECTRA
-    mov     (BeaconState_eth1_data + Eth1Data_deposit_count)(%rbx), %rcx    # get_eth1_pending_deposit_count
-    mov     BeaconState_deposit_requests_start_index(%rbx), %rdx
-    cmp     %rdx, %rcx
-    cmovae  %rdx, %rcx
-    cmp     %rcx, BeaconState_eth1_deposit_index(%rbx)
-    jb      6f
-.endif
-    xor     %eax, %eax
+3:  xor     %eax, %eax                      # the deposits are the eth1 phase's (lantern_node_produce_eth1)
 7:  LEAVE 112
 5:  mov     $LANTERN_INVALID_RANDAO_REVEAL, %eax
-    LEAVE 112
-6:  mov     $LANTERN_INVALID_DEPOSITS, %eax
     LEAVE 112
 9:  mov     $LANTERN_BUFFER_TOO_SMALL, %eax
     LEAVE 112
@@ -5365,10 +5350,13 @@ SPEC_FUNCTION node_produce_block
     mov     (%r12), %rsi
     mov     $96, %edx
     call    lantern_copy
-    mov     S8(%rsp), %rdi
+    mov     S8(%rsp), %rdi                  # the draft's vote with eth1_set, else the state's eth1_data
     add     $96, %rdi
     lea     BeaconState_eth1_data(%rbx), %rsi
-    mov     $72, %edx
+    cmpq    $0, PRODUCE_DRAFT_ETH1(%rbp)
+    je      1f
+    lea     (PRODUCE_DRAFT_ETH1 + 8)(%rbp), %rsi
+1:  mov     $72, %edx
     call    lantern_copy
     mov     S8(%rsp), %rdi
     add     $168, %rdi
@@ -5418,9 +5406,21 @@ SPEC_FUNCTION node_produce_block
     je      98f
     test    %rax, %rax
     jnz     99f
-    /* deposits: none; voluntary_exits */
+    /* deposits: the draft's with eth1_set; voluntary_exits */
     PB_OFFSET 212
-    PB_OFFSET 216
+    cmpq    $0, PRODUCE_DRAFT_ETH1(%rbp)
+    je      2f
+    imul    $PRODUCE_DRAFT_DEPOSIT, (PRODUCE_DRAFT_ETH1 + 80)(%rbp), %rsi
+    mov     %r15, %rdi
+    call    produce_room
+    test    %rax, %rax
+    jnz     98f
+    imul    $PRODUCE_DRAFT_DEPOSIT, (PRODUCE_DRAFT_ETH1 + 80)(%rbp), %rdx
+    mov     %r15, %rdi
+    lea     (PRODUCE_DRAFT_ETH1 + 88)(%rbp), %rsi
+    add     %rdx, %r15
+    call    lantern_copy
+2:  PB_OFFSET 216
     mov     $GOSSIP_VOLUNTARY_EXIT, %edi
     mov     %r15, %rsi
     call    produce_records
@@ -5684,6 +5684,332 @@ SPEC_FUNCTION node_produce_block
     mov     $LANTERN_BUFFER_TOO_SMALL, %eax
     LEAVE 288
 SPEC_END node_produce_block
+
+/* (state, out): node.md, lantern_node_eth1_check. */
+SPEC_FUNCTION node_eth1_check
+    ENTER 0
+    mov     BeaconState_eth1_deposit_index(%rdi), %rax
+    mov     $1, %ecx                        # open before electra; in electra while the index is not deposit_requests_start_index; never from fulu
+.if FORK >= FORK_FULU
+    xor     %ecx, %ecx
+.elseif FORK >= FORK_ELECTRA
+    xor     %ecx, %ecx
+    cmp     BeaconState_deposit_requests_start_index(%rdi), %rax
+    setne   %cl
+.endif
+    mov     %rcx, (%rsi)
+    mov     %rax, 8(%rsi)
+    xor     %eax, %eax
+    LEAVE 0
+SPEC_END node_eth1_check
+
+/* rax = 1 when the Eth1Data at rdi is get_eth1_data of the Eth1Block at rsi, else 0. Uses rcx, rdx, r8. */
+LOCAL_FUNCTION e1v_match
+    UNWIND_END_PROLOGUE
+    mov     Eth1Data_deposit_count(%rdi), %rax
+    cmp     Eth1Block_deposit_count(%rsi), %rax
+    jne     9f
+    xor     %ecx, %ecx
+1:  mov     (%rdi,%rcx), %rax               # deposit_root
+    cmp     Eth1Block_deposit_root(%rsi,%rcx), %rax
+    jne     9f
+    mov     Eth1Data_block_hash(%rdi,%rcx), %rax    # block_hash
+    cmp     Eth1Block_hash(%rsi,%rcx), %rax
+    jne     9f
+    add     $8, %ecx
+    cmp     $32, %ecx
+    jb      1b
+    mov     $1, %eax
+    ret
+9:  xor     %eax, %eax
+    ret
+END_FUNCTION e1v_match
+
+/* rax = 1 when the 72 bytes at rdi and rsi are equal, else 0. Uses rcx, rdx. */
+LOCAL_FUNCTION e1v_same
+    UNWIND_END_PROLOGUE
+    xor     %ecx, %ecx
+1:  mov     (%rdi,%rcx), %rax
+    cmp     (%rsi,%rcx), %rax
+    jne     9f
+    add     $8, %ecx
+    cmp     $Eth1Data__mem, %ecx
+    jb      1b
+    mov     $1, %eax
+    ret
+9:  xor     %eax, %eax
+    ret
+END_FUNCTION e1v_same
+
+/*
+ * rax = 1 when the Eth1Data at rdi is the data of a block of votes_to_consider (phase0
+ * get_eth1_vote): a candidate block (its timestamp + S * F at most the period start, + 2 * S * F
+ * at least it) whose deposit_count is at least the state's. The blocks at rsi, their count rdx, the
+ * period start and S * F at rcx, the state's deposit_count r8. Uses r9-r11.
+ */
+LOCAL_FUNCTION e1v_consider
+    FRAME 32
+    mov     %rdi, (%rsp)
+    mov     %rsi, 8(%rsp)
+    mov     %rdx, 16(%rsp)
+    mov     %rcx, %r10
+    mov     %r8, %r11
+1:  cmpq    $0, 16(%rsp)
+    je      8f
+    mov     8(%rsp), %rsi
+    mov     Eth1Block_timestamp(%rsi), %r9
+    add     8(%r10), %r9
+    cmp     (%r10), %r9
+    ja      2f
+    add     8(%r10), %r9
+    cmp     (%r10), %r9
+    jb      2f
+    cmp     Eth1Block_deposit_count(%rsi), %r11
+    ja      2f
+    mov     (%rsp), %rdi
+    call    e1v_match
+    test    %rax, %rax
+    jnz     9f
+2:  addq    $Eth1Block__mem, 8(%rsp)
+    decq    16(%rsp)
+    jmp     1b
+8:  xor     %eax, %eax
+9:  UNFRAME 32
+END_FUNCTION e1v_consider
+
+/*
+ * (state, draft, snapshot, config, scratch): node.md, lantern_node_produce_eth1. rbx state, rbp the
+ * draft, r12 the snapshot, r13 the vote, S7 the votes, S8 their count, S9 an index, S10 the best
+ * count. Locals: L the period start, L+8 S * F, L+16 config, L+24 a count, L+32 an index, L+40 the
+ * scratch, L+48 the default vote (72), L+120 the vote's data after it (72), L+192 the leaves'
+ * ByteList (24), L+216 the deposits, L+224 the count, L+232 a saved index.
+ */
+SPEC_FUNCTION node_produce_eth1
+    ENTER 240
+    mov     %rdi, %rbx
+    mov     8(%rsi), %rax
+    lea     (%rsi,%rax), %rbp
+    mov     8(%rdx), %rax
+    lea     (%rdx,%rax), %r12
+    mov     %rcx, (L + 16)(%rsp)
+    mov     %r8, (L + 40)(%rsp)
+    lea     BeaconState_eth1_data(%rbx), %r13   # the vote: the state's eth1_data unless the votes give another
+.if FORK >= FORK_FULU
+    jmp     20f                             # fulu deprecates get_eth1_vote: the state's
+.elseif FORK >= FORK_ELECTRA
+    mov     BeaconState_eth1_deposit_index(%rbx), %rax  # the bridge closed: the state's
+    cmp     BeaconState_deposit_requests_start_index(%rbx), %rax
+    je      20f
+.endif
+    mov     BeaconState_slot(%rbx), %rax    # the period start: voting_period_start_time
+    xor     %edx, %edx
+    mov     $(EPOCHS_PER_ETH1_VOTING_PERIOD * SLOTS_PER_EPOCH), %ecx
+    div     %rcx
+    imul    %rcx, %rax
+    mov     (L + 16)(%rsp), %rcx
+    imul    CONFIG_SLOT_DURATION_MS(%rcx), %rax
+    imul    $1000, BeaconState_genesis_time(%rbx), %rdx
+    add     %rdx, %rax
+    xor     %edx, %edx
+    mov     $1000, %ecx
+    div     %rcx
+    mov     %rax, L(%rsp)
+    mov     (L + 16)(%rsp), %rcx
+    mov     CONFIG_SECONDS_PER_ETH1_BLOCK(%rcx), %rax
+    imul    CONFIG_ETH1_FOLLOW_DISTANCE(%rcx), %rax
+    mov     %rax, (L + 8)(%rsp)
+    lea     (L + 48)(%rsp), %rdi            # default_vote: the last of votes_to_consider, else the state's
+    mov     %r13, %rsi
+    mov     $Eth1Data__mem, %edx
+    call    lantern_copy
+    mov     Eth1Snapshot_blocks(%r12), %rax
+    mov     %rax, S9(%rsp)
+1:  cmpq    $0, S9(%rsp)
+    je      3f
+    decq    S9(%rsp)
+    imul    $Eth1Block__mem, S9(%rsp), %rsi
+    lea     Eth1Snapshot__fixed(%r12,%rsi), %rsi
+    mov     Eth1Block_timestamp(%rsi), %rax
+    add     (L + 8)(%rsp), %rax
+    cmp     L(%rsp), %rax
+    ja      1b
+    add     (L + 8)(%rsp), %rax
+    cmp     L(%rsp), %rax
+    jb      1b
+    mov     Eth1Block_deposit_count(%rsi), %rax
+    cmp     (BeaconState_eth1_data + Eth1Data_deposit_count)(%rbx), %rax
+    jb      1b
+    lea     (L + 48)(%rsp), %rdi            # get_eth1_data of it
+    lea     Eth1Block_deposit_root(%rsi), %rcx
+    COPY32  %rdi, %rcx
+    mov     %rax, (L + 48 + Eth1Data_deposit_count)(%rsp)
+    lea     (L + 48 + Eth1Data_block_hash)(%rsp), %rdi
+    lea     Eth1Block_hash(%rsi), %rcx
+    COPY32  %rdi, %rcx
+3:  lea     (L + 48)(%rsp), %r13
+    movq    $0, S10(%rsp)                   # the valid votes: the most often, then the first
+    PART    %rax, %rcx, %rbx, BeaconState_eth1_data_votes
+    mov     %rax, S7(%rsp)
+    mov     %rcx, S8(%rsp)
+    movq    $0, S9(%rsp)
+4:  mov     S9(%rsp), %rax
+    cmp     S8(%rsp), %rax
+    jae     20f
+    imul    $Eth1Data__mem, %rax, %rdi
+    add     S7(%rsp), %rdi
+    lea     Eth1Snapshot__fixed(%r12), %rsi
+    mov     Eth1Snapshot_blocks(%r12), %rdx
+    lea     L(%rsp), %rcx
+    mov     (BeaconState_eth1_data + Eth1Data_deposit_count)(%rbx), %r8
+    call    e1v_consider                    # a valid vote
+    test    %rax, %rax
+    jz      7f
+    movq    $0, (L + 32)(%rsp)              # its first: no equal vote before it
+5:  mov     (L + 32)(%rsp), %rax
+    cmp     S9(%rsp), %rax
+    jae     51f
+    imul    $Eth1Data__mem, %rax, %rdi
+    add     S7(%rsp), %rdi
+    imul    $Eth1Data__mem, S9(%rsp), %rsi
+    add     S7(%rsp), %rsi
+    call    e1v_same
+    test    %rax, %rax
+    jnz     7f
+    incq    (L + 32)(%rsp)
+    jmp     5b
+51: mov     S9(%rsp), %rax                  # its count among the votes from it on
+    mov     %rax, (L + 32)(%rsp)
+    movq    $0, (L + 24)(%rsp)
+6:  mov     (L + 32)(%rsp), %rax
+    cmp     S8(%rsp), %rax
+    jae     61f
+    imul    $Eth1Data__mem, %rax, %rdi
+    add     S7(%rsp), %rdi
+    imul    $Eth1Data__mem, S9(%rsp), %rsi
+    add     S7(%rsp), %rsi
+    call    e1v_same
+    add     %rax, (L + 24)(%rsp)
+    incq    (L + 32)(%rsp)
+    jmp     6b
+61: mov     (L + 24)(%rsp), %rax            # more than the best so far: the vote
+    cmp     S10(%rsp), %rax
+    jbe     7f
+    mov     %rax, S10(%rsp)
+    imul    $Eth1Data__mem, S9(%rsp), %r13
+    add     S7(%rsp), %r13
+7:  incq    S9(%rsp)
+    jmp     4b
+20: lea     (PRODUCE_DRAFT_ETH1 + 8)(%rbp), %rdi    # the draft's vote
+    mov     %r13, %rsi
+    mov     $Eth1Data__mem, %edx
+    call    lantern_copy
+    lea     (PRODUCE_DRAFT_ETH1 + 8)(%rbp), %r13
+    PART    %rax, %rcx, %rbx, BeaconState_eth1_data_votes  # the data after it: the vote's count + 1, times 2, above the period's slots
+    mov     %rax, S7(%rsp)
+    mov     %rcx, S8(%rsp)
+    movq    $1, (L + 24)(%rsp)
+8:  cmpq    $0, S8(%rsp)
+    je      81f
+    mov     S7(%rsp), %rdi
+    mov     %r13, %rsi
+    call    e1v_same
+    add     %rax, (L + 24)(%rsp)
+    addq    $Eth1Data__mem, S7(%rsp)
+    decq    S8(%rsp)
+    jmp     8b
+81: mov     (L + 24)(%rsp), %rax
+    shl     $1, %rax
+    lea     (L + 120)(%rsp), %rdi
+    mov     %r13, %rsi
+    cmp     $(EPOCHS_PER_ETH1_VOTING_PERIOD * SLOTS_PER_EPOCH), %rax
+    ja      82f
+    lea     BeaconState_eth1_data(%rbx), %rsi
+82: mov     $Eth1Data__mem, %edx
+    call    lantern_copy
+    xor     %eax, %eax                      # the deposits' count
+.if FORK < FORK_ELECTRA
+    mov     (L + 120 + Eth1Data_deposit_count)(%rsp), %rax
+    sub     BeaconState_eth1_deposit_index(%rbx), %rax
+    jae     83f
+    xor     %eax, %eax
+83:
+.elseif FORK == FORK_ELECTRA
+    mov     (L + 120 + Eth1Data_deposit_count)(%rsp), %rax  # get_eth1_pending_deposit_count
+    mov     BeaconState_deposit_requests_start_index(%rbx), %rcx
+    cmp     %rcx, %rax
+    cmova   %rcx, %rax
+    sub     BeaconState_eth1_deposit_index(%rbx), %rax
+    jae     83f
+    xor     %eax, %eax
+83:
+.endif
+    cmp     $MAX_DEPOSITS, %rax
+    jbe     84f
+    mov     $MAX_DEPOSITS, %eax
+84: mov     %rax, (PRODUCE_DRAFT_ETH1 + 80)(%rbp)
+    mov     %rax, (L + 224)(%rsp)
+    test    %rax, %rax
+    jz      90f
+    mov     Eth1Snapshot_leaves(%r12), %rax # the leaves: at least the deposit count
+    cmp     (L + 120 + Eth1Data_deposit_count)(%rsp), %rax
+    jb      97f
+    imul    $Eth1Block__mem, Eth1Snapshot_blocks(%r12), %rax    # the deposits, then the leaves' ByteList
+    lea     Eth1Snapshot__fixed(%r12,%rax), %rax
+    mov     %rax, (L + 216)(%rsp)
+    imul    $Eth1Deposit__mem, Eth1Snapshot_deposits(%r12), %rcx
+    add     %rcx, %rax
+    lea     (L + 192)(%rsp), %rdx
+    sub     %rdx, %rax
+    mov     %rax, 8(%rdx)
+    mov     Eth1Snapshot_leaves(%r12), %rcx
+    shl     $5, %rcx
+    mov     %rcx, 16(%rdx)
+    add     %rcx, %rax
+    mov     %rax, (%rdx)
+    movq    $0, S9(%rsp)                    # each deposit: its proof, then its data
+9:  mov     S9(%rsp), %rax
+    cmp     (L + 224)(%rsp), %rax
+    jae     90f
+    add     BeaconState_eth1_deposit_index(%rbx), %rax
+    mov     %rax, (L + 232)(%rsp)
+    cmpq    $0, Eth1Snapshot_deposits(%r12) # the snapshot's deposit of that index
+    je      97f
+    mov     (L + 216)(%rsp), %rcx
+    sub     Eth1Deposit_index(%rcx), %rax
+    jb      97f
+    cmp     Eth1Snapshot_deposits(%r12), %rax
+    jae     97f
+    imul    $Eth1Deposit__mem, %rax, %rax
+    add     %rcx, %rax
+    mov     %rax, S10(%rsp)
+    imul    $PRODUCE_DRAFT_DEPOSIT, S9(%rsp), %r8
+    lea     (PRODUCE_DRAFT_ETH1 + 88)(%rbp,%r8), %r8
+    mov     %r8, S7(%rsp)
+    lea     (L + 192)(%rsp), %rdi
+    lea     (L + 120 + Eth1Data_deposit_count)(%rsp), %rsi
+    lea     (L + 232)(%rsp), %rdx
+    mov     (L + 40)(%rsp), %rcx
+    CALL_GLOBAL lantern_deposit_proof
+    cmp     $LANTERN_BUFFER_TOO_SMALL, %rax
+    je      99f
+    test    %rax, %rax
+    jnz     97f
+    mov     S7(%rsp), %rdi
+    add     $(33 * 32), %rdi
+    mov     S10(%rsp), %rsi
+    add     $Eth1Deposit_data, %rsi
+    mov     $184, %edx
+    call    lantern_copy
+    incq    S9(%rsp)
+    jmp     9b
+90: movq    $1, PRODUCE_DRAFT_ETH1(%rbp)
+    xor     %eax, %eax
+    LEAVE 240
+97: mov     $LANTERN_INVALID_DEPOSITS, %eax
+    LEAVE 240
+99: mov     $LANTERN_BUFFER_TOO_SMALL, %eax
+    LEAVE 240
+SPEC_END node_produce_eth1
 
 /* L0: rax = 0 when rsi bytes from rdi fit in the ByteList r14, else 1. Uses rcx. */
 LOCAL_FUNCTION produce_room

@@ -374,6 +374,8 @@
 .set ENGINE_METHOD_FORKCHOICE_UPDATED, 2
 .set ENGINE_METHOD_EXCHANGE_CAPABILITIES, 3
 .set ENGINE_METHOD_GET_PAYLOAD, 4
+.set ENGINE_METHOD_ETH_BLOCK, 5          /* eth_getBlockByNumber: the eth1 follower (eth1.md) */
+.set ENGINE_METHOD_ETH_LOGS, 6           /* eth_getLogs of the DepositEvent logs */
 
 /* ProduceDraft (node.md): the body draft of a produceBlockV3, filled in place by its fold works */
 .set ProduceDraft_aggregates, 0
@@ -397,7 +399,9 @@
 .set PRODUCE_SLASHINGS_ROOM, PRODUCE_SLASHINGS_ROOM_ELECTRA
 .endif
 .set PRODUCE_DRAFT_OPS_ROOM, MAX_PROPOSER_SLASHINGS * (24 + 416) + PRODUCE_SLASHINGS_ROOM + MAX_VOLUNTARY_EXITS * (24 + 112) + MAX_BLS_TO_EXECUTION_CHANGES * (24 + 176)
-.set ProduceDraft__size, PRODUCE_DRAFT_OPS + PRODUCE_DRAFT_OPS_ROOM
+.set PRODUCE_DRAFT_ETH1, PRODUCE_DRAFT_OPS + PRODUCE_DRAFT_OPS_ROOM   /* eth1_set, eth1_data (72), deposit_count, the deposits */
+.set PRODUCE_DRAFT_DEPOSIT, 33 * 32 + 184     /* a Deposit in SSZ: its proof, then its DepositData */
+.set ProduceDraft__size, PRODUCE_DRAFT_ETH1 + 88 + MAX_DEPOSITS * PRODUCE_DRAFT_DEPOSIT
 
 /* PayloadAttributes (engine-api.md) */
 .set PayloadAttributes_timestamp, 0
@@ -639,6 +643,7 @@
 .set NODE_FLAG_EL_OFFLINE, 512         /* the last connection to the execution engine failed before an answer */
 .set NODE_FLAG_SUPERNODE, 1024         /* the node custodies every custody group */
 .set NODE_FLAG_BUILDER, 2048           /* the node has a builder: it makes the builder calls of builder-specs v0.6.1 */
+.set NODE_FLAG_ETH1, 4096             /* with NODE_FLAG_ENGINE, the node follows the deposit contract's chain (node.md, the eth1 follower) */
 .set Node_peers, 120                   /* PartRef of NodePeer */
 .set Node_streams, 136                 /* PartRef of NodeStream entries of Node_stream_bytes each */
 .set Node_p2p_out, 152                 /* PartRef of bytes: libp2p events the node made for its next libp2p step */
@@ -738,7 +743,29 @@
 .set Node_replay_copy, Node_base_slot + 56       /* the copy of the replay in flight, or 0 */
 .set Node_replay_copy_slot, Node_base_slot + 64  /* its slot */
 .set Node_replay_next, Node_base_slot + 72       /* the slot from which it queues its next block */
-.set NODE_FIXED, Node_base_slot + 80
+.set Node_eth1_state, Node_base_slot + 80      /* the eth1 follower (node.md): 0 unchecked, 1 it runs, 2 it waits */
+.set Node_eth1_head, Node_base_slot + 88       /* the eth1 chain's latest block number */
+.set Node_eth1_head_ms, Node_base_slot + 96    /* the time it was read, or 0 */
+.set Node_eth1_logs_to, Node_base_slot + 104   /* the deposit logs of the blocks below it are in */
+.set Node_eth1_call, Node_base_slot + 112      /* the eth1 call in flight: the block asked (2^64 - 1 latest), or the logs' last block */
+.set Node_eth1_deposit_index, Node_base_slot + 120  /* eth1_deposit_index of the head's post-state at the last check */
+.set Node_eth1_tree, Node_base_slot + 128      /* DepositTree of the deposits */
+.set Node_eth1_blocks, Node_base_slot + 1160   /* PartRef: Eth1Block entries by number */
+.set Node_eth1_deposits, Node_base_slot + 1176 /* PartRef: Eth1Deposit entries by index */
+.set Node_eth1_leaves, Node_base_slot + 1192   /* PartRef: their leaves */
+.set Node_eth1_counts, Node_base_slot + 1208   /* PartRef: Eth1Count entries */
+.set Node_eth1_check_epoch, Node_base_slot + 1224  /* the store's epoch + 1 at the last ETH1_CHECK, or 0 */
+.set NODE_FIXED, Node_base_slot + 1232
+.set Eth1Count_number, 0               /* Eth1Count (node.md) */
+.set Eth1Count_count, 8
+.set Eth1Count_root, 16
+.set Eth1Count__mem, 48
+.set Eth1Snapshot_blocks, 0            /* Eth1Snapshot (node.md) */
+.set Eth1Snapshot_deposits, 8
+.set Eth1Snapshot_leaves, 16
+.set Eth1Snapshot__fixed, 24
+.set NODE_ETH1_LOG_BLOCKS, 1000        /* the most blocks of one eth_getLogs */
+.set NODE_ETH1_ROOM, 1024              /* the eth1_deposits entries free while the follower runs */
 .set NODE_REPLAY_CHUNK, 64             /* the most blocks a replay queues in a step */
 .set NODE_PAYLOAD_NONE, 0
 .set NODE_PAYLOAD_PREPARING, 1             /* its PREPARE_PAYLOAD work is queued */
@@ -903,7 +930,9 @@
 .set NodeRoom_api_streams, 96          /* NodeApi entries: answers the node streams */
 .set NodeRoom_pool, 104                /* NodePool entries: the pool's operations */
 .set NodeRoom_proposers, 112           /* NodeProposer entries: the fee recipients of prepareBeaconProposer */
-.set NODE_ROOM_FIELDS, 15
+.set NodeRoom_eth1_blocks, 120         /* Eth1Block entries: the eth1 follower's window */
+.set NodeRoom_eth1_deposits, 128       /* Eth1Deposit entries, and as many leaves and Eth1Count entries */
+.set NODE_ROOM_FIELDS, 17
 
 /* NodeProposer: a validator's fee recipient (beacon-api.md, prepareBeaconProposer) */
 .set NodeProposer_validator_index, 0
@@ -1018,6 +1047,8 @@
 .set NODE_PRODUCE_FOLD, 3
 .set NODE_PRODUCE_BUILD, 4
 .set NODE_PRODUCE_BID, 5               /* after the folds: the header call in flight, or the bid's check */
+.set NODE_PRODUCE_ETH1, 6              /* after the folds: the eth1 vote and deposits (node.md) */
+.set PRODUCE_ETH1_SNAP, 192            /* the cursor of a produceBlockV3 entry: its Eth1Snapshot's id while its work is in flight */
 .set NODE_WORK_PUBLISH_DECODE, 30      /* data: a publishBlockV2 body; target: its NodeApi index; arg: the fork + 2^8 for SSZ */
 .set NODE_WORK_PUBLISH_SIDECARS, 31    /* b: the sidecars' buffer; data: the body; target: the NodeApi index; arg: the fork + 2^8 for SSZ */
 .set NODE_WORK_PUBLISH_CHECK, 32       /* a: the parent's post-state at the slot; b: the sidecars, or 0; c: the head's post-state; data: the block; arg: the level */
@@ -1028,6 +1059,8 @@
 .set NODE_WORK_LC_GOSSIP, 37           /* c: the light client store; data: a message's bytes; target: its handle; arg: the topic */
 .set NODE_WORK_LC_PUBLISH, 38          /* c: the light client store; arg: the topic */
 .set NODE_WORK_PRODUCE_BID, 39         /* a: the state of a produceBlockV3; data: the builder's answer; target: the NodeApi index */
+.set NODE_WORK_ETH1_CHECK, 40          /* a: the head's post-state */
+.set NODE_WORK_PRODUCE_ETH1, 41        /* a: the state of a produceBlockV3; b: its Eth1Snapshot; data: its draft; target: the NodeApi index */
 .set NODE_LC_ID, 2                     /* the BufferId of the light client store (lantern_node_init: Caller must) */
 .set NODE_PUBLISH_DECODE, 1            /* NodeApi member of a publishBlockV2: its phase */
 .set NODE_PUBLISH_SIDECARS, 2

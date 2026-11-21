@@ -3283,7 +3283,7 @@ LOCAL_FUNCTION app_engine_conf
     cmp     %r15, %r14
     jne     92f
     call    app_file_free
-    orq     $NODE_FLAG_ENGINE, APP_FLAGS(%rbx)
+    orq     $(NODE_FLAG_ENGINE | NODE_FLAG_ETH1), APP_FLAGS(%rbx)   # and the eth1 follower on its connection
 8:  xor     %eax, %eax
     LEAVE 0
 90: call    app_line_start                  # the endpoint's form

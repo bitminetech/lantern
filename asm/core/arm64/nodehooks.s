@@ -3905,26 +3905,9 @@ SPEC_FUNCTION node_produce_check
     bl      verify_root_signature
     cbnz    x0, 7f
     cbz     x1, 5f
-3:
-.if FORK < FORK_ELECTRA
-    LDQ     x9, x19, BeaconState_eth1_data + Eth1Data_deposit_count     /* deposits the block would need */
-    LDQ     x10, x19, BeaconState_eth1_deposit_index
-    cmp     x9, x10
-    b.hi    6f
-.elseif FORK == FORK_ELECTRA
-    LDQ     x9, x19, BeaconState_eth1_data + Eth1Data_deposit_count     /* get_eth1_pending_deposit_count */
-    LDQ     x11, x19, BeaconState_deposit_requests_start_index
-    cmp     x9, x11
-    csel    x9, x9, x11, lo
-    LDQ     x10, x19, BeaconState_eth1_deposit_index
-    cmp     x10, x9
-    b.lo    6f
-.endif
-    mov     x0, #LANTERN_OK
+3:  mov     x0, #LANTERN_OK                 /* the deposits are the eth1 phase's (lantern_node_produce_eth1) */
 7:  LEAVE 112
 5:  mov     x0, #LANTERN_INVALID_RANDAO_REVEAL
-    LEAVE 112
-6:  mov     x0, #LANTERN_INVALID_DEPOSITS
     LEAVE 112
 9:  mov     x0, #LANTERN_BUFFER_TOO_SMALL
     LEAVE 112
@@ -5108,9 +5091,12 @@ SPEC_FUNCTION node_produce_block
     mov     x1, x9
     mov     x2, #96
     bl      lantern_copy
-    add     x0, x26, #96
+    add     x0, x26, #96                    /* the draft's vote with eth1_set, else the state's eth1_data */
     ADDQ    x1, x19, BeaconState_eth1_data
-    mov     x2, #72
+    LDQ     x9, x20, PRODUCE_DRAFT_ETH1
+    cbz     x9, 1f
+    ADDQ    x1, x20, PRODUCE_DRAFT_ETH1 + 8
+1:  mov     x2, #72
     bl      lantern_copy
     add     x0, x26, #168
     ldr     x9, [x21]
@@ -5153,9 +5139,24 @@ SPEC_FUNCTION node_produce_block
     cmp     x0, #LANTERN_BUFFER_TOO_SMALL
     b.eq    98f
     cbnz    x0, 99f
-    /* deposits: none; voluntary_exits */
+    /* deposits: the draft's with eth1_set; voluntary_exits */
     PB_OFFSET 212
-    PB_OFFSET 216
+    LDQ     x9, x20, PRODUCE_DRAFT_ETH1
+    cbz     x9, 2f
+    LDQ     x9, x20, PRODUCE_DRAFT_ETH1 + 80
+    MOVQ    x10, PRODUCE_DRAFT_DEPOSIT
+    mul     x1, x9, x10
+    mov     x0, x24
+    bl      produce_room
+    cbnz    x0, 98f
+    LDQ     x9, x20, PRODUCE_DRAFT_ETH1 + 80
+    MOVQ    x10, PRODUCE_DRAFT_DEPOSIT
+    mul     x2, x9, x10
+    mov     x0, x24
+    ADDQ    x1, x20, PRODUCE_DRAFT_ETH1 + 88
+    add     x24, x24, x2
+    bl      lantern_copy
+2:  PB_OFFSET 216
     mov     x0, #GOSSIP_VOLUNTARY_EXIT
     mov     x1, x24
     bl      produce_records
@@ -5396,6 +5397,335 @@ SPEC_FUNCTION node_produce_block
     mov     x0, #LANTERN_BUFFER_TOO_SMALL
     LEAVE 288
 SPEC_END node_produce_block
+
+/* (state, out): node.md, lantern_node_eth1_check. */
+SPEC_FUNCTION node_eth1_check
+    ENTER 0
+    LDQ     x9, x0, BeaconState_eth1_deposit_index
+    mov     x10, #1                         /* open before electra; in electra while the index is not deposit_requests_start_index; never from fulu */
+.if FORK >= FORK_FULU
+    mov     x10, #0
+.elseif FORK >= FORK_ELECTRA
+    LDQ     x11, x0, BeaconState_deposit_requests_start_index
+    cmp     x9, x11
+    cset    x10, ne
+.endif
+    stp     x10, x9, [x1]
+    mov     x0, #LANTERN_OK
+    LEAVE 0
+SPEC_END node_eth1_check
+
+/* L0: x0 = 1 when the Eth1Data at x0 is get_eth1_data of the Eth1Block at x1, else 0. Uses x9-x12. */
+LOCAL_FUNCTION e1v_match
+    UNWIND_END_PROLOGUE
+    ldr     x9, [x0, #Eth1Data_deposit_count]
+    ldr     x10, [x1, #Eth1Block_deposit_count]
+    cmp     x9, x10
+    b.ne    9f
+    mov     x11, #0
+1:  ldr     x9, [x0, x11]                   /* deposit_root */
+    add     x12, x11, #Eth1Block_deposit_root
+    ldr     x10, [x1, x12]
+    cmp     x9, x10
+    b.ne    9f
+    add     x12, x11, #Eth1Data_block_hash  /* block_hash */
+    ldr     x9, [x0, x12]
+    add     x12, x11, #Eth1Block_hash
+    ldr     x10, [x1, x12]
+    cmp     x9, x10
+    b.ne    9f
+    add     x11, x11, #8
+    cmp     x11, #32
+    b.lo    1b
+    mov     x0, #1
+    ret
+9:  mov     x0, #0
+    ret
+END_FUNCTION e1v_match
+
+/* L0: x0 = 1 when the 72 bytes at x0 and x1 are equal, else 0. Uses x9-x11. */
+LOCAL_FUNCTION e1v_same
+    UNWIND_END_PROLOGUE
+    mov     x11, #0
+1:  ldr     x9, [x0, x11]
+    ldr     x10, [x1, x11]
+    cmp     x9, x10
+    b.ne    9f
+    add     x11, x11, #8
+    cmp     x11, #Eth1Data__mem
+    b.lo    1b
+    mov     x0, #1
+    ret
+9:  mov     x0, #0
+    ret
+END_FUNCTION e1v_same
+
+/*
+ * L1: x0 = 1 when the Eth1Data at x0 is the data of a block of votes_to_consider (phase0
+ * get_eth1_vote): a candidate block (its timestamp + S * F at most the period start L, + 2 * S * F
+ * at least it) whose deposit_count is at least the state's. x23 the blocks, x24 their count, x19
+ * the state; L+8 S * F of the caller's locals at x28. Uses x9-x14.
+ */
+LOCAL_FUNCTION e1v_consider
+    FRAME 16
+    str     x0, [sp, #16]
+    mov     x13, x23
+    mov     x14, x24
+1:  cbz     x14, 8f
+    ldr     x9, [x13, #Eth1Block_timestamp]
+    ldp     x10, x11, [x28]                 /* the period start, S * F */
+    add     x12, x9, x11
+    cmp     x12, x10
+    b.hi    2f
+    add     x12, x12, x11
+    cmp     x12, x10
+    b.lo    2f
+    ldr     x9, [x13, #Eth1Block_deposit_count]
+    LDQ     x10, x19, BeaconState_eth1_data + Eth1Data_deposit_count
+    cmp     x9, x10
+    b.lo    2f
+    ldr     x0, [sp, #16]
+    mov     x1, x13
+    bl      e1v_match
+    cbnz    x0, 9f
+2:  add     x13, x13, #Eth1Block__mem
+    sub     x14, x14, #1
+    b       1b
+8:  mov     x0, #0
+9:  UNFRAME 16
+END_FUNCTION e1v_consider
+
+/*
+ * (state, draft, snapshot, config, scratch): node.md, lantern_node_produce_eth1. x19 state, x20
+ * the draft, x21 the snapshot, x22 config, x23 the blocks, x24 their count, x25 the vote, x26 the
+ * votes, x27 their count, x28 the locals. Locals: L the period start, L+8 S * F, L+16 the best
+ * count, L+24 a count, L+32 an index, L+40 the scratch, L+48 the default vote (72), L+120 the
+ * vote's data after it (72), L+192 the leaves' ByteList (24), L+216 the deposits, L+224 the count.
+ */
+SPEC_FUNCTION node_produce_eth1
+    ENTER 240
+    mov     x19, x0
+    ldr     x9, [x1, #8]
+    add     x20, x1, x9
+    ldr     x9, [x2, #8]
+    add     x21, x2, x9
+    mov     x22, x3
+    str     x4, [sp, #(L + 40)]
+    add     x28, sp, #L
+    add     x23, x21, #Eth1Snapshot__fixed  /* the snapshot's blocks */
+    ldr     x24, [x21, #Eth1Snapshot_blocks]
+    ADDQ    x25, x19, BeaconState_eth1_data /* the vote: the state's eth1_data unless the votes give another */
+.if FORK >= FORK_FULU
+    b       20f                             /* fulu deprecates get_eth1_vote: the state's */
+.elseif FORK >= FORK_ELECTRA
+    LDQ     x9, x19, BeaconState_eth1_deposit_index     /* the bridge closed: the state's */
+    LDQ     x10, x19, BeaconState_deposit_requests_start_index
+    cmp     x9, x10
+    b.eq    20f
+.endif
+    LDQ     x9, x19, BeaconState_slot       /* the period start: voting_period_start_time */
+    MOVQ    x10, EPOCHS_PER_ETH1_VOTING_PERIOD * SLOTS_PER_EPOCH
+    udiv    x11, x9, x10
+    mul     x11, x11, x10
+    LDQ     x12, x22, CONFIG_SLOT_DURATION_MS
+    mul     x11, x11, x12
+    LDQ     x12, x19, BeaconState_genesis_time
+    mov     x13, #1000
+    madd    x11, x12, x13, x11
+    udiv    x11, x11, x13
+    LDQ     x9, x22, CONFIG_SECONDS_PER_ETH1_BLOCK
+    LDQ     x10, x22, CONFIG_ETH1_FOLLOW_DISTANCE
+    mul     x9, x9, x10
+    stp     x11, x9, [sp, #L]
+    add     x0, sp, #(L + 48)               /* default_vote: the last of votes_to_consider, else the state's */
+    mov     x1, x25
+    mov     x2, #Eth1Data__mem
+    bl      lantern_copy
+    mov     x26, x24
+1:  cbz     x26, 3f
+    sub     x26, x26, #1
+    mov     x9, #Eth1Block__mem
+    madd    x13, x26, x9, x23
+    ldr     x9, [x13, #Eth1Block_timestamp]
+    ldp     x10, x11, [sp, #L]
+    add     x12, x9, x11
+    cmp     x12, x10
+    b.hi    1b
+    add     x12, x12, x11
+    cmp     x12, x10
+    b.lo    1b
+    ldr     x9, [x13, #Eth1Block_deposit_count]
+    LDQ     x10, x19, BeaconState_eth1_data + Eth1Data_deposit_count
+    cmp     x9, x10
+    b.lo    1b
+    add     x0, sp, #(L + 48)               /* get_eth1_data of it */
+    add     x1, x13, #Eth1Block_deposit_root
+    COPY32  x0, x1
+    ldr     x9, [x13, #Eth1Block_deposit_count]
+    str     x9, [sp, #(L + 48 + Eth1Data_deposit_count)]
+    add     x0, sp, #(L + 48 + Eth1Data_block_hash)
+    add     x1, x13, #Eth1Block_hash
+    COPY32  x0, x1
+3:  add     x25, sp, #(L + 48)
+    str     xzr, [sp, #(L + 16)]            /* the valid votes: the most often, then the first */
+    PART    x26, x27, x19, BeaconState_eth1_data_votes
+    mov     x9, #0
+    str     x9, [sp, #(L + 32)]
+4:  ldr     x9, [sp, #(L + 32)]
+    cmp     x9, x27
+    b.hs    20f
+    mov     x10, #Eth1Data__mem
+    madd    x0, x9, x10, x26
+    bl      e1v_consider                    /* a valid vote */
+    cbz     x0, 7f
+    ldr     x9, [sp, #(L + 32)]             /* its first: no equal vote before it */
+    mov     x10, #0
+5:  cmp     x10, x9
+    b.hs    51f
+    mov     x11, #Eth1Data__mem
+    madd    x0, x10, x11, x26
+    madd    x1, x9, x11, x26
+    str     x10, [sp, #(L + 24)]
+    bl      e1v_same
+    ldr     x9, [sp, #(L + 32)]
+    ldr     x10, [sp, #(L + 24)]
+    cbnz    x0, 7f
+    add     x10, x10, #1
+    b       5b
+51: mov     x10, x9                         /* its count among the votes from it on */
+    mov     x12, #0
+6:  cmp     x10, x27
+    b.hs    61f
+    mov     x11, #Eth1Data__mem
+    madd    x0, x10, x11, x26
+    madd    x1, x9, x11, x26
+    stp     x10, x12, [sp, #(L + 216)]      /* the deposits' slots, free until the vote is known */
+    bl      e1v_same
+    ldp     x10, x12, [sp, #(L + 216)]
+    ldr     x9, [sp, #(L + 32)]
+    add     x12, x12, x0
+    add     x10, x10, #1
+    b       6b
+61: ldr     x11, [sp, #(L + 16)]            /* more than the best so far: the vote */
+    cmp     x12, x11
+    b.ls    7f
+    str     x12, [sp, #(L + 16)]
+    mov     x11, #Eth1Data__mem
+    madd    x25, x9, x11, x26
+7:  ldr     x9, [sp, #(L + 32)]
+    add     x9, x9, #1
+    str     x9, [sp, #(L + 32)]
+    b       4b
+20: ADDQ    x0, x20, PRODUCE_DRAFT_ETH1 + 8 /* the draft's vote */
+    mov     x1, x25
+    mov     x2, #Eth1Data__mem
+    bl      lantern_copy
+    ADDQ    x25, x20, PRODUCE_DRAFT_ETH1 + 8
+    PART    x26, x27, x19, BeaconState_eth1_data_votes  /* the data after it: the vote's count + 1, times 2, above the period's slots */
+    mov     x12, #1
+8:  cbz     x27, 81f
+    mov     x0, x26
+    mov     x1, x25
+    str     x12, [sp, #(L + 24)]
+    bl      e1v_same
+    ldr     x12, [sp, #(L + 24)]
+    add     x12, x12, x0
+    add     x26, x26, #Eth1Data__mem
+    sub     x27, x27, #1
+    b       8b
+81: lsl     x12, x12, #1
+    MOVQ    x9, EPOCHS_PER_ETH1_VOTING_PERIOD * SLOTS_PER_EPOCH
+    add     x0, sp, #(L + 120)
+    mov     x1, x25
+    cmp     x12, x9
+    b.hi    82f
+    ADDQ    x1, x19, BeaconState_eth1_data
+82: mov     x2, #Eth1Data__mem
+    bl      lantern_copy
+    mov     x26, #0                         /* the deposits' count */
+.if FORK < FORK_ELECTRA
+    ldr     x9, [sp, #(L + 120 + Eth1Data_deposit_count)]
+    LDQ     x10, x19, BeaconState_eth1_deposit_index
+    subs    x26, x9, x10
+    csel    x26, xzr, x26, lo
+.elseif FORK == FORK_ELECTRA
+    ldr     x9, [sp, #(L + 120 + Eth1Data_deposit_count)]   /* get_eth1_pending_deposit_count */
+    LDQ     x11, x19, BeaconState_deposit_requests_start_index
+    cmp     x9, x11
+    csel    x9, x9, x11, lo
+    LDQ     x10, x19, BeaconState_eth1_deposit_index
+    subs    x26, x9, x10
+    csel    x26, xzr, x26, lo
+.endif
+    cmp     x26, #MAX_DEPOSITS
+    mov     x9, #MAX_DEPOSITS
+    csel    x26, x9, x26, hi
+    STQ     x26, x20, PRODUCE_DRAFT_ETH1 + 80
+    str     x26, [sp, #(L + 224)]
+    cbz     x26, 90f
+    ldr     x9, [x21, #Eth1Snapshot_leaves] /* the leaves: at least the deposit count */
+    ldr     x10, [sp, #(L + 120 + Eth1Data_deposit_count)]
+    cmp     x9, x10
+    b.lo    97f
+    ldr     x9, [x21, #Eth1Snapshot_blocks] /* the leaves' ByteList, after the blocks and the deposits */
+    mov     x10, #Eth1Block__mem
+    madd    x11, x9, x10, x23
+    str     x11, [sp, #(L + 216)]           /* the deposits */
+    ldr     x9, [x21, #Eth1Snapshot_deposits]
+    mov     x10, #Eth1Deposit__mem
+    madd    x11, x9, x10, x11
+    add     x12, sp, #(L + 192)
+    sub     x13, x11, x12
+    ldr     x9, [x21, #Eth1Snapshot_leaves]
+    lsl     x9, x9, #5
+    add     x10, x13, x9
+    stp     x10, x13, [x12]
+    str     x9, [x12, #16]
+    mov     x27, #0                         /* each deposit: its proof, then its data */
+9:  ldr     x9, [sp, #(L + 224)]
+    cmp     x27, x9
+    b.hs    90f
+    LDQ     x9, x19, BeaconState_eth1_deposit_index
+    add     x9, x9, x27
+    str     x9, [sp, #(L + 32)]
+    ldr     x10, [sp, #(L + 216)]           /* the snapshot's deposit of that index */
+    ldr     x11, [x21, #Eth1Snapshot_deposits]
+    cbz     x11, 97f
+    ldr     x12, [x10, #Eth1Deposit_index]
+    subs    x12, x9, x12
+    b.lo    97f
+    cmp     x12, x11
+    b.hs    97f
+    mov     x11, #Eth1Deposit__mem
+    madd    x24, x12, x11, x10
+    MOVQ    x9, PRODUCE_DRAFT_DEPOSIT
+    MOVQ    x10, PRODUCE_DRAFT_ETH1 + 88
+    madd    x25, x27, x9, x10
+    add     x25, x20, x25
+    add     x0, sp, #(L + 192)
+    add     x1, sp, #(L + 120 + Eth1Data_deposit_count)
+    add     x2, sp, #(L + 32)
+    ldr     x3, [sp, #(L + 40)]
+    mov     x4, x25
+    CALL_GLOBAL lantern_deposit_proof
+    cmp     x0, #LANTERN_BUFFER_TOO_SMALL
+    b.eq    99f
+    cbnz    x0, 97f
+    add     x0, x25, #(33 * 32)
+    add     x1, x24, #Eth1Deposit_data
+    mov     x2, #184
+    bl      lantern_copy
+    add     x27, x27, #1
+    b       9b
+90: mov     x9, #1
+    STQ     x9, x20, PRODUCE_DRAFT_ETH1
+    mov     x0, #LANTERN_OK
+    LEAVE 240
+97: mov     x0, #LANTERN_INVALID_DEPOSITS
+    LEAVE 240
+99: mov     x0, #LANTERN_BUFFER_TOO_SMALL
+    LEAVE 240
+SPEC_END node_produce_eth1
 
 /* L0: x0 = 0 when x1 bytes from x0 fit in the ByteList x23, else 1. Uses x16, x17. */
 LOCAL_FUNCTION produce_room
