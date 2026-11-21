@@ -1608,7 +1608,10 @@ LOCAL_FUNCTION node_prepare_go
     mov     x4, #0
     mov     x5, x26
     bl      node_work
-6:  ldr     x5, [x19, #Node_engine_id]      /* the work, of the call's id */
+6:  mov     x0, #API_TOPIC_PAYLOAD_ATTRIBUTES  /* target: 1 forced, + 2 with an entry of payload_attributes */
+    bl      node_api_subscribed
+    orr     x25, x25, x0, lsl #1
+    ldr     x5, [x19, #Node_engine_id]      /* the work, of the call's id */
     add     x9, x5, #1
     str     x9, [x19, #Node_engine_id]
     mov     x0, #NODE_WORK_PREPARE_PAYLOAD
@@ -4488,6 +4491,16 @@ LOCAL_FUNCTION node_event
     STQ     x11, x19, Node_payload_proposer
     mov     x11, #NODE_PAYLOAD_SENT
     STQ     x11, x19, Node_payload_status
+    ldr     x11, [x21, #NodeAction_target]  /* its payload_attributes text, after the request: to the topic's entries */
+    tbz     x11, #1, 851f
+    ldr     x11, [x21, #NodeEvent_chunk]
+    add     x12, x11, #NodeEvent_chunk
+    ldr     x13, [x21]
+    cmp     x13, x12
+    b.ls    851f
+    add     x0, x21, x12
+    mov     x1, #API_TOPIC_PAYLOAD_ATTRIBUTES
+    bl      node_api_events
 851:
     ldr     x25, [x21, #(NodeEvent_chunk + 16)]
     add     x1, x25, #(48 + 7)
@@ -9547,7 +9560,37 @@ FUNCTION lantern_node_run
     str     x9, [x27]
     add     x9, x9, #NodeEvent_chunk
     str     x9, [x25]
-    mov     x0, #LANTERN_OK
+    ldr     x10, [x21, #NodeAction_work_kind]   /* a preparation with 2 in target: the payload_attributes text after it */
+    cmp     x10, #NODE_WORK_PREPARE_PAYLOAD
+    b.ne    841f
+    ldr     x10, [x21, #NodeAction_target]
+    tbz     x10, #1, 841f
+    add     x0, x25, x9
+    sub     x10, x26, x9
+    and     x10, x10, #~7
+    cmp     x10, #64
+    b.lo    842f
+    mov     x11, #24
+    stp     x10, x11, [x0]
+    str     xzr, [x0, #16]
+    ldr     x1, [sp, #(L + 32)]
+    mov     x2, x23
+    ldr     x3, [x25, #NodeEvent_index]
+    ADDQ    x4, x19, Node_payload_root
+    mov     x15, x28
+    bl      api_payload_event_text
+    cbnz    x0, 842f
+    ldr     x9, [x25]
+    add     x10, x25, x9
+    ldr     x11, [x10, #16]
+    add     x11, x11, #(24 + 7)
+    and     x11, x11, #~7
+    str     x11, [x10]
+    add     x9, x9, x11
+    str     x9, [x25]
+841: mov    x0, #LANTERN_OK
+    LEAVE 192
+842: mov    x0, #LANTERN_BUFFER_TOO_SMALL
     LEAVE 192
 85: str     x27, [x24]                      /* a status, with the scratch's size back */
     LEAVE 192
@@ -9564,7 +9607,8 @@ FUNCTION lantern_node_run
     LEAVE 192
 830: cmp    x9, #NODE_WORK_PREPARE_PAYLOAD
     b.ne    890f
-    cbz     x22, 837f                       /* PREPARE_PAYLOAD: of the fork of the state's slot */
+    cbz     x22, 837f                       /* PREPARE_PAYLOAD: of the fork of the state's slot; the state at L+32 */
+    str     x22, [sp, #(L + 32)]
     ldr     x0, [x22, #NODE_STATE_SLOT]
     add     x1, x19, #Node_config
     bl      node_fork
@@ -9595,8 +9639,8 @@ FUNCTION lantern_node_run
     b       833b
 834: str    x12, [sp, #(L + 24)]
     b       8336f
-8335: ldr   x9, [x21, #NodeAction_target]    /* forced: a fee recipient of zero bytes, at L+40 */
-    cbz     x9, 836f
+8335: ldr   x9, [x21, #NodeAction_target]    /* forced (1): a fee recipient of zero bytes, at L+40 */
+    tbz     x9, #0, 836f
     stp     xzr, xzr, [sp, #(L + 40)]
     str     xzr, [sp, #(L + 56)]
     add     x12, sp, #(L + 24)

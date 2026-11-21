@@ -5972,6 +5972,122 @@ LOCAL_FUNCTION api_op_event_text
 END_FUNCTION api_op_event_text
 
 /*
+ * L1: (out x0, state x1, attributes x2, proposer x3, head root x4; the fork in x15) -> x0: the text
+ * of the payload_attributes event (beacon-api.md, eventstream) of a preparation: event:
+ * payload_attributes LF data: {"version":…,"data":{…}} LF LF, into the ByteList out, its count
+ * set; LANTERN_OK or LANTERN_BUFFER_TOO_SMALL. The writer's registers; x19 the attributes, x20 the
+ * state, x21 the fork, x22 the head root, x23 out, x28 the proposer. Locals: L the parent's block
+ * number and hash (40), L+40 a withdrawal's index.
+ */
+LOCAL_FUNCTION api_payload_event_text
+    ENTER 48
+    mov     x23, x0
+    mov     x20, x1
+    mov     x19, x2
+    mov     x28, x3
+    mov     x22, x4
+    mov     x21, x15
+    mov     x0, x20                         /* the parent's block number and hash */
+    add     x1, sp, #L
+    FORK_CALL node_payload_parent
+    cbnz    x0, 9f
+    mov     x25, #1
+    mov     x27, #0
+    add     x24, x23, #24
+    ldr     x9, [x23]
+    add     x26, x23, x9
+    API_LIT api_ev_event
+    API_LIT api_ev_t_payload
+    API_LIT api_ev_data
+    API_LIT api_pa_version
+    mov     x0, x21
+    bl      api_fork_name
+    API_LIT api_pa_proposer
+    mov     x0, x28
+    bl      api_qdec
+    API_LIT api_pa_slot
+    ldr     x0, [x20, #NODE_STATE_SLOT]
+    bl      api_qdec
+    API_LIT api_pa_number
+    ldr     x0, [sp, #L]
+    bl      api_qdec
+    API_LIT api_pa_root
+    mov     x0, x22
+    mov     x1, #32
+    bl      api_qhex
+    API_LIT api_pa_hash
+    add     x0, sp, #(L + 8)
+    mov     x1, #32
+    bl      api_qhex
+    /* the PayloadAttributes (engine-api.md) */
+    API_LIT api_pa_time
+    ldr     x0, [x19]
+    bl      api_qdec
+    API_LIT api_pa_randao
+    add     x0, x19, #8
+    mov     x1, #32
+    bl      api_qhex
+    API_LIT api_pa_fee
+    add     x0, x19, #40
+    mov     x1, #20
+    bl      api_qhex
+    cmp     x21, #FORK_CAPELLA              /* from capella, the withdrawals: each 44 SSZ bytes */
+    b.lo    3f
+    API_LIT api_pa_withdrawals
+    str     xzr, [sp, #(L + 40)]
+1:  ldr     x9, [sp, #(L + 40)]
+    ldr     x10, [x19, #96]
+    cmp     x9, x10
+    b.hs    2f
+    cbz     x9, 11f
+    API_LIT api_p_comma
+11: ldr     x9, [sp, #(L + 40)]
+    mov     x10, #44
+    madd    x9, x9, x10, x19
+    add     x9, x9, #104
+    str     x9, [sp, #(L + 32)]
+    API_LIT api_pa_index
+    ldr     x9, [sp, #(L + 32)]
+    ldr     x0, [x9]
+    bl      api_qdec
+    API_LIT api_u_index
+    ldr     x9, [sp, #(L + 32)]
+    ldr     x0, [x9, #8]
+    bl      api_qdec
+    API_LIT api_pa_address
+    ldr     x9, [sp, #(L + 32)]
+    add     x0, x9, #16
+    mov     x1, #20
+    bl      api_qhex
+    API_LIT api_pa_amount
+    ldr     x9, [sp, #(L + 32)]
+    ldr     x0, [x9, #36]
+    bl      api_qdec
+    API_LIT api_end1
+    ldr     x9, [sp, #(L + 40)]
+    add     x9, x9, #1
+    str     x9, [sp, #(L + 40)]
+    b       1b
+2:  API_LIT api_p_rbracket
+3:  cmp     x21, #FORK_DENEB                /* from deneb, the parent beacon block root */
+    b.lo    4f
+    API_LIT api_pa_parent
+    add     x0, x19, #64
+    mov     x1, #32
+    bl      api_qhex
+4:  API_LIT api_pa_end
+    cbnz    x27, 9f
+    add     x9, x23, #24
+    sub     x9, x24, x9
+    mov     x10, #24
+    stp     x10, x9, [x23, #8]
+    mov     x0, #LANTERN_OK
+    LEAVE 48
+9:  mov     x0, #LANTERN_BUFFER_TOO_SMALL
+    LEAVE 48
+END_FUNCTION api_payload_event_text
+
+/*
  * L1: (out x0, topic x1, ssz x2, scratch x3; the fork in x15) -> x0: the text of the event of a
  * sidecar topic (beacon-api.md, eventstream): event: <topic> LF data: {"block_root":…,"index":…,
  * "slot":…,…} LF LF, from the sidecar's bytes, into the ByteList out, its count set; LANTERN_OK,

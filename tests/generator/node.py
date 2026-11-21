@@ -371,7 +371,22 @@ def payload_cases(fork, preset):
             head, safe, fin, attrs = e.call
             fcs = {"headBlockHash": engine.d(head), "safeBlockHash": engine.d(safe), "finalizedBlockHash": engine.d(fin)}
             text = b',"method":"engine_forkchoiceUpdatedV%d","params":' % fcu
-            return proposer, text + json.dumps([fcs, engine.attribute_json(fork, attrs)], separators=(",", ":")).encode() + b"}"
+            # the payload_attributes event (beacon-api.md): the attributes in the beacon API encoding
+            pa = (b'{"timestamp":' + q(attrs.timestamp) + b',"prev_randao":' + qhex(attrs.prev_randao) +
+                  b',"suggested_fee_recipient":' + qhex(attrs.suggested_fee_recipient))
+            if hasattr(attrs, "withdrawals"):
+                pa += b',"withdrawals":[' + b",".join(
+                    b'{"index":' + q(w.index) + b',"validator_index":' + q(w.validator_index) + b',"address":' +
+                    qhex(w.address) + b',"amount":' + q(w.amount) + b"}" for w in attrs.withdrawals) + b"]"
+            if hasattr(attrs, "parent_beacon_block_root"):
+                pa += b',"parent_beacon_block_root":' + qhex(attrs.parent_beacon_block_root)
+            header = st.latest_execution_payload_header
+            event = (b'event: payload_attributes\ndata: {"version":"' + fork.encode() + b'","data":{"proposer_index":' +
+                     q(proposer) + b',"proposal_slot":' + q(st.slot) + b',"parent_block_number":' + q(header.block_number) +
+                     b',"parent_block_root":' + qhex(root) + b',"parent_block_hash":' + qhex(header.block_hash) +
+                     b',"payload_attributes":' + pa + b"}}}\n\n")
+            return (proposer, text + json.dumps([fcs, engine.attribute_json(fork, attrs)], separators=(",", ":")).encode() + b"}",
+                    b"%04x\r\n" % len(event) + event + b"\r\n")
         return run(spec, schedule(fork), f)
 
     def prepare(index, fee):
@@ -389,7 +404,7 @@ def payload_cases(fork, preset):
              ("another_validator", a + 1, start(a + 1), start(a + 1) + due_ms, False, b"")]
     for name, s, t0, t1, mine, pid in plans:
         fee = bytes([0x40 + len(name)]) * 20
-        proposer, tail = expected(s, fee)
+        proposer, tail, event = expected(s, fee)
         index = proposer if mine is not False else (proposer + 1) % len(state.validators)
         due, prepared = mine is not None, mine is True  # due: the node runs the preparation
         yield "payload", name, {
@@ -405,6 +420,7 @@ def payload_cases(fork, preset):
             "payload_root": bytes(root) if due else bytes(32),
             "payload_status": (3 if pid else 0) if prepared else 0,
             "payload_proposer": proposer if prepared else 0,
+            "events": stream_head(b"HTTP/1.1", b"") + (event if prepared else b""),
         }
 
 

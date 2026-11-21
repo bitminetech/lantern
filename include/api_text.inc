@@ -604,6 +604,54 @@ api_sc_hash:
 api_sc_commitments:
     .ascii ",\"kzg_commitments\":["
 .set api_sc_commitments_len, 20
+api_ev_t_payload:                       /* payload_attributes (beacon-api.md, eventstream) */
+    .ascii "payload_attributes"
+.set api_ev_t_payload_len, 18
+api_pa_version:
+    .ascii "{\"version\":\""
+.set api_pa_version_len, 12
+api_pa_proposer:
+    .ascii "\",\"data\":{\"proposer_index\":"
+.set api_pa_proposer_len, 27
+api_pa_slot:
+    .ascii ",\"proposal_slot\":"
+.set api_pa_slot_len, 17
+api_pa_number:
+    .ascii ",\"parent_block_number\":"
+.set api_pa_number_len, 23
+api_pa_root:
+    .ascii ",\"parent_block_root\":"
+.set api_pa_root_len, 21
+api_pa_hash:
+    .ascii ",\"parent_block_hash\":"
+.set api_pa_hash_len, 21
+api_pa_time:
+    .ascii ",\"payload_attributes\":{\"timestamp\":"
+.set api_pa_time_len, 35
+api_pa_randao:
+    .ascii ",\"prev_randao\":"
+.set api_pa_randao_len, 15
+api_pa_fee:
+    .ascii ",\"suggested_fee_recipient\":"
+.set api_pa_fee_len, 27
+api_pa_withdrawals:
+    .ascii ",\"withdrawals\":["
+.set api_pa_withdrawals_len, 16
+api_pa_index:
+    .ascii "{\"index\":"
+.set api_pa_index_len, 9
+api_pa_address:
+    .ascii ",\"address\":"
+.set api_pa_address_len, 11
+api_pa_amount:
+    .ascii ",\"amount\":"
+.set api_pa_amount_len, 10
+api_pa_parent:
+    .ascii ",\"parent_beacon_block_root\":"
+.set api_pa_parent_len, 28
+api_pa_end:
+    .ascii "}}}\n\n"
+.set api_pa_end_len, 5
 api_v_statuses:                         /* the names of the statuses, API_STATUS_* order: 24 bytes each, the length first */
     .byte 19
     .ascii "pending_initialized"

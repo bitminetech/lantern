@@ -7912,6 +7912,12 @@ static void run_node_payload(const char *file, case_file *f) {
             shell_event(s, EV_TICK, tv_u64(tv_get(parts, "time0")), NULL, 0); /* the anchor's forkchoiceUpdated, answered */
             shell_settle(&n, &why);
         }
+        uint64_t elen = 0;
+        const uint8_t *events = tv_bytes(tv_get(parts, "events"), &elen);
+        if (!why) { /* the payload_attributes events: a stream open over the case */
+            static const char ereq[] = "GET /eth/v1/events?topics=payload_attributes HTTP/1.1\r\nHost: lantern\r\n\r\n";
+            ev_open_one(&n, 0, (const uint8_t *)ereq, sizeof ereq - 1, &why);
+        }
         if (!why) { /* the prepareBeaconProposer, then the tick: each engine call counts from here */
             n.watch = 1;
             n.engine_calls = 0;
@@ -7927,6 +7933,7 @@ static void run_node_payload(const char *file, case_file *f) {
             shell_settle(&n, &why);
         }
         if (!why && n.engine_calls != (n.tail_len ? 1u : 0u)) why = n.tail_len ? "no forkchoiceUpdated with the attributes" : "an engine call";
+        if (!why) ev_stream_end(&n, 0, events, elen, "the payload_attributes events", &why);
         if (!why) {
             const uint8_t *nd = s->node + NODE_PAYLOAD_SLOT;
             uint64_t status = rd64(nd + 48);

@@ -17,6 +17,7 @@
 - [`lantern_node_attestation_data`](#function-lantern_node_attestation_data): the `AttestationData` of a state's slot, for one fork.
 - [`lantern_node_attester_duties`](#function-lantern_node_attester_duties): the committee assignments of validators in an epoch, for one fork.
 - [`lantern_node_liveness`](#function-lantern_node_liveness): whether validators were seen live in an epoch, from a state and a `Seen`, for one fork.
+- [`lantern_node_payload_parent`](#function-lantern_node_payload_parent): the block number and hash of a state's latest execution payload header, for one fork from bellatrix.
 - [`lantern_node_sidecar_root`](#function-lantern_node_sidecar_root): hash_tree_root of the block header of a sidecar's SSZ bytes, for one fork from deneb.
 - [`lantern_node_randao`](#function-lantern_node_randao): the RANDAO mix of an epoch in a state, for one fork.
 - [`lantern_node_sync_committee`](#function-lantern_node_sync_committee): the validator indices of a state's sync committee of an epoch, for one fork.
@@ -211,6 +212,7 @@
   - The runner runs the node with `NODE_FLAG_ENGINE` and answers its engine calls as in the fork_choice cases. After the anchor's engine_forkchoiceUpdated, it gives a prepareBeaconProposer of the validator and fee recipient (200), then a `NODE_EV_TICK` of the time.
   - When the validator is get_beacon_proposer_index of the anchor state processed to slot S + 1: the node's next engine call must be engine_forkchoiceUpdated whose `params` are the case's, with the attributes of the spec's prepare_execution_payload of that state, the fee recipient, the justified root's block hash as safe and the finalized root's as finalized. The runner answers with the case's `payloadId`, a value or null; then `payload_slot`, `payload_root`, `payload_status` and `payload_id` must be the case's.
   - When it is another validator: the node must make no engine call after the tick, and `payload_status` must be `NODE_PAYLOAD_NONE`.
+  - An eventstream of payload_attributes over HTTP/1.1 is open before the tick. After the case its bytes must be its head, then, when the node prepares, the case's text of the event in one chunk: the attributes of the spec's prepare_execution_payload in the beacon API encoding (beacon-api.md).
 - Lantern's cases `<preset>-<fork>-node-produce.bin` of altair to fulu, made by tests/generator/node.py with the pinned spec: the anchor of the `api` cases (from bellatrix that of the node-payload cases), the first slot after the anchor's whose proposer is not slashed, the requests with a time for each (0 for none), from bellatrix a `payloadId` and the engine's result, and the answers.
   - `empty_pool`: two produceBlockV3 requests of the slot at its start.
   - `full_pool`: the anchor `SHARD_COMMITTEE_PERIOD` epochs later with 2 `SLOTS_PER_EPOCH` more active validators. At 100 ms into the slot before: POSTs (200) of two voluntary exits, a proposer slashing, two attester slashings, from capella a BLS change, two attestations of one committee of the anchor's slot (from electra `SingleAttestation`s), and two sync committee messages of the slot before on the anchor's root, each valid by the spec's gossip validation; the first attester slashing slashes only the proposer slashing's validator, and the second exit is of a validator the second attester slashing slashes, so the block leaves both out. Then the two produceBlockV3 requests at the slot's start.
@@ -468,11 +470,11 @@ lantern_node_step(node, store, p2p, tick, events, scratch, actions, result) -> s
   - A `proposers` entry has `until_epoch` above the store's epoch.
   - The slot of the block of `head_root` is S, or `time_ms` is at least the start of slot S plus get_attestation_due_ms (phase0 `validator.md`): genesis_time * 1000 + S * `SLOT_DURATION_MS` + `SLOT_DURATION_MS` * `ATTESTATION_DUE_BPS` / 10000.
   - `payload_slot` is not S + 1, or `payload_root` is not `head_root`.
-- The preparation: `payload_slot` takes S + 1, `payload_root` `head_root`, and `payload_status` `NODE_PAYLOAD_PREPARING`; a `NODE_ACT_STATE_COPY` of the head's post-state, the copy across the fork boundaries to S + 1 (the crossing), a `NODE_WORK_SLOTS` of the copy to S + 1 when it is below it, a `NODE_WORK_PREPARE_PAYLOAD` of the copy as `state_a` with the id `engine_id` as `arg`, and a `NODE_ACT_STATE_FREE` of the copy. It is the call in flight, `engine_method` `ENGINE_METHOD_FORKCHOICE_UPDATED` with `engine_target` 1 (0 for a `NODE_WORK_FORKCHOICE`), and takes the next id.
-- `NODE_EV_WORK_DONE` of `NODE_WORK_PREPARE_PAYLOAD`: `LANTERN_VALID`, its request goes out in a `NODE_ACT_ENGINE`, `NODE_FLAG_FCU` clears, `payload_proposer` takes `NodeEvent_index` and `payload_status` `NODE_PAYLOAD_SENT`. Another result ends the call with `payload_status` `NODE_PAYLOAD_NONE`; `payload_slot` and `payload_root` stay, so the same head is not prepared again.
+- The preparation: `payload_slot` takes S + 1, `payload_root` `head_root`, and `payload_status` `NODE_PAYLOAD_PREPARING`; a `NODE_ACT_STATE_COPY` of the head's post-state, the copy across the fork boundaries to S + 1 (the crossing), a `NODE_WORK_SLOTS` of the copy to S + 1 when it is below it, a `NODE_WORK_PREPARE_PAYLOAD` of the copy as `state_a` with the id `engine_id` as `arg` and, as `target`, 2 with an entry of eventstream of payload_attributes (+ 1 for a preparation of produceBlockV3, below), and a `NODE_ACT_STATE_FREE` of the copy. It is the call in flight, `engine_method` `ENGINE_METHOD_FORKCHOICE_UPDATED` with `engine_target` 1 (0 for a `NODE_WORK_FORKCHOICE`), and takes the next id.
+- `NODE_EV_WORK_DONE` of `NODE_WORK_PREPARE_PAYLOAD`: `LANTERN_VALID`, with the text of a payload_attributes event after its request, the text goes to the entries of the topic (the events, below); its request goes out in a `NODE_ACT_ENGINE`, `NODE_FLAG_FCU` clears, `payload_proposer` takes `NodeEvent_index` and `payload_status` `NODE_PAYLOAD_SENT`. Another result ends the call with `payload_status` `NODE_PAYLOAD_NONE`; `payload_slot` and `payload_root` stay, so the same head is not prepared again.
 - Block production (beacon-api.md, produceBlockV3): a `NodeApi` entry of `API_OP_PRODUCE_BLOCK_V3`, its `member` the phase, `slot` the block's slot, `state` its state, `data` its body draft, `filter_index` the engine's result; `cursor` keeps `randao_reveal` (96 bytes), `graffiti` (32 bytes) and, at byte 128, 1 with `skip_randao_verification`. The phases, in order:
   - `NODE_PRODUCE_STATE` (1): a `NODE_ACT_STATE_COPY` of the head's post-state, the copy across the fork boundaries to `slot` and a `NODE_WORK_SLOTS` of it to `slot` when it is below it (as a lookup does), then a `NODE_WORK_PRODUCE_CHECK` of the copy. With no head post-state: 500.
-  - `NODE_PRODUCE_PAYLOAD` (2), from bellatrix when the head's store node has a `block_hash` that is not zero: with no engine call in flight, first of all engine calls: when `payload_status` is `NODE_PAYLOAD_READY` with `payload_slot` `slot` and `payload_root` `head_root`, a `NODE_WORK_GET_PAYLOAD` of `payload_id` with the id `engine_id`, the call `ENGINE_METHOD_GET_PAYLOAD` with `engine_target` the entry's index; else the preparation of `slot` (as above) with `arg` bit 63 set, which takes the fee recipient zero when the proposer has no `NodeProposer` entry. A preparation that ends with no `payloadId`: 500.
+  - `NODE_PRODUCE_PAYLOAD` (2), from bellatrix when the head's store node has a `block_hash` that is not zero: with no engine call in flight, first of all engine calls: when `payload_status` is `NODE_PAYLOAD_READY` with `payload_slot` `slot` and `payload_root` `head_root`, a `NODE_WORK_GET_PAYLOAD` of `payload_id` with the id `engine_id`, the call `ENGINE_METHOD_GET_PAYLOAD` with `engine_target` the entry's index; else the preparation of `slot` (as above) with 1 in its work's `target`, which takes the fee recipient zero when the proposer has no `NodeProposer` entry. A preparation that ends with no `payloadId`: 500.
   - `NODE_PRODUCE_FOLD` (3): a `NODE_ACT_BYTES_NEW` of `ProduceDraft__size` bytes, the draft; then one `NODE_WORK_PRODUCE_FOLD` at a time for each kept pool entry, with the draft as `data` and the entry's bytes as `state_b`: each work adds the entry to the draft in place. The kinds in turn (proposer slashings, attester slashings, voluntary exits, BLS changes, attestations, sync committee messages), the entries of each in the pool's order; `cursor` keeps the kind's turn at byte 144 and `filter_slot` the next pool index.
   - While a work of the entry, or its engine_getPayload, is in flight, the entry has `API_STREAM_BUSY`; when it is done, `API_STREAM_BUSY` clears, and with `API_STREAM_GONE` the entry ends with its draft, engine result and state, and answers nothing.
   - `NODE_PRODUCE_BUILD` (4): a `NODE_WORK_PRODUCE_BLOCK` of the copy as `state_a`, the draft as `data` and the engine's result as `state_b`; its result's bytes become `data`, execution_payload_value goes to `root` and consensus_block_value to `filter_slot`, `cursor` becomes zero, and the entry answers them as getBlockV2 answers a block's bytes, with the headers and the JSON of beacon-api.md. The copy, the draft and the result then go (`NODE_ACT_STATE_FREE`, `NODE_ACT_BYTES_FREE`).
@@ -617,7 +619,7 @@ lantern_node_run(node, store, seen, work, state_a, state_b, state_c, data, setti
 - `NODE_WORK_SYNC_BLOCK`: lantern_node_block_root of the fork of the block's slot, its root at `NodeEvent_root` and its blob count at `NodeEvent_index`.
 - `NODE_WORK_BACKFILL`: lantern_node_block_root of the fork of the block's slot, its root at `NodeEvent_root`; then, for `LANTERN_VALID`, lantern_node_backfill of the fork of the slot of `state_a`, of the block in `data` and that root.
 - `NODE_WORK_NEW_PAYLOAD`: lantern_node_new_payload of the fork of the block's slot (bellatrix and later; before it `LANTERN_NO_PAYLOAD`), its request a ByteList at `NodeEvent_chunk`. The event's `size` then covers it.
-- `NODE_WORK_PREPARE_PAYLOAD`: of the fork of the slot of `state_a`: the `proposers` entry of get_beacon_proposer_index of `state_a` whose `until_epoch` is above the epoch of the state's slot, else the result `LANTERN_NO_PAYLOAD`; lantern_get_payload_attributes of `state_a` with its `fee_recipient` and the node's config; then engine_forkchoiceUpdated with those attributes and the id `arg`, its head the `block_hash` of the store's node of `payload_root` (the state's `latest_execution_payload_header.block_hash`, prepare_execution_payload's `parent_hash`; `LANTERN_INVALID_UNKNOWN_BLOCK` when the store has no such node, `LANTERN_NO_PAYLOAD` when it is zero), its safe and finalized hashes as for `NODE_WORK_FORKCHOICE`, as a ByteList at `NodeEvent_chunk` in an HTTP POST as `NODE_WORK_FORKCHOICE` writes it; the proposer's index at `NodeEvent_index`. The event's `size` then covers the request.
+- `NODE_WORK_PREPARE_PAYLOAD`: of the fork of the slot of `state_a`: the `proposers` entry of get_beacon_proposer_index of `state_a` whose `until_epoch` is above the epoch of the state's slot, else the result `LANTERN_NO_PAYLOAD`; lantern_get_payload_attributes of `state_a` with its `fee_recipient` and the node's config; then engine_forkchoiceUpdated with those attributes and the id `arg`, its head the `block_hash` of the store's node of `payload_root` (the state's `latest_execution_payload_header.block_hash`, prepare_execution_payload's `parent_hash`; `LANTERN_INVALID_UNKNOWN_BLOCK` when the store has no such node, `LANTERN_NO_PAYLOAD` when it is zero), its safe and finalized hashes as for `NODE_WORK_FORKCHOICE`, as a ByteList at `NodeEvent_chunk` in an HTTP POST as `NODE_WORK_FORKCHOICE` writes it; the proposer's index at `NodeEvent_index`. With 2 in `target`: after the request's ByteList, at its size rounded up to 8, the text of the payload_attributes event (beacon-api.md, eventstream) as a ByteList, its parent block number and hash from lantern_node_payload_parent of the fork of the state's slot. The event's `size` then covers the request and the text. With 1 in `target`, a proposer with no `proposers` entry takes a fee recipient of zero bytes.
 - `NODE_WORK_GET_PAYLOAD`: lantern_engine_get_payload of the fork of the slot of the `NodeApi` entry at `target` with `payload_id` and the id `arg`, in an HTTP POST as `NODE_WORK_FORKCHOICE` writes it, as a ByteList at `NodeEvent_chunk`.
 - `NODE_WORK_PRODUCE_CHECK`: of the fork of the slot of `state_a`, for the `NodeApi` entry at `target`: get_beacon_proposer_index of the state at `NodeEvent_index`; with `skip_randao_verification` a `randao_reveal` that is not the point at infinity, else one that fails process_randao's check for that proposer: the result `LANTERN_INVALID_RANDAO_REVEAL` (400); an expected deposit count above 0 (beacon-api.md): `LANTERN_INVALID_DEPOSITS` (500).
 - `NODE_WORK_PRODUCE_FOLD`: lantern_node_produce_fold of the fork of the slot of `state_a`: the pool entry `state_b` joins the draft `data` in place when the rules of beacon-api.md take it at `state_a`; `arg` its topic, + 2^8 times its `NodePool` `fork`, + 2^16 times its `member`.
@@ -927,6 +929,33 @@ lantern_node_liveness(state, config, seen, ids, epoch, scratch, out) -> status
 
 - Export: `lantern_<fork>_node_liveness` of each fork object.
 - Argument order: `state`, `config`, `seen`, `ids`, `epoch`, `scratch`, `out`.
+
+## Function `lantern_node_payload_parent`
+
+The parent of the next payload: the `block_number` and `block_hash` of a state's `latest_execution_payload_header` (beacon-api.md, eventstream: payload_attributes).
+
+### Signature
+
+```
+lantern_node_payload_parent(state, out) -> status
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `state` | input | `BeaconState` of the fork |
+| `out` | output | 40 bytes: u64 the block number, then the 32 bytes of the block hash |
+
+### Returns
+
+- `LANTERN_OK`: `out` holds them.
+- `LANTERN_INVALID_EVENT`: a fork before bellatrix.
+
+### ABI
+
+- Export: `lantern_<fork>_node_payload_parent` of each fork object.
+- Argument order: `state`, `out`.
 
 ## Function `lantern_node_sidecar_root`
 
@@ -2689,6 +2718,14 @@ The actions of one step: a ByteList whose bytes are `NodeAction` entries one aft
 | RISC-V |  |  |  |  |
 
 ### `lantern_node_liveness`
+
+| ISA | Linux | Windows | macOS | `equal` |
+|---|---|---|---|---|
+| x86-64 |  |  |  |  |
+| ARM64 |  |  |  |  |
+| RISC-V |  |  |  |  |
+
+### `lantern_node_payload_parent`
 
 | ISA | Linux | Windows | macOS | `equal` |
 |---|---|---|---|---|
