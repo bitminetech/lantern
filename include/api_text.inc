@@ -604,6 +604,24 @@ api_sc_hash:
 api_sc_commitments:
     .ascii ",\"kzg_commitments\":["
 .set api_sc_commitments_len, 20
+api_ev_t_reorg:                         /* chain_reorg (beacon-api.md, eventstream) */
+    .ascii "chain_reorg"
+.set api_ev_t_reorg_len, 11
+api_cr_depth:
+    .ascii ",\"depth\":"
+.set api_cr_depth_len, 9
+api_cr_old_block:
+    .ascii ",\"old_head_block\":"
+.set api_cr_old_block_len, 18
+api_cr_new_block:
+    .ascii ",\"new_head_block\":"
+.set api_cr_new_block_len, 18
+api_cr_old_state:
+    .ascii ",\"old_head_state\":"
+.set api_cr_old_state_len, 18
+api_cr_new_state:
+    .ascii ",\"new_head_state\":"
+.set api_cr_new_state_len, 18
 api_ev_t_payload:                       /* payload_attributes (beacon-api.md, eventstream) */
     .ascii "payload_attributes"
 .set api_ev_t_payload_len, 18

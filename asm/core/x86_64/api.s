@@ -5699,6 +5699,8 @@ LOCAL_FUNCTION node_api_event_run
     mov     %rcx, ApiView_event_epoch(%rax)
     cmpq    $API_TOPIC_HEAD, S9(%rsp)
     je      1f
+    cmpq    $API_TOPIC_CHAIN_REORG, S9(%rsp)
+    je      20f
     cmpq    $API_TOPIC_FINALIZED_CHECKPOINT, S9(%rsp)
     jne     10f
     cmpq    $0, S7(%rsp)
@@ -5771,6 +5773,58 @@ LOCAL_FUNCTION node_api_event_run
     sub     $NodeEvent_chunk, %rax
     mov     %rax, NodeEvent_chunk(%r15)
     jmp     9f
+20: test    %r13, %r13                      # chain_reorg: the new head from its post-state, the old from its block's bytes
+    jz      8f
+    cmpq    $0, S7(%rsp)
+    je      8f
+    mov     NODE_STATE_SLOT(%r13), %rdi
+    mov     S8(%rsp), %rax
+    mov     %rdi, ApiView_event_slot(%rax)
+    lea     Node_config(%rbx), %rsi
+    call    node_fork
+    mov     %rax, %r10
+    mov     %r13, %rdi
+    lea     Node_config(%rbx), %rsi
+    mov     %r14, %rdx
+    mov     S8(%rsp), %rcx
+    add     $ApiView_event_block, %rcx
+    FORK_CALL node_event_roots
+    cmp     $LANTERN_BUFFER_TOO_SMALL, %rax
+    je      71f
+    test    %rax, %rax
+    jz      21f
+    mov     %rax, NodeEvent_result(%r15)
+    jmp     9f
+21: mov     S7(%rsp), %rcx                  # the old head block's bytes: its root and its state_root
+    cmpq    $(100 + 84), 16(%rcx)
+    jb      41f
+    mov     8(%rcx), %rax
+    add     %rcx, %rax
+    mov     100(%rax), %rdi
+    lea     Node_config(%rbx), %rsi
+    call    node_fork
+    mov     %rax, %r10
+    mov     S7(%rsp), %rcx
+    mov     8(%rcx), %rax
+    add     %rcx, %rax
+    lea     (100 + 48)(%rax), %rsi
+    mov     S8(%rsp), %rdi
+    add     $ApiView_event_old_state, %rdi
+    COPY32  %rdi, %rsi
+    mov     S7(%rsp), %rdi
+    mov     %r14, %rsi
+    mov     S8(%rsp), %rdx
+    add     $ApiView_event_old_block, %rdx
+    lea     (L + 8)(%rsp), %rcx
+    lea     (L + 16)(%rsp), %r8
+    FORK_CALL node_block_root
+    cmp     $LANTERN_BUFFER_TOO_SMALL, %rax
+    je      71f
+    test    %rax, %rax
+    jnz     41f
+    cmpq    $0, (L + 8)(%rsp)
+    jne     41f
+    jmp     5b
 10: mov     S9(%rsp), %rax                  # an operation topic: the JSON of its bytes, lantern_node_json of the fork in arg
     mov     $NODE_JSON_EXIT, %edx
     cmp     $API_TOPIC_VOLUNTARY_EXIT, %rax
@@ -5912,13 +5966,19 @@ LOCAL_FUNCTION api_event_text
     API_LIT api_ev_t_block
     jmp     3f
 11: cmpq    $API_TOPIC_BLOCK_GOSSIP, S7(%rsp)
-    jne     2f
+    jne     12f
     API_LIT api_ev_t_block_gossip
+    jmp     3f
+12: cmpq    $API_TOPIC_CHAIN_REORG, S7(%rsp)
+    jne     2f
+    API_LIT api_ev_t_reorg
     jmp     3f
 2:  API_LIT api_ev_t_finalized
 3:  API_LIT api_ev_data
     cmpq    $API_TOPIC_FINALIZED_CHECKPOINT, S7(%rsp)
     je      5f
+    cmpq    $API_TOPIC_CHAIN_REORG, S7(%rsp)
+    je      7f
     # block, block_gossip and head: {"slot":…,"block":…
     API_LIT api_ev_slot
     mov     ApiView_event_slot(%rbp), %rdi
@@ -5960,6 +6020,37 @@ LOCAL_FUNCTION api_event_text
     call    api_qhex
     API_LIT api_k_epoch
     mov     ApiView_event_epoch(%rbp), %rdi
+    call    api_qdec
+    jmp     6f
+    # chain_reorg: {"slot":…,"depth":…,"old_head_block":…,"new_head_block":…,"old_head_state":…,"new_head_state":…,"epoch":…
+7:  API_LIT api_ev_slot
+    mov     ApiView_event_slot(%rbp), %rdi
+    call    api_qdec
+    API_LIT api_cr_depth
+    mov     ApiView_event_epoch(%rbp), %rdi
+    call    api_qdec
+    API_LIT api_cr_old_block
+    lea     ApiView_event_old_block(%rbp), %rdi
+    mov     $32, %esi
+    call    api_qhex
+    API_LIT api_cr_new_block
+    lea     ApiView_event_block(%rbp), %rdi
+    mov     $32, %esi
+    call    api_qhex
+    API_LIT api_cr_old_state
+    lea     ApiView_event_old_state(%rbp), %rdi
+    mov     $32, %esi
+    call    api_qhex
+    API_LIT api_cr_new_state
+    lea     ApiView_event_state(%rbp), %rdi
+    mov     $32, %esi
+    call    api_qhex
+    API_LIT api_k_epoch
+    mov     ApiView_event_slot(%rbp), %rax
+    xor     %edx, %edx
+    mov     $SLOTS_PER_EPOCH, %ecx
+    div     %rcx
+    mov     %rax, %rdi
     call    api_qdec
 6:  API_LIT api_u_optimistic
     mov     ApiView_event_flags(%rbp), %rdi
@@ -6605,6 +6696,86 @@ LOCAL_FUNCTION node_api_root_event
 END_FUNCTION node_api_root_event
 
 /*
+ * (old head root rdi, new head entry rsi) -> rax: the depth of the reorg from the old head to the
+ * new (node.md, The events: chain_reorg), or 2^64 - 1 with none: the new head's chain has the old
+ * head below the new head's slot, or a walk meets no common block; rdx the old head's entry. The
+ * walk by parent_root from both, the one at the higher slot first. r12 the old head's entry, r13
+ * the new head's, r14 the old chain's block, S7 the new chain's, S8 and S9 the blocks each walk
+ * left last.
+ */
+LOCAL_FUNCTION node_api_reorg
+    ENTER 0
+    mov     %rsi, %r13
+    call    node_find_block
+    cmp     $-1, %rax
+    je      8f
+    mov     %rdx, %r12
+    mov     %rdx, %r14
+    mov     %r13, S7(%rsp)
+    movq    $0, S8(%rsp)
+    movq    $0, S9(%rsp)
+1:  mov     S7(%rsp), %rcx                  # the same block: the common one
+    movdqu  (%r14), %xmm0
+    movdqu  (%rcx), %xmm1
+    pcmpeqb %xmm1, %xmm0
+    pmovmskb %xmm0, %eax
+    cmp     $0xffff, %eax
+    jne     2f
+    movdqu  16(%r14), %xmm0
+    movdqu  16(%rcx), %xmm1
+    pcmpeqb %xmm1, %xmm0
+    pmovmskb %xmm0, %eax
+    cmp     $0xffff, %eax
+    je      4f
+2:  mov     S7(%rsp), %rcx
+    mov     NodeBlock_slot(%rcx), %rax
+    cmp     %rax, NodeBlock_slot(%r14)
+    jb      3f
+    mov     %r14, S8(%rsp)                  # the old chain's block, a step down
+    lea     NodeBlock_parent_root(%r14), %rdi
+    call    node_find_block
+    cmp     $-1, %rax
+    je      8f
+    mov     %rdx, %r14
+    jmp     1b
+3:  mov     %rcx, S9(%rsp)                  # the new chain's block, a step down
+    lea     NodeBlock_parent_root(%rcx), %rdi
+    call    node_find_block
+    cmp     $-1, %rax
+    je      8f
+    mov     %rdx, S7(%rsp)
+    jmp     1b
+4:  mov     NodeBlock_slot(%r12), %rax      # the old head common, below the new head's slot: no reorg
+    mov     NodeBlock_slot(%r13), %rcx
+    cmp     %r12, %r14
+    jne     41f
+    cmp     %rcx, %rax
+    jb      8f
+41: cmp     %rcx, %rax                      # the lowest of the two heads' slots and the slot before each chain's first block after it
+    mov     %rcx, %rdx
+    cmovb   %rax, %rdx
+    mov     S8(%rsp), %rsi
+    test    %rsi, %rsi
+    jz      5f
+    mov     NodeBlock_slot(%rsi), %rsi
+    dec     %rsi
+    cmp     %rdx, %rsi
+    cmovb   %rsi, %rdx
+5:  mov     S9(%rsp), %rsi
+    test    %rsi, %rsi
+    jz      6f
+    mov     NodeBlock_slot(%rsi), %rsi
+    dec     %rsi
+    cmp     %rdx, %rsi
+    cmovb   %rsi, %rdx
+6:  sub     %rdx, %rax
+    mov     %r12, %rdx
+    LEAVE 0
+8:  mov     $-1, %rax
+    LEAVE 0
+END_FUNCTION node_api_reorg
+
+/*
  * The head and finalized_checkpoint events at a quiet point (node.md, The events): with no block
  * vote queued, a head other than event_head, then a finalized epoch above event_epoch; each a
  * NODE_WORK_API_EVENT when an entry has its topic. r12 the block, r13 the values.
@@ -6648,7 +6819,33 @@ LOCAL_FUNCTION node_api_head_events
     cmpq    $PAYLOAD_STATUS_NOT_VALIDATED, NodeBlock_payload_status(%r12)
     sete    %al
     lea     (%r8,%rax,2), %r13
-    mov     NodeBlock_slot(%r12), %rax
+    mov     $API_TOPIC_CHAIN_REORG, %edi    # chain_reorg, before the head event: the new head's chain lacks the old head
+    call    node_api_subscribed
+    test    %rax, %rax
+    jz      12f
+    cmpq    $0, NodeBlock_state_id(%r12)
+    je      12f
+    lea     Node_event_head(%rbx), %rdi
+    mov     %r12, %rsi
+    call    node_api_reorg
+    cmp     $-1, %rax
+    je      12f
+    mov     NodeBlock_data_id(%rdx), %rcx
+    test    %rcx, %rcx
+    jz      12f
+    mov     %rax, %r9
+    shl     $16, %r9
+    mov     %r13, %rax
+    and     $2, %eax
+    shl     $8, %rax
+    or      %rax, %r9
+    add     $API_TOPIC_CHAIN_REORG, %r9
+    mov     $NODE_WORK_API_EVENT, %edi
+    mov     NodeBlock_state_id(%r12), %rsi
+    xor     %edx, %edx
+    xor     %r8d, %r8d
+    call    node_work
+12: mov     NodeBlock_slot(%r12), %rax
     mov     %rax, Node_event_slot(%rbx)
     lea     Node_event_head(%rbx), %rax
     COPY32  %rax, %r12
