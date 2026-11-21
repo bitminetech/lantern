@@ -268,7 +268,11 @@ FUNCTION lantern_app_options
     sete    %cl
     cmp     %al, %cl
     jne     90f
-    movq    $0, (%r12)
+    cmpq    $0, AppOptions_archive(%rbp)    # --archive needs --data-dir
+    je      51f
+    cmpq    $0, (AppOptions_data_dir + 8)(%rbp)
+    je      90f
+51: movq    $0, (%r12)
     xor     %eax, %eax
     LEAVE 32
 91: mov     (L + 16)(%rsp), %rax            # a fault of the option's argument

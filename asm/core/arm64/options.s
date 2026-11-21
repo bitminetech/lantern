@@ -250,7 +250,11 @@ FUNCTION lantern_app_options
     cset    x10, eq
     cmp     x9, x10
     b.ne    90f
-    str     xzr, [x21]
+    ldr     x9, [x20, #AppOptions_archive]  /* --archive needs --data-dir */
+    cbz     x9, 51f
+    ldr     x9, [x20, #(AppOptions_data_dir + 8)]
+    cbz     x9, 90f
+51: str     xzr, [x21]
     mov     x0, #LANTERN_OK
     LEAVE 32
 91: ldr     x28, [sp, #(L + 16)]            /* a fault of the option's argument */

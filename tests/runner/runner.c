@@ -93,6 +93,7 @@ ABI uint64_t LF(process_block)(void *state, const void *block, const void *execu
 ABI uint64_t UPGRADE(const void *pre, const void *room, const void *config, void *scratch, void *out);
 /* The node's start at a state of the fork before: docs/reference/node.md, Test vectors. */
 ABI uint64_t LP(node_anchor)(const void *data, const void *room, void *scratch, void *state, void *block);
+ABI uint64_t LP(node_state_bytes)(const void *state, void *scratch, void *out, void *size);
 ABI uint64_t LP(get_forkchoice_store)(const void *anchor_state, const void *anchor_block, const void *config,
                                           const void *room, void *scratch, void *store);
 #endif
@@ -454,6 +455,8 @@ ABI uint64_t lantern_db_find_root(const void *db, const void *root, void *slot);
 ABI uint64_t lantern_db_prune(void *db, const void *slot);
 ABI uint64_t lantern_db_drop_sidecars(void *db, const void *slot);
 ABI uint64_t lantern_db_add(void *db, const void *record, const void *offset);
+ABI uint64_t lantern_db_state_diff(const void *base, const void *state, void *out, void *size);
+ABI uint64_t lantern_db_state_patch(const void *base, const void *diff, void *out, void *size);
 
 /* Engine API client: docs/reference/engine-api.md. */
 ABI uint64_t lantern_jwt_token(const void *secret, const void *iat, void *scratch, void *out);
@@ -2665,7 +2668,14 @@ static int force_supernode; /* set: the next node has NODE_FLAG_SUPERNODE */
 #define NODE_FLAG_SYNCING 8 /* the view's is_syncing: the api cases set it for their requests marked syncing */
 #define NODE_DB 464 /* Node_db: the PartRef of the node's Db */
 #define NODE_DB_REF (1ull << 63)
+#define DB_SLOT_BYTES 96 /* DbSlot__mem */
 #define NODE_DB_SIDECARS (1ull << 62)
+#define NODE_DB_STATES (1ull << 61)
+#define NODE_ARCHIVE (728 + CONFIG_SIZE + 936 + 1624 + 8 * (4 + 64)) /* Node_archive_slots, then archive_slot, archive_first, archive_segment, archive_end */
+#define WORK_ARCHIVE_LOAD 42
+#define ACT_DB_ARCHIVE 17
+#define EV_DB_ARCHIVE 16
+#define NODE_ANCHOR_SIZE 296
 #define NODE_DB_SEGMENTS 256 /* the segments one node's runner keeps */
 enum { WORK_IMPORT_BLOCK = 1, WORK_JUSTIFIED_STATE, WORK_TARGET_STATE, WORK_ATTESTATION, WORK_ATTESTER_SLASHING, WORK_SERVE, WORK_GOSSIP,
        WORK_SYNC_BLOCK, WORK_BLOB, WORK_NEW_PAYLOAD, WORK_FORKCHOICE, WORK_SLOTS, WORK_UPGRADE, WORK_REPLAY, WORK_BACKFILL,
@@ -2742,7 +2752,7 @@ struct node_shell {
         uint8_t *b;
     } segs[NODE_DB_SEGMENTS];
     size_t nsegs;
-    uint8_t anchor[288], ncfg[CONFIG_SIZE]; /* the node's NodeAnchor and config, for a new node of the same start */
+    uint8_t anchor[NODE_ANCHOR_SIZE], ncfg[CONFIG_SIZE]; /* the node's NodeAnchor and config, for a new node of the same start */
     uint8_t *bld;                           /* with NODE_FLAG_BUILDER: the requests of the node's builder calls, as they came */
     uint64_t bld_len, bld_cap, bld_calls;
     tv bids;                                /* node-produce: the case's answers to the getHeader calls, or NULL */
@@ -2827,12 +2837,100 @@ static void shell_db_append(struct node_shell *s, const uint8_t *act, const char
 
 /* The ByteList in place of the SSZ bytes of the Db record of a NODE_DB_REF, in its segment: the record's header at 56; NULL when there is none. */
 static uint8_t *shell_db_view(struct node_shell *s, uint64_t ref) {
-    uint64_t *len, offset = ref & ((1ull << 48) - 1);
-    uint8_t **seg = shell_segment(s, (ref & NODE_DB_SIDECARS) ? 1 : 0, (ref >> 48) & 0x3fff, &len, 0);
+    uint64_t *len, offset = ref & ((1ull << 44) - 1);
+    if ((ref & NODE_DB_SIDECARS) && (ref & NODE_DB_STATES)) return NULL;
+    uint8_t **seg = shell_segment(s, (ref & NODE_DB_SIDECARS) ? 1 : (ref & NODE_DB_STATES) ? 2 : 0, (ref >> 44) & 0x1ffff, &len, 0);
     if (!seg || offset + 80 > *len || rd64(*seg + offset + 72) > *len - offset - 80) return NULL;
     uint8_t *h = *seg + offset + 56;
     if (rd64(h) != 24 + rd64(h + 16) || rd64(h + 8) != 24) return NULL;
     return h;
+}
+
+/* lantern_node_state_bytes of the fork of the state's slot: the runner's, or the fork before. */
+static uint64_t shell_state_bytes(const struct node_shell *s, const uint8_t *state, uint8_t *out, uint64_t *size) {
+#if FORK > FORK_PHASE0
+    uint64_t f = FORK_FULU, per_epoch = strcmp(PRESET, "minimal") ? 32 : 8, slot = rd64(state + 48);
+    while (f > 0 && slot / per_epoch < rd64(s->ncfg + 16 * f)) f--;
+    if (f < FORK) return CALL(LP(node_state_bytes), state, fresh_scratch(), out, size);
+#endif
+    (void)s;
+    return CALL(LF(node_state_bytes), state, fresh_scratch(), out, size);
+}
+
+static uint8_t *shell_append(struct node_shell *s, uint64_t size);
+static unsigned long node_db_archives, node_db_loads;
+
+/*
+ * NODE_ACT_DB_ARCHIVE: at its state segment's end, of a state of the record's slot, a DB_STATE at
+ * offset 0 or a DB_STATE_DIFF above it. The record as the shell writes it (the state's bytes, or
+ * their diff against the record at offset 0), then a NODE_EV_DB_ARCHIVE of it for the next step.
+ */
+static void shell_db_archive(struct node_shell *s, const uint8_t *act, const char **why) {
+    shell_buf *st = shell_find(s, rd64(act + 16));
+    uint64_t *len, number = rd64(act + 24), offset = rd64(act + 32), kind = rd64(act + 40), slot = rd64(act + 48);
+    uint8_t **seg = shell_segment(s, 2, number, &len, 1), *bytes = NULL, *diff = NULL, small[24] = {0};
+    if (!st) *why = "DB_ARCHIVE names no buffer";
+    else if (!seg) *why = "DB_ARCHIVE: too many segments for the runner";
+    else if (offset != *len) *why = "DB_ARCHIVE: the offset is not the state segment's end";
+    else if (kind != (offset ? 5u : 4u)) *why = "DB_ARCHIVE: not a full state at offset 0 and a diff above it";
+    else if (number != slot >> 13) *why = "DB_ARCHIVE: the record's slot is not of the segment";
+    else if (rd64(st->b + 48) != slot) *why = "DB_ARCHIVE: the state is not of the record's slot"; /* NODE_STATE_SLOT 48 */
+    else if (rd64(act + 40 + 16) || rd64(act + 40 + 56) || rd64(act + 40 + 64) || rd64(act + 40 + 72))
+        *why = "DB_ARCHIVE: the record's index, bytes and length are not 0";
+    uint64_t need = 0, size = 0;
+    wr64(small, 24);
+    if (!*why && (shell_state_bytes(s, st->b, small, &need) != 1 || need <= 24))
+        *why = "lantern_node_state_bytes: a short buffer is not LANTERN_BUFFER_TOO_SMALL with the size";
+    if (!*why) {
+        bytes = buffer(need);
+        wr64(bytes, need);
+        if (shell_state_bytes(s, st->b, bytes, &size) != 0 || size != need) *why = "lantern_node_state_bytes: status";
+    }
+    uint8_t *rec = bytes;
+    if (!*why && offset) {
+        uint8_t *full = shell_db_view(s, NODE_DB_REF | NODE_DB_STATES | number << 44);
+        uint64_t dneed = 0;
+        if (!full) *why = "DB_ARCHIVE: no full state at offset 0 of the segment";
+        else if (CALL(lantern_db_state_diff, full, bytes, small, &dneed) != 1 || dneed < 32)
+            *why = "lantern_db_state_diff: a short buffer is not LANTERN_BUFFER_TOO_SMALL with the size";
+        else {
+            diff = buffer(dneed);
+            wr64(diff, dneed);
+            if (CALL(lantern_db_state_diff, full, bytes, diff, &size) != 0 || size != dneed) *why = "lantern_db_state_diff: status";
+            else if (!guard_ok(diff, dneed)) *why = "lantern_db_state_diff wrote out of bounds";
+            rec = diff;
+        }
+    }
+    if (!*why) {
+        uint64_t length = rd64(rec + 16), rsize = 80 + ((length + 7) & ~7ull), k;
+        for (k = 0; k < s->nsegs && &s->segs[k].b != seg; k++) {}
+        if (*len + rsize > s->segs[k].cap) {
+            s->segs[k].cap = 2 * (*len + rsize);
+            *seg = realloc(*seg, (size_t)s->segs[k].cap);
+            if (!*seg) {
+                fprintf(stderr, "out of memory\n");
+                exit(2);
+            }
+        }
+        uint8_t *h = *seg + *len;
+        memset(h, 0, (size_t)rsize);
+        memcpy(h, act + 40, 80);
+        wr64(h + 56, 24 + length);
+        wr64(h + 64, 24);
+        wr64(h + 72, length);
+        memcpy(h + 80, rec + 24, (size_t)length);
+        *len += rsize;
+        node_db_archives++;
+        uint8_t *e = shell_append(s, 112);
+        memset(e, 0, 112);
+        wr64(e, 112);
+        wr64(e + 8, EV_DB_ARCHIVE);
+        wr64(e + 16, number);
+        wr64(e + 24, offset);
+        memcpy(e + 32, h, 80);
+    }
+    free(bytes);
+    free(diff);
 }
 
 /*
@@ -2871,12 +2969,14 @@ static void shell_db_rescan(struct node_shell *s, const char **why) {
     const uint8_t *a = s->node + rd64(s->node + NODE_DB), *b = node + rd64(node + NODE_DB);
     uint64_t first = rd64(a + 8), end = rd64(a + 16);
     if (!*why && (rd64(b + 8) != first || rd64(b + 16) != end || rd64(b + 56) != rd64(a + 56) ||
-                  memcmp(a + rd64(a + 24), b + rd64(b + 24), (size_t)(88 * (end - first)))))
+                  memcmp(a + rd64(a + 24), b + rd64(b + 24), (size_t)(DB_SLOT_BYTES * (end - first)))))
         *why = "rescan: the index is not the node's";
     uint64_t next = rd64(s->anchor + 32) + 1;
     if (end > next) next = end;
     if (!*why && rd64(node + 480) != next) *why = "rescan: db_next_slot is not past the Db's last block";
     if (!*why && memcmp(node + 488, s->node + 488, 32)) *why = "rescan: the segments to append to are not the node's";
+    if (!*why && !rd64(s->node + NODE_ARCHIVE + 40) && memcmp(node + NODE_ARCHIVE + 8, s->node + NODE_ARCHIVE + 8, 32))
+        *why = "rescan: the archive's state records are not the node's";
     free(node);
 }
 
@@ -3174,18 +3274,27 @@ static uint8_t *regrow_slot(const struct node_shell *s, uint8_t *state, uint64_t
 static void shell_work(fc_node *n, const uint8_t *work, const char **why) {
     struct node_shell *s = n->shell;
     uint64_t kind = rd64(work + 16), a_id = rd64(work + 24), b_id = rd64(work + 32), c_id = rd64(work + 40), d_id = rd64(work + 48);
-    shell_buf *a = a_id ? shell_find(s, a_id) : NULL, *b = b_id ? shell_find(s, b_id) : NULL;
+    shell_buf *a = a_id ? shell_find(s, a_id) : NULL, *b = b_id && !(b_id & NODE_DB_REF) ? shell_find(s, b_id) : NULL;
     shell_buf *c = c_id ? shell_find(s, c_id) : NULL, *d = d_id && !(d_id & NODE_DB_REF) ? shell_find(s, d_id) : NULL;
-    shell_buf view = {0, 0, NULL};
+    shell_buf view = {0, 0, NULL}, view_b = {0, 0, NULL};
     if (d_id & NODE_DB_REF) { /* the record of the node's Db, in place */
-        if (kind != WORK_SERVE && kind != WORK_API_ENCODE && kind != WORK_API_CHUNK && kind != WORK_REPLAY) {
-            *why = "a NODE_DB_REF in a WORK that does not serve or replay";
+        if (kind != WORK_SERVE && kind != WORK_API_ENCODE && kind != WORK_API_CHUNK && kind != WORK_REPLAY && kind != WORK_ARCHIVE_LOAD) {
+            *why = "a NODE_DB_REF in a WORK that does not serve, replay or load";
             return;
         }
         view.b = shell_db_view(s, d_id);
         node_db_serves++;
         view.size = 24;
         d = view.b ? &view : NULL;
+    }
+    if (b_id & NODE_DB_REF) { /* ARCHIVE_LOAD: the full state's record as state_b */
+        if (kind != WORK_ARCHIVE_LOAD) {
+            *why = "a NODE_DB_REF as state_b of a WORK other than ARCHIVE_LOAD";
+            return;
+        }
+        view_b.b = shell_db_view(s, b_id);
+        view_b.size = 24;
+        b = view_b.b ? &view_b : NULL;
     }
     if ((a_id && !a) || (b_id && !b) || (c_id && !c) || (d_id && !d)) {
         *why = "a WORK action names no buffer";
@@ -3209,7 +3318,7 @@ static void shell_work(fc_node *n, const uint8_t *work, const char **why) {
         memset(ev, FILL, (size_t)ev_size);
         wr64(ev, ev_size);
         st = CALL(lantern_node_run, s->node, n->store, s->seen, work, a ? a->b : NULL, b ? b->b : NULL, c ? c->b : NULL,
-                  d ? d->b : NULL, settings, fresh_scratch(), ev);
+                  d ? d->b : NULL, settings, kind == WORK_ARCHIVE_LOAD ? sized_scratch(16u << 20) : fresh_scratch(), ev);
         if (st != 0 && (memcmp(snode, s->node, (size_t)s->node_size) || memcmp(sstore, n->store, (size_t)n->size) ||
                         (a && memcmp(sa, a->b, (size_t)a->size)))) {
             static char msg[128];
@@ -3273,7 +3382,7 @@ static void shell_work(fc_node *n, const uint8_t *work, const char **why) {
         } else if (kind == WORK_API_CHUNK) {
             *why = "lantern_node_run: API_CHUNK asks for room past NODE_API_FIRST_ROOM";
         } else if ((kind == WORK_IMPORT_BLOCK && node_count(n) < node_capacity(n->store)) || kind == WORK_TARGET_STATE ||
-                   kind == WORK_SLOTS || kind == WORK_UPGRADE || kind == WORK_REPLAY) {
+                   kind == WORK_SLOTS || kind == WORK_UPGRADE || kind == WORK_REPLAY || kind == WORK_ARCHIVE_LOAD) {
             shell_buf *g = kind == WORK_UPGRADE ? b : a; /* UPGRADE: the buffer the upgrade writes */
             if (!g) *why = "lantern_node_run: no room, and no state";
             else {
@@ -3292,6 +3401,10 @@ static void shell_work(fc_node *n, const uint8_t *work, const char **why) {
     if (!*why && kind == WORK_REPLAY) {
         node_replays++;
         if (rd64(ev + EV_RESULT) != 0) *why = "lantern_node_run: a REPLAY of a block the node imported is not valid";
+    }
+    if (!*why && kind == WORK_ARCHIVE_LOAD) {
+        node_db_loads++;
+        if (rd64(ev + EV_RESULT) != 0) *why = "lantern_node_run: an ARCHIVE_LOAD of a state record the node wrote is not valid";
     }
     if (!*why && (!guard_ok(ev, ev_size) || !guard_ok(s->node, s->node_size) || !guard_ok(n->store, n->size) ||
                   (a && !guard_ok(a->b, a->size))))
@@ -3457,6 +3570,8 @@ static void shell_step(fc_node *n, const char **why) {
             shell_work(n, act, why);
         else if (kind == ACT_DB_APPEND && size == 128)
             shell_db_append(s, act, why);
+        else if (kind == ACT_DB_ARCHIVE && size == 120)
+            shell_db_archive(s, act, why);
         else if (kind == ACT_DB_DROP && size == 32) { /* the segment goes */
             uint64_t sidecars = rd64(act + 24), number = rd64(act + 16);
             size_t k = 0;
@@ -4011,6 +4126,7 @@ static void peer_node_id(uint8_t *out, const char **why) {
 
 /* The node of a case's anchor, with the shell's buffers: the store, the node, the actions, the anchor state as id 1. */
 static uint64_t shell_next_fork_epoch = UINT64_MAX; /* the epoch of the fork after the runner's in the node's config */
+static int main_db = -1; /* the node of a fork_choice case in node mode: 1 with NODE_FLAG_DB, every second case; -1 others */
 static struct node_shell *shell_open(fc_node *n, tv parts, uint8_t **anchor_block, const char **why) {
     memset(n, 0, sizeof *n);
     struct node_shell *s = calloc(1, sizeof *s);
@@ -4022,11 +4138,12 @@ static struct node_shell *shell_open(fc_node *n, tv parts, uint8_t **anchor_bloc
     *anchor_block = fc_setup(n, parts, why);
     if (*anchor_block) {
         /* Small capacities, so that the node grows through lantern_node_copy. */
-        uint8_t anchor[288] = {0}; /* NodeAnchor: root, slot, genesis_validators_root, jwt_secret, engine_host_len, engine_host, node_id, history_slot, builder_host_len, builder_host */
+        uint8_t anchor[NODE_ANCHOR_SIZE] = {0}; /* NodeAnchor: root, slot, genesis_validators_root, jwt_secret, engine_host_len, engine_host, node_id, history_slot, builder_host_len, builder_host, archive_slots */
         static unsigned long opened; /* every second node archives to a Db */
         int force_db = bf_state != NULL || drop_room; /* the backfill's and the drop check's nodes archive to a Db */
         /* every second node archives to a Db; every second pair keeps few post-states and rebuilds the others */
-        uint64_t flags = (FORK >= FORK_BELLATRIX ? NODE_FLAG_ENGINE : 0) | NODE_FLAG_DISCV5 | (opened % 2 || force_db ? NODE_FLAG_DB : 0) |
+        int db = main_db >= 0 ? main_db || force_db : opened % 2 || force_db;
+        uint64_t flags = (FORK >= FORK_BELLATRIX ? NODE_FLAG_ENGINE : 0) | NODE_FLAG_DISCV5 | (db ? NODE_FLAG_DB : 0) |
                          (opened / 2 % 2 ? NODE_FLAG_FEW_STATES : 0) | (force_supernode ? NODE_FLAG_SUPERNODE : 0), need = 0;
         opened++;
         for (int i = 0; i < NODE_ROOM_FIELDS; i++) s->room[i] = 2;
@@ -4045,6 +4162,8 @@ static struct node_shell *shell_open(fc_node *n, tv parts, uint8_t **anchor_bloc
             s->room[15] = 8192;
             s->room[16] = 2048;
         }
+        if (flags & NODE_FLAG_DB) /* a state record each epoch of finality (node.md, the archive) */
+            wr64(anchor + 288, strcmp(PRESET, "minimal") ? 32 : 8);
         if (force_builder) { /* the runner is the node's builder too */
             flags |= NODE_FLAG_BUILDER;
             wr64(anchor + 216, strlen(BUILDER_HOST));
@@ -4278,7 +4397,10 @@ static void ev_close(fc_node *n, const char **why) {
 static void fc_node_case(tv parts, int serve, const char **why) {
     fc_node n;
     uint8_t *anchor_block;
+    static unsigned long main_opened;
+    main_db = (int)(main_opened++ % 2);
     struct node_shell *s = shell_open(&n, parts, &anchor_block, why);
+    main_db = -1;
     tv steps = tv_get(parts, "steps");
     tv st = steps ? steps + 9 : NULL;
     tv evs = NULL; /* the texts of each step, from the node-events case */
@@ -4412,7 +4534,7 @@ static void transition_node_case(tv parts, uint64_t fork_epoch, int *ran, const 
         snprintf(smsg, sizeof smsg, "get_forkchoice_store of the fork before: status %llu", (unsigned long long)st);
         *why = smsg;
     }
-    uint8_t anchor[216] = {0}, *scr = NULL;
+    uint8_t anchor[NODE_ANCHOR_SIZE] = {0}, *scr = NULL;
     uint64_t flags = NODE_FLAG_DISCV5, scsize;
     if (!*why) { /* the node: as shell_open's, with no execution engine and no Db */
         for (int i = 0; i < NODE_ROOM_FIELDS; i++) s->room[i] = 2;
@@ -5455,7 +5577,7 @@ static int shell_has_blob(const struct node_shell *s, const uint8_t *root, uint6
     uint64_t slot = shell_db_slot(s, root);
     if (slot == UINT64_MAX || index >= 128) return 0;
     const uint8_t *db = s->node + rd64(s->node + NODE_DB);
-    const uint8_t *d = db + rd64(db + 24) + 88 * (slot - rd64(db + 8)); /* DbSlot: indices at 72 */
+    const uint8_t *d = db + rd64(db + 24) + DB_SLOT_BYTES * (slot - rd64(db + 8)); /* DbSlot: indices at 72 */
     return d[72 + index / 8] >> (index % 8) & 1;
 }
 
@@ -6027,8 +6149,8 @@ static void drop_check(tv parts, const char **why) {
         db = s->node + rd64(s->node + NODE_DB);
         static const uint8_t zero[48];
         const uint8_t *a = before + rd64(before + 24), *b = db + rd64(db + 24);
-        for (uint64_t sl = 0; sl < rd64(db + 16) && !*why; sl++, a += 88, b += 88) {
-            if (memcmp(a, b, 40)) *why = "drop: a block of the index changed";
+        for (uint64_t sl = 0; sl < rd64(db + 16) && !*why; sl++, a += DB_SLOT_BYTES, b += DB_SLOT_BYTES) {
+            if (memcmp(a, b, 40) || memcmp(a + 88, b + 88, 8)) *why = "drop: a block or a state of the index changed";
             else if (memcmp(b + 40, zero, 48)) *why = "drop: a sidecar below sidecar_floor stays";
         }
     }
@@ -8460,7 +8582,6 @@ static void run_config_parse(const char *file, case_file *f) {
 #define DB_END_SLOT 16
 #define DB_SLOTS 24
 #define DB_BLOCKS 56
-#define DB_SLOT_BYTES 88
 
 /* A Db of a room [slots, roots], from lantern_db_size and lantern_db_init at a first slot; its size in *size. */
 static uint8_t *db_new(const uint64_t *room, uint64_t first, uint64_t *size, const char **why) {
@@ -8630,7 +8751,7 @@ static void run_db_index(const char *file, case_file *f) {
         uint8_t *db = db_new(room, first, &size, &why);
         tv sg = segs + 9;
         for (uint64_t i = 0, n = rd64(segs + 1); i < n && !why; i++, sg = tv_skip(sg)) {
-            uint64_t blen, number = tv_u64(tv_get(sg, "number")), sidecars = tv_u64(tv_get(sg, "sidecars")), valid = 77;
+            uint64_t blen, number = tv_u64(tv_get(sg, "number")), kind = tv_u64(tv_get(sg, "kind")), valid = 77;
             const uint8_t *bytes = tv_bytes(tv_get(sg, "bytes"), &blen);
             uint8_t *list = buffer(24 + blen + 64); /* bytes after the segment's, that a read past it would take */
             wr64(list, 24 + blen + 64);
@@ -8638,7 +8759,7 @@ static void run_db_index(const char *file, case_file *f) {
             wr64(list + 16, blen);
             if (blen) memcpy(list + 24, bytes, (size_t)blen);
             memset(list + 24 + blen, 0x5C, 64);
-            uint64_t st = CALL(lantern_db_scan, db, &number, &sidecars, list, &valid);
+            uint64_t st = CALL(lantern_db_scan, db, &number, &kind, list, &valid);
             static char msg[96];
             if (!guard_ok(db, size)) why = "lantern_db_scan wrote out of bounds";
             else if (st != tv_u64(tv_get(sg, "status"))) {
@@ -8678,8 +8799,8 @@ static void run_db_index(const char *file, case_file *f) {
             else if (!guard_ok(d2, size)) why = "lantern_db_drop_sidecars wrote out of bounds";
             const uint8_t *a = db + rd64(db + 24), *b = d2 + rd64(d2 + 24);
             static const uint8_t zero[48];
-            for (uint64_t sl = f0; sl < e0 && !why; sl++, a += 88, b += 88) {
-                if (memcmp(a, b, 40)) why = "lantern_db_drop_sidecars: a block changed";
+            for (uint64_t sl = f0; sl < e0 && !why; sl++, a += DB_SLOT_BYTES, b += DB_SLOT_BYTES) {
+                if (memcmp(a, b, 40) || memcmp(a + 88, b + 88, 8)) why = "lantern_db_drop_sidecars: a block or a state changed";
                 else if (sl < cut && memcmp(b + 40, zero, 48)) why = "lantern_db_drop_sidecars: a sidecar below the slot stays";
                 else if (sl >= cut && memcmp(a + 40, b + 40, 48)) why = "lantern_db_drop_sidecars: a later sidecar changed";
             }
@@ -8698,10 +8819,76 @@ static void run_db_index(const char *file, case_file *f) {
     }
 }
 
+/* A ByteList of a copy of n bytes, with 64 bytes of 0x5C after them that a read past the bytes would take. */
+static uint8_t *db_list(const uint8_t *bytes, uint64_t n) {
+    uint8_t *l = buffer(24 + n + 64);
+    wr64(l, 24 + n + 64);
+    wr64(l + 8, 24);
+    wr64(l + 16, n);
+    if (n) memcpy(l + 24, bytes, (size_t)n);
+    memset(l + 24 + n, 0x5C, 64);
+    return l;
+}
+
+/*
+ * db-state_diff: lantern's cases of the state diffs (tests/generator/db.py, docs/reference/db.md):
+ * lantern_db_state_diff of base and state must give diff, and lantern_db_state_patch of base and
+ * diff the state; each with LANTERN_BUFFER_TOO_SMALL and the same size one byte short. A bad diff
+ * must give LANTERN_INVALID_ENCODING.
+ */
+static void run_db_state_diff(const char *file, case_file *f) {
+    for (uint64_t c = 0; c < f->count; c++) {
+        const char *name, *why = NULL;
+        uint64_t len, blen, slen, dlen;
+        tv parts = next_case(f, &name, &len);
+        const uint8_t *b = tv_bytes(tv_get(parts, "base"), &blen);
+        uint8_t *base = db_list(b, blen);
+        tv bad = tv_get(parts, "bad");
+        if (bad) {
+            const uint8_t *d = tv_bytes(bad, &dlen);
+            uint8_t *diff = db_list(d, dlen), *out = buffer(24 + 4096);
+            uint64_t size = 0;
+            wr64(out, 24 + 4096);
+            if (CALL(lantern_db_state_patch, base, diff, out, &size) != 56) why = "lantern_db_state_patch: not LANTERN_INVALID_ENCODING";
+            else if (!guard_ok(out, 24 + 4096)) why = "lantern_db_state_patch wrote out of bounds";
+            free(diff);
+            free(out);
+        } else {
+            const uint8_t *st = tv_bytes(tv_get(parts, "state"), &slen), *want = tv_bytes(tv_get(parts, "diff"), &dlen);
+            uint8_t *state = db_list(st, slen), *diff = db_list(want, dlen);
+            for (int pass = 0; pass < 2 && !why; pass++) { /* 0 the diff, 1 the patch */
+                uint64_t need = 24 + (pass ? slen : dlen), size = 0, st2;
+                const uint8_t *expect = pass ? st : want;
+                uint8_t *out = buffer(need), *small = buffer(need - 1);
+                wr64(out, need);
+                wr64(small, need - 1);
+                st2 = pass ? CALL(lantern_db_state_patch, base, diff, out, &size) : CALL(lantern_db_state_diff, base, state, out, &size);
+                if (st2 != 0) why = pass ? "lantern_db_state_patch status" : "lantern_db_state_diff status";
+                else if (!guard_ok(out, need)) why = "wrote out of bounds";
+                else if (size != need) why = pass ? "lantern_db_state_patch: size" : "lantern_db_state_diff: size";
+                else if (rd64(out + 8) != 24 || rd64(out + 16) != need - 24 || memcmp(out + 24, expect, (size_t)(need - 24)))
+                    why = pass ? "lantern_db_state_patch: another state" : "lantern_db_state_diff: another diff";
+                if (!why) {
+                    size = 0;
+                    st2 = pass ? CALL(lantern_db_state_patch, base, diff, small, &size) : CALL(lantern_db_state_diff, base, state, small, &size);
+                    if (st2 != 1 || size != need) why = "one byte short: not LANTERN_BUFFER_TOO_SMALL with the size";
+                    else if (!guard_ok(small, need - 1)) why = "one byte short: wrote out of bounds";
+                }
+                free(out);
+                free(small);
+            }
+            free(state);
+            free(diff);
+        }
+        free(base);
+        report(file, name, len, !why, why);
+    }
+}
+
 /* ---------------------------------------------------------------- Application */
 
 #define INVALID_OPTION 61
-#define APP_OPTIONS_SIZE 192
+#define APP_OPTIONS_SIZE 200
 
 /*
  * app-options: lantern_app_options over each case's command line (tests/generator/app.py), as an
@@ -8713,8 +8900,8 @@ static void run_app_options(const char *file, case_file *f) {
                                   "checkpoint_block", "builder"};
     static const uint64_t text_at[] = {0, 16, 32, 48, 96, 112, 128, 176};
     static const char *numbers[] = {"port", "enr_address", "http_port", "target_peers", "log_level", "http_address",
-                                    "http_max_connections", "supernode"};
-    static const uint64_t number_at[] = {64, 72, 80, 88, 144, 152, 160, 168};
+                                    "http_max_connections", "supernode", "archive"};
+    static const uint64_t number_at[] = {64, 72, 80, 88, 144, 152, 160, 168, 192};
     for (uint64_t i = 0; i < f->count; i++) {
         const char *name, *why = NULL;
         uint64_t len, total = 0, alen;
@@ -8755,7 +8942,7 @@ static void run_app_options(const char *file, case_file *f) {
                     inside = start >= rd64(list + 40 + 16 * k) && start + got <= rd64(list + 40 + 16 * k) + rd64(list + 48 + 16 * k);
                 if (got != wl || !inside || (wl && memcmp(list + start, w, (size_t)wl))) why = texts[t];
             }
-            for (int t = 0; t < 8 && !why; t++)
+            for (int t = 0; t < 9 && !why; t++)
                 if (rd64(opts + number_at[t]) != tv_u64(tv_get(want, numbers[t]))) why = numbers[t];
         } else if (st != INVALID_OPTION) why = "status is not LANTERN_INVALID_OPTION";
         else if (fault != tv_u64(wfault)) why = "fault is not the case's index";
@@ -10681,6 +10868,7 @@ static void api_headers_checks(fc_node *n, tv parts, case_block **chain, size_t 
  * 200, canonical when it is on the chain. Then getBlockHeaders (api_headers_checks).
  */
 static unsigned long api_lookups;
+static unsigned long api_archive_states; /* old states the archive checks asked */
 static void api_lookup_checks(fc_node *n, tv parts, const char **why) {
     struct node_shell *s = n->shell;
     case_block *blocks = NULL, **chain = NULL;
@@ -10757,6 +10945,43 @@ static void api_lookup_checks(fc_node *n, tv parts, const char **why) {
         }
         if (!*why) *why = api_clean(s);
         api_lookups++;
+    }
+    /* with state records (node.md, the archive): getStateV2 as SSZ of the slot after each, below the head: the
+       state of that slot's state root, from a replay whose base is a state record, full or a diff */
+    if (!*why && (s->flags & NODE_FLAG_DB) && rd64(s->node + NODE_ARCHIVE + 16) != UINT64_MAX) {
+        const uint8_t *db = s->node + rd64(s->node + NODE_DB);
+        for (uint64_t sl = rd64(db + 8); sl < rd64(db + 16) && !*why; sl++) {
+            uint64_t q = sl + 1, glen = 0, vsize = 0;
+            if (!rd64(db + rd64(db + 24) + DB_SLOT_BYTES * (sl - rd64(db + 8)) + 88) || q <= anchor_slot || q >= head_slot ||
+                head_slot - q >= roots_n)
+                continue;
+            const uint8_t *r = st + field_offset("BeaconState", 6) + 32 * (q % roots_n);
+            snprintf(req, sizeof req, "GET /eth/v2/debug/beacon/states/%llu HTTP/1.1\r\nHost: lantern\r\nAccept: application/octet-stream\r\n\r\n",
+                     (unsigned long long)q);
+            s->api.room = 0;
+            shell_api_ask(n, (const uint8_t *)req, strlen(req), conn++, why);
+            uint8_t *g = *why ? NULL : api_normalize(s, &glen, why);
+            const char *end = g ? find_bytes((const char *)g, glen, "\r\n\r\n") : NULL;
+            if (*why) break;
+            if (!end || glen < 17 || memcmp(g, "HTTP/1.1 200 OK\r\n", 17)) {
+                snprintf(msg, sizeof msg, "API getStateV2 of slot %llu after a state record: not 200", (unsigned long long)q);
+                *why = msg;
+            } else {
+                const uint8_t *body = (const uint8_t *)end + 4;
+                uint8_t *v = decode(type_by_name("BeaconState"), body, glen - (uint64_t)(body - g), &vsize, why);
+                uint8_t root[32];
+                if (!v) *why = "API getStateV2 after a state record: not a state";
+                else root_of("BeaconState", v, root, why);
+                if (!*why && memcmp(root, r, 32)) {
+                    snprintf(msg, sizeof msg, "API getStateV2 of slot %llu after a state record: another state", (unsigned long long)q);
+                    *why = msg;
+                }
+                free(v);
+                api_archive_states++;
+            }
+            free(g);
+            if (!*why) *why = api_clean(s);
+        }
     }
     tv steps = tv_get(parts, "steps");
     for (tv stp = steps ? steps + 9 : NULL; stp && nblocks < rd64(steps + 1) && !*why; stp = tv_skip(stp), nblocks++) {
@@ -11268,6 +11493,7 @@ int main(int argc, char **argv) {
         else if (!bls_off && !strcmp(kind, "http-request")) run_http_request(file, &f);
         else if (!bls_off && !strcmp(kind, "api-route")) run_api_route(file, &f);
         else if (!bls_off && !strcmp(kind, "db-index")) run_db_index(file, &f);
+        else if (!bls_off && !strcmp(kind, "db-state_diff")) run_db_state_diff(file, &f);
         else if (!bls_off && !strncmp(kind, "eth1-", 5)) run_eth1(file, kind, &f);
 #if FORK == FORK_FULU
         else if (!bls_off && (!strcmp(kind, "networking-get_custody_groups") ||
@@ -11324,6 +11550,7 @@ int main(int argc, char **argv) {
     if (node_transitions) printf("NOTE: %lu transition cases through the node\n", node_transitions);
 #endif
     if (node_db_records) printf("NOTE: %lu Db records archived, %lu served from the Db, %lu anchors saved and read back\n", node_db_records, node_db_serves, node_db_states);
+    if (node_db_archives) printf("NOTE: %lu state records archived, %lu states loaded from them, %lu old states asked after them\n", node_db_archives, node_db_loads, api_archive_states);
     printf("%s: %d passed, %d failed\n", failures ? "FAIL" : "PASS", passes, failures);
     return failures ? 1 : 0;
 }

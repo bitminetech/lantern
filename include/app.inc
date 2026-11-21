@@ -70,13 +70,13 @@
 .set APP_KZG, APP_PATH + 24 + APP_PATH_MAX  /* pair: the KzgSettings of the trusted setup */
 .set APP_PEERS, APP_KZG + 16               /* the count of connected peers of the last log line */
 .set APP_DB, APP_PEERS + 8                  /* AppDb: the files of the node's history */
-.set AppDb_file, 0                          /* the open segment files: blocks, then sidecars */
-.set AppDb_segment, 16                      /* their segments, or 2^64 - 1 */
-.set AppDb_maps, 32                         /* APP_DB_MAP_COUNT mapped segments of 32 bytes: key (bit 63 sidecars, the segment), address, size, mapped */
+.set AppDb_file, 0                          /* the open segment files: blocks, sidecars, states */
+.set AppDb_segment, 24                      /* their segments, or 2^64 - 1 */
+.set AppDb_maps, 48                         /* APP_DB_MAP_COUNT mapped segments of 32 bytes: key (the kind << 62, the segment), address, size, mapped */
 .set APP_DB_MAP_COUNT, 4
 .set AppDb_next_map, AppDb_maps + 32 * APP_DB_MAP_COUNT /* the map a new segment takes next */
-.set AppDb_view, AppDb_next_map + 8         /* a BufferId table entry (id, address, size), then a ByteList header */
-.set AppDb_op, AppDb_view + 48              /* a FileOp or FileResult */
+.set AppDb_view, AppDb_next_map + 8         /* two BufferId table entries (id, address, size) and 24 bytes: a work's data, then its state_b */
+.set AppDb_op, AppDb_view + 96              /* a FileOp or FileResult */
 .set AppDb_anchor_slot, AppDb_op + 32      /* the slot of the anchor.ssz this run wrote, or 2^64 - 1 */
 .set AppDb__size, AppDb_anchor_slot + 8
 .set APP_PATH2, APP_DB + AppDb__size        /* a ByteList: a second path */

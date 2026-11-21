@@ -4,7 +4,7 @@
 # boot node. args.lantern_image: the image of platform/docker/Dockerfile (default lantern:local);
 # args.lantern_max_cpu: lantern's CPU limit in millicores (default 0, no limit); args.lantern_delay:
 # seconds to wait before lantern starts, so that it syncs a chain that has moved on (default 0);
-# args.lantern_data_dir: a directory for lantern's history (--data-dir), or none (default);
+# args.lantern_data_dir: a directory for lantern's history (--data-dir, with --archive), or none (default);
 # args.lantern_checkpoint: true to start lantern from the finalized block of the first client and
 # its post-state (--checkpoint-block, --checkpoint-state), taken from its Beacon API once its
 # finalized epoch is 1 or more (default false); args.lantern_assertoor: true to run Assertoor with
@@ -176,7 +176,7 @@ def run(plan, args={}):
     if lantern_delay > 0:
         plan.run_sh(run="sleep {0}".format(lantern_delay), wait="{0}s".format(lantern_delay + 60))
     records = [participant.cl_context.enr for participant in out.all_participants]
-    extra_args = ["--data-dir", lantern_data_dir] if lantern_data_dir else []
+    extra_args = ["--data-dir", lantern_data_dir, "--archive"] if lantern_data_dir else []
     files = {"/network-configs": "el_cl_genesis_data"}
     if lantern_checkpoint:
         url = out.all_participants[0].cl_context.beacon_http_url

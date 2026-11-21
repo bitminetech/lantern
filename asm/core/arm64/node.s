@@ -228,6 +228,14 @@ FUNCTION lantern_node_init
     str     x23, [x24, #Node_flags]
     str     x22, [x24, #Node_earliest_slot]
     STQ     x22, x24, Node_base_slot        /* the base state: the anchor's post-state, at its slot */
+    mov     x9, #-1                         /* the archive: no state record yet; with NODE_FLAG_DB, the anchor's archive_slots */
+    STQ     x9, x24, Node_archive_slot
+    STQ     x9, x24, Node_archive_first
+    STQ     x9, x24, Node_archive_segment
+    tbz     x23, #7, 1701f
+    ldr     x9, [x21, #NodeAnchor_archive_slots]
+    STQ     x9, x24, Node_archive_slots
+1701:
     add     x9, x24, #Node_head_root
     COPY32  x9, x21
     ADDQ    x9, x24, Node_event_head        /* the events: the anchor's head and finalized epoch */
@@ -2026,7 +2034,7 @@ LOCAL_FUNCTION node_db_block
     cbz     x9, 9f
     sub     x9, x9, #1
     lsr     x10, x12, #DB_SEGMENT_SHIFT
-    orr     x0, x9, x10, lsl #48
+    orr     x0, x9, x10, lsl #NODE_DB_SEGMENT_SHIFT
     orr     x0, x0, #NODE_DB_REF
     ret
 9:  mov     x0, #0
@@ -2080,13 +2088,210 @@ LOCAL_FUNCTION node_db_sidecar
     udiv    x10, x10, x11
     madd    x9, x15, x10, x9
     lsr     x10, x12, #DB_SEGMENT_SHIFT
-    orr     x0, x9, x10, lsl #48
+    orr     x0, x9, x10, lsl #NODE_DB_SEGMENT_SHIFT
     orr     x0, x0, #NODE_DB_REF
     orr     x0, x0, #NODE_DB_SIDECARS
     ret
 9:  mov     x0, #0
     ret
 END_FUNCTION node_db_sidecar
+
+/*
+ * L0: the replay's base among the Db's state records (node.md, the replay) for the slot x0: x0 =
+ * the highest slot at or below it with a state record, from archive_first and above base_slot
+ * when that is at most x0, x1 = its DbSlot's state; x0 = 2^64 - 1 with none. Uses x9-x15.
+ */
+LOCAL_FUNCTION node_archive_base
+    UNWIND_END_PROLOGUE
+    LDQ     x14, x19, Node_archive_first
+    cmn     x14, #1
+    b.eq    9f
+    LDQ     x15, x19, Node_base_slot
+    cmp     x15, x0
+    b.hi    1f
+    add     x15, x15, #1
+    cmp     x14, x15
+    csel    x14, x15, x14, lo
+1:  ldr     x9, [x19, #Node_db]             /* inside the Db's slots */
+    add     x9, x19, x9
+    ldp     x10, x11, [x9, #Db_first_slot]
+    cmp     x14, x10
+    csel    x14, x10, x14, lo
+    cbz     x11, 9f
+    sub     x11, x11, #1
+    mov     x12, x0
+    cmp     x12, x11
+    csel    x12, x11, x12, hi
+2:  cmp     x12, x14
+    b.lo    9f
+    DB_SLOT x13, x12, 9f
+    ldr     x1, [x13, #DbSlot_state]
+    cbz     x1, 3f
+    mov     x0, x12
+    ret
+3:  cbz     x12, 9f
+    sub     x12, x12, #1
+    b       2b
+9:  mov     x0, #-1
+    ret
+END_FUNCTION node_archive_base
+
+/*
+ * L1: the archive (node.md) of the finalized NodeBlock x0 at slot x1, in the Db: with
+ * archive_slots not 0, a post-state, archive_busy 0, and archive_slot 2^64 - 1 or below the slot
+ * by a run of archive_slots, a NODE_ACT_DB_ARCHIVE of its post-state. x20 the block, x21 the slot.
+ */
+LOCAL_FUNCTION node_archive_queue
+    ENTER 0
+    mov     x20, x0
+    mov     x21, x1
+    LDQ     x9, x19, Node_archive_slots
+    cbz     x9, 9f
+    ldr     x10, [x20, #NodeBlock_state_id]
+    cbz     x10, 9f
+    LDQ     x10, x19, Node_archive_busy
+    cbnz    x10, 9f
+    LDQ     x10, x19, Node_archive_slot
+    cmn     x10, #1
+    b.eq    1f
+    udiv    x11, x21, x9
+    udiv    x12, x10, x9
+    cmp     x11, x12
+    b.ls    9f
+1:  mov     x0, #NODE_ACT_DB_ARCHIVE
+    mov     x1, #NODE_ACT_DB_ARCHIVE_SIZE
+    bl      node_act
+    ldr     x9, [x20, #NodeBlock_state_id]
+    lsr     x10, x21, #DB_SEGMENT_SHIFT
+    stp     x9, x10, [x0, #16]
+    LDQ     x11, x19, Node_archive_segment  /* at the end of its state segment, or a new one */
+    mov     x12, #0
+    cmp     x11, x10
+    b.ne    2f
+    LDQ     x12, x19, Node_archive_end
+2:  str     x12, [x0, #32]
+    add     x13, x0, #40                    /* the DbRecord: a full state at offset 0, else a diff */
+    mov     x9, #DB_STATE
+    mov     x10, #DB_STATE_DIFF
+    cmp     x12, #0
+    csel    x9, x9, x10, eq
+    stp     x9, x21, [x13, #DbRecord_kind]
+    str     xzr, [x13, #DbRecord_index]
+    add     x9, x20, #NodeBlock_root
+    add     x10, x13, #DbRecord_root
+    COPY32  x10, x9
+    stp     xzr, xzr, [x13, #DbRecord_bytes]
+    str     xzr, [x13, #DbRecord_length]
+    mov     x9, #1
+    STQ     x9, x19, Node_archive_busy
+9:  LEAVE 0
+END_FUNCTION node_archive_queue
+
+/*
+ * L1: NODE_EV_DB_ARCHIVE x0 (node.md, the archive): archive_busy 0; a record of kind not 0, of the
+ * segment of its slot, goes in the index with lantern_db_add, and on LANTERN_OK the archive's
+ * fields take it. x20 the event.
+ */
+LOCAL_FUNCTION node_archive_done
+    ENTER 0
+    mov     x20, x0
+    STQ     xzr, x19, Node_archive_busy
+    ldr     x9, [x20, #(32 + DbRecord_kind)]
+    cbz     x9, 9f
+    ldr     x9, [x20, #(32 + DbRecord_slot)]
+    lsr     x9, x9, #DB_SEGMENT_SHIFT
+    ldr     x10, [x20, #16]
+    cmp     x9, x10
+    b.ne    9f
+    ldr     x9, [x19, #Node_db]
+    add     x0, x19, x9
+    add     x1, x20, #32
+    add     x2, x20, #24
+    bl      lantern_db_add
+    cbnz    x0, 9f
+    ldp     x9, x10, [x20, #16]
+    STQ     x9, x19, Node_archive_segment
+    ldr     x11, [x20, #(32 + DbRecord_length)]
+    add     x11, x11, #(DbRecord__mem + 7)
+    and     x11, x11, #~7
+    add     x10, x10, x11
+    STQ     x10, x19, Node_archive_end
+    ldr     x9, [x20, #(32 + DbRecord_slot)]
+    STQ     x9, x19, Node_archive_slot
+    LDQ     x10, x19, Node_archive_first
+    cmp     x9, x10
+    csel    x9, x9, x10, lo
+    STQ     x9, x19, Node_archive_first
+9:  LEAVE 0
+END_FUNCTION node_archive_done
+
+/*
+ * L2: NODE_WORK_ARCHIVE_LOAD (node.md): (state x0, the full record's bytes x1 or 0, the record's
+ * bytes x2, scratch x3, node x4): x0 = LANTERN_VALID, LANTERN_INVALID_ENCODING, or
+ * LANTERN_BUFFER_TOO_SMALL with nothing changed. x20 the state, x21 the bytes, x22 scratch, x23
+ * its size, x24 the node. Locals: L the patch's size.
+ */
+LOCAL_FUNCTION node_run_archive
+    ENTER 16
+    mov     x20, x0
+    mov     x21, x2
+    mov     x22, x3
+    ldr     x23, [x22]
+    mov     x24, x4
+    cbz     x1, 2f
+    ldr     x9, [x21, #16]                  /* a diff: the patch at the end of the scratch */
+    cmp     x9, #8
+    b.lo    7f
+    ldr     x10, [x21, #8]
+    ldr     x9, [x21, x10]
+    adds    x9, x9, #(24 + 7)
+    b.cs    7f
+    and     x9, x9, #~7
+    adds    x10, x9, #64
+    b.cs    8f
+    cmp     x10, x23
+    b.hi    8f
+    sub     x10, x23, x9
+    str     x10, [x22]
+    add     x2, x22, x10
+    str     x9, [x2]
+    mov     x0, x1
+    mov     x1, x21
+    add     x3, sp, #L
+    mov     x21, x2
+    bl      lantern_db_state_patch
+    cmp     x0, #LANTERN_BUFFER_TOO_SMALL
+    b.eq    8f
+    cbnz    x0, 7f
+2:  ldr     x9, [x21, #16]                  /* the state's slot at bytes 40 to 47: its fork */
+    cmp     x9, #48
+    b.lo    7f
+    ldr     x10, [x21, #8]
+    add     x10, x21, x10
+    ldr     x0, [x10, #40]
+    add     x1, x24, #Node_config
+    bl      node_fork
+    mov     x15, x0
+    mov     x0, x21
+    ADDRESS x1, node_upgrade_room
+    mov     x2, x22
+    mov     x3, x20
+    FORK_CALL node_archive_state
+    str     x23, [x22]
+    cmp     x0, #LANTERN_BUFFER_TOO_SMALL
+    b.eq    9f
+    mov     x9, #LANTERN_VALID
+    mov     x10, #LANTERN_INVALID_ENCODING
+    cmp     x0, #LANTERN_OK
+    csel    x0, x9, x10, eq
+9:  LEAVE 16
+8:  str     x23, [x22]
+    mov     x0, #LANTERN_BUFFER_TOO_SMALL
+    LEAVE 16
+7:  str     x23, [x22]
+    mov     x0, #LANTERN_INVALID_ENCODING
+    LEAVE 16
+END_FUNCTION node_run_archive
 
 /* L0: a DB_APPEND action: sidecars x0, BufferId x1, segment x2, offset x3, the DbRecord at x4. */
 LOCAL_FUNCTION node_db_append
@@ -2934,6 +3139,9 @@ LOCAL_FUNCTION node_archive
     ldr     x10, [x26, #NodeBlock_data_id]
     stp     x9, x10, [x0, #16]
     str     x28, [x0, #32]
+    mov     x0, x26                         /* and the archive's state record */
+    mov     x1, x28
+    bl      node_archive_queue
 21: ldr     x0, [x26, #NodeBlock_data_id]   /* the block's bytes go, unless a stream sends them */
     bl      node_serving
     cbnz    x0, 30f
@@ -3002,6 +3210,8 @@ FUNCTION lantern_node_db_scan
     add     x0, x19, x0
     bl      lantern_db_scan
     cbnz    x0, 9f
+    cmp     x20, #2
+    b.eq    20f
     cbz     x20, 10f                        /* a sidecar segment: the backfill's, when it has none */
     ldr     x9, [x19, #Node_backfill_sidecar_segment]
     cmn     x9, #1
@@ -3076,6 +3286,37 @@ FUNCTION lantern_node_db_scan
 4:  str     x10, [x19, #Node_earliest_slot]
 8:  mov     x0, #LANTERN_OK
 9:  LEAVE 0
+20: LDQ     x9, x19, Node_archive_segment   /* a state segment: the archive's, unless it has a higher one; its records' slots */
+    cmn     x9, #1
+    b.eq    21f
+    cmp     x21, x9
+    b.lo    22f
+21: STQ     x21, x19, Node_archive_segment
+    ldr     x9, [x22]
+    STQ     x9, x19, Node_archive_end
+22: ldr     x9, [x23, #8]
+    add     x9, x23, x9
+    ldr     x10, [x22]
+    add     x10, x9, x10
+23: add     x11, x9, #DbRecord__mem
+    cmp     x11, x10
+    b.hi    8b
+    ldr     x11, [x9, #DbRecord_slot]
+    LDQ     x12, x19, Node_archive_slot
+    cmn     x12, #1
+    b.eq    24f
+    cmp     x11, x12
+    b.ls    25f
+24: STQ     x11, x19, Node_archive_slot
+25: LDQ     x12, x19, Node_archive_first
+    cmp     x11, x12
+    b.hs    26f
+    STQ     x11, x19, Node_archive_first
+26: ldr     x11, [x9, #DbRecord_length]
+    add     x11, x11, #(DbRecord__mem + 7)
+    and     x11, x11, #~7
+    add     x9, x9, x11
+    b       23b
 END_FUNCTION lantern_node_db_scan
 
 /* L0: a BYTES_PUT action of the ByteList x0 with a new id: x0 = the id. x21 the ByteList, x22 the id. */
@@ -4092,7 +4333,12 @@ LOCAL_FUNCTION node_event
     b.ne    470f
     bl      node_builder_event
     LEAVE 48
-470: cmp    x9, #NODE_EV_ENR
+470: cmp    x9, #NODE_EV_DB_ARCHIVE
+    b.ne    4701f
+    mov     x0, x21                         /* DB_ARCHIVE: the state record goes in the index */
+    bl      node_archive_done
+    LEAVE 48
+4701: cmp   x9, #NODE_EV_ENR
     b.ne    471f
     mov     x0, x21                         /* ENR: a record discv5 found */
     bl      node_enr
@@ -4688,7 +4934,20 @@ LOCAL_FUNCTION node_event
     ldr     x9, [x21, #NodeEvent_checkpoint]
     STQ     x9, x19, Node_eth1_deposit_index
     LEAVE 48
-7081: sub   x10, x9, #NODE_WORK_PUBLISH_DECODE /* the works of block publishing: their entry goes on */
+7081: cmp   x9, #NODE_WORK_ARCHIVE_LOAD       /* ARCHIVE_LOAD of the replay's copy: the replay goes on, or ends (2) */
+    b.ne    7082f
+    ldr     x9, [x21, #NodeAction_state_a]
+    LDQ     x10, x19, Node_replay_copy
+    cbz     x10, 7083f
+    cmp     x9, x10
+    b.ne    7083f
+    ldr     x9, [x21, #NodeEvent_result]
+    cmp     x9, #LANTERN_VALID
+    mov     x10, #2
+    csel    x10, xzr, x10, eq
+    STQ     x10, x19, Node_replay_loading
+7083: LEAVE 48
+7082: sub   x10, x9, #NODE_WORK_PUBLISH_DECODE /* the works of block publishing: their entry goes on */
     cmp     x10, #(NODE_WORK_PUBLISH_SIDECAR - NODE_WORK_PUBLISH_DECODE)
     b.hi    70f
     mov     x0, x21
@@ -8546,7 +8805,14 @@ FUNCTION lantern_node_step
     cmp     x15, x14
     b.hi    7f
     b       4f
-161: cmp    x13, #NODE_EV_API_SENT          /* API_SENT, API_CLOSED: the connection at 16 */
+161: cmp    x13, #NODE_EV_DB_ARCHIVE        /* DB_ARCHIVE: a state record the shell wrote; with NODE_FLAG_DB */
+    b.ne    162f
+    ldr     x14, [x19, #Node_flags]
+    tbz     x14, #7, 7f
+    cmp     x12, #NODE_EV_DB_ARCHIVE_SIZE
+    b.lo    7f
+    b       4f
+162: cmp    x13, #NODE_EV_API_SENT          /* API_SENT, API_CLOSED: the connection at 16 */
     b.lo    11f
     cmp     x12, #24
     b.lo    7f
@@ -10065,7 +10331,7 @@ FUNCTION lantern_node_run
     mov     x0, #LANTERN_OK
     LEAVE 192
 8426: cmp   x9, #NODE_WORK_ETH1_CHECK
-    b.ne    8430f
+    b.ne    8427f
     cbz     x22, 837b                       /* ETH1_CHECK: lantern_node_eth1_check, its two words at index and checkpoint */
     ldr     x0, [x22, #NODE_STATE_SLOT]
     add     x1, x19, #Node_config
@@ -10077,6 +10343,21 @@ FUNCTION lantern_node_run
     ldp     x9, x10, [sp, #(L + 96)]
     str     x9, [x25, #NodeEvent_index]
     str     x10, [x25, #NodeEvent_checkpoint]
+    mov     x0, #LANTERN_OK
+    LEAVE 192
+8427: cmp   x9, #NODE_WORK_ARCHIVE_LOAD
+    b.ne    8430f
+    cbz     x22, 837b                       /* ARCHIVE_LOAD: the state of a Db state record into state_a */
+    cbz     x23, 837b
+    mov     x0, x22
+    ldr     x1, [sp, #(L + 72)]
+    mov     x2, x23
+    mov     x3, x24
+    mov     x4, x19
+    bl      node_run_archive
+    cmp     x0, #LANTERN_BUFFER_TOO_SMALL
+    b.eq    8449f
+    str     x0, [x25, #NodeEvent_result]
     mov     x0, #LANTERN_OK
     LEAVE 192
 8430: cmp   x9, #NODE_WORK_PRODUCE_BLOCK

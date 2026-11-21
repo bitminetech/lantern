@@ -247,7 +247,11 @@ FUNCTION lantern_app_options
     seqz    t0, t0
     seqz    t1, t1
     bne     t0, t1, 90f
-    sd      zero, 0(s3)
+    ld      t0, AppOptions_archive(s2)      # --archive needs --data-dir
+    beqz    t0, 51f
+    ld      t0, (AppOptions_data_dir + 8)(s2)
+    beqz    t0, 90f
+51: sd      zero, 0(s3)
     li      a0, LANTERN_OK
     LEAVE 32
 91: ld      s10, (L + 16)(sp)               # a fault of the option's argument

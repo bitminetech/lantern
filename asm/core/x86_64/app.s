@@ -1556,12 +1556,18 @@ LOCAL_FUNCTION app_work
     call    app_work_entry
     mov     %rax, %r12
     mov     NodeAction_state_b(%rbp), %rdi
-    call    app_work_entry
-    mov     %rax, %r13
+    mov     $1, %esi                        # ARCHIVE_LOAD: state_b a NODE_DB_REF too
+    cmpq    $NODE_WORK_ARCHIVE_LOAD, S8(%rsp)
+    jne     101f
+    call    app_work_data
+    jmp     102f
+101: call   app_work_entry
+102: mov    %rax, %r13
     mov     NodeAction_state_c(%rbp), %rdi
     call    app_work_entry
     mov     %rax, %r14
     mov     NodeAction_data(%rbp), %rdi
+    xor     %esi, %esi
     call    app_work_data
     mov     %rax, %r15
     cmp     $-1, %r12                       # an id with no buffer
@@ -1684,6 +1690,8 @@ LOCAL_FUNCTION app_work
     je      4f
     cmp     $NODE_WORK_UPGRADE, %rcx        # UPGRADE: state_b, the upgrade's buffer
     je      6f
+    cmp     $NODE_WORK_ARCHIVE_LOAD, %rcx   # ARCHIVE_LOAD: state_a, and twice the scratch
+    je      18f
     cmp     $NODE_WORK_LC_BLOCK, %rcx       # the light client works: state_c, the light client store
     je      17f
     cmp     $NODE_WORK_LC_HEAD, %rcx
@@ -1749,6 +1757,23 @@ LOCAL_FUNCTION app_work
     test    %rax, %rax
     jnz     91f
     jmp     1b
+18: test    %r12, %r12
+    jz      91f
+    mov     %r12, %rdi
+    call    app_regrow
+    test    %rax, %rax
+    jnz     91f
+    mov     (APP_SCRATCH + 8)(%rbx), %rax
+    shl     $1, %rax
+    mov     %rax, S9(%rsp)
+    mov     $APP_SCRATCH, %edi
+    call    app_unmap
+    mov     $APP_SCRATCH, %edi
+    mov     S9(%rsp), %rsi
+    call    app_alloc
+    test    %rax, %rax
+    jz      91f
+    jmp     1b
 7:  mov     $2, %edi
     mov     $-1, %rsi
     call    app_grow
@@ -1784,6 +1809,7 @@ LOCAL_FUNCTION app_db_start
     lea     APP_DB(%rbx), %r15
     movq    $-1, AppDb_segment(%r15)
     movq    $-1, (AppDb_segment + 8)(%r15)
+    movq    $-1, (AppDb_segment + 16)(%r15)
     xor     %ecx, %ecx
 1:  mov     %rcx, %rax
     shl     $5, %rax
@@ -1802,6 +1828,11 @@ LOCAL_FUNCTION app_db_start
     orq     $NODE_FLAG_DB, APP_FLAGS(%rbx)
     movq    $DB_SEGMENT_SLOTS, (APP_NODE_ROOM + NodeRoom_db_slots)(%rbx)
     movq    $APP_DB_ROOTS, (APP_NODE_ROOM + NodeRoom_db_roots)(%rbx)
+    xor     %eax, %eax                      # --archive: a state record each DB_ARCHIVE_DIFF slots
+    mov     $DB_ARCHIVE_DIFF, %ecx
+    cmpq    $0, (APP_OPTIONS + AppOptions_archive)(%rbx)
+    cmovne  %rcx, %rax
+    mov     %rax, (APP_ANCHOR + NodeAnchor_archive_slots)(%rbx)
     cmp     $APP_PATH_MAX, %r12
     ja      9f
     lea     APP_PATH(%rbx), %r13            # the directory's path
@@ -1817,7 +1848,7 @@ LOCAL_FUNCTION app_db_start
 9:  LEAVE 0
 END_FUNCTION app_db_start
 
-/* L1: the path of segment rsi of blocks (rdi 0) or sidecars (1) in the data directory, <dir>/b<n>.seg or <dir>/s<n>.seg: a ByteList at APP_PATH. rbp the kind, r12 the segment, r13 the next byte. Locals: L 24 digits. */
+/* L1: the path of segment rsi of blocks (rdi 0), sidecars (1) or states (2) in the data directory, <dir>/b<n>.seg, <dir>/s<n>.seg or <dir>/a<n>.seg: a ByteList at APP_PATH. rbp the kind, r12 the segment, r13 the next byte. Locals: L 24 digits. */
 LOCAL_FUNCTION app_db_path
     ENTER 32
     mov     %rdi, %rbp
@@ -1836,6 +1867,9 @@ LOCAL_FUNCTION app_db_path
     test    %rbp, %rbp
     jz      1f
     movb    $0x73, %al                      # s
+    cmp     $2, %rbp
+    jne     1f
+    movb    $0x61, %al                      # a
 1:  movb    %al, 1(%r13)
     add     $2, %r13
     lea     (L + 24)(%rsp), %rcx            # the number's digits, from the last
@@ -1868,24 +1902,36 @@ LOCAL_FUNCTION app_db_path
     LEAVE 32
 END_FUNCTION app_db_path
 
-/*
- * L1: NODE_ACT_DB_APPEND rdi: the record at the end of its segment file, its DbRecord, its bytes
- * and zero bytes to a multiple of 8. A file that is not the open one of its kind opens, and is cut
- * to the record's offset first. A failure gives a line on the standard error, and the file closes,
- * so the next record opens it again. rbp the action, r12 the kind (0 blocks, 1 sidecars), r13 the
- * bytes' table entry, r14 the file, r15 the AppDb. Locals: L a ByteList header, L+24 a u64, L+32 zero bytes.
- */
+/* L1: NODE_ACT_DB_APPEND rdi: app_db_write of it with the table entry of its bytes. Locals: the action. */
 LOCAL_FUNCTION app_db_append
-    ENTER 48
-    mov     %rdi, %rbp
-    lea     APP_DB(%rbx), %r15
-    mov     32(%rbp), %r12
-    and     $1, %r12d
-    mov     16(%rbp), %rdi
+    FRAME 16
+    mov     %rdi, (%rsp)
+    mov     16(%rdi), %rdi
     call    app_buf_find
     test    %rax, %rax
-    jz      99f
-    mov     %rax, %r13
+    jz      9f
+    mov     %rax, %rsi
+    mov     (%rsp), %rdi
+    call    app_db_write
+9:  UNFRAME 16
+END_FUNCTION app_db_append
+
+/*
+ * L1: the record of a NODE_ACT_DB_APPEND rdi at the end of its segment file, with the bytes of the
+ * table entry rsi: its DbRecord, its bytes and zero bytes to a multiple of 8. A file that is not
+ * the open one of its kind opens, and is cut to the record's offset first. A failure gives a line
+ * on the standard error, and the file closes, so the next record opens it again: rax = 0 written,
+ * else 1. rbp the action, r12 the kind (0 blocks, 1 sidecars, 2 states), r13 the bytes' table
+ * entry, r14 the file, r15 the AppDb. Locals: L a ByteList header, L+24 a u64, L+32 zero bytes.
+ */
+LOCAL_FUNCTION app_db_write
+    ENTER 48
+    mov     %rdi, %rbp
+    mov     %rsi, %r13
+    lea     APP_DB(%rbx), %r15
+    mov     32(%rbp), %r12
+    cmp     $2, %r12
+    ja      88f
     lea     AppDb_file(%r15,%r12,8), %r14
     mov     AppDb_segment(%r15,%r12,8), %rax
     cmp     24(%rbp), %rax
@@ -1948,7 +1994,10 @@ LOCAL_FUNCTION app_db_append
     CALL_GLOBAL lantern_shell_append
     cmpq    $0, AppDb_op(%r15)
     jne     89f
-99: LEAVE 48
+99: xor     %eax, %eax
+    LEAVE 48
+88: mov     $1, %eax
+    LEAVE 48
 89: mov     %r14, %rdi                      # the file closes
     CALL_GLOBAL lantern_shell_close
     movq    $-1, AppDb_segment(%r15,%r12,8)
@@ -1969,8 +2018,156 @@ LOCAL_FUNCTION app_db_append
     call    app_line_u64
     mov     $APP_LOG_ERROR, %edi
     call    app_line_end
+    mov     $1, %eax
     LEAVE 48
-END_FUNCTION app_db_append
+END_FUNCTION app_db_write
+
+/*
+ * L1: NODE_ACT_DB_ARCHIVE rdi (app.md): the state's SSZ bytes in new memory; above offset 0, the
+ * diff of them against the record at offset 0 of the segment's file, in new memory too; the
+ * record goes as a DB_APPEND's does, in the state segments' file; the memory is freed; then the
+ * NODE_EV_DB_ARCHIVE of the segment, the offset and the record (kind 0 when none was written)
+ * joins the next step's events. rbp the action, r12 the state's entry, r13 the full record's
+ * ByteList, r14 the state's bytes, r15 the AppDb, S7 their size, S8 the diff, S9 its size, S10 1
+ * once written. Locals: L the event (NODE_EV_DB_ARCHIVE_SIZE), L+112 an action of the kind's
+ * record (16 to 127), L+240 a table entry, L+264 a ByteList header, L+288 a size, L+296 a fork.
+ */
+LOCAL_FUNCTION app_db_archive
+    ENTER 304
+    mov     %rdi, %rbp
+    lea     APP_DB(%rbx), %r15
+    xor     %r14d, %r14d
+    movq    $0, S8(%rsp)
+    movq    $0, S10(%rsp)
+    movq    $NODE_EV_DB_ARCHIVE_SIZE, L(%rsp)   # the event, and the action of its record
+    movq    $NODE_EV_DB_ARCHIVE, (L + 8)(%rsp)
+    mov     24(%rbp), %rax
+    mov     %rax, (L + 16)(%rsp)
+    mov     %rax, (L + 112 + 24)(%rsp)
+    mov     32(%rbp), %rax
+    mov     %rax, (L + 24)(%rsp)
+    mov     %rax, (L + 112 + 40)(%rsp)
+    movq    $2, (L + 112 + 32)(%rsp)
+    lea     (L + 112 + 48)(%rsp), %rdi
+    lea     40(%rbp), %rsi
+    mov     $DbRecord__mem, %edx
+    call    lantern_copy
+    mov     16(%rbp), %rdi                  # the state's SSZ bytes
+    call    app_buf_find
+    test    %rax, %rax
+    jz      60f
+    mov     %rax, %r12
+    mov     (40 + DbRecord_slot)(%rbp), %rdi
+    lea     APP_CONFIG(%rbx), %rsi
+    call    app_fork
+    mov     %rax, (L + 296)(%rsp)
+    movq    $24, (L + 264)(%rsp)
+    movq    $0, (L + 288)(%rsp)
+    mov     %rax, %r10
+    mov     8(%r12), %rdi
+    SCRATCH %rsi
+    lea     (L + 264)(%rsp), %rdx
+    lea     (L + 288)(%rsp), %rcx
+    FORK_CALL node_state_bytes
+    mov     (L + 288)(%rsp), %rax
+    cmp     $24, %rax
+    jbe     60f
+    mov     %rax, S7(%rsp)
+    mov     %rax, %rdi
+    call    app_map
+    test    %rax, %rax
+    jz      60f
+    mov     %rax, %r14
+    mov     S7(%rsp), %rax
+    mov     %rax, (%r14)
+    mov     (L + 296)(%rsp), %r10
+    mov     8(%r12), %rdi
+    SCRATCH %rsi
+    mov     %r14, %rdx
+    lea     (L + 288)(%rsp), %rcx
+    FORK_CALL node_state_bytes
+    test    %rax, %rax
+    jnz     70f
+    mov     %r14, (L + 248)(%rsp)           # the record's bytes: the state's at offset 0
+    cmpq    $0, 32(%rbp)
+    je      50f
+    mov     24(%rbp), %rdi                  # else the diff against the full state at 0
+    shl     $NODE_DB_SEGMENT_SHIFT, %rdi
+    bts     $63, %rdi
+    bts     $61, %rdi
+    xor     %esi, %esi
+    call    app_work_data
+    cmp     $-1, %rax
+    je      70f
+    mov     8(%rax), %r13
+    movq    $24, (L + 264)(%rsp)
+    mov     %r13, %rdi
+    mov     %r14, %rsi
+    lea     (L + 264)(%rsp), %rdx
+    lea     (L + 288)(%rsp), %rcx
+    CALL_GLOBAL lantern_db_state_diff
+    mov     (L + 288)(%rsp), %rax
+    mov     %rax, S9(%rsp)
+    mov     %rax, %rdi
+    call    app_map
+    test    %rax, %rax
+    jz      70f
+    mov     %rax, S8(%rsp)
+    mov     S9(%rsp), %rcx
+    mov     %rcx, (%rax)
+    mov     %r13, %rdi
+    mov     %r14, %rsi
+    mov     %rax, %rdx
+    lea     (L + 288)(%rsp), %rcx
+    CALL_GLOBAL lantern_db_state_diff
+    test    %rax, %rax
+    jnz     70f
+    mov     S8(%rsp), %rax
+    mov     %rax, (L + 248)(%rsp)
+50: mov     (L + 248)(%rsp), %rax           # the DbRecord: the ByteList header and length of the bytes
+    mov     16(%rax), %rcx
+    lea     24(%rcx), %rdx
+    mov     %rdx, (L + 112 + 48 + DbRecord_bytes)(%rsp)
+    movq    $24, (L + 112 + 48 + DbRecord_bytes + 8)(%rsp)
+    mov     %rcx, (L + 112 + 48 + DbRecord_length)(%rsp)
+    movq    $0, (L + 240)(%rsp)
+    mov     (%rax), %rcx
+    mov     %rcx, (L + 256)(%rsp)
+    lea     (L + 112)(%rsp), %rdi
+    lea     (L + 240)(%rsp), %rsi
+    call    app_db_write
+    test    %rax, %rax
+    jnz     70f
+    movq    $1, S10(%rsp)
+70: mov     S8(%rsp), %rax                  # the memory goes
+    test    %rax, %rax
+    jz      71f
+    mov     %rax, (L + 264)(%rsp)
+    mov     S9(%rsp), %rax
+    mov     %rax, (L + 272)(%rsp)
+    lea     (L + 264)(%rsp), %rdi
+    lea     (L + 272)(%rsp), %rsi
+    CALL_GLOBAL lantern_shell_unmap
+71: test    %r14, %r14
+    jz      60f
+    mov     %r14, (L + 264)(%rsp)
+    mov     S7(%rsp), %rax
+    mov     %rax, (L + 272)(%rsp)
+    lea     (L + 264)(%rsp), %rdi
+    lea     (L + 272)(%rsp), %rsi
+    CALL_GLOBAL lantern_shell_unmap
+60: lea     (L + 32)(%rsp), %rdi            # the event: the record, kind 0 when none
+    lea     (L + 112 + 48)(%rsp), %rsi
+    mov     $DbRecord__mem, %edx
+    call    lantern_copy
+    cmpq    $0, S10(%rsp)
+    jne     61f
+    movq    $0, (L + 32 + DbRecord_kind)(%rsp)
+61: lea     L(%rsp), %rdi
+    mov     $NODE_EV_DB_ARCHIVE_SIZE, %esi
+    call    app_event_put
+    LEAVE 304
+END_FUNCTION app_db_archive
 
 /*
  * L1: NODE_ACT_DB_DROP rdi: the segment's file goes: the open file of its kind, when it is that
@@ -1990,7 +2187,7 @@ LOCAL_FUNCTION app_db_drop
     CALL_GLOBAL lantern_shell_close
     movq    $-1, AppDb_segment(%r15,%r13,8)
 1:  mov     %r13, %rax                      # its map
-    shl     $63, %rax
+    shl     $62, %rax
     or      %r14, %rax
     mov     %rax, S7(%rsp)
     movq    $0, S8(%rsp)
@@ -2021,7 +2218,7 @@ LOCAL_FUNCTION app_db_drop
 END_FUNCTION app_db_drop
 
 /*
- * L0: rax = the AppDb's view entry of the record at offset rdi of the mapped segment rsi: its
+ * L0: rax = the AppDb's view entry r10 of the record at offset rdi of the mapped segment rsi: its
  * ByteList in place, at byte DbRecord_bytes of the record; 0 when the record is not all inside
  * the map, or its ByteList header is not of its bytes. Uses rcx, rdx, r8, r9.
  */
@@ -2046,7 +2243,7 @@ LOCAL_FUNCTION app_db_record
     jne     8f
     cmpq    $24, (DbRecord_bytes + 8)(%r8)
     jne     8f
-    lea     (APP_DB + AppDb_view)(%rbx), %rax
+    mov     %r10, %rax
     lea     DbRecord_bytes(%r8), %rcx
     mov     %rcx, 8(%rax)
     ret
@@ -2056,9 +2253,10 @@ END_FUNCTION app_db_record
 
 /*
  * L1: rax = the table entry of a work's data BufferId rdi as app_work_entry gives; for a
- * NODE_DB_REF, the AppDb's view entry of its record in the segment, mapped again when the file
- * grew past the map, or 2^64 - 1 when the record is not there. rbp the kind, r12 the segment, r13
- * the offset, r14 a map, r15 the AppDb, S7 the map's key.
+ * NODE_DB_REF, the AppDb's view entry rsi (0 data, 1 state_b) of its record in the segment, mapped
+ * again when the file grew past the map, or 2^64 - 1 when the record is not there. rbp the kind
+ * (0 blocks, 1 sidecars, 2 states), r12 the segment, r13 the offset, r14 a map, r15 the AppDb, S7
+ * the map's key, S8 the view.
  */
 LOCAL_FUNCTION app_work_data
     ENTER 0
@@ -2067,17 +2265,26 @@ LOCAL_FUNCTION app_work_data
     call    app_work_entry
     LEAVE 0
 1:  lea     APP_DB(%rbx), %r15
+    lea     (APP_DB + AppDb_view)(%rbx), %rax
+    imul    $48, %rsi, %rsi
+    add     %rsi, %rax
+    mov     %rax, S8(%rsp)
     mov     %rdi, %rbp
     shr     $62, %rbp
     and     $1, %ebp
-    mov     %rdi, %r12
-    shr     $48, %r12
-    and     $0x3fff, %r12d
+    bt      $61, %rdi
+    jnc     11f
+    test    %rbp, %rbp                      # both kinds: none
+    jnz     8f
+    mov     $2, %ebp
+11: mov     %rdi, %r12
+    shr     $NODE_DB_SEGMENT_SHIFT, %r12
+    and     $0x1ffff, %r12d
     mov     %rdi, %r13
-    shl     $16, %r13
-    shr     $16, %r13
+    shl     $20, %r13
+    shr     $20, %r13
     mov     %rbp, %rax
-    shl     $63, %rax
+    shl     $62, %rax
     or      %r12, %rax
     mov     %rax, S7(%rsp)
     xor     %ecx, %ecx                      # the map of the segment
@@ -2092,6 +2299,7 @@ LOCAL_FUNCTION app_work_data
     jmp     2b
 3:  mov     %r13, %rdi
     mov     %r14, %rsi
+    mov     S8(%rsp), %r10
     call    app_db_record
     test    %rax, %rax
     jnz     9f
@@ -2129,6 +2337,7 @@ LOCAL_FUNCTION app_work_data
     mov     %rax, 24(%r14)
     mov     %r13, %rdi
     mov     %r14, %rsi
+    mov     S8(%rsp), %r10
     call    app_db_record
     test    %rax, %rax
     jnz     9f
@@ -2308,7 +2517,7 @@ LOCAL_FUNCTION app_db_scan_all
 6:  inc     %r12
     jmp     2b
 7:  inc     %rbp
-    cmp     $2, %rbp
+    cmp     $3, %rbp
     jb      1b
     xor     %eax, %eax
     LEAVE 64
@@ -2356,8 +2565,13 @@ LOCAL_FUNCTION app_db_state
     lea     AppDb_op(%r15), %rsi
     CALL_GLOBAL lantern_shell_sync
 2:  cmpq    $-1, (AppDb_segment + 8)(%r15)
-    je      3f
+    je      22f
     lea     (AppDb_file + 8)(%r15), %rdi
+    lea     AppDb_op(%r15), %rsi
+    CALL_GLOBAL lantern_shell_sync
+22: cmpq    $-1, (AppDb_segment + 16)(%r15)
+    je      3f
+    lea     (AppDb_file + 16)(%r15), %rdi
     lea     AppDb_op(%r15), %rsi
     CALL_GLOBAL lantern_shell_sync
 3:  mov     32(%rbp), %rdi                  # the state's SSZ bytes: their size, then the bytes
@@ -2562,9 +2776,14 @@ LOCAL_FUNCTION app_actions
     call    app_db_drop
     jmp     8f
 12: cmp     $NODE_ACT_DB_STATE, %rax
-    jne     10f
+    jne     120f
     mov     %rbp, %rdi                      # DB_STATE: anchor.ssz
     call    app_db_state
+    jmp     8f
+120: cmp    $NODE_ACT_DB_ARCHIVE, %rax
+    jne     10f
+    mov     %rbp, %rdi                      # DB_ARCHIVE: a state record
+    call    app_db_archive
     jmp     8f
 10: cmp     $NODE_ACT_STATE_BYTES, %rax
     jne     13f

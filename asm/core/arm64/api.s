@@ -5173,6 +5173,18 @@ LOCAL_FUNCTION node_api_state
     b.eq    80f
     LDQ     x27, x19, Node_base_slot
     mov     x25, x26
+    cmp     x25, x27
+    b.hs    76f
+    LDQ     x9, x19, Node_archive_first     /* below the base's slot: from the lowest state record on */
+    cmp     x25, x9
+    b.lo    80f
+78: mov     x0, x25
+    bl      node_db_slot
+    mov     x1, x25
+    cbnz    x0, 71f
+    cbz     x25, 80f
+    sub     x25, x25, #1
+    b       78b
 76: cmp     x25, x27
     b.ls    77f
     mov     x0, x25
@@ -5212,10 +5224,14 @@ LOCAL_FUNCTION node_replay_get
     mov     x25, x1
     LDQ     x9, x19, Node_base_slot
     cmp     x25, x9
-    b.lo    8f
+    b.hi    1f
+    b.lo    6f
     ldr     x26, [x19, #Node_anchor_state_id]   /* the base's slot: the base state */
-    b.eq    5f
-    cbz     x21, 8f
+    b       5f
+6:  LDQ     x9, x19, Node_archive_first     /* below it: from the lowest state record on */
+    cmp     x25, x9
+    b.lo    8f
+1:  cbz     x21, 8f
     LDQ     x26, x19, Node_replay_state     /* the last replay's state, of that root */
     cbz     x26, 2f
     ADDQ    x9, x19, Node_replay_root
@@ -5250,6 +5266,29 @@ LOCAL_FUNCTION node_replay_get
     STQ     x9, x19, Node_replay_copy_slot
     add     x9, x9, #1
     STQ     x9, x19, Node_replay_next
+    mov     x0, x25                         /* a nearer base among the state records: the copy loads it */
+    bl      node_archive_base
+    cmn     x0, #1
+    b.eq    7f
+    STQ     x0, x19, Node_replay_copy_slot
+    add     x9, x0, #1
+    STQ     x9, x19, Node_replay_next
+    mov     x9, #1
+    STQ     x9, x19, Node_replay_loading
+    lsr     x9, x0, #DB_SEGMENT_SHIFT       /* the record's NODE_DB_REF, and with a diff the full state's at 0 */
+    lsl     x9, x9, #NODE_DB_SEGMENT_SHIFT
+    orr     x9, x9, #NODE_DB_REF
+    orr     x9, x9, #NODE_DB_STATES
+    sub     x3, x1, #1
+    orr     x3, x3, x9
+    mov     x2, #0
+    cmp     x1, #1
+    csel    x2, x2, x9, eq
+    mov     x0, #NODE_WORK_ARCHIVE_LOAD
+    LDQ     x1, x19, Node_replay_copy
+    mov     x4, #0
+    mov     x5, #0
+    bl      node_work
 7:  mov     x0, #1
     LEAVE 0
 8:  mov     x0, #0
@@ -5672,6 +5711,12 @@ LOCAL_FUNCTION node_replay_due
     mov     x27, #0
     ldr     x9, [x23]
     str     x9, [sp, #L]
+    LDQ     x9, x19, Node_replay_loading    /* a load out: later; a failed one: no replay */
+    cbz     x9, 1f
+    cmp     x9, #2
+    b.ne    99f
+    STQ     xzr, x19, Node_replay_loading
+    b       60f
 1:  cmp     x25, x26
     b.hi    50f
     ldr     x9, [x19, #Node_flags]          /* the Db's blocks, below db_next_slot */

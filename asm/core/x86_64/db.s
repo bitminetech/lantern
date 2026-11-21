@@ -204,10 +204,10 @@ FUNCTION lantern_db_add
     mov     %rdi, %rbx
     mov     %rsi, %rbp
     mov     (%rdx), %r12
-    test    $7, %r12b                       # an offset of a multiple of 8, below 2^48
+    test    $7, %r12b                       # an offset of a multiple of 8, below DB_OFFSET_MAX
     jnz     7f
     mov     %r12, %rax
-    shr     $48, %rax
+    shr     $44, %rax
     jnz     7f
     mov     $1, %eax                        # length at most DB_RECORD_MAX
     shl     $32, %rax
@@ -230,6 +230,10 @@ FUNCTION lantern_db_add
     mov     DbRecord_kind(%rbp), %rax
     cmp     $DB_BLOCK, %rax
     je      1f
+    cmp     $DB_STATE, %rax
+    je      5f
+    cmp     $DB_STATE_DIFF, %rax
+    je      5f
     cmp     $DB_BLOB_SIDECAR, %rax
     je      4f
     cmp     $DB_COLUMN_SIDECAR, %rax
@@ -291,6 +295,28 @@ FUNCTION lantern_db_add
     cmp     Db_end_slot(%rbx), %rax
     jbe     9f
     mov     %rax, Db_end_slot(%rbx)
+    jmp     9f
+5:  cmpq    $0, DbRecord_index(%rbp)        # a state: index 0, its slot's block of its root, no state yet
+    jne     7f
+    cmpq    $0, DbSlot_block(%r14)
+    je      7f
+    cmpq    $0, DbSlot_state(%r14)
+    jne     7f
+    xor     %ecx, %ecx                      # DB_STATE at offset 0, DB_STATE_DIFF above it
+    test    %r12, %r12
+    sete    %cl
+    xor     %edx, %edx
+    cmp     $DB_STATE, %rax
+    sete    %dl
+    cmp     %rdx, %rcx
+    jne     7f
+    .irp off, 0, 8, 16, 24
+    mov     (DbSlot_root + \off)(%r14), %rcx
+    cmp     (DbRecord_root + \off)(%rbp), %rcx
+    jne     7f
+    .endr
+    lea     1(%r12), %rcx
+    mov     %rcx, DbSlot_state(%r14)
 9:  xor     %eax, %eax
     LEAVE 0
 8:  mov     $LANTERN_BUFFER_TOO_SMALL, %eax
@@ -299,8 +325,8 @@ FUNCTION lantern_db_add
     LEAVE 0
 END_FUNCTION lantern_db_add
 
-# (db, segment, sidecars, bytes, valid): each whole record of a segment's bytes into the index,
-# until one does not fit or is rejected. rbx db, rbp the segment, r12 the sidecars flag, r13 the
+# (db, segment, segment_kind, bytes, valid): each whole record of a segment's bytes into the index,
+# until one does not fit or is rejected. rbx db, rbp the segment, r12 the segment's kind, r13 the
 # bytes, r14 their count, r15 valid, S7 the position, S8 the segment's first slot, S9 a record.
 # Locals: L the record's size, L+8 its offset.
 FUNCTION lantern_db_scan
@@ -339,9 +365,8 @@ FUNCTION lantern_db_scan
     jb      9f
     cmp     $DB_SEGMENT_SLOTS, %rax
     jae     9f
-    xor     %eax, %eax                      # a block in a block segment, else a sidecar
-    cmpq    $DB_BLOCK, DbRecord_kind(%rdi)
-    setne   %al
+    mov     DbRecord_kind(%rdi), %rax       # the kind of its segment: kind / 2, 0 blocks, 1 sidecars, 2 states
+    shr     $1, %rax
     cmp     %r12, %rax
     jne     9f
     mov     S7(%rsp), %rax
@@ -441,7 +466,7 @@ FUNCTION lantern_db_drop_sidecars
 1:  test    %r13, %r13
     jz      9f
     lea     DbSlot_sidecars(%r12), %rdi
-    mov     $(DbSlot__mem - DbSlot_sidecars), %esi
+    mov     $(DbSlot_state - DbSlot_sidecars), %esi
     call    lantern_zero
     add     $DbSlot__mem, %r12
     dec     %r13
@@ -449,3 +474,293 @@ FUNCTION lantern_db_drop_sidecars
 9:  xor     %eax, %eax
     LEAVE 0
 END_FUNCTION lantern_db_drop_sidecars
+
+# L0: rax = the u64 of the rsi bytes at rdi (as a signed count: 8 or more a whole word, 0 or less none), zero above them. Uses rcx, rdx, r8.
+LOCAL_FUNCTION db_word
+    UNWIND_END_PROLOGUE
+    cmp     $8, %rsi
+    jl      1f
+    mov     (%rdi), %rax
+    ret
+1:  xor     %eax, %eax
+    test    %rsi, %rsi
+    jle     3f
+    xor     %ecx, %ecx
+    xor     %edx, %edx
+2:  movzbl  (%rdi,%rdx), %r8d
+    shl     %cl, %r8
+    or      %r8, %rax
+    inc     %rdx
+    add     $8, %ecx
+    cmp     %rsi, %rdx
+    jb      2b
+3:  ret
+END_FUNCTION db_word
+
+# L1: rax = 1 when word rdi of the state differs from the patch's start, else 0 (db.md, the state
+# diffs). Reads rbx the base's bytes, rbp min(their count, the state's), r12 the state's bytes, r13
+# their count. Uses rcx, rdx, rsi, rdi, r8-r11.
+LOCAL_FUNCTION db_differ
+    FRAME 0
+    lea     0(,%rdi,8), %r9
+    lea     8(%r9), %rax
+    cmp     %rbp, %rax
+    ja      1f
+    mov     (%r12,%r9), %rax
+    mov     (%rbx,%r9), %r10
+    jmp     2f
+1:  lea     (%r12,%r9), %rdi
+    mov     %r13, %rsi
+    sub     %r9, %rsi
+    call    db_word
+    mov     %rax, %r11
+    lea     (%rbx,%r9), %rdi
+    mov     %rbp, %rsi
+    sub     %r9, %rsi
+    call    db_word
+    mov     %rax, %r10
+    mov     %r11, %rax
+2:  cmp     %r10, %rax
+    setne   %al
+    movzbl  %al, %eax
+    UNFRAME 0
+END_FUNCTION db_differ
+
+# (base, state, out, size): the diff of the state's bytes against the base's (db.md, the state
+# diffs): a pass that counts, then one that writes. rbx the base's bytes, rbp min(their count, the
+# state's), r12 the state's bytes, r13 their count, r14 its words, r15 the diff's bytes (0 while
+# counting), S7 the diff's length so far, S8 the word, S9 a run's first word, S10 its last.
+# Locals: L out, L+8 size, L+16 the first equal word after a group, then a word, L+24 a place.
+FUNCTION lantern_db_state_diff
+    ENTER 32
+    mov     %rdx, L(%rsp)
+    mov     %rcx, (L + 8)(%rsp)
+    mov     8(%rdi), %rax
+    lea     (%rdi,%rax), %rbx
+    mov     16(%rdi), %rbp
+    mov     8(%rsi), %rax
+    lea     (%rsi,%rax), %r12
+    mov     16(%rsi), %r13
+    cmp     %r13, %rbp
+    cmova   %r13, %rbp
+    lea     7(%r13), %r14
+    shr     $3, %r14
+    xor     %r15d, %r15d
+10: movq    $8, S7(%rsp)                    # the length, then the runs
+    test    %r15, %r15
+    jz      11f
+    mov     %r13, (%r15)
+11: movq    $0, S8(%rsp)
+12: mov     S8(%rsp), %rdi
+    cmp     %r14, %rdi
+    jae     30f
+    call    db_differ
+    test    %rax, %rax
+    jnz     13f
+    incq    S8(%rsp)
+    jmp     12b
+13: mov     S8(%rsp), %rax                  # a group from this word
+    mov     %rax, S9(%rsp)
+    mov     %rax, S10(%rsp)
+    inc     %rax
+    mov     %rax, S8(%rsp)
+14: mov     S8(%rsp), %rdi
+    cmp     %r14, %rdi
+    jae     20f
+    call    db_differ
+    test    %rax, %rax
+    jz      15f
+    mov     S8(%rsp), %rax
+    mov     %rax, S10(%rsp)
+    incq    S8(%rsp)
+    jmp     14b
+15: mov     S8(%rsp), %rax                  # equal words: past them
+    mov     %rax, (L + 16)(%rsp)
+16: incq    S8(%rsp)
+    mov     S8(%rsp), %rdi
+    cmp     %r14, %rdi
+    jae     20f
+    call    db_differ
+    test    %rax, %rax
+    jz      16b
+    mov     S8(%rsp), %rax                  # at most 2 equal words between: the group goes on
+    sub     (L + 16)(%rsp), %rax
+    cmp     $2, %rax
+    ja      20f
+    mov     S8(%rsp), %rax
+    mov     %rax, S10(%rsp)
+    incq    S8(%rsp)
+    jmp     14b
+20: mov     S9(%rsp), %rcx                  # the run: offset, count, the words; then on from S8
+    shl     $3, %rcx
+    mov     S10(%rsp), %rdx
+    inc     %rdx
+    shl     $3, %rdx
+    cmp     %r13, %rdx
+    cmova   %r13, %rdx
+    sub     %rcx, %rdx
+    lea     7(%rdx), %rax
+    and     $-8, %rax
+    mov     S7(%rsp), %r9
+    add     $16, %r9
+    add     %r9, %rax
+    mov     %rax, S7(%rsp)
+    test    %r15, %r15
+    jz      12b
+    lea     (%r15,%r9), %r10
+    mov     %rcx, -16(%r10)
+    mov     %rdx, -8(%r10)
+    mov     %r10, (L + 24)(%rsp)
+    mov     S9(%rsp), %rax
+    mov     %rax, (L + 16)(%rsp)
+21: mov     (L + 16)(%rsp), %rax
+    cmp     S10(%rsp), %rax
+    ja      12b
+    shl     $3, %rax
+    lea     (%r12,%rax), %rdi
+    mov     %r13, %rsi
+    sub     %rax, %rsi
+    call    db_word
+    mov     (L + 24)(%rsp), %r10
+    mov     %rax, (%r10)
+    addq    $8, (L + 24)(%rsp)
+    incq    (L + 16)(%rsp)
+    jmp     21b
+30: test    %r15, %r15
+    jnz     9f
+    mov     L(%rsp), %rdx                   # counted: the size, then the room
+    mov     (L + 8)(%rsp), %rcx
+    mov     S7(%rsp), %rax
+    add     $24, %rax
+    mov     %rax, (%rcx)
+    cmp     %rax, (%rdx)
+    jb      8f
+    movq    $24, 8(%rdx)
+    mov     S7(%rsp), %rax
+    mov     %rax, 16(%rdx)
+    lea     24(%rdx), %r15
+    jmp     10b
+9:  xor     %eax, %eax
+    LEAVE 32
+8:  mov     $LANTERN_BUFFER_TOO_SMALL, %eax
+    LEAVE 32
+END_FUNCTION lantern_db_state_diff
+
+# (base, diff, out, size): the state's bytes from the base's and the diff (db.md, the state
+# diffs). rbx the base's bytes, rbp min(their count, length), r12 the diff's bytes, r13 their
+# count, r14 length, r15 the out bytes; r8 the position in the diff, r9 the end of the run before.
+FUNCTION lantern_db_state_patch
+    ENTER 0
+    mov     8(%rsi), %rax
+    lea     (%rsi,%rax), %r12
+    mov     16(%rsi), %r13
+    cmp     $8, %r13
+    jb      7f
+    mov     (%r12), %r14
+    mov     %r14, %rax
+    add     $24, %rax
+    jc      7f
+    mov     %rax, (%rcx)
+    cmp     %rax, (%rdx)
+    jb      8f
+    movq    $24, 8(%rdx)
+    mov     %r14, 16(%rdx)
+    lea     24(%rdx), %r15
+    mov     8(%rdi), %rax
+    lea     (%rdi,%rax), %rbx
+    mov     16(%rdi), %rbp
+    cmp     %r14, %rbp
+    cmova   %r14, %rbp
+    xor     %ecx, %ecx                      # the base's bytes to min(their count, length)
+1:  lea     8(%rcx), %rax
+    cmp     %rbp, %rax
+    ja      2f
+    mov     (%rbx,%rcx), %rdx
+    mov     %rdx, (%r15,%rcx)
+    mov     %rax, %rcx
+    jmp     1b
+2:  cmp     %rbp, %rcx
+    jae     3f
+    movzbl  (%rbx,%rcx), %edx
+    mov     %dl, (%r15,%rcx)
+    inc     %rcx
+    jmp     2b
+3:  cmp     %r14, %rcx                      # zero bytes to length: to a multiple of 8, words, the rest
+    jae     4f
+    test    $7, %cl
+    jz      31f
+    movb    $0, (%r15,%rcx)
+    inc     %rcx
+    jmp     3b
+31: lea     8(%rcx), %rax
+    cmp     %r14, %rax
+    ja      32f
+    movq    $0, (%r15,%rcx)
+    mov     %rax, %rcx
+    jmp     31b
+32: cmp     %r14, %rcx
+    jae     4f
+    movb    $0, (%r15,%rcx)
+    inc     %rcx
+    jmp     32b
+4:  mov     $8, %r8d
+    xor     %r9d, %r9d
+5:  cmp     %r13, %r8                       # the runs end the diff's bytes
+    jae     9f
+    mov     %r13, %rax
+    sub     %r8, %rax
+    cmp     $16, %rax
+    jb      7f
+    lea     (%r12,%r8), %rsi
+    mov     (%rsi), %r10                    # offset, count
+    mov     8(%rsi), %r11
+    test    %r11, %r11
+    jz      7f
+    test    $7, %r10b
+    jnz     7f
+    cmp     %r9, %r10
+    jb      7f
+    cmp     %r14, %r11
+    ja      7f
+    mov     %r14, %rcx
+    sub     %r11, %rcx
+    cmp     %rcx, %r10
+    ja      7f
+    lea     7(%r11), %rdi
+    and     $-8, %rdi
+    sub     $16, %rax
+    cmp     %rax, %rdi
+    ja      7f
+    add     $16, %rsi
+    mov     %r11, %rcx                      # zero padding
+6:  cmp     %rdi, %rcx
+    jae     61f
+    cmpb    $0, (%rsi,%rcx)
+    jne     7f
+    inc     %rcx
+    jmp     6b
+61: lea     (%r15,%r10), %rdx               # its bytes at its offset
+    xor     %ecx, %ecx
+62: lea     8(%rcx), %rax
+    cmp     %r11, %rax
+    ja      63f
+    mov     (%rsi,%rcx), %rbp
+    mov     %rbp, (%rdx,%rcx)
+    mov     %rax, %rcx
+    jmp     62b
+63: cmp     %r11, %rcx
+    jae     64f
+    movzbl  (%rsi,%rcx), %eax
+    mov     %al, (%rdx,%rcx)
+    inc     %rcx
+    jmp     63b
+64: lea     (%r10,%r11), %r9
+    lea     16(%r8,%rdi), %r8
+    jmp     5b
+9:  xor     %eax, %eax
+    LEAVE 0
+8:  mov     $LANTERN_BUFFER_TOO_SMALL, %eax
+    LEAVE 0
+7:  mov     $LANTERN_INVALID_ENCODING, %eax
+    LEAVE 0
+END_FUNCTION lantern_db_state_patch

@@ -755,7 +755,14 @@
 .set Node_eth1_leaves, Node_base_slot + 1192   /* PartRef: their leaves */
 .set Node_eth1_counts, Node_base_slot + 1208   /* PartRef: Eth1Count entries */
 .set Node_eth1_check_epoch, Node_base_slot + 1224  /* the store's epoch + 1 at the last ETH1_CHECK, or 0 */
-.set NODE_FIXED, Node_base_slot + 1232
+.set Node_archive_slots, Node_base_slot + 1232   /* the archive (node.md): 0 for no state records */
+.set Node_archive_slot, Node_base_slot + 1240    /* the slot of the last state record, or 2^64 - 1 */
+.set Node_archive_first, Node_base_slot + 1248   /* the lowest slot of a state record, or 2^64 - 1 */
+.set Node_archive_segment, Node_base_slot + 1256 /* the state segment of the last state record, or 2^64 - 1 */
+.set Node_archive_end, Node_base_slot + 1264     /* its bytes */
+.set Node_archive_busy, Node_base_slot + 1272    /* 1 while a NODE_ACT_DB_ARCHIVE waits for its NODE_EV_DB_ARCHIVE */
+.set Node_replay_loading, Node_base_slot + 1280  /* 1 while the replay's NODE_WORK_ARCHIVE_LOAD is out */
+.set NODE_FIXED, Node_base_slot + 1288
 .set Eth1Count_number, 0               /* Eth1Count (node.md) */
 .set Eth1Count_count, 8
 .set Eth1Count_root, 16
@@ -911,7 +918,8 @@
 .set NodeAnchor_history_slot, 208     /* the first slot of the Db: at most the anchor's slot, rounded down to a segment */
 .set NodeAnchor_builder_host_len, 216  /* with NODE_FLAG_BUILDER, at most NODE_ENGINE_HOST_MAX */
 .set NodeAnchor_builder_host, 224
-.set NodeAnchor__mem, 288
+.set NodeAnchor_archive_slots, 288    /* with NODE_FLAG_DB: a state record each run of this many slots of F; 0 none */
+.set NodeAnchor__mem, 296
 .set NODE_P2P_ROUNDS, 8                /* libp2p steps of one node step for the node's own events, at most */
 
 /* NodeRoom: the capacities of a Node */
@@ -971,7 +979,9 @@
 .set NODE_EV_API_SENT, 13             /* 16 the connection: the shell has room for its next chunk */
 .set NODE_EV_API_CLOSED, 14           /* 16 the connection: it closed */
 .set NODE_EV_BUILDER, 15              /* 16 a builder call, + 256 for a failure; 24 a ByteList of the builder's whole answer */
-.set NODE_EV_LAST, 15
+.set NODE_EV_DB_ARCHIVE, 16            /* 16 a state segment, 24 an offset, 32 the DbRecord written, kind 0 for none */
+.set NODE_EV_LAST, 16
+.set NODE_EV_DB_ARCHIVE_SIZE, 112
 .set NodeEvent_result, 72
 .set NodeEvent_checkpoint, 80
 .set NODE_EV_WORK_DONE_SIZE, 128
@@ -1000,8 +1010,12 @@
 .set NODE_ACT_BYTES_NEW, 15            /* 16 a new id, 24 a size: the shell keeps a ByteList of that size, offset 24, its bytes zero */
 .set NODE_ACT_BYTES_NEW_SIZE, 32
 .set NODE_ACT_BUILDER, 16              /* 16 a builder call, 24 a ByteList of an HTTP request: the shell writes it to a new connection to the builder */
-.set NODE_DB_REF, 1 << 63              /* a BufferId of a Db record: bit 62 a sidecar segment, segment << 48, the offset below */
+.set NODE_ACT_DB_ARCHIVE, 17           /* 16 a state's BufferId, 24 a state segment, 32 an offset, 40 a DbRecord: the shell writes the state's record */
+.set NODE_ACT_DB_ARCHIVE_SIZE, 120
+.set NODE_DB_REF, 1 << 63              /* a BufferId of a Db record: bit 62 a sidecar segment, bit 61 a state segment, segment << 44, the offset below */
 .set NODE_DB_SIDECARS, 1 << 62
+.set NODE_DB_STATES, 1 << 61
+.set NODE_DB_SEGMENT_SHIFT, 44         /* a NODE_DB_REF's segment: 17 bits from here */
 .set DB_SEGMENT_SHIFT, 13              /* slot >> DB_SEGMENT_SHIFT: its segment */
 .set NodeAction_work_kind, 16
 .set NodeAction_state_a, 24
@@ -1061,6 +1075,7 @@
 .set NODE_WORK_PRODUCE_BID, 39         /* a: the state of a produceBlockV3; data: the builder's answer; target: the NodeApi index */
 .set NODE_WORK_ETH1_CHECK, 40          /* a: the head's post-state */
 .set NODE_WORK_PRODUCE_ETH1, 41        /* a: the state of a produceBlockV3; b: its Eth1Snapshot; data: its draft; target: the NodeApi index */
+.set NODE_WORK_ARCHIVE_LOAD, 42        /* a: the state to write; b: with a diff, the full record's NODE_DB_REF; data: the record's NODE_DB_REF */
 .set NODE_LC_ID, 2                     /* the BufferId of the light client store (lantern_node_init: Caller must) */
 .set NODE_PUBLISH_DECODE, 1            /* NodeApi member of a publishBlockV2: its phase */
 .set NODE_PUBLISH_SIDECARS, 2
@@ -1126,7 +1141,8 @@
 .set DbSlot_sidecar_end, 56
 .set DbSlot_sidecar_last, 64
 .set DbSlot_indices, 72                /* bit i % 8 of byte i / 8 for each sidecar index i */
-.set DbSlot__mem, 88
+.set DbSlot_state, 88                  /* 0, or the offset + 1 of the state record */
+.set DbSlot__mem, 96
 .set DbRecord_kind, 0
 .set DbRecord_slot, 8
 .set DbRecord_index, 16
@@ -1137,6 +1153,10 @@
 .set DB_BLOCK, 1
 .set DB_BLOB_SIDECAR, 2
 .set DB_COLUMN_SIDECAR, 3
+.set DB_STATE, 4                        /* the full state of a state segment, at offset 0 */
+.set DB_STATE_DIFF, 5                   /* a diff against it */
+.set DB_OFFSET_MAX, 1 << 44             /* a record's offset is below this */
+.set DB_ARCHIVE_DIFF, 256               /* the app's archive_slots with --archive */
 .set DB_SEGMENT_SLOTS, 8192
 .set DB_RECORD_MAX, 1 << 32
 .set DB_SIDECAR_INDICES, 128           /* a sidecar's index is below this */
@@ -1565,7 +1585,8 @@
 .set AppOptions_http_max_connections, 160
 .set AppOptions_supernode, 168        /* 1 with --supernode */
 .set AppOptions_builder, 176          /* host:port of the builder, without http:// */
-.set AppOptions__size, 192
+.set AppOptions_archive, 192          /* 1 with --archive */
+.set AppOptions__size, 200
 .set APP_DEFAULT_PORT, 9000
 .set APP_DEFAULT_HTTP_PORT, 5052
 .set APP_DEFAULT_TARGET_PEERS, 64

@@ -222,6 +222,14 @@ FUNCTION lantern_node_init
     mov     %r14, Node_flags(%r15)
     mov     %r13, Node_earliest_slot(%r15)
     mov     %r13, Node_base_slot(%r15)      # the base state: the anchor's post-state, at its slot
+    movq    $-1, Node_archive_slot(%r15)    # the archive: no state record yet; with NODE_FLAG_DB, the anchor's archive_slots
+    movq    $-1, Node_archive_first(%r15)
+    movq    $-1, Node_archive_segment(%r15)
+    test    $NODE_FLAG_DB, %r14
+    jz      1701f
+    mov     NodeAnchor_archive_slots(%r12), %rax
+    mov     %rax, Node_archive_slots(%r15)
+1701:
     lea     Node_head_root(%r15), %rdi
     COPY32  %rdi, %r12
     lea     Node_event_head(%r15), %rdi     # the events: the anchor's head and finalized epoch
@@ -2374,7 +2382,7 @@ LOCAL_FUNCTION node_db_block
     dec     %rax
     mov     %rdi, %rcx
     shr     $DB_SEGMENT_SHIFT, %rcx
-    shl     $48, %rcx
+    shl     $NODE_DB_SEGMENT_SHIFT, %rcx
     or      %rcx, %rax
     bts     $63, %rax
     ret
@@ -2433,7 +2441,7 @@ LOCAL_FUNCTION node_db_sidecar
     add     %r9, %rax
     mov     %rdi, %rcx
     shr     $DB_SEGMENT_SHIFT, %rcx
-    shl     $48, %rcx
+    shl     $NODE_DB_SEGMENT_SHIFT, %rcx
     or      %rcx, %rax
     bts     $63, %rax
     bts     $62, %rax
@@ -2441,6 +2449,216 @@ LOCAL_FUNCTION node_db_sidecar
 9:  xor     %eax, %eax
     ret
 END_FUNCTION node_db_sidecar
+
+/*
+ * rax = the replay's base among the Db's state records (node.md, the replay) for the slot rdi: the
+ * highest slot at or below it with a state record, from archive_first and above base_slot when
+ * that is at most rdi, rdx = its DbSlot's state; rax = 2^64 - 1 with none. Uses rcx, rsi, r8-r11.
+ */
+LOCAL_FUNCTION node_archive_base
+    UNWIND_END_PROLOGUE
+    mov     Node_archive_first(%rbx), %r8
+    cmp     $-1, %r8
+    je      9f
+    mov     Node_base_slot(%rbx), %r9
+    cmp     %rdi, %r9
+    ja      1f
+    inc     %r9
+    cmp     %r9, %r8
+    cmovb   %r9, %r8
+1:  mov     Node_db(%rbx), %rsi             # inside the Db's slots
+    add     %rbx, %rsi
+    mov     Db_first_slot(%rsi), %r10
+    cmp     %r10, %r8
+    cmovb   %r10, %r8
+    mov     Db_end_slot(%rsi), %r11
+    test    %r11, %r11
+    jz      9f
+    dec     %r11
+    mov     %rdi, %r10
+    cmp     %r11, %r10
+    cmova   %r11, %r10
+2:  cmp     %r8, %r10
+    jb      9f
+    DB_SLOT %rsi, %r10, 9f
+    mov     DbSlot_state(%rsi), %rdx
+    test    %rdx, %rdx
+    jz      3f
+    mov     %r10, %rax
+    ret
+3:  test    %r10, %r10
+    jz      9f
+    dec     %r10
+    jmp     2b
+9:  mov     $-1, %rax
+    ret
+END_FUNCTION node_archive_base
+
+/*
+ * The archive (node.md) of the finalized NodeBlock rdi at slot rsi, in the Db: with archive_slots
+ * not 0, a post-state, archive_busy 0, and archive_slot 2^64 - 1 or below the slot by a run of
+ * archive_slots, a NODE_ACT_DB_ARCHIVE of its post-state. r12 the block, r13 the slot.
+ */
+LOCAL_FUNCTION node_archive_queue
+    ENTER 0
+    mov     %rdi, %r12
+    mov     %rsi, %r13
+    mov     Node_archive_slots(%rbx), %rcx
+    test    %rcx, %rcx
+    jz      9f
+    cmpq    $0, NodeBlock_state_id(%r12)
+    je      9f
+    cmpq    $0, Node_archive_busy(%rbx)
+    jne     9f
+    mov     Node_archive_slot(%rbx), %r8
+    cmp     $-1, %r8
+    je      1f
+    mov     %r13, %rax
+    xor     %edx, %edx
+    div     %rcx
+    mov     %rax, %r9
+    mov     %r8, %rax
+    xor     %edx, %edx
+    div     %rcx
+    cmp     %rax, %r9
+    jbe     9f
+1:  mov     $NODE_ACT_DB_ARCHIVE, %edi
+    mov     $NODE_ACT_DB_ARCHIVE_SIZE, %esi
+    call    node_act
+    mov     NodeBlock_state_id(%r12), %rcx
+    mov     %rcx, 16(%rax)
+    mov     %r13, %rcx
+    shr     $DB_SEGMENT_SHIFT, %rcx
+    mov     %rcx, 24(%rax)
+    xor     %edx, %edx                      # at the end of its state segment, or a new one
+    cmp     Node_archive_segment(%rbx), %rcx
+    jne     2f
+    mov     Node_archive_end(%rbx), %rdx
+2:  mov     %rdx, 32(%rax)
+    mov     $DB_STATE, %ecx                 # the DbRecord: a full state at offset 0, else a diff
+    mov     $DB_STATE_DIFF, %r8d
+    test    %rdx, %rdx
+    cmovnz  %r8, %rcx
+    mov     %rcx, (40 + DbRecord_kind)(%rax)
+    mov     %r13, (40 + DbRecord_slot)(%rax)
+    movq    $0, (40 + DbRecord_index)(%rax)
+    lea     (40 + DbRecord_root)(%rax), %rdi
+    lea     NodeBlock_root(%r12), %rsi
+    COPY32  %rdi, %rsi
+    movq    $0, (40 + DbRecord_bytes)(%rax)
+    movq    $0, (40 + DbRecord_bytes + 8)(%rax)
+    movq    $0, (40 + DbRecord_length)(%rax)
+    movq    $1, Node_archive_busy(%rbx)
+9:  LEAVE 0
+END_FUNCTION node_archive_queue
+
+/*
+ * NODE_EV_DB_ARCHIVE rdi (node.md, the archive): archive_busy 0; a record of kind not 0, of the
+ * segment of its slot, goes in the index with lantern_db_add, and on LANTERN_OK the archive's
+ * fields take it. r12 the event.
+ */
+LOCAL_FUNCTION node_archive_done
+    ENTER 0
+    mov     %rdi, %r12
+    movq    $0, Node_archive_busy(%rbx)
+    cmpq    $0, (32 + DbRecord_kind)(%r12)
+    je      9f
+    mov     (32 + DbRecord_slot)(%r12), %rax
+    shr     $DB_SEGMENT_SHIFT, %rax
+    cmp     16(%r12), %rax
+    jne     9f
+    mov     Node_db(%rbx), %rdi
+    add     %rbx, %rdi
+    lea     32(%r12), %rsi
+    lea     24(%r12), %rdx
+    call    lantern_db_add
+    test    %rax, %rax
+    jnz     9f
+    mov     16(%r12), %rax
+    mov     %rax, Node_archive_segment(%rbx)
+    mov     (32 + DbRecord_length)(%r12), %rax
+    add     $(DbRecord__mem + 7), %rax
+    and     $-8, %rax
+    add     24(%r12), %rax
+    mov     %rax, Node_archive_end(%rbx)
+    mov     (32 + DbRecord_slot)(%r12), %rax
+    mov     %rax, Node_archive_slot(%rbx)
+    cmp     Node_archive_first(%rbx), %rax
+    jae     9f
+    mov     %rax, Node_archive_first(%rbx)
+9:  LEAVE 0
+END_FUNCTION node_archive_done
+
+/*
+ * NODE_WORK_ARCHIVE_LOAD (node.md): (state rdi, the full record's bytes rsi or 0, the record's
+ * bytes rdx, scratch rcx, node r8): rax = LANTERN_VALID, LANTERN_INVALID_ENCODING, or
+ * LANTERN_BUFFER_TOO_SMALL with nothing changed. r12 the state, r13 the bytes, r14 scratch, r15
+ * its size, rbp the node. Locals: L the patch's size.
+ */
+LOCAL_FUNCTION node_run_archive
+    ENTER 16
+    mov     %rdi, %r12
+    mov     %rdx, %r13
+    mov     %rcx, %r14
+    mov     (%r14), %r15
+    mov     %r8, %rbp
+    test    %rsi, %rsi
+    jz      2f
+    cmpq    $8, 16(%r13)                    # a diff: the patch at the end of the scratch
+    jb      7f
+    mov     8(%r13), %rax
+    mov     (%r13,%rax), %rax
+    add     $(24 + 7), %rax
+    jc      7f
+    and     $-8, %rax
+    mov     %rax, %rcx
+    add     $64, %rcx
+    jc      8f
+    cmp     %r15, %rcx
+    ja      8f
+    mov     %r15, %rcx
+    sub     %rax, %rcx
+    mov     %rcx, (%r14)
+    lea     (%r14,%rcx), %rdx
+    mov     %rax, (%rdx)
+    mov     %rsi, %rdi
+    mov     %r13, %rsi
+    lea     L(%rsp), %rcx
+    mov     %rdx, %r13
+    call    lantern_db_state_patch
+    cmp     $LANTERN_BUFFER_TOO_SMALL, %rax
+    je      8f
+    test    %rax, %rax
+    jnz     7f
+2:  cmpq    $48, 16(%r13)                   # the state's slot at bytes 40 to 47: its fork
+    jb      7f
+    mov     8(%r13), %rax
+    add     %r13, %rax
+    mov     40(%rax), %rdi
+    lea     Node_config(%rbp), %rsi
+    call    node_fork
+    mov     %rax, %r10
+    mov     %r13, %rdi
+    ADDRESS %rsi, node_upgrade_room
+    mov     %r14, %rdx
+    mov     %r12, %rcx
+    FORK_CALL node_archive_state
+    mov     %r15, (%r14)
+    cmp     $LANTERN_BUFFER_TOO_SMALL, %rax
+    je      9f
+    mov     $LANTERN_INVALID_ENCODING, %ecx
+    xor     %edx, %edx
+    test    %rax, %rax
+    cmovnz  %rcx, %rdx
+    mov     %rdx, %rax
+9:  LEAVE 16
+8:  mov     %r15, (%r14)
+    mov     $LANTERN_BUFFER_TOO_SMALL, %eax
+    LEAVE 16
+7:  mov     %r15, (%r14)
+    mov     $LANTERN_INVALID_ENCODING, %eax
+    LEAVE 16
+END_FUNCTION node_run_archive
 
 /* A DB_APPEND action: sidecars rdi, BufferId rsi, segment rdx, offset rcx, the DbRecord at r8. Uses rax, r10, xmm0. */
 LOCAL_FUNCTION node_db_append
@@ -3303,6 +3521,9 @@ LOCAL_FUNCTION node_archive
     mov     %rcx, 24(%rax)
     mov     S10(%rsp), %rcx
     mov     %rcx, 32(%rax)
+    mov     S8(%rsp), %rdi                  # and the archive's state record
+    mov     S10(%rsp), %rsi
+    call    node_archive_queue
 21: mov     S8(%rsp), %rax                  # the block's bytes go, unless a stream sends them
     mov     NodeBlock_data_id(%rax), %rdi
     call    node_serving
@@ -3383,6 +3604,8 @@ FUNCTION lantern_node_db_scan
     call    lantern_db_scan
     test    %rax, %rax
     jnz     9f
+    cmp     $2, %r12
+    je      20f
     test    %r12, %r12                      # a sidecar segment: the backfill's, when it has none
     jz      14f
     cmpq    $-1, Node_backfill_sidecar_segment(%rbx)
@@ -3453,6 +3676,36 @@ FUNCTION lantern_node_db_scan
 6:  mov     %rcx, Node_earliest_slot(%rbx)
 8:  xor     %eax, %eax
 9:  LEAVE 0
+20: mov     Node_archive_segment(%rbx), %rax    # a state segment: the archive's, unless it has a higher one; its records' slots
+    cmp     $-1, %rax
+    je      21f
+    cmp     %rax, %r13
+    jb      22f
+21: mov     %r13, Node_archive_segment(%rbx)
+    mov     (%rbp), %rax
+    mov     %rax, Node_archive_end(%rbx)
+22: mov     8(%r14), %rsi
+    add     %r14, %rsi
+    mov     (%rbp), %rdi
+    add     %rsi, %rdi
+23: lea     DbRecord__mem(%rsi), %rax
+    cmp     %rdi, %rax
+    ja      8b
+    mov     DbRecord_slot(%rsi), %rax
+    mov     Node_archive_slot(%rbx), %rcx
+    cmp     $-1, %rcx
+    je      24f
+    cmp     %rcx, %rax
+    jbe     25f
+24: mov     %rax, Node_archive_slot(%rbx)
+25: cmp     Node_archive_first(%rbx), %rax
+    jae     26f
+    mov     %rax, Node_archive_first(%rbx)
+26: mov     DbRecord_length(%rsi), %rax
+    add     $(DbRecord__mem + 7), %rax
+    and     $-8, %rax
+    add     %rax, %rsi
+    jmp     23b
 END_FUNCTION lantern_node_db_scan
 
 /* A BYTES_PUT action of the ByteList rdi with a new id: rax = the id. r12 the ByteList, r13 the id. */
@@ -4028,7 +4281,12 @@ LOCAL_FUNCTION node_event
     jne     470f
     call    node_builder_event
     LEAVE 48
-470: cmp    $NODE_EV_ENR, %rax
+470: cmp    $NODE_EV_DB_ARCHIVE, %rax
+    jne     4701f
+    mov     %r12, %rdi                      # DB_ARCHIVE: the state record goes in the index
+    call    node_archive_done
+    LEAVE 48
+4701: cmp   $NODE_EV_ENR, %rax
     jne     471f
     mov     %r12, %rdi                      # ENR: a record discv5 found
     call    node_enr
@@ -4618,7 +4876,20 @@ LOCAL_FUNCTION node_event
     mov     NodeEvent_checkpoint(%r12), %rcx
     mov     %rcx, Node_eth1_deposit_index(%rbx)
     LEAVE 48
-7091: lea   -NODE_WORK_PUBLISH_DECODE(%rax), %rcx    # the works of block publishing: their entry goes on
+7091: cmp   $NODE_WORK_ARCHIVE_LOAD, %rax   # ARCHIVE_LOAD of the replay's copy: the replay goes on, or ends (2)
+    jne     7092f
+    mov     Node_replay_copy(%rbx), %rcx
+    test    %rcx, %rcx
+    jz      7093f
+    cmp     NodeAction_state_a(%r12), %rcx
+    jne     7093f
+    xor     %ecx, %ecx
+    mov     $2, %edx
+    cmpq    $LANTERN_VALID, NodeEvent_result(%r12)
+    cmovne  %rdx, %rcx
+    mov     %rcx, Node_replay_loading(%rbx)
+7093: LEAVE 48
+7092: lea   -NODE_WORK_PUBLISH_DECODE(%rax), %rcx    # the works of block publishing: their entry goes on
     cmp     $(NODE_WORK_PUBLISH_SIDECAR - NODE_WORK_PUBLISH_DECODE), %rcx
     ja      70f
     mov     %r12, %rdi
@@ -8610,7 +8881,14 @@ FUNCTION lantern_node_step
     cmp     %rsi, (24 + 16)(%rdi)
     ja      7f
     jmp     4f
-161: cmp    $NODE_EV_API_SENT, %rdx         # API_SENT, API_CLOSED: the connection at 16
+161: cmp    $NODE_EV_DB_ARCHIVE, %rdx       # DB_ARCHIVE: a state record the shell wrote; with NODE_FLAG_DB
+    jne     162f
+    testq   $NODE_FLAG_DB, Node_flags(%rbx)
+    jz      7f
+    cmp     $NODE_EV_DB_ARCHIVE_SIZE, %rcx
+    jb      7f
+    jmp     4f
+162: cmp    $NODE_EV_API_SENT, %rdx         # API_SENT, API_CLOSED: the connection at 16
     jb      11f
     cmp     $24, %rcx
     jb      7f
@@ -10159,7 +10437,7 @@ FUNCTION lantern_node_run
     xor     %eax, %eax
     LEAVE 192
 8426: cmp   $NODE_WORK_ETH1_CHECK, %rax
-    jne     8430f
+    jne     8427f
     test    %r13, %r13                      # ETH1_CHECK: lantern_node_eth1_check, its two words at index and checkpoint
     jz      837b
     mov     NODE_STATE_SLOT(%r13), %rdi
@@ -10174,6 +10452,24 @@ FUNCTION lantern_node_run
     mov     %rax, NodeEvent_index(%rcx)
     mov     (L + 104)(%rsp), %rax
     mov     %rax, NodeEvent_checkpoint(%rcx)
+    xor     %eax, %eax
+    LEAVE 192
+8427: cmp   $NODE_WORK_ARCHIVE_LOAD, %rax
+    jne     8430f
+    test    %r13, %r13                      # ARCHIVE_LOAD: the state of a Db state record into state_a
+    jz      837b
+    test    %r14, %r14
+    jz      837b
+    mov     %r13, %rdi
+    mov     (L + 72)(%rsp), %rsi
+    mov     %r14, %rdx
+    mov     %r15, %rcx
+    mov     %rbx, %r8
+    call    node_run_archive
+    cmp     $LANTERN_BUFFER_TOO_SMALL, %rax
+    je      8449f
+    mov     S8(%rsp), %rcx
+    mov     %rax, NodeEvent_result(%rcx)
     xor     %eax, %eax
     LEAVE 192
 8430: cmp   $NODE_WORK_PRODUCE_BLOCK, %rax

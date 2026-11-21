@@ -16,7 +16,7 @@ def ip4(a, b, c, d):
 DEFAULTS = {"network_dir": "", "execution": "", "jwt_secret": "", "boot_nodes": "", "port": 9000, "enr_address": 0,
             "http_port": 5052, "target_peers": 64, "data_dir": "", "checkpoint_state": "", "checkpoint_block": "",
             "log_level": 2, "http_address": ip4(127, 0, 0, 1), "http_max_connections": 64,
-            "supernode": 0, "builder": ""}
+            "supernode": 0, "builder": "", "archive": 0}
 
 
 def options(**values):
@@ -51,6 +51,7 @@ GOOD = [
     ("http_limits", ["--network-dir", "n", "--http-max-connections", "4096", "--http-address=10.1.2.3"],
      options(network_dir="n", http_max_connections=4096, http_address=ip4(10, 1, 2, 3))),
     ("supernode", ["--network-dir", "n", "--supernode"], options(network_dir="n", supernode=1)),
+    ("archive", ["--network-dir", "n", "--archive", "--data-dir", "/d"], options(network_dir="n", data_dir="/d", archive=1)),
     ("supernode_between", ["--supernode", "--port", "7", "--supernode", "--network-dir=n"],
      options(network_dir="n", port=7, supernode=1)),
     ("builder", ["--network-dir", "n", "--builder", "http://127.0.0.1:18550"], options(network_dir="n", builder="127.0.0.1:18550")),
@@ -87,6 +88,8 @@ FAULTS = [
     ("supernode_empty_value", ["--supernode=", "--network-dir", "/n"], 0),
     ("builder_empty_value", ["--network-dir", "/n", "--builder="], 2),
     ("builder_no_value", ["--network-dir", "/n", "--builder"], 2),
+    ("archive_value", ["--network-dir", "/n", "--data-dir", "/d", "--archive=1"], 4),
+    ("archive_no_data_dir", ["--network-dir", "/n", "--archive"], 3),
 ]
 
 
