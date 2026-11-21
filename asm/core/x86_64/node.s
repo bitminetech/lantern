@@ -4887,7 +4887,23 @@ LOCAL_FUNCTION node_event
     mov     NodeEvent_checkpoint(%r12), %rcx
     mov     %rcx, Node_eth1_deposit_index(%rbx)
     LEAVE 48
-7091: cmp   $NODE_WORK_CUSTODY, %rax        # CUSTODY: custody_need, when more
+7091: cmp   $NODE_WORK_RECONSTRUCT, %rax    # RECONSTRUCT: its sidecars go out, or it failed
+    jne     7096f
+    cmpq    $0, NodeEvent_result(%r12)
+    jne     7097f
+    movq    $2, Node_recon_state(%rbx)
+    movq    $0, Node_recon_next(%rbx)
+    LEAVE 48
+7097: mov   $NODE_ACT_BYTES_FREE, %edi
+    mov     Node_recon_buffer(%rbx), %rsi
+    xor     %edx, %edx
+    call    node_ids
+    lea     Node_recon_failed(%rbx), %rdi
+    lea     Node_recon_root(%rbx), %rsi
+    COPY32  %rdi, %rsi
+    movq    $0, Node_recon_state(%rbx)
+    LEAVE 48
+7096: cmp   $NODE_WORK_CUSTODY, %rax        # CUSTODY: custody_need, when more
     jne     7094f
     mov     NodeEvent_index(%r12), %rcx
     cmp     Node_custody_need(%rbx), %rcx
@@ -7012,6 +7028,419 @@ LOCAL_FUNCTION node_column_raise_topics
     jmp     6b
 9:  LEAVE 0
 END_FUNCTION node_column_raise_topics
+
+/* rax = the NODE_BLOB_VALID entries of the root at rdi. Uses rcx, rdx, rsi, r8-r11. */
+LOCAL_FUNCTION node_recon_count
+    UNWIND_END_PROLOGUE
+    mov     Node_blobs(%rbx), %rsi
+    add     %rbx, %rsi
+    mov     (Node_blobs + 8)(%rbx), %rdx
+    xor     %eax, %eax
+1:  test    %rdx, %rdx
+    jz      9f
+    cmpq    $NODE_BLOB_VALID, NodeBlob_status(%rsi)
+    jne     2f
+    mov     (%rsi), %r8
+    cmp     (%rdi), %r8
+    jne     2f
+    mov     8(%rsi), %r8
+    cmp     8(%rdi), %r8
+    jne     2f
+    mov     16(%rsi), %r8
+    cmp     16(%rdi), %r8
+    jne     2f
+    mov     24(%rsi), %r8
+    cmp     24(%rdi), %r8
+    jne     2f
+    inc     %rax
+2:  add     $NodeBlob__mem, %rsi
+    dec     %rdx
+    jmp     1b
+9:  ret
+END_FUNCTION node_recon_count
+
+/*
+ * The reconstruction (node.md), at the quiet point: with recon_state 0, the first root of
+ * NODE_BLOB_VALID column sidecars of a fulu slot, NUMBER_OF_COLUMNS / 2 or more and fewer than
+ * NUMBER_OF_COLUMNS, not recon_failed, a third of its slot past: the join of their bytes, the
+ * buffer of all sidecars, the work; with recon_state 2, a PUBLISH_SIDECAR of the next column the
+ * node lacks, or the end. r12 an entry, r13 the entries left, S7 the count, S8 the root's entry,
+ * S9 a column, S10 the joined id. Locals: L the join action, L+8 the ids written.
+ */
+LOCAL_FUNCTION node_reconstruct_due
+    ENTER 16
+    mov     Node_recon_state(%rbx), %rax
+    cmp     $2, %rax
+    je      50f
+    test    %rax, %rax
+    jnz     99f
+    mov     Node_blobs(%rbx), %r12
+    add     %rbx, %r12
+    mov     (Node_blobs + 8)(%rbx), %r13
+1:  test    %r13, %r13
+    jz      99f
+    cmpq    $NODE_BLOB_VALID, NodeBlob_status(%r12)
+    jne     3f
+    mov     NodeBlob_slot(%r12), %rdi
+    lea     Node_config(%rbx), %rsi
+    call    node_fork
+    cmp     $FORK_FULU, %rax
+    jb      3f
+    lea     Node_recon_failed(%rbx), %rdi
+    NE32    %rdi, %r12, 11f
+    jmp     3f
+11: mov     %r12, %rdi
+    call    node_recon_count
+    cmp     $(NUMBER_OF_COLUMNS / 2), %rax
+    jb      3f
+    cmp     $NUMBER_OF_COLUMNS, %rax
+    jae     3f
+    mov     %rax, S7(%rsp)
+    mov     NodeBlob_slot(%r12), %rax       # a third of its slot past
+    imul    (Node_config + CONFIG_SLOT_DURATION_MS)(%rbx), %rax
+    add     Store_genesis_time_ms(%rbp), %rax
+    mov     %rax, %rcx
+    mov     (Node_config + CONFIG_SLOT_DURATION_MS)(%rbx), %rax
+    xor     %edx, %edx
+    mov     $3, %esi
+    div     %rsi
+    add     %rcx, %rax
+    cmp     Node_time_ms(%rbx), %rax
+    ja      3f
+    mov     S7(%rsp), %rdi
+    shl     $3, %rdi
+    add     $1024, %rdi
+    call    node_room
+    test    %rax, %rax
+    jz      99f
+    jmp     20f
+3:  add     $NodeBlob__mem, %r12
+    dec     %r13
+    jmp     1b
+20: mov     %r12, S8(%rsp)
+    call    node_new_id                     # the join of the held sidecars, by index
+    mov     %rax, S10(%rsp)
+    mov     S7(%rsp), %rsi
+    shl     $3, %rsi
+    add     $32, %rsi
+    mov     $NODE_ACT_BYTES_JOIN, %edi
+    call    node_act
+    mov     S10(%rsp), %rcx
+    mov     %rcx, 16(%rax)
+    mov     S7(%rsp), %rcx
+    mov     %rcx, 24(%rax)
+    mov     %rax, L(%rsp)
+    movq    $0, (L + 8)(%rsp)
+    movq    $0, S9(%rsp)
+21: cmpq    $NUMBER_OF_COLUMNS, S9(%rsp)
+    jae     22f
+    mov     S8(%rsp), %rdi
+    mov     S9(%rsp), %rsi
+    call    node_blob_held
+    test    %rax, %rax
+    jz      23f
+    mov     (L + 8)(%rsp), %rcx
+    cmp     S7(%rsp), %rcx
+    jae     23f
+    mov     NodeBlob_data_id(%rax), %rdx
+    mov     L(%rsp), %rsi
+    mov     %rdx, 32(%rsi,%rcx,8)
+    incq    (L + 8)(%rsp)
+23: incq    S9(%rsp)
+    jmp     21b
+22: call    node_new_id                     # the buffer of every sidecar
+    mov     %rax, Node_recon_buffer(%rbx)
+    mov     $NODE_ACT_BYTES_NEW, %edi
+    mov     $NODE_ACT_BYTES_NEW_SIZE, %esi
+    call    node_act
+    mov     Node_recon_buffer(%rbx), %rcx
+    mov     %rcx, 16(%rax)
+    mov     S8(%rsp), %rcx
+    mov     NodeBlob_length(%rcx), %rcx
+    add     $(24 + 7), %rcx
+    and     $-8, %rcx
+    imul    $NUMBER_OF_COLUMNS, %rcx, %rcx
+    add     $24, %rcx
+    mov     %rcx, 24(%rax)
+    mov     $NODE_WORK_RECONSTRUCT, %edi
+    xor     %esi, %esi
+    mov     Node_recon_buffer(%rbx), %rdx
+    mov     S10(%rsp), %rcx
+    xor     %r8d, %r8d
+    xor     %r9d, %r9d
+    call    node_work
+    mov     $NODE_ACT_BYTES_FREE, %edi
+    mov     S10(%rsp), %rsi
+    xor     %edx, %edx
+    call    node_ids
+    lea     Node_recon_root(%rbx), %rdi
+    mov     S8(%rsp), %rsi
+    COPY32  %rdi, %rsi
+    mov     S8(%rsp), %rcx
+    mov     NodeBlob_slot(%rcx), %rcx
+    mov     %rcx, Node_recon_slot(%rbx)
+    movq    $1, Node_recon_state(%rbx)
+    jmp     99f
+50: mov     Node_recon_next(%rbx), %rax     # the next column the node lacks
+    mov     %rax, S9(%rsp)
+51: cmpq    $NUMBER_OF_COLUMNS, S9(%rsp)
+    jae     59f
+    lea     Node_recon_root(%rbx), %rdi
+    mov     S9(%rsp), %rsi
+    call    node_blob_held
+    test    %rax, %rax
+    jz      52f
+    incq    S9(%rsp)
+    jmp     51b
+52: mov     $NODE_ACT_WORK_SIZE, %edi
+    call    node_room
+    test    %rax, %rax
+    jz      99f
+    mov     $NODE_WORK_PUBLISH_SIDECAR, %edi
+    xor     %esi, %esi
+    mov     Node_recon_buffer(%rbx), %rdx
+    xor     %ecx, %ecx
+    mov     $-1, %r8
+    mov     S9(%rsp), %r9
+    call    node_work
+    mov     S9(%rsp), %rax
+    inc     %rax
+    mov     %rax, Node_recon_next(%rbx)
+    movq    $3, Node_recon_state(%rbx)
+    jmp     99f
+59: mov     $NODE_ACT_BYTES_FREE, %edi      # none left: the buffer goes
+    mov     Node_recon_buffer(%rbx), %rsi
+    xor     %edx, %edx
+    call    node_ids
+    movq    $0, Node_recon_state(%rbx)
+99: LEAVE 16
+END_FUNCTION node_reconstruct_due
+
+/*
+ * (data, settings, scratch, out): node.md, lantern_node_reconstruct: for each blob,
+ * crypto_kzg_recover_cells_and_kzg_proofs of the held cells, then every column's sidecar. rbx the
+ * held sidecars, rbp a row or a column, r12 an entry or a column, r13 the first sidecar's bytes.
+ * Locals: L the data's end, L+8 the KzgScratch, L+16 the CellIndexList, L+24 the CellList, L+32 the
+ * recovered cells, L+40 their proofs, L+48 the held sidecars' bytes, L+56 settings, L+64 out, L+72
+ * the blobs, L+80 a sidecar's length, L+88 an out ByteList's size.
+ */
+.set RECON_KZG, 64
+.set RECON_INDICES, RECON_KZG + CRYPTO_KZG_SCRATCH
+.set RECON_CELLS, RECON_INDICES + 1056
+.set RECON_OUT_CELLS, RECON_CELLS + 24 + 128 * 2048
+.set RECON_OUT_PROOFS, RECON_OUT_CELLS + 128 * 2048
+.set RECON_HELD, RECON_OUT_PROOFS + 128 * 48
+.set RECON_SCRATCH, RECON_HELD + 128 * 8
+.set RECON_FIXED, 356
+.set RECON_ROW, 2048 + 48 + 48
+.if RECON_SCRATCH > CRYPTO_KZG_SCRATCH + 540672
+.error "the reconstruction's scratch is past its documented need"
+.endif
+FUNCTION lantern_node_reconstruct
+    ENTER 96
+    mov     %rsi, (L + 56)(%rsp)
+    mov     %rcx, (L + 64)(%rsp)
+    cmpq    $(CRYPTO_KZG_SCRATCH + 540672), (%rdx)
+    jb      8f
+    lea     RECON_KZG(%rdx), %rax
+    mov     %rax, (L + 8)(%rsp)
+    lea     RECON_INDICES(%rdx), %rax
+    mov     %rax, (L + 16)(%rsp)
+    lea     RECON_CELLS(%rdx), %rax
+    mov     %rax, (L + 24)(%rsp)
+    lea     RECON_OUT_CELLS(%rdx), %rax
+    mov     %rax, (L + 32)(%rsp)
+    lea     RECON_OUT_PROOFS(%rdx), %rax
+    mov     %rax, (L + 40)(%rsp)
+    lea     RECON_HELD(%rdx), %rax
+    mov     %rax, (L + 48)(%rsp)
+    mov     8(%rdi), %r12                   # the held sidecars: ByteLists at multiples of 8
+    add     %rdi, %r12
+    mov     16(%rdi), %rax
+    add     %r12, %rax
+    mov     %rax, L(%rsp)
+    xor     %ebx, %ebx
+1:  cmp     L(%rsp), %r12
+    jae     2f
+    lea     24(%r12), %rax
+    cmp     L(%rsp), %rax
+    ja      7f
+    cmpq    $24, 8(%r12)
+    jne     7f
+    mov     16(%r12), %rcx                  # its length
+    lea     24(%rcx), %rax
+    cmp     (%r12), %rax
+    ja      7f
+    mov     (%r12), %rax
+    add     %r12, %rax
+    cmp     L(%rsp), %rax
+    ja      7f
+    cmp     $NUMBER_OF_COLUMNS, %rbx
+    jae     7f
+    lea     24(%r12), %r14                  # its bytes
+    test    %rbx, %rbx
+    jnz     11f
+    mov     %rcx, (L + 80)(%rsp)            # the first: the length and the blob count
+    mov     %r14, %r13
+    mov     %rcx, %rax
+    sub     $RECON_FIXED, %rax
+    jb      7f
+    xor     %edx, %edx
+    mov     $RECON_ROW, %esi
+    div     %rsi
+    test    %rdx, %rdx
+    jnz     7f
+    test    %rax, %rax
+    jz      7f
+    mov     %rax, (L + 72)(%rsp)
+11: cmp     (L + 80)(%rsp), %rcx            # each of that length, with the offsets of n blobs
+    jne     7f
+    mov     8(%r14), %eax
+    cmp     $RECON_FIXED, %rax
+    jne     7f
+    mov     (L + 72)(%rsp), %rdx
+    imul    $2048, %rdx, %rsi
+    add     $RECON_FIXED, %rsi
+    mov     12(%r14), %eax
+    cmp     %rsi, %rax
+    jne     7f
+    imul    $48, %rdx, %rdx
+    add     %rdx, %rsi
+    mov     16(%r14), %eax
+    cmp     %rsi, %rax
+    jne     7f
+    mov     (%r14), %rax                    # its index, ascending, below NUMBER_OF_COLUMNS
+    cmp     $NUMBER_OF_COLUMNS, %rax
+    jae     7f
+    mov     (L + 16)(%rsp), %rsi
+    test    %rbx, %rbx
+    jz      12f
+    cmp     (24 - 8)(%rsi,%rbx,8), %rax
+    jbe     7f
+12: mov     %rax, 24(%rsi,%rbx,8)
+    mov     (L + 48)(%rsp), %rsi
+    mov     %r14, (%rsi,%rbx,8)
+    inc     %rbx
+    mov     (%r12), %rax
+    add     $7, %rax
+    and     $-8, %rax
+    add     %rax, %r12
+    jmp     1b
+2:  cmp     $(NUMBER_OF_COLUMNS / 2), %rbx
+    jb      7f
+    mov     (L + 80)(%rsp), %rax            # the out sidecars' room
+    add     $(24 + 7), %rax
+    and     $-8, %rax
+    mov     %rax, (L + 88)(%rsp)
+    imul    $NUMBER_OF_COLUMNS, %rax, %rax
+    mov     (L + 64)(%rsp), %rcx
+    mov     (%rcx), %rdx
+    sub     $24, %rdx
+    jb      8f
+    cmp     %rdx, %rax
+    ja      8f
+    movq    $24, 8(%rcx)
+    mov     %rax, 16(%rcx)
+    xor     %ebp, %ebp                      # each sidecar: its ByteList, index, the first's fixed part and commitments
+3:  cmp     $NUMBER_OF_COLUMNS, %rbp
+    jae     4f
+    mov     %rbp, %r12
+    imul    (L + 88)(%rsp), %r12
+    add     (L + 64)(%rsp), %r12
+    add     $24, %r12
+    mov     (L + 88)(%rsp), %rax
+    mov     %rax, (%r12)
+    movq    $24, 8(%r12)
+    mov     (L + 80)(%rsp), %rax
+    mov     %rax, 16(%r12)
+    lea     (24 + 8)(%r12), %rdi
+    lea     8(%r13), %rsi
+    mov     $(RECON_FIXED - 8), %edx
+    call    lantern_copy
+    mov     %rbp, 24(%r12)
+    mov     (L + 72)(%rsp), %r14
+    imul    $2048, %r14, %r15
+    add     $RECON_FIXED, %r15
+    lea     24(%r12,%r15), %rdi
+    lea     (%r13,%r15), %rsi
+    imul    $48, %r14, %rdx
+    call    lantern_copy
+    inc     %rbp
+    jmp     3b
+4:  xor     %ebp, %ebp                      # each blob: recover its row, then its cells and proofs into the sidecars
+5:  cmp     (L + 72)(%rsp), %rbp
+    jae     9f
+    mov     (L + 24)(%rsp), %rax
+    movq    $(24 + 128 * 2048), (%rax)
+    movq    $24, 8(%rax)
+    mov     %rbx, 16(%rax)
+    mov     (L + 16)(%rsp), %rax
+    movq    $(24 + 128 * 8), (%rax)
+    movq    $24, 8(%rax)
+    mov     %rbx, 16(%rax)
+    xor     %r12d, %r12d
+51: cmp     %rbx, %r12
+    jae     52f
+    mov     %r12, %rdi
+    shl     $11, %rdi
+    add     (L + 24)(%rsp), %rdi
+    add     $24, %rdi
+    mov     (L + 48)(%rsp), %rsi
+    mov     (%rsi,%r12,8), %rsi
+    mov     %rbp, %rax
+    shl     $11, %rax
+    lea     RECON_FIXED(%rsi,%rax), %rsi
+    mov     $2048, %edx
+    call    lantern_copy
+    inc     %r12
+    jmp     51b
+52: mov     (L + 8)(%rsp), %rax
+    movq    $CRYPTO_KZG_SCRATCH, (%rax)
+    mov     (L + 56)(%rsp), %rdi
+    mov     (L + 16)(%rsp), %rsi
+    mov     (L + 24)(%rsp), %rdx
+    mov     (L + 8)(%rsp), %rcx
+    mov     (L + 32)(%rsp), %r8
+    mov     (L + 40)(%rsp), %r9
+    CALL_GLOBAL crypto_kzg_recover_cells_and_kzg_proofs
+    test    %rax, %rax
+    jnz     7f
+    xor     %r12d, %r12d
+53: cmp     $NUMBER_OF_COLUMNS, %r12
+    jae     54f
+    mov     %r12, %r14                      # sidecar c's cell r
+    imul    (L + 88)(%rsp), %r14
+    add     (L + 64)(%rsp), %r14
+    add     $(24 + 24), %r14
+    mov     %rbp, %rax
+    shl     $11, %rax
+    lea     RECON_FIXED(%r14,%rax), %rdi
+    mov     %r12, %rsi
+    shl     $11, %rsi
+    add     (L + 32)(%rsp), %rsi
+    mov     $2048, %edx
+    call    lantern_copy
+    mov     (L + 72)(%rsp), %rax            # and its proof r
+    imul    $(2048 + 48), %rax, %rax
+    add     $RECON_FIXED, %rax
+    imul    $48, %rbp, %rcx
+    add     %rcx, %rax
+    lea     (%r14,%rax), %rdi
+    imul    $48, %r12, %rsi
+    add     (L + 40)(%rsp), %rsi
+    mov     $48, %edx
+    call    lantern_copy
+    inc     %r12
+    jmp     53b
+54: inc     %rbp
+    jmp     5b
+9:  xor     %eax, %eax
+    LEAVE 96
+8:  mov     $LANTERN_BUFFER_TOO_SMALL, %eax
+    LEAVE 96
+7:  mov     $LANTERN_INVALID_ENCODING, %eax
+    LEAVE 96
+END_FUNCTION lantern_node_reconstruct
 
 /*
  * Validator custody (node.md), from fulu: once each store epoch, with a NodeProposer entry whose
@@ -9596,6 +10025,7 @@ FUNCTION lantern_node_step
     call    node_lc_due                     # the light client updates due on gossip
     call    node_produce_due                # the produceBlockV3 entries whose bid is late
     call    node_replay_due                 # the replay in flight: its next blocks
+    call    node_reconstruct_due            # the reconstruction of a block's columns, and its sidecars
     call    node_backfill_link              # the backfill's blocks of the chain join the Db
     call    node_drop_sidecars              # the sidecars the node no longer serves go
     movq    $0, (L + 112)(%rsp)
@@ -10655,7 +11085,7 @@ FUNCTION lantern_node_run
     xor     %eax, %eax
     LEAVE 192
 8428: cmp   $NODE_WORK_CUSTODY, %rax
-    jne     8430f
+    jne     8429f
     test    %r13, %r13                      # CUSTODY: lantern_node_custody with the store's epoch, its count at NodeEvent_index
     jz      837b
     mov     %rbp, %rdi
@@ -10676,6 +11106,23 @@ FUNCTION lantern_node_run
     mov     S8(%rsp), %rcx
     mov     (L + 104)(%rsp), %rax
     mov     %rax, NodeEvent_index(%rcx)
+    xor     %eax, %eax
+    LEAVE 192
+8429: cmp   $NODE_WORK_RECONSTRUCT, %rax
+    jne     8430f
+    test    %r14, %r14                      # RECONSTRUCT: lantern_node_reconstruct of data into state_b
+    jz      837b
+    mov     (L + 72)(%rsp), %rcx
+    test    %rcx, %rcx
+    jz      837b
+    mov     %r14, %rdi
+    mov     (L + 88)(%rsp), %rsi
+    mov     %r15, %rdx
+    call    lantern_node_reconstruct
+    cmp     $LANTERN_BUFFER_TOO_SMALL, %rax
+    je      8449f
+    mov     S8(%rsp), %rcx
+    mov     %rax, NodeEvent_result(%rcx)
     xor     %eax, %eax
     LEAVE 192
 8430: cmp   $NODE_WORK_PRODUCE_BLOCK, %rax
@@ -10995,8 +11442,17 @@ FUNCTION lantern_node_run
     cmp     S9(%rsp), %rax
     ja      8419b
     mov     %rsi, (L + 96)(%rsp)
-    mov     NodeAction_target(%r12), %rax   # its block's root and slot: the entry's
-    PART    %rcx, %rdx, %rbx, Node_api
+    mov     NodeAction_target(%r12), %rax   # its block's root and slot: the entry's, or with no entry the reconstruction's
+    cmp     $-1, %rax
+    jne     8484f
+    mov     S8(%rsp), %rdx
+    lea     NodeEvent_root(%rdx), %rdi
+    lea     Node_recon_root(%rbx), %rax
+    COPY32  %rdi, %rax
+    mov     Node_recon_slot(%rbx), %rax
+    mov     %rax, NodeEvent_checkpoint(%rdx)
+    jmp     8485f
+8484: PART  %rcx, %rdx, %rbx, Node_api
     cmp     %rdx, %rax
     jae     837b
     imul    $NodeApi__mem, %rax, %rax
@@ -11007,6 +11463,7 @@ FUNCTION lantern_node_run
     COPY32  %rdi, %rax
     mov     NodeApi_slot(%rcx), %rax
     mov     %rax, NodeEvent_checkpoint(%rdx)
+8485:
     mov     (L + 96)(%rsp), %rsi
     mov     8(%rsi), %rax                   # its index: the u64 at byte 0 of its bytes
     mov     (%rsi,%rax), %rax

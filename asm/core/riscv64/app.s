@@ -1172,6 +1172,74 @@ LOCAL_FUNCTION app_buf_add
     UNFRAME 32
 END_FUNCTION app_buf_add
 
+/*
+ * L1: NODE_ACT_BYTES_JOIN a0 (app.md): new memory with the ByteLists of the ids one after another,
+ * each at a multiple of 8, kept as the new id's; with no memory or an id with no bytes, a ByteList
+ * of no bytes. s2 the action, s3 the count, s4 the bytes, s5 an index, s6 the memory, s7 the
+ * place, s8 a ByteList.
+ */
+LOCAL_FUNCTION app_bytes_join
+    ENTER 0
+    mv      s2, a0
+    ld      s3, 24(s2)
+    li      s4, 0
+    li      s5, 0
+1:  bgeu    s5, s3, 2f
+    slli    t0, s5, 3
+    add     t0, s2, t0
+    ld      a0, 32(t0)
+    call    app_buf_find
+    beqz    a0, 5f
+    ld      t0, 8(a0)
+    ld      t0, 16(t0)
+    addi    t0, t0, 24 + 7
+    andi    t0, t0, -8
+    add     s4, s4, t0
+    addi    s5, s5, 1
+    j       1b
+5:  li      s4, 0                           # an id with no bytes: none
+    li      s3, 0
+2:  addi    a0, s4, 24
+    call    app_map
+    beqz    a0, 9f
+    mv      s6, a0
+    addi    t0, s4, 24
+    sd      t0, 0(s6)
+    li      t1, 24
+    sd      t1, 8(s6)
+    sd      s4, 16(s6)
+    addi    s7, s6, 24
+    li      s5, 0
+3:  bgeu    s5, s3, 4f
+    slli    t0, s5, 3
+    add     t0, s2, t0
+    ld      a0, 32(t0)
+    call    app_buf_find
+    ld      s8, 8(a0)
+    ld      t0, 16(s8)
+    addi    t1, t0, 24
+    sd      t1, 0(s7)
+    li      t1, 24
+    sd      t1, 8(s7)
+    sd      t0, 16(s7)
+    addi    a0, s7, 24
+    ld      t1, 8(s8)
+    add     a1, s8, t1
+    mv      a2, t0
+    call    lantern_copy
+    ld      t0, 16(s8)
+    addi    t0, t0, 24 + 7
+    andi    t0, t0, -8
+    add     s7, s7, t0
+    addi    s5, s5, 1
+    j       3b
+4:  ld      a0, 16(s2)
+    mv      a1, s6
+    addi    a2, s4, 24
+    call    app_buf_add
+9:  LEAVE 0
+END_FUNCTION app_bytes_join
+
 /* L1: the buffer of the id a0 goes back to the OS, and the last entry takes its place. */
 LOCAL_FUNCTION app_buf_drop
     FRAME 16
@@ -1668,6 +1736,8 @@ LOCAL_FUNCTION app_work
     beq     s8, t0, 6f
     li      t0, NODE_WORK_ARCHIVE_LOAD      # ARCHIVE_LOAD: state_a, and twice the scratch
     beq     s8, t0, 18f
+    li      t0, NODE_WORK_RECONSTRUCT       # RECONSTRUCT: twice the scratch
+    beq     s8, t0, 181f
     li      t0, NODE_WORK_LC_BLOCK          # the light client works: state_c, the light client store
     beq     s8, t0, 17f
     li      t0, NODE_WORK_LC_HEAD
@@ -1724,7 +1794,7 @@ LOCAL_FUNCTION app_work
     mv      a0, s3
     call    app_regrow
     bnez    a0, 91f
-    LDQ     t0, s1, (APP_SCRATCH + 8)
+181: LDQ    t0, s1, (APP_SCRATCH + 8)
     slli    s9, t0, 1
     li      a0, APP_SCRATCH
     call    app_unmap
@@ -2883,7 +2953,7 @@ LOCAL_FUNCTION app_actions
     call    app_buf_add
     j       8f
 131: li     t1, NODE_ACT_BYTES_NEW
-    bne     t0, t1, 2f
+    bne     t0, t1, 132f
     ld      a0, 24(s2)                      # BYTES_NEW: a ByteList of the size, its bytes zero
     call    app_map
     beqz    a0, 8f
@@ -2897,6 +2967,11 @@ LOCAL_FUNCTION app_actions
     ld      a0, 16(s2)
     ld      a2, 24(s2)
     call    app_buf_add
+    j       8f
+132: li     t1, NODE_ACT_BYTES_JOIN
+    bne     t0, t1, 2f
+    mv      a0, s2                          # BYTES_JOIN: the ByteLists of the ids, one after another
+    call    app_bytes_join
     j       8f
 2:  li      t1, NODE_ACT_STATE_COPY
     bne     t0, t1, 3f

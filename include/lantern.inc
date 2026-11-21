@@ -766,7 +766,13 @@
 .set Node_custody_slot, Node_base_slot + 1296   /* the store's slot at its last raise, or the anchor's */
 .set Node_custody_need, Node_base_slot + 1304   /* the count of the node's validators at the last CUSTODY work */
 .set Node_custody_epoch, Node_base_slot + 1312  /* the store's epoch + 1 at the last CUSTODY work, or 0 */
-.set NODE_FIXED, Node_base_slot + 1320
+.set Node_recon_root, Node_base_slot + 1320    /* Root: the block of the reconstruction (fulu das-core.md) */
+.set Node_recon_slot, Node_base_slot + 1352    /* its slot */
+.set Node_recon_state, Node_base_slot + 1360   /* 0 none, 1 its work queued, 2 its sidecars due, 3 a PUBLISH_SIDECAR of them queued */
+.set Node_recon_buffer, Node_base_slot + 1368  /* the BufferId of the rebuilt sidecars */
+.set Node_recon_next, Node_base_slot + 1376    /* the column from which the next missing one is looked for */
+.set Node_recon_failed, Node_base_slot + 1384  /* Root: of the last reconstruction that failed, or zero */
+.set NODE_FIXED, Node_base_slot + 1416
 .set Eth1Count_number, 0               /* Eth1Count (node.md) */
 .set Eth1Count_count, 8
 .set Eth1Count_root, 16
@@ -1018,6 +1024,7 @@
 .set NODE_ACT_BUILDER, 16              /* 16 a builder call, 24 a ByteList of an HTTP request: the shell writes it to a new connection to the builder */
 .set NODE_ACT_DB_ARCHIVE, 17           /* 16 a state's BufferId, 24 a state segment, 32 an offset, 40 a DbRecord: the shell writes the state's record */
 .set NODE_ACT_DB_ARCHIVE_SIZE, 120
+.set NODE_ACT_BYTES_JOIN, 18            /* 16 a new id, 24 a count, then the ids: the shell keeps their ByteLists one after another */
 .set NODE_DB_REF, 1 << 63              /* a BufferId of a Db record: bit 62 a sidecar segment, bit 61 a state segment, segment << 44, the offset below */
 .set NODE_DB_SIDECARS, 1 << 62
 .set NODE_DB_STATES, 1 << 61
@@ -1083,6 +1090,7 @@
 .set NODE_WORK_PRODUCE_ETH1, 41        /* a: the state of a produceBlockV3; b: its Eth1Snapshot; data: its draft; target: the NodeApi index */
 .set NODE_WORK_ARCHIVE_LOAD, 42        /* a: the state to write; b: with a diff, the full record's NODE_DB_REF; data: the record's NODE_DB_REF */
 .set NODE_WORK_CUSTODY, 43             /* a: F's post-state: the custody group count of the node's validators */
+.set NODE_WORK_RECONSTRUCT, 44         /* b: the sidecars' buffer; data: the held sidecars, joined */
 .set NODE_LC_ID, 2                     /* the BufferId of the light client store (lantern_node_init: Caller must) */
 .set NODE_PUBLISH_DECODE, 1            /* NodeApi member of a publishBlockV2: its phase */
 .set NODE_PUBLISH_SIDECARS, 2

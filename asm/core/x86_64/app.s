@@ -1192,6 +1192,76 @@ LOCAL_FUNCTION app_buf_add
     UNFRAME 32
 END_FUNCTION app_buf_add
 
+/*
+ * L1: NODE_ACT_BYTES_JOIN rdi (app.md): new memory with the ByteLists of the ids one after another,
+ * each at a multiple of 8, kept as the new id's; with no memory or an id with no bytes, a ByteList
+ * of no bytes. r12 the action, r13 the count, r14 the bytes, rbp an index, r15 the memory, S7 the
+ * place, S8 a ByteList.
+ */
+LOCAL_FUNCTION app_bytes_join
+    ENTER 0
+    mov     %rdi, %r12
+    mov     24(%r12), %r13
+    xor     %r14d, %r14d
+    xor     %ebp, %ebp
+1:  cmp     %r13, %rbp
+    jae     2f
+    mov     32(%r12,%rbp,8), %rdi
+    call    app_buf_find
+    test    %rax, %rax
+    jz      5f
+    mov     8(%rax), %rcx
+    mov     16(%rcx), %rcx
+    add     $(24 + 7), %rcx
+    and     $-8, %rcx
+    add     %rcx, %r14
+    inc     %rbp
+    jmp     1b
+5:  xor     %r14d, %r14d                    # an id with no bytes: none
+    xor     %r13d, %r13d
+2:  lea     24(%r14), %rdi
+    call    app_map
+    test    %rax, %rax
+    jz      9f
+    mov     %rax, %r15
+    lea     24(%r14), %rcx
+    mov     %rcx, (%r15)
+    movq    $24, 8(%r15)
+    mov     %r14, 16(%r15)
+    lea     24(%r15), %rcx
+    mov     %rcx, S7(%rsp)
+    xor     %ebp, %ebp
+3:  cmp     %r13, %rbp
+    jae     4f
+    mov     32(%r12,%rbp,8), %rdi
+    call    app_buf_find
+    mov     8(%rax), %rax
+    mov     %rax, S8(%rsp)
+    mov     16(%rax), %rcx
+    mov     S7(%rsp), %rdi
+    lea     24(%rcx), %rdx
+    mov     %rdx, (%rdi)
+    movq    $24, 8(%rdi)
+    mov     %rcx, 16(%rdi)
+    add     $24, %rdi
+    mov     8(%rax), %rsi
+    add     %rax, %rsi
+    mov     %rcx, %rdx
+    call    lantern_copy
+    mov     S8(%rsp), %rax
+    mov     16(%rax), %rcx
+    add     $(24 + 7), %rcx
+    and     $-8, %rcx
+    add     %rcx, S7(%rsp)
+    inc     %rbp
+    jmp     3b
+4:  mov     16(%r12), %rdi
+    mov     %r15, %rsi
+    lea     24(%r14), %rdx
+    call    app_buf_add
+9:  LEAVE 0
+END_FUNCTION app_bytes_join
+
 /* L1: the buffer of the id rdi goes back to the OS, and the last entry takes its place. */
 LOCAL_FUNCTION app_buf_drop
     FRAME 16
@@ -1692,6 +1762,8 @@ LOCAL_FUNCTION app_work
     je      6f
     cmp     $NODE_WORK_ARCHIVE_LOAD, %rcx   # ARCHIVE_LOAD: state_a, and twice the scratch
     je      18f
+    cmp     $NODE_WORK_RECONSTRUCT, %rcx    # RECONSTRUCT: twice the scratch
+    je      181f
     cmp     $NODE_WORK_LC_BLOCK, %rcx       # the light client works: state_c, the light client store
     je      17f
     cmp     $NODE_WORK_LC_HEAD, %rcx
@@ -1763,7 +1835,7 @@ LOCAL_FUNCTION app_work
     call    app_regrow
     test    %rax, %rax
     jnz     91f
-    mov     (APP_SCRATCH + 8)(%rbx), %rax
+181: mov    (APP_SCRATCH + 8)(%rbx), %rax
     shl     $1, %rax
     mov     %rax, S9(%rsp)
     mov     $APP_SCRATCH, %edi
@@ -2911,7 +2983,7 @@ LOCAL_FUNCTION app_actions
     call    app_buf_add
     jmp     8f
 131: cmp    $NODE_ACT_BYTES_NEW, %rax
-    jne     2f
+    jne     132f
     mov     24(%rbp), %rdi                  # BYTES_NEW: a ByteList of the size, its bytes zero
     call    app_map
     test    %rax, %rax
@@ -2925,6 +2997,11 @@ LOCAL_FUNCTION app_actions
     mov     16(%rbp), %rdi
     mov     24(%rbp), %rdx
     call    app_buf_add
+    jmp     8f
+132: cmp    $NODE_ACT_BYTES_JOIN, %rax
+    jne     2f
+    mov     %rbp, %rdi                      # BYTES_JOIN: the ByteLists of the ids, one after another
+    call    app_bytes_join
     jmp     8f
 2:  cmp     $NODE_ACT_STATE_COPY, %rax
     jne     3f
