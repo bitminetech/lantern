@@ -19,6 +19,9 @@
 - [`lantern_node_liveness`](#function-lantern_node_liveness): whether validators were seen live in an epoch, from a state and a `Seen`, for one fork.
 - [`lantern_node_block_rewards`](#function-lantern_node_block_rewards): the proposer's rewards of a block, part by part, on its pre-state, for one fork.
 - [`lantern_node_sync_rewards`](#function-lantern_node_sync_rewards): the balance changes of a block's sync aggregate, on its pre-state, for one fork.
+- [`lantern_node_reward_totals`](#function-lantern_node_reward_totals): the totals of an epoch's attestation rewards, for one fork.
+- [`lantern_node_attestation_rewards`](#function-lantern_node_attestation_rewards): the attestation rewards of a window of validators, for one fork.
+- [`lantern_node_ideal_reward`](#function-lantern_node_ideal_reward): the attestation rewards of a validator of an effective balance that voted in time, for one fork.
 - [`lantern_node_payload_parent`](#function-lantern_node_payload_parent): the block number and hash of a state's latest execution payload header, for one fork from bellatrix.
 - [`lantern_node_sidecar_root`](#function-lantern_node_sidecar_root): hash_tree_root of the block header of a sidecar's SSZ bytes, for one fork from deneb.
 - [`lantern_node_randao`](#function-lantern_node_randao): the RANDAO mix of an epoch in a state, for one fork.
@@ -217,6 +220,8 @@
   - The generator checks each part against the spec's own functions: the proposer's balance changes of process_proposer_slashing, process_attester_slashing, process_attestation and process_sync_aggregate on P, and in phase0 the proposer's part of get_inclusion_delay_deltas of `early` and `late`.
   - A case with P one slot past the block's: `LANTERN_INVALID_SLOT`.
   - The runner passes `scratch` of S(6), and an `out` of lantern_node_sync_rewards a byte short of its room, which must give `LANTERN_BUFFER_TOO_SMALL`. Each input must keep its bytes.
+- The `rewards` cases of the spec (basic, leak, random, inactivity_scores) also check, in mode 0, lantern_node_reward_totals and lantern_node_attestation_rewards of every validator of their pre-state against their deltas: `source`, `target` and `head` each the validator's reward less its penalty of the delta of that flag or vote, `inactivity` minus its inactivity penalty. In windows of 7 validators and one of all of them.
+- Lantern's cases `<preset>-<fork>-node-attrewards.bin` of phase0 to fulu, made by tests/generator/node.py with the pinned spec: one for each case of the spec's `rewards` cases, its `pre` and, for modes 0 and 1, the items of lantern_node_attestation_rewards of every validator and of lantern_node_ideal_reward of every effective balance step (beacon-api.md), from the spec's get_flag_index_deltas, get_inactivity_penalty_deltas and the phase0 delta functions on the state, after process_justification_and_finalization and from altair process_inactivity_updates in mode 1. The phase0 inclusion_delay is the attester's part of get_inclusion_delay_deltas: (get_base_reward - get_proposer_reward) // the delay of its earliest attestation.
 - Lantern's cases `<preset>-<fork>-node-reads.bin` of phase0 to fulu, made by tests/generator/node.py with the pinned spec: one for each `fork_choice-get_head` and `fork_choice-on_block` case, named as its node-events case. Its parts `requests` and `responses`: after the case's steps in node mode, each request on its own connection must give its answer, in the form with Content-Length.
   - The requests: getBlockRewards and getSyncCommitteeRewards of each block of the store, by root, in slot order; and getSyncCommitteeRewards of the head with id items: the index of the first member, the pubkey of the last, the index of a validator that is not a member, and an index past the validators.
   - The answers: beacon-api.md's rules, from a replay of the steps with the spec module, as the node-events cases have it. A block that descends from the store's finalized block has its rewards; the anchor, the finalized block and its ancestors, and a block of another branch after the finalized epoch rose: 404. getSyncCommitteeRewards in phase0 of a block the node holds: 400.
@@ -1045,6 +1050,125 @@ lantern_node_sync_rewards(pre, block, scratch, out) -> status
 
 - Export: `lantern_<fork>_node_sync_rewards` of each fork object.
 - Argument order: `pre`, `block`, `scratch`, `out`.
+
+## Function `lantern_node_reward_totals`
+
+The totals of the attestation rewards that process_rewards_and_penalties pays for the previous epoch of a state (beacon-api.md, getAttestationsRewards).
+
+### Signature
+
+```
+lantern_node_reward_totals(state, config, mode, scratch, out) -> status
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `state` | input | `BeaconState` of the fork: S |
+| `config` | input | `Config`: its `INACTIVITY_SCORE_BIAS`, `INACTIVITY_SCORE_RECOVERY_RATE` and `CommitteeCache` |
+| `mode` | input | u64: 0, the state as it is; 1, the steps of process_epoch before process_rewards_and_penalties too |
+| `scratch` | scratch | `Scratch` |
+| `out` | output | 96 bytes, the totals: below |
+
+### Returns
+
+- `LANTERN_OK`: `out` holds the totals.
+- `LANTERN_BUFFER_TOO_SMALL`: `scratch` is short of the room under Limits.
+- The statuses of the functions it calls, as lantern_get_block_root's.
+
+### Function does
+
+- `out`, each a u64: at 0 get_previous_epoch; at 8 get_finality_delay; at 16 1 in an inactivity leak (that delay above `MIN_EPOCHS_TO_INACTIVITY_PENALTY`), else 0; at 24 get_total_active_balance; at 32 from altair get_base_reward_per_increment, in phase0 integer_squareroot of the total active balance; at 40, 48 and 56 the balances of the source, target and head votes of the previous epoch (from altair get_total_balance of get_unslashed_participating_indices of each flag; in phase0 lantern_get_attesting_balance of the matching source, target and head attestations); at 64 `mode`; at 72 the largest effective balance of the fork of the previous epoch (`MAX_EFFECTIVE_BALANCE_ELECTRA` from electra, else `MAX_EFFECTIVE_BALANCE`; in electra, a previous epoch below the epoch of the state's `fork` is deneb's); at 80 and 88 `INACTIVITY_SCORE_BIAS` and `INACTIVITY_SCORE_RECOVERY_RATE` of the config.
+- Mode 1: the finality delay of the finalized checkpoint that process_justification_and_finalization would leave, from the state's justification bits and checkpoints and the target balances of the previous and current epochs; the state keeps its bytes.
+
+### Function never
+
+- Writes `state`.
+
+### Limits
+
+- Scratch: S(3); in phase0 S(6) and the matching attestations.
+
+### ABI
+
+- Export: `lantern_<fork>_node_reward_totals` of each fork object.
+- Argument order: `state`, `config`, `mode`, `scratch`, `out`.
+
+## Function `lantern_node_attestation_rewards`
+
+The attestation rewards of the validators `first` to `first` + `count` - 1 of a state, with its totals (beacon-api.md, getAttestationsRewards).
+
+### Signature
+
+```
+lantern_node_attestation_rewards(state, config, totals, first, count, scratch, out) -> status
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `state` | input | `BeaconState` of the fork: S |
+| `config` | input | `Config`: its `CommitteeCache` |
+| `totals` | input | The 96 bytes of lantern_node_reward_totals of `state` |
+| `first` | input | u64 |
+| `count` | input | u64 |
+| `scratch` | scratch | `Scratch` |
+| `out` | output | 48 bytes for each validator: `head`, `target` and `source` (i64), `inclusion_delay` (u64), `inactivity` (i64), and 1 when it is eligible, else 0 (u64) |
+
+### Returns
+
+- `LANTERN_OK`: `out` holds the items.
+- `LANTERN_INVALID_ENCODING`: `first` + `count` is past the validators.
+- `LANTERN_BUFFER_TOO_SMALL`: `scratch` is short of the room under Limits.
+- In phase0, the statuses of lantern_get_attesting_indices and lantern_get_block_root.
+
+### Function does
+
+- The values of beacon-api.md, getAttestationsRewards, `total_rewards`; all 0 for a validator that is not eligible (get_eligible_validator_indices).
+- Mode 1, from altair: the inactivity score of each eligible validator as process_inactivity_updates leaves it, from its score, its timely target flag and whether the totals are in a leak.
+- Phase0: for the validators of the window, a byte each of the matching source, target and head attestations of the previous epoch that hold them, and a byte of the lowest `inclusion_delay` among the source ones, from one walk of `previous_epoch_attestations`.
+
+### Function never
+
+- Writes `state` or `totals`.
+
+### Limits
+
+- Scratch: S(1) from altair; in phase0 S(6), 2 bytes for each validator of the window, and the matching attestations.
+
+### ABI
+
+- Export: `lantern_<fork>_node_attestation_rewards` of each fork object.
+- Argument order: `state`, `config`, `totals`, `first`, `count`, `scratch`, `out`.
+
+## Function `lantern_node_ideal_reward`
+
+The attestation rewards of a validator of an effective balance that voted for all three in time, with the totals of a state (beacon-api.md, getAttestationsRewards, `ideal_rewards`).
+
+### Signature
+
+```
+lantern_node_ideal_reward(totals, effective_balance, out) -> status
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `totals` | input | The 96 bytes of lantern_node_reward_totals |
+| `effective_balance` | input | u64 |
+| `out` | output | 48 bytes: as an item of lantern_node_attestation_rewards, with the effective balance in place of eligible |
+
+### Returns
+
+- `LANTERN_OK`: `out` holds the item.
+
+### ABI
+
+- Export: `lantern_<fork>_node_ideal_reward` of each fork object.
+- Argument order: `totals`, `effective_balance`, `out`.
 
 ## Function `lantern_node_payload_parent`
 

@@ -532,6 +532,33 @@ api_rw_reward:
 api_rw_minus:
     .ascii "-"
 .set api_rw_minus_len, 1
+api_ar_open:                            /* getAttestationsRewards (beacon-api.md) */
+    .ascii ",\"data\":{\"ideal_rewards\":["
+.set api_ar_open_len, 26
+api_ar_eb:
+    .ascii "{\"effective_balance\":"
+.set api_ar_eb_len, 21
+api_ar_head:
+    .ascii ",\"head\":"
+.set api_ar_head_len, 8
+api_ar_target:
+    .ascii ",\"target\":"
+.set api_ar_target_len, 10
+api_ar_source:
+    .ascii ",\"source\":"
+.set api_ar_source_len, 10
+api_ar_inclusion:
+    .ascii ",\"inclusion_delay\":"
+.set api_ar_inclusion_len, 19
+api_ar_inactivity:
+    .ascii ",\"inactivity\":"
+.set api_ar_inactivity_len, 14
+api_ar_total:
+    .ascii "],\"total_rewards\":["
+.set api_ar_total_len, 19
+api_ar_end:
+    .ascii "]}}"
+.set api_ar_end_len, 3
 api_ev_head:                            /* eventstream (beacon-api.md) */
     .ascii "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nCache-Control: no-cache\r\n"
 .set api_ev_head_len, 75

@@ -236,6 +236,10 @@ ABI uint64_t LF(node_liveness)(const void *state, const void *config, const void
 ABI uint64_t LF(node_block_rewards)(const void *pre, const void *block, const void *early, const void *late,
                                     const void *config, void *scratch, void *out);
 ABI uint64_t LF(node_sync_rewards)(const void *pre, const void *block, void *scratch, void *out);
+ABI uint64_t LF(node_reward_totals)(const void *state, const void *config, uint64_t mode, void *scratch, void *out);
+ABI uint64_t LF(node_attestation_rewards)(const void *state, const void *config, const void *totals, uint64_t first,
+                                          uint64_t count, void *scratch, void *out);
+ABI uint64_t LF(node_ideal_reward)(const void *totals, uint64_t effective_balance, void *out);
 ABI uint64_t LF(node_data_root)(const void *data, void *scratch, void *root);
 ABI uint64_t LF(on_block)(void *store, const void *signed_block, void *state, const void *options, void *scratch,
                               void *result);
@@ -1791,6 +1795,47 @@ static void run_custody(const char *file, const char *handler, case_file *f) {
 /* ---------------------------------------------------------------- Rewards */
 
 /* Whether the IndexList pair (rewards, penalties) equals the SSZ Deltas in want. */
+#define INVALID_ENCODING_STATUS 56 /* LANTERN_INVALID_ENCODING, include/lantern.inc */
+static uint64_t field_offset(const char *name, uint64_t i);
+
+/*
+ * The items of lantern_node_attestation_rewards of every validator of the state, in windows of
+ * `window` validators (a last one of the rest), after lantern_node_reward_totals of mode; NULL with why.
+ */
+static uint8_t *attestation_rewards_of(const uint8_t *state, uint64_t mode, uint64_t window, uint8_t *totals, const char **why) {
+    uint64_t n = rd64(state + field_offset("BeaconState", 11) + 8);
+    uint8_t *items = buffer(48 * n + 48);
+    memset(totals, FILL, 96 + GUARD);
+    if (CALL(LF(node_reward_totals), state, config, (const void *)(uintptr_t)mode, fresh_scratch(), totals) != 0) {
+        *why = "lantern_node_reward_totals: status";
+    } else if (!guard_ok(totals, 96)) {
+        *why = "lantern_node_reward_totals: wrote past out";
+    }
+    memset(items, FILL, (size_t)(48 * n + 48 + GUARD));
+    for (uint64_t first = 0; first < n && !*why; first += window) {
+        uint64_t count = n - first < window ? n - first : window;
+        uint64_t st = CALL(LF(node_attestation_rewards), state, config, totals, (const void *)(uintptr_t)first,
+                           (const void *)(uintptr_t)count, fresh_scratch(), items + 48 * first);
+        if (st != 0) {
+            static char msg[96];
+            snprintf(msg, sizeof msg, "lantern_node_attestation_rewards: status %llu", (unsigned long long)st);
+            *why = msg;
+        }
+    }
+    if (!*why && !guard_ok(items, 48 * n)) *why = "lantern_node_attestation_rewards: wrote past out";
+    if (!*why) { /* a window past the validators */
+        uint8_t one[48 + GUARD];
+        if (CALL(LF(node_attestation_rewards), state, config, totals, (const void *)(uintptr_t)n, (const void *)(uintptr_t)1,
+                 fresh_scratch(), one) != INVALID_ENCODING_STATUS)
+            *why = "lantern_node_attestation_rewards: a window past the validators is not LANTERN_INVALID_ENCODING";
+    }
+    if (*why) {
+        free(items);
+        return NULL;
+    }
+    return items;
+}
+
 static int deltas_equal(const uint8_t *rewards, const uint8_t *penalties, tv want) {
     uint64_t wlen;
     const uint8_t *w = tv_bytes(want, &wlen);
@@ -1849,6 +1894,29 @@ static void run_rewards(const char *file, case_file *f) {
             }
             free(rw);
             free(pn);
+            /* lantern_node_attestation_rewards in mode 0: each validator's reward less penalty of each delta (node.md) */
+            static const int item_at[5] = {16, 8, 0, 24, 32}; /* source, target, head, inclusion (phase0), inactivity */
+            for (uint64_t window = 7; window && !why; window = window == 7 ? 1u << 20 : 0) {
+                uint8_t totals[96 + GUARD];
+                uint8_t *items = attestation_rewards_of(state, 0, window, totals, &why);
+                for (uint64_t flag = 0; items && flag < DELTAS_COUNT && !why; flag++) {
+                    if (DELTAS_COUNT == 5 && flag == 3) continue; /* phase0: the attester's part, in node-attrewards */
+                    uint64_t wlen;
+                    const uint8_t *w = tv_bytes(tv_get(parts, names[flag]), &wlen);
+                    uint64_t o2 = w[4] | (uint64_t)w[5] << 8 | (uint64_t)w[6] << 16 | (uint64_t)w[7] << 24, n = (o2 - 8) / 8;
+                    for (uint64_t v = 0; v < n && !why; v++) {
+                        int64_t want = (int64_t)(rd64(w + 8 + 8 * v) - rd64(w + o2 + 8 * v));
+                        if (flag == DELTAS_COUNT - 1) want = -(int64_t)rd64(w + o2 + 8 * v);
+                        if ((int64_t)rd64(items + 48 * v + item_at[flag == DELTAS_COUNT - 1 ? 4 : flag]) != want) {
+                            static char msg[160];
+                            snprintf(msg, sizeof msg, "lantern_node_attestation_rewards, windows of %llu: %s of validator %llu",
+                                     (unsigned long long)window, names[flag], (unsigned long long)v);
+                            why = msg;
+                        }
+                    }
+                }
+                free(items);
+            }
             free(state);
         }
         report(file, name, len, why == NULL, why);
@@ -8050,6 +8118,60 @@ static void run_node_rewards(const char *file, case_file *f) {
     }
 }
 
+/*
+ * node-attrewards (node.md): in modes 0 and 1, lantern_node_attestation_rewards of every validator
+ * of the case's state, in windows of 5 and in one, and lantern_node_ideal_reward of every effective
+ * balance step, must give the case's items; the state keeps its bytes.
+ */
+static void run_node_attrewards(const char *file, case_file *f) {
+    for (uint64_t i = 0; i < f->count; i++) {
+        const char *name, *why = NULL;
+        uint64_t len, plen, size = 0;
+        tv parts = next_case(f, &name, &len);
+        if (skip_case(parts)) continue;
+        uint8_t *state = load_state(tv_bytes(tv_get(parts, "pre"), &plen), plen, &size, &why);
+        uint8_t *state0 = state ? copy_of(state, size) : NULL;
+        for (uint64_t mode = 0; mode < 2 && !why; mode++) {
+            char key[16];
+            uint64_t ilen, dlen;
+            snprintf(key, sizeof key, "items_%llu", (unsigned long long)mode);
+            const uint8_t *want = tv_bytes(tv_get(parts, key), &ilen);
+            snprintf(key, sizeof key, "ideal_%llu", (unsigned long long)mode);
+            const uint8_t *ideal = tv_bytes(tv_get(parts, key), &dlen);
+            for (uint64_t window = 5; window && !why; window = window == 5 ? 1u << 20 : 0) {
+                uint8_t totals[96 + GUARD];
+                uint8_t *items = attestation_rewards_of(state, mode, window, totals, &why);
+                if (items && memcmp(items, want, (size_t)ilen)) {
+                    uint64_t k = 0;
+                    while (k < ilen && items[k] == want[k]) k++;
+                    static char msg[160];
+                    snprintf(msg, sizeof msg, "mode %llu, windows of %llu: validator %llu, item byte %llu", (unsigned long long)mode,
+                             (unsigned long long)window, (unsigned long long)(k / 48), (unsigned long long)(k % 48));
+                    why = msg;
+                }
+                for (uint64_t s = 0; items && !why && s < dlen / 48; s++) {
+                    uint8_t out[48 + GUARD];
+                    memset(out, FILL, sizeof out);
+                    uint64_t eb = rd64(ideal + 48 * s + 40);
+                    if (CALL(LF(node_ideal_reward), totals, (const void *)(uintptr_t)eb, out) != 0) why = "lantern_node_ideal_reward: status";
+                    else if (memcmp(out, ideal + 48 * s, 48)) {
+                        static char msg[96];
+                        snprintf(msg, sizeof msg, "mode %llu: lantern_node_ideal_reward of step %llu", (unsigned long long)mode,
+                                 (unsigned long long)s + 1);
+                        why = msg;
+                    } else if (!guard_ok(out, 48)) why = "lantern_node_ideal_reward: wrote past out";
+                }
+                if (items && !why && rd64(totals + 72) / 1000000000u != dlen / 48) why = "the totals' largest effective balance";
+                free(items);
+            }
+        }
+        if (!why && memcmp(state, state0, (size_t)size)) why = "changed the state";
+        free(state);
+        free(state0);
+        report(file, name, len, why == NULL, why);
+    }
+}
+
 static void run_node_payload(const char *file, case_file *f) {
     for (uint64_t i = 0; i < f->count; i++) {
         const char *name, *why = NULL;
@@ -9601,6 +9723,7 @@ int main(int argc, char **argv) {
         else if (!bls_off && !strcmp(kind, "node-payload")) run_node_payload(file, &f);
         else if (!bls_off && !strcmp(kind, "node-liveness")) run_node_liveness(file, &f);
         else if (!bls_off && !strcmp(kind, "node-rewards")) run_node_rewards(file, &f);
+        else if (!bls_off && !strcmp(kind, "node-attrewards")) run_node_attrewards(file, &f);
         else if (!bls_off && (!strcmp(kind, "node-produce") || !strcmp(kind, "node-publish"))) run_node_produce(file, argv[1], &f);
         else if (!bls_off && !strcmp(kind, "json-encode")) run_json_encode(file, &f);
         else if (!bls_off && !strcmp(kind, "json-decode")) run_json_decode(file, &f, 0);

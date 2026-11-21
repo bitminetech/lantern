@@ -1008,6 +1008,224 @@ LOCAL_FUNCTION api_validators_json
 END_FUNCTION api_validators_json
 
 /*
+ * The fields ,"head":…,"target":…,"source":…,"inactivity":…} of the 48-byte item a0 of
+ * lantern_node_attestation_rewards, with ,"inclusion_delay":… before inactivity when the fork of
+ * the entry s4 is phase0. Locals: the item.
+ */
+LOCAL_FUNCTION api_reward_fields
+    FRAME 16
+    sd      a0, 0(sp)
+    API_LIT api_ar_head
+    ld      t2, 0(sp)
+    ld      a0, 0(t2)
+    call    api_qint
+    API_LIT api_ar_target
+    ld      t2, 0(sp)
+    ld      a0, 8(t2)
+    call    api_qint
+    API_LIT api_ar_source
+    ld      t2, 0(sp)
+    ld      a0, 16(t2)
+    call    api_qint
+    ld      t2, NodeApi_fork(s4)
+    bnez    t2, 1f
+    API_LIT api_ar_inclusion
+    ld      t2, 0(sp)
+    ld      a0, 24(t2)
+    call    api_qdec
+1:  API_LIT api_ar_inactivity
+    ld      t2, 0(sp)
+    ld      a0, 32(t2)
+    call    api_qint
+    API_LIT api_end1
+    UNFRAME 16
+END_FUNCTION api_reward_fields
+
+.set API_REWARD_WINDOW, 256                 # the validators of one call of lantern_node_attestation_rewards
+.set API_REWARD_ITEM_MAX, 256               # the room an item may take
+
+/*
+ * The items of getAttestationsRewards (beacon-api.md) of the entry s4, of the state s3, from the
+ * cursor at NodeEvent_api + 16 of the event s5 (+0 the next step or validator, +16 the bitmap of
+ * the ids, +32 the items written, +48 the part: 0 no totals yet, 1 the ideal items, 2 the
+ * validators' items; +56 the totals; +584 the node's config; +592 the chunk's scratch), at the
+ * writer's cursor s6 up to s8; then ]}} once all are written. a0 = 1 when whole, 0 when more is to
+ * come, 2 for a state the functions refuse, 3 for a scratch too small. Locals: 0 the cursor, 8 the
+ * window's items, 16 its first validator, 24 its count, 32 a value, 40 an ideal item (48).
+ */
+LOCAL_FUNCTION api_rewards_json
+    FRAME 96
+    ADDQ    t0, s5, NodeEvent_api + 16
+    sd      t0, 0(sp)
+    ld      t1, 48(t0)
+    li      t2, 2
+    beq     t1, t2, 5f
+    li      t2, 1
+    beq     t1, t2, 3f
+    mv      a0, s3                          # the first chunk: the totals, as process_epoch has them
+    ld      a1, 584(t0)
+    li      a2, 1
+    ld      a3, 592(t0)
+    addi    a4, t0, 56
+    ld      t6, NodeApi_fork(s4)
+    FORK_CALL node_reward_totals
+    li      t0, LANTERN_BUFFER_TOO_SMALL
+    beq     a0, t0, 93f
+    bnez    a0, 92f
+    ld      t0, 0(sp)
+    li      t1, 1
+    sd      t1, 48(t0)
+    sd      t1, 0(t0)
+    sd      zero, 32(t0)
+3:  ld      t0, 0(sp)                       # the ideal items: each effective balance step
+    ld      t1, 0(t0)
+    li      t2, EFFECTIVE_BALANCE_INCREMENT
+    mul     t1, t1, t2
+    ld      t2, (56 + 72)(t0)
+    bgtu    t1, t2, 4f
+    sub     t2, s8, s6
+    li      t3, API_REWARD_ITEM_MAX
+    bltu    t2, t3, 90f
+    sd      t1, 32(sp)
+    addi    a0, t0, 56
+    mv      a1, t1
+    addi    a2, sp, 40
+    ld      t6, NodeApi_fork(s4)
+    FORK_CALL node_ideal_reward
+    ld      t0, 0(sp)
+    ld      t1, 0(t0)
+    li      t2, 1
+    beq     t1, t2, 31f
+    API_LIT api_p_comma
+31: API_LIT api_ar_eb
+    ld      a0, 32(sp)
+    call    api_qdec
+    addi    a0, sp, 40
+    call    api_reward_fields
+    ld      t0, 0(sp)
+    ld      t1, 0(t0)
+    addi    t1, t1, 1
+    sd      t1, 0(t0)
+    j       3b
+4:  sub     t2, s8, s6                      # then the validators
+    li      t3, 32
+    bltu    t2, t3, 90f
+    API_LIT api_ar_total
+    ld      t0, 0(sp)
+    li      t1, 2
+    sd      t1, 48(t0)
+    sd      zero, 0(t0)
+    sd      zero, 32(t0)
+5:  ld      t0, 0(sp)                       # a window of validators from the next
+    ld      t1, 0(t0)
+    LDQ     t2, s3, NODE_STATE_VALIDATORS + 8
+    bgeu    t1, t2, 8f
+    sub     t2, t2, t1
+    li      t3, API_REWARD_WINDOW
+    bleu    t2, t3, 51f
+    mv      t2, t3
+51: sd      t1, 16(sp)
+    sd      t2, 24(sp)
+    ld      a5, 592(t0)                     # its items at the end of the chunk's scratch
+    ld      t3, 0(a5)
+    li      t4, 48
+    mul     t4, t2, t4
+    bltu    t3, t4, 93f
+    sub     t3, t3, t4
+    sd      t3, 0(a5)
+    add     a6, a5, t3
+    sd      a6, 8(sp)
+    mv      a0, s3
+    ld      a1, 584(t0)
+    addi    a2, t0, 56
+    ld      a3, 16(sp)
+    ld      a4, 24(sp)
+    ld      t6, NodeApi_fork(s4)
+    FORK_CALL node_attestation_rewards
+    ld      t0, 0(sp)                       # the scratch's size again
+    ld      a5, 592(t0)
+    ld      t3, 0(a5)
+    ld      t2, 24(sp)
+    li      t4, 48
+    mul     t4, t2, t4
+    add     t3, t3, t4
+    sd      t3, 0(a5)
+    li      t0, LANTERN_BUFFER_TOO_SMALL
+    beq     a0, t0, 93f
+    bnez    a0, 92f
+    sd      zero, 32(sp)
+6:  ld      t1, 32(sp)                      # each validator of the window: named by the ids, or with none eligible
+    ld      t2, 24(sp)
+    bgeu    t1, t2, 7f
+    ld      t3, 16(sp)
+    add     t3, t3, t1
+    li      t4, 48
+    mul     t4, t1, t4
+    ld      t5, 8(sp)
+    add     t4, t5, t4
+    ld      t0, 0(sp)
+    ld      t5, 16(t0)
+    beqz    t5, 61f
+    srli    a0, t3, 6
+    slli    a0, a0, 3
+    add     a0, t5, a0
+    ld      a0, 0(a0)
+    srl     a0, a0, t3
+    andi    a0, a0, 1
+    beqz    a0, 69f
+    j       62f
+61: ld      a0, 40(t4)
+    beqz    a0, 69f
+62: sub     a0, s8, s6
+    li      a1, API_REWARD_ITEM_MAX
+    bltu    a0, a1, 68f
+    ld      a0, 32(t0)
+    addi    a1, a0, 1
+    sd      a1, 32(t0)
+    beqz    a0, 63f
+    API_LIT api_p_comma
+63: API_LIT api_q_validator
+    ld      a0, 16(sp)
+    ld      t1, 32(sp)
+    add     a0, a0, t1
+    call    api_qdec
+    ld      t1, 32(sp)
+    li      t4, 48
+    mul     t4, t1, t4
+    ld      a0, 8(sp)
+    add     a0, a0, t4
+    call    api_reward_fields
+69: ld      t1, 32(sp)
+    addi    t1, t1, 1
+    sd      t1, 32(sp)
+    j       6b
+68: ld      t1, 16(sp)                      # no room: the next chunk goes on from this validator
+    ld      t2, 32(sp)
+    add     t1, t1, t2
+    ld      t0, 0(sp)
+    sd      t1, 0(t0)
+    j       90f
+7:  ld      t1, 16(sp)
+    ld      t2, 24(sp)
+    add     t1, t1, t2
+    ld      t0, 0(sp)
+    sd      t1, 0(t0)
+    j       5b
+8:  sub     t2, s8, s6                      # all: ]}}
+    li      t3, 4
+    bltu    t2, t3, 90f
+    API_LIT api_ar_end
+    li      a0, 1
+    UNFRAME 96
+90: li      a0, 0
+    UNFRAME 96
+92: li      a0, 2
+    UNFRAME 96
+93: li      a0, 3
+    UNFRAME 96
+END_FUNCTION api_rewards_json
+
+/*
  * a0 = the epoch of getEpochCommittees of the route a0 and the state of the view a1 (beacon-api.md,
  * Common rules), or 2^64 - 1 for 400: an epoch above the state's + 1, one whose seed's RANDAO mix the
  * state no longer holds, or a slot of another epoch. A leaf. Uses t0-t4.
@@ -3051,6 +3269,8 @@ LOCAL_FUNCTION node_api_event
     beq     a3, t0, 547f
     li      t0, API_OP_GET_SYNC_COMMITTEE_REWARDS
     beq     a3, t0, 547f
+    li      t0, API_OP_GET_ATTESTATIONS_REWARDS
+    beq     a3, t0, 548f
     li      t0, API_OP_GET_STATE_ROOT
     beq     a3, t0, 66f
     li      t0, API_OP_GET_STATE_FORK
@@ -3411,6 +3631,36 @@ LOCAL_FUNCTION node_api_event
     mv      a2, a0
     bnez    a0, 80f
     j       90f
+548: ld     t0, ApiRoute_epoch(s7)          # getAttestationsRewards: the state of the last slot of epoch + 1, a stream of it
+    li      a2, 404
+    addi    t0, t0, 2
+    li      t1, 2
+    bltu    t0, t1, 80f
+    sd      t0, (L + 8)(sp)
+    mv      a0, s2
+    call    node_store_slot
+    addi    t1, a0, 1
+    li      t2, SLOTS_PER_EPOCH
+    divu    t1, t1, t2
+    ld      t0, (L + 8)(sp)
+    li      a2, 404
+    bgtu    t0, t1, 80f
+    mul     t0, t0, t2
+    addi    t0, t0, -1
+    li      t1, API_ID_SLOT
+    sd      t1, ApiRoute_id_kind(s7)
+    sd      t0, ApiRoute_id_slot(s7)
+    mv      a0, s7
+    mv      a1, s8
+    call    node_api_state
+    mv      a2, a0
+    bnez    a0, 80f
+    mv      a0, s8
+    call    node_api_advance
+    mv      a0, s7                          # its ids, as a validator stream's
+    call    node_api_ids
+    sd      a0, ApiView_look_data(s8)
+    j       64f
 547: mv     a0, s9                          # getBlockRewards, getSyncCommitteeRewards: a work of the block on its pre-state
     mv      a1, s7
     mv      a2, s3
@@ -7786,9 +8036,13 @@ LOCAL_FUNCTION api_stream_json
     beq     t0, t1, 1f
     li      t1, API_OP_GET_STATE_V2
     beq     t0, t1, 1f
+    li      t1, API_OP_GET_ATTESTATIONS_REWARDS
+    beq     t0, t1, 35f
     li      t1, API_OP_GET_EPOCH_COMMITTEES
     beq     t0, t1, 2f
     call    api_validators_json
+    UNFRAME 0
+35: call    api_rewards_json
     UNFRAME 0
 2:  call    api_committees_json
     UNFRAME 0
@@ -7910,7 +8164,13 @@ LOCAL_FUNCTION node_api_chunk_run
     beqz    t2, 98f
     li      t2, 4
     j       103f
-104: li     t1, API_OP_GET_STATE_VALIDATOR  # a validator stream: a state
+104: li     t1, API_OP_GET_ATTESTATIONS_REWARDS     # getAttestationsRewards: as a validator stream (1), of a state
+    bne     t0, t1, 106f
+    ld      t2, (L + 48)(sp)
+    beqz    t2, 98f
+    li      t2, 1
+    j       103f
+106: li     t1, API_OP_GET_STATE_VALIDATOR  # a validator stream: a state
     beq     t0, t1, 98f
     addi    t0, t0, -API_OP_GET_STATE_VALIDATORS
     li      t1, API_OP_GET_EPOCH_COMMITTEES - API_OP_GET_STATE_VALIDATORS
@@ -8085,6 +8345,26 @@ LOCAL_FUNCTION node_api_chunk_run
     mv      a2, s3
     call    node_api_validators_prep
     bnez    a0, 97f
+    ld      t0, NodeApi_op(s4)              # getAttestationsRewards: the scratch after the bitmap at +592 of the cursor, the node's config at +584
+    li      t1, API_OP_GET_ATTESTATIONS_REWARDS
+    bne     t0, t1, 66f
+    ld      a0, (L + 56)(sp)
+    ld      t0, (L + 48)(sp)
+    LDQ     t1, t0, NODE_STATE_VALIDATORS + 8
+    addi    t1, t1, 63
+    srli    t1, t1, 6
+    slli    t1, t1, 3
+    addi    t1, t1, 16
+    ld      t2, 0(a0)
+    bltu    t2, t1, 97f
+    sub     t2, t2, t1
+    add     t3, a0, t1
+    sd      t2, 0(t3)
+    ADDQ    t4, s5, NodeEvent_api + 16
+    sd      t3, 592(t4)
+    ld      t0, (L + 64)(sp)
+    ADDQ    t0, t0, Node_config
+    sd      t0, 584(t4)
     j       66f
 68: ld      t0, NodeApi_op(s4)              # a pending stream: its items; for SSZ their bytes and their count
     addi    a1, t0, -API_OP_GET_PENDING_DEPOSITS
@@ -8370,7 +8650,12 @@ LOCAL_FUNCTION node_api_chunk_run
     srli    a0, a0, 9
     andi    a0, a0, 1
     call    api_bool
-    API_LIT api_v_list
+    ld      t0, NodeApi_op(s4)              # getAttestationsRewards: ,"data":{"ideal_rewards":[
+    li      t1, API_OP_GET_ATTESTATIONS_REWARDS
+    bne     t0, t1, 381f
+    API_LIT api_ar_open
+    j       36f
+381: API_LIT api_v_list
     j       36f
     /* the pending streams: {"version":"<fork>","execution_optimistic":…,"finalized":…,"data":[ */
 392: API_LIT api_j_version
@@ -8418,6 +8703,8 @@ LOCAL_FUNCTION node_api_chunk_run
     call    api_bool
     API_LIT api_j_data
 36: call    api_stream_json
+    li      t0, 3
+    beq     a0, t0, 97f
     li      t0, 2
     beq     a0, t0, 96f
     ld      t0, (NodeEvent_api + 8)(s5)
@@ -8478,6 +8765,8 @@ LOCAL_FUNCTION node_api_chunk_run
     ld      s8, (L + 0)(sp)
     addi    s8, s8, -7
     call    api_stream_json
+    li      t0, 3
+    beq     a0, t0, 97f
     li      t0, 2
     beq     a0, t0, 96f
     sd      a0, (L + 32)(sp)
@@ -8504,6 +8793,8 @@ LOCAL_FUNCTION node_api_chunk_run
     API_LIT api_last_chunk
     j       44f
 45: call    api_stream_json                 # HTTP/1.0: the bytes alone
+    li      t0, 3
+    beq     a0, t0, 97f
     li      t0, 2
     beq     a0, t0, 96f
     beqz    a0, 80f

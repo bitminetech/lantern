@@ -1591,6 +1591,538 @@ SPEC_FUNCTION node_sync_rewards
 SPEC_END node_sync_rewards
 .endif
 
+/* ---------------------------------------------------------------- Attestation rewards (beacon-api.md, getAttestationsRewards) */
+
+.if FORK >= FORK_ALTAIR
+/* The participating balance of the flag at the epoch (a pointer in epoch) into base + off: get_total_balance of the unslashed participating indices. */
+.macro TOTALS_FLAG flag, epoch, base, off
+    li      t0, \flag
+    sd      t0, 8(sp)
+    SCRATCH_GIVE s3, s7, 1, s6
+    mv      a0, s1
+    addi    a1, sp, 8
+    mv      a2, \epoch
+    mv      a3, s3
+    mv      a4, s8
+    call    lantern_get_unslashed_participating_indices
+    sd      s7, 0(s3)
+    bnez    a0, 99f
+    mv      a0, s1
+    mv      a1, s8
+    addi    a2, \base, \off
+    call    lantern_get_total_balance
+.endm
+.else
+/* The attesting balance of the attestations of getter at the epoch (a pointer in epoch) into base + off: lantern_get_attesting_balance. */
+.macro TOTALS_PENDING getter, epoch, base, off
+    mv      a0, s1
+    mv      a1, \epoch
+    mv      a2, s8
+    call    \getter
+    bnez    a0, 99f
+    sd      s9, 0(s3)
+    mv      a0, s1
+    mv      a1, s8
+    mv      a2, s3
+    addi    a3, \base, \off
+    call    lantern_get_attesting_balance
+    bnez    a0, 99f
+.endm
+.endif
+
+/*
+ * (state, config, mode, scratch, out) -> a0: the totals of the attestation rewards of the
+ * previous epoch (node.md, lantern_node_reward_totals). s1 state, s2 config, s3 scratch, s4 out,
+ * s5 mode, s6 the validator count, s7 the scratch's size, s8 a list of indices (phase0: the
+ * matching attestations), s9 (phase0) the scratch's size before them. Locals: 0 the current
+ * epoch, 8 a flag, 16 the current epoch's target balance.
+ */
+SPEC_FUNCTION node_reward_totals
+    ENTER 32
+    mv      s1, a0
+    mv      s2, a1
+    mv      s5, a2
+    mv      s3, a3
+    mv      s4, a4
+.if FORK == FORK_PHASE0
+    NEED_SCRATCH_B s3, s1, 6, PENDING_REFS_BYTES, 9f
+.else
+    NEED_SCRATCH s3, s1, 3, 9f
+.endif
+    ld      s7, 0(s3)
+    LDQ     s6, s1, BeaconState_validators + 8
+    sd      zero, 16(sp)
+    mv      a0, s1
+    mv      a1, s4
+    call    lantern_get_previous_epoch
+    mv      a0, s1
+    mv      a1, sp
+    call    lantern_get_current_epoch
+    sd      s5, 64(s4)
+    LDQ     t0, s2, CONFIG_INACTIVITY_SCORE_BIAS
+    LDQ     t1, s2, CONFIG_INACTIVITY_SCORE_RECOVERY_RATE
+    sd      t0, 80(s4)
+    sd      t1, 88(s4)
+    li      t0, MAX_EFFECTIVE_BALANCE       # the largest effective balance of the fork of the previous epoch
+.if FORK >= FORK_ELECTRA
+    li      t0, MAX_EFFECTIVE_BALANCE_ELECTRA
+.if FORK == FORK_ELECTRA
+    LDQ     t1, s1, BeaconState_fork + Fork_epoch   # before the state's fork: deneb's
+    ld      t2, 0(s4)
+    bgeu    t2, t1, 1f
+    li      t0, MAX_EFFECTIVE_BALANCE
+1:
+.endif
+.endif
+    sd      t0, 72(s4)
+    mv      a0, s1
+    mv      a1, s3
+    addi    a2, s4, 24
+    call    lantern_get_total_active_balance
+    bnez    a0, 99f
+.if FORK == FORK_PHASE0
+    addi    a0, s4, 24
+    addi    a1, s4, 32
+    call    lantern_integer_squareroot
+    TAKE_REFS s8, s3, s9
+    TOTALS_PENDING lantern_get_matching_source_attestations, s4, s4, 40
+    TOTALS_PENDING lantern_get_matching_target_attestations, s4, s4, 48
+    TOTALS_PENDING lantern_get_matching_head_attestations, s4, s4, 56
+    beqz    s5, 5f
+    ld      t0, 0(sp)
+    li      t1, GENESIS_EPOCH + 1
+    bleu    t0, t1, 5f
+    mv      t3, sp
+    TOTALS_PENDING lantern_get_matching_target_attestations, t3, sp, 16
+.else
+    mv      a0, s1
+    mv      a1, s3
+    addi    a2, s4, 32
+    call    lantern_get_base_reward_per_increment
+    bnez    a0, 99f
+    SCRATCH_LIST s8, s3, s7, 0, s6
+    TOTALS_FLAG TIMELY_SOURCE_FLAG_INDEX, s4, s4, 40
+    TOTALS_FLAG TIMELY_TARGET_FLAG_INDEX, s4, s4, 48
+    TOTALS_FLAG TIMELY_HEAD_FLAG_INDEX, s4, s4, 56
+    beqz    s5, 5f
+    ld      t0, 0(sp)
+    li      t1, GENESIS_EPOCH + 1
+    bleu    t0, t1, 5f
+    mv      t3, sp
+    TOTALS_FLAG TIMELY_TARGET_FLAG_INDEX, t3, sp, 16
+.endif
+5:  LDQ     t2, s1, BeaconState_finalized_checkpoint + Checkpoint_epoch
+    beqz    s5, 6f                          # mode 1: the finalized epoch weigh_justification_and_finalization would leave
+    ld      t3, 0(sp)
+    li      t0, GENESIS_EPOCH + 1
+    bleu    t3, t0, 6f
+    ADDQ    t0, s1, BeaconState_justification_bits
+    lbu     t4, 0(t0)
+    slli    t4, t4, 1
+    andi    t4, t4, 0xf
+    ld      t0, 24(s4)
+    slli    t0, t0, 1                       # total * 2
+    ld      t1, 48(s4)
+    slli    t5, t1, 1
+    add     t1, t1, t5
+    bltu    t1, t0, 51f
+    ori     t4, t4, 2
+51: ld      t1, 16(sp)
+    slli    t5, t1, 1
+    add     t1, t1, t5
+    bltu    t1, t0, 52f
+    ori     t4, t4, 1
+52: LDQ     a2, s1, BeaconState_previous_justified_checkpoint + Checkpoint_epoch
+    LDQ     a3, s1, BeaconState_current_justified_checkpoint + Checkpoint_epoch
+    andi    t0, t4, 0xe                     # the four rules in spec order: bits[1:4], bits[1:3], bits[0:3], bits[0:2]
+    li      t1, 0xe
+    bne     t0, t1, 53f
+    addi    t1, a2, 3
+    bne     t1, t3, 53f
+    mv      t2, a2
+53: andi    t0, t4, 0x6
+    li      t1, 0x6
+    bne     t0, t1, 54f
+    addi    t1, a2, 2
+    bne     t1, t3, 54f
+    mv      t2, a2
+54: andi    t0, t4, 0x7
+    li      t1, 0x7
+    bne     t0, t1, 55f
+    addi    t1, a3, 2
+    bne     t1, t3, 55f
+    mv      t2, a3
+55: andi    t0, t4, 0x3
+    li      t1, 0x3
+    bne     t0, t1, 6f
+    addi    t1, a3, 1
+    bne     t1, t3, 6f
+    mv      t2, a3
+6:  ld      t0, 0(s4)                       # get_finality_delay, and the leak
+    sub     t0, t0, t2
+    sd      t0, 8(s4)
+    li      t1, MIN_EPOCHS_TO_INACTIVITY_PENALTY
+    sltu    t1, t1, t0
+    sd      t1, 16(s4)
+    li      a0, LANTERN_OK
+99: sd      s7, 0(s3)
+    LEAVE 32
+9:  li      a0, LANTERN_BUFFER_TOO_SMALL
+    LEAVE 32
+SPEC_END node_reward_totals
+
+.if FORK == FORK_PHASE0
+/* The vote's item at ioff: base_reward in a leak, else base_reward * its attesting increments // the active increments. */
+.macro IDEAL_VOTE boff, ioff
+    ld      t2, \boff(a0)
+    divu    t2, t2, a3
+    mul     t2, t0, t2
+    divu    t2, t2, a4
+    beqz    a5, 1f
+    mv      t2, t0
+1:  sd      t2, \ioff(a2)
+.endm
+.else
+/* The flag's item at ioff: 0 in a leak, else base_reward * weight * its increments // (active_increments * WEIGHT_DENOMINATOR). */
+.macro IDEAL_FLAG boff, weight, ioff
+    ld      t2, \boff(a0)
+    divu    t2, t2, a3
+    li      t3, \weight
+    mul     t3, t0, t3
+    mul     t2, t3, t2
+    divu    t2, t2, a4
+    beqz    a5, 1f
+    li      t2, 0
+1:  sd      t2, \ioff(a2)
+.endm
+.endif
+
+/*
+ * (totals, effective_balance, out) -> a0: the item of a validator of the effective balance that
+ * voted for all three in time (node.md, lantern_node_ideal_reward). A leaf: uses a3-a5, t0-t3.
+ */
+SPEC_FUNCTION node_ideal_reward
+    UNWIND_END_PROLOGUE
+    li      a3, EFFECTIVE_BALANCE_INCREMENT
+    ld      a4, 24(a0)
+    divu    a4, a4, a3                      # the active increments
+    ld      a5, 16(a0)                      # the leak
+    sd      a1, 40(a2)
+.if FORK == FORK_PHASE0
+    li      t0, BASE_REWARD_FACTOR          # get_base_reward
+    mul     t0, a1, t0
+    ld      t1, 32(a0)
+    divu    t0, t0, t1
+    srli    t0, t0, 2
+    srli    t1, t0, 3                       # get_proposer_reward: // PROPOSER_REWARD_QUOTIENT
+    IDEAL_VOTE 56, 0
+    IDEAL_VOTE 48, 8
+    IDEAL_VOTE 40, 16
+    sub     t2, t0, t1                      # inclusion_delay at a delay of 1
+    sd      t2, 24(a2)
+    slli    t2, t0, 2                       # inactivity in a leak: -(BASE_REWARDS_PER_EPOCH * base_reward - the proposer's)
+    sub     t2, t2, t1
+    neg     t2, t2
+    bnez    a5, 1f
+    li      t2, 0
+1:  sd      t2, 32(a2)
+.else
+    divu    t0, a1, a3                      # base_reward: increments * get_base_reward_per_increment
+    ld      t1, 32(a0)
+    mul     t0, t0, t1
+    slli    a4, a4, 6
+    IDEAL_FLAG 56, TIMELY_HEAD_WEIGHT, 0
+    IDEAL_FLAG 48, TIMELY_TARGET_WEIGHT, 8
+    IDEAL_FLAG 40, TIMELY_SOURCE_WEIGHT, 16
+    sd      zero, 24(a2)
+    sd      zero, 32(a2)
+.endif
+    li      a0, LANTERN_OK
+    ret
+SPEC_END node_ideal_reward
+
+.if FORK == FORK_PHASE0
+/* Each validator of the window among the attesting indices of the attestations of getter: its status byte takes bit; with lowest 1, its delay byte the lowest inclusion_delay. */
+.macro WINDOW_MARK getter, bit, lowest
+    mv      a0, s1
+    mv      a1, s3
+    mv      a2, s8
+    call    \getter
+    bnez    a0, 99f
+    addi    t0, s8, LIST_FIXED
+    ld      t1, LIST_COUNT(s8)
+    sd      t0, 16(sp)
+    sd      t1, 24(sp)
+71: ld      t0, 16(sp)
+    ld      t1, 24(sp)
+    beqz    t1, 79f
+    ld      t2, 0(t0)
+    addi    t0, t0, 8
+    addi    t1, t1, -1
+    sd      t0, 16(sp)
+    sd      t1, 24(sp)
+    add     a1, s1, t2
+    sd      a1, 32(sp)
+    SCRATCH_GIVE s6, s10, 2, s9
+    mv      a0, s1
+    ld      a1, 32(sp)
+    mv      a2, s2
+    mv      a3, s6
+    SCRATCH_LIST a4, s6, s10, 1, s9
+    call    lantern_get_attesting_indices
+    sd      s10, 0(s6)
+    bnez    a0, 99f
+    ld      t0, 32(sp)
+    ld      t4, PendingAttestation_inclusion_delay(t0)
+    SCRATCH_LIST t0, s6, s10, 1, s9
+    ld      t1, LIST_COUNT(t0)
+    addi    t0, t0, LIST_FIXED
+    ld      t3, 40(sp)                      # the status bytes
+72: beqz    t1, 71b
+    ld      t2, 0(t0)
+    addi    t0, t0, 8
+    addi    t1, t1, -1
+    bltu    t2, s4, 72b
+    sub     t2, t2, s4
+    bgeu    t2, s5, 72b
+    slli    t2, t2, 1
+    add     t2, t3, t2
+    lbu     a5, 0(t2)
+    ori     a5, a5, \bit
+    sb      a5, 0(t2)
+.if \lowest
+    lbu     a5, 1(t2)
+    bgeu    t4, a5, 72b
+    sb      t4, 1(t2)
+.endif
+    j       72b
+79:
+.endm
+
+/* The vote's item at ioff: an attester, base_reward in a leak, else base_reward * its attesting increments // the active increments; another, -base_reward. */
+.macro WINDOW_VOTE bit, boff, ioff
+    andi    a7, a5, (1 << \bit)
+    beqz    a7, 91f
+    bnez    t5, 92f
+    ld      t4, \boff(s3)
+    divu    t4, t4, a1
+    mul     t4, a2, t4
+    divu    t4, t4, t6
+    sd      t4, \ioff(t2)
+    j       93f
+92: sd      a2, \ioff(t2)
+    j       93f
+91: neg     t4, a2
+    sd      t4, \ioff(t2)
+93:
+.endm
+.else
+/* The flag's item at ioff: participating, 0 in a leak, else base_reward * weight * its increments // (active_increments * WEIGHT_DENOMINATOR); not, with penal, -(base_reward * weight // WEIGHT_DENOMINATOR). */
+.macro REWARD_FLAG bit, weight, boff, ioff, penal
+    andi    a7, a5, (1 << \bit)
+    beqz    a7, 91f
+    bnez    t5, 92f
+    ld      t4, \boff(s3)
+    divu    t4, t4, a1
+    li      a6, \weight
+    mul     a6, a2, a6
+    mul     a6, a6, t4
+    divu    a6, a6, t6
+    sd      a6, \ioff(t2)
+    j       92f
+91:
+.if \penal
+    li      a6, \weight
+    mul     a6, a2, a6
+    srli    a6, a6, 6
+    neg     a6, a6
+    sd      a6, \ioff(t2)
+.endif
+92:
+.endm
+.endif
+
+/*
+ * (state, config, totals, first, count, scratch, out) -> a0: the attestation rewards of the
+ * validators first to first + count - 1 (node.md, lantern_node_attestation_rewards). s1 state, s2
+ * the CommitteeCache, s3 totals, s4 first, s5 count, s6 scratch, s7 out, s8 the validators
+ * (phase0: first the matching attestations), s9 the validator count, s10 the scratch's size. In
+ * the loop: t0 the place in the window, t1 the validator, t2 its item, t3 its Validator, a0 its
+ * effective balance, a1 EFFECTIVE_BALANCE_INCREMENT, a2 its base reward, a5 its flags, t5 the
+ * leak, t6 the active increments (from altair * WEIGHT_DENOMINATOR). Locals: 0 and 8 the previous
+ * epoch's participation (from altair) and its count, 16 and 24 the inactivity scores and their
+ * count (phase0: a list's cursor and count), 32 an attestation, 40 (phase0) a status and a delay
+ * byte for each validator of the window.
+ */
+SPEC_FUNCTION node_attestation_rewards
+    ENTER 48
+    mv      s7, a6                          # out first: the macros below use a6 and a7
+    mv      s1, a0
+    LDQ     s2, a1, CONFIG_COMMITTEE_CACHE
+    mv      s3, a2
+    mv      s4, a3
+    mv      s5, a4
+    mv      s6, a5
+    LDQ     s9, s1, BeaconState_validators + 8
+    add     t0, s4, s5
+    bltu    t0, s4, 96f
+    bgtu    t0, s9, 96f
+    ld      s10, 0(s6)
+.if FORK == FORK_PHASE0
+    NEED_SCRATCH_B s6, s1, 6, PENDING_REFS_BYTES, 97f
+    TAKE_REFS s8, s6, s10                   # s10: the scratch's size before the matching attestations
+    SCRATCH_LIST t0, s6, s10, 0, s9         # the window's bytes: no vote, no delay
+    addi    t0, t0, LIST_FIXED
+    sd      t0, 40(sp)
+    mv      t1, s5
+    li      t2, 0xff00
+1:  beqz    t1, 2f
+    sh      t2, 0(t0)
+    addi    t0, t0, 2
+    addi    t1, t1, -1
+    j       1b
+2:  WINDOW_MARK lantern_get_matching_source_attestations, 1, 1
+    WINDOW_MARK lantern_get_matching_target_attestations, 2, 0
+    WINDOW_MARK lantern_get_matching_head_attestations, 4, 0
+.else
+    NEED_SCRATCH s6, s1, 1, 97f
+    PART    t0, t1, s1, BeaconState_previous_epoch_participation
+    sd      t0, 0(sp)
+    sd      t1, 8(sp)
+    PART    t0, t1, s1, BeaconState_inactivity_scores
+    sd      t0, 16(sp)
+    sd      t1, 24(sp)
+.endif
+    PART    s8, t0, s1, BeaconState_validators
+    li      a1, EFFECTIVE_BALANCE_INCREMENT
+    ld      t6, 24(s3)
+    divu    t6, t6, a1                      # the active increments
+.if FORK >= FORK_ALTAIR
+    slli    t6, t6, 6                       # * WEIGHT_DENOMINATOR
+.endif
+    ld      t5, 16(s3)                      # the leak
+    li      t0, 0
+3:  bgeu    t0, s5, 8f
+    add     t1, s4, t0
+    li      t2, 48
+    mul     t2, t0, t2
+    add     t2, t2, s7                      # the item: 0
+    sd      zero, 0(t2)
+    sd      zero, 8(t2)
+    sd      zero, 16(t2)
+    sd      zero, 24(t2)
+    sd      zero, 32(t2)
+    sd      zero, 40(t2)
+    slli    t3, t1, 7
+    add     t3, s8, t3
+    ld      a6, 0(s3)                       # eligible: active in the previous epoch, or slashed and not yet withdrawable
+    ld      a7, Validator_activation_epoch(t3)
+    bgtu    a7, a6, 4f
+    ld      a7, Validator_exit_epoch(t3)
+    bltu    a6, a7, 5f
+4:  lbu     a7, Validator_slashed(t3)
+    beqz    a7, 7f
+    ld      a7, Validator_withdrawable_epoch(t3)
+    addi    a0, a6, 1
+    bgeu    a0, a7, 7f
+5:  li      a0, 1
+    sd      a0, 40(t2)
+    ld      a0, Validator_effective_balance(t3)
+.if FORK == FORK_PHASE0
+    li      a2, BASE_REWARD_FACTOR          # get_base_reward
+    mul     a2, a0, a2
+    ld      a3, 32(s3)
+    divu    a2, a2, a3
+    srli    a2, a2, 2
+    ld      a3, 40(sp)
+    slli    a4, t0, 1
+    add     a3, a3, a4
+    lbu     a5, 0(a3)                       # the window's status: 1 source, 2 target, 4 head
+    lbu     a4, 1(a3)                       # the lowest delay
+    lbu     a7, Validator_slashed(t3)       # unslashed attesters only
+    beqz    a7, 55f
+    li      a5, 0
+55: WINDOW_VOTE 0, 40, 16
+    WINDOW_VOTE 1, 48, 8
+    WINDOW_VOTE 2, 56, 0
+    srli    a3, a2, 3                       # get_proposer_reward
+    andi    a7, a5, 1
+    beqz    a7, 61f
+    sub     t4, a2, a3                      # inclusion_delay: the attester's part, // its lowest delay
+    divu    t4, t4, a4
+    sd      t4, 24(t2)
+61: beqz    t5, 7f                          # inactivity, in a leak
+    slli    t4, a2, 2
+    sub     t4, t4, a3
+    andi    a7, a5, 2
+    bnez    a7, 62f
+    ld      a6, 8(s3)                       # not a target attester: effective_balance * finality_delay // INACTIVITY_PENALTY_QUOTIENT
+    mul     a6, a0, a6
+    li      a7, INACTIVITY_PENALTY_QUOTIENT
+    divu    a6, a6, a7
+    add     t4, t4, a6
+62: neg     t4, t4
+    sd      t4, 32(t2)
+.else
+    divu    a2, a0, a1                      # base_reward
+    ld      a3, 32(s3)
+    mul     a2, a2, a3
+    ld      a3, 0(sp)                       # the flags, of an unslashed validator
+    ld      a4, 8(sp)
+    li      a5, 0
+    bgeu    t1, a4, 51f
+    add     a7, a3, t1
+    lbu     a5, 0(a7)
+51: lbu     a7, Validator_slashed(t3)
+    beqz    a7, 52f
+    li      a5, 0
+52: REWARD_FLAG TIMELY_SOURCE_FLAG_INDEX, TIMELY_SOURCE_WEIGHT, 40, 16, 1
+    REWARD_FLAG TIMELY_TARGET_FLAG_INDEX, TIMELY_TARGET_WEIGHT, 48, 8, 1
+    REWARD_FLAG TIMELY_HEAD_FLAG_INDEX, TIMELY_HEAD_WEIGHT, 56, 0, 0
+    andi    a7, a5, (1 << TIMELY_TARGET_FLAG_INDEX)   # inactivity: not a timely target
+    bnez    a7, 7f
+    ld      a3, 16(sp)
+    ld      a4, 24(sp)
+    li      t4, 0
+    bgeu    t1, a4, 56f
+    slli    a7, t1, 3
+    add     a7, a3, a7
+    ld      t4, 0(a7)
+56: ld      a6, 64(s3)                      # mode 1: its score as process_inactivity_updates leaves it
+    beqz    a6, 57f
+    ld      a6, 80(s3)
+    add     t4, t4, a6
+    bnez    t5, 57f
+    ld      a6, 88(s3)
+    bgeu    t4, a6, 58f
+    mv      a6, t4
+58: sub     t4, t4, a6
+57: mul     t4, a0, t4
+    ld      a6, 80(s3)
+    li      a7, FORK_INACTIVITY_PENALTY_QUOTIENT
+    mul     a6, a6, a7
+    divu    t4, t4, a6
+    neg     t4, t4
+    sd      t4, 32(t2)
+.endif
+7:  addi    t0, t0, 1
+    j       3b
+8:  li      a0, LANTERN_OK
+99:
+.if FORK == FORK_PHASE0
+    li      a7, PENDING_REFS_BYTES          # the scratch's size on entry
+    add     a7, s10, a7
+    sd      a7, 0(s6)
+.else
+    sd      s10, 0(s6)
+.endif
+    LEAVE 48
+96: li      a0, LANTERN_INVALID_ENCODING
+    LEAVE 48
+97: li      a0, LANTERN_BUFFER_TOO_SMALL
+    LEAVE 48
+SPEC_END node_attestation_rewards
+
 /* a0 = the fork's TypeDescriptor of the NODE_JSON_* kind t0, or 0. Uses t1. */
 LOCAL_FUNCTION node_type_of_kind
     UNWIND_END_PROLOGUE

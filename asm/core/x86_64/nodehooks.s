@@ -1624,6 +1624,599 @@ SPEC_FUNCTION node_sync_rewards
 SPEC_END node_sync_rewards
 .endif
 
+/* ---------------------------------------------------------------- Attestation rewards (beacon-api.md, getAttestationsRewards) */
+
+.if FORK >= FORK_ALTAIR
+/* The participating balance of the flag at the epoch (a memory operand) into out (a memory operand): get_total_balance of the unslashed participating indices. */
+.macro TOTALS_FLAG flag, epoch, out
+    movq    $\flag, (L+8)(%rsp)
+    mov     S7(%rsp), %rax
+    SCRATCH_GIVE %r12, %rax, 1, %r15
+    mov     %rbx, %rdi
+    lea     (L+8)(%rsp), %rsi
+    lea     \epoch, %rdx
+    mov     %r12, %rcx
+    mov     S8(%rsp), %r8
+    call    lantern_get_unslashed_participating_indices
+    mov     S7(%rsp), %rcx
+    mov     %rcx, (%r12)
+    test    %rax, %rax
+    jnz     99f
+    mov     %rbx, %rdi
+    mov     S8(%rsp), %rsi
+    lea     \out, %rdx
+    call    lantern_get_total_balance
+.endm
+.else
+/* The attesting balance of the attestations of getter at the epoch (a memory operand) into out (a memory operand): lantern_get_attesting_balance. */
+.macro TOTALS_PENDING getter, epoch, out
+    mov     %rbx, %rdi
+    lea     \epoch, %rsi
+    mov     S8(%rsp), %rdx
+    call    \getter
+    test    %rax, %rax
+    jnz     99f
+    mov     S9(%rsp), %rax
+    mov     %rax, (%r12)
+    mov     %rbx, %rdi
+    mov     S8(%rsp), %rsi
+    mov     %r12, %rdx
+    lea     \out, %rcx
+    call    lantern_get_attesting_balance
+    test    %rax, %rax
+    jnz     99f
+.endm
+.endif
+
+/*
+ * (state, config, mode, scratch, out) -> rax: the totals of the attestation rewards of the
+ * previous epoch (node.md, lantern_node_reward_totals). rbx state, rbp config, r12 scratch, r13
+ * out, r14 mode, r15 the validator count; S7 the scratch's size, S8 a list of indices (phase0: the
+ * matching attestations), S9 (phase0) the scratch's size before them. Locals: L the current
+ * epoch, L+8 a flag, L+16 the current epoch's target balance.
+ */
+SPEC_FUNCTION node_reward_totals
+    ENTER 32
+    mov     %rdi, %rbx
+    mov     %rsi, %rbp
+    mov     %rdx, %r14
+    mov     %rcx, %r12
+    mov     %r8, %r13
+.if FORK == FORK_PHASE0
+    NEED_SCRATCH_B %r12, %rbx, 6, PENDING_REFS_BYTES, 9f
+.else
+    NEED_SCRATCH %r12, %rbx, 3, 9f
+.endif
+    mov     (%r12), %rax
+    mov     %rax, S7(%rsp)
+    mov     (BeaconState_validators + 8)(%rbx), %r15
+    movq    $0, (L + 16)(%rsp)
+    mov     %rbx, %rdi
+    mov     %r13, %rsi
+    call    lantern_get_previous_epoch
+    mov     %rbx, %rdi
+    lea     L(%rsp), %rsi
+    call    lantern_get_current_epoch
+    mov     %r14, 64(%r13)
+    mov     CONFIG_INACTIVITY_SCORE_BIAS(%rbp), %rax
+    mov     %rax, 80(%r13)
+    mov     CONFIG_INACTIVITY_SCORE_RECOVERY_RATE(%rbp), %rax
+    mov     %rax, 88(%r13)
+    MOVQ    %rax, MAX_EFFECTIVE_BALANCE     # the largest effective balance of the fork of the previous epoch
+.if FORK >= FORK_ELECTRA
+    MOVQ    %rax, MAX_EFFECTIVE_BALANCE_ELECTRA
+.if FORK == FORK_ELECTRA
+    mov     (BeaconState_fork + Fork_epoch)(%rbx), %rcx     # before the state's fork: deneb's
+    cmp     %rcx, (%r13)
+    jae     1f
+    MOVQ    %rax, MAX_EFFECTIVE_BALANCE
+1:
+.endif
+.endif
+    mov     %rax, 72(%r13)
+    mov     %rbx, %rdi
+    mov     %r12, %rsi
+    lea     24(%r13), %rdx
+    call    lantern_get_total_active_balance
+    test    %rax, %rax
+    jnz     99f
+.if FORK == FORK_PHASE0
+    lea     24(%r13), %rdi
+    lea     32(%r13), %rsi
+    call    lantern_integer_squareroot
+    TAKE_REFS %rax, %r12, %rcx
+    mov     %rax, S8(%rsp)
+    mov     %rcx, S9(%rsp)
+    TOTALS_PENDING lantern_get_matching_source_attestations, (%r13), 40(%r13)
+    TOTALS_PENDING lantern_get_matching_target_attestations, (%r13), 48(%r13)
+    TOTALS_PENDING lantern_get_matching_head_attestations, (%r13), 56(%r13)
+    test    %r14, %r14
+    jz      5f
+    cmpq    $(GENESIS_EPOCH + 1), L(%rsp)
+    jbe     5f
+    TOTALS_PENDING lantern_get_matching_target_attestations, L(%rsp), (L+16)(%rsp)
+.else
+    mov     %rbx, %rdi
+    mov     %r12, %rsi
+    lea     32(%r13), %rdx
+    call    lantern_get_base_reward_per_increment
+    test    %rax, %rax
+    jnz     99f
+    mov     S7(%rsp), %rax
+    SCRATCH_LIST %rcx, %r12, %rax, 0, %r15
+    mov     %rcx, S8(%rsp)
+    TOTALS_FLAG TIMELY_SOURCE_FLAG_INDEX, (%r13), 40(%r13)
+    TOTALS_FLAG TIMELY_TARGET_FLAG_INDEX, (%r13), 48(%r13)
+    TOTALS_FLAG TIMELY_HEAD_FLAG_INDEX, (%r13), 56(%r13)
+    test    %r14, %r14
+    jz      5f
+    cmpq    $(GENESIS_EPOCH + 1), L(%rsp)
+    jbe     5f
+    TOTALS_FLAG TIMELY_TARGET_FLAG_INDEX, L(%rsp), (L+16)(%rsp)
+.endif
+5:  mov     (BeaconState_finalized_checkpoint + Checkpoint_epoch)(%rbx), %rdx
+    test    %r14, %r14                      # mode 1: the finalized epoch weigh_justification_and_finalization would leave
+    jz      6f
+    mov     L(%rsp), %r8
+    cmp     $(GENESIS_EPOCH + 1), %r8
+    jbe     6f
+    movzbl  BeaconState_justification_bits(%rbx), %ecx
+    shl     $1, %ecx
+    and     $0xf, %ecx
+    mov     24(%r13), %rsi
+    shl     $1, %rsi                        # total * 2
+    imul    $3, 48(%r13), %rax
+    cmp     %rsi, %rax
+    jb      51f
+    or      $2, %ecx
+51: imul    $3, (L + 16)(%rsp), %rax
+    cmp     %rsi, %rax
+    jb      52f
+    or      $1, %ecx
+52: mov     (BeaconState_previous_justified_checkpoint + Checkpoint_epoch)(%rbx), %r9
+    mov     (BeaconState_current_justified_checkpoint + Checkpoint_epoch)(%rbx), %r10
+    mov     %ecx, %eax                      # the four rules in spec order: bits[1:4], bits[1:3], bits[0:3], bits[0:2]
+    and     $0xe, %eax
+    cmp     $0xe, %eax
+    jne     53f
+    lea     3(%r9), %rax
+    cmp     %r8, %rax
+    cmove   %r9, %rdx
+53: mov     %ecx, %eax
+    and     $0x6, %eax
+    cmp     $0x6, %eax
+    jne     54f
+    lea     2(%r9), %rax
+    cmp     %r8, %rax
+    cmove   %r9, %rdx
+54: mov     %ecx, %eax
+    and     $0x7, %eax
+    cmp     $0x7, %eax
+    jne     55f
+    lea     2(%r10), %rax
+    cmp     %r8, %rax
+    cmove   %r10, %rdx
+55: mov     %ecx, %eax
+    and     $0x3, %eax
+    cmp     $0x3, %eax
+    jne     6f
+    lea     1(%r10), %rax
+    cmp     %r8, %rax
+    cmove   %r10, %rdx
+6:  mov     (%r13), %rax                    # get_finality_delay, and the leak
+    sub     %rdx, %rax
+    mov     %rax, 8(%r13)
+    xor     %ecx, %ecx
+    cmp     $MIN_EPOCHS_TO_INACTIVITY_PENALTY, %rax
+    seta    %cl
+    mov     %rcx, 16(%r13)
+    xor     %eax, %eax
+99: mov     S7(%rsp), %rcx
+    mov     %rcx, (%r12)
+    LEAVE 32
+9:  mov     $LANTERN_BUFFER_TOO_SMALL, %eax
+    LEAVE 32
+SPEC_END node_reward_totals
+
+.if FORK == FORK_PHASE0
+/* The vote's item at ioff: base_reward in a leak, else base_reward * its attesting increments // the active increments. */
+.macro IDEAL_VOTE boff, ioff
+    mov     \boff(%rdi), %rax
+    xor     %edx, %edx
+    div     %r9
+    imul    %rcx, %rax
+    xor     %edx, %edx
+    div     %r10
+    test    %r11, %r11
+    cmovnz  %rcx, %rax
+    mov     %rax, \ioff(%r8)
+.endm
+.else
+/* The flag's item at ioff: 0 in a leak, else base_reward * weight * its increments // (active_increments * WEIGHT_DENOMINATOR). */
+.macro IDEAL_FLAG boff, weight, ioff
+    mov     \boff(%rdi), %rax
+    xor     %edx, %edx
+    div     %r9
+    imul    $\weight, %rcx, %rsi
+    imul    %rsi, %rax
+    xor     %edx, %edx
+    div     %r10
+    xor     %esi, %esi
+    test    %r11, %r11
+    cmovnz  %rsi, %rax
+    mov     %rax, \ioff(%r8)
+.endm
+.endif
+
+/*
+ * (totals, effective_balance, out) -> rax: the item of a validator of the effective balance that
+ * voted for all three in time (node.md, lantern_node_ideal_reward). A leaf: uses rcx, rdx, rsi, r8-r11.
+ */
+SPEC_FUNCTION node_ideal_reward
+    UNWIND_END_PROLOGUE
+    mov     %rdx, %r8
+    mov     %rsi, 40(%r8)
+    MOVQ    %r9, EFFECTIVE_BALANCE_INCREMENT
+    mov     24(%rdi), %rax
+    xor     %edx, %edx
+    div     %r9
+    mov     %rax, %r10                      # the active increments
+    mov     16(%rdi), %r11                  # the leak
+.if FORK == FORK_PHASE0
+    imul    $BASE_REWARD_FACTOR, %rsi, %rax # get_base_reward
+    xor     %edx, %edx
+    divq    32(%rdi)
+    shr     $2, %rax
+    mov     %rax, %rcx
+    mov     %rcx, %rsi
+    shr     $3, %rsi                        # get_proposer_reward: // PROPOSER_REWARD_QUOTIENT
+    IDEAL_VOTE 56, 0
+    IDEAL_VOTE 48, 8
+    IDEAL_VOTE 40, 16
+    mov     %rcx, %rax                      # inclusion_delay at a delay of 1
+    sub     %rsi, %rax
+    mov     %rax, 24(%r8)
+    lea     (,%rcx,4), %rax                 # inactivity in a leak: -(BASE_REWARDS_PER_EPOCH * base_reward - the proposer's)
+    sub     %rsi, %rax
+    neg     %rax
+    xor     %edx, %edx
+    test    %r11, %r11
+    cmovz   %rdx, %rax
+    mov     %rax, 32(%r8)
+.else
+    mov     %rsi, %rax                      # base_reward: increments * get_base_reward_per_increment
+    xor     %edx, %edx
+    div     %r9
+    imul    32(%rdi), %rax
+    mov     %rax, %rcx
+    shl     $6, %r10
+    IDEAL_FLAG 56, TIMELY_HEAD_WEIGHT, 0
+    IDEAL_FLAG 48, TIMELY_TARGET_WEIGHT, 8
+    IDEAL_FLAG 40, TIMELY_SOURCE_WEIGHT, 16
+    movq    $0, 24(%r8)
+    movq    $0, 32(%r8)
+.endif
+    xor     %eax, %eax
+    ret
+SPEC_END node_ideal_reward
+
+.if FORK == FORK_PHASE0
+/* Each validator of the window among the attesting indices of the attestations of getter: its status byte takes bit; with lowest 1, its delay byte the lowest inclusion_delay. */
+.macro WINDOW_MARK getter, bit, lowest
+    mov     %rbx, %rdi
+    mov     %r12, %rsi
+    mov     S8(%rsp), %rdx
+    call    \getter
+    test    %rax, %rax
+    jnz     99f
+    mov     S8(%rsp), %rax
+    mov     LIST_COUNT(%rax), %rcx
+    add     $LIST_FIXED, %rax
+    mov     %rax, (L + 16)(%rsp)
+    mov     %rcx, (L + 24)(%rsp)
+71: mov     (L + 16)(%rsp), %rax
+    cmpq    $0, (L + 24)(%rsp)
+    je      79f
+    mov     (%rax), %rsi
+    add     $8, %rax
+    mov     %rax, (L + 16)(%rsp)
+    decq    (L + 24)(%rsp)
+    add     %rbx, %rsi
+    mov     %rsi, (L + 32)(%rsp)
+    mov     S10(%rsp), %rax
+    mov     S9(%rsp), %rdx
+    SCRATCH_GIVE %r15, %rax, 2, %rdx
+    mov     %rbx, %rdi
+    mov     (L + 32)(%rsp), %rsi
+    mov     %rbp, %rdx
+    mov     %r15, %rcx
+    mov     S10(%rsp), %rax
+    mov     S9(%rsp), %r9
+    SCRATCH_LIST %r8, %r15, %rax, 1, %r9
+    call    lantern_get_attesting_indices
+    mov     S10(%rsp), %rcx
+    mov     %rcx, (%r15)
+    test    %rax, %rax
+    jnz     99f
+    mov     (L + 32)(%rsp), %rax
+    mov     PendingAttestation_inclusion_delay(%rax), %r9
+    mov     S10(%rsp), %rax
+    mov     S9(%rsp), %rdx
+    SCRATCH_LIST %rsi, %r15, %rax, 1, %rdx
+    mov     LIST_COUNT(%rsi), %rcx
+    add     $LIST_FIXED, %rsi
+    mov     (L + 40)(%rsp), %rdi            # the status bytes
+72: test    %rcx, %rcx
+    jz      71b
+    mov     (%rsi), %rax
+    add     $8, %rsi
+    dec     %rcx
+    sub     %r13, %rax
+    jb      72b
+    cmp     %r14, %rax
+    jae     72b
+    orb     $\bit, (%rdi,%rax,2)
+.if \lowest
+    movzbl  1(%rdi,%rax,2), %edx
+    cmp     %rdx, %r9
+    jae     72b
+    mov     %r9b, 1(%rdi,%rax,2)
+.endif
+    jmp     72b
+79:
+.endm
+
+/* The vote's item at ioff: an attester, base_reward in a leak, else base_reward * its attesting increments // the active increments; another, -base_reward. */
+.macro WINDOW_VOTE bit, boff, ioff
+    test    $(1 << \bit), %cl
+    jz      91f
+    cmpq    $0, (L + 56)(%rsp)
+    jne     92f
+    mov     \boff(%r12), %rax
+    xor     %edx, %edx
+    MOVQ    %r10, EFFECTIVE_BALANCE_INCREMENT
+    div     %r10
+    imul    %rdi, %rax
+    xor     %edx, %edx
+    divq    (L + 48)(%rsp)
+    mov     %rax, \ioff(%r8)
+    jmp     93f
+92: mov     %rdi, \ioff(%r8)
+    jmp     93f
+91: mov     %rdi, %rax
+    neg     %rax
+    mov     %rax, \ioff(%r8)
+93:
+.endm
+.else
+/* The flag's item at ioff: participating, 0 in a leak, else base_reward * weight * its increments // (active_increments * WEIGHT_DENOMINATOR); not, with penal, -(base_reward * weight // WEIGHT_DENOMINATOR). */
+.macro REWARD_FLAG bit, weight, boff, ioff, penal
+    test    $(1 << \bit), %cl
+    jz      91f
+    cmpq    $0, (L + 56)(%rsp)
+    jne     92f
+    mov     \boff(%r12), %rax
+    xor     %edx, %edx
+    MOVQ    %r10, EFFECTIVE_BALANCE_INCREMENT
+    div     %r10
+    imul    $\weight, %rdi, %r10
+    imul    %r10, %rax
+    xor     %edx, %edx
+    divq    (L + 48)(%rsp)
+    mov     %rax, \ioff(%r8)
+    jmp     92f
+91:
+.if \penal
+    imul    $\weight, %rdi, %rax
+    shr     $6, %rax
+    neg     %rax
+    mov     %rax, \ioff(%r8)
+.endif
+92:
+.endm
+.endif
+
+/*
+ * (state, config, totals, first, count, scratch, out) -> rax: the attestation rewards of the
+ * validators first to first + count - 1 (node.md, lantern_node_attestation_rewards). rbx state,
+ * rbp the CommitteeCache, r12 totals, r13 first, r14 count, r15 scratch; S7 out, S8 the validators
+ * (phase0: first the matching attestations), S9 the validator count, S10 the scratch's size.
+ * Locals: L and L+8 the previous epoch's participation (from altair) and its count, L+16 and L+24
+ * the inactivity scores and their count (phase0: a list's cursor and count), L+32 an attestation,
+ * L+40 (phase0) a status and a delay byte for each validator of the window, L+48 the active
+ * increments (from altair * WEIGHT_DENOMINATOR), L+56 the leak, L+64 the place in the window,
+ * L+72 the effective balance.
+ */
+SPEC_FUNCTION node_attestation_rewards
+    ENTER 80
+    mov     %rdi, %rbx
+    mov     CONFIG_COMMITTEE_CACHE(%rsi), %rbp
+    mov     %rdx, %r12
+    mov     %rcx, %r13
+    mov     %r8, %r14
+    mov     %r9, %r15
+    mov     (80 + 96)(%rsp), %rax           # the seventh argument
+    mov     %rax, S7(%rsp)
+    mov     (BeaconState_validators + 8)(%rbx), %rax
+    mov     %rax, S9(%rsp)
+    mov     %r13, %rcx
+    add     %r14, %rcx
+    jc      96f
+    cmp     %rax, %rcx
+    ja      96f
+    mov     (%r15), %rax
+    mov     %rax, S10(%rsp)
+.if FORK == FORK_PHASE0
+    NEED_SCRATCH_B %r15, %rbx, 6, PENDING_REFS_BYTES, 97f
+    TAKE_REFS %rax, %r15, %rcx              # S10: the scratch's size before the matching attestations
+    mov     %rax, S8(%rsp)
+    mov     %rcx, S10(%rsp)
+    mov     S9(%rsp), %rdx
+    SCRATCH_LIST %rdi, %r15, %rcx, 0, %rdx  # the window's bytes: no vote, no delay
+    add     $LIST_FIXED, %rdi
+    mov     %rdi, (L + 40)(%rsp)
+    mov     %r14, %rcx
+    mov     $0xff00, %eax
+1:  test    %rcx, %rcx
+    jz      2f
+    mov     %ax, (%rdi)
+    add     $2, %rdi
+    dec     %rcx
+    jmp     1b
+2:  WINDOW_MARK lantern_get_matching_source_attestations, 1, 1
+    WINDOW_MARK lantern_get_matching_target_attestations, 2, 0
+    WINDOW_MARK lantern_get_matching_head_attestations, 4, 0
+.else
+    NEED_SCRATCH %r15, %rbx, 1, 97f
+    PART    %rax, %rcx, %rbx, BeaconState_previous_epoch_participation
+    mov     %rax, L(%rsp)
+    mov     %rcx, (L + 8)(%rsp)
+    PART    %rax, %rcx, %rbx, BeaconState_inactivity_scores
+    mov     %rax, (L + 16)(%rsp)
+    mov     %rcx, (L + 24)(%rsp)
+.endif
+    PART    %rax, %rcx, %rbx, BeaconState_validators
+    mov     %rax, S8(%rsp)
+    mov     24(%r12), %rax
+    xor     %edx, %edx
+    MOVQ    %rcx, EFFECTIVE_BALANCE_INCREMENT
+    div     %rcx                            # the active increments
+.if FORK >= FORK_ALTAIR
+    shl     $6, %rax                        # * WEIGHT_DENOMINATOR
+.endif
+    mov     %rax, (L + 48)(%rsp)
+    mov     16(%r12), %rax                  # the leak
+    mov     %rax, (L + 56)(%rsp)
+    movq    $0, (L + 64)(%rsp)
+3:  mov     (L + 64)(%rsp), %rax
+    cmp     %r14, %rax
+    jae     8f
+    lea     (%r13,%rax), %rsi               # the validator
+    imul    $48, %rax, %r8
+    add     S7(%rsp), %r8                   # the item: 0
+    xor     %edx, %edx
+    mov     %rdx, (%r8)
+    mov     %rdx, 8(%r8)
+    mov     %rdx, 16(%r8)
+    mov     %rdx, 24(%r8)
+    mov     %rdx, 32(%r8)
+    mov     %rdx, 40(%r8)
+    mov     %rsi, %r9
+    shl     $7, %r9
+    add     S8(%rsp), %r9
+    mov     (%r12), %rdx                    # eligible: active in the previous epoch, or slashed and not yet withdrawable
+    cmp     Validator_activation_epoch(%r9), %rdx
+    jb      4f
+    cmp     Validator_exit_epoch(%r9), %rdx
+    jb      5f
+4:  cmpb    $0, Validator_slashed(%r9)
+    je      7f
+    lea     1(%rdx), %rax
+    cmp     Validator_withdrawable_epoch(%r9), %rax
+    jae     7f
+5:  movq    $1, 40(%r8)
+    mov     Validator_effective_balance(%r9), %rax
+    mov     %rax, (L + 72)(%rsp)
+.if FORK == FORK_PHASE0
+    imul    $BASE_REWARD_FACTOR, %rax, %rax # get_base_reward
+    xor     %edx, %edx
+    divq    32(%r12)
+    shr     $2, %rax
+    mov     %rax, %rdi
+    mov     (L + 40)(%rsp), %r10
+    mov     (L + 64)(%rsp), %rax
+    movzbl  (%r10,%rax,2), %ecx             # the window's status: 1 source, 2 target, 4 head
+    movzbl  1(%r10,%rax,2), %r11d           # the lowest delay
+    cmpb    $0, Validator_slashed(%r9)      # unslashed attesters only
+    je      55f
+    xor     %ecx, %ecx
+55: WINDOW_VOTE 0, 40, 16
+    WINDOW_VOTE 1, 48, 8
+    WINDOW_VOTE 2, 56, 0
+    mov     %rdi, %r10
+    shr     $3, %r10                        # get_proposer_reward
+    test    $1, %cl
+    jz      61f
+    mov     %rdi, %rax                      # inclusion_delay: the attester's part, // its lowest delay
+    sub     %r10, %rax
+    xor     %edx, %edx
+    div     %r11
+    mov     %rax, 24(%r8)
+61: cmpq    $0, (L + 56)(%rsp)              # inactivity, in a leak
+    je      7f
+    lea     (,%rdi,4), %r11
+    sub     %r10, %r11
+    test    $2, %cl
+    jnz     62f
+    mov     (L + 72)(%rsp), %rax            # not a target attester: effective_balance * finality_delay // INACTIVITY_PENALTY_QUOTIENT
+    imul    8(%r12), %rax
+    xor     %edx, %edx
+    MOVQ    %r10, INACTIVITY_PENALTY_QUOTIENT
+    div     %r10
+    add     %rax, %r11
+62: neg     %r11
+    mov     %r11, 32(%r8)
+.else
+    xor     %edx, %edx                      # base_reward
+    MOVQ    %rcx, EFFECTIVE_BALANCE_INCREMENT
+    div     %rcx
+    imul    32(%r12), %rax
+    mov     %rax, %rdi
+    xor     %ecx, %ecx                      # the flags, of an unslashed validator
+    cmp     (L + 8)(%rsp), %rsi
+    jae     51f
+    mov     L(%rsp), %r10
+    movzbl  (%r10,%rsi), %ecx
+51: cmpb    $0, Validator_slashed(%r9)
+    je      52f
+    xor     %ecx, %ecx
+52: REWARD_FLAG TIMELY_SOURCE_FLAG_INDEX, TIMELY_SOURCE_WEIGHT, 40, 16, 1
+    REWARD_FLAG TIMELY_TARGET_FLAG_INDEX, TIMELY_TARGET_WEIGHT, 48, 8, 1
+    REWARD_FLAG TIMELY_HEAD_FLAG_INDEX, TIMELY_HEAD_WEIGHT, 56, 0, 0
+    test    $(1 << TIMELY_TARGET_FLAG_INDEX), %cl   # inactivity: not a timely target
+    jnz     7f
+    xor     %eax, %eax
+    cmp     (L + 24)(%rsp), %rsi
+    jae     56f
+    mov     (L + 16)(%rsp), %r10
+    mov     (%r10,%rsi,8), %rax
+56: cmpq    $0, 64(%r12)                    # mode 1: its score as process_inactivity_updates leaves it
+    je      57f
+    add     80(%r12), %rax
+    cmpq    $0, (L + 56)(%rsp)
+    jne     57f
+    mov     88(%r12), %r10
+    cmp     %r10, %rax
+    cmovb   %rax, %r10
+    sub     %r10, %rax
+57: imul    (L + 72)(%rsp), %rax
+    mov     80(%r12), %r10
+    MOVQ    %r11, FORK_INACTIVITY_PENALTY_QUOTIENT
+    imul    %r11, %r10
+    xor     %edx, %edx
+    div     %r10
+    neg     %rax
+    mov     %rax, 32(%r8)
+.endif
+7:  incq    (L + 64)(%rsp)
+    jmp     3b
+8:  xor     %eax, %eax
+99:
+.if FORK == FORK_PHASE0
+    MOVQ    %rcx, PENDING_REFS_BYTES        # the scratch's size on entry
+    add     S10(%rsp), %rcx
+    mov     %rcx, (%r15)
+.else
+    mov     S10(%rsp), %rcx
+    mov     %rcx, (%r15)
+.endif
+    LEAVE 80
+96: mov     $LANTERN_INVALID_ENCODING, %eax
+    LEAVE 80
+97: mov     $LANTERN_BUFFER_TOO_SMALL, %eax
+    LEAVE 80
+SPEC_END node_attestation_rewards
+
 /* rdi = the fork's TypeDescriptor of the NODE_JSON_* kind r10, or 0. Uses rdi. */
 LOCAL_FUNCTION node_type_of_kind
     UNWIND_END_PROLOGUE

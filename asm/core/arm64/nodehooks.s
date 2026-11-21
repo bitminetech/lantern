@@ -1531,6 +1531,518 @@ SPEC_FUNCTION node_sync_rewards
 SPEC_END node_sync_rewards
 .endif
 
+/* ---------------------------------------------------------------- Attestation rewards (beacon-api.md, getAttestationsRewards) */
+
+.if FORK >= FORK_ALTAIR
+/* The participating balance of the flag at the previous epoch into out + off: get_total_balance of the unslashed participating indices. */
+.macro TOTALS_FLAG flag, epoch, base, off
+    mov     x9, #\flag
+    str     x9, [sp, #(L + 8)]
+    SCRATCH_GIVE x21, x25, 1, x24
+    mov     x0, x19
+    add     x1, sp, #(L + 8)
+    mov     x2, \epoch
+    mov     x3, x21
+    mov     x4, x26
+    bl      lantern_get_unslashed_participating_indices
+    str     x25, [x21]
+    cbnz    x0, 99f
+    mov     x0, x19
+    mov     x1, x26
+    add     x2, \base, \off
+    bl      lantern_get_total_balance
+.endm
+.else
+/* The attesting balance of the attestations of getter at the epoch into the u64 at addr: lantern_get_attesting_balance. */
+.macro TOTALS_PENDING getter, epoch, base, off
+    mov     x0, x19
+    mov     x1, \epoch
+    mov     x2, x26
+    bl      \getter
+    cbnz    x0, 99f
+    str     x27, [x21]
+    mov     x0, x19
+    mov     x1, x26
+    mov     x2, x21
+    add     x3, \base, \off
+    bl      lantern_get_attesting_balance
+    cbnz    x0, 99f
+.endm
+.endif
+
+/*
+ * (state, config, mode, scratch, out) -> status: the totals of the attestation rewards of the
+ * previous epoch (node.md, lantern_node_reward_totals). x19 state, x20 config, x21 scratch, x22
+ * out, x23 mode, x24 the validator count, x25 the scratch's size, x26 a list of indices (phase0:
+ * the matching attestations), x27 (phase0) the scratch's size before them. Locals: L the current
+ * epoch, L+8 a flag, L+16 the current epoch's target balance.
+ */
+SPEC_FUNCTION node_reward_totals
+    ENTER 32
+    mov     x19, x0
+    mov     x20, x1
+    mov     x23, x2
+    mov     x21, x3
+    mov     x22, x4
+.if FORK == FORK_PHASE0
+    NEED_SCRATCH_B x21, x19, 6, PENDING_REFS_BYTES, 9f
+.else
+    NEED_SCRATCH x21, x19, 3, 9f
+.endif
+    ldr     x25, [x21]
+    LDQ     x24, x19, BeaconState_validators + 8
+    str     xzr, [sp, #(L + 16)]
+    mov     x0, x19
+    mov     x1, x22
+    bl      lantern_get_previous_epoch
+    mov     x0, x19
+    add     x1, sp, #L
+    bl      lantern_get_current_epoch
+    str     x23, [x22, #64]
+    ldr     x9, [x20, #CONFIG_INACTIVITY_SCORE_BIAS]
+    ldr     x10, [x20, #CONFIG_INACTIVITY_SCORE_RECOVERY_RATE]
+    stp     x9, x10, [x22, #80]
+    MOVQ    x9, MAX_EFFECTIVE_BALANCE       /* the largest effective balance of the fork of the previous epoch */
+.if FORK >= FORK_ELECTRA
+    MOVQ    x9, MAX_EFFECTIVE_BALANCE_ELECTRA
+.if FORK == FORK_ELECTRA
+    LDQ     x10, x19, BeaconState_fork + Fork_epoch     /* before the state's fork: deneb's */
+    ldr     x11, [x22]
+    cmp     x11, x10
+    b.hs    1f
+    MOVQ    x9, MAX_EFFECTIVE_BALANCE
+1:
+.endif
+.endif
+    str     x9, [x22, #72]
+    mov     x0, x19
+    mov     x1, x21
+    add     x2, x22, #24
+    bl      lantern_get_total_active_balance
+    cbnz    x0, 99f
+.if FORK == FORK_PHASE0
+    add     x0, x22, #24
+    add     x1, x22, #32
+    bl      lantern_integer_squareroot
+    TAKE_REFS x26, x21, x27
+    TOTALS_PENDING lantern_get_matching_source_attestations, x22, x22, #40
+    TOTALS_PENDING lantern_get_matching_target_attestations, x22, x22, #48
+    TOTALS_PENDING lantern_get_matching_head_attestations, x22, x22, #56
+    cbz     x23, 5f
+    ldr     x9, [sp, #L]
+    cmp     x9, #(GENESIS_EPOCH + 1)
+    b.ls    5f
+    add     x10, sp, #L
+    TOTALS_PENDING lantern_get_matching_target_attestations, x10, sp, #(L + 16)
+.else
+    mov     x0, x19
+    mov     x1, x21
+    add     x2, x22, #32
+    bl      lantern_get_base_reward_per_increment
+    cbnz    x0, 99f
+    SCRATCH_LIST x26, x21, x25, 0, x24
+    TOTALS_FLAG TIMELY_SOURCE_FLAG_INDEX, x22, x22, #40
+    TOTALS_FLAG TIMELY_TARGET_FLAG_INDEX, x22, x22, #48
+    TOTALS_FLAG TIMELY_HEAD_FLAG_INDEX, x22, x22, #56
+    cbz     x23, 5f
+    ldr     x9, [sp, #L]
+    cmp     x9, #(GENESIS_EPOCH + 1)
+    b.ls    5f
+    add     x10, sp, #L
+    TOTALS_FLAG TIMELY_TARGET_FLAG_INDEX, x10, sp, #(L + 16)
+.endif
+5:  LDQ     x12, x19, BeaconState_finalized_checkpoint + Checkpoint_epoch
+    cbz     x23, 6f                         /* mode 1: the finalized epoch weigh_justification_and_finalization would leave */
+    ldr     x13, [sp, #L]
+    cmp     x13, #(GENESIS_EPOCH + 1)
+    b.ls    6f
+    ADDQ    x9, x19, BeaconState_justification_bits
+    ldrb    w14, [x9]
+    lsl     w14, w14, #1
+    and     w14, w14, #0xf
+    ldr     x10, [x22, #24]
+    lsl     x10, x10, #1                    /* total * 2 */
+    mov     x9, #3
+    ldr     x11, [x22, #48]
+    mul     x11, x11, x9
+    cmp     x11, x10
+    b.lo    51f
+    orr     w14, w14, #2
+51: ldr     x11, [sp, #(L + 16)]
+    mul     x11, x11, x9
+    cmp     x11, x10
+    b.lo    52f
+    orr     w14, w14, #1
+52: LDQ     x9, x19, BeaconState_previous_justified_checkpoint + Checkpoint_epoch
+    LDQ     x10, x19, BeaconState_current_justified_checkpoint + Checkpoint_epoch
+    and     w11, w14, #0xe                  /* the four rules in spec order: bits[1:4], bits[1:3], bits[0:3], bits[0:2] */
+    cmp     w11, #0xe
+    b.ne    53f
+    add     x15, x9, #3
+    cmp     x15, x13
+    csel    x12, x9, x12, eq
+53: and     w11, w14, #0x6
+    cmp     w11, #0x6
+    b.ne    54f
+    add     x15, x9, #2
+    cmp     x15, x13
+    csel    x12, x9, x12, eq
+54: and     w11, w14, #0x7
+    cmp     w11, #0x7
+    b.ne    55f
+    add     x15, x10, #2
+    cmp     x15, x13
+    csel    x12, x10, x12, eq
+55: and     w11, w14, #0x3
+    cmp     w11, #0x3
+    b.ne    6f
+    add     x15, x10, #1
+    cmp     x15, x13
+    csel    x12, x10, x12, eq
+6:  ldr     x9, [x22]                       /* get_finality_delay, and the leak */
+    sub     x9, x9, x12
+    str     x9, [x22, #8]
+    cmp     x9, #MIN_EPOCHS_TO_INACTIVITY_PENALTY
+    cset    x9, hi
+    str     x9, [x22, #16]
+    mov     x0, #LANTERN_OK
+99: str     x25, [x21]
+    LEAVE 32
+9:  mov     x0, #LANTERN_BUFFER_TOO_SMALL
+    LEAVE 32
+SPEC_END node_reward_totals
+
+.if FORK == FORK_PHASE0
+/* The vote's item at ioff: base_reward in a leak, else base_reward * its attesting increments // the active increments. */
+.macro IDEAL_VOTE boff, ioff
+    ldr     x10, [x0, #\boff]
+    udiv    x10, x10, x3
+    mul     x10, x6, x10
+    udiv    x10, x10, x4
+    cmp     x5, #0
+    csel    x10, x6, x10, ne
+    str     x10, [x2, #\ioff]
+.endm
+.else
+/* The flag's item at ioff: 0 in a leak, else base_reward * weight * its increments // (active_increments * WEIGHT_DENOMINATOR). */
+.macro IDEAL_FLAG boff, weight, ioff
+    ldr     x10, [x0, #\boff]
+    udiv    x10, x10, x3
+    mov     x11, #\weight
+    mul     x11, x6, x11
+    mul     x10, x11, x10
+    udiv    x10, x10, x4
+    cmp     x5, #0
+    csel    x10, xzr, x10, ne
+    str     x10, [x2, #\ioff]
+.endm
+.endif
+
+/*
+ * (totals, effective_balance, out) -> status: the item of a validator of the effective balance that
+ * voted for all three in time (node.md, lantern_node_ideal_reward). A leaf: uses x3-x11.
+ */
+SPEC_FUNCTION node_ideal_reward
+    UNWIND_END_PROLOGUE
+    MOVQ    x3, EFFECTIVE_BALANCE_INCREMENT
+    ldr     x4, [x0, #24]
+    udiv    x4, x4, x3                      /* the active increments */
+    ldr     x5, [x0, #16]                   /* the leak */
+    str     x1, [x2, #40]
+.if FORK == FORK_PHASE0
+    mov     x6, #BASE_REWARD_FACTOR         /* get_base_reward */
+    mul     x6, x1, x6
+    ldr     x7, [x0, #32]
+    udiv    x6, x6, x7
+    lsr     x6, x6, #2
+    lsr     x7, x6, #3                      /* get_proposer_reward: // PROPOSER_REWARD_QUOTIENT */
+    IDEAL_VOTE 56, 0
+    IDEAL_VOTE 48, 8
+    IDEAL_VOTE 40, 16
+    sub     x9, x6, x7                      /* inclusion_delay at a delay of 1 */
+    str     x9, [x2, #24]
+    lsl     x9, x6, #2                      /* inactivity in a leak: -(BASE_REWARDS_PER_EPOCH * base_reward - the proposer's) */
+    sub     x9, x9, x7
+    neg     x9, x9
+    cmp     x5, #0
+    csel    x9, x9, xzr, ne
+    str     x9, [x2, #32]
+.else
+    udiv    x6, x1, x3                      /* base_reward: increments * get_base_reward_per_increment */
+    ldr     x7, [x0, #32]
+    mul     x6, x6, x7
+    lsl     x4, x4, #6
+    IDEAL_FLAG 56, TIMELY_HEAD_WEIGHT, 0
+    IDEAL_FLAG 48, TIMELY_TARGET_WEIGHT, 8
+    IDEAL_FLAG 40, TIMELY_SOURCE_WEIGHT, 16
+    stp     xzr, xzr, [x2, #24]
+.endif
+    mov     x0, #LANTERN_OK
+    ret
+SPEC_END node_ideal_reward
+
+.if FORK == FORK_PHASE0
+/* Each validator of the window among the attesting indices of the attestations of getter: its status byte takes bit; with lowest 1, its delay byte the lowest inclusion_delay. */
+.macro WINDOW_MARK getter, bit, lowest
+    mov     x0, x19
+    mov     x1, x21
+    mov     x2, x26
+    bl      \getter
+    cbnz    x0, 99f
+    add     x9, x26, #LIST_FIXED
+    ldr     x10, [x26, #LIST_COUNT]
+    stp     x9, x10, [sp, #(L + 16)]
+71: ldp     x9, x10, [sp, #(L + 16)]
+    cbz     x10, 79f
+    ldr     x11, [x9], #8
+    sub     x10, x10, #1
+    stp     x9, x10, [sp, #(L + 16)]
+    add     x1, x19, x11
+    str     x1, [sp, #(L + 32)]
+    SCRATCH_GIVE x24, x28, 2, x27
+    mov     x0, x19
+    mov     x2, x20
+    mov     x3, x24
+    SCRATCH_LIST x4, x24, x28, 1, x27
+    bl      lantern_get_attesting_indices
+    str     x28, [x24]
+    cbnz    x0, 99f
+    ldr     x9, [sp, #(L + 32)]
+    ldr     x12, [x9, #PendingAttestation_inclusion_delay]
+    SCRATCH_LIST x9, x24, x28, 1, x27
+    ldr     x10, [x9, #LIST_COUNT]
+    add     x9, x9, #LIST_FIXED
+    ldr     x13, [sp, #(L + 40)]            /* the status bytes */
+72: cbz     x10, 71b
+    ldr     x11, [x9], #8
+    sub     x10, x10, #1
+    subs    x11, x11, x22
+    b.lo    72b
+    cmp     x11, x23
+    b.hs    72b
+    add     x14, x13, x11, lsl #1
+    ldrb    w15, [x14]
+    orr     w15, w15, #\bit
+    strb    w15, [x14]
+.if \lowest
+    ldrb    w15, [x14, #1]
+    cmp     x12, x15
+    b.hs    72b
+    strb    w12, [x14, #1]
+.endif
+    b       72b
+79:
+.endm
+
+/* The vote's item at ioff: an attester, base_reward in a leak, else base_reward * its attesting increments // the active increments; another, -base_reward. */
+.macro WINDOW_VOTE bit, boff, ioff
+    tbz     x5, #\bit, 91f
+    cbnz    x7, 92f
+    ldr     x8, [x21, #\boff]
+    udiv    x8, x8, x1
+    mul     x8, x2, x8
+    udiv    x8, x8, x6
+    str     x8, [x11, #\ioff]
+    b       93f
+92: str     x2, [x11, #\ioff]
+    b       93f
+91: neg     x8, x2
+    str     x8, [x11, #\ioff]
+93:
+.endm
+.else
+/* The flag's item at ioff: participating, 0 in a leak, else base_reward * weight * its increments // (active_increments * WEIGHT_DENOMINATOR); not, with penal, -(base_reward * weight // WEIGHT_DENOMINATOR). */
+.macro REWARD_FLAG bit, weight, boff, ioff, penal
+    tbz     x5, #\bit, 91f
+    cbnz    x7, 92f
+    ldr     x8, [x21, #\boff]
+    udiv    x8, x8, x1
+    mov     x13, #\weight
+    mul     x13, x2, x13
+    mul     x13, x13, x8
+    udiv    x13, x13, x6
+    str     x13, [x11, #\ioff]
+    b       92f
+91:
+.if \penal
+    mov     x13, #\weight
+    mul     x13, x2, x13
+    lsr     x13, x13, #6
+    neg     x13, x13
+    str     x13, [x11, #\ioff]
+.endif
+92:
+.endm
+.endif
+
+/*
+ * (state, config, totals, first, count, scratch, out) -> status: the attestation rewards of the
+ * validators first to first + count - 1 (node.md, lantern_node_attestation_rewards). x19 state,
+ * x20 the CommitteeCache, x21 totals, x22 first, x23 count, x24 scratch, x25 out, x26 the
+ * validators (phase0: first the matching attestations), x27 the validator count, x28 the scratch's
+ * size. Locals: L and L+8 the previous epoch's participation (from altair) and its count, L+16 and
+ * L+24 the inactivity scores and their count (phase0: a list's cursor and count), L+32 an
+ * attestation, L+40 (phase0) a status and a delay byte for each validator of the window.
+ */
+SPEC_FUNCTION node_attestation_rewards
+    ENTER 48
+    mov     x19, x0
+    ldr     x20, [x1, #CONFIG_COMMITTEE_CACHE]
+    mov     x21, x2
+    mov     x22, x3
+    mov     x23, x4
+    mov     x24, x5
+    mov     x25, x6
+    LDQ     x27, x19, BeaconState_validators + 8
+    adds    x9, x22, x23
+    b.cs    96f
+    cmp     x9, x27
+    b.hi    96f
+    ldr     x28, [x24]
+.if FORK == FORK_PHASE0
+    NEED_SCRATCH_B x24, x19, 6, PENDING_REFS_BYTES, 97f
+    TAKE_REFS x26, x24, x28                 /* x28: the scratch's size before the matching attestations */
+    SCRATCH_LIST x9, x24, x28, 0, x27       /* the window's bytes: no vote, no delay */
+    add     x9, x9, #LIST_FIXED
+    str     x9, [sp, #(L + 40)]
+    mov     x10, x23
+    mov     w11, #0xff00
+1:  cbz     x10, 2f
+    strh    w11, [x9], #2
+    sub     x10, x10, #1
+    b       1b
+2:  WINDOW_MARK lantern_get_matching_source_attestations, 1, 1
+    WINDOW_MARK lantern_get_matching_target_attestations, 2, 0
+    WINDOW_MARK lantern_get_matching_head_attestations, 4, 0
+.else
+    NEED_SCRATCH x24, x19, 1, 97f
+    PART    x9, x10, x19, BeaconState_previous_epoch_participation
+    stp     x9, x10, [sp, #L]
+    PART    x9, x10, x19, BeaconState_inactivity_scores
+    stp     x9, x10, [sp, #(L + 16)]
+.endif
+    PART    x26, x9, x19, BeaconState_validators
+    MOVQ    x1, EFFECTIVE_BALANCE_INCREMENT
+    ldr     x6, [x21, #24]
+    udiv    x6, x6, x1                      /* the active increments */
+.if FORK >= FORK_ALTAIR
+    lsl     x6, x6, #6                      /* * WEIGHT_DENOMINATOR */
+.endif
+    ldr     x7, [x21, #16]                  /* the leak */
+    mov     x9, #0
+3:  cmp     x9, x23
+    b.hs    8f
+    add     x10, x22, x9
+    mov     x11, #48
+    madd    x11, x9, x11, x25               /* the item: 0 */
+    stp     xzr, xzr, [x11]
+    stp     xzr, xzr, [x11, #16]
+    stp     xzr, xzr, [x11, #32]
+    add     x12, x26, x10, lsl #7
+    ldr     x14, [x21]                      /* eligible: active in the previous epoch, or slashed and not yet withdrawable */
+    ldr     x15, [x12, #Validator_activation_epoch]
+    cmp     x15, x14
+    b.hi    4f
+    ldr     x15, [x12, #Validator_exit_epoch]
+    cmp     x14, x15
+    b.lo    5f
+4:  ldrb    w15, [x12, #Validator_slashed]
+    cbz     w15, 7f
+    ldr     x15, [x12, #Validator_withdrawable_epoch]
+    add     x0, x14, #1
+    cmp     x0, x15
+    b.hs    7f
+5:  mov     x0, #1
+    str     x0, [x11, #40]
+    ldr     x0, [x12, #Validator_effective_balance]
+.if FORK == FORK_PHASE0
+    mov     x2, #BASE_REWARD_FACTOR         /* get_base_reward */
+    mul     x2, x0, x2
+    ldr     x3, [x21, #32]
+    udiv    x2, x2, x3
+    lsr     x2, x2, #2
+    ldr     x3, [sp, #(L + 40)]
+    add     x3, x3, x9, lsl #1
+    ldrb    w5, [x3]                        /* the window's status: 1 source, 2 target, 4 head */
+    ldrb    w4, [x3, #1]                    /* the lowest delay */
+    ldrb    w15, [x12, #Validator_slashed]
+    cmp     w15, #0
+    csel    x5, x5, xzr, eq                 /* unslashed attesters only */
+    WINDOW_VOTE 0, 40, 16
+    WINDOW_VOTE 1, 48, 8
+    WINDOW_VOTE 2, 56, 0
+    lsr     x3, x2, #3                      /* get_proposer_reward */
+    tbz     x5, #0, 61f
+    sub     x8, x2, x3                      /* inclusion_delay: the attester's part, // its lowest delay */
+    udiv    x8, x8, x4
+    str     x8, [x11, #24]
+61: cbz     x7, 7f                          /* inactivity, in a leak */
+    lsl     x8, x2, #2
+    sub     x8, x8, x3
+    tbnz    x5, #1, 62f
+    ldr     x13, [x21, #8]                  /* not a target attester: effective_balance * finality_delay // INACTIVITY_PENALTY_QUOTIENT */
+    mul     x13, x0, x13
+    MOVQ    x15, INACTIVITY_PENALTY_QUOTIENT
+    udiv    x13, x13, x15
+    add     x8, x8, x13
+62: neg     x8, x8
+    str     x8, [x11, #32]
+.else
+    udiv    x2, x0, x1                      /* base_reward */
+    ldr     x3, [x21, #32]
+    mul     x2, x2, x3
+    ldp     x3, x4, [sp, #L]                /* the flags, of an unslashed validator */
+    mov     x5, #0
+    cmp     x10, x4
+    b.hs    51f
+    ldrb    w5, [x3, x10]
+51: ldrb    w15, [x12, #Validator_slashed]
+    cmp     w15, #0
+    csel    x5, x5, xzr, eq
+    REWARD_FLAG TIMELY_SOURCE_FLAG_INDEX, TIMELY_SOURCE_WEIGHT, 40, 16, 1
+    REWARD_FLAG TIMELY_TARGET_FLAG_INDEX, TIMELY_TARGET_WEIGHT, 48, 8, 1
+    REWARD_FLAG TIMELY_HEAD_FLAG_INDEX, TIMELY_HEAD_WEIGHT, 56, 0, 0
+    tbnz    x5, #TIMELY_TARGET_FLAG_INDEX, 7f   /* inactivity: not a timely target */
+    ldp     x3, x4, [sp, #(L + 16)]
+    mov     x8, #0
+    cmp     x10, x4
+    b.hs    52f
+    ldr     x8, [x3, x10, lsl #3]
+52: ldr     x13, [x21, #64]                 /* mode 1: its score as process_inactivity_updates leaves it */
+    cbz     x13, 53f
+    ldr     x13, [x21, #80]
+    add     x8, x8, x13
+    cbnz    x7, 53f
+    ldr     x13, [x21, #88]
+    cmp     x8, x13
+    csel    x13, x8, x13, lo
+    sub     x8, x8, x13
+53: mul     x8, x0, x8
+    ldr     x13, [x21, #80]
+    MOVQ    x3, FORK_INACTIVITY_PENALTY_QUOTIENT
+    mul     x13, x13, x3
+    udiv    x8, x8, x13
+    neg     x8, x8
+    str     x8, [x11, #32]
+.endif
+7:  add     x9, x9, #1
+    b       3b
+8:  mov     x0, #LANTERN_OK
+99:
+.if FORK == FORK_PHASE0
+    MOVQ    x10, PENDING_REFS_BYTES          /* the scratch's size on entry */
+    add     x10, x28, x10
+    str     x10, [x24]
+.else
+    str     x28, [x24]
+.endif
+    LEAVE 48
+96: mov     x0, #LANTERN_INVALID_ENCODING
+    LEAVE 48
+97: mov     x0, #LANTERN_BUFFER_TOO_SMALL
+    LEAVE 48
+SPEC_END node_attestation_rewards
+
 /* L0: x0 = the fork's TypeDescriptor of the NODE_JSON_* kind x9, or 0. Uses x0. */
 LOCAL_FUNCTION node_type_of_kind
     UNWIND_END_PROLOGUE
