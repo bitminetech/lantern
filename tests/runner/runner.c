@@ -6010,7 +6010,7 @@ static void fc_subscribe_check(tv parts, const char **why) {
     const uint8_t *cols = s->node + 440;
     for (uint64_t c = 0, sc = rd64(config + 296); c < 128 && sc && !*why; c++) /* DATA_COLUMN_SIDECAR_SUBNET_COUNT */
         if (cols[c / 8] >> (c % 8) & 1) subnets[(c % sc) / 8] |= (uint8_t)(1u << ((c % sc) % 8));
-    next = 7 + (int)rd64(config + 336); /* SUBNETS_PER_NODE */
+    next = 9 + (int)rd64(config + 336); /* SUBNETS_PER_NODE; five, the contribution, the light client and bls_to_execution_change topics */
     for (int c = 0; c < 128; c++) next += subnets[c / 8] >> (c % 8) & 1;
 #endif
     if (!*why) p2p_open(&n, &net, why);
@@ -6259,7 +6259,7 @@ static void fc_gossip_case(tv parts, int *ran, const char **why) {
     node_columns(cols, why);
     for (uint64_t c = 0, sc = rd64(config + 296); c < 128 && sc && !*why; c++) /* DATA_COLUMN_SIDECAR_SUBNET_COUNT */
         if (cols[c / 8] >> (c % 8) & 1) subnets[(c % sc) / 8] |= (uint8_t)(1u << ((c % sc) % 8));
-    topics = 7 + (int)rd64(config + 336);
+    topics = 9 + (int)rd64(config + 336);
     for (int c = 0; c < 128; c++) topics += subnets[c / 8] >> (c % 8) & 1;
 #endif
     if (!*why) p2p_run(&n, &net, p2p_subscribed, topics, why);
