@@ -81,7 +81,22 @@
 .set AppDb__size, AppDb_anchor_slot + 8
 .set APP_PATH2, APP_DB + AppDb__size        /* a ByteList: a second path */
 .set APP_DB_ROOTS, 4096                     /* the Db's first root table */
-.set APP_SIZE, (APP_PATH2 + 24 + APP_PATH_MAX + 4095) & ~4095
+.set APP_BUILDER, APP_PATH2 + 24 + APP_PATH_MAX   /* the Address of the builder (app.md, --builder) */
+.set APP_BUILDER_SLOT0, APP_BUILDER + 32    /* APP_BUILDER_SLOTS slots of APP_BUILDER_SLOT bytes: the builder's calls */
+.set AppBuilder_state, 0                    /* 0 free, 1 dialing, 2 open */
+.set AppBuilder_gen, 8                      /* the generation of its connection's Handle */
+.set AppBuilder_call, 16                    /* the node's builder call */
+.set AppBuilder_buf, 24                     /* pair: the request's bytes, then what the builder sends */
+.set AppBuilder_len, 40                     /* the request's bytes */
+.set AppBuilder_sent, 48                    /* the bytes given to the shell */
+.set AppBuilder_flight, 56                  /* the bytes in the shell's send buffer */
+.set AppBuilder_got, 64                     /* the bytes the builder sent */
+.set AppBuilder_start, 72                   /* the monotonic ms of the dial */
+.set APP_BUILDER_SLOT, 80
+.set APP_BUILDER_SLOTS, 4
+.set APP_BUILDER_BUFFER, 1 << 20            /* the bytes of an answer */
+.set APP_BUILDER_MS, 10000                  /* a call's longest time */
+.set APP_SIZE, (APP_BUILDER_SLOT0 + APP_BUILDER_SLOTS * APP_BUILDER_SLOT + 4095) & ~4095
 .set APP_BLOCK_BYTES, 1 << 16               /* the anchor block */
 .set APP_BUF_ENTRY, 24                      /* a BufferId table entry: id, address, size */
 .set APP_BUFS_CAP, 4096
@@ -269,6 +284,9 @@ app_localhost:
 app_m_endpoint:
     .ascii "--execution-endpoint: give an IPv4 address or localhost, a colon and a port"
 .set app_m_endpoint_len, 75
+app_m_builder:
+    .ascii "--builder: give an IPv4 address or localhost, a colon and a port"
+.set app_m_builder_len, 64
 app_m_jwt:
     .ascii "--jwt-secret: a file of 32 bytes in hex is needed with --execution-endpoint"
 .set app_m_jwt_len, 75

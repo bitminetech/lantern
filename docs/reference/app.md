@@ -79,9 +79,10 @@ lantern_app_options(args, options, fault) -> status
 | `--checkpoint-block` | `checkpoint_block` | a file of the SSZ bytes of that block's `SignedBeaconBlock` | none |
 | `--log-level` | `log_level` | `error`, `warn`, `info` or `debug`: the log lines of that level and the levels before it | `info` |
 | `--supernode` | `supernode` | none: 1, the node custodies every custody group (node.md, `NODE_FLAG_SUPERNODE`) | 0: the groups of max(`SAMPLES_PER_SLOT`, `CUSTODY_REQUIREMENT`) |
+| `--builder` | `builder` | `host:port` of a builder (mev-boost), with or without `http://`: the Builder API of builder-specs v0.6.1 | none: no builder |
 
 - Keeps the last value of an option given twice.
-- Drops `http://` at the start of `--execution-endpoint`.
+- Drops `http://` at the start of `--execution-endpoint` and of `--builder`.
 - `options` holds the defaults for the options not given; a text field is an `Arg` of the bytes of `args`.
 
 ### ABI
@@ -117,7 +118,7 @@ lantern_app_main(args) -> status
 - Reads the options with lantern_app_options.
 - Reads `config.yaml` of the network directory with lantern_config_parse over the pinned config of the preset, and `genesis.ssz` with lantern_<fork>_node_anchor of the fork of its slot.
 - A `StateCache` ([state.md](state.md#type-statecache)) for the anchor file's bytes / 121 + 65536 validators, from lantern_state_cache_size, lantern_shell_map and lantern_state_cache_init, at `CONFIG_STATE_CACHE` of the config before the store and the node start, so each state root of the node goes through it; with no memory for it, none. A `CommitteeCache` ([block-processing.md](block-processing.md#type-committeecache)) for as many validators, from lantern_committee_cache_size, lantern_shell_map and lantern_committee_cache_init, at `CONFIG_COMMITTEE_CACHE` the same way, and a `PubkeyCache` ([block-processing.md](block-processing.md#type-pubkeycache)) for as many, from lantern_pubkey_cache_size and lantern_pubkey_cache_init, at `CONFIG_PUBKEY_CACHE`.
-- Makes a new secp256k1 key. Starts the store (lantern_get_forkchoice_store), the node (lantern_node_init, with `NODE_FLAG_ENGINE` when it has an execution endpoint, `NODE_FLAG_DISCV5`, `NODE_FLAG_SUPERNODE` with `--supernode`, and the anchor's `node_id`: keccak256 of the key's uncompressed point, x then y, in reverse byte order), the libp2p state with that key, and the discv5 state with the same key, the `ip` of `--enr-address`, and the `udp` and `tcp` of `--port`.
+- Makes a new secp256k1 key. Starts the store (lantern_get_forkchoice_store), the node (lantern_node_init, with `NODE_FLAG_ENGINE` when it has an execution endpoint, `NODE_FLAG_DISCV5`, `NODE_FLAG_SUPERNODE` with `--supernode`, `NODE_FLAG_BUILDER` with `--builder` and its text as the anchor's `builder_host`, and the anchor's `node_id`: keccak256 of the key's uncompressed point, x then y, in reverse byte order), the libp2p state with that key, and the discv5 state with the same key, the `ip` of `--enr-address`, and the `udp` and `tcp` of `--port`.
 - Decodes the KZG trusted setup with crypto_kzg_trusted_setup_of_bytes: include/trusted_setup_4096.bin, the compressed points of `presets/<preset>/trusted_setups/trusted_setup_4096.json` of the pinned spec (the same file for both presets): the 4096 of `g1_lagrange`, the 4096 of `g1_monomial`, then the 65 of `g2_monomial`.
 - Listens on TCP `--port` and binds UDP `--port` on every address, through the shell of asm-libp2p, gives each boot node to discv5, and listens for the Beacon API ([beacon-api.md](beacon-api.md)) on TCP `--http-address` and `--http-port`.
 - The Beacon API's connections, through a second shell context of asm-libp2p:
@@ -131,6 +132,7 @@ lantern_app_main(args) -> status
   - The connection of a slot is its index + 2^32 times its generation, which grows by 1 with each new connection of the slot.
   - A `NODE_EV_API_IDENTITY` at the start and at each record of discv5: the peer ID in base58btc, `enr:` and the record in base64url, `/ip4/<--enr-address>/tcp/<--port>/p2p/<peer ID>` and the same with `udp` (empty with no `--enr-address`), and the version `lantern/v0.1.0`.
 - Loops: reads the clock; passes each libp2p shell event, each discv5 record found, each execution engine response and the time to lantern_node_step; performs its actions (on `LANTERN_BUFFER_TOO_SMALL` of lantern_node_step it grows the buffer that `short` names: the node with lantern_node_copy and twice the `NodeRoom` capacity that `room` names, or twice the room of the actions or the scratch; after 64 tries a line `a node step: no room in buffer <short>`); runs each work with lantern_node_run, with the KZG settings, and with more room when it asks; waits for the sockets until the next wakeup, at most 100 ms, and not at all while events wait for the next step.
+- With `--builder`, each `NODE_ACT_BUILDER` takes a free slot of `APP_BUILDER_SLOTS` (4), as the node makes at most that many calls at a time (node.md, the builder calls): a new connection to the builder's address, through the execution engine's shell context, takes the request's bytes; what it reads joins the slot's buffer of `APP_BUILDER_BUFFER` (1048576) bytes. At the shell's CLOSED of the connection: a `NODE_EV_BUILDER` of the call with the bytes it read, or with the failure bit when it read none, and the slot is free. A full buffer, or `APP_BUILDER_MS` (10000) since the dial, closes the connection.
 - `NODE_ACT_STATE_BYTES`: new memory from lantern_shell_map with lantern_node_state_bytes of the fork of the state's slot, kept as `NODE_ACT_BYTES_PUT` keeps bytes; with no memory, a ByteList of no bytes.
 - `NODE_ACT_STATE_COPY` and `NODE_ACT_BYTES_PUT`: new memory from lantern_shell_map with a copy of the bytes. When the source and its size are multiples of 8, a page of 4096 bytes that is all zero is not written, as the new memory is zero already: the OS keeps no memory for it, so a state's free room costs none.
 - Writes a line `slot <s>, head 0x<the head root's first 8 bytes>, finalized epoch <e>, earliest slot <n>` to the standard output at each new slot of the store, with the node's `earliest_slot` (it falls as the backfill's blocks join the history), and a line `peers <n>` when the count of connected peers changes.
@@ -208,7 +210,8 @@ The options of a run. A text field is an [`Arg`](#type-arg) of the bytes of the 
 | 152 | `http_address` | u64 | The Beacon API's IPv4 address, its 4 bytes in network order in the low bytes |
 | 160 | `http_max_connections` | u64 | The Beacon API's connections at a time |
 | 168 | `supernode` | u64 | 1 with `--supernode`, else 0 |
-| 176 | | | Size |
+| 176 | `builder` | `Arg` | `host:port` of the builder, without `http://` |
+| 192 | | | Size |
 
 ## Results
 

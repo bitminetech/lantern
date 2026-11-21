@@ -23,6 +23,7 @@ from ssz.uint import BaseUint
 
 from eth_consensus_specs.debug.random_value import RandomizationMode, get_random_ssz_object
 from p2p import module
+import reqresp
 
 MODES = {"minimal": ("zero", "one_count", "random", "max"), "mainnet": ("zero",)}
 
@@ -52,7 +53,8 @@ def containers(spec):
 
 def cases(fork, preset):
     spec = module(fork, preset)
-    for name, t in containers(spec):
+    builder = [(n, t) for n, t in reqresp.builder_types(spec, fork).items() if issubclass(t, Container)]
+    for name, t in list(containers(spec)) + builder:
         for mode in MODES[preset]:
             rng = Random(f"{fork}-{name}-{mode}")
             try:
@@ -424,8 +426,12 @@ def mutations(text):
 def decode_cases(fork, preset, encode_cases):
     """(name, parts) of lantern_json_decode: valid texts with their SSZ bytes, then texts with their faults."""
     spec = module(fork, preset)
+    builder = reqresp.builder_types(spec, fork)
+
+    def typ(name):
+        return builder[name] if name in builder else getattr(spec, name)
     for name, parts in encode_cases:
-        t = getattr(spec, parts["type"].decode())
+        t = typ(parts["type"].decode())
         for variant, text in (("", parts["json"]), ("_spaced", spaced(parts["json"])), ("_reversed", reversed_fields(parts["json"]))):
             enc = Decoder(text).root(t)
             assert enc == parts["ssz"], (name, variant)
@@ -436,7 +442,7 @@ def decode_cases(fork, preset, encode_cases):
         if tname not in MUTATED or tname in done or not name.endswith("_random"):
             continue
         done.add(tname)
-        t = getattr(spec, tname)
+        t = typ(tname)
         for mname, text in mutations(parts["json"]):
             try:
                 enc = Decoder(text).root(t)

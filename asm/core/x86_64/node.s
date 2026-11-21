@@ -260,7 +260,16 @@ FUNCTION lantern_node_init
     COPY32  %rdi, %rsi
     movq    $1, Node_engine_id(%r15)
     orq     $NODE_FLAG_FCU, Node_flags(%r15)
-1:  mov     %r15, %rdi
+1:  test    $NODE_FLAG_BUILDER, %r14        # the builder's host
+    jz      16f
+    mov     NodeAnchor_builder_host_len(%r12), %rdx
+    cmp     $NODE_ENGINE_HOST_MAX, %rdx
+    ja      7f
+    mov     %rdx, Node_builder_host_len(%r15)
+    lea     Node_builder_host(%r15), %rdi
+    lea     NodeAnchor_builder_host(%r12), %rsi
+    call    lantern_copy
+16: mov     %r15, %rdi
     mov     %rbx, %rsi
     call    node_layout
     PART    %rdi, %rax, %r15, Node_blocks   # the anchor block
@@ -3974,7 +3983,11 @@ LOCAL_FUNCTION node_event
     call    lantern_copy
     call    node_engine_read
     LEAVE 48
-47: cmp     $NODE_EV_ENR, %rax
+47: cmp     $NODE_EV_BUILDER, %rax          # BUILDER: the answer of a builder call
+    jne     470f
+    call    node_builder_event
+    LEAVE 48
+470: cmp    $NODE_EV_ENR, %rax
     jne     471f
     mov     %r12, %rdi                      # ENR: a record discv5 found
     call    node_enr
@@ -8520,7 +8533,29 @@ FUNCTION lantern_node_step
     lea     -1(%rdx), %rsi
     cmp     $NODE_EV_LAST, %rsi
     jae     7f
-    cmp     $NODE_EV_API_SENT, %rdx         # API_SENT, API_CLOSED: the connection at 16
+    cmp     $NODE_EV_BUILDER, %rdx          # BUILDER: a call, + 256 for a failure, else its bytes; with NODE_FLAG_BUILDER
+    jne     161f
+    testq   $NODE_FLAG_BUILDER, Node_flags(%rbx)
+    jz      7f
+    cmp     $24, %rcx
+    jb      7f
+    movzbl  16(%rdi), %esi
+    cmp     $NODE_BUILDER_CALLS, %rsi
+    jae     7f
+    mov     16(%rdi), %rsi
+    shr     $8, %rsi
+    cmp     $1, %rsi
+    ja      7f
+    je      4f
+    cmp     $(24 + 24), %rcx
+    jb      7f
+    cmpq    $24, (24 + 8)(%rdi)
+    jne     7f
+    lea     -(24 + 24)(%rcx), %rsi
+    cmp     %rsi, (24 + 16)(%rdi)
+    ja      7f
+    jmp     4f
+161: cmp    $NODE_EV_API_SENT, %rdx         # API_SENT, API_CLOSED: the connection at 16
     jb      11f
     cmp     $24, %rcx
     jb      7f

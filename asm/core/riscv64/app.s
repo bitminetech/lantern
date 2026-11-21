@@ -976,6 +976,8 @@ LOCAL_FUNCTION app_start
 1:  STQ     t0, s1, APP_FLAGS
     call    app_engine_conf                 # the execution engine
     bnez    a0, 99f
+    call    app_builder_conf                # the builder
+    bnez    a0, 99f
     call    app_key                         # the key, and the anchor's node ID
     bnez    a0, 94f
     ADDQ    a0, s1, APP_NODE_ROOM           # the node
@@ -2596,9 +2598,14 @@ LOCAL_FUNCTION app_actions
     call    app_work
     j       8f
 5:  li      t1, NODE_ACT_ENGINE
-    bne     t0, t1, 6f
+    bne     t0, t1, 51f
     mv      a0, s2
     call    app_engine_request
+    j       8f
+51: li      t1, NODE_ACT_BUILDER
+    bne     t0, t1, 6f
+    mv      a0, s2
+    call    app_builder_request
     j       8f
 6:  li      t1, NODE_ACT_DISCV5
     bne     t0, t1, 7f
@@ -2969,8 +2976,8 @@ LOCAL_FUNCTION app_net
     mv      a0, s2
     CALL_GLOBAL libp2p_init
     bnez    a0, 96f
-    ld      t0, 88(s2)                      # the shell: a slot for each connection, and one for the execution engine
-    addi    t0, t0, 1
+    ld      t0, 88(s2)                      # the shell: a slot for each connection, one for the execution engine, and the builder's
+    addi    t0, t0, 1 + APP_BUILDER_SLOTS
     sd      t0, (L + 8)(sp)
     ld      t0, 160(s2)
     sd      t0, (L + 16)(sp)
@@ -3499,6 +3506,378 @@ LOCAL_FUNCTION app_engine_event
 8:  li      a0, 0
     LEAVE 48
 END_FUNCTION app_engine_event
+
+# L2: with --builder, the builder: its Address, the anchor's builder_host, and NODE_FLAG_BUILDER
+# (app.md): a0 = 0, or 2 after a line on the standard error. s2 the endpoint's bytes, s3 their
+# count, s4 the colon.
+LOCAL_FUNCTION app_builder_conf
+    ENTER 0
+    LDQ     s3, s1, (APP_OPTIONS + AppOptions_builder + 8)
+    beqz    s3, 8f
+    LDQ     s2, s1, (APP_OPTIONS + AppOptions_builder)
+    ld      t0, APP_ARGS(s1)
+    add     s2, t0, s2
+    li      t0, NODE_ENGINE_HOST_MAX        # the Host of each request
+    bgtu    s3, t0, 90f
+    STQ     s3, s1, (APP_ANCHOR + NodeAnchor_builder_host_len)
+    ADDQ    a0, s1, (APP_ANCHOR + NodeAnchor_builder_host)
+    mv      a1, s2
+    mv      a2, s3
+    call    lantern_copy
+    mv      s4, s3                          # the last colon
+1:  beqz    s4, 90f
+    addi    s4, s4, -1
+    add     t0, s2, s4
+    lbu     t0, 0(t0)
+    li      t1, 0x3a
+    bne     t0, t1, 1b
+    add     a0, s2, s4                      # the port
+    addi    a0, a0, 1
+    add     a1, s2, s3
+    call    app_number
+    bnez    a0, 90f
+    beqz    a1, 90f
+    li      t0, 65535
+    bgtu    a1, t0, 90f
+    ADDQ    t1, s1, APP_BUILDER
+    li      t0, 4
+    sd      t0, 0(t1)
+    sd      a1, 8(t1)
+    sd      zero, 16(t1)
+    sd      zero, 24(t1)
+    mv      a0, s2                          # the host: localhost, or an IPv4 address
+    mv      a1, s4
+    ADDRESS a2, app_localhost
+    li      a3, 9
+    call    app_name_is
+    li      a1, 0x0100007f                  # 127.0.0.1
+    bnez    a0, 2f
+    mv      a0, s2
+    add     a1, s2, s4
+    call    app_dotted
+    bnez    a0, 90f
+2:  ADDQ    t0, s1, APP_BUILDER
+    sw      a1, 16(t0)
+    LDQ     t0, s1, APP_FLAGS
+    li      t1, NODE_FLAG_BUILDER
+    or      t0, t0, t1
+    STQ     t0, s1, APP_FLAGS
+8:  li      a0, 0
+    LEAVE 0
+90: call    app_line_start                  # the endpoint's form
+    ADDRESS a0, app_m_builder
+    li      a1, app_m_builder_len
+    call    app_line_text
+    li      a0, APP_LOG_ERROR
+    call    app_line_end
+    li      a0, 2
+    LEAVE 0
+END_FUNCTION app_builder_conf
+
+# L0: a0 = the Handle of the connection of the builder slot a0 (a1 its fields): the slots after the engine's, at its generation. Uses t0, a7.
+LOCAL_FUNCTION app_builder_handle
+    UNWIND_END_PROLOGUE
+    LDQ     t0, s1, APP_P2P_CONFIG
+    ld      t0, 88(t0)                      # max_connections, then the engine's
+    add     a0, a0, t0
+    addi    a0, a0, 1
+    ld      t0, AppBuilder_gen(a1)
+    slli    t0, t0, 32
+    or      a0, a0, t0
+    ret
+END_FUNCTION app_builder_handle
+
+# L1: the NODE_EV_BUILDER of the failure of the call a0 joins the next step's events. Locals: the event.
+LOCAL_FUNCTION app_builder_fail
+    FRAME 32
+    li      t0, 24
+    sd      t0, 0(sp)
+    li      t0, NODE_EV_BUILDER
+    sd      t0, 8(sp)
+    ori     a0, a0, 256
+    sd      a0, 16(sp)
+    mv      a0, sp
+    li      a1, 24
+    call    app_event_put
+    UNFRAME 32
+END_FUNCTION app_builder_fail
+
+# L1: the NODE_EV_BUILDER of the slot fields a1 joins the next step's events: the call, with the
+# bytes the builder sent, or with the failure bit when it sent none; the slot is free. Locals: the
+# event's head, the fields.
+LOCAL_FUNCTION app_builder_answer
+    FRAME 64
+    sd      a1, 48(sp)
+    ld      t0, AppBuilder_got(a1)
+    ld      a0, AppBuilder_call(a1)
+    bnez    t0, 1f
+    call    app_builder_fail                # none: the failure bit
+    j       9f
+1:  addi    t1, t0, 48 + 7                  # size, kind, the call, a ByteList, the bytes
+    andi    t1, t1, -8
+    sd      t1, 0(sp)
+    li      t2, NODE_EV_BUILDER
+    sd      t2, 8(sp)
+    sd      a0, 16(sp)
+    addi    t1, t1, -24
+    sd      t1, 24(sp)
+    li      t2, 24
+    sd      t2, 32(sp)
+    sd      t0, 40(sp)
+    mv      a0, sp
+    li      a1, 48
+    call    app_event_put
+    ld      a1, 48(sp)
+    ld      a0, AppBuilder_buf(a1)
+    ld      t0, AppBuilder_len(a1)
+    add     a0, a0, t0
+    ld      a1, AppBuilder_got(a1)
+    addi    a1, a1, 7
+    andi    a1, a1, -8
+    call    app_event_put
+9:  ld      a1, 48(sp)
+    sd      zero, AppBuilder_state(a1)
+    UNFRAME 64
+END_FUNCTION app_builder_answer
+
+# L2: the NODE_ACT_BUILDER a0 (app.md): a free slot takes its request and dials the builder; with
+# none, or no memory, its NODE_EV_BUILDER of failure. s2 the action, s3 the slot, s4 its fields, s5
+# the request's bytes, s6 their count.
+LOCAL_FUNCTION app_builder_request
+    ENTER 0
+    mv      s2, a0
+    ld      t0, (24 + 8)(s2)
+    addi    s5, s2, 24
+    add     s5, s5, t0
+    ld      s6, (24 + 16)(s2)
+    li      s3, 0
+    ADDQ    s4, s1, APP_BUILDER_SLOT0
+1:  li      t0, APP_BUILDER_SLOTS
+    bgeu    s3, t0, 7f
+    ld      t0, AppBuilder_state(s4)
+    beqz    t0, 2f
+    addi    s4, s4, APP_BUILDER_SLOT
+    addi    s3, s3, 1
+    j       1b
+2:  ld      t0, 16(s2)                      # the call
+    sd      t0, AppBuilder_call(s4)
+    sd      zero, AppBuilder_sent(s4)
+    sd      zero, AppBuilder_flight(s4)
+    sd      zero, AppBuilder_got(s4)
+    li      t0, APP_BUILDER_BUFFER + 8      # room for the request and the answer
+    add     t0, t0, s6
+    ld      t1, (AppBuilder_buf + 8)(s4)
+    bgeu    t1, t0, 3f
+    addi    a0, s4, AppBuilder_buf
+    sub     a0, a0, s1
+    call    app_unmap
+    addi    a0, s4, AppBuilder_buf
+    sub     a0, a0, s1
+    li      a1, APP_BUILDER_BUFFER + 8
+    add     a1, a1, s6
+    call    app_alloc
+    beqz    a0, 8f
+3:  ld      a0, AppBuilder_buf(s4)
+    mv      a1, s5
+    mv      a2, s6
+    call    lantern_copy
+    sd      s6, AppBuilder_len(s4)
+    ld      t0, AppBuilder_gen(s4)
+    addi    t0, t0, 1
+    sd      t0, AppBuilder_gen(s4)
+    li      t0, 1
+    sd      t0, AppBuilder_state(s4)
+    LDQ     t0, s1, (APP_TICK + LIBP2P_TICK_NOW)
+    sd      t0, AppBuilder_start(s4)
+    LDQ     s2, s1, APP_ENGINE_ACT          # the DIAL
+    addi    s2, s2, 24
+    li      t0, LIBP2P_ACT_DIAL_SIZE
+    sd      t0, 0(s2)
+    li      t0, LIBP2P_ACTION_DIAL
+    sd      t0, 8(s2)
+    mv      a0, s3
+    mv      a1, s4
+    call    app_builder_handle
+    sd      a0, LIBP2P_ACT_CONN(s2)
+    addi    a0, s2, LIBP2P_ACT_DIAL_ADDR
+    ADDQ    a1, s1, APP_BUILDER
+    li      a2, 32
+    call    lantern_copy
+    mv      a0, s2
+    li      a1, LIBP2P_ACT_DIAL_SIZE
+    call    app_engine_perform
+    LEAVE 0
+7:  ld      a0, 16(s2)                      # no free slot: a failure
+    call    app_builder_fail
+    LEAVE 0
+8:  sd      zero, AppBuilder_got(s4)        # no memory: a failure
+    mv      a1, s4
+    call    app_builder_answer
+    LEAVE 0
+END_FUNCTION app_builder_request
+
+# L2: a0 = 1 when the shell event a0 is of a builder slot's connection, which it then takes:
+# CONNECTED opens it, SENT frees its buffer, RECEIVED keeps the bytes (a full buffer closes it),
+# DIAL_FAILED and CLOSED give the call's NODE_EV_BUILDER; else 0. An event of an older connection
+# of a slot is dropped. s2 the event, s3 its kind, s4 the slot, s5 its fields.
+LOCAL_FUNCTION app_builder_event
+    ENTER 0
+    mv      s2, a0
+    ld      s3, 8(s2)
+    li      t0, LIBP2P_EVENT_CONNECTED
+    bltu    s3, t0, 8f
+    li      t0, LIBP2P_EVENT_CLOSED
+    bgtu    s3, t0, 8f
+    ld      t1, LIBP2P_EV_CONN(s2)
+    slli    s4, t1, 32                      # its index, past libp2p's and the engine's
+    srli    s4, s4, 32
+    LDQ     t0, s1, APP_P2P_CONFIG
+    ld      t0, 88(t0)
+    addi    t0, t0, 1
+    bltu    s4, t0, 8f
+    sub     s4, s4, t0
+    li      t0, APP_BUILDER_SLOTS
+    bgeu    s4, t0, 8f
+    li      t0, APP_BUILDER_SLOT
+    mul     t0, s4, t0
+    ADDQ    s5, s1, APP_BUILDER_SLOT0
+    add     s5, s5, t0
+    ld      t0, AppBuilder_state(s5)
+    beqz    t0, 9f
+    srli    t1, t1, 32
+    ld      t0, AppBuilder_gen(s5)
+    bne     t0, t1, 9f
+    li      t0, LIBP2P_EVENT_CONNECTED
+    bne     s3, t0, 1f
+    li      t0, 2
+    sd      t0, AppBuilder_state(s5)
+    j       9f
+1:  li      t0, LIBP2P_EVENT_SENT
+    bne     s3, t0, 2f
+    ld      t0, AppBuilder_flight(s5)
+    ld      t1, LIBP2P_EV_COUNT(s2)
+    sub     t2, t0, t1
+    bgeu    t0, t1, 11f
+    li      t2, 0
+11: sd      t2, AppBuilder_flight(s5)
+    j       9f
+2:  li      t0, LIBP2P_EVENT_RECEIVED
+    bne     s3, t0, 3f
+    ld      t0, (AppBuilder_buf + 8)(s5)    # the room after the request and the bytes so far
+    ld      t1, AppBuilder_len(s5)
+    sub     t0, t0, t1
+    ld      t1, AppBuilder_got(s5)
+    sub     t0, t0, t1
+    addi    t0, t0, -8
+    ld      a2, LIBP2P_EV_COUNT(s2)
+    bleu    a2, t0, 21f
+    mv      a2, t0                          # full: the rest goes, and the connection closes
+    li      t0, 3
+    sd      t0, AppBuilder_state(s5)
+21: ld      a0, AppBuilder_buf(s5)
+    ld      t0, AppBuilder_len(s5)
+    add     a0, a0, t0
+    ld      t0, AppBuilder_got(s5)
+    add     a0, a0, t0
+    add     t0, t0, a2
+    sd      t0, AppBuilder_got(s5)
+    addi    a1, s2, LIBP2P_EV_DATA
+    call    lantern_copy
+    j       9f
+3:  mv      a1, s5                          # DIAL_FAILED, CLOSED: the answer
+    call    app_builder_answer
+9:  li      a0, 1
+    LEAVE 0
+8:  li      a0, 0
+    LEAVE 0
+END_FUNCTION app_builder_event
+
+# L2: after the shell's events (app.md): for each slot, a call past APP_BUILDER_MS closes; an open
+# one sends its request's next bytes as the shell's send buffer has room; one to close (state 3)
+# gets its CLOSE, then waits for CLOSED (state 4). s2 the action, s3 the slot, s4 its fields, s5
+# the bytes.
+LOCAL_FUNCTION app_builder_due
+    ENTER 0
+    li      s3, 0
+    ADDQ    s4, s1, APP_BUILDER_SLOT0
+1:  li      t0, APP_BUILDER_SLOTS
+    bgeu    s3, t0, 9f
+    ld      t1, AppBuilder_state(s4)
+    beqz    t1, 7f
+    li      t0, 2
+    bgtu    t1, t0, 3f
+    LDQ     t2, s1, (APP_TICK + LIBP2P_TICK_NOW)    # the time limit
+    ld      t3, AppBuilder_start(s4)
+    sub     t2, t2, t3
+    li      t3, APP_BUILDER_MS
+    bltu    t2, t3, 2f
+    li      t0, 3
+    sd      t0, AppBuilder_state(s4)
+    j       3f
+2:  li      t0, 2
+    bne     t1, t0, 7f
+    ld      t0, AppBuilder_len(s4)          # open: the next bytes, as the send buffer has room
+    ld      t1, AppBuilder_sent(s4)
+    sub     s5, t0, t1
+    beqz    s5, 7f
+    LDQ     t0, s1, APP_P2P_CONFIG
+    ld      t0, 160(t0)                     # send_window
+    ld      t1, AppBuilder_flight(s4)
+    bleu    t0, t1, 7f
+    sub     t0, t0, t1
+    bleu    s5, t0, 21f
+    mv      s5, t0
+21: LDQ     s2, s1, APP_ENGINE_ACT          # SEND: connection, count, the bytes
+    addi    s2, s2, 24
+    addi    t0, s5, LIBP2P_ACT_SEND_DATA + 7
+    andi    t0, t0, -8
+    sd      t0, 0(s2)
+    li      t0, LIBP2P_ACTION_SEND
+    sd      t0, 8(s2)
+    mv      a0, s3
+    mv      a1, s4
+    call    app_builder_handle
+    sd      a0, LIBP2P_ACT_CONN(s2)
+    sd      s5, (LIBP2P_ACT_CONN + 8)(s2)
+    addi    a0, s2, LIBP2P_ACT_SEND_DATA
+    ld      a1, AppBuilder_buf(s4)
+    ld      t0, AppBuilder_sent(s4)
+    add     a1, a1, t0
+    mv      a2, s5
+    call    lantern_copy
+    ld      t0, AppBuilder_sent(s4)
+    add     t0, t0, s5
+    sd      t0, AppBuilder_sent(s4)
+    ld      t0, AppBuilder_flight(s4)
+    add     t0, t0, s5
+    sd      t0, AppBuilder_flight(s4)
+    mv      a0, s2
+    ld      a1, 0(s2)
+    call    app_engine_perform
+    j       7f
+3:  ld      t1, AppBuilder_state(s4)        # to close: the CLOSE
+    li      t0, 3
+    bne     t1, t0, 7f
+    li      t0, 4
+    sd      t0, AppBuilder_state(s4)
+    LDQ     s2, s1, APP_ENGINE_ACT
+    addi    s2, s2, 24
+    li      t0, LIBP2P_ACT_CLOSE_SIZE
+    sd      t0, 0(s2)
+    li      t0, LIBP2P_ACTION_CLOSE
+    sd      t0, 8(s2)
+    mv      a0, s3
+    mv      a1, s4
+    call    app_builder_handle
+    sd      a0, LIBP2P_ACT_CONN(s2)
+    mv      a0, s2
+    li      a1, LIBP2P_ACT_CLOSE_SIZE
+    call    app_engine_perform
+7:  addi    s4, s4, APP_BUILDER_SLOT
+    addi    s3, s3, 1
+    j       1b
+9:  LEAVE 0
+END_FUNCTION app_builder_due
 
 /* L1: the base64url text (RFC 4648 section 5, no padding) of the a1 bytes at a0 joins the log line. Locals: a0, a1, then 4 digits. */
 LOCAL_FUNCTION app_line_base64url
@@ -4751,6 +5130,9 @@ LOCAL_FUNCTION app_p2p_events
     mv      a0, s2                          # the engine's connection
     call    app_engine_event
     bnez    a0, 2f
+    mv      a0, s2                          # a builder call's connection
+    call    app_builder_event
+    bnez    a0, 2f
     ld      t0, 0(s2)
     addi    t0, t0, 16
     sd      t0, L(sp)
@@ -4767,6 +5149,7 @@ LOCAL_FUNCTION app_p2p_events
     j       1b
 9:  LDQ     t0, s1, APP_SHELL_EVENTS
     sd      zero, 16(t0)
+    call    app_builder_due                 # the builder calls: their bytes, ends and time limits
     LDQ     t0, s1, APP_ENGINE_DUE          # then more bytes of the request
     beqz    t0, 10f
     STQ     zero, s1, APP_ENGINE_DUE

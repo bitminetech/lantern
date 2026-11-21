@@ -2645,9 +2645,9 @@ enum { NB_WAITING = 1, NB_IMPORTING, NB_IMPORTED, NB_INVALID, NB_HASHING, NB_BLO
 #define NODE_BLOB_BYTES 72
 #define NBLOB_VALID 2
 enum { EV_TICK = 1, EV_BLOCK, EV_ATTESTATION, EV_ATTESTER_SLASHING, EV_POW_BLOCK, EV_PAYLOAD_STATUS, EV_WORK_DONE, EV_P2P, EV_ENGINE, EV_ENR, EV_API,
-       EV_API_IDENTITY, EV_API_SENT, EV_API_CLOSED };
+       EV_API_IDENTITY, EV_API_SENT, EV_API_CLOSED, EV_BUILDER };
 enum { ACT_BYTES_PUT = 1, ACT_STATE_COPY, ACT_STATE_FREE, ACT_BYTES_FREE, ACT_WORK, ACT_P2P_LIST, ACT_ENGINE, ACT_DISCV5, ACT_DB_APPEND, ACT_DB_STATE, ACT_DB_DROP,
-       ACT_API_SEND, ACT_API_CLOSE, ACT_STATE_BYTES, ACT_BYTES_NEW };
+       ACT_API_SEND, ACT_API_CLOSE, ACT_STATE_BYTES, ACT_BYTES_NEW, ACT_BUILDER };
 #define NODE_FLAG_DISCV5 64
 #define NODE_FLAG_DB 128
 #define NODE_FLAG_FEW_STATES 256
@@ -2696,6 +2696,9 @@ static unsigned long node_replays; /* the REPLAY works the nodes ran: post-state
 #define LANTERN_NEED_TARGET_STATE 55
 #define SHELL_RESULTS 1024
 #define ENGINE_HOST "localhost:8551" /* the node's execution engine: the runner */
+#define BUILDER_HOST "localhost:18550" /* the node's builder, with NODE_FLAG_BUILDER: the runner */
+#define NODE_FLAG_BUILDER 2048
+static int force_builder; /* set: the next node has NODE_FLAG_BUILDER */
 
 typedef struct {
     uint64_t id, size;
@@ -2729,7 +2732,9 @@ struct node_shell {
         uint8_t *b;
     } segs[NODE_DB_SEGMENTS];
     size_t nsegs;
-    uint8_t anchor[216], ncfg[CONFIG_SIZE]; /* the node's NodeAnchor and config, for a new node of the same start */
+    uint8_t anchor[288], ncfg[CONFIG_SIZE]; /* the node's NodeAnchor and config, for a new node of the same start */
+    uint8_t *bld;                           /* with NODE_FLAG_BUILDER: the requests of the node's builder calls, as they came */
+    uint64_t bld_len, bld_cap, bld_calls;
     uint64_t flags, db_states;              /* its flags; the NODE_ACT_DB_STATE actions */
     uint64_t drops[16];                     /* the NODE_ACT_DB_DROP actions: bit 63 for sidecars, the segment */
     size_t ndrops;
@@ -3458,6 +3463,26 @@ static void shell_step(fc_node *n, const char **why) {
         }
         else if (kind == ACT_ENGINE && size >= 48 && rd64(act + 24) == size - 24 && rd64(act + 32) == 24 && rd64(act + 40) <= size - 48)
             shell_engine(n, act + 48, rd64(act + 40), why);
+        else if (kind == ACT_BUILDER && size >= 48 && rd64(act + 16) < 4 && rd64(act + 24) == size - 24 && rd64(act + 32) == 24 &&
+                 rd64(act + 40) <= size - 48) { /* the runner as the builder: it keeps the request and answers 200 */
+            static const char ok[] = "HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
+            uint64_t blen = rd64(act + 40);
+            if (!(s->flags & NODE_FLAG_BUILDER)) *why = "a BUILDER action of a node with no builder";
+            else {
+                if (s->bld_len + blen > s->bld_cap) {
+                    s->bld_cap = 2 * (s->bld_len + blen) + 4096;
+                    s->bld = realloc(s->bld, (size_t)s->bld_cap);
+                    if (!s->bld) {
+                        fprintf(stderr, "out of memory\n");
+                        exit(2);
+                    }
+                }
+                memcpy(s->bld + s->bld_len, act + 48, (size_t)blen);
+                s->bld_len += blen;
+                s->bld_calls++;
+                shell_event(s, EV_BUILDER, rd64(act + 16), (const uint8_t *)ok, sizeof ok - 1);
+            }
+        }
         else if (kind == ACT_DISCV5 && size >= 48 && rd64(act + 24) == size - 24 && rd64(act + 32) == 24 && rd64(act + 40) <= size - 48)
             shell_discv5(s, act + 48, rd64(act + 40), why);
         else if (kind == ACT_API_SEND && size >= 56 && rd64(act + 24) <= 1 && rd64(act + 32) == size - 32 && rd64(act + 40) == 24 &&
@@ -3851,7 +3876,7 @@ static struct node_shell *shell_open(fc_node *n, tv parts, uint8_t **anchor_bloc
     *anchor_block = fc_setup(n, parts, why);
     if (*anchor_block) {
         /* Small capacities, so that the node grows through lantern_node_copy. */
-        uint8_t anchor[216] = {0}; /* NodeAnchor: root, slot, genesis_validators_root, jwt_secret, engine_host_len, engine_host, node_id, history_slot */
+        uint8_t anchor[288] = {0}; /* NodeAnchor: root, slot, genesis_validators_root, jwt_secret, engine_host_len, engine_host, node_id, history_slot, builder_host_len, builder_host */
         static unsigned long opened; /* every second node archives to a Db */
         int force_db = bf_state != NULL || drop_room; /* the backfill's and the drop check's nodes archive to a Db */
         /* every second node archives to a Db; every second pair keeps few post-states and rebuilds the others */
@@ -3869,6 +3894,11 @@ static struct node_shell *shell_open(fc_node *n, tv parts, uint8_t **anchor_bloc
         memset(anchor + 72, 0x42, 32);
         wr64(anchor + 104, strlen(ENGINE_HOST));
         memcpy(anchor + 112, ENGINE_HOST, strlen(ENGINE_HOST));
+        if (force_builder) { /* the runner is the node's builder too */
+            flags |= NODE_FLAG_BUILDER;
+            wr64(anchor + 216, strlen(BUILDER_HOST));
+            memcpy(anchor + 224, BUILDER_HOST, strlen(BUILDER_HOST));
+        }
         s->seen_room[0] = s->seen_room[1] = s->seen_room[2] = 1;
         s->seen_room[3] = 64;
         shell_seen(s, why);
@@ -3905,6 +3935,7 @@ static struct node_shell *shell_open(fc_node *n, tv parts, uint8_t **anchor_bloc
 static void shell_close(fc_node *n, uint8_t *anchor_block) {
     struct node_shell *s = n->shell;
     free(s->api.b);
+    free(s->bld);
     for (int e = 0; e < s->nev; e++) free(s->ev[e].b);
     free(s->seen);
     for (size_t k = 0; k < s->nbufs; k++) free(s->bufs[k].b);
@@ -8398,7 +8429,7 @@ static void run_db_index(const char *file, case_file *f) {
 /* ---------------------------------------------------------------- Application */
 
 #define INVALID_OPTION 61
-#define APP_OPTIONS_SIZE 176
+#define APP_OPTIONS_SIZE 192
 
 /*
  * app-options: lantern_app_options over each case's command line (tests/generator/app.py), as an
@@ -8407,8 +8438,8 @@ static void run_db_index(const char *file, case_file *f) {
  */
 static void run_app_options(const char *file, case_file *f) {
     static const char *texts[] = {"network_dir", "execution", "jwt_secret", "boot_nodes", "data_dir", "checkpoint_state",
-                                  "checkpoint_block"};
-    static const uint64_t text_at[] = {0, 16, 32, 48, 96, 112, 128};
+                                  "checkpoint_block", "builder"};
+    static const uint64_t text_at[] = {0, 16, 32, 48, 96, 112, 128, 176};
     static const char *numbers[] = {"port", "enr_address", "http_port", "target_peers", "log_level", "http_address",
                                     "http_max_connections", "supernode"};
     static const uint64_t number_at[] = {64, 72, 80, 88, 144, 152, 160, 168};
@@ -8444,7 +8475,7 @@ static void run_app_options(const char *file, case_file *f) {
         if (!guard_ok(opts, APP_OPTIONS_SIZE) || !guard_ok(list, size)) why = "lantern_app_options wrote out of bounds";
         else if (want) {
             if (st != 0) why = "status is not LANTERN_OK";
-            for (int t = 0; t < 7 && !why; t++) {
+            for (int t = 0; t < 8 && !why; t++) {
                 uint64_t at = text_at[t], wl, start = rd64(opts + at), got = rd64(opts + at + 8);
                 const uint8_t *w = tv_bytes(tv_get(want, texts[t]), &wl);
                 int inside = got == 0;
@@ -9223,9 +9254,13 @@ static void run_node_api(const char *file, case_file *f) {
         if (skip_case(parts)) continue;
         fc_node n;
         uint8_t *anchor_block;
+        force_builder = 1; /* the runner is the node's builder: each request's calls must be the case's */
         struct node_shell *s = shell_open(&n, parts, &anchor_block, &why);
+        force_builder = 0;
         uint64_t slen, stlen;
         const uint8_t *identity = tv_bytes(tv_get(parts, "identity"), &ilen), *closes = tv_bytes(tv_get(parts, "closes"), &clen);
+        tv builders = tv_get(parts, "builders"), bd = builders ? builders + 9 : NULL;
+        if (builders && rd64(builders + 1) != rd64(tv_get(parts, "requests") + 1)) why = "the case's builders differ in length";
         const uint8_t *syncing = tv_bytes(tv_get(parts, "syncing"), &slen), *streams = tv_bytes(tv_get(parts, "streams"), &stlen);
         tv names = tv_get(parts, "names"), reqs = tv_get(parts, "requests"), resps = tv_get(parts, "responses");
         uint64_t count = rd64(reqs + 1), offline = tv_u64(tv_get(parts, "offline"));
@@ -9242,9 +9277,10 @@ static void run_node_api(const char *file, case_file *f) {
         tv nm = names + 9, rq = reqs + 9, rs = resps + 9;
         const uint8_t *open_want = NULL; /* streams 2: an event stream open to the case's end, and its bytes then */
         uint64_t open_wlen = 0;
-        for (uint64_t k = 0; k < count && !why; k++, nm = tv_skip(nm), rq = tv_skip(rq), rs = tv_skip(rs)) {
-            uint64_t rlen, wlen, nlen;
+        for (uint64_t k = 0; k < count && !why; k++, nm = tv_skip(nm), rq = tv_skip(rq), rs = tv_skip(rs), bd = bd ? tv_skip(bd) : NULL) {
+            uint64_t rlen, wlen, nlen, bwlen = 0;
             const uint8_t *req = tv_bytes(rq, &rlen), *want = tv_bytes(rs, &wlen), *nb = tv_bytes(nm, &nlen);
+            const uint8_t *bwant = bd ? tv_bytes(bd, &bwlen) : NULL;
             char rname[96];
             snprintf(rname, sizeof rname, "%.*s", (int)(nlen < 90 ? nlen : 90), (const char *)nb);
             if (k == offline) {
@@ -9272,7 +9308,17 @@ static void run_node_api(const char *file, case_file *f) {
                     statuses[i] = rd64(node_at(&n, i) + NODE_PAYLOAD_STATUS);
                     wr64((uint8_t *)node_at(&n, i) + NODE_PAYLOAD_STATUS, PAYLOAD_NOT_VALIDATED);
                 }
+                s->bld_len = s->bld_calls = 0;
                 shell_api_ask(&n, req, rlen, (k + 1) | (uint64_t)(7 + r) << 32, &why);
+                if (!why && (s->bld_len != bwlen || (bwlen && memcmp(s->bld, bwant, (size_t)bwlen)) || s->bld_calls > 1)) {
+                    static char msg[600];
+                    uint64_t at = 0;
+                    while (at < s->bld_len && at < bwlen && s->bld[at] == bwant[at]) at++;
+                    snprintf(msg, sizeof msg, "%s: the builder calls differ at byte %llu (%llu bytes, %llu calls; the case's %llu): %.*s", rname,
+                             (unsigned long long)at, (unsigned long long)s->bld_len, (unsigned long long)s->bld_calls,
+                             (unsigned long long)bwlen, (int)(s->bld_len - at < 200 ? s->bld_len - at : 200), (const char *)s->bld + at);
+                    why = msg;
+                }
                 if (syncing[k] & 1) wr64(s->node + NODE_FLAGS, rd64(s->node + NODE_FLAGS) & ~(uint64_t)NODE_FLAG_SYNCING);
                 for (uint64_t i = 0; (syncing[k] & 2) && i < nodes; i++)
                     wr64((uint8_t *)node_at(&n, i) + NODE_PAYLOAD_STATUS, statuses[i]);

@@ -108,6 +108,32 @@ def produce_types(spec, fork):
     return t
 
 
+def builder_types(spec, fork):
+    """The containers of builder-specs v0.6.1 (specs/<fork>/builder.md), by name: ValidatorRegistrationV1,
+    SignedValidatorRegistrationV1 and the registerValidator list of them in every fork; from bellatrix the
+    fork's BuilderBid (header, from deneb blob_kzg_commitments, from electra execution_requests, value,
+    pubkey) and SignedBuilderBid."""
+    f = FORKS.index(fork)
+    registration = container(spec, "ValidatorRegistrationV1", [
+        ("fee_recipient", spec.ExecutionAddress), ("gas_limit", spec.Uint64), ("timestamp", spec.Uint64),
+        ("pubkey", spec.BLSPubkey)])
+    signed = container(spec, "SignedValidatorRegistrationV1", [("message", registration), ("signature", spec.BLSSignature)])
+    t = {"ValidatorRegistrationV1": registration, "SignedValidatorRegistrationV1": signed,
+         "SignedValidatorRegistrations": type("SignedValidatorRegistrations", (List[signed],),
+                                              {"LIMIT": int(spec.VALIDATOR_REGISTRY_LIMIT), "__module__": spec.__name__})}
+    if f >= FORKS.index("bellatrix"):
+        fields = [("header", spec.ExecutionPayloadHeader)]
+        if f >= FORKS.index("deneb"):
+            fields.append(("blob_kzg_commitments", spec.BeaconBlockBody.__annotations__["blob_kzg_commitments"]))
+        if f >= FORKS.index("electra"):
+            fields.append(("execution_requests", spec.ExecutionRequests))
+        fields += [("value", spec.Uint256), ("pubkey", spec.BLSPubkey)]
+        bid = container(spec, "BuilderBid", fields)
+        t["BuilderBid"] = bid
+        t["SignedBuilderBid"] = container(spec, "SignedBuilderBid", [("message", bid), ("signature", spec.BLSSignature)])
+    return t
+
+
 def message_types(spec, fork):
     """The req/resp message types of the fork, by name."""
     f = FORKS.index(fork)

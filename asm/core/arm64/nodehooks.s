@@ -2137,6 +2137,9 @@ LOCAL_FUNCTION node_type_of_kind
     cmp     x9, #NODE_JSON_DATA_COLUMN_SIDECAR
     b.eq    9f
 .endif
+    ADDRESS x0, lantern_type_SignedValidatorRegistrationV1
+    cmp     x9, #NODE_JSON_VALIDATOR_REGISTRATION
+    b.eq    9f
     mov     x0, #0
 9:  ret
 END_FUNCTION node_type_of_kind

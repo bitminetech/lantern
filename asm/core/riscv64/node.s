@@ -281,7 +281,17 @@ FUNCTION lantern_node_init
     sd      t0, Node_engine_id(s6)
     ori     t0, s5, NODE_FLAG_FCU
     sd      t0, Node_flags(s6)
-1:  mv      a0, s6
+1:  li      t0, NODE_FLAG_BUILDER           # the builder's host
+    and     t0, s5, t0
+    beqz    t0, 16f
+    ld      a2, NodeAnchor_builder_host_len(s3)
+    li      t0, NODE_ENGINE_HOST_MAX
+    bgtu    a2, t0, 7f
+    STQ     a2, s6, Node_builder_host_len
+    ADDQ    a0, s6, Node_builder_host
+    addi    a1, s3, NodeAnchor_builder_host
+    call    lantern_copy
+16: mv      a0, s6
     mv      a1, s1
     call    node_layout
     PART    a0, t1, s6, Node_blocks         # the anchor block
@@ -3993,7 +4003,11 @@ LOCAL_FUNCTION node_event
     call    lantern_copy
     call    node_engine_read
     LEAVE 48
-47: li      t1, NODE_EV_ENR
+47: li      t1, NODE_EV_BUILDER             # BUILDER: the answer of a builder call
+    bne     t0, t1, 470f
+    call    node_builder_event
+    LEAVE 48
+470: li     t1, NODE_EV_ENR
     bne     t0, t1, 471f
     mv      a0, s3                          # ENR: a record discv5 found
     call    node_enr
@@ -8507,7 +8521,32 @@ FUNCTION lantern_node_step
     addi    t4, t3, -1
     li      t6, NODE_EV_LAST
     bgeu    t4, t6, 7f
-    li      t4, NODE_EV_API_SENT            # API_SENT, API_CLOSED: the connection at 16
+    li      t4, NODE_EV_BUILDER             # BUILDER: a call, + 256 for a failure, else its bytes; with NODE_FLAG_BUILDER
+    bne     t3, t4, 161f
+    ld      t4, Node_flags(s1)
+    li      t6, NODE_FLAG_BUILDER
+    and     t4, t4, t6
+    beqz    t4, 7f
+    li      t4, 24
+    bltu    t2, t4, 7f
+    ld      t4, 16(t0)
+    andi    t6, t4, 255
+    sltiu   t6, t6, NODE_BUILDER_CALLS
+    beqz    t6, 7f
+    srli    t4, t4, 8
+    li      t6, 1
+    bgtu    t4, t6, 7f
+    beq     t4, t6, 4f
+    li      t4, 24 + 24
+    bltu    t2, t4, 7f
+    ld      t4, (24 + 8)(t0)
+    li      t6, 24
+    bne     t4, t6, 7f
+    addi    t4, t2, -(24 + 24)
+    ld      t6, (24 + 16)(t0)
+    bgtu    t6, t4, 7f
+    j       4f
+161: li     t4, NODE_EV_API_SENT            # API_SENT, API_CLOSED: the connection at 16
     bltu    t3, t4, 11f
     li      t4, 24
     bltu    t2, t4, 7f

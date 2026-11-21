@@ -1864,6 +1864,7 @@ MESSAGES = {400: b"BAD_REQUEST", 404: b"NOT_FOUND", 405: b"METHOD_NOT_ALLOWED", 
             431: b"REQUEST_HEADER_FIELDS_TOO_LARGE", 500: b"INTERNAL_SERVER_ERROR", 501: b"NOT_IMPLEMENTED",
             503: b"SERVICE_UNAVAILABLE", 505: b"HTTP_VERSION_NOT_SUPPORTED"}
 METHODS = {1: b"GET", 2: b"POST", 3: b"DELETE"}
+BUILDER_HOST = b"localhost:18550"  # the runner's builder (node.md, the builder calls)
 ALLOW = {1: b"GET", 2: b"POST", 3: b"GET, POST"}
 VALIDATOR_OPS = ("getStateValidators", "postStateValidators", "getStateValidator", "getStateValidatorBalances",
                  "postStateValidatorBalances", "postStateValidatorIdentities")
@@ -1872,7 +1873,7 @@ POOL_GETS = ("getPoolVoluntaryExits", "getPoolProposerSlashings", "getPoolAttest
 POOL_POSTS = ("submitPoolVoluntaryExit", "submitPoolProposerSlashings", "submitPoolAttesterSlashingsV2",
               "submitPoolBLSToExecutionChange", "submitPoolAttestationsV2", "publishAggregateAndProofsV2",
               "submitPoolSyncCommitteeSignatures", "publishContributionAndProofs", "prepareBeaconCommitteeSubnet",
-              "prepareSyncCommitteeSubnets", "prepareBeaconProposer")
+              "prepareSyncCommitteeSubnets", "prepareBeaconProposer", "registerValidator")
 PENDING = {"getPendingDeposits": "pending_deposits", "getPendingPartialWithdrawals": "pending_partial_withdrawals",
            "getPendingConsolidations": "pending_consolidations"}
 ANSWERED = ("getHealth", "getNetworkIdentity", "getNodeVersion", "getSyncingStatus", "getPeerCount", "getGenesis",
@@ -3062,6 +3063,56 @@ def pool_requests(spec, fork, v, by_name, add):
                  b'[{"validator_index":"1","fee_recipient":"0x' + b"42" * 20 + b'"},'
                  b'{"validator_index":"9999999","fee_recipient":"0x' + b"07" * 20 + b'"}]', 200)
     subscription("prepare_proposer_no_item", "prepareBeaconProposer", b'[{"validator_index":"1"}]', 400)
+    # registerValidator (beacon-api.md; builder-specs v0.6.1): registrations of an active validator, an unknown
+    # pubkey, exited and pending validators when the state has them, and the active one again with an earlier
+    # timestamp; the node forwards the eligible ones to its builder (node.md, the builder calls), in order
+    register_op = by_name["registerValidator"]
+
+    def registration(index, pubkey, fee, gas, timestamp):
+        sig = bytes([index % 256]) * 96
+        ssz = fee + gas.to_bytes(8, "little") + timestamp.to_bytes(8, "little") + pubkey + sig
+        text = (b'{"message":{"fee_recipient":"0x' + fee.hex().encode() + b'","gas_limit":"%d","timestamp":"%d","pubkey":"0x'
+                % (gas, timestamp) + pubkey.hex().encode() + b'"},"signature":"0x' + sig.hex().encode() + b'"}')
+        return ssz, text
+
+    def eligible(pubkey):
+        for i, val in enumerate(state.validators):
+            if bytes(val.pubkey) == pubkey:
+                return spec.is_active_validator(val, epoch) or val.activation_epoch > epoch
+        return False
+    picks = [1]
+    exited = [i for i, val in enumerate(state.validators) if val.exit_epoch <= epoch]
+    pending = [i for i, val in enumerate(state.validators) if val.activation_epoch > epoch]
+    regs = [registration(1, bytes(state.validators[1].pubkey), b"\x42" * 20, 30000000, 1700000000)]
+    regs.append(registration(2, b"\xab" * 48, b"\x07" * 20, 36000000, 1700000001))
+    for i in (exited[:1] + pending[:1]):
+        regs.append(registration(i, bytes(state.validators[i].pubkey), bytes([i % 256]) * 20, 45000000, 1700000002 + i))
+    regs.append(registration(1, bytes(state.validators[1].pubkey), b"\x43" * 20, 30000000, 1699999999))
+    if not exited or not pending:
+        raise RuntimeError("registerValidator: the anchor needs exited and pending validators")
+
+    def builder_request(items):
+        good = [text for (ssz, text), pk in items if eligible(pk)]
+        if not good:
+            return b""
+        body = b"[" + b",".join(good) + b"]"
+        return (b"POST /eth/v1/builder/validators HTTP/1.1\r\nHost: " + BUILDER_HOST + b"\r\nAccept: application/json\r\n"
+                b"Connection: close\r\nContent-Type: application/json\r\nContent-Length: %d\r\n\r\n" % len(body) + body)
+    keyed = [(r, r[0][36:84]) for r in regs]
+
+    def register(name, items, ssz=False, status=200, raw_body=None):
+        body = raw_body if raw_body is not None else (b"".join(r[0] for r, _ in items) if ssz else
+                                                      b"[" + b",".join(r[1] for r, _ in items) + b"]")
+        req = api_route.request(register_op["method"], api_route.fill(register_op, None), b"",
+                                content_type=b"application/octet-stream" if ssz else b"application/json")
+        add(name, req, body=body, builder=builder_request(items) if status == 200 else b"",
+            want=(lambda c, k: response(200, close=c, keep_alive=k)) if status == 200 else (lambda c, k: error(400, close=c, keep_alive=k)))
+    register("register_validators", keyed)
+    register("register_validators_ssz", keyed, ssz=True)
+    register("register_validators_unknown", keyed[1:2])
+    register("register_validators_empty", [])
+    register("register_validators_no_item", [], status=400, raw_body=b'[{"message":1}]')
+    register("register_validators_bad_ssz", [], ssz=True, status=400, raw_body=keyed[0][0][0][:179])
     # with the store's nodes NOT_VALIDATED (syncing bit 1): the aggregate's beacon_block_root, 503
     add("aggregate_not_validated", agg_request(data_root, first_slot, first_index), syncing=2,
         want=lambda c, k: error(503, close=c, keep_alive=k))
@@ -3089,7 +3140,7 @@ def api_requests(spec, fork, v, kind="main"):
     out = []
 
     def add(name, req, offline=False, version=b"HTTP/1.1", connection=b"", extra=b"", body=None, syncing=False, want=None,
-            stream=0):
+            stream=0, builder=b""):
         if body is not None:
             req = dict(req, body=body)
             extra += b"Content-Length: %d\r\n" % len(body)
@@ -3132,7 +3183,7 @@ def api_requests(spec, fork, v, kind="main"):
                 want = error(503 if int(syncing) & 1 else 400, close=close, keep_alive=keep_alive)
             else:
                 want = error(501, close=close, keep_alive=keep_alive)
-        out.append((name, raw, want, close, offline, syncing, stream))
+        out.append((name, raw, want, close, offline, syncing, stream, builder))
 
     committees = by_name["getEpochCommittees"]
     duties = by_name["getProposerDuties"]
@@ -3429,8 +3480,9 @@ def api_cases(fork, preset, epoch=ANCHOR_EPOCH):
     reqs = run(spec, schedule(fork), lambda: api_requests(spec, fork, v, kind))
     if fork in ("altair",):  # no execution engine before bellatrix: el_offline stays false
         reqs = [r for r in reqs if not r[4]]
-    names, raws, wants, closes, offline, syncing, streams = [], [], [], [], [], [], []
-    for name, raw, want, close, off, sync, stream in sorted(reqs, key=lambda r: r[4]):
+    names, raws, wants, closes, offline, syncing, streams, builders = [], [], [], [], [], [], [], []
+    for name, raw, want, close, off, sync, stream, builder in sorted(reqs, key=lambda r: r[4]):
+        builders.append(builder)
         names.append(name.encode())
         raws.append(raw)
         wants.append(want[0] if isinstance(want, list) else want)  # a box: an open stream's bytes at the case's end
@@ -3446,6 +3498,7 @@ def api_cases(fork, preset, epoch=ANCHOR_EPOCH):
         offline.append(offline[-1] if offline else False)
         syncing.append(0)
         streams.append(0)
+        builders.append(b"")
     first_offline = offline.index(True) if True in offline else len(names)
     slot_ms = int(spec.config.SLOT_DURATION_MS) if hasattr(spec.config, "SLOT_DURATION_MS") else int(spec.config.SECONDS_PER_SLOT) * 1000
     return {
@@ -3459,5 +3512,6 @@ def api_cases(fork, preset, epoch=ANCHOR_EPOCH):
         "closes": bytes(closes),
         "syncing": bytes(syncing),
         "streams": bytes(streams),
+        "builders": builders,
         "offline": first_offline,
     }

@@ -984,6 +984,9 @@ LOCAL_FUNCTION app_start
     call    app_engine_conf                 # the execution engine
     test    %rax, %rax
     jnz     99f
+    call    app_builder_conf                # the builder
+    test    %rax, %rax
+    jnz     99f
     call    app_key                         # the key, and the anchor's node ID
     test    %rax, %rax
     jnz     94f
@@ -2618,9 +2621,14 @@ LOCAL_FUNCTION app_actions
     call    app_work
     jmp     8f
 5:  cmp     $NODE_ACT_ENGINE, %rax
-    jne     6f
+    jne     51f
     mov     %rbp, %rdi
     call    app_engine_request
+    jmp     8f
+51: cmp     $NODE_ACT_BUILDER, %rax
+    jne     6f
+    mov     %rbp, %rdi
+    call    app_builder_request
     jmp     8f
 6:  cmp     $NODE_ACT_DISCV5, %rax
     jne     7f
@@ -2999,8 +3007,8 @@ LOCAL_FUNCTION app_net
     CALL_GLOBAL libp2p_init
     test    %rax, %rax
     jnz     96f
-    mov     88(%rbp), %rax                  # the shell: a slot for each connection, and one for the execution engine
-    inc     %rax
+    mov     88(%rbp), %rax                  # the shell: a slot for each connection, one for the execution engine, and the builder's
+    add     $(1 + APP_BUILDER_SLOTS), %rax
     mov     %rax, (L + 8)(%rsp)
     mov     160(%rbp), %rax
     mov     %rax, (L + 16)(%rsp)
@@ -3513,6 +3521,341 @@ LOCAL_FUNCTION app_engine_event
 8:  xor     %eax, %eax
     LEAVE 48
 END_FUNCTION app_engine_event
+
+# L2: with --builder, the builder: its Address, the anchor's builder_host, and NODE_FLAG_BUILDER
+# (app.md): rax = 0, or 2 after a line on the standard error. rbp the endpoint's bytes, r12 their
+# count, r13 the colon.
+LOCAL_FUNCTION app_builder_conf
+    ENTER 0
+    mov     (APP_OPTIONS + AppOptions_builder + 8)(%rbx), %r12
+    test    %r12, %r12
+    jz      8f
+    mov     (APP_OPTIONS + AppOptions_builder)(%rbx), %rbp
+    add     APP_ARGS(%rbx), %rbp
+    cmp     $NODE_ENGINE_HOST_MAX, %r12     # the Host of each request
+    ja      90f
+    mov     %r12, (APP_ANCHOR + NodeAnchor_builder_host_len)(%rbx)
+    lea     (APP_ANCHOR + NodeAnchor_builder_host)(%rbx), %rdi
+    mov     %rbp, %rsi
+    mov     %r12, %rdx
+    call    lantern_copy
+    mov     %r12, %r13                      # the last colon
+1:  test    %r13, %r13
+    jz      90f
+    dec     %r13
+    cmpb    $0x3a, (%rbp,%r13)
+    jne     1b
+    lea     1(%rbp,%r13), %rdi              # the port
+    lea     (%rbp,%r12), %rsi
+    call    app_number
+    test    %rax, %rax
+    jnz     90f
+    test    %rdx, %rdx
+    jz      90f
+    cmp     $65535, %rdx
+    ja      90f
+    lea     APP_BUILDER(%rbx), %r14
+    movq    $4, (%r14)
+    mov     %rdx, 8(%r14)
+    movq    $0, 16(%r14)
+    movq    $0, 24(%r14)
+    mov     %rbp, %rdi                      # the host: localhost, or an IPv4 address
+    mov     %r13, %rsi
+    ADDRESS %rdx, app_localhost
+    mov     $9, %ecx
+    call    app_name_is
+    mov     $0x0100007f, %edx               # 127.0.0.1
+    test    %rax, %rax
+    jnz     2f
+    mov     %rbp, %rdi
+    lea     (%rbp,%r13), %rsi
+    call    app_dotted
+    test    %rax, %rax
+    jnz     90f
+2:  mov     %edx, (APP_BUILDER + 16)(%rbx)
+    orq     $NODE_FLAG_BUILDER, APP_FLAGS(%rbx)
+8:  xor     %eax, %eax
+    LEAVE 0
+90: call    app_line_start                  # the endpoint's form
+    ADDRESS %rdi, app_m_builder
+    mov     $app_m_builder_len, %esi
+    call    app_line_text
+    mov     $APP_LOG_ERROR, %edi
+    call    app_line_end
+    mov     $2, %eax
+    LEAVE 0
+END_FUNCTION app_builder_conf
+
+# L0: rax = the Handle of the connection of the builder slot rdi (rsi its fields): the slots after the engine's, at its generation. Uses rcx.
+LOCAL_FUNCTION app_builder_handle
+    UNWIND_END_PROLOGUE
+    mov     APP_P2P_CONFIG(%rbx), %rax
+    mov     88(%rax), %rax                  # max_connections, then the engine's
+    lea     1(%rax,%rdi), %rax
+    mov     AppBuilder_gen(%rsi), %rcx
+    shl     $32, %rcx
+    or      %rcx, %rax
+    ret
+END_FUNCTION app_builder_handle
+
+# L1: the NODE_EV_BUILDER of the failure of the call rdi joins the next step's events. Locals: the event.
+LOCAL_FUNCTION app_builder_fail
+    FRAME 32
+    movq    $24, (%rsp)
+    movq    $NODE_EV_BUILDER, 8(%rsp)
+    or      $256, %rdi
+    mov     %rdi, 16(%rsp)
+    mov     %rsp, %rdi
+    mov     $24, %esi
+    call    app_event_put
+    UNFRAME 32
+END_FUNCTION app_builder_fail
+
+# L1: the NODE_EV_BUILDER of the slot fields rsi joins the next step's events: the call, with the
+# bytes the builder sent, or with the failure bit when it sent none; the slot is free. Locals: the
+# event's head, the fields.
+LOCAL_FUNCTION app_builder_answer
+    FRAME 64
+    mov     %rsi, 48(%rsp)
+    mov     AppBuilder_got(%rsi), %rax
+    mov     AppBuilder_call(%rsi), %rdi
+    test    %rax, %rax
+    jnz     1f
+    call    app_builder_fail                # none: the failure bit
+    jmp     9f
+1:  lea     (48 + 7)(%rax), %rcx            # size, kind, the call, a ByteList, the bytes
+    and     $-8, %rcx
+    mov     %rcx, (%rsp)
+    movq    $NODE_EV_BUILDER, 8(%rsp)
+    mov     %rdi, 16(%rsp)
+    sub     $24, %rcx
+    mov     %rcx, 24(%rsp)
+    movq    $24, 32(%rsp)
+    mov     %rax, 40(%rsp)
+    mov     %rsp, %rdi
+    mov     $48, %esi
+    call    app_event_put
+    mov     48(%rsp), %rsi
+    mov     AppBuilder_buf(%rsi), %rdi
+    add     AppBuilder_len(%rsi), %rdi
+    mov     AppBuilder_got(%rsi), %rsi
+    add     $7, %rsi
+    and     $-8, %rsi
+    call    app_event_put
+9:  mov     48(%rsp), %rsi
+    movq    $0, AppBuilder_state(%rsi)
+    UNFRAME 64
+END_FUNCTION app_builder_answer
+
+# L2: the NODE_ACT_BUILDER rdi (app.md): a free slot takes its request and dials the builder; with
+# none, or no memory, its NODE_EV_BUILDER of failure. rbp the action, r12 the slot, r13 its fields,
+# r14 the request's bytes, r15 their count.
+LOCAL_FUNCTION app_builder_request
+    ENTER 0
+    mov     %rdi, %rbp
+    mov     (24 + 8)(%rbp), %rax
+    lea     24(%rbp,%rax), %r14
+    mov     (24 + 16)(%rbp), %r15
+    xor     %r12d, %r12d
+    lea     APP_BUILDER_SLOT0(%rbx), %r13
+1:  cmp     $APP_BUILDER_SLOTS, %r12
+    jae     7f
+    cmpq    $0, AppBuilder_state(%r13)
+    je      2f
+    add     $APP_BUILDER_SLOT, %r13
+    inc     %r12
+    jmp     1b
+2:  mov     16(%rbp), %rax                  # the call
+    mov     %rax, AppBuilder_call(%r13)
+    movq    $0, AppBuilder_sent(%r13)
+    movq    $0, AppBuilder_flight(%r13)
+    movq    $0, AppBuilder_got(%r13)
+    lea     (APP_BUILDER_BUFFER + 8)(%r15), %rax   # room for the request and the answer
+    cmp     %rax, (AppBuilder_buf + 8)(%r13)
+    jae     3f
+    lea     AppBuilder_buf(%r13), %rdi
+    sub     %rbx, %rdi
+    call    app_unmap
+    lea     AppBuilder_buf(%r13), %rdi
+    sub     %rbx, %rdi
+    lea     (APP_BUILDER_BUFFER + 8)(%r15), %rsi
+    call    app_alloc
+    test    %rax, %rax
+    jz      8f
+3:  mov     AppBuilder_buf(%r13), %rdi
+    mov     %r14, %rsi
+    mov     %r15, %rdx
+    call    lantern_copy
+    mov     %r15, AppBuilder_len(%r13)
+    incq    AppBuilder_gen(%r13)
+    movq    $1, AppBuilder_state(%r13)
+    mov     (APP_TICK + LIBP2P_TICK_NOW)(%rbx), %rax
+    mov     %rax, AppBuilder_start(%r13)
+    mov     APP_ENGINE_ACT(%rbx), %rbp      # the DIAL
+    add     $24, %rbp
+    movq    $LIBP2P_ACT_DIAL_SIZE, (%rbp)
+    movq    $LIBP2P_ACTION_DIAL, 8(%rbp)
+    mov     %r12, %rdi
+    mov     %r13, %rsi
+    call    app_builder_handle
+    mov     %rax, LIBP2P_ACT_CONN(%rbp)
+    lea     LIBP2P_ACT_DIAL_ADDR(%rbp), %rdi
+    lea     APP_BUILDER(%rbx), %rsi
+    mov     $32, %edx
+    call    lantern_copy
+    mov     %rbp, %rdi
+    mov     $LIBP2P_ACT_DIAL_SIZE, %esi
+    call    app_engine_perform
+    LEAVE 0
+7:  mov     16(%rbp), %rdi                  # no free slot: a failure
+    call    app_builder_fail
+    LEAVE 0
+8:  movq    $0, AppBuilder_got(%r13)        # no memory: a failure
+    mov     %r13, %rsi
+    call    app_builder_answer
+    LEAVE 0
+END_FUNCTION app_builder_request
+
+# L2: rax = 1 when the shell event rdi is of a builder slot's connection, which it then takes:
+# CONNECTED opens it, SENT frees its buffer, RECEIVED keeps the bytes (a full buffer closes it),
+# DIAL_FAILED and CLOSED give the call's NODE_EV_BUILDER; else 0. An event of an older connection
+# of a slot is dropped. rbp the event, r12 its kind, r13 the slot, r14 its fields.
+LOCAL_FUNCTION app_builder_event
+    ENTER 0
+    mov     %rdi, %rbp
+    mov     8(%rbp), %r12
+    cmp     $LIBP2P_EVENT_CONNECTED, %r12
+    jb      8f
+    cmp     $LIBP2P_EVENT_CLOSED, %r12
+    ja      8f
+    mov     LIBP2P_EV_CONN(%rbp), %rax
+    mov     %eax, %r13d                     # its index, past libp2p's and the engine's
+    mov     APP_P2P_CONFIG(%rbx), %rcx
+    mov     88(%rcx), %rcx
+    inc     %rcx
+    sub     %rcx, %r13
+    jb      8f
+    cmp     $APP_BUILDER_SLOTS, %r13
+    jae     8f
+    imul    $APP_BUILDER_SLOT, %r13, %r14
+    lea     APP_BUILDER_SLOT0(%rbx,%r14), %r14
+    cmpq    $0, AppBuilder_state(%r14)
+    je      9f
+    shr     $32, %rax
+    cmp     AppBuilder_gen(%r14), %rax
+    jne     9f
+    cmp     $LIBP2P_EVENT_CONNECTED, %r12
+    jne     1f
+    movq    $2, AppBuilder_state(%r14)
+    jmp     9f
+1:  cmp     $LIBP2P_EVENT_SENT, %r12
+    jne     2f
+    mov     AppBuilder_flight(%r14), %rax
+    sub     LIBP2P_EV_COUNT(%rbp), %rax
+    jae     11f
+    xor     %eax, %eax
+11: mov     %rax, AppBuilder_flight(%r14)
+    jmp     9f
+2:  cmp     $LIBP2P_EVENT_RECEIVED, %r12
+    jne     3f
+    mov     (AppBuilder_buf + 8)(%r14), %rax    # the room after the request and the bytes so far
+    sub     AppBuilder_len(%r14), %rax
+    sub     AppBuilder_got(%r14), %rax
+    sub     $8, %rax
+    mov     LIBP2P_EV_COUNT(%rbp), %rdx
+    cmp     %rax, %rdx
+    jbe     21f
+    mov     %rax, %rdx                      # full: the rest goes, and the connection closes
+    movq    $3, AppBuilder_state(%r14)
+21: mov     AppBuilder_buf(%r14), %rdi
+    add     AppBuilder_len(%r14), %rdi
+    add     AppBuilder_got(%r14), %rdi
+    add     %rdx, AppBuilder_got(%r14)
+    lea     LIBP2P_EV_DATA(%rbp), %rsi
+    call    lantern_copy
+    jmp     9f
+3:  mov     %r14, %rsi                      # DIAL_FAILED, CLOSED: the answer
+    call    app_builder_answer
+9:  mov     $1, %eax
+    LEAVE 0
+8:  xor     %eax, %eax
+    LEAVE 0
+END_FUNCTION app_builder_event
+
+# L2: after the shell's events (app.md): for each slot, a call past APP_BUILDER_MS closes; an open
+# one sends its request's next bytes as the shell's send buffer has room; one to close (state 3)
+# gets its CLOSE, then waits for CLOSED (state 4). rbp the action, r12 the slot, r13 its fields,
+# r14 the bytes.
+LOCAL_FUNCTION app_builder_due
+    ENTER 0
+    xor     %r12d, %r12d
+    lea     APP_BUILDER_SLOT0(%rbx), %r13
+1:  cmp     $APP_BUILDER_SLOTS, %r12
+    jae     9f
+    mov     AppBuilder_state(%r13), %rax
+    test    %rax, %rax
+    jz      7f
+    cmp     $2, %rax
+    ja      3f
+    mov     (APP_TICK + LIBP2P_TICK_NOW)(%rbx), %rcx    # the time limit
+    sub     AppBuilder_start(%r13), %rcx
+    cmp     $APP_BUILDER_MS, %rcx
+    jb      2f
+    movq    $3, AppBuilder_state(%r13)
+    jmp     3f
+2:  cmp     $2, %rax
+    jne     7f
+    mov     AppBuilder_len(%r13), %r14      # open: the next bytes, as the send buffer has room
+    sub     AppBuilder_sent(%r13), %r14
+    jz      7f
+    mov     APP_P2P_CONFIG(%rbx), %rax
+    mov     160(%rax), %rax                 # send_window
+    sub     AppBuilder_flight(%r13), %rax
+    jbe     7f
+    cmp     %rax, %r14
+    jbe     21f
+    mov     %rax, %r14
+21: mov     APP_ENGINE_ACT(%rbx), %rbp      # SEND: connection, count, the bytes
+    add     $24, %rbp
+    lea     (LIBP2P_ACT_SEND_DATA + 7)(%r14), %rax
+    and     $-8, %rax
+    mov     %rax, (%rbp)
+    movq    $LIBP2P_ACTION_SEND, 8(%rbp)
+    mov     %r12, %rdi
+    mov     %r13, %rsi
+    call    app_builder_handle
+    mov     %rax, LIBP2P_ACT_CONN(%rbp)
+    mov     %r14, (LIBP2P_ACT_CONN + 8)(%rbp)
+    lea     LIBP2P_ACT_SEND_DATA(%rbp), %rdi
+    mov     AppBuilder_buf(%r13), %rsi
+    add     AppBuilder_sent(%r13), %rsi
+    mov     %r14, %rdx
+    call    lantern_copy
+    add     %r14, AppBuilder_sent(%r13)
+    add     %r14, AppBuilder_flight(%r13)
+    mov     %rbp, %rdi
+    mov     (%rbp), %rsi
+    call    app_engine_perform
+    jmp     7f
+3:  cmpq    $3, AppBuilder_state(%r13)      # to close: the CLOSE
+    jne     7f
+    movq    $4, AppBuilder_state(%r13)
+    mov     APP_ENGINE_ACT(%rbx), %rbp
+    add     $24, %rbp
+    movq    $LIBP2P_ACT_CLOSE_SIZE, (%rbp)
+    movq    $LIBP2P_ACTION_CLOSE, 8(%rbp)
+    mov     %r12, %rdi
+    mov     %r13, %rsi
+    call    app_builder_handle
+    mov     %rax, LIBP2P_ACT_CONN(%rbp)
+    mov     %rbp, %rdi
+    mov     $LIBP2P_ACT_CLOSE_SIZE, %esi
+    call    app_engine_perform
+7:  add     $APP_BUILDER_SLOT, %r13
+    inc     %r12
+    jmp     1b
+9:  LEAVE 0
+END_FUNCTION app_builder_due
 
 /* L1: the base64url text (RFC 4648 section 5, no padding) of the rsi bytes at rdi joins the log line. Locals: rdi, rsi, then 4 digits. */
 LOCAL_FUNCTION app_line_base64url
@@ -4726,6 +5069,10 @@ LOCAL_FUNCTION app_p2p_events
     call    app_engine_event
     test    %rax, %rax
     jnz     2f
+    mov     %rbp, %rdi                      # a builder call's connection
+    call    app_builder_event
+    test    %rax, %rax
+    jnz     2f
     mov     (%rbp), %rax
     add     $16, %rax
     mov     %rax, L(%rsp)
@@ -4740,6 +5087,7 @@ LOCAL_FUNCTION app_p2p_events
     jmp     1b
 9:  mov     APP_SHELL_EVENTS(%rbx), %rax
     movq    $0, 16(%rax)
+    call    app_builder_due                 # the builder calls: their bytes, ends and time limits
     cmpq    $0, APP_ENGINE_DUE(%rbx)        # then more bytes of the request
     je      10f
     movq    $0, APP_ENGINE_DUE(%rbx)

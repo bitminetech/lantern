@@ -86,6 +86,21 @@ SSZ_DFIELD N_ExecutionRequests, BeaconBlockBody, execution_requests
 .endif
 
 .if FORK >= FORK_BELLATRIX
+SSZ_FIELDS SignedBuilderBid
+SSZ_DFIELD N_BuilderBid, SignedBuilderBid, message
+SSZ_DFIELD N_Bytes96, SignedBuilderBid, signature
+
+SSZ_FIELDS BuilderBid
+SSZ_DFIELD N_ExecutionPayloadHeader, BuilderBid, header
+.if FORK >= FORK_DENEB
+SSZ_DFIELD N_BlobKZGCommitments, BuilderBid, blob_kzg_commitments
+.endif
+.if FORK >= FORK_ELECTRA
+SSZ_DFIELD N_ExecutionRequests, BuilderBid, execution_requests
+.endif
+SSZ_DFIELD N_Uint256, BuilderBid, value
+SSZ_DFIELD N_Bytes48, BuilderBid, pubkey
+
 SSZ_FIELDS SignedBlindedBeaconBlock
 SSZ_DFIELD N_BlindedBeaconBlock, SignedBlindedBeaconBlock, message
 SSZ_DFIELD N_Bytes96, SignedBlindedBeaconBlock, signature
@@ -673,3 +688,13 @@ SSZ_DFIELD N_Uint64, SyncCommitteeSubscription, until_epoch
 SSZ_FIELDS ProposerPreparation
 SSZ_DFIELD N_Uint64, ProposerPreparation, validator_index
 SSZ_DFIELD N_Bytes20, ProposerPreparation, fee_recipient
+
+SSZ_FIELDS SignedValidatorRegistrationV1
+SSZ_DFIELD N_ValidatorRegistrationV1, SignedValidatorRegistrationV1, message
+SSZ_DFIELD N_Bytes96, SignedValidatorRegistrationV1, signature
+
+SSZ_FIELDS ValidatorRegistrationV1
+SSZ_DFIELD N_Bytes20, ValidatorRegistrationV1, fee_recipient
+SSZ_DFIELD N_Uint64, ValidatorRegistrationV1, gas_limit
+SSZ_DFIELD N_Uint64, ValidatorRegistrationV1, timestamp
+SSZ_DFIELD N_Bytes48, ValidatorRegistrationV1, pubkey

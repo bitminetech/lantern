@@ -2187,6 +2187,9 @@ LOCAL_FUNCTION node_type_of_kind
     ADDRESS a0, lantern_type_ProposerPreparation
     li      t1, NODE_JSON_PROPOSER_PREPARATION
     beq     t0, t1, 9f
+    ADDRESS a0, lantern_type_SignedValidatorRegistrationV1
+    li      t1, NODE_JSON_VALIDATOR_REGISTRATION
+    beq     t0, t1, 9f
     ADDRESS a0, lantern_type_BeaconBlock
     li      t1, NODE_JSON_BEACON_BLOCK
     beq     t0, t1, 9f
