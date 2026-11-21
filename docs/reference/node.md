@@ -128,6 +128,7 @@
   - After the steps of each event, the store's first node must be the root of its finalized checkpoint: the node pruned it.
   - The sidecar drop (drop_check): a node with `NODE_FLAG_DB` and a `Db` of three segments of slots, with a block and a sidecar in the first segment and a block in the last, at a store's slot past them and windows of 0 epochs, must give a `NODE_ACT_DB_DROP` of sidecar segments 0 and 1 and no other, `sidecar_floor` the first slot of segment 2, and an index with no sidecar below it and the same blocks.
   - Every second node the runner starts has `NODE_FLAG_DB`. Each `NODE_ACT_DB_STATE` must name a state of its slot and a buffer of bytes; lantern_node_state_bytes of the state and the block's message, as the two ByteLists of lantern_node_anchor_block, must give a state and a block of their roots, and with another `state_root` `LANTERN_INVALID_ANCHOR`. After the case, a new node of the same start given the segments with lantern_node_db_scan must take every record and hold the same index, the same segments to append to, and `db_next_slot` past the index's last block.
+  - The runner's nodes with `NODE_FLAG_DB` have `archive_slots` `SLOTS_PER_EPOCH`. Each `NODE_ACT_DB_ARCHIVE` must be at its state segment's end, of a state of the record's slot, of offset 0 with kind `DB_STATE` or above with `DB_STATE_DIFF`; the runner writes its record as the shell does, and answers each with a `NODE_EV_DB_ARCHIVE`. So the checks of getStateRoot below F's slot replay from state records, full and diffs.
   - The runner's nodes with `NODE_FLAG_DB`: The runner keeps its segments in memory: each `NODE_ACT_DB_APPEND` must be at its segment's end, of the length of the bytes of its id, with the ByteList header of those bytes, and of a slot of its segment; a SERVE of a `NODE_DB_REF` gets the record's ByteList in place in the segment. A block or sidecar in the node's `Db` counts as imported or held in the checks below.
   - From bellatrix on, the node has `NODE_FLAG_ENGINE`, and the runner is its execution engine too. It answers each `NODE_ACT_ENGINE` request with an HTTP/1.1 response in two `NODE_EV_ENGINE` events: engine_newPayload of a `blockHash`, and engine_forkchoiceUpdated of a `headBlockHash`, with the `payloadStatus` of the case's last `payload_status` step of that hash, else `VALID` with that hash as `latestValidHash`. The request must carry a JWT of the node's secret.
   - Cases with `payload_status` steps run in node mode from bellatrix on, through the node's execution engine calls; before bellatrix only directly.
@@ -343,6 +344,7 @@ lantern_node_init(room, config, anchor, flags, node) -> status
 - The node's custody group count: `NUMBER_OF_CUSTODY_GROUPS` with `NODE_FLAG_SUPERNODE` among `flags`, else `CUSTODY_REQUIREMENT` of `config`.
 - The node's `columns`: each column of compute_columns_for_custody_group of each group of get_custody_groups(the anchor's `node_id`, max(`SAMPLES_PER_SLOT`, its custody group count)) of `config`: every column with `NODE_FLAG_SUPERNODE`.
 - With `NODE_FLAG_BUILDER`, the node keeps the anchor's `builder_host`.
+- With `NODE_FLAG_DB`, the node keeps the anchor's `archive_slots`; `archive_slot`, `archive_first` and `archive_segment` are 2^64 - 1.
 - With `NODE_FLAG_ENGINE`, the node keeps the anchor's `jwt_secret` and `engine_host`; its first JSON-RPC id is 1, and it takes `NODE_FLAG_FCU`, so the anchor's head goes to the engine first.
 
 ### Caller must
@@ -426,6 +428,8 @@ lantern_node_step(node, store, p2p, tick, events, scratch, actions, result) -> s
   - With `NODE_FLAG_DB`, before the other blocks: the chain from F down to `db_next_slot`, by `parent_root`, then from its lowest slot up, each block with bytes goes to the `Db`, but one whose root the `Db` holds already (lantern_db_find_root), as after a restart, gets no record and only its sidecars' bytes and entries go: lantern_db_add of its `DbRecord` (kind `DB_BLOCK`, index 0) at the end of the segment of its slot and a `NODE_ACT_DB_APPEND`; then each `NODE_BLOB_VALID` sidecar of its root, by index from 0 to `DB_SIDECAR_INDICES` - 1 (kind `DB_COLUMN_SIDECAR` from fulu on, else `DB_BLOB_SIDECAR`), the same way in its sidecar segment, its bytes freed and its entry free; then, for F, a `NODE_ACT_DB_STATE` of its post-state, its bytes and its slot; then the block's bytes are freed and its entry is free, but F keeps its entry. `db_next_slot` takes each block's slot + 1. A record lantern_db_add refuses ends the archive of a block until a later prune; a sidecar it refuses stays for the prune.
   - With `NODE_FLAG_DB`, an ancestor of F, or a sidecar of one, below `db_next_slot` whose bytes stay goes as the other branches do.
   - The end of a block segment: `db_block_end` for `db_block_segment`, else `backfill_end` for `backfill_segment`, else 0 (a new segment). The archive's segment is `db_block_segment` and the backfill's `backfill_segment`; a record makes its writer's segment that of its slot, and each of the two ends whose segment it is takes the record's end. So the two writers of one segment append after each other. A sidecar segment the same way, with `db_sidecar_segment`, `db_sidecar_end`, `backfill_sidecar_segment` and `backfill_sidecar_end`.
+- The archive (beacon-api.md, the state of a `state_id`), with `NODE_FLAG_DB` and `archive_slots` not 0: at the prune, after F's `NODE_ACT_DB_STATE`, when F's block is in the `Db` (`db_next_slot` above its slot), F has a post-state, `archive_busy` is 0, and `archive_slot` is 2^64 - 1 or below F's slot by a run of `archive_slots` (F's slot / `archive_slots` above `archive_slot` / `archive_slots`): a `NODE_ACT_DB_ARCHIVE` of F's post-state, the state segment of F's slot, the offset `archive_end` when `archive_segment` is that segment, else 0, and a `DbRecord` of kind `DB_STATE` for offset 0, else `DB_STATE_DIFF`, F's slot, index 0 and F's root; `archive_busy` takes 1.
+- `NODE_EV_DB_ARCHIVE`: `archive_busy` takes 0. With a record (its kind not 0): lantern_db_add of the record at its offset; on `LANTERN_OK`, `archive_segment` takes its segment, `archive_end` its offset + its size, `archive_slot` its slot, and `archive_first` its slot when that is less. A record lantern_db_add refuses is not indexed; the next one of the segment goes at the same offset.
 - With `NODE_FLAG_DB`, after the backfill's blocks: the sidecars the node no longer serves go (deneb and fulu `p2p-interface.md`: a node serves the sidecars of the blob window and the column window; it may drop older ones). The drop slot: the first slot of the earlier of the blob window's and the column window's first epochs, at most the `Db`'s `end_slot`, rounded down to a multiple of `DB_SEGMENT_SLOTS`, and at most 16 segments above `sidecar_floor`. When it is above `sidecar_floor`: a `NODE_ACT_DB_DROP` of each sidecar segment from that of `sidecar_floor` below it, lantern_db_drop_sidecars of the `Db` to the drop slot, `sidecar_floor` takes it, and `db_sidecar_segment` and `backfill_sidecar_segment` below it take 2^64 - 1. A sidecar below `sidecar_floor` gets no record.
 - With `NODE_FLAG_DB`, before any change: the `Db` has room for twice its blocks and the `NodeBlock` entries in its root table, with a store's finalized epoch above `pruned_epoch` for the slots up to the finalized epoch's first slot, and with `backfill_start` not 2^64 - 1 (a backfill request open or not weighed) for the slots below `backfill_slot`; else `LANTERN_BUFFER_TOO_SMALL` with `NODE_SHORT_NODE` and `room` the offset of `db_slots` or `db_roots`.
 - A block whose parent is imported with no post-state is no descendant of the finalized block: it becomes `NODE_BLOCK_INVALID`, and its bytes are freed.
@@ -434,15 +438,16 @@ lantern_node_step(node, store, p2p, tick, events, scratch, actions, result) -> s
 - After the head, the post-states the node can rebuild go: each imported block above F's slot with a post-state, other than the head and the justified root, with an imported child, gets a `NODE_ACT_STATE_FREE` and `state_id` 0, when its slot is not the first of its epoch, its slot + `NODE_STATE_KEEP_SLOTS` (4) is at most the store's slot, and every imported child is of its epoch; with `NODE_FLAG_FEW_STATES`, with no rule of slots or epochs. So the node keeps the post-states of the blocks a checkpoint names, of the last slots, and of the blocks with no child. Then a head with no post-state above F's slot gets it again.
 - The rebuild of the post-state of an imported block above F's slot: its path, by `parent_root`, to the nearest ancestor with a post-state, each block of it with bytes, in a list at the end of `scratch` (8 bytes for each `NodeBlock` entry); a `NODE_ACT_STATE_COPY` of the ancestor's post-state; then for each block of the path from the ancestor's child, in slot order, the copy crosses the fork boundaries to its slot (as an import's copy does) and gets a `NODE_WORK_REPLAY` with the block's bytes; the block takes the copy as its post-state. A path the node cannot follow rebuilds nothing.
 - The base state: the anchor's post-state, `anchor_state_id`, at `base_slot`, the anchor's slot. The node keeps it for its life: a `NODE_ACT_STATE_FREE` of it is no action.
-- The replay (beacon-api.md, the state of a `state_id`): the post-state of a block B of the chain at or below F's slot and above `base_slot` with no post-state.
+- The replay (beacon-api.md, the state of a `state_id`): the post-state of a block B of the chain at or below F's slot with no post-state, above `base_slot`, or at or above `archive_first`.
   - B the block of `replay_root` with `replay_state` not 0: a `NODE_ACT_STATE_COPY` of `replay_state`.
-  - Else, with no replay in flight (`replay_copy` 0), one starts: a `NODE_ACT_STATE_FREE` of any `replay_state`, which takes 0; `replay_root` and `replay_slot` B's; a `NODE_ACT_STATE_COPY` of the base state as `replay_copy`, `replay_copy_slot` `base_slot`, `replay_next` `base_slot` + 1. The request waits (`API_STREAM_REPLAY`, below).
+  - Else, with no replay in flight (`replay_copy` 0), one starts: a `NODE_ACT_STATE_FREE` of any `replay_state`, which takes 0; `replay_root` and `replay_slot` B's; a `NODE_ACT_STATE_COPY` of the base state as `replay_copy`, and the replay's base: the nearest at or below B's slot of the base state (with `base_slot` at most B's slot) and the `Db`'s state records (the `DbSlot` entries from B's slot down to `archive_first`). The base state: `replay_copy_slot` `base_slot`, `replay_next` `base_slot` + 1. A state record of slot s: a `NODE_WORK_ARCHIVE_LOAD` of `replay_copy` as `state_a`, `data` the record's `NODE_DB_REF`, and for a `DB_STATE_DIFF` `state_b` the `NODE_DB_REF` of offset 0 of its segment, else 0; `replay_copy_slot` s, `replay_next` s + 1, `replay_loading` 1. The request waits (`API_STREAM_REPLAY`, below).
   - With one in flight for another block, the request waits too, and starts its own when it runs again.
-- Each step, at the quiet point after the produce entries: a replay in flight queues the blocks of the chain with a slot from `replay_next` to `replay_slot`, in slot order, at most `NODE_REPLAY_CHUNK` (64) a step and while the actions have room for 1024 bytes more.
+- Each step, at the quiet point after the produce entries: a replay in flight with `replay_loading` 0 queues the blocks of the chain with a slot from `replay_next` to `replay_slot`, in slot order, at most `NODE_REPLAY_CHUNK` (64) a step and while the actions have room for 1024 bytes more.
   - The blocks: with `NODE_FLAG_DB`, each slot below `db_next_slot` whose `DbSlot` has a block, its record's `NODE_DB_REF`; then the `NodeBlock` entries with bytes on the path from the block of `replay_root` by `parent_root`, from `replay_next`.
   - Each: the copy crosses the fork boundaries to its slot, then a `NODE_WORK_REPLAY` of the copy with its bytes; `replay_copy_slot` takes its slot and `replay_next` its slot + 1.
   - Once `replay_next` is past `replay_slot`: `replay_state` takes the copy and `replay_copy` 0. Then each `NodeApi` entry with `API_STREAM_REPLAY` runs again (below).
   - A block of the path the node does not hold (no `DbSlot` block and no `NodeBlock` with bytes at the next slot of the path): the replay ends, `replay_copy` freed and 0, `replay_root` zero; each waiting entry runs again with no replay: 404.
+- `NODE_EV_WORK_DONE` of `NODE_WORK_ARCHIVE_LOAD` of `replay_copy`: `replay_loading` takes 0; a result other than `LANTERN_VALID` ends the replay as a block the node does not hold does.
 - A waiting block whose parent is imported: a `NODE_ACT_STATE_COPY` of the parent's post-state and a `NODE_WORK_IMPORT_BLOCK`; the block is `NODE_BLOCK_IMPORTING`. A parent with no post-state above F's slot gets it again first; one at or below F's slot is an ancestor of F, as below. When the fork of the block's slot is later than that of the parent's slot, the copy first crosses each fork boundary between them, and the import gets the last state.
 - The crossing of a fork boundary by a state copy `a` of a fork to the next fork: a `NODE_WORK_SLOTS` of `a` to the next fork's first slot, when `a` is before it; a `NODE_ACT_STATE_COPY` of the copied state as `b`, a buffer for the upgrade; a `NODE_WORK_UPGRADE` of `a` into `b` with the next fork as `arg`; a `NODE_ACT_STATE_FREE` of `a`. Then `b` is the copy. The shell does the actions in order, so a work reads what the works before it wrote. A waiting block whose parent is invalid becomes `NODE_BLOCK_INVALID`.
 - With `NODE_FLAG_ENGINE`, a waiting block of bellatrix or later whose parent is imported takes `NODE_BLOCK_PAYLOAD` instead, with `retry` 0: its import waits for the execution engine's answer.
@@ -695,7 +700,7 @@ lantern_node_run(node, store, seen, work, state_a, state_b, state_c, data, setti
 | `seen` | state | `Seen` |
 | `work` | input | `NodeAction` of kind `NODE_ACT_WORK` |
 | `state_a` | state | `BeaconState`: the buffer of the work's `state_a`, or 0 |
-| `state_b` | state | `BeaconState`: the buffer of the work's `state_b`, or 0 |
+| `state_b` | state | `BeaconState`: the buffer of the work's `state_b`, or 0; for a `NODE_WORK_ARCHIVE_LOAD`, the ByteList of the record of its `NODE_DB_REF`, or 0 |
 | `state_c` | state | `BeaconState`: the buffer of the work's `state_c`, or 0 |
 | `data` | input | ByteList: the buffer of the work's `data`, or 0 |
 | `settings` | input | asm-crypto `KzgSettings`, or 0 |
@@ -711,6 +716,7 @@ lantern_node_run(node, store, seen, work, state_a, state_b, state_c, data, setti
 ### Caller must
 
 - On `LANTERN_BUFFER_TOO_SMALL`, grow the store with lantern_store_copy, or `state_a` with lantern_beacon_state_copy, or for a `NODE_WORK_LC_BLOCK` or `NODE_WORK_LC_HEAD` the light client store `state_c` with lantern_lc_store_copy, or `scratch`, or for a SERVE, LC_SERVE, LC_PUBLISH, NEW_PAYLOAD, FORKCHOICE, API_ENCODE, API_CHUNK, API_EVENT, PREPARE_PAYLOAD, GET_PAYLOAD, PRODUCE_BID, PRODUCE_BLOCK, PUBLISH_DECODE, PUBLISH_CHECK or PUBLISH_SIDECAR work `event`, then call again.
+- Give a `NODE_WORK_ARCHIVE_LOAD` whose `state_b` is a `NODE_DB_REF` the record's ByteList as `state_b`, as a `data` of a `NODE_DB_REF` gets it.
 - Give a `NODE_WORK_PUBLISH_DECODE` or `NODE_WORK_PUBLISH_CHECK` an `event` with room for `NodeEvent_chunk` + 24 + the bytes of `data`; a `NODE_WORK_PUBLISH_CHECK` of a blinded block (`arg` bit 8) one with room for `NodeEvent_chunk` + 24 + 4 times them + 4096 + `JSON_CURSOR_SIZE` (its JSON, and the cursor at the event's end): the check changes `state_a`, so it asks for the room before it starts.
 
 ### Function does
@@ -718,6 +724,7 @@ lantern_node_run(node, store, seen, work, state_a, state_b, state_c, data, setti
 - `NODE_WORK_IMPORT_BLOCK`: lantern_node_import of the fork of the block's slot, with `BlockOptions` of `PAYLOAD_STATUS_VALID` (`PAYLOAD_STATUS_NOT_VALIDATED` with `NODE_FLAG_OPTIMISTIC`; the block's `payload_status` with `NODE_FLAG_ENGINE`), the block's `data_available`, and `slots_done` 1 when `state_a` is at the block's slot and that slot is the first of its fork. `LANTERN_NEED_JUSTIFIED_STATE` becomes the result. A `state_a` whose slot's fork is not that of the block's slot gives the result `LANTERN_INVALID_SLOT`.
 - `NODE_WORK_SLOTS`: lantern_process_slots of the fork of the slot of `state_a`, of `state_a` to the slot `arg`.
 - `NODE_WORK_REPLAY`: lantern_node_replay of the fork of the block's slot, of the block in `data` (its bytes, or a `NODE_DB_REF`) on `state_a`; a `state_a` whose slot's fork is not the block's gives `LANTERN_INVALID_SLOT`.
+- `NODE_WORK_ARCHIVE_LOAD`: the state of a `Db` state record (db.md) into `state_a`. Its bytes: those of `data`, a full state, or with `state_b` the patch of the full state's bytes in `state_b` by the diff in `data` (lantern_db_state_patch, in `scratch`). The state: of the fork of the slot at bytes 40 to 47, decoded as lantern_node_anchor_block decodes its state, with the room of `state_a`. The result: `LANTERN_VALID`; `LANTERN_INVALID_ENCODING` for a diff that breaks a rule or bytes of no state of that fork; `LANTERN_BUFFER_TOO_SMALL` is the status, for a short `state_a` or `scratch`.
 - `NODE_WORK_UPGRADE`: lantern_node_upgrade of the fork `arg`, of `state_a` into `state_b`, with a `StateRoom` of 1024 validators, 2048 eth1_data_votes, 64 historical_summaries, 1024 pending_deposits, 64 pending_partial_withdrawals, 64 pending_consolidations, 4 historical_roots and 4096 pending_attestations, as the binary's anchor has, and the node's config. A fork `arg` outside altair to fulu, or a `state_a` not at that fork's first slot, gives the result `LANTERN_INVALID_SLOT`.
 - `NODE_WORK_JUSTIFIED_STATE`: lantern_store_justified_checkpoint_state with `state_a`.
 - `NODE_WORK_TARGET_STATE`: lantern_store_target_checkpoint_state of `state_a` to the `NodeCheckpoint` at index `target`.
@@ -2242,7 +2249,7 @@ Adds the records of a segment file to the node's `Db`, as a start does with the 
 ### Signature
 
 ```
-lantern_node_db_scan(node, segment, sidecars, bytes, valid) -> status
+lantern_node_db_scan(node, segment, segment_kind, bytes, valid) -> status
 ```
 
 ### Arguments
@@ -2251,7 +2258,7 @@ lantern_node_db_scan(node, segment, sidecars, bytes, valid) -> status
 |---|---|---|
 | `node` | state | `Node` |
 | `segment` | input | u64: the segment's number |
-| `sidecars` | input | u64: 0 for a block segment, 1 for a sidecar segment |
+| `segment_kind` | input | u64: 0 for a block segment, 1 for a sidecar segment, 2 for a state segment |
 | `bytes` | input | ByteList: the file's bytes from its start |
 | `valid` | output | u64: the bytes of the whole records added |
 
@@ -2264,11 +2271,12 @@ lantern_node_db_scan(node, segment, sidecars, bytes, valid) -> status
 - lantern_db_scan of the node's `Db`.
 - The segment is then the one of its kind the node appends to, at `valid`, unless the one it has is higher.
 - `db_next_slot` takes the `Db`'s `end_slot` when that is more, and `earliest_slot` the `Db`'s first slot with a block when that is less.
+- A state segment: it is `archive_segment`, at `valid` (`archive_end`), unless that one is higher; `archive_slot` takes the highest slot of its state records when that is more, and `archive_first` the lowest when that is less.
 - A sidecar segment: it is the backfill's sidecar segment, at `valid`, when `backfill_sidecar_segment` is 2^64 - 1. A block segment: it is the backfill's segment, at `valid`, when `backfill_segment` is 2^64 - 1. Each of its block records with a slot below `backfill_slot`: `backfill_slot` and `backfill_next` take the slot and `backfill_root` the record's `parent_root` (bytes 116 to 147 of its SSZ bytes).
 
 ### Caller must
 
-- Pass each segment once, in ascending order, the block segments before the sidecar segments, before the node's first step; cut each file to `valid` before the node appends to it.
+- Pass each segment once, in ascending order, the block segments before the sidecar segments and those before the state segments, before the node's first step; cut each file to `valid` before the node appends to it.
 
 ### ABI
 
@@ -2732,10 +2740,17 @@ The state of the node: a value with parts.
 | 728 + `CONFIG_SIZE` + `API_IDENTITY_SIZE` + 1584 + 8 * (`SYNC_COMMITTEE_SUBNET_COUNT` + `ATTESTATION_SUBNET_COUNT`) | `eth1_leaves` | PartRef | Roots: the leaf of each deposit of `eth1_deposits` |
 | 728 + `CONFIG_SIZE` + `API_IDENTITY_SIZE` + 1600 + 8 * (`SYNC_COMMITTEE_SUBNET_COUNT` + `ATTESTATION_SUBNET_COUNT`) | `eth1_counts` | PartRef | `Eth1Count` entries: the deposit count and root after each block with deposits, by number |
 | 728 + `CONFIG_SIZE` + `API_IDENTITY_SIZE` + 1616 + 8 * (`SYNC_COMMITTEE_SUBNET_COUNT` + `ATTESTATION_SUBNET_COUNT`) | `eth1_check_epoch` | u64 | The store's epoch + 1 at the last `NODE_WORK_ETH1_CHECK`, or 0 |
+| 728 + `CONFIG_SIZE` + `API_IDENTITY_SIZE` + 1624 + 8 * (`SYNC_COMMITTEE_SUBNET_COUNT` + `ATTESTATION_SUBNET_COUNT`) | `archive_slots` | u64 | With `NODE_FLAG_DB`: a state record each time F enters a new run of this many slots (the archive); 0 for none |
+| 728 + `CONFIG_SIZE` + `API_IDENTITY_SIZE` + 1632 + 8 * (`SYNC_COMMITTEE_SUBNET_COUNT` + `ATTESTATION_SUBNET_COUNT`) | `archive_slot` | u64 | The slot of the last state record, or 2^64 - 1 |
+| 728 + `CONFIG_SIZE` + `API_IDENTITY_SIZE` + 1640 + 8 * (`SYNC_COMMITTEE_SUBNET_COUNT` + `ATTESTATION_SUBNET_COUNT`) | `archive_first` | u64 | The lowest slot of a state record, or 2^64 - 1 |
+| 728 + `CONFIG_SIZE` + `API_IDENTITY_SIZE` + 1648 + 8 * (`SYNC_COMMITTEE_SUBNET_COUNT` + `ATTESTATION_SUBNET_COUNT`) | `archive_segment` | u64 | The state segment of the last state record, or 2^64 - 1 |
+| 728 + `CONFIG_SIZE` + `API_IDENTITY_SIZE` + 1656 + 8 * (`SYNC_COMMITTEE_SUBNET_COUNT` + `ATTESTATION_SUBNET_COUNT`) | `archive_end` | u64 | The bytes of that segment |
+| 728 + `CONFIG_SIZE` + `API_IDENTITY_SIZE` + 1664 + 8 * (`SYNC_COMMITTEE_SUBNET_COUNT` + `ATTESTATION_SUBNET_COUNT`) | `archive_busy` | u64 | 1 while a `NODE_ACT_DB_ARCHIVE` waits for its `NODE_EV_DB_ARCHIVE`, else 0 |
+| 728 + `CONFIG_SIZE` + `API_IDENTITY_SIZE` + 1672 + 8 * (`SYNC_COMMITTEE_SUBNET_COUNT` + `ATTESTATION_SUBNET_COUNT`) | `replay_loading` | u64 | 1 while the replay's `NODE_WORK_ARCHIVE_LOAD` is out, else 0 |
 
 ### Rules
 
-- `NODE_FIXED` (728 + `CONFIG_SIZE` + `API_IDENTITY_SIZE` + 1624 + 8 * (`SYNC_COMMITTEE_SUBNET_COUNT` + `ATTESTATION_SUBNET_COUNT`)) bytes of fixed fields; the parts follow in the order blocks, checkpoints, pow_blocks, peers, streams, messages, blobs, api, pool, proposers, p2p_out, engine_in, db, eth1_blocks, eth1_deposits, eth1_leaves, eth1_counts.
+- `NODE_FIXED` (728 + `CONFIG_SIZE` + `API_IDENTITY_SIZE` + 1680 + 8 * (`SYNC_COMMITTEE_SUBNET_COUNT` + `ATTESTATION_SUBNET_COUNT`)) bytes of fixed fields; the parts follow in the order blocks, checkpoints, pow_blocks, peers, streams, messages, blobs, api, pool, proposers, p2p_out, engine_in, db, eth1_blocks, eth1_deposits, eth1_leaves, eth1_counts.
 - The `Db` has the capacities of the `NodeRoom` fields `db_slots` and `db_roots`, and its `first_slot` is the lowest of the anchor's `history_slot`, its slot and the first slot of the epoch max(0, the epoch of its slot - compute_min_epochs_for_block_requests), rounded down to a multiple of `DB_SEGMENT_SLOTS`: the backfill's blocks fit in it.
 - The backfill at the start: `backfill_root` the anchor's root, `backfill_slot` and `backfill_next` its slot + 1 (the anchor block's bytes come from a peer too), `backfill_segment`, `backfill_sidecar_segment` and `backfill_start` 2^64 - 1, and `backfill_handle`, `backfill_end`, `backfill_ms`, `backfill_peer` and `backfill_got` 0.
 - The capacity of a part is its bytes up to the next part over its entry's bytes; `p2p_out` is the last part.
@@ -3079,7 +3094,8 @@ A Beacon API answer the node sends in chunks.
 | 208 | `history_slot` | u64 | The first slot of the `Db`, as of the segments the shell kept: the `Db` starts at the segment of the lower of it and `slot` |
 | 216 | `builder_host_len` | u64 | With `NODE_FLAG_BUILDER`, at most `NODE_ENGINE_HOST_MAX` (64) |
 | 224 | `builder_host` | 64 bytes | The `Host` of the Builder API requests |
-| 288 | | | Size |
+| 288 | `archive_slots` | u64 | With `NODE_FLAG_DB`: the node's `archive_slots`, 0 for no state records |
+| 296 | | | Size |
 
 ## Type `NodeStepResult`
 
@@ -3117,6 +3133,7 @@ The events of one step: a ByteList whose bytes are `NodeEvent` entries one after
 - `NODE_EV_ENGINE`: arg 0 or 1; with 0, the event has `bytes`; only with `NODE_FLAG_ENGINE`.
 - `NODE_EV_BUILDER` (15): arg a builder call, + 256 for the failure bit; without it, the event has `bytes`, the builder's whole answer; only with `NODE_FLAG_BUILDER`.
 - `NODE_EV_ENR`: has `bytes`; only with `p2p`.
+- `NODE_EV_DB_ARCHIVE` (16): `NODE_EV_DB_ARCHIVE_SIZE` (112) bytes; 16 a state segment, 24 an offset, 32 the `DbRecord` the shell wrote at that offset, of kind 0 when it wrote none; only with `NODE_FLAG_DB`.
 - `NODE_EV_PAYLOAD_STATUS` is `LANTERN_INVALID_EVENT` in this version: the answers come in `NODE_EV_ENGINE`.
 - `NODE_EV_API`: `arg` the connection, not 0; `bytes` an `HttpRequest` of lantern_http_request, of `LANTERN_OK` or `LANTERN_INVALID_HTTP`: its `size` the ByteList's count, at least `HTTP_REQUEST_FIXED` and a multiple of 8; with `status` 0, each of its parts inside it.
 - `NODE_EV_API_IDENTITY`: `bytes` an `ApiIdentity` of `API_IDENTITY_SIZE` bytes, each text's length at most its room and its bytes as the type says.
@@ -3154,9 +3171,10 @@ The actions of one step: a ByteList whose bytes are `NodeAction` entries one aft
 - `NODE_ACT_DISCV5`: a ByteList at 24, offset 24, of asm-discv5 events: pass them to discv5_step.
 - `NODE_ACT_DB_APPEND` (`NODE_ACT_DB_APPEND_SIZE`, 128 bytes): 16 a `BufferId` of bytes, 24 a segment's number, 32 1 for a sidecar segment and 0 for a block segment, 40 an offset, 48 a `DbRecord`. Write the record at the offset of the segment file, its end: the `DbRecord`, the bytes, and zero bytes to a multiple of 8. The first record of a segment that a run writes truncates the file to its offset first, so a torn end or an older run's records go.
 - `NODE_ACT_DB_STATE` (`NODE_ACT_DB_STATE_SIZE`, 40 bytes): 16 the `BufferId` of a finalized block's post-state, 24 the `BufferId` of the block's SSZ bytes, 32 its slot. The shell may keep them, so that a later start has an anchor whose blocks the `Db` holds.
+- `NODE_ACT_DB_ARCHIVE` (17, `NODE_ACT_DB_ARCHIVE_SIZE`, 120 bytes): 16 the `BufferId` of a state, 24 a state segment's number, 32 an offset, 40 a `DbRecord` with `bytes` and `length` 0. Write the state's record at the offset of the state segment's file, its end: its bytes are lantern_node_state_bytes of the fork of the state's slot, at offset 0, else the diff of them against the segment's full state (lantern_db_state_diff with the record at offset 0, db.md); the `DbRecord` with the ByteList header and `length` of those bytes, the bytes, and zero bytes to a multiple of 8. The first record of a segment that a run writes truncates the file to its offset first. Then a `NODE_EV_DB_ARCHIVE` of the segment, the offset and the record, or of kind 0 when it could not.
 - `NODE_ACT_DB_DROP` (`NODE_ACT_DB_DROP_SIZE`, 32 bytes): 16 a segment, 24 1 for a sidecar segment, else 0. The shell deletes the segment's file; a later record of that segment starts a new file.
 - `NODE_ACT_BUILDER` (16): 16 a builder call, 24 a ByteList of an HTTP request (offset 24). The shell opens a new connection to the builder, writes the bytes, and reads to the connection's end (the request has `Connection: close`), then passes the bytes it read in a `NODE_EV_BUILDER` of the call; a connection that fails before it reads any byte gives a `NODE_EV_BUILDER` with the failure bit.
-- A `NODE_DB_REF` is a `BufferId` with bit 63 set: bit 62 set for a sidecar segment, the segment's number in bits 48 to 61, and the offset of a record in bits 0 to 47. As the `data` of a SERVE, API_ENCODE, API_CHUNK or REPLAY work it names the SSZ bytes of that record: the shell gives lantern_node_run the record's ByteList at its byte 56, in place in the segment's memory.
+- A `NODE_DB_REF` is a `BufferId` with bit 63 set: bit 62 set for a sidecar segment, bit 61 for a state segment, the segment's number in bits 44 to 60, and the offset of a record in bits 0 to 43. As the `data` of a SERVE, API_ENCODE, API_CHUNK, REPLAY or ARCHIVE_LOAD work, or the `state_b` of an ARCHIVE_LOAD work, it names the SSZ bytes of that record: the shell gives lantern_node_run the record's ByteList at its byte 56, in place in the segment's memory.
 - `NODE_ACT_API_SEND`: 16 the connection, 24 `last`, 1 when the bytes end the answer, else 0; a ByteList at 32, offset 24: write its bytes to the connection, after those before. The shell reads the next request of the connection after the bytes of `last` 1.
 - `NODE_ACT_API_CLOSE` (`NODE_ACT_API_CLOSE_SIZE`, 24 bytes): 16 the connection: close it once its bytes are written.
 - `NODE_ACT_STATE_BYTES` (`NODE_ACT_STATE_BYTES_SIZE`, 32 bytes): 16 the id of a state, 24 a new id: keep lantern_node_state_bytes of the fork of the state's slot as the bytes of the new id, a ByteList as `NODE_ACT_BYTES_PUT` keeps one. With no room for them, keep a ByteList of no bytes.

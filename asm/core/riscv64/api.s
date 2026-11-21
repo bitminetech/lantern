@@ -5017,6 +5017,16 @@ LOCAL_FUNCTION node_api_state
     beqz    t0, 80f
     LDQ     s9, s1, Node_base_slot
     mv      s7, s8
+    bgeu    s7, s9, 76f
+    LDQ     t0, s1, Node_archive_first      # below the base's slot: from the lowest state record on
+    bltu    s7, t0, 80f
+78: mv      a0, s7
+    call    node_db_slot
+    mv      a1, s7
+    bnez    a0, 71f
+    beqz    s7, 80f
+    addi    s7, s7, -1
+    j       78b
 76: bleu    s7, s9, 77f
     mv      a0, s7
     call    node_db_slot
@@ -5054,10 +5064,13 @@ LOCAL_FUNCTION node_replay_get
     mv      s3, a0
     mv      s7, a1
     LDQ     t0, s1, Node_base_slot
-    bltu    s7, t0, 8f
+    bgtu    s7, t0, 1f
+    bltu    s7, t0, 6f
     ld      s8, Node_anchor_state_id(s1)    # the base's slot: the base state
-    beq     s7, t0, 5f
-    beqz    s3, 8f
+    j       5f
+6:  LDQ     t0, s1, Node_archive_first      # below it: from the lowest state record on
+    bltu    s7, t0, 8f
+1:  beqz    s3, 8f
     LDQ     s8, s1, Node_replay_state       # the last replay's state, of that root
     beqz    s8, 2f
     ADDQ    t0, s1, Node_replay_root
@@ -5092,6 +5105,31 @@ LOCAL_FUNCTION node_replay_get
     STQ     t0, s1, Node_replay_copy_slot
     addi    t0, t0, 1
     STQ     t0, s1, Node_replay_next
+    mv      a0, s7                          # a nearer base among the state records: the copy loads it
+    call    node_archive_base
+    li      t0, -1
+    beq     a0, t0, 7f
+    STQ     a0, s1, Node_replay_copy_slot
+    addi    t0, a0, 1
+    STQ     t0, s1, Node_replay_next
+    li      t0, 1
+    STQ     t0, s1, Node_replay_loading
+    srli    t0, a0, DB_SEGMENT_SHIFT        # the record's NODE_DB_REF, and with a diff the full state's at 0
+    slli    t0, t0, NODE_DB_SEGMENT_SHIFT
+    li      t1, 5
+    slli    t1, t1, 61
+    or      t0, t0, t1
+    addi    a3, a1, -1
+    or      a3, a3, t0
+    li      a2, 0
+    li      t1, 1
+    beq     a1, t1, 4f
+    mv      a2, t0
+4:  li      a0, NODE_WORK_ARCHIVE_LOAD
+    LDQ     a1, s1, Node_replay_copy
+    li      a4, 0
+    li      a5, 0
+    call    node_work
 7:  li      a0, 1
     LEAVE 0
 8:  li      a0, 0
@@ -5523,6 +5561,12 @@ LOCAL_FUNCTION node_replay_due
     li      s9, 0
     ld      t0, 0(s5)
     sd      t0, L(sp)
+    LDQ     t0, s1, Node_replay_loading     # a load out: later; a failed one: no replay
+    beqz    t0, 1f
+    li      t1, 2
+    bne     t0, t1, 99f
+    STQ     zero, s1, Node_replay_loading
+    j       60f
 1:  bgtu    s7, s8, 50f
     ld      t0, Node_flags(s1)              # the Db's blocks, below db_next_slot
     andi    t0, t0, NODE_FLAG_DB

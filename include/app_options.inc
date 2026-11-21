@@ -63,6 +63,9 @@ app_options:
     .quad 7, AppOptions_builder, APP_OPTION_ENDPOINT
     .ascii "builder"
     .space 24 - 7
+    .quad 7, AppOptions_archive, APP_OPTION_FLAG
+    .ascii "archive"
+    .space 24 - 7
 app_options_end:
 app_levels:                             /* the name of each log level in 8 bytes, then their lengths */
     .ascii "error"

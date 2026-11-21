@@ -5011,6 +5011,20 @@ LOCAL_FUNCTION node_api_state
     jz      80f
     mov     S8(%rsp), %rax
     mov     %rax, S7(%rsp)
+    cmp     Node_base_slot(%rbx), %rax
+    jae     76f
+    cmp     Node_archive_first(%rbx), %rax  # below the base's slot: from the lowest state record on
+    jb      80f
+78: mov     S7(%rsp), %rdi
+    call    node_db_slot
+    mov     %rax, %rdi
+    mov     S7(%rsp), %rsi
+    test    %rax, %rax
+    jnz     71f
+    cmpq    $0, S7(%rsp)
+    je      80f
+    decq    S7(%rsp)
+    jmp     78b
 76: mov     S7(%rsp), %rdi
     cmp     Node_base_slot(%rbx), %rdi
     jbe     77f
@@ -5051,10 +5065,13 @@ LOCAL_FUNCTION node_replay_get
     mov     %rdi, %r12
     mov     %rsi, S7(%rsp)
     cmp     Node_base_slot(%rbx), %rsi
-    jb      8f
+    ja      1f
+    jb      6f
     mov     Node_anchor_state_id(%rbx), %rax    # the base's slot: the base state
-    je      5f
-    test    %r12, %r12
+    jmp     5f
+6:  cmp     Node_archive_first(%rbx), %rsi  # below it: from the lowest state record on
+    jb      8f
+1:  test    %r12, %r12
     jz      8f
     mov     Node_replay_state(%rbx), %rax   # the last replay's state, of that root
     test    %rax, %rax
@@ -5095,6 +5112,29 @@ LOCAL_FUNCTION node_replay_get
     mov     %rax, Node_replay_copy_slot(%rbx)
     inc     %rax
     mov     %rax, Node_replay_next(%rbx)
+    mov     S7(%rsp), %rdi                  # a nearer base among the state records: the copy loads it
+    call    node_archive_base
+    cmp     $-1, %rax
+    je      7f
+    mov     %rax, Node_replay_copy_slot(%rbx)
+    lea     1(%rax), %rcx
+    mov     %rcx, Node_replay_next(%rbx)
+    movq    $1, Node_replay_loading(%rbx)
+    shr     $DB_SEGMENT_SHIFT, %rax         # the record's NODE_DB_REF, and with a diff the full state's at 0
+    shl     $NODE_DB_SEGMENT_SHIFT, %rax
+    bts     $63, %rax
+    bts     $61, %rax
+    lea     -1(%rdx), %rcx
+    or      %rax, %rcx
+    xor     %r8d, %r8d
+    cmp     $1, %rdx
+    cmovne  %rax, %r8
+    mov     %r8, %rdx
+    mov     $NODE_WORK_ARCHIVE_LOAD, %edi
+    mov     Node_replay_copy(%rbx), %rsi
+    xor     %r8d, %r8d
+    xor     %r9d, %r9d
+    call    node_work
 7:  mov     $1, %eax
     LEAVE 0
 8:  xor     %eax, %eax
@@ -5534,6 +5574,13 @@ LOCAL_FUNCTION node_replay_due
     xor     %r13d, %r13d
     mov     (%r14), %rax
     mov     %rax, L(%rsp)
+    mov     Node_replay_loading(%rbx), %rax # a load out: later; a failed one: no replay
+    test    %rax, %rax
+    jz      1f
+    cmp     $2, %rax
+    jne     99f
+    movq    $0, Node_replay_loading(%rbx)
+    jmp     60f
 1:  cmp     Node_replay_slot(%rbx), %r12
     ja      50f
     testq   $NODE_FLAG_DB, Node_flags(%rbx) # the Db's blocks, below db_next_slot

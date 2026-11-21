@@ -321,6 +321,10 @@ def main():
             count, digest = write_file(out / file, list(db.cases()))
             manifest.append((file, count, digest))
             print(f"{file}: {count} cases")
+            file = f"{preset}-phase0-db-state_diff.bin"
+            count, digest = write_file(out / file, list(db.diff_cases()))
+            manifest.append((file, count, digest))
+            print(f"{file}: {count} cases")
         if "phase0" in forks and (not runners or "eth1" in runners):
             kinds = {}
             for kind, name, parts in eth1.cases(preset):

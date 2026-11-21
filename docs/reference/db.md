@@ -12,6 +12,8 @@
 - [`lantern_db_find_root`](#function-lantern_db_find_root): the slot of a block root.
 - [`lantern_db_prune`](#function-lantern_db_prune): drops the slots below a new first slot.
 - [`lantern_db_drop_sidecars`](#function-lantern_db_drop_sidecars): drops the sidecars of the slots below a slot.
+- [`lantern_db_state_diff`](#function-lantern_db_state_diff): the diff of a state's SSZ bytes against a full state's.
+- [`lantern_db_state_patch`](#function-lantern_db_state_patch): a state's SSZ bytes from a full state's and a diff.
 
 ### Types
 
@@ -29,12 +31,23 @@
 ## Common rules
 
 - As in [helpers.md](helpers.md#common-rules).
-- The history: the finalized blocks of the canonical chain, and their blob or column sidecars, in segment files. A segment holds the records of `DB_SEGMENT_SLOTS` slots: segment `n` the slots from `n` * `DB_SEGMENT_SLOTS`. Blocks and sidecars are in separate segments, so each can be dropped on its own.
+- The history: the finalized blocks of the canonical chain, their blob or column sidecars, and with an archive some of their post-states, in segment files. A segment holds the records of `DB_SEGMENT_SLOTS` slots: segment `n` the slots from `n` * `DB_SEGMENT_SLOTS`. Blocks, sidecars and states are in separate segments, so each can be dropped on its own.
 - A record is a `DbRecord` header, then its SSZ bytes, then zero bytes up to a multiple of 8. A record starts at a multiple of 8 of its segment.
 - In a block segment the records are blocks, at most one for each slot, in any slot order: a backfill writes older blocks after newer ones. In a sidecar segment they are blob or column sidecars; those of one slot are together, in ascending index order.
+- In a state segment the records are post-states of the slots' blocks, at most one for each slot: the first, at offset 0, a `DB_STATE` of the SSZ bytes of a `BeaconState`; each later one a `DB_STATE_DIFF` of a diff against the first (the state diffs, below). So a state needs the segment's first record and its own.
 - A `Db` indexes the history of the slots from `first_slot` below `end_slot`: for each slot the offsets of its records in their segments, and for each block its root. A record's segment follows from its slot, so the index keeps offsets only. Every u64 argument is passed by its address, as ARCHITECTURE.md section 6 asks.
 - The functions read no file and make no OS call. The caller reads the segments and passes their bytes: each block segment before the sidecar segments, since a sidecar needs its slot's block.
 - Every function is in the common object of the core (asm/core/<ISA>/db.s), and its symbol is its name.
+
+## State diffs
+
+- A diff turns the SSZ bytes of the full state of a segment, `base`, into those of another state; its bytes, in lantern's own format of little endian u64s:
+  - At 0, `length`: the bytes of the state.
+  - From 8, the runs, each an `offset` (u64), a `count` (u64), `count` bytes, and zero bytes to a multiple of 8.
+- The patch: the first min(`base`'s bytes, `length`) bytes of `base`, zero bytes after them to `length`, then the bytes of each run at its `offset`.
+- A valid diff: each run's `count` is above 0, its `offset` is a multiple of 8 and at least the end (`offset` + `count`) of the run before it, it ends at `length` or below, and its padding bytes are zero; the last run ends the diff's bytes.
+- The runs lantern_db_state_diff writes: the words are the 8 byte pieces of the state's bytes from 0, the last one cut at `length`; a word differs when its bytes are not those of the patch's start (the first part of `base`, then zero bytes) at the same place. A run covers a group of differing words in which neighbours have at most 2 equal words between them; 3 or more equal words end a group, as another run's 16 bytes of header then cost less than those words. Its `offset` is its first word's, its end its last word's.
+- So a diff holds at most 24 + `length` rounded up to a multiple of 8 bytes: a run's header costs 16 bytes, and a second run leaves out 24 bytes or more.
 
 ## Test vectors
 
@@ -45,6 +58,11 @@
   - lantern_db_prune to a later first slot must leave the entries from it, and lantern_db_find_root of a dropped root no slot.
   - lantern_db_drop_sidecars to the first slot of the second segment must leave no sidecar below it, and every block and every later sidecar as they were.
   - A `Db` of small room must give `LANTERN_BUFFER_TOO_SMALL`, and lantern_db_copy to twice the room must hold the same index.
+  - State segments: a full state and diffs at slots with blocks, scanned after the block segments; a diff at offset 0, a full state above it, a state at a slot with no block, of another root, or a second at its slot must end the scan.
+- Lantern's cases `<preset>-phase0-db-state_diff.bin`, made by tests/generator/db.py from the state diffs' rules: pairs of made up bytes as a full state and a later state, with equal bytes, changed words near and apart, longer and shorter states, and lengths that are no multiple of 8.
+  - lantern_db_state_diff of the pair must give the case's diff; with an `out` of fewer bytes `LANTERN_BUFFER_TOO_SMALL` and the same `size`.
+  - lantern_db_state_patch of the full state and the diff must give the state's bytes; with an `out` of fewer bytes `LANTERN_BUFFER_TOO_SMALL` and the same `size`.
+  - Diffs that break a rule (a run past `length`, out of order, of `count` 0, at an `offset` no multiple of 8, with padding not zero, cut short, or with bytes after its last run) must give `LANTERN_INVALID_ENCODING` from lantern_db_state_patch.
 
 ## Function `lantern_db_size`
 
@@ -146,8 +164,9 @@ lantern_db_add(db, record, offset) -> status
 
 ### Function does
 
-- The rules: `kind` is `DB_BLOCK`, `DB_BLOB_SIDECAR` or `DB_COLUMN_SIDECAR`; the slot is at least `first_slot`; `offset` is a multiple of 8 and below 2^48. A block: its slot has no block yet, and its root is in no other slot. A sidecar: its slot has a block, its index is below `DB_SIDECAR_INDICES` (128) and above the slot's `sidecar_last` when the slot has sidecars, and its offset is the end of the slot's sidecars before it, with the size of the slot's first sidecar record, or the slot has none.
+- The rules: `kind` is `DB_BLOCK`, `DB_BLOB_SIDECAR`, `DB_COLUMN_SIDECAR`, `DB_STATE` or `DB_STATE_DIFF`; the slot is at least `first_slot`; `offset` is a multiple of 8 and below `DB_OFFSET_MAX` (2^44). A block: its slot has no block yet, and its root is in no other slot. A sidecar: its slot has a block, its index is below `DB_SIDECAR_INDICES` (128) and above the slot's `sidecar_last` when the slot has sidecars, and its offset is the end of the slot's sidecars before it, with the size of the slot's first sidecar record, or the slot has none. A state: its index is 0, its slot has a block of the record's root and no state yet; a `DB_STATE` at offset 0, a `DB_STATE_DIFF` above it.
 - A block: the slot's `block` takes `offset` + 1 and its `root` the record's root; the root goes in the root table; `end_slot` takes the slot + 1 when that is more.
+- A state: the slot's `state` takes `offset` + 1.
 - A sidecar: the slot's `sidecars` takes `offset` + 1 when it has none, `sidecar_count` takes 1 more, `sidecar_end` takes `offset` + the record's size, `sidecar_last` its index, and `indices` its bit.
 - So the sidecar records of a slot are of one size, and the record of index i lies at `sidecars` - 1 + that size times the count of the slot's indices below i: a node finds any sidecar without reading the segment.
 - `length` is at most `DB_RECORD_MAX` for each kind.
@@ -159,7 +178,7 @@ Adds each whole record of a segment's bytes to the index, from the start, until 
 ### Signature
 
 ```
-lantern_db_scan(db, segment, sidecars, bytes, valid) -> status
+lantern_db_scan(db, segment, segment_kind, bytes, valid) -> status
 ```
 
 ### Arguments
@@ -168,7 +187,7 @@ lantern_db_scan(db, segment, sidecars, bytes, valid) -> status
 |---|---|---|
 | `db` | state | `Db` |
 | `segment` | input | u64: the segment's number |
-| `sidecars` | input | u64: 0 for a block segment, 1 for a sidecar segment |
+| `segment_kind` | input | u64: 0 for a block segment, 1 for a sidecar segment, 2 for a state segment |
 | `bytes` | input | ByteList: the segment's bytes from its start |
 | `valid` | output | u64: the bytes of the whole records added |
 
@@ -179,7 +198,7 @@ lantern_db_scan(db, segment, sidecars, bytes, valid) -> status
 
 ### Function does
 
-- A record fits when its header and its size are inside `bytes`, `length` is at most `DB_RECORD_MAX`, its slot is in the segment's slots, and its kind is `DB_BLOCK` in a block segment and a sidecar kind in a sidecar segment. A record that does not fit, or that lantern_db_add rejects, ends the scan.
+- A record fits when its header and its size are inside `bytes`, `length` is at most `DB_RECORD_MAX`, its slot is in the segment's slots, and its kind is `DB_BLOCK` in a block segment, a sidecar kind in a sidecar segment, and a state kind in a state segment. A record that does not fit, or that lantern_db_add rejects, ends the scan.
 - Calls lantern_db_add for each record that fits.
 
 ## Function `lantern_db_find_root`
@@ -248,11 +267,68 @@ lantern_db_drop_sidecars(db, slot) -> status
 
 ### Returns
 
-- `LANTERN_OK`: each `DbSlot` from `first_slot` below the slot and `end_slot` has `sidecars`, `sidecar_count`, `sidecar_end`, `sidecar_last` and `indices` 0; its root and block stay.
+- `LANTERN_OK`: each `DbSlot` from `first_slot` below the slot and `end_slot` has `sidecars`, `sidecar_count`, `sidecar_end`, `sidecar_last` and `indices` 0; its root, block and state stay.
 
 ### Caller must
 
 - Drop whole sidecar segments only: a slot that is a multiple of `DB_SEGMENT_SLOTS`.
+
+## Function `lantern_db_state_diff`
+
+The diff of a state's SSZ bytes against those of the full state of its segment (the state diffs, above).
+
+### Signature
+
+```
+lantern_db_state_diff(base, state, out, size) -> status
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `base` | input | ByteList: the full state's SSZ bytes |
+| `state` | input | ByteList: the state's SSZ bytes |
+| `out` | output | ByteList, its `size` set by the caller |
+| `size` | output | u64: 24 + the diff's bytes |
+
+### Returns
+
+- `LANTERN_OK`: `out` holds the diff at offset 24.
+- `LANTERN_BUFFER_TOO_SMALL`: `out` is below `size`; `size` is written all the same.
+
+### Function does
+
+- The runs of the state diffs' rules, in offset order.
+
+## Function `lantern_db_state_patch`
+
+A state's SSZ bytes from the full state's and a diff (the state diffs, above).
+
+### Signature
+
+```
+lantern_db_state_patch(base, diff, out, size) -> status
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `base` | input | ByteList: the full state's SSZ bytes |
+| `diff` | input | ByteList: a diff |
+| `out` | output | ByteList, its `size` set by the caller |
+| `size` | output | u64: 24 + the diff's `length` |
+
+### Returns
+
+- `LANTERN_OK`: `out` holds the state's bytes at offset 24.
+- `LANTERN_BUFFER_TOO_SMALL`: `out` is below `size`; `size` is written all the same.
+- `LANTERN_INVALID_ENCODING`: the diff has fewer than 8 bytes, or breaks a rule of a valid diff; `out` may hold part of the patch.
+
+### Function does
+
+- The patch of the state diffs' rules.
 
 ## Type `Db`
 
@@ -296,10 +372,11 @@ The index of the history: a value with parts.
 | 56 | `sidecar_end` | u64 | The offset after its last sidecar record |
 | 64 | `sidecar_last` | u64 | The index of its last sidecar |
 | 72 | `indices` | 16 bytes | The indices of its sidecars: bit i % 8 of byte i / 8 for index i |
+| 88 | `state` | u64 | 0, or the offset + 1 of its block's post-state record in its state segment |
 
 ### Rules
 
-- `DbSlot__mem` (88) bytes.
+- `DbSlot__mem` (96) bytes.
 
 ## Type `DbRecord`
 
@@ -309,9 +386,9 @@ The header of a record.
 
 | Offset | Field | Type | Meaning |
 |---|---|---|---|
-| 0 | `kind` | u64 | `DB_BLOCK` (1), `DB_BLOB_SIDECAR` (2) or `DB_COLUMN_SIDECAR` (3) |
+| 0 | `kind` | u64 | `DB_BLOCK` (1), `DB_BLOB_SIDECAR` (2), `DB_COLUMN_SIDECAR` (3), `DB_STATE` (4) or `DB_STATE_DIFF` (5) |
 | 8 | `slot` | u64 | The slot of the block |
-| 16 | `index` | u64 | The sidecar's index or column, 0 for a block |
+| 16 | `index` | u64 | The sidecar's index or column, 0 for a block or a state |
 | 24 | `root` | Root | The block's root |
 | 56 | `bytes` | 24 bytes | A ByteList header of the SSZ bytes after the record's header: `size` 24 + `length`, `offset` 24 |
 | 72 | `length` | u64 | The count of `bytes`: the SSZ bytes after the header |

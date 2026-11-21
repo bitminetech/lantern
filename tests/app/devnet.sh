@@ -11,9 +11,9 @@
 # KURTOSIS: the kurtosis CLI (default kurtosis). KEEP=1 keeps the enclave. CL_LOG_LEVEL: the client's
 # log level (default info). LANTERN_MAX_CPU: lantern's CPU limit in millicores (default no limit).
 # LANTERN_DELAY: seconds before lantern starts (default 0). RESTART=1: 6-second slots, lantern with
-# --data-dir /data; after it follows, once its log shows finalized epoch 2 or later, lantern stops and
+# --data-dir /data --archive; after it follows, once its log shows finalized epoch 2 or later, lantern stops and
 # starts again, and must log "restart at slot" and follow again. CHECKPOINT=1: 6-second slots, lantern
-# with --data-dir /data (the backfill keeps its blocks there) starts from the client's finalized block
+# with --data-dir /data --archive (the backfill keeps its blocks there) starts from the client's finalized block
 # and its post-state, must log "checkpoint at slot", and its
 # "earliest slot" must fall below the checkpoint's slot (the backfill).
 # FORK=1: 6-second slots, electra at genesis and fulu at epoch 1 (no BPO fork); lantern's head must

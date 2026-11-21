@@ -2411,6 +2411,49 @@ SPEC_FUNCTION node_anchor
 SPEC_END node_anchor
 
 /*
+ * (bytes, room, scratch, state): node.md, NODE_WORK_ARCHIVE_LOAD: the BeaconState of the SSZ bytes,
+ * decoded as node_anchor_block decodes its state, into state with room; nothing changed when it
+ * is short. x20 room, x21 scratch, x22 state, x24 the decoded state, x25 the bytes, x28 the
+ * scratch's size, restored on return. Locals: L a size.
+ */
+SPEC_FUNCTION node_archive_state
+    ENTER 16
+    mov     x25, x0
+    mov     x20, x1
+    mov     x21, x2
+    mov     x22, x3
+    ldr     x28, [x21]
+    ADDRESS x0, lantern_type_BeaconState
+    mov     x1, x25
+    mov     x2, x21
+    bl      node_decode
+    cmp     x0, #1
+    b.eq    8f
+    b.hi    7f
+    mov     x24, x1
+    mov     x0, x24
+    mov     x1, x20
+    add     x2, sp, #L
+    bl      lantern_beacon_state_copy_size
+    ldr     x9, [sp, #L]
+    ldr     x10, [x22]
+    cmp     x10, x9
+    b.lo    8f
+    mov     x0, x24
+    mov     x1, x20
+    mov     x2, x22
+    bl      lantern_beacon_state_copy
+    cbnz    x0, 8f
+    mov     x0, #LANTERN_OK
+    b       99f
+7:  mov     x0, #LANTERN_INVALID_ENCODING
+    b       99f
+8:  mov     x0, #LANTERN_BUFFER_TOO_SMALL
+99: str     x28, [x21]
+    LEAVE 16
+SPEC_END node_archive_state
+
+/*
  * (data, room, scratch, state, block): the anchor of a start from the node's own history: data
  * holds two ByteLists, the second at the first multiple of 8 after the first: the SSZ bytes of a
  * BeaconState, then those of the message of its block, with the state's slot and root. state:

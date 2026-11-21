@@ -30,10 +30,10 @@
 - tests/app/network.py: a network directory (config.yaml, genesis.ssz) to run the binary with, alone or beside other clients.
 - tests/app/trusted_setup.py: writes include/trusted_setup_4096.bin from the pinned spec, or with `--check` exits 1 when the file differs; CI's trusted-setup job runs the check.
 - tests/app/devnet.sh: a devnet of ethpandaops/ethereum-package (tests/kurtosis/, at a pinned commit) of geth and one consensus client with all the validators, and the binary's image (platform/docker/Dockerfile) beside it with every consensus client's record as a boot node; lantern's head must reach slot 8, be a block of the client's chain and be within 2 slots of the client's head, at two checks a slot apart.
-  - RESTART=1, beside lighthouse, CI's restart job: lantern with `--data-dir`; once its log shows finalized epoch 2 or later, it stops and starts again, must log `restart at slot`, and must follow again.
+  - RESTART=1, beside lighthouse, CI's restart job: lantern with `--data-dir` and `--archive`; once its log shows finalized epoch 2 or later, it stops and starts again, must log `restart at slot`, and must follow again.
   - FORK=1, beside lighthouse, CI's fork job: electra at genesis and fulu at epoch 1 (no BPO fork), with 6-second slots; lantern's head must reach slot 40, past the fork.
   - ASSERTOOR=1, beside lighthouse, CI's assertoor job: 6-second slots, and Assertoor v0.1.2 (pinned by digest in tests/kurtosis/main.star) with lantern as its one consensus endpoint and the first geth as its execution endpoint. After lantern follows, Assertoor's test `lantern` must end in success within the wait: lantern ready and synced, its identity, then together the chain at epoch 3, two blocks from its event stream, a proposer duty, finality (2 finalized epochs, at most 3 unfinalized), attestation stats from its committees (95% target, 80% head, over 2 epochs), at most 2 reorgs an epoch, and no fork; then together, through lantern's pool POSTs (SHARD_COMMITTEE_PERIOD 1 in this devnet), two voluntary exits, two BLS to execution changes, a proposer slashing and an attester slashing of validators of ethereum-package's default mnemonic, each awaited until a block of the client includes it, and two epochs of attestations of its validators 128 and 129, which the devnet has (preregistered_validator_count 130) and no validator client runs, from their duties and lantern's produceAttestationData through submitPoolAttestationsV2. Those two vote only so, which is why the target floor is 95%.
-  - CHECKPOINT=1, beside lighthouse, CI's checkpoint job: lantern, with `--data-dir` (the backfill's blocks go to its `Db`), starts from lighthouse's finalized block and its post-state, as SSZ from its Beacon API once its finalized epoch is 1 or more, must log `checkpoint at slot`, must follow, and its `earliest slot` must fall below the checkpoint's slot: the backfill takes lighthouse's blocks.
+  - CHECKPOINT=1, beside lighthouse, CI's checkpoint job: lantern, with `--data-dir` and `--archive` (the backfill's blocks go to its `Db`), starts from lighthouse's finalized block and its post-state, as SSZ from its Beacon API once its finalized epoch is 1 or more, must log `checkpoint at slot`, must follow, and its `earliest slot` must fall below the checkpoint's slot: the backfill takes lighthouse's blocks.
 
 ## Function `lantern_app_options`
 
@@ -56,11 +56,11 @@ lantern_app_options(args, options, fault) -> status
 ### Returns
 
 - `LANTERN_OK`: `options` holds the options.
-- `LANTERN_INVALID_OPTION`: an argument is not an option below, an option has no value or an empty one (`--supernode`: a value), a number is not decimal digits of a value in its range, an address is not 4 decimal numbers of 0 to 255 with dots between them, `--network-dir` is missing, or one of `--checkpoint-state` and `--checkpoint-block` is given without the other; a missing option's fault is the count of arguments.
+- `LANTERN_INVALID_OPTION`: an argument is not an option below, an option has no value or an empty one (`--supernode` or `--archive`: a value), a number is not decimal digits of a value in its range, an address is not 4 decimal numbers of 0 to 255 with dots between them, `--network-dir` is missing, one of `--checkpoint-state` and `--checkpoint-block` is given without the other, or `--archive` is given without `--data-dir`; a missing option's fault is the count of arguments.
 
 ### Function does
 
-- Takes each option as `--name value` or `--name=value`; `--supernode` as `--name` alone:
+- Takes each option as `--name value` or `--name=value`; `--supernode` and `--archive` as `--name` alone:
 
 | Option | Field | Value | Default |
 |---|---|---|---|
@@ -80,6 +80,7 @@ lantern_app_options(args, options, fault) -> status
 | `--log-level` | `log_level` | `error`, `warn`, `info` or `debug`: the log lines of that level and the levels before it | `info` |
 | `--supernode` | `supernode` | none: 1, the node custodies every custody group (node.md, `NODE_FLAG_SUPERNODE`) | 0: the groups of max(`SAMPLES_PER_SLOT`, `CUSTODY_REQUIREMENT`) |
 | `--builder` | `builder` | `host:port` of a builder (mev-boost), with or without `http://`: the Builder API of builder-specs v0.6.1 | none: no builder |
+| `--archive` | `archive` | none: 1, the node keeps a finalized state in its `Db` each `DB_ARCHIVE_DIFF` (256) slots, so any old state is a short replay (node.md, the archive) | 0: no state records |
 
 - Keeps the last value of an option given twice.
 - Drops `http://` at the start of `--execution-endpoint` and of `--builder`.
@@ -136,15 +137,17 @@ lantern_app_main(args) -> status
 - `NODE_ACT_STATE_BYTES`: new memory from lantern_shell_map with lantern_node_state_bytes of the fork of the state's slot, kept as `NODE_ACT_BYTES_PUT` keeps bytes; with no memory, a ByteList of no bytes.
 - `NODE_ACT_STATE_COPY` and `NODE_ACT_BYTES_PUT`: new memory from lantern_shell_map with a copy of the bytes. When the source and its size are multiples of 8, a page of 4096 bytes that is all zero is not written, as the new memory is zero already: the OS keeps no memory for it, so a state's free room costs none.
 - Writes a line `slot <s>, head 0x<the head root's first 8 bytes>, finalized epoch <e>, earliest slot <n>` to the standard output at each new slot of the store, with the node's `earliest_slot` (it falls as the backfill's blocks join the history), and a line `peers <n>` when the count of connected peers changes.
-- With `--data-dir`: makes the directory (one already there will do), and starts the node with `NODE_FLAG_DB` and a `Db` room of `DB_SEGMENT_SLOTS` slots and `APP_DB_ROOTS` (4096) roots; a short room grows as the node's other parts do.
-- The segment files of the history: `<dir>/b<n>.seg` for blocks and `<dir>/s<n>.seg` for sidecars, with n the segment's number in decimal.
+- With `--data-dir`: makes the directory (one already there will do), and starts the node with `NODE_FLAG_DB` and a `Db` room of `DB_SEGMENT_SLOTS` slots and `APP_DB_ROOTS` (4096) roots; a short room grows as the node's other parts do. The anchor's `archive_slots` is `DB_ARCHIVE_DIFF` (256) with `--archive`, else 0.
+- The segment files of the history: `<dir>/b<n>.seg` for blocks, `<dir>/s<n>.seg` for sidecars and `<dir>/a<n>.seg` for states, with n the segment's number in decimal.
 - `NODE_ACT_DB_APPEND`: one file of each kind stays open. A record of another segment closes it and opens that one with lantern_shell_open to append, cut to the record's offset with lantern_shell_truncate. The record goes in three appends: its `DbRecord`, its bytes, and zero bytes to a multiple of 8. A failure gives a line `cannot write <path>: error <n>` on the standard error, and the file closes, so the next record opens it again.
 - A SERVE work whose data is a `NODE_DB_REF`: lantern_node_run gets the record's own ByteList, at its byte 56, in its segment file mapped with lantern_shell_map_file. Up to `APP_DB_MAP_COUNT` (4) files stay mapped, the oldest map going first; a record past a map's end maps its file again. A record not in its file, or whose ByteList header is not of its bytes, is a buffer the work does not name.
 - An API_ENCODE or API_CHUNK work whose data is a `NODE_DB_REF` gets the record's ByteList as a SERVE work does. An API_CHUNK work's event has room for `NodeEvent_api_bytes` + 24 + `NODE_API_CHUNK` bytes.
+- `NODE_ACT_DB_ARCHIVE`: the state's bytes in new memory from lantern_shell_map with lantern_node_state_bytes of the fork of its slot; above offset 0, the diff of lantern_db_state_diff against the record at offset 0 of the segment's file, mapped as a SERVE's record is, in new memory too. The record goes as a `NODE_ACT_DB_APPEND`'s does, in the state segments' open file, with the `DbRecord`'s ByteList header and `length` of its bytes; the memory is then freed. The node's next step gets a `NODE_EV_DB_ARCHIVE` of the segment, the offset and the `DbRecord`, of kind 0 after a failure, which also gives a `cannot write` line.
+- A `NODE_WORK_ARCHIVE_LOAD` gets its `data` and its `state_b`, `NODE_DB_REF`s, as a SERVE work gets its `data`.
 - `NODE_ACT_DB_DROP`: the segment's file goes: the open file of its kind closes when it is that segment, a map of it goes, and the file is deleted with lantern_shell_remove.
 - `NODE_ACT_DB_STATE`, the first of a run and then each one `DB_SEGMENT_SLOTS` slots or more after the last written: the open segment files are synced; `<dir>/anchor.tmp` gets two ByteLists, the second at the first multiple of 8 after the first: lantern_node_state_bytes of the state, then the block's message, its bytes from 100 of the `SignedBeaconBlock`; it is synced, renamed over `<dir>/anchor.ssz`, and the directory is synced. A failure gives a `cannot write` line.
 - A start with `--checkpoint-state` and `--checkpoint-block`, and no `<dir>/anchor.ssz`, takes them in place of `genesis.ssz`: the two files go into one buffer in the form of `anchor.ssz` (the state's bytes, then the block's message from byte 100 of its `SignedBeaconBlock`) for lantern_node_anchor_block of the fork of the state's slot; a block file below 184 bytes gives a line `<path>: too short`. The anchor's `history_slot` is its slot. Then a line `checkpoint at slot <n>` on the standard output.
-- A start with `--data-dir` and a `<dir>/anchor.ssz` reads it in place of `genesis.ssz` and of the checkpoint files, with lantern_node_anchor_block of the fork of its state's slot. The first block segment file there, from 0 to the anchor's segment, gives the anchor's `history_slot`; the `Db` has room from it to the last block segment file there from the anchor's on, and a segment more, with a power of two of roots above twice those slots. After lantern_node_init each segment file goes to lantern_node_db_scan, the blocks' then the sidecars', and a file with bytes after its last whole record is cut there. Then a line `restart at slot <n>` on the standard output. The node syncs the blocks after the anchor from its peers; those the `Db` holds already get no second record.
+- A start with `--data-dir` and a `<dir>/anchor.ssz` reads it in place of `genesis.ssz` and of the checkpoint files, with lantern_node_anchor_block of the fork of its state's slot. The first block segment file there, from 0 to the anchor's segment, gives the anchor's `history_slot`; the `Db` has room from it to the last block segment file there from the anchor's on, and a segment more, with a power of two of roots above twice those slots. After lantern_node_init each segment file goes to lantern_node_db_scan, the blocks', then the sidecars', then the states', and a file with bytes after its last whole record is cut there. Then a line `restart at slot <n>` on the standard output. The node syncs the blocks after the anchor from its peers; those the `Db` holds already get no second record.
 - The log: each line is the UTC time of lantern_shell_time_ms as `YYYY-MM-DD HH:MM:SS.mmm`, a space, its level in 5 characters (`ERROR`, `WARN `, `INFO ` or `DEBUG`), a space, the message and an LF. A line goes out when its level is at most `log_level`, in the order error, warn, info, debug: ERROR and WARN lines to the standard error, INFO and DEBUG lines to the standard output.
   - ERROR: the lines of a faulty option or a failed start, `cannot write`, and `a node step: no room`.
   - WARN: `block <slot> not imported: result <n>` for a `NODE_WORK_IMPORT_BLOCK` whose result is neither `LANTERN_VALID` nor `LANTERN_NEED_JUSTIFIED_STATE`.
@@ -211,7 +214,8 @@ The options of a run. A text field is an [`Arg`](#type-arg) of the bytes of the 
 | 160 | `http_max_connections` | u64 | The Beacon API's connections at a time |
 | 168 | `supernode` | u64 | 1 with `--supernode`, else 0 |
 | 176 | `builder` | `Arg` | `host:port` of the builder, without `http://` |
-| 192 | | | Size |
+| 192 | `archive` | u64 | 1 with `--archive`, else 0 |
+| 200 | | | Size |
 
 ## Results
 

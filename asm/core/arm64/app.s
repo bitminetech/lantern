@@ -1451,12 +1451,18 @@ LOCAL_FUNCTION app_work
     bl      app_work_entry
     mov     x21, x0
     ldr     x0, [x20, #NodeAction_state_b]
-    bl      app_work_entry
-    mov     x22, x0
+    mov     x1, #1                          /* ARCHIVE_LOAD: state_b a NODE_DB_REF too */
+    cmp     x26, #NODE_WORK_ARCHIVE_LOAD
+    b.ne    101f
+    bl      app_work_data
+    b       102f
+101: bl     app_work_entry
+102: mov    x22, x0
     ldr     x0, [x20, #NodeAction_state_c]
     bl      app_work_entry
     mov     x23, x0
     ldr     x0, [x20, #NodeAction_data]
+    mov     x1, #0
     bl      app_work_data
     mov     x24, x0
     cmn     x21, #1                         /* an id with no buffer */
@@ -1568,6 +1574,8 @@ LOCAL_FUNCTION app_work
     b.eq    4f
     cmp     x26, #NODE_WORK_UPGRADE         /* UPGRADE: state_b, the upgrade's buffer */
     b.eq    6f
+    cmp     x26, #NODE_WORK_ARCHIVE_LOAD    /* ARCHIVE_LOAD: state_a, and twice the scratch */
+    b.eq    18f
     cmp     x26, #NODE_WORK_LC_BLOCK        /* the light client works: state_c, the light client store */
     b.eq    17f
     cmp     x26, #NODE_WORK_LC_HEAD
@@ -1622,6 +1630,20 @@ LOCAL_FUNCTION app_work
     bl      app_lc_grow
     cbnz    x0, 91f
     b       1b
+18: cbz     x21, 91f
+    mov     x0, x21
+    bl      app_regrow
+    cbnz    x0, 91f
+    ldr     x9, [x19, #(APP_SCRATCH + 8)]
+    lsl     x9, x9, #1
+    str     x9, [sp, #-16]!
+    mov     x0, #APP_SCRATCH
+    bl      app_unmap
+    ldr     x1, [sp], #16
+    mov     x0, #APP_SCRATCH
+    bl      app_alloc
+    cbz     x0, 91f
+    b       1b
 7:  mov     x0, #2
     mov     x1, #-1
     bl      app_grow
@@ -1654,6 +1676,7 @@ LOCAL_FUNCTION app_db_start
     ADDQ    x27, x19, APP_DB
     mov     x9, #-1
     stp     x9, x9, [x27, #AppDb_segment]
+    str     x9, [x27, #(AppDb_segment + 16)]
     mov     x10, #0
 1:  add     x11, x27, #AppDb_maps
     add     x11, x11, x10, lsl #5
@@ -1675,6 +1698,11 @@ LOCAL_FUNCTION app_db_start
     str     x9, [x19, #(APP_NODE_ROOM + NodeRoom_db_slots)]
     mov     x9, #APP_DB_ROOTS
     str     x9, [x19, #(APP_NODE_ROOM + NodeRoom_db_roots)]
+    ldr     x9, [x19, #(APP_OPTIONS + AppOptions_archive)]  /* --archive: a state record each DB_ARCHIVE_DIFF slots */
+    cmp     x9, #0
+    mov     x9, #DB_ARCHIVE_DIFF
+    csel    x9, x9, xzr, ne
+    str     x9, [x19, #(APP_ANCHOR + NodeAnchor_archive_slots)]
     cmp     x21, #APP_PATH_MAX
     b.hi    9f
     ADDQ    x22, x19, APP_PATH              /* the directory's path */
@@ -1691,7 +1719,7 @@ LOCAL_FUNCTION app_db_start
 9:  LEAVE 0
 END_FUNCTION app_db_start
 
-/* L1: the path of segment x1 of blocks (x0 0) or sidecars (1) in the data directory, <dir>/b<n>.seg or <dir>/s<n>.seg: a ByteList at APP_PATH. x20 the kind, x21 the segment, x22 the next byte. Locals: L 24 digits. */
+/* L1: the path of segment x1 of blocks (x0 0), sidecars (1) or states (2) in the data directory, <dir>/b<n>.seg, <dir>/s<n>.seg or <dir>/a<n>.seg: a ByteList at APP_PATH. x20 the kind, x21 the segment, x22 the next byte. Locals: L 24 digits. */
 LOCAL_FUNCTION app_db_path
     ENTER 32
     mov     x20, x0
@@ -1712,6 +1740,9 @@ LOCAL_FUNCTION app_db_path
     mov     w10, #0x73                      /* s */
     cmp     x20, #0
     csel    w9, w10, w9, ne
+    mov     w10, #0x61                      /* a */
+    cmp     x20, #2
+    csel    w9, w10, w9, eq
     strb    w9, [x22], #1
     add     x11, sp, #(L + 24)              /* the number's digits, from the last */
     mov     x12, x21
@@ -1747,23 +1778,35 @@ LOCAL_FUNCTION app_db_path
     LEAVE 32
 END_FUNCTION app_db_path
 
-/*
- * L1: NODE_ACT_DB_APPEND x0: the record at the end of its segment file, its DbRecord, its bytes
- * and zero bytes to a multiple of 8. A file that is not the open one of its kind opens, and is cut
- * to the record's offset first. A failure gives a line on the standard error, and the file closes,
- * so the next record opens it again. x20 the action, x21 the kind (0 blocks, 1 sidecars), x22 the
- * bytes' table entry, x23 the file, x27 the AppDb. Locals: L a ByteList header, L+24 a u64, L+32 zero bytes.
- */
+/* L1: NODE_ACT_DB_APPEND x0: app_db_write of it with the table entry of its bytes. */
 LOCAL_FUNCTION app_db_append
+    FRAME 16
+    str     x0, [sp, #16]
+    ldr     x0, [x0, #16]
+    bl      app_buf_find
+    cbz     x0, 9f
+    mov     x1, x0
+    ldr     x0, [sp, #16]
+    bl      app_db_write
+9:  UNFRAME 16
+END_FUNCTION app_db_append
+
+/*
+ * L1: the record of a NODE_ACT_DB_APPEND x0 at the end of its segment file, with the bytes of the
+ * table entry x1: its DbRecord, its bytes and zero bytes to a multiple of 8. A file that is not
+ * the open one of its kind opens, and is cut to the record's offset first. A failure gives a line
+ * on the standard error, and the file closes, so the next record opens it again: x0 = 0 written,
+ * else 1. x20 the action, x21 the kind (0 blocks, 1 sidecars, 2 states), x22 the bytes' table
+ * entry, x23 the file, x27 the AppDb. Locals: L a ByteList header, L+24 a u64, L+32 zero bytes.
+ */
+LOCAL_FUNCTION app_db_write
     ENTER 48
     mov     x20, x0
+    mov     x22, x1
     ADDQ    x27, x19, APP_DB
     ldr     x21, [x20, #32]
-    and     x21, x21, #1
-    ldr     x0, [x20, #16]
-    bl      app_buf_find
-    cbz     x0, 99f
-    mov     x22, x0
+    cmp     x21, #2
+    b.hi    88f
     add     x23, x27, #AppDb_file
     add     x23, x23, x21, lsl #3
     add     x9, x27, #AppDb_segment
@@ -1836,7 +1879,10 @@ LOCAL_FUNCTION app_db_append
     CALL_GLOBAL lantern_shell_append
     ldr     x9, [x27, #AppDb_op]
     cbnz    x9, 89f
-99: LEAVE 48
+99: mov     x0, #0
+    LEAVE 48
+88: mov     x0, #1
+    LEAVE 48
 89: mov     x0, x23                         /* the file closes */
     CALL_GLOBAL lantern_shell_close
     mov     x9, #-1
@@ -1859,8 +1905,140 @@ LOCAL_FUNCTION app_db_append
     bl      app_line_u64
     mov     x0, #APP_LOG_ERROR
     bl      app_line_end
+    mov     x0, #1
     LEAVE 48
-END_FUNCTION app_db_append
+END_FUNCTION app_db_write
+
+/*
+ * L1: NODE_ACT_DB_ARCHIVE x0 (app.md): the state's SSZ bytes in new memory; above offset 0, the
+ * diff of them against the record at offset 0 of the segment's file, in new memory too; the
+ * record goes as a DB_APPEND's does, in the state segments' file; the memory is freed; then the
+ * NODE_EV_DB_ARCHIVE of the segment, the offset and the record (kind 0 when none was written)
+ * joins the next step's events. x20 the action, x21 the state's entry, x22 the full record's
+ * ByteList, x23 the state's bytes, x24 their size, x25 the diff, x26 its size, x27 the AppDb, x28
+ * 1 once written. Locals: L the event (NODE_EV_DB_ARCHIVE_SIZE), L+112 an action of the kind's
+ * record (16 to 127), L+240 a table entry, L+264 a ByteList header, L+288 a size.
+ */
+LOCAL_FUNCTION app_db_archive
+    ENTER 304
+    mov     x20, x0
+    ADDQ    x27, x19, APP_DB
+    mov     x23, #0
+    mov     x25, #0
+    mov     x28, #0
+    mov     x9, #NODE_EV_DB_ARCHIVE_SIZE    /* the event, and the action of its record */
+    mov     x10, #NODE_EV_DB_ARCHIVE
+    stp     x9, x10, [sp, #L]
+    ldp     x9, x10, [x20, #24]             /* segment, offset */
+    stp     x9, x10, [sp, #(L + 16)]
+    str     x9, [sp, #(L + 112 + 24)]
+    mov     x11, #2
+    str     x11, [sp, #(L + 112 + 32)]
+    str     x10, [sp, #(L + 112 + 40)]
+    add     x0, sp, #(L + 112 + 48)
+    add     x1, x20, #40
+    mov     x2, #DbRecord__mem
+    bl      lantern_copy
+    ldr     x0, [x20, #16]                  /* the state's SSZ bytes */
+    bl      app_buf_find
+    cbz     x0, 60f
+    mov     x21, x0
+    ldr     x0, [x20, #(40 + DbRecord_slot)]
+    add     x1, x19, #APP_CONFIG
+    bl      app_fork
+    str     x0, [sp, #(L + 296)]
+    mov     x9, #24
+    str     x9, [sp, #(L + 264)]
+    str     xzr, [sp, #(L + 288)]
+    mov     x15, x0
+    ldr     x0, [x21, #8]
+    SCRATCH x1
+    add     x2, sp, #(L + 264)
+    add     x3, sp, #(L + 288)
+    FORK_CALL node_state_bytes
+    ldr     x24, [sp, #(L + 288)]
+    cmp     x24, #24
+    b.ls    60f
+    mov     x0, x24
+    bl      app_map
+    cbz     x0, 60f
+    mov     x23, x0
+    str     x24, [x23]
+    ldr     x15, [sp, #(L + 296)]
+    ldr     x0, [x21, #8]
+    SCRATCH x1
+    mov     x2, x23
+    add     x3, sp, #(L + 288)
+    FORK_CALL node_state_bytes
+    cbnz    x0, 70f
+    mov     x26, x23                        /* the record's bytes: the state's at offset 0 */
+    ldr     x9, [x20, #32]
+    cbz     x9, 50f
+    ldr     x9, [x20, #24]                  /* else the diff against the full state at 0 */
+    lsl     x0, x9, #NODE_DB_SEGMENT_SHIFT
+    orr     x0, x0, #NODE_DB_REF
+    orr     x0, x0, #NODE_DB_STATES
+    mov     x1, #0
+    bl      app_work_data
+    cmn     x0, #1
+    b.eq    70f
+    ldr     x22, [x0, #8]
+    mov     x9, #24
+    str     x9, [sp, #(L + 264)]
+    mov     x0, x22
+    mov     x1, x23
+    add     x2, sp, #(L + 264)
+    add     x3, sp, #(L + 288)
+    CALL_GLOBAL lantern_db_state_diff
+    ldr     x26, [sp, #(L + 288)]
+    mov     x0, x26
+    bl      app_map
+    cbz     x0, 70f
+    mov     x25, x0
+    str     x26, [x25]
+    mov     x0, x22
+    mov     x1, x23
+    mov     x2, x25
+    add     x3, sp, #(L + 288)
+    CALL_GLOBAL lantern_db_state_diff
+    cbnz    x0, 70f
+    mov     x26, x25
+50: ldr     x9, [x26, #16]                  /* the DbRecord: the ByteList header and length of the bytes */
+    add     x10, x9, #24
+    mov     x11, #24
+    stp     x10, x11, [sp, #(L + 112 + 48 + DbRecord_bytes)]
+    str     x9, [sp, #(L + 112 + 48 + DbRecord_length)]
+    str     xzr, [sp, #(L + 240)]
+    str     x26, [sp, #(L + 248)]
+    ldr     x9, [x26]
+    str     x9, [sp, #(L + 256)]
+    add     x0, sp, #(L + 112)
+    add     x1, sp, #(L + 240)
+    bl      app_db_write
+    cbnz    x0, 70f
+    mov     x28, #1
+70: cbz     x25, 71f                        /* the memory goes */
+    ldr     x9, [x25]
+    stp     x25, x9, [sp, #(L + 264)]
+    add     x0, sp, #(L + 264)
+    add     x1, sp, #(L + 272)
+    CALL_GLOBAL lantern_shell_unmap
+71: cbz     x23, 60f
+    stp     x23, x24, [sp, #(L + 264)]
+    add     x0, sp, #(L + 264)
+    add     x1, sp, #(L + 272)
+    CALL_GLOBAL lantern_shell_unmap
+60: add     x0, sp, #(L + 32)               /* the event: the record, kind 0 when none */
+    add     x1, sp, #(L + 112 + 48)
+    mov     x2, #DbRecord__mem
+    bl      lantern_copy
+    cbnz    x28, 61f
+    str     xzr, [sp, #(L + 32 + DbRecord_kind)]
+61: add     x0, sp, #L
+    mov     x1, #NODE_EV_DB_ARCHIVE_SIZE
+    bl      app_event_put
+    LEAVE 304
+END_FUNCTION app_db_archive
 
 /*
  * L1: NODE_ACT_DB_DROP x0: the segment's file goes: the open file of its kind, when it is that
@@ -1884,7 +2062,7 @@ LOCAL_FUNCTION app_db_drop
     mov     x9, #-1
     add     x10, x27, #AppDb_segment
     str     x9, [x10, x21, lsl #3]
-1:  lsl     x23, x21, #63                   /* its map */
+1:  lsl     x23, x21, #62                   /* its map */
     orr     x23, x23, x22
     mov     x25, #0
 2:  cmp     x25, #APP_DB_MAP_COUNT
@@ -1914,7 +2092,7 @@ LOCAL_FUNCTION app_db_drop
 END_FUNCTION app_db_drop
 
 /*
- * L0: x0 = the AppDb's view entry of the record at offset x23 of the mapped segment x26: its
+ * L0: x0 = the AppDb's view entry x28 of the record at offset x23 of the mapped segment x26: its
  * ByteList in place, at byte DbRecord_bytes of the record; 0 when the record is not all inside
  * the map, or its ByteList header is not of its bytes. Uses x9-x13, x16.
  */
@@ -1939,7 +2117,7 @@ LOCAL_FUNCTION app_db_record
     ldr     x9, [x13, #(DbRecord_bytes + 8)]
     cmp     x9, #24
     b.ne    8f
-    ADDQ    x10, x19, APP_DB + AppDb_view
+    mov     x10, x28
     add     x13, x13, #DbRecord_bytes
     str     x13, [x10, #8]
     mov     x0, x10
@@ -1950,9 +2128,10 @@ END_FUNCTION app_db_record
 
 /*
  * L1: x0 = the table entry of a work's data BufferId x0 as app_work_entry gives; for a
- * NODE_DB_REF, the AppDb's view entry of its record in the segment, mapped again when the file
- * grew past the map, or 2^64 - 1 when the record is not there. x20 the reference, x21 the kind,
- * x22 the segment, x23 the offset, x24 the map's key, x25 a map's index, x26 a map, x27 the AppDb.
+ * NODE_DB_REF, the AppDb's view entry x1 (0 data, 1 state_b) of its record in the segment, mapped
+ * again when the file grew past the map, or 2^64 - 1 when the record is not there. x20 the
+ * reference, x21 the kind (0 blocks, 1 sidecars, 2 states), x22 the segment, x23 the offset, x24
+ * the map's key, x25 a map's index, x26 a map, x27 the AppDb, x28 the view.
  */
 LOCAL_FUNCTION app_work_data
     ENTER 0
@@ -1961,10 +2140,17 @@ LOCAL_FUNCTION app_work_data
     LEAVE 0
 1:  mov     x20, x0
     ADDQ    x27, x19, APP_DB
+    ADDQ    x28, x19, APP_DB + AppDb_view
+    mov     x9, #48
+    madd    x28, x1, x9, x28
     ubfx    x21, x20, #62, #1
-    ubfx    x22, x20, #48, #14
-    and     x23, x20, #0xffffffffffff
-    lsl     x24, x21, #63
+    ubfx    x9, x20, #61, #1
+    tbz     x20, #62, 11f
+    cbnz    x9, 8f                          /* both kinds: none */
+11: add     x21, x21, x9, lsl #1
+    ubfx    x22, x20, #NODE_DB_SEGMENT_SHIFT, #17
+    and     x23, x20, #0xfffffffffff
+    lsl     x24, x21, #62
     orr     x24, x24, x22
     mov     x25, #0                         /* the map of the segment */
 2:  cmp     x25, #APP_DB_MAP_COUNT
@@ -2116,7 +2302,7 @@ LOCAL_FUNCTION app_db_history
 END_FUNCTION app_db_history
 
 /*
- * L1: for a start from anchor.ssz: each segment file there, the blocks' then the sidecars', from
+ * L1: for a start from anchor.ssz: each segment file there, the blocks', the sidecars', then the states', from
  * the segment of history_slot to the end of the Db's room, goes to lantern_node_db_scan; a file
  * with bytes after its last whole record is cut there: x0 = 0, or 2 after a line on the standard
  * error. x20 the kind, x21 the segment, x22 the end, x26 a status, x27 the AppDb. Locals: L a
@@ -2188,7 +2374,7 @@ LOCAL_FUNCTION app_db_scan_all
 6:  add     x21, x21, #1
     b       2b
 7:  add     x20, x20, #1
-    cmp     x20, #2
+    cmp     x20, #3
     b.lo    1b
     mov     x0, #0
     LEAVE 64
@@ -2242,7 +2428,7 @@ LOCAL_FUNCTION app_db_state
     CALL_GLOBAL lantern_shell_sync
     ldr     x9, [sp, #(L + 24)]
 3:  add     x9, x9, #1
-    cmp     x9, #2
+    cmp     x9, #3
     b.lo    2b
     ldr     x0, [x20, #32]                  /* the state's SSZ bytes: their size, then the bytes */
     add     x1, x19, #APP_CONFIG
@@ -2440,9 +2626,14 @@ LOCAL_FUNCTION app_actions
     bl      app_db_drop
     b       8f
 12: cmp     x9, #NODE_ACT_DB_STATE
-    b.ne    10f
+    b.ne    120f
     mov     x0, x20                         /* DB_STATE: anchor.ssz */
     bl      app_db_state
+    b       8f
+120: cmp    x9, #NODE_ACT_DB_ARCHIVE
+    b.ne    10f
+    mov     x0, x20                         /* DB_ARCHIVE: a state record */
+    bl      app_db_archive
     b       8f
 10: cmp     x9, #NODE_ACT_STATE_BYTES
     b.ne    13f
