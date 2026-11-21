@@ -24,6 +24,7 @@ import hashlib
 import json
 import os
 import pathlib
+import re
 
 from p2p import FORKS, U64, module, run
 from reqresp import message_types
@@ -244,6 +245,342 @@ def liveness_cases(fork, preset):
             }
 
 
+# ---------------------------------------------------------------- Rewards (beacon-api.md, getBlockRewards)
+
+REWARD_EXTRA = 56  # active validators after the anchor's 8 and its status ones: committees of a few members
+
+
+def sync_reward_values(spec, state):
+    """(participant_reward, proposer_reward) of process_sync_aggregate at the state (altair beacon-chain.md)."""
+    total_active_increments = int(spec.get_total_active_balance(state)) // int(spec.EFFECTIVE_BALANCE_INCREMENT)
+    total_base_rewards = int(spec.get_base_reward_per_increment(state)) * total_active_increments
+    max_participant_rewards = total_base_rewards * int(spec.SYNC_REWARD_WEIGHT) // int(spec.WEIGHT_DENOMINATOR) // int(spec.SLOTS_PER_EPOCH)
+    participant_reward = max_participant_rewards // int(spec.SYNC_COMMITTEE_SIZE)
+    proposer_reward = participant_reward * int(spec.PROPOSER_WEIGHT) // (int(spec.WEIGHT_DENOMINATOR) - int(spec.PROPOSER_WEIGHT))
+    return participant_reward, proposer_reward
+
+
+def block_rewards(spec, fork, pre, block, early, late):
+    """The values of getBlockRewards (beacon-api.md) of the BeaconBlock on its pre-state P, with the E states
+    of phase0 (None for none): (proposer_index, total, attestations, sync_aggregate, proposer_slashings,
+    attester_slashings)."""
+    body = block.body
+    electra = FORKS.index(fork) >= FORKS.index("electra")
+    quotient = int(spec.WHISTLEBLOWER_REWARD_QUOTIENT_ELECTRA if electra else spec.WHISTLEBLOWER_REWARD_QUOTIENT)
+    epoch = spec.get_current_epoch(pre)
+    slashed = set()
+    proposer_slashings = 0
+    for s in body.proposer_slashings:
+        i = int(s.signed_header_1.message.proposer_index)
+        proposer_slashings += int(pre.validators[i].effective_balance) // quotient
+        slashed.add(i)
+    attester_slashings = 0
+    for s in body.attester_slashings:
+        both = set(map(int, s.attestation_1.attesting_indices)) & set(map(int, s.attestation_2.attesting_indices))
+        for i in sorted(both):
+            if spec.is_slashable_validator(pre.validators[i], epoch) and i not in slashed:
+                attester_slashings += int(pre.validators[i].effective_balance) // quotient
+                slashed.add(i)
+    sync = 0
+    if fork != "phase0":
+        sync = sum(1 for bit in body.sync_aggregate.sync_committee_bits if bit) * sync_reward_values(spec, pre)[1]
+    attestations = 0
+    if fork != "phase0":
+        flags = {int(spec.get_current_epoch(pre)): list(map(int, pre.current_epoch_participation)),
+                 int(spec.get_previous_epoch(pre)): list(map(int, pre.previous_epoch_participation))}
+        denominator = (int(spec.WEIGHT_DENOMINATOR) - int(spec.PROPOSER_WEIGHT)) * int(spec.WEIGHT_DENOMINATOR) // int(spec.PROPOSER_WEIGHT)
+        for a in body.attestations:
+            indices = spec.get_attestation_participation_flag_indices(pre, a.data, pre.slot - a.data.slot)
+            part = flags[int(a.data.target.epoch)]
+            numerator = 0
+            for i in sorted(spec.get_attesting_indices(pre, a)):
+                for f, weight in enumerate(spec.PARTICIPATION_FLAG_WEIGHTS):
+                    if f in indices and not part[i] >> f & 1:
+                        part[i] |= 1 << f
+                        numerator += int(spec.get_base_reward(pre, i)) * int(weight)
+            attestations += numerator // denominator
+    else:
+        b = int(epoch)
+        rewarded = {b - 1: set(), b: set()}
+        lowest = {}
+        for e in (early, late):
+            if e is None:
+                continue
+            low = {}
+            for pa in e.previous_epoch_attestations:
+                for i in spec.get_pending_attesting_indices(e, pa):
+                    low[int(i)] = min(low.get(int(i), 255), int(pa.inclusion_delay))
+            lowest[id(e)] = low
+        for a in body.attestations:
+            t = int(a.data.target.epoch)
+            e = late if t == b else early
+            assert t in (b, b - 1) and e is not None
+            delay = int(pre.slot - a.data.slot)
+            for i in sorted(spec.get_attesting_indices(pre, a)):
+                i = int(i)
+                if i in rewarded[t]:
+                    continue
+                rewarded[t].add(i)
+                if not e.validators[i].slashed and lowest[id(e)].get(i, 255) >= delay:
+                    attestations += int(spec.get_base_reward(e, i)) // int(spec.PROPOSER_REWARD_QUOTIENT)
+    total = attestations + sync + proposer_slashings + attester_slashings
+    return (int(block.proposer_index), total, attestations, sync, proposer_slashings, attester_slashings)
+
+
+def sync_rewards(spec, pre, block):
+    """The items of getSyncCommitteeRewards (beacon-api.md) of the BeaconBlock on its pre-state P:
+    (validator index, reward) of each member once, in index order."""
+    keys = [bytes(v.pubkey) for v in pre.validators]
+    places = [keys.index(bytes(k)) for k in pre.current_sync_committee.pubkeys]
+    participant_reward, proposer_reward = sync_reward_values(spec, pre)
+    proposer = int(block.proposer_index)
+    balance = {i: int(pre.balances[i]) for i in set(places) | {proposer}}
+    took = 0
+    for i, bit in zip(places, block.body.sync_aggregate.sync_committee_bits):
+        if bit:
+            balance[i] += participant_reward
+            balance[proposer] += proposer_reward
+            took += proposer_reward
+        else:
+            balance[i] = max(0, balance[i] - participant_reward)
+    return [(i, balance[i] - int(pre.balances[i]) - (took if i == proposer else 0)) for i in sorted(set(places))]
+
+
+def proposer_part(spec, state, proposer):
+    """The rewards get_inclusion_delay_deltas (phase0 beacon-chain.md) pays the proposer as a proposer."""
+    out = 0
+    matching = spec.get_matching_source_attestations(state, spec.get_previous_epoch(state))
+    for index in spec.get_unslashed_attesting_indices(state, matching):
+        attestation = min([a for a in matching if index in spec.get_pending_attesting_indices(state, a)],
+                          key=lambda a: a.inclusion_delay)
+        if int(attestation.proposer_index) == proposer:
+            out += int(spec.get_proposer_reward(state, index))
+    return out
+
+
+def reward_attestation(spec, fork, state, slot, indices, pick, target_root=None, head_root=None):
+    """An Attestation of the committees `indices` of the slot, at the state: bit k of a committee's members
+    set when pick(committee index, k); its source the justified checkpoint of the target's epoch, its target
+    and head the state's roots unless given."""
+    epoch = spec.compute_epoch_at_slot(slot)
+    source = state.current_justified_checkpoint if epoch == spec.get_current_epoch(state) else state.previous_justified_checkpoint
+    electra = FORKS.index(fork) >= FORKS.index("electra")
+    data = spec.AttestationData(
+        slot=slot, index=0 if electra else indices[0],
+        beacon_block_root=head_root if head_root is not None else spec.get_block_root_at_slot(state, slot),
+        source=source,
+        target=spec.Checkpoint(epoch=epoch, root=target_root if target_root is not None else spec.get_block_root(state, epoch)))
+    bits = []
+    for c in indices:  # each committee with one attester at least, as process_attestation asks
+        committee = spec.get_beacon_committee(state, slot, c)
+        some = [bool(pick(c, k)) for k in range(len(committee))]
+        if not any(some):
+            some[0] = True
+        bits += some
+    att = spec.Attestation(aggregation_bits=spec.AggregationBits(data=bits), data=data)
+    if electra:
+        for c in indices:
+            att.committee_bits[c] = True
+    return att
+
+
+def reward_block(spec, fork, pre, variant):
+    """A BeaconBlock at the slot of P with its proposer, attestations of both epochs, slashings and a sync
+    aggregate, for node-rewards; variant changes the bits."""
+    slot = int(pre.slot)
+    spe = int(spec.SLOTS_PER_EPOCH)
+    proposer = int(spec.get_beacon_proposer_index(pre))
+    epoch = int(spec.get_current_epoch(pre))
+    count = int(spec.get_committee_count_per_slot(pre, epoch))
+    attestations = []
+    # previous epoch: slots the inclusion window allows, two committees where there are two
+    earliest = max(slot - spe, (epoch - 1) * spe)
+    for s in range(earliest, min(earliest + 3, epoch * spe)):
+        cs = list(range(min(count, 2)))
+        if FORKS.index(fork) >= FORKS.index("electra"):
+            attestations.append(reward_attestation(spec, fork, pre, s, cs, lambda c, k: (k + c + variant) % 3 != 0))
+        else:
+            for c in cs:
+                attestations.append(reward_attestation(spec, fork, pre, s, [c], lambda c, k: (k + c + variant) % 3 != 0))
+    # a wrong head, then a wrong target, of the first previous slot; then the same slot again with all bits
+    wrong = spec.Root(b"\x55" * 32)
+    attestations.append(reward_attestation(spec, fork, pre, earliest, [0], lambda c, k: True, head_root=wrong))
+    attestations.append(reward_attestation(spec, fork, pre, earliest + 1, [0], lambda c, k: k % 2 == 0, target_root=wrong))
+    attestations.append(reward_attestation(spec, fork, pre, earliest, [0], lambda c, k: True))
+    # current epoch: the last two slots before the block's
+    last = slot - int(spec.MIN_ATTESTATION_INCLUSION_DELAY)
+    for s in range(max(epoch * spe, last - 1), last + 1):
+        attestations.append(reward_attestation(spec, fork, pre, s, [0], lambda c, k: (k + variant) % 2 == 0))
+    most = spec.MAX_ATTESTATIONS_ELECTRA if FORKS.index(fork) >= FORKS.index("electra") else spec.MAX_ATTESTATIONS
+    assert len(attestations) <= int(most)
+    active = [i for i in spec.get_active_validator_indices(pre, epoch) if i != proposer and not pre.validators[i].slashed]
+
+    def header_of(index, root):
+        return spec.SignedBeaconBlockHeader(message=spec.BeaconBlockHeader(slot=slot - 1, proposer_index=index, body_root=root))
+    victims = [int(active[-1]), int(active[-2])]
+    proposer_slashings = [spec.ProposerSlashing(signed_header_1=header_of(i, spec.Root(b"\x01" * 32)),
+                                                signed_header_2=header_of(i, spec.Root(b"\x02" * 32))) for i in victims]
+
+    def indexed_of(indices, root):
+        data = spec.AttestationData(slot=slot - 1, index=0, beacon_block_root=root,
+                                    source=pre.current_justified_checkpoint, target=spec.Checkpoint(epoch=epoch, root=root))
+        ia = spec.IndexedAttestation(data=data)
+        for i in sorted(indices):
+            ia.attesting_indices.append(i)
+        return ia
+    a, b = [int(x) for x in active[:4]], [int(x) for x in active[2:6]]
+    slashed_before = [i for i, v in enumerate(pre.validators) if v.slashed]
+    exited = [i for i, v in enumerate(pre.validators) if not v.slashed and not spec.is_active_validator(v, epoch)]
+    attester_slashings = [
+        spec.AttesterSlashing(attestation_1=indexed_of(a + slashed_before[:1] + [victims[0]], spec.Root(b"\x03" * 32)),
+                              attestation_2=indexed_of(a + slashed_before[:1] + [victims[0]], spec.Root(b"\x04" * 32))),
+        spec.AttesterSlashing(attestation_1=indexed_of(b + exited[:1], spec.Root(b"\x05" * 32)),
+                              attestation_2=indexed_of(b + exited[:1], spec.Root(b"\x06" * 32))),
+    ]
+    if FORKS.index(fork) < FORKS.index("electra"):
+        attester_slashings = attester_slashings[:int(spec.MAX_ATTESTER_SLASHINGS)]
+    else:
+        attester_slashings = attester_slashings[:int(spec.MAX_ATTESTER_SLASHINGS_ELECTRA)]
+    body = spec.BeaconBlockBody()
+    for items, field in ((proposer_slashings, body.proposer_slashings), (attester_slashings, body.attester_slashings),
+                         (attestations, body.attestations)):
+        for item in items:
+            field.append(item)
+    if fork != "phase0":
+        for k in range(int(spec.SYNC_COMMITTEE_SIZE)):
+            body.sync_aggregate.sync_committee_bits[k] = (k * 7 + variant) % 4 != 0
+    return spec.BeaconBlock(slot=slot, proposer_index=proposer, parent_root=spec.hash_tree_root(pre.latest_block_header),
+                            body=body)
+
+
+def reward_pre(spec, fork, offset, member):
+    """P: the anchor of the api cases at epoch 2 processed to the first slot from `offset` slots into the epoch
+    after it whose proposer is not slashed (and with `member` is in the sync committee), with flags of some
+    validators set and a sync member of a balance below participant_reward (altair)."""
+    state, _ = anchor(spec, fork, statuses=True, epoch=ANCHOR_EPOCH, extra=REWARD_EXTRA)
+    spe = int(spec.SLOTS_PER_EPOCH)
+    spec.process_slots(state, spec.Slot((ANCHOR_EPOCH + 1) * spe + offset))
+    keys = [bytes(v.pubkey) for v in state.validators]
+    while True:
+        proposer = int(spec.get_beacon_proposer_index(state))
+        members = set() if fork == "phase0" else {keys.index(bytes(k)) for k in state.current_sync_committee.pubkeys}
+        if not state.validators[proposer].slashed and (not member or fork == "phase0" or proposer in members):
+            break
+        spec.process_slots(state, state.slot + 1)
+        assert int(state.slot) % spe <= spe - 2, "reward_pre: no slot of the epoch fits"
+    if fork != "phase0":
+        for i in range(0, len(state.validators), 5):
+            state.previous_epoch_participation[i] = 3
+            state.current_epoch_participation[i] = 1
+        keys = [bytes(v.pubkey) for v in state.validators]
+        member = keys.index(bytes(state.current_sync_committee.pubkeys[3]))
+        state.balances[member] = sync_reward_values(spec, state)[0] // 2
+    return state
+
+
+def rewards_check(spec, fork, pre, block, early, late, want):
+    """The spec's own functions give the same proposer rewards, part by part, as block_rewards gives."""
+    proposer = int(block.proposer_index)
+    s = pre.copy()
+    for op, field in ((spec.process_proposer_slashing, 4), (spec.process_attester_slashing, 5)):
+        items = block.body.proposer_slashings if field == 4 else block.body.attester_slashings
+        before = int(s.balances[proposer])
+        for item in items:
+            op(s, item)
+        assert int(s.balances[proposer]) - before == want[field], "rewards: a slashing part differs from the spec's"
+    if fork != "phase0":
+        before = int(s.balances[proposer])
+        for a in block.body.attestations:
+            spec.process_attestation(s, a)
+        assert int(s.balances[proposer]) - before == want[2], "rewards: the attestations part differs from the spec's"
+        t = pre.copy()
+        before = int(t.balances[proposer])
+        spec.process_sync_aggregate(t, block.body.sync_aggregate)
+        own = next((r for i, r in sync_rewards(spec, pre, block) if i == proposer), 0)
+        assert int(t.balances[proposer]) - before - own == want[3], "rewards: the sync part differs from the spec's"
+        for i, r in sync_rewards(spec, pre, block):
+            took = want[3] if i == proposer else 0
+            assert int(t.balances[i]) - int(pre.balances[i]) - took == r, "rewards: a member's sync reward differs"
+    else:
+        part = sum(proposer_part(spec, e, proposer) for e in (early, late) if e is not None)
+        assert part == want[2], "rewards: the phase0 attestations part differs from get_inclusion_delay_deltas"
+
+
+def reward_states(spec, pre, block, marks):
+    """Phase0: E of each target epoch: the block on P, then the slots to the end of the block's epoch (early) and
+    of the next (late); with marks, an earlier attestation of some attesters and a slashed attester in each."""
+    spe = int(spec.SLOTS_PER_EPOCH)
+    b = int(spec.get_current_epoch(pre))
+    s = pre.copy()
+    spec.process_block(s, block)
+    out = []
+    for e in (b, b + 1):
+        spec.process_slots(s, spec.Slot((e + 1) * spe - 1))
+        state = s.copy()
+        if marks and len(state.previous_epoch_attestations):
+            first = state.previous_epoch_attestations[0]  # one of the block's: an earlier copy of it, by another proposer
+            if int(first.inclusion_delay) > 1:
+                early_copy = first.copy()
+                early_copy.inclusion_delay = 1
+                early_copy.proposer_index = (int(block.proposer_index) + 1) % len(state.validators)
+                rest = list(state.previous_epoch_attestations)
+                state.previous_epoch_attestations = type(state.previous_epoch_attestations)(data=[early_copy] + rest)
+            some = spec.get_pending_attesting_indices(state, first)
+            if some:
+                state.validators[sorted(some)[0]].slashed = True
+        out.append(state if e > 0 or b > 0 else None)
+    return (out[0] if b > 0 else None), out[1]
+
+
+def rewards_cases(fork, preset):
+    """lantern_node_block_rewards and lantern_node_sync_rewards (node.md, node-rewards): a pre-state, a block,
+    in phase0 the E states, and the out of each."""
+    import struct
+    from eth_consensus_specs.utils import bls
+    spec = module(fork, preset)
+    assert len(KEYS.pubkeys[0]) == 48  # the keys, made while BLS is on
+    bls_active = bls.bls_active
+    bls.bls_active = False  # the functions check no signature
+    try:
+        for offset, variant, marks in ((2, 0, False), (2, 1, True), (4, 2, True)):
+            def make():
+                pre = reward_pre(spec, fork, offset, variant == 0)
+                block = reward_block(spec, fork, pre, variant)
+                early = late = None
+                if fork == "phase0":
+                    early, late = reward_states(spec, pre, block, marks)
+                want = block_rewards(spec, fork, pre, block, early, late)
+                rewards_check(spec, fork, pre, block, early, late, want)
+                parts = {
+                    "pre": bytes(pre.encode_bytes()),
+                    "block": bytes(spec.SignedBeaconBlock(message=block).encode_bytes()),
+                    "early": bytes(early.encode_bytes()) if early is not None else b"",
+                    "late": bytes(late.encode_bytes()) if late is not None else b"",
+                    "rewards": struct.pack("<6Q", *want),
+                    "status": 0,
+                }
+                if fork != "phase0":
+                    parts["sync"] = b"".join(struct.pack("<Qq", i, r) for i, r in sync_rewards(spec, pre, block))
+                return parts
+            yield "rewards", f"offset_{offset}_variant_{variant}", run_strict(spec, schedule(fork), make)
+        # a pre-state not at the block's slot
+        def wrong_slot():
+            pre = reward_pre(spec, fork, 2, False)
+            block = reward_block(spec, fork, pre, 0)
+            spec.process_slots(pre, pre.slot + 1)
+            return {"pre": bytes(pre.encode_bytes()), "block": bytes(spec.SignedBeaconBlock(message=block).encode_bytes()),
+                    "early": b"", "late": b"", "rewards": b"", "status": lantern_status("LANTERN_INVALID_SLOT"), "sync": b""}
+        yield "rewards", "pre_not_at_slot", run_strict(spec, schedule(fork), wrong_slot)
+    finally:
+        bls.bls_active = bls_active
+
+
+def lantern_status(name):
+    """The value of a status of include/lantern.inc."""
+    inc = (pathlib.Path(__file__).resolve().parents[2] / "include" / "lantern.inc").read_text()
+    return int(re.search(r"^\.set %s, (\d+)" % name, inc, re.M).group(1))
+
+
 def op_event_messages(spec, state):
     """A valid proposer slashing and a valid attester slashing of the anchor's validators, signed with the
     test helpers' keys; and the stream of their operation events (beacon-api.md): its head, then a chunk each."""
@@ -279,6 +616,7 @@ def op_event_messages(spec, state):
 
 def cases(fork, preset):
     yield from liveness_cases(fork, preset)
+    yield from rewards_cases(fork, preset)
     if fork == "phase0":  # the node runs altair to fulu, as the fork choice cases do
         return
     spec = module(fork, preset)
@@ -973,7 +1311,8 @@ def event_texts(spec, fork, parts):
         bls.bls_active = bls_active
 
 
-def replay(spec, fork, parts):
+def replay(spec, fork, parts, keep=None):
+    """The texts of each step's events; with keep, a dict that takes the store and the blocks' execution_optimistic."""
     anchor_state = spec.BeaconState.decode_bytes(parts["anchor_state"])
     anchor_block = spec.BeaconBlock.decode_bytes(parts["anchor_block"])
     store = spec.get_forkchoice_store(anchor_state, anchor_block)
@@ -1096,7 +1435,242 @@ def replay(spec, fork, parts):
                          qhex(store.blocks[root].state_root) + b',"epoch":' + q(cp.epoch) +
                          b',"execution_optimistic":' + flag(optimistic.get(root, False)) + b"}")
         out.append(texts)
+    if keep is not None:
+        keep.update(store=store, optimistic=optimistic, anchor=bytes(spec.hash_tree_root(anchor_block)))
     return out
+
+
+def reads_texts(spec, fork, parts):
+    """The requests of the node-reads case of a fork_choice case, and their answers (beacon-api.md), after a
+    replay of its steps: getBlockRewards and getSyncCommitteeRewards of each block of the store, by root, and
+    getSyncCommitteeRewards of the head with id items."""
+    from eth_consensus_specs.utils import bls, kzg
+    import api_route
+    kzg.load_trusted_setup()
+    assert len(KEYS.pubkeys[0]) == 48
+    bls_active = bls.bls_active
+    bls.bls_active = False
+    keep = {}
+    try:
+        replay(spec, fork, parts, keep)
+    finally:
+        bls.bls_active = bls_active
+    store, optimistic, anchor_root = keep["store"], keep["optimistic"], keep["anchor"]
+    ops = {op["name"]: op for op in api_route.operations(pathlib.Path(os.environ["BEACON_APIS"]))}
+    spe = int(spec.SLOTS_PER_EPOCH)
+    head = spec.get_head(store)
+    head = bytes(getattr(head, "root", head))
+    finalized = bytes(store.finalized_checkpoint.root)
+
+    def ancestor(root, slot):
+        node = spec.ForkChoiceNode(root=spec.Root(root)) if hasattr(spec, "ForkChoiceNode") else spec.Root(root)
+        a = spec.get_ancestor(store, node, spec.Slot(slot))
+        return bytes(getattr(a, "root", a))
+
+    def descends(root):  # a strict descendant of the finalized block
+        return root != finalized and int(store.blocks[root].slot) > int(store.blocks[finalized].slot) and \
+            ancestor(root, store.blocks[finalized].slot) == finalized
+    states = {}
+
+    def chain_state(slot):  # the state of the chain at the slot, past the head's the head's post-state brought to it
+        if slot not in states:
+            root = head if slot >= int(store.blocks[head].slot) else ancestor(head, slot)
+            s = store.block_states[root].copy()
+            if int(s.slot) < slot:
+                spec.process_slots(s, spec.Slot(slot))
+            states[slot] = s
+        return states[slot]
+    requests, answers = [], []
+
+    def ask(op, root, body=None):
+        req = api_route.request(ops[op]["method"], api_route.fill(ops[op], {"block_id": qhex(root)[1:-1]}), b"",
+                                body=body or b"", content_type=b"application/json" if body else b"")
+        requests.append(http(req, extra=b"Content-Length: %d\r\n" % len(body) if body else b"") + (body or b""))
+    roots = sorted(store.blocks, key=lambda r: (int(store.blocks[r].slot), bytes(r)))
+    for root in map(bytes, roots):
+        block = store.blocks[root]
+        ok = root != anchor_root and descends(root)
+        kept = root != anchor_root and (ok or finalized == anchor_root or ancestor(finalized, block.slot) == root)
+        values = b'{"execution_optimistic":' + flag(optimistic.get(root, False)) + b',"finalized":false,"data":'
+        pre = None
+        if ok:
+            pre = store.block_states[bytes(block.parent_root)].copy()
+            spec.process_slots(pre, block.slot)
+        ask("getBlockRewards", root)
+        if not ok:
+            answers.append(error(404))
+        else:
+            early = late = None
+            if fork == "phase0":
+                b = int(spec.get_current_epoch(pre))
+                early = chain_state((b + 1) * spe - 1) if b > 0 else None
+                late = chain_state((b + 2) * spe - 1)
+            r = block_rewards(spec, fork, pre, block, early, late)
+            names = (b"proposer_index", b"total", b"attestations", b"sync_aggregate", b"proposer_slashings", b"attester_slashings")
+            answers.append(response(200, values + b"{" + b",".join(b'"%s":%s' % (n, q(v)) for n, v in zip(names, r)) + b"}}"))
+        bodies = [None]
+        if ok and root == head and fork != "phase0":
+            keys = [bytes(v.pubkey) for v in pre.validators]
+            members = sorted({keys.index(bytes(k)) for k in pre.current_sync_committee.pubkeys})
+            others = [i for i in range(len(keys)) if i not in members]
+            bodies.append(b'["%d","0x%s"%s,"%d"]' % (members[0], keys[members[-1]].hex().encode(),
+                                                     b',"%d"' % others[0] if others else b"", len(keys) + 7))
+        for body in bodies:
+            ask("getSyncCommitteeRewards", root, body)
+            if not kept:
+                answers.append(error(404))
+            elif fork == "phase0":
+                answers.append(error(400))
+            elif not ok:
+                answers.append(error(404))
+            else:
+                items = sync_rewards(spec, pre, block)
+                if body is not None:
+                    pick = {members[0], members[-1]} | ({others[0]} if others else set())
+                    items = [(i, v) for i, v in items if i in pick]
+                answers.append(response(200, values + b"[" + b",".join(b'{"validator_index":%s,"reward":"%d"}' % (q(i), v)
+                                                                       for i, v in items) + b"]}"))
+    return requests, answers
+
+
+def reward_answers(spec, fork, block, pre, early, late, optimistic, body, kept=True):
+    """The answers of getBlockRewards and of getSyncCommitteeRewards (with the id items of body, or None) of a
+    block whose parent's post-state the node holds (beacon-api.md): (block rewards, sync rewards)."""
+    values = b'{"execution_optimistic":' + flag(optimistic) + b',"finalized":false,"data":'
+    r = block_rewards(spec, fork, pre, block, early, late)
+    names = (b"proposer_index", b"total", b"attestations", b"sync_aggregate", b"proposer_slashings", b"attester_slashings")
+    first = response(200, values + b"{" + b",".join(b'"%s":%s' % (n, q(v)) for n, v in zip(names, r)) + b"}}")
+    if fork == "phase0":
+        return first, error(400)
+    items = sync_rewards(spec, pre, block)
+    if body is not None:
+        items = [(i, v) for i, v in items if i in body]
+    return first, response(200, values + b"[" + b",".join(b'{"validator_index":%s,"reward":"%d"}' % (q(i), v) for i, v in items) + b"]}")
+
+
+def transition_reads_texts(fork, preset, parts):
+    """The requests of the node-reads case of a transition case, and their answers (beacon-api.md): the node
+    anchors at pre with the fork before and imports each block (the runner, transition_node_case);
+    getBlockRewards and getSyncCommitteeRewards of the anchor (404) and, by root, of each block whose parent
+    is at or above the first slot of the highest finalized epoch the store can reach. None when pre is no
+    anchor: its slot is past its latest block header's."""
+    from eth_consensus_specs.utils import bls
+    import api_route
+    before = FORKS[FORKS.index(fork) - 1]
+    spec_a, spec_b = module(before, preset), module(fork, preset)
+    meta = parts["meta"]
+    fork_epoch = int(meta["fork_epoch"])
+    spe = int(spec_b.SLOTS_PER_EPOCH)
+    fork_slot = fork_epoch * spe
+    pre = spec_a.BeaconState.decode_bytes(parts["pre"])
+    if int(pre.slot) != int(pre.latest_block_header.slot):
+        return None
+    assert len(KEYS.pubkeys[0]) == 48
+    ops = {op["name"]: op for op in api_route.operations(pathlib.Path(os.environ["BEACON_APIS"]))}
+
+    def is_b(state):
+        return type(state) is spec_b.BeaconState
+
+    def bring(state, slot):  # a copy at the slot, across the fork (node.md, the crossing)
+        s = state.copy()
+        if not is_b(s) and slot >= fork_slot:
+            if int(s.slot) < fork_slot:
+                spec_a.process_slots(s, spec_a.Slot(fork_slot))
+            s = getattr(spec_b, f"upgrade_to_{fork}")(s)
+        spec = spec_b if is_b(s) else spec_a
+        if int(s.slot) < slot:
+            spec.process_slots(s, spec.Slot(slot))
+        return s
+
+    def finalized_epochs(state):  # realized and unrealized (compute_pulled_up_tip)
+        spec = spec_b if is_b(state) else spec_a
+        s = state.copy()
+        spec.process_justification_and_finalization(s)
+        return max(int(state.finalized_checkpoint.epoch), int(s.finalized_checkpoint.epoch))
+    header = pre.latest_block_header.copy()
+    if header.state_root == spec_a.Bytes32():
+        header.state_root = spec_a.hash_tree_root(pre)
+    anchor_root = bytes(spec_a.hash_tree_root(header))
+    chain = [(anchor_root, None, pre, None)]  # (root, block, post-state, pre-state P)
+    highest = int(spec_a.get_current_epoch(pre))
+    bls_active = bls.bls_active
+    bls.bls_active = False
+    try:
+        for i in range(int(meta["blocks_count"])):
+            enc = parts[f"blocks_{i}"]
+            at = int.from_bytes(enc[:4], "little")
+            slot = int.from_bytes(enc[at:at + 8], "little")
+            spec = spec_b if slot // spe >= fork_epoch else spec_a
+            sb = spec.SignedBeaconBlock.decode_bytes(enc)
+            assert bytes(sb.message.parent_root) == chain[-1][0], "transition reads: the blocks are no chain"
+            p = bring(chain[-1][2], slot)
+            post = p.copy()
+            spec.process_block(post, sb.message)
+            chain.append((bytes(spec.hash_tree_root(sb.message)), sb.message, post, p))
+            highest = max(highest, finalized_epochs(post))
+        head_slot = int(chain[-1][1].slot) if len(chain) > 1 else int(pre.slot)
+
+        def chain_state(slot):  # the state of the chain at the slot; past the head's, the head's post-state brought to it
+            below = [c for c in chain if (int(c[1].slot) if c[1] is not None else int(pre.slot)) <= slot]
+            return bring(below[-1][2], slot)
+        requests, answers = [], []
+
+        def ask(op, root, body=None):
+            req = api_route.request(ops[op]["method"], api_route.fill(ops[op], {"block_id": qhex(root)[1:-1]}), b"",
+                                    body=body or b"", content_type=b"application/json" if body else b"")
+            requests.append(http(req, extra=b"Content-Length: %d\r\n" % len(body) if body else b"") + (body or b""))
+        ask("getBlockRewards", anchor_root)
+        answers.append(error(404))
+        ask("getSyncCommitteeRewards", anchor_root)
+        answers.append(error(404))
+        for k in range(1, len(chain)):
+            root, block, _, p = chain[k]
+            parent_slot = int(chain[k - 1][1].slot) if k > 1 else int(pre.slot)
+            if parent_slot < highest * spe:
+                continue
+            b_fork = fork if is_b(p) else before
+            b_spec = spec_b if is_b(p) else spec_a
+            early = late = None
+            if b_fork == "phase0":
+                b = int(b_spec.get_current_epoch(p))
+                early = chain_state((b + 1) * spe - 1) if b > 0 else None
+                late = chain_state((b + 2) * spe - 1) if b + 1 < fork_epoch else None
+            first, second = run_strict(b_spec, schedule_at(b_fork, fork, fork_epoch),
+                                       lambda: reward_answers(b_spec, b_fork, block, p, early, late, False, None))
+            ask("getBlockRewards", root)
+            answers.append(first)
+            ask("getSyncCommitteeRewards", root)
+            answers.append(second)
+    finally:
+        bls.bls_active = bls_active
+    return requests, answers
+
+
+def schedule_at(fork, last, epoch):
+    """The config of a module of fork in a transition to last at epoch: the forks before last at 0, last at epoch."""
+    config = {}
+    for i, name in enumerate(FORKS[1:], start=1):
+        config[f"{name.upper()}_FORK_EPOCH"] = 0 if i < FORKS.index(last) else epoch if name == last else U64
+    return config
+
+
+def transition_read_cases(fork, preset, cases):
+    """cases: (name, parts) of the spec's transition core cases of the fork."""
+    for name, parts in cases:
+        config = schedule_at(fork, fork, int(parts["meta"]["fork_epoch"]))
+        spec_b = module(fork, preset)
+        texts = run_strict(spec_b, config, lambda: run_strict(module(FORKS[FORKS.index(fork) - 1], preset), config,
+                                                               lambda: transition_reads_texts(fork, preset, parts)))
+        if texts is not None:
+            yield "reads", f"transition/{name}", {"requests": texts[0], "responses": texts[1]}
+
+
+def read_cases(fork, preset, cases):
+    """cases: (handler, name, parts) of the spec's fork_choice get_head and on_block cases of the fork."""
+    spec = module(fork, preset)
+    for handler, name, parts in cases:
+        requests, answers = run_strict(spec, schedule(fork), lambda: reads_texts(spec, fork, parts))
+        yield "reads", f"{handler}/{name}", {"requests": requests, "responses": answers}
 
 
 def event_cases(fork, preset, cases):
@@ -2358,6 +2932,9 @@ def api_requests(spec, fork, v, kind="main"):
                 want = error(404, close=close, keep_alive=keep_alive)
             elif opname in ANSWERED:
                 want = answer(v, opname, route, offline, close, keep_alive, syncing)
+            elif opname in ("getBlockRewards", "getSyncCommitteeRewards"):  # the anchor's block has no bytes: 404
+                assert req["path"].endswith(b"/head")
+                want = error(404, close=close, keep_alive=keep_alive)
             elif opname == "produceBlockV3":  # 503 while syncing; else the path's slot is at or below the head's: 400
                 assert int(route.slot) <= v["slot"]
                 want = error(503 if int(syncing) & 1 else 400, close=close, keep_alive=keep_alive)

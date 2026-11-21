@@ -139,6 +139,28 @@ The answers of the node (node.md, `NODE_EV_API`) follow these rules.
   - With `slot`, 400 when the slot is not of the epoch. With `index`, 400 when it is get_committee_count_per_slot of the state and the epoch, or more. The checks go in that order.
   - An item for each slot of the epoch (or `slot`), in order, and in each for each index from 0 below get_committee_count_per_slot (or `index`): `{"index":…,"slot":…,"validators":[…]}`, the members of get_beacon_committee of the state, the slot and the index, in order.
   - Streamed, as getStateValidators: `{"execution_optimistic":…,"finalized":…,"data":[<the items, with , between>]}`, the values those of the state.
+- getBlockRewards and getSyncCommitteeRewards: the proposer's and the sync committee's rewards of the block of `block_id`. The spec describes the fields only; these values are those of process_block of the block's fork, as Lighthouse v8.3.3 reads them (beacon_block_reward.rs, sync_committee_rewards.rs).
+  - The block: as for getBlockV2; with none, or with no bytes, 404.
+  - The pre-state P: the post-state of the node's `NodeBlock` of the block's `parent_root`, brought to the block's slot as a lookup brings a state (node.md, the crossing, then process_slots). No such parent, or one with no post-state: 404, as Lighthouse v8.3.3 answers when the parent's state is not available.
+  - `execution_optimistic` and `finalized`: those of the block, as for getBlockHeader.
+- getBlockRewards: `{"execution_optimistic":…,"finalized":…,"data":{"proposer_index":…,"total":…,"attestations":…,"sync_aggregate":…,"proposer_slashings":…,"attester_slashings":…}}`, in Gwei.
+  - `proposer_index`: the block's.
+  - `proposer_slashings`: for each proposer slashing of the body, the `whistleblower_reward` of its slash_validator: its validator's `effective_balance` in P // `WHISTLEBLOWER_REWARD_QUOTIENT` (`WHISTLEBLOWER_REWARD_QUOTIENT_ELECTRA` from electra). slash_validator with no whistleblower pays the proposer all of it.
+  - `attester_slashings`: the same for each validator that process_attester_slashing slashes: of the sorted intersection of the attesting indices of the slashing's two attestations, each that is slashable (is_slashable_validator at the epoch of P) and that no earlier slashing of the body slashed. Lighthouse v8.3.3 counts a validator that an earlier slashing of the same body slashed once more; process_block pays it once.
+  - `sync_aggregate`: from altair, the count of the set `sync_committee_bits` of the body times the `proposer_reward` of process_sync_aggregate at P; 0 before altair.
+  - `attestations`, from altair: the sum of process_attestation's `proposer_reward` at P for each attestation of the body in order: `proposer_reward_numerator` // ((`WEIGHT_DENOMINATOR` - `PROPOSER_WEIGHT`) * `WEIGHT_DENOMINATOR` // `PROPOSER_WEIGHT`), with each flag an earlier attestation of the body set counted as set.
+  - `attestations`, in phase0: the proposer rewards of get_inclusion_delay_deltas for the attestations of the body, paid by the process_epoch at the end of the epoch after the attestation's target epoch.
+    - The state E of an attestation of target epoch t: that of the chain at the last slot of epoch t + 1, as for a `state_id` of that slot, and past the store's slot too: the head's post-state brought to it, as Lighthouse v8.3.3 `state_at_slot` does. With none: 404 (the spec: "required state not found").
+    - An E whose fork is altair or later: no reward. The upgrade turns those attestations into participation flags (altair fork.md, translate_participation).
+    - For each attesting index of the attestation (get_attesting_indices at P), the first time it is one of an attestation of that target epoch in the body: get_base_reward(E, index) // `PROPOSER_REWARD_QUOTIENT`, when the validator is not slashed in E and no attestation of E's `previous_epoch_attestations` with a lower `inclusion_delay` has the index among its attesting indices.
+    - Lighthouse v8.3.3 pays a validator once in a body across both target epochs; get_inclusion_delay_deltas of each epoch pays the proposer for each.
+  - `total`: the sum of the four.
+- getSyncCommitteeRewards: the balance changes of process_sync_aggregate at P for the body's `sync_aggregate`. A block before altair: 400; it has no sync aggregate.
+  - The places: for each pubkey of P's `current_sync_committee`, in order, the index of the validator with that pubkey, as process_sync_aggregate finds them.
+  - From the balances of P, in place order: a place whose bit is set adds `participant_reward` to its validator and `proposer_reward` to the proposer; another takes `participant_reward` from its validator, down to 0 at the least (decrease_balance). `participant_reward` and `proposer_reward` are those of process_sync_aggregate at P.
+  - A member's reward: its balance after the places less its balance in P; for the proposer, less the proposer rewards it took. Lighthouse v8.3.3 starts from the balances of P, before the other changes of process_block.
+  - The items: each member once, in validator index order; with `id` items, each member whose index or `pubkey` is an item.
+  - `{"execution_optimistic":…,"finalized":…,"data":[{"validator_index":…,"reward":…},…]}`; `reward` a signed decimal in a string, with `-` before a value below 0.
 - getProposerDuties: the proposers of `epoch`.
   - 503 while the node syncs (`is_syncing`), beacon-APIs `CurrentlySyncing`; Lighthouse v8.3.3 refuses its duty operations then too.
   - 400 for an epoch above the epoch of `current_slot` + 1.

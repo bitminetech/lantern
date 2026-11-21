@@ -312,6 +312,7 @@ def main():
         files = {}
         on_block = {}  # the fork_choice on_block cases with blobs, for node.blob_cases
         events = {}  # the node-events cases of each fork, from the fork_choice get_head and on_block cases
+        reads = {}  # the node-reads cases of each fork, from the same cases
         attributes = {}  # the engine-payload_attributes cases of each fork, from operations pre states
         for archive, _ in archives:
             for fork, runner, handler, suite, case, data in read_cases(sources / archive, forks, runners):
@@ -325,6 +326,9 @@ def main():
                     on_block.setdefault(fork, []).append((name, parts))
                 if runner == "fork_choice" and handler in ("get_head", "on_block") and (not runners or "node" in runners):
                     events.setdefault(fork, []).extend(node.event_cases(fork, preset, [(handler, name, parts)]))
+                    reads.setdefault(fork, []).extend(node.read_cases(fork, preset, [(handler, name, parts)]))
+                if runner == "transition" and (not runners or "node" in runners):
+                    reads.setdefault(fork, []).extend(node.transition_read_cases(fork, preset, [(name, parts)]))
                 if runner == "operations" and handler in ("execution_payload", "withdrawals") and "pre" in parts:
                     attributes.setdefault(fork, []).extend(engine.attribute_cases(fork, preset, [(f"{handler}/{name}", parts)]))
         if not runners or "node" in runners:
@@ -339,6 +343,13 @@ def main():
             items = [(name, parts) for _, name, parts in attributes[fork]]
             if items:
                 file = f"{preset}-{fork}-engine-payload_attributes.bin"
+                count, digest = write_file(out / file, items)
+                manifest.append((file, count, digest))
+                print(f"{file}: {count} cases")
+        for fork in sorted(reads):
+            items = [(name, parts) for _, name, parts in reads[fork]]
+            if items:
+                file = f"{preset}-{fork}-node-reads.bin"
                 count, digest = write_file(out / file, items)
                 manifest.append((file, count, digest))
                 print(f"{file}: {count} cases")

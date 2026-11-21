@@ -10195,7 +10195,7 @@ FUNCTION lantern_node_run
     mv      a5, s6
     mv      a6, s7
     mv      a7, s8
-    ld      t0, (L + 64)(sp)
+    addi    t0, sp, L + 64                  # the seen, state_b and state_c
     call    node_api_run
     LEAVE 192
 976: li     t1, NODE_WORK_API_CHUNK

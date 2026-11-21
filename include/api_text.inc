@@ -508,6 +508,30 @@ api_l_index:                            /* getLiveness (beacon-api.md) */
 api_l_live:
     .ascii ",\"is_live\":"
 .set api_l_live_len, 11
+api_rw_proposer:                        /* getBlockRewards, getSyncCommitteeRewards (beacon-api.md) */
+    .ascii "\"proposer_index\":"
+.set api_rw_proposer_len, 17
+api_rw_total:
+    .ascii ",\"total\":"
+.set api_rw_total_len, 9
+api_rw_attestations:
+    .ascii ",\"attestations\":"
+.set api_rw_attestations_len, 16
+api_rw_sync:
+    .ascii ",\"sync_aggregate\":"
+.set api_rw_sync_len, 18
+api_rw_proposer_slashings:
+    .ascii ",\"proposer_slashings\":"
+.set api_rw_proposer_slashings_len, 22
+api_rw_attester_slashings:
+    .ascii ",\"attester_slashings\":"
+.set api_rw_attester_slashings_len, 22
+api_rw_reward:
+    .ascii ",\"reward\":"
+.set api_rw_reward_len, 10
+api_rw_minus:
+    .ascii "-"
+.set api_rw_minus_len, 1
 api_ev_head:                            /* eventstream (beacon-api.md) */
     .ascii "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nCache-Control: no-cache\r\n"
 .set api_ev_head_len, 75

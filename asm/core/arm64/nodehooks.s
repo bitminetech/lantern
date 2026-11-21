@@ -858,6 +858,679 @@ SPEC_FUNCTION node_liveness
     LEAVE 48
 SPEC_END node_liveness
 
+/* ---------------------------------------------------------------- Rewards (beacon-api.md, getBlockRewards) */
+
+/* Add reg to the u64 at off of out (x23). Uses tmp. */
+.macro OUT_ADD off, reg, tmp
+    ldr     \tmp, [x23, #\off]
+    add     \tmp, \tmp, \reg
+    str     \tmp, [x23, #\off]
+.endm
+
+.if FORK >= FORK_ALTAIR
+/*
+ * L1: (state x0, scratch x1) -> x0 status, x1 participant_reward, x2 proposer_reward of
+ * process_sync_aggregate at the state (altair beacon-chain.md). Locals: sp+16 the total active
+ * balance, sp+24 the base reward per increment, sp+32 the state, sp+40 the scratch.
+ */
+LOCAL_FUNCTION node_sync_values
+    FRAME 32
+    stp     x0, x1, [sp, #32]
+    add     x2, sp, #16
+    bl      lantern_get_total_active_balance
+    cbnz    x0, 9f
+    ldp     x0, x1, [sp, #32]
+    add     x2, sp, #24
+    bl      lantern_get_base_reward_per_increment
+    cbnz    x0, 9f
+    ldr     x9, [sp, #16]
+    MOVQ    x10, EFFECTIVE_BALANCE_INCREMENT
+    udiv    x9, x9, x10                     /* total_active_increments */
+    ldr     x10, [sp, #24]
+    mul     x9, x9, x10                     /* total_base_rewards */
+    mov     x10, #SYNC_REWARD_WEIGHT
+    mul     x9, x9, x10
+    lsr     x9, x9, #6                      /* // WEIGHT_DENOMINATOR */
+    lsr     x9, x9, #LOG2_SLOTS_PER_EPOCH   /* max_participant_rewards */
+    mov     x10, #SYNC_COMMITTEE_SIZE
+    udiv    x1, x9, x10                     /* participant_reward */
+    mov     x10, #PROPOSER_WEIGHT
+    mul     x2, x1, x10
+    mov     x10, #(WEIGHT_DENOMINATOR - PROPOSER_WEIGHT)
+    udiv    x2, x2, x10                     /* proposer_reward */
+    mov     x0, #LANTERN_OK
+9:  UNFRAME 32
+END_FUNCTION node_sync_values
+.endif
+
+.if FORK == FORK_PHASE0
+.if BASE_REWARDS_PER_EPOCH != 4
+.error "lantern_node_block_rewards divides by BASE_REWARDS_PER_EPOCH with a shift by 2"
+.endif
+/*
+ * Of the E st (k 1: early, its delays at x26 + 2n; k 2: late, at x26 + 3n): the square root of its
+ * total active balance at root, and for each attestation of its previous_epoch_attestations each
+ * attesting index below n takes the attestation's inclusion_delay when that is lower.
+ */
+.macro REWARD_LOWEST st, k, root
+    cbz     \st, 39f
+    SCRATCH_GIVE x22, x28, 2, x27
+    mov     x0, \st
+    mov     x1, x22
+    add     x2, sp, #(L + 120)
+    bl      lantern_get_total_active_balance
+    str     x28, [x22]
+    cbnz    x0, 99f
+    add     x0, sp, #(L + 120)
+    add     x1, sp, #\root
+    bl      lantern_integer_squareroot
+    MOVQ    x9, BeaconState_previous_epoch_attestations
+    add     x9, \st, x9
+    ldp     x12, x13, [x9]                  /* the part's offset and count */
+    stp     x12, x13, [sp, #(L + 16)]
+32: ldp     x12, x13, [sp, #(L + 16)]
+    cbz     x13, 39f
+    ldr     x15, [\st, x12]                /* the next value starts after this one's size */
+    add     x14, x12, x15
+    sub     x13, x13, #1
+    stp     x14, x13, [sp, #(L + 16)]
+    add     x9, \st, x12
+    str     x9, [sp, #(L + 128)]
+    SCRATCH_GIVE x22, x28, 2, x27
+    mov     x0, \st
+    mov     x1, x9
+    ldr     x2, [sp, #(L + 96)]
+    mov     x3, x22
+    SCRATCH_LIST x4, x22, x28, 1, x27
+    bl      lantern_get_attesting_indices
+    str     x28, [x22]
+    cbnz    x0, 99f
+    ldr     x9, [sp, #(L + 128)]
+    ldr     x11, [x9, #PendingAttestation_inclusion_delay]
+.if \k == 1
+    add     x12, x26, x27, lsl #1
+.else
+    add     x12, x27, x27, lsl #1
+    add     x12, x26, x12
+.endif
+    SCRATCH_LIST x9, x22, x28, 1, x27
+    ldr     x10, [x9, #LIST_COUNT]
+    add     x9, x9, #LIST_FIXED
+33: cbz     x10, 32b
+    ldr     x13, [x9], #8
+    sub     x10, x10, #1
+    cmp     x13, x27
+    b.hs    33b
+    ldrb    w14, [x12, x13]
+    cmp     x11, x14
+    b.hs    33b
+    strb    w11, [x12, x13]
+    b       33b
+39:
+.endm
+.endif
+
+/*
+ * (pre, block, early, late, config, scratch, out) -> status: the proposer's rewards of the block on
+ * its pre-state, part by part (node.md, lantern_node_block_rewards). x19 pre, x20 the body, x21
+ * config, x22 scratch, x23 out, x24 early, x25 late, x26 the bytes of the validators (list 0: the
+ * slashed marks at 0; from altair the copies of the previous and current participation at n and 2n;
+ * in phase0 the rewarded marks at n, bit 0 for the epoch before the block's and bit 1 for its own,
+ * and the lowest delays of early and late at 2n and 3n), x27 the validator count n, x28 the
+ * scratch's size after the decoded block. Locals: L the scratch's size on entry, L+8 the epoch,
+ * L+16 the next entry of a list and L+24 the count left, L+32 the base reward per increment
+ * (phase0: the square root of early's total active balance, L+40 of late's), L+48 the flags
+ * (FLAGS_BYTES), L+96 the CommitteeCache, L+104 the inclusion delay, L+120 a value, L+128 the
+ * attestation, L+136 its E, L+144 its lowest delays, L+152 its bit.
+ */
+SPEC_FUNCTION node_block_rewards
+    ENTER 160
+    mov     x19, x0
+    mov     x24, x2
+    mov     x25, x3
+    mov     x21, x4
+    mov     x22, x5
+    mov     x23, x6
+    ldr     x9, [x22]
+    str     x9, [sp, #L]
+    ldr     x9, [x21, #CONFIG_COMMITTEE_CACHE]
+    str     x9, [sp, #(L + 96)]
+    ADDRESS x0, lantern_type_SignedBeaconBlock
+    mov     x2, x22
+    bl      node_decode
+    cmp     x0, #1
+    b.eq    97f
+    b.hi    96f
+    PART    x9, x10, x1, SignedBeaconBlock_message
+    ldr     x10, [x9, #BeaconBlock_slot]
+    LDQ     x11, x19, BeaconState_slot
+    cmp     x10, x11
+    b.ne    95f
+    PART    x20, x10, x9, BeaconBlock_body
+    ldr     x10, [x9, #BeaconBlock_proposer_index]
+    str     x10, [sp, #(L + 120)]
+    ldr     x28, [x22]
+    NEED_SCRATCH x22, x19, 6, 97f
+.if FORK == FORK_PHASE0
+    cbz     x24, 1f
+    NEED_SCRATCH x22, x24, 6, 97f
+1:  cbz     x25, 2f
+    NEED_SCRATCH x22, x25, 6, 97f
+2:
+.endif
+    ldr     x10, [sp, #(L + 120)]
+    stp     x10, xzr, [x23]
+    stp     xzr, xzr, [x23, #16]
+    stp     xzr, xzr, [x23, #32]
+    LDQ     x27, x19, BeaconState_validators + 8
+    SCRATCH_LIST x26, x22, x28, 0, x27
+    add     x26, x26, #LIST_FIXED
+    mov     x0, x26
+    lsl     x1, x27, #2
+    bl      lantern_zero
+    mov     x0, x19
+    add     x1, sp, #(L + 8)
+    bl      lantern_get_current_epoch
+    PART    x9, x10, x20, BeaconBlockBody_proposer_slashings    /* proposer_slashings: each whistleblower_reward */
+    PART    x12, x13, x19, BeaconState_validators
+3:  cbz     x10, 4f
+    ldr     x11, [x9, #(ProposerSlashing_signed_header_1 + SignedBeaconBlockHeader_message + BeaconBlockHeader_proposer_index)]
+    cmp     x11, x27
+    b.hs    96f
+    add     x14, x12, x11, lsl #7
+    ldr     x14, [x14, #Validator_effective_balance]
+    MOVQ    x15, FORK_WHISTLEBLOWER_REWARD_QUOTIENT
+    udiv    x14, x14, x15
+    OUT_ADD 32, x14, x15
+    mov     w14, #1
+    strb    w14, [x26, x11]
+    MOVQ    x14, ProposerSlashing__mem
+    add     x9, x9, x14
+    sub     x10, x10, #1
+    b       3b
+4:  PART    x9, x10, x20, BeaconBlockBody_attester_slashings    /* attester_slashings: those process_attester_slashing slashes */
+    stp     x9, x10, [sp, #(L + 16)]
+5:  ldp     x9, x10, [sp, #(L + 16)]
+    cbz     x10, 10f
+    ldr     x11, [x9]
+    add     x11, x9, x11
+    sub     x10, x10, #1
+    stp     x11, x10, [sp, #(L + 16)]
+    PART    x0, x1, x9, AttesterSlashing_attestation_1
+    PART    x2, x3, x9, AttesterSlashing_attestation_2
+    PART    x4, x5, x0, IndexedAttestation_attesting_indices
+    add     x5, x4, x5, lsl #3
+    PART    x6, x7, x2, IndexedAttestation_attesting_indices
+    add     x7, x6, x7, lsl #3
+    PART    x8, x1, x19, BeaconState_validators
+    ldr     x11, [sp, #(L + 8)]
+6:  cmp     x4, x5                          /* the sorted intersection, by merge */
+    b.hs    5b
+    cmp     x6, x7
+    b.hs    5b
+    ldr     x12, [x4]
+    ldr     x13, [x6]
+    cmp     x12, x13
+    b.lo    61f
+    b.hi    62f
+    add     x4, x4, #8
+    add     x6, x6, #8
+    cmp     x12, x27
+    b.hs    96f
+    ldrb    w13, [x26, x12]                 /* an earlier slashing of the body slashed it */
+    cbnz    w13, 6b
+    add     x13, x8, x12, lsl #7            /* is_slashable_validator(validator, epoch) */
+    ldrb    w14, [x13, #Validator_slashed]
+    cbnz    w14, 6b
+    ldr     x14, [x13, #Validator_activation_epoch]
+    cmp     x14, x11
+    b.hi    6b
+    ldr     x14, [x13, #Validator_withdrawable_epoch]
+    cmp     x11, x14
+    b.hs    6b
+    mov     w14, #1
+    strb    w14, [x26, x12]
+    ldr     x14, [x13, #Validator_effective_balance]
+    MOVQ    x13, FORK_WHISTLEBLOWER_REWARD_QUOTIENT
+    udiv    x14, x14, x13
+    OUT_ADD 40, x14, x13
+    b       6b
+61: add     x4, x4, #8
+    b       6b
+62: add     x6, x6, #8
+    b       6b
+10:
+.if FORK >= FORK_ALTAIR
+    SCRATCH_GIVE x22, x28, 2, x27           /* sync_aggregate: the set bits times proposer_reward */
+    mov     x0, x19
+    mov     x1, x22
+    bl      node_sync_values
+    str     x28, [x22]
+    cbnz    x0, 99f
+    MOVQ    x9, BeaconBlockBody_sync_aggregate + SyncAggregate_sync_committee_bits
+    add     x9, x20, x9
+    mov     x10, #0
+    mov     x11, #(SYNC_COMMITTEE_SIZE / 8)
+11: cbz     x11, 13f
+    ldrb    w12, [x9], #1
+12: cbz     x12, 121f
+    sub     x13, x12, #1
+    and     x12, x12, x13
+    add     x10, x10, #1
+    b       12b
+121: sub    x11, x11, #1
+    b       11b
+13: mul     x10, x10, x2
+    str     x10, [x23, #24]
+    PART    x1, x2, x19, BeaconState_previous_epoch_participation  /* copies of the flags */
+    cmp     x2, x27
+    csel    x2, x2, x27, lo
+    add     x0, x26, x27
+    bl      lantern_copy
+    PART    x1, x2, x19, BeaconState_current_epoch_participation
+    cmp     x2, x27
+    csel    x2, x2, x27, lo
+    add     x0, x26, x27, lsl #1
+    bl      lantern_copy
+    SCRATCH_GIVE x22, x28, 2, x27
+    mov     x0, x19
+    mov     x1, x22
+    add     x2, sp, #(L + 32)
+    bl      lantern_get_base_reward_per_increment
+    str     x28, [x22]
+    cbnz    x0, 99f
+    PART    x9, x10, x20, BeaconBlockBody_attestations  /* attestations: process_attestation's proposer_reward of each */
+    stp     x9, x10, [sp, #(L + 16)]
+20: ldp     x9, x10, [sp, #(L + 16)]
+    cbz     x10, 90f
+    str     x9, [sp, #(L + 128)]
+    ldr     x11, [x9]
+    add     x11, x9, x11
+    sub     x10, x10, #1
+    stp     x11, x10, [sp, #(L + 16)]
+    LDQ     x11, x19, BeaconState_slot
+    ldr     x12, [x9, #(Attestation_data + AttestationData_slot)]
+    sub     x11, x11, x12
+    str     x11, [sp, #(L + 104)]
+    MOVQ    x11, FLAGS_BYTES
+    str     x11, [sp, #(L + 48)]
+    mov     x0, x19
+    add     x1, x9, #Attestation_data
+    add     x2, sp, #(L + 104)
+    add     x3, sp, #(L + 48)
+    bl      lantern_get_attestation_participation_flag_indices
+    cbnz    x0, 99f
+    SCRATCH_GIVE x22, x28, 2, x27
+    mov     x0, x19
+    ldr     x1, [sp, #(L + 128)]
+    ldr     x2, [sp, #(L + 96)]
+    mov     x3, x22
+    SCRATCH_LIST x4, x22, x28, 1, x27
+    bl      lantern_get_attesting_indices
+    str     x28, [x22]
+    cbnz    x0, 99f
+    ldr     x9, [sp, #(L + 128)]            /* the copy of the target epoch's flags */
+    ldr     x10, [x9, #(Attestation_data + AttestationData_target + Checkpoint_epoch)]
+    ldr     x11, [sp, #(L + 8)]
+    add     x12, x26, x27, lsl #1
+    add     x13, x26, x27
+    cmp     x10, x11
+    csel    x12, x12, x13, eq
+    ldr     x2, [sp, #(L + 48 + LIST_COUNT)]    /* the flags as bits */
+    add     x3, sp, #(L + 48 + LIST_FIXED)
+    mov     x1, #0
+21: cbz     x2, 22f
+    ldr     x4, [x3], #8
+    mov     x5, #1
+    lsl     x5, x5, x4
+    orr     x1, x1, x5
+    sub     x2, x2, #1
+    b       21b
+22: SCRATCH_LIST x9, x22, x28, 1, x27
+    ldr     x10, [x9, #LIST_COUNT]
+    add     x9, x9, #LIST_FIXED
+    mov     x13, #0                         /* proposer_reward_numerator */
+    PART    x14, x15, x19, BeaconState_validators
+23: cbz     x10, 29f
+    ldr     x2, [x9], #8
+    sub     x10, x10, #1
+    cmp     x2, x27
+    b.hs    96f
+    ldrb    w3, [x12, x2]
+    bic     x4, x1, x3                      /* the flags it takes now */
+    cbz     x4, 23b
+    orr     w3, w3, w4
+    strb    w3, [x12, x2]
+    add     x5, x14, x2, lsl #7
+    ldr     x5, [x5, #Validator_effective_balance]
+    MOVQ    x6, EFFECTIVE_BALANCE_INCREMENT
+    udiv    x5, x5, x6
+    ldr     x6, [sp, #(L + 32)]
+    mul     x5, x5, x6                      /* get_base_reward(state, index) */
+    mov     x6, #0
+    tbz     x4, #TIMELY_SOURCE_FLAG_INDEX, 24f
+    add     x6, x6, #TIMELY_SOURCE_WEIGHT
+24: tbz     x4, #TIMELY_TARGET_FLAG_INDEX, 25f
+    add     x6, x6, #TIMELY_TARGET_WEIGHT
+25: tbz     x4, #TIMELY_HEAD_FLAG_INDEX, 26f
+    add     x6, x6, #TIMELY_HEAD_WEIGHT
+26: mul     x5, x5, x6
+    add     x13, x13, x5
+    b       23b
+29: mov     x6, #((WEIGHT_DENOMINATOR - PROPOSER_WEIGHT) * WEIGHT_DENOMINATOR / PROPOSER_WEIGHT)
+    udiv    x13, x13, x6
+    OUT_ADD 16, x13, x6
+    b       20b
+.else
+    add     x9, x26, x27, lsl #1            /* the lowest delays of early and late: none yet */
+    lsl     x10, x27, #1
+    mov     w11, #255
+30: cbz     x10, 31f
+    strb    w11, [x9], #1
+    sub     x10, x10, #1
+    b       30b
+31: REWARD_LOWEST x24, 1, (L + 32)
+    REWARD_LOWEST x25, 2, (L + 40)
+    PART    x9, x10, x20, BeaconBlockBody_attestations  /* attestations: the proposer rewards of get_inclusion_delay_deltas */
+    stp     x9, x10, [sp, #(L + 16)]
+40: ldp     x9, x10, [sp, #(L + 16)]
+    cbz     x10, 90f
+    str     x9, [sp, #(L + 128)]
+    ldr     x11, [x9]
+    add     x11, x9, x11
+    sub     x10, x10, #1
+    stp     x11, x10, [sp, #(L + 16)]
+    ldr     x10, [x9, #(Attestation_data + AttestationData_target + Checkpoint_epoch)]
+    ldr     x11, [sp, #(L + 8)]
+    cmp     x10, x11
+    b.eq    41f
+    add     x12, x10, #1
+    cmp     x12, x11
+    b.ne    95f
+    mov     x13, x24                        /* the epoch before the block's: early */
+    add     x14, x26, x27, lsl #1
+    mov     x15, #1
+    b       42f
+41: mov     x13, x25                        /* the block's epoch: late */
+    add     x14, x27, x27, lsl #1
+    add     x14, x26, x14
+    mov     x15, #2
+42: cbnz    x13, 43f
+    ldr     x12, [x21, #CONFIG_ALTAIR_FORK_EPOCH]   /* no E: the epoch after the target's is altair's or later */
+    add     x11, x10, #1
+    cmp     x12, x11
+    b.hi    95f
+    b       40b
+43: LDQ     x11, x13, BeaconState_slot      /* E at the last slot of the epoch after the target's */
+    add     x12, x10, #2
+    lsl     x12, x12, #LOG2_SLOTS_PER_EPOCH
+    sub     x12, x12, #1
+    cmp     x11, x12
+    b.ne    95f
+    stp     x13, x14, [sp, #(L + 136)]
+    str     x15, [sp, #(L + 152)]
+    LDQ     x11, x19, BeaconState_slot
+    ldr     x12, [x9, #(Attestation_data + AttestationData_slot)]
+    sub     x11, x11, x12
+    str     x11, [sp, #(L + 104)]
+    SCRATCH_GIVE x22, x28, 2, x27
+    mov     x0, x19
+    mov     x1, x9
+    ldr     x2, [sp, #(L + 96)]
+    mov     x3, x22
+    SCRATCH_LIST x4, x22, x28, 1, x27
+    bl      lantern_get_attesting_indices
+    str     x28, [x22]
+    cbnz    x0, 99f
+    ldr     x15, [sp, #(L + 152)]
+    ldr     x5, [sp, #(L + 32)]
+    ldr     x6, [sp, #(L + 40)]
+    cmp     x15, #1
+    csel    x5, x5, x6, eq                  /* the square root of E's total active balance */
+    ldp     x13, x14, [sp, #(L + 136)]
+    PART    x7, x8, x13, BeaconState_validators
+    ldr     x11, [sp, #(L + 104)]
+    SCRATCH_LIST x9, x22, x28, 1, x27
+    ldr     x10, [x9, #LIST_COUNT]
+    add     x9, x9, #LIST_FIXED
+    add     x12, x26, x27                   /* the rewarded marks */
+44: cbz     x10, 40b
+    ldr     x1, [x9], #8
+    sub     x10, x10, #1
+    cmp     x1, x27
+    b.hs    96f
+    ldrb    w2, [x12, x1]
+    tst     x2, x15
+    b.ne    44b
+    orr     w2, w2, w15
+    strb    w2, [x12, x1]
+    cmp     x1, x8
+    b.hs    96f
+    add     x3, x7, x1, lsl #7
+    ldrb    w4, [x3, #Validator_slashed]    /* unslashed in E */
+    cbnz    w4, 44b
+    ldrb    w4, [x14, x1]                   /* and no attestation of E with a lower delay */
+    cmp     x4, x11
+    b.lo    44b
+    ldr     x3, [x3, #Validator_effective_balance]
+    mov     x4, #BASE_REWARD_FACTOR
+    mul     x3, x3, x4
+    udiv    x3, x3, x5
+    lsr     x3, x3, #2                      /* get_base_reward(E, index): // BASE_REWARDS_PER_EPOCH, which is 4 */
+    mov     x4, #PROPOSER_REWARD_QUOTIENT
+    udiv    x3, x3, x4
+    OUT_ADD 16, x3, x4
+    b       44b
+.endif
+90: ldp     x9, x10, [x23, #16]             /* total */
+    ldp     x11, x12, [x23, #32]
+    add     x9, x9, x10
+    add     x9, x9, x11
+    add     x9, x9, x12
+    str     x9, [x23, #8]
+    mov     x0, #LANTERN_OK
+99: ldr     x9, [sp, #L]
+    str     x9, [x22]
+    LEAVE 160
+95: mov     x0, #LANTERN_INVALID_SLOT
+    b       99b
+96: mov     x0, #LANTERN_INVALID_ENCODING
+    b       99b
+97: mov     x0, #LANTERN_BUFFER_TOO_SMALL
+    b       99b
+SPEC_END node_block_rewards
+
+.if FORK >= FORK_ALTAIR
+/*
+ * L0: the entry of the validator x0 among the x2 entries of 24 bytes at x1 (index, balance, member),
+ * a new one with its balance in the state x3 and member 0 when there is none: x0 = the entry, x2 =
+ * the count; x0 = 0 for an index past the validators. Uses x4-x7, x16.
+ */
+LOCAL_FUNCTION node_reward_entry
+    UNWIND_END_PROLOGUE
+    mov     x4, x1
+    mov     x5, x2
+1:  cbz     x5, 2f
+    ldr     x6, [x4]
+    cmp     x6, x0
+    b.eq    3f
+    add     x4, x4, #24
+    sub     x5, x5, #1
+    b       1b
+2:  PART    x6, x7, x3, BeaconState_balances
+    cmp     x0, x7
+    b.hs    4f
+    ldr     x6, [x6, x0, lsl #3]
+    stp     x0, x6, [x4]
+    str     xzr, [x4, #16]
+    add     x2, x2, #1
+3:  mov     x0, x4
+    ret
+4:  mov     x0, #0
+    ret
+END_FUNCTION node_reward_entry
+
+.set SYNC_REWARD_EXTRA, 8 * SYNC_COMMITTEE_SIZE + SYNC_TABLE_BYTES + 24   /* the places, the table of find_pubkeys and its 3 words */
+.if 24 * (SYNC_COMMITTEE_SIZE + 1) > SYNC_TABLE_BYTES
+.error "lantern_node_sync_rewards keeps its entries where the table of find_pubkeys was"
+.endif
+
+/*
+ * (pre, block, scratch, out) -> status: the balance changes of the block's sync aggregate on its
+ * pre-state (node.md, lantern_node_sync_rewards). x19 pre, x20 the bits, x21 out, x22 scratch, x23
+ * the places' validator indices (at the end of scratch, before the decoded block), x24 the hash
+ * table of find_pubkeys, then the entries of node_reward_entry, x25 their count, x26
+ * participant_reward, x27 proposer_reward, x28 the proposer. Locals: L the scratch's size on entry,
+ * L+8 the proposer rewards it took.
+ */
+SPEC_FUNCTION node_sync_rewards
+    ENTER 16
+    mov     x19, x0
+    mov     x22, x2
+    mov     x21, x3
+    ldr     x9, [x22]
+    str     x9, [sp, #L]
+    ldr     x9, [x21]
+    MOVQ    x10, 24 + 16 * SYNC_COMMITTEE_SIZE
+    cmp     x9, x10
+    b.lo    97f
+    ADDRESS x0, lantern_type_SignedBeaconBlock
+    mov     x2, x22
+    bl      node_decode
+    cmp     x0, #1
+    b.eq    97f
+    b.hi    96f
+    PART    x9, x10, x1, SignedBeaconBlock_message
+    ldr     x10, [x9, #BeaconBlock_slot]
+    LDQ     x11, x19, BeaconState_slot
+    cmp     x10, x11
+    b.ne    95f
+    ldr     x28, [x9, #BeaconBlock_proposer_index]
+    PART    x20, x10, x9, BeaconBlock_body
+    MOVQ    x10, BeaconBlockBody_sync_aggregate + SyncAggregate_sync_committee_bits
+    add     x20, x20, x10
+    NEED_SCRATCH_B x22, x19, 1, SYNC_REWARD_EXTRA, 97f
+    ldr     x9, [x22]                       /* the places, then the table, at the end */
+    MOVQ    x10, 8 * SYNC_COMMITTEE_SIZE
+    sub     x9, x9, x10
+    add     x23, x22, x9
+    MOVQ    x10, SYNC_TABLE_BYTES + 24
+    sub     x9, x9, x10
+    add     x24, x22, x9
+    str     x9, [x22]                       /* what callees get */
+    mov     x0, x19                         /* committee_indices, as process_sync_aggregate finds them */
+    MOVQ    x1, BeaconState_current_sync_committee + SyncCommittee_pubkeys
+    add     x1, x19, x1
+    mov     x2, x23
+    mov     x3, x24
+    bl      find_pubkeys
+    cbnz    x0, 96f
+    mov     x0, x19
+    mov     x1, x22
+    bl      node_sync_values
+    cbnz    x0, 99f
+    mov     x26, x1
+    mov     x27, x2
+    str     xzr, [sp, #(L + 8)]
+    mov     x25, #0
+    mov     x9, #0                          /* each place, in order */
+1:  cmp     x9, #SYNC_COMMITTEE_SIZE
+    b.hs    5f
+    ldr     x0, [x23, x9, lsl #3]
+    mov     x1, x24
+    mov     x2, x25
+    mov     x3, x19
+    bl      node_reward_entry
+    mov     x25, x2
+    cbz     x0, 96f
+    mov     x10, #1
+    str     x10, [x0, #16]                  /* a member */
+    lsr     x10, x9, #3
+    ldrb    w10, [x20, x10]
+    and     x11, x9, #7
+    lsr     w10, w10, w11
+    tbz     w10, #0, 3f
+    ldr     x10, [x0, #8]                   /* the participant takes participant_reward, the proposer proposer_reward */
+    add     x10, x10, x26
+    str     x10, [x0, #8]
+    mov     x0, x28
+    mov     x1, x24
+    mov     x2, x25
+    mov     x3, x19
+    bl      node_reward_entry
+    mov     x25, x2
+    cbz     x0, 96f
+    ldr     x10, [x0, #8]
+    add     x10, x10, x27
+    str     x10, [x0, #8]
+    ldr     x10, [sp, #(L + 8)]
+    add     x10, x10, x27
+    str     x10, [sp, #(L + 8)]
+    b       4f
+3:  ldr     x10, [x0, #8]                   /* decrease_balance: down to 0 at the least */
+    subs    x10, x10, x26
+    csel    x10, x10, xzr, hs
+    str     x10, [x0, #8]
+4:  add     x9, x9, #1
+    b       1b
+5:  PART    x8, x7, x19, BeaconState_balances   /* the members in index order: the lowest after the last */
+    mov     x0, #0                          /* 1 once one is written */
+    mov     x1, #0                          /* the last written */
+    add     x2, x21, #24
+6:  mov     x3, #-1
+    mov     x4, #0
+    mov     x5, x24
+    mov     x6, x25
+7:  cbz     x6, 9f
+    ldr     x7, [x5]
+    ldr     x9, [x5, #16]
+    cbz     x9, 8f
+    cbz     x0, 71f
+    cmp     x7, x1
+    b.ls    8f
+71: cmp     x7, x3
+    b.hs    8f
+    mov     x3, x7
+    mov     x4, x5
+8:  add     x5, x5, #24
+    sub     x6, x6, #1
+    b       7b
+9:  cbz     x4, 11f
+    ldr     x5, [x8, x3, lsl #3]
+    ldr     x7, [x4, #8]
+    sub     x7, x7, x5                      /* after less before */
+    cmp     x3, x28
+    b.ne    10f
+    ldr     x9, [sp, #(L + 8)]              /* the proposer: less the proposer rewards */
+    sub     x7, x7, x9
+10: stp     x3, x7, [x2], #16
+    mov     x0, #1
+    mov     x1, x3
+    b       6b
+11: sub     x3, x2, x21
+    sub     x3, x3, #24
+    mov     x4, #24
+    stp     x4, x3, [x21, #8]
+    mov     x0, #LANTERN_OK
+99: ldr     x9, [sp, #L]
+    str     x9, [x22]
+    LEAVE 16
+95: mov     x0, #LANTERN_INVALID_SLOT
+    b       99b
+96: mov     x0, #LANTERN_INVALID_ENCODING
+    b       99b
+97: mov     x0, #LANTERN_BUFFER_TOO_SMALL
+    b       99b
+SPEC_END node_sync_rewards
+.else
+/* (pre, block, scratch, out) -> LANTERN_NO_STATE_ANSWER: phase0 has no sync committee (node.md, lantern_node_sync_rewards). */
+SPEC_FUNCTION node_sync_rewards
+    FRAME 0
+    mov     x0, #LANTERN_NO_STATE_ANSWER
+    UNFRAME 0
+SPEC_END node_sync_rewards
+.endif
+
 /* L0: x0 = the fork's TypeDescriptor of the NODE_JSON_* kind x9, or 0. Uses x0. */
 LOCAL_FUNCTION node_type_of_kind
     UNWIND_END_PROLOGUE

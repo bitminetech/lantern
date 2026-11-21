@@ -1682,10 +1682,167 @@ LOCAL_FUNCTION api_body
     UNFRAME 16
     /* getLiveness: {"data":[{"index":…,"is_live":…},…]} */
 182: cmp    x28, #API_OP_GET_LIVENESS
-    b.ne    99f
+    b.ne    183f
     bl      api_liveness_body
+    b       99f
+    /* getBlockRewards and getSyncCommitteeRewards */
+183: cmp    x28, #API_OP_GET_BLOCK_REWARDS
+    b.ne    184f
+    bl      api_rewards_body
+    b       99f
+184: cmp    x28, #API_OP_GET_SYNC_COMMITTEE_REWARDS
+    b.ne    99f
+    bl      api_sync_rewards_body
 99: UNFRAME 16
 END_FUNCTION api_body
+
+/* L0: the 48 bytes of the pubkey of validator x0 of the state x1 among the ValidatorRef items of the ByteList x2, or its index: x0 = 1, else 0. Uses x3-x13. */
+LOCAL_FUNCTION api_names
+    UNWIND_END_PROLOGUE
+    PART    x3, x4, x1, NODE_STATE_VALIDATORS
+    mov     x5, #NODE_VALIDATOR_MEM
+    madd    x3, x0, x5, x3                  /* the validator's pubkey */
+    ldr     x5, [x2, #8]
+    add     x5, x2, x5
+    ldr     x6, [x2, #16]
+    lsr     x6, x6, #6
+1:  cbz     x6, 8f
+    ldr     x7, [x5]
+    cmp     x7, #API_VALIDATOR_INDEX
+    b.ne    2f
+    ldr     x7, [x5, #8]
+    cmp     x7, x0
+    b.eq    9f
+    b       3f
+2:  ldp     x7, x8, [x5, #ValidatorRef_pubkey]
+    ldp     x9, x10, [x3]
+    cmp     x7, x9
+    ccmp    x8, x10, #0, eq
+    b.ne    3f
+    ldp     x7, x8, [x5, #(ValidatorRef_pubkey + 16)]
+    ldp     x9, x10, [x3, #16]
+    cmp     x7, x9
+    ccmp    x8, x10, #0, eq
+    b.ne    3f
+    ldp     x7, x8, [x5, #(ValidatorRef_pubkey + 32)]
+    ldp     x9, x10, [x3, #32]
+    cmp     x7, x9
+    ccmp    x8, x10, #0, eq
+    b.eq    9f
+3:  add     x5, x5, #64
+    sub     x6, x6, #1
+    b       1b
+8:  mov     x0, #0
+    ret
+9:  mov     x0, #1
+    ret
+END_FUNCTION api_names
+
+/* L1: the signed (two's complement) x0 in decimal, in quotes, with - before a value below 0. Locals: x0. */
+LOCAL_FUNCTION api_qint
+    FRAME 16
+    str     x0, [sp, #16]
+    API_LIT api_quote
+    ldr     x0, [sp, #16]
+    tbz     x0, #63, 1f
+    API_LIT api_rw_minus
+    ldr     x0, [sp, #16]
+    neg     x0, x0
+1:  bl      api_dec
+    API_LIT api_quote
+    UNFRAME 16
+END_FUNCTION api_qint
+
+/*
+ * L1: the body of getBlockRewards (beacon-api.md): {"execution_optimistic":…,"finalized":…,"data":{"proposer_index":…,
+ * "total":…,"attestations":…,"sync_aggregate":…,"proposer_slashings":…,"attester_slashings":…}} of the 48 bytes of
+ * lantern_node_block_rewards at ApiView_live_out of the view x22.
+ */
+.macro REWARD_FIELD text, off
+    API_LIT \text
+    LDQ     x9, x22, ApiView_live_out
+    ldr     x0, [x9, #\off]
+    bl      api_qdec
+.endm
+LOCAL_FUNCTION api_rewards_body
+    FRAME 0
+    API_LIT api_x_optimistic
+    ldr     x0, [x22, #ApiView_is_optimistic]
+    bl      api_bool
+    API_LIT api_x_finalized
+    LDQ     x0, x22, ApiView_head_finalized
+    bl      api_bool
+    API_LIT api_x_data
+    REWARD_FIELD api_rw_proposer, 0
+    REWARD_FIELD api_rw_total, 8
+    REWARD_FIELD api_rw_attestations, 16
+    REWARD_FIELD api_rw_sync, 24
+    REWARD_FIELD api_rw_proposer_slashings, 32
+    REWARD_FIELD api_rw_attester_slashings, 40
+    API_LIT api_end2
+    UNFRAME 0
+END_FUNCTION api_rewards_body
+
+/*
+ * L1: the body of getSyncCommitteeRewards (beacon-api.md): {"execution_optimistic":…,"finalized":…,"data":[{"validator_index":…,
+ * "reward":…},…]} of the items of lantern_node_sync_rewards at ApiView_live_out of the view x22; with ValidatorRef items at
+ * ApiView_sd_ids, those of the validators of ApiView_val_state that one names. Locals: the item, the items written.
+ */
+LOCAL_FUNCTION api_sync_rewards_body
+    FRAME 16
+    API_LIT api_x_optimistic
+    ldr     x0, [x22, #ApiView_is_optimistic]
+    bl      api_bool
+    API_LIT api_x_finalized
+    LDQ     x0, x22, ApiView_head_finalized
+    bl      api_bool
+    API_LIT api_v_list
+    stp     xzr, xzr, [sp, #16]
+1:  LDQ     x9, x22, ApiView_live_out
+    ldr     x10, [x9, #16]
+    lsr     x10, x10, #4
+    ldr     x11, [sp, #16]
+    cmp     x11, x10
+    b.hs    9f
+    ldr     x12, [x9, #8]
+    add     x12, x9, x12
+    add     x12, x12, x11, lsl #4
+    ldr     x0, [x12]
+    LDQ     x2, x22, ApiView_sd_ids
+    cbz     x2, 2f
+    ldr     x1, [x22, #ApiView_val_state]
+    bl      api_names
+    cbz     x0, 5f
+2:  ldr     x11, [sp, #24]
+    cbz     x11, 3f
+    API_LIT api_p_comma
+3:  API_LIT api_q_validator
+    LDQ     x9, x22, ApiView_live_out
+    ldr     x12, [x9, #8]
+    add     x12, x9, x12
+    ldr     x11, [sp, #16]
+    add     x12, x12, x11, lsl #4
+    ldr     x0, [x12]
+    bl      api_qdec
+    API_LIT api_rw_reward
+    LDQ     x9, x22, ApiView_live_out
+    ldr     x12, [x9, #8]
+    add     x12, x9, x12
+    ldr     x11, [sp, #16]
+    add     x12, x12, x11, lsl #4
+    ldr     x0, [x12, #8]
+    bl      api_qint
+    API_LIT api_end1
+    ldr     x11, [sp, #24]
+    add     x11, x11, #1
+    str     x11, [sp, #24]
+5:  ldr     x11, [sp, #16]
+    add     x11, x11, #1
+    str     x11, [sp, #16]
+    b       1b
+9:  API_LIT api_v_end
+    UNFRAME 16
+END_FUNCTION api_sync_rewards_body
 
 /*
  * L1: the body of getLiveness (beacon-api.md): {"data":[{"index":…,"is_live":…},…]} of the
@@ -2835,6 +2992,10 @@ LOCAL_FUNCTION node_api_event
     b.eq    65f
     cmp     x3, #API_OP_GET_DEBUG_DATA_COLUMN_SIDECARS
     b.eq    65f
+    cmp     x3, #API_OP_GET_BLOCK_REWARDS
+    b.eq    547f
+    cmp     x3, #API_OP_GET_SYNC_COMMITTEE_REWARDS
+    b.eq    547f
     cmp     x3, #API_OP_GET_STATE_ROOT
     b.eq    66f
     cmp     x3, #API_OP_GET_STATE_FORK
@@ -3192,6 +3353,14 @@ LOCAL_FUNCTION node_api_event
     cbz     x0, 90f
     mov     x2, x0
     b       80f
+547: mov    x0, x27                         /* getBlockRewards, getSyncCommitteeRewards: a work of the block on its pre-state */
+    mov     x1, x25
+    mov     x2, x21
+    mov     x3, x26
+    bl      node_api_rewards
+    mov     x2, x0
+    cbnz    x0, 80f
+    b       90f
 545: mov    x2, #503                        /* publishBlockV2: 503 while syncing; a work decodes its body */
     ldr     x9, [x26, #ApiView_is_syncing]
     cbnz    x9, 80f
@@ -3300,6 +3469,191 @@ LOCAL_FUNCTION node_api_event
 END_FUNCTION node_api_event
 
 /*
+ * L3: the state of the chain at the slot x0, as for a state_id of it, and past the store's slot the
+ * head's post-state brought to it (beacon-api.md, getBlockRewards), with the route x21 and the view
+ * x22: x0 = 0 or 404, x1 its id, x2 1 when it is a copy. Locals: L the slot.
+ */
+LOCAL_FUNCTION node_api_rewards_state
+    ENTER 16
+    str     x0, [sp, #L]
+    mov     x0, x20
+    bl      node_store_slot
+    ldr     x10, [sp, #L]
+    mov     x9, #API_ID_SLOT
+    cmp     x10, x0
+    b.ls    1f
+    mov     x9, #API_ID_HEAD
+1:  stp     x9, x10, [x21, #ApiRoute_id_kind]
+    str     xzr, [x22, #ApiView_look_copy]
+    mov     x0, x21
+    mov     x1, x22
+    bl      node_api_state
+    cbnz    x0, 9f
+    ldr     x9, [sp, #L]
+    str     x9, [x22, #ApiView_head_slot]
+    mov     x0, x22
+    bl      node_api_advance
+    ldr     x1, [x22, #ApiView_look_state]
+    ldr     x2, [x22, #ApiView_look_copy]
+    mov     x0, #0
+9:  LEAVE 16
+END_FUNCTION node_api_rewards_state
+
+/*
+ * L2: getBlockRewards and getSyncCommitteeRewards (node.md, NODE_EV_API): the block, a NodeBlock with
+ * bytes; P, its parent's post-state brought to its slot; getSyncCommitteeRewards its ids as state_b,
+ * getBlockRewards of a phase0 block the E states as state_b and state_c; a NODE_WORK_API_ENCODE, then a
+ * STATE_FREE of each copy. (connection x0, route x1, answer flags x2, view x3) -> x0 = 0, or the error
+ * status. x21 the route, x22 the view, x25 the parent. Locals: L the connection, L+8 the flags, L+16 P,
+ * L+24 state_b, L+32 state_c, L+40 1 when state_b is a copy, L+48 1 when state_c is, L+56 the block's
+ * slot, L+64 its values, L+72 its bytes, L+80 its fork, L+88 a slot, L+96 the status.
+ */
+LOCAL_FUNCTION node_api_rewards
+    ENTER 112
+    stp     x0, x2, [sp, #L]
+    mov     x21, x1
+    mov     x22, x3
+    mov     x0, x21
+    mov     x1, x22
+    bl      node_api_block
+    cbnz    x0, 9f
+    mov     x0, #404
+    ldr     x9, [x22, #ApiView_look_index]  /* a NodeBlock with bytes */
+    cmn     x9, #1
+    b.eq    9f
+    ldr     x9, [x22, #ApiView_look_data]
+    cbz     x9, 9f
+    str     x9, [sp, #(L + 72)]
+    ldr     x0, [x22, #ApiView_head_slot]
+    str     x0, [sp, #(L + 56)]
+    add     x1, x19, #Node_config
+    bl      node_fork
+    str     x0, [sp, #(L + 80)]
+    ldr     x9, [x21, #ApiRoute_op]         /* getSyncCommitteeRewards of a phase0 block: 400 */
+    cmp     x9, #API_OP_GET_SYNC_COMMITTEE_REWARDS
+    b.ne    1f
+    mov     x9, x0
+    mov     x0, #400
+    cbz     x9, 9f
+1:  ldr     x9, [x22, #ApiView_canonical]   /* the values of the block */
+    LDQ     x10, x22, ApiView_head_finalized
+    ldr     x11, [x22, #ApiView_is_optimistic]
+    orr     x9, x9, x10, lsl #1
+    orr     x9, x9, x11, lsl #2
+    str     x9, [sp, #(L + 64)]
+    add     x0, x22, #ApiView_head_root     /* the parent, imported, with a post-state */
+    bl      node_find_block
+    mov     x9, x0
+    mov     x0, #404
+    cmn     x9, #1
+    b.eq    9f
+    add     x0, x1, #NodeBlock_parent_root
+    bl      node_find_block
+    mov     x9, x0
+    mov     x0, #404
+    cmn     x9, #1
+    b.eq    9f
+    mov     x25, x1
+    ldr     x9, [x25, #NodeBlock_status]
+    cmp     x9, #NODE_BLOCK_IMPORTED
+    b.ne    9f
+    ldr     x0, [x25, #NodeBlock_state_id]
+    cbnz    x0, 2f
+    bl      node_f_slot
+    ldr     x9, [x25, #NodeBlock_slot]
+    cmn     x0, #1
+    b.eq    8f
+    cmp     x9, x0
+    b.ls    8f
+    mov     x0, x25
+    bl      node_rebuild
+    cbz     x0, 8f
+2:  str     x0, [x22, #ApiView_look_state]  /* P: a copy brought to the block's slot */
+    ldr     x9, [x25, #NodeBlock_slot]
+    str     x9, [x22, #ApiView_look_state_slot]
+    ldr     x9, [sp, #(L + 56)]
+    str     x9, [x22, #ApiView_head_slot]
+    mov     x0, x22
+    bl      node_api_advance
+    ldr     x9, [x22, #ApiView_look_state]
+    str     x9, [sp, #(L + 16)]
+    stp     xzr, xzr, [sp, #(L + 24)]
+    stp     xzr, xzr, [sp, #(L + 40)]
+    str     xzr, [sp, #(L + 96)]
+    ldr     x9, [x21, #ApiRoute_op]
+    cmp     x9, #API_OP_GET_SYNC_COMMITTEE_REWARDS
+    b.ne    3f
+    mov     x0, x21                         /* getSyncCommitteeRewards: its ids as state_b */
+    bl      node_api_ids
+    str     x0, [sp, #(L + 24)]
+    b       6f
+3:  ldr     x9, [sp, #(L + 80)]             /* getBlockRewards of a phase0 block of epoch b: the E states */
+    cbnz    x9, 6f
+    ldr     x9, [sp, #(L + 56)]
+    mov     x10, #SLOTS_PER_EPOCH
+    udiv    x9, x9, x10
+    cbz     x9, 4f
+    add     x0, x9, #1                      /* early: the state at the last slot of b */
+    mul     x0, x0, x10
+    sub     x0, x0, #1
+    bl      node_api_rewards_state
+    str     x0, [sp, #(L + 96)]
+    cbnz    x0, 7f
+    str     x1, [sp, #(L + 24)]
+    str     x2, [sp, #(L + 40)]
+4:  ldr     x9, [sp, #(L + 56)]             /* late: at the last slot of b + 1, when that epoch is phase0's */
+    mov     x10, #SLOTS_PER_EPOCH
+    udiv    x9, x9, x10
+    add     x0, x9, #2
+    mul     x0, x0, x10
+    sub     x0, x0, #1
+    str     x0, [sp, #(L + 88)]
+    add     x1, x19, #Node_config
+    bl      node_fork
+    cbnz    x0, 6f
+    ldr     x0, [sp, #(L + 88)]
+    bl      node_api_rewards_state
+    str     x0, [sp, #(L + 96)]
+    cbnz    x0, 7f
+    str     x1, [sp, #(L + 32)]
+    str     x2, [sp, #(L + 48)]
+6:  ldp     x4, x10, [sp, #L]               /* the work: arg as node_api_encode packs it */
+    ldr     x11, [x21, #ApiRoute_op]
+    orr     x5, x11, x10, lsl #8
+    ldr     x12, [sp, #(L + 64)]
+    orr     x5, x5, x12, lsl #16
+    ldr     x12, [sp, #(L + 56)]
+    orr     x5, x5, x12, lsl #24
+    mov     x0, #NODE_WORK_API_ENCODE
+    ldr     x1, [sp, #(L + 16)]
+    ldr     x2, [sp, #(L + 24)]
+    ldr     x3, [sp, #(L + 72)]
+    bl      node_work
+    ldr     x9, [sp, #(L + 32)]
+    str     x9, [x0, #NodeAction_state_c]
+7:  mov     x0, #NODE_ACT_STATE_FREE        /* the copies go after the work */
+    ldr     x1, [sp, #(L + 16)]
+    mov     x2, #0
+    bl      node_ids
+    ldr     x9, [sp, #(L + 40)]
+    cbz     x9, 71f
+    mov     x0, #NODE_ACT_STATE_FREE
+    ldr     x1, [sp, #(L + 24)]
+    mov     x2, #0
+    bl      node_ids
+71: ldr     x9, [sp, #(L + 48)]
+    cbz     x9, 72f
+    mov     x0, #NODE_ACT_STATE_FREE
+    ldr     x1, [sp, #(L + 32)]
+    mov     x2, #0
+    bl      node_ids
+72: ldr     x0, [sp, #(L + 96)]
+9:  LEAVE 112
+8:  mov     x0, #404
+    LEAVE 112
+END_FUNCTION node_api_rewards
+
+/*
  * L2: the NODE_EV_WORK_DONE x0 of a NODE_WORK_API_ENCODE (node.md, lantern_node_step): its
  * response to the connection, or the error 500. x19 the node, x24 the actions. x21 the event,
  * x22 the action, x23 the response's bytes, x25 the flags.
@@ -3308,6 +3662,16 @@ LOCAL_FUNCTION node_api_done
     ENTER 0
     mov     x21, x0
     ldr     x9, [x21, #NodeAction_arg]
+    and     x10, x9, #255                   /* getSyncCommitteeRewards: its ids in state_b go */
+    cmp     x10, #API_OP_GET_SYNC_COMMITTEE_REWARDS
+    b.ne    3f
+    ldr     x1, [x21, #NodeAction_state_b]
+    cbz     x1, 3f
+    mov     x0, #NODE_ACT_BYTES_FREE
+    mov     x2, #0
+    bl      node_ids
+    ldr     x9, [x21, #NodeAction_arg]
+3:
     and     x10, x9, #255                   /* getStateValidator: its ids go; produceAttestationData its index; the epoch reads their epoch */
     mov     x11, #API_OP_PRODUCE_ATTESTATION_DATA
     mov     x12, #API_OP_GET_ATTESTER_DUTIES
@@ -3386,8 +3750,11 @@ END_FUNCTION node_api_done
  * Locals: L the scratch's size, L+8 a kept word, L+16 a Result, L+24 a blob count, L+32 the seen.
  */
 LOCAL_FUNCTION node_api_run
-    ENTER 48
-    str     x8, [sp, #(L + 32)]             /* the seen */
+    ENTER 64
+    ldr     x9, [x8]                        /* x8: the seen, state_b and state_c */
+    str     x9, [sp, #(L + 32)]
+    ldp     x9, x10, [x8, #8]
+    stp     x9, x10, [sp, #(L + 40)]
     mov     x19, x0
     mov     x20, x1
     mov     x21, x2
@@ -3439,6 +3806,10 @@ LOCAL_FUNCTION node_api_run
     b.eq    2f
     cmp     x27, #API_OP_GET_LIVENESS
     b.eq    2f
+    cmp     x27, #API_OP_GET_BLOCK_REWARDS
+    b.eq    2f
+    cmp     x27, #API_OP_GET_SYNC_COMMITTEE_REWARDS
+    b.eq    2f
     cmp     x27, #API_OP_GET_STATE_FORK
     b.ne    8f
 2:  ldr     x9, [x24]                       /* the ApiView at the end of scratch, with the work's values */
@@ -3475,6 +3846,10 @@ LOCAL_FUNCTION node_api_run
 43: add     x1, x19, #Node_config
     bl      node_fork
     mov     x15, x0
+    cmp     x27, #API_OP_GET_BLOCK_REWARDS
+    b.eq    277f
+    cmp     x27, #API_OP_GET_SYNC_COMMITTEE_REWARDS
+    b.eq    278f
     cmp     x27, #API_OP_GET_STATE_VALIDATOR
     b.ne    271f
     mov     x0, x22                         /* getStateValidator: the validator of its ids */
@@ -3554,6 +3929,43 @@ LOCAL_FUNCTION node_api_run
 276: cbz    x0, 5f
     str     x0, [x25, #NodeEvent_result]
     b       9f
+277: cbz    x23, 41f                        /* getBlockRewards: lantern_node_block_rewards of the block in data, its out at the end of scratch */
+    ldr     x10, [x24]
+    subs    x10, x10, #48
+    b.lo    71f
+    str     x10, [x24]
+    add     x6, x24, x10
+    STQ     x6, x26, ApiView_live_out
+    mov     x0, x22
+    mov     x1, x23
+    ldp     x2, x3, [sp, #(L + 40)]
+    add     x4, x19, #Node_config
+    mov     x5, x24
+    FORK_CALL node_block_rewards
+    b       279f
+278: cbz    x23, 41f                        /* getSyncCommitteeRewards: lantern_node_sync_rewards, its out at the end of scratch; its ids in state_b */
+    ldr     x9, [sp, #(L + 40)]
+    STQ     x9, x26, ApiView_sd_ids
+    str     x22, [x26, #ApiView_val_state]
+    ldr     x10, [x24]
+    MOVQ    x11, 24 + 16 * SYNC_COMMITTEE_SIZE
+    subs    x10, x10, x11
+    b.lo    71f
+    str     x10, [x24]
+    add     x3, x24, x10
+    str     x11, [x3]
+    STQ     x3, x26, ApiView_live_out
+    mov     x0, x22
+    mov     x1, x23
+    mov     x2, x24
+    FORK_CALL node_sync_rewards
+279: cmp    x0, #LANTERN_BUFFER_TOO_SMALL
+    b.eq    71f
+    cmp     x0, #LANTERN_NO_STATE_ANSWER    /* no answer in the state: 400 */
+    b.ne    276b
+    mov     x9, #400
+    str     x9, [x26, #ApiView_status]
+    b       5f
 20: cmp     x27, #API_OP_PRODUCE_ATTESTATION_DATA
     b.ne    25f
     cbz     x23, 41f                        /* produceAttestationData: lantern_node_attestation_data, its index in data */
@@ -3841,13 +4253,13 @@ LOCAL_FUNCTION node_api_run
 9:  ldr     x9, [sp, #L]
     str     x9, [x24]
     mov     x0, #LANTERN_OK
-    LEAVE 48
+    LEAVE 64
 8:  mov     x0, #LANTERN_INVALID_EVENT
-    LEAVE 48
+    LEAVE 64
 71: ldr     x9, [sp, #L]
     str     x9, [x24]
 7:  mov     x0, #LANTERN_BUFFER_TOO_SMALL
-    LEAVE 48
+    LEAVE 64
 END_FUNCTION node_api_run
 
 /*
