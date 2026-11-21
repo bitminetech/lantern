@@ -238,8 +238,11 @@ FUNCTION lantern_node_init
     mov     x1, x20
     MOVQ    x2, CONFIG_SIZE
     bl      lantern_copy
-    LDQ     x9, x20, CONFIG_SAMPLES_PER_SLOT  /* the columns: of max(SAMPLES_PER_SLOT, CUSTODY_REQUIREMENT) groups */
+    LDQ     x9, x20, CONFIG_SAMPLES_PER_SLOT  /* the columns: of max(SAMPLES_PER_SLOT, the custody group count) groups */
     LDQ     x10, x20, CONFIG_CUSTODY_REQUIREMENT
+    LDQ     x11, x20, CONFIG_NUMBER_OF_CUSTODY_GROUPS
+    tst     x23, #NODE_FLAG_SUPERNODE       /* a supernode: every group */
+    csel    x10, x11, x10, ne
     cmp     x9, x10
     csel    x1, x9, x10, hs
     add     x0, x21, #NodeAnchor_node_id
@@ -5077,7 +5080,11 @@ LOCAL_FUNCTION node_request
     stp     x9, x10, [sp, #(L + 64)]
     LDQ     x9, x19, Node_syncnets
     strb    w9, [sp, #(L + 64 + 16)]
-    LDQ     x9, x19, Node_config + CONFIG_CUSTODY_REQUIREMENT
+    LDQ     x9, x19, Node_config + CONFIG_CUSTODY_REQUIREMENT  /* the custody group count */
+    LDQ     x10, x19, Node_config + CONFIG_NUMBER_OF_CUSTODY_GROUPS
+    ldr     x11, [x19, #Node_flags]
+    tst     x11, #NODE_FLAG_SUPERNODE
+    csel    x9, x10, x9, ne
     str     x9, [sp, #(L + 56)]
     add     x0, sp, #(L + 64 + 17)
     add     x1, sp, #(L + 56)
@@ -5989,7 +5996,7 @@ LOCAL_FUNCTION node_enr_entries
     add     x25, x25, #56
     cmp     x21, #FORK_FULU
     b.lo    8f
-    mov     x9, #56                         /* cgc: CUSTODY_REQUIREMENT, big-endian, no leading zero byte */
+    mov     x9, #56                         /* cgc: the custody group count, big-endian, no leading zero byte */
     mov     x10, #DISCV5_EVENT_SET_ENTRY
     stp     x9, x10, [x25]
     mov     x9, #3
@@ -5998,6 +6005,10 @@ LOCAL_FUNCTION node_enr_entries
     str     xzr, [x25, #32]
     str     xzr, [x25, #48]
     LDQ     x11, x19, Node_config + CONFIG_CUSTODY_REQUIREMENT
+    LDQ     x12, x19, Node_config + CONFIG_NUMBER_OF_CUSTODY_GROUPS
+    ldr     x13, [x19, #Node_flags]
+    tst     x13, #NODE_FLAG_SUPERNODE
+    csel    x11, x12, x11, ne
     clz     x12, x11                        /* n bytes: 8 - its leading zero bytes */
     lsr     x12, x12, #3
     mov     x13, #8

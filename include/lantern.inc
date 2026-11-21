@@ -631,6 +631,7 @@
 .set NODE_FLAG_DB, 128                 /* the node archives the finalized history: it gives NODE_ACT_DB_APPEND and serves NODE_DB_REF records */
 .set NODE_FLAG_FEW_STATES, 256         /* the node keeps the post-states of the head, the justified root, F and the blocks with no child only */
 .set NODE_FLAG_EL_OFFLINE, 512         /* the last connection to the execution engine failed before an answer */
+.set NODE_FLAG_SUPERNODE, 1024         /* the node custodies every custody group */
 .set Node_peers, 120                   /* PartRef of NodePeer */
 .set Node_streams, 136                 /* PartRef of NodeStream entries of Node_stream_bytes each */
 .set Node_p2p_out, 152                 /* PartRef of bytes: libp2p events the node made for its next libp2p step */
@@ -1146,6 +1147,7 @@
 .set API_STREAM_FOLD, 32768             /* getAggregatedAttestationV2: its chunks fold the pool's entries, sending nothing */
 .set API_STREAM_PRODUCE_OWN, 65536     /* produceBlockV3: the pool entry bytes of its fold in flight (root) are its to free */
 .set API_STREAM_PRODUCE_FORCED, 131072  /* produceBlockV3: it made a preparation of its slot */
+.set API_STREAM_BLOB_SKIP, 262144      /* in a WORK_DONE only: the blob stream skips the rest of a blob */
 .set API_VALUE_CANONICAL, 1              /* the values of a NODE_WORK_API_ENCODE's arg, times 2^16 */
 .set API_VALUE_FINALIZED, 2
 .set API_VALUE_OPTIMISTIC, 4
@@ -1318,7 +1320,8 @@
 .set AppOptions_log_level, 144          /* 0 error, 1 warn, 2 info, 3 debug */
 .set AppOptions_http_address, 152       /* IPv4, its 4 bytes in network order in the low bytes */
 .set AppOptions_http_max_connections, 160
-.set AppOptions__size, 168
+.set AppOptions_supernode, 168        /* 1 with --supernode */
+.set AppOptions__size, 176
 .set APP_DEFAULT_PORT, 9000
 .set APP_DEFAULT_HTTP_PORT, 5052
 .set APP_DEFAULT_TARGET_PEERS, 64

@@ -125,34 +125,17 @@ FUNCTION lantern_app_options
     sub     $2, %r11
     mov     %r10, L(%rsp)
     xor     %ecx, %ecx
-2:  cmp     %r11, %rcx
+2:  cmp     %r11, %rcx                      # the name: up to = or the end
     jae     3f
     lea     (%rbx,%r10), %rax
     cmpb    $0x3d, (%rax,%rcx)              # =
-    je      4f
+    je      3f
     inc     %rcx
     jmp     2b
-3:  mov     %r11, (L + 8)(%rsp)             # --name value: the value is the next argument
-    lea     1(%r14), %rax
-    mov     %rax, S10(%rsp)
-    cmp     %r13, %rax
-    jae     91f
-    shl     $4, %rax
-    mov     (%r15,%rax), %rcx
-    mov     %rcx, S8(%rsp)
-    mov     8(%r15,%rax), %rcx
-    mov     %rcx, S9(%rsp)
-    add     $2, %r14
-    jmp     5f
-4:  mov     %rcx, (L + 8)(%rsp)             # --name=value
-    lea     1(%r10,%rcx), %rax
-    mov     %rax, S8(%rsp)
-    mov     %r11, %rax
-    sub     %rcx, %rax
-    dec     %rax
-    mov     %rax, S9(%rsp)
-    inc     %r14
-5:  lea     app_options(%rip), %rax
+3:  mov     %rcx, (L + 8)(%rsp)
+    mov     %rcx, S8(%rsp)                  # S8: where = is, S9: the length of the name and value
+    mov     %r11, S9(%rsp)
+    lea     app_options(%rip), %rax
     mov     %rax, S7(%rsp)
 6:  mov     S7(%rsp), %rdx
     lea     app_options_end(%rip), %rax
@@ -165,9 +148,41 @@ FUNCTION lantern_app_options
     add     $24, %rdx
     call    config_name_is
     test    %rax, %rax
-    jnz     7f
+    jnz     4f
     addq    $APP_OPTION_BYTES, S7(%rsp)
     jmp     6b
+4:  mov     S7(%rsp), %rax
+    cmpq    $APP_OPTION_FLAG, 16(%rax)
+    jne     5f
+    mov     S8(%rsp), %rax                  # a flag: no value, 1
+    cmp     S9(%rsp), %rax
+    jne     90f
+    inc     %r14
+    mov     $1, %edx
+    jmp     23f
+5:  mov     S8(%rsp), %rax
+    cmp     S9(%rsp), %rax
+    jne     51f
+    lea     1(%r14), %rax                   # --name value: the value is the next argument
+    mov     %rax, S10(%rsp)
+    cmp     %r13, %rax
+    jae     91f
+    shl     $4, %rax
+    mov     (%r15,%rax), %rcx
+    mov     %rcx, S8(%rsp)
+    mov     8(%r15,%rax), %rcx
+    mov     %rcx, S9(%rsp)
+    add     $2, %r14
+    jmp     7f
+51: mov     S9(%rsp), %rax                  # --name=value
+    sub     S8(%rsp), %rax
+    dec     %rax
+    mov     %rax, S9(%rsp)
+    mov     L(%rsp), %rax
+    add     S8(%rsp), %rax
+    inc     %rax
+    mov     %rax, S8(%rsp)
+    inc     %r14
 7:  cmpq    $0, S9(%rsp)                    # an empty value
     je      90f
     mov     S7(%rsp), %rax

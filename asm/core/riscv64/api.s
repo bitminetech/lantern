@@ -2969,8 +2969,12 @@ LOCAL_FUNCTION node_api_view
     sd      t0, ApiView_seq_number(t3)
     ld      t0, Node_attnets(s1)
     sd      t0, ApiView_attnets(t3)
-    LDQ     t0, s1, Node_config + CONFIG_CUSTODY_REQUIREMENT
-    sd      t0, ApiView_custody_group_count(t3)
+    LDQ     t0, s1, Node_config + CONFIG_CUSTODY_REQUIREMENT  # the custody group count
+    ld      t1, Node_flags(s1)
+    andi    t1, t1, NODE_FLAG_SUPERNODE
+    beqz    t1, 1f
+    LDQ     t0, s1, Node_config + CONFIG_NUMBER_OF_CUSTODY_GROUPS
+1:  sd      t0, ApiView_custody_group_count(t3)
     addi    a0, t3, ApiView_peer_id         # the identity's texts
     ADDQ    a1, s1, Node_api_identity
     li      a2, API_IDENTITY_SIZE
@@ -3264,6 +3268,8 @@ LOCAL_FUNCTION node_api_event
     li      t0, API_OP_GET_BLOB_SIDECARS
     beq     a3, t0, 65f
     li      t0, API_OP_GET_DEBUG_DATA_COLUMN_SIDECARS
+    beq     a3, t0, 65f
+    li      t0, API_OP_GET_BLOBS
     beq     a3, t0, 65f
     li      t0, API_OP_GET_BLOCK_REWARDS
     beq     a3, t0, 547f
@@ -3740,6 +3746,8 @@ LOCAL_FUNCTION node_api_event
     beq     a3, t0, 54f
     li      t0, API_OP_GET_DEBUG_DATA_COLUMN_SIDECARS
     beq     a3, t0, 54f
+    li      t0, API_OP_GET_BLOBS
+    beq     a3, t0, 55f
 67: ld      a0, ApiRoute_op(s7)             # a work
     mv      a1, s9
     mv      a2, s3
@@ -3753,6 +3761,14 @@ LOCAL_FUNCTION node_api_event
     mv      a2, s3
     mv      a3, s8
     call    node_api_sidecar_stream
+    beqz    a0, 90f
+    mv      a2, a0
+    j       80f
+55: mv      a0, s9                          # getBlobs: the blob stream of the block
+    mv      a1, s7
+    mv      a2, s3
+    mv      a3, s8
+    call    node_api_blob_stream
     beqz    a0, 90f
     mv      a2, a0
     j       80f
@@ -7763,7 +7779,11 @@ LOCAL_FUNCTION node_api_chunk_done
     addi    a1, a1, 1
     call    node_headers_next
     j       3f
-2:  li      t1, API_OP_GET_BLOB_SIDECARS    # a sidecar stream: its sidecar from member + 1 on
+2:  li      t1, API_OP_GET_BLOBS            # the blob stream: its next sidecar or cell
+    bne     t0, t1, 21f
+    call    node_blob_advance
+    j       3f
+21: li      t1, API_OP_GET_BLOB_SIDECARS    # a sidecar stream: its sidecar from member + 1 on
     beq     t0, t1, 4f
     li      t1, API_OP_GET_DEBUG_DATA_COLUMN_SIDECARS
     bne     t0, t1, 5f
@@ -8009,7 +8029,11 @@ LOCAL_FUNCTION api_stream_json
     call    api_headers_json
     UNFRAME 0
 32: ld      t0, NodeApi_op(s4)
-    li      t1, API_OP_GET_BLOB_SIDECARS
+    li      t1, API_OP_GET_BLOBS            # the blob stream: the sidecar s3, the versioned hashes a1
+    bne     t0, t1, 35f
+    call    api_blob_body
+    UNFRAME 0
+35: li      t1, API_OP_GET_BLOB_SIDECARS
     beq     t0, t1, 33f
     li      t1, API_OP_GET_DEBUG_DATA_COLUMN_SIDECARS
     bne     t0, t1, 34f
@@ -8153,6 +8177,8 @@ LOCAL_FUNCTION node_api_chunk_run
     li      t1, API_OP_GET_BLOB_SIDECARS
     beq     t0, t1, 103f
     li      t1, API_OP_GET_DEBUG_DATA_COLUMN_SIDECARS
+    beq     t0, t1, 103f
+    li      t1, API_OP_GET_BLOBS            # the blob stream: as a sidecar stream
     beq     t0, t1, 103f
     li      t2, 5                           # getBlockHeaders (5): an item of data or state, none at its end
     li      t1, API_OP_GET_BLOCK_HEADERS
@@ -8609,6 +8635,9 @@ LOCAL_FUNCTION node_api_chunk_run
     ld      t2, (NodeEvent_api + 8)(s5)
     andi    t2, t2, API_STREAM_SSZ
     bnez    t2, 36f
+    ld      t2, NodeApi_op(s4)              # getBlobs: as the validator streams
+    li      t3, API_OP_GET_BLOBS
+    beq     t2, t3, 38f
     j       392f
 393: li     t1, 4
     beq     t0, t1, 392f
@@ -8702,7 +8731,8 @@ LOCAL_FUNCTION node_api_chunk_run
     andi    a0, a0, 1
     call    api_bool
     API_LIT api_j_data
-36: call    api_stream_json
+36: ld      a1, (L + 48)(sp)            # state_a: the blob stream's versioned hashes
+    call    api_stream_json
     li      t0, 3
     beq     a0, t0, 97f
     li      t0, 2
@@ -8764,6 +8794,7 @@ LOCAL_FUNCTION node_api_chunk_run
     addi    s6, s10, 6
     ld      s8, (L + 0)(sp)
     addi    s8, s8, -7
+    ld      a1, (L + 48)(sp)
     call    api_stream_json
     li      t0, 3
     beq     a0, t0, 97f
@@ -8792,7 +8823,8 @@ LOCAL_FUNCTION node_api_chunk_run
     beqz    t0, 80f
     API_LIT api_last_chunk
     j       44f
-45: call    api_stream_json                 # HTTP/1.0: the bytes alone
+45: ld      a1, (L + 48)(sp)            # HTTP/1.0: the bytes alone
+    call    api_stream_json
     li      t0, 3
     beq     a0, t0, 97f
     li      t0, 2
@@ -9406,6 +9438,424 @@ LOCAL_FUNCTION node_api_headers_stream
     call    node_api_chunk_work
     UNFRAME 48
 END_FUNCTION node_api_headers_stream
+
+/*
+ * a0 = the data of the sidecar of index a2 of the block of the root at a0 and the slot a1, as a
+ * sidecar stream finds it (node.md): the NODE_BLOB_VALID entry's bytes, else with NODE_FLAG_DB the
+ * NODE_DB_REF of the Db's record; 0 with none. s1 the node. Locals: the slot, the index.
+ */
+LOCAL_FUNCTION node_sidecar_of
+    FRAME 16
+    sd      a1, 0(sp)
+    sd      a2, 8(sp)
+    mv      a1, a2
+    call    node_blob_held
+    beqz    a0, 1f
+    ld      a0, NodeBlob_data_id(a0)
+    UNFRAME 16
+1:  ld      t0, Node_flags(s1)
+    andi    t0, t0, NODE_FLAG_DB
+    beqz    t0, 9f
+    ld      a0, 0(sp)
+    ld      a1, 8(sp)
+    call    node_db_sidecar
+    UNFRAME 16
+9:  li      a0, 0
+    UNFRAME 16
+END_FUNCTION node_sidecar_of
+
+/*
+ * (connection a0, route a1, flags a2, view a3) -> a0: the blob stream of the block of the view
+ * (node.md, NODE_EV_API, the blob stream): 0, or 404 for a fulu block of which the node holds a
+ * column sidecar but not one of each of the first NUMBER_OF_COLUMNS / 2 columns. s1 the node.
+ * Locals: the connection, the route, the flags, the view, the fork, the entry's index and address, a
+ * column, the count of the first half's columns held, 1 with any held, a ByteList head (24).
+ */
+LOCAL_FUNCTION node_api_blob_stream
+    FRAME 112
+    sd      a0, 0(sp)
+    sd      a1, 8(sp)
+    sd      a2, 16(sp)
+    sd      a3, 24(sp)
+    ld      a0, ApiView_head_slot(a3)
+    addi    a1, s1, Node_config
+    call    node_fork
+    sd      a0, 32(sp)
+    sd      zero, 64(sp)
+    sd      zero, 72(sp)
+    li      t0, FORK_FULU
+    bltu    a0, t0, 2f
+    sd      zero, 56(sp)
+1:  ld      a2, 56(sp)                      # fulu: the columns the node holds
+    li      t0, NUMBER_OF_COLUMNS
+    bgeu    a2, t0, 11f
+    ld      t3, 24(sp)
+    addi    a0, t3, ApiView_head_root
+    ld      a1, ApiView_head_slot(t3)
+    call    node_sidecar_of
+    ld      a2, 56(sp)
+    addi    t0, a2, 1
+    sd      t0, 56(sp)
+    beqz    a0, 1b
+    li      t0, 1
+    sd      t0, 72(sp)
+    li      t0, NUMBER_OF_COLUMNS / 2
+    bgeu    a2, t0, 1b
+    ld      t0, 64(sp)
+    addi    t0, t0, 1
+    sd      t0, 64(sp)
+    j       1b
+11: ld      t0, 64(sp)
+    li      t1, NUMBER_OF_COLUMNS / 2
+    beq     t0, t1, 2f
+    ld      t0, 72(sp)
+    bnez    t0, 8f                          # some, but not each of the first half: 404
+2:  call    node_api_new
+    sd      a0, 40(sp)
+    sd      a1, 48(sp)
+    mv      a0, a1
+    li      a1, NodeApi__mem
+    call    lantern_zero
+    ld      a1, 48(sp)
+    ld      t0, 0(sp)
+    sd      t0, NodeApi_connection(a1)
+    ld      t2, 8(sp)
+    ld      t0, ApiRoute_op(t2)
+    sd      t0, NodeApi_op(a1)
+    ld      t0, 16(sp)                      # the answer flags, SSZ, and the block's values
+    ld      t1, ApiRoute_response(t2)
+    li      t3, API_TYPE_SSZ
+    bne     t1, t3, 3f
+    ori     t0, t0, API_STREAM_SSZ
+3:  ld      t3, 24(sp)
+    ld      t1, ApiView_is_optimistic(t3)
+    beqz    t1, 31f
+    ori     t0, t0, API_STREAM_OPTIMISTIC
+31: LDQ     t1, t3, ApiView_head_finalized
+    beqz    t1, 32f
+    ori     t0, t0, API_STREAM_FINALIZED
+32: sd      t0, NodeApi_flags(a1)
+    ld      t0, 32(sp)
+    sd      t0, NodeApi_fork(a1)
+    ld      t0, ApiView_head_slot(t3)
+    sd      t0, NodeApi_slot(a1)
+    addi    t0, a1, NodeApi_root
+    addi    t1, t3, ApiView_head_root
+    COPY32  t0, t1
+    ld      t2, 8(sp)                       # the versioned hashes: a BYTES_PUT of them, as the entry's state
+    ld      t0, ApiRoute_present(t2)
+    li      t1, 1 << API_PARAM_VERSIONED_HASHES
+    and     t0, t0, t1
+    beqz    t0, 5f
+    PART    t0, t1, t2, ApiRoute_list
+    slli    t1, t1, 5
+    addi    t3, sp, 80                      # a ByteList head whose offset reaches the items
+    sub     t0, t0, t3
+    sd      t1, 0(t3)
+    sd      t0, 8(t3)
+    sd      t1, 16(t3)
+    mv      a0, t3
+    call    node_put
+    ld      a1, 48(sp)
+    sd      a0, NodeApi_state(a1)
+    ld      t0, NodeApi_flags(a1)
+    li      t1, API_STREAM_OWN_STATE
+    or      t0, t0, t1
+    sd      t0, NodeApi_flags(a1)
+5:  ld      a1, 48(sp)                      # the first item
+    ld      t0, 32(sp)
+    li      t1, FORK_DENEB
+    bltu    t0, t1, 7f
+    li      t1, FORK_FULU
+    bgeu    t0, t1, 6f
+    li      t0, -1                          # deneb and electra: every sidecar
+    sd      t0, NodeApi_filter_slot(a1)
+    sd      t0, NodeApi_filter_index(a1)
+    mv      a0, a1
+    li      a1, 0
+    call    node_sidecar_next
+    j       7f
+6:  ld      t0, 64(sp)                      # fulu: blob 0 and column 0 with the first half; else none
+    li      t1, NUMBER_OF_COLUMNS / 2
+    bne     t0, t1, 7f
+    addi    a0, a1, NodeApi_root
+    ld      a1, NodeApi_slot(a1)
+    li      a2, 0
+    call    node_sidecar_of
+    ld      a1, 48(sp)
+    sd      a0, NodeApi_data(a1)
+7:  ld      a0, 40(sp)
+    ld      a1, 48(sp)
+    call    node_api_chunk_work
+    li      a0, 0
+    UNFRAME 112
+8:  li      a0, 404
+    UNFRAME 112
+END_FUNCTION node_api_blob_stream
+
+/*
+ * The blob stream a0 after a chunk that ended its item (node.md, NODE_EV_API, the blob stream):
+ * deneb and electra the sidecar from member + 1 on; fulu the next cell, of blob filter_slot + 1 and
+ * column 0 after API_STREAM_BLOB_SKIP or the first half's last column, else of column member + 1,
+ * with sent 0. API_STREAM_BLOB_SKIP clears. s1 the node. s9 the entry, s10 its flags.
+ */
+LOCAL_FUNCTION node_blob_advance
+    ENTER 0
+    mv      s9, a0
+    ld      s10, NodeApi_flags(s9)
+    li      t0, ~API_STREAM_BLOB_SKIP
+    and     t0, s10, t0
+    sd      t0, NodeApi_flags(s9)
+    ld      t0, NodeApi_fork(s9)
+    li      t1, FORK_FULU
+    bgeu    t0, t1, 1f
+    mv      a0, s9
+    ld      a1, NodeApi_member(s9)
+    addi    a1, a1, 1
+    call    node_sidecar_next
+    LEAVE 0
+1:  ld      t0, NodeApi_member(s9)
+    ld      t1, NodeApi_filter_slot(s9)
+    addi    t0, t0, 1
+    li      t2, API_STREAM_BLOB_SKIP
+    and     t2, s10, t2
+    bnez    t2, 2f
+    li      t2, NUMBER_OF_COLUMNS / 2
+    bltu    t0, t2, 3f
+2:  addi    t1, t1, 1
+    li      t0, 0
+3:  sd      t0, NodeApi_member(s9)
+    sd      t1, NodeApi_filter_slot(s9)
+    sd      zero, NodeApi_sent(s9)
+    addi    a0, s9, NodeApi_root
+    ld      a1, NodeApi_slot(s9)
+    mv      a2, t0
+    call    node_sidecar_of
+    sd      a0, NodeApi_data(s9)
+    LEAVE 0
+END_FUNCTION node_blob_advance
+
+/*
+ * a0 = 1 when kzg_commitment_to_versioned_hash of the 48-byte commitment at a0 (deneb
+ * beacon-chain.md: VERSIONED_HASH_VERSION_KZG, then the last 31 bytes of its sha256) is one of the
+ * Root items of the ByteList a1, else 0. Locals: the ByteList a1, a ByteList of the commitment
+ * (72), the hash (32).
+ */
+LOCAL_FUNCTION api_blob_wanted
+    FRAME 112
+    sd      a1, 0(sp)
+    li      t0, 72
+    sd      t0, 8(sp)
+    li      t0, 24
+    sd      t0, 16(sp)
+    li      t0, 48
+    sd      t0, 24(sp)
+    mv      a1, a0
+    addi    a0, sp, 32
+    li      a2, 48
+    call    lantern_copy
+    addi    a0, sp, 8
+    addi    a1, sp, 80
+    CALL_GLOBAL crypto_sha256
+    li      t0, VERSIONED_HASH_VERSION_KZG
+    sb      t0, 80(sp)
+    ld      t2, 0(sp)                       # the items
+    ld      t0, 8(t2)
+    add     t0, t2, t0
+    ld      t1, 16(t2)
+    srli    t1, t1, 5
+    addi    t2, sp, 80
+1:  beqz    t1, 8f
+    NE32    t0, t2, 2f
+    li      a0, 1
+    UNFRAME 112
+2:  addi    t0, t0, 32
+    addi    t1, t1, -1
+    j       1b
+8:  li      a0, 0
+    UNFRAME 112
+END_FUNCTION api_blob_wanted
+
+/*
+ * The blob stream's body, as api_stream_json (node.md, NODE_WORK_API_CHUNK, the blob stream): with
+ * the sidecar s3 and the versioned hashes a1 (or 0), the bytes of its blob, or of its cell, from
+ * sent (NodeEvent_api), as many as fit, as JSON in lower case hex; with s3 = 0, or a blob past the
+ * last, ]} as JSON. a0 = 1 when the answer is whole, 0 when more is to come, 2 for bytes that are
+ * no encoding. Locals: the hashes, the piece's bytes, their count, 1 at a blob's first piece, 1 at
+ * its last, the offsets of column and kzg_commitments.
+ */
+LOCAL_FUNCTION api_blob_body
+    FRAME 64
+    sd      a1, 0(sp)
+    beqz    s3, 90f
+    ld      t0, 8(s3)                       # the sidecar's SSZ bytes, t2 of them
+    add     t1, s3, t0
+    ld      t2, 16(s3)
+    ld      t0, NodeApi_fork(s4)
+    li      t3, FORK_FULU
+    bgeu    t0, t3, 20f
+    li      t3, 8 + PUB_BLOB_BYTES + 48     # deneb and electra: index, blob, kzg_commitment, ...
+    bltu    t2, t3, 92f
+    addi    t0, t1, 8
+    sd      t0, 8(sp)
+    li      t0, PUB_BLOB_BYTES
+    sd      t0, 16(sp)
+    li      t0, 1
+    sd      t0, 24(sp)
+    sd      t0, 32(sp)
+    ld      t0, NodeEvent_api(s5)           # at the blob's start, with hashes: its versioned hash
+    bnez    t0, 30f
+    ld      a1, 0(sp)
+    beqz    a1, 30f
+    li      t0, 8 + PUB_BLOB_BYTES
+    add     a0, t1, t0
+    call    api_blob_wanted
+    bnez    a0, 30f
+    j       88f
+20: li      t3, PUB_COLUMN_FIXED            # fulu: a DataColumnSidecar; the offsets of column, kzg_commitments, kzg_proofs
+    bltu    t2, t3, 92f
+    lwu     t3, 8(t1)
+    lwu     t4, 12(t1)
+    lwu     t5, 16(t1)
+    bgtu    t3, t4, 92f
+    bgtu    t4, t5, 92f
+    bgtu    t5, t2, 92f
+    sd      t3, 40(sp)
+    sd      t4, 48(sp)
+    ld      t0, NodeApi_member(s4)
+    ld      a2, NodeEvent_api(s5)
+    or      t0, t0, a2
+    bnez    t0, 22f
+    sub     t0, t5, t4                      # at the blob's start: past the last commitment, the end
+    li      a2, 48
+    divu    t0, t0, a2
+    ld      a3, NodeApi_filter_slot(s4)
+    bgeu    a3, t0, 90f
+    ld      a1, 0(sp)
+    beqz    a1, 22f
+    mul     t0, a3, a2                      # with hashes: the versioned hash of commitment b
+    add     t0, t0, t4
+    add     a0, t1, t0
+    call    api_blob_wanted
+    beqz    a0, 87f
+    ld      t0, 8(s3)
+    add     t1, s3, t0
+22: ld      t3, 40(sp)                      # cell b of the column
+    ld      t4, 48(sp)
+    sub     t0, t4, t3
+    li      a2, PUB_CELL_BYTES
+    divu    t0, t0, a2
+    ld      a3, NodeApi_filter_slot(s4)
+    bgeu    a3, t0, 92f
+    mul     t0, a3, a2
+    add     t0, t0, t3
+    add     t0, t1, t0
+    sd      t0, 8(sp)
+    sd      a2, 16(sp)
+    ld      t0, NodeApi_member(s4)
+    seqz    t2, t0
+    sd      t2, 24(sp)
+    addi    t0, t0, -(NUMBER_OF_COLUMNS / 2 - 1)
+    seqz    t2, t0
+    sd      t2, 32(sp)
+30: ld      t0, (NodeEvent_api + 8)(s5)     # the piece from sent
+    andi    t1, t0, API_STREAM_SSZ
+    bnez    t1, 40f
+    ld      t1, NodeEvent_api(s5)           # JSON: at a blob's start , and "0x
+    bnez    t1, 32f
+    ld      t1, 24(sp)
+    beqz    t1, 32f
+    sub     t1, s8, s6
+    li      t2, 8
+    bltu    t1, t2, 89f
+    li      t1, API_STREAM_ITEMS
+    and     t1, t0, t1
+    beqz    t1, 31f
+    API_LIT api_p_comma
+31: API_LIT api_blob_open
+32: ld      a1, 8(sp)                       # the hex of the bytes from sent, as many as fit before a "
+    ld      a2, 16(sp)
+    ld      t0, NodeEvent_api(s5)
+    sub     a2, a2, t0
+    sub     t1, s8, s6
+    li      t2, 1
+    bleu    t1, t2, 89f
+    addi    t1, t1, -1
+    srli    t1, t1, 1
+    bleu    a2, t1, 321f
+    mv      a2, t1
+321: add    a1, a1, t0
+    add     t0, t0, a2
+    sd      t0, NodeEvent_api(s5)
+    li      t3, 0x39
+33: beqz    a2, 34f
+    lbu     t0, 0(a1)
+    addi    a1, a1, 1
+    srli    t1, t0, 4
+    andi    t2, t0, 15
+    addi    t1, t1, 0x30
+    bleu    t1, t3, 331f
+    addi    t1, t1, 39
+331: addi   t2, t2, 0x30
+    bleu    t2, t3, 332f
+    addi    t2, t2, 39
+332: sb     t1, 0(s6)
+    sb      t2, 1(s6)
+    addi    s6, s6, 2
+    addi    a2, a2, -1
+    j       33b
+34: ld      t0, NodeEvent_api(s5)           # the piece's end: " after a blob's last byte
+    ld      t1, 16(sp)
+    bne     t0, t1, 89f
+    ld      t1, 32(sp)
+    beqz    t1, 88f
+    API_LIT api_quote
+    j       86f
+40: ld      a1, 8(sp)                       # SSZ: the bytes from sent, as many as fit
+    ld      a2, 16(sp)
+    ld      t0, NodeEvent_api(s5)
+    sub     a2, a2, t0
+    sub     t1, s8, s6
+    bleu    a2, t1, 41f
+    mv      a2, t1
+41: add     a1, a1, t0
+    add     t0, t0, a2
+    sd      t0, NodeEvent_api(s5)
+    mv      a0, s6
+    add     s6, s6, a2
+    call    lantern_copy
+    ld      t0, NodeEvent_api(s5)
+    ld      t1, 16(sp)
+    bne     t0, t1, 89f
+    ld      t1, 32(sp)
+    beqz    t1, 88f
+86: ld      t0, (NodeEvent_api + 8)(s5)     # a blob's end
+    li      t1, API_STREAM_ITEMS
+    or      t0, t0, t1
+    sd      t0, (NodeEvent_api + 8)(s5)
+88: ld      t0, (NodeEvent_api + 8)(s5)     # the piece is done
+    li      t1, API_STREAM_ITEM_DONE
+    or      t0, t0, t1
+    sd      t0, (NodeEvent_api + 8)(s5)
+89: li      a0, 0
+    UNFRAME 64
+87: ld      t0, (NodeEvent_api + 8)(s5)     # a blob not wanted: skip it
+    li      t1, API_STREAM_ITEM_DONE | API_STREAM_BLOB_SKIP
+    or      t0, t0, t1
+    sd      t0, (NodeEvent_api + 8)(s5)
+    j       89b
+90: ld      t0, (NodeEvent_api + 8)(s5)     # the end: ]} as JSON
+    andi    t0, t0, API_STREAM_SSZ
+    bnez    t0, 91f
+    sub     t1, s8, s6
+    li      t2, 2
+    bltu    t1, t2, 89b
+    API_LIT api_v_end
+91: li      a0, 1
+    UNFRAME 64
+92: li      a0, 2
+    UNFRAME 64
+END_FUNCTION api_blob_body
 
 /*
  * The sidecar of the sidecar stream a0 from the index a1 on (node.md, NODE_EV_API, a sidecar of a

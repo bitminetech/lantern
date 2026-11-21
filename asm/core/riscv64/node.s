@@ -252,9 +252,12 @@ FUNCTION lantern_node_init
     mv      a1, s2
     li      a2, CONFIG_SIZE
     call    lantern_copy
-    LDQ     t0, s2, CONFIG_SAMPLES_PER_SLOT # the columns: of max(SAMPLES_PER_SLOT, CUSTODY_REQUIREMENT) groups
+    LDQ     t0, s2, CONFIG_SAMPLES_PER_SLOT # the columns: of max(SAMPLES_PER_SLOT, the custody group count) groups
     LDQ     t1, s2, CONFIG_CUSTODY_REQUIREMENT
-    mv      a1, t0
+    andi    t2, s5, NODE_FLAG_SUPERNODE     # a supernode: every group
+    beqz    t2, 1f
+    LDQ     t1, s2, CONFIG_NUMBER_OF_CUSTODY_GROUPS
+1:  mv      a1, t0
     bgeu    t0, t1, 2f
     mv      a1, t1
 2:  addi    a0, s3, NodeAnchor_node_id
@@ -5047,8 +5050,12 @@ LOCAL_FUNCTION node_request
     sd      t0, (L + 72)(sp)
     LDQ     t0, s1, Node_syncnets
     sb      t0, (L + 80)(sp)
-    LDQ     t0, s1, Node_config + CONFIG_CUSTODY_REQUIREMENT
-    sd      t0, (L + 56)(sp)
+    LDQ     t0, s1, Node_config + CONFIG_CUSTODY_REQUIREMENT  # the custody group count
+    ld      t1, Node_flags(s1)
+    andi    t1, t1, NODE_FLAG_SUPERNODE
+    beqz    t1, 1f
+    LDQ     t0, s1, Node_config + CONFIG_NUMBER_OF_CUSTODY_GROUPS
+1:  sd      t0, (L + 56)(sp)
     addi    a0, sp, L + 64 + 17
     addi    a1, sp, L + 56
     li      a2, 8
@@ -5995,9 +6002,13 @@ LOCAL_FUNCTION node_enr_entries
     addi    s7, s7, 56
     li      t0, FORK_FULU
     bltu    s3, t0, 8f
-    ENR_ENTRY 56, 3, 0x636763, 0            # cgc: CUSTODY_REQUIREMENT, big-endian, no leading zero byte
+    ENR_ENTRY 56, 3, 0x636763, 0            # cgc: the custody group count, big-endian, no leading zero byte
     LDQ     t1, s1, Node_config + CONFIG_CUSTODY_REQUIREMENT
-    li      t2, 0                           # n bytes: 8 - its leading zero bytes
+    ld      t2, Node_flags(s1)
+    andi    t2, t2, NODE_FLAG_SUPERNODE
+    beqz    t2, 3f
+    LDQ     t1, s1, Node_config + CONFIG_NUMBER_OF_CUSTODY_GROUPS
+3:  li      t2, 0                           # n bytes: 8 - its leading zero bytes
     mv      t3, t1
 1:  beqz    t3, 2f
     addi    t2, t2, 1

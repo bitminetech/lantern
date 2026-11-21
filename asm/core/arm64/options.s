@@ -130,28 +130,17 @@ FUNCTION lantern_app_options
     str     x10, [sp, #L]
     add     x12, x19, x10
     mov     x13, #0
-2:  cmp     x13, x11
+2:  cmp     x13, x11                        /* the name: up to = or the end */
     b.hs    3f
     ldrb    w14, [x12, x13]
     cmp     w14, #0x3d                      /* = */
-    b.eq    4f
+    b.eq    3f
     add     x13, x13, #1
     b       2b
-3:  str     x11, [sp, #(L + 8)]             /* --name value: the value is the next argument */
-    add     x28, x23, #1
-    cmp     x28, x22
-    b.hs    91f
-    add     x9, x24, x28, lsl #4
-    ldp     x26, x27, [x9]
-    add     x23, x23, #2
-    b       5f
-4:  str     x13, [sp, #(L + 8)]             /* --name=value */
-    add     x26, x10, x13
-    add     x26, x26, #1
-    sub     x27, x11, x13
-    sub     x27, x27, #1
-    add     x23, x23, #1
-5:  ADDRESS x25, app_options
+3:  str     x13, [sp, #(L + 8)]
+    mov     x26, x13                        /* x26: where = is, x27: the length of the name and value */
+    mov     x27, x11
+    ADDRESS x25, app_options
 6:  ADDRESS x9, app_options_end
     cmp     x25, x9
     b.hs    91f                             /* not an option */
@@ -160,9 +149,33 @@ FUNCTION lantern_app_options
     add     x2, x25, #24
     ldr     x3, [x25]
     bl      config_name_is
-    cbnz    x0, 7f
+    cbnz    x0, 4f
     add     x25, x25, #APP_OPTION_BYTES
     b       6b
+4:  ldr     x9, [x25, #16]
+    cmp     x9, #APP_OPTION_FLAG
+    b.ne    5f
+    cmp     x26, x27                        /* a flag: no value, 1 */
+    b.ne    90f
+    add     x23, x23, #1
+    mov     x1, #1
+    b       23f
+5:  cmp     x26, x27
+    b.ne    51f
+    add     x28, x23, #1                    /* --name value: the value is the next argument */
+    cmp     x28, x22
+    b.hs    91f
+    add     x9, x24, x28, lsl #4
+    ldp     x26, x27, [x9]
+    add     x23, x23, #2
+    b       7f
+51: ldr     x10, [sp, #L]                   /* --name=value */
+    add     x10, x10, x26
+    add     x10, x10, #1
+    sub     x27, x27, x26
+    sub     x27, x27, #1
+    mov     x26, x10
+    add     x23, x23, #1
 7:  cbz     x27, 90f                        /* an empty value */
     ldr     x9, [x25, #16]
     cmp     x9, #APP_OPTION_ENDPOINT

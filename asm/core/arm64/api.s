@@ -2902,7 +2902,11 @@ LOCAL_FUNCTION node_api_view
     str     x10, [x9, #ApiView_seq_number]
     ldr     x10, [x19, #Node_attnets]
     str     x10, [x9, #ApiView_attnets]
-    LDQ     x10, x19, Node_config + CONFIG_CUSTODY_REQUIREMENT
+    LDQ     x10, x19, Node_config + CONFIG_CUSTODY_REQUIREMENT  /* the custody group count */
+    LDQ     x11, x19, Node_config + CONFIG_NUMBER_OF_CUSTODY_GROUPS
+    ldr     x12, [x19, #Node_flags]
+    tst     x12, #NODE_FLAG_SUPERNODE
+    csel    x10, x11, x10, ne
     str     x10, [x9, #ApiView_custody_group_count]
     add     x0, x9, #ApiView_peer_id        /* the identity's texts */
     ADDQ    x1, x19, Node_api_identity
@@ -3203,6 +3207,8 @@ LOCAL_FUNCTION node_api_event
     cmp     x3, #API_OP_GET_BLOB_SIDECARS
     b.eq    65f
     cmp     x3, #API_OP_GET_DEBUG_DATA_COLUMN_SIDECARS
+    b.eq    65f
+    cmp     x3, #API_OP_GET_BLOBS
     b.eq    65f
     cmp     x3, #API_OP_GET_BLOCK_REWARDS
     b.eq    547f
@@ -3676,6 +3682,8 @@ LOCAL_FUNCTION node_api_event
     b.eq    54f
     cmp     x3, #API_OP_GET_DEBUG_DATA_COLUMN_SIDECARS
     b.eq    54f
+    cmp     x3, #API_OP_GET_BLOBS
+    b.eq    55f
 67: ldr     x0, [x25, #ApiRoute_op]         /* a work */
     mov     x1, x27
     mov     x2, x21
@@ -3689,6 +3697,14 @@ LOCAL_FUNCTION node_api_event
     mov     x2, x21
     mov     x3, x26
     bl      node_api_sidecar_stream
+    cbz     x0, 90f
+    mov     x2, x0
+    b       80f
+55: mov     x0, x27                         /* getBlobs: the blob stream of the block */
+    mov     x1, x25
+    mov     x2, x21
+    mov     x3, x26
+    bl      node_api_blob_stream
     cbz     x0, 90f
     mov     x2, x0
     b       80f
@@ -7627,7 +7643,11 @@ LOCAL_FUNCTION node_api_chunk_done
     add     x1, x1, #1
     bl      node_headers_next
     b       3f
-2:  cmp     x9, #API_OP_GET_BLOB_SIDECARS   /* a sidecar stream: its sidecar from member + 1 on */
+2:  cmp     x9, #API_OP_GET_BLOBS          /* the blob stream: its next sidecar or cell */
+    b.ne    21f
+    bl      node_blob_advance
+    b       3f
+21: cmp     x9, #API_OP_GET_BLOB_SIDECARS   /* a sidecar stream: its sidecar from member + 1 on */
     b.eq    4f
     cmp     x9, #API_OP_GET_DEBUG_DATA_COLUMN_SIDECARS
     b.ne    5f
@@ -7857,7 +7877,11 @@ LOCAL_FUNCTION api_stream_json
     b.ne    32f
     bl      api_headers_json
     UNFRAME 0
-32: cmp     x9, #API_OP_GET_BLOB_SIDECARS
+32: cmp     x9, #API_OP_GET_BLOBS
+    b.ne    35f
+    bl      api_blob_body
+    UNFRAME 0
+35: cmp     x9, #API_OP_GET_BLOB_SIDECARS
     b.eq    33f
     cmp     x9, #API_OP_GET_DEBUG_DATA_COLUMN_SIDECARS
     b.ne    34f
@@ -7993,8 +8017,10 @@ LOCAL_FUNCTION node_api_chunk_run
     b.eq    2f
     cmp     x10, #API_OP_PRODUCE_SYNC_COMMITTEE_CONTRIBUTION
     b.eq    2f
-    mov     x9, #6                          /* a sidecar stream (6): data 0 at its end */
+    mov     x9, #6                          /* a sidecar stream (6), and the blob stream: data 0 at its end */
     cmp     x10, #API_OP_GET_BLOB_SIDECARS
+    b.eq    2f
+    cmp     x10, #API_OP_GET_BLOBS
     b.eq    2f
     cmp     x10, #API_OP_GET_DEBUG_DATA_COLUMN_SIDECARS
     b.eq    2f
@@ -8423,6 +8449,9 @@ LOCAL_FUNCTION node_api_chunk_run
     b.ne    393f
     ldr     x10, [x23, #(NodeEvent_api + 8)]
     tbnz    x10, #2, 36f
+    ldr     x10, [x22, #NodeApi_op]          /* getBlobs: as the validator streams */
+    cmp     x10, #API_OP_GET_BLOBS
+    b.eq    37f
     b       392f
 393: cmp    x9, #4
     b.eq    392f
@@ -9188,6 +9217,402 @@ LOCAL_FUNCTION node_api_headers_stream
     bl      node_api_chunk_work
     UNFRAME 48
 END_FUNCTION node_api_headers_stream
+
+/*
+ * L1: x0 = the data of the sidecar of index x2 of the block of the root at x0 and the slot x1, as a
+ * sidecar stream finds it (node.md): the NODE_BLOB_VALID entry's bytes, else with NODE_FLAG_DB the
+ * NODE_DB_REF of the Db's record; 0 with none. Locals: the slot, the index.
+ */
+LOCAL_FUNCTION node_sidecar_of
+    FRAME 16
+    stp     x1, x2, [sp, #16]
+    mov     x1, x2
+    bl      node_blob_held
+    cbz     x0, 1f
+    ldr     x0, [x0, #NodeBlob_data_id]
+    UNFRAME 16
+1:  ldr     x9, [x19, #Node_flags]
+    tst     x9, #NODE_FLAG_DB
+    b.eq    9f
+    ldp     x0, x1, [sp, #16]
+    bl      node_db_sidecar
+    UNFRAME 16
+9:  mov     x0, #0
+    UNFRAME 16
+END_FUNCTION node_sidecar_of
+
+/*
+ * L1: (connection x0, route x1, flags x2, view x3) -> x0: the blob stream of the block of the
+ * view (node.md, NODE_EV_API, the blob stream): 0, or 404 for a fulu block of which the node holds
+ * a column sidecar but not one of each of the first NUMBER_OF_COLUMNS / 2 columns. Locals: the
+ * connection, the route, the flags, the view, the fork, the entry's index and address, a column,
+ * the count of the first half's columns held, 1 with any held, a ByteList head (24).
+ */
+LOCAL_FUNCTION node_api_blob_stream
+    FRAME 112
+    stp     x0, x1, [sp, #16]
+    stp     x2, x3, [sp, #32]
+    ldr     x0, [x3, #ApiView_head_slot]
+    add     x1, x19, #Node_config
+    bl      node_fork
+    str     x0, [sp, #48]
+    stp     xzr, xzr, [sp, #80]
+    cmp     x0, #FORK_FULU
+    b.lo    2f
+    str     xzr, [sp, #72]
+1:  ldr     x2, [sp, #72]                   /* fulu: the columns the node holds */
+    cmp     x2, #NUMBER_OF_COLUMNS
+    b.hs    11f
+    ldr     x3, [sp, #40]
+    add     x0, x3, #ApiView_head_root
+    ldr     x1, [x3, #ApiView_head_slot]
+    bl      node_sidecar_of
+    ldr     x2, [sp, #72]
+    add     x9, x2, #1
+    str     x9, [sp, #72]
+    cbz     x0, 1b
+    mov     x9, #1
+    str     x9, [sp, #88]
+    cmp     x2, #(NUMBER_OF_COLUMNS / 2)
+    b.hs    1b
+    ldr     x9, [sp, #80]
+    add     x9, x9, #1
+    str     x9, [sp, #80]
+    b       1b
+11: ldp     x9, x10, [sp, #80]
+    cmp     x9, #(NUMBER_OF_COLUMNS / 2)
+    b.eq    2f
+    cbnz    x10, 8f                         /* some, but not each of the first half: 404 */
+2:  bl      node_api_new
+    stp     x0, x1, [sp, #56]
+    mov     x0, x1
+    mov     x1, #NodeApi__mem
+    bl      lantern_zero
+    ldr     x1, [sp, #64]
+    ldp     x9, x10, [sp, #16]
+    str     x9, [x1, #NodeApi_connection]
+    ldr     x11, [x10, #ApiRoute_op]
+    str     x11, [x1, #NodeApi_op]
+    ldr     x9, [sp, #32]                   /* the answer flags, SSZ, and the block's values */
+    ldr     x11, [x10, #ApiRoute_response]
+    cmp     x11, #API_TYPE_SSZ
+    orr     x11, x9, #API_STREAM_SSZ
+    csel    x9, x11, x9, eq
+    ldr     x12, [sp, #40]
+    ldr     x11, [x12, #ApiView_is_optimistic]
+    cbz     x11, 3f
+    orr     x9, x9, #API_STREAM_OPTIMISTIC
+3:  LDQ     x11, x12, ApiView_head_finalized
+    cbz     x11, 4f
+    orr     x9, x9, #API_STREAM_FINALIZED
+4:  str     x9, [x1, #NodeApi_flags]
+    ldr     x9, [sp, #48]
+    str     x9, [x1, #NodeApi_fork]
+    ldr     x9, [x12, #ApiView_head_slot]
+    str     x9, [x1, #NodeApi_slot]
+    add     x0, x1, #NodeApi_root
+    add     x1, x12, #ApiView_head_root
+    bl      lantern_copy_root
+    ldr     x10, [sp, #24]                  /* the versioned hashes: a BYTES_PUT of them, as the entry's state */
+    ldr     x9, [x10, #ApiRoute_present]
+    tst     x9, #(1 << API_PARAM_VERSIONED_HASHES)
+    b.eq    5f
+    ldp     x11, x12, [x10, #ApiRoute_list]
+    add     x11, x10, x11
+    lsl     x12, x12, #5
+    add     x13, sp, #96                    /* a ByteList head whose offset reaches the items */
+    sub     x14, x11, x13
+    stp     x12, x14, [x13]
+    str     x12, [x13, #16]
+    mov     x0, x13
+    bl      node_put
+    ldr     x1, [sp, #64]
+    str     x0, [x1, #NodeApi_state]
+    ldr     x9, [x1, #NodeApi_flags]
+    orr     x9, x9, #API_STREAM_OWN_STATE
+    str     x9, [x1, #NodeApi_flags]
+5:  ldr     x1, [sp, #64]                   /* the first item */
+    ldr     x9, [sp, #48]
+    cmp     x9, #FORK_DENEB
+    b.lo    7f
+    cmp     x9, #FORK_FULU
+    b.hs    6f
+    mov     x9, #-1                         /* deneb and electra: every sidecar */
+    str     x9, [x1, #NodeApi_filter_slot]
+    str     x9, [x1, #NodeApi_filter_index]
+    mov     x0, x1
+    mov     x1, #0
+    bl      node_sidecar_next
+    b       7f
+6:  ldr     x9, [sp, #80]                   /* fulu: blob 0 and column 0 with the first half; else none */
+    cmp     x9, #(NUMBER_OF_COLUMNS / 2)
+    b.ne    7f
+    add     x0, x1, #NodeApi_root
+    ldr     x1, [x1, #NodeApi_slot]
+    mov     x2, #0
+    bl      node_sidecar_of
+    ldr     x1, [sp, #64]
+    str     x0, [x1, #NodeApi_data]
+7:  ldp     x0, x1, [sp, #56]
+    bl      node_api_chunk_work
+    mov     x0, #0
+    UNFRAME 112
+8:  mov     x0, #404
+    UNFRAME 112
+END_FUNCTION node_api_blob_stream
+
+/*
+ * L1: the blob stream x0 after a chunk that ended its item (node.md, NODE_EV_API, the blob stream):
+ * deneb and electra the sidecar from member + 1 on; fulu the next cell, of blob filter_slot + 1
+ * and column 0 after API_STREAM_BLOB_SKIP or the first half's last column, else of column member
+ * + 1, with sent 0. API_STREAM_BLOB_SKIP clears. x21 the entry.
+ */
+LOCAL_FUNCTION node_blob_advance
+    ENTER 0
+    mov     x21, x0
+    ldr     x9, [x21, #NodeApi_flags]
+    and     x10, x9, #~API_STREAM_BLOB_SKIP
+    str     x10, [x21, #NodeApi_flags]
+    ldr     x10, [x21, #NodeApi_fork]
+    cmp     x10, #FORK_FULU
+    b.hs    1f
+    ldr     x1, [x21, #NodeApi_member]
+    add     x1, x1, #1
+    bl      node_sidecar_next
+    LEAVE 0
+1:  ldr     x10, [x21, #NodeApi_member]
+    ldr     x11, [x21, #NodeApi_filter_slot]
+    add     x10, x10, #1
+    tst     x9, #API_STREAM_BLOB_SKIP
+    b.ne    2f
+    cmp     x10, #(NUMBER_OF_COLUMNS / 2)
+    b.lo    3f
+2:  add     x11, x11, #1
+    mov     x10, #0
+3:  str     x10, [x21, #NodeApi_member]
+    str     x11, [x21, #NodeApi_filter_slot]
+    str     xzr, [x21, #NodeApi_sent]
+    add     x0, x21, #NodeApi_root
+    ldr     x1, [x21, #NodeApi_slot]
+    mov     x2, x10
+    bl      node_sidecar_of
+    str     x0, [x21, #NodeApi_data]
+    LEAVE 0
+END_FUNCTION node_blob_advance
+
+/*
+ * L1: x0 = 1 when kzg_commitment_to_versioned_hash of the 48-byte commitment at x0 (deneb
+ * beacon-chain.md: VERSIONED_HASH_VERSION_KZG, then the last 31 bytes of its sha256) is one of the
+ * Root items of the ByteList x20, else 0. Locals: a ByteList of the commitment (72), the hash (32).
+ */
+LOCAL_FUNCTION api_blob_wanted
+    FRAME 112
+    add     x9, sp, #16
+    mov     x10, #72
+    mov     x11, #24
+    stp     x10, x11, [x9]
+    mov     x10, #48
+    str     x10, [x9, #16]
+    mov     x1, x0
+    add     x0, sp, #40
+    mov     x2, #48
+    bl      lantern_copy
+    add     x0, sp, #16
+    add     x1, sp, #88
+    CALL_GLOBAL crypto_sha256
+    mov     w9, #VERSIONED_HASH_VERSION_KZG
+    strb    w9, [sp, #88]
+    ldr     x9, [x20, #8]                   /* the items */
+    add     x10, x20, x9
+    ldr     x11, [x20, #16]
+    lsr     x11, x11, #5
+1:  cbz     x11, 8f
+    ldp     x12, x13, [x10]
+    ldp     x14, x15, [sp, #88]
+    cmp     x12, x14
+    ccmp    x13, x15, #0, eq
+    b.ne    2f
+    ldp     x12, x13, [x10, #16]
+    ldp     x14, x15, [sp, #104]
+    cmp     x12, x14
+    ccmp    x13, x15, #0, eq
+    b.ne    2f
+    mov     x0, #1
+    UNFRAME 112
+2:  add     x10, x10, #32
+    sub     x11, x11, #1
+    b       1b
+8:  mov     x0, #0
+    UNFRAME 112
+END_FUNCTION api_blob_wanted
+
+/*
+ * L1: the blob stream's body, as api_stream_json (node.md, NODE_WORK_API_CHUNK, the blob stream):
+ * with the sidecar x21 and the versioned hashes x20 (or 0), the bytes of its blob, or of its cell,
+ * from sent (NodeEvent_api), as many as fit, as JSON in lower case hex; with x21 = 0, or a blob past
+ * the last, ]} as JSON. x0 = 1 when the answer is whole, 0 when more is to come, 2 for bytes that
+ * are no encoding. Locals: sp+16 the piece's bytes, sp+24 their count, sp+32 1 at a blob's first
+ * piece, sp+40 1 at its last.
+ */
+LOCAL_FUNCTION api_blob_body
+    FRAME 32
+    cbz     x21, 90f
+    ldr     x9, [x21, #8]
+    add     x10, x21, x9                    /* the sidecar's SSZ bytes, x11 of them */
+    ldr     x11, [x21, #16]
+    ldr     x12, [x22, #NodeApi_fork]
+    cmp     x12, #FORK_FULU
+    b.hs    20f
+    MOVQ    x12, (8 + PUB_BLOB_BYTES + 48)  /* deneb and electra: index, blob, kzg_commitment, ... */
+    cmp     x11, x12
+    b.lo    92f
+    add     x9, x10, #8
+    MOVQ    x13, PUB_BLOB_BYTES
+    stp     x9, x13, [sp, #16]
+    mov     x9, #1
+    stp     x9, x9, [sp, #32]
+    ldr     x9, [x23, #NodeEvent_api]       /* at the blob's start, with hashes: its versioned hash */
+    cbnz    x9, 30f
+    cbz     x20, 30f
+    MOVQ    x9, (8 + PUB_BLOB_BYTES)
+    add     x0, x10, x9
+    bl      api_blob_wanted
+    cbnz    x0, 30f
+    b       88f
+20: cmp     x11, #PUB_COLUMN_FIXED          /* fulu: a DataColumnSidecar; the offsets of column, kzg_commitments, kzg_proofs */
+    b.lo    92f
+    ldr     w12, [x10, #8]
+    ldr     w13, [x10, #12]
+    ldr     w14, [x10, #16]
+    cmp     x12, x13
+    b.hi    92f
+    cmp     x13, x14
+    b.hi    92f
+    cmp     x14, x11
+    b.hi    92f
+    ldr     x7, [x22, #NodeApi_filter_slot] /* b */
+    ldr     x6, [x22, #NodeApi_member]      /* c */
+    ldr     x5, [x23, #NodeEvent_api]
+    orr     x4, x6, x5
+    cbnz    x4, 22f
+    sub     x9, x14, x13                    /* at the blob's start: past the last commitment, the end */
+    mov     x8, #48
+    udiv    x9, x9, x8
+    cmp     x7, x9
+    b.hs    90f
+    cbz     x20, 22f
+    madd    x9, x7, x8, x13                 /* with hashes: the versioned hash of commitment b */
+    add     x0, x10, x9
+    bl      api_blob_wanted
+    cbz     x0, 87f
+    ldr     x9, [x21, #8]
+    add     x10, x21, x9
+    ldr     w12, [x10, #8]
+    ldr     w13, [x10, #12]
+    ldr     x7, [x22, #NodeApi_filter_slot]
+    ldr     x6, [x22, #NodeApi_member]
+22: sub     x15, x13, x12                   /* cell b of the column */
+    MOVQ    x8, PUB_CELL_BYTES
+    udiv    x15, x15, x8
+    cmp     x7, x15
+    b.hs    92f
+    madd    x9, x7, x8, x12
+    add     x9, x10, x9
+    stp     x9, x8, [sp, #16]
+    cmp     x6, #0
+    cset    x9, eq
+    cmp     x6, #(NUMBER_OF_COLUMNS / 2 - 1)
+    cset    x13, eq
+    stp     x9, x13, [sp, #32]
+30: ldr     x9, [x23, #NodeEvent_api]       /* the piece from sent */
+    ldr     x10, [x23, #(NodeEvent_api + 8)]
+    tbnz    x10, #2, 40f
+    cbnz    x9, 32f                         /* JSON: at a blob's start , and "0x */
+    ldr     x11, [sp, #32]
+    cbz     x11, 32f
+    sub     x12, x26, x24
+    cmp     x12, #8
+    b.lo    89f
+    tbz     x10, #13, 31f
+    API_LIT api_p_comma
+31: API_LIT api_blob_open
+32: ldp     x1, x2, [sp, #16]               /* the hex of the bytes from sent, as many as fit before a " */
+    ldr     x9, [x23, #NodeEvent_api]
+    sub     x2, x2, x9
+    sub     x12, x26, x24
+    subs    x12, x12, #1
+    b.ls    89f
+    lsr     x12, x12, #1
+    cmp     x2, x12
+    csel    x2, x12, x2, hi
+    add     x1, x1, x9
+    add     x9, x9, x2
+    str     x9, [x23, #NodeEvent_api]
+33: cbz     x2, 34f
+    ldrb    w9, [x1], #1
+    lsr     w10, w9, #4
+    and     w11, w9, #15
+    add     w10, w10, #0x30
+    cmp     w10, #0x39
+    b.ls    331f
+    add     w10, w10, #39
+331: add    w11, w11, #0x30
+    cmp     w11, #0x39
+    b.ls    332f
+    add     w11, w11, #39
+332: strb   w10, [x24], #1
+    strb    w11, [x24], #1
+    sub     x2, x2, #1
+    b       33b
+34: ldr     x9, [x23, #NodeEvent_api]       /* the piece's end: " after a blob's last byte */
+    ldr     x10, [sp, #24]
+    cmp     x9, x10
+    b.ne    89f
+    ldr     x11, [sp, #40]
+    cbz     x11, 88f
+    API_LIT api_quote
+    b       86f
+40: ldp     x1, x2, [sp, #16]               /* SSZ: the bytes from sent, as many as fit */
+    sub     x2, x2, x9
+    sub     x12, x26, x24
+    cmp     x2, x12
+    csel    x2, x12, x2, hi
+    add     x1, x1, x9
+    add     x9, x9, x2
+    str     x9, [x23, #NodeEvent_api]
+    mov     x0, x24
+    add     x24, x24, x2
+    bl      lantern_copy
+    ldr     x9, [x23, #NodeEvent_api]
+    ldr     x10, [sp, #24]
+    cmp     x9, x10
+    b.ne    89f
+    ldr     x11, [sp, #40]
+    cbz     x11, 88f
+86: ldr     x9, [x23, #(NodeEvent_api + 8)] /* a blob's end */
+    orr     x9, x9, #API_STREAM_ITEMS
+    str     x9, [x23, #(NodeEvent_api + 8)]
+88: ldr     x9, [x23, #(NodeEvent_api + 8)] /* the piece is done */
+    orr     x9, x9, #API_STREAM_ITEM_DONE
+    str     x9, [x23, #(NodeEvent_api + 8)]
+89: mov     x0, #0
+    UNFRAME 32
+87: ldr     x9, [x23, #(NodeEvent_api + 8)] /* a blob not wanted: skip it */
+    orr     x9, x9, #API_STREAM_ITEM_DONE
+    orr     x9, x9, #API_STREAM_BLOB_SKIP
+    str     x9, [x23, #(NodeEvent_api + 8)]
+    b       89b
+90: ldr     x9, [x23, #(NodeEvent_api + 8)] /* the end: ]} as JSON */
+    tbnz    x9, #2, 91f
+    sub     x12, x26, x24
+    cmp     x12, #2
+    b.lo    89b
+    API_LIT api_v_end
+91: mov     x0, #1
+    UNFRAME 32
+92: mov     x0, #2
+    UNFRAME 32
+END_FUNCTION api_blob_body
 
 /*
  * L1: the sidecar of the sidecar stream x0 from the index x1 on (node.md, NODE_EV_API, a sidecar of a
