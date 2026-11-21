@@ -680,3 +680,74 @@ SPEC_FUNCTION lc_object
     LEAVE 0
 .endif
 SPEC_END lc_object
+
+# (block, scratch, out) -> status: the LightClientHeader of a BeaconBlock value (light-client.md): its
+# SSZ bytes as the message of a SignedBeaconBlock with a zero signature at the end of scratch, then
+# lantern_block_to_light_client_header. rbx block, rbp scratch, r12 out, r13 the scratch's size on
+# entry, r14 the SignedBeaconBlock ByteList, r15 the block's bytes. Locals: L the serialized size.
+SPEC_FUNCTION lc_anchor_header
+    ENTER 16
+    mov     %rdi, %rbx
+    mov     %rsi, %rbp
+    mov     %rdx, %r12
+    mov     (%rbp), %r13
+    ADDRESS %rdi, lantern_type_BeaconBlock
+    mov     %rbx, %rsi
+    mov     %rbp, %rdx
+    lea     L(%rsp), %rcx
+    CALL_GLOBAL ssz_serialize_size
+    mov     %r13, (%rbp)
+    cmp     $SSZ_BUFFER_TOO_SMALL, %rax
+    je      98f
+    test    %rax, %rax
+    jnz     96f
+    mov     L(%rsp), %rax                   # the SignedBeaconBlock at the end of scratch: 104 bytes, then the serialized ByteList
+    add     $(104 + 7), %rax
+    and     $-8, %rax
+    mov     %r13, %rcx
+    sub     %rax, %rcx
+    jb      98f
+    cmp     $4096, %rcx
+    jb      98f
+    lea     (%rbp,%rcx), %r14
+    mov     %rcx, (%rbp)
+    lea     104(%r14), %rcx
+    mov     L(%rsp), %rax
+    mov     %rax, (%rcx)
+    ADDRESS %rdi, lantern_type_BeaconBlock
+    mov     %rbx, %rsi
+    mov     %rbp, %rdx
+    CALL_GLOBAL ssz_serialize
+    test    %rax, %rax
+    jnz     97f
+    mov     (104 + 16)(%r14), %r15          # its bytes down 4, after the 100 of the fixed part
+    lea     124(%r14), %rdi
+    lea     128(%r14), %rsi
+    mov     %r15, %rdx
+    call    lantern_copy
+    lea     28(%r14), %rdi
+    mov     $96, %esi
+    call    lantern_zero
+    movl    $100, 24(%r14)
+    lea     (24 + 100)(%r15), %rax
+    mov     %rax, (%r14)
+    movq    $24, 8(%r14)
+    lea     100(%r15), %rax
+    mov     %rax, 16(%r14)
+    mov     %r14, %rdi
+    mov     %rbp, %rsi
+    mov     %r12, %rdx
+    call    lantern_block_to_light_client_header
+    mov     %r13, (%rbp)
+    LEAVE 16
+96: mov     $LANTERN_INVALID_ENCODING, %eax
+    LEAVE 16
+97: mov     %r13, (%rbp)
+    cmp     $SSZ_BUFFER_TOO_SMALL, %rax
+    je      98f
+    mov     $LANTERN_INVALID_ENCODING, %eax
+    LEAVE 16
+98: mov     %r13, (%rbp)
+    mov     $LANTERN_BUFFER_TOO_SMALL, %eax
+    LEAVE 16
+SPEC_END lc_anchor_header

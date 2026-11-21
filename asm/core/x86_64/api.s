@@ -1455,7 +1455,34 @@ LOCAL_FUNCTION api_body
     call    api_code_text
     API_LIT api_e_end
     UNFRAME 16
-1:  cmp     $API_OP_SUBMIT_POOL_BLS_TO_EXECUTION_CHANGE, %rsi
+1:  cmp     $API_OP_GET_LIGHT_CLIENT_UPDATES_BY_RANGE, %rsi
+    jne     102f
+    call    api_lc_updates_body
+    UNFRAME 16
+102: lea    -API_OP_GET_LIGHT_CLIENT_BOOTSTRAP(%rsi), %rax   # the light client reads: SSZ, or {"version":…,"data":…}
+    cmp     $(API_OP_GET_LIGHT_CLIENT_OPTIMISTIC_UPDATE - API_OP_GET_LIGHT_CLIENT_BOOTSTRAP), %rax
+    ja      10f
+    cmpq    $0, ApiView_lc_json(%rbp)
+    jne     101f
+    mov     ApiView_lc_bytes(%rbp), %rax
+    mov     8(%rax), %rdi
+    add     %rax, %rdi
+    mov     16(%rax), %rsi
+    call    api_put
+    UNFRAME 16
+101: API_LIT api_j_version
+    mov     ApiView_fork(%rbp), %rdi
+    call    api_fork_name
+    API_LIT api_g_data
+    mov     ApiView_lc_json(%rbp), %rax
+    mov     8(%rax), %rdi
+    add     %rax, %rdi
+    mov     16(%rax), %rsi
+    call    api_put
+    API_LIT api_end1
+    UNFRAME 16
+10: mov     8(%rsp), %rsi
+    cmp     $API_OP_SUBMIT_POOL_BLS_TO_EXECUTION_CHANGE, %rsi
     jne     11f
     # {"code":400,"message":"BAD_REQUEST","failures":[…]}: rbp the event of the work
     API_LIT api_e_code
@@ -3111,6 +3138,9 @@ LOCAL_FUNCTION node_api_event
     cmpq    $10, HttpRequest_version(%r13)
     sete    %al
     lea     (%r12,%rax,2), %r12
+    lea     -API_OP_GET_LIGHT_CLIENT_BOOTSTRAP(%rcx), %rax  # the light client reads: of the light client store
+    cmp     $(API_OP_GET_LIGHT_CLIENT_OPTIMISTIC_UPDATE - API_OP_GET_LIGHT_CLIENT_BOOTSTRAP), %rax
+    jbe     549f
     cmp     $API_OP_GET_BLOCK_ROOT, %rcx
     je      65f
     cmp     $API_OP_GET_BLOCK_HEADER, %rcx
@@ -3672,6 +3702,14 @@ LOCAL_FUNCTION node_api_event
     test    %rax, %rax
     jnz     80f
     jmp     90f
+549: mov    S7(%rsp), %rdi                  # the light client reads: a work
+    mov     S9(%rsp), %rsi
+    mov     %r12, %rdx
+    call    node_api_lc
+    mov     %rax, %rdx
+    test    %rax, %rax
+    jnz     80f
+    jmp     90f
 54: mov     S9(%rsp), %rdi                  # a sidecar stream of the block
     mov     S7(%rsp), %rsi
     mov     %r12, %rdx
@@ -3939,6 +3977,10 @@ LOCAL_FUNCTION node_api_done
     je      3f
     cmp     $API_OP_GET_LIVENESS, %eax
     je      3f
+    cmp     $API_OP_GET_LIGHT_CLIENT_BOOTSTRAP, %eax
+    je      3f
+    cmp     $API_OP_GET_LIGHT_CLIENT_UPDATES_BY_RANGE, %eax
+    je      3f
     cmp     $API_OP_GET_ATTESTER_DUTIES, %eax
     jne     2f
 3:  mov     NodeAction_data(%r12), %rsi
@@ -4042,6 +4084,9 @@ LOCAL_FUNCTION node_api_run
     jmp     2f
 1:  cmp     $API_OP_GET_SPEC, %eax          # getSpec, getDebugChainHeadsV2, getDebugForkChoice: no state
     je      2f
+    lea     -API_OP_GET_LIGHT_CLIENT_BOOTSTRAP(%rax), %rdx  # the light client reads: the light client store
+    cmp     $(API_OP_GET_LIGHT_CLIENT_OPTIMISTIC_UPDATE - API_OP_GET_LIGHT_CLIENT_BOOTSTRAP), %rdx
+    jbe     2f
     cmp     $API_OP_GET_DEBUG_CHAIN_HEADS_V2, %eax
     je      2f
     cmp     $API_OP_GET_DEBUG_FORK_CHOICE, %eax
@@ -4102,7 +4147,24 @@ LOCAL_FUNCTION node_api_run
     movq    $0, ApiView_status(%rdi)
     cmpq    $API_OP_GET_BLOCK_HEADER, S9(%rsp)
     je      3f
-    cmpq    $API_OP_GET_SPEC, S9(%rsp)
+    mov     S9(%rsp), %rcx                  # rax: the work's arg, below
+    sub     $API_OP_GET_LIGHT_CLIENT_BOOTSTRAP, %rcx
+    cmp     $(API_OP_GET_LIGHT_CLIENT_OPTIMISTIC_UPDATE - API_OP_GET_LIGHT_CLIENT_BOOTSTRAP), %rcx
+    ja      30f
+    mov     (L + 48)(%rsp), %rdi            # the light client reads: the object, and its JSON
+    mov     %r12, %rsi
+    mov     S7(%rsp), %rdx
+    mov     %r14, %rcx
+    mov     S8(%rsp), %r8
+    call    node_api_lc_read
+    test    %rax, %rax
+    jz      5f
+    cmp     $LANTERN_BUFFER_TOO_SMALL, %rax
+    je      71f
+    mov     L(%rsp), %rcx
+    mov     %rcx, (%r14)
+    LEAVE 64
+30: cmpq    $API_OP_GET_SPEC, S9(%rsp)
     je      5f
     cmpq    $API_OP_GET_DEBUG_CHAIN_HEADS_V2, S9(%rsp)
     je      29f
@@ -4497,9 +4559,15 @@ LOCAL_FUNCTION node_api_run
     mov     $API_BODY_ERROR, %ecx
     and     $~API_R_SSZ, %r8
     jmp     54f
-53: cmpq    $API_OP_GET_PROPOSER_LOOKAHEAD, S9(%rsp)    # Eth-Consensus-Version of getProposerLookahead
-    jne     54f
-    or      $API_R_VERSION, %r8
+53: cmpq    $API_OP_GET_PROPOSER_LOOKAHEAD, S9(%rsp)    # Eth-Consensus-Version of getProposerLookahead and the light client reads
+    je      531f
+    mov     S9(%rsp), %rax
+    sub     $API_OP_GET_LIGHT_CLIENT_BOOTSTRAP, %rax
+    cmp     $(API_OP_GET_LIGHT_CLIENT_OPTIMISTIC_UPDATE - API_OP_GET_LIGHT_CLIENT_BOOTSTRAP), %rax
+    ja      54f
+    cmpq    $API_OP_GET_LIGHT_CLIENT_UPDATES_BY_RANGE, S9(%rsp)  # no version: of each item
+    je      54f
+531: or     $API_R_VERSION, %r8
 54: call    api_respond
     test    %rax, %rax
     jnz     71f
@@ -6362,6 +6430,7 @@ END_FUNCTION node_api_sent
  */
 LOCAL_FUNCTION node_api_event_run
     ENTER 32
+    mov     %r11, (L + 24)(%rsp)            # state_c: the light client store
     mov     %rdi, %rbx
     mov     %rsi, %r12
     mov     %rdx, %r13
@@ -6511,7 +6580,31 @@ LOCAL_FUNCTION node_api_event_run
     cmpq    $0, (L + 8)(%rsp)
     jne     41f
     jmp     5b
-10: mov     S9(%rsp), %rax                  # an operation topic: the JSON of its bytes, lantern_node_json of the fork in arg
+10: mov     S9(%rsp), %rax                  # the light client topics: of the store's latest update
+    cmp     $API_TOPIC_LIGHT_CLIENT_FINALITY_UPDATE, %rax
+    je      100f
+    cmp     $API_TOPIC_LIGHT_CLIENT_OPTIMISTIC_UPDATE, %rax
+    jne     101f
+100: mov    (L + 24)(%rsp), %rdx
+    test    %rdx, %rdx
+    jz      8f
+    mov     S10(%rsp), %rax                 # the text, in the event
+    sub     $NodeEvent_chunk, %rax
+    and     $-8, %rax
+    cmp     $64, %rax
+    jb      71f
+    mov     %rax, NodeEvent_chunk(%r15)
+    lea     NodeEvent_chunk(%r15), %rdi
+    mov     S9(%rsp), %rsi
+    mov     %r14, %rcx
+    call    api_lc_event_text
+    cmp     $LANTERN_BUFFER_TOO_SMALL, %rax
+    je      71f
+    test    %rax, %rax
+    jz      55b
+    mov     %rax, NodeEvent_result(%r15)
+    jmp     9f
+101: mov    S9(%rsp), %rax                  # an operation topic: the JSON of its bytes, lantern_node_json of the fork in arg
     mov     $NODE_JSON_EXIT, %edx
     cmp     $API_TOPIC_VOLUNTARY_EXIT, %rax
     je      11f
@@ -7490,6 +7583,14 @@ LOCAL_FUNCTION node_api_head_events
     cmp     $-1, %rax
     je      5f
     mov     %rdx, %r12
+    mov     $NODE_WORK_LC_HEAD, %edi        # the light client data first
+    xor     %esi, %esi
+    xor     %edx, %edx
+    xor     %ecx, %ecx
+    xor     %r8d, %r8d
+    xor     %r9d, %r9d
+    call    node_work
+    movq    $NODE_LC_ID, NodeAction_state_c(%rax)
     mov     NodeBlock_slot(%r12), %rax      # epoch_transition, execution_optimistic
     xor     %edx, %edx
     mov     $SLOTS_PER_EPOCH, %ecx

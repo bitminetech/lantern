@@ -38,4 +38,5 @@
 .include "jsonrpc.s"
 .include "node.s"
 .include "lcstore.s"
+.include "lcnode.s"
 .include "db.s"

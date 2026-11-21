@@ -35,6 +35,14 @@ reqresp_name_10:
     .ascii  "data_column_sidecars_by_root"
 reqresp_name_11:
     .ascii  "beacon_blocks_by_head"
+reqresp_name_12:
+    .ascii  "light_client_bootstrap"
+reqresp_name_13:
+    .ascii  "light_client_updates_by_range"
+reqresp_name_14:
+    .ascii  "light_client_finality_update"
+reqresp_name_15:
+    .ascii  "light_client_optimistic_update"
 reqresp_name_end:
     .p2align 3
 reqresp_names:
@@ -49,7 +57,11 @@ reqresp_names:
     .quad   reqresp_name_9 - reqresp_name_bytes, 29 + 256 * 0x2
     .quad   reqresp_name_10 - reqresp_name_bytes, 28 + 256 * 0x2
     .quad   reqresp_name_11 - reqresp_name_bytes, 21 + 256 * 0x2
-.if (reqresp_name_2 - reqresp_name_1 != 6) || (reqresp_name_3 - reqresp_name_2 != 7) || (reqresp_name_4 - reqresp_name_3 != 22) || (reqresp_name_5 - reqresp_name_4 != 21) || (reqresp_name_6 - reqresp_name_5 != 4) || (reqresp_name_7 - reqresp_name_6 != 8) || (reqresp_name_8 - reqresp_name_7 != 22) || (reqresp_name_9 - reqresp_name_8 != 21) || (reqresp_name_10 - reqresp_name_9 != 29) || (reqresp_name_11 - reqresp_name_10 != 28) || (reqresp_name_end - reqresp_name_11 != 21) || (REQRESP_METHODS != 11)
+    .quad   reqresp_name_12 - reqresp_name_bytes, 22 + 256 * 0x2
+    .quad   reqresp_name_13 - reqresp_name_bytes, 29 + 256 * 0x2
+    .quad   reqresp_name_14 - reqresp_name_bytes, 28 + 256 * 0x2
+    .quad   reqresp_name_15 - reqresp_name_bytes, 30 + 256 * 0x2
+.if (reqresp_name_2 - reqresp_name_1 != 6) || (reqresp_name_3 - reqresp_name_2 != 7) || (reqresp_name_4 - reqresp_name_3 != 22) || (reqresp_name_5 - reqresp_name_4 != 21) || (reqresp_name_6 - reqresp_name_5 != 4) || (reqresp_name_7 - reqresp_name_6 != 8) || (reqresp_name_8 - reqresp_name_7 != 22) || (reqresp_name_9 - reqresp_name_8 != 21) || (reqresp_name_10 - reqresp_name_9 != 29) || (reqresp_name_11 - reqresp_name_10 != 28) || (reqresp_name_12 - reqresp_name_11 != 21) || (reqresp_name_13 - reqresp_name_12 != 22) || (reqresp_name_14 - reqresp_name_13 != 29) || (reqresp_name_15 - reqresp_name_14 != 28) || (reqresp_name_end - reqresp_name_15 != 30) || (REQRESP_METHODS != 15)
 .error "a req/resp name length in reqresp_names is wrong"
 .endif
 .endm

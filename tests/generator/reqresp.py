@@ -38,6 +38,10 @@ METHODS = [
     ("data_column_sidecars_by_range", (1,)),
     ("data_column_sidecars_by_root", (1,)),
     ("beacon_blocks_by_head", (1,)),
+    ("light_client_bootstrap", (1,)),
+    ("light_client_updates_by_range", (1,)),
+    ("light_client_finality_update", (1,)),
+    ("light_client_optimistic_update", (1,)),
 ]
 
 
@@ -262,10 +266,10 @@ def cases(fork, preset):
             f"eth2/beacon_chain/req/{name}/{versions[0]}/ssz_snappy",
         ]):
             yield "protocol_parse", f"{name}_bad_{k}", {"input": {"id": bad.encode()}, "output": None}
-    for k, bad in enumerate([b"", b"/eth2/beacon_chain/req/", b"/eth2/beacon_chain/req/light_client_bootstrap/1/ssz_snappy",
+    for k, bad in enumerate([b"", b"/eth2/beacon_chain/req/", b"/eth2/beacon_chain/req/light_client_bootstraps/1/ssz_snappy",
                              b"/meshsub/1.1.0", b"/eth2/beacon_chain/req/status/18446744073709551617/ssz_snappy"]):
         yield "protocol_parse", f"bad_{k}", {"input": {"id": bad}, "output": None}
-    for k, (m, v) in enumerate([(0, 1), (12, 1), (U64, 1), (1, 0), (1, U64)]):
+    for k, (m, v) in enumerate([(0, 1), (16, 1), (U64, 1), (1, 0), (1, U64)]):
         yield "protocol_id", f"bad_{k}", {"input": {"method": m, "version": v}, "output": None}
 
     # The chunk size bound.

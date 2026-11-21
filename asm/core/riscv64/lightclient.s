@@ -689,3 +689,73 @@ SPEC_FUNCTION lc_object
     LEAVE 0
 .endif
 SPEC_END lc_object
+
+# (block, scratch, out) -> status: the LightClientHeader of a BeaconBlock value (light-client.md): its
+# SSZ bytes as the message of a SignedBeaconBlock with a zero signature at the end of scratch, then
+# lantern_block_to_light_client_header. s1 block, s2 scratch, s3 out, s4 the scratch's size on
+# entry, s5 the SignedBeaconBlock ByteList, s6 the block's bytes. Locals: L the serialized size.
+SPEC_FUNCTION lc_anchor_header
+    ENTER 16
+    mv      s1, a0
+    mv      s2, a1
+    mv      s3, a2
+    ld      s4, 0(s2)
+    ADDRESS a0, lantern_type_BeaconBlock
+    mv      a1, s1
+    mv      a2, s2
+    addi    a3, sp, L
+    CALL_GLOBAL ssz_serialize_size
+    sd      s4, 0(s2)
+    li      t0, SSZ_BUFFER_TOO_SMALL
+    beq     a0, t0, 98f
+    bnez    a0, 96f
+    ld      t0, L(sp)                       # the SignedBeaconBlock at the end of scratch: 104 bytes, then the serialized ByteList
+    addi    t0, t0, 104 + 7
+    andi    t0, t0, -8
+    bltu    s4, t0, 98f
+    sub     t1, s4, t0
+    li      t2, 4096
+    bltu    t1, t2, 98f
+    add     s5, s2, t1
+    sd      t1, 0(s2)
+    addi    a3, s5, 104
+    ld      t0, L(sp)
+    sd      t0, 0(a3)
+    ADDRESS a0, lantern_type_BeaconBlock
+    mv      a1, s1
+    mv      a2, s2
+    CALL_GLOBAL ssz_serialize
+    bnez    a0, 97f
+    ld      s6, (104 + 16)(s5)              # its bytes down 4, after the 100 of the fixed part
+    addi    a0, s5, 124
+    addi    a1, s5, 128
+    mv      a2, s6
+    call    lantern_copy
+    addi    a0, s5, 28
+    li      a1, 96
+    call    lantern_zero
+    li      t0, 100
+    sw      t0, 24(s5)
+    addi    t0, s6, 24 + 100
+    sd      t0, 0(s5)
+    li      t0, 24
+    sd      t0, 8(s5)
+    addi    t0, s6, 100
+    sd      t0, 16(s5)
+    mv      a0, s5
+    mv      a1, s2
+    mv      a2, s3
+    call    lantern_block_to_light_client_header
+    sd      s4, 0(s2)
+    LEAVE 16
+96: li      a0, LANTERN_INVALID_ENCODING
+    LEAVE 16
+97: sd      s4, 0(s2)
+    li      t0, SSZ_BUFFER_TOO_SMALL
+    beq     a0, t0, 98f
+    li      a0, LANTERN_INVALID_ENCODING
+    LEAVE 16
+98: sd      s4, 0(s2)
+    li      a0, LANTERN_BUFFER_TOO_SMALL
+    LEAVE 16
+SPEC_END lc_anchor_header

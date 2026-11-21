@@ -1527,7 +1527,33 @@ LOCAL_FUNCTION api_body
     call    api_code_text
     API_LIT api_e_end
     UNFRAME 16
-1:  li      t0, API_OP_SUBMIT_POOL_BLS_TO_EXECUTION_CHANGE
+1:  li      t0, API_OP_GET_LIGHT_CLIENT_UPDATES_BY_RANGE
+    bne     s10, t0, 102f
+    call    api_lc_updates_body
+    UNFRAME 16
+102: addi   t0, s10, -API_OP_GET_LIGHT_CLIENT_BOOTSTRAP   # the light client reads: SSZ, or {"version":…,"data":…}
+    li      t1, API_OP_GET_LIGHT_CLIENT_OPTIMISTIC_UPDATE - API_OP_GET_LIGHT_CLIENT_BOOTSTRAP
+    bgtu    t0, t1, 10f
+    LDQ     t0, s4, ApiView_lc_json
+    bnez    t0, 101f
+    LDQ     t0, s4, ApiView_lc_bytes
+    ld      t1, 8(t0)
+    add     a0, t0, t1
+    ld      a1, 16(t0)
+    call    api_put
+    UNFRAME 16
+101: API_LIT api_j_version
+    ld      a0, ApiView_fork(s4)
+    call    api_fork_name
+    API_LIT api_g_data
+    LDQ     t0, s4, ApiView_lc_json
+    ld      t1, 8(t0)
+    add     a0, t0, t1
+    ld      a1, 16(t0)
+    call    api_put
+    API_LIT api_end1
+    UNFRAME 16
+10: li      t0, API_OP_SUBMIT_POOL_BLS_TO_EXECUTION_CHANGE
     bne     s10, t0, 11f
     # {"code":400,"message":"BAD_REQUEST","failures":[…]}: s4 the event of the work
     API_LIT api_e_code
@@ -3255,6 +3281,9 @@ LOCAL_FUNCTION node_api_event
     seqz    t0, t0
     slli    t0, t0, 1
     or      s3, s3, t0
+    addi    t0, a3, -API_OP_GET_LIGHT_CLIENT_BOOTSTRAP  # the light client reads: of the light client store
+    li      t1, API_OP_GET_LIGHT_CLIENT_OPTIMISTIC_UPDATE - API_OP_GET_LIGHT_CLIENT_BOOTSTRAP
+    bleu    t0, t1, 549f
     li      t0, API_OP_GET_BLOCK_ROOT
     beq     a3, t0, 65f
     li      t0, API_OP_GET_BLOCK_HEADER
@@ -3756,6 +3785,13 @@ LOCAL_FUNCTION node_api_event
     mv      a2, a0
     bnez    a0, 80f
     j       90f
+549: mv     a0, s7                          # the light client reads: a work
+    mv      a1, s9
+    mv      a2, s3
+    call    node_api_lc
+    mv      a2, a0
+    bnez    a0, 80f
+    j       90f
 54: mv      a0, s9                          # a sidecar stream of the block
     mv      a1, s7
     mv      a2, s3
@@ -4011,6 +4047,10 @@ LOCAL_FUNCTION node_api_done
     beq     t0, t1, 3f
     li      t1, API_OP_GET_LIVENESS
     beq     t0, t1, 3f
+    li      t1, API_OP_GET_LIGHT_CLIENT_BOOTSTRAP
+    beq     t0, t1, 3f
+    li      t1, API_OP_GET_LIGHT_CLIENT_UPDATES_BY_RANGE
+    beq     t0, t1, 3f
     li      t1, API_OP_GET_ATTESTER_DUTIES
     bne     t0, t1, 2f
 3:  ld      a1, NodeAction_data(s3)
@@ -4110,6 +4150,9 @@ LOCAL_FUNCTION node_api_run
     j       2f
 1:  li      t2, API_OP_GET_SPEC             # getSpec, getDebugChainHeadsV2, getDebugForkChoice: no state
     beq     s9, t2, 2f
+    addi    t2, s9, -API_OP_GET_LIGHT_CLIENT_BOOTSTRAP  # the light client reads: the light client store
+    li      t3, API_OP_GET_LIGHT_CLIENT_OPTIMISTIC_UPDATE - API_OP_GET_LIGHT_CLIENT_BOOTSTRAP
+    bleu    t2, t3, 2f
     li      t2, API_OP_GET_DEBUG_CHAIN_HEADS_V2
     beq     s9, t2, 2f
     li      t2, API_OP_GET_DEBUG_FORK_CHOICE
@@ -4165,7 +4208,22 @@ LOCAL_FUNCTION node_api_run
     STQ     zero, s8, ApiView_status
     li      t2, API_OP_GET_BLOCK_HEADER
     beq     s9, t2, 3f
-    li      t2, API_OP_GET_SPEC
+    addi    t2, s9, -API_OP_GET_LIGHT_CLIENT_BOOTSTRAP   # t0: the work's arg, below
+    li      t3, API_OP_GET_LIGHT_CLIENT_OPTIMISTIC_UPDATE - API_OP_GET_LIGHT_CLIENT_BOOTSTRAP
+    bgtu    t2, t3, 30f
+    ld      a0, (L + 48)(sp)                # the light client reads: the object, and its JSON
+    mv      a1, s3
+    mv      a2, s5
+    mv      a3, s6
+    mv      a4, s8
+    call    node_api_lc_read
+    beqz    a0, 5f
+    li      t0, LANTERN_BUFFER_TOO_SMALL
+    beq     a0, t0, 71f
+    ld      t0, L(sp)
+    sd      t0, 0(s6)
+    LEAVE 64
+30: li      t2, API_OP_GET_SPEC
     beq     s9, t2, 5f
     li      t2, API_OP_GET_DEBUG_CHAIN_HEADS_V2
     beq     s9, t2, 29f
@@ -4520,9 +4578,14 @@ LOCAL_FUNCTION node_api_run
     li      a3, API_BODY_ERROR
     andi    a4, a4, ~API_R_SSZ
     j       56f
-54: li      t0, API_OP_GET_PROPOSER_LOOKAHEAD   # Eth-Consensus-Version of getProposerLookahead
-    bne     s9, t0, 56f
-    ori     a4, a4, API_R_VERSION
+54: li      t0, API_OP_GET_PROPOSER_LOOKAHEAD   # Eth-Consensus-Version of getProposerLookahead and the light client reads
+    beq     s9, t0, 541f
+    addi    t0, s9, -API_OP_GET_LIGHT_CLIENT_BOOTSTRAP
+    li      t1, API_OP_GET_LIGHT_CLIENT_OPTIMISTIC_UPDATE - API_OP_GET_LIGHT_CLIENT_BOOTSTRAP
+    bgtu    t0, t1, 56f
+    li      t0, API_OP_GET_LIGHT_CLIENT_UPDATES_BY_RANGE  # no version: of each item
+    beq     s9, t0, 56f
+541: ori    a4, a4, API_R_VERSION
 56: call    api_respond
     bnez    a0, 71f
     ld      t0, (NodeEvent_chunk + 16)(s7)  # the event's size covers the chunk
@@ -7249,6 +7312,15 @@ LOCAL_FUNCTION node_api_head_events
     li      t0, -1
     beq     a0, t0, 5f
     mv      s3, a1
+    li      a0, NODE_WORK_LC_HEAD           # the light client data first
+    li      a1, 0
+    li      a2, 0
+    li      a3, 0
+    li      a4, 0
+    li      a5, 0
+    call    node_work
+    li      t0, NODE_LC_ID
+    sd      t0, NodeAction_state_c(a0)
     ld      t0, NodeBlock_slot(s3)          # epoch_transition, execution_optimistic
     li      t1, SLOTS_PER_EPOCH
     divu    t2, t0, t1
@@ -7352,6 +7424,7 @@ END_FUNCTION node_api_event_done
  */
 LOCAL_FUNCTION node_api_event_run
     ENTER 32
+    sd      a7, (L + 24)(sp)                # state_c: the light client store
     mv      s1, a0
     mv      s2, a1
     mv      s3, a2
@@ -7490,7 +7563,27 @@ LOCAL_FUNCTION node_api_event_run
     ld      t0, (L + 8)(sp)
     bnez    t0, 41f
     j       5b
-10: li      t0, API_TOPIC_VOLUNTARY_EXIT    # an operation topic: the JSON of its bytes, lantern_node_json of the fork in arg
+10: li      t0, API_TOPIC_LIGHT_CLIENT_FINALITY_UPDATE  # the light client topics: of the store's latest update
+    beq     s8, t0, 100f
+    li      t0, API_TOPIC_LIGHT_CLIENT_OPTIMISTIC_UPDATE
+    bne     s8, t0, 101f
+100: ld     a2, (L + 24)(sp)
+    beqz    a2, 8f
+    addi    t0, s9, -NodeEvent_chunk        # the text, in the event
+    andi    t0, t0, -8
+    li      t1, 64
+    bltu    t0, t1, 71f
+    sd      t0, NodeEvent_chunk(s6)
+    addi    a0, s6, NodeEvent_chunk
+    mv      a1, s8
+    mv      a3, s5
+    call    api_lc_event_text
+    li      t0, LANTERN_BUFFER_TOO_SMALL
+    beq     a0, t0, 71f
+    beqz    a0, 55b
+    sd      a0, NodeEvent_result(s6)
+    j       9f
+101: li     t0, API_TOPIC_VOLUNTARY_EXIT    # an operation topic: the JSON of its bytes, lantern_node_json of the fork in arg
     li      a2, NODE_JSON_EXIT
     beq     s8, t0, 11f
     li      t0, API_TOPIC_BLS_TO_EXECUTION_CHANGE

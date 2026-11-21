@@ -262,6 +262,10 @@ lantern_ssz_size_bounds(type, out) -> status
 | `REQRESP_DATA_COLUMN_SIDECARS_BY_RANGE` (9) | `data_column_sidecars_by_range` | 1 |
 | `REQRESP_DATA_COLUMN_SIDECARS_BY_ROOT` (10) | `data_column_sidecars_by_root` | 1 |
 | `REQRESP_BEACON_BLOCKS_BY_HEAD` (11) | `beacon_blocks_by_head` | 1 |
+| `REQRESP_LIGHT_CLIENT_BOOTSTRAP` (12) | `light_client_bootstrap` | 1 |
+| `REQRESP_LIGHT_CLIENT_UPDATES_BY_RANGE` (13) | `light_client_updates_by_range` | 1 |
+| `REQRESP_LIGHT_CLIENT_FINALITY_UPDATE` (14) | `light_client_finality_update` | 1 |
+| `REQRESP_LIGHT_CLIENT_OPTIMISTIC_UPDATE` (15) | `light_client_optimistic_update` | 1 |
 
 - `ReqRespProtocol__mem` (16) bytes.
 

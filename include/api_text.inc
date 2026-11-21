@@ -583,6 +583,21 @@ api_ev_t_block:
 api_ev_t_finalized:
     .ascii "finalized_checkpoint"
 .set api_ev_t_finalized_len, 20
+api_ev_t_lc_finality:
+    .ascii "light_client_finality_update"
+.set api_ev_t_lc_finality_len, 28
+api_ev_t_lc_optimistic:
+    .ascii "light_client_optimistic_update"
+.set api_ev_t_lc_optimistic_len, 30
+api_lc_open:
+    .ascii "["
+.set api_lc_open_len, 1
+api_lc_close:
+    .ascii "]"
+.set api_lc_close_len, 1
+api_lc_comma:
+    .ascii ","
+.set api_lc_comma_len, 1
 api_ev_data:
     .ascii "\ndata: "
 .set api_ev_data_len, 7

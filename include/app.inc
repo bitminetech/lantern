@@ -85,6 +85,13 @@
 .set APP_BLOCK_BYTES, 1 << 16               /* the anchor block */
 .set APP_BUF_ENTRY, 24                      /* a BufferId table entry: id, address, size */
 .set APP_BUFS_CAP, 4096
+.set APP_LC_BLOCKS, 64                      /* the LcRoom of the light client store at start (node.md, lantern_node_init) */
+.set APP_LC_FINALIZED, 64
+.set APP_LC_PERIODS, 16
+.set APP_LC_BOOTSTRAPS, 64
+.set APP_LC_HEADERS, 128
+.set APP_LC_COMMITTEES, 8
+.set APP_LC_UPDATES, 64
 .set APP_QUEUE_BYTES, 1 << 20               /* the events, and the actions, of a step */
 .set APP_TRIES, 8                           /* the times a start step doubles its buffers */
 .set APP_WAIT_MS, 100                       /* the longest wait for the sockets */

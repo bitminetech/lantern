@@ -1502,7 +1502,33 @@ LOCAL_FUNCTION api_body
     bl      api_code_text
     API_LIT api_e_end
     UNFRAME 16
-1:  cmp     x28, #API_OP_SUBMIT_POOL_BLS_TO_EXECUTION_CHANGE
+1:  cmp     x28, #API_OP_GET_LIGHT_CLIENT_UPDATES_BY_RANGE
+    b.ne    102f
+    bl      api_lc_updates_body
+    UNFRAME 16
+102: sub    x9, x28, #API_OP_GET_LIGHT_CLIENT_BOOTSTRAP   /* the light client reads: SSZ, or {"version":…,"data":…} */
+    cmp     x9, #(API_OP_GET_LIGHT_CLIENT_OPTIMISTIC_UPDATE - API_OP_GET_LIGHT_CLIENT_BOOTSTRAP)
+    b.hi    10f
+    LDQ     x9, x22, ApiView_lc_json
+    cbnz    x9, 101f
+    LDQ     x9, x22, ApiView_lc_bytes
+    ldr     x10, [x9, #8]
+    add     x0, x9, x10
+    ldr     x1, [x9, #16]
+    bl      api_put
+    UNFRAME 16
+101: API_LIT api_j_version
+    ldr     x0, [x22, #ApiView_fork]
+    bl      api_fork_name
+    API_LIT api_g_data
+    LDQ     x9, x22, ApiView_lc_json
+    ldr     x10, [x9, #8]
+    add     x0, x9, x10
+    ldr     x1, [x9, #16]
+    bl      api_put
+    API_LIT api_end1
+    UNFRAME 16
+10: cmp     x28, #API_OP_SUBMIT_POOL_BLS_TO_EXECUTION_CHANGE
     b.ne    11f
     /* {"code":400,"message":"BAD_REQUEST","failures":[…]}: x22 the event of the work */
     API_LIT api_e_code
@@ -3194,6 +3220,9 @@ LOCAL_FUNCTION node_api_event
     tst     x28, #API_R_CLOSE
     cset    x21, ne
     orr     x21, x21, x9, lsl #1
+    sub     x9, x3, #API_OP_GET_LIGHT_CLIENT_BOOTSTRAP  /* the light client reads: of the light client store */
+    cmp     x9, #(API_OP_GET_LIGHT_CLIENT_OPTIMISTIC_UPDATE - API_OP_GET_LIGHT_CLIENT_BOOTSTRAP)
+    b.ls    549f
     cmp     x3, #API_OP_GET_BLOCK_ROOT
     b.eq    65f
     cmp     x3, #API_OP_GET_BLOCK_HEADER
@@ -3692,6 +3721,13 @@ LOCAL_FUNCTION node_api_event
     mov     x2, x0
     cbnz    x0, 80f
     b       90f
+549: mov    x0, x25                         /* the light client reads: a work */
+    mov     x1, x27
+    mov     x2, x21
+    bl      node_api_lc
+    mov     x2, x0
+    cbnz    x0, 80f
+    b       90f
 54: mov     x0, x27                         /* a sidecar stream of the block */
     mov     x1, x25
     mov     x2, x21
@@ -3943,6 +3979,10 @@ LOCAL_FUNCTION node_api_done
     ccmp    x10, #API_OP_GET_EPOCH_SYNC_COMMITTEES, #4, ne
     mov     x14, #API_OP_GET_LIVENESS
     ccmp    x10, x14, #4, ne
+    mov     x14, #API_OP_GET_LIGHT_CLIENT_BOOTSTRAP
+    ccmp    x10, x14, #4, ne
+    mov     x14, #API_OP_GET_LIGHT_CLIENT_UPDATES_BY_RANGE
+    ccmp    x10, x14, #4, ne
     b.ne    2f
     ldr     x1, [x21, #NodeAction_data]
     cbz     x1, 2f
@@ -4038,6 +4078,11 @@ LOCAL_FUNCTION node_api_run
     b       2f
 1:  cmp     x27, #API_OP_GET_SPEC           /* getSpec, getDebugChainHeadsV2, getDebugForkChoice: no state */
     b.eq    2f
+    sub     x9, x27, #API_OP_GET_LIGHT_CLIENT_BOOTSTRAP  /* the light client reads: the light client store */
+    cmp     x9, #(API_OP_GET_LIGHT_CLIENT_OPTIMISTIC_UPDATE - API_OP_GET_LIGHT_CLIENT_BOOTSTRAP)
+    b.ls    2f
+    cmp     x27, #API_OP_GET_LIGHT_CLIENT_OPTIMISTIC_UPDATE
+    b.eq    2f
     cmp     x27, #API_OP_GET_DEBUG_CHAIN_HEADS_V2
     b.eq    2f
     cmp     x27, #API_OP_GET_DEBUG_FORK_CHOICE
@@ -4090,7 +4135,22 @@ LOCAL_FUNCTION node_api_run
     str     xzr, [x26, #ApiView_status]
     cmp     x27, #API_OP_GET_BLOCK_HEADER
     b.eq    3f
-    cmp     x27, #API_OP_GET_SPEC
+    sub     x10, x27, #API_OP_GET_LIGHT_CLIENT_BOOTSTRAP   /* x9: the work's arg, below */
+    cmp     x10, #(API_OP_GET_LIGHT_CLIENT_OPTIMISTIC_UPDATE - API_OP_GET_LIGHT_CLIENT_BOOTSTRAP)
+    b.hi    30f
+    ldr     x0, [sp, #(L + 48)]             /* the light client reads: the object, and its JSON */
+    mov     x1, x21
+    mov     x2, x23
+    mov     x3, x24
+    mov     x4, x26
+    bl      node_api_lc_read
+    cbz     x0, 5f
+    cmp     x0, #LANTERN_BUFFER_TOO_SMALL
+    b.eq    71f
+    ldr     x9, [sp, #L]
+    str     x9, [x24]
+    LEAVE 64
+30: cmp     x27, #API_OP_GET_SPEC
     b.eq    5f
     cmp     x27, #API_OP_GET_DEBUG_CHAIN_HEADS_V2
     b.eq    29f
@@ -4432,9 +4492,14 @@ LOCAL_FUNCTION node_api_run
     mov     x3, #API_BODY_ERROR
     and     x4, x4, #~API_R_SSZ
     b       54f
-53: cmp     x27, #API_OP_GET_PROPOSER_LOOKAHEAD /* Eth-Consensus-Version of getProposerLookahead */
-    b.ne    54f
-    orr     x4, x4, #API_R_VERSION
+53: cmp     x27, #API_OP_GET_PROPOSER_LOOKAHEAD /* Eth-Consensus-Version of getProposerLookahead and the light client reads */
+    b.eq    531f
+    sub     x9, x27, #API_OP_GET_LIGHT_CLIENT_BOOTSTRAP
+    cmp     x9, #(API_OP_GET_LIGHT_CLIENT_OPTIMISTIC_UPDATE - API_OP_GET_LIGHT_CLIENT_BOOTSTRAP)
+    b.hi    54f
+    cmp     x27, #API_OP_GET_LIGHT_CLIENT_UPDATES_BY_RANGE  /* no version: of each item */
+    b.eq    54f
+531: orr    x4, x4, #API_R_VERSION
 54: bl      api_respond
     cbnz    x0, 71f
     ldr     x9, [x25, #(NodeEvent_chunk + 16)]  /* the event's size covers the chunk */
@@ -4537,6 +4602,7 @@ LOCAL_FUNCTION node_api_event_run
     mov     x24, x4
     mov     x25, x5
     mov     x28, x6
+    str     x7, [sp, #(L + 24)]             /* state_c: the light client store */
     ldr     x9, [x21, #NodeAction_arg]
     and     x27, x9, #255
     ldr     x9, [x24]                       /* the ApiView at the end of scratch, with the work's values */
@@ -4659,7 +4725,26 @@ LOCAL_FUNCTION node_api_event_run
     ldr     x9, [sp, #(L + 8)]
     cbnz    x9, 41f
     b       5b
-10: mov     x14, #NODE_JSON_EXIT            /* an operation topic: the JSON of its bytes, lantern_node_json of the fork in arg */
+10: cmp     x27, #API_TOPIC_LIGHT_CLIENT_FINALITY_UPDATE  /* the light client topics: of the store's latest update */
+    ccmp    x27, #API_TOPIC_LIGHT_CLIENT_OPTIMISTIC_UPDATE, #4, ne
+    b.ne    101f
+    ldr     x2, [sp, #(L + 24)]
+    cbz     x2, 8f
+    sub     x10, x28, #NodeEvent_chunk      /* the text, in the event */
+    and     x10, x10, #~7
+    cmp     x10, #64
+    b.lo    71f
+    str     x10, [x25, #NodeEvent_chunk]
+    add     x0, x25, #NodeEvent_chunk
+    mov     x1, x27
+    mov     x3, x24
+    bl      api_lc_event_text
+    cmp     x0, #LANTERN_BUFFER_TOO_SMALL
+    b.eq    71f
+    cbz     x0, 55b
+    str     x0, [x25, #NodeEvent_result]
+    b       9f
+101: mov    x14, #NODE_JSON_EXIT            /* an operation topic: the JSON of its bytes, lantern_node_json of the fork in arg */
     cmp     x27, #API_TOPIC_VOLUNTARY_EXIT
     b.eq    11f
     mov     x14, #NODE_JSON_BLS_CHANGE
@@ -7280,6 +7365,15 @@ LOCAL_FUNCTION node_api_head_events
     cmn     x0, #1
     b.eq    5f
     mov     x21, x1
+    mov     x0, #NODE_WORK_LC_HEAD          /* the light client data first */
+    mov     x1, #0
+    mov     x2, #0
+    mov     x3, #0
+    mov     x4, #0
+    mov     x5, #0
+    bl      node_work
+    mov     x9, #NODE_LC_ID
+    str     x9, [x0, #NodeAction_state_c]
     ldr     x9, [x21, #NodeBlock_slot]      /* epoch_transition, execution_optimistic */
     LDQ     x10, x19, Node_event_slot
     mov     x11, #SLOTS_PER_EPOCH

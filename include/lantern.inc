@@ -566,7 +566,11 @@
 .set REQRESP_DATA_COLUMN_SIDECARS_BY_RANGE, 9
 .set REQRESP_DATA_COLUMN_SIDECARS_BY_ROOT, 10
 .set REQRESP_BEACON_BLOCKS_BY_HEAD, 11
-.set REQRESP_METHODS, 11
+.set REQRESP_LIGHT_CLIENT_BOOTSTRAP, 12
+.set REQRESP_LIGHT_CLIENT_UPDATES_BY_RANGE, 13
+.set REQRESP_LIGHT_CLIENT_FINALITY_UPDATE, 14
+.set REQRESP_LIGHT_CLIENT_OPTIMISTIC_UPDATE, 15
+.set REQRESP_METHODS, 15
 
 /* ChunkHeader: the parts of a req/resp chunk before its payload (req-resp.md) */
 .set ChunkHeader_kind, 0               /* CHUNK_REQUEST or CHUNK_RESPONSE */
@@ -699,7 +703,10 @@
 .set Node_payload_id, Node_proposers + 56    /* 8 bytes: the payloadId, with NODE_PAYLOAD_READY */
 .set Node_payload_status, Node_proposers + 64    /* NODE_PAYLOAD_* */
 .set Node_payload_proposer, Node_proposers + 72  /* the proposer's validator index */
-.set NODE_FIXED, Node_proposers + 80
+.set Node_lc_finality_slot, Node_proposers + 80   /* the finalized slot of the last light client finality update forwarded */
+.set Node_lc_finality_super, Node_proposers + 88  /* 1 when it had a supermajority */
+.set Node_lc_optimistic_slot, Node_proposers + 96 /* the attested slot of the last optimistic update forwarded */
+.set NODE_FIXED, Node_proposers + 104
 .set NODE_PAYLOAD_NONE, 0
 .set NODE_PAYLOAD_PREPARING, 1             /* its PREPARE_PAYLOAD work is queued */
 .set NODE_PAYLOAD_SENT, 2                  /* its engine_forkchoiceUpdated is in flight */
@@ -972,6 +979,10 @@
 .set NODE_WORK_PUBLISH_SIDECARS, 31    /* b: the sidecars' buffer; data: the body; target: the NodeApi index; arg: the fork + 2^8 for SSZ */
 .set NODE_WORK_PUBLISH_CHECK, 32       /* a: the parent's post-state at the slot; b: the sidecars, or 0; c: the head's post-state; data: the block; arg: the level */
 .set NODE_WORK_PUBLISH_SIDECAR, 33     /* b: the sidecars; target: the NodeApi index; arg: the sidecar's place */
+.set NODE_WORK_LC_BLOCK, 34            /* a: an imported block's post-state; c: the light client store; data: the block */
+.set NODE_WORK_LC_HEAD, 35             /* c: the light client store */
+.set NODE_WORK_LC_SERVE, 36            /* c: the light client store; data: the request bytes, or 0; target: the stream handle; arg: the method */
+.set NODE_LC_ID, 2                     /* the BufferId of the light client store (lantern_node_init: Caller must) */
 .set NODE_PUBLISH_DECODE, 1            /* NodeApi member of a publishBlockV2: its phase */
 .set NODE_PUBLISH_SIDECARS, 2
 .set NODE_PUBLISH_CHECK, 3
@@ -1100,7 +1111,15 @@
 .set ApiView_next_period, ApiView_weights + 40     /* getSyncCommitteeDuties: 1, API_VALUE_NEXT_PERIOD of the work */
 .set ApiView_sd_ids, ApiView_weights + 48          /* getSyncCommitteeDuties, getLiveness: the address of the work's ValidatorRef items */
 .set ApiView_live_out, ApiView_weights + 56        /* getLiveness: lantern_node_liveness's out, a byte for each item */
-.set ApiView__size, ApiView_weights + 64
+.set ApiView_lc_bytes, ApiView_weights + 64        /* the light client reads: the ByteList of the object's SSZ bytes */
+.set ApiView_lc_json, ApiView_weights + 72         /* as JSON: the ByteList of its JSON, else 0 */
+.set ApiView_lc_store, ApiView_weights + 80        /* getLightClientUpdatesByRange: the LcStore */
+.set ApiView_lc_cursor, ApiView_weights + 88       /* its JsonCursor */
+.set ApiView_lc_start, ApiView_weights + 96        /* its first period */
+.set ApiView_lc_end, ApiView_weights + 104         /* the period after its last */
+.set ApiView_lc_ssz, ApiView_weights + 112         /* 1 for an SSZ answer */
+.set ApiView__size, ApiView_weights + 120
+.set MAX_REQUEST_LIGHT_CLIENT_UPDATES, 128         /* altair light-client p2p-interface.md, Configuration */
 .set ApiIdentity_peer_id, 0              /* ApiIdentity (beacon-api.md): texts, each a length and its room */
 .set ApiIdentity_enr, 72
 .set ApiIdentity_p2p_address, 592
@@ -1300,6 +1319,10 @@
 .set NODE_JSON_SYNC_SUBSCRIPTION, 17     /* lantern's SyncCommitteeSubscription, from altair */
 .set NODE_JSON_PROPOSER_PREPARATION, 18  /* lantern's ProposerPreparation */
 .set NODE_JSON_BEACON_BLOCK, 19          /* a BeaconBlock (produceBlockV3 before deneb) */
+.set NODE_JSON_LC_BOOTSTRAP, 21         /* a LightClientBootstrap, from altair */
+.set NODE_JSON_LC_UPDATE, 22            /* a LightClientUpdate, from altair */
+.set NODE_JSON_LC_FINALITY_UPDATE, 23   /* a LightClientFinalityUpdate, from altair */
+.set NODE_JSON_LC_OPTIMISTIC_UPDATE, 24 /* a LightClientOptimisticUpdate, from altair */
 .set NODE_JSON_BLOCK_CONTENTS, 20        /* lantern's BlockContents, from deneb */
 .set NodePool_topic, 0                   /* NodePool (node.md): GOSSIP_* of the operation; 0 for a free entry */
 .set NodePool_state, 8                   /* NODE_POOL_* */

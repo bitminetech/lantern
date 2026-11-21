@@ -2088,6 +2088,18 @@ LOCAL_FUNCTION node_type_of_kind
     ADDRESS x0, lantern_type_SyncCommitteeSubscription
     cmp     x9, #NODE_JSON_SYNC_SUBSCRIPTION
     b.eq    9f
+    ADDRESS x0, lantern_type_LightClientBootstrap
+    cmp     x9, #NODE_JSON_LC_BOOTSTRAP
+    b.eq    9f
+    ADDRESS x0, lantern_type_LightClientUpdate
+    cmp     x9, #NODE_JSON_LC_UPDATE
+    b.eq    9f
+    ADDRESS x0, lantern_type_LightClientFinalityUpdate
+    cmp     x9, #NODE_JSON_LC_FINALITY_UPDATE
+    b.eq    9f
+    ADDRESS x0, lantern_type_LightClientOptimisticUpdate
+    cmp     x9, #NODE_JSON_LC_OPTIMISTIC_UPDATE
+    b.eq    9f
 .endif
     ADDRESS x0, lantern_type_BeaconCommitteeSubscription
     cmp     x9, #NODE_JSON_COMMITTEE_SUBSCRIPTION
