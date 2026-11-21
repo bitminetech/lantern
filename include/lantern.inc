@@ -731,7 +731,15 @@
 .set PRODUCE_CALL, 152                 /* its NODE_BUILDER_HEADER call + 1 while in flight, else 0 */
 .set PRODUCE_BID, 160                  /* the id of the builder's answer, then of its valid bid; 0 for none */
 .set PRODUCE_FEE, 168                  /* the fee recipient of the proposer's registration: 20 bytes */
-.set NODE_FIXED, Node_proposers + 192 + NODE_BUILDER_CALLS * NODE_BUILDER_CALL_SIZE
+.set Node_base_slot, Node_proposers + 192 + NODE_BUILDER_CALLS * NODE_BUILDER_CALL_SIZE  /* the slot of the base state, anchor_state_id */
+.set Node_replay_root, Node_base_slot + 8        /* Root: the block of the last replay (node.md, the replay) */
+.set Node_replay_slot, Node_base_slot + 40       /* its slot */
+.set Node_replay_state, Node_base_slot + 48      /* its post-state once queued whole, or 0 */
+.set Node_replay_copy, Node_base_slot + 56       /* the copy of the replay in flight, or 0 */
+.set Node_replay_copy_slot, Node_base_slot + 64  /* its slot */
+.set Node_replay_next, Node_base_slot + 72       /* the slot from which it queues its next block */
+.set NODE_FIXED, Node_base_slot + 80
+.set NODE_REPLAY_CHUNK, 64             /* the most blocks a replay queues in a step */
 .set NODE_PAYLOAD_NONE, 0
 .set NODE_PAYLOAD_PREPARING, 1             /* its PREPARE_PAYLOAD work is queued */
 .set NODE_PAYLOAD_SENT, 2                  /* its engine_forkchoiceUpdated is in flight */
@@ -1159,7 +1167,8 @@
 .set ApiView_lc_start, ApiView_weights + 96        /* its first period */
 .set ApiView_lc_end, ApiView_weights + 104         /* the period after its last */
 .set ApiView_lc_ssz, ApiView_weights + 112         /* 1 for an SSZ answer */
-.set ApiView__size, ApiView_weights + 120
+.set ApiView_look_replay, ApiView_weights + 120   /* 1: node_api_state may start the replay and answer 1 (wait) */
+.set ApiView__size, ApiView_weights + 128
 .set MAX_REQUEST_LIGHT_CLIENT_UPDATES, 128         /* altair light-client p2p-interface.md, Configuration */
 .set ApiIdentity_peer_id, 0              /* ApiIdentity (beacon-api.md): texts, each a length and its room */
 .set ApiIdentity_enr, 72
@@ -1209,6 +1218,8 @@
 .set API_STREAM_PRODUCE_FORCED, 131072  /* produceBlockV3: it made a preparation of its slot */
 .set API_STREAM_BLOB_SKIP, 262144      /* in a WORK_DONE only: the blob stream skips the rest of a blob */
 .set API_STREAM_PRODUCE_BLINDED, 524288  /* a produceBlockV3 answers a blinded block */
+.set API_STREAM_REPLAY, 1048576       /* a lookup entry waits for the replay (node.md) */
+.set API_REPLAY_SLOT, 136              /* the cursor of a lookup entry that waits for the replay: the slot of its state_id */
 .set LC_BRANCH_CURRENT_SYNC_COMMITTEE, 0   /* lantern_state_branch (light-client.md): the field */
 .set LC_BRANCH_NEXT_SYNC_COMMITTEE, 1
 .set LC_BRANCH_FINALIZED_ROOT, 2

@@ -1171,6 +1171,73 @@ LOCAL_FUNCTION api_rewards_json
     UNFRAME 96
 END_FUNCTION api_rewards_json
 
+/*
+ * The answer of a state operation (beacon-api.md) for the connection rdi, the route rsi, the answer
+ * flags rdx and the view rcx whose state node_api_state found: the state at head_slot, then a
+ * stream or a work. A validator operation's ids: look_data when it is not 0, else the route's.
+ * rax = 0, or the status of an error. r12 the flags, r13 the route, S7 the view, S8 the connection.
+ */
+LOCAL_FUNCTION node_api_state_answer
+    ENTER 0
+    mov     %rdi, S8(%rsp)
+    mov     %rsi, %r13
+    mov     %rdx, %r12
+    mov     %rcx, S7(%rsp)
+    mov     %rcx, %rdi
+    call    node_api_advance
+    mov     ApiRoute_op(%r13), %rcx
+    cmp     $API_OP_GET_STATE_V2, %rcx
+    je      64f
+    lea     -API_OP_GET_PENDING_CONSOLIDATIONS(%rcx), %rdx  # the pending lists: a stream of the state, no data
+    cmp     $2, %rdx
+    ja      5f
+    mov     S7(%rsp), %rdx
+    movq    $0, ApiView_look_data(%rdx)
+    jmp     64f
+5:  cmp     $API_OP_GET_STATE_RANDAO, %rcx  # getStateRandao, getEpochSyncCommittees: the epoch in the work's data
+    je      2f
+    cmp     $API_OP_GET_EPOCH_SYNC_COMMITTEES, %rcx
+    je      2f
+    cmp     $API_OP_GET_PROPOSER_LOOKAHEAD, %rcx    # getProposerLookahead: SSZ, an answer flag
+    jne     3f
+    cmpq    $API_TYPE_SSZ, ApiRoute_response(%r13)
+    jne     67f
+    or      $API_ANSWER_SSZ, %r12
+    jmp     67f
+2:  testq   $(1 << API_PARAM_EPOCH), ApiRoute_present(%r13)
+    jnz     4f
+    movq    $-1, ApiRoute_epoch(%r13)
+4:  lea     ApiRoute_epoch(%r13), %rdi
+    call    node_api_put8
+    mov     S7(%rsp), %rcx
+    mov     %rax, ApiView_look_data(%rcx)
+    jmp     67f
+3:  sub     $API_OP_GET_STATE_VALIDATORS, %rcx
+    cmp     $(API_OP_GET_EPOCH_COMMITTEES - API_OP_GET_STATE_VALIDATORS), %rcx
+    ja      67f
+    mov     S7(%rsp), %rcx                  # the validator operations: their ids; getStateValidator a work, the others a stream
+    cmpq    $0, ApiView_look_data(%rcx)
+    jne     6f
+    mov     %r13, %rdi
+    call    node_api_ids
+    mov     S7(%rsp), %rcx
+    mov     %rax, ApiView_look_data(%rcx)
+6:  cmpq    $API_OP_GET_STATE_VALIDATOR, ApiRoute_op(%r13)
+    jne     64f
+67: mov     ApiRoute_op(%r13), %rdi         # a work
+    mov     S8(%rsp), %rsi
+    mov     %r12, %rdx
+    mov     S7(%rsp), %rcx
+    call    node_api_encode
+    LEAVE 0
+64: mov     S8(%rsp), %rdi                  # a stream of the answer
+    mov     %r13, %rsi
+    mov     %r12, %rdx
+    mov     S7(%rsp), %rcx
+    call    node_api_stream
+    LEAVE 0
+END_FUNCTION node_api_state_answer
+
 # rax = the epoch of getEpochCommittees of the route rdi and the state of the view rsi (beacon-api.md,
 # Common rules), or 2^64 - 1 for 400: an epoch above the state's + 1, one whose seed's RANDAO mix the
 # state no longer holds, or a slot of another epoch. A leaf. Uses rax, rcx, rdx, r8, r9.
@@ -3243,58 +3310,40 @@ LOCAL_FUNCTION node_api_event
     mov     S9(%rsp), %rdi
     mov     %rax, %rsi
     mov     %r12, %rdx
+    xor     %ecx, %ecx
     call    node_api_lookup
     mov     %rax, %rdx
     test    %rax, %rax
     jnz     80f
     jmp     90f
-69: mov     S7(%rsp), %rdi                  # a state: its lookup, then the state at its slot
-    mov     S8(%rsp), %rsi
+69: mov     S8(%rsp), %rsi                  # a state: its lookup, then the state at its slot; the replay may come
+    movq    $1, ApiView_look_replay(%rsi)
+    mov     S7(%rsp), %rdi
     call    node_api_state
+    mov     %rax, %rdx
+    cmp     $1, %rax
+    je      698f
+    test    %rax, %rax
+    jnz     80f
+    mov     S8(%rsp), %rcx
+    movq    $0, ApiView_look_data(%rcx)
+    mov     S9(%rsp), %rdi
+    mov     S7(%rsp), %rsi
+    mov     %r12, %rdx
+    call    node_api_state_answer
     mov     %rax, %rdx
     test    %rax, %rax
     jnz     80f
-    mov     S8(%rsp), %rdi
-    call    node_api_advance
-    mov     S7(%rsp), %rax
-    mov     ApiRoute_op(%rax), %rcx
-    cmp     $API_OP_GET_STATE_V2, %rcx
-    je      64f
-    lea     -API_OP_GET_PENDING_CONSOLIDATIONS(%rcx), %rdx  # the pending lists: a stream of the state, no data
-    cmp     $2, %rdx
-    ja      695f
-    mov     S8(%rsp), %rdx
-    movq    $0, ApiView_look_data(%rdx)
-    jmp     64f
-695: cmp    $API_OP_GET_STATE_RANDAO, %rcx  # getStateRandao, getEpochSyncCommittees: the epoch in the work's data
-    je      692f
-    cmp     $API_OP_GET_EPOCH_SYNC_COMMITTEES, %rcx
-    je      692f
-    cmp     $API_OP_GET_PROPOSER_LOOKAHEAD, %rcx    # getProposerLookahead: SSZ, an answer flag
-    jne     693f
-    cmpq    $API_TYPE_SSZ, ApiRoute_response(%rax)
-    jne     67f
-    or      $API_ANSWER_SSZ, %r12
-    jmp     67f
-692: testq  $(1 << API_PARAM_EPOCH), ApiRoute_present(%rax)
-    jnz     694f
-    movq    $-1, ApiRoute_epoch(%rax)
-694: lea    ApiRoute_epoch(%rax), %rdi
-    call    node_api_put8
-    mov     S8(%rsp), %rcx
-    mov     %rax, ApiView_look_data(%rcx)
-    jmp     67f
-693: sub    $API_OP_GET_STATE_VALIDATORS, %rcx
-    cmp     $(API_OP_GET_EPOCH_COMMITTEES - API_OP_GET_STATE_VALIDATORS), %rcx
-    ja      67f
-    mov     %rax, %rdi                      # the validator operations: their ids; getStateValidator a work, the others a stream
-    call    node_api_ids
-    mov     S8(%rsp), %rcx
-    mov     %rax, ApiView_look_data(%rcx)
-    mov     S7(%rsp), %rax
-    cmpq    $API_OP_GET_STATE_VALIDATOR, ApiRoute_op(%rax)
-    jne     64f
-    jmp     67f
+    jmp     90f
+698: mov    S9(%rsp), %rdi                  # the replay: the request waits in a lookup entry
+    mov     S7(%rsp), %rsi
+    mov     %r12, %rdx
+    mov     $1, %ecx
+    call    node_api_lookup
+    mov     %rax, %rdx
+    test    %rax, %rax
+    jnz     80f
+    jmp     90f
 53: mov     $503, %edx                      # getSyncCommitteeDuties: 503 while syncing; 400 past the next period, with no index or a key
     mov     S8(%rsp), %rax
     cmpq    $0, ApiView_is_syncing(%rax)
@@ -4845,14 +4894,19 @@ END_FUNCTION node_api_block
 /*
  * The state of the state_id of the ApiRoute rdi into the ApiView rsi (beacon-api.md, Common
  * rules): look_state, a state the node keeps, at look_state_slot; head_slot the slot it goes to;
- * head_finalized and is_optimistic. rax = 0, or 404 for none. rbx the node, rbp the store, r14 the
- * scratch, r15 the actions. r12 the route, r13 the view, S7 the block's entry, S8 the slot, S9 the
- * checkpoint.
+ * head_finalized and is_optimistic. rax = 0, or 404 for none; with look_replay 1 (which goes to 0)
+ * a block at or below F's slot with no post-state comes from the replay (node.md): rax = 1 while
+ * the request waits for it. rbx the node, rbp the store, r14 the scratch, r15 the actions. r12 the
+ * route, r13 the view, S7 the block's entry, then the slot scanned, S8 the slot, S9 the checkpoint.
+ * Locals: L look_replay.
  */
 LOCAL_FUNCTION node_api_state
-    ENTER 0
+    ENTER 16
     mov     %rdi, %r12
     mov     %rsi, %r13
+    mov     ApiView_look_replay(%r13), %rax
+    mov     %rax, L(%rsp)
+    movq    $0, ApiView_look_replay(%r13)
     movq    $0, ApiView_look_state(%r13)
     movq    $0, ApiView_look_copy(%r13)
     movq    $-1, ApiView_look_index(%r13)
@@ -4917,7 +4971,7 @@ LOCAL_FUNCTION node_api_state
     mov     S8(%rsp), %rdi
     call    node_api_below
     cmp     $-1, %rax
-    je      80f
+    je      75f
 5:  mov     %rdx, S7(%rsp)                  # the block's post-state, again when the node let it go
     xor     %eax, %eax
     cmpq    $PAYLOAD_STATUS_NOT_VALIDATED, NodeBlock_payload_status(%rdx)
@@ -4931,7 +4985,7 @@ LOCAL_FUNCTION node_api_state
     je      80f
     mov     S7(%rsp), %rdi
     cmp     %rax, NodeBlock_slot(%rdi)
-    jbe     80f
+    jbe     70f
     call    node_rebuild
     test    %rax, %rax
     jz      80f
@@ -4948,10 +5002,104 @@ LOCAL_FUNCTION node_api_state
     setbe   %dl
     mov     %rdx, ApiView_head_finalized(%r13)
     xor     %eax, %eax
-    LEAVE 0
+    LEAVE 16
+70: mov     S7(%rsp), %rdx                  # at or below F's slot: the replay
+    lea     NodeBlock_root(%rdx), %rdi
+    mov     NodeBlock_slot(%rdx), %rsi
+    jmp     71f
+75: testq   $NODE_FLAG_DB, Node_flags(%rbx) # below the chain's lowest block: the Db's block at or below the slot
+    jz      80f
+    mov     S8(%rsp), %rax
+    mov     %rax, S7(%rsp)
+76: mov     S7(%rsp), %rdi
+    cmp     Node_base_slot(%rbx), %rdi
+    jbe     77f
+    call    node_db_slot
+    mov     %rax, %rdi                      # its DbSlot: the root at 0
+    mov     S7(%rsp), %rsi
+    test    %rax, %rax
+    jnz     71f
+    decq    S7(%rsp)
+    jmp     76b
+77: xor     %edi, %edi                      # none above the base's slot: the base state
+    mov     Node_base_slot(%rbx), %rsi
+71: cmpq    $0, L(%rsp)
+    je      80f
+    call    node_replay_get
+    test    %rax, %rax
+    jz      80f
+    cmp     $1, %rax
+    je      79f
+    mov     %rax, ApiView_look_state(%r13)
+    mov     %rdx, ApiView_look_state_slot(%r13)
+    movq    $1, ApiView_look_copy(%r13)
+    movq    $0, ApiView_is_optimistic(%r13)
+    jmp     7b
+79: LEAVE 16
 80: mov     $404, %eax
-    LEAVE 0
+    LEAVE 16
 END_FUNCTION node_api_state
+
+/*
+ * (root rdi, or 0 for the base, slot rsi): the post-state of the block of root rdi at slot rsi, at
+ * or below F's slot and at or above base_slot, by the replay (node.md): rax = a copy of it and rdx
+ * its slot; 1 when the request waits for the replay; 0 for none. r12 the root, S7 the slot, S8 the
+ * state, S9 the copy.
+ */
+LOCAL_FUNCTION node_replay_get
+    ENTER 0
+    mov     %rdi, %r12
+    mov     %rsi, S7(%rsp)
+    cmp     Node_base_slot(%rbx), %rsi
+    jb      8f
+    mov     Node_anchor_state_id(%rbx), %rax    # the base's slot: the base state
+    je      5f
+    test    %r12, %r12
+    jz      8f
+    mov     Node_replay_state(%rbx), %rax   # the last replay's state, of that root
+    test    %rax, %rax
+    jz      2f
+    lea     Node_replay_root(%rbx), %rdi
+    NE32    %rdi, %r12, 2f
+    mov     Node_replay_state(%rbx), %rax
+5:  mov     %rax, S8(%rsp)                  # a copy for the answer
+    call    node_new_id
+    mov     %rax, S9(%rsp)
+    mov     $NODE_ACT_STATE_COPY, %edi
+    mov     S8(%rsp), %rsi
+    mov     %rax, %rdx
+    call    node_ids
+    mov     S9(%rsp), %rax
+    mov     S7(%rsp), %rdx
+    LEAVE 0
+2:  cmpq    $0, Node_replay_copy(%rbx)      # a replay in flight: the request waits
+    jne     7f
+    mov     Node_replay_state(%rbx), %rsi   # else one starts, for this block
+    test    %rsi, %rsi
+    jz      3f
+    mov     $NODE_ACT_STATE_FREE, %edi
+    xor     %edx, %edx
+    call    node_ids
+    movq    $0, Node_replay_state(%rbx)
+3:  lea     Node_replay_root(%rbx), %rdi
+    COPY32  %rdi, %r12
+    mov     S7(%rsp), %rax
+    mov     %rax, Node_replay_slot(%rbx)
+    call    node_new_id
+    mov     %rax, Node_replay_copy(%rbx)
+    mov     %rax, %rdx
+    mov     $NODE_ACT_STATE_COPY, %edi
+    mov     Node_anchor_state_id(%rbx), %rsi
+    call    node_ids
+    mov     Node_base_slot(%rbx), %rax
+    mov     %rax, Node_replay_copy_slot(%rbx)
+    inc     %rax
+    mov     %rax, Node_replay_next(%rbx)
+7:  mov     $1, %eax
+    LEAVE 0
+8:  xor     %eax, %eax
+    LEAVE 0
+END_FUNCTION node_replay_get
 
 /*
  * The state of the ApiView rdi at its slot (node.md, NODE_EV_API): when head_slot is past
@@ -5090,17 +5238,23 @@ LOCAL_FUNCTION node_api_encode
 END_FUNCTION node_api_encode
 
 /*
- * (connection rdi, route rsi, answer flags rdx) -> rax: a state_id of a root (node.md, NODE_EV_API):
- * a NodeApi entry with API_STREAM_LOOKUP and a NODE_WORK_API_LOOKUP with the head's post-state; 0,
- * or 404 with no head post-state. rbx the node, r15 the actions. r12 the route, S7 the flags, S9
- * the connection, S8 the head's post-state. Locals: L the entry's index.
+ * (connection rdi, route rsi, answer flags rdx, wait rcx) -> rax: a state_id of a root (node.md,
+ * NODE_EV_API): a NodeApi entry with API_STREAM_LOOKUP and a NODE_WORK_API_LOOKUP with the head's
+ * post-state; with wait 1, a state_id of a slot whose state waits for the replay: the entry with
+ * API_STREAM_REPLAY and the slot at API_REPLAY_SLOT of its cursor, and no work. 0, or 404 with no
+ * head post-state. rbx the node, r15 the actions. r12 the route, S7 the flags, S9 the connection,
+ * S8 the head's post-state, S10 wait. Locals: L the entry's index.
  */
 LOCAL_FUNCTION node_api_lookup
     ENTER 16
     mov     %rdi, S9(%rsp)
     mov     %rsi, %r12
+    mov     %rcx, S10(%rsp)
     or      $(API_STREAM_LOOKUP | API_STREAM_BUSY), %rdx
-    cmpq    $API_TYPE_SSZ, ApiRoute_response(%r12)
+    test    %rcx, %rcx
+    jz      3f
+    or      $API_STREAM_REPLAY, %rdx
+3:  cmpq    $API_TYPE_SSZ, ApiRoute_response(%r12)
     jne     1f
     or      $API_STREAM_SSZ, %rdx
 1:  mov     %rdx, S7(%rsp)
@@ -5127,11 +5281,8 @@ LOCAL_FUNCTION node_api_lookup
     lea     NodeApi_cursor(%r13), %rax
     lea     ApiRoute_id_root(%r12), %rcx
     COPY32  %rax, %rcx
-    mov     ApiRoute_op(%r12), %rax         # the validator operations and getEpochCommittees: statuses, validator_id, epoch, slot, index, present and ids
-    sub     $API_OP_GET_STATE_VALIDATORS, %rax
-    cmp     $(API_OP_GET_EPOCH_COMMITTEES - API_OP_GET_STATE_VALIDATORS), %rax
-    ja      2f
-    mov     ApiRoute_statuses(%r12), %rax
+    mov     ApiRoute_statuses(%r12), %rax   # statuses, validator_id, epoch, slot, index and present; the validator operations' ids
+
     mov     %rax, (NodeApi_cursor + 32)(%r13)
     mov     ApiRoute_epoch(%r12), %rax
     mov     %rax, (NodeApi_cursor + 104)(%r13)
@@ -5145,13 +5296,26 @@ LOCAL_FUNCTION node_api_lookup
     lea     ApiRoute_validator(%r12), %rsi
     mov     $64, %edx
     call    lantern_copy
+    mov     ApiRoute_op(%r12), %rax
+    sub     $API_OP_GET_STATE_VALIDATORS, %rax
+    cmp     $(API_OP_GET_EPOCH_COMMITTEES - API_OP_GET_STATE_VALIDATORS), %rax
+    ja      2f
     mov     %r12, %rdi
     call    node_api_ids
     mov     %rax, NodeApi_data(%r13)
     test    %rax, %rax
     jz      2f
     orq     $API_STREAM_OWN, NodeApi_flags(%r13)
-2:  mov     $NODE_WORK_API_LOOKUP, %edi
+2:  cmpq    $0, S10(%rsp)                   # the replay's wait: the slot of the state_id, no work
+    je      4f
+    xor     %eax, %eax
+    cmpq    $API_ID_SLOT, ApiRoute_id_kind(%r12)
+    jne     5f
+    mov     ApiRoute_id_slot(%r12), %rax
+5:  mov     %rax, (NodeApi_cursor + API_REPLAY_SLOT)(%r13)
+    xor     %eax, %eax
+    LEAVE 16
+4:  mov     $NODE_WORK_API_LOOKUP, %edi
     mov     S8(%rsp), %rsi
     xor     %edx, %edx
     xor     %ecx, %ecx
@@ -5165,13 +5329,11 @@ LOCAL_FUNCTION node_api_lookup
 END_FUNCTION node_api_lookup
 
 /*
- * The NODE_EV_WORK_DONE rdi of a NODE_WORK_API_LOOKUP (node.md, lantern_node_step): the entry
- * ends; the answer for the state_id of the slot found, or 404. rbx the node, rbp the store, r14 the
- * scratch, r15 the actions. r12 the event, r13 the route, S7 the flags, S8 the view, S9 the
- * connection, S10 the operation. Locals: L the scratch's size.
+ * The NODE_EV_WORK_DONE rdi of a NODE_WORK_API_LOOKUP (node.md, lantern_node_step): its entry goes
+ * on with the slot found (node_api_rerun), the replay allowed. r12 the event.
  */
 LOCAL_FUNCTION node_api_lookup_done
-    ENTER 128
+    ENTER 0
     mov     %rdi, %r12
     mov     NodeAction_arg(%r12), %rax
     PART    %rdi, %rcx, %rbx, Node_api
@@ -5184,35 +5346,52 @@ LOCAL_FUNCTION node_api_lookup_done
     jz      99f
     cmp     NodeAction_target(%r12), %rax
     jne     99f
-    mov     %rax, S9(%rsp)
-    mov     NodeApi_flags(%rdi), %rax
-    test    $API_STREAM_LOOKUP, %eax
+    testq   $API_STREAM_LOOKUP, NodeApi_flags(%rdi)
     jz      99f
+    mov     NodeEvent_index(%r12), %rsi
+    mov     $1, %edx
+    call    node_api_rerun
+99: LEAVE 0
+END_FUNCTION node_api_lookup_done
+
+/*
+ * (entry rdi, slot rsi, replay rdx): a lookup entry goes on with the slot of its state_id (node.md,
+ * NODE_WORK_API_LOOKUP done, and the replay): it ends, then the answer of its operation for the
+ * state_id of that slot, or 404 for 2^64 - 1; with replay 1 a state that needs the replay keeps the
+ * entry waiting (API_STREAM_REPLAY, the slot at API_REPLAY_SLOT of its cursor). With
+ * API_STREAM_GONE it ends. rbx the node, rbp the store, r14 the scratch, r15 the actions. r12 the
+ * entry, r13 the route, S7 the flags, S8 the view, S9 the connection, S10 the operation. Locals: L
+ * the scratch's size, L+16 the ids, L+24 statuses, L+32 validator (64), L+96 epoch, slot, index and
+ * present, L+128 the slot, L+136 replay, then the status.
+ */
+LOCAL_FUNCTION node_api_rerun
+    ENTER 144
+    mov     %rdi, %r12
+    mov     %rsi, (L + 128)(%rsp)
+    mov     %rdx, (L + 136)(%rsp)
+    mov     NodeApi_connection(%r12), %rax
+    mov     %rax, S9(%rsp)
+    mov     NodeApi_flags(%r12), %rax
     mov     %rax, S7(%rsp)
-    mov     NodeApi_op(%rdi), %rcx
+    mov     NodeApi_op(%r12), %rcx
     mov     %rcx, S10(%rsp)
     test    $API_STREAM_GONE, %eax
     jz      1f
+    mov     %r12, %rdi
     call    node_api_end                    # API_STREAM_GONE: the entry ends, its ids with it
     jmp     99f
-1:  mov     NodeApi_data(%rdi), %rcx        # its ids, statuses and validator_id go to the answer
+1:  mov     NodeApi_data(%r12), %rcx        # its ids, statuses and validator_id go to the answer
     mov     %rcx, (L + 16)(%rsp)
-    mov     (NodeApi_cursor + 32)(%rdi), %rcx
+    mov     (NodeApi_cursor + 32)(%r12), %rcx
     mov     %rcx, (L + 24)(%rsp)
-    mov     %rdi, %r13
     lea     (L + 32)(%rsp), %rdi
-    lea     (NodeApi_cursor + 40)(%r13), %rsi
+    lea     (NodeApi_cursor + 40)(%r12), %rsi
     mov     $64, %edx
     call    lantern_copy
     lea     (L + 96)(%rsp), %rdi
-    lea     (NodeApi_cursor + 104)(%r13), %rsi
+    lea     (NodeApi_cursor + 104)(%r12), %rsi
     mov     $32, %edx
     call    lantern_copy
-    mov     %r13, %rdi
-    mov     S7(%rsp), %rax
-    and     $~API_STREAM_OWN, %rax          # the entry ends; it owns no bytes
-    mov     %rax, NodeApi_flags(%rdi)
-    call    node_api_end
     mov     (%r14), %rax                    # the ApiView, then an ApiRoute, at the end of scratch
     mov     %rax, L(%rsp)
     sub     $(ApiView__size + API_ROUTE_FIXED), %rax
@@ -5231,9 +5410,9 @@ LOCAL_FUNCTION node_api_lookup_done
     mov     %rax, ApiRoute_op(%r13)
     mov     $API_TYPE_JSON, %eax
     testq   $API_STREAM_SSZ, S7(%rsp)
-    jz      1f
+    jz      2f
     mov     $API_TYPE_SSZ, %eax
-1:  mov     %rax, ApiRoute_response(%r13)
+2:  mov     %rax, ApiRoute_response(%r13)
     mov     (L + 24)(%rsp), %rax
     mov     %rax, ApiRoute_statuses(%r13)
     lea     ApiRoute_validator(%r13), %rdi
@@ -5249,45 +5428,42 @@ LOCAL_FUNCTION node_api_lookup_done
     mov     (L + 120)(%rsp), %rax
     mov     %rax, ApiRoute_present(%r13)
     movq    $API_ID_SLOT, ApiRoute_id_kind(%r13)
-    mov     NodeEvent_index(%r12), %rax
+    mov     (L + 128)(%rsp), %rax
     mov     %rax, ApiRoute_id_slot(%r13)
     mov     $404, %edx
     cmp     $-1, %rax
-    je      80f
-    mov     %r13, %rdi
+    je      70f
     mov     S8(%rsp), %rsi
+    mov     (L + 136)(%rsp), %rax
+    mov     %rax, ApiView_look_replay(%rsi)
+    mov     %r13, %rdi
     call    node_api_state
     mov     %rax, %rdx
-    test    %rax, %rax
+    cmp     $1, %rax
+    jne     70f
+    orq     $API_STREAM_REPLAY, NodeApi_flags(%r12) # the replay: the entry waits
+    mov     (L + 128)(%rsp), %rax
+    mov     %rax, (NodeApi_cursor + API_REPLAY_SLOT)(%r12)
+    jmp     90f
+70: mov     %rdx, (L + 136)(%rsp)
+    mov     S7(%rsp), %rax
+    and     $~API_STREAM_OWN, %rax          # the entry ends; it owns no bytes
+    mov     %rax, NodeApi_flags(%r12)
+    mov     %r12, %rdi
+    call    node_api_end
+    mov     (L + 136)(%rsp), %rdx
+    test    %rdx, %rdx
     jnz     80f
-    mov     S8(%rsp), %rdi
-    call    node_api_advance
-    mov     S7(%rsp), %rdx
-    and     $(API_STREAM_CLOSE | API_STREAM_HTTP10), %edx
     mov     S8(%rsp), %rax                  # the ids go to the answer
     mov     (L + 16)(%rsp), %rcx
     mov     %rcx, ApiView_look_data(%rax)
     movq    $0, (L + 16)(%rsp)
-    mov     S10(%rsp), %rax
-    cmp     $API_OP_GET_STATE_V2, %rax
-    je      3f
-    cmp     $API_OP_GET_STATE_VALIDATOR, %rax
-    je      2f
-    sub     $API_OP_GET_STATE_VALIDATORS, %rax
-    cmp     $(API_OP_GET_EPOCH_COMMITTEES - API_OP_GET_STATE_VALIDATORS), %rax
-    ja      2f
-3:  mov     S9(%rsp), %rdi                  # getStateV2, the validator streams and getEpochCommittees: a stream
+    mov     S9(%rsp), %rdi
     mov     %r13, %rsi
+    mov     S7(%rsp), %rdx
+    and     $(API_STREAM_CLOSE | API_STREAM_HTTP10), %edx
     mov     S8(%rsp), %rcx
-    call    node_api_stream
-    mov     %rax, %rdx
-    test    %rax, %rax
-    jnz     80f
-    jmp     90f
-2:  mov     S10(%rsp), %rdi                 # the others: a work
-    mov     S9(%rsp), %rsi
-    mov     S8(%rsp), %rcx
-    call    node_api_encode
+    call    node_api_state_answer
     mov     %rax, %rdx
     test    %rax, %rax
     jz      90f
@@ -5311,8 +5487,169 @@ LOCAL_FUNCTION node_api_lookup_done
 81: call    node_api_send
 90: mov     L(%rsp), %rax
     mov     %rax, (%r14)
-99: LEAVE 128
-END_FUNCTION node_api_lookup_done
+99: LEAVE 144
+END_FUNCTION node_api_rerun
+
+/*
+ * (data rdi, slot rsi): the copy of the replay in flight crosses the fork boundaries to the slot
+ * rsi, then a NODE_WORK_REPLAY of it with the block's bytes rdi (node.md, the replay). S7 the data,
+ * S8 the slot.
+ */
+LOCAL_FUNCTION node_replay_block
+    ENTER 0
+    mov     %rdi, S7(%rsp)
+    mov     %rsi, S8(%rsp)
+    mov     Node_replay_copy(%rbx), %rdi
+    mov     Node_anchor_state_id(%rbx), %rsi
+    mov     Node_replay_copy_slot(%rbx), %rdx
+    mov     S8(%rsp), %rcx
+    call    node_cross
+    mov     %rax, Node_replay_copy(%rbx)
+    mov     S8(%rsp), %rcx
+    mov     %rcx, Node_replay_copy_slot(%rbx)
+    mov     $NODE_WORK_REPLAY, %edi
+    mov     %rax, %rsi
+    xor     %edx, %edx
+    mov     S7(%rsp), %rcx
+    xor     %r8d, %r8d
+    xor     %r9d, %r9d
+    call    node_work
+    LEAVE 0
+END_FUNCTION node_replay_block
+
+/*
+ * The replay in flight queues its next blocks (node.md, the replay): at most NODE_REPLAY_CHUNK, the
+ * first always and the others while the actions have room for 1024 bytes more; the Db's blocks
+ * below db_next_slot, then the NodeBlock path from replay_root, a list at the end of scratch. Once
+ * it is queued whole, replay_state takes the copy and the entries that wait run again; a block it
+ * cannot find ends it, and they run again with no replay. r12 the next slot, r13 the blocks queued,
+ * S7 a block's data, then the path's count, S8 the path list, S9 an entry, S10 the entries left.
+ * Locals: L the scratch's size, L+16 replay.
+ */
+LOCAL_FUNCTION node_replay_due
+    ENTER 32
+    cmpq    $0, Node_replay_copy(%rbx)
+    je      99f
+    mov     Node_replay_next(%rbx), %r12
+    xor     %r13d, %r13d
+    mov     (%r14), %rax
+    mov     %rax, L(%rsp)
+1:  cmp     Node_replay_slot(%rbx), %r12
+    ja      50f
+    testq   $NODE_FLAG_DB, Node_flags(%rbx) # the Db's blocks, below db_next_slot
+    jz      10f
+    cmp     Node_db_next_slot(%rbx), %r12
+    jae     10f
+    mov     %r12, %rdi
+    call    node_db_block
+    test    %rax, %rax
+    jz      3f
+    mov     %rax, S7(%rsp)
+    cmp     $NODE_REPLAY_CHUNK, %r13
+    jae     40f
+    test    %r13, %r13
+    jz      2f
+    mov     $1024, %edi
+    call    node_room
+    test    %rax, %rax
+    jz      40f
+2:  mov     S7(%rsp), %rdi
+    mov     %r12, %rsi
+    call    node_replay_block
+    inc     %r13
+3:  inc     %r12
+    jmp     1b
+10: lea     Node_replay_root(%rbx), %rdi    # the NodeBlock path from the replay's block, down to the next slot
+    call    node_find_block
+    cmp     $-1, %rax
+    je      60f
+    mov     (%r14), %rax
+    mov     (Node_blocks + 8)(%rbx), %rcx
+    shl     $3, %rcx
+    sub     %rcx, %rax
+    jb      40f
+    mov     %rax, (%r14)
+    add     %r14, %rax
+    mov     %rax, S8(%rsp)
+    movq    $0, S7(%rsp)
+11: cmp     %r12, NodeBlock_slot(%rdx)
+    jb      14f
+    cmpq    $0, NodeBlock_data_id(%rdx)     # a block of the path with no bytes: none
+    je      60f
+    mov     S7(%rsp), %rcx
+    cmp     (Node_blocks + 8)(%rbx), %rcx
+    jae     60f
+    mov     S8(%rsp), %rax
+    mov     %rdx, (%rax,%rcx,8)
+    incq    S7(%rsp)
+    lea     NodeBlock_parent_root(%rdx), %rdi
+    call    node_find_block
+    cmp     $-1, %rax
+    jne     11b
+14: cmpq    $0, S7(%rsp)                    # from the lowest
+    je      15f
+    cmp     $NODE_REPLAY_CHUNK, %r13
+    jae     40f
+    test    %r13, %r13
+    jz      16f
+    mov     $1024, %edi
+    call    node_room
+    test    %rax, %rax
+    jz      40f
+16: decq    S7(%rsp)
+    mov     S7(%rsp), %rcx
+    mov     S8(%rsp), %rax
+    mov     (%rax,%rcx,8), %rax
+    mov     NodeBlock_data_id(%rax), %rdi
+    mov     NodeBlock_slot(%rax), %rsi
+    lea     1(%rsi), %r12
+    call    node_replay_block
+    inc     %r13
+    jmp     14b
+15: mov     Node_replay_slot(%rbx), %r12    # the path's last: the replay's block
+    inc     %r12
+50: mov     Node_replay_copy(%rbx), %rax    # queued whole: its state
+    mov     %rax, Node_replay_state(%rbx)
+    movq    $0, Node_replay_copy(%rbx)
+    mov     %r12, Node_replay_next(%rbx)
+    movq    $1, (L + 16)(%rsp)
+    jmp     70f
+40: mov     %r12, Node_replay_next(%rbx)    # the rest in a later step
+    jmp     90f
+60: mov     $NODE_ACT_STATE_FREE, %edi      # a block it cannot find: no replay
+    mov     Node_replay_copy(%rbx), %rsi
+    xor     %edx, %edx
+    call    node_ids
+    movq    $0, Node_replay_copy(%rbx)
+    lea     Node_replay_root(%rbx), %rdi
+    mov     $32, %esi
+    call    lantern_zero
+    movq    $0, (L + 16)(%rsp)
+70: mov     L(%rsp), %rax                   # the entries that wait run again
+    mov     %rax, (%r14)
+    PART    %rax, %rcx, %rbx, Node_api
+    mov     %rax, S9(%rsp)
+    mov     %rcx, S10(%rsp)
+71: cmpq    $0, S10(%rsp)
+    je      99f
+    mov     S9(%rsp), %rdi
+    cmpq    $0, NodeApi_connection(%rdi)
+    je      72f
+    mov     NodeApi_flags(%rdi), %rax
+    test    $API_STREAM_REPLAY, %eax
+    jz      72f
+    and     $~API_STREAM_REPLAY, %rax
+    mov     %rax, NodeApi_flags(%rdi)
+    mov     (NodeApi_cursor + API_REPLAY_SLOT)(%rdi), %rsi
+    mov     (L + 16)(%rsp), %rdx
+    call    node_api_rerun
+72: addq    $NodeApi__mem, S9(%rsp)
+    decq    S10(%rsp)
+    jmp     71b
+90: mov     L(%rsp), %rax
+    mov     %rax, (%r14)
+99: LEAVE 32
+END_FUNCTION node_replay_due
 
 /*
  * (node rdi, work rsi, state_a rdx, scratch rcx, event r8) -> rax: a NODE_WORK_API_LOOKUP of

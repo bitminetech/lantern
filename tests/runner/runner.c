@@ -3166,8 +3166,8 @@ static void shell_work(fc_node *n, const uint8_t *work, const char **why) {
     shell_buf *c = c_id ? shell_find(s, c_id) : NULL, *d = d_id && !(d_id & NODE_DB_REF) ? shell_find(s, d_id) : NULL;
     shell_buf view = {0, 0, NULL};
     if (d_id & NODE_DB_REF) { /* the record of the node's Db, in place */
-        if (kind != WORK_SERVE && kind != WORK_API_ENCODE && kind != WORK_API_CHUNK) {
-            *why = "a NODE_DB_REF in a WORK that does not serve";
+        if (kind != WORK_SERVE && kind != WORK_API_ENCODE && kind != WORK_API_CHUNK && kind != WORK_REPLAY) {
+            *why = "a NODE_DB_REF in a WORK that does not serve or replay";
             return;
         }
         view.b = shell_db_view(s, d_id);
@@ -10464,22 +10464,28 @@ static void api_lookup_checks(fc_node *n, tv parts, const char **why) {
         api_lookups++;
     }
     free(copy);
-    /* getStateRoot of the state root of each slot from the anchor's to the head's: that root, or 404 below F's slot */
-    uint64_t roots_n = strcmp(PRESET, "minimal") ? 8192 : 64, first = head_slot > roots_n ? head_slot - roots_n : 0, f_slot = 0;
-    const uint8_t *fe = shell_block(s, n->store + STORE_FINALIZED + 8);
-    if (fe) f_slot = rd64(fe + 64);
+    /* getStateRoot of each slot from the anchor's to the head's, then of its state root: that root (below F's slot by the replay) */
+    uint64_t roots_n = strcmp(PRESET, "minimal") ? 8192 : 64, first = head_slot > roots_n ? head_slot - roots_n : 0;
     uint8_t head_root[32];
     if (!*why) root_of("BeaconState", st, head_root, why);
     for (uint64_t slot = anchor_slot > first ? anchor_slot : first; slot <= head_slot && !*why; slot++) {
         const uint8_t *r = slot == head_slot ? head_root : st + field_offset("BeaconState", 6) + 32 * (slot % roots_n);
+        snprintf(req, sizeof req, "GET /eth/v1/beacon/states/%llu/root HTTP/1.1\r\nHost: lantern\r\n\r\n", (unsigned long long)slot);
+        shell_api_ask(n, (const uint8_t *)req, strlen(req), conn++, why);
+        if (*why) break;
+        if (!(api_root_of(s, got) && !memcmp(got, r, 32))) {
+            snprintf(msg, sizeof msg, "API getStateRoot of slot %llu: not its state root", (unsigned long long)slot);
+            *why = msg;
+        }
+        if (!*why) *why = api_clean(s);
+        api_lookups++;
+        if (*why) break;
         int k = snprintf(req, sizeof req, "GET /eth/v1/beacon/states/0x");
         for (int b = 0; b < 32; b++) k += snprintf(req + k, sizeof req - (size_t)k, "%02x", r[b]);
         snprintf(req + k, sizeof req - (size_t)k, "/root HTTP/1.1\r\nHost: lantern\r\n\r\n");
         shell_api_ask(n, (const uint8_t *)req, strlen(req), conn++, why);
         if (*why) break;
-        int ok = (api_root_of(s, got) && !memcmp(got, r, 32)) ||
-                 (slot < f_slot && s->api.len > 13 && !memcmp(s->api.b, "HTTP/1.1 404 ", 13));
-        if (!ok) {
+        if (!(api_root_of(s, got) && !memcmp(got, r, 32))) {
             snprintf(msg, sizeof msg, "API getStateRoot of the state root of slot %llu: not that root", (unsigned long long)slot);
             *why = msg;
         }

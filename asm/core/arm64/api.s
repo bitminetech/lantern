@@ -3323,53 +3323,37 @@ LOCAL_FUNCTION node_api_event
     mov     x0, x27
     mov     x1, x25
     mov     x2, x21
+    mov     x3, #0
     bl      node_api_lookup
     mov     x2, x0
     cbnz    x0, 80f
     b       90f
-69: mov     x0, x25                         /* a state: its lookup, then the state at its slot */
+69: mov     x9, #1                          /* a state: its lookup, then the state at its slot; the replay may come */
+    STQ     x9, x26, ApiView_look_replay
+    mov     x0, x25
     mov     x1, x26
     bl      node_api_state
     mov     x2, x0
+    cmp     x0, #1
+    b.eq    698f
     cbnz    x0, 80f
-    mov     x0, x26
-    bl      node_api_advance
-    ldr     x0, [x25, #ApiRoute_op]
-    cmp     x0, #API_OP_GET_STATE_V2
-    b.eq    64f
-    sub     x9, x0, #API_OP_GET_PENDING_CONSOLIDATIONS  /* the pending lists: a stream of the state, no data */
-    cmp     x9, #2
-    b.hi    695f
     str     xzr, [x26, #ApiView_look_data]
-    b       64f
-695: cmp    x0, #API_OP_GET_STATE_RANDAO    /* getStateRandao, getEpochSyncCommittees: the epoch in the work's data */
-    ccmp    x0, #API_OP_GET_EPOCH_SYNC_COMMITTEES, #4, ne
-    b.ne    691f
-    ldr     x9, [x25, #ApiRoute_present]
-    tbnz    x9, #API_PARAM_EPOCH, 692f
-    mov     x10, #-1
-    str     x10, [x25, #ApiRoute_epoch]
-692: add    x0, x25, #ApiRoute_epoch
-    bl      node_api_put8
-    str     x0, [x26, #ApiView_look_data]
-    b       67f
-691: cmp    x0, #API_OP_GET_PROPOSER_LOOKAHEAD  /* getProposerLookahead: SSZ, an answer flag */
-    b.ne    693f
-    ldr     x9, [x25, #ApiRoute_response]
-    cmp     x9, #API_TYPE_SSZ
-    b.ne    67f
-    orr     x21, x21, #API_ANSWER_SSZ
-    b       67f
-693: sub    x9, x0, #API_OP_GET_STATE_VALIDATORS
-    cmp     x9, #(API_OP_GET_EPOCH_COMMITTEES - API_OP_GET_STATE_VALIDATORS)
-    b.hi    67f
-    mov     x0, x25                         /* the validator operations: their ids; getStateValidator a work, the others a stream */
-    bl      node_api_ids
-    str     x0, [x26, #ApiView_look_data]
-    ldr     x0, [x25, #ApiRoute_op]
-    cmp     x0, #API_OP_GET_STATE_VALIDATOR
-    b.ne    64f
-    b       67f
+    mov     x0, x27
+    mov     x1, x25
+    mov     x2, x21
+    mov     x3, x26
+    bl      node_api_state_answer
+    mov     x2, x0
+    cbnz    x0, 80f
+    b       90f
+698: mov    x0, x27                         /* the replay: the request waits in a lookup entry */
+    mov     x1, x25
+    mov     x2, x21
+    mov     x3, #1
+    bl      node_api_lookup
+    mov     x2, x0
+    cbnz    x0, 80f
+    b       90f
 53: mov     x2, #503                        /* getSyncCommitteeDuties: 503 while syncing; 400 past the next period, with no index or a key */
     ldr     x9, [x26, #ApiView_is_syncing]
     cbnz    x9, 80f
@@ -3766,6 +3750,71 @@ LOCAL_FUNCTION node_api_event
     str     x9, [x23]
     LEAVE 16
 END_FUNCTION node_api_event
+
+/*
+ * L2: the answer of a state operation (beacon-api.md) for the connection x0, the route x1, the
+ * answer flags x2 and the view x3 whose state node_api_state found: the state at head_slot, then a
+ * stream or a work. A validator operation's ids: look_data when it is not 0, else the route's.
+ * x0 = 0, or the status of an error. x21 the flags, x25 the route, x26 the view, x27 the connection.
+ */
+LOCAL_FUNCTION node_api_state_answer
+    ENTER 0
+    mov     x27, x0
+    mov     x25, x1
+    mov     x21, x2
+    mov     x26, x3
+    mov     x0, x26
+    bl      node_api_advance
+    ldr     x0, [x25, #ApiRoute_op]
+    cmp     x0, #API_OP_GET_STATE_V2
+    b.eq    64f
+    sub     x9, x0, #API_OP_GET_PENDING_CONSOLIDATIONS  /* the pending lists: a stream of the state, no data */
+    cmp     x9, #2
+    b.hi    5f
+    str     xzr, [x26, #ApiView_look_data]
+    b       64f
+5:  cmp     x0, #API_OP_GET_STATE_RANDAO    /* getStateRandao, getEpochSyncCommittees: the epoch in the work's data */
+    ccmp    x0, #API_OP_GET_EPOCH_SYNC_COMMITTEES, #4, ne
+    b.ne    1f
+    ldr     x9, [x25, #ApiRoute_present]
+    tbnz    x9, #API_PARAM_EPOCH, 2f
+    mov     x10, #-1
+    str     x10, [x25, #ApiRoute_epoch]
+2:  add     x0, x25, #ApiRoute_epoch
+    bl      node_api_put8
+    str     x0, [x26, #ApiView_look_data]
+    b       67f
+1:  cmp     x0, #API_OP_GET_PROPOSER_LOOKAHEAD  /* getProposerLookahead: SSZ, an answer flag */
+    b.ne    3f
+    ldr     x9, [x25, #ApiRoute_response]
+    cmp     x9, #API_TYPE_SSZ
+    b.ne    67f
+    orr     x21, x21, #API_ANSWER_SSZ
+    b       67f
+3:  sub     x9, x0, #API_OP_GET_STATE_VALIDATORS
+    cmp     x9, #(API_OP_GET_EPOCH_COMMITTEES - API_OP_GET_STATE_VALIDATORS)
+    b.hi    67f
+    ldr     x9, [x26, #ApiView_look_data]   /* the validator operations: their ids; getStateValidator a work, the others a stream */
+    cbnz    x9, 4f
+    mov     x0, x25
+    bl      node_api_ids
+    str     x0, [x26, #ApiView_look_data]
+4:  ldr     x0, [x25, #ApiRoute_op]
+    cmp     x0, #API_OP_GET_STATE_VALIDATOR
+    b.ne    64f
+67: ldr     x0, [x25, #ApiRoute_op]         /* a work */
+    mov     x1, x27
+    mov     x2, x21
+    mov     x3, x26
+    bl      node_api_encode
+    LEAVE 0
+64: mov     x0, x27                         /* a stream of the answer */
+    mov     x1, x25
+    mov     x2, x21
+    mov     x3, x26
+    bl      node_api_stream
+    LEAVE 0
+END_FUNCTION node_api_state_answer
 
 /*
  * L3: the state of the chain at the slot x0, as for a state_id of it, and past the store's slot the
@@ -5015,13 +5064,18 @@ END_FUNCTION node_api_block
 /*
  * L2: the state of the state_id of the ApiRoute x0 into the ApiView x1 (beacon-api.md, Common
  * rules): look_state, a state the node keeps, at look_state_slot; head_slot the slot it goes to;
- * head_finalized and is_optimistic. x0 = 0, or 404 for none. x21 the route, x22 the view, x25 the
- * block's entry, x26 the slot, x27 the checkpoint.
+ * head_finalized and is_optimistic. x0 = 0, or 404 for none; with look_replay 1 (which goes to 0)
+ * a block at or below F's slot with no post-state comes from the replay (node.md): x0 = 1 while the
+ * request waits for it. x21 the route, x22 the view, x25 the block's entry, x26 the slot, x27 the
+ * checkpoint, then the base's slot. Locals: L look_replay.
  */
 LOCAL_FUNCTION node_api_state
-    ENTER 0
+    ENTER 16
     mov     x21, x0
     mov     x22, x1
+    LDQ     x9, x22, ApiView_look_replay
+    str     x9, [sp, #L]
+    STQ     xzr, x22, ApiView_look_replay
     str     xzr, [x22, #ApiView_look_state]
     str     xzr, [x22, #ApiView_look_copy]
     mov     x9, #-1
@@ -5082,7 +5136,7 @@ LOCAL_FUNCTION node_api_state
     mov     x0, x26
     bl      node_api_below
     cmn     x0, #1
-    b.eq    80f
+    b.eq    75f
 5:  mov     x25, x1                         /* the block's post-state, again when the node let it go */
     ldr     x9, [x25, #NodeBlock_payload_status]
     cmp     x9, #PAYLOAD_STATUS_NOT_VALIDATED
@@ -5095,7 +5149,7 @@ LOCAL_FUNCTION node_api_state
     cmn     x0, #1
     b.eq    80f
     cmp     x9, x0
-    b.ls    80f
+    b.ls    70f
     mov     x0, x25
     bl      node_rebuild
     cbz     x0, 80f
@@ -5110,10 +5164,97 @@ LOCAL_FUNCTION node_api_state
     cset    x9, ls
     STQ     x9, x22, ApiView_head_finalized
     mov     x0, #0
-    LEAVE 0
+    LEAVE 16
+70: add     x0, x25, #NodeBlock_root        /* at or below F's slot: the replay */
+    ldr     x1, [x25, #NodeBlock_slot]
+    b       71f
+75: ldr     x9, [x19, #Node_flags]          /* below the chain's lowest block: the Db's block at or below the slot */
+    tst     x9, #NODE_FLAG_DB
+    b.eq    80f
+    LDQ     x27, x19, Node_base_slot
+    mov     x25, x26
+76: cmp     x25, x27
+    b.ls    77f
+    mov     x0, x25
+    bl      node_db_slot
+    mov     x1, x25
+    cbnz    x0, 71f                         /* its DbSlot: the root at 0 */
+    sub     x25, x25, #1
+    b       76b
+77: mov     x0, #0                          /* none above the base's slot: the base state */
+    mov     x1, x27
+71: ldr     x9, [sp, #L]
+    cbz     x9, 80f
+    bl      node_replay_get
+    cbz     x0, 80f
+    cmp     x0, #1
+    b.eq    79f
+    str     x0, [x22, #ApiView_look_state]
+    str     x1, [x22, #ApiView_look_state_slot]
+    mov     x9, #1
+    str     x9, [x22, #ApiView_look_copy]
+    str     xzr, [x22, #ApiView_is_optimistic]
+    b       7b
+79: LEAVE 16
 80: mov     x0, #404
-    LEAVE 0
+    LEAVE 16
 END_FUNCTION node_api_state
+
+/*
+ * L2: (root x0, or 0 for the base, slot x1) with the view x22: the post-state of the block of root
+ * x0 at slot x1, at or below F's slot and at or above base_slot, by the replay (node.md): x0 = a
+ * copy of it and x1 its slot; 1 when the request waits for the replay; 0 for none. x21 the root,
+ * x25 the slot, x26 the state, x27 the copy.
+ */
+LOCAL_FUNCTION node_replay_get
+    ENTER 0
+    mov     x21, x0
+    mov     x25, x1
+    LDQ     x9, x19, Node_base_slot
+    cmp     x25, x9
+    b.lo    8f
+    ldr     x26, [x19, #Node_anchor_state_id]   /* the base's slot: the base state */
+    b.eq    5f
+    cbz     x21, 8f
+    LDQ     x26, x19, Node_replay_state     /* the last replay's state, of that root */
+    cbz     x26, 2f
+    ADDQ    x9, x19, Node_replay_root
+    NE32    x9, x21, 2f
+5:  bl      node_new_id                     /* a copy for the answer */
+    mov     x27, x0
+    mov     x0, #NODE_ACT_STATE_COPY
+    mov     x1, x26
+    mov     x2, x27
+    bl      node_ids
+    mov     x0, x27
+    mov     x1, x25
+    LEAVE 0
+2:  LDQ     x9, x19, Node_replay_copy       /* a replay in flight: the request waits */
+    cbnz    x9, 7f
+    LDQ     x1, x19, Node_replay_state      /* else one starts, for this block */
+    cbz     x1, 3f
+    mov     x0, #NODE_ACT_STATE_FREE
+    mov     x2, #0
+    bl      node_ids
+    STQ     xzr, x19, Node_replay_state
+3:  ADDQ    x0, x19, Node_replay_root
+    COPY32  x0, x21
+    STQ     x25, x19, Node_replay_slot
+    bl      node_new_id
+    STQ     x0, x19, Node_replay_copy
+    mov     x2, x0
+    mov     x0, #NODE_ACT_STATE_COPY
+    ldr     x1, [x19, #Node_anchor_state_id]
+    bl      node_ids
+    LDQ     x9, x19, Node_base_slot
+    STQ     x9, x19, Node_replay_copy_slot
+    add     x9, x9, #1
+    STQ     x9, x19, Node_replay_next
+7:  mov     x0, #1
+    LEAVE 0
+8:  mov     x0, #0
+    LEAVE 0
+END_FUNCTION node_replay_get
 
 /*
  * L2: the state of the ApiView x0 at its slot (node.md, NODE_EV_API): when head_slot is past
@@ -5243,18 +5384,23 @@ LOCAL_FUNCTION node_api_encode
 END_FUNCTION node_api_encode
 
 /*
- * L2: (connection x0, route x1, answer flags x2) -> x0: a state_id of a root (node.md, NODE_EV_API):
- * a NodeApi entry with API_STREAM_LOOKUP and a NODE_WORK_API_LOOKUP with the head's post-state;
- * 0, or 404 with no head post-state. x21 the route, x25 the flags, x27 the connection. Locals: L
- * the entry's index, L+8 the entry.
+ * L2: (connection x0, route x1, answer flags x2, wait x3) -> x0: a state_id of a root (node.md,
+ * NODE_EV_API): a NodeApi entry with API_STREAM_LOOKUP and a NODE_WORK_API_LOOKUP with the head's
+ * post-state; with wait 1, a state_id of a slot whose state waits for the replay: the entry with
+ * API_STREAM_REPLAY and the slot at API_REPLAY_SLOT of its cursor, and no work. 0, or 404 with no
+ * head post-state. x21 the route, x25 the flags, x26 wait, x27 the connection. Locals: L the
+ * entry's index, L+8 the entry.
  */
 LOCAL_FUNCTION node_api_lookup
     ENTER 16
     mov     x27, x0
     mov     x21, x1
+    mov     x26, x3
     orr     x25, x2, #API_STREAM_LOOKUP
     orr     x25, x25, #API_STREAM_BUSY
-    ldr     x9, [x21, #ApiRoute_response]
+    cbz     x26, 3f
+    orr     x25, x25, #API_STREAM_REPLAY
+3:  ldr     x9, [x21, #ApiRoute_response]
     cmp     x9, #API_TYPE_SSZ
     b.ne    1f
     orr     x25, x25, #API_STREAM_SSZ
@@ -5277,11 +5423,7 @@ LOCAL_FUNCTION node_api_lookup
     add     x0, x1, #NodeApi_cursor
     add     x1, x21, #ApiRoute_id_root
     bl      lantern_copy_root
-    ldr     x9, [x21, #ApiRoute_op]         /* the validator operations and getEpochCommittees: statuses, validator_id, epoch, slot, index, present and ids */
-    sub     x9, x9, #API_OP_GET_STATE_VALIDATORS
-    cmp     x9, #(API_OP_GET_EPOCH_COMMITTEES - API_OP_GET_STATE_VALIDATORS)
-    b.hi    2f
-    ldr     x1, [sp, #(L + 8)]
+    ldr     x1, [sp, #(L + 8)]              /* statuses, validator_id, epoch, slot, index and present; the validator operations' ids */
     ldr     x9, [x21, #ApiRoute_statuses]
     str     x9, [x1, #(NodeApi_cursor + 32)]
     add     x11, x1, #(NodeApi_cursor + 104)
@@ -5295,6 +5437,10 @@ LOCAL_FUNCTION node_api_lookup
     add     x1, x21, #ApiRoute_validator
     mov     x2, #64
     bl      lantern_copy
+    ldr     x9, [x21, #ApiRoute_op]
+    sub     x9, x9, #API_OP_GET_STATE_VALIDATORS
+    cmp     x9, #(API_OP_GET_EPOCH_COMMITTEES - API_OP_GET_STATE_VALIDATORS)
+    b.hi    2f
     mov     x0, x21
     bl      node_api_ids
     ldr     x1, [sp, #(L + 8)]
@@ -5303,7 +5449,16 @@ LOCAL_FUNCTION node_api_lookup
     ldr     x9, [x1, #NodeApi_flags]
     orr     x9, x9, #API_STREAM_OWN
     str     x9, [x1, #NodeApi_flags]
-2:  add     x0, x19, #Node_head_root
+2:  cbz     x26, 4f                         /* the replay's wait: the slot of the state_id, no work */
+    ldr     x1, [sp, #(L + 8)]
+    ldr     x9, [x21, #ApiRoute_id_kind]
+    ldr     x10, [x21, #ApiRoute_id_slot]
+    cmp     x9, #API_ID_SLOT
+    csel    x10, x10, xzr, eq
+    str     x10, [x1, #(NodeApi_cursor + API_REPLAY_SLOT)]
+    mov     x0, #0
+    LEAVE 16
+4:  add     x0, x19, #Node_head_root
     bl      node_find_block
     ldr     x1, [x1, #NodeBlock_state_id]
     mov     x0, #NODE_WORK_API_LOOKUP
@@ -5319,13 +5474,11 @@ LOCAL_FUNCTION node_api_lookup
 END_FUNCTION node_api_lookup
 
 /*
- * L2: the NODE_EV_WORK_DONE x0 of a NODE_WORK_API_LOOKUP (node.md, lantern_node_step): the entry
- * ends; the answer for the state_id of the slot found, or 404. x19 the node, x20 the store, x23 the
- * scratch, x24 the actions. x21 the event, x22 the entry, x25 the flags, x26 the view, x27 the
- * connection, x28 the operation. Locals: L the scratch's size, L+8 the route.
+ * L2: the NODE_EV_WORK_DONE x0 of a NODE_WORK_API_LOOKUP (node.md, lantern_node_step): its entry
+ * goes on with the slot found (node_api_rerun), the replay allowed. x21 the event, x22 the entry.
  */
 LOCAL_FUNCTION node_api_lookup_done
-    ENTER 128
+    ENTER 0
     mov     x21, x0
     ldr     x9, [x21, #NodeAction_arg]
     PART    x10, x11, x19, Node_api
@@ -5333,14 +5486,38 @@ LOCAL_FUNCTION node_api_lookup_done
     b.hs    99f
     mov     x12, #NodeApi__mem
     madd    x22, x9, x12, x10
-    ldr     x27, [x22, #NodeApi_connection]
-    cbz     x27, 99f
+    ldr     x9, [x22, #NodeApi_connection]
+    cbz     x9, 99f
     ldr     x10, [x21, #NodeAction_target]
-    cmp     x27, x10
+    cmp     x9, x10
     b.ne    99f
-    ldr     x25, [x22, #NodeApi_flags]
-    tst     x25, #API_STREAM_LOOKUP
+    ldr     x9, [x22, #NodeApi_flags]
+    tst     x9, #API_STREAM_LOOKUP
     b.eq    99f
+    mov     x0, x22
+    ldr     x1, [x21, #NodeEvent_index]
+    mov     x2, #1
+    bl      node_api_rerun
+99: LEAVE 0
+END_FUNCTION node_api_lookup_done
+
+/*
+ * L2: (entry x0, slot x1, replay x2): a lookup entry goes on with the slot of its state_id (node.md,
+ * NODE_WORK_API_LOOKUP done, and the replay): it ends, then the answer of its operation for the
+ * state_id of that slot, or 404 for 2^64 - 1; with replay 1 a state that needs the replay keeps the
+ * entry waiting (API_STREAM_REPLAY, the slot at API_REPLAY_SLOT of its cursor). With
+ * API_STREAM_GONE it ends. x19 the node, x20 the store, x23 the scratch, x24 the actions. x22 the
+ * entry, x25 its flags, x26 the view, x27 the connection, x28 the operation. Locals: L the
+ * scratch's size, L+8 the route, L+16 the ids, L+24 statuses, L+32 validator (64), L+96 epoch,
+ * slot, index and present, L+128 the slot, L+136 replay, then the status.
+ */
+LOCAL_FUNCTION node_api_rerun
+    ENTER 144
+    mov     x22, x0
+    str     x1, [sp, #(L + 128)]
+    str     x2, [sp, #(L + 136)]
+    ldr     x27, [x22, #NodeApi_connection]
+    ldr     x25, [x22, #NodeApi_flags]
     ldr     x28, [x22, #NodeApi_op]
     tbz     x25, #5, 1f                     /* API_STREAM_GONE: the entry ends, its ids with it */
     mov     x0, x22
@@ -5358,10 +5535,6 @@ LOCAL_FUNCTION node_api_lookup_done
     add     x1, x22, #(NodeApi_cursor + 104)
     mov     x2, #32
     bl      lantern_copy
-    and     x9, x25, #~API_STREAM_OWN       /* the entry ends; it owns no bytes */
-    str     x9, [x22, #NodeApi_flags]
-    mov     x0, x22
-    bl      node_api_end
     ldr     x9, [x23]                       /* the ApiView, then an ApiRoute, at the end of scratch */
     str     x9, [sp, #L]
     MOVQ    x10, ApiView__size + API_ROUTE_FIXED
@@ -5399,39 +5572,39 @@ LOCAL_FUNCTION node_api_lookup_done
     str     x10, [x0, #ApiRoute_present]
     mov     x9, #API_ID_SLOT
     str     x9, [x0, #ApiRoute_id_kind]
-    ldr     x9, [x21, #NodeEvent_index]
+    ldr     x9, [sp, #(L + 128)]
     str     x9, [x0, #ApiRoute_id_slot]
     mov     x2, #404
     cmn     x9, #1
-    b.eq    80f
+    b.eq    70f
+    ldr     x9, [sp, #(L + 136)]
+    STQ     x9, x26, ApiView_look_replay
     mov     x1, x26
     bl      node_api_state
     mov     x2, x0
-    cbnz    x0, 80f
-    mov     x0, x26
-    bl      node_api_advance
-    and     x2, x25, #(API_STREAM_CLOSE | API_STREAM_HTTP10)
+    cmp     x0, #1
+    b.ne    70f
+    ldr     x9, [x22, #NodeApi_flags]       /* the replay: the entry waits */
+    orr     x9, x9, #API_STREAM_REPLAY
+    str     x9, [x22, #NodeApi_flags]
+    ldr     x9, [sp, #(L + 128)]
+    str     x9, [x22, #(NodeApi_cursor + API_REPLAY_SLOT)]
+    b       90f
+70: str     x2, [sp, #(L + 136)]
+    and     x9, x25, #~API_STREAM_OWN       /* the entry ends; it owns no bytes */
+    str     x9, [x22, #NodeApi_flags]
+    mov     x0, x22
+    bl      node_api_end
+    ldr     x2, [sp, #(L + 136)]
+    cbnz    x2, 80f
     ldr     x9, [sp, #(L + 16)]             /* the ids go to the answer */
     str     x9, [x26, #ApiView_look_data]
     str     xzr, [sp, #(L + 16)]
-    cmp     x28, #API_OP_GET_STATE_V2
-    b.eq    2f
-    cmp     x28, #API_OP_GET_STATE_VALIDATOR
-    b.eq    1f
-    sub     x9, x28, #API_OP_GET_STATE_VALIDATORS
-    cmp     x9, #(API_OP_GET_EPOCH_COMMITTEES - API_OP_GET_STATE_VALIDATORS)
-    b.hi    1f
-2:  mov     x0, x27                         /* getStateV2, the validator streams and getEpochCommittees: a stream */
+    mov     x0, x27
     ldr     x1, [sp, #(L + 8)]
+    and     x2, x25, #(API_STREAM_CLOSE | API_STREAM_HTTP10)
     mov     x3, x26
-    bl      node_api_stream
-    mov     x2, x0
-    cbnz    x0, 80f
-    b       90f
-1:  mov     x0, x28                         /* the others: a work */
-    mov     x1, x27
-    mov     x3, x26
-    bl      node_api_encode
+    bl      node_api_state_answer
     mov     x2, x0
     cbz     x0, 90f
 80: ldr     x1, [sp, #(L + 16)]             /* ids no answer took: they go */
@@ -5452,8 +5625,165 @@ LOCAL_FUNCTION node_api_lookup_done
 81: bl      node_api_send
 90: ldr     x9, [sp, #L]
     str     x9, [x23]
-99: LEAVE 128
-END_FUNCTION node_api_lookup_done
+99: LEAVE 144
+END_FUNCTION node_api_rerun
+
+/*
+ * L2: (data x0, slot x1): the copy of the replay in flight crosses the fork boundaries to the slot
+ * x1, then a NODE_WORK_REPLAY of it with the block's bytes x0 (node.md, the replay). x21 the data,
+ * x25 the slot.
+ */
+LOCAL_FUNCTION node_replay_block
+    ENTER 0
+    mov     x21, x0
+    mov     x25, x1
+    LDQ     x0, x19, Node_replay_copy
+    ldr     x1, [x19, #Node_anchor_state_id]
+    LDQ     x2, x19, Node_replay_copy_slot
+    mov     x3, x25
+    bl      node_cross
+    STQ     x0, x19, Node_replay_copy
+    STQ     x25, x19, Node_replay_copy_slot
+    mov     x1, x0
+    mov     x0, #NODE_WORK_REPLAY
+    mov     x2, #0
+    mov     x3, x21
+    mov     x4, #0
+    mov     x5, #0
+    bl      node_work
+    LEAVE 0
+END_FUNCTION node_replay_block
+
+/*
+ * L2: the replay in flight queues its next blocks (node.md, the replay): at most NODE_REPLAY_CHUNK,
+ * the first always and the others while the actions have room for 1024 bytes more; the Db's blocks
+ * below db_next_slot, then the NodeBlock path from replay_root, a list at the end of scratch. Once
+ * it is queued whole, replay_state takes the copy and the entries that wait run again; a block it
+ * cannot find ends it, and they run again with no replay. x21 an entry, x22 the entries left, x25
+ * the next slot, x26 the block's slot, x27 the blocks queued, x28 a block's data, then the path's
+ * count. Locals: L the scratch's size, L+8 the path list, L+16 replay.
+ */
+LOCAL_FUNCTION node_replay_due
+    ENTER 32
+    LDQ     x9, x19, Node_replay_copy
+    cbz     x9, 99f
+    LDQ     x25, x19, Node_replay_next
+    LDQ     x26, x19, Node_replay_slot
+    mov     x27, #0
+    ldr     x9, [x23]
+    str     x9, [sp, #L]
+1:  cmp     x25, x26
+    b.hi    50f
+    ldr     x9, [x19, #Node_flags]          /* the Db's blocks, below db_next_slot */
+    tst     x9, #NODE_FLAG_DB
+    b.eq    10f
+    LDQ     x9, x19, Node_db_next_slot
+    cmp     x25, x9
+    b.hs    10f
+    mov     x0, x25
+    bl      node_db_block
+    cbz     x0, 3f
+    mov     x28, x0
+    cmp     x27, #NODE_REPLAY_CHUNK
+    b.hs    40f
+    cbz     x27, 2f
+    mov     x0, #1024
+    bl      node_room
+    cbz     x0, 40f
+2:  mov     x0, x28
+    mov     x1, x25
+    bl      node_replay_block
+    add     x27, x27, #1
+3:  add     x25, x25, #1
+    b       1b
+10: ADDQ    x0, x19, Node_replay_root       /* the NodeBlock path from the replay's block, down to the next slot */
+    bl      node_find_block
+    cmn     x0, #1
+    b.eq    60f
+    ldr     x9, [x23]
+    ldr     x10, [x19, #(Node_blocks + 8)]
+    lsl     x10, x10, #3
+    subs    x11, x9, x10
+    b.lo    40f
+    str     x11, [x23]
+    add     x9, x23, x11
+    str     x9, [sp, #(L + 8)]
+    mov     x28, #0
+    mov     x0, x1
+11: ldr     x9, [x0, #NodeBlock_slot]
+    cmp     x9, x25
+    b.lo    14f
+    ldr     x10, [x0, #NodeBlock_data_id]   /* a block of the path with no bytes: none */
+    cbz     x10, 60f
+    ldr     x10, [x19, #(Node_blocks + 8)]
+    cmp     x28, x10
+    b.hs    60f
+    ldr     x10, [sp, #(L + 8)]
+    str     x0, [x10, x28, lsl #3]
+    add     x28, x28, #1
+    add     x0, x0, #NodeBlock_parent_root
+    bl      node_find_block
+    cmn     x0, #1
+    b.eq    14f
+    mov     x0, x1
+    b       11b
+14: cbz     x28, 15f                        /* from the lowest */
+    cmp     x27, #NODE_REPLAY_CHUNK
+    b.hs    40f
+    cbz     x27, 16f
+    mov     x0, #1024
+    bl      node_room
+    cbz     x0, 40f
+16: sub     x28, x28, #1
+    ldr     x10, [sp, #(L + 8)]
+    ldr     x9, [x10, x28, lsl #3]
+    ldr     x0, [x9, #NodeBlock_data_id]
+    ldr     x1, [x9, #NodeBlock_slot]
+    add     x25, x1, #1
+    bl      node_replay_block
+    add     x27, x27, #1
+    b       14b
+15: add     x25, x26, #1                    /* the path's last: the replay's block */
+50: LDQ     x9, x19, Node_replay_copy       /* queued whole: its state */
+    STQ     x9, x19, Node_replay_state
+    STQ     xzr, x19, Node_replay_copy
+    STQ     x25, x19, Node_replay_next
+    mov     x9, #1
+    b       70f
+40: STQ     x25, x19, Node_replay_next      /* the rest in a later step */
+    b       90f
+60: LDQ     x1, x19, Node_replay_copy       /* a block it cannot find: no replay */
+    mov     x0, #NODE_ACT_STATE_FREE
+    mov     x2, #0
+    bl      node_ids
+    STQ     xzr, x19, Node_replay_copy
+    ADDQ    x0, x19, Node_replay_root
+    mov     x1, #32
+    bl      lantern_zero
+    mov     x9, #0
+70: str     x9, [sp, #(L + 16)]             /* the entries that wait run again */
+    ldr     x9, [sp, #L]
+    str     x9, [x23]
+    PART    x21, x22, x19, Node_api
+71: cbz     x22, 99f
+    ldr     x9, [x21, #NodeApi_connection]
+    cbz     x9, 72f
+    ldr     x9, [x21, #NodeApi_flags]
+    tst     x9, #API_STREAM_REPLAY
+    b.eq    72f
+    and     x9, x9, #~API_STREAM_REPLAY
+    str     x9, [x21, #NodeApi_flags]
+    mov     x0, x21
+    ldr     x1, [x21, #(NodeApi_cursor + API_REPLAY_SLOT)]
+    ldr     x2, [sp, #(L + 16)]
+    bl      node_api_rerun
+72: add     x21, x21, #NodeApi__mem
+    sub     x22, x22, #1
+    b       71b
+90: ldr     x9, [sp, #L]
+    str     x9, [x23]
+99: LEAVE 32
+END_FUNCTION node_replay_due
 
 /*
  * (node, work, state_a, scratch, event) -> status: a NODE_WORK_API_LOOKUP of lantern_node_run

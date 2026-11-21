@@ -220,6 +220,7 @@ FUNCTION lantern_node_init
     str     x9, [x24, #Node_anchor_state_id]
     str     x23, [x24, #Node_flags]
     str     x22, [x24, #Node_earliest_slot]
+    STQ     x22, x24, Node_base_slot        /* the base state: the anchor's post-state, at its slot */
     add     x9, x24, #Node_head_root
     COPY32  x9, x21
     ADDQ    x9, x24, Node_event_head        /* the events: the anchor's head and finalized epoch */
@@ -587,14 +588,19 @@ END_FUNCTION node_work
 /*
  * L0: an action of kind x0 with the two ids x1 and x2 (STATE_COPY: source, new; the FREE kinds: x1).
  * A BYTES_FREE of bytes a NodeApi entry sends goes to the entry instead: API_STREAM_OWN; so does a
- * STATE_FREE of the state a validator stream reads: API_STREAM_OWN_STATE.
+ * STATE_FREE of the state a validator stream reads: API_STREAM_OWN_STATE. A STATE_FREE of the base
+ * state is none.
  */
 LOCAL_FUNCTION node_ids
     FRAME 32
     stp     x1, x2, [sp, #16]
     cmp     x0, #NODE_ACT_STATE_FREE
     b.ne    5f
-    PART    x9, x10, x19, Node_api
+    ldr     x9, [x19, #Node_anchor_state_id]    /* the base state stays for the node's life */
+    cmp     x1, x9
+    b.ne    40f
+    UNFRAME 32
+40: PART    x9, x10, x19, Node_api
 4:  cbz     x10, 3f
     ldr     x11, [x9, #NodeApi_connection]
     cbz     x11, 41f
@@ -9056,6 +9062,7 @@ FUNCTION lantern_node_step
     bl      node_api_head_events            /* the head and finalized_checkpoint events, at a quiet point */
     bl      node_lc_due                     /* the light client updates due on gossip */
     bl      node_produce_due                /* the produceBlockV3 entries whose bid is late */
+    bl      node_replay_due                 /* the replay in flight: its next blocks */
     bl      node_backfill_link              /* the backfill's blocks of the chain join the Db */
     bl      node_drop_sidecars              /* the sidecars the node no longer serves go */
     str     xzr, [sp, #(L + 112)]

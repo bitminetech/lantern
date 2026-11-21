@@ -91,7 +91,7 @@ The answers of the node (node.md, `NODE_EV_API`) follow these rules.
   - `finalized` and `justified`: the store's finalized checkpoint, or its current justified checkpoint: the state of its `NodeCheckpoint` when the node keeps one, else the post-state of the block of its root, at the first slot of its epoch.
   - A slot: the post-state of the block of the chain at or below that slot, at that slot; none past the store's slot.
   - A root: the slot of the chain whose state has that root: the head's post-state's own hash_tree_root, or an entry of its `state_roots`, for the slots from the head's slot - `SLOTS_PER_HISTORICAL_ROOT` to the head's; then as that slot. A root of none of them: 404.
-  - A block above F's slot with no post-state gets it again first (node.md, the rebuild); a block at or below F's slot with none: 404.
+  - A block above F's slot with no post-state gets it again first (node.md, the rebuild). A block at or below F's slot with none: for a `state_id` of a slot of a getState operation, the replay from the base state (node.md), for a block at or above `base_slot`; else 404.
   - None: 404.
   - At a slot past the post-state's: a copy of it, across the fork boundaries to that slot (node.md, the crossing), then process_slots to that slot.
   - `finalized`: its slot is at most the first slot of the epoch of the store's finalized checkpoint. `execution_optimistic`: that of the block of its post-state or checkpoint.

@@ -234,6 +234,7 @@ FUNCTION lantern_node_init
     sd      t0, Node_anchor_state_id(s6)
     sd      s5, Node_flags(s6)
     sd      s4, Node_earliest_slot(s6)
+    STQ     s4, s6, Node_base_slot          # the base state: the anchor's post-state, at its slot
     addi    t0, s6, Node_head_root
     COPY32  t0, s3
     ADDQ    t0, s6, Node_event_head         # the events: the anchor's head and finalized epoch
@@ -586,12 +587,18 @@ LOCAL_FUNCTION node_work
     ret
 END_FUNCTION node_work
 
-/* An action of kind a0 with the two ids a1 and a2 (STATE_COPY: source, new; the FREE kinds: a1). Uses t0-t2, a7. */
+/*
+ * An action of kind a0 with the two ids a1 and a2 (STATE_COPY: source, new; the FREE kinds: a1). A
+ * STATE_FREE of the base state is none. Uses t0-t2, a7.
+ */
 LOCAL_FUNCTION node_ids
     UNWIND_END_PROLOGUE
     li      t0, NODE_ACT_STATE_FREE         # a STATE_FREE of the state a validator stream reads goes to the entry: API_STREAM_OWN_STATE
     bne     a0, t0, 5f
-    PART    t0, t1, s1, Node_api
+    ld      t0, Node_anchor_state_id(s1)    # the base state stays for the node's life
+    bne     a1, t0, 40f
+    ret
+40: PART    t0, t1, s1, Node_api
 4:  beqz    t1, 3f
     ld      t2, NodeApi_connection(t0)
     beqz    t2, 41f
@@ -9110,6 +9117,7 @@ FUNCTION lantern_node_step
     call    node_api_head_events            # the head and finalized_checkpoint events, at a quiet point
     call    node_lc_due                     # the light client updates due on gossip
     call    node_produce_due                # the produceBlockV3 entries whose bid is late
+    call    node_replay_due                 # the replay in flight: its next blocks
     call    node_backfill_link              # the backfill's blocks of the chain join the Db
     call    node_drop_sidecars              # the sidecars the node no longer serves go
     sd      zero, (L + 112)(sp)
