@@ -3801,6 +3801,23 @@ static void ev_open(fc_node *n, const char **why) {
     }
 }
 
+/* An event stream on ev[e] of the request bytes req: its head and the events after it collect there. */
+static void ev_open_one(fc_node *n, int e, const uint8_t *req, uint64_t len, const char **why) {
+    static const uint64_t limits[2] = {16384, 1048576};
+    struct node_shell *s = n->shell;
+    uint64_t http = 0, osize = (HTTP_REQUEST_FIXED + 2 * len + 64 + 7) & ~(uint64_t)7;
+    uint8_t *out = NULL;
+    memset(&s->ev[e], 0, sizeof s->ev[e]);
+    s->ev[e].conn = (uint64_t)(0x100 + e) | (uint64_t)99 << 32;
+    if (s->nev < e + 1) s->nev = e + 1;
+    if (http_request_call(req, len, limits, osize, &out, &http, why) != 0 && !*why) *why = "an event stream: lantern_http_request";
+    if (!*why) {
+        shell_event(s, EV_API, s->ev[e].conn, out, rd64(out));
+        shell_settle(n, why);
+    }
+    free(out);
+}
+
 /* The topic of the event text at t: its name after "event: ". */
 static int ev_topic_is(const uint8_t *t, uint64_t len, const char *topic) {
     size_t k = strlen(topic);
@@ -4801,6 +4818,8 @@ static int shell_entry(const struct node_shell *s, const char *key, const uint8_
     return 0;
 }
 
+static void p2p_op_events(fc_node *n, struct p2p_net *net, tv parts, const char **why);
+
 static void run_node_p2p(const char *file, case_file *f) {
     for (uint64_t i = 0; i < f->count; i++) {
         const char *name, *why = NULL;
@@ -4867,6 +4886,7 @@ static void run_node_p2p(const char *file, case_file *f) {
 #endif
         }
         if (!why) api_subscribe_check(&n, &net, &why);
+        if (!why) p2p_op_events(&n, &net, parts, &why);
         if (!why && rd64(s->node + rd64(s->node + 152) + 16)) why = "the node keeps libp2p events at the end"; /* Node_p2p_out: a ByteList */
         p2p_close(&net);
         shell_close(&n, anchor_block);
@@ -5654,6 +5674,48 @@ static void p2p_publish(struct p2p_net *net, const uint8_t *topic, uint64_t tlen
     free(out);
     free(scr);
     free(tl);
+}
+
+/*
+ * The operation events over gossip (node.md, node-p2p): an event stream of proposer_slashing and
+ * attester_slashing, then the case's slashings from the peer, each on its topic of the anchor's
+ * epoch; the stream's bytes must be the case's.
+ */
+static void p2p_op_events(fc_node *n, struct p2p_net *net, tv parts, const char **why) {
+    static const char req[] = "GET /eth/v1/events?topics=proposer_slashing,attester_slashing HTTP/1.1\r\nHost: lantern\r\n\r\n";
+    struct node_shell *s = n->shell;
+    uint64_t lens[2], wlen;
+    const uint8_t *msgs[2] = {tv_bytes(tv_get(parts, "proposer_slashing"), &lens[0]), tv_bytes(tv_get(parts, "attester_slashing"), &lens[1])};
+    const uint8_t *want = tv_bytes(tv_get(parts, "op_events"), &wlen);
+    static const uint64_t ids[2] = {5, GOSSIP_ATTESTER_SLASHING_TOPIC}; /* GOSSIP_PROPOSER_SLASHING, GOSSIP_ATTESTER_SLASHING */
+    uint8_t gvr[32], ncfg[CONFIG_SIZE];
+    memcpy(gvr, n->anchor + field_offset("BeaconState", 1), 32);
+    node_config(ncfg);
+    uint64_t epoch = rd64(s->node + 216) / SLOTS_PER_EPOCH_RUNNER; /* Node_earliest_slot: the anchor's */
+    ev_open_one(n, 0, (const uint8_t *)req, sizeof req - 1, why);
+    if (!*why) p2p_settle(n, net, why);
+    for (int k = 0; k < 2 && !*why; k++) {
+        uint8_t topic[24] = {0}, list[24 + 128];
+        wr64(list, sizeof list);
+        CALL(LF(compute_fork_digest), gvr, &epoch, ncfg, fresh_scratch(), topic);
+        wr64(topic + 8, ids[k]);
+        if (CALL(lantern_gossip_topic, topic, list) != 0) *why = "gossip_topic status";
+        if (!*why) p2p_publish(net, list + 24, rd64(list + 16), msgs[k], lens[k], why);
+        if (!*why) p2p_settle(n, net, why);
+    }
+    if (!*why && (s->ev[0].len != wlen || memcmp(s->ev[0].b, want, (size_t)wlen) || s->ev[0].lasts || s->ev[0].closes ||
+                  s->ev[0].late)) {
+        static char msg[512];
+        snprintf(msg, sizeof msg, "the operation events over gossip: %llu bytes, the case's %llu: %.*s",
+                 (unsigned long long)s->ev[0].len, (unsigned long long)wlen, (int)(s->ev[0].len < 300 ? s->ev[0].len : 300),
+                 s->ev[0].b ? (const char *)s->ev[0].b : "");
+        *why = msg;
+    }
+    if (!*why) {
+        shell_event(s, EV_API_CLOSED, s->ev[0].conn, NULL, 0);
+        s->ev[0].gone = 1;
+        p2p_settle(n, net, why);
+    }
 }
 
 static const uint8_t *gossip_root; /* the block p2p_imported waits for */
@@ -7502,7 +7564,9 @@ static uint8_t *api_normalize(const struct node_shell *s, uint64_t *len, const c
 
 /* 0 when the node holds no NodeApi entry and each id of a NODE_ACT_STATE_BYTES is free, else why. */
 static const char *api_clean(struct node_shell *s) {
-    if (rd64(s->node + NODE_API_PART + 8)) return "the node holds a NodeApi entry after the answer";
+    uint64_t open = 0; /* the entries of the event streams still open may stay */
+    for (int e = 0; e < s->nev; e++) open += !s->ev[e].gone && !s->ev[e].closed && !s->ev[e].closes;
+    if (rd64(s->node + NODE_API_PART + 8) > open) return "the node holds a NodeApi entry after the answer";
     for (size_t k = 0; k < s->api.nids; k++)
         if (shell_find(s, s->api.ids[k])) return "the state's bytes of an answer are not freed";
     return NULL;
@@ -7777,6 +7841,8 @@ static void run_node_api(const char *file, case_file *f) {
             shell_settle(&n, &why);
         }
         tv nm = names + 9, rq = reqs + 9, rs = resps + 9;
+        const uint8_t *open_want = NULL; /* streams 2: an event stream open to the case's end, and its bytes then */
+        uint64_t open_wlen = 0;
         for (uint64_t k = 0; k < count && !why; k++, nm = tv_skip(nm), rq = tv_skip(rq), rs = tv_skip(rs)) {
             uint64_t rlen, wlen, nlen;
             const uint8_t *req = tv_bytes(rq, &rlen), *want = tv_bytes(rs, &wlen), *nb = tv_bytes(nm, &nlen);
@@ -7785,6 +7851,13 @@ static void run_node_api(const char *file, case_file *f) {
             if (k == offline) {
                 shell_event(s, EV_ENGINE, 1, NULL, 0);
                 shell_settle(&n, &why);
+            }
+            if (streams[k] == 2) { /* once, on its own connection; its bytes are checked at the end */
+                if (open_want) why = "a second open event stream";
+                if (!why) ev_open_one(&n, 0, req, rlen, &why);
+                open_want = want;
+                open_wlen = wlen;
+                continue;
             }
             /* NODE_API_CHUNK, then many small chunks: 2048 bytes, or a 512th of the response, so that a
                mainnet state goes in some hundreds of chunks */
@@ -7845,6 +7918,24 @@ static void run_node_api(const char *file, case_file *f) {
                 static char msg[256];
                 snprintf(msg, sizeof msg, "%s: %s", rname, why);
                 why = msg;
+            }
+        }
+        if (!why && open_want) { /* the open stream: its head and the events of the requests after it */
+            if (s->ev[0].len != open_wlen || memcmp(s->ev[0].b, open_want, (size_t)open_wlen) || s->ev[0].lasts ||
+                s->ev[0].closes || s->ev[0].late) {
+                static char msg[1024];
+                uint64_t at = 0;
+                while (at < s->ev[0].len && at < open_wlen && s->ev[0].b[at] == open_want[at]) at++;
+                snprintf(msg, sizeof msg, "the open event stream differs at byte %llu of %llu (case %llu), lasts %llu, closes %llu: got %.*s",
+                         (unsigned long long)at, (unsigned long long)s->ev[0].len, (unsigned long long)open_wlen,
+                         (unsigned long long)s->ev[0].lasts, (unsigned long long)s->ev[0].closes,
+                         (int)(s->ev[0].len - at < 400 ? s->ev[0].len - at : 400), (const char *)s->ev[0].b + at);
+                why = msg;
+            } else {
+                shell_event(s, EV_API_CLOSED, s->ev[0].conn, NULL, 0);
+                s->ev[0].gone = 1;
+                shell_settle(&n, &why);
+                if (!why) why = api_clean(s);
             }
         }
         if (!why) { /* getStateV2 of head as SSZ in small chunks, the connection closed after the first */

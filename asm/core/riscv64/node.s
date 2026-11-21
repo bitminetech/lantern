@@ -4208,6 +4208,14 @@ LOCAL_FUNCTION node_event
     mv      s4, a1
     li      t0, LIBP2P_ACCEPT
     bne     s7, t0, 65f
+    mv      a0, s2                          # the event of an operation (node.md, The events), before its bytes go
+    call    node_store_slot
+    addi    a1, s1, Node_config
+    call    node_fork
+    mv      a2, a0
+    ld      a0, NodeMessage_topic(s4)
+    ld      a1, NodeAction_data(s3)
+    call    node_op_event
     mv      a0, s2                          # an operation of the pool keeps its bytes there too
     call    node_store_slot
     addi    a1, s1, Node_config

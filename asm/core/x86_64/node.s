@@ -4188,6 +4188,15 @@ LOCAL_FUNCTION node_event
     mov     %rdx, %r13
     cmpq    $LIBP2P_ACCEPT, S7(%rsp)
     jne     65f
+    mov     %rbp, %rdi                      # the event of an operation (node.md, The events), before its bytes go
+    call    node_store_slot
+    mov     %rax, %rdi
+    lea     Node_config(%rbx), %rsi
+    call    node_fork
+    mov     %rax, %rdx
+    mov     NodeMessage_topic(%r13), %rdi
+    mov     NodeAction_data(%r12), %rsi
+    call    node_op_event
     mov     %rbp, %rdi                      # an operation of the pool keeps its bytes there too
     call    node_store_slot
     mov     %rax, %rdi
