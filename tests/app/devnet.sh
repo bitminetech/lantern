@@ -33,6 +33,8 @@
 # it starts, a geth and a lighthouse beacon node whose one boot node is lantern's multiaddr
 # (tests/kurtosis/main.star); that lighthouse must sync from genesis to within 2 slots of the client's
 # head, on a block of the client's chain, within SECONDS, with lantern its one peer at every check.
+# With nimbus the 6-second slots are 12 seconds (ethereum-package's floor for it on the mainnet
+# preset). With VC=1 the second client, which runs no validators, is a supernode.
 set -eu
 root=$(cd "$(dirname "$0")/../.." && pwd)
 client=$1
@@ -46,8 +48,14 @@ vc=${VC:-0}
 if [ "$vc" = 1 ]; then
     case $client in lighthouse|prysm|teku|nimbus|lodestar) ;; *) echo "VC=1: no validator client for $client" >&2; exit 2 ;; esac
 fi
+# VC=1: the first client runs keys 0 to 63; the second, with none, is the network's supernode (with
+# fulu at genesis ethereum-package needs one, or a node of 128 validators).
 first_count=
-[ "$vc" = 1 ] && first_count="    validator_count: 64"
+second_supernode=
+[ "$vc" = 1 ] && first_count="    validator_count: 64" && second_supernode="    supernode: true"
+# Short slots: 6 seconds, but 12 for nimbus (ethereum-package's floor for it on the mainnet preset).
+slot_secs=6
+[ "$client" = nimbus ] && slot_secs=12
 work=$(mktemp -d)
 cat > "$work/args.yaml" <<EOF
 participants:
@@ -65,13 +73,14 @@ $first_count
     vc_image: $(validator_image "$client")
     cl_log_level: ${CL_LOG_LEVEL:-info}
     validator_count: 0
+$second_supernode
 additional_services: []
 lantern_image: $image
 lantern_max_cpu: ${LANTERN_MAX_CPU:-0}
 lantern_delay: ${LANTERN_DELAY:-0}
 EOF
 if [ "${RESTART:-0}" = 1 ] || [ "${CHECKPOINT:-0}" = 1 ] || [ "${FORK:-0}" = 1 ] || [ "${ASSERTOOR:-0}" = 1 ] || [ "$vc" = 1 ] || [ "${DIFF:-0}" = 1 ] || [ "${SYNC:-0}" = 1 ]; then
-    printf 'network_params:\n  seconds_per_slot: 6\n' >> "$work/args.yaml"
+    printf 'network_params:\n  seconds_per_slot: %s\n' "$slot_secs" >> "$work/args.yaml"
 fi
 # Assertoor: exits at once (shard_committee_period 1), and two validators of the mnemonic past the
 # first client's 128 that no validator client runs (preregistered_validator_count 130), whose
