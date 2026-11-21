@@ -4090,8 +4090,16 @@ LOCAL_FUNCTION node_event
     bne     t0, t2, 603f
     LEAVE 48
 603: li     t2, NODE_WORK_LC_SERVE          # the light client answer to its stream
-    bne     t0, t2, 602f
+    bne     t0, t2, 604f
     call    node_lc_served
+    LEAVE 48
+604: li     t2, NODE_WORK_LC_GOSSIP         # the light client gossip: a message's validation, a publish
+    bne     t0, t2, 605f
+    call    node_lc_validated
+    LEAVE 48
+605: li     t2, NODE_WORK_LC_PUBLISH
+    bne     t0, t2, 602f
+    call    node_lc_published
     LEAVE 48
 602: li     t2, NODE_WORK_JUSTIFIED_STATE
     bne     t0, t2, 61f
@@ -6363,7 +6371,17 @@ LOCAL_FUNCTION node_topics
     call    node_sub
 15: addi    s4, s4, 1
     j       13b
-14: li      t0, FORK_CAPELLA
+14: li      a0, GOSSIP_LIGHT_CLIENT_FINALITY_UPDATE    # the light client topics
+    li      a1, 0
+    ld      a2, L(sp)
+    ld      a3, (L + 8)(sp)
+    call    node_sub
+    li      a0, GOSSIP_LIGHT_CLIENT_OPTIMISTIC_UPDATE
+    li      a1, 0
+    ld      a2, L(sp)
+    ld      a3, (L + 8)(sp)
+    call    node_sub
+    li      t0, FORK_CAPELLA
     bltu    s3, t0, 9f
     li      a0, GOSSIP_BLS_TO_EXECUTION_CHANGE
     li      a1, 0
@@ -6945,7 +6963,22 @@ LOCAL_FUNCTION node_message_status
     call    node_room
     li      a1, LIBP2P_IGNORE
     beqz    a0, 70b
-    li      s7, 0                           # the head state
+    ld      a5, NodeMessage_topic(s4)       # a light client update: matched against the light client store's
+    addi    t0, a5, -GOSSIP_LIGHT_CLIENT_FINALITY_UPDATE
+    li      t1, GOSSIP_LIGHT_CLIENT_OPTIMISTIC_UPDATE - GOSSIP_LIGHT_CLIENT_FINALITY_UPDATE
+    bltu    t1, t0, 11f
+    li      a0, NODE_WORK_LC_GOSSIP
+    li      a1, 0
+    li      a2, 0
+    ld      a3, NodeMessage_data_id(s4)
+    ld      a4, NodeMessage_handle(s4)
+    call    node_work
+    li      t0, NODE_LC_ID
+    sd      t0, NodeAction_state_c(a0)
+    li      t0, NODE_MESSAGE_VALIDATING
+    sd      t0, NodeMessage_state(s4)
+    LEAVE 0
+11: li      s7, 0                           # the head state
     addi    a0, s1, Node_head_root
     call    node_find_block
     li      t0, -1
@@ -9034,6 +9067,7 @@ FUNCTION lantern_node_step
     call    node_engine_next
     call    node_shed                       # the post-states the node can rebuild go
     call    node_api_head_events            # the head and finalized_checkpoint events, at a quiet point
+    call    node_lc_due                     # the light client updates due on gossip
     call    node_backfill_link              # the backfill's blocks of the chain join the Db
     call    node_drop_sidecars              # the sidecars the node no longer serves go
     sd      zero, (L + 112)(sp)
@@ -9176,7 +9210,19 @@ FUNCTION lantern_node_run
     mv      a6, s8
     call    node_run_lc_serve
     LEAVE 192
-4:  addi    t1, t0, -NODE_WORK_LC_BLOCK     # the light client works: of the light client store, state_c
+4:  addi    t1, t0, -NODE_WORK_LC_GOSSIP    # LC_GOSSIP, LC_PUBLISH: the latest update of a topic, in the event's room
+    li      t2, NODE_WORK_LC_PUBLISH - NODE_WORK_LC_GOSSIP
+    bltu    t2, t1, 41f
+    mv      a0, s1
+    mv      a1, s3
+    mv      a2, s5
+    ld      a3, (L + 80)(sp)
+    mv      a4, s6
+    mv      a5, s7
+    mv      a6, s8
+    call    node_run_lc_gossip
+    LEAVE 192
+41: addi    t1, t0, -NODE_WORK_LC_BLOCK     # the light client works: of the light client store, state_c
     li      t2, NODE_WORK_LC_HEAD - NODE_WORK_LC_BLOCK
     bltu    t2, t1, 5f
     mv      a0, s1

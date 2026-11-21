@@ -4066,8 +4066,16 @@ LOCAL_FUNCTION node_event
     jne     603f
     LEAVE 48
 603: cmp    $NODE_WORK_LC_SERVE, %rax        # the light client answer to its stream
-    jne     602f
+    jne     604f
     call    node_lc_served
+    LEAVE 48
+604: cmp    $NODE_WORK_LC_GOSSIP, %rax       # the light client gossip: a message's validation, a publish
+    jne     605f
+    call    node_lc_validated
+    LEAVE 48
+605: cmp    $NODE_WORK_LC_PUBLISH, %rax
+    jne     602f
+    call    node_lc_published
     LEAVE 48
 602: cmp    $NODE_WORK_JUSTIFIED_STATE, %rax
     jne     61f
@@ -6359,7 +6367,17 @@ LOCAL_FUNCTION node_topics
     call    node_sub
 15: inc     %r13
     jmp     13b
-14: cmp     $FORK_CAPELLA, %r12
+14: mov     $GOSSIP_LIGHT_CLIENT_FINALITY_UPDATE, %edi  # the light client topics
+    xor     %esi, %esi
+    mov     L(%rsp), %rdx
+    mov     (L + 8)(%rsp), %rcx
+    call    node_sub
+    mov     $GOSSIP_LIGHT_CLIENT_OPTIMISTIC_UPDATE, %edi
+    xor     %esi, %esi
+    mov     L(%rsp), %rdx
+    mov     (L + 8)(%rsp), %rcx
+    call    node_sub
+    cmp     $FORK_CAPELLA, %r12
     jb      9f
     mov     $GOSSIP_BLS_TO_EXECUTION_CHANGE, %edi
     xor     %esi, %esi
@@ -6957,7 +6975,21 @@ LOCAL_FUNCTION node_message_status
     mov     $LIBP2P_IGNORE, %esi
     test    %rax, %rax
     jz      70b
-    movq    $0, S7(%rsp)                    # the head state
+    mov     NodeMessage_topic(%r13), %r9    # a light client update: matched against the light client store's
+    cmp     $GOSSIP_LIGHT_CLIENT_FINALITY_UPDATE, %r9
+    je      11f
+    cmp     $GOSSIP_LIGHT_CLIENT_OPTIMISTIC_UPDATE, %r9
+    jne     12f
+11: mov     $NODE_WORK_LC_GOSSIP, %edi
+    xor     %esi, %esi
+    xor     %edx, %edx
+    mov     NodeMessage_data_id(%r13), %rcx
+    mov     NodeMessage_handle(%r13), %r8
+    call    node_work
+    movq    $NODE_LC_ID, NodeAction_state_c(%rax)
+    movq    $NODE_MESSAGE_VALIDATING, NodeMessage_state(%r13)
+    LEAVE 0
+12: movq    $0, S7(%rsp)                    # the head state
     lea     Node_head_root(%rbx), %rdi
     call    node_find_block
     cmp     $-1, %rax
@@ -8993,6 +9025,7 @@ FUNCTION lantern_node_step
     call    node_engine_next
     call    node_shed                       # the post-states the node can rebuild go
     call    node_api_head_events            # the head and finalized_checkpoint events, at a quiet point
+    call    node_lc_due                     # the light client updates due on gossip
     call    node_backfill_link              # the backfill's blocks of the chain join the Db
     call    node_drop_sidecars              # the sidecars the node no longer serves go
     movq    $0, (L + 112)(%rsp)
@@ -9135,7 +9168,19 @@ FUNCTION lantern_node_run
     mov     S9(%rsp), %r10
     call    node_run_lc_serve
     LEAVE 192
-4:  lea     -NODE_WORK_LC_BLOCK(%rax), %rcx # the light client works: of the light client store, state_c
+4:  lea     -NODE_WORK_LC_GOSSIP(%rax), %rcx    # LC_GOSSIP, LC_PUBLISH: the latest update of a topic, in the event's room
+    cmp     $(NODE_WORK_LC_PUBLISH - NODE_WORK_LC_GOSSIP), %rcx
+    ja      41f
+    mov     %rbx, %rdi
+    mov     %r12, %rsi
+    mov     %r14, %rdx
+    mov     (L + 80)(%rsp), %rcx
+    mov     %r15, %r8
+    mov     S8(%rsp), %r9
+    mov     S9(%rsp), %r10
+    call    node_run_lc_gossip
+    LEAVE 192
+41: lea     -NODE_WORK_LC_BLOCK(%rax), %rcx # the light client works: of the light client store, state_c
     cmp     $(NODE_WORK_LC_HEAD - NODE_WORK_LC_BLOCK), %rcx
     ja      5f
     mov     %rbx, %rdi

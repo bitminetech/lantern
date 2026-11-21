@@ -2664,7 +2664,7 @@ enum { WORK_IMPORT_BLOCK = 1, WORK_JUSTIFIED_STATE, WORK_TARGET_STATE, WORK_ATTE
        WORK_BLOCK_ATTESTATION, WORK_BLOCK_SLASHING, WORK_GOSSIP_VOTE, WORK_API_ENCODE, WORK_API_CHUNK, WORK_API_LOOKUP, WORK_API_EVENT,
        WORK_API_SUBMIT, WORK_POOL_CHECK, WORK_PREPARE_PAYLOAD, WORK_PRODUCE_CHECK, WORK_GET_PAYLOAD, WORK_PRODUCE_FOLD,
        WORK_PRODUCE_BLOCK, WORK_PUBLISH_DECODE, WORK_PUBLISH_SIDECARS, WORK_PUBLISH_CHECK, WORK_PUBLISH_SIDECAR,
-       WORK_LC_BLOCK, WORK_LC_HEAD, WORK_LC_SERVE };
+       WORK_LC_BLOCK, WORK_LC_HEAD, WORK_LC_SERVE, WORK_LC_GOSSIP, WORK_LC_PUBLISH };
 #define EV_API_BYTES (128 + 616) /* NodeEvent_api_bytes: the chunk's ByteList in the WORK_DONE of an API_CHUNK */
 #define NODE_API_CHUNK 65536
 #define NODE_API_PART (728 + CONFIG_SIZE + 936) /* Node_api: the PartRef of the NodeApi entries */
@@ -3216,7 +3216,7 @@ static void shell_work(fc_node *n, const uint8_t *work, const char **why) {
             shell_seen(s, why);
         } else if (kind == WORK_POOL_CHECK || kind == WORK_PRODUCE_CHECK || kind == WORK_PRODUCE_FOLD) {
             *why = "lantern_node_run: POOL_CHECK, PRODUCE_CHECK or PRODUCE_FOLD asks for room";
-        } else if (kind == WORK_SERVE || kind == WORK_LC_SERVE || kind == WORK_NEW_PAYLOAD || kind == WORK_FORKCHOICE || kind == WORK_API_ENCODE ||
+        } else if (kind == WORK_SERVE || kind == WORK_LC_SERVE || kind == WORK_LC_PUBLISH || kind == WORK_NEW_PAYLOAD || kind == WORK_FORKCHOICE || kind == WORK_API_ENCODE ||
             kind == WORK_API_EVENT || kind == WORK_PREPARE_PAYLOAD || kind == WORK_GET_PAYLOAD || kind == WORK_PRODUCE_BLOCK ||
             kind == WORK_PUBLISH_DECODE || kind == WORK_PUBLISH_SIDECAR) {
             free(ev);
@@ -3277,7 +3277,7 @@ static void shell_work(fc_node *n, const uint8_t *work, const char **why) {
     uint64_t esize = *why ? 0 : rd64(ev);
     if (!*why && (esize < EV_WORK_DONE_SIZE || esize > ev_size || esize % 8 || rd64(ev + 8) != EV_WORK_DONE ||
                   memcmp(ev + 16, work + 16, 56) ||
-                  (kind != WORK_SERVE && kind != WORK_LC_SERVE && kind != WORK_NEW_PAYLOAD && kind != WORK_FORKCHOICE && kind != WORK_API_ENCODE &&
+                  (kind != WORK_SERVE && kind != WORK_LC_SERVE && kind != WORK_LC_PUBLISH && kind != WORK_NEW_PAYLOAD && kind != WORK_FORKCHOICE && kind != WORK_API_ENCODE &&
                    kind != WORK_API_CHUNK && kind != WORK_API_EVENT && kind != WORK_API_SUBMIT && kind != WORK_PREPARE_PAYLOAD &&
                    kind != WORK_GET_PAYLOAD && kind != WORK_PRODUCE_BLOCK && kind != WORK_PUBLISH_DECODE && kind != WORK_PUBLISH_CHECK &&
                    kind != WORK_PUBLISH_SIDECAR && esize != EV_WORK_DONE_SIZE)))
@@ -4436,6 +4436,10 @@ struct p2p_net {
         uint8_t *data;
         uint64_t len;
     } st[P2P_STREAMS];
+    int nlc;                     /* the light client gossip messages the peer got: their topics and data */
+    char lc_topic[4][96];
+    uint8_t *lc_data[4];
+    uint64_t lc_len[4];
 };
 
 static void *p2p_state_of(struct p2p_net *net) { return net->state[0]; }
@@ -4531,6 +4535,18 @@ static void p2p_peer_app(struct p2p_net *net, uint8_t *act) {
     if (kind == P2P_ACT_PEER_CONNECTED) {
         net->node_handle = rd64(act + 16);
         net->connected = 1;
+        return;
+    }
+    if (kind == 16) { /* MESSAGE: a light client one is kept (its data is at data_off of the peer's state) */
+        uint64_t tlen = rd64(act + 48), dlen = rd64(act + 40);
+        if (tlen < 96 && net->nlc < 4) {
+            memcpy(net->lc_topic[net->nlc], act + 56, (size_t)tlen);
+            net->lc_topic[net->nlc][tlen] = 0;
+            if (strstr(net->lc_topic[net->nlc], "/light_client_")) {
+                net->lc_data[net->nlc] = copy_of(net->state[1] + rd64(act + 32), dlen);
+                net->lc_len[net->nlc++] = dlen;
+            }
+        }
         return;
     }
     if (kind == 19) { /* PEER_TOPIC: the node joins or leaves a topic */
@@ -5000,6 +5016,7 @@ static void p2p_close(struct p2p_net *net) {
         free(net->st[k].data);
         free(net->in[k].data);
     }
+    for (int k = 0; k < net->nlc; k++) free(net->lc_data[k]);
     free(net->state[0]);
     free(net->state[1]);
     free(net->scratch);
@@ -5961,10 +5978,10 @@ static int p2p_subscribed(struct p2p_net *net, int arg) { return net->topics >= 
 #if FORK < FORK_FULU
 static int p2p_unsubscribed(struct p2p_net *net, int arg) { return net->untopics >= arg; }
 
-/* The gossip topics of a fork before fulu (node.md): five, sync_committee_contribution_and_proof, bls_to_execution_change, blob subnets. */
+/* The gossip topics of a fork before fulu (node.md): five, sync_committee_contribution_and_proof and the two light client topics, bls_to_execution_change, blob subnets. */
 /* The topics of a fork the node joins: from phase0 those of its SUBNETS_PER_NODE attestation subnets too. */
 static int fork_topics(uint64_t fork) {
-    int t = 5 + (int)rd64(config + 336) + (fork >= FORK_ALTAIR) + (fork >= FORK_CAPELLA);
+    int t = 5 + (int)rd64(config + 336) + 3 * (fork >= FORK_ALTAIR) + (fork >= FORK_CAPELLA);
     if (fork == FORK_DENEB) t += (int)rd64(config + 392 + 16 * 32 + 112);   /* BLOB_SIDECAR_SUBNET_COUNT */
     if (fork == FORK_ELECTRA) t += (int)rd64(config + 392 + 16 * 32 + 120); /* BLOB_SIDECAR_SUBNET_COUNT_ELECTRA */
     return t;
@@ -7059,6 +7076,173 @@ static void p2p_lc_serve_check(fc_node *n, struct p2p_net *net, const uint8_t *c
 #undef LC_STORE
 }
 
+#define NODE_LC_FIELDS (NODE_API_PART + 728) /* Node_lc_finality_slot, then lc_finality_super, lc_optimistic_slot, lc_pending, lc_due */
+#define NODE_FORK_DIGEST 240                  /* Node_fork_digest */
+static int p2p_lc_got(struct p2p_net *net, int arg) { return net->nlc >= arg; }
+
+/*
+ * The slots of a light client finality (kind 2) or optimistic (kind 3) update's SSZ bytes of the
+ * fork: out[0] attested_header.beacon.slot, out[1] finalized_header.beacon.slot (0 for an
+ * optimistic update), out[2] signature_slot, out[3] 1 for a supermajority of its sync aggregate.
+ */
+static void lc_update_slots(const uint8_t *b, uint64_t kind, uint64_t fork, uint64_t out[4]) {
+    uint64_t committee = strcmp(PRESET, "minimal") ? 512 : 32, agg = committee / 8 + 96, branch = 32 * (fork >= FORK_ELECTRA ? 7 : 6);
+    uint64_t fixed = fork >= FORK_CAPELLA, at = 0, sig;
+    if (kind == 2) {
+        out[0] = rd64(b + (fixed ? (uint64_t)(b[0] | b[1] << 8 | b[2] << 16 | (uint64_t)b[3] << 24) : 0));
+        out[1] = rd64(b + (fixed ? (uint64_t)(b[4] | b[5] << 8 | b[6] << 16 | (uint64_t)b[7] << 24) : 112));
+        at = (fixed ? 8 : 224) + branch;
+    } else {
+        out[0] = rd64(b + (fixed ? (uint64_t)(b[0] | b[1] << 8 | b[2] << 16 | (uint64_t)b[3] << 24) : 0));
+        out[1] = 0;
+        at = fixed ? 4 : 112;
+    }
+    uint64_t bits = 0;
+    for (uint64_t i = 0; i < committee / 8; i++)
+        for (int j = 0; j < 8; j++) bits += b[at + i] >> j & 1;
+    sig = rd64(b + at + agg);
+    out[2] = sig;
+    out[3] = bits * 3 >= committee * 2;
+}
+
+/* The light client gossip of a node, as the runner sees it: the topics at its ForkDigest, the store's updates, their slots, and whether each goes. */
+typedef struct {
+    char topics[2][96];
+    uint64_t tlens[2], forks[2], slots[2][4];
+    uint8_t *want[2];
+    int goes[2], ngo;
+} lc_gossip;
+
+/*
+ * The node's light client gossip once it subscribes: the peer joins both topics; for each topic the
+ * store's update (lantern_lc_read), its slots, and whether it goes: its ForkDigest (of its fork, at
+ * the epoch of its attested slot) is the node's, and it is new for fields at 0 (node.md, The light
+ * client gossip).
+ */
+static void lc_gossip_open(fc_node *n, struct p2p_net *net, const uint8_t *gvr, lc_gossip *g, const char **why) {
+    struct node_shell *s = n->shell;
+    static const char *names[2] = {"light_client_finality_update", "light_client_optimistic_update"};
+    uint8_t ncfg[CONFIG_SIZE];
+    node_config(ncfg);
+    memset(g, 0, sizeof *g);
+    for (int k = 0; k < 40 && !*why && !(rd64(s->node + NODE_FLAGS) & 4); k++) p2p_settle(n, net, why); /* NODE_FLAG_SUBSCRIBED */
+    if (!*why && !(rd64(s->node + NODE_FLAGS) & 4)) *why = "lc gossip: the node does not subscribe";
+    const uint8_t *d = s->node + NODE_FORK_DIGEST;
+    for (int i = 0; i < 2 && !*why; i++) {
+        g->tlens[i] = (uint64_t)snprintf(g->topics[i], sizeof g->topics[i], "/eth2/%02x%02x%02x%02x/%s/ssz_snappy", d[0], d[1], d[2], d[3], names[i]);
+        uint8_t *e = p2p_event(net, 1, 13 /* SUBSCRIBE */, 24 + ((g->tlens[i] + 7) & ~(uint64_t)7));
+        wr64(e + 16, g->tlens[i]);
+        memcpy(e + 24, g->topics[i], (size_t)g->tlens[i]);
+        g->want[i] = lc_object(shell_find(s, 2)->b, 2 + (uint64_t)i, 0, &g->forks[i], why);
+        if (!g->want[i]) continue;
+        lc_update_slots(g->want[i] + rd64(g->want[i] + 8), 2 + (uint64_t)i, g->forks[i], g->slots[i]);
+        uint64_t epoch = g->slots[i][0] / SLOTS_PER_EPOCH_RUNNER;
+        uint8_t digest[8] = {0};
+        CALL(lcf[g->forks[i]].digest, gvr, &epoch, ncfg, fresh_scratch(), digest);
+        int fresh = i == 0 ? g->slots[0][1] > 0 || g->slots[0][3] : g->slots[1][0] > 0;
+        g->goes[i] = !memcmp(digest, d, 4) && fresh;
+        g->ngo += g->goes[i];
+    }
+    if (!*why) p2p_settle(n, net, why);
+}
+
+static void lc_gossip_close(lc_gossip *g) {
+    free(g->want[0]);
+    free(g->want[1]);
+}
+
+/*
+ * The node's publish (node.md, The light client gossip): with the fields at 0, lc_pending 3 and
+ * lc_due 0, the node must publish on each topic the store's update that goes, Snappy compressed,
+ * take its slots in the topic's fields, and leave lc_pending 0.
+ */
+static void p2p_lc_publish_check(fc_node *n, struct p2p_net *net, const uint8_t *gvr, const char **why) {
+    static char msg[160];
+    struct node_shell *s = n->shell;
+    lc_gossip g;
+    lc_gossip_open(n, net, gvr, &g, why);
+    net->nlc = 0;
+    memset(s->node + NODE_LC_FIELDS, 0, 24);
+    wr64(s->node + NODE_LC_FIELDS + 24, 3);
+    wr64(s->node + NODE_LC_FIELDS + 32, 0);
+    if (!*why) p2p_run(n, net, p2p_lc_got, g.ngo, why);
+    if (!*why) p2p_settle(n, net, why);
+    if (!*why && net->nlc != g.ngo) {
+        snprintf(msg, sizeof msg, "lc publish: the peer got %d messages, not %d", net->nlc, g.ngo);
+        *why = msg;
+    }
+    if (!*why && rd64(s->node + NODE_LC_FIELDS + 24)) *why = "lc publish: lc_pending is not 0";
+    for (int i = 0, m = 0; i < 2 && !*why; i++) {
+        if (!g.goes[i]) continue;
+        uint64_t csize = 0, len = rd64(g.want[i] + 16);
+        uint8_t *in = serialized(g.want[i] + rd64(g.want[i] + 8), len, &(uint64_t){0});
+        CALL(snappy_compress_size, in, &csize);
+        uint8_t *out = buffer(csize), *scr = buffer(SNAPPY_SCRATCH_COMPRESS + 64);
+        wr64(out, csize);
+        wr64(scr, SNAPPY_SCRATCH_COMPRESS + 64);
+        if (CALL(snappy_compress, in, scr, out) != 0) *why = "lc publish: snappy_compress status";
+        else if (strcmp(net->lc_topic[m], g.topics[i])) *why = "lc publish: a message on another topic";
+        else if (net->lc_len[m] != rd64(out + 16) || memcmp(net->lc_data[m], out + 24, (size_t)net->lc_len[m]))
+            *why = "lc publish: a message's data is not the store's update";
+        else if (i == 0 && (rd64(s->node + NODE_LC_FIELDS) != g.slots[0][1] || rd64(s->node + NODE_LC_FIELDS + 8) != g.slots[0][3]))
+            *why = "lc publish: the finality fields are not the update's";
+        else if (i == 1 && rd64(s->node + NODE_LC_FIELDS + 16) != g.slots[1][0]) *why = "lc publish: lc_optimistic_slot is not the update's";
+        m++;
+        free(in);
+        free(out);
+        free(scr);
+    }
+    lc_gossip_close(&g);
+}
+
+/* The topic's field of the node that an accepted update sets, and the update's value for it: finality lc_finality_slot, optimistic lc_optimistic_slot. */
+static uint64_t lc_field_of(const struct node_shell *s, int i) { return rd64(s->node + NODE_LC_FIELDS + (i ? 16 : 0)); }
+static uint64_t lc_value_of(const lc_gossip *g, int i) { return i ? g->slots[1][0] : g->slots[0][1]; }
+
+/*
+ * The node's validation of the peer's updates (node.md, The light client gossip), with the fields
+ * at 0: on the topic early, the update with its last byte changed, then the update itself before its
+ * due time less MAXIMUM_GOSSIP_CLOCK_DISPARITY, must leave them at 0; on the other topic, the update
+ * at its due time must set the topic's field to its slot (finality: also lc_finality_super).
+ */
+static void p2p_lc_validate_check(fc_node *n, struct p2p_net *net, const uint8_t *gvr, int early, const char **why) {
+    static char msg[160];
+    struct node_shell *s = n->shell;
+    lc_gossip g;
+    lc_gossip_open(n, net, gvr, &g, why);
+    memset(s->node + NODE_LC_FIELDS, 0, 24);
+    uint64_t genesis_ms = rd64(n->store + STORE_GENESIS_TIME_MS), slot_ms = rd64(config + 104);
+    uint64_t due_ms = rd64(config + 256) * slot_ms / 10000, disparity = rd64(config + 328); /* SYNC_MESSAGE_DUE_BPS, MAXIMUM_GOSSIP_CLOCK_DISPARITY */
+    int late = 1 - early;
+    if (!*why && g.goes[early]) {
+        uint64_t due = genesis_ms + g.slots[early][2] * slot_ms + due_ms, len = rd64(g.want[early] + 16);
+        const uint8_t *b = g.want[early] + rd64(g.want[early] + 8);
+        uint8_t *changed = copy_of(b, len);
+        changed[len - 1] ^= 1;
+        if (rd64(s->node + NODE_TIME_MS) < due - disparity) {
+            shell_event(s, EV_TICK, due - disparity - 1, NULL, 0);
+            p2p_publish(net, (const uint8_t *)g.topics[early], g.tlens[early], changed, len, why);
+            if (!*why) p2p_settle(n, net, why);
+            if (!*why && (lc_field_of(s, 0) || lc_field_of(s, 1))) *why = "lc validate: a changed update sets the fields";
+            if (!*why) p2p_publish(net, (const uint8_t *)g.topics[early], g.tlens[early], b, len, why);
+            if (!*why) p2p_settle(n, net, why);
+            if (!*why && (lc_field_of(s, 0) || lc_field_of(s, 1))) *why = "lc validate: an update before its due time sets the fields";
+        }
+        free(changed);
+    }
+    if (!*why && g.goes[late]) {
+        uint64_t due = genesis_ms + g.slots[late][2] * slot_ms + due_ms;
+        if (rd64(s->node + NODE_TIME_MS) < due) shell_event(s, EV_TICK, due, NULL, 0);
+        p2p_publish(net, (const uint8_t *)g.topics[late], g.tlens[late], g.want[late] + rd64(g.want[late] + 8), rd64(g.want[late] + 16), why);
+        for (int k = 0; k < 4 && !*why && lc_field_of(s, late) != lc_value_of(&g, late); k++) p2p_settle(n, net, why);
+        if (!*why && (lc_field_of(s, late) != lc_value_of(&g, late) || (late == 0 && rd64(s->node + NODE_LC_FIELDS + 8) != g.slots[0][3]))) {
+            snprintf(msg, sizeof msg, "lc validate: the peer's %s update does not set its fields", late ? "optimistic" : "finality");
+            *why = msg;
+        }
+    }
+    lc_gossip_close(&g);
+}
+
 /* The post-state of the block at enc on its parent's, kept by the block's root; the root in root. */
 static void lc_new_block(lc_run *r, const uint8_t *enc, uint64_t elen, uint8_t root[32], const char **why) {
     if (elen < 100 + 80) {
@@ -7197,35 +7381,41 @@ static void lc_check_object(lc_run *r, tv parts, uint64_t kind, uint64_t key, tv
 }
 
 /*
- * The case's store at its end, served by a node (node.md, NODE_WORK_LC_SERVE): a node of the case's
- * anchor state and block whose light client store (BufferId 2) is a copy of it, and the requests of
- * p2p_lc_serve_check; bootstraps of the anchor's root and of up to 7 blocks of the case.
+ * The case's store at its end, on two nodes of the case's anchor state and block whose light client
+ * store (BufferId 2) is a copy of it (node.md, NODE_WORK_LC_SERVE, The light client gossip): the
+ * requests of p2p_lc_serve_check, with bootstraps of the anchor's root and of up to 7 blocks of
+ * the case, and p2p_lc_publish_check on the first; p2p_lc_validate_check on the second with the
+ * finality topic early and on the third with the optimistic topic early.
  */
 static void lc_serve_store(lc_run *r, const uint8_t *block, const char **why) {
-    fc_node m;
-    uint8_t *anchor_block = NULL;
-    bf_state = r->states[0].state;
-    bf_state_size = r->states[0].size;
-    bf_block = block;
-    struct node_shell *s = shell_open(&m, NULL, &anchor_block, why);
-    bf_state = NULL;
-    bf_block = NULL;
-    shell_buf *c = *why ? NULL : shell_find(s, 2);
-    if (!*why && !c) *why = "lc serve: no light client store";
-    if (!*why) {
-        free(c->b);
-        c->size = rd64(r->b);
-        c->b = copy_of(r->b, c->size);
-        const uint8_t *roots[8];
-        size_t nroots = 0;
-        for (uint64_t k = 0; k < r->nstates && nroots < 8; k += r->nstates / 8 + 1) roots[nroots++] = r->states[k].root;
-        struct p2p_net net;
-        p2p_open(&m, &net, why);
-        if (!*why) p2p_lc_serve_check(&m, &net, roots, nroots, r->gvr, why);
-        if (!*why && rd64(s->node + 136 + 8)) *why = "lc serve: the node keeps a stream at the end"; /* Node_streams */
-        p2p_close(&net);
+    for (int pass = 0; pass < 3 && !*why; pass++) { /* one node serves and publishes; two validate the peer's updates */
+        fc_node m;
+        uint8_t *anchor_block = NULL;
+        bf_state = r->states[0].state;
+        bf_state_size = r->states[0].size;
+        bf_block = block;
+        struct node_shell *s = shell_open(&m, NULL, &anchor_block, why);
+        bf_state = NULL;
+        bf_block = NULL;
+        shell_buf *c = *why ? NULL : shell_find(s, 2);
+        if (!*why && !c) *why = "lc serve: no light client store";
+        if (!*why) {
+            free(c->b);
+            c->size = rd64(r->b);
+            c->b = copy_of(r->b, c->size);
+            const uint8_t *roots[8];
+            size_t nroots = 0;
+            for (uint64_t k = 0; k < r->nstates && nroots < 8; k += r->nstates / 8 + 1) roots[nroots++] = r->states[k].root;
+            struct p2p_net net;
+            p2p_open(&m, &net, why);
+            if (!*why && pass == 0) p2p_lc_serve_check(&m, &net, roots, nroots, r->gvr, why);
+            if (!*why && pass == 0) p2p_lc_publish_check(&m, &net, r->gvr, why);
+            if (!*why && pass) p2p_lc_validate_check(&m, &net, r->gvr, pass - 1, why);
+            if (!*why && rd64(s->node + 136 + 8)) *why = "lc serve: the node keeps a stream at the end"; /* Node_streams */
+            p2p_close(&net);
+        }
+        if (s) shell_close(&m, anchor_block);
     }
-    if (s) shell_close(&m, anchor_block);
 }
 
 /*

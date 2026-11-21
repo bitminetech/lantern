@@ -915,6 +915,8 @@ A Uint256: 32 bytes, little endian.
 | `GOSSIP_BLS_TO_EXECUTION_CHANGE` (9) | `bls_to_execution_change` | no |
 | `GOSSIP_BLOB_SIDECAR` (10) | `blob_sidecar_{subnet_id}` | yes |
 | `GOSSIP_DATA_COLUMN_SIDECAR` (11) | `data_column_sidecar_{subnet_id}` | yes |
+| `GOSSIP_LIGHT_CLIENT_FINALITY_UPDATE` (12) | `light_client_finality_update` | no |
+| `GOSSIP_LIGHT_CLIENT_OPTIMISTIC_UPDATE` (13) | `light_client_optimistic_update` | no |
 
 - `GossipTopic__mem` (24) bytes.
 

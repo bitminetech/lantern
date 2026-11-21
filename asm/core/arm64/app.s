@@ -1521,6 +1521,8 @@ LOCAL_FUNCTION app_work
     b.eq    2f
     cmp     x26, #NODE_WORK_LC_SERVE
     b.eq    2f
+    cmp     x26, #NODE_WORK_LC_PUBLISH
+    b.eq    2f
     cmp     x26, #NODE_WORK_NEW_PAYLOAD
     b.eq    2f
     cmp     x26, #NODE_WORK_FORKCHOICE

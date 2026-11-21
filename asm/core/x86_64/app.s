@@ -1637,6 +1637,8 @@ LOCAL_FUNCTION app_work
     je      2f
     cmp     $NODE_WORK_LC_SERVE, %rcx
     je      2f
+    cmp     $NODE_WORK_LC_PUBLISH, %rcx
+    je      2f
     cmp     $NODE_WORK_NEW_PAYLOAD, %rcx
     je      2f
     cmp     $NODE_WORK_FORKCHOICE, %rcx
