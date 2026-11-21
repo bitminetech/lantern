@@ -519,7 +519,19 @@ LOCAL_FUNCTION jresult
     b       2b
 4:  cbz     x28, 9f
     LEAVE 0
-5:  cmp     x21, #ENGINE_METHOD_GET_PAYLOAD
+5:  cmp     x21, #ENGINE_METHOD_ETH_BLOCK   /* the eth_ methods: any value, its bytes kept */
+    ccmp    x21, #ENGINE_METHOD_ETH_LOGS, #4, ne
+    b.ne    51f
+    sub     x9, x0, x24
+    str     x9, [x20, #EngineResponse_result_offset]
+    bl      jskip
+    cbz     x0, 9f
+    sub     x9, x0, x24
+    ldr     x10, [x20, #EngineResponse_result_offset]
+    sub     x9, x9, x10
+    str     x9, [x20, #EngineResponse_result_length]
+    LEAVE 0
+51: cmp     x21, #ENGINE_METHOD_GET_PAYLOAD
     b.ne    17f
     cmp     x0, x19                         /* getPayload: an object, its bytes kept */
     b.hs    9f

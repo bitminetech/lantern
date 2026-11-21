@@ -3126,7 +3126,8 @@ LOCAL_FUNCTION app_engine_conf
     b.ne    92f
     bl      app_file_free
     ldr     x9, [x19, #APP_FLAGS]
-    orr     x9, x9, #NODE_FLAG_ENGINE
+    orr     x9, x9, #NODE_FLAG_ENGINE       /* and the eth1 follower on its connection */
+    orr     x9, x9, #NODE_FLAG_ETH1
     str     x9, [x19, #APP_FLAGS]
 8:  mov     x0, #0
     LEAVE 0

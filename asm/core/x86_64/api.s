@@ -5906,9 +5906,21 @@ LOCAL_FUNCTION node_produce_done
     call    node_produce_next
     LEAVE 0
 20: cmp     $NODE_WORK_PRODUCE_FOLD, %rcx   # the draft holds the entry, or the rules left it out: the next
-    jne     30f
+    jne     25f
     mov     %r13, %rdi
     call    node_produce_next
+    LEAVE 0
+25: cmp     $NODE_WORK_PRODUCE_ETH1, %rcx   # PRODUCE_ETH1: the snapshot goes; then the header call's wait, at the quiet point
+    jne     30f
+    mov     (NodeApi_cursor + PRODUCE_ETH1_SNAP)(%r13), %rsi
+    movq    $0, (NodeApi_cursor + PRODUCE_ETH1_SNAP)(%r13)
+    mov     $NODE_ACT_BYTES_FREE, %edi
+    xor     %edx, %edx
+    call    node_ids
+    mov     $500, %esi
+    cmpq    $0, S7(%rsp)
+    jne     8f
+    movq    $NODE_PRODUCE_BID, NodeApi_member(%r13)
     LEAVE 0
 30: cmp     $NODE_WORK_PRODUCE_BID, %rcx    # PRODUCE_BID: the answer goes, a valid bid stays; then the build
     jne     31f
@@ -6678,8 +6690,16 @@ LOCAL_FUNCTION node_produce_next
 3:  incq    S9(%rsp)                        # the next kind, from the pool's first entry
     movq    $0, S8(%rsp)
     jmp     1b
-5:  movq    $NODE_PRODUCE_BID, NodeApi_member(%r12)   # after the last fold: the header call's wait, at the quiet point
-    andq    $~API_STREAM_BUSY, NodeApi_flags(%r12)
+5:  movq    $NODE_PRODUCE_ETH1, NodeApi_member(%r12)  # after the last fold: the eth1 vote and deposits from the follower's snapshot
+    call    node_eth1_snapshot
+    mov     %rax, (NodeApi_cursor + PRODUCE_ETH1_SNAP)(%r12)
+    mov     $NODE_WORK_PRODUCE_ETH1, %edi
+    mov     NodeApi_state(%r12), %rsi
+    mov     %rax, %rdx
+    mov     NodeApi_data(%r12), %rcx
+    mov     %r13, %r8
+    xor     %r9d, %r9d
+    call    node_work
     LEAVE 0
 END_FUNCTION node_produce_next
 
@@ -6806,7 +6826,15 @@ LOCAL_FUNCTION node_produce_release
     mov     $NODE_ACT_BYTES_FREE, %edi
     xor     %edx, %edx
     call    node_ids
-2:  mov     (%rsp), %rdi                    # the builder's answer or bid
+2:  mov     (%rsp), %rdi                    # the eth1 snapshot of a work in flight
+    mov     (NodeApi_cursor + PRODUCE_ETH1_SNAP)(%rdi), %rsi
+    movq    $0, (NodeApi_cursor + PRODUCE_ETH1_SNAP)(%rdi)
+    test    %rsi, %rsi
+    jz      21f
+    mov     $NODE_ACT_BYTES_FREE, %edi
+    xor     %edx, %edx
+    call    node_ids
+21: mov     (%rsp), %rdi                    # the builder's answer or bid
     mov     (NodeApi_cursor + PRODUCE_BID)(%rdi), %rsi
     movq    $0, (NodeApi_cursor + PRODUCE_BID)(%rdi)
     test    %rsi, %rsi

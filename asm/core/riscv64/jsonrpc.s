@@ -513,7 +513,20 @@ LOCAL_FUNCTION jresult
     j       2b
 4:  beqz    s7, 9f
     LEAVE 0
-5:  li      t0, ENGINE_METHOD_GET_PAYLOAD
+5:  li      t0, ENGINE_METHOD_ETH_BLOCK     # the eth_ methods: any value, its bytes kept
+    beq     s3, t0, 51f
+    li      t0, ENGINE_METHOD_ETH_LOGS
+    bne     s3, t0, 52f
+51: sub     t0, a0, s8
+    sd      t0, EngineResponse_result_offset(s2)
+    call    jskip
+    beqz    a0, 9f
+    sub     t0, a0, s8
+    ld      t1, EngineResponse_result_offset(s2)
+    sub     t0, t0, t1
+    sd      t0, EngineResponse_result_length(s2)
+    LEAVE 0
+52: li      t0, ENGINE_METHOD_GET_PAYLOAD
     bne     s3, t0, 17f
     bgeu    a0, s1, 9f                      # getPayload: an object, its bytes kept
     lbu     t0, 0(a0)

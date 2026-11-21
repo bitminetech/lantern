@@ -6061,9 +6061,21 @@ LOCAL_FUNCTION node_produce_done
     bl      node_produce_next
     LEAVE 0
 20: cmp     x9, #NODE_WORK_PRODUCE_FOLD     /* the draft holds the entry, or the rules left it out: the next */
-    b.ne    30f
+    b.ne    25f
     mov     x0, x22
     bl      node_produce_next
+    LEAVE 0
+25: cmp     x9, #NODE_WORK_PRODUCE_ETH1     /* PRODUCE_ETH1: the snapshot goes; then the header call's wait, at the quiet point */
+    b.ne    30f
+    ldr     x1, [x22, #(NodeApi_cursor + PRODUCE_ETH1_SNAP)]
+    str     xzr, [x22, #(NodeApi_cursor + PRODUCE_ETH1_SNAP)]
+    mov     x0, #NODE_ACT_BYTES_FREE
+    mov     x2, #0
+    bl      node_ids
+    mov     x1, #500
+    cbnz    x25, 8f
+    mov     x9, #NODE_PRODUCE_BID
+    str     x9, [x22, #NodeApi_member]
     LEAVE 0
 30: cmp     x9, #NODE_WORK_PRODUCE_BID      /* PRODUCE_BID: the answer goes, a valid bid stays; then the build */
     b.ne    31f
@@ -6184,11 +6196,17 @@ LOCAL_FUNCTION node_produce_next
 3:  add     x27, x27, #1                    /* the next kind, from the pool's first entry */
     mov     x26, #0
     b       1b
-5:  mov     x9, #NODE_PRODUCE_BID           /* after the last fold: the header call's wait, at the quiet point */
+5:  mov     x9, #NODE_PRODUCE_ETH1          /* after the last fold: the eth1 vote and deposits from the follower's snapshot */
     str     x9, [x21, #NodeApi_member]
-    ldr     x9, [x21, #NodeApi_flags]
-    and     x9, x9, #~API_STREAM_BUSY
-    str     x9, [x21, #NodeApi_flags]
+    bl      node_eth1_snapshot
+    str     x0, [x21, #(NodeApi_cursor + PRODUCE_ETH1_SNAP)]
+    mov     x2, x0
+    mov     x0, #NODE_WORK_PRODUCE_ETH1
+    ldr     x1, [x21, #NodeApi_state]
+    ldr     x3, [x21, #NodeApi_data]
+    mov     x4, x22
+    mov     x5, #0
+    bl      node_work
     LEAVE 0
 END_FUNCTION node_produce_next
 
@@ -6315,7 +6333,14 @@ LOCAL_FUNCTION node_produce_release
     mov     x0, #NODE_ACT_BYTES_FREE
     mov     x2, #0
     bl      node_ids
-2:  ldr     x0, [sp, #16]                   /* the builder's answer or bid */
+2:  ldr     x0, [sp, #16]                   /* the eth1 snapshot of a work in flight */
+    ldr     x1, [x0, #(NodeApi_cursor + PRODUCE_ETH1_SNAP)]
+    str     xzr, [x0, #(NodeApi_cursor + PRODUCE_ETH1_SNAP)]
+    cbz     x1, 21f
+    mov     x0, #NODE_ACT_BYTES_FREE
+    mov     x2, #0
+    bl      node_ids
+21: ldr     x0, [sp, #16]                   /* the builder's answer or bid */
     ldr     x1, [x0, #(NodeApi_cursor + PRODUCE_BID)]
     str     xzr, [x0, #(NodeApi_cursor + PRODUCE_BID)]
     cbz     x1, 3f

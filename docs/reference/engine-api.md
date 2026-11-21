@@ -35,7 +35,7 @@
 ## Common rules
 
 - As in [helpers.md](helpers.md#common-rules).
-- The node calls four methods: engine_exchangeCapabilities, engine_newPayload, engine_forkchoiceUpdated (with null payload attributes, or with them for a payload it builds for a proposer) and engine_getPayload.
+- The node calls four methods: engine_exchangeCapabilities, engine_newPayload, engine_forkchoiceUpdated (with null payload attributes, or with them for a payload it builds for a proposer) and engine_getPayload; and through the same connection eth_getBlockByNumber and eth_getLogs for the eth1 follower (eth1.md).
 - The versions follow the fork of the block: bellatrix engine_newPayloadV1, engine_forkchoiceUpdatedV1 (`PayloadAttributesV1`) and engine_getPayloadV1; capella V2, V2 (`PayloadAttributesV2`) and V2; deneb V3, V3 (`PayloadAttributesV3`) and V3; electra engine_newPayloadV4, engine_forkchoiceUpdatedV3 and engine_getPayloadV4; fulu engine_newPayloadV4, engine_forkchoiceUpdatedV3 and engine_getPayloadV5 (osaka.md: `BlobsBundleV2`).
 - JSON is written compact, with no spaces, in the field order of the spec's lists. A `QUANTITY` is lowercase hex with no leading zeros, `0x0` for zero; `DATA` is lowercase hex, two digits a byte.
 - lantern_get_execution_requests_list, lantern_get_execution_requests, lantern_engine_new_payload_size, lantern_engine_new_payload, lantern_engine_forkchoice_updated, lantern_engine_get_payload and lantern_get_payload_attributes read the fork's layouts, and are in the objects of bellatrix and later (electra and later for the first two). lantern_engine_exchange_capabilities, lantern_engine_parse_response, lantern_jwt_token, lantern_http_post and lantern_http_parse_response read no fork's layouts. Each is in the common object of the core (asm/core/<ISA>/common.s), and its symbol is its name.
@@ -326,7 +326,7 @@ lantern_engine_parse_response(body, method, out) -> status
 | Name | Role | Type |
 |---|---|---|
 | `body` | input | `ByteList`: the HTTP body |
-| `method` | input | u64: `ENGINE_METHOD_*` of include/lantern.inc, the method called: `ENGINE_METHOD_NEW_PAYLOAD` (1), `ENGINE_METHOD_FORKCHOICE_UPDATED` (2), `ENGINE_METHOD_EXCHANGE_CAPABILITIES` (3), `ENGINE_METHOD_GET_PAYLOAD` (4) |
+| `method` | input | u64: `ENGINE_METHOD_*` of include/lantern.inc, the method called: `ENGINE_METHOD_NEW_PAYLOAD` (1), `ENGINE_METHOD_FORKCHOICE_UPDATED` (2), `ENGINE_METHOD_EXCHANGE_CAPABILITIES` (3), `ENGINE_METHOD_GET_PAYLOAD` (4), `ENGINE_METHOD_ETH_BLOCK` (5) eth_getBlockByNumber, `ENGINE_METHOD_ETH_LOGS` (6) eth_getLogs |
 | `out` | output | `EngineResponse` |
 
 ### Returns
@@ -343,6 +343,7 @@ lantern_engine_parse_response(body, method, out) -> status
 - engine_forkchoiceUpdated: `result` has a `PayloadStatusV1` in `payloadStatus`, and `payloadId` is an 8 byte `DATA`, or null, or absent.
 - engine_exchangeCapabilities: `result` is an array of strings; each name of the methods lantern calls sets its bit, and other names are ignored.
 - engine_getPayload: `result` is an object, its text checked as for an ignored member; `result_offset` and `result_length` give its bytes in the body, for lantern_engine_json_decode with the fork's result type.
+- eth_getBlockByNumber and eth_getLogs (the eth1 follower, eth1.md): `result` is any value, its text checked as for an ignored member; `result_offset` and `result_length` give its bytes, for lantern_eth1_block and lantern_eth1_deposit_logs.
 - Takes a later member of the same name over an earlier one.
 - Compares names and strings byte for byte: a string with an escape matches no name.
 
