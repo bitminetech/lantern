@@ -154,6 +154,9 @@ jobs:
           chmod +x build/linux-${{ matrix.isa }}/lantern-minimal
           tests/app/start.sh "${{ matrix.qemu }}" build/linux-${{ matrix.isa }}/lantern-minimal vectors/network
       - name: Run vectors
+        env:
+          LANTERN_FUZZ: 100
+          LANTERN_FUZZ_SEED: ${{ github.run_number }}
         run: |
           set -o pipefail
           chmod +x build/linux-${{ matrix.isa }}/runner-*
@@ -314,6 +317,9 @@ jobs:
           enableCrossOsArchive: true
           fail-on-cache-miss: true
       - name: Run vectors
+        env:
+          LANTERN_FUZZ: 100
+          LANTERN_FUZZ_SEED: ${{ github.run_number }}
         shell: pwsh
         run: |
           tests/runner/run.ps1 build/windows-${{ matrix.isa }} vectors | Tee-Object results-windows-${{ matrix.isa }}-${{ matrix.fork }}.txt
@@ -354,6 +360,9 @@ jobs:
           enableCrossOsArchive: true
           fail-on-cache-miss: true
       - name: Run vectors
+        env:
+          LANTERN_FUZZ: 100
+          LANTERN_FUZZ_SEED: ${{ github.run_number }}
         run: |
           set -o pipefail
           tests/runner/macos.sh vectors | tee results-macos-${{ matrix.isa }}-${{ matrix.fork }}.txt

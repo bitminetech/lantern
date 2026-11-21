@@ -11,6 +11,7 @@ build/linux-x86_64/runner-minimal-fulu ~/.cache/lantern/vectors minimal-fulu-ope
 - The status is 0 only when every case of every file passes.
 - `tests/runner/run.sh RUNNER_DIR VECTOR_DIR [FILE ...]` runs the runners of one target, one process for each runner and file, as many at once as the machine has cores. Each file goes to the runners of its preset and fork. `QEMU` sets the command that runs them, `JOBS` the processes at once. `run.ps1` does the same on Windows.
 - For each runner, `run.sh` and `run.ps1` print a `FUNCTION <symbol> PASS` line for each function its processes called, or `FAIL` when a process that called it failed. tests/runner/tick_tables.py turns these lines into the tick tables of ARCHITECTURE.md section 10.
+- `LANTERN_FUZZ=N`: after the cases of an `http-request`, `json-decode` or `json-engine_decode` file, N inputs made from each case's input by 1 to 8 edits run through lantern_http_request or lantern_json_decode. Each input ends at the end of a page with no access after it. The status must be one the function documents, every guard byte must hold, and the parts of a valid answer must lie inside it; a trap prints the input in hex. `LANTERN_FUZZ_SEED` seeds the edits (default 1); CI runs 100 inputs of each case with its run number as the seed.
 - `tests/runner/docker.sh` builds every target in Docker and runs the three Linux ISAs; `tests/runner/macos.sh` runs the macOS runners. Both call `run.sh`.
 
 ## Files
