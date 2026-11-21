@@ -56,11 +56,11 @@ lantern_app_options(args, options, fault) -> status
 ### Returns
 
 - `LANTERN_OK`: `options` holds the options.
-- `LANTERN_INVALID_OPTION`: an argument is not an option below, an option has no value or an empty one, a number is not decimal digits of a value in its range, an address is not 4 decimal numbers of 0 to 255 with dots between them, `--network-dir` is missing, or one of `--checkpoint-state` and `--checkpoint-block` is given without the other; a missing option's fault is the count of arguments.
+- `LANTERN_INVALID_OPTION`: an argument is not an option below, an option has no value or an empty one (`--supernode`: a value), a number is not decimal digits of a value in its range, an address is not 4 decimal numbers of 0 to 255 with dots between them, `--network-dir` is missing, or one of `--checkpoint-state` and `--checkpoint-block` is given without the other; a missing option's fault is the count of arguments.
 
 ### Function does
 
-- Takes each option as `--name value` or `--name=value`:
+- Takes each option as `--name value` or `--name=value`; `--supernode` as `--name` alone:
 
 | Option | Field | Value | Default |
 |---|---|---|---|
@@ -78,6 +78,7 @@ lantern_app_options(args, options, fault) -> status
 | `--checkpoint-state` | `checkpoint_state` | a file of the SSZ bytes of a finalized `BeaconState`: the post-state of the checkpoint block | none: the node starts from `genesis.ssz` |
 | `--checkpoint-block` | `checkpoint_block` | a file of the SSZ bytes of that block's `SignedBeaconBlock` | none |
 | `--log-level` | `log_level` | `error`, `warn`, `info` or `debug`: the log lines of that level and the levels before it | `info` |
+| `--supernode` | `supernode` | none: 1, the node custodies every custody group (node.md, `NODE_FLAG_SUPERNODE`) | 0: the groups of max(`SAMPLES_PER_SLOT`, `CUSTODY_REQUIREMENT`) |
 
 - Keeps the last value of an option given twice.
 - Drops `http://` at the start of `--execution-endpoint`.
@@ -116,7 +117,7 @@ lantern_app_main(args) -> status
 - Reads the options with lantern_app_options.
 - Reads `config.yaml` of the network directory with lantern_config_parse over the pinned config of the preset, and `genesis.ssz` with lantern_<fork>_node_anchor of the fork of its slot.
 - A `StateCache` ([state.md](state.md#type-statecache)) for the anchor file's bytes / 121 + 65536 validators, from lantern_state_cache_size, lantern_shell_map and lantern_state_cache_init, at `CONFIG_STATE_CACHE` of the config before the store and the node start, so each state root of the node goes through it; with no memory for it, none. A `CommitteeCache` ([block-processing.md](block-processing.md#type-committeecache)) for as many validators, from lantern_committee_cache_size, lantern_shell_map and lantern_committee_cache_init, at `CONFIG_COMMITTEE_CACHE` the same way, and a `PubkeyCache` ([block-processing.md](block-processing.md#type-pubkeycache)) for as many, from lantern_pubkey_cache_size and lantern_pubkey_cache_init, at `CONFIG_PUBKEY_CACHE`.
-- Makes a new secp256k1 key. Starts the store (lantern_get_forkchoice_store), the node (lantern_node_init, with `NODE_FLAG_ENGINE` when it has an execution endpoint, `NODE_FLAG_DISCV5`, and the anchor's `node_id`: keccak256 of the key's uncompressed point, x then y, in reverse byte order), the libp2p state with that key, and the discv5 state with the same key, the `ip` of `--enr-address`, and the `udp` and `tcp` of `--port`.
+- Makes a new secp256k1 key. Starts the store (lantern_get_forkchoice_store), the node (lantern_node_init, with `NODE_FLAG_ENGINE` when it has an execution endpoint, `NODE_FLAG_DISCV5`, `NODE_FLAG_SUPERNODE` with `--supernode`, and the anchor's `node_id`: keccak256 of the key's uncompressed point, x then y, in reverse byte order), the libp2p state with that key, and the discv5 state with the same key, the `ip` of `--enr-address`, and the `udp` and `tcp` of `--port`.
 - Decodes the KZG trusted setup with crypto_kzg_trusted_setup_of_bytes: include/trusted_setup_4096.bin, the compressed points of `presets/<preset>/trusted_setups/trusted_setup_4096.json` of the pinned spec (the same file for both presets): the 4096 of `g1_lagrange`, the 4096 of `g1_monomial`, then the 65 of `g2_monomial`.
 - Listens on TCP `--port` and binds UDP `--port` on every address, through the shell of asm-libp2p, gives each boot node to discv5, and listens for the Beacon API ([beacon-api.md](beacon-api.md)) on TCP `--http-address` and `--http-port`.
 - The Beacon API's connections, through a second shell context of asm-libp2p:
@@ -206,7 +207,8 @@ The options of a run. A text field is an [`Arg`](#type-arg) of the bytes of the 
 | 144 | `log_level` | u64 | 0 error, 1 warn, 2 info, 3 debug |
 | 152 | `http_address` | u64 | The Beacon API's IPv4 address, its 4 bytes in network order in the low bytes |
 | 160 | `http_max_connections` | u64 | The Beacon API's connections at a time |
-| 168 | | | Size |
+| 168 | `supernode` | u64 | 1 with `--supernode`, else 0 |
+| 176 | | | Size |
 
 ## Results
 

@@ -1879,7 +1879,7 @@ ANSWERED = ("getHealth", "getNetworkIdentity", "getNodeVersion", "getSyncingStat
             "getBlockHeader", "getStateFinalityCheckpoints", "getBlockV2", "getStateV2", "getBlockRoot", "getStateRoot",
             "getStateFork", "getSpec", "getForkSchedule", "getDepositContract", "getEpochCommittees",
             "getProposerDuties", "produceAttestationData", "getAttesterDuties", "eventstream", "getStateRandao",
-            "getEpochSyncCommittees", "getProposerLookahead", "getBlockAttestationsV2", "getBlindedBlock", "getDebugChainHeadsV2", "getDebugForkChoice", "getBlockHeaders", "getPeers", "getPeer", "getBlobSidecars", "getDebugDataColumnSidecars", "getSyncCommitteeDuties", "getLiveness") + tuple(PENDING) + VALIDATOR_OPS
+            "getEpochSyncCommittees", "getProposerLookahead", "getBlockAttestationsV2", "getBlindedBlock", "getDebugChainHeadsV2", "getDebugForkChoice", "getBlockHeaders", "getPeers", "getPeer", "getBlobSidecars", "getDebugDataColumnSidecars", "getBlobs", "getSyncCommitteeDuties", "getLiveness") + tuple(PENDING) + VALIDATOR_OPS
 STATE_READS = ("getStateRandao", "getEpochSyncCommittees", "getProposerLookahead")
 IDENTITY = (b"16Uiu2HAmPLe7Mzm8TsYUubgCAW1aJoeFScxrLj8ppHFivPo97bUZ",
             b"enr:-Iu4QLm7bZGdAhVwRqZ6Zf3LlnqKsBTnZGOByHQhPMQJ3pV4F3t8L9i5yJOZ0X0hiZ6q4D5V0jB7l8J3ZtYw1JDH9C4BgmlkgnY0gmlwhAoAAAGJc2VjcDI1NmsxoQPKY0yuDUmstAHYpMa2_oxVtw0RW_QAdpzBQA8yWM0xOIN0Y3CCIyg",
@@ -2438,6 +2438,14 @@ def answer(v, name, route, offline, close, keep_alive, syncing=False):
         if route.response == 2:
             return streamed(fork, b"", ssz=True, **kw)
         return streamed(fork, b'{"version":"' + fork.encode() + b'","execution_optimistic":false,"finalized":true,"data":[]}', **kw)
+    if name == "getBlobs":  # the anchor block, of no sidecars the node holds: no blob
+        found = (route.id_kind in (1, 3) or (route.id_kind == 5 and route.id_slot == v["slot"]) or
+                 (route.id_kind == 2 and v["slot"] == 0) or (route.id_kind == 6 and route.id_root == v["root"]))
+        if not found:
+            return error(404, **kw)
+        if route.response == 2:
+            return streamed(None, b"", ssz=True, **kw)
+        return streamed(None, b'{"execution_optimistic":false,"finalized":true,"data":[]}', **kw)
     if name == "getPeers":  # the node has no peers
         return response(200, b'{"data":[],"meta":{"count":0}}', **kw)
     if name == "getPeer":
@@ -3091,6 +3099,10 @@ def api_requests(spec, fork, v, kind="main"):
             elif opname in ("getBlockRewards", "getSyncCommitteeRewards"):  # the anchor's block has no bytes: 404
                 assert req["path"].endswith(b"/head")
                 want = error(404, close=close, keep_alive=keep_alive)
+            elif opname == "getAttestationsRewards":  # the state of the last slot of epoch + 1: none the node holds, 404
+                last = (int(route.epoch) + 2) * int(spec.SLOTS_PER_EPOCH) - 1
+                assert last > v["slot"] + SLOTS_AHEAD or last not in v["states"]
+                want = error(404, close=close, keep_alive=keep_alive)
             elif opname == "produceBlockV3":  # 503 while syncing; else the path's slot is at or below the head's: 400
                 assert int(route.slot) <= v["slot"]
                 want = error(503 if int(syncing) & 1 else 400, close=close, keep_alive=keep_alive)
@@ -3207,6 +3219,13 @@ def api_requests(spec, fork, v, kind="main"):
         add(f"sidecars_{op}_ssz", api_route.base(by_name[op], path_values={"block_id": b"head"}, accept=octet))
         add(f"sidecars_{op}_indices", api_route.base(by_name[op], [("indices", b"0,3")], path_values={"block_id": b"head"}))
         add(f"sidecars_{op}_http10", api_route.base(by_name[op], path_values={"block_id": b"head"}), version=b"HTTP/1.0")
+    blobs = by_name["getBlobs"]
+    for block_id in (b"head", root_id, other_root, b"%d" % v["slot"]):
+        add(f"blobs_{block_id.decode()[:12]}", api_route.base(blobs, path_values={"block_id": block_id}))
+    add("blobs_ssz", api_route.base(blobs, path_values={"block_id": b"head"}, accept=octet))
+    add("blobs_hashes", api_route.base(blobs, [("versioned_hashes", b"0x01" + b"ab" * 31 + b",0x01" + b"cd" * 31)],
+                                       path_values={"block_id": b"head"}))
+    add("blobs_http10", api_route.base(blobs, path_values={"block_id": b"head"}), version=b"HTTP/1.0")
     peers = by_name["getPeers"]
     for key, query in (("connected", [("state", b"connected")]), ("states", [("state", b"disconnected,connecting")]),
                        ("inbound", [("direction", b"inbound")]),

@@ -10,6 +10,7 @@
 .set APP_OPTION_ADDRESS, 4              /* an IPv4 address */
 .set APP_OPTION_LEVEL, 5                /* error, warn, info or debug: 0 to 3 */
 .set APP_OPTION_CONNECTIONS, 6          /* 1 to APP_MAX_HTTP_CONNECTIONS */
+.set APP_OPTION_FLAG, 7                 /* no value: 1 */
 .set APP_OPTION_BYTES, 48
 
     .p2align 3
@@ -55,6 +56,9 @@ app_options:
     .space 24 - 16
     .quad 9, AppOptions_log_level, APP_OPTION_LEVEL
     .ascii "log-level"
+    .space 24 - 9
+    .quad 9, AppOptions_supernode, APP_OPTION_FLAG
+    .ascii "supernode"
     .space 24 - 9
 app_options_end:
 app_levels:                             /* the name of each log level in 8 bytes, then their lengths */

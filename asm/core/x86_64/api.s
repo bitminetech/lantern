@@ -2830,7 +2830,9 @@ LOCAL_FUNCTION node_api_view
     mov     %rax, ApiView_seq_number(%rdi)
     mov     Node_attnets(%rbx), %rax
     mov     %rax, ApiView_attnets(%rdi)
-    mov     (Node_config + CONFIG_CUSTODY_REQUIREMENT)(%rbx), %rax
+    mov     (Node_config + CONFIG_CUSTODY_REQUIREMENT)(%rbx), %rax  # the custody group count
+    testq   $NODE_FLAG_SUPERNODE, Node_flags(%rbx)
+    cmovnz  (Node_config + CONFIG_NUMBER_OF_CUSTODY_GROUPS)(%rbx), %rax
     mov     %rax, ApiView_custody_group_count(%rdi)
     add     $ApiView_peer_id, %rdi          # the identity's texts
     lea     Node_api_identity(%rbx), %rsi
@@ -3122,6 +3124,8 @@ LOCAL_FUNCTION node_api_event
     cmp     $API_OP_GET_BLOB_SIDECARS, %rcx
     je      65f
     cmp     $API_OP_GET_DEBUG_DATA_COLUMN_SIDECARS, %rcx
+    je      65f
+    cmp     $API_OP_GET_BLOBS, %rcx
     je      65f
     cmp     $API_OP_GET_BLOCK_REWARDS, %rcx
     je      547f
@@ -3656,6 +3660,8 @@ LOCAL_FUNCTION node_api_event
     je      54f
     cmp     $API_OP_GET_DEBUG_DATA_COLUMN_SIDECARS, %rcx
     je      54f
+    cmp     $API_OP_GET_BLOBS, %rcx
+    je      55f
 67: mov     S7(%rsp), %rax                  # a work
     mov     ApiRoute_op(%rax), %rdi
     mov     S9(%rsp), %rsi
@@ -3671,6 +3677,15 @@ LOCAL_FUNCTION node_api_event
     mov     %r12, %rdx
     mov     S8(%rsp), %rcx
     call    node_api_sidecar_stream
+    test    %rax, %rax
+    jz      90f
+    mov     %rax, %rdx
+    jmp     80f
+55: mov     S9(%rsp), %rdi                  # getBlobs: the blob stream of the block
+    mov     S7(%rsp), %rsi
+    mov     %r12, %rdx
+    mov     S8(%rsp), %rcx
+    call    node_api_blob_stream
     test    %rax, %rax
     jz      90f
     mov     %rax, %rdx
@@ -7790,7 +7805,11 @@ LOCAL_FUNCTION node_api_chunk_done
     inc     %rsi
     call    node_headers_next
     jmp     3f
-2:  cmpq    $API_OP_GET_BLOB_SIDECARS, NodeApi_op(%r13)    # a sidecar stream: its sidecar from member + 1 on
+2:  cmpq    $API_OP_GET_BLOBS, NodeApi_op(%r13)   # the blob stream: its next sidecar or cell
+    jne     21f
+    call    node_blob_advance
+    jmp     3f
+21: cmpq    $API_OP_GET_BLOB_SIDECARS, NodeApi_op(%r13)    # a sidecar stream: its sidecar from member + 1 on
     je      4f
     cmpq    $API_OP_GET_DEBUG_DATA_COLUMN_SIDECARS, NodeApi_op(%r13)
     jne     5f
@@ -8022,7 +8041,11 @@ LOCAL_FUNCTION api_stream_json
     jne     32f
     call    api_headers_json
     UNFRAME 0
-32: cmpq    $API_OP_GET_BLOB_SIDECARS, NodeApi_op(%rbx)
+32: cmpq    $API_OP_GET_BLOBS, NodeApi_op(%rbx)   # the blob stream: the sidecar rdi, the versioned hashes rsi
+    jne     35f
+    call    api_blob_body
+    UNFRAME 0
+35: cmpq    $API_OP_GET_BLOB_SIDECARS, NodeApi_op(%rbx)
     je      33f
     cmpq    $API_OP_GET_DEBUG_DATA_COLUMN_SIDECARS, NodeApi_op(%rbx)
     jne     34f
@@ -8160,8 +8183,10 @@ LOCAL_FUNCTION node_api_chunk_run
     je      103f
     cmp     $API_OP_PRODUCE_SYNC_COMMITTEE_CONTRIBUTION, %rax
     je      103f
-    mov     $6, %ecx                        # a sidecar stream (6): data 0 at its end
+    mov     $6, %ecx                        # a sidecar stream (6), and the blob stream: data 0 at its end
     cmp     $API_OP_GET_BLOB_SIDECARS, %rax
+    je      103f
+    cmp     $API_OP_GET_BLOBS, %rax
     je      103f
     cmp     $API_OP_GET_DEBUG_DATA_COLUMN_SIDECARS, %rax
     je      103f
@@ -8615,6 +8640,8 @@ LOCAL_FUNCTION node_api_chunk_run
     jne     393f
     testq   $API_STREAM_SSZ, (NodeEvent_api + 8)(%rbp)
     jnz     36f
+    cmpq    $API_OP_GET_BLOBS, NodeApi_op(%rbx)   # getBlobs: as the validator streams
+    je      38f
     jmp     392f
 393: cmpq   $4, (L + 56)(%rsp)
     je      392f
@@ -8705,6 +8732,7 @@ LOCAL_FUNCTION node_api_chunk_run
     call    api_bool
     API_LIT api_j_data
 36: mov     (L + 40)(%rsp), %rdi
+    mov     (L + 48)(%rsp), %rsi            # state_a: the blob stream's versioned hashes
     call    api_stream_json
     cmp     $3, %rax
     je      97f
@@ -8764,6 +8792,7 @@ LOCAL_FUNCTION node_api_chunk_run
     mov     L(%rsp), %r14
     sub     $7, %r14
     mov     (L + 40)(%rsp), %rdi
+    mov     (L + 48)(%rsp), %rsi
     call    api_stream_json
     cmp     $3, %rax
     je      97f
@@ -8792,6 +8821,7 @@ LOCAL_FUNCTION node_api_chunk_run
     API_LIT api_last_chunk
     jmp     44f
 45: mov     (L + 40)(%rsp), %rdi            # HTTP/1.0: the bytes alone
+    mov     (L + 48)(%rsp), %rsi
     call    api_stream_json
     cmp     $3, %rax
     je      97f
@@ -9383,6 +9413,400 @@ LOCAL_FUNCTION node_api_headers_stream
     call    node_api_chunk_work
     UNFRAME 48
 END_FUNCTION node_api_headers_stream
+
+# rax = the data of the sidecar of index rdx of the block of the root at rdi and the slot rsi, as a
+# sidecar stream finds it (node.md): the NODE_BLOB_VALID entry's bytes, else with NODE_FLAG_DB the
+# NODE_DB_REF of the Db's record; 0 with none. rbx the node. Locals: the slot, the index.
+LOCAL_FUNCTION node_sidecar_of
+    FRAME 16
+    mov     %rsi, (%rsp)
+    mov     %rdx, 8(%rsp)
+    mov     %rdx, %rsi
+    call    node_blob_held
+    test    %rax, %rax
+    jz      1f
+    mov     NodeBlob_data_id(%rax), %rax
+    UNFRAME 16
+1:  testq   $NODE_FLAG_DB, Node_flags(%rbx)
+    jz      9f
+    mov     (%rsp), %rdi
+    mov     8(%rsp), %rsi
+    call    node_db_sidecar
+    UNFRAME 16
+9:  xor     %eax, %eax
+    UNFRAME 16
+END_FUNCTION node_sidecar_of
+
+# (connection rdi, route rsi, flags rdx, view rcx) -> rax: the blob stream of the block of the view
+# (node.md, NODE_EV_API, the blob stream): 0, or 404 for a fulu block of which the node holds a
+# column sidecar but not one of each of the first NUMBER_OF_COLUMNS / 2 columns. rbx the node.
+# Locals: the connection, the route, the flags, the view, the fork, the entry's index and address, a
+# column, the count of the first half's columns held, 1 with any held, a ByteList head (24).
+LOCAL_FUNCTION node_api_blob_stream
+    FRAME 112
+    mov     %rdi, (%rsp)
+    mov     %rsi, 8(%rsp)
+    mov     %rdx, 16(%rsp)
+    mov     %rcx, 24(%rsp)
+    mov     ApiView_head_slot(%rcx), %rdi
+    lea     Node_config(%rbx), %rsi
+    call    node_fork
+    mov     %rax, 32(%rsp)
+    movq    $0, 64(%rsp)
+    movq    $0, 72(%rsp)
+    cmp     $FORK_FULU, %rax
+    jb      2f
+    movq    $0, 56(%rsp)
+1:  mov     56(%rsp), %rdx                  # fulu: the columns the node holds
+    cmp     $NUMBER_OF_COLUMNS, %rdx
+    jae     11f
+    mov     24(%rsp), %rcx
+    lea     ApiView_head_root(%rcx), %rdi
+    mov     ApiView_head_slot(%rcx), %rsi
+    call    node_sidecar_of
+    mov     56(%rsp), %rdx
+    incq    56(%rsp)
+    test    %rax, %rax
+    jz      1b
+    movq    $1, 72(%rsp)
+    cmp     $(NUMBER_OF_COLUMNS / 2), %rdx
+    jae     1b
+    incq    64(%rsp)
+    jmp     1b
+11: cmpq    $(NUMBER_OF_COLUMNS / 2), 64(%rsp)
+    je      2f
+    cmpq    $0, 72(%rsp)
+    jne     8f                              # some, but not each of the first half: 404
+2:  call    node_api_new
+    mov     %rax, 40(%rsp)
+    mov     %rdx, 48(%rsp)
+    mov     %rdx, %rdi
+    mov     $NodeApi__mem, %esi
+    call    lantern_zero
+    mov     48(%rsp), %rdx
+    mov     (%rsp), %rax
+    mov     %rax, NodeApi_connection(%rdx)
+    mov     8(%rsp), %rsi
+    mov     ApiRoute_op(%rsi), %rax
+    mov     %rax, NodeApi_op(%rdx)
+    mov     16(%rsp), %rax                  # the answer flags, SSZ, and the block's values
+    cmpq    $API_TYPE_SSZ, ApiRoute_response(%rsi)
+    jne     3f
+    or      $API_STREAM_SSZ, %rax
+3:  mov     24(%rsp), %rcx
+    cmpq    $0, ApiView_is_optimistic(%rcx)
+    je      31f
+    or      $API_STREAM_OPTIMISTIC, %rax
+31: cmpq    $0, ApiView_head_finalized(%rcx)
+    je      32f
+    or      $API_STREAM_FINALIZED, %rax
+32: mov     %rax, NodeApi_flags(%rdx)
+    mov     32(%rsp), %rax
+    mov     %rax, NodeApi_fork(%rdx)
+    mov     ApiView_head_slot(%rcx), %rax
+    mov     %rax, NodeApi_slot(%rdx)
+    lea     NodeApi_root(%rdx), %rdi
+    lea     ApiView_head_root(%rcx), %rsi
+    COPY32  %rdi, %rsi
+    mov     8(%rsp), %rsi                   # the versioned hashes: a BYTES_PUT of them, as the entry's state
+    testq   $(1 << API_PARAM_VERSIONED_HASHES), ApiRoute_present(%rsi)
+    jz      5f
+    PART    %rax, %rcx, %rsi, ApiRoute_list
+    shl     $5, %rcx
+    lea     80(%rsp), %rdi                  # a ByteList head whose offset reaches the items
+    sub     %rdi, %rax
+    mov     %rcx, (%rdi)
+    mov     %rax, 8(%rdi)
+    mov     %rcx, 16(%rdi)
+    call    node_put
+    mov     48(%rsp), %rdx
+    mov     %rax, NodeApi_state(%rdx)
+    orq     $API_STREAM_OWN_STATE, NodeApi_flags(%rdx)
+5:  mov     48(%rsp), %rdx                  # the first item
+    mov     32(%rsp), %rax
+    cmp     $FORK_DENEB, %rax
+    jb      7f
+    cmp     $FORK_FULU, %rax
+    jae     6f
+    movq    $-1, NodeApi_filter_slot(%rdx)  # deneb and electra: every sidecar
+    movq    $-1, NodeApi_filter_index(%rdx)
+    mov     %rdx, %rdi
+    xor     %esi, %esi
+    call    node_sidecar_next
+    jmp     7f
+6:  cmpq    $(NUMBER_OF_COLUMNS / 2), 64(%rsp)  # fulu: blob 0 and column 0 with the first half; else none
+    jne     7f
+    lea     NodeApi_root(%rdx), %rdi
+    mov     NodeApi_slot(%rdx), %rsi
+    xor     %edx, %edx
+    call    node_sidecar_of
+    mov     48(%rsp), %rdx
+    mov     %rax, NodeApi_data(%rdx)
+7:  mov     40(%rsp), %rax
+    mov     48(%rsp), %rdx
+    call    node_api_chunk_work
+    xor     %eax, %eax
+    UNFRAME 112
+8:  mov     $404, %eax
+    UNFRAME 112
+END_FUNCTION node_api_blob_stream
+
+# The blob stream rdi after a chunk that ended its item (node.md, NODE_EV_API, the blob stream):
+# deneb and electra the sidecar from member + 1 on; fulu the next cell, of blob filter_slot + 1 and
+# column 0 after API_STREAM_BLOB_SKIP or the first half's last column, else of column member + 1,
+# with sent 0. API_STREAM_BLOB_SKIP clears. rbx the node. r12 the entry, r13 its flags.
+LOCAL_FUNCTION node_blob_advance
+    ENTER 0
+    mov     %rdi, %r12
+    mov     NodeApi_flags(%r12), %r13
+    andq    $~API_STREAM_BLOB_SKIP, NodeApi_flags(%r12)
+    cmpq    $FORK_FULU, NodeApi_fork(%r12)
+    jae     1f
+    mov     %r12, %rdi
+    mov     NodeApi_member(%r12), %rsi
+    inc     %rsi
+    call    node_sidecar_next
+    LEAVE 0
+1:  mov     NodeApi_member(%r12), %rax
+    mov     NodeApi_filter_slot(%r12), %rcx
+    inc     %rax
+    test    $API_STREAM_BLOB_SKIP, %r13
+    jnz     2f
+    cmp     $(NUMBER_OF_COLUMNS / 2), %rax
+    jb      3f
+2:  inc     %rcx
+    xor     %eax, %eax
+3:  mov     %rax, NodeApi_member(%r12)
+    mov     %rcx, NodeApi_filter_slot(%r12)
+    movq    $0, NodeApi_sent(%r12)
+    lea     NodeApi_root(%r12), %rdi
+    mov     NodeApi_slot(%r12), %rsi
+    mov     %rax, %rdx
+    call    node_sidecar_of
+    mov     %rax, NodeApi_data(%r12)
+    LEAVE 0
+END_FUNCTION node_blob_advance
+
+# rax = 1 when kzg_commitment_to_versioned_hash of the 48-byte commitment at rdi (deneb
+# beacon-chain.md: VERSIONED_HASH_VERSION_KZG, then the last 31 bytes of its sha256) is one of the
+# Root items of the ByteList rsi, else 0. Locals: the ByteList rsi, a ByteList of the commitment
+# (72), the hash (32).
+LOCAL_FUNCTION api_blob_wanted
+    FRAME 112
+    mov     %rsi, (%rsp)
+    movq    $72, 8(%rsp)
+    movq    $24, 16(%rsp)
+    movq    $48, 24(%rsp)
+    mov     %rdi, %rsi
+    lea     32(%rsp), %rdi
+    mov     $48, %edx
+    call    lantern_copy
+    lea     8(%rsp), %rdi
+    lea     80(%rsp), %rsi
+    CALL_GLOBAL crypto_sha256
+    movb    $VERSIONED_HASH_VERSION_KZG, 80(%rsp)
+    mov     (%rsp), %rsi                    # the items
+    mov     8(%rsi), %rax
+    add     %rsi, %rax
+    mov     16(%rsi), %rcx
+    shr     $5, %rcx
+    lea     80(%rsp), %rdx
+1:  test    %rcx, %rcx
+    jz      8f
+    NE32    %rax, %rdx, 2f
+    mov     $1, %eax
+    UNFRAME 112
+2:  add     $32, %rax
+    dec     %rcx
+    jmp     1b
+8:  xor     %eax, %eax
+    UNFRAME 112
+END_FUNCTION api_blob_wanted
+
+# The blob stream's body, as api_stream_json (node.md, NODE_WORK_API_CHUNK, the blob stream): with
+# the sidecar rdi and the versioned hashes rsi (or 0), the bytes of its blob, or of its cell, from
+# sent (NodeEvent_api), as many as fit, as JSON in lower case hex; with rdi = 0, or a blob past the
+# last, ]} as JSON. rax = 1 when the answer is whole, 0 when more is to come, 2 for bytes that are
+# no encoding. Locals: the sidecar, the hashes, the piece's bytes, their count, 1 at a blob's first
+# piece, 1 at its last, the offsets of column and kzg_commitments.
+LOCAL_FUNCTION api_blob_body
+    FRAME 64
+    mov     %rdi, (%rsp)
+    mov     %rsi, 8(%rsp)
+    test    %rdi, %rdi
+    jz      90f
+    mov     8(%rdi), %r8                    # the sidecar's SSZ bytes, r9 of them
+    add     %rdi, %r8
+    mov     16(%rdi), %r9
+    cmpq    $FORK_FULU, NodeApi_fork(%rbx)
+    jae     20f
+    cmp     $(8 + PUB_BLOB_BYTES + 48), %r9 # deneb and electra: index, blob, kzg_commitment, ...
+    jb      92f
+    lea     8(%r8), %rax
+    mov     %rax, 16(%rsp)
+    movq    $PUB_BLOB_BYTES, 24(%rsp)
+    movq    $1, 32(%rsp)
+    movq    $1, 40(%rsp)
+    cmpq    $0, NodeEvent_api(%rbp)         # at the blob's start, with hashes: its versioned hash
+    jne     30f
+    cmpq    $0, 8(%rsp)
+    je      30f
+    lea     (8 + PUB_BLOB_BYTES)(%r8), %rdi
+    mov     8(%rsp), %rsi
+    call    api_blob_wanted
+    test    %rax, %rax
+    jnz     30f
+    jmp     88f
+20: cmp     $PUB_COLUMN_FIXED, %r9          # fulu: a DataColumnSidecar; the offsets of column, kzg_commitments, kzg_proofs
+    jb      92f
+    mov     8(%r8), %eax
+    mov     12(%r8), %ecx
+    mov     16(%r8), %edx
+    cmp     %rcx, %rax
+    ja      92f
+    cmp     %rdx, %rcx
+    ja      92f
+    cmp     %r9, %rdx
+    ja      92f
+    mov     %rax, 48(%rsp)
+    mov     %rcx, 56(%rsp)
+    mov     NodeApi_member(%rbx), %rax
+    or      NodeEvent_api(%rbp), %rax
+    jnz     22f
+    mov     %rdx, %rax                      # at the blob's start: past the last commitment, the end
+    sub     %rcx, %rax
+    xor     %edx, %edx
+    mov     $48, %ecx
+    div     %rcx
+    cmp     %rax, NodeApi_filter_slot(%rbx)
+    jae     90f
+    cmpq    $0, 8(%rsp)
+    je      22f
+    imul    $48, NodeApi_filter_slot(%rbx), %rdi    # with hashes: the versioned hash of commitment b
+    add     56(%rsp), %rdi
+    add     %r8, %rdi
+    mov     8(%rsp), %rsi
+    call    api_blob_wanted
+    test    %rax, %rax
+    jz      87f
+    mov     (%rsp), %rdi
+    mov     8(%rdi), %r8
+    add     %rdi, %r8
+22: mov     56(%rsp), %rax                  # cell b of the column
+    sub     48(%rsp), %rax
+    xor     %edx, %edx
+    mov     $PUB_CELL_BYTES, %ecx
+    div     %rcx
+    mov     NodeApi_filter_slot(%rbx), %r10
+    cmp     %rax, %r10
+    jae     92f
+    imul    $PUB_CELL_BYTES, %r10, %rax
+    add     48(%rsp), %rax
+    add     %r8, %rax
+    mov     %rax, 16(%rsp)
+    movq    $PUB_CELL_BYTES, 24(%rsp)
+    xor     %eax, %eax
+    cmpq    $0, NodeApi_member(%rbx)
+    sete    %al
+    mov     %rax, 32(%rsp)
+    xor     %eax, %eax
+    cmpq    $(NUMBER_OF_COLUMNS / 2 - 1), NodeApi_member(%rbx)
+    sete    %al
+    mov     %rax, 40(%rsp)
+30: testq   $API_STREAM_SSZ, (NodeEvent_api + 8)(%rbp)  # the piece from sent
+    jnz     40f
+    cmpq    $0, NodeEvent_api(%rbp)         # JSON: at a blob's start , and "0x
+    jne     32f
+    cmpq    $0, 32(%rsp)
+    je      32f
+    mov     %r14, %rax
+    sub     %r12, %rax
+    cmp     $8, %rax
+    jb      89f
+    testq   $API_STREAM_ITEMS, (NodeEvent_api + 8)(%rbp)
+    jz      31f
+    API_LIT api_p_comma
+31: API_LIT api_blob_open
+32: mov     24(%rsp), %rcx                  # the hex of the bytes from sent, as many as fit before a "
+    mov     NodeEvent_api(%rbp), %rax
+    sub     %rax, %rcx
+    mov     %r14, %rdx
+    sub     %r12, %rdx
+    sub     $1, %rdx
+    jbe     89f
+    shr     $1, %rdx
+    cmp     %rdx, %rcx
+    jbe     321f
+    mov     %rdx, %rcx
+321: mov    16(%rsp), %rsi
+    add     %rax, %rsi
+    add     %rcx, %rax
+    mov     %rax, NodeEvent_api(%rbp)
+33: test    %rcx, %rcx
+    jz      34f
+    movzbl  (%rsi), %eax
+    inc     %rsi
+    mov     %eax, %edx
+    shr     $4, %edx
+    and     $15, %eax
+    add     $0x30, %edx
+    cmp     $0x39, %edx
+    jbe     331f
+    add     $39, %edx
+331: add    $0x30, %eax
+    cmp     $0x39, %eax
+    jbe     332f
+    add     $39, %eax
+332: mov    %dl, (%r12)
+    mov     %al, 1(%r12)
+    add     $2, %r12
+    dec     %rcx
+    jmp     33b
+34: mov     NodeEvent_api(%rbp), %rax       # the piece's end: " after a blob's last byte
+    cmp     24(%rsp), %rax
+    jne     89f
+    cmpq    $0, 40(%rsp)
+    je      88f
+    API_LIT api_quote
+    jmp     86f
+40: mov     24(%rsp), %rdx                  # SSZ: the bytes from sent, as many as fit
+    mov     NodeEvent_api(%rbp), %rax
+    sub     %rax, %rdx
+    mov     %r14, %rcx
+    sub     %r12, %rcx
+    cmp     %rcx, %rdx
+    jbe     41f
+    mov     %rcx, %rdx
+41: mov     16(%rsp), %rsi
+    add     %rax, %rsi
+    add     %rdx, %rax
+    mov     %rax, NodeEvent_api(%rbp)
+    mov     %r12, %rdi
+    add     %rdx, %r12
+    call    lantern_copy
+    mov     NodeEvent_api(%rbp), %rax
+    cmp     24(%rsp), %rax
+    jne     89f
+    cmpq    $0, 40(%rsp)
+    je      88f
+86: orq     $API_STREAM_ITEMS, (NodeEvent_api + 8)(%rbp)   # a blob's end
+88: orq     $API_STREAM_ITEM_DONE, (NodeEvent_api + 8)(%rbp)   # the piece is done
+89: xor     %eax, %eax
+    UNFRAME 64
+87: orq     $(API_STREAM_ITEM_DONE | API_STREAM_BLOB_SKIP), (NodeEvent_api + 8)(%rbp)  # a blob not wanted: skip it
+    jmp     89b
+90: testq   $API_STREAM_SSZ, (NodeEvent_api + 8)(%rbp)  # the end: ]} as JSON
+    jnz     91f
+    mov     %r14, %rax
+    sub     %r12, %rax
+    cmp     $2, %rax
+    jb      89b
+    API_LIT api_v_end
+91: mov     $1, %eax
+    UNFRAME 64
+92: mov     $2, %eax
+    UNFRAME 64
+END_FUNCTION api_blob_body
 
 /*
  * The sidecar of the sidecar stream rdi from the index rsi on (node.md, NODE_EV_API, a sidecar of a

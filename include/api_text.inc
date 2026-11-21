@@ -559,6 +559,9 @@ api_ar_total:
 api_ar_end:
     .ascii "]}}"
 .set api_ar_end_len, 3
+api_blob_open:                          /* getBlobs: a blob's start */
+    .ascii "\"0x"
+.set api_blob_open_len, 3
 api_ev_head:                            /* eventstream (beacon-api.md) */
     .ascii "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nCache-Control: no-cache\r\n"
 .set api_ev_head_len, 75

@@ -278,6 +278,7 @@ ABI uint64_t crypto_secp256k1_public_key(const void *private_key, void *public_k
 ABI uint64_t crypto_secp256k1_decompress(const void *public_key, void *point);
 ABI uint64_t crypto_keccak256(const void *message, void *digest);
 ABI uint64_t crypto_sha256(const void *message, void *digest);
+ABI uint64_t crypto_kzg_blob_to_kzg_commitment(const void *settings, const void *blob, void *scratch, void *commitment);
 ABI uint64_t crypto_bls_sign(const void *secret_key, const void *message, void *scratch, void *signature);
 ABI uint64_t LF(get_attesting_indices)(const void *state, const void *attestation, void *cache, void *scratch, void *out);
 ABI uint64_t LF(get_domain)(const void *state, const void *domain_type, const void *epoch, void *scratch, void *out);
@@ -2634,6 +2635,8 @@ enum { ACT_BYTES_PUT = 1, ACT_STATE_COPY, ACT_STATE_FREE, ACT_BYTES_FREE, ACT_WO
 #define NODE_FLAG_DISCV5 64
 #define NODE_FLAG_DB 128
 #define NODE_FLAG_FEW_STATES 256
+#define NODE_FLAG_SUPERNODE 1024
+static int force_supernode; /* set: the next node has NODE_FLAG_SUPERNODE */
 #define NODE_FLAGS 112       /* include/lantern.inc: Node_flags */
 #define NODE_FLAG_SYNCING 8 /* the view's is_syncing: the api cases set it for their requests marked syncing */
 #define NODE_DB 464 /* Node_db: the PartRef of the node's Db */
@@ -3783,7 +3786,7 @@ static struct node_shell *shell_open(fc_node *n, tv parts, uint8_t **anchor_bloc
         int force_db = bf_state != NULL || drop_room; /* the backfill's and the drop check's nodes archive to a Db */
         /* every second node archives to a Db; every second pair keeps few post-states and rebuilds the others */
         uint64_t flags = (FORK >= FORK_BELLATRIX ? NODE_FLAG_ENGINE : 0) | NODE_FLAG_DISCV5 | (opened % 2 || force_db ? NODE_FLAG_DB : 0) |
-                         (opened / 2 % 2 ? NODE_FLAG_FEW_STATES : 0), need = 0;
+                         (opened / 2 % 2 ? NODE_FLAG_FEW_STATES : 0) | (force_supernode ? NODE_FLAG_SUPERNODE : 0), need = 0;
         opened++;
         for (int i = 0; i < NODE_ROOM_FIELDS; i++) s->room[i] = 2;
         s->room[2] = 1;
@@ -4707,6 +4710,10 @@ static uint8_t *p2p_config(int side, const uint8_t *protos, uint64_t n) {
     };
     for (size_t i = 0; i < sizeof fields / sizeof fields[0]; i++) wr64(c + fields[i][0], fields[i][1]);
     if (side == 1) wr64(c + 8, 2); /* the key of the peer's record (peer_record) */
+    if (side == 1) { /* the peer queues a whole answer at once: a supernode's columns of a range are past 1 MiB */
+        wr64(c + 120, 1 << 24);
+        wr64(c + 200, 1 << 23);
+    }
     wr64(c, size);
     for (int i = 0; i < 32; i++) {
         c[16 + i] = (uint8_t)(side * 31 + i + 1);
@@ -5302,6 +5309,10 @@ static int p2p_blobs_wait(struct p2p_net *net, int arg) {
 }
 
 static void api_sidecar_checks(fc_node *n, tv parts, case_block **chain, size_t nchain, const uint8_t *cols, const char **why);
+static void api_blob_checks(fc_node *n, tv parts, case_block **chain, size_t nchain, int supernode, const char **why);
+#if FORK >= FORK_FULU
+static void api_supernode_identity(fc_node *n, const char **why);
+#endif
 
 /*
  * After a sync with sidecars, the node serves them: BlobSidecarsByRange of the anchor's slot to the
@@ -5416,11 +5427,14 @@ static void peer_record(const uint8_t *gvr, uint64_t epoch, uint8_t *out, const 
  * may be imported. Else the node must import the chain, take its last block as head, and hold
  * each sidecar the peer sent.
  */
+static int sync_supernode; /* set: the sync's node has NODE_FLAG_SUPERNODE */
 static void sync_once(tv parts, case_block **chain, size_t nchain, uint64_t last_ms, int no_blobs, uint8_t **head_state,
                       uint64_t *head_size, const char **why) {
     fc_node m;
     uint8_t *anchor_block;
+    force_supernode = sync_supernode;
     struct node_shell *s = shell_open(&m, parts, &anchor_block, why);
+    force_supernode = 0;
     uint64_t genesis_ms = *why ? 0 : rd64(m.store + STORE_GENESIS_TIME_MS);
     if (!*why) {
         shell_event(s, EV_TICK, last_ms, NULL, 0);
@@ -5449,6 +5463,7 @@ static void sync_once(tv parts, case_block **chain, size_t nchain, uint64_t last
 #if FORK >= FORK_FULU
         uint8_t nid[32], cols[16];
         node_columns(cols, why); /* with no sidecars, a peer of CUSTODY_REQUIREMENT groups: the node asks for those */
+        if (sync_supernode) memset(cols, 0xFF, 16); /* a supernode: every column */
         net.peer_cgc = no_blobs ? rd64(config + 288) : rd64(config + 280);
         if (!*why) peer_node_id(nid, why);
         if (!*why && no_blobs) custody_columns(nid, net.peer_cgc, net.want_columns, why);
@@ -5474,6 +5489,7 @@ static void sync_once(tv parts, case_block **chain, size_t nchain, uint64_t last
             if (!*why) sync_serve_blobs(&m, &net, chain, nchain, why);
 #if FORK < FORK_FULU
             if (!*why) api_sidecar_checks(&m, parts, chain, nchain, NULL, why);
+            if (!*why) api_blob_checks(&m, parts, chain, nchain, 0, why);
 #endif
 #if FORK >= FORK_FULU
             for (size_t b = 0; b < nchain && !*why; b++) /* each column sidecar of its columns the peer sent */
@@ -5481,8 +5497,14 @@ static void sync_once(tv parts, case_block **chain, size_t nchain, uint64_t last
                     if ((cols[c / 8] >> (c % 8) & 1) && case_column(parts, chain[b]->columns, c, &len) &&
                         !shell_has_blob(s, chain[b]->root, c))
                         *why = "sync: a column sidecar the peer sent is not a valid NodeBlob";
-            if (!*why) sync_serve_columns(&m, &net, parts, chain, nchain, cols, why);
-            if (!*why) api_sidecar_checks(&m, parts, chain, nchain, cols, why);
+            if (sync_supernode) { /* a supernode: its custody group count, and the blobs of its columns */
+                if (!*why) api_supernode_identity(&m, why);
+                if (!*why) api_blob_checks(&m, parts, chain, nchain, 1, why);
+            } else {
+                if (!*why) sync_serve_columns(&m, &net, parts, chain, nchain, cols, why);
+                if (!*why) api_sidecar_checks(&m, parts, chain, nchain, cols, why);
+                if (!*why) api_blob_checks(&m, parts, chain, nchain, 0, why);
+            }
 #endif
         }
 #if FORK >= FORK_FULU
@@ -5749,6 +5771,15 @@ static void fc_sync_check(tv parts, const char **why) {
         sync_chain = chain;
         sync_nchain = nchain;
         if (!*why && sync_first_blobs() < nchain) sync_once(parts, chain, nchain, last_ms, 1, NULL, NULL, why);
+#if FORK >= FORK_FULU
+        int columns = 0; /* a chain with column sidecars syncs again with a supernode */
+        for (size_t b = 0; b < nchain; b++) columns |= chain[b]->columns != NULL;
+        if (!*why && columns) {
+            sync_supernode = 1;
+            sync_once(parts, chain, nchain, last_ms, 0, NULL, NULL, why);
+            sync_supernode = 0;
+        }
+#endif
         if (!*why) status_check(parts, last_ms, why);
         if (!*why && head_state) backfill_check(parts, chain, nchain, last_ms, head_state, head_size, why);
         free(head_state);
@@ -7412,7 +7443,7 @@ static void run_db_index(const char *file, case_file *f) {
 /* ---------------------------------------------------------------- Application */
 
 #define INVALID_OPTION 61
-#define APP_OPTIONS_SIZE 168
+#define APP_OPTIONS_SIZE 176
 
 /*
  * app-options: lantern_app_options over each case's command line (tests/generator/app.py), as an
@@ -7424,8 +7455,8 @@ static void run_app_options(const char *file, case_file *f) {
                                   "checkpoint_block"};
     static const uint64_t text_at[] = {0, 16, 32, 48, 96, 112, 128};
     static const char *numbers[] = {"port", "enr_address", "http_port", "target_peers", "log_level", "http_address",
-                                    "http_max_connections"};
-    static const uint64_t number_at[] = {64, 72, 80, 88, 144, 152, 160};
+                                    "http_max_connections", "supernode"};
+    static const uint64_t number_at[] = {64, 72, 80, 88, 144, 152, 160, 168};
     for (uint64_t i = 0; i < f->count; i++) {
         const char *name, *why = NULL;
         uint64_t len, total = 0, alen;
@@ -7466,7 +7497,7 @@ static void run_app_options(const char *file, case_file *f) {
                     inside = start >= rd64(list + 40 + 16 * k) && start + got <= rd64(list + 40 + 16 * k) + rd64(list + 48 + 16 * k);
                 if (got != wl || !inside || (wl && memcmp(list + start, w, (size_t)wl))) why = texts[t];
             }
-            for (int t = 0; t < 7 && !why; t++)
+            for (int t = 0; t < 8 && !why; t++)
                 if (rd64(opts + number_at[t]) != tv_u64(tv_get(want, numbers[t]))) why = numbers[t];
         } else if (st != INVALID_OPTION) why = "status is not LANTERN_INVALID_OPTION";
         else if (fault != tv_u64(wfault)) why = "fault is not the case's index";
@@ -9022,6 +9053,183 @@ static void api_sidecar_checks(fc_node *n, tv parts, case_block **chain, size_t 
 #endif
 }
 
+#if FORK >= FORK_FULU
+/* The little endian u32 at p. */
+static uint64_t le32(const uint8_t *p) {
+    return p[0] | (uint64_t)p[1] << 8 | (uint64_t)p[2] << 16 | (uint64_t)p[3] << 24;
+}
+#endif
+
+#if FORK >= FORK_DENEB
+/* The value of the lower case hex digit c, or 16. */
+static unsigned lower_hex_digit(char c) {
+    return c >= '0' && c <= '9' ? (unsigned)(c - '0') : c >= 'a' && c <= 'f' ? (unsigned)(c - 'a' + 10) : 16u;
+}
+#endif
+
+/*
+ * After a sync, getBlobs (beacon-api.md) of the root of each block of the chain with sidecars or columns (node.md).
+ * Deneb and electra: the blob of each of its sidecars. Fulu, with supernode: blob i is cell i of each of the
+ * columns 0 to 63 of the case, and crypto_kzg_blob_to_kzg_commitment of it must give commitment i; without: 404.
+ * As SSZ the blobs one after another; as JSON data items whose hex gives them; with versioned_hashes of the first
+ * and last commitments, as SSZ, those two blobs.
+ */
+static unsigned long api_blobs_checked; /* the blocks whose blobs were checked */
+static void api_blob_checks(fc_node *n, tv parts, case_block **chain, size_t nchain, int supernode, const char **why) {
+#if FORK >= FORK_DENEB
+    struct node_shell *s = n->shell;
+    static char msg[256];
+    static uint64_t conn = 600;
+    const uint64_t blob = 4096 * 32; /* FIELD_ELEMENTS_PER_BLOB * BYTES_PER_FIELD_ELEMENT */
+    (void)parts;
+    (void)supernode;
+    for (size_t b = 0; b < nchain && !*why; b++) {
+        uint8_t *blobs = NULL;
+        const uint8_t *cm[128];
+        uint64_t nb = 0;
+        int want404 = 0;
+#if FORK >= FORK_FULU
+        const uint64_t cell = 2048; /* BYTES_PER_CELL */
+        uint64_t len0, len;
+        const uint8_t *c0 = case_column(parts, chain[b]->columns, 0, &len0);
+        if (!c0) continue;
+        uint64_t ocom = le32(c0 + 12), opr = le32(c0 + 16);
+        nb = (opr - ocom) / 48;
+        if (!nb || nb > 128) continue;
+        for (uint64_t i = 0; i < nb; i++) cm[i] = c0 + ocom + 48 * i;
+        if (!supernode) want404 = 1;
+        else {
+            blobs = xmalloc((size_t)(nb * blob));
+            for (uint64_t c = 0; c < 64 && !*why; c++) {
+                const uint8_t *col = case_column(parts, chain[b]->columns, c, &len);
+                if (!col) *why = "getBlobs: the case lacks a column of the first half";
+                else
+                    for (uint64_t i = 0; i < nb; i++) memcpy(blobs + i * blob + c * cell, col + le32(col + 8) + i * cell, (size_t)cell);
+            }
+            for (uint64_t i = 0; i < nb && !*why; i++) {
+                uint8_t got[48];
+                if (CALL(crypto_kzg_blob_to_kzg_commitment, kzg_settings, blobs + i * blob, fresh_scratch(), got) != 0 || memcmp(got, cm[i], 48))
+                    *why = "getBlobs: cells 0 to 63 of the case's columns are not a blob of its commitment";
+            }
+        }
+#else
+        tv e = chain[b]->sidecars ? chain[b]->sidecars + 9 : NULL;
+        uint64_t c = chain[b]->sidecars ? rd64(chain[b]->sidecars + 1) : 0;
+        if (!c || c > 128) continue;
+        blobs = xmalloc((size_t)(c * blob));
+        for (uint64_t i = 0; i < c; i++, e = tv_skip(e)) {
+            uint64_t sl;
+            const uint8_t *sc = tv_bytes(e, &sl);
+            memcpy(blobs + nb * blob, sc + 8, (size_t)blob);
+            cm[nb++] = sc + 8 + blob;
+        }
+#endif
+        char hex[65], vh[2][67];
+        for (int k = 0; k < 32; k++) snprintf(hex + 2 * k, 3, "%02x", chain[b]->root[k]);
+        for (int k = 0; k < 2; k++) { /* kzg_commitment_to_versioned_hash of the first and last commitments */
+            uint8_t bl[24 + 48], h[32];
+            wr64(bl, sizeof bl);
+            wr64(bl + 8, 24);
+            wr64(bl + 16, 48);
+            memcpy(bl + 24, cm[k ? nb - 1 : 0], 48);
+            CALL(crypto_sha256, bl, h);
+            h[0] = 1; /* VERSIONED_HASH_VERSION_KZG */
+            hex_text(vh[k], h, 32);
+        }
+        for (int form = 0; form < 3 && !*why; form++) { /* SSZ, JSON, SSZ of the first and last versioned hashes */
+            char req[512];
+            if (form == 2)
+                snprintf(req, sizeof req, "GET /eth/v1/beacon/blobs/0x%s?versioned_hashes=%s,%s HTTP/1.1\r\nHost: lantern\r\nAccept: application/octet-stream\r\n\r\n",
+                         hex, vh[0], vh[1]);
+            else
+                snprintf(req, sizeof req, "GET /eth/v1/beacon/blobs/0x%s HTTP/1.1\r\nHost: lantern\r\n%s\r\n", hex,
+                         form == 0 ? "Accept: application/octet-stream\r\n" : "");
+            shell_api_ask(n, (const uint8_t *)req, strlen(req), conn++, why);
+            uint64_t glen = 0;
+            uint8_t *g = *why ? NULL : api_normalize(s, &glen, why);
+            const char *end = g ? find_bytes((const char *)g, glen, "\r\n\r\n") : NULL;
+            if (*why) break;
+            const uint8_t *body = end ? (const uint8_t *)end + 4 : NULL;
+            uint64_t blen = body ? glen - (uint64_t)(body - g) : 0;
+            if (want404) {
+                if (!end || glen < 24 || memcmp(g, "HTTP/1.1 404 Not Found\r\n", 24)) *why = "getBlobs of a node with under half the columns: not 404";
+                if (!*why) *why = api_clean(s);
+                free(g);
+                break;
+            }
+            if (!end || glen < 17 || memcmp(g, "HTTP/1.1 200 OK\r\n", 17) || s->api.lasts != 1 || s->api.late) {
+                snprintf(msg, sizeof msg, "getBlobs of a block (form %d): not a 200 answer", form);
+                *why = msg;
+            } else if (form == 0) {
+                if (blen != nb * blob || memcmp(body, blobs, (size_t)(nb * blob))) {
+                    snprintf(msg, sizeof msg, "getBlobs as SSZ: not the block's %llu blobs, one after another (%llu bytes)",
+                             (unsigned long long)nb, (unsigned long long)blen);
+                    *why = msg;
+                }
+            } else if (form == 2) {
+                int ok = nb == 1 ? blen == blob && !memcmp(body, blobs, (size_t)blob)
+                                 : blen == 2 * blob && !memcmp(body, blobs, (size_t)blob) &&
+                                       !memcmp(body + blob, blobs + (nb - 1) * blob, (size_t)blob);
+                if (!ok) *why = "getBlobs with versioned_hashes: not those blobs";
+            } else { /* JSON: {"execution_optimistic":…,"finalized":…,"data":["0x…",…]} */
+                const char *pre = "{\"execution_optimistic\":";
+                const char *d = blen > 24 ? find_bytes((const char *)body, blen, ",\"data\":[") : NULL;
+                if (!d || memcmp(body, pre, strlen(pre)) || blen < 2 || memcmp(body + blen - 2, "]}", 2)) {
+                    *why = "getBlobs as JSON: not {execution_optimistic, finalized, data}";
+                } else {
+                    uint64_t i = 0, p = (uint64_t)(d - (const char *)body) + 9, stop = blen - 2;
+                    while (!*why && p < stop) {
+                        if (i >= nb || stop - p < 2 * blob + 4 || memcmp(body + p, "\"0x", 3) || body[p + 3 + 2 * blob] != '"') {
+                            *why = "getBlobs as JSON: an item that is not \"0x and a blob's hex";
+                            break;
+                        }
+                        for (uint64_t k = 0; k < blob && !*why; k++) {
+                            unsigned hi = lower_hex_digit((char)body[p + 3 + 2 * k]), lo = lower_hex_digit((char)body[p + 4 + 2 * k]);
+                            if (hi > 15 || lo > 15 || (uint8_t)(hi << 4 | lo) != blobs[i * blob + k]) *why = "getBlobs as JSON: an item that is not the block's blob";
+                        }
+                        p += 2 * blob + 4;
+                        if (p < stop && body[p] == ',') p++;
+                        i++;
+                    }
+                    if (!*why && i != nb) *why = "getBlobs as JSON: not one item for each blob";
+                }
+            }
+            if (!*why) *why = api_clean(s);
+            free(g);
+        }
+        free(blobs);
+        if (!*why) api_blobs_checked++;
+    }
+#else
+    (void)n;
+    (void)parts;
+    (void)chain;
+    (void)nchain;
+    (void)supernode;
+    (void)why;
+#endif
+}
+
+/*
+ * The custody group count of a supernode through the Beacon API: getNetworkIdentity's metadata must give
+ * custody_group_count NUMBER_OF_CUSTODY_GROUPS (beacon-api.md).
+ */
+#if FORK >= FORK_FULU
+static void api_supernode_identity(fc_node *n, const char **why) {
+    static uint64_t conn = 900;
+    const char *req = "GET /eth/v1/node/identity HTTP/1.1\r\nHost: lantern\r\n\r\n";
+    shell_api_ask(n, (const uint8_t *)req, strlen(req), conn++, why);
+    uint64_t glen = 0;
+    uint8_t *g = *why ? NULL : api_normalize(n->shell, &glen, why);
+    char want[64];
+    snprintf(want, sizeof want, "\"custody_group_count\":\"%llu\"", (unsigned long long)rd64(config + 280));
+    if (!*why && (glen < 17 || memcmp(g, "HTTP/1.1 200 OK\r\n", 17) || !find_bytes((const char *)g, glen, want)))
+        *why = "a supernode's getNetworkIdentity: custody_group_count is not NUMBER_OF_CUSTODY_GROUPS";
+    if (!*why) *why = api_clean(n->shell);
+    free(g);
+}
+#endif
+
 /*
  * getBlockHeaders of the Db's blocks (beacon-api.md), in a node whose Db holds the chain below its anchor, the
  * chain's last block: of each slot of a block below the anchor, and of the root of each block below the anchor's
@@ -9766,6 +9974,7 @@ int main(int argc, char **argv) {
         printf("NOTE: getPeers and getPeer checked after %lu inbound and %lu outbound connections\n", api_peers_checked[0],
                api_peers_checked[1]);
     if (api_sidecars_checked) printf("NOTE: the sidecars of %lu blocks checked through the Beacon API\n", api_sidecars_checked);
+    if (api_blobs_checked) printf("NOTE: the blobs of %lu blocks checked through getBlobs\n", api_blobs_checked);
     if (api_headers_asked) printf("NOTE: %lu getBlockHeaders answers checked, %lu with a Db block\n", api_headers_asked, api_headers_db);
     if (api_fork_choice_200 || api_fork_choice_500)
         printf("NOTE: getDebugForkChoice answered 200 %lu times, 500 %lu times\n", api_fork_choice_200, api_fork_choice_500);

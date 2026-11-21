@@ -129,29 +129,17 @@ FUNCTION lantern_app_options
     sd      t1, L(sp)
     add     t3, s1, t1
     li      t4, 0
-2:  bgeu    t4, t2, 3f
+2:  bgeu    t4, t2, 3f                      # the name: up to = or the end
     add     t5, t3, t4
     lbu     t5, 0(t5)
     li      t6, 0x3d                        # =
-    beq     t5, t6, 4f
+    beq     t5, t6, 3f
     addi    t4, t4, 1
     j       2b
-3:  sd      t2, (L + 8)(sp)                 # --name value: the value is the next argument
-    addi    s10, s5, 1
-    bgeu    s10, s4, 91f
-    slli    t0, s10, 4
-    add     t0, s6, t0
-    ld      s8, 0(t0)
-    ld      s9, 8(t0)
-    addi    s5, s5, 2
-    j       5f
-4:  sd      t4, (L + 8)(sp)                 # --name=value
-    add     s8, t1, t4
-    addi    s8, s8, 1
-    sub     s9, t2, t4
-    addi    s9, s9, -1
-    addi    s5, s5, 1
-5:  ADDRESS s7, app_options
+3:  sd      t4, (L + 8)(sp)
+    mv      s8, t4                          # s8: where = is, s9: the length of the name and value
+    mv      s9, t2
+    ADDRESS s7, app_options
 6:  ADDRESS t0, app_options_end
     bgeu    s7, t0, 91f                     # not an option
     ld      a0, L(sp)
@@ -160,9 +148,31 @@ FUNCTION lantern_app_options
     addi    a2, s7, 24
     ld      a3, 0(s7)
     call    config_name_is
-    bnez    a0, 7f
+    bnez    a0, 4f
     addi    s7, s7, APP_OPTION_BYTES
     j       6b
+4:  ld      t0, 16(s7)
+    li      t1, APP_OPTION_FLAG
+    bne     t0, t1, 5f
+    bne     s8, s9, 90f                     # a flag: no value, 1
+    addi    s5, s5, 1
+    li      a1, 1
+    j       23f
+5:  bne     s8, s9, 51f
+    addi    s10, s5, 1                      # --name value: the value is the next argument
+    bgeu    s10, s4, 91f
+    slli    t0, s10, 4
+    add     t0, s6, t0
+    ld      s8, 0(t0)
+    ld      s9, 8(t0)
+    addi    s5, s5, 2
+    j       7f
+51: sub     s9, s9, s8                      # --name=value
+    addi    s9, s9, -1
+    ld      t0, L(sp)
+    add     s8, t0, s8
+    addi    s8, s8, 1
+    addi    s5, s5, 1
 7:  beqz    s9, 90f                         # an empty value
     ld      t0, 16(s7)
     li      t1, APP_OPTION_ENDPOINT

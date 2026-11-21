@@ -234,8 +234,10 @@ FUNCTION lantern_node_init
     mov     %rbp, %rsi
     MOVQ    %rdx, CONFIG_SIZE
     call    lantern_copy
-    mov     CONFIG_SAMPLES_PER_SLOT(%rbp), %rsi  # the columns: of max(SAMPLES_PER_SLOT, CUSTODY_REQUIREMENT) groups
+    mov     CONFIG_SAMPLES_PER_SLOT(%rbp), %rsi  # the columns: of max(SAMPLES_PER_SLOT, the custody group count) groups
     mov     CONFIG_CUSTODY_REQUIREMENT(%rbp), %rax
+    test    $NODE_FLAG_SUPERNODE, %r14      # a supernode: every group
+    cmovnz  CONFIG_NUMBER_OF_CUSTODY_GROUPS(%rbp), %rax
     cmp     %rax, %rsi
     cmovb   %rax, %rsi
     lea     NodeAnchor_node_id(%r12), %rdi
@@ -5035,7 +5037,9 @@ LOCAL_FUNCTION node_request
     mov     %rax, (L + 72)(%rsp)
     mov     Node_syncnets(%rbx), %rax
     mov     %al, (L + 80)(%rsp)
-    mov     (Node_config + CONFIG_CUSTODY_REQUIREMENT)(%rbx), %rax
+    mov     (Node_config + CONFIG_CUSTODY_REQUIREMENT)(%rbx), %rax  # the custody group count
+    testq   $NODE_FLAG_SUPERNODE, Node_flags(%rbx)
+    cmovnz  (Node_config + CONFIG_NUMBER_OF_CUSTODY_GROUPS)(%rbx), %rax
     mov     %rax, (L + 56)(%rsp)
     lea     (L + 64 + 17)(%rsp), %rdi
     lea     (L + 56)(%rsp), %rsi
@@ -6003,7 +6007,9 @@ LOCAL_FUNCTION node_enr_entries
     movq    $0x636763, 24(%rax)
     movq    $0, 32(%rax)
     movq    $0, 48(%rax)
-    mov     (Node_config + CONFIG_CUSTODY_REQUIREMENT)(%rbx), %rdx
+    mov     (Node_config + CONFIG_CUSTODY_REQUIREMENT)(%rbx), %rdx  # the custody group count
+    testq   $NODE_FLAG_SUPERNODE, Node_flags(%rbx)
+    cmovnz  (Node_config + CONFIG_NUMBER_OF_CUSTODY_GROUPS)(%rbx), %rdx
     xor     %ecx, %ecx                      # n bytes: 8 - its leading zero bytes
     mov     %rdx, %rsi
 1:  test    %rsi, %rsi

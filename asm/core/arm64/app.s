@@ -892,6 +892,10 @@ LOCAL_FUNCTION app_start
     bl      lantern_copy
     ldr     x9, [x19, #APP_FLAGS]           /* the shell runs discv5 for the node */
     orr     x9, x9, #NODE_FLAG_DISCV5
+    ldr     x10, [x19, #(APP_OPTIONS + AppOptions_supernode)]   /* --supernode: every custody group */
+    orr     x11, x9, #NODE_FLAG_SUPERNODE
+    cmp     x10, #0
+    csel    x9, x11, x9, ne
     str     x9, [x19, #APP_FLAGS]
     bl      app_engine_conf                 /* the execution engine */
     cbnz    x0, 99f

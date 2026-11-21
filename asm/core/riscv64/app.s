@@ -970,7 +970,10 @@ LOCAL_FUNCTION app_start
     call    lantern_copy
     LDQ     t0, s1, APP_FLAGS               # the shell runs discv5 for the node
     ori     t0, t0, NODE_FLAG_DISCV5
-    STQ     t0, s1, APP_FLAGS
+    LDQ     t1, s1, (APP_OPTIONS + AppOptions_supernode)   # --supernode: every custody group
+    beqz    t1, 1f
+    ori     t0, t0, NODE_FLAG_SUPERNODE
+1:  STQ     t0, s1, APP_FLAGS
     call    app_engine_conf                 # the execution engine
     bnez    a0, 99f
     call    app_key                         # the key, and the anchor's node ID

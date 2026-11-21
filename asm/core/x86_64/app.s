@@ -977,6 +977,10 @@ LOCAL_FUNCTION app_start
     mov     $32, %edx
     call    lantern_copy
     orq     $NODE_FLAG_DISCV5, APP_FLAGS(%rbx)  # the shell runs discv5 for the node
+    cmpq    $0, (APP_OPTIONS + AppOptions_supernode)(%rbx)  # --supernode: every custody group
+    je      1f
+    orq     $NODE_FLAG_SUPERNODE, APP_FLAGS(%rbx)
+1:
     call    app_engine_conf                 # the execution engine
     test    %rax, %rax
     jnz     99f
