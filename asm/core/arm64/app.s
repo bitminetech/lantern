@@ -402,6 +402,25 @@ LOCAL_FUNCTION app_line_end
 9:  UNFRAME 32
 END_FUNCTION app_line_end
 
+/* Debug only: DEBUG work 9999 result <the connections at a time>, for a refused API connection. */
+LOCAL_FUNCTION app_log_refuse
+    FRAME 16
+    bl      app_line_start
+    ADDRESS x0, app_m_log_work
+    mov     x1, #app_m_log_work_len
+    bl      app_line_text
+    mov     x0, #9999
+    bl      app_line_u64
+    ADDRESS x0, app_m_log_result
+    mov     x1, #app_m_log_result_len
+    bl      app_line_text
+    ldr     x0, [x19, #(APP_OPTIONS + AppOptions_http_max_connections)]
+    bl      app_line_u64
+    mov     x0, #APP_LOG_DEBUG
+    bl      app_line_end
+    UNFRAME 16
+END_FUNCTION app_log_refuse
+
 /* Debug only: DEBUG work <kind> result <event room> result <scratch room> result <tries>. */
 LOCAL_FUNCTION app_log_retry
     FRAME 16
@@ -5222,7 +5241,8 @@ LOCAL_FUNCTION app_api_poll
     add     x22, x22, #APP_API_SLOT
     add     x10, x10, #1
     b       2b
-21: mov     x0, #LIBP2P_ACT_REFUSE_SIZE
+21: bl      app_log_refuse                  /* debug only: the refusal */
+    mov     x0, #LIBP2P_ACT_REFUSE_SIZE
     bl      app_api_room
     cbz     x0, 79f
     mov     x9, #LIBP2P_ACT_REFUSE_SIZE
