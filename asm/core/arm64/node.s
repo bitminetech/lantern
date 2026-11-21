@@ -265,7 +265,15 @@ FUNCTION lantern_node_init
     str     x9, [x24, #Node_engine_id]
     orr     x9, x23, #NODE_FLAG_FCU         /* the anchor's head goes to the engine first */
     str     x9, [x24, #Node_flags]
-1:  mov     x0, x24
+1:  tbz     x23, #11, 16f                   /* NODE_FLAG_BUILDER: the builder's host */
+    ldr     x2, [x21, #NodeAnchor_builder_host_len]
+    cmp     x2, #NODE_ENGINE_HOST_MAX
+    b.hi    7f
+    STQ     x2, x24, Node_builder_host_len
+    ADDQ    x0, x24, Node_builder_host
+    add     x1, x21, #NodeAnchor_builder_host
+    bl      lantern_copy
+16: mov     x0, x24
     mov     x1, x19
     bl      node_layout
     PART    x9, x10, x24, Node_blocks       /* the anchor block */
@@ -4041,7 +4049,11 @@ LOCAL_FUNCTION node_event
     bl      lantern_copy
     bl      node_engine_read
     LEAVE 48
-47: cmp     x9, #NODE_EV_ENR
+47: cmp     x9, #NODE_EV_BUILDER            /* BUILDER: the answer of a builder call */
+    b.ne    470f
+    bl      node_builder_event
+    LEAVE 48
+470: cmp    x9, #NODE_EV_ENR
     b.ne    471f
     mov     x0, x21                         /* ENR: a record discv5 found */
     bl      node_enr
@@ -8456,7 +8468,30 @@ FUNCTION lantern_node_step
     sub     x14, x13, #1
     cmp     x14, #NODE_EV_LAST
     b.hs    7f
-    cmp     x13, #NODE_EV_API_SENT          /* API_SENT, API_CLOSED: the connection at 16 */
+    cmp     x13, #NODE_EV_BUILDER           /* BUILDER: a call, + 256 for a failure, else its bytes; with NODE_FLAG_BUILDER */
+    b.ne    161f
+    ldr     x14, [x19, #Node_flags]
+    tbz     x14, #11, 7f
+    cmp     x12, #24
+    b.lo    7f
+    ldr     x14, [x11, #16]
+    and     x15, x14, #255
+    cmp     x15, #NODE_BUILDER_CALLS
+    b.hs    7f
+    lsr     x15, x14, #8
+    cmp     x15, #1
+    b.hi    7f
+    b.eq    4f
+    cmp     x12, #(24 + 24)
+    b.lo    7f
+    ldp     x14, x15, [x11, #(24 + 8)]
+    cmp     x14, #24
+    b.ne    7f
+    sub     x14, x12, #(24 + 24)
+    cmp     x15, x14
+    b.hi    7f
+    b       4f
+161: cmp    x13, #NODE_EV_API_SENT          /* API_SENT, API_CLOSED: the connection at 16 */
     b.lo    11f
     cmp     x12, #24
     b.lo    7f

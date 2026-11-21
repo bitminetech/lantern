@@ -208,6 +208,8 @@ def write_descriptors(path, fork, preset):
         types[name] = descriptor.build(t)
     for name, t in reqresp.produce_types(spec, fork).items():  # lantern's block production values
         types[name] = descriptor.build(t)
+    for name, t in reqresp.builder_types(spec, fork).items():  # the builder API's containers (builder-specs v0.6.1)
+        types[name] = descriptor.build(t)
     return write_file(path, [(name, {"descriptor": d}) for name, d in types.items()])
 
 

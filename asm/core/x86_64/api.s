@@ -3220,6 +3220,8 @@ LOCAL_FUNCTION node_api_event
     je      60f
     cmp     $API_OP_PREPARE_BEACON_PROPOSER, %rcx
     je      60f
+    cmp     $API_OP_REGISTER_VALIDATOR, %rcx
+    je      60f
     cmp     $API_OP_PUBLISH_BLOCK_V2, %rcx
     je      545f
     mov     %rcx, %rdi
@@ -10783,6 +10785,8 @@ LOCAL_FUNCTION node_proposer_put
     jnz     2f
     cmp     %rax, NodeProposer_until_epoch(%r9)
     ja      2f
+    cmpq    $0, NodeProposer_registered(%r9)
+    jne     2f
     mov     %r9, %rdx
 2:  add     $NodeProposer__mem, %r9
     inc     %r11
@@ -10802,6 +10806,7 @@ LOCAL_FUNCTION node_proposer_put
     add     %rax, %r9
     inc     %r10
     mov     %r10, (Node_proposers + 8)(%rbx)
+    movq    $0, NodeProposer_registered(%r9)    # a new entry: no registration
 5:  mov     %r8, NodeProposer_validator_index(%r9)
     mov     8(%rsp), %rax
     add     $3, %rax
@@ -10963,6 +10968,8 @@ LOCAL_FUNCTION node_api_submit_done
     je      42f
     cmp     $API_OP_PREPARE_BEACON_PROPOSER, %ecx
     je      45f
+    cmp     $API_OP_REGISTER_VALIDATOR, %ecx
+    je      46f
     cmpb    $0, 32(%rax)                    # is_aggregator: subnet_until of compute_subnet_for_attestation, the slot + 1 at least
     je      6b
     mov     24(%rax), %rsi
@@ -10995,7 +11002,14 @@ LOCAL_FUNCTION node_api_submit_done
 45: mov     %rax, %rdi                      # a fee recipient: through the store's epoch + 2
     call    node_proposer_put
     jmp     6b
-70: mov     NodeAction_target(%r12), %rdi   # the answer: 200, or 400 with the failures
+46: lea     16(%r13), %rdi                  # a registration: its validator's NodeProposer entry
+    mov     8(%r13), %rsi
+    call    node_registration_put
+    jmp     6b
+70: cmpb    $API_OP_REGISTER_VALIDATOR, NodeAction_arg(%r12)   # registerValidator: the builder's call, then the answer
+    jne     701f
+    call    node_builder_register
+701: mov    NodeAction_target(%r12), %rdi   # the answer: 200, or 400 with the failures
     cmpq    $0, S8(%rsp)
     je      71f
     movzbl  NodeAction_arg(%r12), %eax      # a list: the failures
@@ -11295,6 +11309,9 @@ LOCAL_FUNCTION node_api_submit_run
     cmp     $API_OP_PREPARE_BEACON_PROPOSER, %edi
     sete    %cl
     or      %cl, %al
+    cmp     $API_OP_REGISTER_VALIDATOR, %edi
+    sete    %cl
+    or      %cl, %al
     mov     %rax, (L + 40)(%rsp)
     mov     %rdi, (L + 48)(%rsp)
     call    node_submit_topic
@@ -11310,6 +11327,9 @@ LOCAL_FUNCTION node_api_submit_run
     je      13f
     mov     $NODE_JSON_PROPOSER_PREPARATION, %eax
     cmp     $API_OP_PREPARE_BEACON_PROPOSER, %edi
+    je      13f
+    mov     $NODE_JSON_VALIDATOR_REGISTRATION, %eax
+    cmp     $API_OP_REGISTER_VALIDATOR, %edi
     je      13f
     jmp     98f
 17: mov     (L + 16)(%rsp), %rax
@@ -11463,6 +11483,8 @@ LOCAL_FUNCTION node_api_submit_run
 40: mov     %rdi, (L + 48)(%rsp)            # SSZ: attestations from electra items of 240 bytes
     mov     S10(%rsp), %rax
     sub     %rdi, %rax
+    cmpb    $API_OP_REGISTER_VALIDATOR, NodeAction_arg(%r12)   # registrations: items of 180 bytes
+    je      46f
     cmpq    $GOSSIP_BEACON_AGGREGATE_AND_PROOF, (L + 16)(%rsp)
     je      42f
     cmpq    $FORK_ELECTRA, (L + 24)(%rsp)
@@ -11487,6 +11509,26 @@ LOCAL_FUNCTION node_api_submit_run
     decq    (L + 56)(%rsp)
     incq    (L + 32)(%rsp)
     jmp     41b
+46: xor     %edx, %edx                      # registrations: SignedValidatorRegistrationV1 items
+    mov     $180, %ecx
+    div     %rcx
+    test    %rdx, %rdx
+    jnz     90f
+    mov     %rax, (L + 56)(%rsp)
+47: cmpq    $0, (L + 56)(%rsp)
+    je      30f
+    mov     (L + 48)(%rsp), %rdi
+    mov     $180, %esi
+    mov     S9(%rsp), %r9
+    mov     S8(%rsp), %r10
+    call    node_submit_copy
+    test    %rax, %rax
+    jnz     97f
+    mov     %rdx, S9(%rsp)
+    addq    $180, (L + 48)(%rsp)
+    decq    (L + 56)(%rsp)
+    incq    (L + 32)(%rsp)
+    jmp     47b
 42: test    %rax, %rax                      # before electra: the items of the 4-byte offsets
     jz      30f
     cmp     $4, %rax
@@ -11706,6 +11748,8 @@ LOCAL_FUNCTION node_api_submit_run
     LEAVE 320
 50: mov     S7(%rsp), %rcx                  # each subscription valid, else the result LANTERN_INVALID_ENCODING
     add     $(NodeEvent_chunk + 24), %rcx
+    cmpb    $API_OP_REGISTER_VALIDATOR, NodeAction_arg(%r12)   # registrations: 180 bytes each, IGNORE until found eligible
+    je      60f
 51: cmpq    $0, (L + 32)(%rsp)
     je      39b
     movq    $0, (%rcx)
@@ -11749,6 +11793,28 @@ LOCAL_FUNCTION node_api_submit_run
     lea     16(%rcx,%rax), %rcx
     decq    (L + 32)(%rsp)
     jmp     51b
+60: mov     (L + 32)(%rsp), %rdx
+    mov     %rcx, %rsi
+61: test    %rdx, %rdx
+    jz      62f
+    cmpq    $180, 32(%rsi)
+    jne     90f
+    movq    $LANTERN_GOSSIP_IGNORE, (%rsi)
+    movq    $0, 8(%rsi)
+    mov     16(%rsi), %rax
+    lea     16(%rsi,%rax), %rsi
+    dec     %rdx
+    jmp     61b
+62: mov     (L + 32)(%rsp), %rdx
+    test    %rdx, %rdx
+    jz      39b
+    mov     %r13, %rdi                      # one scan of the state's validators
+    mov     %rcx, %rsi
+    mov     %r15, %rcx
+    call    node_registrations_find
+    test    %rax, %rax
+    jnz     97f
+    jmp     39b
 90: mov     S7(%rsp), %rcx                  # a body that is no such text
     movq    $LANTERN_INVALID_ENCODING, NodeEvent_result(%rcx)
     movq    $NODE_EV_WORK_DONE_SIZE, (%rcx)

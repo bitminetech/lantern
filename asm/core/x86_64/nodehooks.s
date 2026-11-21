@@ -2281,6 +2281,9 @@ LOCAL_FUNCTION node_type_of_kind
     ADDRESS %rdi, lantern_type_ProposerPreparation
     cmp     $NODE_JSON_PROPOSER_PREPARATION, %r10
     je      9f
+    ADDRESS %rdi, lantern_type_SignedValidatorRegistrationV1
+    cmp     $NODE_JSON_VALIDATOR_REGISTRATION, %r10
+    je      9f
     ADDRESS %rdi, lantern_type_BeaconBlock
     cmp     $NODE_JSON_BEACON_BLOCK, %r10
     je      9f

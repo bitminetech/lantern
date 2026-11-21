@@ -3363,6 +3363,8 @@ LOCAL_FUNCTION node_api_event
     beq     a3, t0, 60f
     li      t0, API_OP_PREPARE_BEACON_PROPOSER
     beq     a3, t0, 60f
+    li      t0, API_OP_REGISTER_VALIDATOR
+    beq     a3, t0, 60f
     li      t0, API_OP_PUBLISH_BLOCK_V2
     beq     a3, t0, 545f
     mv      a0, a3
@@ -10857,6 +10859,8 @@ LOCAL_FUNCTION node_proposer_put
     bnez    t6, 2f
     ld      t3, NodeProposer_until_epoch(t0)
     bgtu    t3, a0, 2f
+    ld      t3, NodeProposer_registered(t0)
+    bnez    t3, 2f
     mv      t6, t0
 2:  addi    t0, t0, NodeProposer__mem
     addi    t2, t2, 1
@@ -10875,6 +10879,7 @@ LOCAL_FUNCTION node_proposer_put
     add     t0, t0, t4
     addi    t1, t1, 1
     STQ     t1, s1, Node_proposers + 8
+    sd      zero, NodeProposer_registered(t0)   # a new entry: no registration
 5:  sd      t5, NodeProposer_validator_index(t0)
     ld      t1, 8(sp)
     addi    t1, t1, 3
@@ -11034,6 +11039,8 @@ LOCAL_FUNCTION node_api_submit_done
     beq     t1, t2, 42f
     li      t2, API_OP_PREPARE_BEACON_PROPOSER
     beq     t1, t2, 45f
+    li      t2, API_OP_REGISTER_VALIDATOR
+    beq     t1, t2, 46f
     lbu     t1, 32(t0)                      # is_aggregator: subnet_until of compute_subnet_for_attestation, the slot + 1 at least
     beqz    t1, 6b
     ld      t1, 24(t0)
@@ -11077,7 +11084,16 @@ LOCAL_FUNCTION node_api_submit_done
 45: mv      a0, t0                          # a fee recipient: through the store's epoch + 2
     call    node_proposer_put
     j       6b
-70: ld      a0, NodeAction_target(s3)       # the answer: 200, or 400 with the failures
+46: addi    a0, s4, 16                      # a registration: its validator's NodeProposer entry
+    ld      a1, 8(s4)
+    call    node_registration_put
+    j       6b
+70: ld      t0, NodeAction_arg(s3)          # registerValidator: the builder's call, then the answer
+    andi    t0, t0, 255
+    li      t1, API_OP_REGISTER_VALIDATOR
+    bne     t0, t1, 701f
+    call    node_builder_register
+701: ld     a0, NodeAction_target(s3)       # the answer: 200, or 400 with the failures
     beqz    s8, 71f
     ld      t0, NodeAction_arg(s3)          # a list: the failures
     andi    t0, t0, 255
@@ -11375,6 +11391,10 @@ LOCAL_FUNCTION node_api_submit_run
     sub     t3, a0, t3
     seqz    t3, t3
     or      t2, t2, t3
+    li      t3, API_OP_REGISTER_VALIDATOR
+    sub     t3, a0, t3
+    seqz    t3, t3
+    or      t2, t2, t3
     sd      t2, (L + 40)(sp)
     sd      a0, (L + 48)(sp)
     call    node_submit_topic
@@ -11389,6 +11409,9 @@ LOCAL_FUNCTION node_api_submit_run
     beq     t1, t0, 13f
     li      a0, NODE_JSON_PROPOSER_PREPARATION
     li      t0, API_OP_PREPARE_BEACON_PROPOSER
+    beq     t1, t0, 13f
+    li      a0, NODE_JSON_VALIDATOR_REGISTRATION
+    li      t0, API_OP_REGISTER_VALIDATOR
     beq     t1, t0, 13f
     j       98f
 17: ld      a0, (L + 16)(sp)
@@ -11535,6 +11558,10 @@ LOCAL_FUNCTION node_api_submit_run
     j       30f
 40: sd      a0, (L + 48)(sp)                # SSZ: attestations from electra items of 240 bytes
     sub     t0, s10, a0
+    ld      t1, NodeAction_arg(s3)          # registrations: items of 180 bytes
+    andi    t1, t1, 255
+    li      t2, API_OP_REGISTER_VALIDATOR
+    beq     t1, t2, 46f
     ld      t1, (L + 16)(sp)
     li      t2, GOSSIP_BEACON_AGGREGATE_AND_PROOF
     beq     t1, t2, 42f
@@ -11565,6 +11592,30 @@ LOCAL_FUNCTION node_api_submit_run
     addi    t0, t0, 1
     sd      t0, (L + 32)(sp)
     j       41b
+46: li      t1, 180                         # registrations: SignedValidatorRegistrationV1 items
+    divu    t2, t0, t1
+    mul     t3, t2, t1
+    bne     t3, t0, 90f
+    sd      t2, (L + 56)(sp)
+47: ld      t2, (L + 56)(sp)
+    beqz    t2, 30f
+    ld      a0, (L + 48)(sp)
+    li      a1, 180
+    mv      a5, s9
+    mv      a6, s8
+    call    node_submit_copy
+    bnez    a0, 97f
+    mv      s9, a1
+    ld      t0, (L + 48)(sp)
+    addi    t0, t0, 180
+    sd      t0, (L + 48)(sp)
+    ld      t0, (L + 56)(sp)
+    addi    t0, t0, -1
+    sd      t0, (L + 56)(sp)
+    ld      t0, (L + 32)(sp)
+    addi    t0, t0, 1
+    sd      t0, (L + 32)(sp)
+    j       47b
 42: beqz    t0, 30f                         # before electra: the items of the 4-byte offsets
     li      t1, 4
     bltu    t0, t1, 90f
@@ -11776,6 +11827,10 @@ LOCAL_FUNCTION node_api_submit_run
     LEAVE 320
 50: addi    s9, s7, NodeEvent_chunk + 24    # each subscription valid, else the result LANTERN_INVALID_ENCODING
     ld      s10, (L + 32)(sp)
+    ld      t2, NodeAction_arg(s3)          # registrations: 180 bytes each, IGNORE until found eligible
+    andi    t2, t2, 255
+    li      t3, API_OP_REGISTER_VALIDATOR
+    beq     t2, t3, 60f
 51: beqz    s10, 39b
     sd      zero, 0(s9)
     sd      zero, 8(s9)
@@ -11822,6 +11877,28 @@ LOCAL_FUNCTION node_api_submit_run
     add     s9, s9, t0
     addi    s10, s10, -1
     j       51b
+60: mv      t0, s9
+    mv      t1, s10
+61: beqz    t1, 62f
+    ld      t2, 32(t0)
+    li      t3, 180
+    bne     t2, t3, 90f
+    li      t2, LANTERN_GOSSIP_IGNORE
+    sd      t2, 0(t0)
+    sd      zero, 8(t0)
+    ld      t2, 16(t0)
+    addi    t0, t0, 16
+    add     t0, t0, t2
+    addi    t1, t1, -1
+    j       61b
+62: beqz    s10, 39b
+    mv      a0, s4                          # one scan of the state's validators
+    mv      a1, s9
+    mv      a2, s10
+    mv      a3, s6
+    call    node_registrations_find
+    bnez    a0, 97f
+    j       39b
 90: li      t0, LANTERN_INVALID_ENCODING    # a body that is no such text
     sd      t0, NodeEvent_result(s7)
     li      t0, NODE_EV_WORK_DONE_SIZE

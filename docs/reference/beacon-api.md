@@ -310,6 +310,11 @@ The answers of the node (node.md, `NODE_EV_API`) follow these rules.
 - prepareBeaconProposer: a JSON array of the spec's items, decoded as lantern's `ProposerPreparation` (`validator_index`, `fee_recipient`). A body of no such list: 400 `{"code":400,"message":"BAD_REQUEST"}`, and none applies.
   - Each item: the node's `NodeProposer` entry of its `validator_index` takes its `fee_recipient` until the store's epoch + 3, exclusive (the spec: it persists "through the epoch in which the call is submitted and for a further two epochs after that"); an index the node does not know is kept too (the spec: such requests "will be accepted"). With no entry of its index: a free entry, one past its epoch, else a new one while the part has room; else the item is dropped.
   - The answer: 200 with no body.
+- registerValidator: a JSON array of `SignedValidatorRegistrationV1` (builder-specs v0.6.1, include/types.inc), or with `Content-Type: application/octet-stream` the SSZ list of them (items of 180 bytes). A body that is no such list: 400 `{"code":400,"message":"BAD_REQUEST"}`, and none applies.
+  - Each registration, in order: eligible when its `pubkey` is a validator of the head's post-state that is active or pending at the state's current epoch (builder-specs is_eligible_for_registration: is_active_validator, or `activation_epoch` above the epoch). Another is filtered out (beacon-APIs: registrations of unknown or exited validators "must be filtered out and not sent to the builder network"), with no failure.
+  - An eligible one becomes the registration of its validator's `NodeProposer` entry (node.md), unless that entry holds one of a later `timestamp`; with none, the first free entry, else a new one while the part has room.
+  - With `NODE_FLAG_BUILDER` and an eligible one: a `NODE_BUILDER_REGISTER` call (node.md, the builder calls) of the JSON array of the eligible ones, in order. The node checks no signature: the builder does (builder-specs verify_registration_signature is its processing).
+  - The answer: 200 with no body, once the registrations apply.
 - Every other operation: 501.
 
 ## Test vectors

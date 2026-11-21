@@ -41,6 +41,8 @@
     \m BeaconBlock, F_BeaconBlock
     \m BeaconBlockBody, F_BeaconBlockBody
     .if FORK >= FORK_BELLATRIX
+    \m SignedBuilderBid, F_SignedBuilderBid
+    \m BuilderBid, F_BuilderBid
     \m SignedBlindedBeaconBlock, F_SignedBlindedBeaconBlock
     \m BlindedBeaconBlock, F_BlindedBeaconBlock
     \m BlindedBeaconBlockBody, F_BlindedBeaconBlockBody
@@ -242,6 +244,9 @@
     \m SyncCommitteeSubscription, F_SyncCommitteeSubscription
     .endif
     \m ProposerPreparation, F_ProposerPreparation
+    \m SignedValidatorRegistrations, N_SignedValidatorRegistrationV1
+    \m SignedValidatorRegistrationV1, F_SignedValidatorRegistrationV1
+    \m ValidatorRegistrationV1, F_ValidatorRegistrationV1
     \m BlockRoots, N_Bytes32
     \m BeaconBlockRoots, N_Bytes32
     \m ErrorMessage, N_Uint8
@@ -344,6 +349,8 @@
     .if FORK >= FORK_BELLATRIX
     \m SignedBlindedBeaconBlock
     \m BlindedBeaconBlock
+    \m SignedBuilderBid
+    \m BuilderBid
     .endif
     \m BeaconState
     .if FORK == FORK_PHASE0
@@ -511,6 +518,9 @@
     \m SyncCommitteeSubscription
     .endif
     \m ProposerPreparation
+    \m SignedValidatorRegistrations
+    \m SignedValidatorRegistrationV1
+    \m ValidatorRegistrationV1
     \m BlockRoots
     \m Bytes32
     \m Uint64

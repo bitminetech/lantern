@@ -638,6 +638,7 @@
 .set NODE_FLAG_FEW_STATES, 256         /* the node keeps the post-states of the head, the justified root, F and the blocks with no child only */
 .set NODE_FLAG_EL_OFFLINE, 512         /* the last connection to the execution engine failed before an answer */
 .set NODE_FLAG_SUPERNODE, 1024         /* the node custodies every custody group */
+.set NODE_FLAG_BUILDER, 2048           /* the node has a builder: it makes the builder calls of builder-specs v0.6.1 */
 .set Node_peers, 120                   /* PartRef of NodePeer */
 .set Node_streams, 136                 /* PartRef of NodeStream entries of Node_stream_bytes each */
 .set Node_p2p_out, 152                 /* PartRef of bytes: libp2p events the node made for its next libp2p step */
@@ -710,7 +711,13 @@
 .set Node_lc_optimistic_slot, Node_proposers + 96 /* the attested slot of the last optimistic update forwarded */
 .set Node_lc_pending, Node_proposers + 104 /* the light client topics whose update waits for its due time: 1 finality, 2 optimistic */
 .set Node_lc_due, Node_proposers + 112     /* the Unix time in ms from which they may go */
-.set NODE_FIXED, Node_proposers + 120
+.set Node_builder_host_len, Node_proposers + 120  /* with NODE_FLAG_BUILDER */
+.set Node_builder_host, Node_proposers + 128      /* the Host of the Builder API requests, at most 64 bytes */
+.set Node_builder_calls, Node_proposers + 192     /* NODE_BUILDER_CALLS entries: kind (0 free), the NodeApi entry, the time_ms it went out */
+.set NODE_BUILDER_CALLS, 4
+.set NODE_BUILDER_CALL_SIZE, 24
+.set NODE_BUILDER_REGISTER, 1          /* registerValidator: POST /eth/v1/builder/validators */
+.set NODE_FIXED, Node_proposers + 192 + NODE_BUILDER_CALLS * NODE_BUILDER_CALL_SIZE
 .set NODE_PAYLOAD_NONE, 0
 .set NODE_PAYLOAD_PREPARING, 1             /* its PREPARE_PAYLOAD work is queued */
 .set NODE_PAYLOAD_SENT, 2                  /* its engine_forkchoiceUpdated is in flight */
@@ -853,7 +860,9 @@
 .set NodeAnchor_engine_host, 112
 .set NodeAnchor_node_id, 176           /* NodeID of the node's key: keccak256 of its point, reversed */
 .set NodeAnchor_history_slot, 208     /* the first slot of the Db: at most the anchor's slot, rounded down to a segment */
-.set NodeAnchor__mem, 216
+.set NodeAnchor_builder_host_len, 216  /* with NODE_FLAG_BUILDER, at most NODE_ENGINE_HOST_MAX */
+.set NodeAnchor_builder_host, 224
+.set NodeAnchor__mem, 288
 .set NODE_P2P_ROUNDS, 8                /* libp2p steps of one node step for the node's own events, at most */
 
 /* NodeRoom: the capacities of a Node */
@@ -878,7 +887,11 @@
 .set NodeProposer_validator_index, 0
 .set NodeProposer_until_epoch, 8          /* the entry holds while the store's epoch is below it; 0 for a free entry */
 .set NodeProposer_fee_recipient, 16       /* ExecutionAddress: 20 bytes */
-.set NodeProposer__mem, 40
+.set NodeProposer_registered, 40           /* 1 with the validator's latest registration (beacon-api.md, registerValidator) */
+.set NodeProposer_registration_fee_recipient, 48   /* ExecutionAddress: 20 bytes */
+.set NodeProposer_gas_limit, 72
+.set NodeProposer_timestamp, 80
+.set NodeProposer__mem, 88
 
 /* NodeStepResult: the output of lantern_node_step */
 .set NodeStepResult_accepted, 0        /* events handled, from the first */
@@ -905,7 +918,8 @@
 .set NODE_EV_API_IDENTITY, 12          /* 24 a ByteList of an ApiIdentity */
 .set NODE_EV_API_SENT, 13             /* 16 the connection: the shell has room for its next chunk */
 .set NODE_EV_API_CLOSED, 14           /* 16 the connection: it closed */
-.set NODE_EV_LAST, 14
+.set NODE_EV_BUILDER, 15              /* 16 a builder call, + 256 for a failure; 24 a ByteList of the builder's whole answer */
+.set NODE_EV_LAST, 15
 .set NodeEvent_result, 72
 .set NodeEvent_checkpoint, 80
 .set NODE_EV_WORK_DONE_SIZE, 128
@@ -933,6 +947,7 @@
 .set NODE_ACT_STATE_BYTES_SIZE, 32
 .set NODE_ACT_BYTES_NEW, 15            /* 16 a new id, 24 a size: the shell keeps a ByteList of that size, offset 24, its bytes zero */
 .set NODE_ACT_BYTES_NEW_SIZE, 32
+.set NODE_ACT_BUILDER, 16              /* 16 a builder call, 24 a ByteList of an HTTP request: the shell writes it to a new connection to the builder */
 .set NODE_DB_REF, 1 << 63              /* a BufferId of a Db record: bit 62 a sidecar segment, segment << 48, the offset below */
 .set NODE_DB_SIDECARS, 1 << 62
 .set DB_SEGMENT_SHIFT, 13              /* slot >> DB_SEGMENT_SHIFT: its segment */
@@ -1329,6 +1344,7 @@
 .set NODE_JSON_LC_UPDATE, 22            /* a LightClientUpdate, from altair */
 .set NODE_JSON_LC_FINALITY_UPDATE, 23   /* a LightClientFinalityUpdate, from altair */
 .set NODE_JSON_LC_OPTIMISTIC_UPDATE, 24 /* a LightClientOptimisticUpdate, from altair */
+.set NODE_JSON_VALIDATOR_REGISTRATION, 25   /* a SignedValidatorRegistrationV1 of builder-specs */
 .set NODE_JSON_BLOCK_CONTENTS, 20        /* lantern's BlockContents, from deneb */
 .set NodePool_topic, 0                   /* NodePool (node.md): GOSSIP_* of the operation; 0 for a free entry */
 .set NodePool_state, 8                   /* NODE_POOL_* */
@@ -1466,7 +1482,8 @@
 .set AppOptions_http_address, 152       /* IPv4, its 4 bytes in network order in the low bytes */
 .set AppOptions_http_max_connections, 160
 .set AppOptions_supernode, 168        /* 1 with --supernode */
-.set AppOptions__size, 176
+.set AppOptions_builder, 176          /* host:port of the builder, without http:// */
+.set AppOptions__size, 192
 .set APP_DEFAULT_PORT, 9000
 .set APP_DEFAULT_HTTP_PORT, 5052
 .set APP_DEFAULT_TARGET_PEERS, 64

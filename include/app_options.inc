@@ -60,6 +60,9 @@ app_options:
     .quad 9, AppOptions_supernode, APP_OPTION_FLAG
     .ascii "supernode"
     .space 24 - 9
+    .quad 7, AppOptions_builder, APP_OPTION_ENDPOINT
+    .ascii "builder"
+    .space 24 - 7
 app_options_end:
 app_levels:                             /* the name of each log level in 8 bytes, then their lengths */
     .ascii "error"

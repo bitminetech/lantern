@@ -39,4 +39,5 @@
 .include "node.s"
 .include "lcstore.s"
 .include "lcnode.s"
+.include "builder.s"
 .include "db.s"

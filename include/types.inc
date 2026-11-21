@@ -770,6 +770,45 @@ SSZ_FIELD ProposerPreparation, fee_recipient, Bytes20
 SSZ_END ProposerPreparation
 
 /*
+ * The builder API (builder-specs v0.6.1, specs/<fork>/builder.md): ValidatorRegistrationV1,
+ * SignedValidatorRegistrationV1 and the registerValidator body, a list of them, in every fork; from
+ * bellatrix the fork's BuilderBid (header, from deneb blob_kzg_commitments, from electra
+ * execution_requests, value, pubkey) and SignedBuilderBid.
+ */
+SSZ_CONTAINER ValidatorRegistrationV1, 0
+SSZ_FIELD ValidatorRegistrationV1, fee_recipient, Bytes20
+SSZ_FIELD ValidatorRegistrationV1, gas_limit, Uint64
+SSZ_FIELD ValidatorRegistrationV1, timestamp, Uint64
+SSZ_FIELD ValidatorRegistrationV1, pubkey, Bytes48
+SSZ_END ValidatorRegistrationV1
+
+SSZ_CONTAINER SignedValidatorRegistrationV1, 0
+SSZ_FIELD SignedValidatorRegistrationV1, message, ValidatorRegistrationV1
+SSZ_FIELD SignedValidatorRegistrationV1, signature, Bytes96
+SSZ_END SignedValidatorRegistrationV1
+
+SSZ_LIST SignedValidatorRegistrations, SignedValidatorRegistrationV1, VALIDATOR_REGISTRY_LIMIT
+
+.if TYPES_FORK >= FORK_BELLATRIX
+SSZ_CONTAINER BuilderBid, 1
+SSZ_FIELD BuilderBid, header, ExecutionPayloadHeader
+.if TYPES_FORK >= FORK_DENEB
+SSZ_FIELD BuilderBid, blob_kzg_commitments, BlobKZGCommitments
+.endif
+.if TYPES_FORK >= FORK_ELECTRA
+SSZ_FIELD BuilderBid, execution_requests, ExecutionRequests
+.endif
+SSZ_FIELD BuilderBid, value, Uint256
+SSZ_FIELD BuilderBid, pubkey, Bytes48
+SSZ_END BuilderBid
+
+SSZ_CONTAINER SignedBuilderBid, 1
+SSZ_FIELD SignedBuilderBid, message, BuilderBid
+SSZ_FIELD SignedBuilderBid, signature, Bytes96
+SSZ_END SignedBuilderBid
+.endif
+
+/*
  * Engine API results (execution-apis 981aa66), lantern's containers of the result of
  * engine_getPayload, decoded by lantern_engine_json_decode: GetPayloadResult from capella (the
  * result of engine_getPayloadV1 is the ExecutionPayload), with a BlobsBundle from deneb
