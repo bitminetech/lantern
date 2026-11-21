@@ -603,7 +603,9 @@
 .set GOSSIP_BLS_TO_EXECUTION_CHANGE, 9
 .set GOSSIP_BLOB_SIDECAR, 10           /* blob_sidecar_{subnet_id} */
 .set GOSSIP_DATA_COLUMN_SIDECAR, 11    /* data_column_sidecar_{subnet_id} */
-.set GOSSIP_NAMES, 11
+.set GOSSIP_LIGHT_CLIENT_FINALITY_UPDATE, 12
+.set GOSSIP_LIGHT_CLIENT_OPTIMISTIC_UPDATE, 13
+.set GOSSIP_NAMES, 13
 
 /*
  * Scratch of lantern_verify_data_column_sidecar_kzg_proofs for a sidecar of n
@@ -706,7 +708,9 @@
 .set Node_lc_finality_slot, Node_proposers + 80   /* the finalized slot of the last light client finality update forwarded */
 .set Node_lc_finality_super, Node_proposers + 88  /* 1 when it had a supermajority */
 .set Node_lc_optimistic_slot, Node_proposers + 96 /* the attested slot of the last optimistic update forwarded */
-.set NODE_FIXED, Node_proposers + 104
+.set Node_lc_pending, Node_proposers + 104 /* the light client topics whose update waits for its due time: 1 finality, 2 optimistic */
+.set Node_lc_due, Node_proposers + 112     /* the Unix time in ms from which they may go */
+.set NODE_FIXED, Node_proposers + 120
 .set NODE_PAYLOAD_NONE, 0
 .set NODE_PAYLOAD_PREPARING, 1             /* its PREPARE_PAYLOAD work is queued */
 .set NODE_PAYLOAD_SENT, 2                  /* its engine_forkchoiceUpdated is in flight */
@@ -982,6 +986,8 @@
 .set NODE_WORK_LC_BLOCK, 34            /* a: an imported block's post-state; c: the light client store; data: the block */
 .set NODE_WORK_LC_HEAD, 35             /* c: the light client store */
 .set NODE_WORK_LC_SERVE, 36            /* c: the light client store; data: the request bytes, or 0; target: the stream handle; arg: the method */
+.set NODE_WORK_LC_GOSSIP, 37           /* c: the light client store; data: a message's bytes; target: its handle; arg: the topic */
+.set NODE_WORK_LC_PUBLISH, 38          /* c: the light client store; arg: the topic */
 .set NODE_LC_ID, 2                     /* the BufferId of the light client store (lantern_node_init: Caller must) */
 .set NODE_PUBLISH_DECODE, 1            /* NodeApi member of a publishBlockV2: its phase */
 .set NODE_PUBLISH_SIDECARS, 2

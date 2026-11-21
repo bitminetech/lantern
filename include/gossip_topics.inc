@@ -35,6 +35,10 @@ gossip_name_10:
     .ascii  "blob_sidecar"
 gossip_name_11:
     .ascii  "data_column_sidecar"
+gossip_name_12:
+    .ascii  "light_client_finality_update"
+gossip_name_13:
+    .ascii  "light_client_optimistic_update"
 gossip_name_end:
     .p2align 3
 gossip_names:
@@ -49,7 +53,9 @@ gossip_names:
     .quad   gossip_name_9 - gossip_name_bytes, 23
     .quad   gossip_name_10 - gossip_name_bytes, 12 + 0x8000000000000000
     .quad   gossip_name_11 - gossip_name_bytes, 19 + 0x8000000000000000
-.if (gossip_name_2 - gossip_name_1 != 12) || (gossip_name_3 - gossip_name_2 != 26) || (gossip_name_4 - gossip_name_3 != 18) || (gossip_name_5 - gossip_name_4 != 14) || (gossip_name_6 - gossip_name_5 != 17) || (gossip_name_7 - gossip_name_6 != 17) || (gossip_name_8 - gossip_name_7 != 37) || (gossip_name_9 - gossip_name_8 != 14) || (gossip_name_10 - gossip_name_9 != 23) || (gossip_name_11 - gossip_name_10 != 12) || (gossip_name_end - gossip_name_11 != 19) || (GOSSIP_NAMES != 11)
+    .quad   gossip_name_12 - gossip_name_bytes, 28
+    .quad   gossip_name_13 - gossip_name_bytes, 30
+.if (gossip_name_2 - gossip_name_1 != 12) || (gossip_name_3 - gossip_name_2 != 26) || (gossip_name_4 - gossip_name_3 != 18) || (gossip_name_5 - gossip_name_4 != 14) || (gossip_name_6 - gossip_name_5 != 17) || (gossip_name_7 - gossip_name_6 != 17) || (gossip_name_8 - gossip_name_7 != 37) || (gossip_name_9 - gossip_name_8 != 14) || (gossip_name_10 - gossip_name_9 != 23) || (gossip_name_11 - gossip_name_10 != 12) || (gossip_name_12 - gossip_name_11 != 19) || (gossip_name_13 - gossip_name_12 != 28) || (gossip_name_end - gossip_name_13 != 30) || (GOSSIP_NAMES != 13)
 .error "a gossip name length in gossip_names is wrong"
 .endif
 .endm

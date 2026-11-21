@@ -307,9 +307,9 @@ LOCAL_FUNCTION api_lc_updates_body
 END_FUNCTION api_lc_updates_body
 
 /*
- * L2: (node, store, work, state_a, data, state_c, scratch, event) -> status: a NODE_WORK_LC_BLOCK or
- * NODE_WORK_LC_HEAD of lantern_node_run (node.md). x19 node, x20 store, x21 work, x22 state_a, x23
- * data, x24 the LcStore, x25 scratch, x26 event, x27 the latest update.
+ * L2: (node, store, work, state_a, data, state_c, scratch, event) -> status: a light client work of
+ * lantern_node_run (node.md); x8 the event's room. x19 node, x20 store, x21 work, x22 state_a, x23
+ * data, x24 the LcStore, x25 scratch, x26 event.
  */
 LOCAL_FUNCTION node_run_lc
     ENTER 0
@@ -334,7 +334,19 @@ LOCAL_FUNCTION node_run_lc
     mov     x6, x8
     bl      node_run_lc_serve
     LEAVE 0
-1:  cmp     x9, #NODE_WORK_LC_HEAD
+1:  sub     x10, x9, #NODE_WORK_LC_GOSSIP   /* LC_GOSSIP, LC_PUBLISH: the latest update of a topic */
+    cmp     x10, #(NODE_WORK_LC_PUBLISH - NODE_WORK_LC_GOSSIP)
+    b.hi    11f
+    mov     x0, x19
+    mov     x1, x21
+    mov     x2, x23
+    mov     x3, x24
+    mov     x4, x25
+    mov     x5, x26
+    mov     x6, x8
+    bl      node_run_lc_gossip
+    LEAVE 0
+11: cmp     x9, #NODE_WORK_LC_HEAD
     b.eq    2f
     cbz     x22, 97f                        /* LC_BLOCK: lantern_lc_on_block of the post-state and the block */
     cbz     x23, 97f
@@ -360,37 +372,9 @@ LOCAL_FUNCTION node_run_lc
     b.eq    9f
     str     x0, [x26, #NodeEvent_result]
     cbnz    x0, 8f
-    ldr     x2, [x24, #LcStore_latest]      /* the latest finality update's slots and supermajority */
-    cbz     x2, 8f
-    mov     x0, x24
-    mov     x1, #LC_PART_UPDATES
-    bl      lc_ref
-    mov     x27, x0
-    mov     x0, x24
-    mov     x1, #LC_PART_HEADERS
-    ldr     x2, [x27, #LcUpdate_finalized_header]
-    bl      lc_ref
-    add     x0, x0, #LcHeader_header
-    ldr     x9, [x0, #8]
-    ldr     x9, [x0, x9]
-    str     x9, [x26, #NodeEvent_index]
-    mov     x0, x24
-    mov     x1, #LC_PART_HEADERS
-    ldr     x2, [x27, #LcUpdate_attested_header]
-    bl      lc_ref
-    add     x0, x0, #LcHeader_header
-    ldr     x9, [x0, #8]
-    ldr     x9, [x0, x9]
-    str     x9, [x26, #NodeEvent_root]
-    add     x0, x27, #LcUpdate_sync_aggregate
-    bl      lc_participants
-    mov     x9, #3
-    mul     x0, x0, x9
-    mov     x9, #(SYNC_COMMITTEE_SIZE * 2)
-    cmp     x0, x9
-    cset    x9, hs
-    mov     x10, #1
-    stp     x9, x10, [x26, #(NodeEvent_root + 8)]
+    mov     x0, x24                         /* the latest update's fields */
+    mov     x1, x26
+    bl      node_lc_slots
 8:  mov     x0, #LANTERN_OK
     LEAVE 0
 9:  LEAVE 0
@@ -399,9 +383,70 @@ LOCAL_FUNCTION node_run_lc
 END_FUNCTION node_run_lc
 
 /*
- * L1: the NODE_EV_WORK_DONE x21 of a NODE_WORK_LC_HEAD (node.md, The events): a new finality update,
- * or a new optimistic update, sets the node's fields and gives the event of its topic. x19 the node,
- * x24 the actions; x25 its finalized slot, x26 its attested slot, x27 its supermajority.
+ * L1: (event) -> x0: 1 when the update of the fields of the light client work's event x0 is new for
+ * the topic x1 (node.md, The light client gossip), else 0. x19 the node. Uses x9-x12.
+ */
+LOCAL_FUNCTION node_lc_new
+    UNWIND_END_PROLOGUE
+    cmp     x1, #GOSSIP_LIGHT_CLIENT_FINALITY_UPDATE
+    b.ne    2f
+    ldr     x9, [x0, #NodeEvent_index]      /* finality: a higher finalized slot, or the same with a new supermajority */
+    LDQ     x10, x19, Node_lc_finality_slot
+    cmp     x9, x10
+    b.hi    8f
+    b.ne    9f
+    LDQ     x10, x19, Node_lc_finality_super
+    cbnz    x10, 9f
+    ldr     x9, [x0, #(NodeEvent_root + 8)]
+    cbz     x9, 9f
+    b       8f
+2:  ldr     x9, [x0, #NodeEvent_root]       /* optimistic: a higher attested slot */
+    LDQ     x10, x19, Node_lc_optimistic_slot
+    cmp     x9, x10
+    b.ls    9f
+8:  mov     x0, #1
+    ret
+9:  mov     x0, #0
+    ret
+END_FUNCTION node_lc_new
+
+/* L1: the fields of the topic x1 take the update of the light client work's event x0 (node.md, The light client gossip). x19 the node. Uses x9, x10. */
+LOCAL_FUNCTION node_lc_set
+    UNWIND_END_PROLOGUE
+    cmp     x1, #GOSSIP_LIGHT_CLIENT_FINALITY_UPDATE
+    b.ne    2f
+    ldr     x9, [x0, #NodeEvent_index]
+    STQ     x9, x19, Node_lc_finality_slot
+    ldr     x9, [x0, #(NodeEvent_root + 8)]
+    STQ     x9, x19, Node_lc_finality_super
+    ret
+2:  ldr     x9, [x0, #NodeEvent_root]
+    STQ     x9, x19, Node_lc_optimistic_slot
+    ret
+END_FUNCTION node_lc_set
+
+/*
+ * L1: x0 = the due time in Unix ms of an update of signature slot x0 (node.md, The light client
+ * gossip): genesis time + the slot times SLOT_DURATION_MS + get_sync_message_due_ms(). x19 the
+ * node, x20 the store. Uses x9-x11.
+ */
+LOCAL_FUNCTION node_lc_due_ms
+    UNWIND_END_PROLOGUE
+    LDQ     x9, x19, Node_config + CONFIG_SLOT_DURATION_MS
+    LDQ     x10, x19, Node_config + CONFIG_SYNC_MESSAGE_DUE_BPS
+    mul     x10, x10, x9
+    mov     x11, #BASIS_POINTS
+    udiv    x10, x10, x11
+    madd    x0, x0, x9, x10
+    ldr     x9, [x20, #Store_genesis_time_ms]
+    add     x0, x0, x9
+    ret
+END_FUNCTION node_lc_due_ms
+
+/*
+ * L1: the NODE_EV_WORK_DONE x21 of a NODE_WORK_LC_HEAD (node.md, The light client gossip): with a
+ * latest update, the bit of each topic it is new for joins lc_pending, and lc_due becomes its due
+ * time. x19 the node, x20 the store, x24 the actions; x25 the bits.
  */
 LOCAL_FUNCTION node_lc_head_done
     ENTER 0
@@ -409,30 +454,154 @@ LOCAL_FUNCTION node_lc_head_done
     cbnz    x9, 9f
     ldr     x9, [x21, #(NodeEvent_root + 16)]
     cbz     x9, 9f
-    ldr     x25, [x21, #NodeEvent_index]
-    ldr     x26, [x21, #NodeEvent_root]
-    ldr     x27, [x21, #(NodeEvent_root + 8)]
-    LDQ     x9, x19, Node_lc_finality_slot  /* finality: a higher finalized slot, or the same with a new supermajority */
-    cmp     x25, x9
-    b.hi    1f
-    b.ne    2f
-    LDQ     x10, x19, Node_lc_finality_super
-    cbnz    x10, 2f
-    cbz     x27, 2f
-1:  STQ     x25, x19, Node_lc_finality_slot
-    STQ     x27, x19, Node_lc_finality_super
-    mov     x0, #API_TOPIC_LIGHT_CLIENT_FINALITY_UPDATE
-    mov     x1, #API_TOPIC_LIGHT_CLIENT_FINALITY_UPDATE
-    bl      node_lc_event
-2:  LDQ     x9, x19, Node_lc_optimistic_slot   /* optimistic: a higher attested slot */
-    cmp     x26, x9
-    b.ls    9f
-    STQ     x26, x19, Node_lc_optimistic_slot
-    mov     x0, #API_TOPIC_LIGHT_CLIENT_OPTIMISTIC_UPDATE
-    mov     x1, #API_TOPIC_LIGHT_CLIENT_OPTIMISTIC_UPDATE
-    bl      node_lc_event
+    mov     x25, #0
+    mov     x0, x21
+    mov     x1, #GOSSIP_LIGHT_CLIENT_FINALITY_UPDATE
+    bl      node_lc_new
+    orr     x25, x25, x0
+    mov     x0, x21
+    mov     x1, #GOSSIP_LIGHT_CLIENT_OPTIMISTIC_UPDATE
+    bl      node_lc_new
+    orr     x25, x25, x0, lsl #1
+    cbz     x25, 9f
+    LDQ     x9, x19, Node_lc_pending
+    orr     x9, x9, x25
+    STQ     x9, x19, Node_lc_pending
+    ldr     x0, [x21, #(NodeEvent_root + 24)]
+    bl      node_lc_due_ms
+    STQ     x0, x19, Node_lc_due
 9:  LEAVE 0
 END_FUNCTION node_lc_head_done
+
+/*
+ * L1: at a quiet point (node.md, The light client gossip): with lc_pending not 0, time_ms at least
+ * lc_due and room for two works, a NODE_WORK_LC_PUBLISH of each topic of lc_pending, which becomes
+ * 0. x19 the node, x24 the actions; x21 the bits.
+ */
+LOCAL_FUNCTION node_lc_due
+    ENTER 0
+    LDQ     x21, x19, Node_lc_pending
+    cbz     x21, 9f
+    LDQ     x9, x19, Node_lc_due
+    ldr     x10, [x19, #Node_time_ms]
+    cmp     x10, x9
+    b.lo    9f
+    mov     x0, #(2 * NODE_ACT_WORK_SIZE)
+    bl      node_room
+    cbz     x0, 9f
+    STQ     xzr, x19, Node_lc_pending
+    tbz     x21, #0, 1f
+    mov     x0, #GOSSIP_LIGHT_CLIENT_FINALITY_UPDATE
+    bl      node_lc_publish_work
+1:  tbz     x21, #1, 9f
+    mov     x0, #GOSSIP_LIGHT_CLIENT_OPTIMISTIC_UPDATE
+    bl      node_lc_publish_work
+9:  LEAVE 0
+END_FUNCTION node_lc_due
+
+/* L1: a NODE_WORK_LC_PUBLISH of the topic x0 with the light client store as state_c. */
+LOCAL_FUNCTION node_lc_publish_work
+    FRAME 16
+    mov     x5, x0
+    mov     x0, #NODE_WORK_LC_PUBLISH
+    mov     x1, #0
+    mov     x2, #0
+    mov     x3, #0
+    mov     x4, #0
+    bl      node_work
+    mov     x9, #NODE_LC_ID
+    str     x9, [x0, #NodeAction_state_c]
+    UNFRAME 16
+END_FUNCTION node_lc_publish_work
+
+/* L0: x0 = the event topic of the light client gossip topic x0. */
+.macro LC_API_TOPIC reg
+    cmp     \reg, #GOSSIP_LIGHT_CLIENT_FINALITY_UPDATE
+    mov     \reg, #API_TOPIC_LIGHT_CLIENT_FINALITY_UPDATE
+    mov     x9, #API_TOPIC_LIGHT_CLIENT_OPTIMISTIC_UPDATE
+    csel    \reg, \reg, x9, eq
+.endm
+
+/*
+ * L1: the NODE_EV_WORK_DONE x21 of a NODE_WORK_LC_PUBLISH (node.md, The light client gossip):
+ * LANTERN_VALID of an update new for its topic sets the topic's fields, then with
+ * NODE_FLAG_SUBSCRIBED its bytes at NodeEvent_chunk go out on the topic, and its event. x19 the
+ * node, x24 the actions; x22 the topic.
+ */
+LOCAL_FUNCTION node_lc_published
+    ENTER 0
+    ldr     x9, [x21, #NodeEvent_result]
+    cbnz    x9, 9f
+    ldr     x22, [x21, #NodeAction_arg]
+    mov     x0, x21
+    mov     x1, x22
+    bl      node_lc_new
+    cbz     x0, 9f
+    mov     x0, x21
+    mov     x1, x22
+    bl      node_lc_set
+    ldr     x9, [x19, #Node_flags]
+    tst     x9, #NODE_FLAG_SUBSCRIBED
+    b.eq    1f
+    mov     x0, x22
+    add     x1, x21, #NodeEvent_chunk
+    mov     x2, #0
+    bl      node_publish
+1:  mov     x0, x22
+    LC_API_TOPIC x0
+    mov     x1, x0
+    bl      node_lc_event
+9:  LEAVE 0
+END_FUNCTION node_lc_published
+
+/*
+ * L1: the NODE_EV_WORK_DONE x21 of a NODE_WORK_LC_GOSSIP (node.md, The light client gossip): an
+ * ACCEPT for LANTERN_VALID of an update new for its topic that is due by time_ms +
+ * MAXIMUM_GOSSIP_CLOCK_DISPARITY, with the topic's fields and its event; else an IGNORE. Then its
+ * bytes and the message's entry go. x19 the node, x20 the store, x24 the actions; x22 the topic,
+ * x25 the result.
+ */
+LOCAL_FUNCTION node_lc_validated
+    ENTER 0
+    ldr     x22, [x21, #NodeAction_arg]
+    mov     x25, #LIBP2P_IGNORE
+    ldr     x9, [x21, #NodeEvent_result]
+    cbnz    x9, 1f
+    mov     x0, x21
+    mov     x1, x22
+    bl      node_lc_new
+    cbz     x0, 1f
+    ldr     x0, [x21, #(NodeEvent_root + 24)]   /* due, with the clock disparity */
+    bl      node_lc_due_ms
+    ldr     x9, [x19, #Node_time_ms]
+    LDQ     x10, x19, Node_config + CONFIG_MAXIMUM_GOSSIP_CLOCK_DISPARITY
+    add     x9, x9, x10
+    cmp     x9, x0
+    b.lo    1f
+    mov     x25, #LIBP2P_ACCEPT
+    mov     x0, x21
+    mov     x1, x22
+    bl      node_lc_set
+    mov     x0, x22
+    LC_API_TOPIC x0
+    mov     x1, x0
+    bl      node_lc_event
+1:  ldr     x0, [x21, #NodeAction_target]
+    mov     x1, x25
+    bl      node_validation
+    ldr     x1, [x21, #NodeAction_data]
+    cbz     x1, 2f
+    mov     x0, #NODE_ACT_BYTES_FREE
+    mov     x2, #0
+    bl      node_ids
+2:  ldr     x0, [x21, #NodeAction_target]
+    bl      node_find_message
+    cmn     x0, #1
+    b.eq    9f
+    mov     x0, x1
+    bl      node_drop_message
+9:  LEAVE 0
+END_FUNCTION node_lc_validated
 
 /* L1: a NODE_WORK_API_EVENT of the topic x0 (arg x1) with the light client store as state_c, when an entry has the topic. */
 LOCAL_FUNCTION node_lc_event
@@ -834,3 +1003,180 @@ LOCAL_FUNCTION node_lc_served
     bl      node_drop_stream
     LEAVE 16
 END_FUNCTION node_lc_served
+
+/*
+ * L1: (lc, event) -> x0: the latest update's fields of a light client work at NodeEvent_index and
+ * NodeEvent_root (node.md, NODE_WORK_LC_HEAD): its finalized slot; its attested slot, its
+ * supermajority, 1, its signature slot. 1, or 0 with no latest update. x19 lc, x20 event, x21 the
+ * update.
+ */
+LOCAL_FUNCTION node_lc_slots
+    ENTER 0
+    mov     x19, x0
+    mov     x20, x1
+    ldr     x2, [x19, #LcStore_latest]
+    mov     x0, #0
+    cbz     x2, 9f
+    mov     x0, x19
+    mov     x1, #LC_PART_UPDATES
+    bl      lc_ref
+    mov     x21, x0
+    mov     x0, x19
+    mov     x1, #LC_PART_HEADERS
+    ldr     x2, [x21, #LcUpdate_finalized_header]
+    bl      lc_ref
+    add     x0, x0, #LcHeader_header
+    ldr     x9, [x0, #8]
+    ldr     x9, [x0, x9]
+    str     x9, [x20, #NodeEvent_index]
+    mov     x0, x19
+    mov     x1, #LC_PART_HEADERS
+    ldr     x2, [x21, #LcUpdate_attested_header]
+    bl      lc_ref
+    add     x0, x0, #LcHeader_header
+    ldr     x9, [x0, #8]
+    ldr     x9, [x0, x9]
+    str     x9, [x20, #NodeEvent_root]
+    add     x0, x21, #LcUpdate_sync_aggregate
+    bl      lc_participants
+    mov     x9, #3
+    mul     x0, x0, x9
+    mov     x9, #(SYNC_COMMITTEE_SIZE * 2)
+    cmp     x0, x9
+    cset    x9, hs
+    mov     x10, #1
+    stp     x9, x10, [x20, #(NodeEvent_root + 8)]
+    ldr     x9, [x21, #LcUpdate_signature_slot]
+    str     x9, [x20, #(NodeEvent_root + 24)]
+    mov     x0, #1
+9:  LEAVE 0
+END_FUNCTION node_lc_slots
+
+/*
+ * L2: (node, work, data, lc, scratch, event, room) -> status: a NODE_WORK_LC_PUBLISH or
+ * NODE_WORK_LC_GOSSIP of lantern_node_run (node.md): the latest update of the topic arg, as a
+ * ByteList at NodeEvent_chunk of the event (PUBLISH) or at the end of scratch (GOSSIP, matched
+ * against data), its fields, and the result. x19 node, x20 work, x21 data, x22 lc, x23 scratch, x24
+ * event, x25 the object, x26 the kind, x27 1 for a publish. Locals: L the scratch's size, L + 8 the
+ * fork, L + 16 the epoch, L + 24 a ForkDigest.
+ */
+LOCAL_FUNCTION node_run_lc_gossip
+    ENTER 32
+    mov     x19, x0
+    mov     x20, x1
+    mov     x21, x2
+    mov     x22, x3
+    mov     x23, x4
+    mov     x24, x5
+    ldr     x9, [x23]
+    str     x9, [sp, #L]
+    ldr     x9, [x20, #NodeAction_work_kind]
+    cmp     x9, #NODE_WORK_LC_PUBLISH
+    cset    x27, eq
+    ldr     x9, [x20, #NodeAction_arg]
+    mov     x26, #LC_OBJECT_FINALITY_UPDATE
+    cmp     x9, #GOSSIP_LIGHT_CLIENT_FINALITY_UPDATE
+    b.eq    1f
+    mov     x26, #LC_OBJECT_OPTIMISTIC_UPDATE
+    cmp     x9, #GOSSIP_LIGHT_CLIENT_OPTIMISTIC_UPDATE
+    b.ne    97f
+1:  cbz     x22, 97f
+    cbz     x27, 2f
+    sub     x9, x6, #NodeEvent_chunk        /* PUBLISH: the object in the event */
+    and     x9, x9, #~7
+    cmp     x9, #64
+    b.lo    98f
+    add     x25, x24, #NodeEvent_chunk
+    str     x9, [x25]
+    b       3f
+2:  ldr     x9, [x23]                       /* GOSSIP: at the end of scratch; no room, IGNORE */
+    MOVQ    x10, 24 + LC_UPDATE_ROOM
+    subs    x9, x9, x10
+    b.lo    96f
+    str     x9, [x23]
+    add     x25, x23, x9
+    str     x10, [x25]
+3:  mov     x0, x22
+    mov     x1, x26
+    mov     x2, #0
+    mov     x3, x25
+    add     x4, sp, #(L + 8)
+    bl      lantern_lc_read
+    cmp     x0, #LANTERN_BUFFER_TOO_SMALL
+    b.ne    4f
+    cbnz    x27, 98f
+    b       96f
+4:  cbnz    x0, 96f
+    ldr     x9, [x25, #8]                   /* the ForkDigest of the epoch of attested_header.beacon.slot: fork_digest */
+    add     x9, x25, x9
+    ldr     x10, [sp, #(L + 8)]
+    cmp     x10, #FORK_CAPELLA
+    b.lo    5f
+    ldr     w11, [x9]
+    add     x9, x9, x11
+5:  ldr     x9, [x9]
+    mov     x10, #SLOTS_PER_EPOCH
+    udiv    x9, x9, x10
+    str     x9, [sp, #(L + 16)]
+    str     xzr, [sp, #(L + 24)]
+    add     x0, x19, #Node_genesis_validators_root
+    add     x1, sp, #(L + 16)
+    add     x2, x19, #Node_config
+    mov     x3, x23
+    add     x4, sp, #(L + 24)
+    ldr     x15, [sp, #(L + 8)]
+    FORK_CALL compute_fork_digest
+    cbnz    x0, 96f
+    ldr     w9, [sp, #(L + 24)]
+    ldr     w10, [x19, #Node_fork_digest]
+    cmp     w9, w10
+    b.ne    96f
+    cbnz    x27, 7f
+    cbz     x21, 96f                        /* GOSSIP: data must be its bytes */
+    ldr     x2, [x21, #16]
+    ldr     x9, [x25, #16]
+    cmp     x2, x9
+    b.ne    96f
+    ldr     x0, [x21, #8]
+    add     x0, x21, x0
+    ldr     x1, [x25, #8]
+    add     x1, x25, x1
+6:  cbz     x2, 7f
+    ldrb    w9, [x0], #1
+    ldrb    w10, [x1], #1
+    sub     x2, x2, #1
+    cmp     w9, w10
+    b.eq    6b
+    b       96f
+7:  mov     x0, x22                         /* the latest update's fields */
+    mov     x1, x24
+    bl      node_lc_slots
+    cbz     x0, 96f
+    cbz     x27, 8f
+    ldp     x9, x10, [x25, #8]              /* PUBLISH: the event's size covers the bytes */
+    add     x9, x9, x10
+    add     x9, x9, #(NodeEvent_chunk + 7)
+    and     x9, x9, #~7
+    str     x9, [x24]
+    sub     x9, x9, #NodeEvent_chunk
+    str     x9, [x25]
+8:  str     xzr, [x24, #NodeEvent_result]   /* LANTERN_VALID */
+    ldr     x9, [sp, #L]
+    str     x9, [x23]
+    mov     x0, #LANTERN_OK
+    LEAVE 32
+96: mov     x9, #LANTERN_GOSSIP_IGNORE
+    str     x9, [x24, #NodeEvent_result]
+    ldr     x9, [sp, #L]
+    str     x9, [x23]
+    mov     x0, #LANTERN_OK
+    LEAVE 32
+97: ldr     x9, [sp, #L]
+    str     x9, [x23]
+    mov     x0, #LANTERN_INVALID_EVENT
+    LEAVE 32
+98: ldr     x9, [sp, #L]
+    str     x9, [x23]
+    mov     x0, #LANTERN_BUFFER_TOO_SMALL
+    LEAVE 32
+END_FUNCTION node_run_lc_gossip

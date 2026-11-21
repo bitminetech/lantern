@@ -45,6 +45,8 @@ TOPICS = [
     ("bls_to_execution_change", False),
     ("blob_sidecar", True),
     ("data_column_sidecar", True),
+    ("light_client_finality_update", False),
+    ("light_client_optimistic_update", False),
 ]
 
 
@@ -209,7 +211,7 @@ def cases(fork, preset):
                 if TOPICS[name - 1][1] or not subnet:
                     parse = {"fork_digest": digest, "name": name, "subnet_id": subnet}
                     yield "gossip_topic_parse", f"{k}_{name}_{subnet}", {"config": {}, "input": {"string": string}, "output": parse}
-    for name in (0, 12, U64):
+    for name in (0, len(TOPICS) + 1, U64):
         yield "gossip_topic", f"bad_name_{name}", {"config": {}, "input": {"fork_digest": bytes(4), "name": name, "subnet_id": 0}, "output": None}
     bad = [
         b"", b"/eth2/", b"/eth2/446a7232/beacon_block/ssz", b"/eth2/446a7232/beacon_block/ssz_snappy/",
@@ -219,7 +221,7 @@ def cases(fork, preset):
         b"/eth2/446a7232/beacon_attestation_/ssz_snappy", b"/eth2/446a7232/beacon_attestation_01/ssz_snappy",
         b"/eth2/446a7232/beacon_attestation_18446744073709551616/ssz_snappy",
         b"/eth2/446a7232/beacon_attestation_1a/ssz_snappy", b"/eth2/446a7232/sync_committee/ssz_snappy",
-        b"/eth2/446a7232/light_client_finality_update/ssz_snappy", b"eth2/446a7232/beacon_block/ssz_snappy",
+        b"/eth2/446a7232/light_client_finality_updates/ssz_snappy", b"eth2/446a7232/beacon_block/ssz_snappy",
         b"/eth2/446a7232/beacon_block/ssz_snappy\x00", b"/eth2/446a7232//ssz_snappy", b"/eth2/g46a7232/beacon_block/ssz_snappy",
     ]
     for k, string in enumerate(bad):

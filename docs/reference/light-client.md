@@ -808,7 +808,7 @@ An update, or a finality update.
   - `new_block`: the block's state transition on its parent's post-state, the state crossing each fork boundary before it (process_slots to the fork's first slot, then lantern_node_upgrade); then lantern_lc_on_block.
   - `new_head`: lantern_lc_on_head with the `finalized_checkpoint` of the head's post-state; then the checks: lantern_lc_read of each bootstrap's root and each period of `best_updates`, and of the latest finality and optimistic updates, must give the case's bytes, or `LANTERN_NO_STATE_ANSWER` where the case has none; each object's fork must be that of its `fork_digest`; `latest_finalized_epoch` and `latest_finalized_root` must be `latest_finalized_checkpoint`.
   - The runner starts with capacities of 2 and grows a part with lantern_lc_store_copy when a function gives `LANTERN_BUFFER_TOO_SMALL`, then calls it again; the store must hold the same data after it.
-  - After the steps, a node of the case's anchor serves a copy of the store (node.md, `NODE_WORK_LC_SERVE`) to the runner's peer: the light client checks of node.md's test vectors, with the bootstraps of the anchor's root and of up to 7 blocks of the case.
+  - After the steps, three nodes of the case's anchor, each with a copy of the store as its light client store, meet the runner's peer (node.md, Test vectors): the first serves the light client methods, with the bootstraps of the anchor's root and of up to 7 blocks of the case, and publishes the store's updates; the second and third validate the peer's updates.
 - Not run: `light_client/sync`, the light client's own sync (lantern is a beacon node).
 
 ## Results

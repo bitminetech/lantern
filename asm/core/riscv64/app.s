@@ -1612,6 +1612,8 @@ LOCAL_FUNCTION app_work
     beq     s8, t0, 2f
     li      t0, NODE_WORK_LC_SERVE
     beq     s8, t0, 2f
+    li      t0, NODE_WORK_LC_PUBLISH
+    beq     s8, t0, 2f
     li      t0, NODE_WORK_NEW_PAYLOAD
     beq     s8, t0, 2f
     li      t0, NODE_WORK_FORKCHOICE

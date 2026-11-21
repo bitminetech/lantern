@@ -300,7 +300,7 @@ END_FUNCTION api_lc_updates_body
 
 # L2: (node, store, work, state_a, data, state_c; scratch r10, event r11) -> status: a
 # NODE_WORK_LC_BLOCK or NODE_WORK_LC_HEAD of lantern_node_run (node.md). rbx node, rbp store, r12
-# work, r13 state_a, r14 data, r15 the LcStore; S7 scratch, S8 event, S9 the latest update.
+# work, r13 state_a, r14 data, r15 the LcStore; S7 scratch, S8 event.
 LOCAL_FUNCTION node_run_lc
     ENTER 0
     mov     %rdi, %rbx
@@ -344,42 +344,9 @@ LOCAL_FUNCTION node_run_lc
     mov     %rax, NodeEvent_result(%rcx)
     test    %rax, %rax
     jnz     8f
-    mov     LcStore_latest(%r15), %rdx      # the latest finality update's slots and supermajority
-    test    %rdx, %rdx
-    jz      8f
-    mov     %r15, %rdi
-    mov     $LC_PART_UPDATES, %esi
-    call    lc_ref
-    mov     %rax, S9(%rsp)
-    mov     %r15, %rdi
-    mov     $LC_PART_HEADERS, %esi
-    mov     LcUpdate_finalized_header(%rax), %rdx
-    call    lc_ref
-    lea     LcHeader_header(%rax), %rax
-    mov     8(%rax), %rcx
-    mov     (%rax,%rcx), %rcx
-    mov     S8(%rsp), %rdx
-    mov     %rcx, NodeEvent_index(%rdx)
-    mov     %r15, %rdi
-    mov     $LC_PART_HEADERS, %esi
-    mov     S9(%rsp), %rax
-    mov     LcUpdate_attested_header(%rax), %rdx
-    call    lc_ref
-    lea     LcHeader_header(%rax), %rax
-    mov     8(%rax), %rcx
-    mov     (%rax,%rcx), %rcx
-    mov     S8(%rsp), %rdx
-    mov     %rcx, NodeEvent_root(%rdx)
-    mov     S9(%rsp), %rdi
-    add     $LcUpdate_sync_aggregate, %rdi
-    call    lc_participants
-    imul    $3, %rax, %rax
-    xor     %ecx, %ecx
-    cmp     $(SYNC_COMMITTEE_SIZE * 2), %rax
-    setae   %cl
-    mov     S8(%rsp), %rdx
-    mov     %rcx, (NodeEvent_root + 8)(%rdx)
-    movq    $1, (NodeEvent_root + 16)(%rdx)
+    mov     %r15, %rdi                      # the latest update's fields
+    mov     S8(%rsp), %rsi
+    call    node_lc_slots
 8:  xor     %eax, %eax
     LEAVE 0
 9:  LEAVE 0
@@ -387,36 +354,210 @@ LOCAL_FUNCTION node_run_lc
     LEAVE 0
 END_FUNCTION node_run_lc
 
-# L1: the NODE_EV_WORK_DONE r12 of a NODE_WORK_LC_HEAD (node.md, The events): a new finality update,
-# or a new optimistic update, sets the node's fields and gives the event of its topic. rbx the node,
-# r15 the actions; r13 its finalized slot, r14 its attested slot, rbp its supermajority.
+# L1: (event, topic) -> rax: 1 when the update of the fields of the light client work's event rdi is
+# new for the topic rsi (node.md, The light client gossip), else 0. rbx the node. Uses rcx.
+LOCAL_FUNCTION node_lc_new
+    UNWIND_END_PROLOGUE
+    cmp     $GOSSIP_LIGHT_CLIENT_FINALITY_UPDATE, %rsi
+    jne     2f
+    mov     NodeEvent_index(%rdi), %rcx     # finality: a higher finalized slot, or the same with a new supermajority
+    cmp     Node_lc_finality_slot(%rbx), %rcx
+    ja      8f
+    jne     9f
+    cmpq    $0, Node_lc_finality_super(%rbx)
+    jne     9f
+    cmpq    $0, (NodeEvent_root + 8)(%rdi)
+    je      9f
+    jmp     8f
+2:  mov     NodeEvent_root(%rdi), %rcx      # optimistic: a higher attested slot
+    cmp     Node_lc_optimistic_slot(%rbx), %rcx
+    jbe     9f
+8:  mov     $1, %eax
+    ret
+9:  xor     %eax, %eax
+    ret
+END_FUNCTION node_lc_new
+
+# L1: the fields of the topic rsi take the update of the light client work's event rdi (node.md, The light client gossip). rbx the node. Uses rcx.
+LOCAL_FUNCTION node_lc_set
+    UNWIND_END_PROLOGUE
+    cmp     $GOSSIP_LIGHT_CLIENT_FINALITY_UPDATE, %rsi
+    jne     2f
+    mov     NodeEvent_index(%rdi), %rcx
+    mov     %rcx, Node_lc_finality_slot(%rbx)
+    mov     (NodeEvent_root + 8)(%rdi), %rcx
+    mov     %rcx, Node_lc_finality_super(%rbx)
+    ret
+2:  mov     NodeEvent_root(%rdi), %rcx
+    mov     %rcx, Node_lc_optimistic_slot(%rbx)
+    ret
+END_FUNCTION node_lc_set
+
+# L1: rax = the due time in Unix ms of an update of signature slot rdi (node.md, The light client
+# gossip): genesis time + the slot times SLOT_DURATION_MS + get_sync_message_due_ms(). rbx the
+# node, rbp the store. Uses rcx, rdx.
+LOCAL_FUNCTION node_lc_due_ms
+    UNWIND_END_PROLOGUE
+    mov     (Node_config + CONFIG_SYNC_MESSAGE_DUE_BPS)(%rbx), %rax
+    mulq    (Node_config + CONFIG_SLOT_DURATION_MS)(%rbx)
+    mov     $BASIS_POINTS, %ecx
+    div     %rcx
+    mov     %rax, %rcx
+    mov     %rdi, %rax
+    mulq    (Node_config + CONFIG_SLOT_DURATION_MS)(%rbx)
+    add     %rcx, %rax
+    add     Store_genesis_time_ms(%rbp), %rax
+    ret
+END_FUNCTION node_lc_due_ms
+
+# L1: the NODE_EV_WORK_DONE r12 of a NODE_WORK_LC_HEAD (node.md, The light client gossip): with a
+# latest update, the bit of each topic it is new for joins lc_pending, and lc_due becomes its due
+# time. rbx the node, rbp the store, r15 the actions; r13 the bits.
 LOCAL_FUNCTION node_lc_head_done
     ENTER 0
     cmpq    $0, NodeEvent_result(%r12)
     jne     9f
     cmpq    $0, (NodeEvent_root + 16)(%r12)
     je      9f
-    mov     NodeEvent_index(%r12), %r13
-    mov     NodeEvent_root(%r12), %r14
-    mov     (NodeEvent_root + 8)(%r12), %rbp
-    cmp     Node_lc_finality_slot(%rbx), %r13   # finality: a higher finalized slot, or the same with a new supermajority
-    ja      1f
-    jne     2f
-    cmpq    $0, Node_lc_finality_super(%rbx)
-    jne     2f
-    test    %rbp, %rbp
-    jz      2f
-1:  mov     %r13, Node_lc_finality_slot(%rbx)
-    mov     %rbp, Node_lc_finality_super(%rbx)
-    mov     $API_TOPIC_LIGHT_CLIENT_FINALITY_UPDATE, %edi
-    call    node_lc_event
-2:  cmp     Node_lc_optimistic_slot(%rbx), %r14 # optimistic: a higher attested slot
-    jbe     9f
-    mov     %r14, Node_lc_optimistic_slot(%rbx)
-    mov     $API_TOPIC_LIGHT_CLIENT_OPTIMISTIC_UPDATE, %edi
-    call    node_lc_event
+    mov     %r12, %rdi
+    mov     $GOSSIP_LIGHT_CLIENT_FINALITY_UPDATE, %esi
+    call    node_lc_new
+    mov     %rax, %r13
+    mov     %r12, %rdi
+    mov     $GOSSIP_LIGHT_CLIENT_OPTIMISTIC_UPDATE, %esi
+    call    node_lc_new
+    lea     (%r13,%rax,2), %r13
+    test    %r13, %r13
+    jz      9f
+    or      %r13, Node_lc_pending(%rbx)
+    mov     (NodeEvent_root + 24)(%r12), %rdi
+    call    node_lc_due_ms
+    mov     %rax, Node_lc_due(%rbx)
 9:  LEAVE 0
 END_FUNCTION node_lc_head_done
+
+# L1: after the head (node.md, The light client gossip): with lc_pending not 0, time_ms at least
+# lc_due and room for two works, a NODE_WORK_LC_PUBLISH of each topic of lc_pending, which becomes
+# 0. rbx the node, r15 the actions; r12 the bits.
+LOCAL_FUNCTION node_lc_due
+    ENTER 0
+    mov     Node_lc_pending(%rbx), %r12
+    test    %r12, %r12
+    jz      9f
+    mov     Node_time_ms(%rbx), %rax
+    cmp     Node_lc_due(%rbx), %rax
+    jb      9f
+    mov     $(2 * NODE_ACT_WORK_SIZE), %edi
+    call    node_room
+    test    %rax, %rax
+    jz      9f
+    movq    $0, Node_lc_pending(%rbx)
+    test    $1, %r12
+    jz      1f
+    mov     $GOSSIP_LIGHT_CLIENT_FINALITY_UPDATE, %edi
+    call    node_lc_publish_work
+1:  test    $2, %r12
+    jz      9f
+    mov     $GOSSIP_LIGHT_CLIENT_OPTIMISTIC_UPDATE, %edi
+    call    node_lc_publish_work
+9:  LEAVE 0
+END_FUNCTION node_lc_due
+
+# L1: a NODE_WORK_LC_PUBLISH of the topic rdi with the light client store as state_c.
+LOCAL_FUNCTION node_lc_publish_work
+    FRAME 16
+    mov     %rdi, %r9
+    mov     $NODE_WORK_LC_PUBLISH, %edi
+    xor     %esi, %esi
+    xor     %edx, %edx
+    xor     %ecx, %ecx
+    xor     %r8d, %r8d
+    call    node_work
+    movq    $NODE_LC_ID, NodeAction_state_c(%rax)
+    UNFRAME 16
+END_FUNCTION node_lc_publish_work
+
+# rdi = the event topic of the light client gossip topic in reg. Uses rax.
+.macro LC_API_TOPIC reg
+    mov     $API_TOPIC_LIGHT_CLIENT_FINALITY_UPDATE, %edi
+    mov     $API_TOPIC_LIGHT_CLIENT_OPTIMISTIC_UPDATE, %eax
+    cmp     $GOSSIP_LIGHT_CLIENT_FINALITY_UPDATE, \reg
+    cmovne  %rax, %rdi
+.endm
+
+# L1: the NODE_EV_WORK_DONE r12 of a NODE_WORK_LC_PUBLISH (node.md, The light client gossip):
+# LANTERN_VALID of an update new for its topic sets the topic's fields, then with
+# NODE_FLAG_SUBSCRIBED its bytes at NodeEvent_chunk go out on the topic, and its event. rbx the
+# node, rbp the store, r14 the scratch, r15 the actions; r13 the topic.
+LOCAL_FUNCTION node_lc_published
+    ENTER 0
+    cmpq    $0, NodeEvent_result(%r12)
+    jne     9f
+    mov     NodeAction_arg(%r12), %r13
+    mov     %r12, %rdi
+    mov     %r13, %rsi
+    call    node_lc_new
+    test    %rax, %rax
+    jz      9f
+    mov     %r12, %rdi
+    mov     %r13, %rsi
+    call    node_lc_set
+    testq   $NODE_FLAG_SUBSCRIBED, Node_flags(%rbx)
+    jz      1f
+    mov     %r13, %rdi
+    lea     NodeEvent_chunk(%r12), %rsi
+    xor     %edx, %edx
+    call    node_publish
+1:  LC_API_TOPIC %r13
+    call    node_lc_event
+9:  LEAVE 0
+END_FUNCTION node_lc_published
+
+# L1: the NODE_EV_WORK_DONE r12 of a NODE_WORK_LC_GOSSIP (node.md, The light client gossip): an
+# ACCEPT for LANTERN_VALID of an update new for its topic that is due by time_ms +
+# MAXIMUM_GOSSIP_CLOCK_DISPARITY, with the topic's fields and its event; else an IGNORE. Then its
+# bytes and the message's entry go. rbx the node, rbp the store, r15 the actions; r13 the topic,
+# S7 the result.
+LOCAL_FUNCTION node_lc_validated
+    ENTER 0
+    mov     NodeAction_arg(%r12), %r13
+    movq    $LIBP2P_IGNORE, S7(%rsp)
+    cmpq    $0, NodeEvent_result(%r12)
+    jne     1f
+    mov     %r12, %rdi
+    mov     %r13, %rsi
+    call    node_lc_new
+    test    %rax, %rax
+    jz      1f
+    mov     (NodeEvent_root + 24)(%r12), %rdi   # due, with the clock disparity
+    call    node_lc_due_ms
+    mov     Node_time_ms(%rbx), %rcx
+    add     (Node_config + CONFIG_MAXIMUM_GOSSIP_CLOCK_DISPARITY)(%rbx), %rcx
+    cmp     %rax, %rcx
+    jb      1f
+    movq    $LIBP2P_ACCEPT, S7(%rsp)
+    mov     %r12, %rdi
+    mov     %r13, %rsi
+    call    node_lc_set
+    LC_API_TOPIC %r13
+    call    node_lc_event
+1:  mov     NodeAction_target(%r12), %rdi
+    mov     S7(%rsp), %rsi
+    call    node_validation
+    mov     NodeAction_data(%r12), %rsi
+    test    %rsi, %rsi
+    jz      2f
+    mov     $NODE_ACT_BYTES_FREE, %edi
+    xor     %edx, %edx
+    call    node_ids
+2:  mov     NodeAction_target(%r12), %rdi
+    call    node_find_message
+    cmp     $-1, %rax
+    je      9f
+    mov     %rdx, %rdi
+    call    node_drop_message
+9:  LEAVE 0
+END_FUNCTION node_lc_validated
 
 # L1: a NODE_WORK_API_EVENT of the topic rdi with the light client store as state_c, when an entry has the topic.
 LOCAL_FUNCTION node_lc_event
@@ -818,3 +959,189 @@ LOCAL_FUNCTION node_lc_served
     call    node_drop_stream
     LEAVE 0
 END_FUNCTION node_lc_served
+
+# L1: (lc, event) -> rax: the latest update's fields of a light client work at NodeEvent_index and
+# NodeEvent_root (node.md, NODE_WORK_LC_HEAD): its finalized slot; its attested slot, its
+# supermajority, 1, its signature slot. 1, or 0 with no latest update. r12 lc, r13 event, r14 the
+# update.
+LOCAL_FUNCTION node_lc_slots
+    ENTER 0
+    mov     %rdi, %r12
+    mov     %rsi, %r13
+    xor     %eax, %eax
+    mov     LcStore_latest(%r12), %rdx
+    test    %rdx, %rdx
+    jz      9f
+    mov     %r12, %rdi
+    mov     $LC_PART_UPDATES, %esi
+    call    lc_ref
+    mov     %rax, %r14
+    mov     %r12, %rdi
+    mov     $LC_PART_HEADERS, %esi
+    mov     LcUpdate_finalized_header(%r14), %rdx
+    call    lc_ref
+    lea     LcHeader_header(%rax), %rax
+    mov     8(%rax), %rcx
+    mov     (%rax,%rcx), %rcx
+    mov     %rcx, NodeEvent_index(%r13)
+    mov     %r12, %rdi
+    mov     $LC_PART_HEADERS, %esi
+    mov     LcUpdate_attested_header(%r14), %rdx
+    call    lc_ref
+    lea     LcHeader_header(%rax), %rax
+    mov     8(%rax), %rcx
+    mov     (%rax,%rcx), %rcx
+    mov     %rcx, NodeEvent_root(%r13)
+    lea     LcUpdate_sync_aggregate(%r14), %rdi
+    call    lc_participants
+    imul    $3, %rax, %rax
+    xor     %ecx, %ecx
+    cmp     $(SYNC_COMMITTEE_SIZE * 2), %rax
+    setae   %cl
+    mov     %rcx, (NodeEvent_root + 8)(%r13)
+    movq    $1, (NodeEvent_root + 16)(%r13)
+    mov     LcUpdate_signature_slot(%r14), %rcx
+    mov     %rcx, (NodeEvent_root + 24)(%r13)
+    mov     $1, %eax
+9:  LEAVE 0
+END_FUNCTION node_lc_slots
+
+# L2: (node, work, data, lc, scratch, event; room r10) -> status: a NODE_WORK_LC_PUBLISH or
+# NODE_WORK_LC_GOSSIP of lantern_node_run (node.md): the latest update of the topic arg, as a
+# ByteList at NodeEvent_chunk of the event (PUBLISH) or at the end of scratch (GOSSIP, matched
+# against data), its fields, and the result. rbx node, r12 work, r13 data, r14 lc, r15 scratch,
+# rbp event; S7 the object, S8 the kind, S9 1 for a publish. Locals: L the scratch's size, L + 8
+# the fork, L + 16 the epoch, L + 24 a ForkDigest.
+LOCAL_FUNCTION node_run_lc_gossip
+    ENTER 32
+    mov     %rdi, %rbx
+    mov     %rsi, %r12
+    mov     %rdx, %r13
+    mov     %rcx, %r14
+    mov     %r8, %r15
+    mov     %r9, %rbp
+    mov     (%r15), %rax
+    mov     %rax, L(%rsp)
+    xor     %eax, %eax
+    cmpq    $NODE_WORK_LC_PUBLISH, NodeAction_work_kind(%r12)
+    sete    %al
+    mov     %rax, S9(%rsp)
+    mov     NodeAction_arg(%r12), %rax
+    movq    $LC_OBJECT_FINALITY_UPDATE, S8(%rsp)
+    cmp     $GOSSIP_LIGHT_CLIENT_FINALITY_UPDATE, %rax
+    je      1f
+    movq    $LC_OBJECT_OPTIMISTIC_UPDATE, S8(%rsp)
+    cmp     $GOSSIP_LIGHT_CLIENT_OPTIMISTIC_UPDATE, %rax
+    jne     97f
+1:  test    %r14, %r14
+    jz      97f
+    cmpq    $0, S9(%rsp)
+    je      2f
+    lea     -NodeEvent_chunk(%r10), %rax    # PUBLISH: the object in the event
+    and     $-8, %rax
+    cmp     $64, %rax
+    jb      98f
+    lea     NodeEvent_chunk(%rbp), %rcx
+    mov     %rax, (%rcx)
+    mov     %rcx, S7(%rsp)
+    jmp     3f
+2:  mov     (%r15), %rax                    # GOSSIP: at the end of scratch; no room, IGNORE
+    sub     $(24 + LC_UPDATE_ROOM), %rax
+    jb      96f
+    mov     %rax, (%r15)
+    add     %r15, %rax
+    movq    $(24 + LC_UPDATE_ROOM), (%rax)
+    mov     %rax, S7(%rsp)
+3:  mov     %r14, %rdi
+    mov     S8(%rsp), %rsi
+    xor     %edx, %edx
+    mov     S7(%rsp), %rcx
+    lea     (L + 8)(%rsp), %r8
+    call    lantern_lc_read
+    cmp     $LANTERN_BUFFER_TOO_SMALL, %rax
+    jne     4f
+    cmpq    $0, S9(%rsp)
+    jne     98f
+    jmp     96f
+4:  test    %rax, %rax
+    jnz     96f
+    mov     S7(%rsp), %rdx                  # the ForkDigest of the epoch of attested_header.beacon.slot: fork_digest
+    mov     8(%rdx), %rax
+    add     %rdx, %rax
+    cmpq    $FORK_CAPELLA, (L + 8)(%rsp)
+    jb      5f
+    mov     (%rax), %ecx
+    add     %rcx, %rax
+5:  mov     (%rax), %rax
+    xor     %edx, %edx
+    mov     $SLOTS_PER_EPOCH, %ecx
+    div     %rcx
+    mov     %rax, (L + 16)(%rsp)
+    movq    $0, (L + 24)(%rsp)
+    lea     Node_genesis_validators_root(%rbx), %rdi
+    lea     (L + 16)(%rsp), %rsi
+    lea     Node_config(%rbx), %rdx
+    mov     %r15, %rcx
+    lea     (L + 24)(%rsp), %r8
+    mov     (L + 8)(%rsp), %r10
+    FORK_CALL compute_fork_digest
+    test    %rax, %rax
+    jnz     96f
+    mov     (L + 24)(%rsp), %eax
+    cmp     Node_fork_digest(%rbx), %eax
+    jne     96f
+    cmpq    $0, S9(%rsp)
+    jne     7f
+    test    %r13, %r13                      # GOSSIP: data must be its bytes
+    jz      96f
+    mov     S7(%rsp), %rsi
+    mov     16(%r13), %rcx
+    cmp     16(%rsi), %rcx
+    jne     96f
+    mov     8(%r13), %rdi
+    add     %r13, %rdi
+    mov     8(%rsi), %rax
+    add     %rax, %rsi
+6:  test    %rcx, %rcx
+    jz      7f
+    mov     (%rdi), %al
+    cmp     (%rsi), %al
+    jne     96f
+    inc     %rdi
+    inc     %rsi
+    dec     %rcx
+    jmp     6b
+7:  mov     %r14, %rdi                      # the latest update's fields
+    mov     %rbp, %rsi
+    call    node_lc_slots
+    test    %rax, %rax
+    jz      96f
+    cmpq    $0, S9(%rsp)
+    je      8f
+    mov     S7(%rsp), %rcx                  # PUBLISH: the event's size covers the bytes
+    mov     8(%rcx), %rax
+    add     16(%rcx), %rax
+    add     $(NodeEvent_chunk + 7), %rax
+    and     $-8, %rax
+    mov     %rax, (%rbp)
+    sub     $NodeEvent_chunk, %rax
+    mov     %rax, (%rcx)
+8:  movq    $LANTERN_VALID, NodeEvent_result(%rbp)
+    mov     L(%rsp), %rax
+    mov     %rax, (%r15)
+    xor     %eax, %eax
+    LEAVE 32
+96: movq    $LANTERN_GOSSIP_IGNORE, NodeEvent_result(%rbp)
+    mov     L(%rsp), %rax
+    mov     %rax, (%r15)
+    xor     %eax, %eax
+    LEAVE 32
+97: mov     L(%rsp), %rax
+    mov     %rax, (%r15)
+    mov     $LANTERN_INVALID_EVENT, %eax
+    LEAVE 32
+98: mov     L(%rsp), %rax
+    mov     %rax, (%r15)
+    mov     $LANTERN_BUFFER_TOO_SMALL, %eax
+    LEAVE 32
+END_FUNCTION node_run_lc_gossip

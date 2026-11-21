@@ -4135,8 +4135,16 @@ LOCAL_FUNCTION node_event
     b.ne    603f
     LEAVE 48
 603: cmp    x9, #NODE_WORK_LC_SERVE         /* the light client answer to its stream */
-    b.ne    602f
+    b.ne    604f
     bl      node_lc_served
+    LEAVE 48
+604: cmp    x9, #NODE_WORK_LC_GOSSIP        /* the light client gossip: a message's validation, a publish */
+    b.ne    605f
+    bl      node_lc_validated
+    LEAVE 48
+605: cmp    x9, #NODE_WORK_LC_PUBLISH
+    b.ne    602f
+    bl      node_lc_published
     LEAVE 48
 602: cmp    x9, #NODE_WORK_JUSTIFIED_STATE
     b.ne    61f
@@ -6353,7 +6361,15 @@ LOCAL_FUNCTION node_topics
     bl      node_sub
 15: add     x22, x22, #1
     b       13b
-14: cmp     x21, #FORK_CAPELLA
+14: mov     x0, #GOSSIP_LIGHT_CLIENT_FINALITY_UPDATE   /* the light client topics */
+    mov     x1, #0
+    ldp     x2, x3, [sp, #L]
+    bl      node_sub
+    mov     x0, #GOSSIP_LIGHT_CLIENT_OPTIMISTIC_UPDATE
+    mov     x1, #0
+    ldp     x2, x3, [sp, #L]
+    bl      node_sub
+    cmp     x21, #FORK_CAPELLA
     b.lo    9f
     mov     x0, #GOSSIP_BLS_TO_EXECUTION_CHANGE
     mov     x1, #0
@@ -6936,7 +6952,23 @@ LOCAL_FUNCTION node_message_status
     bl      node_room
     mov     x1, #LIBP2P_IGNORE
     cbz     x0, 70b
-    mov     x25, #0                         /* the head state */
+    ldr     x9, [x22, #NodeMessage_topic]   /* a light client update: matched against the light client store's */
+    cmp     x9, #GOSSIP_LIGHT_CLIENT_FINALITY_UPDATE
+    ccmp    x9, #GOSSIP_LIGHT_CLIENT_OPTIMISTIC_UPDATE, #4, ne
+    b.ne    11f
+    mov     x5, x9
+    mov     x0, #NODE_WORK_LC_GOSSIP
+    mov     x1, #0
+    mov     x2, #0
+    ldr     x3, [x22, #NodeMessage_data_id]
+    ldr     x4, [x22, #NodeMessage_handle]
+    bl      node_work
+    mov     x9, #NODE_LC_ID
+    str     x9, [x0, #NodeAction_state_c]
+    mov     x9, #NODE_MESSAGE_VALIDATING
+    str     x9, [x22, #NodeMessage_state]
+    LEAVE 0
+11: mov     x25, #0                         /* the head state */
     add     x0, x19, #Node_head_root
     bl      node_find_block
     cmn     x0, #1
@@ -8984,6 +9016,7 @@ FUNCTION lantern_node_step
     bl      node_engine_next
     bl      node_shed                       /* the post-states the node can rebuild go */
     bl      node_api_head_events            /* the head and finalized_checkpoint events, at a quiet point */
+    bl      node_lc_due                     /* the light client updates due on gossip */
     bl      node_backfill_link              /* the backfill's blocks of the chain join the Db */
     bl      node_drop_sidecars              /* the sidecars the node no longer serves go */
     str     xzr, [sp, #(L + 112)]
@@ -9111,7 +9144,7 @@ FUNCTION lantern_node_run
     bl      lantern_zero
     ldr     x9, [x21, #NodeAction_work_kind]
     sub     x10, x9, #NODE_WORK_LC_BLOCK    /* the light client works: of the light client store, state_c */
-    cmp     x10, #(NODE_WORK_LC_SERVE - NODE_WORK_LC_BLOCK)
+    cmp     x10, #(NODE_WORK_LC_PUBLISH - NODE_WORK_LC_BLOCK)
     b.hi    5f
     mov     x8, x26                         /* the event's room */
     mov     x0, x19
