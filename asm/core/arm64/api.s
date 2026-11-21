@@ -3478,9 +3478,17 @@ LOCAL_FUNCTION node_api_event
     b.ls    582f
     mov     x9, #API_ID_HEAD
 582: stp    x9, x10, [x25, #ApiRoute_id_kind]
-    mov     x0, x25
+    ldr     x12, [x25, #ApiRoute_op]        /* getAttesterDuties of a slot: the replay may come */
+    cmp     x12, #API_OP_GET_ATTESTER_DUTIES
+    ccmp    x9, #API_ID_SLOT, #0, eq
+    b.ne    584f
+    mov     x12, #1
+    STQ     x12, x26, ApiView_look_replay
+584: mov    x0, x25
     mov     x1, x26
     bl      node_api_state
+    cmp     x0, #1
+    b.eq    698b
     mov     x2, #400
     cbnz    x0, 80f
     ldr     x9, [x25, #ApiRoute_id_slot]
@@ -3666,10 +3674,16 @@ LOCAL_FUNCTION node_api_event
     b.ls    62f
     mov     x9, #API_ID_HEAD
 62: stp     x9, x10, [x25, #ApiRoute_id_kind]
-    mov     x0, x25
+    cmp     x9, #API_ID_SLOT                /* a slot: the replay may come */
+    b.ne    621f
+    mov     x9, #1
+    STQ     x9, x26, ApiView_look_replay
+621: mov    x0, x25
     mov     x1, x26
     bl      node_api_state
     mov     x2, x0
+    cmp     x0, #1
+    b.eq    698b
     cbnz    x0, 80f
     ldr     x9, [x25, #ApiRoute_id_slot]    /* brought to the first slot */
     str     x9, [x26, #ApiView_head_slot]
@@ -5473,10 +5487,12 @@ LOCAL_FUNCTION node_api_lookup
     mov     x2, #64
     bl      lantern_copy
     ldr     x9, [x21, #ApiRoute_op]
+    cmp     x9, #API_OP_GET_ATTESTER_DUTIES /* and getAttesterDuties' */
+    b.eq    5f
     sub     x9, x9, #API_OP_GET_STATE_VALIDATORS
     cmp     x9, #(API_OP_GET_EPOCH_COMMITTEES - API_OP_GET_STATE_VALIDATORS)
     b.hi    2f
-    mov     x0, x21
+5:  mov     x0, x21
     bl      node_api_ids
     ldr     x1, [sp, #(L + 8)]
     str     x0, [x1, #NodeApi_data]
@@ -5625,7 +5641,12 @@ LOCAL_FUNCTION node_api_rerun
     ldr     x9, [sp, #(L + 128)]
     str     x9, [x22, #(NodeApi_cursor + API_REPLAY_SLOT)]
     b       90f
-70: str     x2, [sp, #(L + 136)]
+70: cmp     x28, #API_OP_GET_ATTESTER_DUTIES    /* getAttesterDuties with no state: 400 */
+    b.ne    707f
+    cmp     x2, #404
+    mov     x9, #400
+    csel    x2, x9, x2, eq
+707: str    x2, [sp, #(L + 136)]
     and     x9, x25, #~API_STREAM_OWN       /* the entry ends; it owns no bytes */
     str     x9, [x22, #NodeApi_flags]
     mov     x0, x22

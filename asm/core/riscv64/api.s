@@ -3539,10 +3539,21 @@ LOCAL_FUNCTION node_api_event
     bleu    t2, a0, 582f
     li      t0, API_ID_HEAD
 582: sd     t0, ApiRoute_id_kind(s7)
-    mv      a0, s7
+    ld      t2, ApiRoute_op(s7)             # getAttesterDuties of a slot: the replay may come
+    li      t1, API_OP_GET_ATTESTER_DUTIES
+    bne     t2, t1, 584f
+    li      t1, API_ID_SLOT
+    bne     t0, t1, 584f
+    li      t1, 1
+    STQ     t1, s8, ApiView_look_replay
+584: mv     a0, s7
     mv      a1, s8
     call    node_api_state
-    li      a2, 400
+    mv      a2, a0
+    li      t1, 1
+    bne     a0, t1, 585f
+    j       698b
+585: li     a2, 400
     bnez    a0, 80f
     ld      t0, ApiRoute_id_slot(s7)
     sd      t0, ApiView_head_slot(s8)
@@ -3728,11 +3739,18 @@ LOCAL_FUNCTION node_api_event
     bleu    t2, a0, 62f
     li      t0, API_ID_HEAD
 62: sd      t0, ApiRoute_id_kind(s7)
-    mv      a0, s7
+    li      t1, API_ID_SLOT                 # a slot: the replay may come
+    bne     t0, t1, 621f
+    li      t1, 1
+    STQ     t1, s8, ApiView_look_replay
+621: mv     a0, s7
     mv      a1, s8
     call    node_api_state
     mv      a2, a0
-    bnez    a0, 80f
+    li      t1, 1
+    bne     a0, t1, 622f
+    j       698b
+622: bnez   a0, 80f
     ld      t0, ApiRoute_id_slot(s7)        # brought to the first slot
     sd      t0, ApiView_head_slot(s8)
     mv      a0, s8
@@ -5324,10 +5342,12 @@ LOCAL_FUNCTION node_api_lookup
     li      a2, 64
     call    lantern_copy
     ld      t0, ApiRoute_op(s3)
+    li      t1, API_OP_GET_ATTESTER_DUTIES  # and getAttesterDuties'
+    beq     t0, t1, 21f
     addi    t0, t0, -API_OP_GET_STATE_VALIDATORS
     li      t1, API_OP_GET_EPOCH_COMMITTEES - API_OP_GET_STATE_VALIDATORS
     bgtu    t0, t1, 2f
-    mv      a0, s3
+21: mv      a0, s3
     call    node_api_ids
     sd      a0, NodeApi_data(s4)
     beqz    a0, 2f
@@ -5475,7 +5495,12 @@ LOCAL_FUNCTION node_api_rerun
     ld      t0, (L + 128)(sp)
     sd      t0, (NodeApi_cursor + API_REPLAY_SLOT)(s3)
     j       90f
-70: sd      a2, (L + 136)(sp)
+70: li      t0, API_OP_GET_ATTESTER_DUTIES  # getAttesterDuties with no state: 400
+    bne     s10, t0, 707f
+    li      t0, 404
+    bne     a2, t0, 707f
+    li      a2, 400
+707: sd     a2, (L + 136)(sp)
     andi    t0, s7, ~API_STREAM_OWN         # the entry ends; it owns no bytes
     sd      t0, NodeApi_flags(s3)
     mv      a0, s3

@@ -11045,6 +11045,7 @@ static void api_headers_checks(fc_node *n, tv parts, case_block **chain, size_t 
  */
 static unsigned long api_lookups;
 static unsigned long api_archive_states; /* old states the archive checks asked */
+static unsigned long api_duty_epochs;    /* duties the lookup checks asked */
 static void api_lookup_checks(fc_node *n, tv parts, const char **why) {
     struct node_shell *s = n->shell;
     case_block *blocks = NULL, **chain = NULL;
@@ -11157,6 +11158,37 @@ static void api_lookup_checks(fc_node *n, tv parts, const char **why) {
             }
             free(g);
             if (!*why) *why = api_clean(s);
+        }
+    }
+    /* getProposerDuties and getAttesterDuties of validator 0 for each epoch from the anchor's to the head's: 200, an
+       item for each slot of the epoch and one item (below F's slot by the replay); 503 while the node syncs */
+    for (uint64_t ep = (anchor_slot + SLOTS_PER_EPOCH_RUNNER - 1) / SLOTS_PER_EPOCH_RUNNER; ep <= head_slot / SLOTS_PER_EPOCH_RUNNER && !*why; ep++) {
+        for (int kind = 0; kind < 2 && !*why; kind++) {
+            uint64_t glen = 0, items = 0;
+            if (kind == 0)
+                snprintf(req, sizeof req, "GET /eth/v1/validator/duties/proposer/%llu HTTP/1.1\r\nHost: lantern\r\n\r\n", (unsigned long long)ep);
+            else
+                snprintf(req, sizeof req, "POST /eth/v1/validator/duties/attester/%llu HTTP/1.1\r\nHost: lantern\r\nContent-Type: application/json\r\n"
+                         "Content-Length: 5\r\n\r\n[\"0\"]", (unsigned long long)ep);
+            s->api.room = 0;
+            shell_api_ask(n, (const uint8_t *)req, strlen(req), conn++, why);
+            uint8_t *g = *why ? NULL : api_normalize(s, &glen, why);
+            const char *end = g ? find_bytes((const char *)g, glen, "\r\n\r\n") : NULL;
+            if (*why) break;
+            if (end && glen >= 13 && !memcmp(g, "HTTP/1.1 503 ", 13)) {
+                free(g);
+                *why = api_clean(s);
+                continue;
+            }
+            for (const char *at = end; at && (at = find_bytes(at + 1, glen - (uint64_t)(at + 1 - (const char *)g), "\"slot\":\"")); ) items++;
+            if (!end || glen < 17 || memcmp(g, "HTTP/1.1 200 OK\r\n", 17) || items != (kind ? 1 : SLOTS_PER_EPOCH_RUNNER)) {
+                snprintf(msg, sizeof msg, "API %s of epoch %llu: not 200 with %u items", kind ? "getAttesterDuties" : "getProposerDuties",
+                         (unsigned long long)ep, kind ? 1u : (unsigned)SLOTS_PER_EPOCH_RUNNER);
+                *why = msg;
+            }
+            free(g);
+            if (!*why) *why = api_clean(s);
+            api_duty_epochs++;
         }
     }
     tv steps = tv_get(parts, "steps");
@@ -12042,6 +12074,7 @@ int main(int argc, char **argv) {
     if (custody_raises) printf("NOTE: %lu custody raises checked\n", custody_raises);
 #endif
     if (node_recons) printf("NOTE: %lu blocks of columns rebuilt from half of them\n", node_recons);
+    if (api_duty_epochs) printf("NOTE: %lu duties of epochs from the anchor's to the head's asked\n", api_duty_epochs);
     if (node_db_archives) printf("NOTE: %lu state records archived, %lu states loaded from them, %lu old states asked after them\n", node_db_archives, node_db_loads, api_archive_states);
     printf("%s: %d passed, %d failed\n", failures ? "FAIL" : "PASS", passes, failures);
     return failures ? 1 : 0;

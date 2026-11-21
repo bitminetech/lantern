@@ -3,7 +3,7 @@
 Usage: python3 tests/app/differential.py LANTERN_URL PEER_URL CLIENT
 
 The block: the peer's finalized block (getBlockHeader of finalized), root R, its state root S, and
-the finalized epoch E. The duties: of the epoch N of the peer's head slot - 2, and N + 1. The
+the finalized epoch E. The duties: of the epoch N of the peer's head slot - 2, N + 1 and E. The
 rewards: of the block B of the peer's chain at or below its head slot - 4, and of the attestations
 of epoch N - 2; both nodes keep their states. Each read names R, S, E, N or B, so both nodes answer
 of the same chain. The check of a read:
@@ -137,6 +137,8 @@ READS = [
     ("getAttesterDuties", "/eth/v1/validator/duties/attester/%d" % N, validators, False),
     ("getAttesterDuties of the next epoch", "/eth/v1/validator/duties/attester/%d" % (N + 1), validators, False),
     ("getSyncCommitteeDuties", "/eth/v1/validator/duties/sync/%d" % N, validators, False),
+    ("getProposerDuties of the finalized epoch", "/eth/v1/validator/duties/proposer/%d" % E, None, False),
+    ("getAttesterDuties of the finalized epoch", "/eth/v1/validator/duties/attester/%d" % E, validators, False),
     ("getLightClientBootstrap", "/eth/v1/beacon/light_client/bootstrap/" + R, None, False),
 ]
 
