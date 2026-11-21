@@ -402,6 +402,35 @@ LOCAL_FUNCTION app_line_end
 9:  UNFRAME 32
 END_FUNCTION app_line_end
 
+/* Debug only: DEBUG work <kind> result <event room> result <scratch room> result <tries>. */
+LOCAL_FUNCTION app_log_retry
+    FRAME 16
+    bl      app_line_start
+    ADDRESS x0, app_m_log_work
+    mov     x1, #app_m_log_work_len
+    bl      app_line_text
+    mov     x0, x26
+    bl      app_line_u64
+    ADDRESS x0, app_m_log_result
+    mov     x1, #app_m_log_result_len
+    bl      app_line_text
+    ldr     x0, [x19, #(APP_WORK_EVENT + 8)]
+    bl      app_line_u64
+    ADDRESS x0, app_m_log_result
+    mov     x1, #app_m_log_result_len
+    bl      app_line_text
+    ldr     x0, [x19, #(APP_SCRATCH + 8)]
+    bl      app_line_u64
+    ADDRESS x0, app_m_log_result
+    mov     x1, #app_m_log_result_len
+    bl      app_line_text
+    mov     x0, x25
+    bl      app_line_u64
+    mov     x0, #APP_LOG_DEBUG
+    bl      app_line_end
+    UNFRAME 16
+END_FUNCTION app_log_retry
+
 /*
  * L1: the log lines of a work that ran (app.md, the log): DEBUG work <kind> result <n>; for a
  * block's import, INFO block <slot> imported, <a> attestations, or WARN block <slot> not imported:
@@ -1596,6 +1625,7 @@ LOCAL_FUNCTION app_work
     cmp     x0, #LANTERN_BUFFER_TOO_SMALL
     b.ne    91f
     add     x25, x25, #1                    /* more room: as the runner's shell */
+    bl      app_log_retry                   /* debug only: the retry */
     cmp     x25, #APP_WORK_TRIES
     b.hs    91f
     cmp     x26, #NODE_WORK_SERVE           /* SERVE, NEW_PAYLOAD, FORKCHOICE: a larger event */
