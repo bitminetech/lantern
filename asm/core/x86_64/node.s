@@ -1553,7 +1553,11 @@ LOCAL_FUNCTION node_prepare_go
     xor     %ecx, %ecx
     xor     %r8d, %r8d
     call    node_work
-6:  mov     Node_engine_id(%rbx), %r9       # the work, of the call's id
+6:  mov     $API_TOPIC_PAYLOAD_ATTRIBUTES, %edi  # target: 1 forced, + 2 with an entry of payload_attributes
+    call    node_api_subscribed
+    shl     $1, %rax
+    or      %rax, S9(%rsp)
+    mov     Node_engine_id(%rbx), %r9       # the work, of the call's id
     incq    Node_engine_id(%rbx)
     mov     $NODE_WORK_PREPARE_PAYLOAD, %edi
     mov     %r13, %rsi
@@ -4421,6 +4425,15 @@ LOCAL_FUNCTION node_event
     mov     NodeEvent_index(%r12), %rdx
     mov     %rdx, Node_payload_proposer(%rbx)
     movq    $NODE_PAYLOAD_SENT, Node_payload_status(%rbx)
+    testq   $2, NodeAction_target(%r12)     # its payload_attributes text, after the request: to the topic's entries
+    jz      851f
+    mov     NodeEvent_chunk(%r12), %rax
+    add     $NodeEvent_chunk, %rax
+    cmp     (%r12), %rax
+    jae     851f
+    lea     (%r12,%rax), %rdi
+    mov     $API_TOPIC_PAYLOAD_ATTRIBUTES, %esi
+    call    node_api_events
 851: mov    (NodeEvent_chunk + 16)(%r12), %r13
     lea     (48 + 7)(%r13), %rsi
     and     $-8, %rsi
@@ -9611,7 +9624,39 @@ FUNCTION lantern_node_run
     add     $NodeEvent_chunk, %rax
     mov     S8(%rsp), %rcx
     mov     %rax, (%rcx)
-    xor     %eax, %eax
+    cmpq    $NODE_WORK_PREPARE_PAYLOAD, NodeAction_work_kind(%r12)  # a preparation with 2 in target: the payload_attributes text after it
+    jne     841f
+    testq   $2, NodeAction_target(%r12)
+    jz      841f
+    lea     (%rcx,%rax), %rdi
+    mov     S9(%rsp), %rdx
+    sub     %rax, %rdx
+    and     $-8, %rdx
+    cmp     $64, %rdx
+    jb      842f
+    mov     %rdx, (%rdi)
+    movq    $24, 8(%rdi)
+    movq    $0, 16(%rdi)
+    mov     (L + 32)(%rsp), %rsi
+    mov     %r14, %rdx
+    mov     NodeEvent_index(%rcx), %rcx
+    lea     Node_payload_root(%rbx), %r8
+    mov     S7(%rsp), %r10
+    call    api_payload_event_text
+    test    %rax, %rax
+    jnz     842f
+    mov     S8(%rsp), %rcx
+    mov     (%rcx), %rax
+    lea     (%rcx,%rax), %rdx
+    mov     16(%rdx), %r8
+    add     $(24 + 7), %r8
+    and     $-8, %r8
+    mov     %r8, (%rdx)
+    add     %r8, %rax
+    mov     %rax, (%rcx)
+841: xor    %eax, %eax
+    LEAVE 192
+842: mov    $LANTERN_BUFFER_TOO_SMALL, %eax
     LEAVE 192
 85: mov     S10(%rsp), %rcx                 # a status, with the scratch's size back
     mov     %rcx, (%r15)
@@ -9630,8 +9675,9 @@ FUNCTION lantern_node_run
     LEAVE 192
 830: cmp    $NODE_WORK_PREPARE_PAYLOAD, %rax
     jne     890f
-    test    %r13, %r13                      # PREPARE_PAYLOAD: of the fork of the state's slot
+    test    %r13, %r13                      # PREPARE_PAYLOAD: of the fork of the state's slot; the state at L+32
     jz      837f
+    mov     %r13, (L + 32)(%rsp)
     mov     NODE_STATE_SLOT(%r13), %rdi
     lea     Node_config(%rbx), %rsi
     call    node_fork
@@ -9667,8 +9713,8 @@ FUNCTION lantern_node_run
     jmp     833b
 834: mov    %rsi, (L + 24)(%rsp)
     jmp     8336f
-8335: cmpq  $0, NodeAction_target(%r12)     # forced: a fee recipient of zero bytes, at L+40
-    je      836f
+8335: testq $1, NodeAction_target(%r12)    # forced (1): a fee recipient of zero bytes, at L+40
+    jz      836f
     xorps   %xmm0, %xmm0
     movdqu  %xmm0, (L + 40)(%rsp)
     movq    $0, (L + 56)(%rsp)

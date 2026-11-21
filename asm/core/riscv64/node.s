@@ -1583,7 +1583,11 @@ LOCAL_FUNCTION node_prepare_go
     li      a4, 0
     mv      a5, s8
     call    node_work
-6:  ld      a5, Node_engine_id(s1)          # the work, of the call's id
+6:  li      a0, API_TOPIC_PAYLOAD_ATTRIBUTES  # target: 1 forced, + 2 with an entry of payload_attributes
+    call    node_api_subscribed
+    slli    a0, a0, 1
+    or      s7, s7, a0
+    ld      a5, Node_engine_id(s1)          # the work, of the call's id
     addi    t0, a5, 1
     sd      t0, Node_engine_id(s1)
     li      a0, NODE_WORK_PREPARE_PAYLOAD
@@ -4446,6 +4450,16 @@ LOCAL_FUNCTION node_event
     STQ     t2, s1, Node_payload_proposer
     li      t2, NODE_PAYLOAD_SENT
     STQ     t2, s1, Node_payload_status
+    ld      t2, NodeAction_target(s3)       # its payload_attributes text, after the request: to the topic's entries
+    andi    t2, t2, 2
+    beqz    t2, 851f
+    ld      t0, NodeEvent_chunk(s3)
+    addi    t0, t0, NodeEvent_chunk
+    ld      t1, 0(s3)
+    bgeu    t0, t1, 851f
+    add     a0, s3, t0
+    li      a1, API_TOPIC_PAYLOAD_ATTRIBUTES
+    call    node_api_events
 851: ld     s7, (NodeEvent_chunk + 16)(s3)
     addi    a1, s7, 48 + 7
     andi    a1, a1, -8
@@ -9600,7 +9614,40 @@ FUNCTION lantern_node_run
     sd      t0, 0(s9)
     addi    t0, t0, NodeEvent_chunk
     sd      t0, 0(s7)
-    li      a0, LANTERN_OK
+    ld      t1, NodeAction_work_kind(s3)    # a preparation with 2 in target: the payload_attributes text after it
+    li      t2, NODE_WORK_PREPARE_PAYLOAD
+    bne     t1, t2, 841f
+    ld      t1, NodeAction_target(s3)
+    andi    t1, t1, 2
+    beqz    t1, 841f
+    add     a0, s7, t0
+    sub     t1, s8, t0
+    andi    t1, t1, -8
+    li      t2, 64
+    bltu    t1, t2, 842f
+    sd      t1, 0(a0)
+    li      t2, 24
+    sd      t2, 8(a0)
+    sd      zero, 16(a0)
+    ld      a1, (L + 32)(sp)
+    mv      a2, s5
+    ld      a3, NodeEvent_index(s7)
+    li      t0, Node_payload_root
+    add     a4, s1, t0
+    mv      t6, s10
+    call    api_payload_event_text
+    bnez    a0, 842f
+    ld      t0, 0(s7)
+    add     t1, s7, t0
+    ld      t2, 16(t1)
+    addi    t2, t2, 24 + 7
+    andi    t2, t2, -8
+    sd      t2, 0(t1)
+    add     t0, t0, t2
+    sd      t0, 0(s7)
+841: li     a0, LANTERN_OK
+    LEAVE 192
+842: li     a0, LANTERN_BUFFER_TOO_SMALL
     LEAVE 192
 85: sd      s9, 0(s6)                       # a status, with the scratch's size back
     LEAVE 192
@@ -9617,7 +9664,8 @@ FUNCTION lantern_node_run
     LEAVE 192
 830: li     t1, NODE_WORK_PREPARE_PAYLOAD
     bne     t0, t1, 890f
-    beqz    s4, 837f                        # PREPARE_PAYLOAD: of the fork of the state's slot
+    beqz    s4, 837f                        # PREPARE_PAYLOAD: of the fork of the state's slot; the state at L+32
+    sd      s4, (L + 32)(sp)
     ld      a0, NODE_STATE_SLOT(s4)
     addi    a1, s1, Node_config
     call    node_fork
@@ -9649,7 +9697,8 @@ FUNCTION lantern_node_run
     j       833b
 834: sd     t2, (L + 24)(sp)
     j       8336f
-8335: ld    t0, NodeAction_target(s3)       # forced: a fee recipient of zero bytes, at L+40
+8335: ld    t0, NodeAction_target(s3)       # forced (1): a fee recipient of zero bytes, at L+40
+    andi    t0, t0, 1
     beqz    t0, 836f
     sd      zero, (L + 40)(sp)
     sd      zero, (L + 48)(sp)

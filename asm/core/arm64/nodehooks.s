@@ -652,6 +652,31 @@ SPEC_FUNCTION node_attester_duties
 SPEC_END node_attester_duties
 
 /*
+ * (state, out) -> status: the block number and hash of the state's latest_execution_payload_header
+ * (node.md, lantern_node_payload_parent).
+ */
+SPEC_FUNCTION node_payload_parent
+    ENTER 0
+.if FORK < FORK_BELLATRIX
+    mov     x0, #LANTERN_INVALID_EVENT
+.else
+    mov     x9, x1
+    LDQ     x10, x0, BeaconState_latest_execution_payload_header   /* the header value in its part */
+    add     x11, x0, x10
+    MOVQ    x10, ExecutionPayloadHeader_block_number
+    ldr     x10, [x11, x10]
+    str     x10, [x9]
+    MOVQ    x10, ExecutionPayloadHeader_block_hash
+    add     x1, x11, x10
+    add     x0, x9, #8
+    mov     x2, #32
+    bl      lantern_copy
+    mov     x0, #LANTERN_OK
+.endif
+    LEAVE 0
+SPEC_END node_payload_parent
+
+/*
  * (ssz, scratch, out) -> status: the block root of a sidecar's SSZ bytes, hash_tree_root of its
  * signed_block_header.message (node.md, lantern_node_sidecar_root). x19 the bytes, x20 their count,
  * x21 scratch, x22 out.

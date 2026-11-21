@@ -6068,6 +6068,123 @@ LOCAL_FUNCTION api_op_event_text
 END_FUNCTION api_op_event_text
 
 /*
+ * (out rdi, state rsi, attributes rdx, proposer rcx, head root r8; the fork in r10) -> rax: the
+ * text of the payload_attributes event (beacon-api.md, eventstream) of a preparation: event:
+ * payload_attributes LF data: {"version":…,"data":{…}} LF LF, into the ByteList out, its count
+ * set; LANTERN_OK or LANTERN_BUFFER_TOO_SMALL. The writer's registers; rbx out, rbp the attributes,
+ * S7 the state, S8 the proposer, S9 the head root, S10 the fork. Locals: L the parent's block
+ * number and hash (40), L+40 a withdrawal's index, L+48 the withdrawal.
+ */
+LOCAL_FUNCTION api_payload_event_text
+    ENTER 64
+    mov     %rdi, %rbx
+    mov     %rsi, S7(%rsp)
+    mov     %rdx, %rbp
+    mov     %rcx, S8(%rsp)
+    mov     %r8, S9(%rsp)
+    mov     %r10, S10(%rsp)
+    mov     %rsi, %rdi                      # the parent's block number and hash
+    lea     L(%rsp), %rsi
+    FORK_CALL node_payload_parent
+    test    %rax, %rax
+    jnz     9f
+    mov     $1, %r13d
+    xor     %r15d, %r15d
+    lea     24(%rbx), %r12
+    mov     (%rbx), %r14
+    add     %rbx, %r14
+    API_LIT api_ev_event
+    API_LIT api_ev_t_payload
+    API_LIT api_ev_data
+    API_LIT api_pa_version
+    mov     S10(%rsp), %rdi
+    call    api_fork_name
+    API_LIT api_pa_proposer
+    mov     S8(%rsp), %rdi
+    call    api_qdec
+    API_LIT api_pa_slot
+    mov     S7(%rsp), %rax
+    mov     NODE_STATE_SLOT(%rax), %rdi
+    call    api_qdec
+    API_LIT api_pa_number
+    mov     L(%rsp), %rdi
+    call    api_qdec
+    API_LIT api_pa_root
+    mov     S9(%rsp), %rdi
+    mov     $32, %esi
+    call    api_qhex
+    API_LIT api_pa_hash
+    lea     (L + 8)(%rsp), %rdi
+    mov     $32, %esi
+    call    api_qhex
+    # the PayloadAttributes (engine-api.md)
+    API_LIT api_pa_time
+    mov     (%rbp), %rdi
+    call    api_qdec
+    API_LIT api_pa_randao
+    lea     8(%rbp), %rdi
+    mov     $32, %esi
+    call    api_qhex
+    API_LIT api_pa_fee
+    lea     40(%rbp), %rdi
+    mov     $20, %esi
+    call    api_qhex
+    cmpq    $FORK_CAPELLA, S10(%rsp)        # from capella, the withdrawals: each 44 SSZ bytes
+    jb      3f
+    API_LIT api_pa_withdrawals
+    movq    $0, (L + 40)(%rsp)
+1:  mov     (L + 40)(%rsp), %rax
+    cmp     96(%rbp), %rax
+    jae     2f
+    test    %rax, %rax
+    jz      11f
+    API_LIT api_p_comma
+11: mov     (L + 40)(%rsp), %rax
+    imul    $44, %rax, %rax
+    lea     104(%rbp,%rax), %rax
+    mov     %rax, (L + 48)(%rsp)
+    API_LIT api_pa_index
+    mov     (L + 48)(%rsp), %rax
+    mov     (%rax), %rdi
+    call    api_qdec
+    API_LIT api_u_index
+    mov     (L + 48)(%rsp), %rax
+    mov     8(%rax), %rdi
+    call    api_qdec
+    API_LIT api_pa_address
+    mov     (L + 48)(%rsp), %rdi
+    add     $16, %rdi
+    mov     $20, %esi
+    call    api_qhex
+    API_LIT api_pa_amount
+    mov     (L + 48)(%rsp), %rax
+    mov     36(%rax), %rdi
+    call    api_qdec
+    API_LIT api_end1
+    incq    (L + 40)(%rsp)
+    jmp     1b
+2:  API_LIT api_p_rbracket
+3:  cmpq    $FORK_DENEB, S10(%rsp)          # from deneb, the parent beacon block root
+    jb      4f
+    API_LIT api_pa_parent
+    lea     64(%rbp), %rdi
+    mov     $32, %esi
+    call    api_qhex
+4:  API_LIT api_pa_end
+    test    %r15, %r15
+    jnz     9f
+    lea     24(%rbx), %rax
+    mov     %r12, %rcx
+    sub     %rax, %rcx
+    movq    $24, 8(%rbx)
+    mov     %rcx, 16(%rbx)
+    xor     %eax, %eax
+    LEAVE 64
+9:  mov     $LANTERN_BUFFER_TOO_SMALL, %eax
+    LEAVE 64
+END_FUNCTION api_payload_event_text
+
+/*
  * (out rdi, topic rsi, ssz rdx, scratch rcx; the fork in r10) -> rax: the text of the event of a
  * sidecar topic (beacon-api.md, eventstream): event: <topic> LF data: {"block_root":…,"index":…,
  * "slot":…,…} LF LF, from the sidecar's bytes, into the ByteList out, its count set; LANTERN_OK,
