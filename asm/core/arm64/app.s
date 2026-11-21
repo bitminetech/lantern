@@ -1541,6 +1541,8 @@ LOCAL_FUNCTION app_work
     b.eq    2f
     cmp     x26, #NODE_WORK_PRODUCE_BLOCK
     b.eq    2f
+    cmp     x26, #NODE_WORK_PRODUCE_BID
+    b.eq    2f
     cmp     x26, #NODE_WORK_PUBLISH_DECODE
     b.eq    2f
     cmp     x26, #NODE_WORK_PUBLISH_SIDECAR

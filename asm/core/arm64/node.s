@@ -4629,7 +4629,10 @@ LOCAL_FUNCTION node_event
 707: cmp    x9, #NODE_WORK_PRODUCE_CHECK       /* the works of block production: their entry goes on */
     ccmp    x9, #NODE_WORK_PRODUCE_FOLD, #4, ne
     ccmp    x9, #NODE_WORK_PRODUCE_BLOCK, #4, ne
+    b.eq    7071f
+    cmp     x9, #NODE_WORK_PRODUCE_BID
     b.ne    708f
+7071:
     mov     x0, x21
     bl      node_produce_done
     LEAVE 48
@@ -9052,6 +9055,7 @@ FUNCTION lantern_node_step
     bl      node_shed                       /* the post-states the node can rebuild go */
     bl      node_api_head_events            /* the head and finalized_checkpoint events, at a quiet point */
     bl      node_lc_due                     /* the light client updates due on gossip */
+    bl      node_produce_due                /* the produceBlockV3 entries whose bid is late */
     bl      node_backfill_link              /* the backfill's blocks of the chain join the Db */
     bl      node_drop_sidecars              /* the sidecars the node no longer serves go */
     str     xzr, [sp, #(L + 112)]
@@ -9858,7 +9862,7 @@ FUNCTION lantern_node_run
     add     x1, x1, #NodeApi_cursor
     mov     x0, x22
     mov     x2, x24
-    add     x3, x25, #NodeEvent_index
+    add     x3, x25, #NodeEvent_root        /* the proposer, then the health */
     FORK_CALL node_produce_check
     cmp     x0, #LANTERN_BUFFER_TOO_SMALL
     b.eq    8401f
@@ -9964,7 +9968,7 @@ FUNCTION lantern_node_run
     mov     x0, #LANTERN_OK
     LEAVE 192
 8430: cmp   x9, #NODE_WORK_PRODUCE_BLOCK
-    b.ne    8450f
+    b.ne    8445f
     cbz     x22, 837b                       /* PRODUCE_BLOCK: lantern_node_produce_block, as a ByteList at NodeEvent_chunk */
     cbz     x23, 837b
     cmp     x26, #(NodeEvent_chunk + 24)
@@ -9986,14 +9990,17 @@ FUNCTION lantern_node_run
     add     x1, x19, #Node_config
     bl      node_fork
     mov     x15, x0
-    add     x9, x19, #Node_config           /* ProduceBlock at L+96: request, config, result, values */
+    add     x9, x19, #Node_config           /* ProduceParams at L+96: request, config, result, values, bid, blinded */
     ldr     x10, [sp, #(L + 32)]
     stp     x10, x9, [sp, #(L + 96)]
     ldr     x9, [sp, #(L + 72)]
     add     x10, x25, #NodeEvent_root
     stp     x9, x10, [sp, #(L + 112)]
     add     x9, x25, #NodeEvent_index
-    str     x9, [sp, #(L + 128)]
+    ldr     x10, [sp, #(L + 80)]            /* the bid: state_c */
+    stp     x9, x10, [sp, #(L + 128)]
+    add     x9, x25, #NodeEvent_checkpoint
+    str     x9, [sp, #(L + 144)]
     mov     x0, x22
     mov     x1, x23
     add     x2, sp, #(L + 96)
@@ -10015,6 +10022,52 @@ FUNCTION lantern_node_run
     str     x10, [x25]
     mov     x0, #LANTERN_OK
 8449: LEAVE 192
+8445: cmp   x9, #NODE_WORK_PRODUCE_BID
+    b.ne    8450f
+    cbz     x22, 837b                       /* PRODUCE_BID: the bid's JSON of the answer, lantern_node_produce_bid as a ByteList at NodeEvent_chunk */
+    cbz     x23, 837b
+    cmp     x26, #(NodeEvent_chunk + 24)
+    b.lo    8419b
+    add     x9, x25, #NodeEvent_chunk
+    sub     x10, x26, #NodeEvent_chunk
+    mov     x11, #24
+    stp     x10, x11, [x9]
+    str     xzr, [x9, #16]
+    ldr     x9, [x21, #NodeAction_target]   /* ProduceParams at L+96: the entry's cursor, the config */
+    PART    x10, x11, x19, Node_api
+    cmp     x9, x11
+    b.hs    837b
+    mov     x11, #NodeApi__mem
+    madd    x9, x9, x11, x10
+    add     x9, x9, #NodeApi_cursor
+    add     x10, x19, #Node_config
+    stp     x9, x10, [sp, #(L + 96)]
+    ldr     x0, [x22, #NODE_STATE_SLOT]
+    add     x1, x19, #Node_config
+    bl      node_fork
+    str     x0, [sp, #(L + 152)]
+    ldr     x9, [x24]                       /* the scratch's size, back after the call */
+    str     x9, [sp, #(L + 160)]
+    mov     x2, x0
+    mov     x0, x23
+    mov     x1, x24
+    bl      node_bid_data
+    cbnz    x0, 8446f
+    add     x9, sp, #(L + 168)              /* a ByteList view of the data's text */
+    sub     x10, x1, x9
+    add     x11, x10, x2
+    stp     x11, x10, [x9]
+    str     x2, [x9, #16]
+    ldr     x15, [sp, #(L + 152)]
+    mov     x0, x22
+    add     x1, sp, #(L + 168)
+    add     x2, sp, #(L + 96)
+    mov     x3, x24
+    add     x4, x25, #NodeEvent_chunk
+    FORK_CALL node_produce_bid
+8446: ldr   x9, [sp, #(L + 160)]
+    str     x9, [x24]
+    b       8440b
 8450: cmp   x9, #NODE_WORK_PUBLISH_DECODE
     b.ne    8460f
     cbz     x23, 837b                       /* PUBLISH_DECODE: lantern_node_publish_decode, the block as a ByteList at NodeEvent_chunk */

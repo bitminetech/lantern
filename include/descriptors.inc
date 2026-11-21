@@ -349,6 +349,7 @@
     .if FORK >= FORK_BELLATRIX
     \m SignedBlindedBeaconBlock
     \m BlindedBeaconBlock
+    \m BlindedBeaconBlockBody
     \m SignedBuilderBid
     \m BuilderBid
     .endif

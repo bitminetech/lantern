@@ -2664,7 +2664,7 @@ enum { WORK_IMPORT_BLOCK = 1, WORK_JUSTIFIED_STATE, WORK_TARGET_STATE, WORK_ATTE
        WORK_BLOCK_ATTESTATION, WORK_BLOCK_SLASHING, WORK_GOSSIP_VOTE, WORK_API_ENCODE, WORK_API_CHUNK, WORK_API_LOOKUP, WORK_API_EVENT,
        WORK_API_SUBMIT, WORK_POOL_CHECK, WORK_PREPARE_PAYLOAD, WORK_PRODUCE_CHECK, WORK_GET_PAYLOAD, WORK_PRODUCE_FOLD,
        WORK_PRODUCE_BLOCK, WORK_PUBLISH_DECODE, WORK_PUBLISH_SIDECARS, WORK_PUBLISH_CHECK, WORK_PUBLISH_SIDECAR,
-       WORK_LC_BLOCK, WORK_LC_HEAD, WORK_LC_SERVE, WORK_LC_GOSSIP, WORK_LC_PUBLISH };
+       WORK_LC_BLOCK, WORK_LC_HEAD, WORK_LC_SERVE, WORK_LC_GOSSIP, WORK_LC_PUBLISH, WORK_PRODUCE_BID };
 #define EV_API_BYTES (128 + 616) /* NodeEvent_api_bytes: the chunk's ByteList in the WORK_DONE of an API_CHUNK */
 #define NODE_API_CHUNK 65536
 #define NODE_API_PART (728 + CONFIG_SIZE + 936) /* Node_api: the PartRef of the NodeApi entries */
@@ -2735,6 +2735,8 @@ struct node_shell {
     uint8_t anchor[288], ncfg[CONFIG_SIZE]; /* the node's NodeAnchor and config, for a new node of the same start */
     uint8_t *bld;                           /* with NODE_FLAG_BUILDER: the requests of the node's builder calls, as they came */
     uint64_t bld_len, bld_cap, bld_calls;
+    tv bids;                                /* node-produce: the case's answers to the getHeader calls, or NULL */
+    uint64_t nbids, bid_calls;              /* their count; the getHeader calls so far */
     uint64_t flags, db_states;              /* its flags; the NODE_ACT_DB_STATE actions */
     uint64_t drops[16];                     /* the NODE_ACT_DB_DROP actions: bit 63 for sidecars, the segment */
     size_t ndrops;
@@ -3223,7 +3225,7 @@ static void shell_work(fc_node *n, const uint8_t *work, const char **why) {
             *why = "lantern_node_run: POOL_CHECK, PRODUCE_CHECK or PRODUCE_FOLD asks for room";
         } else if (kind == WORK_SERVE || kind == WORK_LC_SERVE || kind == WORK_LC_PUBLISH || kind == WORK_NEW_PAYLOAD || kind == WORK_FORKCHOICE || kind == WORK_API_ENCODE ||
             kind == WORK_API_EVENT || kind == WORK_PREPARE_PAYLOAD || kind == WORK_GET_PAYLOAD || kind == WORK_PRODUCE_BLOCK ||
-            kind == WORK_PUBLISH_DECODE || kind == WORK_PUBLISH_SIDECAR) {
+            kind == WORK_PRODUCE_BID || kind == WORK_PUBLISH_DECODE || kind == WORK_PUBLISH_SIDECAR) {
             free(ev);
             ev_size *= 4;
             ev = buffer(ev_size);
@@ -3284,7 +3286,7 @@ static void shell_work(fc_node *n, const uint8_t *work, const char **why) {
                   memcmp(ev + 16, work + 16, 56) ||
                   (kind != WORK_SERVE && kind != WORK_LC_SERVE && kind != WORK_LC_PUBLISH && kind != WORK_NEW_PAYLOAD && kind != WORK_FORKCHOICE && kind != WORK_API_ENCODE &&
                    kind != WORK_API_CHUNK && kind != WORK_API_EVENT && kind != WORK_API_SUBMIT && kind != WORK_PREPARE_PAYLOAD &&
-                   kind != WORK_GET_PAYLOAD && kind != WORK_PRODUCE_BLOCK && kind != WORK_PUBLISH_DECODE && kind != WORK_PUBLISH_CHECK &&
+                   kind != WORK_GET_PAYLOAD && kind != WORK_PRODUCE_BLOCK && kind != WORK_PRODUCE_BID && kind != WORK_PUBLISH_DECODE && kind != WORK_PUBLISH_CHECK &&
                    kind != WORK_PUBLISH_SIDECAR && esize != EV_WORK_DONE_SIZE)))
         *why = "lantern_node_run: the event is not the WORK_DONE of the work";
     if (!*why) {
@@ -3480,7 +3482,17 @@ static void shell_step(fc_node *n, const char **why) {
                 memcpy(s->bld + s->bld_len, act + 48, (size_t)blen);
                 s->bld_len += blen;
                 s->bld_calls++;
-                shell_event(s, EV_BUILDER, rd64(act + 16), (const uint8_t *)ok, sizeof ok - 1);
+                static const char hdr[] = "GET /eth/v1/builder/header/";
+                if (s->bids && s->nbids && blen >= sizeof hdr - 1 && !memcmp(act + 48, hdr, sizeof hdr - 1)) {
+                    /* getHeader: the case's k-th answer, its last past them; an empty one is no answer */
+                    tv b = s->bids + 9;
+                    for (uint64_t k = 0; k < s->bid_calls && k + 1 < s->nbids; k++) b = tv_skip(b);
+                    s->bid_calls++;
+                    uint64_t alen;
+                    const uint8_t *ans = tv_bytes(b, &alen);
+                    if (alen) shell_event(s, EV_BUILDER, rd64(act + 16), ans, alen);
+                }
+                else shell_event(s, EV_BUILDER, rd64(act + 16), (const uint8_t *)ok, sizeof ok - 1);
             }
         }
         else if (kind == ACT_DISCV5 && size >= 48 && rd64(act + 24) == size - 24 && rd64(act + 32) == 24 && rd64(act + 40) <= size - 48)
@@ -8920,6 +8932,27 @@ static const char *publish_sidecars_held(struct node_shell *s, tv parts, tv sc) 
 }
 
 /*
+ * The closes of a node-produce case: the request, its connection closed after each number of the
+ * node's steps below closes; after each the node must hold no entry and no buffer of it.
+ */
+static void produce_closes(fc_node *n, const uint8_t *req, uint64_t rlen, uint64_t closes, const char **why) {
+    struct node_shell *s = n->shell;
+    for (uint64_t c = 0; c < closes && !*why; c++) {
+        size_t nbufs = s->nbufs;
+        uint64_t held = node_held_ids(s->node);
+        uint64_t took = shell_api_ask_closing(n, req, rlen, 1000 + c, c, why);
+        if (!*why && c + 1 == closes && took == c) *why = "the case's closes end before the node settles";
+        if (!*why) *why = api_clean(s);
+        if (!*why && s->nbufs - nbufs != node_held_ids(s->node) - held) *why = "a request whose connection closed leaves buffers";
+        if (*why) {
+            static char msg[256];
+            snprintf(msg, sizeof msg, "the connection closed after %llu steps: %s", (unsigned long long)c, *why);
+            *why = msg;
+        }
+    }
+}
+
+/*
  * node-produce and node-publish: lantern's cases of produceBlockV3 and publishBlockV2 (node.md, Test
  * vectors). Each request after its tick; the runner's buffers grow only by those the node holds.
  */
@@ -8936,7 +8969,16 @@ static void run_node_produce(const char *file, const char *dir, case_file *f) {
         if (skip_case(parts)) continue;
         fc_node n;
         uint8_t *anchor_block;
+        tv bflag = tv_get(parts, "builder");
+        int builder = bflag && tv_u64(bflag);
+        force_builder = builder; /* the builder cases: the runner is the node's builder, its bids the case's */
         struct node_shell *s = shell_open(&n, parts, &anchor_block, &why);
+        force_builder = 0;
+        if (builder) {
+            s->bids = tv_get(parts, "bids");
+            s->nbids = s->bids ? rd64(s->bids + 1) : 0;
+            s->bid_calls = s->bld_len = s->bld_calls = 0;
+        }
         tv reqs = tv_get(parts, "requests"), resps = tv_get(parts, "responses");
         n.produce = 1;
         n.pid = tv_bytes(tv_get(parts, "payload_id"), &plen);
@@ -8955,41 +8997,32 @@ static void run_node_produce(const char *file, const char *dir, case_file *f) {
             static const char ereq[] = "GET /eth/v1/events?topics=block_gossip,blob_sidecar,data_column_sidecar HTTP/1.1\r\nHost: lantern\r\n\r\n";
             ev_open_one(&n, 0, (const uint8_t *)ereq, sizeof ereq - 1, &why);
         }
-        tv rq = reqs + 9, rs = resps + 9, tk = tv_get(parts, "ticks") + 9;
+        tv rq = reqs + 9, rs = resps + 9, tk = tv_get(parts, "ticks") + 9, afterp = tv_get(parts, "after");
+        tv af = afterp ? afterp + 9 : NULL;
         uint64_t nreq = rd64(reqs + 1), closes = tv_u64(tv_get(parts, "closes"));
         if (rd64(tv_get(parts, "ticks") + 1) != nreq) why = "the case's ticks are not one for each request";
-        if (!why && closes) { /* the first request, its connection closed after each number of steps up to closes */
-            uint64_t rlen, at = tv_u64(tk);
-            const uint8_t *req = tv_bytes(rq, &rlen);
-            if (at) {
-                shell_event(s, EV_TICK, at, NULL, 0);
-                shell_settle(&n, &why);
-            }
-            for (uint64_t c = 0; c < closes && !why; c++) {
-                size_t nbufs = s->nbufs;
-                uint64_t held = node_held_ids(s->node);
-                uint64_t took = shell_api_ask_closing(&n, req, rlen, 1000 + c, c, &why);
-                if (!why && c + 1 == closes && took == c) why = "the case's closes end before the node settles";
-                if (!why) why = api_clean(s);
-                if (!why && s->nbufs - nbufs != node_held_ids(s->node) - held) why = "a request whose connection closed leaves buffers";
-                if (why) {
-                    static char msg[256];
-                    snprintf(msg, sizeof msg, "the connection closed after %llu steps: %s", (unsigned long long)c, why);
-                    why = msg;
-                }
-            }
-        }
-        for (uint64_t k = 0; k < nreq && !why; k++, rq = tv_skip(rq), rs = tv_skip(rs), tk = tv_skip(tk)) {
-            uint64_t rlen, wlen, glen = 0, at = tv_u64(tk);
+        if (afterp && rd64(afterp + 1) != nreq) why = "the case's after ticks are not one for each request";
+        for (uint64_t k = 0; k < nreq && !why; k++, rq = tv_skip(rq), rs = tv_skip(rs), tk = tv_skip(tk), af = af ? tv_skip(af) : NULL) {
+            uint64_t rlen, wlen, glen = 0, at = tv_u64(tk), later = af ? tv_u64(af) : 0;
             const uint8_t *req = tv_bytes(rq, &rlen), *want = tv_bytes(rs, &wlen);
             if (at) { /* a tick before the request */
                 shell_event(s, EV_TICK, at, NULL, 0);
                 shell_settle(&n, &why);
                 if (why) break;
             }
+            if (closes && k + 1 == nreq) /* the last request: its connection closed after each number of steps up to closes */
+                produce_closes(&n, req, rlen, closes, &why);
+            if (why) break;
             size_t nbufs = s->nbufs;
             uint64_t held = node_held_ids(s->node);
             shell_api_ask(&n, req, rlen, (k + 1) | (uint64_t)7 << 32, &why);
+            if (!why && later) { /* a tick after the request: no answer before it */
+                if (s->api.len) why = "an answer before the tick after the request";
+                if (!why) {
+                    shell_event(s, EV_TICK, later, NULL, 0);
+                    shell_settle(&n, &why);
+                }
+            }
             if (!why && s->nbufs - nbufs != node_held_ids(s->node) - held) why = "a request leaves buffers the node does not hold";
             uint8_t *got = why ? NULL : api_normalize(s, &glen, &why);
             if (!why && (glen != wlen || memcmp(got, want, (size_t)wlen))) {
@@ -9003,6 +9036,20 @@ static void run_node_produce(const char *file, const char *dir, case_file *f) {
             }
             free(got);
             if (!why) why = api_clean(s);
+        }
+        tv bwant = tv_get(parts, "builders");
+        if (!why && builder && bwant) { /* the requests of the node's builder calls, in their order */
+            uint64_t bwlen;
+            const uint8_t *bw = tv_bytes(bwant, &bwlen);
+            if (s->bld_len != bwlen || (bwlen && memcmp(s->bld, bw, (size_t)bwlen))) {
+                static char msg[384];
+                uint64_t at = 0;
+                while (at < s->bld_len && at < bwlen && s->bld[at] == bw[at]) at++;
+                snprintf(msg, sizeof msg, "the builder calls differ at byte %llu (%llu bytes, %llu calls; the case's %llu): %.*s",
+                         (unsigned long long)at, (unsigned long long)s->bld_len, (unsigned long long)s->bld_calls,
+                         (unsigned long long)bwlen, (int)(s->bld_len - at < 200 ? s->bld_len - at : 200), (const char *)s->bld + at);
+                why = msg;
+            }
         }
         if (!why && elen) ev_stream_end(&n, 0, events, elen, "the publish events", &why);
         if (!why && elen) why = api_clean(s);

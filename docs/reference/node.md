@@ -35,7 +35,8 @@
 - [`lantern_node_produce_check`](#function-lantern_node_produce_check): the proposer of a state's slot, its randao reveal checked, for one fork.
 - [`lantern_node_payload_result`](#function-lantern_node_payload_result): the SSZ bytes of an engine_getPayload result, for one fork.
 - [`lantern_node_produce_fold`](#function-lantern_node_produce_fold): a pool entry added to the body draft of a block to produce, for one fork.
-- [`lantern_node_produce_block`](#function-lantern_node_produce_block): the block of produceBlockV3 from its draft and the engine's payload, for one fork.
+- [`lantern_node_produce_block`](#function-lantern_node_produce_block): the block of produceBlockV3 from its draft and the engine's payload, or blinded with the builder's bid, for one fork.
+- [`lantern_node_produce_bid`](#function-lantern_node_produce_bid): the valid bid of a builder's getHeader answer, for one fork.
 - [`lantern_node_publish_decode`](#function-lantern_node_publish_decode): the signed block of a publishBlockV2 body, for one fork.
 - [`lantern_node_publish_sidecars`](#function-lantern_node_publish_sidecars): the sidecars of a publishBlockV2 body, for one fork from deneb.
 - [`lantern_node_publish_check`](#function-lantern_node_publish_check): the checks of `broadcast_validation` of a block to publish, for one fork.
@@ -248,7 +249,15 @@
   - The engine's result: from the attributes of the spec's prepare_execution_payload of the anchor state processed to the slot, with the fee recipient zero, an empty payload on the anchor's, with `block_value` 123456789012345678901234567890 from capella and an empty bundle from deneb.
   - The answers: the spec's block with `eth1_data` the state's, the operations the rules of beacon-api.md take (the two attestations as one aggregate, the messages as the sync aggregate; with none, no bit and the point at infinity), the engine's payload, and `state_root` from process_block, which must accept it; consensus_block_value its rule of beacon-api.md.
   - The runner runs the node with `NODE_FLAG_ENGINE`, answers engine_forkchoiceUpdated with attributes with the case's `payloadId` and engine_getPayload with the case's result, gives a `NODE_EV_TICK` of `time_ms`, then each request after a `NODE_EV_TICK` of its time when that is not 0; each answer must be the case's, and after each request the runner's buffers must differ from those before it only by the ids the node holds (each `NodeBlock`'s bytes and post-state, each `NodeBlob`'s bytes, each pool entry's).
-  - `closed`: the last close must come after the node has no event left, so the closes cover each step of the request.
+  - `closed`: the last close must come after the node has no event left, so the closes cover each step of the request. The closes run on the case's last request, after its tick and the requests before it.
+  - The builder cases, from bellatrix, with `builder` 1: the runner runs the node with `NODE_FLAG_BUILDER` and is its builder. It answers each builder call: registerValidator with 200 and no body; the k-th getHeader with the case's `bids` entry k, or its last entry past them; an empty entry is no answer. After the case, the requests of the node's builder calls, joined in their order, must be the case's `builders`. After each request, when the case's `after` entry is not 0, the node must have sent nothing to the connection; then a `NODE_EV_TICK` of that time, and the answer must be the case's.
+  - The bid: on a payload of the engine's attributes with `fee_recipient` the registration's, two transactions, `extra_data` `builder`, `block_hash` 0x88 bytes, from capella the expected withdrawals, from deneb one commitment (the G1 point at infinity); from electra no requests; `value` 10^18 in bellatrix, the engine's `block_value` + 10^6 from capella; signed with test key 9 and compute_domain(`DOMAIN_APPLICATION_BUILDER`). The answer: `HTTP/1.1 200 OK`, `Content-Type: application/json`, `Content-Length`, the body `{"version":"<fork>","data":…}`.
+  - `builder_bid`: at 100 ms into the slot before, a registerValidator (200) of the proposer, fee recipient 0x77 bytes, gas limit 30000000; then the two produceBlockV3 requests at the slot's start, each answered with the blinded block: the spec's block with the bid's payload, its state root from process_block, then blinded as builder-specs gives it.
+  - `builder_boost`: as `builder_bid`, two JSON requests: `builder_boost_factor=0` (no getHeader, the local block) and `builder_boost_factor=50` (a getHeader; the local block from capella, the blinded block in bellatrix, whose local value is 0).
+  - `builder_invalid`: as `builder_bid`, JSON requests each answered with the local block, the bids in turn: an answer of 204 with no body; a `version` of another fork; a fee recipient other than the registration's; a signature of another key; a parent hash other than the state's; another `prev_randao`; the timestamp of the slot after; from capella the withdrawals root of no withdrawals; from deneb one commitment more than the fork's limit.
+  - `builder_late`: as `builder_bid`, its JSON request with no answer from the builder; `after` its time + 1000: then the local block.
+  - `builder_unhealthy`: as `builder_bid`, on an anchor at epoch `ANCHOR_EPOCH` + 4 whose finalized epoch is 0: its JSON request with no getHeader, the local block.
+  - `builder_closed`: as `builder_bid`, its JSON request, with `closes` 40 (as `closed`); each getHeader answered with the bid.
 - Lantern's cases `<preset>-<fork>-node-publish.bin` of altair to fulu, made by tests/generator/node.py with the pinned spec, run as the node-produce cases: the empty_pool block of the node-produce cases on an anchor at epoch 0 (on_block's shuffling dependent root of a later epoch is a block of the store there), signed with its proposer's test key, from deneb in a `SignedBlockContents` with no blobs. The spec's gossip validation, state_transition and on_block give each block's verdict, which the generator checks.
   - The events, in each case but the closed ones: an eventstream of `block_gossip,blob_sidecar,data_column_sidecar` over HTTP/1.1 is open before the requests. After the case its bytes must be the event of each block whose check passes and of each sidecar the node publishes, in order, each in one chunk, the case's `events` (beacon-api.md).
   - `published`: the block with `broadcast_validation=consensus_and_equivocation` (200), getBlockRoot of `head` (the block's root), then the block again in SSZ with no level (200: a block the node holds).
@@ -487,7 +496,8 @@ lantern_node_step(node, store, p2p, tick, events, scratch, actions, result) -> s
 - `MESSAGE`: a `MESSAGE_ID` of compute_message_id of the fork of the store's slot, then a `NodeMessage` when the messages part has room. Its data uncompressed with Snappy goes in a `NODE_ACT_BYTES_PUT`, and for a block, a blob sidecar or a column sidecar the slot and parent root of its block header go in the entry; for a beacon_aggregate_and_proof the slot of its aggregate's data, by the offsets of its bytes (the message's at byte 0, the aggregate's at byte 8 of the message, the slot at byte 4 of the aggregate), or 2^64 - 1 when the bytes do not hold one. Data that is no Snappy block of at most `MAX_PAYLOAD_SIZE` bytes makes the entry `NODE_MESSAGE_CORRUPT`; data that does not fit in `scratch` or the actions makes it `NODE_MESSAGE_NO_ROOM`. A topic whose ForkDigest is not `fork_digest` makes it `NODE_MESSAGE_OTHER_DIGEST`, its data unread, for an IGNORE (altair `p2p-interface.md`, Transitioning the gossip: after a fork, peers on the pre-fork topics MUST NOT be scored down; before it, messages on the post-fork topics can be IGNORED); a topic of no name counts as of `fork_digest`.
 - The builder calls (builder-specs v0.6.1, the Builder API), with `NODE_FLAG_BUILDER`: each call takes a free entry of `builder_calls` (`NODE_BUILDER_CALLS`, 4), its kind, the `NodeApi` entry it answers (2^64 - 1 for none) and `time_ms`, and goes out in a `NODE_ACT_BUILDER` of the entry's index; with no free entry, no call. Its request: HTTP/1.1 to `builder_host`, with `Host`, `Accept: application/json`, `Connection: close`, and with a body `Content-Type: application/json` and `Content-Length`.
   - `NODE_BUILDER_REGISTER` (1): registerValidator, `POST /eth/v1/builder/validators`, the body a JSON array of `SignedValidatorRegistrationV1`.
-  - `NODE_EV_BUILDER` of a call: the entry goes free. Of `NODE_BUILDER_REGISTER`: nothing more (the API answer went before).
+  - `NODE_BUILDER_HEADER` (2): getHeader of a produceBlockV3 entry (block production, below), `GET /eth/v1/builder/header/<slot>/<parent_hash>/<pubkey>`, the slot in decimal, the hash and the key `0x` and lower case hex; no body.
+  - `NODE_EV_BUILDER` of a call: the entry goes free. Of `NODE_BUILDER_REGISTER`: nothing more (the API answer went before). Of `NODE_BUILDER_HEADER`: to its produceBlockV3 entry (below), when it still waits for the call.
 - `MESSAGE_STATUS` of `LIBP2P_MSG_NEW` for an entry of light_client_finality_update or light_client_optimistic_update with bytes: a `NODE_WORK_LC_GOSSIP` of its bytes as `data`, with the light client store as `state_c`, its handle as `target` and the topic as `arg`; the entry takes `NODE_MESSAGE_VALIDATING`.
 - `MESSAGE_STATUS` of `LIBP2P_MSG_NEW` for an entry of another topic with bytes: a `NODE_WORK_GOSSIP` with the head's post-state, the post-state of the justified root, and for a block, a blob sidecar or a column sidecar whose parent is imported at an earlier slot of the same fork a `NODE_ACT_STATE_COPY` of its post-state, which a parent above F's slot with none gets again first; the entry takes `NODE_MESSAGE_VALIDATING`. With no bytes, or no room in the actions, a `VALIDATION` of `LIBP2P_IGNORE`, or `LIBP2P_REJECT` for `NODE_MESSAGE_CORRUPT`. Any other status: the bytes and the entry go.
 - After the subscriptions and the serving, with `p2p`: the response bytes of each stream in `NODE_STREAM_RESPONSE` are read. Then, when the fork of the store's slot is fulu or later, each peer whose Status the node read and that has neither `NODE_PEER_METADATA` nor `NODE_PEER_METADATA_ASKED` gets a GetMetaData v3 request, as a request of the node with no request bytes, while the streams part has room for it and two more entries, and takes `NODE_PEER_METADATA_ASKED`. Then, with no `NODE_FLAG_SYNCING`, a BeaconBlocksByRange (v2 from altair, v1 before) to the first peer with a Status of the node's `fork_digest` whose `head_slot` is at least the start slot, and when the fork of the store's slot is fulu or later with `NODE_PEER_METADATA`: the start slot is the head's slot + 1, or `sync_slot` when that is higher; the count is at most `NODE_SYNC_BATCH` and reaches the peer's `head_slot`; the step is 1. The node takes `NODE_FLAG_SYNCING`, and `sync_slot` becomes the start slot + the count. A response that waits for room makes `wakeup` the tick's time.
@@ -516,12 +526,18 @@ lantern_node_step(node, store, p2p, tick, events, scratch, actions, result) -> s
   - `payload_slot` is not S + 1, or `payload_root` is not `head_root`.
 - The preparation: `payload_slot` takes S + 1, `payload_root` `head_root`, and `payload_status` `NODE_PAYLOAD_PREPARING`; a `NODE_ACT_STATE_COPY` of the head's post-state, the copy across the fork boundaries to S + 1 (the crossing), a `NODE_WORK_SLOTS` of the copy to S + 1 when it is below it, a `NODE_WORK_PREPARE_PAYLOAD` of the copy as `state_a` with the id `engine_id` as `arg` and, as `target`, 2 with an entry of eventstream of payload_attributes (+ 1 for a preparation of produceBlockV3, below), and a `NODE_ACT_STATE_FREE` of the copy. It is the call in flight, `engine_method` `ENGINE_METHOD_FORKCHOICE_UPDATED` with `engine_target` 1 (0 for a `NODE_WORK_FORKCHOICE`), and takes the next id.
 - `NODE_EV_WORK_DONE` of `NODE_WORK_PREPARE_PAYLOAD`: `LANTERN_VALID`, with the text of a payload_attributes event after its request, the text goes to the entries of the topic (the events, below); its request goes out in a `NODE_ACT_ENGINE`, `NODE_FLAG_FCU` clears, `payload_proposer` takes `NodeEvent_index` and `payload_status` `NODE_PAYLOAD_SENT`. Another result ends the call with `payload_status` `NODE_PAYLOAD_NONE`; `payload_slot` and `payload_root` stay, so the same head is not prepared again.
-- Block production (beacon-api.md, produceBlockV3): a `NodeApi` entry of `API_OP_PRODUCE_BLOCK_V3`, its `member` the phase, `slot` the block's slot, `state` its state, `data` its body draft, `filter_index` the engine's result; `cursor` keeps `randao_reveal` (96 bytes), `graffiti` (32 bytes) and, at byte 128, 1 with `skip_randao_verification`. The phases, in order:
+- Block production (beacon-api.md, produceBlockV3): a `NodeApi` entry of `API_OP_PRODUCE_BLOCK_V3`, its `member` the phase, `slot` the block's slot, `state` its state, `data` its body draft, `filter_index` the engine's result; `cursor` keeps `randao_reveal` (96 bytes), `graffiti` (32 bytes), at byte 128 1 with `skip_randao_verification`, at byte 136 `builder_boost_factor` (100 without it), at byte 152 the index + 1 of its `NODE_BUILDER_HEADER` call while that is in flight (else 0), at byte 160 the id of the builder's answer or bid (else 0), and at byte 168 the fee recipient of the proposer's registration (20 bytes). The phases, in order:
   - `NODE_PRODUCE_STATE` (1): a `NODE_ACT_STATE_COPY` of the head's post-state, the copy across the fork boundaries to `slot` and a `NODE_WORK_SLOTS` of it to `slot` when it is below it (as a lookup does), then a `NODE_WORK_PRODUCE_CHECK` of the copy. With no head post-state: 500.
-  - `NODE_PRODUCE_PAYLOAD` (2), from bellatrix when the head's store node has a `block_hash` that is not zero: with no engine call in flight, first of all engine calls: when `payload_status` is `NODE_PAYLOAD_READY` with `payload_slot` `slot` and `payload_root` `head_root`, a `NODE_WORK_GET_PAYLOAD` of `payload_id` with the id `engine_id`, the call `ENGINE_METHOD_GET_PAYLOAD` with `engine_target` the entry's index; else the preparation of `slot` (as above) with 1 in its work's `target`, which takes the fee recipient zero when the proposer has no `NodeProposer` entry. A preparation that ends with no `payloadId`: 500.
+  - The check's event: the proposer at `NodeEvent_root` and at byte 8 of it 1 when the chain is healthy (lantern_node_produce_check).
+  - `NODE_PRODUCE_PAYLOAD` (2), from bellatrix when the head's store node has a `block_hash` that is not zero. On the way in, with `NODE_FLAG_BUILDER`: a `NODE_BUILDER_HEADER` call for the entry, of `slot`, that `block_hash` and the `pubkey` of the proposer's `NodeProposer` entry, when `builder_boost_factor` is not 0, that entry has `registered` 1, the head's `NodeBlock` has a `payload_status` other than `PAYLOAD_STATUS_NOT_VALIDATED`, and the chain is healthy; the entry keeps the call and the registration's fee recipient. Then, with no engine call in flight, first of all engine calls: when `payload_status` is `NODE_PAYLOAD_READY` with `payload_slot` `slot` and `payload_root` `head_root`, a `NODE_WORK_GET_PAYLOAD` of `payload_id` with the id `engine_id`, the call `ENGINE_METHOD_GET_PAYLOAD` with `engine_target` the entry's index; else the preparation of `slot` (as above) with 1 in its work's `target`, which takes the fee recipient zero when the proposer has no `NodeProposer` entry. A preparation that ends with no `payloadId`: 500.
   - `NODE_PRODUCE_FOLD` (3): a `NODE_ACT_BYTES_NEW` of `ProduceDraft__size` bytes, the draft; then one `NODE_WORK_PRODUCE_FOLD` at a time for each kept pool entry, with the draft as `data` and the entry's bytes as `state_b`: each work adds the entry to the draft in place. The kinds in turn (proposer slashings, attester slashings, voluntary exits, BLS changes, attestations, sync committee messages), the entries of each in the pool's order; `cursor` keeps the kind's turn at byte 144 and `filter_slot` the next pool index.
   - While a work of the entry, or its engine_getPayload, is in flight, the entry has `API_STREAM_BUSY`; when it is done, `API_STREAM_BUSY` clears, and with `API_STREAM_GONE` the entry ends with its draft, engine result and state, and answers nothing.
-  - `NODE_PRODUCE_BUILD` (4): a `NODE_WORK_PRODUCE_BLOCK` of the copy as `state_a`, the draft as `data` and the engine's result as `state_b`; its result's bytes become `data`, execution_payload_value goes to `root` and consensus_block_value to `filter_slot`, `cursor` becomes zero, and the entry answers them as getBlockV2 answers a block's bytes, with the headers and the JSON of beacon-api.md. The copy, the draft and the result then go (`NODE_ACT_STATE_FREE`, `NODE_ACT_BYTES_FREE`).
+  - `NODE_PRODUCE_BID` (5), after the last fold, while the header call is in flight: the entry waits, with no work.
+    - `NODE_EV_BUILDER` of the call: its index + 1 at byte 152 becomes 0; without the failure bit and with room in the actions, a `NODE_ACT_BYTES_PUT` of the answer's bytes to a new id, at byte 160.
+    - After the head, each entry in `NODE_PRODUCE_BID` with no work in flight: when its call is in flight and `time_ms` is at least the call's `time_ms` + `BUILDER_PROPOSAL_DELAY_TOLERANCE` (1000 ms), the call answers no entry (its `NodeApi` index 2^64 - 1) and byte 152 becomes 0; then, with no call in flight and room in the actions for two works and 4096 bytes, the entry goes on.
+    - Going on: with an answer at byte 160, a `NODE_WORK_PRODUCE_BID` of the copy as `state_a` and the answer as `data`. Its result `LANTERN_OK`: the bid, the event's bytes, in a `NODE_ACT_BYTES_PUT` to a new id at byte 160; another result: 0 there. Then the answer's bytes go (`NODE_ACT_BYTES_FREE`). Then the build; with no answer, the build at once.
+  - `NODE_PRODUCE_BUILD` (4): a `NODE_WORK_PRODUCE_BLOCK` of the copy as `state_a`, the draft as `data`, the engine's result as `state_b` and the bid at byte 160 as `state_c` (0 for none); its result's bytes become `data`, execution_payload_value goes to `root` and consensus_block_value to `filter_slot`, 1 at `NodeEvent_checkpoint` sets `API_STREAM_PRODUCE_BLINDED`, `cursor` becomes zero, and the entry answers them as getBlockV2 answers a block's bytes, with the headers and the JSON of beacon-api.md. The copy, the draft, the result and the bid then go (`NODE_ACT_STATE_FREE`, `NODE_ACT_BYTES_FREE`).
+  - An entry that ends in another way loses the same ids; with its header call in flight, the call answers no entry.
 - engine_getPayload answered: lantern_engine_json_decode of the `result` (`result_offset` and `result_length` in the body) as the fork's `ExecutionPayload` (bellatrix) or `GetPayloadResult`, its SSZ bytes in a `NODE_ACT_BYTES_PUT` as the entry's `filter_index`; the entry goes on to `NODE_PRODUCE_FOLD`. A failed call, or a result that does not decode: 500. The call ends.
 - Block publishing (beacon-api.md, publishBlockV2): a `NodeApi` entry of `API_OP_PUBLISH_BLOCK_V2`, its `member` the phase, `fork` the fork of `consensus_version`, `cursor` the level of `broadcast_validation` at byte 0, the answer flags at byte 8 and the blob count at byte 16, `data` the body's bytes, `filter_slot` the block's bytes, `filter_index` the sidecars' buffer, `root` the block's root and `slot` its slot (each id 0 until it is made). While a work of it is in flight it has `API_STREAM_BUSY`. A closed connection ends it as a produceBlockV3's (above), its ids gone and no answer, before its check passes; once its check passes, the publish and the import go on and the entry ends with no answer. The phases, in order:
   - `NODE_PUBLISH_DECODE` (1): a `NODE_ACT_BYTES_PUT` of the request's body to a new id, the entry's `data`, and a `NODE_WORK_PUBLISH_DECODE` of it, `arg` the fork + 2^8 with an SSZ body. Its result but `LANTERN_VALID`: 400. Else the event's bytes, the `SignedBeaconBlock`, go in a `NODE_ACT_BYTES_PUT` to a new id, the entry's `filter_slot`; the entry takes `root` from `NodeEvent_root`, `slot` from `NodeEvent_index` and the blob count from `NodeEvent_checkpoint`. A slot of another fork than `fork`: 400. A root of a `NodeBlock` but `NODE_BLOCK_INVALID`: 200, and the entry ends with its ids.
@@ -612,7 +628,7 @@ lantern_node_step(node, store, p2p, tick, events, scratch, actions, result) -> s
   - `NODE_EV_WORK_DONE` of `NODE_WORK_POOL_CHECK`, of the entry at index `target` in `NODE_POOL_CHECKING`: `LANTERN_VALID`, it takes `NODE_POOL_KEPT`; else a `NODE_ACT_BYTES_FREE` of its bytes, and it is free (topic 0).
 - The publish of SSZ bytes on a topic, with `NODE_FLAG_SUBSCRIBED` (phase0 `p2p-interface.md`, Topics and messages: the data of a message is the SSZ bytes compressed with Snappy's block format): a `LIBP2P_EVENT_PUBLISH` at the end of `p2p_out`, the topic lantern_gossip_topic of `fork_digest` and the topic's name, the data snappy_compress of the bytes, and the ID compute_message_id of the fork of the store's slot of that topic and the bytes; none when `p2p_out` has no room for it. libp2p's `LIBP2P_ACTION_PUBLISHED` that answers it changes nothing.
 - `NODE_EV_API_SENT` of the connection of a `NodeApi` entry of eventstream: its `sent` is 0. Of another entry without `API_STREAM_BUSY`: a `NODE_WORK_API_CHUNK` of it, and `API_STREAM_BUSY`. Another `NODE_EV_API_SENT` is skipped.
-- `NODE_EV_API_CLOSED` of the connection of a `NodeApi` entry: with `API_STREAM_BUSY`, the entry takes `API_STREAM_GONE`; else the stream ends, and a produceBlockV3 entry's draft and engine result go with it. Another is skipped.
+- `NODE_EV_API_CLOSED` of the connection of a `NodeApi` entry: with `API_STREAM_BUSY`, the entry takes `API_STREAM_GONE`; else the stream ends, and a produceBlockV3 entry's draft, engine result, builder answer or bid go with it, and its header call in flight answers no entry. Another is skipped.
 - The end of a stream: with `API_STREAM_OWN`, a `NODE_ACT_BYTES_FREE` of its `data`; with `API_STREAM_OWN_STATE`, a `NODE_ACT_STATE_FREE` of its `state`; its entry is free (connection 0), and the api part's count drops past the free entries at its end.
 - A `NODE_ACT_BYTES_FREE` of an id that a `NodeApi` entry has as `data` without `API_STREAM_OWN` does not go: the entry takes `API_STREAM_OWN`, and frees the bytes at its end. So with a `NODE_ACT_STATE_FREE` of an id that an entry has as `state` without `API_STREAM_OWN_STATE`: the entry takes `API_STREAM_OWN_STATE`. The node changes no state it keeps, so the entry reads the same state to its end. A produceBlockV3 entry in `NODE_PRODUCE_FOLD` whose `root` is the id (the pool bytes of its fold in flight) takes `API_STREAM_PRODUCE_OWN` instead, and frees them when the fold is done; in another phase `root` holds no id.
 - `NODE_EV_API_IDENTITY`: the node's `api_identity` takes the event's `ApiIdentity`.
@@ -657,7 +673,7 @@ lantern_node_run(node, store, seen, work, state_a, state_b, state_c, data, setti
 
 ### Caller must
 
-- On `LANTERN_BUFFER_TOO_SMALL`, grow the store with lantern_store_copy, or `state_a` with lantern_beacon_state_copy, or for a `NODE_WORK_LC_BLOCK` or `NODE_WORK_LC_HEAD` the light client store `state_c` with lantern_lc_store_copy, or `scratch`, or for a SERVE, LC_SERVE, LC_PUBLISH, NEW_PAYLOAD, FORKCHOICE, API_ENCODE, API_CHUNK, API_EVENT, PREPARE_PAYLOAD, GET_PAYLOAD, PRODUCE_BLOCK, PUBLISH_DECODE, PUBLISH_CHECK or PUBLISH_SIDECAR work `event`, then call again.
+- On `LANTERN_BUFFER_TOO_SMALL`, grow the store with lantern_store_copy, or `state_a` with lantern_beacon_state_copy, or for a `NODE_WORK_LC_BLOCK` or `NODE_WORK_LC_HEAD` the light client store `state_c` with lantern_lc_store_copy, or `scratch`, or for a SERVE, LC_SERVE, LC_PUBLISH, NEW_PAYLOAD, FORKCHOICE, API_ENCODE, API_CHUNK, API_EVENT, PREPARE_PAYLOAD, GET_PAYLOAD, PRODUCE_BID, PRODUCE_BLOCK, PUBLISH_DECODE, PUBLISH_CHECK or PUBLISH_SIDECAR work `event`, then call again.
 
 ### Function does
 
@@ -683,9 +699,10 @@ lantern_node_run(node, store, seen, work, state_a, state_b, state_c, data, setti
 - `NODE_WORK_NEW_PAYLOAD`: lantern_node_new_payload of the fork of the block's slot (bellatrix and later; before it `LANTERN_NO_PAYLOAD`), its request a ByteList at `NodeEvent_chunk`. The event's `size` then covers it.
 - `NODE_WORK_PREPARE_PAYLOAD`: of the fork of the slot of `state_a`: the `proposers` entry of get_beacon_proposer_index of `state_a` whose `until_epoch` is above the epoch of the state's slot, else the result `LANTERN_NO_PAYLOAD`; lantern_get_payload_attributes of `state_a` with its `fee_recipient` and the node's config; then engine_forkchoiceUpdated with those attributes and the id `arg`, its head the `block_hash` of the store's node of `payload_root` (the state's `latest_execution_payload_header.block_hash`, prepare_execution_payload's `parent_hash`; `LANTERN_INVALID_UNKNOWN_BLOCK` when the store has no such node, `LANTERN_NO_PAYLOAD` when it is zero), its safe and finalized hashes as for `NODE_WORK_FORKCHOICE`, as a ByteList at `NodeEvent_chunk` in an HTTP POST as `NODE_WORK_FORKCHOICE` writes it; the proposer's index at `NodeEvent_index`. With 2 in `target`: after the request's ByteList, at its size rounded up to 8, the text of the payload_attributes event (beacon-api.md, eventstream) as a ByteList, its parent block number and hash from lantern_node_payload_parent of the fork of the state's slot. The event's `size` then covers the request and the text. With 1 in `target`, a proposer with no `proposers` entry takes a fee recipient of zero bytes.
 - `NODE_WORK_GET_PAYLOAD`: lantern_engine_get_payload of the fork of the slot of the `NodeApi` entry at `target` with `payload_id` and the id `arg`, in an HTTP POST as `NODE_WORK_FORKCHOICE` writes it, as a ByteList at `NodeEvent_chunk`.
-- `NODE_WORK_PRODUCE_CHECK`: of the fork of the slot of `state_a`, for the `NodeApi` entry at `target`: get_beacon_proposer_index of the state at `NodeEvent_index`; with `skip_randao_verification` a `randao_reveal` that is not the point at infinity, else one that fails process_randao's check for that proposer: the result `LANTERN_INVALID_RANDAO_REVEAL` (400); an expected deposit count above 0 (beacon-api.md): `LANTERN_INVALID_DEPOSITS` (500).
+- `NODE_WORK_PRODUCE_CHECK`: lantern_node_produce_check of the fork of the slot of `state_a`, for the `NodeApi` entry at `target`: get_beacon_proposer_index of the state at `NodeEvent_root`, and at byte 8 of it 1 when the chain is healthy, else 0; with `skip_randao_verification` a `randao_reveal` that is not the point at infinity, else one that fails process_randao's check for that proposer: the result `LANTERN_INVALID_RANDAO_REVEAL` (400); an expected deposit count above 0 (beacon-api.md): `LANTERN_INVALID_DEPOSITS` (500).
 - `NODE_WORK_PRODUCE_FOLD`: lantern_node_produce_fold of the fork of the slot of `state_a`: the pool entry `state_b` joins the draft `data` in place when the rules of beacon-api.md take it at `state_a`; `arg` its topic, + 2^8 times its `NodePool` `fork`, + 2^16 times its `member`.
-- `NODE_WORK_PRODUCE_BLOCK`: lantern_node_produce_block of the fork of the slot of `state_a`, from the draft `data` and the engine's result `state_b`, with the request of the entry at `target` and the node's config: the fork's `BeaconBlock` or `BlockContents` in SSZ bytes as a ByteList at `NodeEvent_chunk`, execution_payload_value at `NodeEvent_root` (32 bytes) and consensus_block_value in Gwei at `NodeEvent_index`.
+- `NODE_WORK_PRODUCE_BLOCK`: lantern_node_produce_block of the fork of the slot of `state_a`, from the draft `data`, the engine's result `state_b` and the bid `state_c` (a ByteList, or 0), with the request of the entry at `target` and the node's config: the fork's `BeaconBlock`, `BlockContents` or `BlindedBeaconBlock` in SSZ bytes as a ByteList at `NodeEvent_chunk`, execution_payload_value at `NodeEvent_root` (32 bytes), consensus_block_value in Gwei at `NodeEvent_index`, and 1 at `NodeEvent_checkpoint` for a blinded block, else 0.
+- `NODE_WORK_PRODUCE_BID`: of the builder's answer `data` (beacon-api.md, produceBlockV3, the builder): lantern_http_parse_response with `eof` 1, its body unchunked at the end of `scratch` (`LANTERN_INVALID_HTTP` when it gives no response); a status other than 200, the result `LANTERN_NO_BID`; the body an object whose first member `version` is a string and whose first member `data` is a value, other members skipped (else `LANTERN_INVALID_JSON`); `version` the name of the fork of the slot of `state_a` (else `LANTERN_INVALID_BID`). Then lantern_node_produce_bid of that fork, of the text of `data`, with the request of the entry at `target` and the node's config: the `SignedBuilderBid` in SSZ bytes as a ByteList at `NodeEvent_chunk`.
 - `NODE_WORK_PUBLISH_DECODE`: lantern_node_publish_decode of the fork `arg` & 255, of the body in `data`, JSON or with `arg` bit 8 SSZ: the `SignedBeaconBlock` in SSZ bytes as a ByteList at `NodeEvent_chunk`, its hash_tree_root of the message at `NodeEvent_root`, its slot at `NodeEvent_index`, and from deneb the count of its body's `blob_kzg_commitments` at `NodeEvent_checkpoint`. `LANTERN_INVALID_ENCODING` for a body that is no value of the fork's type, or whose counts do not match (beacon-api.md).
 - `NODE_WORK_PUBLISH_SIDECARS`: lantern_node_publish_sidecars of the fork of the entry, of the body in `data`, into the ByteList `state_b` in place: the sidecars of beacon-api.md, each a ByteList, back to back.
 - `NODE_WORK_PUBLISH_CHECK`: lantern_node_publish_check of the fork of the slot of `state_a`: the checks of the level `arg` (beacon-api.md) of the block `data` and the sidecars `state_b`, with `state_a` the parent's post-state at the slot (process_block runs on it), `state_c` the head's, `seen` and the store, as lantern_node_gossip has them; its result, and with `LANTERN_VALID` the block's bytes as a ByteList at `NodeEvent_chunk`.
@@ -730,7 +747,7 @@ lantern_node_run(node, store, seen, work, state_a, state_b, state_c, data, setti
 - `NODE_WORK_API_CHUNK`: the next chunk of the answer of the `NodeApi` entry at index `arg` (beacon-api.md, Common rules, the streamed answers), from the SSZ bytes in `data`, at `NodeEvent_api` of the event: the entry's `sent` and `flags` and its `cursor` after the chunk, then a ByteList of the chunk's bytes at `NodeEvent_api_bytes`, offset 24; the event's `size` then covers it.
   - A chunk is at most `NODE_API_CHUNK` (65536) bytes, and at most the room of the event after the ByteList's header. With less than `NODE_API_FIRST_ROOM` (1024) bytes of room for the first chunk, or 64 for a later one (1024 for a validator stream, which writes an item in each chunk): `LANTERN_BUFFER_TOO_SMALL`.
   - The first chunk, without `API_STREAM_STARTED`: the head of the answer, then as much of the body as fits; it sets `API_STREAM_STARTED`. A later chunk goes on with the body.
-  - `data` of no bytes, or whose slot is not the entry's `slot` (a state's u64 at byte 40, a `SignedBeaconBlock`'s at byte 100; of produceBlockV3 a `BeaconBlock`'s at byte 0, and from deneb at the offset in the first 4 bytes of the `BlockContents`), gives the result `LANTERN_INVALID_ENCODING`.
+  - `data` of no bytes, or whose slot is not the entry's `slot` (a state's u64 at byte 40, a `SignedBeaconBlock`'s at byte 100; of produceBlockV3 a `BeaconBlock`'s at byte 0, and from deneb at the offset in the first 4 bytes of the `BlockContents`, and with `API_STREAM_PRODUCE_BLINDED` a `BlindedBeaconBlock`'s at byte 0), gives the result `LANTERN_INVALID_ENCODING`.
   - The pending streams: the items of lantern_node_pending of the fork `fork` of `state_a` (`kind` 0 for getPendingDeposits, 1 getPendingPartialWithdrawals, 2 getPendingConsolidations). JSON: the head and `{"version":"<fork>","execution_optimistic":…,"finalized":…,"data":[`, then from the index at byte 0 of the cursor (`position`) the JSON of each item as many as fit, with `,` between, then `]}`; `position` then the next index. SSZ: the items' bytes, as the SSZ bytes of a getStateV2 (their count times their size is the `Content-Length`), from `sent`. A `state_a` whose slot is not the entry's gives the result `LANTERN_INVALID_SLOT`, and `LANTERN_NO_STATE_ANSWER` of lantern_node_pending the result `LANTERN_INVALID_ENCODING`.
   - The validator streams: the items of the validators of `state_a` from the index at byte 0 of the cursor (`position`), with the status bits at byte 8 of it and the `ValidatorRef` items of `data` (none with `data` 0), as many as fit; `position` then the next index. A `state_a` whose slot is not the entry's gives the result `LANTERN_INVALID_SLOT`.
   - Their `scratch`: 8 bytes for every 64 validators, a bit for each that the items name; with public keys among the items, 8 bytes more for each slot of a table of the keys, the least power of two at least twice their count.
@@ -745,6 +762,7 @@ lantern_node_run(node, store, seen, work, state_a, state_b, state_c, data, setti
   - getPoolAttestationsV2, an entry of a fork from electra: its bytes are a `SingleAttestation`, and the JSON is that of the electra `Attestation` of it, written at the end of `scratch` (`NODE_POOL_ATTESTATION_ROOM`, 1024 bytes): `aggregation_bits` of the committee's length (`member` / 2^16) with the bit at the attester's place (`member` % 2^16), its `data` and `signature`, and `committee_bits` with the bit of its `committee_index`, as the spec's aggregation of a single attester gives it. Bytes that are no `SingleAttestation`, a member of a place not below the length or of a length above `MAX_VALIDATORS_PER_COMMITTEE`, and a `committee_index` not below `MAX_COMMITTEES_PER_SLOT` give the result `LANTERN_INVALID_ENCODING`.
   - SSZ: the bytes of `data` from `sent`; `sent` counts them.
   - JSON: the body's start, then lantern_json_encode_ssz of `cursor` (lantern_node_json of the fork of the entry, `SignedBeaconBlock` for getBlockV2 and `BeaconState` for getStateV2), then `}` once the cursor is whole. getBlindedBlock: lantern_node_blinded_block of the fork of the entry, of `data`, into a ByteList at the end of `scratch` with room for the bytes of `data` + 1024 (a header's SSZ bytes, at most 616, are at most 108 more than its payload's), then its SSZ bytes, or its JSON by lantern_node_json of `NODE_JSON_BLINDED_BLOCK`, as the bytes of getBlockV2; each chunk makes it again from `data`. getBlockAttestationsV2: the fork's `Attestations` (`NODE_JSON_ATTESTATIONS`) of the bytes of the body's `attestations` in `data`, the same in every fork: the message from the 4-byte offset at byte 0, its body from the offset at byte 80 of the message, the list from the offset at byte 208 of the body to the offset at byte 212 (`deposits`), its bytes copied into a ByteList at the end of `scratch`. Offsets past the bytes or out of order give the result `LANTERN_INVALID_ENCODING`; a `scratch` without room for that ByteList, `LANTERN_BUFFER_TOO_SMALL`. A first chunk that holds the whole body has `Content-Length`; else, with `API_STREAM_HTTP10`, it sets `API_STREAM_CLOSE`, and else `API_STREAM_CHUNKED`, and each chunk then holds the body's bytes in one chunk of RFC 9112 section 7.1, the last also `0` CRLF CRLF.
+  - produceBlockV3: the JSON of lantern_node_json of `NODE_JSON_BEACON_BLOCK`, from deneb `NODE_JSON_BLOCK_CONTENTS`, and with `API_STREAM_PRODUCE_BLINDED` `NODE_JSON_BLINDED_BEACON_BLOCK`; the head's fields and the body's start of beacon-api.md, `true` for the blinded block.
   - The chunk that ends the body sets `API_STREAM_DONE`.
   - getAggregatedAttestationV2: the room of a pool stream's chunk. The aggregate in `cursor`: the root at byte 0, the count at 32, the committee length at 40, `data` at 48, `signature` at 176, the bits from 272.
   - With `API_STREAM_FOLD` and `data`: no bytes, and `API_STREAM_ITEM_DONE`. `data` is the pool entry's: of the fork `sent` from electra a `SingleAttestation` (240 bytes) with its place `member` % 2^16 and its committee's length `member` / 2^16, before electra an `Attestation` (the offset 228, at most 228 + MAX_VALIDATORS_PER_COMMITTEE / 8 + 1 bytes) with its first bit set as its place and its bits' length. The entry joins when lantern_node_data_root of the fork `fork` of its `data` is the root, and, after the first, its length is the aggregate's and its place's bit is clear: the first gives the length, `data` and `signature`; a later one's signature is added by crypto_bls_aggregate of a `BlsSignatureList` of the two at the end of `scratch`. Its place's bit is set and the count goes up. Bytes that are no such attestation, a length above `MAX_VALIDATORS_PER_COMMITTEE`, a place not below the length, and a signature crypto_bls_aggregate rejects give the result `LANTERN_INVALID_ENCODING`.
@@ -1527,11 +1545,11 @@ lantern_node_produce_check(state, request, scratch, out) -> status
 | `state` | input | `BeaconState`: at the slot of the block |
 | `request` | input | 136 bytes: `randao_reveal` (96), `graffiti` (32), then u64 1 with `skip_randao_verification` |
 | `scratch` | scratch | `Scratch` |
-| `out` | output | u64: get_beacon_proposer_index of the state |
+| `out` | output | 16 bytes: get_beacon_proposer_index of the state (u64), then u64 1 when the chain is healthy for a builder, else 0 |
 
 ### Returns
 
-- `LANTERN_OK`: `out` holds the proposer.
+- `LANTERN_OK`: `out` holds the proposer and the health.
 - `LANTERN_INVALID_RANDAO_REVEAL`: with skip 1, a reveal other than the point at infinity (`0xc0` and 95 zero bytes); with skip 0, a reveal that fails the bls.Verify of process_randao for the proposer, the state's current epoch and get_domain(state, DOMAIN_RANDAO).
 - `LANTERN_INVALID_DEPOSITS`: the block would need deposits: before electra min(`MAX_DEPOSITS`, `eth1_data.deposit_count` - `eth1_deposit_index`) above 0 (phase0 validator.md), in electra get_eth1_pending_deposit_count above 0; never from fulu, whose process_operations takes no deposit.
 - `LANTERN_BUFFER_TOO_SMALL`: `scratch` is short.
@@ -1540,10 +1558,14 @@ lantern_node_produce_check(state, request, scratch, out) -> status
 ### Function does
 
 - The state is not changed: the reveal is checked without mixing it in.
+- The health (beacon-api.md, produceBlockV3, the builder): with S the state's slot, all of these hold:
+  - max(S - 1 - the slot of `latest_block_header`, 0) is at most `BUILDER_FALLBACK_SKIPS` (3).
+  - max(compute_epoch_at_slot(S) - `finalized_checkpoint.epoch`, 0) is at most `BUILDER_FALLBACK_EPOCHS_SINCE_FINALIZATION` (3).
+  - Of the slots s from max(S - `SLOTS_PER_EPOCH`, 0) below S, at most `BUILDER_FALLBACK_SKIPS_PER_EPOCH` (8) are skipped: s above 0 and `block_roots[s % SLOTS_PER_HISTORICAL_ROOT]` equal to `block_roots[(s - 1) % SLOTS_PER_HISTORICAL_ROOT]` (Lighthouse's block_root_at_slot_skips_none).
 
 ### Tests
 
-- The node-produce cases: their answers come from the spec module's block proposal.
+- The node-produce cases: their answers come from the spec module's block proposal; the builder cases need the health (`builder_unhealthy` its lack).
 
 ### ABI
 
@@ -1620,7 +1642,7 @@ lantern_node_produce_fold(state, entry, draft, arg, scratch) -> status
 
 ## Function `lantern_node_produce_block`
 
-The block of produceBlockV3 (beacon-api.md) from a state at its slot, its `ProduceDraft` and the engine's payload.
+The block of produceBlockV3 (beacon-api.md) from a state at its slot, its `ProduceDraft` and the engine's payload, or with a builder's bid that wins the choice the blinded block.
 
 ### Signature
 
@@ -1636,7 +1658,7 @@ lantern_node_produce_block(state, draft, params, scratch, out) -> status
 | `draft` | input | ByteList: a `ProduceDraft` from offset 24 |
 | `params` | input | `ProduceParams` |
 | `scratch` | scratch | `Scratch` |
-| `out` | output | ByteList, its `size` set: the SSZ bytes of the fork's `BeaconBlock`, from deneb of `BlockContents` |
+| `out` | output | ByteList, its `size` set: the SSZ bytes of the fork's `BeaconBlock`, from deneb of `BlockContents`; a blinded block: of `BlindedBeaconBlock` |
 
 ### Returns
 
@@ -1649,6 +1671,12 @@ lantern_node_produce_block(state, draft, params, scratch, out) -> status
 - The body of beacon-api.md: the operations in the draft's record order; the attestations of the draft's aggregates by `data.slot` descending, then `order`, at most the fork's limit, from electra those of one data joined; the draft's sync aggregate; the payload, commitments and requests of the result (bellatrix: the result is the payload; with no result, before the merge, the empty payload).
 - `state_root`: hash_tree_root of the state after process_block with an execution_valid of 1, or 3 with `skip_randao_verification` (no check of the reveal's signature).
 - `execution_payload_value`: the result's `block_value`, 0 in bellatrix. `consensus_block_value`: the proposer's balance after less before, plus the payload's withdrawals to the proposer, at least 0.
+- With a `bid` (from bellatrix): the choice of beacon-api.md, from the result's `block_value` (0 in bellatrix), the request's `builder_boost_factor` and the bid's `value`. The local block as above; else the blinded block:
+  - The payload in the body is the stand-in: the header's fields from `parent_hash` to `block_hash`, then from deneb `blob_gas_used` and `excess_blob_gas`, its `extra_data`, no transactions, and from capella the withdrawals of lantern_get_expected_withdrawals of the state; from deneb the bid's `blob_kzg_commitments`, from electra its `execution_requests`.
+  - process_block of that block. `out` then holds the `BlindedBeaconBlock`: the block's bytes with the header's SSZ bytes in place of the stand-in's, and the body's offsets after the payload's (from capella) grown by the difference.
+  - `state_root`: the state's `latest_block_header.body_root` becomes the hash_tree_root of the blinded body (that of the builder's full body), its `latest_execution_payload_header.transactions_root` the header's; then hash_tree_root of the state.
+  - `execution_payload_value`: the bid's `value`; `consensus_block_value` as above, with the stand-in's withdrawals; 1 at `blinded`.
+  - The bid is not checked again: lantern_node_produce_bid checks it.
 
 ### Tests
 
@@ -1659,15 +1687,59 @@ lantern_node_produce_block(state, draft, params, scratch, out) -> status
 - Export: `lantern_<fork>_node_produce_block` of each fork object (asm/core/<ISA>/nodehooks.s).
 - Argument order: `state`, `draft`, `params`, `scratch`, `out`.
 
+## Function `lantern_node_produce_bid`
+
+The bid of a builder's answer to getHeader, when it is valid for a block to produce (beacon-api.md, produceBlockV3, the builder).
+
+### Signature
+
+```
+lantern_node_produce_bid(state, bid, params, scratch, out) -> status
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `state` | input | `BeaconState`: at the slot of the block |
+| `bid` | input | ByteList: the JSON text of the `data` of the builder's getHeader answer |
+| `params` | input | `ProduceParams`: its `request` and `config` |
+| `scratch` | scratch | `Scratch` |
+| `out` | output | ByteList, its `size` set: the SSZ bytes of the fork's `SignedBuilderBid` |
+
+### Returns
+
+- `LANTERN_OK`: `out` holds a valid bid.
+- `LANTERN_INVALID_JSON`: `bid` is no JSON of the fork's `SignedBuilderBid` (lantern_json_decode).
+- `LANTERN_INVALID_BID`: a check of beacon-api.md fails.
+- `LANTERN_BUFFER_TOO_SMALL`: `scratch` or `out` is short.
+- Another code: a callee's check failed.
+
+### Function does
+
+- The checks of beacon-api.md (process_bid, and those of process_execution_payload that need no transactions), in that order; the fee recipient is that at byte 168 of the request.
+- Its `scratch`: `JSON_DECODE_SCRATCH`, the decoded bid, and that of lantern_get_expected_withdrawals.
+
+### Tests
+
+- The node-produce cases of a builder.
+
+### ABI
+
+- Export: `lantern_<fork>_node_produce_bid` of each fork object (asm/core/<ISA>/nodehooks.s); before bellatrix `LANTERN_INVALID_BID`.
+- Argument order: `state`, `bid`, `params`, `scratch`, `out`.
+
 ## Type `ProduceParams`
 
 | Offset | Field | Type | Meaning |
 |---|---|---|---|
-| 0 | `request` | address | The 136 bytes of lantern_node_produce_check's `request` |
+| 0 | `request` | address | The 188 bytes of the entry's `cursor`: lantern_node_produce_check's `request`, `builder_boost_factor` at byte 136, the registration's fee recipient at byte 168 |
 | 8 | `config` | address | `Config` |
 | 16 | `result` | address | ByteList: the SSZ bytes of the engine's result, or 0 |
 | 24 | `payload_value` | address | Where execution_payload_value goes: 32 bytes, little endian |
 | 32 | `block_value` | address | Where consensus_block_value goes: u64, in Gwei |
+| 40 | `bid` | address | ByteList: the SSZ bytes of a valid `SignedBuilderBid` of the fork, or 0 |
+| 48 | `blinded` | address | Where 1 goes for a blinded block, else 0: u64 |
 
 ## Function `lantern_node_publish_decode`
 
@@ -2425,7 +2497,7 @@ lantern_node_json(kind, ssz, cursor, out) -> status
 
 | Name | Role | Type |
 |---|---|---|
-| `kind` | input | u64: `NODE_JSON_BLOCK` (0) `SignedBeaconBlock`, `NODE_JSON_STATE` (1) `BeaconState`, `NODE_JSON_EXIT` (2) `SignedVoluntaryExit`, `NODE_JSON_PROPOSER_SLASHING` (3) `ProposerSlashing`, `NODE_JSON_ATTESTER_SLASHING` (4) `AttesterSlashing`, `NODE_JSON_BLS_CHANGE` (5) `SignedBLSToExecutionChange`, `NODE_JSON_ATTESTATION` (6) `Attestation`, `NODE_JSON_SINGLE_ATTESTATION` (7) `SingleAttestation`, `NODE_JSON_ATTESTATIONS` (8) `Attestations`, `NODE_JSON_BLINDED_BLOCK` (9) `SignedBlindedBeaconBlock` from bellatrix, `SignedBeaconBlock` before, `NODE_JSON_BLOB_SIDECAR` (10) `BlobSidecar` of deneb and electra, `NODE_JSON_DATA_COLUMN_SIDECAR` (11) `DataColumnSidecar` from fulu, `NODE_JSON_AGGREGATE_AND_PROOF` (12) `SignedAggregateAndProof`, `NODE_JSON_SYNC_COMMITTEE_MESSAGE` (13) `SyncCommitteeMessage` from altair, `NODE_JSON_SYNC_CONTRIBUTION` (14) `SyncCommitteeContribution` from altair, `NODE_JSON_CONTRIBUTION_AND_PROOF` (15) `SignedContributionAndProof` from altair, `NODE_JSON_COMMITTEE_SUBSCRIPTION` (16) lantern's `BeaconCommitteeSubscription`, `NODE_JSON_SYNC_SUBSCRIPTION` (17) lantern's `SyncCommitteeSubscription` from altair, `NODE_JSON_PROPOSER_PREPARATION` (18) lantern's `ProposerPreparation`, `NODE_JSON_BEACON_BLOCK` (19) `BeaconBlock`, `NODE_JSON_BLOCK_CONTENTS` (20) lantern's `BlockContents` from deneb, `NODE_JSON_LC_BOOTSTRAP` (21) `LightClientBootstrap`, `NODE_JSON_LC_UPDATE` (22) `LightClientUpdate`, `NODE_JSON_LC_FINALITY_UPDATE` (23) `LightClientFinalityUpdate` and `NODE_JSON_LC_OPTIMISTIC_UPDATE` (24) `LightClientOptimisticUpdate`, from altair, `NODE_JSON_VALIDATOR_REGISTRATION` (25) `SignedValidatorRegistrationV1` of builder-specs |
+| `kind` | input | u64: `NODE_JSON_BLOCK` (0) `SignedBeaconBlock`, `NODE_JSON_STATE` (1) `BeaconState`, `NODE_JSON_EXIT` (2) `SignedVoluntaryExit`, `NODE_JSON_PROPOSER_SLASHING` (3) `ProposerSlashing`, `NODE_JSON_ATTESTER_SLASHING` (4) `AttesterSlashing`, `NODE_JSON_BLS_CHANGE` (5) `SignedBLSToExecutionChange`, `NODE_JSON_ATTESTATION` (6) `Attestation`, `NODE_JSON_SINGLE_ATTESTATION` (7) `SingleAttestation`, `NODE_JSON_ATTESTATIONS` (8) `Attestations`, `NODE_JSON_BLINDED_BLOCK` (9) `SignedBlindedBeaconBlock` from bellatrix, `SignedBeaconBlock` before, `NODE_JSON_BLOB_SIDECAR` (10) `BlobSidecar` of deneb and electra, `NODE_JSON_DATA_COLUMN_SIDECAR` (11) `DataColumnSidecar` from fulu, `NODE_JSON_AGGREGATE_AND_PROOF` (12) `SignedAggregateAndProof`, `NODE_JSON_SYNC_COMMITTEE_MESSAGE` (13) `SyncCommitteeMessage` from altair, `NODE_JSON_SYNC_CONTRIBUTION` (14) `SyncCommitteeContribution` from altair, `NODE_JSON_CONTRIBUTION_AND_PROOF` (15) `SignedContributionAndProof` from altair, `NODE_JSON_COMMITTEE_SUBSCRIPTION` (16) lantern's `BeaconCommitteeSubscription`, `NODE_JSON_SYNC_SUBSCRIPTION` (17) lantern's `SyncCommitteeSubscription` from altair, `NODE_JSON_PROPOSER_PREPARATION` (18) lantern's `ProposerPreparation`, `NODE_JSON_BEACON_BLOCK` (19) `BeaconBlock`, `NODE_JSON_BLOCK_CONTENTS` (20) lantern's `BlockContents` from deneb, `NODE_JSON_LC_BOOTSTRAP` (21) `LightClientBootstrap`, `NODE_JSON_LC_UPDATE` (22) `LightClientUpdate`, `NODE_JSON_LC_FINALITY_UPDATE` (23) `LightClientFinalityUpdate` and `NODE_JSON_LC_OPTIMISTIC_UPDATE` (24) `LightClientOptimisticUpdate`, from altair, `NODE_JSON_VALIDATOR_REGISTRATION` (25) `SignedValidatorRegistrationV1` of builder-specs, `NODE_JSON_BLINDED_BEACON_BLOCK` (26) `BlindedBeaconBlock` from bellatrix, `BeaconBlock` before, `NODE_JSON_BUILDER_BID` (27) `SignedBuilderBid` of builder-specs from bellatrix |
 | `ssz` | input | ByteList: a valid SSZ encoding of the type |
 | `cursor` | state | `JsonCursor` of [beacon-api.md](beacon-api.md#type-jsoncursor) |
 | `out` | output | ByteList |
@@ -2592,10 +2664,11 @@ A validator's fee recipient (beacon-api.md, prepareBeaconProposer).
 | 48 | `registration_fee_recipient` | ExecutionAddress | 20 bytes: of the registration |
 | 72 | `gas_limit` | u64 | Of the registration |
 | 80 | `timestamp` | u64 | Of the registration |
+| 88 | `pubkey` | BLSPubkey | 48 bytes: of the registration |
 
 ### Rules
 
-- `NodeProposer__mem` (88) bytes.
+- `NodeProposer__mem` (136) bytes.
 - A free entry: `until_epoch` at most the store's epoch and `registered` 0.
 
 ## Type `ProduceDraft`
@@ -2807,7 +2880,7 @@ A Beacon API answer the node sends in chunks.
 ### Rules
 
 - `NodeApi__mem` (720) bytes.
-- `flags`: `API_STREAM_CLOSE` (1) the connection closes after the answer; `API_STREAM_HTTP10` (2) an HTTP/1.0 request; `API_STREAM_SSZ` (4) the answer is SSZ, else JSON; `API_STREAM_OWN` (8) the stream frees `data` at its end; `API_STREAM_BUSY` (16) a `NODE_WORK_API_CHUNK` is queued; `API_STREAM_GONE` (32) the connection closed; `API_STREAM_STARTED` (64) the head went; `API_STREAM_CHUNKED` (128) the body goes with `Transfer-Encoding: chunked`; `API_STREAM_OPTIMISTIC` (256) and `API_STREAM_FINALIZED` (512) the JSON's `execution_optimistic` and `finalized`; `API_STREAM_DONE` (1024), in a `NODE_EV_WORK_DONE` only, the chunk ends the answer; `API_STREAM_LOOKUP` (2048) the entry waits for a `NODE_WORK_API_LOOKUP`, and sends no chunk; `API_STREAM_OWN_STATE` (4096) the stream frees `state` at its end; `API_STREAM_ITEMS` (8192) a pool stream wrote an entry; `API_STREAM_ITEM_DONE` (16384), in a `NODE_EV_WORK_DONE` only, the chunk ends an entry; `API_STREAM_FOLD` (32768) getAggregatedAttestationV2 folds its entries; `API_STREAM_PRODUCE_OWN` (65536) a produceBlockV3 frees the pool bytes of its fold in flight; `API_STREAM_PRODUCE_FORCED` (131072) a produceBlockV3 made its own payload preparation; `API_STREAM_BLOB_SKIP` (262144), in a `NODE_EV_WORK_DONE` only, the blob stream skips the rest of a blob.
+- `flags`: `API_STREAM_CLOSE` (1) the connection closes after the answer; `API_STREAM_HTTP10` (2) an HTTP/1.0 request; `API_STREAM_SSZ` (4) the answer is SSZ, else JSON; `API_STREAM_OWN` (8) the stream frees `data` at its end; `API_STREAM_BUSY` (16) a `NODE_WORK_API_CHUNK` is queued; `API_STREAM_GONE` (32) the connection closed; `API_STREAM_STARTED` (64) the head went; `API_STREAM_CHUNKED` (128) the body goes with `Transfer-Encoding: chunked`; `API_STREAM_OPTIMISTIC` (256) and `API_STREAM_FINALIZED` (512) the JSON's `execution_optimistic` and `finalized`; `API_STREAM_DONE` (1024), in a `NODE_EV_WORK_DONE` only, the chunk ends the answer; `API_STREAM_LOOKUP` (2048) the entry waits for a `NODE_WORK_API_LOOKUP`, and sends no chunk; `API_STREAM_OWN_STATE` (4096) the stream frees `state` at its end; `API_STREAM_ITEMS` (8192) a pool stream wrote an entry; `API_STREAM_ITEM_DONE` (16384), in a `NODE_EV_WORK_DONE` only, the chunk ends an entry; `API_STREAM_FOLD` (32768) getAggregatedAttestationV2 folds its entries; `API_STREAM_PRODUCE_OWN` (65536) a produceBlockV3 frees the pool bytes of its fold in flight; `API_STREAM_PRODUCE_FORCED` (131072) a produceBlockV3 made its own payload preparation; `API_STREAM_BLOB_SKIP` (262144), in a `NODE_EV_WORK_DONE` only, the blob stream skips the rest of a blob; `API_STREAM_PRODUCE_BLINDED` (524288) a produceBlockV3 answers a blinded block.
 - A `NODE_ACT_API_SEND` with `last` 0 is never more than `NODE_API_CHUNK` bytes, so a shell with room for two chunks in flight can take the next chunk at each `NODE_EV_API_SENT`.
 
 ## Type `NodeGossip`
@@ -3144,6 +3217,14 @@ The actions of one step: a ByteList whose bytes are `NodeAction` entries one aft
 | RISC-V |  |  |  |  |
 
 ### `lantern_node_produce_block`
+
+| ISA | Linux | Windows | macOS | `equal` |
+|---|---|---|---|---|
+| x86-64 |  |  |  |  |
+| ARM64 |  |  |  |  |
+| RISC-V |  |  |  |  |
+
+### `lantern_node_produce_bid`
 
 | ISA | Linux | Windows | macOS | `equal` |
 |---|---|---|---|---|

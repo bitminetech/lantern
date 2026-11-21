@@ -131,6 +131,14 @@ def builder_types(spec, fork):
         bid = container(spec, "BuilderBid", fields)
         t["BuilderBid"] = bid
         t["SignedBuilderBid"] = container(spec, "SignedBuilderBid", [("message", bid), ("signature", spec.BLSSignature)])
+        # the blinded block of produceBlockV3 (builder-specs, BlindedBeaconBlockBody): the body's fields, the header in the payload's place
+        body = [("execution_payload_header", spec.ExecutionPayloadHeader) if name == "execution_payload" else (name, typ)
+                for name, typ in spec.BeaconBlockBody.__annotations__.items()]
+        blinded_body = container(spec, "BlindedBeaconBlockBody", body)
+        t["BlindedBeaconBlockBody"] = blinded_body
+        t["BlindedBeaconBlock"] = container(spec, "BlindedBeaconBlock", [
+            ("slot", spec.Slot), ("proposer_index", spec.ValidatorIndex), ("parent_root", spec.Root), ("state_root", spec.Root),
+            ("body", blinded_body)])
     return t
 
 

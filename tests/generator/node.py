@@ -648,6 +648,21 @@ def cases(fork, preset):
 PAYLOAD_HASH = bytes([0x11]) * 32  # the anchor payload's block hash
 
 
+def payload_header(spec, payload):
+    """The ExecutionPayloadHeader of a payload, as process_execution_payload builds it."""
+    fields = {}
+    header = spec.ExecutionPayloadHeader
+    names = header.model_fields if hasattr(header, "model_fields") else header.fields()
+    for name in names:
+        if name == "transactions_root":
+            fields[name] = spec.hash_tree_root(payload.transactions)
+        elif name == "withdrawals_root":
+            fields[name] = spec.hash_tree_root(payload.withdrawals)
+        else:
+            fields[name] = getattr(payload, name)
+    return spec.ExecutionPayloadHeader(**fields)
+
+
 def payload_anchor(spec, fork, epoch=ANCHOR_EPOCH, extra=0):
     """The api anchor with an execution payload in its block and its header in the state, so the
     merge is complete; from capella validators 2 and 3 have 0x01 credentials, 2 a balance past the
@@ -663,17 +678,7 @@ def payload_anchor(spec, fork, epoch=ANCHOR_EPOCH, extra=0):
                                     block_number=7, gas_limit=30_000_000, timestamp=spec.compute_time_at_slot(state.genesis_time, state.slot),
                                     prev_randao=spec.get_randao_mix(state, spec.get_current_epoch(state)),
                                     block_hash=spec.Hash32(PAYLOAD_HASH))
-    fields = {}
-    header = spec.ExecutionPayloadHeader
-    names = header.model_fields if hasattr(header, "model_fields") else header.fields()
-    for name in names:
-        if name == "transactions_root":
-            fields[name] = spec.hash_tree_root(payload.transactions)
-        elif name == "withdrawals_root":
-            fields[name] = spec.hash_tree_root(payload.withdrawals)
-        else:
-            fields[name] = getattr(payload, name)
-    state.latest_execution_payload_header = spec.ExecutionPayloadHeader(**fields)
+    state.latest_execution_payload_header = payload_header(spec, payload)
     body = spec.BeaconBlockBody(execution_payload=payload)
     state.latest_block_header.body_root = spec.hash_tree_root(body)
     block = spec.BeaconBlock(slot=state.slot, body=body, state_root=spec.hash_tree_root(state))
@@ -1043,6 +1048,8 @@ def produce_cases(fork, preset):
             "result": result.encode() if result is not None else b"",
             "closes": 0,
         }
+    if merged:
+        yield from builder_produce_cases(spec, fork, build, graffiti, block_value)
     # publishBlockV2: an anchor at epoch 0, so that on_block's shuffling dependent root is a block of the store
     made = run(spec, schedule(fork), lambda: build(False, False, 0))
     if made is None:
@@ -1050,6 +1057,185 @@ def produce_cases(fork, preset):
     state, anchor_block, slot, _, block = made[:5]
     yield from publish_cases(spec, fork, state, anchor_block, block,
                              int(state.genesis_time) * 1000 + int(slot) * int(spec.config.SLOT_DURATION_MS))
+
+
+BUILDER_CLOSES = 40  # more steps than a produceBlockV3 with a builder's bid takes
+BUILDER_KEY = 9      # the test key of the builder's bids
+
+
+def produce_answers(fork, data_json, data_ssz, payload_value, gwei, blinded):
+    """The JSON and SSZ answers of produceBlockV3 (beacon-api.md) of a block's JSON and SSZ bytes."""
+    wei = b"%d" % gwei + (b"000000000" if gwei else b"")
+    flag = b"true" if blinded else b"false"
+    head = (b"Eth-Consensus-Version: " + fork.encode() + b"\r\nEth-Execution-Payload-Blinded: " + flag + b"\r\n"
+            b"Eth-Execution-Payload-Value: %d\r\nEth-Consensus-Block-Value: %s\r\n" % (payload_value, wei))
+
+    def answer(body, ssz):
+        return (b"HTTP/1.1 200 OK\r\nContent-Type: " + (b"application/octet-stream" if ssz else b"application/json") + b"\r\n"
+                + head + b"Content-Length: %d\r\n\r\n" % len(body) + body)
+    body = (b'{"version":"' + fork.encode() + b'","execution_payload_blinded":' + flag + b',"execution_payload_value":"%d",'
+            b'"consensus_block_value":"%s","data":' % (payload_value, wei) + data_json + b"}")
+    return answer(body, False), answer(data_ssz, True)
+
+
+def builder_produce_cases(spec, fork, build, graffiti, block_value):
+    """node-produce with a builder (beacon-api.md, produceBlockV3, the builder; builder-specs v0.6.1),
+    from bellatrix: a registerValidator of the proposer in the slot before, then produceBlockV3 at the
+    slot's start with the runner as the builder. builder_bid: a bid that wins, the blinded block (the
+    spec's block on the bid's payload, its state root from process_block). builder_boost: boost 0
+    (no getHeader) and 50. builder_invalid: a bid that fails each check, the local block.
+    builder_late: no answer within BUILDER_PROPOSAL_DELAY_TOLERANCE. builder_unhealthy: an anchor
+    4 epochs past finality, no getHeader. builder_closed: the request closed after each step."""
+    import json_codec
+    import reqresp
+    from eth_consensus_specs.utils import bls
+    f = FORKS.index(fork)
+    capella = f >= FORKS.index("capella")
+    deneb = f >= FORKS.index("deneb")
+    electra = f >= FORKS.index("electra")
+    to_json = json_codec.to_json
+    btypes = reqresp.builder_types(spec, fork)
+    fee = b"\x77" * 20
+    slot_ms = int(spec.config.SLOT_DURATION_MS)
+
+    def signed_bid(header, commitments, value, key=BUILDER_KEY):
+        fields = {"header": header, "value": spec.Uint256(value), "pubkey": spec.BLSPubkey(KEYS.pubkeys[BUILDER_KEY])}
+        if deneb:
+            fields["blob_kzg_commitments"] = btypes["BuilderBid"].__annotations__["blob_kzg_commitments"](data=commitments)
+        if electra:
+            fields["execution_requests"] = spec.ExecutionRequests()
+        bid = btypes["BuilderBid"](**fields)
+        domain = spec.compute_domain(spec.DomainType(b"\x00\x00\x00\x01"))  # DOMAIN_APPLICATION_BUILDER
+        return btypes["SignedBuilderBid"](message=bid, signature=bls.Sign(KEYS.privkeys[key], spec.compute_signing_root(bid, domain)))
+
+    def bid_http(sb, version=None, chunked=False):
+        body = b'{"version":"' + (version or fork).encode() + b'","data":' + to_json(sb).encode() + b"}"
+        if not chunked:
+            return b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: %d\r\n\r\n" % len(body) + body
+        half = len(body) // 2  # two chunks, as a Go server sends a body past its buffer
+        return (b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nTransfer-Encoding: chunked\r\n\r\n"
+                + b"%x\r\n" % half + body[:half] + b"\r\n%x\r\n" % (len(body) - half) + body[half:] + b"\r\n0\r\n\r\n")
+
+    def builder_build(epoch0=None):
+        made = build(False, False, epoch0)
+        state, block = made[0], made[4]
+        st = state.copy()
+        spec.process_slots(st, block.slot)
+        proposer = int(block.proposer_index)
+        p = block.body.execution_payload.copy()  # the builder's payload: the engine's with transactions
+        p.fee_recipient = spec.ExecutionAddress(fee)
+        p.block_hash = spec.Hash32(b"\x88" * 32)
+        p.extra_data = type(p.extra_data)(data=b"builder")
+        for tx in (b"\x01\x02\x03", b"\xab" * 100):
+            p.transactions.append(spec.Transaction(data=tx))
+        if deneb:
+            p.blob_gas_used = spec.Uint64(131072)
+        commitments = [spec.KZGCommitment(b"\xc0" + bytes(47))] if deneb else []  # the G1 point at infinity
+        value = block_value + 10 ** 6 if capella else 10 ** 18
+        header = payload_header(spec, p)
+        full = block.copy()
+        full.body.execution_payload = p
+        if deneb:
+            full.body.blob_kzg_commitments = type(full.body.blob_kzg_commitments)(data=commitments)
+        post = st.copy()
+        spec.process_block(post, full)
+        full.state_root = spec.hash_tree_root(post)
+        names = btypes["BlindedBeaconBlockBody"].__annotations__
+        body = btypes["BlindedBeaconBlockBody"](**{n: header if n == "execution_payload_header" else getattr(full.body, n) for n in names})
+        blinded = btypes["BlindedBeaconBlock"](slot=full.slot, proposer_index=full.proposer_index, parent_root=full.parent_root,
+                                               state_root=full.state_root, body=body)
+        gained = int(post.balances[proposer]) - int(st.balances[proposer])
+        if capella:
+            gained += sum(int(w.amount) for w in p.withdrawals if int(w.validator_index) == proposer)
+        good = signed_bid(header, commitments, value)
+
+        def changed(**kw):
+            h = header.copy()
+            for k, v in kw.items():
+                setattr(h, k, v)
+            return bid_http(signed_bid(h, commitments, value))
+        bad = [b"HTTP/1.1 204 No Content\r\nConnection: close\r\n\r\n",
+               bid_http(good, version=FORKS[f - 1]),
+               changed(fee_recipient=spec.ExecutionAddress(b"\x78" * 20)),
+               bid_http(signed_bid(header, commitments, value, key=BUILDER_KEY + 1)),
+               changed(parent_hash=spec.Hash32(b"\x99" * 32)),
+               changed(prev_randao=spec.Bytes32(b"\x98" * 32)),
+               changed(timestamp=spec.Uint64(int(header.timestamp) + slot_ms // 1000))]
+        if capella:
+            bad.append(changed(withdrawals_root=spec.hash_tree_root(type(p.withdrawals)())))
+        if deneb:
+            if f >= FORKS.index("fulu"):
+                limit = spec.get_blob_parameters(spec.get_current_epoch(st)).max_blobs_per_block
+            else:
+                limit = spec.config.MAX_BLOBS_PER_BLOCK_ELECTRA if electra else spec.config.MAX_BLOBS_PER_BLOCK
+            bad.append(bid_http(signed_bid(header, commitments * (int(limit) + 1), value)))
+        # the proposer's registration, signed with its test key
+        pubkey = bytes(st.validators[proposer].pubkey)
+        msg = btypes["ValidatorRegistrationV1"](fee_recipient=spec.ExecutionAddress(fee), gas_limit=30000000,
+                                                timestamp=1700000000, pubkey=spec.BLSPubkey(pubkey))
+        domain = spec.compute_domain(spec.DomainType(b"\x00\x00\x00\x01"))
+        sig = bytes(bls.Sign(KEYS.privkeys[proposer], spec.compute_signing_root(msg, domain)))
+        text = (b'{"message":{"fee_recipient":"0x' + fee.hex().encode() + b'","gas_limit":"30000000","timestamp":"1700000000",'
+                b'"pubkey":"0x' + pubkey.hex().encode() + b'"},"signature":"0x' + sig.hex().encode() + b'"}')
+        header_request = (b"GET /eth/v1/builder/header/%d/0x%s/0x%s HTTP/1.1\r\nHost: " % (
+            int(block.slot), bytes(st.latest_execution_payload_header.block_hash).hex().encode(), pubkey.hex().encode())
+            + BUILDER_HOST + b"\r\nAccept: application/json\r\nConnection: close\r\n\r\n")
+        return made, good, blinded, max(gained, 0), bad, value, text, header_request
+
+    def cases_of(epoch0=None):
+        built = run(spec, schedule(fork), lambda: builder_build(epoch0))
+        if built is None:
+            raise RuntimeError(f"node-produce {fork}: the spec refuses the builder's block")
+        made, good, blinded, bgwei, bad, value, text, header_request = built
+        state, anchor_block, slot, reveal, block, result, gwei = made[:7]
+        time_ms = int(state.genesis_time) * 1000 + int(slot) * slot_ms
+        if deneb:
+            bc = reqresp.produce_types(spec, fork)["BlockContents"](block=block)
+            local = produce_answers(fork, to_json(bc).encode(), bytes(bc.encode_bytes()), block_value if capella else 0, gwei, False)
+        else:
+            local = produce_answers(fork, to_json(block).encode(), bytes(block.encode_bytes()), block_value if capella else 0, gwei, False)
+        blind = produce_answers(fork, to_json(blinded).encode(), bytes(blinded.encode_bytes()), value, bgwei, True)
+        body = b"[" + text + b"]"
+        register = (b"POST /eth/v1/validator/register_validator HTTP/1.1\r\nHost: lantern\r\nContent-Type: application/json\r\n"
+                    b"Content-Length: %d\r\n\r\n" % len(body) + body)
+        register_call = (b"POST /eth/v1/builder/validators HTTP/1.1\r\nHost: " + BUILDER_HOST + b"\r\nAccept: application/json\r\n"
+                         b"Connection: close\r\nContent-Type: application/json\r\nContent-Length: %d\r\n\r\n" % len(body) + body)
+        path = b"/eth/v3/validator/blocks/%d?randao_reveal=0x%s&graffiti=0x%s" % (int(slot), bytes(reveal).hex().encode(), graffiti.hex().encode())
+
+        def get(query=b"", ssz=False):
+            return (b"GET " + path + query + b" HTTP/1.1\r\nHost: lantern\r\n"
+                    + (b"Accept: application/octet-stream\r\n" if ssz else b"") + b"\r\n")
+
+        def case(produce, answers, bids, calls, after=None, closes=0):
+            reqs = [register] + produce
+            parts = {
+                "anchor_state": bytes(state.encode_bytes()),
+                "anchor_block": bytes(anchor_block.encode_bytes()),
+                "time_ms": time_ms - slot_ms,
+                "ticks": [time_ms - slot_ms + 100, time_ms] + [0] * (len(produce) - 1),
+                "requests": reqs,
+                "responses": [response(200)] + answers,
+                "payload_id": bytes(range(1, 9)),
+                "result": result.encode(),
+                "closes": closes,
+                "builder": 1,
+                "bids": bids,
+                "after": after or [0] * len(reqs),
+            }
+            if calls is not None:
+                parts["builders"] = register_call + header_request * calls
+            return parts
+        return time_ms, local, blind, good, bad, get, case, bid_http
+
+    time_ms, local, blind, good, bad, get, case, http = cases_of()
+    yield "produce", "builder_bid", case([get(), get(ssz=True)], list(blind), [http(good, chunked=True)], 2)
+    yield "produce", "builder_boost", case([get(b"&builder_boost_factor=0"), get(b"&builder_boost_factor=50")],
+                                           [local[0], local[0] if capella else blind[0]], [http(good)], 1)
+    yield "produce", "builder_invalid", case([get()] * len(bad), [local[0]] * len(bad), bad, len(bad))
+    yield "produce", "builder_late", case([get()], [local[0]], [b""], 1, after=[0, time_ms + 1000])
+    yield "produce", "builder_closed", case([get()], [blind[0]], [http(good)], None, closes=BUILDER_CLOSES)
+    _, local, _, _, _, get, case, _ = cases_of(ANCHOR_EPOCH + 4)
+    yield "produce", "builder_unhealthy", case([get()], [local[0]], [b""], 0)
 
 
 # ---------------------------------------------------------------- Block publishing (beacon-api.md, publishBlockV2)

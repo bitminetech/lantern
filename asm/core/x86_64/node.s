@@ -4559,6 +4559,8 @@ LOCAL_FUNCTION node_event
     cmp     $NODE_WORK_PRODUCE_FOLD, %rax
     je      708f
     cmp     $NODE_WORK_PRODUCE_BLOCK, %rax
+    je      708f
+    cmp     $NODE_WORK_PRODUCE_BID, %rax
     jne     709f
 708: mov    %r12, %rdi
     call    node_produce_done
@@ -9061,6 +9063,7 @@ FUNCTION lantern_node_step
     call    node_shed                       # the post-states the node can rebuild go
     call    node_api_head_events            # the head and finalized_checkpoint events, at a quiet point
     call    node_lc_due                     # the light client updates due on gossip
+    call    node_produce_due                # the produceBlockV3 entries whose bid is late
     call    node_backfill_link              # the backfill's blocks of the chain join the Db
     call    node_drop_sidecars              # the sidecars the node no longer serves go
     movq    $0, (L + 112)(%rsp)
@@ -9952,7 +9955,7 @@ FUNCTION lantern_node_run
     mov     %r13, %rdi
     mov     %r15, %rdx
     mov     S8(%rsp), %rcx
-    add     $NodeEvent_index, %rcx
+    add     $NodeEvent_root, %rcx           # the proposer, then the health
     FORK_CALL node_produce_check
     cmp     $LANTERN_BUFFER_TOO_SMALL, %rax
     je      8401f
@@ -10058,7 +10061,7 @@ FUNCTION lantern_node_run
     xor     %eax, %eax
     LEAVE 192
 8430: cmp   $NODE_WORK_PRODUCE_BLOCK, %rax
-    jne     8450f
+    jne     8445f
     test    %r13, %r13                      # PRODUCE_BLOCK: lantern_node_produce_block, as a ByteList at NodeEvent_chunk
     jz      837b
     test    %r14, %r14
@@ -10087,6 +10090,10 @@ FUNCTION lantern_node_run
     mov     %rax, (L + 120)(%rsp)
     lea     NodeEvent_index(%rcx), %rax
     mov     %rax, (L + 128)(%rsp)
+    mov     (L + 80)(%rsp), %rax            # the bid: state_c; then where blinded goes
+    mov     %rax, (L + 136)(%rsp)
+    lea     NodeEvent_checkpoint(%rcx), %rax
+    mov     %rax, (L + 144)(%rsp)
     mov     NODE_STATE_SLOT(%r13), %rdi
     lea     Node_config(%rbx), %rsi
     call    node_fork
@@ -10117,6 +10124,59 @@ FUNCTION lantern_node_run
     mov     %rax, (%rcx)
     xor     %eax, %eax
 8449: LEAVE 192
+8445: cmp   $NODE_WORK_PRODUCE_BID, %rax
+    jne     8450f
+    test    %r13, %r13                      # PRODUCE_BID: the bid's JSON of the answer, lantern_node_produce_bid as a ByteList at NodeEvent_chunk
+    jz      837b
+    test    %r14, %r14
+    jz      837b
+    cmpq    $(NodeEvent_chunk + 24), S9(%rsp)
+    jb      8419b
+    mov     S8(%rsp), %rcx
+    mov     S9(%rsp), %rax
+    sub     $NodeEvent_chunk, %rax
+    mov     %rax, NodeEvent_chunk(%rcx)
+    movq    $24, (NodeEvent_chunk + 8)(%rcx)
+    movq    $0, (NodeEvent_chunk + 16)(%rcx)
+    mov     NodeAction_target(%r12), %rax   # ProduceParams at L+96: the entry's cursor, the config
+    PART    %rsi, %rcx, %rbx, Node_api
+    cmp     %rcx, %rax
+    jae     837b
+    imul    $NodeApi__mem, %rax, %rax
+    lea     NodeApi_cursor(%rsi,%rax), %rax
+    mov     %rax, (L + 96)(%rsp)
+    lea     Node_config(%rbx), %rax
+    mov     %rax, (L + 104)(%rsp)
+    mov     NODE_STATE_SLOT(%r13), %rdi
+    lea     Node_config(%rbx), %rsi
+    call    node_fork
+    mov     %rax, (L + 152)(%rsp)
+    mov     (%r15), %rax                    # the scratch's size, back after the call
+    mov     %rax, (L + 160)(%rsp)
+    mov     %r14, %rdi
+    mov     %r15, %rsi
+    mov     (L + 152)(%rsp), %rdx
+    call    node_bid_data
+    test    %rax, %rax
+    jnz     8446f
+    lea     (L + 168)(%rsp), %rcx           # a ByteList view of the data's text
+    mov     %rsi, %rax
+    sub     %rcx, %rax
+    mov     %rax, 8(%rcx)
+    add     %rdx, %rax
+    mov     %rax, (%rcx)
+    mov     %rdx, 16(%rcx)
+    mov     (L + 152)(%rsp), %r10
+    mov     %r13, %rdi
+    lea     (L + 168)(%rsp), %rsi
+    lea     (L + 96)(%rsp), %rdx
+    mov     %r15, %rcx
+    mov     S8(%rsp), %r8
+    add     $NodeEvent_chunk, %r8
+    FORK_CALL node_produce_bid
+8446: mov   (L + 160)(%rsp), %rcx
+    mov     %rcx, (%r15)
+    jmp     8440b
 8450: cmp   $NODE_WORK_PUBLISH_DECODE, %rax
     jne     8460f
     test    %r14, %r14                      # PUBLISH_DECODE: lantern_node_publish_decode, the block as a ByteList at NodeEvent_chunk
