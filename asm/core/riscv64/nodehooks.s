@@ -6384,7 +6384,7 @@ LOCAL_FUNCTION produce_attestations
     add     t2, s8, t2
     ld      a0, 0(t2)
     call    produce_att_bits
-    addi    a0, a0, (8 + 7)                 # the bits: as many as the length, and the end bit
+    addi    a0, a0, 8                 # the bits: (length + 1 end bit) rounded up to bytes
     srli    a0, a0, 3
     addi    a0, a0, PB_ATT_FIXED
     ld      t0, (L + 16)(sp)
@@ -6406,7 +6406,7 @@ LOCAL_FUNCTION produce_attestations
     mul     s6, a0, t0
     add     s6, s3, s6                      # the chosen aggregate
     call    produce_att_bits
-    addi    a0, a0, (8 + 7)
+    addi    a0, a0, 8
     srli    a0, a0, 3
     addi    a1, a0, PB_ATT_FIXED
     mv      a0, s9
@@ -6427,7 +6427,7 @@ LOCAL_FUNCTION produce_attestations
     add     t2, s8, t2
     ld      a0, 0(t2)
     call    produce_att_bits
-    addi    a1, a0, (8 + 7)
+    addi    a1, a0, 8
     srli    a1, a1, 3
     addi    a1, a1, PB_ATT_COMMITTEE
     addi    a0, s9, 228
