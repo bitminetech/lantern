@@ -12,7 +12,8 @@
 # log level (default info). LANTERN_MAX_CPU: lantern's CPU limit in millicores (default no limit).
 # LANTERN_DELAY: seconds before lantern starts (default 0). RESTART=1: 6-second slots, lantern with
 # --data-dir /data --archive; after it follows, once its log shows finalized epoch 2 or later, lantern stops and
-# starts again, and must log "restart at slot" and follow again. CHECKPOINT=1: 6-second slots, lantern
+# starts again, and must log "restart at slot" and follow again; DOWNTIME: the seconds it stays stopped
+# (default 0). CHECKPOINT=1: 6-second slots, lantern
 # with --data-dir /data --archive (the backfill keeps its blocks there) starts from the client's finalized block
 # and its post-state, must log "checkpoint at slot", and its
 # "earliest slot" must fall below the checkpoint's slot (the backfill).
@@ -21,7 +22,14 @@
 # epoch 1), 130 validators in genesis (two that no validator client runs), and Assertoor with lantern
 # as its one consensus endpoint (tests/kurtosis/main.star); after
 # lantern follows, Assertoor's test "lantern" must end in success within SECONDS, and each of its tasks
-# is printed.
+# is printed. VC=1: 6-second slots, 128 validators in genesis, the first client runs keys 0 to 63, and
+# the client's validator client runs keys 64 to 127 with lantern as its one beacon node, lantern on the
+# second client's geth (tests/kurtosis/main.star); after lantern follows, the client's finalized epoch must
+# reach 3 within SECONDS (the stake of keys 0 to 63 alone is half), and 4 or more of the client's
+# block headers must have a proposer index of 64 or more (blocks lantern produced). CLIENT: lighthouse,
+# prysm, teku, nimbus or lodestar. DIFF=1: 6-second slots; after lantern follows, once the client's
+# finalized epoch is 2 or more and lantern's has reached it, tests/app/differential.py compares their
+# reads of the client's finalized block.
 set -eu
 root=$(cd "$(dirname "$0")/../.." && pwd)
 client=$1
@@ -31,6 +39,12 @@ kurtosis=${KURTOSIS:-kurtosis}
 enclave=lantern-devnet
 . "$root/tests/app/clients.sh"
 [ -n "$(client_image "$client")" ] || { echo "unknown client: $client" >&2; exit 2; }
+vc=${VC:-0}
+if [ "$vc" = 1 ]; then
+    case $client in lighthouse|prysm|teku|nimbus|lodestar) ;; *) echo "VC=1: no validator client for $client" >&2; exit 2 ;; esac
+fi
+first_count=
+[ "$vc" = 1 ] && first_count="    validator_count: 64"
 work=$(mktemp -d)
 cat > "$work/args.yaml" <<EOF
 participants:
@@ -40,6 +54,7 @@ participants:
     cl_image: $(client_image "$client")
     vc_image: $(validator_image "$client")
     cl_log_level: ${CL_LOG_LEVEL:-info}
+$first_count
   - el_type: geth
     el_image: $geth_image
     cl_type: $client
@@ -52,13 +67,15 @@ lantern_image: $image
 lantern_max_cpu: ${LANTERN_MAX_CPU:-0}
 lantern_delay: ${LANTERN_DELAY:-0}
 EOF
-if [ "${RESTART:-0}" = 1 ] || [ "${CHECKPOINT:-0}" = 1 ] || [ "${FORK:-0}" = 1 ] || [ "${ASSERTOOR:-0}" = 1 ]; then
+if [ "${RESTART:-0}" = 1 ] || [ "${CHECKPOINT:-0}" = 1 ] || [ "${FORK:-0}" = 1 ] || [ "${ASSERTOOR:-0}" = 1 ] || [ "$vc" = 1 ] || [ "${DIFF:-0}" = 1 ]; then
     printf 'network_params:\n  seconds_per_slot: 6\n' >> "$work/args.yaml"
 fi
 # Assertoor: exits at once (shard_committee_period 1), and two validators of the mnemonic past the
 # first client's 128 that no validator client runs (preregistered_validator_count 130), whose
 # attestations only Assertoor signs, through lantern's submitPoolAttestationsV2.
 if [ "${ASSERTOOR:-0}" = 1 ]; then printf '  shard_committee_period: 1\n  preregistered_validator_count: 130\n' >> "$work/args.yaml"; fi
+# VC=1: keys 64 to 127, which only lantern's validator client runs.
+if [ "$vc" = 1 ]; then printf '  preregistered_validator_count: 128\n' >> "$work/args.yaml"; fi
 min_slot=8
 if [ "${FORK:-0}" = 1 ]; then
     printf '  electra_fork_epoch: 0\n  fulu_fork_epoch: 1\n' >> "$work/args.yaml"
@@ -68,6 +85,7 @@ fi
 if [ "${RESTART:-0}" = 1 ] || [ "${CHECKPOINT:-0}" = 1 ]; then printf 'lantern_data_dir: /data\n' >> "$work/args.yaml"; fi
 if [ "${CHECKPOINT:-0}" = 1 ]; then printf 'lantern_checkpoint: true\n' >> "$work/args.yaml"; fi
 if [ "${ASSERTOOR:-0}" = 1 ]; then printf 'lantern_assertoor: true\n' >> "$work/args.yaml"; fi
+if [ "$vc" = 1 ]; then printf 'lantern_vc: %s\nlantern_vc_image: %s\n' "$client" "$(validator_image "$client")" >> "$work/args.yaml"; fi
 
 cleanup() {
     echo "== lantern"
@@ -78,6 +96,11 @@ cleanup() {
     if [ "${ASSERTOOR:-0}" = 1 ]; then
         echo "== assertoor"
         $kurtosis service logs -a $enclave assertoor 2>&1 | grep -i "error\|fail\|warn" | tail -40 || true
+    fi
+    if [ "$vc" = 1 ]; then
+        echo "== lantern-vc"
+        $kurtosis service logs -a $enclave lantern-vc 2>&1 | grep -i "error\|fail\|warn\|crit" | tail -40 || true
+        $kurtosis service logs -a $enclave lantern-vc 2>&1 | tail -15 || true
     fi
     [ "${KEEP:-0}" = 1 ] || $kurtosis enclave rm -f $enclave >/dev/null 2>&1 || true
     rm -rf "$work"
@@ -175,6 +198,63 @@ except Exception as e:
     fi
     if [ $status -eq 0 ]; then echo "PASS Assertoor's checks over lantern"; else echo "FAIL Assertoor's checks over lantern"; fi
 fi
+# The finalized epoch of the Beacon API at $1, or nothing.
+finalized_epoch() {
+    curl -s --max-time 5 "$1/eth/v1/beacon/states/head/finality_checkpoints" | python3 -c '
+import json, sys
+try:
+    print(json.load(sys.stdin)["data"]["finalized"]["epoch"])
+except Exception:
+    pass'
+}
+if [ $status -eq 0 ] && [ "${DIFF:-0}" = 1 ]; then
+    status=1
+    waited=0
+    while [ $waited -lt "$secs" ]; do
+        p=$(finalized_epoch "$peer"); l=$(finalized_epoch "$lantern")
+        echo "$client finalized epoch ${p:-none}, lantern ${l:-none}"
+        [ -n "$p" ] && [ -n "$l" ] && [ "$p" -ge 2 ] && [ "$l" -ge "$p" ] && { status=0; break; }
+        sleep 30; waited=$((waited + 30))
+    done
+    if [ $status -eq 0 ]; then
+        python3 "$root/tests/app/differential.py" "$lantern" "$peer" || status=1
+        if [ $status -eq 0 ]; then echo "PASS lantern's reads agree with $client's"; else echo "FAIL lantern's reads differ from $client's"; fi
+    else
+        echo "FAIL no finalized epoch 2 on both nodes"
+    fi
+fi
+if [ $status -eq 0 ] && [ "$vc" = 1 ]; then
+    # finality, which needs the attestations of lantern's validators; then the blocks they proposed
+    status=1
+    waited=0
+    while [ $waited -lt "$secs" ]; do
+        f=$(finalized_epoch "$peer")
+        echo "$client finalized epoch ${f:-none}"
+        [ -n "$f" ] && [ "$f" -ge 3 ] && { status=0; break; }
+        sleep 30; waited=$((waited + 30))
+    done
+    if [ $status -eq 0 ]; then echo "PASS finality with the validators of lantern's validator client"; else echo "FAIL no finality with the validators of lantern's validator client"; fi
+    if [ $status -eq 0 ]; then
+        n=$(python3 - "$peer" <<'PY' || true
+import json, sys, urllib.request
+peer = sys.argv[1]
+head = int(json.load(urllib.request.urlopen(peer + "/eth/v1/beacon/headers/head", timeout=10))["data"]["header"]["message"]["slot"])
+count = 0
+for slot in range(1, head + 1):
+    try:
+        d = json.load(urllib.request.urlopen(peer + "/eth/v1/beacon/headers/" + str(slot), timeout=10))["data"]
+    except Exception:
+        continue
+    if int(d["header"]["message"]["proposer_index"]) >= 64:
+        count += 1
+print(count)
+PY
+)
+        echo "blocks of lantern's validators: $n"
+        [ "${n:-0}" -ge 4 ] || status=1
+        if [ $status -eq 0 ]; then echo "PASS blocks produced through lantern"; else echo "FAIL too few blocks produced through lantern"; fi
+    fi
+fi
 [ $status -eq 0 ] && [ "${RESTART:-0}" = 1 ] || exit $status
 
 # RESTART=1: once lantern has written its history at a finalized epoch, it stops and starts again.
@@ -191,6 +271,7 @@ done
 [ $status -eq 0 ] || { echo "FAIL lantern does not reach finalized epoch 2"; exit 1; }
 sleep 12
 $kurtosis service stop $enclave lantern
+sleep "${DOWNTIME:-0}"
 $kurtosis service start $enclave lantern
 lantern=$(url lantern)
 status=1
@@ -204,5 +285,5 @@ while [ $waited -lt "$secs" ]; do
     fi
 done
 log | grep "restart at slot\|cannot write\|status" | head -10 || true
-if [ $status -eq 0 ]; then echo "PASS lantern restarts from its history and follows again"; else echo "FAIL lantern does not restart from its history and follow"; fi
+if [ $status -eq 0 ]; then echo "PASS lantern restarts from its history after ${DOWNTIME:-0} s down and follows again"; else echo "FAIL lantern does not restart from its history and follow"; fi
 exit $status
