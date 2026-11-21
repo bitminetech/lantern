@@ -3497,7 +3497,15 @@ LOCAL_FUNCTION node_api_event
     jbe     582f
     movq    $API_ID_HEAD, ApiRoute_id_kind(%rdi)
 582: mov    S8(%rsp), %rsi
-    call    node_api_state
+    cmpq    $API_OP_GET_ATTESTER_DUTIES, ApiRoute_op(%rdi)  # getAttesterDuties of a slot: the replay may come
+    jne     584f
+    cmpq    $API_ID_SLOT, ApiRoute_id_kind(%rdi)
+    jne     584f
+    movq    $1, ApiView_look_replay(%rsi)
+584: call   node_api_state
+    mov     %rax, %rdx
+    cmp     $1, %rax
+    je      698b
     mov     $400, %edx
     test    %rax, %rax
     jnz     80f
@@ -3710,8 +3718,13 @@ LOCAL_FUNCTION node_api_event
     jbe     62f
     movq    $API_ID_HEAD, ApiRoute_id_kind(%rdi)
 62: mov     S8(%rsp), %rsi
-    call    node_api_state
+    cmpq    $API_ID_SLOT, ApiRoute_id_kind(%rdi)    # a slot: the replay may come
+    jne     621f
+    movq    $1, ApiView_look_replay(%rsi)
+621: call   node_api_state
     mov     %rax, %rdx
+    cmp     $1, %rax
+    je      698b
     test    %rax, %rax
     jnz     80f
     mov     S7(%rsp), %rax                  # brought to the first slot
@@ -5335,10 +5348,12 @@ LOCAL_FUNCTION node_api_lookup
     mov     $64, %edx
     call    lantern_copy
     mov     ApiRoute_op(%r12), %rax
+    cmp     $API_OP_GET_ATTESTER_DUTIES, %rax   # and getAttesterDuties'
+    je      21f
     sub     $API_OP_GET_STATE_VALIDATORS, %rax
     cmp     $(API_OP_GET_EPOCH_COMMITTEES - API_OP_GET_STATE_VALIDATORS), %rax
     ja      2f
-    mov     %r12, %rdi
+21: mov     %r12, %rdi
     call    node_api_ids
     mov     %rax, NodeApi_data(%r13)
     test    %rax, %rax
@@ -5483,7 +5498,12 @@ LOCAL_FUNCTION node_api_rerun
     mov     (L + 128)(%rsp), %rax
     mov     %rax, (NodeApi_cursor + API_REPLAY_SLOT)(%r12)
     jmp     90f
-70: mov     %rdx, (L + 136)(%rsp)
+70: cmpq    $API_OP_GET_ATTESTER_DUTIES, S10(%rsp)  # getAttesterDuties with no state: 400
+    jne     707f
+    mov     $400, %eax
+    cmp     $404, %rdx
+    cmove   %rax, %rdx
+707: mov    %rdx, (L + 136)(%rsp)
     mov     S7(%rsp), %rax
     and     $~API_STREAM_OWN, %rax          # the entry ends; it owns no bytes
     mov     %rax, NodeApi_flags(%r12)
