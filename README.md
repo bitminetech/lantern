@@ -83,6 +83,7 @@ Standard: [asm-standard@2a19d3f](https://github.com/bitminetech/asm-standard/blo
 | Devnet of geth and each client, lantern following it | [tests/app/devnet.sh](tests/app/devnet.sh), [tests/kurtosis/](tests/kurtosis/), images in [tests/app/clients.sh](tests/app/clients.sh) |
 | Devnet: lantern restarts from its history after 0, 120 or 300 s down, starts from a checkpoint, and follows across a fork | [tests/app/devnet.sh](tests/app/devnet.sh) (RESTART=1 with DOWNTIME, CHECKPOINT=1, FORK=1) |
 | Devnet: Assertoor's Beacon API checks, and pool operations through lantern into blocks | [tests/app/devnet.sh](tests/app/devnet.sh) (ASSERTOOR=1), [tests/kurtosis/main.star](tests/kurtosis/main.star) |
+| Devnet: a lighthouse node syncs from genesis with lantern its one peer | [tests/app/devnet.sh](tests/app/devnet.sh) (SYNC=1), [tests/kurtosis/main.star](tests/kurtosis/main.star) |
 | Devnet: lantern's reads and each client's at the client's finalized block, compared | [tests/app/devnet.sh](tests/app/devnet.sh) (DIFF=1), [tests/app/differential.py](tests/app/differential.py) |
 | Devnet: each client's validator client on lantern, to finality, with blocks lantern produced | [tests/app/devnet.sh](tests/app/devnet.sh) (VC=1), [tests/kurtosis/main.star](tests/kurtosis/main.star) |
 | CI, 7 targets | [.github/workflows/ci.yml](.github/workflows/ci.yml) |

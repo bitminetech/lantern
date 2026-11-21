@@ -12,7 +12,10 @@
 # ASSERTOOR_TESTS at its start (default false); args.lantern_vc: a client (lighthouse, prysm, teku, nimbus,
 # lodestar) whose validator client runs keys LANTERN_VC_FIRST to LANTERN_VC_LAST - 1 of the mnemonic with
 # lantern as its one beacon node, and lantern then takes the second participant's geth as its execution
-# client (default none); args.lantern_vc_image: that validator client's image.
+# client (default none); args.lantern_vc_image: that validator client's image; args.lantern_sync: true to
+# run lantern with --supernode and, args.lantern_sync_delay seconds later, a geth (args.lantern_sync_el_image)
+# and a lighthouse beacon node (args.lantern_sync_cl_image) whose one boot node is lantern's multiaddr,
+# syncing from genesis (default false).
 ethereum = import_module("github.com/ethpandaops/ethereum-package/main.star")
 
 # The keys of lantern's validator client: those of the mnemonic past the first participant's 64.
@@ -208,7 +211,11 @@ def run(plan, args={}):
     lantern_assertoor = args.get("lantern_assertoor", False)
     lantern_vc = args.get("lantern_vc", "")
     lantern_vc_image = args.get("lantern_vc_image", "")
-    network_args = {key: value for key, value in args.items() if key not in ("lantern_image", "lantern_max_cpu", "lantern_delay", "lantern_data_dir", "lantern_checkpoint", "lantern_assertoor", "lantern_vc", "lantern_vc_image")}
+    lantern_sync = args.get("lantern_sync", False)
+    lantern_sync_delay = args.get("lantern_sync_delay", 600)
+    lantern_sync_el_image = args.get("lantern_sync_el_image", "")
+    lantern_sync_cl_image = args.get("lantern_sync_cl_image", "")
+    network_args = {key: value for key, value in args.items() if key not in ("lantern_image", "lantern_max_cpu", "lantern_delay", "lantern_data_dir", "lantern_checkpoint", "lantern_assertoor", "lantern_vc", "lantern_vc_image", "lantern_sync", "lantern_sync_delay", "lantern_sync_el_image", "lantern_sync_cl_image")}
     out = ethereum.run(plan, network_args)
     if lantern_delay > 0:
         plan.run_sh(run="sleep {0}".format(lantern_delay), wait="{0}s".format(lantern_delay + 60))
@@ -225,6 +232,8 @@ def run(plan, args={}):
         )
         files["/checkpoint"] = "lantern_checkpoint"
         extra_args += ["--checkpoint-state", "/checkpoint/state.ssz", "--checkpoint-block", "/checkpoint/block.ssz"]
+    if lantern_sync:
+        extra_args.append("--supernode")
     if lantern_vc:
         el = out.all_participants[1].el_context
         files["/jwt"] = "jwt_file"
@@ -274,6 +283,84 @@ def run(plan, args={}):
                 image=lantern_vc_image,
                 cmd=vc_cmd(lantern_vc, "http://{0}:5052".format(lantern.ip_address)),
                 files={"/network-configs": "el_cl_genesis_data", "/validator-keys": keys},
+            ),
+        )
+    if lantern_sync:
+        identity = plan.request(
+            service_name="lantern",
+            recipe=GetHttpRequestRecipe(port_id="http", endpoint="/eth/v1/node/identity", extract={"peer_id": ".data.peer_id"}),
+            description="lantern's peer id",
+        )
+        plan.run_sh(run="sleep {0}".format(lantern_sync_delay), wait="{0}s".format(lantern_sync_delay + 60))
+        records = [participant.el_context.enr for participant in out.all_participants if participant.el_context.enr]
+        sync_el = plan.add_service(
+            name="sync-el",
+            config=ServiceConfig(
+                image=lantern_sync_el_image,
+                entrypoint=["sh", "-c"],
+                cmd=[" ".join([
+                    "geth",
+                    "--override.genesis=/network-configs/genesis.json",
+                    "--datadir=/data/geth",
+                    "--http",
+                    "--http.addr=0.0.0.0",
+                    "--http.port=8545",
+                    "--http.vhosts=*",
+                    "--http.api=eth,net,web3",
+                    "--authrpc.port=8551",
+                    "--authrpc.addr=0.0.0.0",
+                    "--authrpc.vhosts=*",
+                    "--authrpc.jwtsecret=/jwt/jwtsecret",
+                    "--syncmode=full",
+                    "--nat=extip:KURTOSIS_IP_ADDR_PLACEHOLDER",
+                    "--port=30303",
+                    "--discovery.port=30303",
+                    "--discovery.v4=false",
+                    "--discovery.v5=true",
+                    "--bootnodes=" + ",".join(records),
+                ])],
+                files={"/network-configs": "el_cl_genesis_data", "/jwt": "jwt_file"},
+                ports={
+                    "rpc": PortSpec(number=8545, application_protocol="http", wait=None),
+                    "engine": PortSpec(number=8551, wait=None),
+                    "tcp": PortSpec(number=30303, transport_protocol="TCP", wait=None),
+                    "udp": PortSpec(number=30303, transport_protocol="UDP", wait=None),
+                },
+            ),
+        )
+        plan.add_service(
+            name="sync-cl",
+            config=ServiceConfig(
+                image=lantern_sync_cl_image,
+                cmd=[
+                    "lighthouse",
+                    "beacon_node",
+                    "--datadir=/data/lighthouse",
+                    "--testnet-dir=/network-configs",
+                    "--listen-address=0.0.0.0",
+                    "--port=9000",
+                    "--http",
+                    "--http-address=0.0.0.0",
+                    "--http-port=4000",
+                    "--disable-packet-filter",
+                    "--disable-enr-auto-update",
+                    "--enr-address=KURTOSIS_IP_ADDR_PLACEHOLDER",
+                    "--enr-tcp-port=9000",
+                    "--enr-udp-port=9000",
+                    "--execution-endpoints=http://{0}:8551".format(sync_el.ip_address),
+                    "--jwt-secrets=/jwt/jwtsecret",
+                    "--allow-insecure-genesis-sync",
+                    "--ignore-ws-check",
+                    "--boot-nodes=/ip4/{0}/tcp/9000/p2p/{1}".format(lantern.ip_address, identity["extract.peer_id"]),
+                    "--target-peers=1",
+                    "--trusted-peers=" + identity["extract.peer_id"],
+                ],
+                files={"/network-configs": "el_cl_genesis_data", "/jwt": "jwt_file"},
+                ports={
+                    "http": PortSpec(number=4000, application_protocol="http", wait=None),
+                    "tcp": PortSpec(number=9000, transport_protocol="TCP", wait=None),
+                    "udp": PortSpec(number=9000, transport_protocol="UDP", wait=None),
+                },
             ),
         )
     if lantern_assertoor:
