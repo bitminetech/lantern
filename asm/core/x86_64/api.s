@@ -3224,6 +3224,8 @@ LOCAL_FUNCTION node_api_event
     je      60f
     cmp     $API_OP_PUBLISH_BLOCK_V2, %rcx
     je      545f
+    cmp     $API_OP_PUBLISH_BLINDED_BLOCK_V2, %rcx
+    je      545f
     mov     %rcx, %rdi
     call    node_submit_topic
     test    %rax, %rax
@@ -3610,7 +3612,7 @@ LOCAL_FUNCTION node_api_event
     test    %rax, %rax
     jnz     80f
     jmp     90f
-545: mov    $503, %edx                      # publishBlockV2: 503 while syncing; a work decodes its body
+545: mov    $503, %edx                      # publishBlockV2 and publishBlindedBlockV2: 503 while syncing; a work decodes its body
     mov     S8(%rsp), %rax
     cmpq    $0, ApiView_is_syncing(%rax)
     jne     80f
@@ -5673,6 +5675,12 @@ LOCAL_FUNCTION node_api_publish
     cmpq    $API_TYPE_SSZ, ApiRoute_body(%rsi)
     setne   %al
     mov     %rax, (NodeApi_cursor + 24)(%r12)
+    xor     %eax, %eax                      # publishBlindedBlockV2 from bellatrix: a blinded block
+    cmpq    $API_OP_PUBLISH_BLINDED_BLOCK_V2, ApiRoute_op(%rsi)
+    jne     1f
+    cmpq    $FORK_BELLATRIX, ApiRoute_consensus_version(%rsi)
+    setae   %al
+1:  mov     %rax, (NodeApi_cursor + PUBLISH_BLINDED)(%r12)
     lea     L(%rsp), %rdi
     call    node_put
     mov     %rax, NodeApi_data(%r12)
@@ -5685,6 +5693,9 @@ LOCAL_FUNCTION node_api_publish
     xor     $1, %r9
     shl     $8, %r9
     or      NodeApi_fork(%r12), %r9
+    mov     (NodeApi_cursor + PUBLISH_BLINDED)(%r12), %rax
+    shl     $9, %rax
+    or      %rax, %r9
     call    node_work
     xor     %eax, %eax
     LEAVE 32
@@ -5763,7 +5774,9 @@ LOCAL_FUNCTION node_publish_done
     mov     $200, %esi
     cmpq    $NODE_BLOCK_INVALID, NodeBlock_status(%rdx)
     jne     90f
-11: cmpq    $0, (NodeApi_cursor + 16)(%r13)    # with blobs: the sidecars, else the check
+11: cmpq    $0, (NodeApi_cursor + PUBLISH_BLINDED)(%r13)    # a blinded block: no sidecars
+    jne     30f
+    cmpq    $0, (NodeApi_cursor + 16)(%r13)    # with blobs: the sidecars, else the check
     je      30f
     mov     %r13, %rdi
     call    node_publish_sidecars_work
@@ -5778,7 +5791,16 @@ LOCAL_FUNCTION node_publish_done
     LEAVE 0
 22: cmp     $NODE_WORK_PUBLISH_CHECK, %rax
     jne     99f
-    call    node_new_block                  # CHECK: the block's NodeBlock, before the publish
+    cmpq    $0, (NodeApi_cursor + PUBLISH_BLINDED)(%r13)    # a blinded block: to the builder
+    je      25f
+    mov     %r13, %rdi
+    lea     NodeEvent_chunk(%r12), %rsi
+    call    node_publish_submit
+    test    %rax, %rax
+    jz      99f
+    mov     %rax, %rsi
+    jmp     90f
+25: call    node_new_block                  # CHECK: the block's NodeBlock, before the publish
     mov     %rax, S7(%rsp)
     mov     %rdi, %rdx
     lea     NodeBlock_root(%rdx), %rdi
@@ -6095,6 +6117,9 @@ LOCAL_FUNCTION node_publish_check_work
     mov     NodeApi_filter_index(%r12), %rdx
     mov     NodeApi_filter_slot(%r12), %rcx
     mov     NodeApi_cursor(%r12), %r9
+    mov     (NodeApi_cursor + PUBLISH_BLINDED)(%r12), %rax  # a blinded block's check
+    shl     $8, %rax
+    or      %rax, %r9
     call    node_work
     mov     S8(%rsp), %rcx
     mov     %rcx, NodeAction_state_c(%rax)
@@ -6136,6 +6161,14 @@ END_FUNCTION node_publish_drop
 LOCAL_FUNCTION node_publish_end
     FRAME 16
     mov     %rdi, (%rsp)
+    mov     (NodeApi_cursor + PUBLISH_CALL)(%rdi), %rax     # its builder call in flight answers no entry
+    movq    $0, (NodeApi_cursor + PUBLISH_CALL)(%rdi)
+    test    %rax, %rax
+    jz      2f
+    dec     %rax
+    imul    $NODE_BUILDER_CALL_SIZE, %rax, %rax
+    movq    $-1, (Node_builder_calls + 8)(%rbx,%rax)
+2:  mov     (%rsp), %rdi
     call    node_publish_drop
     mov     (%rsp), %rdi
     mov     NodeApi_filter_slot(%rdi), %rsi

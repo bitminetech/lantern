@@ -64,9 +64,10 @@ KEYS = _Keys()
 BLS_VALIDATORS = (1, 3, 7)  # BLS withdrawal credentials of the key pubkeys[8191 - i], as the helpers sign changes
 
 
-def anchor(spec, fork, statuses=False, epoch=ANCHOR_EPOCH, extra=0):
+def anchor(spec, fork, statuses=False, epoch=ANCHOR_EPOCH, extra=0, recent=False):
     """A state at the first slot of the epoch (ANCHOR_EPOCH) with 8 validators (and those of
-    STATUS_VALIDATORS after them with statuses, then `extra` more active ones), and its block."""
+    STATUS_VALIDATORS after them with statuses, then `extra` more active ones), and its block.
+    recent: block_roots of the SLOTS_PER_EPOCH slots before it all differ (a block in each)."""
     slot = spec.Slot(epoch * spec.SLOTS_PER_EPOCH)
     version = spec.config.GENESIS_FORK_VERSION if fork == "phase0" else getattr(spec.config, f"{fork.upper()}_FORK_VERSION")
     state = spec.BeaconState(
@@ -76,6 +77,9 @@ def anchor(spec, fork, statuses=False, epoch=ANCHOR_EPOCH, extra=0):
         fork=spec.Fork(previous_version=version, current_version=version, epoch=0),
         latest_block_header=spec.BeaconBlockHeader(slot=slot, body_root=spec.hash_tree_root(spec.BeaconBlockBody())),
     )
+    if recent:
+        for s in range(max(int(slot) - int(spec.SLOTS_PER_EPOCH), 0), int(slot)):
+            state.block_roots[s % spec.SLOTS_PER_HISTORICAL_ROOT] = spec.Root(b"\xb0" + s.to_bytes(8, "little") + bytes(23))
     for i in range(8):
         state.validators.append(
             spec.Validator(
@@ -663,11 +667,11 @@ def payload_header(spec, payload):
     return spec.ExecutionPayloadHeader(**fields)
 
 
-def payload_anchor(spec, fork, epoch=ANCHOR_EPOCH, extra=0):
+def payload_anchor(spec, fork, epoch=ANCHOR_EPOCH, extra=0, recent=False):
     """The api anchor with an execution payload in its block and its header in the state, so the
     merge is complete; from capella validators 2 and 3 have 0x01 credentials, 2 a balance past the
-    maximum (a partial withdrawal) and 3 a withdrawable epoch of 0 (a full one)."""
-    state, block = anchor(spec, fork, statuses=True, epoch=epoch, extra=extra)
+    maximum (a partial withdrawal) and 3 a withdrawable epoch of 0 (a full one). recent as anchor's."""
+    state, block = anchor(spec, fork, statuses=True, epoch=epoch, extra=extra, recent=recent)
     if FORKS.index(fork) >= FORKS.index("capella"):  # a partial withdrawal of validator 2, a full one of validator 3
         for i in (2, 3):
             state.validators[i].withdrawal_credentials = spec.Bytes32(spec.ETH1_ADDRESS_WITHDRAWAL_PREFIX + bytes(11) + bytes([0xa0 + i]) * 20)
@@ -920,12 +924,12 @@ def produce_cases(fork, preset):
         body.sync_aggregate = aggregate
         return reqs
 
-    def build(full, skip, epoch0=None):
+    def build(full, skip, epoch0=None, recent=False):
         if epoch0 is None:
             epoch0 = int(spec.config.SHARD_COMMITTEE_PERIOD) + ANCHOR_EPOCH if full else ANCHOR_EPOCH
         extra = 2 * int(spec.SLOTS_PER_EPOCH) if full else 0  # committees of two and more
-        state, anchor_block = (payload_anchor(spec, fork, epoch0, extra) if merged
-                               else anchor(spec, fork, statuses=True, epoch=epoch0, extra=extra))
+        state, anchor_block = (payload_anchor(spec, fork, epoch0, extra, recent) if merged
+                               else anchor(spec, fork, statuses=True, epoch=epoch0, extra=extra, recent=recent))
         slot, st = state.slot, None
         while st is None or st.validators[proposer].slashed:  # the first slot after the anchor's of a proposer not slashed
             slot += 1
@@ -1117,7 +1121,7 @@ def builder_produce_cases(spec, fork, build, graffiti, block_value):
                 + b"%x\r\n" % half + body[:half] + b"\r\n%x\r\n" % (len(body) - half) + body[half:] + b"\r\n0\r\n\r\n")
 
     def builder_build(epoch0=None):
-        made = build(False, False, epoch0)
+        made = build(False, False, epoch0, True)  # a block in each slot of the epoch before: a healthy chain
         state, block = made[0], made[4]
         st = state.copy()
         spec.process_slots(st, block.slot)
@@ -1180,13 +1184,13 @@ def builder_produce_cases(spec, fork, build, graffiti, block_value):
         header_request = (b"GET /eth/v1/builder/header/%d/0x%s/0x%s HTTP/1.1\r\nHost: " % (
             int(block.slot), bytes(st.latest_execution_payload_header.block_hash).hex().encode(), pubkey.hex().encode())
             + BUILDER_HOST + b"\r\nAccept: application/json\r\nConnection: close\r\n\r\n")
-        return made, good, blinded, max(gained, 0), bad, value, text, header_request
+        return made, good, blinded, max(gained, 0), bad, value, text, header_request, full, st
 
     def cases_of(epoch0=None):
         built = run(spec, schedule(fork), lambda: builder_build(epoch0))
         if built is None:
             raise RuntimeError(f"node-produce {fork}: the spec refuses the builder's block")
-        made, good, blinded, bgwei, bad, value, text, header_request = built
+        made, good, blinded, bgwei, bad, value, text, header_request = built[:8]
         state, anchor_block, slot, reveal, block, result, gwei = made[:7]
         time_ms = int(state.genesis_time) * 1000 + int(slot) * slot_ms
         if deneb:
@@ -1236,6 +1240,108 @@ def builder_produce_cases(spec, fork, build, graffiti, block_value):
     yield "produce", "builder_closed", case([get()], [blind[0]], [http(good)], None, closes=BUILDER_CLOSES)
     _, local, _, _, _, get, case, _ = cases_of(ANCHOR_EPOCH + 4)
     yield "produce", "builder_unhealthy", case([get()], [local[0]], [b""], 0)
+    yield from blinded_publish_cases(spec, fork, builder_build, btypes, slot_ms)
+
+
+def blinded_publish_cases(spec, fork, builder_build, btypes, slot_ms):
+    """publishBlindedBlockV2 (beacon-api.md; builder-specs v0.6.1, submitBlindedBlockV2), from
+    bellatrix: the blinded block of builder_bid signed by its proposer, on the anchor of the builder
+    cases. blinded_published: 202 from the builder, 200 twice (JSON at consensus_and_equivocation,
+    SSZ at the default level), no NodeBlock. blinded_refused: another key, the fork before, another
+    state root, a zero block_hash (400 each). blinded_builder_error: 400 from the builder, 500.
+    blinded_no_builder: 500. The spec's checks of the full block give the verdicts."""
+    import dataclasses
+    import json_codec
+    from eth_consensus_specs.utils import bls
+    f = FORKS.index(fork)
+    to_json = json_codec.to_json
+    built = run(spec, schedule(fork), lambda: builder_build(None))
+    if built is None:
+        raise RuntimeError(f"node-publish {fork}: the spec refuses the builder's block")
+    made, blinded, full, st = built[0], built[2], built[8], built[9]
+    state, anchor_block = made[0], made[1]
+    proposer = int(blinded.proposer_index)
+    time_ms = int(state.genesis_time) * 1000 + int(blinded.slot) * slot_ms
+
+    def signed_of(message, key):
+        domain = spec.get_domain(st, spec.DOMAIN_BEACON_PROPOSER, spec.compute_epoch_at_slot(message.slot))
+        return bls.Sign(KEYS.privkeys[key], spec.compute_signing_root(message, domain))
+
+    def blind_of(message, key):
+        return btypes["SignedBlindedBeaconBlock"](message=message, signature=run(spec, schedule(fork), lambda: signed_of(message, key)))
+    good = blind_of(blinded, proposer)
+    bad_sig = blind_of(blinded, (proposer + 1) % len(state.validators))
+    wrong = blinded.copy()
+    wrong.state_root = spec.Root(bytes([0x99]) * 32)
+    bad_root = blind_of(wrong, proposer)
+    zero = blinded.copy()
+    zero.body.execution_payload_header.block_hash = spec.Hash32(bytes(32))
+    bad_hash = blind_of(zero, proposer)
+    # the verdicts of the spec on the full block, whose root and signature are the blinded block's
+    full_signed = spec.SignedBeaconBlock(message=full, signature=good.signature)
+    if bytes(spec.hash_tree_root(full)) != bytes(spec.hash_tree_root(blinded)):
+        raise RuntimeError(f"node-publish {fork}: the blinded block's root is not the full block's")
+
+    def verdicts():
+        store = spec.get_forkchoice_store(state, anchor_block)
+        spec.on_tick(store, time_ms)
+        extra = ({},) if f >= FORKS.index("bellatrix") else ()
+        out = []
+        for sig in (good.signature, bad_sig.signature):
+            seen = spec.Seen(**{x.name: (dict() if "dict" in str(x.type) else set()) for x in dataclasses.fields(spec.Seen)})
+            sb = spec.SignedBeaconBlock(message=full, signature=sig)
+            out.append(gossip_result(spec, spec.validate_beacon_block_gossip, seen, store, sb, time_ms, *extra))
+        return out
+    gossip = run(spec, schedule(fork), verdicts)
+    moved = run(spec, schedule(fork), lambda: spec.state_transition(state.copy(), full_signed, True) or True)
+    wrong_full = full.copy()
+    wrong_full.state_root = wrong.state_root
+    refused = run(spec, schedule(fork), lambda: spec.state_transition(
+        state.copy(), spec.SignedBeaconBlock(message=wrong_full, signature=bad_root.signature), True) or True)
+    if gossip != ["VALID", "REJECT"] or moved is not True or refused is not None:
+        raise RuntimeError(f"node-publish {fork}: the spec's verdicts on the blinded blocks are {gossip}, {moved}, {refused}")
+
+    def post(signed, version=fork, level=b"", ssz=False):
+        body = bytes(signed.encode_bytes()) if ssz else to_json(signed).encode()
+        path = b"/eth/v2/beacon/blinded_blocks" + (b"?broadcast_validation=" + level if level else b"")
+        return (b"POST " + path + b" HTTP/1.1\r\nHost: lantern\r\nContent-Type: " +
+                (b"application/octet-stream" if ssz else b"application/json") + b"\r\nEth-Consensus-Version: " +
+                version.encode() + b"\r\nContent-Length: %d\r\n\r\n" % len(body) + body)
+    body = to_json(good).encode()
+    submit = (b"POST /eth/v2/builder/blinded_blocks HTTP/1.1\r\nHost: " + BUILDER_HOST + b"\r\nAccept: application/json\r\n"
+              b"Connection: close\r\nEth-Consensus-Version: " + fork.encode() + b"\r\nContent-Type: application/json\r\n"
+              b"Content-Length: %d\r\n\r\n" % len(body) + body)
+    accepted = b"HTTP/1.1 202 Accepted\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+    refused_answer = b"HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+    head = b"GET /eth/v1/beacon/blocks/head/root HTTP/1.1\r\nHost: lantern\r\n\r\n"
+    at_anchor = response(200, b'{"execution_optimistic":false,"finalized":true,"data":{"root":' +
+                         qhex(spec.hash_tree_root(anchor_block)) + b"}}")
+    plans = [
+        ("blinded_published", [post(good, level=b"consensus_and_equivocation"), post(good, ssz=True), head],
+         [response(200), response(200), at_anchor], 1, [accepted], submit * 2),
+        ("blinded_refused", [post(bad_sig, level=b"consensus"), post(good, version=FORKS[f - 1], level=b"consensus"),
+                             post(bad_root, level=b"consensus"), post(bad_hash, level=b"consensus")],
+         [error(400)] * 4, 1, [accepted], b""),
+        ("blinded_builder_error", [post(good)], [error(500)], 1, [refused_answer], submit),
+        ("blinded_no_builder", [post(good)], [error(500)], 0, [accepted], None),
+    ]
+    for name, reqs, resps, builder, submits, calls in plans:
+        parts = {
+            "anchor_state": bytes(state.encode_bytes()),
+            "anchor_block": bytes(anchor_block.encode_bytes()),
+            "time_ms": time_ms,
+            "ticks": [time_ms] + [0] * (len(reqs) - 1),
+            "requests": reqs,
+            "responses": resps,
+            "payload_id": b"",
+            "result": b"",
+            "closes": 0,
+            "builder": builder,
+            "submits": submits,
+        }
+        if calls is not None:
+            parts["builders"] = calls
+        yield "publish", name, parts
 
 
 # ---------------------------------------------------------------- Block publishing (beacon-api.md, publishBlockV2)
@@ -1339,6 +1445,9 @@ def publish_cases(spec, fork, state, anchor_block, block, time_ms):
          events_head + gossip_event(bad_root_root)),
         ("closed", [post(good_json), head], [response(200), at(root, False)], PUBLISH_CLOSES, b""),
     ]
+    if f < FORKS.index("bellatrix"):  # publishBlindedBlockV2 before bellatrix: a SignedBeaconBlock, as publishBlockV2
+        blinded_post = post(good_json, level=b"consensus_and_equivocation").replace(b"/eth/v2/beacon/blocks", b"/eth/v2/beacon/blinded_blocks", 1)
+        plans.append(("published_blinded", [blinded_post, head], [response(200), at(root, False)], 0, events_head + gossip_event(root)))
     for name, reqs, resps, closes, events in plans:
         yield "publish", name, {
             "anchor_state": bytes(state.encode_bytes()),
@@ -3364,7 +3473,7 @@ def api_requests(spec, fork, v, kind="main"):
             elif opname == "produceBlockV3":  # 503 while syncing; else the path's slot is at or below the head's: 400
                 assert int(route.slot) <= v["slot"]
                 want = error(503 if int(syncing) & 1 else 400, close=close, keep_alive=keep_alive)
-            elif opname == "publishBlockV2":  # 503 while syncing; else a body of no block: 400
+            elif opname in ("publishBlockV2", "publishBlindedBlockV2"):  # 503 while syncing; else a body of no block: 400
                 assert not req["body"]
                 want = error(503 if int(syncing) & 1 else 400, close=close, keep_alive=keep_alive)
             else:

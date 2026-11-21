@@ -1582,7 +1582,13 @@ LOCAL_FUNCTION app_work
 16: test    %r15, %r15
     jz      1f
     mov     16(%r15), %rax
-    add     $(NodeEvent_chunk + 7), %rax
+    cmpq    $NODE_WORK_PUBLISH_CHECK, S8(%rsp)  # a blinded block's check: room for its JSON and a cursor
+    jne     161f
+    testq   $256, NodeAction_arg(%rbp)
+    jz      161f
+    shl     $2, %rax
+    add     $(4096 + JSON_CURSOR_SIZE + 24), %rax
+161: add    $(NodeEvent_chunk + 7), %rax
     and     $-8, %rax
 15: cmp     (APP_WORK_EVENT + 8)(%rbx), %rax
     jbe     1f

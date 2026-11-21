@@ -10191,14 +10191,17 @@ FUNCTION lantern_node_run
     movq    $0, (NodeEvent_chunk + 16)(%rcx)
     mov     NodeAction_arg(%r12), %rax
     movzbl  %al, %r10d
-    shr     $8, %eax
+    mov     %rax, %rsi
+    shr     $8, %esi
+    and     $1, %esi
+    xor     $1, %esi                        # JSON without the SSZ bit, + 2 for a blinded block
+    shr     $9, %eax
     and     $1, %eax
-    xor     $1, %eax
-    mov     %rax, %rsi                      # JSON without the SSZ bit
+    lea     (%rsi,%rax,2), %rsi
     mov     %r14, %rdi
     mov     %r15, %rdx
     add     $NodeEvent_chunk, %rcx
-    lea     (L + 96)(%rsp), %r8             # facts: the slot, the blob count, 0
+    lea     (L + 96)(%rsp), %r8             # facts: the slot, the blob count, 0, a blinded block's root
     FORK_CALL node_publish_decode
     cmp     $LANTERN_BUFFER_TOO_SMALL, %rax
     je      8449b
@@ -10209,7 +10212,13 @@ FUNCTION lantern_node_run
     mov     %rax, NodeEvent_index(%rcx)
     mov     (L + 104)(%rsp), %rax
     mov     %rax, NodeEvent_checkpoint(%rcx)
-    movzbl  NodeAction_arg(%r12), %r10d     # its root
+    testq   $512, NodeAction_arg(%r12)      # its root: a blinded block's from the decode
+    jz      8457f
+    lea     NodeEvent_root(%rcx), %rdi
+    lea     (L + 120)(%rsp), %rsi
+    COPY32  %rdi, %rsi
+    jmp     8441b
+8457: movzbl NodeAction_arg(%r12), %r10d
     lea     NodeEvent_chunk(%rcx), %rdi
     mov     %r15, %rsi
     lea     NodeEvent_root(%rcx), %rdx
@@ -10237,7 +10246,11 @@ FUNCTION lantern_node_run
     test    %rcx, %rcx
     jz      837b
     mov     16(%r14), %rax
-    add     $(NodeEvent_chunk + 24 + 7), %rax
+    testq   $256, NodeAction_arg(%r12)      # a blinded block: room for its JSON and a cursor
+    jz      8461f
+    shl     $2, %rax
+    add     $(4096 + JSON_CURSOR_SIZE), %rax
+8461: add   $(NodeEvent_chunk + 24 + 7), %rax
     cmp     %rax, S9(%rsp)
     jb      8419b
     mov     (L + 64)(%rsp), %rax            # a NodeGossip at L+96: seen, store, time_ms, topic, subnet,
@@ -10268,6 +10281,8 @@ FUNCTION lantern_node_run
     je      8449b
     test    %rax, %rax
     jnz     8458b
+    testq   $256, NodeAction_arg(%r12)
+    jnz     8462f
     mov     S8(%rsp), %rcx                  # the block's bytes
     mov     S9(%rsp), %rax
     sub     $NodeEvent_chunk, %rax
@@ -10280,6 +10295,35 @@ FUNCTION lantern_node_run
     add     %r14, %rsi
     call    lantern_copy
     jmp     8441b
+8462: mov   S9(%rsp), %rax                  # a blinded block: its JSON, the cursor at the end of the event
+    sub     $JSON_CURSOR_SIZE, %rax
+    and     $-8, %rax
+    add     S8(%rsp), %rax
+    mov     %rax, (L + 176)(%rsp)
+    mov     %rax, %rdi
+    mov     $JSON_CURSOR_SIZE, %esi
+    call    lantern_zero
+    mov     S8(%rsp), %rcx
+    mov     (L + 176)(%rsp), %rax
+    lea     NodeEvent_chunk(%rcx), %rdx
+    sub     %rdx, %rax
+    mov     %rax, NodeEvent_chunk(%rcx)
+    movq    $24, (NodeEvent_chunk + 8)(%rcx)
+    movq    $0, (NodeEvent_chunk + 16)(%rcx)
+    mov     NODE_STATE_SLOT(%r13), %rdi
+    lea     Node_config(%rbx), %rsi
+    call    node_fork
+    mov     %rax, %r10
+    mov     $NODE_JSON_BLINDED_BLOCK, %edi
+    mov     %r14, %rsi
+    mov     (L + 176)(%rsp), %rdx
+    mov     S8(%rsp), %rcx
+    add     $NodeEvent_chunk, %rcx
+    FORK_CALL node_json
+    test    %rax, %rax
+    jz      8441b
+    mov     $LANTERN_INVALID_ENCODING, %eax
+    jmp     8458b
 8470: cmp   $NODE_WORK_PUBLISH_SIDECARS, %rax
     jne     8480f
     test    %r14, %r14                      # PUBLISH_SIDECARS: lantern_node_publish_sidecars of the fork arg & 255, into state_b

@@ -10166,13 +10166,17 @@ FUNCTION lantern_node_run
     sd      zero, 16(t0)
     ld      t0, NodeAction_arg(s3)
     andi    t6, t0, 255
-    srli    t0, t0, 8
-    andi    t0, t0, 1
-    xori    a1, t0, 1                       # JSON without the SSZ bit
+    srli    t1, t0, 8
+    andi    t1, t1, 1
+    xori    a1, t1, 1                       # JSON without the SSZ bit, + 2 for a blinded block
+    srli    t1, t0, 9
+    andi    t1, t1, 1
+    slli    t1, t1, 1
+    or      a1, a1, t1
     mv      a0, s5
     mv      a2, s6
     addi    a3, s7, NodeEvent_chunk
-    addi    a4, sp, (L + 96)                # facts: the slot, the blob count, 0
+    addi    a4, sp, (L + 96)                # facts: the slot, the blob count, 0, a blinded block's root
     FORK_CALL node_publish_decode
     li      t0, LANTERN_BUFFER_TOO_SMALL
     beq     a0, t0, 8449b
@@ -10181,8 +10185,15 @@ FUNCTION lantern_node_run
     sd      t0, NodeEvent_index(s7)
     ld      t0, (L + 104)(sp)
     sd      t0, NodeEvent_checkpoint(s7)
-    ld      t0, NodeAction_arg(s3)          # its root
-    andi    t6, t0, 255
+    ld      t0, NodeAction_arg(s3)          # its root: a blinded block's from the decode
+    andi    t1, t0, 512
+    beqz    t1, 8457f
+    addi    a0, s7, NodeEvent_root
+    addi    a1, sp, (L + 120)
+    li      a2, 32
+    call    lantern_copy
+    j       8441b
+8457: andi  t6, t0, 255
     addi    a0, s7, NodeEvent_chunk
     mv      a1, s6
     addi    a2, s7, NodeEvent_root
@@ -10204,7 +10215,13 @@ FUNCTION lantern_node_run
     ld      t1, (L + 80)(sp)
     beqz    t1, 837b
     ld      t0, 16(s5)
-    addi    t0, t0, NodeEvent_chunk + 24 + 7
+    ld      t2, NodeAction_arg(s3)          # a blinded block: room for its JSON and a cursor
+    andi    t2, t2, 256
+    beqz    t2, 8461f
+    slli    t0, t0, 2
+    li      t2, (4096 + JSON_CURSOR_SIZE)
+    add     t0, t0, t2
+8461: addi  t0, t0, NodeEvent_chunk + 24 + 7
     bltu    s8, t0, 8419b
     ld      t0, (L + 64)(sp)                # a NodeGossip at L+96: seen, store, time_ms, topic, subnet,
     sd      t0, (L + 96)(sp)                # head, proposer, justified, settings, config
@@ -10233,6 +10250,9 @@ FUNCTION lantern_node_run
     li      t0, LANTERN_BUFFER_TOO_SMALL
     beq     a0, t0, 8449b
     bnez    a0, 8458b
+    ld      t0, NodeAction_arg(s3)
+    andi    t0, t0, 256
+    bnez    t0, 8462f
     addi    t0, s7, NodeEvent_chunk         # the block's bytes
     addi    t1, s8, -NodeEvent_chunk
     sd      t1, 0(t0)
@@ -10245,6 +10265,33 @@ FUNCTION lantern_node_run
     add     a1, s5, t1
     call    lantern_copy
     j       8441b
+8462: li    t0, JSON_CURSOR_SIZE            # a blinded block: its JSON, the cursor at the end of the event
+    sub     t0, s8, t0
+    andi    t0, t0, -8
+    add     t0, s7, t0
+    sd      t0, (L + 176)(sp)
+    mv      a0, t0
+    li      a1, JSON_CURSOR_SIZE
+    call    lantern_zero
+    addi    t0, s7, NodeEvent_chunk
+    ld      t1, (L + 176)(sp)
+    sub     t1, t1, t0
+    sd      t1, 0(t0)
+    li      t1, 24
+    sd      t1, 8(t0)
+    sd      zero, 16(t0)
+    ld      a0, NODE_STATE_SLOT(s4)
+    addi    a1, s1, Node_config
+    call    node_fork
+    mv      t6, a0
+    li      a0, NODE_JSON_BLINDED_BLOCK
+    mv      a1, s5
+    ld      a2, (L + 176)(sp)
+    addi    a3, s7, NodeEvent_chunk
+    FORK_CALL node_json
+    beqz    a0, 8441b
+    li      a0, LANTERN_INVALID_ENCODING
+    j       8458b
 8470: li    t1, NODE_WORK_PUBLISH_SIDECARS
     bne     t0, t1, 8480f
     beqz    s5, 837b                        # PUBLISH_SIDECARS: lantern_node_publish_sidecars of the fork arg & 255, into state_b

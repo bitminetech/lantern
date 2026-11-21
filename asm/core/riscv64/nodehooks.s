@@ -3305,6 +3305,11 @@ SPEC_FUNCTION node_gossip
     ADDRESS a0, lantern_type_SignedBeaconBlock     # the type of the topic
     li      t0, GOSSIP_BEACON_BLOCK
     beq     s6, t0, 1f
+.if FORK >= FORK_BELLATRIX
+    ADDRESS a0, lantern_type_SignedBlindedBeaconBlock  # lantern's blinded block: publishBlindedBlockV2's checks
+    li      t0, GOSSIP_BLINDED_BLOCK
+    beq     s6, t0, 1f
+.endif
     ADDRESS a0, lantern_type_SignedAggregateAndProof
     li      t0, GOSSIP_BEACON_AGGREGATE_AND_PROOF
     beq     s6, t0, 1f
@@ -3361,8 +3366,10 @@ SPEC_FUNCTION node_gossip
     ld      s8, NodeGossip_proposer(s1)     # the proposer state at the message's slot
     beqz    s8, 20f
     li      t0, GOSSIP_BEACON_BLOCK
+    beq     s6, t0, 101f
+    li      t0, GOSSIP_BLINDED_BLOCK
     bne     s6, t0, 11f
-    PART    t0, t1, s2, SignedBeaconBlock_message
+101: PART   t0, t1, s2, SignedBeaconBlock_message
     ld      s7, BeaconBlock_slot(t0)
     j       14f
 11:
@@ -3406,8 +3413,28 @@ SPEC_FUNCTION node_gossip
     bnez    s8, 21f
     mv      s8, t2
 21: li      t0, GOSSIP_BEACON_BLOCK
+    beq     s6, t0, 211f
+.if FORK >= FORK_BELLATRIX
+    li      t0, GOSSIP_BLINDED_BLOCK        # the blinded block: its result only
     bne     s6, t0, 30f
     mv      a4, t2
+    mv      a5, s8
+.if FORK == FORK_BELLATRIX
+    ld      a6, NodeGossip_justified(s1)
+    bnez    a6, 212f
+    mv      a6, t2
+212: mv     a7, s3
+    sd      s4, L(sp)
+.else
+    mv      a6, s3
+    mv      a7, s4
+.endif
+    call    lantern_validate_blinded_block_gossip
+    j       98f
+.else
+    j       30f
+.endif
+211: mv     a4, t2
     mv      a5, s8
 .if FORK == FORK_BELLATRIX
     ld      a6, NodeGossip_justified(s1)
@@ -6215,6 +6242,10 @@ SPEC_FUNCTION node_publish_decode
     mv      s4, a3
     mv      s5, a4
     ld      s9, 0(s3)
+.if FORK >= FORK_BELLATRIX
+    andi    t0, s2, 2                       # a blinded block
+    bnez    t0, 50f
+.endif
 .if FORK >= FORK_DENEB
     ADDRESS s6, lantern_type_SignedBlockContents
 .else
@@ -6305,6 +6336,92 @@ SPEC_FUNCTION node_publish_decode
     sd      zero, 16(s5)
     li      a0, LANTERN_OK
     LEAVE 128
+.if FORK >= FORK_BELLATRIX
+50: andi    s2, s2, 1                       # blinded: a SignedBlindedBeaconBlock, its root in facts at 24
+    ADDRESS s6, lantern_type_SignedBlindedBeaconBlock
+    li      t0, 24
+    sd      t0, 8(s4)
+    sd      zero, 16(s4)
+    beqz    s2, 51f
+    mv      a0, s6                          # JSON: its SSZ bytes
+    mv      a1, s1
+    mv      a2, s3
+    mv      a3, s4
+    addi    a4, sp, L
+    CALL_GLOBAL lantern_json_decode
+    sd      s9, 0(s3)
+    li      t0, LANTERN_BUFFER_TOO_SMALL
+    beq     a0, t0, 9f
+    bnez    a0, 8f
+    j       52f
+51: ld      t0, 8(s1)                       # SSZ: the bytes as they are
+    ld      t1, 16(s1)
+    ld      t2, 0(s4)
+    addi    t3, t1, 24
+    bgtu    t3, t2, 9f
+    sd      t1, 16(s4)
+    addi    a0, s4, 24
+    add     a1, s1, t0
+    mv      a2, t1
+    call    lantern_copy
+52: mv      a0, s6                          # a value of the type, and the root of its message
+    mv      a1, s4
+    mv      a2, s3
+    call    node_decode
+    li      t0, 1
+    beq     a0, t0, 59f
+    bnez    a0, 58f
+    PART    t0, t1, a1, SignedBlindedBeaconBlock_message
+    ADDRESS a0, lantern_type_BlindedBeaconBlock
+    mv      a1, t0
+    mv      a2, s3
+    addi    a3, s5, 24
+    CALL_GLOBAL ssz_hash_tree_root
+    sd      s9, 0(s3)
+    bnez    a0, 9f
+    addi    s7, s4, 24                      # the message, its body, its header: offsets checked by the decode
+    ld      s8, 16(s4)
+    LWB     t0, s7, 0, t6
+    add     t0, s7, t0
+    LDB     t1, t0, 0, t6, t2               # facts: the slot
+    sd      t1, 0(s5)
+    LWB     t1, t0, 80, t6
+    add     t0, t0, t1
+    LWB     t1, t0, PB_PAYLOAD, t6          # a header's block_hash of zero: no blinded block of lantern
+    add     t1, t0, t1
+    addi    t1, t1, 472
+    li      t2, 0
+    li      t3, 32
+53: lbu     t4, 0(t1)
+    or      t2, t2, t4
+    addi    t1, t1, 1
+    addi    t3, t3, -1
+    bnez    t3, 53b
+    beqz    t2, 8f
+.if FORK >= FORK_DENEB
+    LWB     t1, t0, PB_COMMITMENTS, t6      # the blob count: blob_kzg_commitments [c0, c1) of the body
+    add     t1, t0, t1
+.if FORK >= FORK_ELECTRA
+    LWB     t2, t0, PB_REQUESTS, t6
+    add     t2, t0, t2
+.else
+    add     t2, s7, s8
+.endif
+    sub     t2, t2, t1
+    li      t3, 48
+    divu    t2, t2, t3
+    sd      t2, 8(s5)
+.else
+    sd      zero, 8(s5)
+.endif
+    sd      zero, 16(s5)
+    li      a0, LANTERN_OK
+    LEAVE 128
+58: sd      s9, 0(s3)
+    j       8f
+59: sd      s9, 0(s3)
+    j       9f
+.endif
 8:  li      a0, LANTERN_INVALID_ENCODING
     LEAVE 128
 9:  li      a0, LANTERN_BUFFER_TOO_SMALL
@@ -6335,6 +6452,10 @@ SPEC_FUNCTION node_publish_check
     sd      t1, (L + 88)(sp)
     ld      t1, Seen_header_bytes(t0)
     sd      t1, (L + 96)(sp)
+.if FORK >= FORK_BELLATRIX
+    andi    t0, s4, 256                     # a blinded block
+    bnez    t0, 60f
+.endif
     li      t0, GOSSIP_BEACON_BLOCK         # the beacon_block topic's checks
     sd      t0, NodeGossip_topic(s1)
     sd      zero, NodeGossip_subnet(s1)
@@ -6435,7 +6556,301 @@ SPEC_FUNCTION node_publish_check
     ld      t1, (L + 96)(sp)
     sd      t1, Seen_header_bytes(t0)
     LEAVE 112
+.if FORK >= FORK_BELLATRIX
+60: andi    s4, s4, 255                     # blinded: the checks of beacon_block on it, then its transition; seen as it was
+    li      t0, GOSSIP_BLINDED_BLOCK
+    sd      t0, NodeGossip_topic(s1)
+    sd      zero, NodeGossip_subnet(s1)
+    mv      a0, s1
+    mv      a1, s2
+    mv      a2, s5
+    call    publish_gossip
+    bnez    a0, 99b
+    li      t0, 2
+    bltu    s4, t0, 99b
+    mv      a0, s1
+    mv      a1, s2
+    mv      a2, s5
+    call    publish_blinded_transition
+    j       99b
+.endif
 SPEC_END node_publish_check
+
+.if FORK >= FORK_BELLATRIX
+/*
+ * L2: (blinded ByteList a0, state a1, scratch a2) -> a0 status, a1: the SignedBeaconBlock of the
+ * blinded block with the stand-in payload of its header (node.md, lantern_node_publish_check), as
+ * a ByteList at the end of scratch, whose size drops below it and its expected withdrawals (the
+ * caller restores it). SSZ bytes have no alignment: byte loads. s1 the blinded bytes, s2 their
+ * count, s3 scratch, s4 the state, s5 the header, s6 its count, s7 the body, s8 the full
+ * ByteList, s9 the expected withdrawals, s10 the payload's place in the full block. Locals: L the
+ * extra_data's bytes, L+8 the stand-in's bytes, L+16 the header's offset in the blinded block.
+ */
+LOCAL_FUNCTION publish_unblind
+    ENTER 32
+    ld      t0, 8(a0)
+    add     s1, a0, t0
+    ld      s2, 16(a0)
+    mv      s4, a1
+    mv      s3, a2
+    LWB     t0, s1, 0, t6                   # the message, its body, the header: to the next field, else to the end
+    add     t0, s1, t0
+    LWB     t1, t0, 80, t6
+    add     s7, t0, t1
+    LWB     t1, s7, PB_PAYLOAD, t6
+    add     s5, s7, t1
+.if FORK >= FORK_CAPELLA
+    LWB     t1, s7, PB_BLS, t6
+    add     t1, s7, t1
+.else
+    add     t1, s1, s2
+.endif
+    sub     s6, t1, s5
+    sub     t0, s5, s1
+    sd      t0, (L + 16)(sp)
+    LWB     t0, s5, EPH_EXTRA_DATA, t6      # extra_data: from its offset to the header's end
+    bgtu    t0, s6, 97f
+    sub     t1, s6, t0
+    li      t2, MAX_EXTRA_DATA_BYTES
+    bgtu    t1, t2, 97f
+    sd      t1, L(sp)
+    ld      t0, 0(s3)
+.if FORK >= FORK_CAPELLA
+    li      t1, (SWEEP_BYTES + EXPECTED_SCRATCH)
+    bltu    t0, t1, 98f
+    li      t1, SWEEP_BYTES                 # the expected withdrawals at the end of scratch
+    sub     t0, t0, t1
+    sd      t0, 0(s3)
+    add     s9, s3, t0
+    mv      a0, s4
+    mv      a1, s3
+    mv      a2, s9
+    call    lantern_get_expected_withdrawals
+    bnez    a0, 99f
+    ld      t0, (16 + LIST_COUNT)(s9)
+    li      t1, 44
+    mul     t0, t0, t1
+.else
+    li      t0, 0
+.endif
+    ld      t1, L(sp)                       # the stand-in's bytes: the fixed part, extra_data, the withdrawals
+    add     t0, t0, t1
+    addi    t0, t0, EPP_FIXED
+    sd      t0, (L + 8)(sp)
+    sub     t1, s2, s6                      # the full block's: those of the blinded one, the stand-in for the header
+    add     t1, t1, t0
+    addi    t2, t1, (24 + 7)
+    andi    t2, t2, -8
+    ld      t3, 0(s3)
+    bltu    t3, t2, 98f
+    sub     t3, t3, t2
+    sd      t3, 0(s3)
+    add     s8, s3, t3
+    sd      t2, 0(s8)
+    li      t4, 24
+    sd      t4, 8(s8)
+    sd      t1, 16(s8)
+    addi    a0, s8, 24                      # the bytes before the header
+    mv      a1, s1
+    ld      a2, (L + 16)(sp)
+    call    lantern_copy
+    addi    s10, s8, 24
+    ld      t0, (L + 16)(sp)
+    add     s10, s10, t0
+    mv      a0, s10                         # the stand-in: parent_hash to timestamp, base_fee_per_gas and block_hash
+    mv      a1, s5
+    li      a2, EPH_EXTRA_DATA
+    call    lantern_copy
+    addi    a0, s10, (EPH_EXTRA_DATA + 4)
+    addi    a1, s5, (EPH_EXTRA_DATA + 4)
+    li      a2, (EPH_TRANSACTIONS_ROOT - EPH_EXTRA_DATA - 4)
+    call    lantern_copy
+    li      t0, EPP_FIXED                   # the offsets: extra_data, transactions, from capella withdrawals
+    SWB     t0, s10, EPH_EXTRA_DATA, t1
+    ld      t2, L(sp)
+    add     t0, t0, t2
+    SWB     t0, s10, EPH_TRANSACTIONS_ROOT, t1
+.if FORK >= FORK_CAPELLA
+    SWB     t0, s10, (EPH_TRANSACTIONS_ROOT + 4), t1
+.endif
+.if FORK >= FORK_DENEB
+    addi    a0, s10, (EPH_TRANSACTIONS_ROOT + 8)    # blob_gas_used and excess_blob_gas
+    addi    a1, s5, EPH_BLOB_GAS_USED
+    li      a2, 16
+    call    lantern_copy
+.endif
+    addi    a0, s10, EPP_FIXED              # extra_data
+    LWB     t0, s5, EPH_EXTRA_DATA, t1
+    add     a1, s5, t0
+    ld      a2, L(sp)
+    call    lantern_copy
+.if FORK >= FORK_CAPELLA
+    addi    a0, s10, EPP_FIXED              # the withdrawals in SSZ: index, validator_index, address, amount
+    ld      t0, L(sp)
+    add     a0, a0, t0
+    ld      t1, (16 + LIST_COUNT)(s9)
+    addi    a1, s9, (16 + LIST_FIXED)
+1:  beqz    t1, 2f
+    ld      t2, 0(a1)
+    PB_SDB  t2, a0, 0, t3
+    ld      t2, 8(a1)
+    PB_SDB  t2, a0, 8, t3
+    ld      t2, Withdrawal_address(a1)
+    PB_SDB  t2, a0, 16, t3
+    ld      t2, (Withdrawal_address + 8)(a1)
+    PB_SDB  t2, a0, 24, t3
+    lwu     t2, (Withdrawal_address + 16)(a1)
+    SWB     t2, a0, 32, t3
+    ld      t2, Withdrawal_amount(a1)
+    PB_SDB  t2, a0, 36, t3
+    addi    a0, a0, 44
+    addi    a1, a1, Withdrawal__mem
+    addi    t1, t1, -1
+    j       1b
+2:
+.endif
+    ld      t0, (L + 8)(sp)                 # then the bytes after the header
+    add     a0, s10, t0
+    add     a1, s5, s6
+    add     a2, s1, s2
+    sub     a2, a2, a1
+    call    lantern_copy
+    ld      t0, (L + 8)(sp)                 # the body's offsets after the payload grow by the difference
+    sub     t0, t0, s6
+    sub     t1, s7, s1
+    addi    t2, s8, 24
+    add     t2, t2, t1
+.if FORK >= FORK_CAPELLA
+    LWB     t3, t2, PB_BLS, t4
+    add     t3, t3, t0
+    SWB     t3, t2, PB_BLS, t4
+.endif
+.if FORK >= FORK_DENEB
+    LWB     t3, t2, PB_COMMITMENTS, t4
+    add     t3, t3, t0
+    SWB     t3, t2, PB_COMMITMENTS, t4
+.endif
+.if FORK >= FORK_ELECTRA
+    LWB     t3, t2, PB_REQUESTS, t4
+    add     t3, t3, t0
+    SWB     t3, t2, PB_REQUESTS, t4
+.endif
+    li      a0, LANTERN_OK
+    mv      a1, s8
+99: LEAVE 32
+97: li      a0, LANTERN_INVALID_ENCODING
+    LEAVE 32
+98: li      a0, LANTERN_BUFFER_TOO_SMALL
+    LEAVE 32
+END_FUNCTION publish_unblind
+
+/*
+ * L2: (gossip a0, block a1, scratch a2) -> a0: the blinded transition of the blinded block on the
+ * proposer state of the gossip (node.md, lantern_node_publish_check): its body's root and header's
+ * transactions_root, then process_block of the block with the stand-in payload, those roots in the
+ * state, and its state root against the block's: LANTERN_OK, its result, or
+ * LANTERN_INVALID_STATE_ROOT. Scratch as it was. s1 gossip, s2 block, s3 scratch, s4 the state, s5
+ * the scratch size. Locals: L the body's root, L+32 the transactions_root, L+64 execution_valid 1,
+ * L+72 a Result, L+80 the state root.
+ */
+LOCAL_FUNCTION publish_blinded_transition
+    ENTER 112
+    mv      s1, a0
+    mv      s2, a1
+    mv      s3, a2
+    ld      s4, NodeGossip_proposer(s1)
+    ld      s5, 0(s3)
+    ADDRESS a0, lantern_type_SignedBlindedBeaconBlock   # the root of its body
+    mv      a1, s2
+    mv      a2, s3
+    call    node_decode
+    li      t0, 1
+    beq     a0, t0, 98f
+    bnez    a0, 97f
+    PART    t0, t1, a1, SignedBlindedBeaconBlock_message
+    PART    a1, t1, t0, BlindedBeaconBlock_body
+    ADDRESS a0, lantern_type_BlindedBeaconBlockBody
+    mv      a2, s3
+    addi    a3, sp, L
+    CALL_GLOBAL ssz_hash_tree_root
+    sd      s5, 0(s3)
+    bnez    a0, 98f
+    ld      t0, 8(s2)                       # its header's transactions_root, in its bytes
+    add     t0, s2, t0
+    LWB     t1, t0, 0, t6
+    add     t0, t0, t1
+    LWB     t1, t0, 80, t6
+    add     t0, t0, t1
+    LWB     t1, t0, PB_PAYLOAD, t6
+    add     t0, t0, t1
+    addi    a1, t0, EPH_TRANSACTIONS_ROOT
+    addi    a0, sp, (L + 32)
+    li      a2, 32
+    call    lantern_copy
+    mv      a0, s2                          # the full block of the stand-in, decoded
+    mv      a1, s4
+    mv      a2, s3
+    call    publish_unblind
+    bnez    a0, 96f
+    ADDRESS a0, lantern_type_SignedBeaconBlock
+    mv      a2, s3
+    call    node_decode
+    li      t0, 1
+    beq     a0, t0, 98f
+    bnez    a0, 97f
+    LDQ     t0, a1, SignedBeaconBlock_message
+    add     a1, a1, t0
+    li      t0, 1
+    sd      t0, (L + 64)(sp)
+    mv      a0, s4
+    addi    a2, sp, (L + 64)
+    ld      a3, NodeGossip_config(s1)
+    mv      a4, s3
+    addi    a5, sp, (L + 72)
+    call    lantern_process_block
+    sd      s5, 0(s3)
+    bnez    a0, 99f
+    ld      a0, (L + 72)(sp)
+    bnez    a0, 99f
+    ADDQ    a0, s4, BeaconState_latest_block_header + BeaconBlockHeader_body_root   # the roots of the blinded block
+    addi    a1, sp, L
+    li      a2, 32
+    call    lantern_copy
+    LDQ     t0, s4, BeaconState_latest_execution_payload_header
+    add     a0, s4, t0
+    ADDQ    a0, a0, ExecutionPayloadHeader_transactions_root
+    addi    a1, sp, (L + 32)
+    li      a2, 32
+    call    lantern_copy
+    mv      a0, s4
+    li      a1, 0
+    mv      a2, s3
+    addi    a3, sp, (L + 80)
+    call    lantern_state_root
+    bnez    a0, 99f
+    ld      t0, 8(s2)                       # against the block's state_root, at byte 48 of its message
+    add     t0, s2, t0
+    LWB     t1, t0, 0, t6
+    add     t0, t0, t1
+    addi    a0, t0, 48
+    addi    a1, sp, (L + 80)
+    li      a2, 32
+    call    produce_differ
+    bnez    a0, 95f
+    li      a0, LANTERN_OK
+99: LEAVE 112
+95: li      a0, LANTERN_INVALID_STATE_ROOT
+    LEAVE 112
+96: sd      s5, 0(s3)
+    LEAVE 112
+97: sd      s5, 0(s3)
+    li      a0, LANTERN_INVALID_ENCODING
+    LEAVE 112
+98: sd      s5, 0(s3)
+    li      a0, LANTERN_BUFFER_TOO_SMALL
+    LEAVE 112
+END_FUNCTION publish_blinded_transition
+.endif
 
 /*
  * L1: (gossip a0, data a1, scratch a2) -> a0: LANTERN_OK when lantern_node_gossip of the data

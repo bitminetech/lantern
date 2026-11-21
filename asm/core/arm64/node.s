@@ -10080,12 +10080,14 @@ FUNCTION lantern_node_run
     str     xzr, [x9, #16]
     ldr     x9, [x21, #NodeAction_arg]
     and     x15, x9, #255
-    ubfx    x9, x9, #8, #1
-    eor     x1, x9, #1                      /* JSON without the SSZ bit */
+    ubfx    x10, x9, #8, #1
+    eor     x1, x10, #1                     /* JSON without the SSZ bit, + 2 for a blinded block */
+    ubfx    x10, x9, #9, #1
+    orr     x1, x1, x10, lsl #1
     mov     x0, x23
     mov     x2, x24
     add     x3, x25, #NodeEvent_chunk
-    add     x4, sp, #(L + 96)               /* facts: the slot, the blob count, 0 */
+    add     x4, sp, #(L + 96)               /* facts: the slot, the blob count, 0, a blinded block's root */
     FORK_CALL node_publish_decode
     cmp     x0, #LANTERN_BUFFER_TOO_SMALL
     b.eq    8449b
@@ -10094,8 +10096,13 @@ FUNCTION lantern_node_run
     str     x9, [x25, #NodeEvent_index]
     ldr     x9, [sp, #(L + 104)]
     str     x9, [x25, #NodeEvent_checkpoint]
-    ldr     x9, [x21, #NodeAction_arg]      /* its root */
-    and     x15, x9, #255
+    ldr     x9, [x21, #NodeAction_arg]      /* its root: a blinded block's from the decode */
+    tbz     x9, #9, 8457f
+    add     x0, x25, #NodeEvent_root
+    add     x1, sp, #(L + 120)
+    COPY32  x0, x1
+    b       8441b
+8457: and   x15, x9, #255
     add     x0, x25, #NodeEvent_chunk
     mov     x1, x24
     add     x2, x25, #NodeEvent_root
@@ -10118,7 +10125,12 @@ FUNCTION lantern_node_run
     ldr     x9, [sp, #(L + 80)]
     cbz     x9, 837b
     ldr     x10, [x23, #16]
-    add     x10, x10, #(NodeEvent_chunk + 24 + 7)
+    ldr     x11, [x21, #NodeAction_arg]     /* a blinded block: room for its JSON and a cursor */
+    tbz     x11, #8, 8461f
+    lsl     x10, x10, #2
+    MOVQ    x12, 4096 + JSON_CURSOR_SIZE
+    add     x10, x10, x12
+8461: add   x10, x10, #(NodeEvent_chunk + 24 + 7)
     cmp     x26, x10
     b.lo    8419b
     ldr     x10, [sp, #(L + 64)]            /* a NodeGossip at L+96: seen, store, time_ms, topic, subnet, */
@@ -10144,6 +10156,8 @@ FUNCTION lantern_node_run
     cmp     x0, #LANTERN_BUFFER_TOO_SMALL
     b.eq    8449b
     cbnz    x0, 8458b
+    ldr     x9, [x21, #NodeAction_arg]
+    tbnz    x9, #8, 8462f
     add     x9, x25, #NodeEvent_chunk       /* the block's bytes */
     sub     x10, x26, #NodeEvent_chunk
     mov     x11, #24
@@ -10155,6 +10169,32 @@ FUNCTION lantern_node_run
     add     x1, x23, x10
     bl      lantern_copy
     b       8441b
+8462: MOVQ  x9, JSON_CURSOR_SIZE            /* a blinded block: its JSON, the cursor at the end of the event */
+    sub     x10, x26, x9
+    and     x10, x10, #~7
+    add     x10, x25, x10
+    str     x10, [sp, #(L + 176)]
+    mov     x0, x10
+    MOVQ    x1, JSON_CURSOR_SIZE
+    bl      lantern_zero
+    add     x9, x25, #NodeEvent_chunk
+    ldr     x10, [sp, #(L + 176)]
+    sub     x10, x10, x9
+    mov     x11, #24
+    stp     x10, x11, [x9]
+    str     xzr, [x9, #16]
+    ldr     x0, [x22, #NODE_STATE_SLOT]
+    add     x1, x19, #Node_config
+    bl      node_fork
+    mov     x15, x0
+    mov     x0, #NODE_JSON_BLINDED_BLOCK
+    mov     x1, x23
+    ldr     x2, [sp, #(L + 176)]
+    add     x3, x25, #NodeEvent_chunk
+    FORK_CALL node_json
+    cbz     x0, 8441b
+    mov     x0, #LANTERN_INVALID_ENCODING
+    b       8458b
 8470: cmp   x9, #NODE_WORK_PUBLISH_SIDECARS
     b.ne    8480f
     cbz     x23, 837b                       /* PUBLISH_SIDECARS: lantern_node_publish_sidecars of the fork arg & 255, into state_b */
