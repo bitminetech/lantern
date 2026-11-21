@@ -208,9 +208,14 @@ jobs:
           KURTOSIS="$RUNNER_TEMP/kurtosis" tests/app/devnet.sh ${{ matrix.client }} lantern:local
 
   # The ARM64 binary with --data-dir beside lighthouse: it archives the finalized history, stops,
-  # starts again from its anchor.ssz and segments, and follows (tests/app/devnet.sh, RESTART=1).
+  # stays down 0, 120 or 300 seconds, starts again from its anchor.ssz and segments, and follows
+  # (tests/app/devnet.sh, RESTART=1, DOWNTIME).
   restart:
     needs: build
+    strategy:
+      fail-fast: false
+      matrix:
+        downtime: [0, 120, 300]
     runs-on: ubuntu-24.04-arm
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
@@ -223,11 +228,11 @@ jobs:
           echo "1a1c5eb356eadece5b6a8da9eec1a23bd1cb7f8fdb230d22e89c28b977b798fc  $RUNNER_TEMP/kurtosis.tar.gz" | sha256sum -c
           tar -xzf "$RUNNER_TEMP/kurtosis.tar.gz" -C "$RUNNER_TEMP" kurtosis
           "$RUNNER_TEMP/kurtosis" analytics disable
-      - name: lantern restarts from its history
+      - name: lantern restarts from its history after ${{ matrix.downtime }} s down
         run: |
           chmod +x image/linux-arm64/lantern-*
           docker build -q -t lantern:local -f platform/docker/Dockerfile image
-          RESTART=1 KURTOSIS="$RUNNER_TEMP/kurtosis" tests/app/devnet.sh lighthouse lantern:local 1800
+          RESTART=1 DOWNTIME=${{ matrix.downtime }} KURTOSIS="$RUNNER_TEMP/kurtosis" tests/app/devnet.sh lighthouse lantern:local 1800
 
   # The ARM64 binary beside lighthouse on a chain that starts at electra and moves to fulu at epoch 1
   # (tests/app/devnet.sh, FORK=1): lantern must follow past the fork.
@@ -294,6 +299,58 @@ jobs:
           chmod +x image/linux-arm64/lantern-*
           docker build -q -t lantern:local -f platform/docker/Dockerfile image
           ASSERTOOR=1 KURTOSIS="$RUNNER_TEMP/kurtosis" tests/app/devnet.sh lighthouse lantern:local 3600
+
+  # The same reads of the ARM64 binary and of each client at the client's finalized block, compared
+  # (tests/app/devnet.sh, DIFF=1; tests/app/differential.py).
+  differential:
+    needs: build
+    strategy:
+      fail-fast: false
+      matrix:
+        client: [lighthouse, prysm, teku, nimbus, lodestar, grandine]
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333  # v8.0.2
+        with: { name: build-linux-arm64, path: image/linux-arm64 }
+      - name: The Kurtosis CLI 1.23.0
+        run: |
+          curl -sSfL -o "$RUNNER_TEMP/kurtosis.tar.gz" \
+            https://github.com/kurtosis-tech/kurtosis-cli-release-artifacts/releases/download/1.23.0/kurtosis-cli_1.23.0_linux_arm64.tar.gz
+          echo "1a1c5eb356eadece5b6a8da9eec1a23bd1cb7f8fdb230d22e89c28b977b798fc  $RUNNER_TEMP/kurtosis.tar.gz" | sha256sum -c
+          tar -xzf "$RUNNER_TEMP/kurtosis.tar.gz" -C "$RUNNER_TEMP" kurtosis
+          "$RUNNER_TEMP/kurtosis" analytics disable
+      - name: lantern's reads beside ${{ matrix.client }}'s
+        run: |
+          chmod +x image/linux-arm64/lantern-*
+          docker build -q -t lantern:local -f platform/docker/Dockerfile image
+          DIFF=1 KURTOSIS="$RUNNER_TEMP/kurtosis" tests/app/devnet.sh ${{ matrix.client }} lantern:local 2400
+
+  # Each client's validator client with the ARM64 binary as its one beacon node, on half the stake
+  # (tests/app/devnet.sh, VC=1): finality and blocks produced through lantern.
+  validator:
+    needs: build
+    strategy:
+      fail-fast: false
+      matrix:
+        client: [lighthouse, prysm, teku, nimbus, lodestar]
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333  # v8.0.2
+        with: { name: build-linux-arm64, path: image/linux-arm64 }
+      - name: The Kurtosis CLI 1.23.0
+        run: |
+          curl -sSfL -o "$RUNNER_TEMP/kurtosis.tar.gz" \
+            https://github.com/kurtosis-tech/kurtosis-cli-release-artifacts/releases/download/1.23.0/kurtosis-cli_1.23.0_linux_arm64.tar.gz
+          echo "1a1c5eb356eadece5b6a8da9eec1a23bd1cb7f8fdb230d22e89c28b977b798fc  $RUNNER_TEMP/kurtosis.tar.gz" | sha256sum -c
+          tar -xzf "$RUNNER_TEMP/kurtosis.tar.gz" -C "$RUNNER_TEMP" kurtosis
+          "$RUNNER_TEMP/kurtosis" analytics disable
+      - name: ${{ matrix.client }}'s validator client on lantern
+        run: |
+          chmod +x image/linux-arm64/lantern-*
+          docker build -q -t lantern:local -f platform/docker/Dockerfile image
+          VC=1 KURTOSIS="$RUNNER_TEMP/kurtosis" tests/app/devnet.sh ${{ matrix.client }} lantern:local 3000
 
   windows:
     needs: [key, vectors, build]
