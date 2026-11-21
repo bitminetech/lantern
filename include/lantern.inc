@@ -1148,6 +1148,10 @@
 .set API_STREAM_PRODUCE_OWN, 65536     /* produceBlockV3: the pool entry bytes of its fold in flight (root) are its to free */
 .set API_STREAM_PRODUCE_FORCED, 131072  /* produceBlockV3: it made a preparation of its slot */
 .set API_STREAM_BLOB_SKIP, 262144      /* in a WORK_DONE only: the blob stream skips the rest of a blob */
+.set LC_BRANCH_CURRENT_SYNC_COMMITTEE, 0   /* lantern_state_branch (light-client.md): the field */
+.set LC_BRANCH_NEXT_SYNC_COMMITTEE, 1
+.set LC_BRANCH_FINALIZED_ROOT, 2
+.set EXECUTION_PAYLOAD_GINDEX, 25          /* capella light-client/sync-protocol.md: execution_payload of BeaconBlockBody */
 .set API_VALUE_CANONICAL, 1              /* the values of a NODE_WORK_API_ENCODE's arg, times 2^16 */
 .set API_VALUE_FINALIZED, 2
 .set API_VALUE_OPTIMISTIC, 4

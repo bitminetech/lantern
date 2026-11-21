@@ -825,3 +825,58 @@ SSZ_FIELD SignedBlockContents, kzg_proofs, BundleProofs
 SSZ_FIELD SignedBlockContents, blobs, BundleBlobs
 SSZ_END SignedBlockContents
 .endif
+
+/* Light client data (light-client.md): altair's types, with capella's header from capella and electra's branches from electra. */
+.if TYPES_FORK >= FORK_ALTAIR
+.if TYPES_FORK >= FORK_ELECTRA
+SSZ_VECTOR SyncCommitteeBranch, Bytes32, 6                         /* also NextSyncCommitteeBranch */
+SSZ_VECTOR FinalityBranch, Bytes32, 7
+.else
+SSZ_VECTOR SyncCommitteeBranch, Bytes32, 5                         /* also NextSyncCommitteeBranch */
+SSZ_VECTOR FinalityBranch, Bytes32, 6
+.endif
+.if TYPES_FORK >= FORK_CAPELLA
+SSZ_VECTOR ExecutionBranch, Bytes32, 4
+SSZ_CONTAINER LightClientHeader, 1
+SSZ_FIELD LightClientHeader, beacon, BeaconBlockHeader
+SSZ_FIELD LightClientHeader, execution, ExecutionPayloadHeader
+SSZ_FIELD LightClientHeader, execution_branch, ExecutionBranch
+SSZ_END LightClientHeader
+.set LC_VARIABLE, 1
+.else
+SSZ_CONTAINER LightClientHeader, 0
+SSZ_FIELD LightClientHeader, beacon, BeaconBlockHeader
+SSZ_END LightClientHeader
+.set LC_VARIABLE, 0
+.endif
+
+SSZ_CONTAINER LightClientBootstrap, LC_VARIABLE
+SSZ_FIELD LightClientBootstrap, header, LightClientHeader
+SSZ_FIELD LightClientBootstrap, current_sync_committee, SyncCommittee
+SSZ_FIELD LightClientBootstrap, current_sync_committee_branch, SyncCommitteeBranch
+SSZ_END LightClientBootstrap
+
+SSZ_CONTAINER LightClientUpdate, LC_VARIABLE
+SSZ_FIELD LightClientUpdate, attested_header, LightClientHeader
+SSZ_FIELD LightClientUpdate, next_sync_committee, SyncCommittee
+SSZ_FIELD LightClientUpdate, next_sync_committee_branch, SyncCommitteeBranch
+SSZ_FIELD LightClientUpdate, finalized_header, LightClientHeader
+SSZ_FIELD LightClientUpdate, finality_branch, FinalityBranch
+SSZ_FIELD LightClientUpdate, sync_aggregate, SyncAggregate
+SSZ_FIELD LightClientUpdate, signature_slot, Uint64
+SSZ_END LightClientUpdate
+
+SSZ_CONTAINER LightClientFinalityUpdate, LC_VARIABLE
+SSZ_FIELD LightClientFinalityUpdate, attested_header, LightClientHeader
+SSZ_FIELD LightClientFinalityUpdate, finalized_header, LightClientHeader
+SSZ_FIELD LightClientFinalityUpdate, finality_branch, FinalityBranch
+SSZ_FIELD LightClientFinalityUpdate, sync_aggregate, SyncAggregate
+SSZ_FIELD LightClientFinalityUpdate, signature_slot, Uint64
+SSZ_END LightClientFinalityUpdate
+
+SSZ_CONTAINER LightClientOptimisticUpdate, LC_VARIABLE
+SSZ_FIELD LightClientOptimisticUpdate, attested_header, LightClientHeader
+SSZ_FIELD LightClientOptimisticUpdate, sync_aggregate, SyncAggregate
+SSZ_FIELD LightClientOptimisticUpdate, signature_slot, Uint64
+SSZ_END LightClientOptimisticUpdate
+.endif

@@ -529,37 +529,16 @@ LOCAL_FUNCTION sr_tree
 END_FUNCTION sr_tree
 .endif
 
-/*
- * rbx state, rbp cache, r12 scratch, r13 out, r14 the area at the end of scratch, r15 the field
- * record, S7 the fields left, S8 the field's root, S9 the scratch size on entry, S10 the size of
- * the front, which callees get.
- */
-SPEC_FUNCTION state_root
-    ENTER 16
-    mov     %rdi, %rbx
-    mov     %rsi, %rbp
-    mov     %rdx, %r12
-    mov     %rcx, %r13
-    mov     (%r12), %rax
-    mov     %rax, S9(%rsp)
-.if FORK > FORK_PHASE0
-    test    %rbp, %rbp
-    jz      90f
-    cmp     $LANTERN_SCRATCH_FIXED, %rax
-    jb      99f
-    sub     $STATE_ROOT_AREA, %rax
-    mov     %rax, S10(%rsp)
-    lea     (%r12,%rax), %r14
-    movq    $(24 + 64), STATE_ROOT_HASH(%r14)   # the hash input: a ByteList of 64 bytes
-    movq    $24, (STATE_ROOT_HASH + 8)(%r14)
-    movq    $64, (STATE_ROOT_HASH + 16)(%r14)
-    call    sr_zeros
+# The root of each field of the state into the leaves of the area, in field order: rbx state, rbp cache,
+# r12 scratch, r14 the area, S10 the size of the front; r15, S7 and S8 are its own. To 90f for a tree past
+# its capacity, 98f for a refusal of ssz.
+.macro SR_FIELD_ROOTS
     ADDRESS %r15, state_root_fields
     movq    $SR_COUNT, S7(%rsp)
     lea     STATE_ROOT_LEAVES(%r14), %rax
     mov     %rax, S8(%rsp)
 1:  cmpq    $0, S7(%rsp)
-    je      50f
+    je      49f
     mov     S10(%rsp), %rax
     mov     %rax, (%r12)
     mov     (%r15), %rax                    # kind
@@ -618,6 +597,35 @@ SPEC_FUNCTION state_root
     addq    $32, S8(%rsp)
     decq    S7(%rsp)
     jmp     1b
+49:
+.endm
+
+/*
+ * rbx state, rbp cache, r12 scratch, r13 out, r14 the area at the end of scratch, r15 the field
+ * record, S7 the fields left, S8 the field's root, S9 the scratch size on entry, S10 the size of
+ * the front, which callees get.
+ */
+SPEC_FUNCTION state_root
+    ENTER 16
+    mov     %rdi, %rbx
+    mov     %rsi, %rbp
+    mov     %rdx, %r12
+    mov     %rcx, %r13
+    mov     (%r12), %rax
+    mov     %rax, S9(%rsp)
+.if FORK > FORK_PHASE0
+    test    %rbp, %rbp
+    jz      90f
+    cmp     $LANTERN_SCRATCH_FIXED, %rax
+    jb      99f
+    sub     $STATE_ROOT_AREA, %rax
+    mov     %rax, S10(%rsp)
+    lea     (%r12,%rax), %r14
+    movq    $(24 + 64), STATE_ROOT_HASH(%r14)   # the hash input: a ByteList of 64 bytes
+    movq    $24, (STATE_ROOT_HASH + 8)(%r14)
+    movq    $64, (STATE_ROOT_HASH + 16)(%r14)
+    call    sr_zeros
+    SR_FIELD_ROOTS
 50: lea     STATE_ROOT_LEAVES(%r14), %rdi   # zeros to the width, then merkleize
     pxor    %xmm0, %xmm0
     mov     $SR_COUNT, %ecx
@@ -668,3 +676,129 @@ SPEC_FUNCTION state_root
     CALL_GLOBAL ssz_hash_tree_root
     LEAVE 16
 SPEC_END state_root
+
+/*
+ * rbx state, rbp cache, then the nodes of a level, r12 scratch, r13 out, r14 the area at the end of
+ * scratch, r15 the leaf's index, S7 a node, S8 the next root of out, S9 the scratch size on entry,
+ * S10 the size of the front, which callees get. Locals: L the field, L+8 the generalized index.
+ */
+SPEC_FUNCTION state_branch
+    ENTER 16
+.if FORK == FORK_PHASE0
+    mov     $LANTERN_NO_STATE_ANSWER, %eax
+    LEAVE 16
+.else
+    cmp     $LC_BRANCH_FINALIZED_ROOT, %rsi
+    ja      97f
+    mov     %rdi, %rbx
+    mov     %rsi, L(%rsp)
+    mov     %rdx, %rbp
+    mov     %rcx, %r12
+    mov     %r8, %r13
+    mov     (%r12), %rax
+    mov     %rax, S9(%rsp)
+    lea     (STATE_ROOT_WIDTH + 22)(%rsi), %rcx # the generalized index: current_sync_committee is field 22, next 23
+    cmp     $LC_BRANCH_FINALIZED_ROOT, %rsi
+    jne     1f
+    mov     $((STATE_ROOT_WIDTH + 20) * 2 + 1), %ecx    # finalized_checkpoint (field 20), then its root
+1:  mov     %rcx, (L + 8)(%rsp)
+    test    %rbp, %rbp
+    jz      90f
+    cmp     $LANTERN_SCRATCH_FIXED, %rax
+    jb      99f
+    sub     $STATE_ROOT_AREA, %rax
+    mov     %rax, S10(%rsp)
+    lea     (%r12,%rax), %r14
+    movq    $(24 + 64), STATE_ROOT_HASH(%r14)   # the hash input: a ByteList of 64 bytes
+    movq    $24, (STATE_ROOT_HASH + 8)(%r14)
+    movq    $64, (STATE_ROOT_HASH + 16)(%r14)
+    call    sr_zeros
+    SR_FIELD_ROOTS
+    lea     STATE_ROOT_LEAVES(%r14), %rdi   # zeros to the width
+    pxor    %xmm0, %xmm0
+    mov     $SR_COUNT, %ecx
+2:  cmp     $STATE_ROOT_WIDTH, %rcx
+    jae     3f
+    mov     %rcx, %rax
+    shl     $5, %rax
+    movdqu  %xmm0, (%rdi,%rax)
+    movdqu  %xmm0, 16(%rdi,%rax)
+    inc     %rcx
+    jmp     2b
+3:  mov     %r13, S8(%rsp)                  # the branch; for the finalized root, the epoch's leaf first
+    mov     L(%rsp), %rax
+    lea     22(%rax), %r15
+    cmp     $LC_BRANCH_FINALIZED_ROOT, %rax
+    jne     4f
+    mov     $20, %r15d
+    mov     (BeaconState_finalized_checkpoint + Checkpoint_epoch)(%rbx), %rax
+    mov     %rax, (%r13)
+    movq    $0, 8(%r13)
+    movq    $0, 16(%r13)
+    movq    $0, 24(%r13)
+    addq    $32, S8(%rsp)
+4:  mov     $STATE_ROOT_WIDTH, %ebp
+5:  cmp     $1, %rbp                        # each level: the sibling, then the level above
+    jbe     7f
+    mov     %r15, %rax
+    xor     $1, %rax
+    shl     $5, %rax
+    lea     STATE_ROOT_LEAVES(%r14,%rax), %rsi
+    mov     S8(%rsp), %rdi
+    COPY32  %rdi, %rsi
+    addq    $32, S8(%rsp)
+    shr     $1, %rbp
+    movq    $0, S7(%rsp)
+6:  mov     S7(%rsp), %rax
+    lea     STATE_ROOT_LEAVES(%r14), %rdx
+    mov     %rax, %rdi
+    shl     $6, %rdi
+    add     %rdx, %rdi
+    lea     32(%rdi), %rsi
+    shl     $5, %rax
+    add     %rax, %rdx
+    call    sr_hash
+    incq    S7(%rsp)
+    cmp     %rbp, S7(%rsp)
+    jb      6b
+    shr     $1, %r15
+    jmp     5b
+7:  mov     S9(%rsp), %rax
+    mov     %rax, (%r12)
+    xor     %eax, %eax
+    LEAVE 16
+98: mov     S9(%rsp), %rcx
+    mov     %rcx, (%r12)
+    LEAVE 16
+99: mov     $LANTERN_BUFFER_TOO_SMALL, %eax
+    LEAVE 16
+97: mov     $LANTERN_INVALID_EVENT, %eax
+    LEAVE 16
+90: mov     S9(%rsp), %rax                  # ssz_build_proof of the state, into a Branch at the end of scratch
+    mov     %rax, (%r12)
+    sub     $(24 + 8 * 32), %rax
+    jb      99b
+    mov     %rax, (%r12)
+    lea     (%r12,%rax), %r15
+    movq    $(24 + 8 * 32), (%r15)
+    movq    $24, 8(%r15)
+    movq    $0, 16(%r15)
+    ADDRESS %rdi, lantern_type_BeaconState
+    mov     %rbx, %rsi
+    lea     (L + 8)(%rsp), %rdx
+    mov     %r12, %rcx
+    mov     %r15, %r8
+    CALL_GLOBAL ssz_build_proof
+    mov     S9(%rsp), %rcx
+    mov     %rcx, (%r12)
+    test    %rax, %rax
+    jnz     91f
+    mov     16(%r15), %rdx
+    shl     $5, %rdx
+    lea     24(%r15), %rsi
+    mov     %r13, %rdi
+    call    lantern_copy
+    xor     %eax, %eax
+91: LEAVE 16
+.endif
+SPEC_END state_branch

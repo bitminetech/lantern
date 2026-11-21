@@ -3,6 +3,41 @@
  * container T, then one SSZ_DFIELD for each field. descriptors.inc includes it twice: once for the
  * TypeField records, once for the name of each field.
  */
+.if FORK >= FORK_ALTAIR
+SSZ_FIELDS LightClientBootstrap
+SSZ_DFIELD N_LightClientHeader, LightClientBootstrap, header
+SSZ_DFIELD N_SyncCommittee, LightClientBootstrap, current_sync_committee
+SSZ_DFIELD N_SyncCommitteeBranch, LightClientBootstrap, current_sync_committee_branch
+
+SSZ_FIELDS LightClientUpdate
+SSZ_DFIELD N_LightClientHeader, LightClientUpdate, attested_header
+SSZ_DFIELD N_SyncCommittee, LightClientUpdate, next_sync_committee
+SSZ_DFIELD N_SyncCommitteeBranch, LightClientUpdate, next_sync_committee_branch
+SSZ_DFIELD N_LightClientHeader, LightClientUpdate, finalized_header
+SSZ_DFIELD N_FinalityBranch, LightClientUpdate, finality_branch
+SSZ_DFIELD N_SyncAggregate, LightClientUpdate, sync_aggregate
+SSZ_DFIELD N_Uint64, LightClientUpdate, signature_slot
+
+SSZ_FIELDS LightClientFinalityUpdate
+SSZ_DFIELD N_LightClientHeader, LightClientFinalityUpdate, attested_header
+SSZ_DFIELD N_LightClientHeader, LightClientFinalityUpdate, finalized_header
+SSZ_DFIELD N_FinalityBranch, LightClientFinalityUpdate, finality_branch
+SSZ_DFIELD N_SyncAggregate, LightClientFinalityUpdate, sync_aggregate
+SSZ_DFIELD N_Uint64, LightClientFinalityUpdate, signature_slot
+
+SSZ_FIELDS LightClientOptimisticUpdate
+SSZ_DFIELD N_LightClientHeader, LightClientOptimisticUpdate, attested_header
+SSZ_DFIELD N_SyncAggregate, LightClientOptimisticUpdate, sync_aggregate
+SSZ_DFIELD N_Uint64, LightClientOptimisticUpdate, signature_slot
+
+SSZ_FIELDS LightClientHeader
+SSZ_DFIELD N_BeaconBlockHeader, LightClientHeader, beacon
+.if FORK >= FORK_CAPELLA
+SSZ_DFIELD N_ExecutionPayloadHeader, LightClientHeader, execution
+SSZ_DFIELD N_ExecutionBranch, LightClientHeader, execution_branch
+.endif
+.endif
+
 .if FORK >= FORK_DENEB
 SSZ_FIELDS BlockContents
 SSZ_DFIELD N_BeaconBlock, BlockContents, block

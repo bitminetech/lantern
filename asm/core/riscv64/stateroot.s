@@ -540,40 +540,14 @@ LOCAL_FUNCTION sr_tree
 END_FUNCTION sr_tree
 .endif
 
-/*
- * s1 state, s2 cache, s3 scratch, s4 out, s5 the area at the end of scratch, s6 the field record,
- * s7 the fields left, s8 the field's root, s10 the size of the front, which callees get.
- * Locals: L the scratch size on entry.
- */
-SPEC_FUNCTION state_root
-    ENTER 16
-    mv      s1, a0
-    mv      s2, a1
-    mv      s3, a2
-    mv      s4, a3
-    ld      t0, 0(s3)
-    sd      t0, L(sp)
-.if FORK > FORK_PHASE0
-    beqz    s2, 90f
-    li      t1, LANTERN_SCRATCH_FIXED
-    bltu    t0, t1, 99f
-    li      t1, STATE_ROOT_AREA
-    sub     s10, t0, t1
-    andi    s10, s10, -8
-    add     s5, s3, s10
-    li      t1, STATE_ROOT_HASH             # the hash input: a ByteList of 64 bytes
-    add     t1, s5, t1
-    li      t0, 24 + 64
-    sd      t0, 0(t1)
-    li      t0, 24
-    sd      t0, 8(t1)
-    li      t0, 64
-    sd      t0, 16(t1)
-    call    sr_zeros
+# The root of each field of the state into the leaves of the area, in field order: s1 state, s2 cache, s3
+# scratch, s5 the area, s10 the size of the front; s6, s7 and s8 are its own. To 90f for a tree past its
+# capacity, 98f for a refusal of ssz.
+.macro SR_FIELD_ROOTS
     ADDRESS s6, state_root_fields
     li      s7, SR_COUNT
     addi    s8, s5, STATE_ROOT_LEAVES
-1:  beqz    s7, 50f
+1:  beqz    s7, 49f
     sd      s10, 0(s3)
     ld      t0, 0(s6)                       # kind
     ld      t1, 8(s6)
@@ -644,6 +618,40 @@ SPEC_FUNCTION state_root
     addi    s8, s8, 32
     addi    s7, s7, -1
     j       1b
+49:
+.endm
+
+/*
+ * s1 state, s2 cache, s3 scratch, s4 out, s5 the area at the end of scratch, s6 the field record,
+ * s7 the fields left, s8 the field's root, s10 the size of the front, which callees get.
+ * Locals: L the scratch size on entry.
+ */
+SPEC_FUNCTION state_root
+    ENTER 16
+    mv      s1, a0
+    mv      s2, a1
+    mv      s3, a2
+    mv      s4, a3
+    ld      t0, 0(s3)
+    sd      t0, L(sp)
+.if FORK > FORK_PHASE0
+    beqz    s2, 90f
+    li      t1, LANTERN_SCRATCH_FIXED
+    bltu    t0, t1, 99f
+    li      t1, STATE_ROOT_AREA
+    sub     s10, t0, t1
+    andi    s10, s10, -8
+    add     s5, s3, s10
+    li      t1, STATE_ROOT_HASH             # the hash input: a ByteList of 64 bytes
+    add     t1, s5, t1
+    li      t0, 24 + 64
+    sd      t0, 0(t1)
+    li      t0, 24
+    sd      t0, 8(t1)
+    li      t0, 64
+    sd      t0, 16(t1)
+    call    sr_zeros
+    SR_FIELD_ROOTS
 50: li      s7, SR_COUNT                    # zeros to the width, then merkleize
 51: li      t0, STATE_ROOT_WIDTH
     bgeu    s7, t0, 52f
@@ -692,3 +700,133 @@ SPEC_FUNCTION state_root
     CALL_GLOBAL ssz_hash_tree_root
     LEAVE 16
 SPEC_END state_root
+
+/*
+ * s1 state, s2 cache, then a node, s3 scratch, s4 out, s5 the area at the end of scratch, s6 the
+ * leaf's index, s7 the nodes of a level, s9 the next root of out, s10 the size of the front, which
+ * callees get. Locals: L the scratch size on entry, L+8 the field, L+16 the generalized index.
+ */
+SPEC_FUNCTION state_branch
+    ENTER 32
+.if FORK == FORK_PHASE0
+    li      a0, LANTERN_NO_STATE_ANSWER
+    LEAVE 32
+.else
+    li      t0, LC_BRANCH_FINALIZED_ROOT
+    bgtu    a1, t0, 97f
+    mv      s1, a0
+    sd      a1, (L + 8)(sp)
+    mv      s2, a2
+    mv      s3, a3
+    mv      s4, a4
+    ld      t0, 0(s3)
+    sd      t0, L(sp)
+    addi    t1, a1, STATE_ROOT_WIDTH + 22   # the generalized index: current_sync_committee is field 22, next 23
+    li      t2, LC_BRANCH_FINALIZED_ROOT
+    bne     a1, t2, 1f
+    li      t1, (STATE_ROOT_WIDTH + 20) * 2 + 1 # finalized_checkpoint (field 20), then its root
+1:  sd      t1, (L + 16)(sp)
+    beqz    s2, 90f
+    li      t1, LANTERN_SCRATCH_FIXED
+    bltu    t0, t1, 99f
+    li      t1, STATE_ROOT_AREA
+    sub     s10, t0, t1
+    andi    s10, s10, -8
+    add     s5, s3, s10
+    li      t1, STATE_ROOT_HASH             # the hash input: a ByteList of 64 bytes
+    add     t1, s5, t1
+    li      t0, 24 + 64
+    sd      t0, 0(t1)
+    li      t0, 24
+    sd      t0, 8(t1)
+    li      t0, 64
+    sd      t0, 16(t1)
+    call    sr_zeros
+    SR_FIELD_ROOTS
+    li      s7, SR_COUNT                    # zeros to the width
+2:  li      t0, STATE_ROOT_WIDTH
+    bgeu    s7, t0, 3f
+    slli    t1, s7, 5
+    addi    t1, t1, STATE_ROOT_LEAVES
+    add     t1, s5, t1
+    sd      zero, 0(t1)
+    sd      zero, 8(t1)
+    sd      zero, 16(t1)
+    sd      zero, 24(t1)
+    addi    s7, s7, 1
+    j       2b
+3:  mv      s9, s4                          # the branch; for the finalized root, the epoch's leaf first
+    ld      t0, (L + 8)(sp)
+    addi    s6, t0, 22
+    li      t1, LC_BRANCH_FINALIZED_ROOT
+    bne     t0, t1, 4f
+    li      s6, 20
+    LDQ     t2, s1, BeaconState_finalized_checkpoint + Checkpoint_epoch
+    sd      t2, 0(s9)
+    sd      zero, 8(s9)
+    sd      zero, 16(s9)
+    sd      zero, 24(s9)
+    addi    s9, s9, 32
+4:  li      s7, STATE_ROOT_WIDTH
+5:  li      t0, 1                           # each level: the sibling, then the level above
+    bleu    s7, t0, 7f
+    xori    t0, s6, 1
+    slli    t0, t0, 5
+    addi    t0, t0, STATE_ROOT_LEAVES
+    add     t0, s5, t0
+    COPY32  s9, t0
+    addi    s9, s9, 32
+    srli    s7, s7, 1
+    li      s2, 0
+6:  addi    t0, s5, STATE_ROOT_LEAVES
+    slli    a0, s2, 6
+    add     a0, t0, a0
+    addi    a1, a0, 32
+    slli    a2, s2, 5
+    add     a2, t0, a2
+    call    sr_hash
+    addi    s2, s2, 1
+    bltu    s2, s7, 6b
+    srli    s6, s6, 1
+    j       5b
+7:  ld      t0, L(sp)
+    sd      t0, 0(s3)
+    li      a0, LANTERN_OK
+    LEAVE 32
+98: ld      t0, L(sp)
+    sd      t0, 0(s3)
+    LEAVE 32
+99: li      a0, LANTERN_BUFFER_TOO_SMALL
+    LEAVE 32
+97: li      a0, LANTERN_INVALID_EVENT
+    LEAVE 32
+90: ld      t0, L(sp)                       # ssz_build_proof of the state, into a Branch at the end of scratch
+    sd      t0, 0(s3)
+    li      t1, 24 + 8 * 32
+    bltu    t0, t1, 99b
+    sub     t0, t0, t1
+    andi    t0, t0, -8
+    sd      t0, 0(s3)
+    add     s9, s3, t0
+    sd      t1, 0(s9)
+    li      t2, 24
+    sd      t2, 8(s9)
+    sd      zero, 16(s9)
+    ADDRESS a0, lantern_type_BeaconState
+    mv      a1, s1
+    addi    a2, sp, L + 16
+    mv      a3, s3
+    mv      a4, s9
+    CALL_GLOBAL ssz_build_proof
+    ld      t0, L(sp)
+    sd      t0, 0(s3)
+    bnez    a0, 91f
+    ld      a2, 16(s9)
+    slli    a2, a2, 5
+    addi    a1, s9, 24
+    mv      a0, s4
+    call    lantern_copy
+    li      a0, LANTERN_OK
+91: LEAVE 32
+.endif
+SPEC_END state_branch

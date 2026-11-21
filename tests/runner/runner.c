@@ -116,6 +116,9 @@ ABI uint64_t LF(beacon_state_copy)(const void *state, const void *room, void *ou
 ABI uint64_t LF(state_cache_size)(const void *validators, void *size);
 ABI uint64_t LF(state_cache_init)(const void *validators, void *cache);
 ABI uint64_t LF(state_root)(const void *state, void *cache, void *scratch, void *out);
+ABI uint64_t LF(state_branch)(const void *state, uint64_t field, void *cache, void *scratch, void *out);
+ABI uint64_t LF(execution_branch)(const void *body, void *scratch, void *out);
+ABI uint64_t LF(is_better_update)(const void *new_update, const void *old_update, void *out);
 ABI uint64_t LF(committee_cache_size)(const void *validators, void *size);
 ABI uint64_t LF(committee_cache_init)(const void *validators, void *cache);
 ABI uint64_t LF(pubkey_cache_size)(const void *validators, void *size);
@@ -6591,6 +6594,104 @@ static void run_merkle_proof(const char *file, case_file *f) {
 }
 #endif
 
+
+/* ---------------------------------------------------------------- Light client data */
+
+#if FORK >= FORK_ALTAIR
+/*
+ * light_client-single_merkle_proof (light-client.md): BeaconState, lantern_state_branch of the case's field with
+ * and without the StateCache must be branch, and leaf with it must rebuild the state's root at leaf_index;
+ * BeaconBlockBody, lantern_execution_branch must be branch.
+ */
+static void run_lc_merkle_proof(const char *file, case_file *f) {
+    for (uint64_t i = 0; i < f->count; i++) {
+        const char *name, *why = NULL;
+        uint64_t len, olen, vsize, blen;
+        tv parts = next_case(f, &name, &len);
+        tv proof = tv_get(parts, "proof"), branch = tv_get(proof, "branch");
+        const uint8_t *obj = tv_bytes(tv_get(parts, "object"), &olen);
+        uint64_t depth = branch ? rd64(branch + 1) : 0, gindex = tv_u64(tv_get(proof, "leaf_index"));
+        uint8_t want[32 * 8], got[32 * 8], guard[8];
+        tv e = branch ? branch + 9 : NULL;
+        for (uint64_t k = 0; k < depth && k < 8; k++, e = tv_skip(e)) memcpy(want + 32 * k, tv_bytes(e, &blen), 32);
+        if (depth < 1 || depth > 8) why = "a branch of no depth lantern knows";
+        if (!why && !strncmp(name, "BeaconState/", 12)) {
+            uint64_t field = strstr(name, "current_sync_committee") ? 0 : strstr(name, "next_sync_committee") ? 1 :
+                             strstr(name, "finality_root") ? 2 : 9;
+            uint8_t *state = decode(type_by_name("BeaconState"), obj, olen, &vsize, &why);
+            for (int cached = 0; cached < 2 && state && !why; cached++) {
+                memset(got, 0xA5, sizeof got);
+                memset(guard, 0xA5, sizeof guard);
+                if (CALL(LF(state_branch), state, (const void *)(uintptr_t)field, cached ? state_cache : NULL, fresh_scratch(), got) != 0) why = "lantern_state_branch: status";
+                else if (memcmp(got, want, (size_t)(32 * depth))) why = cached ? "lantern_state_branch with the StateCache: not the branch" : "lantern_state_branch: not the branch";
+                else if (depth < 8 && got[32 * depth] != 0xA5) why = "lantern_state_branch: wrote past the branch";
+            }
+            if (!why && state) { /* is_valid_merkle_branch: leaf, the branch and leaf_index give the state's root */
+                uint8_t node[32], root[32], bl[24 + 64];
+                memcpy(node, tv_bytes(tv_get(proof, "leaf"), &blen), 32);
+                wr64(bl, sizeof bl);
+                wr64(bl + 8, 24);
+                wr64(bl + 16, 64);
+                for (uint64_t k = 0, g = gindex; k < depth; k++, g >>= 1) {
+                    memcpy(bl + 24 + (g & 1 ? 0 : 32), want + 32 * k, 32); /* a right child's sibling is on the left */
+                    memcpy(bl + 24 + (g & 1 ? 32 : 0), node, 32);
+                    CALL(crypto_sha256, bl, node);
+                }
+                if (CALL(LF(state_root), state, NULL, fresh_scratch(), root) != 0) why = "lantern_state_root status";
+                else if (memcmp(root, node, 32) || gindex >> depth != 1) why = "leaf and branch do not give the state's root";
+            }
+            free(state);
+        } else if (!why && !strncmp(name, "BeaconBlockBody/", 16)) {
+            uint64_t lsize;
+            uint8_t *list = list_of(obj, olen, 0, 0, &lsize);
+            memset(got, 0xA5, sizeof got);
+            if (CALL(LF(execution_branch), list, fresh_scratch(), got) != 0) why = "lantern_execution_branch: status";
+            else if (depth != 4 || memcmp(got, want, 128)) why = "lantern_execution_branch: not the branch";
+            else if (got[128] != 0xA5) why = "lantern_execution_branch: wrote past the branch";
+            free(list);
+        } else if (!why) {
+            why = "a suite lantern does not know";
+        }
+        report(file, name, len, why == NULL, why);
+    }
+}
+
+/* light_client-update_ranking (light-client.md): lantern_is_better_update of each ordered pair must be the spec's. */
+static void run_lc_update_ranking(const char *file, case_file *f) {
+    for (uint64_t i = 0; i < f->count; i++) {
+        const char *name, *why = NULL;
+        uint64_t len;
+        tv parts = next_case(f, &name, &len), better = tv_get(parts, "better");
+        uint64_t n = tv_u64(tv_get(tv_get(parts, "meta"), "updates_count"));
+        uint8_t **lists = calloc((size_t)n + 1, sizeof *lists);
+        for (uint64_t k = 0; k < n; k++) {
+            char key[32];
+            uint64_t ulen, lsize;
+            snprintf(key, sizeof key, "updates_%llu", (unsigned long long)k);
+            const uint8_t *u = tv_bytes(tv_get(parts, key), &ulen);
+            lists[k] = u ? list_of(u, ulen, 0, 0, &lsize) : NULL;
+            if (!u) why = "an update is missing";
+        }
+        if (!better || rd64(better + 1) != n * n) why = "the case has not an answer for each pair";
+        tv b = better ? better + 9 : NULL;
+        for (uint64_t x = 0; x < n && !why; x++)
+            for (uint64_t y = 0; y < n && !why; y++, b = tv_skip(b)) {
+                uint64_t out = 7;
+                static char msg[96];
+                if (CALL(LF(is_better_update), lists[x], lists[y], &out) != 0) why = "lantern_is_better_update: status";
+                else if (out != tv_u64(b)) {
+                    snprintf(msg, sizeof msg, "lantern_is_better_update(updates_%llu, updates_%llu) is %llu",
+                             (unsigned long long)x, (unsigned long long)y, (unsigned long long)out);
+                    why = msg;
+                }
+            }
+        for (uint64_t k = 0; k < n; k++) free(lists[k]);
+        free(lists);
+        report(file, name, len, why == NULL, why);
+    }
+}
+#endif
+
 /* ---------------------------------------------------------------- Gossip */
 
 /* The config of one case: the preset's, with the values of the case's config.yaml when it has one. */
@@ -9946,6 +10047,10 @@ int main(int argc, char **argv) {
 #endif
 #if FORK >= FORK_DENEB
         else if (!bls_off && !strcmp(kind, "merkle_proof-single_merkle_proof")) run_merkle_proof(file, &f);
+#endif
+#if FORK >= FORK_ALTAIR
+        else if (!bls_off && !strcmp(kind, "light_client-single_merkle_proof")) run_lc_merkle_proof(file, &f);
+        else if (!bls_off && !strcmp(kind, "light_client-update_ranking")) run_lc_update_ranking(file, &f);
 #endif
         else {
             if (!bls_off) printf("SKIP %s: the runner has no handler for it\n", file);

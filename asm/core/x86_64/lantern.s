@@ -46,6 +46,7 @@ SSZ_DEPTH LOG2_SLOTS_PER_EPOCH, SLOTS_PER_EPOCH
 .include "helpers.s"
 .include "state.s"
 .include "stateroot.s"
+.include "lightclient.s"
 .include "shuffle.s"
 .include "deposits.s"
 .if FORK >= FORK_ALTAIR

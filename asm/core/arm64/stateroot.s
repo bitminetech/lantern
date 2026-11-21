@@ -478,35 +478,15 @@ END_FUNCTION sr_tree
 .endif
 
 /*
- * x19 state, x20 cache, x21 scratch, x22 out, x23 the area at the end of scratch, x24 the field
- * record, x25 the fields left, x26 the field's root, x27 the scratch size on entry, x28 the size
- * of the front, which callees get.
+ * The root of each field of the state into the leaves of the area, in field order: x19 state, x20 cache, x21
+ * scratch, x23 the area, x28 the size of the front; x24, x25 and x26 are its own. To 90f for a tree past its
+ * capacity, 98f for a refusal of ssz.
  */
-SPEC_FUNCTION state_root
-    ENTER 16
-    mov     x19, x0
-    mov     x20, x1
-    mov     x21, x2
-    mov     x22, x3
-    ldr     x27, [x21]
-.if FORK > FORK_PHASE0
-    cbz     x20, 90f
-    MOVQ    x9, LANTERN_SCRATCH_FIXED
-    cmp     x27, x9
-    b.lo    99f
-    sub     x28, x27, #STATE_ROOT_AREA
-    add     x23, x21, x28
-    mov     x9, #(24 + 64)                  /* the hash input: a ByteList of 64 bytes */
-    mov     x10, #24
-    mov     x11, #64
-    add     x12, x23, #STATE_ROOT_HASH
-    stp     x9, x10, [x12]
-    str     x11, [x12, #16]
-    bl      sr_zeros
+.macro SR_FIELD_ROOTS
     ADDRESS x24, state_root_fields
     mov     x25, #SR_COUNT
     add     x26, x23, #STATE_ROOT_LEAVES
-1:  cbz     x25, 50f
+1:  cbz     x25, 49f
     str     x28, [x21]
     ldr     x9, [x24]                       /* kind */
     ldr     x10, [x24, #8]
@@ -573,6 +553,36 @@ SPEC_FUNCTION state_root
     add     x26, x26, #32
     sub     x25, x25, #1
     b       1b
+49:
+.endm
+
+/*
+ * x19 state, x20 cache, x21 scratch, x22 out, x23 the area at the end of scratch, x24 the field
+ * record, x25 the fields left, x26 the field's root, x27 the scratch size on entry, x28 the size
+ * of the front, which callees get.
+ */
+SPEC_FUNCTION state_root
+    ENTER 16
+    mov     x19, x0
+    mov     x20, x1
+    mov     x21, x2
+    mov     x22, x3
+    ldr     x27, [x21]
+.if FORK > FORK_PHASE0
+    cbz     x20, 90f
+    MOVQ    x9, LANTERN_SCRATCH_FIXED
+    cmp     x27, x9
+    b.lo    99f
+    sub     x28, x27, #STATE_ROOT_AREA
+    add     x23, x21, x28
+    mov     x9, #(24 + 64)                  /* the hash input: a ByteList of 64 bytes */
+    mov     x10, #24
+    mov     x11, #64
+    add     x12, x23, #STATE_ROOT_HASH
+    stp     x9, x10, [x12]
+    str     x11, [x12, #16]
+    bl      sr_zeros
+    SR_FIELD_ROOTS
 50: mov     x25, #SR_COUNT                  /* zeros to the width, then merkleize */
 51: cmp     x25, #STATE_ROOT_WIDTH
     b.hs    52f
@@ -614,3 +624,118 @@ SPEC_FUNCTION state_root
     CALL_GLOBAL ssz_hash_tree_root
     LEAVE 16
 SPEC_END state_root
+
+/*
+ * x19 state, x20 cache, then a node, x21 scratch, x22 out, x23 the area at the end of scratch,
+ * x24 the leaf's index, x25 the nodes of a level, x26 the next root of out, x27 the scratch size
+ * on entry, x28 the size of the front, which callees get. Locals: L the field, L+8 the generalized
+ * index.
+ */
+SPEC_FUNCTION state_branch
+    ENTER 16
+.if FORK == FORK_PHASE0
+    mov     x0, #LANTERN_NO_STATE_ANSWER
+    LEAVE 16
+.else
+    cmp     x1, #LC_BRANCH_FINALIZED_ROOT
+    b.hi    97f
+    mov     x19, x0
+    str     x1, [sp, #L]
+    mov     x20, x2
+    mov     x21, x3
+    mov     x22, x4
+    ldr     x27, [x21]
+    mov     x9, #(STATE_ROOT_WIDTH + 22)    /* the generalized index: current_sync_committee is field 22, next 23 */
+    add     x9, x9, x1
+    cmp     x1, #LC_BRANCH_FINALIZED_ROOT
+    b.ne    1f
+    mov     x9, #((STATE_ROOT_WIDTH + 20) * 2 + 1)  /* finalized_checkpoint (field 20), then its root */
+1:  str     x9, [sp, #(L + 8)]
+    cbz     x20, 90f
+    MOVQ    x9, LANTERN_SCRATCH_FIXED
+    cmp     x27, x9
+    b.lo    99f
+    sub     x28, x27, #STATE_ROOT_AREA
+    add     x23, x21, x28
+    mov     x9, #(24 + 64)                  /* the hash input: a ByteList of 64 bytes */
+    mov     x10, #24
+    mov     x11, #64
+    add     x12, x23, #STATE_ROOT_HASH
+    stp     x9, x10, [x12]
+    str     x11, [x12, #16]
+    bl      sr_zeros
+    SR_FIELD_ROOTS
+    mov     x25, #SR_COUNT                  /* zeros to the width */
+2:  cmp     x25, #STATE_ROOT_WIDTH
+    b.hs    3f
+    add     x9, x23, #STATE_ROOT_LEAVES
+    add     x9, x9, x25, lsl #5
+    stp     xzr, xzr, [x9]
+    stp     xzr, xzr, [x9, #16]
+    add     x25, x25, #1
+    b       2b
+3:  mov     x26, x22                        /* the branch; for the finalized root, the epoch's leaf first */
+    ldr     x9, [sp, #L]
+    add     x24, x9, #22
+    cmp     x9, #LC_BRANCH_FINALIZED_ROOT
+    b.ne    4f
+    mov     x24, #20
+    LDQ     x10, x19, BeaconState_finalized_checkpoint + Checkpoint_epoch
+    stp     x10, xzr, [x26]
+    stp     xzr, xzr, [x26, #16]
+    add     x26, x26, #32
+4:  mov     x25, #STATE_ROOT_WIDTH
+5:  cmp     x25, #1                         /* each level: the sibling, then the level above */
+    b.ls    7f
+    eor     x9, x24, #1
+    add     x10, x23, #STATE_ROOT_LEAVES
+    add     x10, x10, x9, lsl #5
+    COPY32  x26, x10
+    add     x26, x26, #32
+    lsr     x25, x25, #1
+    mov     x20, #0
+6:  add     x2, x23, #STATE_ROOT_LEAVES
+    add     x0, x2, x20, lsl #6
+    add     x1, x0, #32
+    add     x2, x2, x20, lsl #5
+    bl      sr_hash
+    add     x20, x20, #1
+    cmp     x20, x25
+    b.lo    6b
+    lsr     x24, x24, #1
+    b       5b
+7:  str     x27, [x21]
+    mov     x0, #LANTERN_OK
+    LEAVE 16
+98: str     x27, [x21]
+    LEAVE 16
+99: mov     x0, #LANTERN_BUFFER_TOO_SMALL
+    LEAVE 16
+97: mov     x0, #LANTERN_INVALID_EVENT
+    LEAVE 16
+90: str     x27, [x21]                      /* ssz_build_proof of the state, into a Branch at the end of scratch */
+    subs    x28, x27, #(24 + 8 * 32)
+    b.lo    99b
+    str     x28, [x21]
+    add     x26, x21, x28
+    mov     x9, #(24 + 8 * 32)
+    mov     x10, #24
+    stp     x9, x10, [x26]
+    str     xzr, [x26, #16]
+    ADDRESS x0, lantern_type_BeaconState
+    mov     x1, x19
+    add     x2, sp, #(L + 8)
+    mov     x3, x21
+    mov     x4, x26
+    CALL_GLOBAL ssz_build_proof
+    str     x27, [x21]
+    cbnz    x0, 91f
+    ldr     x2, [x26, #16]
+    lsl     x2, x2, #5
+    add     x1, x26, #24
+    mov     x0, x22
+    bl      lantern_copy
+    mov     x0, #LANTERN_OK
+91: LEAVE 16
+.endif
+SPEC_END state_branch
