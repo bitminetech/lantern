@@ -14,9 +14,12 @@ of the same chain. The check of a read:
   case (an address may be in EIP-55 form), the `validator_sync_committee_indices` of a duty as a
   set, and the forks of getForkSchedule at FAR_FUTURE_EPOCH not at all (forks a node knows of
   before they are scheduled).
-- Lists of items with a `validator_index` compare as sets, in no order (the spec gives none).
-- getAttestationsRewards: `total_rewards`, and the `ideal_rewards` of each effective balance both
-  nodes list, in the fields both give (each client lists its own set of balances).
+- Lists of items with a `validator_index`, and validator items with an `index`, compare as sets, in
+  no order (the spec gives none). getSyncCommitteeRewards: the rewards of each validator summed
+  first (nimbus gives an item for each seat of the committee, the others one for each validator).
+- getAttestationsRewards: the `total_rewards` of each validator, and the `ideal_rewards` of each
+  effective balance both nodes list, in the fields both give (each client lists its own set of
+  balances; lodestar gives `inclusion_delay` after phase0 too).
 - getProposerDuties: lantern's proposers must be those of the peer's blocks of the epoch; a peer
   whose duties differ from its own blocks is reported and not counted.
 - getSpec: the same value of each key both nodes give, numbers as numbers (`2` and `0x02`), but
@@ -53,6 +56,8 @@ def normal(value, key=None):
             items.sort(key=int)
         elif items and all(isinstance(v, dict) and "validator_index" in v for v in items):
             items.sort(key=lambda v: (int(v["validator_index"]), int(v.get("slot", 0))))
+        elif items and all(isinstance(v, dict) and "index" in v and "validator" in v for v in items):
+            items.sort(key=lambda v: int(v["index"]))
         return items
     if isinstance(value, str) and value.startswith("0x"):
         return value.lower()
@@ -185,14 +190,25 @@ for name, path, body, ssz in READS:
             if not why and name in DEPENDENT_QUIRKS.get(client, set()):
                 mine.pop("dependent_root", None)
                 theirs.pop("dependent_root", None)
+        if name == "getSyncCommitteeRewards":
+            for answer in (mine, theirs):
+                total = {}
+                for item in answer["data"]:
+                    total[item["validator_index"]] = total.get(item["validator_index"], 0) + int(item["reward"])
+                answer["data"] = [{"validator_index": k, "reward": str(v)} for k, v in total.items()]
         if why or name == "getSpec":
             pass
         elif name == "getAttestationsRewards":
             a, b = ideal(normal(mine)), ideal(normal(theirs))
             both = sorted(set(a) & set(b), key=int)
             bad = [k for k in both if any(a[k][f] != b[k][f] for f in set(a[k]) & set(b[k]))]
-            if normal(mine["data"]["total_rewards"]) != normal(theirs["data"]["total_rewards"]):
-                why = "total_rewards differ"
+            ta = {v["validator_index"]: v for v in mine["data"]["total_rewards"]}
+            tb = {v["validator_index"]: v for v in theirs["data"]["total_rewards"]}
+            off = [k for k in sorted(set(ta) | set(tb), key=int)
+                   if k not in ta or k not in tb or any(ta[k][f] != tb[k][f] for f in set(ta[k]) & set(tb[k]))]
+            if off:
+                k = off[0]
+                why = "total_rewards differ at validator %s: %s and %s" % (k, ta.get(k), tb.get(k))
             elif bad:
                 why = "ideal_rewards differ at effective balance %s" % bad[0]
         elif normal(mine.get("dependent_root")) != normal(theirs.get("dependent_root")):

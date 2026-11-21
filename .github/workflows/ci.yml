@@ -205,7 +205,12 @@ jobs:
         run: |
           chmod +x image/linux-arm64/lantern-*
           docker build -q -t lantern:local -f platform/docker/Dockerfile image
-          KURTOSIS="$RUNNER_TEMP/kurtosis" tests/app/devnet.sh ${{ matrix.client }} lantern:local
+          LOG_DIR="$RUNNER_TEMP/logs" KURTOSIS="$RUNNER_TEMP/kurtosis" tests/app/devnet.sh ${{ matrix.client }} lantern:local
+      - if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
+        with:
+          name: logs-${{ github.job }}-${{ strategy.job-index }}
+          path: ${{ runner.temp }}/logs
 
   # The ARM64 binary with --data-dir beside lighthouse: it archives the finalized history, stops,
   # stays down 0, 120 or 300 seconds, starts again from its anchor.ssz and segments, and follows
@@ -232,7 +237,12 @@ jobs:
         run: |
           chmod +x image/linux-arm64/lantern-*
           docker build -q -t lantern:local -f platform/docker/Dockerfile image
-          RESTART=1 DOWNTIME=${{ matrix.downtime }} KURTOSIS="$RUNNER_TEMP/kurtosis" tests/app/devnet.sh lighthouse lantern:local 1800
+          LOG_DIR="$RUNNER_TEMP/logs" RESTART=1 DOWNTIME=${{ matrix.downtime }} KURTOSIS="$RUNNER_TEMP/kurtosis" tests/app/devnet.sh lighthouse lantern:local 1800
+      - if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
+        with:
+          name: logs-${{ github.job }}-${{ strategy.job-index }}
+          path: ${{ runner.temp }}/logs
 
   # The ARM64 binary beside lighthouse on a chain that starts at electra and moves to fulu at epoch 1
   # (tests/app/devnet.sh, FORK=1): lantern must follow past the fork.
@@ -254,7 +264,12 @@ jobs:
         run: |
           chmod +x image/linux-arm64/lantern-*
           docker build -q -t lantern:local -f platform/docker/Dockerfile image
-          FORK=1 KURTOSIS="$RUNNER_TEMP/kurtosis" tests/app/devnet.sh lighthouse lantern:local 1800
+          LOG_DIR="$RUNNER_TEMP/logs" FORK=1 KURTOSIS="$RUNNER_TEMP/kurtosis" tests/app/devnet.sh lighthouse lantern:local 1800
+      - if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
+        with:
+          name: logs-${{ github.job }}-${{ strategy.job-index }}
+          path: ${{ runner.temp }}/logs
 
   # The ARM64 binary started from lighthouse's finalized block and its post-state (tests/app/devnet.sh,
   # CHECKPOINT=1): it must sync from that anchor and follow.
@@ -276,7 +291,12 @@ jobs:
         run: |
           chmod +x image/linux-arm64/lantern-*
           docker build -q -t lantern:local -f platform/docker/Dockerfile image
-          CHECKPOINT=1 KURTOSIS="$RUNNER_TEMP/kurtosis" tests/app/devnet.sh lighthouse lantern:local 1800
+          LOG_DIR="$RUNNER_TEMP/logs" CHECKPOINT=1 KURTOSIS="$RUNNER_TEMP/kurtosis" tests/app/devnet.sh lighthouse lantern:local 1800
+      - if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
+        with:
+          name: logs-${{ github.job }}-${{ strategy.job-index }}
+          path: ${{ runner.temp }}/logs
 
   # Assertoor with the ARM64 binary as its one consensus endpoint (tests/app/devnet.sh, ASSERTOOR=1):
   # its test of the checks that read the Beacon API must pass over lantern.
@@ -298,7 +318,12 @@ jobs:
         run: |
           chmod +x image/linux-arm64/lantern-*
           docker build -q -t lantern:local -f platform/docker/Dockerfile image
-          ASSERTOOR=1 KURTOSIS="$RUNNER_TEMP/kurtosis" tests/app/devnet.sh lighthouse lantern:local 3600
+          LOG_DIR="$RUNNER_TEMP/logs" ASSERTOOR=1 KURTOSIS="$RUNNER_TEMP/kurtosis" tests/app/devnet.sh lighthouse lantern:local 3600
+      - if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
+        with:
+          name: logs-${{ github.job }}-${{ strategy.job-index }}
+          path: ${{ runner.temp }}/logs
 
   # A lighthouse beacon node whose one peer is the ARM64 binary (with --supernode), started 600 s
   # into the chain: it must sync from genesis to the head (tests/app/devnet.sh, SYNC=1).
@@ -320,7 +345,12 @@ jobs:
         run: |
           chmod +x image/linux-arm64/lantern-*
           docker build -q -t lantern:local -f platform/docker/Dockerfile image
-          SYNC=1 KURTOSIS="$RUNNER_TEMP/kurtosis" tests/app/devnet.sh lighthouse lantern:local 2400
+          LOG_DIR="$RUNNER_TEMP/logs" SYNC=1 KURTOSIS="$RUNNER_TEMP/kurtosis" tests/app/devnet.sh lighthouse lantern:local 2400
+      - if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
+        with:
+          name: logs-${{ github.job }}-${{ strategy.job-index }}
+          path: ${{ runner.temp }}/logs
 
   # The same reads of the ARM64 binary and of each client at the client's finalized block, compared
   # (tests/app/devnet.sh, DIFF=1; tests/app/differential.py).
@@ -346,7 +376,12 @@ jobs:
         run: |
           chmod +x image/linux-arm64/lantern-*
           docker build -q -t lantern:local -f platform/docker/Dockerfile image
-          DIFF=1 KURTOSIS="$RUNNER_TEMP/kurtosis" tests/app/devnet.sh ${{ matrix.client }} lantern:local 2400
+          LOG_DIR="$RUNNER_TEMP/logs" DIFF=1 KURTOSIS="$RUNNER_TEMP/kurtosis" tests/app/devnet.sh ${{ matrix.client }} lantern:local 2400
+      - if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
+        with:
+          name: logs-${{ github.job }}-${{ strategy.job-index }}
+          path: ${{ runner.temp }}/logs
 
   # Each client's validator client with the ARM64 binary as its one beacon node, on half the stake
   # (tests/app/devnet.sh, VC=1): finality and blocks produced through lantern.
@@ -372,7 +407,12 @@ jobs:
         run: |
           chmod +x image/linux-arm64/lantern-*
           docker build -q -t lantern:local -f platform/docker/Dockerfile image
-          VC=1 KURTOSIS="$RUNNER_TEMP/kurtosis" tests/app/devnet.sh ${{ matrix.client }} lantern:local 3000
+          LOG_DIR="$RUNNER_TEMP/logs" VC=1 KURTOSIS="$RUNNER_TEMP/kurtosis" tests/app/devnet.sh ${{ matrix.client }} lantern:local 3000
+      - if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
+        with:
+          name: logs-${{ github.job }}-${{ strategy.job-index }}
+          path: ${{ runner.temp }}/logs
 
   windows:
     needs: [key, vectors, build]
