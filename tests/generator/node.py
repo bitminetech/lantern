@@ -1070,6 +1070,18 @@ def replay(spec, fork, parts):
             state = store.block_states[head]
             slot = int(state.slot)
             epoch = slot // spe
+
+            def ancestor(root, at):
+                node = spec.ForkChoiceNode(root=spec.Root(root)) if hasattr(spec, "ForkChoiceNode") else spec.Root(root)
+                a = spec.get_ancestor(store, node, spec.Slot(at))
+                return bytes(getattr(a, "root", a))
+            if not (last_slot < slot and ancestor(head, last_slot) == last_head):  # chain_reorg (beacon-api.md)
+                common = next(t for t in range(min(slot, last_slot), -1, -1) if ancestor(head, t) == ancestor(last_head, t))
+                texts += sse(b"chain_reorg", b'{"slot":' + q(slot) + b',"depth":' + q(last_slot - common) +
+                             b',"old_head_block":' + qhex(last_head) + b',"new_head_block":' + qhex(head) +
+                             b',"old_head_state":' + qhex(store.blocks[last_head].state_root) +
+                             b',"new_head_state":' + qhex(store.blocks[head].state_root) + b',"epoch":' + q(epoch) +
+                             b',"execution_optimistic":' + flag(optimistic.get(head, False)) + b"}")
             texts += sse(b"head", b'{"slot":' + q(slot) + b',"block":' + qhex(head) + b',"state":' +
                          qhex(spec.hash_tree_root(state)) + b',"epoch_transition":' + flag(epoch > last_slot // spe) +
                          b',"previous_duty_dependent_root":' + qhex(dependent(state, epoch - 1)) +

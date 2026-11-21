@@ -1080,6 +1080,8 @@
 .set ApiView_event_state, ApiView_event_slot + 56
 .set ApiView_event_previous, ApiView_event_slot + 88
 .set ApiView_event_current, ApiView_event_slot + 120
+.set ApiView_event_old_block, ApiView_event_previous   /* chain_reorg: the old head's root, in the place of the head's dependent roots */
+.set ApiView_event_old_state, ApiView_event_current    /* chain_reorg: the old head block's state_root */
 .set ApiView_att, ApiView_event_slot + 152      /* produceAttestationData: lantern_node_attestation_data's out, 128 bytes */
 .set ApiView_ad_out, ApiView_att + 128       /* getAttesterDuties: lantern_node_attester_duties's out */
 .set ApiView_ad_count, ApiView_att + 136     /* its items */

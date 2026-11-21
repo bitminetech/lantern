@@ -3882,6 +3882,8 @@ LOCAL_FUNCTION node_api_event_run
     str     x10, [x26, #ApiView_event_epoch]
     cmp     x27, #API_TOPIC_HEAD
     b.eq    1f
+    cmp     x27, #API_TOPIC_CHAIN_REORG
+    b.eq    20f
     cmp     x27, #API_TOPIC_FINALIZED_CHECKPOINT
     b.ne    10f
     cbnz    x23, 3f
@@ -3943,6 +3945,49 @@ LOCAL_FUNCTION node_api_event_run
     sub     x9, x9, #NodeEvent_chunk
     str     x9, [x25, #NodeEvent_chunk]
     b       9f
+20: cbz     x22, 8f                         /* chain_reorg: the new head from its post-state, the old from its block's bytes */
+    cbz     x23, 8f
+    ldr     x0, [x22, #NODE_STATE_SLOT]
+    str     x0, [x26, #ApiView_event_slot]
+    add     x1, x19, #Node_config
+    bl      node_fork
+    mov     x15, x0
+    mov     x0, x22
+    add     x1, x19, #Node_config
+    mov     x2, x24
+    add     x3, x26, #ApiView_event_block
+    FORK_CALL node_event_roots
+    cmp     x0, #LANTERN_BUFFER_TOO_SMALL
+    b.eq    71f
+    cbz     x0, 21f
+    str     x0, [x25, #NodeEvent_result]
+    b       9f
+21: ldr     x9, [x23, #16]                  /* the old head block's bytes: its root and its state_root */
+    cmp     x9, #(100 + 84)
+    b.lo    41f
+    ldr     x9, [x23, #8]
+    add     x9, x23, x9
+    ldr     x0, [x9, #100]
+    add     x1, x19, #Node_config
+    bl      node_fork
+    mov     x15, x0
+    ldr     x9, [x23, #8]
+    add     x9, x23, x9
+    add     x1, x9, #(100 + 48)
+    add     x0, x26, #ApiView_event_old_state
+    bl      lantern_copy_root
+    mov     x0, x23
+    mov     x1, x24
+    add     x2, x26, #ApiView_event_old_block
+    add     x3, sp, #(L + 8)
+    add     x4, sp, #(L + 16)
+    FORK_CALL node_block_root
+    cmp     x0, #LANTERN_BUFFER_TOO_SMALL
+    b.eq    71f
+    cbnz    x0, 41f
+    ldr     x9, [sp, #(L + 8)]
+    cbnz    x9, 41f
+    b       5b
 10: mov     x14, #NODE_JSON_EXIT            /* an operation topic: the JSON of its bytes, lantern_node_json of the fork in arg */
     cmp     x27, #API_TOPIC_VOLUNTARY_EXIT
     b.eq    11f
@@ -5823,13 +5868,19 @@ LOCAL_FUNCTION api_event_text
     API_LIT api_ev_t_block
     b       3f
 11: cmp     x28, #API_TOPIC_BLOCK_GOSSIP
-    b.ne    2f
+    b.ne    12f
     API_LIT api_ev_t_block_gossip
+    b       3f
+12: cmp     x28, #API_TOPIC_CHAIN_REORG
+    b.ne    2f
+    API_LIT api_ev_t_reorg
     b       3f
 2:  API_LIT api_ev_t_finalized
 3:  API_LIT api_ev_data
     cmp     x28, #API_TOPIC_FINALIZED_CHECKPOINT
     b.eq    5f
+    cmp     x28, #API_TOPIC_CHAIN_REORG
+    b.eq    7f
     /* block, block_gossip and head: {"slot":…,"block":… */
     API_LIT api_ev_slot
     ldr     x0, [x22, #ApiView_event_slot]
@@ -5871,6 +5922,35 @@ LOCAL_FUNCTION api_event_text
     bl      api_qhex
     API_LIT api_k_epoch
     ldr     x0, [x22, #ApiView_event_epoch]
+    bl      api_qdec
+    b       6f
+    /* chain_reorg: {"slot":…,"depth":…,"old_head_block":…,"new_head_block":…,"old_head_state":…,"new_head_state":…,"epoch":… */
+7:  API_LIT api_ev_slot
+    ldr     x0, [x22, #ApiView_event_slot]
+    bl      api_qdec
+    API_LIT api_cr_depth
+    ldr     x0, [x22, #ApiView_event_epoch]
+    bl      api_qdec
+    API_LIT api_cr_old_block
+    add     x0, x22, #ApiView_event_old_block
+    mov     x1, #32
+    bl      api_qhex
+    API_LIT api_cr_new_block
+    add     x0, x22, #ApiView_event_block
+    mov     x1, #32
+    bl      api_qhex
+    API_LIT api_cr_old_state
+    add     x0, x22, #ApiView_event_old_state
+    mov     x1, #32
+    bl      api_qhex
+    API_LIT api_cr_new_state
+    add     x0, x22, #ApiView_event_state
+    mov     x1, #32
+    bl      api_qhex
+    API_LIT api_k_epoch
+    ldr     x0, [x22, #ApiView_event_slot]
+    mov     x9, #SLOTS_PER_EPOCH
+    udiv    x0, x0, x9
     bl      api_qdec
 6:  API_LIT api_u_optimistic
     ldr     x0, [x22, #ApiView_event_flags]
@@ -6540,6 +6620,28 @@ LOCAL_FUNCTION node_api_head_events
     cmp     x10, #PAYLOAD_STATUS_NOT_VALIDATED
     cset    x10, eq
     orr     x22, x22, x10, lsl #1
+    mov     x0, #API_TOPIC_CHAIN_REORG      /* chain_reorg, before the head event: the new head's chain lacks the old head */
+    bl      node_api_subscribed
+    cbz     x0, 12f
+    ldr     x9, [x21, #NodeBlock_state_id]
+    cbz     x9, 12f
+    ADDQ    x0, x19, Node_event_head
+    mov     x1, x21
+    bl      node_api_reorg
+    cmn     x0, #1
+    b.eq    12f
+    ldr     x3, [x1, #NodeBlock_data_id]
+    cbz     x3, 12f
+    lsl     x5, x0, #16
+    and     x9, x22, #2
+    orr     x5, x5, x9, lsl #8
+    add     x5, x5, #API_TOPIC_CHAIN_REORG
+    mov     x0, #NODE_WORK_API_EVENT
+    ldr     x1, [x21, #NodeBlock_state_id]
+    mov     x2, #0
+    mov     x4, #0
+    bl      node_work
+12: ldr     x9, [x21, #NodeBlock_slot]
     STQ     x9, x19, Node_event_slot
     ADDQ    x0, x19, Node_event_head
     add     x1, x21, #NodeBlock_root
@@ -6588,6 +6690,76 @@ LOCAL_FUNCTION node_api_head_events
     bl      node_work
 9:  LEAVE 0
 END_FUNCTION node_api_head_events
+
+/*
+ * L1: (old head root x0, new head entry x1) -> x0: the depth of the reorg from the old head to the
+ * new (node.md, The events: chain_reorg), or 2^64 - 1 with none: the new head's chain has the old
+ * head below the new head's slot, or a walk meets no common block; x1 the old head's entry. The walk
+ * by parent_root from both, the one at the higher slot first. x21 the old head's entry, x22 the new
+ * head's, x25 the old chain's block, x26 the new chain's, x27 and x28 the blocks each walk left last.
+ */
+LOCAL_FUNCTION node_api_reorg
+    ENTER 0
+    mov     x22, x1
+    bl      node_find_block
+    cmn     x0, #1
+    b.eq    8f
+    mov     x21, x1
+    mov     x25, x21
+    mov     x26, x22
+    mov     x27, #0
+    mov     x28, #0
+1:  ldp     x9, x10, [x25]                  /* the same block: the common one */
+    ldp     x11, x12, [x26]
+    cmp     x9, x11
+    ccmp    x10, x12, #0, eq
+    b.ne    2f
+    ldp     x9, x10, [x25, #16]
+    ldp     x11, x12, [x26, #16]
+    cmp     x9, x11
+    ccmp    x10, x12, #0, eq
+    b.eq    4f
+2:  ldr     x9, [x25, #NodeBlock_slot]
+    ldr     x10, [x26, #NodeBlock_slot]
+    cmp     x9, x10
+    b.lo    3f
+    mov     x27, x25                        /* the old chain's block, a step down */
+    add     x0, x25, #NodeBlock_parent_root
+    bl      node_find_block
+    cmn     x0, #1
+    b.eq    8f
+    mov     x25, x1
+    b       1b
+3:  mov     x28, x26                        /* the new chain's block, a step down */
+    add     x0, x26, #NodeBlock_parent_root
+    bl      node_find_block
+    cmn     x0, #1
+    b.eq    8f
+    mov     x26, x1
+    b       1b
+4:  ldr     x9, [x21, #NodeBlock_slot]      /* the old head common, below the new head's slot: no reorg */
+    ldr     x10, [x22, #NodeBlock_slot]
+    cmp     x25, x21
+    ccmp    x9, x10, #2, eq
+    b.lo    8f
+    cmp     x9, x10                         /* the lowest of the two heads' slots and the slot before each chain's first block after it */
+    csel    x11, x9, x10, lo
+    cbz     x27, 5f
+    ldr     x12, [x27, #NodeBlock_slot]
+    sub     x12, x12, #1
+    cmp     x12, x11
+    csel    x11, x12, x11, lo
+5:  cbz     x28, 6f
+    ldr     x12, [x28, #NodeBlock_slot]
+    sub     x12, x12, #1
+    cmp     x12, x11
+    csel    x11, x12, x11, lo
+6:  sub     x0, x9, x11
+    mov     x1, x21
+    LEAVE 0
+8:  mov     x0, #-1
+    LEAVE 0
+END_FUNCTION node_api_reorg
 
 /* L1: NODE_EV_WORK_DONE x0 of a NODE_WORK_API_EVENT: LANTERN_VALID, its text to the entries of its topic. */
 LOCAL_FUNCTION node_api_event_done

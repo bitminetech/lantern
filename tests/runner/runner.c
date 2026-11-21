@@ -3857,7 +3857,8 @@ static void ev_step_check(struct node_shell *s, tv texts, const char **why) {
             const uint8_t *x = t + at;
             uint64_t xl = end - at;
             at = end;
-            if (e == 1 && !ev_topic_is(x, xl, "block")) continue;
+            if (e == 1 && !ev_topic_is(x, xl, "block") && !ev_topic_is(x, xl, "chain_reorg")) continue;
+            if (e != 1 && ev_topic_is(x, xl, "chain_reorg")) continue;
             if (e == 2 && s->ev[e].total + xl + 8 > NODE_API_CHUNK) { /* falls behind: a close in place of it */
                 close_now = 1;
                 s->ev[e].closed = 1;
