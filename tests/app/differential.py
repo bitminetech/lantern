@@ -14,8 +14,14 @@ of the same chain. The check of a read:
   case (an address may be in EIP-55 form), the `validator_sync_committee_indices` of a duty as a
   set, and the forks of getForkSchedule at FAR_FUTURE_EPOCH not at all (forks a node knows of
   before they are scheduled).
+- Lists of items with a `validator_index` compare as sets, in no order (the spec gives none).
+- getAttestationsRewards: `total_rewards`, and the `ideal_rewards` of each effective balance both
+  nodes list, in the fields both give (each client lists its own set of balances).
+- getProposerDuties: lantern's proposers must be those of the peer's blocks of the epoch; a peer
+  whose duties differ from its own blocks is reported and not counted.
 - getSpec: the same value of each key both nodes give, numbers as numbers (`2` and `0x02`), but
   for the keys of QUIRKS.
+- `dependent_root`: but for the reads of DEPENDENT_QUIRKS.
 - SSZ: the same bytes.
 Prints a PASS, FAIL or SKIP line for each read, and exits 1 when one fails.
 """
@@ -30,6 +36,10 @@ lantern, peer, client = sys.argv[1].rstrip("/"), sys.argv[2].rstrip("/"), sys.ar
 # getSpec keys whose value a client gives otherwise than the network's config.yaml: lodestar gives
 # SECONDS_PER_SLOT 12 on a network of 6-second slots (its SLOT_DURATION_MS is the network's).
 QUIRKS = {"lodestar": {"SECONDS_PER_SLOT"}}
+# Reads whose `dependent_root` a client gives by another rule than beacon-APIs v4.0.0's
+# get_block_root_at_slot(state, compute_start_slot_at_epoch(epoch) - 1): prysm and lodestar give the
+# root before the start of epoch - 1 for the next epoch's proposers.
+DEPENDENT_QUIRKS = {"prysm": {"getProposerDuties of the next epoch"}, "lodestar": {"getProposerDuties of the next epoch"}}
 FAR_FUTURE_EPOCH = "18446744073709551615"
 
 
@@ -41,6 +51,8 @@ def normal(value, key=None):
         items = [normal(v) for v in value]
         if key == "validator_sync_committee_indices":
             items.sort(key=int)
+        elif items and all(isinstance(v, dict) and "validator_index" in v for v in items):
+            items.sort(key=lambda v: (int(v["validator_index"]), int(v.get("slot", 0))))
         return items
     if isinstance(value, str) and value.startswith("0x"):
         return value.lower()
@@ -74,7 +86,7 @@ def fetch(base, path, body=None, ssz=False):
 head = json.loads(fetch(peer, "/eth/v1/beacon/headers/finalized")[1])["data"]
 R = head["root"]
 S = head["header"]["message"]["state_root"]
-E = int(json.loads(fetch(peer, "/eth/v1/beacon/states/finalized/finality_checkpoints")[1])["data"]["finalized"]["epoch"])
+E = int(json.loads(fetch(peer, "/eth/v1/beacon/states/head/finality_checkpoints")[1])["data"]["finalized"]["epoch"])
 validators = [str(i) for i in range(len(json.loads(fetch(peer, "/eth/v1/beacon/states/%s/validators" % S)[1])["data"]))]
 spe = int(json.loads(fetch(peer, "/eth/v1/config/spec")[1])["data"]["SLOTS_PER_EPOCH"])
 head_slot = int(json.loads(fetch(peer, "/eth/v1/beacon/headers/head")[1])["data"]["header"]["message"]["slot"])
@@ -123,6 +135,21 @@ READS = [
     ("getLightClientBootstrap", "/eth/v1/beacon/light_client/bootstrap/" + R, None, False),
 ]
 
+def chain_proposers(epoch):
+    """slot -> proposer_index of the peer's blocks of the epoch."""
+    found = {}
+    for slot in range(epoch * spe, (epoch + 1) * spe):
+        status, body = fetch(peer, "/eth/v1/beacon/headers/%d" % slot)
+        if status == 200:
+            found[slot] = json.loads(body)["data"]["header"]["message"]["proposer_index"]
+    return found
+
+
+def ideal(answer):
+    """getAttestationsRewards' ideal_rewards by effective balance."""
+    return {v["effective_balance"]: v for v in answer["data"]["ideal_rewards"]}
+
+
 failed = 0
 for name, path, body, ssz in READS:
     peer_status, peer_body = fetch(peer, path, body, ssz)
@@ -146,6 +173,28 @@ for name, path, body, ssz in READS:
             diff = [k for k in keys if number(mine["data"][k]) != number(theirs["data"][k])]
             if diff:
                 why = "values differ: " + ", ".join("%s %s and %s" % (k, mine["data"][k], theirs["data"][k]) for k in diff[:5])
+        elif name.startswith("getProposerDuties") and not why:
+            blocks = chain_proposers(int(path.rsplit("/", 1)[1]))
+            off = [d["slot"] for d in mine["data"] if int(d["slot"]) in blocks and blocks[int(d["slot"])] != d["validator_index"]]
+            peer_off = [d["slot"] for d in theirs["data"] if int(d["slot"]) in blocks and blocks[int(d["slot"])] != d["validator_index"]]
+            if off:
+                why = "lantern's proposers of slots %s are not those of the chain's blocks" % ", ".join(off[:5])
+            elif peer_off:
+                print("NOTE %s: the peer's proposers of slots %s are not those of its own blocks" % (name, ", ".join(peer_off[:5])))
+                mine["data"] = theirs["data"] = []
+            if not why and name in DEPENDENT_QUIRKS.get(client, set()):
+                mine.pop("dependent_root", None)
+                theirs.pop("dependent_root", None)
+        if why or name == "getSpec":
+            pass
+        elif name == "getAttestationsRewards":
+            a, b = ideal(normal(mine)), ideal(normal(theirs))
+            both = sorted(set(a) & set(b), key=int)
+            bad = [k for k in both if any(a[k][f] != b[k][f] for f in set(a[k]) & set(b[k]))]
+            if normal(mine["data"]["total_rewards"]) != normal(theirs["data"]["total_rewards"]):
+                why = "total_rewards differ"
+            elif bad:
+                why = "ideal_rewards differ at effective balance %s" % bad[0]
         elif normal(mine.get("dependent_root")) != normal(theirs.get("dependent_root")):
             why = "dependent_root %s and %s" % (mine.get("dependent_root"), theirs.get("dependent_root"))
         elif mine.get("version") != theirs.get("version"):
