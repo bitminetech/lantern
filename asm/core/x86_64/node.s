@@ -4197,7 +4197,14 @@ LOCAL_FUNCTION node_event
     mov     NodeMessage_topic(%r13), %rdi
     mov     NodeAction_data(%r12), %rsi
     call    node_op_event
-    mov     %rbp, %rdi                      # an operation of the pool keeps its bytes there too
+    cmpq    $GOSSIP_BEACON_BLOCK, NodeMessage_topic(%r13)  # a block: its block_gossip event
+    jne     638f
+    mov     $API_TOPIC_BLOCK_GOSSIP, %edi
+    lea     NodeEvent_root(%r12), %rsi
+    mov     NodeMessage_slot(%r13), %rdx
+    xor     %ecx, %ecx
+    call    node_api_root_event
+638: mov    %rbp, %rdi                      # an operation of the pool keeps its bytes there too
     call    node_store_slot
     mov     %rax, %rdi
     lea     Node_config(%rbx), %rsi

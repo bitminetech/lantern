@@ -4839,6 +4839,11 @@ LOCAL_FUNCTION node_publish_done
     sd      t0, NodeBlock_blobs(s7)
     ld      t0, (NodeEvent_chunk + 16)(s3)
     sd      t0, NodeBlock_length(s7)
+    li      a0, API_TOPIC_BLOCK_GOSSIP      # its block_gossip event: its checks passed
+    addi    a1, s4, NodeApi_root
+    ld      a2, NodeApi_slot(s4)
+    li      a3, 0
+    call    node_api_root_event
     ld      t0, Node_flags(s1)              # subscribed: the block out on beacon_block
     andi    t0, t0, NODE_FLAG_SUBSCRIBED
     beqz    t0, 21f
@@ -4954,6 +4959,7 @@ LOCAL_FUNCTION node_publish_sidecar_done
     ENTER 0
     mv      s3, a0
     mv      s4, a1
+    li      s8, 0
     addi    s7, s4, NodeEvent_chunk
     ld      t0, NodeApi_fork(s3)
     li      t1, FORK_FULU
@@ -4983,7 +4989,34 @@ LOCAL_FUNCTION node_publish_sidecar_done
     sd      t1, NodeBlob_length(t0)
     addi    a0, s4, NodeEvent_root
     call    node_blob_added
-3:  ld      t0, Node_flags(s1)              # subscribed: out on its subnet's topic
+3:  ld      t0, NodeApi_fork(s3)            # its event: of its NodeBlob's bytes, else of a copy for the work
+    li      s9, API_TOPIC_BLOB_SIDECAR
+    li      t1, FORK_FULU
+    bltu    t0, t1, 37f
+    li      s9, API_TOPIC_DATA_COLUMN_SIDECAR
+37: mv      a0, s9
+    call    node_api_subscribed
+    beqz    a0, 39f
+    mv      s10, s8
+    bnez    s10, 38f
+    mv      a0, s7
+    call    node_put
+    mv      s10, a0
+38: li      a0, NODE_WORK_API_EVENT
+    li      a1, 0
+    li      a2, 0
+    mv      a3, s10
+    li      a4, 0
+    ld      a5, NodeApi_fork(s3)
+    slli    a5, a5, 16
+    or      a5, a5, s9
+    call    node_work
+    beq     s10, s8, 39f
+    li      a0, NODE_ACT_BYTES_FREE
+    mv      a1, s10
+    li      a2, 0
+    call    node_ids
+39: ld      t0, Node_flags(s1)              # subscribed: out on its subnet's topic
     andi    t0, t0, NODE_FLAG_SUBSCRIBED
     beqz    t0, 4f
     ld      t2, NodeEvent_index(s4)
@@ -5691,14 +5724,18 @@ LOCAL_FUNCTION api_event_text
     API_LIT api_ev_t_head
     j       3f
 1:  li      t0, API_TOPIC_BLOCK
-    bne     s10, t0, 2f
+    bne     s10, t0, 11f
     API_LIT api_ev_t_block
+    j       3f
+11: li      t0, API_TOPIC_BLOCK_GOSSIP
+    bne     s10, t0, 2f
+    API_LIT api_ev_t_block_gossip
     j       3f
 2:  API_LIT api_ev_t_finalized
 3:  API_LIT api_ev_data
     li      t0, API_TOPIC_FINALIZED_CHECKPOINT
     beq     s10, t0, 5f
-    # block and head: {"slot":…,"block":…
+    # block, block_gossip and head: {"slot":…,"block":…
     API_LIT api_ev_slot
     ld      a0, ApiView_event_slot(s4)
     call    api_qdec
@@ -5706,6 +5743,8 @@ LOCAL_FUNCTION api_event_text
     addi    a0, s4, ApiView_event_block
     li      a1, 32
     call    api_qhex
+    li      t0, API_TOPIC_BLOCK_GOSSIP
+    beq     s10, t0, 61f
     li      t0, API_TOPIC_HEAD
     bne     s10, t0, 6f
     # head: state, epoch_transition and the dependent roots
@@ -5743,7 +5782,7 @@ LOCAL_FUNCTION api_event_text
     srli    a0, a0, 1
     andi    a0, a0, 1
     call    api_bool
-    API_LIT api_ev_end
+61: API_LIT api_ev_end
     bnez    s9, 9f
     addi    t0, s5, 24
     sub     t0, s6, t0
@@ -5842,6 +5881,142 @@ LOCAL_FUNCTION api_op_event_text
 END_FUNCTION api_op_event_text
 
 /*
+ * (out a0, topic a1, ssz a2, scratch a3; the fork in t6) -> a0: the text of the event of a sidecar
+ * topic (beacon-api.md, eventstream): event: <topic> LF data: {"block_root":…,"index":…,"slot":…,…}
+ * LF LF, from the sidecar's bytes, into the ByteList out, its count set; LANTERN_OK,
+ * LANTERN_BUFFER_TOO_SMALL, or LANTERN_INVALID_ENCODING. The writer's registers; s5 out, s10 the
+ * topic, s1 the bytes, s2 their count, s3 a commitment's index. Locals: L the block root, L+32 a
+ * versioned hash, L+64 a ByteList of a commitment (24 + 48), L+136 a slot.
+ */
+LOCAL_FUNCTION api_sidecar_event_text
+    ENTER 144
+    mv      s5, a0
+    mv      s10, a1
+    ld      t0, 8(a2)
+    add     s1, a2, t0
+    ld      s2, 16(a2)
+    mv      a0, a2                          # block_root: lantern_node_sidecar_root
+    mv      a1, a3
+    addi    a2, sp, L
+    FORK_CALL node_sidecar_root
+    li      t0, LANTERN_BUFFER_TOO_SMALL
+    beq     a0, t0, 9f
+    bnez    a0, 8f
+    li      s7, 1
+    li      s9, 0
+    addi    s6, s5, 24
+    ld      t0, 0(s5)
+    add     s8, s5, t0
+    API_LIT api_ev_event
+    li      t0, API_TOPIC_BLOB_SIDECAR
+    bne     s10, t0, 1f
+    API_LIT api_ev_t_blob
+    j       2f
+1:  API_LIT api_ev_t_column
+2:  API_LIT api_ev_data
+    API_LIT api_sc_root
+    addi    a0, sp, L
+    li      a1, 32
+    call    api_qhex
+    API_LIT api_sc_index
+    addi    a0, sp, L + 136                 # SSZ bytes have no alignment: each integer through an aligned copy
+    mv      a1, s1
+    li      a2, 8
+    call    lantern_copy
+    ld      a0, (L + 136)(sp)
+    call    api_qdec
+    API_LIT api_c_slot
+    li      t0, API_TOPIC_BLOB_SIDECAR
+    bne     s10, t0, 4f
+    addi    a0, sp, L + 136                 # a BlobSidecar: the header's slot, the commitment, its versioned hash
+    li      t0, 8 + PUB_BLOB_BYTES + 96
+    add     a1, s1, t0
+    li      a2, 8
+    call    lantern_copy
+    ld      a0, (L + 136)(sp)
+    call    api_qdec
+    API_LIT api_sc_commitment
+    li      t0, 8 + PUB_BLOB_BYTES
+    add     a0, s1, t0
+    li      a1, 48
+    call    api_qhex
+    API_LIT api_sc_hash
+    addi    a0, sp, L + 88
+    li      t0, 8 + PUB_BLOB_BYTES
+    add     a1, s1, t0
+    li      a2, 48
+    call    lantern_copy
+    li      t0, 72
+    sd      t0, (L + 64)(sp)
+    li      t0, 24
+    sd      t0, (L + 72)(sp)
+    li      t0, 48
+    sd      t0, (L + 80)(sp)
+    addi    a0, sp, L + 64
+    addi    a1, sp, L + 32
+    CALL_GLOBAL crypto_sha256
+    bnez    a0, 8f
+    li      t0, VERSIONED_HASH_VERSION_KZG
+    sb      t0, (L + 32)(sp)
+    addi    a0, sp, L + 32
+    li      a1, 32
+    call    api_qhex
+    API_LIT api_end1
+    j       7f
+4:  addi    a0, sp, L + 136                 # a DataColumnSidecar: the header's slot, then the commitments
+    addi    a1, s1, 20
+    li      a2, 8
+    call    lantern_copy
+    ld      a0, (L + 136)(sp)
+    call    api_qdec
+    API_LIT api_sc_commitments
+    addi    a0, sp, L + 136                 # the offsets of kzg_commitments and kzg_proofs
+    addi    a1, s1, 12
+    li      a2, 8
+    call    lantern_copy
+    lwu     t0, (L + 136)(sp)
+    lwu     t1, (L + 140)(sp)
+    bgtu    t0, t1, 8f
+    bgtu    t1, s2, 8f
+    sub     t1, t1, t0
+    li      t2, 48
+    remu    t3, t1, t2
+    bnez    t3, 8f
+    li      s3, 0
+5:  lwu     t0, (L + 136)(sp)
+    lwu     t1, (L + 140)(sp)
+    sub     t1, t1, t0
+    li      t2, 48
+    divu    t1, t1, t2                      # the count: the bytes over 48
+    bgeu    s3, t1, 6f
+    beqz    s3, 51f
+    API_LIT api_p_comma
+51: lwu     t0, (L + 136)(sp)
+    li      t2, 48
+    mul     t1, s3, t2
+    add     t0, t0, t1
+    add     a0, s1, t0
+    li      a1, 48
+    call    api_qhex
+    addi    s3, s3, 1
+    j       5b
+6:  API_LIT api_v_end
+7:  API_LIT api_ev_lf2
+    bnez    s9, 9f
+    addi    t0, s5, 24
+    sub     t0, s6, t0
+    li      t1, 24
+    sd      t1, 8(s5)
+    sd      t0, 16(s5)
+    li      a0, LANTERN_OK
+    LEAVE 144
+8:  li      a0, LANTERN_INVALID_ENCODING
+    LEAVE 144
+9:  li      a0, LANTERN_BUFFER_TOO_SMALL
+    LEAVE 144
+END_FUNCTION api_sidecar_event_text
+
+/*
  * The event of a valid operation of the gossip topic a0, its bytes a1, of the fork a2 (node.md, The
  * events): a NODE_WORK_API_EVENT of its event topic when an entry has the topic. Locals: the bytes,
  * the work's arg.
@@ -5863,6 +6038,12 @@ LOCAL_FUNCTION node_op_event
     beq     a0, t1, 1f
     li      t1, GOSSIP_SYNC_COMMITTEE_CONTRIBUTION_AND_PROOF
     li      t0, API_TOPIC_CONTRIBUTION_AND_PROOF
+    beq     a0, t1, 1f
+    li      t1, GOSSIP_BLOB_SIDECAR
+    li      t0, API_TOPIC_BLOB_SIDECAR
+    beq     a0, t1, 1f
+    li      t1, GOSSIP_DATA_COLUMN_SIDECAR
+    li      t0, API_TOPIC_DATA_COLUMN_SIDECAR
     beq     a0, t1, 1f
     li      t1, GOSSIP_BEACON_ATTESTATION
     bne     a0, t1, 9f
@@ -6074,15 +6255,32 @@ LOCAL_FUNCTION node_api_events
 9:  LEAVE 0
 END_FUNCTION node_api_events
 
-/*
- * The block event of the NodeBlock entry a0 (node.md, The events), with an entry of the topic: its
- * text in a ByteList at the end of scratch, after the ApiView of its values. s3 the block, s4 the
- * view, s7 the ByteList. Locals: L the scratch's size.
- */
+/* The block event of the NodeBlock entry a0 (node.md, The events): its slot and root, execution_optimistic from its payload status. */
 LOCAL_FUNCTION node_api_block_event
-    ENTER 16
-    mv      s3, a0
+    FRAME 0
+    ld      t0, NodeBlock_payload_status(a0)
+    addi    t0, t0, -PAYLOAD_STATUS_NOT_VALIDATED
+    seqz    a3, t0
+    slli    a3, a3, 1
+    ld      a2, NodeBlock_slot(a0)
+    addi    a1, a0, NodeBlock_root
     li      a0, API_TOPIC_BLOCK
+    call    node_api_root_event
+    UNFRAME 0
+END_FUNCTION node_api_block_event
+
+/*
+ * The event of the topic a0 (block or block_gossip) of the block root a1 and slot a2, with the
+ * values a3 (node.md, The events), with an entry of the topic: its text in a ByteList at the end of
+ * scratch, after the ApiView of its values. s3 the root, s4 the view, s7 the ByteList, s8 the
+ * topic, s9 the slot, s10 the values. Locals: L the scratch's size.
+ */
+LOCAL_FUNCTION node_api_root_event
+    ENTER 16
+    mv      s3, a1
+    mv      s8, a0
+    mv      s9, a2
+    mv      s10, a3
     call    node_api_subscribed
     beqz    a0, 9f
     ld      t0, 0(s5)
@@ -6099,27 +6297,22 @@ LOCAL_FUNCTION node_api_block_event
     li      t0, 24
     sd      t0, 8(s7)
     sd      zero, 16(s7)
-    ld      t0, NodeBlock_slot(s3)
-    sd      t0, ApiView_event_slot(s4)
+    sd      s9, ApiView_event_slot(s4)
     addi    t0, s4, ApiView_event_block
     COPY32  t0, s3
-    ld      t0, NodeBlock_payload_status(s3)
-    addi    t0, t0, -PAYLOAD_STATUS_NOT_VALIDATED
-    seqz    t0, t0
-    slli    t0, t0, 1
-    sd      t0, ApiView_event_flags(s4)
+    sd      s10, ApiView_event_flags(s4)
     mv      a0, s4
     mv      a1, s7
-    li      a2, API_TOPIC_BLOCK
+    mv      a2, s8
     call    api_event_text
     bnez    a0, 8f
     mv      a0, s7
-    li      a1, API_TOPIC_BLOCK
+    mv      a1, s8
     call    node_api_events
 8:  ld      t0, L(sp)
     sd      t0, 0(s5)
 9:  LEAVE 16
-END_FUNCTION node_api_block_event
+END_FUNCTION node_api_root_event
 
 /*
  * The head and finalized_checkpoint events at a quiet point (node.md, The events): with no block
@@ -6338,7 +6531,7 @@ LOCAL_FUNCTION node_api_event_run
     beq     s8, t0, 11f
     li      t0, API_TOPIC_CONTRIBUTION_AND_PROOF
     li      a2, NODE_JSON_CONTRIBUTION_AND_PROOF
-    bne     s8, t0, 8f
+    bne     s8, t0, 12f
 11: beqz    s4, 41f
     ld      t0, 0(s5)                       # a JsonCursor at the end of scratch
     li      t1, JSON_CURSOR_SIZE
@@ -6358,6 +6551,28 @@ LOCAL_FUNCTION node_api_event_run
     mv      a1, s8
     mv      a3, s4
     call    api_op_event_text
+    li      t0, LANTERN_BUFFER_TOO_SMALL
+    beq     a0, t0, 71f
+    beqz    a0, 55b
+    j       41f
+12: li      t0, API_TOPIC_BLOB_SIDECAR      # a sidecar topic: its fields from its bytes
+    beq     s8, t0, 13f
+    li      t0, API_TOPIC_DATA_COLUMN_SIDECAR
+    bne     s8, t0, 8f
+13: beqz    s4, 41f
+    ld      t0, NodeAction_arg(s2)
+    srli    t6, t0, 16
+    andi    t6, t6, 255
+    addi    t0, s9, -NodeEvent_chunk        # the text, in the event
+    andi    t0, t0, -8
+    li      t1, 64
+    bltu    t0, t1, 71f
+    sd      t0, NodeEvent_chunk(s6)
+    addi    a0, s6, NodeEvent_chunk
+    mv      a1, s8
+    mv      a2, s4
+    mv      a3, s5
+    call    api_sidecar_event_text
     li      t0, LANTERN_BUFFER_TOO_SMALL
     beq     a0, t0, 71f
     beqz    a0, 55b

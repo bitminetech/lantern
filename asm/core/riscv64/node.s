@@ -4216,7 +4216,15 @@ LOCAL_FUNCTION node_event
     ld      a0, NodeMessage_topic(s4)
     ld      a1, NodeAction_data(s3)
     call    node_op_event
-    mv      a0, s2                          # an operation of the pool keeps its bytes there too
+    ld      t0, NodeMessage_topic(s4)       # a block: its block_gossip event
+    li      t1, GOSSIP_BEACON_BLOCK
+    bne     t0, t1, 638f
+    li      a0, API_TOPIC_BLOCK_GOSSIP
+    addi    a1, s3, NodeEvent_root
+    ld      a2, NodeMessage_slot(s4)
+    li      a3, 0
+    call    node_api_root_event
+638: mv     a0, s2                          # an operation of the pool keeps its bytes there too
     call    node_store_slot
     addi    a1, s1, Node_config
     call    node_fork

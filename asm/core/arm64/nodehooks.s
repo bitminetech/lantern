@@ -651,6 +651,43 @@ SPEC_FUNCTION node_attester_duties
     LEAVE 192
 SPEC_END node_attester_duties
 
+/*
+ * (ssz, scratch, out) -> status: the block root of a sidecar's SSZ bytes, hash_tree_root of its
+ * signed_block_header.message (node.md, lantern_node_sidecar_root). x19 the bytes, x20 their count,
+ * x21 scratch, x22 out.
+ */
+SPEC_FUNCTION node_sidecar_root
+    ENTER 0
+.if FORK < FORK_DENEB
+    mov     x0, #LANTERN_INVALID_EVENT
+    LEAVE 0
+.else
+    ldr     x9, [x0, #8]
+    add     x19, x0, x9
+    ldr     x20, [x0, #16]
+    mov     x21, x1
+    mov     x22, x2
+.if FORK < FORK_FULU
+    MOVQ    x9, PUB_BLOB_SIDECAR            /* a BlobSidecar: its fixed size; the header after the index, blob, commitment and proof */
+    cmp     x20, x9
+    b.ne    8f
+    MOVQ    x9, 8 + PUB_BLOB_BYTES + 96
+    add     x1, x19, x9
+.else
+    cmp     x20, #PUB_COLUMN_FIXED          /* a DataColumnSidecar: the header after the index and three offsets */
+    b.lo    8f
+    add     x1, x19, #20
+.endif
+    ADDRESS x0, lantern_type_BeaconBlockHeader
+    mov     x2, x21
+    mov     x3, x22
+    CALL_GLOBAL ssz_hash_tree_root
+    LEAVE 0
+8:  mov     x0, #LANTERN_INVALID_ENCODING
+    LEAVE 0
+.endif
+SPEC_END node_sidecar_root
+
 /* Set the byte of each index of a phase0 epoch list of PendingAttestation values: of the part at ref of the state. */
 .macro LIVE_PENDING ref
     MOVQ    x9, \ref

@@ -4259,7 +4259,15 @@ LOCAL_FUNCTION node_event
     ldr     x0, [x22, #NodeMessage_topic]
     ldr     x1, [x21, #NodeAction_data]
     bl      node_op_event
-    mov     x0, x20                         /* an operation of the pool keeps its bytes there too */
+    ldr     x9, [x22, #NodeMessage_topic]   /* a block: its block_gossip event */
+    cmp     x9, #GOSSIP_BEACON_BLOCK
+    b.ne    638f
+    mov     x0, #API_TOPIC_BLOCK_GOSSIP
+    add     x1, x21, #NodeEvent_root
+    ldr     x2, [x22, #NodeMessage_slot]
+    mov     x3, #0
+    bl      node_api_root_event
+638: mov    x0, x20                         /* an operation of the pool keeps its bytes there too */
     bl      node_store_slot
     add     x1, x19, #Node_config
     bl      node_fork
