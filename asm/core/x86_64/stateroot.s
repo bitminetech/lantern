@@ -537,7 +537,7 @@ END_FUNCTION sr_tree
     movq    $SR_COUNT, S7(%rsp)
     lea     STATE_ROOT_LEAVES(%r14), %rax
     mov     %rax, S8(%rsp)
-1:  cmpq    $0, S7(%rsp)
+1:  cmpq    $(0), S7(%rsp)
     je      49f
     mov     S10(%rsp), %rax
     mov     %rax, (%r12)
@@ -570,14 +570,14 @@ END_FUNCTION sr_tree
 5:  cmp     $SR_PVEC, %rax
     jne     6f
     mov     24(%r15), %rdx                  # the bytes, as elements of 1 byte; no length
-    mov     $1, %ecx
+    mov     $(1), %ecx
     mov     32(%r15), %r8
     jmp     8f
 6:  mov     8(%rsi), %rdx                   # a list: its part
     mov     (%rsi), %rsi
     add     %rbx, %rsi
     mov     32(%r15), %r8
-    or      $256, %r8
+    or      $(256), %r8
     cmp     $SR_PLIST, %rax
     jne     7f
     mov     24(%r15), %rcx
@@ -589,12 +589,12 @@ END_FUNCTION sr_tree
     lea     StateCache_trees(%rbp,%rdi), %rdi
     mov     S8(%rsp), %r9
     call    sr_tree
-    cmp     $1, %rax
+    cmp     $(1), %rax
     je      90f
     test    %rax, %rax
     jnz     98f
-40: add     $40, %r15
-    addq    $32, S8(%rsp)
+40: add     $(40), %r15
+    addq    $(32), S8(%rsp)
     decq    S7(%rsp)
     jmp     1b
 49:
