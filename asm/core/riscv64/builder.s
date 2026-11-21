@@ -54,6 +54,31 @@ bld_reg_6_len = . - bld_reg_6
 .if (bld_post_validators_len != BLD_POST_VALIDATORS_LEN) || (bld_head_json_len != BLD_HEAD_JSON_LEN) || (bld_head_end_len != BLD_HEAD_END_LEN) || (bld_reg_1_len != BLD_REG_1_LEN) || (bld_reg_2_len != BLD_REG_2_LEN) || (bld_reg_3_len != BLD_REG_3_LEN) || (bld_reg_4_len != BLD_REG_4_LEN) || (bld_reg_5_len != BLD_REG_5_LEN) || (bld_reg_6_len != BLD_REG_6_LEN)
 .error "a builder text's length is wrong"
 .endif
+bld_get_header:
+    .ascii  "GET /eth/v1/builder/header/"
+bld_get_header_len = . - bld_get_header
+bld_get_0x:
+    .ascii  "/0x"
+bld_get_0x_len = . - bld_get_0x
+bld_get_http:
+    .ascii  " HTTP/1.1\r\nHost: "
+bld_get_http_len = . - bld_get_http
+bld_get_end:
+    .ascii  "\r\nAccept: application/json\r\nConnection: close\r\n\r\n"
+bld_get_end_len = . - bld_get_end
+bld_version:
+    .ascii  "version"
+bld_data:
+    .ascii  "data"
+/* The getHeader texts' lengths as numbers, and the request's bytes other than the slot's digits and the host. */
+.set BLD_GET_HEADER_LEN, 27
+.set BLD_GET_0X_LEN, 3
+.set BLD_GET_HTTP_LEN, 17
+.set BLD_GET_END_LEN, 49
+.set BLD_GET_FIXED, BLD_GET_HEADER_LEN + 2 * BLD_GET_0X_LEN + BLD_GET_HTTP_LEN + BLD_GET_END_LEN + 2 * (32 + 48)
+.if (bld_get_header_len != BLD_GET_HEADER_LEN) || (bld_get_0x_len != BLD_GET_0X_LEN) || (bld_get_http_len != BLD_GET_HTTP_LEN) || (bld_get_end_len != BLD_GET_END_LEN)
+.error "a getHeader text's length is wrong"
+.endif
 bld_hex_digits:
     .ascii  "0123456789abcdef"
 
@@ -148,20 +173,298 @@ LOCAL_FUNCTION node_builder_call
     ret
 END_FUNCTION node_builder_call
 
-# L1: the NODE_EV_BUILDER s3 (node.md, the builder calls): its call's entry goes free. s1 the node, s6 the actions.
+# L2: the NODE_EV_BUILDER s3 (node.md, the builder calls): a header call still awaited by its
+# produceBlockV3 entry ends there, the answer's bytes in a NODE_ACT_BYTES_PUT to a new id at
+# PRODUCE_BID when the call did not fail and the actions have room; then the call's entry goes
+# free. s1 the node, s6 the actions; s7 the call, s8 the failure bit, s9 the call's entry, s10 the
+# NodeApi entry.
 LOCAL_FUNCTION node_builder_event
-    UNWIND_END_PROLOGUE
+    ENTER 0
     ld      t0, 16(s3)
-    andi    t0, t0, 255
+    andi    s7, t0, 255
+    srli    s8, t0, 8
+    andi    s8, s8, 1
     li      t1, NODE_BUILDER_CALLS
-    bgeu    t0, t1, 9f
+    bgeu    s7, t1, 9f
     ADDQ    t2, s1, Node_builder_calls
     li      t1, NODE_BUILDER_CALL_SIZE
-    mul     t0, t0, t1
-    add     t2, t2, t0
-    sd      zero, 0(t2)
-9:  ret
+    mul     t0, s7, t1
+    add     s9, t2, t0
+    ld      t0, 0(s9)                       # a header call: to its entry, when that waits for it
+    li      t1, NODE_BUILDER_HEADER
+    bne     t0, t1, 8f
+    ld      t0, 8(s9)
+    PART    t1, t2, s1, Node_api
+    bgeu    t0, t2, 8f
+    li      t3, NodeApi__mem
+    mul     t0, t0, t3
+    add     s10, t1, t0
+    ld      t0, NodeApi_connection(s10)
+    beqz    t0, 8f
+    ld      t0, NodeApi_op(s10)
+    li      t1, API_OP_PRODUCE_BLOCK_V3
+    bne     t0, t1, 8f
+    ld      t0, (NodeApi_cursor + PRODUCE_CALL)(s10)
+    addi    t1, s7, 1
+    bne     t0, t1, 8f
+    sd      zero, (NodeApi_cursor + PRODUCE_CALL)(s10)
+    bnez    s8, 8f
+    ld      a0, (24 + 16)(s3)               # the answer's bytes
+    addi    a0, a0, (48 + 7)
+    call    node_room
+    beqz    a0, 8f
+    addi    a0, s3, 24
+    call    node_put
+    sd      a0, (NodeApi_cursor + PRODUCE_BID)(s10)
+8:  sd      zero, 0(s9)
+9:  LEAVE 0
 END_FUNCTION node_builder_event
+
+# L2: on the way into NODE_PRODUCE_PAYLOAD of the produceBlockV3 entry a0 (node.md, Block
+# production), the event a1 of its PRODUCE_CHECK and the head's block_hash at a2: with
+# NODE_FLAG_BUILDER, a NODE_BUILDER_HEADER call of its slot, the hash and the pubkey of the
+# proposer's NodeProposer entry, when builder_boost_factor is not 0, the entry has registered 1,
+# the head's NodeBlock is not NOT_VALIDATED and the check says the chain is healthy; the entry
+# keeps the call + 1 and the registration's fee recipient. None with no free call or no room in
+# the actions. s1 the node, s6 the actions; s7 the entry, s8 the event, s9 the hash, s10 the
+# NodeProposer. Locals: L the request's bytes, L+8 the call.
+LOCAL_FUNCTION node_produce_header
+    ENTER 16
+    mv      s7, a0
+    mv      s8, a1
+    mv      s9, a2
+    ld      t0, Node_flags(s1)
+    li      t1, NODE_FLAG_BUILDER
+    and     t0, t0, t1
+    beqz    t0, 9f
+    ld      t0, (NodeApi_cursor + PRODUCE_BOOST)(s7)
+    beqz    t0, 9f
+    ld      t0, (NodeEvent_root + 8)(s8)
+    beqz    t0, 9f
+    ld      t0, NodeEvent_root(s8)          # the proposer's registration
+    PART    s10, t1, s1, Node_proposers
+1:  beqz    t1, 9f
+    ld      t2, NodeProposer_validator_index(s10)
+    bne     t2, t0, 2f
+    ld      t2, NodeProposer_registered(s10)
+    bnez    t2, 3f
+2:  addi    s10, s10, NodeProposer__mem
+    addi    t1, t1, -1
+    j       1b
+3:  ADDQ    a0, s1, Node_head_root          # the head is not optimistic
+    call    node_find_block
+    li      t0, -1
+    beq     a0, t0, 9f
+    ld      t0, NodeBlock_payload_status(a1)
+    li      t1, PAYLOAD_STATUS_NOT_VALIDATED
+    beq     t0, t1, 9f
+    ld      a0, NodeApi_slot(s7)            # the request's bytes
+    call    bld_digits
+    LDQ     t0, s1, Node_builder_host_len
+    add     a0, a0, t0
+    addi    a0, a0, BLD_GET_FIXED
+    sd      a0, L(sp)
+    addi    a0, a0, (48 + 7)
+    call    node_room
+    beqz    a0, 9f
+    PART    t0, t1, s1, Node_api
+    sub     a1, s7, t0
+    li      t1, NodeApi__mem
+    divu    a1, a1, t1
+    li      a0, NODE_BUILDER_HEADER
+    call    node_builder_call
+    li      t0, -1
+    beq     a0, t0, 9f
+    sd      a0, (L + 8)(sp)
+    addi    t0, a0, 1
+    sd      t0, (NodeApi_cursor + PRODUCE_CALL)(s7)
+    addi    a0, s7, (NodeApi_cursor + PRODUCE_FEE)
+    addi    a1, s10, NodeProposer_registration_fee_recipient
+    li      a2, 20
+    call    lantern_copy
+    ld      a1, L(sp)
+    addi    a1, a1, (48 + 7)
+    andi    a1, a1, -8
+    li      a0, NODE_ACT_BUILDER
+    call    node_act
+    ld      t0, (L + 8)(sp)
+    sd      t0, 16(a0)
+    ld      t0, 0(a0)
+    addi    t0, t0, -24
+    sd      t0, 24(a0)
+    li      t0, 24
+    sd      t0, 32(a0)
+    ld      t0, L(sp)
+    sd      t0, 40(a0)
+    addi    a0, a0, 48
+    ADDRESS a1, bld_get_header
+    li      a2, BLD_GET_HEADER_LEN
+    call    bld_put
+    ld      a1, NodeApi_slot(s7)
+    call    bld_dec
+    ADDRESS a1, bld_get_0x
+    li      a2, BLD_GET_0X_LEN
+    call    bld_put
+    mv      a1, s9
+    li      a2, 32
+    call    bld_hex
+    ADDRESS a1, bld_get_0x
+    li      a2, BLD_GET_0X_LEN
+    call    bld_put
+    addi    a1, s10, NodeProposer_pubkey
+    li      a2, 48
+    call    bld_hex
+    ADDRESS a1, bld_get_http
+    li      a2, BLD_GET_HTTP_LEN
+    call    bld_put
+    ADDQ    a1, s1, Node_builder_host
+    LDQ     a2, s1, Node_builder_host_len
+    call    bld_put
+    ADDRESS a1, bld_get_end
+    li      a2, BLD_GET_END_LEN
+    call    bld_put
+9:  LEAVE 16
+END_FUNCTION node_produce_header
+
+# L0: a0 = 1 when the a2 bytes at a1 are the a3 bytes at a0, else 0. Uses t0, t1.
+LOCAL_FUNCTION bld_same
+    UNWIND_END_PROLOGUE
+    bne     a2, a3, 8f
+1:  beqz    a2, 9f
+    lbu     t0, 0(a0)
+    lbu     t1, 0(a1)
+    bne     t0, t1, 8f
+    addi    a0, a0, 1
+    addi    a1, a1, 1
+    addi    a2, a2, -1
+    j       1b
+9:  li      a0, 1
+    ret
+8:  li      a0, 0
+    ret
+END_FUNCTION bld_same
+
+# L2: (answer a0, scratch a1, fork a2) -> a0: the JSON text of the bid in a builder's getHeader
+# answer (node.md, NODE_WORK_PRODUCE_BID): lantern_http_parse_response with eof 1, the body
+# unchunked at the end of scratch, whose size drops below it (the caller restores it); status 200;
+# the body an object whose first member version is a string, the fork's name, and whose first
+# member data is a value. LANTERN_OK with a1 the data's text and a2 its bytes; else
+# LANTERN_INVALID_HTTP, LANTERN_NO_BID, LANTERN_INVALID_JSON, LANTERN_INVALID_BID or
+# LANTERN_BUFFER_TOO_SMALL. s1 the body's end (the JSON scan's), s2 scratch, s3 the fork, s6 the
+# body, s7 the version's text or 0, s8 its bytes, s9 the data or 0, s10 its end. Locals: L the
+# answer, L+16 the HttpResponse (16), L+32 eof, L+40 a name and its bytes, L+56 the cursor.
+LOCAL_FUNCTION node_bid_data
+    ENTER 64
+    sd      a0, L(sp)
+    mv      s2, a1
+    mv      s3, a2
+    ld      t0, 16(a0)                      # the body: at most the answer's bytes
+    addi    t0, t0, (24 + 7)
+    andi    t0, t0, -8
+    ld      t1, 0(s2)
+    bltu    t1, t0, 98f
+    sub     t1, t1, t0
+    li      t2, 64
+    bltu    t1, t2, 98f
+    sd      t1, 0(s2)
+    add     s6, s2, t1
+    sd      t0, 0(s6)
+    li      t2, 24
+    sd      t2, 8(s6)
+    sd      zero, 16(s6)
+    li      t0, 1
+    sd      t0, (L + 32)(sp)
+    ld      a0, L(sp)
+    addi    a1, sp, (L + 32)
+    mv      a2, s6
+    addi    a3, sp, (L + 16)
+    call    lantern_http_parse_response
+    bnez    a0, 97f
+    ld      t0, (L + 16)(sp)
+    li      t1, 200
+    bne     t0, t1, 96f
+    ld      t0, 8(s6)                       # the body's object: its members
+    add     a0, s6, t0
+    ld      t1, 16(s6)
+    add     s1, a0, t1
+    li      s7, 0
+    li      s9, 0
+    call    jws
+    bgeu    a0, s1, 95f
+    lbu     t0, 0(a0)
+    li      t1, '{'
+    bne     t0, t1, 95f
+    addi    a0, a0, 1
+    li      a1, 1
+1:  call    jmember
+    beqz    a0, 95f
+    bnez    a3, 5f
+    sd      a1, (L + 40)(sp)                # the name
+    sd      a2, (L + 48)(sp)
+    sd      a0, (L + 56)(sp)
+    mv      a0, a1
+    mv      a3, a2
+    ADDRESS a1, bld_version
+    li      a2, 7
+    call    bld_same
+    mv      t4, a0
+    ld      a0, (L + 56)(sp)
+    beqz    t4, 2f
+    bnez    s7, 2f
+    call    jstring                         # version: a string with no escape
+    beqz    a0, 95f
+    bnez    a3, 95f
+    mv      s7, a1
+    mv      s8, a2
+    li      a1, 0
+    j       1b
+2:  ld      a0, (L + 40)(sp)
+    ld      a3, (L + 48)(sp)
+    ADDRESS a1, bld_data
+    li      a2, 4
+    call    bld_same
+    mv      t4, a0
+    ld      a0, (L + 56)(sp)
+    beqz    t4, 3f
+    bnez    s9, 3f
+    mv      s9, a0                          # data: its text
+    call    jskip
+    beqz    a0, 95f
+    mv      s10, a0
+    li      a1, 0
+    j       1b
+3:  call    jskip                           # another member: skipped
+    beqz    a0, 95f
+    li      a1, 0
+    j       1b
+5:  call    jws                             # nothing after the object
+    bne     a0, s1, 95f
+    beqz    s7, 95f
+    beqz    s9, 95f
+    ADDRESS a0, api_forks                   # version: the fork's name
+    slli    t0, s3, 4
+    add     a0, a0, t0
+    lbu     a3, 0(a0)
+    addi    a0, a0, 1
+    mv      a1, s7
+    mv      a2, s8
+    call    bld_same
+    beqz    a0, 94f
+    li      a0, LANTERN_OK
+    mv      a1, s9
+    sub     a2, s10, s9
+    LEAVE 64
+94: li      a0, LANTERN_INVALID_BID
+    LEAVE 64
+95: li      a0, LANTERN_INVALID_JSON
+    LEAVE 64
+96: li      a0, LANTERN_NO_BID
+    LEAVE 64
+97: li      a0, LANTERN_INVALID_HTTP
+    LEAVE 64
+98: li      a0, LANTERN_BUFFER_TOO_SMALL
+    LEAVE 64
+END_FUNCTION node_bid_data
 
 # L1: a0 = the bytes of the JSON of the SignedValidatorRegistrationV1 at a0 (180 bytes). Locals: the registration, a count.
 LOCAL_FUNCTION bld_reg_len
@@ -415,6 +718,12 @@ LOCAL_FUNCTION node_registration_put
     addi    a0, t0, NodeProposer_registration_fee_recipient
     ld      a1, 0(sp)
     li      a2, 20
+    call    lantern_copy
+    ld      t0, 8(sp)                       # and its pubkey
+    addi    a0, t0, NodeProposer_pubkey
+    ld      a1, 0(sp)
+    addi    a1, a1, 36
+    li      a2, 48
     call    lantern_copy
 9:  UNFRAME 32
 END_FUNCTION node_registration_put

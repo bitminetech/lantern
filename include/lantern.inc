@@ -717,6 +717,16 @@
 .set NODE_BUILDER_CALLS, 4
 .set NODE_BUILDER_CALL_SIZE, 24
 .set NODE_BUILDER_REGISTER, 1          /* registerValidator: POST /eth/v1/builder/validators */
+.set NODE_BUILDER_HEADER, 2            /* getHeader: GET /eth/v1/builder/header/<slot>/<parent_hash>/<pubkey> */
+.set DOMAIN_APPLICATION_BUILDER, 0x01000000  /* builder-specs bellatrix builder.md: DomainType('0x00000001'), its bytes as a little endian u32 */
+.set BUILDER_PROPOSAL_DELAY_TOLERANCE_MS, 1000  /* builder-specs bellatrix validator.md: 1 second */
+.set BUILDER_FALLBACK_SKIPS, 3         /* the liveness failsafe (beacon-api.md, produceBlockV3): Lighthouse v8.3.3's defaults */
+.set BUILDER_FALLBACK_SKIPS_PER_EPOCH, 8
+.set BUILDER_FALLBACK_EPOCHS_SINCE_FINALIZATION, 3
+.set PRODUCE_BOOST, 136                /* the cursor of a produceBlockV3 entry: builder_boost_factor */
+.set PRODUCE_CALL, 152                 /* its NODE_BUILDER_HEADER call + 1 while in flight, else 0 */
+.set PRODUCE_BID, 160                  /* the id of the builder's answer, then of its valid bid; 0 for none */
+.set PRODUCE_FEE, 168                  /* the fee recipient of the proposer's registration: 20 bytes */
 .set NODE_FIXED, Node_proposers + 192 + NODE_BUILDER_CALLS * NODE_BUILDER_CALL_SIZE
 .set NODE_PAYLOAD_NONE, 0
 .set NODE_PAYLOAD_PREPARING, 1             /* its PREPARE_PAYLOAD work is queued */
@@ -891,7 +901,8 @@
 .set NodeProposer_registration_fee_recipient, 48   /* ExecutionAddress: 20 bytes */
 .set NodeProposer_gas_limit, 72
 .set NodeProposer_timestamp, 80
-.set NodeProposer__mem, 88
+.set NodeProposer_pubkey, 88            /* BLSPubkey: 48 bytes of the registration */
+.set NodeProposer__mem, 136
 
 /* NodeStepResult: the output of lantern_node_step */
 .set NodeStepResult_accepted, 0        /* events handled, from the first */
@@ -989,11 +1000,12 @@
 .set NODE_WORK_PRODUCE_CHECK, 26       /* a: the state of a produceBlockV3; target: its NodeApi index */
 .set NODE_WORK_GET_PAYLOAD, 27         /* target: the NodeApi index of a produceBlockV3; arg: the engine id */
 .set NODE_WORK_PRODUCE_FOLD, 28        /* a: the state; b: a pool entry's bytes; data: the draft, or 0; target: the NodeApi index */
-.set NODE_WORK_PRODUCE_BLOCK, 29       /* a: the state; b: the engine's result, or 0; data: the draft; target: the NodeApi index */
+.set NODE_WORK_PRODUCE_BLOCK, 29       /* a: the state; b: the engine's result, or 0; c: the bid, or 0; data: the draft; target: the NodeApi index */
 .set NODE_PRODUCE_STATE, 1             /* NodeApi member of a produceBlockV3: its phase */
 .set NODE_PRODUCE_PAYLOAD, 2
 .set NODE_PRODUCE_FOLD, 3
 .set NODE_PRODUCE_BUILD, 4
+.set NODE_PRODUCE_BID, 5               /* after the folds: the header call in flight, or the bid's check */
 .set NODE_WORK_PUBLISH_DECODE, 30      /* data: a publishBlockV2 body; target: its NodeApi index; arg: the fork + 2^8 for SSZ */
 .set NODE_WORK_PUBLISH_SIDECARS, 31    /* b: the sidecars' buffer; data: the body; target: the NodeApi index; arg: the fork + 2^8 for SSZ */
 .set NODE_WORK_PUBLISH_CHECK, 32       /* a: the parent's post-state at the slot; b: the sidecars, or 0; c: the head's post-state; data: the block; arg: the level */
@@ -1003,6 +1015,7 @@
 .set NODE_WORK_LC_SERVE, 36            /* c: the light client store; data: the request bytes, or 0; target: the stream handle; arg: the method */
 .set NODE_WORK_LC_GOSSIP, 37           /* c: the light client store; data: a message's bytes; target: its handle; arg: the topic */
 .set NODE_WORK_LC_PUBLISH, 38          /* c: the light client store; arg: the topic */
+.set NODE_WORK_PRODUCE_BID, 39         /* a: the state of a produceBlockV3; data: the builder's answer; target: the NodeApi index */
 .set NODE_LC_ID, 2                     /* the BufferId of the light client store (lantern_node_init: Caller must) */
 .set NODE_PUBLISH_DECODE, 1            /* NodeApi member of a publishBlockV2: its phase */
 .set NODE_PUBLISH_SIDECARS, 2
@@ -1033,6 +1046,8 @@
 .set LANTERN_INVALID_COLUMN_SIDECAR, 62 /* lantern_node_column_sidecar: verify_data_column_sidecar, the inclusion proof or the KZG proofs fail */
 .set LANTERN_INVALID_RECORD, 63        /* lantern_db_add: a record breaks a rule of docs/reference/db.md */
 .set LANTERN_NO_STATE_ANSWER, 66       /* lantern_node_randao, lantern_node_sync_committee, lantern_node_proposer_lookahead: the state holds no answer */
+.set LANTERN_NO_BID, 67                /* NODE_WORK_PRODUCE_BID: the builder's answer is not 200 */
+.set LANTERN_INVALID_BID, 68           /* lantern_node_produce_bid: the bid fails a check */
 
 /* Db: the index of the stored history (docs/reference/db.md) */
 .set Db_first_slot, 8
@@ -1188,6 +1203,7 @@
 .set API_STREAM_PRODUCE_OWN, 65536     /* produceBlockV3: the pool entry bytes of its fold in flight (root) are its to free */
 .set API_STREAM_PRODUCE_FORCED, 131072  /* produceBlockV3: it made a preparation of its slot */
 .set API_STREAM_BLOB_SKIP, 262144      /* in a WORK_DONE only: the blob stream skips the rest of a blob */
+.set API_STREAM_PRODUCE_BLINDED, 524288  /* a produceBlockV3 answers a blinded block */
 .set LC_BRANCH_CURRENT_SYNC_COMMITTEE, 0   /* lantern_state_branch (light-client.md): the field */
 .set LC_BRANCH_NEXT_SYNC_COMMITTEE, 1
 .set LC_BRANCH_FINALIZED_ROOT, 2
@@ -1345,6 +1361,8 @@
 .set NODE_JSON_LC_FINALITY_UPDATE, 23   /* a LightClientFinalityUpdate, from altair */
 .set NODE_JSON_LC_OPTIMISTIC_UPDATE, 24 /* a LightClientOptimisticUpdate, from altair */
 .set NODE_JSON_VALIDATOR_REGISTRATION, 25   /* a SignedValidatorRegistrationV1 of builder-specs */
+.set NODE_JSON_BLINDED_BEACON_BLOCK, 26    /* a BlindedBeaconBlock from bellatrix (produceBlockV3), a BeaconBlock before */
+.set NODE_JSON_BUILDER_BID, 27             /* a SignedBuilderBid of builder-specs, from bellatrix */
 .set NODE_JSON_BLOCK_CONTENTS, 20        /* lantern's BlockContents, from deneb */
 .set NodePool_topic, 0                   /* NodePool (node.md): GOSSIP_* of the operation; 0 for a free entry */
 .set NodePool_state, 8                   /* NODE_POOL_* */

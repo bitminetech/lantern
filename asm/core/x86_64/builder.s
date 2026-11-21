@@ -40,6 +40,27 @@ bld_reg_6_len = . - bld_reg_6
 .if (bld_reg_1_len + bld_reg_2_len + bld_reg_3_len + bld_reg_4_len + bld_reg_5_len + bld_reg_6_len + 2 * (20 + 48 + 96) != BLD_REG_FIXED) || (bld_post_validators_len + bld_head_json_len + bld_head_end_len != BLD_HEAD_FIXED)
 .error "a builder text's length is wrong"
 .endif
+bld_get_header:
+    .ascii  "GET /eth/v1/builder/header/"
+bld_get_header_len = . - bld_get_header
+bld_get_0x:
+    .ascii  "/0x"
+bld_get_0x_len = . - bld_get_0x
+bld_get_http:
+    .ascii  " HTTP/1.1\r\nHost: "
+bld_get_http_len = . - bld_get_http
+bld_get_end:
+    .ascii  "\r\nAccept: application/json\r\nConnection: close\r\n\r\n"
+bld_get_end_len = . - bld_get_end
+bld_version:
+    .ascii  "version"
+bld_data:
+    .ascii  "data"
+/* The bytes of a getHeader request other than the slot's digits and the host (2 hex digits a byte of the hash and the key). */
+.set BLD_GET_FIXED, 259
+.if bld_get_header_len + 2 * bld_get_0x_len + bld_get_http_len + bld_get_end_len + 2 * (32 + 48) != BLD_GET_FIXED
+.error "the getHeader request's length is wrong"
+.endif
 bld_hex_digits:
     .ascii  "0123456789abcdef"
 
@@ -135,16 +156,321 @@ LOCAL_FUNCTION node_builder_call
     ret
 END_FUNCTION node_builder_call
 
-# L1: the NODE_EV_BUILDER r12 (node.md, the builder calls): its call's entry goes free. rbx the node, r15 the actions.
+# L2: the NODE_EV_BUILDER r12 (node.md, the builder calls): a header call still awaited by its
+# produceBlockV3 entry ends there, the answer's bytes in a NODE_ACT_BYTES_PUT to a new id at
+# PRODUCE_BID when the call did not fail and the actions have room; then the call's entry goes
+# free. rbx the node, r15 the actions; r13 the call, r14 its entry; S7 the failure bit, S8 the
+# NodeApi entry.
 LOCAL_FUNCTION node_builder_event
-    UNWIND_END_PROLOGUE
-    movzbl  16(%r12), %eax
-    cmp     $NODE_BUILDER_CALLS, %rax
+    ENTER 0
+    mov     16(%r12), %rax
+    movzbl  %al, %r13d
+    shr     $8, %eax
+    and     $1, %eax
+    mov     %rax, S7(%rsp)
+    cmp     $NODE_BUILDER_CALLS, %r13
     jae     9f
-    imul    $NODE_BUILDER_CALL_SIZE, %rax, %rax
-    movq    $0, Node_builder_calls(%rbx,%rax)
-9:  ret
+    imul    $NODE_BUILDER_CALL_SIZE, %r13, %rax
+    lea     Node_builder_calls(%rbx,%rax), %r14
+    cmpq    $NODE_BUILDER_HEADER, (%r14)    # a header call: to its entry, when that waits for it
+    jne     8f
+    mov     8(%r14), %rax
+    PART    %rcx, %rdx, %rbx, Node_api
+    cmp     %rdx, %rax
+    jae     8f
+    imul    $NodeApi__mem, %rax, %rax
+    add     %rax, %rcx
+    mov     %rcx, S8(%rsp)
+    cmpq    $0, NodeApi_connection(%rcx)
+    je      8f
+    cmpq    $API_OP_PRODUCE_BLOCK_V3, NodeApi_op(%rcx)
+    jne     8f
+    lea     1(%r13), %rax
+    cmp     %rax, (NodeApi_cursor + PRODUCE_CALL)(%rcx)
+    jne     8f
+    movq    $0, (NodeApi_cursor + PRODUCE_CALL)(%rcx)
+    cmpq    $0, S7(%rsp)
+    jne     8f
+    mov     (24 + 16)(%r12), %rdi           # the answer's bytes
+    add     $(48 + 7), %rdi
+    call    node_room
+    test    %rax, %rax
+    jz      8f
+    lea     24(%r12), %rdi
+    call    node_put
+    mov     S8(%rsp), %rcx
+    mov     %rax, (NodeApi_cursor + PRODUCE_BID)(%rcx)
+8:  movq    $0, (%r14)
+9:  LEAVE 0
 END_FUNCTION node_builder_event
+
+# L2: on the way into NODE_PRODUCE_PAYLOAD of the produceBlockV3 entry rdi (node.md, Block
+# production), the event rsi of its PRODUCE_CHECK and the head's block_hash at rdx: with
+# NODE_FLAG_BUILDER, a NODE_BUILDER_HEADER call of its slot, the hash and the pubkey of the
+# proposer's NodeProposer entry, when builder_boost_factor is not 0, the entry has registered 1,
+# the head's NodeBlock is not NOT_VALIDATED and the check says the chain is healthy; the entry
+# keeps the call + 1 and the registration's fee recipient. None with no free call or no room in
+# the actions. rbx the node, r15 the actions; r12 the entry, r13 the event, r14 the hash, rbp the
+# NodeProposer; S7 the request's bytes, S8 the call.
+LOCAL_FUNCTION node_produce_header
+    ENTER 16
+    mov     %rdi, %r12
+    mov     %rsi, %r13
+    mov     %rdx, %r14
+    testq   $NODE_FLAG_BUILDER, Node_flags(%rbx)
+    jz      9f
+    cmpq    $0, (NodeApi_cursor + PRODUCE_BOOST)(%r12)
+    je      9f
+    cmpq    $0, (NodeEvent_root + 8)(%r13)
+    je      9f
+    mov     NodeEvent_root(%r13), %rax      # the proposer's registration
+    PART    %rbp, %rcx, %rbx, Node_proposers
+1:  test    %rcx, %rcx
+    jz      9f
+    cmp     %rax, NodeProposer_validator_index(%rbp)
+    jne     2f
+    cmpq    $0, NodeProposer_registered(%rbp)
+    jne     3f
+2:  add     $NodeProposer__mem, %rbp
+    dec     %rcx
+    jmp     1b
+3:  lea     Node_head_root(%rbx), %rdi      # the head is not optimistic
+    call    node_find_block
+    cmp     $-1, %rax
+    je      9f
+    cmpq    $PAYLOAD_STATUS_NOT_VALIDATED, NodeBlock_payload_status(%rdx)
+    je      9f
+    mov     NodeApi_slot(%r12), %rdi        # the request's bytes
+    call    bld_digits
+    add     Node_builder_host_len(%rbx), %rax
+    add     $BLD_GET_FIXED, %rax
+    mov     %rax, S7(%rsp)
+    lea     (48 + 7)(%rax), %rdi
+    call    node_room
+    test    %rax, %rax
+    jz      9f
+    PART    %rcx, %rdx, %rbx, Node_api
+    mov     %r12, %rax
+    sub     %rcx, %rax
+    xor     %edx, %edx
+    mov     $NodeApi__mem, %ecx
+    div     %rcx
+    mov     %rax, %rsi
+    mov     $NODE_BUILDER_HEADER, %edi
+    call    node_builder_call
+    cmp     $-1, %rax
+    je      9f
+    mov     %rax, S8(%rsp)
+    inc     %rax
+    mov     %rax, (NodeApi_cursor + PRODUCE_CALL)(%r12)
+    lea     (NodeApi_cursor + PRODUCE_FEE)(%r12), %rdi
+    lea     NodeProposer_registration_fee_recipient(%rbp), %rsi
+    mov     $20, %edx
+    call    lantern_copy
+    mov     S7(%rsp), %rsi
+    add     $(48 + 7), %rsi
+    and     $-8, %rsi
+    mov     $NODE_ACT_BUILDER, %edi
+    call    node_act
+    mov     S8(%rsp), %rcx
+    mov     %rcx, 16(%rax)
+    mov     (%rax), %rcx
+    sub     $24, %rcx
+    mov     %rcx, 24(%rax)
+    movq    $24, 32(%rax)
+    mov     S7(%rsp), %rcx
+    mov     %rcx, 40(%rax)
+    lea     48(%rax), %rdi
+    ADDRESS %rsi, bld_get_header
+    mov     $bld_get_header_len, %edx
+    call    bld_put
+    mov     %rax, %rdi
+    mov     NodeApi_slot(%r12), %rsi
+    call    bld_dec
+    mov     %rax, %rdi
+    ADDRESS %rsi, bld_get_0x
+    mov     $bld_get_0x_len, %edx
+    call    bld_put
+    mov     %rax, %rdi
+    mov     %r14, %rsi
+    mov     $32, %edx
+    call    bld_hex
+    mov     %rax, %rdi
+    ADDRESS %rsi, bld_get_0x
+    mov     $bld_get_0x_len, %edx
+    call    bld_put
+    mov     %rax, %rdi
+    lea     NodeProposer_pubkey(%rbp), %rsi
+    mov     $48, %edx
+    call    bld_hex
+    mov     %rax, %rdi
+    ADDRESS %rsi, bld_get_http
+    mov     $bld_get_http_len, %edx
+    call    bld_put
+    mov     %rax, %rdi
+    lea     Node_builder_host(%rbx), %rsi
+    mov     Node_builder_host_len(%rbx), %rdx
+    call    bld_put
+    mov     %rax, %rdi
+    ADDRESS %rsi, bld_get_end
+    mov     $bld_get_end_len, %edx
+    call    bld_put
+9:  LEAVE 16
+END_FUNCTION node_produce_header
+
+# L0: rax = 1 when the rcx bytes at rdi are the rdx bytes at rsi, else 0. Uses rdi, rsi, rdx.
+LOCAL_FUNCTION bld_same
+    UNWIND_END_PROLOGUE
+    cmp     %rcx, %rdx
+    jne     8f
+1:  test    %rdx, %rdx
+    jz      9f
+    movzbl  (%rdi), %eax
+    cmp     (%rsi), %al
+    jne     8f
+    inc     %rdi
+    inc     %rsi
+    dec     %rdx
+    jmp     1b
+9:  mov     $1, %eax
+    ret
+8:  xor     %eax, %eax
+    ret
+END_FUNCTION bld_same
+
+# L2: (answer rdi, scratch rsi, fork rdx) -> rax: the JSON text of the bid in a builder's getHeader
+# answer (node.md, NODE_WORK_PRODUCE_BID): lantern_http_parse_response with eof 1, the body
+# unchunked at the end of scratch, whose size drops below it (the caller restores it); status 200;
+# the body an object whose first member version is a string, the fork's name, and whose first
+# member data is a value. LANTERN_OK with rsi the data's text and rdx its bytes; else
+# LANTERN_INVALID_HTTP, LANTERN_NO_BID, LANTERN_INVALID_JSON, LANTERN_INVALID_BID or
+# LANTERN_BUFFER_TOO_SMALL. rbx the body's end (the JSON scan's), rbp scratch, r12 the fork, r13
+# the body, r14 the version's text or 0, r15 its bytes; S7 the data or 0, S8 its end, S9 the
+# answer. Locals: L the HttpResponse (16), L+16 eof, L+24 a name and its bytes, L+40 the cursor.
+LOCAL_FUNCTION node_bid_data
+    ENTER 48
+    mov     %rdi, S9(%rsp)
+    mov     %rsi, %rbp
+    mov     %rdx, %r12
+    mov     16(%rdi), %rax                  # the body: at most the answer's bytes
+    add     $(24 + 7), %rax
+    and     $-8, %rax
+    mov     (%rbp), %rcx
+    sub     %rax, %rcx
+    jb      98f
+    cmp     $64, %rcx
+    jb      98f
+    mov     %rcx, (%rbp)
+    lea     (%rbp,%rcx), %r13
+    mov     %rax, (%r13)
+    movq    $24, 8(%r13)
+    movq    $0, 16(%r13)
+    movq    $1, (L + 16)(%rsp)
+    mov     S9(%rsp), %rdi
+    lea     (L + 16)(%rsp), %rsi
+    mov     %r13, %rdx
+    lea     L(%rsp), %rcx
+    call    lantern_http_parse_response
+    test    %rax, %rax
+    jnz     97f
+    cmpq    $200, L(%rsp)
+    jne     96f
+    mov     8(%r13), %rdi                   # the body's object: its members
+    add     %r13, %rdi
+    mov     16(%r13), %rbx
+    add     %rdi, %rbx
+    xor     %r14d, %r14d
+    movq    $0, S7(%rsp)
+    call    jws
+    cmp     %rbx, %rdi
+    jae     95f
+    cmpb    $'{', (%rdi)
+    jne     95f
+    inc     %rdi
+    mov     $1, %esi
+1:  call    jmember
+    test    %rdi, %rdi
+    jz      95f
+    test    %rcx, %rcx
+    jnz     5f
+    mov     %rsi, (L + 24)(%rsp)            # the name
+    mov     %rdx, (L + 32)(%rsp)
+    mov     %rdi, (L + 40)(%rsp)
+    mov     %rsi, %rdi
+    mov     %rdx, %rcx
+    ADDRESS %rsi, bld_version
+    mov     $7, %edx
+    call    bld_same
+    mov     (L + 40)(%rsp), %rdi
+    test    %rax, %rax
+    jz      2f
+    test    %r14, %r14
+    jnz     2f
+    call    jstring                         # version: a string with no escape
+    test    %rdi, %rdi
+    jz      95f
+    test    %rcx, %rcx
+    jnz     95f
+    mov     %rsi, %r14
+    mov     %rdx, %r15
+    xor     %esi, %esi
+    jmp     1b
+2:  mov     (L + 24)(%rsp), %rdi
+    mov     (L + 32)(%rsp), %rcx
+    ADDRESS %rsi, bld_data
+    mov     $4, %edx
+    call    bld_same
+    mov     (L + 40)(%rsp), %rdi
+    test    %rax, %rax
+    jz      3f
+    cmpq    $0, S7(%rsp)
+    jne     3f
+    mov     %rdi, S7(%rsp)                  # data: its text
+    call    jskip
+    test    %rdi, %rdi
+    jz      95f
+    mov     %rdi, S8(%rsp)
+    xor     %esi, %esi
+    jmp     1b
+3:  call    jskip                           # another member: skipped
+    test    %rdi, %rdi
+    jz      95f
+    xor     %esi, %esi
+    jmp     1b
+5:  call    jws                             # nothing after the object
+    cmp     %rbx, %rdi
+    jne     95f
+    test    %r14, %r14
+    jz      95f
+    cmpq    $0, S7(%rsp)
+    je      95f
+    ADDRESS %rdi, api_forks                 # version: the fork's name
+    mov     %r12, %rax
+    shl     $4, %rax
+    add     %rax, %rdi
+    movzbl  (%rdi), %ecx
+    inc     %rdi
+    mov     %r14, %rsi
+    mov     %r15, %rdx
+    call    bld_same
+    test    %rax, %rax
+    jz      94f
+    xor     %eax, %eax
+    mov     S7(%rsp), %rsi
+    mov     S8(%rsp), %rdx
+    sub     %rsi, %rdx
+    LEAVE 48
+94: mov     $LANTERN_INVALID_BID, %eax
+    LEAVE 48
+95: mov     $LANTERN_INVALID_JSON, %eax
+    LEAVE 48
+96: mov     $LANTERN_NO_BID, %eax
+    LEAVE 48
+97: mov     $LANTERN_INVALID_HTTP, %eax
+    LEAVE 48
+98: mov     $LANTERN_BUFFER_TOO_SMALL, %eax
+    LEAVE 48
+END_FUNCTION node_bid_data
 
 # L1: rax = the bytes of the JSON of the SignedValidatorRegistrationV1 at rdi (180 bytes). Locals: the registration, a count.
 LOCAL_FUNCTION bld_reg_len
@@ -399,6 +725,11 @@ LOCAL_FUNCTION node_registration_put
     mov     %rax, NodeProposer_timestamp(%r9)
     lea     NodeProposer_registration_fee_recipient(%r9), %rdi
     mov     $20, %edx
+    call    lantern_copy
+    lea     NodeProposer_pubkey(%r9), %rdi  # and its pubkey
+    mov     (%rsp), %rsi
+    add     $36, %rsi
+    mov     $48, %edx
     call    lantern_copy
 9:  UNFRAME 32
 END_FUNCTION node_registration_put

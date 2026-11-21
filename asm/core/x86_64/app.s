@@ -1658,6 +1658,8 @@ LOCAL_FUNCTION app_work
     je      2f
     cmp     $NODE_WORK_PRODUCE_BLOCK, %rcx
     je      2f
+    cmp     $NODE_WORK_PRODUCE_BID, %rcx
+    je      2f
     cmp     $NODE_WORK_PUBLISH_DECODE, %rcx
     je      2f
     cmp     $NODE_WORK_PUBLISH_SIDECAR, %rcx

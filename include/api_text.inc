@@ -819,6 +819,12 @@ api_pb_block_value:
 api_g_data:
     .ascii "\",\"data\":"
 .set api_g_data_len, 9
+api_h_blinded_true:
+    .ascii "Eth-Execution-Payload-Blinded: true\r\nEth-Execution-Payload-Value: "
+.set api_h_blinded_true_len, 66
+api_pb_head_true:
+    .ascii "\",\"execution_payload_blinded\":true,\"execution_payload_value\":\""
+.set api_pb_head_true_len, 62
 
 api_a_slot:
     .ascii "{\"data\":{\"slot\":"

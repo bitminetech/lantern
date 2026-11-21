@@ -4592,6 +4592,8 @@ LOCAL_FUNCTION node_event
     li      t2, NODE_WORK_PRODUCE_FOLD
     beq     t0, t2, 708f
     li      t2, NODE_WORK_PRODUCE_BLOCK
+    beq     t0, t2, 708f
+    li      t2, NODE_WORK_PRODUCE_BID
     bne     t0, t2, 709f
 708: mv     a0, s3
     call    node_produce_done
@@ -9107,6 +9109,7 @@ FUNCTION lantern_node_step
     call    node_shed                       # the post-states the node can rebuild go
     call    node_api_head_events            # the head and finalized_checkpoint events, at a quiet point
     call    node_lc_due                     # the light client updates due on gossip
+    call    node_produce_due                # the produceBlockV3 entries whose bid is late
     call    node_backfill_link              # the backfill's blocks of the chain join the Db
     call    node_drop_sidecars              # the sidecars the node no longer serves go
     sd      zero, (L + 112)(sp)
@@ -9946,7 +9949,7 @@ FUNCTION lantern_node_run
     addi    a1, a1, NodeApi_cursor
     mv      a0, s4
     mv      a2, s6
-    addi    a3, s7, NodeEvent_index
+    addi    a3, s7, NodeEvent_root          # the proposer, then the health
     FORK_CALL node_produce_check
     li      t0, LANTERN_BUFFER_TOO_SMALL
     beq     a0, t0, 8401f
@@ -10045,7 +10048,7 @@ FUNCTION lantern_node_run
     li      a0, LANTERN_OK
     LEAVE 192
 8430: li    t1, NODE_WORK_PRODUCE_BLOCK
-    bne     t0, t1, 8450f
+    bne     t0, t1, 8445f
     beqz    s4, 837b                        # PRODUCE_BLOCK: lantern_node_produce_block, as a ByteList at NodeEvent_chunk
     beqz    s5, 837b
     li      t0, NodeEvent_chunk + 24
@@ -10072,6 +10075,10 @@ FUNCTION lantern_node_run
     sd      t0, (L + 120)(sp)
     addi    t0, s7, NodeEvent_index
     sd      t0, (L + 128)(sp)
+    ld      t0, (L + 80)(sp)                # the bid: state_c; then where blinded goes
+    sd      t0, (L + 136)(sp)
+    addi    t0, s7, NodeEvent_checkpoint
+    sd      t0, (L + 144)(sp)
     ld      a0, NODE_STATE_SLOT(s4)
     addi    a1, s1, Node_config
     call    node_fork
@@ -10097,6 +10104,55 @@ FUNCTION lantern_node_run
     sd      t0, 0(s7)
     li      a0, LANTERN_OK
 8449: LEAVE 192
+8445: li    t1, NODE_WORK_PRODUCE_BID
+    bne     t0, t1, 8450f
+    beqz    s4, 837b                        # PRODUCE_BID: the bid's JSON of the answer, lantern_node_produce_bid as a ByteList at NodeEvent_chunk
+    beqz    s5, 837b
+    li      t0, NodeEvent_chunk + 24
+    bltu    s8, t0, 8419b
+    addi    t0, s7, NodeEvent_chunk
+    addi    t1, s8, -NodeEvent_chunk
+    sd      t1, 0(t0)
+    li      t1, 24
+    sd      t1, 8(t0)
+    sd      zero, 16(t0)
+    ld      t0, NodeAction_target(s3)       # ProduceParams at L+96: the entry's cursor, the config
+    PART    t1, t2, s1, Node_api
+    bgeu    t0, t2, 837b
+    li      t2, NodeApi__mem
+    mul     t0, t0, t2
+    add     t0, t1, t0
+    addi    t0, t0, NodeApi_cursor
+    sd      t0, (L + 96)(sp)
+    addi    t0, s1, Node_config
+    sd      t0, (L + 104)(sp)
+    ld      a0, NODE_STATE_SLOT(s4)
+    addi    a1, s1, Node_config
+    call    node_fork
+    sd      a0, (L + 152)(sp)
+    ld      t0, 0(s6)                       # the scratch's size, back after the call
+    sd      t0, (L + 160)(sp)
+    mv      a2, a0
+    mv      a0, s5
+    mv      a1, s6
+    call    node_bid_data
+    bnez    a0, 8446f
+    addi    t0, sp, (L + 168)               # a ByteList view of the data's text
+    sub     t1, a1, t0
+    sd      t1, 8(t0)
+    add     t1, t1, a2
+    sd      t1, 0(t0)
+    sd      a2, 16(t0)
+    ld      t6, (L + 152)(sp)
+    mv      a0, s4
+    addi    a1, sp, (L + 168)
+    addi    a2, sp, (L + 96)
+    mv      a3, s6
+    addi    a4, s7, NodeEvent_chunk
+    FORK_CALL node_produce_bid
+8446: ld    t0, (L + 160)(sp)
+    sd      t0, 0(s6)
+    j       8440b
 8450: li    t1, NODE_WORK_PUBLISH_DECODE
     bne     t0, t1, 8460f
     beqz    s5, 837b                        # PUBLISH_DECODE: lantern_node_publish_decode, the block as a ByteList at NodeEvent_chunk

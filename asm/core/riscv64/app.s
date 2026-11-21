@@ -1632,6 +1632,8 @@ LOCAL_FUNCTION app_work
     beq     s8, t0, 2f
     li      t0, NODE_WORK_PRODUCE_BLOCK
     beq     s8, t0, 2f
+    li      t0, NODE_WORK_PRODUCE_BID
+    beq     s8, t0, 2f
     li      t0, NODE_WORK_PUBLISH_DECODE
     beq     s8, t0, 2f
     li      t0, NODE_WORK_PUBLISH_SIDECAR

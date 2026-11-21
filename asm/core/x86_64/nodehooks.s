@@ -2314,6 +2314,18 @@ LOCAL_FUNCTION node_type_of_kind
     cmp     $NODE_JSON_DATA_COLUMN_SIDECAR, %r10
     je      9f
 .endif
+.if FORK >= FORK_BELLATRIX
+    ADDRESS %rdi, lantern_type_BlindedBeaconBlock
+.else
+    ADDRESS %rdi, lantern_type_BeaconBlock
+.endif
+    cmp     $NODE_JSON_BLINDED_BEACON_BLOCK, %r10
+    je      9f
+.if FORK >= FORK_BELLATRIX
+    ADDRESS %rdi, lantern_type_SignedBuilderBid
+    cmp     $NODE_JSON_BUILDER_BID, %r10
+    je      9f
+.endif
     xor     %edi, %edi
 9:  ret
 END_FUNCTION node_type_of_kind
@@ -3948,6 +3960,70 @@ SPEC_END node_new_payload
 .endif
 
 /*
+ * L0: rax = 1 when the chain of the state rbx is healthy for a builder (node.md,
+ * lantern_node_produce_check: the skips before its slot, the epochs since finality, the skipped
+ * slots of the last SLOTS_PER_EPOCH), else 0. Uses rcx, rdx, rsi, rdi, r8-r11.
+ */
+LOCAL_FUNCTION produce_health
+    UNWIND_END_PROLOGUE
+    mov     BeaconState_slot(%rbx), %r8
+    mov     (BeaconState_latest_block_header + BeaconBlockHeader_slot)(%rbx), %rax
+    inc     %rax                            # S - 1 - the head's slot, 0 below 0
+    mov     %r8, %rcx
+    sub     %rax, %rcx
+    jb      1f
+    cmp     $BUILDER_FALLBACK_SKIPS, %rcx
+    ja      8f
+1:  mov     %r8, %rax                       # the epochs since finality
+    xor     %edx, %edx
+    mov     $SLOTS_PER_EPOCH, %ecx
+    div     %rcx
+    sub     (BeaconState_finalized_checkpoint + Checkpoint_epoch)(%rbx), %rax
+    jb      2f
+    cmp     $BUILDER_FALLBACK_EPOCHS_SINCE_FINALIZATION, %rax
+    ja      8f
+2:  mov     %r8, %r9                        # the slots from max(S - SLOTS_PER_EPOCH, 0): a skip has the root before it
+    sub     $SLOTS_PER_EPOCH, %r9
+    jae     3f
+    xor     %r9d, %r9d
+3:  xor     %r10d, %r10d
+    lea     BeaconState_block_roots(%rbx), %r11
+4:  cmp     %r8, %r9
+    jae     6f
+    test    %r9, %r9
+    jz      5f
+    mov     %r9, %rsi
+    and     $(SLOTS_PER_HISTORICAL_ROOT - 1), %rsi
+    shl     $5, %rsi
+    add     %r11, %rsi
+    lea     -1(%r9), %rdi
+    and     $(SLOTS_PER_HISTORICAL_ROOT - 1), %rdi
+    shl     $5, %rdi
+    add     %r11, %rdi
+    mov     (%rsi), %rax
+    xor     (%rdi), %rax
+    mov     8(%rsi), %rcx
+    xor     8(%rdi), %rcx
+    or      %rcx, %rax
+    mov     16(%rsi), %rcx
+    xor     16(%rdi), %rcx
+    or      %rcx, %rax
+    mov     24(%rsi), %rcx
+    xor     24(%rdi), %rcx
+    or      %rcx, %rax
+    jnz     5f
+    inc     %r10
+5:  inc     %r9
+    jmp     4b
+6:  cmp     $BUILDER_FALLBACK_SKIPS_PER_EPOCH, %r10
+    ja      8f
+    mov     $1, %eax
+    ret
+8:  xor     %eax, %eax
+    ret
+END_FUNCTION produce_health
+
+/*
  * (state, request, scratch, out): node.md, lantern_node_produce_check. rbx state, rbp request, r12
  * scratch, r13 out, r14 the scratch size, r15 the proposer's Validator. Locals: L epoch, L+8 the
  * proposer, L+16 domain type, L+24 domain (32), L+56 the signing root after a ByteList header (56).
@@ -3981,6 +4057,8 @@ SPEC_FUNCTION node_produce_check
     jnz     7f
     mov     (L + 8)(%rsp), %rax
     mov     %rax, (%r13)
+    call    produce_health                  # the chain's health for a builder
+    mov     %rax, 8(%r13)
     cmpq    $0, 128(%rbp)                   # skip_randao_verification: the point at infinity
     je      1f
     cmpb    $0xc0, (%rbp)
@@ -4436,6 +4514,237 @@ LOCAL_FUNCTION produce_add_signature
     UNFRAME 32
 END_FUNCTION produce_add_signature
 
+/* ---------------------------------------------------------------- produceBlockV3: the builder's bid */
+
+.if FORK >= FORK_BELLATRIX
+/* BuilderBid's SSZ: value and pubkey after the offsets of its variable fields */
+.if FORK >= FORK_ELECTRA
+.set BID_VALUE, 12
+.elseif FORK >= FORK_DENEB
+.set BID_VALUE, 8
+.else
+.set BID_VALUE, 4
+.endif
+.set BID_PUBKEY, BID_VALUE + 32
+/* ExecutionPayloadHeader's SSZ: the fields the bid's checks and the blinded block read */
+.set EPH_FEE_RECIPIENT, 32
+.set EPH_PREV_RANDAO, 372
+.set EPH_TIMESTAMP, 428
+.set EPH_EXTRA_DATA, 436
+.set EPH_TRANSACTIONS_ROOT, 504
+.set EPH_WITHDRAWALS_ROOT, 536
+.set EPH_BLOB_GAS_USED, 568
+.if FORK >= FORK_DENEB
+.set EPH_FIXED, 584
+.set EPP_FIXED, 528                             /* ExecutionPayload's fixed part */
+.elseif FORK >= FORK_CAPELLA
+.set EPH_FIXED, 568
+.set EPP_FIXED, 512
+.else
+.set EPH_FIXED, 536
+.set EPP_FIXED, 508
+.endif
+
+/*
+ * (state, bid, params, scratch, out): node.md, lantern_node_produce_bid. rbx state, rbp the bid's
+ * JSON, r12 params, r13 scratch, r14 out, r15 the message's bytes; S7 the header's bytes, S8 the
+ * scratch size, S9 the expected withdrawals, S10 the message's count. Locals: L a JsonFault (128),
+ * L+128 the epoch, L+136 the domain type, L+144 the domain (32), L+176 the time, L+184 the signing
+ * root after a ByteList header (56), L+240 a mix or the blob parameters (32), L+272 a zero root,
+ * then a root (32).
+ */
+SPEC_FUNCTION node_produce_bid
+    ENTER 320
+    mov     %rdi, %rbx
+    mov     %rsi, %rbp
+    mov     %rdx, %r12
+    mov     %rcx, %r13
+    mov     %r8, %r14
+    mov     (%r13), %rax
+    mov     %rax, S8(%rsp)
+    ADDRESS %rdi, lantern_type_SignedBuilderBid   # the bid's SSZ bytes in out
+    mov     %rbp, %rsi
+    mov     %r13, %rdx
+    mov     %r14, %rcx
+    lea     L(%rsp), %r8
+    CALL_GLOBAL lantern_json_decode
+    mov     S8(%rsp), %rcx
+    mov     %rcx, (%r13)
+    test    %rax, %rax
+    jnz     99f
+    mov     8(%r14), %rax                   # the message: from the offset at byte 0 to the end
+    lea     (%r14,%rax), %rcx
+    mov     16(%r14), %rdx
+    mov     (%rcx), %eax
+    lea     (%rcx,%rax), %r15
+    sub     %rax, %rdx
+    mov     %rdx, S10(%rsp)
+    mov     (%r15), %eax                    # the header: from the offset at byte 0 of the message
+    add     %r15, %rax
+    mov     %rax, S7(%rsp)
+    /* process_bid: parent_hash, the registration's fee recipient, the signature */
+    mov     BeaconState_latest_execution_payload_header(%rbx), %rcx
+    lea     ExecutionPayloadHeader_block_hash(%rbx,%rcx), %rcx
+    NE32    %rax, %rcx, 96f
+    mov     (%r12), %rcx
+    mov     S7(%rsp), %rax
+    mov     EPH_FEE_RECIPIENT(%rax), %rdx
+    cmp     PRODUCE_FEE(%rcx), %rdx
+    jne     96f
+    mov     (EPH_FEE_RECIPIENT + 8)(%rax), %rdx
+    cmp     (PRODUCE_FEE + 8)(%rcx), %rdx
+    jne     96f
+    mov     (EPH_FEE_RECIPIENT + 16)(%rax), %edx
+    cmp     (PRODUCE_FEE + 16)(%rcx), %edx
+    jne     96f
+    movl    $DOMAIN_APPLICATION_BUILDER, (L + 136)(%rsp)    # compute_domain(DOMAIN_APPLICATION_BUILDER): GENESIS_FORK_VERSION, a zero root
+    xorps   %xmm0, %xmm0
+    movdqu  %xmm0, (L + 272)(%rsp)
+    movdqu  %xmm0, (L + 288)(%rsp)
+    lea     (L + 136)(%rsp), %rdi
+    mov     8(%r12), %rsi
+    add     $CONFIG_GENESIS_FORK_VERSION, %rsi
+    lea     (L + 272)(%rsp), %rdx
+    mov     %r13, %rcx
+    lea     (L + 144)(%rsp), %r8
+    call    lantern_compute_domain
+    test    %rax, %rax
+    jnz     99f
+    ADDRESS %rdi, lantern_type_SignedBuilderBid   # the signing root of the decoded message
+    mov     %r14, %rsi
+    mov     %r13, %rdx
+    call    node_decode
+    cmp     $1, %rax
+    je      98f
+    test    %rax, %rax
+    jnz     95f
+    PART    %rsi, %rcx, %rdx, SignedBuilderBid_message
+    ADDRESS %rdi, lantern_type_BuilderBid
+    lea     (L + 144)(%rsp), %rdx
+    mov     %r13, %rcx
+    lea     (L + 208)(%rsp), %r8
+    call    lantern_compute_signing_root
+    test    %rax, %rax
+    jnz     97f
+    lea     BID_PUBKEY(%r15), %rdi          # bls.Verify of the bid's pubkey and its signature at byte 4
+    mov     8(%r14), %rsi
+    lea     4(%r14,%rsi), %rsi
+    lea     (L + 184)(%rsp), %rdx
+    mov     %r13, %rcx
+    call    verify_root_signature
+    mov     S8(%rsp), %rcx
+    mov     %rcx, (%r13)
+    test    %rax, %rax
+    jnz     99f
+    test    %rdx, %rdx
+    jz      96f
+    /* the checks of process_execution_payload with no transactions: prev_randao, timestamp */
+    mov     %rbx, %rdi
+    lea     (L + 128)(%rsp), %rsi
+    call    lantern_get_current_epoch
+    mov     %rbx, %rdi
+    lea     (L + 128)(%rsp), %rsi
+    lea     (L + 240)(%rsp), %rdx
+    call    lantern_get_randao_mix
+    test    %rax, %rax
+    jnz     99f
+    mov     S7(%rsp), %rax
+    add     $EPH_PREV_RANDAO, %rax
+    lea     (L + 240)(%rsp), %rcx
+    NE32    %rax, %rcx, 96f
+    lea     BeaconState_genesis_time(%rbx), %rdi
+    lea     BeaconState_slot(%rbx), %rsi
+    mov     8(%r12), %rdx
+    lea     (L + 176)(%rsp), %rcx
+    call    lantern_compute_time_at_slot
+    test    %rax, %rax
+    jnz     99f
+    mov     S7(%rsp), %rax
+    mov     EPH_TIMESTAMP(%rax), %rcx
+    cmp     (L + 176)(%rsp), %rcx
+    jne     96f
+.if FORK >= FORK_CAPELLA
+    mov     S8(%rsp), %rax                  # withdrawals_root: of get_expected_withdrawals
+    MOVQ    %rcx, EXPECTED_SCRATCH + SWEEP_BYTES
+    cmp     %rcx, %rax
+    jb      98f
+    sub     $SWEEP_BYTES, %rax
+    lea     (%r13,%rax), %rcx
+    mov     %rcx, S9(%rsp)
+    mov     %rax, (%r13)
+    mov     %rbx, %rdi
+    mov     %r13, %rsi
+    mov     %rcx, %rdx
+    call    lantern_get_expected_withdrawals
+    test    %rax, %rax
+    jnz     97f
+    ADDRESS %rdi, lantern_type_Withdrawals
+    mov     S9(%rsp), %rsi
+    add     $16, %rsi
+    mov     %r13, %rdx
+    lea     (L + 272)(%rsp), %rcx
+    CALL_GLOBAL ssz_hash_tree_root
+    mov     S8(%rsp), %rcx
+    mov     %rcx, (%r13)
+    test    %rax, %rax
+    jnz     98f
+    mov     S7(%rsp), %rax
+    add     $EPH_WITHDRAWALS_ROOT, %rax
+    lea     (L + 272)(%rsp), %rcx
+    NE32    %rax, %rcx, 96f
+.endif
+.if FORK >= FORK_DENEB
+.if FORK >= FORK_FULU                           /* the commitments: at most the fork's limit */
+    lea     (L + 128)(%rsp), %rdi
+    mov     8(%r12), %rsi
+    lea     (L + 240)(%rsp), %rdx
+    call    lantern_get_blob_parameters
+    mov     (L + 248)(%rsp), %r8
+.elseif FORK == FORK_ELECTRA
+    mov     8(%r12), %rax
+    mov     CONFIG_MAX_BLOBS_PER_BLOCK_ELECTRA(%rax), %r8
+.else
+    mov     8(%r12), %rax
+    mov     CONFIG_MAX_BLOBS_PER_BLOCK(%rax), %r8
+.endif
+    mov     4(%r15), %ecx
+.if FORK >= FORK_ELECTRA
+    mov     8(%r15), %eax
+.else
+    mov     S10(%rsp), %rax
+.endif
+    sub     %rcx, %rax
+    xor     %edx, %edx
+    mov     $48, %ecx
+    div     %rcx
+    cmp     %r8, %rax
+    ja      96f
+.endif
+    xor     %eax, %eax
+99: LEAVE 320
+95: mov     S8(%rsp), %rcx
+    mov     %rcx, (%r13)
+    mov     $LANTERN_INVALID_JSON, %eax
+    LEAVE 320
+96: mov     $LANTERN_INVALID_BID, %eax
+    LEAVE 320
+97: mov     S8(%rsp), %rcx
+    mov     %rcx, (%r13)
+    LEAVE 320
+98: mov     S8(%rsp), %rcx
+    mov     %rcx, (%r13)
+    mov     $LANTERN_BUFFER_TOO_SMALL, %eax
+    LEAVE 320
+SPEC_END node_produce_bid
+.else
+/* Before bellatrix: no bid (node.md, lantern_node_produce_bid). */
+SPEC_FUNCTION node_produce_bid
+    FRAME 0
+    mov     $LANTERN_INVALID_BID, %eax
+    UNFRAME 0
+SPEC_END node_produce_bid
+.endif
+
 /* ---------------------------------------------------------------- produceBlockV3: the block */
 
 .if Eth1Data_block_hash != 40 || Eth1Data__mem != 72
@@ -4479,6 +4788,409 @@ END_FUNCTION produce_add_signature
     mov     %eax, \pos(%rcx)
 .endm
 
+/* The locals of node_produce_block a bid uses (node.md, lantern_node_produce_block, with a bid); S7 and S8 are 32 and 24 below them. */
+.set PBL_BID, 112                               /* the bid's ByteList when it wins, else 0 */
+.set PBL_MESSAGE, 120                           /* its message's bytes */
+.set PBL_HEADER, 128                            /* its header's bytes and their count */
+.set PBL_HEADER_LEN, 136
+.set PBL_COMMITMENTS, 152                       /* its commitments' bytes and their count (deneb) */
+.set PBL_COMMITMENTS_LEN, 160
+.set PBL_REQUESTS, 168                          /* its requests' bytes and their count (electra) */
+.set PBL_REQUESTS_LEN, 176
+.if FORK >= FORK_CAPELLA
+.set PB_STANDIN_ROOM, (EPP_FIXED + MAX_EXTRA_DATA_BYTES + 44 * MAX_WITHDRAWALS_PER_PAYLOAD + 7) & ~7
+.set PB_SWEEP, SWEEP_BYTES                      /* the ExpectedWithdrawals, and the scratch of get_expected_withdrawals */
+.set PB_EXPECTED, EXPECTED_SCRATCH
+.elseif FORK >= FORK_BELLATRIX
+.set PB_STANDIN_ROOM, (EPP_FIXED + MAX_EXTRA_DATA_BYTES + 7) & ~7
+.set PB_SWEEP, 0
+.set PB_EXPECTED, 0
+.endif
+
+.if FORK >= FORK_BELLATRIX
+/*
+ * L0: rax = 1 when the bid at 40(r12) wins the choice (beacon-api.md, produceBlockV3): the
+ * engine's block_value (0 in bellatrix or with no result) below builder_boost_factor * (the bid's
+ * value // 100), the product saturating at 2^256 - 1; else 0. r12 params. Uses rcx, rdx, rsi,
+ * rdi, r8-r11.
+ */
+LOCAL_FUNCTION produce_choice
+    UNWIND_END_PROLOGUE
+    mov     40(%r12), %rsi                  # the bid's value: in its message, from the offset at byte 0
+    mov     8(%rsi), %rax
+    add     %rax, %rsi
+    mov     (%rsi), %eax
+    add     %rax, %rsi
+    add     $BID_VALUE, %rsi
+    mov     $100, %ecx                      # // 100, from the top limb
+    xor     %edx, %edx
+    mov     24(%rsi), %rax
+    div     %rcx
+    mov     %rax, %r11
+    mov     16(%rsi), %rax
+    div     %rcx
+    mov     %rax, %r10
+    mov     8(%rsi), %rax
+    div     %rcx
+    mov     %rax, %r9
+    mov     (%rsi), %rax
+    div     %rcx
+    mov     %rax, %r8
+    mov     (%r12), %rcx                    # times builder_boost_factor
+    mov     PRODUCE_BOOST(%rcx), %rcx
+    mov     %r8, %rax
+    mul     %rcx
+    mov     %rax, %r8
+    mov     %rdx, %rsi
+    mov     %r9, %rax
+    mul     %rcx
+    add     %rsi, %rax
+    adc     $0, %rdx
+    mov     %rax, %r9
+    mov     %rdx, %rsi
+    mov     %r10, %rax
+    mul     %rcx
+    add     %rsi, %rax
+    adc     $0, %rdx
+    mov     %rax, %r10
+    mov     %rdx, %rsi
+    mov     %r11, %rax
+    mul     %rcx
+    add     %rsi, %rax
+    adc     $0, %rdx
+    mov     %rax, %r11
+    test    %rdx, %rdx
+    jz      1f
+    mov     $-1, %r8                        # saturating
+    mov     %r8, %r9
+    mov     %r8, %r10
+    mov     %r8, %r11
+1:  xor     %eax, %eax                      # the engine's value: block_value at byte 4 of its result
+    xor     %ecx, %ecx
+    xor     %edx, %edx
+    xor     %edi, %edi
+.if FORK >= FORK_CAPELLA
+    mov     16(%r12), %rsi
+    test    %rsi, %rsi
+    jz      2f
+    mov     8(%rsi), %rax
+    lea     4(%rsi,%rax), %rsi
+    mov     (%rsi), %rax
+    mov     8(%rsi), %rcx
+    mov     16(%rsi), %rdx
+    mov     24(%rsi), %rdi
+2:
+.endif
+    cmp     %r11, %rdi                      # the local block when its value is at least the product
+    ja      8f
+    jb      9f
+    cmp     %r10, %rdx
+    ja      8f
+    jb      9f
+    cmp     %r9, %rcx
+    ja      8f
+    jb      9f
+    cmp     %r8, %rax
+    jae     8f
+9:  mov     $1, %eax
+    ret
+8:  xor     %eax, %eax
+    ret
+END_FUNCTION produce_choice
+
+/*
+ * L0: the parts of the winning bid at PBL_BID of the locals rdi: its message, header, from deneb
+ * its commitments, from electra its requests (lantern_node_produce_bid checked its offsets).
+ * Uses rax, rcx, rdx, rsi, r8, r9.
+ */
+LOCAL_FUNCTION produce_bid_parts
+    UNWIND_END_PROLOGUE
+    mov     PBL_BID(%rdi), %rax
+    mov     8(%rax), %rcx
+    add     %rax, %rcx                      # the bid's bytes and their end
+    mov     16(%rax), %rdx
+    add     %rcx, %rdx
+    mov     (%rcx), %eax
+    add     %rax, %rcx                      # the message
+    mov     %rcx, PBL_MESSAGE(%rdi)
+    mov     (%rcx), %eax
+    lea     (%rcx,%rax), %rsi               # the header: to the commitments, else to the end
+.if FORK >= FORK_DENEB
+    mov     4(%rcx), %eax
+    lea     (%rcx,%rax), %r8
+.if FORK >= FORK_ELECTRA
+    mov     8(%rcx), %eax
+    lea     (%rcx,%rax), %r9
+.else
+    mov     %rdx, %r9
+.endif
+    mov     %r8, PBL_COMMITMENTS(%rdi)
+    mov     %r9, %rax
+    sub     %r8, %rax
+    mov     %rax, PBL_COMMITMENTS_LEN(%rdi)
+.if FORK >= FORK_ELECTRA
+    mov     %r9, PBL_REQUESTS(%rdi)
+    mov     %rdx, %rax
+    sub     %r9, %rax
+    mov     %rax, PBL_REQUESTS_LEN(%rdi)
+.endif
+    mov     %r8, %rax
+.else
+    mov     %rdx, %rax
+.endif
+    sub     %rsi, %rax
+    mov     %rsi, PBL_HEADER(%rdi)
+    mov     %rax, PBL_HEADER_LEN(%rdi)
+    ret
+END_FUNCTION produce_bid_parts
+
+/*
+ * L2: the stand-in payload of the winning bid (node.md, lantern_node_produce_block, with a bid),
+ * at the end of the scratch r13 below its expected withdrawals, whose size then drops below both:
+ * the header's fields, its extra_data, no transactions, from capella the expected withdrawals in
+ * SSZ. Its bytes and their count at 24 of the locals rdi. rax = 0, or LANTERN_BUFFER_TOO_SMALL,
+ * or another code. rbx state. Locals: 0 the locals, 8 the stand-in, 16 the withdrawals, 24 the
+ * extra_data's bytes.
+ */
+LOCAL_FUNCTION produce_standin
+    FRAME 32
+    mov     %rdi, (%rsp)
+    mov     (%r13), %rax
+    MOVQ    %rcx, PB_STANDIN_ROOM + PB_SWEEP + PB_EXPECTED
+    cmp     %rcx, %rax
+    jb      98f
+    sub     $PB_SWEEP, %rax                 # the expected withdrawals at the end, the stand-in below them
+    lea     (%r13,%rax), %rcx
+    mov     %rcx, 16(%rsp)
+    sub     $PB_STANDIN_ROOM, %rax
+    lea     (%r13,%rax), %rdx
+    mov     %rdx, 8(%rsp)
+    mov     %rax, (%r13)
+.if FORK >= FORK_CAPELLA
+    mov     %rbx, %rdi
+    mov     %r13, %rsi
+    mov     %rcx, %rdx
+    call    lantern_get_expected_withdrawals
+    test    %rax, %rax
+    jnz     99f
+.endif
+    mov     (%rsp), %rax                    # parent_hash to timestamp
+    mov     PBL_HEADER(%rax), %rsi
+    mov     8(%rsp), %rdi
+    mov     $EPH_EXTRA_DATA, %edx
+    call    lantern_copy
+    mov     (%rsp), %rax                    # base_fee_per_gas and block_hash
+    mov     PBL_HEADER(%rax), %rsi
+    add     $(EPH_EXTRA_DATA + 4), %rsi
+    mov     8(%rsp), %rdi
+    add     $(EPH_EXTRA_DATA + 4), %rdi
+    mov     $(EPH_TRANSACTIONS_ROOT - EPH_EXTRA_DATA - 4), %edx
+    call    lantern_copy
+    mov     (%rsp), %rax                    # extra_data: from its offset to the header's end
+    mov     PBL_HEADER(%rax), %rsi
+    mov     PBL_HEADER_LEN(%rax), %rcx
+    mov     EPH_EXTRA_DATA(%rsi), %eax
+    cmp     %rcx, %rax
+    ja      97f
+    mov     %rcx, %rdx
+    sub     %rax, %rdx
+    cmp     $MAX_EXTRA_DATA_BYTES, %rdx
+    ja      97f
+    mov     %rdx, 24(%rsp)
+    mov     8(%rsp), %rdi                   # the offsets: extra_data, transactions, from capella withdrawals
+    movl    $EPP_FIXED, EPH_EXTRA_DATA(%rdi)
+    lea     EPP_FIXED(%rdx), %r8
+    mov     %r8d, EPH_TRANSACTIONS_ROOT(%rdi)
+.if FORK >= FORK_CAPELLA
+    mov     %r8d, (EPH_TRANSACTIONS_ROOT + 4)(%rdi)
+.endif
+.if FORK >= FORK_DENEB
+    movdqu  EPH_BLOB_GAS_USED(%rsi), %xmm0  # blob_gas_used and excess_blob_gas
+    movdqu  %xmm0, (EPH_TRANSACTIONS_ROOT + 8)(%rdi)
+.endif
+    add     %rax, %rsi
+    add     $EPP_FIXED, %rdi
+    call    lantern_copy
+    mov     24(%rsp), %rcx                  # the stand-in's bytes so far
+    add     $EPP_FIXED, %rcx
+.if FORK >= FORK_CAPELLA
+    mov     8(%rsp), %rdi                   # the withdrawals in SSZ: index, validator_index, address, amount
+    add     %rcx, %rdi
+    mov     16(%rsp), %rsi
+    mov     (16 + LIST_COUNT)(%rsi), %r8
+    add     $(16 + LIST_FIXED), %rsi
+1:  test    %r8, %r8
+    jz      2f
+    mov     (%rsi), %rax
+    mov     %rax, (%rdi)
+    mov     8(%rsi), %rax
+    mov     %rax, 8(%rdi)
+    mov     Withdrawal_address(%rsi), %rax
+    mov     %rax, 16(%rdi)
+    mov     (Withdrawal_address + 8)(%rsi), %rax
+    mov     %rax, 24(%rdi)
+    mov     (Withdrawal_address + 16)(%rsi), %eax
+    mov     %eax, 32(%rdi)
+    mov     Withdrawal_amount(%rsi), %rax
+    mov     %rax, 36(%rdi)
+    add     $44, %rdi
+    add     $44, %rcx
+    add     $Withdrawal__mem, %rsi
+    dec     %r8
+    jmp     1b
+2:
+.endif
+    mov     (%rsp), %rax
+    mov     8(%rsp), %rdx
+    mov     %rdx, 24(%rax)
+    mov     %rcx, 32(%rax)
+    xor     %eax, %eax
+99: UNFRAME 32
+97: mov     $LANTERN_INVALID_ENCODING, %eax
+    UNFRAME 32
+98: mov     $LANTERN_BUFFER_TOO_SMALL, %eax
+    UNFRAME 32
+END_FUNCTION produce_standin
+
+/*
+ * L2: the BlindedBeaconBlock of the block in out r14 (S7 of the locals rdi its bytes, S8 its body):
+ * the header of the winning bid in the payload's place, the tail after it moved through the end of
+ * the scratch r13, the body's offsets after the payload's grown by the difference. rax = 0, or
+ * LANTERN_BUFFER_TOO_SMALL. Locals: 0 the locals, 8 the payload's place, 16 its end, 24 the tail's
+ * copy, 32 its bytes, 40 the body.
+ */
+LOCAL_FUNCTION produce_blind
+    FRAME 48
+    mov     %rdi, (%rsp)
+    mov     -24(%rdi), %rsi                 # the body, and the block
+    mov     -32(%rdi), %rdx
+    mov     %rsi, 40(%rsp)
+    mov     PB_PAYLOAD(%rsi), %eax          # the payload: to the next field's offset, else to the block's end
+    lea     (%rsi,%rax), %r8
+    mov     16(%r14), %rcx
+    lea     (%rdx,%rcx), %r9
+.if FORK >= FORK_CAPELLA
+    mov     PB_BLS(%rsi), %eax
+    lea     (%rsi,%rax), %r10
+.else
+    mov     %r9, %r10
+.endif
+    mov     %r8, 8(%rsp)
+    mov     %r10, 16(%rsp)
+    mov     %r9, %r11                       # the tail, at the end of scratch
+    sub     %r10, %r11
+    mov     (%r13), %rax
+    cmp     %r11, %rax
+    jb      98f
+    sub     %r11, %rax
+    add     %r13, %rax
+    and     $-8, %rax
+    cmp     %r13, %rax
+    jb      98f
+    mov     %rax, 24(%rsp)
+    mov     %r11, 32(%rsp)
+    mov     (%rsp), %rcx                    # the room of out for the new length
+    mov     PBL_HEADER_LEN(%rcx), %rcx
+    mov     16(%r14), %rax
+    add     %rcx, %rax
+    mov     %r10, %rdx
+    sub     %r8, %rdx
+    sub     %rdx, %rax
+    add     $24, %rax
+    cmp     (%r14), %rax
+    ja      98f
+    mov     24(%rsp), %rdi
+    mov     16(%rsp), %rsi
+    mov     32(%rsp), %rdx
+    call    lantern_copy
+    mov     (%rsp), %rax                    # the header in the payload's place
+    mov     PBL_HEADER(%rax), %rsi
+    mov     PBL_HEADER_LEN(%rax), %rdx
+    mov     8(%rsp), %rdi
+    call    lantern_copy
+    mov     (%rsp), %rax                    # then the tail
+    mov     PBL_HEADER_LEN(%rax), %rdi
+    add     8(%rsp), %rdi
+    mov     24(%rsp), %rsi
+    mov     32(%rsp), %rdx
+    call    lantern_copy
+    mov     (%rsp), %rax                    # the difference: the length and the later offsets
+    mov     PBL_HEADER_LEN(%rax), %rcx
+    mov     16(%rsp), %rdx
+    sub     8(%rsp), %rdx
+    sub     %rdx, %rcx
+    add     %rcx, 16(%r14)
+    mov     40(%rsp), %rsi
+.if FORK >= FORK_CAPELLA
+    add     %ecx, PB_BLS(%rsi)
+.endif
+.if FORK >= FORK_DENEB
+    add     %ecx, PB_COMMITMENTS(%rsi)
+.endif
+.if FORK >= FORK_ELECTRA
+    add     %ecx, PB_REQUESTS(%rsi)
+.endif
+    xor     %eax, %eax
+    UNFRAME 48
+98: mov     $LANTERN_BUFFER_TOO_SMALL, %eax
+    UNFRAME 48
+END_FUNCTION produce_blind
+
+/*
+ * L2: the state root of the blinded block in out r14 (S7 of the locals rdi its bytes), as
+ * process_block of the builder's full block gives it: the state rbx's latest_block_header.body_root
+ * becomes the hash_tree_root of the blinded body (the full body's), its
+ * latest_execution_payload_header's transactions_root the bid's header's; then lantern_state_root
+ * into the block's state_root. rax = 0, or a status. r13 scratch. Locals: 0 the locals.
+ */
+LOCAL_FUNCTION produce_blind_root
+    FRAME 16
+    mov     %rdi, (%rsp)
+    ADDRESS %rdi, lantern_type_BlindedBeaconBlock
+    mov     %r14, %rsi
+    mov     %r13, %rdx
+    call    node_decode
+    cmp     $1, %rax
+    je      98f
+    test    %rax, %rax
+    jnz     97f
+    PART    %rsi, %rcx, %rdx, BlindedBeaconBlock_body
+    ADDRESS %rdi, lantern_type_BlindedBeaconBlockBody
+    mov     %r13, %rdx
+    lea     (BeaconState_latest_block_header + BeaconBlockHeader_body_root)(%rbx), %rcx
+    CALL_GLOBAL ssz_hash_tree_root
+    mov     (%rsp), %rcx                    # the scratch's size back
+    mov     80(%rcx), %rcx
+    mov     %rcx, (%r13)
+    test    %rax, %rax
+    jnz     98f
+    mov     BeaconState_latest_execution_payload_header(%rbx), %rax
+    lea     ExecutionPayloadHeader_transactions_root(%rbx,%rax), %rdi
+    mov     (%rsp), %rax
+    mov     PBL_HEADER(%rax), %rsi
+    add     $EPH_TRANSACTIONS_ROOT, %rsi
+    COPY32  %rdi, %rsi
+    mov     %rbx, %rdi
+    xor     %esi, %esi
+    mov     %r13, %rdx
+    mov     (%rsp), %rcx
+    mov     -32(%rcx), %rcx
+    add     $48, %rcx
+    call    lantern_state_root
+    UNFRAME 16
+97: mov     (%rsp), %rcx
+    mov     80(%rcx), %rcx
+    mov     %rcx, (%r13)
+    mov     $LANTERN_INVALID_ENCODING, %eax
+    UNFRAME 16
+98: mov     (%rsp), %rcx
+    mov     80(%rcx), %rcx
+    mov     %rcx, (%r13)
+    mov     $LANTERN_BUFFER_TOO_SMALL, %eax
+    UNFRAME 16
+END_FUNCTION produce_blind_root
+.endif
+
 /*
  * (state, draft, params, scratch, out): node.md, lantern_node_produce_block. rbx state, rbp the
  * draft, r12 params, r13 scratch, r14 out, r15 the write position; S7 the block, S8 the body.
@@ -4500,6 +5212,9 @@ SPEC_FUNCTION node_produce_block
     mov     128(%rax), %rax
     lea     1(%rax,%rax), %rax
     mov     %rax, (L + 64)(%rsp)
+    mov     48(%r12), %rax                  # not blinded so far
+    movq    $0, (%rax)
+    movq    $0, (L + PBL_BID)(%rsp)
     movq    $24, 8(%r14)                    # out: the block from offset 24, as large as its room
     movq    $0, 16(%r14)
     lea     24(%r14), %rax
@@ -4576,7 +5291,26 @@ SPEC_FUNCTION node_produce_block
     mov     %rax, (L + 48)(%rsp)
 .endif
 .endif
-5:  mov     (%r14), %rax                    # room: the fixed parts of the block and the body
+5:
+.if FORK >= FORK_BELLATRIX
+    cmpq    $0, 40(%r12)                    # a bid: the choice, then the stand-in payload of the winner
+    je      51f
+    call    produce_choice
+    test    %rax, %rax
+    jz      51f
+    mov     40(%r12), %rax
+    mov     %rax, (L + PBL_BID)(%rsp)
+    lea     L(%rsp), %rdi
+    call    produce_bid_parts
+    lea     L(%rsp), %rdi
+    call    produce_standin
+    cmp     $LANTERN_BUFFER_TOO_SMALL, %rax
+    je      98f
+    test    %rax, %rax
+    jnz     95f
+51:
+.endif
+    mov     (%r14), %rax                    # room: the fixed parts of the block and the body
     cmp     $(PB_FIXED + PB_BODY_FIXED + 24), %rax
     jb      98f
     mov     S7(%rsp), %rdi
@@ -4693,6 +5427,7 @@ SPEC_FUNCTION node_produce_block
     mov     %r15, %rdi
     mov     (L + 24)(%rsp), %rsi
     mov     (L + 32)(%rsp), %rdx
+    mov     %r15, (L + 24)(%rsp)            # the payload: its copy in the block from now on
     add     %rdx, %r15
     call    lantern_copy
 71:
@@ -4707,8 +5442,15 @@ SPEC_FUNCTION node_produce_block
     jnz     98f
 .endif
 .if FORK >= FORK_DENEB
-    PB_OFFSET PB_COMMITMENTS                /* the bundle's commitments */
-    mov     (L + 40)(%rsp), %rcx
+    PB_OFFSET PB_COMMITMENTS                /* the bundle's commitments, or the winning bid's */
+    cmpq    $0, (L + PBL_BID)(%rsp)
+    je      72f
+    mov     (L + PBL_COMMITMENTS)(%rsp), %rax
+    mov     %rax, (L + 8)(%rsp)
+    mov     (L + PBL_COMMITMENTS_LEN)(%rsp), %r9
+    mov     %r9, (L + 16)(%rsp)
+    jmp     73f
+72: mov     (L + 40)(%rsp), %rcx
     mov     (L + 48)(%rsp), %rdx
     cmp     $12, %rdx
     jb      96f
@@ -4722,7 +5464,7 @@ SPEC_FUNCTION node_produce_block
     mov     %rax, (L + 8)(%rsp)
     sub     %r8, %r9
     mov     %r9, (L + 16)(%rsp)
-    mov     %r15, %rdi
+73: mov     %r15, %rdi
     mov     %r9, %rsi
     call    produce_room
     test    %rax, %rax
@@ -4734,8 +5476,21 @@ SPEC_FUNCTION node_produce_block
     call    lantern_copy
 .endif
 .if FORK >= FORK_ELECTRA
-    PB_OFFSET PB_REQUESTS                   /* lantern_get_execution_requests of the result's request lists */
-    mov     16(%r12), %rcx
+    PB_OFFSET PB_REQUESTS                   /* lantern_get_execution_requests of the result's request lists, or the bid's */
+    cmpq    $0, (L + PBL_BID)(%rsp)
+    je      74f
+    mov     %r15, %rdi
+    mov     (L + PBL_REQUESTS_LEN)(%rsp), %rsi
+    call    produce_room
+    test    %rax, %rax
+    jnz     98f
+    mov     %r15, %rdi
+    mov     (L + PBL_REQUESTS)(%rsp), %rsi
+    mov     (L + PBL_REQUESTS_LEN)(%rsp), %rdx
+    add     %rdx, %r15
+    call    lantern_copy
+    jmp     75f
+74: mov     16(%r12), %rcx
     mov     8(%rcx), %rdx
     mov     16(%rcx), %r8
     add     %rcx, %rdx
@@ -4779,6 +5534,7 @@ SPEC_FUNCTION node_produce_block
     test    %rax, %rax
     jnz     96f
     add     %rcx, %r15
+75:
 .endif
     mov     %r15, %rax                      # the block's bytes
     sub     S7(%rsp), %rax
@@ -4804,6 +5560,10 @@ SPEC_FUNCTION node_produce_block
     mov     (L + 72)(%rsp), %rax
     test    %rax, %rax
     jnz     99f
+.if FORK >= FORK_BELLATRIX
+    cmpq    $0, (L + PBL_BID)(%rsp)         # a winning bid: the state root after the blinded block, below
+    jne     78f
+.endif
     mov     %rbx, %rdi
     xor     %esi, %esi
     mov     %r13, %rdx
@@ -4812,6 +5572,7 @@ SPEC_FUNCTION node_produce_block
     call    lantern_state_root
     test    %rax, %rax
     jnz     99f
+78:
     mov     L(%rsp), %rcx                   # consensus_block_value: the balance after less before, plus the proposer's withdrawals
     PART    %rdx, %rax, %rbx, BeaconState_balances
     mov     (%rdx,%rcx,8), %r8
@@ -4852,6 +5613,29 @@ SPEC_FUNCTION node_produce_block
     COPY32  %rdi, %rsi
 82:
 .endif
+.if FORK >= FORK_BELLATRIX
+    cmpq    $0, (L + PBL_BID)(%rsp)         # a winning bid: its value, and the blinded block
+    je      77f
+    mov     24(%r12), %rdi
+    mov     (L + PBL_MESSAGE)(%rsp), %rsi
+    add     $BID_VALUE, %rsi
+    COPY32  %rdi, %rsi
+    lea     L(%rsp), %rdi
+    call    produce_blind
+    test    %rax, %rax
+    jnz     98f
+    lea     L(%rsp), %rdi
+    call    produce_blind_root
+    cmp     $LANTERN_BUFFER_TOO_SMALL, %rax
+    je      98f
+    test    %rax, %rax
+    jnz     99f
+    mov     48(%r12), %rax
+    movq    $1, (%rax)
+    xor     %eax, %eax
+    LEAVE 288
+77:
+.endif
 .if FORK >= FORK_DENEB
     lea     L(%rsp), %rdi                   # BlockContents: the block, the bundle's proofs and blobs
     call    produce_contents
@@ -4860,6 +5644,9 @@ SPEC_FUNCTION node_produce_block
 .endif
     xor     %eax, %eax
 99: LEAVE 288
+95: mov     (L + 80)(%rsp), %rcx
+    mov     %rcx, (%r13)
+    LEAVE 288
 96: mov     $LANTERN_INVALID_ENCODING, %eax
     LEAVE 288
 97: mov     $LANTERN_INVALID_VALIDATOR_INDEX, %eax

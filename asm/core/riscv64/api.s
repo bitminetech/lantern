@@ -6063,6 +6063,13 @@ LOCAL_FUNCTION node_api_produce
     srli    t0, t0, API_PARAM_SKIP_RANDAO_VERIFICATION
     andi    t0, t0, 1
     sd      t0, (NodeApi_cursor + 128)(s3)
+    li      t0, 100                         # builder_boost_factor: 100 without it
+    ld      t1, ApiRoute_present(s7)
+    srli    t1, t1, API_PARAM_BUILDER_BOOST_FACTOR
+    andi    t1, t1, 1
+    beqz    t1, 3f
+    ld      t0, ApiRoute_builder_boost_factor(s7)
+3:  sd      t0, (NodeApi_cursor + PRODUCE_BOOST)(s3)
     li      a0, NODE_WORK_PRODUCE_CHECK
     ld      a1, NodeApi_state(s3)
     li      a2, 0
@@ -6149,6 +6156,10 @@ LOCAL_FUNCTION node_produce_done
     beqz    t0, 10f
     li      t0, NODE_PRODUCE_PAYLOAD
     sd      t0, NodeApi_member(s4)
+    addi    a2, a1, BlockNode_block_hash    # with a builder: its getHeader
+    mv      a0, s4
+    mv      a1, s3
+    call    node_produce_header
     LEAVE 0
 10: li      t0, NODE_PRODUCE_FOLD
     sd      t0, NodeApi_member(s4)
@@ -6161,7 +6172,21 @@ LOCAL_FUNCTION node_produce_done
     mv      a0, s4
     call    node_produce_next
     LEAVE 0
-30: li      a1, 500                         # PRODUCE_BLOCK: the block's bytes, answered as a block's
+30: li      t1, NODE_WORK_PRODUCE_BID       # PRODUCE_BID: the answer goes, a valid bid stays; then the build
+    bne     t0, t1, 31f
+    ld      a1, (NodeApi_cursor + PRODUCE_BID)(s4)
+    sd      zero, (NodeApi_cursor + PRODUCE_BID)(s4)
+    li      a0, NODE_ACT_BYTES_FREE
+    li      a2, 0
+    call    node_ids
+    bnez    s7, 32f
+    addi    a0, s3, NodeEvent_chunk
+    call    node_put
+    sd      a0, (NodeApi_cursor + PRODUCE_BID)(s4)
+32: mv      a0, s4
+    call    node_produce_build
+    LEAVE 0
+31: li      a1, 500                         # PRODUCE_BLOCK: the block's bytes, answered as a block's
     bnez    s7, 8f
     mv      a0, s4
     call    node_produce_release
@@ -6170,7 +6195,11 @@ LOCAL_FUNCTION node_produce_done
     sd      a0, NodeApi_data(s4)
     ld      t0, NodeApi_flags(s4)
     ori     t0, t0, API_STREAM_OWN
-    sd      t0, NodeApi_flags(s4)
+    ld      t1, NodeEvent_checkpoint(s3)    # a blinded block
+    beqz    t1, 33f
+    li      t1, API_STREAM_PRODUCE_BLINDED
+    or      t0, t0, t1
+33: sd      t0, NodeApi_flags(s4)
     addi    a0, s4, NodeApi_root            # the values: execution_payload_value at root, consensus_block_value at filter_slot
     addi    a1, s3, NodeEvent_root
     COPY32  a0, a1
@@ -6265,7 +6294,59 @@ LOCAL_FUNCTION node_produce_next
 3:  addi    s9, s9, 1                       # the next kind, from the pool's first entry
     li      s8, 0
     j       1b
-5:  li      t0, NODE_PRODUCE_BUILD
+5:  li      t0, NODE_PRODUCE_BID            # after the last fold: the header call's wait, at the quiet point
+    sd      t0, NodeApi_member(s3)
+    ld      t0, NodeApi_flags(s3)
+    andi    t0, t0, ~API_STREAM_BUSY
+    sd      t0, NodeApi_flags(s3)
+    LEAVE 0
+END_FUNCTION node_produce_next
+
+/*
+ * L2: the produceBlockV3 entry a0 in NODE_PRODUCE_BID with no call in flight goes on (node.md,
+ * Block production): with the builder's answer at PRODUCE_BID a PRODUCE_BID work of it, else the
+ * build. s3 the entry, s4 its index.
+ */
+LOCAL_FUNCTION node_produce_bid_go
+    ENTER 0
+    mv      s3, a0
+    PART    t0, t1, s1, Node_api
+    sub     s4, s3, t0
+    li      t1, NodeApi__mem
+    divu    s4, s4, t1
+    ld      a3, (NodeApi_cursor + PRODUCE_BID)(s3)
+    beqz    a3, 5f
+    ld      t0, NodeApi_flags(s3)
+    ori     t0, t0, API_STREAM_BUSY
+    sd      t0, NodeApi_flags(s3)
+    li      a0, NODE_WORK_PRODUCE_BID
+    ld      a1, NodeApi_state(s3)
+    li      a2, 0
+    mv      a4, s4
+    li      a5, 0
+    call    node_work
+    LEAVE 0
+5:  mv      a0, s3
+    call    node_produce_build
+    LEAVE 0
+END_FUNCTION node_produce_bid_go
+
+/*
+ * L2: the build of the produceBlockV3 entry a0 (node.md, Block production): NODE_PRODUCE_BUILD and
+ * its PRODUCE_BLOCK of the copy, the engine's result, the draft and the bid at PRODUCE_BID as
+ * state_c. s3 the entry, s4 its index.
+ */
+LOCAL_FUNCTION node_produce_build
+    ENTER 0
+    mv      s3, a0
+    PART    t0, t1, s1, Node_api
+    sub     s4, s3, t0
+    li      t1, NodeApi__mem
+    divu    s4, s4, t1
+    ld      t0, NodeApi_flags(s3)
+    ori     t0, t0, API_STREAM_BUSY
+    sd      t0, NodeApi_flags(s3)
+    li      t0, NODE_PRODUCE_BUILD
     sd      t0, NodeApi_member(s3)
     li      a0, NODE_WORK_PRODUCE_BLOCK
     ld      a1, NodeApi_state(s3)
@@ -6274,8 +6355,58 @@ LOCAL_FUNCTION node_produce_next
     mv      a4, s4
     li      a5, 0
     call    node_work
+    ld      t0, (NodeApi_cursor + PRODUCE_BID)(s3)
+    sd      t0, NodeAction_state_c(a0)
     LEAVE 0
-END_FUNCTION node_produce_next
+END_FUNCTION node_produce_build
+
+/*
+ * L1: at a quiet point (node.md, Block production, NODE_PRODUCE_BID): each produceBlockV3 entry
+ * waiting for its bid, with no work in flight: a header call in flight past
+ * BUILDER_PROPOSAL_DELAY_TOLERANCE_MS answers no entry; with no call in flight, the entry goes on
+ * while the actions have room for two works. s1 the node, s6 the actions; s3 an entry, s4 the
+ * entries left.
+ */
+LOCAL_FUNCTION node_produce_due
+    ENTER 0
+    PART    s3, s4, s1, Node_api
+1:  beqz    s4, 9f
+    ld      t0, NodeApi_connection(s3)
+    beqz    t0, 2f
+    ld      t0, NodeApi_op(s3)
+    li      t1, API_OP_PRODUCE_BLOCK_V3
+    bne     t0, t1, 2f
+    ld      t0, NodeApi_member(s3)
+    li      t1, NODE_PRODUCE_BID
+    bne     t0, t1, 2f
+    ld      t0, NodeApi_flags(s3)           # API_STREAM_BUSY: its bid's check
+    andi    t0, t0, API_STREAM_BUSY
+    bnez    t0, 2f
+    ld      t0, (NodeApi_cursor + PRODUCE_CALL)(s3)
+    beqz    t0, 3f
+    addi    t0, t0, -1                      # the call in flight: late at its time + the tolerance
+    li      t1, NODE_BUILDER_CALL_SIZE
+    mul     t0, t0, t1
+    ADDQ    t1, s1, Node_builder_calls
+    add     t1, t1, t0
+    ld      t2, 16(t1)
+    li      t3, BUILDER_PROPOSAL_DELAY_TOLERANCE_MS
+    add     t2, t2, t3
+    ld      t3, Node_time_ms(s1)
+    bltu    t3, t2, 2f
+    li      t2, -1
+    sd      t2, 8(t1)
+    sd      zero, (NodeApi_cursor + PRODUCE_CALL)(s3)
+3:  li      a0, (2 * NODE_ACT_WORK_SIZE)
+    call    node_room
+    beqz    a0, 9f
+    mv      a0, s3
+    call    node_produce_bid_go
+2:  addi    s3, s3, NodeApi__mem
+    addi    s4, s4, -1
+    j       1b
+9:  LEAVE 0
+END_FUNCTION node_produce_due
 
 /* L1: the draft and the engine's result of the produceBlockV3 entry a0 go. Locals: F the entry. */
 LOCAL_FUNCTION node_produce_release
@@ -6294,7 +6425,25 @@ LOCAL_FUNCTION node_produce_release
     li      a0, NODE_ACT_BYTES_FREE
     li      a2, 0
     call    node_ids
-2:  UNFRAME 16
+2:  ld      a0, 0(sp)                       # the builder's answer or bid
+    ld      a1, (NodeApi_cursor + PRODUCE_BID)(a0)
+    sd      zero, (NodeApi_cursor + PRODUCE_BID)(a0)
+    beqz    a1, 3f
+    li      a0, NODE_ACT_BYTES_FREE
+    li      a2, 0
+    call    node_ids
+3:  ld      a0, 0(sp)                       # its header call in flight answers no entry
+    ld      t0, (NodeApi_cursor + PRODUCE_CALL)(a0)
+    sd      zero, (NodeApi_cursor + PRODUCE_CALL)(a0)
+    beqz    t0, 4f
+    addi    t0, t0, -1
+    li      t1, NODE_BUILDER_CALL_SIZE
+    mul     t0, t0, t1
+    ADDQ    t1, s1, Node_builder_calls
+    add     t1, t1, t0
+    li      t2, -1
+    sd      t2, 8(t1)
+4:  UNFRAME 16
 END_FUNCTION node_produce_release
 
 /*
@@ -8050,8 +8199,14 @@ LOCAL_FUNCTION api_stream_head
     ld      a0, NodeApi_fork(s4)
     call    api_fork_name
     API_LIT api_crlf
+    ld      t0, NodeApi_flags(s4)           # blinded with API_STREAM_PRODUCE_BLINDED
+    li      t1, API_STREAM_PRODUCE_BLINDED
+    and     t0, t0, t1
+    bnez    t0, 231f
     API_LIT api_h_blinded
-    addi    a0, s4, NodeApi_root
+    j       232f
+231: API_LIT api_h_blinded_true
+232: addi   a0, s4, NodeApi_root
     call    api_dec256
     API_LIT api_h_block_value
     ld      a0, NodeApi_filter_slot(s4)
@@ -8194,8 +8349,13 @@ LOCAL_FUNCTION api_stream_json
     li      a0, NODE_JSON_BEACON_BLOCK
     ld      t2, NodeApi_fork(s4)
     li      t3, FORK_DENEB
-    bltu    t2, t3, 125f
+    bltu    t2, t3, 1241f
     li      a0, NODE_JSON_BLOCK_CONTENTS
+1241: ld    t2, NodeApi_flags(s4)           # a blinded block: its BlindedBeaconBlock
+    li      t3, API_STREAM_PRODUCE_BLINDED
+    and     t2, t2, t3
+    beqz    t2, 125f
+    li      a0, NODE_JSON_BLINDED_BEACON_BLOCK
 125:
     mv      a1, s3
     addi    a2, s5, (NodeEvent_api + 16)
@@ -8355,6 +8515,10 @@ LOCAL_FUNCTION node_api_chunk_run
     li      t3, API_OP_PRODUCE_BLOCK_V3     # produceBlockV3: a block's at 0, from deneb at the BlockContents' offset of its block
     bne     t2, t3, 4f
     li      t1, 0
+    ld      t3, NodeApi_flags(s4)           # a blinded block's at 0
+    li      t2, API_STREAM_PRODUCE_BLINDED
+    and     t3, t3, t2
+    bnez    t3, 4f
     ld      t3, NodeApi_fork(s4)
     li      t2, FORK_DENEB
     bltu    t3, t2, 4f
@@ -8804,8 +8968,14 @@ LOCAL_FUNCTION node_api_chunk_run
     API_LIT api_j_version
     ld      a0, NodeApi_fork(s4)
     call    api_fork_name
+    ld      t0, NodeApi_flags(s4)           # blinded with API_STREAM_PRODUCE_BLINDED
+    li      t1, API_STREAM_PRODUCE_BLINDED
+    and     t0, t0, t1
+    bnez    t0, 3521f
     API_LIT api_pb_head
-    addi    a0, s4, NodeApi_root
+    j       3522f
+3521: API_LIT api_pb_head_true
+3522: addi  a0, s4, NodeApi_root
     call    api_dec256
     API_LIT api_pb_block_value
     ld      a0, NodeApi_filter_slot(s4)
