@@ -260,3 +260,238 @@ SPEC_FUNCTION execution_branch
     LEAVE 16
 .endif
 SPEC_END execution_branch
+
+.set LC_EPH_EXTRA, 436                       # an ExecutionPayloadHeader's SSZ bytes: the offset of extra_data
+.set LC_EPH_CAPELLA, 568                     # the fixed part of capella's
+.set LC_EPH_DENEB, 584                       # of deneb's, electra's and fulu's: blob_gas_used, excess_blob_gas
+.set LC_EPH_FIXED, LC_EPH_CAPELLA
+.if FORK >= FORK_DENEB
+.set LC_EPH_FIXED, LC_EPH_DENEB
+.endif
+.set LC_HEADER_EXECUTION, 112 + 4 + 32 * 4   # a LightClientHeader from capella: where execution starts
+.set LC_BODY_PAYLOAD, 220 + SYNC_COMMITTEE_SIZE / 8 + 96   # a BlindedBeaconBlockBody's SSZ bytes: the offset of execution_payload_header
+
+# (block, scratch, out) -> rax: block_to_light_client_header of the block (light-client.md). rbx
+# block, rbp scratch, r12 out, r13 the message, r14 the body, r15 the bytes of out; S7 a Branch or
+# the blinded block at the end of scratch, S8 the header's bytes, S9 the scratch's size on entry,
+# S10 the size after the decoded block. Locals: L the generalized index.
+SPEC_FUNCTION block_to_light_client_header
+    ENTER 16
+    mov     %rdi, %rbx
+    mov     %rsi, %rbp
+    mov     %rdx, %r12
+    mov     (%rbp), %rax
+    mov     %rax, S9(%rsp)
+    mov     (%r12), %rax                    # out: room for the beacon header; from capella, the branch and a payload header too
+    sub     $24, %rax
+    jb      98f
+.if FORK >= FORK_CAPELLA
+    cmp     $(LC_HEADER_EXECUTION + LC_EPH_FIXED), %rax
+.else
+    cmp     $112, %rax
+.endif
+    jb      98f
+    ADDRESS %rdi, lantern_type_SignedBeaconBlock
+    mov     %rbx, %rsi
+    mov     %rbp, %rdx
+    call    node_decode
+    cmp     $1, %rax
+    je      98f
+    test    %rax, %rax
+    jnz     96f
+    PART    %r13, %rcx, %rdx, SignedBeaconBlock_message
+    PART    %r14, %rcx, %r13, BeaconBlock_body
+    mov     (%rbp), %rax
+    mov     %rax, S10(%rsp)
+    lea     24(%r12), %r15
+    movq    $24, 8(%r12)
+    mov     BeaconBlock_slot(%r13), %rax    # beacon
+    mov     %rax, (%r15)
+    mov     BeaconBlock_proposer_index(%r13), %rax
+    mov     %rax, 8(%r15)
+    lea     16(%r15), %rdi
+    lea     BeaconBlock_parent_root(%r13), %rsi
+    COPY32  %rdi, %rsi
+    lea     48(%r15), %rdi
+    lea     BeaconBlock_state_root(%r13), %rsi
+    COPY32  %rdi, %rsi
+    ADDRESS %rdi, lantern_type_BeaconBlockBody
+    mov     %r14, %rsi
+    mov     %rbp, %rdx
+    lea     80(%r15), %rcx
+    CALL_GLOBAL ssz_hash_tree_root
+    cmp     $SSZ_BUFFER_TOO_SMALL, %rax
+    je      98f
+    test    %rax, %rax
+    jnz     96f
+    movq    $112, S8(%rsp)
+.if FORK >= FORK_CAPELLA
+    mov     S10(%rsp), %rax                 # execution_branch: ssz_build_proof of the body at 25
+    sub     $(24 + 8 * 32), %rax
+    jb      98f
+    mov     %rax, (%rbp)
+    lea     (%rbp,%rax), %rcx
+    mov     %rcx, S7(%rsp)
+    movq    $(24 + 8 * 32), (%rcx)
+    movq    $24, 8(%rcx)
+    movq    $0, 16(%rcx)
+    movq    $EXECUTION_PAYLOAD_GINDEX, L(%rsp)
+    ADDRESS %rdi, lantern_type_BeaconBlockBody
+    mov     %r14, %rsi
+    lea     L(%rsp), %rdx
+    mov     %rbp, %rcx
+    mov     S7(%rsp), %r8
+    CALL_GLOBAL ssz_build_proof
+    mov     S10(%rsp), %rcx
+    mov     %rcx, (%rbp)
+    cmp     $SSZ_BUFFER_TOO_SMALL, %rax
+    je      98f
+    test    %rax, %rax
+    jnz     96f
+    lea     116(%r15), %rdi
+    mov     S7(%rsp), %rsi
+    add     $24, %rsi
+    mov     $128, %edx
+    call    lantern_copy
+    movl    $LC_HEADER_EXECUTION, 112(%r15)
+    mov     16(%rbx), %rax                  # execution: of the blinded block, at the end of scratch
+    add     $(24 + 1024 + 7), %rax
+    and     $~7, %rax
+    mov     S10(%rsp), %rcx
+    sub     %rax, %rcx
+    jb      98f
+    mov     %rcx, (%rbp)
+    lea     (%rbp,%rcx), %rdx
+    mov     %rdx, S7(%rsp)
+    mov     %rax, (%rdx)
+    movq    $24, 8(%rdx)
+    movq    $0, 16(%rdx)
+    mov     %rbx, %rdi
+    mov     %rbp, %rsi
+    call    lantern_node_blinded_block
+    mov     S10(%rsp), %rcx
+    mov     %rcx, (%rbp)
+    cmp     $LANTERN_BUFFER_TOO_SMALL, %rax
+    je      98f
+    test    %rax, %rax
+    jnz     96f
+    mov     S7(%rsp), %rsi                  # its bytes: the message, the body, the header's offsets
+    mov     8(%rsi), %rax
+    add     %rax, %rsi
+    mov     (%rsi), %eax
+    add     %rax, %rsi
+    mov     80(%rsi), %eax
+    add     %rax, %rsi
+    mov     LC_BODY_PAYLOAD(%rsi), %eax
+    mov     (LC_BODY_PAYLOAD + 4)(%rsi), %edx
+    sub     %rax, %rdx
+    add     %rax, %rsi
+    mov     (%r12), %rax                    # out: room for it too; at least LC_EPH_FIXED, as checked first
+    sub     $(24 + LC_HEADER_EXECUTION), %rax
+    cmp     %rax, %rdx
+    ja      98f
+    lea     LC_HEADER_EXECUTION(%rdx), %rax
+    mov     %rax, S8(%rsp)
+    lea     LC_HEADER_EXECUTION(%r15), %rdi
+    call    lantern_copy
+.endif
+    mov     S8(%rsp), %rax
+    mov     %rax, 16(%r12)
+    mov     S9(%rsp), %rax
+    mov     %rax, (%rbp)
+    xor     %eax, %eax
+    LEAVE 16
+96: mov     S9(%rsp), %rcx
+    mov     %rcx, (%rbp)
+    mov     $LANTERN_INVALID_ENCODING, %eax
+    LEAVE 16
+98: mov     S9(%rsp), %rcx
+    mov     %rcx, (%rbp)
+    mov     $LANTERN_BUFFER_TOO_SMALL, %eax
+    LEAVE 16
+SPEC_END block_to_light_client_header
+
+# (header, from, out) -> rax: the header of the fork from as one of the fork (light-client.md). rbx
+# the header's bytes, rbp their count, r12 from, r13 out, r14 the bytes of out, r15 the room of out.
+SPEC_FUNCTION upgrade_lc_header
+    ENTER 0
+    cmp     $FORK, %rsi
+    ja      97f
+    mov     8(%rdi), %rax
+    lea     (%rdi,%rax), %rbx
+    mov     16(%rdi), %rbp
+    mov     %rsi, %r12
+    mov     %rdx, %r13
+    lea     24(%r13), %r14
+    mov     (%r13), %r15
+    sub     $24, %r15                       # the room of out
+.if FORK >= FORK_CAPELLA
+    cmp     $FORK_CAPELLA, %r12
+    jae     2f
+.endif
+    cmp     $112, %rbp                      # before capella: beacon
+    jne     96f
+.if FORK >= FORK_CAPELLA
+    cmp     $(LC_HEADER_EXECUTION + LC_EPH_FIXED), %r15 # to capella or later: an empty payload header and a zero branch
+    jb      98f
+    mov     %r14, %rdi
+    mov     $(LC_HEADER_EXECUTION + LC_EPH_FIXED), %esi
+    call    lantern_zero
+    mov     %r14, %rdi
+    mov     %rbx, %rsi
+    mov     $112, %edx
+    call    lantern_copy
+    movl    $LC_HEADER_EXECUTION, 112(%r14)
+    movl    $LC_EPH_FIXED, (LC_HEADER_EXECUTION + LC_EPH_EXTRA)(%r14)
+    mov     $(LC_HEADER_EXECUTION + LC_EPH_FIXED), %ebp
+    jmp     8f
+2:  cmpl    $LC_HEADER_EXECUTION, 112(%rbx) # capella or later: its payload header at 244, extra_data after the fixed part
+    jne     96f
+    mov     $LC_EPH_DENEB, %eax
+    mov     $LC_EPH_CAPELLA, %ecx
+    cmp     $FORK_CAPELLA, %r12
+    cmove   %rcx, %rax
+    lea     LC_HEADER_EXECUTION(%rax), %rcx
+    cmp     %rcx, %rbp
+    jb      96f
+    mov     (LC_HEADER_EXECUTION + LC_EPH_EXTRA)(%rbx), %ecx
+    cmp     %rax, %rcx
+    jne     96f
+.if FORK >= FORK_DENEB
+    cmp     $FORK_CAPELLA, %r12             # capella to deneb or later: blob_gas_used and excess_blob_gas 0
+    jne     7f
+    lea     16(%rbp), %rax
+    cmp     %rax, %r15
+    jb      98f
+    mov     %r14, %rdi
+    mov     %rbx, %rsi
+    mov     $(LC_HEADER_EXECUTION + LC_EPH_CAPELLA), %edx
+    call    lantern_copy
+    movq    $0, (LC_HEADER_EXECUTION + LC_EPH_CAPELLA)(%r14)
+    movq    $0, (LC_HEADER_EXECUTION + LC_EPH_CAPELLA + 8)(%r14)
+    lea     (LC_HEADER_EXECUTION + LC_EPH_CAPELLA + 16)(%r14), %rdi
+    lea     (LC_HEADER_EXECUTION + LC_EPH_CAPELLA)(%rbx), %rsi
+    lea     -(LC_HEADER_EXECUTION + LC_EPH_CAPELLA)(%rbp), %rdx
+    call    lantern_copy
+    movl    $LC_EPH_DENEB, (LC_HEADER_EXECUTION + LC_EPH_EXTRA)(%r14)
+    add     $16, %rbp
+    jmp     8f
+.endif
+.endif
+7:  cmp     %rbp, %r15                      # the same layout: the same bytes
+    jb      98f
+    mov     %r14, %rdi
+    mov     %rbx, %rsi
+    mov     %rbp, %rdx
+    call    lantern_copy
+8:  movq    $24, 8(%r13)
+    mov     %rbp, 16(%r13)
+    xor     %eax, %eax
+    LEAVE 0
+96: mov     $LANTERN_INVALID_ENCODING, %eax
+    LEAVE 0
+97: mov     $LANTERN_INVALID_EVENT, %eax
+    LEAVE 0
+98: mov     $LANTERN_BUFFER_TOO_SMALL, %eax
+    LEAVE 0
+SPEC_END upgrade_lc_header

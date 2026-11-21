@@ -31,6 +31,7 @@ import engine  # lantern's Engine API client cases
 import node  # lantern's node core cases over libp2p
 import config  # lantern's network config file cases
 import app  # lantern's command line cases
+import light_client  # lantern's light client cases
 import http_request  # lantern_http_request cases
 import api_route  # lantern_api_route cases, from the beacon-APIs clone
 import db  # lantern's database index cases
@@ -130,7 +131,7 @@ def read_cases(archive, forks, runners):
     with tarfile.open(archive, "r:gz") as tar:
         for member in tar:
             m = CASE.search(member.name) if member.isfile() else None
-            if not m or m.group(3) in SKIP or (m.group(3), m.group(4)) in SKIP_HANDLERS or (runners and m.group(3) not in runners):
+            if not m or m.group(3) in SKIP or (runners and m.group(3) not in runners):
                 continue
             if m.group(2) not in forks and (m.group(2), m.group(3)) not in EVERY_FORK:
                 continue
@@ -326,12 +327,20 @@ def main():
         reads = {}  # the node-reads cases of each fork, from the same cases
         attrewards = {}  # the node-attrewards cases of each fork, from the rewards cases
         attributes = {}  # the engine-payload_attributes cases of each fork, from operations pre states
+        lc_blocks = {}  # the blocks of the sanity and light client cases of each fork, for light_client.header_cases
         for archive, _ in archives:
             for fork, runner, handler, suite, case, data in read_cases(sources / archive, forks, runners):
+                name = f"{suite}/{case}"
+                if (runner, handler) in (("sanity", "blocks"), ("light_client", "data_collection")) and (not runners or "light_client" in runners):
+                    for key in sorted(k for k in data if k.startswith("block")):  # the blocks of lantern's light client cases
+                        block = snappy.uncompress(data[key])
+                        lc_blocks.setdefault(light_client.block_fork(fork, preset, block), []).append(
+                            (f"{runner}/{name}/{key.split('.')[0]}", block))
+                if (runner, handler) in SKIP_HANDLERS:
+                    continue
                 file = f"{preset}-{fork}-{runner}-{handler}.bin"
                 if file not in files:
                     files[file] = CaseFile(out / file)
-                name = f"{suite}/{case}"
                 parts = case_parts(name, data)
                 if (runner, handler) == ("light_client", "update_ranking"):
                     parts["better"] = update_ranking_answers(fork, preset, parts)
@@ -352,6 +361,14 @@ def main():
                 items = [(name, parts) for _, name, parts in node.blob_cases(fork, preset, on_block.get(fork, []))]
                 if items:
                     file = f"{preset}-{fork}-node-blobs.bin"
+                    count, digest = write_file(out / file, items)
+                    manifest.append((file, count, digest))
+                    print(f"{file}: {count} cases")
+        if not runners or "light_client" in runners:
+            for fork in forks:
+                items = list(light_client.header_cases(fork, preset, lc_blocks))
+                if items:
+                    file = f"{preset}-{fork}-lc-header.bin"
                     count, digest = write_file(out / file, items)
                     manifest.append((file, count, digest))
                     print(f"{file}: {count} cases")
