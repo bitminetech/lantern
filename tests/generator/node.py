@@ -1530,7 +1530,147 @@ def reads_texts(spec, fork, parts):
                     items = [(i, v) for i, v in items if i in pick]
                 answers.append(response(200, values + b"[" + b",".join(b'{"validator_index":%s,"reward":"%d"}' % (q(i), v)
                                                                        for i, v in items) + b"]}"))
+    # getAttestationsRewards: of the lowest and the highest epoch whose state the node holds, with id items of the
+    # highest; and of the store's epoch, past its slot (404)
+    store_slot = int(spec.get_current_slot(store))
+
+    def epoch_ask(e, body=None):
+        op = ops["getAttestationsRewards"]
+        req = api_route.request(op["method"], api_route.fill(op, {"epoch": b"%d" % e}), b"", body=body or b"",
+                                content_type=b"application/json" if body else b"")
+        requests.append(http(req, extra=b"Content-Length: %d\r\n" % len(body) if body else b"") + (body or b""))
+    held = []
+    for e in range(0, store_slot // spe):
+        x = (e + 2) * spe - 1
+        if x > store_slot:
+            break
+        root = head if x >= int(store.blocks[head].slot) else ancestor(head, x)
+        if root == finalized or descends(root):
+            held.append((e, x, root))
+    for k, (e, x, root) in enumerate(held[:1] + held[-1:] if len(held) > 1 else held):
+        s = chain_state(x)
+        fin = x <= int(store.finalized_checkpoint.epoch) * spe
+        epoch_ask(e)
+        answers.append(attestation_rewards_answer(spec, fork, s, optimistic.get(root, False), fin))
+        if k == len(held[:1] + held[-1:]) - 1 or len(held) == 1:
+            keys = [bytes(v.pubkey) for v in s.validators]
+            ids = {1, 4, len(keys) - 1}
+            body = b'["1","0x%s","%d","%d"]' % (keys[4].hex().encode(), len(keys) - 1, len(keys) + 9)
+            epoch_ask(e, body)
+            answers.append(attestation_rewards_answer(spec, fork, s, optimistic.get(root, False), fin, ids))
+    epoch_ask(store_slot // spe)
+    answers.append(error(404))
     return requests, answers
+
+
+def attestation_reward_items(spec, fork, state):
+    """getAttestationsRewards (beacon-api.md) of the state as it is: (head, target, source, inclusion_delay,
+    inactivity, eligible) of each validator, from the spec's delta functions."""
+    n = len(state.validators)
+    prev = spec.get_previous_epoch(state)
+    eligible = {int(i) for i in spec.get_eligible_validator_indices(state)}
+    out = [[0, 0, 0, 0, 0, 1 if i in eligible else 0] for i in range(n)]
+    if fork == "phase0":
+        for k, fn in ((2, spec.get_source_deltas), (1, spec.get_target_deltas), (0, spec.get_head_deltas)):
+            r, p = fn(state)
+            for i in range(n):
+                out[i][k] = int(r[i]) - int(p[i])
+        matching = spec.get_matching_source_attestations(state, prev)
+        for index in spec.get_unslashed_attesting_indices(state, matching):
+            a = min([a for a in matching if index in spec.get_pending_attesting_indices(state, a)], key=lambda a: a.inclusion_delay)
+            base = int(spec.get_base_reward(state, index))
+            out[int(index)][3] = (base - int(spec.get_proposer_reward(state, index))) // int(a.inclusion_delay)
+    else:
+        for k, flag in ((2, 0), (1, 1), (0, 2)):
+            r, p = spec.get_flag_index_deltas(state, flag)
+            for i in range(n):
+                out[i][k] = int(r[i]) - int(p[i])
+    r, p = spec.get_inactivity_penalty_deltas(state)
+    for i in range(n):
+        out[i][4] = -int(p[i])
+    return out
+
+
+def ideal_reward_items(spec, fork, state):
+    """The ideal_rewards of getAttestationsRewards (beacon-api.md) of the state as it is: (head, target, source,
+    inclusion_delay, inactivity, effective_balance) of each effective balance step of the fork of the previous
+    epoch: electra's from electra, but deneb's in electra before the epoch of the state's fork."""
+    inc = int(spec.EFFECTIVE_BALANCE_INCREMENT)
+    prev = int(spec.get_previous_epoch(state))
+    electra = FORKS.index(fork) >= FORKS.index("electra") and not (fork == "electra" and prev < int(state.fork.epoch))
+    top = int(spec.MAX_EFFECTIVE_BALANCE_ELECTRA) if electra else int(spec.MAX_EFFECTIVE_BALANCE)
+    total = int(spec.get_total_active_balance(state))
+    leak = bool(spec.is_in_inactivity_leak(state))
+    out = []
+    if fork == "phase0":
+        root = int(spec.integer_squareroot(total))
+        balances = [int(spec.get_attesting_balance(state, fn(state, prev))) for fn in
+                    (spec.get_matching_head_attestations, spec.get_matching_target_attestations, spec.get_matching_source_attestations)]
+        for k in range(1, top // inc + 1):
+            base = k * inc * int(spec.BASE_REWARD_FACTOR) // root // int(spec.BASE_REWARDS_PER_EPOCH)
+            part = base // int(spec.PROPOSER_REWARD_QUOTIENT)
+            parts = [base if leak else base * (b // inc) // (total // inc) for b in balances]
+            out.append(parts + [base - part, -(int(spec.BASE_REWARDS_PER_EPOCH) * base - part) if leak else 0, k * inc])
+    else:
+        per = int(spec.get_base_reward_per_increment(state))
+        balances = [int(spec.get_total_balance(state, spec.get_unslashed_participating_indices(state, f, prev))) for f in (2, 1, 0)]
+        weights = [int(spec.PARTICIPATION_FLAG_WEIGHTS[f]) for f in (2, 1, 0)]
+        for k in range(1, top // inc + 1):
+            base = k * per
+            parts = [0 if leak else base * w * (b // inc) // ((total // inc) * int(spec.WEIGHT_DENOMINATOR)) for w, b in zip(weights, balances)]
+            out.append(parts + [0, 0, k * inc])
+    return out
+
+
+def epoch_steps(spec, fork, state):
+    """A copy of the state after the steps of process_epoch before process_rewards_and_penalties."""
+    s = state.copy()
+    spec.process_justification_and_finalization(s)
+    if fork != "phase0":
+        spec.process_inactivity_updates(s)
+    return s
+
+
+def attestation_reward_cases(fork, preset, cases):
+    """node-attrewards (node.md): for each official rewards case, its pre-state and the items of
+    lantern_node_attestation_rewards and lantern_node_ideal_reward in mode 0 (the state as it is) and mode 1
+    (the steps of process_epoch before process_rewards_and_penalties applied)."""
+    import struct
+    spec = module(fork, preset)
+    for name, parts in cases:
+        def make():
+            pre = spec.BeaconState.decode_bytes(parts["pre"])
+            out = {}
+            for mode in (0, 1):
+                s = pre if mode == 0 else epoch_steps(spec, fork, pre)
+                items = attestation_reward_items(spec, fork, s)
+                ideal = ideal_reward_items(spec, fork, s)
+                out[f"items_{mode}"] = b"".join(struct.pack("<qqqQqQ", *it) for it in items)
+                out[f"ideal_{mode}"] = b"".join(struct.pack("<qqqQqQ", *it) for it in ideal)
+            out["pre"] = parts["pre"]
+            return out
+        yield "attrewards", name, run_strict(spec, schedule(fork), make)
+
+
+def attestation_rewards_answer(spec, fork, state, optimistic, finalized, ids=None):
+    """The answer of getAttestationsRewards (beacon-api.md) of S = state: the steps of process_epoch before
+    process_rewards_and_penalties on a copy, then its ideal and total items; ids a set of validator indices,
+    or None for the eligible ones."""
+    s = epoch_steps(spec, fork, state)
+    items = attestation_reward_items(spec, fork, s)
+    ideal = ideal_reward_items(spec, fork, s)
+
+    def fields(it):
+        out = b',"head":' + q(it[0]) + b',"target":' + q(it[1]) + b',"source":' + q(it[2])
+        if fork == "phase0":
+            out += b',"inclusion_delay":' + q(it[3])
+        return out + b',"inactivity":' + q(it[4]) + b"}"
+    first = b",".join(b'{"effective_balance":' + q(it[5]) + fields(it) for it in ideal)
+    chosen = [i for i, it in enumerate(items) if (it[5] if ids is None else i in ids)]
+    second = b",".join(b'{"validator_index":' + q(i) + fields(items[i]) for i in chosen)
+    body = (b'{"execution_optimistic":' + flag(optimistic) + b',"finalized":' + flag(finalized) +
+            b',"data":{"ideal_rewards":[' + first + b'],"total_rewards":[' + second + b"]}}")
+    return streamed(None, body)
 
 
 def reward_answers(spec, fork, block, pre, early, late, optimistic, body, kept=True):
@@ -1641,6 +1781,22 @@ def transition_reads_texts(fork, preset, parts):
             answers.append(first)
             ask("getSyncCommitteeRewards", root)
             answers.append(second)
+        # getAttestationsRewards of each epoch whose state is the chain's at a block at or above that bound
+        for e in range(0, head_slot // spe):
+            x = (e + 2) * spe - 1
+            if x > head_slot:
+                break
+            below = [c for c in chain if (int(c[1].slot) if c[1] is not None else int(pre.slot)) <= x][-1]
+            if (int(below[1].slot) if below[1] is not None else int(pre.slot)) < highest * spe:
+                continue
+            s = chain_state(x)
+            s_fork = fork if is_b(s) else before
+            s_spec = spec_b if is_b(s) else spec_a
+            op = ops["getAttestationsRewards"]
+            req = api_route.request(op["method"], api_route.fill(op, {"epoch": b"%d" % e}), b"")
+            requests.append(http(req))
+            answers.append(run_strict(s_spec, schedule_at(s_fork, fork, fork_epoch),
+                                      lambda: attestation_rewards_answer(s_spec, s_fork, s, False, x <= highest * spe)))
     finally:
         bls.bls_active = bls_active
     return requests, answers

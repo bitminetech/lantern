@@ -961,6 +961,216 @@ LOCAL_FUNCTION api_validators_json
     UNFRAME 32
 END_FUNCTION api_validators_json
 
+# The fields ,"head":…,"target":…,"source":…,"inactivity":…} of the 48-byte item rdi of
+# lantern_node_attestation_rewards, with ,"inclusion_delay":… before inactivity when the fork of the
+# entry rbx is phase0. Locals: the item.
+LOCAL_FUNCTION api_reward_fields
+    FRAME 16
+    mov     %rdi, (%rsp)
+    API_LIT api_ar_head
+    mov     (%rsp), %rax
+    mov     (%rax), %rdi
+    call    api_qint
+    API_LIT api_ar_target
+    mov     (%rsp), %rax
+    mov     8(%rax), %rdi
+    call    api_qint
+    API_LIT api_ar_source
+    mov     (%rsp), %rax
+    mov     16(%rax), %rdi
+    call    api_qint
+    cmpq    $0, NodeApi_fork(%rbx)
+    jne     1f
+    API_LIT api_ar_inclusion
+    mov     (%rsp), %rax
+    mov     24(%rax), %rdi
+    call    api_qdec
+1:  API_LIT api_ar_inactivity
+    mov     (%rsp), %rax
+    mov     32(%rax), %rdi
+    call    api_qint
+    API_LIT api_end1
+    UNFRAME 16
+END_FUNCTION api_reward_fields
+
+.set API_REWARD_WINDOW, 256                 # the validators of one call of lantern_node_attestation_rewards
+.set API_REWARD_ITEM_MAX, 256               # the room an item may take
+
+# The items of getAttestationsRewards (beacon-api.md) of the entry rbx, of the state rdi, from the
+# cursor at NodeEvent_api + 16 of the event rbp (+0 the next step or validator, +16 the bitmap of
+# the ids, +32 the items written, +48 the part: 0 no totals yet, 1 the ideal items, 2 the
+# validators' items; +56 the totals; +584 the node's config; +592 the chunk's scratch), at the
+# writer's cursor r12 up to r14; then ]}} once all are written. rax = 1 when whole, 0 when more is
+# to come, 2 for a state the functions refuse, 3 for a scratch too small. Locals: the state, the
+# cursor, the window's items, its first validator, its count, a value, an ideal item (48).
+LOCAL_FUNCTION api_rewards_json
+    FRAME 96
+    mov     %rdi, (%rsp)
+    lea     (NodeEvent_api + 16)(%rbp), %rax
+    mov     %rax, 8(%rsp)
+    mov     48(%rax), %rcx
+    cmp     $2, %rcx
+    je      5f
+    cmp     $1, %rcx
+    je      3f
+    mov     (%rsp), %rdi                    # the first chunk: the totals, as process_epoch has them
+    mov     584(%rax), %rsi
+    mov     $1, %edx
+    mov     592(%rax), %rcx
+    lea     56(%rax), %r8
+    mov     NodeApi_fork(%rbx), %r10
+    FORK_CALL node_reward_totals
+    cmp     $LANTERN_BUFFER_TOO_SMALL, %rax
+    je      93f
+    test    %rax, %rax
+    jnz     92f
+    mov     8(%rsp), %rax
+    movq    $1, 48(%rax)
+    movq    $1, (%rax)
+    movq    $0, 32(%rax)
+3:  mov     8(%rsp), %rax                   # the ideal items: each effective balance step
+    mov     (%rax), %rcx
+    MOVQ    %rdx, EFFECTIVE_BALANCE_INCREMENT
+    imul    %rdx, %rcx
+    cmp     (56 + 72)(%rax), %rcx
+    ja      4f
+    mov     %r14, %rdx
+    sub     %r12, %rdx
+    cmp     $API_REWARD_ITEM_MAX, %rdx
+    jb      90f
+    mov     %rcx, 40(%rsp)
+    lea     56(%rax), %rdi
+    mov     %rcx, %rsi
+    lea     48(%rsp), %rdx
+    mov     NodeApi_fork(%rbx), %r10
+    FORK_CALL node_ideal_reward
+    mov     8(%rsp), %rax
+    cmpq    $1, (%rax)
+    je      31f
+    API_LIT api_p_comma
+31: API_LIT api_ar_eb
+    mov     40(%rsp), %rdi
+    call    api_qdec
+    lea     48(%rsp), %rdi
+    call    api_reward_fields
+    mov     8(%rsp), %rax
+    incq    (%rax)
+    jmp     3b
+4:  mov     %r14, %rax                      # then the validators
+    sub     %r12, %rax
+    cmp     $32, %rax
+    jb      90f
+    API_LIT api_ar_total
+    mov     8(%rsp), %rax
+    movq    $2, 48(%rax)
+    movq    $0, (%rax)
+    movq    $0, 32(%rax)
+5:  mov     8(%rsp), %rax                   # a window of validators from the next
+    mov     (%rax), %rcx
+    mov     (%rsp), %rdx
+    mov     (NODE_STATE_VALIDATORS + 8)(%rdx), %rdx
+    cmp     %rdx, %rcx
+    jae     8f
+    sub     %rcx, %rdx
+    cmp     $API_REWARD_WINDOW, %rdx
+    jbe     51f
+    mov     $API_REWARD_WINDOW, %edx
+51: mov     %rcx, 24(%rsp)
+    mov     %rdx, 32(%rsp)
+    mov     592(%rax), %rsi                 # its items at the end of the chunk's scratch
+    imul    $48, %rdx, %rdx
+    mov     (%rsi), %rcx
+    sub     %rdx, %rcx
+    jb      93f
+    mov     %rcx, (%rsi)
+    add     %rsi, %rcx
+    mov     %rcx, 16(%rsp)
+    mov     (%rsp), %rdi
+    mov     584(%rax), %rsi
+    lea     56(%rax), %rdx
+    mov     24(%rsp), %rcx
+    mov     32(%rsp), %r8
+    mov     592(%rax), %r9
+    mov     16(%rsp), %rax
+    sub     $16, %rsp                       # the seventh argument: out
+    mov     %rax, (%rsp)
+    mov     NodeApi_fork(%rbx), %r10
+    FORK_CALL node_attestation_rewards
+    add     $16, %rsp
+    mov     8(%rsp), %rcx                   # the scratch's size again
+    mov     592(%rcx), %rsi
+    mov     32(%rsp), %rdx
+    imul    $48, %rdx, %rdx
+    add     %rdx, (%rsi)
+    cmp     $LANTERN_BUFFER_TOO_SMALL, %rax
+    je      93f
+    test    %rax, %rax
+    jnz     92f
+    movq    $0, 40(%rsp)
+6:  mov     40(%rsp), %rcx                  # each validator of the window: named by the ids, or with none eligible
+    cmp     32(%rsp), %rcx
+    jae     7f
+    mov     24(%rsp), %rsi
+    add     %rcx, %rsi
+    imul    $48, %rcx, %rdi
+    add     16(%rsp), %rdi
+    mov     8(%rsp), %rax
+    mov     16(%rax), %rdx
+    test    %rdx, %rdx
+    jz      61f
+    mov     %rsi, %rax
+    shr     $6, %rax
+    mov     (%rdx,%rax,8), %rax
+    bt      %rsi, %rax
+    jnc     69f
+    jmp     62f
+61: cmpq    $0, 40(%rdi)
+    je      69f
+62: mov     %r14, %rax
+    sub     %r12, %rax
+    cmp     $API_REWARD_ITEM_MAX, %rax
+    jb      68f
+    mov     8(%rsp), %rax
+    mov     32(%rax), %rcx
+    incq    32(%rax)
+    test    %rcx, %rcx
+    jz      63f
+    API_LIT api_p_comma
+63: API_LIT api_q_validator
+    mov     24(%rsp), %rdi
+    add     40(%rsp), %rdi
+    call    api_qdec
+    mov     40(%rsp), %rdi
+    imul    $48, %rdi, %rdi
+    add     16(%rsp), %rdi
+    call    api_reward_fields
+69: incq    40(%rsp)
+    jmp     6b
+68: mov     24(%rsp), %rcx                  # no room: the next chunk goes on from this validator
+    add     40(%rsp), %rcx
+    mov     8(%rsp), %rax
+    mov     %rcx, (%rax)
+    jmp     90f
+7:  mov     24(%rsp), %rcx
+    add     32(%rsp), %rcx
+    mov     8(%rsp), %rax
+    mov     %rcx, (%rax)
+    jmp     5b
+8:  mov     %r14, %rax                      # all: ]}}
+    sub     %r12, %rax
+    cmp     $4, %rax
+    jb      90f
+    API_LIT api_ar_end
+    mov     $1, %eax
+    UNFRAME 96
+90: xor     %eax, %eax
+    UNFRAME 96
+92: mov     $2, %eax
+    UNFRAME 96
+93: mov     $3, %eax
+    UNFRAME 96
+END_FUNCTION api_rewards_json
+
 # rax = the epoch of getEpochCommittees of the route rdi and the state of the view rsi (beacon-api.md,
 # Common rules), or 2^64 - 1 for 400: an epoch above the state's + 1, one whose seed's RANDAO mix the
 # state no longer holds, or a slot of another epoch. A leaf. Uses rax, rcx, rdx, r8, r9.
@@ -2917,6 +3127,8 @@ LOCAL_FUNCTION node_api_event
     je      547f
     cmp     $API_OP_GET_SYNC_COMMITTEE_REWARDS, %rcx
     je      547f
+    cmp     $API_OP_GET_ATTESTATIONS_REWARDS, %rcx
+    je      548f
     cmp     $API_OP_GET_STATE_ROOT, %rcx
     je      66f
     cmp     $API_OP_GET_STATE_FORK, %rcx
@@ -3320,6 +3532,39 @@ LOCAL_FUNCTION node_api_event
     test    %rax, %rax
     jnz     80f
     jmp     90f
+548: mov    S7(%rsp), %rax                  # getAttestationsRewards: the state of the last slot of epoch + 1, a stream of it
+    mov     $404, %edx
+    mov     ApiRoute_epoch(%rax), %rcx
+    add     $2, %rcx
+    jc      80f
+    mov     %rcx, (L + 8)(%rsp)
+    mov     %rbp, %rdi
+    call    node_store_slot
+    inc     %rax
+    xor     %edx, %edx
+    mov     $SLOTS_PER_EPOCH, %ecx
+    div     %rcx
+    mov     $404, %edx
+    mov     (L + 8)(%rsp), %rcx
+    cmp     %rax, %rcx
+    ja      80f
+    imul    $SLOTS_PER_EPOCH, %rcx, %rcx
+    dec     %rcx
+    mov     S7(%rsp), %rdi
+    movq    $API_ID_SLOT, ApiRoute_id_kind(%rdi)
+    mov     %rcx, ApiRoute_id_slot(%rdi)
+    mov     S8(%rsp), %rsi
+    call    node_api_state
+    mov     %rax, %rdx
+    test    %rax, %rax
+    jnz     80f
+    mov     S8(%rsp), %rdi
+    call    node_api_advance
+    mov     S7(%rsp), %rdi                  # its ids, as a validator stream's
+    call    node_api_ids
+    mov     S8(%rsp), %rcx
+    mov     %rax, ApiView_look_data(%rcx)
+    jmp     64f
 547: mov    S9(%rsp), %rdi                  # getBlockRewards, getSyncCommitteeRewards: a work of the block on its pre-state
     mov     S7(%rsp), %rsi
     mov     %r12, %rdx
@@ -7803,9 +8048,13 @@ LOCAL_FUNCTION api_stream_json
     je      1f
     cmpq    $API_OP_GET_STATE_V2, NodeApi_op(%rbx)
     je      1f
+    cmpq    $API_OP_GET_ATTESTATIONS_REWARDS, NodeApi_op(%rbx)
+    je      35f
     cmpq    $API_OP_GET_EPOCH_COMMITTEES, NodeApi_op(%rbx)
     je      2f
     call    api_validators_json
+    UNFRAME 0
+35: call    api_rewards_json
     UNFRAME 0
 2:  call    api_committees_json
     UNFRAME 0
@@ -7927,7 +8176,13 @@ LOCAL_FUNCTION node_api_chunk_run
     cmpq    $0, (L + 48)(%rsp)
     je      98f
     jmp     103f
-104: cmp    $API_OP_GET_STATE_VALIDATOR, %rax       # a validator stream: a state
+104: cmp    $API_OP_GET_ATTESTATIONS_REWARDS, %rax  # getAttestationsRewards: as a validator stream (1), of a state
+    jne     106f
+    cmpq    $0, (L + 48)(%rsp)
+    je      98f
+    mov     $1, %ecx
+    jmp     103f
+106: cmp    $API_OP_GET_STATE_VALIDATOR, %rax       # a validator stream: a state
     je      98f
     sub     $API_OP_GET_STATE_VALIDATORS, %rax
     cmp     $(API_OP_GET_EPOCH_COMMITTEES - API_OP_GET_STATE_VALIDATORS), %rax
@@ -8103,6 +8358,23 @@ LOCAL_FUNCTION node_api_chunk_run
     call    node_api_validators_prep
     test    %rax, %rax
     jnz     97f
+    cmpq    $API_OP_GET_ATTESTATIONS_REWARDS, NodeApi_op(%rbx)  # getAttestationsRewards: the scratch after the bitmap at +592 of the cursor, the node's config at +584
+    jne     66f
+    mov     (L + 64)(%rsp), %rdi
+    mov     (L + 48)(%rsp), %rax
+    mov     (NODE_STATE_VALIDATORS + 8)(%rax), %rcx
+    add     $63, %rcx
+    shr     $6, %rcx
+    lea     16(,%rcx,8), %rcx
+    mov     (%rdi), %rax
+    sub     %rcx, %rax
+    jb      97f
+    add     %rdi, %rcx
+    mov     %rax, (%rcx)
+    mov     %rcx, (NodeEvent_api + 16 + 592)(%rbp)
+    mov     (L + 72)(%rsp), %rax
+    add     $Node_config, %rax
+    mov     %rax, (NodeEvent_api + 16 + 584)(%rbp)
     jmp     66f
 68: mov     NodeApi_op(%rbx), %rax          # a pending stream: its items; for SSZ their bytes and their count
     lea     -API_OP_GET_PENDING_DEPOSITS(%rax), %rsi
@@ -8382,7 +8654,11 @@ LOCAL_FUNCTION node_api_chunk_run
     shr     $9, %rdi
     and     $1, %edi
     call    api_bool
-    API_LIT api_v_list
+    cmpq    $API_OP_GET_ATTESTATIONS_REWARDS, NodeApi_op(%rbx)  # getAttestationsRewards: ,"data":{"ideal_rewards":[
+    jne     381f
+    API_LIT api_ar_open
+    jmp     36f
+381: API_LIT api_v_list
     jmp     36f
     /* the pending streams: {"version":"<fork>","execution_optimistic":…,"finalized":…,"data":[ */
 392: API_LIT api_j_version
@@ -8430,6 +8706,8 @@ LOCAL_FUNCTION node_api_chunk_run
     API_LIT api_j_data
 36: mov     (L + 40)(%rsp), %rdi
     call    api_stream_json
+    cmp     $3, %rax
+    je      97f
     cmp     $2, %rax
     je      96f
     mov     (NodeEvent_api + 8)(%rbp), %rcx
@@ -8487,6 +8765,8 @@ LOCAL_FUNCTION node_api_chunk_run
     sub     $7, %r14
     mov     (L + 40)(%rsp), %rdi
     call    api_stream_json
+    cmp     $3, %rax
+    je      97f
     cmp     $2, %rax
     je      96f
     mov     %rax, (L + 32)(%rsp)
@@ -8513,6 +8793,8 @@ LOCAL_FUNCTION node_api_chunk_run
     jmp     44f
 45: mov     (L + 40)(%rsp), %rdi            # HTTP/1.0: the bytes alone
     call    api_stream_json
+    cmp     $3, %rax
+    je      97f
     cmp     $2, %rax
     je      96f
     test    %rax, %rax

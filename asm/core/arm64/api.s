@@ -995,6 +995,218 @@ LOCAL_FUNCTION api_validators_json
 END_FUNCTION api_validators_json
 
 /*
+ * L1: ,"head":…,"target":…,"source":…,"inactivity":…} of the 48-byte item x0 of lantern_node_attestation_rewards,
+ * with ,"inclusion_delay":… before inactivity when the fork of the entry x22 is phase0. Locals: the item.
+ */
+LOCAL_FUNCTION api_reward_fields
+    FRAME 16
+    str     x0, [sp, #16]
+    API_LIT api_ar_head
+    ldr     x9, [sp, #16]
+    ldr     x0, [x9]
+    bl      api_qint
+    API_LIT api_ar_target
+    ldr     x9, [sp, #16]
+    ldr     x0, [x9, #8]
+    bl      api_qint
+    API_LIT api_ar_source
+    ldr     x9, [sp, #16]
+    ldr     x0, [x9, #16]
+    bl      api_qint
+    ldr     x9, [x22, #NodeApi_fork]
+    cbnz    x9, 1f
+    API_LIT api_ar_inclusion
+    ldr     x9, [sp, #16]
+    ldr     x0, [x9, #24]
+    bl      api_qdec
+1:  API_LIT api_ar_inactivity
+    ldr     x9, [sp, #16]
+    ldr     x0, [x9, #32]
+    bl      api_qint
+    API_LIT api_end1
+    UNFRAME 16
+END_FUNCTION api_reward_fields
+
+.set API_REWARD_WINDOW, 256                 /* the validators of one call of lantern_node_attestation_rewards */
+.set API_REWARD_ITEM_MAX, 256               /* the room an item may take */
+
+/*
+ * L1: the items of getAttestationsRewards (beacon-api.md) of the entry x22, of the state x20, from the
+ * cursor at NodeEvent_api + 16 of the event x23 (+0 the next step or validator, +16 the bitmap of the
+ * ids, +32 the items written, +48 the part: 0 no totals yet, 1 the ideal items, 2 the validators'
+ * items; +56 the totals; +592 the chunk's scratch), at the writer's cursor x24 up to x26; then ]}}
+ * once all are written. x0 = 1 when whole, 0 when more is to come, 2 for a state the functions
+ * refuse, 3 for a scratch too small. Locals: sp+16 the cursor, sp+24 the window's items, sp+32 its
+ * first validator, sp+40 its count, sp+48 a value, sp+56 an ideal item (48).
+ */
+LOCAL_FUNCTION api_rewards_json
+    FRAME 96
+    add     x9, x23, #(NodeEvent_api + 16)
+    str     x9, [sp, #16]
+    ldr     x10, [x9, #48]
+    cmp     x10, #2
+    b.eq    5f
+    cmp     x10, #1
+    b.eq    3f
+    mov     x0, x20                         /* the first chunk: the totals, as process_epoch has them */
+    add     x1, x19, #Node_config
+    mov     x2, #1
+    ldr     x3, [x9, #592]
+    add     x4, x9, #56
+    ldr     x15, [x22, #NodeApi_fork]
+    FORK_CALL node_reward_totals
+    cmp     x0, #LANTERN_BUFFER_TOO_SMALL
+    b.eq    93f
+    cbnz    x0, 92f
+    ldr     x9, [sp, #16]
+    mov     x10, #1
+    str     x10, [x9, #48]
+    str     x10, [x9]
+    str     xzr, [x9, #32]
+3:  ldr     x9, [sp, #16]                   /* the ideal items: each effective balance step */
+    ldr     x10, [x9]
+    MOVQ    x11, EFFECTIVE_BALANCE_INCREMENT
+    mul     x10, x10, x11
+    ldr     x11, [x9, #(56 + 72)]
+    cmp     x10, x11
+    b.hi    4f
+    sub     x12, x26, x24
+    cmp     x12, #API_REWARD_ITEM_MAX
+    b.lo    90f
+    str     x10, [sp, #48]
+    add     x0, x9, #56
+    mov     x1, x10
+    add     x2, sp, #56
+    ldr     x15, [x22, #NodeApi_fork]
+    FORK_CALL node_ideal_reward
+    ldr     x9, [sp, #16]
+    ldr     x10, [x9]
+    cmp     x10, #1
+    b.eq    31f
+    API_LIT api_p_comma
+31: API_LIT api_ar_eb
+    ldr     x0, [sp, #48]
+    bl      api_qdec
+    add     x0, sp, #56
+    bl      api_reward_fields
+    ldr     x9, [sp, #16]
+    ldr     x10, [x9]
+    add     x10, x10, #1
+    str     x10, [x9]
+    b       3b
+4:  sub     x12, x26, x24                   /* then the validators */
+    cmp     x12, #32
+    b.lo    90f
+    API_LIT api_ar_total
+    ldr     x9, [sp, #16]
+    mov     x10, #2
+    str     x10, [x9, #48]
+    str     xzr, [x9]
+    str     xzr, [x9, #32]
+5:  ldr     x9, [sp, #16]                   /* a window of validators from the next */
+    ldr     x10, [x9]
+    LDQ     x11, x20, NODE_STATE_VALIDATORS + 8
+    cmp     x10, x11
+    b.hs    8f
+    sub     x12, x11, x10
+    mov     x13, #API_REWARD_WINDOW
+    cmp     x12, x13
+    csel    x12, x12, x13, lo
+    stp     x10, x12, [sp, #32]
+    ldr     x3, [x9, #592]                  /* its items at the end of the chunk's scratch */
+    ldr     x13, [x3]
+    mov     x14, #48
+    mul     x14, x12, x14
+    subs    x13, x13, x14
+    b.lo    93f
+    str     x13, [x3]
+    add     x14, x3, x13
+    str     x14, [sp, #24]
+    mov     x0, x20
+    add     x1, x19, #Node_config
+    add     x2, x9, #56
+    ldp     x3, x4, [sp, #32]
+    ldr     x5, [x9, #592]
+    ldr     x6, [sp, #24]
+    ldr     x15, [x22, #NodeApi_fork]
+    FORK_CALL node_attestation_rewards
+    ldr     x9, [sp, #16]                   /* the scratch's size again */
+    ldr     x3, [x9, #592]
+    ldr     x13, [x3]
+    ldr     x12, [sp, #40]
+    mov     x14, #48
+    madd    x13, x12, x14, x13
+    str     x13, [x3]
+    cmp     x0, #LANTERN_BUFFER_TOO_SMALL
+    b.eq    93f
+    cbnz    x0, 92f
+    str     xzr, [sp, #48]
+6:  ldr     x10, [sp, #48]                  /* each validator of the window: named by the ids, or with none eligible */
+    ldp     x11, x12, [sp, #32]
+    cmp     x10, x12
+    b.hs    7f
+    add     x13, x11, x10
+    ldr     x14, [sp, #24]
+    mov     x15, #48
+    madd    x14, x10, x15, x14
+    ldr     x9, [sp, #16]
+    ldr     x15, [x9, #16]
+    cbz     x15, 61f
+    lsr     x0, x13, #6
+    ldr     x0, [x15, x0, lsl #3]
+    lsr     x0, x0, x13
+    tbz     x0, #0, 69f
+    b       62f
+61: ldr     x0, [x14, #40]
+    cbz     x0, 69f
+62: sub     x0, x26, x24
+    cmp     x0, #API_REWARD_ITEM_MAX
+    b.lo    68f
+    ldr     x0, [x9, #32]
+    add     x1, x0, #1
+    str     x1, [x9, #32]
+    cbz     x0, 63f
+    API_LIT api_p_comma
+63: API_LIT api_q_validator
+    ldp     x11, x12, [sp, #32]
+    ldr     x10, [sp, #48]
+    add     x0, x11, x10
+    bl      api_qdec
+    ldr     x10, [sp, #48]
+    ldr     x14, [sp, #24]
+    mov     x15, #48
+    madd    x0, x10, x15, x14
+    bl      api_reward_fields
+69: ldr     x10, [sp, #48]
+    add     x10, x10, #1
+    str     x10, [sp, #48]
+    b       6b
+68: ldr     x9, [sp, #16]                   /* no room: the next chunk goes on from this validator */
+    ldr     x11, [sp, #32]
+    ldr     x10, [sp, #48]
+    add     x11, x11, x10
+    str     x11, [x9]
+    b       90f
+7:  ldr     x9, [sp, #16]
+    ldp     x11, x12, [sp, #32]
+    add     x11, x11, x12
+    str     x11, [x9]
+    b       5b
+8:  sub     x12, x26, x24                   /* all: ]}} */
+    cmp     x12, #4
+    b.lo    90f
+    API_LIT api_ar_end
+    mov     x0, #1
+    UNFRAME 96
+90: mov     x0, #0
+    UNFRAME 96
+92: mov     x0, #2
+    UNFRAME 96
+93: mov     x0, #3
+    UNFRAME 96
+END_FUNCTION api_rewards_json
+
+/*
  * L0: x0 = the epoch of getEpochCommittees of the route x0 and the state of the view x1 (beacon-api.md,
  * Common rules), or 2^64 - 1 for 400: an epoch above the state's + 1, one whose seed's RANDAO mix the
  * state no longer holds, or a slot of another epoch. A leaf. Uses x9-x13.
@@ -2996,6 +3208,8 @@ LOCAL_FUNCTION node_api_event
     b.eq    547f
     cmp     x3, #API_OP_GET_SYNC_COMMITTEE_REWARDS
     b.eq    547f
+    cmp     x3, #API_OP_GET_ATTESTATIONS_REWARDS
+    b.eq    548f
     cmp     x3, #API_OP_GET_STATE_ROOT
     b.eq    66f
     cmp     x3, #API_OP_GET_STATE_FORK
@@ -3353,6 +3567,35 @@ LOCAL_FUNCTION node_api_event
     cbz     x0, 90f
     mov     x2, x0
     b       80f
+548: ldr    x10, [x25, #ApiRoute_epoch]     /* getAttestationsRewards: the state of the last slot of epoch + 1, a stream of it */
+    mov     x2, #404
+    adds    x10, x10, #2
+    b.cs    80f
+    mov     x0, x20
+    bl      node_store_slot
+    add     x11, x0, #1
+    mov     x12, #SLOTS_PER_EPOCH
+    udiv    x11, x11, x12
+    ldr     x10, [x25, #ApiRoute_epoch]
+    add     x10, x10, #2
+    mov     x2, #404
+    cmp     x10, x11
+    b.hi    80f
+    mul     x10, x10, x12
+    sub     x10, x10, #1
+    mov     x9, #API_ID_SLOT
+    stp     x9, x10, [x25, #ApiRoute_id_kind]
+    mov     x0, x25
+    mov     x1, x26
+    bl      node_api_state
+    mov     x2, x0
+    cbnz    x0, 80f
+    mov     x0, x26
+    bl      node_api_advance
+    mov     x0, x25                         /* its ids, as a validator stream's */
+    bl      node_api_ids
+    str     x0, [x26, #ApiView_look_data]
+    b       64f
 547: mov    x0, x27                         /* getBlockRewards, getSyncCommitteeRewards: a work of the block on its pre-state */
     mov     x1, x25
     mov     x2, x21
@@ -7639,9 +7882,13 @@ LOCAL_FUNCTION api_stream_json
     b.eq    1f
     cmp     x9, #API_OP_GET_STATE_V2
     b.eq    1f
+    cmp     x9, #API_OP_GET_ATTESTATIONS_REWARDS
+    b.eq    35f
     cmp     x9, #API_OP_GET_EPOCH_COMMITTEES
     b.eq    2f
     bl      api_validators_json
+    UNFRAME 0
+35: bl      api_rewards_json
     UNFRAME 0
 2:  bl      api_committees_json
     UNFRAME 0
@@ -7761,7 +8008,12 @@ LOCAL_FUNCTION node_api_chunk_run
     cbz     x20, 98f
     mov     x9, #4
     b       2f
-241: sub    x10, x9, #API_OP_GET_STATE_VALIDATORS   /* a validator stream (1) or getEpochCommittees (2): a state */
+241: cmp    x9, #API_OP_GET_ATTESTATIONS_REWARDS    /* getAttestationsRewards: as a validator stream (1), of a state */
+    b.ne    243f
+    cbz     x20, 98f
+    mov     x9, #1
+    b       2f
+243: sub    x10, x9, #API_OP_GET_STATE_VALIDATORS   /* a validator stream (1) or getEpochCommittees (2): a state */
     cmp     x10, #(API_OP_GET_EPOCH_COMMITTEES - API_OP_GET_STATE_VALIDATORS)
     b.hi    98f
     cmp     x9, #API_OP_GET_STATE_VALIDATOR
@@ -7936,6 +8188,22 @@ LOCAL_FUNCTION node_api_chunk_run
     b.eq    63f
     bl      node_api_validators_prep
     cbnz    x0, 97f
+    ldr     x9, [x22, #NodeApi_op]          /* getAttestationsRewards: the scratch after the bitmap, at +592 of the cursor */
+    cmp     x9, #API_OP_GET_ATTESTATIONS_REWARDS
+    b.ne    6f
+    ldr     x0, [sp, #(L + 48)]
+    LDQ     x10, x20, NODE_STATE_VALIDATORS + 8
+    add     x10, x10, #63
+    lsr     x10, x10, #6
+    lsl     x10, x10, #3
+    add     x10, x10, #16
+    ldr     x11, [x0]
+    subs    x11, x11, x10
+    b.lo    97f
+    add     x12, x0, x10
+    str     x11, [x12]
+    add     x13, x23, #(NodeEvent_api + 16)
+    str     x12, [x13, #592]
     b       6f
 66: cbz     x21, 6f                         /* getPoolAttestationsV2 from electra: the Attestation of a SingleAttestation */
     ldr     x9, [x22, #NodeApi_op]
@@ -8195,7 +8463,12 @@ LOCAL_FUNCTION node_api_chunk_run
     ldr     x9, [x23, #(NodeEvent_api + 8)]
     ubfx    x0, x9, #9, #1
     bl      api_bool
-    API_LIT api_v_list
+    ldr     x9, [x22, #NodeApi_op]          /* getAttestationsRewards: ,"data":{"ideal_rewards":[ */
+    cmp     x9, #API_OP_GET_ATTESTATIONS_REWARDS
+    b.ne    371f
+    API_LIT api_ar_open
+    b       36f
+371: API_LIT api_v_list
     b       36f
     /* the pending streams: {"version":"<fork>","execution_optimistic":…,"finalized":…,"data":[ */
 392: API_LIT api_j_version
@@ -8239,6 +8512,8 @@ LOCAL_FUNCTION node_api_chunk_run
     bl      api_bool
     API_LIT api_j_data
 36: bl      api_stream_json
+    cmp     x0, #3
+    b.eq    97f
     cmp     x0, #2
     b.eq    96f
     ldr     x9, [x23, #(NodeEvent_api + 8)]
@@ -8295,6 +8570,8 @@ LOCAL_FUNCTION node_api_chunk_run
     ldr     x9, [sp, #L]
     sub     x26, x9, #7
     bl      api_stream_json
+    cmp     x0, #3
+    b.eq    97f
     cmp     x0, #2
     b.eq    96f
     str     x0, [sp, #(L + 32)]
@@ -8319,6 +8596,8 @@ LOCAL_FUNCTION node_api_chunk_run
     API_LIT api_last_chunk
     b       44f
 45: bl      api_stream_json                 /* HTTP/1.0: the bytes alone */
+    cmp     x0, #3
+    b.eq    97f
     cmp     x0, #2
     b.eq    96f
     cbz     x0, 80f
