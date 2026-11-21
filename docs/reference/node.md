@@ -17,6 +17,7 @@
 - [`lantern_node_attestation_data`](#function-lantern_node_attestation_data): the `AttestationData` of a state's slot, for one fork.
 - [`lantern_node_attester_duties`](#function-lantern_node_attester_duties): the committee assignments of validators in an epoch, for one fork.
 - [`lantern_node_liveness`](#function-lantern_node_liveness): whether validators were seen live in an epoch, from a state and a `Seen`, for one fork.
+- [`lantern_node_sidecar_root`](#function-lantern_node_sidecar_root): hash_tree_root of the block header of a sidecar's SSZ bytes, for one fork from deneb.
 - [`lantern_node_randao`](#function-lantern_node_randao): the RANDAO mix of an epoch in a state, for one fork.
 - [`lantern_node_sync_committee`](#function-lantern_node_sync_committee): the validator indices of a state's sync committee of an epoch, for one fork.
 - [`lantern_node_proposer_lookahead`](#function-lantern_node_proposer_lookahead): a state's `proposer_lookahead`, for one fork.
@@ -152,6 +153,7 @@
   - Only cases with no `payload_status` step whose valid blocks each have their own slot and come at or after the start of that slot.
   - The runner opens the same network. The node's topics must reach the peer.
   - Each valid block goes from the peer as a beacon_block message, Snappy compressed, on the topic of the block's epoch. The node must import it.
+  - An eventstream of `block_gossip,blob_sidecar,data_column_sidecar` over HTTP/1.1 is open before the steps. After each valid block and its sidecars go over gossip, the stream must have the events of them in order, each in one chunk: the block's, then each sidecar's, the runner's texts from the case's bytes (beacon-api.md).
   - Each valid attester slashing goes from the peer on the attester_slashing topic of the last tick's epoch. One the node does not apply goes again as a `NODE_EV_ATTESTER_SLASHING`. A case with valid attester slashings must apply one over gossip.
   - Each valid attestation goes from the peer first as a `SignedAggregateAndProof` on the beacon_aggregate_and_proof topic of the last tick's epoch: its first attester aggregates it, signed with the pyspec test keys (validator i has the secret key i + 1); from electra, only an attestation of one committee. The vote the node applies from it must be valid. One the node does not apply goes again as a `NODE_EV_ATTESTATION`. The runner counts both in a NOTE.
   - The other steps go as in node mode; the checks must hold.
@@ -221,6 +223,7 @@
   - The runner runs the node with `NODE_FLAG_ENGINE`, answers engine_forkchoiceUpdated with attributes with the case's `payloadId` and engine_getPayload with the case's result, gives a `NODE_EV_TICK` of `time_ms`, then each request after a `NODE_EV_TICK` of its time when that is not 0; each answer must be the case's, and after each request the runner's buffers must differ from those before it only by the ids the node holds (each `NodeBlock`'s bytes and post-state, each `NodeBlob`'s bytes, each pool entry's).
   - `closed`: the last close must come after the node has no event left, so the closes cover each step of the request.
 - Lantern's cases `<preset>-<fork>-node-publish.bin` of altair to fulu, made by tests/generator/node.py with the pinned spec, run as the node-produce cases: the empty_pool block of the node-produce cases on an anchor at epoch 0 (on_block's shuffling dependent root of a later epoch is a block of the store there), signed with its proposer's test key, from deneb in a `SignedBlockContents` with no blobs. The spec's gossip validation, state_transition and on_block give each block's verdict, which the generator checks.
+  - The events, in each case but the closed ones: an eventstream of `block_gossip,blob_sidecar,data_column_sidecar` over HTTP/1.1 is open before the requests. After the case its bytes must be the event of each block whose check passes and of each sidecar the node publishes, in order, each in one chunk, the case's `events` (beacon-api.md).
   - `published`: the block with `broadcast_validation=consensus_and_equivocation` (200), getBlockRoot of `head` (the block's root), then the block again in SSZ with no level (200: a block the node holds).
   - `refused`: at `consensus`, the block signed with another validator's key, the block with `Eth-Consensus-Version` of the fork before, and the block with another `state_root` signed by its proposer (each 400); then getBlockRoot of `head` (the anchor's root).
   - `gossip`: the block with another `state_root` at the default level (202: it goes out, and its import fails); then getBlockRoot of `head` (the anchor's root).
@@ -400,7 +403,9 @@ lantern_node_step(node, store, p2p, tick, events, scratch, actions, result) -> s
   - head and finalized_checkpoint at a quiet point: after the head, once the head's post-state is back (the rule of the post-states the node lets go, above), with `event_votes` 0, so that the votes of each block the node imports are in fork choice first.
   - head: at a quiet point, when `head_root` is not `event_head`: `event_head` and `event_slot` take the head's root and slot; with an entry of the topic, a `NODE_WORK_API_EVENT` with the head's post-state as `state_a` and as `arg` `API_TOPIC_HEAD` + 2^8 times the values: 1 `epoch_transition` (the epoch of the head's slot above that of the old `event_slot`), 2 `execution_optimistic`.
   - finalized_checkpoint: then, when the store's finalized epoch is above `event_epoch`: `event_epoch` takes it; with an entry of the topic, a `NODE_WORK_API_EVENT` with the bytes of the finalized root's block as `data` (its `NODE_DB_REF` when the `Db` holds them), else its post-state as `state_a`, and as `arg` `API_TOPIC_FINALIZED_CHECKPOINT` + 2^8 times the values (2 `execution_optimistic`) + 2^16 times the epoch. A block with neither gives no event.
-  - The operation topics: at the `NODE_EV_WORK_DONE` of a `NODE_WORK_GOSSIP` of `LANTERN_VALID`, and for each `LANTERN_VALID` record of a `NODE_WORK_API_SUBMIT`, of the gossip topic voluntary_exit, bls_to_execution_change, proposer_slashing, attester_slashing, beacon_attestation or sync_committee_contribution_and_proof: with an entry of its event topic (beacon_attestation: `API_TOPIC_ATTESTATION` before electra, `API_TOPIC_SINGLE_ATTESTATION` from electra, by the fork of the validation), a `NODE_WORK_API_EVENT` with its bytes as `data` and as `arg` the event topic + 2^16 times the fork of the validation. It goes before any `NODE_ACT_BYTES_FREE` of those bytes: the shell runs it first.
+  - block_gossip: at the `NODE_EV_WORK_DONE` of a `NODE_WORK_GOSSIP` of `LANTERN_VALID` of beacon_block, its text from the root at `NodeEvent_root` and the message's slot; at the `NODE_EV_WORK_DONE` of a `NODE_WORK_PUBLISH_CHECK` of `LANTERN_VALID`, from the entry's root and slot. Each written as the block event's, with an entry of the topic.
+  - blob_sidecar and data_column_sidecar: at the `NODE_EV_WORK_DONE` of a `NODE_WORK_GOSSIP` of `LANTERN_VALID` of blob_sidecar or data_column_sidecar, as for the operation topics (below); at the `NODE_EV_WORK_DONE` of a valid `NODE_WORK_PUBLISH_SIDECAR`, with an entry of the topic of the entry's fork (blob_sidecar before fulu, data_column_sidecar from fulu): a `NODE_WORK_API_EVENT` of the sidecar's bytes as for the operation topics, those of its new `NodeBlob` when the node keeps it, else a `NODE_ACT_BYTES_PUT` of them to a new id before the work and a `NODE_ACT_BYTES_FREE` of it after.
+  - The operation topics: at the `NODE_EV_WORK_DONE` of a `NODE_WORK_GOSSIP` of `LANTERN_VALID`, and for each `LANTERN_VALID` record of a `NODE_WORK_API_SUBMIT`, of the gossip topic voluntary_exit, bls_to_execution_change, proposer_slashing, attester_slashing, beacon_attestation or sync_committee_contribution_and_proof (and, from the network only, blob_sidecar and data_column_sidecar): with an entry of its event topic (beacon_attestation: `API_TOPIC_ATTESTATION` before electra, `API_TOPIC_SINGLE_ATTESTATION` from electra, by the fork of the validation), a `NODE_WORK_API_EVENT` with its bytes as `data` and as `arg` the event topic + 2^16 times the fork of the validation. It goes before any `NODE_ACT_BYTES_FREE` of those bytes: the shell runs it first.
   - `NODE_EV_WORK_DONE` of `NODE_WORK_API_EVENT`: `LANTERN_VALID`, the text at `NodeEvent_chunk` goes to the entries of the topic of `arg` % 2^8. Another result: no event.
   - To an entry: a `NODE_ACT_API_SEND` of the text with `last` 0, in one chunk of RFC 9112 section 7.1 with `API_STREAM_CHUNKED`; its `sent` grows by the bytes sent. When `sent` would pass `NODE_API_CHUNK`, the stream falls behind: a `NODE_ACT_API_CLOSE` of the connection in its place, and the stream ends.
 - libp2p first, before the node's events: libp2p_step with the queued events, then the `NODE_EV_P2P` events, after them in the queue. The first libp2p_step takes at most half the action room left, when that half is enough, so the notices have room. When it accepts k of n P2P events, with k < n, the P2P events it did not take leave the queue, the step handles the node's events before the next P2P event, and gives that count as `accepted`. A status of libp2p_step leaves the queue as it was.
@@ -647,6 +652,7 @@ lantern_node_run(node, store, seen, work, state_a, state_b, state_c, data, setti
   - Before the first: `seen` with fewer free `keys` entries than the operations (sync committee messages: `SYNC_COMMITTEE_SUBNET_COUNT` times their count) gives `LANTERN_BUFFER_TOO_SMALL`, so that no check of a list adds to `seen` before one is short.
 - `NODE_WORK_POOL_CHECK`: lantern_node_gossip of the fork of the store's slot of the topic `arg` for the bytes in `data`, as for `NODE_WORK_API_SUBMIT`, with an empty `Seen` at the end of `scratch` (lantern_seen_init of a `SeenRoom` of `keys` the bytes' length / 8 + 1, and no other room): its result's code is the event's result. A `scratch` without room for that `Seen` and `LANTERN_SCRATCH_FIXED` bytes before it, a lantern_node_gossip of `LANTERN_BUFFER_TOO_SMALL`, and a `state_a` of another fork than the store's slot give `LANTERN_GOSSIP_IGNORE`.
 - `NODE_WORK_API_EVENT`: the text of the event of the topic `arg` % 2^8 (beacon-api.md, eventstream), `event: <topic>` LF `data: <JSON>` LF LF, as a ByteList at `NodeEvent_chunk` of the event; the event's `size` then covers it.
+  - blob_sidecar and data_column_sidecar: from the sidecar's bytes in `data`: `block_root` lantern_node_sidecar_root of the fork `arg` / 2^16, `index` and the header's `slot` from the bytes; for blob_sidecar `kzg_commitment` and `versioned_hash` (0x01, then the last 31 bytes of crypto_sha256 of the commitment); for data_column_sidecar each commitment of `kzg_commitments`. Bytes of no sidecar of the fork give the result `LANTERN_INVALID_ENCODING`.
   - The operation topics: the JSON of lantern_node_json of the fork `arg` / 2^16, of `data` and the kind of the topic: `NODE_JSON_ATTESTATION`, `NODE_JSON_SINGLE_ATTESTATION`, `NODE_JSON_EXIT`, `NODE_JSON_BLS_CHANGE`, `NODE_JSON_PROPOSER_SLASHING`, `NODE_JSON_ATTESTER_SLASHING` or `NODE_JSON_CONTRIBUTION_AND_PROOF`, with a `JsonCursor` in `scratch`. A status of it but `LANTERN_OK` and `LANTERN_BUFFER_TOO_SMALL` gives the result `LANTERN_INVALID_ENCODING`.
   - head: lantern_node_event_roots of the fork of the slot of `state_a`, with the node's config: `block`, `state` and the two dependent roots; `slot` the state's; `epoch_transition` and `execution_optimistic` from `arg` / 2^8 (1 and 2).
   - finalized_checkpoint: with `data`, the block's root by lantern_node_block_root of the fork of its slot and its message's `state_root`; else the block root and state root of lantern_node_event_roots of `state_a`. `epoch` `arg` / 2^16; `execution_optimistic` from `arg` / 2^8 % 2^8 (2). Bytes that do not hold a block give `LANTERN_INVALID_ENCODING`.
@@ -921,6 +927,41 @@ lantern_node_liveness(state, config, seen, ids, epoch, scratch, out) -> status
 
 - Export: `lantern_<fork>_node_liveness` of each fork object.
 - Argument order: `state`, `config`, `seen`, `ids`, `epoch`, `scratch`, `out`.
+
+## Function `lantern_node_sidecar_root`
+
+The block root of a sidecar: hash_tree_root of its `signed_block_header.message` (beacon-api.md, eventstream: blob_sidecar and data_column_sidecar).
+
+### Signature
+
+```
+lantern_node_sidecar_root(ssz, scratch, out) -> status
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `ssz` | input | ByteList: the SSZ bytes of a `BlobSidecar` (deneb, electra) or a `DataColumnSidecar` (from fulu) |
+| `scratch` | scratch | `Scratch` |
+| `out` | output | 32 bytes: the root |
+
+### Returns
+
+- `LANTERN_OK`: `out` holds the root.
+- `LANTERN_INVALID_ENCODING`: a `BlobSidecar` of another length than its fixed size; a `DataColumnSidecar` shorter than its fixed part.
+- `LANTERN_INVALID_EVENT`: a fork before deneb.
+- The statuses of ssz_hash_tree_root.
+
+### Function does
+
+- The header: at byte 8 + `BYTES_PER_BLOB` + 96 of a `BlobSidecar`; at byte 20 of a `DataColumnSidecar`, after its index and three offsets.
+- ssz_hash_tree_root of `BeaconBlockHeader` of its 112 bytes, whose layout is that of the value.
+
+### ABI
+
+- Export: `lantern_<fork>_node_sidecar_root` of each fork object.
+- Argument order: `ssz`, `scratch`, `out`.
 
 ## Function `lantern_node_randao`
 
@@ -2648,6 +2689,14 @@ The actions of one step: a ByteList whose bytes are `NodeAction` entries one aft
 | RISC-V |  |  |  |  |
 
 ### `lantern_node_liveness`
+
+| ISA | Linux | Windows | macOS | `equal` |
+|---|---|---|---|---|
+| x86-64 |  |  |  |  |
+| ARM64 |  |  |  |  |
+| RISC-V |  |  |  |  |
+
+### `lantern_node_sidecar_root`
 
 | ISA | Linux | Windows | macOS | `equal` |
 |---|---|---|---|---|

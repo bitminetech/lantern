@@ -3818,6 +3818,25 @@ static void ev_open_one(fc_node *n, int e, const uint8_t *req, uint64_t len, con
     free(out);
 }
 
+/* The bytes of the open stream ev[e] must be want; then its client goes and the node settles. */
+static void ev_stream_end(fc_node *n, int e, const uint8_t *want, uint64_t wlen, const char *what, const char **why) {
+    struct node_shell *s = n->shell;
+    if (s->ev[e].len != wlen || memcmp(s->ev[e].b, want, (size_t)wlen) || s->ev[e].lasts || s->ev[e].closes || s->ev[e].late) {
+        static char msg[1024];
+        uint64_t at = 0;
+        while (at < s->ev[e].len && at < wlen && s->ev[e].b[at] == want[at]) at++;
+        snprintf(msg, sizeof msg, "%s: the event stream differs at byte %llu of %llu (case %llu), lasts %llu, closes %llu: got %.*s",
+                 what, (unsigned long long)at, (unsigned long long)s->ev[e].len, (unsigned long long)wlen,
+                 (unsigned long long)s->ev[e].lasts, (unsigned long long)s->ev[e].closes,
+                 (int)(s->ev[e].len - at < 400 ? s->ev[e].len - at : 400), s->ev[e].b ? (const char *)s->ev[e].b + at : "");
+        *why = msg;
+        return;
+    }
+    shell_event(s, EV_API_CLOSED, s->ev[e].conn, NULL, 0);
+    s->ev[e].gone = 1;
+    shell_settle(n, why);
+}
+
 /* The topic of the event text at t: its name after "event: ". */
 static int ev_topic_is(const uint8_t *t, uint64_t len, const char *topic) {
     size_t k = strlen(topic);
@@ -5922,6 +5941,72 @@ static unsigned long gossip_votes, gossip_votes_applied; /* valid attestation st
  * beacon_block after the case's ticks, and the node must import it; the other steps are events
  * as in fc_node_case, and the checks must hold.
  */
+/* "0x" and the lower case hex of n bytes at b, at o; o has 2n + 3 bytes. */
+static void hex_text(char *o, const uint8_t *b, size_t n) {
+    static const char d[] = "0123456789abcdef";
+    o[0] = '0';
+    o[1] = 'x';
+    for (size_t i = 0; i < n; i++) {
+        o[2 + 2 * i] = d[b[i] >> 4];
+        o[3 + 2 * i] = d[b[i] & 15];
+    }
+    o[2 + 2 * n] = 0;
+}
+
+/* The text t as one chunk of an event stream over HTTP/1.1 at the end of the growing buffer *b. */
+static void ev_want_chunk(uint8_t **b, uint64_t *len, uint64_t *cap, const char *t) {
+    size_t tl = strlen(t);
+    if (*len + tl + 16 > *cap) {
+        *cap = 2 * (*len + tl + 16) + 4096;
+        *b = realloc(*b, (size_t)*cap);
+        if (!*b) {
+            fprintf(stderr, "out of memory\n");
+            exit(2);
+        }
+    }
+    *len += (uint64_t)snprintf((char *)*b + *len, 16, "%04llx\r\n", (unsigned long long)tl);
+    memcpy(*b + *len, t, tl);
+    memcpy(*b + *len + tl, "\r\n", 2);
+    *len += tl + 2;
+}
+
+#if FORK >= FORK_DENEB
+/* The text of the event of a blob or column sidecar sc (beacon-api.md) of the block root, into a new buffer. */
+static char *ev_sidecar_text(const uint8_t *sc, uint64_t n, const uint8_t root[32], int column) {
+    char rh[67], h[99];
+    uint64_t cap = 512 + 100 * (n / 48 + 1);
+    char *t = xmalloc((size_t)cap);
+    hex_text(rh, root, 32);
+    if (!column) { /* a BlobSidecar: index, blob, commitment, proof, the header */
+        const uint64_t blob = 4096 * 32; /* FIELD_ELEMENTS_PER_BLOB * BYTES_PER_FIELD_ELEMENT */
+        uint8_t bl[24 + 48], vh[32];
+        wr64(bl, sizeof bl);
+        wr64(bl + 8, 24);
+        wr64(bl + 16, 48);
+        memcpy(bl + 24, sc + 8 + blob, 48);
+        CALL(crypto_sha256, bl, vh);
+        vh[0] = 1; /* VERSIONED_HASH_VERSION_KZG */
+        char ch[99], vhh[67];
+        hex_text(ch, sc + 8 + blob, 48);
+        hex_text(vhh, vh, 32);
+        snprintf(t, (size_t)cap, "event: blob_sidecar\ndata: {\"block_root\":\"%s\",\"index\":\"%llu\",\"slot\":\"%llu\","
+                 "\"kzg_commitment\":\"%s\",\"versioned_hash\":\"%s\"}\n\n", rh, (unsigned long long)rd64(sc),
+                 (unsigned long long)rd64(sc + 8 + blob + 96), ch, vhh);
+        return t;
+    }
+    uint64_t a = sc[12] | (uint64_t)sc[13] << 8 | (uint64_t)sc[14] << 16 | (uint64_t)sc[15] << 24;
+    uint64_t z = sc[16] | (uint64_t)sc[17] << 8 | (uint64_t)sc[18] << 16 | (uint64_t)sc[19] << 24;
+    int at = snprintf(t, (size_t)cap, "event: data_column_sidecar\ndata: {\"block_root\":\"%s\",\"index\":\"%llu\",\"slot\":\"%llu\","
+                      "\"kzg_commitments\":[", rh, (unsigned long long)rd64(sc), (unsigned long long)rd64(sc + 20));
+    for (uint64_t c = a; c + 48 <= z && z <= n; c += 48) {
+        hex_text(h, sc + c, 48);
+        at += snprintf(t + at, (size_t)cap - (size_t)at, "%s\"%s\"", c == a ? "" : ",", h);
+    }
+    snprintf(t + at, (size_t)cap - (size_t)at, "]}\n\n");
+    return t;
+}
+#endif
+
 static void fc_gossip_case(tv parts, int *ran, const char **why) {
     fc_node n;
     uint8_t *anchor_block;
@@ -5948,6 +6033,14 @@ static void fc_gossip_case(tv parts, int *ran, const char **why) {
     for (int c = 0; c < 128; c++) topics += subnets[c / 8] >> (c % 8) & 1;
 #endif
     if (!*why) p2p_run(&n, &net, p2p_subscribed, topics, why);
+    /* the events of the blocks and sidecars over gossip (node.md): a stream open over the case */
+    static const char ereq[] = "GET /eth/v1/events?topics=block_gossip,blob_sidecar,data_column_sidecar HTTP/1.1\r\nHost: lantern\r\n\r\n";
+    static const char ehead[] = "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nCache-Control: no-cache\r\nTransfer-Encoding: chunked\r\n\r\n";
+    uint64_t ewlen = sizeof ehead - 1, ewcap = 65536;
+    uint8_t *ewant = xmalloc((size_t)ewcap);
+    memcpy(ewant, ehead, (size_t)ewlen);
+    if (!*why) ev_open_one(&n, 0, (const uint8_t *)ereq, sizeof ereq - 1, why);
+    if (!*why) p2p_settle(&n, &net, why);
     tv steps = tv_get(parts, "steps");
     tv st = steps ? steps + 9 : NULL;
     uint64_t now_ms = 0, slashings = 0, slashings_applied = 0;
@@ -5997,6 +6090,13 @@ static void fc_gossip_case(tv parts, int *ran, const char **why) {
             wr64(topic + 8, GOSSIP_BEACON_BLOCK_TOPIC);
             if (!*why && CALL(lantern_gossip_topic, topic, list) != 0) *why = "gossip_topic status";
             if (!*why) p2p_publish(&net, list + 24, rd64(list + 16), bytes, blen, why);
+            { /* its block_gossip event */
+                char rh[67], t[160];
+                hex_text(rh, root, 32);
+                snprintf(t, sizeof t, "event: block_gossip\ndata: {\"slot\":\"%llu\",\"block\":\"%s\"}\n\n",
+                         (unsigned long long)rd64(block + field_offset("BeaconBlock", 0)), rh);
+                ev_want_chunk(&ewant, &ewlen, &ewcap, t);
+            }
 #if FORK == FORK_DENEB || FORK == FORK_ELECTRA
             tv sc = case_blobs ? tv_get(case_blobs, key) : NULL; /* then its sidecars, each on the topic of its subnet */
             tv se = sc ? sc + 9 : NULL;
@@ -6009,6 +6109,9 @@ static void fc_gossip_case(tv parts, int *ran, const char **why) {
                 wr64(list, sizeof list);
                 if (!*why && CALL(lantern_gossip_topic, topic, list) != 0) *why = "gossip_topic status";
                 if (!*why) p2p_publish(&net, list + 24, rd64(list + 16), sb, slen, why);
+                char *t = ev_sidecar_text(sb, slen, root, 0);
+                ev_want_chunk(&ewant, &ewlen, &ewcap, t);
+                free(t);
             }
 #endif
 #if FORK >= FORK_FULU
@@ -6020,12 +6123,24 @@ static void fc_gossip_case(tv parts, int *ran, const char **why) {
                 wr64(list, sizeof list);
                 if (CALL(lantern_gossip_topic, topic, list) != 0) *why = "gossip_topic status";
                 if (!*why) p2p_publish(&net, list + 24, rd64(list + 16), cb, len, why);
+                char *t = ev_sidecar_text(cb, len, root, 1);
+                ev_want_chunk(&ewant, &ewlen, &ewcap, t);
+                free(t);
             }
 #endif
             gossip_root = root;
             if (!*why) p2p_run(&n, &net, p2p_imported, 0, why);
             if (*why && !strcmp(*why, "the network does not get there")) *why = "a valid block is not imported over gossip";
             if (!*why) p2p_settle(&n, &net, why); /* the block's votes: the node's own works */
+            if (!*why && (s->ev[0].len != ewlen || memcmp(s->ev[0].b, ewant, (size_t)ewlen) || s->ev[0].closes || s->ev[0].late)) {
+                static char emsg[640];
+                uint64_t at = 0;
+                while (at < s->ev[0].len && at < ewlen && s->ev[0].b[at] == ewant[at]) at++;
+                snprintf(emsg, sizeof emsg, "the events of a block over gossip differ at byte %llu of %llu (want %llu): got %.*s",
+                         (unsigned long long)at, (unsigned long long)s->ev[0].len, (unsigned long long)ewlen,
+                         (int)(s->ev[0].len - at < 300 ? s->ev[0].len - at : 300), s->ev[0].b ? (const char *)s->ev[0].b + at : "");
+                *why = emsg;
+            }
             free(sb);
         } else if (tv_get(st, "attestation") || tv_get(st, "attester_slashing") || tv_get(st, "pow_block")) {
             int att = tv_get(st, "attestation") != NULL, pow = tv_get(st, "pow_block") != NULL;
@@ -6072,6 +6187,8 @@ static void fc_gossip_case(tv parts, int *ran, const char **why) {
         }
     }
     if (!*why && slashings && !slashings_applied) *why = "no valid attester slashing is applied over gossip";
+    if (!*why) ev_stream_end(&n, 0, ewant, ewlen, "gossip", why);
+    free(ewant);
     p2p_close(&net);
     shell_close(&n, anchor_block);
 }
@@ -7660,6 +7777,13 @@ static void run_node_produce(const char *file, const char *dir, case_file *f) {
             shell_event(s, EV_TICK, tv_u64(tv_get(parts, "time_ms")), NULL, 0);
             shell_settle(&n, &why);
         }
+        uint64_t elen = 0;
+        tv evp = tv_get(parts, "events");
+        const uint8_t *events = evp ? tv_bytes(evp, &elen) : NULL;
+        if (!why && elen) { /* node-publish: the events of the publishes, a stream open over the case */
+            static const char ereq[] = "GET /eth/v1/events?topics=block_gossip,blob_sidecar,data_column_sidecar HTTP/1.1\r\nHost: lantern\r\n\r\n";
+            ev_open_one(&n, 0, (const uint8_t *)ereq, sizeof ereq - 1, &why);
+        }
         tv rq = reqs + 9, rs = resps + 9, tk = tv_get(parts, "ticks") + 9;
         uint64_t nreq = rd64(reqs + 1), closes = tv_u64(tv_get(parts, "closes"));
         if (rd64(tv_get(parts, "ticks") + 1) != nreq) why = "the case's ticks are not one for each request";
@@ -7709,6 +7833,8 @@ static void run_node_produce(const char *file, const char *dir, case_file *f) {
             free(got);
             if (!why) why = api_clean(s);
         }
+        if (!why && elen) ev_stream_end(&n, 0, events, elen, "the publish events", &why);
+        if (!why && elen) why = api_clean(s);
         tv sc = tv_get(parts, "sidecars");
         if (!why && sc) why = publish_sidecars_held(s, parts, sc);
         n.produce = 0;

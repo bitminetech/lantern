@@ -580,6 +580,30 @@ api_ev_t_attester:
 api_ev_t_contribution:
     .ascii "contribution_and_proof"
 .set api_ev_t_contribution_len, 22
+api_ev_t_block_gossip:                  /* block_gossip and the sidecar topics */
+    .ascii "block_gossip"
+.set api_ev_t_block_gossip_len, 12
+api_ev_t_blob:
+    .ascii "blob_sidecar"
+.set api_ev_t_blob_len, 12
+api_ev_t_column:
+    .ascii "data_column_sidecar"
+.set api_ev_t_column_len, 19
+api_sc_root:
+    .ascii "{\"block_root\":"
+.set api_sc_root_len, 14
+api_sc_index:
+    .ascii ",\"index\":"
+.set api_sc_index_len, 9
+api_sc_commitment:
+    .ascii ",\"kzg_commitment\":"
+.set api_sc_commitment_len, 18
+api_sc_hash:
+    .ascii ",\"versioned_hash\":"
+.set api_sc_hash_len, 18
+api_sc_commitments:
+    .ascii ",\"kzg_commitments\":["
+.set api_sc_commitments_len, 20
 api_v_statuses:                         /* the names of the statuses, API_STATUS_* order: 24 bytes each, the length first */
     .byte 19
     .ascii "pending_initialized"

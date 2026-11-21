@@ -5015,6 +5015,11 @@ LOCAL_FUNCTION node_publish_done
     mov     %rax, NodeBlock_blobs(%rdx)
     mov     (NodeEvent_chunk + 16)(%r12), %rax
     mov     %rax, NodeBlock_length(%rdx)
+    mov     $API_TOPIC_BLOCK_GOSSIP, %edi   # its block_gossip event: its checks passed
+    lea     NodeApi_root(%r13), %rsi
+    mov     NodeApi_slot(%r13), %rdx
+    xor     %ecx, %ecx
+    call    node_api_root_event
     testq   $NODE_FLAG_SUBSCRIBED, Node_flags(%rbx)  # subscribed: the block out on beacon_block
     jz      21f
     mov     $GOSSIP_BEACON_BLOCK, %edi
@@ -5131,6 +5136,7 @@ LOCAL_FUNCTION node_publish_sidecar_done
     ENTER 0
     mov     %rdi, %r12
     mov     %rsi, %r13
+    movq    $0, S7(%rsp)
     cmpq    $FORK_FULU, NodeApi_fork(%r12)
     jb      1f
     mov     NodeEvent_index(%r13), %rdi     # a column the node samples
@@ -5161,7 +5167,39 @@ LOCAL_FUNCTION node_publish_sidecar_done
     mov     %rax, NodeBlob_length(%rdx)
     lea     NodeEvent_root(%r13), %rdi
     call    node_blob_added
-3:  testq   $NODE_FLAG_SUBSCRIBED, Node_flags(%rbx)  # subscribed: out on its subnet's topic
+3:  mov     $API_TOPIC_BLOB_SIDECAR, %eax   # its event: of its NodeBlob's bytes, else of a copy for the work
+    mov     $API_TOPIC_DATA_COLUMN_SIDECAR, %ecx
+    cmpq    $FORK_FULU, NodeApi_fork(%r12)
+    cmovae  %rcx, %rax
+    mov     %rax, S8(%rsp)
+    mov     %rax, %rdi
+    call    node_api_subscribed
+    test    %rax, %rax
+    jz      39f
+    mov     S7(%rsp), %rax
+    mov     %rax, S9(%rsp)
+    test    %rax, %rax
+    jnz     38f
+    lea     NodeEvent_chunk(%r13), %rdi
+    call    node_put
+    mov     %rax, S9(%rsp)
+38: mov     $NODE_WORK_API_EVENT, %edi
+    xor     %esi, %esi
+    xor     %edx, %edx
+    mov     S9(%rsp), %rcx
+    xor     %r8d, %r8d
+    mov     NodeApi_fork(%r12), %r9
+    shl     $16, %r9
+    or      S8(%rsp), %r9
+    call    node_work
+    mov     S9(%rsp), %rax
+    cmp     S7(%rsp), %rax
+    je      39f
+    mov     $NODE_ACT_BYTES_FREE, %edi
+    mov     S9(%rsp), %rsi
+    xor     %edx, %edx
+    call    node_ids
+39: testq   $NODE_FLAG_SUBSCRIBED, Node_flags(%rbx)  # subscribed: out on its subnet's topic
     jz      4f
     mov     NodeEvent_index(%r13), %rax
     mov     NodeApi_fork(%r12), %rcx
@@ -5754,7 +5792,7 @@ LOCAL_FUNCTION node_api_event_run
     je      11f
     mov     $NODE_JSON_CONTRIBUTION_AND_PROOF, %edx
     cmp     $API_TOPIC_CONTRIBUTION_AND_PROOF, %rax
-    jne     8f
+    jne     12f
 11: mov     S7(%rsp), %rcx
     test    %rcx, %rcx
     jz      41f
@@ -5773,6 +5811,29 @@ LOCAL_FUNCTION node_api_event_run
     lea     NodeEvent_chunk(%r15), %rdi
     mov     S9(%rsp), %rsi
     call    api_op_event_text
+    cmp     $LANTERN_BUFFER_TOO_SMALL, %rax
+    je      71f
+    test    %rax, %rax
+    jz      55b
+    jmp     41f
+12: cmp     $API_TOPIC_BLOB_SIDECAR, %rax   # a sidecar topic: its fields from its bytes
+    je      13f
+    cmp     $API_TOPIC_DATA_COLUMN_SIDECAR, %rax
+    jne     8f
+13: cmpq    $0, S7(%rsp)
+    je      41f
+    movzbl  (NodeAction_arg + 2)(%r12), %r10d
+    mov     S10(%rsp), %rax                 # the text, in the event
+    sub     $NodeEvent_chunk, %rax
+    and     $-8, %rax
+    cmp     $64, %rax
+    jb      71f
+    mov     %rax, NodeEvent_chunk(%r15)
+    lea     NodeEvent_chunk(%r15), %rdi
+    mov     S9(%rsp), %rsi
+    mov     S7(%rsp), %rdx
+    mov     %r14, %rcx
+    call    api_sidecar_event_text
     cmp     $LANTERN_BUFFER_TOO_SMALL, %rax
     je      71f
     test    %rax, %rax
@@ -5847,14 +5908,18 @@ LOCAL_FUNCTION api_event_text
     API_LIT api_ev_t_head
     jmp     3f
 1:  cmpq    $API_TOPIC_BLOCK, S7(%rsp)
-    jne     2f
+    jne     11f
     API_LIT api_ev_t_block
+    jmp     3f
+11: cmpq    $API_TOPIC_BLOCK_GOSSIP, S7(%rsp)
+    jne     2f
+    API_LIT api_ev_t_block_gossip
     jmp     3f
 2:  API_LIT api_ev_t_finalized
 3:  API_LIT api_ev_data
     cmpq    $API_TOPIC_FINALIZED_CHECKPOINT, S7(%rsp)
     je      5f
-    # block and head: {"slot":…,"block":…
+    # block, block_gossip and head: {"slot":…,"block":…
     API_LIT api_ev_slot
     mov     ApiView_event_slot(%rbp), %rdi
     call    api_qdec
@@ -5862,6 +5927,8 @@ LOCAL_FUNCTION api_event_text
     lea     ApiView_event_block(%rbp), %rdi
     mov     $32, %esi
     call    api_qhex
+    cmpq    $API_TOPIC_BLOCK_GOSSIP, S7(%rsp)
+    je      61f
     cmpq    $API_TOPIC_HEAD, S7(%rsp)
     jne     6f
     # head: state, epoch_transition and the dependent roots
@@ -5899,7 +5966,7 @@ LOCAL_FUNCTION api_event_text
     shr     $1, %rdi
     and     $1, %edi
     call    api_bool
-    API_LIT api_ev_end
+61: API_LIT api_ev_end
     test    %r15, %r15
     jnz     9f
     lea     24(%rbx), %rax
@@ -6001,6 +6068,131 @@ LOCAL_FUNCTION api_op_event_text
 END_FUNCTION api_op_event_text
 
 /*
+ * (out rdi, topic rsi, ssz rdx, scratch rcx; the fork in r10) -> rax: the text of the event of a
+ * sidecar topic (beacon-api.md, eventstream): event: <topic> LF data: {"block_root":…,"index":…,
+ * "slot":…,…} LF LF, from the sidecar's bytes, into the ByteList out, its count set; LANTERN_OK,
+ * LANTERN_BUFFER_TOO_SMALL, or LANTERN_INVALID_ENCODING. The writer's registers; rbx out, rbp the
+ * bytes, S7 the topic, S8 their count, S9 a commitment's index. Locals: L the block root, L+32 a
+ * versioned hash, L+64 a ByteList of a commitment (24 + 48).
+ */
+LOCAL_FUNCTION api_sidecar_event_text
+    ENTER 144
+    mov     %rdi, %rbx
+    mov     %rsi, S7(%rsp)
+    mov     8(%rdx), %rbp
+    add     %rdx, %rbp
+    mov     16(%rdx), %rax
+    mov     %rax, S8(%rsp)
+    mov     %rdx, %rdi                      # block_root: lantern_node_sidecar_root
+    mov     %rcx, %rsi
+    lea     L(%rsp), %rdx
+    FORK_CALL node_sidecar_root
+    cmp     $LANTERN_BUFFER_TOO_SMALL, %rax
+    je      9f
+    test    %rax, %rax
+    jnz     8f
+    mov     $1, %r13d
+    xor     %r15d, %r15d
+    lea     24(%rbx), %r12
+    mov     (%rbx), %r14
+    add     %rbx, %r14
+    API_LIT api_ev_event
+    cmpq    $API_TOPIC_BLOB_SIDECAR, S7(%rsp)
+    jne     1f
+    API_LIT api_ev_t_blob
+    jmp     2f
+1:  API_LIT api_ev_t_column
+2:  API_LIT api_ev_data
+    API_LIT api_sc_root
+    lea     L(%rsp), %rdi
+    mov     $32, %esi
+    call    api_qhex
+    API_LIT api_sc_index
+    mov     (%rbp), %rdi
+    call    api_qdec
+    API_LIT api_c_slot
+    cmpq    $API_TOPIC_BLOB_SIDECAR, S7(%rsp)
+    jne     4f
+    mov     (8 + PUB_BLOB_BYTES + 96)(%rbp), %rdi   # a BlobSidecar: the header's slot, the commitment, its versioned hash
+    call    api_qdec
+    API_LIT api_sc_commitment
+    lea     (8 + PUB_BLOB_BYTES)(%rbp), %rdi
+    mov     $48, %esi
+    call    api_qhex
+    API_LIT api_sc_hash
+    lea     (L + 88)(%rsp), %rdi
+    lea     (8 + PUB_BLOB_BYTES)(%rbp), %rsi
+    mov     $48, %edx
+    call    lantern_copy
+    movq    $72, (L + 64)(%rsp)
+    movq    $24, (L + 72)(%rsp)
+    movq    $48, (L + 80)(%rsp)
+    lea     (L + 64)(%rsp), %rdi
+    lea     (L + 32)(%rsp), %rsi
+    CALL_GLOBAL crypto_sha256
+    test    %rax, %rax
+    jnz     8f
+    movb    $VERSIONED_HASH_VERSION_KZG, (L + 32)(%rsp)
+    lea     (L + 32)(%rsp), %rdi
+    mov     $32, %esi
+    call    api_qhex
+    API_LIT api_end1
+    jmp     7f
+4:  mov     20(%rbp), %rdi                  # a DataColumnSidecar: the header's slot, then the commitments
+    call    api_qdec
+    API_LIT api_sc_commitments
+    mov     12(%rbp), %eax
+    mov     16(%rbp), %ecx
+    cmp     %rcx, %rax
+    ja      8f
+    cmp     S8(%rsp), %rcx
+    ja      8f
+    sub     %rax, %rcx
+    mov     %rcx, %rax
+    xor     %edx, %edx
+    mov     $48, %ecx
+    div     %rcx
+    test    %rdx, %rdx
+    jnz     8f
+    movq    $0, S9(%rsp)
+5:  mov     12(%rbp), %eax
+    mov     16(%rbp), %ecx
+    sub     %rax, %rcx
+    mov     %rcx, %rax
+    xor     %edx, %edx
+    mov     $48, %ecx
+    div     %rcx                            # the count: the bytes over 48
+    cmp     %rax, S9(%rsp)
+    jae     6f
+    cmpq    $0, S9(%rsp)
+    je      51f
+    API_LIT api_p_comma
+51: mov     12(%rbp), %eax
+    imul    $48, S9(%rsp), %rdi
+    add     %rax, %rdi
+    add     %rbp, %rdi
+    mov     $48, %esi
+    call    api_qhex
+    incq    S9(%rsp)
+    jmp     5b
+6:  API_LIT api_v_end
+7:  API_LIT api_ev_lf2
+    test    %r15, %r15
+    jnz     9f
+    lea     24(%rbx), %rax
+    mov     %r12, %rcx
+    sub     %rax, %rcx
+    movq    $24, 8(%rbx)
+    mov     %rcx, 16(%rbx)
+    xor     %eax, %eax
+    LEAVE 144
+8:  mov     $LANTERN_INVALID_ENCODING, %eax
+    LEAVE 144
+9:  mov     $LANTERN_BUFFER_TOO_SMALL, %eax
+    LEAVE 144
+END_FUNCTION api_sidecar_event_text
+
+/*
  * The event of a valid operation of the gossip topic rdi, its bytes rsi, of the fork rdx (node.md,
  * The events): a NODE_WORK_API_EVENT of its event topic when an entry has the topic. Locals: the
  * bytes, the work's arg.
@@ -6022,6 +6214,12 @@ LOCAL_FUNCTION node_op_event
     je      1f
     mov     $API_TOPIC_CONTRIBUTION_AND_PROOF, %eax
     cmp     $GOSSIP_SYNC_COMMITTEE_CONTRIBUTION_AND_PROOF, %rdi
+    je      1f
+    mov     $API_TOPIC_BLOB_SIDECAR, %eax
+    cmp     $GOSSIP_BLOB_SIDECAR, %rdi
+    je      1f
+    mov     $API_TOPIC_DATA_COLUMN_SIDECAR, %eax
+    cmp     $GOSSIP_DATA_COLUMN_SIDECAR, %rdi
     je      1f
     cmp     $GOSSIP_BEACON_ATTESTATION, %rdi
     jne     9f
@@ -6229,15 +6427,32 @@ LOCAL_FUNCTION node_api_events
 9:  LEAVE 32
 END_FUNCTION node_api_events
 
-/*
- * The block event of the NodeBlock entry rdi (node.md, The events), with an entry of the topic: its
- * text in a ByteList at the end of scratch, after the ApiView of its values. r12 the block, r13 the
- * view. Locals: L the scratch's size, L+8 the ByteList.
- */
+/* The block event of the NodeBlock entry rdi (node.md, The events): its slot and root, execution_optimistic from its payload status. */
 LOCAL_FUNCTION node_api_block_event
-    ENTER 16
-    mov     %rdi, %r12
+    FRAME 0
+    xor     %ecx, %ecx
+    cmpq    $PAYLOAD_STATUS_NOT_VALIDATED, NodeBlock_payload_status(%rdi)
+    sete    %cl
+    shl     $1, %ecx
+    mov     NodeBlock_slot(%rdi), %rdx
+    lea     NodeBlock_root(%rdi), %rsi
     mov     $API_TOPIC_BLOCK, %edi
+    call    node_api_root_event
+    UNFRAME 0
+END_FUNCTION node_api_block_event
+
+/*
+ * The event of the topic rdi (block or block_gossip) of the block root rsi and slot rdx, with the
+ * values rcx (node.md, The events), with an entry of the topic: its text in a ByteList at the end
+ * of scratch, after the ApiView of its values. r12 the root, r13 the view. Locals: L the scratch's
+ * size, L+8 the ByteList, L+16 the topic, L+24 the slot, L+32 the values.
+ */
+LOCAL_FUNCTION node_api_root_event
+    ENTER 48
+    mov     %rsi, %r12
+    mov     %rdi, (L + 16)(%rsp)
+    mov     %rdx, (L + 24)(%rsp)
+    mov     %rcx, (L + 32)(%rsp)
     call    node_api_subscribed
     test    %rax, %rax
     jz      9f
@@ -6252,28 +6467,25 @@ LOCAL_FUNCTION node_api_block_event
     movq    $1024, (%rax)
     movq    $24, 8(%rax)
     movq    $0, 16(%rax)
-    mov     NodeBlock_slot(%r12), %rax
+    mov     (L + 24)(%rsp), %rax
     mov     %rax, ApiView_event_slot(%r13)
     lea     ApiView_event_block(%r13), %rax
     COPY32  %rax, %r12
-    xor     %eax, %eax
-    cmpq    $PAYLOAD_STATUS_NOT_VALIDATED, NodeBlock_payload_status(%r12)
-    sete    %al
-    shl     $1, %eax
+    mov     (L + 32)(%rsp), %rax
     mov     %rax, ApiView_event_flags(%r13)
     mov     %r13, %rdi
     mov     (L + 8)(%rsp), %rsi
-    mov     $API_TOPIC_BLOCK, %edx
+    mov     (L + 16)(%rsp), %rdx
     call    api_event_text
     test    %rax, %rax
     jnz     8f
     mov     (L + 8)(%rsp), %rdi
-    mov     $API_TOPIC_BLOCK, %esi
+    mov     (L + 16)(%rsp), %rsi
     call    node_api_events
 8:  mov     L(%rsp), %rax
     mov     %rax, (%r14)
-9:  LEAVE 16
-END_FUNCTION node_api_block_event
+9:  LEAVE 48
+END_FUNCTION node_api_root_event
 
 /*
  * The head and finalized_checkpoint events at a quiet point (node.md, The events): with no block

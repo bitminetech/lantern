@@ -771,16 +771,35 @@ def publish_cases(spec, fork, state, anchor_block, block, time_ms):
         return response(200, b'{"execution_optimistic":false,"finalized":' + flag(finalized) + b',"data":{"root":' + qhex(root) + b"}}")
     anchor_root, root = spec.hash_tree_root(anchor_block), spec.hash_tree_root(block)
     good_json, good_ssz = bodies(good)
-    plans = [
+
+    def chunk(text):
+        return b"%04x\r\n" % len(text) + text + b"\r\n"
+
+    def gossip_event(r):  # block_gossip (beacon-api.md): the block's slot and root
+        return chunk(b'event: block_gossip\ndata: {"slot":' + q(block.slot) + b',"block":' + qhex(r) + b"}\n\n")
+
+    def sidecar_event(sc, r):  # blob_sidecar and data_column_sidecar (beacon-api.md)
+        import hashlib
+        head = b'{"block_root":' + qhex(r) + b',"index":' + q(sc.index) + b',"slot":' + q(sc.signed_block_header.message.slot)
+        if hasattr(sc, "kzg_commitment"):
+            vh = b"\x01" + hashlib.sha256(bytes(sc.kzg_commitment)).digest()[1:]
+            return chunk(b"event: blob_sidecar\ndata: " + head + b',"kzg_commitment":' + qhex(sc.kzg_commitment) +
+                         b',"versioned_hash":' + qhex(vh) + b"}\n\n")
+        items = b",".join(qhex(c) for c in sc.kzg_commitments)
+        return chunk(b"event: data_column_sidecar\ndata: " + head + b',"kzg_commitments":[' + items + b"]}\n\n")
+    events_head = stream_head(b"HTTP/1.1", b"")
+    bad_root_root = spec.hash_tree_root(wrong)
+    plans = [  # the events of each: of each check that passes (block_gossip), none for the closed case
         ("published", [post(good_json, level=b"consensus_and_equivocation"), head, post(good_ssz, ssz=True)],
-         [response(200), at(root, False), response(200)], 0),
+         [response(200), at(root, False), response(200)], 0, events_head + gossip_event(root)),
         ("refused", [post(bodies(bad_sig)[0], level=b"consensus"), post(good_json, version=FORKS[f - 1], level=b"consensus"),
                      post(bodies(bad_root)[0], level=b"consensus"), head],
-         [error(400), error(400), error(400), at(anchor_root, True)], 0),
-        ("gossip", [post(bodies(bad_root)[0]), head], [response(202), at(anchor_root, True)], 0),
-        ("closed", [post(good_json), head], [response(200), at(root, False)], PUBLISH_CLOSES),
+         [error(400), error(400), error(400), at(anchor_root, True)], 0, events_head),
+        ("gossip", [post(bodies(bad_root)[0]), head], [response(202), at(anchor_root, True)], 0,
+         events_head + gossip_event(bad_root_root)),
+        ("closed", [post(good_json), head], [response(200), at(root, False)], PUBLISH_CLOSES, b""),
     ]
-    for name, reqs, resps, closes in plans:
+    for name, reqs, resps, closes, events in plans:
         yield "publish", name, {
             "anchor_state": bytes(state.encode_bytes()),
             "anchor_block": bytes(anchor_block.encode_bytes()),
@@ -793,6 +812,7 @@ def publish_cases(spec, fork, state, anchor_block, block, time_ms):
             "closes": closes,
             "root": bytes(root),
             "sidecars": [],
+            "events": events,
         }
     if f < FORKS.index("deneb"):
         return
@@ -869,14 +889,18 @@ def publish_cases(spec, fork, state, anchor_block, block, time_ms):
     good_c = contents(signed_block=signed, kzg_proofs=fields["kzg_proofs"](data=proofs), blobs=fields["blobs"](data=blobs))
     bad_c = contents(signed_block=signed, kzg_proofs=fields["kzg_proofs"](data=bad_proofs), blobs=fields["blobs"](data=blobs))
     kept = [bytes(sc.encode_bytes()) for sc in sidecars]
+    blob_events = events_head + gossip_event(blob_root) + b"".join(sidecar_event(sc, blob_root) for sc in sidecars)
     blob_plans = [
-        ("blobs", [post(to_json(good_c).encode(), level=b"consensus"), head], [response(200), at(blob_root, False)], 0, kept),
-        ("blobs_ssz", [post(bytes(good_c.encode_bytes()), ssz=True), head], [response(200), at(blob_root, False)], 0, kept),
-        ("bad_proof", [post(to_json(bad_c).encode(), level=b"consensus"), head], [error(400), at(anchor_root, True)], 0, []),
+        ("blobs", [post(to_json(good_c).encode(), level=b"consensus"), head], [response(200), at(blob_root, False)], 0, kept,
+         blob_events),
+        ("blobs_ssz", [post(bytes(good_c.encode_bytes()), ssz=True), head], [response(200), at(blob_root, False)], 0, kept,
+         blob_events),
+        ("bad_proof", [post(to_json(bad_c).encode(), level=b"consensus"), head], [error(400), at(anchor_root, True)], 0, [],
+         events_head),
         ("blobs_closed", [post(to_json(good_c).encode()), head], [response(200), at(blob_root, False)],
-         PUBLISH_CLOSES + len(sidecars) + 8, kept),
+         PUBLISH_CLOSES + len(sidecars) + 8, kept, b""),
     ]
-    for name, reqs, resps, closes, held in blob_plans:
+    for name, reqs, resps, closes, held, events in blob_plans:
         yield "publish", name, {
             "anchor_state": bytes(state.encode_bytes()),
             "anchor_block": bytes(anchor_block.encode_bytes()),
@@ -889,6 +913,7 @@ def publish_cases(spec, fork, state, anchor_block, block, time_ms):
             "closes": closes,
             "root": bytes(blob_root),
             "sidecars": held,
+            "events": events,
         }
 
 
