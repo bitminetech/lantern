@@ -75,6 +75,7 @@ Standard: [asm-standard@2a19d3f](https://github.com/bitminetech/asm-standard/blo
 |---|---|
 | Vector generator | [tests/generator/](tests/generator/) |
 | Test runner | [tests/runner/](tests/runner/README.md) |
+| Fuzzing of the HTTP parser and the JSON decoders | [tests/runner/](tests/runner/README.md) (`LANTERN_FUZZ`) |
 | Signatures-off runner, for cases with `bls_setting` 2 | [tests/runner/bls_off.c](tests/runner/bls_off.c) |
 | Shell test of each target | [tests/shell/shell.c](tests/shell/shell.c) |
 | Start checks of the binary on each target | [tests/app/start.sh](tests/app/start.sh), [tests/app/start.ps1](tests/app/start.ps1) |

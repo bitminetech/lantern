@@ -11576,6 +11576,306 @@ static void run_engine(const char *file, const char *handler, case_file *f) {
     }
 }
 
+/* ---------------------------------------------------------------- Fuzzing */
+
+#ifdef _WIN32
+#include <windows.h>
+#else
+#include <signal.h>
+#include <sys/mman.h>
+#include <unistd.h>
+#endif
+
+/*
+ * LANTERN_FUZZ=N: after the cases of an http-request, json-decode or json-engine_decode file, N
+ * inputs made from each case's input by 1 to 8 edits (xorshift64 from LANTERN_FUZZ_SEED, default
+ * 1): a bit flipped, a byte set to a JSON or HTTP token byte or to any byte, bytes cut, bytes
+ * repeated, a token byte put in, the input cut short. Each input ends at the end of a page with
+ * no access after it, so a read past its length traps. The status must be one the function
+ * documents, every guard byte must hold, and the parts of a valid answer must lie inside it. A
+ * trap prints the input in hex and exits 3. First each case's own input in that layout: the
+ * case's status.
+ */
+static uint64_t fuzz_rounds(void) {
+    const char *n = getenv("LANTERN_FUZZ");
+    return n ? strtoull(n, NULL, 10) : 0;
+}
+
+static uint64_t fuzz_state = 1;
+static uint64_t fuzz_next(void) {
+    fuzz_state ^= fuzz_state << 13;
+    fuzz_state ^= fuzz_state >> 7;
+    fuzz_state ^= fuzz_state << 17;
+    return fuzz_state;
+}
+
+/* The input that runs now, for the trap report. */
+static const uint8_t *fuzz_input;
+static uint64_t fuzz_input_len;
+
+#ifndef _WIN32
+static void fuzz_trap(int sig) {
+    static const char hex[] = "0123456789abcdef";
+    char line[80];
+    int n = snprintf(line, sizeof line, "CRASH signal %d on a fuzz input of %llu bytes:\n", sig, (unsigned long long)fuzz_input_len);
+    if (write(2, line, (size_t)n) < 0) _exit(3);
+    for (uint64_t k = 0; fuzz_input && k < fuzz_input_len; k++) {
+        char two[2] = {hex[fuzz_input[k] >> 4], hex[fuzz_input[k] & 15]};
+        if (write(2, two, 2) < 0) break;
+    }
+    if (write(2, "\n", 1) < 0) _exit(3);
+    printf("CRASH: see the standard error\n");
+    fflush(stdout);
+    _exit(3);
+}
+#endif
+
+/* A page of no access after a ByteList of len bytes, its last byte the last of the page before. */
+typedef struct {
+    uint8_t *base, *list;
+    size_t total;
+} fuzz_map;
+
+static size_t fuzz_page(void) {
+#ifdef _WIN32
+    SYSTEM_INFO info;
+    GetSystemInfo(&info);
+    return info.dwPageSize;
+#else
+    return (size_t)sysconf(_SC_PAGESIZE);
+#endif
+}
+
+static uint8_t *fuzz_list(fuzz_map *m, const uint8_t *b, uint64_t len) {
+    size_t page = fuzz_page(), need = 24 + (size_t)len;
+    m->total = (need + page - 1) / page * page + page;
+#ifdef _WIN32
+    m->base = VirtualAlloc(NULL, m->total, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
+    DWORD old;
+    if (!m->base || !VirtualProtect(m->base + m->total - page, page, PAGE_NOACCESS, &old)) {
+        fprintf(stderr, "fuzz: no memory\n");
+        exit(2);
+    }
+#else
+    m->base = mmap(NULL, m->total, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    if (m->base == MAP_FAILED || mprotect(m->base + m->total - page, page, PROT_NONE)) {
+        fprintf(stderr, "fuzz: no memory\n");
+        exit(2);
+    }
+#endif
+    uint8_t *bytes = m->base + m->total - page - len;
+    m->list = m->base;
+    wr64(m->list, (uint64_t)(bytes - m->base) + len);
+    wr64(m->list + 8, (uint64_t)(bytes - m->base));
+    wr64(m->list + 16, len);
+    if (len) memcpy(bytes, b, (size_t)len);
+    fuzz_input = bytes;
+    fuzz_input_len = len;
+    return m->list;
+}
+
+static void fuzz_free(fuzz_map *m) {
+#ifdef _WIN32
+    VirtualFree(m->base, 0, MEM_RELEASE);
+#else
+    munmap(m->base, m->total);
+#endif
+    fuzz_input = NULL;
+}
+
+/* An input made from len bytes at in by 1 to 8 edits, in out of cap bytes: its length. */
+static uint64_t fuzz_mutate(const uint8_t *in, uint64_t len, uint8_t *out, uint64_t cap) {
+    static const char tokens[] = "{}[]\":,-.0123456789abcdefxX \r\n\t\\uE+/?&=;%";
+    uint64_t n = len < cap ? len : cap;
+    memcpy(out, in, (size_t)n);
+    int edits = 1 + (int)(fuzz_next() % 8);
+    for (int e = 0; e < edits; e++) {
+        uint64_t r = fuzz_next(), at = n ? r % n : 0, k;
+        switch ((r >> 32) % 8) {
+        case 0:
+            if (n) out[at] ^= (uint8_t)(1u << ((r >> 40) % 8));
+            break;
+        case 1:
+        case 2:
+            if (n) out[at] = (uint8_t)tokens[(r >> 40) % (sizeof tokens - 1)];
+            break;
+        case 3:
+            if (n) out[at] = (uint8_t)(r >> 48);
+            break;
+        case 4:
+            k = 1 + (r >> 40) % 16;
+            if (at + k > n) k = n - at;
+            memmove(out + at, out + at + k, (size_t)(n - at - k));
+            n -= k;
+            break;
+        case 5:
+            k = 1 + (r >> 40) % 64;
+            if (at + k > n) k = n - at;
+            if (n + k <= cap) {
+                memmove(out + at + k, out + at, (size_t)(n - at));
+                n += k;
+            }
+            break;
+        case 6:
+            if (n < cap) {
+                memmove(out + at + 1, out + at, (size_t)(n - at));
+                out[at] = (uint8_t)tokens[(r >> 40) % (sizeof tokens - 1)];
+                n++;
+            }
+            break;
+        default:
+            if (n && (r >> 40) % 4 == 0) n = (r >> 44) % n;
+            break;
+        }
+    }
+    return n;
+}
+
+static void fuzz_start(void) {
+    const char *seed = getenv("LANTERN_FUZZ_SEED");
+    fuzz_state = seed ? strtoull(seed, NULL, 10) : 1;
+    if (!fuzz_state) fuzz_state = 1;
+#ifndef _WIN32
+    signal(SIGSEGV, fuzz_trap);
+    signal(SIGBUS, fuzz_trap);
+#endif
+}
+
+static void fuzz_end(void) {
+#ifndef _WIN32
+    signal(SIGSEGV, SIG_DFL);
+    signal(SIGBUS, SIG_DFL);
+#endif
+}
+
+/* The fuzz inputs of the http-request cases (lantern_http_request). */
+static void fuzz_http(const char *file, case_file *f) {
+    uint64_t rounds = fuzz_rounds(), runs = 0;
+    if (!rounds) return;
+    fuzz_start();
+    static char msg[256];
+    const char *why = NULL;
+    f->at = 16;
+    for (uint64_t i = 0; i < f->count && !why; i++) {
+        const char *name;
+        uint64_t len, blen;
+        tv parts = next_case(f, &name, &len);
+        const uint8_t *b = tv_bytes(tv_get(parts, "bytes"), &blen);
+        uint64_t cap = blen + 1024, limits[2] = {tv_u64(tv_get(parts, "head_max")), tv_u64(tv_get(parts, "body_max"))};
+        uint8_t *in = xmalloc((size_t)cap);
+        {
+            tv osz = tv_get(parts, "out_size");
+            uint64_t osize = osz ? tv_u64(osz) : HTTP_REQUEST_FIXED + 64;
+            fuzz_map m;
+            uint8_t *l = fuzz_list(&m, b, blen), *lim = buffer(16), *out = buffer(osize);
+            wr64(lim, limits[0]);
+            wr64(lim + 8, limits[1]);
+            wr64(out, osize);
+            if (CALL(lantern_http_request, l, lim, out) != tv_u64(tv_get(parts, "status"))) why = "a case's own input at the end of a page: not the case's status";
+            fuzz_free(&m);
+            free(lim);
+            free(out);
+        }
+        for (uint64_t r = 0; r < rounds && !why; r++, runs++) {
+            uint64_t n = fuzz_mutate(b, blen, in, cap), osize = HTTP_REQUEST_FIXED + 64 + (fuzz_next() % 2 ? n + 64 : 0);
+            fuzz_map m;
+            uint8_t *l = fuzz_list(&m, in, n), *lim = buffer(16), *out = buffer(osize);
+            wr64(lim, limits[0]);
+            wr64(lim + 8, limits[1]);
+            wr64(out, osize);
+            uint64_t st = CALL(lantern_http_request, l, lim, out);
+            if (!guard_ok(out, osize) || !guard_ok(lim, 16)) why = "lantern_http_request wrote out of bounds";
+            else if (st != 0 && st != 1 && st != HTTP_INVALID_STATUS && st != HTTP_MORE_STATUS) {
+                snprintf(msg, sizeof msg, "status %llu", (unsigned long long)st);
+                why = msg;
+            } else if (st == 0) {
+                if (rd64(out + 16) > n) why = "used is past the input";
+                for (int k = 0; k < 6 && !why; k++) {
+                    uint64_t off = rd64(out + 48 + 16 * k), cnt = rd64(out + 56 + 16 * k);
+                    if (cnt && (off < HTTP_REQUEST_FIXED || off > osize || cnt > osize - off)) why = "a part lies outside out";
+                }
+            }
+            if (why) {
+                fprintf(stderr, "fuzz input of %s round %llu (%llu bytes):", file, (unsigned long long)r, (unsigned long long)n);
+                for (uint64_t k = 0; k < n; k++) fprintf(stderr, "%02x", in[k]);
+                fprintf(stderr, "\n");
+            }
+            fuzz_free(&m);
+            free(lim);
+            free(out);
+        }
+        free(in);
+    }
+    fuzz_end();
+    report(file, "fuzz", 4, !why, why);
+    if (!why) printf("NOTE: %llu fuzz inputs of %s\n", (unsigned long long)runs, file);
+}
+
+/* The fuzz inputs of the json-decode or json-engine_decode cases (lantern_json_decode). */
+static void fuzz_json(const char *file, case_file *f, int engine) {
+    ABI uint64_t (*decode_fn)(const void *, const void *, void *, void *, void *) = engine ? lantern_engine_json_decode : lantern_json_decode;
+    uint64_t rounds = fuzz_rounds(), runs = 0;
+    if (!rounds) return;
+    fuzz_start();
+    static char msg[256];
+    const char *why = NULL;
+    f->at = 16;
+    for (uint64_t i = 0; i < f->count && !why; i++) {
+        const char *name;
+        uint64_t len, tlen, jlen;
+        tv parts = next_case(f, &name, &len);
+        const uint8_t *tn = tv_bytes(tv_get(parts, "type"), &tlen), *json = tv_bytes(tv_get(parts, "json"), &jlen);
+        char tname[128];
+        snprintf(tname, sizeof tname, "%.*s", (int)(tlen < 120 ? tlen : 120), (const char *)tn);
+        const uint8_t *desc = type_by_name(tname);
+        if (!desc) continue;
+        uint64_t cap = jlen + 1024, slen = 0;
+        uint8_t *in = xmalloc((size_t)cap);
+        tv want = tv_get(parts, "ssz");
+        if (want) tv_bytes(want, &slen);
+        {
+            uint64_t osize = 24 + slen + 64;
+            fuzz_map m;
+            uint8_t *l = fuzz_list(&m, json, jlen), *scratch = buffer(JSON_DECODE_SCRATCH), *fault = buffer(JSON_FAULT_BYTES), *out = buffer(osize);
+            wr64(scratch, JSON_DECODE_SCRATCH);
+            wr64(out, osize);
+            if (CALL(decode_fn, desc, l, scratch, out, fault) != (want ? 0 : JSON_INVALID_STATUS))
+                why = "a case's own input at the end of a page: not the case's status";
+            fuzz_free(&m);
+            free(scratch);
+            free(fault);
+            free(out);
+        }
+        for (uint64_t r = 0; r < rounds && !why; r++, runs++) {
+            uint64_t n = fuzz_mutate(json, jlen, in, cap), osize = 24 + 2 * n + 256;
+            fuzz_map m;
+            uint8_t *l = fuzz_list(&m, in, n), *scratch = buffer(JSON_DECODE_SCRATCH), *fault = buffer(JSON_FAULT_BYTES), *out = buffer(osize);
+            wr64(scratch, JSON_DECODE_SCRATCH);
+            wr64(out, osize);
+            uint64_t st = CALL(decode_fn, desc, l, scratch, out, fault);
+            if (!guard_ok(out, osize) || !guard_ok(fault, JSON_FAULT_BYTES) || !guard_ok(scratch, JSON_DECODE_SCRATCH))
+                why = "lantern_json_decode wrote out of bounds";
+            else if (st != 0 && st != 1 && st != JSON_INVALID_STATUS) {
+                snprintf(msg, sizeof msg, "status %llu", (unsigned long long)st);
+                why = msg;
+            } else if (st == 0 && (rd64(out + 8) != 24 || rd64(out + 16) > osize - 24)) why = "the SSZ bytes lie outside out";
+            else if (st == JSON_INVALID_STATUS && rd64(fault + 8) > n) why = "the fault's offset is past the input";
+            if (why) {
+                fprintf(stderr, "fuzz input of %s, type %s, round %llu (%llu bytes): %.*s\n", file, tname, (unsigned long long)r,
+                        (unsigned long long)n, (int)n, (const char *)in);
+            }
+            fuzz_free(&m);
+            free(scratch);
+            free(fault);
+            free(out);
+        }
+        free(in);
+    }
+    fuzz_end();
+    report(file, "fuzz", 4, !why, why);
+    if (!why) printf("NOTE: %llu fuzz inputs of %s\n", (unsigned long long)runs, file);
+}
+
 /* ---------------------------------------------------------------- Main */
 
 #ifdef _WIN32
@@ -11597,6 +11897,11 @@ static LONG WINAPI crash_report(EXCEPTION_POINTERS *e) {
             (unsigned long)e->ExceptionRecord->ExceptionCode, (unsigned long long)(at - base),
             (unsigned long long)(back - base), (unsigned long long)data, (unsigned long long)sp, current_file,
             (int)current_case_len, current_case);
+    if (fuzz_input) { /* a fuzz input: in hex */
+        fprintf(stderr, "on a fuzz input of %llu bytes:\n", (unsigned long long)fuzz_input_len);
+        for (uint64_t k = 0; k < fuzz_input_len; k++) fprintf(stderr, "%02x", fuzz_input[k]);
+        fprintf(stderr, "\n");
+    }
     printf("CRASH: see the standard error\n");
     fflush(stderr);
     fflush(stdout);
@@ -11664,9 +11969,16 @@ int main(int argc, char **argv) {
         else if (!bls_off && !strcmp(kind, "node-attrewards")) run_node_attrewards(file, &f);
         else if (!bls_off && (!strcmp(kind, "node-produce") || !strcmp(kind, "node-publish"))) run_node_produce(file, argv[1], &f);
         else if (!bls_off && !strcmp(kind, "json-encode")) run_json_encode(file, &f);
-        else if (!bls_off && !strcmp(kind, "json-decode")) run_json_decode(file, &f, 0);
-        else if (!bls_off && !strcmp(kind, "json-engine_decode")) run_json_decode(file, &f, 1);
-        else if (!bls_off && !strcmp(kind, "http-request")) run_http_request(file, &f);
+        else if (!bls_off && !strcmp(kind, "json-decode")) {
+            run_json_decode(file, &f, 0);
+            fuzz_json(file, &f, 0);
+        } else if (!bls_off && !strcmp(kind, "json-engine_decode")) {
+            run_json_decode(file, &f, 1);
+            fuzz_json(file, &f, 1);
+        } else if (!bls_off && !strcmp(kind, "http-request")) {
+            run_http_request(file, &f);
+            fuzz_http(file, &f);
+        }
         else if (!bls_off && !strcmp(kind, "api-route")) run_api_route(file, &f);
         else if (!bls_off && !strcmp(kind, "db-index")) run_db_index(file, &f);
         else if (!bls_off && !strcmp(kind, "db-state_diff")) run_db_state_diff(file, &f);
