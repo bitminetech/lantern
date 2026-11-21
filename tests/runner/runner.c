@@ -233,6 +233,9 @@ ABI uint64_t LF(get_weight)(const void *store, const void *node, void *out);
 ABI uint64_t LF(node_weights)(const void *store, void *scratch, void *out);
 ABI uint64_t LF(node_liveness)(const void *state, const void *config, const void *seen, const void *ids, uint64_t epoch,
                                void *scratch, void *out);
+ABI uint64_t LF(node_block_rewards)(const void *pre, const void *block, const void *early, const void *late,
+                                    const void *config, void *scratch, void *out);
+ABI uint64_t LF(node_sync_rewards)(const void *pre, const void *block, void *scratch, void *out);
 ABI uint64_t LF(node_data_root)(const void *data, void *scratch, void *root);
 ABI uint64_t LF(on_block)(void *store, const void *signed_block, void *state, const void *options, void *scratch,
                               void *result);
@@ -537,6 +540,8 @@ static int guard_ok(const uint8_t *b, uint64_t n) {
 
 enum { T_INT = 1, T_BYTES, T_STRING, T_BOOL, T_LIST, T_MAP, T_NULL, T_UINT256, T_NEG_INT };
 typedef const uint8_t *tv; /* a tagged value: its tag byte, then its payload */
+static tv case_events; /* the node-events case of the fork choice case that runs, or NULL */
+static tv case_reads;  /* the node-reads case of the fork choice or transition case that runs, or NULL */
 
 static tv tv_skip(tv v) {
     switch (*v) {
@@ -1528,14 +1533,30 @@ static void block_on_fork_slot(uint8_t **state, uint64_t *size, const uint8_t *s
 
 static void transition_node_case(tv parts, uint64_t fork_epoch, int *ran, const char **why);
 
-/* transition/core: the blocks up to fork_block with the fork before, the fork, then the other blocks; then through the node. */
-static void run_transition(const char *file, case_file *f) {
+/*
+ * transition/core: the blocks up to fork_block with the fork before, the fork, then the other blocks; then
+ * through the node, with the node-reads case "transition/" and the case's name after its blocks.
+ */
+static void run_transition(const char *file, const char *dir, case_file *f) {
     const uint8_t *pre_desc = type_in(LP(types), "SignedBeaconBlock"), *post_desc = type_by_name("SignedBeaconBlock");
+    case_file reads = {0};
+    if (!read_file(dir, PRESET "-" STR(FORK_NAME) "-node-reads.bin", &reads)) {
+        fprintf(stderr, "%s/%s-%s-node-reads.bin: missing\n", dir, PRESET, STR(FORK_NAME));
+        exit(2);
+    }
     for (uint64_t i = 0; i < f->count; i++) {
         const char *name, *why = NULL;
         uint64_t len, plen, size;
         tv parts = next_case(f, &name, &len);
         if (skip_case(parts)) continue;
+        case_reads = NULL;
+        reads.at = 16;
+        for (uint64_t r = 0; r < reads.count && !case_reads; r++) {
+            const char *rname;
+            uint64_t rlen;
+            tv rparts = next_case(&reads, &rname, &rlen);
+            if (rlen == 11 + len && !memcmp(rname, "transition/", 11) && !memcmp(rname + 11, name, (size_t)len)) case_reads = rparts;
+        }
         tv meta = tv_get(parts, "meta"), fb = tv_get(meta, "fork_block");
         uint64_t blocks = tv_u64(tv_get(meta, "blocks_count")), fork_epoch = tv_u64(tv_get(meta, "fork_epoch"));
         int64_t fork_block = fb ? (int64_t)tv_u64(fb) : -1;
@@ -1588,12 +1609,14 @@ static void run_transition(const char *file, case_file *f) {
         int ran = 0;
         const char *nwhy = NULL;
         transition_node_case(parts, fork_epoch, &ran, &nwhy);
+        case_reads = NULL;
         if (ran) {
             char nname[256];
             int nlen = snprintf(nname, sizeof nname, "%.*s (node)", (int)len, name);
             report(file, nname, (uint64_t)nlen, nwhy == NULL, nwhy);
         }
     }
+    free(reads.data);
 }
 #endif
 
@@ -3755,6 +3778,7 @@ static void shell_close(fc_node *n, uint8_t *anchor_block) {
 }
 
 static void fc_serve_check(fc_node *n, tv parts, const char **why);
+static void fc_reads_check(fc_node *n, const char **why);
 static void fc_sync_check(tv parts, const char **why);
 static void shell_api_head(fc_node *n, const char **why);
 static void api_lookup_checks(fc_node *n, tv parts, const char **why);
@@ -3762,7 +3786,7 @@ static void drop_check(tv parts, const char **why);
 
 static uint64_t http_request_call(const uint8_t *b, uint64_t len, const uint64_t *limits, uint64_t osize, uint8_t **out,
                                   uint64_t *http, const char **why);
-static tv case_events; /* the node-events case of the fork choice case that runs, or NULL */
+
 #define HTTP_REQUEST_FIXED 144
 
 /* The event streams of a node-events case (docs/reference/node.md, Test vectors): the request and head of each. */
@@ -3988,6 +4012,7 @@ static void fc_node_case(tv parts, int serve, const char **why) {
     if (!*why) shell_db_rescan(n.shell, why);
     if (serve && !*why) shell_api_head(&n, why);
     if (serve && !*why) api_lookup_checks(&n, parts, why);
+    if (serve && !*why) fc_reads_check(&n, why);
     if (serve && !*why) fc_serve_check(&n, parts, why);
     if (serve && !*why) fc_sync_check(parts, why);
     static int dropped; /* once in each process */
@@ -4174,6 +4199,10 @@ static void transition_node_case(tv parts, uint64_t fork_epoch, int *ran, const 
         shell_buf *h = e ? shell_find(s, rd64(e + NB_STATE_ID)) : NULL;
         if (!h) *why = "the head has no post-state";
         else state_equals(h->b, post, qlen, why);
+    }
+    if (!*why) { /* node-reads: the rewards of the anchor and of the blocks (tests/generator/node.py) */
+        if (!case_reads) *why = "no node-reads case of the case";
+        else fc_reads_check(&n, why);
     }
     if (!*why && !guard_ok(scratch_buf, SCRATCH_BYTES)) *why = "wrote past the scratch";
     shell_close(&n, block);
@@ -6210,6 +6239,11 @@ static void run_fork_choice(const char *file, const char *dir, case_file *f, int
         exit(2);
     }
 #endif
+    case_file reads = {0}; /* the node-reads cases, named as the node-events cases */
+    if (serve && !read_file(dir, PRESET "-" STR(FORK_NAME) "-node-reads.bin", &reads)) {
+        fprintf(stderr, "%s/%s-%s-node-reads.bin: missing\n", dir, PRESET, STR(FORK_NAME));
+        exit(2);
+    }
     case_file events = {0}; /* the node-events cases: "get_head/" or "on_block/" and the case's name */
     const char *handler = strstr(file, "fork_choice-get_head") ? "get_head/" : "on_block/";
 #if FORK > FORK_PHASE0
@@ -6230,6 +6264,14 @@ static void run_fork_choice(const char *file, const char *dir, case_file *f, int
             uint64_t elen, hl = strlen(handler);
             tv eparts = next_case(&events, &ename, &elen);
             if (elen == hl + len && !memcmp(ename, handler, (size_t)hl) && !memcmp(ename + hl, name, (size_t)len)) case_events = eparts;
+        }
+        case_reads = NULL;
+        reads.at = 16;
+        for (uint64_t b = 0; b < reads.count && !case_reads; b++) {
+            const char *rname;
+            uint64_t rlen, hl = strlen(handler);
+            tv rparts = next_case(&reads, &rname, &rlen);
+            if (rlen == hl + len && !memcmp(rname, handler, (size_t)hl) && !memcmp(rname + hl, name, (size_t)len)) case_reads = rparts;
         }
         case_blobs = NULL; /* the node-blobs case of the same name */
         blobs.at = 16;
@@ -6311,8 +6353,10 @@ static void run_fork_choice(const char *file, const char *dir, case_file *f, int
             int nlen = snprintf(nname, sizeof nname, "%.*s (node)", (int)len, name);
             const char *nwhy = NULL;
             if (serve && FORK > FORK_PHASE0 && !case_events) nwhy = "no node-events case of the case";
+            else if (serve && !case_reads) nwhy = "no node-reads case of the case";
             else fc_node_case(parts, serve, &nwhy);
             case_events = NULL;
+            case_reads = NULL;
             report(file, nname, (uint64_t)nlen, nwhy == NULL, nwhy);
             int ran = 0;
             const char *gwhy = NULL;
@@ -6335,8 +6379,10 @@ static void run_fork_choice(const char *file, const char *dir, case_file *f, int
     }
     case_blobs = NULL;
     case_events = NULL;
+    case_reads = NULL;
     free(blobs.data);
     free(events.data);
+    free(reads.data);
 }
 
 /* ---------------------------------------------------------------- Merkle proofs */
@@ -7680,6 +7726,45 @@ static uint8_t *api_normalize(const struct node_shell *s, uint64_t *len, const c
     return out;
 }
 
+/*
+ * node-reads (docs/reference/node.md, Test vectors): after the steps of a fork choice case in node
+ * mode, each request of its node-reads case on its own connection; the sends, in the form with
+ * Content-Length, must be the case's answer, and the node must hold no entry or bytes of it after.
+ */
+static const char *api_clean(struct node_shell *s);
+static const char *api_mismatch(const struct node_shell *s, const char *name, const uint8_t *want, uint64_t wlen);
+static unsigned long reads_asked; /* the node-reads requests checked */
+static void fc_reads_check(fc_node *n, const char **why) {
+    struct node_shell *s = n->shell;
+    tv reqs = tv_get(case_reads, "requests"), wants = tv_get(case_reads, "responses");
+    if (!reqs || !wants || rd64(reqs + 1) != rd64(wants + 1)) {
+        *why = "the node-reads case has not an answer for each request";
+        return;
+    }
+    tv rq = reqs + 9, w = wants + 9;
+    for (uint64_t k = 0, c = rd64(reqs + 1); k < c && !*why; k++, rq = tv_skip(rq), w = tv_skip(w)) {
+        uint64_t rlen, wlen, glen = 0;
+        const uint8_t *req = tv_bytes(rq, &rlen), *want = tv_bytes(w, &wlen);
+        s->api.room = 0;
+        shell_api_ask(n, req, rlen, 40, why);
+        uint8_t *g = *why ? NULL : api_normalize(s, &glen, why);
+        if (!*why && (glen != wlen || memcmp(g, want, (size_t)wlen))) {
+            static char msg[1200];
+            const char *eol = memchr(req, '\r', (size_t)rlen);
+            snprintf(msg, sizeof msg, "node-reads %.*s: %s", (int)(eol ? eol - (const char *)req : 0), (const char *)req,
+                     api_mismatch(s, "the answer", want, wlen));
+            *why = msg;
+        }
+        if (!*why && s->api.lasts != 1) *why = "node-reads: not one send with last 1";
+        if (!*why) {
+            const char *c = api_clean(s);
+            if (c) *why = c;
+        }
+        free(g);
+        reads_asked++;
+    }
+}
+
 /* 0 when the node holds no NodeApi entry and each id of a NODE_ACT_STATE_BYTES is free, else why. */
 static const char *api_clean(struct node_shell *s) {
     uint64_t open = 0; /* the entries of the event streams still open may stay */
@@ -7889,6 +7974,78 @@ static void run_node_liveness(const char *file, case_file *f) {
         free(out);
         free(state);
         free(seen.b);
+        report(file, name, len, why == NULL, why);
+    }
+}
+
+/* SYNC_COMMITTEE_SIZE of the preset (presets/<preset>/altair.yaml). */
+#define SYNC_SIZE_RUNNER (strcmp(PRESET, "minimal") ? 512u : 32u)
+
+/* A ByteList of the bytes (len of them), in a new buffer. */
+static uint8_t *byte_list_of(const uint8_t *bytes, uint64_t len) {
+    uint8_t *list = buffer(24 + len);
+    wr64(list, 24 + len);
+    wr64(list + 8, 24);
+    wr64(list + 16, len);
+    memcpy(list + 24, bytes, (size_t)len);
+    return list;
+}
+
+/*
+ * lantern_node_block_rewards and lantern_node_sync_rewards (node.md, node-rewards): the case's status,
+ * the 48 bytes of the block's rewards and the sync items; the inputs keep their bytes, and an out one
+ * byte short of room gives LANTERN_BUFFER_TOO_SMALL.
+ */
+static void run_node_rewards(const char *file, case_file *f) {
+    for (uint64_t i = 0; i < f->count; i++) {
+        const char *name, *why = NULL;
+        uint64_t len, plen, blen, elen, llen, wlen, slen = 0, psize = 0, esize = 0, lsize = 0;
+        tv parts = next_case(f, &name, &len);
+        if (skip_case(parts)) continue;
+        const uint8_t *penc = tv_bytes(tv_get(parts, "pre"), &plen), *benc = tv_bytes(tv_get(parts, "block"), &blen);
+        const uint8_t *eenc = tv_bytes(tv_get(parts, "early"), &elen), *lenc = tv_bytes(tv_get(parts, "late"), &llen);
+        const uint8_t *want = tv_bytes(tv_get(parts, "rewards"), &wlen);
+        uint64_t status = tv_u64(tv_get(parts, "status"));
+        uint8_t *pre = load_state(penc, plen, &psize, &why);
+        uint8_t *early = elen && !why ? load_state(eenc, elen, &esize, &why) : NULL;
+        uint8_t *late = llen && !why ? load_state(lenc, llen, &lsize, &why) : NULL;
+        uint8_t *block = byte_list_of(benc, blen), *out = buffer(48);
+        uint8_t *pre0 = pre ? copy_of(pre, psize) : NULL, *block0 = copy_of(block, 24 + blen);
+        uint8_t *early0 = early ? copy_of(early, esize) : NULL, *late0 = late ? copy_of(late, lsize) : NULL;
+        memset(out, FILL, 48 + GUARD);
+        if (!why) {
+            uint64_t st = CALL(LF(node_block_rewards), pre, block, early, late, config, fresh_scratch(), out);
+            if (st != status) why = "lantern_node_block_rewards: status";
+            else if (st == 0 && (wlen != 48 || memcmp(out, want, 48))) why = "lantern_node_block_rewards: out differs";
+            else if (!guard_ok(out, 48)) why = "lantern_node_block_rewards: wrote past out";
+        }
+#if FORK == FORK_PHASE0
+        (void)slen;
+        if (!why) { /* phase0 has no sync committee */
+            uint8_t small[24 + GUARD];
+            wr64(small, 24);
+            if (CALL(LF(node_sync_rewards), pre, block, fresh_scratch(), small) != 66) why = "lantern_node_sync_rewards: not LANTERN_NO_STATE_ANSWER in phase0";
+        }
+#else
+        const uint8_t *items = tv_bytes(tv_get(parts, "sync"), &slen);
+        uint64_t room = 24 + 16 * (uint64_t)SYNC_SIZE_RUNNER;
+        uint8_t *list = buffer(room);
+        for (int r = 0; r < 2 && !why; r++) {
+            memset(list, FILL, (size_t)(room + GUARD));
+            wr64(list, room - (uint64_t)r);
+            uint64_t st = CALL(LF(node_sync_rewards), pre, block, fresh_scratch(), list), sw = r ? 1 : status;
+            if (st != sw) why = r ? "lantern_node_sync_rewards: an out a byte short is not BUFFER_TOO_SMALL" : "lantern_node_sync_rewards: status";
+            else if (!r && st == 0 && (rd64(list + 8) != 24 || rd64(list + 16) != slen || memcmp(list + 24, items, (size_t)slen)))
+                why = "lantern_node_sync_rewards: out differs";
+            else if (!guard_ok(list, room - (uint64_t)r)) why = "lantern_node_sync_rewards: wrote past out";
+        }
+        free(list);
+#endif
+        if (!why && memcmp(pre, pre0, (size_t)psize)) why = "changed pre";
+        if (!why && memcmp(block, block0, (size_t)(24 + blen))) why = "changed the block";
+        if (!why && early && memcmp(early, early0, (size_t)esize)) why = "changed early";
+        if (!why && late && memcmp(late, late0, (size_t)lsize)) why = "changed late";
+        free(pre); free(pre0); free(early); free(early0); free(late); free(late0); free(block); free(block0); free(out);
         report(file, name, len, why == NULL, why);
     }
 }
@@ -9425,7 +9582,7 @@ int main(int argc, char **argv) {
         else if (!bls_off && !strncmp(kind, "rewards-", 8)) run_rewards(file, &f);
 #if FORK > FORK_PHASE0
         else if (!bls_off && !strcmp(kind, "fork-fork")) run_fork(file, &f);
-        else if (!strcmp(kind, "transition-core")) run_transition(file, &f);
+        else if (!strcmp(kind, "transition-core")) run_transition(file, argv[1], &f);
 #else
         else if (!bls_off && !strcmp(kind, "genesis-initialization")) run_genesis_init(file, &f);
         else if (!bls_off && !strcmp(kind, "genesis-validity")) run_genesis_validity(file, &f);
@@ -9443,6 +9600,7 @@ int main(int argc, char **argv) {
         else if (!bls_off && !strcmp(kind, "node-api")) run_node_api(file, &f);
         else if (!bls_off && !strcmp(kind, "node-payload")) run_node_payload(file, &f);
         else if (!bls_off && !strcmp(kind, "node-liveness")) run_node_liveness(file, &f);
+        else if (!bls_off && !strcmp(kind, "node-rewards")) run_node_rewards(file, &f);
         else if (!bls_off && (!strcmp(kind, "node-produce") || !strcmp(kind, "node-publish"))) run_node_produce(file, argv[1], &f);
         else if (!bls_off && !strcmp(kind, "json-encode")) run_json_encode(file, &f);
         else if (!bls_off && !strcmp(kind, "json-decode")) run_json_decode(file, &f, 0);
@@ -9480,6 +9638,7 @@ int main(int argc, char **argv) {
     }
     if (node_settles_finalized) printf("NOTE: %lu node settles past a finalized epoch\n", node_settles_finalized);
     if (api_heads_streamed) printf("NOTE: %lu heads served as getBlockV2 and getStateV2 streams\n", api_heads_streamed);
+    if (reads_asked) printf("NOTE: %lu node-reads requests answered\n", reads_asked);
     if (api_peers_checked[0] || api_peers_checked[1])
         printf("NOTE: getPeers and getPeer checked after %lu inbound and %lu outbound connections\n", api_peers_checked[0],
                api_peers_checked[1]);

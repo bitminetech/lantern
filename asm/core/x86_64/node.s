@@ -10245,7 +10245,7 @@ FUNCTION lantern_node_run
     mov     %r15, %r9
     mov     S8(%rsp), %r10
     mov     S9(%rsp), %r11
-    mov     (L + 64)(%rsp), %rax
+    lea     (L + 64)(%rsp), %rax            # the seen, state_b and state_c
     call    node_api_run
     LEAVE 192
 976: cmp    $NODE_WORK_API_CHUNK, %rax

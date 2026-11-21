@@ -17,6 +17,8 @@
 - [`lantern_node_attestation_data`](#function-lantern_node_attestation_data): the `AttestationData` of a state's slot, for one fork.
 - [`lantern_node_attester_duties`](#function-lantern_node_attester_duties): the committee assignments of validators in an epoch, for one fork.
 - [`lantern_node_liveness`](#function-lantern_node_liveness): whether validators were seen live in an epoch, from a state and a `Seen`, for one fork.
+- [`lantern_node_block_rewards`](#function-lantern_node_block_rewards): the proposer's rewards of a block, part by part, on its pre-state, for one fork.
+- [`lantern_node_sync_rewards`](#function-lantern_node_sync_rewards): the balance changes of a block's sync aggregate, on its pre-state, for one fork.
 - [`lantern_node_payload_parent`](#function-lantern_node_payload_parent): the block number and hash of a state's latest execution payload header, for one fork from bellatrix.
 - [`lantern_node_sidecar_root`](#function-lantern_node_sidecar_root): hash_tree_root of the block header of a sidecar's SSZ bytes, for one fork from deneb.
 - [`lantern_node_randao`](#function-lantern_node_randao): the RANDAO mix of an epoch in a state, for one fork.
@@ -208,6 +210,17 @@
   - The keys: each of the five kinds the rules read, of the epoch, the epochs before and after, and slots of each; keys of the other kinds; a key of an index past the validators.
   - The epochs: that of the state, the one before, the one after, and the fifth after.
   - The runner fills a `Seen` of lantern_seen_init with the keys, in order, and passes `scratch` of S(6). The case's `out` must match, and `seen` and the state must keep their bytes.
+- Lantern's cases `<preset>-<fork>-node-rewards.bin` of phase0 to fulu, made by tests/generator/node.py with the pinned spec, for lantern_node_block_rewards and, from altair, lantern_node_sync_rewards: a pre-state P, a block, in phase0 the states `early` and `late`, the status, the 48 bytes of `out` of lantern_node_block_rewards, and from altair the items of lantern_node_sync_rewards, by the rules of [beacon-api.md](beacon-api.md#common-rules) (getBlockRewards, getSyncCommitteeRewards).
+  - P: the anchor of the `api` cases at epoch 2 with 56 more active validators, processed to a slot of epoch 3 whose proposer is not slashed (in one case a sync committee member); from altair, flags set for every fifth validator, and a member with a balance below `participant_reward`.
+  - The block: attestations of three slots of the previous epoch (two committees each), of a wrong head, of a wrong target, one again of the same members, and of the last two slots of the current epoch; two proposer slashings; attester slashings whose intersections hold a validator a proposer slashing slashes, one slashed in P, one not slashable, and validators the other slashing slashes too; from altair a sync aggregate with some bits set.
+  - Phase0: `early` and `late`, the block on P and the slots to the end of its epoch and of the next; in two of the cases each with an earlier copy of one of the block's attestations, by another proposer, and an attester slashed.
+  - The generator checks each part against the spec's own functions: the proposer's balance changes of process_proposer_slashing, process_attester_slashing, process_attestation and process_sync_aggregate on P, and in phase0 the proposer's part of get_inclusion_delay_deltas of `early` and `late`.
+  - A case with P one slot past the block's: `LANTERN_INVALID_SLOT`.
+  - The runner passes `scratch` of S(6), and an `out` of lantern_node_sync_rewards a byte short of its room, which must give `LANTERN_BUFFER_TOO_SMALL`. Each input must keep its bytes.
+- Lantern's cases `<preset>-<fork>-node-reads.bin` of phase0 to fulu, made by tests/generator/node.py with the pinned spec: one for each `fork_choice-get_head` and `fork_choice-on_block` case, named as its node-events case. Its parts `requests` and `responses`: after the case's steps in node mode, each request on its own connection must give its answer, in the form with Content-Length.
+  - The requests: getBlockRewards and getSyncCommitteeRewards of each block of the store, by root, in slot order; and getSyncCommitteeRewards of the head with id items: the index of the first member, the pubkey of the last, the index of a validator that is not a member, and an index past the validators.
+  - The answers: beacon-api.md's rules, from a replay of the steps with the spec module, as the node-events cases have it. A block that descends from the store's finalized block has its rewards; the anchor, the finalized block and its ancestors, and a block of another branch after the finalized epoch rose: 404. getSyncCommitteeRewards in phase0 of a block the node holds: 400.
+  - Also one for each `transition-core` case whose pre-state is an anchor, named `transition/` and the case's name, checked after the node of the transition case (above) imports its blocks: getBlockRewards and getSyncCommitteeRewards of the anchor (404), and of each block whose parent's slot is at least the first slot of the highest finalized epoch, realized or not, of any of the case's states, so that the store's finalized block is at or below the parent. The answers come from the blocks applied with the spec modules of both forks, the upgrade at the fork's first slot; the blocks of the fork before give the phase0 rules their E states.
 - Lantern's cases `<preset>-<fork>-node-payload.bin` of bellatrix to fulu, made by tests/generator/node.py with the pinned spec: the anchor of the `api` cases, a validator index, a fee recipient, a time in the store's slot S at or after its attestation due time, and the answer of the execution engine.
   - The runner runs the node with `NODE_FLAG_ENGINE` and answers its engine calls as in the fork_choice cases. After the anchor's engine_forkchoiceUpdated, it gives a prepareBeaconProposer of the validator and fee recipient (200), then a `NODE_EV_TICK` of the time.
   - When the validator is get_beacon_proposer_index of the anchor state processed to slot S + 1: the node's next engine call must be engine_forkchoiceUpdated whose `params` are the case's, with the attributes of the spec's prepare_execution_payload of that state, the fee recipient, the justified root's block hash as safe and the finalized root's as finalized. The runner answers with the case's `payloadId`, a value or null; then `payload_slot`, `payload_root`, `payload_status` and `payload_id` must be the case's.
@@ -519,6 +532,10 @@ lantern_node_step(node, store, p2p, tick, events, scratch, actions, result) -> s
   - getSyncCommitteeDuties: 503 with `NODE_FLAG_SYNCING`; 400 for an epoch whose sync committee period is above that of the store's slot + 1, for no `ValidatorRef` item or one of a public key; then, when the head's post-state is of altair or later and the epoch's period is that of the head's slot (or the next), that state, and `API_VALUE_NEXT_PERIOD` (8) among the values for the next; else the state as for getAttesterDuties; then the `NODE_ACT_BYTES_PUT` of the items and the `NODE_WORK_API_ENCODE` as for getAttesterDuties, `arg` with the state's slot.
   - getAttesterDuties: 503 with `NODE_FLAG_SYNCING`; 400 for an epoch above the epoch of the store's slot + 1, for no `ValidatorRef` item or one of a public key; then the state of the epoch's first slot, as for getProposerDuties (none: 400); a `NODE_ACT_BYTES_PUT` of the route's `ValidatorRef` items to a new id, and a `NODE_WORK_API_ENCODE` of the state as `state_a` and that id as `data`, `arg` as for the state operations with that slot; after its `NODE_EV_WORK_DONE`, a `NODE_ACT_BYTES_FREE` of the id.
   - getLiveness: 503 with `NODE_FLAG_SYNCING`; 400 for an epoch below the previous epoch of the store's slot (get_previous_epoch: 0 at epoch 0) or above its next, for no `ValidatorRef` item or one of a public key; then the head's post-state at its slot, as for a `state_id` of `head` (none: 500); a `NODE_ACT_BYTES_PUT` of the route's `ValidatorRef` items to a new id, and a `NODE_WORK_API_ENCODE` of the state as `state_a` and that id as `data`, `arg` as for the state operations with the route's `epoch` in place of the slot; after its `NODE_EV_WORK_DONE`, a `NODE_ACT_BYTES_FREE` of the id.
+  - getBlockRewards and getSyncCommitteeRewards: the block, as for getBlockV2, must be a `NodeBlock` with bytes; a block of the `Db`, or none: the error 404. getSyncCommitteeRewards of a block whose slot's fork is phase0: the error 400. Then the `NodeBlock` of its `parent_root`, with a post-state, which one above F's slot with none gets again first; with none, the error 404. P: a `NODE_ACT_STATE_COPY` of that post-state brought to the block's slot, as a lookup's state (the crossing, then `NODE_WORK_SLOTS`).
+    - getBlockRewards of a phase0 block of epoch b: as `state_b` when b is above 0, the state of the chain at the last slot of b; as `state_c` when the fork of epoch b + 1 is phase0, that at the last slot of b + 1. Each as for a `state_id` of its slot, and past the store's slot the head's post-state brought to it; with none, the error 404.
+    - getSyncCommitteeRewards: a `NODE_ACT_BYTES_PUT` of the route's `ValidatorRef` items to a new id, as `state_b`.
+    - Then a `NODE_WORK_API_ENCODE` of P as `state_a` and the block's bytes as `data`, `arg` as for the state operations with the block's slot and the values of the block, as getBlockHeader has them; after its `NODE_EV_WORK_DONE`, a `NODE_ACT_STATE_FREE` of each copy and a `NODE_ACT_BYTES_FREE` of the id.
   - A `state_id` of a root: a `NodeApi` entry with `API_STREAM_LOOKUP`, the connection, the operation, the answer flags and `API_STREAM_SSZ` for `response` `API_TYPE_SSZ`, the root in the first 32 bytes of its `cursor`, the route's `statuses` at byte 32 of it, its `validator` at byte 40, and its `epoch`, `slot`, `index` and `present` at bytes 104, 112, 120 and 128; for the six validator operations the ids as for their stream (below), as `data` with `API_STREAM_OWN`; and a `NODE_WORK_API_LOOKUP` with the head's post-state as `state_a`, the connection as `target` and the entry's index as `arg`.
 - `NODE_EV_WORK_DONE` of `NODE_WORK_API_LOOKUP`, of the `NodeApi` entry at index `arg`: the entry ends. Without `API_STREAM_GONE`: with a slot at `NodeEvent_index`, the answer of the entry's operation for the `state_id` of that slot, as for a `NODE_EV_API` with its answer flags, `statuses`, `validator`, `epoch`, `slot`, `index`, `present` and ids, whose `data` the answer takes; with 2^64 - 1 there, the error 404 (and the ids' `NODE_ACT_BYTES_FREE`).
   - Every other operation: 501.
@@ -644,6 +661,7 @@ lantern_node_run(node, store, seen, work, state_a, state_b, state_c, data, setti
   - getAttesterDuties: lantern_node_attester_duties of the fork of the state's slot, of `state_a` and the `ValidatorRef` items of `data`, with the node's config, into `scratch`; then the answer of each item in order.
   - getSyncCommitteeDuties: lantern_node_sync_committee of the fork of the state's slot, of `state_a` and the epoch of its slot (+ `EPOCHS_PER_SYNC_COMMITTEE_PERIOD` with `API_VALUE_NEXT_PERIOD`), its out at the end of `scratch`; then the answer of each `ValidatorRef` item of `data` in order. `LANTERN_NO_STATE_ANSWER`: the error 400 as the answer.
   - getLiveness: lantern_node_liveness of the fork of the state's slot, of `state_a`, the node's config, `seen`, the `ValidatorRef` items of `data` and the epoch `arg` / 2^24, its out at the end of `scratch`; then the answer of each item in order.
+  - getBlockRewards: lantern_node_block_rewards of the fork of the block's slot (the u64 at byte 100 of `data`), of `state_a`, the block in `data`, `state_b`, `state_c` and the node's config, its out at the end of `scratch`; then the answer of its values. getSyncCommitteeRewards: lantern_node_sync_rewards of that fork, of `state_a` and the block in `data`, its out at the end of `scratch`; then the answer of each of its items, with `ValidatorRef` items in `state_b` only of those whose validator one names (beacon-api.md). A status of either but `LANTERN_OK` and `LANTERN_BUFFER_TOO_SMALL` is the result.
   - getStateValidator: the validator of the `ValidatorRef` in `data`, in `state_a`: the one of its index, or the first whose `pubkey` is its public key; with none, the error 404 in place of the response.
   - A `state_a` of these three whose slot is not `arg` / 2^24 gives the result `LANTERN_INVALID_SLOT`: the work that brought it to that slot failed. getLiveness takes `state_a` at its own slot, with the epoch in `arg` / 2^24.
 - `NODE_WORK_API_SUBMIT`: the operations of the body in `data` (beacon-api.md, the pool POSTs), as a ByteList at `NodeEvent_chunk` of the event, the event's `size` covering it, and their count at `NodeEvent_index`.
@@ -931,6 +949,102 @@ lantern_node_liveness(state, config, seen, ids, epoch, scratch, out) -> status
 
 - Export: `lantern_<fork>_node_liveness` of each fork object.
 - Argument order: `state`, `config`, `seen`, `ids`, `epoch`, `scratch`, `out`.
+
+## Function `lantern_node_block_rewards`
+
+The proposer's rewards of a block, part by part, on its pre-state (beacon-api.md, getBlockRewards).
+
+### Signature
+
+```
+lantern_node_block_rewards(pre, block, early, late, config, scratch, out) -> status
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `pre` | input | `BeaconState` of the fork at the block's slot: P |
+| `block` | input | ByteList of the SSZ bytes of a `SignedBeaconBlock` of the fork |
+| `early` | input | Phase0: the `BeaconState` E of the attestations of the epoch before the block's, at the last slot of the block's epoch; 0 at epoch 0. From altair: 0 |
+| `late` | input | Phase0: the E of the attestations of the block's epoch, at the last slot of the next epoch, when that epoch is of phase0; else 0. From altair: 0 |
+| `config` | input | `Config`: its fork epochs and its `CommitteeCache` |
+| `scratch` | scratch | `Scratch` |
+| `out` | output | 48 bytes: `proposer_index`, `total`, `attestations`, `sync_aggregate`, `proposer_slashings` and `attester_slashings`, each a u64 |
+
+### Returns
+
+- `LANTERN_OK`: `out` holds them.
+- `LANTERN_INVALID_ENCODING`: `block` holds no `SignedBeaconBlock` of the fork, or a validator index of it is not below the validator count of `pre`.
+- `LANTERN_INVALID_SLOT`: `pre` is not at the block's slot. In phase0: an attestation's target epoch is neither the block's epoch nor the one before; or the E it needs is 0, or not at the last slot of its epoch, while the fork of the slot after it is phase0.
+- `LANTERN_BUFFER_TOO_SMALL`: `scratch` is short of the room under Limits.
+- The statuses of lantern_get_attesting_indices.
+
+### Function does
+
+- The values of beacon-api.md, getBlockRewards.
+- A byte for each validator of `pre`, in `scratch`, marks the validators the body's slashings slash, in the body's order: the proposer slashings, then the attester slashings.
+- From altair: a copy of `previous_epoch_participation` and of `current_epoch_participation`, in `scratch`, takes the flags of each attestation in order, as process_attestation sets them.
+- In phase0: a byte for each validator of `pre`, in `scratch`, marks the attesters the block rewarded already; and for each of `early` and `late` that is not 0, a byte for each validator holds the lowest `inclusion_delay` of the attestations of its `previous_epoch_attestations` that have the validator among their attesting indices, or 255 for none.
+
+### Function never
+
+- Writes `pre`, `early`, `late` or `block`.
+
+### Limits
+
+- Scratch: S(6) of the validator count of `pre`, and in phase0 of each of `early` and `late` that is not 0: S(1) for the bytes of the validators, S(1) for the attesting indices of one attestation, and the S(4) of lantern_get_attesting_indices. The decoded block takes the end of `scratch` first.
+
+### ABI
+
+- Export: `lantern_<fork>_node_block_rewards` of each fork object.
+- Argument order: `pre`, `block`, `early`, `late`, `config`, `scratch`, `out`.
+
+## Function `lantern_node_sync_rewards`
+
+The balance changes of a block's sync aggregate, on its pre-state (beacon-api.md, getSyncCommitteeRewards).
+
+### Signature
+
+```
+lantern_node_sync_rewards(pre, block, scratch, out) -> status
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `pre` | input | `BeaconState` of the fork at the block's slot: P |
+| `block` | input | ByteList of the SSZ bytes of a `SignedBeaconBlock` of the fork |
+| `scratch` | scratch | `Scratch` |
+| `out` | output | ByteList, its `size` set by the caller: 16 bytes for each member, each once, in validator index order: its index (u64) and its reward (two's complement i64) |
+
+### Returns
+
+- `LANTERN_OK`: `out` holds the items.
+- `LANTERN_NO_STATE_ANSWER`: the fork is phase0, which has no sync committee.
+- `LANTERN_INVALID_ENCODING`: `block` holds no `SignedBeaconBlock` of the fork, or a pubkey of `current_sync_committee` is that of no validator.
+- `LANTERN_INVALID_SLOT`: `pre` is not at the block's slot.
+- `LANTERN_BUFFER_TOO_SMALL`: `out` has room for fewer than 24 + 16 * `SYNC_COMMITTEE_SIZE` bytes, or `scratch` is short of the room under Limits.
+
+### Function does
+
+- The values of beacon-api.md, getSyncCommitteeRewards.
+- The places' validators: as process_sync_aggregate's committee_indices (block-processing.md).
+- The members' balances: entries of 16 bytes in `scratch`, each a member's index and its balance, the proposer's once more when it is a member.
+
+### Function never
+
+- Writes `pre` or `block`.
+
+### Limits
+
+- Scratch: S(1), then at its end, before the decoded block, 8 * `SYNC_COMMITTEE_SIZE` bytes for the places and `SYNC_TABLE_BYTES` + 24 for the hash table of process_sync_aggregate's committee_indices, where the entries go after it.
+
+### ABI
+
+- Export: `lantern_<fork>_node_sync_rewards` of each fork object.
+- Argument order: `pre`, `block`, `scratch`, `out`.
 
 ## Function `lantern_node_payload_parent`
 

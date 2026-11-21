@@ -879,6 +879,718 @@ SPEC_FUNCTION node_liveness
     LEAVE 48
 SPEC_END node_liveness
 
+/* ---------------------------------------------------------------- Rewards (beacon-api.md, getBlockRewards) */
+
+.if FORK >= FORK_ALTAIR
+/*
+ * (state a0, scratch a1) -> a0 status, a1 participant_reward, a2 proposer_reward of
+ * process_sync_aggregate at the state (altair beacon-chain.md). Locals: 0 the total active
+ * balance, 8 the base reward per increment, 16 the state, 24 the scratch.
+ */
+LOCAL_FUNCTION node_sync_values
+    FRAME 32
+    sd      a0, 16(sp)
+    sd      a1, 24(sp)
+    mv      a2, sp
+    call    lantern_get_total_active_balance
+    bnez    a0, 9f
+    ld      a0, 16(sp)
+    ld      a1, 24(sp)
+    addi    a2, sp, 8
+    call    lantern_get_base_reward_per_increment
+    bnez    a0, 9f
+    ld      t0, 0(sp)
+    li      t1, EFFECTIVE_BALANCE_INCREMENT
+    divu    t0, t0, t1                      # total_active_increments
+    ld      t1, 8(sp)
+    mul     t0, t0, t1                      # total_base_rewards
+    li      t1, SYNC_REWARD_WEIGHT
+    mul     t0, t0, t1
+    srli    t0, t0, 6                       # // WEIGHT_DENOMINATOR
+    srli    t0, t0, LOG2_SLOTS_PER_EPOCH    # max_participant_rewards
+    li      t1, SYNC_COMMITTEE_SIZE
+    divu    a1, t0, t1                      # participant_reward
+    li      t1, PROPOSER_WEIGHT
+    mul     a2, a1, t1
+    li      t1, WEIGHT_DENOMINATOR - PROPOSER_WEIGHT
+    divu    a2, a2, t1                      # proposer_reward
+    li      a0, LANTERN_OK
+9:  UNFRAME 32
+END_FUNCTION node_sync_values
+.endif
+
+.if FORK == FORK_PHASE0
+.if BASE_REWARDS_PER_EPOCH != 4 || PROPOSER_REWARD_QUOTIENT != 8
+.error "lantern_node_block_rewards divides by BASE_REWARDS_PER_EPOCH and PROPOSER_REWARD_QUOTIENT with shifts"
+.endif
+/*
+ * Of the E st (k 1: early, its delays at s8 + 2n; k 2: late, at s8 + 3n): the square root of its
+ * total active balance at root, and for each attestation of its previous_epoch_attestations each
+ * attesting index below n takes the attestation's inclusion_delay when that is lower.
+ */
+.macro REWARD_LOWEST st, k, root
+    beqz    \st, 39f
+    SCRATCH_GIVE s4, s10, 2, s9
+    mv      a0, \st
+    mv      a1, s4
+    addi    a2, sp, 120
+    call    lantern_get_total_active_balance
+    sd      s10, 0(s4)
+    bnez    a0, 99f
+    addi    a0, sp, 120
+    addi    a1, sp, \root
+    call    lantern_integer_squareroot
+    li      t0, BeaconState_previous_epoch_attestations
+    add     t0, \st, t0
+    ld      t1, 0(t0)                       # the part's offset and count
+    ld      t2, 8(t0)
+    sd      t1, 16(sp)
+    sd      t2, 24(sp)
+32: ld      t1, 16(sp)
+    ld      t2, 24(sp)
+    beqz    t2, 39f
+    add     t3, \st, t1
+    ld      t0, 0(t3)                       # the next value starts after this one's size
+    add     t0, t1, t0
+    sd      t0, 16(sp)
+    addi    t2, t2, -1
+    sd      t2, 24(sp)
+    sd      t3, 128(sp)
+    SCRATCH_GIVE s4, s10, 2, s9
+    mv      a0, \st
+    mv      a1, t3
+    ld      a2, 96(sp)
+    mv      a3, s4
+    SCRATCH_LIST a4, s4, s10, 1, s9
+    call    lantern_get_attesting_indices
+    sd      s10, 0(s4)
+    bnez    a0, 99f
+    ld      t3, 128(sp)
+    ld      a5, PendingAttestation_inclusion_delay(t3)
+    slli    t4, s9, 1
+.if \k == 2
+    add     t4, t4, s9
+.endif
+    add     t4, s8, t4
+    SCRATCH_LIST t3, s4, s10, 1, s9
+    ld      t2, LIST_COUNT(t3)
+    addi    t3, t3, LIST_FIXED
+33: beqz    t2, 32b
+    ld      t0, 0(t3)
+    addi    t3, t3, 8
+    addi    t2, t2, -1
+    bgeu    t0, s9, 33b
+    add     t1, t4, t0
+    lbu     t5, 0(t1)
+    bgeu    a5, t5, 33b
+    sb      a5, 0(t1)
+    j       33b
+39:
+.endm
+.endif
+
+/*
+ * (pre, block, early, late, config, scratch, out) -> a0: the proposer's rewards of the block on
+ * its pre-state, part by part (node.md, lantern_node_block_rewards). s1 pre, s2 the body, s3
+ * config, s4 scratch, s5 out, s6 early, s7 late, s8 the bytes of the validators (list 0: the
+ * slashed marks at 0; from altair the copies of the previous and current participation at n and
+ * 2n; in phase0 the rewarded marks at n, bit 0 for the epoch before the block's and bit 1 for its
+ * own, and the lowest delays of early and late at 2n and 3n), s9 the validator count n, s10 the
+ * scratch's size after the decoded block. Locals: 0 the scratch's size on entry, 8 the epoch, 16
+ * the next entry of a list and 24 the count left, 32 the base reward per increment (phase0: the
+ * square root of early's total active balance, 40 of late's), 48 the flags (FLAGS_BYTES), 96 the
+ * CommitteeCache, 104 the inclusion delay, 120 a value, 128 the attestation, 136 its E, 144 its
+ * lowest delays, 152 its bit.
+ */
+SPEC_FUNCTION node_block_rewards
+    ENTER 160
+    mv      s5, a6                          # out first: the macros below use a6 and a7
+    mv      s1, a0
+    mv      s6, a2
+    mv      s7, a3
+    mv      s3, a4
+    mv      s4, a5
+    ld      t0, 0(s4)
+    sd      t0, 0(sp)
+    LDQ     t0, s3, CONFIG_COMMITTEE_CACHE
+    sd      t0, 96(sp)
+    ADDRESS a0, lantern_type_SignedBeaconBlock
+    mv      a2, s4
+    call    node_decode                     # a1: the block
+    li      t0, 1
+    beq     a0, t0, 97f
+    bgtu    a0, t0, 96f
+    PART    t1, t2, a1, SignedBeaconBlock_message
+    ld      t0, BeaconBlock_slot(t1)
+    LDQ     t2, s1, BeaconState_slot
+    bne     t0, t2, 95f
+    PART    s2, t2, t1, BeaconBlock_body
+    ld      t0, BeaconBlock_proposer_index(t1)
+    sd      t0, 120(sp)
+    ld      s10, 0(s4)
+    NEED_SCRATCH s4, s1, 6, 97f
+.if FORK == FORK_PHASE0
+    beqz    s6, 1f
+    NEED_SCRATCH s4, s6, 6, 97f
+1:  beqz    s7, 2f
+    NEED_SCRATCH s4, s7, 6, 97f
+2:
+.endif
+    ld      t0, 120(sp)                     # out: the proposer, then 0
+    sd      t0, 0(s5)
+    sd      zero, 8(s5)
+    sd      zero, 16(s5)
+    sd      zero, 24(s5)
+    sd      zero, 32(s5)
+    sd      zero, 40(s5)
+    LDQ     s9, s1, BeaconState_validators + 8
+    SCRATCH_LIST s8, s4, s10, 0, s9
+    addi    s8, s8, LIST_FIXED
+    mv      a0, s8
+    slli    a1, s9, 2
+    call    lantern_zero
+    mv      a0, s1
+    addi    a1, sp, 8
+    call    lantern_get_current_epoch
+    PART    t1, t2, s2, BeaconBlockBody_proposer_slashings  # proposer_slashings: each whistleblower_reward
+    PART    t3, t4, s1, BeaconState_validators
+    li      t5, FORK_WHISTLEBLOWER_REWARD_QUOTIENT
+3:  beqz    t2, 4f
+    ld      t0, (ProposerSlashing_signed_header_1 + SignedBeaconBlockHeader_message + BeaconBlockHeader_proposer_index)(t1)
+    bgeu    t0, s9, 96f
+    slli    t6, t0, 7
+    add     t6, t3, t6
+    ld      t6, Validator_effective_balance(t6)
+    divu    t6, t6, t5
+    ld      a0, 32(s5)
+    add     a0, a0, t6
+    sd      a0, 32(s5)
+    add     t6, s8, t0
+    li      a0, 1
+    sb      a0, 0(t6)
+    li      t6, ProposerSlashing__mem
+    add     t1, t1, t6
+    addi    t2, t2, -1
+    j       3b
+4:  PART    t1, t2, s2, BeaconBlockBody_attester_slashings  # attester_slashings: those process_attester_slashing slashes
+    sd      t1, 16(sp)
+    sd      t2, 24(sp)
+5:  ld      t1, 16(sp)
+    ld      t2, 24(sp)
+    beqz    t2, 10f
+    ld      t0, 0(t1)
+    add     t0, t1, t0
+    sd      t0, 16(sp)
+    addi    t2, t2, -1
+    sd      t2, 24(sp)
+    PART    t3, t4, t1, AttesterSlashing_attestation_1
+    PART    a0, a1, t3, IndexedAttestation_attesting_indices
+    slli    a1, a1, 3
+    add     a1, a0, a1
+    PART    t3, t4, t1, AttesterSlashing_attestation_2
+    PART    a2, a3, t3, IndexedAttestation_attesting_indices
+    slli    a3, a3, 3
+    add     a3, a2, a3
+    PART    a4, t4, s1, BeaconState_validators
+    ld      a5, 8(sp)
+6:  bgeu    a0, a1, 5b                      # the sorted intersection, by merge
+    bgeu    a2, a3, 5b
+    ld      t3, 0(a0)
+    ld      t4, 0(a2)
+    bltu    t3, t4, 61f
+    bltu    t4, t3, 62f
+    addi    a0, a0, 8
+    addi    a2, a2, 8
+    bgeu    t3, s9, 96f
+    add     t5, s8, t3
+    lbu     t6, 0(t5)                       # an earlier slashing of the body slashed it
+    bnez    t6, 6b
+    slli    t6, t3, 7                       # is_slashable_validator(validator, epoch)
+    add     t6, a4, t6
+    lbu     t0, Validator_slashed(t6)
+    bnez    t0, 6b
+    ld      t0, Validator_activation_epoch(t6)
+    bltu    a5, t0, 6b
+    ld      t0, Validator_withdrawable_epoch(t6)
+    bgeu    a5, t0, 6b
+    li      t0, 1
+    sb      t0, 0(t5)
+    ld      t6, Validator_effective_balance(t6)
+    li      t0, FORK_WHISTLEBLOWER_REWARD_QUOTIENT
+    divu    t6, t6, t0
+    ld      t0, 40(s5)
+    add     t0, t0, t6
+    sd      t0, 40(s5)
+    j       6b
+61: addi    a0, a0, 8
+    j       6b
+62: addi    a2, a2, 8
+    j       6b
+10:
+.if FORK >= FORK_ALTAIR
+    SCRATCH_GIVE s4, s10, 2, s9             # sync_aggregate: the set bits times proposer_reward
+    mv      a0, s1
+    mv      a1, s4
+    call    node_sync_values
+    sd      s10, 0(s4)
+    bnez    a0, 99f
+    li      t0, BeaconBlockBody_sync_aggregate + SyncAggregate_sync_committee_bits
+    add     t0, s2, t0
+    li      t1, 0
+    li      t2, SYNC_COMMITTEE_SIZE / 8
+11: beqz    t2, 13f
+    lbu     t3, 0(t0)
+12: beqz    t3, 121f
+    addi    t4, t3, -1
+    and     t3, t3, t4
+    addi    t1, t1, 1
+    j       12b
+121: addi   t0, t0, 1
+    addi    t2, t2, -1
+    j       11b
+13: mul     t1, t1, a2
+    sd      t1, 24(s5)
+    PART    a1, a2, s1, BeaconState_previous_epoch_participation  # copies of the flags
+    bleu    a2, s9, 14f
+    mv      a2, s9
+14: add     a0, s8, s9
+    call    lantern_copy
+    PART    a1, a2, s1, BeaconState_current_epoch_participation
+    bleu    a2, s9, 15f
+    mv      a2, s9
+15: slli    a0, s9, 1
+    add     a0, s8, a0
+    call    lantern_copy
+    SCRATCH_GIVE s4, s10, 2, s9
+    mv      a0, s1
+    mv      a1, s4
+    addi    a2, sp, 32
+    call    lantern_get_base_reward_per_increment
+    sd      s10, 0(s4)
+    bnez    a0, 99f
+    PART    t1, t2, s2, BeaconBlockBody_attestations    # attestations: process_attestation's proposer_reward of each
+    sd      t1, 16(sp)
+    sd      t2, 24(sp)
+20: ld      t1, 16(sp)
+    ld      t2, 24(sp)
+    beqz    t2, 90f
+    sd      t1, 128(sp)
+    ld      t0, 0(t1)
+    add     t0, t1, t0
+    sd      t0, 16(sp)
+    addi    t2, t2, -1
+    sd      t2, 24(sp)
+    LDQ     t0, s1, BeaconState_slot
+    ld      t3, (Attestation_data + AttestationData_slot)(t1)
+    sub     t0, t0, t3
+    sd      t0, 104(sp)
+    li      t0, FLAGS_BYTES
+    sd      t0, 48(sp)
+    mv      a0, s1
+    addi    a1, t1, Attestation_data
+    addi    a2, sp, 104
+    addi    a3, sp, 48
+    call    lantern_get_attestation_participation_flag_indices
+    bnez    a0, 99f
+    SCRATCH_GIVE s4, s10, 2, s9
+    mv      a0, s1
+    ld      a1, 128(sp)
+    ld      a2, 96(sp)
+    mv      a3, s4
+    SCRATCH_LIST a4, s4, s10, 1, s9
+    call    lantern_get_attesting_indices
+    sd      s10, 0(s4)
+    bnez    a0, 99f
+    ld      t1, 128(sp)                     # the copy of the target epoch's flags
+    ld      t0, (Attestation_data + AttestationData_target + Checkpoint_epoch)(t1)
+    ld      t2, 8(sp)
+    add     a5, s8, s9
+    bne     t0, t2, 21f
+    add     a5, a5, s9
+21: ld      t2, (48 + LIST_COUNT)(sp)      # the flags as bits
+    addi    t3, sp, 48 + LIST_FIXED
+    li      a3, 0
+22: beqz    t2, 23f
+    ld      t4, 0(t3)
+    li      t5, 1
+    sll     t5, t5, t4
+    or      a3, a3, t5
+    addi    t3, t3, 8
+    addi    t2, t2, -1
+    j       22b
+23: SCRATCH_LIST t3, s4, s10, 1, s9
+    ld      t2, LIST_COUNT(t3)
+    addi    t3, t3, LIST_FIXED
+    li      a4, 0                           # proposer_reward_numerator
+    PART    a1, t4, s1, BeaconState_validators
+    li      a2, EFFECTIVE_BALANCE_INCREMENT
+24: beqz    t2, 29f
+    ld      t4, 0(t3)
+    addi    t3, t3, 8
+    addi    t2, t2, -1
+    bgeu    t4, s9, 96f
+    add     t5, a5, t4
+    lbu     t6, 0(t5)
+    not     t0, t6
+    and     t0, t0, a3                      # the flags it takes now
+    beqz    t0, 24b
+    or      t6, t6, t0
+    sb      t6, 0(t5)
+    slli    t5, t4, 7
+    add     t5, a1, t5
+    ld      t5, Validator_effective_balance(t5)
+    divu    t5, t5, a2
+    ld      t6, 32(sp)
+    mul     t5, t5, t6                      # get_base_reward(state, index)
+    li      t6, 0
+    andi    t1, t0, 1 << TIMELY_SOURCE_FLAG_INDEX
+    beqz    t1, 25f
+    addi    t6, t6, TIMELY_SOURCE_WEIGHT
+25: andi    t1, t0, 1 << TIMELY_TARGET_FLAG_INDEX
+    beqz    t1, 26f
+    addi    t6, t6, TIMELY_TARGET_WEIGHT
+26: andi    t1, t0, 1 << TIMELY_HEAD_FLAG_INDEX
+    beqz    t1, 27f
+    addi    t6, t6, TIMELY_HEAD_WEIGHT
+27: mul     t5, t5, t6
+    add     a4, a4, t5
+    j       24b
+29: li      t0, (WEIGHT_DENOMINATOR - PROPOSER_WEIGHT) * WEIGHT_DENOMINATOR / PROPOSER_WEIGHT
+    divu    a4, a4, t0
+    ld      t0, 16(s5)
+    add     t0, t0, a4
+    sd      t0, 16(s5)
+    j       20b
+.else
+    slli    t0, s9, 1                       # the lowest delays of early and late: none yet
+    add     t0, s8, t0
+    slli    t1, s9, 1
+    li      t2, 255
+30: beqz    t1, 31f
+    sb      t2, 0(t0)
+    addi    t0, t0, 1
+    addi    t1, t1, -1
+    j       30b
+31: REWARD_LOWEST s6, 1, 32
+    REWARD_LOWEST s7, 2, 40
+    PART    t1, t2, s2, BeaconBlockBody_attestations    # attestations: the proposer rewards of get_inclusion_delay_deltas
+    sd      t1, 16(sp)
+    sd      t2, 24(sp)
+40: ld      t1, 16(sp)
+    ld      t2, 24(sp)
+    beqz    t2, 90f
+    sd      t1, 128(sp)
+    ld      t0, 0(t1)
+    add     t0, t1, t0
+    sd      t0, 16(sp)
+    addi    t2, t2, -1
+    sd      t2, 24(sp)
+    ld      t0, (Attestation_data + AttestationData_target + Checkpoint_epoch)(t1)
+    ld      t2, 8(sp)
+    beq     t0, t2, 41f
+    addi    t3, t0, 1
+    bne     t3, t2, 95f
+    mv      t3, s6                          # the epoch before the block's: early
+    slli    t4, s9, 1
+    add     t4, s8, t4
+    li      t5, 1
+    j       42f
+41: mv      t3, s7                          # the block's epoch: late
+    slli    t4, s9, 1
+    add     t4, t4, s9
+    add     t4, s8, t4
+    li      t5, 2
+42: bnez    t3, 43f
+    LDQ     t6, s3, CONFIG_ALTAIR_FORK_EPOCH    # no E: the epoch after the target's is altair's or later
+    addi    t2, t0, 1
+    bltu    t2, t6, 95f
+    j       40b
+43: addi    t2, t0, 2                       # E at the last slot of the epoch after the target's
+    slli    t2, t2, LOG2_SLOTS_PER_EPOCH
+    addi    t2, t2, -1
+    LDQ     t6, t3, BeaconState_slot
+    bne     t6, t2, 95f
+    sd      t3, 136(sp)
+    sd      t4, 144(sp)
+    sd      t5, 152(sp)
+    LDQ     t0, s1, BeaconState_slot
+    ld      t2, (Attestation_data + AttestationData_slot)(t1)
+    sub     t0, t0, t2
+    sd      t0, 104(sp)
+    SCRATCH_GIVE s4, s10, 2, s9
+    mv      a0, s1
+    mv      a1, t1
+    ld      a2, 96(sp)
+    mv      a3, s4
+    SCRATCH_LIST a4, s4, s10, 1, s9
+    call    lantern_get_attesting_indices
+    sd      s10, 0(s4)
+    bnez    a0, 99f
+    ld      t5, 152(sp)
+    ld      a5, 32(sp)                      # the square root of E's total active balance
+    li      t0, 1
+    beq     t5, t0, 45f
+    ld      a5, 40(sp)
+45: ld      t3, 136(sp)
+    PART    a1, a2, t3, BeaconState_validators
+    ld      a3, 144(sp)
+    add     a4, s8, s9                      # the rewarded marks
+    ld      t6, 104(sp)
+    SCRATCH_LIST t3, s4, s10, 1, s9
+    ld      t2, LIST_COUNT(t3)
+    addi    t3, t3, LIST_FIXED
+44: beqz    t2, 40b
+    ld      t0, 0(t3)
+    addi    t3, t3, 8
+    addi    t2, t2, -1
+    bgeu    t0, s9, 96f
+    add     t1, a4, t0
+    lbu     t4, 0(t1)
+    and     a0, t4, t5
+    bnez    a0, 44b
+    or      t4, t4, t5
+    sb      t4, 0(t1)
+    bgeu    t0, a2, 96f
+    slli    t1, t0, 7
+    add     t1, a1, t1
+    lbu     t4, Validator_slashed(t1)       # unslashed in E
+    bnez    t4, 44b
+    add     t4, a3, t0                      # and no attestation of E with a lower delay
+    lbu     t4, 0(t4)
+    bltu    t4, t6, 44b
+    ld      t4, Validator_effective_balance(t1)
+    li      a0, BASE_REWARD_FACTOR
+    mul     t4, t4, a0
+    divu    t4, t4, a5
+    srli    t4, t4, 2                       # get_base_reward(E, index): // BASE_REWARDS_PER_EPOCH
+    srli    t4, t4, 3                       # // PROPOSER_REWARD_QUOTIENT
+    ld      a0, 16(s5)
+    add     a0, a0, t4
+    sd      a0, 16(s5)
+    j       44b
+.endif
+90: ld      t0, 16(s5)                      # total
+    ld      t1, 24(s5)
+    add     t0, t0, t1
+    ld      t1, 32(s5)
+    add     t0, t0, t1
+    ld      t1, 40(s5)
+    add     t0, t0, t1
+    sd      t0, 8(s5)
+    li      a0, LANTERN_OK
+99: ld      t0, 0(sp)
+    sd      t0, 0(s4)
+    LEAVE 160
+95: li      a0, LANTERN_INVALID_SLOT
+    j       99b
+96: li      a0, LANTERN_INVALID_ENCODING
+    j       99b
+97: li      a0, LANTERN_BUFFER_TOO_SMALL
+    j       99b
+SPEC_END node_block_rewards
+
+.if FORK >= FORK_ALTAIR
+/*
+ * a0 = the entry of the validator a0 among the a2 entries of 24 bytes at a1 (index, balance,
+ * member), a new one with its balance in the state a3 and member 0 when there is none, a2 = the
+ * count; a0 = 0 for an index past the validators. Uses a4-a7, t0.
+ */
+LOCAL_FUNCTION node_reward_entry
+    UNWIND_END_PROLOGUE
+    mv      a4, a1
+    mv      a5, a2
+1:  beqz    a5, 2f
+    ld      a6, 0(a4)
+    beq     a6, a0, 3f
+    addi    a4, a4, 24
+    addi    a5, a5, -1
+    j       1b
+2:  PART    a6, t0, a3, BeaconState_balances
+    bgeu    a0, t0, 4f
+    slli    t0, a0, 3
+    add     t0, a6, t0
+    ld      t0, 0(t0)
+    sd      a0, 0(a4)
+    sd      t0, 8(a4)
+    sd      zero, 16(a4)
+    addi    a2, a2, 1
+3:  mv      a0, a4
+    ret
+4:  li      a0, 0
+    ret
+END_FUNCTION node_reward_entry
+
+.set SYNC_REWARD_EXTRA, 8 * SYNC_COMMITTEE_SIZE + SYNC_TABLE_BYTES + 24   /* the places, the table of find_pubkeys and its 3 words */
+.if 24 * (SYNC_COMMITTEE_SIZE + 1) > SYNC_TABLE_BYTES
+.error "lantern_node_sync_rewards keeps its entries where the table of find_pubkeys was"
+.endif
+
+/*
+ * (pre, block, scratch, out) -> a0: the balance changes of the block's sync aggregate on its
+ * pre-state (node.md, lantern_node_sync_rewards). s1 pre, s2 the bits, s3 out, s4 scratch, s5 the
+ * places' validator indices (at the end of scratch, before the decoded block), s6 the hash table of
+ * find_pubkeys, then the entries of node_reward_entry, s7 their count, s8 participant_reward, s9
+ * proposer_reward, s10 the proposer. Locals: 0 the scratch's size on entry, 8 the proposer rewards
+ * it took, 16 the place.
+ */
+SPEC_FUNCTION node_sync_rewards
+    ENTER 32
+    mv      s1, a0
+    mv      s4, a2
+    mv      s3, a3
+    ld      t0, 0(s4)
+    sd      t0, 0(sp)
+    ld      t0, 0(s3)
+    li      t1, 24 + 16 * SYNC_COMMITTEE_SIZE
+    bltu    t0, t1, 97f
+    ADDRESS a0, lantern_type_SignedBeaconBlock
+    mv      a2, s4
+    call    node_decode                     # a1: the block
+    li      t0, 1
+    beq     a0, t0, 97f
+    bgtu    a0, t0, 96f
+    PART    t1, t2, a1, SignedBeaconBlock_message
+    ld      t0, BeaconBlock_slot(t1)
+    LDQ     t2, s1, BeaconState_slot
+    bne     t0, t2, 95f
+    ld      s10, BeaconBlock_proposer_index(t1)
+    PART    s2, t2, t1, BeaconBlock_body
+    li      t0, BeaconBlockBody_sync_aggregate + SyncAggregate_sync_committee_bits
+    add     s2, s2, t0
+    NEED_SCRATCH_B s4, s1, 1, SYNC_REWARD_EXTRA, 97f
+    ld      t0, 0(s4)                       # the places, then the table, at the end
+    li      t1, 8 * SYNC_COMMITTEE_SIZE
+    sub     t0, t0, t1
+    add     s5, s4, t0
+    li      t1, SYNC_TABLE_BYTES + 24
+    sub     t0, t0, t1
+    add     s6, s4, t0
+    sd      t0, 0(s4)                       # what callees get
+    mv      a0, s1                          # committee_indices, as process_sync_aggregate finds them
+    li      a1, BeaconState_current_sync_committee + SyncCommittee_pubkeys
+    add     a1, s1, a1
+    mv      a2, s5
+    mv      a3, s6
+    call    find_pubkeys
+    bnez    a0, 96f
+    mv      a0, s1
+    mv      a1, s4
+    call    node_sync_values
+    bnez    a0, 99f
+    mv      s8, a1
+    mv      s9, a2
+    sd      zero, 8(sp)
+    sd      zero, 16(sp)
+    li      s7, 0
+1:  ld      t0, 16(sp)                      # each place, in order
+    li      t1, SYNC_COMMITTEE_SIZE
+    bgeu    t0, t1, 5f
+    slli    t1, t0, 3
+    add     t1, s5, t1
+    ld      a0, 0(t1)
+    mv      a1, s6
+    mv      a2, s7
+    mv      a3, s1
+    call    node_reward_entry
+    mv      s7, a2
+    beqz    a0, 96f
+    li      t0, 1
+    sd      t0, 16(a0)                      # a member
+    ld      t0, 16(sp)
+    srli    t1, t0, 3
+    add     t1, s2, t1
+    lbu     t1, 0(t1)
+    andi    t2, t0, 7
+    srl     t1, t1, t2
+    andi    t1, t1, 1
+    beqz    t1, 3f
+    ld      t0, 8(a0)                       # the participant takes participant_reward, the proposer proposer_reward
+    add     t0, t0, s8
+    sd      t0, 8(a0)
+    mv      a0, s10
+    mv      a1, s6
+    mv      a2, s7
+    mv      a3, s1
+    call    node_reward_entry
+    mv      s7, a2
+    beqz    a0, 96f
+    ld      t0, 8(a0)
+    add     t0, t0, s9
+    sd      t0, 8(a0)
+    ld      t0, 8(sp)
+    add     t0, t0, s9
+    sd      t0, 8(sp)
+    j       4f
+3:  ld      t0, 8(a0)                       # decrease_balance: down to 0 at the least
+    bgeu    t0, s8, 31f
+    li      t0, 0
+    j       32f
+31: sub     t0, t0, s8
+32: sd      t0, 8(a0)
+4:  ld      t0, 16(sp)
+    addi    t0, t0, 1
+    sd      t0, 16(sp)
+    j       1b
+5:  PART    a6, t0, s1, BeaconState_balances    # the members in index order: the lowest after the last
+    li      a4, 0                           # 1 once one is written
+    li      a5, 0                           # the last written
+    addi    t6, s3, 24
+6:  li      t0, -1
+    li      t1, 0
+    mv      t2, s6
+    mv      t3, s7
+7:  beqz    t3, 9f
+    ld      t4, 0(t2)
+    ld      t5, 16(t2)
+    beqz    t5, 8f
+    beqz    a4, 71f
+    bleu    t4, a5, 8f
+71: bgeu    t4, t0, 8f
+    mv      t0, t4
+    mv      t1, t2
+8:  addi    t2, t2, 24
+    addi    t3, t3, -1
+    j       7b
+9:  beqz    t1, 11f
+    slli    t2, t0, 3
+    add     t2, a6, t2
+    ld      t2, 0(t2)
+    ld      t3, 8(t1)
+    sub     t3, t3, t2                      # after less before
+    bne     t0, s10, 10f
+    ld      t2, 8(sp)                       # the proposer: less the proposer rewards
+    sub     t3, t3, t2
+10: sd      t0, 0(t6)
+    sd      t3, 8(t6)
+    addi    t6, t6, 16
+    li      a4, 1
+    mv      a5, t0
+    j       6b
+11: sub     t0, t6, s3
+    addi    t0, t0, -24
+    li      t1, 24
+    sd      t1, 8(s3)
+    sd      t0, 16(s3)
+    li      a0, LANTERN_OK
+99: ld      t0, 0(sp)
+    sd      t0, 0(s4)
+    LEAVE 32
+95: li      a0, LANTERN_INVALID_SLOT
+    j       99b
+96: li      a0, LANTERN_INVALID_ENCODING
+    j       99b
+97: li      a0, LANTERN_BUFFER_TOO_SMALL
+    j       99b
+SPEC_END node_sync_rewards
+.else
+/* (pre, block, scratch, out) -> LANTERN_NO_STATE_ANSWER: phase0 has no sync committee (node.md, lantern_node_sync_rewards). */
+SPEC_FUNCTION node_sync_rewards
+    FRAME 0
+    li      a0, LANTERN_NO_STATE_ANSWER
+    UNFRAME 0
+SPEC_END node_sync_rewards
+.endif
+
 /* a0 = the fork's TypeDescriptor of the NODE_JSON_* kind t0, or 0. Uses t1. */
 LOCAL_FUNCTION node_type_of_kind
     UNWIND_END_PROLOGUE

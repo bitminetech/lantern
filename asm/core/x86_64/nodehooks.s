@@ -876,6 +876,754 @@ SPEC_FUNCTION node_liveness
     LEAVE 48
 SPEC_END node_liveness
 
+/* ---------------------------------------------------------------- Rewards (beacon-api.md, getBlockRewards) */
+
+.if FORK >= FORK_ALTAIR
+/*
+ * (state rdi, scratch rsi) -> rax status, rdx participant_reward, rcx proposer_reward of
+ * process_sync_aggregate at the state (altair beacon-chain.md). Locals: 0 the total active
+ * balance, 8 the base reward per increment, 16 the state, 24 the scratch.
+ */
+LOCAL_FUNCTION node_sync_values
+    FRAME 32
+    mov     %rdi, 16(%rsp)
+    mov     %rsi, 24(%rsp)
+    mov     %rsp, %rdx
+    call    lantern_get_total_active_balance
+    test    %rax, %rax
+    jnz     9f
+    mov     16(%rsp), %rdi
+    mov     24(%rsp), %rsi
+    lea     8(%rsp), %rdx
+    call    lantern_get_base_reward_per_increment
+    test    %rax, %rax
+    jnz     9f
+    mov     (%rsp), %rax
+    xor     %edx, %edx
+    MOVQ    %rcx, EFFECTIVE_BALANCE_INCREMENT
+    div     %rcx                            # total_active_increments
+    imul    8(%rsp), %rax                   # total_base_rewards
+    imul    $SYNC_REWARD_WEIGHT, %rax, %rax
+    shr     $6, %rax                        # // WEIGHT_DENOMINATOR
+    shr     $LOG2_SLOTS_PER_EPOCH, %rax     # max_participant_rewards
+    xor     %edx, %edx
+    mov     $SYNC_COMMITTEE_SIZE, %ecx
+    div     %rcx                            # participant_reward
+    mov     %rax, %r8
+    imul    $PROPOSER_WEIGHT, %rax, %rax
+    xor     %edx, %edx
+    mov     $(WEIGHT_DENOMINATOR - PROPOSER_WEIGHT), %ecx
+    div     %rcx                            # proposer_reward
+    mov     %rax, %rcx
+    mov     %r8, %rdx
+    xor     %eax, %eax
+9:  UNFRAME 32
+END_FUNCTION node_sync_values
+.endif
+
+.if FORK == FORK_PHASE0
+.if BASE_REWARDS_PER_EPOCH != 4 || PROPOSER_REWARD_QUOTIENT != 8
+.error "lantern_node_block_rewards divides by BASE_REWARDS_PER_EPOCH and PROPOSER_REWARD_QUOTIENT with shifts"
+.endif
+/*
+ * Of the E at st (k 1: early, its delays at r14 + 2n; k 2: late, at r14 + 3n): the square root of
+ * its total active balance at root, and for each attestation of its previous_epoch_attestations each
+ * attesting index below n takes the attestation's inclusion_delay when that is lower.
+ */
+.macro REWARD_LOWEST st, k, root
+    mov     \st, %rax
+    test    %rax, %rax
+    jz      39f
+    mov     S10(%rsp), %rcx
+    SCRATCH_GIVE %r13, %rcx, 2, %r15
+    mov     \st, %rdi
+    mov     %r13, %rsi
+    lea     (L + 120)(%rsp), %rdx
+    call    lantern_get_total_active_balance
+    mov     S10(%rsp), %rcx
+    mov     %rcx, (%r13)
+    test    %rax, %rax
+    jnz     99f
+    lea     (L + 120)(%rsp), %rdi
+    lea     \root(%rsp), %rsi
+    call    lantern_integer_squareroot
+    mov     \st, %rdi
+    MOVQ    %rax, BeaconState_previous_epoch_attestations
+    mov     (%rdi,%rax), %rcx               # the part's offset and count
+    mov     8(%rdi,%rax), %rdx
+    mov     %rcx, (L + 16)(%rsp)
+    mov     %rdx, (L + 24)(%rsp)
+32: mov     (L + 16)(%rsp), %rcx
+    mov     (L + 24)(%rsp), %rdx
+    test    %rdx, %rdx
+    jz      39f
+    mov     \st, %rdi
+    mov     (%rdi,%rcx), %rax               # the next value starts after this one's size
+    add     %rcx, %rax
+    mov     %rax, (L + 16)(%rsp)
+    dec     %rdx
+    mov     %rdx, (L + 24)(%rsp)
+    lea     (%rdi,%rcx), %rsi
+    mov     %rsi, (L + 128)(%rsp)
+    mov     S10(%rsp), %rax
+    SCRATCH_GIVE %r13, %rax, 2, %r15
+    mov     (L + 96)(%rsp), %rdx
+    mov     %r13, %rcx
+    mov     S10(%rsp), %rax
+    SCRATCH_LIST %r8, %r13, %rax, 1, %r15
+    call    lantern_get_attesting_indices
+    mov     S10(%rsp), %rcx
+    mov     %rcx, (%r13)
+    test    %rax, %rax
+    jnz     99f
+    mov     (L + 128)(%rsp), %rsi
+    mov     PendingAttestation_inclusion_delay(%rsi), %r9
+.if \k == 1
+    lea     (%r14,%r15,2), %rdi
+.else
+    lea     (%r15,%r15,2), %rdi
+    add     %r14, %rdi
+.endif
+    mov     S10(%rsp), %rax
+    SCRATCH_LIST %rsi, %r13, %rax, 1, %r15
+    mov     LIST_COUNT(%rsi), %rcx
+    add     $LIST_FIXED, %rsi
+33: test    %rcx, %rcx
+    jz      32b
+    mov     (%rsi), %rax
+    add     $8, %rsi
+    dec     %rcx
+    cmp     %r15, %rax
+    jae     33b
+    movzbl  (%rdi,%rax), %edx
+    cmp     %rdx, %r9
+    jae     33b
+    mov     %r9b, (%rdi,%rax)
+    jmp     33b
+39:
+.endm
+.endif
+
+/*
+ * (pre, block, early, late, config, scratch, out) -> rax: the proposer's rewards of the block on
+ * its pre-state, part by part (node.md, lantern_node_block_rewards). rbx pre, rbp the body, r12
+ * config, r13 scratch, r14 the bytes of the validators (list 0: the slashed marks at 0; from altair
+ * the copies of the previous and current participation at n and 2n; in phase0 the rewarded marks
+ * at n, bit 0 for the epoch before the block's and bit 1 for its own, and the lowest delays of
+ * early and late at 2n and 3n), r15 the validator count n; S7 out, S8 early, S9 late, S10 the
+ * scratch's size after the decoded block. Locals: L the scratch's size on entry, L+8 the epoch,
+ * L+16 the next entry of a list and L+24 the count left, L+32 the base reward per increment
+ * (phase0: the square root of early's total active balance, L+40 of late's), L+48 the flags
+ * (FLAGS_BYTES), L+96 the CommitteeCache, L+104 the inclusion delay, L+112 EFFECTIVE_BALANCE_INCREMENT,
+ * L+120 a value, L+128 the attestation, L+136 its E, L+144 its lowest delays, L+152 its bit.
+ */
+SPEC_FUNCTION node_block_rewards
+    ENTER 160
+    mov     %rdi, %rbx
+    mov     %rdx, S8(%rsp)
+    mov     %rcx, S9(%rsp)
+    mov     %r8, %r12
+    mov     %r9, %r13
+    mov     (160 + 96)(%rsp), %rax          # the seventh argument
+    mov     %rax, S7(%rsp)
+    mov     (%r13), %rax
+    mov     %rax, L(%rsp)
+    mov     CONFIG_COMMITTEE_CACHE(%r12), %rax
+    mov     %rax, (L + 96)(%rsp)
+    ADDRESS %rdi, lantern_type_SignedBeaconBlock
+    mov     %r13, %rdx
+    call    node_decode                     # rsi: the block
+    cmp     $1, %rax
+    je      97f
+    ja      96f
+    PART    %rsi, %rcx, %rdx, SignedBeaconBlock_message
+    mov     BeaconBlock_slot(%rsi), %rax
+    cmp     BeaconState_slot(%rbx), %rax
+    jne     95f
+    PART    %rbp, %rcx, %rsi, BeaconBlock_body
+    mov     BeaconBlock_proposer_index(%rsi), %rax
+    mov     %rax, (L + 120)(%rsp)
+    mov     (%r13), %rax
+    mov     %rax, S10(%rsp)
+    NEED_SCRATCH %r13, %rbx, 6, 97f
+.if FORK == FORK_PHASE0
+    mov     S8(%rsp), %rax
+    test    %rax, %rax
+    jz      1f
+    NEED_SCRATCH %r13, %rax, 6, 97f
+1:  mov     S9(%rsp), %rax
+    test    %rax, %rax
+    jz      2f
+    NEED_SCRATCH %r13, %rax, 6, 97f
+2:
+.endif
+    mov     S7(%rsp), %rdi                  # out: the proposer, then 0
+    mov     (L + 120)(%rsp), %rax
+    mov     %rax, (%rdi)
+    xor     %eax, %eax
+    mov     %rax, 8(%rdi)
+    mov     %rax, 16(%rdi)
+    mov     %rax, 24(%rdi)
+    mov     %rax, 32(%rdi)
+    mov     %rax, 40(%rdi)
+    mov     (BeaconState_validators + 8)(%rbx), %r15
+    mov     S10(%rsp), %rax
+    SCRATCH_LIST %r14, %r13, %rax, 0, %r15
+    add     $LIST_FIXED, %r14
+    mov     %r14, %rdi
+    lea     (,%r15,4), %rsi
+    call    lantern_zero
+    mov     %rbx, %rdi
+    lea     (L + 8)(%rsp), %rsi
+    call    lantern_get_current_epoch
+    PART    %rsi, %rcx, %rbp, BeaconBlockBody_proposer_slashings   # proposer_slashings: each whistleblower_reward
+    PART    %r8, %r10, %rbx, BeaconState_validators
+    mov     S7(%rsp), %r9
+    MOVQ    %r11, FORK_WHISTLEBLOWER_REWARD_QUOTIENT
+3:  test    %rcx, %rcx
+    jz      4f
+    mov     (ProposerSlashing_signed_header_1 + SignedBeaconBlockHeader_message + BeaconBlockHeader_proposer_index)(%rsi), %rdi
+    cmp     %r15, %rdi
+    jae     96f
+    mov     %rdi, %rax
+    shl     $7, %rax
+    mov     Validator_effective_balance(%r8,%rax), %rax
+    xor     %edx, %edx
+    div     %r11
+    add     %rax, 32(%r9)
+    movb    $1, (%r14,%rdi)
+    add     $ProposerSlashing__mem, %rsi
+    dec     %rcx
+    jmp     3b
+4:  PART    %rsi, %rcx, %rbp, BeaconBlockBody_attester_slashings   # attester_slashings: those process_attester_slashing slashes
+    mov     %rsi, (L + 16)(%rsp)
+    mov     %rcx, (L + 24)(%rsp)
+5:  mov     (L + 16)(%rsp), %rsi
+    mov     (L + 24)(%rsp), %rcx
+    test    %rcx, %rcx
+    jz      10f
+    mov     (%rsi), %rax
+    add     %rsi, %rax
+    mov     %rax, (L + 16)(%rsp)
+    dec     %rcx
+    mov     %rcx, (L + 24)(%rsp)
+    PART    %rdi, %rax, %rsi, AttesterSlashing_attestation_1
+    PART    %r8, %rax, %rdi, IndexedAttestation_attesting_indices
+    lea     (%r8,%rax,8), %r9
+    PART    %rdi, %rax, %rsi, AttesterSlashing_attestation_2
+    PART    %r10, %rax, %rdi, IndexedAttestation_attesting_indices
+    lea     (%r10,%rax,8), %r11
+6:  cmp     %r9, %r8                        # the sorted intersection, by merge
+    jae     5b
+    cmp     %r11, %r10
+    jae     5b
+    mov     (%r8), %rax
+    mov     (%r10), %rdx
+    cmp     %rdx, %rax
+    jb      61f
+    ja      62f
+    add     $8, %r8
+    add     $8, %r10
+    cmp     %r15, %rax
+    jae     96f
+    cmpb    $0, (%r14,%rax)                 # an earlier slashing of the body slashed it
+    jne     6b
+    mov     BeaconState_validators(%rbx), %rdi  # is_slashable_validator(validator, epoch)
+    add     %rbx, %rdi
+    mov     %rax, %rcx
+    shl     $7, %rcx
+    add     %rcx, %rdi
+    cmpb    $0, Validator_slashed(%rdi)
+    jne     6b
+    mov     (L + 8)(%rsp), %rdx
+    cmp     Validator_activation_epoch(%rdi), %rdx
+    jb      6b
+    cmp     Validator_withdrawable_epoch(%rdi), %rdx
+    jae     6b
+    movb    $1, (%r14,%rax)
+    mov     Validator_effective_balance(%rdi), %rax
+    xor     %edx, %edx
+    MOVQ    %rcx, FORK_WHISTLEBLOWER_REWARD_QUOTIENT
+    div     %rcx
+    mov     S7(%rsp), %rcx
+    add     %rax, 40(%rcx)
+    jmp     6b
+61: add     $8, %r8
+    jmp     6b
+62: add     $8, %r10
+    jmp     6b
+10:
+.if FORK >= FORK_ALTAIR
+    mov     S10(%rsp), %rax                 # sync_aggregate: the set bits times proposer_reward
+    SCRATCH_GIVE %r13, %rax, 2, %r15
+    mov     %rbx, %rdi
+    mov     %r13, %rsi
+    call    node_sync_values
+    mov     S10(%rsp), %r8
+    mov     %r8, (%r13)
+    test    %rax, %rax
+    jnz     99f
+    MOVQ    %rsi, BeaconBlockBody_sync_aggregate + SyncAggregate_sync_committee_bits
+    add     %rbp, %rsi
+    xor     %eax, %eax
+    mov     $(SYNC_COMMITTEE_SIZE / 8), %r8d
+11: test    %r8, %r8
+    jz      13f
+    movzbl  (%rsi), %r9d
+12: test    %r9, %r9
+    jz      121f
+    lea     -1(%r9), %r10
+    and     %r10, %r9
+    inc     %rax
+    jmp     12b
+121: inc    %rsi
+    dec     %r8
+    jmp     11b
+13: imul    %rcx, %rax
+    mov     S7(%rsp), %rdi
+    mov     %rax, 24(%rdi)
+    PART    %rsi, %rdx, %rbx, BeaconState_previous_epoch_participation  # copies of the flags
+    cmp     %r15, %rdx
+    cmova   %r15, %rdx
+    lea     (%r14,%r15), %rdi
+    call    lantern_copy
+    PART    %rsi, %rdx, %rbx, BeaconState_current_epoch_participation
+    cmp     %r15, %rdx
+    cmova   %r15, %rdx
+    lea     (%r14,%r15,2), %rdi
+    call    lantern_copy
+    mov     S10(%rsp), %rax
+    SCRATCH_GIVE %r13, %rax, 2, %r15
+    mov     %rbx, %rdi
+    mov     %r13, %rsi
+    lea     (L + 32)(%rsp), %rdx
+    call    lantern_get_base_reward_per_increment
+    mov     S10(%rsp), %rcx
+    mov     %rcx, (%r13)
+    test    %rax, %rax
+    jnz     99f
+    MOVQ    %rax, EFFECTIVE_BALANCE_INCREMENT
+    mov     %rax, (L + 112)(%rsp)
+    PART    %rsi, %rcx, %rbp, BeaconBlockBody_attestations   # attestations: process_attestation's proposer_reward of each
+    mov     %rsi, (L + 16)(%rsp)
+    mov     %rcx, (L + 24)(%rsp)
+20: mov     (L + 16)(%rsp), %rsi
+    mov     (L + 24)(%rsp), %rcx
+    test    %rcx, %rcx
+    jz      90f
+    mov     %rsi, (L + 128)(%rsp)
+    mov     (%rsi), %rax
+    add     %rsi, %rax
+    mov     %rax, (L + 16)(%rsp)
+    dec     %rcx
+    mov     %rcx, (L + 24)(%rsp)
+    mov     BeaconState_slot(%rbx), %rax
+    sub     (Attestation_data + AttestationData_slot)(%rsi), %rax
+    mov     %rax, (L + 104)(%rsp)
+    movq    $FLAGS_BYTES, (L + 48)(%rsp)
+    mov     %rbx, %rdi
+    lea     Attestation_data(%rsi), %rsi
+    lea     (L + 104)(%rsp), %rdx
+    lea     (L + 48)(%rsp), %rcx
+    call    lantern_get_attestation_participation_flag_indices
+    test    %rax, %rax
+    jnz     99f
+    mov     S10(%rsp), %rax
+    SCRATCH_GIVE %r13, %rax, 2, %r15
+    mov     %rbx, %rdi
+    mov     (L + 128)(%rsp), %rsi
+    mov     (L + 96)(%rsp), %rdx
+    mov     %r13, %rcx
+    mov     S10(%rsp), %rax
+    SCRATCH_LIST %r8, %r13, %rax, 1, %r15
+    call    lantern_get_attesting_indices
+    mov     S10(%rsp), %rcx
+    mov     %rcx, (%r13)
+    test    %rax, %rax
+    jnz     99f
+    mov     (L + 128)(%rsp), %rsi           # the copy of the target epoch's flags
+    mov     (Attestation_data + AttestationData_target + Checkpoint_epoch)(%rsi), %rax
+    lea     (%r14,%r15,2), %rdi
+    cmp     (L + 8)(%rsp), %rax
+    je      21f
+    lea     (%r14,%r15), %rdi
+21: mov     (L + 48 + LIST_COUNT)(%rsp), %rcx   # the flags as bits
+    lea     (L + 48 + LIST_FIXED)(%rsp), %rsi
+    xor     %r8d, %r8d
+22: test    %rcx, %rcx
+    jz      23f
+    mov     (%rsi), %rax
+    bts     %rax, %r8
+    add     $8, %rsi
+    dec     %rcx
+    jmp     22b
+23: mov     S10(%rsp), %rax
+    SCRATCH_LIST %rsi, %r13, %rax, 1, %r15
+    mov     LIST_COUNT(%rsi), %rcx
+    add     $LIST_FIXED, %rsi
+    xor     %r10d, %r10d                    # proposer_reward_numerator
+    PART    %r9, %rax, %rbx, BeaconState_validators
+24: test    %rcx, %rcx
+    jz      29f
+    mov     (%rsi), %rax
+    add     $8, %rsi
+    dec     %rcx
+    cmp     %r15, %rax
+    jae     96f
+    movzbl  (%rdi,%rax), %edx
+    mov     %edx, %r11d
+    not     %r11
+    and     %r8, %r11                       # the flags it takes now
+    jz      24b
+    or      %r11b, (%rdi,%rax)
+    shl     $7, %rax
+    mov     Validator_effective_balance(%r9,%rax), %rax
+    xor     %edx, %edx
+    divq    (L + 112)(%rsp)
+    imul    (L + 32)(%rsp), %rax            # get_base_reward(state, index)
+    xor     %edx, %edx
+    test    $(1 << TIMELY_SOURCE_FLAG_INDEX), %r11
+    jz      25f
+    add     $TIMELY_SOURCE_WEIGHT, %rdx
+25: test    $(1 << TIMELY_TARGET_FLAG_INDEX), %r11
+    jz      26f
+    add     $TIMELY_TARGET_WEIGHT, %rdx
+26: test    $(1 << TIMELY_HEAD_FLAG_INDEX), %r11
+    jz      27f
+    add     $TIMELY_HEAD_WEIGHT, %rdx
+27: imul    %rdx, %rax
+    add     %rax, %r10
+    jmp     24b
+29: mov     %r10, %rax
+    xor     %edx, %edx
+    mov     $((WEIGHT_DENOMINATOR - PROPOSER_WEIGHT) * WEIGHT_DENOMINATOR / PROPOSER_WEIGHT), %ecx
+    div     %rcx
+    mov     S7(%rsp), %rdx
+    add     %rax, 16(%rdx)
+    jmp     20b
+.else
+    lea     (%r14,%r15,2), %rdi             # the lowest delays of early and late: none yet
+    lea     (,%r15,2), %rcx
+    mov     $255, %al
+    rep stosb
+    REWARD_LOWEST S8(%rsp), 1, (L + 32)
+    REWARD_LOWEST S9(%rsp), 2, (L + 40)
+    PART    %rsi, %rcx, %rbp, BeaconBlockBody_attestations   # attestations: the proposer rewards of get_inclusion_delay_deltas
+    mov     %rsi, (L + 16)(%rsp)
+    mov     %rcx, (L + 24)(%rsp)
+40: mov     (L + 16)(%rsp), %rsi
+    mov     (L + 24)(%rsp), %rcx
+    test    %rcx, %rcx
+    jz      90f
+    mov     %rsi, (L + 128)(%rsp)
+    mov     (%rsi), %rax
+    add     %rsi, %rax
+    mov     %rax, (L + 16)(%rsp)
+    dec     %rcx
+    mov     %rcx, (L + 24)(%rsp)
+    mov     (Attestation_data + AttestationData_target + Checkpoint_epoch)(%rsi), %rdx
+    cmp     (L + 8)(%rsp), %rdx
+    je      41f
+    lea     1(%rdx), %rax
+    cmp     (L + 8)(%rsp), %rax
+    jne     95f
+    mov     S8(%rsp), %r8                   # the epoch before the block's: early
+    lea     (%r14,%r15,2), %r9
+    mov     $1, %r10d
+    jmp     42f
+41: mov     S9(%rsp), %r8                   # the block's epoch: late
+    lea     (%r15,%r15,2), %r9
+    add     %r14, %r9
+    mov     $2, %r10d
+42: test    %r8, %r8
+    jnz     43f
+    lea     1(%rdx), %rax                   # no E: the epoch after the target's is altair's or later
+    cmp     CONFIG_ALTAIR_FORK_EPOCH(%r12), %rax
+    jb      95f
+    jmp     40b
+43: lea     2(%rdx), %rax                   # E at the last slot of the epoch after the target's
+    shl     $LOG2_SLOTS_PER_EPOCH, %rax
+    dec     %rax
+    cmp     BeaconState_slot(%r8), %rax
+    jne     95f
+    mov     %r8, (L + 136)(%rsp)
+    mov     %r9, (L + 144)(%rsp)
+    mov     %r10, (L + 152)(%rsp)
+    mov     BeaconState_slot(%rbx), %rax
+    sub     (Attestation_data + AttestationData_slot)(%rsi), %rax
+    mov     %rax, (L + 104)(%rsp)
+    mov     S10(%rsp), %rax
+    SCRATCH_GIVE %r13, %rax, 2, %r15
+    mov     %rbx, %rdi
+    mov     (L + 96)(%rsp), %rdx
+    mov     %r13, %rcx
+    mov     S10(%rsp), %rax
+    SCRATCH_LIST %r8, %r13, %rax, 1, %r15
+    call    lantern_get_attesting_indices
+    mov     S10(%rsp), %rcx
+    mov     %rcx, (%r13)
+    test    %rax, %rax
+    jnz     99f
+    mov     S10(%rsp), %rax
+    SCRATCH_LIST %rsi, %r13, %rax, 1, %r15
+    mov     LIST_COUNT(%rsi), %rcx
+    add     $LIST_FIXED, %rsi
+    mov     (L + 32)(%rsp), %r11            # the square root of E's total active balance
+    cmpq    $1, (L + 152)(%rsp)
+    je      45f
+    mov     (L + 40)(%rsp), %r11
+45: mov     (L + 136)(%rsp), %r8
+    PART    %rdi, %r10, %r8, BeaconState_validators
+    lea     (%r14,%r15), %r8                # the rewarded marks
+    mov     (L + 144)(%rsp), %r9
+44: test    %rcx, %rcx
+    jz      40b
+    mov     (%rsi), %rax
+    add     $8, %rsi
+    dec     %rcx
+    cmp     %r15, %rax
+    jae     96f
+    movzbl  (%r8,%rax), %edx
+    test    (L + 152)(%rsp), %dl
+    jnz     44b
+    or      (L + 152)(%rsp), %dl
+    mov     %dl, (%r8,%rax)
+    cmp     %r10, %rax
+    jae     96f
+    mov     %rax, %rdx
+    shl     $7, %rdx
+    cmpb    $0, Validator_slashed(%rdi,%rdx)    # unslashed in E
+    jne     44b
+    movzbl  (%r9,%rax), %eax                # and no attestation of E with a lower delay
+    cmp     (L + 104)(%rsp), %rax
+    jb      44b
+    mov     Validator_effective_balance(%rdi,%rdx), %rax
+    imul    $BASE_REWARD_FACTOR, %rax, %rax
+    xor     %edx, %edx
+    div     %r11
+    shr     $2, %rax                        # get_base_reward(E, index): // BASE_REWARDS_PER_EPOCH
+    shr     $3, %rax                        # // PROPOSER_REWARD_QUOTIENT
+    mov     S7(%rsp), %rdx
+    add     %rax, 16(%rdx)
+    jmp     44b
+.endif
+90: mov     S7(%rsp), %rdi                  # total
+    mov     16(%rdi), %rax
+    add     24(%rdi), %rax
+    add     32(%rdi), %rax
+    add     40(%rdi), %rax
+    mov     %rax, 8(%rdi)
+    xor     %eax, %eax
+99: mov     L(%rsp), %rcx
+    mov     %rcx, (%r13)
+    LEAVE 160
+95: mov     $LANTERN_INVALID_SLOT, %eax
+    jmp     99b
+96: mov     $LANTERN_INVALID_ENCODING, %eax
+    jmp     99b
+97: mov     $LANTERN_BUFFER_TOO_SMALL, %eax
+    jmp     99b
+SPEC_END node_block_rewards
+
+.if FORK >= FORK_ALTAIR
+/*
+ * rax = the entry of the validator rdi among the rdx entries of 24 bytes at rsi (index, balance,
+ * member), a new one with its balance in the state rcx and member 0 when there is none, rdx = the
+ * count; rax = 0 for an index past the validators. Uses r8-r10.
+ */
+LOCAL_FUNCTION node_reward_entry
+    UNWIND_END_PROLOGUE
+    mov     %rsi, %rax
+    mov     %rdx, %r8
+1:  test    %r8, %r8
+    jz      2f
+    cmp     %rdi, (%rax)
+    je      3f
+    add     $24, %rax
+    dec     %r8
+    jmp     1b
+2:  PART    %r9, %r10, %rcx, BeaconState_balances
+    cmp     %r10, %rdi
+    jae     4f
+    mov     (%r9,%rdi,8), %r9
+    mov     %rdi, (%rax)
+    mov     %r9, 8(%rax)
+    movq    $0, 16(%rax)
+    inc     %rdx
+3:  ret
+4:  xor     %eax, %eax
+    ret
+END_FUNCTION node_reward_entry
+
+.set SYNC_REWARD_EXTRA, 8 * SYNC_COMMITTEE_SIZE + SYNC_TABLE_BYTES + 24   /* the places, the table of find_pubkeys and its 3 words */
+.if 24 * (SYNC_COMMITTEE_SIZE + 1) > SYNC_TABLE_BYTES
+.error "lantern_node_sync_rewards keeps its entries where the table of find_pubkeys was"
+.endif
+
+/*
+ * (pre, block, scratch, out) -> rax: the balance changes of the block's sync aggregate on its
+ * pre-state (node.md, lantern_node_sync_rewards). rbx pre, rbp the bits, r12 out, r13 scratch, r14
+ * the places' validator indices (at the end of scratch, before the decoded block), r15 the hash
+ * table of find_pubkeys, then the entries of node_reward_entry. Locals: L the scratch's size on
+ * entry, L+8 the proposer rewards it took, L+16 the entries' count, L+24 participant_reward, L+32
+ * proposer_reward, L+40 the proposer, L+48 the place.
+ */
+SPEC_FUNCTION node_sync_rewards
+    ENTER 64
+    mov     %rdi, %rbx
+    mov     %rdx, %r13
+    mov     %rcx, %r12
+    mov     (%r13), %rax
+    mov     %rax, L(%rsp)
+    MOVQ    %rax, 24 + 16 * SYNC_COMMITTEE_SIZE
+    cmp     %rax, (%r12)
+    jb      97f
+    ADDRESS %rdi, lantern_type_SignedBeaconBlock
+    mov     %r13, %rdx
+    call    node_decode                     # rsi: the block
+    cmp     $1, %rax
+    je      97f
+    ja      96f
+    PART    %rsi, %rcx, %rdx, SignedBeaconBlock_message
+    mov     BeaconBlock_slot(%rsi), %rax
+    cmp     BeaconState_slot(%rbx), %rax
+    jne     95f
+    mov     BeaconBlock_proposer_index(%rsi), %rax
+    mov     %rax, (L + 40)(%rsp)
+    PART    %rbp, %rcx, %rsi, BeaconBlock_body
+    MOVQ    %rax, BeaconBlockBody_sync_aggregate + SyncAggregate_sync_committee_bits
+    add     %rax, %rbp
+    NEED_SCRATCH_B %r13, %rbx, 1, SYNC_REWARD_EXTRA, 97f
+    mov     (%r13), %rax                    # the places, then the table, at the end
+    MOVQ    %rcx, 8 * SYNC_COMMITTEE_SIZE
+    sub     %rcx, %rax
+    lea     (%r13,%rax), %r14
+    MOVQ    %rcx, SYNC_TABLE_BYTES + 24
+    sub     %rcx, %rax
+    lea     (%r13,%rax), %r15
+    mov     %rax, (%r13)                    # what callees get
+    mov     %rbx, %rdi                      # committee_indices, as process_sync_aggregate finds them
+    MOVQ    %rsi, BeaconState_current_sync_committee + SyncCommittee_pubkeys
+    add     %rbx, %rsi
+    mov     %r14, %rdx
+    mov     %r15, %rcx
+    call    find_pubkeys
+    test    %rax, %rax
+    jnz     96f
+    mov     %rbx, %rdi
+    mov     %r13, %rsi
+    call    node_sync_values
+    test    %rax, %rax
+    jnz     99f
+    mov     %rdx, (L + 24)(%rsp)
+    mov     %rcx, (L + 32)(%rsp)
+    xor     %eax, %eax
+    mov     %rax, (L + 8)(%rsp)
+    mov     %rax, (L + 16)(%rsp)
+    mov     %rax, (L + 48)(%rsp)
+1:  mov     (L + 48)(%rsp), %rcx            # each place, in order
+    cmp     $SYNC_COMMITTEE_SIZE, %rcx
+    jae     5f
+    mov     (%r14,%rcx,8), %rdi
+    mov     %r15, %rsi
+    mov     (L + 16)(%rsp), %rdx
+    mov     %rbx, %rcx
+    call    node_reward_entry
+    mov     %rdx, (L + 16)(%rsp)
+    test    %rax, %rax
+    jz      96f
+    movq    $1, 16(%rax)                    # a member
+    mov     (L + 48)(%rsp), %rcx
+    mov     %rcx, %rdx
+    shr     $3, %rdx
+    movzbl  (%rbp,%rdx), %edx
+    and     $7, %ecx
+    shr     %cl, %edx
+    test    $1, %dl
+    jz      3f
+    mov     (L + 24)(%rsp), %rcx            # the participant takes participant_reward, the proposer proposer_reward
+    add     %rcx, 8(%rax)
+    mov     (L + 40)(%rsp), %rdi
+    mov     %r15, %rsi
+    mov     (L + 16)(%rsp), %rdx
+    mov     %rbx, %rcx
+    call    node_reward_entry
+    mov     %rdx, (L + 16)(%rsp)
+    test    %rax, %rax
+    jz      96f
+    mov     (L + 32)(%rsp), %rcx
+    add     %rcx, 8(%rax)
+    add     %rcx, (L + 8)(%rsp)
+    jmp     4f
+3:  mov     8(%rax), %rdx                   # decrease_balance: down to 0 at the least
+    sub     (L + 24)(%rsp), %rdx
+    jae     31f
+    xor     %edx, %edx
+31: mov     %rdx, 8(%rax)
+4:  incq    (L + 48)(%rsp)
+    jmp     1b
+5:  PART    %r8, %rcx, %rbx, BeaconState_balances   # the members in index order: the lowest after the last
+    xor     %r9d, %r9d                      # 1 once one is written
+    xor     %r10d, %r10d                    # the last written
+    lea     24(%r12), %r11
+6:  mov     $-1, %rax
+    xor     %edx, %edx
+    mov     %r15, %rsi
+    mov     (L + 16)(%rsp), %rcx
+7:  test    %rcx, %rcx
+    jz      9f
+    mov     (%rsi), %rdi
+    cmpq    $0, 16(%rsi)
+    je      8f
+    test    %r9, %r9
+    jz      71f
+    cmp     %r10, %rdi
+    jbe     8f
+71: cmp     %rax, %rdi
+    jae     8f
+    mov     %rdi, %rax
+    mov     %rsi, %rdx
+8:  add     $24, %rsi
+    dec     %rcx
+    jmp     7b
+9:  test    %rdx, %rdx
+    jz      11f
+    mov     8(%rdx), %rcx                   # after less before
+    sub     (%r8,%rax,8), %rcx
+    cmp     (L + 40)(%rsp), %rax
+    jne     10f
+    sub     (L + 8)(%rsp), %rcx             # the proposer: less the proposer rewards
+10: mov     %rax, (%r11)
+    mov     %rcx, 8(%r11)
+    add     $16, %r11
+    mov     $1, %r9d
+    mov     %rax, %r10
+    jmp     6b
+11: mov     %r11, %rax
+    sub     %r12, %rax
+    sub     $24, %rax
+    movq    $24, 8(%r12)
+    mov     %rax, 16(%r12)
+    xor     %eax, %eax
+99: mov     L(%rsp), %rcx
+    mov     %rcx, (%r13)
+    LEAVE 64
+95: mov     $LANTERN_INVALID_SLOT, %eax
+    jmp     99b
+96: mov     $LANTERN_INVALID_ENCODING, %eax
+    jmp     99b
+97: mov     $LANTERN_BUFFER_TOO_SMALL, %eax
+    jmp     99b
+SPEC_END node_sync_rewards
+.else
+/* (pre, block, scratch, out) -> LANTERN_NO_STATE_ANSWER: phase0 has no sync committee (node.md, lantern_node_sync_rewards). */
+SPEC_FUNCTION node_sync_rewards
+    FRAME 0
+    mov     $LANTERN_NO_STATE_ANSWER, %eax
+    UNFRAME 0
+SPEC_END node_sync_rewards
+.endif
+
 /* rdi = the fork's TypeDescriptor of the NODE_JSON_* kind r10, or 0. Uses rdi. */
 LOCAL_FUNCTION node_type_of_kind
     UNWIND_END_PROLOGUE
