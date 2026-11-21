@@ -495,3 +495,188 @@ SPEC_FUNCTION upgrade_lc_header
 98: mov     $LANTERN_BUFFER_TOO_SMALL, %eax
     LEAVE 0
 SPEC_END upgrade_lc_header
+
+# The offsets that the LcStore functions of the common object read in a state of any fork.
+.if BeaconState_finalized_checkpoint != NODE_STATE_FINALIZED
+.error "NODE_STATE_FINALIZED is not BeaconState.finalized_checkpoint"
+.endif
+.if FORK >= FORK_ALTAIR
+.if (BeaconState_current_sync_committee != NODE_STATE_CURRENT_SYNC_COMMITTEE) || (BeaconState_next_sync_committee != NODE_STATE_NEXT_SYNC_COMMITTEE) || (SyncCommittee__mem != LC_COMMITTEE)
+.error "NODE_STATE_*_SYNC_COMMITTEE or LC_COMMITTEE is not the state's"
+.endif
+.endif
+
+# (kind, parts, out) -> status: the SSZ bytes of a light client object of the fork from its parts
+# (light-client.md). rbx parts, rbp out, r12 the kind's fields (LCO_*, 3 bits each), r13 the bytes
+# of the fixed part, r14 of the variable part, r15 the fixed cursor, S7 the variable cursor, S8 the
+# bytes of out, S9 and S10 a branch's roots and bytes. Locals: none.
+SPEC_FUNCTION lc_object
+    ENTER 0
+.if FORK == FORK_PHASE0
+    mov     $LANTERN_NO_STATE_ANSWER, %eax
+    LEAVE 0
+.else
+    mov     %rsi, %rbx
+    mov     %rdx, %rbp
+    mov     $LCO_BOOTSTRAP_FIELDS, %r12d
+    test    %rdi, %rdi
+    jz      1f
+    mov     $LCO_UPDATE_FIELDS, %r12d
+    cmp     $LC_OBJECT_UPDATE, %rdi
+    je      1f
+    mov     $LCO_FINALITY_FIELDS, %r12d
+    cmp     $LC_OBJECT_FINALITY_UPDATE, %rdi
+    je      1f
+    mov     $LCO_OPTIMISTIC_FIELDS, %r12d
+    cmp     $LC_OBJECT_OPTIMISTIC_UPDATE, %rdi
+    jne     97f
+1:  xor     %r13d, %r13d                    # the sizes, and the checks, before any write
+    xor     %r14d, %r14d
+    mov     %r12, %rax
+2:  mov     %rax, %rcx
+    and     $7, %ecx
+    jz      5f
+    shr     $3, %rax
+    cmp     $LCO_HEADER, %ecx
+    je      3f
+    cmp     $LCO_FINALIZED, %ecx
+    je      31f
+    cmp     $LCO_COMMITTEE, %ecx
+    jne     21f
+    add     $LC_COMMITTEE, %r13
+    jmp     2b
+21: cmp     $LCO_BRANCH, %ecx
+    jne     22f
+    cmpq    $(LCU_BRANCH / 32), LcParts_branch_count(%rbx)
+    ja      97f
+    add     $LCU_BRANCH, %r13
+    jmp     2b
+22: cmp     $LCO_FINALITY, %ecx
+    jne     23f
+    cmpq    $(LCU_FINALITY / 32), LcParts_finality_count(%rbx)
+    ja      97f
+    add     $LCU_FINALITY, %r13
+    jmp     2b
+23: cmp     $LCO_AGGREGATE, %ecx
+    jne     24f
+    add     $LC_AGGREGATE, %r13
+    jmp     2b
+24: add     $8, %r13                        # signature_slot
+    jmp     2b
+3:  mov     LcParts_header(%rbx), %rdx
+    jmp     4f
+31: mov     LcParts_finalized_header(%rbx), %rdx
+4:  mov     16(%rdx), %rsi                  # a header: rsi bytes at rdi
+    mov     8(%rdx), %rdi
+    add     %rdx, %rdi
+.if FORK >= FORK_CAPELLA
+    cmp     $(LC_HEADER_EXECUTION + LC_EPH_FIXED), %rsi
+    jb      96f
+    cmpl    $LC_HEADER_EXECUTION, 112(%rdi)
+    jne     96f
+    add     $4, %r13
+    add     %rsi, %r14
+.else
+    cmp     $112, %rsi
+    jne     96f
+    add     $112, %r13
+.endif
+    jmp     2b
+5:  mov     (%rbp), %rax                    # out: room for both parts
+    sub     $24, %rax
+    lea     (%r13,%r14), %rcx
+    cmp     %rax, %rcx
+    ja      98f
+    lea     24(%rbp), %rax
+    mov     %rax, S8(%rsp)
+    mov     %rax, %r15
+    add     %r13, %rax
+    mov     %rax, S7(%rsp)
+6:  mov     %r12, %rcx                      # each field in turn
+    and     $7, %ecx
+    jz      9f
+    shr     $3, %r12
+    cmp     $LCO_HEADER, %ecx
+    je      7f
+    cmp     $LCO_FINALIZED, %ecx
+    je      71f
+    cmp     $LCO_COMMITTEE, %ecx
+    jne     61f
+    mov     %r15, %rdi
+    mov     LcParts_sync_committee(%rbx), %rsi
+    mov     $LC_COMMITTEE, %edx
+    add     %rdx, %r15
+    call    lantern_copy
+    jmp     6b
+61: cmp     $LCO_BRANCH, %ecx
+    jne     62f
+    mov     LcParts_branch(%rbx), %rax
+    mov     %rax, S10(%rsp)
+    mov     LcParts_branch_count(%rbx), %rax
+    mov     %rax, S9(%rsp)
+    mov     $(LCU_BRANCH / 32), %eax
+    jmp     63f
+62: cmp     $LCO_FINALITY, %ecx
+    jne     64f
+    mov     LcParts_finality_branch(%rbx), %rax
+    mov     %rax, S10(%rsp)
+    mov     LcParts_finality_count(%rbx), %rax
+    mov     %rax, S9(%rsp)
+    mov     $(LCU_FINALITY / 32), %eax
+63: sub     S9(%rsp), %rax                  # normalize_merkle_branch: zero roots first
+    shl     $5, %rax
+    mov     %r15, %rdi
+    mov     %rax, %rsi
+    add     %rax, %r15
+    call    lantern_zero
+    mov     S9(%rsp), %rdx
+    shl     $5, %rdx
+    mov     %r15, %rdi
+    mov     S10(%rsp), %rsi
+    add     %rdx, %r15
+    call    lantern_copy
+    jmp     6b
+64: cmp     $LCO_AGGREGATE, %ecx
+    jne     65f
+    mov     %r15, %rdi
+    mov     LcParts_sync_aggregate(%rbx), %rsi
+    mov     $LC_AGGREGATE, %edx
+    add     %rdx, %r15
+    call    lantern_copy
+    jmp     6b
+65: mov     LcParts_signature_slot(%rbx), %rax
+    mov     %rax, (%r15)
+    add     $8, %r15
+    jmp     6b
+7:  mov     LcParts_header(%rbx), %rax
+    jmp     8f
+71: mov     LcParts_finalized_header(%rbx), %rax
+8:  mov     16(%rax), %rdx
+    mov     8(%rax), %rsi
+    add     %rax, %rsi
+.if FORK >= FORK_CAPELLA
+    mov     S7(%rsp), %rdi                  # its offset, then its bytes after the fixed part
+    mov     %rdi, %rcx
+    sub     S8(%rsp), %rcx
+    movl    %ecx, (%r15)
+    add     $4, %r15
+    add     %rdx, S7(%rsp)
+.else
+    mov     %r15, %rdi
+    add     %rdx, %r15
+.endif
+    call    lantern_copy
+    jmp     6b
+9:  movq    $24, 8(%rbp)
+    lea     (%r13,%r14), %rax
+    mov     %rax, 16(%rbp)
+    xor     %eax, %eax
+    LEAVE 0
+96: mov     $LANTERN_INVALID_ENCODING, %eax
+    LEAVE 0
+97: mov     $LANTERN_INVALID_EVENT, %eax
+    LEAVE 0
+98: mov     $LANTERN_BUFFER_TOO_SMALL, %eax
+    LEAVE 0
+.endif
+SPEC_END lc_object

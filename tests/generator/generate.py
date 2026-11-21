@@ -50,9 +50,8 @@ FORKS = ("phase0", "altair", "bellatrix", "capella", "deneb", "electra", "fulu")
 # Spec test runners outside lantern's scope: it has no fast confirmation.
 SKIP = {"fast_confirmation"}
 # Spec test handlers outside its scope: light_client/sync is the light client's own
-# sync (lantern is a beacon node); light_client/data_collection waits for the node's
-# light client data (docs/reference/light-client.md, Test vectors).
-SKIP_HANDLERS = {("light_client", "sync"), ("light_client", "data_collection")}
+# sync (lantern is a beacon node).
+SKIP_HANDLERS = {("light_client", "sync")}
 # The spec writes the shuffling cases for phase0 only; every later fork keeps
 # its functions, so each fork's file holds them.
 EVERY_FORK = {("phase0", "shuffling")}

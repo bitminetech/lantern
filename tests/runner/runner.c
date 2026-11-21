@@ -259,6 +259,16 @@ ABI uint64_t lantern_store_payload_status(void *store, const void *node, const v
 ABI uint64_t LF(get_proposer_head)(const void *store, const void *head, const void *slot, const void *head_state,
                                        void *scratch, void *out);
 
+/* The light client store: docs/reference/light-client.md. */
+ABI uint64_t lantern_lc_store_size(const void *room, void *size);
+ABI uint64_t lantern_lc_store_init(const void *room, const void *config, const void *state, const void *block, void *scratch,
+                                   void *lc);
+ABI uint64_t lantern_lc_store_copy(const void *lc, const void *room, void *out);
+ABI uint64_t lantern_lc_on_block(void *lc, const void *config, const void *state, const void *block, void *cache,
+                                 void *scratch);
+ABI uint64_t lantern_lc_on_head(void *lc, const void *config, const void *head, const void *checkpoint, void *scratch);
+ABI uint64_t lantern_lc_read(const void *lc, uint64_t kind, uint64_t key, void *out, void *fork);
+
 /* The node core: docs/reference/node.md. */
 ABI uint64_t lantern_node_size(const void *room, void *size);
 ABI uint64_t lantern_node_init(const void *room, const void *config, const void *anchor, const void *flags, void *node);
@@ -6739,6 +6749,401 @@ static void run_lc_update_ranking(const char *file, case_file *f) {
 }
 #endif
 
+#if FORK >= FORK_ALTAIR
+/* ---------------------------------------------------------------- Light client data collection */
+
+static void case_config(tv parts);
+static void root_of(const char *type, const uint8_t *value, uint8_t root[32], const char **why);
+
+/* The functions of each fork from altair that a case of several forks calls (light-client.md, Test vectors). */
+#define LCF_DECL(f)                                                                                                  \
+    extern const uint8_t lantern_##f##_types[];                                                                      \
+    ABI uint64_t lantern_##f##_process_slots(void *, const void *, const void *, void *, void *);                    \
+    ABI uint64_t lantern_##f##_state_transition(void *, const void *, const void *, const void *, void *, void *);   \
+    ABI uint64_t lantern_##f##_beacon_state_copy_size(const void *, const void *, void *);                           \
+    ABI uint64_t lantern_##f##_beacon_state_copy(const void *, const void *, void *);                                \
+    ABI uint64_t lantern_##f##_upgrade_size(const void *, const void *, void *);                                     \
+    ABI uint64_t lantern_##f##_node_upgrade(const void *, const void *, const void *, void *, void *);               \
+    ABI uint64_t lantern_##f##_compute_fork_digest(const void *, const void *, const void *, void *, void *);
+LCF_DECL(altair)
+LCF_DECL(bellatrix)
+LCF_DECL(capella)
+LCF_DECL(deneb)
+LCF_DECL(electra)
+LCF_DECL(fulu)
+#define LCF_ENTRY(f)                                                                                                 \
+    {lantern_##f##_types, (const void *)lantern_##f##_process_slots, (const void *)lantern_##f##_state_transition,  \
+     (const void *)lantern_##f##_beacon_state_copy_size, (const void *)lantern_##f##_beacon_state_copy,             \
+     (const void *)lantern_##f##_upgrade_size, (const void *)lantern_##f##_node_upgrade,                            \
+     (const void *)lantern_##f##_compute_fork_digest}
+static const struct {
+    const uint8_t *types;
+    const void *slots, *transition, *copy_size, *copy, *upgrade_size, *upgrade, *digest;
+} lcf[7] = {{0}, LCF_ENTRY(altair), LCF_ENTRY(bellatrix), LCF_ENTRY(capella), LCF_ENTRY(deneb), LCF_ENTRY(electra), LCF_ENTRY(fulu)};
+
+#define LC_NO_ANSWER 66 /* LANTERN_NO_STATE_ANSWER */
+#define LC_KINDS 4
+
+/* The fork of a slot with the case's config: the last fork whose epoch is at most the slot's. */
+static uint64_t lc_fork_at(uint64_t slot) {
+    uint64_t epoch = slot / slots_per_epoch();
+    for (uint64_t f = 6; f >= 1; f--)
+        if (epoch >= rd64(config + 16 * f)) return f;
+    return 0;
+}
+
+/* The offset of field i of the container name of the fork's types. */
+static uint64_t lc_field(uint64_t fork, const char *name, uint64_t i) {
+    const uint8_t *d = type_in(lcf[fork].types, name);
+    return rd64(field_of(d, rd64(root_node(d) + 16) + i) + 8);
+}
+
+/* A copy of the state s of the fork with each list's room times growth, or NULL. */
+static uint8_t *lc_copy(const uint8_t *s, uint64_t fork, uint64_t growth, uint64_t *size) {
+    uint64_t room[8] = {64 * growth, 2048 * growth, 4 * growth,  9000 * growth,
+                        64 * growth, 64 * growth,   4 * growth, 4096 * growth}, need = 0;
+    if (CALL(lcf[fork].copy_size, s, room, &need) != 0) return NULL;
+    uint8_t *out = buffer(need + 4096);
+    wr64(out, need + 4096);
+    if (CALL(lcf[fork].copy, s, room, out) != 0 || !guard_ok(out, need + 4096)) {
+        free(out);
+        return NULL;
+    }
+    *size = need + 4096;
+    return out;
+}
+
+typedef struct {
+    uint8_t root[32];
+    uint64_t fork, size;
+    uint8_t *state;
+} lc_kept;
+
+typedef struct {
+    uint8_t *b;
+    uint64_t room[7];
+    lc_kept *states;
+    uint64_t nstates;
+    uint8_t gvr[32];
+} lc_run;
+
+/* The store with twice the capacities of each part: lantern_lc_store_copy, which must keep its data. */
+static void lc_grow(lc_run *r, const char **why) {
+    uint64_t room[7], need = 0;
+    for (int k = 0; k < 7; k++) room[k] = 2 * r->room[k];
+    if (CALL(lantern_lc_store_size, room, &need) != 0) {
+        *why = "lantern_lc_store_size: status";
+        return;
+    }
+    uint8_t *out = buffer(need);
+    wr64(out, need);
+    if (CALL(lantern_lc_store_copy, r->b, room, out) != 0) *why = "lantern_lc_store_copy: status";
+    else if (!guard_ok(out, need)) *why = "lantern_lc_store_copy wrote out of bounds";
+    else if (memcmp(out + 8, r->b + 8, 72) || memcmp(out + 136, r->b + 136, 32)) *why = "lantern_lc_store_copy: other data";
+    if (*why) {
+        free(out);
+        return;
+    }
+    free(r->b);
+    r->b = out;
+    memcpy(r->room, room, sizeof room);
+}
+
+/* The kept post-state of a root, or NULL. */
+static lc_kept *lc_state_of(lc_run *r, const uint8_t *root) {
+    for (uint64_t k = 0; k < r->nstates; k++)
+        if (!memcmp(r->states[k].root, root, 32)) return &r->states[k];
+    return NULL;
+}
+
+/* The text of a string value in buf, or "" when it is none. */
+static const char *lc_text(tv v, char *buf, size_t n) {
+    buf[0] = 0;
+    if (v && *v == T_STRING && rd64(v + 1) < n) {
+        memcpy(buf, v + 9, (size_t)rd64(v + 1));
+        buf[rd64(v + 1)] = 0;
+    }
+    return buf;
+}
+
+/* The fork digest of an epoch with the functions of the fork. */
+static void lc_digest(lc_run *r, uint64_t fork, uint64_t epoch, uint8_t out[4]) {
+    uint8_t d[8] = {0};
+    CALL(lcf[fork].digest, r->gvr, &epoch, config, fresh_scratch(), d);
+    memcpy(out, d, 4);
+}
+
+/* The post-state of the block at enc on its parent's, kept by the block's root; the root in root. */
+static void lc_new_block(lc_run *r, const uint8_t *enc, uint64_t elen, uint8_t root[32], const char **why) {
+    if (elen < 100 + 80) {
+        *why = "a block is too short";
+        return;
+    }
+    const uint8_t *msg = enc + (enc[0] | enc[1] << 8 | enc[2] << 16 | (uint64_t)enc[3] << 24);
+    uint64_t slot = rd64(msg), bfork = lc_fork_at(slot), vsize, size = 0;
+    lc_kept *parent = lc_state_of(r, msg + 16);
+    if (!parent) {
+        *why = "a block's parent state is unknown";
+        return;
+    }
+    if (bfork < parent->fork) {
+        *why = "a block of a fork before its parent's";
+        return;
+    }
+    uint8_t *state = lc_copy(parent->state, parent->fork, 1, &size);
+    uint64_t f = parent->fork, result = 0, st = 0;
+    while (state && !*why && f < bfork) { /* each fork boundary: process_slots to its first slot, then the upgrade */
+        uint64_t first = rd64(config + 16 * (f + 1)) * slots_per_epoch();
+        if (rd64(state + 48) < first) {
+            for (uint64_t growth = 2;; growth *= 2) {
+                st = CALL(lcf[f].slots, state, &first, config, fresh_scratch(), &result);
+                if (st != 1 || growth > 1024) break;
+                uint8_t *g = lc_copy(state, f, growth, &size);
+                if (!g) break;
+                free(state);
+                state = g;
+            }
+            if (st != 0 || result != 0) {
+                *why = "process_slots to a fork failed";
+                break;
+            }
+        }
+        uint64_t sroom[8] = {64, 2048, 4, 9000, 64, 64, 4, 4096}, need = 0;
+        CALL(lcf[f + 1].upgrade_size, state, sroom, &need);
+        uint8_t *out = buffer(need + 4096);
+        wr64(out, need + 4096);
+        if (CALL(lcf[f + 1].upgrade, state, sroom, config, fresh_scratch(), out) != 0) {
+            *why = "lantern_node_upgrade: status";
+            free(out);
+            break;
+        }
+        free(state);
+        state = out;
+        size = need + 4096;
+        f++;
+    }
+    uint8_t *block = state && !*why ? decode(type_in(lcf[bfork].types, "SignedBeaconBlock"), enc, elen, &vsize, why) : NULL;
+    if (block) {
+        uint64_t options[3] = {1, 1, rd64(state + 48) == slot}; /* TransitionOptions: slots_done after an upgrade at the slot */
+        for (uint64_t growth = 2;; growth *= 2) {
+            st = CALL(lcf[bfork].transition, state, block, options, config, fresh_scratch(), &result);
+            if (st != 1 || growth > 1024) break;
+            uint8_t *g = lc_copy(state, bfork, growth, &size);
+            if (!g) break;
+            free(state);
+            state = g;
+        }
+        if (st != 0 || result != 0) {
+            static char msg2[96];
+            snprintf(msg2, sizeof msg2, "the state transition of the block of slot %llu: status %llu, result %llu",
+                     (unsigned long long)slot, (unsigned long long)st, (unsigned long long)result);
+            *why = msg2;
+        } else {
+            const uint8_t *m = nested(block, lc_field(bfork, "SignedBeaconBlock", 0));
+            if (CALL(ssz_hash_tree_root, type_in(lcf[bfork].types, "BeaconBlock"), m, fresh_scratch(), root) != 0)
+                *why = "the block's root";
+        }
+        free(block);
+    }
+    if (*why) {
+        free(state);
+        return;
+    }
+    r->states = realloc(r->states, (size_t)(r->nstates + 1) * sizeof *r->states);
+    lc_kept *k = &r->states[r->nstates++];
+    memcpy(k->root, root, 32);
+    k->fork = bfork;
+    k->size = size;
+    k->state = state;
+}
+
+/* st = a store function's status, after growing the store as often as it asks for room. */
+#define LC_GROWING(r, why, st, call)                                                                                  \
+    do {                                                                                                             \
+        for (int tries_ = 0; tries_ < 24 && !*(why); tries_++) {                                                    \
+            (st) = (call);                                                                                           \
+            if ((st) != 1) break;                                                                                    \
+            lc_grow((r), (why));                                                                                     \
+        }                                                                                                            \
+    } while (0)
+
+/* The check of one object of a new_head step: lantern_lc_read must give the case's bytes, or none. */
+static void lc_check_object(lc_run *r, tv parts, uint64_t kind, uint64_t key, tv obj, const char *what, const char **why) {
+    static char msg[160];
+    uint64_t room = 24 + 65536, fork = 99;
+    uint8_t *out = buffer(room);
+    wr64(out, room);
+    uint64_t st = CALL(lantern_lc_read, r->b, (const void *)(uintptr_t)kind, (const void *)(uintptr_t)key, out, &fork);
+    if (!obj) {
+        if (st != LC_NO_ANSWER) {
+            snprintf(msg, sizeof msg, "%s: status %llu where the case has none", what, (unsigned long long)st);
+            *why = msg;
+        }
+        free(out);
+        return;
+    }
+    char name[200];
+    uint64_t wlen = 0, dlen = 0;
+    lc_text(tv_get(obj, "data"), name, sizeof name);
+    tv file = tv_get(parts, name);
+    const uint8_t *want = file ? tv_bytes(file, &wlen) : NULL, *digest = tv_bytes(tv_get(obj, "fork_digest"), &dlen);
+    if (!want) snprintf(msg, sizeof msg, "%s: the case lacks %s", what, name);
+    else if (st != 0) snprintf(msg, sizeof msg, "%s: status %llu", what, (unsigned long long)st);
+    else if (!guard_ok(out, room)) snprintf(msg, sizeof msg, "%s: wrote past out", what);
+    else if (rd64(out + 16) != wlen || memcmp(out + rd64(out + 8), want, (size_t)wlen)) {
+        uint64_t at = 0;
+        while (at < wlen && at < rd64(out + 16) && out[rd64(out + 8) + at] == want[at]) at++;
+        snprintf(msg, sizeof msg, "%s: not %s (%llu bytes, not %llu; first at byte %llu)", what, name,
+                 (unsigned long long)rd64(out + 16), (unsigned long long)wlen, (unsigned long long)at);
+    } else {
+        const uint8_t *b = out + rd64(out + 8);
+        uint64_t at = fork >= 3 ? (uint64_t)(b[0] | b[1] << 8 | b[2] << 16 | (uint64_t)b[3] << 24) : 0, slot = rd64(b + at);
+        uint8_t d[4];
+        if (fork != lc_fork_at(slot)) snprintf(msg, sizeof msg, "%s: fork %llu, not that of its slot", what, (unsigned long long)fork);
+        else {
+            lc_digest(r, fork, slot / slots_per_epoch(), d);
+            if (dlen != 4 || memcmp(d, digest, 4)) snprintf(msg, sizeof msg, "%s: not the case's fork_digest", what);
+            else msg[0] = 0;
+        }
+    }
+    if (!want || st != 0 || msg[0]) *why = msg;
+    free(out);
+}
+
+/*
+ * light_client-data_collection (light-client.md, Test vectors): the steps of the case through the
+ * LcStore functions, with the post-states of the runner.
+ */
+static void run_lc_data_collection(const char *file, case_file *f) {
+    for (uint64_t i = 0; i < f->count; i++) {
+        const char *name, *why = NULL;
+        uint64_t len, slen, size = 0, step_no = 0;
+        tv parts = next_case(f, &name, &len);
+        case_config(parts);
+        lc_run r;
+        memset(&r, 0, sizeof r);
+        for (int k = 0; k < 7; k++) r.room[k] = 2;
+        const uint8_t *enc = tv_bytes(tv_get(parts, "initial_state"), &slen);
+        uint8_t *anchor = load_state(enc, slen, &size, &why), *block = NULL;
+        if (anchor) memcpy(r.gvr, anchor + 16, 32);
+        if (anchor) { /* the anchor block: lantern_node_anchor's, as a SignedBeaconBlock */
+            uint64_t sroom[8] = {64, 64, 4, 9000, 64, 64, 4, 4096}, need = 0, lsize, blen = 0;
+            CALL(LF(beacon_state_copy_size), anchor, sroom, &need);
+            uint8_t *data = list_of(enc, slen, 0, 0, &lsize), *st2 = buffer(need), *bv = buffer(ANCHOR_BLOCK_BYTES);
+            wr64(st2, need);
+            wr64(bv, ANCHOR_BLOCK_BYTES);
+            if (CALL(LF(node_anchor), data, sroom, fresh_scratch(), st2, bv) != 0) why = "lantern_node_anchor: status";
+            uint8_t *e = why ? NULL : encoded("BeaconBlock", bv, &blen, &why);
+            if (e) {
+                uint8_t *sb = calloc(1, (size_t)(100 + blen));
+                sb[0] = 100;
+                memcpy(sb + 100, e + 24, (size_t)blen);
+                block = list_of(sb, 100 + blen, 0, 0, &lsize);
+                free(sb);
+                r.states = calloc(1, sizeof *r.states);
+                r.nstates = 1;
+                r.states[0].fork = FORK;
+                r.states[0].state = anchor;
+                r.states[0].size = size;
+                anchor = NULL;
+                root_of("BeaconBlock", bv, r.states[0].root, &why);
+            }
+            free(e);
+            free(data);
+            free(st2);
+            free(bv);
+        }
+        if (!why) {
+            uint64_t need = 0;
+            CALL(lantern_lc_store_size, r.room, &need);
+            r.b = buffer(need);
+            wr64(r.b, need);
+            uint64_t st = CALL(lantern_lc_store_init, r.room, config, r.states[0].state, block, fresh_scratch(), r.b);
+            if (!why && st != 0) why = "lantern_lc_store_init: status";
+        }
+        free(block);
+        free(anchor);
+        tv steps = tv_get(tv_get(parts, "steps"), "steps") ? tv_get(tv_get(parts, "steps"), "steps") : tv_get(parts, "steps");
+        tv s = steps && *steps == T_LIST ? steps + 9 : NULL;
+        uint64_t nsteps = s ? rd64(steps + 1) : 0;
+        if (!s && !why) why = "the case has no steps";
+        static char where[256];
+        for (uint64_t k = 0; k < nsteps && !why; k++, s = tv_skip(s), step_no++) {
+            tv nb = tv_get(s, "new_block"), nh = tv_get(s, "new_head");
+            if (nb) {
+                char bname[200];
+                uint64_t blen, lsize, dlen;
+                tv bfile = tv_get(parts, lc_text(tv_get(nb, "data"), bname, sizeof bname));
+                if (!bfile) {
+                    why = "a new_block file is missing";
+                    break;
+                }
+                const uint8_t *benc = tv_bytes(bfile, &blen), *digest = tv_bytes(tv_get(nb, "fork_digest"), &dlen);
+                uint8_t root[32], d[4];
+                lc_new_block(&r, benc, blen, root, &why);
+                if (why) break;
+                lc_kept *kept = lc_state_of(&r, root);
+                lc_digest(&r, kept->fork, rd64(kept->state + 48) / slots_per_epoch(), d);
+                if (dlen != 4 || memcmp(d, digest, 4)) {
+                    why = "new_block: not the case's fork_digest";
+                    break;
+                }
+                uint8_t *list = list_of(benc, blen, 0, 0, &lsize);
+                uint64_t st = 1;
+                LC_GROWING(&r, &why, st, CALL(lantern_lc_on_block, r.b, config, kept->state, list, NULL, fresh_scratch()));
+                free(list);
+                if (!why && st != 0) {
+                    snprintf(where, sizeof where, "step %llu, lantern_lc_on_block: status %llu", (unsigned long long)k, (unsigned long long)st);
+                    why = where;
+                }
+            } else if (nh) {
+                uint64_t hlen, dlen;
+                const uint8_t *head = tv_bytes(tv_get(nh, "head_block_root"), &hlen);
+                lc_kept *kept = lc_state_of(&r, head);
+                if (!kept) {
+                    why = "new_head: the head's state is unknown";
+                    break;
+                }
+                uint8_t cp[40]; /* the finalized_checkpoint of the head's post-state: field 20 */
+                memcpy(cp, kept->state + lc_field(kept->fork, "BeaconState", 20), 40);
+                uint64_t st = 1;
+                LC_GROWING(&r, &why, st, CALL(lantern_lc_on_head, r.b, config, head, cp, fresh_scratch()));
+                if (!why && st != 0) {
+                    snprintf(where, sizeof where, "step %llu, lantern_lc_on_head: status %llu", (unsigned long long)k, (unsigned long long)st);
+                    why = where;
+                    break;
+                }
+                tv checks = tv_get(nh, "checks"), fin = tv_get(checks, "latest_finalized_checkpoint");
+                const uint8_t *froot = tv_bytes(tv_get(fin, "root"), &dlen);
+                const char *w = NULL;
+                if (rd64(r.b + 24) != tv_u64(tv_get(fin, "epoch")) || dlen != 32 || memcmp(r.b + 40, froot, 32))
+                    w = "latest_finalized_checkpoint differs";
+                tv list = tv_get(checks, "bootstraps"), e = list && *list == T_LIST ? list + 9 : NULL;
+                for (uint64_t n = 0, c = e ? rd64(list + 1) : 0; n < c && !w; n++, e = tv_skip(e)) {
+                    uint64_t rl;
+                    const uint8_t *br = tv_bytes(tv_get(e, "block_root"), &rl);
+                    lc_check_object(&r, parts, 0, (uint64_t)(uintptr_t)br, tv_get(e, "bootstrap"), "bootstrap", &w);
+                }
+                list = tv_get(checks, "best_updates");
+                e = list && *list == T_LIST ? list + 9 : NULL;
+                for (uint64_t n = 0, c = e ? rd64(list + 1) : 0; n < c && !w; n++, e = tv_skip(e))
+                    lc_check_object(&r, parts, 1, tv_u64(tv_get(e, "period")), tv_get(e, "update"), "best update", &w);
+                if (!w) lc_check_object(&r, parts, 2, 0, tv_get(checks, "latest_finality_update"), "finality update", &w);
+                if (!w) lc_check_object(&r, parts, 3, 0, tv_get(checks, "latest_optimistic_update"), "optimistic update", &w);
+                if (w) {
+                    snprintf(where, sizeof where, "step %llu (head): %s", (unsigned long long)k, w);
+                    why = where;
+                }
+            } else why = "a step lantern does not know";
+        }
+        for (uint64_t k = 0; k < r.nstates; k++) free(r.states[k].state);
+        free(r.states);
+        free(r.b);
+        report(file, name, len, why == NULL, why);
+    }
+}
+#endif
+
 /* ---------------------------------------------------------------- Gossip */
 
 /* The config of one case: the preset's, with the values of the case's config.yaml when it has one. */
@@ -10098,6 +10503,7 @@ int main(int argc, char **argv) {
 #if FORK >= FORK_ALTAIR
         else if (!bls_off && !strcmp(kind, "light_client-single_merkle_proof")) run_lc_merkle_proof(file, &f);
         else if (!bls_off && !strcmp(kind, "light_client-update_ranking")) run_lc_update_ranking(file, &f);
+        else if (!bls_off && !strcmp(kind, "light_client-data_collection")) run_lc_data_collection(file, &f);
 #endif
         else if (!bls_off && !strcmp(kind, "lc-header")) run_lc_header(file, &f);
         else {

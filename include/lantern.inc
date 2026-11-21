@@ -1152,6 +1152,115 @@
 .set LC_BRANCH_NEXT_SYNC_COMMITTEE, 1
 .set LC_BRANCH_FINALIZED_ROOT, 2
 .set EXECUTION_PAYLOAD_GINDEX, 25          /* capella light-client/sync-protocol.md: execution_payload of BeaconBlockBody */
+
+/* Light client objects and the LcStore (docs/reference/light-client.md) */
+.set LC_OBJECT_BOOTSTRAP, 0                /* lantern_lc_object, lantern_lc_read: the kind */
+.set LC_OBJECT_UPDATE, 1
+.set LC_OBJECT_FINALITY_UPDATE, 2
+.set LC_OBJECT_OPTIMISTIC_UPDATE, 3
+.set LC_FREE, 0                            /* the state of an LcStore record */
+.set LC_USED, 1
+.set LC_MARKED, 2
+.set LC_AGGREGATE, SYNC_COMMITTEE_SIZE / 8 + 96             /* the SSZ bytes of a SyncAggregate */
+.set LC_AGGREGATE_ROOM, (LC_AGGREGATE + 7) & ~7
+.set LC_COMMITTEE, 48 * SYNC_COMMITTEE_SIZE + 48            /* the SSZ bytes of a SyncCommittee */
+.set LC_HEADER_ROOM, 864                   /* a LightClientHeader: 244, a deneb ExecutionPayloadHeader's fixed part, MAX_EXTRA_DATA_BYTES */
+.set LC_UPDATE_ROOM, (4 + LC_COMMITTEE + 192 + 4 + 224 + LC_AGGREGATE + 8 + 2 * LC_HEADER_ROOM + 7) & ~7   /* the most bytes of an update, up to a multiple of 8 */
+/* The fields of each kind for lantern_lc_object: 3 bits each, the first field lowest. */
+.set LCO_HEADER, 1
+.set LCO_COMMITTEE, 2
+.set LCO_BRANCH, 3
+.set LCO_FINALIZED, 4
+.set LCO_FINALITY, 5
+.set LCO_AGGREGATE, 6
+.set LCO_SLOT, 7
+.set LCO_BOOTSTRAP_FIELDS, LCO_HEADER | (LCO_COMMITTEE << 3) | (LCO_BRANCH << 6)
+.set LCO_UPDATE_FIELDS, LCO_HEADER | (LCO_COMMITTEE << 3) | (LCO_BRANCH << 6) | (LCO_FINALIZED << 9) | (LCO_FINALITY << 12) | (LCO_AGGREGATE << 15) | (LCO_SLOT << 18)
+.set LCO_FINALITY_FIELDS, LCO_HEADER | (LCO_FINALIZED << 3) | (LCO_FINALITY << 6) | (LCO_AGGREGATE << 9) | (LCO_SLOT << 12)
+.set LCO_OPTIMISTIC_FIELDS, LCO_HEADER | (LCO_AGGREGATE << 3) | (LCO_SLOT << 6)
+.set LcParts_header, 0
+.set LcParts_sync_committee, 8
+.set LcParts_branch, 16
+.set LcParts_branch_count, 24
+.set LcParts_finalized_header, 32
+.set LcParts_finality_branch, 40
+.set LcParts_finality_count, 48
+.set LcParts_sync_aggregate, 56
+.set LcParts_signature_slot, 64
+.set LcParts__mem, 72
+.set LcRoom_blocks, 0
+.set LcRoom_finalized, 8
+.set LcRoom_periods, 16
+.set LcRoom_bootstraps, 24
+.set LcRoom_headers, 32
+.set LcRoom_committees, 40
+.set LcRoom_updates, 48
+.set LcRoom__mem, 56
+.set LcStore_tail_slot, 8
+.set LcStore_historical_tail_slot, 16
+.set LcStore_latest_finalized_epoch, 24
+.set LcStore_latest_finalized_slot, 32
+.set LcStore_latest_finalized_root, 40
+.set LcStore_latest, 72
+.set LcStore_room, 80
+.set LcStore_blocks, 136                   /* the entry counts of the parts, in LcRoom order */
+.set LcStore_finalized, 144
+.set LcStore_periods, 152
+.set LcStore_bootstraps, 160
+.set LC_STORE_FIXED, 168
+.set LC_PART_BLOCKS, 0                     /* the parts of an LcStore, in order */
+.set LC_PART_FINALIZED, 1
+.set LC_PART_PERIODS, 2
+.set LC_PART_BOOTSTRAPS, 3
+.set LC_PART_HEADERS, 4
+.set LC_PART_COMMITTEES, 5
+.set LC_PART_UPDATES, 6
+.set LcBlock_root, 0
+.set LcBlock_parent_root, 32
+.set LcBlock_slot, 64
+.set LcBlock_parent, 72
+.set LcBlock_data, 80
+.set LcBlock_header, 88
+.set LcBlock_current_sync_committee, 96
+.set LcBlock_next_sync_committee, 104
+.set LcBlock_best, 112
+.set LcBlock_finalized_slot, 120
+.set LcBlock_latest_signature_slot, 128
+.set LcBlock_sync_aggregate, 136
+.set LcBlock_current_branch, 136 + LC_AGGREGATE_ROOM
+.set LcBlock_next_branch, 328 + LC_AGGREGATE_ROOM
+.set LcBlock_finality_branch, 520 + LC_AGGREGATE_ROOM
+.set LcBlock__mem, 744 + LC_AGGREGATE_ROOM
+.set LcFinalized_slot, 0
+.set LcFinalized_root, 8
+.set LcFinalized__mem, 40
+.set LcPeriod_period, 0
+.set LcPeriod_update, 8
+.set LcPeriod__mem, 16
+.set LcBootstrap_root, 0
+.set LcBootstrap_slot, 32
+.set LcBootstrap_header, 40
+.set LcBootstrap_sync_committee, 48
+.set LcBootstrap_branch, 56
+.set LcBootstrap__mem, 248
+.set LcHeader_state, 0
+.set LcHeader_fork, 8
+.set LcHeader_header, 16
+.set LcHeader__mem, 40 + LC_HEADER_ROOM
+.set LcCommittee_state, 0
+.set LcCommittee_committee, 8
+.set LcCommittee__mem, 8 + LC_COMMITTEE
+.set LcUpdate_state, 0
+.set LcUpdate_fork, 8
+.set LcUpdate_attested_header, 16
+.set LcUpdate_finalized_header, 24
+.set LcUpdate_next_sync_committee, 32
+.set LcUpdate_signature_slot, 40
+.set LcUpdate_next_branch, 48
+.set LcUpdate_finality_branch, 240
+.set LcUpdate_sync_aggregate, 464
+.set LcUpdate__mem, 464 + LC_AGGREGATE_ROOM
+.set LC_COMPARE_SCRATCH, 8 + 2 * (24 + LC_UPDATE_ROOM) + 2 * (24 + LC_HEADER_ROOM)   /* lantern_lc_on_block: the scratch of a comparison */
 .set API_VALUE_CANONICAL, 1              /* the values of a NODE_WORK_API_ENCODE's arg, times 2^16 */
 .set API_VALUE_FINALIZED, 2
 .set API_VALUE_OPTIMISTIC, 4
@@ -1159,6 +1268,9 @@
 .set NODE_STATE_FORK, 56               /* BeaconState.fork in the value of every fork */
 .set NODE_STATE_VALIDATORS, 296 + 64 * SLOTS_PER_HISTORICAL_ROOT   /* BeaconState.validators, a PartRef, in every fork */
 .set NODE_STATE_BALANCES, NODE_STATE_VALIDATORS + 16                /* BeaconState.balances, a PartRef of u64 */
+.set NODE_STATE_FINALIZED, NODE_STATE_VALIDATORS + 32 + 32 * EPOCHS_PER_HISTORICAL_VECTOR + 8 * EPOCHS_PER_SLASHINGS_VECTOR + 32 + 8 + 80   /* BeaconState.finalized_checkpoint in the value of every fork */
+.set NODE_STATE_CURRENT_SYNC_COMMITTEE, NODE_STATE_FINALIZED + 40 + 16   /* BeaconState.current_sync_committee from altair: its SSZ bytes */
+.set NODE_STATE_NEXT_SYNC_COMMITTEE, NODE_STATE_CURRENT_SYNC_COMMITTEE + 48 * SYNC_COMMITTEE_SIZE + 48
 .set NODE_VALIDATOR_MEM, 128           /* a Validator in a state's value: its fields at these offsets */
 .set NODE_VALIDATOR_CREDENTIALS, 48
 .set NODE_VALIDATOR_EFFECTIVE_BALANCE, 80
