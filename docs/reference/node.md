@@ -35,6 +35,7 @@
 - [`lantern_node_produce_check`](#function-lantern_node_produce_check): the proposer of a state's slot, its randao reveal checked, for one fork.
 - [`lantern_node_payload_result`](#function-lantern_node_payload_result): the SSZ bytes of an engine_getPayload result, for one fork.
 - [`lantern_node_produce_fold`](#function-lantern_node_produce_fold): a pool entry added to the body draft of a block to produce, for one fork.
+- [`lantern_node_custody`](#function-lantern_node_custody): the custody group count of the node's validators (fulu validator custody).
 - [`lantern_node_eth1_check`](#function-lantern_node_eth1_check): whether a state still takes votes on the deposit contract's chain, for one fork.
 - [`lantern_node_produce_eth1`](#function-lantern_node_produce_eth1): the eth1 vote and the deposits of a block to produce, for one fork.
 - [`lantern_node_produce_block`](#function-lantern_node_produce_block): the block of produceBlockV3 from its draft and the engine's payload, or blinded with the builder's bid, for one fork.
@@ -91,6 +92,7 @@
 - `fork-choice.md` of fulu, `is_data_available`: every column sidecar the node samples passes verify_data_column_sidecar and verify_data_column_sidecar_kzg_proofs; the network does not promise sidecars outside `MIN_EPOCHS_FOR_DATA_COLUMN_SIDECARS_REQUESTS`.
 - `das-core.md` of fulu, Custody sampling: the node samples the columns of the groups of get_custody_groups(node_id, max(`SAMPLES_PER_SLOT`, custody_group_count)); its custody groups are the first custody_group_count of them. Column gossip: the node joins the subnets of the columns it samples. A node may custody more than `CUSTODY_REQUIREMENT` groups, "up to `NUMBER_OF_CUSTODY_GROUPS`, indicating a super-full node": with `NODE_FLAG_SUPERNODE`, lantern's custody_group_count is `NUMBER_OF_CUSTODY_GROUPS`, so it samples every column.
 - `p2p-interface.md` of fulu, DataColumnSidecarsByRange v1 and DataColumnSidecarsByRoot v1: the reader checks each sidecar's format, inclusion proof and KZG proofs before the next chunk; the server sends the sidecars of the head's chain in (slot, column index) order, or of the requested identifiers in their order, at most compute_max_request_data_column_sidecars. GetMetaData v3: the peer's `custody_group_count`.
+- `validator.md` of fulu, Validator custody: a node with validators attached custodies get_validators_custody_requirement of the latest finalized state and their indices, advertises that count in its MetaData and record, never advertises a lower one, keeps it across restarts, and its Status v2 `earliest_available_slot` is the slot from which it serves all its sidecars (`p2p-interface.md` of fulu, Status v2).
 - The node ID of a secp256k1 key: keccak256 of the key's 64-byte uncompressed point (x then y), the discv5 identity scheme "v4" (EIP-778). get_custody_groups reads those 32 bytes as a big-endian number, as Lighthouse does (`U256::from_be_slice` in consensus/types/src/data/data_column_custody_group.rs); a `NodeID` holds them in reverse order.
 - `p2p-interface.md` of phase0 to fulu, The discovery domain: discv5: the ENR keys `eth2` (`ENRForkID`), `attnets`, `syncnets` (altair), `cgc` and `nfd` (fulu); peers whose `eth2` fork digest is the node's. The Req/Resp domain, Status: the dialing client MUST send a Status request upon connection.
 - `optimistic-sync.md` of bellatrix: optimistic import, the optimistic candidate, how to apply `latestValidHash`, execution engine errors.
@@ -154,7 +156,7 @@
   - After each connection of the runner's network: getPeers, with no query, with `state` `connected`, with `state` `disconnected,connecting`, with each `direction`, and with both sets, must answer the peer as beacon-api.md gives it, with its connection's address (the peer's 10.0.0.1 and TCP port 40001 when the peer dials the node, the record's 10.0.0.2 and 9000 when the node dials it), or no peer; getPeer of its peer ID text must answer it, and of another, 404.
   - The node has `NODE_FLAG_DISCV5`: its `NODE_ACT_DISCV5` actions must set `eth2` to lantern_compute_enr_fork_id at the anchor's epoch, `attnets` to the bits of the node's subnets at that epoch (lantern_compute_subscribed_subnets of its node ID), from altair `syncnets` to 1 zero byte (no sync subscription yet), in fulu `cgc` to the node's custody group count and `nfd` to lantern_compute_next_fork_digest, and ask for a lookup.
   - The operation events: an eventstream of `proposer_slashing,attester_slashing` over HTTP/1.1, then from the peer a valid proposer slashing and a valid attester slashing of the anchor's validators (signed with the keys of the spec's test helpers), each Snappy compressed on its topic of the anchor's epoch. The stream's bytes must be its head, then the case's event text of each, each in one chunk.
-  - The subscriptions (beacon-api.md): prepareBeaconCommitteeSubnet of an aggregator for the next slot on a subnet outside `attnets` must answer 200, and the peer must see the node join one topic; at the slot after that slot, leave one topic. From altair, prepareSyncCommitteeSubnets of index 0 to the next epoch must answer 200, and the peer must see the node join one topic, its `seq_number` one more, MetaData v2 with bit 0 of `syncnets`, and the record's `syncnets` 1; at that epoch, leave one topic, `seq_number` one more, the record's `syncnets` 0.
+  - The subscriptions (beacon-api.md): prepareBeaconCommitteeSubnet of an aggregator for the next slot on a subnet outside `attnets` must answer 200, and the peer must see the node join one topic; at the slot after that slot, leave one topic. From altair, prepareSyncCommitteeSubnets of index 0 to the next epoch must answer 200, and the peer must see the node join one topic, its `seq_number` one more, MetaData v2 with bit 0 of `syncnets`, and the record's `syncnets` 1; at that epoch, leave one topic, `seq_number` one more, the record's `syncnets` 0. In fulu, prepareBeaconProposer of the validators 0 to 9 of the anchor state, then the next epoch: `custody_count` must be get_validators_custody_requirement of their balances, `columns` those of max(`SAMPLES_PER_SLOT`, it) groups of get_custody_groups, with one SUBSCRIBE of each new subnet, `seq_number` one more, MetaData v3 and the record's `cgc` of it, and Status v2 `earliest_available_slot` the store's slot of the preparation, at which the node checks; three epochs on, with the preparations ended, `custody_count` must stay.
 - The `fork_choice-get_head` and `fork_choice-on_block` cases in node mode, after their steps: the runner opens the same network, and the node serves the chain of the case's last checked head, which the runner builds from the case's valid blocks by `parent_root`.
   - BeaconBlocksByRange v2 from the anchor's slot to the head's must give each block of the chain, in slot order.
   - BeaconBlocksByRoot v2 of the head, a root of no block, and the chain's first block must give the head and the first block.
@@ -341,7 +343,7 @@ lantern_node_init(room, config, anchor, flags, node) -> status
 
 - The node keeps the anchor's `node_id`; `attnets` is 0 until its first subscription.
 - The first `BufferId` the node gives is 3: 1 is the anchor state, 2 the light client store.
-- The node's custody group count: `NUMBER_OF_CUSTODY_GROUPS` with `NODE_FLAG_SUPERNODE` among `flags`, else `CUSTODY_REQUIREMENT` of `config`.
+- The node's custody group count, `custody_count`: `NUMBER_OF_CUSTODY_GROUPS` with `NODE_FLAG_SUPERNODE` among `flags`, else the higher of `CUSTODY_REQUIREMENT` of `config` and the anchor's `custody_count`, at most `NUMBER_OF_CUSTODY_GROUPS`; `custody_slot` the anchor's.
 - The node's `columns`: each column of compute_columns_for_custody_group of each group of get_custody_groups(the anchor's `node_id`, max(`SAMPLES_PER_SLOT`, its custody group count)) of `config`: every column with `NODE_FLAG_SUPERNODE`.
 - With `NODE_FLAG_BUILDER`, the node keeps the anchor's `builder_host`.
 - With `NODE_FLAG_DB`, the node keeps the anchor's `archive_slots`; `archive_slot`, `archive_first` and `archive_segment` are 2^64 - 1.
@@ -507,12 +509,13 @@ lantern_node_step(node, store, p2p, tick, events, scratch, actions, result) -> s
 - After the head, each stream in `NODE_STREAM_SERVE` gets a `NODE_WORK_SERVE` of its next block or sidecar, with the protocol version + 256 times the method as `arg`, and takes `NODE_STREAM_SERVING`, while the actions have room for the work and 4096 bytes; a stream left waiting makes `wakeup` the tick's time.
 - `NODE_EV_WORK_DONE` of `NODE_WORK_SERVE`: the chunk goes out in a `STREAM_WRITE`, then the stream's next block, or a `STREAM_CLOSE` after the last; a result other than `LANTERN_VALID`, or no room in `p2p_out`, gives a `STREAM_RESET`.
 - An answer is one chunk of lantern_reqresp_write_chunk in a `STREAM_WRITE`, then a `STREAM_CLOSE`; then the stream goes.
-- The node's Status: compute_fork_digest of the store's epoch, the store's finalized checkpoint (with a zero root when its epoch is `GENESIS_EPOCH`: p2p-interface.md, "defaults to `Root(b'\x00' * 32)` for the genesis finalized checkpoint"), `head_root` and its slot, and `earliest_slot`. Its MetaData: `metadata_seq`, the subnets of `attnets`, the sync subnets of `syncnets`, and the node's custody group count: `NUMBER_OF_CUSTODY_GROUPS` with `NODE_FLAG_SUPERNODE`, else `CUSTODY_REQUIREMENT`.
+- The node's Status: compute_fork_digest of the store's epoch, the store's finalized checkpoint (with a zero root when its epoch is `GENESIS_EPOCH`: p2p-interface.md, "defaults to `Root(b'\x00' * 32)` for the genesis finalized checkpoint"), `head_root` and its slot, and `earliest_slot`, or `custody_slot` while it is above `earliest_slot` and the first slot of the column window (the node serves its new custody columns from it on). Its MetaData: `metadata_seq`, the subnets of `attnets`, the sync subnets of `syncnets`, and `custody_count`.
 - After the head, with `p2p`, one change a step, when `p2p_out` has 8192 bytes free (altair `p2p-interface.md`, Transitioning the gossip: a node SHOULD subscribe to the post-fork topics in advance of the fork, and SHOULD unsubscribe from the pre-fork topics two epochs after it):
   - When compute_fork_digest of the store's epoch is not `fork_digest`: it becomes `fork_digest`, `attnets` the subnets of the store's epoch (below) and `subnets` the subnets the node keeps (below), then the record entries below; a `SUBSCRIBE` of each topic of the fork of that epoch at that digest, unless it is `next_digest`, whose topics are there; `next_digest` becomes 0. A `fork_digest` before it becomes `old_digest`, with the fork of the epoch before as `old_fork` and the store's epoch + `NODE_SUBSCRIBE_AHEAD` (2) as `old_epoch`.
   - Else, when compute_fork_digest of the store's epoch + `NODE_SUBSCRIBE_AHEAD` is neither `fork_digest` nor `next_digest`: it becomes `next_digest`, with a `SUBSCRIBE` of each topic of the fork of that epoch at that digest.
   - Else, when the subnets of the store's epoch are not `attnets`: `attnets` takes them, with the record entries below.
   - Else, when the subnets the node keeps are not `subnets`: an `UNSUBSCRIBE` of beacon_attestation of each subnet of `subnets` not among them and a `SUBSCRIBE` of each new one, at `fork_digest` and at `next_digest` when it is not 0; `subnets` takes them. The subnets the node keeps: those of `attnets`, and each i whose `subnet_until[i]` is above the store's slot (an aggregator's subscription, beacon-api.md, prepareBeaconCommitteeSubnet).
+  - Else, from fulu, when `custody_need` is above `custody_count` (validator custody, below): `custody_count` takes it and `custody_slot` the store's slot; `columns` becomes those of max(`SAMPLES_PER_SLOT`, `custody_count`) groups (lantern_node_init's rule), with a `SUBSCRIBE` of data_column_sidecar of each subnet of a new column that no former column had, at `fork_digest` and at `next_digest` when it is not 0; `metadata_seq` grows by 1, with the record entries below.
   - Else, from altair, when the sync subnets the node keeps are not `syncnets`: the same events of sync_committee; `syncnets` takes them, `metadata_seq` grows by 1, with the record entries below. The sync subnets the node keeps: each i whose `sync_until[i]` is above the store's epoch (beacon-api.md, prepareSyncCommitteeSubnets; altair p2p-interface.md, MetaData: `syncnets` the sync subnets the node is subscribed to).
   - The subnets of an epoch: those of lantern_compute_subscribed_subnet(the node ID, the epoch, index) for each index below `SUBNETS_PER_NODE` (phase0 `p2p-interface.md`, Attestation subnet subscription: a beacon node should stay subscribed to `SUBNETS_PER_NODE` subnets, chosen from its node ID, for `EPOCHS_PER_SUBNET_SUBSCRIPTION` epochs, and set their bits in its record's `attnets`). Each change of `attnets` adds 1 to `metadata_seq` (MetaData: `seq_number` grows when `attnets` changes).
   - Else, from `old_epoch` on, an `UNSUBSCRIBE` of each topic of `old_fork` at `old_digest`, which becomes 0.
@@ -583,6 +586,7 @@ lantern_node_step(node, store, p2p, tick, events, scratch, actions, result) -> s
 - engine_forkchoiceUpdated answered: of a preparation (`engine_target` 1), a `payloadId` sets `payload_id` and `payload_status` `NODE_PAYLOAD_READY`, and a null one `payload_status` `NODE_PAYLOAD_NONE`. `VALID`, lantern_store_payload_status of the head's node with `PAYLOAD_STATUS_VALID`; `INVALID` or `INVALID_BLOCK_HASH`, `latestValidHash` applies from the head, the head included. The call ends.
 - The eth1 follower (eth1.md; phase0 `validator.md`, Eth1 Data; electra `validator.md`), with `NODE_FLAG_ENGINE` and `NODE_FLAG_ETH1`:
   - The check: after the head, when the store's epoch + 1 is above `eth1_check_epoch` and the head's post-state is held, a `NODE_WORK_ETH1_CHECK` of it, and `eth1_check_epoch` takes the epoch + 1. Its event: `NodeEvent_index` 1 when the deposit bridge is open, then `eth1_state` 1, else 2; `NodeEvent_checkpoint` the state's `eth1_deposit_index`, then `eth1_deposit_index`.
+- Validator custody (fulu `validator.md`), from fulu: after the head, when the store's epoch + 1 is above `custody_epoch`, a `NodeProposer` entry's `until_epoch` is above the store's epoch, and F has a post-state: a `NODE_WORK_CUSTODY` of it, and `custody_epoch` takes the epoch + 1. `NODE_EV_WORK_DONE` of it: `custody_need` takes its `NodeEvent_index` when that is more.
   - The calls: with `eth1_state` 1, after the engine's calls (above) when none is in flight, the first of these goes out, its JSON-RPC request with the id `engine_id` in lantern_http_post with the JWT of lantern_jwt_token of `time_ms` / 1000, in a `NODE_ACT_ENGINE`; `engine_method` `ENGINE_METHOD_ETH_BLOCK` or `ENGINE_METHOD_ETH_LOGS`:
     - `eth1_head_ms` 0, or `time_ms` at least `eth1_head_ms` + `SECONDS_PER_ETH1_BLOCK` * 1000: eth_getBlockByNumber of the latest block, `eth1_call` 2^64 - 1.
     - With F the follow head, `eth1_head` - `ETH1_FOLLOW_DISTANCE` (none when below it): `eth1_logs_to` at most F: eth_getLogs of the deposit contract's address (the config's `DEPOSIT_CONTRACT_ADDRESS`) from `eth1_logs_to` to the lower of F and `eth1_logs_to` + `NODE_ETH1_LOG_BLOCKS` (1000) - 1, `eth1_call` that last block.
@@ -746,6 +750,7 @@ lantern_node_run(node, store, seen, work, state_a, state_b, state_c, data, setti
 - `NODE_WORK_GET_PAYLOAD`: lantern_engine_get_payload of the fork of the slot of the `NodeApi` entry at `target` with `payload_id` and the id `arg`, in an HTTP POST as `NODE_WORK_FORKCHOICE` writes it, as a ByteList at `NodeEvent_chunk`.
 - `NODE_WORK_PRODUCE_CHECK`: lantern_node_produce_check of the fork of the slot of `state_a`, for the `NodeApi` entry at `target`: get_beacon_proposer_index of the state at `NodeEvent_root`, and at byte 8 of it 1 when the chain is healthy, else 0; with `skip_randao_verification` a `randao_reveal` that is not the point at infinity, else one that fails process_randao's check for that proposer: the result `LANTERN_INVALID_RANDAO_REVEAL` (400).
 - `NODE_WORK_ETH1_CHECK`: lantern_node_eth1_check of the fork of the slot of `state_a`: its two u64 at `NodeEvent_index` and `NodeEvent_checkpoint`.
+- `NODE_WORK_CUSTODY`: lantern_node_custody of the fork of the slot of `state_a`, with the store's epoch: its count at `NodeEvent_index`.
 - `NODE_WORK_PRODUCE_ETH1`: lantern_node_produce_eth1 of the fork of the slot of `state_a`, with the draft `data`, the snapshot `state_b` and the node's config; its status is the result.
 - `NODE_WORK_PRODUCE_FOLD`: lantern_node_produce_fold of the fork of the slot of `state_a`: the pool entry `state_b` joins the draft `data` in place when the rules of beacon-api.md take it at `state_a`; `arg` its topic, + 2^8 times its `NodePool` `fork`, + 2^16 times its `member`.
 - `NODE_WORK_PRODUCE_BLOCK`: lantern_node_produce_block of the fork of the slot of `state_a`, from the draft `data`, the engine's result `state_b` and the bid `state_c` (a ByteList, or 0), with the request of the entry at `target` and the node's config: the fork's `BeaconBlock`, `BlockContents` or `BlindedBeaconBlock` in SSZ bytes as a ByteList at `NodeEvent_chunk`, execution_payload_value at `NodeEvent_root` (32 bytes), consensus_block_value in Gwei at `NodeEvent_index`, and 1 at `NodeEvent_checkpoint` for a blinded block, else 0.
@@ -1685,6 +1690,38 @@ lantern_node_produce_fold(state, entry, draft, arg, scratch) -> status
 
 - Export: `lantern_<fork>_node_produce_fold` of each fork object (asm/core/<ISA>/nodehooks.s).
 - Argument order: `state`, `entry`, `draft`, `arg`, `scratch`.
+
+## Function `lantern_node_custody`
+
+The custody group count of the node's validators (fulu `validator.md`, Validator custody).
+
+### Signature
+
+```
+lantern_node_custody(state, node, epoch, count) -> status
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `state` | input | `BeaconState`: the latest finalized state |
+| `node` | input | `Node` |
+| `epoch` | input | u64: the store's epoch |
+| `count` | output | u64 |
+
+### Returns
+
+- `LANTERN_OK`: `count` holds it.
+
+### Function does
+
+- The validators: the `validator_index` of each `NodeProposer` entry of the node whose `until_epoch` is above `epoch`; an index past the state's validators adds no balance.
+- `count`: get_validators_custody_requirement of the state and those validators, with the node's config: min(max(the sum of their `effective_balance` // `BALANCE_PER_ADDITIONAL_CUSTODY_GROUP`, `VALIDATOR_CUSTODY_REQUIREMENT`), `NUMBER_OF_CUSTODY_GROUPS`); 0 with no validator.
+
+### ABI
+
+- Export: `lantern_<fork>_node_custody` of each fork object.
 
 ## Function `lantern_node_eth1_check`
 
@@ -2747,10 +2784,14 @@ The state of the node: a value with parts.
 | 728 + `CONFIG_SIZE` + `API_IDENTITY_SIZE` + 1656 + 8 * (`SYNC_COMMITTEE_SUBNET_COUNT` + `ATTESTATION_SUBNET_COUNT`) | `archive_end` | u64 | The bytes of that segment |
 | 728 + `CONFIG_SIZE` + `API_IDENTITY_SIZE` + 1664 + 8 * (`SYNC_COMMITTEE_SUBNET_COUNT` + `ATTESTATION_SUBNET_COUNT`) | `archive_busy` | u64 | 1 while a `NODE_ACT_DB_ARCHIVE` waits for its `NODE_EV_DB_ARCHIVE`, else 0 |
 | 728 + `CONFIG_SIZE` + `API_IDENTITY_SIZE` + 1672 + 8 * (`SYNC_COMMITTEE_SUBNET_COUNT` + `ATTESTATION_SUBNET_COUNT`) | `replay_loading` | u64 | 1 while the replay's `NODE_WORK_ARCHIVE_LOAD` is out, else 0 |
+| 728 + `CONFIG_SIZE` + `API_IDENTITY_SIZE` + 1680 + 8 * (`SYNC_COMMITTEE_SUBNET_COUNT` + `ATTESTATION_SUBNET_COUNT`) | `custody_count` | u64 | The node's custody group count (fulu): its MetaData's and record's; it never falls |
+| 728 + `CONFIG_SIZE` + `API_IDENTITY_SIZE` + 1688 + 8 * (`SYNC_COMMITTEE_SUBNET_COUNT` + `ATTESTATION_SUBNET_COUNT`) | `custody_slot` | u64 | The store's slot at its last raise, or the anchor's |
+| 728 + `CONFIG_SIZE` + `API_IDENTITY_SIZE` + 1696 + 8 * (`SYNC_COMMITTEE_SUBNET_COUNT` + `ATTESTATION_SUBNET_COUNT`) | `custody_need` | u64 | The custody group count of the node's validators at the last `NODE_WORK_CUSTODY`, or 0 |
+| 728 + `CONFIG_SIZE` + `API_IDENTITY_SIZE` + 1704 + 8 * (`SYNC_COMMITTEE_SUBNET_COUNT` + `ATTESTATION_SUBNET_COUNT`) | `custody_epoch` | u64 | The store's epoch + 1 at the last `NODE_WORK_CUSTODY`, or 0 |
 
 ### Rules
 
-- `NODE_FIXED` (728 + `CONFIG_SIZE` + `API_IDENTITY_SIZE` + 1680 + 8 * (`SYNC_COMMITTEE_SUBNET_COUNT` + `ATTESTATION_SUBNET_COUNT`)) bytes of fixed fields; the parts follow in the order blocks, checkpoints, pow_blocks, peers, streams, messages, blobs, api, pool, proposers, p2p_out, engine_in, db, eth1_blocks, eth1_deposits, eth1_leaves, eth1_counts.
+- `NODE_FIXED` (728 + `CONFIG_SIZE` + `API_IDENTITY_SIZE` + 1712 + 8 * (`SYNC_COMMITTEE_SUBNET_COUNT` + `ATTESTATION_SUBNET_COUNT`)) bytes of fixed fields; the parts follow in the order blocks, checkpoints, pow_blocks, peers, streams, messages, blobs, api, pool, proposers, p2p_out, engine_in, db, eth1_blocks, eth1_deposits, eth1_leaves, eth1_counts.
 - The `Db` has the capacities of the `NodeRoom` fields `db_slots` and `db_roots`, and its `first_slot` is the lowest of the anchor's `history_slot`, its slot and the first slot of the epoch max(0, the epoch of its slot - compute_min_epochs_for_block_requests), rounded down to a multiple of `DB_SEGMENT_SLOTS`: the backfill's blocks fit in it.
 - The backfill at the start: `backfill_root` the anchor's root, `backfill_slot` and `backfill_next` its slot + 1 (the anchor block's bytes come from a peer too), `backfill_segment`, `backfill_sidecar_segment` and `backfill_start` 2^64 - 1, and `backfill_handle`, `backfill_end`, `backfill_ms`, `backfill_peer` and `backfill_got` 0.
 - The capacity of a part is its bytes up to the next part over its entry's bytes; `p2p_out` is the last part.
@@ -2764,7 +2805,7 @@ The state of the node: a value with parts.
 - `NODE_FLAG_ETH1` (4096): with `NODE_FLAG_ENGINE`, the node follows the deposit contract's chain through the execution engine's connection (the eth1 follower).
 - `NODE_FLAG_EL_OFFLINE`: the last connection to the execution engine failed or closed before an answer, and no answer came since.
 - `NODE_FLAG_FEW_STATES`: the node keeps the post-states of the head, the justified root, F and the blocks with no child, and rebuilds the others when it needs them.
-- `NODE_FLAG_SUPERNODE`: the node custodies every custody group: `columns` holds every column, and its MetaData and ENR give `NUMBER_OF_CUSTODY_GROUPS` (lantern_node_init).
+- `NODE_FLAG_SUPERNODE`: the node custodies every custody group: `columns` holds every column, and `custody_count` is `NUMBER_OF_CUSTODY_GROUPS` (lantern_node_init).
 - `NODE_FLAG_BUILDER` (2048): the node has a builder (app.md `--builder`): it keeps the anchor's `builder_host`, and makes the builder calls (below).
 - `columns` has room for `NUMBER_OF_COLUMNS` of the preset, at most 128.
 
@@ -3095,7 +3136,9 @@ A Beacon API answer the node sends in chunks.
 | 216 | `builder_host_len` | u64 | With `NODE_FLAG_BUILDER`, at most `NODE_ENGINE_HOST_MAX` (64) |
 | 224 | `builder_host` | 64 bytes | The `Host` of the Builder API requests |
 | 288 | `archive_slots` | u64 | With `NODE_FLAG_DB`: the node's `archive_slots`, 0 for no state records |
-| 296 | | | Size |
+| 296 | `custody_count` | u64 | The custody group count the node advertised last, 0 for none (validator custody) |
+| 304 | `custody_slot` | u64 | The slot of its last raise |
+| 312 | | | Size |
 
 ## Type `NodeStepResult`
 
@@ -3170,7 +3213,7 @@ The actions of one step: a ByteList whose bytes are `NodeAction` entries one aft
 - `NODE_ACT_P2P_LIST`: a ByteList of libp2p `Action` values from 16, offset 24; do its DIAL, ADOPT, REFUSE, SEND, CLOSE and SEND_DATAGRAM in order, and skip the others.
 - `NODE_ACT_DISCV5`: a ByteList at 24, offset 24, of asm-discv5 events: pass them to discv5_step.
 - `NODE_ACT_DB_APPEND` (`NODE_ACT_DB_APPEND_SIZE`, 128 bytes): 16 a `BufferId` of bytes, 24 a segment's number, 32 1 for a sidecar segment and 0 for a block segment, 40 an offset, 48 a `DbRecord`. Write the record at the offset of the segment file, its end: the `DbRecord`, the bytes, and zero bytes to a multiple of 8. The first record of a segment that a run writes truncates the file to its offset first, so a torn end or an older run's records go.
-- `NODE_ACT_DB_STATE` (`NODE_ACT_DB_STATE_SIZE`, 40 bytes): 16 the `BufferId` of a finalized block's post-state, 24 the `BufferId` of the block's SSZ bytes, 32 its slot. The shell may keep them, so that a later start has an anchor whose blocks the `Db` holds.
+- `NODE_ACT_DB_STATE` (`NODE_ACT_DB_STATE_SIZE`, 56 bytes): 16 the `BufferId` of a finalized block's post-state, 24 the `BufferId` of the block's SSZ bytes, 32 its slot, 40 `custody_count`, 48 `custody_slot`. The shell may keep them, so that a later start has an anchor whose blocks the `Db` holds.
 - `NODE_ACT_DB_ARCHIVE` (17, `NODE_ACT_DB_ARCHIVE_SIZE`, 120 bytes): 16 the `BufferId` of a state, 24 a state segment's number, 32 an offset, 40 a `DbRecord` with `bytes` and `length` 0. Write the state's record at the offset of the state segment's file, its end: its bytes are lantern_node_state_bytes of the fork of the state's slot, at offset 0, else the diff of them against the segment's full state (lantern_db_state_diff with the record at offset 0, db.md); the `DbRecord` with the ByteList header and `length` of those bytes, the bytes, and zero bytes to a multiple of 8. The first record of a segment that a run writes truncates the file to its offset first. Then a `NODE_EV_DB_ARCHIVE` of the segment, the offset and the record, or of kind 0 when it could not.
 - `NODE_ACT_DB_DROP` (`NODE_ACT_DB_DROP_SIZE`, 32 bytes): 16 a segment, 24 1 for a sidecar segment, else 0. The shell deletes the segment's file; a later record of that segment starts a new file.
 - `NODE_ACT_BUILDER` (16): 16 a builder call, 24 a ByteList of an HTTP request (offset 24). The shell opens a new connection to the builder, writes the bytes, and reads to the connection's end (the request has `Connection: close`), then passes the bytes it read in a `NODE_EV_BUILDER` of the call; a connection that fails before it reads any byte gives a `NODE_EV_BUILDER` with the failure bit.

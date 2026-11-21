@@ -2924,9 +2924,7 @@ LOCAL_FUNCTION node_api_view
     mov     %rax, ApiView_seq_number(%rdi)
     mov     Node_attnets(%rbx), %rax
     mov     %rax, ApiView_attnets(%rdi)
-    mov     (Node_config + CONFIG_CUSTODY_REQUIREMENT)(%rbx), %rax  # the custody group count
-    testq   $NODE_FLAG_SUPERNODE, Node_flags(%rbx)
-    cmovnz  (Node_config + CONFIG_NUMBER_OF_CUSTODY_GROUPS)(%rbx), %rax
+    mov     Node_custody_count(%rbx), %rax  # the custody group count
     mov     %rax, ApiView_custody_group_count(%rdi)
     add     $ApiView_peer_id, %rdi          # the identity's texts
     lea     Node_api_identity(%rbx), %rsi

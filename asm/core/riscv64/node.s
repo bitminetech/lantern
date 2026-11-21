@@ -269,11 +269,20 @@ FUNCTION lantern_node_init
     mv      a1, s2
     li      a2, CONFIG_SIZE
     call    lantern_copy
+    LDQ     t1, s2, CONFIG_CUSTODY_REQUIREMENT  # custody_count: the higher of CUSTODY_REQUIREMENT and the anchor's, at most every group
+    ld      t2, NodeAnchor_custody_count(s3)
+    bleu    t2, t1, 11f
+    mv      t1, t2
+11: LDQ     t2, s2, CONFIG_NUMBER_OF_CUSTODY_GROUPS
+    bleu    t1, t2, 12f
+    mv      t1, t2
+12: andi    t3, s5, NODE_FLAG_SUPERNODE     # a supernode: every group
+    beqz    t3, 13f
+    mv      t1, t2
+13: STQ     t1, s6, Node_custody_count
+    ld      t2, NodeAnchor_custody_slot(s3)
+    STQ     t2, s6, Node_custody_slot
     LDQ     t0, s2, CONFIG_SAMPLES_PER_SLOT # the columns: of max(SAMPLES_PER_SLOT, the custody group count) groups
-    LDQ     t1, s2, CONFIG_CUSTODY_REQUIREMENT
-    andi    t2, s5, NODE_FLAG_SUPERNODE     # a supernode: every group
-    beqz    t2, 1f
-    LDQ     t1, s2, CONFIG_NUMBER_OF_CUSTODY_GROUPS
 1:  mv      a1, t0
     bgeu    t0, t1, 2f
     mv      a1, t1
@@ -3540,6 +3549,10 @@ LOCAL_FUNCTION node_archive
     ld      t0, NodeBlock_data_id(s8)
     sd      t0, 24(t2)
     sd      s10, 32(t2)
+    LDQ     t0, s1, Node_custody_count
+    sd      t0, 40(t2)
+    LDQ     t0, s1, Node_custody_slot
+    sd      t0, 48(t2)
     mv      a0, s8                          # and the archive's state record
     mv      a1, s10
     call    node_archive_queue
@@ -4891,7 +4904,14 @@ LOCAL_FUNCTION node_event
     ld      t0, NodeEvent_checkpoint(s3)
     STQ     t0, s1, Node_eth1_deposit_index
     LEAVE 48
-7091: li    t2, NODE_WORK_ARCHIVE_LOAD      # ARCHIVE_LOAD of the replay's copy: the replay goes on, or ends (2)
+7091: li    t2, NODE_WORK_CUSTODY           # CUSTODY: custody_need, when more
+    bne     t0, t2, 7094f
+    ld      t1, NodeEvent_index(s3)
+    LDQ     t2, s1, Node_custody_need
+    bleu    t1, t2, 7095f
+    STQ     t1, s1, Node_custody_need
+7095: LEAVE 48
+7094: li    t2, NODE_WORK_ARCHIVE_LOAD      # ARCHIVE_LOAD of the replay's copy: the replay goes on, or ends (2)
     bne     t0, t2, 7092f
     LDQ     t1, s1, Node_replay_copy
     beqz    t1, 7093f
@@ -5413,12 +5433,8 @@ LOCAL_FUNCTION node_request
     sd      t0, (L + 72)(sp)
     LDQ     t0, s1, Node_syncnets
     sb      t0, (L + 80)(sp)
-    LDQ     t0, s1, Node_config + CONFIG_CUSTODY_REQUIREMENT  # the custody group count
-    ld      t1, Node_flags(s1)
-    andi    t1, t1, NODE_FLAG_SUPERNODE
-    beqz    t1, 1f
-    LDQ     t0, s1, Node_config + CONFIG_NUMBER_OF_CUSTODY_GROUPS
-1:  sd      t0, (L + 56)(sp)
+    LDQ     t0, s1, Node_custody_count      # the custody group count
+    sd      t0, (L + 56)(sp)
     addi    a0, sp, L + 64 + 17
     addi    a1, sp, L + 56
     li      a2, 8
@@ -6302,8 +6318,26 @@ LOCAL_FUNCTION node_status_bytes
     addi    a1, sp, L + 16
     li      a2, 8
     call    lantern_copy
-    addi    a0, s3, 84                      # earliest_available_slot: Status v2
-    addi    a1, s1, Node_earliest_slot
+    ld      t1, Node_earliest_slot(s1)      # earliest_available_slot: Status v2; custody_slot above it and the column window's start
+    LDQ     t2, s1, Node_custody_slot
+    bleu    t2, t1, 2f
+    sd      t1, (L + 24)(sp)
+    mv      a0, s2
+    call    node_store_slot
+    li      t0, SLOTS_PER_EPOCH
+    divu    a0, a0, t0
+    LDQ     t1, s1, Node_config + CONFIG_MIN_EPOCHS_FOR_DATA_COLUMN_SIDECARS_REQUESTS
+    li      t2, 0
+    bltu    a0, t1, 3f
+    sub     t2, a0, t1
+3:  mul     t2, t2, t0
+    ld      t1, (L + 24)(sp)
+    LDQ     t3, s1, Node_custody_slot
+    bleu    t3, t2, 2f
+    mv      t1, t3
+2:  sd      t1, (L + 16)(sp)
+    addi    a0, s3, 84
+    addi    a1, sp, L + 16
     li      a2, 8
     call    lantern_copy
     LEAVE 32
@@ -6371,12 +6405,8 @@ LOCAL_FUNCTION node_enr_entries
     li      t0, FORK_FULU
     bltu    s3, t0, 8f
     ENR_ENTRY 56, 3, 0x636763, 0            # cgc: the custody group count, big-endian, no leading zero byte
-    LDQ     t1, s1, Node_config + CONFIG_CUSTODY_REQUIREMENT
-    ld      t2, Node_flags(s1)
-    andi    t2, t2, NODE_FLAG_SUPERNODE
-    beqz    t2, 3f
-    LDQ     t1, s1, Node_config + CONFIG_NUMBER_OF_CUSTODY_GROUPS
-3:  li      t2, 0                           # n bytes: 8 - its leading zero bytes
+    LDQ     t1, s1, Node_custody_count
+    li      t2, 0                           # n bytes: 8 - its leading zero bytes
     mv      t3, t1
 1:  beqz    t3, 2f
     addi    t2, t2, 1
@@ -6896,6 +6926,123 @@ LOCAL_FUNCTION node_syncnets_want
 END_FUNCTION node_syncnets_want
 
 /*
+ * A SUBSCRIBE of data_column_sidecar of each subnet of a column of columns that no column of the
+ * 16 bytes at a0 (the columns before) had, at fork_digest and at next_digest when it is not 0. s3
+ * the old subnets below 64, s4 from 64, s5 the new ones below 64, s6 from 64, s7 a column, s8 the
+ * old columns, s9 the subnet count.
+ */
+LOCAL_FUNCTION node_column_raise_topics
+    ENTER 0
+    mv      s8, a0
+    li      s3, 0
+    li      s4, 0
+    li      s5, 0
+    li      s6, 0
+    LDQ     s9, s1, Node_config + CONFIG_DATA_COLUMN_SIDECAR_SUBNET_COUNT
+    beqz    s9, 9f
+    li      s7, 0
+1:  li      t0, 128                         # the subnets of the columns before and now
+    bgeu    s7, t0, 5f
+    remu    t1, s7, s9
+    li      t2, 1
+    sll     t2, t2, t1                      # its bit; shifts use the low 6 bits
+    srli    t3, s7, 3
+    add     t4, s8, t3
+    lbu     t4, 0(t4)
+    andi    t5, s7, 7
+    srl     t4, t4, t5
+    andi    t4, t4, 1
+    beqz    t4, 2f
+    li      t6, 64
+    bgeu    t1, t6, 11f
+    or      s3, s3, t2
+    j       2f
+11: or      s4, s4, t2
+2:  add     t4, s1, t3
+    lbu     t4, Node_columns(t4)
+    srl     t4, t4, t5
+    andi    t4, t4, 1
+    beqz    t4, 3f
+    li      t6, 64
+    bgeu    t1, t6, 21f
+    or      s5, s5, t2
+    j       3f
+21: or      s6, s6, t2
+3:  addi    s7, s7, 1
+    j       1b
+5:  not     t0, s3                          # the new ones
+    and     s5, s5, t0
+    not     t0, s4
+    and     s6, s6, t0
+    li      s7, 0
+6:  li      t0, 128
+    bgeu    s7, t0, 9f
+    li      t0, 64
+    bgeu    s7, t0, 61f
+    srl     t1, s5, s7
+    j       62f
+61: addi    t1, s7, -64
+    srl     t1, s6, t1
+62: andi    t1, t1, 1
+    beqz    t1, 7f
+    li      a0, GOSSIP_DATA_COLUMN_SIDECAR
+    mv      a1, s7
+    ld      a2, Node_fork_digest(s1)
+    li      a3, LIBP2P_EVENT_SUBSCRIBE
+    call    node_sub
+    ld      a2, Node_next_digest(s1)
+    beqz    a2, 7f
+    li      a0, GOSSIP_DATA_COLUMN_SIDECAR
+    mv      a1, s7
+    li      a3, LIBP2P_EVENT_SUBSCRIBE
+    call    node_sub
+7:  addi    s7, s7, 1
+    j       6b
+9:  LEAVE 0
+END_FUNCTION node_column_raise_topics
+
+/*
+ * Validator custody (node.md), from fulu: once each store epoch, with a NodeProposer entry whose
+ * until_epoch is above the store's epoch and F's post-state held, a NODE_WORK_CUSTODY of it. s3
+ * the epoch, s4 the epoch + 1.
+ */
+LOCAL_FUNCTION node_custody_due
+    ENTER 0
+    mv      a0, s2
+    call    node_store_slot
+    li      t0, SLOTS_PER_EPOCH
+    divu    s3, a0, t0
+    addi    s4, s3, 1
+    addi    a1, s1, Node_config
+    call    node_fork
+    li      t0, FORK_FULU
+    bltu    a0, t0, 9f
+    LDQ     t0, s1, Node_custody_epoch
+    bleu    s4, t0, 9f
+    PART    t0, t1, s1, Node_proposers      # a live preparation
+1:  beqz    t1, 9f
+    ld      t2, NodeProposer_until_epoch(t0)
+    bgtu    t2, s3, 2f
+    addi    t0, t0, NodeProposer__mem
+    addi    t1, t1, -1
+    j       1b
+2:  addi    a0, s2, Store_finalized_checkpoint + 8
+    call    node_find_block
+    li      t0, -1
+    beq     a0, t0, 9f
+    ld      a1, NodeBlock_state_id(a1)
+    beqz    a1, 9f
+    STQ     s4, s1, Node_custody_epoch
+    li      a0, NODE_WORK_CUSTODY
+    li      a2, 0
+    li      a3, 0
+    li      a4, 0
+    li      a5, 0
+    call    node_work
+9:  LEAVE 0
+END_FUNCTION node_custody_due
+
+/*
  * The node's gossip topics (node.md; altair p2p-interface.md, Transitioning the gossip), one change
  * a step, when p2p_out has room: the topics of the fork of the store's epoch at its ForkDigest,
  * once for each digest, with the record entries; else those of the epoch NODE_SUBSCRIBE_AHEAD
@@ -6904,7 +7051,7 @@ END_FUNCTION node_syncnets_want
  * Locals: L an epoch, L+8 a ForkDigest.
  */
 LOCAL_FUNCTION node_subscribe
-    ENTER 16
+    ENTER 32
     P2P_OUT t0
     ld      t1, 0(t0)
     ld      t2, 16(t0)
@@ -7022,10 +7169,10 @@ LOCAL_FUNCTION node_subscribe
     STQ     s8, s1, Node_subnets
     j       9f
 33: li      t0, FORK_ALTAIR                 # the sync subnets the node keeps, when they changed: the MetaData and the record
-    bltu    s4, t0, 31f
+    bltu    s4, t0, 34f
     call    node_syncnets_want
     LDQ     s9, s1, Node_syncnets
-    beq     a0, s9, 31f
+    beq     a0, s9, 34f
     mv      s8, a0
     not     a0, s8
     and     a0, a0, s9
@@ -7046,6 +7193,36 @@ LOCAL_FUNCTION node_subscribe
     mv      a1, s4
     call    node_enr_entries
     j       9f
+34: li      t0, FORK_FULU                   # validator custody: a raise of custody_count, its columns, topics, MetaData and record
+    bltu    s4, t0, 31f
+    LDQ     s8, s1, Node_custody_need
+    LDQ     s9, s1, Node_custody_count
+    bleu    s8, s9, 31f
+    STQ     s8, s1, Node_custody_count
+    mv      a0, s2
+    call    node_store_slot
+    STQ     a0, s1, Node_custody_slot
+    ld      t0, Node_columns(s1)
+    ld      t1, (Node_columns + 8)(s1)
+    sd      t0, (L + 16)(sp)
+    sd      t1, (L + 24)(sp)
+    LDQ     a1, s1, Node_config + CONFIG_SAMPLES_PER_SLOT
+    bgeu    a1, s8, 35f
+    mv      a1, s8
+35: ADDQ    a0, s1, Node_node_id
+    addi    a2, s1, Node_config
+    addi    a3, s1, Node_columns
+    call    node_custody_columns
+    addi    a0, sp, L + 16
+    call    node_column_raise_topics
+    ld      t0, Node_metadata_seq(s1)
+    addi    t0, t0, 1
+    sd      t0, Node_metadata_seq(s1)
+    sd      s3, L(sp)
+    addi    a0, sp, L
+    mv      a1, s4
+    call    node_enr_entries
+    j       9f
 31: ld      a1, Node_old_digest(s1)         # the old digest's topics leave
     beqz    a1, 9f
     ld      t0, Node_old_epoch(s1)
@@ -7054,7 +7231,7 @@ LOCAL_FUNCTION node_subscribe
     ld      a0, Node_old_fork(s1)
     li      a2, LIBP2P_EVENT_UNSUBSCRIBE
     call    node_topics
-9:  LEAVE 16
+9:  LEAVE 32
 END_FUNCTION node_subscribe
 
 /*
@@ -9439,6 +9616,7 @@ FUNCTION lantern_node_step
 9:  call    node_head
     call    node_publish_poll               # the answers of the published blocks whose import ended
     call    node_eth1_check_due             # the eth1 follower's check, each store epoch
+    call    node_custody_due                # validator custody's check, each store epoch
     call    node_engine_next
     call    node_shed                       # the post-states the node can rebuild go
     call    node_api_head_events            # the head and finalized_checkpoint events, at a quiet point
@@ -10422,7 +10600,7 @@ FUNCTION lantern_node_run
     li      a0, LANTERN_OK
     LEAVE 192
 8427: li    t1, NODE_WORK_ARCHIVE_LOAD
-    bne     t0, t1, 8430f
+    bne     t0, t1, 8428f
     beqz    s4, 837b                        # ARCHIVE_LOAD: the state of a Db state record into state_a
     beqz    s5, 837b
     mv      a0, s4
@@ -10434,6 +10612,27 @@ FUNCTION lantern_node_run
     li      t0, LANTERN_BUFFER_TOO_SMALL
     beq     a0, t0, 8449f
     sd      a0, NodeEvent_result(s7)
+    li      a0, LANTERN_OK
+    LEAVE 192
+8428: li    t1, NODE_WORK_CUSTODY
+    bne     t0, t1, 8430f
+    beqz    s4, 837b                        # CUSTODY: lantern_node_custody with the store's epoch, its count at NodeEvent_index
+    mv      a0, s2
+    call    node_store_slot
+    li      t0, SLOTS_PER_EPOCH
+    divu    a0, a0, t0
+    sd      a0, (L + 96)(sp)
+    ld      a0, NODE_STATE_SLOT(s4)
+    addi    a1, s1, Node_config
+    call    node_fork
+    mv      t6, a0
+    mv      a0, s4
+    mv      a1, s1
+    addi    a2, sp, (L + 96)
+    addi    a3, sp, (L + 104)
+    FORK_CALL node_custody
+    ld      t0, (L + 104)(sp)
+    sd      t0, NodeEvent_index(s7)
     li      a0, LANTERN_OK
     LEAVE 192
 8430: li    t1, NODE_WORK_PRODUCE_BLOCK

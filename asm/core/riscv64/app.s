@@ -1780,6 +1780,8 @@ LOCAL_FUNCTION app_db_start
     sd      zero, AppDb_next_map(s10)
     li      t0, -1
     sd      t0, AppDb_anchor_slot(s10)
+    sd      zero, AppDb_custody(s10)
+    sd      zero, (AppDb_custody + 8)(s10)
     LDQ     t0, s1, (APP_ANCHOR + 32)       # the Db from the anchor's slot
     STQ     t0, s1, (APP_ANCHOR + NodeAnchor_history_slot)
     LDQ     s3, s1, (APP_OPTIONS + AppOptions_data_dir + 8)
@@ -1809,8 +1811,116 @@ LOCAL_FUNCTION app_db_start
     mv      a0, s4
     addi    a1, s10, AppDb_op
     CALL_GLOBAL lantern_shell_mkdir
+    ADDRESS a0, app_custody_name            # custody.bin: the anchor's custody_count and custody_slot
+    li      a1, app_custody_name_len
+    ADDQ    a2, s1, APP_PATH
+    call    app_db_file
+    ADDQ    a0, s1, APP_PATH
+    addi    a1, s10, AppDb_op
+    CALL_GLOBAL lantern_shell_read_file
+    ld      t0, AppDb_op(s10)
+    bnez    t0, 9f
+    ld      t0, (AppDb_op + 16)(s10)
+    li      t1, 16
+    bne     t0, t1, 8f
+    ld      t2, (AppDb_op + 8)(s10)
+    ld      t3, 0(t2)
+    ld      t4, 8(t2)
+    STQ     t3, s1, (APP_ANCHOR + NodeAnchor_custody_count)
+    STQ     t4, s1, (APP_ANCHOR + NodeAnchor_custody_slot)
+    sd      t3, AppDb_custody(s10)
+    sd      t4, (AppDb_custody + 8)(s10)
+8:  addi    a0, s10, AppDb_op + 8
+    addi    a1, s10, AppDb_op + 24
+    CALL_GLOBAL lantern_shell_unmap_file
 9:  LEAVE 0
 END_FUNCTION app_db_start
+
+/*
+ * L1: the custody_count and custody_slot of the NODE_ACT_DB_STATE a0, when they are not those of
+ * AppDb_custody: <dir>/custody.bin gets them, 16 bytes, synced, and AppDb_custody takes them; a
+ * failure gives a cannot write line. s2 the action, s10 the AppDb. Locals: L a ByteList header,
+ * L+24 a u64, L+32 a file.
+ */
+LOCAL_FUNCTION app_db_custody
+    ENTER 48
+    mv      s2, a0
+    ADDQ    s10, s1, APP_DB
+    ld      t0, 40(s2)
+    ld      t1, AppDb_custody(s10)
+    bne     t0, t1, 1f
+    ld      t0, 48(s2)
+    ld      t1, (AppDb_custody + 8)(s10)
+    beq     t0, t1, 99f
+1:  ADDRESS a0, app_custody_name
+    li      a1, app_custody_name_len
+    ADDQ    a2, s1, APP_PATH
+    call    app_db_file
+    li      t0, 1
+    sd      t0, (L + 24)(sp)
+    ADDQ    a0, s1, APP_PATH
+    addi    a1, sp, L + 24
+    addi    a2, s10, AppDb_op
+    CALL_GLOBAL lantern_shell_open
+    ld      t0, AppDb_op(s10)
+    bnez    t0, 90f
+    ld      t0, (AppDb_op + 8)(s10)
+    sd      t0, (L + 32)(sp)
+    sd      zero, (L + 24)(sp)
+    addi    a0, sp, L + 32
+    addi    a1, sp, L + 24
+    addi    a2, s10, AppDb_op
+    CALL_GLOBAL lantern_shell_truncate
+    ld      t0, AppDb_op(s10)
+    bnez    t0, 89f
+    addi    t0, s2, 40                      # the 16 bytes, a ByteList in place
+    addi    t1, sp, L
+    sub     t0, t0, t1
+    li      t2, 24
+    sd      t2, L(sp)
+    sd      t0, (L + 8)(sp)
+    li      t2, 16
+    sd      t2, (L + 16)(sp)
+    addi    a0, sp, L + 32
+    addi    a1, sp, L
+    addi    a2, s10, AppDb_op
+    CALL_GLOBAL lantern_shell_append
+    ld      t0, AppDb_op(s10)
+    bnez    t0, 89f
+    addi    a0, sp, L + 32
+    addi    a1, s10, AppDb_op
+    CALL_GLOBAL lantern_shell_sync
+    ld      t0, AppDb_op(s10)
+    bnez    t0, 89f
+    addi    a0, sp, L + 32
+    CALL_GLOBAL lantern_shell_close
+    ld      t0, 40(s2)
+    sd      t0, AppDb_custody(s10)
+    ld      t0, 48(s2)
+    sd      t0, (AppDb_custody + 8)(s10)
+99: LEAVE 48
+89: ld      t0, AppDb_op(s10)
+    sd      t0, (L + 24)(sp)
+    addi    a0, sp, L + 32
+    CALL_GLOBAL lantern_shell_close
+    ld      t0, (L + 24)(sp)
+    sd      t0, AppDb_op(s10)
+90: ld      t0, AppDb_op(s10)               # cannot write <path>: error <n>
+    sd      t0, (L + 24)(sp)
+    call    app_line_start
+    ADDRESS a0, app_m_write
+    li      a1, app_m_write_len
+    call    app_line_text
+    call    app_line_path
+    ADDRESS a0, app_m_error
+    li      a1, app_m_error_len
+    call    app_line_text
+    ld      a0, (L + 24)(sp)
+    call    app_line_u64
+    li      a0, APP_LOG_ERROR
+    call    app_line_end
+    LEAVE 48
+END_FUNCTION app_db_custody
 
 /* L1: the path of segment a1 of blocks (a0 0), sidecars (1) or states (2) in the data directory, <dir>/b<n>.seg, <dir>/s<n>.seg or <dir>/a<n>.seg: a ByteList at APP_PATH. s2 the kind, s3 the segment, s4 the next byte. Locals: L 24 digits. */
 LOCAL_FUNCTION app_db_path
@@ -2746,7 +2856,9 @@ LOCAL_FUNCTION app_actions
     j       8f
 12: li      t1, NODE_ACT_DB_STATE
     bne     t0, t1, 120f
-    mv      a0, s2                          # DB_STATE: anchor.ssz
+    mv      a0, s2                          # DB_STATE: custody.bin, anchor.ssz
+    call    app_db_custody
+    mv      a0, s2
     call    app_db_state
     j       8f
 120: li     t1, NODE_ACT_DB_ARCHIVE

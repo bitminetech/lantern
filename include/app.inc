@@ -78,7 +78,8 @@
 .set AppDb_view, AppDb_next_map + 8         /* two BufferId table entries (id, address, size) and 24 bytes: a work's data, then its state_b */
 .set AppDb_op, AppDb_view + 96              /* a FileOp or FileResult */
 .set AppDb_anchor_slot, AppDb_op + 32      /* the slot of the anchor.ssz this run wrote, or 2^64 - 1 */
-.set AppDb__size, AppDb_anchor_slot + 8
+.set AppDb_custody, AppDb_anchor_slot + 8    /* custody_count and custody_slot as custody.bin holds them */
+.set AppDb__size, AppDb_custody + 16
 .set APP_PATH2, APP_DB + AppDb__size        /* a ByteList: a second path */
 .set APP_DB_ROOTS, 4096                     /* the Db's first root table */
 .set APP_BUILDER, APP_PATH2 + 24 + APP_PATH_MAX   /* the Address of the builder (app.md, --builder) */
@@ -209,6 +210,9 @@ app_anchor_name:
 app_anchor_tmp_name:
     .ascii "anchor.tmp"
 .set app_anchor_tmp_name_len, 10
+app_custody_name:
+    .ascii "custody.bin"
+.set app_custody_name_len, 11
 app_m_line:
     .ascii ": faulty line "
 .set app_m_line_len, 14

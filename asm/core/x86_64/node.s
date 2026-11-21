@@ -250,10 +250,17 @@ FUNCTION lantern_node_init
     mov     %rbp, %rsi
     MOVQ    %rdx, CONFIG_SIZE
     call    lantern_copy
-    mov     CONFIG_SAMPLES_PER_SLOT(%rbp), %rsi  # the columns: of max(SAMPLES_PER_SLOT, the custody group count) groups
-    mov     CONFIG_CUSTODY_REQUIREMENT(%rbp), %rax
+    mov     CONFIG_CUSTODY_REQUIREMENT(%rbp), %rax  # custody_count: the higher of CUSTODY_REQUIREMENT and the anchor's, at most every group
+    cmp     NodeAnchor_custody_count(%r12), %rax
+    cmovb   NodeAnchor_custody_count(%r12), %rax
+    cmp     CONFIG_NUMBER_OF_CUSTODY_GROUPS(%rbp), %rax
+    cmova   CONFIG_NUMBER_OF_CUSTODY_GROUPS(%rbp), %rax
     test    $NODE_FLAG_SUPERNODE, %r14      # a supernode: every group
     cmovnz  CONFIG_NUMBER_OF_CUSTODY_GROUPS(%rbp), %rax
+    mov     %rax, Node_custody_count(%r15)
+    mov     NodeAnchor_custody_slot(%r12), %rcx
+    mov     %rcx, Node_custody_slot(%r15)
+    mov     CONFIG_SAMPLES_PER_SLOT(%rbp), %rsi  # the columns: of max(SAMPLES_PER_SLOT, the custody group count) groups
     cmp     %rax, %rsi
     cmovb   %rax, %rsi
     lea     NodeAnchor_node_id(%r12), %rdi
@@ -3521,6 +3528,10 @@ LOCAL_FUNCTION node_archive
     mov     %rcx, 24(%rax)
     mov     S10(%rsp), %rcx
     mov     %rcx, 32(%rax)
+    mov     Node_custody_count(%rbx), %rcx
+    mov     %rcx, 40(%rax)
+    mov     Node_custody_slot(%rbx), %rcx
+    mov     %rcx, 48(%rax)
     mov     S8(%rsp), %rdi                  # and the archive's state record
     mov     S10(%rsp), %rsi
     call    node_archive_queue
@@ -4876,7 +4887,14 @@ LOCAL_FUNCTION node_event
     mov     NodeEvent_checkpoint(%r12), %rcx
     mov     %rcx, Node_eth1_deposit_index(%rbx)
     LEAVE 48
-7091: cmp   $NODE_WORK_ARCHIVE_LOAD, %rax   # ARCHIVE_LOAD of the replay's copy: the replay goes on, or ends (2)
+7091: cmp   $NODE_WORK_CUSTODY, %rax        # CUSTODY: custody_need, when more
+    jne     7094f
+    mov     NodeEvent_index(%r12), %rcx
+    cmp     Node_custody_need(%rbx), %rcx
+    jbe     7095f
+    mov     %rcx, Node_custody_need(%rbx)
+7095: LEAVE 48
+7094: cmp   $NODE_WORK_ARCHIVE_LOAD, %rax   # ARCHIVE_LOAD of the replay's copy: the replay goes on, or ends (2)
     jne     7092f
     mov     Node_replay_copy(%rbx), %rcx
     test    %rcx, %rcx
@@ -5418,9 +5436,7 @@ LOCAL_FUNCTION node_request
     mov     %rax, (L + 72)(%rsp)
     mov     Node_syncnets(%rbx), %rax
     mov     %al, (L + 80)(%rsp)
-    mov     (Node_config + CONFIG_CUSTODY_REQUIREMENT)(%rbx), %rax  # the custody group count
-    testq   $NODE_FLAG_SUPERNODE, Node_flags(%rbx)
-    cmovnz  (Node_config + CONFIG_NUMBER_OF_CUSTODY_GROUPS)(%rbx), %rax
+    mov     Node_custody_count(%rbx), %rax  # the custody group count
     mov     %rax, (L + 56)(%rsp)
     lea     (L + 64 + 17)(%rsp), %rdi
     lea     (L + 56)(%rsp), %rsi
@@ -6317,8 +6333,27 @@ LOCAL_FUNCTION node_status_bytes
     lea     (L + 16)(%rsp), %rsi
     mov     $8, %edx
     call    lantern_copy
-    lea     84(%r12), %rdi                  # earliest_available_slot: Status v2
-    lea     Node_earliest_slot(%rbx), %rsi
+    mov     Node_earliest_slot(%rbx), %rcx  # earliest_available_slot: Status v2; custody_slot above it and the column window's start
+    mov     Node_custody_slot(%rbx), %rax
+    cmp     %rcx, %rax
+    jbe     2f
+    mov     %rcx, (L + 24)(%rsp)
+    mov     %rbp, %rdi
+    call    node_store_slot
+    xor     %edx, %edx
+    mov     $SLOTS_PER_EPOCH, %ecx
+    div     %rcx
+    sub     (Node_config + CONFIG_MIN_EPOCHS_FOR_DATA_COLUMN_SIDECARS_REQUESTS)(%rbx), %rax
+    jae     3f
+    xor     %eax, %eax
+3:  imul    $SLOTS_PER_EPOCH, %rax, %rax
+    mov     (L + 24)(%rsp), %rcx
+    cmp     Node_custody_slot(%rbx), %rax
+    jae     2f
+    mov     Node_custody_slot(%rbx), %rcx
+2:  mov     %rcx, (L + 16)(%rsp)
+    lea     84(%r12), %rdi
+    lea     (L + 16)(%rsp), %rsi
     mov     $8, %edx
     call    lantern_copy
     LEAVE 32
@@ -6393,9 +6428,7 @@ LOCAL_FUNCTION node_enr_entries
     movq    $0x636763, 24(%rax)
     movq    $0, 32(%rax)
     movq    $0, 48(%rax)
-    mov     (Node_config + CONFIG_CUSTODY_REQUIREMENT)(%rbx), %rdx  # the custody group count
-    testq   $NODE_FLAG_SUPERNODE, Node_flags(%rbx)
-    cmovnz  (Node_config + CONFIG_NUMBER_OF_CUSTODY_GROUPS)(%rbx), %rdx
+    mov     Node_custody_count(%rbx), %rdx  # the custody group count
     xor     %ecx, %ecx                      # n bytes: 8 - its leading zero bytes
     mov     %rdx, %rsi
 1:  test    %rsi, %rsi
@@ -6908,6 +6941,128 @@ LOCAL_FUNCTION node_syncnets_want
 END_FUNCTION node_syncnets_want
 
 /*
+ * A SUBSCRIBE of data_column_sidecar of each subnet of a column of columns that no column of the
+ * 16 bytes at rdi (the columns before) had, at fork_digest and at next_digest when it is not 0. r12
+ * the old subnets below 64, r13 from 64, r14 the new ones below 64, r15 from 64, S7 a column, S8
+ * the old columns.
+ */
+LOCAL_FUNCTION node_column_raise_topics
+    ENTER 0
+    mov     %rdi, S8(%rsp)
+    xor     %r12d, %r12d
+    xor     %r13d, %r13d
+    xor     %r14d, %r14d
+    xor     %r15d, %r15d
+    mov     (Node_config + CONFIG_DATA_COLUMN_SIDECAR_SUBNET_COUNT)(%rbx), %r8
+    test    %r8, %r8
+    jz      9f
+    xor     %r9d, %r9d                      # the column
+1:  cmp     $128, %r9
+    jae     5f
+    mov     %r9, %rax
+    xor     %edx, %edx
+    div     %r8                             # rdx: its subnet
+    mov     S8(%rsp), %rsi
+    bt      %r9, (%rsi)
+    jnc     2f
+    cmp     $64, %rdx
+    jae     11f
+    bts     %rdx, %r12
+    jmp     2f
+11: lea     -64(%rdx), %rcx
+    bts     %rcx, %r13
+2:  bt      %r9, Node_columns(%rbx)
+    jnc     3f
+    cmp     $64, %rdx
+    jae     21f
+    bts     %rdx, %r14
+    jmp     3f
+21: lea     -64(%rdx), %rcx
+    bts     %rcx, %r15
+3:  inc     %r9
+    jmp     1b
+5:  not     %r12                            # the new ones
+    and     %r12, %r14
+    not     %r13
+    and     %r13, %r15
+    movq    $0, S7(%rsp)
+6:  mov     S7(%rsp), %rax
+    cmp     $128, %rax
+    jae     9f
+    cmp     $64, %rax
+    jae     61f
+    bt      %rax, %r14
+    jmp     62f
+61: lea     -64(%rax), %rcx
+    bt      %rcx, %r15
+62: jnc     7f
+    mov     $GOSSIP_DATA_COLUMN_SIDECAR, %edi
+    mov     S7(%rsp), %rsi
+    mov     Node_fork_digest(%rbx), %rdx
+    mov     $LIBP2P_EVENT_SUBSCRIBE, %ecx
+    call    node_sub
+    mov     Node_next_digest(%rbx), %rdx
+    test    %rdx, %rdx
+    jz      7f
+    mov     $GOSSIP_DATA_COLUMN_SIDECAR, %edi
+    mov     S7(%rsp), %rsi
+    mov     $LIBP2P_EVENT_SUBSCRIBE, %ecx
+    call    node_sub
+7:  incq    S7(%rsp)
+    jmp     6b
+9:  LEAVE 0
+END_FUNCTION node_column_raise_topics
+
+/*
+ * Validator custody (node.md), from fulu: once each store epoch, with a NodeProposer entry whose
+ * until_epoch is above the store's epoch and F's post-state held, a NODE_WORK_CUSTODY of it. r12
+ * the epoch, r13 the epoch + 1.
+ */
+LOCAL_FUNCTION node_custody_due
+    ENTER 0
+    mov     %rbp, %rdi
+    call    node_store_slot
+    mov     %rax, %r14
+    xor     %edx, %edx
+    mov     $SLOTS_PER_EPOCH, %ecx
+    div     %rcx
+    mov     %rax, %r12
+    lea     1(%rax), %r13
+    mov     %r14, %rdi
+    lea     Node_config(%rbx), %rsi
+    call    node_fork
+    cmp     $FORK_FULU, %rax
+    jb      9f
+    cmp     Node_custody_epoch(%rbx), %r13
+    jbe     9f
+    mov     Node_proposers(%rbx), %rcx      # a live preparation
+    add     %rbx, %rcx
+    mov     (Node_proposers + 8)(%rbx), %rdx
+1:  test    %rdx, %rdx
+    jz      9f
+    cmp     NodeProposer_until_epoch(%rcx), %r12
+    jb      2f
+    add     $NodeProposer__mem, %rcx
+    dec     %rdx
+    jmp     1b
+2:  lea     (Store_finalized_checkpoint + 8)(%rbp), %rdi
+    call    node_find_block
+    cmp     $-1, %rax
+    je      9f
+    mov     NodeBlock_state_id(%rdx), %rsi
+    test    %rsi, %rsi
+    jz      9f
+    mov     %r13, Node_custody_epoch(%rbx)
+    mov     $NODE_WORK_CUSTODY, %edi
+    xor     %edx, %edx
+    xor     %ecx, %ecx
+    xor     %r8d, %r8d
+    xor     %r9d, %r9d
+    call    node_work
+9:  LEAVE 0
+END_FUNCTION node_custody_due
+
+/*
  * The node's gossip topics (node.md; altair p2p-interface.md, Transitioning the gossip), one change
  * a step, when p2p_out has room: the topics of the fork of the store's epoch at its ForkDigest,
  * once for each digest, with the record entries; else those of the epoch NODE_SUBSCRIBE_AHEAD
@@ -6916,7 +7071,7 @@ END_FUNCTION node_syncnets_want
  * an epoch, L+8 a ForkDigest.
  */
 LOCAL_FUNCTION node_subscribe
-    ENTER 16
+    ENTER 32
     P2P_OUT %rcx
     mov     (%rcx), %rax
     sub     $24, %rax
@@ -7045,11 +7200,11 @@ LOCAL_FUNCTION node_subscribe
     mov     %rax, Node_subnets(%rbx)
     jmp     9f
 33: cmp     $FORK_ALTAIR, %r13              # the sync subnets the node keeps, when they changed: the MetaData and the record
-    jb      31f
+    jb      34f
     call    node_syncnets_want
     mov     Node_syncnets(%rbx), %rcx
     cmp     %rcx, %rax
-    je      31f
+    je      34f
     mov     %rax, S8(%rsp)
     mov     %rcx, S9(%rsp)
     mov     %rax, %rdi
@@ -7072,6 +7227,32 @@ LOCAL_FUNCTION node_subscribe
     mov     %r13, %rsi
     call    node_enr_entries
     jmp     9f
+34: cmp     $FORK_FULU, %r13                # validator custody: a raise of custody_count, its columns, topics, MetaData and record
+    jb      31f
+    mov     Node_custody_need(%rbx), %rax
+    cmp     Node_custody_count(%rbx), %rax
+    jbe     31f
+    mov     %rax, Node_custody_count(%rbx)
+    mov     %rbp, %rdi
+    call    node_store_slot
+    mov     %rax, Node_custody_slot(%rbx)
+    movdqu  Node_columns(%rbx), %xmm0
+    movdqu  %xmm0, (L + 16)(%rsp)
+    mov     (Node_config + CONFIG_SAMPLES_PER_SLOT)(%rbx), %rsi
+    cmp     Node_custody_count(%rbx), %rsi
+    cmovb   Node_custody_count(%rbx), %rsi
+    lea     Node_node_id(%rbx), %rdi
+    lea     Node_config(%rbx), %rdx
+    lea     Node_columns(%rbx), %rcx
+    call    node_custody_columns
+    lea     (L + 16)(%rsp), %rdi
+    call    node_column_raise_topics
+    incq    Node_metadata_seq(%rbx)
+    mov     %r12, L(%rsp)
+    lea     L(%rsp), %rdi
+    mov     %r13, %rsi
+    call    node_enr_entries
+    jmp     9f
 31: mov     Node_old_digest(%rbx), %rsi     # the old digest's topics leave
     test    %rsi, %rsi
     jz      9f
@@ -7081,7 +7262,7 @@ LOCAL_FUNCTION node_subscribe
     mov     Node_old_fork(%rbx), %rdi
     mov     $LIBP2P_EVENT_UNSUBSCRIBE, %edx
     call    node_topics
-9:  LEAVE 16
+9:  LEAVE 32
 END_FUNCTION node_subscribe
 
 /*
@@ -9408,6 +9589,7 @@ FUNCTION lantern_node_step
 9:  call    node_head
     call    node_publish_poll               # the answers of the published blocks whose import ended
     call    node_eth1_check_due             # the eth1 follower's check, each store epoch
+    call    node_custody_due                # validator custody's check, each store epoch
     call    node_engine_next
     call    node_shed                       # the post-states the node can rebuild go
     call    node_api_head_events            # the head and finalized_checkpoint events, at a quiet point
@@ -10455,7 +10637,7 @@ FUNCTION lantern_node_run
     xor     %eax, %eax
     LEAVE 192
 8427: cmp   $NODE_WORK_ARCHIVE_LOAD, %rax
-    jne     8430f
+    jne     8428f
     test    %r13, %r13                      # ARCHIVE_LOAD: the state of a Db state record into state_a
     jz      837b
     test    %r14, %r14
@@ -10470,6 +10652,30 @@ FUNCTION lantern_node_run
     je      8449f
     mov     S8(%rsp), %rcx
     mov     %rax, NodeEvent_result(%rcx)
+    xor     %eax, %eax
+    LEAVE 192
+8428: cmp   $NODE_WORK_CUSTODY, %rax
+    jne     8430f
+    test    %r13, %r13                      # CUSTODY: lantern_node_custody with the store's epoch, its count at NodeEvent_index
+    jz      837b
+    mov     %rbp, %rdi
+    call    node_store_slot
+    xor     %edx, %edx
+    mov     $SLOTS_PER_EPOCH, %ecx
+    div     %rcx
+    mov     %rax, (L + 96)(%rsp)
+    mov     NODE_STATE_SLOT(%r13), %rdi
+    lea     Node_config(%rbx), %rsi
+    call    node_fork
+    mov     %rax, %r10
+    mov     %r13, %rdi
+    mov     %rbx, %rsi
+    lea     (L + 96)(%rsp), %rdx
+    lea     (L + 104)(%rsp), %rcx
+    FORK_CALL node_custody
+    mov     S8(%rsp), %rcx
+    mov     (L + 104)(%rsp), %rax
+    mov     %rax, NodeEvent_index(%rcx)
     xor     %eax, %eax
     LEAVE 192
 8430: cmp   $NODE_WORK_PRODUCE_BLOCK, %rax

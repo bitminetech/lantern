@@ -2928,11 +2928,7 @@ LOCAL_FUNCTION node_api_view
     str     x10, [x9, #ApiView_seq_number]
     ldr     x10, [x19, #Node_attnets]
     str     x10, [x9, #ApiView_attnets]
-    LDQ     x10, x19, Node_config + CONFIG_CUSTODY_REQUIREMENT  /* the custody group count */
-    LDQ     x11, x19, Node_config + CONFIG_NUMBER_OF_CUSTODY_GROUPS
-    ldr     x12, [x19, #Node_flags]
-    tst     x12, #NODE_FLAG_SUPERNODE
-    csel    x10, x11, x10, ne
+    LDQ     x10, x19, Node_custody_count    /* the custody group count */
     str     x10, [x9, #ApiView_custody_group_count]
     add     x0, x9, #ApiView_peer_id        /* the identity's texts */
     ADDQ    x1, x19, Node_api_identity

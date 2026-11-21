@@ -2675,7 +2675,7 @@ static int force_supernode; /* set: the next node has NODE_FLAG_SUPERNODE */
 #define WORK_ARCHIVE_LOAD 42
 #define ACT_DB_ARCHIVE 17
 #define EV_DB_ARCHIVE 16
-#define NODE_ANCHOR_SIZE 296
+#define NODE_ANCHOR_SIZE 312
 #define NODE_DB_SEGMENTS 256 /* the segments one node's runner keeps */
 enum { WORK_IMPORT_BLOCK = 1, WORK_JUSTIFIED_STATE, WORK_TARGET_STATE, WORK_ATTESTATION, WORK_ATTESTER_SLASHING, WORK_SERVE, WORK_GOSSIP,
        WORK_SYNC_BLOCK, WORK_BLOB, WORK_NEW_PAYLOAD, WORK_FORKCHOICE, WORK_SLOTS, WORK_UPGRADE, WORK_REPLAY, WORK_BACKFILL,
@@ -3583,7 +3583,7 @@ static void shell_step(fc_node *n, const char **why) {
             }
             if (s->ndrops < 16) s->drops[s->ndrops++] = sidecars << 63 | number;
         }
-        else if (kind == ACT_DB_STATE && size == 40) {
+        else if (kind == ACT_DB_STATE && size == 56) {
             shell_buf *st = shell_find(s, rd64(act + 16)), *bl = shell_find(s, rd64(act + 24));
             if (!st || !bl) *why = "DB_STATE names no buffer";
             else if (rd64(st->b + 48) != rd64(act + 32)) *why = "DB_STATE: the state is not of the slot"; /* NODE_STATE_SLOT 48 */
@@ -5184,7 +5184,11 @@ static int p2p_request(fc_node *n, struct p2p_net *net, int k, const char *name,
     uint8_t *c = p2p_event(net, 1, P2P_EV_STREAM_CLOSE, 24);
     wr64(c + 16, net->st[k].handle);
     p2p_run(n, net, p2p_ended, k, why);
-    if (!*why && net->st[k].reset) *why = "the node resets the stream";
+    if (!*why && net->st[k].reset) {
+        static char rmsg[96];
+        snprintf(rmsg, sizeof rmsg, "the node resets the stream of %s v%llu", name, (unsigned long long)version);
+        *why = rmsg;
+    }
     return k;
 }
 
@@ -5237,6 +5241,9 @@ static void p2p_open_record(fc_node *n, struct p2p_net *net, const uint8_t *reco
 static void p2p_open(fc_node *n, struct p2p_net *net, const char **why) { p2p_open_record(n, net, NULL, 0, NULL, 0, why); }
 static void api_peers_check(fc_node *n, struct p2p_net *net, int outbound, const char **why);
 static void api_subscribe_check(fc_node *n, struct p2p_net *net, const char **why);
+#if FORK >= FORK_FULU
+static void custody_check(fc_node *n, struct p2p_net *net, const uint8_t *status, uint64_t slen, const char **why);
+#endif
 
 /*
  * The network of a node, as p2p_open: with a record, the node gets it in a NODE_EV_ENR and must
@@ -5404,6 +5411,9 @@ static void run_node_p2p(const char *file, case_file *f) {
 #endif
         }
         if (!why) api_subscribe_check(&n, &net, &why);
+#if FORK >= FORK_FULU
+        if (!why) custody_check(&n, &net, status, slen, &why);
+#endif
         if (!why) p2p_op_events(&n, &net, parts, &why);
         if (!why && rd64(s->node + rd64(s->node + 152) + 16)) why = "the node keeps libp2p events at the end"; /* Node_p2p_out: a ByteList */
         p2p_close(&net);
@@ -10353,7 +10363,7 @@ static int p2p_untopic(struct p2p_net *net, int arg) { return net->untopics >= a
 static void api_subscribe(fc_node *n, const char *path, const char *body, uint64_t conn, const char **why) {
     struct node_shell *s = n->shell;
     static const char ok[] = "HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n";
-    char req[768];
+    char req[2048];
     snprintf(req, sizeof req, "POST %s HTTP/1.1\r\nHost: lantern\r\nContent-Type: application/json\r\nContent-Length: %zu\r\n\r\n%s",
              path, strlen(body), body);
     shell_api_ask(n, (const uint8_t *)req, strlen(req), conn, why);
@@ -10436,6 +10446,117 @@ static void api_subscribe_check(fc_node *n, struct p2p_net *net, const char **wh
     if (!*why && !shell_entry(s, "syncnets", none, 1)) *why = "subscribe: at the sync subscription's epoch: the record's syncnets";
 #endif
 }
+
+/*
+ * Validator custody (fulu validator.md; node.md, validator custody), with a peer: prepareBeaconProposer of
+ * the validators 0 to 9 of the anchor state (the store's finalized state), then the next epoch: custody_count
+ * get_validators_custody_requirement of their effective balances, columns those of max(SAMPLES_PER_SLOT, it)
+ * groups of get_custody_groups of the node ID, one SUBSCRIBE of each new subnet, seq_number one more,
+ * MetaData v3 and the record's cgc of it, and Status v2 the case's with earliest_available_slot the slot of
+ * the preparation (the node checks at once). Three epochs on, with the preparations ended, custody_count stays.
+ */
+#if FORK >= FORK_FULU
+static unsigned long custody_raises; /* the raises the custody checks saw */
+static void custody_check(fc_node *n, struct p2p_net *net, const uint8_t *status, uint64_t slen, const char **why) {
+    struct node_shell *s = n->shell;
+    uint64_t genesis_ms = rd64(n->store + STORE_GENESIS_TIME_MS), slot_ms = rd64(config + 104), slot = 0;
+    if (CALL(LF(get_current_slot), n->store, &slot) != 0) {
+        *why = "custody: get_current_slot status";
+        return;
+    }
+    uint64_t epoch = slot / SLOTS_PER_EPOCH_RUNNER, ref = field_offset("BeaconState", 11);
+    const uint8_t *st = n->anchor, *vals = st + rd64(st + ref);
+    uint64_t nvals = rd64(st + ref + 8), total = 0, groups_n = rd64(config + 280), samples = rd64(config + 272);
+    for (uint64_t i = 0; i < 10 && i < nvals; i++) total += rd64(vals + 128 * i + 80); /* Validator effective_balance */
+    uint64_t need = rd64(config + 368) ? total / rd64(config + 368) : groups_n;
+    if (need < rd64(config + 360)) need = rd64(config + 360); /* VALIDATOR_CUSTODY_REQUIREMENT */
+    if (need > groups_n) need = groups_n;
+    uint64_t cur = rd64(s->node + NODE_ARCHIVE + 56), want = need > cur ? need : cur, count = want > samples ? want : samples;
+    uint8_t before[16], cols[16] = {0}, *gout = buffer(24 + 8 * count);
+    memcpy(before, s->node + 440, 16); /* Node_columns */
+    wr64(gout, 24 + 8 * count);
+    if (CALL(LF(get_custody_groups), s->node + 680, &count, config, gout) != 0) *why = "custody: get_custody_groups status"; /* Node_node_id */
+    for (uint64_t g = 0; g < count && !*why; g++) {
+        uint8_t *cout = buffer(24 + 8 * 128);
+        wr64(cout, 24 + 8 * 128);
+        if (CALL(LF(compute_columns_for_custody_group), gout + 24 + 8 * g, config, cout) != 0) *why = "custody: compute_columns_for_custody_group status";
+        for (uint64_t c = 0; c < rd64(cout + 16) && !*why; c++) {
+            uint64_t col = rd64(cout + rd64(cout + 8) + 8 * c);
+            if (col < 128) cols[col / 8] |= (uint8_t)(1u << (col % 8));
+        }
+        free(cout);
+    }
+    free(gout);
+    uint64_t subnets = rd64(config + 296), k = 0;
+    for (uint64_t sn = 0; sn < subnets && sn < 128 && !*why; sn++) { /* the subnets of the new columns that the old had not */
+        int had = 0, has = 0;
+        for (uint64_t c = sn; c < 128; c += subnets) {
+            had |= before[c / 8] >> (c % 8) & 1;
+            has |= cols[c / 8] >> (c % 8) & 1;
+        }
+        k += has && !had;
+    }
+    char body[1024];
+    int w = snprintf(body, sizeof body, "[");
+    for (int i = 0; i < 10; i++)
+        w += snprintf(body + w, sizeof body - (size_t)w, "%s{\"validator_index\":\"%d\",\"fee_recipient\":\"0x%040d\"}", i ? "," : "", i, i);
+    snprintf(body + w, sizeof body - (size_t)w, "]");
+    uint64_t seq = rd64(s->node + 176), topics = (uint64_t)net->topics, untopics = (uint64_t)net->untopics;
+    if (!*why) api_subscribe(n, "/eth/v1/validator/prepare_beacon_proposer", body, 402, why);
+    if (!*why) {
+        shell_event(s, EV_TICK, genesis_ms + (epoch + 1) * SLOTS_PER_EPOCH_RUNNER * slot_ms, NULL, 0);
+        if (k) p2p_run(n, net, p2p_topic, (int)(topics + k), why);
+    }
+    if (!*why) p2p_settle(n, net, why);
+    static char msg[160];
+    if (!*why && rd64(s->node + NODE_ARCHIVE + 56) != want) {
+        snprintf(msg, sizeof msg, "custody: custody_count %llu, not %llu", (unsigned long long)rd64(s->node + NODE_ARCHIVE + 56), (unsigned long long)want);
+        *why = msg;
+    }
+    if (!*why && memcmp(s->node + 440, cols, 16)) *why = "custody: the node's columns are not those of get_custody_groups";
+    if (!*why && ((uint64_t)net->topics != topics + k || (uint64_t)net->untopics != untopics)) {
+        snprintf(msg, sizeof msg, "custody: %d topics joined, not %llu", net->topics - (int)topics, (unsigned long long)k);
+        *why = msg;
+    }
+    if (!*why && want > cur) {
+        custody_raises++;
+        uint8_t cgc[8], md[25] = {0}, *sv = copy_of(status, slen);
+        uint64_t nb = 0;
+        for (uint64_t t = want; t; t >>= 8) nb++;
+        for (uint64_t b = 0; b < nb; b++) cgc[b] = (uint8_t)(want >> (8 * (nb - 1 - b)));
+        if (rd64(s->node + 176) != seq + 1) *why = "custody: seq_number not one more";
+        else if (!shell_entry(s, "cgc", cgc, nb)) *why = "custody: the record's cgc";
+        if (!*why) { /* MetaData v3: seq_number, attnets, syncnets, custody_group_count */
+            wr64(md, seq + 1);
+            wr64(md + 8, rd64(s->node + 712));
+            wr64(md + 17, want);
+            if (!net->status_len && slen <= sizeof net->status) { /* the peer answers the node's own requests first */
+                memcpy(net->status, status, (size_t)slen);
+                net->status_len = slen;
+            }
+            p2p_serve(net, why);
+            if (!*why) p2p_settle(n, net, why);
+            net->st[4].len = 0; /* a fresh stream in the slot */
+            net->st[4].opened = net->st[4].eof = net->st[4].reset = net->st[4].failed = 0;
+            int q = p2p_request(n, net, 4, "metadata", 3, NULL, 0, why);
+            if (!*why) p2p_check_response(net, q, md, sizeof md, "custody: metadata", why);
+        }
+        if (!*why && slen >= 92) { /* Status v2: earliest_available_slot the raise's slot */
+            wr64(sv + slen - 8, slot); /* the store's slot of the preparation: the node checks at once */
+            net->st[0].len = 0;
+            net->st[0].opened = net->st[0].eof = net->st[0].reset = net->st[0].failed = 0;
+            int q = p2p_request(n, net, 0, "status", 2, status, slen, why);
+            if (!*why) p2p_check_response(net, q, sv, slen, "custody: status", why);
+        }
+        free(sv);
+    }
+    if (!*why) { /* the preparations end: no change */
+        shell_event(s, EV_TICK, genesis_ms + (epoch + 4) * SLOTS_PER_EPOCH_RUNNER * slot_ms, NULL, 0);
+        p2p_settle(n, net, why);
+    }
+    if (!*why && rd64(s->node + NODE_ARCHIVE + 56) != want) *why = "custody: custody_count fell after the preparations ended";
+}
+#endif
 
 /*
  * After a sync, the node's sidecars through the Beacon API (beacon-api.md): getBlobSidecars (deneb, electra) or
@@ -11550,6 +11671,9 @@ int main(int argc, char **argv) {
     if (node_transitions) printf("NOTE: %lu transition cases through the node\n", node_transitions);
 #endif
     if (node_db_records) printf("NOTE: %lu Db records archived, %lu served from the Db, %lu anchors saved and read back\n", node_db_records, node_db_serves, node_db_states);
+#if FORK >= FORK_FULU
+    if (custody_raises) printf("NOTE: %lu custody raises checked\n", custody_raises);
+#endif
     if (node_db_archives) printf("NOTE: %lu state records archived, %lu states loaded from them, %lu old states asked after them\n", node_db_archives, node_db_loads, api_archive_states);
     printf("%s: %d passed, %d failed\n", failures ? "FAIL" : "PASS", passes, failures);
     return failures ? 1 : 0;
