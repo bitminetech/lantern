@@ -23,6 +23,7 @@ Standard: [asm-standard@2a19d3f](https://github.com/bitminetech/asm-standard/blo
 | [docs/reference/engine-api.md](docs/reference/engine-api.md) | Engine API client: JSON-RPC requests of each fork and their responses, JWT, HTTP/1.1 |
 | [docs/reference/node.md](docs/reference/node.md) | Node core: events, actions, block import, checkpoint states, head, req/resp, gossip, sync, backfill, blob and column data availability, Engine API calls, discovery |
 | [docs/reference/db.md](docs/reference/db.md) | Database: the record format of the stored history and its index by slot and root |
+| [docs/reference/eth1.md](docs/reference/eth1.md) | Eth1 follower: eth_getBlockByNumber and eth_getLogs requests, block and deposit log parsing, the deposit tree and its proofs |
 | [docs/reference/config.md](docs/reference/config.md) | The network config file |
 | [docs/reference/app.md](docs/reference/app.md) | The binary: command line options, startup and the loop |
 | [docs/reference/beacon-api.md](docs/reference/beacon-api.md) | The Beacon API answers: health, identity, version, syncing, peers, genesis, head header, finality |

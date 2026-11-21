@@ -441,6 +441,14 @@ ABI uint64_t lantern_db_size(const void *room, void *size);
 ABI uint64_t lantern_db_init(const void *room, const void *slot, void *db);
 ABI uint64_t lantern_db_copy(const void *db, const void *room, void *out);
 ABI uint64_t lantern_db_scan(void *db, const void *segment, const void *sidecars, const void *bytes, void *valid);
+ABI uint64_t lantern_eth_get_block_by_number(const void *number, const void *id, void *out);
+ABI uint64_t lantern_eth_get_deposit_logs(const void *address, const void *from, const void *to, const void *id, void *out);
+ABI uint64_t lantern_eth1_block(const void *json, void *out);
+ABI uint64_t lantern_eth1_deposit_logs(const void *json, void *out);
+ABI uint64_t lantern_deposit_leaf(const void *data, void *out);
+ABI uint64_t lantern_deposit_tree_push(void *tree, const void *leaf);
+ABI uint64_t lantern_deposit_tree_root(const void *tree, void *out);
+ABI uint64_t lantern_deposit_proof(const void *leaves, const void *count, const void *index, void *scratch, void *out);
 ABI uint64_t lantern_node_db_scan(void *node, const void *segment, const void *sidecars, const void *bytes, void *valid);
 ABI uint64_t lantern_db_find_root(const void *db, const void *root, void *slot);
 ABI uint64_t lantern_db_prune(void *db, const void *slot);
@@ -8363,6 +8371,127 @@ static const char *db_check(const uint8_t *db, uint64_t first, uint64_t end, uin
 }
 
 /*
+ * eth1-<kind>: lantern's cases of the eth1 follower functions (tests/generator/eth1.py,
+ * docs/reference/eth1.md). requests: the request of eth_getBlockByNumber or eth_getLogs, and
+ * LANTERN_BUFFER_TOO_SMALL one byte short of the room. block: lantern_eth1_block of the text. logs:
+ * lantern_eth1_deposit_logs of the text, its entries. tree: each push and its root, then each proof.
+ */
+static uint8_t *eth1_list(const uint8_t *bytes, uint64_t len) {
+    uint8_t *l = buffer(24 + len);
+    wr64(l, 24 + len);
+    wr64(l + 8, 24);
+    wr64(l + 16, len);
+    if (len) memcpy(l + 24, bytes, (size_t)len);
+    return l;
+}
+static void run_eth1(const char *file, const char *kind, case_file *f) {
+    static const uint64_t status_of[3] = {0, 54, 69}; /* LANTERN_OK, LANTERN_INVALID_JSON, LANTERN_INVALID_DEPOSIT_LOG */
+    for (uint64_t c = 0; c < f->count; c++) {
+        const char *name, *why = NULL;
+        uint64_t len;
+        tv parts = next_case(f, &name, &len);
+        if (!strcmp(kind, "eth1-requests")) {
+            uint64_t tlen, k = tv_u64(tv_get(parts, "kind")), id = tv_u64(tv_get(parts, "id"));
+            const uint8_t *text = tv_bytes(tv_get(parts, "text"), &tlen);
+            for (int small = 0; small < 2 && !why; small++) {
+                uint64_t room = small ? (k ? 383 : 127) : 24 + 1024;
+                uint8_t *out = buffer(24 + room);
+                wr64(out, 24 + room);
+                uint64_t st;
+                if (k == 0) {
+                    uint64_t number = tv_u64(tv_get(parts, "number"));
+                    st = CALL(lantern_eth_get_block_by_number, &number, &id, out);
+                } else {
+                    uint64_t alen, from = tv_u64(tv_get(parts, "from")), to = tv_u64(tv_get(parts, "to"));
+                    const uint8_t *address = tv_bytes(tv_get(parts, "address"), &alen);
+                    st = CALL(lantern_eth_get_deposit_logs, address, &from, &to, &id, out);
+                }
+                if (!guard_ok(out, 24 + room)) why = "the request wrote out of bounds";
+                else if (small && st != 1) why = "a room one byte short: not LANTERN_BUFFER_TOO_SMALL";
+                else if (!small && st != 0) why = "the request: not LANTERN_OK";
+                else if (!small && (rd64(out + 8) != 24 || rd64(out + 16) != tlen || memcmp(out + 24, text, (size_t)tlen))) why = "the request differs";
+                free(out);
+            }
+        } else if (!strcmp(kind, "eth1-block")) {
+            uint64_t tlen, hlen;
+            const uint8_t *text = tv_bytes(tv_get(parts, "text"), &tlen), *hash = tv_bytes(tv_get(parts, "hash"), &hlen);
+            uint8_t *json = eth1_list(text, tlen), *out = buffer(88);
+            memset(out, 0x5A, 88);
+            uint64_t st = CALL(lantern_eth1_block, json, out), want = status_of[tv_u64(tv_get(parts, "status"))];
+            if (!guard_ok(out, 88)) why = "lantern_eth1_block wrote out of bounds";
+            else if (st != want) why = "lantern_eth1_block: another status";
+            else if (st == 0 && (rd64(out) != tv_u64(tv_get(parts, "number")) || rd64(out + 8) != tv_u64(tv_get(parts, "timestamp")) ||
+                                 memcmp(out + 24, hash, 32)))
+                why = "lantern_eth1_block: another number, timestamp or hash";
+            free(json);
+            free(out);
+        } else if (!strcmp(kind, "eth1-logs")) {
+            uint64_t tlen, elen;
+            const uint8_t *text = tv_bytes(tv_get(parts, "text"), &tlen), *ents = tv_bytes(tv_get(parts, "entries"), &elen);
+            uint8_t *json = eth1_list(text, tlen);
+            uint64_t want = status_of[tv_u64(tv_get(parts, "status"))];
+            for (int small = 0; small < 2 && !why; small++) {
+                if (small && (want != 0 || elen == 0)) break;
+                uint64_t room = small ? elen - 1 : elen + 4096;
+                uint8_t *out = buffer(24 + room);
+                wr64(out, 24 + room);
+                uint64_t st = CALL(lantern_eth1_deposit_logs, json, out);
+                if (!guard_ok(out, 24 + room)) why = "lantern_eth1_deposit_logs wrote out of bounds";
+                else if (small && st != 1) why = "a room one entry short: not LANTERN_BUFFER_TOO_SMALL";
+                else if (!small && st != want) why = "lantern_eth1_deposit_logs: another status";
+                else if (!small && st == 0 && (rd64(out + 8) != 24 || rd64(out + 16) != elen || memcmp(out + 24, ents, (size_t)elen)))
+                    why = "lantern_eth1_deposit_logs: other entries";
+                free(out);
+            }
+            free(json);
+        } else {
+            uint64_t llen, rlen;
+            const uint8_t *leaves = tv_bytes(tv_get(parts, "leaves"), &llen), *roots = tv_bytes(tv_get(parts, "roots"), &rlen);
+            uint64_t tsize = 8 + 32 * 32, dlen;
+            uint8_t *tree = buffer(tsize), root[32];
+            memset(tree, 0, (size_t)tsize);
+            const uint8_t *datas = tv_bytes(tv_get(parts, "datas"), &dlen);
+            for (uint64_t k = 0; k < dlen / 184 && !why; k++) {
+                uint8_t *d = buffer(184), *leaf = buffer(32);
+                memcpy(d, datas + 184 * k, 184);
+                if (CALL(lantern_deposit_leaf, d, leaf) != 0) why = "lantern_deposit_leaf status";
+                else if (!guard_ok(leaf, 32)) why = "lantern_deposit_leaf wrote out of bounds";
+                else if (memcmp(leaf, leaves + 32 * k, 32)) why = "lantern_deposit_leaf: another root";
+                free(d);
+                free(leaf);
+            }
+            for (uint64_t k = 0; k < llen / 32 && !why; k++) {
+                if (CALL(lantern_deposit_tree_push, tree, leaves + 32 * k) != 0) why = "lantern_deposit_tree_push status";
+                else if (CALL(lantern_deposit_tree_root, tree, root) != 0) why = "lantern_deposit_tree_root status";
+                else if (!guard_ok(tree, tsize)) why = "the tree was written out of bounds";
+                else if (rd64(tree) != k + 1 || memcmp(root, roots + 32 * k, 32)) why = "the root after a push differs";
+            }
+            uint8_t *lst = eth1_list(leaves, llen);
+            tv proofs = tv_get(parts, "proofs");
+            tv p = proofs + 9;
+            for (uint64_t i = 0, n = rd64(proofs + 1); i < n && !why; i++, p = tv_skip(p)) {
+                tv it = p + 9;
+                uint64_t count = tv_u64(it), index = tv_u64(tv_skip(it)), plen;
+                const uint8_t *want = tv_bytes(tv_skip(tv_skip(it)), &plen);
+                uint64_t ssize = 8 + 16 * count + 32;
+                uint8_t *scr = buffer(ssize), *out = buffer(33 * 32);
+                wr64(scr, ssize);
+                if (CALL(lantern_deposit_proof, lst, &count, &index, scr, out) != 0) why = "lantern_deposit_proof status";
+                else if (!guard_ok(out, 33 * 32) || !guard_ok(scr, ssize)) why = "lantern_deposit_proof wrote out of bounds";
+                else if (memcmp(out, want, 33 * 32)) why = "lantern_deposit_proof: another proof";
+                uint64_t past = count;
+                if (!why && CALL(lantern_deposit_proof, lst, &count, &past, scr, out) != 70) why = "an index at the count: not LANTERN_INVALID_INDEX";
+                free(scr);
+                free(out);
+            }
+            free(lst);
+            free(tree);
+        }
+        report(file, name, len, !why, why);
+    }
+}
+
+/*
  * db-index: lantern's cases of the database index (tests/generator/db.py): lantern_db_scan of each
  * segment in order, then the Db, lantern_db_find_root, lantern_db_copy to a larger room, and
  * lantern_db_prune.
@@ -11002,6 +11131,7 @@ int main(int argc, char **argv) {
         else if (!bls_off && !strcmp(kind, "http-request")) run_http_request(file, &f);
         else if (!bls_off && !strcmp(kind, "api-route")) run_api_route(file, &f);
         else if (!bls_off && !strcmp(kind, "db-index")) run_db_index(file, &f);
+        else if (!bls_off && !strncmp(kind, "eth1-", 5)) run_eth1(file, kind, &f);
 #if FORK == FORK_FULU
         else if (!bls_off && (!strcmp(kind, "networking-get_custody_groups") ||
                               !strcmp(kind, "networking-compute_columns_for_custody_group")))

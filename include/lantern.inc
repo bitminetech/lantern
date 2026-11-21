@@ -1061,6 +1061,21 @@
 .set LANTERN_NO_STATE_ANSWER, 66       /* lantern_node_randao, lantern_node_sync_committee, lantern_node_proposer_lookahead: the state holds no answer */
 .set LANTERN_NO_BID, 67                /* NODE_WORK_PRODUCE_BID: the builder's answer is not 200 */
 .set LANTERN_INVALID_BID, 68           /* lantern_node_produce_bid: the bid fails a check */
+.set LANTERN_INVALID_DEPOSIT_LOG, 69   /* lantern_eth1_deposit_logs: a log's data is not the deposit contract's encoding */
+.set LANTERN_INVALID_INDEX, 70         /* lantern_deposit_proof: the index is not below the count */
+.set Eth1Block_number, 0               /* Eth1Block (eth1.md) */
+.set Eth1Block_timestamp, 8
+.set Eth1Block_deposit_count, 16
+.set Eth1Block_hash, 24
+.set Eth1Block_deposit_root, 56
+.set Eth1Block__mem, 88
+.set Eth1Deposit_block_number, 0       /* Eth1Deposit (eth1.md) */
+.set Eth1Deposit_index, 8
+.set Eth1Deposit_data, 16              /* DepositData: pubkey 48, withdrawal_credentials 32, amount 8, signature 96 */
+.set Eth1Deposit__mem, 200
+.set DepositTree_count, 0              /* DepositTree (eth1.md) */
+.set DepositTree_branch, 8
+.set DepositTree__mem, 8 + 32 * DEPOSIT_CONTRACT_TREE_DEPTH
 
 /* Db: the index of the stored history (docs/reference/db.md) */
 .set Db_first_slot, 8

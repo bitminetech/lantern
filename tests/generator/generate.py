@@ -35,6 +35,7 @@ import light_client  # lantern's light client cases
 import http_request  # lantern_http_request cases
 import api_route  # lantern_api_route cases, from the beacon-APIs clone
 import db  # lantern's database index cases
+import eth1  # lantern's eth1 follower cases
 import json_codec  # lantern_json_encode cases, from the pinned spec's values
 
 RELEASE = "https://github.com/ethereum/consensus-specs/releases/download/v1.7.0-beta.4/"
@@ -320,6 +321,15 @@ def main():
             count, digest = write_file(out / file, list(db.cases()))
             manifest.append((file, count, digest))
             print(f"{file}: {count} cases")
+        if "phase0" in forks and (not runners or "eth1" in runners):
+            kinds = {}
+            for kind, name, parts in eth1.cases(preset):
+                kinds.setdefault(kind, []).append((name, parts))
+            for kind, items in kinds.items():
+                file = f"{preset}-phase0-eth1-{kind}.bin"
+                count, digest = write_file(out / file, items)
+                manifest.append((file, count, digest))
+                print(f"{file}: {count} cases")
         count, digest = write_kzg_setup(out / f"{preset}-kzg_setup.bin", preset)
         manifest.append((f"{preset}-kzg_setup.bin", count, digest))
         files = {}
