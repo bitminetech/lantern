@@ -7,6 +7,8 @@
 - [`lantern_state_branch`](#function-lantern_state_branch): the Merkle branch of a sync committee or the finalized root of a state.
 - [`lantern_execution_branch`](#function-lantern_execution_branch): the Merkle branch of the execution payload of a block body.
 - [`lantern_is_better_update`](#function-lantern_is_better_update): whether one `LightClientUpdate` ranks above another.
+- [`lantern_block_to_light_client_header`](#function-lantern_block_to_light_client_header): the `LightClientHeader` of a block.
+- [`lantern_upgrade_lc_header`](#function-lantern_upgrade_lc_header): a `LightClientHeader` of an earlier fork as one of the fork.
 
 ### Types
 
@@ -19,7 +21,7 @@
 ## Spec
 
 - Document: [consensus-specs v1.7.0-beta.4](https://github.com/ethereum/consensus-specs/tree/aa16bb4c156184e9548a997d53efaf2a228a6304/specs), `light-client/full-node.md` and `light-client/sync-protocol.md` of altair, capella, deneb and electra. Fulu has no light-client folder: its light client types and rules are electra's.
-- Section: `compute_merkle_proof` and the gindex functions (`current_sync_committee_gindex_at_slot`, `next_sync_committee_gindex_at_slot`, `finalized_root_gindex_at_slot`, `EXECUTION_PAYLOAD_GINDEX`); `is_better_update`, `is_sync_committee_update`, `is_finality_update`.
+- Section: `block_to_light_client_header` of altair, capella and deneb `full-node.md`; `upgrade_lc_header_to_capella`, `upgrade_lc_header_to_deneb` and `upgrade_lc_header_to_electra` of their `fork.md`; `compute_merkle_proof` and the gindex functions (`current_sync_committee_gindex_at_slot`, `next_sync_committee_gindex_at_slot`, `finalized_root_gindex_at_slot`, `EXECUTION_PAYLOAD_GINDEX`); `is_better_update`, `is_sync_committee_update`, `is_finality_update`.
 - `compute_merkle_proof` is asm-ssz `ssz_build_proof` (its proofs.md: the spec's name for `build_proof` of ssz-specs v0.1.0).
 
 ## Common rules
@@ -164,12 +166,97 @@ lantern_is_better_update(new, old, out) -> status
 - Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
 - Argument order: `new`, `old`, `out`.
 
+## Function `lantern_block_to_light_client_header`
+
+`block_to_light_client_header(block)` of the block's fork.
+
+### Signature
+
+```
+lantern_block_to_light_client_header(block, scratch, out) -> status
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `block` | input | ByteList: the SSZ bytes of a `SignedBeaconBlock` of the fork |
+| `scratch` | scratch | `Scratch` |
+| `out` | output | ByteList: the SSZ bytes of the fork's `LightClientHeader`; for phase0, altair's |
+
+### Returns
+
+- `LANTERN_OK`: `out` holds them, its `count` set.
+- `LANTERN_INVALID_ENCODING`: `block` is no SSZ encoding of the type.
+- `LANTERN_BUFFER_TOO_SMALL`: `out` has too little room, or `scratch` too little for the decoded block, the blinded block and the proof's work.
+
+### Function does
+
+- `beacon`: the block's `slot`, `proposer_index`, `parent_root`, `state_root`, and as `body_root` hash_tree_root of its body.
+- From capella: `execution`, the `ExecutionPayloadHeader` that lantern_node_blinded_block puts in the body's place of the payload (node.md: `transactions_root` and `withdrawals_root` the hash_tree_root of the payload's lists; from deneb `blob_gas_used` and `excess_blob_gas` the payload's); `execution_branch`, lantern_execution_branch of the body.
+- A block of the fork has an epoch of capella or later from capella on, so the spec's branch for an earlier epoch (an empty `execution`) never applies here: an earlier block's header is that of its own fork, then lantern_upgrade_lc_header.
+- Phase0 has no `LightClientHeader`: its header is altair's, the beacon fields alone, as the spec's data collection makes it (`_light_client_header_for_block` takes altair's for a block before altair).
+
+### Function never
+
+- Writes outside `scratch`, `out` and its own stack.
+
+### ABI
+
+- Role: L1.
+- Symbol: `lantern_<fork>_block_to_light_client_header` of each fork object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- Argument order: `block`, `scratch`, `out`.
+
+## Function `lantern_upgrade_lc_header`
+
+A `LightClientHeader` of the fork `from` as one of the fork: `upgrade_lc_header_to_capella`, `upgrade_lc_header_to_deneb` and `upgrade_lc_header_to_electra`, each that applies, in turn.
+
+### Signature
+
+```
+lantern_upgrade_lc_header(header, from, out) -> status
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `header` | input | ByteList: the SSZ bytes of a `LightClientHeader` of the fork `from` (altair's for phase0) |
+| `from` | input | u64: `FORK_*`, at most the fork |
+| `out` | output | ByteList: the SSZ bytes of the fork's `LightClientHeader` |
+
+### Returns
+
+- `LANTERN_OK`: `out` holds them, its `count` set.
+- `LANTERN_INVALID_EVENT`: `from` is above the fork. Nothing is written.
+- `LANTERN_INVALID_ENCODING`: the bytes are no header of the fork `from`: not 112 bytes before capella; from capella an offset of `execution` other than 244, or a payload header shorter than its fixed part, or whose `extra_data` offset is not its fixed size. Nothing is written.
+- `LANTERN_BUFFER_TOO_SMALL`: `out` has too little room. Nothing is written.
+
+### Function does
+
+- `from` before capella and the fork capella or later: `beacon`, then an empty `ExecutionPayloadHeader` of the fork (zero bytes, `extra_data` empty) and a zero `execution_branch`.
+- `from` capella and the fork deneb or later: `blob_gas_used` and `excess_blob_gas` 0 join the payload header after `withdrawals_root`.
+- Else the same bytes: deneb, electra and fulu share the layout, as do altair and bellatrix.
+
+### Function never
+
+- Writes outside `out` and its own stack.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_<fork>_upgrade_lc_header` of each fork object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- Argument order: `header`, `from`, `out`.
+
 ## Test vectors
 
 - consensus-spec-tests v1.7.0-beta.4, `tests/<preset>/<fork>/light_client/single_merkle_proof/` of altair to fulu, for mainnet and minimal.
   - `BeaconState`: the runner decodes `object` and checks lantern_state_branch of the case's field (`current_sync_committee_merkle_proof`, `next_sync_committee_merkle_proof`, `finality_root_merkle_proof`) against `branch`, with and without a `StateCache`; is_valid_merkle_branch of `leaf` at `leaf_index` must rebuild hash_tree_root of the state.
   - `BeaconBlockBody` (capella to fulu, `execution_merkle_proof`): lantern_execution_branch of `object` against `branch`.
 - consensus-spec-tests v1.7.0-beta.4, `tests/<preset>/<fork>/light_client/update_ranking/` of altair to fulu: the generator adds to each case, from `is_better_update` of the spec module, its answer for each ordered pair of the case's updates; lantern_is_better_update must give each.
+- Lantern's cases `<preset>-<fork>-lc-header.bin` of phase0 to fulu, made by tests/generator/light_client.py with the pinned spec from the blocks of the `light_client/data_collection` cases: for each block of the fork, `block_to_light_client_header` of its fork's module (altair's for phase0); and for each header of an earlier fork, its upgrade to the fork by the spec's `upgrade_lc_header_to_*`. The runner checks lantern_block_to_light_client_header and lantern_upgrade_lc_header against them, and each output one byte short.
 - Not run: `light_client/sync`, the light client's own sync (lantern is a beacon node), and, until the node collects light client data, `light_client/data_collection`.
 
 ## Results

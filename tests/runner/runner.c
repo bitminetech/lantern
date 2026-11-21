@@ -119,6 +119,8 @@ ABI uint64_t LF(state_root)(const void *state, void *cache, void *scratch, void 
 ABI uint64_t LF(state_branch)(const void *state, uint64_t field, void *cache, void *scratch, void *out);
 ABI uint64_t LF(execution_branch)(const void *body, void *scratch, void *out);
 ABI uint64_t LF(is_better_update)(const void *new_update, const void *old_update, void *out);
+ABI uint64_t LF(block_to_light_client_header)(const void *block, void *scratch, void *out);
+ABI uint64_t LF(upgrade_lc_header)(const void *header, uint64_t from, void *out);
 ABI uint64_t LF(committee_cache_size)(const void *validators, void *size);
 ABI uint64_t LF(committee_cache_init)(const void *validators, void *cache);
 ABI uint64_t LF(pubkey_cache_size)(const void *validators, void *size);
@@ -6597,6 +6599,51 @@ static void run_merkle_proof(const char *file, case_file *f) {
 
 /* ---------------------------------------------------------------- Light client data */
 
+/*
+ * lc-header (light-client.md): lantern_block_to_light_client_header of each case's block, and
+ * lantern_upgrade_lc_header of each case's header, must give the case's bytes; with an out one
+ * byte short, LANTERN_BUFFER_TOO_SMALL.
+ */
+static void run_lc_header(const char *file, case_file *f) {
+    for (uint64_t i = 0; i < f->count; i++) {
+        const char *name, *why = NULL;
+        uint64_t len, blen, wlen, lsize;
+        tv parts = next_case(f, &name, &len);
+        int upgrade = !strncmp(name, "upgrade/", 8);
+        const uint8_t *in = tv_bytes(tv_get(parts, upgrade ? "header" : "block"), &blen);
+        const uint8_t *want = tv_bytes(tv_get(parts, upgrade ? "out" : "header"), &wlen);
+        uint8_t *list = in ? list_of(in, blen, 0, 0, &lsize) : NULL;
+        if (!list || !want) why = "the case lacks its bytes";
+        uint64_t scratch_size = SCRATCH_BYTES; /* a block past what SCRATCH_BYTES decodes: twice the room, as a shell grows it */
+        for (int shy = 0; shy < 2 && !why; shy++) {
+            uint64_t room = 24 + wlen - (uint64_t)shy, st;
+            uint8_t *out = buffer(room);
+            wr64(out, room);
+            for (;;) {
+                st = upgrade ? CALL(LF(upgrade_lc_header), list, (const void *)(uintptr_t)tv_u64(tv_get(parts, "from")), out)
+                             : CALL(LF(block_to_light_client_header), list, sized_scratch(scratch_size), out);
+                if (upgrade || shy || st != 1 || scratch_size >= (uint64_t)1 << 28) break;
+                scratch_size *= 2;
+            }
+            static char msg[96];
+            if (shy && st != 1) why = "an out a byte short is not BUFFER_TOO_SMALL";
+            else if (!shy && st != 0) {
+                snprintf(msg, sizeof msg, "status %llu", (unsigned long long)st);
+                why = msg;
+            } else if (!shy && (rd64(out + 8) != 24 || rd64(out + 16) != wlen || memcmp(out + 24, want, (size_t)wlen))) {
+                uint64_t at = 0;
+                while (at < wlen && at < rd64(out + 16) && out[24 + at] == want[at]) at++;
+                snprintf(msg, sizeof msg, "not the header (%llu bytes, not %llu; first at byte %llu)", (unsigned long long)rd64(out + 16),
+                         (unsigned long long)wlen, (unsigned long long)at);
+                why = msg;
+            } else if (!guard_ok(out, room)) why = "wrote past out";
+            free(out);
+        }
+        free(list);
+        report(file, name, len, why == NULL, why);
+    }
+}
+
 #if FORK >= FORK_ALTAIR
 /*
  * light_client-single_merkle_proof (light-client.md): BeaconState, lantern_state_branch of the case's field with
@@ -10052,6 +10099,7 @@ int main(int argc, char **argv) {
         else if (!bls_off && !strcmp(kind, "light_client-single_merkle_proof")) run_lc_merkle_proof(file, &f);
         else if (!bls_off && !strcmp(kind, "light_client-update_ranking")) run_lc_update_ranking(file, &f);
 #endif
+        else if (!bls_off && !strcmp(kind, "lc-header")) run_lc_header(file, &f);
         else {
             if (!bls_off) printf("SKIP %s: the runner has no handler for it\n", file);
             free(f.data);
