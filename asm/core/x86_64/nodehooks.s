@@ -6486,7 +6486,7 @@ LOCAL_FUNCTION produce_attestations
     mov     S7(%rsp), %rax
     mov     (%rax,%rcx,8), %rdi
     call    produce_att_bits
-    add     $(8 + 7), %rax                  # the bits: as many as the length, and the end bit
+    add     $8, %rax                  # the bits: (length + 1 end bit) rounded up to bytes
     shr     $3, %rax
     add     $PB_ATT_FIXED, %rax
     add     %rax, (L + 16)(%rsp)
@@ -6503,7 +6503,7 @@ LOCAL_FUNCTION produce_attestations
     add     %r12, %rax
     mov     %rax, S9(%rsp)                  # the chosen aggregate
     call    produce_att_bits
-    add     $(8 + 7), %rax
+    add     $8, %rax
     shr     $3, %rax
     add     $PB_ATT_FIXED, %rax
     mov     %r15, %rdi
@@ -6525,7 +6525,7 @@ LOCAL_FUNCTION produce_attestations
     mov     S7(%rsp), %rax
     mov     (%rax,%rcx,8), %rdi
     call    produce_att_bits
-    lea     (8 + 7)(%rax), %rsi
+    lea     8(%rax), %rsi
     shr     $3, %rsi
     add     $PB_ATT_COMMITTEE, %rsi
     lea     228(%r15), %rdi

@@ -782,10 +782,12 @@ def produce_cases(fork, preset):
     with a randao reveal of the proposer's test key, and from bellatrix an empty payload of the
     engine on the attributes of the spec's prepare_execution_payload: the answer of the spec's
     block proposal, in JSON and SSZ. empty_pool: no pool entries. full_pool: an anchor
-    SHARD_COMMITTEE_PERIOD epochs later with 2 SLOTS_PER_EPOCH more validators, and in the slot
-    before, POSTs of each pool operation the block takes, and of those its rules leave out (an
-    attester slashing of only the proposer slashing's validator, an exit of a validator the
-    attester slashing slashes). skip_randao: skip_randao_verification with the point at infinity,
+    SHARD_COMMITTEE_PERIOD epochs later with 2 SLOTS_PER_EPOCH more validators, the block a slot
+    later (of the second slot after the anchor's at the least), and in the slot before, POSTs of
+    each pool operation the block takes, and of those its rules leave out (an attester slashing
+    of only the proposer slashing's validator, an exit of a validator the attester slashing
+    slashes); the attestations of two slots, so two AttestationData and two of the block's
+    attestations. skip_randao: skip_randao_verification with the point at infinity,
     the state root of process_block with no signature checks. bad_reveal: 400 for a reveal of
     another key, and for skip_randao_verification with a reveal that is not the point at infinity.
     closed: the request with its connection closed after each number of the node's steps up to
@@ -871,30 +873,35 @@ def produce_cases(fork, preset):
             valid("the change", spec.validate_bls_to_execution_change_gossip, change, time_ms)
             reqs.append(post(b"/eth/v1/beacon/pool/bls_to_execution_changes", ("[" + to_json(change) + "]").encode()))
             body.bls_to_execution_changes.append(change)
-        # two attesters of committee 0 of the anchor's slot, aggregated as the block's one attestation
-        committee = list(spec.get_beacon_committee(state, spec.Slot(a), spec.CommitteeIndex(0)))
-        data = spec.AttestationData(slot=a, index=0, beacon_block_root=anchor_root, source=state.current_justified_checkpoint,
-                                    target=spec.Checkpoint(epoch=epoch, root=anchor_root))
-        sr = spec.compute_signing_root(data, spec.get_domain(state, spec.DOMAIN_BEACON_ATTESTER, epoch))
-        places = [0, len(committee) - 1]
-        sigs = [bls.Sign(KEYS.privkeys[committee[p]], sr) for p in places]
-        singles = []
-        for p, sig in zip(places, sigs):
-            if electra:
-                singles.append(spec.SingleAttestation(committee_index=0, attester_index=committee[p], data=data, signature=sig))
-            else:
-                bits = spec.AggregationBits(data=[False] * len(committee))
-                bits[p] = True
-                singles.append(spec.Attestation(aggregation_bits=bits, data=data, signature=sig))
+        # two attesters of committee 0 of each slot from the anchor's to the one before the block's, each
+        # slot's aggregated as one of the block's attestations, the highest slot first (lantern's order)
         count = spec.get_committee_count_per_slot(state, epoch)
-        for x in singles:
-            valid("an attestation", spec.validate_beacon_attestation_gossip, x, time_ms, spec.compute_subnet_for_attestation(count, a, 0))
+        singles, atts = [], []
+        for att_slot in range(a, int(slot)):
+            committee = list(spec.get_beacon_committee(state, spec.Slot(att_slot), spec.CommitteeIndex(0)))
+            data = spec.AttestationData(slot=att_slot, index=0, beacon_block_root=anchor_root,
+                                        source=state.current_justified_checkpoint, target=spec.Checkpoint(epoch=epoch, root=anchor_root))
+            sr = spec.compute_signing_root(data, spec.get_domain(state, spec.DOMAIN_BEACON_ATTESTER, epoch))
+            places = [0, len(committee) - 1]
+            sigs = [bls.Sign(KEYS.privkeys[committee[p]], sr) for p in places]
+            for p, sig in zip(places, sigs):
+                if electra:
+                    x = spec.SingleAttestation(committee_index=0, attester_index=committee[p], data=data, signature=sig)
+                else:
+                    bits = spec.AggregationBits(data=[False] * len(committee))
+                    bits[p] = True
+                    x = spec.Attestation(aggregation_bits=bits, data=data, signature=sig)
+                valid("an attestation", spec.validate_beacon_attestation_gossip, x, time_ms,
+                      spec.compute_subnet_for_attestation(count, att_slot, 0))
+                singles.append(x)
+            bits = spec.AggregationBits(data=[p in places for p in range(len(committee))])
+            att = spec.Attestation(aggregation_bits=bits, data=data, signature=bls.Aggregate(sigs))
+            if electra:
+                att.committee_bits[0] = True
+            atts.insert(0, att)
         reqs.append(post(b"/eth/v2/beacon/pool/attestations", ("[" + ",".join(to_json(x) for x in singles) + "]").encode(), version=True))
-        bits = spec.AggregationBits(data=[p in places for p in range(len(committee))])
-        att = spec.Attestation(aggregation_bits=bits, data=data, signature=bls.Aggregate(sigs))
-        if electra:
-            att.committee_bits[0] = True
-        body.attestations.append(att)
+        for att in atts:
+            body.attestations.append(att)
         # sync committee messages of slot - 1 on the parent root, of two validators of the committee
         pubkeys = [bytes(k) for k in st.current_sync_committee.pubkeys]
         members = []
@@ -934,7 +941,7 @@ def produce_cases(fork, preset):
         if eth1:  # the deposit bridge's state, then the anchor block of that state
             eth1["prep"](state)
             anchor_block = spec.BeaconBlock(slot=anchor_block.slot, body=anchor_block.body, state_root=spec.hash_tree_root(state))
-        slot, st = state.slot, None
+        slot, st = state.slot + (1 if full else 0), None  # full_pool: attestations of two slots before the block's
         while st is None or st.validators[proposer].slashed:  # the first slot after the anchor's of a proposer not slashed
             slot += 1
             st = state.copy()

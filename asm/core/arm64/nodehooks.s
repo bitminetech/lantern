@@ -6090,10 +6090,11 @@ END_FUNCTION produce_same_data
  * each, from electra one Attestation for each data of the aggregates of every committee
  * (compute_on_chain_aggregate). The list: offsets, then the attestations. x21 the aggregates, x25
  * their count, x26 the chosen indices (in scratch, after a flag byte for each aggregate), x27 the
- * position, x28 the chosen count. Locals: L the scratch size, L+8 an index, L+16 the bits' cursor.
+ * position, x28 the chosen count. Locals: L the scratch size, L+8 an index or the bits' cursor,
+ * L+16 an index or the attestation, L+32 the committee and the aggregate of the committee loop.
  */
 LOCAL_FUNCTION produce_attestations
-    ENTER 32
+    ENTER 48
     mov     x27, x1
     ldr     x25, [x20, #ProduceDraft_aggregates]
     ADDQ    x21, x20, PRODUCE_DRAFT_AGGREGATES
@@ -6182,7 +6183,7 @@ LOCAL_FUNCTION produce_attestations
     ldr     x12, [x26, x11, lsl #3]
     mov     x0, x12
     bl      produce_att_bits
-    add     x13, x0, #(8 + 7)               /* the bits: as many as the length, and the end bit */
+    add     x13, x0, #8               /* the bits: (length + 1 end bit) rounded up to bytes */
     lsr     x13, x13, #3
     add     x10, x10, x13
     add     x10, x10, #(PB_ATT_FIXED)
@@ -6198,7 +6199,7 @@ LOCAL_FUNCTION produce_attestations
     madd    x24, x12, x13, x21              /* the chosen aggregate (the caller keeps its own position) */
     mov     x0, x12
     bl      produce_att_bits
-    add     x13, x0, #(8 + 7)
+    add     x13, x0, #8
     lsr     x13, x13, #3
     add     x1, x13, #(PB_ATT_FIXED)
     mov     x0, x27
@@ -6218,7 +6219,7 @@ LOCAL_FUNCTION produce_attestations
     ldr     x0, [sp, #(L + 16)]
     ldr     x0, [x26, x0, lsl #3]
     bl      produce_att_bits
-    add     x1, x0, #(8 + 7)
+    add     x1, x0, #8
     lsr     x1, x1, #3
     add     x1, x1, #(PB_ATT_COMMITTEE)
     add     x0, x27, #228
@@ -6236,11 +6237,11 @@ LOCAL_FUNCTION produce_attestations
     ldr     x14, [x13, #DraftAggregate_committee_index]
     cmp     x14, x11
     b.ne    65f
-    stp     x11, x12, [sp, #(L + 16)]
+    stp     x11, x12, [sp, #(L + 32)]
     mov     x0, x24
     mov     x1, x13
     bl      produce_same_data
-    ldp     x11, x12, [sp, #(L + 16)]
+    ldp     x11, x12, [sp, #(L + 32)]
     cbz     x0, 65f
     mov     x13, #DraftAggregate__mem
     madd    x13, x12, x13, x21
@@ -6254,13 +6255,13 @@ LOCAL_FUNCTION produce_attestations
     strb    w15, [x14, x9]
     cmp     x13, x24                        /* its signature, after the first's */
     b.eq    63f
-    stp     x11, x12, [sp, #(L + 16)]
+    stp     x11, x12, [sp, #(L + 32)]
     add     x0, x27, #132
     ADDQ    x1, x13, DraftAggregate_signature
     mov     x2, x22
     bl      produce_add_signature
     mov     x9, x0
-    ldp     x11, x12, [sp, #(L + 16)]
+    ldp     x11, x12, [sp, #(L + 32)]
     cmp     x9, #LANTERN_BUFFER_TOO_SMALL
     b.eq    97f
     cbnz    x9, 96f
@@ -6301,17 +6302,17 @@ LOCAL_FUNCTION produce_attestations
     str     x9, [x22]
     mov     x0, #0
     mov     x1, x27
-    LEAVE 32
+    LEAVE 48
 96: ldr     x10, [sp, #L]
     str     x10, [x22]
     mov     x0, x9
     mov     x1, x27
-    LEAVE 32
+    LEAVE 48
 97: ldr     x9, [sp, #L]
     str     x9, [x22]
 98: mov     x0, #1
     mov     x1, x27
-    LEAVE 32
+    LEAVE 48
 END_FUNCTION produce_attestations
 
 /*
