@@ -9,7 +9,7 @@
 #   IMAGE: the lantern image of platform/docker/Dockerfile (default lantern:local).
 #   SECONDS: the longest wait for lantern to follow, after the devnet starts (default 900).
 # KURTOSIS: the kurtosis CLI (default kurtosis). KEEP=1 keeps the enclave. CL_LOG_LEVEL: the client's
-# log level (default info). LANTERN_MAX_CPU: lantern's CPU limit in millicores (default no limit).
+# log level (default info). LOG_DIR: a folder for the full logs of lantern and the other services. LANTERN_MAX_CPU: lantern's CPU limit in millicores (default no limit).
 # LANTERN_DELAY: seconds before lantern starts (default 0). RESTART=1: 6-second slots, lantern with
 # --data-dir /data --archive; after it follows, once its log shows finalized epoch 2 or later, lantern stops and
 # starts again, and must log "restart at slot" and follow again; DOWNTIME: the seconds it stays stopped
@@ -106,6 +106,8 @@ cleanup() {
     echo "== lantern"
     $kurtosis service logs -a $enclave lantern > "$work/lantern.log" 2>&1 || true
     grep -v "record enr" "$work/lantern.log" | grep -v " INFO  slot " | head -40 || true
+    echo "== lantern, its last lines but the slot and block lines"
+    grep -v "record enr" "$work/lantern.log" | grep -v " INFO  slot \| INFO  block " | tail -30 || true
     grep " INFO  slot " "$work/lantern.log" | tail -10 || true
     grep -E " (WARN|ERROR) " "$work/lantern.log" | tail -20 || true
     if [ "${ASSERTOOR:-0}" = 1 ]; then
@@ -121,6 +123,13 @@ cleanup() {
         echo "== lantern-vc"
         $kurtosis service logs -a $enclave lantern-vc 2>&1 | grep -i "error\|fail\|warn\|crit" | tail -40 || true
         $kurtosis service logs -a $enclave lantern-vc 2>&1 | tail -15 || true
+    fi
+    if [ -n "${LOG_DIR:-}" ]; then
+        mkdir -p "$LOG_DIR"
+        cp "$work/lantern.log" "$work/args.yaml" "$LOG_DIR/" 2>/dev/null || true
+        for service in ${peer_service:-} lantern-vc sync-cl assertoor; do
+            $kurtosis service logs -a $enclave "$service" > "$LOG_DIR/$service.log" 2>&1 || rm -f "$LOG_DIR/$service.log"
+        done
     fi
     [ "${KEEP:-0}" = 1 ] || $kurtosis enclave rm -f $enclave >/dev/null 2>&1 || true
     rm -rf "$work"
