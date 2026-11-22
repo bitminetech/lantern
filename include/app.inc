@@ -100,7 +100,7 @@
 .set APP_SIZE, (APP_BUILDER_SLOT0 + APP_BUILDER_SLOTS * APP_BUILDER_SLOT + 4095) & ~4095
 .set APP_BLOCK_BYTES, 1 << 16               /* the anchor block */
 .set APP_BUF_ENTRY, 24                      /* a BufferId table entry: id, address, size */
-.set APP_BUFS_CAP, 4096
+.set APP_BUFS_CAP, 64                      /* the BufferId table's first room; it doubles when full */
 .set APP_LC_BLOCKS, 64                      /* the LcRoom of the light client store at start (node.md, lantern_node_init) */
 .set APP_LC_FINALIZED, 64
 .set APP_LC_PERIODS, 16

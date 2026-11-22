@@ -1067,7 +1067,39 @@ LOCAL_FUNCTION app_buf_find
     ret
 END_FUNCTION app_buf_find
 
-/* L1: a table entry of the id x0 for the memory x1 of x2 bytes: x0 = 0, or 1 for id 0, an id in use or a full table. */
+/*
+ * L1: the BufferId table with twice its room: new memory with its entries, the old memory back to
+ * lantern_shell_unmap. x0 = 0, or 1 with no memory. Locals: the old address, its bytes.
+ */
+LOCAL_FUNCTION app_buf_grow
+    FRAME 16
+    ldr     x9, [x19, #(APP_BUFS + 16)]
+    mov     x10, #(2 * APP_BUF_ENTRY)
+    mul     x0, x9, x10
+    bl      app_map
+    cbz     x0, 9f
+    add     x12, x19, #APP_BUFS
+    ldp     x9, x10, [x12]
+    ldr     x11, [x12, #16]
+    mov     x13, #APP_BUF_ENTRY
+    mul     x14, x11, x13
+    stp     x9, x14, [sp, #16]
+    lsl     x11, x11, #1
+    str     x11, [x12, #16]
+    str     x0, [x12]
+    mov     x1, x9
+    mul     x2, x10, x13
+    bl      lantern_copy
+    add     x0, sp, #16
+    add     x1, sp, #24
+    CALL_GLOBAL lantern_shell_unmap
+    mov     x0, #0
+    UNFRAME 16
+9:  mov     x0, #1
+    UNFRAME 16
+END_FUNCTION app_buf_grow
+
+/* L1: a table entry of the id x0 for the memory x1 of x2 bytes, the table twice as large when full: x0 = 0, or 1 for id 0, an id in use or no memory. */
 LOCAL_FUNCTION app_buf_add
     FRAME 32
     stp     x0, x1, [sp, #16]
@@ -1079,8 +1111,12 @@ LOCAL_FUNCTION app_buf_add
     ldp     x9, x10, [x12]
     ldr     x11, [x12, #16]
     cmp     x10, x11
-    b.hs    9f
-    mov     x11, #APP_BUF_ENTRY
+    b.lo    1f
+    bl      app_buf_grow                    /* full: twice the room */
+    cbnz    x0, 9f
+    add     x12, x19, #APP_BUFS
+    ldp     x9, x10, [x12]
+1:  mov     x11, #APP_BUF_ENTRY
     madd    x9, x10, x11, x9
     ldp     x13, x14, [sp, #16]
     stp     x13, x14, [x9]

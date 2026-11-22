@@ -1142,7 +1142,40 @@ LOCAL_FUNCTION app_buf_find
     ret
 END_FUNCTION app_buf_find
 
-/* L1: a table entry of the id a0 for the memory a1 of a2 bytes: a0 = 0, or 1 for id 0, an id in use or a full table. */
+/*
+ * L1: the BufferId table with twice its room: new memory with its entries, the old memory back to
+ * lantern_shell_unmap. a0 = 0, or 1 with no memory. Locals: the old address, its bytes.
+ */
+LOCAL_FUNCTION app_buf_grow
+    FRAME 16
+    LDQ     t0, s1, (APP_BUFS + 16)
+    li      t1, 2 * APP_BUF_ENTRY
+    mul     a0, t0, t1
+    call    app_map
+    beqz    a0, 9f
+    LDQ     t0, s1, APP_BUFS
+    LDQ     t1, s1, (APP_BUFS + 16)
+    li      t2, APP_BUF_ENTRY
+    mul     t3, t1, t2
+    sd      t0, 0(sp)
+    sd      t3, 8(sp)
+    slli    t1, t1, 1
+    STQ     t1, s1, (APP_BUFS + 16)
+    STQ     a0, s1, APP_BUFS
+    mv      a1, t0
+    LDQ     t1, s1, (APP_BUFS + 8)
+    mul     a2, t1, t2
+    call    lantern_copy
+    mv      a0, sp
+    addi    a1, sp, 8
+    CALL_GLOBAL lantern_shell_unmap
+    li      a0, 0
+    UNFRAME 16
+9:  li      a0, 1
+    UNFRAME 16
+END_FUNCTION app_buf_grow
+
+/* L1: a table entry of the id a0 for the memory a1 of a2 bytes, the table twice as large when full: a0 = 0, or 1 for id 0, an id in use or no memory. */
 LOCAL_FUNCTION app_buf_add
     FRAME 32
     sd      a0, 0(sp)
@@ -1154,8 +1187,12 @@ LOCAL_FUNCTION app_buf_add
     LDQ     t0, s1, APP_BUFS
     LDQ     t1, s1, (APP_BUFS + 8)
     LDQ     t2, s1, (APP_BUFS + 16)
-    bgeu    t1, t2, 9f
-    li      t2, APP_BUF_ENTRY
+    bltu    t1, t2, 1f
+    call    app_buf_grow                    # full: twice the room
+    bnez    a0, 9f
+    LDQ     t0, s1, APP_BUFS
+    LDQ     t1, s1, (APP_BUFS + 8)
+1:  li      t2, APP_BUF_ENTRY
     mul     t2, t1, t2
     add     t0, t0, t2
     ld      t2, 0(sp)

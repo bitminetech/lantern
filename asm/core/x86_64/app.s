@@ -1162,7 +1162,35 @@ LOCAL_FUNCTION app_buf_find
 3:  ret
 END_FUNCTION app_buf_find
 
-/* L1: a table entry of the id rdi for the memory rsi of rdx bytes: rax = 0, or 1 for id 0, an id in use or a full table. */
+/*
+ * L1: the BufferId table with twice its room: new memory with its entries, the old memory back to
+ * lantern_shell_unmap. rax = 0, or 1 with no memory. Locals: the old address, its bytes.
+ */
+LOCAL_FUNCTION app_buf_grow
+    FRAME 16
+    imul    $(2 * APP_BUF_ENTRY), (APP_BUFS + 16)(%rbx), %rdi
+    call    app_map
+    test    %rax, %rax
+    jz      9f
+    mov     APP_BUFS(%rbx), %rsi
+    mov     %rsi, (%rsp)
+    imul    $APP_BUF_ENTRY, (APP_BUFS + 16)(%rbx), %rcx
+    mov     %rcx, 8(%rsp)
+    shlq    $1, (APP_BUFS + 16)(%rbx)
+    mov     %rax, APP_BUFS(%rbx)
+    mov     %rax, %rdi
+    imul    $APP_BUF_ENTRY, (APP_BUFS + 8)(%rbx), %rdx
+    call    lantern_copy
+    mov     %rsp, %rdi
+    lea     8(%rsp), %rsi
+    CALL_GLOBAL lantern_shell_unmap
+    xor     %eax, %eax
+    UNFRAME 16
+9:  mov     $1, %eax
+    UNFRAME 16
+END_FUNCTION app_buf_grow
+
+/* L1: a table entry of the id rdi for the memory rsi of rdx bytes, the table twice as large when full: rax = 0, or 1 for id 0, an id in use or no memory. */
 LOCAL_FUNCTION app_buf_add
     FRAME 32
     mov     %rdi, (%rsp)
@@ -1175,8 +1203,12 @@ LOCAL_FUNCTION app_buf_add
     jnz     9f
     mov     (APP_BUFS + 8)(%rbx), %rcx
     cmp     (APP_BUFS + 16)(%rbx), %rcx
-    jae     9f
-    imul    $APP_BUF_ENTRY, %rcx, %rax
+    jb      1f
+    call    app_buf_grow                    # full: twice the room
+    test    %rax, %rax
+    jnz     9f
+    mov     (APP_BUFS + 8)(%rbx), %rcx
+1:  imul    $APP_BUF_ENTRY, %rcx, %rax
     add     APP_BUFS(%rbx), %rax
     mov     (%rsp), %rdx
     mov     %rdx, (%rax)
