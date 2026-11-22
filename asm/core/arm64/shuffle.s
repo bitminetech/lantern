@@ -186,13 +186,19 @@ SPEC_FUNCTION get_seed
     UNFRAME 64
 SPEC_END get_seed
 
+.set PI_PIVOTS, 8 * SHUFFLE_ROUND_COUNT + 8 * (SHUFFLE_ROUND_COUNT & 1)   /* a multiple of 16 */
+.set PI_L, PI_PIVOTS + L
 /*
- * x19 state, x20 indices, x21 seed, x22 scratch, x23 out, x24 i, x25 total, x26 scratch size.
- * Locals: L i % total, L+8 total, L+16 shuffled, L+24 message (seed, i // 16, or i // 32
- * before electra), L+64 digest.
+ * x19 state, x20 indices, x21 seed, x22 scratch, x23 out, x24 i, x25 total, x26 scratch size,
+ * x27 candidate, x28 round. At sp: the pivot of each round (PI_PIVOTS bytes). Locals: PI_L
+ * i % total, PI_L+8 the position, PI_L+16 the flip, PI_L+24 message (seed, i // 16, or i // 32
+ * before electra), PI_L+64 digest, PI_L+96 the shuffle's message (seed, round, position // 256),
+ * PI_L+136 its digest. compute_shuffled_index
+ * inline: the pivots of the seed once, then for each candidate one digest a round; the random
+ * bytes once for each 16 candidates (32 before electra). The same values as the spec's steps.
  */
 SPEC_FUNCTION compute_proposer_index
-    ENTER 96
+    ENTER_OUT 176, PI_PIVOTS
     mov     x19, x0
     mov     x20, x1
     mov     x21, x2
@@ -200,35 +206,74 @@ SPEC_FUNCTION compute_proposer_index
     mov     x23, x4
     ldr     x25, [x20, #LIST_COUNT]
     cbz     x25, 8f                         /* assert len(indices) > 0 */
-    str     x25, [sp, #(L + 8)]
+    str     x25, [sp, #(PI_L + 8)]
     ldr     x26, [x22]
-    add     x9, sp, #(L + 24)
+    add     x9, sp, #(PI_L + 24)
     COPY32  x9, x21
-    mov     x24, #0
-1:  udiv    x9, x24, x25
-    msub    x9, x9, x25, x24
-    str     x9, [sp, #L]
-    str     x26, [x22]
-    add     x0, sp, #L                      /* compute_shuffled_index(i % total, total, seed) */
-    add     x1, sp, #(L + 8)
-    mov     x2, x21
-    mov     x3, x22
-    add     x4, sp, #(L + 16)
-    bl      lantern_compute_shuffled_index
-    cbnz    x0, 7f
-    ldr     x9, [sp, #(L + 16)]
-    add     x10, x20, #LIST_FIXED
-    ldr     x27, [x10, x9, lsl #3]          /* candidate_index */
-.if FORK >= FORK_ELECTRA
-    lsr     x9, x24, #4                     /* random_bytes = sha256(seed + uint_to_bytes(i // 16)) */
-    str     x9, [sp, #(L + 56)]
-    add     x0, sp, #(L + 24)
-    mov     x1, #40
-    add     x2, sp, #(L + 64)
+    add     x9, sp, #(PI_L + 96)               /* the pivots: bytes_to_uint64(sha256(seed + round_bytes)[0:8]) % total */
+    COPY32  x9, x21
+    mov     x28, #0
+0:  add     x11, sp, #(PI_L + 96)
+    strb    w28, [x11, #32]
+    add     x0, sp, #(PI_L + 96)
+    mov     x1, #33
+    add     x2, sp, #(PI_L + 136)
     bl      sha256_short
-    and     x9, x24, #15
+    ldr     x9, [sp, #(PI_L + 136)]
+    udiv    x10, x9, x25
+    msub    x9, x10, x25, x9
+    str     x9, [sp, x28, lsl #3]
+    add     x28, x28, #1
+    cmp     x28, #SHUFFLE_ROUND_COUNT
+    b.lo    0b
+    mov     x24, #0
+1:  udiv    x27, x24, x25                   /* compute_shuffled_index(i % total, total, seed) */
+    msub    x27, x27, x25, x24
+    mov     x28, #0
+11: ldr     x9, [sp, x28, lsl #3]           /* flip = (pivot + total - index) % total */
+    add     x9, x9, x25
+    sub     x9, x9, x27
+    cmp     x9, x25
+    b.lo    12f
+    sub     x9, x9, x25
+12: str     x9, [sp, #(PI_L + 16)]
+    cmp     x27, x9
+    csel    x9, x27, x9, hi                 /* position = max(index, flip) */
+    str     x9, [sp, #(PI_L + 8)]           /* the position, kept below */
+    add     x11, sp, #(PI_L + 96)
+    strb    w28, [x11, #32]
+    lsr     x10, x9, #8
+    stur    w10, [x11, #33]                 /* uint_to_bytes(uint32(position // 256)) */
+    add     x0, sp, #(PI_L + 96)               /* source = sha256(seed + round_bytes + position_bytes) */
+    mov     x1, #37
+    add     x2, sp, #(PI_L + 136)
+    bl      sha256_short
+    ldr     x9, [sp, #(PI_L + 8)]
+    ubfx    x10, x9, #3, #5                 /* source[(position % 256) // 8] */
+    add     x11, sp, #(PI_L + 136)
+    ldrb    w10, [x11, x10]
+    and     x11, x9, #7
+    lsr     w10, w10, w11
+    ldr     x12, [sp, #(PI_L + 16)]
+    tst     w10, #1
+    csel    x27, x12, x27, ne               /* index = flip if bit else index */
+    add     x28, x28, #1
+    cmp     x28, #SHUFFLE_ROUND_COUNT
+    b.lo    11b
+    add     x10, x20, #LIST_FIXED
+    ldr     x27, [x10, x27, lsl #3]         /* candidate_index */
+.if FORK >= FORK_ELECTRA
+    tst     x24, #15                        /* random_bytes = sha256(seed + uint_to_bytes(i // 16)), new each 16 */
+    b.ne    13f
+    lsr     x9, x24, #4
+    str     x9, [sp, #(PI_L + 56)]
+    add     x0, sp, #(PI_L + 24)
+    mov     x1, #40
+    add     x2, sp, #(PI_L + 64)
+    bl      sha256_short
+13: and     x9, x24, #15
     lsl     x9, x9, #1
-    add     x10, sp, #(L + 64)
+    add     x10, sp, #(PI_L + 64)
     ldrh    w9, [x10, x9]                   /* random_value */
     PART    x10, x11, x19, BeaconState_validators
     add     x10, x10, x27, lsl #7
@@ -242,14 +287,16 @@ SPEC_FUNCTION compute_proposer_index
     cmp     x10, x11
     b.hs    2f
 .else
-    lsr     x9, x24, #5                     /* sha256(seed + uint_to_bytes(i // 32)) */
-    str     x9, [sp, #(L + 56)]
-    add     x0, sp, #(L + 24)
+    tst     x24, #31                        /* sha256(seed + uint_to_bytes(i // 32)), new each 32 */
+    b.ne    14f
+    lsr     x9, x24, #5
+    str     x9, [sp, #(PI_L + 56)]
+    add     x0, sp, #(PI_L + 24)
     mov     x1, #40
-    add     x2, sp, #(L + 64)
+    add     x2, sp, #(PI_L + 64)
     bl      sha256_short
-    and     x9, x24, #31
-    add     x10, sp, #(L + 64)
+14: and     x9, x24, #31
+    add     x10, sp, #(PI_L + 64)
     ldrb    w9, [x10, x9]                   /* random_byte */
     PART    x10, x11, x19, BeaconState_validators
     add     x10, x10, x27, lsl #7
@@ -267,11 +314,11 @@ SPEC_FUNCTION compute_proposer_index
     b       1b
 2:  str     x27, [x23]
     mov     x0, #LANTERN_OK
-7:  LEAVE 96
+7:  LEAVE_OUT 176, PI_PIVOTS
 6:  mov     x0, #LANTERN_INVALID_OVERFLOW
-    LEAVE 96
+    LEAVE_OUT 176, PI_PIVOTS
 8:  mov     x0, #LANTERN_INVALID_NO_INDICES
-    LEAVE 96
+    LEAVE_OUT 176, PI_PIVOTS
 SPEC_END compute_proposer_index
 
 /* Every fork: fulu's spec function, and lantern_node_proposers before fulu (node.md). */

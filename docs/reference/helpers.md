@@ -1043,6 +1043,8 @@ lantern_compute_proposer_index(state, indices, seed, scratch, out) -> status
 
 - Before electra: draws one random byte per candidate, sha256(seed + uint_to_bytes(i // 32))[i % 32], against MAX_EFFECTIVE_BALANCE.
 - Electra and later: draws a 16-bit value per candidate against MAX_EFFECTIVE_BALANCE_ELECTRA.
+- Runs compute_shuffled_index of each candidate inline: the pivot of each of the `SHUFFLE_ROUND_COUNT` rounds, bytes_to_uint64(sha256(seed + round)[0:8]) % total, once for the seed, then one digest of the position's bucket a round for each candidate. The pivots depend only on the seed, the round and the total, so each candidate gets the spec's index.
+- Hashes the random bytes once for each 16 candidates (32 before electra): the candidates of one i // 16 (i // 32) read the same digest, as the spec's steps do.
 
 ### ABI
 
