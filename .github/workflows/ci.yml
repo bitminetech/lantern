@@ -384,13 +384,16 @@ jobs:
           path: ${{ runner.temp }}/logs
 
   # Each client's validator client with the ARM64 binary as its one beacon node, on half the stake
-  # (tests/app/devnet.sh, VC=1): finality and blocks produced through lantern.
+  # (tests/app/devnet.sh, VC=1): finality and blocks produced through lantern. Nimbus v26.10.2's
+  # validator client reads each getSpec value other than BLOB_SCHEDULE and GAS_LIMIT_SCHEDULE as a
+  # string, and lantern gives PARTICIPATION_FLAG_WEIGHTS as the JSON array beacon-APIs v4.0.0 asks
+  # for ("array values are returned as a JSON array"), so its validator client stops at its start.
   validator:
     needs: build
     strategy:
       fail-fast: false
       matrix:
-        client: [lighthouse, prysm, teku, nimbus, lodestar]
+        client: [lighthouse, prysm, teku, lodestar]
     runs-on: ubuntu-24.04-arm
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
