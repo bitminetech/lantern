@@ -4767,6 +4767,7 @@ struct p2p_net {
     size_t nchain;
     int no_blobs;          /* the peer answers BlobSidecarsByRange and DataColumnSidecarsByRange with no sidecar */
     int half_columns;      /* the peer answers DataColumnSidecarsByRange with the even columns only */
+    int cut;               /* 1: its next BeaconBlocksByRange answer of 3 blocks or more leaves out the second; 2: the next of 2 or more holds the first only */
     uint64_t blobs_sent;   /* the sidecars it sent */
     tv parts;              /* fulu: the case, whose parts hold the column sidecars */
     uint64_t peer_cgc;     /* the custody_group_count of the peer's MetaData */
@@ -5056,9 +5057,11 @@ static void p2p_serve(struct p2p_net *net, const char **why) {
             else p2p_chunk(net, k, 0, net->status, net->status_len, 0, why);
             count = 0;
         }
+        uint64_t nth = 0; /* the blocks of the range */
         for (size_t b = 0; b < net->nchain && !*why; b++) {
             const case_block *cb = net->chain[b];
             if (cb->slot < start || cb->slot - start >= count) continue;
+            nth++;
             if (columns) { /* the block's column sidecars of the columns asked, by index */
                 for (uint64_t c = 0; c < 128 && cb->columns && !net->no_blobs && !*why; c++) {
                     if (!(asked[c / 8] >> (c % 8) & 1)) continue;
@@ -5076,6 +5079,7 @@ static void p2p_serve(struct p2p_net *net, const char **why) {
                 continue;
             }
             if (!blobs) {
+                if ((net->cut == 1 && nth == 2) || (net->cut == 2 && nth >= 2)) continue; /* a gap; a short answer */
                 p2p_chunk(net, k, cb->slot, cb->bytes, cb->len, 4, why);
                 continue;
             }
@@ -5087,6 +5091,8 @@ static void p2p_serve(struct p2p_net *net, const char **why) {
                 net->blobs_sent++;
             }
         }
+        if (!columns && !blobs && !status && net->cut == 1 && nth >= 3) net->cut = 2;
+        else if (!columns && !blobs && !status && net->cut == 2 && nth >= 2) net->cut = 0;
         uint8_t *c = p2p_event(net, 1, P2P_EV_STREAM_CLOSE, 24);
         wr64(c + 16, net->in[k].handle);
         net->in[k].handle = 0;
@@ -5941,6 +5947,7 @@ static void sync_once(tv parts, case_block **chain, size_t nchain, uint64_t last
         net.nchain = nchain;
         net.no_blobs = no_blobs;
         net.half_columns = sync_half;
+        net.cut = sync_dead; /* with the dead peer: a gap, then a short answer */
         net.parts = parts;
         memcpy(net.gvr, gvr, 32);
 #if FORK >= FORK_FULU

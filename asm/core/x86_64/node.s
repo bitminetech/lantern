@@ -8204,8 +8204,9 @@ LOCAL_FUNCTION node_find_opening
 END_FUNCTION node_find_opening
 
 /*
- * The stream entry rdi goes; the node's BeaconBlocksByRange request ends with it. The sync's, not
- * read to its end: sync_slot = max(sync_start, min(sync_got, sync_slot)).
+ * The stream entry rdi goes; the node's BeaconBlocksByRange request ends with it. The sync's: with
+ * blocks, sync_slot = max(sync_start, min(sync_got, sync_slot)); with none and not read to its end,
+ * sync_start.
  */
 LOCAL_FUNCTION node_end_stream
     FRAME 0
@@ -8221,10 +8222,12 @@ LOCAL_FUNCTION node_end_stream
     cmpq    $REQRESP_BEACON_BLOCKS_BY_RANGE, NodeStream_method(%rdi)
     jne     1f
     andq    $~NODE_FLAG_SYNCING, Node_flags(%rbx)
-    cmpq    $2, NodeStream_next(%rdi)
+    mov     Node_sync_got(%rbx), %rax       # blocks: the next request after its last block
+    test    %rax, %rax
+    jnz     3f
+    cmpq    $2, NodeStream_next(%rdi)       # none, and not read to its end: the range again
     je      1f
-    mov     Node_sync_got(%rbx), %rax       # the slots after its last block again
-    cmp     Node_sync_slot(%rbx), %rax
+3:  cmp     Node_sync_slot(%rbx), %rax
     cmovae  Node_sync_slot(%rbx), %rax
     cmp     Node_sync_start(%rbx), %rax
     cmovb   Node_sync_start(%rbx), %rax
@@ -9024,6 +9027,47 @@ LOCAL_FUNCTION node_sidecar_retry
 END_FUNCTION node_sidecar_retry
 
 /*
+ * The gap rule (node.md): with no block in NODE_BLOCK_HASHING and a block in NODE_BLOCK_WAITING below
+ * sync_slot whose parent root no block has, sync_slot takes the head's slot + 1. r12 an entry, r13
+ * the entries left, S7 1 once a waiting block lacks its parent.
+ */
+LOCAL_FUNCTION node_sync_gap
+    ENTER 0
+    movq    $0, S7(%rsp)
+    PART    %r12, %r13, %rbx, Node_blocks
+1:  test    %r13, %r13
+    jz      3f
+    mov     NodeBlock_status(%r12), %rax
+    cmp     $NODE_BLOCK_HASHING, %rax
+    je      9f
+    cmp     $NODE_BLOCK_WAITING, %rax
+    jne     2f
+    cmpq    $0, S7(%rsp)
+    jne     2f
+    mov     NodeBlock_slot(%r12), %rax
+    cmp     Node_sync_slot(%rbx), %rax
+    jae     2f
+    lea     NodeBlock_parent_root(%r12), %rdi
+    call    node_find_block
+    cmp     $-1, %rax
+    jne     2f
+    movq    $1, S7(%rsp)
+2:  add     $NodeBlock__mem, %r12
+    dec     %r13
+    jmp     1b
+3:  cmpq    $0, S7(%rsp)
+    je      9f
+    lea     Node_head_root(%rbx), %rdi
+    call    node_find_block
+    cmp     $-1, %rax
+    je      9f
+    mov     NodeBlock_slot(%rdx), %rax
+    inc     %rax
+    mov     %rax, Node_sync_slot(%rbx)
+9:  LEAVE 0
+END_FUNCTION node_sync_gap
+
+/*
  * rax = 1 when a response waits for room, else 0. The bytes of each response are read. From
  * fulu, each peer with a Status and no MetaData asked gets a GetMetaData v3. Then, with no
  * BeaconBlocksByRange of the node open, one to a peer from sync_peer of the node's ForkDigest (from
@@ -9092,6 +9136,7 @@ LOCAL_FUNCTION node_sync
     jmp     30b
 31: testq   $NODE_FLAG_SYNCING, Node_flags(%rbx)
     jnz     9f
+    call    node_sync_gap
     lea     Node_head_root(%rbx), %rdi
     call    node_find_block
     cmp     $-1, %rax
