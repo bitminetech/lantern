@@ -333,7 +333,12 @@ SPEC_LEAF get_total_balance
     RETURN_OK
 SPEC_END get_total_balance
 
-/* s1 state, s2 scratch, s3 out; locals: the epoch. The index list is the scratch after its size. */
+/*
+ * A candidate of ARCHITECTURE.md section 9: get_active_validator_indices and get_total_balance
+ * inlined in one pass over the validators, after v1's check that the index list would fit
+ * in the scratch after its size field.
+ * s1 state, s2 scratch, s3 out; locals: the epoch.
+ */
 SPEC_FUNCTION get_total_active_balance
     ENTER 16
     mv      s1, a0
@@ -341,19 +346,32 @@ SPEC_FUNCTION get_total_active_balance
     mv      s3, a2
     addi    a1, sp, L
     call    lantern_get_current_epoch
-    ld      t0, 0(s2)                       # the list takes all of scratch but its size field
+    ld      t0, 0(s2)                       # room for every validator in the scratch after its size
     addi    t0, t0, -8
-    sd      t0, 8(s2)
-    mv      a0, s1
-    addi    a1, sp, L
-    addi    a2, s2, 8
-    call    lantern_get_active_validator_indices
-    bnez    a0, 9f
-    mv      a0, s1
-    addi    a1, s2, 8
-    mv      a2, s3
-    call    lantern_get_total_balance
-9:  LEAVE 16
+    PART    a0, a1, s1, BeaconState_validators
+    slli    t1, a1, 3
+    addi    t1, t1, LIST_FIXED
+    bltu    t0, t1, 9f
+    ld      t6, L(sp)
+    li      a2, 0                           # sum
+    beqz    a1, 2f
+1:  ld      t0, Validator_activation_epoch(a0)
+    ld      t1, Validator_exit_epoch(a0)
+    ld      t2, Validator_effective_balance(a0)
+    bgtu    t0, t6, 3f                      # is_active_validator(validator, epoch)
+    bgeu    t6, t1, 3f
+    add     a2, a2, t2
+3:  addi    a0, a0, Validator__mem
+    addi    a1, a1, -1
+    bnez    a1, 1b
+2:  li      t0, EFFECTIVE_BALANCE_INCREMENT
+    bltu    t0, a2, 4f                      # max(EFFECTIVE_BALANCE_INCREMENT, sum)
+    mv      a2, t0
+4:  sd      a2, 0(s3)
+    li      a0, LANTERN_OK
+    LEAVE 16
+9:  li      a0, LANTERN_BUFFER_TOO_SMALL
+    LEAVE 16
 SPEC_END get_total_active_balance
 
 /* ---------------------------------------------------------------- Mutators */
