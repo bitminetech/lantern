@@ -111,6 +111,7 @@
 .set APP_QUEUE_BYTES, 1 << 20               /* the events, and the actions, of a step */
 .set APP_TRIES, 8                           /* the times a start step doubles its buffers */
 .set APP_WAIT_MS, 100                       /* the longest wait for the sockets */
+.set APP_API_WAIT_MS, 5                     /* the longest wait while a Beacon API connection is open */
 .set APP_SHELL_EVENT_BYTES, 8 << 20
 .set APP_PROTOCOLS_MAX, 64
 .set APP_RECORD_MAX, 512                     /* the bytes of a boot node record */
