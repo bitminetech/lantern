@@ -3471,6 +3471,25 @@ static void shell_discv5(struct node_shell *s, const uint8_t *ev, uint64_t len, 
 }
 
 /* One lantern_node_step with the pending events, again with more room while it asks for it, then its actions in order. */
+/* Each part of the node holds at most the entries of its NodeRoom capacity, as lantern_node_copy needs. */
+static const struct {
+    uint64_t ref; /* its PartRef in the Node */
+    int room;     /* its NodeRoom field */
+    const char *name;
+} node_parts[] = {{64, 0, "blocks"}, {80, 1, "checkpoints"}, {96, 2, "pow_blocks"}, {120, 3, "peers"}, {136, 4, "streams"},
+                  {224, 7, "messages"}, {256, 8, "blobs"}, {NODE_API_PART, 12, "api"}, {NODE_API_PART + 72, 13, "pool"},
+                  {NODE_API_PART + 648, 14, "proposers"}, {NODE_API_PART + 2096, 15, "eth1_blocks"},
+                  {NODE_API_PART + 2112, 16, "eth1_deposits"}, {NODE_API_PART + 2144, 16, "eth1_counts"},
+                  {NODE_API_PART + 2352, 17, "responses"}};
+static void shell_parts_check(const struct node_shell *s, const char **why) {
+    for (size_t i = 0; i < sizeof node_parts / sizeof node_parts[0] && !*why; i++)
+        if (rd64(s->node + node_parts[i].ref + 8) > s->room[node_parts[i].room]) {
+            static char msg[96];
+            snprintf(msg, sizeof msg, "lantern_node_step: the %s part holds more entries than its room", node_parts[i].name);
+            *why = msg;
+        }
+}
+
 static void shell_step(fc_node *n, const char **why) {
     struct node_shell *s = n->shell;
     uint64_t len = s->pending_len, esize = 24 + len, count[4] = {0, 0, 0, 0}, nevents = 0, st = 1;
@@ -3523,6 +3542,7 @@ static void shell_step(fc_node *n, const char **why) {
     }
     if (!*why && (!guard_ok(s->node, s->node_size) || !guard_ok(n->store, n->size) || !guard_ok(s->actions, s->actions_size)))
         *why = "lantern_node_step wrote out of bounds";
+    if (!*why) shell_parts_check(n->shell, why);
     if (!*why && !s->net && (count[0] != nevents || count[1] != UINT64_MAX)) *why = "lantern_node_step: result is not the event count";
     if (!*why && count[0] > nevents) *why = "lantern_node_step: more events handled than given";
     if (!*why && count[0] < nevents) { /* the events not handled go again, before the new ones */

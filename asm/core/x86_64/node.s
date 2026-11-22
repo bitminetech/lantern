@@ -748,7 +748,7 @@ LOCAL_FUNCTION node_pool_add
     je      1f
     cmp     $GOSSIP_BLS_TO_EXECUTION_CHANGE, %rdi
     jne     8f
-1:  mov     Node_p2p_out(%rbx), %rax        # the capacity, for an attestation or a sync message 3/4 of it
+1:  mov     Node_proposers(%rbx), %rax      # the capacity: up to the next part; for an attestation or a sync message 3/4 of it
     sub     Node_pool(%rbx), %rax
     shr     $6, %rax
     cmp     $GOSSIP_BEACON_ATTESTATION, %rdi

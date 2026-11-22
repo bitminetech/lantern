@@ -778,7 +778,7 @@ LOCAL_FUNCTION node_pool_add
     beq     a0, t0, 1f
     li      t0, GOSSIP_BLS_TO_EXECUTION_CHANGE
     bne     a0, t0, 8f
-1:  ld      t4, Node_p2p_out(s1)            # the capacity, for an attestation or a sync message 3/4 of it
+1:  LDQ     t4, s1, Node_proposers          # the capacity: up to the next part; for an attestation or a sync message 3/4 of it
     LDQ     t3, s1, Node_pool
     sub     t4, t4, t3
     li      a7, NodePool__mem

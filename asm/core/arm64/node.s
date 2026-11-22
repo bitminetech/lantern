@@ -761,7 +761,7 @@ LOCAL_FUNCTION node_pool_add
     ccmp    x0, #GOSSIP_BEACON_ATTESTATION, #4, ne
     ccmp    x0, #GOSSIP_SYNC_COMMITTEE, #4, ne
     b.ne    8f
-    LDQ     x12, x19, Node_p2p_out          /* the capacity, for an attestation or a sync message 3/4 of it */
+    LDQ     x12, x19, Node_proposers        /* the capacity: up to the next part; for an attestation or a sync message 3/4 of it */
     LDQ     x13, x19, Node_pool
     sub     x12, x12, x13
     mov     x13, #NodePool__mem
