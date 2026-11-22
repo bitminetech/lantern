@@ -257,11 +257,13 @@ SPEC_FUNCTION process_sync_aggregate
     MOVQ    x9, SYNC_AGG_EXTRA
     sub     x9, x24, x9
     str     x9, [x22]
-    mov     x0, x19
-    mov     x1, x22
-    add     x2, sp, #(L + 168)
-    bl      lantern_get_base_reward_per_increment
-    cbnz    x0, 7f
+    add     x0, sp, #(L + 160)              /* get_base_reward_per_increment of the same total */
+    add     x1, sp, #(L + 168)
+    bl      lantern_integer_squareroot
+    ldr     x9, [sp, #(L + 168)]
+    MOVQ    x10, EFFECTIVE_BALANCE_INCREMENT * BASE_REWARD_FACTOR
+    udiv    x10, x10, x9
+    str     x10, [sp, #(L + 168)]
     ldr     x9, [sp, #(L + 160)]
     MOVQ    x10, EFFECTIVE_BALANCE_INCREMENT
     udiv    x9, x9, x10                     /* total_active_increments */

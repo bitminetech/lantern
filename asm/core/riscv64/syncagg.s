@@ -264,11 +264,13 @@ SPEC_FUNCTION process_sync_aggregate
     li      t0, SYNC_AGG_EXTRA
     sub     t0, s6, t0
     sd      t0, 0(s4)
-    mv      a0, s1
-    mv      a1, s4
-    addi    a2, sp, (L + 168)
-    call    lantern_get_base_reward_per_increment
-    bnez    a0, 7f
+    addi    a0, sp, (L + 160)               # get_base_reward_per_increment of the same total
+    addi    a1, sp, (L + 168)
+    call    lantern_integer_squareroot
+    ld      t0, (L + 168)(sp)
+    li      t1, EFFECTIVE_BALANCE_INCREMENT * BASE_REWARD_FACTOR
+    divu    t1, t1, t0
+    sd      t1, (L + 168)(sp)
     ld      t0, (L + 160)(sp)
     li      t1, EFFECTIVE_BALANCE_INCREMENT
     divu    t0, t0, t1                      # total_active_increments
