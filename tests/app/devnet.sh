@@ -22,7 +22,8 @@
 # epoch 1), 130 validators in genesis (two that no validator client runs), and Assertoor with lantern
 # as its one consensus endpoint (tests/kurtosis/main.star); after
 # lantern follows, Assertoor's test "lantern" must end in success within SECONDS, and each of its tasks
-# is printed. VC=1: 6-second slots, 128 validators in genesis, the first client runs keys 0 to 63, and
+# is printed; with VC=1 too, lantern's validator client runs keys 64 to 127, so lantern proposes blocks
+# and the operations of its pool reach them even when the client leaves them out. VC=1: 6-second slots, 128 validators in genesis, the first client runs keys 0 to 63, and
 # the client's validator client runs keys 64 to 127 with lantern as its one beacon node, lantern on the
 # second client's geth (tests/kurtosis/main.star); after lantern follows, the client's finalized epoch must
 # reach 3 within SECONDS (the stake of keys 0 to 63 alone is half), and 4 or more of the client's
@@ -86,8 +87,8 @@ fi
 # first client's 128 that no validator client runs (preregistered_validator_count 130), whose
 # attestations only Assertoor signs, through lantern's submitPoolAttestationsV2.
 if [ "${ASSERTOOR:-0}" = 1 ]; then printf '  shard_committee_period: 1\n  preregistered_validator_count: 130\n' >> "$work/args.yaml"; fi
-# VC=1: keys 64 to 127, which only lantern's validator client runs.
-if [ "$vc" = 1 ]; then printf '  preregistered_validator_count: 128\n' >> "$work/args.yaml"; fi
+# VC=1: keys 64 to 127, which only lantern's validator client runs (with ASSERTOOR=1, 130 in all).
+if [ "$vc" = 1 ] && [ "${ASSERTOOR:-0}" != 1 ]; then printf '  preregistered_validator_count: 128\n' >> "$work/args.yaml"; fi
 min_slot=8
 if [ "${FORK:-0}" = 1 ]; then
     printf '  electra_fork_epoch: 0\n  fulu_fork_epoch: 1\n' >> "$work/args.yaml"

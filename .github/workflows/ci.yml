@@ -299,7 +299,8 @@ jobs:
           path: ${{ runner.temp }}/logs
 
   # Assertoor with the ARM64 binary as its one consensus endpoint (tests/app/devnet.sh, ASSERTOOR=1):
-  # its test of the checks that read the Beacon API must pass over lantern.
+  # its test of the checks that read the Beacon API must pass over lantern. With VC=1, lantern's
+  # validator client runs half the keys, so lantern proposes and its pool's operations reach its blocks.
   assertoor:
     needs: build
     runs-on: ubuntu-24.04-arm
@@ -318,7 +319,7 @@ jobs:
         run: |
           chmod +x image/linux-arm64/lantern-*
           docker build -q -t lantern:local -f platform/docker/Dockerfile image
-          LOG_DIR="$RUNNER_TEMP/logs" ASSERTOOR=1 KURTOSIS="$RUNNER_TEMP/kurtosis" tests/app/devnet.sh lighthouse lantern:local 3600
+          LOG_DIR="$RUNNER_TEMP/logs" ASSERTOOR=1 VC=1 KURTOSIS="$RUNNER_TEMP/kurtosis" tests/app/devnet.sh lighthouse lantern:local 3600
       - if: failure()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
         with:
