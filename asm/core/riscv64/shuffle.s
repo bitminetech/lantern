@@ -210,11 +210,15 @@ SPEC_FUNCTION get_seed
 SPEC_END get_seed
 
 /*
- * s1 state, s2 indices, s3 seed, s4 scratch, s5 out, s6 i, s7 total, s8 scratch size, s9 candidate.
- * Locals: L i % total, L+8 total, L+16 shuffled, L+24 message (seed, i // 16), L+64 digest.
+ * s1 state, s2 indices, s3 seed, s4 scratch, s5 out, s6 i, s7 total, s8 scratch size, s9 candidate,
+ * s10 the index. Locals: L the position, L+8 total, L+16 the flip, L+24 message (seed, i // 16),
+ * L+64 digest, L+96 the shuffle's message (seed, round, position // 256), L+136 its digest, L+168
+ * the pivot of each round, L+888 the round. compute_shuffled_index inline: the pivots of the seed
+ * once, then for each candidate one digest a round; the random bytes once for each 16 candidates
+ * (32 before electra). The same values as the spec's steps.
  */
 SPEC_FUNCTION compute_proposer_index
-    ENTER 96
+    ENTER 896
     mv      s1, a0
     mv      s2, a1
     mv      s3, a2
@@ -226,29 +230,82 @@ SPEC_FUNCTION compute_proposer_index
     ld      s8, 0(s4)
     addi    t0, sp, (L + 24)
     COPY32  t0, s3
+    addi    t0, sp, (L + 96)                # the pivots: bytes_to_uint64(sha256(seed + round_bytes)[0:8]) % total
+    COPY32  t0, s3
+    sd      zero, (L + 888)(sp)
+0:  ld      t0, (L + 888)(sp)
+    sb      t0, (L + 128)(sp)
+    addi    a0, sp, (L + 96)
+    li      a1, 33
+    addi    a2, sp, (L + 136)
+    call    sha256_short
+    ld      t1, (L + 136)(sp)
+    remu    t1, t1, s7
+    ld      t0, (L + 888)(sp)
+    slli    t2, t0, 3
+    add     t2, sp, t2
+    sd      t1, (L + 168)(t2)
+    addi    t0, t0, 1
+    sd      t0, (L + 888)(sp)
+    li      t3, SHUFFLE_ROUND_COUNT
+    bltu    t0, t3, 0b
     li      s6, 0
-1:  remu    t0, s6, s7
-    sd      t0, L(sp)
-    sd      s8, 0(s4)
-    addi    a0, sp, L                       # compute_shuffled_index(i % total, total, seed)
-    addi    a1, sp, (L + 8)
-    mv      a2, s3
-    mv      a3, s4
-    addi    a4, sp, (L + 16)
-    call    lantern_compute_shuffled_index
-    bnez    a0, 7f
-    ld      t0, (L + 16)(sp)
-    slli    t0, t0, 3
+1:  remu    s10, s6, s7                     # compute_shuffled_index(i % total, total, seed)
+    sd      zero, (L + 888)(sp)
+11: ld      t0, (L + 888)(sp)
+    slli    t2, t0, 3                       # flip = (pivot + total - index) % total
+    add     t2, sp, t2
+    ld      t1, (L + 168)(t2)
+    add     t1, t1, s7
+    sub     t1, t1, s10
+    bltu    t1, s7, 12f
+    sub     t1, t1, s7
+12: sd      t1, (L + 16)(sp)
+    mv      t2, t1                          # position = max(index, flip)
+    bgeu    t1, s10, 121f
+    mv      t2, s10
+121: sd     t2, L(sp)
+    sb      t0, (L + 128)(sp)
+    srli    t3, t2, 8                       # uint_to_bytes(uint32(position // 256))
+    sb      t3, (L + 129)(sp)
+    srli    t4, t3, 8
+    sb      t4, (L + 130)(sp)
+    srli    t4, t3, 16
+    sb      t4, (L + 131)(sp)
+    srli    t4, t3, 24
+    sb      t4, (L + 132)(sp)
+    addi    a0, sp, (L + 96)                # source = sha256(seed + round_bytes + position_bytes)
+    li      a1, 37
+    addi    a2, sp, (L + 136)
+    call    sha256_short
+    ld      t2, L(sp)
+    srli    t0, t2, 3                       # source[(position % 256) // 8]
+    andi    t0, t0, 31
+    add     t0, sp, t0
+    lbu     t0, (L + 136)(t0)
+    andi    t1, t2, 7
+    srl     t0, t0, t1
+    andi    t0, t0, 1
+    beqz    t0, 13f
+    ld      s10, (L + 16)(sp)               # index = flip if bit else index
+13: ld      t0, (L + 888)(sp)
+    addi    t0, t0, 1
+    sd      t0, (L + 888)(sp)
+    li      t3, SHUFFLE_ROUND_COUNT
+    bltu    t0, t3, 11b
+    slli    t0, s10, 3
     add     t0, s2, t0
     ld      s9, LIST_FIXED(t0)              # candidate_index
 .if FORK >= FORK_ELECTRA
-    srli    t0, s6, 4                       # random_bytes = sha256(seed + uint_to_bytes(i // 16))
+    andi    t0, s6, 15                      # random_bytes = sha256(seed + uint_to_bytes(i // 16)), new each 16
+    bnez    t0, 14f
+    srli    t0, s6, 4
     sd      t0, (L + 56)(sp)
     addi    a0, sp, (L + 24)
     li      a1, 40
     addi    a2, sp, (L + 64)
     call    sha256_short
-    andi    t0, s6, 15
+14: andi    t0, s6, 15
     slli    t0, t0, 1
     add     t0, sp, t0
     lhu     t0, (L + 64)(t0)                # random_value
@@ -263,13 +320,15 @@ SPEC_FUNCTION compute_proposer_index
     li      t2, MAX_EFFECTIVE_BALANCE_ELECTRA
     mul     t2, t2, t0                      # MAX_EFFECTIVE_BALANCE_ELECTRA * random_value fits
 .else
-    srli    t0, s6, 5                       # sha256(seed + uint_to_bytes(i // 32))
+    andi    t0, s6, 31                      # sha256(seed + uint_to_bytes(i // 32)), new each 32
+    bnez    t0, 15f
+    srli    t0, s6, 5
     sd      t0, (L + 56)(sp)
     addi    a0, sp, (L + 24)
     li      a1, 40
     addi    a2, sp, (L + 64)
     call    sha256_short
-    andi    t0, s6, 31
+15: andi    t0, s6, 31
     add     t0, sp, t0
     lbu     t0, (L + 64)(t0)                # random_byte
     PART    t1, t2, s1, BeaconState_validators
@@ -288,11 +347,11 @@ SPEC_FUNCTION compute_proposer_index
     j       1b
 2:  sd      s9, 0(s5)
     li      a0, LANTERN_OK
-7:  LEAVE 96
+7:  LEAVE 896
 6:  li      a0, LANTERN_INVALID_OVERFLOW
-    LEAVE 96
+    LEAVE 896
 8:  li      a0, LANTERN_INVALID_NO_INDICES
-    LEAVE 96
+    LEAVE 896
 SPEC_END compute_proposer_index
 
 /* Every fork: fulu's spec function, and lantern_node_proposers before fulu (node.md). */

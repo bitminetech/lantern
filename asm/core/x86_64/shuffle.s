@@ -193,11 +193,15 @@ SPEC_FUNCTION get_seed
 SPEC_END get_seed
 
 /*
- * rbx state, rbp indices, r12 seed, r13 scratch, r14 out, r15 i, S8 scratch size, S9 candidate.
- * Locals: L i % total, L+8 total, L+16 shuffled, L+24 message (seed, i // 16), L+64 digest.
+ * rbx state, rbp indices, r12 seed, r13 scratch, r14 out, r15 i, S7 the index, S8 scratch size,
+ * S9 candidate, S10 the round. Locals: L the position, L+8 total, L+16 the flip, L+24 message
+ * (seed, i // 16), L+64 digest, L+96 the shuffle's message (seed, round, position // 256), L+136
+ * its digest, L+168 the pivot of each round. compute_shuffled_index inline: the pivots of the
+ * seed once, then for each candidate one digest a round; the random bytes once for each 16
+ * candidates (32 before electra). The same values as the spec's steps.
  */
 SPEC_FUNCTION compute_proposer_index
-    ENTER 96
+    ENTER 896
     mov     %rdi, %rbx
     mov     %rsi, %rbp
     mov     %rdx, %r12
@@ -211,33 +215,81 @@ SPEC_FUNCTION compute_proposer_index
     mov     %rax, S8(%rsp)
     lea     (L + 24)(%rsp), %rax
     COPY32  %rax, %r12
-    xor     %r15d, %r15d
-1:  mov     %r15, %rax
+    lea     (L + 96)(%rsp), %rax            # the pivots: bytes_to_uint64(sha256(seed + round_bytes)[0:8]) % total
+    COPY32  %rax, %r12
+    movq    $0, S10(%rsp)
+0:  mov     S10(%rsp), %rax
+    mov     %al, (L + 128)(%rsp)
+    lea     (L + 96)(%rsp), %rdi
+    mov     $33, %esi
+    lea     (L + 136)(%rsp), %rdx
+    call    sha256_short
+    mov     (L + 136)(%rsp), %rax
     xor     %edx, %edx
     divq    (L + 8)(%rsp)
-    mov     %rdx, L(%rsp)
-    mov     S8(%rsp), %rax
-    mov     %rax, (%r13)
-    lea     L(%rsp), %rdi                   # compute_shuffled_index(i % total, total, seed)
-    lea     (L + 8)(%rsp), %rsi
-    mov     %r12, %rdx
-    mov     %r13, %rcx
-    lea     (L + 16)(%rsp), %r8
-    call    lantern_compute_shuffled_index
-    test    %rax, %rax
-    jnz     7f
-    mov     (L + 16)(%rsp), %rax
+    mov     S10(%rsp), %rcx
+    mov     %rdx, (L + 168)(%rsp,%rcx,8)
+    inc     %rcx
+    mov     %rcx, S10(%rsp)
+    cmp     $SHUFFLE_ROUND_COUNT, %rcx
+    jb      0b
+    xor     %r15d, %r15d
+1:  mov     %r15, %rax                      # compute_shuffled_index(i % total, total, seed)
+    xor     %edx, %edx
+    divq    (L + 8)(%rsp)
+    mov     %rdx, S7(%rsp)
+    movq    $0, S10(%rsp)
+11: mov     S10(%rsp), %rcx
+    mov     (L + 168)(%rsp,%rcx,8), %rax    # flip = (pivot + total - index) % total
+    add     (L + 8)(%rsp), %rax
+    sub     S7(%rsp), %rax
+    cmp     (L + 8)(%rsp), %rax
+    jb      12f
+    sub     (L + 8)(%rsp), %rax
+12: mov     %rax, (L + 16)(%rsp)
+    mov     S7(%rsp), %rdx                  # position = max(index, flip)
+    cmp     %rax, %rdx
+    cmova   %rdx, %rax
+    mov     %rax, L(%rsp)
+    mov     %cl, (L + 128)(%rsp)
+    mov     %rax, %rdx
+    shr     $8, %rdx
+    mov     %edx, (L + 129)(%rsp)           # uint_to_bytes(uint32(position // 256))
+    lea     (L + 96)(%rsp), %rdi            # source = sha256(seed + round_bytes + position_bytes)
+    mov     $37, %esi
+    lea     (L + 136)(%rsp), %rdx
+    call    sha256_short
+    mov     L(%rsp), %rax
+    mov     %rax, %rcx                      # source[(position % 256) // 8]
+    shr     $3, %rcx
+    and     $31, %ecx
+    movzbl  (L + 136)(%rsp,%rcx), %edx
+    mov     %eax, %ecx
+    and     $7, %ecx
+    shr     %cl, %edx
+    test    $1, %dl
+    jz      13f
+    mov     (L + 16)(%rsp), %rax            # index = flip if bit else index
+    mov     %rax, S7(%rsp)
+13: mov     S10(%rsp), %rcx
+    inc     %rcx
+    mov     %rcx, S10(%rsp)
+    cmp     $SHUFFLE_ROUND_COUNT, %rcx
+    jb      11b
+    mov     S7(%rsp), %rax
     mov     LIST_FIXED(%rbp,%rax,8), %rax   # candidate_index
     mov     %rax, S9(%rsp)
 .if FORK >= FORK_ELECTRA
-    mov     %r15, %rax                      # random_bytes = sha256(seed + uint_to_bytes(i // 16))
+    test    $15, %r15                       # random_bytes = sha256(seed + uint_to_bytes(i // 16)), new each 16
+    jnz     14f
+    mov     %r15, %rax
     shr     $4, %rax
     mov     %rax, (L + 56)(%rsp)
     lea     (L + 24)(%rsp), %rdi
     mov     $40, %esi
     lea     (L + 64)(%rsp), %rdx
     call    sha256_short
-    mov     %r15, %rax
+14: mov     %r15, %rax
     and     $15, %eax
     movzwl  (L + 64)(%rsp,%rax,2), %ecx     # random_value
     mov     S9(%rsp), %rax
@@ -252,14 +304,16 @@ SPEC_FUNCTION compute_proposer_index
     MOVQ    %rdx, MAX_EFFECTIVE_BALANCE_ELECTRA
     imul    %rcx, %rdx                      # MAX_EFFECTIVE_BALANCE_ELECTRA * random_value fits
 .else
-    mov     %r15, %rax                      # sha256(seed + uint_to_bytes(i // 32))
+    test    $31, %r15                       # sha256(seed + uint_to_bytes(i // 32)), new each 32
+    jnz     15f
+    mov     %r15, %rax
     shr     $5, %rax
     mov     %rax, (L + 56)(%rsp)
     lea     (L + 24)(%rsp), %rdi
     mov     $40, %esi
     lea     (L + 64)(%rsp), %rdx
     call    sha256_short
-    mov     %r15, %rax
+15: mov     %r15, %rax
     and     $31, %eax
     movzbl  (L + 64)(%rsp,%rax), %ecx       # random_byte
     mov     S9(%rsp), %rax
@@ -281,11 +335,11 @@ SPEC_FUNCTION compute_proposer_index
 2:  mov     S9(%rsp), %rax
     mov     %rax, (%r14)
     xor     %eax, %eax
-7:  LEAVE 96
+7:  LEAVE 896
 6:  mov     $LANTERN_INVALID_OVERFLOW, %eax
-    LEAVE 96
+    LEAVE 896
 8:  mov     $LANTERN_INVALID_NO_INDICES, %eax
-    LEAVE 96
+    LEAVE 896
 SPEC_END compute_proposer_index
 
 /* Every fork: fulu's spec function, and lantern_node_proposers before fulu (node.md). */
