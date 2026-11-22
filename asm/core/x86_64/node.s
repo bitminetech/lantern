@@ -1021,7 +1021,7 @@ END_FUNCTION node_rebuild
  * The post-states the node can rebuild go (node.md): each imported block above F's slot with a
  * post-state, other than the head and the justified root, whose slot is not the first of its epoch
  * and is NODE_STATE_KEEP_SLOTS or more before the store's, with an imported child and every
- * imported child of its epoch (with NODE_FLAG_FEW_STATES, no slot or epoch rule): a STATE_FREE, and
+ * imported child of its epoch (with NODE_FLAG_FEW_STATES, any slot past the first): a STATE_FREE, and
  * state_id 0. Then a head with no post-state above F's slot gets it again. r12 the entry, r13 the
  * entries left, S7 the store's slot, S8 F's slot, S9 a child, S10 the children. Locals: L the
  * entries left to look at.
@@ -1045,10 +1045,10 @@ LOCAL_FUNCTION node_shed
     mov     NodeBlock_slot(%r12), %rax
     cmp     S8(%rsp), %rax
     jbe     6f
-    testq   $NODE_FLAG_FEW_STATES, Node_flags(%rbx)
-    jnz     11f
-    test    $(SLOTS_PER_EPOCH - 1), %rax
+    test    $(SLOTS_PER_EPOCH - 1), %rax    # the first slot of its epoch: it stays
     jz      6f
+    testq   $NODE_FLAG_FEW_STATES, Node_flags(%rbx)  # NODE_FLAG_FEW_STATES: no rule of the last slots
+    jnz     11f
     add     $NODE_STATE_KEEP_SLOTS, %rax
     cmp     S7(%rsp), %rax
     jae     6f
@@ -1071,8 +1071,6 @@ LOCAL_FUNCTION node_shed
     lea     NodeBlock_parent_root(%rax), %rcx
     NE32    %rcx, %r12, 41f
     incq    S10(%rsp)
-    testq   $NODE_FLAG_FEW_STATES, Node_flags(%rbx)
-    jnz     41f
     mov     S9(%rsp), %rax
     mov     NodeBlock_slot(%rax), %rax
     xor     %edx, %edx
@@ -10692,8 +10690,8 @@ FUNCTION lantern_node_run
     lea     Node_config(%rbx), %rsi
     call    node_fork
     mov     %rax, (L + 40)(%rsp)
-    test    %r13, %r13                      # a state of another fork: IGNORE
-    jz      41f
+    test    %r13, %r13                      # no post-state of the justified root; a state of another fork: IGNORE
+    jz      42f
     mov     NODE_STATE_SLOT(%r13), %rdi
     lea     Node_config(%rbx), %rsi
     call    node_fork
@@ -10708,6 +10706,10 @@ FUNCTION lantern_node_run
     add     $NodeEvent_result, %r8
     FORK_CALL node_attester_slashing
 99: LEAVE 192
+42: mov     S8(%rsp), %rcx
+    movq    $LANTERN_NEED_JUSTIFIED_STATE, NodeEvent_result(%rcx)
+    xor     %eax, %eax
+    LEAVE 192
 50: cmp     $NODE_WORK_SERVE, %rax
     jne     60f
     mov     NodeAction_arg(%r12), %rax      # SERVE: L+176 1 for a blob method, 2 for a column method
@@ -12175,8 +12177,8 @@ LOCAL_FUNCTION node_run_vote
     lea     Node_config(%rbx), %rsi
     call    node_fork
     mov     %rax, (L + 16)(%rsp)
-    test    %r13, %r13
-    jz      4f
+    test    %r13, %r13                      # no post-state of the justified root
+    jz      63f
     mov     NODE_STATE_SLOT(%r13), %rdi
     lea     Node_config(%rbx), %rsi
     call    node_fork
@@ -12197,6 +12199,10 @@ LOCAL_FUNCTION node_run_vote
     jmp     9f
 62: mov     S8(%rsp), %rcx
     movq    $LANTERN_GOSSIP_IGNORE, NodeEvent_result(%rcx)
+    xor     %eax, %eax
+    jmp     9f
+63: mov     S8(%rsp), %rcx
+    movq    $LANTERN_NEED_JUSTIFIED_STATE, NodeEvent_result(%rcx)
     xor     %eax, %eax
     jmp     9f
 7:  mov     S8(%rsp), %rcx                  # no such item

@@ -1035,8 +1035,9 @@ END_FUNCTION node_rebuild
 /*
  * L0: the post-states the node can rebuild go (node.md): each imported block above F's slot with
  * a post-state, other than the head and the justified root, whose slot is not the first of its
- * epoch and is NODE_STATE_KEEP_SLOTS or more before the store's, with an imported child and every
- * imported child of its epoch: a STATE_FREE, and state_id 0. Then a head with no post-state above
+ * epoch and is NODE_STATE_KEEP_SLOTS or more before the store's (with NODE_FLAG_FEW_STATES, any
+ * slot), with an imported child and every imported child of its epoch: a STATE_FREE, and
+ * state_id 0. Then a head with no post-state above
  * F's slot gets it again. x21 the entry, x22 the entries left, x25 the store's slot, x26 F's slot,
  * x27 a child, x28 the children of its epoch. Locals: L the entries left to look at.
  */
@@ -1059,10 +1060,10 @@ LOCAL_FUNCTION node_shed
     ldr     x10, [x21, #NodeBlock_slot]
     cmp     x10, x26
     b.ls    6f
-    ldr     x9, [x19, #Node_flags]          /* NODE_FLAG_FEW_STATES: no slot rule, and children of any epoch */
-    tbnz    x9, #8, 11f
-    tst     x10, #(SLOTS_PER_EPOCH - 1)
+    tst     x10, #(SLOTS_PER_EPOCH - 1)     /* the first slot of its epoch: it stays */
     b.eq    6f
+    ldr     x9, [x19, #Node_flags]          /* NODE_FLAG_FEW_STATES: no rule of the last slots */
+    tbnz    x9, #8, 11f
     add     x11, x10, #NODE_STATE_KEEP_SLOTS
     cmp     x11, x25
     b.hs    6f
@@ -1085,8 +1086,6 @@ LOCAL_FUNCTION node_shed
     add     x14, x27, #NodeBlock_parent_root
     NE32    x14, x21, 41f
     add     x28, x28, #1
-    ldr     x9, [x19, #Node_flags]
-    tbnz    x9, #8, 41f
     ldr     x9, [x27, #NodeBlock_slot]
     ldr     x10, [x21, #NodeBlock_slot]
     mov     x11, #SLOTS_PER_EPOCH
@@ -10596,7 +10595,7 @@ FUNCTION lantern_node_run
     add     x1, x19, #Node_config
     bl      node_fork
     mov     x28, x0
-    cbz     x22, 41f                        /* a state of another fork: IGNORE */
+    cbz     x22, 42f                        /* no post-state of the justified root; a state of another fork: IGNORE */
     ldr     x0, [x22, #NODE_STATE_SLOT]
     add     x1, x19, #Node_config
     bl      node_fork
@@ -10610,6 +10609,10 @@ FUNCTION lantern_node_run
     add     x4, x25, #NodeEvent_result
     FORK_CALL node_attester_slashing
 99: LEAVE 192
+42: mov     x9, #LANTERN_NEED_JUSTIFIED_STATE
+    str     x9, [x25, #NodeEvent_result]
+    mov     x0, #LANTERN_OK
+    LEAVE 192
 50: cmp     x9, #NODE_WORK_SERVE
     b.ne    60f
     ldr     x10, [x21, #NodeAction_arg]     /* SERVE: the chunk of the block's or sidecar's bytes, with room for it */
@@ -11933,7 +11936,7 @@ LOCAL_FUNCTION node_run_vote
     add     x1, x19, #Node_config
     bl      node_fork
     mov     x15, x0
-    cbz     x22, 4f
+    cbz     x22, 63f                        /* no post-state of the justified root */
     ldr     x0, [x22, #NODE_STATE_SLOT]
     add     x1, x19, #Node_config
     bl      node_fork
@@ -11951,6 +11954,10 @@ LOCAL_FUNCTION node_run_vote
     mov     x0, #LANTERN_OK
     b       9f
 62: mov     x9, #LANTERN_GOSSIP_IGNORE
+    str     x9, [x25, #NodeEvent_result]
+    mov     x0, #LANTERN_OK
+    b       9f
+63: mov     x9, #LANTERN_NEED_JUSTIFIED_STATE
     str     x9, [x25, #NodeEvent_result]
     mov     x0, #LANTERN_OK
     b       9f

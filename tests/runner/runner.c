@@ -4446,6 +4446,35 @@ static void ev_close(fc_node *n, const char **why) {
 }
 
 /* One case through the node: the shell's buffers, then each step as events; with serve, then fc_serve_check. */
+/*
+ * A NODE_WORK_ATTESTER_SLASHING of the bytes with no state_a, as when the justified root has no
+ * post-state (node.md): lantern_node_run must give LANTERN_OK, the result LANTERN_NEED_JUSTIFIED_STATE
+ * and leave the store and the node unchanged.
+ */
+static void slashing_no_state_check(fc_node *n, const uint8_t *bytes, uint64_t len, const char **why) {
+    struct node_shell *s = n->shell;
+    uint8_t work[72] = {0};
+    wr64(work, 72);
+    wr64(work + 8, 5); /* NODE_ACT_WORK */
+    wr64(work + 16, WORK_ATTESTER_SLASHING);
+    uint8_t *data = serialized(bytes, len, &(uint64_t){0}), *ev = buffer(EV_WORK_DONE_SIZE);
+    uint8_t *snode = copy_of(s->node, s->node_size), *sstore = copy_of(n->store, n->size);
+    wr64(ev, EV_WORK_DONE_SIZE);
+    const void *settings = NULL;
+#if FORK >= FORK_DENEB
+    settings = kzg_settings;
+#endif
+    uint64_t st = CALL(lantern_node_run, s->node, n->store, s->seen, work, NULL, NULL, NULL, data, settings, fresh_scratch(), ev);
+    if (st != 0) *why = "an attester slashing work with no state: status not 0";
+    else if (rd64(ev + EV_RESULT) != 41) *why = "an attester slashing work with no state: not LANTERN_NEED_JUSTIFIED_STATE";
+    else if (memcmp(sstore, n->store, (size_t)n->size) || memcmp(snode, s->node, (size_t)s->node_size))
+        *why = "an attester slashing work with no state: the store or the node changed";
+    free(data);
+    free(ev);
+    free(snode);
+    free(sstore);
+}
+
 static void fc_node_case(tv parts, int serve, const char **why) {
     fc_node n;
     uint8_t *anchor_block;
@@ -4480,6 +4509,7 @@ static void fc_node_case(tv parts, int serve, const char **why) {
             uint64_t olen;
             snprintf(key, sizeof key, "%.*s", (int)rd64(nm + 1), (const char *)(nm + 9));
             const uint8_t *bytes = tv_bytes(tv_get(parts, key), &olen);
+            if (!att && !pow) slashing_no_state_check(&n, bytes, olen, why);
             s->nresults[0] = s->nresults[1] = 0;
             shell_event(s, att ? EV_ATTESTATION : pow ? EV_POW_BLOCK : EV_ATTESTER_SLASHING, 0, bytes, olen);
             shell_settle(&n, why);

@@ -1051,7 +1051,7 @@ END_FUNCTION node_rebuild
  * The post-states the node can rebuild go (node.md): each imported block above F's slot with a
  * post-state, other than the head and the justified root, whose slot is not the first of its epoch
  * and is NODE_STATE_KEEP_SLOTS or more before the store's, with an imported child and every imported
- * child of its epoch (with NODE_FLAG_FEW_STATES, no slot or epoch rule): a STATE_FREE, and state_id
+ * child of its epoch (with NODE_FLAG_FEW_STATES, any slot past the first): a STATE_FREE, and state_id
  * 0. Then a head with no post-state above F's slot gets it again. s3 the entry, s4 the entries left,
  * s7 the store's slot, s8 F's slot, s9 a child, s10 the children. Locals: L the entries left to
  * look at.
@@ -1074,12 +1074,12 @@ LOCAL_FUNCTION node_shed
     beqz    t0, 6f
     ld      t0, NodeBlock_slot(s3)
     bleu    t0, s8, 6f
-    ld      t1, Node_flags(s1)
+    andi    t1, t0, SLOTS_PER_EPOCH - 1     # the first slot of its epoch: it stays
+    beqz    t1, 6f
+    ld      t1, Node_flags(s1)              # NODE_FLAG_FEW_STATES: no rule of the last slots
     li      t2, NODE_FLAG_FEW_STATES
     and     t1, t1, t2
     bnez    t1, 11f
-    andi    t1, t0, SLOTS_PER_EPOCH - 1
-    beqz    t1, 6f
     addi    t1, t0, NODE_STATE_KEEP_SLOTS
     bgeu    t1, s7, 6f
 11: addi    t3, s1, Node_head_root
@@ -1101,10 +1101,6 @@ LOCAL_FUNCTION node_shed
     addi    t3, s9, NodeBlock_parent_root
     NE32    t3, s3, 41f
     addi    s10, s10, 1
-    ld      t1, Node_flags(s1)
-    li      t2, NODE_FLAG_FEW_STATES
-    and     t1, t1, t2
-    bnez    t1, 41f
     ld      t0, NodeBlock_slot(s9)
     ld      t1, NodeBlock_slot(s3)
     li      t2, SLOTS_PER_EPOCH
@@ -10690,7 +10686,7 @@ FUNCTION lantern_node_run
     addi    a1, s1, Node_config
     call    node_fork
     mv      s10, a0
-    beqz    s4, 41f                         # a state of another fork: IGNORE
+    beqz    s4, 42f                         # no post-state of the justified root; a state of another fork: IGNORE
     ld      a0, NODE_STATE_SLOT(s4)
     addi    a1, s1, Node_config
     call    node_fork
@@ -10703,6 +10699,10 @@ FUNCTION lantern_node_run
     addi    a4, s7, NodeEvent_result
     FORK_CALL node_attester_slashing
 99: LEAVE 192
+42: li      t0, LANTERN_NEED_JUSTIFIED_STATE
+    sd      t0, NodeEvent_result(s7)
+    li      a0, LANTERN_OK
+    LEAVE 192
 50: li      t1, NODE_WORK_SERVE
     bne     t0, t1, 60f
     ld      t0, NodeAction_arg(s3)          # SERVE: s10 1 for a blob method, 2 for a column method
@@ -12059,7 +12059,7 @@ LOCAL_FUNCTION node_run_vote
     addi    a1, s1, Node_config
     call    node_fork
     sd      a0, (L + 8)(sp)
-    beqz    s4, 4f
+    beqz    s4, 63f                         # no post-state of the justified root
     ld      a0, NODE_STATE_SLOT(s4)
     addi    a1, s1, Node_config
     call    node_fork
@@ -12078,6 +12078,10 @@ LOCAL_FUNCTION node_run_vote
     li      a0, LANTERN_OK
     j       9f
 62: li      t0, LANTERN_GOSSIP_IGNORE
+    sd      t0, NodeEvent_result(s7)
+    li      a0, LANTERN_OK
+    j       9f
+63: li      t0, LANTERN_NEED_JUSTIFIED_STATE
     sd      t0, NodeEvent_result(s7)
     li      a0, LANTERN_OK
     j       9f
