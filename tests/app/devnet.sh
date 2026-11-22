@@ -27,7 +27,7 @@
 # second client's geth (tests/kurtosis/main.star); after lantern follows, the client's finalized epoch must
 # reach 3 within SECONDS (the stake of keys 0 to 63 alone is half), and 4 or more of the client's
 # block headers must have a proposer index of 64 or more (blocks lantern produced). CLIENT: lighthouse,
-# prysm, teku, nimbus or lodestar. DIFF=1: 6-second slots; after lantern follows, once the client's
+# prysm, teku, nimbus or lodestar (CI runs the four whose validator clients take lantern's getSpec). DIFF=1: 6-second slots; after lantern follows, once the client's
 # finalized epoch is 2 or more and lantern's has reached it, tests/app/differential.py compares their
 # reads of the client's finalized block. SYNC=1: 6-second slots, lantern with --supernode; 600 s after
 # it starts, a geth and a lighthouse beacon node whose one boot node is lantern's multiaddr
