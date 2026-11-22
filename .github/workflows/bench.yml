@@ -1,5 +1,4 @@
-# The state benchmarks of bench/ (bench/README.md) on an ARM64 and an x86-64 runner, on a push
-# to a bench/ branch, with the fulu vectors of the ci workflow's cache.
+# Bench branch only: asm-crypto main against blst v0.3.13 on the ARM64 and x86-64 runners.
 name: bench
 
 on:
@@ -10,29 +9,28 @@ permissions:
   contents: read
 
 jobs:
-  state:
+  blst:
     strategy:
       fail-fast: false
       matrix:
         include:
           - { isa: arm64, runner: ubuntu-24.04-arm }
           - { isa: x86_64, runner: ubuntu-24.04 }
-    name: state (${{ matrix.isa }})
+    name: blst (${{ matrix.isa }})
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 300
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
-      - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
-        with:
-          path: vectors
-          key: vectors-fulu-${{ hashFiles('tests/generator/*') }}
-          enableCrossOsArchive: true
-          fail-on-cache-miss: true
-      - name: Build the image
-        run: docker build -q -t lantern-build -f platform/linux/Dockerfile platform/linux
-      - name: Run the benchmarks
+      - name: Build blst and asm-crypto, then compare
         run: |
-          for n in 20000 80000 1000000; do
-            echo "== $n validators"
-            VECTORS="$PWD/vectors" bench/run.sh ${{ matrix.isa }} "$n"
-          done
+          git clone -q --depth 1 --branch v0.3.13 https://github.com/supranational/blst "$RUNNER_TEMP/blst"
+          (cd "$RUNNER_TEMP/blst" && ./build.sh > /dev/null)
+          git clone -q https://github.com/bitminetech/asm-crypto "$RUNNER_TEMP/ac"
+          cd "$RUNNER_TEMP/ac" && git checkout -q 98ca227d7d0c1c0e5bd1bd0b0e8ad8c0d0b1a8e0 2>/dev/null || git checkout -q main
+          git log --oneline -1
+          docker build -q -t asm-crypto-build -f platform/linux/Dockerfile platform/linux > /dev/null
+          docker run --rm -v "$PWD:/src" asm-crypto-build platform/build-all.sh | tail -1
+          cd "$GITHUB_WORKSPACE"
+          lscpu | grep -i "model name\|^CPU(s)" || true
+          cc -O2 bench/blstcmp.c -I"$RUNNER_TEMP/blst/bindings" "$RUNNER_TEMP/blst/libblst.a" \
+            "$RUNNER_TEMP/ac/build/linux-${{ matrix.isa }}/libasm-crypto.a" -o blstcmp
+          ./blstcmp
