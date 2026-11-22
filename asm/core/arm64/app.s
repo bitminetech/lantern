@@ -2889,6 +2889,8 @@ LOCAL_FUNCTION app_actions
     b       8f
 7:  cmp     x9, #NODE_ACT_P2P_LIST
     b.ne    71f
+    add     x0, x20, #16                    /* debug only: a line per PUBLISHED */
+    bl      app_log_published
     ldr     x0, [x19, #APP_SHELL]           /* P2P_LIST: the shell requests of libp2p */
     add     x1, x20, #16
     ldr     x2, [x19, #APP_SHELL_EVENTS]
@@ -5317,6 +5319,38 @@ LOCAL_FUNCTION app_api_poll
 85: bl      app_api_flush
     LEAVE 64
 END_FUNCTION app_api_poll
+
+/* Debug only: DEBUG published <peers> id <the message-id's first 8 bytes>, for each LIBP2P_ACTION_PUBLISHED of the ByteList x0 of libp2p actions. */
+LOCAL_FUNCTION app_log_published
+    ENTER 16
+    ldp     x9, x10, [x0, #8]               /* offset, count */
+    add     x21, x0, x9
+    add     x22, x21, x10
+1:  cmp     x21, x22
+    b.hs    9f
+    ldp     x9, x10, [x21]                  /* size, kind */
+    cbz     x9, 9f
+    cmp     x10, #LIBP2P_ACTION_PUBLISHED
+    b.ne    2f
+    bl      app_line_start
+    ADDRESS x0, app_m_log_published
+    mov     x1, #app_m_log_published_len
+    bl      app_line_text
+    ldr     x0, [x21, #LIBP2P_ACT_PUB_PEERS]
+    bl      app_line_u64
+    ADDRESS x0, app_m_log_pub_id
+    mov     x1, #app_m_log_pub_id_len
+    bl      app_line_text
+    add     x0, x21, #LIBP2P_ACT_PUB_ID
+    mov     x1, #8
+    bl      app_line_hex
+    mov     x0, #APP_LOG_DEBUG
+    bl      app_line_end
+2:  ldr     x9, [x21]
+    add     x21, x21, x9
+    b       1b
+9:  LEAVE 16
+END_FUNCTION app_log_published
 
 /* L2: each event of the shell becomes a NODE_EV_P2P event of the next step, but those of the engine's connection. x20 the next event, x21 the end. Locals: L the header. */
 LOCAL_FUNCTION app_p2p_events

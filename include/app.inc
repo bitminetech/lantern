@@ -250,6 +250,12 @@ app_m_fork:
 app_m_head:
     .ascii ", head 0x"
 .set app_m_head_len, 9
+app_m_log_published:                        /* debug only */
+    .ascii "published "
+.set app_m_log_published_len, 10
+app_m_log_pub_id:
+    .ascii " id "
+.set app_m_log_pub_id_len, 4
 app_m_slot:
     .ascii "slot "
 .set app_m_slot_len, 5
