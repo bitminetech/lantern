@@ -5443,7 +5443,19 @@ LOCAL_FUNCTION app_loop
     mov     x12, #APP_WAIT_MS
     cmp     x11, x12
     csel    x11, x11, x12, lo
-    ldr     x9, [x19, #APP_EVENTS]          /* no wait while events wait for the next step */
+    ldr     x12, [x19, #APP_API_SLOTS]      /* an open Beacon API connection: at most APP_API_WAIT_MS */
+    ldr     x13, [x19, #(APP_OPTIONS + AppOptions_http_max_connections)]
+    cbz     x12, 43f
+41: cbz     x13, 43f
+    ldr     x14, [x12, #8]
+    cbnz    x14, 42f
+    add     x12, x12, #APP_API_SLOT
+    sub     x13, x13, #1
+    b       41b
+42: mov     x12, #APP_API_WAIT_MS
+    cmp     x11, x12
+    csel    x11, x11, x12, lo
+43: ldr     x9, [x19, #APP_EVENTS]          /* no wait while events wait for the next step */
     ldr     x9, [x9, #16]
     cmp     x9, #0
     csel    x11, xzr, x11, ne

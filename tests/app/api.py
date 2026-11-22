@@ -6,6 +6,9 @@ The binary listens on 127.0.0.1:PORT with --http-max-connections 2, on the netwo
 the file GENESIS (genesis.ssz: altair, 4096 validators at slot 0). The checks:
 - on one connection, two getNodeVersion requests in one write, then a getHealth: three responses,
   and the connection stays open;
+- on that connection, 50 getNodeVersion requests one after another, each sent once the one before
+  is answered: all within 3 s (the loop waits at most APP_API_WAIT_MS, 5 ms, while a Beacon API
+  connection is open; at APP_WAIT_MS, 100 ms, they would take 5 s or more);
 - a third connection, while two are open, closes with no bytes;
 - a request head of 16385 bytes: 431, and the connection closes;
 - DELETE on getHealth's path: 405 with Allow: GET;
@@ -158,6 +161,16 @@ def main():
         check("pipelined requests on one connection, kept open", ok, repr(got))
     except (EOFError, OSError) as e:
         check("pipelined requests on one connection, kept open", False, repr(e))
+    try:
+        start = time.monotonic()
+        ok = True
+        for _ in range(50):
+            a.sendall(request(b"GET", b"/eth/v1/node/version"))
+            ok = ok and ra.response()[2] == VERSION
+        took = time.monotonic() - start
+        check("50 requests one after another within 3 s", ok and took < 3.0, f"{took:.2f} s, answers {ok}")
+    except (EOFError, OSError) as e:
+        check("50 requests one after another within 3 s", False, repr(e))
 
     b = connect(port)
     rb = Reader(b)
