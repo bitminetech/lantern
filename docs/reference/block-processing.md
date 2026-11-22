@@ -1033,6 +1033,12 @@ lantern_is_valid_indexed_attestation(state, indexed_attestation, cache, scratch,
 - With a cache whose `count` is above the largest index: crypto_bls_fast_aggregate_verify_cached of the state's validators' keys at the attesting indices. It is an asm-crypto custom function, functionally equivalent to bls.FastAggregateVerify of those keys.
 - The indexed attestation itself is the `BlsIndexList` of that call: its `attesting_indices` sit at the list's offset and count.
 - With a cache whose `count` is at or below the largest index: as with no cache.
+- lantern_process_attestation, lantern_on_attestation and the gossip check of an aggregate's signature (networking.md) run it as an L0 form that also takes the attestation and the `CommitteeCache` its indexed attestation came from. With both caches, that form may take the keys' sum from the cache's key sums:
+- For each committee of the attestation, in order: the committee's `KeySum` plus the negated key of each member without its bit, when fewer members lack the bit than have it; else the key of each member with the bit. All by crypto_bls_g1_add, from the point at infinity, each key from its `PubkeyCache` entry.
+- Then crypto_bls_verify of crypto_bls_g1_compress of the sum, the signing root and the signature. bls.FastAggregateVerify is CoreVerify of point_to_pubkey of the keys' sum, and the order of the additions does not change the point.
+- A `KeySum` of status 0 is made at first use. Before, crypto_bls_fast_aggregate_verify_cached of the members whose entries do not hold their keys, with the signing root and signature, fills those entries; its result is not used.
+- It takes the key sums only when they save at least `KEYSUM_MIN_SAVED` additions: present - absent - 1 for each committee whose sum it takes. A first pass over the bits counts them.
+- The form verifies as above, with crypto_bls_fast_aggregate_verify_cached, when the key sums save fewer additions, the epoch has no entry, a sum has status 2, a key's entry does not hold the key, or the bits do not match the committees.
 
 ### Returns
 
@@ -1042,6 +1048,7 @@ lantern_is_valid_indexed_attestation(state, indexed_attestation, cache, scratch,
 ### Limits
 
 - Scratch: S(7): the public keys take 48 bytes each.
+- The L0 form: also 24 + 8 * MAX_VALIDATORS_PER_COMMITTEE bytes at the end of scratch for the members whose entries it fills.
 
 ## Function `lantern_get_committee_indices`
 
@@ -1254,7 +1261,7 @@ lantern_committee_cache_size(validators, size) -> status
 
 ### Function does
 
-- `COMMITTEE_CACHE_FIXED` + `COMMITTEE_CACHE_ENTRIES` * (`CommitteeEntry__mem` + 24 + 8 * `validators`) bytes.
+- `COMMITTEE_CACHE_FIXED` + `COMMITTEE_CACHE_ENTRIES` * (`CommitteeEntry__mem` + 24 + 8 * `validators` + `KEYSUM_BLOCK_BYTES`) bytes.
 
 ### ABI
 
@@ -1346,6 +1353,14 @@ The shuffled active validators of a few epochs, from states of one chain.
 | 8 | `validators` | u64 | The active validators an entry holds at most |
 | 16 | `next` | u64 | The entry the next new shuffling takes |
 | 24 | `entries` | `CommitteeEntry` × `COMMITTEE_CACHE_ENTRIES` | Each followed by its list: an `IndexList` of 24 + 8 * `validators` bytes |
+| after the entries | `key_sums` | `KEYSUM_BLOCK_BYTES` × `COMMITTEE_CACHE_ENTRIES` | Block i: the `KeySum` of each committee of entry i |
+
+### `KeySum`
+
+| Offset | Field | Type | Meaning |
+|---|---|---|---|
+| 0 | `status` | u64 | 0 not made; 1 made; 2 it cannot be made |
+| 8 | `point` | asm-crypto `G1Point` | With status 1: the sum of the members' public keys |
 
 ### `CommitteeEntry`
 
@@ -1363,6 +1378,11 @@ The shuffled active validators of a few epochs, from states of one chain.
 
 - `CommitteeEntry__mem` (128) bytes, then its list.
 - The caller keeps the states of one chain on a cache: states that only the state transition changed, from one anchor.
+- A block holds `SLOTS_PER_EPOCH` * `MAX_COMMITTEES_PER_SLOT` sums of `KeySum__mem` (152) bytes. Sum k is that of committee k of the epoch: index (slot % SLOTS_PER_EPOCH) * committees_per_slot + committee index, as in compute_committee.
+- A new shuffling in an entry sets each `status` of its block to 0.
+- Status 1: the point is crypto_bls_g1_add of the members' keys, in member order, from the point at infinity. Each key is the point of its `PubkeyCache` entry, of status 1 and of the 48 bytes of the validator's pubkey.
+- Status 2: a member's index is at or past the `PubkeyCache` count, or its entry has status 2 and the 48 bytes of its pubkey.
+- A sum holds for each state that finds the entry: the members are active in the entry's epoch, so each was in the registry at the decision root, and a validator's pubkey never changes.
 
 ## Type `ExpectedWithdrawals`
 

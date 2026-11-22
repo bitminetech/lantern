@@ -174,6 +174,8 @@ SPEC_FUNCTION committee_cache_size
     ld      t0, 0(a0)
     slli    t0, t0, 3
     addi    t0, t0, CommitteeEntry__mem + LIST_FIXED
+    li      t1, KEYSUM_BLOCK_BYTES          # and the entry's block of key sums
+    add     t0, t0, t1
     li      t1, COMMITTEE_CACHE_ENTRIES
     mul     t0, t0, t1
     addi    t0, t0, COMMITTEE_CACHE_FIXED
@@ -188,7 +190,9 @@ SPEC_FUNCTION committee_cache_init
     slli    t1, t0, 3
     addi    t1, t1, CommitteeEntry__mem + LIST_FIXED   # an entry and its list
     li      t2, COMMITTEE_CACHE_ENTRIES
-    mul     t3, t1, t2
+    li      t3, KEYSUM_BLOCK_BYTES          # and its block of key sums
+    add     t3, t1, t3
+    mul     t3, t3, t2
     addi    t3, t3, COMMITTEE_CACHE_FIXED
     ld      t4, CommitteeCache_size(a1)
     bltu    t4, t3, 9f
@@ -395,6 +399,18 @@ SPEC_FUNCTION get_beacon_committee
     mul     t4, t2, t3
     add     s10, s9, t4
     addi    s10, s10, CommitteeCache_entries
+    li      t4, COMMITTEE_CACHE_ENTRIES     # its block of key sums: each status 0
+    mul     t4, t4, t3
+    add     t4, t4, s9
+    addi    t4, t4, CommitteeCache_entries
+    li      t5, KEYSUM_BLOCK_BYTES
+    mul     t5, t5, t2
+    add     t4, t4, t5
+    li      t5, SLOTS_PER_EPOCH * MAX_COMMITTEES_PER_SLOT
+13: sd      zero, KeySum_status(t4)
+    addi    t4, t4, KeySum__mem
+    addi    t5, t5, -1
+    bnez    t5, 13b
     addi    t2, t2, 1
     li      t4, COMMITTEE_CACHE_ENTRIES
     bltu    t2, t4, 10f
@@ -738,8 +754,23 @@ SPEC_END get_indexed_attestation
 .if IndexedAttestation_attesting_indices != CRYPTO_BLS_LIST_OFFSET
 .error "an IndexedAttestation must read as a BlsIndexList of its attesting indices"
 .endif
-SPEC_FUNCTION is_valid_indexed_attestation
-    ENTER 160
+SPEC_LEAF is_valid_indexed_attestation
+    li      a5, 0
+    li      a6, 0
+    j       indexed_attestation_valid
+SPEC_END is_valid_indexed_attestation
+
+/*
+ * L0: is_valid_indexed_attestation with a5 the attestation that the indexed attestation a1
+ * is get_indexed_attestation of, with the CommitteeCache a6 (each 0 or not); with both and a
+ * PubkeyCache, the keys' sum may come from the cache's key sums (block-processing.md).
+ * Locals as is_valid_indexed_attestation's, then L+96 the attestation, L+104 the committee
+ * cache, L+112 the keys' sum (G1Point), L+256 its compressed form (48).
+ */
+LOCAL_FUNCTION indexed_attestation_valid
+    ENTER 304
+    sd      a5, (L + 96)(sp)
+    sd      a6, (L + 104)(sp)
     mv      s1, a0
     mv      s2, a1
     mv      s9, a2
@@ -827,14 +858,38 @@ SPEC_FUNCTION is_valid_indexed_attestation
     mv      a3, s3
     mv      a4, s4
     CALL_GLOBAL crypto_bls_fast_aggregate_verify
-7:  LEAVE 160
+7:  LEAVE 304
 8:  li      a0, LANTERN_OK
-    LEAVE 160
+    LEAVE 304
 6:  li      a0, LANTERN_INVALID_VALIDATOR_INDEX
-    LEAVE 160
+    LEAVE 304
 9:  li      a0, LANTERN_BUFFER_TOO_SMALL
-    LEAVE 160
-40: PART    a0, t0, s1, BeaconState_validators      # the keys: the validators' pubkeys
+    LEAVE 304
+40: ld      t0, (L + 96)(sp)                # the keys' sum from the committees' key sums
+    beqz    t0, 41f
+    ld      t1, (L + 104)(sp)
+    beqz    t1, 41f
+    mv      a0, s1
+    mv      a1, t0
+    mv      a2, t1
+    mv      a3, s9
+    addi    a4, sp, (L + 112)
+    addi    a5, sp, (L + 40)
+    addi    a6, s2, IndexedAttestation_signature
+    mv      a7, s3
+    call    attestation_key_sum
+    beqz    a0, 41f
+    addi    a0, sp, (L + 112)               # bls.FastAggregateVerify: CoreVerify of point_to_pubkey(sum)
+    addi    a1, sp, (L + 256)
+    CALL_GLOBAL crypto_bls_g1_compress
+    addi    a0, sp, (L + 256)
+    addi    a1, sp, (L + 40)
+    addi    a2, s2, IndexedAttestation_signature
+    mv      a3, s3
+    mv      a4, s4
+    CALL_GLOBAL crypto_bls_verify
+    LEAVE 304
+41: PART    a0, t0, s1, BeaconState_validators      # the keys: the validators' pubkeys
     addi    a0, a0, Validator_pubkey
     mv      a1, s2                          # the indices: the indexed attestation, as a BlsIndexList
     mv      a2, s9
@@ -843,8 +898,423 @@ SPEC_FUNCTION is_valid_indexed_attestation
     mv      a5, s3
     mv      a6, s4
     CALL_GLOBAL crypto_bls_fast_aggregate_verify_cached
-    LEAVE 160
-SPEC_END is_valid_indexed_attestation
+    LEAVE 304
+END_FUNCTION indexed_attestation_valid
+
+# 1 in Montgomery form: 2^384 mod p of BLS12-381, the z of an affine point as a G1Point.
+    RODATA
+    .p2align 3
+keysum_one:
+    .quad 0x760900000002fffd, 0xebf4000bc40c0002, 0x5f48985753c758ba
+    .quad 0x77ce585370525745, 0x5c071a97a256ec6d, 0x15f65ec3fa80e493
+    .text
+
+/* The 144 bytes at soff(sbase) to doff(dbase). Uses t5, t6. */
+.macro COPY144 doff, dbase, soff, sbase
+    .irp o, 0, 16, 32, 48, 64, 80, 96, 112, 128
+    ld      t5, (\soff + \o)(\sbase)
+    ld      t6, (\soff + \o + 8)(\sbase)
+    sd      t5, (\doff + \o)(\dbase)
+    sd      t6, (\doff + \o + 8)(\dbase)
+    .endr
+.endm
+
+/* The point of PubkeyCache entry e as a G1Point at doff(dbase): its affine x and y, and z = 1. Uses t4-t6. */
+.macro ENTRY_POINT doff, dbase, e
+    .irp o, 0, 8, 16, 24, 32, 40, 48, 56, 64, 72, 80, 88
+    ld      t5, (CRYPTO_BLS_ENTRY_POINT + \o)(\e)
+    sd      t5, (\doff + \o)(\dbase)
+    .endr
+    ADDRESS t4, keysum_one
+    .irp o, 0, 8, 16, 24, 32, 40
+    ld      t5, \o(t4)
+    sd      t5, (\doff + 96 + \o)(\dbase)
+    .endr
+.endm
+
+/* Bit b of the bits at base into dst: 0 or 1. Uses tmp. */
+.macro BIT dst, base, b, tmp
+    srli    \dst, \b, 3
+    add     \dst, \dst, \base
+    lbu     \dst, 0(\dst)
+    andi    \tmp, \b, 7
+    srl     \dst, \dst, \tmp
+    andi    \dst, \dst, 1
+.endm
+
+/*
+ * L0: a0 = the members of the a1 indices at a0 whose PubkeyCache a3 entries do not hold their
+ * keys (state validators at a2), each also written at a4 when a4 is not 0; or -1 when a member
+ * is at or past the cache's count, or its entry has status 2 and its key. A leaf.
+ */
+LOCAL_FUNCTION key_sum_scan
+    UNWIND_END_PROLOGUE
+    ld      a5, CRYPTO_BLS_CACHE_COUNT(a3)
+    ld      a6, CRYPTO_BLS_CACHE_OFFSET(a3)
+    add     a6, a3, a6
+    li      a7, 0
+    li      t6, CRYPTO_BLS_ENTRY_BYTES
+1:  beqz    a1, 5f
+    ld      t0, 0(a0)
+    addi    a0, a0, 8
+    bgeu    t0, a5, 6f
+    mul     t1, t0, t6                      # the entry
+    add     t1, t1, a6
+    slli    t2, t0, 7                       # the validator
+    add     t2, t2, a2
+    ld      t3, CRYPTO_BLS_ENTRY_STATUS(t1)
+    beqz    t3, 3f
+    .irp o, 0, 8, 16, 24, 32, 40
+    ld      t4, (CRYPTO_BLS_ENTRY_KEY + \o)(t1)
+    ld      t5, (Validator_pubkey + \o)(t2)
+    bne     t4, t5, 3f
+    .endr
+    li      t4, 1
+    bne     t3, t4, 6f
+    j       4f
+3:  addi    a7, a7, 1                       # not its key
+    beqz    a4, 4f
+    sd      t0, 0(a4)
+    addi    a4, a4, 8
+4:  addi    a1, a1, -1
+    j       1b
+5:  mv      a0, a7
+    ret
+6:  li      a0, -1
+    ret
+END_FUNCTION key_sum_scan
+
+/*
+ * L0: makes the KeySum a0 of the a2 members at a1 (state validators at a3, PubkeyCache a4).
+ * Members whose entries do not hold their keys: crypto_bls_fast_aggregate_verify_cached of
+ * them first, with message a5, signature a6 and scratch a7 (its last bytes take their list),
+ * to fill their entries. a0 = 1 when the KeySum has status 1, 2 when it has status 2, 0 when
+ * a callee fails. s1 KeySum, s2 members, s3 count, s4 validators, s5 cache, s6 message,
+ * s7 signature, s8 scratch, s9 list, s10 i. Locals: L the scratch size, L+8 valid,
+ * L+48 the sum, L+192 the next, L+336 a key.
+ */
+LOCAL_FUNCTION key_sum_make
+    ENTER 480
+    mv      s1, a0
+    mv      s2, a1
+    mv      s3, a2
+    mv      s4, a3
+    mv      s5, a4
+    mv      s6, a5
+    mv      s7, a6
+    mv      s8, a7
+    mv      a0, s2
+    mv      a1, s3
+    mv      a2, s4
+    mv      a3, s5
+    li      a4, 0
+    call    key_sum_scan
+    li      t0, -1
+    beq     a0, t0, 8f
+    beqz    a0, 3f
+    ld      t1, 0(s8)                       # the list of those members at the end of scratch
+    sd      t1, L(sp)
+    slli    t2, a0, 3
+    addi    t2, t2, LIST_FIXED
+    sub     t3, t1, t2
+    add     s9, s8, t3
+    sd      t3, 0(s8)
+    sd      t2, LIST_SIZE(s9)
+    li      t4, LIST_FIXED
+    sd      t4, LIST_OFFSET(s9)
+    sd      a0, LIST_COUNT(s9)
+    mv      a0, s2
+    mv      a1, s3
+    mv      a2, s4
+    mv      a3, s5
+    addi    a4, s9, LIST_FIXED
+    call    key_sum_scan
+    addi    a0, s4, Validator_pubkey
+    mv      a1, s9
+    mv      a2, s5
+    mv      a3, s6
+    mv      a4, s7
+    mv      a5, s8
+    addi    a6, sp, (L + 8)
+    CALL_GLOBAL crypto_bls_fast_aggregate_verify_cached
+    ld      t1, L(sp)
+    sd      t1, 0(s8)
+    bnez    a0, 9f
+    mv      a0, s2
+    mv      a1, s3
+    mv      a2, s4
+    mv      a3, s5
+    li      a4, 0
+    call    key_sum_scan
+    bnez    a0, 8f                          # an entry still without its key: never tried again
+3:  .irp o, 0, 8, 16, 24, 32, 40, 48, 56, 64, 72, 80, 88, 96, 104, 112, 120, 128, 136
+    sd      zero, (L + 48 + \o)(sp)         # the point at infinity
+    .endr
+    li      s10, 0
+4:  bgeu    s10, s3, 5f
+    slli    t0, s10, 3
+    add     t0, t0, s2
+    ld      t0, 0(t0)
+    li      t1, CRYPTO_BLS_ENTRY_BYTES
+    mul     t1, t0, t1
+    ld      t2, CRYPTO_BLS_CACHE_OFFSET(s5)
+    add     t1, t1, t2
+    add     t1, t1, s5
+    ENTRY_POINT (L + 336), sp, t1
+    addi    a0, sp, (L + 48)
+    addi    a1, sp, (L + 336)
+    addi    a2, sp, (L + 192)
+    CALL_GLOBAL crypto_bls_g1_add
+    COPY144 (L + 48), sp, (L + 192), sp
+    addi    s10, s10, 1
+    j       4b
+5:  COPY144 KeySum_point, s1, (L + 48), sp
+    li      t0, 1
+    sd      t0, KeySum_status(s1)
+    li      a0, 1
+    LEAVE 480
+8:  li      t0, 2
+    sd      t0, KeySum_status(s1)
+    li      a0, 2
+    LEAVE 480
+9:  li      a0, 0
+    LEAVE 480
+END_FUNCTION key_sum_make
+
+/* Within attestation_key_sum: the key of member s10 at L+528 when its entry holds it, else to fail. */
+.macro MEMBER_POINT fail
+    ld      t0, (L + 72)(sp)
+    slli    t1, s10, 3
+    add     t0, t0, t1
+    ld      t0, 0(t0)                       # the validator index
+    ld      t1, CRYPTO_BLS_CACHE_COUNT(s3)
+    bgeu    t0, t1, \fail
+    li      t1, CRYPTO_BLS_ENTRY_BYTES
+    mul     t1, t0, t1
+    ld      t2, CRYPTO_BLS_CACHE_OFFSET(s3)
+    add     t1, t1, t2
+    add     t1, t1, s3
+    ld      t2, CRYPTO_BLS_ENTRY_STATUS(t1)
+    li      t3, 1
+    bne     t2, t3, \fail
+    slli    t0, t0, 7
+    add     t0, t0, s4
+    .irp o, 0, 8, 16, 24, 32, 40
+    ld      t2, (CRYPTO_BLS_ENTRY_KEY + \o)(t1)
+    ld      t3, (Validator_pubkey + \o)(t0)
+    bne     t2, t3, \fail
+    .endr
+    ENTRY_POINT (L + 528), sp, t1
+.endm
+
+/*
+ * L0: the sum of the keys of the attesting validators of attestation a1 (state a0), from the
+ * key sums of CommitteeCache a2 and the entries of PubkeyCache a3, at a4 (G1Point); a5 the
+ * message, a6 the signature, a7 the scratch, for key_sum_make. a0 = 1 when a4 holds the sum,
+ * else 0. s1 state, s2 attestation, s3 PubkeyCache, s4 validators, s5 the entry, s6 committees
+ * of the epoch, s7 its active validators, s8 bits, s9 bit count, s10 member i.
+ * Locals: L epoch, +8 committee index, +16 committee offset, +24 the block of key sums,
+ * +32 committees per slot, +40 out, +48 message, +56 signature, +64 scratch, +72 members,
+ * +80 member count, +88 bits set, +96 the KeySum, +104 the committee cache, +112 the entry's
+ * key (96), +240 the sum, +384 the next, +528 a key, +672 its negation, +816 the pass: 0 counts
+ * the additions the key sums save, 1 adds; +824 that count.
+ */
+LOCAL_FUNCTION attestation_key_sum
+    ENTER 832
+    mv      s1, a0
+    mv      s2, a1
+    sd      a2, (L + 104)(sp)
+    mv      s3, a3
+    sd      a4, (L + 40)(sp)
+    sd      a5, (L + 48)(sp)
+    sd      a6, (L + 56)(sp)
+    sd      a7, (L + 64)(sp)
+    ld      t0, (Attestation_data + AttestationData_slot)(s2)
+    srli    t0, t0, LOG2_SLOTS_PER_EPOCH
+    sd      t0, L(sp)
+    mv      a0, s1                          # the entry of the epoch
+    mv      a1, t0
+    addi    a2, sp, (L + 112)
+    call    committee_key
+    bnez    a0, 90f
+    ld      a0, (L + 104)(sp)
+    ld      a1, L(sp)
+    addi    a2, sp, (L + 112)
+    call    committee_find
+    beqz    a0, 90f
+    mv      s5, a0
+    ld      t0, (L + 104)(sp)               # its block of key sums
+    ld      t1, CommitteeCache_validators(t0)
+    slli    t1, t1, 3
+    addi    t1, t1, CommitteeEntry__mem + LIST_FIXED
+    addi    t2, t0, CommitteeCache_entries
+    sub     t3, s5, t2
+    divu    t3, t3, t1
+    li      t4, COMMITTEE_CACHE_ENTRIES
+    mul     t4, t4, t1
+    add     t2, t2, t4
+    li      t4, KEYSUM_BLOCK_BYTES
+    mul     t3, t3, t4
+    add     t2, t2, t3
+    sd      t2, (L + 24)(sp)
+    ld      s7, CommitteeEntry_count(s5)
+    srli    t0, s7, LOG2_SLOTS_PER_EPOCH    # get_committee_count_per_slot of the entry's count
+    li      t1, TARGET_COMMITTEE_SIZE
+    divu    t0, t0, t1
+    li      t1, MAX_COMMITTEES_PER_SLOT
+    bltu    t0, t1, 3f
+    mv      t0, t1
+3:  bnez    t0, 4f
+    li      t0, 1
+4:  sd      t0, (L + 32)(sp)
+    slli    s6, t0, LOG2_SLOTS_PER_EPOCH
+    PART    s4, t0, s1, BeaconState_validators
+    PART    s8, s9, s2, Attestation_aggregation_bits
+    .irp o, 0, 8, 16, 24, 32, 40, 48, 56, 64, 72, 80, 88, 96, 104, 112, 120, 128, 136
+    sd      zero, (L + 240 + \o)(sp)        # the point at infinity
+    .endr
+    sd      zero, (L + 816)(sp)
+    sd      zero, (L + 824)(sp)
+5:  sd      zero, (L + 16)(sp)
+.if FORK >= FORK_ELECTRA
+    sd      zero, (L + 8)(sp)               # each committee of committee_bits, in order
+1:  ld      t0, (L + 8)(sp)
+    li      t1, MAX_COMMITTEES_PER_SLOT
+    bgeu    t0, t1, 80f
+    addi    t2, s2, Attestation_committee_bits
+    BIT     t3, t2, t0, t4
+    bnez    t3, 10f
+2:  ld      t0, (L + 8)(sp)
+    addi    t0, t0, 1
+    sd      t0, (L + 8)(sp)
+    j       1b
+.else
+    ld      t0, (Attestation_data + AttestationData_index)(s2)   # the committee of data.index
+    sd      t0, (L + 8)(sp)
+.endif
+10: ld      t0, (L + 8)(sp)                 # the committee: its slice of the entry and its bits
+    ld      t1, (L + 32)(sp)
+    bgeu    t0, t1, 90f
+    ld      t2, (Attestation_data + AttestationData_slot)(s2)
+    andi    t2, t2, (SLOTS_PER_EPOCH - 1)
+    mul     t2, t2, t1
+    add     t2, t2, t0                      # k
+    li      t3, KeySum__mem
+    mul     t3, t2, t3
+    ld      t4, (L + 24)(sp)
+    add     t3, t3, t4
+    sd      t3, (L + 96)(sp)
+    mul     t3, s7, t2                      # start
+    divu    t3, t3, s6
+    addi    t4, t2, 1                       # end
+    mul     t4, s7, t4
+    divu    t4, t4, s6
+    bgtu    t4, s7, 90f
+    sub     t5, t4, t3
+    sd      t5, (L + 80)(sp)
+    slli    t3, t3, 3
+    add     t3, t3, s5
+    addi    t3, t3, CommitteeEntry__mem + LIST_FIXED
+    sd      t3, (L + 72)(sp)
+    ld      t0, (L + 16)(sp)
+    add     t1, t0, t5
+    bgtu    t1, s9, 90f
+    li      t2, 0                           # members with the bit
+11: bgeu    t0, t1, 12f
+    BIT     t3, s8, t0, t4
+    add     t2, t2, t3
+    addi    t0, t0, 1
+    j       11b
+12: sd      t2, (L + 88)(sp)
+    sub     t3, t5, t2
+    ld      t0, (L + 816)(sp)
+    bnez    t0, 13f
+    bgeu    t3, t2, 40f                     # pass 0: present - absent - 1 saved with the KeySum
+    sub     t0, t2, t3
+    addi    t0, t0, -1
+    ld      t1, (L + 824)(sp)
+    add     t1, t1, t0
+    sd      t1, (L + 824)(sp)
+    j       40f
+13: bgeu    t3, t2, 30f
+    ld      a0, (L + 96)(sp)                # fewer without the bit: the KeySum, less their keys
+    ld      t0, KeySum_status(a0)
+    li      t1, 1
+    beq     t0, t1, 20f
+    bnez    t0, 90f
+    ld      a1, (L + 72)(sp)
+    ld      a2, (L + 80)(sp)
+    mv      a3, s4
+    mv      a4, s3
+    ld      a5, (L + 48)(sp)
+    ld      a6, (L + 56)(sp)
+    ld      a7, (L + 64)(sp)
+    call    key_sum_make
+    li      t0, 1
+    bne     a0, t0, 90f
+20: addi    a0, sp, (L + 240)
+    ld      a1, (L + 96)(sp)
+    addi    a1, a1, KeySum_point
+    addi    a2, sp, (L + 384)
+    CALL_GLOBAL crypto_bls_g1_add
+    COPY144 (L + 240), sp, (L + 384), sp
+    li      s10, 0
+21: ld      t0, (L + 80)(sp)
+    bgeu    s10, t0, 40f
+    ld      t0, (L + 16)(sp)
+    add     t0, t0, s10
+    BIT     t1, s8, t0, t2
+    bnez    t1, 22f
+    MEMBER_POINT 90f
+    addi    a0, sp, (L + 528)
+    addi    a1, sp, (L + 672)
+    CALL_GLOBAL crypto_bls_g1_neg
+    addi    a0, sp, (L + 240)
+    addi    a1, sp, (L + 672)
+    addi    a2, sp, (L + 384)
+    CALL_GLOBAL crypto_bls_g1_add
+    COPY144 (L + 240), sp, (L + 384), sp
+22: addi    s10, s10, 1
+    j       21b
+30: li      s10, 0                          # else the keys of the members with the bit
+31: ld      t0, (L + 80)(sp)
+    bgeu    s10, t0, 40f
+    ld      t0, (L + 16)(sp)
+    add     t0, t0, s10
+    BIT     t1, s8, t0, t2
+    beqz    t1, 32f
+    MEMBER_POINT 90f
+    addi    a0, sp, (L + 240)
+    addi    a1, sp, (L + 528)
+    addi    a2, sp, (L + 384)
+    CALL_GLOBAL crypto_bls_g1_add
+    COPY144 (L + 240), sp, (L + 384), sp
+32: addi    s10, s10, 1
+    j       31b
+40: ld      t0, (L + 16)(sp)                # committee_offset += len(committee)
+    ld      t1, (L + 80)(sp)
+    add     t0, t0, t1
+    sd      t0, (L + 16)(sp)
+.if FORK >= FORK_ELECTRA
+    j       2b
+.endif
+80: ld      t0, (L + 16)(sp)                # the bits: those of the committees, no more
+    bne     t0, s9, 90f
+    ld      t0, (L + 816)(sp)
+    bnez    t0, 81f
+    ld      t0, (L + 824)(sp)               # pass 0 done: pass 1 when the key sums save enough
+    li      t1, KEYSUM_MIN_SAVED
+    bltu    t0, t1, 90f
+    li      t0, 1
+    sd      t0, (L + 816)(sp)
+    j       5b
+81: ld      t0, (L + 40)(sp)
+    COPY144 0, t0, (L + 240), sp
+    li      a0, 1
+    LEAVE 832
+90: li      a0, 0
+    LEAVE 832
+END_FUNCTION attestation_key_sum
 
 .if FORK >= FORK_ALTAIR
 /*
@@ -1315,7 +1785,9 @@ LOCAL_FUNCTION attestation_memo
     mv      a3, s4
     addi    a4, sp, (L + 40)
     ld      a2, CONFIG_PUBKEY_CACHE(s3)
-    call    lantern_is_valid_indexed_attestation
+    mv      a5, s2
+    ld      a6, CONFIG_COMMITTEE_CACHE(s3)
+    call    indexed_attestation_valid
     CHECK_STATUS s5, 7f, 8f
     ld      t0, (L + 40)(sp)
     li      a0, LANTERN_INVALID_ATTESTATION
