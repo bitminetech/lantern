@@ -1,5 +1,5 @@
-# The state benchmarks of bench/ (bench/README.md) on an ARM64 runner, on a push to a bench/
-# branch, with the fulu vectors of the ci workflow's cache.
+# The state benchmarks of bench/ (bench/README.md) on an ARM64 and an x86-64 runner, on a push
+# to a bench/ branch, with the fulu vectors of the ci workflow's cache.
 name: bench
 
 on:
@@ -11,7 +11,14 @@ permissions:
 
 jobs:
   state:
-    runs-on: ubuntu-24.04-arm
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { isa: arm64, runner: ubuntu-24.04-arm }
+          - { isa: x86_64, runner: ubuntu-24.04 }
+    name: state (${{ matrix.isa }})
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 300
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
@@ -27,5 +34,5 @@ jobs:
         run: |
           for n in 20000 80000 1000000; do
             echo "== $n validators"
-            VECTORS="$PWD/vectors" bench/run.sh arm64 "$n"
+            VECTORS="$PWD/vectors" bench/run.sh ${{ matrix.isa }} "$n"
           done
