@@ -1134,7 +1134,9 @@ SPEC_FUNCTION on_attestation
     mov     %r14, %rcx
     lea     L(%rsp), %r8
     mov     (Store_config + CONFIG_PUBKEY_CACHE)(%rbx), %rdx
-    call    lantern_is_valid_indexed_attestation
+    mov     %rbp, %r9                       # with the attestation and its CommitteeCache: key sums
+    mov     (Store_config + CONFIG_COMMITTEE_CACHE)(%rbx), %r10
+    call    indexed_attestation_valid
     CHECK_STATUS %r15, 7f, 8f
     mov     $LANTERN_INVALID_ATTESTATION, %eax
     cmpq    $0, L(%rsp)

@@ -1113,7 +1113,9 @@ SPEC_FUNCTION on_attestation
     mov     x3, x23
     add     x4, sp, #L
     ldr     x2, [x19, #(Store_config + CONFIG_PUBKEY_CACHE)]
-    bl      lantern_is_valid_indexed_attestation
+    mov     x5, x20                         /* with the attestation and its CommitteeCache: key sums */
+    ldr     x6, [x19, #(Store_config + CONFIG_COMMITTEE_CACHE)]
+    bl      indexed_attestation_valid
     CHECK_STATUS x24, 7f, 8f
     ldr     x9, [sp, #L]
     mov     x0, #LANTERN_INVALID_ATTESTATION

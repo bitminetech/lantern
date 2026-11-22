@@ -1146,7 +1146,9 @@ SPEC_FUNCTION on_attestation
     mv      a3, s5
     addi    a4, sp, L
     ld      a2, (Store_config + CONFIG_PUBKEY_CACHE)(s1)
-    call    lantern_is_valid_indexed_attestation
+    mv      a5, s2                          # with the attestation and its CommitteeCache: key sums
+    ld      a6, (Store_config + CONFIG_COMMITTEE_CACHE)(s1)
+    call    indexed_attestation_valid
     CHECK_STATUS s6, 7f, 8f
     ld      t0, L(sp)
     li      a0, LANTERN_INVALID_ATTESTATION

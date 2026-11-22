@@ -177,6 +177,15 @@
 .set CommitteeEntry_decision_root, 56
 .set CommitteeEntry_genesis_validators_root, 88
 .set CommitteeEntry__mem, 128
+.set KeySum_status, 0                   /* a KeySum of a CommitteeCache (block-processing.md) */
+.set KeySum_point, 8
+.set KeySum__mem, 152
+.set KEYSUM_BLOCK_BYTES, SLOTS_PER_EPOCH * MAX_COMMITTEES_PER_SLOT * KeySum__mem
+.ifdef PRESET_MINIMAL                    /* additions the key sums must save before they are used */
+.set KEYSUM_MIN_SAVED, 0                /* minimal: always, so the test vectors run every branch */
+.else
+.set KEYSUM_MIN_SAVED, 128              /* the summed key's check costs about as many additions */
+.endif
 
 /* StateCache and CacheTree (docs/reference/state.md). */
 .set StateCache_size, 0

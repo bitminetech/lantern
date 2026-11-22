@@ -1336,7 +1336,9 @@ SPEC_FUNCTION validate_beacon_aggregate_and_proof_gossip
     mv      a3, s6
     addi    a4, sp, L + 88
     ld      a2, (Store_config + CONFIG_PUBKEY_CACHE)(s2)
-    call    lantern_is_valid_indexed_attestation
+    mv      a5, s8                          # with the aggregate and its CommitteeCache: key sums
+    ld      a6, (Store_config + CONFIG_COMMITTEE_CACHE)(s2)
+    call    indexed_attestation_valid
     CHECK_STATUS s7, 7f, 8f
     ld      t0, (L + 88)(sp)
     beqz    t0, 5f

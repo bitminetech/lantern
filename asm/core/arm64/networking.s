@@ -1312,7 +1312,9 @@ SPEC_FUNCTION validate_beacon_aggregate_and_proof_gossip
     mov     x3, x24
     add     x4, sp, #(L + 88)
     ldr     x2, [x20, #(Store_config + CONFIG_PUBKEY_CACHE)]
-    bl      lantern_is_valid_indexed_attestation
+    mov     x5, x26                         /* with the aggregate and its CommitteeCache: key sums */
+    ldr     x6, [x20, #(Store_config + CONFIG_COMMITTEE_CACHE)]
+    bl      indexed_attestation_valid
     CHECK_STATUS x25, 7f, 8f
     ldr     x9, [sp, #(L + 88)]
     cbz     x9, 5f

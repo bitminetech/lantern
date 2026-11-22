@@ -165,6 +165,8 @@ SPEC_FUNCTION committee_cache_size
     ldr     x9, [x0]
     lsl     x9, x9, #3
     add     x9, x9, #(CommitteeEntry__mem + LIST_FIXED)
+    MOVQ    x10, KEYSUM_BLOCK_BYTES         /* and the entry's block of key sums */
+    add     x9, x9, x10
     mov     x10, #COMMITTEE_CACHE_ENTRIES
     mul     x9, x9, x10
     add     x9, x9, #COMMITTEE_CACHE_FIXED
@@ -178,8 +180,10 @@ SPEC_FUNCTION committee_cache_init
     ldr     x9, [x0]
     lsl     x10, x9, #3
     add     x10, x10, #(CommitteeEntry__mem + LIST_FIXED)   /* an entry and its list */
-    mov     x11, #COMMITTEE_CACHE_ENTRIES
-    mul     x11, x10, x11
+    MOVQ    x11, KEYSUM_BLOCK_BYTES         /* and its block of key sums */
+    add     x11, x10, x11
+    mov     x13, #COMMITTEE_CACHE_ENTRIES
+    mul     x11, x11, x13
     add     x11, x11, #COMMITTEE_CACHE_FIXED
     ldr     x12, [x1, #CommitteeCache_size]
     cmp     x12, x11
@@ -389,6 +393,17 @@ SPEC_FUNCTION get_beacon_committee
     add     x12, x12, #(CommitteeEntry__mem + LIST_FIXED)
     madd    x28, x11, x12, x27
     add     x28, x28, #CommitteeCache_entries
+    mov     x13, #COMMITTEE_CACHE_ENTRIES   /* its block of key sums: each status 0 */
+    mul     x13, x13, x12
+    add     x13, x13, x27
+    add     x13, x13, #CommitteeCache_entries
+    MOVQ    x14, KEYSUM_BLOCK_BYTES
+    madd    x13, x11, x14, x13
+    MOVQ    x14, SLOTS_PER_EPOCH * MAX_COMMITTEES_PER_SLOT
+13: str     xzr, [x13, #KeySum_status]
+    add     x13, x13, #KeySum__mem
+    subs    x14, x14, #1
+    b.ne    13b
     add     x11, x11, #1
     cmp     x11, #COMMITTEE_CACHE_ENTRIES
     csel    x11, x11, xzr, lo
@@ -728,13 +743,27 @@ SPEC_END get_indexed_attestation
 .if IndexedAttestation_attesting_indices != CRYPTO_BLS_LIST_OFFSET
 .error "an IndexedAttestation must read as a BlsIndexList of its attesting indices"
 .endif
-SPEC_FUNCTION is_valid_indexed_attestation
-    ENTER 160
+SPEC_LEAF is_valid_indexed_attestation
+    mov     x5, #0
+    mov     x6, #0
+    b       indexed_attestation_valid
+SPEC_END is_valid_indexed_attestation
+
+/*
+ * L0: is_valid_indexed_attestation with x5 the attestation that the indexed attestation x1
+ * is get_indexed_attestation of, with the CommitteeCache x6 (each 0 or not); with both and a
+ * PubkeyCache, the keys' sum may come from the cache's key sums (block-processing.md).
+ * Locals as is_valid_indexed_attestation's, then L+96 the attestation, L+104 the committee
+ * cache, L+112 the keys' sum (G1Point), L+256 its compressed form (48).
+ */
+LOCAL_FUNCTION indexed_attestation_valid
+    ENTER 304
     mov     x19, x0
     mov     x20, x1
     mov     x27, x2
     mov     x21, x3
     mov     x22, x4
+    stp     x5, x6, [sp, #(L + 96)]
     str     xzr, [x22]
     PART    x25, x26, x20, IndexedAttestation_attesting_indices
     cbz     x26, 8f                         /* len(indices) == 0: False */
@@ -819,14 +848,37 @@ SPEC_FUNCTION is_valid_indexed_attestation
     mov     x3, x21
     mov     x4, x22
     CALL_GLOBAL crypto_bls_fast_aggregate_verify
-7:  LEAVE 160
+7:  LEAVE 304
 8:  mov     x0, #LANTERN_OK
-    LEAVE 160
+    LEAVE 304
 6:  mov     x0, #LANTERN_INVALID_VALIDATOR_INDEX
-    LEAVE 160
+    LEAVE 304
 9:  mov     x0, #LANTERN_BUFFER_TOO_SMALL
-    LEAVE 160
-40: PART    x0, x9, x19, BeaconState_validators     /* the keys: the validators' pubkeys */
+    LEAVE 304
+40: ldp     x9, x10, [sp, #(L + 96)]        /* the keys' sum from the committees' key sums */
+    cbz     x9, 41f
+    cbz     x10, 41f
+    mov     x0, x19
+    mov     x1, x9
+    mov     x2, x10
+    mov     x3, x27
+    add     x4, sp, #(L + 112)
+    add     x5, sp, #(L + 40)
+    add     x6, x20, #IndexedAttestation_signature
+    mov     x7, x21
+    bl      attestation_key_sum
+    cbz     x0, 41f
+    add     x0, sp, #(L + 112)              /* bls.FastAggregateVerify: CoreVerify of point_to_pubkey(sum) */
+    add     x1, sp, #(L + 256)
+    CALL_GLOBAL crypto_bls_g1_compress
+    add     x0, sp, #(L + 256)
+    add     x1, sp, #(L + 40)
+    add     x2, x20, #IndexedAttestation_signature
+    mov     x3, x21
+    mov     x4, x22
+    CALL_GLOBAL crypto_bls_verify
+    LEAVE 304
+41: PART    x0, x9, x19, BeaconState_validators     /* the keys: the validators' pubkeys */
     add     x0, x0, #Validator_pubkey
     mov     x1, x20                         /* the indices: the indexed attestation, as a BlsIndexList */
     mov     x2, x27
@@ -835,8 +887,445 @@ SPEC_FUNCTION is_valid_indexed_attestation
     mov     x5, x21
     mov     x6, x22
     CALL_GLOBAL crypto_bls_fast_aggregate_verify_cached
-    LEAVE 160
-SPEC_END is_valid_indexed_attestation
+    LEAVE 304
+END_FUNCTION indexed_attestation_valid
+
+/* 1 in Montgomery form: 2^384 mod p of BLS12-381, the z of an affine point as a G1Point. */
+    RODATA
+    .p2align 3
+keysum_one:
+    .quad 0x760900000002fffd, 0xebf4000bc40c0002, 0x5f48985753c758ba
+    .quad 0x77ce585370525745, 0x5c071a97a256ec6d, 0x15f65ec3fa80e493
+    .text
+
+/* The 144 bytes at src to dst. Uses x16, x17. */
+.macro COPY144 dst, src
+    .irp o, 0, 16, 32, 48, 64, 80, 96, 112, 128
+    ldp     x16, x17, [\src, #\o]
+    stp     x16, x17, [\dst, #\o]
+    .endr
+.endm
+
+/* The point of PubkeyCache entry e as a G1Point at dst: its affine x and y, and z = 1. Uses x16, x17. */
+.macro ENTRY_POINT dst, e
+    .irp o, 0, 16, 32, 48, 64, 80
+    ldp     x16, x17, [\e, #(CRYPTO_BLS_ENTRY_POINT + \o)]
+    stp     x16, x17, [\dst, #\o]
+    .endr
+    ADDRESS x16, keysum_one
+    .irp o, 0, 16, 32
+    ldp     x14, x15, [x16, #\o]
+    stp     x14, x15, [\dst, #(96 + \o)]
+    .endr
+.endm
+
+/*
+ * L0: x0 = the members of the x1 indices at x0 whose PubkeyCache x3 entries do not hold their
+ * keys (state validators at x2), each also written at x4 when x4 is not 0; or -1 when a member
+ * is at or past the cache's count, or its entry has status 2 and its key. A leaf.
+ */
+LOCAL_FUNCTION key_sum_scan
+    UNWIND_END_PROLOGUE
+    ldr     x5, [x3, #CRYPTO_BLS_CACHE_COUNT]
+    ldr     x6, [x3, #CRYPTO_BLS_CACHE_OFFSET]
+    add     x6, x3, x6
+    mov     x7, #0
+    mov     x8, #CRYPTO_BLS_ENTRY_BYTES
+1:  cbz     x1, 5f
+    ldr     x9, [x0], #8
+    cmp     x9, x5
+    b.hs    6f
+    madd    x10, x9, x8, x6                 /* the entry */
+    add     x11, x2, x9, lsl #7             /* the validator */
+    ldr     x12, [x10, #CRYPTO_BLS_ENTRY_STATUS]
+    cbz     x12, 3f
+    .irp o, 0, 16, 32
+    ldp     x13, x14, [x10, #(CRYPTO_BLS_ENTRY_KEY + \o)]
+    ldp     x15, x16, [x11, #(Validator_pubkey + \o)]
+    cmp     x13, x15
+    ccmp    x14, x16, #0, eq
+    b.ne    3f
+    .endr
+    cmp     x12, #1
+    b.ne    6f
+    b       4f
+3:  add     x7, x7, #1                      /* not its key */
+    cbz     x4, 4f
+    str     x9, [x4], #8
+4:  sub     x1, x1, #1
+    b       1b
+5:  mov     x0, x7
+    ret
+6:  mov     x0, #-1
+    ret
+END_FUNCTION key_sum_scan
+
+/*
+ * L0: makes the KeySum x0 of the x2 members at x1 (state validators at x3, PubkeyCache x4).
+ * Members whose entries do not hold their keys: crypto_bls_fast_aggregate_verify_cached of
+ * them first, with message x5, signature x6 and scratch x7 (its last bytes take their list),
+ * to fill their entries. x0 = 1 when the KeySum has status 1, 2 when it has status 2, 0 when
+ * a callee fails. x19 KeySum, x20 members, x21 count, x22 validators, x23 cache, x24 message,
+ * x25 signature, x26 scratch, x27 i, x28 list. Out: sp the sum, sp+144 the next, sp+288 a key.
+ * Locals: KSM_L the scratch size, KSM_L+8 valid.
+ */
+.set KSM_OUT, 432
+.set KSM_L, KSM_OUT + L
+LOCAL_FUNCTION key_sum_make
+    ENTER_OUT 32, KSM_OUT
+    mov     x19, x0
+    mov     x20, x1
+    mov     x21, x2
+    mov     x22, x3
+    mov     x23, x4
+    mov     x24, x5
+    mov     x25, x6
+    mov     x26, x7
+    mov     x0, x20
+    mov     x1, x21
+    mov     x2, x22
+    mov     x3, x23
+    mov     x4, #0
+    bl      key_sum_scan
+    cmn     x0, #1
+    b.eq    8f
+    cbz     x0, 3f
+    mov     x27, x0                         /* the list of those members at the end of scratch */
+    ldr     x9, [x26]
+    str     x9, [sp, #KSM_L]
+    lsl     x10, x27, #3
+    add     x10, x10, #LIST_FIXED
+    sub     x11, x9, x10
+    add     x28, x26, x11
+    str     x11, [x26]
+    str     x10, [x28, #LIST_SIZE]
+    mov     x12, #LIST_FIXED
+    str     x12, [x28, #LIST_OFFSET]
+    str     x27, [x28, #LIST_COUNT]
+    mov     x0, x20
+    mov     x1, x21
+    mov     x2, x22
+    mov     x3, x23
+    add     x4, x28, #LIST_FIXED
+    bl      key_sum_scan
+    add     x0, x22, #Validator_pubkey
+    mov     x1, x28
+    mov     x2, x23
+    mov     x3, x24
+    mov     x4, x25
+    mov     x5, x26
+    add     x6, sp, #(KSM_L + 8)
+    CALL_GLOBAL crypto_bls_fast_aggregate_verify_cached
+    ldr     x9, [sp, #KSM_L]
+    str     x9, [x26]
+    cbnz    x0, 9f
+    mov     x0, x20
+    mov     x1, x21
+    mov     x2, x22
+    mov     x3, x23
+    mov     x4, #0
+    bl      key_sum_scan
+    cbnz    x0, 8f                          /* an entry still without its key: never tried again */
+3:  .irp o, 0, 16, 32, 48, 64, 80, 96, 112, 128
+    stp     xzr, xzr, [sp, #\o]             /* the point at infinity */
+    .endr
+    mov     x27, #0
+4:  cmp     x27, x21
+    b.hs    5f
+    ldr     x9, [x20, x27, lsl #3]
+    ldr     x10, [x23, #CRYPTO_BLS_CACHE_OFFSET]
+    add     x10, x23, x10
+    mov     x11, #CRYPTO_BLS_ENTRY_BYTES
+    madd    x10, x9, x11, x10
+    add     x12, sp, #288
+    ENTRY_POINT x12, x10
+    mov     x0, sp
+    add     x1, sp, #288
+    add     x2, sp, #144
+    CALL_GLOBAL crypto_bls_g1_add
+    add     x9, sp, #144
+    COPY144 sp, x9
+    add     x27, x27, #1
+    b       4b
+5:  add     x9, x19, #KeySum_point
+    COPY144 x9, sp
+    mov     x9, #1
+    str     x9, [x19, #KeySum_status]
+    mov     x0, #1
+    LEAVE_OUT 32, KSM_OUT
+8:  mov     x9, #2
+    str     x9, [x19, #KeySum_status]
+    mov     x0, #2
+    LEAVE_OUT 32, KSM_OUT
+9:  mov     x0, #0
+    LEAVE_OUT 32, KSM_OUT
+END_FUNCTION key_sum_make
+
+/*
+ * L0: the sum of the keys of the attesting validators of attestation x1 (state x0), from the
+ * key sums of CommitteeCache x2 and the entries of PubkeyCache x3, at x4 (G1Point); x5 the
+ * message, x6 the signature, x7 the scratch, for key_sum_make. x0 = 1 when x4 holds the sum,
+ * else 0. x19 state, x20 attestation, x21 member i, x22 PubkeyCache, x23 validators, x24 the
+ * entry, x25 committees of the epoch, x26 its active validators, x27 bits, x28 bit count.
+ * Out: sp the sum, sp+144 the next, sp+288 a key, sp+432 its negation.
+ * Locals at AKS_L: +0 epoch, +8 committee index, +16 committee offset, +24 the block of key sums,
+ * +32 committees per slot, +40 out, +48 message, +56 signature, +64 scratch, +72 members,
+ * +80 member count, +88 bits set, +96 the KeySum, +112 the entry's key (96), +208 the pass:
+ * 0 counts the additions the key sums save, 1 adds; +216 that count.
+ */
+.set AKS_OUT, 576
+.set AKS_L, AKS_OUT + L
+LOCAL_FUNCTION attestation_key_sum
+    ENTER_OUT 224, AKS_OUT
+    mov     x19, x0
+    mov     x20, x1
+    mov     x24, x2
+    mov     x22, x3
+    str     x4, [sp, #(AKS_L + 40)]
+    str     x5, [sp, #(AKS_L + 48)]
+    str     x6, [sp, #(AKS_L + 56)]
+    str     x7, [sp, #(AKS_L + 64)]
+    ldr     x9, [x20, #(Attestation_data + AttestationData_slot)]
+    lsr     x9, x9, #LOG2_SLOTS_PER_EPOCH
+    str     x9, [sp, #AKS_L]
+    mov     x0, x19                         /* the entry of the epoch */
+    mov     x1, x9
+    add     x2, sp, #(AKS_L + 112)
+    bl      committee_key
+    cbnz    x0, 90f
+    mov     x0, x24
+    ldr     x1, [sp, #AKS_L]
+    add     x2, sp, #(AKS_L + 112)
+    bl      committee_find
+    cbz     x0, 90f
+    ldr     x10, [x24, #CommitteeCache_validators]  /* its block of key sums */
+    lsl     x10, x10, #3
+    add     x10, x10, #(CommitteeEntry__mem + LIST_FIXED)
+    add     x11, x24, #CommitteeCache_entries
+    sub     x12, x0, x11
+    udiv    x12, x12, x10
+    mov     x13, #COMMITTEE_CACHE_ENTRIES
+    madd    x11, x13, x10, x11
+    MOVQ    x13, KEYSUM_BLOCK_BYTES
+    madd    x11, x12, x13, x11
+    str     x11, [sp, #(AKS_L + 24)]
+    mov     x24, x0
+    ldr     x26, [x24, #CommitteeEntry_count]
+    lsr     x9, x26, #LOG2_SLOTS_PER_EPOCH  /* get_committee_count_per_slot of the entry's count */
+    mov     x10, #TARGET_COMMITTEE_SIZE
+    udiv    x9, x9, x10
+    mov     x10, #MAX_COMMITTEES_PER_SLOT
+    cmp     x9, x10
+    csel    x9, x9, x10, lo
+    cmp     x9, #1
+    csinc   x9, x9, xzr, hs
+    str     x9, [sp, #(AKS_L + 32)]
+    lsl     x25, x9, #LOG2_SLOTS_PER_EPOCH
+    PART    x23, x9, x19, BeaconState_validators
+    PART    x27, x28, x20, Attestation_aggregation_bits
+    .irp o, 0, 16, 32, 48, 64, 80, 96, 112, 128
+    stp     xzr, xzr, [sp, #\o]             /* the point at infinity */
+    .endr
+    str     xzr, [sp, #(AKS_L + 208)]
+    str     xzr, [sp, #(AKS_L + 216)]
+5:  str     xzr, [sp, #(AKS_L + 16)]
+.if FORK >= FORK_ELECTRA
+    str     xzr, [sp, #(AKS_L + 8)]         /* each committee of committee_bits, in order */
+1:  ldr     x9, [sp, #(AKS_L + 8)]
+    cmp     x9, #MAX_COMMITTEES_PER_SLOT
+    b.hs    80f
+    add     x10, x20, #Attestation_committee_bits
+    lsr     x11, x9, #3
+    ldrb    w11, [x10, x11]
+    and     x12, x9, #7
+    lsr     w11, w11, w12
+    tbnz    w11, #0, 10f
+2:  ldr     x9, [sp, #(AKS_L + 8)]
+    add     x9, x9, #1
+    str     x9, [sp, #(AKS_L + 8)]
+    b       1b
+.else
+    ldr     x9, [x20, #(Attestation_data + AttestationData_index)]   /* the committee of data.index */
+    str     x9, [sp, #(AKS_L + 8)]
+.endif
+10: ldr     x9, [sp, #(AKS_L + 8)]          /* the committee: its slice of the entry and its bits */
+    ldr     x10, [sp, #(AKS_L + 32)]
+    cmp     x9, x10
+    b.hs    90f
+    ldr     x11, [x20, #(Attestation_data + AttestationData_slot)]
+    and     x11, x11, #(SLOTS_PER_EPOCH - 1)
+    madd    x11, x11, x10, x9               /* k */
+    ldr     x13, [sp, #(AKS_L + 24)]
+    mov     x14, #KeySum__mem
+    madd    x13, x11, x14, x13
+    str     x13, [sp, #(AKS_L + 96)]
+    mul     x12, x26, x11                   /* start */
+    udiv    x12, x12, x25
+    add     x13, x11, #1                    /* end */
+    mul     x13, x26, x13
+    udiv    x13, x13, x25
+    cmp     x13, x26
+    b.hi    90f
+    sub     x14, x13, x12
+    str     x14, [sp, #(AKS_L + 80)]
+    add     x15, x24, #(CommitteeEntry__mem + LIST_FIXED)
+    add     x15, x15, x12, lsl #3
+    str     x15, [sp, #(AKS_L + 72)]
+    ldr     x16, [sp, #(AKS_L + 16)]
+    add     x17, x16, x14
+    cmp     x17, x28
+    b.hi    90f
+    mov     x0, #0                          /* members with the bit */
+    mov     x1, x16
+11: cmp     x1, x17
+    b.hs    12f
+    lsr     x2, x1, #3
+    ldrb    w2, [x27, x2]
+    and     x3, x1, #7
+    lsr     w2, w2, w3
+    and     x2, x2, #1
+    add     x0, x0, x2
+    add     x1, x1, #1
+    b       11b
+12: str     x0, [sp, #(AKS_L + 88)]
+    sub     x1, x14, x0
+    ldr     x9, [sp, #(AKS_L + 208)]
+    cbnz    x9, 13f
+    cmp     x1, x0                          /* pass 0: present - absent - 1 saved with the KeySum */
+    b.hs    40f
+    sub     x9, x0, x1
+    sub     x9, x9, #1
+    ldr     x10, [sp, #(AKS_L + 216)]
+    add     x10, x10, x9
+    str     x10, [sp, #(AKS_L + 216)]
+    b       40f
+13: cmp     x1, x0
+    b.hs    30f
+    ldr     x9, [sp, #(AKS_L + 96)]         /* fewer without the bit: the KeySum, less their keys */
+    ldr     x10, [x9, #KeySum_status]
+    cmp     x10, #1
+    b.eq    20f
+    cbnz    x10, 90f
+    mov     x0, x9
+    ldr     x1, [sp, #(AKS_L + 72)]
+    ldr     x2, [sp, #(AKS_L + 80)]
+    mov     x3, x23
+    mov     x4, x22
+    ldr     x5, [sp, #(AKS_L + 48)]
+    ldr     x6, [sp, #(AKS_L + 56)]
+    ldr     x7, [sp, #(AKS_L + 64)]
+    bl      key_sum_make
+    cmp     x0, #1
+    b.ne    90f
+20: mov     x0, sp
+    ldr     x1, [sp, #(AKS_L + 96)]
+    add     x1, x1, #KeySum_point
+    add     x2, sp, #144
+    CALL_GLOBAL crypto_bls_g1_add
+    add     x9, sp, #144
+    COPY144 sp, x9
+    mov     x21, #0
+21: ldr     x9, [sp, #(AKS_L + 80)]
+    cmp     x21, x9
+    b.hs    40f
+    ldr     x10, [sp, #(AKS_L + 16)]
+    add     x10, x10, x21
+    lsr     x11, x10, #3
+    ldrb    w11, [x27, x11]
+    and     x12, x10, #7
+    lsr     w11, w11, w12
+    tbnz    w11, #0, 22f
+    bl      member_point                    /* sp+288: the key of member x21 */
+    cbz     x0, 90f
+    add     x0, sp, #288
+    add     x1, sp, #432
+    CALL_GLOBAL crypto_bls_g1_neg
+    mov     x0, sp
+    add     x1, sp, #432
+    add     x2, sp, #144
+    CALL_GLOBAL crypto_bls_g1_add
+    add     x9, sp, #144
+    COPY144 sp, x9
+22: add     x21, x21, #1
+    b       21b
+30: mov     x21, #0                         /* else the keys of the members with the bit */
+31: ldr     x9, [sp, #(AKS_L + 80)]
+    cmp     x21, x9
+    b.hs    40f
+    ldr     x10, [sp, #(AKS_L + 16)]
+    add     x10, x10, x21
+    lsr     x11, x10, #3
+    ldrb    w11, [x27, x11]
+    and     x12, x10, #7
+    lsr     w11, w11, w12
+    tbz     w11, #0, 32f
+    bl      member_point
+    cbz     x0, 90f
+    mov     x0, sp
+    add     x1, sp, #288
+    add     x2, sp, #144
+    CALL_GLOBAL crypto_bls_g1_add
+    add     x9, sp, #144
+    COPY144 sp, x9
+32: add     x21, x21, #1
+    b       31b
+40: ldr     x9, [sp, #(AKS_L + 16)]         /* committee_offset += len(committee) */
+    ldr     x10, [sp, #(AKS_L + 80)]
+    add     x9, x9, x10
+    str     x9, [sp, #(AKS_L + 16)]
+.if FORK >= FORK_ELECTRA
+    b       2b
+.endif
+80: ldr     x9, [sp, #(AKS_L + 16)]         /* the bits: those of the committees, no more */
+    cmp     x9, x28
+    b.ne    90f
+    ldr     x9, [sp, #(AKS_L + 208)]
+    cbnz    x9, 81f
+    ldr     x9, [sp, #(AKS_L + 216)]        /* pass 0 done: pass 1 when the key sums save enough */
+    cmp     x9, #KEYSUM_MIN_SAVED
+    b.lo    90f
+    mov     x9, #1
+    str     x9, [sp, #(AKS_L + 208)]
+    b       5b
+81: ldr     x9, [sp, #(AKS_L + 40)]
+    COPY144 x9, sp
+    mov     x0, #1
+    LEAVE_OUT 224, AKS_OUT
+90: mov     x0, #0
+    LEAVE_OUT 224, AKS_OUT
+
+/*
+ * Within attestation_key_sum, by bl (sp unchanged): the key of member x21 of the committee as a
+ * G1Point at sp+288, when its entry holds it; x0 = 1, else 0. Uses x9-x17.
+ */
+member_point:
+    ldr     x9, [sp, #(AKS_L + 72)]
+    ldr     x9, [x9, x21, lsl #3]           /* the validator index */
+    ldr     x10, [x22, #CRYPTO_BLS_CACHE_COUNT]
+    cmp     x9, x10
+    b.hs    92f
+    ldr     x10, [x22, #CRYPTO_BLS_CACHE_OFFSET]
+    add     x10, x22, x10
+    mov     x11, #CRYPTO_BLS_ENTRY_BYTES
+    madd    x10, x9, x11, x10
+    ldr     x11, [x10, #CRYPTO_BLS_ENTRY_STATUS]
+    cmp     x11, #1
+    b.ne    92f
+    add     x11, x23, x9, lsl #7
+    .irp o, 0, 16, 32
+    ldp     x12, x13, [x10, #(CRYPTO_BLS_ENTRY_KEY + \o)]
+    ldp     x14, x15, [x11, #(Validator_pubkey + \o)]
+    cmp     x12, x14
+    ccmp    x13, x15, #0, eq
+    b.ne    92f
+    .endr
+    add     x12, sp, #288
+    ENTRY_POINT x12, x10
+    mov     x0, #1
+    ret
+92: mov     x0, #0
+    ret
+END_FUNCTION attestation_key_sum
 
 .if FORK >= FORK_ALTAIR
 /*
@@ -1320,7 +1809,9 @@ LOCAL_FUNCTION attestation_memo
     mov     x3, x22
     add     x4, sp, #(L + 40)
     ldr     x2, [x21, #CONFIG_PUBKEY_CACHE]
-    bl      lantern_is_valid_indexed_attestation
+    mov     x5, x20
+    ldr     x6, [x21, #CONFIG_COMMITTEE_CACHE]
+    bl      indexed_attestation_valid
     CHECK_STATUS x23, 7f, 8f
     ldr     x9, [sp, #(L + 40)]
     mov     x0, #LANTERN_INVALID_ATTESTATION
