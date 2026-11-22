@@ -50,12 +50,12 @@ Standard: [asm-standard@2a19d3f](https://github.com/bitminetech/asm-standard/blo
 
 | Repo | Commit | Functions used |
 |---|---|---|
-| [asm-ssz](https://github.com/bitminetech/asm-ssz) | [`413b8c0`](https://github.com/bitminetech/asm-ssz/tree/413b8c0f330b464b799fdfc6e42de09477ed4bf6) | `ssz_hash_tree_root` |
-| [asm-crypto](https://github.com/bitminetech/asm-crypto) | [`745aaf5`](https://github.com/bitminetech/asm-crypto/tree/745aaf5954c57bb65289f474326d5c566e4d653e) | `crypto_sha256`, `crypto_hmac_sha256`, `crypto_bls_verify`, `crypto_bls_fast_aggregate_verify`, `crypto_bls_fast_aggregate_verify_cached`, `crypto_bls_eth_fast_aggregate_verify`, `crypto_bls_eth_aggregate_pubkeys`, `crypto_bls_g1_decode`, `crypto_bls_g1_neg`, `crypto_bls_g1_add`, `crypto_bls_g1_compress`, `crypto_kzg_verify_blob_kzg_proof`, `crypto_kzg_verify_blob_kzg_proof_batch`, `crypto_kzg_verify_cell_kzg_proof_batch`, `crypto_kzg_recover_cells_and_kzg_proofs` |
+| [asm-ssz](https://github.com/bitminetech/asm-ssz) | [`dfa72fe`](https://github.com/bitminetech/asm-ssz/tree/dfa72fe42f90efce9fa03974fae30f84bf2a2bdb) | `ssz_hash_tree_root` |
+| [asm-crypto](https://github.com/bitminetech/asm-crypto) | [`0f80dd7`](https://github.com/bitminetech/asm-crypto/tree/0f80dd746dfa7a561610165065b9473e4d16a0ce) | `crypto_sha256`, `crypto_hmac_sha256`, `crypto_bls_verify`, `crypto_bls_fast_aggregate_verify`, `crypto_bls_fast_aggregate_verify_cached`, `crypto_bls_eth_fast_aggregate_verify`, `crypto_bls_eth_aggregate_pubkeys`, `crypto_bls_g1_decode`, `crypto_bls_g1_neg`, `crypto_bls_g1_add`, `crypto_bls_g1_compress`, `crypto_kzg_verify_blob_kzg_proof`, `crypto_kzg_verify_blob_kzg_proof_batch`, `crypto_kzg_verify_cell_kzg_proof_batch`, `crypto_kzg_recover_cells_and_kzg_proofs` |
 | [asm-snappy](https://github.com/bitminetech/asm-snappy) | [`b84f65a`](https://github.com/bitminetech/asm-snappy/tree/b84f65a17f51dead69d22a7f6c5a16f7b2975d2a) | `snappy_get_uncompressed_length`, `snappy_uncompress`, `snappy_frame_compress`, `snappy_frame_uncompress` |
-| [asm-libp2p](https://github.com/bitminetech/asm-libp2p) | [`0b3fa54`](https://github.com/bitminetech/asm-libp2p/tree/0b3fa544ed1b6fb6f3be983fbc5f6f2367169a32) | `libp2p_step` |
-| [asm-quic](https://github.com/bitminetech/asm-quic) | [`8cbef0f`](https://github.com/bitminetech/asm-quic/tree/8cbef0fdb1c402bdf5d12530e977765e13a6703b) | <Functions> |
-| [asm-discv5](https://github.com/bitminetech/asm-discv5) | [`ef766f3`](https://github.com/bitminetech/asm-discv5/tree/ef766f35037023506da19282e621ec9508a4e6f6) | <Functions> |
+| [asm-libp2p](https://github.com/bitminetech/asm-libp2p) | [`d021240`](https://github.com/bitminetech/asm-libp2p/tree/d0212404d7d432ebce08f090e99c07b2754e97e6) | `libp2p_step` |
+| [asm-quic](https://github.com/bitminetech/asm-quic) | [`d2eaf04`](https://github.com/bitminetech/asm-quic/tree/d2eaf0404eb1e7127d4d1487faab36d63205df74) | <Functions> |
+| [asm-discv5](https://github.com/bitminetech/asm-discv5) | [`98f055b`](https://github.com/bitminetech/asm-discv5/tree/98f055b67a27a4bb03190d5ea538fe8bc5747ec9) | <Functions> |
 | [asm-rlp](https://github.com/bitminetech/asm-rlp) | [`40cca37`](https://github.com/bitminetech/asm-rlp/tree/40cca377a1621ed660a73724192a4a0b2c059a84) | <Functions> |
 
 ## Build tools
