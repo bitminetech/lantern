@@ -944,7 +944,9 @@ LOCAL_FUNCTION app_start
     mov     x0, #APP_LOG_INFO
     bl      app_line_end
     b       14f
-141: bl     app_db_scan_all                 /* from anchor.ssz: the history's segments to the node */
+141: bl     app_db_fit                      /* from anchor.ssz: room for the Db from its first slot */
+    cbnz    x0, 99f
+    bl      app_db_scan_all                 /* the history's segments to the node */
     cbnz    x0, 99f
     bl      app_line_start                  /* restart at slot <n> */
     ADDRESS x0, app_m_restart
@@ -2508,6 +2510,52 @@ LOCAL_FUNCTION app_db_history
     str     x10, [x19, #(APP_NODE_ROOM + NodeRoom_db_roots)]
     LEAVE 0
 END_FUNCTION app_db_history
+
+/*
+ * L2: for a start from anchor.ssz, after lantern_node_init: the Db's first_slot can be below
+ * history_slot (the backfill's target, node.md), so db_slots doubles until the room covers the
+ * slots from first_slot to the end app_db_history gave, then db_roots until it is above twice
+ * db_slots, each as a short room grows: x0 = 0, or 2 after a line on the standard error. x21 the end.
+ */
+LOCAL_FUNCTION app_db_fit
+    ENTER 0
+    ldr     x21, [x19, #(APP_ANCHOR + NodeAnchor_history_slot)]
+    ldr     x9, [x19, #(APP_NODE_ROOM + NodeRoom_db_slots)]
+    add     x21, x21, x9
+1:  ldr     x9, [x19, #APP_NODE]            /* the slots from the Db's first_slot to the end */
+    ldr     x10, [x9, #Node_db]
+    add     x9, x9, x10
+    ldr     x9, [x9, #Db_first_slot]
+    sub     x9, x21, x9
+    ldr     x10, [x19, #(APP_NODE_ROOM + NodeRoom_db_slots)]
+    cmp     x10, x9
+    b.hs    2f
+    mov     x0, #0
+    mov     x1, #NodeRoom_db_slots
+    bl      app_grow
+    cbnz    x0, 8f
+    b       1b
+2:  ldr     x9, [x19, #(APP_NODE_ROOM + NodeRoom_db_slots)]   /* roots above twice them */
+    lsl     x9, x9, #1
+    ldr     x10, [x19, #(APP_NODE_ROOM + NodeRoom_db_roots)]
+    cmp     x10, x9
+    b.hi    7f
+    mov     x0, #0
+    mov     x1, #NodeRoom_db_roots
+    bl      app_grow
+    cbnz    x0, 8f
+    b       2b
+7:  mov     x0, #0
+    LEAVE 0
+8:  bl      app_line_start                  /* no memory */
+    ADDRESS x0, app_m_memory
+    mov     x1, #app_m_memory_len
+    bl      app_line_text
+    mov     x0, #APP_LOG_ERROR
+    bl      app_line_end
+    mov     x0, #2
+    LEAVE 0
+END_FUNCTION app_db_fit
 
 /*
  * L1: for a start from anchor.ssz: each segment file there, the blocks', the sidecars', then the states', from

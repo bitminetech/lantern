@@ -1020,7 +1020,9 @@ LOCAL_FUNCTION app_start
     li      a0, APP_LOG_INFO
     call    app_line_end
     j       14f
-141: call   app_db_scan_all                 # from anchor.ssz: the history's segments to the node
+141: call   app_db_fit                      # from anchor.ssz: room for the Db from its first slot
+    bnez    a0, 99f
+    call    app_db_scan_all                 # the history's segments to the node
     bnez    a0, 99f
     call    app_line_start                  # restart at slot <n>
     ADDRESS a0, app_m_restart
@@ -2631,6 +2633,44 @@ LOCAL_FUNCTION app_db_history
 6:  STQ     t1, s1, (APP_NODE_ROOM + NodeRoom_db_roots)
     LEAVE 0
 END_FUNCTION app_db_history
+
+/*
+ * L2: for a start from anchor.ssz, after lantern_node_init: the Db's first_slot can be below
+ * history_slot (the backfill's target, node.md), so db_slots doubles until the room covers the
+ * slots from first_slot to the end app_db_history gave, then db_roots until it is above twice
+ * db_slots, each as a short room grows: a0 = 0, or 2 after a line on the standard error. s3 the end.
+ */
+LOCAL_FUNCTION app_db_fit
+    ENTER 0
+    LDQ     s3, s1, (APP_ANCHOR + NodeAnchor_history_slot)
+    LDQ     t0, s1, (APP_NODE_ROOM + NodeRoom_db_slots)
+    add     s3, s3, t0
+1:  LDQ     t0, s1, APP_NODE                # the slots from the Db's first_slot to the end
+    ld      t1, Node_db(t0)
+    add     t0, t0, t1
+    ld      t0, Db_first_slot(t0)
+    sub     t0, s3, t0
+    LDQ     t1, s1, (APP_NODE_ROOM + NodeRoom_db_slots)
+    bgeu    t1, t0, 2f
+    li      a0, 0
+    li      a1, NodeRoom_db_slots
+    call    app_grow
+    bnez    a0, 8f
+    j       1b
+2:  LDQ     t0, s1, (APP_NODE_ROOM + NodeRoom_db_slots)  # roots above twice them
+    slli    t0, t0, 1
+    LDQ     t1, s1, (APP_NODE_ROOM + NodeRoom_db_roots)
+    bgtu    t1, t0, 7f
+    li      a0, 0
+    li      a1, NodeRoom_db_roots
+    call    app_grow
+    bnez    a0, 8f
+    j       2b
+7:  li      a0, 0
+    LEAVE 0
+8:  call    app_no_memory
+    LEAVE 0
+END_FUNCTION app_db_fit
 
 /*
  * L1: for a start from anchor.ssz: each segment file there, the blocks' then the sidecars', from

@@ -1034,7 +1034,10 @@ LOCAL_FUNCTION app_start
     mov     $APP_LOG_INFO, %edi
     call    app_line_end
     jmp     14f
-141: call   app_db_scan_all                 # from anchor.ssz: the history's segments to the node
+141: call   app_db_fit                      # from anchor.ssz: room for the Db from its first slot
+    test    %rax, %rax
+    jnz     99f
+    call    app_db_scan_all                 # the history's segments to the node
     test    %rax, %rax
     jnz     99f
     call    app_line_start                  # restart at slot <n>
@@ -2652,6 +2655,45 @@ LOCAL_FUNCTION app_db_history
     mov     %rax, (APP_NODE_ROOM + NodeRoom_db_roots)(%rbx)
     LEAVE 0
 END_FUNCTION app_db_history
+
+/*
+ * L2: for a start from anchor.ssz, after lantern_node_init: the Db's first_slot can be below
+ * history_slot (the backfill's target, node.md), so db_slots doubles until the room covers the
+ * slots from first_slot to the end app_db_history gave, then db_roots until it is above twice
+ * db_slots, each as a short room grows: rax = 0, or 2 after a line on the standard error. r12 the end.
+ */
+LOCAL_FUNCTION app_db_fit
+    ENTER 0
+    mov     (APP_ANCHOR + NodeAnchor_history_slot)(%rbx), %r12
+    add     (APP_NODE_ROOM + NodeRoom_db_slots)(%rbx), %r12
+1:  mov     APP_NODE(%rbx), %rax            # the slots from the Db's first_slot to the end
+    mov     Node_db(%rax), %rcx
+    mov     Db_first_slot(%rax,%rcx), %rcx
+    mov     %r12, %rax
+    sub     %rcx, %rax
+    cmp     %rax, (APP_NODE_ROOM + NodeRoom_db_slots)(%rbx)
+    jae     2f
+    xor     %edi, %edi
+    mov     $NodeRoom_db_slots, %esi
+    call    app_grow
+    test    %rax, %rax
+    jnz     8f
+    jmp     1b
+2:  mov     (APP_NODE_ROOM + NodeRoom_db_slots)(%rbx), %rax  # roots above twice them
+    shl     $1, %rax
+    cmp     %rax, (APP_NODE_ROOM + NodeRoom_db_roots)(%rbx)
+    ja      7f
+    xor     %edi, %edi
+    mov     $NodeRoom_db_roots, %esi
+    call    app_grow
+    test    %rax, %rax
+    jnz     8f
+    jmp     2b
+7:  xor     %eax, %eax
+    LEAVE 0
+8:  call    app_no_memory
+    LEAVE 0
+END_FUNCTION app_db_fit
 
 /*
  * L1: for a start from anchor.ssz: each segment file there, the blocks' then the sidecars', from
