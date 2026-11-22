@@ -337,7 +337,12 @@ SPEC_LEAF get_total_balance
     RETURN_OK
 SPEC_END get_total_balance
 
-/* rbx state, rbp scratch, r12 out; locals: the epoch. The index list is the scratch after its size. */
+/*
+ * A candidate of ARCHITECTURE.md section 9: get_active_validator_indices and get_total_balance
+ * inlined in one pass over the validators, after v1's check that the index list would fit
+ * in the scratch after its size field.
+ * rbx state, rbp scratch, r12 out; locals: the epoch.
+ */
 SPEC_FUNCTION get_total_active_balance
     ENTER 16
     mov     %rdi, %rbx
@@ -345,20 +350,33 @@ SPEC_FUNCTION get_total_active_balance
     mov     %rdx, %r12
     lea     L(%rsp), %rsi
     call    lantern_get_current_epoch
-    mov     (%rbp), %rax                    # the list takes all of scratch but its size field
+    mov     (%rbp), %rax                    # room for every validator in the scratch after its size
     sub     $8, %rax
-    mov     %rax, 8(%rbp)
-    mov     %rbx, %rdi
-    lea     L(%rsp), %rsi
-    lea     8(%rbp), %rdx
-    call    lantern_get_active_validator_indices
-    test    %rax, %rax
-    jnz     9f
-    mov     %rbx, %rdi
-    lea     8(%rbp), %rsi
-    mov     %r12, %rdx
-    call    lantern_get_total_balance
-9:  LEAVE 16
+    PART    %rcx, %rdx, %rbx, BeaconState_validators
+    lea     LIST_FIXED(,%rdx,8), %r8
+    cmp     %r8, %rax
+    jb      9f
+    mov     L(%rsp), %rsi
+    xor     %eax, %eax                      # sum
+    test    %rdx, %rdx
+    jz      2f
+1:  mov     Validator_activation_epoch(%rcx), %r8
+    cmp     %rsi, %r8                       # is_active_validator(validator, epoch)
+    ja      3f
+    cmp     Validator_exit_epoch(%rcx), %rsi
+    jae     3f
+    add     Validator_effective_balance(%rcx), %rax
+3:  add     $Validator__mem, %rcx
+    dec     %rdx
+    jnz     1b
+2:  mov     $EFFECTIVE_BALANCE_INCREMENT, %r8
+    cmp     %r8, %rax
+    cmovbe  %r8, %rax                       # max(EFFECTIVE_BALANCE_INCREMENT, sum)
+    mov     %rax, (%r12)
+    xor     %eax, %eax
+    LEAVE 16
+9:  mov     $LANTERN_BUFFER_TOO_SMALL, %eax
+    LEAVE 16
 SPEC_END get_total_active_balance
 
 /* ---------------------------------------------------------------- Mutators */

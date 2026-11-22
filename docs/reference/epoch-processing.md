@@ -98,6 +98,8 @@ lantern_process_justification_and_finalization(state, config, scratch, result) -
 
 - Phase0: the target balances are lantern_get_attesting_balance of lantern_get_matching_target_attestations of each epoch.
 - Altair and later: the total balances of the unslashed participating indices of the timely target flag.
+- Altair and later: one pass over the validators sums the total active balance and both target balances, with get_unslashed_participating_indices, get_total_active_balance and get_total_balance inline; each sum is at least EFFECTIVE_BALANCE_INCREMENT, as in get_total_balance.
+
 ### Limits
 
 - Scratch: S(3).
@@ -268,6 +270,10 @@ lantern_process_inactivity_updates(state, config, scratch, result) -> status
 - `LANTERN_OK`: `result` is `LANTERN_VALID`.
 - `LANTERN_BUFFER_TOO_SMALL`: `scratch` is short.
 
+### Function does
+
+- One pass over the validators, with get_eligible_validator_indices and get_unslashed_participating_indices of the target flag inline: each score changes only for its own validator, so the order of the spec's loop over the eligible indices gives the same scores.
+
 ### Limits
 
 - Scratch: S(3).
@@ -295,6 +301,11 @@ lantern_process_rewards_and_penalties(state, config, scratch, result) -> status
 ### Function does
 
 - Phase0: increases each balance by its reward and then decreases it by its penalty of lantern_get_attestation_deltas.
+- Altair and later: runs get_flag_index_deltas and get_inactivity_penalty_deltas inline, in two passes over the validators.
+- Pass 1 sums the effective balances of the validators active in the current epoch, and for each flag those of the validators active in the previous epoch, not slashed, with the flag in previous_epoch_participation; each sum is at least EFFECTIVE_BALANCE_INCREMENT, as in get_total_balance.
+- Pass 2 changes the balance of each eligible validator: each flag's reward or penalty in flag order, then the inactivity penalty. Each delta changes only its own validator's balance, so this gives the balances of the spec's loops.
+- A flag's reward is base_reward * (weight * unslashed_participating_increments) // (active_increments * WEIGHT_DENOMINATOR): the product of get_flag_index_deltas, since u64 multiplication is associative.
+
 ### Limits
 
 - Scratch: S(11).

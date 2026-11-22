@@ -8,20 +8,19 @@
 
 .if FORK >= FORK_ALTAIR
 /*
- * rbx state, rbp config, r12 scratch, r13 result, r14 validator count, r15 previous list,
- * S7 current list. Locals: L current epoch, L+8 previous epoch, L+16 total active,
- * L+24 previous target balance, L+32 current target balance, L+40 flag index, L+48 the scratch size on entry.
+ * A candidate of ARCHITECTURE.md section 9: get_unslashed_participating_indices,
+ * get_total_active_balance and get_total_balance inlined in one pass over the validators.
+ * rbx state, rbp config, then the validator count; r12 scratch, then previous_epoch_participation;
+ * r13 result; r14 validator; r15 current_epoch_participation. Locals: L current epoch,
+ * L+8 previous epoch, L+16 total active balance, L+24 previous target balance, L+32 current target balance.
  */
 SPEC_FUNCTION process_justification_and_finalization
-    ENTER 64
+    ENTER 48
     mov     %rdi, %rbx
     mov     %rsi, %rbp
     mov     %rdx, %r12
     mov     %rcx, %r13
     NEED_SCRATCH %r12, %rbx, 3, 9f
-    mov     (BeaconState_validators + 8)(%rbx), %r14
-    mov     (%r12), %rax
-    mov     %rax, (L + 48)(%rsp)
     mov     %rbx, %rdi
     lea     L(%rsp), %rsi
     call    lantern_get_current_epoch
@@ -30,56 +29,69 @@ SPEC_FUNCTION process_justification_and_finalization
     mov     %rbx, %rdi
     lea     (L + 8)(%rsp), %rsi
     call    lantern_get_previous_epoch
-    movq    $TIMELY_TARGET_FLAG_INDEX, (L + 40)(%rsp)
-    mov     (L + 48)(%rsp), %rax
-    SCRATCH_LIST %r15, %r12, %rax, 0, %r14
-    SCRATCH_LIST %rcx, %r12, %rax, 1, %r14
-    mov     %rcx, S7(%rsp)
-    SCRATCH_GIVE %r12, %rax, 2, %r14
-    mov     %rbx, %rdi                      # previous_indices
-    lea     (L + 40)(%rsp), %rsi
-    lea     (L + 8)(%rsp), %rdx
-    mov     %r12, %rcx
-    mov     %r15, %r8
-    call    lantern_get_unslashed_participating_indices
-    CHECK_STATUS %r13, 7f, 6f
-    SCRATCH_GIVE %r12, (L+48)(%rsp), 2, %r14
-    mov     %rbx, %rdi                      # current_indices
-    lea     (L + 40)(%rsp), %rsi
-    lea     L(%rsp), %rdx
-    mov     %r12, %rcx
-    mov     S7(%rsp), %r8
-    call    lantern_get_unslashed_participating_indices
-    CHECK_STATUS %r13, 7f, 6f
-    SCRATCH_GIVE %r12, (L+48)(%rsp), 2, %r14
-    mov     %rbx, %rdi
-    mov     %r12, %rsi
-    lea     (L + 16)(%rsp), %rdx
-    call    lantern_get_total_active_balance
-    test    %rax, %rax
-    jnz     7f
-    mov     %rbx, %rdi
-    mov     %r15, %rsi
-    lea     (L + 24)(%rsp), %rdx
-    call    lantern_get_total_balance
-    mov     %rbx, %rdi
-    mov     S7(%rsp), %rsi
-    lea     (L + 32)(%rsp), %rdx
-    call    lantern_get_total_balance
+    PART    %r14, %rbp, %rbx, BeaconState_validators
+    PART    %r12, %rax, %rbx, BeaconState_previous_epoch_participation
+    PART    %r15, %rax, %rbx, BeaconState_current_epoch_participation
+    mov     L(%rsp), %rsi                   # current
+    mov     (L + 8)(%rsp), %rdi             # previous
+    xor     %r8d, %r8d                      # total active balance
+    xor     %r9d, %r9d                      # previous target balance
+    xor     %r10d, %r10d                    # current target balance
+    test    %rbp, %rbp
+    jz      2f
+1:  mov     Validator_activation_epoch(%r14), %rax
+    mov     Validator_exit_epoch(%r14), %rcx
+    mov     Validator_effective_balance(%r14), %rdx
+    cmp     %rsi, %rax                      # is_active_validator(validator, current)
+    ja      3f
+    cmp     %rcx, %rsi
+    jae     3f
+    add     %rdx, %r8
+    cmpb    $0, Validator_slashed(%r14)     # and not slashed, with the target flag
+    jne     3f
+    movzbl  (%r15), %r11d                   # current_epoch_participation[index]
+    bt      $TIMELY_TARGET_FLAG_INDEX, %r11d
+    sbb     %r11, %r11
+    and     %rdx, %r11
+    add     %r11, %r10
+3:  cmp     %rdi, %rax                      # the same in the previous epoch
+    ja      4f
+    cmp     %rcx, %rdi
+    jae     4f
+    cmpb    $0, Validator_slashed(%r14)
+    jne     4f
+    movzbl  (%r12), %r11d                   # previous_epoch_participation[index]
+    bt      $TIMELY_TARGET_FLAG_INDEX, %r11d
+    sbb     %r11, %r11
+    and     %rdx, %r11
+    add     %r11, %r9
+4:  add     $Validator__mem, %r14
+    inc     %r12
+    inc     %r15
+    dec     %rbp
+    jnz     1b
+2:  mov     $EFFECTIVE_BALANCE_INCREMENT, %rcx    # get_total_balance: max(EFFECTIVE_BALANCE_INCREMENT, sum)
+    cmp     %rcx, %r8
+    cmovbe  %rcx, %r8
+    cmp     %rcx, %r9
+    cmovbe  %rcx, %r9
+    cmp     %rcx, %r10
+    cmovbe  %rcx, %r10
+    mov     %r8, (L + 16)(%rsp)
+    mov     %r9, (L + 24)(%rsp)
+    mov     %r10, (L + 32)(%rsp)
     mov     %rbx, %rdi
     lea     (L + 16)(%rsp), %rsi
     lea     (L + 24)(%rsp), %rdx
     lea     (L + 32)(%rsp), %rcx
     mov     %r13, %r8
     call    lantern_weigh_justification_and_finalization
-7:  LEAVE 64
-6:  xor     %eax, %eax
-    LEAVE 64
+    LEAVE 48
 8:  movq    $0, (%r13)
     xor     %eax, %eax
-    LEAVE 64
+    LEAVE 48
 9:  mov     $LANTERN_BUFFER_TOO_SMALL, %eax
-    LEAVE 64
+    LEAVE 48
 SPEC_END process_justification_and_finalization
 .endif
 
@@ -205,20 +217,18 @@ SPEC_END weigh_justification_and_finalization
 
 .if FORK >= FORK_ALTAIR
 /*
- * rbx state, rbp config, r12 scratch, r13 result, r14 eligible cursor, r15 participating cursor,
- * S7 eligible list, S8 participating list, S9 score.
- * Locals: L epoch, L+8 previous epoch, L+16 flag index, L+24 in leak, L+32 eligible end,
- * L+40 participating end, L+56 the constant 1, L+64 the scratch size on entry.
+ * A candidate of ARCHITECTURE.md section 9: get_eligible_validator_indices and
+ * get_unslashed_participating_indices inlined in one pass over the validators.
+ * rbx state, rbp config, r12 scratch, then previous_epoch_participation; r13 result;
+ * r14 validator; r15 inactivity_scores. Locals: L current epoch, L+8 previous epoch, L+16 leak.
  */
 SPEC_FUNCTION process_inactivity_updates
-    ENTER 80
+    ENTER 32
     mov     %rdi, %rbx
     mov     %rsi, %rbp
     mov     %rdx, %r12
     mov     %rcx, %r13
     NEED_SCRATCH %r12, %rbx, 3, 9f
-    mov     (%r12), %rax
-    mov     %rax, (L + 64)(%rsp)
     mov     %rbx, %rdi
     lea     L(%rsp), %rsi
     call    lantern_get_current_epoch
@@ -227,75 +237,59 @@ SPEC_FUNCTION process_inactivity_updates
     mov     %rbx, %rdi
     lea     (L + 8)(%rsp), %rsi
     call    lantern_get_previous_epoch
-    mov     (BeaconState_validators + 8)(%rbx), %rcx
-    mov     (L + 64)(%rsp), %rax
-    SCRATCH_LIST %rdx, %r12, %rax, 0, %rcx
-    mov     %rdx, S7(%rsp)
-    SCRATCH_LIST %rdx, %r12, %rax, 1, %rcx
-    mov     %rdx, S8(%rsp)
-    mov     %rbx, %rdi
-    mov     S7(%rsp), %rsi
-    call    lantern_get_eligible_validator_indices
-    test    %rax, %rax
-    jnz     7f
-    movq    $TIMELY_TARGET_FLAG_INDEX, (L + 16)(%rsp)
-    mov     (BeaconState_validators + 8)(%rbx), %rcx
-    SCRATCH_GIVE %r12, (L+64)(%rsp), 2, %rcx
     mov     %rbx, %rdi
     lea     (L + 16)(%rsp), %rsi
-    lea     (L + 8)(%rsp), %rdx
-    mov     %r12, %rcx
-    mov     S8(%rsp), %r8
-    call    lantern_get_unslashed_participating_indices
-    CHECK_STATUS %r13, 7f, 6f
-    mov     %rbx, %rdi
-    lea     (L + 24)(%rsp), %rsi
     call    lantern_is_in_inactivity_leak
-    movq    $1, (L + 56)(%rsp)
-    mov     S7(%rsp), %rax
-    lea     LIST_FIXED(%rax), %r14
-    mov     LIST_COUNT(%rax), %rcx
-    lea     (%r14,%rcx,8), %rcx
-    mov     %rcx, (L + 32)(%rsp)
-    mov     S8(%rsp), %rax
-    lea     LIST_FIXED(%rax), %r15
-    mov     LIST_COUNT(%rax), %rcx
-    lea     (%r15,%rcx,8), %rcx
-    mov     %rcx, (L + 40)(%rsp)
-1:  cmp     (L + 32)(%rsp), %r14
-    jae     8f
-    mov     (%r14), %rax                    # index
-    add     $8, %r14
-    mov     BeaconState_inactivity_scores(%rbx), %rcx
-    add     %rbx, %rcx
-    lea     (%rcx,%rax,8), %rcx             # &state.inactivity_scores[index]
-    mov     %rcx, S9(%rsp)
-    IN_SORTED %rax, %r15, (L+40)(%rsp), %rdx
-    test    %rdx, %rdx
-    jz      2f
-    mov     S9(%rsp), %rdi                  # saturating_sub(score, 1)
-    lea     (L + 56)(%rsp), %rsi
-    mov     %rdi, %rdx
-    call    lantern_saturating_sub
+    mov     (L + 8)(%rsp), %rdi             # previous epoch, and it + 1
+    lea     1(%rdi), %rsi
+    mov     CONFIG_INACTIVITY_SCORE_BIAS(%rbp), %r8
+    mov     CONFIG_INACTIVITY_SCORE_RECOVERY_RATE(%rbp), %r9
+    mov     (L + 16)(%rsp), %r10            # leak
+    PART    %r14, %rcx, %rbx, BeaconState_validators
+    PART    %r12, %rax, %rbx, BeaconState_previous_epoch_participation
+    PART    %r15, %rax, %rbx, BeaconState_inactivity_scores
+    test    %rcx, %rcx
+    jz      8f
+1:  mov     Validator_activation_epoch(%r14), %rax
+    mov     Validator_exit_epoch(%r14), %rdx
+    movzbl  (%r12), %r11d                   # previous_epoch_participation[index]
+    cmp     %rdi, %rax                      # is_active_validator(validator, previous)
+    ja      2f
+    cmp     %rdx, %rdi
+    jae     2f
+    cmpb    $0, Validator_slashed(%r14)
+    je      3f
+    xor     %r11d, %r11d                    # slashed: not in the unslashed participating set
     jmp     3f
-2:  mov     S9(%rsp), %rcx                  # += INACTIVITY_SCORE_BIAS
-    mov     CONFIG_INACTIVITY_SCORE_BIAS(%rbp), %rax
-    add     %rax, (%rcx)
-3:  cmpq    $0, (L + 24)(%rsp)
-    jne     1b
-    mov     S9(%rsp), %rdi                  # saturating_sub(score, INACTIVITY_SCORE_RECOVERY_RATE)
-    lea     CONFIG_INACTIVITY_SCORE_RECOVERY_RATE(%rbp), %rsi
-    mov     %rdi, %rdx
-    call    lantern_saturating_sub
-    jmp     1b
-7:  LEAVE 80
-6:  xor     %eax, %eax
-    LEAVE 80
+2:  cmpb    $0, Validator_slashed(%r14)     # get_eligible_validator_indices: or slashed and
+    je      7f
+    cmp     Validator_withdrawable_epoch(%r14), %rsi    # previous_epoch + 1 < withdrawable_epoch
+    jae     7f
+    xor     %r11d, %r11d
+3:  mov     (%r15), %rax                    # inactivity_scores[index]
+    bt      $TIMELY_TARGET_FLAG_INDEX, %r11d
+    jnc     4f
+    xor     %edx, %edx                      # -= min(1, score): saturating_sub(score, 1)
+    sub     $1, %rax
+    cmovb   %rdx, %rax
+    jmp     5f
+4:  add     %r8, %rax                       # += INACTIVITY_SCORE_BIAS
+5:  test    %r10, %r10
+    jnz     6f
+    xor     %edx, %edx                      # saturating_sub(score, INACTIVITY_SCORE_RECOVERY_RATE)
+    sub     %r9, %rax
+    cmovb   %rdx, %rax
+6:  mov     %rax, (%r15)
+7:  add     $Validator__mem, %r14
+    inc     %r12
+    add     $8, %r15
+    dec     %rcx
+    jnz     1b
 8:  movq    $0, (%r13)
     xor     %eax, %eax
-    LEAVE 80
+    LEAVE 32
 9:  mov     $LANTERN_BUFFER_TOO_SMALL, %eax
-    LEAVE 80
+    LEAVE 32
 SPEC_END process_inactivity_updates
 .endif
 
@@ -554,85 +548,209 @@ SPEC_END get_inactivity_penalty_deltas
 
 .if FORK >= FORK_ALTAIR
 /*
- * rbx state, rbp config, r12 scratch, r13 result, r14 delta pair, r15 index,
- * S7 the scratch size on entry. Scratch: lists 0 to 7 at its end. Locals: L epoch, L+8 flag index, L+16 index.
+ * A candidate of ARCHITECTURE.md section 9: get_flag_index_deltas and
+ * get_inactivity_penalty_deltas inlined in two passes over the validators, with no lists.
+ * Pass 1 sums the total active balance and each flag's unslashed participating balance;
+ * pass 2 changes each eligible validator's balance by its deltas, in the spec's order.
+ * rbx state, then balances; rbp config, then the validator count; r12 participation;
+ * r13 result; r14 validator; r15 index. Locals: L current epoch, L+8 previous epoch,
+ * L+16 total active balance, L+24 its square root, L+32 leak, L+40 previous epoch + 1,
+ * L+48 EFFECTIVE_BALANCE_INCREMENT, L+56 to L+72 weight * unslashed_participating_increments
+ * of the source, target and head flags, L+80 active_increments * WEIGHT_DENOMINATOR,
+ * L+88 the inactivity penalty denominator, L+96 base reward per increment.
  */
 SPEC_FUNCTION process_rewards_and_penalties
-    ENTER 32
+    ENTER 112
     mov     %rdi, %rbx
     mov     %rsi, %rbp
     mov     %rdx, %r12
     mov     %rcx, %r13
     NEED_SCRATCH %r12, %rbx, 11, 9f
-    mov     (%r12), %rax
-    mov     %rax, S7(%rsp)
     mov     %rbx, %rdi
     lea     L(%rsp), %rsi
     call    lantern_get_current_epoch
     cmpq    $GENESIS_EPOCH, L(%rsp)
     je      8f
-    xor     %r14d, %r14d                    # flag_deltas for each flag
-1:  mov     %r14, (L + 8)(%rsp)
-    mov     (BeaconState_validators + 8)(%rbx), %rcx
-    mov     S7(%rsp), %rax
-    lea     (%r14,%r14), %rdx
-    SCRATCH_LIST_R %r8, %r12, %rax, %rdx, %rcx
-    inc     %rdx
-    SCRATCH_LIST_R %r9, %r12, %rax, %rdx, %rcx
-    SCRATCH_GIVE %r12, %rax, 8, %rcx
     mov     %rbx, %rdi
     lea     (L + 8)(%rsp), %rsi
-    mov     %r12, %rdx
-    mov     %r8, %rcx
-    mov     %r9, %r8
-    call    lantern_get_flag_index_deltas
-    CHECK_STATUS %r13, 7f, 6f
-    inc     %r14
-    cmp     $3, %r14
-    jb      1b
-    mov     (BeaconState_validators + 8)(%rbx), %rcx    # get_inactivity_penalty_deltas
-    mov     S7(%rsp), %rax
-    SCRATCH_LIST %r8, %r12, %rax, 6, %rcx
-    SCRATCH_LIST %r9, %r12, %rax, 7, %rcx
-    SCRATCH_GIVE %r12, %rax, 8, %rcx
-    mov     %rbx, %rdi
-    mov     %rbp, %rsi
-    mov     %r12, %rdx
-    mov     %r8, %rcx
-    mov     %r9, %r8
-    call    lantern_get_inactivity_penalty_deltas
-    CHECK_STATUS %r13, 7f, 6f
-    xor     %r14d, %r14d                    # for rewards, penalties in deltas
-2:  xor     %r15d, %r15d
-3:  cmp     (BeaconState_validators + 8)(%rbx), %r15
+    call    lantern_get_previous_epoch
+    mov     CONFIG_INACTIVITY_SCORE_BIAS(%rbp), %rax
+    imul    $FORK_INACTIVITY_PENALTY_QUOTIENT, %rax, %rax   # penalty_denominator
+    mov     %rax, (L + 88)(%rsp)
+    movq    $EFFECTIVE_BALANCE_INCREMENT, (L + 48)(%rsp)
+    mov     L(%rsp), %rsi                   # current
+    mov     (L + 8)(%rsp), %rdi             # previous
+    PART    %r14, %rbp, %rbx, BeaconState_validators
+    PART    %r12, %rax, %rbx, BeaconState_previous_epoch_participation
+    xor     %r8d, %r8d                      # total active balance
+    xor     %r9d, %r9d                      # the source, target and head balances
+    xor     %r10d, %r10d
+    xor     %r11d, %r11d
+    test    %rbp, %rbp
+    jz      2f
+1:  mov     Validator_activation_epoch(%r14), %rax
+    mov     Validator_exit_epoch(%r14), %rcx
+    mov     Validator_effective_balance(%r14), %rdx
+    cmp     %rsi, %rax                      # is_active_validator(validator, current)
+    ja      3f
+    cmp     %rcx, %rsi
+    jae     3f
+    add     %rdx, %r8
+3:  cmp     %rdi, %rax                      # active in previous and not slashed: its flags count
+    ja      4f
+    cmp     %rcx, %rdi
     jae     4f
-    mov     %r15, (L + 16)(%rsp)
-    mov     (BeaconState_validators + 8)(%rbx), %rcx
-    mov     S7(%rsp), %rax
-    lea     (%r14,%r14), %rdx
-    SCRATCH_LIST_R %r8, %r12, %rax, %rdx, %rcx
-    lea     LIST_FIXED(%r8,%r15,8), %rdx
+    cmpb    $0, Validator_slashed(%r14)
+    jne     4f
+    movzbl  (%r12), %r15d                   # previous_epoch_participation[index]
+    bt      $TIMELY_SOURCE_FLAG_INDEX, %r15d
+    sbb     %rax, %rax
+    and     %rdx, %rax
+    add     %rax, %r9
+    bt      $TIMELY_TARGET_FLAG_INDEX, %r15d
+    sbb     %rax, %rax
+    and     %rdx, %rax
+    add     %rax, %r10
+    bt      $TIMELY_HEAD_FLAG_INDEX, %r15d
+    sbb     %rax, %rax
+    and     %rdx, %rax
+    add     %rax, %r11
+4:  add     $Validator__mem, %r14
+    inc     %r12
+    dec     %rbp
+    jnz     1b
+2:  mov     $EFFECTIVE_BALANCE_INCREMENT, %rcx    # get_total_balance: max(EFFECTIVE_BALANCE_INCREMENT, sum)
+    cmp     %rcx, %r8
+    cmovbe  %rcx, %r8
+    cmp     %rcx, %r9
+    cmovbe  %rcx, %r9
+    cmp     %rcx, %r10
+    cmovbe  %rcx, %r10
+    cmp     %rcx, %r11
+    cmovbe  %rcx, %r11
+    mov     %r8, (L + 16)(%rsp)
+    mov     %r9, %rax                       # weight * unslashed_participating_increments
+    xor     %edx, %edx
+    div     %rcx
+    imul    $TIMELY_SOURCE_WEIGHT, %rax, %rax
+    mov     %rax, (L + 56)(%rsp)
+    mov     %r10, %rax
+    xor     %edx, %edx
+    div     %rcx
+    imul    $TIMELY_TARGET_WEIGHT, %rax, %rax
+    mov     %rax, (L + 64)(%rsp)
+    mov     %r11, %rax
+    xor     %edx, %edx
+    div     %rcx
+    imul    $TIMELY_HEAD_WEIGHT, %rax, %rax
+    mov     %rax, (L + 72)(%rsp)
+    mov     %r8, %rax                       # active_increments * WEIGHT_DENOMINATOR
+    xor     %edx, %edx
+    div     %rcx
+    imul    $WEIGHT_DENOMINATOR, %rax, %rax
+    mov     %rax, (L + 80)(%rsp)
     mov     %rbx, %rdi
-    lea     (L + 16)(%rsp), %rsi
-    call    lantern_increase_balance
-    mov     (BeaconState_validators + 8)(%rbx), %rcx
-    mov     S7(%rsp), %rax
-    lea     1(%r14,%r14), %rdx
-    SCRATCH_LIST_R %r8, %r12, %rax, %rdx, %rcx
-    lea     LIST_FIXED(%r8,%r15,8), %rdx
-    mov     %rbx, %rdi
-    lea     (L + 16)(%rsp), %rsi
-    call    lantern_decrease_balance
+    lea     (L + 32)(%rsp), %rsi
+    call    lantern_is_in_inactivity_leak
+    lea     (L + 16)(%rsp), %rdi            # get_base_reward_per_increment
+    lea     (L + 24)(%rsp), %rsi
+    call    lantern_integer_squareroot
+    MOVQ    %rax, EFFECTIVE_BALANCE_INCREMENT * BASE_REWARD_FACTOR
+    xor     %edx, %edx
+    divq    (L + 24)(%rsp)
+    mov     %rax, (L + 96)(%rsp)
+    mov     (L + 8)(%rsp), %rdi             # previous epoch, and it + 1
+    lea     1(%rdi), %rax
+    mov     %rax, (L + 40)(%rsp)
+    PART    %r14, %rbp, %rbx, BeaconState_validators
+    PART    %r12, %rax, %rbx, BeaconState_previous_epoch_participation
+    PART    %rsi, %rax, %rbx, BeaconState_inactivity_scores
+    PART    %rax, %rcx, %rbx, BeaconState_balances
+    mov     %rax, %rbx
+    xor     %r15d, %r15d
+    test    %rbp, %rbp
+    jz      8f
+5:  mov     Validator_activation_epoch(%r14), %rax
+    mov     Validator_exit_epoch(%r14), %rcx
+    movzbl  (%r12,%r15), %r8d               # previous_epoch_participation[index]
+    cmp     %rdi, %rax                      # is_active_validator(validator, previous)
+    ja      6f
+    cmp     %rcx, %rdi
+    jae     6f
+    cmpb    $0, Validator_slashed(%r14)
+    je      10f
+    xor     %r8d, %r8d                      # slashed: in no unslashed participating set
+    jmp     10f
+6:  cmpb    $0, Validator_slashed(%r14)     # get_eligible_validator_indices: or slashed and
+    je      7f
+    mov     (L + 40)(%rsp), %rax            # previous_epoch + 1 < withdrawable_epoch
+    cmp     Validator_withdrawable_epoch(%r14), %rax
+    jae     7f
+    xor     %r8d, %r8d
+10: mov     Validator_effective_balance(%r14), %r9
+    mov     %r9, %rax                       # base_reward = get_base_reward(state, index)
+    xor     %edx, %edx
+    divq    (L + 48)(%rsp)
+    imul    (L + 96)(%rsp), %rax
+    mov     %rax, %r10
+    mov     (%rbx,%r15,8), %r11             # balances[index]
+    xor     %ecx, %ecx
+    bt      $TIMELY_SOURCE_FLAG_INDEX, %r8d
+    jnc     11f
+    cmpq    $0, (L + 32)(%rsp)              # participating: a reward unless leaking
+    jne     12f
+    mov     %r10, %rax
+    imul    (L + 56)(%rsp), %rax
+    xor     %edx, %edx
+    divq    (L + 80)(%rsp)
+    add     %rax, %r11
+    jmp     12f
+11: imul    $TIMELY_SOURCE_WEIGHT, %r10, %rax   # not participating: decrease_balance by the penalty
+    shr     $6, %rax                        # // WEIGHT_DENOMINATOR, which is 64
+    sub     %rax, %r11
+    cmovb   %rcx, %r11
+12: bt      $TIMELY_TARGET_FLAG_INDEX, %r8d
+    jnc     13f
+    cmpq    $0, (L + 32)(%rsp)
+    jne     14f
+    mov     %r10, %rax
+    imul    (L + 64)(%rsp), %rax
+    xor     %edx, %edx
+    divq    (L + 80)(%rsp)
+    add     %rax, %r11
+    jmp     14f
+13: imul    $TIMELY_TARGET_WEIGHT, %r10, %rax
+    shr     $6, %rax
+    sub     %rax, %r11
+    cmovb   %rcx, %r11
+14: bt      $TIMELY_HEAD_FLAG_INDEX, %r8d   # no head penalty
+    jnc     15f
+    cmpq    $0, (L + 32)(%rsp)
+    jne     15f
+    mov     %r10, %rax
+    imul    (L + 72)(%rsp), %rax
+    xor     %edx, %edx
+    divq    (L + 80)(%rsp)
+    add     %rax, %r11
+15: bt      $TIMELY_TARGET_FLAG_INDEX, %r8d # get_inactivity_penalty_deltas
+    jc      16f
+    mov     %r9, %rax
+    imul    (%rsi,%r15,8), %rax             # penalty_numerator
+    xor     %edx, %edx
+    divq    (L + 88)(%rsp)
+    xor     %ecx, %ecx
+    sub     %rax, %r11
+    cmovb   %rcx, %r11
+16: mov     %r11, (%rbx,%r15,8)
+7:  add     $Validator__mem, %r14
     inc     %r15
-    jmp     3b
-4:  inc     %r14
-    cmp     $4, %r14
-    jb      2b
+    cmp     %rbp, %r15
+    jb      5b
 8:  movq    $0, (%r13)
-6:  xor     %eax, %eax
-7:  LEAVE 32
+    xor     %eax, %eax
+    LEAVE 112
 9:  mov     $LANTERN_BUFFER_TOO_SMALL, %eax
-    LEAVE 32
+    LEAVE 112
 SPEC_END process_rewards_and_penalties
 .endif
 

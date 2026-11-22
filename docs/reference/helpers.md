@@ -625,6 +625,11 @@ lantern_get_total_active_balance(state, scratch, out) -> status
 - `LANTERN_OK`: `out` holds the total.
 - `LANTERN_BUFFER_TOO_SMALL`: `scratch` has fewer than S(1) bytes.
 
+### Function does
+
+- One pass over the validators sums the effective balances of those active in the current epoch, with get_active_validator_indices and get_total_balance inline.
+- Fails with `LANTERN_BUFFER_TOO_SMALL` when the index list of every validator would not fit in the scratch after its size field, as get_active_validator_indices does.
+
 ### ABI
 
 - Argument order: `state`, `scratch`, `out`.

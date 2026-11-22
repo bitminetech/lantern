@@ -325,27 +325,48 @@ SPEC_LEAF get_total_balance
     RETURN_OK
 SPEC_END get_total_balance
 
-/* x19 state, x20 scratch, x21 out; locals: the epoch. The index list is the scratch after its size. */
+/*
+ * A candidate of ARCHITECTURE.md section 9: get_active_validator_indices and get_total_balance
+ * inlined in one pass over the validators, after v1's check that the index list would fit
+ * in the scratch after its size field.
+ * Locals: sp+16 out, sp+24 state, sp+32 scratch, sp+40 the epoch.
+ */
 SPEC_FUNCTION get_total_active_balance
-    ENTER 16
-    mov     x19, x0
-    mov     x20, x1
-    mov     x21, x2
-    add     x1, sp, #L
+    FRAME 32
+    str     x2, [sp, #16]
+    stp     x0, x1, [sp, #24]
+    add     x1, sp, #40
     bl      lantern_get_current_epoch
-    ldr     x9, [x20]                       /* the list takes all of scratch but its size field */
+    ldp     x0, x1, [sp, #24]
+    ldr     x9, [x1]                        /* room for every validator in the scratch after its size */
     sub     x9, x9, #8
-    str     x9, [x20, #8]
-    mov     x0, x19
-    add     x1, sp, #L
-    add     x2, x20, #8
-    bl      lantern_get_active_validator_indices
-    cbnz    x0, 9f
-    mov     x0, x19
-    add     x1, x20, #8
-    mov     x2, x21
-    bl      lantern_get_total_balance
-9:  LEAVE 16
+    PART    x3, x4, x0, BeaconState_validators
+    lsl     x10, x4, #3
+    add     x10, x10, #LIST_FIXED
+    cmp     x9, x10
+    b.lo    9f
+    ldr     x8, [sp, #40]
+    mov     x7, #0                          /* sum */
+    cbz     x4, 2f
+1:  ldr     x9, [x3, #Validator_activation_epoch]
+    ldr     x10, [x3, #Validator_exit_epoch]
+    ldr     x11, [x3, #Validator_effective_balance]
+    cmp     x9, x8                          /* is_active_validator(validator, epoch) */
+    ccmp    x8, x10, #2, ls
+    csel    x11, x11, xzr, lo
+    add     x7, x7, x11
+    add     x3, x3, #Validator__mem
+    subs    x4, x4, #1
+    b.ne    1b
+2:  MOVQ    x8, EFFECTIVE_BALANCE_INCREMENT
+    cmp     x7, x8
+    csel    x7, x7, x8, hi                  /* max(EFFECTIVE_BALANCE_INCREMENT, sum) */
+    ldr     x2, [sp, #16]
+    str     x7, [x2]
+    mov     x0, #LANTERN_OK
+    UNFRAME 32
+9:  mov     x0, #LANTERN_BUFFER_TOO_SMALL
+    UNFRAME 32
 SPEC_END get_total_active_balance
 
 /* ---------------------------------------------------------------- Mutators */
