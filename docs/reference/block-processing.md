@@ -1325,7 +1325,7 @@ lantern_pubkey_cache_init(validators, cache) -> status
 
 ## Type `PubkeyCache`
 
-The checked public key of each validator index: asm-crypto's [`BlsKeyCache`](https://github.com/bitminetech/asm-crypto/blob/745aaf5954c57bb65289f474326d5c566e4d653e/docs/reference/bls-signatures.md#type-blskeycache), whose keys are a state's validators' pubkeys.
+The checked public key of each validator index: asm-crypto's [`BlsKeyCache`](https://github.com/bitminetech/asm-crypto/blob/0f80dd746dfa7a561610165065b9473e4d16a0ce/docs/reference/bls-signatures.md#type-blskeycache), whose keys are a state's validators' pubkeys.
 
 ### Rules
 
