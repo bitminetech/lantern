@@ -36,6 +36,11 @@
 
 - Each OS and ISA has one shell, `asm/shell/<OS>/<ISA>/shell.s`, with the functions below and the entry point of the binary.
 - The entry point copies the program's arguments into an [`ArgList`](app.md#type-arglist) in memory from lantern_shell_map, calls lantern_app_main ([app.md](app.md)) with it, and ends the process with the status it returns as the exit code.
+- On x86-64 and ARM64 it first checks the CPU features of the `sha` variant (README, Target profile), with baseline instructions only. With all of them it calls `lx_lantern_app_main`, lantern_app_main of the copy built with that variant; else lantern_app_main.
+  - x86-64: `cpuid`.
+  - Linux ARM64: the `AT_HWCAP` entry of the auxiliary vector, after the environment pointers on the stack the kernel builds.
+  - macOS ARM64: `sysctlbyname`.
+  - Windows ARM64: `IsProcessorFeaturePresent`.
   - Linux: `_start`; the arguments from the stack the kernel builds, without the program name.
   - macOS: `main`; `argv` without the program name.
   - Windows: `mainCRTStartup`; `GetCommandLineW` split by the rules of `CommandLineToArgvW`, each argument converted to UTF-8, without the program name.

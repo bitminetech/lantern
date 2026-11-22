@@ -74,7 +74,22 @@ FUNCTION main
     inc     %r9
     jmp     4b
 6:  mov     %rbx, %rdi
-    CALL_GLOBAL lantern_app_main
+    xor     %eax, %eax                      # the sha variant (README, Target profile): cpuid
+    cpuid
+    cmp     $7, %eax
+    jb      60f
+    mov     $1, %eax
+    cpuid
+    bt      $9, %ecx                        # SSSE3
+    jnc     60f
+    mov     $7, %eax
+    xor     %ecx, %ecx
+    cpuid
+    bt      $29, %ebx                       # SHA
+    jnc     60f
+    CALL_GLOBAL lx_lantern_app_main
+    LEAVE 16
+60: CALL_GLOBAL lantern_app_main
     LEAVE 16
 9:  mov     $2, %eax                        # no memory for the arguments
     LEAVE 16

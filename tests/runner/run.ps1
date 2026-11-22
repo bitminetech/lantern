@@ -29,6 +29,11 @@ try {
         if (Test-Path (Join-Path $RunnerDir "$runner$exe")) {
             "$runner $($_.Name)"
             "$runner-bls-off $($_.Name)"
+            # The same with asm-crypto's sha variant (README, Target profile).
+            if (Test-Path (Join-Path $RunnerDir "$runner-sha$exe")) {
+                "$runner-sha $($_.Name)"
+                "$runner-bls-off-sha $($_.Name)"
+            }
         }
     }
 
@@ -42,7 +47,8 @@ try {
     }
 
     $status = 0
-    $runners = foreach ($preset in 'mainnet', 'minimal') { foreach ($fork in $forks) { "runner-$preset-$fork"; "runner-$preset-$fork-bls-off" } }
+    $runners = foreach ($preset in 'mainnet', 'minimal') { foreach ($fork in $forks) {
+        "runner-$preset-$fork"; "runner-$preset-$fork-bls-off"; "runner-$preset-$fork-sha"; "runner-$preset-$fork-bls-off-sha" } }
     foreach ($runner in $runners) {
         $runnerLogs = Get-ChildItem $logs -Filter "$runner.*.log" | Where-Object { $_.Name.StartsWith("$runner.") } | Sort-Object Name
         if (-not $runnerLogs) { continue }

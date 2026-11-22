@@ -29,6 +29,13 @@ for preset in mainnet minimal; do
         /opt/llvm-mingw/bin/$mingw-clang $march $flags -DBLS_OFF \
             "$root/tests/runner/runner.c" "$root/tests/runner/bls_off.c" -I"$root/platform/windows" -I"$root/tests/runner" \
             "$root/tests/runner/abi_$isa.s" "$out/liblantern-$preset.a" $deps_off -o "$out/runner-$preset-$fork-bls-off.exe"
+        # The same two with asm-crypto's sha variant (README, Target profile): -sha.
+        /opt/llvm-mingw/bin/$mingw-clang $march $flags -DLANTERN_SHA_VARIANT \
+            "$root/tests/runner/runner.c" -I"$root/platform/windows" -I"$root/tests/runner" \
+            "$root/tests/runner/abi_$isa.s" "$out/liblantern-$preset.a" $deps_sha -o "$out/runner-$preset-$fork-sha.exe"
+        /opt/llvm-mingw/bin/$mingw-clang $march $flags -DBLS_OFF -DLANTERN_SHA_VARIANT \
+            "$root/tests/runner/runner.c" "$root/tests/runner/bls_off.c" -I"$root/platform/windows" -I"$root/tests/runner" \
+            "$root/tests/runner/abi_$isa.s" "$out/liblantern-$preset.a" $deps_off_sha -o "$out/runner-$preset-$fork-bls-off-sha.exe"
     done
 done
 
@@ -45,7 +52,7 @@ if [ -e "$root/asm/core/$isa/app.s" ]; then
         -c "$root/asm/shell/windows/$isa/entry.s" -o "$out/entry.o"
     for preset in mainnet minimal; do
         /opt/llvm-mingw/bin/$mingw-clang $march -nostdlib -Wl,--entry=mainCRTStartup -Wl,--subsystem,console \
-            "$out/entry.o" "$out/liblantern-$preset.a" $deps "$out/deps/libp2p-shell.o" \
+            "$out/entry.o" "$out/liblantern-$preset.a" "$out/liblantern-$preset-lx.a" $deps "$out/deps/libp2p-shell.o" \
             -lkernel32 -lshell32 -lws2_32 -lbcrypt -o "$out/lantern-$preset.exe"
     done
 fi

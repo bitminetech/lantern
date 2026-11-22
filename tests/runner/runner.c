@@ -11941,6 +11941,31 @@ static LONG WINAPI crash_report(EXCEPTION_POINTERS *e) {
 }
 #endif
 
+#ifdef LANTERN_SHA_VARIANT
+/* The CPU features of asm-crypto's sha variant (README, Target profile). */
+#if defined(__x86_64__)
+#include <cpuid.h>
+static int sha_variant_supported(void) {
+    unsigned a, b, c, d;
+    if (!__get_cpuid(1, &a, &b, &c, &d) || !(c & bit_SSSE3)) return 0;
+    if (!__get_cpuid_count(7, 0, &a, &b, &c, &d)) return 0;
+    return (b & bit_SHA) != 0;
+}
+#elif defined(_WIN32)
+static int sha_variant_supported(void) { return IsProcessorFeaturePresent(PF_ARM_V8_CRYPTO_INSTRUCTIONS_AVAILABLE) != 0; }
+#elif defined(__APPLE__)
+#include <sys/sysctl.h>
+static int sha_variant_supported(void) {
+    int v = 0;
+    size_t n = sizeof v;
+    return sysctlbyname("hw.optional.arm.FEAT_SHA256", &v, &n, NULL, 0) == 0 && v == 1;
+}
+#else
+#include <sys/auxv.h>
+static int sha_variant_supported(void) { return (getauxval(AT_HWCAP) & (1UL << 6)) != 0; }   /* HWCAP_SHA2 */
+#endif
+#endif
+
 int main(int argc, char **argv) {
 #ifdef _WIN32
     SetUnhandledExceptionFilter(crash_report);
@@ -11949,6 +11974,13 @@ int main(int argc, char **argv) {
         fprintf(stderr, "usage: %s VECTOR_DIR FILE ...\n", argv[0]);
         return 2;
     }
+#ifdef LANTERN_SHA_VARIANT
+    if (!sha_variant_supported()) {
+        printf("SKIP the sha variant: this CPU lacks its features\n");
+        printf("PASS: 0 passed, 0 failed\n");
+        return 0;
+    }
+#endif
     load_config(argv[1]);
     const char *prefix = PRESET "-" STR(FORK_NAME) "-";
     size_t plen = strlen(prefix);

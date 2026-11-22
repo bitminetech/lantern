@@ -2,7 +2,9 @@
 # Sourced by platform/<OS>/build.sh, which defines as() with the target flags
 # and sets isa and root. build_objects OS OUT_DIR leaves the dependency objects
 # in $deps (and in $deps_off for the signatures-off runner), and liblantern-mainnet.a
-# and liblantern-minimal.a in OUT_DIR.
+# and liblantern-minimal.a in OUT_DIR. On x86-64 and ARM64 also $deps_sha and
+# $deps_off_sha, with asm-crypto's sha variant, and liblantern-<preset>-lx.a, the
+# binary's copy of the core built with it (README, Target profile).
 
 # The asm-crypto objects lantern calls, and those that its dependencies call.
 CRYPTO_OBJECTS="sha256 hmac bls12381 chacha20 aes x25519 p256 secp256k1 sha512 ed25519 keccak"
@@ -65,6 +67,17 @@ build_objects() {
     llvm-objcopy $renames "$out/deps/crypto-bls12381.o" "$out/deps/crypto-bls12381-off.o"
     deps_off=$(echo "$deps" | sed 's#crypto-bls12381\.o#crypto-bls12381-off.o#')
 
+    # asm-crypto's sha variant (README, Target profile) on x86-64 and ARM64: its SHA-256 object,
+    # and $deps_sha and $deps_off_sha, $deps and $deps_off with it.
+    deps_sha=""
+    deps_off_sha=""
+    if [ "$isa" != riscv64 ]; then
+        as -I"$dep/asm-crypto/include" -I"$dep/asm-crypto/platform/$os" \
+            -c "$dep/asm-crypto/asm/core/$isa/sha256x.s" -o "$out/deps/crypto-sha256x.o"
+        deps_sha=$(echo "$deps" | sed 's#crypto-sha256\.o#crypto-sha256x.o#')
+        deps_off_sha=$(echo "$deps_off" | sed 's#crypto-sha256\.o#crypto-sha256x.o#')
+    fi
+
     # One archive per preset. The core files include preset.inc from the
     # preset's folder in include/.
     for preset in mainnet minimal; do
@@ -101,6 +114,27 @@ build_objects() {
             llvm-ar --format=darwin rcs "$out/liblantern-$preset.a" $objects
         else
             llvm-ar rcs "$out/liblantern-$preset.a" $objects
+        fi
+        # The binary's sha copy (README, Target profile): the core objects but the shell, and
+        # $deps_sha, each symbol they define with the prefix lx_. Their calls of the shell keep
+        # its names. The entry point picks lx_lantern_app_main or lantern_app_main.
+        if [ -n "$deps_sha" ]; then
+            lx=$out/$preset/lx
+            mkdir -p "$lx"
+            coreobjects=$(echo $objects | tr ' ' '\n' | grep -v '/shell\.o$')
+            llvm-nm --defined-only -g $coreobjects $deps_sha | awk 'NF == 3 { print $3 }' | sort -u \
+                | sed "s/^$prefix\(.*\)$/$prefix\1 ${prefix}lx_\1/" > "$lx/names.txt"
+            lxobjects=""
+            for o in $coreobjects $deps_sha; do
+                llvm-objcopy --redefine-syms="$lx/names.txt" "$o" "$lx/$(basename "$o")"
+                lxobjects="$lxobjects $lx/$(basename "$o")"
+            done
+            rm -f "$out/liblantern-$preset-lx.a"
+            if [ "$os" = macos ]; then
+                llvm-ar --format=darwin rcs "$out/liblantern-$preset-lx.a" $lxobjects
+            else
+                llvm-ar rcs "$out/liblantern-$preset-lx.a" $lxobjects
+            fi
         fi
     done
 }

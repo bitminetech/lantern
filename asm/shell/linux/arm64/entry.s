@@ -1,9 +1,10 @@
 /*
  * The entry point of the lantern binary for Linux on ARM64: the arguments, without the program
  * name, as an ArgList; then lantern_app_main; then exit_group with its status.
- * Requirements: docs/reference/shell.md, Common rules. At _start, sp holds argc, then argv.
- * x19 the argument count, x20 argv, x21 the argument bytes, x22 the ArgList's size, x23 the
- * ArgList, x24 the next byte.
+ * Requirements: docs/reference/shell.md, Common rules. At _start, sp holds argc, then argv,
+ * a 0, envp, a 0, then the auxiliary vector. x19 the argument count, x20 argv, x21 the argument
+ * bytes, x22 the ArgList's size, x23 the ArgList, x24 the next byte, x25 1 when the CPU has
+ * FEAT_SHA256 (README, Target profile).
  */
 .set ISA_ARM64, 1
 .include "ssz.inc"
@@ -22,7 +23,18 @@
 _start:
     mov     x29, #0
     mov     x30, #0
-    ldr     x19, [sp]
+    ldr     x9, [sp]                        /* the sha variant: bit 6 (HWCAP_SHA2) of AT_HWCAP */
+    add     x10, sp, #16
+    add     x10, x10, x9, lsl #3            /* envp */
+70: ldr     x11, [x10], #8
+    cbnz    x11, 70b
+    mov     x25, #0
+71: ldp     x11, x12, [x10], #16            /* the auxiliary vector: type, value; AT_NULL ends it */
+    cbz     x11, 72f
+    cmp     x11, #16                        /* AT_HWCAP */
+    b.ne    71b
+    ubfx    x25, x12, #6, #1
+72: ldr     x19, [sp]
     add     x20, sp, #16                    /* argv[1] */
     sub     x19, x19, #1
     mov     x21, #0                         /* the bytes of every argument */
@@ -72,7 +84,10 @@ _start:
     add     x9, x9, #1
     b       4b
 6:  mov     x0, x23
-    bl      lantern_app_main
+    cbz     x25, 60f
+    bl      lx_lantern_app_main
+    b       8f
+60: bl      lantern_app_main
     b       8f
 9:  mov     x0, #2                          /* no memory for the arguments */
 8:  mov     x8, #SYS_EXIT_GROUP
