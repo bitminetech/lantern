@@ -781,7 +781,15 @@
 .set Node_recon_buffer, Node_base_slot + 1368  /* the BufferId of the rebuilt sidecars */
 .set Node_recon_next, Node_base_slot + 1376    /* the column from which the next missing one is looked for */
 .set Node_recon_failed, Node_base_slot + 1384  /* Root: of the last reconstruction that failed, or zero */
-.set NODE_FIXED, Node_base_slot + 1416
+.set Node_responses, Node_base_slot + 1416  /* PartRef: NodeResponse entries of Node_response_bytes each, all made at the start */
+.set Node_response_bytes, Node_base_slot + 1432  /* NodeResponse__fixed + the response room, a multiple of 8 */
+.set Node_sync_start, Node_base_slot + 1440  /* the start slot of the open BeaconBlocksByRange of the sync */
+.set Node_sync_got, Node_base_slot + 1448    /* the slot after its highest block so far, or 0 */
+.set Node_sync_peer, Node_base_slot + 1456   /* the peers part index the next BeaconBlocksByRange of the sync looks from */
+.set Node_status_peer, Node_base_slot + 1464 /* the same for the next Status request of the sync */
+.set Node_sidecar_ms, Node_base_slot + 1472  /* the time_ms of the last sidecar retry, or 0 */
+.set Node_sidecar_peer, Node_base_slot + 1480  /* the peers part index the sidecar requests look from */
+.set NODE_FIXED, Node_base_slot + 1488
 .set Eth1Count_number, 0               /* Eth1Count (node.md) */
 .set Eth1Count_count, 8
 .set Eth1Count_root, 16
@@ -799,6 +807,7 @@
 .set NODE_PAYLOAD_READY, 3                 /* payload_id holds the engine's payloadId */
 .set NODE_LOOKUP_MS, 10000             /* the least time between two lookups of the node */
 .set NODE_STATUS_MS, 12000             /* the least time between two Status requests of node_sync */
+.set NODE_SIDECAR_RETRY_MS, 4000       /* the least time between two sidecar retries */
 .set NODE_SUBSCRIBE_AHEAD, 2           /* epochs: the topics of a new ForkDigest join this early, the old ones leave this late */
 .set NODE_STATE_KEEP_SLOTS, 4          /* the post-states of blocks of this many slots before the store's stay */
 .set NODE_DIAL_TAG, 0x4000000000000000 /* the bit of a DIAL tag of the node */
@@ -890,9 +899,13 @@
 .set NODE_STREAM_TAG, 0x8000000000000000  /* the bit of an OPEN_STREAM tag of the node */
 .set NODE_SYNC_BATCH, 64               /* the most blocks of one BeaconBlocksByRange request of the node */
 .set NodeStream_next, 40               /* SERVE: the index of the next BufferId of the list */
-.set NodeStream_list, 48               /* a ByteList: the request bytes, then the BufferIds of the blocks to send */
-.set NodeStream_request, 72
-.set NodeStream__fixed, 72
+.set NodeStream_response, 48           /* a request of the node: the index + 1 of its NodeResponse, or 0 */
+.set NodeStream_list, 56               /* a ByteList: the request bytes, then the BufferIds of the blocks to send */
+.set NodeStream_request, 80
+.set NodeStream__fixed, 80
+.set NodeResponse_used, 0              /* NodeResponse (node.md): 1 while a stream holds it */
+.set NodeResponse_list, 8              /* a ByteList: the response bytes not read yet */
+.set NodeResponse__fixed, 32
 
 /* NodeMessage: a gossip message the node holds */
 .set NodeMessage_handle, 0             /* the libp2p message Handle */
@@ -961,7 +974,9 @@
 .set NodeRoom_proposers, 112           /* NodeProposer entries: the fee recipients of prepareBeaconProposer */
 .set NodeRoom_eth1_blocks, 120         /* Eth1Block entries: the eth1 follower's window */
 .set NodeRoom_eth1_deposits, 128       /* Eth1Deposit entries, and as many leaves and Eth1Count entries */
-.set NODE_ROOM_FIELDS, 17
+.set NodeRoom_responses, 136           /* NodeResponse entries: the requests of the node but Status and GetMetaData open at once */
+.set NodeRoom_response_bytes, 144      /* response bytes each NodeResponse holds */
+.set NODE_ROOM_FIELDS, 19
 
 /* NodeProposer: a validator's fee recipient (beacon-api.md, prepareBeaconProposer) */
 .set NodeProposer_validator_index, 0

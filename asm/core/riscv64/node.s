@@ -80,6 +80,18 @@ FUNCTION lantern_node_size
     mulhu   t2, t0, t1
     bnez    t2, 9f
     mul     t3, t0, t1
+    ld      t0, NodeRoom_response_bytes(a0) # the bytes of a NodeResponse
+    srli    t1, t0, 32
+    bnez    t1, 9f
+    addi    t0, t0, NodeResponse__fixed + 7
+    andi    t1, t0, -8
+    ld      t0, NodeRoom_responses(a0)
+    mulhu   t2, t0, t1
+    bnez    t2, 9f
+    mul     t0, t0, t1
+    add     t0, t3, t0
+    bltu    t0, t3, 9f
+    mv      t3, t0
     NODE_SIZE_ADD blocks, NodeBlock__mem
     NODE_SIZE_ADD checkpoints, NodeCheckpoint__mem
     NODE_SIZE_ADD pow_blocks, POW_BLOCK_BYTES
@@ -140,7 +152,10 @@ END_FUNCTION lantern_node_size
     add     t0, t0, t1
 .endm
 
-/* Lay out the parts of the node a0 for the room a1 at NODE_FIXED, with no entries. Uses t0-t3. */
+/*
+ * Lay out the parts of the node a0 for the room a1 at NODE_FIXED, with no entries; the
+ * NodeResponse entries all made, each free. Uses t0-t3, a7.
+ */
 LOCAL_FUNCTION node_layout
     UNWIND_END_PROLOGUE
     ld      t3, NodeRoom_request_bytes(a1)
@@ -206,7 +221,23 @@ LOCAL_FUNCTION node_layout
     NODE_PART eth1_deposits, eth1_deposits, Eth1Deposit__mem
     NODE_PART eth1_leaves, eth1_deposits, 32
     NODE_PART eth1_counts, eth1_deposits, Eth1Count__mem
-    ret
+    ld      t3, NodeRoom_response_bytes(a1) # the NodeResponse entries, each free with an empty list
+    addi    t3, t3, NodeResponse__fixed + 7
+    andi    t3, t3, -8
+    STQ     t3, a0, Node_response_bytes
+    STQ     t0, a0, Node_responses
+    ld      t1, NodeRoom_responses(a1)
+    STQ     t1, a0, Node_responses + 8
+1:  beqz    t1, 2f
+    add     t2, a0, t0
+    sd      zero, 0(t2)
+    sd      zero, 8(t2)
+    sd      zero, 16(t2)
+    sd      zero, 24(t2)
+    add     t0, t0, t3
+    addi    t1, t1, -1
+    j       1b
+2:  ret
 END_FUNCTION node_layout
 
 /*
@@ -439,6 +470,7 @@ FUNCTION lantern_node_copy
     NODE_COPY_ROOM eth1_blocks, Node_eth1_blocks
     NODE_COPY_ROOM eth1_deposits, Node_eth1_deposits
     NODE_COPY_ROOM eth1_deposits, Node_eth1_counts
+    NODE_COPY_ROOM responses, Node_responses
     ld      t0, NodeRoom_p2p_out(s2)        # the queued bytes fit
     ld      t1, Node_p2p_out(s1)
     add     t1, s1, t1
@@ -448,6 +480,11 @@ FUNCTION lantern_node_copy
     ld      t1, Node_engine_in(s1)
     add     t1, s1, t1
     ld      t1, 16(t1)
+    bltu    t0, t1, 8f
+    ld      t0, NodeRoom_response_bytes(s2) # a NodeResponse's bytes fit
+    addi    t0, t0, NodeResponse__fixed + 7
+    andi    t0, t0, -8
+    LDQ     t1, s1, Node_response_bytes
     bltu    t0, t1, 8f
     ld      s8, Node_stream_bytes(s1)       # a stream's request bytes fit
     ld      t0, NodeRoom_request_bytes(s2)
@@ -515,7 +552,24 @@ FUNCTION lantern_node_copy
     add     s4, s4, s8
     addi    s7, s7, -1
     j       1b
-2:  li      a0, LANTERN_OK
+2:  PART    s4, s7, s1, Node_responses      # each NodeResponse, with the room of the new stride
+    LDQ     s8, s1, Node_response_bytes
+    LDQ     t0, s3, Node_responses
+    add     s9, s3, t0
+3:  beqz    s7, 4f
+    mv      a0, s9
+    mv      a1, s4
+    ld      a2, (NodeResponse_list + 16)(s4)
+    addi    a2, a2, NodeResponse__fixed
+    call    lantern_copy
+    LDQ     t0, s3, Node_response_bytes
+    addi    t1, t0, -NodeResponse_list
+    sd      t1, NodeResponse_list(s9)
+    add     s9, s9, t0
+    add     s4, s4, s8
+    addi    s7, s7, -1
+    j       3b
+4:  li      a0, LANTERN_OK
 9:  LEAVE 16
 8:  li      a0, LANTERN_BUFFER_TOO_SMALL
     LEAVE 16
@@ -5050,10 +5104,19 @@ LOCAL_FUNCTION node_find_stream
     ret
 END_FUNCTION node_find_stream
 
-/* Removes the stream entry a0: the last entry takes its place. */
+/* Removes the stream entry a0, its NodeResponse free: the last entry takes its place. */
 LOCAL_FUNCTION node_drop_stream
     FRAME 0
-    PART    t0, t1, s1, Node_streams
+    ld      t0, NodeStream_response(a0)     # its NodeResponse is free
+    beqz    t0, 2f
+    addi    t0, t0, -1
+    LDQ     t1, s1, Node_response_bytes
+    mul     t0, t0, t1
+    LDQ     t1, s1, Node_responses
+    add     t0, t0, t1
+    add     t0, s1, t0
+    sd      zero, NodeResponse_used(t0)
+2:  PART    t0, t1, s1, Node_streams
     ld      t2, Node_stream_bytes(s1)
     addi    t1, t1, -1
     sd      t1, (Node_streams + 8)(s1)
@@ -8085,7 +8148,10 @@ LOCAL_FUNCTION node_find_opening
     ret
 END_FUNCTION node_find_opening
 
-/* The stream entry a0 goes; the node's BeaconBlocksByRange request ends with it. */
+/*
+ * The stream entry a0 goes; the node's BeaconBlocksByRange request ends with it. The sync's, not
+ * read to its end: sync_slot = max(sync_start, min(sync_got, sync_slot)).
+ */
 LOCAL_FUNCTION node_end_stream
     FRAME 0
     ld      t1, Node_backfill_handle(s1)    # the backfill's stream: the backfill has none
@@ -8103,6 +8169,17 @@ LOCAL_FUNCTION node_end_stream
     ld      t0, Node_flags(s1)
     andi    t0, t0, ~NODE_FLAG_SYNCING
     sd      t0, Node_flags(s1)
+    ld      t0, NodeStream_next(a0)         # not read to its end: the slots after its last block again
+    li      t1, 2
+    beq     t0, t1, 1f
+    LDQ     t0, s1, Node_sync_got
+    ld      t1, Node_sync_slot(s1)
+    bltu    t0, t1, 3f
+    mv      t0, t1
+3:  LDQ     t1, s1, Node_sync_start
+    bgeu    t0, t1, 4f
+    mv      t0, t1
+4:  sd      t0, Node_sync_slot(s1)
 1:  call    node_drop_stream
     UNFRAME 0
 END_FUNCTION node_end_stream
@@ -8110,13 +8187,15 @@ END_FUNCTION node_end_stream
 /*
  * A request of the node: method a0, version a1, to the peer of handle a2, its SSZ bytes at a3 of
  * a4 bytes: a NodeStream in NODE_STREAM_OPENING whose list holds the request chunk, and an
- * OPEN_STREAM of its protocol ID; a0 = the entry, or 0 when the streams part, scratch or p2p_out
- * has no room. s3 the entry, s4 the request's ByteList, then the OPEN_STREAM, s7 the scratch
- * size, restored on return, s8 the peer, s9 the bytes, s10 their size. Locals: L a ChunkHeader,
- * L+48 a ReqRespProtocol, L+64 a ByteList of the protocol ID (152), L+216 the tag.
+ * OPEN_STREAM of its protocol ID; but for Status and GetMetaData, it takes a free NodeResponse.
+ * a0 = the entry, or 0 when the streams part, the NodeResponse entries, scratch or p2p_out have no
+ * room. s3 the entry, s4 the request's ByteList, then the OPEN_STREAM, s7 the scratch size,
+ * restored on return, s8 the peer, s9 the bytes, s10 their size. Locals: L a ChunkHeader, L+48 a
+ * ReqRespProtocol, L+64 a ByteList of the protocol ID (152), L+216 the tag, L+224 the
+ * NodeResponse's index + 1, or 0.
  */
 LOCAL_FUNCTION node_open
-    ENTER 224
+    ENTER 240
     sd      a0, (L + 48)(sp)
     sd      a1, (L + 56)(sp)
     mv      s8, a2
@@ -8133,6 +8212,22 @@ LOCAL_FUNCTION node_open
     mul     t3, t3, t2
     add     t3, t3, t1
     add     s3, s1, t3
+    li      t0, 0                           # a free NodeResponse, but for Status and GetMetaData
+    ld      t1, (L + 48)(sp)
+    li      t2, REQRESP_STATUS
+    beq     t1, t2, 11f
+    li      t2, REQRESP_METADATA
+    beq     t1, t2, 11f
+    PART    t1, t2, s1, Node_responses
+    LDQ     t3, s1, Node_response_bytes
+10: beqz    t2, 8f
+    addi    t0, t0, 1
+    ld      t4, NodeResponse_used(t1)
+    beqz    t4, 11f
+    add     t1, t1, t3
+    addi    t2, t2, -1
+    j       10b
+11: sd      t0, (L + 224)(sp)
     addi    t0, s10, 24 + 7                 # the request's ByteList at the end of scratch
     andi    t0, t0, -8
     bltu    s7, t0, 8f
@@ -8200,7 +8295,23 @@ LOCAL_FUNCTION node_open
     addi    a1, sp, L + 88
     ld      a2, (L + 80)(sp)
     call    lantern_copy
-    ld      t0, (L + 216)(sp)               # the entry joins the part
+    ld      t0, (L + 224)(sp)               # its NodeResponse: used, its list empty
+    sd      t0, NodeStream_response(s3)
+    beqz    t0, 12f
+    addi    t0, t0, -1
+    LDQ     t1, s1, Node_response_bytes
+    mul     t0, t0, t1
+    LDQ     t2, s1, Node_responses
+    add     t0, t0, t2
+    add     t0, s1, t0
+    li      t2, 1
+    sd      t2, NodeResponse_used(t0)
+    addi    t1, t1, -NodeResponse_list
+    sd      t1, NodeResponse_list(t0)
+    li      t2, 24
+    sd      t2, (NodeResponse_list + 8)(t0)
+    sd      zero, (NodeResponse_list + 16)(t0)
+12: ld      t0, (L + 216)(sp)               # the entry joins the part
     sd      t0, NodeStream_handle(s3)
     sd      s8, NodeStream_peer(s3)
     ld      t0, (L + 48)(sp)
@@ -8214,11 +8325,81 @@ LOCAL_FUNCTION node_open
     sd      t0, (Node_streams + 8)(s1)
     sd      s7, 0(s5)
     mv      a0, s3
-    LEAVE 224
+    LEAVE 240
 8:  sd      s7, 0(s5)
     li      a0, 0
-    LEAVE 224
+    LEAVE 240
 END_FUNCTION node_open
+
+/* a0 = the ByteList that holds the bytes of the stream entry a0: its NodeResponse's list, else its own. Uses t0, t1, a7. */
+LOCAL_FUNCTION node_stream_list
+    UNWIND_END_PROLOGUE
+    ld      t0, NodeStream_response(a0)
+    beqz    t0, 1f
+    addi    t0, t0, -1
+    LDQ     t1, s1, Node_response_bytes
+    mul     t0, t0, t1
+    LDQ     t1, s1, Node_responses
+    add     t0, t0, t1
+    add     t0, s1, t0
+    addi    a0, t0, NodeResponse_list
+    ret
+1:  addi    a0, a0, NodeStream_list
+    ret
+END_FUNCTION node_stream_list
+
+/* a0 = the free NodeResponse entries. Uses t0-t3, a7. */
+LOCAL_FUNCTION node_free_responses
+    UNWIND_END_PROLOGUE
+    PART    t0, t1, s1, Node_responses
+    LDQ     t2, s1, Node_response_bytes
+    li      a0, 0
+1:  beqz    t1, 2f
+    ld      t3, NodeResponse_used(t0)
+    seqz    t3, t3
+    add     a0, a0, t3
+    add     t0, t0, t2
+    addi    t1, t1, -1
+    j       1b
+2:  ret
+END_FUNCTION node_free_responses
+
+/*
+ * The first peer from the index a0 of the peers part, in its order and around, with a Status of
+ * the node's fork_digest whose head_slot is at least a1, and NODE_PEER_METADATA when a2 is not 0:
+ * a0 = its index, or 2^64 - 1; a1 = its entry. Uses t0-t6, a7.
+ */
+LOCAL_FUNCTION node_next_peer
+    UNWIND_END_PROLOGUE
+    PART    t0, t1, s1, Node_peers
+    beqz    t1, 3f
+    remu    t2, a0, t1
+    li      t3, 0
+1:  bgeu    t3, t1, 3f
+    addi    t3, t3, 1
+    li      t4, NodePeer__mem
+    mul     t4, t2, t4
+    add     t4, t0, t4
+    mv      a0, t2
+    addi    t2, t2, 1
+    bltu    t2, t1, 11f
+    li      t2, 0
+11: ld      t5, NodePeer_flags(t4)
+    andi    t6, t5, NODE_PEER_STATUS
+    beqz    t6, 1b
+    beqz    a2, 2f
+    andi    t6, t5, NODE_PEER_METADATA
+    beqz    t6, 1b
+2:  ld      t5, NodePeer_fork_digest(t4)
+    ld      t6, Node_fork_digest(s1)
+    bne     t5, t6, 1b
+    ld      t5, NodePeer_head_slot(t4)
+    bltu    t5, a1, 1b
+    mv      a1, t4
+    ret
+3:  li      a0, -1
+    ret
+END_FUNCTION node_next_peer
 
 /*
  * a0 = 1 when the response bytes of the node's request stream a0 wait for room, else 0. Each
@@ -8226,19 +8407,27 @@ END_FUNCTION node_open
  * NODE_BLOCK_HASHING, a BYTES_PUT of its bytes and a SYNC_BLOCK work of its root. After a Status,
  * after the last chunk and STREAM_EOF, after an error result, or on a bad chunk (with a
  * STREAM_RESET), the stream ends. s3 the entry, s4 the method, s7 the scratch size, restored on
- * return, s8 the payload's ByteList, s9 the SSZ size, s10 a block entry. Locals: L a ChunkHeader,
- * L+48 a length, then a block index, L+56 eof, L+64 the payload bytes read.
+ * return, s8 the payload's ByteList, s9 the SSZ size, s10 a block entry. A block of the sync's
+ * stream moves sync_got past its slot; the end after STREAM_EOF with no bytes left makes next 2.
+ * Locals: L a ChunkHeader, L+48 a length, then a block index, L+56 eof, L+64 the payload bytes
+ * read, L+72 the ByteList of the response bytes (node_stream_list).
  */
 LOCAL_FUNCTION node_response
     ENTER 80
     mv      s3, a0
     ld      s4, NodeStream_method(s3)
     ld      s7, 0(s5)
-1:  ld      t0, (NodeStream_list + 16)(s3)
+    mv      a0, s3                          # the response bytes: in its NodeResponse, or its list
+    call    node_stream_list
+    sd      a0, (L + 72)(sp)
+1:  ld      t0, (L + 72)(sp)
+    ld      t0, 16(t0)
     bnez    t0, 2f
-    ld      t0, NodeStream_next(s3)         # no bytes: the end after STREAM_EOF
-    bnez    t0, 80f
-    j       90f
+    ld      t0, NodeStream_next(s3)         # no bytes: the end after STREAM_EOF, read to its end
+    beqz    t0, 90f
+    li      t0, 2
+    sd      t0, NodeStream_next(s3)
+    j       80f
 2:  li      t0, CHUNK_RESPONSE              # blocks by range v2, blob and column sidecars: a ForkDigest context
     sd      t0, (L + ChunkHeader_kind)(sp)
     li      t0, 4
@@ -8256,7 +8445,7 @@ LOCAL_FUNCTION node_response
     bltu    t1, t2, 3f
     li      t0, 4
 3:  sd      t0, (L + ChunkHeader_context_length)(sp)
-    addi    a0, s3, NodeStream_list
+    ld      a0, (L + 72)(sp)
     addi    a1, sp, L
     call    lantern_reqresp_read_header
     li      t0, LANTERN_REQRESP_MORE
@@ -8331,7 +8520,7 @@ LOCAL_FUNCTION node_response
     sd      s9, (L + 48)(sp)                # length and eof, by address
     ld      t0, NodeStream_next(s3)
     sd      t0, (L + 56)(sp)
-    addi    a0, s3, NodeStream_list
+    ld      a0, (L + 72)(sp)
     addi    a1, sp, L + ChunkHeader_header_bytes
     addi    a2, sp, L + 48
     addi    a3, sp, L + 56
@@ -8401,7 +8590,7 @@ LOCAL_FUNCTION node_response
     li      a1, 0
     ld      t0, NodeBlock_status(s10)
     li      t1, NODE_BLOCK_BF_CHECKING
-    bne     t0, t1, 641f
+    bne     t0, t1, 643f
     ld      t0, Node_backfill_got(s1)
     addi    t0, t0, 1
     sd      t0, Node_backfill_got(s1)
@@ -8413,6 +8602,12 @@ LOCAL_FUNCTION node_response
     ld      a2, NodeBlock_state_id(a1)
 642: mv     a1, a2
     li      a0, NODE_WORK_BACKFILL
+    j       641f
+643: ld     t0, NodeBlock_slot(s10)         # the sync's: sync_got past its slot
+    addi    t0, t0, 1
+    LDQ     t1, s1, Node_sync_got
+    bleu    t0, t1, 641f
+    STQ     t0, s1, Node_sync_got
 641: li     a2, 0
     ld      a3, (L + 56)(sp)
     ld      a4, (L + 48)(sp)
@@ -8466,10 +8661,12 @@ LOCAL_FUNCTION node_response
     ld      t0, (L + ChunkHeader_header_bytes)(sp)
     ld      t1, (L + 64)(sp)
     add     t0, t0, t1
-    ld      t1, (NodeStream_list + 16)(s3)
+    ld      t2, (L + 72)(sp)
+    ld      t1, 16(t2)
     sub     a2, t1, t0
-    sd      a2, (NodeStream_list + 16)(s3)
-    addi    a0, s3, NodeStream_request
+    sd      a2, 16(t2)
+    ld      t1, 8(t2)
+    add     a0, t2, t1
     add     a1, a0, t0
     call    lantern_copy
     li      t0, REQRESP_STATUS              # Status and MetaData: one chunk
@@ -8498,7 +8695,7 @@ END_FUNCTION node_response
  * The sidecar requests of a range (node.md): a BlobSidecarsByRange v1 to the peer a0 of the slots of
  * a1, count a2, in the blob window whose fork is deneb or electra, then from fulu (a3 the fork of the
  * store's slot) the DataColumnSidecarsByRange v1 of the slots in the column window to the peers with
- * NODE_PEER_METADATA. a0 = 1 when a request has no room or the node cannot open it, else 0. Locals
+ * NODE_PEER_METADATA, from sidecar_peer and around. a0 = 1 when a request has no room or the node cannot open it, else 0. Locals
  * as node_sync's: L the range, L+24 a request's range, L+40 the fork, L+48 the columns asked, L+64
  * count or send, L+72 the column requests, L+80 the peer. s3 a peer, s4 the peers left, s10 the
  * scratch size.
@@ -8534,7 +8731,10 @@ LOCAL_FUNCTION node_sidecar_ask
     sub     t3, t3, t2
     sd      t2, (L + 24)(sp)
     sd      t3, (L + 32)(sp)
-    ld      t0, (Node_streams + 8)(s1)      # room for it and the blocks' request
+    call    node_free_responses             # two NodeResponse entries free, and room for it and the blocks' request
+    li      t0, 2
+    bltu    a0, t0, 9f
+    ld      t0, (Node_streams + 8)(s1)
     ld      t1, Node_messages(s1)
     ld      t2, Node_streams(s1)
     sub     t1, t1, t2
@@ -8580,7 +8780,13 @@ LOCAL_FUNCTION node_sidecar_ask
 72: sd      zero, (L + 48)(sp)
     sd      zero, (L + 56)(sp)
     sd      zero, (L + 72)(sp)
-    PART    s3, s4, s1, Node_peers
+    PART    s3, s4, s1, Node_peers          # from sidecar_peer, around
+    beqz    s4, 76f
+    LDQ     t0, s1, Node_sidecar_peer
+    remu    t0, t0, s4
+    li      t1, NodePeer__mem
+    mul     t0, t0, t1
+    add     s3, s3, t0
 73: beqz    s4, 76f
     ld      t0, NodePeer_flags(s3)
     andi    t0, t0, NODE_PEER_METADATA
@@ -8641,10 +8847,20 @@ LOCAL_FUNCTION node_sidecar_ask
     beqz    a0, 78f
 75: addi    s3, s3, NodePeer__mem
     addi    s4, s4, -1
+    PART    t0, t1, s1, Node_peers
+    li      t2, NodePeer__mem
+    mul     t1, t1, t2
+    add     t1, t0, t1
+    bltu    s3, t1, 73b
+    mv      s3, t0
     j       73b
 76: ld      t0, (L + 64)(sp)
     bnez    t0, 77f
-    ld      t0, (L + 72)(sp)                # room for the column requests and the blocks' request
+    call    node_free_responses             # as many NodeResponse entries free, and room for the column requests and the blocks' request
+    ld      t0, (L + 72)(sp)
+    addi    t0, t0, 1
+    bltu    a0, t0, 78f
+    ld      t0, (L + 72)(sp)
     ld      t1, (Node_streams + 8)(s1)
     add     t0, t0, t1
     addi    t0, t0, 1
@@ -8667,10 +8883,98 @@ LOCAL_FUNCTION node_sidecar_ask
 END_FUNCTION node_sidecar_ask
 
 /*
+ * The sidecar retry (node.md): with no BlobSidecarsByRange or DataColumnSidecarsByRange of the node
+ * open, no NodeBlob in NODE_BLOB_VERIFYING, a block below the store's slot in NODE_BLOCK_BLOBS, from
+ * sidecar_ms + NODE_SIDECAR_RETRY_MS on: the sidecar requests of the slots of those blocks from the
+ * lowest to the highest, at most NODE_SYNC_BATCH, the blob request to a peer from sidecar_peer;
+ * sidecar_ms takes time_ms, and sidecar_peer 1 more. s3 an entry, s4 the entries left, s7 the
+ * lowest slot, s8 the highest, then the count, s9 the fork of the store's slot, s10 its slot.
+ */
+LOCAL_FUNCTION node_sidecar_retry
+    ENTER 0
+    LDQ     t0, s1, Node_sidecar_ms         # its time
+    li      t1, NODE_SIDECAR_RETRY_MS
+    add     t0, t0, t1
+    ld      t1, Node_time_ms(s1)
+    bltu    t1, t0, 9f
+    PART    s3, s4, s1, Node_streams        # no sidecar request of the node open
+    ld      t2, Node_stream_bytes(s1)
+1:  beqz    s4, 2f
+    ld      t0, NodeStream_state(s3)
+    li      t1, NODE_STREAM_OPENING
+    bltu    t0, t1, 11f
+    ld      t0, NodeStream_method(s3)
+    li      t1, REQRESP_BLOB_SIDECARS_BY_RANGE
+    beq     t0, t1, 9f
+    li      t1, REQRESP_DATA_COLUMN_SIDECARS_BY_RANGE
+    beq     t0, t1, 9f
+11: add     s3, s3, t2
+    addi    s4, s4, -1
+    j       1b
+2:  PART    s3, s4, s1, Node_blobs          # no sidecar verifying
+    li      t1, NODE_BLOB_VERIFYING
+3:  beqz    s4, 4f
+    ld      t0, NodeBlob_status(s3)
+    beq     t0, t1, 9f
+    addi    s3, s3, NodeBlob__mem
+    addi    s4, s4, -1
+    j       3b
+4:  mv      a0, s2                          # the slots of the blocks below the store's slot that wait for sidecars
+    call    node_store_slot
+    mv      s10, a0
+    li      s7, -1
+    li      s8, 0
+    PART    s3, s4, s1, Node_blocks
+    li      t1, NODE_BLOCK_BLOBS
+5:  beqz    s4, 6f
+    ld      t0, NodeBlock_status(s3)
+    bne     t0, t1, 51f
+    ld      t0, NodeBlock_slot(s3)
+    bgeu    t0, s10, 51f
+    bgeu    t0, s7, 52f
+    mv      s7, t0
+52: bleu    t0, s8, 51f
+    mv      s8, t0
+51: addi    s3, s3, NodeBlock__mem
+    addi    s4, s4, -1
+    j       5b
+6:  li      t0, -1
+    beq     s7, t0, 9f
+    sub     s8, s8, s7                      # the count: to the highest, at most NODE_SYNC_BATCH
+    addi    s8, s8, 1
+    li      t0, NODE_SYNC_BATCH
+    bleu    s8, t0, 61f
+    mv      s8, t0
+61: mv      a0, s10                         # the fork of the store's slot
+    addi    a1, s1, Node_config
+    call    node_fork
+    mv      s9, a0
+    LDQ     a0, s1, Node_sidecar_peer       # the blob request's peer
+    mv      a1, s7
+    li      t0, FORK_FULU
+    sltu    a2, s9, t0
+    xori    a2, a2, 1
+    call    node_next_peer
+    li      t0, -1
+    beq     a0, t0, 9f
+    mv      a0, a1
+    mv      a1, s7
+    mv      a2, s8
+    mv      a3, s9
+    call    node_sidecar_ask
+    ld      t0, Node_time_ms(s1)
+    STQ     t0, s1, Node_sidecar_ms
+    LDQ     t0, s1, Node_sidecar_peer
+    addi    t0, t0, 1
+    STQ     t0, s1, Node_sidecar_peer
+9:  LEAVE 0
+END_FUNCTION node_sidecar_retry
+
+/*
  * a0 = 1 when a response waits for room, else 0. The bytes of each response are read. From
  * fulu, each peer with a Status and no MetaData asked gets a GetMetaData v3. Then, with no
- * BeaconBlocksByRange of the node open, one to a peer of the node's ForkDigest (from fulu, with its
- * MetaData read) whose Status head_slot is at least the next slot: max(the head's slot + 1,
+ * BeaconBlocksByRange of the node open, one to a peer from sync_peer of the node's ForkDigest (from
+ * fulu, with its MetaData read) whose Status head_slot is at least the next slot: max(the head's slot + 1,
  * sync_slot), at most NODE_SYNC_BATCH slots. Before it, with room for two streams, a
  * BlobSidecarsByRange of the range's slots in the blob window before fulu; from fulu, a
  * DataColumnSidecarsByRange of the range's slots in the column window to each peer whose custody
@@ -8678,10 +8982,11 @@ END_FUNCTION node_sidecar_ask
  * request. s3 a peer, s4 the streams or peers left, s7 the result, s8 the start slot, s9 a column
  * request at the end of scratch, s10 the scratch size. Locals: L the request (24), L+24 the blob
  * or column range (16), L+40 the fork of the store's slot, L+48 the columns asked (16), L+64 the
- * pass (0 counts, 1 sends), L+72 the column requests, L+80 the peer of the blocks.
+ * pass (0 counts, 1 sends), L+72 the column requests, L+80 the peer of the blocks, L+96 its index.
+ * Then the sidecar retry and the backfill's request.
  */
 LOCAL_FUNCTION node_sync
-    ENTER 96
+    ENTER 112
     li      s7, 0
     ld      s4, (Node_streams + 8)(s1)      # the responses, from the last stream: an end moves the last
 1:  beqz    s4, 3f
@@ -8744,25 +9049,19 @@ LOCAL_FUNCTION node_sync
     ld      t0, Node_sync_slot(s1)
     bleu    t0, s8, 33f
     mv      s8, t0
-33: PART    s3, s4, s1, Node_peers          # a peer ahead
-4:  beqz    s4, 90f
-    ld      t0, NodePeer_flags(s3)
-    andi    t1, t0, NODE_PEER_STATUS
-    beqz    t1, 5f
+33: LDQ     a0, s1, Node_sync_peer          # a peer ahead, from sync_peer
+    mv      a1, s8
     ld      t1, (L + 40)(sp)                # from fulu: its MetaData read
     li      t2, FORK_FULU
-    bltu    t1, t2, 41f
-    andi    t1, t0, NODE_PEER_METADATA
-    beqz    t1, 5f
-41: ld      t0, NodePeer_fork_digest(s3)
-    ld      t1, Node_fork_digest(s1)
-    bne     t0, t1, 5f
+    sltu    a2, t1, t2
+    xori    a2, a2, 1
+    call    node_next_peer
+    li      t0, -1
+    beq     a0, t0, 90f
+    sd      a0, (L + 96)(sp)
+    mv      s3, a1
+    sd      s3, (L + 80)(sp)
     ld      t0, NodePeer_head_slot(s3)
-    bgeu    t0, s8, 6f
-5:  addi    s3, s3, NodePeer__mem
-    addi    s4, s4, -1
-    j       4b
-6:  sd      s3, (L + 80)(sp)
     sub     t0, t0, s8                      # the request: start_slot, count, step 1
     addi    t0, t0, 1
     li      t1, NODE_SYNC_BATCH
@@ -8796,10 +9095,15 @@ LOCAL_FUNCTION node_sync
     ld      t0, Node_flags(s1)
     ori     t0, t0, NODE_FLAG_SYNCING
     sd      t0, Node_flags(s1)
-    ld      t0, L(sp)
+    ld      t0, L(sp)                       # sync_start, sync_got, sync_slot, sync_peer
+    STQ     t0, s1, Node_sync_start
+    STQ     zero, s1, Node_sync_got
     ld      t1, (L + 8)(sp)
     add     t0, t0, t1
     sd      t0, Node_sync_slot(s1)
+    ld      t0, (L + 96)(sp)
+    addi    t0, t0, 1
+    STQ     t0, s1, Node_sync_peer
     j       9f
 90: mv      a0, s2                          # none: a fresh Status of a peer, when the store's slot is above the start
     call    node_store_slot
@@ -8818,18 +9122,15 @@ LOCAL_FUNCTION node_sync
     divu    t1, t1, t2
     addi    t0, t0, 1
     bgtu    t0, t1, 9f
-    PART    s3, s4, s1, Node_peers          # the first peer with a Status of the node's fork_digest
-92: beqz    s4, 9f
-    ld      t0, NodePeer_flags(s3)
-    andi    t0, t0, NODE_PEER_STATUS
-    beqz    t0, 93f
-    ld      t0, NodePeer_fork_digest(s3)
-    ld      t1, Node_fork_digest(s1)
-    beq     t0, t1, 94f
-93: addi    s3, s3, NodePeer__mem
-    addi    s4, s4, -1
-    j       92b
-94: ld      s9, (L + 40)(sp)                # the fork of the store's slot: v2 from fulu
+    LDQ     a0, s1, Node_status_peer        # the first peer from status_peer with a Status of the node's fork_digest
+    li      a1, 0
+    li      a2, 0
+    call    node_next_peer
+    li      t0, -1
+    beq     a0, t0, 9f
+    sd      a0, (L + 96)(sp)
+    mv      s3, a1
+    ld      s9, (L + 40)(sp)                # the fork of the store's slot: v2 from fulu
     addi    a0, sp, L
     call    node_status_bytes
     li      a1, 1
@@ -8845,9 +9146,13 @@ LOCAL_FUNCTION node_sync
     beqz    a0, 9f
     ld      t0, Node_time_ms(s1)
     sd      t0, Node_status_ms(s1)
-9:  call    node_backfill_ask
+    ld      t0, (L + 96)(sp)
+    addi    t0, t0, 1
+    STQ     t0, s1, Node_status_peer
+9:  call    node_sidecar_retry
+    call    node_backfill_ask
     mv      a0, s7
-    LEAVE 96
+    LEAVE 112
 END_FUNCTION node_sync
 
 /*
@@ -9045,6 +9350,7 @@ LOCAL_FUNCTION node_notice
     sd      s8, NodeStream_version(s4)
     li      t0, NODE_STREAM_REQUEST
     sd      t0, NodeStream_state(s4)
+    sd      zero, NodeStream_response(s4)
     addi    t0, t2, -NodeStream_list
     sd      t0, NodeStream_list(s4)
     li      t0, 24
@@ -9064,17 +9370,20 @@ LOCAL_FUNCTION node_notice
     li      t0, -1
     beq     a0, t0, 39f
     mv      s4, a1
-    ld      t0, (NodeStream_list + 16)(s4)
+    mv      a0, s4                          # its list: of its NodeResponse, else its own
+    call    node_stream_list
+    ld      t0, 16(a0)
     ld      a2, LIBP2P_ACT_SD_COUNT(s3)
-    ld      t1, NodeStream_list(s4)
-    addi    t1, t1, -24
+    ld      t1, 0(a0)
+    ld      t2, 8(a0)
+    sub     t1, t1, t2
     sub     t1, t1, t0
     bgtu    a2, t1, 38f
-    addi    a0, s4, NodeStream_request
+    add     t3, t0, a2
+    sd      t3, 16(a0)
+    add     a0, a0, t2
     add     a0, a0, t0
     addi    a1, s3, LIBP2P_ACT_SD_DATA
-    add     t0, t0, a2
-    sd      t0, (NodeStream_list + 16)(s4)
     call    lantern_copy
     mv      a0, s4
     ld      t0, NodeStream_state(s4)

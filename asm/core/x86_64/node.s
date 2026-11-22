@@ -80,6 +80,17 @@ FUNCTION lantern_node_size
     mul     %rcx
     jc      9f
     mov     %rax, %r8
+    mov     NodeRoom_response_bytes(%rdi), %rcx     # the bytes of a NodeResponse
+    mov     %rcx, %rax
+    shr     $32, %rax
+    jnz     9f
+    add     $(NodeResponse__fixed + 7), %rcx
+    and     $-8, %rcx
+    mov     NodeRoom_responses(%rdi), %rax
+    mul     %rcx
+    jc      9f
+    add     %rax, %r8
+    jc      9f
     NODE_SIZE_ADD blocks, NodeBlock__mem
     NODE_SIZE_ADD checkpoints, NodeCheckpoint__mem
     NODE_SIZE_ADD pow_blocks, POW_BLOCK_BYTES
@@ -136,7 +147,10 @@ END_FUNCTION lantern_node_size
     add     %rcx, %rax
 .endm
 
-/* Lay out the parts of the node rdi for the room rsi at NODE_FIXED, with no entries. Uses rax, rcx, rdx. */
+/*
+ * Lay out the parts of the node rdi for the room rsi at NODE_FIXED, with no entries; the
+ * NodeResponse entries all made, each free. Uses rax, rcx, rdx.
+ */
 LOCAL_FUNCTION node_layout
     UNWIND_END_PROLOGUE
     mov     NodeRoom_request_bytes(%rsi), %rdx
@@ -187,7 +201,23 @@ LOCAL_FUNCTION node_layout
     NODE_PART eth1_deposits, eth1_deposits, Eth1Deposit__mem
     NODE_PART eth1_leaves, eth1_deposits, 32
     NODE_PART eth1_counts, eth1_deposits, Eth1Count__mem
-    ret
+    mov     NodeRoom_response_bytes(%rsi), %rdx     # the NodeResponse entries, each free with an empty list
+    add     $(NodeResponse__fixed + 7), %rdx
+    and     $-8, %rdx
+    mov     %rdx, Node_response_bytes(%rdi)
+    mov     %rax, Node_responses(%rdi)
+    mov     NodeRoom_responses(%rsi), %rcx
+    mov     %rcx, (Node_responses + 8)(%rdi)
+1:  test    %rcx, %rcx
+    jz      2f
+    movq    $0, (%rdi,%rax)
+    movq    $0, 8(%rdi,%rax)
+    movq    $0, 16(%rdi,%rax)
+    movq    $0, 24(%rdi,%rax)
+    add     %rdx, %rax
+    dec     %rcx
+    jmp     1b
+2:  ret
 END_FUNCTION node_layout
 
 /*
@@ -387,7 +417,8 @@ END_FUNCTION lantern_node_init
 
 /*
  * (node, room, out): the node in out, with the capacities of room. rbx node, rbp room, r12 out,
- * r13 a stream, r14 the streams left, r15 the old stream bytes, S7 the new stream. Locals: L the size.
+ * r13 a stream or NodeResponse, r14 those left, r15 the old stream bytes, S7 the new entry. Locals:
+ * L the size.
  */
 FUNCTION lantern_node_copy
     ENTER 16
@@ -415,6 +446,7 @@ FUNCTION lantern_node_copy
     NODE_COPY_ROOM eth1_blocks, Node_eth1_blocks
     NODE_COPY_ROOM eth1_deposits, Node_eth1_deposits
     NODE_COPY_ROOM eth1_deposits, Node_eth1_counts
+    NODE_COPY_ROOM responses, Node_responses
     mov     Node_p2p_out(%rbx), %rax        # the queued bytes fit
     mov     16(%rbx,%rax), %rax
     cmp     %rax, NodeRoom_p2p_out(%rbp)
@@ -422,6 +454,11 @@ FUNCTION lantern_node_copy
     mov     Node_engine_in(%rbx), %rax      # the execution engine's bytes fit
     mov     16(%rbx,%rax), %rax
     cmp     %rax, NodeRoom_engine_bytes(%rbp)
+    jb      8f
+    mov     NodeRoom_response_bytes(%rbp), %rax  # a NodeResponse's bytes fit
+    add     $(NodeResponse__fixed + 7), %rax
+    and     $-8, %rax
+    cmp     Node_response_bytes(%rbx), %rax
     jb      8f
     mov     Node_stream_bytes(%rbx), %r15   # a stream's request bytes fit
     mov     NodeRoom_request_bytes(%rbp), %rax
@@ -494,7 +531,26 @@ FUNCTION lantern_node_copy
     add     %r15, %r13
     dec     %r14
     jmp     1b
-2:  xor     %eax, %eax
+2:  PART    %r13, %r14, %rbx, Node_responses  # each NodeResponse, with the room of the new stride
+    mov     Node_responses(%r12), %rax
+    add     %r12, %rax
+    mov     %rax, S7(%rsp)
+3:  test    %r14, %r14
+    jz      4f
+    mov     S7(%rsp), %rdi
+    mov     %r13, %rsi
+    mov     (NodeResponse_list + 16)(%r13), %rdx
+    add     $NodeResponse__fixed, %rdx
+    call    lantern_copy
+    mov     S7(%rsp), %rdi
+    mov     Node_response_bytes(%r12), %rax
+    lea     -NodeResponse_list(%rax), %rcx
+    mov     %rcx, NodeResponse_list(%rdi)
+    add     %rax, S7(%rsp)
+    add     Node_response_bytes(%rbx), %r13
+    dec     %r14
+    jmp     3b
+4:  xor     %eax, %eax
 9:  LEAVE 16
 8:  mov     $LANTERN_BUFFER_TOO_SMALL, %eax
     LEAVE 16
@@ -5033,10 +5089,17 @@ LOCAL_FUNCTION node_find_stream
 3:  ret
 END_FUNCTION node_find_stream
 
-/* Removes the stream entry rdi: the last entry takes its place. */
+/* Removes the stream entry rdi, its NodeResponse free: the last entry takes its place. */
 LOCAL_FUNCTION node_drop_stream
     FRAME 0
-    PART    %rax, %rcx, %rbx, Node_streams
+    mov     NodeStream_response(%rdi), %rax
+    test    %rax, %rax
+    jz      2f
+    dec     %rax
+    imul    Node_response_bytes(%rbx), %rax
+    add     Node_responses(%rbx), %rax
+    movq    $0, (%rbx,%rax)                 # NodeResponse_used
+2:  PART    %rax, %rcx, %rbx, Node_streams
     mov     Node_stream_bytes(%rbx), %rdx
     dec     %rcx
     mov     %rcx, (Node_streams + 8)(%rbx)
@@ -8140,7 +8203,10 @@ LOCAL_FUNCTION node_find_opening
 3:  ret
 END_FUNCTION node_find_opening
 
-/* The stream entry rdi goes; the node's BeaconBlocksByRange request ends with it. */
+/*
+ * The stream entry rdi goes; the node's BeaconBlocksByRange request ends with it. The sync's, not
+ * read to its end: sync_slot = max(sync_start, min(sync_got, sync_slot)).
+ */
 LOCAL_FUNCTION node_end_stream
     FRAME 0
     mov     Node_backfill_handle(%rbx), %rax    # the backfill's stream: the backfill has none
@@ -8155,6 +8221,14 @@ LOCAL_FUNCTION node_end_stream
     cmpq    $REQRESP_BEACON_BLOCKS_BY_RANGE, NodeStream_method(%rdi)
     jne     1f
     andq    $~NODE_FLAG_SYNCING, Node_flags(%rbx)
+    cmpq    $2, NodeStream_next(%rdi)
+    je      1f
+    mov     Node_sync_got(%rbx), %rax       # the slots after its last block again
+    cmp     Node_sync_slot(%rbx), %rax
+    cmovae  Node_sync_slot(%rbx), %rax
+    cmp     Node_sync_start(%rbx), %rax
+    cmovb   Node_sync_start(%rbx), %rax
+    mov     %rax, Node_sync_slot(%rbx)
 1:  call    node_drop_stream
     UNFRAME 0
 END_FUNCTION node_end_stream
@@ -8162,13 +8236,15 @@ END_FUNCTION node_end_stream
 /*
  * A request of the node: method rdi, version rsi, to the peer of handle rdx, its SSZ bytes at rcx
  * of r8 bytes: a NodeStream in NODE_STREAM_OPENING whose list holds the request chunk, and an
- * OPEN_STREAM of its protocol ID; rax = the entry, or 0 when the streams part, scratch or p2p_out
- * has no room. r12 the entry, r13 the request's ByteList, then the OPEN_STREAM, S7 the scratch
- * size, restored on return, S8 the peer, S9 the bytes, S10 their size. Locals: L a ChunkHeader,
- * L+48 a ReqRespProtocol, L+64 a ByteList of the protocol ID (152), L+216 the tag.
+ * OPEN_STREAM of its protocol ID; but for Status and GetMetaData, it takes a free NodeResponse.
+ * rax = the entry, or 0 when the streams part, the NodeResponse entries, scratch or p2p_out have no
+ * room. r12 the entry, r13 the request's ByteList, then the OPEN_STREAM, S7 the scratch size,
+ * restored on return, S8 the peer, S9 the bytes, S10 their size. Locals: L a ChunkHeader, L+48 a
+ * ReqRespProtocol, L+64 a ByteList of the protocol ID (152), L+216 the tag, L+224 the
+ * NodeResponse's index + 1, or 0.
  */
 LOCAL_FUNCTION node_open
-    ENTER 224
+    ENTER 240
     mov     %rdi, (L + 48)(%rsp)
     mov     %rsi, (L + 56)(%rsp)
     mov     %rdx, S8(%rsp)
@@ -8186,6 +8262,23 @@ LOCAL_FUNCTION node_open
     imul    Node_stream_bytes(%rbx), %rcx
     add     Node_streams(%rbx), %rcx
     lea     (%rbx,%rcx), %r12
+    xor     %eax, %eax                      # a free NodeResponse, but for Status and GetMetaData
+    mov     (L + 48)(%rsp), %rcx
+    cmp     $REQRESP_STATUS, %rcx
+    je      11f
+    cmp     $REQRESP_METADATA, %rcx
+    je      11f
+    PART    %rsi, %rdx, %rbx, Node_responses
+    xor     %ecx, %ecx
+10: cmp     %rdx, %rcx
+    jae     8f
+    inc     %rcx
+    cmpq    $0, NodeResponse_used(%rsi)
+    je      101f
+    add     Node_response_bytes(%rbx), %rsi
+    jmp     10b
+101: mov    %rcx, %rax
+11: mov     %rax, (L + 224)(%rsp)
     mov     S10(%rsp), %rax                 # the request's ByteList at the end of scratch
     add     $(24 + 7), %rax
     and     $-8, %rax
@@ -8252,7 +8345,21 @@ LOCAL_FUNCTION node_open
     lea     (L + 88)(%rsp), %rsi
     mov     (L + 80)(%rsp), %rdx
     call    lantern_copy
-    mov     (L + 216)(%rsp), %rax           # the entry joins the part
+    mov     (L + 224)(%rsp), %rax           # its NodeResponse: used, its list empty
+    mov     %rax, NodeStream_response(%r12)
+    test    %rax, %rax
+    jz      12f
+    dec     %rax
+    imul    Node_response_bytes(%rbx), %rax
+    add     Node_responses(%rbx), %rax
+    add     %rbx, %rax
+    movq    $1, NodeResponse_used(%rax)
+    mov     Node_response_bytes(%rbx), %rcx
+    sub     $NodeResponse_list, %rcx
+    mov     %rcx, NodeResponse_list(%rax)
+    movq    $24, (NodeResponse_list + 8)(%rax)
+    movq    $0, (NodeResponse_list + 16)(%rax)
+12: mov     (L + 216)(%rsp), %rax           # the entry joins the part
     mov     %rax, NodeStream_handle(%r12)
     mov     S8(%rsp), %rax
     mov     %rax, NodeStream_peer(%r12)
@@ -8265,12 +8372,85 @@ LOCAL_FUNCTION node_open
     mov     S7(%rsp), %rax
     mov     %rax, (%r14)
     mov     %r12, %rax
-    LEAVE 224
+    LEAVE 240
 8:  mov     S7(%rsp), %rax
     mov     %rax, (%r14)
     xor     %eax, %eax
-    LEAVE 224
+    LEAVE 240
 END_FUNCTION node_open
+
+/* rax = the ByteList that holds the bytes of the stream entry rdi: its NodeResponse's list, else its own. */
+LOCAL_FUNCTION node_stream_list
+    UNWIND_END_PROLOGUE
+    mov     NodeStream_response(%rdi), %rax
+    test    %rax, %rax
+    jz      1f
+    dec     %rax
+    imul    Node_response_bytes(%rbx), %rax
+    add     Node_responses(%rbx), %rax
+    lea     NodeResponse_list(%rbx,%rax), %rax
+    ret
+1:  lea     NodeStream_list(%rdi), %rax
+    ret
+END_FUNCTION node_stream_list
+
+/* rax = the free NodeResponse entries. Uses rcx, rdx. */
+LOCAL_FUNCTION node_free_responses
+    UNWIND_END_PROLOGUE
+    PART    %rdx, %rcx, %rbx, Node_responses
+    xor     %eax, %eax
+1:  test    %rcx, %rcx
+    jz      2f
+    cmpq    $0, NodeResponse_used(%rdx)
+    jne     11f
+    inc     %rax
+11: add     Node_response_bytes(%rbx), %rdx
+    dec     %rcx
+    jmp     1b
+2:  ret
+END_FUNCTION node_free_responses
+
+/*
+ * The first peer from the index rdi of the peers part, in its order and around, with a Status of
+ * the node's fork_digest whose head_slot is at least rsi, and NODE_PEER_METADATA when rdx is not
+ * 0: rax = its index, or 2^64 - 1; rdx = its entry. Uses rcx, rdi, r8-r11.
+ */
+LOCAL_FUNCTION node_next_peer
+    UNWIND_END_PROLOGUE
+    mov     %rdx, %r11
+    PART    %r8, %r9, %rbx, Node_peers
+    test    %r9, %r9
+    jz      3f
+    mov     %rdi, %rax
+    xor     %edx, %edx
+    div     %r9
+    mov     %rdx, %r10
+    xor     %ecx, %ecx
+1:  cmp     %r9, %rcx
+    jae     3f
+    inc     %rcx
+    imul    $NodePeer__mem, %r10, %rdx
+    add     %r8, %rdx
+    mov     %r10, %rax
+    inc     %r10
+    cmp     %r9, %r10
+    jb      11f
+    xor     %r10d, %r10d
+11: testq   $NODE_PEER_STATUS, NodePeer_flags(%rdx)
+    jz      1b
+    test    %r11, %r11
+    jz      2f
+    testq   $NODE_PEER_METADATA, NodePeer_flags(%rdx)
+    jz      1b
+2:  mov     NodePeer_fork_digest(%rdx), %rdi
+    cmp     Node_fork_digest(%rbx), %rdi
+    jne     1b
+    cmp     %rsi, NodePeer_head_slot(%rdx)
+    jb      1b
+    ret
+3:  mov     $-1, %rax
+    ret
+END_FUNCTION node_next_peer
 
 /*
  * rax = 1 when the response bytes of the node's request stream rdi wait for room, else 0. Each
@@ -8279,7 +8459,9 @@ END_FUNCTION node_open
  * after the last chunk and STREAM_EOF, after an error result, or on a bad chunk (with a
  * STREAM_RESET), the stream ends. r12 the entry, r13 the method. Locals: L a ChunkHeader, L+48 a
  * length, then a block index, L+56 eof, L+64 the payload bytes read, L+72 the scratch size,
- * restored on return, L+80 the SSZ size, L+88 the payload's ByteList, L+96 a block entry.
+ * restored on return, L+80 the SSZ size, L+88 the payload's ByteList, L+96 a block entry, L+104 the
+ * ByteList of the response bytes (node_stream_list). A block of the sync's stream moves sync_got
+ * past its slot; the end after STREAM_EOF with no bytes left makes next 2.
  */
 LOCAL_FUNCTION node_response
     ENTER 112
@@ -8287,11 +8469,16 @@ LOCAL_FUNCTION node_response
     mov     NodeStream_method(%r12), %r13
     mov     (%r14), %rax
     mov     %rax, (L + 72)(%rsp)
-1:  cmpq    $0, (NodeStream_list + 16)(%r12)
+    mov     %r12, %rdi                      # the response bytes: in its NodeResponse, or its list
+    call    node_stream_list
+    mov     %rax, (L + 104)(%rsp)
+1:  mov     (L + 104)(%rsp), %rax
+    cmpq    $0, 16(%rax)
     jne     2f
-    cmpq    $0, NodeStream_next(%r12)       # no bytes: the end after STREAM_EOF
-    jne     80f
-    jmp     90f
+    cmpq    $0, NodeStream_next(%r12)       # no bytes: the end after STREAM_EOF, read to its end
+    je      90f
+    movq    $2, NodeStream_next(%r12)
+    jmp     80f
 2:  movq    $CHUNK_RESPONSE, (L + ChunkHeader_kind)(%rsp)  # blocks by range v2, blob and column sidecars: a ForkDigest context
     mov     $4, %eax
     cmp     $REQRESP_BLOB_SIDECARS_BY_RANGE, %r13
@@ -8307,7 +8494,7 @@ LOCAL_FUNCTION node_response
     jb      3f
     mov     $4, %eax
 3:  mov     %rax, (L + ChunkHeader_context_length)(%rsp)
-    lea     NodeStream_list(%r12), %rdi
+    mov     (L + 104)(%rsp), %rdi
     lea     L(%rsp), %rsi
     call    lantern_reqresp_read_header
     cmp     $LANTERN_REQRESP_MORE, %rax
@@ -8391,7 +8578,7 @@ LOCAL_FUNCTION node_response
     mov     %rax, (L + 56)(%rsp)
     lea     (L + 64)(%rsp), %rax
     mov     %rax, S7(%rsp)                  # consumed, the seventh argument
-    lea     NodeStream_list(%r12), %rdi
+    mov     (L + 104)(%rsp), %rdi
     lea     (L + ChunkHeader_header_bytes)(%rsp), %rsi
     lea     (L + 48)(%rsp), %rdx
     lea     (L + 56)(%rsp), %rcx
@@ -8456,7 +8643,7 @@ LOCAL_FUNCTION node_response
     xor     %esi, %esi
     mov     (L + 96)(%rsp), %rax
     cmpq    $NODE_BLOCK_BF_CHECKING, NodeBlock_status(%rax)
-    jne     641f
+    jne     643f
     incq    Node_backfill_got(%rbx)
     lea     (Store_finalized_checkpoint + 8)(%rbp), %rdi   # BACKFILL: with F's post-state
     call    node_find_block
@@ -8465,6 +8652,12 @@ LOCAL_FUNCTION node_response
     je      642f
     mov     NodeBlock_state_id(%rdx), %rsi
 642: mov    $NODE_WORK_BACKFILL, %edi
+    jmp     641f
+643: mov    NodeBlock_slot(%rax), %rax      # the sync's: sync_got past its slot
+    inc     %rax
+    cmp     Node_sync_got(%rbx), %rax
+    jbe     641f
+    mov     %rax, Node_sync_got(%rbx)
 641: xor    %edx, %edx
     mov     (L + 80)(%rsp), %rcx
     mov     (L + 48)(%rsp), %r8
@@ -8522,10 +8715,12 @@ LOCAL_FUNCTION node_response
     mov     %rax, (%r14)
     mov     (L + ChunkHeader_header_bytes)(%rsp), %rax
     add     (L + 64)(%rsp), %rax
-    mov     (NodeStream_list + 16)(%r12), %rdx
+    mov     (L + 104)(%rsp), %rcx
+    mov     16(%rcx), %rdx
     sub     %rax, %rdx
-    mov     %rdx, (NodeStream_list + 16)(%r12)
-    lea     NodeStream_request(%r12), %rdi
+    mov     %rdx, 16(%rcx)
+    mov     8(%rcx), %rdi
+    add     %rcx, %rdi
     lea     (%rdi,%rax), %rsi
     call    lantern_copy
     cmp     $REQRESP_STATUS, %r13           # Status and MetaData: one chunk
@@ -8556,7 +8751,7 @@ END_FUNCTION node_response
  * The sidecar requests of a range (node.md): a BlobSidecarsByRange v1 to the peer rdi of the slots of
  * rsi, count rdx, in the blob window whose fork is deneb or electra, then from fulu (rcx the fork of
  * the store's slot) the DataColumnSidecarsByRange v1 of the slots in the column window to the peers
- * with NODE_PEER_METADATA. rax = 1 when a request has no room or the node cannot open it, else 0.
+ * with NODE_PEER_METADATA, from sidecar_peer and around. rax = 1 when a request has no room or the node cannot open it, else 0.
  * Locals as node_sync's: L the range, L+24 a request's range, L+40 the fork, L+48 the columns asked,
  * L+64 count or send, L+72 the column requests, L+80 the peer, L+88 the request's bytes. r12 a peer,
  * r13 the peers left, S9 the scratch size.
@@ -8592,7 +8787,10 @@ LOCAL_FUNCTION node_sidecar_ask
     sub     %rsi, %rdi
     mov     %rsi, (L + 24)(%rsp)
     mov     %rdi, (L + 32)(%rsp)
-    mov     Node_messages(%rbx), %rax       # room for it and the blocks' request
+    call    node_free_responses             # two NodeResponse entries free, and room for it and the blocks' request
+    cmp     $2, %rax
+    jb      9f
+    mov     Node_messages(%rbx), %rax
     sub     Node_streams(%rbx), %rax
     xor     %edx, %edx
     divq    Node_stream_bytes(%rbx)
@@ -8639,7 +8837,14 @@ LOCAL_FUNCTION node_sidecar_ask
 72: movq    $0, (L + 48)(%rsp)
     movq    $0, (L + 56)(%rsp)
     movq    $0, (L + 72)(%rsp)
-    PART    %r12, %r13, %rbx, Node_peers
+    PART    %r12, %r13, %rbx, Node_peers    # from sidecar_peer, around
+    test    %r13, %r13
+    jz      76f
+    mov     Node_sidecar_peer(%rbx), %rax
+    xor     %edx, %edx
+    div     %r13
+    imul    $NodePeer__mem, %rdx, %rdx
+    add     %rdx, %r12
 73: test    %r13, %r13
     jz      76f
     testq   $NODE_PEER_METADATA, NodePeer_flags(%r12)
@@ -8691,10 +8896,23 @@ LOCAL_FUNCTION node_sidecar_ask
     jz      78f
 75: add     $NodePeer__mem, %r12
     dec     %r13
+    mov     (Node_peers + 8)(%rbx), %rax
+    imul    $NodePeer__mem, %rax, %rax
+    add     Node_peers(%rbx), %rax
+    add     %rbx, %rax
+    cmp     %rax, %r12
+    jb      73b
+    mov     Node_peers(%rbx), %r12
+    add     %rbx, %r12
     jmp     73b
 76: cmpq    $0, (L + 64)(%rsp)
     jne     77f
-    mov     Node_messages(%rbx), %rax       # room for the column requests and the blocks' request
+    call    node_free_responses             # as many NodeResponse entries free, and room for the column requests and the blocks' request
+    mov     (L + 72)(%rsp), %rcx
+    inc     %rcx
+    cmp     %rcx, %rax
+    jb      78f
+    mov     Node_messages(%rbx), %rax
     sub     Node_streams(%rbx), %rax
     xor     %edx, %edx
     divq    Node_stream_bytes(%rbx)
@@ -8717,10 +8935,99 @@ LOCAL_FUNCTION node_sidecar_ask
 END_FUNCTION node_sidecar_ask
 
 /*
+ * The sidecar retry (node.md): with no BlobSidecarsByRange or DataColumnSidecarsByRange of the node
+ * open, no NodeBlob in NODE_BLOB_VERIFYING, a block below the store's slot in NODE_BLOCK_BLOBS, from
+ * sidecar_ms + NODE_SIDECAR_RETRY_MS on: the sidecar requests of the slots of those blocks from the
+ * lowest to the highest, at most NODE_SYNC_BATCH, the blob request to a peer from sidecar_peer;
+ * sidecar_ms takes time_ms, and sidecar_peer 1 more. r12 an entry, r13 the entries left, S7 the
+ * lowest slot, S8 the highest, then the count, S9 the fork of the store's slot, S10 its slot.
+ */
+LOCAL_FUNCTION node_sidecar_retry
+    ENTER 0
+    mov     Node_sidecar_ms(%rbx), %rax     # its time
+    add     $NODE_SIDECAR_RETRY_MS, %rax
+    cmp     %rax, Node_time_ms(%rbx)
+    jb      9f
+    PART    %r12, %r13, %rbx, Node_streams  # no sidecar request of the node open
+1:  test    %r13, %r13
+    jz      2f
+    cmpq    $NODE_STREAM_OPENING, NodeStream_state(%r12)
+    jb      11f
+    mov     NodeStream_method(%r12), %rax
+    cmp     $REQRESP_BLOB_SIDECARS_BY_RANGE, %rax
+    je      9f
+    cmp     $REQRESP_DATA_COLUMN_SIDECARS_BY_RANGE, %rax
+    je      9f
+11: add     Node_stream_bytes(%rbx), %r12
+    dec     %r13
+    jmp     1b
+2:  PART    %r12, %r13, %rbx, Node_blobs    # no sidecar verifying
+3:  test    %r13, %r13
+    jz      4f
+    cmpq    $NODE_BLOB_VERIFYING, NodeBlob_status(%r12)
+    je      9f
+    add     $NodeBlob__mem, %r12
+    dec     %r13
+    jmp     3b
+4:  mov     %rbp, %rdi                      # the slots of the blocks below the store's slot that wait for sidecars
+    call    node_store_slot
+    mov     %rax, S10(%rsp)
+    movq    $-1, S7(%rsp)
+    movq    $0, S8(%rsp)
+    PART    %r12, %r13, %rbx, Node_blocks
+5:  test    %r13, %r13
+    jz      6f
+    cmpq    $NODE_BLOCK_BLOBS, NodeBlock_status(%r12)
+    jne     51f
+    mov     NodeBlock_slot(%r12), %rax
+    cmp     S10(%rsp), %rax
+    jae     51f
+    cmp     S7(%rsp), %rax
+    jae     52f
+    mov     %rax, S7(%rsp)
+52: cmp     S8(%rsp), %rax
+    jbe     51f
+    mov     %rax, S8(%rsp)
+51: add     $NodeBlock__mem, %r12
+    dec     %r13
+    jmp     5b
+6:  cmpq    $-1, S7(%rsp)
+    je      9f
+    mov     S8(%rsp), %rax                  # the count: to the highest, at most NODE_SYNC_BATCH
+    sub     S7(%rsp), %rax
+    inc     %rax
+    mov     $NODE_SYNC_BATCH, %ecx
+    cmp     %rcx, %rax
+    cmova   %rcx, %rax
+    mov     %rax, S8(%rsp)
+    mov     S10(%rsp), %rdi                 # the fork of the store's slot
+    lea     Node_config(%rbx), %rsi
+    call    node_fork
+    mov     %rax, S9(%rsp)
+    mov     Node_sidecar_peer(%rbx), %rdi   # the blob request's peer
+    mov     S7(%rsp), %rsi
+    xor     %edx, %edx
+    cmp     $FORK_FULU, %rax
+    setae   %dl
+    call    node_next_peer
+    cmp     $-1, %rax
+    je      9f
+    mov     %rdx, %rdi
+    mov     S7(%rsp), %rsi
+    mov     S8(%rsp), %rdx
+    mov     S9(%rsp), %rcx
+    call    node_sidecar_ask
+    mov     Node_time_ms(%rbx), %rax
+    mov     %rax, Node_sidecar_ms(%rbx)
+    incq    Node_sidecar_peer(%rbx)
+9:  LEAVE 0
+END_FUNCTION node_sidecar_retry
+
+/*
  * rax = 1 when a response waits for room, else 0. The bytes of each response are read. From
  * fulu, each peer with a Status and no MetaData asked gets a GetMetaData v3. Then, with no
- * BeaconBlocksByRange of the node open, one to a peer of the node's ForkDigest (from fulu, with its
- * MetaData read) whose Status head_slot is at least the next slot: max(the head's slot + 1,
+ * BeaconBlocksByRange of the node open, one to a peer from sync_peer of the node's ForkDigest (from
+ * fulu, with its MetaData read) whose Status head_slot is at least the next slot: max(the head's slot + 1,
  * sync_slot), at most NODE_SYNC_BATCH slots. Before it, with room for two streams, a
  * BlobSidecarsByRange of the range's slots in the blob window before fulu; from fulu, a
  * DataColumnSidecarsByRange of the range's slots in the column window to each peer whose custody
@@ -8728,10 +9035,11 @@ END_FUNCTION node_sidecar_ask
  * request. r12 a peer, r13 the streams or peers left, S7 the result, S8 the start slot, S9 the
  * scratch size. Locals: L the request (24), L+24 the blob or column range (16), L+40 the fork of
  * the store's slot, L+48 the columns asked (16), L+64 the pass (0 counts, 1 sends), L+72 the
- * column requests, L+80 the peer of the blocks, L+88 a column request at the end of scratch.
+ * column requests, L+80 the peer of the blocks, L+88 a column request at the end of scratch, L+96
+ * the index of the peer. Then the sidecar retry and the backfill's request.
  */
 LOCAL_FUNCTION node_sync
-    ENTER 96
+    ENTER 112
     movq    $0, S7(%rsp)
     mov     (Node_streams + 8)(%rbx), %r13  # the responses, from the last stream: an end moves the last
 1:  test    %r13, %r13
@@ -8794,26 +9102,18 @@ LOCAL_FUNCTION node_sync
     cmp     %rax, %rcx
     cmova   %rcx, %rax
     mov     %rax, S8(%rsp)
-    PART    %r12, %r13, %rbx, Node_peers    # a peer ahead
-4:  test    %r13, %r13
-    jz      90f
-    mov     NodePeer_flags(%r12), %rax
-    test    $NODE_PEER_STATUS, %rax
-    jz      5f
+    mov     Node_sync_peer(%rbx), %rdi      # a peer ahead, from sync_peer
+    mov     S8(%rsp), %rsi
+    xor     %edx, %edx
     cmpq    $FORK_FULU, (L + 40)(%rsp)      # from fulu: its MetaData read
-    jb      41f
-    test    $NODE_PEER_METADATA, %rax
-    jz      5f
-41: mov     NodePeer_fork_digest(%r12), %rax
-    cmp     Node_fork_digest(%rbx), %rax
-    jne     5f
+    setae   %dl
+    call    node_next_peer
+    cmp     $-1, %rax
+    je      90f
+    mov     %rax, (L + 96)(%rsp)
+    mov     %rdx, %r12
+    mov     %r12, (L + 80)(%rsp)
     mov     NodePeer_head_slot(%r12), %rax
-    cmp     S8(%rsp), %rax
-    jae     6f
-5:  add     $NodePeer__mem, %r12
-    dec     %r13
-    jmp     4b
-6:  mov     %r12, (L + 80)(%rsp)
     sub     S8(%rsp), %rax                  # the request: start_slot, count, step 1
     inc     %rax
     mov     $NODE_SYNC_BATCH, %ecx
@@ -8848,9 +9148,14 @@ LOCAL_FUNCTION node_sync
     test    %rax, %rax
     jz      9f
     orq     $NODE_FLAG_SYNCING, Node_flags(%rbx)
-    mov     L(%rsp), %rax
+    mov     L(%rsp), %rax                   # sync_start, sync_got, sync_slot, sync_peer
+    mov     %rax, Node_sync_start(%rbx)
+    movq    $0, Node_sync_got(%rbx)
     add     (L + 8)(%rsp), %rax
     mov     %rax, Node_sync_slot(%rbx)
+    mov     (L + 96)(%rsp), %rax
+    inc     %rax
+    mov     %rax, Node_sync_peer(%rbx)
     jmp     9f
 90: mov     %rbp, %rdi                      # none: a fresh Status of a peer, when the store's slot is above the start
     call    node_store_slot
@@ -8870,18 +9175,15 @@ LOCAL_FUNCTION node_sync
     inc     %rcx
     cmp     %rax, %rcx
     ja      9f
-    PART    %r12, %r13, %rbx, Node_peers    # the first peer with a Status of the node's fork_digest
-92: test    %r13, %r13
-    jz      9f
-    testq   $NODE_PEER_STATUS, NodePeer_flags(%r12)
-    jz      93f
-    mov     NodePeer_fork_digest(%r12), %rax
-    cmp     Node_fork_digest(%rbx), %rax
-    je      94f
-93: add     $NodePeer__mem, %r12
-    dec     %r13
-    jmp     92b
-94: mov     (L + 40)(%rsp), %rax            # the fork of the store's slot: v2 from fulu
+    mov     Node_status_peer(%rbx), %rdi    # the first peer from status_peer with a Status of the node's fork_digest
+    xor     %esi, %esi
+    xor     %edx, %edx
+    call    node_next_peer
+    cmp     $-1, %rax
+    je      9f
+    mov     %rax, (L + 96)(%rsp)
+    mov     %rdx, %r12
+    mov     (L + 40)(%rsp), %rax            # the fork of the store's slot: v2 from fulu
     mov     %rax, S9(%rsp)
     lea     L(%rsp), %rdi
     call    node_status_bytes
@@ -8899,9 +9201,13 @@ LOCAL_FUNCTION node_sync
     jz      9f
     mov     Node_time_ms(%rbx), %rax
     mov     %rax, Node_status_ms(%rbx)
-9:  call    node_backfill_ask
+    mov     (L + 96)(%rsp), %rax
+    inc     %rax
+    mov     %rax, Node_status_peer(%rbx)
+9:  call    node_sidecar_retry
+    call    node_backfill_ask
     mov     S7(%rsp), %rax
-    LEAVE 96
+    LEAVE 112
 END_FUNCTION node_sync
 
 /*
@@ -9102,6 +9408,7 @@ LOCAL_FUNCTION node_notice
     mov     S8(%rsp), %rax
     mov     %rax, NodeStream_version(%r13)
     movq    $NODE_STREAM_REQUEST, NodeStream_state(%r13)
+    movq    $0, NodeStream_response(%r13)
     mov     Node_stream_bytes(%rbx), %rax
     sub     $NodeStream_list, %rax
     mov     %rax, NodeStream_list(%r13)
@@ -9121,17 +9428,22 @@ LOCAL_FUNCTION node_notice
     cmp     $-1, %rax
     je      39f
     mov     %rdx, %r13
-    mov     (NodeStream_list + 16)(%r13), %rax
+    mov     %r13, %rdi                      # its list: of its NodeResponse, else its own
+    call    node_stream_list
+    mov     %rax, %r8
+    mov     16(%r8), %rax
     mov     LIBP2P_ACT_SD_COUNT(%r12), %rdx
-    mov     NodeStream_list(%r13), %rcx
-    sub     $24, %rcx
+    mov     (%r8), %rcx
+    sub     8(%r8), %rcx
     sub     %rax, %rcx
     cmp     %rcx, %rdx
     ja      38f
-    lea     NodeStream_request(%r13,%rax), %rdi
+    mov     8(%r8), %rdi
+    add     %r8, %rdi
+    add     %rax, %rdi
     lea     LIBP2P_ACT_SD_DATA(%r12), %rsi
     add     %rdx, %rax
-    mov     %rax, (NodeStream_list + 16)(%r13)
+    mov     %rax, 16(%r8)
     call    lantern_copy
     mov     %r13, %rdi
     cmpq    $NODE_STREAM_RESPONSE, NodeStream_state(%r13)

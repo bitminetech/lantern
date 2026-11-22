@@ -2727,7 +2727,7 @@ typedef struct {
     uint8_t *b;
 } shell_buf;
 
-#define NODE_ROOM_FIELDS 17 /* NodeRoom: blocks, checkpoints, pow_blocks, peers, streams, request_bytes, p2p_out, messages, blobs, engine_bytes, db_slots, db_roots, api_streams, pool, proposers, eth1_blocks, eth1_deposits */
+#define NODE_ROOM_FIELDS 19 /* NodeRoom: blocks, checkpoints, pow_blocks, peers, streams, request_bytes, p2p_out, messages, blobs, engine_bytes, db_slots, db_roots, api_streams, pool, proposers, eth1_blocks, eth1_deposits, responses, response_bytes */
 
 struct p2p_net;
 
@@ -5297,6 +5297,8 @@ static void p2p_open_record(fc_node *n, struct p2p_net *net, const uint8_t *reco
     if (s->room[6] < (1u << 20)) s->room[6] = 1u << 20; /* queued libp2p events */
     if (s->room[7] < 16) s->room[7] = 16;               /* gossip messages */
     if (s->room[8] < 1024) s->room[8] = 1024;           /* blob sidecars: NODE_SYNC_BATCH * 9 free, and more */
+    if (s->room[17] < 8) s->room[17] = 8;               /* NodeResponse entries: the node's requests but Status and GetMetaData */
+    if (s->room[18] < (1u << 18)) s->room[18] = 1u << 18; /* response bytes: a block's chunk, past the request bytes */
     if (!*why) { /* the node with that room, then its libp2p state */
         uint8_t *old = s->node;
         uint64_t need = 0;
@@ -5605,8 +5607,17 @@ static int shell_imported(const struct node_shell *s, const uint8_t *root) {
     return (e && rd64(e + NB_STATUS) == NB_IMPORTED) || shell_db_slot(s, root) != UINT64_MAX;
 }
 
+#define NODE_STREAMS 136 /* Node_streams: NodeStream entries of Node_stream_bytes (at 168) each */
+static int sync_bare; /* set: a request of the node but Status and GetMetaData read its response with no NodeResponse */
+static void sync_responses(const struct node_shell *s) {
+    const uint8_t *e = s->node + rd64(s->node + NODE_STREAMS);
+    for (uint64_t i = 0, c = rd64(s->node + NODE_STREAMS + 8), w = rd64(s->node + 168); i < c; i++, e += w)
+        if (rd64(e + 32) == 6 && rd64(e + 16) != 1 && rd64(e + 16) != 6 && !rd64(e + 48)) sync_bare = 1; /* NODE_STREAM_RESPONSE, not REQRESP_STATUS or REQRESP_METADATA, no response */
+}
+
 static int p2p_synced(struct p2p_net *net, int arg) {
     (void)arg;
+    sync_responses(net->shell);
     for (size_t b = 0; b < sync_nchain; b++)
         if (!shell_imported(net->shell, sync_chain[b]->root)) return 0;
     return 1;
@@ -5749,6 +5760,7 @@ static void sync_serve_columns(fc_node *m, struct p2p_net *net, tv parts, case_b
 #endif
 static int p2p_blobs_wait(struct p2p_net *net, int arg) {
     (void)arg;
+    sync_responses(net->shell);
     size_t f = sync_first_blobs();
     for (size_t b = 0; b < f; b++)
         if (!shell_imported(net->shell, sync_chain[b]->root)) return 0;
@@ -5877,6 +5889,8 @@ static void peer_record(const uint8_t *gvr, uint64_t epoch, uint8_t *out, const 
  */
 static int sync_supernode; /* set: the sync's node has NODE_FLAG_SUPERNODE */
 static int sync_half; /* set: the peer serves the even columns only, so the supernode rebuilds the others */
+static int sync_dead; /* set: a peer with no connection goes first in the node's peers part (node.md, sync_peer) */
+static int sync_retry; /* set: the peer serves sidecars only after the first block with them waits (the sidecar retry) */
 static void sync_once(tv parts, case_block **chain, size_t nchain, uint64_t last_ms, int no_blobs, uint8_t **head_state,
                       uint64_t *head_size, const char **why) {
     fc_node m;
@@ -5890,7 +5904,6 @@ static void sync_once(tv parts, case_block **chain, size_t nchain, uint64_t last
         shell_settle(&m, why);
     }
     struct p2p_net net;
-    s->room[5] = 1u << 18; /* request bytes: a block's chunk */
     uint8_t gvr[32], ncfg[CONFIG_SIZE], status[96] = {0}, digest[8] = {0}, record[24 + 300];
     memcpy(gvr, m.anchor + field_offset("BeaconState", 1), 32);
     node_config(ncfg);
@@ -5914,17 +5927,41 @@ static void sync_once(tv parts, case_block **chain, size_t nchain, uint64_t last
         uint8_t nid[32], cols[16];
         node_columns(cols, why); /* with no sidecars, a peer of CUSTODY_REQUIREMENT groups: the node asks for those */
         if (sync_supernode) memset(cols, 0xFF, 16); /* a supernode: every column */
-        net.peer_cgc = no_blobs ? rd64(config + 288) : rd64(config + 280);
+        net.peer_cgc = no_blobs && !sync_retry ? rd64(config + 288) : rd64(config + 280);
         if (!*why) peer_node_id(nid, why);
-        if (!*why && no_blobs) custody_columns(nid, net.peer_cgc, net.want_columns, why);
+        if (!*why && no_blobs && !sync_retry) custody_columns(nid, net.peer_cgc, net.want_columns, why);
         else if (!*why) memcpy(net.want_columns, cols, 16);
 #endif
         sync_chain = chain;
         sync_nchain = nchain;
+        if (!*why && sync_dead) { /* before the peer, one whose handle works no more: each request to it fails */
+            uint8_t *peers = s->node + rd64(s->node + NODE_PEERS);
+            uint64_t np = rd64(s->node + NODE_PEERS + 8);
+            memmove(peers + NODE_PEER_BYTES, peers, (size_t)(np * NODE_PEER_BYTES));
+            memset(peers, 0, NODE_PEER_BYTES);
+            wr64(peers, rd64(peers + NODE_PEER_BYTES) + ((uint64_t)0x100 << 32)); /* the peer's slot, a later generation */
+            wr64(peers + 16, 1 | 4);                   /* NODE_PEER_STATUS, NODE_PEER_METADATA, no custody */
+            memcpy(peers + 24, digest, 4);             /* fork_digest */
+            wr64(peers + 104, chain[nchain - 1]->slot); /* head_slot */
+            wr64(s->node + NODE_PEERS + 8, np + 1);
+        }
         if (!*why) p2p_run(&m, &net, no_blobs ? p2p_blobs_wait : p2p_synced, 0, why);
         if (*why && !strcmp(*why, "the network does not get there"))
             *why = no_blobs ? "sync with no sidecars: the first block with blobs does not wait for them"
-                            : "sync: the node does not import the peer's chain";
+                 : sync_dead ? "sync with a peer that fails first: the node does not import the chain"
+                             : "sync: the node does not import the peer's chain";
+        if (!*why && sync_bare) *why = "sync: a request of the node reads its response with no NodeResponse";
+        sync_bare = 0;
+        if (!*why && sync_retry) { /* the peer has the sidecars now: from a slot later the node must ask again */
+            shell_settle(&m, why);
+            if (!*why) p2p_settle(&m, &net, why);
+            net.no_blobs = no_blobs = 0;
+            uint64_t later = rd64(config + 104) > 4000 ? rd64(config + 104) : 4000; /* NODE_SIDECAR_RETRY_MS */
+            if (!*why) shell_event(s, EV_TICK, last_ms + later, NULL, 0);
+            if (!*why) p2p_run(&m, &net, p2p_synced, 0, why);
+            if (*why && !strcmp(*why, "the network does not get there"))
+                *why = "sync with sidecars a slot later: the node does not ask for them again";
+        }
         if (!*why) shell_settle(&m, why);
         if (!*why && no_blobs) {
             p2p_settle(&m, &net, why);
@@ -6100,7 +6137,6 @@ static void backfill_once(tv parts, case_block **chain, size_t nchain, uint64_t 
         peer_record(gvr, epoch, record, why);
     }
     if (!*why) {
-        s->room[5] = 1u << 18; /* request bytes: a block's chunk */
         p2p_open_record(&m, &net, record + 24, rd64(record + 16), status, FORK >= FORK_FULU ? 92 : 84, why);
         if (!*why) {
             net.chain = served;
@@ -6234,10 +6270,15 @@ static void fc_sync_check(tv parts, const char **why) {
     if (!*why && nchain) {
         uint8_t *head_state = NULL;
         uint64_t head_size = 0;
+        sync_dead = 1; /* a peer that fails first: the node must ask the next one, and the slots again */
         sync_once(parts, chain, nchain, last_ms, 0, nchain >= 2 ? &head_state : NULL, &head_size, why);
+        sync_dead = 0;
         sync_chain = chain;
         sync_nchain = nchain;
         if (!*why && sync_first_blobs() < nchain) sync_once(parts, chain, nchain, last_ms, 1, NULL, NULL, why);
+        sync_retry = 1; /* sidecars only later: the sidecar retry must get them */
+        if (!*why && sync_first_blobs() < nchain) sync_once(parts, chain, nchain, last_ms, 1, NULL, NULL, why);
+        sync_retry = 0;
 #if FORK >= FORK_FULU
         int columns = 0; /* a chain with column sidecars syncs again with a supernode */
         for (size_t b = 0; b < nchain; b++) columns |= chain[b]->columns != NULL;
