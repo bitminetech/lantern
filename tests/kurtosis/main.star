@@ -257,6 +257,8 @@ def run(plan, args={}):
                 "KURTOSIS_IP_ADDR_PLACEHOLDER",
                 "--boot-nodes",
                 ",".join(records),
+                "--log-level",
+                "debug",
             ] + extra_args,
             files=files,
             max_cpu=lantern_max_cpu,
