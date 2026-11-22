@@ -15,6 +15,8 @@ esac
 
 deps=$(sed "s#^#$out/#" "$out/deps.txt")
 deps_off=$(sed "s#^#$out/#" "$out/deps-off.txt")
+deps_sha=$(sed "s#^#$out/#" "$out/deps-sha.txt")
+deps_off_sha=$(sed "s#^#$out/#" "$out/deps-off-sha.txt")
 . "$root/platform/objects.sh"    # FORKS and fork_number
 # runner-<preset>-<fork>, and runner-<preset>-<fork>-bls-off for the cases made with signature checks off.
 for preset in mainnet minimal; do
@@ -26,6 +28,13 @@ for preset in mainnet minimal; do
         clang $flags -DBLS_OFF \
             "$root/tests/runner/runner.c" "$root/tests/runner/bls_off.c" -I"$root/platform/macos" -I"$root/tests/runner" \
             "$root/tests/runner/abi_$isa.s" "$out/liblantern-$preset.a" $deps_off -o "$out/runner-$preset-$fork-bls-off"
+        # The same two with asm-crypto's sha variant (README, Target profile): -sha.
+        clang $flags -DLANTERN_SHA_VARIANT \
+            "$root/tests/runner/runner.c" -I"$root/platform/macos" -I"$root/tests/runner" \
+            "$root/tests/runner/abi_$isa.s" "$out/liblantern-$preset.a" $deps_sha -o "$out/runner-$preset-$fork-sha"
+        clang $flags -DBLS_OFF -DLANTERN_SHA_VARIANT \
+            "$root/tests/runner/runner.c" "$root/tests/runner/bls_off.c" -I"$root/platform/macos" -I"$root/tests/runner" \
+            "$root/tests/runner/abi_$isa.s" "$out/liblantern-$preset.a" $deps_off_sha -o "$out/runner-$preset-$fork-bls-off-sha"
     done
 done
 
@@ -37,7 +46,7 @@ clang -arch $arch -mmacosx-version-min=11.0 -std=c11 -O2 -Wall -Wextra -Werror \
 # objects and asm-libp2p's shell, with libSystem.
 if [ -e "$out/entry.o" ]; then
     for preset in mainnet minimal; do
-        clang -arch $arch -mmacosx-version-min=11.0 "$out/entry.o" "$out/liblantern-$preset.a" $deps \
+        clang -arch $arch -mmacosx-version-min=11.0 "$out/entry.o" "$out/liblantern-$preset.a" "$out/liblantern-$preset-lx.a" $deps \
             "$out/deps/libp2p-shell.o" -o "$out/lantern-$preset"
     done
 fi

@@ -66,9 +66,29 @@ FUNCTION main
 51: str     x12, [x11, #48]
     add     x9, x9, #1
     b       4b
-6:  mov     x0, x23
+6:  ADDRESS x0, entry_sha_feature        /* the sha variant (README, Target profile): sysctlbyname */
+    add     x1, sp, #L
+    str     wzr, [x1]
+    add     x2, sp, #(L + 8)
+    mov     x9, #4
+    str     x9, [x2]
+    mov     x3, #0
+    mov     x4, #0
+    CALL_GLOBAL sysctlbyname
+    cbnz    w0, 60f
+    ldr     w9, [sp, #L]
+    cmp     w9, #1
+    b.ne    60f
+    mov     x0, x23
+    CALL_GLOBAL lx_lantern_app_main
+    LEAVE 16
+60: mov     x0, x23
     CALL_GLOBAL lantern_app_main
     LEAVE 16
 9:  mov     x0, #2                          /* no memory for the arguments */
     LEAVE 16
 END_FUNCTION main
+
+    RODATA
+entry_sha_feature:
+    .asciz  "hw.optional.arm.FEAT_SHA256"

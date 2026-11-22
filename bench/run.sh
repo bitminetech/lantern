@@ -25,4 +25,13 @@ deps="$deps $out/deps/ssz.o $out/deps/snappy.o $out/deps/libp2p.o $out/deps/quic
 clang --target=$target $march -std=c11 -O2 -Wall -Wextra -Werror -Wno-unused-function -static -fuse-ld=lld \
     -DPRESET=\"mainnet\" -DFORK=$(fork_number fulu) -DFORK_NAME=fulu bench/state.c -Iplatform/linux -Itests/runner \
     tests/runner/abi_$isa.s build/stf-$isa/liblantern-mainnet.a $deps -o build/stf-$isa/bench-state
-$q build/stf-$isa/bench-state /vectors $n' sh "$isa" "$n"
+$q build/stf-$isa/bench-state /vectors $n
+# Then the same with asm-crypto'"'"'s sha variant (README, Target profile), on x86-64 and ARM64.
+if [ -e $out/deps/crypto-sha256x.o ]; then
+    sha=$(echo "$deps" | sed "s#crypto-sha256\.o#crypto-sha256x.o#")
+    clang --target=$target $march -std=c11 -O2 -Wall -Wextra -Werror -Wno-unused-function -static -fuse-ld=lld \
+        -DPRESET=\"mainnet\" -DFORK=$(fork_number fulu) -DFORK_NAME=fulu bench/state.c -Iplatform/linux -Itests/runner \
+        tests/runner/abi_$isa.s build/stf-$isa/liblantern-mainnet.a $sha -o build/stf-$isa/bench-state-sha
+    echo "== the sha variant"
+    QEMU_CPU=max $q build/stf-$isa/bench-state-sha /vectors $n
+fi' sh "$isa" "$n"

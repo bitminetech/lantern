@@ -161,7 +161,7 @@ lantern_app_main(args) -> status
 ### ABI
 
 - Role: L2.
-- Symbol: `lantern_app_main` (`_lantern_app_main` on macOS).
+- Symbol: `lantern_app_main` (`_lantern_app_main` on macOS); in the binary's `sha` copy on x86-64 and ARM64, `lx_lantern_app_main` (README, Target profile).
 - Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
 - Argument order: `args`.
 

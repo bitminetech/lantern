@@ -31,6 +31,15 @@ for preset in mainnet minimal; do
         clang --target=$target $march $flags -DBLS_OFF \
             "$root/tests/runner/runner.c" "$root/tests/runner/bls_off.c" -I"$root/platform/linux" -I"$root/tests/runner" \
             "$root/tests/runner/abi_$isa.s" "$out/liblantern-$preset.a" $deps_off -o "$out/runner-$preset-$fork-bls-off"
+        # The same two with asm-crypto's sha variant (README, Target profile): -sha.
+        if [ -n "$deps_sha" ]; then
+            clang --target=$target $march $flags -DLANTERN_SHA_VARIANT \
+                "$root/tests/runner/runner.c" -I"$root/platform/linux" -I"$root/tests/runner" \
+                "$root/tests/runner/abi_$isa.s" "$out/liblantern-$preset.a" $deps_sha -o "$out/runner-$preset-$fork-sha"
+            clang --target=$target $march $flags -DBLS_OFF -DLANTERN_SHA_VARIANT \
+                "$root/tests/runner/runner.c" "$root/tests/runner/bls_off.c" -I"$root/platform/linux" -I"$root/tests/runner" \
+                "$root/tests/runner/abi_$isa.s" "$out/liblantern-$preset.a" $deps_off_sha -o "$out/runner-$preset-$fork-bls-off-sha"
+        fi
     done
 done
 
@@ -45,7 +54,9 @@ if [ -e "$root/asm/core/$isa/app.s" ]; then
     as -I"$root/include/minimal" -I"$root/include" -I"$root/platform/linux" -I"$root/build/deps/asm-ssz/include" \
         -I"$root/build/deps/asm-crypto/include" -c "$root/asm/shell/linux/$isa/entry.s" -o "$out/entry.o"
     for preset in mainnet minimal; do
-        clang --target=$target $march -static -nostdlib -fuse-ld=lld "$out/entry.o" "$out/liblantern-$preset.a" $deps \
+        lx=""
+        [ -e "$out/liblantern-$preset-lx.a" ] && lx="$out/liblantern-$preset-lx.a"
+        clang --target=$target $march -static -nostdlib -fuse-ld=lld "$out/entry.o" "$out/liblantern-$preset.a" $lx $deps \
             "$out/deps/libp2p-shell.o" -o "$out/lantern-$preset"
     done
 fi

@@ -3,8 +3,9 @@
 # runner and file, as many at once as the machine has cores.
 # Usage: tests/runner/run.sh RUNNER_DIR VECTOR_DIR [FILE ...]
 #
-# RUNNER_DIR holds runner-<preset>-<fork> and runner-<preset>-<fork>-bls-off.
-# A file <preset>-<fork>-*.bin goes to the two runners of its preset and fork;
+# RUNNER_DIR holds runner-<preset>-<fork> and runner-<preset>-<fork>-bls-off, and on
+# x86-64 and ARM64 the same with -sha, built with asm-crypto's sha variant (README,
+# Target profile). A file <preset>-<fork>-*.bin goes to the runners of its preset and fork;
 # other files are left out. With no FILE, every .bin file in VECTOR_DIR runs.
 # QEMU is the command that runs the runners for an ISA other than the host's.
 # JOBS is the number of processes at once, the number of cores when unset.
@@ -36,6 +37,10 @@ for file in $(cd "$vectors" && ls -S $files); do
     [ -e "$runners/$runner" ] || continue
     echo "$runner $file"
     echo "$runner-bls-off $file"
+    if [ -e "$runners/$runner-sha" ]; then
+        echo "$runner-sha $file"
+        echo "$runner-bls-off-sha $file"
+    fi
 done > "$logs/work"
 
 # Each process writes runner.file.log, and its exit status as the last line.
@@ -46,7 +51,8 @@ xargs -n 2 -P "$jobs" sh -c '
 
 status=0
 for runner in $(for preset in mainnet minimal; do for fork in $forks; do
-                    echo runner-$preset-$fork runner-$preset-$fork-bls-off; done; done); do
+                    echo runner-$preset-$fork runner-$preset-$fork-bls-off \
+                         runner-$preset-$fork-sha runner-$preset-$fork-bls-off-sha; done; done); do
     set -- "$logs/$runner".*.log
     [ -e "$1" ] || continue
     echo "== $runner${QEMU:+ (under $QEMU)}"

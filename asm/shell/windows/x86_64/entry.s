@@ -103,7 +103,23 @@ FUNCTION mainCRTStartup
 6:  mov     %r13, %rcx
     CALL_GLOBAL LocalFree
     mov     %rbx, %rdi
-    CALL_GLOBAL lantern_app_main
+    xor     %eax, %eax                      # the sha variant (README, Target profile): cpuid
+    cpuid
+    cmp     $7, %eax
+    jb      60f
+    mov     $1, %eax
+    cpuid
+    bt      $9, %ecx                        # SSSE3
+    jnc     60f
+    mov     $7, %eax
+    xor     %ecx, %ecx
+    cpuid
+    bt      $29, %ebx                       # SHA
+    jnc     60f
+    CALL_GLOBAL lx_lantern_app_main
+    mov     %eax, %ecx
+    CALL_GLOBAL ExitProcess
+60: CALL_GLOBAL lantern_app_main
     mov     %eax, %ecx
     CALL_GLOBAL ExitProcess
 9:  mov     $2, %ecx                        # no memory for the arguments

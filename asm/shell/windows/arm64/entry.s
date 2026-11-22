@@ -88,7 +88,13 @@ FUNCTION mainCRTStartup
     b       4b
 6:  mov     x0, x20
     CALL_GLOBAL LocalFree
+    mov     w0, #30                         /* the sha variant: PF_ARM_V8_CRYPTO_INSTRUCTIONS_AVAILABLE */
+    CALL_GLOBAL IsProcessorFeaturePresent
+    cbz     w0, 60f
     mov     x0, x23
+    CALL_GLOBAL lx_lantern_app_main
+    CALL_GLOBAL ExitProcess
+60: mov     x0, x23
     CALL_GLOBAL lantern_app_main
     CALL_GLOBAL ExitProcess
 9:  mov     w0, #2                          /* no memory for the arguments */
