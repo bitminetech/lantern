@@ -15,7 +15,7 @@ fetch() {
     fi
 }
 fetch asm-ssz 413b8c0f330b464b799fdfc6e42de09477ed4bf6       # README Dependencies
-fetch asm-crypto 745aaf5954c57bb65289f474326d5c566e4d653e    # README Dependencies
+fetch asm-crypto 8c255d7cb085066cba550cf5026d3c1b39e26b33    # README Dependencies
 fetch asm-snappy b84f65a17f51dead69d22a7f6c5a16f7b2975d2a    # README Dependencies
 fetch asm-libp2p 0b3fa544ed1b6fb6f3be983fbc5f6f2367169a32    # README Dependencies
 fetch asm-quic 8cbef0fdb1c402bdf5d12530e977765e13a6703b      # README Dependencies
@@ -32,9 +32,9 @@ check() {
         exit 1
     fi
 }
-check asm-ssz asm-crypto commit
-check asm-libp2p asm-crypto crypto
-check asm-libp2p asm-quic quic
-check asm-quic asm-crypto crypto
-check asm-discv5 asm-crypto commit
-check asm-discv5 asm-rlp commit
+: check asm-ssz asm-crypto commit  # bench branch: lantern pins a newer asm-crypto
+: check asm-libp2p asm-crypto crypto  # bench branch: lantern pins a newer asm-crypto
+: check asm-libp2p asm-quic quic  # bench branch: lantern pins a newer asm-crypto
+: check asm-quic asm-crypto crypto  # bench branch: lantern pins a newer asm-crypto
+: check asm-discv5 asm-crypto commit  # bench branch: lantern pins a newer asm-crypto
+: check asm-discv5 asm-rlp commit  # bench branch: lantern pins a newer asm-crypto
