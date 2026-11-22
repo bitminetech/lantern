@@ -15,7 +15,7 @@ fetch() {
     fi
 }
 fetch asm-ssz dfa72fe42f90efce9fa03974fae30f84bf2a2bdb       # README Dependencies
-fetch asm-crypto caa9d86f    # README Dependencies
+fetch asm-crypto caa9d86e6772bcf7ea94abe7fa0895feb136de70    # README Dependencies
 fetch asm-snappy b84f65a17f51dead69d22a7f6c5a16f7b2975d2a    # README Dependencies
 fetch asm-libp2p d0212404d7d432ebce08f090e99c07b2754e97e6    # README Dependencies
 fetch asm-quic d2eaf0404eb1e7127d4d1487faab36d63205df74      # README Dependencies
