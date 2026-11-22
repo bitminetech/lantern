@@ -890,8 +890,9 @@ LOCAL_FUNCTION app_start
     add     x1, x1, #NODE_STATE_GVR
     mov     x2, #32
     bl      lantern_copy
-    ldr     x9, [x19, #APP_FLAGS]           /* the shell runs discv5 for the node */
+    ldr     x9, [x19, #APP_FLAGS]           /* the shell runs discv5 for the node; the node keeps few post-states */
     orr     x9, x9, #NODE_FLAG_DISCV5
+    orr     x9, x9, #NODE_FLAG_FEW_STATES
     ldr     x10, [x19, #(APP_OPTIONS + AppOptions_supernode)]   /* --supernode: every custody group */
     orr     x11, x9, #NODE_FLAG_SUPERNODE
     cmp     x10, #0

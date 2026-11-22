@@ -976,7 +976,7 @@ LOCAL_FUNCTION app_start
     add     $NODE_STATE_GVR, %rsi
     mov     $32, %edx
     call    lantern_copy
-    orq     $NODE_FLAG_DISCV5, APP_FLAGS(%rbx)  # the shell runs discv5 for the node
+    orq     $(NODE_FLAG_DISCV5 | NODE_FLAG_FEW_STATES), APP_FLAGS(%rbx)  # the shell runs discv5 for the node; the node keeps few post-states
     cmpq    $0, (APP_OPTIONS + AppOptions_supernode)(%rbx)  # --supernode: every custody group
     je      1f
     orq     $NODE_FLAG_SUPERNODE, APP_FLAGS(%rbx)

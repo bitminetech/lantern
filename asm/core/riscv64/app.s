@@ -968,8 +968,8 @@ LOCAL_FUNCTION app_start
     ADDQ    a1, a1, NODE_STATE_GVR
     li      a2, 32
     call    lantern_copy
-    LDQ     t0, s1, APP_FLAGS               # the shell runs discv5 for the node
-    ori     t0, t0, NODE_FLAG_DISCV5
+    LDQ     t0, s1, APP_FLAGS               # the shell runs discv5 for the node; the node keeps few post-states
+    ori     t0, t0, NODE_FLAG_DISCV5 | NODE_FLAG_FEW_STATES
     LDQ     t1, s1, (APP_OPTIONS + AppOptions_supernode)   # --supernode: every custody group
     beqz    t1, 1f
     ori     t0, t0, NODE_FLAG_SUPERNODE
