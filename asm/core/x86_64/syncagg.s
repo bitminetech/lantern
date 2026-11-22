@@ -249,12 +249,13 @@ SPEC_FUNCTION process_sync_aggregate
     mov     S9(%rsp), %rax
     sub     $SYNC_AGG_EXTRA, %rax
     mov     %rax, (%r12)
-    mov     %rbx, %rdi
-    mov     %r12, %rsi
-    lea     (L + 168)(%rsp), %rdx
-    call    lantern_get_base_reward_per_increment
-    test    %rax, %rax
-    jnz     7f
+    lea     (L + 160)(%rsp), %rdi           # get_base_reward_per_increment of the same total
+    lea     (L + 168)(%rsp), %rsi
+    call    lantern_integer_squareroot
+    MOVQ    %rax, EFFECTIVE_BALANCE_INCREMENT * BASE_REWARD_FACTOR
+    xor     %edx, %edx
+    divq    (L + 168)(%rsp)
+    mov     %rax, (L + 168)(%rsp)
     mov     (L + 160)(%rsp), %rax
     MOVQ    %rcx, EFFECTIVE_BALANCE_INCREMENT
     xor     %edx, %edx

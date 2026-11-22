@@ -961,6 +961,7 @@ lantern_process_sync_aggregate(state, sync_aggregate, config, scratch, result) -
 - With a key cache in the config (`CONFIG_PUBKEY_CACHE`), some members signed but not all, and every participant's index below the cache's `count`: committee_indices first, then crypto_bls_fast_aggregate_verify_cached of the validators' keys at the participants' indices. It equals eth_fast_aggregate_verify of the participants' keys: at least one key, and each index's key is the member's key. Else the spec's steps.
 - committee_indices: all_pubkeys.index(pubkey) of each member, in one pass over the validators. The distinct member keys sit in a hash table of 2 * SYNC_COMMITTEE_SIZE slots, in the scratch the keys of the signature check used. Each key takes the first validator that has it.
 - A member key that no validator has: `LANTERN_INVALID_SYNC_AGGREGATE`.
+- get_base_reward_per_increment from the total of its get_total_active_balance call, with get_total_active_balance once: both calls get the same state and scratch size.
 
 ### Limits
 
