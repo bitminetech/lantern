@@ -5587,7 +5587,21 @@ LOCAL_FUNCTION app_loop
 32: cmp     $APP_WAIT_MS, %rax
     jb      33f
     mov     $APP_WAIT_MS, %eax
-33: mov     APP_EVENTS(%rbx), %rcx          # no wait while events wait for the next step
+33: mov     APP_API_SLOTS(%rbx), %rcx       # an open Beacon API connection: at most APP_API_WAIT_MS
+    mov     (APP_OPTIONS + AppOptions_http_max_connections)(%rbx), %rdx
+    test    %rcx, %rcx
+    jz      37f
+35: test    %rdx, %rdx
+    jz      37f
+    cmpq    $0, 8(%rcx)
+    jne     36f
+    add     $APP_API_SLOT, %rcx
+    dec     %rdx
+    jmp     35b
+36: cmp     $APP_API_WAIT_MS, %rax
+    jb      37f
+    mov     $APP_API_WAIT_MS, %eax
+37: mov     APP_EVENTS(%rbx), %rcx          # no wait while events wait for the next step
     cmpq    $0, 16(%rcx)
     je      34f
     xor     %eax, %eax

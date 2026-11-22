@@ -5644,7 +5644,19 @@ LOCAL_FUNCTION app_loop
 32: li      t3, APP_WAIT_MS
     bltu    t2, t3, 33f
     mv      t2, t3
-33: LDQ     t0, s1, APP_EVENTS              # no wait while events wait for the next step
+33: LDQ     t0, s1, APP_API_SLOTS           # an open Beacon API connection: at most APP_API_WAIT_MS
+    LDQ     t1, s1, (APP_OPTIONS + AppOptions_http_max_connections)
+    beqz    t0, 37f
+35: beqz    t1, 37f
+    ld      t3, 8(t0)
+    bnez    t3, 36f
+    addi    t0, t0, APP_API_SLOT
+    addi    t1, t1, -1
+    j       35b
+36: li      t3, APP_API_WAIT_MS
+    bltu    t2, t3, 37f
+    mv      t2, t3
+37: LDQ     t0, s1, APP_EVENTS              # no wait while events wait for the next step
     ld      t0, 16(t0)
     beqz    t0, 34f
     li      t2, 0
