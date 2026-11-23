@@ -1804,10 +1804,12 @@ LOCAL_FUNCTION api_body
     bl      api_validator_item
     API_LIT api_end1
     UNFRAME 16
-    /* getProposerDuties: {"dependent_root":…,"execution_optimistic":…,"data":[{"pubkey":…,"validator_index":…,"slot":…},…]} */
+    /* getProposerDuties and getProposerDutiesV2: {"dependent_root":…,"execution_optimistic":…,"data":[{"pubkey":…,"validator_index":…,"slot":…},…]} */
 19: cmp     x28, #API_OP_GET_PROPOSER_DUTIES
+    b.eq    190f
+    cmp     x28, #API_OP_GET_PROPOSER_DUTIES_V2
     b.ne    18f
-    API_LIT api_u_root
+190: API_LIT api_u_root
     add     x0, x22, #ApiView_duties
     mov     x1, #32
     bl      api_qhex
@@ -3266,6 +3268,8 @@ LOCAL_FUNCTION node_api_event
     b.eq    57f
     cmp     x3, #API_OP_GET_PROPOSER_DUTIES
     b.eq    63f
+    cmp     x3, #API_OP_GET_PROPOSER_DUTIES_V2
+    b.eq    63f
     cmp     x3, #API_OP_PRODUCE_ATTESTATION_DATA
     b.eq    59f
     cmp     x3, #API_OP_PRODUCE_BLOCK_V3
@@ -4159,6 +4163,8 @@ LOCAL_FUNCTION node_api_run
     b.eq    2f
     cmp     x27, #API_OP_GET_PROPOSER_DUTIES
     b.eq    2f
+    cmp     x27, #API_OP_GET_PROPOSER_DUTIES_V2
+    b.eq    2f
     cmp     x27, #API_OP_PRODUCE_ATTESTATION_DATA
     b.eq    2f
     cmp     x27, #API_OP_GET_ATTESTER_DUTIES
@@ -4419,14 +4425,33 @@ LOCAL_FUNCTION node_api_run
     str     x0, [x25, #NodeEvent_result]
     b       9f
 26: cmp     x27, #API_OP_GET_PROPOSER_DUTIES
+    b.eq    261f
+    cmp     x27, #API_OP_GET_PROPOSER_DUTIES_V2
     b.ne    23f
-    mov     x0, x22                         /* getProposerDuties: lantern_node_proposers */
+261: mov    x0, x22                         /* getProposerDuties and V2: lantern_node_proposers */
     add     x1, x19, #Node_config
     mov     x2, x24
     add     x3, x26, #ApiView_duties
     FORK_CALL node_proposers
     cmp     x0, #LANTERN_BUFFER_TOO_SMALL
     b.eq    71f
+    cbz     x0, 262f
+    str     x0, [x25, #NodeEvent_result]
+    b       9f
+262: cmp    x27, #API_OP_GET_PROPOSER_DUTIES_V2
+    b.ne    24f
+    ldr     x0, [x22, #NODE_STATE_SLOT]     /* V2 from epoch 1: get_block_root_at_slot of max(the first slot - SLOTS_PER_EPOCH - 1, 0) */
+    cbz     x0, 24f
+    subs    x9, x0, #(SLOTS_PER_EPOCH + 1)
+    csel    x9, x9, xzr, hs
+    str     x9, [sp, #(L + 56)]
+    add     x1, x19, #Node_config
+    bl      node_fork
+    mov     x15, x0
+    mov     x0, x22
+    add     x1, sp, #(L + 56)
+    add     x2, x26, #ApiView_duties
+    FORK_CALL get_block_root_at_slot
     cbz     x0, 24f
     str     x0, [x25, #NodeEvent_result]
     b       9f
@@ -4682,6 +4707,8 @@ LOCAL_FUNCTION node_api_event_run
     str     x10, [x26, #ApiView_event_epoch]
     cmp     x27, #API_TOPIC_HEAD
     b.eq    1f
+    cmp     x27, #API_TOPIC_HEAD_V2
+    b.eq    1f
     cmp     x27, #API_TOPIC_CHAIN_REORG
     b.eq    20f
     cmp     x27, #API_TOPIC_FINALIZED_CHECKPOINT
@@ -4693,6 +4720,7 @@ LOCAL_FUNCTION node_api_event_run
     add     x1, x19, #Node_config
     bl      node_fork
     mov     x15, x0
+    str     x0, [x26, #ApiView_fork]        /* head_v2's version */
     mov     x0, x22
     add     x1, x19, #Node_config
     mov     x2, x24
@@ -7275,9 +7303,47 @@ LOCAL_FUNCTION api_event_text
     add     x26, x23, x9
     API_LIT api_ev_event
     cmp     x28, #API_TOPIC_HEAD
-    b.ne    1f
+    b.ne    13f
     API_LIT api_ev_t_head
     b       3f
+13: cmp     x28, #API_TOPIC_HEAD_V2
+    b.ne    1f
+    /* head_v2: {"version":…,"data":{"slot":…,"block":…,"state":…,"payload_status":"full","epoch_transition":…,"current_epoch_dependent_root":…,"next_epoch_dependent_root":…,"execution_optimistic":…}} */
+    API_LIT api_ev_t_head_v2
+    API_LIT api_ev_data
+    API_LIT api_pa_version
+    ldr     x0, [x22, #ApiView_fork]
+    bl      api_fork_name
+    API_LIT api_ev_v2_slot
+    ldr     x0, [x22, #ApiView_event_slot]
+    bl      api_qdec
+    API_LIT api_ev_block
+    add     x0, x22, #ApiView_event_block
+    mov     x1, #32
+    bl      api_qhex
+    API_LIT api_ev_state
+    add     x0, x22, #ApiView_event_state
+    mov     x1, #32
+    bl      api_qhex
+    API_LIT api_ev_full
+    API_LIT api_ev_transition
+    ldr     x0, [x22, #ApiView_event_flags]
+    and     x0, x0, #1
+    bl      api_bool
+    API_LIT api_ev_current_epoch
+    add     x0, x22, #ApiView_event_previous
+    mov     x1, #32
+    bl      api_qhex
+    API_LIT api_ev_next_epoch
+    add     x0, x22, #ApiView_event_current
+    mov     x1, #32
+    bl      api_qhex
+    API_LIT api_u_optimistic
+    ldr     x0, [x22, #ApiView_event_flags]
+    ubfx    x0, x0, #1, #1
+    bl      api_bool
+    API_LIT api_end1
+    b       61f
 1:  cmp     x28, #API_TOPIC_BLOCK
     b.ne    11f
     API_LIT api_ev_t_block
@@ -8074,7 +8140,7 @@ LOCAL_FUNCTION node_api_head_events
     bl      node_pool_checks
     mov     x0, #API_TOPIC_HEAD
     bl      node_api_subscribed
-    cbz     x0, 5f
+    cbz     x0, 13f
     ldr     x1, [x21, #NodeBlock_state_id]
     cbz     x1, 5f
     mov     x0, #NODE_WORK_API_EVENT
@@ -8082,6 +8148,18 @@ LOCAL_FUNCTION node_api_head_events
     mov     x3, #0
     mov     x4, #0
     lsl     x5, x22, #8                     /* API_TOPIC_HEAD is 0 */
+    bl      node_work
+13: mov     x0, #API_TOPIC_HEAD_V2          /* head_v2: the same values, its own text */
+    bl      node_api_subscribed
+    cbz     x0, 5f
+    ldr     x1, [x21, #NodeBlock_state_id]
+    cbz     x1, 5f
+    mov     x0, #NODE_WORK_API_EVENT
+    mov     x2, #0
+    mov     x3, #0
+    mov     x4, #0
+    lsl     x5, x22, #8
+    add     x5, x5, #API_TOPIC_HEAD_V2
     bl      node_work
 5:  ldr     x9, [x20, #Store_finalized_checkpoint]
     LDQ     x10, x19, Node_event_epoch

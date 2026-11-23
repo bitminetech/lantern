@@ -1824,10 +1824,12 @@ LOCAL_FUNCTION api_body
     call    api_validator_item
     API_LIT api_end1
     UNFRAME 16
-    # getProposerDuties: {"dependent_root":…,"execution_optimistic":…,"data":[{"pubkey":…,"validator_index":…,"slot":…},…]}
+    # getProposerDuties and getProposerDutiesV2: {"dependent_root":…,"execution_optimistic":…,"data":[{"pubkey":…,"validator_index":…,"slot":…},…]}
 19: cmp     $API_OP_GET_PROPOSER_DUTIES, %rsi
+    je      190f
+    cmp     $API_OP_GET_PROPOSER_DUTIES_V2, %rsi
     jne     18f
-    API_LIT api_u_root
+190: API_LIT api_u_root
     lea     ApiView_duties(%rbp), %rdi
     mov     $32, %esi
     call    api_qhex
@@ -3253,6 +3255,8 @@ LOCAL_FUNCTION node_api_event
     je      57f
     cmp     $API_OP_GET_PROPOSER_DUTIES, %rcx
     je      63f
+    cmp     $API_OP_GET_PROPOSER_DUTIES_V2, %rcx
+    je      63f
     cmp     $API_OP_PRODUCE_ATTESTATION_DATA, %rcx
     je      59f
     cmp     $API_OP_PRODUCE_BLOCK_V3, %rcx
@@ -3695,7 +3699,7 @@ LOCAL_FUNCTION node_api_event
     mov     %r12, %rdx
     call    node_api_subscribe
     jmp     90f
-63: mov     $503, %edx                      # getProposerDuties: 503 while syncing; 400 past the next epoch
+63: mov     $503, %edx                      # getProposerDuties and V2: 503 while syncing; 400 past the next epoch
     mov     S8(%rsp), %rax
     cmpq    $0, ApiView_is_syncing(%rax)
     jne     80f
@@ -4165,6 +4169,8 @@ LOCAL_FUNCTION node_api_run
     je      2f
     cmp     $API_OP_GET_PROPOSER_DUTIES, %eax
     je      2f
+    cmp     $API_OP_GET_PROPOSER_DUTIES_V2, %eax
+    je      2f
     cmp     $API_OP_PRODUCE_ATTESTATION_DATA, %eax
     je      2f
     cmp     $API_OP_GET_ATTESTER_DUTIES, %eax
@@ -4468,8 +4474,10 @@ LOCAL_FUNCTION node_api_run
     mov     %rax, NodeEvent_result(%r15)
     jmp     9f
 26: cmpq    $API_OP_GET_PROPOSER_DUTIES, S9(%rsp)
+    je      261f
+    cmpq    $API_OP_GET_PROPOSER_DUTIES_V2, S9(%rsp)
     jne     23f
-    mov     %r13, %rdi                      # getProposerDuties: lantern_node_proposers
+261: mov    %r13, %rdi                      # getProposerDuties and V2: lantern_node_proposers
     lea     Node_config(%rbx), %rsi
     mov     %r14, %rdx
     mov     S8(%rsp), %rcx
@@ -4477,6 +4485,28 @@ LOCAL_FUNCTION node_api_run
     FORK_CALL node_proposers
     cmp     $LANTERN_BUFFER_TOO_SMALL, %rax
     je      71f
+    test    %rax, %rax
+    jz      262f
+    mov     %rax, NodeEvent_result(%r15)
+    jmp     9f
+262: cmpq   $API_OP_GET_PROPOSER_DUTIES_V2, S9(%rsp)
+    jne     24f
+    mov     NODE_STATE_SLOT(%r13), %rax     # V2 from epoch 1: get_block_root_at_slot of max(the first slot - SLOTS_PER_EPOCH - 1, 0)
+    test    %rax, %rax
+    jz      24f
+    sub     $(SLOTS_PER_EPOCH + 1), %rax
+    jae     263f
+    xor     %eax, %eax
+263: mov    %rax, (L + 56)(%rsp)
+    mov     NODE_STATE_SLOT(%r13), %rdi
+    lea     Node_config(%rbx), %rsi
+    call    node_fork
+    mov     %rax, %r10
+    mov     %r13, %rdi
+    lea     (L + 56)(%rsp), %rsi
+    mov     S8(%rsp), %rdx
+    add     $ApiView_duties, %rdx
+    FORK_CALL get_block_root_at_slot
     test    %rax, %rax
     jz      24f
     mov     %rax, NodeEvent_result(%r15)
@@ -7122,6 +7152,8 @@ LOCAL_FUNCTION node_api_event_run
     mov     %rcx, ApiView_event_epoch(%rax)
     cmpq    $API_TOPIC_HEAD, S9(%rsp)
     je      1f
+    cmpq    $API_TOPIC_HEAD_V2, S9(%rsp)
+    je      1f
     cmpq    $API_TOPIC_CHAIN_REORG, S9(%rsp)
     je      20f
     cmpq    $API_TOPIC_FINALIZED_CHECKPOINT, S9(%rsp)
@@ -7136,6 +7168,8 @@ LOCAL_FUNCTION node_api_event_run
     lea     Node_config(%rbx), %rsi
     call    node_fork
     mov     %rax, %r10
+    mov     S8(%rsp), %rcx                  # head_v2's version
+    mov     %rax, ApiView_fork(%rcx)
     mov     %r13, %rdi
     lea     Node_config(%rbx), %rsi
     mov     %r14, %rdx
@@ -7405,9 +7439,48 @@ LOCAL_FUNCTION api_event_text
     add     %rbx, %r14
     API_LIT api_ev_event
     cmpq    $API_TOPIC_HEAD, S7(%rsp)
-    jne     1f
+    jne     13f
     API_LIT api_ev_t_head
     jmp     3f
+13: cmpq    $API_TOPIC_HEAD_V2, S7(%rsp)
+    jne     1f
+    # head_v2: {"version":…,"data":{"slot":…,"block":…,"state":…,"payload_status":"full","epoch_transition":…,"current_epoch_dependent_root":…,"next_epoch_dependent_root":…,"execution_optimistic":…}}
+    API_LIT api_ev_t_head_v2
+    API_LIT api_ev_data
+    API_LIT api_pa_version
+    mov     ApiView_fork(%rbp), %rdi
+    call    api_fork_name
+    API_LIT api_ev_v2_slot
+    mov     ApiView_event_slot(%rbp), %rdi
+    call    api_qdec
+    API_LIT api_ev_block
+    lea     ApiView_event_block(%rbp), %rdi
+    mov     $32, %esi
+    call    api_qhex
+    API_LIT api_ev_state
+    lea     ApiView_event_state(%rbp), %rdi
+    mov     $32, %esi
+    call    api_qhex
+    API_LIT api_ev_full
+    API_LIT api_ev_transition
+    mov     ApiView_event_flags(%rbp), %rdi
+    and     $1, %edi
+    call    api_bool
+    API_LIT api_ev_current_epoch
+    lea     ApiView_event_previous(%rbp), %rdi
+    mov     $32, %esi
+    call    api_qhex
+    API_LIT api_ev_next_epoch
+    lea     ApiView_event_current(%rbp), %rdi
+    mov     $32, %esi
+    call    api_qhex
+    API_LIT api_u_optimistic
+    mov     ApiView_event_flags(%rbp), %rdi
+    shr     $1, %rdi
+    and     $1, %edi
+    call    api_bool
+    API_LIT api_end1
+    jmp     61f
 1:  cmpq    $API_TOPIC_BLOCK, S7(%rsp)
     jne     11f
     API_LIT api_ev_t_block
@@ -8309,7 +8382,7 @@ LOCAL_FUNCTION node_api_head_events
     mov     $API_TOPIC_HEAD, %edi
     call    node_api_subscribed
     test    %rax, %rax
-    jz      5f
+    jz      13f
     mov     NodeBlock_state_id(%r12), %rsi
     test    %rsi, %rsi
     jz      5f
@@ -8319,6 +8392,21 @@ LOCAL_FUNCTION node_api_head_events
     xor     %r8d, %r8d
     mov     %r13, %r9
     shl     $8, %r9                         # API_TOPIC_HEAD is 0
+    call    node_work
+13: mov     $API_TOPIC_HEAD_V2, %edi        # head_v2: the same values, its own text
+    call    node_api_subscribed
+    test    %rax, %rax
+    jz      5f
+    mov     NodeBlock_state_id(%r12), %rsi
+    test    %rsi, %rsi
+    jz      5f
+    mov     $NODE_WORK_API_EVENT, %edi
+    xor     %edx, %edx
+    xor     %ecx, %ecx
+    xor     %r8d, %r8d
+    mov     %r13, %r9
+    shl     $8, %r9
+    add     $API_TOPIC_HEAD_V2, %r9
     call    node_work
 5:  mov     Store_finalized_checkpoint(%rbp), %rax
     cmp     Node_event_epoch(%rbx), %rax

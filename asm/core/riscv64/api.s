@@ -1828,10 +1828,12 @@ LOCAL_FUNCTION api_body
     call    api_validator_item
     API_LIT api_end1
     UNFRAME 16
-    # getProposerDuties: {"dependent_root":…,"execution_optimistic":…,"data":[{"pubkey":…,"validator_index":…,"slot":…},…]}
+    # getProposerDuties and getProposerDutiesV2: {"dependent_root":…,"execution_optimistic":…,"data":[{"pubkey":…,"validator_index":…,"slot":…},…]}
 19: li      t0, API_OP_GET_PROPOSER_DUTIES
+    beq     s10, t0, 190f
+    li      t0, API_OP_GET_PROPOSER_DUTIES_V2
     bne     s10, t0, 18f
-    API_LIT api_u_root
+190: API_LIT api_u_root
     addi    a0, s4, ApiView_duties
     li      a1, 32
     call    api_qhex
@@ -3327,6 +3329,8 @@ LOCAL_FUNCTION node_api_event
     beq     a3, t0, 57f
     li      t0, API_OP_GET_PROPOSER_DUTIES
     beq     a3, t0, 63f
+    li      t0, API_OP_GET_PROPOSER_DUTIES_V2
+    beq     a3, t0, 63f
     li      t0, API_OP_PRODUCE_ATTESTATION_DATA
     beq     a3, t0, 59f
     li      t0, API_OP_PRODUCE_BLOCK_V3
@@ -4233,6 +4237,8 @@ LOCAL_FUNCTION node_api_run
     beq     s9, t2, 2f
     li      t2, API_OP_GET_PROPOSER_DUTIES
     beq     s9, t2, 2f
+    li      t2, API_OP_GET_PROPOSER_DUTIES_V2
+    beq     s9, t2, 2f
     li      t2, API_OP_PRODUCE_ATTESTATION_DATA
     beq     s9, t2, 2f
     li      t2, API_OP_GET_ATTESTER_DUTIES
@@ -4502,14 +4508,36 @@ LOCAL_FUNCTION node_api_run
     sd      a0, NodeEvent_result(s7)
     j       9f
 26: li      t0, API_OP_GET_PROPOSER_DUTIES
+    beq     s9, t0, 261f
+    li      t0, API_OP_GET_PROPOSER_DUTIES_V2
     bne     s9, t0, 23f
-    mv      a0, s4                          # getProposerDuties: lantern_node_proposers
+261: mv     a0, s4                          # getProposerDuties and V2: lantern_node_proposers
     addi    a1, s1, Node_config
     mv      a2, s6
     addi    a3, s8, ApiView_duties
     FORK_CALL node_proposers
     li      t0, LANTERN_BUFFER_TOO_SMALL
     beq     a0, t0, 71f
+    beqz    a0, 262f
+    sd      a0, NodeEvent_result(s7)
+    j       9f
+262: li     t0, API_OP_GET_PROPOSER_DUTIES_V2
+    bne     s9, t0, 24f
+    ld      t0, NODE_STATE_SLOT(s4)         # V2 from epoch 1: get_block_root_at_slot of max(the first slot - SLOTS_PER_EPOCH - 1, 0)
+    beqz    t0, 24f
+    li      t1, SLOTS_PER_EPOCH + 1
+    sub     t2, t0, t1
+    bgeu    t0, t1, 263f
+    li      t2, 0
+263: sd     t2, (L + 56)(sp)
+    mv      a0, t0
+    addi    a1, s1, Node_config
+    call    node_fork
+    mv      t6, a0
+    mv      a0, s4
+    addi    a1, sp, (L + 56)
+    addi    a2, s8, ApiView_duties
+    FORK_CALL get_block_root_at_slot
     beqz    a0, 24f
     sd      a0, NodeEvent_result(s7)
     j       9f
@@ -7136,9 +7164,48 @@ LOCAL_FUNCTION api_event_text
     add     s8, s5, t0
     API_LIT api_ev_event
     li      t0, API_TOPIC_HEAD
-    bne     s10, t0, 1f
+    bne     s10, t0, 13f
     API_LIT api_ev_t_head
     j       3f
+13: li      t0, API_TOPIC_HEAD_V2
+    bne     s10, t0, 1f
+    # head_v2: {"version":…,"data":{"slot":…,"block":…,"state":…,"payload_status":"full","epoch_transition":…,"current_epoch_dependent_root":…,"next_epoch_dependent_root":…,"execution_optimistic":…}}
+    API_LIT api_ev_t_head_v2
+    API_LIT api_ev_data
+    API_LIT api_pa_version
+    ld      a0, ApiView_fork(s4)
+    call    api_fork_name
+    API_LIT api_ev_v2_slot
+    ld      a0, ApiView_event_slot(s4)
+    call    api_qdec
+    API_LIT api_ev_block
+    addi    a0, s4, ApiView_event_block
+    li      a1, 32
+    call    api_qhex
+    API_LIT api_ev_state
+    addi    a0, s4, ApiView_event_state
+    li      a1, 32
+    call    api_qhex
+    API_LIT api_ev_full
+    API_LIT api_ev_transition
+    ld      a0, ApiView_event_flags(s4)
+    andi    a0, a0, 1
+    call    api_bool
+    API_LIT api_ev_current_epoch
+    addi    a0, s4, ApiView_event_previous
+    li      a1, 32
+    call    api_qhex
+    API_LIT api_ev_next_epoch
+    addi    a0, s4, ApiView_event_current
+    li      a1, 32
+    call    api_qhex
+    API_LIT api_u_optimistic
+    ld      a0, ApiView_event_flags(s4)
+    srli    a0, a0, 1
+    andi    a0, a0, 1
+    call    api_bool
+    API_LIT api_end1
+    j       61f
 1:  li      t0, API_TOPIC_BLOCK
     bne     s10, t0, 11f
     API_LIT api_ev_t_block
@@ -8032,7 +8099,7 @@ LOCAL_FUNCTION node_api_head_events
     call    node_pool_checks
     li      a0, API_TOPIC_HEAD
     call    node_api_subscribed
-    beqz    a0, 5f
+    beqz    a0, 13f
     ld      a1, NodeBlock_state_id(s3)
     beqz    a1, 5f
     li      a0, NODE_WORK_API_EVENT
@@ -8040,6 +8107,18 @@ LOCAL_FUNCTION node_api_head_events
     li      a3, 0
     li      a4, 0
     slli    a5, s4, 8                       # API_TOPIC_HEAD is 0
+    call    node_work
+13: li      a0, API_TOPIC_HEAD_V2           # head_v2: the same values, its own text
+    call    node_api_subscribed
+    beqz    a0, 5f
+    ld      a1, NodeBlock_state_id(s3)
+    beqz    a1, 5f
+    li      a0, NODE_WORK_API_EVENT
+    li      a2, 0
+    li      a3, 0
+    li      a4, 0
+    slli    a5, s4, 8
+    addi    a5, a5, API_TOPIC_HEAD_V2
     call    node_work
 5:  ld      t0, Store_finalized_checkpoint(s2)
     LDQ     t1, s1, Node_event_epoch
@@ -8119,6 +8198,8 @@ LOCAL_FUNCTION node_api_event_run
     sd      t1, ApiView_event_epoch(s7)
     li      t0, API_TOPIC_HEAD
     beq     s8, t0, 1f
+    li      t0, API_TOPIC_HEAD_V2
+    beq     s8, t0, 1f
     li      t0, API_TOPIC_CHAIN_REORG
     beq     s8, t0, 20f
     li      t0, API_TOPIC_FINALIZED_CHECKPOINT
@@ -8130,6 +8211,7 @@ LOCAL_FUNCTION node_api_event_run
     addi    a1, s1, Node_config
     call    node_fork
     mv      t6, a0
+    sd      a0, ApiView_fork(s7)            # head_v2's version
     mv      a0, s3
     addi    a1, s1, Node_config
     mv      a2, s5

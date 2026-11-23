@@ -4344,7 +4344,7 @@ static uint64_t http_request_call(const uint8_t *b, uint64_t len, const uint64_t
 
 /* The event streams of a node-events case (docs/reference/node.md, Test vectors): the request and head of each. */
 static const char *const ev_requests[3] = {
-    "GET /eth/v1/events?topics=head,block,finalized_checkpoint HTTP/1.1\r\nHost: lantern\r\nAccept: text/event-stream\r\n\r\n",
+    "GET /eth/v1/events?topics=head,head_v2,block,finalized_checkpoint HTTP/1.1\r\nHost: lantern\r\nAccept: text/event-stream\r\n\r\n",
     "GET /eth/v1/events?topics=block,chain_reorg HTTP/1.0\r\nHost: lantern\r\n\r\n",
     "GET /eth/v1/events?topics=finalized_checkpoint,head,block HTTP/1.1\r\nHost: lantern\r\n\r\n"};
 static const char *const ev_heads[3] = {
@@ -4436,6 +4436,7 @@ static void ev_step_check(struct node_shell *s, tv texts, const char **why) {
             at = end;
             if (e == 1 && !ev_topic_is(x, xl, "block") && !ev_topic_is(x, xl, "chain_reorg")) continue;
             if (e != 1 && ev_topic_is(x, xl, "chain_reorg")) continue;
+            if (e == 2 && ev_topic_is(x, xl, "head_v2")) continue; /* the third stream names head, not head_v2 */
             if (e == 2 && s->ev[e].total + xl + 8 > NODE_API_CHUNK) { /* falls behind: a close in place of it */
                 close_now = 1;
                 s->ev[e].closed = 1;

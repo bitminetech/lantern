@@ -32,9 +32,17 @@ docker run --rm -v "$root:/src" -v "$out:/out" lantern-build sh -eu -c '
         git -C $apis fetch -q --depth 1 https://github.com/ethereum/beacon-APIs $commit
         git -C $apis checkout -q FETCH_HEAD
     fi
+    apis5=/out/beacon-APIs-v5
+    commit=7911555e6a30c51f9b69bb168111a59f1ff8ee49    # beacon-APIs v5.0.0-beta.0: the validator client additions
+    if [ "$(git -C $apis5 rev-parse HEAD 2>/dev/null)" != "$commit" ]; then
+        rm -rf $apis5
+        git init -q $apis5
+        git -C $apis5 fetch -q --depth 1 https://github.com/ethereum/beacon-APIs $commit
+        git -C $apis5 checkout -q FETCH_HEAD
+    fi
     [ -x /out/.venv/bin/python ] || python3 -m venv /out/.venv
     /out/.venv/bin/pip install -q --disable-pip-version-check -r tests/generator/requirements.txt
     [ -f $spec/tests/core/pyspec/eth_consensus_specs/fulu/mainnet.py ] || (cd $spec && /out/.venv/bin/python -m pysetup.generate_specs --all-forks)
-    PYTHONPATH=$spec/tests/core/pyspec:$spec:/src/build/deps/asm-ssz/tests/generator CONSENSUS_SPECS=$spec BEACON_APIS=$apis \
+    PYTHONPATH=$spec/tests/core/pyspec:$spec:/src/build/deps/asm-ssz/tests/generator CONSENSUS_SPECS=$spec BEACON_APIS=$apis BEACON_APIS_V5=$apis5 \
         /out/.venv/bin/python tests/generator/generate.py /out "$@"
 ' sh "$@"

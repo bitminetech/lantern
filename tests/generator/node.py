@@ -1861,6 +1861,12 @@ def replay(spec, fork, parts, keep=None):
                          b',"previous_duty_dependent_root":' + qhex(dependent(state, epoch - 1)) +
                          b',"current_duty_dependent_root":' + qhex(dependent(state, epoch)) +
                          b',"execution_optimistic":' + flag(optimistic.get(head, False)) + b"}")
+            texts += sse(b"head_v2", b'{"version":"' + fork.encode() + b'","data":{"slot":' + q(slot) + b',"block":' +
+                         qhex(head) + b',"state":' + qhex(spec.hash_tree_root(state)) + b',"payload_status":"full"' +
+                         b',"epoch_transition":' + flag(epoch > last_slot // spe) +
+                         b',"current_epoch_dependent_root":' + qhex(dependent(state, epoch - 1)) +
+                         b',"next_epoch_dependent_root":' + qhex(dependent(state, epoch)) +
+                         b',"execution_optimistic":' + flag(optimistic.get(head, False)) + b"}}")
             last_head, last_slot = head, slot
         cp = store.finalized_checkpoint
         if int(cp.epoch) > last_epoch:
@@ -2314,7 +2320,7 @@ PENDING = {"getPendingDeposits": "pending_deposits", "getPendingPartialWithdrawa
 ANSWERED = ("getHealth", "getNetworkIdentity", "getNodeVersion", "getSyncingStatus", "getPeerCount", "getGenesis",
             "getBlockHeader", "getStateFinalityCheckpoints", "getBlockV2", "getStateV2", "getBlockRoot", "getStateRoot",
             "getStateFork", "getSpec", "getForkSchedule", "getDepositContract", "getEpochCommittees",
-            "getProposerDuties", "produceAttestationData", "getAttesterDuties", "eventstream", "getStateRandao",
+            "getProposerDuties", "getProposerDutiesV2", "produceAttestationData", "getAttesterDuties", "eventstream", "getStateRandao",
             "getEpochSyncCommittees", "getProposerLookahead", "getBlockAttestationsV2", "getBlindedBlock", "getDebugChainHeadsV2", "getDebugForkChoice", "getBlockHeaders", "getPeers", "getPeer", "getBlobSidecars", "getDebugDataColumnSidecars", "getBlobs", "getSyncCommitteeDuties", "getLiveness", "getLightClientBootstrap",
             "getLightClientUpdatesByRange", "getLightClientFinalityUpdate", "getLightClientOptimisticUpdate") + tuple(PENDING) + VALIDATOR_OPS
 STATE_READS = ("getStateRandao", "getEpochSyncCommittees", "getProposerLookahead")
@@ -2446,6 +2452,8 @@ def config_bodies(fork, preset):
     for f in FORKS:
         for name in constants(root / "specs" / f / "beacon-chain.md"):
             v = getattr(last, name)
+            if isinstance(v, list):  # PARTICIPATION_FLAG_WEIGHTS, the one list: beacon-api.md, getSpec
+                continue
             if isinstance(v, bytes):
                 out = qhex(v)
             elif isinstance(v, str):
@@ -2632,8 +2640,8 @@ def committees_answer(v, route, s, values, kw):
     return streamed(None, values + b',"data":[' + b",".join(items) + b"]}", **kw)
 
 
-def duties_answer(v, route, kw, syncing):
-    """The answer of getProposerDuties (beacon-api.md, Common rules)."""
+def duties_answer(v, route, kw, syncing, v2=False):
+    """The answer of getProposerDuties, or with v2 of getProposerDutiesV2 (beacon-api.md, Common rules)."""
     spec = v["spec"]
     if syncing:
         return error(503, **kw)
@@ -2656,7 +2664,12 @@ def duties_answer(v, route, kw, syncing):
         at.slot = slot
         i = int(spec.get_beacon_proposer_index(at))
         items.append(b'{"pubkey":' + qhex(s.validators[i].pubkey) + b',"validator_index":' + q(i) + b',"slot":' + q(slot) + b"}")
-    root = v["root"] if first == 0 else bytes(spec.get_block_root_at_slot(s, first - 1))
+    if first == 0:
+        root = v["root"]
+    elif v2:  # get_block_root_at_slot(state, compute_start_slot_at_epoch(epoch - 1) - 1), the genesis root on underflow
+        root = bytes(spec.get_block_root_at_slot(s, max(first - spe - 1, 0)))
+    else:
+        root = bytes(spec.get_block_root_at_slot(s, first - 1))
     return response(200, b'{"dependent_root":' + qhex(root) + b',"execution_optimistic":false,"data":[' +
                     b",".join(items) + b"]}", **kw)
 
@@ -2838,6 +2851,8 @@ def answer(v, name, route, offline, close, keep_alive, syncing=False):
     kw = dict(close=close, keep_alive=keep_alive)
     if name == "getProposerDuties":
         return duties_answer(v, route, kw, syncing)
+    if name == "getProposerDutiesV2":
+        return duties_answer(v, route, kw, syncing, v2=True)
     if name == "produceAttestationData":
         return att_data_answer(v, route, kw, syncing)
     if name == "getAttesterDuties":
@@ -3622,6 +3637,7 @@ def api_requests(spec, fork, v, kind="main"):
 
     committees = by_name["getEpochCommittees"]
     duties = by_name["getProposerDuties"]
+    duties_v2 = by_name["getProposerDutiesV2"]
     epoch = v["slot"] // int(spec.SLOTS_PER_EPOCH)
     current = (v["slot"] + SLOTS_AHEAD) // int(spec.SLOTS_PER_EPOCH)
 
@@ -3644,6 +3660,7 @@ def api_requests(spec, fork, v, kind="main"):
     if kind == "genesis":
         for e in range(0, 3):
             add(f"duties_{e}", api_route.base(duties, path_values={"epoch": b"%d" % e}))
+            add(f"duties_v2_{e}", api_route.base(duties_v2, path_values={"epoch": b"%d" % e}))
         liveness_requests()
         return out
     if kind == "late":  # the lowest epoch whose seed's RANDAO mix the state holds, and the one below
@@ -3792,7 +3809,9 @@ def api_requests(spec, fork, v, kind="main"):
             version=version, connection=connection)
     for e in range(epoch - 1, current + 3):
         add(f"duties_{e}", api_route.base(duties, path_values={"epoch": b"%d" % e}))
+        add(f"duties_v2_{e}", api_route.base(duties_v2, path_values={"epoch": b"%d" % e}))
     add("duties_syncing", api_route.base(duties, path_values={"epoch": b"%d" % current}), syncing=True)
+    add("duties_v2_syncing", api_route.base(duties_v2, path_values={"epoch": b"%d" % current}), syncing=True)
     att = by_name["produceAttestationData"]
 
     def att_data(slot, index=1, **headers):

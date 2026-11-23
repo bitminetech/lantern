@@ -1,10 +1,11 @@
 /*
- * The operations of beacon-APIs v4.0.0 (commit 88fc940) and the names of their parameters, for
- * lantern_api_route (docs/reference/beacon-api.md). The same on every ISA. tests/generator/api_route.py
+ * The operations of beacon-APIs v4.0.0 (commit 88fc940), then getProposerDutiesV2 of v5.0.0-beta.0
+ * (commit 7911555), and the names of their parameters, for lantern_api_route
+ * (docs/reference/beacon-api.md). The same on every ISA. tests/generator/api_route.py
  * reads the operations from the spec itself, so its cases check this table.
  */
 
-/* API_OP_*: the operations, in the order of `paths` in beacon-node-oapi.yaml, GET before POST. */
+/* API_OP_*: the operations, in the order of `paths` in beacon-node-oapi.yaml, GET before POST; then those of v5.0.0-beta.0. */
 .set API_OP_GET_GENESIS, 1
 .set API_OP_GET_STATE_ROOT, 2
 .set API_OP_GET_STATE_FORK, 3
@@ -81,7 +82,8 @@
 .set API_OP_REGISTER_VALIDATOR, 74
 .set API_OP_GET_LIVENESS, 75
 .set API_OP_EVENTSTREAM, 76
-.set API_OPS, 76
+.set API_OP_GET_PROPOSER_DUTIES_V2, 77
+.set API_OPS, 77
 
 /* API_PARAM_*: the parameters; bit n of ApiRoute.present, and ApiRoute.fault. */
 .set API_PARAM_STATE_ID, 1
@@ -148,6 +150,8 @@
 .set API_TOPIC_PAYLOAD_ATTRIBUTES, 14
 .set API_TOPIC_BLOB_SIDECAR, 15
 .set API_TOPIC_DATA_COLUMN_SIDECAR, 16
+.set API_TOPIC_HEAD_V2, 17
+.set API_TOPIC_EXECUTION_PAYLOAD_AVAILABLE, 18
 
 /* An operation's flags (api_routes): the responses it lists. */
 .set API_FLAG_SSZ_RESPONSE, 1        /* 406: Accept chooses JSON or SSZ */
@@ -267,6 +271,7 @@ api_routes:
     .quad   api_t_66 - api_route_text, 36 + (2 << 16) + (2 << 24), 0x0, 0x0   /* registerValidator */
     .quad   api_t_67 - api_route_text, 28 + (2 << 16) + (32 << 24), 0x0, 0x0   /* getLiveness */
     .quad   api_t_68 - api_route_text, 14 + (1 << 16) + (0 << 24), 0x10000000, 0x10000000   /* eventstream */
+    .quad   api_t_69 - api_route_text, 35 + (1 << 16) + (0 << 24), 0x0, 0x0   /* getProposerDutiesV2 */
 api_params:
     .quad   0, 0, 0, 0                         /* entry 0: no parameter */
     .quad   api_p_1 - api_param_text, 8, API_KIND_STATE_ID, ApiRoute_id_kind
@@ -345,6 +350,8 @@ api_words:
     .quad   API_PARAM_TOPICS, api_w_43 - api_word_text, 18, 0x4000
     .quad   API_PARAM_TOPICS, api_w_44 - api_word_text, 12, 0x8000
     .quad   API_PARAM_TOPICS, api_w_45 - api_word_text, 19, 0x10000
+    .quad   API_PARAM_TOPICS, api_w_53 - api_word_text, 7, 0x20000
+    .quad   API_PARAM_TOPICS, api_w_54 - api_word_text, 27, 0x40000
     .quad   API_PARAM_CONSENSUS_VERSION, api_w_46 - api_word_text, 6, 0x0
     .quad   API_PARAM_CONSENSUS_VERSION, api_w_47 - api_word_text, 6, 0x1
     .quad   API_PARAM_CONSENSUS_VERSION, api_w_48 - api_word_text, 9, 0x2
@@ -491,6 +498,8 @@ api_t_67:
     .ascii  "/eth/v1/validator/liveness/\006"
 api_t_68:
     .ascii  "/eth/v1/events"
+api_t_69:
+    .ascii  "/eth/v2/validator/duties/proposer/\006"
 api_param_text:
 api_p_1:
     .ascii  "state_id"
@@ -643,6 +652,10 @@ api_w_44:
     .ascii  "blob_sidecar"
 api_w_45:
     .ascii  "data_column_sidecar"
+api_w_53:
+    .ascii  "head_v2"
+api_w_54:
+    .ascii  "execution_payload_available"
 api_w_46:
     .ascii  "phase0"
 api_w_47:
@@ -659,4 +672,4 @@ api_w_52:
     .ascii  "fulu"
     .p2align 3
 .endm
-.set API_WORDS, 53
+.set API_WORDS, 55

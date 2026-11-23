@@ -45,7 +45,12 @@ DIRECTIONS = ("inbound", "outbound")
 TOPICS = ("head", "block", "block_gossip", "attestation", "single_attestation", "voluntary_exit",
           "bls_to_execution_change", "proposer_slashing", "attester_slashing", "finalized_checkpoint",
           "chain_reorg", "contribution_and_proof", "light_client_finality_update",
-          "light_client_optimistic_update", "payload_attributes", "blob_sidecar", "data_column_sidecar")
+          "light_client_optimistic_update", "payload_attributes", "blob_sidecar", "data_column_sidecar",
+          "head_v2", "execution_payload_available")
+# The validator client additions of beacon-APIs v5.0.0-beta.0 (BEACON_APIS_V5, from run.sh; beacon-api.md, Spec):
+# its operations by operationId, after the 76 of v4.0.0, and its topics, after those of v4.0.0.
+V5_OPS = ("getProposerDutiesV2",)
+V5_TOPICS = ("head_v2", "execution_payload_available")
 BROADCAST = {b"gossip": 1, b"consensus": 2, b"consensus_and_equivocation": 3}
 # Flags of an operation in include/api_routes.inc.
 F_SSZ_RESPONSE, F_SSZ_BODY, F_VERSION, F_ID_MAX, F_IDS_OBJECT, F_IDS_ARRAY = 1, 2, 4, 8, 16, 32
@@ -99,80 +104,99 @@ def enum_of(schema, base):
     return list(schema.get("enum", []))
 
 
-def operations(spec):
-    """The operations of beacon-node-oapi.yaml, in order: a dict for each."""
+def operation(path, method, op, file, n):
+    """The dict of one operation of the spec: its name, method, template, query bits, flags."""
+    name = op["operationId"]
+    query = required = flags = 0
+    for p in op.get("parameters", []):
+        p, base = resolve(p, file)
+        where, pname = p["in"], p["name"]
+        if where == "header":
+            if pname != "Eth-Consensus-Version" or not p.get("required"):
+                fail(f"{name}: header {pname}")
+            if enum_of(p["schema"], base) != list(FORKS):
+                fail(f"{name}: Eth-Consensus-Version values {enum_of(p['schema'], base)}")
+            flags |= F_VERSION
+            continue
+        if pname not in P:
+            fail(f"{name}: parameter {pname} has no rule in beacon-api.md")
+        if where == "path":
+            if "{" + pname + "}" not in path or not p.get("required"):
+                fail(f"{name}: path parameter {pname}")
+            continue
+        if where != "query":
+            fail(f"{name}: parameter {pname} in {where}")
+        query |= 1 << P[pname]
+        if p.get("required"):
+            required |= 1 << P[pname]
+        if pname in SETS:
+            want = sorted(x.decode() for x in SETS[pname] if x.decode() not in V5_TOPICS)
+            if sorted(enum_of(p["schema"], base)) != want:
+                fail(f"{name}: {pname} values {enum_of(p['schema'], base)}")
+        if pname == "broadcast_validation" and sorted(enum_of(p["schema"], base)) != sorted(x.decode() for x in BROADCAST):
+            fail(f"{name}: broadcast_validation values")
+        if pname == "id" and resolve(p["schema"], base)[0].get("maxItems") not in (None, 64):
+            fail(f"{name}: id maxItems")
+    codes = {str(c) for c in op.get("responses", {})}
+    if "406" in codes:
+        flags |= F_SSZ_RESPONSE
+    if "415" in codes:
+        flags |= F_SSZ_BODY
+    if "414" in codes:
+        if resolve([p for p in op["parameters"] if resolve(p, file)[0]["name"] == "id"][0], file)[0]["schema"]["maxItems"] != 64:
+            fail(f"{name}: 414 without 64 ids")
+        flags |= F_ID_MAX
+    if "requestBody" in op:  # a body of ids: an object of ids and statuses, or an array of ids
+        schema, sbase = resolve(op["requestBody"]["content"]["application/json"]["schema"], file)
+        item = resolve(schema.get("items", {}), sbase)[0]
+        if schema.get("type") == "object" and set(schema.get("properties", {})) == {"ids", "statuses"}:
+            flags |= F_IDS_OBJECT
+        elif (schema.get("type") == "array" and item.get("type") == "string" and
+              "public key" in item.get("description", "") and "validator index" in item.get("description", "")):
+            flags |= F_IDS_ARRAY
+        elif schema.get("type") == "array" and schema.get("items", {}).get("$ref", "").endswith("/Uint64"):
+            flags |= F_IDS_ARRAY  # validator indices: read as ids; a public key is the operation's 400
+    if flags & (F_IDS_OBJECT | F_IDS_ARRAY) != IDS_BODIES.get(name, 0):
+        fail(f"{name}: body of ids {flags}")
+    template = path.encode()
+    for pname in PARAMS:
+        template = template.replace(b"{" + pname.encode() + b"}", bytes([P[pname]]))
+    if b"{" in template:
+        fail(f"{path}: a path parameter with no rule")
+    return {"n": n, "name": name, "method": GET if method == "get" else POST,
+                "path": path, "template": template, "query": query, "required": required, "flags": flags}
+
+
+def items(spec):
+    """(path, method, operation, file) of each operation of the spec's beacon-node-oapi.yaml, in order."""
     main = load(spec / "beacon-node-oapi.yaml")
-    ops = []
     for path, ref in main["paths"].items():
         file = (spec / ref["$ref"]).resolve()
         item = load(file)
         if set(item) - {"get", "post"}:
             fail(f"{path}: methods {sorted(item)}")
         for method in ("get", "post"):
-            if method not in item:
-                continue
-            op = item[method]
-            name = op["operationId"]
-            query = required = flags = 0
-            for p in op.get("parameters", []):
-                p, base = resolve(p, file)
-                where, pname = p["in"], p["name"]
-                if where == "header":
-                    if pname != "Eth-Consensus-Version" or not p.get("required"):
-                        fail(f"{name}: header {pname}")
-                    if enum_of(p["schema"], base) != list(FORKS):
-                        fail(f"{name}: Eth-Consensus-Version values {enum_of(p['schema'], base)}")
-                    flags |= F_VERSION
-                    continue
-                if pname not in P:
-                    fail(f"{name}: parameter {pname} has no rule in beacon-api.md")
-                if where == "path":
-                    if "{" + pname + "}" not in path or not p.get("required"):
-                        fail(f"{name}: path parameter {pname}")
-                    continue
-                if where != "query":
-                    fail(f"{name}: parameter {pname} in {where}")
-                query |= 1 << P[pname]
-                if p.get("required"):
-                    required |= 1 << P[pname]
-                if pname in SETS:
-                    want = sorted(x.decode() for x in SETS[pname])
-                    if sorted(enum_of(p["schema"], base)) != want:
-                        fail(f"{name}: {pname} values {enum_of(p['schema'], base)}")
-                if pname == "broadcast_validation" and sorted(enum_of(p["schema"], base)) != sorted(x.decode() for x in BROADCAST):
-                    fail(f"{name}: broadcast_validation values")
-                if pname == "id" and resolve(p["schema"], base)[0].get("maxItems") not in (None, 64):
-                    fail(f"{name}: id maxItems")
-            codes = {str(c) for c in op.get("responses", {})}
-            if "406" in codes:
-                flags |= F_SSZ_RESPONSE
-            if "415" in codes:
-                flags |= F_SSZ_BODY
-            if "414" in codes:
-                if resolve([p for p in op["parameters"] if resolve(p, file)[0]["name"] == "id"][0], file)[0]["schema"]["maxItems"] != 64:
-                    fail(f"{name}: 414 without 64 ids")
-                flags |= F_ID_MAX
-            if "requestBody" in op:  # a body of ids: an object of ids and statuses, or an array of ids
-                schema, sbase = resolve(op["requestBody"]["content"]["application/json"]["schema"], file)
-                item = resolve(schema.get("items", {}), sbase)[0]
-                if schema.get("type") == "object" and set(schema.get("properties", {})) == {"ids", "statuses"}:
-                    flags |= F_IDS_OBJECT
-                elif (schema.get("type") == "array" and item.get("type") == "string" and
-                      "public key" in item.get("description", "") and "validator index" in item.get("description", "")):
-                    flags |= F_IDS_ARRAY
-                elif schema.get("type") == "array" and schema.get("items", {}).get("$ref", "").endswith("/Uint64"):
-                    flags |= F_IDS_ARRAY  # validator indices: read as ids; a public key is the operation's 400
-            if flags & (F_IDS_OBJECT | F_IDS_ARRAY) != IDS_BODIES.get(name, 0):
-                fail(f"{name}: body of ids {flags}")
-            template = path.encode()
-            for pname in PARAMS:
-                template = template.replace(b"{" + pname.encode() + b"}", bytes([P[pname]]))
-            if b"{" in template:
-                fail(f"{path}: a path parameter with no rule")
-            ops.append({"n": len(ops) + 1, "name": name, "method": GET if method == "get" else POST,
-                        "path": path, "template": template, "query": query, "required": required, "flags": flags})
-    if len(ops) != 76 or len(main["paths"]) != 69:
-        fail(f"{len(main['paths'])} paths and {len(ops)} operations, not 69 and 76")
+            if method in item:
+                yield path, method, item[method], file
+
+
+def operations(spec):
+    """The operations of beacon-node-oapi.yaml of v4.0.0, in order: a dict for each; then V5_OPS of
+    the v5.0.0-beta.0 clone (BEACON_APIS_V5), in their order."""
+    ops = [operation(path, method, op, file, k + 1) for k, (path, method, op, file) in enumerate(items(spec))]
+    paths = len(load(spec / "beacon-node-oapi.yaml")["paths"])
+    if len(ops) != 76 or paths != 69:
+        fail(f"{paths} paths and {len(ops)} operations, not 69 and 76")
+    v5 = pathlib.Path(os.environ["BEACON_APIS_V5"])
+    found = {op["operationId"]: (path, method, op, file) for path, method, op, file in items(v5)}
+    for name in V5_OPS:
+        if name not in found:
+            fail(f"{name}: not an operation of beacon-APIs v5.0.0-beta.0")
+        ops.append(operation(*found[name], len(ops) + 1))
+    events = (v5 / "apis" / "eventstream" / "index.yaml").read_text()
+    for topic in V5_TOPICS:
+        if f"- {topic}\n" not in events:
+            fail(f"{topic}: not a topic of beacon-APIs v5.0.0-beta.0")
     return ops
 
 

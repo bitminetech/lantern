@@ -580,6 +580,9 @@ api_ev_t_head:
 api_ev_t_block:
     .ascii "block"
 .set api_ev_t_block_len, 5
+api_ev_t_head_v2:
+    .ascii "head_v2"
+.set api_ev_t_head_v2_len, 7
 api_ev_t_finalized:
     .ascii "finalized_checkpoint"
 .set api_ev_t_finalized_len, 20
@@ -622,6 +625,18 @@ api_ev_previous:
 api_ev_current:
     .ascii ",\"current_duty_dependent_root\":"
 .set api_ev_current_len, 31
+api_ev_v2_slot:
+    .ascii "\",\"data\":{\"slot\":"
+.set api_ev_v2_slot_len, 17
+api_ev_full:
+    .ascii ",\"payload_status\":\"full\""
+.set api_ev_full_len, 24
+api_ev_current_epoch:
+    .ascii ",\"current_epoch_dependent_root\":"
+.set api_ev_current_epoch_len, 32
+api_ev_next_epoch:
+    .ascii ",\"next_epoch_dependent_root\":"
+.set api_ev_next_epoch_len, 29
 api_ev_end:
     .ascii "}\n\n"
 .set api_ev_end_len, 3
