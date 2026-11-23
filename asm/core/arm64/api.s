@@ -3516,13 +3516,15 @@ LOCAL_FUNCTION node_api_event
     ldr     x9, [x26, #ApiView_head_slot]
     cmp     x10, x9
     b.ls    80f
-    mov     x9, #API_ID_SLOT                /* the head's post-state brought to the slot */
-    stp     x9, x10, [x25, #ApiRoute_id_kind]
+    mov     x9, #API_ID_HEAD                /* the head's post-state brought to the slot, which may be past the store's */
+    str     x9, [x25, #ApiRoute_id_kind]
     mov     x0, x25
     mov     x1, x26
     bl      node_api_state
     mov     x2, #500
     cbnz    x0, 80f
+    ldr     x9, [x25, #ApiRoute_slot]
+    str     x9, [x26, #ApiView_head_slot]
     mov     x0, x26
     bl      node_api_advance
     mov     x0, x27

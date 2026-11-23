@@ -105,6 +105,7 @@ lantern_get_forkchoice_store(anchor_state, anchor_block, config, room, scratch, 
 
 - Sets `genesis_time_ms` to seconds_to_milliseconds(genesis_time), which gives UINT64_MAX when the product does not fit.
 - Gives the anchor node `parent` `NODE_NONE`, `timely` 0, `justified_checkpoint` the anchor state's `current_justified_checkpoint`, and `unrealized_justified_checkpoint` the anchor checkpoint.
+- Gives the anchor node `payload_status` `VALID` and, from bellatrix, `block_hash` the anchor state's `latest_execution_payload_header.block_hash`: the payload hash of the chain at the anchor, the `parent_hash` of the next payload (prepare_execution_payload). The genesis block's body has the empty payload, while a genesis state after the merge has the execution genesis block's header; for another anchor block, process_execution_payload made the header from its payload, so the two hashes are the same.
 - Gives `room.nodes` and `room.validators` entries of capacity to the two parts; every `StoreValidator` starts with no latest message.
 - Ends with lantern_store_justified_checkpoint_state of the anchor state.
 
@@ -784,7 +785,7 @@ The fork choice store: a value with two parts.
 | 88 | `justified_checkpoint` | Checkpoint | `current_justified_checkpoint` of the block's post-state |
 | 128 | `unrealized_justified_checkpoint` | Checkpoint | `unrealized_justifications[root]` |
 | 168 | `timely` | u64 | `block_timeliness[root]`: 1 or 0; 0 for the anchor |
-| 176 | `block_hash` | Hash32 | `body.execution_payload.block_hash` of the block |
+| 176 | `block_hash` | Hash32 | `body.execution_payload.block_hash` of the block; of the anchor, its state's `latest_execution_payload_header.block_hash` |
 | 208 | `payload_status` | u64 | `PAYLOAD_STATUS_*`: the execution engine's answer for the payload; `VALID` for the anchor |
 | 216 | `finalized_epoch` | u64 | `finalized_checkpoint.epoch` of the block's post-state |
 

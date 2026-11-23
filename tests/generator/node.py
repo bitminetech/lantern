@@ -775,6 +775,7 @@ def payload_cases(fork, preset):
 # ---------------------------------------------------------------- Block production (beacon-api.md, produceBlockV3)
 
 PRODUCE_CLOSES = 24  # more steps than a produceBlockV3 of an empty pool takes
+PRODUCE_EARLY_MS = 5  # node-produce early: the node's time before the slot's start (node.md)
 
 
 def produce_cases(fork, preset):
@@ -932,12 +933,15 @@ def produce_cases(fork, preset):
         body.sync_aggregate = aggregate
         return reqs
 
-    def build(full, skip, epoch0=None, recent=False, eth1=None):
+    def build(full, skip, epoch0=None, recent=False, eth1=None, genesis=False):
         if epoch0 is None:
             epoch0 = int(spec.config.SHARD_COMMITTEE_PERIOD) + ANCHOR_EPOCH if full else ANCHOR_EPOCH
         extra = 2 * int(spec.SLOTS_PER_EPOCH) if full else 0  # committees of two and more
         state, anchor_block = (payload_anchor(spec, fork, epoch0, extra, recent) if merged
                                else anchor(spec, fork, statuses=True, epoch=epoch0, extra=extra, recent=recent))
+        if genesis:  # as genesis gives it: the block's body has the empty payload, the state the payload's header
+            state.latest_block_header.body_root = spec.hash_tree_root(spec.BeaconBlockBody())
+            anchor_block = spec.BeaconBlock(slot=anchor_block.slot, state_root=spec.hash_tree_root(state))
         if eth1:  # the deposit bridge's state, then the anchor block of that state
             eth1["prep"](state)
             anchor_block = spec.BeaconBlock(slot=anchor_block.slot, body=anchor_block.body, state_root=spec.hash_tree_root(state))
@@ -998,13 +1002,15 @@ def produce_cases(fork, preset):
             gained += sum(int(w.amount) for w in body.execution_payload.withdrawals if int(w.validator_index) == proposer)
         return state, anchor_block, slot, reveal, block, result, max(gained, 0), reqs, bytes(root), bytes(other)
 
-    for name, full, skip in (("empty_pool", False, False), ("full_pool", True, False), ("skip_randao", False, True)):
-        made = run(spec, schedule(fork), lambda: build(full, skip))
+    kinds = (("empty_pool", False, False, 0, False), ("full_pool", True, False, 0, False), ("skip_randao", False, True, 0, False),
+             ("early", False, False, PRODUCE_EARLY_MS, False)) + ((("genesis_anchor", False, False, 0, True),) if merged else ())
+    for name, full, skip, early, genesis in kinds:
+        made = run(spec, schedule(fork), lambda: build(full, skip, 0 if genesis else None, genesis=genesis))
         if made is None:
             raise RuntimeError(f"node-produce {fork} {name}: the spec refuses the block")
         state, anchor_block, slot, reveal, block, result, gwei, pool_reqs, root, other = made
         slot_ms = int(spec.config.SLOT_DURATION_MS)
-        time_ms = int(state.genesis_time) * 1000 + int(slot) * slot_ms
+        time_ms = int(state.genesis_time) * 1000 + int(slot) * slot_ms - early
         payload_value = block_value if capella else 0
         wei = b"%d" % gwei + (b"000000000" if gwei else b"")
         if f >= FORKS.index("deneb"):
@@ -2492,13 +2498,13 @@ def api_values(spec, fork, state, block):
 
     def cp(c):
         return b'{"epoch":' + q(c.epoch) + b',"root":' + qhex(c.root) + b"}"
-    payload = getattr(block.body, "execution_payload", None)
+    el_header = getattr(state, "latest_execution_payload_header", None)  # the anchor node's block_hash (fork-choice.md)
     fork_choice_body = (  # the store holds the anchor alone
         b'{"justified_checkpoint":' + cp(store.justified_checkpoint) + b',"finalized_checkpoint":' +
         cp(store.finalized_checkpoint) + b',"fork_choice_nodes":[{"slot":' + q(block.slot) + b',"block_root":' + qhex(root) +
         b',"parent_root":' + qhex(block.parent_root) + b',"justified_epoch":' + q(state.current_justified_checkpoint.epoch) +
         b',"finalized_epoch":' + q(state.finalized_checkpoint.epoch) + b',"weight":' + q(spec.get_weight(store, root)) +
-        b',"validity":"valid","execution_block_hash":' + qhex(payload.block_hash if payload is not None else bytes(32)) + b"}]}")
+        b',"validity":"valid","execution_block_hash":' + qhex(el_header.block_hash if el_header is not None else bytes(32)) + b"}]}")
     lc_bootstrap = None  # the LcStore's bootstrap of the anchor (light-client.md, lantern_lc_store_init), from altair
     if fork != "phase0":
         lc_header = spec.block_to_light_client_header(spec.SignedBeaconBlock(message=block))

@@ -955,9 +955,8 @@ SPEC_FUNCTION get_forkchoice_store
     COPY32  %rdx, %rcx
     movq    $0, BlockNode_timely(%rax)
 .if FORK >= FORK_BELLATRIX
-    PART    %rdx, %rcx, %rbp, BeaconBlock_body      # the anchor's payload counts as VALID
-    PART    %rsi, %rcx, %rdx, BeaconBlockBody_execution_payload
-    add     $ExecutionPayload_block_hash, %rsi
+    mov     BeaconState_latest_execution_payload_header(%rbx), %rsi    # the anchor state's payload hash, VALID
+    lea     ExecutionPayloadHeader_block_hash(%rbx,%rsi), %rsi
     lea     BlockNode_block_hash(%rax), %rdx
     COPY32  %rdx, %rsi
 .else

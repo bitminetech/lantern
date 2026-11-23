@@ -942,9 +942,9 @@ SPEC_FUNCTION get_forkchoice_store
     COPY32  x9, x10
     str     xzr, [x28, #BlockNode_timely]
 .if FORK >= FORK_BELLATRIX
-    PART    x9, x10, x20, BeaconBlock_body  /* the anchor's payload counts as VALID */
-    PART    x11, x10, x9, BeaconBlockBody_execution_payload
-    add     x9, x11, #ExecutionPayload_block_hash
+    LDQ     x9, x19, BeaconState_latest_execution_payload_header  /* the anchor state's payload hash, VALID */
+    add     x9, x19, x9
+    add     x9, x9, #ExecutionPayloadHeader_block_hash
     add     x10, x28, #BlockNode_block_hash
     COPY32  x10, x9
 .else

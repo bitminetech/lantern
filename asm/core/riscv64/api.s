@@ -3578,14 +3578,15 @@ LOCAL_FUNCTION node_api_event
     bgtu    t1, a0, 80f
     ld      t0, ApiView_head_slot(s8)
     bleu    t1, t0, 80f
-    li      t0, API_ID_SLOT                 # the head's post-state brought to the slot
+    li      t0, API_ID_HEAD                 # the head's post-state brought to the slot, which may be past the store's
     sd      t0, ApiRoute_id_kind(s7)
-    sd      t1, ApiRoute_id_slot(s7)
     mv      a0, s7
     mv      a1, s8
     call    node_api_state
     li      a2, 500
     bnez    a0, 80f
+    ld      t0, ApiRoute_slot(s7)
+    sd      t0, ApiView_head_slot(s8)
     mv      a0, s8
     call    node_api_advance
     mv      a0, s9

@@ -3538,14 +3538,16 @@ LOCAL_FUNCTION node_api_event
     mov     S8(%rsp), %rax
     cmp     ApiView_head_slot(%rax), %rcx
     jbe     80f
-    movq    $API_ID_SLOT, ApiRoute_id_kind(%rdi)    # the head's post-state brought to the slot
-    mov     %rcx, ApiRoute_id_slot(%rdi)
+    movq    $API_ID_HEAD, ApiRoute_id_kind(%rdi)    # the head's post-state brought to the slot, which may be past the store's
     mov     S8(%rsp), %rsi
     call    node_api_state
     mov     $500, %edx
     test    %rax, %rax
     jnz     80f
+    mov     S7(%rsp), %rax
+    mov     ApiRoute_slot(%rax), %rax
     mov     S8(%rsp), %rdi
+    mov     %rax, ApiView_head_slot(%rdi)
     call    node_api_advance
     mov     S9(%rsp), %rdi
     mov     S7(%rsp), %rsi
