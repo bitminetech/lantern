@@ -322,7 +322,7 @@ def main():
         status2, _, body2 = ru.response()
         d = json.loads(body2)
         ok = (status == 200 and status2 == 200 and d["dependent_root"] == root and d["execution_optimistic"] is False and
-              [x["slot"] for x in d["data"]] == [str(s) for s in range(8)] and
+              [x["slot"] for x in d["data"]] == [str(s) for s in range(1, 8)] and
               all(0 <= int(x["validator_index"]) < 4096 and x["pubkey"] == pubkey(int(x["validator_index"])) for x in d["data"]))
         check(name, ok, f"status {status} and {status2}: {body2[:300]!r}")
     except (EOFError, OSError, ValueError, KeyError, IndexError) as x:

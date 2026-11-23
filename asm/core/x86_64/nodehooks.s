@@ -843,13 +843,9 @@ SPEC_FUNCTION node_liveness
     je      4f
     cmp     $SEEN_AGGREGATOR_EPOCH, %rax
     je      4f
-    cmp     $SEEN_PROPOSER_SLOT, %rax       # a slot's keys
-    je      31f
-    cmp     $SEEN_SYNC_MESSAGE, %rax
-    je      31f
-    cmp     $SEEN_SYNC_CONTRIBUTION, %rax
+    cmp     $SEEN_PROPOSER_SLOT, %rax       # a slot's key; sync committee keys never count
     jne     3b
-31: shr     $LOG2_SLOTS_PER_EPOCH, %rdx
+    shr     $LOG2_SLOTS_PER_EPOCH, %rdx
 4:  cmp     %r8, %rdx
     jne     3b
     movb    $1, (%r14,%rdi)

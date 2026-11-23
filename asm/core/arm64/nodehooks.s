@@ -829,9 +829,7 @@ SPEC_FUNCTION node_liveness
     cmp     x11, #SEEN_ATTESTATION          /* an epoch's keys */
     ccmp    x11, #SEEN_AGGREGATOR_EPOCH, #4, ne
     b.eq    4f
-    cmp     x11, #SEEN_PROPOSER_SLOT        /* a slot's keys */
-    ccmp    x11, #SEEN_SYNC_MESSAGE, #4, ne
-    ccmp    x11, #SEEN_SYNC_CONTRIBUTION, #4, ne
+    cmp     x11, #SEEN_PROPOSER_SLOT        /* a slot's key; sync committee keys never count */
     b.ne    3b
     lsr     x12, x12, #LOG2_SLOTS_PER_EPOCH
 4:  cmp     x12, x25

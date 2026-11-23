@@ -2665,7 +2665,7 @@ def duties_answer(v, route, kw, syncing, v2=False):
     else:
         return error(404, **kw)
     items = []
-    for slot in range(first, first + spe):
+    for slot in range(max(first, 1), first + spe):  # slot 0 has no item: its block is the genesis block
         at = s.copy()
         at.slot = slot
         i = int(spec.get_beacon_proposer_index(at))
@@ -2799,7 +2799,8 @@ def empty_seen(spec):
 
 def is_live(spec, fork, state, seen, epoch, index):
     """getLiveness (beacon-api.md): in the beacon chain by the state's epoch lists, on the network and from
-    the API by the Seen's keys of the epoch or of its slots."""
+    the API by the Seen's attestation and aggregator keys of the epoch and proposer keys of its slots; sync
+    committee keys never count."""
     if index >= len(state.validators):
         return False
     cur, prev = int(spec.get_current_epoch(state)), int(spec.get_previous_epoch(state))
@@ -2816,10 +2817,7 @@ def is_live(spec, fork, state, seen, epoch, index):
         if any(int(k[0]) == epoch and int(k[1]) == index for k in keys):
             return True
     spe = int(spec.SLOTS_PER_EPOCH)
-    slot_sets = [seen.proposer_slots]
-    if fork != "phase0":
-        slot_sets += [seen.sync_message_validator_slots, seen.sync_contribution_aggregator_slots]
-    return any(int(k[1]) == index and int(k[0]) // spe == epoch for keys in slot_sets for k in keys)
+    return any(int(k[1]) == index and int(k[0]) // spe == epoch for k in seen.proposer_slots)
 
 
 def liveness_answer(v, epoch, refs, kw, syncing, seen=None):

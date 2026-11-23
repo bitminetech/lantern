@@ -1841,8 +1841,13 @@ LOCAL_FUNCTION api_body
 20: mov     8(%rsp), %rax
     cmp     $SLOTS_PER_EPOCH, %rax
     jae     21f
-    test    %rax, %rax
-    jz      22f
+    mov     ApiView_val_state(%rbp), %rcx
+    add     NODE_STATE_SLOT(%rcx), %rax     # the slot; slot 0 has no item: its block is the genesis block
+    jz      23f
+    cmp     $1, %rax                        # a comma before each item past the first: past the epoch's first slot and past slot 1
+    jbe     22f
+    cmpq    $0, 8(%rsp)
+    je      22f
     API_LIT api_p_comma
 22: API_LIT api_u_pubkey
     mov     ApiView_val_state(%rbp), %rdi
@@ -1863,7 +1868,7 @@ LOCAL_FUNCTION api_body
     add     8(%rsp), %rdi
     call    api_qdec
     API_LIT api_end1
-    incq    8(%rsp)
+23: incq    8(%rsp)
     jmp     20b
 21: API_LIT api_v_end
     UNFRAME 16

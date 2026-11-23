@@ -11319,7 +11319,7 @@ static void api_lookup_checks(fc_node *n, tv parts, const char **why) {
         }
     }
     /* getProposerDuties and getAttesterDuties of validator 0 for each epoch from the anchor's to the head's: 200, an
-       item for each slot of the epoch and one item (below F's slot by the replay); 503 while the node syncs */
+       item for each slot of the epoch above 0 and one item (below F's slot by the replay); 503 while the node syncs */
     for (uint64_t ep = (anchor_slot + SLOTS_PER_EPOCH_RUNNER - 1) / SLOTS_PER_EPOCH_RUNNER; ep <= head_slot / SLOTS_PER_EPOCH_RUNNER && !*why; ep++) {
         for (int kind = 0; kind < 2 && !*why; kind++) {
             uint64_t glen = 0, items = 0;
@@ -11339,9 +11339,9 @@ static void api_lookup_checks(fc_node *n, tv parts, const char **why) {
                 continue;
             }
             for (const char *at = end; at && (at = find_bytes(at + 1, glen - (uint64_t)(at + 1 - (const char *)g), "\"slot\":\"")); ) items++;
-            if (!end || glen < 17 || memcmp(g, "HTTP/1.1 200 OK\r\n", 17) || items != (kind ? 1 : SLOTS_PER_EPOCH_RUNNER)) {
+            if (!end || glen < 17 || memcmp(g, "HTTP/1.1 200 OK\r\n", 17) || items != (kind ? 1 : ep ? SLOTS_PER_EPOCH_RUNNER : SLOTS_PER_EPOCH_RUNNER - 1)) {
                 snprintf(msg, sizeof msg, "API %s of epoch %llu: not 200 with %u items", kind ? "getAttesterDuties" : "getProposerDuties",
-                         (unsigned long long)ep, kind ? 1u : (unsigned)SLOTS_PER_EPOCH_RUNNER);
+                         (unsigned long long)ep, kind ? 1u : ep ? (unsigned)SLOTS_PER_EPOCH_RUNNER : (unsigned)SLOTS_PER_EPOCH_RUNNER - 1);
                 *why = msg;
             }
             free(g);

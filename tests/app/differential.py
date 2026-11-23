@@ -21,7 +21,8 @@ of the same chain. The check of a read:
   effective balance both nodes list, in the fields both give (each client lists its own set of
   balances; lodestar gives `inclusion_delay` after phase0 too).
 - getProposerDuties: lantern's proposers must be those of the peer's blocks of the epoch; a peer
-  whose duties differ from its own blocks is reported and not counted.
+  whose duties differ from its own blocks is reported and not counted. Slot 0 is left out of both:
+  lighthouse and lodestar list it, lantern, nimbus, prysm and teku do not.
 - getSpec: the same value of each key both nodes give, numbers as numbers (`2` and `0x02`), but
   for the keys of QUIRKS.
 - `dependent_root`: but for the reads of DEPENDENT_QUIRKS.
@@ -181,6 +182,8 @@ for name, path, body, ssz in READS:
             if diff:
                 why = "values differ: " + ", ".join("%s %s and %s" % (k, mine["data"][k], theirs["data"][k]) for k in diff[:5])
         elif name.startswith("getProposerDuties") and not why:
+            for answer in (mine, theirs):
+                answer["data"] = [d for d in answer["data"] if d["slot"] != "0"]
             blocks = chain_proposers(int(path.rsplit("/", 1)[1]))
             off = [d["slot"] for d in mine["data"] if int(d["slot"]) in blocks and blocks[int(d["slot"])] != d["validator_index"]]
             peer_off = [d["slot"] for d in theirs["data"] if int(d["slot"]) in blocks and blocks[int(d["slot"])] != d["validator_index"]]

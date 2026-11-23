@@ -848,13 +848,9 @@ SPEC_FUNCTION node_liveness
     beq     t0, t5, 4f
     li      t5, SEEN_AGGREGATOR_EPOCH
     beq     t0, t5, 4f
-    li      t5, SEEN_PROPOSER_SLOT          # a slot's keys
-    beq     t0, t5, 31f
-    li      t5, SEEN_SYNC_MESSAGE
-    beq     t0, t5, 31f
-    li      t5, SEEN_SYNC_CONTRIBUTION
+    li      t5, SEEN_PROPOSER_SLOT          # a slot's key; sync committee keys never count
     bne     t0, t5, 3b
-31: srli    t1, t1, LOG2_SLOTS_PER_EPOCH
+    srli    t1, t1, LOG2_SLOTS_PER_EPOCH
 4:  bne     t1, s7, 3b
     add     t5, s8, t4
     sb      t6, 0(t5)

@@ -1821,6 +1821,12 @@ LOCAL_FUNCTION api_body
 20: ldr     x9, [sp, #24]
     cmp     x9, #SLOTS_PER_EPOCH
     b.hs    21f
+    ldr     x10, [x22, #ApiView_val_state]
+    ldr     x10, [x10, #NODE_STATE_SLOT]
+    adds    x10, x10, x9                    /* the slot; slot 0 has no item: its block is the genesis block */
+    b.eq    23f
+    cmp     x10, #1                         /* a comma before each item past the first: past the epoch's first slot and past slot 1 */
+    b.ls    22f
     cbz     x9, 22f
     API_LIT api_p_comma
 22: API_LIT api_u_pubkey
@@ -1844,7 +1850,7 @@ LOCAL_FUNCTION api_body
     add     x0, x0, x9
     bl      api_qdec
     API_LIT api_end1
-    ldr     x9, [sp, #24]
+23: ldr     x9, [sp, #24]
     add     x9, x9, #1
     str     x9, [sp, #24]
     b       20b
