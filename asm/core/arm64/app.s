@@ -1223,9 +1223,9 @@ LOCAL_FUNCTION app_buf_drop
 END_FUNCTION app_buf_drop
 
 /*
- * L1: x0 = new memory with a copy of the x1 bytes at x0, or 0. With a source and size of
- * multiples of 8, a page of the source that is all zero bytes is not written: the new memory is
- * zero already, and the OS keeps no memory for a page nobody writes. x20 the source, x21 the
+ * L1: x0 = new memory with a copy of the x1 bytes at x0, or 0. With a source at a multiple of 8,
+ * a whole page of the source that is all zero bytes is not written: the new memory is zero
+ * already, and the OS keeps no memory for a page nobody writes; the last part of a page is copied. x20 the source, x21 the
  * size, x22 the copy, x23 the page's offset, x24 its bytes.
  */
 LOCAL_FUNCTION app_dup
@@ -1236,20 +1236,20 @@ LOCAL_FUNCTION app_dup
     bl      app_map
     cbz     x0, 9f
     mov     x22, x0
-    orr     x9, x20, x21
-    tst     x9, #7
+    tst     x20, #7
     b.eq    1f
-    mov     x1, x20                         /* not multiples of 8: all of it */
+    mov     x1, x20                         /* a source not at a multiple of 8: all of it */
     mov     x2, x21
     bl      lantern_copy
     b       8f
 1:  mov     x23, #0
 2:  subs    x24, x21, x23                   /* the next page: all zero, or a copy */
     b.ls    8f
+    add     x10, x20, x23
     mov     x9, #4096
     cmp     x24, x9
-    csel    x24, x24, x9, lo
-    add     x10, x20, x23
+    b.lo    4f                              /* the last part of a page: a copy */
+    mov     x24, x9
     mov     x11, #0
 3:  ldr     x12, [x10, x11]
     cbnz    x12, 4f

@@ -1323,9 +1323,9 @@ LOCAL_FUNCTION app_buf_drop
 END_FUNCTION app_buf_drop
 
 /*
- * L1: rax = new memory with a copy of the rsi bytes at rdi, or 0. With a source and size of
- * multiples of 8, a page of the source that is all zero bytes is not written: the new memory is
- * zero already, and the OS keeps no memory for a page nobody writes. rbp the source, r12 the
+ * L1: rax = new memory with a copy of the rsi bytes at rdi, or 0. With a source at a multiple of
+ * 8, a whole page of the source that is all zero bytes is not written: the new memory is zero
+ * already, and the OS keeps no memory for a page nobody writes; the last part of a page is copied. rbp the source, r12 the
  * size, r13 the copy, r14 the page's offset, r15 its bytes.
  */
 LOCAL_FUNCTION app_dup
@@ -1338,10 +1338,9 @@ LOCAL_FUNCTION app_dup
     jz      9f
     mov     %rax, %r13
     mov     %rbp, %rcx
-    or      %r12, %rcx
     test    $7, %cl
     jz      1f
-    mov     %rax, %rdi                      # not multiples of 8: all of it
+    mov     %rax, %rdi                      # a source not at a multiple of 8: all of it
     mov     %rbp, %rsi
     mov     %r12, %rdx
     call    lantern_copy
@@ -1350,10 +1349,11 @@ LOCAL_FUNCTION app_dup
 2:  mov     %r12, %r15                      # the next page: all zero, or a copy
     sub     %r14, %r15
     jbe     8f
+    lea     (%rbp,%r14), %rsi
     mov     $4096, %eax
     cmp     %rax, %r15
-    cmova   %rax, %r15
-    lea     (%rbp,%r14), %rsi
+    jb      4f                              # the last part of a page: a copy
+    mov     %rax, %r15
     xor     %ecx, %ecx
 3:  cmpq    $0, (%rsi,%rcx)
     jne     4f
