@@ -7097,8 +7097,11 @@ END_FUNCTION node_recon_count
  * NODE_BLOB_VALID column sidecars of a fulu slot, NUMBER_OF_COLUMNS / 2 or more and fewer than
  * NUMBER_OF_COLUMNS, not recon_failed, a third of its slot past: the join of their bytes, the
  * buffer of all sidecars, the work; with recon_state 2, a PUBLISH_SIDECAR of the next column the
- * node lacks, or the end. x21 an entry, x22 the entries left, x25 the count, x26 the root's entry,
- * x27 a column, x28 the joined id. Locals: L the join action, L+8 the ids written.
+ * node lacks, or the end. With fewer columns than NUMBER_OF_COLUMNS / 2, no root: an entry is
+ * NODE_BLOB_VALID only for a column the node samples. An entry of the root of the last entry
+ * weighed is not weighed again. x21 an entry, x22 the entries left, x25 the count, x26 the last
+ * entry weighed, then the root's entry, x27 a column, x28 the joined id. Locals: L the join
+ * action, L+8 the ids written.
  */
 LOCAL_FUNCTION node_reconstruct_due
     ENTER 16
@@ -7106,11 +7109,19 @@ LOCAL_FUNCTION node_reconstruct_due
     cmp     x9, #2
     b.eq    50f
     cbnz    x9, 99f
+    bl      node_column_count               /* fewer columns than half: no root has half */
+    cmp     x0, #(NUMBER_OF_COLUMNS / 2)
+    b.lo    99f
+    mov     x26, #0
     PART    x21, x22, x19, Node_blobs
 1:  cbz     x22, 99f
     ldr     x9, [x21, #NodeBlob_status]
     cmp     x9, #NODE_BLOB_VALID
     b.ne    3f
+    cbz     x26, 10f                        /* the root of the last entry weighed: weighed */
+    NE32    x26, x21, 10f
+    b       3f
+10: mov     x26, x21
     ldr     x0, [x21, #NodeBlob_slot]
     add     x1, x19, #Node_config
     bl      node_fork

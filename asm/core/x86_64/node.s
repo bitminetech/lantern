@@ -7125,8 +7125,11 @@ END_FUNCTION node_recon_count
  * NODE_BLOB_VALID column sidecars of a fulu slot, NUMBER_OF_COLUMNS / 2 or more and fewer than
  * NUMBER_OF_COLUMNS, not recon_failed, a third of its slot past: the join of their bytes, the
  * buffer of all sidecars, the work; with recon_state 2, a PUBLISH_SIDECAR of the next column the
- * node lacks, or the end. r12 an entry, r13 the entries left, S7 the count, S8 the root's entry,
- * S9 a column, S10 the joined id. Locals: L the join action, L+8 the ids written.
+ * node lacks, or the end. With fewer columns than NUMBER_OF_COLUMNS / 2, no root: an entry is
+ * NODE_BLOB_VALID only for a column the node samples. An entry of the root of the last entry
+ * weighed is not weighed again. r12 an entry, r13 the entries left, S7 the count, S8 the last
+ * entry weighed, then the root's entry, S9 a column, S10 the joined id. Locals: L the join
+ * action, L+8 the ids written.
  */
 LOCAL_FUNCTION node_reconstruct_due
     ENTER 16
@@ -7135,6 +7138,10 @@ LOCAL_FUNCTION node_reconstruct_due
     je      50f
     test    %rax, %rax
     jnz     99f
+    call    node_column_count               # fewer columns than half: no root has half
+    cmp     $(NUMBER_OF_COLUMNS / 2), %rax
+    jb      99f
+    movq    $0, S8(%rsp)
     mov     Node_blobs(%rbx), %r12
     add     %rbx, %r12
     mov     (Node_blobs + 8)(%rbx), %r13
@@ -7142,6 +7149,12 @@ LOCAL_FUNCTION node_reconstruct_due
     jz      99f
     cmpq    $NODE_BLOB_VALID, NodeBlob_status(%r12)
     jne     3f
+    mov     S8(%rsp), %rdi                  # the root of the last entry weighed: weighed
+    test    %rdi, %rdi
+    jz      10f
+    NE32    %rdi, %r12, 10f
+    jmp     3f
+10: mov     %r12, S8(%rsp)
     mov     NodeBlob_slot(%r12), %rdi
     lea     Node_config(%rbx), %rsi
     call    node_fork
