@@ -323,7 +323,7 @@ LOCAL_FUNCTION node_run_lc
     lea     Node_config(%rbx), %rsi
     mov     %r13, %rdx
     mov     %r14, %rcx
-    xor     %r8d, %r8d
+    mov     (Node_config + CONFIG_STATE_CACHE)(%rbx), %r8  # the StateCache of the node's config
     mov     S7(%rsp), %r9
     call    lantern_lc_on_block
     cmp     $LANTERN_BUFFER_TOO_SMALL, %rax

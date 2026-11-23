@@ -354,7 +354,7 @@ LOCAL_FUNCTION node_run_lc
     add     x1, x19, #Node_config
     mov     x2, x22
     mov     x3, x23
-    mov     x4, #0
+    LDQ     x4, x19, Node_config + CONFIG_STATE_CACHE  /* the StateCache of the node's config */
     mov     x5, x25
     bl      lantern_lc_on_block
     cmp     x0, #LANTERN_BUFFER_TOO_SMALL
