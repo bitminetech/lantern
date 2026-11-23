@@ -182,7 +182,7 @@ MNEMONIC = "giant issue aisle success illegal bike spike question tent bar rely 
 # has it ask the v1 operation of the pinned v4.0.0.
 def vc_cmd(client, url):
     if client == "lighthouse":
-        return ["lighthouse", "vc", "--testnet-dir=/network-configs", "--validators-dir=/validator-keys/keys", "--secrets-dir=/validator-keys/secrets", "--init-slashing-protection", "--beacon-nodes=" + url, "--suggested-fee-recipient=" + FEE_RECIPIENT]
+        return ["lighthouse", "vc", "--testnet-dir=/network-configs", "--validators-dir=/validator-keys/keys", "--secrets-dir=/validator-keys/secrets", "--init-slashing-protection", "--beacon-nodes=" + url, "--suggested-fee-recipient=" + FEE_RECIPIENT, "--disable-proposer-duties-v2"]
     if client == "lodestar":
         return ["validator", "--paramsFile=/network-configs/config.yaml", "--beaconNodes=" + url, "--suggestedFeeRecipient=" + FEE_RECIPIENT, "--useProduceBlockV3", "--disableKeystoresThreadPool", "--keystoresDir=/validator-keys/keys", "--secretsDir=/validator-keys/secrets"]
     if client == "teku":
@@ -257,6 +257,8 @@ def run(plan, args={}):
                 "KURTOSIS_IP_ADDR_PLACEHOLDER",
                 "--boot-nodes",
                 ",".join(records),
+                "--log-level",
+                "debug",
             ] + extra_args,
             files=files,
             max_cpu=lantern_max_cpu,
