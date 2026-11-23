@@ -277,14 +277,14 @@ def run(plan, args={}):
         )
         plan.verify(made["code"], "==", 0)
         keys = plan.store_service_files("lantern-vc-keys", "/keys/", name="lantern_vc_keys", depends_on=made["output"])
-        plan.add_service(
-            name="lantern-vc",
-            config=ServiceConfig(
-                image=lantern_vc_image,
-                cmd=vc_cmd(lantern_vc, "http://{0}:5052".format(lantern.ip_address)),
-                files={"/network-configs": "el_cl_genesis_data", "/validator-keys": keys},
-            ),
-        )
+        vc = {
+            "image": lantern_vc_image,
+            "cmd": vc_cmd(lantern_vc, "http://{0}:5052".format(lantern.ip_address)),
+            "files": {"/network-configs": "el_cl_genesis_data", "/validator-keys": keys},
+        }
+        if lantern_vc == "nimbus":  # as root, as ethereum-package's src/vc/nimbus.star runs it: its slashing protection database goes in the validators directory
+            vc["user"] = User(uid=0, gid=0)
+        plan.add_service(name="lantern-vc", config=ServiceConfig(**vc))
     if lantern_sync:
         identity = plan.request(
             service_name="lantern",
