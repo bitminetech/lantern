@@ -1135,6 +1135,133 @@ LOCAL_FUNCTION node_shed
 END_FUNCTION node_shed
 
 /*
+ * a0 = the proposer state of a gossip message of the parent root at a0 and the slot a1 (node.md,
+ * NodeGossipState): the state of the gossip_states entry of them, with 1 more use; else, in the
+ * first entry with no use, a STATE_FREE of its state and a copy of the post-state a2 with the root,
+ * the slot and 1 use; else a copy of it for the message alone. s3 the root, s4 the slot, s7 the
+ * post-state, s8 an entry, s9 the entries left, s10 the copy (s5 and s6 are the step's scratch and
+ * actions).
+ */
+LOCAL_FUNCTION node_gossip_state
+    ENTER 0
+    mv      s3, a0
+    mv      s4, a1
+    mv      s7, a2
+    ADDQ    s8, s1, Node_gossip_states      # the entry of the root and slot
+    li      s9, NODE_GOSSIP_STATES
+1:  ld      t0, NodeGossipState_state(s8)
+    beqz    t0, 2f
+    ld      t0, NodeGossipState_slot(s8)
+    bne     t0, s4, 2f
+    addi    t1, s8, NodeGossipState_root
+    NE32    t1, s3, 2f
+    ld      t0, NodeGossipState_uses(s8)
+    addi    t0, t0, 1
+    sd      t0, NodeGossipState_uses(s8)
+    ld      a0, NodeGossipState_state(s8)
+    LEAVE 0
+2:  addi    s8, s8, NodeGossipState__mem
+    addi    s9, s9, -1
+    bnez    s9, 1b
+    ADDQ    s8, s1, Node_gossip_states      # else the first entry with no use
+    li      s9, NODE_GOSSIP_STATES
+3:  ld      t0, NodeGossipState_uses(s8)
+    beqz    t0, 4f
+    addi    s8, s8, NodeGossipState__mem
+    addi    s9, s9, -1
+    bnez    s9, 3b
+    call    node_new_id                     # every entry in use: a copy for the message alone
+    mv      s10, a0
+    mv      a2, a0
+    li      a0, NODE_ACT_STATE_COPY
+    mv      a1, s7
+    call    node_ids
+    mv      a0, s10
+    LEAVE 0
+4:  ld      a1, NodeGossipState_state(s8)   # its old state goes
+    beqz    a1, 5f
+    li      a0, NODE_ACT_STATE_FREE
+    li      a2, 0
+    call    node_ids
+5:  call    node_new_id
+    sd      a0, NodeGossipState_state(s8)
+    mv      a2, a0
+    li      a0, NODE_ACT_STATE_COPY
+    mv      a1, s7
+    call    node_ids
+    addi    t1, s8, NodeGossipState_root
+    COPY32  t1, s3
+    sd      s4, NodeGossipState_slot(s8)
+    li      t0, 1
+    sd      t0, NodeGossipState_uses(s8)
+    ld      a0, NodeGossipState_state(s8)
+    LEAVE 0
+END_FUNCTION node_gossip_state
+
+# The end of a GOSSIP work of the proposer state a0 (node.md): its gossip_states entry has 1 use less; a state of no entry goes.
+LOCAL_FUNCTION node_gossip_state_done
+    ENTER 0
+    beqz    a0, 9f
+    ADDQ    t2, s1, Node_gossip_states
+    li      t3, NODE_GOSSIP_STATES
+1:  ld      t0, NodeGossipState_state(t2)
+    bne     t0, a0, 2f
+    ld      t0, NodeGossipState_uses(t2)
+    beqz    t0, 9f
+    addi    t0, t0, -1
+    sd      t0, NodeGossipState_uses(t2)
+    j       9f
+2:  addi    t2, t2, NodeGossipState__mem
+    addi    t3, t3, -1
+    bnez    t3, 1b
+    mv      a1, a0
+    li      a0, NODE_ACT_STATE_FREE
+    li      a2, 0
+    call    node_ids
+9:  LEAVE 0
+END_FUNCTION node_gossip_state_done
+
+/*
+ * The proposer states of gossip that no work uses go (node.md): each gossip_states entry with a
+ * state, no use and a slot + 2 at most the store's slot, when the actions have room. s3 an entry,
+ * s4 the store's slot, s7 the entries left.
+ */
+LOCAL_FUNCTION node_gossip_shed
+    ENTER 0
+    mv      a0, s2
+    call    node_store_slot
+    mv      s4, a0
+    ADDQ    s3, s1, Node_gossip_states
+    li      s7, NODE_GOSSIP_STATES
+1:  ld      t0, NodeGossipState_state(s3)
+    beqz    t0, 2f
+    ld      t0, NodeGossipState_uses(s3)
+    bnez    t0, 2f
+    ld      t0, NodeGossipState_slot(s3)
+    addi    t1, t0, 2
+    bltu    t1, t0, 2f
+    bltu    s4, t1, 2f
+    li      a0, 32
+    call    node_room
+    beqz    a0, 9f
+    li      a0, NODE_ACT_STATE_FREE
+    ld      a1, NodeGossipState_state(s3)
+    li      a2, 0
+    call    node_ids
+    sd      zero, 0(s3)                     # the entry becomes zero
+    sd      zero, 8(s3)
+    sd      zero, 16(s3)
+    sd      zero, 24(s3)
+    sd      zero, 32(s3)
+    sd      zero, 40(s3)
+    sd      zero, 48(s3)
+2:  addi    s3, s3, NodeGossipState__mem
+    addi    s7, s7, -1
+    bnez    s7, 1b
+9:  LEAVE 0
+END_FUNCTION node_gossip_shed
+
+/*
  * a0 = the id of the last copy: the copy a0 of the state of id a1, at slot a2, crosses each fork
  * boundary up to the fork of slot a3 (node.md): for each, a SLOTS work to the next fork's first
  * slot when the copy is before it, a copy of the state a1 as the upgrade's buffer, an UPGRADE work
@@ -4589,11 +4716,8 @@ LOCAL_FUNCTION node_event
 631: ld     a0, NodeAction_target(s3)
     mv      a1, s7
     call    node_validation
-    ld      a1, NodeAction_state_b(s3)      # the proposer state
-    beqz    a1, 64f
-    li      a0, NODE_ACT_STATE_FREE
-    li      a2, 0
-    call    node_ids
+    ld      a0, NodeAction_state_b(s3)      # the proposer state: 1 use less, or it goes
+    call    node_gossip_state_done
 64: ld      a0, NodeAction_target(s3)
     call    node_find_message
     li      t0, -1
@@ -7940,7 +8064,7 @@ LOCAL_FUNCTION node_message_status
 70: ld      a0, NodeMessage_handle(s4)
     call    node_validation
     j       80f
-1:  li      a0, NODE_ACT_WORK_SIZE + 32     # room for the work and a state copy
+1:  li      a0, NODE_ACT_WORK_SIZE + 64     # room for the work, a state copy and a state free
     call    node_room
     li      a1, LIBP2P_IGNORE
     beqz    a0, 70b
@@ -8003,12 +8127,11 @@ LOCAL_FUNCTION node_message_status
     addi    a1, s1, Node_config
     call    node_fork
     bne     a0, s10, 3f
-    call    node_new_id
+    ADDQ    a0, s4, NodeMessage_parent_root # one proposer state for each parent root and slot
+    ld      a1, NodeMessage_slot(s4)
+    mv      a2, s9
+    call    node_gossip_state
     mv      s8, a0
-    li      a0, NODE_ACT_STATE_COPY
-    mv      a1, s9
-    mv      a2, s8
-    call    node_ids
 3:  li      s9, 0                           # the state of the justified root
     ADDQ    a0, s2, Store_justified_checkpoint + 8
     call    node_find_block
@@ -10390,6 +10513,7 @@ FUNCTION lantern_node_step
     call    node_custody_due                # validator custody's check, each store epoch
     call    node_engine_next
     call    node_shed                       # the post-states the node can rebuild go
+    call    node_gossip_shed                # the proposer states of gossip no work uses go
     call    node_api_head_events            # the head and finalized_checkpoint events, at a quiet point
     call    node_lc_due                     # the light client updates due on gossip
     call    node_produce_due                # the produceBlockV3 entries whose bid is late

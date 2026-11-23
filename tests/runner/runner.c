@@ -3067,6 +3067,44 @@ static shell_buf *shell_find(struct node_shell *s, uint64_t id) {
     return NULL;
 }
 
+/* node.md, gossip test: each NODE_WORK_GOSSIP of a block or sidecar with a proposer state names the
+ * state of the earlier such work of the same parent root and slot while that state is kept. */
+static struct { const struct node_shell *s; uint8_t key[40]; uint64_t id; } gshare[256];
+static int ngshare;
+static unsigned long gshare_works, gshare_states;
+static void gshare_forget(const struct node_shell *s) { /* a new shell at the address of an old one */
+    for (int i = 0; i < ngshare; i++)
+        if (gshare[i].s == s) gshare[i].s = NULL;
+}
+static void gossip_share_check(struct node_shell *s, const uint8_t *act, const char **why) {
+    uint64_t kind = rd64(act + 16), sb = rd64(act + 32), topic = rd64(act + 64) & 0xff, at;
+    if (kind != 7 || !sb || (topic != 1 && topic != 10 && topic != 11)) return; /* NODE_WORK_GOSSIP; beacon_block, blob_sidecar, data_column_sidecar */
+    shell_buf *d = shell_find(s, rd64(act + 48));
+    if (!d || d->size < 24) return;
+    const uint8_t *m = d->b + rd64(d->b + 8);
+    uint64_t len = rd64(d->b + 16);
+    if (topic == 1) at = len >= 4 ? (uint64_t)(m[0] | m[1] << 8 | m[2] << 16 | (uint32_t)m[3] << 24) : len; /* SignedBeaconBlock: the message's offset */
+    else if (topic == 11) at = 20;                                    /* DataColumnSidecar: signed_block_header */
+    else at = 8 + 131072 + 48 + 48;                                   /* BlobSidecar: signed_block_header */
+    if (at + 48 > len) return;
+    uint8_t key[40];
+    memcpy(key, m + at + 16, 32); /* parent_root */
+    memcpy(key + 32, m + at, 8);  /* slot */
+    gshare_works++;
+    for (int i = 0; i < ngshare; i++)
+        if (gshare[i].s == s && !memcmp(gshare[i].key, key, 40)) {
+            if (gshare[i].id != sb && shell_find(s, gshare[i].id)) *why = "a second proposer state copy for one parent root and slot of gossip";
+            if (gshare[i].id != sb) gshare_states++;
+            gshare[i].id = sb;
+            return;
+        }
+    int i = ngshare < 256 ? ngshare++ : (int)(gshare_works % 256);
+    gshare[i].s = s;
+    memcpy(gshare[i].key, key, 40);
+    gshare[i].id = sb;
+    gshare_states++;
+}
+
 static void shell_keep(struct node_shell *s, uint64_t id, uint8_t *b, uint64_t size, const char **why) {
     if (!id || shell_find(s, id)) {
         *why = "an action gives an id in use";
@@ -3593,8 +3631,10 @@ static void shell_step(fc_node *n, const char **why) {
             else shell_keep(s, rd64(act + 24), copy_of(src->b, src->size), src->size, why);
         } else if ((kind == ACT_STATE_FREE || kind == ACT_BYTES_FREE) && size == 32)
             shell_drop(s, rd64(act + 16), why);
-        else if (kind == ACT_WORK && size == 72)
-            shell_work(n, act, why);
+        else if (kind == ACT_WORK && size == 72) {
+            gossip_share_check(s, act, why);
+            if (!*why) shell_work(n, act, why);
+        }
         else if (kind == ACT_DB_APPEND && size == 128)
             shell_db_append(s, act, why);
         else if (kind == ACT_DB_ARCHIVE && size == 120)
@@ -4186,6 +4226,7 @@ static struct node_shell *shell_open(fc_node *n, tv parts, uint8_t **anchor_bloc
         fprintf(stderr, "out of memory\n");
         exit(2);
     }
+    gshare_forget(s);
     n->shell = s;
     *anchor_block = fc_setup(n, parts, why);
     if (*anchor_block) {
@@ -4595,6 +4636,7 @@ static void transition_node_case(tv parts, uint64_t fork_epoch, int *ran, const 
         fprintf(stderr, "out of memory\n");
         exit(2);
     }
+    gshare_forget(s);
     n.shell = s;
     if (st != 0) *why = "node_anchor of the fork before: status not 0";
     uint64_t sroom[2] = {2, 1}, sneed = 0; /* the store: get_forkchoice_store of the fork before */
@@ -12192,6 +12234,7 @@ int main(int argc, char **argv) {
         printf("NOTE: getDebugForkChoice answered 200 %lu times, 500 %lu times\n", api_fork_choice_200, api_fork_choice_500);
     if (api_lookups) printf("NOTE: %lu lookups of a block or a state by slot or root\n", api_lookups);
     if (node_replays) printf("NOTE: %lu post-states the nodes rebuilt by replay\n", node_replays);
+    if (gshare_works) printf("NOTE: %lu gossip blocks and sidecars checked with %lu proposer states\n", gshare_works, gshare_states);
     if (gossip_votes) printf("NOTE: %lu of %lu valid attestations went to fork choice as gossip aggregates\n", gossip_votes_applied, gossip_votes);
     if (drop_ran) printf("NOTE: the sidecar drop check passed\n");
     if (json_types_skipped) printf("NOTE: %lu JSON cases of types lantern does not define\n", json_types_skipped);

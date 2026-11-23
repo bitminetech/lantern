@@ -789,7 +789,8 @@
 .set Node_status_peer, Node_base_slot + 1464 /* the same for the next Status request of the sync */
 .set Node_sidecar_ms, Node_base_slot + 1472  /* the time_ms of the last sidecar retry, or 0 */
 .set Node_sidecar_peer, Node_base_slot + 1480  /* the peers part index the sidecar requests look from */
-.set NODE_FIXED, Node_base_slot + 1488
+.set Node_gossip_states, Node_base_slot + 1488  /* NODE_GOSSIP_STATES NodeGossipState entries: shared proposer states of gossip */
+.set NODE_FIXED, Node_base_slot + 1600
 .set Eth1Count_number, 0               /* Eth1Count (node.md) */
 .set Eth1Count_count, 8
 .set Eth1Count_root, 16
@@ -808,6 +809,12 @@
 .set NODE_LOOKUP_MS, 10000             /* the least time between two lookups of the node */
 .set NODE_STATUS_MS, 12000             /* the least time between two Status requests of node_sync */
 .set NODE_SIDECAR_RETRY_MS, 4000       /* the least time between two sidecar retries */
+.set NODE_GOSSIP_STATES, 2             /* the shared proposer states of gossip (node.md, NodeGossipState) */
+.set NodeGossipState_state, 0          /* BufferId of the state, 0 for none */
+.set NodeGossipState_root, 8           /* the parent root of its messages */
+.set NodeGossipState_slot, 40          /* the slot of its messages */
+.set NodeGossipState_uses, 48          /* NODE_WORK_GOSSIP works of it not done yet */
+.set NodeGossipState__mem, 56
 .set NODE_SUBSCRIBE_AHEAD, 2           /* epochs: the topics of a new ForkDigest join this early, the old ones leave this late */
 .set NODE_STATE_KEEP_SLOTS, 4          /* the post-states of blocks of this many slots before the store's stay */
 .set NODE_DIAL_TAG, 0x4000000000000000 /* the bit of a DIAL tag of the node */

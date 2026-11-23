@@ -1111,6 +1111,135 @@ LOCAL_FUNCTION node_shed
 END_FUNCTION node_shed
 
 /*
+ * rax = the proposer state of a gossip message of the parent root at rdi and the slot rsi (node.md,
+ * NodeGossipState): the state of the gossip_states entry of them, with 1 more use; else, in the
+ * first entry with no use, a STATE_FREE of its state and a copy of the post-state rdx with the root,
+ * the slot and 1 use; else a copy of it for the message alone. r12 an entry, r13 the slot, S7 the
+ * root, S8 the post-state, S9 the copy (r14 and r15 are the step's scratch and actions).
+ */
+LOCAL_FUNCTION node_gossip_state
+    ENTER 0
+    mov     %rdi, S7(%rsp)
+    mov     %rsi, %r13
+    mov     %rdx, S8(%rsp)
+    lea     Node_gossip_states(%rbx), %r12  # the entry of the root and slot
+    mov     $NODE_GOSSIP_STATES, %ecx
+1:  cmpq    $0, NodeGossipState_state(%r12)
+    je      2f
+    cmp     NodeGossipState_slot(%r12), %r13
+    jne     2f
+    lea     NodeGossipState_root(%r12), %rdi
+    mov     S7(%rsp), %rsi
+    NE32    %rdi, %rsi, 2f
+    incq    NodeGossipState_uses(%r12)
+    mov     NodeGossipState_state(%r12), %rax
+    LEAVE 0
+2:  add     $NodeGossipState__mem, %r12
+    dec     %ecx
+    jnz     1b
+    lea     Node_gossip_states(%rbx), %r12  # else the first entry with no use
+    mov     $NODE_GOSSIP_STATES, %ecx
+3:  cmpq    $0, NodeGossipState_uses(%r12)
+    je      4f
+    add     $NodeGossipState__mem, %r12
+    dec     %ecx
+    jnz     3b
+    call    node_new_id                     # every entry in use: a copy for the message alone
+    mov     %rax, S9(%rsp)
+    mov     $NODE_ACT_STATE_COPY, %edi
+    mov     S8(%rsp), %rsi
+    mov     %rax, %rdx
+    call    node_ids
+    mov     S9(%rsp), %rax
+    LEAVE 0
+4:  mov     NodeGossipState_state(%r12), %rsi   # its old state goes
+    test    %rsi, %rsi
+    jz      5f
+    mov     $NODE_ACT_STATE_FREE, %edi
+    xor     %edx, %edx
+    call    node_ids
+5:  call    node_new_id
+    mov     %rax, NodeGossipState_state(%r12)
+    mov     $NODE_ACT_STATE_COPY, %edi
+    mov     S8(%rsp), %rsi
+    mov     %rax, %rdx
+    call    node_ids
+    lea     NodeGossipState_root(%r12), %rdi
+    mov     S7(%rsp), %rsi
+    COPY32  %rdi, %rsi
+    mov     %r13, NodeGossipState_slot(%r12)
+    movq    $1, NodeGossipState_uses(%r12)
+    mov     NodeGossipState_state(%r12), %rax
+    LEAVE 0
+END_FUNCTION node_gossip_state
+
+/* The end of a GOSSIP work of the proposer state rdi (node.md): its gossip_states entry has 1 use less; a state of no entry goes. */
+LOCAL_FUNCTION node_gossip_state_done
+    ENTER 0
+    test    %rdi, %rdi
+    jz      9f
+    lea     Node_gossip_states(%rbx), %rax
+    mov     $NODE_GOSSIP_STATES, %ecx
+1:  cmp     NodeGossipState_state(%rax), %rdi
+    jne     2f
+    cmpq    $0, NodeGossipState_uses(%rax)
+    je      9f
+    decq    NodeGossipState_uses(%rax)
+    jmp     9f
+2:  add     $NodeGossipState__mem, %rax
+    dec     %ecx
+    jnz     1b
+    mov     %rdi, %rsi
+    mov     $NODE_ACT_STATE_FREE, %edi
+    xor     %edx, %edx
+    call    node_ids
+9:  LEAVE 0
+END_FUNCTION node_gossip_state_done
+
+/*
+ * The proposer states of gossip that no work uses go (node.md): each gossip_states entry with a
+ * state, no use and a slot + 2 at most the store's slot, when the actions have room. r12 an entry,
+ * r13 the store's slot, S7 the entries left.
+ */
+LOCAL_FUNCTION node_gossip_shed
+    ENTER 0
+    mov     %rbp, %rdi
+    call    node_store_slot
+    mov     %rax, %r13
+    lea     Node_gossip_states(%rbx), %r12
+    movq    $NODE_GOSSIP_STATES, S7(%rsp)
+1:  cmpq    $0, NodeGossipState_state(%r12)
+    je      2f
+    cmpq    $0, NodeGossipState_uses(%r12)
+    jne     2f
+    mov     NodeGossipState_slot(%r12), %rax
+    add     $2, %rax
+    jc      2f
+    cmp     %r13, %rax
+    ja      2f
+    mov     $32, %edi
+    call    node_room
+    test    %rax, %rax
+    jz      9f
+    mov     $NODE_ACT_STATE_FREE, %edi
+    mov     NodeGossipState_state(%r12), %rsi
+    xor     %edx, %edx
+    call    node_ids
+    xor     %eax, %eax                      # the entry becomes zero
+    mov     %rax, NodeGossipState_state(%r12)
+    mov     %rax, (NodeGossipState_root + 0)(%r12)
+    mov     %rax, (NodeGossipState_root + 8)(%r12)
+    mov     %rax, (NodeGossipState_root + 16)(%r12)
+    mov     %rax, (NodeGossipState_root + 24)(%r12)
+    mov     %rax, NodeGossipState_slot(%r12)
+    mov     %rax, NodeGossipState_uses(%r12)
+2:  add     $NodeGossipState__mem, %r12
+    decq    S7(%rsp)
+    jnz     1b
+9:  LEAVE 0
+END_FUNCTION node_gossip_shed
+
+/*
  * The copy rdi of the state of id rsi, at slot rdx, crosses each fork boundary up to the fork of
  * slot rcx (node.md): for each, a SLOTS work to the next fork's first slot when the copy is before
  * it, a copy of the state rsi as the upgrade's buffer, an UPGRADE work and a STATE_FREE of the copy
@@ -4585,12 +4714,8 @@ LOCAL_FUNCTION node_event
     mov     %rsi, S7(%rsp)
     mov     NodeAction_target(%r12), %rdi
     call    node_validation
-    mov     NodeAction_state_b(%r12), %rsi  # the proposer state
-    test    %rsi, %rsi
-    jz      64f
-    mov     $NODE_ACT_STATE_FREE, %edi
-    xor     %edx, %edx
-    call    node_ids
+    mov     NodeAction_state_b(%r12), %rdi  # the proposer state: 1 use less, or it goes
+    call    node_gossip_state_done
 64: mov     NodeAction_target(%r12), %rdi
     call    node_find_message
     cmp     $-1, %rax
@@ -7993,7 +8118,7 @@ LOCAL_FUNCTION node_message_status
 70: mov     NodeMessage_handle(%r13), %rdi
     call    node_validation
     jmp     80f
-1:  mov     $(NODE_ACT_WORK_SIZE + 32), %edi        # room for the work and a state copy
+1:  mov     $(NODE_ACT_WORK_SIZE + 64), %edi        # room for the work, a state copy and a state free
     call    node_room
     mov     $LIBP2P_IGNORE, %esi
     test    %rax, %rax
@@ -8059,12 +8184,11 @@ LOCAL_FUNCTION node_message_status
     call    node_fork
     cmp     S10(%rsp), %rax
     jne     3f
-    call    node_new_id
+    lea     NodeMessage_parent_root(%r13), %rdi # one proposer state for each parent root and slot
+    mov     NodeMessage_slot(%r13), %rsi
+    mov     S9(%rsp), %rdx
+    call    node_gossip_state
     mov     %rax, S8(%rsp)
-    mov     $NODE_ACT_STATE_COPY, %edi
-    mov     S9(%rsp), %rsi
-    mov     %rax, %rdx
-    call    node_ids
 3:  movq    $0, S9(%rsp)                    # the state of the justified root
     lea     (Store_justified_checkpoint + 8)(%rbp), %rdi
     call    node_find_block
@@ -10389,6 +10513,7 @@ FUNCTION lantern_node_step
     call    node_custody_due                # validator custody's check, each store epoch
     call    node_engine_next
     call    node_shed                       # the post-states the node can rebuild go
+    call    node_gossip_shed                # the proposer states of gossip no work uses go
     call    node_api_head_events            # the head and finalized_checkpoint events, at a quiet point
     call    node_lc_due                     # the light client updates due on gossip
     call    node_produce_due                # the produceBlockV3 entries whose bid is late

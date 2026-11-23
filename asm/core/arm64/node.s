@@ -1122,6 +1122,135 @@ LOCAL_FUNCTION node_shed
 END_FUNCTION node_shed
 
 /*
+ * L1: x0 = the proposer state of a gossip message of the parent root at x0 and the slot x1 (node.md,
+ * NodeGossipState): the state of the gossip_states entry of them, with 1 more use; else, in the
+ * first entry with no use, a STATE_FREE of its state and a copy of the post-state x2 with the root,
+ * the slot and 1 use; else a copy of it for the message alone. x21 the root, x22 the slot, x25 the
+ * post-state, x26 an entry, x27 the entries left, x28 the copy (x23 and x24 are the step's scratch
+ * and actions).
+ */
+LOCAL_FUNCTION node_gossip_state
+    ENTER 0
+    mov     x21, x0
+    mov     x22, x1
+    mov     x25, x2
+    ADDQ    x26, x19, Node_gossip_states    /* the entry of the root and slot */
+    mov     x27, #NODE_GOSSIP_STATES
+1:  ldr     x9, [x26, #NodeGossipState_state]
+    cbz     x9, 2f
+    ldr     x9, [x26, #NodeGossipState_slot]
+    cmp     x9, x22
+    b.ne    2f
+    add     x9, x26, #NodeGossipState_root
+    NE32    x9, x21, 2f
+    ldr     x9, [x26, #NodeGossipState_uses]
+    add     x9, x9, #1
+    str     x9, [x26, #NodeGossipState_uses]
+    ldr     x0, [x26, #NodeGossipState_state]
+    LEAVE 0
+2:  add     x26, x26, #NodeGossipState__mem
+    subs    x27, x27, #1
+    b.ne    1b
+    ADDQ    x26, x19, Node_gossip_states    /* else the first entry with no use */
+    mov     x27, #NODE_GOSSIP_STATES
+3:  ldr     x9, [x26, #NodeGossipState_uses]
+    cbz     x9, 4f
+    add     x26, x26, #NodeGossipState__mem
+    subs    x27, x27, #1
+    b.ne    3b
+    bl      node_new_id                     /* every entry in use: a copy for the message alone */
+    mov     x28, x0
+    mov     x2, x0
+    mov     x0, #NODE_ACT_STATE_COPY
+    mov     x1, x25
+    bl      node_ids
+    mov     x0, x28
+    LEAVE 0
+4:  ldr     x1, [x26, #NodeGossipState_state]   /* its old state goes */
+    cbz     x1, 5f
+    mov     x0, #NODE_ACT_STATE_FREE
+    mov     x2, #0
+    bl      node_ids
+5:  bl      node_new_id
+    str     x0, [x26, #NodeGossipState_state]
+    mov     x2, x0
+    mov     x0, #NODE_ACT_STATE_COPY
+    mov     x1, x25
+    bl      node_ids
+    ldp     x9, x10, [x21]
+    stp     x9, x10, [x26, #NodeGossipState_root]
+    ldp     x9, x10, [x21, #16]
+    stp     x9, x10, [x26, #(NodeGossipState_root + 16)]
+    str     x22, [x26, #NodeGossipState_slot]
+    mov     x9, #1
+    str     x9, [x26, #NodeGossipState_uses]
+    ldr     x0, [x26, #NodeGossipState_state]
+    LEAVE 0
+END_FUNCTION node_gossip_state
+
+/* L1: the end of a GOSSIP work of the proposer state x0 (node.md): its gossip_states entry has 1 use less; a state of no entry goes. */
+LOCAL_FUNCTION node_gossip_state_done
+    ENTER 0
+    cbz     x0, 9f
+    ADDQ    x9, x19, Node_gossip_states
+    mov     x10, #NODE_GOSSIP_STATES
+1:  ldr     x11, [x9, #NodeGossipState_state]
+    cmp     x11, x0
+    b.ne    2f
+    ldr     x11, [x9, #NodeGossipState_uses]
+    cbz     x11, 9f
+    sub     x11, x11, #1
+    str     x11, [x9, #NodeGossipState_uses]
+    b       9f
+2:  add     x9, x9, #NodeGossipState__mem
+    subs    x10, x10, #1
+    b.ne    1b
+    mov     x1, x0
+    mov     x0, #NODE_ACT_STATE_FREE
+    mov     x2, #0
+    bl      node_ids
+9:  LEAVE 0
+END_FUNCTION node_gossip_state_done
+
+/*
+ * L1: the proposer states of gossip that no work uses go (node.md): each gossip_states entry with a
+ * state, no use and a slot + 2 at most the store's slot, when the actions have room. x21 an entry,
+ * x22 the store's slot, x25 the entries left.
+ */
+LOCAL_FUNCTION node_gossip_shed
+    ENTER 0
+    mov     x0, x20
+    bl      node_store_slot
+    mov     x22, x0
+    ADDQ    x21, x19, Node_gossip_states
+    mov     x25, #NODE_GOSSIP_STATES
+1:  ldr     x9, [x21, #NodeGossipState_state]
+    cbz     x9, 2f
+    ldr     x9, [x21, #NodeGossipState_uses]
+    cbnz    x9, 2f
+    ldr     x9, [x21, #NodeGossipState_slot]
+    adds    x9, x9, #2
+    b.cs    2f
+    cmp     x9, x22
+    b.hi    2f
+    mov     x0, #32
+    bl      node_room
+    cbz     x0, 9f
+    mov     x0, #NODE_ACT_STATE_FREE
+    ldr     x1, [x21, #NodeGossipState_state]
+    mov     x2, #0
+    bl      node_ids
+    stp     xzr, xzr, [x21]                 /* the entry becomes zero */
+    stp     xzr, xzr, [x21, #16]
+    stp     xzr, xzr, [x21, #32]
+    str     xzr, [x21, #48]
+2:  add     x21, x21, #NodeGossipState__mem
+    subs    x25, x25, #1
+    b.ne    1b
+9:  LEAVE 0
+END_FUNCTION node_gossip_shed
+
+/*
  * L0: the copy x0 of the state of id x1, at slot x2, crosses each fork boundary up to the fork of
  * slot x3 (node.md): for each, a SLOTS work to the next fork's first slot when the copy is before
  * it, a copy of the state x1 as the upgrade's buffer, an UPGRADE work and a STATE_FREE of the copy
@@ -4632,11 +4761,8 @@ LOCAL_FUNCTION node_event
     ldr     x0, [x21, #NodeAction_target]
     mov     x1, x25
     bl      node_validation
-    ldr     x1, [x21, #NodeAction_state_b]     /* the proposer state */
-    cbz     x1, 64f
-    mov     x0, #NODE_ACT_STATE_FREE
-    mov     x2, #0
-    bl      node_ids
+    ldr     x0, [x21, #NodeAction_state_b]     /* the proposer state: 1 use less, or it goes */
+    bl      node_gossip_state_done
 64: ldr     x0, [x21, #NodeAction_target]
     bl      node_find_message
     cmn     x0, #1
@@ -7923,7 +8049,7 @@ LOCAL_FUNCTION node_message_status
 70: ldr     x0, [x22, #NodeMessage_handle]
     bl      node_validation
     b       80f
-1:  mov     x0, #(NODE_ACT_WORK_SIZE + 32)  /* room for the work and a state copy */
+1:  mov     x0, #(NODE_ACT_WORK_SIZE + 64)  /* room for the work, a state copy and a state free */
     bl      node_room
     mov     x1, #LIBP2P_IGNORE
     cbz     x0, 70b
@@ -7988,12 +8114,11 @@ LOCAL_FUNCTION node_message_status
     bl      node_fork
     cmp     x0, x28
     b.ne    3f
-    bl      node_new_id
+    add     x0, x22, #NodeMessage_parent_root   /* one proposer state for each parent root and slot */
+    ldr     x1, [x22, #NodeMessage_slot]
+    mov     x2, x27
+    bl      node_gossip_state
     mov     x26, x0
-    mov     x0, #NODE_ACT_STATE_COPY
-    mov     x1, x27
-    mov     x2, x26
-    bl      node_ids
 3:  mov     x27, #0                         /* the state of the justified root */
     add     x0, x20, #(Store_justified_checkpoint + 8)
     bl      node_find_block
@@ -10325,6 +10450,7 @@ FUNCTION lantern_node_step
     bl      node_custody_due                /* validator custody's check, each store epoch */
     bl      node_engine_next
     bl      node_shed                       /* the post-states the node can rebuild go */
+    bl      node_gossip_shed                /* the proposer states of gossip no work uses go */
     bl      node_api_head_events            /* the head and finalized_checkpoint events, at a quiet point */
     bl      node_lc_due                     /* the light client updates due on gossip */
     bl      node_produce_due                /* the produceBlockV3 entries whose bid is late */
