@@ -1837,7 +1837,7 @@ LOCAL_FUNCTION app_db_start
     cmp     x9, #16
     b.ne    8f
     ldr     x10, [x27, #(AppDb_op + 8)]
-    ldp     x11, x12, [x10]
+    ldp     x11, x12, [x10, #24]            /* the file's bytes, after the ByteList's 24 */
     ADDQ    x13, x19, APP_ANCHOR
     stp     x11, x12, [x13, #NodeAnchor_custody_count]
     stp     x11, x12, [x27, #AppDb_custody]

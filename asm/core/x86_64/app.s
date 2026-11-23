@@ -1965,11 +1965,11 @@ LOCAL_FUNCTION app_db_start
     jne     9f
     cmpq    $16, (AppDb_op + 16)(%r15)
     jne     8f
-    mov     (AppDb_op + 8)(%r15), %rcx
-    mov     (%rcx), %rax
+    mov     (AppDb_op + 8)(%r15), %rcx      # the file's bytes, after the ByteList's 24
+    mov     24(%rcx), %rax
     mov     %rax, (APP_ANCHOR + NodeAnchor_custody_count)(%rbx)
     mov     %rax, AppDb_custody(%r15)
-    mov     8(%rcx), %rax
+    mov     32(%rcx), %rax
     mov     %rax, (APP_ANCHOR + NodeAnchor_custody_slot)(%rbx)
     mov     %rax, (AppDb_custody + 8)(%r15)
 8:  lea     (AppDb_op + 8)(%r15), %rdi

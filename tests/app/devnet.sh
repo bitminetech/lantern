@@ -12,7 +12,7 @@
 # log level (default info). LOG_DIR: a folder for the full logs of lantern and the other services. LANTERN_MAX_CPU: lantern's CPU limit in millicores (default no limit).
 # LANTERN_DELAY: seconds before lantern starts (default 0). RESTART=1: 6-second slots, lantern with
 # --data-dir /data --archive; after it follows, once its log shows finalized epoch 2 or later, lantern stops and
-# starts again, and must log "restart at slot" and follow again; DOWNTIME: the seconds it stays stopped
+# starts again, and must log "restart at slot", follow again and keep its custody group count; DOWNTIME: the seconds it stays stopped
 # (default 0). CHECKPOINT=1: 6-second slots, lantern
 # with --data-dir /data --archive (the backfill keeps its blocks there) starts from the client's finalized block
 # and its post-state, must log "checkpoint at slot", and its
@@ -327,6 +327,17 @@ while [ $waited -lt "$secs" ]; do
 done
 [ $status -eq 0 ] || { echo "FAIL lantern does not reach finalized epoch 2"; exit 1; }
 sleep 12
+# From fulu: lantern's custody group count (getNetworkIdentity), or nothing.
+custody() {
+    curl -s --max-time 3 "$lantern/eth/v1/node/identity" | python3 -c '
+import json, sys
+try:
+    print(json.load(sys.stdin)["data"]["metadata"]["custody_group_count"])
+except Exception:
+    pass'
+}
+custody_before=$(custody)
+echo "lantern custody group count before the stop: ${custody_before:-none}"
 $kurtosis service stop $enclave lantern
 sleep "${DOWNTIME:-0}"
 $kurtosis service start $enclave lantern
@@ -343,4 +354,10 @@ while [ $waited -lt "$secs" ]; do
 done
 log | grep "restart at slot\|cannot write\|status" | head -10 || true
 if [ $status -eq 0 ]; then echo "PASS lantern restarts from its history after ${DOWNTIME:-0} s down and follows again"; else echo "FAIL lantern does not restart from its history and follow"; fi
+# The custody group count of custody.bin: the one before the stop.
+if [ $status -eq 0 ] && [ -n "$custody_before" ]; then
+    custody_after=$(custody)
+    echo "lantern custody group count after the restart: ${custody_after:-none}"
+    if [ "$custody_after" = "$custody_before" ]; then echo "PASS lantern keeps its custody group count across the restart"; else echo "FAIL lantern's custody group count changes across the restart"; status=1; fi
+fi
 exit $status

@@ -1933,8 +1933,8 @@ LOCAL_FUNCTION app_db_start
     li      t1, 16
     bne     t0, t1, 8f
     ld      t2, (AppDb_op + 8)(s10)
-    ld      t3, 0(t2)
-    ld      t4, 8(t2)
+    ld      t3, 24(t2)                      # the file's bytes, after the ByteList's 24
+    ld      t4, 32(t2)
     STQ     t3, s1, (APP_ANCHOR + NodeAnchor_custody_count)
     STQ     t4, s1, (APP_ANCHOR + NodeAnchor_custody_slot)
     sd      t3, AppDb_custody(s10)
