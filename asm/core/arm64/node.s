@@ -294,6 +294,8 @@ FUNCTION lantern_node_init
     STQ     x10, x24, Node_custody_count
     ldr     x12, [x21, #NodeAnchor_custody_slot]
     STQ     x12, x24, Node_custody_slot
+    mov     x12, #1                         /* the head is due at the first step */
+    STQ     x12, x24, Node_head_due
     LDQ     x9, x20, CONFIG_SAMPLES_PER_SLOT  /* the columns: of max(SAMPLES_PER_SLOT, the custody group count) groups */
     cmp     x9, x10
     csel    x1, x9, x10, hs
@@ -2003,6 +2005,8 @@ LOCAL_FUNCTION node_prune
     mov     x0, x20
     mov     x1, x23
     bl      lantern_store_prune
+    mov     x9, #1                          /* the store changed: the head is due */
+    STQ     x9, x19, Node_head_due
     cbnz    x0, 99f
     ldr     x9, [x20, #Store_finalized_checkpoint]
     str     x9, [x19, #Node_pruned_epoch]
@@ -4094,6 +4098,8 @@ LOCAL_FUNCTION node_lvh
     add     x2, sp, #(L + 8)
     add     x3, sp, #(L + 16)
     bl      lantern_store_payload_status
+    mov     x9, #1                          /* the store changed: the head is due */
+    STQ     x9, x19, Node_head_due
     PART    x9, x10, x20, Store_blocks
     mov     x11, #BlockNode__mem
     madd    x9, x21, x11, x9
@@ -4109,6 +4115,8 @@ LOCAL_FUNCTION node_lvh
     add     x2, sp, #(L + 8)
     add     x3, sp, #(L + 16)
     bl      lantern_store_payload_status
+    mov     x9, #1                          /* the store changed: the head is due */
+    STQ     x9, x19, Node_head_due
 9:  LEAVE 32
 END_FUNCTION node_lvh
 
@@ -4271,6 +4279,8 @@ LOCAL_FUNCTION node_engine_read
     add     x2, sp, #(L + 152)
     add     x3, sp, #(L + 16)
     bl      lantern_store_payload_status
+    mov     x9, #1                          /* the store changed: the head is due */
+    STQ     x9, x19, Node_head_due
     b       9f
 41: cmp     x9, #ENGINE_STATUS_INVALID
     ccmp    x9, #ENGINE_STATUS_INVALID_BLOCK_HASH, #4, ne
@@ -4326,6 +4336,13 @@ LOCAL_FUNCTION node_head
     ENTER 16
     mov     x0, x20
     bl      node_store_slot
+    LDQ     x9, x19, Node_head_due          /* only when the store changed: a work wrote it, or a new slot */
+    cbnz    x9, 11f
+    LDQ     x9, x19, Node_head_slot
+    cmp     x9, x0
+    b.eq    9f
+11: STQ     xzr, x19, Node_head_due
+    STQ     x0, x19, Node_head_slot
     add     x1, x19, #Node_config
     bl      node_fork
     mov     x15, x0
@@ -4333,12 +4350,14 @@ LOCAL_FUNCTION node_head
     mov     x1, x23
     add     x2, sp, #L
     FORK_CALL get_head
+    cbz     x0, 1f
+    mov     x9, #1                          /* no head: again at the next step */
+    STQ     x9, x19, Node_head_due
     cmp     x0, #LANTERN_NEED_JUSTIFIED_STATE
-    b.ne    1f
+    b.ne    9f
     bl      node_justified
     LEAVE 16
-1:  cbnz    x0, 9f
-    ldr     x9, [sp, #L]
+1:  ldr     x9, [sp, #L]
     PART    x10, x11, x20, Store_blocks
     cmp     x9, x11
     b.hs    9f
@@ -4559,6 +4578,14 @@ LOCAL_FUNCTION node_event
     bl      node_api_closed
     LEAVE 48
 50: ldr     x9, [x21, #NodeAction_work_kind]    /* WORK_DONE */
+    cmp     x9, #63                         /* a work that writes the store: the head is due */
+    b.hi    503f
+    MOVQ    x10, NODE_HEAD_WORKS
+    lsr     x10, x10, x9
+    tbz     x10, #0, 503f
+    mov     x10, #1
+    STQ     x10, x19, Node_head_due
+503:
     cmp     x9, #NODE_WORK_BLOCK_ATTESTATION     /* a block's vote done: event_votes takes 1 off */
     ccmp    x9, #NODE_WORK_BLOCK_SLASHING, #4, ne
     b.ne    501f

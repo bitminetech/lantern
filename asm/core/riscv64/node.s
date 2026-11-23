@@ -313,6 +313,8 @@ FUNCTION lantern_node_init
 13: STQ     t1, s6, Node_custody_count
     ld      t2, NodeAnchor_custody_slot(s3)
     STQ     t2, s6, Node_custody_slot
+    li      t2, 1                           # the head is due at the first step
+    STQ     t2, s6, Node_head_due
     LDQ     t0, s2, CONFIG_SAMPLES_PER_SLOT # the columns: of max(SAMPLES_PER_SLOT, the custody group count) groups
 1:  mv      a1, t0
     bgeu    t0, t1, 2f
@@ -2036,6 +2038,8 @@ LOCAL_FUNCTION node_lvh
     addi    a2, sp, L + 8
     addi    a3, sp, L + 16
     call    lantern_store_payload_status
+    li      t0, 1                           # the store changed: the head is due
+    STQ     t0, s1, Node_head_due
     PART    t0, t1, s2, Store_blocks
     li      t1, BlockNode__mem
     mul     t1, s3, t1
@@ -2052,6 +2056,8 @@ LOCAL_FUNCTION node_lvh
     addi    a2, sp, L + 8
     addi    a3, sp, L + 16
     call    lantern_store_payload_status
+    li      t0, 1                           # the store changed: the head is due
+    STQ     t0, s1, Node_head_due
 9:  LEAVE 32
 END_FUNCTION node_lvh
 
@@ -2228,6 +2234,8 @@ LOCAL_FUNCTION node_engine_read
     addi    a2, sp, L + 152
     addi    a3, sp, L + 16
     call    lantern_store_payload_status
+    li      t0, 1                           # the store changed: the head is due
+    STQ     t0, s1, Node_head_due
     j       9f
 41: li      t0, ENGINE_STATUS_INVALID
     beq     s10, t0, 42f
@@ -2392,6 +2400,8 @@ LOCAL_FUNCTION node_prune
     mv      a0, s2
     mv      a1, s5
     call    lantern_store_prune
+    li      t0, 1                           # the store changed: the head is due
+    STQ     t0, s1, Node_head_due
     bnez    a0, 99f
     ld      t0, Store_finalized_checkpoint(s2)
     sd      t0, Node_pruned_epoch(s1)
@@ -4284,6 +4294,12 @@ LOCAL_FUNCTION node_head
     ENTER 16
     mv      a0, s2
     call    node_store_slot
+    LDQ     t0, s1, Node_head_due           # only when the store changed: a work wrote it, or a new slot
+    bnez    t0, 11f
+    LDQ     t0, s1, Node_head_slot
+    beq     t0, a0, 9f
+11: STQ     zero, s1, Node_head_due
+    STQ     a0, s1, Node_head_slot
     addi    a1, s1, Node_config
     call    node_fork
     mv      t6, a0
@@ -4291,12 +4307,14 @@ LOCAL_FUNCTION node_head
     mv      a1, s5
     addi    a2, sp, L
     FORK_CALL get_head
+    beqz    a0, 1f
+    li      t0, 1                           # no head: again at the next step
+    STQ     t0, s1, Node_head_due
     li      t0, LANTERN_NEED_JUSTIFIED_STATE
-    bne     a0, t0, 1f
+    bne     a0, t0, 9f
     call    node_justified
     LEAVE 16
-1:  bnez    a0, 9f
-    ld      t0, L(sp)
+1:  ld      t0, L(sp)
     PART    t1, t2, s2, Store_blocks
     bgeu    t0, t2, 9f
     li      t2, BlockNode__mem
@@ -4508,6 +4526,15 @@ LOCAL_FUNCTION node_event
     call    node_api_closed
     LEAVE 48
 50: ld      t0, NodeAction_work_kind(s3)    # WORK_DONE
+    li      t2, 63                          # a work that writes the store: the head is due
+    bltu    t2, t0, 503f
+    li      t2, NODE_HEAD_WORKS
+    srl     t2, t2, t0
+    andi    t2, t2, 1
+    beqz    t2, 503f
+    li      t2, 1
+    STQ     t2, s1, Node_head_due
+503:
     li      t2, NODE_WORK_BLOCK_ATTESTATION     # a block's vote done: event_votes takes 1 off
     beq     t0, t2, 501f
     li      t2, NODE_WORK_BLOCK_SLASHING

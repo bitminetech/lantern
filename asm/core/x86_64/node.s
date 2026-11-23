@@ -290,6 +290,7 @@ FUNCTION lantern_node_init
     mov     %rax, Node_custody_count(%r15)
     mov     NodeAnchor_custody_slot(%r12), %rcx
     mov     %rcx, Node_custody_slot(%r15)
+    movq    $1, Node_head_due(%r15)         # the head is due at the first step
     mov     CONFIG_SAMPLES_PER_SLOT(%rbp), %rsi  # the columns: of max(SAMPLES_PER_SLOT, the custody group count) groups
     cmp     %rax, %rsi
     cmovb   %rax, %rsi
@@ -1995,6 +1996,7 @@ LOCAL_FUNCTION node_lvh
     lea     (L + 8)(%rsp), %rdx
     lea     (L + 16)(%rsp), %rcx
     call    lantern_store_payload_status
+    movq    $1, Node_head_due(%rbx)         # the store changed: the head is due
     imul    $BlockNode__mem, %r12, %rax
     add     Store_blocks(%rbp), %rax
     mov     BlockNode_parent(%rbp,%rax), %r12
@@ -2009,6 +2011,7 @@ LOCAL_FUNCTION node_lvh
     lea     (L + 8)(%rsp), %rdx
     lea     (L + 16)(%rsp), %rcx
     call    lantern_store_payload_status
+    movq    $1, Node_head_due(%rbx)         # the store changed: the head is due
 9:  LEAVE 32
 END_FUNCTION node_lvh
 
@@ -2191,6 +2194,7 @@ LOCAL_FUNCTION node_engine_read
     lea     (L + 152)(%rsp), %rdx
     lea     (L + 16)(%rsp), %rcx
     call    lantern_store_payload_status
+    movq    $1, Node_head_due(%rbx)         # the store changed: the head is due
     jmp     9f
 41: cmp     $ENGINE_STATUS_INVALID, %rcx
     je      42f
@@ -2350,6 +2354,7 @@ LOCAL_FUNCTION node_prune
     mov     %rbp, %rdi
     mov     %r14, %rsi
     call    lantern_store_prune
+    movq    $1, Node_head_due(%rbx)         # the store changed: the head is due
     test    %rax, %rax
     jnz     99f
     mov     Store_finalized_checkpoint(%rbp), %rax
@@ -4289,6 +4294,12 @@ LOCAL_FUNCTION node_head
     ENTER 16
     mov     %rbp, %rdi
     call    node_store_slot
+    cmpq    $0, Node_head_due(%rbx)         # only when the store changed: a work wrote it, or a new slot
+    jne     11f
+    cmp     Node_head_slot(%rbx), %rax
+    je      9f
+11: movq    $0, Node_head_due(%rbx)
+    mov     %rax, Node_head_slot(%rbx)
     mov     %rax, %rdi
     lea     Node_config(%rbx), %rsi
     call    node_fork
@@ -4297,13 +4308,14 @@ LOCAL_FUNCTION node_head
     mov     %r14, %rsi
     lea     L(%rsp), %rdx
     FORK_CALL get_head
+    test    %rax, %rax
+    jz      1f
+    movq    $1, Node_head_due(%rbx)         # no head: again at the next step
     cmp     $LANTERN_NEED_JUSTIFIED_STATE, %rax
-    jne     1f
+    jne     9f
     call    node_justified
     LEAVE 16
-1:  test    %rax, %rax
-    jnz     9f
-    mov     L(%rsp), %rax
+1:  mov     L(%rsp), %rax
     PART    %rcx, %rdx, %rbp, Store_blocks
     cmp     %rdx, %rax
     jae     9f
@@ -4509,7 +4521,13 @@ LOCAL_FUNCTION node_event
     call    node_api_closed
     LEAVE 48
 50: mov     NodeAction_work_kind(%r12), %rax        # WORK_DONE
-    cmp     $NODE_WORK_BLOCK_ATTESTATION, %rax  # a block's vote done: event_votes takes 1 off
+    cmp     $63, %rax                       # a work that writes the store: the head is due
+    ja      503f
+    mov     $NODE_HEAD_WORKS, %ecx
+    bt      %rax, %rcx
+    jnc     503f
+    movq    $1, Node_head_due(%rbx)
+503: cmp    $NODE_WORK_BLOCK_ATTESTATION, %rax  # a block's vote done: event_votes takes 1 off
     je      501f
     cmp     $NODE_WORK_BLOCK_SLASHING, %rax
     jne     502f

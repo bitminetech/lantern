@@ -3072,6 +3072,11 @@ static shell_buf *shell_find(struct node_shell *s, uint64_t id) {
 static struct { const struct node_shell *s; uint8_t key[40]; uint64_t id; } gshare[256];
 static int ngshare;
 static unsigned long gshare_works, gshare_states;
+
+/* node.md, the head: with head_due 0 and the store's slot at head_slot, the store has not changed
+ * since the node's last get_head, so its head_root is get_head of the store. */
+#define NODE_HEAD_DUE (728 + CONFIG_SIZE + 936 + 1992 + 8 * (4 + 64)) /* include/lantern.inc: Node_head_due, then head_slot */
+static unsigned long head_due_checks;
 static void gshare_forget(const struct node_shell *s) { /* a new shell at the address of an old one */
     for (int i = 0; i < ngshare; i++)
         if (gshare[i].s == s) gshare[i].s = NULL;
@@ -3233,6 +3238,17 @@ static uint64_t shell_head(fc_node *n, const char **why) {
         if (!memcmp(node_at(n, i), n->shell->node + NODE_HEAD_ROOT, 32)) return i;
     *why = "the node's head is not in the store";
     return 0;
+}
+
+static void head_due_check(fc_node *n, const char **why) {
+    const uint8_t *node = n->shell->node;
+    if (rd64(node + NODE_HEAD_DUE)) return;
+    uint64_t now = rd64(n->store + STORE_TIME_MS), g = rd64(n->store + STORE_GENESIS_TIME_MS), d = rd64(n->store + STORE_CONFIG + 104);
+    if ((now >= g && d ? (now - g) / d : 0) != rd64(node + NODE_HEAD_DUE + 8)) return; /* a new slot: the next step computes it */
+    uint64_t head = 0;
+    if (CALL(LF(get_head), n->store, fresh_scratch(), &head) != 0 || head >= node_count(n)) return;
+    head_due_checks++;
+    if (memcmp(node_at(n, head), node + NODE_HEAD_ROOT, 32)) *why = "head_due is 0 but the node's head is not get_head of the store";
 }
 
 /* The post-state the node keeps for the block root, or NULL. */
@@ -3581,6 +3597,7 @@ static void shell_step(fc_node *n, const char **why) {
     if (!*why && (!guard_ok(s->node, s->node_size) || !guard_ok(n->store, n->size) || !guard_ok(s->actions, s->actions_size)))
         *why = "lantern_node_step wrote out of bounds";
     if (!*why) shell_parts_check(n->shell, why);
+    if (!*why) head_due_check(n, why);
     if (!*why && !s->net && (count[0] != nevents || count[1] != UINT64_MAX)) *why = "lantern_node_step: result is not the event count";
     if (!*why && count[0] > nevents) *why = "lantern_node_step: more events handled than given";
     if (!*why && count[0] < nevents) { /* the events not handled go again, before the new ones */
@@ -12235,6 +12252,7 @@ int main(int argc, char **argv) {
     if (api_lookups) printf("NOTE: %lu lookups of a block or a state by slot or root\n", api_lookups);
     if (node_replays) printf("NOTE: %lu post-states the nodes rebuilt by replay\n", node_replays);
     if (gshare_works) printf("NOTE: %lu gossip blocks and sidecars checked with %lu proposer states\n", gshare_works, gshare_states);
+    if (head_due_checks) printf("NOTE: %lu node steps whose head was not due matched get_head\n", head_due_checks);
     if (gossip_votes) printf("NOTE: %lu of %lu valid attestations went to fork choice as gossip aggregates\n", gossip_votes_applied, gossip_votes);
     if (drop_ran) printf("NOTE: the sidecar drop check passed\n");
     if (json_types_skipped) printf("NOTE: %lu JSON cases of types lantern does not define\n", json_types_skipped);
