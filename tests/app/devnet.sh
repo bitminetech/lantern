@@ -353,6 +353,9 @@ while [ $waited -lt "$secs" ]; do
     fi
 done
 log | grep "restart at slot\|cannot write\|status" | head -10 || true
+# The anchor of a restart: a block at the first slot of its epoch (32 slots on the mainnet preset).
+rs=$(log | grep -o "restart at slot [0-9]*" | head -1 | grep -o "[0-9]*$" || true)
+if [ -n "$rs" ] && [ $((rs % 32)) -ne 0 ]; then echo "FAIL lantern restarts at slot $rs, not the first slot of an epoch"; status=1; fi
 if [ $status -eq 0 ]; then echo "PASS lantern restarts from its history after ${DOWNTIME:-0} s down and follows again"; else echo "FAIL lantern does not restart from its history and follow"; fi
 # The custody group count of custody.bin: the one before the stop.
 if [ $status -eq 0 ] && [ -n "$custody_before" ]; then

@@ -2643,8 +2643,8 @@ LOCAL_FUNCTION app_db_scan_all
 END_FUNCTION app_db_scan_all
 
 /*
- * L1: NODE_ACT_DB_STATE x0, with no anchor written in this run or one DB_SEGMENT_SLOTS slots
- * back: the open segment files are synced; <dir>/anchor.tmp gets two ByteLists, the second at the
+ * L1: NODE_ACT_DB_STATE x0 of a block at the first slot of its epoch (the anchor of
+ * get_forkchoice_store), with no anchor written in this run or one DB_SEGMENT_SLOTS slots back: the open segment files are synced; <dir>/anchor.tmp gets two ByteLists, the second at the
  * first multiple of 8 after the first: the state's SSZ bytes, then those of its block's message;
  * it is synced and renamed over <dir>/anchor.ssz, and the directory is synced. A failure gives a
  * line on the standard error. x20 the action, x21 the state's entry, x22 the block's entry, x23
@@ -2656,6 +2656,9 @@ LOCAL_FUNCTION app_db_state
     mov     x20, x0
     ADDQ    x27, x19, APP_DB
     mov     x23, #0
+    ldr     x9, [x20, #32]                  /* a block at the first slot of its epoch only */
+    tst     x9, #(SLOTS_PER_EPOCH - 1)
+    b.ne    99f
     ldr     x9, [x27, #AppDb_anchor_slot]
     cmn     x9, #1
     b.eq    1f
