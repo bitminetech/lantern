@@ -5,6 +5,7 @@
 ### Functions
 
 - [`lantern_metrics_text`](#function-lantern_metrics_text): the Prometheus text of the metrics categories.
+- [`lantern_metrics_answer`](#function-lantern_metrics_answer): the HTTP answer to a metrics server's request.
 - [`lantern_metrics_state`](#function-lantern_metrics_state): the head state's values of the metrics.
 - [`lantern_metrics_node`](#function-lantern_metrics_node): the node's and store's values of the metrics.
 
@@ -25,6 +26,8 @@
 - `METRIC_BIT_<CATEGORY>_<SUB>`: the bit of a sub category, by the table of [Categories](#categories); `METRIC_BIT_BEACON` (0) for `beacon`.
 - `METRICS_BEACON`, `METRICS_NETWORK`, `METRICS_PROCESSING`, `METRICS_NODE`: the bits of each category's sub categories.
 - `METRICS_ALL`: the bits of every category.
+- `METRICS_HEAD_MAX` (4096): the longest request head of the metrics server.
+- `METRICS_HEAD_ROOM` (256): the bytes of `out` that lantern_metrics_answer keeps before the text.
 
 ## Spec
 
@@ -54,7 +57,7 @@
 - Each family has a source: the head's post-state (`MetricsState`), the node and the store (`MetricsNode`), the node step's counters (`NodeMetrics`), the app (`AppMetrics`, `MetricsProcess`), gossipsub (`MetricsGossip`) or the function timers (`Profile`).
 - beacon-metrics leaves these out of the `beacon` category, as lantern has no source for them: the fast confirmation metrics (lantern runs no fast confirmation rule), the engine_getBlobsV2 and engine_getBlobsV3 metrics (lantern calls neither), the partial message metrics and `beacon_useful_full_columns_received_total` (lantern sends and takes no partial column messages), `beacon_custody_groups_backfilled` (lantern backfills no custody group after a raise), `beacon_data_column_sidecar_inclusion_proof_verification_seconds` (the inclusion proof check runs inside a larger work, with no run time of its own), `store_beacon_block_cache_hit_total` and `beacon_state_data_cache_misses_total` (lantern has no such caches), and `beacon_attestor_slashing_created_total` (lantern runs no slasher).
 - A root as a number: bytes 24 to 32 of the root as a little-endian signed 64-bit integer (beacon-metrics: `int.from_bytes(root[24:32], byteorder='little', signed=True)`).
-- `lantern_metrics_text` and `lantern_metrics_node` are in the common object of the core (asm/core/<ISA>/metrics.s), and each symbol is its name. `lantern_metrics_state` is in the object of each fork, as `lantern_<fork>_metrics_state`. Every u64 argument is passed by its address.
+- `lantern_metrics_text`, `lantern_metrics_answer` and `lantern_metrics_node` are in the common object of the core (asm/core/<ISA>/metrics.s), and each symbol is its name. `lantern_metrics_state` is in the object of each fork, as `lantern_<fork>_metrics_state`. Every u64 argument is passed by its address.
 
 ## The `beacon` category
 
@@ -165,6 +168,49 @@ lantern_metrics_text(categories, sources, out) -> status
 - Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
 - Argument order: `categories`, `sources`, `out`.
 
+## Function `lantern_metrics_answer`
+
+The HTTP answer to the first request in a metrics server connection's bytes; the connection closes after it.
+
+### Signature
+
+```
+lantern_metrics_answer(bytes, categories, sources, out) -> status
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `bytes` | input | ByteList: the connection's bytes so far |
+| `categories` | input | u64: the bits of the sub categories |
+| `sources` | input | [`MetricsSources`](#type-metricssources) |
+| `out` | output | `ByteList`, its `size` set by the caller |
+
+### Returns
+
+- `LANTERN_OK`: `out` holds the answer.
+- `LANTERN_HTTP_MORE`: `bytes` holds no whole request yet.
+- `LANTERN_BUFFER_TOO_SMALL`: `out` has fewer than 24 + `HTTP_REQUEST_FIXED` + 64 + `METRICS_HEAD_ROOM` + the bytes' length bytes, or, for a 200, fewer than `METRICS_HEAD_ROOM` + 24 + the text's length.
+
+### Function does
+
+- Reads the request with lantern_http_request ([beacon-api.md](beacon-api.md#function-lantern_http_request)), with `head_max` `METRICS_HEAD_MAX` and `body_max` 0, its `HttpRequest` in `out`'s room.
+- The status: the fault's status of `LANTERN_INVALID_HTTP`; else 405 for a method other than GET; else 404 for a `path` other than `/metrics` (the query does not count); else 200.
+- 200: `HTTP/1.1 200 OK`, `Content-Type: text/plain; version=0.0.4; charset=utf-8`, `Content-Length: <n>` and `Connection: close`, each line ending with CRLF, an empty line, then the n bytes of lantern_metrics_text of `categories` and `sources`.
+- Another status: `HTTP/1.1 <status> <reason>` with the reason phrase of the Beacon API's status table, `Allow: GET` for 405, `Content-Length: 0` and `Connection: close`, then the empty line.
+
+### Function never
+
+- Writes past `out`'s `size`.
+
+### ABI
+
+- Role: L1.
+- Symbol: `lantern_metrics_answer` (`_lantern_metrics_answer` on macOS).
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- Argument order: `bytes`, `categories`, `sources`, `out`.
+
 ## Function `lantern_metrics_state`
 
 The values of the metrics from a head's post-state and its block, of one fork.
@@ -235,9 +281,9 @@ lantern_metrics_node(node, store, out) -> status
 - `peers`: the entries of the peers part.
 - `fulu`: 1 when the fork of the store's slot is fulu or later; then `custody_groups`: the node's `custody_count`.
 - `pending_exits`: the pool's entries of voluntary_exit.
-- `local_validators`: the `NodeProposer` entries in use: the validators whose validator client gave this node prepareBeaconProposer (Prysm's tracked validators).
-- `orphaned_blocks`: the imported blocks of the node with a slot in the store's previous epoch that are not ancestors of the head: by `parent_root` from the head, no block of the chain has their root.
-- `sync_state`: 1 when the head's slot is the store's slot or one below; else 2 with `NODE_FLAG_SYNCING`; else 0.
+- `local_validators`: the `NodeProposer` entries whose `until_epoch` is above the store's epoch: the validators whose validator client gave this node prepareBeaconProposer and still holds (Prysm's tracked validators).
+- `orphaned_blocks`: the blocks of the node with status `NODE_BLOCK_IMPORTED` and a slot in the store's previous epoch (get_previous_epoch: one less than the store's, not below 0) that are not on the head's chain: the head and its ancestors by `parent_root`, up to the first one below that epoch, the first root the node holds no block of, or 2 × `SLOTS_PER_EPOCH` blocks.
+- `sync_state`: 1 when the head's slot + 1 is at least the store's slot; else 2 with `NODE_FLAG_SYNCING`; else 0. With no block of `head_root` the head's slot counts as 0.
 - `head_block_id` and `head_state_id`: the `data_id` and `state_id` of the `NodeBlock` of the node's `head_root`; 0 and 0 with none. The caller gives their buffers to lantern_<fork>_metrics_state.
 
 ### ABI
@@ -425,8 +471,9 @@ The tick rate and the tick bounds of the function timers. The core reads the CPU
 ## Test vectors
 
 - Lantern's cases `<preset>-<fork>-metrics-text.bin`, made by tests/generator/metrics.py: values of each type and the text an independent Python formatter of the rules above gives; with no category, one category and all; with `present`, `electra`, `fulu`, `state_root_present` and `max_fds` 0 and 1; with sources not given; with tick rates of 24 MHz, 1 GHz and 2.4 GHz.
+- Lantern's cases `<preset>-phase0-metrics-answer.bin`, made by tests/generator/metrics.py: requests written out with the status each must give (GET of `/metrics` with a query, from Prometheus, over HTTP/1.0, after empty lines, two at once; other paths and methods; no Host, HTTP/2.0, a body, a transfer coding, a head past `METRICS_HEAD_MAX`; part of a head and no bytes) over the sources of the text cases; the runner gives the exact room and one byte less.
 - Lantern's cases `<preset>-<fork>-metrics-state.bin`, made by tests/generator/metrics.py with the pinned spec: states of the fork's `BeaconState` with 0 to 300 validators whose epochs lie about the state's epoch (some out of order), random participation flags, checkpoints, deposit counts and pending lists, each with no block, 179 bytes and a `SignedBeaconBlock`; and the values the spec's functions give (get_current_epoch, get_previous_epoch, is_active_validator, get_active_validator_indices).
-- `lantern_metrics_node`: node-mode fork_choice cases (node.md, Test vectors), after their steps: the node's peers, pool and blocks against the runner's counts.
+- `lantern_metrics_node`: after each step of the node-mode runs (node.md, Test vectors), its values against the runner's own reading of the node's and the store's bytes by the rules above.
 
 ## Results
 

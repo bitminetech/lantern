@@ -264,3 +264,5 @@
 .set METRIC_BOUNDS_DELAY, 2
 .set METRIC_BOUNDS_TICKS, 3
 .set METRIC_COUNT, 46
+.set METRICS_HEAD_MAX, 4096                 /* lantern_metrics_answer: HttpLimits head_max */
+.set METRICS_HEAD_ROOM, 256                 /* out bytes before the text's ByteList */

@@ -450,6 +450,63 @@ def text_cases(beacon_metrics):
         yield name, parts
 
 
+# ---------------------------------------------------------------- lantern_metrics_answer
+
+OK_HEAD = "200 OK\r\nContent-Type: text/plain; version=0.0.4; charset=utf-8\r\nContent-Length: "
+CLOSE = "\r\nConnection: close\r\n\r\n"
+REASONS = {400: "Bad Request", 404: "Not Found", 405: "Method Not Allowed", 413: "Content Too Large",
+           431: "Request Header Fields Too Large", 501: "Not Implemented", 505: "HTTP Version Not Supported"}
+ANSWER_MORE = 53  # LANTERN_HTTP_MORE
+
+
+def answer(status, body):
+    """The answer of docs/reference/metrics.md, lantern_metrics_answer: its head, then the text for 200."""
+    if status == 200:
+        return f"HTTP/1.1 {OK_HEAD}{len(body)}{CLOSE}".encode() + body
+    allow = "Allow: GET\r\n" if status == 405 else ""
+    return f"HTTP/1.1 {status} {REASONS[status]}\r\n{allow}Content-Length: 0{CLOSE}".encode()
+
+
+def answer_cases(beacon_metrics):
+    """Requests (the status each must give written out here) over the sources of a text case."""
+    cases = dict(text_cases(beacon_metrics))
+    parts0, parts1 = cases["every_metric"], cases["beacon_only"]
+    get = b"GET /metrics HTTP/1.1\r\nHost: 127.0.0.1:8008\r\n\r\n"
+    prom = (b"GET /metrics HTTP/1.1\r\nHost: 10.0.0.2:8008\r\nUser-Agent: Prometheus/3.5.0\r\n"
+            b"Accept: application/openmetrics-text;version=1.0.0;q=0.5,text/plain;version=0.0.4;q=0.4,*/*;q=0.1\r\n"
+            b"Accept-Encoding: gzip\r\nX-Prometheus-Scrape-Timeout-Seconds: 10\r\n\r\n")
+    reqs = [  # name, request, status (0 for LANTERN_HTTP_MORE), sources
+        ("get", get, 200, parts0),
+        ("prometheus", prom, 200, parts0),
+        ("beacon_only", get, 200, parts1),
+        ("query", b"GET /metrics?x=1 HTTP/1.1\r\nHost: h\r\n\r\n", 200, parts0),
+        ("http_1_0", b"GET /metrics HTTP/1.0\r\n\r\n", 200, parts0),
+        ("empty_lines_first", b"\r\n\r\nGET /metrics HTTP/1.1\r\nHost: h\r\n\r\n", 200, parts0),
+        ("two_requests", get + get, 200, parts0),
+        ("no_category", get, 200, dict(parts0, categories=0)),
+        ("root", b"GET / HTTP/1.1\r\nHost: h\r\n\r\n", 404, parts0),
+        ("shorter_path", b"GET /metric HTTP/1.1\r\nHost: h\r\n\r\n", 404, parts0),
+        ("longer_path", b"GET /metricsx HTTP/1.1\r\nHost: h\r\n\r\n", 404, parts0),
+        ("upper_path", b"GET /Metrics HTTP/1.1\r\nHost: h\r\n\r\n", 404, parts0),
+        ("post", b"POST /metrics HTTP/1.1\r\nHost: h\r\nContent-Length: 0\r\n\r\n", 405, parts0),
+        ("head", b"HEAD /metrics HTTP/1.1\r\nHost: h\r\n\r\n", 405, parts0),
+        ("no_host", b"GET /metrics HTTP/1.1\r\n\r\n", 400, parts0),
+        ("version_2", b"GET /metrics HTTP/2.0\r\nHost: h\r\n\r\n", 505, parts0),
+        ("body", b"POST /metrics HTTP/1.1\r\nHost: h\r\nContent-Length: 5\r\n\r\nhello", 413, parts0),
+        ("coding", b"GET /metrics HTTP/1.1\r\nHost: h\r\nTransfer-Encoding: gzip\r\n\r\n", 501, parts0),
+        ("head_too_long", b"GET /metrics HTTP/1.1\r\nHost: h\r\nX-Pad: " + b"a" * 4096, 431, parts0),
+        ("part_of_a_head", get[:-2], 0, parts0),
+        ("no_bytes", b"", 0, parts0),
+    ]
+    for name, req, status, parts in reqs:
+        out = dict((k, v) for k, v in parts.items() if k != "text")
+        out["bytes"] = req
+        out["status"] = 0 if status else ANSWER_MORE
+        body = parts["text"] if parts["categories"] else b""
+        out["answer"] = answer(status, body) if status else b""
+        yield name, out
+
+
 # ---------------------------------------------------------------- lantern_<fork>_metrics_state
 
 FORKS = ("phase0", "altair", "bellatrix", "capella", "deneb", "electra", "fulu")
@@ -549,7 +606,7 @@ def state_cases(fork, preset):
 # ---------------------------------------------------------------- The include files
 
 def asm_string(s):
-    return s.replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n")
+    return s.replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n").replace("\r", "\\r")
 
 
 def write_metrics_inc(path):
@@ -607,6 +664,8 @@ def write_metrics_inc(path):
     for i, b in enumerate(BOUND_ORDER):
         out.append(f".set METRIC_BOUNDS_{b.upper()}, {i}")
     out.append(f".set METRIC_COUNT, {len(FAMILIES)}")
+    out.append(".set METRICS_HEAD_MAX, 4096                 /* lantern_metrics_answer: HttpLimits head_max */")
+    out.append(".set METRICS_HEAD_ROOM, 256                 /* out bytes before the text's ByteList */")
     pathlib.Path(path).write_text("\n".join(out) + "\n")
 
 
@@ -646,7 +705,9 @@ def write_table_inc(path, beacon_metrics):
              "mx_histogram": " histogram\n", "mx_bucket": "_bucket", "mx_sum": "_sum", "mx_count": "_count",
              "mx_inf": "+Inf", "mx_le": "le", "mx_sp": " ", "mx_lf": "\n", "mx_lbrace": "{", "mx_rbrace": "}",
              "mx_comma": ",", "mx_eq": "=\"", "mx_quote": "\"", "mx_topic": "topic",
-             "mx_partial": "partial", "mx_supports": "supports_partial", "mx_false": "false", "mx_true": "true"}
+             "mx_partial": "partial", "mx_supports": "supports_partial", "mx_false": "false", "mx_true": "true",
+             "mx_http": "HTTP/1.1 ", "mx_ok_head": OK_HEAD, "mx_close": CLOSE, "mx_crlf": "\r\n",
+             "mx_allow": "Allow: GET\r\n", "mx_len0": "Content-Length: 0" + CLOSE, "mx_path": "/metrics"}
     out.append("metrics_texts:")
     for lab, s in texts:
         out.append(f"{lab}:")

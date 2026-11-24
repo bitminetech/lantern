@@ -313,6 +313,10 @@ def main():
             count, digest = write_file(out / file, list(metrics.text_cases(os.environ["BEACON_METRICS"])))
             manifest.append((file, count, digest))
             print(f"{file}: {count} cases")
+            file = f"{preset}-phase0-metrics-answer.bin"
+            count, digest = write_file(out / file, list(metrics.answer_cases(os.environ["BEACON_METRICS"])))
+            manifest.append((file, count, digest))
+            print(f"{file}: {count} cases")
         if preset == "minimal" and "phase0" in forks and (not runners or "app" in runners):
             # The network directory of the binary's start tests (tests/app/start.sh, start.ps1).
             subprocess.run([sys.executable, str(pathlib.Path(__file__).resolve().parents[1] / "app" / "network.py"),

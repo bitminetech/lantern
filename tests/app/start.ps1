@@ -2,7 +2,8 @@
 # faulty option gives exit code 1 and its line, with today's UTC date; a network directory with no config.yaml gives
 # exit code 2 and a "cannot read" line.
 # With NETWORK, the binary runs on that network directory with --http-max-connections 2,
-# tests/app/api.py checks its Beacon API's connections, and tests/app/burst.py gives discv5 a step of far
+# tests/app/api.py checks its Beacon API's connections, tests/app/metrics.py its metrics server (on
+# --metrics-port 18008), and tests/app/burst.py gives discv5 a step of far
 # more than 64 datagrams, after which the log holds no discv5 status line.
 # Usage: tests/app/start.ps1 BINARY [NETWORK]
 param([string]$Binary, [string]$Network = '')
@@ -17,8 +18,10 @@ Write-Output $out
 if ($code -eq 2 -and $out -match '^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d{3} ERROR cannot read C:\\nonexistent/config\.yaml: error ') { Write-Output 'PASS a missing network directory' } else { Write-Output "FAIL a missing network directory: exit $code"; $fail = 1 }
 if ($Network -ne '') {
     $log = [System.IO.Path]::GetTempFileName()
-    $proc = Start-Process -FilePath $Binary -ArgumentList @('--network-dir', $Network, '--port', '19100', '--http-port', '15052', '--http-max-connections', '2') -RedirectStandardOutput $log -RedirectStandardError "$log.err" -PassThru -NoNewWindow
+    $proc = Start-Process -FilePath $Binary -ArgumentList @('--network-dir', $Network, '--port', '19100', '--http-port', '15052', '--http-max-connections', '2', '--metrics-port', '18008') -RedirectStandardOutput $log -RedirectStandardError "$log.err" -PassThru -NoNewWindow
     python (Join-Path $PSScriptRoot 'api.py') 15052 (Join-Path $Network 'genesis.ssz')
+    if ($LASTEXITCODE -ne 0) { $fail = 1 }
+    python (Join-Path $PSScriptRoot 'metrics.py') 18008
     if ($LASTEXITCODE -ne 0) { $fail = 1 }
     python (Join-Path $PSScriptRoot 'burst.py') 19100 256   # a discv5 step of far more than 64 events
     Start-Sleep -Seconds 2

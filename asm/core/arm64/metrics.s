@@ -615,3 +615,232 @@ FUNCTION lantern_metrics_text
 91: mov     x0, #LANTERN_BUFFER_TOO_SMALL
     LEAVE 80
 END_FUNCTION lantern_metrics_text
+
+.set MN_CHAIN, 2 * SLOTS_PER_EPOCH         /* the head's chain from the previous epoch on: at most two epochs of blocks */
+
+/*
+ * lantern_metrics_node(node, store, out) -> status
+ * The node's and store's values of the metrics. x19 node, x20 store, x21 out, x22 the store's slot,
+ * x23 the head's NodeBlock or 0, x24 the head's chain blocks, x25 the store's epoch, x26 the
+ * previous epoch's first slot. Below the frame, from sp: their NodeBlock addresses (MN_CHAIN).
+ */
+FUNCTION lantern_metrics_node
+    ENTER_OUT 0, (8 * MN_CHAIN)
+    mov     x19, x0
+    mov     x20, x1
+    mov     x21, x2
+    mov     x9, #0                          /* out: zero */
+1:  str     xzr, [x21, x9]
+    add     x9, x9, #8
+    cmp     x9, #MetricsNode__mem
+    b.lo    1b
+    LDQ     x9, x19, Node_peers + 8
+    str     x9, [x21, #MetricsNode_peers]
+    mov     x0, x20
+    bl      node_store_slot
+    mov     x22, x0
+    mov     x9, #SLOTS_PER_EPOCH            /* the store's epoch: from fulu, the custody groups */
+    udiv    x25, x22, x9
+    LDQ     x9, x19, Node_config + CONFIG_FULU_FORK_EPOCH
+    cmp     x25, x9
+    b.lo    2f
+    mov     x9, #1
+    str     x9, [x21, #MetricsNode_fulu]
+    LDQ     x9, x19, Node_custody_count
+    str     x9, [x21, #MetricsNode_custody_groups]
+    /* the pool's voluntary exits */
+2:  PART    x9, x10, x19, Node_pool
+    mov     x11, #0
+3:  cbz     x10, 4f
+    ldr     x12, [x9, #NodePool_topic]
+    cmp     x12, #GOSSIP_VOLUNTARY_EXIT
+    cinc    x11, x11, eq
+    add     x9, x9, #NodePool__mem
+    sub     x10, x10, #1
+    b       3b
+4:  str     x11, [x21, #MetricsNode_pending_exits]
+    /* the proposers that hold: until_epoch above the store's epoch */
+    PART    x9, x10, x19, Node_proposers
+    mov     x11, #0
+5:  cbz     x10, 6f
+    ldr     x12, [x9, #NodeProposer_until_epoch]
+    cmp     x12, x25
+    cinc    x11, x11, hi
+    add     x9, x9, #NodeProposer__mem
+    sub     x10, x10, #1
+    b       5b
+6:  str     x11, [x21, #MetricsNode_local_validators]
+    /* the head's block: its buffers and slot */
+    ADDQ    x0, x19, Node_head_root
+    bl      node_find_block
+    mov     x23, #0
+    mov     x9, #0
+    cmn     x0, #1
+    b.eq    7f
+    mov     x23, x1
+    ldr     x10, [x23, #NodeBlock_data_id]
+    str     x10, [x21, #MetricsNode_head_block_id]
+    ldr     x10, [x23, #NodeBlock_state_id]
+    str     x10, [x21, #MetricsNode_head_state_id]
+    ldr     x9, [x23, #NodeBlock_slot]
+    /* synced: the head at most a slot behind; else syncing with a request open */
+7:  add     x9, x9, #1
+    mov     x10, #1
+    cmp     x9, x22
+    b.hs    8f
+    mov     x10, #0
+    LDQ     x11, x19, Node_flags
+    tst     x11, #NODE_FLAG_SYNCING
+    b.eq    8f
+    mov     x10, #2
+8:  str     x10, [x21, #MetricsNode_sync_state]
+    subs    x26, x25, #1                    /* the previous epoch's first slot */
+    csel    x26, xzr, x26, lo
+    mov     x9, #SLOTS_PER_EPOCH
+    mul     x26, x26, x9
+    mov     x24, #0                         /* the head's chain from it on, by parent_root, to a gap */
+    mov     x1, x23
+9:  cbz     x1, 12f
+    cmp     x24, #MN_CHAIN
+    b.hs    12f
+    ldr     x9, [x1, #NodeBlock_slot]
+    cmp     x9, x26
+    b.lo    12f
+    mov     x9, sp
+    str     x1, [x9, x24, lsl #3]
+    add     x24, x24, #1
+    add     x0, x1, #NodeBlock_parent_root
+    bl      node_find_block
+    cmn     x0, #1
+    b.ne    9b
+    mov     x1, #0
+    b       9b
+    /* the imported blocks of the previous epoch off that chain */
+12: PART    x9, x10, x19, Node_blocks
+    mov     x11, #0
+    add     x12, x26, #SLOTS_PER_EPOCH
+    mov     x15, sp
+13: cbz     x10, 16f
+    ldr     x13, [x9, #NodeBlock_status]
+    cmp     x13, #NODE_BLOCK_IMPORTED
+    b.ne    15f
+    ldr     x13, [x9, #NodeBlock_slot]
+    cmp     x13, x26
+    b.lo    15f
+    cmp     x13, x12
+    b.hs    15f
+    mov     x13, #0
+14: cmp     x13, x24
+    b.hs    141f
+    ldr     x14, [x15, x13, lsl #3]
+    cmp     x14, x9
+    b.eq    15f
+    add     x13, x13, #1
+    b       14b
+141: add    x11, x11, #1
+15: add     x9, x9, #NodeBlock__mem
+    sub     x10, x10, #1
+    b       13b
+16: str     x11, [x21, #MetricsNode_orphaned_blocks]
+    mov     x0, #LANTERN_OK
+    LEAVE_OUT 0, (8 * MN_CHAIN)
+END_FUNCTION lantern_metrics_node
+
+/*
+ * lantern_metrics_answer(bytes, categories, sources, out) -> status
+ * The answer to the first request of a metrics connection's bytes. x19 metrics_texts, x20 the
+ * cursor, x21 the end of the room, x22 1 when the room ran out, x23 out, x24 the status. Locals: L
+ * bytes, L+8 categories, L+16 sources, L+24 HttpLimits.
+ */
+FUNCTION lantern_metrics_answer
+    ENTER 48
+    stp     x0, x1, [sp, #L]
+    str     x2, [sp, #(L + 16)]
+    mov     x23, x3
+    ADDRESS x19, metrics_texts
+    ldr     x9, [x0, #16]                   /* room: the HttpRequest of the bytes, and the head */
+    add     x9, x9, #(24 + HTTP_REQUEST_FIXED + 64 + METRICS_HEAD_ROOM)
+    ldr     x10, [x23]
+    cmp     x9, x10
+    b.hi    98f
+    sub     x10, x10, #24                   /* the request, in out's room */
+    str     x10, [x23, #24]
+    mov     x9, #METRICS_HEAD_MAX
+    stp     x9, xzr, [sp, #(L + 24)]
+    add     x1, sp, #(L + 24)
+    add     x2, x23, #24
+    CALL_GLOBAL lantern_http_request
+    cmp     x0, #LANTERN_HTTP_MORE
+    b.eq    97f
+    cmp     x0, #LANTERN_BUFFER_TOO_SMALL
+    b.eq    98f
+    ldr     x24, [x23, #(24 + HttpRequest_status)]
+    cbnz    x0, 50f
+    mov     x24, #405
+    ldr     x9, [x23, #(24 + HttpRequest_method)]
+    cmp     x9, #HTTP_METHOD_GET
+    b.ne    50f
+    mov     x24, #404                       /* the path: /metrics */
+    add     x9, x23, #24
+    PART    x10, x11, x9, HttpRequest_path
+    cmp     x11, #mx_path_len
+    b.ne    50f
+    ldr     x10, [x10]
+    ADDRESS x9, mx_path
+    ldr     x9, [x9]
+    cmp     x10, x9
+    b.ne    50f
+    ldr     x9, [x23]                       /* 200: the text after METRICS_HEAD_ROOM bytes */
+    sub     x9, x9, #METRICS_HEAD_ROOM
+    str     x9, [x23, #METRICS_HEAD_ROOM]
+    ldp     x0, x1, [sp, #(L + 8)]
+    add     x2, x23, #METRICS_HEAD_ROOM
+    bl      lantern_metrics_text
+    cbnz    x0, 98f
+    /* the head before it; then the text moves up to the head */
+    add     x20, x23, #24
+    add     x21, x23, #METRICS_HEAD_ROOM
+    mov     x22, #0
+    MT_TEXT mx_http
+    MT_TEXT mx_ok_head
+    ldr     x0, [x23, #(METRICS_HEAD_ROOM + 16)]
+    bl      mt_dec
+    MT_TEXT mx_close
+    mov     x0, x20
+    add     x1, x23, #(METRICS_HEAD_ROOM + 24)
+    ldr     x2, [x23, #(METRICS_HEAD_ROOM + 16)]
+    add     x20, x20, x2
+    bl      lantern_copy
+    b       90f
+    /* HTTP/1.1 <status> <reason>; Allow: GET for 405; no body */
+50: add     x20, x23, #24
+    add     x21, x23, #METRICS_HEAD_ROOM
+    mov     x22, #0
+    MT_TEXT mx_http
+    mov     x0, x24
+    bl      mt_dec
+    MT_TEXT mx_sp
+    mov     x0, x24
+    bl      api_code
+    cbz     x0, 51f
+    ldp     x9, x1, [x0, #8]
+    ADDRESS x0, api_texts
+    add     x0, x0, x9
+    bl      mt_put
+51: MT_TEXT mx_crlf
+    cmp     x24, #405
+    b.ne    52f
+    MT_TEXT mx_allow
+52: MT_TEXT mx_len0
+90: mov     x9, #24                         /* out: the answer's bytes */
+    str     x9, [x23, #8]
+    add     x9, x23, #24
+    sub     x9, x20, x9
+    str     x9, [x23, #16]
+    mov     x0, #LANTERN_OK
+    LEAVE 48
+97: mov     x0, #LANTERN_HTTP_MORE
+    LEAVE 48
+98: mov     x0, #LANTERN_BUFFER_TOO_SMALL
+    LEAVE 48
+END_FUNCTION lantern_metrics_answer

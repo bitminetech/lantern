@@ -464,6 +464,27 @@ mx_false:
 mx_true:
     .ascii "true"
 .set mx_true_len, 4
+mx_http:
+    .ascii "HTTP/1.1 "
+.set mx_http_len, 9
+mx_ok_head:
+    .ascii "200 OK\r\nContent-Type: text/plain; version=0.0.4; charset=utf-8\r\nContent-Length: "
+.set mx_ok_head_len, 80
+mx_close:
+    .ascii "\r\nConnection: close\r\n\r\n"
+.set mx_close_len, 23
+mx_crlf:
+    .ascii "\r\n"
+.set mx_crlf_len, 2
+mx_allow:
+    .ascii "Allow: GET\r\n"
+.set mx_allow_len, 12
+mx_len0:
+    .ascii "Content-Length: 0\r\nConnection: close\r\n\r\n"
+.set mx_len0_len, 40
+mx_path:
+    .ascii "/metrics"
+.set mx_path_len, 8
     .p2align 3
 metrics_labels:                  /* by id from 1: name, name length, count, first value */
     .long mt_s92 - metrics_texts, mt_s92_len, 4, 0

@@ -436,6 +436,8 @@ ABI uint64_t lantern_engine_json_decode(const void *type, const void *json, void
 /* Application: docs/reference/app.md. */
 ABI uint64_t lantern_app_options(const void *args, void *options, void *fault);
 ABI uint64_t lantern_metrics_text(const void *categories, const void *sources, void *out);
+ABI uint64_t lantern_metrics_node(const void *node, const void *store, void *out);
+ABI uint64_t lantern_metrics_answer(const void *bytes, const void *categories, const void *sources, void *out);
 
 /* Network config: docs/reference/config.md. */
 ABI uint64_t lantern_config_parse(const void *text, void *config, void *line);
@@ -3325,6 +3327,60 @@ static void reorg_check(fc_node *n, const char **why) {
     memcpy(s->last_head, head, 32);
 }
 
+/*
+ * lantern_metrics_node (metrics.md) after each node step, against the rules worked out here from the
+ * node's and the store's bytes: peers, fulu and custody, the pool's exits, the proposers that hold,
+ * the head's buffers, the sync state and the previous epoch's blocks off the head's chain.
+ */
+#define METRICS_NODE_BYTES 72 /* include/metrics.inc: MetricsNode__mem */
+#define NODE_API_OFF (728 + CONFIG_SIZE + 936) /* include/lantern.inc: Node_api */
+#define NODE_POOL_OFF (NODE_API_OFF + 72)
+#define NODE_PROPOSERS_OFF (NODE_API_OFF + 104 + 8 * (4 + 64))
+#define NODE_CUSTODY_OFF (NODE_METRICS - 336) /* Node_custody_count */
+static uint64_t metrics_node_checks, metrics_node_seen[9];
+static void metrics_node_check(fc_node *n, const char **why) {
+    const uint8_t *node = n->shell->node, *store = n->store;
+    uint64_t want[9] = {0}, spe = strcmp(PRESET, "minimal") ? 32u : 8u;
+    uint64_t t = rd64(store + 8), g = rd64(store + 16), d = rd64(store + 296 + 104);
+    uint64_t slot = t >= g && d ? (t - g) / d : 0, epoch = slot / spe;
+    want[0] = rd64(node + 120 + 8); /* Node_peers */
+    if (epoch >= rd64(node + 728 + 96)) want[1] = 1, want[2] = rd64(node + NODE_CUSTODY_OFF);
+    const uint8_t *e = node + rd64(node + NODE_POOL_OFF);
+    for (uint64_t i = 0, c = rd64(node + NODE_POOL_OFF + 8); i < c; i++, e += 64) want[3] += rd64(e) == 4; /* GOSSIP_VOLUNTARY_EXIT */
+    e = node + rd64(node + NODE_PROPOSERS_OFF);
+    for (uint64_t i = 0, c = rd64(node + NODE_PROPOSERS_OFF + 8); i < c; i++, e += 136) want[4] += rd64(e + 8) > epoch;
+    const uint8_t *head = shell_block(n->shell, node + NODE_HEAD_ROOT);
+    uint64_t hslot = head ? rd64(head + NODE_SLOT) : 0;
+    want[6] = hslot + 1 >= slot ? 1 : (rd64(node + NODE_FLAGS) & NODE_FLAG_SYNCING) ? 2 : 0;
+    if (head) want[7] = rd64(head + 72), want[8] = rd64(head + NB_STATE_ID);
+    uint64_t lo = (epoch ? epoch - 1 : 0) * spe;
+    const uint8_t *chain[64];
+    uint64_t nchain = 0;
+    for (const uint8_t *b = head; b && nchain < 2 * spe && rd64(b + NODE_SLOT) >= lo; b = shell_block(n->shell, b + 32)) chain[nchain++] = b;
+    e = node + rd64(node + NODE_BLOCKS);
+    for (uint64_t i = 0, c = rd64(node + NODE_BLOCKS + 8); i < c; i++, e += NODE_BLOCK_BYTES) {
+        if (rd64(e + NB_STATUS) != NB_IMPORTED || rd64(e + NODE_SLOT) < lo || rd64(e + NODE_SLOT) >= lo + spe) continue;
+        int on = 0;
+        for (uint64_t k = 0; k < nchain; k++) on |= chain[k] == e;
+        want[5] += !on;
+    }
+    uint8_t *out = buffer(METRICS_NODE_BYTES);
+    uint64_t st = CALL(lantern_metrics_node, node, store, out);
+    static char msg[96];
+    if (st != 0) *why = "lantern_metrics_node: status not 0";
+    else if (!guard_ok(out, METRICS_NODE_BYTES)) *why = "lantern_metrics_node wrote out of bounds";
+    else
+        for (int k = 0; k < 9 && !*why; k++)
+            if (rd64(out + 8 * k) != want[k]) {
+                snprintf(msg, sizeof msg, "lantern_metrics_node: field %d is %llu, not %llu", k, (unsigned long long)rd64(out + 8 * k),
+                         (unsigned long long)want[k]);
+                *why = msg;
+            }
+    metrics_node_checks += !*why;
+    for (int k = 0; k < 9; k++) metrics_node_seen[k] += want[k] > (k == 6);
+    free(out);
+}
+
 /* The post-state the node keeps for the block root, or NULL. */
 static const uint8_t *shell_state_of(fc_node *n, const uint8_t *root) {
     const uint8_t *e = shell_block(n->shell, root);
@@ -3675,6 +3731,7 @@ static void shell_step(fc_node *n, const char **why) {
     if (!*why) idle_peer_check(s, why);
     if (!*why) request_age_check(s, why);
     if (!*why) reorg_check(n, why);
+    if (!*why) metrics_node_check(n, why);
     if (!*why && !s->net && (count[0] != nevents || count[1] != UINT64_MAX)) *why = "lantern_node_step: result is not the event count";
     if (!*why && count[0] > nevents) *why = "lantern_node_step: more events handled than given";
     if (!*why && count[0] < nevents) { /* the events not handled go again, before the new ones */
@@ -9716,6 +9773,71 @@ static void run_metrics_text(const char *file, case_file *f) {
 }
 
 /*
+ * metrics-answer: lantern_metrics_answer of each case's request bytes over its sources
+ * (tests/generator/metrics.py). With the room metrics.md names exactly, the status must be the
+ * case's and out its answer; with one byte less, LANTERN_BUFFER_TOO_SMALL. The inputs must stay
+ * unchanged.
+ */
+#define METRICS_ANSWER_FIXED (24 + 144 + 64 + 256) /* 24 + HTTP_REQUEST_FIXED + 64 + METRICS_HEAD_ROOM */
+static void run_metrics_answer(const char *file, case_file *f) {
+    static const char *keys[7] = {"state", "node", "counters", "app", "process", "gossip", "profile"};
+    for (uint64_t i = 0; i < f->count; i++) {
+        const char *name, *why = NULL;
+        uint64_t len, blen, alen, cat, lsize, il[7];
+        tv parts = next_case(f, &name, &len);
+        const uint8_t *req = tv_bytes(tv_get(parts, "bytes"), &blen), *want = tv_bytes(tv_get(parts, "answer"), &alen);
+        uint64_t want_st = tv_u64(tv_get(parts, "status"));
+        uint8_t *in[7], *keep[7];
+        const void *sources[7];
+        cat = tv_u64(tv_get(parts, "categories"));
+        for (int k = 0; k < 7; k++) {
+            const uint8_t *b = tv_bytes(tv_get(parts, keys[k]), &il[k]);
+            in[k] = copy_of(b, il[k]);
+            keep[k] = copy_of(b, il[k]);
+            sources[k] = il[k] ? in[k] : NULL;
+        }
+        uint8_t *list = list_of(req, blen, 0, 0, &lsize), *lkeep = copy_of(list, lsize);
+        uint64_t room = METRICS_ANSWER_FIXED + blen, tlen = 0;
+        for (uint64_t k = 0; k + 4 <= alen; k++) /* a 200's text: after the head */
+            if (!memcmp(want + k, "\r\n\r\n", 4)) {
+                tlen = !memcmp(want, "HTTP/1.1 200", 12) ? alen - k - 4 : 0;
+                break;
+            }
+        if (256 + 24 + tlen > room) room = 256 + 24 + tlen;
+        for (int pass = 0; pass < 2 && !why; pass++) {
+            uint64_t size = room - (uint64_t)pass, st;
+            uint8_t *out = buffer(size);
+            wr64(out, size);
+            st = CALL(lantern_metrics_answer, list, &cat, sources, out);
+            static char msg[200];
+            if (!guard_ok(out, size)) why = "lantern_metrics_answer wrote out of bounds";
+            else if (pass == 1 && st != 1) why = "one byte less room: status is not LANTERN_BUFFER_TOO_SMALL";
+            else if (pass == 0 && st != want_st) {
+                snprintf(msg, sizeof msg, "status %llu, not %llu", (unsigned long long)st, (unsigned long long)want_st);
+                why = msg;
+            } else if (pass == 0 && st == 0 && (rd64(out + 8) != 24 || rd64(out + 16) != alen || memcmp(out + 24, want, (size_t)alen))) {
+                uint64_t got = rd64(out + 16), k = 0;
+                while (k < got && k < alen && out[24 + k] == want[k]) k++;
+                snprintf(msg, sizeof msg, "answer differs at byte %llu (length %llu, want %llu): got \"%.60s\"", (unsigned long long)k,
+                         (unsigned long long)got, (unsigned long long)alen, (const char *)out + 24 + k);
+                why = msg;
+            }
+            free(out);
+        }
+        for (int k = 0; k < 7 && !why; k++)
+            if (!guard_ok(in[k], il[k]) || memcmp(in[k], keep[k], (size_t)il[k])) why = "lantern_metrics_answer changed an input";
+        if (!why && memcmp(list, lkeep, (size_t)lsize)) why = "lantern_metrics_answer changed the bytes";
+        for (int k = 0; k < 7; k++) {
+            free(in[k]);
+            free(keep[k]);
+        }
+        free(list);
+        free(lkeep);
+        report(file, name, len, !why, why);
+    }
+}
+
+/*
  * metrics-state: lantern_<fork>_metrics_state of each case's state and block (tests/generator/metrics.py,
  * from the spec's functions): out must be the case's MetricsState, with nothing written past it,
  * and the state and the block unchanged.
@@ -12765,6 +12887,7 @@ int main(int argc, char **argv) {
         else if (!bls_off && !strcmp(kind, "app-options")) run_app_options(file, &f);
         else if (!bls_off && !strcmp(kind, "metrics-text")) run_metrics_text(file, &f);
         else if (!bls_off && !strcmp(kind, "metrics-state")) run_metrics_state(file, &f);
+        else if (!bls_off && !strcmp(kind, "metrics-answer")) run_metrics_answer(file, &f);
         else if (!bls_off && !strcmp(kind, "node-api")) run_node_api(file, &f);
         else if (!bls_off && !strcmp(kind, "node-payload")) run_node_payload(file, &f);
         else if (!bls_off && !strcmp(kind, "node-liveness")) run_node_liveness(file, &f);
@@ -12823,6 +12946,11 @@ int main(int argc, char **argv) {
     if (node_settles_finalized) printf("NOTE: %lu node settles past a finalized epoch\n", node_settles_finalized);
     if (api_heads_streamed) printf("NOTE: %lu heads served as getBlockV2 and getStateV2 streams\n", api_heads_streamed);
     if (reads_asked) printf("NOTE: %lu node-reads requests answered\n", reads_asked);
+    if (metrics_node_checks)
+        printf("NOTE: %lu node steps checked against lantern_metrics_node; above 0: peers %lu, fulu %lu, exits %lu, proposers %lu, "
+               "orphaned %lu, syncing %lu\n", (unsigned long)metrics_node_checks, (unsigned long)metrics_node_seen[0],
+               (unsigned long)metrics_node_seen[1], (unsigned long)metrics_node_seen[3], (unsigned long)metrics_node_seen[4],
+               (unsigned long)metrics_node_seen[5], (unsigned long)metrics_node_seen[6]);
     if (reorg_checks) printf("NOTE: %lu head changes checked against NodeMetrics reorgs, %lu of them reorgs\n", (unsigned long)reorg_checks,
                                (unsigned long)reorgs_seen);
     if (engine_fcu_errors) printf("NOTE: %lu engine_forkchoiceUpdated answered Too deep reorg on syncs\n", engine_fcu_errors);

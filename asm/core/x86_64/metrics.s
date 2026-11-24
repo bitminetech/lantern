@@ -622,3 +622,228 @@ FUNCTION lantern_metrics_text
 91: mov     $LANTERN_BUFFER_TOO_SMALL, %eax
     LEAVE 112
 END_FUNCTION lantern_metrics_text
+
+.set MN_CHAIN, 2 * SLOTS_PER_EPOCH         /* the head's chain from the previous epoch on: at most two epochs of blocks */
+
+/*
+ * lantern_metrics_node(node, store, out) -> status
+ * The node's and store's values of the metrics. rbx node, r12 store, rbp out, r13 the store's slot,
+ * r14 the head's NodeBlock or 0, r15 the head's chain blocks. Locals: L their NodeBlock addresses
+ * (MN_CHAIN), then the previous epoch's first slot, then the store's epoch.
+ */
+FUNCTION lantern_metrics_node
+    ENTER (8 * MN_CHAIN + 16)
+    mov     %rdi, %rbx
+    mov     %rsi, %r12
+    mov     %rdx, %rbp
+    mov     %rbp, %rdi
+    mov     $MetricsNode__mem, %esi
+    call    lantern_zero
+    mov     (Node_peers + 8)(%rbx), %rax
+    mov     %rax, MetricsNode_peers(%rbp)
+    mov     %r12, %rdi
+    call    node_store_slot
+    mov     %rax, %r13
+    xor     %edx, %edx                      # the store's epoch: from fulu, the custody groups
+    mov     $SLOTS_PER_EPOCH, %ecx
+    div     %rcx
+    mov     %rax, (L + 8 * MN_CHAIN + 8)(%rsp)
+    cmp     (Node_config + CONFIG_FULU_FORK_EPOCH)(%rbx), %rax
+    jb      1f
+    movq    $1, MetricsNode_fulu(%rbp)
+    mov     Node_custody_count(%rbx), %rcx
+    mov     %rcx, MetricsNode_custody_groups(%rbp)
+1:  PART    %rcx, %rdx, %rbx, Node_pool     # the pool's voluntary exits
+    xor     %eax, %eax
+2:  test    %rdx, %rdx
+    jz      3f
+    cmpq    $GOSSIP_VOLUNTARY_EXIT, NodePool_topic(%rcx)
+    jne     21f
+    inc     %rax
+21: add     $NodePool__mem, %rcx
+    dec     %rdx
+    jmp     2b
+3:  mov     %rax, MetricsNode_pending_exits(%rbp)
+    PART    %rcx, %rdx, %rbx, Node_proposers  # the proposers that hold: until_epoch above the store's epoch
+    mov     (L + 8 * MN_CHAIN + 8)(%rsp), %rsi
+    xor     %eax, %eax
+4:  test    %rdx, %rdx
+    jz      5f
+    cmp     %rsi, NodeProposer_until_epoch(%rcx)
+    jbe     41f
+    inc     %rax
+41: add     $NodeProposer__mem, %rcx
+    dec     %rdx
+    jmp     4b
+5:  mov     %rax, MetricsNode_local_validators(%rbp)
+    lea     Node_head_root(%rbx), %rdi      # the head's block: its buffers and slot
+    call    node_find_block
+    xor     %r14d, %r14d
+    xor     %ecx, %ecx
+    cmp     $-1, %rax
+    je      6f
+    mov     %rdx, %r14
+    mov     NodeBlock_data_id(%r14), %rax
+    mov     %rax, MetricsNode_head_block_id(%rbp)
+    mov     NodeBlock_state_id(%r14), %rax
+    mov     %rax, MetricsNode_head_state_id(%rbp)
+    mov     NodeBlock_slot(%r14), %rcx
+6:  inc     %rcx                            # synced: the head at most a slot behind; else syncing with a request open
+    mov     $1, %eax
+    cmp     %r13, %rcx
+    jae     7f
+    xor     %eax, %eax
+    testq   $NODE_FLAG_SYNCING, Node_flags(%rbx)
+    jz      7f
+    mov     $2, %eax
+7:  mov     %rax, MetricsNode_sync_state(%rbp)
+    mov     (L + 8 * MN_CHAIN + 8)(%rsp), %rax  # the previous epoch's first slot
+    test    %rax, %rax
+    jz      8f
+    dec     %rax
+8:  imul    $SLOTS_PER_EPOCH, %rax, %rax
+    mov     %rax, (L + 8 * MN_CHAIN)(%rsp)
+    xor     %r15d, %r15d                    # the head's chain from it on, by parent_root, to a gap
+    mov     %r14, %rdx
+9:  test    %rdx, %rdx
+    jz      12f
+    cmp     $MN_CHAIN, %r15
+    jae     12f
+    mov     NodeBlock_slot(%rdx), %rax
+    cmp     (L + 8 * MN_CHAIN)(%rsp), %rax
+    jb      12f
+    mov     %rdx, L(%rsp,%r15,8)
+    inc     %r15
+    lea     NodeBlock_parent_root(%rdx), %rdi
+    call    node_find_block
+    cmp     $-1, %rax
+    jne     9b
+    xor     %edx, %edx
+    jmp     9b
+12: PART    %rcx, %rdx, %rbx, Node_blocks   # the imported blocks of the previous epoch off that chain
+    xor     %r8d, %r8d
+    mov     (L + 8 * MN_CHAIN)(%rsp), %r9
+    lea     SLOTS_PER_EPOCH(%r9), %r10
+13: test    %rdx, %rdx
+    jz      16f
+    cmpq    $NODE_BLOCK_IMPORTED, NodeBlock_status(%rcx)
+    jne     15f
+    mov     NodeBlock_slot(%rcx), %rax
+    cmp     %r9, %rax
+    jb      15f
+    cmp     %r10, %rax
+    jae     15f
+    xor     %esi, %esi
+14: cmp     %r15, %rsi
+    jae     141f
+    cmp     L(%rsp,%rsi,8), %rcx
+    je      15f
+    inc     %rsi
+    jmp     14b
+141: inc    %r8
+15: add     $NodeBlock__mem, %rcx
+    dec     %rdx
+    jmp     13b
+16: mov     %r8, MetricsNode_orphaned_blocks(%rbp)
+    xor     %eax, %eax
+    LEAVE (8 * MN_CHAIN + 16)
+END_FUNCTION lantern_metrics_node
+
+/*
+ * lantern_metrics_answer(bytes, categories, sources, out) -> status
+ * The answer to the first request of a metrics connection's bytes. rbx metrics_texts, r12 the
+ * cursor, r13 the end of the room, r15 1 when the room ran out, rbp the status, r14 out. Locals: L
+ * bytes, L+8 categories, L+16 sources, L+24 HttpLimits.
+ */
+FUNCTION lantern_metrics_answer
+    ENTER 48
+    mov     %rdi, L(%rsp)
+    mov     %rsi, (L + 8)(%rsp)
+    mov     %rdx, (L + 16)(%rsp)
+    mov     %rcx, %r14
+    lea     metrics_texts(%rip), %rbx
+    mov     16(%rdi), %rax                  # room: the HttpRequest of the bytes, and the head
+    add     $(24 + HTTP_REQUEST_FIXED + 64 + METRICS_HEAD_ROOM), %rax
+    cmp     (%r14), %rax
+    ja      98f
+    mov     (%r14), %rax                    # the request, in out's room
+    sub     $24, %rax
+    mov     %rax, 24(%r14)
+    movq    $METRICS_HEAD_MAX, (L + 24)(%rsp)
+    movq    $0, (L + 32)(%rsp)
+    lea     (L + 24)(%rsp), %rsi
+    lea     24(%r14), %rdx
+    CALL_GLOBAL lantern_http_request
+    cmp     $LANTERN_HTTP_MORE, %rax
+    je      97f
+    cmp     $LANTERN_BUFFER_TOO_SMALL, %rax
+    je      98f
+    mov     (24 + HttpRequest_status)(%r14), %rbp
+    test    %rax, %rax
+    jnz     50f                             # a fault: its status
+    mov     $405, %ebp
+    cmpq    $HTTP_METHOD_GET, (24 + HttpRequest_method)(%r14)
+    jne     50f
+    mov     $404, %ebp                      # the path: /metrics
+    lea     24(%r14), %rcx
+    PART    %rsi, %rdx, %rcx, HttpRequest_path
+    cmp     $mx_path_len, %rdx
+    jne     50f
+    mov     (%rsi), %rax
+    cmp     mx_path(%rip), %rax
+    jne     50f
+    mov     (%r14), %rax                    # 200: the text after METRICS_HEAD_ROOM bytes
+    sub     $METRICS_HEAD_ROOM, %rax
+    mov     %rax, METRICS_HEAD_ROOM(%r14)
+    mov     (L + 8)(%rsp), %rdi
+    mov     (L + 16)(%rsp), %rsi
+    lea     METRICS_HEAD_ROOM(%r14), %rdx
+    call    lantern_metrics_text
+    test    %rax, %rax
+    jnz     98f
+    lea     24(%r14), %r12                  # the head before it, then the text moves up to the head
+    lea     METRICS_HEAD_ROOM(%r14), %r13
+    xor     %r15d, %r15d
+    MT_TEXT mx_http
+    MT_TEXT mx_ok_head
+    mov     (METRICS_HEAD_ROOM + 16)(%r14), %rdi
+    call    mt_dec
+    MT_TEXT mx_close
+    mov     %r12, %rdi
+    lea     (METRICS_HEAD_ROOM + 24)(%r14), %rsi
+    mov     (METRICS_HEAD_ROOM + 16)(%r14), %rdx
+    add     %rdx, %r12
+    call    lantern_copy
+    jmp     90f
+50: lea     24(%r14), %r12                  # HTTP/1.1 <status> <reason>, Allow: GET for 405, no body
+    lea     METRICS_HEAD_ROOM(%r14), %r13
+    xor     %r15d, %r15d
+    MT_TEXT mx_http
+    mov     %rbp, %rdi
+    call    mt_dec
+    MT_TEXT mx_sp
+    mov     %rbp, %rdi
+    call    api_code
+    test    %rax, %rax
+    jz      51f
+    mov     8(%rax), %rdi
+    mov     16(%rax), %rsi
+    lea     api_texts(%rip), %rcx
+    add     %rcx, %rdi
+    call    mt_put
+51: MT_TEXT mx_crlf
+    cmp     $405, %rbp
+    jne     52f
+    MT_TEXT mx_allow
+52: MT_TEXT mx_len0
+90: movq    $24, 8(%r14)                    # out: the answer's bytes
+    lea     24(%r14), %rax
+    sub     %rax, %r12
+    mov     %r12, 16(%r14)
+    xor     %eax, %eax
+    LEAVE 48
+97: mov     $LANTERN_HTTP_MORE, %eax
+    LEAVE 48
+98: mov     $LANTERN_BUFFER_TOO_SMALL, %eax
+    LEAVE 48
+END_FUNCTION lantern_metrics_answer

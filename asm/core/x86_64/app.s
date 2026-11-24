@@ -3559,6 +3559,9 @@ LOCAL_FUNCTION app_net
 3:  call    app_api_start
     test    %rax, %rax
     jnz     99f
+    call    app_met_start
+    test    %rax, %rax
+    jnz     99f
     call    app_dv_start
     test    %rax, %rax
     jnz     99f
@@ -5539,6 +5542,487 @@ LOCAL_FUNCTION app_api_poll
     LEAVE 16
 END_FUNCTION app_api_poll
 
+/*
+ * L2: the metrics server (app.md): with --metrics categories, a shell context of APP_MET_CONNS
+ * connections that listens on --metrics-address and --metrics-port, and its buffers: rax = 0, or 2
+ * after a line on the standard error. Locals: L ShellParams or an Address, L+32 a size or a
+ * ListenResult.
+ */
+LOCAL_FUNCTION app_met_start
+    ENTER 64
+    cmpq    $0, (APP_OPTIONS + AppOptions_metrics)(%rbx)
+    je      8f
+    movq    $APP_MET_CONNS, L(%rsp)
+    movq    $APP_MET_WINDOW, (L + 8)(%rsp)
+    lea     L(%rsp), %rdi
+    lea     (L + 32)(%rsp), %rsi
+    CALL_GLOBAL libp2p_shell_size
+    test    %rax, %rax
+    jnz     97f
+    mov     $APP_MET_SHELL, %edi
+    mov     (L + 32)(%rsp), %rsi
+    call    app_alloc
+    test    %rax, %rax
+    jz      97f
+    mov     %rax, %rsi
+    lea     L(%rsp), %rdi
+    CALL_GLOBAL libp2p_shell_init
+    test    %rax, %rax
+    jnz     97f
+    mov     $APP_MET_EVENTS, %edi
+    mov     $APP_MET_EVENT_BYTES, %esi
+    call    app_alloc
+    test    %rax, %rax
+    jz      97f
+    movq    $24, 8(%rax)
+    movq    $0, 16(%rax)
+    mov     $APP_MET_ACT, %edi
+    mov     $APP_MET_ACT_BYTES, %esi
+    call    app_alloc
+    test    %rax, %rax
+    jz      97f
+    movq    $24, 8(%rax)
+    movq    $0, 16(%rax)
+    movq    $24, APP_MET_EMPTY(%rbx)        # the empty ByteList, and each slot's request ByteList
+    movq    $24, (APP_MET_EMPTY + 8)(%rbx)
+    movq    $0, (APP_MET_EMPTY + 16)(%rbx)
+    lea     APP_MET_SLOT0(%rbx), %rax
+    mov     $APP_MET_CONNS, %ecx
+1:  movq    $(24 + METRICS_HEAD_MAX), APP_MET_REQUEST(%rax)
+    movq    $24, (APP_MET_REQUEST + 8)(%rax)
+    movq    $0, (APP_MET_REQUEST + 16)(%rax)
+    add     $APP_MET_SLOT, %rax
+    dec     %ecx
+    jnz     1b
+    movq    $4, L(%rsp)                     # listen: TCP --metrics-address, --metrics-port
+    mov     (APP_OPTIONS + AppOptions_metrics_port)(%rbx), %rax
+    mov     %rax, (L + 8)(%rsp)
+    mov     (APP_OPTIONS + AppOptions_metrics_address)(%rbx), %rax
+    mov     %rax, (L + 16)(%rsp)
+    movq    $0, (L + 24)(%rsp)
+    mov     APP_MET_SHELL(%rbx), %rdi
+    lea     L(%rsp), %rsi
+    lea     (L + 32)(%rsp), %rdx
+    CALL_GLOBAL libp2p_shell_listen
+    cmpq    $0, (L + 32)(%rsp)
+    jne     96f
+    call    app_line_start                  # metrics on TCP <address>:<port>
+    ADDRESS %rdi, app_m_metrics
+    mov     $app_m_metrics_len, %esi
+    call    app_line_text
+    mov     (APP_OPTIONS + AppOptions_metrics_address)(%rbx), %rdi
+    call    app_line_ip4
+    ADDRESS %rdi, app_t_colon
+    mov     $1, %esi
+    call    app_line_text
+    mov     (APP_OPTIONS + AppOptions_metrics_port)(%rbx), %rdi
+    call    app_line_u64
+    mov     $APP_LOG_INFO, %edi
+    call    app_line_end
+8:  xor     %eax, %eax
+    LEAVE 64
+96: call    app_line_start                  # listen on TCP port <p>: error <n>
+    ADDRESS %rdi, app_m_listen
+    mov     $app_m_listen_len, %esi
+    call    app_line_text
+    mov     (APP_OPTIONS + AppOptions_metrics_port)(%rbx), %rdi
+    call    app_line_u64
+    ADDRESS %rdi, app_m_error
+    mov     $app_m_error_len, %esi
+    call    app_line_text
+    mov     (L + 32)(%rsp), %rdi
+    call    app_line_u64
+    mov     $APP_LOG_ERROR, %edi
+    call    app_line_end
+    mov     $2, %eax
+    LEAVE 64
+97: call    app_no_memory
+    LEAVE 64
+END_FUNCTION app_met_start
+
+/* L0: rax = the slot of the metrics connection rdi, while open at its generation, or 0. Uses rcx, rdx. */
+LOCAL_FUNCTION app_met_slot
+    UNWIND_END_PROLOGUE
+    mov     %edi, %ecx
+    cmp     $APP_MET_CONNS, %rcx
+    jae     9f
+    imul    $APP_MET_SLOT, %rcx, %rcx
+    lea     APP_MET_SLOT0(%rbx,%rcx), %rax
+    cmpq    $APP_MET_FREE, 8(%rax)
+    je      9f
+    mov     %rdi, %rdx
+    shr     $32, %rdx
+    cmp     (%rax), %rdx
+    jne     9f
+    ret
+9:  xor     %eax, %eax
+    ret
+END_FUNCTION app_met_slot
+
+/* L1: the metrics server's shell actions go out; their results come at the next poll. */
+LOCAL_FUNCTION app_met_flush
+    FRAME 0
+    mov     APP_MET_ACT(%rbx), %rsi
+    cmpq    $0, 16(%rsi)
+    je      9f
+    mov     APP_MET_SHELL(%rbx), %rdi
+    mov     APP_MET_EVENTS(%rbx), %rdx
+    CALL_GLOBAL libp2p_shell_perform
+    mov     APP_MET_ACT(%rbx), %rax
+    movq    $0, 16(%rax)
+9:  UNFRAME 0
+END_FUNCTION app_met_flush
+
+/* L1: rax = room for a shell action of rdi bytes at the end of the metrics server's actions, its bytes counted, after a flush when they are full; 0 when it never fits. Locals: rdi. */
+LOCAL_FUNCTION app_met_room
+    FRAME 16
+    mov     %rdi, (%rsp)
+    mov     APP_MET_ACT(%rbx), %rax
+    mov     (%rax), %rcx
+    sub     $24, %rcx
+    cmp     %rcx, %rdi
+    ja      8f
+    mov     16(%rax), %rdx
+    add     %rdi, %rdx
+    cmp     %rcx, %rdx
+    jbe     1f
+    call    app_met_flush
+1:  mov     APP_MET_ACT(%rbx), %rax
+    mov     16(%rax), %rcx
+    mov     (%rsp), %rdx
+    add     %rcx, %rdx
+    mov     %rdx, 16(%rax)
+    lea     24(%rax,%rcx), %rax
+    UNFRAME 16
+8:  xor     %eax, %eax
+    UNFRAME 16
+END_FUNCTION app_met_room
+
+/* L1: a CLOSE of the metrics connection rdi, while it is open; its slot waits for the shell's CLOSED. Locals: rdi. */
+LOCAL_FUNCTION app_met_close
+    FRAME 16
+    mov     %rdi, (%rsp)
+    call    app_met_slot
+    test    %rax, %rax
+    jz      9f
+    movq    $APP_MET_CLOSING, 8(%rax)
+    mov     $LIBP2P_ACT_CLOSE_SIZE, %edi
+    call    app_met_room
+    test    %rax, %rax
+    jz      9f
+    movq    $LIBP2P_ACT_CLOSE_SIZE, (%rax)
+    movq    $LIBP2P_ACTION_CLOSE, 8(%rax)
+    mov     (%rsp), %rcx
+    mov     %rcx, LIBP2P_ACT_CONN(%rax)
+9:  UNFRAME 16
+END_FUNCTION app_met_close
+
+/*
+ * L1: the sources of the metrics (app.md): lantern_metrics_node of the node and the store; the head
+ * state's values by lantern_<fork>_metrics_state, again only for a new head state; the node's
+ * counters; the app's run times. Locals: L the state, L+8 the block.
+ */
+LOCAL_FUNCTION app_met_sources
+    ENTER 16
+    mov     APP_NODE(%rbx), %rdi
+    mov     APP_STORE(%rbx), %rsi
+    lea     APP_MET_NODE(%rbx), %rdx
+    CALL_GLOBAL lantern_metrics_node
+    mov     (APP_MET_NODE + MetricsNode_head_state_id)(%rbx), %rdi
+    cmp     APP_MET_STATE_ID(%rbx), %rdi
+    je      5f
+    movq    $0, APP_MET_STATE_ID(%rbx)
+    movq    $0, (APP_MET_STATE + MetricsState_present)(%rbx)
+    call    app_buf_find
+    test    %rax, %rax
+    jz      5f
+    mov     8(%rax), %rax
+    mov     %rax, L(%rsp)
+    lea     APP_MET_EMPTY(%rbx), %rax       # the head block's bytes, or none
+    mov     %rax, (L + 8)(%rsp)
+    mov     (APP_MET_NODE + MetricsNode_head_block_id)(%rbx), %rdi
+    call    app_buf_find
+    test    %rax, %rax
+    jz      3f
+    mov     8(%rax), %rax
+    mov     %rax, (L + 8)(%rsp)
+3:  mov     L(%rsp), %rax
+    mov     NODE_STATE_SLOT(%rax), %rdi
+    lea     APP_CONFIG(%rbx), %rsi
+    call    app_fork
+    mov     %rax, %r10
+    mov     L(%rsp), %rdi
+    mov     (L + 8)(%rsp), %rsi
+    lea     APP_MET_STATE(%rbx), %rdx
+    FORK_CALL metrics_state
+    mov     (APP_MET_NODE + MetricsNode_head_state_id)(%rbx), %rax
+    mov     %rax, APP_MET_STATE_ID(%rbx)
+5:  lea     APP_MET_STATE(%rbx), %rax       # MetricsSources
+    mov     %rax, (APP_MET_SOURCES + MetricsSources_state)(%rbx)
+    lea     APP_MET_NODE(%rbx), %rax
+    mov     %rax, (APP_MET_SOURCES + MetricsSources_node)(%rbx)
+    mov     APP_NODE(%rbx), %rax
+    add     $Node_metrics, %rax
+    mov     %rax, (APP_MET_SOURCES + MetricsSources_counters)(%rbx)
+    lea     APP_METRICS(%rbx), %rax
+    mov     %rax, (APP_MET_SOURCES + MetricsSources_app)(%rbx)
+    movq    $0, (APP_MET_SOURCES + MetricsSources_process)(%rbx)
+    movq    $0, (APP_MET_SOURCES + MetricsSources_gossip)(%rbx)
+    movq    $0, (APP_MET_SOURCES + MetricsSources_profile)(%rbx)
+    LEAVE 16
+END_FUNCTION app_met_sources
+
+/*
+ * L2: the slot index rdi sends more of its answer, while the shell's send buffer has room, in
+ * SENDs of at most APP_MET_PIECE bytes; with the last bytes out and none in flight, the connection
+ * closes. r12 the slot, r13 the connection, r14 the bytes of a SEND, r15 its action.
+ */
+LOCAL_FUNCTION app_met_send
+    ENTER 0
+    imul    $APP_MET_SLOT, %rdi, %r12
+    lea     APP_MET_SLOT0(%rbx,%r12), %r12
+    mov     (%r12), %r13
+    shl     $32, %r13
+    or      %rdi, %r13
+    cmpq    $APP_MET_SENDING, 8(%r12)
+    jne     9f
+1:  mov     40(%r12), %r14                  # the bytes left, the room of the window, a piece
+    sub     48(%r12), %r14
+    jz      5f
+    mov     $APP_MET_WINDOW, %eax
+    sub     56(%r12), %rax
+    jbe     9f
+    cmp     %rax, %r14
+    jbe     2f
+    mov     %rax, %r14
+2:  cmp     $APP_MET_PIECE, %r14
+    jbe     3f
+    mov     $APP_MET_PIECE, %r14d
+3:  lea     (LIBP2P_ACT_SEND_DATA + 7)(%r14), %rdi
+    and     $-8, %rdi
+    call    app_met_room
+    test    %rax, %rax
+    jz      8f
+    mov     %rax, %r15
+    lea     (LIBP2P_ACT_SEND_DATA + 7)(%r14), %rax
+    and     $-8, %rax
+    mov     %rax, (%r15)
+    movq    $LIBP2P_ACTION_SEND, 8(%r15)
+    mov     %r13, LIBP2P_ACT_CONN(%r15)
+    mov     %r14, (LIBP2P_ACT_CONN + 8)(%r15)
+    lea     LIBP2P_ACT_SEND_DATA(%r15), %rdi
+    mov     24(%r12), %rsi
+    add     48(%r12), %rsi
+    add     $24, %rsi
+    mov     %r14, %rdx
+    call    lantern_copy
+    add     %r14, 48(%r12)
+    add     %r14, 56(%r12)
+    jmp     1b
+5:  cmpq    $0, 56(%r12)                    # all out: the close once none is in flight
+    jne     9f
+8:  mov     %r13, %rdi
+    call    app_met_close
+9:  LEAVE 0
+END_FUNCTION app_met_send
+
+/*
+ * L2: the slot index rdi, while it reads: lantern_metrics_answer of its request bytes, in its
+ * answer's memory, which doubles while short (APP_MET_TRIES times); then the answer goes. r12 the
+ * slot, r13 the index, r14 the tries. Locals: L a size.
+ */
+LOCAL_FUNCTION app_met_answer
+    ENTER 16
+    mov     %rdi, %r13
+    imul    $APP_MET_SLOT, %rdi, %r12
+    lea     APP_MET_SLOT0(%rbx,%r12), %r12
+    cmpq    $APP_MET_READING, 8(%r12)
+    jne     9f
+    call    app_met_sources
+    xor     %r14d, %r14d
+1:  cmpq    $0, 24(%r12)                    # the answer's memory: APP_MET_OUT at first
+    jne     2f
+    imul    $APP_MET_SLOT, %r13, %rdi
+    add     $(APP_MET_SLOT0 + 24), %rdi
+    mov     $APP_MET_OUT, %esi
+    call    app_alloc
+    test    %rax, %rax
+    jz      8f
+2:  mov     24(%r12), %rcx
+    mov     32(%r12), %rax
+    mov     %rax, (%rcx)
+    lea     APP_MET_REQUEST(%r12), %rdi
+    lea     (APP_OPTIONS + AppOptions_metrics)(%rbx), %rsi
+    lea     APP_MET_SOURCES(%rbx), %rdx
+    CALL_GLOBAL lantern_metrics_answer
+    cmp     $LANTERN_HTTP_MORE, %rax
+    je      9f
+    test    %rax, %rax
+    jz      4f
+    inc     %r14                            # short: twice the memory
+    cmp     $APP_MET_TRIES, %r14
+    jae     8f
+    mov     32(%r12), %rsi
+    add     %rsi, %rsi
+    mov     %rsi, L(%rsp)
+    imul    $APP_MET_SLOT, %r13, %rdi
+    add     $(APP_MET_SLOT0 + 24), %rdi
+    call    app_unmap
+    imul    $APP_MET_SLOT, %r13, %rdi
+    add     $(APP_MET_SLOT0 + 24), %rdi
+    mov     L(%rsp), %rsi
+    call    app_alloc
+    test    %rax, %rax
+    jz      8f
+    jmp     2b
+4:  mov     24(%r12), %rax                  # the answer goes
+    mov     16(%rax), %rax
+    mov     %rax, 40(%r12)
+    movq    $0, 48(%r12)
+    movq    $APP_MET_SENDING, 8(%r12)
+    mov     %r13, %rdi
+    call    app_met_send
+    jmp     9f
+8:  mov     (%r12), %rdi                    # no memory: the connection closes
+    shl     $32, %rdi
+    or      %r13, %rdi
+    call    app_met_close
+9:  LEAVE 16
+END_FUNCTION app_met_answer
+
+/*
+ * L2: the metrics server's sockets, without waiting (app.md): ACCEPTED takes a free slot (ADOPT) or
+ * a REFUSE; RECEIVED joins a reading slot's request bytes, and the slot answers; SENT sends more of
+ * the answer; CLOSED frees the slot; a slot with no bytes for APP_API_IDLE_MS closes; then the
+ * shell actions go out. rbp the next event, r12 the end, r13 a slot, r14 an index, r15 the
+ * connection. Locals: L the wait.
+ */
+LOCAL_FUNCTION app_met_poll
+    ENTER 16
+    cmpq    $0, APP_MET_SHELL(%rbx)
+    je      99f
+    movq    $0, L(%rsp)
+    mov     APP_MET_SHELL(%rbx), %rdi
+    lea     L(%rsp), %rsi
+    mov     APP_MET_EVENTS(%rbx), %rdx
+    CALL_GLOBAL libp2p_shell_wait
+    mov     APP_MET_EVENTS(%rbx), %rax
+    mov     8(%rax), %rbp
+    add     %rax, %rbp
+    mov     16(%rax), %r12
+    add     %rbp, %r12
+1:  cmp     %r12, %rbp
+    jae     80f
+    mov     8(%rbp), %rax
+    cmp     $LIBP2P_EVENT_ACCEPTED, %rax
+    jne     3f
+    lea     APP_MET_SLOT0(%rbx), %r13       # ACCEPTED: a free slot, or REFUSE
+    xor     %r14d, %r14d
+2:  cmp     $APP_MET_CONNS, %r14
+    jae     21f
+    cmpq    $APP_MET_FREE, 8(%r13)
+    je      22f
+    add     $APP_MET_SLOT, %r13
+    inc     %r14
+    jmp     2b
+21: mov     $LIBP2P_ACT_REFUSE_SIZE, %edi
+    call    app_met_room
+    test    %rax, %rax
+    jz      79f
+    movq    $LIBP2P_ACT_REFUSE_SIZE, (%rax)
+    movq    $LIBP2P_ACTION_REFUSE, 8(%rax)
+    mov     LIBP2P_EV_TOKEN(%rbp), %rcx
+    mov     %rcx, LIBP2P_ACT_TOKEN(%rax)
+    jmp     79f
+22: mov     (%r13), %rax                    # a new generation, reading, no bytes, the time now
+    inc     %rax
+    mov     %rax, (%r13)
+    movq    $APP_MET_READING, 8(%r13)
+    mov     (APP_TICK + LIBP2P_TICK_NOW)(%rbx), %rcx
+    mov     %rcx, 16(%r13)
+    movq    $0, 56(%r13)
+    movq    $0, (APP_MET_REQUEST + 16)(%r13)
+    mov     %rax, %r15
+    shl     $32, %r15
+    or      %r14, %r15
+    mov     $LIBP2P_ACT_ADOPT_SIZE, %edi
+    call    app_met_room
+    test    %rax, %rax
+    jz      79f
+    movq    $LIBP2P_ACT_ADOPT_SIZE, (%rax)
+    movq    $LIBP2P_ACTION_ADOPT, 8(%rax)
+    mov     LIBP2P_EV_TOKEN(%rbp), %rcx
+    mov     %rcx, LIBP2P_ACT_TOKEN(%rax)
+    mov     %r15, (LIBP2P_ACT_TOKEN + 8)(%rax)
+    jmp     79f
+3:  mov     LIBP2P_EV_CONN(%rbp), %r15      # the others: the slot of the connection, at its generation
+    mov     %r15, %rdi
+    call    app_met_slot
+    test    %rax, %rax
+    jz      79f
+    mov     %rax, %r13
+    mov     %r15d, %r14d
+    mov     8(%rbp), %rax
+    cmp     $LIBP2P_EVENT_CLOSED, %rax      # CLOSED: the slot is free
+    jne     4f
+    movq    $APP_MET_FREE, 8(%r13)
+    jmp     79f
+4:  mov     (APP_TICK + LIBP2P_TICK_NOW)(%rbx), %rcx
+    cmp     $LIBP2P_EVENT_SENT, %rax        # SENT: fewer bytes in flight, then more
+    jne     5f
+    mov     %rcx, 16(%r13)
+    mov     56(%r13), %rcx
+    sub     LIBP2P_EV_COUNT(%rbp), %rcx
+    jae     41f
+    xor     %ecx, %ecx
+41: mov     %rcx, 56(%r13)
+    mov     %r14, %rdi
+    call    app_met_send
+    jmp     79f
+5:  cmp     $LIBP2P_EVENT_RECEIVED, %rax    # RECEIVED while reading: what fits joins the request bytes
+    jne     79f
+    cmpq    $APP_MET_READING, 8(%r13)
+    jne     79f
+    mov     %rcx, 16(%r13)
+    mov     (APP_MET_REQUEST + 16)(%r13), %rcx
+    mov     $METRICS_HEAD_MAX, %edx
+    sub     %rcx, %rdx
+    cmp     LIBP2P_EV_COUNT(%rbp), %rdx
+    jbe     51f
+    mov     LIBP2P_EV_COUNT(%rbp), %rdx
+51: add     %rdx, (APP_MET_REQUEST + 16)(%r13)
+    lea     (APP_MET_REQUEST + 24)(%r13,%rcx), %rdi
+    lea     LIBP2P_EV_DATA(%rbp), %rsi
+    call    lantern_copy
+    mov     %r14, %rdi
+    call    app_met_answer
+79: add     (%rbp), %rbp
+    jmp     1b
+80: mov     APP_MET_EVENTS(%rbx), %rax      # the idle connections close
+    movq    $0, 16(%rax)
+    lea     APP_MET_SLOT0(%rbx), %r13
+    xor     %r14d, %r14d
+81: cmp     $APP_MET_CONNS, %r14
+    jae     85f
+    cmpq    $APP_MET_READING, 8(%r13)
+    je      82f
+    cmpq    $APP_MET_SENDING, 8(%r13)
+    jne     84f
+82: mov     16(%r13), %rax
+    add     $APP_API_IDLE_MS, %rax
+    cmp     (APP_TICK + LIBP2P_TICK_NOW)(%rbx), %rax
+    ja      84f
+    mov     (%r13), %rdi
+    shl     $32, %rdi
+    or      %r14, %rdi
+    call    app_met_close
+84: add     $APP_MET_SLOT, %r13
+    inc     %r14
+    jmp     81b
+85: call    app_met_flush
+99: LEAVE 16
+END_FUNCTION app_met_poll
+
 /* L2: each event of the shell becomes a NODE_EV_P2P event of the next step, but those of the engine's connection. rbp the next event, r12 the end. Locals: L the header. */
 LOCAL_FUNCTION app_p2p_events
     ENTER 16
@@ -5677,7 +6161,17 @@ LOCAL_FUNCTION app_loop
 36: cmp     $APP_API_WAIT_MS, %rax
     jb      37f
     mov     $APP_API_WAIT_MS, %eax
-37: mov     APP_EVENTS(%rbx), %rcx          # no wait while events wait for the next step
+37: lea     APP_MET_SLOT0(%rbx), %rcx       # an open metrics connection: at most APP_API_WAIT_MS too
+    mov     $APP_MET_CONNS, %edx
+38: cmpq    $APP_MET_FREE, 8(%rcx)
+    je      39f
+    cmp     $APP_API_WAIT_MS, %rax
+    jb      39f
+    mov     $APP_API_WAIT_MS, %eax
+39: add     $APP_MET_SLOT, %rcx
+    dec     %edx
+    jnz     38b
+    mov     APP_EVENTS(%rbx), %rcx          # no wait while events wait for the next step
     cmpq    $0, 16(%rcx)
     je      34f
     xor     %eax, %eax
@@ -5687,6 +6181,7 @@ LOCAL_FUNCTION app_loop
     mov     APP_SHELL_EVENTS(%rbx), %rdx
     CALL_GLOBAL libp2p_shell_wait
     call    app_api_poll
+    call    app_met_poll
     jmp     1b
 END_FUNCTION app_loop
 

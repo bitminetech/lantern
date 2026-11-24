@@ -97,7 +97,34 @@
 .set APP_BUILDER_SLOTS, 4
 .set APP_BUILDER_BUFFER, 1 << 20            /* the bytes of an answer */
 .set APP_BUILDER_MS, 10000                  /* a call's longest time */
-.set APP_SIZE, (APP_BUILDER_SLOT0 + APP_BUILDER_SLOTS * APP_BUILDER_SLOT + 4095) & ~4095
+.set APP_MET, APP_BUILDER_SLOT0 + APP_BUILDER_SLOTS * APP_BUILDER_SLOT
+.set APP_MET_SHELL, APP_MET                  /* pair: the shell context of the metrics server, or 0 (app.md) */
+.set APP_MET_EVENTS, APP_MET_SHELL + 16      /* pair: a ByteList of its events */
+.set APP_MET_ACT, APP_MET_EVENTS + 16        /* pair: a ByteList of its shell actions */
+.set APP_MET_SOURCES, APP_MET_ACT + 16       /* MetricsSources of the answers */
+.set APP_MET_STATE, APP_MET_SOURCES + MetricsSources__mem   /* MetricsState of the head */
+.set APP_MET_STATE_ID, APP_MET_STATE + MetricsState__mem    /* the BufferId of the state of APP_MET_STATE, or 0 */
+.set APP_MET_NODE, APP_MET_STATE_ID + 8      /* MetricsNode */
+.set APP_MET_PROCESS, APP_MET_NODE + MetricsNode__mem       /* MetricsProcess */
+.set APP_MET_EMPTY, APP_MET_PROCESS + MetricsProcess__mem   /* a ByteList of no bytes: the head block when its bytes are not held */
+.set APP_METRICS, APP_MET_EMPTY + 24         /* AppMetrics: the run times the app keeps */
+.set APP_MET_SLOT0, APP_METRICS + AppMetrics__mem   /* APP_MET_CONNS slots of APP_MET_SLOT bytes */
+.set APP_MET_CONNS, 4                        /* the metrics server's connections at a time */
+.set APP_MET_SLOT, 104 + METRICS_HEAD_MAX    /* a slot: its generation, its state, the time of its last bytes, the pair of
+                                                its answer's memory, the answer's bytes, those sent, those in flight, then
+                                                at APP_MET_REQUEST a ByteList of the request's bytes */
+.set APP_MET_REQUEST, 80
+.set APP_MET_FREE, 0                         /* the states of a slot */
+.set APP_MET_READING, 1
+.set APP_MET_SENDING, 2
+.set APP_MET_CLOSING, 3
+.set APP_MET_WINDOW, 1 << 20                 /* the shell's send buffer of a connection */
+.set APP_MET_PIECE, 1 << 16                  /* the bytes of one SEND */
+.set APP_MET_OUT, 1 << 20                    /* the first memory of an answer; it doubles while short */
+.set APP_MET_TRIES, 8
+.set APP_MET_EVENT_BYTES, 1 << 20
+.set APP_MET_ACT_BYTES, 1 << 18
+.set APP_SIZE, (APP_MET_SLOT0 + APP_MET_CONNS * APP_MET_SLOT + 4095) & ~4095
 .set APP_BLOCK_BYTES, 1 << 16               /* the anchor block */
 .set APP_BUF_ENTRY, 24                      /* a BufferId table entry: id, address, size */
 .set APP_BUFS_CAP, 64                      /* the BufferId table's first room; it doubles when full */
@@ -319,6 +346,9 @@ app_version_text:
 app_m_api:
     .ascii "Beacon API on TCP "
 .set app_m_api_len, 18
+app_m_metrics:
+    .ascii "metrics on TCP "
+.set app_m_metrics_len, 15
 app_t_colon:
     .ascii ":"
 app_m_peer_id:
