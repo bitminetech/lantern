@@ -325,7 +325,7 @@ lantern_initialize_proposer_lookahead(state, scratch, out) -> status
 
 | ISA | Linux | Windows | macOS | `equal` |
 |---|---|---|---|---|
-| x86-64 | ✅ | ✅ | ✅ |  |
+| x86-64 | ✅ | ✅ |  |  |
 | ARM64 | ✅ | ✅ | ✅ |  |
 | RISC-V | ✅ |  |  |  |
 
@@ -333,7 +333,7 @@ lantern_initialize_proposer_lookahead(state, scratch, out) -> status
 
 | ISA | Linux | Windows | macOS | `equal` |
 |---|---|---|---|---|
-| x86-64 | ✅ | ✅ | ✅ |  |
+| x86-64 | ✅ | ✅ |  |  |
 | ARM64 | ✅ | ✅ | ✅ |  |
 | RISC-V | ✅ |  |  |  |
 
@@ -349,7 +349,7 @@ lantern_initialize_proposer_lookahead(state, scratch, out) -> status
 
 | ISA | Linux | Windows | macOS | `equal` |
 |---|---|---|---|---|
-| x86-64 | ✅ | ✅ | ✅ |  |
+| x86-64 | ✅ | ✅ |  |  |
 | ARM64 | ✅ | ✅ | ✅ |  |
 | RISC-V | ✅ |  |  |  |
 
@@ -357,7 +357,7 @@ lantern_initialize_proposer_lookahead(state, scratch, out) -> status
 
 | ISA | Linux | Windows | macOS | `equal` |
 |---|---|---|---|---|
-| x86-64 | ✅ | ✅ | ✅ |  |
+| x86-64 | ✅ | ✅ |  |  |
 | ARM64 | ✅ | ✅ | ✅ |  |
 | RISC-V | ✅ |  |  |  |
 
@@ -365,7 +365,7 @@ lantern_initialize_proposer_lookahead(state, scratch, out) -> status
 
 | ISA | Linux | Windows | macOS | `equal` |
 |---|---|---|---|---|
-| x86-64 | ✅ | ✅ | ✅ |  |
+| x86-64 | ✅ | ✅ |  |  |
 | ARM64 | ✅ | ✅ | ✅ |  |
 | RISC-V | ✅ |  |  |  |
 
@@ -373,7 +373,7 @@ lantern_initialize_proposer_lookahead(state, scratch, out) -> status
 
 | ISA | Linux | Windows | macOS | `equal` |
 |---|---|---|---|---|
-| x86-64 | ✅ | ✅ | ✅ |  |
+| x86-64 | ✅ | ✅ |  |  |
 | ARM64 | ✅ | ✅ | ✅ |  |
 | RISC-V | ✅ |  |  |  |
 
@@ -381,7 +381,7 @@ lantern_initialize_proposer_lookahead(state, scratch, out) -> status
 
 | ISA | Linux | Windows | macOS | `equal` |
 |---|---|---|---|---|
-| x86-64 | ✅ | ✅ | ✅ |  |
+| x86-64 | ✅ | ✅ |  |  |
 | ARM64 | ✅ | ✅ | ✅ |  |
 | RISC-V | ✅ |  |  |  |
 

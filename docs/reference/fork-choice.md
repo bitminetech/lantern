@@ -841,7 +841,7 @@ A standalone asm-ssz Value of List[DataColumnSidecar, NUMBER_OF_COLUMNS]: size, 
 
 | ISA | Linux | Windows | macOS | `equal` |
 |---|---|---|---|---|
-| x86-64 | ✅ | ✅ | ✅ |  |
+| x86-64 | ✅ | ✅ |  |  |
 | ARM64 | ✅ | ✅ | ✅ |  |
 | RISC-V | ✅ |  |  |  |
 
@@ -849,7 +849,7 @@ A standalone asm-ssz Value of List[DataColumnSidecar, NUMBER_OF_COLUMNS]: size, 
 
 | ISA | Linux | Windows | macOS | `equal` |
 |---|---|---|---|---|
-| x86-64 | ✅ | ✅ | ✅ |  |
+| x86-64 | ✅ | ✅ |  |  |
 | ARM64 | ✅ | ✅ | ✅ |  |
 | RISC-V | ✅ |  |  |  |
 
@@ -857,7 +857,7 @@ A standalone asm-ssz Value of List[DataColumnSidecar, NUMBER_OF_COLUMNS]: size, 
 
 | ISA | Linux | Windows | macOS | `equal` |
 |---|---|---|---|---|
-| x86-64 | ✅ | ✅ | ✅ |  |
+| x86-64 | ✅ | ✅ |  |  |
 | ARM64 | ✅ | ✅ | ✅ |  |
 | RISC-V | ✅ |  |  |  |
 
@@ -865,7 +865,7 @@ A standalone asm-ssz Value of List[DataColumnSidecar, NUMBER_OF_COLUMNS]: size, 
 
 | ISA | Linux | Windows | macOS | `equal` |
 |---|---|---|---|---|
-| x86-64 | ✅ | ✅ | ✅ |  |
+| x86-64 | ✅ | ✅ |  |  |
 | ARM64 | ✅ | ✅ | ✅ |  |
 | RISC-V | ✅ |  |  |  |
 
@@ -873,7 +873,7 @@ A standalone asm-ssz Value of List[DataColumnSidecar, NUMBER_OF_COLUMNS]: size, 
 
 | ISA | Linux | Windows | macOS | `equal` |
 |---|---|---|---|---|
-| x86-64 | ✅ | ✅ | ✅ |  |
+| x86-64 | ✅ | ✅ |  |  |
 | ARM64 | ✅ | ✅ | ✅ |  |
 | RISC-V | ✅ |  |  |  |
 
@@ -905,7 +905,7 @@ A standalone asm-ssz Value of List[DataColumnSidecar, NUMBER_OF_COLUMNS]: size, 
 
 | ISA | Linux | Windows | macOS | `equal` |
 |---|---|---|---|---|
-| x86-64 | ✅ | ✅ | ✅ |  |
+| x86-64 | ✅ | ✅ |  |  |
 | ARM64 | ✅ | ✅ | ✅ |  |
 | RISC-V | ✅ |  |  |  |
 
@@ -913,7 +913,7 @@ A standalone asm-ssz Value of List[DataColumnSidecar, NUMBER_OF_COLUMNS]: size, 
 
 | ISA | Linux | Windows | macOS | `equal` |
 |---|---|---|---|---|
-| x86-64 | ✅ | ✅ | ✅ |  |
+| x86-64 | ✅ | ✅ |  |  |
 | ARM64 | ✅ | ✅ | ✅ |  |
 | RISC-V | ✅ |  |  |  |
 
@@ -921,7 +921,7 @@ A standalone asm-ssz Value of List[DataColumnSidecar, NUMBER_OF_COLUMNS]: size, 
 
 | ISA | Linux | Windows | macOS | `equal` |
 |---|---|---|---|---|
-| x86-64 | ✅ | ✅ | ✅ |  |
+| x86-64 | ✅ | ✅ |  |  |
 | ARM64 | ✅ | ✅ | ✅ |  |
 | RISC-V | ✅ |  |  |  |
 
@@ -929,7 +929,7 @@ A standalone asm-ssz Value of List[DataColumnSidecar, NUMBER_OF_COLUMNS]: size, 
 
 | ISA | Linux | Windows | macOS | `equal` |
 |---|---|---|---|---|
-| x86-64 | ✅ | ✅ | ✅ |  |
+| x86-64 | ✅ | ✅ |  |  |
 | ARM64 | ✅ | ✅ | ✅ |  |
 | RISC-V | ✅ |  |  |  |
 
@@ -937,7 +937,7 @@ A standalone asm-ssz Value of List[DataColumnSidecar, NUMBER_OF_COLUMNS]: size, 
 
 | ISA | Linux | Windows | macOS | `equal` |
 |---|---|---|---|---|
-| x86-64 | ✅ | ✅ | ✅ |  |
+| x86-64 | ✅ | ✅ |  |  |
 | ARM64 | ✅ | ✅ | ✅ |  |
 | RISC-V | ✅ |  |  |  |
 
@@ -961,7 +961,7 @@ A standalone asm-ssz Value of List[DataColumnSidecar, NUMBER_OF_COLUMNS]: size, 
 
 | ISA | Linux | Windows | macOS | `equal` |
 |---|---|---|---|---|
-| x86-64 | ✅ | ✅ | ✅ |  |
+| x86-64 | ✅ | ✅ |  |  |
 | ARM64 | ✅ | ✅ | ✅ |  |
 | RISC-V | ✅ |  |  |  |
 
@@ -969,7 +969,7 @@ A standalone asm-ssz Value of List[DataColumnSidecar, NUMBER_OF_COLUMNS]: size, 
 
 | ISA | Linux | Windows | macOS | `equal` |
 |---|---|---|---|---|
-| x86-64 | ✅ | ✅ | ✅ |  |
+| x86-64 | ✅ | ✅ |  |  |
 | ARM64 | ✅ | ✅ | ✅ |  |
 | RISC-V | ✅ |  |  |  |
 
@@ -977,7 +977,7 @@ A standalone asm-ssz Value of List[DataColumnSidecar, NUMBER_OF_COLUMNS]: size, 
 
 | ISA | Linux | Windows | macOS | `equal` |
 |---|---|---|---|---|
-| x86-64 | ✅ | ✅ | ✅ |  |
+| x86-64 | ✅ | ✅ |  |  |
 | ARM64 | ✅ | ✅ | ✅ |  |
 | RISC-V | ✅ |  |  |  |
 
@@ -985,7 +985,7 @@ A standalone asm-ssz Value of List[DataColumnSidecar, NUMBER_OF_COLUMNS]: size, 
 
 | ISA | Linux | Windows | macOS | `equal` |
 |---|---|---|---|---|
-| x86-64 | ✅ | ✅ | ✅ |  |
+| x86-64 | ✅ | ✅ |  |  |
 | ARM64 | ✅ | ✅ | ✅ |  |
 | RISC-V | ✅ |  |  |  |
 
@@ -993,7 +993,7 @@ A standalone asm-ssz Value of List[DataColumnSidecar, NUMBER_OF_COLUMNS]: size, 
 
 | ISA | Linux | Windows | macOS | `equal` |
 |---|---|---|---|---|
-| x86-64 | ✅ | ✅ | ✅ |  |
+| x86-64 | ✅ | ✅ |  |  |
 | ARM64 | ✅ | ✅ | ✅ |  |
 | RISC-V | ✅ |  |  |  |
 
@@ -1001,7 +1001,7 @@ A standalone asm-ssz Value of List[DataColumnSidecar, NUMBER_OF_COLUMNS]: size, 
 
 | ISA | Linux | Windows | macOS | `equal` |
 |---|---|---|---|---|
-| x86-64 | ✅ | ✅ | ✅ |  |
+| x86-64 | ✅ | ✅ |  |  |
 | ARM64 | ✅ | ✅ | ✅ |  |
 | RISC-V | ✅ |  |  |  |
 
@@ -1017,7 +1017,7 @@ A standalone asm-ssz Value of List[DataColumnSidecar, NUMBER_OF_COLUMNS]: size, 
 
 | ISA | Linux | Windows | macOS | `equal` |
 |---|---|---|---|---|
-| x86-64 | ✅ | ✅ | ✅ |  |
+| x86-64 | ✅ | ✅ |  |  |
 | ARM64 | ✅ | ✅ | ✅ |  |
 | RISC-V | ✅ |  |  |  |
 

@@ -408,7 +408,7 @@ The header of a record.
 
 | ISA | Linux | Windows | macOS | `equal` |
 |---|---|---|---|---|
-| x86-64 | ✅ | ✅ | ✅ |  |
+| x86-64 | ✅ | ✅ |  |  |
 | ARM64 | ✅ | ✅ | ✅ |  |
 | RISC-V | ✅ |  |  |  |
 
@@ -416,7 +416,7 @@ The header of a record.
 
 | ISA | Linux | Windows | macOS | `equal` |
 |---|---|---|---|---|
-| x86-64 | ✅ | ✅ | ✅ |  |
+| x86-64 | ✅ | ✅ |  |  |
 | ARM64 | ✅ | ✅ | ✅ |  |
 | RISC-V | ✅ |  |  |  |
 
@@ -424,7 +424,7 @@ The header of a record.
 
 | ISA | Linux | Windows | macOS | `equal` |
 |---|---|---|---|---|
-| x86-64 | ✅ | ✅ | ✅ |  |
+| x86-64 | ✅ | ✅ |  |  |
 | ARM64 | ✅ | ✅ | ✅ |  |
 | RISC-V | ✅ |  |  |  |
 
@@ -432,7 +432,7 @@ The header of a record.
 
 | ISA | Linux | Windows | macOS | `equal` |
 |---|---|---|---|---|
-| x86-64 | ✅ | ✅ | ✅ |  |
+| x86-64 | ✅ | ✅ |  |  |
 | ARM64 | ✅ | ✅ | ✅ |  |
 | RISC-V | ✅ |  |  |  |
 
@@ -440,7 +440,7 @@ The header of a record.
 
 | ISA | Linux | Windows | macOS | `equal` |
 |---|---|---|---|---|
-| x86-64 | ✅ | ✅ | ✅ |  |
+| x86-64 | ✅ | ✅ |  |  |
 | ARM64 | ✅ | ✅ | ✅ |  |
 | RISC-V | ✅ |  |  |  |
 
@@ -448,7 +448,7 @@ The header of a record.
 
 | ISA | Linux | Windows | macOS | `equal` |
 |---|---|---|---|---|
-| x86-64 | ✅ | ✅ | ✅ |  |
+| x86-64 | ✅ | ✅ |  |  |
 | ARM64 | ✅ | ✅ | ✅ |  |
 | RISC-V | ✅ |  |  |  |
 
@@ -456,7 +456,7 @@ The header of a record.
 
 | ISA | Linux | Windows | macOS | `equal` |
 |---|---|---|---|---|
-| x86-64 | ✅ | ✅ | ✅ |  |
+| x86-64 | ✅ | ✅ |  |  |
 | ARM64 | ✅ | ✅ | ✅ |  |
 | RISC-V | ✅ |  |  |  |
 
@@ -464,7 +464,7 @@ The header of a record.
 
 | ISA | Linux | Windows | macOS | `equal` |
 |---|---|---|---|---|
-| x86-64 | ✅ | ✅ | ✅ |  |
+| x86-64 | ✅ | ✅ |  |  |
 | ARM64 | ✅ | ✅ | ✅ |  |
 | RISC-V | ✅ |  |  |  |
 
@@ -472,7 +472,7 @@ The header of a record.
 
 | ISA | Linux | Windows | macOS | `equal` |
 |---|---|---|---|---|
-| x86-64 | ✅ | ✅ | ✅ |  |
+| x86-64 | ✅ | ✅ |  |  |
 | ARM64 | ✅ | ✅ | ✅ |  |
 | RISC-V | ✅ |  |  |  |
 
@@ -480,6 +480,6 @@ The header of a record.
 
 | ISA | Linux | Windows | macOS | `equal` |
 |---|---|---|---|---|
-| x86-64 | ✅ | ✅ | ✅ |  |
+| x86-64 | ✅ | ✅ |  |  |
 | ARM64 | ✅ | ✅ | ✅ |  |
 | RISC-V | ✅ |  |  |  |

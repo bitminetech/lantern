@@ -819,7 +819,7 @@ An update, or a finality update.
 
 | ISA | Linux | Windows | macOS | `equal` |
 |---|---|---|---|---|
-| x86-64 | ✅ | ✅ | ✅ |  |
+| x86-64 | ✅ | ✅ |  |  |
 | ARM64 | ✅ | ✅ | ✅ |  |
 | RISC-V | ✅ |  |  |  |
 
@@ -827,7 +827,7 @@ An update, or a finality update.
 
 | ISA | Linux | Windows | macOS | `equal` |
 |---|---|---|---|---|
-| x86-64 | ✅ | ✅ | ✅ |  |
+| x86-64 | ✅ | ✅ |  |  |
 | ARM64 | ✅ | ✅ | ✅ |  |
 | RISC-V | ✅ |  |  |  |
 
@@ -835,7 +835,7 @@ An update, or a finality update.
 
 | ISA | Linux | Windows | macOS | `equal` |
 |---|---|---|---|---|
-| x86-64 | ✅ | ✅ | ✅ |  |
+| x86-64 | ✅ | ✅ |  |  |
 | ARM64 | ✅ | ✅ | ✅ |  |
 | RISC-V | ✅ |  |  |  |
 
@@ -843,7 +843,7 @@ An update, or a finality update.
 
 | ISA | Linux | Windows | macOS | `equal` |
 |---|---|---|---|---|
-| x86-64 | ✅ | ✅ | ✅ |  |
+| x86-64 | ✅ | ✅ |  |  |
 | ARM64 | ✅ | ✅ | ✅ |  |
 | RISC-V | ✅ |  |  |  |
 
@@ -851,7 +851,7 @@ An update, or a finality update.
 
 | ISA | Linux | Windows | macOS | `equal` |
 |---|---|---|---|---|
-| x86-64 | ✅ | ✅ | ✅ |  |
+| x86-64 | ✅ | ✅ |  |  |
 | ARM64 | ✅ | ✅ | ✅ |  |
 | RISC-V | ✅ |  |  |  |
 
@@ -875,7 +875,7 @@ An update, or a finality update.
 
 | ISA | Linux | Windows | macOS | `equal` |
 |---|---|---|---|---|
-| x86-64 | ✅ | ✅ | ✅ |  |
+| x86-64 | ✅ | ✅ |  |  |
 | ARM64 | ✅ | ✅ | ✅ |  |
 | RISC-V | ✅ |  |  |  |
 
@@ -883,7 +883,7 @@ An update, or a finality update.
 
 | ISA | Linux | Windows | macOS | `equal` |
 |---|---|---|---|---|
-| x86-64 | ✅ | ✅ | ✅ |  |
+| x86-64 | ✅ | ✅ |  |  |
 | ARM64 | ✅ | ✅ | ✅ |  |
 | RISC-V | ✅ |  |  |  |
 
@@ -891,7 +891,7 @@ An update, or a finality update.
 
 | ISA | Linux | Windows | macOS | `equal` |
 |---|---|---|---|---|
-| x86-64 | ✅ | ✅ | ✅ |  |
+| x86-64 | ✅ | ✅ |  |  |
 | ARM64 | ✅ | ✅ | ✅ |  |
 | RISC-V | ✅ |  |  |  |
 
@@ -899,7 +899,7 @@ An update, or a finality update.
 
 | ISA | Linux | Windows | macOS | `equal` |
 |---|---|---|---|---|
-| x86-64 | ✅ | ✅ | ✅ |  |
+| x86-64 | ✅ | ✅ |  |  |
 | ARM64 | ✅ | ✅ | ✅ |  |
 | RISC-V | ✅ |  |  |  |
 
@@ -907,7 +907,7 @@ An update, or a finality update.
 
 | ISA | Linux | Windows | macOS | `equal` |
 |---|---|---|---|---|
-| x86-64 | ✅ | ✅ | ✅ |  |
+| x86-64 | ✅ | ✅ |  |  |
 | ARM64 | ✅ | ✅ | ✅ |  |
 | RISC-V | ✅ |  |  |  |
 
@@ -915,6 +915,6 @@ An update, or a finality update.
 
 | ISA | Linux | Windows | macOS | `equal` |
 |---|---|---|---|---|
-| x86-64 | ✅ | ✅ | ✅ |  |
+| x86-64 | ✅ | ✅ |  |  |
 | ARM64 | ✅ | ✅ | ✅ |  |
 | RISC-V | ✅ |  |  |  |

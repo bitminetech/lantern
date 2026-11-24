@@ -270,7 +270,7 @@ lantern_deposit_proof(leaves, count, index, scratch, out) -> status
 
 | ISA | Linux | Windows | macOS | `equal` |
 |---|---|---|---|---|
-| x86-64 | ✅ | ✅ | ✅ |  |
+| x86-64 | ✅ | ✅ |  |  |
 | ARM64 | ✅ | ✅ | ✅ |  |
 | RISC-V | ✅ |  |  |  |
 
@@ -278,7 +278,7 @@ lantern_deposit_proof(leaves, count, index, scratch, out) -> status
 
 | ISA | Linux | Windows | macOS | `equal` |
 |---|---|---|---|---|
-| x86-64 | ✅ | ✅ | ✅ |  |
+| x86-64 | ✅ | ✅ |  |  |
 | ARM64 | ✅ | ✅ | ✅ |  |
 | RISC-V | ✅ |  |  |  |
 
@@ -286,7 +286,7 @@ lantern_deposit_proof(leaves, count, index, scratch, out) -> status
 
 | ISA | Linux | Windows | macOS | `equal` |
 |---|---|---|---|---|
-| x86-64 | ✅ | ✅ | ✅ |  |
+| x86-64 | ✅ | ✅ |  |  |
 | ARM64 | ✅ | ✅ | ✅ |  |
 | RISC-V | ✅ |  |  |  |
 
@@ -294,7 +294,7 @@ lantern_deposit_proof(leaves, count, index, scratch, out) -> status
 
 | ISA | Linux | Windows | macOS | `equal` |
 |---|---|---|---|---|
-| x86-64 | ✅ | ✅ | ✅ |  |
+| x86-64 | ✅ | ✅ |  |  |
 | ARM64 | ✅ | ✅ | ✅ |  |
 | RISC-V | ✅ |  |  |  |
 
@@ -302,7 +302,7 @@ lantern_deposit_proof(leaves, count, index, scratch, out) -> status
 
 | ISA | Linux | Windows | macOS | `equal` |
 |---|---|---|---|---|
-| x86-64 | ✅ | ✅ | ✅ |  |
+| x86-64 | ✅ | ✅ |  |  |
 | ARM64 | ✅ | ✅ | ✅ |  |
 | RISC-V | ✅ |  |  |  |
 
@@ -310,7 +310,7 @@ lantern_deposit_proof(leaves, count, index, scratch, out) -> status
 
 | ISA | Linux | Windows | macOS | `equal` |
 |---|---|---|---|---|
-| x86-64 | ✅ | ✅ | ✅ |  |
+| x86-64 | ✅ | ✅ |  |  |
 | ARM64 | ✅ | ✅ | ✅ |  |
 | RISC-V | ✅ |  |  |  |
 
@@ -318,7 +318,7 @@ lantern_deposit_proof(leaves, count, index, scratch, out) -> status
 
 | ISA | Linux | Windows | macOS | `equal` |
 |---|---|---|---|---|
-| x86-64 | ✅ | ✅ | ✅ |  |
+| x86-64 | ✅ | ✅ |  |  |
 | ARM64 | ✅ | ✅ | ✅ |  |
 | RISC-V | ✅ |  |  |  |
 
@@ -326,6 +326,6 @@ lantern_deposit_proof(leaves, count, index, scratch, out) -> status
 
 | ISA | Linux | Windows | macOS | `equal` |
 |---|---|---|---|---|
-| x86-64 | ✅ | ✅ | ✅ |  |
+| x86-64 | ✅ | ✅ |  |  |
 | ARM64 | ✅ | ✅ | ✅ |  |
 | RISC-V | ✅ |  |  |  |
