@@ -2466,17 +2466,14 @@ LOCAL_FUNCTION node_prune
     movq    $NODE_BLOCK_FREE, NodeBlock_status(%r12)
 19: incq    S7(%rsp)
     jmp     3b
-20: movq    $0, S7(%rsp)                    # each sidecar: invalid, or at or below the finalized slot and of no kept block
+20: movq    $0, S7(%rsp)                    # each sidecar at or below the finalized slot and of no kept block
 21: mov     S7(%rsp), %rax
     cmp     (Node_blobs + 8)(%rbx), %rax
     jae     30f
     imul    $NodeBlob__mem, %rax, %r12
     add     Node_blobs(%rbx), %r12
     add     %rbx, %r12
-    mov     NodeBlob_status(%r12), %rax
-    cmp     $NODE_BLOB_INVALID, %rax
-    je      26f
-    cmp     $NODE_BLOB_VALID, %rax
+    cmpq    $NODE_BLOB_VALID, NodeBlob_status(%r12)
     jne     29f
     cmp     %r13, NodeBlob_slot(%r12)
     ja      29f
@@ -3186,6 +3183,7 @@ LOCAL_FUNCTION node_backfill_ask
     mov     L(%rsp), %rsi
     mov     (L + 8)(%rsp), %rdx
     mov     %rax, %rcx
+    lea     Node_columns(%rbx), %r8
     call    node_sidecar_ask
     test    %rax, %rax
     jnz     99f
@@ -4022,7 +4020,8 @@ END_FUNCTION node_column_count
 
 /*
  * rax = 1 when the node holds a NODE_BLOB_VALID entry of the root at rdi for each column it
- * samples, else 0. A leaf; uses rcx, rdx, rsi, r8, r9, r11, xmm0-xmm2.
+ * samples, else 0; r9 and rsi = the columns it samples and lacks, below 64 and from 64. A leaf;
+ * uses rcx, rdx, rsi, r8, r9, r11, xmm0-xmm2.
  */
 LOCAL_FUNCTION node_columns_held
     UNWIND_END_PROLOGUE
@@ -4047,11 +4046,12 @@ LOCAL_FUNCTION node_columns_held
     jmp     1b
 3:  mov     Node_columns(%rbx), %rax        # each sampled column held
     not     %r9
-    and     %r9, %rax
+    and     %rax, %r9
     mov     (Node_columns + 8)(%rbx), %rcx
     not     %rsi
-    and     %rsi, %rcx
-    or      %rcx, %rax
+    and     %rcx, %rsi
+    mov     %r9, %rax
+    or      %rsi, %rax
     sete    %al
     movzbl  %al, %eax
     ret
@@ -4190,6 +4190,78 @@ LOCAL_FUNCTION node_peer_custody
     call    node_custody_columns
 9:  LEAVE 224
 END_FUNCTION node_peer_custody
+
+/*
+ * The peer room (node.md): rax = the capacity of the peers part, rdx = its open room (the
+ * capacity less capacity >> NODE_PEER_SPARE_SHIFT), rcx = dialing + the peers. A leaf; uses r8.
+ */
+LOCAL_FUNCTION node_peer_room
+    UNWIND_END_PROLOGUE
+    mov     Node_streams(%rbx), %rax
+    sub     Node_peers(%rbx), %rax
+    xor     %edx, %edx
+    mov     $NodePeer__mem, %r8d
+    div     %r8
+    mov     %rax, %rdx
+    shr     $NODE_PEER_SPARE_SHIFT, %rdx
+    neg     %rdx
+    add     %rax, %rdx
+    mov     (Node_peers + 8)(%rbx), %rcx
+    add     Node_dialing(%rbx), %rcx
+    ret
+END_FUNCTION node_peer_room
+
+.if NODE_COLUMN_PEERS - 2
+.error "node_short_columns counts to 2 with two masks"
+.endif
+/*
+ * rax, rdx = the short columns (node.md, the peer room), below 64 and from 64: from fulu, the
+ * columns of the node that fewer than NODE_COLUMN_PEERS peers with NODE_PEER_METADATA hold in
+ * their custody; none before fulu. r12 a peer, r13 the peers left, S7 and S8 the columns of one
+ * peer or more, S9 and S10 of two or more.
+ */
+LOCAL_FUNCTION node_short_columns
+    ENTER 0
+    mov     %rbp, %rdi
+    call    node_store_slot
+    mov     %rax, %rdi
+    lea     Node_config(%rbx), %rsi
+    call    node_fork
+    cmp     $FORK_FULU, %rax
+    jb      8f
+    movq    $0, S7(%rsp)
+    movq    $0, S8(%rsp)
+    movq    $0, S9(%rsp)
+    movq    $0, S10(%rsp)
+    PART    %r12, %r13, %rbx, Node_peers
+1:  test    %r13, %r13
+    jz      2f
+    testq   $NODE_PEER_METADATA, NodePeer_flags(%r12)
+    jz      3f
+    mov     NodePeer_custody(%r12), %rax    # two or more |= one or more & custody; one or more |= custody
+    mov     %rax, %rcx
+    and     S7(%rsp), %rcx
+    or      %rcx, S9(%rsp)
+    or      %rax, S7(%rsp)
+    mov     (NodePeer_custody + 8)(%r12), %rax
+    mov     %rax, %rcx
+    and     S8(%rsp), %rcx
+    or      %rcx, S10(%rsp)
+    or      %rax, S8(%rsp)
+3:  add     $NodePeer__mem, %r12
+    dec     %r13
+    jmp     1b
+2:  mov     S9(%rsp), %rax                  # the node's columns of fewer than two
+    not     %rax
+    and     Node_columns(%rbx), %rax
+    mov     S10(%rsp), %rdx
+    not     %rdx
+    and     (Node_columns + 8)(%rbx), %rdx
+    LEAVE 0
+8:  xor     %eax, %eax
+    xor     %edx, %edx
+    LEAVE 0
+END_FUNCTION node_short_columns
 
 /* rax = 1 when the block entry rdi needs blobs or columns it does not hold (node.md), else 0. r13 the entry, S7 its blob count, S8 a window. */
 LOCAL_FUNCTION node_lacks_sidecars
@@ -4951,12 +5023,18 @@ LOCAL_FUNCTION node_event
     mov     %r13, %rdi
     call    node_blob_added
     LEAVE 48
-78: movq    $NODE_BLOB_INVALID, NodeBlob_status(%r13)      # not valid, or held: its bytes go
-    mov     $NODE_ACT_BYTES_FREE, %edi
+78: mov     $NODE_ACT_BYTES_FREE, %edi      # not valid, or held: its bytes go, and the entry is free
     mov     NodeBlob_data_id(%r13), %rsi
     xor     %edx, %edx
     call    node_ids
+    mov     $-1, %rax
+    mov     %rax, (%r13)
+    mov     %rax, 8(%r13)
+    mov     %rax, 16(%r13)
+    mov     %rax, 24(%r13)
+    mov     %rax, NodeBlob_slot(%r13)
     movq    $0, NodeBlob_data_id(%r13)
+    movq    $NODE_BLOB_FREE, NodeBlob_status(%r13)
     LEAVE 48
 85: cmp     $NODE_WORK_NEW_PAYLOAD, %rax    # NEW_PAYLOAD, FORKCHOICE, PREPARE_PAYLOAD: the request to the execution engine
     je      86f
@@ -6812,16 +6890,59 @@ LOCAL_FUNCTION node_enr
 3:  add     $NodePeer__mem, %r8
     dec     %r9
     jmp     2b
-4:  mov     (Node_peers + 8)(%rbx), %rcx    # room for a peer
-    add     Node_dialing(%rbx), %rcx
-    mov     Node_streams(%rbx), %rax
-    sub     Node_peers(%rbx), %rax
-    xor     %edx, %edx
-    mov     $NodePeer__mem, %r8d
-    div     %r8
+4:  call    node_peer_room                  # room: below the open room, or below the capacity for a column dial
+    cmp     %rdx, %rcx
+    jb      41f
     cmp     %rax, %rcx
     jae     9f
-    mov     $LIBP2P_EV_DIAL_SIZE, %edi      # the DIAL
+    call    node_short_columns
+    mov     %rax, (L + 96)(%rsp)
+    mov     %rdx, (L + 104)(%rsp)
+    or      %rdx, %rax
+    jz      9f
+    mov     %r13, %rdi                      # the record's custody: of its cgc, or of CUSTODY_REQUIREMENT groups
+    mov     8(%r12), %rsi
+    add     %r12, %rsi
+    mov     $0x636763, %edx
+    mov     $3, %ecx
+    call    node_enr_pair
+    mov     (Node_config + CONFIG_CUSTODY_REQUIREMENT)(%rbx), %rsi
+    test    %rax, %rax
+    jz      43f
+    cmp     $8, %rdx
+    ja      9f
+    xor     %esi, %esi                      # big-endian, no leading zero byte
+42: test    %rdx, %rdx
+    jz      43f
+    shl     $8, %rsi
+    movzbl  (%rax), %ecx
+    or      %rcx, %rsi
+    inc     %rax
+    dec     %rdx
+    jmp     42b
+43: mov     DISCV5_ENR_NODE_ID(%r13), %rax  # its NodeID: the digest's bytes in reverse order
+    mov     (DISCV5_ENR_NODE_ID + 8)(%r13), %rcx
+    mov     (DISCV5_ENR_NODE_ID + 16)(%r13), %rdx
+    mov     (DISCV5_ENR_NODE_ID + 24)(%r13), %rdi
+    bswap   %rax
+    bswap   %rcx
+    bswap   %rdx
+    bswap   %rdi
+    mov     %rdi, (L + 48)(%rsp)
+    mov     %rdx, (L + 56)(%rsp)
+    mov     %rcx, (L + 64)(%rsp)
+    mov     %rax, (L + 72)(%rsp)
+    lea     (L + 48)(%rsp), %rdi
+    lea     Node_config(%rbx), %rdx
+    lea     (L + 80)(%rsp), %rcx
+    call    node_custody_columns
+    mov     (L + 80)(%rsp), %rax            # a short column in it: a column dial
+    and     (L + 96)(%rsp), %rax
+    mov     (L + 88)(%rsp), %rdx
+    and     (L + 104)(%rsp), %rdx
+    or      %rdx, %rax
+    jz      9f
+41: mov     $LIBP2P_EV_DIAL_SIZE, %edi      # the DIAL
     call    node_out
     test    %rax, %rax
     jz      9f
@@ -6858,24 +6979,18 @@ LOCAL_FUNCTION node_enr
 END_FUNCTION node_enr
 
 /*
- * With NODE_FLAG_DISCV5 and room for more peers, a NODE_ACT_DISCV5 of a LOOKUP whose target is
- * the 32 entropy bytes of the tick rdi, when lookup_ms is 0 or NODE_LOOKUP_MS before time_ms.
- * r12 the tick, r13 the action.
+ * With NODE_FLAG_DISCV5, below the open room or with short columns (node.md, the peer room), a
+ * NODE_ACT_DISCV5 of a LOOKUP whose target is the 32 entropy bytes of the tick rdi, when lookup_ms
+ * is 0 or NODE_LOOKUP_MS before time_ms. Then, with short columns and dialing + the peers at the
+ * capacity, a DISCONNECT of the last peer with NODE_PEER_METADATA whose custody holds none of the
+ * node's columns. r12 the tick, then a peer; r13 the action, then the peers left; S7 and S8 the
+ * short columns.
  */
 LOCAL_FUNCTION node_lookup
     ENTER 0
     mov     %rdi, %r12
     testq   $NODE_FLAG_DISCV5, Node_flags(%rbx)
     jz      9f
-    mov     (Node_peers + 8)(%rbx), %rcx
-    add     Node_dialing(%rbx), %rcx
-    mov     Node_streams(%rbx), %rax
-    sub     Node_peers(%rbx), %rax
-    xor     %edx, %edx
-    mov     $NodePeer__mem, %r8d
-    div     %r8
-    cmp     %rax, %rcx
-    jae     9f
     mov     Node_lookup_ms(%rbx), %rax
     test    %rax, %rax
     jz      1f
@@ -6883,7 +6998,16 @@ LOCAL_FUNCTION node_lookup
     add     %rcx, %rax
     cmp     %rax, Node_time_ms(%rbx)
     jb      9f
-1:  mov     $96, %edi                       # the action: 16, 24 a ByteList, 48 the LOOKUP
+1:  call    node_short_columns
+    mov     %rax, S7(%rsp)
+    mov     %rdx, S8(%rsp)
+    call    node_peer_room
+    cmp     %rdx, %rcx
+    jb      2f
+    mov     S7(%rsp), %rax
+    or      S8(%rsp), %rax
+    jz      9f
+2:  mov     $96, %edi                       # the action: 16, 24 a ByteList, 48 the LOOKUP
     call    node_room
     test    %rax, %rax
     jz      9f
@@ -6905,6 +7029,33 @@ LOCAL_FUNCTION node_lookup
     cmp     $1, %rax                        # 0 becomes 1
     adc     $0, %rax
     mov     %rax, Node_lookup_ms(%rbx)
+    mov     S7(%rsp), %rax                  # short columns and no room: the last spare peer goes
+    or      S8(%rsp), %rax
+    jz      9f
+    call    node_peer_room
+    cmp     %rax, %rcx
+    jb      9f
+    PART    %r12, %r13, %rbx, Node_peers
+    test    %r13, %r13
+    jz      9f
+    lea     -1(%r13), %rax
+    imul    $NodePeer__mem, %rax, %rax
+    add     %rax, %r12
+3:  testq   $NODE_PEER_METADATA, NodePeer_flags(%r12)
+    jz      4f
+    mov     NodePeer_custody(%r12), %rax    # none of the node's columns
+    and     Node_columns(%rbx), %rax
+    mov     (NodePeer_custody + 8)(%r12), %rcx
+    and     (Node_columns + 8)(%rbx), %rcx
+    or      %rcx, %rax
+    jz      5f
+4:  sub     $NodePeer__mem, %r12
+    dec     %r13
+    jnz     3b
+    jmp     9f
+5:  mov     $LIBP2P_EVENT_DISCONNECT, %edi
+    mov     NodePeer_handle(%r12), %rsi
+    call    node_out_handle
 9:  LEAVE 0
 END_FUNCTION node_lookup
 
@@ -8915,6 +9066,7 @@ END_FUNCTION node_response
 LOCAL_FUNCTION node_sidecar_ask
     ENTER 96
     mov     %rdi, (L + 80)(%rsp)
+    mov     %r8, (L + 16)(%rsp)
     mov     %rsi, L(%rsp)
     mov     %rdx, (L + 8)(%rsp)
     mov     %rcx, (L + 40)(%rsp)
@@ -9005,12 +9157,13 @@ LOCAL_FUNCTION node_sidecar_ask
     jz      76f
     testq   $NODE_PEER_METADATA, NodePeer_flags(%r12)
     jz      75f
-    mov     Node_columns(%rbx), %rax        # the sampled columns it custodies, not asked yet
+    mov     (L + 16)(%rsp), %rdx            # the columns asked for that it custodies, not asked yet
+    mov     (%rdx), %rax
+    mov     8(%rdx), %rdx
     and     NodePeer_custody(%r12), %rax
     mov     (L + 48)(%rsp), %rcx
     not     %rcx
     and     %rcx, %rax
-    mov     (Node_columns + 8)(%rbx), %rdx
     and     (NodePeer_custody + 8)(%r12), %rdx
     mov     (L + 56)(%rsp), %rcx
     not     %rcx
@@ -9094,12 +9247,13 @@ END_FUNCTION node_sidecar_ask
  * The sidecar retry (node.md): with no BlobSidecarsByRange or DataColumnSidecarsByRange of the node
  * open, no NodeBlob in NODE_BLOB_VERIFYING, a block below the store's slot in NODE_BLOCK_BLOBS, from
  * sidecar_ms + NODE_SIDECAR_RETRY_MS on: the sidecar requests of the slots of those blocks from the
- * lowest to the highest, at most NODE_SYNC_BATCH, the blob request to a peer from sidecar_peer;
- * sidecar_ms takes time_ms, and sidecar_peer 1 more. r12 an entry, r13 the entries left, S7 the
- * lowest slot, S8 the highest, then the count, S9 the fork of the store's slot, S10 its slot.
+ * lowest to the highest, at most NODE_SYNC_BATCH, the blob request to a peer from sidecar_peer, the
+ * column requests of the columns those blocks of the range lack; sidecar_ms takes time_ms, and
+ * sidecar_peer 1 more. r12 an entry, r13 the entries left, S7 the lowest slot, S8 the highest, then
+ * the count, S9 the fork of the store's slot, S10 its slot. Locals: L the columns lacked (16).
  */
 LOCAL_FUNCTION node_sidecar_retry
-    ENTER 0
+    ENTER 16
     mov     Node_sidecar_ms(%rbx), %rax     # its time
     add     $NODE_SIDECAR_RETRY_MS, %rax
     cmp     %rax, Node_time_ms(%rbx)
@@ -9156,7 +9310,26 @@ LOCAL_FUNCTION node_sidecar_retry
     cmp     %rcx, %rax
     cmova   %rcx, %rax
     mov     %rax, S8(%rsp)
-    mov     S10(%rsp), %rdi                 # the fork of the store's slot
+    movq    $0, L(%rsp)                     # the columns those blocks of the range lack
+    movq    $0, (L + 8)(%rsp)
+    PART    %r12, %r13, %rbx, Node_blocks
+7:  test    %r13, %r13
+    jz      8f
+    cmpq    $NODE_BLOCK_BLOBS, NodeBlock_status(%r12)
+    jne     71f
+    mov     NodeBlock_slot(%r12), %rax
+    sub     S7(%rsp), %rax
+    jb      71f
+    cmp     S8(%rsp), %rax
+    jae     71f
+    mov     %r12, %rdi
+    call    node_columns_held
+    or      %r9, L(%rsp)
+    or      %rsi, (L + 8)(%rsp)
+71: add     $NodeBlock__mem, %r12
+    dec     %r13
+    jmp     7b
+8:  mov     S10(%rsp), %rdi                 # the fork of the store's slot
     lea     Node_config(%rbx), %rsi
     call    node_fork
     mov     %rax, S9(%rsp)
@@ -9172,11 +9345,12 @@ LOCAL_FUNCTION node_sidecar_retry
     mov     S7(%rsp), %rsi
     mov     S8(%rsp), %rdx
     mov     S9(%rsp), %rcx
+    lea     L(%rsp), %r8
     call    node_sidecar_ask
     mov     Node_time_ms(%rbx), %rax
     mov     %rax, Node_sidecar_ms(%rbx)
     incq    Node_sidecar_peer(%rbx)
-9:  LEAVE 0
+9:  LEAVE 16
 END_FUNCTION node_sidecar_retry
 
 /*
@@ -9325,6 +9499,7 @@ LOCAL_FUNCTION node_sync
     mov     L(%rsp), %rsi
     mov     (L + 8)(%rsp), %rdx
     mov     (L + 40)(%rsp), %rcx
+    lea     Node_columns(%rbx), %r8
     call    node_sidecar_ask
     test    %rax, %rax
     jnz     9f
@@ -9499,18 +9674,19 @@ LOCAL_FUNCTION node_notice
     cmpq    $0, Node_dialing(%rbx)
     je      65f
     decq    Node_dialing(%rbx)
-65: mov     Node_streams(%rbx), %rax        # a new peer: its entry, or DISCONNECT when the table is full
-    sub     Node_peers(%rbx), %rax
-    xor     %edx, %edx
-    mov     $NodePeer__mem, %ecx
-    div     %rcx
-    mov     (Node_peers + 8)(%rbx), %rcx
-    cmp     %rax, %rcx
-    jb      1f
-    mov     $LIBP2P_EVENT_DISCONNECT, %edi
+65: call    node_peer_room                  # a new peer: its entry; DISCONNECT when the table is full, or inbound past the open room
+    mov     (Node_peers + 8)(%rbx), %r8
+    cmp     %rax, %r8
+    jae     651f
+    cmpq    $LIBP2P_INBOUND, LIBP2P_ACT_PC_DIRECTION(%r12)
+    jne     652f
+    cmp     %rdx, %rcx
+    jb      652f
+651: mov    $LIBP2P_EVENT_DISCONNECT, %edi
     mov     LIBP2P_ACT_PEER(%r12), %rsi
     call    node_out_handle
     LEAVE 96
+652: mov    %r8, %rcx
 1:  imul    $NodePeer__mem, %rcx, %r13
     add     Node_peers(%rbx), %r13
     add     %rbx, %r13

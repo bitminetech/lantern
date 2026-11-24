@@ -2508,15 +2508,14 @@ LOCAL_FUNCTION node_prune
     sd      t0, NodeBlock_status(s8)
 19: addi    s7, s7, 1
     j       3b
-20: li      s7, 0                           # each sidecar: invalid, or at or below the finalized slot and of no kept block
+20: li      s7, 0                           # each sidecar at or below the finalized slot and of no kept block
 21: ld      t0, (Node_blobs + 8)(s1)
     bgeu    s7, t0, 30f
     PART    s8, t0, s1, Node_blobs
-    slli    t0, s7, 6
+    li      t0, NodeBlob__mem
+    mul     t0, s7, t0
     add     s8, s8, t0
     ld      t0, NodeBlob_status(s8)
-    li      t1, NODE_BLOB_INVALID
-    beq     t0, t1, 26f
     li      t1, NODE_BLOB_VALID
     bne     t0, t1, 29f
     ld      t0, NodeBlob_slot(s8)
@@ -3218,6 +3217,7 @@ LOCAL_FUNCTION node_backfill_ask
     mv      a0, s7
     ld      a1, L(sp)
     ld      a2, (L + 8)(sp)
+    addi    a4, s1, Node_columns
     call    node_sidecar_ask
     bnez    a0, 99f
     li      a1, 1                           # version 2 from altair on
@@ -4029,7 +4029,8 @@ END_FUNCTION node_column_count
 
 /*
  * a0 = 1 when the node holds a NODE_BLOB_VALID entry of the root at a0 for each column it
- * samples, else 0. A leaf; uses t0-t6, a6, a7.
+ * samples, else 0; t4 and t5 = the columns it samples and lacks, below 64 and from 64. A leaf;
+ * uses t0-t6, a6, a7.
  */
 LOCAL_FUNCTION node_columns_held
     UNWIND_END_PROLOGUE
@@ -4056,11 +4057,11 @@ LOCAL_FUNCTION node_columns_held
     j       1b
 3:  ld      t2, Node_columns(s1)            # each sampled column held
     not     t4, t4
-    and     t2, t2, t4
+    and     t4, t2, t4
     ld      t3, (Node_columns + 8)(s1)
     not     t5, t5
-    and     t3, t3, t5
-    or      t2, t2, t3
+    and     t5, t3, t5
+    or      t2, t4, t5
     seqz    a0, t2
     ret
 END_FUNCTION node_columns_held
@@ -4199,6 +4200,74 @@ LOCAL_FUNCTION node_peer_custody
     call    node_custody_columns
 9:  LEAVE 224
 END_FUNCTION node_peer_custody
+
+/*
+ * The peer room (node.md): a0 = the capacity of the peers part, a1 = its open room (the capacity
+ * less capacity >> NODE_PEER_SPARE_SHIFT), a2 = dialing + the peers. A leaf; uses t0.
+ */
+LOCAL_FUNCTION node_peer_room
+    UNWIND_END_PROLOGUE
+    ld      a0, Node_streams(s1)
+    ld      t0, Node_peers(s1)
+    sub     a0, a0, t0
+    li      t0, NodePeer__mem
+    divu    a0, a0, t0
+    srli    t0, a0, NODE_PEER_SPARE_SHIFT
+    sub     a1, a0, t0
+    ld      a2, (Node_peers + 8)(s1)
+    ld      t0, Node_dialing(s1)
+    add     a2, a2, t0
+    ret
+END_FUNCTION node_peer_room
+
+.if NODE_COLUMN_PEERS - 2
+.error "node_short_columns counts to 2 with two masks"
+.endif
+/*
+ * a0, a1 = the short columns (node.md, the peer room), below 64 and from 64: from fulu, the
+ * columns of the node that fewer than NODE_COLUMN_PEERS peers with NODE_PEER_METADATA hold in
+ * their custody; none before fulu. s3 a peer, s4 the peers left, s7 and s8 the columns of one
+ * peer or more, s9 and s10 of two or more.
+ */
+LOCAL_FUNCTION node_short_columns
+    ENTER 0
+    mv      a0, s2
+    call    node_store_slot
+    addi    a1, s1, Node_config
+    call    node_fork
+    li      t0, FORK_FULU
+    bltu    a0, t0, 8f
+    li      s7, 0
+    li      s8, 0
+    li      s9, 0
+    li      s10, 0
+    PART    s3, s4, s1, Node_peers
+1:  beqz    s4, 2f
+    ld      t0, NodePeer_flags(s3)
+    andi    t0, t0, NODE_PEER_METADATA
+    beqz    t0, 3f
+    ld      t0, NodePeer_custody(s3)        # two or more |= one or more & custody; one or more |= custody
+    and     t1, t0, s7
+    or      s9, s9, t1
+    or      s7, s7, t0
+    ld      t0, (NodePeer_custody + 8)(s3)
+    and     t1, t0, s8
+    or      s10, s10, t1
+    or      s8, s8, t0
+3:  addi    s3, s3, NodePeer__mem
+    addi    s4, s4, -1
+    j       1b
+2:  ld      t0, Node_columns(s1)            # the node's columns of fewer than two
+    not     t1, s9
+    and     a0, t0, t1
+    ld      t0, (Node_columns + 8)(s1)
+    not     t1, s10
+    and     a1, t0, t1
+    LEAVE 0
+8:  li      a0, 0
+    li      a1, 0
+    LEAVE 0
+END_FUNCTION node_short_columns
 
 /* L0: a0 = 1 when the block entry a0 needs blobs or columns it does not hold (node.md), else 0. s4 the entry, s7 its blob count. */
 LOCAL_FUNCTION node_lacks_sidecars
@@ -4964,13 +5033,19 @@ LOCAL_FUNCTION node_event
     mv      a0, s4
     call    node_blob_added
     LEAVE 48
-78: li      t0, NODE_BLOB_INVALID           # not valid, or held: its bytes go
-    sd      t0, NodeBlob_status(s4)
-    li      a0, NODE_ACT_BYTES_FREE
+78: li      a0, NODE_ACT_BYTES_FREE         # not valid, or held: its bytes go, and the entry is free
     ld      a1, NodeBlob_data_id(s4)
     li      a2, 0
     call    node_ids
+    li      t0, -1
+    sd      t0, 0(s4)
+    sd      t0, 8(s4)
+    sd      t0, 16(s4)
+    sd      t0, 24(s4)
+    sd      t0, NodeBlob_slot(s4)
     sd      zero, NodeBlob_data_id(s4)
+    li      t0, NODE_BLOB_FREE
+    sd      t0, NodeBlob_status(s4)
     LEAVE 48
 85: li      t2, NODE_WORK_NEW_PAYLOAD       # NEW_PAYLOAD, FORKCHOICE, PREPARE_PAYLOAD: the request to the execution engine
     beq     t0, t2, 86f
@@ -6796,16 +6871,55 @@ LOCAL_FUNCTION node_enr
 3:  addi    t0, t0, NodePeer__mem
     addi    t1, t1, -1
     j       2b
-4:  ld      t0, (Node_peers + 8)(s1)        # room for a peer
-    ld      t1, Node_dialing(s1)
-    add     t0, t0, t1
-    ld      t2, Node_streams(s1)
-    ld      t3, Node_peers(s1)
-    sub     t2, t2, t3
-    li      t3, NodePeer__mem
-    divu    t2, t2, t3
-    bgeu    t0, t2, 9f
-    li      a0, LIBP2P_EV_DIAL_SIZE         # the DIAL
+4:  call    node_peer_room                  # room: below the open room, or below the capacity for a column dial
+    bltu    a2, a1, 41f
+    bgeu    a2, a0, 9f
+    call    node_short_columns
+    sd      a0, (L + 96)(sp)
+    sd      a1, (L + 104)(sp)
+    or      t0, a0, a1
+    beqz    t0, 9f
+    mv      a0, s4                          # the record's custody: of its cgc, or of CUSTODY_REQUIREMENT groups
+    ld      a1, 8(s3)
+    add     a1, s3, a1
+    li      a2, 0x636763
+    li      a3, 3
+    call    node_enr_pair
+    ld      t2, (Node_config + CONFIG_CUSTODY_REQUIREMENT)(s1)
+    beqz    a0, 43f
+    li      t0, 8
+    bgtu    a1, t0, 9f
+    li      t2, 0                           # big-endian, no leading zero byte
+42: beqz    a1, 43f
+    lbu     t0, 0(a0)
+    slli    t2, t2, 8
+    or      t2, t2, t0
+    addi    a0, a0, 1
+    addi    a1, a1, -1
+    j       42b
+43: addi    t0, s4, DISCV5_ENR_NODE_ID      # its NodeID: the digest's bytes in reverse order
+    addi    t1, sp, L + 48 + 31
+    li      t3, 32
+44: lbu     t4, 0(t0)
+    sb      t4, 0(t1)
+    addi    t0, t0, 1
+    addi    t1, t1, -1
+    addi    t3, t3, -1
+    bnez    t3, 44b
+    addi    a0, sp, L + 48
+    mv      a1, t2
+    addi    a2, s1, Node_config
+    addi    a3, sp, L + 80
+    call    node_custody_columns
+    ld      t0, (L + 80)(sp)                # a short column in it: a column dial
+    ld      t1, (L + 96)(sp)
+    and     t0, t0, t1
+    ld      t1, (L + 88)(sp)
+    ld      t3, (L + 104)(sp)
+    and     t1, t1, t3
+    or      t0, t0, t1
+    beqz    t0, 9f
+41: li      a0, LIBP2P_EV_DIAL_SIZE         # the DIAL
     call    node_out
     beqz    a0, 9f
     mv      s9, a0
@@ -6842,9 +6956,12 @@ LOCAL_FUNCTION node_enr
 END_FUNCTION node_enr
 
 /*
- * With NODE_FLAG_DISCV5 and room for more peers, a NODE_ACT_DISCV5 of a LOOKUP whose target is
- * the 32 entropy bytes of the tick a0, when lookup_ms is 0 or NODE_LOOKUP_MS before time_ms.
- * s3 the tick, s4 the action.
+ * With NODE_FLAG_DISCV5, below the open room or with short columns (node.md, the peer room), a
+ * NODE_ACT_DISCV5 of a LOOKUP whose target is the 32 entropy bytes of the tick a0, when lookup_ms
+ * is 0 or NODE_LOOKUP_MS before time_ms. Then, with short columns and dialing + the peers at the
+ * capacity, a DISCONNECT of the last peer with NODE_PEER_METADATA whose custody holds none of the
+ * node's columns. s3 the tick, then a peer; s4 the action, then the peers left; s7 and s8 the
+ * short columns.
  */
 LOCAL_FUNCTION node_lookup
     ENTER 0
@@ -6852,22 +6969,20 @@ LOCAL_FUNCTION node_lookup
     ld      t0, Node_flags(s1)
     andi    t0, t0, NODE_FLAG_DISCV5
     beqz    t0, 9f
-    ld      t0, (Node_peers + 8)(s1)
-    ld      t1, Node_dialing(s1)
-    add     t0, t0, t1
-    ld      t2, Node_streams(s1)
-    ld      t3, Node_peers(s1)
-    sub     t2, t2, t3
-    li      t3, NodePeer__mem
-    divu    t2, t2, t3
-    bgeu    t0, t2, 9f
     ld      t0, Node_lookup_ms(s1)
     beqz    t0, 1f
     ld      t1, Node_time_ms(s1)
     li      t2, NODE_LOOKUP_MS
     add     t0, t0, t2
     bltu    t1, t0, 9f
-1:  li      a0, 96                          # the action: 16, 24 a ByteList, 48 the LOOKUP
+1:  call    node_short_columns
+    mv      s7, a0
+    mv      s8, a1
+    call    node_peer_room
+    bltu    a2, a1, 2f
+    or      t0, s7, s8
+    beqz    t0, 9f
+2:  li      a0, 96                          # the action: 16, 24 a ByteList, 48 the LOOKUP
     call    node_room
     beqz    a0, 9f
     li      a0, NODE_ACT_DISCV5
@@ -6892,6 +7007,34 @@ LOCAL_FUNCTION node_lookup
     seqz    t1, t0
     add     t0, t0, t1
     sd      t0, Node_lookup_ms(s1)
+    or      t0, s7, s8                      # short columns and no room: the last spare peer goes
+    beqz    t0, 9f
+    call    node_peer_room
+    bltu    a2, a0, 9f
+    PART    s3, s4, s1, Node_peers
+    beqz    s4, 9f
+    addi    t0, s4, -1
+    li      t1, NodePeer__mem
+    mul     t0, t0, t1
+    add     s3, s3, t0
+3:  ld      t0, NodePeer_flags(s3)
+    andi    t0, t0, NODE_PEER_METADATA
+    beqz    t0, 4f
+    ld      t0, NodePeer_custody(s3)        # none of the node's columns
+    ld      t1, Node_columns(s1)
+    and     t0, t0, t1
+    ld      t1, (NodePeer_custody + 8)(s3)
+    ld      t2, (Node_columns + 8)(s1)
+    and     t1, t1, t2
+    or      t0, t0, t1
+    beqz    t0, 5f
+4:  addi    s3, s3, -NodePeer__mem
+    addi    s4, s4, -1
+    bnez    s4, 3b
+    j       9f
+5:  li      a0, LIBP2P_EVENT_DISCONNECT
+    ld      a1, NodePeer_handle(s3)
+    call    node_out_handle
 9:  LEAVE 0
 END_FUNCTION node_lookup
 
@@ -8862,6 +9005,7 @@ END_FUNCTION node_response
 LOCAL_FUNCTION node_sidecar_ask
     ENTER 96
     sd      a0, (L + 80)(sp)
+    sd      a4, (L + 16)(sp)
     sd      a1, L(sp)
     sd      a2, (L + 8)(sp)
     sd      a3, (L + 40)(sp)
@@ -8950,13 +9094,14 @@ LOCAL_FUNCTION node_sidecar_ask
     ld      t0, NodePeer_flags(s3)
     andi    t0, t0, NODE_PEER_METADATA
     beqz    t0, 75f
-    ld      t0, Node_columns(s1)            # the sampled columns it custodies, not asked yet
+    ld      t2, (L + 16)(sp)                # the columns asked for that it custodies, not asked yet
+    ld      t0, 0(t2)
+    ld      t2, 8(t2)
     ld      t1, NodePeer_custody(s3)
     and     t0, t0, t1
     ld      t1, (L + 48)(sp)
     not     t1, t1
     and     t0, t0, t1
-    ld      t2, (Node_columns + 8)(s1)
     ld      t1, (NodePeer_custody + 8)(s3)
     and     t2, t2, t1
     ld      t1, (L + 56)(sp)
@@ -9050,7 +9195,7 @@ END_FUNCTION node_sidecar_ask
  * lowest slot, s8 the highest, then the count, s9 the fork of the store's slot, s10 its slot.
  */
 LOCAL_FUNCTION node_sidecar_retry
-    ENTER 0
+    ENTER 16
     LDQ     t0, s1, Node_sidecar_ms         # its time
     li      t1, NODE_SIDECAR_RETRY_MS
     add     t0, t0, t1
@@ -9104,7 +9249,29 @@ LOCAL_FUNCTION node_sidecar_retry
     li      t0, NODE_SYNC_BATCH
     bleu    s8, t0, 61f
     mv      s8, t0
-61: mv      a0, s10                         # the fork of the store's slot
+61: sd      zero, L(sp)                     # the columns those blocks of the range lack
+    sd      zero, (L + 8)(sp)
+    PART    s3, s4, s1, Node_blocks
+7:  beqz    s4, 8f
+    ld      t0, NodeBlock_status(s3)
+    li      t1, NODE_BLOCK_BLOBS
+    bne     t0, t1, 71f
+    ld      t0, NodeBlock_slot(s3)
+    bltu    t0, s7, 71f
+    sub     t0, t0, s7
+    bgeu    t0, s8, 71f
+    mv      a0, s3
+    call    node_columns_held
+    ld      t0, L(sp)
+    or      t0, t0, t4
+    sd      t0, L(sp)
+    ld      t0, (L + 8)(sp)
+    or      t0, t0, t5
+    sd      t0, (L + 8)(sp)
+71: addi    s3, s3, NodeBlock__mem
+    addi    s4, s4, -1
+    j       7b
+8:  mv      a0, s10                         # the fork of the store's slot
     addi    a1, s1, Node_config
     call    node_fork
     mv      s9, a0
@@ -9120,13 +9287,14 @@ LOCAL_FUNCTION node_sidecar_retry
     mv      a1, s7
     mv      a2, s8
     mv      a3, s9
+    addi    a4, sp, L
     call    node_sidecar_ask
     ld      t0, Node_time_ms(s1)
     STQ     t0, s1, Node_sidecar_ms
     LDQ     t0, s1, Node_sidecar_peer
     addi    t0, t0, 1
     STQ     t0, s1, Node_sidecar_peer
-9:  LEAVE 0
+9:  LEAVE 16
 END_FUNCTION node_sidecar_retry
 
 /*
@@ -9273,6 +9441,7 @@ LOCAL_FUNCTION node_sync
     ld      a1, L(sp)
     ld      a2, (L + 8)(sp)
     ld      a3, (L + 40)(sp)
+    addi    a4, s1, Node_columns
     call    node_sidecar_ask
     bnez    a0, 9f
 71: ld      s3, (L + 80)(sp)
@@ -9443,17 +9612,18 @@ LOCAL_FUNCTION node_notice
     beqz    t1, 65f
     addi    t1, t1, -1
     sd      t1, Node_dialing(s1)
-65: ld      t2, Node_streams(s1)            # a new peer: its entry, or DISCONNECT when the table is full
-    ld      t3, Node_peers(s1)
-    sub     t2, t2, t3
-    li      t3, NodePeer__mem
-    divu    t2, t2, t3
+65: call    node_peer_room                  # a new peer: its entry; DISCONNECT when the table is full, or inbound past the open room
     ld      t4, (Node_peers + 8)(s1)
-    bltu    t4, t2, 1f
-    li      a0, LIBP2P_EVENT_DISCONNECT
+    bgeu    t4, a0, 651f
+    ld      t0, LIBP2P_ACT_PC_DIRECTION(s3)
+    li      t1, LIBP2P_INBOUND
+    bne     t0, t1, 652f
+    bltu    a2, a1, 652f
+651: li     a0, LIBP2P_EVENT_DISCONNECT
     ld      a1, LIBP2P_ACT_PEER(s3)
     call    node_out_handle
     LEAVE 96
+652: li     t3, NodePeer__mem
 1:  mul     s4, t4, t3
     ld      t5, Node_peers(s1)
     add     s4, s4, t5

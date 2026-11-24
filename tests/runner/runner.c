@@ -4863,6 +4863,11 @@ struct p2p_net {
     uint64_t peer_cgc;     /* the custody_group_count of the peer's MetaData */
     uint8_t want_columns[16]; /* the columns each DataColumnSidecarsByRange of the node must ask for */
     uint64_t column_requests; /* the node's DataColumnSidecarsByRange requests */
+    uint64_t skip_column;     /* fulu: 1 + a column the peer leaves out of its answers, or 0 */
+    uint8_t extra_columns[16]; /* fulu: columns the peer adds to its answers, asked or not */
+    uint8_t retry_columns[16]; /* fulu: the columns a request may ask for instead of want_columns: a retry's */
+    int drop_dials;           /* set: the node's dials reach no one; dials counts them */
+    uint64_t dials, closes;   /* closes: the connections the node closed */
     uint8_t protos[64 * P2P_PROTO_SIZE]; /* the protocol list of both sides */
     uint64_t nprotos;
     uint8_t gvr[32];
@@ -4928,6 +4933,10 @@ static uint8_t *p2p_event(struct p2p_net *net, int side, uint64_t kind, uint64_t
 /* A shell request of a side, as a socket layer: the dial of the peer reaches the node. */
 static void p2p_shell(struct p2p_net *net, int side, uint8_t *act, const char **why) {
     uint64_t kind = rd64(act + 8);
+    if (kind == P2P_ACT_DIAL && side == 0 && net->drop_dials) { /* a dial of the node to no one */
+        net->dials++;
+        return;
+    }
     if (kind == P2P_ACT_DIAL) { /* the other side accepts it */
         net->dial_side = side;
         net->dial_conn = rd64(act + 16);
@@ -4967,6 +4976,7 @@ static void p2p_shell(struct p2p_net *net, int side, uint8_t *act, const char **
         wr64(e + 24, count);
     } else if (kind == P2P_ACT_CLOSE) {
         uint64_t conn = rd64(act + 16);
+        if (side == 0) net->closes++;
         uint8_t *e = p2p_event(net, side, P2P_EV_CLOSED, 32);
         wr64(e + 16, conn);
         if (conn == net->conn[side]) {
@@ -5136,7 +5146,8 @@ static void p2p_serve(struct p2p_net *net, const char **why) {
                 if (c >= 128 || (i && c <= rd64(req + 24 + 12 + 8 * i))) *why = "the node's DataColumnSidecarsByRange: the columns are not ascending";
                 else asked[c / 8] |= (uint8_t)(1u << (c % 8));
             }
-            if (!*why && memcmp(asked, net->want_columns, 16)) *why = "the node's DataColumnSidecarsByRange: not the columns expected";
+            if (!*why && memcmp(asked, net->want_columns, 16) && memcmp(asked, net->retry_columns, 16))
+                *why = "the node's DataColumnSidecarsByRange: not the columns expected";
             net->column_requests++;
         }
         free(input);
@@ -5154,7 +5165,7 @@ static void p2p_serve(struct p2p_net *net, const char **why) {
             nth++;
             if (columns) { /* the block's column sidecars of the columns asked, by index */
                 for (uint64_t c = 0; c < 128 && cb->columns && !net->no_blobs && !*why; c++) {
-                    if (!(asked[c / 8] >> (c % 8) & 1)) continue;
+                    if (!((asked[c / 8] | net->extra_columns[c / 8]) >> (c % 8) & 1) || net->skip_column == c + 1) continue;
                     tv e = cb->columns + 9;
                     for (uint64_t i = 0, nc = rd64(cb->columns + 1); i < nc && !*why; i++, e = tv_skip(e)) {
                         char key[128];
@@ -5228,9 +5239,23 @@ static void p2p_run(fc_node *n, struct p2p_net *net, int (*done)(struct p2p_net 
     if (!*why && !done(net, arg)) *why = "the network does not get there";
 }
 
+static uint64_t p2p_taken; /* set: p2p_open_record's node has 8 peer entries, this many taken by peers with no connection */
 static int p2p_connected(struct p2p_net *net, int arg) {
     (void)arg;
-    return net->connected && rd64(net->shell->node + NODE_PEERS + 8) == 1;
+    return net->connected && rd64(net->shell->node + NODE_PEERS + 8) == 1 + p2p_taken;
+}
+
+/*
+ * A peer entry of the node at index i with no connection (a handle of no libp2p slot), inbound,
+ * with NODE_PEER_METADATA and the 16 bytes of custody; its peer ID is empty.
+ */
+static void shell_fake_peer(struct node_shell *s, uint64_t i, const uint8_t *custody) {
+    uint8_t *p = s->node + rd64(s->node + NODE_PEERS) + i * NODE_PEER_BYTES;
+    memset(p, 0, NODE_PEER_BYTES);
+    wr64(p, ((uint64_t)0x77 << 32) | (0xff00 + i)); /* slot 0xff00 + i, generation 0x77 */
+    wr64(p + 16, 4);                                   /* NODE_PEER_METADATA */
+    memcpy(p + 176, custody, 16);
+    if (rd64(s->node + NODE_PEERS + 8) < i + 1) wr64(s->node + NODE_PEERS + 8, i + 1);
 }
 static int p2p_opened(struct p2p_net *net, int k) { return net->st[k].opened || net->st[k].failed; }
 static int p2p_ended(struct p2p_net *net, int k) { return net->st[k].eof || net->st[k].reset; }
@@ -5407,7 +5432,7 @@ static void p2p_open_record(fc_node *n, struct p2p_net *net, const uint8_t *reco
     net->shell = s;
     net->now = 1000;
     s->net = net;
-    s->room[3] = 4;       /* peers */
+    s->room[3] = p2p_taken ? 8 : 4; /* peers */
     s->room[4] = 4;       /* streams */
     if (s->room[5] < 8192) s->room[5] = 8192;      /* request bytes */
     if (s->room[6] < (1u << 20)) s->room[6] = 1u << 20; /* queued libp2p events */
@@ -5448,6 +5473,25 @@ static void p2p_open_record(fc_node *n, struct p2p_net *net, const uint8_t *reco
         wr64(s->actions, s->actions_size);
     }
     net->events = xmalloc(24);
+    static const uint8_t all[16] = {0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff};
+    for (uint64_t i = 0; i < p2p_taken && !*why; i++) shell_fake_peer(s, i, all); /* they hold every column */
+    if (!*why && p2p_taken >= 7) { /* the open room is full: the peer dials the node and gets no entry */
+        uint8_t *e = p2p_event(net, 1, P2P_EV_DIAL, 128);
+        wr64(e + 16, 7);
+        wr64(e + 24, 4);
+        wr64(e + 32, 9000);
+        e[40] = 10;
+        e[43] = 1;
+        uint64_t idlen = rd64(net->state[0] + P2P_ST_PEER_ID_LEN);
+        wr64(e + 56, idlen);
+        memcpy(e + 64, net->state[0] + P2P_ST_PEER_ID, (size_t)idlen);
+        for (int r = 0; r < 100 && !*why; r++) {
+            shell_step(n, why);
+            if (!*why) p2p_peer_step(net, why);
+            net->now += 10;
+        }
+        return;
+    }
     if (!*why && record) { /* the node dials the peer of the record */
         shell_event(s, EV_ENR, 0, record, rlen);
         p2p_run(n, net, p2p_connected, 0, why);
@@ -5465,12 +5509,12 @@ static void p2p_open_record(fc_node *n, struct p2p_net *net, const uint8_t *reco
         p2p_run(n, net, p2p_connected, 0, why);
     }
     if (!*why) { /* the node's entry of the peer */
-        const uint8_t *peer = s->node + rd64(s->node + NODE_PEERS);
+        const uint8_t *peer = s->node + rd64(s->node + NODE_PEERS) + p2p_taken * NODE_PEER_BYTES;
         uint64_t idlen = rd64(net->state[1] + P2P_ST_PEER_ID_LEN);
         if (rd64(peer + 120) != idlen || memcmp(peer + 128, net->state[1] + P2P_ST_PEER_ID, (size_t)idlen))
             *why = "the node's peer entry: not the peer's ID";
     }
-    if (!*why) api_peers_check(n, net, record != NULL, why);
+    if (!*why && !p2p_taken) api_peers_check(n, net, record != NULL, why);
 }
 
 static void p2p_close(struct p2p_net *net) {
@@ -5495,6 +5539,122 @@ static int shell_entry(const struct node_shell *s, const char *key, const uint8_
 }
 
 static void p2p_op_events(fc_node *n, struct p2p_net *net, tv parts, const char **why);
+
+static void p2p_settle(fc_node *n, struct p2p_net *net, const char **why);
+static void record_of(const uint8_t *gvr, uint64_t epoch, int seed, int64_t cgc, uint8_t *out, const char **why);
+
+/* Whether the node has a peer entry of the runner's peer's ID. */
+static int shell_has_peer(const struct node_shell *s, const struct p2p_net *net) {
+    const uint8_t *e = s->node + rd64(s->node + NODE_PEERS);
+    uint64_t idlen = rd64(net->state[1] + P2P_ST_PEER_ID_LEN);
+    for (uint64_t i = 0, c = rd64(s->node + NODE_PEERS + 8); i < c; i++, e += NODE_PEER_BYTES)
+        if (rd64(e + 120) == idlen && !memcmp(e + 128, net->state[1] + P2P_ST_PEER_ID, (size_t)idlen)) return 1;
+    return 0;
+}
+
+/*
+ * The open room (node.md, the peer room): a new node of 8 peer entries, 7 taken by peers with no
+ * connection: the peer dials it and gets no entry, the node closing the connection. With 6 taken,
+ * the peer gets an entry.
+ */
+static unsigned long inbound_room_checked;
+static void inbound_room_check(tv parts, const char **why) {
+    for (uint64_t taken = 7; taken >= 6 && !*why; taken--) {
+        fc_node m;
+        uint8_t *anchor_block;
+        struct p2p_net net;
+        struct node_shell *s = shell_open(&m, parts, &anchor_block, why);
+        if (*why) break;
+        p2p_taken = taken;
+        p2p_open(&m, &net, why);
+        p2p_taken = 0;
+        if (!*why && taken == 7 && (shell_has_peer(s, &net) || rd64(s->node + NODE_PEERS + 8) != 7 || !net.closes))
+            *why = "the open room: an inbound peer past it is not refused";
+        if (!*why && taken == 6 && (!shell_has_peer(s, &net) || rd64(s->node + NODE_PEERS + 8) != 7))
+            *why = "the open room: an inbound peer within it gets no entry";
+        p2p_close(&net);
+        shell_close(&m, anchor_block);
+    }
+    if (!*why) inbound_room_checked++;
+}
+
+#if FORK >= FORK_FULU
+/*
+ * The column dials and the spare peer (node.md, the peer room), on the node of the network: 8 peer
+ * entries; the runner's peer with no custody, peers with no connection holding every column but
+ * the node's lowest, c0, and one holding c0 only, so c0 is short. With the open room full, a record
+ * with cgc 0 gives no DIAL, and one with cgc NUMBER_OF_CUSTODY_GROUPS a DIAL. With the 8 entries
+ * full, a lookup past NODE_LOOKUP_MS: with the runner's peer holding one of the node's columns, no
+ * DISCONNECT; with no custody, its DISCONNECT, and its entry goes.
+ */
+static unsigned long column_room_checked;
+static void column_room_check(fc_node *n, struct p2p_net *net, const char **why) {
+    struct node_shell *s = n->shell;
+    uint8_t *old = s->node;
+    uint64_t need = 0, slot = 0;
+    s->room[3] = 8; /* peers: spare room 1 */
+    CALL(lantern_node_size, s->room, &need);
+    s->node = buffer(need);
+    wr64(s->node, need);
+    if (CALL(lantern_node_copy, old, s->room, s->node) != 0) *why = "column dials: lantern_node_copy status";
+    s->node_size = need;
+    free(old);
+    if (!*why && (rd64(s->node + NODE_PEERS + 8) != 1 || !shell_has_peer(s, net))) *why = "column dials: the runner's peer is not the one entry";
+    if (!*why && CALL(LF(get_current_slot), n->store, &slot) != 0) *why = "column dials: get_current_slot status";
+    if (*why) return;
+    uint8_t cols[16], most[16], only[16] = {0}, one[16] = {0}, gvr[32], rec[24 + 300];
+    uint64_t c0 = 128, c1 = 128, epoch = slot / SLOTS_PER_EPOCH_RUNNER;
+    memcpy(cols, s->node + 440, 16); /* Node_columns */
+    for (uint64_t c = 0; c < 128; c++)
+        if (cols[c / 8] >> (c % 8) & 1) {
+            if (c0 == 128) c0 = c;
+            else if (c1 == 128) c1 = c;
+        }
+    if (c1 == 128) {
+        *why = "column dials: the node samples fewer than 2 columns";
+        return;
+    }
+    memset(most, 0xff, 16);
+    most[c0 / 8] &= (uint8_t)~(1u << (c0 % 8));
+    only[c0 / 8] = (uint8_t)(1u << (c0 % 8));
+    one[c1 / 8] = (uint8_t)(1u << (c1 % 8));
+    uint8_t *p0 = s->node + rd64(s->node + NODE_PEERS);
+    wr64(p0 + 16, rd64(p0 + 16) | 4); /* the runner's peer: NODE_PEER_METADATA, no custody */
+    memset(p0 + 176, 0, 16);
+    for (uint64_t i = 1; i <= 5; i++) shell_fake_peer(s, i, most);
+    shell_fake_peer(s, 6, only); /* 7 peers: the open room is full; c0 has one peer */
+    wr64(s->node + 432, 0);      /* Node_dialing */
+    net->drop_dials = 1;
+    memcpy(gvr, n->anchor + field_offset("BeaconState", 1), 32);
+    record_of(gvr, epoch, 100, 0, rec, why); /* cgc 0: no columns */
+    if (!*why) {
+        shell_event(s, EV_ENR, 0, rec + 24, rd64(rec + 16));
+        shell_step(n, why);
+    }
+    if (!*why && (rd64(s->node + 432) || net->dials)) *why = "column dials: a record of no short column dials past the open room";
+    if (!*why) record_of(gvr, epoch, 150, (int64_t)rd64(config + 280), rec, why); /* every custody group */
+    if (!*why) {
+        shell_event(s, EV_ENR, 0, rec + 24, rd64(rec + 16));
+        shell_step(n, why);
+    }
+    if (!*why && rd64(s->node + 432) != 1) *why = "column dials: a record of a short column gets no DIAL";
+    wr64(s->node + 432, 0); /* the dial ends */
+    if (!*why) shell_fake_peer(s, 7, most); /* 8 peers: full */
+    for (int spare = 0; spare < 2 && !*why; spare++) {
+        static const uint8_t none[16] = {0};
+        memcpy(p0 + 176, spare ? none : one, 16);
+        uint64_t t = rd64(s->node + 16), due = rd64(s->node + 424) + 10000 + 1, lookups = s->lookups; /* time_ms; lookup_ms + NODE_LOOKUP_MS */
+        shell_event(s, EV_TICK, t > due ? t + 1 : due, NULL, 0);
+        p2p_settle(n, net, why);
+        if (!*why && s->lookups == lookups) *why = "column dials: no lookup with a short column and the peers full";
+        if (!*why && !spare && !shell_has_peer(s, net)) *why = "column dials: a peer of a sampled column is dropped";
+        if (!*why && spare && shell_has_peer(s, net)) *why = "column dials: the spare peer is not dropped";
+        p0 = s->node + rd64(s->node + NODE_PEERS);
+    }
+    net->drop_dials = 0;
+    if (!*why) column_room_checked++;
+}
+#endif
 
 static void run_node_p2p(const char *file, case_file *f) {
     for (uint64_t i = 0; i < f->count; i++) {
@@ -5566,9 +5726,13 @@ static void run_node_p2p(const char *file, case_file *f) {
         if (!why) custody_check(&n, &net, status, slen, &why);
 #endif
         if (!why) p2p_op_events(&n, &net, parts, &why);
+#if FORK >= FORK_FULU
+        if (!why) column_room_check(&n, &net, &why);
+#endif
         if (!why && rd64(s->node + rd64(s->node + 152) + 16)) why = "the node keeps libp2p events at the end"; /* Node_p2p_out: a ByteList */
         p2p_close(&net);
         shell_close(&n, anchor_block);
+        if (!why) inbound_room_check(parts, &why);
         report(file, name, len, why == NULL, why);
     }
 }
@@ -5943,13 +6107,13 @@ static void sync_serve_blobs(fc_node *m, struct p2p_net *net, case_block **chain
 }
 
 /*
- * The node record of the runner's peer, made with asm-discv5 from the peer's secp256k1 key
- * (p2p_config of side 1): ip 10.0.0.2, udp and tcp 9000, and eth2 of lantern_compute_enr_fork_id at
- * the epoch. out: a ByteList of 24 + 300 bytes.
+ * A node record made with asm-discv5 from the secp256k1 key of bytes seed + 1 to seed + 32: ip
+ * 10.0.0.2, udp and tcp 9000, eth2 of lantern_compute_enr_fork_id at the epoch, and with cgc at 0
+ * or above, a cgc of it (big-endian, no leading zero byte). out: a ByteList of 24 + 300 bytes.
  */
-static void peer_record(const uint8_t *gvr, uint64_t epoch, uint8_t *out, const char **why) {
-    uint8_t cfg[152] = {0}, tick[40] = {0}, ncfg[CONFIG_SIZE], ev[24 + 56 + 64] = {0};
-    for (int i = 0; i < 32; i++) cfg[i] = (uint8_t)(31 + i + 1);
+static void record_of(const uint8_t *gvr, uint64_t epoch, int seed, int64_t cgc, uint8_t *out, const char **why) {
+    uint8_t cfg[152] = {0}, tick[40] = {0}, ncfg[CONFIG_SIZE], ev[24 + 56 + 64 + 56] = {0};
+    for (int i = 0; i < 32; i++) cfg[i] = (uint8_t)(seed + i + 1);
     wr64(cfg + 32, 1);         /* seq */
     memset(cfg + 40, 7, 32);   /* entropy */
     wr64(cfg + 72, 1000);      /* now */
@@ -5972,14 +6136,25 @@ static void peer_record(const uint8_t *gvr, uint64_t epoch, uint8_t *out, const 
     wr64(ev + 96, 4);
     memcpy(ev + 104, "eth2", 4);
     wr64(ev + 120, 16);
+    if (cgc >= 0) { /* SET_ENTRY cgc */
+        uint64_t nb = 0;
+        for (uint64_t t = (uint64_t)cgc; t; t >>= 8) nb++;
+        wr64(ev + 16, 56 + 64 + 56);
+        wr64(ev + 144, 56);
+        wr64(ev + 152, 5);
+        wr64(ev + 160, 3);
+        memcpy(ev + 168, "cgc", 3);
+        wr64(ev + 184, nb);
+        for (uint64_t b = 0; b < nb; b++) ev[192 + b] = (uint8_t)((uint64_t)cgc >> (8 * (nb - 1 - b)));
+    }
     node_config(ncfg);
     if (CALL(LF(compute_enr_fork_id), gvr, &epoch, ncfg, fresh_scratch(), ev + 128) != 0) {
         *why = "compute_enr_fork_id status";
         return;
     }
-    uint8_t *st = buffer(DISCV5_STATE_SIZE), *scr = buffer(DISCV5_SCRATCH_SIZE), *acts = buffer(DISCV5_ACTIONS_ROOM);
+    uint8_t *st = buffer(DISCV5_STATE_SIZE), *scr = buffer(DISCV5_SCRATCH_SIZE), *acts = buffer(DISCV5_ACTIONS_ROOM + 16384);
     wr64(scr, DISCV5_SCRATCH_SIZE);
-    wr64(acts, DISCV5_ACTIONS_ROOM);
+    wr64(acts, DISCV5_ACTIONS_ROOM + 16384); /* a third SET_ENTRY event: cgc */
     wr64(tick, 1001);
     memset(tick + 8, 9, 32);
     wr64(out, 24 + 300);
@@ -5996,6 +6171,9 @@ static void peer_record(const uint8_t *gvr, uint64_t epoch, uint8_t *out, const 
     free(acts);
 }
 
+/* The node record of the runner's peer, from the peer's secp256k1 key (p2p_config of side 1), with no cgc. */
+static void peer_record(const uint8_t *gvr, uint64_t epoch, uint8_t *out, const char **why) { record_of(gvr, epoch, 31, -1, out, why); }
+
 /*
  * One sync of the chain: a new node at the case's anchor, at last_ms, gets the Status of a peer
  * whose head is the chain's last block, and syncs from it. With no_blobs the peer sends no
@@ -6007,6 +6185,7 @@ static int sync_supernode; /* set: the sync's node has NODE_FLAG_SUPERNODE */
 static int sync_half; /* set: the peer serves the even columns only, so the supernode rebuilds the others */
 static int sync_dead; /* set: a peer with no connection goes first in the node's peers part (node.md, sync_peer) */
 static int sync_retry; /* set: the peer serves sidecars only after the first block with them waits (the sidecar retry) */
+static int sync_partial; /* fulu, with sync_retry: the peer leaves out the node's lowest column until then (node.md, the retry's columns) */
 static void sync_once(tv parts, case_block **chain, size_t nchain, uint64_t last_ms, int no_blobs, uint8_t **head_state,
                       uint64_t *head_size, const char **why) {
     fc_node m;
@@ -6048,6 +6227,15 @@ static void sync_once(tv parts, case_block **chain, size_t nchain, uint64_t last
         if (!*why) peer_node_id(nid, why);
         if (!*why && no_blobs && !sync_retry) custody_columns(nid, net.peer_cgc, net.want_columns, why);
         else if (!*why) memcpy(net.want_columns, cols, 16);
+        if (sync_partial) { /* every column but the lowest; a retry asks for that one alone */
+            net.no_blobs = 0;
+            for (uint64_t c = 0; c < 128 && !net.skip_column; c++)
+                if (cols[c / 8] >> (c % 8) & 1) net.skip_column = c + 1;
+            if (net.skip_column) net.retry_columns[(net.skip_column - 1) / 8] = (uint8_t)(1u << ((net.skip_column - 1) % 8));
+        }
+        if (sync_half) /* the even columns only: a retry asks for the odd ones */
+            for (uint64_t c = 1; c < 128; c += 2)
+                if (cols[c / 8] >> (c % 8) & 1) net.retry_columns[c / 8] |= (uint8_t)(1u << (c % 8));
 #endif
         sync_chain = chain;
         sync_nchain = nchain;
@@ -6073,11 +6261,35 @@ static void sync_once(tv parts, case_block **chain, size_t nchain, uint64_t last
             shell_settle(&m, why);
             if (!*why) p2p_settle(&m, &net, why);
             net.no_blobs = no_blobs = 0;
+#if FORK >= FORK_FULU
+            if (sync_partial) { /* the retry asks for the lowest column only; the answers hold the others too */
+                uint64_t c0 = net.skip_column - 1;
+                memset(net.want_columns, 0, 16);
+                net.want_columns[c0 / 8] = (uint8_t)(1u << (c0 % 8));
+                memset(net.retry_columns, 0, 16);
+                memcpy(net.extra_columns, cols, 16);
+                net.extra_columns[c0 / 8] &= (uint8_t)~(1u << (c0 % 8));
+                net.skip_column = 0;
+            }
+#endif
             uint64_t later = rd64(config + 104) > 4000 ? rd64(config + 104) : 4000; /* NODE_SIDECAR_RETRY_MS */
             if (!*why) shell_event(s, EV_TICK, last_ms + later, NULL, 0);
             if (!*why) p2p_run(&m, &net, p2p_synced, 0, why);
             if (*why && !strcmp(*why, "the network does not get there"))
-                *why = "sync with sidecars a slot later: the node does not ask for them again";
+                *why = sync_partial ? "sync with a column left out: the node does not ask for it again"
+                                    : "sync with sidecars a slot later: the node does not ask for them again";
+            if (!*why && sync_partial) { /* the copies leave no entry: each is valid, one of a root and index, or free */
+                shell_settle(&m, why);
+                const uint8_t *e = s->node + rd64(s->node + NODE_BLOBS), *f;
+                uint64_t c = rd64(s->node + NODE_BLOBS + 8);
+                for (uint64_t i = 0; i < c && !*why; i++, e += NODE_BLOB_BYTES) {
+                    if (rd64(e + 56) != NBLOB_VALID && rd64(e + 56) != 4) *why = "sync with a column left out: a NodeBlob neither valid nor free";
+                    f = e + NODE_BLOB_BYTES;
+                    for (uint64_t j = i + 1; j < c && !*why && rd64(e + 56) == NBLOB_VALID; j++, f += NODE_BLOB_BYTES)
+                        if (rd64(f + 56) == NBLOB_VALID && rd64(f + 32) == rd64(e + 32) && !memcmp(f, e, 32))
+                            *why = "sync with a column left out: two valid entries of a root and index";
+                }
+            }
         }
         if (!*why) shell_settle(&m, why);
         if (!*why && no_blobs) {
@@ -6400,8 +6612,11 @@ static void fc_sync_check(tv parts, const char **why) {
         int columns = 0; /* a chain with column sidecars syncs again with a supernode */
         for (size_t b = 0; b < nchain; b++) columns |= chain[b]->columns != NULL;
         if (!*why && columns) {
+            sync_retry = sync_partial = 1; /* a column left out: the retry asks for it alone */
+            sync_once(parts, chain, nchain, last_ms, 1, NULL, NULL, why);
+            sync_retry = sync_partial = 0;
             sync_supernode = 1;
-            sync_once(parts, chain, nchain, last_ms, 0, NULL, NULL, why);
+            if (!*why) sync_once(parts, chain, nchain, last_ms, 0, NULL, NULL, why);
             sync_half = 1; /* and with the even columns only: it rebuilds the others */
             if (!*why) sync_once(parts, chain, nchain, last_ms, 0, NULL, NULL, why);
             sync_half = 0;
@@ -12242,6 +12457,10 @@ int main(int argc, char **argv) {
     if (node_settles_finalized) printf("NOTE: %lu node settles past a finalized epoch\n", node_settles_finalized);
     if (api_heads_streamed) printf("NOTE: %lu heads served as getBlockV2 and getStateV2 streams\n", api_heads_streamed);
     if (reads_asked) printf("NOTE: %lu node-reads requests answered\n", reads_asked);
+    if (inbound_room_checked) printf("NOTE: the open room checked on %lu cases\n", inbound_room_checked);
+#if FORK >= FORK_FULU
+    if (column_room_checked) printf("NOTE: the column dials and the spare peer checked on %lu cases\n", column_room_checked);
+#endif
     if (api_peers_checked[0] || api_peers_checked[1])
         printf("NOTE: getPeers and getPeer checked after %lu inbound and %lu outbound connections\n", api_peers_checked[0],
                api_peers_checked[1]);
