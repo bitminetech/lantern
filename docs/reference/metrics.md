@@ -140,7 +140,7 @@ lantern_metrics_text(categories, sources, out) -> status
 ### Function does
 
 - Each family of the metric table whose bit is in `categories`, whose source is given and whose condition holds, in the order of the table: `# HELP <name> <help>`, `# TYPE <name> <type>`, then its samples. Every line ends with LF. With no such family: no bytes.
-- Conditions: `state`: the `MetricsState` with `present` 1; `electra`: `present` and `electra` 1; `state_root`: `present` and `state_root_present` 1; `fulu`: the `MetricsNode` with `fulu` 1; `max_fds`: the `MetricsProcess` with `max_fds` above 0; `profile`: the `Profile` with `ticks_per_second` above 0.
+- Conditions: `state`: the `MetricsState` with `present` 1; `altair`: `present` and `altair` 1; `electra`: `present` and `electra` 1; `state_root`: `present` and `state_root_present` 1; `fulu`: the `MetricsNode` with `fulu` 1; `max_fds`: the `MetricsProcess` with `max_fds` above 0; `profile`: the `Profile` with `ticks_per_second` above 0.
 - A value (u64 kind): `<name><labels> <value>`, in decimal.
 - A root kind: `<name> <value>`, the value a signed decimal.
 - A seconds kind: `<name> <seconds>`, the microseconds as `<s>.<six digits>`.
@@ -193,13 +193,13 @@ lantern_<fork>_metrics_state(state, block, out) -> status
 - `deposit_count`: `eth1_data.deposit_count` (Lighthouse v8.3.3).
 - `active_validators`: the validators active at get_current_epoch(state).
 - `current_validators` and `previous_validators`: at get_current_epoch(state) and get_previous_epoch(state), each validator by status: `pending` with `activation_epoch` above the epoch; `active` with is_active_validator; `exited` with `exit_epoch` at most the epoch and `withdrawable_epoch` above it; `withdrawable` with `withdrawable_epoch` at most the epoch.
-- `current_live` and `previous_live`: the validators active at the epoch with a flag in `current_epoch_participation` or `previous_epoch_participation`; phase0: the attesting indices of the attestations of `current_epoch_attestations` or `previous_epoch_attestations` (get_attesting_indices), each validator once.
+- From altair: `altair` 1; `current_live` and `previous_live`: the validators active at the epoch with a flag in `current_epoch_participation` or `previous_epoch_participation`. Phase0 leaves them 0, and the two live metrics out: its live validators need the committees of each pending attestation.
 - From electra: `electra` 1, and the entries of `pending_deposits`, `pending_partial_withdrawals` and `pending_consolidations`.
 - `state_root_present` 1 and `state_root` the `state_root` of the block's message as a number (bytes 148 to 180 of a `SignedBeaconBlock`), when `block` holds at least 180 bytes; else 0 and 0.
 
 ### Forks
 
-- Every fork defines it. Phase0 counts the live validators from the pending attestations; altair on from the participation flags; electra adds the pending lists.
+- Every fork defines it. Altair on counts the live validators from the participation flags; electra adds the pending lists.
 
 ### ABI
 
@@ -285,13 +285,14 @@ The values of the metrics from the head's post-state.
 | 104 | `previous_validators` | u64 x 4 | By status |
 | 136 | `current_live` | u64 | |
 | 144 | `previous_live` | u64 | |
-| 152 | `electra` | u64 | 1 from electra, else 0 |
-| 160 | `pending_deposits` | u64 | |
-| 168 | `pending_partial_withdrawals` | u64 | |
-| 176 | `pending_consolidations` | u64 | |
-| 184 | `state_root_present` | u64 | 1 when the block gave `state_root`, else 0 |
-| 192 | `state_root` | i64 | The state's root as a number |
-| 200 | | | Size |
+| 152 | `altair` | u64 | 1 from altair, else 0 |
+| 160 | `electra` | u64 | 1 from electra, else 0 |
+| 168 | `pending_deposits` | u64 | |
+| 176 | `pending_partial_withdrawals` | u64 | |
+| 184 | `pending_consolidations` | u64 | |
+| 192 | `state_root_present` | u64 | 1 when the block gave `state_root`, else 0 |
+| 200 | `state_root` | i64 | The state's root as a number |
+| 208 | | | Size |
 
 ## Type `MetricsNode`
 
@@ -424,7 +425,7 @@ The tick rate and the tick bounds of the function timers. The core reads the CPU
 ## Test vectors
 
 - Lantern's cases `<preset>-<fork>-metrics-text.bin`, made by tests/generator/metrics.py: values of each type and the text an independent Python formatter of the rules above gives; with no category, one category and all; with `present`, `electra`, `fulu`, `state_root_present` and `max_fds` 0 and 1; with sources not given; with tick rates of 24 MHz, 1 GHz and 2.4 GHz.
-- Lantern's cases `<preset>-<fork>-metrics-state.bin`, made by tests/generator/metrics.py with the pinned spec: states of the spec's test helpers, at genesis and after random validator changes and blocks, and the values the spec's functions give.
+- Lantern's cases `<preset>-<fork>-metrics-state.bin`, made by tests/generator/metrics.py with the pinned spec: states of the fork's `BeaconState` with 0 to 300 validators whose epochs lie about the state's epoch (some out of order), random participation flags, checkpoints, deposit counts and pending lists, each with no block, 179 bytes and a `SignedBeaconBlock`; and the values the spec's functions give (get_current_epoch, get_previous_epoch, is_active_validator, get_active_validator_indices).
 - `lantern_metrics_node`: node-mode fork_choice cases (node.md, Test vectors), after their steps: the node's peers, pool and blocks against the runner's counts.
 
 ## Results

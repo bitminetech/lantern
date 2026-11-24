@@ -422,6 +422,8 @@ FUNCTION lantern_metrics_text
     beq     t0, t3, 14f
     li      t3, METRIC_COND_MAX_FDS
     beq     t0, t3, 15f
+    li      t3, METRIC_COND_ALTAIR
+    beq     t0, t3, 16f
     ld      t4, (L + 24)(sp)                # METRIC_COND_PROFILE: a tick rate
     beqz    t4, 80f
     j       20f
@@ -433,6 +435,12 @@ FUNCTION lantern_metrics_text
     ld      t4, MetricsState_present(t2)
     beqz    t4, 80f
     ld      t4, MetricsState_electra(t2)
+    beqz    t4, 80f
+    j       20f
+16: beqz    t2, 80f
+    ld      t4, MetricsState_present(t2)
+    beqz    t4, 80f
+    ld      t4, MetricsState_altair(t2)
     beqz    t4, 80f
     j       20f
 13: beqz    t2, 80f

@@ -90,7 +90,7 @@ STRUCTS = {
         ("current_justified_epoch", "u64", 1), ("previous_justified_epoch", "u64", 1),
         ("active_validators", "u64", 1), ("deposit_count", "u64", 1), ("finalized_root", "i64", 1),
         ("previous_justified_root", "i64", 1), ("current_validators", "u64", 4), ("previous_validators", "u64", 4),
-        ("current_live", "u64", 1), ("previous_live", "u64", 1), ("electra", "u64", 1),
+        ("current_live", "u64", 1), ("previous_live", "u64", 1), ("altair", "u64", 1), ("electra", "u64", 1),
         ("pending_deposits", "u64", 1), ("pending_partial_withdrawals", "u64", 1),
         ("pending_consolidations", "u64", 1), ("state_root_present", "u64", 1), ("state_root", "i64", 1),
     ],
@@ -136,7 +136,7 @@ def layout(name):
 # of a bound set), array_hist (Histograms by labels), gossip_main, gossip_sent, gossip_mesh (asm-libp2p's
 # gossipsub topics).
 KINDS = ["u64", "root", "seconds", "array", "hist", "array_hist", "gossip_main", "gossip_sent", "gossip_mesh"]
-CONDS = [None, "state", "electra", "fulu", "state_root", "max_fds", "profile"]
+CONDS = [None, "state", "electra", "fulu", "state_root", "max_fds", "profile", "altair"]
 
 
 def F(name, mtype, cat, src, field, kind, labels=(), bounds=None, cond=None, help=None):
@@ -169,8 +169,8 @@ BEACON = [
       cond="state"),
     F("beacon_previous_validators", None, "beacon", "state", "previous_validators", "array", labels=["status"],
       cond="state"),
-    F("beacon_current_live_validators", None, "beacon", "state", "current_live", "u64", cond="state"),
-    F("beacon_previous_live_validators", None, "beacon", "state", "previous_live", "u64", cond="state"),
+    F("beacon_current_live_validators", None, "beacon", "state", "current_live", "u64", cond="altair"),
+    F("beacon_previous_live_validators", None, "beacon", "state", "previous_live", "u64", cond="altair"),
     F("beacon_pending_deposits", None, "beacon", "state", "pending_deposits", "u64", cond="electra"),
     F("beacon_pending_partial_withdrawals", None, "beacon", "state", "pending_partial_withdrawals", "u64",
       cond="electra"),
@@ -276,6 +276,8 @@ def text(fams, categories, src, topics):
         if c == "state" and not (s and s["present"]):
             continue
         if c == "electra" and not (s and s["present"] and s["electra"]):
+            continue
+        if c == "altair" and not (s and s["present"] and s["altair"]):
             continue
         if c == "fulu" and not (n and n["fulu"]):
             continue
@@ -404,15 +406,17 @@ def text_cases(beacon_metrics):
         ("beacon_only", category_mask("beacon"), 1, 1, 1, 1, 4096, 5, ()),
         ("no_state_no_fulu_no_root_no_fds_no_topics", all_bits, 0, 0, 0, 0, 0, 0, ()),
         ("before_electra", all_bits, 1, 0, 1, 1, 4096, 2, ()),
+        ("phase0", all_bits, 1, 0, 0, 1, 4096, 2, ()),
         ("subnet_topics_only", all_bits, 1, 1, 0, 0, 65536, 0, ()),
         ("many_topics", all_bits, 1, 1, 1, 1, 1024, 60, ()),
         ("no_state_source", all_bits, 1, 1, 1, 1, 1024, 3, ("state",)),
         ("no_app_no_profile", all_bits, 1, 1, 1, 1, 1024, 3, ("app", "profile")),
     ]
     for name, cats, present, electra, fulu, state_root, max_fds, ntopics, left_out in specs:
+        altair = int(name != "phase0")
         tps = rng.choice([1000000000, 2399999999, 24000000])
         src = {
-            "state": values(rng, "MetricsState", fams, {"present": present, "electra": electra,
+            "state": values(rng, "MetricsState", fams, {"present": present, "electra": electra, "altair": altair,
                                                         "state_root_present": state_root}, tps),
             "node": values(rng, "MetricsNode", fams, {"fulu": fulu}, tps),
             "counters": values(rng, "NodeMetrics", fams, {}, tps),
@@ -444,6 +448,102 @@ def text_cases(beacon_metrics):
                 parts[k] = struct_bytes(SOURCE_STRUCT[k], src[k])
         parts["text"] = text(fams, cats, src, topics).encode()
         yield name, parts
+
+
+# ---------------------------------------------------------------- lantern_<fork>_metrics_state
+
+FORKS = ("phase0", "altair", "bellatrix", "capella", "deneb", "electra", "fulu")
+
+
+def signed_root(root):
+    """A root as a number (beacon-metrics): bytes 24 to 32, little endian, signed."""
+    return int.from_bytes(bytes(root)[24:32], "little", signed=True)
+
+
+def state_values(spec, fork, state, block):
+    """MetricsState of docs/reference/metrics.md, lantern_metrics_state, from the spec's functions."""
+    cur, prev = spec.get_current_epoch(state), spec.get_previous_epoch(state)
+
+    def status(v, e):
+        if v.activation_epoch > e:
+            return 0  # pending
+        if spec.is_active_validator(v, e):
+            return 1  # active
+        return 2 if v.withdrawable_epoch > e else 3  # exited, withdrawable
+
+    cv, pv = [0] * 4, [0] * 4
+    clive = plive = 0
+    for i, v in enumerate(state.validators):
+        cv[status(v, cur)] += 1
+        pv[status(v, prev)] += 1
+        if fork != "phase0":
+            clive += int(spec.is_active_validator(v, cur) and state.current_epoch_participation[i] != 0)
+            plive += int(spec.is_active_validator(v, prev) and state.previous_epoch_participation[i] != 0)
+    electra = FORKS.index(fork) >= FORKS.index("electra")
+    out = {
+        "present": 1, "slot": int(state.slot), "finalized_epoch": int(state.finalized_checkpoint.epoch),
+        "current_justified_epoch": int(state.current_justified_checkpoint.epoch),
+        "previous_justified_epoch": int(state.previous_justified_checkpoint.epoch),
+        "active_validators": len(spec.get_active_validator_indices(state, cur)),
+        "deposit_count": int(state.eth1_data.deposit_count),
+        "finalized_root": signed_root(state.finalized_checkpoint.root),
+        "previous_justified_root": signed_root(state.previous_justified_checkpoint.root),
+        "current_validators": cv, "previous_validators": pv, "current_live": clive, "previous_live": plive,
+        "altair": int(fork != "phase0"), "electra": int(electra),
+        "pending_deposits": len(state.pending_deposits) if electra else 0,
+        "pending_partial_withdrawals": len(state.pending_partial_withdrawals) if electra else 0,
+        "pending_consolidations": len(state.pending_consolidations) if electra else 0,
+        "state_root_present": int(len(block) >= 180),
+        "state_root": int.from_bytes(block[172:180], "little", signed=True) if len(block) >= 180 else 0,
+    }
+    return struct_bytes("MetricsState", out)
+
+
+def state_cases(fork, preset):
+    """States of random validators about their epochs, checkpoints and lists, with blocks of each kind."""
+    spec = __import__(f"eth_consensus_specs.{fork}.{preset}", fromlist=["*"])
+    rng = random.Random(f"metrics-state-{fork}-{preset}")
+    far = int(spec.FAR_FUTURE_EPOCH)
+    electra = FORKS.index(fork) >= FORKS.index("electra")
+    shapes = [("genesis", 0, 0), ("one_validator", 1, 3), ("epoch_one", 40, 1), ("many", 300, 7),
+              ("far_epoch", 120, 1 << 30), ("odd", 97, 12)]
+    for name, n, epoch in shapes:
+        for blk in ("anchor", "short", "block"):
+            state = spec.BeaconState()
+            state.slot = epoch * int(spec.SLOTS_PER_EPOCH) + rng.randrange(int(spec.SLOTS_PER_EPOCH))
+            near = [0, max(epoch - 1, 0), epoch, epoch + 1, epoch + 2, far]
+            for i in range(n):
+                a, x, w = sorted(rng.choice(near) for _ in range(3))
+                if rng.random() < 0.1:
+                    a, x, w = rng.choice(near), rng.choice(near), rng.choice(near)  # out of order
+                state.validators.append(spec.Validator(pubkey=spec.BLSPubkey(rng.randbytes(48)), activation_epoch=a,
+                                                       exit_epoch=x, withdrawable_epoch=w,
+                                                       effective_balance=spec.MAX_EFFECTIVE_BALANCE))
+                state.balances.append(spec.MAX_EFFECTIVE_BALANCE)
+                if fork != "phase0":
+                    state.previous_epoch_participation.append(rng.choice([0, 0, 1, 2, 4, 7]))
+                    state.current_epoch_participation.append(rng.choice([0, 0, 1, 2, 4, 7]))
+                    state.inactivity_scores.append(0)
+            state.finalized_checkpoint = spec.Checkpoint(epoch=max(epoch - 2, 0), root=spec.Root(rng.randbytes(32)))
+            state.current_justified_checkpoint = spec.Checkpoint(epoch=epoch, root=spec.Root(rng.randbytes(32)))
+            state.previous_justified_checkpoint = spec.Checkpoint(epoch=max(epoch - 1, 0), root=spec.Root(rng.randbytes(32)))
+            state.eth1_data.deposit_count = rng.choice([0, n, rng.getrandbits(64)])
+            if electra:
+                for _ in range(rng.randrange(4)):
+                    state.pending_deposits.append(spec.PendingDeposit(amount=rng.getrandbits(32)))
+                for _ in range(rng.randrange(4)):
+                    state.pending_partial_withdrawals.append(spec.PendingPartialWithdrawal(amount=rng.getrandbits(32)))
+                for _ in range(rng.randrange(4)):
+                    state.pending_consolidations.append(spec.PendingConsolidation(source_index=rng.randrange(1 << 20)))
+            if blk == "anchor":
+                block = b""
+            elif blk == "short":
+                block = rng.randbytes(179)
+            else:
+                msg = spec.BeaconBlock(slot=state.slot, state_root=spec.Root(rng.randbytes(32)))
+                block = spec.SignedBeaconBlock(message=msg).encode_bytes()
+            yield f"{name}/{blk}", {"state": state.encode_bytes(), "block": block,
+                                    "out": state_values(spec, fork, state, block)}
 
 
 # ---------------------------------------------------------------- The include files

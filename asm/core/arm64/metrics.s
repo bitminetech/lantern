@@ -408,6 +408,8 @@ FUNCTION lantern_metrics_text
     b.eq    14f
     cmp     w9, #METRIC_COND_MAX_FDS
     b.eq    15f
+    cmp     w9, #METRIC_COND_ALTAIR
+    b.eq    16f
     ldr     x12, [sp, #(L + 24)]            /* METRIC_COND_PROFILE: a tick rate */
     cbz     x12, 80f
     b       20f
@@ -419,6 +421,12 @@ FUNCTION lantern_metrics_text
     ldr     x12, [x11, #MetricsState_present]
     cbz     x12, 80f
     ldr     x12, [x11, #MetricsState_electra]
+    cbz     x12, 80f
+    b       20f
+16: cbz     x11, 80f
+    ldr     x12, [x11, #MetricsState_present]
+    cbz     x12, 80f
+    ldr     x12, [x11, #MetricsState_altair]
     cbz     x12, 80f
     b       20f
 13: cbz     x11, 80f

@@ -79,6 +79,7 @@ SSZ_DEPTH LOG2_SLOTS_PER_EPOCH, SLOTS_PER_EPOCH
 .include "networking.s"
 .include "p2p.s"
 .include "enginejson.s"
+.include "metricsstate.s"
 
 /* ---------------------------------------------------------------- Read only data */
 

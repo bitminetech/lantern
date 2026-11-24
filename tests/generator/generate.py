@@ -304,6 +304,11 @@ def main():
             manifest.append((file, count, digest))
             print(f"{file}: {count} cases")
         if not runners or "metrics" in runners:
+            for fork in forks:
+                file = f"{preset}-{fork}-metrics-state.bin"
+                count, digest = write_file(out / file, list(metrics.state_cases(fork, preset)))
+                manifest.append((file, count, digest))
+                print(f"{file}: {count} cases")
             file = f"{preset}-phase0-metrics-text.bin"
             count, digest = write_file(out / file, list(metrics.text_cases(os.environ["BEACON_METRICS"])))
             manifest.append((file, count, digest))

@@ -388,6 +388,8 @@ FUNCTION lantern_metrics_text
     je      14f
     cmp     $METRIC_COND_MAX_FDS, %eax
     je      15f
+    cmp     $METRIC_COND_ALTAIR, %eax
+    je      16f
     cmpq    $0, (L + 24)(%rsp)              # METRIC_COND_PROFILE: a tick rate
     je      80f
     jmp     20f
@@ -401,6 +403,13 @@ FUNCTION lantern_metrics_text
     cmpq    $0, MetricsState_present(%rdx)
     je      80f
     cmpq    $0, MetricsState_electra(%rdx)
+    je      80f
+    jmp     20f
+16: test    %rdx, %rdx
+    jz      80f
+    cmpq    $0, MetricsState_present(%rdx)
+    je      80f
+    cmpq    $0, MetricsState_altair(%rdx)
     je      80f
     jmp     20f
 13: test    %rdx, %rdx

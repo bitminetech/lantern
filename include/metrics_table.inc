@@ -654,12 +654,12 @@ metrics_table:
     .short 1, 0
     .long 0, 4
     .long mt_s36 - metrics_texts, mt_s36_len, mt_s37 - metrics_texts, mt_s37_len, METRIC_TYPE_GAUGE, METRIC_SRC_STATE, MetricsState_current_live
-    .short METRIC_KIND_U64, METRIC_COND_STATE
+    .short METRIC_KIND_U64, METRIC_COND_ALTAIR
     .long METRIC_BIT_BEACON
     .short 0, 0
     .long 0, 1
     .long mt_s38 - metrics_texts, mt_s38_len, mt_s39 - metrics_texts, mt_s39_len, METRIC_TYPE_GAUGE, METRIC_SRC_STATE, MetricsState_previous_live
-    .short METRIC_KIND_U64, METRIC_COND_STATE
+    .short METRIC_KIND_U64, METRIC_COND_ALTAIR
     .long METRIC_BIT_BEACON
     .short 0, 0
     .long 0, 1

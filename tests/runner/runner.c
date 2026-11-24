@@ -121,6 +121,7 @@ ABI uint64_t LF(state_branch)(const void *state, uint64_t field, void *cache, vo
 ABI uint64_t LF(execution_branch)(const void *body, void *scratch, void *out);
 ABI uint64_t LF(is_better_update)(const void *new_update, const void *old_update, void *out);
 ABI uint64_t LF(block_to_light_client_header)(const void *block, void *scratch, void *out);
+ABI uint64_t LF(metrics_state)(const void *state, const void *block, void *out);
 ABI uint64_t LF(upgrade_lc_header)(const void *header, uint64_t from, void *out);
 ABI uint64_t LF(committee_cache_size)(const void *validators, void *size);
 ABI uint64_t LF(committee_cache_init)(const void *validators, void *cache);
@@ -9714,6 +9715,45 @@ static void run_metrics_text(const char *file, case_file *f) {
     }
 }
 
+/*
+ * metrics-state: lantern_<fork>_metrics_state of each case's state and block (tests/generator/metrics.py,
+ * from the spec's functions): out must be the case's MetricsState, with nothing written past it,
+ * and the state and the block unchanged.
+ */
+#define METRICS_STATE_BYTES 208 /* include/metrics.inc: MetricsState__mem */
+static void run_metrics_state(const char *file, case_file *f) {
+    for (uint64_t i = 0; i < f->count; i++) {
+        const char *name, *why = NULL;
+        uint64_t len, slen, blen, wlen, ssize = 0, lsize = 0;
+        tv parts = next_case(f, &name, &len);
+        const uint8_t *enc = tv_bytes(tv_get(parts, "state"), &slen);
+        const uint8_t *blk = tv_bytes(tv_get(parts, "block"), &blen);
+        const uint8_t *want = tv_bytes(tv_get(parts, "out"), &wlen);
+        uint8_t *state = load_state(enc, slen, &ssize, &why), *list = list_of(blk, blen, 0, 0, &lsize);
+        uint8_t *keep = state ? copy_of(state, ssize) : NULL, *lkeep = copy_of(list, lsize);
+        uint8_t *out = buffer(METRICS_STATE_BYTES);
+        if (!why && wlen != METRICS_STATE_BYTES) why = "the case's out is not a MetricsState";
+        if (!why) {
+            uint64_t st = CALL(LF(metrics_state), state, list, out);
+            static char msg[96];
+            if (st != 0) why = "status is not LANTERN_OK";
+            else if (!guard_ok(out, METRICS_STATE_BYTES)) why = "wrote past out";
+            else if (memcmp(out, want, METRICS_STATE_BYTES)) {
+                uint64_t at = 0;
+                while (at < METRICS_STATE_BYTES && out[at] == want[at]) at++;
+                snprintf(msg, sizeof msg, "out differs at byte %llu", (unsigned long long)at);
+                why = msg;
+            } else if (memcmp(state, keep, (size_t)ssize) || memcmp(list, lkeep, (size_t)lsize)) why = "changed an input";
+        }
+        free(out);
+        free(state);
+        free(keep);
+        free(list);
+        free(lkeep);
+        report(file, name, len, why == NULL, why);
+    }
+}
+
 /* ---------------------------------------------------------------- Beacon API */
 
 #define HTTP_MORE_STATUS 53
@@ -12724,6 +12764,7 @@ int main(int argc, char **argv) {
         else if (!bls_off && !strcmp(kind, "config-parse")) run_config_parse(file, &f);
         else if (!bls_off && !strcmp(kind, "app-options")) run_app_options(file, &f);
         else if (!bls_off && !strcmp(kind, "metrics-text")) run_metrics_text(file, &f);
+        else if (!bls_off && !strcmp(kind, "metrics-state")) run_metrics_state(file, &f);
         else if (!bls_off && !strcmp(kind, "node-api")) run_node_api(file, &f);
         else if (!bls_off && !strcmp(kind, "node-payload")) run_node_payload(file, &f);
         else if (!bls_off && !strcmp(kind, "node-liveness")) run_node_liveness(file, &f);
