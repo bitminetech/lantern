@@ -1562,7 +1562,7 @@ The outcome of the spec checks of a call that changes a state and returned `LANT
 |---|---|---|---|---|
 | x86-64 | ✅ | ✅ |  |  |
 | ARM64 | ✅ | ✅ | ✅ |  |
-| RISC-V | ✅ |  |  |  |
+| RISC-V |  |  |  |  |
 
 ### `lantern_compute_shuffled_index`
 
@@ -1570,7 +1570,7 @@ The outcome of the spec checks of a call that changes a state and returned `LANT
 |---|---|---|---|---|
 | x86-64 | ✅ | ✅ |  |  |
 | ARM64 | ✅ | ✅ | ✅ |  |
-| RISC-V | ✅ |  |  |  |
+| RISC-V |  |  |  |  |
 
 ### `lantern_get_seed`
 
@@ -1626,7 +1626,7 @@ The outcome of the spec checks of a call that changes a state and returned `LANT
 |---|---|---|---|---|
 | x86-64 | ✅ | ✅ |  |  |
 | ARM64 | ✅ | ✅ | ✅ |  |
-| RISC-V | ✅ |  |  |  |
+| RISC-V |  |  |  |  |
 
 ### `lantern_compute_signing_root`
 

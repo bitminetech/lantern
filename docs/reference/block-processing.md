@@ -1437,7 +1437,7 @@ An epoch and the blob limit from it.
 |---|---|---|---|---|
 | x86-64 | ✅ | ✅ |  |  |
 | ARM64 | ✅ | ✅ | ✅ |  |
-| RISC-V | ✅ |  |  |  |
+| RISC-V |  |  |  |  |
 
 ### `lantern_process_block_header`
 
@@ -1445,7 +1445,7 @@ An epoch and the blob limit from it.
 |---|---|---|---|---|
 | x86-64 | ✅ | ✅ |  |  |
 | ARM64 | ✅ | ✅ | ✅ |  |
-| RISC-V | ✅ |  |  |  |
+| RISC-V |  |  |  |  |
 
 ### `lantern_process_withdrawals`
 
@@ -1453,7 +1453,7 @@ An epoch and the blob limit from it.
 |---|---|---|---|---|
 | x86-64 | ✅ | ✅ |  |  |
 | ARM64 | ✅ | ✅ | ✅ |  |
-| RISC-V | ✅ |  |  |  |
+| RISC-V |  |  |  |  |
 
 ### `lantern_get_expected_withdrawals`
 
@@ -1573,7 +1573,7 @@ An epoch and the blob limit from it.
 |---|---|---|---|---|
 | x86-64 | ✅ | ✅ |  |  |
 | ARM64 | ✅ | ✅ | ✅ |  |
-| RISC-V | ✅ |  |  |  |
+| RISC-V |  |  |  |  |
 
 ### `lantern_is_merge_transition_complete`
 
@@ -1653,7 +1653,7 @@ An epoch and the blob limit from it.
 |---|---|---|---|---|
 | x86-64 | ✅ | ✅ |  |  |
 | ARM64 | ✅ | ✅ | ✅ |  |
-| RISC-V | ✅ |  |  |  |
+| RISC-V |  |  |  |  |
 
 ### `lantern_apply_deposit`
 
@@ -1669,7 +1669,7 @@ An epoch and the blob limit from it.
 |---|---|---|---|---|
 | x86-64 | ✅ | ✅ |  |  |
 | ARM64 | ✅ | ✅ | ✅ |  |
-| RISC-V | ✅ |  |  |  |
+| RISC-V |  |  |  |  |
 
 ### `lantern_process_attester_slashing`
 
@@ -1677,7 +1677,7 @@ An epoch and the blob limit from it.
 |---|---|---|---|---|
 | x86-64 | ✅ | ✅ |  |  |
 | ARM64 | ✅ | ✅ | ✅ |  |
-| RISC-V | ✅ |  |  |  |
+| RISC-V |  |  |  |  |
 
 ### `lantern_process_attestation`
 
@@ -1685,7 +1685,7 @@ An epoch and the blob limit from it.
 |---|---|---|---|---|
 | x86-64 | ✅ | ✅ |  |  |
 | ARM64 | ✅ | ✅ | ✅ |  |
-| RISC-V | ✅ |  |  |  |
+| RISC-V |  |  |  |  |
 
 ### `lantern_process_voluntary_exit`
 
@@ -1693,7 +1693,7 @@ An epoch and the blob limit from it.
 |---|---|---|---|---|
 | x86-64 | ✅ | ✅ |  |  |
 | ARM64 | ✅ | ✅ | ✅ |  |
-| RISC-V | ✅ |  |  |  |
+| RISC-V |  |  |  |  |
 
 ### `lantern_process_bls_to_execution_change`
 
@@ -1701,7 +1701,7 @@ An epoch and the blob limit from it.
 |---|---|---|---|---|
 | x86-64 | ✅ | ✅ |  |  |
 | ARM64 | ✅ | ✅ | ✅ |  |
-| RISC-V | ✅ |  |  |  |
+| RISC-V |  |  |  |  |
 
 ### `lantern_process_deposit_request`
 
@@ -1709,7 +1709,7 @@ An epoch and the blob limit from it.
 |---|---|---|---|---|
 | x86-64 | ✅ | ✅ |  |  |
 | ARM64 | ✅ | ✅ | ✅ |  |
-| RISC-V | ✅ |  |  |  |
+| RISC-V |  |  |  |  |
 
 ### `lantern_process_withdrawal_request`
 
@@ -1717,7 +1717,7 @@ An epoch and the blob limit from it.
 |---|---|---|---|---|
 | x86-64 | ✅ | ✅ |  |  |
 | ARM64 | ✅ | ✅ | ✅ |  |
-| RISC-V | ✅ |  |  |  |
+| RISC-V |  |  |  |  |
 
 ### `lantern_process_consolidation_request`
 
@@ -1725,7 +1725,7 @@ An epoch and the blob limit from it.
 |---|---|---|---|---|
 | x86-64 | ✅ | ✅ |  |  |
 | ARM64 | ✅ | ✅ | ✅ |  |
-| RISC-V | ✅ |  |  |  |
+| RISC-V |  |  |  |  |
 
 ### `lantern_is_valid_switch_to_compounding_request`
 
@@ -1765,7 +1765,7 @@ An epoch and the blob limit from it.
 |---|---|---|---|---|
 | x86-64 | ✅ | ✅ |  |  |
 | ARM64 | ✅ | ✅ | ✅ |  |
-| RISC-V | ✅ |  |  |  |
+| RISC-V |  |  |  |  |
 
 ### `lantern_slash_validator`
 
@@ -1829,7 +1829,7 @@ An epoch and the blob limit from it.
 |---|---|---|---|---|
 | x86-64 | ✅ | ✅ |  |  |
 | ARM64 | ✅ | ✅ | ✅ |  |
-| RISC-V | ✅ |  |  |  |
+| RISC-V |  |  |  |  |
 
 ### `lantern_get_indexed_attestation`
 
@@ -1877,7 +1877,7 @@ An epoch and the blob limit from it.
 |---|---|---|---|---|
 | x86-64 | ✅ | ✅ |  |  |
 | ARM64 | ✅ | ✅ | ✅ |  |
-| RISC-V | ✅ |  |  |  |
+| RISC-V |  |  |  |  |
 
 ### `lantern_committee_cache_init`
 
@@ -1885,7 +1885,7 @@ An epoch and the blob limit from it.
 |---|---|---|---|---|
 | x86-64 | ✅ | ✅ |  |  |
 | ARM64 | ✅ | ✅ | ✅ |  |
-| RISC-V | ✅ |  |  |  |
+| RISC-V |  |  |  |  |
 
 ### `lantern_pubkey_cache_size`
 
@@ -1893,7 +1893,7 @@ An epoch and the blob limit from it.
 |---|---|---|---|---|
 | x86-64 | ✅ | ✅ |  |  |
 | ARM64 | ✅ | ✅ | ✅ |  |
-| RISC-V | ✅ |  |  |  |
+| RISC-V |  |  |  |  |
 
 ### `lantern_pubkey_cache_init`
 
@@ -1901,4 +1901,4 @@ An epoch and the blob limit from it.
 |---|---|---|---|---|
 | x86-64 | ✅ | ✅ |  |  |
 | ARM64 | ✅ | ✅ | ✅ |  |
-| RISC-V | ✅ |  |  |  |
+| RISC-V |  |  |  |  |

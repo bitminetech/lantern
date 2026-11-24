@@ -105,4 +105,4 @@ lantern_config_parse(text, config, line) -> status
 |---|---|---|---|---|
 | x86-64 | ✅ | ✅ |  |  |
 | ARM64 | ✅ | ✅ | ✅ |  |
-| RISC-V | ✅ |  |  |  |
+| RISC-V |  |  |  |  |

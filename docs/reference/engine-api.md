@@ -513,7 +513,7 @@ lantern_http_parse_response(input, eof, body, out) -> status
 |---|---|---|---|---|
 | x86-64 | ✅ | ✅ |  |  |
 | ARM64 | ✅ | ✅ | ✅ |  |
-| RISC-V | ✅ |  |  |  |
+| RISC-V |  |  |  |  |
 
 ### `lantern_engine_new_payload_size`
 
@@ -521,7 +521,7 @@ lantern_http_parse_response(input, eof, body, out) -> status
 |---|---|---|---|---|
 | x86-64 | ✅ | ✅ |  |  |
 | ARM64 | ✅ | ✅ | ✅ |  |
-| RISC-V | ✅ |  |  |  |
+| RISC-V |  |  |  |  |
 
 ### `lantern_engine_new_payload`
 
@@ -529,7 +529,7 @@ lantern_http_parse_response(input, eof, body, out) -> status
 |---|---|---|---|---|
 | x86-64 | ✅ | ✅ |  |  |
 | ARM64 | ✅ | ✅ | ✅ |  |
-| RISC-V | ✅ |  |  |  |
+| RISC-V |  |  |  |  |
 
 ### `lantern_engine_forkchoice_updated`
 
@@ -537,7 +537,7 @@ lantern_http_parse_response(input, eof, body, out) -> status
 |---|---|---|---|---|
 | x86-64 | ✅ | ✅ |  |  |
 | ARM64 | ✅ | ✅ | ✅ |  |
-| RISC-V | ✅ |  |  |  |
+| RISC-V |  |  |  |  |
 
 ### `lantern_engine_get_payload`
 
@@ -545,7 +545,7 @@ lantern_http_parse_response(input, eof, body, out) -> status
 |---|---|---|---|---|
 | x86-64 | ✅ | ✅ |  |  |
 | ARM64 | ✅ | ✅ | ✅ |  |
-| RISC-V | ✅ |  |  |  |
+| RISC-V |  |  |  |  |
 
 ### `lantern_engine_json_decode`
 
@@ -561,7 +561,7 @@ lantern_http_parse_response(input, eof, body, out) -> status
 |---|---|---|---|---|
 | x86-64 | ✅ | ✅ |  |  |
 | ARM64 | ✅ | ✅ | ✅ |  |
-| RISC-V | ✅ |  |  |  |
+| RISC-V |  |  |  |  |
 
 ### `lantern_get_payload_attributes`
 
@@ -569,7 +569,7 @@ lantern_http_parse_response(input, eof, body, out) -> status
 |---|---|---|---|---|
 | x86-64 | ✅ | ✅ |  |  |
 | ARM64 | ✅ | ✅ | ✅ |  |
-| RISC-V | ✅ |  |  |  |
+| RISC-V |  |  |  |  |
 
 ### `lantern_engine_exchange_capabilities`
 
@@ -577,7 +577,7 @@ lantern_http_parse_response(input, eof, body, out) -> status
 |---|---|---|---|---|
 | x86-64 | ✅ | ✅ |  |  |
 | ARM64 | ✅ | ✅ | ✅ |  |
-| RISC-V | ✅ |  |  |  |
+| RISC-V |  |  |  |  |
 
 ### `lantern_engine_parse_response`
 
@@ -585,7 +585,7 @@ lantern_http_parse_response(input, eof, body, out) -> status
 |---|---|---|---|---|
 | x86-64 | ✅ | ✅ |  |  |
 | ARM64 | ✅ | ✅ | ✅ |  |
-| RISC-V | ✅ |  |  |  |
+| RISC-V |  |  |  |  |
 
 ### `lantern_jwt_token`
 
@@ -593,7 +593,7 @@ lantern_http_parse_response(input, eof, body, out) -> status
 |---|---|---|---|---|
 | x86-64 | ✅ | ✅ |  |  |
 | ARM64 | ✅ | ✅ | ✅ |  |
-| RISC-V | ✅ |  |  |  |
+| RISC-V |  |  |  |  |
 
 ### `lantern_http_post`
 
@@ -601,7 +601,7 @@ lantern_http_parse_response(input, eof, body, out) -> status
 |---|---|---|---|---|
 | x86-64 | ✅ | ✅ |  |  |
 | ARM64 | ✅ | ✅ | ✅ |  |
-| RISC-V | ✅ |  |  |  |
+| RISC-V |  |  |  |  |
 
 ### `lantern_http_parse_response`
 
@@ -609,4 +609,4 @@ lantern_http_parse_response(input, eof, body, out) -> status
 |---|---|---|---|---|
 | x86-64 | ✅ | ✅ |  |  |
 | ARM64 | ✅ | ✅ | ✅ |  |
-| RISC-V | ✅ |  |  |  |
+| RISC-V |  |  |  |  |

@@ -1017,7 +1017,7 @@ The spec's `Seen` of every fork, and the blocks of `store.blocks` that have no p
 |---|---|---|---|---|
 | x86-64 | ✅ | ✅ |  |  |
 | ARM64 | ✅ | ✅ | ✅ |  |
-| RISC-V | ✅ |  |  |  |
+| RISC-V |  |  |  |  |
 
 ### `lantern_compute_columns_for_custody_group`
 
@@ -1025,7 +1025,7 @@ The spec's `Seen` of every fork, and the blocks of `store.blocks` that have no p
 |---|---|---|---|---|
 | x86-64 | ✅ | ✅ |  |  |
 | ARM64 | ✅ | ✅ | ✅ |  |
-| RISC-V | ✅ |  |  |  |
+| RISC-V |  |  |  |  |
 
 ### `lantern_compute_subnet_for_data_column_sidecar`
 
@@ -1049,7 +1049,7 @@ The spec's `Seen` of every fork, and the blocks of `store.blocks` that have no p
 |---|---|---|---|---|
 | x86-64 | ✅ | ✅ |  |  |
 | ARM64 | ✅ | ✅ | ✅ |  |
-| RISC-V | ✅ |  |  |  |
+| RISC-V |  |  |  |  |
 
 ### `lantern_verify_partial_data_column_sidecar_kzg_proofs`
 
@@ -1065,7 +1065,7 @@ The spec's `Seen` of every fork, and the blocks of `store.blocks` that have no p
 |---|---|---|---|---|
 | x86-64 | ✅ | ✅ |  |  |
 | ARM64 | ✅ | ✅ | ✅ |  |
-| RISC-V | ✅ |  |  |  |
+| RISC-V |  |  |  |  |
 
 ### `lantern_verify_blob_sidecar_inclusion_proof`
 
@@ -1073,7 +1073,7 @@ The spec's `Seen` of every fork, and the blocks of `store.blocks` that have no p
 |---|---|---|---|---|
 | x86-64 | ✅ | ✅ |  |  |
 | ARM64 | ✅ | ✅ | ✅ |  |
-| RISC-V | ✅ |  |  |  |
+| RISC-V |  |  |  |  |
 
 ### `lantern_compute_fork_version`
 
@@ -1081,7 +1081,7 @@ The spec's `Seen` of every fork, and the blocks of `store.blocks` that have no p
 |---|---|---|---|---|
 | x86-64 | ✅ | ✅ |  |  |
 | ARM64 | ✅ | ✅ | ✅ |  |
-| RISC-V | ✅ |  |  |  |
+| RISC-V |  |  |  |  |
 
 ### `lantern_compute_fork_digest`
 
@@ -1089,7 +1089,7 @@ The spec's `Seen` of every fork, and the blocks of `store.blocks` that have no p
 |---|---|---|---|---|
 | x86-64 | ✅ | ✅ |  |  |
 | ARM64 | ✅ | ✅ | ✅ |  |
-| RISC-V | ✅ |  |  |  |
+| RISC-V |  |  |  |  |
 
 ### `lantern_compute_attestation_subnet_prefix_bits`
 
@@ -1097,7 +1097,7 @@ The spec's `Seen` of every fork, and the blocks of `store.blocks` that have no p
 |---|---|---|---|---|
 | x86-64 | ✅ | ✅ |  |  |
 | ARM64 | ✅ | ✅ | ✅ |  |
-| RISC-V | ✅ |  |  |  |
+| RISC-V |  |  |  |  |
 
 ### `lantern_compute_min_epochs_for_block_requests`
 
@@ -1105,7 +1105,7 @@ The spec's `Seen` of every fork, and the blocks of `store.blocks` that have no p
 |---|---|---|---|---|
 | x86-64 | ✅ | ✅ |  |  |
 | ARM64 | ✅ | ✅ | ✅ |  |
-| RISC-V | ✅ |  |  |  |
+| RISC-V |  |  |  |  |
 
 ### `lantern_max_compressed_len`
 
@@ -1113,7 +1113,7 @@ The spec's `Seen` of every fork, and the blocks of `store.blocks` that have no p
 |---|---|---|---|---|
 | x86-64 | ✅ | ✅ |  |  |
 | ARM64 | ✅ | ✅ | ✅ |  |
-| RISC-V | ✅ |  |  |  |
+| RISC-V |  |  |  |  |
 
 ### `lantern_max_message_size`
 
@@ -1121,7 +1121,7 @@ The spec's `Seen` of every fork, and the blocks of `store.blocks` that have no p
 |---|---|---|---|---|
 | x86-64 | ✅ | ✅ |  |  |
 | ARM64 | ✅ | ✅ | ✅ |  |
-| RISC-V | ✅ |  |  |  |
+| RISC-V |  |  |  |  |
 
 ### `lantern_compute_subscribed_subnet`
 
@@ -1129,7 +1129,7 @@ The spec's `Seen` of every fork, and the blocks of `store.blocks` that have no p
 |---|---|---|---|---|
 | x86-64 | ✅ | ✅ |  |  |
 | ARM64 | ✅ | ✅ | ✅ |  |
-| RISC-V | ✅ |  |  |  |
+| RISC-V |  |  |  |  |
 
 ### `lantern_compute_subscribed_subnets`
 
@@ -1137,7 +1137,7 @@ The spec's `Seen` of every fork, and the blocks of `store.blocks` that have no p
 |---|---|---|---|---|
 | x86-64 | ✅ | ✅ |  |  |
 | ARM64 | ✅ | ✅ | ✅ |  |
-| RISC-V | ✅ |  |  |  |
+| RISC-V |  |  |  |  |
 
 ### `lantern_compute_max_request_blob_sidecars`
 
@@ -1145,7 +1145,7 @@ The spec's `Seen` of every fork, and the blocks of `store.blocks` that have no p
 |---|---|---|---|---|
 | x86-64 | ✅ | ✅ |  |  |
 | ARM64 | ✅ | ✅ | ✅ |  |
-| RISC-V | ✅ |  |  |  |
+| RISC-V |  |  |  |  |
 
 ### `lantern_compute_max_request_data_column_sidecars`
 
@@ -1153,7 +1153,7 @@ The spec's `Seen` of every fork, and the blocks of `store.blocks` that have no p
 |---|---|---|---|---|
 | x86-64 | ✅ | ✅ |  |  |
 | ARM64 | ✅ | ✅ | ✅ |  |
-| RISC-V | ✅ |  |  |  |
+| RISC-V |  |  |  |  |
 
 ### `lantern_compute_enr_fork_id`
 
@@ -1161,7 +1161,7 @@ The spec's `Seen` of every fork, and the blocks of `store.blocks` that have no p
 |---|---|---|---|---|
 | x86-64 | ✅ | ✅ |  |  |
 | ARM64 | ✅ | ✅ | ✅ |  |
-| RISC-V | ✅ |  |  |  |
+| RISC-V |  |  |  |  |
 
 ### `lantern_compute_next_fork_digest`
 
@@ -1169,7 +1169,7 @@ The spec's `Seen` of every fork, and the blocks of `store.blocks` that have no p
 |---|---|---|---|---|
 | x86-64 | ✅ | ✅ |  |  |
 | ARM64 | ✅ | ✅ | ✅ |  |
-| RISC-V | ✅ |  |  |  |
+| RISC-V |  |  |  |  |
 
 ### `lantern_gossip_topic`
 
@@ -1177,7 +1177,7 @@ The spec's `Seen` of every fork, and the blocks of `store.blocks` that have no p
 |---|---|---|---|---|
 | x86-64 | ✅ | ✅ |  |  |
 | ARM64 | ✅ | ✅ | ✅ |  |
-| RISC-V | ✅ |  |  |  |
+| RISC-V |  |  |  |  |
 
 ### `lantern_gossip_topic_parse`
 
@@ -1185,7 +1185,7 @@ The spec's `Seen` of every fork, and the blocks of `store.blocks` that have no p
 |---|---|---|---|---|
 | x86-64 | ✅ | ✅ |  |  |
 | ARM64 | ✅ | ✅ | ✅ |  |
-| RISC-V | ✅ |  |  |  |
+| RISC-V |  |  |  |  |
 
 ### `lantern_compute_message_id`
 
@@ -1193,7 +1193,7 @@ The spec's `Seen` of every fork, and the blocks of `store.blocks` that have no p
 |---|---|---|---|---|
 | x86-64 | ✅ | ✅ |  |  |
 | ARM64 | ✅ | ✅ | ✅ |  |
-| RISC-V | ✅ |  |  |  |
+| RISC-V |  |  |  |  |
 
 ### `lantern_seen_size`
 
@@ -1201,7 +1201,7 @@ The spec's `Seen` of every fork, and the blocks of `store.blocks` that have no p
 |---|---|---|---|---|
 | x86-64 | ✅ | ✅ |  |  |
 | ARM64 | ✅ | ✅ | ✅ |  |
-| RISC-V | ✅ |  |  |  |
+| RISC-V |  |  |  |  |
 
 ### `lantern_seen_init`
 
@@ -1209,7 +1209,7 @@ The spec's `Seen` of every fork, and the blocks of `store.blocks` that have no p
 |---|---|---|---|---|
 | x86-64 | ✅ | ✅ |  |  |
 | ARM64 | ✅ | ✅ | ✅ |  |
-| RISC-V | ✅ |  |  |  |
+| RISC-V |  |  |  |  |
 
 ### `lantern_seen_copy`
 
@@ -1217,7 +1217,7 @@ The spec's `Seen` of every fork, and the blocks of `store.blocks` that have no p
 |---|---|---|---|---|
 | x86-64 | ✅ | ✅ |  |  |
 | ARM64 | ✅ | ✅ | ✅ |  |
-| RISC-V | ✅ |  |  |  |
+| RISC-V |  |  |  |  |
 
 ### `lantern_seen_add_block`
 
@@ -1225,4 +1225,4 @@ The spec's `Seen` of every fork, and the blocks of `store.blocks` that have no p
 |---|---|---|---|---|
 | x86-64 | ✅ | ✅ |  |  |
 | ARM64 | ✅ | ✅ | ✅ |  |
-| RISC-V | ✅ |  |  |  |
+| RISC-V |  |  |  |  |

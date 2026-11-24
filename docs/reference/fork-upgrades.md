@@ -327,7 +327,7 @@ lantern_initialize_proposer_lookahead(state, scratch, out) -> status
 |---|---|---|---|---|
 | x86-64 | ✅ | ✅ |  |  |
 | ARM64 | ✅ | ✅ | ✅ |  |
-| RISC-V | ✅ |  |  |  |
+| RISC-V |  |  |  |  |
 
 ### `lantern_upgrade_to_altair`
 
@@ -335,7 +335,7 @@ lantern_initialize_proposer_lookahead(state, scratch, out) -> status
 |---|---|---|---|---|
 | x86-64 | ✅ | ✅ |  |  |
 | ARM64 | ✅ | ✅ | ✅ |  |
-| RISC-V | ✅ |  |  |  |
+| RISC-V |  |  |  |  |
 
 ### `lantern_translate_participation`
 
@@ -351,7 +351,7 @@ lantern_initialize_proposer_lookahead(state, scratch, out) -> status
 |---|---|---|---|---|
 | x86-64 | ✅ | ✅ |  |  |
 | ARM64 | ✅ | ✅ | ✅ |  |
-| RISC-V | ✅ |  |  |  |
+| RISC-V |  |  |  |  |
 
 ### `lantern_upgrade_to_capella`
 
@@ -359,7 +359,7 @@ lantern_initialize_proposer_lookahead(state, scratch, out) -> status
 |---|---|---|---|---|
 | x86-64 | ✅ | ✅ |  |  |
 | ARM64 | ✅ | ✅ | ✅ |  |
-| RISC-V | ✅ |  |  |  |
+| RISC-V |  |  |  |  |
 
 ### `lantern_upgrade_to_deneb`
 
@@ -367,7 +367,7 @@ lantern_initialize_proposer_lookahead(state, scratch, out) -> status
 |---|---|---|---|---|
 | x86-64 | ✅ | ✅ |  |  |
 | ARM64 | ✅ | ✅ | ✅ |  |
-| RISC-V | ✅ |  |  |  |
+| RISC-V |  |  |  |  |
 
 ### `lantern_upgrade_to_electra`
 
@@ -375,7 +375,7 @@ lantern_initialize_proposer_lookahead(state, scratch, out) -> status
 |---|---|---|---|---|
 | x86-64 | ✅ | ✅ |  |  |
 | ARM64 | ✅ | ✅ | ✅ |  |
-| RISC-V | ✅ |  |  |  |
+| RISC-V |  |  |  |  |
 
 ### `lantern_upgrade_to_fulu`
 
@@ -383,7 +383,7 @@ lantern_initialize_proposer_lookahead(state, scratch, out) -> status
 |---|---|---|---|---|
 | x86-64 | ✅ | ✅ |  |  |
 | ARM64 | ✅ | ✅ | ✅ |  |
-| RISC-V | ✅ |  |  |  |
+| RISC-V |  |  |  |  |
 
 ### `lantern_initialize_proposer_lookahead`
 

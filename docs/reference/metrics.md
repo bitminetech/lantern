@@ -670,3 +670,43 @@ The tick rate and the tick bounds of the function timers. The core reads the CPU
 ## Results
 
 <!-- CI generates the tick table for each function here. -->
+
+### `lantern_metrics_text`
+
+| ISA | Linux | Windows | macOS | `equal` |
+|---|---|---|---|---|
+| x86-64 | ✅ | ✅ |  |  |
+| ARM64 | ✅ | ✅ | ✅ |  |
+| RISC-V |  |  |  |  |
+
+### `lantern_metrics_answer`
+
+| ISA | Linux | Windows | macOS | `equal` |
+|---|---|---|---|---|
+| x86-64 | ✅ | ✅ |  |  |
+| ARM64 | ✅ | ✅ | ✅ |  |
+| RISC-V |  |  |  |  |
+
+### `lantern_metrics_observe`
+
+| ISA | Linux | Windows | macOS | `equal` |
+|---|---|---|---|---|
+| x86-64 | ✅ | ✅ |  |  |
+| ARM64 | ✅ | ✅ | ✅ |  |
+| RISC-V |  |  |  |  |
+
+### `lantern_metrics_state`
+
+| ISA | Linux | Windows | macOS | `equal` |
+|---|---|---|---|---|
+| x86-64 | ✅ | ✅ |  |  |
+| ARM64 | ✅ | ✅ | ✅ |  |
+| RISC-V |  |  |  |  |
+
+### `lantern_metrics_node`
+
+| ISA | Linux | Windows | macOS | `equal` |
+|---|---|---|---|---|
+| x86-64 | ✅ | ✅ |  |  |
+| ARM64 | ✅ | ✅ | ✅ |  |
+| RISC-V |  |  |  |  |

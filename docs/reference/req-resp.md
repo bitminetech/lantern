@@ -299,7 +299,7 @@ lantern_ssz_size_bounds(type, out) -> status
 |---|---|---|---|---|
 | x86-64 | ✅ | ✅ |  |  |
 | ARM64 | ✅ | ✅ | ✅ |  |
-| RISC-V | ✅ |  |  |  |
+| RISC-V |  |  |  |  |
 
 ### `lantern_reqresp_protocol_id`
 
@@ -307,7 +307,7 @@ lantern_ssz_size_bounds(type, out) -> status
 |---|---|---|---|---|
 | x86-64 | ✅ | ✅ |  |  |
 | ARM64 | ✅ | ✅ | ✅ |  |
-| RISC-V | ✅ |  |  |  |
+| RISC-V |  |  |  |  |
 
 ### `lantern_reqresp_chunk_size`
 
@@ -315,7 +315,7 @@ lantern_ssz_size_bounds(type, out) -> status
 |---|---|---|---|---|
 | x86-64 | ✅ | ✅ |  |  |
 | ARM64 | ✅ | ✅ | ✅ |  |
-| RISC-V | ✅ |  |  |  |
+| RISC-V |  |  |  |  |
 
 ### `lantern_reqresp_write_chunk`
 
@@ -323,7 +323,7 @@ lantern_ssz_size_bounds(type, out) -> status
 |---|---|---|---|---|
 | x86-64 | ✅ | ✅ |  |  |
 | ARM64 | ✅ | ✅ | ✅ |  |
-| RISC-V | ✅ |  |  |  |
+| RISC-V |  |  |  |  |
 
 ### `lantern_reqresp_read_header`
 
@@ -331,7 +331,7 @@ lantern_ssz_size_bounds(type, out) -> status
 |---|---|---|---|---|
 | x86-64 | ✅ | ✅ |  |  |
 | ARM64 | ✅ | ✅ | ✅ |  |
-| RISC-V | ✅ |  |  |  |
+| RISC-V |  |  |  |  |
 
 ### `lantern_reqresp_read_payload`
 
@@ -339,7 +339,7 @@ lantern_ssz_size_bounds(type, out) -> status
 |---|---|---|---|---|
 | x86-64 | ✅ | ✅ |  |  |
 | ARM64 | ✅ | ✅ | ✅ |  |
-| RISC-V | ✅ |  |  |  |
+| RISC-V |  |  |  |  |
 
 ### `lantern_ssz_size_bounds`
 
@@ -347,4 +347,4 @@ lantern_ssz_size_bounds(type, out) -> status
 |---|---|---|---|---|
 | x86-64 | ✅ | ✅ |  |  |
 | ARM64 | ✅ | ✅ | ✅ |  |
-| RISC-V | ✅ |  |  |  |
+| RISC-V |  |  |  |  |

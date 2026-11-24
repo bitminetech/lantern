@@ -272,7 +272,7 @@ lantern_deposit_proof(leaves, count, index, scratch, out) -> status
 |---|---|---|---|---|
 | x86-64 | ✅ | ✅ |  |  |
 | ARM64 | ✅ | ✅ | ✅ |  |
-| RISC-V | ✅ |  |  |  |
+| RISC-V |  |  |  |  |
 
 ### `lantern_eth_get_deposit_logs`
 
@@ -280,7 +280,7 @@ lantern_deposit_proof(leaves, count, index, scratch, out) -> status
 |---|---|---|---|---|
 | x86-64 | ✅ | ✅ |  |  |
 | ARM64 | ✅ | ✅ | ✅ |  |
-| RISC-V | ✅ |  |  |  |
+| RISC-V |  |  |  |  |
 
 ### `lantern_eth1_block`
 
@@ -288,7 +288,7 @@ lantern_deposit_proof(leaves, count, index, scratch, out) -> status
 |---|---|---|---|---|
 | x86-64 | ✅ | ✅ |  |  |
 | ARM64 | ✅ | ✅ | ✅ |  |
-| RISC-V | ✅ |  |  |  |
+| RISC-V |  |  |  |  |
 
 ### `lantern_eth1_deposit_logs`
 
@@ -296,7 +296,7 @@ lantern_deposit_proof(leaves, count, index, scratch, out) -> status
 |---|---|---|---|---|
 | x86-64 | ✅ | ✅ |  |  |
 | ARM64 | ✅ | ✅ | ✅ |  |
-| RISC-V | ✅ |  |  |  |
+| RISC-V |  |  |  |  |
 
 ### `lantern_deposit_leaf`
 
@@ -304,7 +304,7 @@ lantern_deposit_proof(leaves, count, index, scratch, out) -> status
 |---|---|---|---|---|
 | x86-64 | ✅ | ✅ |  |  |
 | ARM64 | ✅ | ✅ | ✅ |  |
-| RISC-V | ✅ |  |  |  |
+| RISC-V |  |  |  |  |
 
 ### `lantern_deposit_tree_push`
 
@@ -312,7 +312,7 @@ lantern_deposit_proof(leaves, count, index, scratch, out) -> status
 |---|---|---|---|---|
 | x86-64 | ✅ | ✅ |  |  |
 | ARM64 | ✅ | ✅ | ✅ |  |
-| RISC-V | ✅ |  |  |  |
+| RISC-V |  |  |  |  |
 
 ### `lantern_deposit_tree_root`
 
@@ -320,7 +320,7 @@ lantern_deposit_proof(leaves, count, index, scratch, out) -> status
 |---|---|---|---|---|
 | x86-64 | ✅ | ✅ |  |  |
 | ARM64 | ✅ | ✅ | ✅ |  |
-| RISC-V | ✅ |  |  |  |
+| RISC-V |  |  |  |  |
 
 ### `lantern_deposit_proof`
 
@@ -328,4 +328,4 @@ lantern_deposit_proof(leaves, count, index, scratch, out) -> status
 |---|---|---|---|---|
 | x86-64 | ✅ | ✅ |  |  |
 | ARM64 | ✅ | ✅ | ✅ |  |
-| RISC-V | ✅ |  |  |  |
+| RISC-V |  |  |  |  |

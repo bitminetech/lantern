@@ -843,7 +843,7 @@ A standalone asm-ssz Value of List[DataColumnSidecar, NUMBER_OF_COLUMNS]: size, 
 |---|---|---|---|---|
 | x86-64 | ✅ | ✅ |  |  |
 | ARM64 | ✅ | ✅ | ✅ |  |
-| RISC-V | ✅ |  |  |  |
+| RISC-V |  |  |  |  |
 
 ### `lantern_store_size`
 
@@ -851,7 +851,7 @@ A standalone asm-ssz Value of List[DataColumnSidecar, NUMBER_OF_COLUMNS]: size, 
 |---|---|---|---|---|
 | x86-64 | ✅ | ✅ |  |  |
 | ARM64 | ✅ | ✅ | ✅ |  |
-| RISC-V | ✅ |  |  |  |
+| RISC-V |  |  |  |  |
 
 ### `lantern_store_copy`
 
@@ -859,7 +859,7 @@ A standalone asm-ssz Value of List[DataColumnSidecar, NUMBER_OF_COLUMNS]: size, 
 |---|---|---|---|---|
 | x86-64 | ✅ | ✅ |  |  |
 | ARM64 | ✅ | ✅ | ✅ |  |
-| RISC-V | ✅ |  |  |  |
+| RISC-V |  |  |  |  |
 
 ### `lantern_store_justified_checkpoint_state`
 
@@ -867,7 +867,7 @@ A standalone asm-ssz Value of List[DataColumnSidecar, NUMBER_OF_COLUMNS]: size, 
 |---|---|---|---|---|
 | x86-64 | ✅ | ✅ |  |  |
 | ARM64 | ✅ | ✅ | ✅ |  |
-| RISC-V | ✅ |  |  |  |
+| RISC-V |  |  |  |  |
 
 ### `lantern_get_current_slot`
 
@@ -875,7 +875,7 @@ A standalone asm-ssz Value of List[DataColumnSidecar, NUMBER_OF_COLUMNS]: size, 
 |---|---|---|---|---|
 | x86-64 | ✅ | ✅ |  |  |
 | ARM64 | ✅ | ✅ | ✅ |  |
-| RISC-V | ✅ |  |  |  |
+| RISC-V |  |  |  |  |
 
 ### `lantern_get_current_store_epoch`
 
@@ -907,7 +907,7 @@ A standalone asm-ssz Value of List[DataColumnSidecar, NUMBER_OF_COLUMNS]: size, 
 |---|---|---|---|---|
 | x86-64 | ✅ | ✅ |  |  |
 | ARM64 | ✅ | ✅ | ✅ |  |
-| RISC-V | ✅ |  |  |  |
+| RISC-V |  |  |  |  |
 
 ### `lantern_get_filtered_node_tree`
 
@@ -915,7 +915,7 @@ A standalone asm-ssz Value of List[DataColumnSidecar, NUMBER_OF_COLUMNS]: size, 
 |---|---|---|---|---|
 | x86-64 | ✅ | ✅ |  |  |
 | ARM64 | ✅ | ✅ | ✅ |  |
-| RISC-V | ✅ |  |  |  |
+| RISC-V |  |  |  |  |
 
 ### `lantern_get_head`
 
@@ -923,7 +923,7 @@ A standalone asm-ssz Value of List[DataColumnSidecar, NUMBER_OF_COLUMNS]: size, 
 |---|---|---|---|---|
 | x86-64 | ✅ | ✅ |  |  |
 | ARM64 | ✅ | ✅ | ✅ |  |
-| RISC-V | ✅ |  |  |  |
+| RISC-V |  |  |  |  |
 
 ### `lantern_on_tick`
 
@@ -931,7 +931,7 @@ A standalone asm-ssz Value of List[DataColumnSidecar, NUMBER_OF_COLUMNS]: size, 
 |---|---|---|---|---|
 | x86-64 | ✅ | ✅ |  |  |
 | ARM64 | ✅ | ✅ | ✅ |  |
-| RISC-V | ✅ |  |  |  |
+| RISC-V |  |  |  |  |
 
 ### `lantern_on_block`
 
@@ -939,7 +939,7 @@ A standalone asm-ssz Value of List[DataColumnSidecar, NUMBER_OF_COLUMNS]: size, 
 |---|---|---|---|---|
 | x86-64 | ✅ | ✅ |  |  |
 | ARM64 | ✅ | ✅ | ✅ |  |
-| RISC-V | ✅ |  |  |  |
+| RISC-V |  |  |  |  |
 
 ### `lantern_validate_merge_block`
 
@@ -963,7 +963,7 @@ A standalone asm-ssz Value of List[DataColumnSidecar, NUMBER_OF_COLUMNS]: size, 
 |---|---|---|---|---|
 | x86-64 | ✅ | ✅ |  |  |
 | ARM64 | ✅ | ✅ | ✅ |  |
-| RISC-V | ✅ |  |  |  |
+| RISC-V |  |  |  |  |
 
 ### `lantern_store_target_checkpoint_state`
 
@@ -971,7 +971,7 @@ A standalone asm-ssz Value of List[DataColumnSidecar, NUMBER_OF_COLUMNS]: size, 
 |---|---|---|---|---|
 | x86-64 | ✅ | ✅ |  |  |
 | ARM64 | ✅ | ✅ | ✅ |  |
-| RISC-V | ✅ |  |  |  |
+| RISC-V |  |  |  |  |
 
 ### `lantern_on_attestation`
 
@@ -979,7 +979,7 @@ A standalone asm-ssz Value of List[DataColumnSidecar, NUMBER_OF_COLUMNS]: size, 
 |---|---|---|---|---|
 | x86-64 | ✅ | ✅ |  |  |
 | ARM64 | ✅ | ✅ | ✅ |  |
-| RISC-V | ✅ |  |  |  |
+| RISC-V |  |  |  |  |
 
 ### `lantern_on_attester_slashing`
 
@@ -987,7 +987,7 @@ A standalone asm-ssz Value of List[DataColumnSidecar, NUMBER_OF_COLUMNS]: size, 
 |---|---|---|---|---|
 | x86-64 | ✅ | ✅ |  |  |
 | ARM64 | ✅ | ✅ | ✅ |  |
-| RISC-V | ✅ |  |  |  |
+| RISC-V |  |  |  |  |
 
 ### `lantern_get_proposer_head`
 
@@ -995,7 +995,7 @@ A standalone asm-ssz Value of List[DataColumnSidecar, NUMBER_OF_COLUMNS]: size, 
 |---|---|---|---|---|
 | x86-64 | ✅ | ✅ |  |  |
 | ARM64 | ✅ | ✅ | ✅ |  |
-| RISC-V | ✅ |  |  |  |
+| RISC-V |  |  |  |  |
 
 ### `lantern_store_payload_status`
 
@@ -1003,7 +1003,7 @@ A standalone asm-ssz Value of List[DataColumnSidecar, NUMBER_OF_COLUMNS]: size, 
 |---|---|---|---|---|
 | x86-64 | ✅ | ✅ |  |  |
 | ARM64 | ✅ | ✅ | ✅ |  |
-| RISC-V | ✅ |  |  |  |
+| RISC-V |  |  |  |  |
 
 ### `lantern_store_prune`
 
@@ -1019,7 +1019,7 @@ A standalone asm-ssz Value of List[DataColumnSidecar, NUMBER_OF_COLUMNS]: size, 
 |---|---|---|---|---|
 | x86-64 | ✅ | ✅ |  |  |
 | ARM64 | ✅ | ✅ | ✅ |  |
-| RISC-V | ✅ |  |  |  |
+| RISC-V |  |  |  |  |
 
 ### `lantern_verify_data_column_sidecar`
 

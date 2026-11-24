@@ -741,6 +741,14 @@ The outcome of `lantern_shell_read_file` and `lantern_shell_map_file`.
 | ARM64 |  |  |  |  |
 | RISC-V |  |  |  |  |
 
+### `lantern_shell_process`
+
+| ISA | Linux | Windows | macOS | `equal` |
+|---|---|---|---|---|
+| x86-64 |  |  |  |  |
+| ARM64 |  |  |  |  |
+| RISC-V |  |  |  |  |
+
 ## Function `lantern_shell_process`
 
 Reads the process's CPU time, highest resident memory and open file limit, for the metrics ([metrics.md](metrics.md)).

@@ -3382,7 +3382,7 @@ The actions of one step: a ByteList whose bytes are `NodeAction` entries one aft
 |---|---|---|---|---|
 | x86-64 | ✅ | ✅ |  |  |
 | ARM64 | ✅ | ✅ | ✅ |  |
-| RISC-V | ✅ |  |  |  |
+| RISC-V |  |  |  |  |
 
 ### `lantern_node_init`
 
@@ -3390,7 +3390,7 @@ The actions of one step: a ByteList whose bytes are `NodeAction` entries one aft
 |---|---|---|---|---|
 | x86-64 | ✅ | ✅ |  |  |
 | ARM64 | ✅ | ✅ | ✅ |  |
-| RISC-V | ✅ |  |  |  |
+| RISC-V |  |  |  |  |
 
 ### `lantern_node_copy`
 
@@ -3398,7 +3398,7 @@ The actions of one step: a ByteList whose bytes are `NodeAction` entries one aft
 |---|---|---|---|---|
 | x86-64 | ✅ | ✅ |  |  |
 | ARM64 | ✅ | ✅ | ✅ |  |
-| RISC-V | ✅ |  |  |  |
+| RISC-V |  |  |  |  |
 
 ### `lantern_node_step`
 
@@ -3406,7 +3406,7 @@ The actions of one step: a ByteList whose bytes are `NodeAction` entries one aft
 |---|---|---|---|---|
 | x86-64 | ✅ | ✅ |  |  |
 | ARM64 | ✅ | ✅ | ✅ |  |
-| RISC-V | ✅ |  |  |  |
+| RISC-V |  |  |  |  |
 
 ### `lantern_node_run`
 
@@ -3414,7 +3414,7 @@ The actions of one step: a ByteList whose bytes are `NodeAction` entries one aft
 |---|---|---|---|---|
 | x86-64 | ✅ | ✅ |  |  |
 | ARM64 | ✅ | ✅ | ✅ |  |
-| RISC-V | ✅ |  |  |  |
+| RISC-V |  |  |  |  |
 
 ### `lantern_node_protocols`
 
@@ -3422,7 +3422,7 @@ The actions of one step: a ByteList whose bytes are `NodeAction` entries one aft
 |---|---|---|---|---|
 | x86-64 | ✅ | ✅ |  |  |
 | ARM64 | ✅ | ✅ | ✅ |  |
-| RISC-V | ✅ |  |  |  |
+| RISC-V |  |  |  |  |
 
 ### `lantern_node_import`
 
@@ -3470,7 +3470,7 @@ The actions of one step: a ByteList whose bytes are `NodeAction` entries one aft
 |---|---|---|---|---|
 | x86-64 | ✅ | ✅ |  |  |
 | ARM64 | ✅ | ✅ | ✅ |  |
-| RISC-V | ✅ |  |  |  |
+| RISC-V |  |  |  |  |
 
 ### `lantern_node_block_rewards`
 
@@ -3478,7 +3478,7 @@ The actions of one step: a ByteList whose bytes are `NodeAction` entries one aft
 |---|---|---|---|---|
 | x86-64 | ✅ | ✅ |  |  |
 | ARM64 | ✅ | ✅ | ✅ |  |
-| RISC-V | ✅ |  |  |  |
+| RISC-V |  |  |  |  |
 
 ### `lantern_node_sync_rewards`
 
@@ -3486,7 +3486,7 @@ The actions of one step: a ByteList whose bytes are `NodeAction` entries one aft
 |---|---|---|---|---|
 | x86-64 | ✅ | ✅ |  |  |
 | ARM64 | ✅ | ✅ | ✅ |  |
-| RISC-V | ✅ |  |  |  |
+| RISC-V |  |  |  |  |
 
 ### `lantern_node_reward_totals`
 
@@ -3494,7 +3494,7 @@ The actions of one step: a ByteList whose bytes are `NodeAction` entries one aft
 |---|---|---|---|---|
 | x86-64 | ✅ | ✅ |  |  |
 | ARM64 | ✅ | ✅ | ✅ |  |
-| RISC-V | ✅ |  |  |  |
+| RISC-V |  |  |  |  |
 
 ### `lantern_node_attestation_rewards`
 
@@ -3502,7 +3502,7 @@ The actions of one step: a ByteList whose bytes are `NodeAction` entries one aft
 |---|---|---|---|---|
 | x86-64 | ✅ | ✅ |  |  |
 | ARM64 | ✅ | ✅ | ✅ |  |
-| RISC-V | ✅ |  |  |  |
+| RISC-V |  |  |  |  |
 
 ### `lantern_node_ideal_reward`
 
@@ -3510,7 +3510,7 @@ The actions of one step: a ByteList whose bytes are `NodeAction` entries one aft
 |---|---|---|---|---|
 | x86-64 | ✅ | ✅ |  |  |
 | ARM64 | ✅ | ✅ | ✅ |  |
-| RISC-V | ✅ |  |  |  |
+| RISC-V |  |  |  |  |
 
 ### `lantern_node_payload_parent`
 
@@ -3558,7 +3558,7 @@ The actions of one step: a ByteList whose bytes are `NodeAction` entries one aft
 |---|---|---|---|---|
 | x86-64 | ✅ | ✅ |  |  |
 | ARM64 | ✅ | ✅ | ✅ |  |
-| RISC-V | ✅ |  |  |  |
+| RISC-V |  |  |  |  |
 
 ### `lantern_node_data_root`
 
@@ -3566,7 +3566,7 @@ The actions of one step: a ByteList whose bytes are `NodeAction` entries one aft
 |---|---|---|---|---|
 | x86-64 | ✅ | ✅ |  |  |
 | ARM64 | ✅ | ✅ | ✅ |  |
-| RISC-V | ✅ |  |  |  |
+| RISC-V |  |  |  |  |
 
 ### `lantern_node_sync_subnets`
 
@@ -3750,7 +3750,7 @@ The actions of one step: a ByteList whose bytes are `NodeAction` entries one aft
 |---|---|---|---|---|
 | x86-64 | ✅ | ✅ |  |  |
 | ARM64 | ✅ | ✅ | ✅ |  |
-| RISC-V | ✅ |  |  |  |
+| RISC-V |  |  |  |  |
 
 ### `lantern_node_anchor`
 
@@ -3758,7 +3758,7 @@ The actions of one step: a ByteList whose bytes are `NodeAction` entries one aft
 |---|---|---|---|---|
 | x86-64 | ✅ | ✅ |  |  |
 | ARM64 | ✅ | ✅ | ✅ |  |
-| RISC-V | ✅ |  |  |  |
+| RISC-V |  |  |  |  |
 
 ### `lantern_node_anchor_block`
 
@@ -3766,7 +3766,7 @@ The actions of one step: a ByteList whose bytes are `NodeAction` entries one aft
 |---|---|---|---|---|
 | x86-64 | ✅ | ✅ |  |  |
 | ARM64 | ✅ | ✅ | ✅ |  |
-| RISC-V | ✅ |  |  |  |
+| RISC-V |  |  |  |  |
 
 ### `lantern_node_state_bytes`
 
@@ -3774,7 +3774,7 @@ The actions of one step: a ByteList whose bytes are `NodeAction` entries one aft
 |---|---|---|---|---|
 | x86-64 | ✅ | ✅ |  |  |
 | ARM64 | ✅ | ✅ | ✅ |  |
-| RISC-V | ✅ |  |  |  |
+| RISC-V |  |  |  |  |
 
 ### `lantern_node_upgrade`
 
@@ -3806,7 +3806,7 @@ The actions of one step: a ByteList whose bytes are `NodeAction` entries one aft
 |---|---|---|---|---|
 | x86-64 | ✅ | ✅ |  |  |
 | ARM64 | ✅ | ✅ | ✅ |  |
-| RISC-V | ✅ |  |  |  |
+| RISC-V |  |  |  |  |
 
 ### `lantern_node_state_checkpoints`
 
@@ -3814,7 +3814,7 @@ The actions of one step: a ByteList whose bytes are `NodeAction` entries one aft
 |---|---|---|---|---|
 | x86-64 | ✅ | ✅ |  |  |
 | ARM64 | ✅ | ✅ | ✅ |  |
-| RISC-V | ✅ |  |  |  |
+| RISC-V |  |  |  |  |
 
 ### `lantern_node_new_payload`
 

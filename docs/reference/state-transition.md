@@ -149,7 +149,7 @@ The spec's validate_result, the answer of the execution engine to the block's pa
 |---|---|---|---|---|
 | x86-64 | ✅ | ✅ |  |  |
 | ARM64 | ✅ | ✅ | ✅ |  |
-| RISC-V | ✅ |  |  |  |
+| RISC-V |  |  |  |  |
 
 ### `lantern_verify_block_signature`
 
@@ -157,7 +157,7 @@ The spec's validate_result, the answer of the execution engine to the block's pa
 |---|---|---|---|---|
 | x86-64 | ✅ | ✅ |  |  |
 | ARM64 | ✅ | ✅ | ✅ |  |
-| RISC-V | ✅ |  |  |  |
+| RISC-V |  |  |  |  |
 
 ### `lantern_process_slots`
 
@@ -165,7 +165,7 @@ The spec's validate_result, the answer of the execution engine to the block's pa
 |---|---|---|---|---|
 | x86-64 | ✅ | ✅ |  |  |
 | ARM64 | ✅ | ✅ | ✅ |  |
-| RISC-V | ✅ |  |  |  |
+| RISC-V |  |  |  |  |
 
 ### `lantern_process_slot`
 
