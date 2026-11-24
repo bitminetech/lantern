@@ -61,7 +61,7 @@ LOCAL_FUNCTION mt_sdec
     FRAME 16
     str     x0, [sp, #16]
     tbz     x0, #63, 1f
-    mov     w9, #0x2d                       // "-", then the digits of 0 - x0 (2^63 stays 2^63, unsigned)
+    mov     w9, #0x2d                       /* "-", then the digits of 0 - x0 (2^63 stays 2^63, unsigned) */
     strb    w9, [sp, #24]
     add     x0, sp, #24
     mov     x1, #1
@@ -83,9 +83,9 @@ LOCAL_FUNCTION mt_seconds
     str     x11, [sp, #16]
     mov     x0, x10
     bl      mt_dec
-    mov     w9, #0x2e                       // "."
+    mov     w9, #0x2e                       /* "." */
     strb    w9, [sp, #24]
-    ldr     x0, [sp, #16]                   // six digits, from the end
+    ldr     x0, [sp, #16]                   /* six digits, from the end */
     mov     x13, #10
     add     x12, sp, #31
     mov     x11, #6
@@ -118,7 +118,7 @@ LOCAL_FUNCTION mt_histogram
     FRAME 32
     stp     x0, x1, [sp, #16]
     stp     xzr, xzr, [sp, #32]
-1:  ldp     x9, x10, [sp, #32]              // each bound: the values at or below it
+1:  ldp     x9, x10, [sp, #32]              /* each bound: the values at or below it */
     ldr     x11, [sp, #24]
     ldr     x12, [x11]
     cmp     x9, x12
@@ -133,7 +133,7 @@ LOCAL_FUNCTION mt_histogram
     ldr     x9, [sp, #32]
     ldr     x11, [sp, #24]
     add     x11, x11, x9, lsl #4
-    ldr     w0, [x11, #16]                  // its text: offset, length
+    ldr     w0, [x11, #16]                  /* its text: offset, length */
     ldr     w1, [x11, #20]
     bl      mt_text
     MT_TEXT mx_le_end
@@ -144,7 +144,7 @@ LOCAL_FUNCTION mt_histogram
     add     x9, x9, #1
     str     x9, [sp, #32]
     b       1b
-2:  bl      mt_name                         // +Inf: every value
+2:  bl      mt_name                         /* +Inf: every value */
     MT_TEXT mx_bucket
     MT_TEXT mx_inf
     MT_TEXT mx_le_end
@@ -152,7 +152,7 @@ LOCAL_FUNCTION mt_histogram
     ldr     x0, [x9, #Histogram_count]
     bl      mt_dec
     MT_TEXT mx_lf
-    bl      mt_name                         // _sum in seconds, _count
+    bl      mt_name                         /* _sum in seconds, _count */
     MT_TEXT mx_sum
     ldr     x9, [sp, #16]
     ldr     x0, [x9, #Histogram_sum_us]
@@ -204,13 +204,13 @@ FUNCTION lantern_metrics_text
 1:  ADDRESS x9, metrics_table_end
     cmp     x23, x9
     b.hs    90f
-    ldr     w9, [x23, #MetricEntry_source]  // its source
+    ldr     w9, [x23, #MetricEntry_source]  /* its source */
     add     x10, sp, #L
     ldr     x24, [x10, x9, lsl #3]
-    ldrh    w9, [x23, #MetricEntry_cond]    // its condition
+    ldrh    w9, [x23, #MetricEntry_cond]    /* its condition */
     cmp     w9, #METRIC_COND_NONE
     b.eq    10f
-    ldr     x10, [sp, #L]                   // MetricsState
+    ldr     x10, [sp, #L]                   /* MetricsState */
     cmp     w9, #METRIC_COND_STATE
     b.ne    2f
     ldr     x11, [x10, #MetricsState_present]
@@ -223,7 +223,7 @@ FUNCTION lantern_metrics_text
     ldr     x11, [x10, #MetricsState_electra]
     cbz     x11, 80f
     b       10f
-3:  ldr     x10, [sp, #(L + 8)]             // MetricsNode
+3:  ldr     x10, [sp, #(L + 8)]             /* MetricsNode */
     cmp     w9, #METRIC_COND_FULU
     b.ne    4f
     ldr     x11, [x10, #MetricsNode_fulu]
@@ -234,10 +234,10 @@ FUNCTION lantern_metrics_text
     ldr     x11, [x10, #MetricsNode_head_state_root_present]
     cbz     x11, 80f
     b       10f
-5:  ldr     x10, [sp, #(L + 24)]            // MetricsProcess: METRIC_COND_MAX_FDS
+5:  ldr     x10, [sp, #(L + 24)]            /* MetricsProcess: METRIC_COND_MAX_FDS */
     ldr     x11, [x10, #MetricsProcess_max_fds]
     cbz     x11, 80f
-10: ldrh    w9, [x23, #MetricEntry_kind]    // a gossipsub metric with no sample goes out
+10: ldrh    w9, [x23, #MetricEntry_kind]    /* a gossipsub metric with no sample goes out */
     cmp     w9, #METRIC_KIND_GOSSIP_MAIN
     b.lo    20f
     PART    x10, x11, x24, MetricsGossip_topics
@@ -249,7 +249,7 @@ FUNCTION lantern_metrics_text
     add     x10, x10, #GossipTopic__mem
     sub     x11, x11, #1
     b       11b
-20: MT_TEXT mx_help                         // # HELP <name> <help>, # TYPE <name> <type>
+20: MT_TEXT mx_help                         /* # HELP <name> <help>, # TYPE <name> <type> */
     bl      mt_name
     MT_TEXT mx_sp
     ldr     w0, [x23, #MetricEntry_help]
@@ -267,8 +267,8 @@ FUNCTION lantern_metrics_text
 22: MT_TEXT mx_counter
     b       24f
 23: MT_TEXT mx_histogram
-24: ldr     w9, [x23, #MetricEntry_offset]  // its samples
-    add     x24, x24, x9                    // the value, in its source
+24: ldr     w9, [x23, #MetricEntry_offset]  /* its samples */
+    add     x24, x24, x9                    /* the value, in its source */
     ldrh    w9, [x23, #MetricEntry_kind]
     cmp     w9, #METRIC_KIND_U64
     b.ne    30f
@@ -331,14 +331,14 @@ FUNCTION lantern_metrics_text
 36: mov     x0, x24
     bl      mt_histogram
     b       80f
-40: mov     w25, w9                         // gossipsub: each topic
+40: mov     w25, w9                         /* gossipsub: each topic */
     ldr     w9, [x23, #MetricEntry_offset]
-    sub     x24, x24, x9                    // the MetricsGossip again
+    sub     x24, x24, x9                    /* the MetricsGossip again */
     PART    x26, x27, x24, MetricsGossip_topics
 41: cbz     x27, 80f
     cmp     w25, #METRIC_KIND_GOSSIP_MAIN
     b.ne    42f
-    ldr     x9, [x26, #GossipTopic_subnet]  // main topics only
+    ldr     x9, [x26, #GossipTopic_subnet]  /* main topics only */
     cbnz    x9, 49f
     mov     x0, x26
     bl      mt_topic
@@ -362,7 +362,7 @@ FUNCTION lantern_metrics_text
     bl      mt_dec
     MT_TEXT mx_lf
     b       49f
-43: mov     x0, x26                         // mesh peers by partial support
+43: mov     x0, x26                         /* mesh peers by partial support */
     bl      mt_topic
     MT_TEXT mx_supports_f
     ldr     x0, [x26, #GossipTopic_mesh_peers]
@@ -381,7 +381,7 @@ FUNCTION lantern_metrics_text
     b       41b
 80: add     x23, x23, #MetricEntry__mem
     b       1b
-90: cbnz    x22, 91f                        // the text's length, or no room
+90: cbnz    x22, 91f                        /* the text's length, or no room */
     ldr     x9, [sp, #(L + 40)]
     mov     x10, #24
     str     x10, [x9, #8]

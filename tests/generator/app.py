@@ -16,7 +16,8 @@ def ip4(a, b, c, d):
 DEFAULTS = {"network_dir": "", "execution": "", "jwt_secret": "", "boot_nodes": "", "port": 9000, "enr_address": 0,
             "http_port": 5052, "target_peers": 64, "data_dir": "", "checkpoint_state": "", "checkpoint_block": "",
             "log_level": 2, "http_address": ip4(127, 0, 0, 1), "http_max_connections": 64,
-            "supernode": 0, "builder": "", "archive": 0}
+            "supernode": 0, "builder": "", "archive": 0, "metrics": 1, "metrics_address": ip4(127, 0, 0, 1),
+            "metrics_port": 8008}
 
 
 def options(**values):
@@ -56,6 +57,16 @@ GOOD = [
      options(network_dir="n", port=7, supernode=1)),
     ("builder", ["--network-dir", "n", "--builder", "http://127.0.0.1:18550"], options(network_dir="n", builder="127.0.0.1:18550")),
     ("builder_without_scheme", ["--builder=localhost:18550", "--network-dir", "n"], options(network_dir="n", builder="localhost:18550")),
+    ("metrics_beacon", ["--network-dir", "n", "--metrics", "beacon"], options(network_dir="n", metrics=1)),
+    ("metrics_none", ["--network-dir", "n", "--metrics", ""], options(network_dir="n", metrics=0)),
+    ("metrics_none_equals", ["--metrics=", "--network-dir", "n"], options(network_dir="n", metrics=0)),
+    ("metrics_name_twice", ["--metrics=beacon,beacon", "--network-dir", "n"], options(network_dir="n", metrics=1)),
+    ("metrics_none_then_beacon", ["--metrics", "", "--network-dir", "n", "--metrics", "beacon"], options(network_dir="n", metrics=1)),
+    ("metrics_beacon_then_none", ["--metrics=beacon", "--network-dir", "n", "--metrics="], options(network_dir="n", metrics=0)),
+    ("metrics_address_and_port", ["--network-dir", "n", "--metrics-address", "0.0.0.0", "--metrics-port=9100"],
+     options(network_dir="n", metrics_address=0, metrics_port=9100)),
+    ("metrics_limits", ["--metrics-port", "65535", "--metrics-address=10.20.30.40", "--network-dir", "n"],
+     options(network_dir="n", metrics_port=65535, metrics_address=ip4(10, 20, 30, 40))),
 ]
 
 FAULTS = [
@@ -90,6 +101,18 @@ FAULTS = [
     ("builder_no_value", ["--network-dir", "/n", "--builder"], 2),
     ("archive_value", ["--network-dir", "/n", "--data-dir", "/d", "--archive=1"], 4),
     ("archive_no_data_dir", ["--network-dir", "/n", "--archive"], 3),
+    ("metrics_unknown_category", ["--network-dir", "/n", "--metrics", "sync"], 3),
+    ("metrics_capitals", ["--metrics=Beacon", "--network-dir", "/n"], 0),
+    ("metrics_name_prefix", ["--network-dir", "/n", "--metrics", "beaco"], 3),
+    ("metrics_name_longer", ["--network-dir", "/n", "--metrics", "beacons"], 3),
+    ("metrics_trailing_comma", ["--network-dir", "/n", "--metrics", "beacon,"], 3),
+    ("metrics_leading_comma", ["--network-dir", "/n", "--metrics=,beacon"], 2),
+    ("metrics_comma_only", ["--metrics", ",", "--network-dir", "/n"], 1),
+    ("metrics_no_value", ["--network-dir", "/n", "--metrics"], 2),
+    ("metrics_port_zero", ["--network-dir", "/n", "--metrics-port", "0"], 3),
+    ("metrics_port_too_big", ["--metrics-port=65536", "--network-dir", "/n"], 0),
+    ("metrics_address_three_parts", ["--metrics-address", "1.2.3", "--network-dir", "/n"], 1),
+    ("metrics_address_empty", ["--network-dir", "/n", "--metrics-address="], 2),
 ]
 
 

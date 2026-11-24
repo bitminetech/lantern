@@ -84,6 +84,51 @@ LOCAL_FUNCTION app_ipv4
 END_FUNCTION app_ipv4
 
 /*
+ * rax = 0 and rdx = the bits of the metrics categories rdi to rsi, names of app_categories_table
+ * with commas between them, none or more; else rax = 1. Uses rcx, rdi, r8-r10.
+ */
+LOCAL_FUNCTION app_categories
+    UNWIND_END_PROLOGUE
+    xor     %edx, %edx                      # the bits
+    cmp     %rsi, %rdi
+    je      8f                              # no category
+1:  mov     %rdi, %r8                       # a name: up to a comma or the end
+2:  cmp     %rsi, %r8
+    jae     3f
+    cmpb    $0x2c, (%r8)                    # ,
+    je      3f
+    inc     %r8
+    jmp     2b
+3:  mov     %r8, %r9                        # its length: 1 or more
+    sub     %rdi, %r9
+    jz      9f
+    lea     app_categories_table(%rip), %r10
+4:  lea     app_categories_end(%rip), %rax
+    cmp     %rax, %r10
+    jae     9f                              # not a category
+    cmp     8(%r10), %r9
+    jne     6f
+    xor     %ecx, %ecx
+5:  movzbl  (%rdi,%rcx), %eax
+    cmp     16(%r10,%rcx), %al
+    jne     6f
+    inc     %rcx
+    cmp     %r9, %rcx
+    jb      5b
+    or      (%r10), %rdx
+    cmp     %rsi, %r8                       # the next name, past the comma
+    jae     8f
+    lea     1(%r8), %rdi
+    jmp     1b
+6:  add     $APP_CATEGORY_BYTES, %r10
+    jmp     4b
+8:  xor     %eax, %eax
+    ret
+9:  mov     $1, %eax
+    ret
+END_FUNCTION app_categories
+
+/*
  * (args, options, fault): docs/reference/app.md. rbx args, rbp options, r12 fault, r13 the
  * argument count, r14 the next argument, r15 the Arg entries, S7 an option record, S8 the
  * value's start, S9 its length, S10 the argument that holds it. Locals: L the name's start,
@@ -103,6 +148,9 @@ FUNCTION lantern_app_options
     movq    $APP_DEFAULT_LOG_LEVEL, AppOptions_log_level(%rbp)
     movq    $APP_DEFAULT_HTTP_ADDRESS, AppOptions_http_address(%rbp)
     movq    $APP_DEFAULT_HTTP_CONNECTIONS, AppOptions_http_max_connections(%rbp)
+    movq    $APP_DEFAULT_METRICS, AppOptions_metrics(%rbp)
+    movq    $APP_DEFAULT_METRICS_ADDRESS, AppOptions_metrics_address(%rbp)
+    movq    $APP_DEFAULT_METRICS_PORT, AppOptions_metrics_port(%rbp)
     mov     (ArgList_args + 8)(%rbx), %r13
     mov     ArgList_args(%rbx), %r15
     add     %rbx, %r15
@@ -183,10 +231,12 @@ FUNCTION lantern_app_options
     inc     %rax
     mov     %rax, S8(%rsp)
     inc     %r14
-7:  cmpq    $0, S9(%rsp)                    # an empty value
-    je      90f
-    mov     S7(%rsp), %rax
+7:  mov     S7(%rsp), %rax
     mov     16(%rax), %rax
+    cmp     $APP_OPTION_CATEGORIES, %rax
+    je      27f
+    cmpq    $0, S9(%rsp)                    # an empty value
+    je      90f
     cmp     $APP_OPTION_ENDPOINT, %rax
     ja      20f
     jne     8f
@@ -258,6 +308,14 @@ FUNCTION lantern_app_options
     incq    (L + 24)(%rsp)
     jmp     25b
 26: mov     (L + 24)(%rsp), %rdx
+    jmp     23b
+27: mov     S8(%rsp), %rdi                  # metrics categories: their bits; an empty value has none
+    add     %rbx, %rdi
+    mov     S9(%rsp), %rsi
+    add     %rdi, %rsi
+    call    app_categories
+    test    %rax, %rax
+    jnz     90f
     jmp     23b
 50: mov     %r13, S10(%rsp)                 # --network-dir is required
     cmpq    $0, (AppOptions_network_dir + 8)(%rbp)

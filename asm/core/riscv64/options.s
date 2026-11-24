@@ -80,6 +80,50 @@ LOCAL_FUNCTION app_ipv4
 END_FUNCTION app_ipv4
 
 /*
+ * a0 = 0 and a1 = the bits of the metrics categories a0 to a1, names of app_categories_table
+ * with commas between them, none or more; else a0 = 1. Uses t0-t6.
+ */
+LOCAL_FUNCTION app_categories
+    UNWIND_END_PROLOGUE
+    li      t0, 0                           # the bits
+    beq     a0, a1, 8f                      # no category
+1:  mv      t1, a0                          # a name: up to a comma or the end
+2:  bgeu    t1, a1, 3f
+    lbu     t2, 0(t1)
+    li      t3, 0x2c                        # ,
+    beq     t2, t3, 3f
+    addi    t1, t1, 1
+    j       2b
+3:  sub     t2, t1, a0                      # its length: 1 or more
+    beqz    t2, 9f
+    ADDRESS t3, app_categories_table
+4:  ADDRESS t4, app_categories_end
+    bgeu    t3, t4, 9f                      # not a category
+    ld      t4, 8(t3)
+    bne     t4, t2, 6f
+    li      t4, 0
+5:  add     t5, a0, t4
+    lbu     t5, 0(t5)
+    add     t6, t3, t4
+    lbu     t6, 16(t6)
+    bne     t5, t6, 6f
+    addi    t4, t4, 1
+    bltu    t4, t2, 5b
+    ld      t4, 0(t3)
+    or      t0, t0, t4
+    bgeu    t1, a1, 8f                      # the next name, past the comma
+    addi    a0, t1, 1
+    j       1b
+6:  addi    t3, t3, APP_CATEGORY_BYTES
+    j       4b
+8:  mv      a1, t0
+    li      a0, 0
+    ret
+9:  li      a0, 1
+    ret
+END_FUNCTION app_categories
+
+/*
  * (args, options, fault): docs/reference/app.md. s1 args, s2 options, s3 fault, s4 the argument
  * count, s5 the next argument, s6 the Arg entries, s7 an option record, s8 the value's start, s9
  * its length, s10 the argument that holds it. Locals: L the name's start, L+8 its length, L+16
@@ -105,6 +149,12 @@ FUNCTION lantern_app_options
     STQ     t0, s2, AppOptions_http_address
     li      t0, APP_DEFAULT_HTTP_CONNECTIONS
     STQ     t0, s2, AppOptions_http_max_connections
+    li      t0, APP_DEFAULT_METRICS
+    STQ     t0, s2, AppOptions_metrics
+    li      t0, APP_DEFAULT_METRICS_ADDRESS
+    STQ     t0, s2, AppOptions_metrics_address
+    li      t0, APP_DEFAULT_METRICS_PORT
+    STQ     t0, s2, AppOptions_metrics_port
     ld      s4, (ArgList_args + 8)(s1)
     ld      t0, ArgList_args(s1)
     add     s6, s1, t0
@@ -173,8 +223,10 @@ FUNCTION lantern_app_options
     add     s8, t0, s8
     addi    s8, s8, 1
     addi    s5, s5, 1
-7:  beqz    s9, 90f                         # an empty value
-    ld      t0, 16(s7)
+7:  ld      t0, 16(s7)
+    li      t1, APP_OPTION_CATEGORIES
+    beq     t0, t1, 27f
+    beqz    s9, 90f                         # an empty value
     li      t1, APP_OPTION_ENDPOINT
     bgtu    t0, t1, 20f
     bne     t0, t1, 8f
@@ -238,6 +290,11 @@ FUNCTION lantern_app_options
     sd      t0, (L + 24)(sp)
     j       25b
 26: ld      a1, (L + 24)(sp)
+    j       23b
+27: add     a0, s1, s8                      # metrics categories: their bits; an empty value has none
+    add     a1, a0, s9
+    call    app_categories
+    bnez    a0, 90f
     j       23b
 50: mv      s10, s4                         # --network-dir is required
     ld      t0, (AppOptions_network_dir + 8)(s2)

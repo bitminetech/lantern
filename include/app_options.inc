@@ -11,6 +11,7 @@
 .set APP_OPTION_LEVEL, 5                /* error, warn, info or debug: 0 to 3 */
 .set APP_OPTION_CONNECTIONS, 6          /* 1 to APP_MAX_HTTP_CONNECTIONS */
 .set APP_OPTION_FLAG, 7                 /* no value: 1 */
+.set APP_OPTION_CATEGORIES, 8           /* metrics categories with commas between them, or none: their bits */
 .set APP_OPTION_BYTES, 48
 
     .p2align 3
@@ -66,7 +67,22 @@ app_options:
     .quad 7, AppOptions_archive, APP_OPTION_FLAG
     .ascii "archive"
     .space 24 - 7
+    .quad 7, AppOptions_metrics, APP_OPTION_CATEGORIES
+    .ascii "metrics"
+    .space 24 - 7
+    .quad 15, AppOptions_metrics_address, APP_OPTION_ADDRESS
+    .ascii "metrics-address"
+    .space 24 - 15
+    .quad 12, AppOptions_metrics_port, APP_OPTION_PORT
+    .ascii "metrics-port"
+    .space 24 - 12
 app_options_end:
+app_categories_table:                   /* each metrics category: its bit, the name's length, the name in 16 bytes */
+    .quad METRICS_BEACON, 6
+    .ascii "beacon"
+    .space 16 - 6
+app_categories_end:
+.set APP_CATEGORY_BYTES, 32
 app_levels:                             /* the name of each log level in 8 bytes, then their lengths */
     .ascii "error"
     .space 3

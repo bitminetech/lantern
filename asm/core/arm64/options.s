@@ -81,6 +81,56 @@ LOCAL_FUNCTION app_ipv4
 END_FUNCTION app_ipv4
 
 /*
+ * L0: x0 = 0 and x1 = the bits of the metrics categories x0 to x1, names of app_categories_table
+ * with commas between them, none or more; else x0 = 1. Uses x9-x15.
+ */
+LOCAL_FUNCTION app_categories
+    UNWIND_END_PROLOGUE
+    mov     x9, #0                          /* the bits */
+    cmp     x0, x1
+    b.eq    8f                              /* no category */
+1:  mov     x10, x0                         /* a name: up to a comma or the end */
+2:  cmp     x10, x1
+    b.hs    3f
+    ldrb    w11, [x10]
+    cmp     w11, #0x2c                      /* , */
+    b.eq    3f
+    add     x10, x10, #1
+    b       2b
+3:  subs    x11, x10, x0                    /* its length: 1 or more */
+    b.eq    9f
+    ADDRESS x12, app_categories_table
+4:  ADDRESS x13, app_categories_end
+    cmp     x12, x13
+    b.hs    9f                              /* not a category */
+    ldr     x13, [x12, #8]
+    cmp     x13, x11
+    b.ne    6f
+    mov     x13, #0
+5:  ldrb    w14, [x0, x13]
+    add     x15, x12, #16
+    ldrb    w15, [x15, x13]
+    cmp     w14, w15
+    b.ne    6f
+    add     x13, x13, #1
+    cmp     x13, x11
+    b.lo    5b
+    ldr     x13, [x12]
+    orr     x9, x9, x13
+    cmp     x10, x1                         /* the next name, past the comma */
+    b.hs    8f
+    add     x0, x10, #1
+    b       1b
+6:  add     x12, x12, #APP_CATEGORY_BYTES
+    b       4b
+8:  mov     x1, x9
+    mov     x0, #0
+    ret
+9:  mov     x0, #1
+    ret
+END_FUNCTION app_categories
+
+/*
  * (args, options, fault): docs/reference/app.md. x19 args, x20 options, x21 fault, x22 the
  * argument count, x23 the next argument, x24 the Arg entries, x25 an option record, x26 the
  * value's start, x27 its length, x28 the argument that holds it. Locals: L the name's start,
@@ -106,6 +156,12 @@ FUNCTION lantern_app_options
     str     x9, [x20, #AppOptions_http_address]
     mov     x9, #APP_DEFAULT_HTTP_CONNECTIONS
     str     x9, [x20, #AppOptions_http_max_connections]
+    mov     x9, #APP_DEFAULT_METRICS
+    str     x9, [x20, #AppOptions_metrics]
+    MOVQ    x9, APP_DEFAULT_METRICS_ADDRESS
+    str     x9, [x20, #AppOptions_metrics_address]
+    mov     x9, #APP_DEFAULT_METRICS_PORT
+    str     x9, [x20, #AppOptions_metrics_port]
     ldr     x22, [x19, #(ArgList_args + 8)]
     ldr     x9, [x19, #ArgList_args]
     add     x24, x19, x9
@@ -176,8 +232,10 @@ FUNCTION lantern_app_options
     sub     x27, x27, #1
     mov     x26, x10
     add     x23, x23, #1
-7:  cbz     x27, 90f                        /* an empty value */
-    ldr     x9, [x25, #16]
+7:  ldr     x9, [x25, #16]
+    cmp     x9, #APP_OPTION_CATEGORIES
+    b.eq    27f
+    cbz     x27, 90f                        /* an empty value */
     cmp     x9, #APP_OPTION_ENDPOINT
     b.hi    20f
     b.ne    8f
@@ -238,6 +296,11 @@ FUNCTION lantern_app_options
     str     x9, [sp, #(L + 24)]
     b       25b
 26: ldr     x1, [sp, #(L + 24)]
+    b       23b
+27: add     x0, x19, x26                    /* metrics categories: their bits; an empty value has none */
+    add     x1, x0, x27
+    bl      app_categories
+    cbnz    x0, 90f
     b       23b
 50: ldr     x9, [x20, #(AppOptions_network_dir + 8)]    /* --network-dir is required */
     mov     x28, x22

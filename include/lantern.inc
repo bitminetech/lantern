@@ -1617,6 +1617,8 @@
 .set JSON_FAULT_MISSING, 7
 .set JSON_DECODE_SCRATCH, 64 + JSON_LEVELS * 512  /* the field tables of lantern_json_decode, 64 fields a level */
 
+.include "metrics.inc"
+
 /* ArgList, Arg and AppOptions (docs/reference/app.md): a text field is an Arg (start, length) of the ArgList's bytes. */
 .set ArgList_args, 8
 .set ArgList_bytes, 24
@@ -1641,7 +1643,10 @@
 .set AppOptions_supernode, 168        /* 1 with --supernode */
 .set AppOptions_builder, 176          /* host:port of the builder, without http:// */
 .set AppOptions_archive, 192          /* 1 with --archive */
-.set AppOptions__size, 200
+.set AppOptions_metrics, 200          /* the bits of the metrics categories (METRICS_*) */
+.set AppOptions_metrics_address, 208  /* IPv4, its 4 bytes in network order in the low bytes */
+.set AppOptions_metrics_port, 216
+.set AppOptions__size, 224
 .set APP_DEFAULT_PORT, 9000
 .set APP_DEFAULT_HTTP_PORT, 5052
 .set APP_DEFAULT_TARGET_PEERS, 64
@@ -1650,9 +1655,11 @@
 .set APP_DEFAULT_HTTP_ADDRESS, 0x0100007f  /* 127.0.0.1 */
 .set APP_DEFAULT_HTTP_CONNECTIONS, 64
 .set APP_MAX_HTTP_CONNECTIONS, 4096
+.set APP_DEFAULT_METRICS, METRICS_BEACON
+.set APP_DEFAULT_METRICS_ADDRESS, 0x0100007f  /* 127.0.0.1 */
+.set APP_DEFAULT_METRICS_PORT, 8008
 
 .if DB_SEGMENT_SLOTS != 1 << DB_SEGMENT_SHIFT
 .error "DB_SEGMENT_SHIFT is not the log of DB_SEGMENT_SLOTS"
 .endif
 
-.include "metrics.inc"
