@@ -60,64 +60,64 @@ jobs:
           key: vectors-${{ matrix.fork }}-${{ needs.key.outputs.generator }}
           enableCrossOsArchive: true
 
+  # One job for each target, all at once: the tests wait for the slowest build, not for 7 builds in
+  # a row. The macOS targets have a job of their own (build-macos, below): their tests are the
+  # longest stage, and they start as soon as those two builds end.
   build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: linux,   isa: x86_64 }
+          - { os: linux,   isa: arm64 }
+          - { os: linux,   isa: riscv64 }
+          - { os: windows, isa: x86_64 }
+          - { os: windows, isa: arm64 }
+    name: build (${{ matrix.os }}, ${{ matrix.isa }})
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
-      - name: Build all targets
+      - name: Build ${{ matrix.os }}-${{ matrix.isa }}
         run: |
           docker build -q -t lantern-build -f platform/linux/Dockerfile platform/linux
-          docker run --rm -v "$PWD:/src" lantern-build platform/build-all.sh
+          docker run --rm -v "$PWD:/src" lantern-build platform/build-all.sh ${{ matrix.os }}-${{ matrix.isa }}
+      - if: matrix.os == 'linux'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
+        with:
+          name: build-linux-${{ matrix.isa }}
+          path: |
+            build/linux-${{ matrix.isa }}/runner-*
+            build/linux-${{ matrix.isa }}/shell-test
+            build/linux-${{ matrix.isa }}/lantern-minimal
+            build/linux-${{ matrix.isa }}/lantern-mainnet
+      - if: matrix.os == 'windows'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
+        with:
+          name: build-windows-${{ matrix.isa }}
+          path: |
+            build/windows-${{ matrix.isa }}/runner-*
+            build/windows-${{ matrix.isa }}/shell-test.exe
+            build/windows-${{ matrix.isa }}/lantern-minimal.exe
+
+  build-macos:
+    strategy:
+      fail-fast: false
+      matrix:
+        isa: [arm64, x86_64]
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - name: Build macos-${{ matrix.isa }}
+        run: |
+          docker build -q -t lantern-build -f platform/linux/Dockerfile platform/linux
+          docker run --rm -v "$PWD:/src" lantern-build platform/build-all.sh macos-${{ matrix.isa }}
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
         with:
-          name: build-linux-x86_64
+          name: build-macos-${{ matrix.isa }}
           path: |
-            build/linux-x86_64/runner-*
-            build/linux-x86_64/shell-test
-            build/linux-x86_64/lantern-minimal
-      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
-        with:
-          name: build-linux-arm64
-          path: |
-            build/linux-arm64/runner-*
-            build/linux-arm64/shell-test
-            build/linux-arm64/lantern-minimal
-            build/linux-arm64/lantern-mainnet
-      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
-        with:
-          name: build-linux-riscv64
-          path: |
-            build/linux-riscv64/runner-*
-            build/linux-riscv64/shell-test
-            build/linux-riscv64/lantern-minimal
-      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
-        with:
-          name: build-windows-x86_64
-          path: |
-            build/windows-x86_64/runner-*
-            build/windows-x86_64/shell-test.exe
-            build/windows-x86_64/lantern-minimal.exe
-      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
-        with:
-          name: build-windows-arm64
-          path: |
-            build/windows-arm64/runner-*
-            build/windows-arm64/shell-test.exe
-            build/windows-arm64/lantern-minimal.exe
-      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
-        with:
-          name: build-macos-x86_64
-          path: |
-            build/macos-x86_64/
-            !build/macos-x86_64/mainnet/
-            !build/macos-x86_64/minimal/
-      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
-        with:
-          name: build-macos-arm64
-          path: |
-            build/macos-arm64/
-            !build/macos-arm64/mainnet/
-            !build/macos-arm64/minimal/
+            build/macos-${{ matrix.isa }}/
+            !build/macos-${{ matrix.isa }}/mainnet/
+            !build/macos-${{ matrix.isa }}/minimal/
 
   linux:
     needs: [key, vectors, build]
@@ -458,16 +458,29 @@ jobs:
           name: results-windows-${{ matrix.isa }}-${{ matrix.fork }}
           path: results-windows-${{ matrix.isa }}-${{ matrix.fork }}.txt
 
+  # GitHub runs at most 5 macOS jobs at once (Actions limits, Team plan), so the longest start first:
+  # largest first, by the Run vectors times of the CI run of 2026-11-24 (minutes in the comments).
   macos:
-    needs: [key, vectors, build]
+    needs: [key, vectors, build-macos]
     strategy:
       fail-fast: false
       matrix:
-        fork: [phase0, altair, bellatrix, capella, deneb, electra, fulu]
-        isa: [x86_64, arm64]
         include:
-          - { isa: x86_64, runs-on: macos-15-intel }
-          - { isa: arm64,  runs-on: macos-15 }
+          - { fork: fulu,      isa: arm64,  runs-on: macos-15 }        # 25.5
+          - { fork: fulu,      isa: x86_64, runs-on: macos-15-intel }  # 21.3
+          - { fork: capella,   isa: x86_64, runs-on: macos-15-intel }  # 21.1
+          - { fork: electra,   isa: arm64,  runs-on: macos-15 }        # 21.0
+          - { fork: deneb,     isa: x86_64, runs-on: macos-15-intel }  # 20.4
+          - { fork: altair,    isa: arm64,  runs-on: macos-15 }        # 20.3
+          - { fork: bellatrix, isa: arm64,  runs-on: macos-15 }        # 17.5
+          - { fork: electra,   isa: x86_64, runs-on: macos-15-intel }  # 17.2
+          - { fork: phase0,    isa: arm64,  runs-on: macos-15 }        # 16.6
+          - { fork: deneb,     isa: arm64,  runs-on: macos-15 }        # 16.6
+          - { fork: capella,   isa: arm64,  runs-on: macos-15 }        # 15.1
+          - { fork: altair,    isa: x86_64, runs-on: macos-15-intel }  # 15.1
+          - { fork: bellatrix, isa: x86_64, runs-on: macos-15-intel }  # 12.2
+          - { fork: phase0,    isa: x86_64, runs-on: macos-15-intel }  # 12.0
+    name: macos (${{ matrix.fork }}, ${{ matrix.isa }})
     runs-on: ${{ matrix.runs-on }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
