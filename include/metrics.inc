@@ -1,36 +1,73 @@
 /*
- * Metrics (docs/reference/metrics.md): the category bits and the layouts of the values.
+ * Metrics (docs/reference/metrics.md): the category bits, the layouts of the values and the
+ * constants of the table. Written by tests/generator/metrics.py from its lists; not by hand.
  */
-.set METRICS_BEACON, 1                  /* the bit of the beacon category */
-
-.set MetricsState_present, 0            /* MetricsState: 1 when the values are a state's */
+.set METRIC_BIT_BEACON, 0
+.set METRIC_BIT_NETWORK_PEER, 1
+.set METRIC_BIT_NETWORK_DISCOVERY, 2
+.set METRIC_BIT_NETWORK_TRANSPORT, 3
+.set METRIC_BIT_NETWORK_GOSSIP, 4
+.set METRIC_BIT_NETWORK_REQRESP, 5
+.set METRIC_BIT_PROCESSING_BLOCK, 8
+.set METRIC_BIT_PROCESSING_EPOCH, 9
+.set METRIC_BIT_PROCESSING_STATE, 10
+.set METRIC_BIT_PROCESSING_FORKCHOICE, 11
+.set METRIC_BIT_PROCESSING_AVAILABILITY, 12
+.set METRIC_BIT_PROCESSING_GOSSIP, 13
+.set METRIC_BIT_PROCESSING_ENGINE, 14
+.set METRIC_BIT_PROCESSING_BUILDER, 15
+.set METRIC_BIT_PROCESSING_LIGHTCLIENT, 16
+.set METRIC_BIT_PROCESSING_HISTORY, 17
+.set METRIC_BIT_PROCESSING_VALIDATOR, 18
+.set METRIC_BIT_NODE_RESOURCE, 24
+.set METRIC_BIT_NODE_SYNC, 25
+.set METRIC_BIT_NODE_HEALTH, 26
+.set METRIC_BIT_NODE_POOL, 27
+.set METRIC_BIT_NODE_LOG, 28
+.set METRIC_BIT_NODE_API, 29
+.set METRIC_BIT_NODE_STORAGE, 30
+.set METRICS_BEACON, 1
+.set METRICS_NETWORK, 62
+.set METRICS_PROCESSING, 524032
+.set METRICS_NODE, 2130706432
+.set METRICS_ALL, 2131230527
+.set HISTOGRAM_BUCKETS, 12
+.set Histogram_count, 0
+.set Histogram_sum, 8
+.set Histogram_buckets, 16
+.set Histogram__mem, 112
+.set PROFILE_BOUNDS, 11
+.set MetricsState_present, 0
 .set MetricsState_slot, 8
 .set MetricsState_finalized_epoch, 16
 .set MetricsState_current_justified_epoch, 24
 .set MetricsState_previous_justified_epoch, 32
 .set MetricsState_active_validators, 40
 .set MetricsState_deposit_count, 48
-.set MetricsState_finalized_root, 56     /* a root as a number: bytes 24 to 32, little-endian, signed */
+.set MetricsState_finalized_root, 56
 .set MetricsState_previous_justified_root, 64
-.set MetricsState_current_validators, 72 /* u64 x 4: pending, active, exited, withdrawable */
+.set MetricsState_current_validators, 72
 .set MetricsState_previous_validators, 104
 .set MetricsState_current_live, 136
 .set MetricsState_previous_live, 144
-.set MetricsState_electra, 152           /* 1 from electra */
+.set MetricsState_electra, 152
 .set MetricsState_pending_deposits, 160
 .set MetricsState_pending_partial_withdrawals, 168
 .set MetricsState_pending_consolidations, 176
-.set MetricsState_state_root_present, 184  /* 1 when the head block's bytes gave state_root */
-.set MetricsState_state_root, 192        /* the head state's root as a number */
+.set MetricsState_state_root_present, 184
+.set MetricsState_state_root, 192
 .set MetricsState__mem, 200
-
-.set Histogram_count, 0                 /* Histogram: the values */
-.set Histogram_sum_us, 8                /* their sum in microseconds */
-.set Histogram_buckets, 16              /* u64 x HISTOGRAM_BUCKETS: entry i above bound i - 1 and at most bound i; then above the last */
-.set HISTOGRAM_BUCKETS, 12
-.set Histogram__mem, 112
-
-.set NodeMetrics_reorgs, 0              /* NodeMetrics: the node step's counters */
+.set MetricsNode_peers, 0
+.set MetricsNode_fulu, 8
+.set MetricsNode_custody_groups, 16
+.set MetricsNode_pending_exits, 24
+.set MetricsNode_local_validators, 32
+.set MetricsNode_orphaned_blocks, 40
+.set MetricsNode_sync_state, 48
+.set MetricsNode_head_block_id, 56
+.set MetricsNode_head_state_id, 64
+.set MetricsNode__mem, 72
+.set NodeMetrics_reorgs, 0
 .set NodeMetrics_column_requests, 8
 .set NodeMetrics_column_successes, 16
 .set NodeMetrics_reconstructed_columns, 24
@@ -43,77 +80,101 @@
 .set NodeMetrics_validation_failures, 80
 .set NodeMetrics_api_requests, 88
 .set NodeMetrics_api_successes, 96
-.set NodeMetrics_attestation_delay, 104 /* Histogram, delay bounds */
-.set NodeMetrics_block_delay, 216       /* Histogram, delay bounds */
+.set NodeMetrics_attestation_delay, 104
+.set NodeMetrics_block_delay, 216
 .set NodeMetrics__mem, 328
-
-.set MetricsNode_peers, 0               /* MetricsNode */
-.set MetricsNode_fulu, 8                /* 1 from fulu */
-.set MetricsNode_custody_groups, 16
-.set MetricsNode_pending_exits, 24
-.set MetricsNode_local_validators, 32
-.set MetricsNode_orphaned_blocks, 40
-.set MetricsNode_sync_state, 48
-.set MetricsNode_head_block_id, 56       /* BufferId of the head's SignedBeaconBlock bytes, or 0 */
-.set MetricsNode_head_state_id, 64       /* BufferId of the head's post-state, or 0 */
-.set MetricsNode_counters, 72           /* a copy of the node's NodeMetrics */
-.set MetricsNode__mem, 72 + NodeMetrics__mem
-
-.set AppMetrics_gossip_verification, 0  /* AppMetrics: Histograms */
+.set AppMetrics_gossip_verification, 0
 .set AppMetrics_reconstruction, 112
 .set AppMetrics_computation, 224
 .set AppMetrics_kzg_batch, 336
 .set AppMetrics__mem, 448
-
-.set MetricsProcess_cpu_us, 0           /* MetricsProcess */
-.set MetricsProcess_max_fds, 8          /* 0 for none */
+.set MetricsProcess_cpu_us, 0
+.set MetricsProcess_max_fds, 8
 .set MetricsProcess__mem, 16
-
-.set MetricsGossip_topics, 8            /* MetricsGossip: a value with one part of GossipTopic entries */
+.set Profile_ticks_per_second, 0
+.set Profile_bounds, 8
+.set Profile__mem, 96
+/* MetricsSources: the address of each source, by METRIC_SRC_*; 0 for a source not given */
+.set MetricsSources_state, 0
+.set METRIC_SRC_STATE, 0
+.set MetricsSources_node, 8
+.set METRIC_SRC_NODE, 1
+.set MetricsSources_counters, 16
+.set METRIC_SRC_COUNTERS, 2
+.set MetricsSources_app, 24
+.set METRIC_SRC_APP, 3
+.set MetricsSources_process, 32
+.set METRIC_SRC_PROCESS, 4
+.set MetricsSources_gossip, 40
+.set METRIC_SRC_GOSSIP, 5
+.set MetricsSources_profile, 48
+.set METRIC_SRC_PROFILE, 6
+.set MetricsSources__mem, 56
+.set MetricsGossip_topics, 8
 .set MetricsGossip__fixed, 24
-.set GossipTopic_name_length, 0         /* GossipTopic */
-.set GossipTopic_name, 8                /* 64 bytes */
+.set GossipTopic_name_length, 0
+.set GossipTopic_name, 8
 .set GOSSIP_TOPIC_NAME_MAX, 64
-.set GossipTopic_subnet, 72             /* 1 for a topic of a subnet */
+.set GossipTopic_subnet, 72
 .set GossipTopic_mesh_peers, 80
 .set GossipTopic_mesh_partial_peers, 88
 .set GossipTopic_sent_bytes, 96
 .set GossipTopic_sent_partial_bytes, 104
 .set GossipTopic__mem, 112
-
-/* An entry of the metric table (include/metrics_table.inc): offsets from metrics_texts, and u32 fields. */
+/* An entry of the table (include/metrics_table.inc): text offsets from metrics_texts, and fields */
 .set MetricEntry_name, 0
 .set MetricEntry_name_len, 4
 .set MetricEntry_help, 8
 .set MetricEntry_help_len, 12
-.set MetricEntry_type, 16               /* METRIC_TYPE_* */
-.set MetricEntry_source, 20             /* METRIC_SRC_* */
-.set MetricEntry_offset, 24             /* the value's offset in its source */
-.set MetricEntry_kind, 28               /* u16 METRIC_KIND_* */
-.set MetricEntry_cond, 30               /* u16 METRIC_COND_* */
-.set MetricEntry__mem, 32
+.set MetricEntry_type, 16
+.set MetricEntry_source, 20
+.set MetricEntry_offset, 24
+.set MetricEntry_kind, 28
+.set MetricEntry_cond, 30
+.set MetricEntry_bit, 32
+.set MetricEntry_label1, 36
+.set MetricEntry_label2, 38
+.set MetricEntry_bounds, 40
+.set MetricEntry_count, 44
+.set MetricEntry__mem, 48
+/* A label table (metrics_labels): its name, its values from metrics_label_values */
+.set MetricLabel_name, 0
+.set MetricLabel_name_len, 4
+.set MetricLabel_count, 8
+.set MetricLabel_first, 12
+.set MetricLabel__mem, 16
+/* A bound set (metrics_bounds): its unit and bounds from metrics_bound_values */
+.set MetricBounds_count, 0
+.set MetricBounds_unit, 4
+.set MetricBounds_first, 8
+.set MetricBounds__mem, 16
+.set MetricBound_value, 0
+.set MetricBound_text, 8
+.set MetricBound_text_len, 12
+.set MetricBound__mem, 16
+.set METRIC_UNIT_US, 0
+.set METRIC_UNIT_TICKS, 1
 .set METRIC_TYPE_GAUGE, 0
 .set METRIC_TYPE_COUNTER, 1
 .set METRIC_TYPE_HISTOGRAM, 2
-.set METRIC_SRC_STATE, 0
-.set METRIC_SRC_NODE, 1
-.set METRIC_SRC_APP, 2
-.set METRIC_SRC_PROCESS, 3
-.set METRIC_SRC_GOSSIP, 4
-.set METRIC_KIND_U64, 0                 /* a decimal */
-.set METRIC_KIND_ROOT, 1                /* a signed decimal */
-.set METRIC_KIND_STATUS, 2              /* four samples by status */
-.set METRIC_KIND_HIST_DEFAULT, 3        /* a histogram of the default bounds */
-.set METRIC_KIND_HIST_KZG, 4            /* of the KZG bounds */
-.set METRIC_KIND_HIST_DELAY, 5          /* of the delay bounds */
-.set METRIC_KIND_SECONDS, 6             /* microseconds as seconds */
-.set METRIC_KIND_GOSSIP_MAIN, 7         /* mesh_peers of each topic with no subnet */
-.set METRIC_KIND_GOSSIP_SENT, 8         /* sent bytes of each topic, partial false and true */
-.set METRIC_KIND_GOSSIP_MESH, 9         /* mesh peers of each topic, supports_partial false and true */
+.set METRIC_KIND_U64, 0
+.set METRIC_KIND_ROOT, 1
+.set METRIC_KIND_SECONDS, 2
+.set METRIC_KIND_ARRAY, 3
+.set METRIC_KIND_HIST, 4
+.set METRIC_KIND_ARRAY_HIST, 5
+.set METRIC_KIND_GOSSIP_MAIN, 6
+.set METRIC_KIND_GOSSIP_SENT, 7
+.set METRIC_KIND_GOSSIP_MESH, 8
 .set METRIC_COND_NONE, 0
-.set METRIC_COND_STATE, 1               /* MetricsState.present */
-.set METRIC_COND_ELECTRA, 2             /* and MetricsState.electra */
-.set METRIC_COND_FULU, 3                /* MetricsNode.fulu */
-.set METRIC_COND_STATE_ROOT, 4          /* MetricsState.present and state_root_present */
-.set METRIC_COND_MAX_FDS, 5             /* MetricsProcess.max_fds above 0 */
-.set METRIC_COUNT, 46                   /* the beacon category's metrics */
+.set METRIC_COND_STATE, 1
+.set METRIC_COND_ELECTRA, 2
+.set METRIC_COND_FULU, 3
+.set METRIC_COND_STATE_ROOT, 4
+.set METRIC_COND_MAX_FDS, 5
+.set METRIC_COND_PROFILE, 6
+.set METRIC_BOUNDS_DEFAULT, 0
+.set METRIC_BOUNDS_KZG, 1
+.set METRIC_BOUNDS_DELAY, 2
+.set METRIC_BOUNDS_TICKS, 3
+.set METRIC_COUNT, 46

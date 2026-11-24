@@ -434,8 +434,7 @@ ABI uint64_t lantern_engine_json_decode(const void *type, const void *json, void
 
 /* Application: docs/reference/app.md. */
 ABI uint64_t lantern_app_options(const void *args, void *options, void *fault);
-ABI uint64_t lantern_metrics_text(const void *categories, const void *state, const void *node, const void *app,
-                                  const void *process, const void *gossip, void *out);
+ABI uint64_t lantern_metrics_text(const void *categories, const void *sources, void *out);
 
 /* Network config: docs/reference/config.md. */
 ABI uint64_t lantern_config_parse(const void *text, void *config, void *line);
@@ -9664,31 +9663,34 @@ static void run_app_options(const char *file, case_file *f) {
 }
 
 /*
- * metrics-text: lantern_metrics_text over each case's values (tests/generator/metrics.py). With
- * room for the text exactly, the out ByteList must hold the case's text; with one byte less, the
- * status must be LANTERN_BUFFER_TOO_SMALL. The inputs must stay unchanged.
+ * metrics-text: lantern_metrics_text over each case's values (tests/generator/metrics.py). The
+ * MetricsSources holds each source's address in the order of METRIC_SRC_*, and 0 for an empty part.
+ * With room for the text exactly, the out ByteList must hold the case's text; with one byte less,
+ * the status must be LANTERN_BUFFER_TOO_SMALL. The inputs must stay unchanged.
  */
 static void run_metrics_text(const char *file, case_file *f) {
-    static const char *keys[5] = {"state", "node", "app", "process", "gossip"};
+    static const char *keys[7] = {"state", "node", "counters", "app", "process", "gossip", "profile"};
     for (uint64_t i = 0; i < f->count; i++) {
         const char *name, *why = NULL;
         uint64_t len, tl, cat;
         tv parts = next_case(f, &name, &len);
         const uint8_t *want = tv_bytes(tv_get(parts, "text"), &tl);
-        uint8_t *in[5], *keep[5];
-        uint64_t il[5];
+        uint8_t *in[7], *keep[7];
+        uint64_t il[7];
+        const void *sources[7];
         cat = tv_u64(tv_get(parts, "categories"));
-        for (int k = 0; k < 5; k++) {
+        for (int k = 0; k < 7; k++) {
             const uint8_t *b = tv_bytes(tv_get(parts, keys[k]), &il[k]);
             in[k] = copy_of(b, il[k]);
             keep[k] = copy_of(b, il[k]);
+            sources[k] = il[k] ? in[k] : NULL;
         }
         for (int pass = 0; pass < 2 && !why; pass++) {
             if (pass == 1 && tl == 0) break;
             uint64_t size = 24 + tl - (uint64_t)pass, st;
             uint8_t *out = buffer(size);
             wr64(out, size);
-            st = CALL(lantern_metrics_text, &cat, in[0], in[1], in[2], in[3], in[4], out);
+            st = CALL(lantern_metrics_text, &cat, sources, out);
             if (!guard_ok(out, size)) why = "lantern_metrics_text wrote out of bounds";
             else if (pass == 1 && st != 1) why = "one byte less room: status is not LANTERN_BUFFER_TOO_SMALL";
             else if (pass == 0 && st != 0) why = "status is not LANTERN_OK";
@@ -9702,9 +9704,9 @@ static void run_metrics_text(const char *file, case_file *f) {
             }
             free(out);
         }
-        for (int k = 0; k < 5 && !why; k++)
+        for (int k = 0; k < 7 && !why; k++)
             if (!guard_ok(in[k], il[k]) || memcmp(in[k], keep[k], (size_t)il[k])) why = "lantern_metrics_text changed an input";
-        for (int k = 0; k < 5; k++) {
+        for (int k = 0; k < 7; k++) {
             free(in[k]);
             free(keep[k]);
         }

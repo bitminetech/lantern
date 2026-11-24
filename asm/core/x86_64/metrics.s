@@ -2,11 +2,17 @@
  * Metrics, x86-64: in the common object. Requirements: docs/reference/metrics.md.
  *
  * The writers keep the cursor in r12 and the end of the room in r13; r15 becomes 1 when the room
- * runs out, and nothing is written from then on. rbx holds metrics_texts.
+ * runs out, and nothing is written from then on. rbx holds metrics_texts. A LabelState (LS_*) holds
+ * the label tables of a family and the element's value index in each.
  */
 
     RODATA
 .include "metrics_table.inc"
+
+.set LS_LABEL1, 0                       /* the first label table's record, or 0 */
+.set LS_LABEL2, 8                       /* the second's, or 0 */
+.set LS_I1, 16                          /* the value index in the first */
+.set LS_I2, 24                          /* the value index in the second */
 
 /* The rsi bytes at rdi go to the cursor. Uses rax, rcx, rsi, rdi. */
 LOCAL_FUNCTION mt_put
@@ -109,151 +115,327 @@ LOCAL_FUNCTION mt_name
     jmp     mt_text
 END_FUNCTION mt_name
 
-/*
- * A histogram's samples: the entry r14, its Histogram at rdi and its bounds table at rsi. Locals:
- * the Histogram, the bounds, the bound index, the sum so far.
- */
-LOCAL_FUNCTION mt_histogram
-    FRAME 32
+/* `name="value"` of the label table record rdi and value index rsi. Locals: rdi, rsi. */
+LOCAL_FUNCTION mt_label
+    FRAME 16
     mov     %rdi, (%rsp)
     mov     %rsi, 8(%rsp)
-    movq    $0, 16(%rsp)
-    movq    $0, 24(%rsp)
-1:  mov     16(%rsp), %rax                  # each bound: the values at or below it
+    mov     MetricLabel_name(%rdi), %eax
+    mov     MetricLabel_name_len(%rdi), %esi
+    mov     %rax, %rdi
+    call    mt_text
+    MT_TEXT mx_eq
+    mov     (%rsp), %rdi                    # the value: metrics_label_values[first + index]
+    mov     MetricLabel_first(%rdi), %eax
+    add     8(%rsp), %rax
+    lea     metrics_label_values(%rip), %rcx
+    mov     (%rcx,%rax,8), %edi
+    mov     4(%rcx,%rax,8), %esi
+    call    mt_text
+    MT_TEXT mx_quote
+    UNFRAME 16
+END_FUNCTION mt_label
+
+/*
+ * A sample's start: the entry r14's name, the suffix of rsi bytes at rdi (none when rsi is 0), then
+ * "{" and the labels of the LabelState rdx when it has a label. rax = 1 when a "{" went out, else 0.
+ * Locals: the LabelState, the flag, the suffix, its length.
+ */
+LOCAL_FUNCTION mt_open
+    FRAME 32
+    mov     %rdx, (%rsp)
+    movq    $0, 8(%rsp)
+    mov     %rdi, 16(%rsp)
+    mov     %rsi, 24(%rsp)
+    call    mt_name
+    mov     24(%rsp), %rsi
+    test    %rsi, %rsi
+    jz      1f
+    mov     16(%rsp), %rdi
+    call    mt_put
+1:  mov     (%rsp), %rax
+    cmpq    $0, LS_LABEL1(%rax)
+    je      9f
+    movq    $1, 8(%rsp)
+    MT_TEXT mx_lbrace
+    mov     (%rsp), %rax
+    mov     LS_LABEL1(%rax), %rdi
+    mov     LS_I1(%rax), %rsi
+    call    mt_label
+    mov     (%rsp), %rax
+    cmpq    $0, LS_LABEL2(%rax)
+    je      9f
+    MT_TEXT mx_comma
+    mov     (%rsp), %rax
+    mov     LS_LABEL2(%rax), %rdi
+    mov     LS_I2(%rax), %rsi
+    call    mt_label
+9:  mov     8(%rsp), %rax
+    UNFRAME 32
+END_FUNCTION mt_open
+
+/* A sample's end: "}" when rdi is 1, " ", then the decimal rsi and LF. Locals: rsi. */
+LOCAL_FUNCTION mt_value
+    FRAME 16
+    mov     %rsi, (%rsp)
+    test    %rdi, %rdi
+    jz      1f
+    MT_TEXT mx_rbrace
+1:  MT_TEXT mx_sp
+    mov     (%rsp), %rdi
+    call    mt_dec
+    MT_TEXT mx_lf
+    UNFRAME 16
+END_FUNCTION mt_value
+
+/* `{` when rdi is 0, else `,`; then `le="`. Uses rax, rcx, rsi, rdi. */
+LOCAL_FUNCTION mt_le
+    FRAME 0
+    test    %rdi, %rdi
+    jnz     1f
+    MT_TEXT mx_lbrace
+    jmp     2f
+1:  MT_TEXT mx_comma
+2:  MT_TEXT mx_le
+    MT_TEXT mx_eq
+    UNFRAME 0
+END_FUNCTION mt_le
+
+/*
+ * The histogram rdi of the bound set record rsi, with the labels of the LabelState rdx; rcx is the
+ * ticks per second for a set of ticks. Locals: the Histogram, the bounds, the LabelState, the tick
+ * rate, the bound index, the sum so far.
+ */
+LOCAL_FUNCTION mt_histogram
+    FRAME 48
+    mov     %rdi, (%rsp)
+    mov     %rsi, 8(%rsp)
+    mov     %rdx, 16(%rsp)
+    mov     %rcx, 24(%rsp)
+    movq    $0, 32(%rsp)
+    movq    $0, 40(%rsp)
+1:  mov     32(%rsp), %rax                  # each bound: the values at or below it
     mov     8(%rsp), %rcx
-    cmp     (%rcx), %rax
+    mov     MetricBounds_count(%rcx), %ecx
+    cmp     %rcx, %rax
     jae     2f
     mov     (%rsp), %rdx
     mov     Histogram_buckets(%rdx,%rax,8), %rdx
-    add     %rdx, 24(%rsp)
-    call    mt_name
-    MT_TEXT mx_bucket
-    mov     16(%rsp), %rax
+    add     %rdx, 40(%rsp)
+    lea     mx_bucket(%rip), %rdi
+    mov     $mx_bucket_len, %esi
+    mov     16(%rsp), %rdx
+    call    mt_open
+    mov     %rax, %rdi
+    call    mt_le
+    mov     8(%rsp), %rcx                   # the bound's text
+    mov     MetricBounds_first(%rcx), %eax
+    add     32(%rsp), %rax
     shl     $4, %rax
-    add     8(%rsp), %rax
-    mov     16(%rax), %edi                  # its text: offset, length
-    mov     20(%rax), %esi
+    lea     metrics_bound_values(%rip), %rcx
+    mov     MetricBound_text(%rcx,%rax), %edi
+    mov     MetricBound_text_len(%rcx,%rax), %esi
     call    mt_text
-    MT_TEXT mx_le_end
-    mov     24(%rsp), %rdi
-    call    mt_dec
-    MT_TEXT mx_lf
-    incq    16(%rsp)
+    MT_TEXT mx_quote
+    mov     $1, %edi
+    mov     40(%rsp), %rsi
+    call    mt_value
+    incq    32(%rsp)
     jmp     1b
-2:  call    mt_name                         # +Inf: every value
-    MT_TEXT mx_bucket
+2:  lea     mx_bucket(%rip), %rdi           # +Inf: every value
+    mov     $mx_bucket_len, %esi
+    mov     16(%rsp), %rdx
+    call    mt_open
+    mov     %rax, %rdi
+    call    mt_le
     MT_TEXT mx_inf
-    MT_TEXT mx_le_end
+    MT_TEXT mx_quote
+    mov     $1, %edi
     mov     (%rsp), %rax
-    mov     Histogram_count(%rax), %rdi
-    call    mt_dec
-    MT_TEXT mx_lf
-    call    mt_name                         # _sum in seconds, _count
-    MT_TEXT mx_sum
+    mov     Histogram_count(%rax), %rsi
+    call    mt_value
+    lea     mx_sum(%rip), %rdi              # _sum in seconds
+    mov     $mx_sum_len, %esi
+    mov     16(%rsp), %rdx
+    call    mt_open
+    test    %rax, %rax
+    jz      3f
+    MT_TEXT mx_rbrace
+3:  MT_TEXT mx_sp
     mov     (%rsp), %rax
-    mov     Histogram_sum_us(%rax), %rdi
-    call    mt_seconds
+    mov     Histogram_sum(%rax), %rdi
+    mov     8(%rsp), %rcx
+    cmpl    $METRIC_UNIT_TICKS, MetricBounds_unit(%rcx)
+    jne     5f
+    mov     24(%rsp), %rcx                  # ticks: sum * 10^6 / the rate, in microseconds
+    xor     %eax, %eax
+    test    %rcx, %rcx
+    jz      4f
+    mov     %rdi, %rax
+    mov     $1000000, %edx
+    mul     %rdx
+    cmp     %rcx, %rdx                      # a quotient of 2^64 or more: the largest u64
+    jae     6f
+    div     %rcx
+    jmp     4f
+6:  mov     $-1, %rax
+4:  mov     %rax, %rdi
+5:  call    mt_seconds
     MT_TEXT mx_lf
-    call    mt_name
-    MT_TEXT mx_count
+    lea     mx_count(%rip), %rdi            # _count
+    mov     $mx_count_len, %esi
+    mov     16(%rsp), %rdx
+    call    mt_open
+    mov     %rax, %rdi
     mov     (%rsp), %rax
-    mov     Histogram_count(%rax), %rdi
-    call    mt_dec
-    MT_TEXT mx_lf
-    UNFRAME 32
+    mov     Histogram_count(%rax), %rsi
+    call    mt_value
+    UNFRAME 48
 END_FUNCTION mt_histogram
 
-/* The topic label of the GossipTopic rdi: `{topic="<name>`. Locals: the entry. */
+/* The entry r14's name and `{topic="<name>"` of the GossipTopic rdi. Locals: the topic. */
 LOCAL_FUNCTION mt_topic
     FRAME 16
     mov     %rdi, (%rsp)
     call    mt_name
+    MT_TEXT mx_lbrace
     MT_TEXT mx_topic
+    MT_TEXT mx_eq
     mov     (%rsp), %rax
     lea     GossipTopic_name(%rax), %rdi
     mov     GossipTopic_name_length(%rax), %rsi
     call    mt_put
+    MT_TEXT mx_quote
     UNFRAME 16
 END_FUNCTION mt_topic
 
+/* `,<name>="<value>"`: the name is rsi bytes at rdi, the value rcx bytes at rdx. Locals: the texts. */
+LOCAL_FUNCTION mt_pair
+    FRAME 32
+    mov     %rdi, (%rsp)
+    mov     %rsi, 8(%rsp)
+    mov     %rdx, 16(%rsp)
+    mov     %rcx, 24(%rsp)
+    MT_TEXT mx_comma
+    mov     (%rsp), %rdi
+    mov     8(%rsp), %rsi
+    call    mt_put
+    MT_TEXT mx_eq
+    mov     16(%rsp), %rdi
+    mov     24(%rsp), %rsi
+    call    mt_put
+    MT_TEXT mx_quote
+    UNFRAME 32
+END_FUNCTION mt_pair
+
+.macro MT_PAIR name, value
+    lea     \name(%rip), %rdi
+    mov     $\name\()_len, %esi
+    lea     \value(%rip), %rdx
+    mov     $\value\()_len, %ecx
+    call    mt_pair
+.endm
+
 /*
- * lantern_metrics_text(categories, state, node, app, process, gossip, out) -> status
+ * lantern_metrics_text(categories, sources, out) -> status
  * The Prometheus text of the metrics of the categories. rbx metrics_texts, r12 the cursor, r13 the
- * end of the room, r14 a table entry, r15 1 when the room ran out, rbp the entry's source. Locals:
- * L the sources by METRIC_SRC_* (state, node, app, process, gossip), L+40 out, L+48 a gossip
- * entry, L+56 the gossip entries left, L+64 a value.
+ * end of the room, r14 a table entry, r15 1 when the room ran out, rbp the entry's value. Locals: L
+ * the categories, L+8 the sources, L+16 out, L+24 the ticks per second, L+32 a LabelState (32 bytes),
+ * L+64 the element, L+72 the elements, L+80 the second label's value count, L+88 the kind, L+96 a
+ * gossip topic, L+104 the gossip topics left.
  */
 FUNCTION lantern_metrics_text
-    ENTER 80
-    mov     %rsi, L(%rsp)
-    mov     %rdx, (L + 8)(%rsp)
-    mov     %rcx, (L + 16)(%rsp)
-    mov     %r8, (L + 24)(%rsp)
-    mov     %r9, (L + 32)(%rsp)
-    mov     (80 + 96)(%rsp), %rax           # the seventh argument
-    mov     %rax, (L + 40)(%rsp)
+    ENTER 112
     mov     (%rdi), %rdi
-    lea     24(%rax), %r12
-    mov     (%rax), %r13
-    add     %rax, %r13
+    mov     %rdi, L(%rsp)
+    mov     %rsi, (L + 8)(%rsp)
+    mov     %rdx, (L + 16)(%rsp)
+    lea     24(%rdx), %r12
+    mov     (%rdx), %r13
+    add     %rdx, %r13
     xor     %r15d, %r15d
     lea     metrics_texts(%rip), %rbx
-    test    $METRICS_BEACON, %rdi
-    jz      90f
-    lea     metrics_table(%rip), %r14
-1:  lea     metrics_table_end(%rip), %rax
+    movq    $0, (L + 24)(%rsp)              # the tick rate: the Profile's, or 0
+    mov     MetricsSources_profile(%rsi), %rax
+    test    %rax, %rax
+    jz      1f
+    mov     Profile_ticks_per_second(%rax), %rax
+    mov     %rax, (L + 24)(%rsp)
+1:  lea     metrics_table(%rip), %r14
+10: lea     metrics_table_end(%rip), %rax
     cmp     %rax, %r14
     jae     90f
-    mov     MetricEntry_source(%r14), %eax  # its source
-    mov     L(%rsp,%rax,8), %rbp
-    movzwl  MetricEntry_cond(%r14), %eax    # its condition
-    cmp     $METRIC_COND_NONE, %eax
-    je      10f
-    mov     L(%rsp), %rcx                   # MetricsState
-    cmp     $METRIC_COND_STATE, %eax
-    jne     2f
-    cmpq    $0, MetricsState_present(%rcx)
-    je      80f
-    jmp     10f
-2:  cmp     $METRIC_COND_ELECTRA, %eax
-    jne     3f
-    cmpq    $0, MetricsState_present(%rcx)
-    je      80f
-    cmpq    $0, MetricsState_electra(%rcx)
-    je      80f
-    jmp     10f
-3:  mov     (L + 8)(%rsp), %rcx             # MetricsNode
-    cmp     $METRIC_COND_FULU, %eax
-    jne     4f
-    cmpq    $0, MetricsNode_fulu(%rcx)
-    je      80f
-    jmp     10f
-4:  cmp     $METRIC_COND_STATE_ROOT, %eax
-    jne     5f
-    mov     L(%rsp), %rcx                   # MetricsState
-    cmpq    $0, MetricsState_present(%rcx)
-    je      80f
-    cmpq    $0, MetricsState_state_root_present(%rcx)
-    je      80f
-    jmp     10f
-5:  mov     (L + 24)(%rsp), %rcx            # MetricsProcess: METRIC_COND_MAX_FDS
-    cmpq    $0, MetricsProcess_max_fds(%rcx)
-    je      80f
-10: movzwl  MetricEntry_kind(%r14), %eax    # a gossipsub metric with no sample goes out
-    cmp     $METRIC_KIND_GOSSIP_MAIN, %eax
-    jb      20f
-    mov     %eax, %edx
-    PART    %rcx, %rsi, %rbp, MetricsGossip_topics
-11: test    %rsi, %rsi
+    mov     MetricEntry_bit(%r14), %eax     # its category
+    mov     L(%rsp), %rcx
+    bt      %rax, %rcx
+    jnc     80f
+    mov     MetricEntry_source(%r14), %eax  # its source, given
+    mov     (L + 8)(%rsp), %rcx
+    mov     (%rcx,%rax,8), %rbp
+    test    %rbp, %rbp
     jz      80f
-    cmp     $METRIC_KIND_GOSSIP_MAIN, %edx
-    jne     20f
-    cmpq    $0, GossipTopic_subnet(%rcx)
+    movzwl  MetricEntry_cond(%r14), %eax    # its condition
+    mov     MetricsSources_state(%rcx), %rdx
+    cmp     $METRIC_COND_NONE, %eax
     je      20f
+    cmp     $METRIC_COND_STATE, %eax
+    je      11f
+    cmp     $METRIC_COND_ELECTRA, %eax
+    je      12f
+    cmp     $METRIC_COND_STATE_ROOT, %eax
+    je      13f
+    cmp     $METRIC_COND_FULU, %eax
+    je      14f
+    cmp     $METRIC_COND_MAX_FDS, %eax
+    je      15f
+    cmpq    $0, (L + 24)(%rsp)              # METRIC_COND_PROFILE: a tick rate
+    je      80f
+    jmp     20f
+11: test    %rdx, %rdx
+    jz      80f
+    cmpq    $0, MetricsState_present(%rdx)
+    je      80f
+    jmp     20f
+12: test    %rdx, %rdx
+    jz      80f
+    cmpq    $0, MetricsState_present(%rdx)
+    je      80f
+    cmpq    $0, MetricsState_electra(%rdx)
+    je      80f
+    jmp     20f
+13: test    %rdx, %rdx
+    jz      80f
+    cmpq    $0, MetricsState_present(%rdx)
+    je      80f
+    cmpq    $0, MetricsState_state_root_present(%rdx)
+    je      80f
+    jmp     20f
+14: mov     MetricsSources_node(%rcx), %rdx
+    test    %rdx, %rdx
+    jz      80f
+    cmpq    $0, MetricsNode_fulu(%rdx)
+    je      80f
+    jmp     20f
+15: mov     MetricsSources_process(%rcx), %rdx
+    test    %rdx, %rdx
+    jz      80f
+    cmpq    $0, MetricsProcess_max_fds(%rdx)
+    je      80f
+20: movzwl  MetricEntry_kind(%r14), %eax    # a gossipsub family with no sample does not go out
+    mov     %rax, (L + 88)(%rsp)
+    cmp     $METRIC_KIND_GOSSIP_MAIN, %eax
+    jb      30f
+    PART    %rcx, %rsi, %rbp, MetricsGossip_topics
+21: test    %rsi, %rsi
+    jz      80f
+    cmp     $METRIC_KIND_GOSSIP_MAIN, %eax
+    jne     30f
+    cmpq    $0, GossipTopic_subnet(%rcx)
+    je      30f
     add     $GossipTopic__mem, %rcx
     dec     %rsi
-    jmp     11b
-20: MT_TEXT mx_help                         # # HELP <name> <help>, # TYPE <name> <type>
+    jmp     21b
+30: MT_TEXT mx_help                         # # HELP <name> <help>, # TYPE <name> <type>
     call    mt_name
     MT_TEXT mx_sp
     mov     MetricEntry_help(%r14), %edi
@@ -264,140 +446,170 @@ FUNCTION lantern_metrics_text
     call    mt_name
     mov     MetricEntry_type(%r14), %eax
     cmp     $METRIC_TYPE_COUNTER, %eax
-    je      22f
-    ja      23f
+    je      31f
+    ja      32f
     MT_TEXT mx_gauge
-    jmp     24f
-22: MT_TEXT mx_counter
-    jmp     24f
-23: MT_TEXT mx_histogram
-24: mov     MetricEntry_offset(%r14), %eax  # its samples
-    add     %rax, %rbp                      # the value, in its source
-    movzwl  MetricEntry_kind(%r14), %eax
+    jmp     33f
+31: MT_TEXT mx_counter
+    jmp     33f
+32: MT_TEXT mx_histogram
+33: mov     MetricEntry_offset(%r14), %eax  # its value in its source; its label tables
+    add     %rax, %rbp
+    xor     %eax, %eax
+    mov     %rax, (L + 32 + LS_LABEL1)(%rsp)
+    mov     %rax, (L + 32 + LS_LABEL2)(%rsp)
+    mov     %rax, (L + 32 + LS_I1)(%rsp)
+    mov     %rax, (L + 32 + LS_I2)(%rsp)
+    mov     %rax, (L + 64)(%rsp)
+    movq    $1, (L + 80)(%rsp)
+    lea     metrics_labels(%rip), %rcx
+    movzwl  MetricEntry_label1(%r14), %eax
+    test    %eax, %eax
+    jz      34f
+    dec     %eax
+    shl     $4, %rax
+    add     %rcx, %rax
+    mov     %rax, (L + 32 + LS_LABEL1)(%rsp)
+    movzwl  MetricEntry_label2(%r14), %eax
+    test    %eax, %eax
+    jz      34f
+    dec     %eax
+    shl     $4, %rax
+    add     %rcx, %rax
+    mov     %rax, (L + 32 + LS_LABEL2)(%rsp)
+    mov     MetricLabel_count(%rax), %eax
+    mov     %rax, (L + 80)(%rsp)
+34: mov     MetricEntry_count(%r14), %eax
+    mov     %rax, (L + 72)(%rsp)
+    mov     (L + 88)(%rsp), %rax
     cmp     $METRIC_KIND_U64, %eax
-    jne     30f
-    call    mt_name
-    MT_TEXT mx_sp
-    mov     (%rbp), %rdi
-    call    mt_dec
-    MT_TEXT mx_lf
+    je      40f
+    cmp     $METRIC_KIND_ROOT, %eax
+    je      41f
+    cmp     $METRIC_KIND_SECONDS, %eax
+    je      42f
+    cmp     $METRIC_KIND_ARRAY, %eax
+    je      43f
+    cmp     $METRIC_KIND_HIST, %eax
+    je      44f
+    cmp     $METRIC_KIND_ARRAY_HIST, %eax
+    je      44f
+    jmp     50f
+40: xor     %edi, %edi                      # a value
+    xor     %esi, %esi
+    lea     (L + 32)(%rsp), %rdx
+    call    mt_open
+    mov     %rax, %rdi
+    mov     (%rbp), %rsi
+    call    mt_value
     jmp     80f
-30: cmp     $METRIC_KIND_ROOT, %eax
-    jne     31f
-    call    mt_name
+41: call    mt_name                         # a root, signed
     MT_TEXT mx_sp
     mov     (%rbp), %rdi
     call    mt_sdec
     MT_TEXT mx_lf
     jmp     80f
-31: cmp     $METRIC_KIND_SECONDS, %eax
-    jne     32f
-    call    mt_name
+42: call    mt_name                         # microseconds as seconds
     MT_TEXT mx_sp
     mov     (%rbp), %rdi
     call    mt_seconds
     MT_TEXT mx_lf
     jmp     80f
-32: cmp     $METRIC_KIND_STATUS, %eax
-    jne     33f
-    call    mt_name
-    MT_TEXT mx_st_pending
-    mov     (%rbp), %rdi
-    call    mt_dec
-    MT_TEXT mx_lf
-    call    mt_name
-    MT_TEXT mx_st_active
-    mov     8(%rbp), %rdi
-    call    mt_dec
-    MT_TEXT mx_lf
-    call    mt_name
-    MT_TEXT mx_st_exited
-    mov     16(%rbp), %rdi
-    call    mt_dec
-    MT_TEXT mx_lf
-    call    mt_name
-    MT_TEXT mx_st_withdrawable
-    mov     24(%rbp), %rdi
-    call    mt_dec
-    MT_TEXT mx_lf
-    jmp     80f
-33: cmp     $METRIC_KIND_HIST_DEFAULT, %eax
-    jne     34f
-    lea     mb_default(%rip), %rsi
-    jmp     36f
-34: cmp     $METRIC_KIND_HIST_KZG, %eax
-    jne     35f
-    lea     mb_kzg(%rip), %rsi
-    jmp     36f
-35: cmp     $METRIC_KIND_HIST_DELAY, %eax
-    jne     40f
-    lea     mb_delay(%rip), %rsi
-36: mov     %rbp, %rdi
+43: mov     (L + 64)(%rsp), %rax            # values by labels: element e at e * 8, its label
+    cmp     (L + 72)(%rsp), %rax            # values e / the second label's count, e % it
+    jae     80f
+    xor     %edx, %edx
+    divq    (L + 80)(%rsp)
+    mov     %rax, (L + 32 + LS_I1)(%rsp)
+    mov     %rdx, (L + 32 + LS_I2)(%rsp)
+    xor     %edi, %edi
+    xor     %esi, %esi
+    lea     (L + 32)(%rsp), %rdx
+    call    mt_open
+    mov     %rax, %rdi
+    mov     (L + 64)(%rsp), %rax
+    mov     (%rbp,%rax,8), %rsi
+    call    mt_value
+    incq    (L + 64)(%rsp)
+    jmp     43b
+44: mov     (L + 64)(%rsp), %rax            # histograms by labels: element e at e * Histogram__mem
+    cmp     (L + 72)(%rsp), %rax
+    jae     80f
+    xor     %edx, %edx
+    divq    (L + 80)(%rsp)
+    mov     %rax, (L + 32 + LS_I1)(%rsp)
+    mov     %rdx, (L + 32 + LS_I2)(%rsp)
+    mov     (L + 64)(%rsp), %rax
+    imul    $Histogram__mem, %rax, %rdi
+    add     %rbp, %rdi
+    movzwl  MetricEntry_bounds(%r14), %eax
+    shl     $4, %rax
+    lea     metrics_bounds(%rip), %rsi
+    add     %rax, %rsi
+    lea     (L + 32)(%rsp), %rdx
+    mov     (L + 24)(%rsp), %rcx
     call    mt_histogram
-    jmp     80f
-40: mov     %eax, (L + 64)(%rsp)            # gossipsub: each topic
-    mov     MetricEntry_offset(%r14), %eax
-    sub     %rax, %rbp                      # the MetricsGossip again
-    PART    %rcx, %rsi, %rbp, MetricsGossip_topics
-    mov     %rcx, (L + 48)(%rsp)
-    mov     %rsi, (L + 56)(%rsp)
-41: cmpq    $0, (L + 56)(%rsp)
+    incq    (L + 64)(%rsp)
+    jmp     44b
+50: PART    %rcx, %rsi, %rbp, MetricsGossip_topics  # gossipsub: each topic
+    mov     %rcx, (L + 96)(%rsp)
+    mov     %rsi, (L + 104)(%rsp)
+51: cmpq    $0, (L + 104)(%rsp)
     je      80f
-    mov     (L + 48)(%rsp), %rbp
-    mov     (L + 64)(%rsp), %eax
+    mov     (L + 96)(%rsp), %rbp
+    mov     (L + 88)(%rsp), %rax
     cmp     $METRIC_KIND_GOSSIP_MAIN, %eax
-    jne     42f
+    jne     52f
     cmpq    $0, GossipTopic_subnet(%rbp)    # main topics only
-    jne     49f
+    jne     59f
     mov     %rbp, %rdi
     call    mt_topic
-    MT_TEXT mx_topic_end
-    mov     GossipTopic_mesh_peers(%rbp), %rdi
-    call    mt_dec
-    MT_TEXT mx_lf
-    jmp     49f
-42: cmp     $METRIC_KIND_GOSSIP_SENT, %eax
-    jne     43f
+    mov     $1, %edi
+    mov     GossipTopic_mesh_peers(%rbp), %rsi
+    call    mt_value
+    jmp     59f
+52: cmp     $METRIC_KIND_GOSSIP_SENT, %eax
+    jne     53f
     mov     %rbp, %rdi
     call    mt_topic
-    MT_TEXT mx_partial_f
-    mov     GossipTopic_sent_bytes(%rbp), %rdi
-    call    mt_dec
-    MT_TEXT mx_lf
+    MT_PAIR mx_partial, mx_false
+    mov     $1, %edi
+    mov     GossipTopic_sent_bytes(%rbp), %rsi
+    call    mt_value
     mov     %rbp, %rdi
     call    mt_topic
-    MT_TEXT mx_partial_t
-    mov     GossipTopic_sent_partial_bytes(%rbp), %rdi
-    call    mt_dec
-    MT_TEXT mx_lf
-    jmp     49f
-43: mov     %rbp, %rdi                      # mesh peers by partial support
+    MT_PAIR mx_partial, mx_true
+    mov     $1, %edi
+    mov     GossipTopic_sent_partial_bytes(%rbp), %rsi
+    call    mt_value
+    jmp     59f
+53: mov     %rbp, %rdi                      # mesh peers by partial support
     call    mt_topic
-    MT_TEXT mx_supports_f
-    mov     GossipTopic_mesh_peers(%rbp), %rdi
-    sub     GossipTopic_mesh_partial_peers(%rbp), %rdi
-    call    mt_dec
-    MT_TEXT mx_lf
+    MT_PAIR mx_supports, mx_false
+    mov     $1, %edi
+    mov     GossipTopic_mesh_peers(%rbp), %rsi
+    sub     GossipTopic_mesh_partial_peers(%rbp), %rsi
+    call    mt_value
     mov     %rbp, %rdi
     call    mt_topic
-    MT_TEXT mx_supports_t
-    mov     GossipTopic_mesh_partial_peers(%rbp), %rdi
-    call    mt_dec
-    MT_TEXT mx_lf
-49: addq    $GossipTopic__mem, (L + 48)(%rsp)
-    decq    (L + 56)(%rsp)
-    jmp     41b
+    MT_PAIR mx_supports, mx_true
+    mov     $1, %edi
+    mov     GossipTopic_mesh_partial_peers(%rbp), %rsi
+    call    mt_value
+59: addq    $GossipTopic__mem, (L + 96)(%rsp)
+    decq    (L + 104)(%rsp)
+    jmp     51b
 80: add     $MetricEntry__mem, %r14
-    jmp     1b
+    jmp     10b
 90: test    %r15, %r15                      # the text's length, or no room
     jnz     91f
-    mov     (L + 40)(%rsp), %rax
+    mov     (L + 16)(%rsp), %rax
     movq    $24, 8(%rax)
     lea     24(%rax), %rcx
     sub     %rcx, %r12
     mov     %r12, 16(%rax)
     xor     %eax, %eax
-    LEAVE 80
+    LEAVE 112
 91: mov     $LANTERN_BUFFER_TOO_SMALL, %eax
-    LEAVE 80
+    LEAVE 112
 END_FUNCTION lantern_metrics_text
