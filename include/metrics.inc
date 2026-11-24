@@ -20,7 +20,9 @@
 .set MetricsState_pending_deposits, 160
 .set MetricsState_pending_partial_withdrawals, 168
 .set MetricsState_pending_consolidations, 176
-.set MetricsState__mem, 184
+.set MetricsState_state_root_present, 184  /* 1 when the head block's bytes gave state_root */
+.set MetricsState_state_root, 192        /* the head state's root as a number */
+.set MetricsState__mem, 200
 
 .set Histogram_count, 0                 /* Histogram: the values */
 .set Histogram_sum_us, 8                /* their sum in microseconds */
@@ -52,8 +54,8 @@
 .set MetricsNode_local_validators, 32
 .set MetricsNode_orphaned_blocks, 40
 .set MetricsNode_sync_state, 48
-.set MetricsNode_head_state_root_present, 56
-.set MetricsNode_head_state_root, 64
+.set MetricsNode_head_block_id, 56       /* BufferId of the head's SignedBeaconBlock bytes, or 0 */
+.set MetricsNode_head_state_id, 64       /* BufferId of the head's post-state, or 0 */
 .set MetricsNode_counters, 72           /* a copy of the node's NodeMetrics */
 .set MetricsNode__mem, 72 + NodeMetrics__mem
 
@@ -112,6 +114,6 @@
 .set METRIC_COND_STATE, 1               /* MetricsState.present */
 .set METRIC_COND_ELECTRA, 2             /* and MetricsState.electra */
 .set METRIC_COND_FULU, 3                /* MetricsNode.fulu */
-.set METRIC_COND_STATE_ROOT, 4          /* MetricsNode.head_state_root_present */
+.set METRIC_COND_STATE_ROOT, 4          /* MetricsState.present and state_root_present */
 .set METRIC_COND_MAX_FDS, 5             /* MetricsProcess.max_fds above 0 */
 .set METRIC_COUNT, 46                   /* the beacon category's metrics */

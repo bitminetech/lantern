@@ -551,7 +551,7 @@ metrics_table:
     .short METRIC_KIND_U64, METRIC_COND_NONE
     .long mt_n36 - metrics_texts, mt_n36_len, mt_h36 - metrics_texts, mt_h36_len, METRIC_TYPE_GAUGE, METRIC_SRC_NODE, MetricsNode_counters + NodeMetrics_validation_failures
     .short METRIC_KIND_U64, METRIC_COND_NONE
-    .long mt_n37 - metrics_texts, mt_n37_len, mt_h37 - metrics_texts, mt_h37_len, METRIC_TYPE_GAUGE, METRIC_SRC_NODE, MetricsNode_head_state_root
+    .long mt_n37 - metrics_texts, mt_n37_len, mt_h37 - metrics_texts, mt_h37_len, METRIC_TYPE_GAUGE, METRIC_SRC_STATE, MetricsState_state_root
     .short METRIC_KIND_ROOT, METRIC_COND_STATE_ROOT
     .long mt_n38 - metrics_texts, mt_n38_len, mt_h38 - metrics_texts, mt_h38_len, METRIC_TYPE_GAUGE, METRIC_SRC_NODE, MetricsNode_counters + NodeMetrics_attestations_received
     .short METRIC_KIND_U64, METRIC_COND_NONE

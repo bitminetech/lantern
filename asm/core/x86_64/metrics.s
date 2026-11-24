@@ -230,7 +230,10 @@ FUNCTION lantern_metrics_text
     jmp     10f
 4:  cmp     $METRIC_COND_STATE_ROOT, %eax
     jne     5f
-    cmpq    $0, MetricsNode_head_state_root_present(%rcx)
+    mov     L(%rsp), %rcx                   # MetricsState
+    cmpq    $0, MetricsState_present(%rcx)
+    je      80f
+    cmpq    $0, MetricsState_state_root_present(%rcx)
     je      80f
     jmp     10f
 5:  mov     (L + 24)(%rsp), %rcx            # MetricsProcess: METRIC_COND_MAX_FDS

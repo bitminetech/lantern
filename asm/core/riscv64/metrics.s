@@ -238,7 +238,10 @@ FUNCTION lantern_metrics_text
     j       10f
 4:  li      t2, METRIC_COND_STATE_ROOT
     bne     t0, t2, 5f
-    ld      t3, MetricsNode_head_state_root_present(t1)
+    ld      t1, (L + 0)(sp)                 # MetricsState
+    ld      t3, MetricsState_present(t1)
+    beqz    t3, 80f
+    ld      t3, MetricsState_state_root_present(t1)
     beqz    t3, 80f
     j       10f
 5:  ld      t1, (L + 24)(sp)                # MetricsProcess: METRIC_COND_MAX_FDS

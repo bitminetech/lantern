@@ -51,7 +51,7 @@ BEACON = [
     ("beacon_attestations_published_total", "node", "attestations_published", "u64", None),
     ("beacon_processor_gossip_block_imported_total", "node", "gossip_blocks_imported", "u64", None),
     ("libp2p_pubsub_validation_failure_total", "node", "validation_failures", "u64", None),
-    ("beacon_head_state_root", "node", "head_state_root", "root", "state_root"),
+    ("beacon_head_state_root", "state", "state_root", "root", "state_root"),
     ("beacon_attestations_received_total", "node", "attestations_received", "u64", None),
     ("beacon_http_api_requests_total", "node", "api_requests", "u64", None),
     ("beacon_http_api_successes_total", "node", "api_successes", "u64", None),
@@ -73,7 +73,7 @@ BUCKETS = 12
 STATE_FIELDS = ["present", "slot", "finalized_epoch", "current_justified_epoch", "previous_justified_epoch",
                 "active_validators", "deposit_count", "finalized_root", "previous_justified_root"]
 NODE_FIELDS = ["peers", "fulu", "custody_groups", "pending_exits", "local_validators", "orphaned_blocks", "sync_state",
-               "head_state_root_present", "head_state_root"]
+               "head_block_id", "head_state_id"]
 COUNTERS = ["reorgs", "column_requests", "column_successes", "reconstructed_columns", "aggregates_received",
             "attestations_received", "attester_slashings_received", "blocks_proposed", "attestations_published",
             "gossip_blocks_imported", "validation_failures", "api_requests", "api_successes"]
@@ -117,12 +117,13 @@ def state_bytes(s):
     out += struct.pack("<4Q", *s["current_validators"]) + struct.pack("<4Q", *s["previous_validators"])
     out += struct.pack("<6Q", s["current_live"], s["previous_live"], s["electra"], s["pending_deposits"],
                        s["pending_partial_withdrawals"], s["pending_consolidations"])
-    assert len(out) == 184
+    out += struct.pack("<Qq", s["state_root_present"], s["state_root"])
+    assert len(out) == 200
     return out
 
 
 def node_bytes(n):
-    out = struct.pack("<8Q", *(n[k] for k in NODE_FIELDS[:8])) + struct.pack("<q", n["head_state_root"])
+    out = struct.pack("<9Q", *(n[k] for k in NODE_FIELDS))
     out += b"".join(struct.pack("<Q", n[k]) for k in COUNTERS)
     out += hist_bytes(n["attestation_delay"]) + hist_bytes(n["block_delay"])
     assert len(out) == 400
@@ -161,7 +162,7 @@ def text(table, categories, s, n, a, p, topics):
             continue
         if cond == "fulu" and not n["fulu"]:
             continue
-        if cond == "state_root" and not n["head_state_root_present"]:
+        if cond == "state_root" and not (s["present"] and s["state_root_present"]):
             continue
         if cond == "max_fds" and not p["max_fds"]:
             continue
@@ -210,15 +211,16 @@ def values(rng, present, electra, fulu, state_root, max_fds, ntopics):
          "finalized_root": rng.choice([root(), -(1 << 63), -1, 0, (1 << 63) - 1]), "previous_justified_root": root(),
          "current_validators": [big() for _ in range(4)], "previous_validators": [big() for _ in range(4)],
          "current_live": big(), "previous_live": big(), "electra": electra, "pending_deposits": big(),
-         "pending_partial_withdrawals": big(), "pending_consolidations": big()}
+         "pending_partial_withdrawals": big(), "pending_consolidations": big(), "state_root_present": state_root,
+         "state_root": root()}
     delay_us = lambda k: [rng.choice([0, 1, 499999, 500000, 500001, 3000000, 24000000, 24000001, rng.randrange(30000000)])
                           for _ in range(k)]
     run_us = lambda k: [rng.choice([0, 5000, 5001, 10000000, 10000001, rng.randrange(2000), rng.randrange(20000000)])
                         for _ in range(k)]
     n = {"peers": rng.randrange(100), "fulu": fulu, "custody_groups": rng.randrange(129),
          "pending_exits": rng.randrange(5000), "local_validators": rng.randrange(5000),
-         "orphaned_blocks": rng.randrange(40), "sync_state": rng.randrange(3), "head_state_root_present": state_root,
-         "head_state_root": root(), "attestation_delay": histogram(delay_us(rng.randrange(20)), BOUNDS["delay"]),
+         "orphaned_blocks": rng.randrange(40), "sync_state": rng.randrange(3), "head_block_id": big(),
+         "head_state_id": big(), "attestation_delay": histogram(delay_us(rng.randrange(20)), BOUNDS["delay"]),
          "block_delay": histogram(delay_us(rng.randrange(20)), BOUNDS["delay"])}
     for k in COUNTERS:
         n[k] = big()

@@ -231,7 +231,10 @@ FUNCTION lantern_metrics_text
     b       10f
 4:  cmp     w9, #METRIC_COND_STATE_ROOT
     b.ne    5f
-    ldr     x11, [x10, #MetricsNode_head_state_root_present]
+    ldr     x10, [sp, #L]                   /* MetricsState */
+    ldr     x11, [x10, #MetricsState_present]
+    cbz     x11, 80f
+    ldr     x11, [x10, #MetricsState_state_root_present]
     cbz     x11, 80f
     b       10f
 5:  ldr     x10, [sp, #(L + 24)]            /* MetricsProcess: METRIC_COND_MAX_FDS */

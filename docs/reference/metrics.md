@@ -77,7 +77,7 @@
 | `beacon_attestations_published_total` | gauge | `NodeMetrics.attestations_published` |
 | `beacon_processor_gossip_block_imported_total` | gauge | `NodeMetrics.gossip_blocks_imported` |
 | `libp2p_pubsub_validation_failure_total` | gauge | `NodeMetrics.validation_failures` |
-| `beacon_head_state_root` | gauge | `MetricsNode.head_state_root` |
+| `beacon_head_state_root` | gauge | `MetricsState.state_root` |
 | `beacon_attestations_received_total` | gauge | `NodeMetrics.attestations_received` |
 | `beacon_http_api_requests_total` | gauge | `NodeMetrics.api_requests` |
 | `beacon_http_api_successes_total` | gauge | `NodeMetrics.api_successes` |
@@ -130,7 +130,7 @@ lantern_metrics_text(categories, state, node, app, process, gossip, out) -> stat
 - `gossipsub_mesh_peers_per_main_topic`: `<name>{topic="<topic>"} <mesh_peers>` for each topic with no subnet, in the order of `gossip`.
 - `gossipsub_topic_msg_sent_bytes`: `<name>{topic="<topic>",partial="false"} <sent_bytes>` and `<name>{topic="<topic>",partial="true"} <sent_partial_bytes>` for each topic.
 - `gossipsub_mesh_peer_counts`: `<name>{topic="<topic>",supports_partial="false"} <mesh_peers - mesh_partial_peers>` and `<name>{topic="<topic>",supports_partial="true"} <mesh_partial_peers>` for each topic.
-- A metric goes in only with its source: the `MetricsState` metrics with `present` 1; the three pending metrics with `electra` 1 too; `beacon_custody_groups` with `fulu` 1; `beacon_head_state_root` with `head_state_root_present` 1; `process_max_fds` with `max_fds` above 0; a gossipsub metric with a topic for it.
+- A metric goes in only with its source: the `MetricsState` metrics with `present` 1; the three pending metrics with `electra` 1 too; `beacon_custody_groups` with `fulu` 1; `beacon_head_state_root` with `present` and `state_root_present` 1; `process_max_fds` with `max_fds` above 0; a gossipsub metric with a topic for it.
 
 ### Function never
 
@@ -145,12 +145,12 @@ lantern_metrics_text(categories, state, node, app, process, gossip, out) -> stat
 
 ## Function `lantern_metrics_state`
 
-The values of the metrics from a head's post-state, of one fork.
+The values of the metrics from a head's post-state and its block, of one fork.
 
 ### Signature
 
 ```
-lantern_<fork>_metrics_state(state, out) -> status
+lantern_<fork>_metrics_state(state, block, out) -> status
 ```
 
 ### Arguments
@@ -158,6 +158,7 @@ lantern_<fork>_metrics_state(state, out) -> status
 | Name | Role | Type |
 |---|---|---|
 | `state` | input | `BeaconState` of the fork, well formed |
+| `block` | input | `ByteList`: the SSZ bytes of the `SignedBeaconBlock` whose post-state `state` is, or no bytes (an anchor) |
 | `out` | output | [`MetricsState`](#type-metricsstate) |
 
 ### Returns
@@ -172,6 +173,7 @@ lantern_<fork>_metrics_state(state, out) -> status
 - `current_validators` and `previous_validators`: at get_current_epoch(state) and get_previous_epoch(state), each validator by status: `pending` with `activation_epoch` above the epoch; `active` with is_active_validator; `exited` with `exit_epoch` at most the epoch and `withdrawable_epoch` above it; `withdrawable` with `withdrawable_epoch` at most the epoch.
 - `current_live` and `previous_live`: the validators active at the epoch with a flag in `current_epoch_participation` or `previous_epoch_participation`; phase0: the attesting indices of the attestations of `current_epoch_attestations` or `previous_epoch_attestations` (get_attesting_indices), each validator once.
 - From electra: `electra` 1, and the entries of `pending_deposits`, `pending_partial_withdrawals` and `pending_consolidations`.
+- `state_root_present` 1 and `state_root` the `state_root` of the block's message as a number (bytes 148 to 180 of a `SignedBeaconBlock`), when `block` holds at least 180 bytes; else 0 and 0.
 
 ### Forks
 
@@ -182,7 +184,7 @@ lantern_<fork>_metrics_state(state, out) -> status
 - Role: L1.
 - Symbol: `lantern_<fork>_metrics_state`.
 - Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
-- Argument order: `state`, `out`.
+- Argument order: `state`, `block`, `out`.
 
 ## Function `lantern_metrics_node`
 
@@ -191,7 +193,7 @@ The values of the metrics from the node and its store.
 ### Signature
 
 ```
-lantern_metrics_node(node, store, head_block, out) -> status
+lantern_metrics_node(node, store, out) -> status
 ```
 
 ### Arguments
@@ -200,7 +202,6 @@ lantern_metrics_node(node, store, head_block, out) -> status
 |---|---|---|
 | `node` | input | `Node` ([node.md](node.md#type-node)), well formed |
 | `store` | input | `Store`, the node's |
-| `head_block` | input | `ByteList`: the SSZ bytes of the head's `SignedBeaconBlock`, or none |
 | `out` | output | [`MetricsNode`](#type-metricsnode) |
 
 ### Returns
@@ -215,7 +216,7 @@ lantern_metrics_node(node, store, head_block, out) -> status
 - `local_validators`: the `NodeProposer` entries in use: the validators whose validator client gave this node prepareBeaconProposer (Prysm's tracked validators).
 - `orphaned_blocks`: the imported blocks of the node with a slot in the store's previous epoch that are not ancestors of the head: by `parent_root` from the head, no block of the chain has their root.
 - `sync_state`: 1 when the head's slot is the store's slot or one below; else 2 with `NODE_FLAG_SYNCING`; else 0.
-- `head_state_root_present` 1 and `head_state_root` the `state_root` of the block's message as a number (bytes 148 to 180 of a `SignedBeaconBlock`), when `head_block` holds at least 180 bytes; else 0.
+- `head_block_id` and `head_state_id`: the `data_id` and `state_id` of the `NodeBlock` of the node's `head_root`; 0 and 0 with none. The caller gives their buffers to lantern_<fork>_metrics_state.
 - `counters`: a copy of the node's `NodeMetrics`.
 
 ### ABI
@@ -223,7 +224,7 @@ lantern_metrics_node(node, store, head_block, out) -> status
 - Role: L1.
 - Symbol: `lantern_metrics_node` (`_lantern_metrics_node` on macOS).
 - Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
-- Argument order: `node`, `store`, `head_block`, `out`.
+- Argument order: `node`, `store`, `out`.
 
 ## Type `MetricsState`
 
@@ -250,7 +251,9 @@ The values of the metrics from the head's post-state.
 | 160 | `pending_deposits` | u64 | |
 | 168 | `pending_partial_withdrawals` | u64 | |
 | 176 | `pending_consolidations` | u64 | |
-| 184 | | | Size |
+| 184 | `state_root_present` | u64 | 1 when the block gave `state_root`, else 0 |
+| 192 | `state_root` | i64 | The state's root as a number |
+| 200 | | | Size |
 
 ## Type `MetricsNode`
 
@@ -267,8 +270,8 @@ The values of the metrics from the node and the store.
 | 32 | `local_validators` | u64 | |
 | 40 | `orphaned_blocks` | u64 | |
 | 48 | `sync_state` | u64 | 0, 1 or 2 |
-| 56 | `head_state_root_present` | u64 | 1 or 0 |
-| 64 | `head_state_root` | i64 | The root as a number |
+| 56 | `head_block_id` | u64 | `BufferId` of the head's `SignedBeaconBlock` bytes, or 0 |
+| 64 | `head_state_id` | u64 | `BufferId` of the head's post-state, or 0 |
 | 72 | `counters` | [`NodeMetrics`](#type-nodemetrics) | |
 | 400 | | | Size |
 
@@ -367,7 +370,7 @@ gossipsub's values for each topic: a value with one part, of `GossipTopic` entri
 
 ## Test vectors
 
-- Lantern's cases `<preset>-<fork>-metrics-text.bin`, made by tests/generator/metrics.py: values of each type and the text an independent Python formatter of the rules above gives; with no category, and with `present`, `electra`, `fulu`, `head_state_root_present` and `max_fds` 0 and 1.
+- Lantern's cases `<preset>-<fork>-metrics-text.bin`, made by tests/generator/metrics.py: values of each type and the text an independent Python formatter of the rules above gives; with no category, and with `present`, `electra`, `fulu`, `state_root_present` and `max_fds` 0 and 1.
 - Lantern's cases `<preset>-<fork>-metrics-state.bin`, made by tests/generator/metrics.py with the pinned spec: states of the spec's test helpers, at genesis and after random validator changes and blocks, and the values the spec's functions give.
 - `lantern_metrics_node`: node-mode fork_choice cases (node.md, Test vectors), after their steps: the node's peers, pool and blocks against the runner's counts.
 
