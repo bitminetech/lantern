@@ -7,6 +7,8 @@ cases() yields (name, parts): "args", a list of byte strings, and "options", a m
 fields (text fields as byte strings, numbers as integers), or "fault", an index.
 """
 
+import metrics
+
 
 def ip4(a, b, c, d):
     """An IPv4 address: its 4 bytes in network order in the low bytes of a little endian u64."""
@@ -63,6 +65,15 @@ GOOD = [
     ("metrics_name_twice", ["--metrics=beacon,beacon", "--network-dir", "n"], options(network_dir="n", metrics=1)),
     ("metrics_none_then_beacon", ["--metrics", "", "--network-dir", "n", "--metrics", "beacon"], options(network_dir="n", metrics=1)),
     ("metrics_beacon_then_none", ["--metrics=beacon", "--network-dir", "n", "--metrics="], options(network_dir="n", metrics=0)),
+    ("metrics_network", ["--network-dir", "n", "--metrics", "network"],
+     options(network_dir="n", metrics=metrics.category_mask("network"))),
+    ("metrics_subs", ["--metrics=network.peer,processing.availability,node.storage", "--network-dir", "n"],
+     options(network_dir="n", metrics=sum(metrics.category_mask(x) for x in
+                                          ["network.peer", "processing.availability", "node.storage"]))),
+    ("metrics_every_category", ["--network-dir", "n", "--metrics", "beacon,network,processing,node"],
+     options(network_dir="n", metrics=sum(metrics.category_mask(x) for x in ["beacon", "network", "processing", "node"]))),
+    ("metrics_category_and_its_sub", ["--network-dir", "n", "--metrics", "processing.block,processing"],
+     options(network_dir="n", metrics=metrics.category_mask("processing"))),
     ("metrics_address_and_port", ["--network-dir", "n", "--metrics-address", "0.0.0.0", "--metrics-port=9100"],
      options(network_dir="n", metrics_address=0, metrics_port=9100)),
     ("metrics_limits", ["--metrics-port", "65535", "--metrics-address=10.20.30.40", "--network-dir", "n"],
@@ -109,6 +120,12 @@ FAULTS = [
     ("metrics_leading_comma", ["--network-dir", "/n", "--metrics=,beacon"], 2),
     ("metrics_comma_only", ["--metrics", ",", "--network-dir", "/n"], 1),
     ("metrics_no_value", ["--network-dir", "/n", "--metrics"], 2),
+    ("metrics_sub_unknown", ["--network-dir", "/n", "--metrics", "network.sync"], 3),
+    ("metrics_sub_of_beacon", ["--network-dir", "/n", "--metrics=beacon.head"], 2),
+    ("metrics_sub_empty", ["--network-dir", "/n", "--metrics", "network."], 3),
+    ("metrics_sub_no_category", ["--metrics", ".peer", "--network-dir", "/n"], 1),
+    ("metrics_sub_other_category", ["--network-dir", "/n", "--metrics", "beacon,node.block"], 3),
+    ("metrics_sub_two_dots", ["--network-dir", "/n", "--metrics", "network.peer.x"], 3),
     ("metrics_port_zero", ["--network-dir", "/n", "--metrics-port", "0"], 3),
     ("metrics_port_too_big", ["--metrics-port=65536", "--network-dir", "/n"], 0),
     ("metrics_address_three_parts", ["--metrics-address", "1.2.3", "--network-dir", "/n"], 1),

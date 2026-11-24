@@ -77,12 +77,10 @@ app_options:
     .ascii "metrics-port"
     .space 24 - 12
 app_options_end:
-app_categories_table:                   /* each metrics category: its bit, the name's length, the name in 16 bytes */
-    .quad METRICS_BEACON, 6
-    .ascii "beacon"
-    .space 16 - 6
+app_categories_table:                   /* each --metrics name (include/metrics.inc): its bits, length, name in 24 bytes */
+    METRIC_CATEGORY_NAMES
 app_categories_end:
-.set APP_CATEGORY_BYTES, 32
+.set APP_CATEGORY_BYTES, 40
 app_levels:                             /* the name of each log level in 8 bytes, then their lengths */
     .ascii "error"
     .space 3

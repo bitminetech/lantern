@@ -57,7 +57,7 @@ lantern_app_options(args, options, fault) -> status
 ### Returns
 
 - `LANTERN_OK`: `options` holds the options.
-- `LANTERN_INVALID_OPTION`: an argument is not an option below, an option has no value or an empty one (`--supernode` or `--archive`: a value; `--metrics` may have an empty value), a number is not decimal digits of a value in its range, an address is not 4 decimal numbers of 0 to 255 with dots between them, a `--metrics` value is not category names with commas between them, `--network-dir` is missing, one of `--checkpoint-state` and `--checkpoint-block` is given without the other, or `--archive` is given without `--data-dir`; a missing option's fault is the count of arguments.
+- `LANTERN_INVALID_OPTION`: an argument is not an option below, an option has no value or an empty one (`--supernode` or `--archive`: a value; `--metrics` may have an empty value), a number is not decimal digits of a value in its range, an address is not 4 decimal numbers of 0 to 255 with dots between them, a `--metrics` value is not names of categories or sub categories with commas between them, `--network-dir` is missing, one of `--checkpoint-state` and `--checkpoint-block` is given without the other, or `--archive` is given without `--data-dir`; a missing option's fault is the count of arguments.
 
 ### Function does
 
@@ -82,13 +82,13 @@ lantern_app_options(args, options, fault) -> status
 | `--supernode` | `supernode` | none: 1, the node custodies every custody group (node.md, `NODE_FLAG_SUPERNODE`) | 0: the groups of max(`SAMPLES_PER_SLOT`, `CUSTODY_REQUIREMENT`) |
 | `--builder` | `builder` | `host:port` of a builder (mev-boost), with or without `http://`: the Builder API of builder-specs v0.6.1 | none: no builder |
 | `--archive` | `archive` | none: 1, the node keeps a finalized state in its `Db` each `DB_ARCHIVE_DIFF` (256) slots, so any old state is a short replay (node.md, the archive) | 0: no state records |
-| `--metrics` | `metrics` | the metrics categories the metrics server serves, with commas between them: `beacon` ([metrics.md](metrics.md)); an empty value: none, and no metrics server | `beacon` |
+| `--metrics` | `metrics` | the metrics the metrics server serves, with commas between them: each a category, with all its sub categories, or `<category>.<sub>` ([metrics.md](metrics.md#categories)); an empty value: none, and no metrics server | `beacon` |
 | `--metrics-address` | `metrics_address` | an IPv4 address in dotted decimal: the metrics server listens on it | 127.0.0.1 |
 | `--metrics-port` | `metrics_port` | 1 to 65535: the metrics server | 8008 |
 
 - Keeps the last value of an option given twice.
 - Drops `http://` at the start of `--execution-endpoint` and of `--builder`.
-- Takes each `--metrics` category name only in lowercase; a name given twice is one category.
+- Takes each `--metrics` name only in lowercase; a name given twice, or a sub category of a category also given, adds no more bits.
 - `options` holds the defaults for the options not given; a text field is an `Arg` of the bytes of `args`.
 
 ### ABI
@@ -226,7 +226,7 @@ The options of a run. A text field is an [`Arg`](#type-arg) of the bytes of the 
 | 168 | `supernode` | u64 | 1 with `--supernode`, else 0 |
 | 176 | `builder` | `Arg` | `host:port` of the builder, without `http://` |
 | 192 | `archive` | u64 | 1 with `--archive`, else 0 |
-| 200 | `metrics` | u64 | The bits of the metrics categories: `METRICS_BEACON` (1) for `beacon` |
+| 200 | `metrics` | u64 | The bits of the metrics sub categories ([metrics.md](metrics.md#categories)) |
 | 208 | `metrics_address` | u64 | The metrics server's IPv4 address, its 4 bytes in network order in the low bytes |
 | 216 | `metrics_port` | u64 | The metrics server's port |
 | 224 | | | Size |

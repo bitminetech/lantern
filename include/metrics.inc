@@ -31,6 +31,90 @@
 .set METRICS_PROCESSING, 524032
 .set METRICS_NODE, 2130706432
 .set METRICS_ALL, 2131230527
+/* The names of the --metrics flag (app.md): each one's bits, its length, the name in 24 bytes */
+.macro METRIC_CATEGORY_NAMES
+    .quad 1, 6
+    .ascii "beacon"
+    .space 24 - 6
+    .quad 62, 7
+    .ascii "network"
+    .space 24 - 7
+    .quad 2, 12
+    .ascii "network.peer"
+    .space 24 - 12
+    .quad 4, 17
+    .ascii "network.discovery"
+    .space 24 - 17
+    .quad 8, 17
+    .ascii "network.transport"
+    .space 24 - 17
+    .quad 16, 14
+    .ascii "network.gossip"
+    .space 24 - 14
+    .quad 32, 15
+    .ascii "network.reqresp"
+    .space 24 - 15
+    .quad 524032, 10
+    .ascii "processing"
+    .space 24 - 10
+    .quad 256, 16
+    .ascii "processing.block"
+    .space 24 - 16
+    .quad 512, 16
+    .ascii "processing.epoch"
+    .space 24 - 16
+    .quad 1024, 16
+    .ascii "processing.state"
+    .space 24 - 16
+    .quad 2048, 21
+    .ascii "processing.forkchoice"
+    .space 24 - 21
+    .quad 4096, 23
+    .ascii "processing.availability"
+    .space 24 - 23
+    .quad 8192, 17
+    .ascii "processing.gossip"
+    .space 24 - 17
+    .quad 16384, 17
+    .ascii "processing.engine"
+    .space 24 - 17
+    .quad 32768, 18
+    .ascii "processing.builder"
+    .space 24 - 18
+    .quad 65536, 22
+    .ascii "processing.lightclient"
+    .space 24 - 22
+    .quad 131072, 18
+    .ascii "processing.history"
+    .space 24 - 18
+    .quad 262144, 20
+    .ascii "processing.validator"
+    .space 24 - 20
+    .quad 2130706432, 4
+    .ascii "node"
+    .space 24 - 4
+    .quad 16777216, 13
+    .ascii "node.resource"
+    .space 24 - 13
+    .quad 33554432, 9
+    .ascii "node.sync"
+    .space 24 - 9
+    .quad 67108864, 11
+    .ascii "node.health"
+    .space 24 - 11
+    .quad 134217728, 9
+    .ascii "node.pool"
+    .space 24 - 9
+    .quad 268435456, 8
+    .ascii "node.log"
+    .space 24 - 8
+    .quad 536870912, 8
+    .ascii "node.api"
+    .space 24 - 8
+    .quad 1073741824, 12
+    .ascii "node.storage"
+    .space 24 - 12
+.endm
 .set HISTOGRAM_BUCKETS, 12
 .set Histogram_count, 0
 .set Histogram_sum, 8

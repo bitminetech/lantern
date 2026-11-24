@@ -44,6 +44,14 @@ def category_bits():
 BITS = category_bits()
 
 
+def flag_names():
+    """The names the --metrics flag takes, in order: each category, then each of its sub categories."""
+    for cat, subs in CATEGORIES:
+        yield cat
+        for sub in subs:
+            yield f"{cat}.{sub}"
+
+
 def category_mask(name):
     """The bits of a flag item: a category (all its sub categories) or category.sub."""
     if name in BITS:
@@ -454,6 +462,12 @@ def write_metrics_inc(path):
     for cat, subs in CATEGORIES:
         out.append(f".set METRICS_{cat.upper()}, {category_mask(cat)}")
     out.append(f".set METRICS_ALL, {sum(1 << b for b in BITS.values())}")
+    out.append("/* The names of the --metrics flag (app.md): each one's bits, its length, the name in 24 bytes */")
+    out.append(".macro METRIC_CATEGORY_NAMES")
+    for name in flag_names():
+        assert len(name) <= 24
+        out += [f"    .quad {category_mask(name)}, {len(name)}", f'    .ascii "{name}"', f"    .space 24 - {len(name)}"]
+    out.append(".endm")
     out.append(f".set HISTOGRAM_BUCKETS, {BUCKETS}")
     out += [".set Histogram_count, 0", ".set Histogram_sum, 8", ".set Histogram_buckets, 16",
             f".set Histogram__mem, {TYPE_SIZE['hist']}", f".set PROFILE_BOUNDS, {PROFILE_BOUNDS}"]
