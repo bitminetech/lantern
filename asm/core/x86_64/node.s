@@ -4218,19 +4218,40 @@ LOCAL_FUNCTION node_peer_room
     ret
 END_FUNCTION node_peer_room
 
+/*
+ * rax = 1 when the peer entry rdi serves the slot rsi (node.md, the peer room): NODE_PEER_STATUS, its
+ * head_slot + SLOTS_PER_EPOCH at least the slot, its earliest_slot at most it; else 0. Uses rcx.
+ */
+LOCAL_FUNCTION node_peer_serves
+    UNWIND_END_PROLOGUE
+    xor     %eax, %eax
+    testq   $NODE_PEER_STATUS, NodePeer_flags(%rdi)
+    jz      9f
+    cmp     NodePeer_earliest_slot(%rdi), %rsi
+    jb      9f
+    mov     NodePeer_head_slot(%rdi), %rcx
+    add     $SLOTS_PER_EPOCH, %rcx
+    jc      8f
+    cmp     %rsi, %rcx
+    jb      9f
+8:  mov     $1, %eax
+9:  ret
+END_FUNCTION node_peer_serves
+
 .if NODE_COLUMN_PEERS - 2
 .error "node_short_columns counts to 2 with two masks"
 .endif
 /*
  * rax, rdx = the short columns (node.md, the peer room), below 64 and from 64: from fulu, the
- * columns of the node that fewer than NODE_COLUMN_PEERS peers with NODE_PEER_METADATA hold in
- * their custody; none before fulu. r12 a peer, r13 the peers left, S7 and S8 the columns of one
- * peer or more, S9 and S10 of two or more.
+ * columns of the node that fewer than NODE_COLUMN_PEERS peers with NODE_PEER_METADATA that serve
+ * the store's slot hold in their custody; none before fulu. r12 a peer, r13 the peers left, S7 and
+ * S8 the columns of one peer or more, S9 and S10 of two or more. Locals: L the store's slot.
  */
 LOCAL_FUNCTION node_short_columns
-    ENTER 0
+    ENTER 16
     mov     %rbp, %rdi
     call    node_store_slot
+    mov     %rax, L(%rsp)
     mov     %rax, %rdi
     lea     Node_config(%rbx), %rsi
     call    node_fork
@@ -4244,6 +4265,11 @@ LOCAL_FUNCTION node_short_columns
 1:  test    %r13, %r13
     jz      2f
     testq   $NODE_PEER_METADATA, NodePeer_flags(%r12)
+    jz      3f
+    mov     %r12, %rdi
+    mov     L(%rsp), %rsi
+    call    node_peer_serves
+    test    %rax, %rax
     jz      3f
     mov     NodePeer_custody(%r12), %rax    # two or more |= one or more & custody; one or more |= custody
     mov     %rax, %rcx
@@ -4264,10 +4290,10 @@ LOCAL_FUNCTION node_short_columns
     mov     S10(%rsp), %rdx
     not     %rdx
     and     (Node_columns + 8)(%rbx), %rdx
-    LEAVE 0
+    LEAVE 16
 8:  xor     %eax, %eax
     xor     %edx, %edx
-    LEAVE 0
+    LEAVE 16
 END_FUNCTION node_short_columns
 
 /* rax = 1 when the block entry rdi needs blobs or columns it does not hold (node.md), else 0. r13 the entry, S7 its blob count, S8 a window. */
@@ -8440,6 +8466,8 @@ LOCAL_FUNCTION node_peer_status
     call    lantern_copy
 1:  mov     S7(%rsp), %rdi
     orq     $NODE_PEER_STATUS, NodePeer_flags(%rdi)
+    mov     Node_time_ms(%rbx), %rax
+    mov     %rax, NodePeer_status_ms(%rdi)
     lea     L(%rsp), %rdi                   # its fork_digest: the node's of the store's epoch, or the one ahead or before around a fork
     call    node_status_bytes
     mov     S7(%rsp), %rdx
@@ -8617,6 +8645,8 @@ LOCAL_FUNCTION node_open
     sub     $NodeStream_list, %rax
     mov     %rax, NodeStream_list(%r12)
     movq    $24, (NodeStream_list + 8)(%r12)
+    mov     Node_time_ms(%rbx), %rax
+    mov     %rax, NodeStream_opened_ms(%r12)
     cmpq    $0, S10(%rsp)                   # no request bytes: an empty list
     je      1f
     movq    $CHUNK_REQUEST, (L + ChunkHeader_kind)(%rsp)    # the request chunk in the list
@@ -8730,8 +8760,9 @@ END_FUNCTION node_free_responses
 
 /*
  * The first peer from the index rdi of the peers part, in its order and around, with a Status of
- * the node's fork_digest whose head_slot is at least rsi, and NODE_PEER_METADATA when rdx is not
- * 0: rax = its index, or 2^64 - 1; rdx = its entry. Uses rcx, rdi, r8-r11.
+ * the node's fork_digest whose head_slot is at least rsi, with NODE_PEER_METADATA when bit 0 of rdx
+ * is set, and an earliest_slot at most rsi when bit 1 is: rax = its index, or 2^64 - 1; rdx = its
+ * entry. Uses rcx, rdi, r8-r11.
  */
 LOCAL_FUNCTION node_next_peer
     UNWIND_END_PROLOGUE
@@ -8756,7 +8787,7 @@ LOCAL_FUNCTION node_next_peer
     xor     %r10d, %r10d
 11: testq   $NODE_PEER_STATUS, NodePeer_flags(%rdx)
     jz      1b
-    test    %r11, %r11
+    test    $1, %r11
     jz      2f
     testq   $NODE_PEER_METADATA, NodePeer_flags(%rdx)
     jz      1b
@@ -8765,7 +8796,11 @@ LOCAL_FUNCTION node_next_peer
     jne     1b
     cmp     %rsi, NodePeer_head_slot(%rdx)
     jb      1b
-    ret
+    test    $2, %r11
+    jz      4f
+    cmp     NodePeer_earliest_slot(%rdx), %rsi
+    jb      1b
+4:  ret
 3:  mov     $-1, %rax
     ret
 END_FUNCTION node_next_peer
@@ -9069,7 +9104,7 @@ END_FUNCTION node_response
  * The sidecar requests of a range (node.md): a BlobSidecarsByRange v1 to the peer rdi of the slots of
  * rsi, count rdx, in the blob window whose fork is deneb or electra, then from fulu (rcx the fork of
  * the store's slot) the DataColumnSidecarsByRange v1 of the slots in the column window to the peers
- * with NODE_PEER_METADATA, from sidecar_peer and around. rax = 1 when a request has no room or the node cannot open it, else 0.
+ * with NODE_PEER_METADATA that serve its first slot, from sidecar_peer and around. rax = 1 when a request has no room or the node cannot open it, else 0.
  * Locals as node_sync's: L the range, L+24 a request's range, L+40 the fork, L+48 the columns asked,
  * L+64 count or send, L+72 the column requests, L+80 the peer, L+88 the request's bytes. r12 a peer,
  * r13 the peers left, S9 the scratch size.
@@ -9168,6 +9203,11 @@ LOCAL_FUNCTION node_sidecar_ask
     jz      76f
     testq   $NODE_PEER_METADATA, NodePeer_flags(%r12)
     jz      75f
+    mov     %r12, %rdi                      # it serves the range's first slot
+    mov     (L + 24)(%rsp), %rsi
+    call    node_peer_serves
+    test    %rax, %rax
+    jz      75f
     mov     (L + 16)(%rsp), %rdx            # the columns asked for that it custodies, not asked yet
     mov     (%rdx), %rax
     mov     8(%rdx), %rdx
@@ -9253,6 +9293,64 @@ LOCAL_FUNCTION node_sidecar_ask
 9:  mov     $1, %eax
     LEAVE 96
 END_FUNCTION node_sidecar_ask
+
+/*
+ * The Status refresh (node.md): the first peer with NODE_PEER_STATUS whose status_ms +
+ * NODE_STATUS_REFRESH_SLOTS slots is at most time_ms gets a Status request (v2 from fulu, v1
+ * before), when the streams part has room for it; its status_ms takes time_ms. r12 a peer, r13 the
+ * peers left. Locals: L the Status (96), L+96 the refresh's time.
+ */
+LOCAL_FUNCTION node_status_refresh
+    ENTER 112
+    mov     Node_messages(%rbx), %rax       # room for it
+    sub     Node_streams(%rbx), %rax
+    xor     %edx, %edx
+    divq    Node_stream_bytes(%rbx)
+    mov     (Node_streams + 8)(%rbx), %rcx
+    inc     %rcx
+    cmp     %rax, %rcx
+    ja      9f
+    mov     (Node_config + CONFIG_SLOT_DURATION_MS)(%rbx), %rax
+    mov     $NODE_STATUS_REFRESH_SLOTS, %ecx
+    mul     %rcx
+    jc      9f
+    mov     %rax, (L + 96)(%rsp)
+    PART    %r12, %r13, %rbx, Node_peers
+1:  test    %r13, %r13
+    jz      9f
+    testq   $NODE_PEER_STATUS, NodePeer_flags(%r12)
+    jz      2f
+    mov     NodePeer_status_ms(%r12), %rax
+    add     (L + 96)(%rsp), %rax
+    jc      2f
+    cmp     Node_time_ms(%rbx), %rax
+    jbe     3f
+2:  add     $NodePeer__mem, %r12
+    dec     %r13
+    jmp     1b
+3:  lea     L(%rsp), %rdi
+    call    node_status_bytes
+    mov     %rbp, %rdi
+    call    node_store_slot
+    mov     %rax, %rdi
+    lea     Node_config(%rbx), %rsi
+    call    node_fork
+    mov     $1, %esi
+    mov     $84, %r8d
+    cmp     $FORK_FULU, %rax
+    jb      4f
+    mov     $2, %esi
+    mov     $92, %r8d
+4:  mov     $REQRESP_STATUS, %edi
+    mov     NodePeer_handle(%r12), %rdx
+    lea     L(%rsp), %rcx
+    call    node_open
+    test    %rax, %rax
+    jz      9f
+    mov     Node_time_ms(%rbx), %rax
+    mov     %rax, NodePeer_status_ms(%r12)
+9:  LEAVE 112
+END_FUNCTION node_status_refresh
 
 /*
  * The sidecar retry (node.md): with no BlobSidecarsByRange or DataColumnSidecarsByRange of the node
@@ -9344,11 +9442,12 @@ LOCAL_FUNCTION node_sidecar_retry
     lea     Node_config(%rbx), %rsi
     call    node_fork
     mov     %rax, S9(%rsp)
-    mov     Node_sidecar_peer(%rbx), %rdi   # the blob request's peer
+    mov     Node_sidecar_peer(%rbx), %rdi   # the blob request's peer: it serves the first slot
     mov     S7(%rsp), %rsi
     xor     %edx, %edx
     cmp     $FORK_FULU, %rax
     setae   %dl
+    or      $2, %edx
     call    node_next_peer
     cmp     $-1, %rax
     je      9f
@@ -9446,14 +9545,16 @@ LOCAL_FUNCTION node_sync
     add     %rbx, %r12
     cmpq    $NODE_STREAM_OPENING, NodeStream_state(%r12)
     jb      33b
-    mov     NodeStream_response(%r12), %rax # its NodeResponse: no bytes for NODE_REQUEST_MS
+    mov     NodeStream_response(%r12), %rax # its NodeResponse: no bytes for NODE_REQUEST_MS; with none, from its open
     test    %rax, %rax
-    jz      33b
+    jz      36f
     dec     %rax
     imul    Node_response_bytes(%rbx), %rax
     add     Node_responses(%rbx), %rax
     mov     NodeResponse_used(%rbx,%rax), %rax
-    add     $NODE_REQUEST_MS, %rax
+    jmp     37f
+36: mov     NodeStream_opened_ms(%r12), %rax
+37: add     $NODE_REQUEST_MS, %rax
     cmp     %rax, Node_time_ms(%rbx)
     jb      33b
     cmpq    $NODE_STREAM_RESPONSE, NodeStream_state(%r12)
@@ -9516,8 +9617,9 @@ LOCAL_FUNCTION node_sync
     mov     Node_sync_peer(%rbx), %rdi      # a peer ahead, from sync_peer
     mov     S8(%rsp), %rsi
     xor     %edx, %edx
-    cmpq    $FORK_FULU, (L + 40)(%rsp)      # from fulu: its MetaData read
+    cmpq    $FORK_FULU, (L + 40)(%rsp)      # from fulu: its MetaData read; its earliest_slot at most the start
     setae   %dl
+    or      $2, %edx
     call    node_next_peer
     cmp     $-1, %rax
     je      90f
@@ -9616,7 +9718,8 @@ LOCAL_FUNCTION node_sync
     mov     (L + 96)(%rsp), %rax
     inc     %rax
     mov     %rax, Node_status_peer(%rbx)
-9:  call    node_sidecar_retry
+9:  call    node_status_refresh
+    call    node_sidecar_retry
     call    node_backfill_ask
     mov     S7(%rsp), %rax
     LEAVE 112

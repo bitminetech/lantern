@@ -3240,6 +3240,34 @@ static uint64_t shell_head(fc_node *n, const char **why) {
     return 0;
 }
 
+/*
+ * The first sync (node.md): the index of a peer entry that serves no slot of the chain, and that
+ * sync_peer was set to, or UINT64_MAX. After each step sync_peer may not be that index + 1: the
+ * node's BeaconBlocksByRange went to it. (A request to an entry with no connection fails within
+ * the step, so the step leaves no stream of it.)
+ */
+static uint64_t idle_peer_index = UINT64_MAX;
+static unsigned long idle_peer_checks;
+static void idle_peer_check(const struct node_shell *s, const char **why) {
+    if (idle_peer_index == UINT64_MAX) return;
+    if (rd64(s->node + 728 + CONFIG_SIZE + 936 + 1848 + 8 * (4 + 64)) == idle_peer_index + 1) /* Node_sync_peer */
+        *why = "a BeaconBlocksByRange to a peer that serves no slot of it";
+    else idle_peer_checks++;
+}
+
+/* The request timeout (node.md): after a step, no request of the node with no NodeResponse is NODE_REQUEST_MS old. */
+static unsigned long request_age_checks;
+static void request_age_check(const struct node_shell *s, const char **why) {
+    const uint8_t *e = s->node + rd64(s->node + 136); /* Node_streams */
+    uint64_t now = rd64(s->node + NODE_TIME_MS);
+    for (uint64_t i = 0, c = rd64(s->node + 136 + 8), sb = rd64(s->node + 168); i < c; i++, e += sb)
+        if (rd64(e + 32) >= 5 && !rd64(e + 48) && rd64(e + 56) + 10000 <= now) { /* OPENING or RESPONSE, no response, opened_ms */
+            *why = "a Status or GetMetaData request of the node outlives NODE_REQUEST_MS";
+            return;
+        }
+    request_age_checks++;
+}
+
 static void head_due_check(fc_node *n, const char **why) {
     const uint8_t *node = n->shell->node;
     if (rd64(node + NODE_HEAD_DUE)) return;
@@ -3598,6 +3626,8 @@ static void shell_step(fc_node *n, const char **why) {
         *why = "lantern_node_step wrote out of bounds";
     if (!*why) shell_parts_check(n->shell, why);
     if (!*why) head_due_check(n, why);
+    if (!*why) idle_peer_check(s, why);
+    if (!*why) request_age_check(s, why);
     if (!*why && !s->net && (count[0] != nevents || count[1] != UINT64_MAX)) *why = "lantern_node_step: result is not the event count";
     if (!*why && count[0] > nevents) *why = "lantern_node_step: more events handled than given";
     if (!*why && count[0] < nevents) { /* the events not handled go again, before the new ones */
@@ -4840,7 +4870,8 @@ enum { P2P_ACT_DIAL = 1, P2P_ACT_ADOPT, P2P_ACT_REFUSE, P2P_ACT_SEND, P2P_ACT_CL
        P2P_ACT_PEER_DISCONNECTED, P2P_ACT_DIAL_FAILED, P2P_ACT_STREAM_INBOUND, P2P_ACT_STREAM_OPENED, P2P_ACT_STREAM_FAILED,
        P2P_ACT_STREAM_DATA, P2P_ACT_STREAM_EOF, P2P_ACT_STREAM_RESET, P2P_ACT_SEND_DATAGRAM = 23 };
 #define NODE_PEERS 120          /* include/lantern.inc: Node_peers */
-#define NODE_PEER_BYTES 232     /* NodePeer__mem */
+#define NODE_PEER_BYTES 240     /* NodePeer__mem */
+#define NODE_PEER_STATUS_MS 232 /* NodePeer_status_ms */
 #define P2P_STREAMS 8
 #define P2P_PEER_ACTIONS (P2P_ACTIONS_MIN + (4u << 20))
 
@@ -4873,11 +4904,13 @@ struct p2p_net {
     uint64_t peer_cgc;     /* the custody_group_count of the peer's MetaData */
     uint8_t want_columns[16]; /* the columns each DataColumnSidecarsByRange of the node must ask for */
     uint64_t column_requests; /* the node's DataColumnSidecarsByRange requests */
+    uint64_t column_floor;    /* fulu: a DataColumnSidecarsByRange may start at this slot or later: the peer's earliest_available_slot */
     uint64_t skip_column;     /* fulu: 1 + a column the peer leaves out of its answers, or 0 */
     uint8_t extra_columns[16]; /* fulu: columns the peer adds to its answers, asked or not */
     uint8_t retry_columns[16]; /* fulu: the columns a request may ask for instead of want_columns: a retry's */
     int drop_dials;           /* set: the node's dials reach no one; dials counts them */
     int silent;               /* set: the peer answers no BeaconBlocksByRange; held is set once it holds one */
+    int silent_status;        /* set: the peer answers no Status request; held is set once it holds one */
     int held;
     uint64_t in_resets;       /* the node's request streams to the peer that the node reset */
     uint64_t dials, closes;   /* closes: the connections the node closed */
@@ -5164,11 +5197,16 @@ static void p2p_serve(struct p2p_net *net, const char **why) {
             }
             if (!*why && memcmp(asked, net->want_columns, 16) && memcmp(asked, net->retry_columns, 16))
                 *why = "the node's DataColumnSidecarsByRange: not the columns expected";
+            if (!*why && start < net->column_floor) *why = "the node's DataColumnSidecarsByRange: a slot below the peer's earliest_available_slot";
             net->column_requests++;
         }
         free(input);
         free(req);
         if (!*why && !status && !columns && !blobs && net->silent) { /* the node's request waits with no answer */
+            net->held = 1;
+            continue;
+        }
+        if (!*why && status && net->silent_status) { /* the node's Status waits with no answer */
             net->held = 1;
             continue;
         }
@@ -5267,13 +5305,19 @@ static int p2p_connected(struct p2p_net *net, int arg) {
 
 /*
  * A peer entry of the node at index i with no connection (a handle of no libp2p slot), inbound,
- * with NODE_PEER_METADATA and the 16 bytes of custody; its peer ID is empty.
+ * with NODE_PEER_METADATA and the 16 bytes of custody; its peer ID is empty. With head not
+ * UINT64_MAX, NODE_PEER_STATUS too, that head_slot, and a status_ms the Status refresh never reaches.
  */
-static void shell_fake_peer(struct node_shell *s, uint64_t i, const uint8_t *custody) {
+static void shell_fake_peer(struct node_shell *s, uint64_t i, const uint8_t *custody, uint64_t head) {
     uint8_t *p = s->node + rd64(s->node + NODE_PEERS) + i * NODE_PEER_BYTES;
     memset(p, 0, NODE_PEER_BYTES);
     wr64(p, ((uint64_t)0x77 << 32) | (0xff00 + i)); /* slot 0xff00 + i, generation 0x77 */
     wr64(p + 16, 4);                                   /* NODE_PEER_METADATA */
+    if (head != UINT64_MAX) {
+        wr64(p + 16, 1 | 4); /* NODE_PEER_STATUS */
+        wr64(p + 104, head);
+        wr64(p + NODE_PEER_STATUS_MS, (uint64_t)1 << 62);
+    }
     memcpy(p + 176, custody, 16);
     if (rd64(s->node + NODE_PEERS + 8) < i + 1) wr64(s->node + NODE_PEERS + 8, i + 1);
 }
@@ -5502,7 +5546,7 @@ static void p2p_open_record(fc_node *n, struct p2p_net *net, const uint8_t *reco
     }
     net->events = xmalloc(24);
     static const uint8_t all[16] = {0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff};
-    for (uint64_t i = 0; i < p2p_taken && !*why; i++) shell_fake_peer(s, i, all); /* they hold every column */
+    for (uint64_t i = 0; i < p2p_taken && !*why; i++) shell_fake_peer(s, i, all, UINT64_MAX); /* they hold every column */
     if (!*why && p2p_taken >= 7) { /* the open room is full: the peer dials the node and gets no entry */
         uint8_t *e = p2p_event(net, 1, P2P_EV_DIAL, 128);
         wr64(e + 16, 7);
@@ -5649,8 +5693,8 @@ static void column_room_check(fc_node *n, struct p2p_net *net, const char **why)
     uint8_t *p0 = s->node + rd64(s->node + NODE_PEERS);
     wr64(p0 + 16, rd64(p0 + 16) | 4); /* the runner's peer: NODE_PEER_METADATA, no custody */
     memset(p0 + 176, 0, 16);
-    for (uint64_t i = 1; i <= 5; i++) shell_fake_peer(s, i, most);
-    shell_fake_peer(s, 6, only); /* 7 peers: the open room is full; c0 has one peer */
+    for (uint64_t i = 1; i <= 5; i++) shell_fake_peer(s, i, most, slot);
+    shell_fake_peer(s, 6, only, slot); /* 7 peers: the open room is full; c0 has one peer that serves the store's slot */
     wr64(s->node + 432, 0);      /* Node_dialing */
     net->drop_dials = 1;
     memcpy(gvr, n->anchor + field_offset("BeaconState", 1), 32);
@@ -5667,7 +5711,33 @@ static void column_room_check(fc_node *n, struct p2p_net *net, const char **why)
     }
     if (!*why && rd64(s->node + 432) != 1) *why = "column dials: a record of a short column gets no DIAL";
     wr64(s->node + 432, 0); /* the dial ends */
-    if (!*why) shell_fake_peer(s, 7, most); /* 8 peers: full */
+    /* A second holder of c0, peer 1: behind (head_slot + SLOTS_PER_EPOCH below the slot), then with no data
+     * at the slot (earliest_slot past it), c0 stays short; serving the slot, it is not short. */
+    uint8_t *p1 = s->node + rd64(s->node + NODE_PEERS) + NODE_PEER_BYTES, both[16];
+    memcpy(both, most, 16);
+    both[c0 / 8] |= (uint8_t)(1u << (c0 % 8));
+    if (!*why && slot <= SLOTS_PER_EPOCH_RUNNER) *why = "column dials: the store's slot leaves no room for a peer behind";
+    for (int k = 0; k < 3 && !*why; k++) {
+        memcpy(p1 + 176, both, 16);
+        wr64(p1 + 104, k == 0 ? slot - SLOTS_PER_EPOCH_RUNNER - 1 : slot - SLOTS_PER_EPOCH_RUNNER);
+        wr64(p1 + 112, k == 1 ? slot + 1 : 0); /* earliest_slot */
+        record_of(gvr, epoch, (uint64_t)(151 + k), (int64_t)rd64(config + 280), rec, why);
+        if (!*why) {
+            shell_event(s, EV_ENR, 0, rec + 24, rd64(rec + 16));
+            shell_step(n, why);
+        }
+        if (!*why && k < 2 && rd64(s->node + 432) != 1)
+            *why = k ? "column dials: a holder with no data at the slot makes the column not short"
+                     : "column dials: a holder behind makes the column not short";
+        if (!*why && k == 2 && rd64(s->node + 432)) *why = "column dials: a column of two serving holders is short";
+        wr64(s->node + 432, 0);
+    }
+    if (!*why) {
+        memcpy(p1 + 176, most, 16);
+        wr64(p1 + 104, slot);
+        wr64(p1 + 112, 0);
+    }
+    if (!*why) shell_fake_peer(s, 7, most, slot); /* 8 peers: full */
     for (int spare = 0; spare < 2 && !*why; spare++) {
         static const uint8_t none[16] = {0};
         memcpy(p0 + 176, spare ? none : one, 16);
@@ -5683,6 +5753,61 @@ static void column_room_check(fc_node *n, struct p2p_net *net, const char **why)
     if (!*why) column_room_checked++;
 }
 #endif
+
+/*
+ * The Status refresh (node.md): a peer entry with no connection, NODE_PEER_STATUS and status_ms the
+ * node's time T; the runner's peer at T + NODE_STATUS_REFRESH, so the other is the one due. A tick at T + NODE_STATUS_REFRESH - 1 leaves its status_ms; a tick at T +
+ * NODE_STATUS_REFRESH makes it that time, the refresh's Status request to it. The entry goes after.
+ */
+static unsigned long status_refresh_checked;
+static void status_refresh_check(fc_node *n, struct p2p_net *net, const char **why) {
+    struct node_shell *s = n->shell;
+    static const uint8_t none[16] = {0};
+    uint64_t k = rd64(s->node + NODE_PEERS + 8), t = rd64(s->node + NODE_TIME_MS);
+    uint64_t period = SLOTS_PER_EPOCH_RUNNER / 2 * rd64(config + 104), at;
+    if (k != 1) {
+        *why = "status refresh: the runner's peer is not the one entry";
+        return;
+    }
+    shell_fake_peer(s, k, none, 0);
+    wr64(s->node + rd64(s->node + NODE_PEERS) + k * NODE_PEER_BYTES + NODE_PEER_STATUS_MS, t);
+    wr64(s->node + rd64(s->node + NODE_PEERS) + NODE_PEER_STATUS_MS, t + period); /* the runner's peer: not due before it */
+    shell_event(s, EV_TICK, t + period - 1, NULL, 0);
+    p2p_settle(n, net, why);
+    at = rd64(s->node + rd64(s->node + NODE_PEERS) + k * NODE_PEER_BYTES + NODE_PEER_STATUS_MS);
+    if (!*why && at != t) *why = "status refresh: a Status asked before half an epoch";
+    if (!*why) {
+        shell_event(s, EV_TICK, t + period, NULL, 0);
+        p2p_settle(n, net, why);
+    }
+    at = rd64(s->node + rd64(s->node + NODE_PEERS) + k * NODE_PEER_BYTES + NODE_PEER_STATUS_MS);
+    if (!*why && at < t + period) *why = "status refresh: no Status asked after half an epoch";
+    wr64(s->node + NODE_PEERS + 8, k); /* the entry goes */
+    if (!*why) p2p_settle(n, net, why);
+    if (!*why) { /* a Status the peer never answers: NODE_REQUEST_MS after it, the node resets the stream */
+        uint64_t now = rd64(s->node + NODE_TIME_MS) + 10000; /* NODE_REQUEST_MS: the requests open now go, and free their room */
+        shell_event(s, EV_TICK, now, NULL, 0);
+        p2p_settle(n, net, why);
+        net->silent_status = 1;
+        net->held = 0;
+        net->in_resets = 0;
+        wr64(s->node + rd64(s->node + NODE_PEERS) + NODE_PEER_STATUS_MS, now - period);
+        if (!*why) shell_event(s, EV_TICK, now, NULL, 0);
+        if (!*why) p2p_settle(n, net, why);
+        int asked = 0; /* the refresh's: its status_ms that time, and a Status request of the node to it opened then */
+        const uint8_t *e = s->node + rd64(s->node + 136);
+        for (uint64_t q = 0, c = rd64(s->node + 144), sb = rd64(s->node + 168); q < c; q++, e += sb)
+            asked |= rd64(e + 16) == 1 && rd64(e + 32) >= 5 && rd64(e + 56) == now; /* REQRESP_STATUS, OPENING or RESPONSE, opened_ms */
+        if (!*why && (!asked || rd64(s->node + rd64(s->node + NODE_PEERS) + NODE_PEER_STATUS_MS) != now))
+            *why = "status refresh: no Status asked of the peer once due";
+        if (!*why) shell_event(s, EV_TICK, now + 10000, NULL, 0); /* NODE_REQUEST_MS */
+        if (!*why) p2p_run(n, net, p2p_reset_seen, 0, why);
+        if (*why && !strcmp(*why, "the network does not get there")) *why = "status refresh: a Status with no answer is not reset after NODE_REQUEST_MS";
+        net->silent_status = 0;
+        if (!*why) p2p_settle(n, net, why);
+    }
+    if (!*why) status_refresh_checked++;
+}
 
 static void run_node_p2p(const char *file, case_file *f) {
     for (uint64_t i = 0; i < f->count; i++) {
@@ -5754,6 +5879,7 @@ static void run_node_p2p(const char *file, case_file *f) {
         if (!why) custody_check(&n, &net, status, slen, &why);
 #endif
         if (!why) p2p_op_events(&n, &net, parts, &why);
+        if (!why) status_refresh_check(&n, &net, &why);
 #if FORK >= FORK_FULU
         if (!why) column_room_check(&n, &net, &why);
 #endif
@@ -6277,6 +6403,20 @@ static void sync_once(tv parts, case_block **chain, size_t nchain, uint64_t last
             memcpy(peers + 24, digest, 4);             /* fork_digest */
             wr64(peers + 104, chain[nchain - 1]->slot); /* head_slot */
             wr64(s->node + NODE_PEERS + 8, np + 1);
+            /* before both, one whose earliest_slot is past the chain: it serves none of it, and no range request may go to it */
+            np++;
+            memmove(peers + NODE_PEER_BYTES, peers, (size_t)(np * NODE_PEER_BYTES));
+            memset(peers, 0, NODE_PEER_BYTES);
+            wr64(peers, rd64(peers + NODE_PEER_BYTES) + ((uint64_t)0x100 << 32)); /* the dead peer's slot, a later generation */
+            wr64(peers + 16, 1 | 4);
+            memcpy(peers + 24, digest, 4);
+            wr64(peers + 104, chain[nchain - 1]->slot);
+            wr64(peers + 112, chain[nchain - 1]->slot + 1); /* earliest_slot */
+            memset(peers + 176, 0xff, 16);
+            wr64(peers + NODE_PEER_STATUS_MS, (uint64_t)1 << 62);
+            wr64(s->node + NODE_PEERS + 8, np + 1);
+            idle_peer_index = 0;
+            wr64(s->node + 728 + CONFIG_SIZE + 936 + 1848 + 8 * (4 + 64), 0); /* Node_sync_peer: the next request looks from it on */
         }
         engine_fcu_error = sync_dead && FORK >= FORK_BELLATRIX; /* each forkchoiceUpdated fails: the imports go on */
         if (!*why && sync_dead) { /* the peer holds the first BeaconBlocksByRange: NODE_REQUEST_MS later the node resets it */
@@ -6393,6 +6533,7 @@ static void sync_once(tv parts, case_block **chain, size_t nchain, uint64_t last
             *head_size = h->size;
         }
     }
+    idle_peer_index = UINT64_MAX;
     shell_close(&m, anchor_block);
 }
 
@@ -6458,6 +6599,28 @@ static int p2p_backfilled(struct p2p_net *net, int arg) {
     return 1;
 }
 
+#if FORK >= FORK_FULU
+/* The node's backfill request is open; then answered and weighed, with no block in NODE_BLOCK_BF_CHECKING. */
+static int p2p_backfill_open(struct p2p_net *net, int arg) {
+    (void)arg;
+    return rd64(net->shell->node + NODE_BACKFILL_HANDLE) != 0;
+}
+static int p2p_backfill_weighed(struct p2p_net *net, int arg) {
+    (void)arg;
+    const uint8_t *node = net->shell->node, *e = node + rd64(node + NODE_BLOCKS);
+    if (rd64(node + NODE_BACKFILL_HANDLE) || rd64(node + 648) != UINT64_MAX) return 0; /* Node_backfill_start */
+    for (uint64_t i = 0, c = rd64(node + NODE_BLOCKS + 8); i < c; i++, e += NODE_BLOCK_BYTES)
+        if (rd64(e + NB_STATUS) == NB_BF_CHECKING) return 0;
+    return 1;
+}
+/* The node's entry of the peer holds an earliest_slot of 0. */
+static int p2p_peer_earliest_zero(struct p2p_net *net, int arg) {
+    (void)arg;
+    const uint8_t *node = net->shell->node;
+    return rd64(node + NODE_PEERS + 8) == 1 && rd64(node + rd64(node + NODE_PEERS) + 112) == 0;
+}
+#endif
+
 /*
  * The backfill (node.md): a node with NODE_FLAG_DB from the post-state and the block of the chain's
  * last block, at the case's last tick, gets a peer whose Status head is that block. The peer
@@ -6521,7 +6684,30 @@ static void backfill_once(tv parts, case_block **chain, size_t nchain, uint64_t 
             bf_chain = chain;
             bf_nchain = nchain;
             bf_above = bad < nchain ? bad + 1 : 0;
-            p2p_run(&m, &net, p2p_backfilled, 0, why);
+#if FORK >= FORK_FULU
+            if (late) { /* the peer serves no sidecar below its earliest slot: none is asked of it, and no block joins the Db */
+                net.column_floor = chain[nchain - 1]->slot;
+                p2p_run(&m, &net, p2p_backfill_open, 0, why);
+                if (*why && !strcmp(*why, "the network does not get there")) *why = "backfill with a late peer: no request";
+                if (!*why) p2p_run(&m, &net, p2p_backfill_weighed, 0, why);
+                if (*why && !strcmp(*why, "the network does not get there")) *why = "backfill with a late peer: the request is not weighed";
+                for (size_t b = 0; b + 1 < nchain && !*why; b++) /* a block with columns waits for them */
+                    if (chain[b]->columns && shell_db_slot(s, chain[b]->root) != UINT64_MAX)
+                        *why = "backfill with a late peer: a block with columns joins the Db with no sidecars asked";
+                /* the peer backfills: its next Status, at the Status refresh, gives earliest_available_slot 0 */
+                wr64(net.status + 84, 0);
+                net.column_floor = 0;
+                uint64_t now = rd64(s->node + NODE_TIME_MS);
+                if (!*why) shell_event(s, EV_TICK, now + SLOTS_PER_EPOCH_RUNNER / 2 * rd64(config + 104), NULL, 0);
+                if (!*why) p2p_run(&m, &net, p2p_peer_earliest_zero, 0, why);
+                if (*why && !strcmp(*why, "the network does not get there")) *why = "backfill with a late peer: no Status asked after half an epoch";
+                if (!*why) p2p_run(&m, &net, p2p_backfill_weighed, 0, why); /* a request of that tick, before the new Status, ends */
+                if (*why && !strcmp(*why, "the network does not get there")) *why = "backfill with a late peer: a request is not weighed";
+                now = rd64(s->node + NODE_TIME_MS);
+                if (!*why) shell_event(s, EV_TICK, now + 12000, NULL, 0); /* NODE_STATUS_MS: the backfill asks again */
+            }
+#endif
+            if (!*why) p2p_run(&m, &net, p2p_backfilled, 0, why);
             if (*why && !strcmp(*why, "the network does not get there")) {
                 static char msg[256];
                 size_t in = 0;
@@ -12498,6 +12684,9 @@ int main(int argc, char **argv) {
     if (reads_asked) printf("NOTE: %lu node-reads requests answered\n", reads_asked);
     if (engine_fcu_errors) printf("NOTE: %lu engine_forkchoiceUpdated answered Too deep reorg on syncs\n", engine_fcu_errors);
     if (inbound_room_checked) printf("NOTE: the open room checked on %lu cases\n", inbound_room_checked);
+    if (request_age_checks) printf("NOTE: %lu node steps with no request older than NODE_REQUEST_MS\n", request_age_checks);
+    if (idle_peer_checks) printf("NOTE: %lu node steps with no BeaconBlocksByRange to a peer that serves none of it\n", idle_peer_checks);
+    if (status_refresh_checked) printf("NOTE: the Status refresh checked on %lu cases\n", status_refresh_checked);
 #if FORK >= FORK_FULU
     if (column_room_checked) printf("NOTE: the column dials and the spare peer checked on %lu cases\n", column_room_checked);
 #endif

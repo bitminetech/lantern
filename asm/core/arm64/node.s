@@ -3838,19 +3838,42 @@ LOCAL_FUNCTION node_peer_room
     ret
 END_FUNCTION node_peer_room
 
+/*
+ * L0: x0 = 1 when the peer entry x0 serves the slot x1 (node.md, the peer room): NODE_PEER_STATUS,
+ * its head_slot + SLOTS_PER_EPOCH at least the slot, its earliest_slot at most it; else 0. Uses x9.
+ */
+LOCAL_FUNCTION node_peer_serves
+    UNWIND_END_PROLOGUE
+    ldr     x9, [x0, #NodePeer_flags]
+    tbz     x9, #0, 9f                      /* NODE_PEER_STATUS */
+    ldr     x9, [x0, #NodePeer_earliest_slot]
+    cmp     x9, x1
+    b.hi    9f
+    ldr     x9, [x0, #NodePeer_head_slot]
+    adds    x9, x9, #SLOTS_PER_EPOCH
+    b.cs    8f
+    cmp     x9, x1
+    b.lo    9f
+8:  mov     x0, #1
+    ret
+9:  mov     x0, #0
+    ret
+END_FUNCTION node_peer_serves
+
 .if NODE_COLUMN_PEERS - 2
 .error "node_short_columns counts to 2 with two masks"
 .endif
 /*
  * L1: x0, x1 = the short columns (node.md, the peer room), below 64 and from 64: from fulu, the
- * columns of the node that fewer than NODE_COLUMN_PEERS peers with NODE_PEER_METADATA hold in
- * their custody; none before fulu. x21 a peer, x22 the peers left, x25 and x26 the columns of one
- * peer or more, x27 and x28 of two or more.
+ * columns of the node that fewer than NODE_COLUMN_PEERS peers with NODE_PEER_METADATA that serve
+ * the store's slot hold in their custody; none before fulu. x21 a peer, x22 the peers left, x25
+ * and x26 the columns of one peer or more, x27 and x28 of two or more. Locals: L the store's slot.
  */
 LOCAL_FUNCTION node_short_columns
-    ENTER 0
+    ENTER 16
     mov     x0, x20
     bl      node_store_slot
+    str     x0, [sp, #L]
     add     x1, x19, #Node_config
     bl      node_fork
     cmp     x0, #FORK_FULU
@@ -3864,6 +3887,10 @@ LOCAL_FUNCTION node_short_columns
     ldr     x9, [x21, #NodePeer_flags]
     tst     x9, #NODE_PEER_METADATA
     b.eq    3f
+    mov     x0, x21
+    ldr     x1, [sp, #L]
+    bl      node_peer_serves
+    cbz     x0, 3f
     ldp     x9, x10, [x21, #NodePeer_custody]   /* two or more |= one or more & custody; one or more |= custody */
     and     x11, x9, x25
     orr     x27, x27, x11
@@ -3877,10 +3904,10 @@ LOCAL_FUNCTION node_short_columns
 2:  ldp     x9, x10, [x19, #Node_columns]   /* the node's columns of fewer than two */
     bic     x0, x9, x27
     bic     x1, x10, x28
-    LEAVE 0
+    LEAVE 16
 8:  mov     x0, #0
     mov     x1, #0
-    LEAVE 0
+    LEAVE 16
 END_FUNCTION node_short_columns
 
 /* L0: x0 = 1 when the block entry x0 needs blobs or columns it does not hold (node.md), else 0. x22 the entry, x25 its blob count. */
@@ -8353,6 +8380,8 @@ LOCAL_FUNCTION node_peer_status
 1:  ldr     x9, [x25, #NodePeer_flags]
     orr     x9, x9, #NODE_PEER_STATUS
     str     x9, [x25, #NodePeer_flags]
+    ldr     x9, [x19, #Node_time_ms]
+    str     x9, [x25, #NodePeer_status_ms]
     add     x0, sp, #L                      /* its fork_digest: the node's of the store's epoch, or the one ahead or before around a fork */
     bl      node_status_bytes
     ldr     x9, [x25, #NodePeer_fork_digest]
@@ -8531,6 +8560,8 @@ LOCAL_FUNCTION node_open
     sub     x9, x9, #NodeStream_list
     mov     x10, #24
     stp     x9, x10, [x21, #NodeStream_list]
+    ldr     x9, [x19, #Node_time_ms]
+    str     x9, [x21, #NodeStream_opened_ms]
     cbz     x28, 1f                         /* no request bytes: an empty list */
     mov     x9, #CHUNK_REQUEST              /* the request chunk in the list */
     str     x9, [sp, #(L + ChunkHeader_kind)]
@@ -8639,8 +8670,9 @@ END_FUNCTION node_free_responses
 
 /*
  * L0: the first peer from the index x0 of the peers part, in its order and around, with a Status
- * of the node's fork_digest whose head_slot is at least x1, and NODE_PEER_METADATA when x2 is not
- * 0: x0 = its index, or 2^64 - 1; x1 = its entry. Uses x9-x16.
+ * of the node's fork_digest whose head_slot is at least x1, with NODE_PEER_METADATA when bit 0 of
+ * x2 is set, and an earliest_slot at most x1 when bit 1 is: x0 = its index, or 2^64 - 1; x1 = its
+ * entry. Uses x9-x16.
  */
 LOCAL_FUNCTION node_next_peer
     UNWIND_END_PROLOGUE
@@ -8660,7 +8692,7 @@ LOCAL_FUNCTION node_next_peer
     csel    x12, xzr, x12, hs
     ldr     x15, [x14, #NodePeer_flags]
     tbz     x15, #0, 1b                     /* NODE_PEER_STATUS */
-    cbz     x2, 2f
+    tbz     x2, #0, 2f
     tst     x15, #NODE_PEER_METADATA
     b.eq    1b
 2:  ldr     x15, [x14, #NodePeer_fork_digest]
@@ -8670,7 +8702,11 @@ LOCAL_FUNCTION node_next_peer
     ldr     x15, [x14, #NodePeer_head_slot]
     cmp     x15, x1
     b.lo    1b
-    mov     x1, x14
+    tbz     x2, #1, 4f
+    ldr     x15, [x14, #NodePeer_earliest_slot]
+    cmp     x15, x1
+    b.hi    1b
+4:  mov     x1, x14
     ret
 3:  mov     x0, #-1
     ret
@@ -8965,7 +9001,7 @@ END_FUNCTION node_response
  * The sidecar requests of a range (node.md): a BlobSidecarsByRange v1 to the peer x0 of the slots of
  * x1, count x2, in the blob window whose fork is deneb or electra, then from fulu (x3 the fork of
  * the store's slot) the DataColumnSidecarsByRange v1 of the slots in the column window to the peers
- * with NODE_PEER_METADATA, from sidecar_peer and around. x0 = 1 when a request has no room or the node cannot open it, else 0.
+ * with NODE_PEER_METADATA that serve its first slot, from sidecar_peer and around. x0 = 1 when a request has no room or the node cannot open it, else 0.
  * Locals as node_sync's: L the range, L+24 a request's range, L+40 the fork, L+48 the columns asked,
  * L+64 count or send, L+72 the column requests, L+80 the peer. x21 a peer, x22 the peers left, x25
  * the request's bytes, x28 the scratch size.
@@ -9057,6 +9093,10 @@ LOCAL_FUNCTION node_sidecar_ask
     ldr     x9, [x21, #NodePeer_flags]
     tst     x9, #NODE_PEER_METADATA
     b.eq    75f
+    mov     x0, x21                         /* it serves the range's first slot */
+    ldr     x1, [sp, #(L + 24)]
+    bl      node_peer_serves
+    cbz     x0, 75f
     ldr     x9, [sp, #(L + 16)]             /* the columns asked for that it custodies, not asked yet */
     ldp     x9, x10, [x9]
     ldp     x11, x12, [x21, #NodePeer_custody]
@@ -9134,6 +9174,64 @@ LOCAL_FUNCTION node_sidecar_ask
 9:  mov     x0, #1
     LEAVE 96
 END_FUNCTION node_sidecar_ask
+
+/*
+ * L1: the Status refresh (node.md): the first peer with NODE_PEER_STATUS whose status_ms +
+ * NODE_STATUS_REFRESH_SLOTS slots is at most time_ms gets a Status request (v2 from fulu, v1
+ * before), when the streams part has room for it; its status_ms takes time_ms. x21 a peer, x22 the
+ * peers left, x25 the refresh's time. Locals: L the Status (96).
+ */
+LOCAL_FUNCTION node_status_refresh
+    ENTER 96
+    ldr     x12, [x19, #Node_messages]      /* room for it */
+    ldr     x13, [x19, #Node_streams]
+    sub     x12, x12, x13
+    ldr     x13, [x19, #Node_stream_bytes]
+    udiv    x12, x12, x13
+    ldr     x11, [x19, #(Node_streams + 8)]
+    add     x11, x11, #1
+    cmp     x11, x12
+    b.hi    9f
+    LDQ     x9, x19, Node_config + CONFIG_SLOT_DURATION_MS
+    mov     x10, #NODE_STATUS_REFRESH_SLOTS
+    umulh   x11, x9, x10
+    cbnz    x11, 9f
+    mul     x25, x9, x10
+    PART    x21, x22, x19, Node_peers
+1:  cbz     x22, 9f
+    ldr     x9, [x21, #NodePeer_flags]
+    tbz     x9, #0, 2f                      /* NODE_PEER_STATUS */
+    ldr     x9, [x21, #NodePeer_status_ms]
+    adds    x9, x9, x25
+    b.cs    2f
+    ldr     x10, [x19, #Node_time_ms]
+    cmp     x9, x10
+    b.ls    3f
+2:  add     x21, x21, #NodePeer__mem
+    sub     x22, x22, #1
+    b       1b
+3:  add     x0, sp, #L
+    bl      node_status_bytes
+    mov     x0, x20
+    bl      node_store_slot
+    add     x1, x19, #Node_config
+    bl      node_fork
+    mov     x9, x0
+    mov     x1, #1
+    mov     x4, #84
+    cmp     x9, #FORK_FULU
+    b.lo    4f
+    mov     x1, #2
+    mov     x4, #92
+4:  mov     x0, #REQRESP_STATUS
+    ldr     x2, [x21, #NodePeer_handle]
+    add     x3, sp, #L
+    bl      node_open
+    cbz     x0, 9f
+    ldr     x9, [x19, #Node_time_ms]
+    str     x9, [x21, #NodePeer_status_ms]
+9:  LEAVE 96
+END_FUNCTION node_status_refresh
 
 /*
  * L0: the sidecar retry (node.md): with no BlobSidecarsByRange or DataColumnSidecarsByRange of the
@@ -9223,10 +9321,11 @@ LOCAL_FUNCTION node_sidecar_retry
     add     x1, x19, #Node_config
     bl      node_fork
     mov     x27, x0
-    LDQ     x0, x19, Node_sidecar_peer      /* the blob request's peer */
+    LDQ     x0, x19, Node_sidecar_peer      /* the blob request's peer: it serves the first slot */
     mov     x1, x25
     cmp     x27, #FORK_FULU
     cset    x2, hs
+    orr     x2, x2, #2
     bl      node_next_peer
     cmn     x0, #1
     b.eq    9f
@@ -9323,14 +9422,16 @@ LOCAL_FUNCTION node_sync
     ldr     x9, [x21, #NodeStream_state]
     cmp     x9, #NODE_STREAM_OPENING
     b.lo    33b
-    ldr     x9, [x21, #NodeStream_response] /* its NodeResponse: no bytes for NODE_REQUEST_MS */
-    cbz     x9, 33b
+    ldr     x9, [x21, #NodeStream_response] /* its NodeResponse: no bytes for NODE_REQUEST_MS; with none, from its open */
+    cbz     x9, 36f
     sub     x9, x9, #1
     LDQ     x10, x19, Node_response_bytes
     LDQ     x11, x19, Node_responses
     madd    x9, x9, x10, x11
     ldr     x9, [x19, x9]                   /* NodeResponse_used */
-    MOVQ    x10, NODE_REQUEST_MS
+    b       37f
+36: ldr     x9, [x21, #NodeStream_opened_ms]
+37: MOVQ    x10, NODE_REQUEST_MS
     add     x9, x9, x10
     ldr     x10, [x19, #Node_time_ms]
     cmp     x10, x9
@@ -9393,9 +9494,10 @@ LOCAL_FUNCTION node_sync
     csel    x27, x9, x27, hi
     LDQ     x0, x19, Node_sync_peer         /* a peer ahead, from sync_peer */
     mov     x1, x27
-    ldr     x2, [sp, #(L + 40)]             /* from fulu: its MetaData read */
+    ldr     x2, [sp, #(L + 40)]             /* from fulu: its MetaData read; its earliest_slot at most the start */
     cmp     x2, #FORK_FULU
     cset    x2, hs
+    orr     x2, x2, #2
     bl      node_next_peer
     cmn     x0, #1
     b.eq    90f
@@ -9490,7 +9592,8 @@ LOCAL_FUNCTION node_sync
     ldr     x9, [sp, #(L + 96)]
     add     x9, x9, #1
     STQ     x9, x19, Node_status_peer
-9:  bl      node_sidecar_retry
+9:  bl      node_status_refresh
+    bl      node_sidecar_retry
     bl      node_backfill_ask
     mov     x0, x26
     LEAVE 112
