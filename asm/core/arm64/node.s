@@ -4429,6 +4429,39 @@ LOCAL_FUNCTION node_blob_added
 9:  UNFRAME 16
 END_FUNCTION node_blob_added
 
+/*
+ * L1: a new head, the root at x0: NodeMetrics reorgs takes 1 when get_ancestor of it at the old
+ * head's slot (of Node_head_root) is not the old head. With either not among the node's blocks, or a
+ * gap in the new head's chain, nothing. Locals: the old head's slot, the root.
+ */
+LOCAL_FUNCTION node_reorg_count
+    FRAME 16
+    str     x0, [sp, #24]
+    add     x0, x19, #Node_head_root
+    bl      node_find_block
+    cmn     x0, #1
+    b.eq    9f
+    ldr     x9, [x1, #NodeBlock_slot]
+    str     x9, [sp, #16]
+    ldr     x0, [sp, #24]
+1:  bl      node_find_block                 /* the new head's chain down to the old head's slot */
+    cmn     x0, #1
+    b.eq    9f
+    ldr     x9, [x1, #NodeBlock_slot]
+    ldr     x10, [sp, #16]
+    cmp     x9, x10
+    b.ls    2f
+    add     x0, x1, #NodeBlock_parent_root
+    b       1b
+2:  add     x0, x19, #Node_head_root
+    NE32    x0, x1, 3f
+    b       9f
+3:  LDQ     x9, x19, Node_metrics + NodeMetrics_reorgs
+    add     x9, x9, #1
+    STQ     x9, x19, Node_metrics + NodeMetrics_reorgs
+9:  UNFRAME 16
+END_FUNCTION node_reorg_count
+
 /* L0: the head: the root of get_head of the fork of the store's slot into the node, or a JUSTIFIED_STATE work. Locals: L the node. */
 LOCAL_FUNCTION node_head
     ENTER 16
@@ -4462,7 +4495,7 @@ LOCAL_FUNCTION node_head
     mov     x11, #BlockNode__mem
     madd    x10, x9, x11, x10
     add     x9, x19, #Node_head_root
-    ldp     x11, x12, [x9]                  /* a new head with NODE_FLAG_ENGINE: a forkchoiceUpdated is due */
+    ldp     x11, x12, [x9]                  /* a new head: the reorg count; with NODE_FLAG_ENGINE, a forkchoiceUpdated is due */
     ldp     x13, x14, [x10]
     cmp     x11, x13
     ccmp    x12, x14, #0, eq
@@ -4472,7 +4505,12 @@ LOCAL_FUNCTION node_head
     cmp     x11, x13
     ccmp    x12, x14, #0, eq
     b.eq    3f
-2:  ldr     x11, [x19, #Node_flags]
+2:  str     x10, [sp, #(L + 8)]
+    mov     x0, x10
+    bl      node_reorg_count
+    ldr     x10, [sp, #(L + 8)]
+    add     x9, x19, #Node_head_root
+    ldr     x11, [x19, #Node_flags]
     tst     x11, #NODE_FLAG_ENGINE
     b.eq    3f
     orr     x11, x11, #NODE_FLAG_FCU

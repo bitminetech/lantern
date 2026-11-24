@@ -629,6 +629,8 @@
 .set DA_SCRATCH_FIXED, 8 + 4 * LIST_FIXED + CRYPTO_KZG_SCRATCH
 .set DA_SCRATCH_PER_BLOB, 48 + 8 + CRYPTO_KZG_CELL_SIZE + 48 + CRYPTO_KZG_SCRATCH_PER_ENTRY
 
+.include "metrics.inc"
+
 /* ------------------------------------------------------------ Node (node.md) */
 
 /* Node: the state of the node */
@@ -793,7 +795,8 @@
 .set Node_head_due, Node_base_slot + 1600  /* 1 when the store may have changed since the last get_head */
 .set Node_head_slot, Node_base_slot + 1608  /* the store's slot at the last get_head */
 .set Node_fcu_wait, Node_base_slot + 1616  /* after a failed engine_forkchoiceUpdated, the slot from which the next goes */
-.set NODE_FIXED, Node_base_slot + 1624
+.set Node_metrics, Node_base_slot + 1624  /* NodeMetrics (metrics.md): the counters and delay histograms of the metrics */
+.set NODE_FIXED, Node_metrics + NodeMetrics__mem
 .set Eth1Count_number, 0               /* Eth1Count (node.md) */
 .set Eth1Count_count, 8
 .set Eth1Count_root, 16
@@ -1616,8 +1619,6 @@
 .set JSON_FAULT_FIELD, 6
 .set JSON_FAULT_MISSING, 7
 .set JSON_DECODE_SCRATCH, 64 + JSON_LEVELS * 512  /* the field tables of lantern_json_decode, 64 fields a level */
-
-.include "metrics.inc"
 
 /* ArgList, Arg and AppOptions (docs/reference/app.md): a text field is an Arg (start, length) of the ArgList's bytes. */
 .set ArgList_args, 8

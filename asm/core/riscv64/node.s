@@ -4391,6 +4391,38 @@ LOCAL_FUNCTION node_blob_added
 9:  UNFRAME 0
 END_FUNCTION node_blob_added
 
+/*
+ * A new head, the root at a0: NodeMetrics reorgs takes 1 when get_ancestor of it at the old head's
+ * slot (of Node_head_root) is not the old head. With either not among the node's blocks, or a gap in
+ * the new head's chain, nothing. Locals: the old head's slot, the root.
+ */
+LOCAL_FUNCTION node_reorg_count
+    FRAME 16
+    sd      a0, 8(sp)
+    addi    a0, s1, Node_head_root
+    call    node_find_block
+    li      t0, -1
+    beq     a0, t0, 9f
+    ld      t0, NodeBlock_slot(a1)
+    sd      t0, 0(sp)
+    ld      a0, 8(sp)
+1:  call    node_find_block                 # the new head's chain down to the old head's slot
+    li      t0, -1
+    beq     a0, t0, 9f
+    ld      t0, NodeBlock_slot(a1)
+    ld      t1, 0(sp)
+    bleu    t0, t1, 2f
+    addi    a0, a1, NodeBlock_parent_root
+    j       1b
+2:  addi    t0, s1, Node_head_root
+    NE32    t0, a1, 3f
+    j       9f
+3:  LDQ     t0, s1, Node_metrics + NodeMetrics_reorgs
+    addi    t0, t0, 1
+    STQ     t0, s1, Node_metrics + NodeMetrics_reorgs
+9:  UNFRAME 16
+END_FUNCTION node_reorg_count
+
 /* The head: the root of get_head of the fork of the store's slot into the node, or a JUSTIFIED_STATE work. Locals: L the node. */
 LOCAL_FUNCTION node_head
     ENTER 16
@@ -4423,9 +4455,14 @@ LOCAL_FUNCTION node_head
     mul     t0, t0, t2
     add     t1, t1, t0
     addi    t0, s1, Node_head_root
-    NE32    t0, t1, 2f                      # a new head with NODE_FLAG_ENGINE: a forkchoiceUpdated is due
+    NE32    t0, t1, 2f                      # a new head: the reorg count; with NODE_FLAG_ENGINE, a forkchoiceUpdated is due
     j       3f
-2:  ld      t2, Node_flags(s1)
+2:  sd      t1, (L + 8)(sp)
+    mv      a0, t1
+    call    node_reorg_count
+    ld      t1, (L + 8)(sp)
+    addi    t0, s1, Node_head_root
+    ld      t2, Node_flags(s1)
     andi    t3, t2, NODE_FLAG_ENGINE
     beqz    t3, 3f
     ori     t2, t2, NODE_FLAG_FCU

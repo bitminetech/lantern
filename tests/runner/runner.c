@@ -2764,6 +2764,9 @@ struct node_shell {
     tv submits;                             /* node-publish: the case's answers to the blinded_blocks calls, or NULL */
     uint64_t nsubmits, submit_calls;
     const uint8_t *eth1_blocks, *eth1_deposits, *eth1_contract; /* node-eth1: the chain (number, timestamp, hash), its deposits */
+    uint8_t last_head[32];                  /* the node's head after the last step, for reorg_check */
+    uint64_t reorgs;                        /* the reorg count then */
+    int head_set;
     uint64_t eth1_nblocks, eth1_ndeposits, eth1_calls;
     uint64_t flags, db_states;              /* its flags; the NODE_ACT_DB_STATE actions */
     uint64_t drops[16];                     /* the NODE_ACT_DB_DROP actions: bit 63 for sidecars, the segment */
@@ -3281,6 +3284,47 @@ static void head_due_check(fc_node *n, const char **why) {
     if (memcmp(node_at(n, head), node + NODE_HEAD_ROOT, 32)) *why = "head_due is 0 but the node's head is not get_head of the store";
 }
 
+#define NODE_METRICS (728 + CONFIG_SIZE + 936 + 2016 + 8 * (4 + 64)) /* include/lantern.inc: Node_metrics; NodeMetrics_reorgs first */
+#define NODE_PARENT_ROOT 32 /* BlockNode_parent_root */
+static uint64_t reorg_checks, reorgs_seen;
+
+/* The store's BlockNode of the root, or NULL. */
+static const uint8_t *store_block(const fc_node *n, const uint8_t *root) {
+    for (uint64_t i = 0; i < node_count(n); i++)
+        if (!memcmp(node_at(n, i), root, 32)) return node_at(n, i);
+    return NULL;
+}
+
+/*
+ * beacon_reorgs_total (metrics.md, NodeMetrics reorgs): at each change of the node's head, the count
+ * takes 1 when get_ancestor of the store (fork-choice.md) of the new head at the old head's slot is
+ * not the old head, else it stays. With either head out of the store, or a gap in the walk, the
+ * runner takes the node's count.
+ */
+static void reorg_check(fc_node *n, const char **why) {
+    struct node_shell *s = n->shell;
+    const uint8_t *head = s->node + NODE_HEAD_ROOT;
+    uint64_t got = rd64(s->node + NODE_METRICS);
+    if (s->head_set && !memcmp(s->last_head, head, 32)) {
+        if (got != s->reorgs) *why = "NodeMetrics reorgs changed with no new head";
+        return;
+    }
+    const uint8_t *old = s->head_set ? store_block(n, s->last_head) : NULL, *b = store_block(n, head);
+    if (old && b) {
+        uint64_t slot = rd64(old + NODE_SLOT);
+        while (b && rd64(b + NODE_SLOT) > slot) b = store_block(n, b + NODE_PARENT_ROOT);
+        if (b) {
+            uint64_t off = memcmp(b, s->last_head, 32) != 0;
+            reorg_checks++;
+            reorgs_seen += off;
+            if (got != s->reorgs + off) *why = "NodeMetrics reorgs is not the count of head changes off the old head's chain";
+        }
+    }
+    s->reorgs = got;
+    s->head_set = 1;
+    memcpy(s->last_head, head, 32);
+}
+
 /* The post-state the node keeps for the block root, or NULL. */
 static const uint8_t *shell_state_of(fc_node *n, const uint8_t *root) {
     const uint8_t *e = shell_block(n->shell, root);
@@ -3630,6 +3674,7 @@ static void shell_step(fc_node *n, const char **why) {
     if (!*why) head_due_check(n, why);
     if (!*why) idle_peer_check(s, why);
     if (!*why) request_age_check(s, why);
+    if (!*why) reorg_check(n, why);
     if (!*why && !s->net && (count[0] != nevents || count[1] != UINT64_MAX)) *why = "lantern_node_step: result is not the event count";
     if (!*why && count[0] > nevents) *why = "lantern_node_step: more events handled than given";
     if (!*why && count[0] < nevents) { /* the events not handled go again, before the new ones */
@@ -12735,6 +12780,8 @@ int main(int argc, char **argv) {
     if (node_settles_finalized) printf("NOTE: %lu node settles past a finalized epoch\n", node_settles_finalized);
     if (api_heads_streamed) printf("NOTE: %lu heads served as getBlockV2 and getStateV2 streams\n", api_heads_streamed);
     if (reads_asked) printf("NOTE: %lu node-reads requests answered\n", reads_asked);
+    if (reorg_checks) printf("NOTE: %lu head changes checked against NodeMetrics reorgs, %lu of them reorgs\n", (unsigned long)reorg_checks,
+                               (unsigned long)reorgs_seen);
     if (engine_fcu_errors) printf("NOTE: %lu engine_forkchoiceUpdated answered Too deep reorg on syncs\n", engine_fcu_errors);
     if (inbound_room_checked) printf("NOTE: the open room checked on %lu cases\n", inbound_room_checked);
     if (request_age_checks) printf("NOTE: %lu node steps with no request older than NODE_REQUEST_MS\n", request_age_checks);

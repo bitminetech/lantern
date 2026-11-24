@@ -4394,6 +4394,36 @@ LOCAL_FUNCTION node_blob_added
 9:  UNFRAME 0
 END_FUNCTION node_blob_added
 
+/*
+ * A new head, the root at rdi: NodeMetrics reorgs takes 1 when get_ancestor of it at the old head's
+ * slot (of Node_head_root) is not the old head. With either not among the node's blocks, or a gap in
+ * the new head's chain, nothing. Locals: the old head's slot, the root.
+ */
+LOCAL_FUNCTION node_reorg_count
+    FRAME 16
+    mov     %rdi, 8(%rsp)
+    lea     Node_head_root(%rbx), %rdi
+    call    node_find_block
+    cmp     $-1, %rax
+    je      9f
+    mov     NodeBlock_slot(%rdx), %rax
+    mov     %rax, (%rsp)
+    mov     8(%rsp), %rdi
+1:  call    node_find_block                 # the new head's chain down to the old head's slot
+    cmp     $-1, %rax
+    je      9f
+    mov     NodeBlock_slot(%rdx), %rax
+    cmp     (%rsp), %rax
+    jbe     2f
+    lea     NodeBlock_parent_root(%rdx), %rdi
+    jmp     1b
+2:  lea     Node_head_root(%rbx), %rdi
+    NE32    %rdi, %rdx, 3f
+    jmp     9f
+3:  incq    (Node_metrics + NodeMetrics_reorgs)(%rbx)
+9:  UNFRAME 16
+END_FUNCTION node_reorg_count
+
 /* The head: the root of get_head of the fork of the store's slot into the node, or a JUSTIFIED_STATE work. Locals: L the node. */
 LOCAL_FUNCTION node_head
     ENTER 16
@@ -4427,9 +4457,14 @@ LOCAL_FUNCTION node_head
     imul    $BlockNode__mem, %rax, %rax
     add     %rax, %rcx
     lea     Node_head_root(%rbx), %rdi
-    NE32    %rdi, %rcx, 2f                  # a new head with NODE_FLAG_ENGINE: a forkchoiceUpdated is due
+    NE32    %rdi, %rcx, 2f                  # a new head: the reorg count; with NODE_FLAG_ENGINE, a forkchoiceUpdated is due
     jmp     3f
-2:  testq   $NODE_FLAG_ENGINE, Node_flags(%rbx)
+2:  mov     %rcx, (L + 8)(%rsp)
+    mov     %rcx, %rdi
+    call    node_reorg_count
+    mov     (L + 8)(%rsp), %rcx
+    lea     Node_head_root(%rbx), %rdi
+    testq   $NODE_FLAG_ENGINE, Node_flags(%rbx)
     jz      3f
     orq     $NODE_FLAG_FCU, Node_flags(%rbx)
     movq    $0, Node_fcu_wait(%rbx)
