@@ -31,6 +31,7 @@ import engine  # lantern's Engine API client cases
 import node  # lantern's node core cases over libp2p
 import config  # lantern's network config file cases
 import app  # lantern's command line cases
+import metrics  # lantern's metrics cases
 import light_client  # lantern's light client cases
 import http_request  # lantern_http_request cases
 import api_route  # lantern_api_route cases, from the beacon-APIs clone
@@ -300,6 +301,11 @@ def main():
         if not runners or "app" in runners:
             file = f"{preset}-phase0-app-options.bin"
             count, digest = write_file(out / file, list(app.cases()))
+            manifest.append((file, count, digest))
+            print(f"{file}: {count} cases")
+        if not runners or "metrics" in runners:
+            file = f"{preset}-phase0-metrics-text.bin"
+            count, digest = write_file(out / file, list(metrics.text_cases(os.environ["BEACON_METRICS"])))
             manifest.append((file, count, digest))
             print(f"{file}: {count} cases")
         if preset == "minimal" and "phase0" in forks and (not runners or "app" in runners):

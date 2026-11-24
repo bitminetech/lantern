@@ -1654,3 +1654,5 @@
 .if DB_SEGMENT_SLOTS != 1 << DB_SEGMENT_SHIFT
 .error "DB_SEGMENT_SHIFT is not the log of DB_SEGMENT_SLOTS"
 .endif
+
+.include "metrics.inc"
