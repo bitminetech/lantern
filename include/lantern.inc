@@ -811,6 +811,7 @@
 .set NODE_LOOKUP_MS, 10000             /* the least time between two lookups of the node */
 .set NODE_STATUS_MS, 12000             /* the least time between two Status requests of node_sync */
 .set NODE_SIDECAR_RETRY_MS, 4000       /* the least time between two sidecar retries */
+.set NODE_REQUEST_MS, 10000            /* a request of the node with no response bytes for this long goes (node.md, the request timeout) */
 .set NODE_COLUMN_PEERS, 2              /* a sampled column with fewer peers of its custody is short (node.md); the code counts to 2 with two masks */
 .set NODE_PEER_SPARE_SHIFT, 3          /* the spare room of the peers part: its capacity >> this */
 .set NODE_HEAD_WORKS, (1 << NODE_WORK_IMPORT_BLOCK) | (1 << NODE_WORK_JUSTIFIED_STATE) | (1 << NODE_WORK_ATTESTATION) | (1 << NODE_WORK_ATTESTER_SLASHING) | (1 << NODE_WORK_BLOCK_ATTESTATION) | (1 << NODE_WORK_BLOCK_SLASHING) | (1 << NODE_WORK_GOSSIP_VOTE)  /* the works that write the store */
@@ -914,7 +915,7 @@
 .set NodeStream_list, 56               /* a ByteList: the request bytes, then the BufferIds of the blocks to send */
 .set NodeStream_request, 80
 .set NodeStream__fixed, 80
-.set NodeResponse_used, 0              /* NodeResponse (node.md): 1 while a stream holds it */
+.set NodeResponse_used, 0              /* NodeResponse (node.md): 0 free, else max(time_ms, 1) at the open and at each STREAM_DATA */
 .set NodeResponse_list, 8              /* a ByteList: the response bytes not read yet */
 .set NodeResponse__fixed, 32
 

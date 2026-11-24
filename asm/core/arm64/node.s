@@ -8570,7 +8570,9 @@ LOCAL_FUNCTION node_open
     LDQ     x11, x19, Node_responses
     madd    x9, x9, x10, x11
     add     x9, x19, x9
-    mov     x11, #1
+    ldr     x11, [x19, #Node_time_ms]       /* used: the time of the open, at least 1 */
+    cmp     x11, #1
+    csinc   x11, x11, xzr, hs
     str     x11, [x9, #NodeResponse_used]
     sub     x10, x10, #NodeResponse_list
     mov     x11, #24
@@ -9302,7 +9304,38 @@ LOCAL_FUNCTION node_sync
     bl      node_response
     orr     x26, x26, x0
     b       1b
-3:  mov     x0, x20                         /* the fork of the store's slot */
+3:  ldr     x22, [x19, #(Node_streams + 8)] /* the request timeout (node.md): from the last stream, an end moves the last */
+33: cbz     x22, 34f
+    sub     x22, x22, #1
+    ldr     x9, [x19, #Node_streams]
+    add     x9, x19, x9
+    ldr     x10, [x19, #Node_stream_bytes]
+    madd    x21, x22, x10, x9
+    ldr     x9, [x21, #NodeStream_state]
+    cmp     x9, #NODE_STREAM_OPENING
+    b.lo    33b
+    ldr     x9, [x21, #NodeStream_response] /* its NodeResponse: no bytes for NODE_REQUEST_MS */
+    cbz     x9, 33b
+    sub     x9, x9, #1
+    LDQ     x10, x19, Node_response_bytes
+    LDQ     x11, x19, Node_responses
+    madd    x9, x9, x10, x11
+    ldr     x9, [x19, x9]                   /* NodeResponse_used */
+    MOVQ    x10, NODE_REQUEST_MS
+    add     x9, x9, x10
+    ldr     x10, [x19, #Node_time_ms]
+    cmp     x10, x9
+    b.lo    33b
+    ldr     x9, [x21, #NodeStream_state]
+    cmp     x9, #NODE_STREAM_RESPONSE
+    b.ne    35f
+    mov     x0, #LIBP2P_EVENT_STREAM_RESET
+    ldr     x1, [x21, #NodeStream_handle]
+    bl      node_out_handle
+35: mov     x0, x21
+    bl      node_end_stream
+    b       33b
+34: mov     x0, x20                         /* the fork of the store's slot */
     bl      node_store_slot
     add     x1, x19, #Node_config
     bl      node_fork
@@ -9479,8 +9512,12 @@ LOCAL_FUNCTION node_notice
     ldr     x0, [x21, #LIBP2P_ACT_SO_TAG]   /* the node's request stream: the request, then the close of our side */
     bl      node_find_opening
     cmn     x0, #1
-    b.eq    69f
-    mov     x22, x1
+    b.ne    620f
+    mov     x0, #LIBP2P_EVENT_STREAM_RESET  /* a tag of no stream of the node: the stream goes */
+    ldr     x1, [x21, #LIBP2P_ACT_STREAM]
+    bl      node_out_handle
+    LEAVE 96
+620: mov    x22, x1
     ldr     x9, [x21, #LIBP2P_ACT_STREAM]
     str     x9, [x22, #NodeStream_handle]
     ldr     x10, [x21, #LIBP2P_ACT_SO_TAG]  /* the backfill's stream: its handle */
@@ -9682,7 +9719,17 @@ LOCAL_FUNCTION node_notice
     add     x1, x21, #LIBP2P_ACT_SD_DATA
     mov     x2, x10
     bl      lantern_copy
-    mov     x0, x22
+    ldr     x9, [x22, #NodeStream_response] /* a request with a NodeResponse: the time of its bytes */
+    cbz     x9, 36f
+    sub     x9, x9, #1
+    LDQ     x10, x19, Node_response_bytes
+    LDQ     x11, x19, Node_responses
+    madd    x9, x9, x10, x11
+    ldr     x11, [x19, #Node_time_ms]
+    cmp     x11, #1
+    csinc   x11, x11, xzr, hs
+    str     x11, [x19, x9]                  /* NodeResponse_used */
+36: mov     x0, x22
     ldr     x9, [x22, #NodeStream_state]
     cmp     x9, #NODE_STREAM_RESPONSE
     b.ne    37f

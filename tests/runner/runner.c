@@ -4867,6 +4867,9 @@ struct p2p_net {
     uint8_t extra_columns[16]; /* fulu: columns the peer adds to its answers, asked or not */
     uint8_t retry_columns[16]; /* fulu: the columns a request may ask for instead of want_columns: a retry's */
     int drop_dials;           /* set: the node's dials reach no one; dials counts them */
+    int silent;               /* set: the peer answers no BeaconBlocksByRange; held is set once it holds one */
+    int held;
+    uint64_t in_resets;       /* the node's request streams to the peer that the node reset */
     uint64_t dials, closes;   /* closes: the connections the node closed */
     uint8_t protos[64 * P2P_PROTO_SIZE]; /* the protocol list of both sides */
     uint64_t nprotos;
@@ -5035,7 +5038,10 @@ static void p2p_peer_app(struct p2p_net *net, uint8_t *act) {
             memcpy(net->in[k].data + net->in[k].len, act + 32, (size_t)count);
             net->in[k].len += count;
         } else if (kind == P2P_ACT_STREAM_EOF) net->in[k].eof = 1;
-        else if (kind == P2P_ACT_STREAM_RESET) net->in[k].handle = 0;
+        else if (kind == P2P_ACT_STREAM_RESET) {
+            net->in[k].handle = 0;
+            net->in_resets++;
+        }
         return;
     }
     for (int k = 0; k < P2P_STREAMS; k++) {
@@ -5152,6 +5158,10 @@ static void p2p_serve(struct p2p_net *net, const char **why) {
         }
         free(input);
         free(req);
+        if (!*why && !status && !columns && !blobs && net->silent) { /* the node's request waits with no answer */
+            net->held = 1;
+            continue;
+        }
         if (!*why && !status && !net->chain) continue; /* blocks and sidecars once the chain is there */
         if (!*why && status) { /* Status: the peer's, of the same version */
             if (net->status_len != header[4]) *why = "the peer: a Status of another version";
@@ -5259,6 +5269,14 @@ static void shell_fake_peer(struct node_shell *s, uint64_t i, const uint8_t *cus
 }
 static int p2p_opened(struct p2p_net *net, int k) { return net->st[k].opened || net->st[k].failed; }
 static int p2p_ended(struct p2p_net *net, int k) { return net->st[k].eof || net->st[k].reset; }
+static int p2p_held(struct p2p_net *net, int arg) {
+    (void)arg;
+    return net->held;
+}
+static int p2p_reset_seen(struct p2p_net *net, int arg) {
+    (void)arg;
+    return net->in_resets != 0;
+}
 
 /* A libp2p config of a side, with the protocol list protos of n entries. */
 static uint8_t *p2p_config(int side, const uint8_t *protos, uint64_t n) {
@@ -6249,6 +6267,15 @@ static void sync_once(tv parts, case_block **chain, size_t nchain, uint64_t last
             memcpy(peers + 24, digest, 4);             /* fork_digest */
             wr64(peers + 104, chain[nchain - 1]->slot); /* head_slot */
             wr64(s->node + NODE_PEERS + 8, np + 1);
+        }
+        if (!*why && sync_dead) { /* the peer holds the first BeaconBlocksByRange: NODE_REQUEST_MS later the node resets it */
+            net.silent = 1;
+            p2p_run(&m, &net, p2p_held, 0, why);
+            if (*why && !strcmp(*why, "the network does not get there")) *why = "sync with a silent peer: the node sends no BeaconBlocksByRange";
+            if (!*why) shell_event(s, EV_TICK, last_ms + 10000, NULL, 0); /* NODE_REQUEST_MS */
+            if (!*why) p2p_run(&m, &net, p2p_reset_seen, 0, why);
+            if (*why && !strcmp(*why, "the network does not get there")) *why = "sync with a silent peer: the node does not reset its request";
+            net.silent = 0;
         }
         if (!*why) p2p_run(&m, &net, no_blobs ? p2p_blobs_wait : p2p_synced, 0, why);
         if (*why && !strcmp(*why, "the network does not get there"))

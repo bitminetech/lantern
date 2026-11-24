@@ -8606,8 +8606,10 @@ LOCAL_FUNCTION node_open
     LDQ     t2, s1, Node_responses
     add     t0, t0, t2
     add     t0, s1, t0
+    ld      t2, Node_time_ms(s1)            # used: the time of the open, at least 1
+    bnez    t2, 13f
     li      t2, 1
-    sd      t2, NodeResponse_used(t0)
+13: sd      t2, NodeResponse_used(t0)
     addi    t1, t1, -NodeResponse_list
     sd      t1, NodeResponse_list(t0)
     li      t2, 24
@@ -9367,7 +9369,40 @@ LOCAL_FUNCTION node_sync
     call    node_response
     or      s7, s7, a0
     j       1b
-3:  mv      a0, s2                          # the fork of the store's slot
+3:  ld      s4, (Node_streams + 8)(s1)      # the request timeout (node.md): from the last stream, an end moves the last
+33: beqz    s4, 34f
+    addi    s4, s4, -1
+    ld      t0, Node_stream_bytes(s1)
+    mul     t0, t0, s4
+    ld      t1, Node_streams(s1)
+    add     t0, t0, t1
+    add     s3, s1, t0
+    ld      t0, NodeStream_state(s3)
+    li      t1, NODE_STREAM_OPENING
+    bltu    t0, t1, 33b
+    ld      t0, NodeStream_response(s3)     # its NodeResponse: no bytes for NODE_REQUEST_MS
+    beqz    t0, 33b
+    addi    t0, t0, -1
+    LDQ     t1, s1, Node_response_bytes
+    mul     t0, t0, t1
+    LDQ     t2, s1, Node_responses
+    add     t0, t0, t2
+    add     t0, s1, t0
+    ld      t0, NodeResponse_used(t0)
+    li      t1, NODE_REQUEST_MS
+    add     t0, t0, t1
+    ld      t1, Node_time_ms(s1)
+    bltu    t1, t0, 33b
+    ld      t0, NodeStream_state(s3)
+    li      t1, NODE_STREAM_RESPONSE
+    bne     t0, t1, 35f
+    li      a0, LIBP2P_EVENT_STREAM_RESET
+    ld      a1, NodeStream_handle(s3)
+    call    node_out_handle
+35: mv      a0, s3
+    call    node_end_stream
+    j       33b
+34: mv      a0, s2                          # the fork of the store's slot
     call    node_store_slot
     addi    a1, s1, Node_config
     call    node_fork
@@ -9543,8 +9578,12 @@ LOCAL_FUNCTION node_notice
     ld      a0, LIBP2P_ACT_SO_TAG(s3)       # the node's request stream: the request, then the close of our side
     call    node_find_opening
     li      t0, -1
-    beq     a0, t0, 69f
-    mv      s4, a1
+    bne     a0, t0, 620f
+    li      a0, LIBP2P_EVENT_STREAM_RESET   # a tag of no stream of the node: the stream goes
+    ld      a1, LIBP2P_ACT_STREAM(s3)
+    call    node_out_handle
+    LEAVE 96
+620: mv     s4, a1
     ld      t0, LIBP2P_ACT_STREAM(s3)
     sd      t0, NodeStream_handle(s4)
     ld      t1, LIBP2P_ACT_SO_TAG(s3)       # the backfill's stream: its handle
@@ -9753,7 +9792,19 @@ LOCAL_FUNCTION node_notice
     add     a0, a0, t0
     addi    a1, s3, LIBP2P_ACT_SD_DATA
     call    lantern_copy
-    mv      a0, s4
+    ld      t0, NodeStream_response(s4)     # a request with a NodeResponse: the time of its bytes
+    beqz    t0, 36f
+    addi    t0, t0, -1
+    LDQ     t1, s1, Node_response_bytes
+    mul     t0, t0, t1
+    LDQ     t2, s1, Node_responses
+    add     t0, t0, t2
+    add     t0, s1, t0
+    ld      t2, Node_time_ms(s1)
+    bnez    t2, 361f
+    li      t2, 1
+361: sd     t2, NodeResponse_used(t0)
+36: mv      a0, s4
     ld      t0, NodeStream_state(s4)
     li      t1, NODE_STREAM_RESPONSE
     bne     t0, t1, 37f
