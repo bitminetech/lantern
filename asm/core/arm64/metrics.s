@@ -252,7 +252,8 @@ FUNCTION lantern_metrics_text
     add     x10, x10, #GossipTopic__mem
     sub     x11, x11, #1
     b       11b
-20: MT_TEXT mx_help                         /* # HELP <name> <help>, # TYPE <name> <type> */
+    /* # HELP <name> <help>, # TYPE <name> <type> */
+20: MT_TEXT mx_help
     bl      mt_name
     MT_TEXT mx_sp
     ldr     w0, [x23, #MetricEntry_help]
