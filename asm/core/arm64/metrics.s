@@ -150,6 +150,41 @@ LOCAL_FUNCTION mt_name
     b       mt_text
 END_FUNCTION mt_name
 
+/*
+ * lantern_metrics_observe(histogram, bounds, value) -> status
+ * The value joins the Histogram of the bound set bounds (METRIC_BOUNDS_*, of microseconds): count,
+ * sum, and the bucket of the first bound at or above it, else the last. A leaf.
+ */
+LEAF lantern_metrics_observe
+    ldr     x1, [x1]
+    ldr     x2, [x2]
+    ldp     x9, x10, [x0]                   /* count, sum */
+    add     x9, x9, #1
+    add     x10, x10, x2
+    stp     x9, x10, [x0]
+    ADDRESS x9, metrics_bounds
+    add     x9, x9, x1, lsl #4
+    ldr     w10, [x9, #MetricBounds_count]
+    ldr     w11, [x9, #MetricBounds_first]
+    ADDRESS x12, metrics_bound_values
+    add     x12, x12, x11, lsl #4
+    mov     x13, #0
+1:  cmp     x13, x10
+    b.hs    2f
+    ldr     x14, [x12, #MetricBound_value]
+    cmp     x2, x14
+    b.ls    2f
+    add     x12, x12, #MetricBound__mem
+    add     x13, x13, #1
+    b       1b
+2:  add     x9, x0, #Histogram_buckets
+    ldr     x10, [x9, x13, lsl #3]
+    add     x10, x10, #1
+    str     x10, [x9, x13, lsl #3]
+    mov     x0, #LANTERN_OK
+    ret
+END_FUNCTION lantern_metrics_observe
+
 /* `name="value"` of the label table record x0 and value index x1. Locals: x0, x1. */
 LOCAL_FUNCTION mt_label
     FRAME 16
@@ -655,7 +690,14 @@ FUNCTION lantern_metrics_node
     ldr     x12, [x9, #NodePool_topic]
     cmp     x12, #GOSSIP_VOLUNTARY_EXIT
     cinc    x11, x11, eq
-    add     x9, x9, #NodePool__mem
+    sub     x13, x12, #1                    /* and the pool's entries by topic */
+    cmp     x13, #(GOSSIP_NAMES - 1)
+    b.hi    31f
+    add     x13, x21, #MetricsNode_pool
+    ldr     x14, [x13, x12, lsl #3]
+    add     x14, x14, #1
+    str     x14, [x13, x12, lsl #3]
+31: add     x9, x9, #NodePool__mem
     sub     x10, x10, #1
     b       3b
 4:  str     x11, [x21, #MetricsNode_pending_exits]
@@ -694,6 +736,40 @@ FUNCTION lantern_metrics_node
     b.eq    8f
     mov     x10, #2
 8:  str     x10, [x21, #MetricsNode_sync_state]
+    str     x22, [x21, #MetricsNode_store_slot]  /* the sync: the head's slot and its distance to the store's */
+    mov     x9, #0
+    cbz     x23, 81f
+    ldr     x9, [x23, #NodeBlock_slot]
+81: str     x9, [x21, #MetricsNode_head_slot]
+    subs    x10, x22, x9
+    csel    x10, xzr, x10, lo
+    str     x10, [x21, #MetricsNode_distance]
+    LDQ     x9, x19, Node_dialing
+    str     x9, [x21, #MetricsNode_dialing]
+    LDQ     x9, x19, Node_earliest_slot
+    str     x9, [x21, #MetricsNode_earliest_slot]
+    LDQ     x9, x19, Node_backfill_slot
+    str     x9, [x21, #MetricsNode_backfill_slot]
+    ldr     x9, [x20, #Store_finalized_checkpoint]
+    str     x9, [x21, #MetricsNode_finalized_epoch]
+    ldr     x9, [x20, #Store_justified_checkpoint]
+    str     x9, [x21, #MetricsNode_justified_epoch]
+    LDQ     x9, x19, Node_messages + 8
+    str     x9, [x21, #MetricsNode_messages]
+    LDQ     x9, x19, Node_streams + 8
+    str     x9, [x21, #MetricsNode_streams]
+    PART    x9, x10, x19, Node_peers
+    add     x13, x21, #MetricsNode_peer_directions
+82: cbz     x10, 83f
+    ldr     x11, [x9, #NodePeer_direction]
+    and     x11, x11, #1
+    ldr     x12, [x13, x11, lsl #3]
+    add     x12, x12, #1
+    str     x12, [x13, x11, lsl #3]
+    add     x9, x9, #NodePeer__mem
+    sub     x10, x10, #1
+    b       82b
+83:
     subs    x26, x25, #1                    /* the previous epoch's first slot */
     csel    x26, xzr, x26, lo
     mov     x9, #SLOTS_PER_EPOCH

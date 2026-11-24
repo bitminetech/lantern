@@ -601,3 +601,34 @@ FUNCTION lantern_shell_sync_dir
     mov     x0, #LANTERN_OK
     ret
 END_FUNCTION lantern_shell_sync_dir
+
+/*
+ * (out): docs/reference/shell.md. x19 out. Locals: L the four FILETIMEs of GetProcessTimes, L+32
+ * PROCESS_MEMORY_COUNTERS (72 bytes).
+ */
+FUNCTION lantern_shell_process
+    ENTER 112
+    mov     x19, x0
+    mov     x0, #-1                         /* GetProcessTimes(GetCurrentProcess(), ...) */
+    add     x1, sp, #L
+    add     x2, sp, #(L + 8)
+    add     x3, sp, #(L + 16)
+    add     x4, sp, #(L + 24)
+    CALL_GLOBAL GetProcessTimes
+    ldp     x9, x10, [sp, #(L + 16)]        /* kernel and user time, in 100 ns */
+    add     x9, x9, x10
+    mov     x10, #10
+    udiv    x9, x9, x10
+    str     x9, [x19]
+    mov     w9, #72                         /* K32GetProcessMemoryInfo: PeakWorkingSetSize */
+    str     w9, [sp, #(L + 32)]
+    mov     x0, #-1
+    add     x1, sp, #(L + 32)
+    mov     x2, #72
+    CALL_GLOBAL K32GetProcessMemoryInfo
+    ldr     x9, [sp, #(L + 40)]
+    str     x9, [x19, #8]
+    str     xzr, [x19, #16]
+    mov     x0, #LANTERN_OK
+    LEAVE 112
+END_FUNCTION lantern_shell_process

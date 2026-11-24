@@ -108,7 +108,15 @@
 .set APP_MET_PROCESS, APP_MET_NODE + MetricsNode__mem       /* MetricsProcess */
 .set APP_MET_EMPTY, APP_MET_PROCESS + MetricsProcess__mem   /* a ByteList of no bytes: the head block when its bytes are not held */
 .set APP_METRICS, APP_MET_EMPTY + 24         /* AppMetrics: the run times the app keeps */
-.set APP_MET_SLOT0, APP_METRICS + AppMetrics__mem   /* APP_MET_CONNS slots of APP_MET_SLOT bytes */
+.set APP_MET_T0, APP_METRICS + AppMetrics__mem      /* the microseconds at the start of the work that runs */
+.set APP_MET_T1, APP_MET_T0 + 8              /* the microseconds at the start of the node step that runs */
+.set APP_MET_S0, APP_MET_T1 + 8              /* the slot of the state_a of the work that runs, or 0 */
+.set APP_MET_ST, APP_MET_S0 + 8              /* the status of the last node step */
+.set APP_MET_START_US, APP_MET_ST + 8        /* the microseconds of the start */
+.set APP_MET_START_S, APP_MET_START_US + 8   /* the Unix seconds of the start */
+.set APP_MET_SHELLP, APP_MET_START_S + 8     /* ShellProcess of lantern_shell_process (shell.md) */
+.set APP_MET_TICK, APP_MET_SHELLP + 24       /* a libp2p Tick for the microseconds */
+.set APP_MET_SLOT0, APP_MET_TICK + LIBP2P_TICK_SIZE  /* APP_MET_CONNS slots of APP_MET_SLOT bytes */
 .set APP_MET_CONNS, 4                        /* the metrics server's connections at a time */
 .set APP_MET_SLOT, 104 + METRICS_HEAD_MAX    /* a slot: its generation, its state, the time of its last bytes, the pair of
                                                 its answer's memory, the answer's bytes, those sent, those in flight, then
@@ -149,7 +157,7 @@
 .set APP_API_BODY_MAX, 1 << 20
 .set APP_API_BUFFER, APP_API_HEAD_MAX + APP_API_BODY_MAX + APP_API_HEAD_MAX  /* the bytes a slot holds */
 .set APP_API_SLOT_BYTES, 24 + APP_API_BUFFER
-.set APP_API_SLOT, 48                       /* a slot: its generation, its state, its bytes held, the time of its last bytes, its bytes in flight, 1 when an API_SENT is owed */
+.set APP_API_SLOT, 56                       /* a slot: its generation, its state, its bytes held, the time of its last bytes, its bytes in flight, 1 when an API_SENT is owed, 1 until the answer's first bytes go */
 .set APP_API_FREE, 0                        /* the states of a slot */
 .set APP_API_READING, 1                     /* no answer pending: its bytes are read */
 .set APP_API_ANSWERING, 2                   /* a NODE_EV_API went; the answer's last bytes have not */
@@ -189,6 +197,9 @@ app_state_room:                             /* StateRoom */
     .quad 1024, 2048, 64, 1024, 64, 64, 4, 4096
 app_log_rank:                               /* the level of each kind of line: APP_LOG_INFO to APP_LOG_DEBUG */
     .byte 2, 2, 0, 1, 3
+app_work_slots:                             /* the AppMetrics slot of each NODE_WORK_* kind (include/metrics.inc) */
+    METRIC_WORK_SLOTS
+    .p2align 3
 app_log_names:                              /* each level's name in 5 bytes, at 8 bytes apart */
     .ascii "ERROR"
     .space 3

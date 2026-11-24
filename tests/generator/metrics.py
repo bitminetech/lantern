@@ -68,18 +68,62 @@ BOUNDS = {
     "default": ("us", ["0.005", "0.01", "0.025", "0.05", "0.1", "0.25", "0.5", "1", "2.5", "5", "10"]),
     "kzg": ("us", ["0.002", "0.004", "0.008", "0.016", "0.032", "0.064", "0.128", "0.256", "0.512", "1.024"]),
     "delay": ("us", ["0.5", "1", "2", "3", "4", "6", "8", "12", "24"]),
+    "work": ("us", ["0.00001", "0.0001", "0.0005", "0.001", "0.005", "0.01", "0.05", "0.1", "0.5", "1", "5"]),
     "ticks": ("ticks", ["0.000001", "0.000004", "0.000016", "0.000064", "0.000256", "0.001", "0.004", "0.016",
                         "0.064", "0.256", "1"]),
 }
-BOUND_ORDER = ["default", "kzg", "delay", "ticks"]
+BOUND_ORDER = ["default", "kzg", "delay", "ticks", "work"]
 PROFILE_BOUNDS = len(BOUNDS["ticks"][1])
 
 # ---------------------------------------------------------------- Labels
 
 # id: (label name, values)
+TOPICS = ["other", "beacon_block", "beacon_aggregate_and_proof", "beacon_attestation", "voluntary_exit",
+          "proposer_slashing", "attester_slashing", "sync_committee_contribution_and_proof", "sync_committee",
+          "bls_to_execution_change", "blob_sidecar", "data_column_sidecar", "light_client_finality_update",
+          "light_client_optimistic_update"]  # by GOSSIP_*: 0 a topic of no name
+METHODS = ["other", "status", "goodbye", "beacon_blocks_by_range", "beacon_blocks_by_root", "ping", "metadata",
+           "blob_sidecars_by_range", "blob_sidecars_by_root", "data_column_sidecars_by_range",
+           "data_column_sidecars_by_root", "beacon_blocks_by_head", "light_client_bootstrap",
+           "light_client_updates_by_range", "light_client_finality_update", "light_client_optimistic_update"]  # by REQRESP_*
+# NODE_WORK_* kinds by number (node.md), and the processing sub category of each.
+WORKS = ["none", "import_block", "justified_state", "target_state", "attestation", "attester_slashing", "serve",
+         "gossip", "sync_block", "blob", "new_payload", "forkchoice", "slots", "upgrade", "replay", "backfill",
+         "block_attestation", "block_slashing", "gossip_vote", "api_encode", "api_chunk", "api_lookup", "api_event",
+         "api_submit", "pool_check", "prepare_payload", "produce_check", "get_payload", "produce_fold", "produce_block",
+         "publish_decode", "publish_sidecars", "publish_check", "publish_sidecar", "lc_block", "lc_head", "lc_serve",
+         "lc_gossip", "lc_publish", "produce_bid", "eth1_check", "produce_eth1", "archive_load", "custody",
+         "reconstruct"]
+WORK_SUB = {
+    "block": ["import_block", "sync_block", "block_attestation", "block_slashing", "replay"],
+    "state": ["justified_state", "target_state", "slots", "upgrade"],
+    "forkchoice": ["attestation", "attester_slashing", "gossip_vote"],
+    "availability": ["blob", "reconstruct", "custody"],
+    "gossip": ["gossip"],
+    "engine": ["new_payload", "forkchoice", "prepare_payload", "get_payload", "eth1_check"],
+    "builder": ["produce_bid"],
+    "lightclient": ["lc_block", "lc_head", "lc_serve", "lc_gossip", "lc_publish"],
+    "history": ["backfill", "archive_load", "serve"],
+    "validator": ["api_encode", "api_chunk", "api_lookup", "api_event", "api_submit", "pool_check", "produce_check",
+                  "produce_fold", "produce_block", "publish_decode", "publish_sidecars", "publish_check",
+                  "publish_sidecar", "produce_eth1"],
+}
+WORK_ORDER = [w for sub in WORK_SUB.values() for w in sub]  # the slots of AppMetrics work_seconds and work_failures
+assert sorted(WORK_ORDER) == sorted(WORKS[1:])
+WORK_SLOT = {w: i for i, w in enumerate(WORK_ORDER)}
+
 LABELS = {
     "status": ("status", ["pending", "active", "exited", "withdrawable"]),
+    "topic": ("topic", TOPICS),
+    "result": ("result", ["accept", "ignore", "reject"]),
+    "method": ("method", METHODS),
+    "direction": ("direction", ["inbound", "outbound"]),
+    "level": ("level", ["error", "warn", "info", "debug"]),  # by the level of app_log_rank
+    "class": ("class", ["2xx", "3xx", "4xx", "5xx"]),
+    "kind": ("kind", ["block", "sidecar", "state"]),
 }
+for _sub, _works in WORK_SUB.items():
+    LABELS["work_" + _sub] = ("work", _works)
 
 # ---------------------------------------------------------------- Structs
 
@@ -97,21 +141,31 @@ STRUCTS = {
     "MetricsNode": [
         ("peers", "u64", 1), ("fulu", "u64", 1), ("custody_groups", "u64", 1), ("pending_exits", "u64", 1),
         ("local_validators", "u64", 1), ("orphaned_blocks", "u64", 1), ("sync_state", "u64", 1),
-        ("head_block_id", "u64", 1), ("head_state_id", "u64", 1),
+        ("head_block_id", "u64", 1), ("head_state_id", "u64", 1), ("peer_directions", "u64", 2),
+        ("dialing", "u64", 1), ("head_slot", "u64", 1), ("store_slot", "u64", 1), ("distance", "u64", 1),
+        ("earliest_slot", "u64", 1), ("backfill_slot", "u64", 1), ("finalized_epoch", "u64", 1),
+        ("justified_epoch", "u64", 1), ("messages", "u64", 1), ("streams", "u64", 1), ("pool", "u64", len(TOPICS)),
     ],
-    "NodeMetrics": [
-        ("reorgs", "u64", 1), ("column_requests", "u64", 1), ("column_successes", "u64", 1),
-        ("reconstructed_columns", "u64", 1), ("aggregates_received", "u64", 1),
-        ("attestations_received", "u64", 1), ("attester_slashings_received", "u64", 1),
-        ("blocks_proposed", "u64", 1), ("attestations_published", "u64", 1), ("gossip_blocks_imported", "u64", 1),
-        ("validation_failures", "u64", 1), ("api_requests", "u64", 1), ("api_successes", "u64", 1),
-        ("attestation_delay", "hist", 1), ("block_delay", "hist", 1),
-    ],
+    "NodeMetrics": [("reorgs", "u64", 1), ("attestations_published", "u64", 1)],
     "AppMetrics": [
         ("gossip_verification", "hist", 1), ("reconstruction", "hist", 1), ("computation", "hist", 1),
-        ("kzg_batch", "hist", 1),
+        ("kzg_batch", "hist", 1), ("attestation_delay", "hist", 1), ("block_delay", "hist", 1),
+        ("column_requests", "u64", 1), ("column_successes", "u64", 1), ("reconstructed_columns", "u64", 1),
+        ("aggregates_received", "u64", 1), ("attestations_received", "u64", 1),
+        ("attester_slashings_received", "u64", 1), ("blocks_proposed", "u64", 1),
+        ("gossip_blocks_imported", "u64", 1), ("validation_failures", "u64", 1), ("api_requests", "u64", 1),
+        ("api_successes", "u64", 1), ("connections", "u64", 2), ("dial_failures", "u64", 1), ("closed", "u64", 1),
+        ("records", "u64", 1), ("lookups", "u64", 1), ("dv_in", "u64", 1), ("dv_out", "u64", 1),
+        ("dv_failures", "u64", 1), ("rx_bytes", "u64", 1), ("tx_bytes", "u64", 1),
+        ("gossip_results", "u64", 3 * len(TOPICS)), ("served", "u64", len(METHODS)),
+        ("work_seconds", "hist", len(WORK_ORDER)), ("work_failures", "u64", len(WORK_ORDER)),
+        ("epoch_transitions", "u64", 1), ("epoch_seconds", "hist", 1), ("gossip_seconds", "hist", len(TOPICS)),
+        ("step_seconds", "hist", 1), ("log_lines", "u64", 4), ("api_classes", "u64", 4), ("db_records", "u64", 3),
+        ("db_bytes", "u64", 3), ("db_anchors", "u64", 1), ("db_drops", "u64", 1), ("db_failures", "u64", 1),
     ],
-    "MetricsProcess": [("cpu_us", "u64", 1), ("max_fds", "u64", 1)],
+    "MetricsProcess": [("cpu_us", "u64", 1), ("max_fds", "u64", 1), ("max_rss_bytes", "u64", 1), ("buffers", "u64", 1),
+                       ("buffer_bytes", "u64", 1), ("start_s", "u64", 1), ("uptime_us", "u64", 1),
+                       ("engine", "u64", 1), ("api_open", "u64", 1)],
     "Profile": [("ticks_per_second", "u64", 1), ("bounds", "u64", PROFILE_BOUNDS)],
 }
 TYPE_SIZE = {"u64": 8, "i64": 8, "hist": 16 + 8 * BUCKETS, "bytes16": 16}
@@ -139,9 +193,10 @@ KINDS = ["u64", "root", "seconds", "array", "hist", "array_hist", "gossip_main",
 CONDS = [None, "state", "electra", "fulu", "state_root", "max_fds", "profile", "altair"]
 
 
-def F(name, mtype, cat, src, field, kind, labels=(), bounds=None, cond=None, help=None):
+def F(name, mtype, cat, src, field, kind, labels=(), bounds=None, cond=None, help=None, index=0):
+    """A family; index: its first element in the field's array."""
     return {"name": name, "type": mtype, "cat": cat, "src": src, "field": field, "kind": kind,
-            "labels": list(labels), "bounds": bounds, "cond": cond, "help": help}
+            "labels": list(labels), "bounds": bounds, "cond": cond, "help": help, "index": index}
 
 
 # The beacon category (ethereum/beacon-metrics), in its order; type and HELP from metrics.md.
@@ -154,11 +209,11 @@ BEACON = [
     F("beacon_current_active_validators", None, "beacon", "state", "active_validators", "u64", cond="state"),
     F("beacon_reorgs_total", None, "beacon", "counters", "reorgs", "u64"),
     F("beacon_processed_deposits_total", None, "beacon", "state", "deposit_count", "u64", cond="state"),
-    F("beacon_data_column_sidecar_processing_requests_total", None, "beacon", "counters", "column_requests", "u64"),
-    F("beacon_data_column_sidecar_processing_successes_total", None, "beacon", "counters", "column_successes", "u64"),
+    F("beacon_data_column_sidecar_processing_requests_total", None, "beacon", "app", "column_requests", "u64"),
+    F("beacon_data_column_sidecar_processing_successes_total", None, "beacon", "app", "column_successes", "u64"),
     F("beacon_data_column_sidecar_gossip_verification_seconds", None, "beacon", "app", "gossip_verification", "hist",
       bounds="default"),
-    F("beacon_data_availability_reconstructed_columns_total", None, "beacon", "counters", "reconstructed_columns",
+    F("beacon_data_availability_reconstructed_columns_total", None, "beacon", "app", "reconstructed_columns",
       "u64"),
     F("beacon_data_availability_reconstruction_time_seconds", None, "beacon", "app", "reconstruction", "hist",
       bounds="default"),
@@ -178,21 +233,21 @@ BEACON = [
     F("beacon_pending_exits", None, "beacon", "node", "pending_exits", "u64"),
     F("beacon_previous_epoch_orphaned_blocks", None, "beacon", "node", "orphaned_blocks", "u64"),
     F("gossipsub_mesh_peers_per_main_topic", None, "beacon", "gossip", None, "gossip_main"),
-    F("beacon_attestation_delay_count", None, "beacon", "counters", "attestation_delay", "hist", bounds="delay"),
+    F("beacon_attestation_delay_count", None, "beacon", "app", "attestation_delay", "hist", bounds="delay"),
     F("local_validator_count", None, "beacon", "node", "local_validators", "u64"),
     F("beacon_head_state_finalized_root", None, "beacon", "state", "finalized_root", "root", cond="state"),
     F("beacon_previous_justified_root", None, "beacon", "state", "previous_justified_root", "root", cond="state"),
-    F("beacon_aggregates_received_total", None, "beacon", "counters", "aggregates_received", "u64"),
-    F("beacon_block_delay_count", None, "beacon", "counters", "block_delay", "hist", bounds="delay"),
-    F("beacon_attestor_slashing_received_total", None, "beacon", "counters", "attester_slashings_received", "u64"),
-    F("beacon_block_proposed_total", None, "beacon", "counters", "blocks_proposed", "u64"),
+    F("beacon_aggregates_received_total", None, "beacon", "app", "aggregates_received", "u64"),
+    F("beacon_block_delay_count", None, "beacon", "app", "block_delay", "hist", bounds="delay"),
+    F("beacon_attestor_slashing_received_total", None, "beacon", "app", "attester_slashings_received", "u64"),
+    F("beacon_block_proposed_total", None, "beacon", "app", "blocks_proposed", "u64"),
     F("beacon_attestations_published_total", None, "beacon", "counters", "attestations_published", "u64"),
-    F("beacon_processor_gossip_block_imported_total", None, "beacon", "counters", "gossip_blocks_imported", "u64"),
-    F("libp2p_pubsub_validation_failure_total", None, "beacon", "counters", "validation_failures", "u64"),
+    F("beacon_processor_gossip_block_imported_total", None, "beacon", "app", "gossip_blocks_imported", "u64"),
+    F("libp2p_pubsub_validation_failure_total", None, "beacon", "app", "validation_failures", "u64"),
     F("beacon_head_state_root", None, "beacon", "state", "state_root", "root", cond="state_root"),
-    F("beacon_attestations_received_total", None, "beacon", "counters", "attestations_received", "u64"),
-    F("beacon_http_api_requests_total", None, "beacon", "counters", "api_requests", "u64"),
-    F("beacon_http_api_successes_total", None, "beacon", "counters", "api_successes", "u64"),
+    F("beacon_attestations_received_total", None, "beacon", "app", "attestations_received", "u64"),
+    F("beacon_http_api_requests_total", None, "beacon", "app", "api_requests", "u64"),
+    F("beacon_http_api_successes_total", None, "beacon", "app", "api_successes", "u64"),
     F("beacon_sync_state", None, "beacon", "node", "sync_state", "u64"),
     F("process_cpu_seconds_total", None, "beacon", "process", "cpu_us", "seconds"),
     F("process_max_fds", None, "beacon", "process", "max_fds", "u64", cond="max_fds"),
@@ -200,7 +255,122 @@ BEACON = [
     F("gossipsub_mesh_peer_counts", None, "beacon", "gossip", None, "gossip_mesh"),
 ]
 
-FAMILIES = BEACON
+def _work_families():
+    out = []
+    for sub, works in WORK_SUB.items():
+        out.append(F(f"lantern_processing_{sub}_work_seconds", "histogram", f"processing.{sub}", "app", "work_seconds",
+                     "array_hist", labels=["work_" + sub], bounds="work", index=WORK_SLOT[works[0]],
+                     help=f"Run time of each node work of the {sub} stage, by work kind"))
+        out.append(F(f"lantern_processing_{sub}_work_failures_total", "counter", f"processing.{sub}", "app",
+                     "work_failures", "array", labels=["work_" + sub], index=WORK_SLOT[works[0]],
+                     help=f"Node works of the {sub} stage whose result was not LANTERN_OK, by work kind"))
+    return out
+
+
+NETWORK = [
+    F("lantern_network_peer_connected", "gauge", "network.peer", "node", "peers", "u64",
+      help="Connected peers"),
+    F("lantern_network_peer_direction", "gauge", "network.peer", "node", "peer_directions", "array", labels=["direction"],
+      help="Connected peers by the direction of their connection"),
+    F("lantern_network_peer_dialing", "gauge", "network.peer", "node", "dialing", "u64",
+      help="Dials of the node not yet connected or failed"),
+    F("lantern_network_peer_connections_total", "counter", "network.peer", "app", "connections", "array",
+      labels=["direction"], help="Connections made, by direction"),
+    F("lantern_network_peer_dial_failures_total", "counter", "network.peer", "app", "dial_failures", "u64",
+      help="Dials that failed"),
+    F("lantern_network_peer_disconnections_total", "counter", "network.peer", "app", "closed", "u64",
+      help="Connections that closed"),
+    F("lantern_network_discovery_records_total", "counter", "network.discovery", "app", "records", "u64",
+      help="Node records discv5 found and gave to the node"),
+    F("lantern_network_discovery_lookups_total", "counter", "network.discovery", "app", "lookups", "u64",
+      help="Lookups the node asked discv5 for"),
+    F("lantern_network_discovery_datagrams_received_total", "counter", "network.discovery", "app", "dv_in", "u64",
+      help="UDP datagrams discv5 received"),
+    F("lantern_network_discovery_datagrams_sent_total", "counter", "network.discovery", "app", "dv_out", "u64",
+      help="UDP datagrams discv5 sent"),
+    F("lantern_network_discovery_step_failures_total", "counter", "network.discovery", "app", "dv_failures", "u64",
+      help="discv5 steps that failed"),
+    F("lantern_network_transport_received_bytes_total", "counter", "network.transport", "app", "rx_bytes", "u64",
+      help="Bytes received on libp2p connections"),
+    F("lantern_network_transport_sent_bytes_total", "counter", "network.transport", "app", "tx_bytes", "u64",
+      help="Bytes sent on libp2p connections"),
+    F("lantern_network_gossip_messages_total", "counter", "network.gossip", "app", "gossip_results", "array",
+      labels=["topic", "result"], help="Gossip messages validated, by topic and result"),
+    F("lantern_network_gossip_messages_held", "gauge", "network.gossip", "node", "messages", "u64",
+      help="Gossip messages the node holds"),
+    F("lantern_network_reqresp_served_total", "counter", "network.reqresp", "app", "served", "array", labels=["method"],
+      help="Requests of peers the node served, by method"),
+    F("lantern_network_reqresp_streams_open", "gauge", "network.reqresp", "node", "streams", "u64",
+      help="Request streams open"),
+]
+
+PROCESSING = _work_families() + [
+    F("lantern_processing_epoch_transitions_total", "counter", "processing.epoch", "app", "epoch_transitions", "u64",
+      help="Slot processing works that crossed an epoch boundary"),
+    F("lantern_processing_epoch_slots_seconds", "histogram", "processing.epoch", "app", "epoch_seconds", "hist",
+      bounds="work", help="Run time of each slot processing work that crossed an epoch boundary"),
+    F("lantern_processing_gossip_validation_seconds", "histogram", "processing.gossip", "app", "gossip_seconds",
+      "array_hist", labels=["topic"], bounds="work", help="Run time of each gossip validation, by topic"),
+]
+
+NODE = [
+    F("lantern_node_resource_cpu_seconds_total", "counter", "node.resource", "process", "cpu_us", "seconds",
+      help="User and system CPU time"),
+    F("lantern_node_resource_max_resident_memory_bytes", "gauge", "node.resource", "process", "max_rss_bytes", "u64",
+      help="Highest resident memory since the start"),
+    F("lantern_node_resource_max_fds", "gauge", "node.resource", "process", "max_fds", "u64", cond="max_fds",
+      help="The soft limit of open files"),
+    F("lantern_node_resource_buffers", "gauge", "node.resource", "process", "buffers", "u64",
+      help="Buffers the app holds for the node"),
+    F("lantern_node_resource_buffer_bytes", "gauge", "node.resource", "process", "buffer_bytes", "u64",
+      help="Bytes of those buffers"),
+    F("lantern_node_resource_start_time_seconds", "gauge", "node.resource", "process", "start_s", "u64",
+      help="Unix time of the start"),
+    F("lantern_node_sync_head_slot", "gauge", "node.sync", "node", "head_slot", "u64", help="Slot of the head block"),
+    F("lantern_node_sync_store_slot", "gauge", "node.sync", "node", "store_slot", "u64", help="Slot of the store's time"),
+    F("lantern_node_sync_distance", "gauge", "node.sync", "node", "distance", "u64",
+      help="Slots from the head to the store's slot"),
+    F("lantern_node_sync_state", "gauge", "node.sync", "node", "sync_state", "u64",
+      help="0 behind and not syncing, 1 synced, 2 syncing"),
+    F("lantern_node_sync_earliest_slot", "gauge", "node.sync", "node", "earliest_slot", "u64",
+      help="First slot whose blocks the node serves"),
+    F("lantern_node_sync_backfill_slot", "gauge", "node.sync", "node", "backfill_slot", "u64",
+      help="Slot below which the backfill looks for blocks"),
+    F("lantern_node_sync_finalized_epoch", "gauge", "node.sync", "node", "finalized_epoch", "u64",
+      help="The store's finalized epoch"),
+    F("lantern_node_sync_justified_epoch", "gauge", "node.sync", "node", "justified_epoch", "u64",
+      help="The store's justified epoch"),
+    F("lantern_node_health_uptime_seconds", "gauge", "node.health", "process", "uptime_us", "seconds",
+      help="Time since the start"),
+    F("lantern_node_health_execution_engine", "gauge", "node.health", "process", "engine", "u64",
+      help="Connection to the execution engine: 0 none, 1 dialing, 2 open"),
+    F("lantern_node_health_step_seconds", "histogram", "node.health", "app", "step_seconds", "hist", bounds="work",
+      help="Run time of each node step"),
+    F("lantern_node_pool_operations", "gauge", "node.pool", "node", "pool", "array", labels=["topic"],
+      help="Operations in the pool, by topic"),
+    F("lantern_node_pool_proposers", "gauge", "node.pool", "node", "local_validators", "u64",
+      help="Validators with a fee recipient from prepareBeaconProposer"),
+    F("lantern_node_log_lines_total", "counter", "node.log", "app", "log_lines", "array", labels=["level"],
+      help="Log lines written, by level"),
+    F("lantern_node_api_requests_total", "counter", "node.api", "app", "api_requests", "u64",
+      help="Beacon API requests"),
+    F("lantern_node_api_answers_total", "counter", "node.api", "app", "api_classes", "array", labels=["class"],
+      help="Beacon API answers, by status class"),
+    F("lantern_node_api_connections_open", "gauge", "node.api", "process", "api_open", "u64",
+      help="Beacon API connections open"),
+    F("lantern_node_storage_records_total", "counter", "node.storage", "app", "db_records", "array", labels=["kind"],
+      help="Records appended to the history's segment files, by kind"),
+    F("lantern_node_storage_record_bytes_total", "counter", "node.storage", "app", "db_bytes", "array", labels=["kind"],
+      help="Bytes of those records"),
+    F("lantern_node_storage_anchors_total", "counter", "node.storage", "app", "db_anchors", "u64",
+      help="Anchor states written for a restart"),
+    F("lantern_node_storage_segments_dropped_total", "counter", "node.storage", "app", "db_drops", "u64",
+      help="Segment files deleted"),
+    F("lantern_node_storage_write_failures_total", "counter", "node.storage", "app", "db_failures", "u64",
+      help="Writes to the data directory that failed"),
+]
+
+FAMILIES = BEACON + NETWORK + PROCESSING + NODE
 
 
 def spec_table(beacon_metrics):
@@ -292,6 +462,11 @@ def text(fams, categories, src, topics):
             continue
         out.append(f"# HELP {name} {f['help']}\n# TYPE {name} {f['type']}\n")
         v = src[f["src"]][f["field"]] if f["field"] else None
+        if isinstance(v, list) and f["kind"] in ("array", "array_hist"):
+            n = 1
+            for x in f["labels"]:
+                n *= len(LABELS[x][1])
+            v = v[f["index"]:f["index"] + n]
         tps = prof["ticks_per_second"] if prof else 0
         if kind == "u64" or kind == "root":
             out.append(f"{name} {v}\n")
@@ -507,6 +682,32 @@ def answer_cases(beacon_metrics):
         yield name, out
 
 
+# ---------------------------------------------------------------- lantern_metrics_observe
+
+def observe_cases():
+    """Each microsecond bound set: a Histogram with random counts, then values about its bounds (and
+    0, and 2^64 - 1 for a sum that wraps) one at a time, and the Histogram after each."""
+    rng = random.Random(7806)
+    for b in BOUND_ORDER:
+        unit, texts = BOUNDS[b]
+        if unit != "us":
+            continue
+        lim = [round(float(t) * 1000000) for t in texts]
+        for k in range(3):
+            h = {"count": rng.getrandbits(32), "sum": rng.getrandbits(63), "buckets": [rng.getrandbits(20) for _ in range(BUCKETS)]}
+            start = hist_bytes(h)
+            vals = [rng.choice([0, 1, lim[0], lim[0] + 1, lim[-1], lim[-1] + 1, (1 << 64) - 1] + [x + d for x in lim for d in (-1, 0, 1)])
+                    for _ in range(40)]
+            outs = b""
+            for v in vals:
+                h["count"] = (h["count"] + 1) % (1 << 64)
+                h["sum"] = (h["sum"] + v) % (1 << 64)
+                h["buckets"][next((i for i, x in enumerate(lim) if v <= x), len(lim))] += 1
+                outs += hist_bytes(h)
+            yield f"{b}/{k}", {"bounds": BOUND_ORDER.index(b), "histogram": start,
+                               "values": b"".join(struct.pack("<Q", v) for v in vals), "out": outs}
+
+
 # ---------------------------------------------------------------- lantern_<fork>_metrics_state
 
 FORKS = ("phase0", "altair", "bellatrix", "capella", "deneb", "electra", "fulu")
@@ -620,6 +821,10 @@ def write_metrics_inc(path):
         out.append(f".set METRICS_{cat.upper()}, {category_mask(cat)}")
     out.append(f".set METRICS_ALL, {sum(1 << b for b in BITS.values())}")
     out.append("/* The names of the --metrics flag (app.md): each one's bits, its length, the name in 24 bytes */")
+    out.append("/* The slot of each NODE_WORK_* kind in AppMetrics work_seconds and work_failures, by kind */")
+    out.append(".macro METRIC_WORK_SLOTS")
+    out.append("    .byte " + ", ".join(str(WORK_SLOT.get(w, 0)) for w in WORKS))
+    out.append(".endm")
     out.append(".macro METRIC_CATEGORY_NAMES")
     for name in flag_names():
         assert len(name) <= 24
@@ -738,6 +943,9 @@ def write_table_inc(path, beacon_metrics):
     for f, nid, hid in rows:
         src = f["src"]
         off = "0" if f["field"] is None else f"{SOURCE_STRUCT[src]}_{f['field']}"
+        if f["index"]:
+            typ = layout(SOURCE_STRUCT[src])[0][f["field"]][1]
+            off += f" + {f['index'] * TYPE_SIZE[typ]}"
         labs = [label_ids[x] for x in f["labels"]] + [0, 0]
         count = 1
         for x in f["labels"]:

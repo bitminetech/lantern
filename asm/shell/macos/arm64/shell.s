@@ -515,3 +515,33 @@ FUNCTION lantern_shell_sync_dir
     mov     x0, #LANTERN_OK
     LEAVE 0
 END_FUNCTION lantern_shell_sync_dir
+
+/* (out): docs/reference/shell.md. x19 out. Locals: struct rusage (144 bytes), then struct rlimit (16). */
+FUNCTION lantern_shell_process
+    ENTER 160
+    mov     x19, x0
+    mov     w0, #0                          /* getrusage(RUSAGE_SELF) */
+    add     x1, sp, #L
+    CALL_GLOBAL getrusage
+    ldr     x9, [sp, #L]                    /* user and system seconds; their microseconds are ints */
+    ldr     x11, [sp, #(L + 16)]
+    add     x9, x9, x11
+    MOVQ    x13, 1000000
+    mul     x9, x9, x13
+    ldrsw   x10, [sp, #(L + 8)]
+    ldrsw   x12, [sp, #(L + 24)]
+    add     x9, x9, x10
+    add     x9, x9, x12
+    str     x9, [x19]
+    ldr     x9, [sp, #(L + 32)]             /* ru_maxrss, in bytes */
+    str     x9, [x19, #8]
+    mov     w0, #8                          /* getrlimit(RLIMIT_NOFILE) */
+    add     x1, sp, #(L + 144)
+    CALL_GLOBAL getrlimit
+    mov     x9, #0
+    cbnz    w0, 1f
+    ldr     x9, [sp, #(L + 144)]
+1:  str     x9, [x19, #16]
+    mov     x0, #LANTERN_OK
+    LEAVE 160
+END_FUNCTION lantern_shell_process

@@ -11431,6 +11431,11 @@ LOCAL_FUNCTION node_api_submit_done
     ldr     x2, [x21, #NodeAction_arg]
     lsr     x2, x2, #16
     bl      node_op_event
+    cmp     x26, #GOSSIP_BEACON_ATTESTATION /* the metrics (metrics.md): an attestation that goes out */
+    cset    x9, eq
+    LDQ     x10, x19, Node_metrics + NodeMetrics_attestations_published
+    add     x10, x10, x9
+    STQ     x10, x19, Node_metrics + NodeMetrics_attestations_published
     mov     x4, #0                          /* an attestation: its slot and committee index, its member */
     mov     x5, #0
     ldr     x6, [x22, #8]

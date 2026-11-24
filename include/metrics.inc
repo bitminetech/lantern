@@ -32,6 +32,10 @@
 .set METRICS_NODE, 2130706432
 .set METRICS_ALL, 2131230527
 /* The names of the --metrics flag (app.md): each one's bits, its length, the name in 24 bytes */
+/* The slot of each NODE_WORK_* kind in AppMetrics work_seconds and work_failures, by kind */
+.macro METRIC_WORK_SLOTS
+    .byte 0, 0, 5, 6, 9, 10, 29, 15, 1, 12, 16, 17, 7, 8, 4, 27, 2, 3, 11, 30, 31, 32, 33, 34, 35, 18, 36, 19, 37, 38, 39, 40, 41, 42, 22, 23, 24, 25, 26, 21, 20, 43, 28, 14, 13
+.endm
 .macro METRIC_CATEGORY_NAMES
     .quad 1, 6
     .ascii "beacon"
@@ -151,31 +155,75 @@
 .set MetricsNode_sync_state, 48
 .set MetricsNode_head_block_id, 56
 .set MetricsNode_head_state_id, 64
-.set MetricsNode__mem, 72
+.set MetricsNode_peer_directions, 72
+.set MetricsNode_dialing, 88
+.set MetricsNode_head_slot, 96
+.set MetricsNode_store_slot, 104
+.set MetricsNode_distance, 112
+.set MetricsNode_earliest_slot, 120
+.set MetricsNode_backfill_slot, 128
+.set MetricsNode_finalized_epoch, 136
+.set MetricsNode_justified_epoch, 144
+.set MetricsNode_messages, 152
+.set MetricsNode_streams, 160
+.set MetricsNode_pool, 168
+.set MetricsNode__mem, 280
 .set NodeMetrics_reorgs, 0
-.set NodeMetrics_column_requests, 8
-.set NodeMetrics_column_successes, 16
-.set NodeMetrics_reconstructed_columns, 24
-.set NodeMetrics_aggregates_received, 32
-.set NodeMetrics_attestations_received, 40
-.set NodeMetrics_attester_slashings_received, 48
-.set NodeMetrics_blocks_proposed, 56
-.set NodeMetrics_attestations_published, 64
-.set NodeMetrics_gossip_blocks_imported, 72
-.set NodeMetrics_validation_failures, 80
-.set NodeMetrics_api_requests, 88
-.set NodeMetrics_api_successes, 96
-.set NodeMetrics_attestation_delay, 104
-.set NodeMetrics_block_delay, 216
-.set NodeMetrics__mem, 328
+.set NodeMetrics_attestations_published, 8
+.set NodeMetrics__mem, 16
 .set AppMetrics_gossip_verification, 0
 .set AppMetrics_reconstruction, 112
 .set AppMetrics_computation, 224
 .set AppMetrics_kzg_batch, 336
-.set AppMetrics__mem, 448
+.set AppMetrics_attestation_delay, 448
+.set AppMetrics_block_delay, 560
+.set AppMetrics_column_requests, 672
+.set AppMetrics_column_successes, 680
+.set AppMetrics_reconstructed_columns, 688
+.set AppMetrics_aggregates_received, 696
+.set AppMetrics_attestations_received, 704
+.set AppMetrics_attester_slashings_received, 712
+.set AppMetrics_blocks_proposed, 720
+.set AppMetrics_gossip_blocks_imported, 728
+.set AppMetrics_validation_failures, 736
+.set AppMetrics_api_requests, 744
+.set AppMetrics_api_successes, 752
+.set AppMetrics_connections, 760
+.set AppMetrics_dial_failures, 776
+.set AppMetrics_closed, 784
+.set AppMetrics_records, 792
+.set AppMetrics_lookups, 800
+.set AppMetrics_dv_in, 808
+.set AppMetrics_dv_out, 816
+.set AppMetrics_dv_failures, 824
+.set AppMetrics_rx_bytes, 832
+.set AppMetrics_tx_bytes, 840
+.set AppMetrics_gossip_results, 848
+.set AppMetrics_served, 1184
+.set AppMetrics_work_seconds, 1312
+.set AppMetrics_work_failures, 6240
+.set AppMetrics_epoch_transitions, 6592
+.set AppMetrics_epoch_seconds, 6600
+.set AppMetrics_gossip_seconds, 6712
+.set AppMetrics_step_seconds, 8280
+.set AppMetrics_log_lines, 8392
+.set AppMetrics_api_classes, 8424
+.set AppMetrics_db_records, 8456
+.set AppMetrics_db_bytes, 8480
+.set AppMetrics_db_anchors, 8504
+.set AppMetrics_db_drops, 8512
+.set AppMetrics_db_failures, 8520
+.set AppMetrics__mem, 8528
 .set MetricsProcess_cpu_us, 0
 .set MetricsProcess_max_fds, 8
-.set MetricsProcess__mem, 16
+.set MetricsProcess_max_rss_bytes, 16
+.set MetricsProcess_buffers, 24
+.set MetricsProcess_buffer_bytes, 32
+.set MetricsProcess_start_s, 40
+.set MetricsProcess_uptime_us, 48
+.set MetricsProcess_engine, 56
+.set MetricsProcess_api_open, 64
+.set MetricsProcess__mem, 72
 .set Profile_ticks_per_second, 0
 .set Profile_bounds, 8
 .set Profile__mem, 96
@@ -263,6 +311,7 @@
 .set METRIC_BOUNDS_KZG, 1
 .set METRIC_BOUNDS_DELAY, 2
 .set METRIC_BOUNDS_TICKS, 3
-.set METRIC_COUNT, 46
+.set METRIC_BOUNDS_WORK, 4
+.set METRIC_COUNT, 114
 .set METRICS_HEAD_MAX, 4096                 /* lantern_metrics_answer: HttpLimits head_max */
 .set METRICS_HEAD_ROOM, 256                 /* out bytes before the text's ByteList */

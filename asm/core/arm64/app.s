@@ -19,6 +19,22 @@
 /* The App, at x19; the constants and the RODATA. */
 .include "app.inc"
 
+/* AppMetrics field + 1. Uses x9, x16. */
+.macro AM_INC field
+    LDQ     x9, x19, APP_METRICS + AppMetrics_\field
+    add     x9, x9, #1
+    STQ     x9, x19, APP_METRICS + AppMetrics_\field
+.endm
+
+/* The u64 at AppMetrics field + 8 x index reg, + 1. Uses x10, x11, x16. */
+.macro AM_INC_AT field, reg
+    ADDQ    x10, x19, APP_METRICS + AppMetrics_\field
+    ldr     x11, [x10, \reg, lsl #3]
+    add     x11, x11, #1
+    str     x11, [x10, \reg, lsl #3]
+.endm
+
+
 /* reg = the scratch buffer, its size written back into its first 8 bytes: a callee may leave it
  * invalid (ARCHITECTURE.md section 6). Uses x16. */
 .macro SCRATCH reg
@@ -396,6 +412,8 @@ LOCAL_FUNCTION app_line_end
     add     x0, sp, #32
     mov     x1, #1
     bl      app_line_text
+    ldr     x12, [sp, #16]                  /* the metrics: the line by its level (0 error to 3 debug) */
+    AM_INC_AT log_lines, x12
     add     x0, x19, #APP_STREAM
     add     x1, x19, #APP_LINE
     CALL_GLOBAL lantern_shell_write
@@ -694,7 +712,8 @@ END_FUNCTION app_fail_status
  */
 LOCAL_FUNCTION app_start
     ENTER 16
-    ADDRESS x0, app_builtin_config          /* the config: the pinned config of the preset, then the network's */
+    /* the config: the pinned config of the preset, then the network's */
+    ADDRESS x0, app_builtin_config
     add     x1, x19, #APP_CONFIG
     add     x2, sp, #L
     CALL_GLOBAL lantern_config_parse
@@ -773,7 +792,8 @@ LOCAL_FUNCTION app_start
     MOVQ    x9, 1 << 26
     add     x23, x23, x9
     mov     x24, #0
-    MOVQ    x26, APP_BLOCK_BYTES            /* the block: of genesis, or of anchor.ssz */
+    /* the block: of genesis, or of anchor.ssz */
+    MOVQ    x26, APP_BLOCK_BYTES
     cbz     x25, 3f
     MOVQ    x9, 1 << 20
     add     x26, x21, x9
@@ -1575,6 +1595,13 @@ LOCAL_FUNCTION app_work
     ccmn    x23, #1, #4, ne
     ccmn    x24, #1, #4, ne
     b.eq    90f
+    mov     x9, #0                          /* the metrics: state_a's slot, and the start time */
+    cbz     x21, 100f
+    ldr     x9, [x21, #8]
+    ldr     x9, [x9, #NODE_STATE_SLOT]
+100: STQ    x9, x19, APP_MET_S0
+    bl      app_met_us
+    STQ     x0, x19, APP_MET_T0
     MOVQ    x10, NodeEvent_api_bytes + 24 + NODE_API_CHUNK
     cmp     x26, #NODE_WORK_API_CHUNK       /* API_CHUNK: room for a whole chunk */
     b.eq    15f
@@ -1756,7 +1783,10 @@ LOCAL_FUNCTION app_work
     bl      app_grow
     cbnz    x0, 91f
     b       2b
-8:  bl      app_log_work
+8:  mov     x0, x26
+    mov     x1, x24
+    bl      app_met_work
+    bl      app_log_work
     ldr     x0, [x19, #APP_WORK_EVENT]      /* the WORK_DONE event */
     ldr     x1, [x0]
     bl      app_event_put
@@ -1914,6 +1944,7 @@ LOCAL_FUNCTION app_db_custody
     str     x9, [x27, #AppDb_op]
 90: ldr     x9, [x27, #AppDb_op]            /* cannot write <path>: error <n> */
     str     x9, [sp, #(L + 24)]
+    AM_INC  db_failures
     bl      app_line_start
     ADDRESS x0, app_m_write
     mov     x1, #app_m_write_len
@@ -2100,6 +2131,7 @@ LOCAL_FUNCTION app_db_write
     str     x9, [x10, x21, lsl #3]
 90: ldr     x9, [x27, #AppDb_op]            /* cannot write <path>: error <n> */
     str     x9, [sp, #(L + 24)]
+    AM_INC  db_failures
     mov     x0, x21
     ldr     x1, [x20, #24]
     bl      app_db_path
@@ -2717,7 +2749,8 @@ LOCAL_FUNCTION app_db_state
     add     x3, sp, #(L + 40)
     FORK_CALL node_state_bytes
     cbnz    x0, 98f
-    ADDRESS x0, app_anchor_tmp_name         /* anchor.tmp, cut to 0 */
+    /* anchor.tmp, cut to 0 */
+    ADDRESS x0, app_anchor_tmp_name
     mov     x1, #app_anchor_tmp_name_len
     ADDQ    x2, x19, APP_PATH
     bl      app_db_file
@@ -2803,7 +2836,8 @@ LOCAL_FUNCTION app_db_state
     cbnz    x9, 89f
     add     x0, sp, #(L + 56)
     CALL_GLOBAL lantern_shell_close
-    ADDRESS x0, app_anchor_name             /* over anchor.ssz, and the directory synced */
+    /* over anchor.ssz, and the directory synced */
+    ADDRESS x0, app_anchor_name
     mov     x1, #app_anchor_name_len
     ADDQ    x2, x19, APP_PATH2
     bl      app_db_file
@@ -2827,6 +2861,7 @@ LOCAL_FUNCTION app_db_state
     CALL_GLOBAL lantern_shell_close
 90: ldr     x9, [x27, #AppDb_op]            /* cannot write <path>: error <n> */
     str     x9, [sp, #(L + 24)]
+    AM_INC  db_failures
     bl      app_line_start
     ADDRESS x0, app_m_write
     mov     x1, #app_m_write_len
@@ -2876,16 +2911,29 @@ LOCAL_FUNCTION app_actions
     ldr     x9, [x20, #8]
     cmp     x9, #NODE_ACT_DB_APPEND
     b.ne    11f
-    mov     x0, x20                         /* DB_APPEND: the record in its segment file */
+    ldr     x0, [x20, #16]                  /* the metrics: the record and its bytes, by kind */
+    bl      app_buf_find
+    ldr     x12, [x20, #32]
+    and     x12, x12, #1
+    AM_INC_AT db_records, x12
+    cbz     x0, 190f
+    ldr     x13, [x0, #16]
+    ADDQ    x10, x19, APP_METRICS + AppMetrics_db_bytes
+    ldr     x11, [x10, x12, lsl #3]
+    add     x11, x11, x13
+    str     x11, [x10, x12, lsl #3]
+190: mov    x0, x20                         /* DB_APPEND: the record in its segment file */
     bl      app_db_append
     b       8f
 11: cmp     x9, #NODE_ACT_DB_DROP
     b.ne    12f
+    AM_INC  db_drops
     mov     x0, x20                         /* DB_DROP: the segment's file goes */
     bl      app_db_drop
     b       8f
 12: cmp     x9, #NODE_ACT_DB_STATE
     b.ne    120f
+    AM_INC  db_anchors
     mov     x0, x20                         /* DB_STATE: custody.bin, anchor.ssz */
     bl      app_db_custody
     mov     x0, x20
@@ -2893,6 +2941,8 @@ LOCAL_FUNCTION app_actions
     b       8f
 120: cmp    x9, #NODE_ACT_DB_ARCHIVE
     b.ne    10f
+    mov     x12, #2
+    AM_INC_AT db_records, x12
     mov     x0, x20                         /* DB_ARCHIVE: a state record */
     bl      app_db_archive
     b       8f
@@ -2969,6 +3019,7 @@ LOCAL_FUNCTION app_actions
     b       8f
 6:  cmp     x9, #NODE_ACT_DISCV5
     b.ne    7f
+    AM_INC  lookups
     ldr     x9, [x20, #(24 + 8)]            /* DISCV5: its events join discv5's */
     add     x0, x20, #24
     add     x0, x0, x9
@@ -3003,7 +3054,9 @@ LOCAL_FUNCTION app_step
     mov     x20, x0
     mov     x21, x1
     mov     x22, #0
-1:  ldr     x9, [x19, #APP_ACTIONS]
+1:  bl      app_met_us                      /* the step's run time (app.md, the metrics) */
+    STQ     x0, x19, APP_MET_T1
+    ldr     x9, [x19, #APP_ACTIONS]
     mov     x10, #24
     stp     x10, xzr, [x9, #8]
     ldr     x0, [x19, #APP_NODE]
@@ -3015,6 +3068,14 @@ LOCAL_FUNCTION app_step
     ldr     x6, [x19, #APP_ACTIONS]
     add     x7, x19, #APP_RESULT
     CALL_GLOBAL lantern_node_step
+    STQ     x0, x19, APP_MET_ST
+    bl      app_met_us
+    LDQ     x9, x19, APP_MET_T1
+    sub     x2, x0, x9
+    MOVQ    x0, AppMetrics_step_seconds
+    mov     x1, #METRIC_BOUNDS_WORK
+    bl      app_met_obs
+    LDQ     x0, x19, APP_MET_ST
     cbz     x0, 3f
     cmp     x0, #LANTERN_BUFFER_TOO_SMALL
     b.ne    2f
@@ -4392,6 +4453,7 @@ LOCAL_FUNCTION app_dv_start
     mov     x0, #2
     LEAVE 256
 96: mov     x2, x0                          /* discv5: status <n> */
+    AM_INC  dv_failures
     ADDRESS x0, app_m_discv5
     mov     x1, #app_m_discv5_len
     bl      app_fail_status
@@ -4513,6 +4575,7 @@ LOCAL_FUNCTION app_discv5
     str     xzr, [x9, #16]
     cbz     x0, 5f
     mov     x2, x0                          /* discv5: status <n>; its events are dropped */
+    AM_INC  dv_failures
     ADDRESS x0, app_m_discv5
     mov     x1, #app_m_discv5_len
     bl      app_fail_status
@@ -4558,9 +4621,11 @@ LOCAL_FUNCTION app_discv5
     add     x1, x20, #DISCV5_ACT_SEND_DATA
     mov     x2, x10
     bl      lantern_copy
+    AM_INC  dv_out
     b       80f
 7:  cmp     x9, #DISCV5_ACTION_NODE_FOUND
     b.ne    71f
+    AM_INC  records
     ldr     x10, [x20, #DISCV5_ACT_FOUND_LEN]   /* NODE_FOUND: NODE_EV_ENR with the record */
     add     x11, x10, #(48 + 7)
     and     x11, x11, #~7
@@ -5054,7 +5119,8 @@ LOCAL_FUNCTION app_api_read
     mov     x9, #400                        /* no room: a request too large to read */
     cmp     x0, #LANTERN_HTTP_MORE
     b.ne    2f
-    MOVQ    x10, APP_API_BUFFER             /* more to come, unless the buffer is full */
+    /* more to come, unless the buffer is full */
+    MOVQ    x10, APP_API_BUFFER
     cmp     x24, x10
     b.lo    99f
     mov     x9, #413
@@ -5083,6 +5149,10 @@ LOCAL_FUNCTION app_api_read
     bl      app_event_put
     mov     x9, #APP_API_ANSWERING
     str     x9, [x22, #8]
+    /* the metrics: a request, its answer's first bytes owed */
+    AM_INC  api_requests
+    mov     x9, #1
+    str     x9, [x22, #48]
 99: LEAVE 16
 END_FUNCTION app_api_read
 
@@ -5131,7 +5201,20 @@ LOCAL_FUNCTION app_api_action
     add     x1, x20, #56
     mov     x2, x9
     bl      lantern_copy
-    ldr     x9, [x22, #32]                  /* its bytes are in flight */
+    ldr     x9, [x22, #48]                  /* the metrics: an answer's first bytes give its status class */
+    cbz     x9, 96f
+    str     xzr, [x22, #48]
+    ldr     x9, [x20, #48]
+    cmp     x9, #12
+    b.lo    96f
+    ldrb    w12, [x20, #(56 + 9)]
+    sub     x12, x12, #0x32
+    cmp     x12, #3
+    b.hi    96f
+    AM_INC_AT api_classes, x12
+    cbnz    x12, 96f
+    AM_INC  api_successes
+96: ldr     x9, [x22, #32]                  /* its bytes are in flight */
     ldr     x10, [x20, #48]
     add     x9, x9, x10
     str     x9, [x22, #32]
@@ -5297,7 +5380,8 @@ LOCAL_FUNCTION app_api_poll
     stp     x11, x12, [x22]
     ldr     x12, [x19, #(APP_TICK + LIBP2P_TICK_NOW)]
     stp     xzr, x12, [x22, #16]
-    stp     xzr, xzr, [x22, #32]            /* no bytes in flight, no API_SENT owed */
+    stp     xzr, xzr, [x22, #32]            /* no bytes in flight, no API_SENT owed, no first bytes owed */
+    str     xzr, [x22, #48]
     orr     x24, x10, x11, lsl #32
     mov     x0, #LIBP2P_ACT_ADOPT_SIZE
     bl      app_api_room
@@ -5408,6 +5492,214 @@ LOCAL_FUNCTION app_api_poll
     LEAVE 64
 END_FUNCTION app_api_poll
 
+/* L1: x0 = the monotonic microseconds of libp2p_shell_clock. */
+LOCAL_FUNCTION app_met_us
+    FRAME 0
+    ADDQ    x0, x19, APP_MET_TICK
+    CALL_GLOBAL libp2p_shell_clock
+    LDQ     x0, x19, APP_MET_TICK + LIBP2P_TICK_US
+    UNFRAME 0
+END_FUNCTION app_met_us
+
+/* L1: the value x2 joins the AppMetrics Histogram at offset x0, of the bound set x1. Locals: the bound set, the value. */
+LOCAL_FUNCTION app_met_obs
+    FRAME 16
+    stp     x1, x2, [sp, #16]
+    ADDQ    x9, x19, APP_METRICS
+    add     x0, x9, x0
+    add     x1, sp, #16
+    add     x2, sp, #24
+    CALL_GLOBAL lantern_metrics_observe
+    UNFRAME 16
+END_FUNCTION app_met_obs
+
+/* L1: the delay of a message of the slot x1, from its slot's start to the store's time, joins the AppMetrics Histogram at offset x0 (delay bounds). */
+LOCAL_FUNCTION app_met_delay
+    FRAME 0
+    LDQ     x9, x19, APP_STORE
+    LDQ     x10, x19, APP_CONFIG + CONFIG_SLOT_DURATION_MS
+    mul     x10, x10, x1
+    ldr     x11, [x9, #Store_genesis_time_ms]
+    add     x10, x10, x11
+    ldr     x11, [x9, #Store_time_ms]
+    subs    x2, x11, x10
+    csel    x2, xzr, x2, lo
+    mov     x11, #1000
+    mul     x2, x2, x11
+    mov     x1, #METRIC_BOUNDS_DELAY
+    bl      app_met_obs
+    UNFRAME 0
+END_FUNCTION app_met_delay
+
+/*
+ * L2: the metrics of a work that ran (app.md, the metrics): its run time since APP_MET_T0 and a
+ * result other than LANTERN_OK, by kind; then by kind: gossip by topic and result, the requests
+ * served by method, the column times and counts, a published block, an epoch crossed. x0 its
+ * kind, x1 its data's table entry or 0. x20 the kind, x21 the data entry, x22 the microseconds,
+ * x23 the WORK_DONE event, x24 the kind's slot, x25 a topic, x26 a result's index.
+ */
+LOCAL_FUNCTION app_met_work
+    ENTER 0
+    mov     x20, x0
+    mov     x21, x1
+    bl      app_met_us
+    LDQ     x9, x19, APP_MET_T0
+    sub     x22, x0, x9
+    LDQ     x23, x19, APP_WORK_EVENT
+    cmp     x20, #NODE_WORK_RECONSTRUCT
+    b.hi    99f
+    ADDRESS x9, app_work_slots
+    ldrb    w24, [x9, x20]
+    mov     x9, #Histogram__mem             /* its run time and failures, by kind */
+    MOVQ    x0, AppMetrics_work_seconds
+    madd    x0, x24, x9, x0
+    mov     x1, #METRIC_BOUNDS_WORK
+    mov     x2, x22
+    bl      app_met_obs
+    ldr     x9, [x23, #NodeEvent_result]
+    cbz     x9, 1f
+    AM_INC_AT work_failures, x24
+1:  cmp     x20, #NODE_WORK_GOSSIP
+    b.ne    20f
+    ldrb    w25, [x23, #NodeAction_arg]     /* GOSSIP: by topic and result (accept, ignore, reject) */
+    cmp     x25, #GOSSIP_NAMES
+    csel    x25, x25, xzr, ls
+    ldr     x9, [x23, #NodeEvent_result]
+    mov     x26, #0
+    cbz     x9, 3f
+    mov     x26, #2
+    cmp     x9, #LANTERN_GOSSIP_REJECT
+    b.eq    3f
+    mov     x26, #1
+3:  add     x12, x25, x25, lsl #1
+    add     x12, x12, x26
+    AM_INC_AT gossip_results, x12
+    cmp     x26, #2
+    b.ne    4f
+    AM_INC  validation_failures
+4:  mov     x9, #Histogram__mem
+    MOVQ    x0, AppMetrics_gossip_seconds
+    madd    x0, x25, x9, x0
+    mov     x1, #METRIC_BOUNDS_WORK
+    mov     x2, x22
+    bl      app_met_obs
+    cmp     x25, #GOSSIP_DATA_COLUMN_SIDECAR
+    b.ne    5f
+    AM_INC  column_requests
+    cbnz    x26, 41f
+    AM_INC  column_successes
+41: MOVQ    x0, AppMetrics_gossip_verification
+    mov     x1, #METRIC_BOUNDS_DEFAULT
+    mov     x2, x22
+    bl      app_met_obs
+    b       99f
+5:  cmp     x25, #GOSSIP_BEACON_AGGREGATE_AND_PROOF
+    b.ne    6f
+    AM_INC  aggregates_received
+    b       99f
+6:  cmp     x25, #GOSSIP_BEACON_ATTESTATION
+    b.ne    7f
+    AM_INC  attestations_received
+    cbnz    x26, 99f
+    /* a valid one: its delay, its slot at NodeEvent_root */
+    MOVQ    x0, AppMetrics_attestation_delay
+    ldr     x1, [x23, #NodeEvent_root]
+    bl      app_met_delay
+    b       99f
+7:  cmp     x25, #GOSSIP_ATTESTER_SLASHING
+    b.ne    8f
+    AM_INC  attester_slashings_received
+    b       99f
+8:  cmp     x25, #GOSSIP_BEACON_BLOCK
+    b.ne    99f
+    cbnz    x26, 99f
+    AM_INC  gossip_blocks_imported
+    cbz     x21, 99f
+    ldr     x9, [x21, #8]                   /* its delay: its slot at bytes 100 to 108 of the SignedBeaconBlock */
+    ldr     x10, [x9, #16]
+    cmp     x10, #108
+    b.lo    99f
+    ldr     x10, [x9, #8]
+    add     x10, x9, x10
+    ldr     x1, [x10, #100]
+    MOVQ    x0, AppMetrics_block_delay
+    bl      app_met_delay
+    b       99f
+20: cmp     x20, #NODE_WORK_SERVE
+    b.ne    30f
+    ldrb    w12, [x23, #(NodeAction_arg + 1)]   /* SERVE: by method */
+    cmp     x12, #REQRESP_METHODS
+    csel    x12, x12, xzr, ls
+    AM_INC_AT served, x12
+    b       99f
+30: cmp     x20, #NODE_WORK_RECONSTRUCT
+    b.ne    40f
+    MOVQ    x0, AppMetrics_reconstruction
+    mov     x1, #METRIC_BOUNDS_DEFAULT
+    mov     x2, x22
+    bl      app_met_obs
+    ldr     x9, [x23, #NodeEvent_result]
+    cbnz    x9, 99f
+    cbz     x21, 99f
+    ldr     x9, [x21, #8]                   /* the columns it rebuilt: NUMBER_OF_COLUMNS less the ByteLists of data */
+    ldr     x10, [x21, #16]
+    add     x10, x9, x10
+    mov     x11, #NUMBER_OF_COLUMNS
+31: add     x12, x9, #24
+    cmp     x12, x10
+    b.hi    32f
+    ldr     x12, [x9]
+    cmp     x12, #24
+    b.lo    32f
+    add     x12, x12, #7
+    and     x12, x12, #~7
+    add     x9, x9, x12
+    subs    x11, x11, #1
+    b.ne    31b
+32: LDQ     x12, x19, APP_METRICS + AppMetrics_reconstructed_columns
+    add     x12, x12, x11
+    STQ     x12, x19, APP_METRICS + AppMetrics_reconstructed_columns
+    b       99f
+40: cmp     x20, #NODE_WORK_PUBLISH_SIDECARS
+    b.ne    50f
+    MOVQ    x0, AppMetrics_computation
+    mov     x1, #METRIC_BOUNDS_DEFAULT
+    mov     x2, x22
+    bl      app_met_obs
+    b       99f
+50: cmp     x20, #NODE_WORK_BLOB            /* BLOB of a column sidecar from a response: its check */
+    b.ne    60f
+    ldr     x9, [x23, #NodeAction_arg]
+    cmp     x9, #1
+    b.ne    99f
+    MOVQ    x0, AppMetrics_kzg_batch
+    mov     x1, #METRIC_BOUNDS_KZG
+    mov     x2, x22
+    bl      app_met_obs
+    b       99f
+60: cmp     x20, #NODE_WORK_PUBLISH_CHECK
+    b.ne    70f
+    ldr     x9, [x23, #NodeEvent_result]
+    cbnz    x9, 99f
+    AM_INC  blocks_proposed
+    b       99f
+70: cmp     x20, #NODE_WORK_SLOTS           /* SLOTS across an epoch boundary */
+    b.ne    99f
+    LDQ     x9, x19, APP_MET_S0
+    mov     x10, #SLOTS_PER_EPOCH
+    udiv    x9, x9, x10
+    ldr     x11, [x23, #NodeAction_arg]
+    udiv    x11, x11, x10
+    cmp     x11, x9
+    b.ls    99f
+    AM_INC  epoch_transitions
+    MOVQ    x0, AppMetrics_epoch_seconds
+    mov     x1, #METRIC_BOUNDS_WORK
+    mov     x2, x22
+    bl      app_met_obs
+99: LEAVE 0
+END_FUNCTION app_met_work
+
 /*
  * L2: the metrics server (app.md): with --metrics categories, a shell context of APP_MET_CONNS
  * connections that listens on --metrics-address and --metrics-port, and its buffers: x0 = 0, or 2
@@ -5416,6 +5708,10 @@ END_FUNCTION app_api_poll
  */
 LOCAL_FUNCTION app_met_start
     ENTER 64
+    bl      app_met_us                      /* the start, for the uptime */
+    STQ     x0, x19, APP_MET_START_US
+    LDQ     x9, x19, APP_MET_TICK + LIBP2P_TICK_UNIX
+    STQ     x9, x19, APP_MET_START_S
     LDQ     x9, x19, APP_OPTIONS + AppOptions_metrics
     cbz     x9, 8f
     mov     x9, #APP_MET_CONNS
@@ -5445,7 +5741,8 @@ LOCAL_FUNCTION app_met_start
     cbz     x0, 97f
     mov     x9, #24
     stp     x9, xzr, [x0, #8]
-    ADDQ    x10, x19, APP_MET_EMPTY         /* the empty ByteList, and each slot's request ByteList */
+    /* the empty ByteList, and each slot's request ByteList */
+    ADDQ    x10, x19, APP_MET_EMPTY
     stp     x9, x9, [x10]
     str     xzr, [x10, #16]
     ADDQ    x10, x19, APP_MET_SLOT0
@@ -5608,7 +5905,8 @@ LOCAL_FUNCTION app_met_sources
     bl      app_buf_find
     cbz     x0, 5f
     ldr     x9, [x0, #8]
-    ADDQ    x10, x19, APP_MET_EMPTY         /* the head block's bytes, or none */
+    /* the head block's bytes, or none */
+    ADDQ    x10, x19, APP_MET_EMPTY
     stp     x9, x10, [sp, #L]
     LDQ     x0, x19, APP_MET_NODE + MetricsNode_head_block_id
     bl      app_buf_find
@@ -5634,7 +5932,48 @@ LOCAL_FUNCTION app_met_sources
     ADDQ    x9, x9, Node_metrics
     ADDQ    x10, x19, APP_METRICS
     stp     x9, x10, [x20, #MetricsSources_counters]
-    stp     xzr, xzr, [x20, #MetricsSources_process]
+    /* MetricsProcess: the shell's values, the buffers, the times */
+    ADDQ    x0, x19, APP_MET_SHELLP
+    CALL_GLOBAL lantern_shell_process
+    ADDQ    x21, x19, APP_MET_PROCESS
+    ADDQ    x9, x19, APP_MET_SHELLP
+    ldp     x10, x11, [x9]
+    ldr     x12, [x9, #16]
+    str     x10, [x21, #MetricsProcess_cpu_us]
+    str     x11, [x21, #MetricsProcess_max_rss_bytes]
+    str     x12, [x21, #MetricsProcess_max_fds]
+    ADDQ    x9, x19, APP_BUFS
+    ldp     x10, x11, [x9]
+    str     x11, [x21, #MetricsProcess_buffers]
+    mov     x12, #0
+6:  cbz     x11, 7f
+    ldr     x13, [x10, #16]
+    add     x12, x12, x13
+    add     x10, x10, #APP_BUF_ENTRY
+    sub     x11, x11, #1
+    b       6b
+7:  str     x12, [x21, #MetricsProcess_buffer_bytes]
+    LDQ     x9, x19, APP_MET_START_S
+    str     x9, [x21, #MetricsProcess_start_s]
+    bl      app_met_us
+    LDQ     x9, x19, APP_MET_START_US
+    sub     x0, x0, x9
+    str     x0, [x21, #MetricsProcess_uptime_us]
+    LDQ     x9, x19, APP_ENGINE
+    str     x9, [x21, #MetricsProcess_engine]
+    mov     x12, #0                         /* the Beacon API's connections open */
+    LDQ     x10, x19, APP_API_SLOTS
+    LDQ     x11, x19, APP_OPTIONS + AppOptions_http_max_connections
+    cbz     x10, 9f
+8:  cbz     x11, 9f
+    ldr     x13, [x10, #8]
+    cmp     x13, #0
+    cinc    x12, x12, ne
+    add     x10, x10, #APP_API_SLOT
+    sub     x11, x11, #1
+    b       8b
+9:  str     x12, [x21, #MetricsProcess_api_open]
+    stp     x21, xzr, [x20, #MetricsSources_process]
     str     xzr, [x20, #MetricsSources_profile]
     LEAVE 16
 END_FUNCTION app_met_sources
@@ -5781,7 +6120,8 @@ LOCAL_FUNCTION app_met_poll
     ldr     x9, [x20, #8]
     cmp     x9, #LIBP2P_EVENT_ACCEPTED
     b.ne    3f
-    ADDQ    x22, x19, APP_MET_SLOT0         /* ACCEPTED: a free slot, or REFUSE */
+    /* ACCEPTED: a free slot, or REFUSE */
+    ADDQ    x22, x19, APP_MET_SLOT0
     mov     x23, #0
 2:  cmp     x23, #APP_MET_CONNS
     b.hs    21f
@@ -5904,13 +6244,48 @@ LOCAL_FUNCTION app_p2p_events
     b.hs    9f
     mov     x0, x20                         /* a datagram of discv5 */
     bl      app_dv_datagram
-    cbnz    x0, 2f
+    cbz     x0, 11f
+    AM_INC  dv_in
+    b       2f
+11:
     mov     x0, x20                         /* the engine's connection */
     bl      app_engine_event
     cbnz    x0, 2f
     mov     x0, x20                         /* a builder call's connection */
     bl      app_builder_event
     cbnz    x0, 2f
+    ldr     x12, [x20, #8]                  /* the metrics of the transport (app.md) */
+    ldr     x13, [x20, #LIBP2P_EV_COUNT]
+    cmp     x12, #LIBP2P_EVENT_RECEIVED
+    b.ne    31f
+    LDQ     x14, x19, APP_METRICS + AppMetrics_rx_bytes
+    add     x14, x14, x13
+    STQ     x14, x19, APP_METRICS + AppMetrics_rx_bytes
+    b       39f
+31: cmp     x12, #LIBP2P_EVENT_SENT
+    b.ne    32f
+    LDQ     x14, x19, APP_METRICS + AppMetrics_tx_bytes
+    add     x14, x14, x13
+    STQ     x14, x19, APP_METRICS + AppMetrics_tx_bytes
+    b       39f
+32: cmp     x12, #LIBP2P_EVENT_ACCEPTED
+    b.ne    33f
+    mov     x12, #0
+    AM_INC_AT connections, x12
+    b       39f
+33: cmp     x12, #LIBP2P_EVENT_CONNECTED
+    b.ne    34f
+    mov     x12, #1
+    AM_INC_AT connections, x12
+    b       39f
+34: cmp     x12, #LIBP2P_EVENT_DIAL_FAILED
+    b.ne    35f
+    AM_INC  dial_failures
+    b       39f
+35: cmp     x12, #LIBP2P_EVENT_CLOSED
+    b.ne    39f
+    AM_INC  closed
+39:
     ldr     x9, [x20]
     add     x10, x9, #16
     mov     x11, #NODE_EV_P2P

@@ -21,6 +21,24 @@
 /* The App, at s1; the constants and the RODATA. */
 .include "app.inc"
 
+# AppMetrics field + 1. Uses t0, a7.
+.macro AM_INC field
+    LDQ     t0, s1, APP_METRICS + AppMetrics_\field
+    addi    t0, t0, 1
+    STQ     t0, s1, APP_METRICS + AppMetrics_\field
+.endm
+
+# The u64 at AppMetrics field + 8 x index reg, + 1. Uses t0, t1, a7.
+.macro AM_INC_AT field, reg
+    ADDQ    t0, s1, APP_METRICS + AppMetrics_\field
+    slli    t1, \reg, 3
+    add     t0, t0, t1
+    ld      t1, 0(t0)
+    addi    t1, t1, 1
+    sd      t1, 0(t0)
+.endm
+
+
 /* reg = the scratch buffer, its size written back into its first 8 bytes: a callee may leave it
  * invalid (ARCHITECTURE.md section 6). Uses t1 and a7. */
 .macro SCRATCH reg
@@ -441,6 +459,8 @@ LOCAL_FUNCTION app_line_end
     addi    a0, sp, 16
     li      a1, 1
     call    app_line_text
+    ld      t2, 0(sp)                       # the metrics: the line, by its level (0 error to 3 debug)
+    AM_INC_AT log_lines, t2
     ADDQ    a0, s1, APP_STREAM
     ADDQ    a1, s1, APP_LINE
     CALL_GLOBAL lantern_shell_write
@@ -1668,6 +1688,13 @@ LOCAL_FUNCTION app_work
     beq     s4, t0, 90f
     beq     s5, t0, 90f
     beq     s6, t0, 90f
+    li      t0, 0                           # the metrics: state_a's slot, and the start time
+    beqz    s3, 100f
+    ld      t0, 8(s3)
+    ld      t0, NODE_STATE_SLOT(t0)
+100: STQ    t0, s1, APP_MET_S0
+    call    app_met_us
+    STQ     a0, s1, APP_MET_T0
     li      t1, NodeEvent_api_bytes + 24 + NODE_API_CHUNK
     li      t0, NODE_WORK_API_CHUNK         # API_CHUNK: room for a whole chunk
     beq     s8, t0, 15f
@@ -1848,6 +1875,9 @@ LOCAL_FUNCTION app_work
     j       2b
 8:  mv      a0, s8
     mv      a1, s6
+    call    app_met_work
+    mv      a0, s8
+    mv      a1, s6
     call    app_log_work
     LDQ     a0, s1, APP_WORK_EVENT          # the WORK_DONE event
     ld      a1, 0(a0)
@@ -2015,6 +2045,7 @@ LOCAL_FUNCTION app_db_custody
     sd      t0, AppDb_op(s10)
 90: ld      t0, AppDb_op(s10)               # cannot write <path>: error <n>
     sd      t0, (L + 24)(sp)
+    AM_INC  db_failures
     call    app_line_start
     ADDRESS a0, app_m_write
     li      a1, app_m_write_len
@@ -2207,6 +2238,7 @@ LOCAL_FUNCTION app_db_write
     sd      t2, AppDb_segment(t1)
 90: ld      t0, AppDb_op(s10)               # cannot write <path>: error <n>
     sd      t0, (L + 24)(sp)
+    AM_INC  db_failures
     mv      a0, s3
     ld      a1, 24(s2)
     call    app_db_path
@@ -2949,6 +2981,7 @@ LOCAL_FUNCTION app_db_state
     CALL_GLOBAL lantern_shell_close
 90: ld      t0, AppDb_op(s10)               # cannot write <path>: error <n>
     sd      t0, (L + 24)(sp)
+    AM_INC  db_failures
     call    app_line_start
     ADDRESS a0, app_m_write
     li      a1, app_m_write_len
@@ -2995,16 +3028,31 @@ LOCAL_FUNCTION app_actions
     ld      t0, 8(s2)
     li      t1, NODE_ACT_DB_APPEND
     bne     t0, t1, 11f
-    mv      a0, s2                          # DB_APPEND: the record in its segment file
+    ld      a0, 16(s2)                      # the metrics: the record and its bytes, by kind
+    call    app_buf_find
+    ld      t2, 32(s2)
+    andi    t2, t2, 1
+    AM_INC_AT db_records, t2
+    beqz    a0, 190f
+    ld      t3, 16(a0)
+    ADDQ    t0, s1, APP_METRICS + AppMetrics_db_bytes
+    slli    t1, t2, 3
+    add     t0, t0, t1
+    ld      t1, 0(t0)
+    add     t1, t1, t3
+    sd      t1, 0(t0)
+190: mv     a0, s2                          # DB_APPEND: the record in its segment file
     call    app_db_append
     j       8f
 11: li      t1, NODE_ACT_DB_DROP
     bne     t0, t1, 12f
+    AM_INC  db_drops
     mv      a0, s2                          # DB_DROP: the segment's file goes
     call    app_db_drop
     j       8f
 12: li      t1, NODE_ACT_DB_STATE
     bne     t0, t1, 120f
+    AM_INC  db_anchors
     mv      a0, s2                          # DB_STATE: custody.bin, anchor.ssz
     call    app_db_custody
     mv      a0, s2
@@ -3012,6 +3060,8 @@ LOCAL_FUNCTION app_actions
     j       8f
 120: li     t1, NODE_ACT_DB_ARCHIVE
     bne     t0, t1, 10f
+    li      t2, 2
+    AM_INC_AT db_records, t2
     mv      a0, s2                          # DB_ARCHIVE: a state record
     call    app_db_archive
     j       8f
@@ -3091,6 +3141,7 @@ LOCAL_FUNCTION app_actions
     j       8f
 6:  li      t1, NODE_ACT_DISCV5
     bne     t0, t1, 7f
+    AM_INC  lookups
     ld      t2, (24 + 8)(s2)                # DISCV5: its events join discv5's
     addi    a0, s2, 24
     add     a0, a0, t2
@@ -3126,7 +3177,9 @@ LOCAL_FUNCTION app_step
     mv      s2, a0
     mv      s3, a1
     li      s4, 0
-1:  LDQ     t0, s1, APP_ACTIONS
+1:  call    app_met_us                      # the step's run time (app.md, the metrics)
+    STQ     a0, s1, APP_MET_T1
+    LDQ     t0, s1, APP_ACTIONS
     li      t1, 24
     sd      t1, 8(t0)
     sd      zero, 16(t0)
@@ -3139,6 +3192,14 @@ LOCAL_FUNCTION app_step
     LDQ     a6, s1, APP_ACTIONS
     ADDQ    a7, s1, APP_RESULT
     CALL_GLOBAL lantern_node_step
+    STQ     a0, s1, APP_MET_ST
+    call    app_met_us
+    LDQ     t0, s1, APP_MET_T1
+    sub     a2, a0, t0
+    li      a0, AppMetrics_step_seconds
+    li      a1, METRIC_BOUNDS_WORK
+    call    app_met_obs
+    LDQ     a0, s1, APP_MET_ST
     beqz    a0, 3f
     li      t0, LANTERN_BUFFER_TOO_SMALL
     bne     a0, t0, 2f
@@ -4558,6 +4619,7 @@ LOCAL_FUNCTION app_dv_start
     li      a0, 2
     LEAVE 256
 96: mv      a2, a0                          # discv5: status <n>
+    AM_INC  dv_failures
     ADDRESS a0, app_m_discv5
     li      a1, app_m_discv5_len
     call    app_fail_status
@@ -4673,6 +4735,7 @@ LOCAL_FUNCTION app_discv5
     sd      zero, 16(t0)
     beqz    a0, 5f
     mv      a2, a0                          # discv5: status <n>; its events are dropped
+    AM_INC  dv_failures
     ADDRESS a0, app_m_discv5
     li      a1, app_m_discv5_len
     call    app_fail_status
@@ -4721,9 +4784,11 @@ LOCAL_FUNCTION app_discv5
     ADDQ    a1, s2, DISCV5_ACT_SEND_DATA
     mv      a2, t2
     call    lantern_copy
+    AM_INC  dv_out
     j       80f
 7:  li      t1, DISCV5_ACTION_NODE_FOUND
     bne     t0, t1, 71f
+    AM_INC  records
     LDQ     t2, s2, DISCV5_ACT_FOUND_LEN    # NODE_FOUND: NODE_EV_ENR with the record
     addi    t3, t2, (48 + 7)
     andi    t3, t3, -8
@@ -5265,6 +5330,9 @@ LOCAL_FUNCTION app_api_read
     call    app_event_put
     li      t0, APP_API_ANSWERING
     sd      t0, 8(s4)
+    AM_INC  api_requests                    # the metrics: a request, its answer's first bytes owed
+    li      t0, 1
+    sd      t0, 48(s4)
 99: LEAVE 16
 END_FUNCTION app_api_read
 
@@ -5315,7 +5383,20 @@ LOCAL_FUNCTION app_api_action
     addi    a1, s2, 56
     mv      a2, t0
     call    lantern_copy
-    ld      t0, 32(s4)                      # its bytes are in flight
+    ld      t0, 48(s4)                      # the metrics: an answer's first bytes give its status class
+    beqz    t0, 96f
+    sd      zero, 48(s4)
+    ld      t0, 48(s2)
+    li      t1, 12
+    bltu    t0, t1, 96f
+    lbu     t2, (56 + 9)(s2)
+    addi    t2, t2, -0x32
+    li      t1, 3
+    bgtu    t2, t1, 96f
+    AM_INC_AT api_classes, t2
+    bnez    t2, 96f
+    AM_INC  api_successes
+96: ld      t0, 32(s4)                      # its bytes are in flight
     ld      t1, 48(s2)
     add     t0, t0, t1
     sd      t0, 32(s4)
@@ -5484,8 +5565,9 @@ LOCAL_FUNCTION app_api_poll
     sd      zero, 16(s4)
     LDQ     t1, s1, (APP_TICK + LIBP2P_TICK_NOW)
     sd      t1, 24(s4)
-    sd      zero, 32(s4)                    # no bytes in flight, no API_SENT owed
+    sd      zero, 32(s4)                    # no bytes in flight, no API_SENT owed, no first bytes owed
     sd      zero, 40(s4)
+    sd      zero, 48(s4)
     slli    s6, t0, 32
     or      s6, s6, s5
     li      a0, LIBP2P_ACT_ADOPT_SIZE
@@ -5601,6 +5683,219 @@ LOCAL_FUNCTION app_api_poll
     LEAVE 16
 END_FUNCTION app_api_poll
 
+# L1: a0 = the monotonic microseconds of libp2p_shell_clock.
+LOCAL_FUNCTION app_met_us
+    FRAME 0
+    ADDQ    a0, s1, APP_MET_TICK
+    CALL_GLOBAL libp2p_shell_clock
+    LDQ     a0, s1, APP_MET_TICK + LIBP2P_TICK_US
+    UNFRAME 0
+END_FUNCTION app_met_us
+
+# L1: the value a2 joins the AppMetrics Histogram at offset a0, of the bound set a1. Locals: the bound set, the value.
+LOCAL_FUNCTION app_met_obs
+    FRAME 16
+    sd      a1, 0(sp)
+    sd      a2, 8(sp)
+    ADDQ    t0, s1, APP_METRICS
+    add     a0, t0, a0
+    mv      a1, sp
+    addi    a2, sp, 8
+    CALL_GLOBAL lantern_metrics_observe
+    UNFRAME 16
+END_FUNCTION app_met_obs
+
+# L1: the delay of a message of the slot a1, from its slot's start to the store's time, joins the AppMetrics Histogram at offset a0 (delay bounds).
+LOCAL_FUNCTION app_met_delay
+    FRAME 0
+    LDQ     t0, s1, APP_STORE
+    LDQ     t1, s1, APP_CONFIG + CONFIG_SLOT_DURATION_MS
+    mul     t1, t1, a1
+    ld      t2, Store_genesis_time_ms(t0)
+    add     t1, t1, t2
+    ld      t2, Store_time_ms(t0)
+    li      a2, 0
+    bltu    t2, t1, 1f
+    sub     a2, t2, t1
+1:  li      t2, 1000
+    mul     a2, a2, t2
+    li      a1, METRIC_BOUNDS_DELAY
+    call    app_met_obs
+    UNFRAME 0
+END_FUNCTION app_met_delay
+
+/*
+ * L2: the metrics of a work that ran (app.md, the metrics): its run time since APP_MET_T0 and a
+ * result other than LANTERN_OK, by kind; then by kind: gossip by topic and result, the requests
+ * served by method, the column times and counts, a published block, an epoch crossed. a0 its
+ * kind, a1 its data's table entry or 0. s2 the kind, s3 the data entry, s4 the microseconds, s5
+ * the WORK_DONE event, s6 the kind's slot, s7 a topic, s8 a result's index.
+ */
+LOCAL_FUNCTION app_met_work
+    ENTER 0
+    mv      s2, a0
+    mv      s3, a1
+    call    app_met_us
+    LDQ     t0, s1, APP_MET_T0
+    sub     s4, a0, t0
+    LDQ     s5, s1, APP_WORK_EVENT
+    li      t0, NODE_WORK_RECONSTRUCT
+    bgtu    s2, t0, 99f
+    lla     t0, app_work_slots
+    add     t0, t0, s2
+    lbu     s6, 0(t0)
+    li      t0, Histogram__mem              # its run time and failures, by kind
+    mul     a0, s6, t0
+    li      t0, AppMetrics_work_seconds
+    add     a0, a0, t0
+    li      a1, METRIC_BOUNDS_WORK
+    mv      a2, s4
+    call    app_met_obs
+    ld      t0, NodeEvent_result(s5)
+    beqz    t0, 1f
+    AM_INC_AT work_failures, s6
+1:  li      t0, NODE_WORK_GOSSIP
+    bne     s2, t0, 20f
+    lbu     s7, NodeAction_arg(s5)          # GOSSIP: by topic and result (accept, ignore, reject)
+    li      t0, GOSSIP_NAMES
+    bleu    s7, t0, 2f
+    li      s7, 0
+2:  ld      t0, NodeEvent_result(s5)
+    li      s8, 0
+    beqz    t0, 3f
+    li      s8, 2
+    li      t1, LANTERN_GOSSIP_REJECT
+    beq     t0, t1, 3f
+    li      s8, 1
+3:  slli    t2, s7, 1
+    add     t2, t2, s7
+    add     t2, t2, s8
+    AM_INC_AT gossip_results, t2
+    li      t0, 2
+    bne     s8, t0, 4f
+    AM_INC  validation_failures
+4:  li      t0, Histogram__mem
+    mul     a0, s7, t0
+    li      t0, AppMetrics_gossip_seconds
+    add     a0, a0, t0
+    li      a1, METRIC_BOUNDS_WORK
+    mv      a2, s4
+    call    app_met_obs
+    li      t0, GOSSIP_DATA_COLUMN_SIDECAR
+    bne     s7, t0, 5f
+    AM_INC  column_requests
+    bnez    s8, 41f
+    AM_INC  column_successes
+41: li      a0, AppMetrics_gossip_verification
+    li      a1, METRIC_BOUNDS_DEFAULT
+    mv      a2, s4
+    call    app_met_obs
+    j       99f
+5:  li      t0, GOSSIP_BEACON_AGGREGATE_AND_PROOF
+    bne     s7, t0, 6f
+    AM_INC  aggregates_received
+    j       99f
+6:  li      t0, GOSSIP_BEACON_ATTESTATION
+    bne     s7, t0, 7f
+    AM_INC  attestations_received
+    bnez    s8, 99f
+    li      a0, AppMetrics_attestation_delay    # a valid one: its delay, its slot at NodeEvent_root
+    ld      a1, NodeEvent_root(s5)
+    call    app_met_delay
+    j       99f
+7:  li      t0, GOSSIP_ATTESTER_SLASHING
+    bne     s7, t0, 8f
+    AM_INC  attester_slashings_received
+    j       99f
+8:  li      t0, GOSSIP_BEACON_BLOCK
+    bne     s7, t0, 99f
+    bnez    s8, 99f
+    AM_INC  gossip_blocks_imported
+    beqz    s3, 99f
+    ld      t0, 8(s3)                       # its delay: its slot at bytes 100 to 108 of the SignedBeaconBlock
+    ld      t1, 16(t0)
+    li      t2, 108
+    bltu    t1, t2, 99f
+    ld      t1, 8(t0)
+    add     t1, t0, t1
+    ld      a1, 100(t1)
+    li      a0, AppMetrics_block_delay
+    call    app_met_delay
+    j       99f
+20: li      t0, NODE_WORK_SERVE
+    bne     s2, t0, 30f
+    lbu     t2, (NodeAction_arg + 1)(s5)    # SERVE: by method
+    li      t0, REQRESP_METHODS
+    bleu    t2, t0, 21f
+    li      t2, 0
+21: AM_INC_AT served, t2
+    j       99f
+30: li      t0, NODE_WORK_RECONSTRUCT
+    bne     s2, t0, 40f
+    li      a0, AppMetrics_reconstruction
+    li      a1, METRIC_BOUNDS_DEFAULT
+    mv      a2, s4
+    call    app_met_obs
+    ld      t0, NodeEvent_result(s5)
+    bnez    t0, 99f
+    beqz    s3, 99f
+    ld      t0, 8(s3)                       # the columns it rebuilt: NUMBER_OF_COLUMNS less the ByteLists of data
+    ld      t1, 16(s3)
+    add     t1, t0, t1
+    li      t2, NUMBER_OF_COLUMNS
+31: addi    t3, t0, 24
+    bgtu    t3, t1, 32f
+    ld      t3, 0(t0)
+    li      t4, 24
+    bltu    t3, t4, 32f
+    addi    t3, t3, 7
+    andi    t3, t3, -8
+    add     t0, t0, t3
+    addi    t2, t2, -1
+    bnez    t2, 31b
+32: LDQ     t3, s1, APP_METRICS + AppMetrics_reconstructed_columns
+    add     t3, t3, t2
+    STQ     t3, s1, APP_METRICS + AppMetrics_reconstructed_columns
+    j       99f
+40: li      t0, NODE_WORK_PUBLISH_SIDECARS
+    bne     s2, t0, 50f
+    li      a0, AppMetrics_computation
+    li      a1, METRIC_BOUNDS_DEFAULT
+    mv      a2, s4
+    call    app_met_obs
+    j       99f
+50: li      t0, NODE_WORK_BLOB              # BLOB of a column sidecar from a response: its check
+    bne     s2, t0, 60f
+    ld      t0, NodeAction_arg(s5)
+    li      t1, 1
+    bne     t0, t1, 99f
+    li      a0, AppMetrics_kzg_batch
+    li      a1, METRIC_BOUNDS_KZG
+    mv      a2, s4
+    call    app_met_obs
+    j       99f
+60: li      t0, NODE_WORK_PUBLISH_CHECK
+    bne     s2, t0, 70f
+    ld      t0, NodeEvent_result(s5)
+    bnez    t0, 99f
+    AM_INC  blocks_proposed
+    j       99f
+70: li      t0, NODE_WORK_SLOTS             # SLOTS across an epoch boundary
+    bne     s2, t0, 99f
+    LDQ     t0, s1, APP_MET_S0
+    li      t1, SLOTS_PER_EPOCH
+    divu    t0, t0, t1
+    ld      t2, NodeAction_arg(s5)
+    divu    t2, t2, t1
+    bleu    t2, t0, 99f
+    AM_INC  epoch_transitions
+    li      a0, AppMetrics_epoch_seconds
+    li      a1, METRIC_BOUNDS_WORK
+    mv      a2, s4
+    call    app_met_obs
+99: LEAVE 0
+END_FUNCTION app_met_work
+
 /*
  * L2: the metrics server (app.md): with --metrics categories, a shell context of APP_MET_CONNS
  * connections that listens on --metrics-address and --metrics-port, and its buffers: a0 = 0, or 2
@@ -5609,6 +5904,10 @@ END_FUNCTION app_api_poll
  */
 LOCAL_FUNCTION app_met_start
     ENTER 64
+    call    app_met_us                      # the start, for the uptime
+    STQ     a0, s1, APP_MET_START_US
+    LDQ     t0, s1, APP_MET_TICK + LIBP2P_TICK_UNIX
+    STQ     t0, s1, APP_MET_START_S
     LDQ     t0, s1, APP_OPTIONS + AppOptions_metrics
     beqz    t0, 8f
     li      t0, APP_MET_CONNS
@@ -5830,7 +6129,48 @@ LOCAL_FUNCTION app_met_sources
     sd      t0, MetricsSources_counters(s2)
     ADDQ    t0, s1, APP_METRICS
     sd      t0, MetricsSources_app(s2)
-    sd      zero, MetricsSources_process(s2)
+    ADDQ    a0, s1, APP_MET_SHELLP          # MetricsProcess: the shell's values, the buffers, the times
+    CALL_GLOBAL lantern_shell_process
+    ADDQ    s3, s1, APP_MET_PROCESS
+    ADDQ    t0, s1, APP_MET_SHELLP
+    ld      t1, 0(t0)
+    sd      t1, MetricsProcess_cpu_us(s3)
+    ld      t1, 8(t0)
+    sd      t1, MetricsProcess_max_rss_bytes(s3)
+    ld      t1, 16(t0)
+    sd      t1, MetricsProcess_max_fds(s3)
+    LDQ     t0, s1, APP_BUFS
+    LDQ     t1, s1, APP_BUFS + 8
+    sd      t1, MetricsProcess_buffers(s3)
+    li      t2, 0
+6:  beqz    t1, 7f
+    ld      t3, 16(t0)
+    add     t2, t2, t3
+    addi    t0, t0, APP_BUF_ENTRY
+    addi    t1, t1, -1
+    j       6b
+7:  sd      t2, MetricsProcess_buffer_bytes(s3)
+    LDQ     t0, s1, APP_MET_START_S
+    sd      t0, MetricsProcess_start_s(s3)
+    call    app_met_us
+    LDQ     t0, s1, APP_MET_START_US
+    sub     a0, a0, t0
+    sd      a0, MetricsProcess_uptime_us(s3)
+    LDQ     t0, s1, APP_ENGINE
+    sd      t0, MetricsProcess_engine(s3)
+    li      t2, 0                           # the Beacon API's connections open
+    LDQ     t0, s1, APP_API_SLOTS
+    LDQ     t1, s1, APP_OPTIONS + AppOptions_http_max_connections
+    beqz    t0, 9f
+8:  beqz    t1, 9f
+    ld      t3, 8(t0)
+    beqz    t3, 81f
+    addi    t2, t2, 1
+81: addi    t0, t0, APP_API_SLOT
+    addi    t1, t1, -1
+    j       8b
+9:  sd      t2, MetricsProcess_api_open(s3)
+    sd      s3, MetricsSources_process(s2)
     sd      zero, MetricsSources_gossip(s2)
     sd      zero, MetricsSources_profile(s2)
     LEAVE 16
@@ -6116,13 +6456,47 @@ LOCAL_FUNCTION app_p2p_events
 1:  bgeu    s2, s3, 9f
     mv      a0, s2                          # a datagram of discv5
     call    app_dv_datagram
-    bnez    a0, 2f
+    beqz    a0, 11f
+    AM_INC  dv_in
+    j       2f
+11:
     mv      a0, s2                          # the engine's connection
     call    app_engine_event
     bnez    a0, 2f
     mv      a0, s2                          # a builder call's connection
     call    app_builder_event
     bnez    a0, 2f
+    ld      t2, 8(s2)                       # the metrics of the transport (app.md)
+    ld      t3, LIBP2P_EV_COUNT(s2)
+    li      t4, LIBP2P_EVENT_RECEIVED
+    bne     t2, t4, 31f
+    LDQ     t5, s1, APP_METRICS + AppMetrics_rx_bytes
+    add     t5, t5, t3
+    STQ     t5, s1, APP_METRICS + AppMetrics_rx_bytes
+    j       39f
+31: li      t4, LIBP2P_EVENT_SENT
+    bne     t2, t4, 32f
+    LDQ     t5, s1, APP_METRICS + AppMetrics_tx_bytes
+    add     t5, t5, t3
+    STQ     t5, s1, APP_METRICS + AppMetrics_tx_bytes
+    j       39f
+32: li      t4, LIBP2P_EVENT_ACCEPTED
+    bne     t2, t4, 33f
+    AM_INC  connections
+    j       39f
+33: li      t4, LIBP2P_EVENT_CONNECTED
+    bne     t2, t4, 34f
+    li      t5, 1
+    AM_INC_AT connections, t5
+    j       39f
+34: li      t4, LIBP2P_EVENT_DIAL_FAILED
+    bne     t2, t4, 35f
+    AM_INC  dial_failures
+    j       39f
+35: li      t4, LIBP2P_EVENT_CLOSED
+    bne     t2, t4, 39f
+    AM_INC  closed
+39:
     ld      t0, 0(s2)
     addi    t0, t0, 16
     sd      t0, L(sp)

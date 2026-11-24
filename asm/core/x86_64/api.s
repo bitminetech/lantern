@@ -11646,6 +11646,10 @@ LOCAL_FUNCTION node_api_submit_done
     mov     NodeAction_arg(%r12), %rdx
     shr     $16, %rdx
     call    node_op_event
+    xor     %eax, %eax                      # the metrics (metrics.md): an attestation that goes out
+    cmpq    $GOSSIP_BEACON_ATTESTATION, S9(%rsp)
+    sete    %al
+    add     %rax, (Node_metrics + NodeMetrics_attestations_published)(%rbx)
     mov     8(%r13), %rax                   # an attestation: its slot and committee index, its member
     shr     $32, %rax
     mov     %rax, (L + 32)(%rsp)

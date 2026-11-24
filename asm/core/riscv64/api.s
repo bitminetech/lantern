@@ -11721,6 +11721,11 @@ LOCAL_FUNCTION node_api_submit_done
     ld      a2, NodeAction_arg(s3)
     srli    a2, a2, 16
     call    node_op_event
+    addi    t0, s9, -GOSSIP_BEACON_ATTESTATION  # the metrics (metrics.md): an attestation that goes out
+    seqz    t0, t0
+    LDQ     t1, s1, Node_metrics + NodeMetrics_attestations_published
+    add     t1, t1, t0
+    STQ     t1, s1, Node_metrics + NodeMetrics_attestations_published
     li      a4, 0                           # an attestation: its slot and committee index, its member
     li      a5, 0
     ld      a6, 8(s4)

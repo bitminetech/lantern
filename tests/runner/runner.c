@@ -438,6 +438,7 @@ ABI uint64_t lantern_app_options(const void *args, void *options, void *fault);
 ABI uint64_t lantern_metrics_text(const void *categories, const void *sources, void *out);
 ABI uint64_t lantern_metrics_node(const void *node, const void *store, void *out);
 ABI uint64_t lantern_metrics_answer(const void *bytes, const void *categories, const void *sources, void *out);
+ABI uint64_t lantern_metrics_observe(void *histogram, const void *bounds, const void *value);
 
 /* Network config: docs/reference/config.md. */
 ABI uint64_t lantern_config_parse(const void *text, void *config, void *line);
@@ -3332,27 +3333,43 @@ static void reorg_check(fc_node *n, const char **why) {
  * node's and the store's bytes: peers, fulu and custody, the pool's exits, the proposers that hold,
  * the head's buffers, the sync state and the previous epoch's blocks off the head's chain.
  */
-#define METRICS_NODE_BYTES 72 /* include/metrics.inc: MetricsNode__mem */
+#define METRICS_NODE_BYTES 280 /* include/metrics.inc: MetricsNode__mem */
+#define METRICS_NODE_U64 (METRICS_NODE_BYTES / 8)
 #define NODE_API_OFF (728 + CONFIG_SIZE + 936) /* include/lantern.inc: Node_api */
 #define NODE_POOL_OFF (NODE_API_OFF + 72)
 #define NODE_PROPOSERS_OFF (NODE_API_OFF + 104 + 8 * (4 + 64))
 #define NODE_CUSTODY_OFF (NODE_METRICS - 336) /* Node_custody_count */
-static uint64_t metrics_node_checks, metrics_node_seen[9];
+static uint64_t metrics_node_checks, metrics_node_seen[METRICS_NODE_U64];
 static void metrics_node_check(fc_node *n, const char **why) {
     const uint8_t *node = n->shell->node, *store = n->store;
-    uint64_t want[9] = {0}, spe = strcmp(PRESET, "minimal") ? 32u : 8u;
+    uint64_t want[METRICS_NODE_U64] = {0}, spe = strcmp(PRESET, "minimal") ? 32u : 8u;
     uint64_t t = rd64(store + 8), g = rd64(store + 16), d = rd64(store + 296 + 104);
     uint64_t slot = t >= g && d ? (t - g) / d : 0, epoch = slot / spe;
     want[0] = rd64(node + 120 + 8); /* Node_peers */
     if (epoch >= rd64(node + 728 + 96)) want[1] = 1, want[2] = rd64(node + NODE_CUSTODY_OFF);
     const uint8_t *e = node + rd64(node + NODE_POOL_OFF);
-    for (uint64_t i = 0, c = rd64(node + NODE_POOL_OFF + 8); i < c; i++, e += 64) want[3] += rd64(e) == 4; /* GOSSIP_VOLUNTARY_EXIT */
+    for (uint64_t i = 0, c = rd64(node + NODE_POOL_OFF + 8); i < c; i++, e += 64) {
+        want[3] += rd64(e) == 4; /* GOSSIP_VOLUNTARY_EXIT */
+        if (rd64(e) >= 1 && rd64(e) <= 13) want[21 + rd64(e)]++; /* pool, by topic: GOSSIP_NAMES 13 */
+    }
     e = node + rd64(node + NODE_PROPOSERS_OFF);
     for (uint64_t i = 0, c = rd64(node + NODE_PROPOSERS_OFF + 8); i < c; i++, e += 136) want[4] += rd64(e + 8) > epoch;
     const uint8_t *head = shell_block(n->shell, node + NODE_HEAD_ROOT);
     uint64_t hslot = head ? rd64(head + NODE_SLOT) : 0;
     want[6] = hslot + 1 >= slot ? 1 : (rd64(node + NODE_FLAGS) & NODE_FLAG_SYNCING) ? 2 : 0;
     if (head) want[7] = rd64(head + 72), want[8] = rd64(head + NB_STATE_ID);
+    e = node + rd64(node + 120); /* Node_peers: NodePeer entries of 240 bytes, direction at 8 */
+    for (uint64_t i = 0, c = rd64(node + 120 + 8); i < c; i++, e += 240) want[9 + (rd64(e + 8) & 1)]++;
+    want[11] = rd64(node + 432);                 /* Node_dialing */
+    want[12] = hslot;
+    want[13] = slot;
+    want[14] = slot > hslot ? slot - hslot : 0;
+    want[15] = rd64(node + 216);                 /* Node_earliest_slot */
+    want[16] = rd64(node + 568);                 /* Node_backfill_slot */
+    want[17] = rd64(store + 64);                 /* Store_finalized_checkpoint: its epoch */
+    want[18] = rd64(store + 24);                 /* Store_justified_checkpoint */
+    want[19] = rd64(node + 224 + 8);             /* Node_messages: its count */
+    want[20] = rd64(node + 136 + 8);             /* Node_streams */
     uint64_t lo = (epoch ? epoch - 1 : 0) * spe;
     const uint8_t *chain[64];
     uint64_t nchain = 0;
@@ -3370,14 +3387,14 @@ static void metrics_node_check(fc_node *n, const char **why) {
     if (st != 0) *why = "lantern_metrics_node: status not 0";
     else if (!guard_ok(out, METRICS_NODE_BYTES)) *why = "lantern_metrics_node wrote out of bounds";
     else
-        for (int k = 0; k < 9 && !*why; k++)
+        for (int k = 0; k < METRICS_NODE_U64 && !*why; k++)
             if (rd64(out + 8 * k) != want[k]) {
                 snprintf(msg, sizeof msg, "lantern_metrics_node: field %d is %llu, not %llu", k, (unsigned long long)rd64(out + 8 * k),
                          (unsigned long long)want[k]);
                 *why = msg;
             }
     metrics_node_checks += !*why;
-    for (int k = 0; k < 9; k++) metrics_node_seen[k] += want[k] > (k == 6);
+    for (int k = 0; k < METRICS_NODE_U64; k++) metrics_node_seen[k] += want[k] > (k == 6);
     free(out);
 }
 
@@ -9773,6 +9790,33 @@ static void run_metrics_text(const char *file, case_file *f) {
 }
 
 /*
+ * metrics-observe: lantern_metrics_observe of each case's values in turn on its Histogram: after
+ * each, the Histogram must be the case's, with nothing written past it.
+ */
+#define HISTOGRAM_BYTES 112 /* include/metrics.inc: Histogram__mem */
+static void run_metrics_observe(const char *file, case_file *f) {
+    for (uint64_t i = 0; i < f->count; i++) {
+        const char *name, *why = NULL;
+        uint64_t len, hl, vl, ol;
+        tv parts = next_case(f, &name, &len);
+        uint64_t bounds = tv_u64(tv_get(parts, "bounds"));
+        const uint8_t *start = tv_bytes(tv_get(parts, "histogram"), &hl), *vals = tv_bytes(tv_get(parts, "values"), &vl);
+        const uint8_t *want = tv_bytes(tv_get(parts, "out"), &ol);
+        if (hl != HISTOGRAM_BYTES || vl % 8 || ol != vl / 8 * HISTOGRAM_BYTES) why = "the case's parts have no Histogram's sizes";
+        uint8_t *h = buffer(HISTOGRAM_BYTES);
+        if (!why) memcpy(h, start, HISTOGRAM_BYTES);
+        for (uint64_t k = 0; !why && k < vl / 8; k++) {
+            uint64_t v = rd64(vals + 8 * k);
+            if (CALL(lantern_metrics_observe, h, &bounds, &v) != 0) why = "status is not LANTERN_OK";
+            else if (!guard_ok(h, HISTOGRAM_BYTES)) why = "wrote past the Histogram";
+            else if (memcmp(h, want + k * HISTOGRAM_BYTES, HISTOGRAM_BYTES)) why = "the Histogram differs";
+        }
+        free(h);
+        report(file, name, len, !why, why);
+    }
+}
+
+/*
  * metrics-answer: lantern_metrics_answer of each case's request bytes over its sources
  * (tests/generator/metrics.py). With the room metrics.md names exactly, the status must be the
  * case's and out its answer; with one byte less, LANTERN_BUFFER_TOO_SMALL. The inputs must stay
@@ -12888,6 +12932,7 @@ int main(int argc, char **argv) {
         else if (!bls_off && !strcmp(kind, "metrics-text")) run_metrics_text(file, &f);
         else if (!bls_off && !strcmp(kind, "metrics-state")) run_metrics_state(file, &f);
         else if (!bls_off && !strcmp(kind, "metrics-answer")) run_metrics_answer(file, &f);
+        else if (!bls_off && !strcmp(kind, "metrics-observe")) run_metrics_observe(file, &f);
         else if (!bls_off && !strcmp(kind, "node-api")) run_node_api(file, &f);
         else if (!bls_off && !strcmp(kind, "node-payload")) run_node_payload(file, &f);
         else if (!bls_off && !strcmp(kind, "node-liveness")) run_node_liveness(file, &f);
@@ -12948,9 +12993,11 @@ int main(int argc, char **argv) {
     if (reads_asked) printf("NOTE: %lu node-reads requests answered\n", reads_asked);
     if (metrics_node_checks)
         printf("NOTE: %lu node steps checked against lantern_metrics_node; above 0: peers %lu, fulu %lu, exits %lu, proposers %lu, "
-               "orphaned %lu, syncing %lu\n", (unsigned long)metrics_node_checks, (unsigned long)metrics_node_seen[0],
-               (unsigned long)metrics_node_seen[1], (unsigned long)metrics_node_seen[3], (unsigned long)metrics_node_seen[4],
-               (unsigned long)metrics_node_seen[5], (unsigned long)metrics_node_seen[6]);
+               "orphaned %lu, syncing %lu, outbound %lu, distance %lu, streams %lu, pool %lu\n", (unsigned long)metrics_node_checks,
+               (unsigned long)metrics_node_seen[0], (unsigned long)metrics_node_seen[1], (unsigned long)metrics_node_seen[3],
+               (unsigned long)metrics_node_seen[4], (unsigned long)metrics_node_seen[5], (unsigned long)metrics_node_seen[6],
+               (unsigned long)metrics_node_seen[10], (unsigned long)metrics_node_seen[14], (unsigned long)metrics_node_seen[20],
+               (unsigned long)(metrics_node_seen[21 + 3] + metrics_node_seen[21 + 4] + metrics_node_seen[21 + 6]));
     if (reorg_checks) printf("NOTE: %lu head changes checked against NodeMetrics reorgs, %lu of them reorgs\n", (unsigned long)reorg_checks,
                                (unsigned long)reorgs_seen);
     if (engine_fcu_errors) printf("NOTE: %lu engine_forkchoiceUpdated answered Too deep reorg on syncs\n", engine_fcu_errors);

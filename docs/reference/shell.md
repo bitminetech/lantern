@@ -20,6 +20,7 @@
 - [`lantern_shell_rename`](#function-lantern_shell_rename): renames a file over another.
 - [`lantern_shell_mkdir`](#function-lantern_shell_mkdir): makes a directory.
 - [`lantern_shell_sync_dir`](#function-lantern_shell_sync_dir): makes a directory's entries durable.
+- [`lantern_shell_process`](#function-lantern_shell_process): reads the process's CPU time, highest resident memory and open file limit.
 
 ### Types
 
@@ -739,3 +740,38 @@ The outcome of `lantern_shell_read_file` and `lantern_shell_map_file`.
 | x86-64 |  |  |  |  |
 | ARM64 |  |  |  |  |
 | RISC-V |  |  |  |  |
+
+## Function `lantern_shell_process`
+
+Reads the process's CPU time, highest resident memory and open file limit, for the metrics ([metrics.md](metrics.md)).
+
+### Signature
+
+```
+lantern_shell_process(out) -> status
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `out` | output | 24 bytes: `cpu_us`, `max_rss_bytes`, `max_fds`, each a u64 |
+
+### Returns
+
+- `LANTERN_OK`.
+
+### Function does
+
+- `cpu_us`: the process's user and system CPU time, in microseconds.
+- `max_rss_bytes`: the highest resident memory of the process, in bytes.
+- `max_fds`: the soft limit of open files; 0 when the OS reports none or the call fails.
+- Linux: getrusage(RUSAGE_SELF) (`ru_maxrss` in KiB) and prlimit64(0, RLIMIT_NOFILE).
+- macOS: getrusage and getrlimit(RLIMIT_NOFILE) of libSystem (`ru_maxrss` in bytes).
+- Windows: GetProcessTimes and K32GetProcessMemoryInfo (`PeakWorkingSetSize`) of the current process; `max_fds` 0.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_shell_process` (`_lantern_shell_process` on macOS).
+- Argument order: `out`.

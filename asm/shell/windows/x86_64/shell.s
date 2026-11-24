@@ -657,3 +657,35 @@ FUNCTION lantern_shell_sync_dir
     xor     %eax, %eax
     ret
 END_FUNCTION lantern_shell_sync_dir
+
+/*
+ * (out): docs/reference/shell.md. rbx out. Locals: L the fifth argument of a call, L+16 the four
+ * FILETIMEs of GetProcessTimes, L+48 PROCESS_MEMORY_COUNTERS (72 bytes).
+ */
+FUNCTION lantern_shell_process
+    ENTER 128
+    mov     %rdi, %rbx
+    mov     $-1, %rcx                       # GetProcessTimes(GetCurrentProcess(), ...)
+    lea     (L + 16)(%rsp), %rdx
+    lea     (L + 24)(%rsp), %r8
+    lea     (L + 32)(%rsp), %r9
+    lea     (L + 40)(%rsp), %rax
+    mov     %rax, L(%rsp)
+    CALL_GLOBAL GetProcessTimes
+    mov     (L + 32)(%rsp), %rax            # kernel and user time, in 100 ns
+    add     (L + 40)(%rsp), %rax
+    xor     %edx, %edx
+    mov     $10, %ecx
+    div     %rcx
+    mov     %rax, (%rbx)
+    movl    $72, (L + 48)(%rsp)             # K32GetProcessMemoryInfo: PeakWorkingSetSize
+    mov     $-1, %rcx
+    lea     (L + 48)(%rsp), %rdx
+    mov     $72, %r8d
+    CALL_GLOBAL K32GetProcessMemoryInfo
+    mov     (L + 56)(%rsp), %rax
+    mov     %rax, 8(%rbx)
+    movq    $0, 16(%rbx)                    # no open file limit
+    xor     %eax, %eax
+    LEAVE 128
+END_FUNCTION lantern_shell_process

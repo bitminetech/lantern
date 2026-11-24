@@ -21,6 +21,11 @@
 /* The App, at rbx; the constants and the RODATA. */
 .include "app.inc"
 
+.macro AM_INC field
+    incq    (APP_METRICS + AppMetrics_\field)(%rbx)
+.endm
+
+
 /* reg = the scratch buffer, its size written back into its first 8 bytes: a callee may leave it
  * invalid (ARCHITECTURE.md section 6). Uses r11. */
 .macro SCRATCH reg
@@ -456,6 +461,8 @@ LOCAL_FUNCTION app_line_end
     lea     16(%rsp), %rdi
     mov     $1, %esi
     call    app_line_text
+    mov     (%rsp), %rax                    # the metrics: the line, by its level (0 error to 3 debug)
+    incq    (APP_METRICS + AppMetrics_log_lines)(%rbx,%rax,8)
     lea     APP_STREAM(%rbx), %rdi
     lea     APP_LINE(%rbx), %rsi
     CALL_GLOBAL lantern_shell_write
@@ -1683,6 +1690,14 @@ LOCAL_FUNCTION app_work
     je      90f
     cmp     $-1, %r15
     je      90f
+    xor     %eax, %eax                      # the metrics: state_a's slot, and the start time
+    test    %r12, %r12
+    jz      100f
+    mov     8(%r12), %rax
+    mov     NODE_STATE_SLOT(%rax), %rax
+100: mov    %rax, APP_MET_S0(%rbx)
+    call    app_met_us
+    mov     %rax, APP_MET_T0(%rbx)
     mov     $(NodeEvent_api_bytes + 24 + NODE_API_CHUNK), %eax
     cmpq    $NODE_WORK_API_CHUNK, S8(%rsp)  # API_CHUNK: room for a whole chunk
     je      15f
@@ -1889,6 +1904,9 @@ LOCAL_FUNCTION app_work
     jmp     2b
 8:  mov     S8(%rsp), %rdi
     mov     %r15, %rsi
+    call    app_met_work
+    mov     S8(%rsp), %rdi
+    mov     %r15, %rsi
     call    app_log_work
     mov     APP_WORK_EVENT(%rbx), %rdi      # the WORK_DONE event
     mov     (%rdi), %rsi
@@ -2046,6 +2064,7 @@ LOCAL_FUNCTION app_db_custody
     mov     %rax, AppDb_op(%r15)
 90: mov     AppDb_op(%r15), %rax            # cannot write <path>: error <n>
     mov     %rax, (L + 24)(%rsp)
+    AM_INC  db_failures
     call    app_line_start
     ADDRESS %rdi, app_m_write
     mov     $app_m_write_len, %esi
@@ -2216,6 +2235,7 @@ LOCAL_FUNCTION app_db_write
     movq    $-1, AppDb_segment(%r15,%r12,8)
 90: mov     AppDb_op(%r15), %rax            # cannot write <path>: error <n>
     mov     %rax, (L + 24)(%rsp)
+    AM_INC  db_failures
     mov     %r12, %rdi
     mov     24(%rbp), %rsi
     call    app_db_path
@@ -2969,6 +2989,7 @@ LOCAL_FUNCTION app_db_state
     CALL_GLOBAL lantern_shell_close
 90: mov     AppDb_op(%r15), %rax            # cannot write <path>: error <n>
     mov     %rax, (L + 24)(%rsp)
+    AM_INC  db_failures
     call    app_line_start
     ADDRESS %rdi, app_m_write
     mov     $app_m_write_len, %esi
@@ -3021,16 +3042,27 @@ LOCAL_FUNCTION app_actions
     mov     8(%rbp), %rax
     cmp     $NODE_ACT_DB_APPEND, %rax
     jne     11f
-    mov     %rbp, %rdi                      # DB_APPEND: the record in its segment file
+    mov     16(%rbp), %rdi                  # the metrics: the record and its bytes, by kind
+    call    app_buf_find
+    mov     32(%rbp), %rdx
+    and     $1, %edx
+    incq    (APP_METRICS + AppMetrics_db_records)(%rbx,%rdx,8)
+    test    %rax, %rax
+    jz      190f
+    mov     16(%rax), %rcx
+    add     %rcx, (APP_METRICS + AppMetrics_db_bytes)(%rbx,%rdx,8)
+190: mov    %rbp, %rdi                      # DB_APPEND: the record in its segment file
     call    app_db_append
     jmp     8f
 11: cmp     $NODE_ACT_DB_DROP, %rax
     jne     12f
+    AM_INC  db_drops
     mov     %rbp, %rdi                      # DB_DROP: the segment's file goes
     call    app_db_drop
     jmp     8f
 12: cmp     $NODE_ACT_DB_STATE, %rax
     jne     120f
+    AM_INC  db_anchors
     mov     %rbp, %rdi                      # DB_STATE: custody.bin, anchor.ssz
     call    app_db_custody
     mov     %rbp, %rdi
@@ -3038,6 +3070,7 @@ LOCAL_FUNCTION app_actions
     jmp     8f
 120: cmp    $NODE_ACT_DB_ARCHIVE, %rax
     jne     10f
+    incq    (APP_METRICS + AppMetrics_db_records + 16)(%rbx)
     mov     %rbp, %rdi                      # DB_ARCHIVE: a state record
     call    app_db_archive
     jmp     8f
@@ -3120,6 +3153,7 @@ LOCAL_FUNCTION app_actions
     jmp     8f
 6:  cmp     $NODE_ACT_DISCV5, %rax
     jne     7f
+    AM_INC  lookups
     mov     (24 + 8)(%rbp), %rax            # DISCV5: its events join discv5's
     lea     24(%rbp,%rax), %rdi
     mov     (24 + 16)(%rbp), %rsi
@@ -3154,7 +3188,9 @@ LOCAL_FUNCTION app_step
     mov     %rdi, %rbp
     mov     %rsi, %r12
     xor     %r13d, %r13d
-1:  mov     APP_ACTIONS(%rbx), %rax
+1:  call    app_met_us                      # the step's run time (app.md, the metrics)
+    mov     %rax, APP_MET_T1(%rbx)
+    mov     APP_ACTIONS(%rbx), %rax
     movq    $24, 8(%rax)
     movq    $0, 16(%rax)
     sub     $16, %rsp                       # the seventh and eighth arguments: actions, result
@@ -3169,6 +3205,14 @@ LOCAL_FUNCTION app_step
     SCRATCH %r9
     CALL_GLOBAL lantern_node_step
     add     $16, %rsp
+    mov     %rax, APP_MET_ST(%rbx)
+    call    app_met_us
+    sub     APP_MET_T1(%rbx), %rax
+    mov     %rax, %rdx
+    mov     $AppMetrics_step_seconds, %edi
+    mov     $METRIC_BOUNDS_WORK, %esi
+    call    app_met_obs
+    mov     APP_MET_ST(%rbx), %rax
     test    %rax, %rax
     jz      3f
     cmp     $LANTERN_BUFFER_TOO_SMALL, %rax
@@ -4532,6 +4576,7 @@ LOCAL_FUNCTION app_dv_start
     mov     $2, %eax
     LEAVE 256
 96: mov     %rax, %rdx                      # discv5: status <n>
+    AM_INC  dv_failures
     ADDRESS %rdi, app_m_discv5
     mov     $app_m_discv5_len, %esi
     call    app_fail_status
@@ -4647,6 +4692,7 @@ LOCAL_FUNCTION app_discv5
     test    %rax, %rax
     jz      5f
     mov     %rax, %rdx                      # discv5: status <n>; its events are dropped
+    AM_INC  dv_failures
     ADDRESS %rdi, app_m_discv5
     mov     $app_m_discv5_len, %esi
     call    app_fail_status
@@ -4692,9 +4738,11 @@ LOCAL_FUNCTION app_discv5
     lea     DISCV5_ACT_SEND_DATA(%rbp), %rsi
     mov     %r8, %rdx
     call    lantern_copy
+    AM_INC  dv_out
     jmp     80f
 7:  cmp     $DISCV5_ACTION_NODE_FOUND, %rax
     jne     71f
+    AM_INC  records
     mov     DISCV5_ACT_FOUND_LEN(%rbp), %rax    # NODE_FOUND: NODE_EV_ENR with the record
     lea     (48 + 7)(%rax), %rcx
     and     $-8, %rcx
@@ -5222,6 +5270,8 @@ LOCAL_FUNCTION app_api_read
     lea     48(%rcx), %rsi
     call    app_event_put
     movq    $APP_API_ANSWERING, 8(%r12)
+    AM_INC  api_requests                    # the metrics: a request, its answer's first bytes owed
+    movq    $1, 48(%r12)
 99: LEAVE 16
 END_FUNCTION app_api_read
 
@@ -5270,7 +5320,20 @@ LOCAL_FUNCTION app_api_action
     lea     56(%rbp), %rsi
     mov     %rcx, %rdx
     call    lantern_copy
-    mov     48(%rbp), %rax                  # its bytes are in flight
+    cmpq    $0, 48(%r12)                    # the metrics: an answer's first bytes give its status class
+    je      96f
+    movq    $0, 48(%r12)
+    cmpq    $12, 48(%rbp)
+    jb      96f
+    movzbl  (56 + 9)(%rbp), %eax
+    sub     $0x32, %eax
+    cmp     $3, %eax
+    ja      96f
+    incq    (APP_METRICS + AppMetrics_api_classes)(%rbx,%rax,8)
+    test    %eax, %eax
+    jnz     96f
+    AM_INC  api_successes
+96: mov     48(%rbp), %rax                  # its bytes are in flight
     add     %rax, 32(%r12)
     cmpq    $0, 24(%rbp)                    # last: the slot reads its next request
     jne     97f
@@ -5431,8 +5494,9 @@ LOCAL_FUNCTION app_api_poll
     movq    $0, 16(%r13)
     mov     (APP_TICK + LIBP2P_TICK_NOW)(%rbx), %rcx
     mov     %rcx, 24(%r13)
-    movq    $0, 32(%r13)                    # no bytes in flight, no API_SENT owed
+    movq    $0, 32(%r13)                    # no bytes in flight, no API_SENT owed, no first bytes owed
     movq    $0, 40(%r13)
+    movq    $0, 48(%r13)
     mov     %rax, %r15
     shl     $32, %r15
     or      %r14, %r15
@@ -5542,6 +5606,220 @@ LOCAL_FUNCTION app_api_poll
     LEAVE 16
 END_FUNCTION app_api_poll
 
+/* L1: rax = the monotonic microseconds of libp2p_shell_clock. */
+LOCAL_FUNCTION app_met_us
+    FRAME 0
+    lea     APP_MET_TICK(%rbx), %rdi
+    CALL_GLOBAL libp2p_shell_clock
+    mov     (APP_MET_TICK + LIBP2P_TICK_US)(%rbx), %rax
+    UNFRAME 0
+END_FUNCTION app_met_us
+
+/* L1: the value rdx joins the AppMetrics Histogram at offset rdi, of the bound set rsi. Locals: the bound set, the value. */
+LOCAL_FUNCTION app_met_obs
+    FRAME 16
+    mov     %rsi, (%rsp)
+    mov     %rdx, 8(%rsp)
+    lea     APP_METRICS(%rbx,%rdi), %rdi
+    mov     %rsp, %rsi
+    lea     8(%rsp), %rdx
+    CALL_GLOBAL lantern_metrics_observe
+    UNFRAME 16
+END_FUNCTION app_met_obs
+
+/* L1: the delay of a message of the slot rsi, from its slot's start to the store's time, joins the AppMetrics Histogram at offset rdi (delay bounds). */
+LOCAL_FUNCTION app_met_delay
+    FRAME 0
+    mov     APP_STORE(%rbx), %rcx
+    mov     (APP_CONFIG + CONFIG_SLOT_DURATION_MS)(%rbx), %rax
+    mul     %rsi
+    add     Store_genesis_time_ms(%rcx), %rax
+    mov     Store_time_ms(%rcx), %rdx
+    sub     %rax, %rdx
+    jae     1f
+    xor     %edx, %edx
+1:  imul    $1000, %rdx, %rdx
+    mov     $METRIC_BOUNDS_DELAY, %esi
+    call    app_met_obs
+    UNFRAME 0
+END_FUNCTION app_met_delay
+
+/*
+ * L2: the metrics of a work that ran (app.md, the metrics): its run time since APP_MET_T0 and a
+ * result other than LANTERN_OK, by kind; then by kind: gossip by topic and result, the requests
+ * served by method, the column times and counts, a published block, an epoch crossed. rdi its
+ * kind, rsi its data's table entry or 0. rbp the WORK_DONE event, r12 the kind, r13 the data
+ * entry, r14 the microseconds, r15 the kind's slot. Locals: L the topic, L+8 the result's index.
+ */
+LOCAL_FUNCTION app_met_work
+    ENTER 16
+    mov     %rdi, %r12
+    mov     %rsi, %r13
+    call    app_met_us
+    sub     APP_MET_T0(%rbx), %rax
+    mov     %rax, %r14
+    mov     APP_WORK_EVENT(%rbx), %rbp
+    cmp     $NODE_WORK_RECONSTRUCT, %r12
+    ja      99f
+    ADDRESS %rax, app_work_slots
+    movzbl  (%rax,%r12), %r15d
+    imul    $Histogram__mem, %r15, %rdi     # its run time and failures, by kind
+    add     $AppMetrics_work_seconds, %rdi
+    mov     $METRIC_BOUNDS_WORK, %esi
+    mov     %r14, %rdx
+    call    app_met_obs
+    cmpq    $0, NodeEvent_result(%rbp)
+    je      1f
+    incq    (APP_METRICS + AppMetrics_work_failures)(%rbx,%r15,8)
+1:  cmp     $NODE_WORK_GOSSIP, %r12
+    jne     20f
+    movzbl  NodeAction_arg(%rbp), %ecx      # GOSSIP: by topic and result (accept, ignore, reject)
+    cmp     $GOSSIP_NAMES, %ecx
+    jbe     2f
+    xor     %ecx, %ecx
+2:  mov     NodeEvent_result(%rbp), %rax
+    xor     %edx, %edx
+    test    %rax, %rax
+    jz      3f
+    mov     $2, %edx
+    cmp     $LANTERN_GOSSIP_REJECT, %rax
+    je      3f
+    mov     $1, %edx
+3:  mov     %rcx, L(%rsp)
+    mov     %rdx, (L + 8)(%rsp)
+    lea     (%rcx,%rcx,2), %rax
+    add     %rdx, %rax
+    incq    (APP_METRICS + AppMetrics_gossip_results)(%rbx,%rax,8)
+    cmp     $2, %rdx
+    jne     4f
+    AM_INC  validation_failures
+4:  imul    $Histogram__mem, %rcx, %rdi
+    add     $AppMetrics_gossip_seconds, %rdi
+    mov     $METRIC_BOUNDS_WORK, %esi
+    mov     %r14, %rdx
+    call    app_met_obs
+    mov     L(%rsp), %rcx
+    mov     (L + 8)(%rsp), %rdx
+    cmp     $GOSSIP_DATA_COLUMN_SIDECAR, %rcx
+    jne     5f
+    AM_INC  column_requests
+    test    %rdx, %rdx
+    jnz     41f
+    AM_INC  column_successes
+41: mov     $AppMetrics_gossip_verification, %edi
+    mov     $METRIC_BOUNDS_DEFAULT, %esi
+    mov     %r14, %rdx
+    call    app_met_obs
+    jmp     99f
+5:  cmp     $GOSSIP_BEACON_AGGREGATE_AND_PROOF, %rcx
+    jne     6f
+    AM_INC  aggregates_received
+    jmp     99f
+6:  cmp     $GOSSIP_BEACON_ATTESTATION, %rcx
+    jne     7f
+    AM_INC  attestations_received
+    test    %rdx, %rdx
+    jnz     99f
+    mov     $AppMetrics_attestation_delay, %edi  # a valid one: its delay, its slot at NodeEvent_root
+    mov     NodeEvent_root(%rbp), %rsi
+    call    app_met_delay
+    jmp     99f
+7:  cmp     $GOSSIP_ATTESTER_SLASHING, %rcx
+    jne     8f
+    AM_INC  attester_slashings_received
+    jmp     99f
+8:  cmp     $GOSSIP_BEACON_BLOCK, %rcx
+    jne     99f
+    test    %rdx, %rdx
+    jnz     99f
+    AM_INC  gossip_blocks_imported
+    test    %r13, %r13
+    jz      99f
+    mov     8(%r13), %rax                   # its delay: its slot at bytes 100 to 108 of the SignedBeaconBlock
+    cmpq    $108, 16(%rax)
+    jb      99f
+    mov     8(%rax), %rcx
+    mov     100(%rax,%rcx), %rsi
+    mov     $AppMetrics_block_delay, %edi
+    call    app_met_delay
+    jmp     99f
+20: cmp     $NODE_WORK_SERVE, %r12
+    jne     30f
+    movzbl  (NodeAction_arg + 1)(%rbp), %eax  # SERVE: by method
+    cmp     $REQRESP_METHODS, %eax
+    jbe     21f
+    xor     %eax, %eax
+21: incq    (APP_METRICS + AppMetrics_served)(%rbx,%rax,8)
+    jmp     99f
+30: cmp     $NODE_WORK_RECONSTRUCT, %r12
+    jne     40f
+    mov     $AppMetrics_reconstruction, %edi
+    mov     $METRIC_BOUNDS_DEFAULT, %esi
+    mov     %r14, %rdx
+    call    app_met_obs
+    cmpq    $0, NodeEvent_result(%rbp)
+    jne     99f
+    test    %r13, %r13                      # the columns it rebuilt: NUMBER_OF_COLUMNS less the ByteLists of data
+    jz      99f
+    mov     8(%r13), %rax
+    mov     16(%r13), %rcx
+    add     %rax, %rcx
+    mov     $NUMBER_OF_COLUMNS, %edx
+31: lea     24(%rax), %rsi
+    cmp     %rcx, %rsi
+    ja      32f
+    mov     (%rax), %rsi
+    cmp     $24, %rsi
+    jb      32f
+    add     $7, %rsi
+    and     $-8, %rsi
+    add     %rsi, %rax
+    dec     %rdx
+    jnz     31b
+32: add     %rdx, (APP_METRICS + AppMetrics_reconstructed_columns)(%rbx)
+    jmp     99f
+40: cmp     $NODE_WORK_PUBLISH_SIDECARS, %r12
+    jne     50f
+    mov     $AppMetrics_computation, %edi
+    mov     $METRIC_BOUNDS_DEFAULT, %esi
+    mov     %r14, %rdx
+    call    app_met_obs
+    jmp     99f
+50: cmp     $NODE_WORK_BLOB, %r12           # BLOB of a column sidecar from a response: its check
+    jne     60f
+    cmpq    $1, NodeAction_arg(%rbp)
+    jne     99f
+    mov     $AppMetrics_kzg_batch, %edi
+    mov     $METRIC_BOUNDS_KZG, %esi
+    mov     %r14, %rdx
+    call    app_met_obs
+    jmp     99f
+60: cmp     $NODE_WORK_PUBLISH_CHECK, %r12
+    jne     70f
+    cmpq    $0, NodeEvent_result(%rbp)
+    jne     99f
+    AM_INC  blocks_proposed
+    jmp     99f
+70: cmp     $NODE_WORK_SLOTS, %r12          # SLOTS across an epoch boundary
+    jne     99f
+    mov     APP_MET_S0(%rbx), %rax
+    xor     %edx, %edx
+    mov     $SLOTS_PER_EPOCH, %ecx
+    div     %rcx
+    mov     %rax, %rsi
+    mov     NodeAction_arg(%rbp), %rax
+    xor     %edx, %edx
+    div     %rcx
+    cmp     %rsi, %rax
+    jbe     99f
+    AM_INC  epoch_transitions
+    mov     $AppMetrics_epoch_seconds, %edi
+    mov     $METRIC_BOUNDS_WORK, %esi
+    mov     %r14, %rdx
+    call    app_met_obs
+99: LEAVE 16
+END_FUNCTION app_met_work
+
 /*
  * L2: the metrics server (app.md): with --metrics categories, a shell context of APP_MET_CONNS
  * connections that listens on --metrics-address and --metrics-port, and its buffers: rax = 0, or 2
@@ -5550,6 +5828,10 @@ END_FUNCTION app_api_poll
  */
 LOCAL_FUNCTION app_met_start
     ENTER 64
+    call    app_met_us                      # the start, for the uptime
+    mov     %rax, APP_MET_START_US(%rbx)
+    mov     (APP_MET_TICK + LIBP2P_TICK_UNIX)(%rbx), %rax
+    mov     %rax, APP_MET_START_S(%rbx)
     cmpq    $0, (APP_OPTIONS + AppOptions_metrics)(%rbx)
     je      8f
     movq    $APP_MET_CONNS, L(%rsp)
@@ -5766,7 +6048,48 @@ LOCAL_FUNCTION app_met_sources
     mov     %rax, (APP_MET_SOURCES + MetricsSources_counters)(%rbx)
     lea     APP_METRICS(%rbx), %rax
     mov     %rax, (APP_MET_SOURCES + MetricsSources_app)(%rbx)
-    movq    $0, (APP_MET_SOURCES + MetricsSources_process)(%rbx)
+    lea     APP_MET_SHELLP(%rbx), %rdi      # MetricsProcess: the shell's values, the buffers, the times
+    CALL_GLOBAL lantern_shell_process
+    mov     APP_MET_SHELLP(%rbx), %rax
+    mov     %rax, (APP_MET_PROCESS + MetricsProcess_cpu_us)(%rbx)
+    mov     (APP_MET_SHELLP + 8)(%rbx), %rax
+    mov     %rax, (APP_MET_PROCESS + MetricsProcess_max_rss_bytes)(%rbx)
+    mov     (APP_MET_SHELLP + 16)(%rbx), %rax
+    mov     %rax, (APP_MET_PROCESS + MetricsProcess_max_fds)(%rbx)
+    mov     APP_BUFS(%rbx), %rcx
+    mov     (APP_BUFS + 8)(%rbx), %rdx
+    mov     %rdx, (APP_MET_PROCESS + MetricsProcess_buffers)(%rbx)
+    xor     %eax, %eax
+6:  test    %rdx, %rdx
+    jz      7f
+    add     16(%rcx), %rax
+    add     $APP_BUF_ENTRY, %rcx
+    dec     %rdx
+    jmp     6b
+7:  mov     %rax, (APP_MET_PROCESS + MetricsProcess_buffer_bytes)(%rbx)
+    mov     APP_MET_START_S(%rbx), %rax
+    mov     %rax, (APP_MET_PROCESS + MetricsProcess_start_s)(%rbx)
+    call    app_met_us
+    sub     APP_MET_START_US(%rbx), %rax
+    mov     %rax, (APP_MET_PROCESS + MetricsProcess_uptime_us)(%rbx)
+    mov     APP_ENGINE(%rbx), %rax
+    mov     %rax, (APP_MET_PROCESS + MetricsProcess_engine)(%rbx)
+    xor     %eax, %eax                      # the Beacon API's connections open
+    mov     APP_API_SLOTS(%rbx), %rcx
+    mov     (APP_OPTIONS + AppOptions_http_max_connections)(%rbx), %rdx
+    test    %rcx, %rcx
+    jz      9f
+8:  test    %rdx, %rdx
+    jz      9f
+    cmpq    $0, 8(%rcx)
+    je      81f
+    inc     %rax
+81: add     $APP_API_SLOT, %rcx
+    dec     %rdx
+    jmp     8b
+9:  mov     %rax, (APP_MET_PROCESS + MetricsProcess_api_open)(%rbx)
+    lea     APP_MET_PROCESS(%rbx), %rax
+    mov     %rax, (APP_MET_SOURCES + MetricsSources_process)(%rbx)
     movq    $0, (APP_MET_SOURCES + MetricsSources_gossip)(%rbx)
     movq    $0, (APP_MET_SOURCES + MetricsSources_profile)(%rbx)
     LEAVE 16
@@ -6036,7 +6359,10 @@ LOCAL_FUNCTION app_p2p_events
     mov     %rbp, %rdi                      # a datagram of discv5
     call    app_dv_datagram
     test    %rax, %rax
-    jnz     2f
+    jz      11f
+    AM_INC  dv_in
+    jmp     2f
+11:
     mov     %rbp, %rdi                      # the engine's connection
     call    app_engine_event
     test    %rax, %rax
@@ -6045,6 +6371,32 @@ LOCAL_FUNCTION app_p2p_events
     call    app_builder_event
     test    %rax, %rax
     jnz     2f
+    mov     8(%rbp), %rax                   # the metrics of the transport (app.md)
+    mov     LIBP2P_EV_COUNT(%rbp), %rcx
+    cmp     $LIBP2P_EVENT_RECEIVED, %rax
+    jne     31f
+    add     %rcx, (APP_METRICS + AppMetrics_rx_bytes)(%rbx)
+    jmp     39f
+31: cmp     $LIBP2P_EVENT_SENT, %rax
+    jne     32f
+    add     %rcx, (APP_METRICS + AppMetrics_tx_bytes)(%rbx)
+    jmp     39f
+32: cmp     $LIBP2P_EVENT_ACCEPTED, %rax
+    jne     33f
+    incq    (APP_METRICS + AppMetrics_connections)(%rbx)
+    jmp     39f
+33: cmp     $LIBP2P_EVENT_CONNECTED, %rax
+    jne     34f
+    incq    (APP_METRICS + AppMetrics_connections + 8)(%rbx)
+    jmp     39f
+34: cmp     $LIBP2P_EVENT_DIAL_FAILED, %rax
+    jne     35f
+    AM_INC  dial_failures
+    jmp     39f
+35: cmp     $LIBP2P_EVENT_CLOSED, %rax
+    jne     39f
+    AM_INC  closed
+39:
     mov     (%rbp), %rax
     add     $16, %rax
     mov     %rax, L(%rsp)

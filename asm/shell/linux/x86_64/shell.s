@@ -539,3 +539,38 @@ FUNCTION lantern_shell_sync_dir
 91: mov     $-OS_ENAMETOOLONG, %rax
 90: SHELL_ERROR SHELL_PATH_FRAME
 END_FUNCTION lantern_shell_sync_dir
+
+.set SYS_GETRUSAGE, 98
+.set SYS_PRLIMIT64, 302
+
+/* (out): docs/reference/shell.md. Locals: struct rusage (144 bytes), struct rlimit (16), then out. */
+FUNCTION lantern_shell_process
+    FRAME 176
+    mov     %rdi, 160(%rsp)
+    xor     %edi, %edi                      # getrusage(RUSAGE_SELF)
+    mov     %rsp, %rsi
+    SYSCALL SYS_GETRUSAGE
+    mov     (%rsp), %rax                    # user and system seconds, then their microseconds
+    add     16(%rsp), %rax
+    imul    $1000000, %rax, %rax
+    add     8(%rsp), %rax
+    add     24(%rsp), %rax
+    mov     160(%rsp), %rcx
+    mov     %rax, (%rcx)
+    mov     32(%rsp), %rax                  # ru_maxrss, in KiB
+    shl     $10, %rax
+    mov     %rax, 8(%rcx)
+    xor     %edi, %edi                      # prlimit64(0, RLIMIT_NOFILE, NULL, &old)
+    mov     $7, %esi
+    xor     %edx, %edx
+    lea     144(%rsp), %r10
+    SYSCALL SYS_PRLIMIT64
+    xor     %edx, %edx
+    test    %rax, %rax
+    jnz     1f
+    mov     144(%rsp), %rdx
+1:  mov     160(%rsp), %rcx
+    mov     %rdx, 16(%rcx)
+    xor     %eax, %eax
+    UNFRAME 176
+END_FUNCTION lantern_shell_process

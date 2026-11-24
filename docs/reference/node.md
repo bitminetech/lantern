@@ -2896,7 +2896,7 @@ The state of the node: a value with parts.
 | 728 + `CONFIG_SIZE` + `API_IDENTITY_SIZE` + 1992 + 8 * (`SYNC_COMMITTEE_SUBNET_COUNT` + `ATTESTATION_SUBNET_COUNT`) | `head_due` | u64 | 1 when the store may have changed since the last get_head, else 0 |
 | 728 + `CONFIG_SIZE` + `API_IDENTITY_SIZE` + 2000 + 8 * (`SYNC_COMMITTEE_SUBNET_COUNT` + `ATTESTATION_SUBNET_COUNT`) | `head_slot` | u64 | The store's slot at the last get_head |
 | 728 + `CONFIG_SIZE` + `API_IDENTITY_SIZE` + 2008 + 8 * (`SYNC_COMMITTEE_SUBNET_COUNT` + `ATTESTATION_SUBNET_COUNT`) | `fcu_wait` | u64 | After a failed engine_forkchoiceUpdated, the slot from which the next forkchoiceUpdated and preparation go; a new head makes it 0 |
-| 728 + `CONFIG_SIZE` + `API_IDENTITY_SIZE` + 2016 + 8 * (`SYNC_COMMITTEE_SUBNET_COUNT` + `ATTESTATION_SUBNET_COUNT`) | `metrics` | [`NodeMetrics`](metrics.md#type-nodemetrics) | The counters and delay histograms of the metrics; zero at the start |
+| 728 + `CONFIG_SIZE` + `API_IDENTITY_SIZE` + 2016 + 8 * (`SYNC_COMMITTEE_SUBNET_COUNT` + `ATTESTATION_SUBNET_COUNT`) | `metrics` | [`NodeMetrics`](metrics.md#type-nodemetrics) | The counters of the metrics; zero at the start: `reorgs` at each head change off the old head's chain, `attestations_published` at each attestation of submitPoolAttestationsV2 that goes out |
 
 ### Rules
 

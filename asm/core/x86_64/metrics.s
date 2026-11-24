@@ -115,6 +115,37 @@ LOCAL_FUNCTION mt_name
     jmp     mt_text
 END_FUNCTION mt_name
 
+/*
+ * lantern_metrics_observe(histogram, bounds, value) -> status
+ * The value joins the Histogram of the bound set bounds (METRIC_BOUNDS_*, of microseconds): count,
+ * sum, and the bucket of the first bound at or above it, else the last. A leaf.
+ */
+LEAF lantern_metrics_observe
+    mov     (%rsi), %rsi
+    mov     (%rdx), %rdx
+    incq    Histogram_count(%rdi)
+    add     %rdx, Histogram_sum(%rdi)
+    shl     $4, %rsi
+    lea     metrics_bounds(%rip), %rax
+    add     %rax, %rsi
+    mov     MetricBounds_count(%rsi), %ecx
+    mov     MetricBounds_first(%rsi), %eax
+    shl     $4, %rax
+    lea     metrics_bound_values(%rip), %r8
+    add     %rax, %r8
+    xor     %eax, %eax
+1:  cmp     %rcx, %rax
+    jae     2f
+    cmp     MetricBound_value(%r8), %rdx
+    jbe     2f
+    add     $MetricBound__mem, %r8
+    inc     %rax
+    jmp     1b
+2:  incq    Histogram_buckets(%rdi,%rax,8)
+    xor     %eax, %eax
+    ret
+END_FUNCTION lantern_metrics_observe
+
 /* `name="value"` of the label table record rdi and value index rsi. Locals: rdi, rsi. */
 LOCAL_FUNCTION mt_label
     FRAME 16
@@ -655,11 +686,17 @@ FUNCTION lantern_metrics_node
     mov     %rcx, MetricsNode_custody_groups(%rbp)
 1:  PART    %rcx, %rdx, %rbx, Node_pool     # the pool's voluntary exits
     xor     %eax, %eax
-2:  test    %rdx, %rdx
+2:  test    %rdx, %rdx                  # and the pool's entries by topic
     jz      3f
-    cmpq    $GOSSIP_VOLUNTARY_EXIT, NodePool_topic(%rcx)
-    jne     21f
+    mov     NodePool_topic(%rcx), %r8
+    cmp     $GOSSIP_VOLUNTARY_EXIT, %r8
+    jne     20f
     inc     %rax
+20: test    %r8, %r8
+    jz      21f
+    cmp     $GOSSIP_NAMES, %r8
+    ja      21f
+    incq    MetricsNode_pool(%rbp,%r8,8)
 21: add     $NodePool__mem, %rcx
     dec     %rdx
     jmp     2b
@@ -697,6 +734,41 @@ FUNCTION lantern_metrics_node
     jz      7f
     mov     $2, %eax
 7:  mov     %rax, MetricsNode_sync_state(%rbp)
+    mov     %r13, MetricsNode_store_slot(%rbp)  # the sync: the head's slot and its distance to the store's
+    xor     %eax, %eax
+    test    %r14, %r14
+    jz      71f
+    mov     NodeBlock_slot(%r14), %rax
+71: mov     %rax, MetricsNode_head_slot(%rbp)
+    mov     %r13, %rcx
+    sub     %rax, %rcx
+    jae     72f
+    xor     %ecx, %ecx
+72: mov     %rcx, MetricsNode_distance(%rbp)
+    mov     Node_dialing(%rbx), %rax
+    mov     %rax, MetricsNode_dialing(%rbp)
+    mov     Node_earliest_slot(%rbx), %rax
+    mov     %rax, MetricsNode_earliest_slot(%rbp)
+    mov     Node_backfill_slot(%rbx), %rax
+    mov     %rax, MetricsNode_backfill_slot(%rbp)
+    mov     Store_finalized_checkpoint(%r12), %rax
+    mov     %rax, MetricsNode_finalized_epoch(%rbp)
+    mov     Store_justified_checkpoint(%r12), %rax
+    mov     %rax, MetricsNode_justified_epoch(%rbp)
+    mov     (Node_messages + 8)(%rbx), %rax
+    mov     %rax, MetricsNode_messages(%rbp)
+    mov     (Node_streams + 8)(%rbx), %rax
+    mov     %rax, MetricsNode_streams(%rbp)
+    PART    %rcx, %rdx, %rbx, Node_peers    # the peers by direction
+73: test    %rdx, %rdx
+    jz      74f
+    mov     NodePeer_direction(%rcx), %rax
+    and     $1, %eax
+    incq    MetricsNode_peer_directions(%rbp,%rax,8)
+    add     $NodePeer__mem, %rcx
+    dec     %rdx
+    jmp     73b
+74:
     mov     (L + 8 * MN_CHAIN + 8)(%rsp), %rax  # the previous epoch's first slot
     test    %rax, %rax
     jz      8f

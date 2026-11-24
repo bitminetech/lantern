@@ -148,6 +148,44 @@ LOCAL_FUNCTION mt_name
     j       mt_text
 END_FUNCTION mt_name
 
+/*
+ * lantern_metrics_observe(histogram, bounds, value) -> status
+ * The value joins the Histogram of the bound set bounds (METRIC_BOUNDS_*, of microseconds): count,
+ * sum, and the bucket of the first bound at or above it, else the last. A leaf.
+ */
+LEAF lantern_metrics_observe
+    ld      a1, 0(a1)
+    ld      a2, 0(a2)
+    ld      t0, Histogram_count(a0)
+    addi    t0, t0, 1
+    sd      t0, Histogram_count(a0)
+    ld      t0, Histogram_sum(a0)
+    add     t0, t0, a2
+    sd      t0, Histogram_sum(a0)
+    lla     t0, metrics_bounds
+    slli    t1, a1, 4
+    add     t0, t0, t1
+    lwu     t1, MetricBounds_count(t0)
+    lwu     t2, MetricBounds_first(t0)
+    lla     t3, metrics_bound_values
+    slli    t2, t2, 4
+    add     t3, t3, t2
+    li      t4, 0
+1:  bgeu    t4, t1, 2f
+    ld      t5, MetricBound_value(t3)
+    bleu    a2, t5, 2f
+    addi    t3, t3, MetricBound__mem
+    addi    t4, t4, 1
+    j       1b
+2:  slli    t4, t4, 3
+    add     t4, t4, a0
+    ld      t5, Histogram_buckets(t4)
+    addi    t5, t5, 1
+    sd      t5, Histogram_buckets(t4)
+    li      a0, LANTERN_OK
+    ret
+END_FUNCTION lantern_metrics_observe
+
 # `name="value"` of the label table record a0 and value index a1. Locals: a0, a1.
 LOCAL_FUNCTION mt_label
     FRAME 16
@@ -669,8 +707,16 @@ FUNCTION lantern_metrics_node
     li      t4, GOSSIP_VOLUNTARY_EXIT
 3:  beqz    t1, 4f
     ld      t3, NodePool_topic(t0)
-    bne     t3, t4, 31f
+    bne     t3, t4, 30f
     addi    t2, t2, 1
+30: addi    t5, t3, -1                      # and the pool's entries by topic
+    li      t6, GOSSIP_NAMES - 1
+    bgtu    t5, t6, 31f
+    slli    t5, t3, 3
+    add     t5, t5, s3
+    ld      t6, MetricsNode_pool(t5)
+    addi    t6, t6, 1
+    sd      t6, MetricsNode_pool(t5)
 31: addi    t0, t0, NodePool__mem
     addi    t1, t1, -1
     j       3b
@@ -706,6 +752,42 @@ FUNCTION lantern_metrics_node
     beqz    t2, 8f
     li      t1, 2
 8:  sd      t1, MetricsNode_sync_state(s3)
+    sd      s4, MetricsNode_store_slot(s3)  # the sync: the head's slot and its distance to the store's
+    li      t0, 0
+    beqz    s5, 82f
+    ld      t0, NodeBlock_slot(s5)
+82: sd      t0, MetricsNode_head_slot(s3)
+    sub     t1, s4, t0
+    bgeu    s4, t0, 83f
+    li      t1, 0
+83: sd      t1, MetricsNode_distance(s3)
+    LDQ     t0, s1, Node_dialing
+    sd      t0, MetricsNode_dialing(s3)
+    LDQ     t0, s1, Node_earliest_slot
+    sd      t0, MetricsNode_earliest_slot(s3)
+    LDQ     t0, s1, Node_backfill_slot
+    sd      t0, MetricsNode_backfill_slot(s3)
+    ld      t0, Store_finalized_checkpoint(s2)
+    sd      t0, MetricsNode_finalized_epoch(s3)
+    ld      t0, Store_justified_checkpoint(s2)
+    sd      t0, MetricsNode_justified_epoch(s3)
+    LDQ     t0, s1, Node_messages + 8
+    sd      t0, MetricsNode_messages(s3)
+    LDQ     t0, s1, Node_streams + 8
+    sd      t0, MetricsNode_streams(s3)
+    PART    t0, t1, s1, Node_peers          # the peers by direction
+84: beqz    t1, 85f
+    ld      t2, NodePeer_direction(t0)
+    andi    t2, t2, 1
+    slli    t2, t2, 3
+    add     t2, t2, s3
+    ld      t3, MetricsNode_peer_directions(t2)
+    addi    t3, t3, 1
+    sd      t3, MetricsNode_peer_directions(t2)
+    addi    t0, t0, NodePeer__mem
+    addi    t1, t1, -1
+    j       84b
+85:
     mv      s8, s7                          # the previous epoch's first slot
     beqz    s8, 81f
     addi    s8, s8, -1

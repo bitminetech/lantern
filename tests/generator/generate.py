@@ -313,6 +313,10 @@ def main():
             count, digest = write_file(out / file, list(metrics.text_cases(os.environ["BEACON_METRICS"])))
             manifest.append((file, count, digest))
             print(f"{file}: {count} cases")
+            file = f"{preset}-phase0-metrics-observe.bin"
+            count, digest = write_file(out / file, list(metrics.observe_cases()))
+            manifest.append((file, count, digest))
+            print(f"{file}: {count} cases")
             file = f"{preset}-phase0-metrics-answer.bin"
             count, digest = write_file(out / file, list(metrics.answer_cases(os.environ["BEACON_METRICS"])))
             manifest.append((file, count, digest))

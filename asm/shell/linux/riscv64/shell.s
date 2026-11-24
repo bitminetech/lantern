@@ -552,3 +552,40 @@ FUNCTION lantern_shell_sync_dir
     sd      a0, 0(t0)
 99: SHELL_RETURN SHELL_PATH_FRAME
 END_FUNCTION lantern_shell_sync_dir
+
+.set SYS_GETRUSAGE, 165
+.set SYS_PRLIMIT64, 261
+
+/* (out): docs/reference/shell.md. Frame: struct rusage (144 bytes), struct rlimit (16), then out. */
+FUNCTION lantern_shell_process
+    SHELL_FRAME 176
+    sd      a0, 160(sp)
+    li      a0, 0                           # getrusage(RUSAGE_SELF)
+    mv      a1, sp
+    SYSCALL SYS_GETRUSAGE
+    ld      t0, 0(sp)                       # user and system seconds, then their microseconds
+    ld      t1, 16(sp)
+    add     t0, t0, t1
+    li      t1, 1000000
+    mul     t0, t0, t1
+    ld      t1, 8(sp)
+    add     t0, t0, t1
+    ld      t1, 24(sp)
+    add     t0, t0, t1
+    ld      t2, 160(sp)
+    sd      t0, 0(t2)
+    ld      t0, 32(sp)                      # ru_maxrss, in KiB
+    slli    t0, t0, 10
+    sd      t0, 8(t2)
+    li      a0, 0                           # prlimit64(0, RLIMIT_NOFILE, NULL, &old)
+    li      a1, 7
+    li      a2, 0
+    addi    a3, sp, 144
+    SYSCALL SYS_PRLIMIT64
+    li      t0, 0
+    bnez    a0, 1f
+    ld      t0, 144(sp)
+1:  ld      t2, 160(sp)
+    sd      t0, 16(t2)
+    SHELL_RETURN 176
+END_FUNCTION lantern_shell_process
