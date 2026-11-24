@@ -1544,8 +1544,8 @@ END_FUNCTION node_store_find
 /*
  * L0: with NODE_FLAG_ENGINE, the next engine call when none is in flight and the store's slot is
  * at least engine_wait: a NEW_PAYLOAD work for the first block in NODE_BLOCK_PAYLOAD whose retry
- * is at most the slot, else with NODE_FLAG_FCU from bellatrix on a FORKCHOICE work. x21 an entry,
- * x22 the count, x25 the slot, x26 the index.
+ * is at most the slot, else, with the slot at least fcu_wait, a preparation or with NODE_FLAG_FCU
+ * from bellatrix on a FORKCHOICE work. x21 an entry, x22 the count, x25 the slot, x26 the index.
  */
 LOCAL_FUNCTION node_engine_next
     ENTER 0
@@ -1589,7 +1589,10 @@ LOCAL_FUNCTION node_engine_next
 2:  add     x21, x21, #NodeBlock__mem
     add     x26, x26, #1
     b       1b
-3:  bl      node_prepare                    /* a payload's preparation, when it is due */
+3:  LDQ     x9, x19, Node_fcu_wait      /* after a failed forkchoiceUpdated, the next waits for fcu_wait */
+    cmp     x25, x9
+    b.lo    50f
+    bl      node_prepare                    /* a payload's preparation, when it is due */
     cbnz    x0, 9f
     ldr     x9, [x19, #Node_flags]
     tbz     x9, #5, 50f                     /* NODE_FLAG_FCU */
@@ -3961,8 +3964,8 @@ END_FUNCTION node_await
 
 /*
  * L0: the engine call in flight failed: an engine_newPayload's block takes NODE_BLOCK_PAYLOAD with
- * retry the store's slot + 1, an engine_forkchoiceUpdated sets NODE_FLAG_FCU again; engine_wait
- * becomes the slot + 1 and the call ends. x21 the slot + 1.
+ * retry the store's slot + 1, an engine_forkchoiceUpdated sets NODE_FLAG_FCU again; fcu_wait for a
+ * forkchoiceUpdated, else engine_wait, becomes the slot + 1, and the call ends. x21 the slot + 1.
  */
 LOCAL_FUNCTION node_engine_failed
     ENTER 0
@@ -3977,8 +3980,13 @@ LOCAL_FUNCTION node_engine_failed
 10: mov     x0, x20
     bl      node_store_slot
     add     x21, x0, #1
-    str     x21, [x19, #Node_engine_wait]
     ldr     x9, [x19, #Node_engine_method]
+    cmp     x9, #ENGINE_METHOD_FORKCHOICE_UPDATED
+    b.ne    12f
+    STQ     x21, x19, Node_fcu_wait         /* a forkchoiceUpdated: only the next forkchoiceUpdated waits */
+    b       13f
+12: str     x21, [x19, #Node_engine_wait]
+13: ldr     x9, [x19, #Node_engine_method]
     str     xzr, [x19, #Node_engine_method]
     cmp     x9, #ENGINE_METHOD_FORKCHOICE_UPDATED
     b.ne    1f
@@ -4442,6 +4450,7 @@ LOCAL_FUNCTION node_head
     b.eq    3f
     orr     x11, x11, #NODE_FLAG_FCU
     str     x11, [x19, #Node_flags]
+    STQ     xzr, x19, Node_fcu_wait
 3:  COPY32  x9, x10
 9:  LEAVE 16
 END_FUNCTION node_head

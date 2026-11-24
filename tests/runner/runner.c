@@ -3953,6 +3953,8 @@ static void shell_eth1(fc_node *n, const char *body, uint64_t blen, const char *
     free(http);
 }
 
+static int engine_fcu_error;          /* set: each engine_forkchoiceUpdated with no payload attributes gets -38006, Too deep reorg */
+static unsigned long engine_fcu_errors; /* those answers */
 static void shell_engine(fc_node *n, const uint8_t *req, uint64_t len, const char **why) {
     static const char *const names[5] = {"VALID", "INVALID", "SYNCING", "ACCEPTED", "INVALID_BLOCK_HASH"};
     struct node_shell *s = n->shell;
@@ -4025,6 +4027,14 @@ static void shell_engine(fc_node *n, const uint8_t *req, uint64_t len, const cha
     }
     unsigned long long id = 0; /* the digits after "id": within the body */
     for (const char *d = idp + 5; d < body + blen && *d >= '0' && *d <= '9'; d++) id = id * 10 + (unsigned long long)(*d - '0');
+    if (fcu && engine_fcu_error && !find_bytes(body, blen, "\"timestamp\":")) { /* as Geth past its reorg limit */
+        char ej[160], eh[320];
+        int jl = snprintf(ej, sizeof ej, "{\"jsonrpc\":\"2.0\",\"id\":%llu,\"error\":{\"code\":-38006,\"message\":\"Too deep reorg\"}}", id);
+        int el2 = snprintf(eh, sizeof eh, "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: %d\r\n\r\n%s", jl, ej);
+        shell_event(s, EV_ENGINE, 0, (const uint8_t *)eh, (uint64_t)el2);
+        engine_fcu_errors++;
+        return;
+    }
     uint64_t el = 1, has_latest = 1;
     const uint8_t *latest = hash;
     for (size_t k = 0; k < n->npayloads; k++)
@@ -6268,6 +6278,7 @@ static void sync_once(tv parts, case_block **chain, size_t nchain, uint64_t last
             wr64(peers + 104, chain[nchain - 1]->slot); /* head_slot */
             wr64(s->node + NODE_PEERS + 8, np + 1);
         }
+        engine_fcu_error = sync_dead && FORK >= FORK_BELLATRIX; /* each forkchoiceUpdated fails: the imports go on */
         if (!*why && sync_dead) { /* the peer holds the first BeaconBlocksByRange: NODE_REQUEST_MS later the node resets it */
             net.silent = 1;
             p2p_run(&m, &net, p2p_held, 0, why);
@@ -6278,6 +6289,7 @@ static void sync_once(tv parts, case_block **chain, size_t nchain, uint64_t last
             net.silent = 0;
         }
         if (!*why) p2p_run(&m, &net, no_blobs ? p2p_blobs_wait : p2p_synced, 0, why);
+        engine_fcu_error = 0;
         if (*why && !strcmp(*why, "the network does not get there"))
             *why = no_blobs ? "sync with no sidecars: the first block with blobs does not wait for them"
                  : sync_dead ? "sync with a peer that fails first: the node does not import the chain"
@@ -12484,6 +12496,7 @@ int main(int argc, char **argv) {
     if (node_settles_finalized) printf("NOTE: %lu node settles past a finalized epoch\n", node_settles_finalized);
     if (api_heads_streamed) printf("NOTE: %lu heads served as getBlockV2 and getStateV2 streams\n", api_heads_streamed);
     if (reads_asked) printf("NOTE: %lu node-reads requests answered\n", reads_asked);
+    if (engine_fcu_errors) printf("NOTE: %lu engine_forkchoiceUpdated answered Too deep reorg on syncs\n", engine_fcu_errors);
     if (inbound_room_checked) printf("NOTE: the open room checked on %lu cases\n", inbound_room_checked);
 #if FORK >= FORK_FULU
     if (column_room_checked) printf("NOTE: the column dials and the spare peer checked on %lu cases\n", column_room_checked);

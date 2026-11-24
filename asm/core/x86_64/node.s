@@ -1518,8 +1518,8 @@ END_FUNCTION node_store_find
 /*
  * With NODE_FLAG_ENGINE, the next engine call when none is in flight and the store's slot is at
  * least engine_wait: a NEW_PAYLOAD work for the first block in NODE_BLOCK_PAYLOAD whose retry is
- * at most the slot, else with NODE_FLAG_FCU from bellatrix on a FORKCHOICE work. r12 an entry,
- * r13 the index, S7 the slot, S8 the count.
+ * at most the slot, else, with the slot at least fcu_wait, a preparation or with NODE_FLAG_FCU
+ * from bellatrix on a FORKCHOICE work. r12 an entry, r13 the index, S7 the slot, S8 the count.
  */
 LOCAL_FUNCTION node_engine_next
     ENTER 0
@@ -1560,7 +1560,10 @@ LOCAL_FUNCTION node_engine_next
 2:  add     $NodeBlock__mem, %r12
     inc     %r13
     jmp     1b
-3:  mov     S7(%rsp), %rdi                  # a payload's preparation, when it is due
+3:  mov     S7(%rsp), %rax                  # after a failed forkchoiceUpdated, the next waits for fcu_wait
+    cmp     Node_fcu_wait(%rbx), %rax
+    jb      50f
+    mov     S7(%rsp), %rdi                  # a payload's preparation, when it is due
     call    node_prepare
     test    %rax, %rax
     jnz     9f
@@ -1808,8 +1811,8 @@ END_FUNCTION node_prepare_go
 
 /*
  * The engine call in flight failed: an engine_newPayload's block takes NODE_BLOCK_PAYLOAD with
- * retry the store's slot + 1, an engine_forkchoiceUpdated sets NODE_FLAG_FCU again; engine_wait
- * becomes the slot + 1 and the call ends.
+ * retry the store's slot + 1, an engine_forkchoiceUpdated sets NODE_FLAG_FCU again; fcu_wait for
+ * a forkchoiceUpdated, else engine_wait, becomes the slot + 1, and the call ends.
  */
 LOCAL_FUNCTION node_engine_failed
     ENTER 0
@@ -1825,8 +1828,12 @@ LOCAL_FUNCTION node_engine_failed
 11: mov     %rbp, %rdi
     call    node_store_slot
     inc     %rax
-    mov     %rax, Node_engine_wait(%rbx)
-    mov     Node_engine_method(%rbx), %rax
+    cmpq    $ENGINE_METHOD_FORKCHOICE_UPDATED, Node_engine_method(%rbx)
+    jne     12f
+    mov     %rax, Node_fcu_wait(%rbx)       # a forkchoiceUpdated: only the next forkchoiceUpdated waits
+    jmp     13f
+12: mov     %rax, Node_engine_wait(%rbx)
+13: mov     Node_engine_method(%rbx), %rax
     movq    $0, Node_engine_method(%rbx)
     cmp     $ENGINE_METHOD_FORKCHOICE_UPDATED, %rax
     jne     1f
@@ -4399,6 +4406,7 @@ LOCAL_FUNCTION node_head
 2:  testq   $NODE_FLAG_ENGINE, Node_flags(%rbx)
     jz      3f
     orq     $NODE_FLAG_FCU, Node_flags(%rbx)
+    movq    $0, Node_fcu_wait(%rbx)
 3:  COPY32  %rdi, %rcx
 9:  LEAVE 16
 END_FUNCTION node_head

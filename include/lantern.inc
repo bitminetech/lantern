@@ -670,7 +670,7 @@
 .set Node_engine_id, 376               /* the JSON-RPC id of the next call */
 .set Node_engine_method, 384            /* ENGINE_METHOD_* of the call in flight, or 0 */
 .set Node_engine_target, 392           /* engine_newPayload in flight: the NodeBlock index */
-.set Node_engine_wait, 400             /* after a failed call: the slot from which calls go again */
+.set Node_engine_wait, 400             /* after a failed call but forkchoiceUpdated: the slot from which calls go again */
 .set Node_engine_in, 408               /* PartRef of bytes: one ByteList of the bytes the execution engine sent */
 .set Node_lookup_ms, 424               /* the time of the last discv5 lookup the node asked for */
 .set Node_dialing, 432                 /* the node's dials not yet connected or failed */
@@ -792,7 +792,8 @@
 .set Node_gossip_states, Node_base_slot + 1488  /* NODE_GOSSIP_STATES NodeGossipState entries: shared proposer states of gossip */
 .set Node_head_due, Node_base_slot + 1600  /* 1 when the store may have changed since the last get_head */
 .set Node_head_slot, Node_base_slot + 1608  /* the store's slot at the last get_head */
-.set NODE_FIXED, Node_base_slot + 1616
+.set Node_fcu_wait, Node_base_slot + 1616  /* after a failed engine_forkchoiceUpdated, the slot from which the next goes */
+.set NODE_FIXED, Node_base_slot + 1624
 .set Eth1Count_number, 0               /* Eth1Count (node.md) */
 .set Eth1Count_count, 8
 .set Eth1Count_root, 16
