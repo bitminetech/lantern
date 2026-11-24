@@ -730,11 +730,28 @@ FUNCTION lantern_metrics_node
     mov     x10, #1
     cmp     x9, x22
     b.hs    8f
-    mov     x10, #0
+    mov     x10, #2                         /* else syncing with a request open */
     LDQ     x11, x19, Node_flags
     tst     x11, #NODE_FLAG_SYNCING
-    b.eq    8f
-    mov     x10, #2
+    b.ne    8f
+    /* else synced when a peer of the node's ForkDigest has a Status and none has a head above the head's slot + 1 */
+    mov     x10, #0
+    PART    x11, x12, x19, Node_peers
+    ldr     w13, [x19, #Node_fork_digest]
+71: cbz     x12, 8f
+    ldr     x14, [x11, #NodePeer_flags]
+    tbz     x14, #0, 72f                    /* NODE_PEER_STATUS */
+    ldr     w14, [x11, #NodePeer_fork_digest]
+    cmp     w14, w13
+    b.ne    72f
+    ldr     x14, [x11, #NodePeer_head_slot]
+    cmp     x14, x9
+    b.hi    73f
+    mov     x10, #1
+72: add     x11, x11, #NodePeer__mem
+    sub     x12, x12, #1
+    b       71b
+73: mov     x10, #0                         /* a peer ahead: behind */
 8:  str     x10, [x21, #MetricsNode_sync_state]
     str     x22, [x21, #MetricsNode_store_slot]  /* the sync: the head's slot and its distance to the store's */
     mov     x9, #0

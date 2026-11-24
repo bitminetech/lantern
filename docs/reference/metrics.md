@@ -425,7 +425,8 @@ lantern_metrics_node(node, store, out) -> status
 - `pending_exits`: the pool's entries of voluntary_exit.
 - `local_validators`: the `NodeProposer` entries whose `until_epoch` is above the store's epoch: the validators whose validator client gave this node prepareBeaconProposer and still holds (Prysm's tracked validators).
 - `orphaned_blocks`: the blocks of the node with status `NODE_BLOCK_IMPORTED` and a slot in the store's previous epoch (get_previous_epoch: one less than the store's, not below 0) that are not on the head's chain: the head and its ancestors by `parent_root`, up to the first one below that epoch, the first root the node holds no block of, or 2 × `SLOTS_PER_EPOCH` blocks.
-- `sync_state`: 1 when the head's slot + 1 is at least the store's slot; else 2 with `NODE_FLAG_SYNCING`; else 0. With no block of `head_root` the head's slot counts as 0.
+- `sync_state`: 1 when the head's slot + 1 is at least the store's slot; else 2 with `NODE_FLAG_SYNCING`; else 0 when a peer with `NODE_PEER_STATUS` and the node's `fork_digest` has a `head_slot` above the head's slot + 1, or no such peer has a Status; else 1. With no block of `head_root` the head's slot counts as 0.
+- The case: slots with no block leave the head behind the store's slot while no peer has a later block; the sync asks only for blocks a peer's Status shows (node.md, the sync), so the node is synced then (Hoodi, 2026-11-24: one missed slot gave 0).
 - `head_block_id` and `head_state_id`: the `data_id` and `state_id` of the `NodeBlock` of the node's `head_root`; 0 and 0 with none. The caller gives their buffers to lantern_<fork>_metrics_state.
 - `pending_exits` and `pool`: the pool's entries, those of voluntary_exit, and those of each topic 1 to 13 at its topic's element.
 - `peer_directions`, `dialing`, `messages` and `streams`: from the peers part by direction, `dialing`, and the entries of the messages and streams parts.
@@ -500,7 +501,7 @@ The values of the metrics from the node and the store.
 | 24 | `pending_exits` | u64 |  |
 | 32 | `local_validators` | u64 |  |
 | 40 | `orphaned_blocks` | u64 |  |
-| 48 | `sync_state` | u64 | 0, 1 or 2 |
+| 48 | `sync_state` | u64 | 0 behind, 1 synced, 2 syncing |
 | 56 | `head_block_id` | u64 | `BufferId` of the head's `SignedBeaconBlock` bytes, or 0 |
 | 64 | `head_state_id` | u64 | `BufferId` of the head's post-state, or 0 |
 | 72 | `peer_directions` | u64 x 2 | Peers by `NodePeer.direction`: inbound, outbound |

@@ -725,14 +725,29 @@ FUNCTION lantern_metrics_node
     mov     NodeBlock_state_id(%r14), %rax
     mov     %rax, MetricsNode_head_state_id(%rbp)
     mov     NodeBlock_slot(%r14), %rcx
-6:  inc     %rcx                            # synced: the head at most a slot behind; else syncing with a request open
+6:  inc     %rcx                            # synced: the head at most a slot behind the store's
     mov     $1, %eax
     cmp     %r13, %rcx
     jae     7f
-    xor     %eax, %eax
+    mov     $2, %eax                        # else syncing, with a request open
     testq   $NODE_FLAG_SYNCING, Node_flags(%rbx)
+    jnz     7f
+    xor     %eax, %eax                      # else synced when a peer of the node's ForkDigest has a Status
+    PART    %rsi, %rdx, %rbx, Node_peers    # and none has a head above the head's slot + 1 (missed slots)
+    mov     Node_fork_digest(%rbx), %r8d
+61: test    %rdx, %rdx
     jz      7f
-    mov     $2, %eax
+    testq   $NODE_PEER_STATUS, NodePeer_flags(%rsi)
+    jz      62f
+    cmp     NodePeer_fork_digest(%rsi), %r8d
+    jne     62f
+    cmp     NodePeer_head_slot(%rsi), %rcx
+    jb      63f
+    mov     $1, %eax
+62: add     $NodePeer__mem, %rsi
+    dec     %rdx
+    jmp     61b
+63: xor     %eax, %eax                      # a peer ahead: behind
 7:  mov     %rax, MetricsNode_sync_state(%rbp)
     mov     %r13, MetricsNode_store_slot(%rbp)  # the sync: the head's slot and its distance to the store's
     xor     %eax, %eax

@@ -743,14 +743,29 @@ FUNCTION lantern_metrics_node
     ld      t1, NodeBlock_state_id(s5)
     sd      t1, MetricsNode_head_state_id(s3)
     ld      t0, NodeBlock_slot(s5)
-7:  addi    t0, t0, 1                       # synced: the head at most a slot behind; else syncing with a request open
+7:  addi    t0, t0, 1                       # synced: the head at most a slot behind the store's
     li      t1, 1
     bgeu    t0, s4, 8f
-    li      t1, 0
+    li      t1, 2                           # else syncing, with a request open
     LDQ     t2, s1, Node_flags
     andi    t2, t2, NODE_FLAG_SYNCING
-    beqz    t2, 8f
-    li      t1, 2
+    bnez    t2, 8f
+    li      t1, 0                           # else synced when a peer of the node's ForkDigest has a Status
+    PART    t2, t3, s1, Node_peers          # and none has a head above the head's slot + 1 (missed slots)
+    lwu     t4, Node_fork_digest(s1)
+71: beqz    t3, 8f
+    ld      t5, NodePeer_flags(t2)
+    andi    t5, t5, NODE_PEER_STATUS
+    beqz    t5, 72f
+    lwu     t5, NodePeer_fork_digest(t2)
+    bne     t5, t4, 72f
+    ld      t5, NodePeer_head_slot(t2)
+    bgtu    t5, t0, 73f
+    li      t1, 1
+72: addi    t2, t2, NodePeer__mem
+    addi    t3, t3, -1
+    j       71b
+73: li      t1, 0                           # a peer ahead: behind
 8:  sd      t1, MetricsNode_sync_state(s3)
     sd      s4, MetricsNode_store_slot(s3)  # the sync: the head's slot and its distance to the store's
     li      t0, 0

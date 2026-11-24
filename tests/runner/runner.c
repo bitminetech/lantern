@@ -3339,7 +3339,7 @@ static void reorg_check(fc_node *n, const char **why) {
 #define NODE_POOL_OFF (NODE_API_OFF + 72)
 #define NODE_PROPOSERS_OFF (NODE_API_OFF + 104 + 8 * (4 + 64))
 #define NODE_CUSTODY_OFF (NODE_METRICS - 336) /* Node_custody_count */
-static uint64_t metrics_node_checks, metrics_node_seen[METRICS_NODE_U64];
+static uint64_t metrics_node_checks, metrics_node_seen[METRICS_NODE_U64], metrics_node_missed;
 static void metrics_node_check(fc_node *n, const char **why) {
     const uint8_t *node = n->shell->node, *store = n->store;
     uint64_t want[METRICS_NODE_U64] = {0}, spe = strcmp(PRESET, "minimal") ? 32u : 8u;
@@ -3357,6 +3357,18 @@ static void metrics_node_check(fc_node *n, const char **why) {
     const uint8_t *head = shell_block(n->shell, node + NODE_HEAD_ROOT);
     uint64_t hslot = head ? rd64(head + NODE_SLOT) : 0;
     want[6] = hslot + 1 >= slot ? 1 : (rd64(node + NODE_FLAGS) & NODE_FLAG_SYNCING) ? 2 : 0;
+    if (want[6] == 0) { /* synced too when a peer of the node's ForkDigest has a Status and none is ahead of the head + 1 */
+        const uint8_t *pe = node + rd64(node + 120);
+        for (uint64_t i = 0, c = rd64(node + 120 + 8); i < c; i++, pe += 240) /* NodePeer: flags 16, fork_digest 24, head_slot 104 */
+            if ((rd64(pe + 16) & 1) && !memcmp(pe + 24, node + 240, 4)) { /* NODE_PEER_STATUS; Node_fork_digest */
+                if (rd64(pe + 104) > hslot + 1) {
+                    want[6] = 0;
+                    break;
+                }
+                want[6] = 1;
+            }
+        metrics_node_missed += want[6] == 1;
+    }
     if (head) want[7] = rd64(head + 72), want[8] = rd64(head + NB_STATE_ID);
     e = node + rd64(node + 120); /* Node_peers: NodePeer entries of 240 bytes, direction at 8 */
     for (uint64_t i = 0, c = rd64(node + 120 + 8); i < c; i++, e += 240) want[9 + (rd64(e + 8) & 1)]++;
@@ -12993,11 +13005,13 @@ int main(int argc, char **argv) {
     if (reads_asked) printf("NOTE: %lu node-reads requests answered\n", reads_asked);
     if (metrics_node_checks)
         printf("NOTE: %lu node steps checked against lantern_metrics_node; above 0: peers %lu, fulu %lu, exits %lu, proposers %lu, "
-               "orphaned %lu, syncing %lu, outbound %lu, distance %lu, streams %lu, pool %lu\n", (unsigned long)metrics_node_checks,
+               "orphaned %lu, syncing %lu, outbound %lu, distance %lu, streams %lu, pool %lu; synced with the head behind %lu\n",
+               (unsigned long)metrics_node_checks,
                (unsigned long)metrics_node_seen[0], (unsigned long)metrics_node_seen[1], (unsigned long)metrics_node_seen[3],
                (unsigned long)metrics_node_seen[4], (unsigned long)metrics_node_seen[5], (unsigned long)metrics_node_seen[6],
                (unsigned long)metrics_node_seen[10], (unsigned long)metrics_node_seen[14], (unsigned long)metrics_node_seen[20],
-               (unsigned long)(metrics_node_seen[21 + 3] + metrics_node_seen[21 + 4] + metrics_node_seen[21 + 6]));
+               (unsigned long)(metrics_node_seen[21 + 3] + metrics_node_seen[21 + 4] + metrics_node_seen[21 + 6]),
+               (unsigned long)metrics_node_missed);
     if (reorg_checks) printf("NOTE: %lu head changes checked against NodeMetrics reorgs, %lu of them reorgs\n", (unsigned long)reorg_checks,
                                (unsigned long)reorgs_seen);
     if (engine_fcu_errors) printf("NOTE: %lu engine_forkchoiceUpdated answered Too deep reorg on syncs\n", engine_fcu_errors);
