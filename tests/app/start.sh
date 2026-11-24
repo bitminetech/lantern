@@ -2,7 +2,8 @@
 # The start of the lantern binary (docs/reference/app.md): a faulty option gives exit code 1 and
 # its line, with today's UTC date; a network directory with no config.yaml gives exit code 2 and a
 # "cannot read" line. With NETWORK, the binary runs on that network directory with
-# --http-max-connections 2, and tests/app/api.py checks its Beacon API's connections.
+# --http-max-connections 2, tests/app/api.py checks its Beacon API's connections, and tests/app/burst.py
+# gives discv5 a step of far more than 64 datagrams, after which the log holds no discv5 status line.
 # Usage: tests/app/start.sh RUNNER BINARY [NETWORK]    (RUNNER: "" or a qemu command)
 set -u
 runner=$1
@@ -29,6 +30,9 @@ if [ -n "$network" ]; then
     $runner "$binary" --network-dir "$network" --port 19100 --http-port 15052 --http-max-connections 2 > "$log" 2>&1 &
     pid=$!
     python3 "$(dirname "$0")/api.py" 15052 "$network/genesis.ssz" || fail=1
+    python3 "$(dirname "$0")/burst.py" 19100 256; sleep 2   # a discv5 step of far more than 64 events
+    if grep -q "discv5: status" "$log"; then echo "FAIL discv5 with a burst of datagrams: $(grep -m1 'discv5: status' "$log")"; fail=1
+    else echo "PASS discv5 with a burst of datagrams"; fi
     kill -INT $pid 2>/dev/null; sleep 1; kill -9 $pid 2>/dev/null
     head -5 "$log"
     rm -f "$log"

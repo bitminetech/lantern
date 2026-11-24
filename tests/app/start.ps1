@@ -1,8 +1,9 @@
 # The start of the lantern binary on Windows (docs/reference/app.md), as tests/app/start.sh: a
 # faulty option gives exit code 1 and its line, with today's UTC date; a network directory with no config.yaml gives
 # exit code 2 and a "cannot read" line.
-# With NETWORK, the binary runs on that network directory with --http-max-connections 2, and
-# tests/app/api.py checks its Beacon API's connections.
+# With NETWORK, the binary runs on that network directory with --http-max-connections 2,
+# tests/app/api.py checks its Beacon API's connections, and tests/app/burst.py gives discv5 a step of far
+# more than 64 datagrams, after which the log holds no discv5 status line.
 # Usage: tests/app/start.ps1 BINARY [NETWORK]
 param([string]$Binary, [string]$Network = '')
 $fail = 0
@@ -19,6 +20,10 @@ if ($Network -ne '') {
     $proc = Start-Process -FilePath $Binary -ArgumentList @('--network-dir', $Network, '--port', '19100', '--http-port', '15052', '--http-max-connections', '2') -RedirectStandardOutput $log -RedirectStandardError "$log.err" -PassThru -NoNewWindow
     python (Join-Path $PSScriptRoot 'api.py') 15052 (Join-Path $Network 'genesis.ssz')
     if ($LASTEXITCODE -ne 0) { $fail = 1 }
+    python (Join-Path $PSScriptRoot 'burst.py') 19100 256   # a discv5 step of far more than 64 events
+    Start-Sleep -Seconds 2
+    $dv = Select-String -Path "$log.err" -Pattern 'discv5: status' | Select-Object -First 1
+    if ($dv) { Write-Output "FAIL discv5 with a burst of datagrams: $($dv.Line)"; $fail = 1 } else { Write-Output 'PASS discv5 with a burst of datagrams' }
     Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
     Get-Content $log -TotalCount 5
     Get-Content "$log.err" -TotalCount 5

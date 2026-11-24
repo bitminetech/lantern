@@ -4297,7 +4297,7 @@ LOCAL_FUNCTION app_dv_start
     mov     x9, #24
     stp     x9, xzr, [x0, #8]
     mov     x0, #APP_DV_ACTIONS
-    MOVQ    x1, DISCV5_ACTIONS_BASE + 64 * DISCV5_ACTIONS_PER_EVENT
+    MOVQ    x1, DISCV5_BL_FIXED + DISCV5_ACTIONS_BASE + 64 * DISCV5_ACTIONS_PER_EVENT
     bl      app_alloc
     cbz     x0, 97f
     mov     x0, #APP_DV_OUT
@@ -4478,7 +4478,7 @@ LOCAL_FUNCTION app_discv5
     add     x23, x23, #1
     b       2b
 3:  MOVQ    x9, DISCV5_ACTIONS_PER_EVENT
-    MOVQ    x10, DISCV5_ACTIONS_BASE
+    MOVQ    x10, DISCV5_BL_FIXED + DISCV5_ACTIONS_BASE  /* the room is past the ActionList's header */
     madd    x23, x23, x9, x10
     ldr     x9, [x19, #(APP_DV_ACTIONS + 8)]
     cmp     x23, x9

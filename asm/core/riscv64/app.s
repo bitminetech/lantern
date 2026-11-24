@@ -4457,7 +4457,7 @@ LOCAL_FUNCTION app_dv_start
     sd      t0, 8(a0)
     sd      zero, 16(a0)
     li      a0, APP_DV_ACTIONS
-    li      a1, (DISCV5_ACTIONS_BASE + 64 * DISCV5_ACTIONS_PER_EVENT)
+    li      a1, (DISCV5_BL_FIXED + DISCV5_ACTIONS_BASE + 64 * DISCV5_ACTIONS_PER_EVENT)
     call    app_alloc
     beqz    a0, 97f
     li      a0, APP_DV_OUT
@@ -4639,7 +4639,7 @@ LOCAL_FUNCTION app_discv5
     j       2b
 3:  li      t0, DISCV5_ACTIONS_PER_EVENT
     mul     s5, s5, t0
-    li      t0, DISCV5_ACTIONS_BASE
+    li      t0, DISCV5_BL_FIXED + DISCV5_ACTIONS_BASE   # the room is past the ActionList's header
     add     s5, s5, t0
     LDQ     t0, s1, (APP_DV_ACTIONS + 8)
     bleu    s5, t0, 4f

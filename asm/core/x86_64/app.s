@@ -4439,7 +4439,7 @@ LOCAL_FUNCTION app_dv_start
     movq    $24, 8(%rax)
     movq    $0, 16(%rax)
     mov     $APP_DV_ACTIONS, %edi
-    MOVQ    %rsi, DISCV5_ACTIONS_BASE + 64 * DISCV5_ACTIONS_PER_EVENT
+    MOVQ    %rsi, DISCV5_BL_FIXED + DISCV5_ACTIONS_BASE + 64 * DISCV5_ACTIONS_PER_EVENT
     call    app_alloc
     test    %rax, %rax
     jz      97f
@@ -4610,7 +4610,7 @@ LOCAL_FUNCTION app_discv5
     jmp     2b
 3:  MOVQ    %rax, DISCV5_ACTIONS_PER_EVENT
     imul    %rax, %r14
-    MOVQ    %rax, DISCV5_ACTIONS_BASE
+    MOVQ    %rax, DISCV5_BL_FIXED + DISCV5_ACTIONS_BASE  # the room is past the ActionList's header
     add     %rax, %r14
     cmp     (APP_DV_ACTIONS + 8)(%rbx), %r14
     jbe     4f
