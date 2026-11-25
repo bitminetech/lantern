@@ -212,11 +212,11 @@ SPEC_FUNCTION process_proposer_slashing
     beqz    t0, 6f
     addi    s7, s2, ProposerSlashing_signed_header_1
     addi    a0, sp, L
-    call    check_header_signature
+    call    lantern_check_header_signature
     bnez    a0, 3f
     addi    s7, s2, ProposerSlashing_signed_header_2
     addi    a0, sp, L
-    call    check_header_signature
+    call    lantern_check_header_signature
 3:  CHECK_STATUS s5, 7f, 8f
     mv      a0, s1                          # slash_validator(state, header_1.proposer_index)
     addi    a1, sp, (L + 112)
@@ -241,7 +241,7 @@ SPEC_END process_proposer_slashing
  * +16 domain type, +24 domain, +56 signing root as a ByteList. Returns a0: 0, a status,
  * or LANTERN_INVALID_PROPOSER_SLASHING. Locals: sp+0 the caller's locals.
  */
-LOCAL_FUNCTION check_header_signature
+LOCAL_FUNCTION lantern_check_header_signature
     FRAME 16
     sd      a0, 0(sp)
     mv      t0, a0
@@ -270,12 +270,12 @@ LOCAL_FUNCTION check_header_signature
     addi    a1, s7, SignedBeaconBlockHeader_signature
     addi    a2, t0, 56
     mv      a3, s4
-    call    verify_root_signature
+    call    lantern_verify_root_signature
     bnez    a0, 1f
     bnez    a1, 1f
     li      a0, LANTERN_INVALID_PROPOSER_SLASHING
 1:  UNFRAME 16
-END_FUNCTION check_header_signature
+END_FUNCTION lantern_check_header_signature
 
 /*
  * s1 state, s2 attester slashing, s3 config, s4 scratch, s5 result, s6 attestation_1,

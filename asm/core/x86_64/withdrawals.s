@@ -175,7 +175,7 @@ SPEC_END get_balance_after_withdrawals
  * The list all = prior + new, for get_balance_after_withdrawals: rdi = all (a Withdrawals value),
  * rsi = prior, rdx = new. Uses rax, rcx, rdi, rsi, r8. A leaf.
  */
-LOCAL_FUNCTION concat_withdrawals
+LOCAL_FUNCTION lantern_concat_withdrawals
     UNWIND_END_PROLOGUE
     movq    $LIST_FIXED, LIST_OFFSET(%rdi)
     mov     LIST_COUNT(%rsi), %rax
@@ -190,13 +190,13 @@ LOCAL_FUNCTION concat_withdrawals
     imul    $(Withdrawal__mem / 8), %r8, %rcx
     rep movsq
     ret
-END_FUNCTION concat_withdrawals
+END_FUNCTION lantern_concat_withdrawals
 
 /*
  * Append Withdrawal(index, validator_index, address of validator, amount) to Withdrawals rdi.
  * rsi index, rdx validator index, rcx validator, r8 amount.
  */
-LOCAL_FUNCTION append_withdrawal
+LOCAL_FUNCTION lantern_append_withdrawal
     UNWIND_END_PROLOGUE
     mov     LIST_COUNT(%rdi), %rax
     lea     1(%rax), %r9
@@ -212,7 +212,7 @@ LOCAL_FUNCTION append_withdrawal
     movl    $0, (Withdrawal_address + 20)(%rax)                     # padding
     mov     %r8, Withdrawal_amount(%rax)
     ret
-END_FUNCTION append_withdrawal
+END_FUNCTION lantern_append_withdrawal
 
 .if FORK >= FORK_ELECTRA
 /*
@@ -252,7 +252,7 @@ SPEC_FUNCTION get_pending_partial_withdrawals
     mov     S7(%rsp), %rdi                  # all_withdrawals = prior_withdrawals + withdrawals
     mov     %r12, %rsi
     lea     16(%r13), %rdx
-    call    concat_withdrawals
+    call    lantern_concat_withdrawals
     mov     PendingPartialWithdrawal_withdrawable_epoch(%r14), %rax
     cmp     L(%rsp), %rax                   # not is_withdrawable
     ja      5f
@@ -287,7 +287,7 @@ SPEC_FUNCTION get_pending_partial_withdrawals
     VALIDATOR %rcx, %rbx, %rdx
     lea     16(%r13), %rdi
     mov     %rbp, %rsi
-    call    append_withdrawal
+    call    lantern_append_withdrawal
     inc     %rbp
 3:  incq    S9(%rsp)
     add     $PendingPartialWithdrawal__mem, %r14
@@ -344,7 +344,7 @@ SPEC_FUNCTION get_validators_sweep_withdrawals
     mov     S7(%rsp), %rdi
     mov     %r12, %rsi
     lea     16(%r13), %rdx
-    call    concat_withdrawals
+    call    lantern_concat_withdrawals
     mov     S7(%rsp), %rax
     cmpq    $MAX_WITHDRAWALS_PER_PAYLOAD, LIST_COUNT(%rax)  # has_reached_limit
     jae     5f
@@ -388,7 +388,7 @@ SPEC_FUNCTION get_validators_sweep_withdrawals
     lea     16(%r13), %rdi
     mov     %rbp, %rsi
     mov     %r14, %rdx
-    call    append_withdrawal
+    call    lantern_append_withdrawal
     inc     %rbp
 41: inc     %r14                            # validator_index = (validator_index + 1) % len(state.validators)
     cmp     S8(%rsp), %r14
@@ -443,7 +443,7 @@ SPEC_FUNCTION get_expected_withdrawals
     lea     16(%r12), %rdi                  # withdrawals.extend(partial_withdrawals)
     lea     16(%r12), %rsi
     lea     16(%r14), %rdx
-    call    concat_withdrawals
+    call    lantern_concat_withdrawals
 .else
     movq    $0, 8(%r14)                     # no partial withdrawals before electra
 .endif
@@ -464,7 +464,7 @@ SPEC_FUNCTION get_expected_withdrawals
     lea     16(%r12), %rdi
     lea     16(%r12), %rsi
     lea     16(%r15), %rdx
-    call    concat_withdrawals
+    call    lantern_concat_withdrawals
     mov     8(%r14), %rax
     mov     %rax, (%r12)                    # processed_partial_withdrawals_count
     mov     8(%r15), %rax

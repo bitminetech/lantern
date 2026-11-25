@@ -64,7 +64,7 @@
 # the participants, a2 attested_header.beacon.slot, a3 finalized_header.beacon.slot, a4
 # signature_slot, a5 1 with a next_sync_committee_branch not all zero, a6 1 with a finality_branch
 # not all zero; a0 = 1 for bytes that are no update of the fork. Uses t0-t6, a7.
-LOCAL_FUNCTION lc_update_fields
+LOCAL_FUNCTION lantern_lc_update_fields
     UNWIND_END_PROLOGUE
     ld      t0, 8(a0)
     add     t0, a0, t0                      # the bytes, t1 of them
@@ -117,7 +117,7 @@ LOCAL_FUNCTION lc_update_fields
     ret
 9:  li      a0, 1
     ret
-END_FUNCTION lc_update_fields
+END_FUNCTION lantern_lc_update_fields
 .endif
 
 # dst = the sync committee period of the slot src. Uses t6.
@@ -137,7 +137,7 @@ SPEC_FUNCTION is_better_update
 .else
     mv      s1, a2
     mv      s2, a1
-    call    lc_update_fields
+    call    lantern_lc_update_fields
     bnez    a0, 96f
     mv      s3, a1
     mv      s4, a2
@@ -146,7 +146,7 @@ SPEC_FUNCTION is_better_update
     mv      s7, a5
     mv      s8, a6
     mv      a0, s2
-    call    lc_update_fields
+    call    lantern_lc_update_fields
     bnez    a0, 96f
     sd      a1, (L + 0)(sp)
     sd      a2, (L + 8)(sp)
@@ -233,7 +233,7 @@ SPEC_FUNCTION execution_branch
     ADDRESS a0, lantern_type_BeaconBlockBody
     mv      a1, s1
     mv      a2, s2
-    call    node_decode
+    call    lantern_node_decode
     li      t0, 1
     beq     a0, t0, 99f
     bnez    a0, 96f
@@ -309,7 +309,7 @@ SPEC_FUNCTION block_to_light_client_header
     ADDRESS a0, lantern_type_SignedBeaconBlock
     mv      a1, s1
     mv      a2, s2
-    call    node_decode
+    call    lantern_node_decode
     li      t0, 1
     beq     a0, t0, 98f
     bnez    a0, 96f

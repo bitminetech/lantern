@@ -6,7 +6,7 @@
 .include "app_options.inc"
 
 /* L0: x0 = 0 and x1 = the u64 of the decimal digits x0 to x1, one or more; else x0 = 1. Uses x9-x12. */
-LOCAL_FUNCTION app_decimal
+LOCAL_FUNCTION lantern_app_decimal
     UNWIND_END_PROLOGUE
     cmp     x0, x1
     b.hs    9f
@@ -29,13 +29,13 @@ LOCAL_FUNCTION app_decimal
     ret
 9:  mov     x0, #1
     ret
-END_FUNCTION app_decimal
+END_FUNCTION lantern_app_decimal
 
 /*
  * L0: x0 = 0 and x1 = the IPv4 address of the bytes x0 to x1, 4 decimal numbers of 0 to 255 with
  * dots between them, its 4 bytes in order in the low bytes; else x0 = 1. Uses x9-x14.
  */
-LOCAL_FUNCTION app_ipv4
+LOCAL_FUNCTION lantern_app_ipv4
     UNWIND_END_PROLOGUE
     mov     x9, #0                          /* the address */
     mov     x10, #0                         /* the numbers */
@@ -78,13 +78,13 @@ LOCAL_FUNCTION app_ipv4
     ret
 9:  mov     x0, #1
     ret
-END_FUNCTION app_ipv4
+END_FUNCTION lantern_app_ipv4
 
 /*
  * L0: x0 = 0 and x1 = the bits of the metrics categories x0 to x1, names of app_categories_table
  * with commas between them, none or more; else x0 = 1. Uses x9-x15.
  */
-LOCAL_FUNCTION app_categories
+LOCAL_FUNCTION lantern_app_categories
     UNWIND_END_PROLOGUE
     mov     x9, #0                          /* the bits */
     cmp     x0, x1
@@ -128,7 +128,7 @@ LOCAL_FUNCTION app_categories
     ret
 9:  mov     x0, #1
     ret
-END_FUNCTION app_categories
+END_FUNCTION lantern_app_categories
 
 /*
  * (args, options, fault): docs/reference/app.md. x19 args, x20 options, x21 fault, x22 the
@@ -204,7 +204,7 @@ FUNCTION lantern_app_options
     add     x0, x19, x0
     add     x2, x25, #24
     ldr     x3, [x25]
-    bl      config_name_is
+    bl      lantern_config_name_is
     cbnz    x0, 4f
     add     x25, x25, #APP_OPTION_BYTES
     b       6b
@@ -245,7 +245,7 @@ FUNCTION lantern_app_options
     mov     x1, #7
     ADDRESS x2, app_http
     mov     x3, #7
-    bl      config_name_is
+    bl      lantern_config_name_is
     cbz     x0, 8f
     add     x26, x26, #7
     sub     x27, x27, #7
@@ -260,7 +260,7 @@ FUNCTION lantern_app_options
     add     x1, x0, x27
     cmp     x9, #APP_OPTION_ADDRESS
     b.eq    21f
-    bl      app_decimal
+    bl      lantern_app_decimal
     cbnz    x0, 90f
     cbz     x1, 90f
     ldr     x9, [x25, #16]
@@ -274,7 +274,7 @@ FUNCTION lantern_app_options
 22: cmp     x1, x10
     b.hi    90f
     b       23f
-21: bl      app_ipv4
+21: bl      lantern_app_ipv4
     cbnz    x0, 90f
 23: ldr     x10, [x25, #8]
     str     x1, [x20, x10]
@@ -289,7 +289,7 @@ FUNCTION lantern_app_options
     ldrb    w3, [x3, x9]
     add     x0, x19, x26
     mov     x1, x27
-    bl      config_name_is
+    bl      lantern_config_name_is
     cbnz    x0, 26f
     ldr     x9, [sp, #(L + 24)]
     add     x9, x9, #1
@@ -299,7 +299,7 @@ FUNCTION lantern_app_options
     b       23b
 27: add     x0, x19, x26                    /* metrics categories: their bits; an empty value has none */
     add     x1, x0, x27
-    bl      app_categories
+    bl      lantern_app_categories
     cbnz    x0, 90f
     b       23b
 50: ldr     x9, [x20, #(AppOptions_network_dir + 8)]    /* --network-dir is required */

@@ -14,7 +14,7 @@
 .endm
 
 /* L0: x0 = the first entry or record of part x1 of the store x0. Uses x9-x12. */
-LOCAL_FUNCTION lc_part
+LOCAL_FUNCTION lantern_lc_part
     UNWIND_END_PROLOGUE
     MOVQ    x9, LC_STORE_FIXED
     add     x10, x0, #LcStore_room
@@ -26,10 +26,10 @@ LOCAL_FUNCTION lc_part
     LC_PART_STEP 5, LcCommittee__mem
 9:  add     x0, x0, x9
     ret
-END_FUNCTION lc_part
+END_FUNCTION lantern_lc_part
 
 /* L0: x12 = the bytes of an entry or record of part x1. */
-LOCAL_FUNCTION lc_mem
+LOCAL_FUNCTION lantern_lc_mem
     UNWIND_END_PROLOGUE
     MOVQ    x12, LcBlock__mem
     cbz     x1, 1f
@@ -50,32 +50,32 @@ LOCAL_FUNCTION lc_mem
     b.eq    1f
     MOVQ    x12, LcUpdate__mem
 1:  ret
-END_FUNCTION lc_mem
+END_FUNCTION lantern_lc_mem
 
 /* L1: x0 = entry or record x2 (an index) of part x1 of the store x0; x1, x2 kept. Uses x9-x12. */
-LOCAL_FUNCTION lc_at
+LOCAL_FUNCTION lantern_lc_at
     FRAME 0
-    bl      lc_part
-    bl      lc_mem
+    bl      lantern_lc_part
+    bl      lantern_lc_mem
     madd    x0, x2, x12, x0
     UNFRAME 0
-END_FUNCTION lc_at
+END_FUNCTION lantern_lc_at
 
 /* L1: x0 = record x2 (a reference, not 0) of part x1 of the store x0. Uses x9-x12. */
-LOCAL_FUNCTION lc_ref
+LOCAL_FUNCTION lantern_lc_ref
     FRAME 0
     sub     x2, x2, #1
-    bl      lc_at
+    bl      lantern_lc_at
     add     x2, x2, #1
     UNFRAME 0
-END_FUNCTION lc_ref
+END_FUNCTION lantern_lc_ref
 
 /* L1: x0 = the reference of a free record of part x1 of the store x0, now LC_USED; 0 with none. Uses x9-x13. */
-LOCAL_FUNCTION lc_alloc
+LOCAL_FUNCTION lantern_lc_alloc
     FRAME 0
     mov     x13, x0
-    bl      lc_part
-    bl      lc_mem
+    bl      lantern_lc_part
+    bl      lantern_lc_mem
     add     x9, x13, #LcStore_room
     ldr     x10, [x9, x1, lsl #3]
     mov     x11, #0
@@ -92,14 +92,14 @@ LOCAL_FUNCTION lc_alloc
     UNFRAME 0
 8:  mov     x0, #0
     UNFRAME 0
-END_FUNCTION lc_alloc
+END_FUNCTION lantern_lc_alloc
 
 /* L1: x0 = the free records of part x1 of the store x0. Uses x9-x14. */
-LOCAL_FUNCTION lc_free_count
+LOCAL_FUNCTION lantern_lc_free_count
     FRAME 0
     mov     x13, x0
-    bl      lc_part
-    bl      lc_mem
+    bl      lantern_lc_part
+    bl      lantern_lc_mem
     add     x9, x13, #LcStore_room
     ldr     x10, [x9, x1, lsl #3]
     mov     x14, #0
@@ -112,86 +112,86 @@ LOCAL_FUNCTION lc_free_count
     b       1b
 2:  mov     x0, x14
     UNFRAME 0
-END_FUNCTION lc_free_count
+END_FUNCTION lantern_lc_free_count
 
 /* L1: record x2 (a reference, or 0 for none) of part x1 of the store x0 becomes LC_MARKED. Uses x9-x12. */
-LOCAL_FUNCTION lc_mark
+LOCAL_FUNCTION lantern_lc_mark
     FRAME 0
     cbz     x2, 1f
-    bl      lc_ref
+    bl      lantern_lc_ref
     mov     x9, #LC_MARKED
     str     x9, [x0]
 1:  UNFRAME 0
-END_FUNCTION lc_mark
+END_FUNCTION lantern_lc_mark
 
 /*
  * L1: the records of the store x0 that nothing refers to become LC_FREE (LcStore, Rules). x19 the
  * store, x20 an entry or record, x21 the ones left, x22 the part.
  */
-LOCAL_FUNCTION lc_collect
+LOCAL_FUNCTION lantern_lc_collect
     ENTER 0
     mov     x19, x0
     mov     x1, #LC_PART_BLOCKS             /* the blocks' header, committees and best update */
-    bl      lc_part
+    bl      lantern_lc_part
     mov     x20, x0
     ldr     x21, [x19, #LcStore_blocks]
 1:  cbz     x21, 2f
     mov     x0, x19
     mov     x1, #LC_PART_HEADERS
     ldr     x2, [x20, #LcBlock_header]
-    bl      lc_mark
+    bl      lantern_lc_mark
     mov     x0, x19
     mov     x1, #LC_PART_COMMITTEES
     ldr     x2, [x20, #LcBlock_current_sync_committee]
-    bl      lc_mark
+    bl      lantern_lc_mark
     mov     x0, x19
     mov     x1, #LC_PART_COMMITTEES
     ldr     x2, [x20, #LcBlock_next_sync_committee]
-    bl      lc_mark
+    bl      lantern_lc_mark
     mov     x0, x19
     mov     x1, #LC_PART_UPDATES
     ldr     x2, [x20, #LcBlock_best]
-    bl      lc_mark
+    bl      lantern_lc_mark
     add     x20, x20, #LcBlock__mem
     sub     x21, x21, #1
     b       1b
 2:  mov     x0, x19                         /* the bootstraps' header and committee */
     mov     x1, #LC_PART_BOOTSTRAPS
-    bl      lc_part
+    bl      lantern_lc_part
     mov     x20, x0
     ldr     x21, [x19, #LcStore_bootstraps]
 3:  cbz     x21, 4f
     mov     x0, x19
     mov     x1, #LC_PART_HEADERS
     ldr     x2, [x20, #LcBootstrap_header]
-    bl      lc_mark
+    bl      lantern_lc_mark
     mov     x0, x19
     mov     x1, #LC_PART_COMMITTEES
     ldr     x2, [x20, #LcBootstrap_sync_committee]
-    bl      lc_mark
+    bl      lantern_lc_mark
     add     x20, x20, #LcBootstrap__mem
     sub     x21, x21, #1
     b       3b
 4:  mov     x0, x19                         /* the periods' updates, and latest */
     mov     x1, #LC_PART_PERIODS
-    bl      lc_part
+    bl      lantern_lc_part
     mov     x20, x0
     ldr     x21, [x19, #LcStore_periods]
 5:  cbz     x21, 6f
     mov     x0, x19
     mov     x1, #LC_PART_UPDATES
     ldr     x2, [x20, #LcPeriod_update]
-    bl      lc_mark
+    bl      lantern_lc_mark
     add     x20, x20, #LcPeriod__mem
     sub     x21, x21, #1
     b       5b
 6:  mov     x0, x19
     mov     x1, #LC_PART_UPDATES
     ldr     x2, [x19, #LcStore_latest]
-    bl      lc_mark
+    bl      lantern_lc_mark
     mov     x0, x19                         /* each marked update's headers and committee */
     mov     x1, #LC_PART_UPDATES
-    bl      lc_part
+    bl      lantern_lc_part
     mov     x20, x0
     ldr     x21, [x19, #(LcStore_room + LcRoom_updates)]
 7:  cbz     x21, 10f
@@ -201,15 +201,15 @@ LOCAL_FUNCTION lc_collect
     mov     x0, x19
     mov     x1, #LC_PART_HEADERS
     ldr     x2, [x20, #LcUpdate_attested_header]
-    bl      lc_mark
+    bl      lantern_lc_mark
     mov     x0, x19
     mov     x1, #LC_PART_HEADERS
     ldr     x2, [x20, #LcUpdate_finalized_header]
-    bl      lc_mark
+    bl      lantern_lc_mark
     mov     x0, x19
     mov     x1, #LC_PART_COMMITTEES
     ldr     x2, [x20, #LcUpdate_next_sync_committee]
-    bl      lc_mark
+    bl      lantern_lc_mark
 8:  MOVQ    x9, LcUpdate__mem
     add     x20, x20, x9
     sub     x21, x21, #1
@@ -217,8 +217,8 @@ LOCAL_FUNCTION lc_collect
 10: mov     x22, #LC_PART_HEADERS           /* the sweep: LC_USED goes, LC_MARKED stays */
 11: mov     x0, x19
     mov     x1, x22
-    bl      lc_part
-    bl      lc_mem
+    bl      lantern_lc_part
+    bl      lantern_lc_mem
     mov     x20, x0
     add     x9, x19, #LcStore_room
     ldr     x21, [x9, x22, lsl #3]
@@ -234,14 +234,14 @@ LOCAL_FUNCTION lc_collect
     cmp     x22, #LC_PART_UPDATES
     b.ls    11b
     LEAVE 0
-END_FUNCTION lc_collect
+END_FUNCTION lantern_lc_collect
 
 /*
  * L1: x0 = LANTERN_OK when the store x0 has x1 free headers, x2 committees and x3 updates, once
  * the records nothing refers to are freed; else LANTERN_BUFFER_TOO_SMALL. x19 the store, x20-x22
  * the needs, x23 1 once collected, x24 the part.
  */
-LOCAL_FUNCTION lc_reserve
+LOCAL_FUNCTION lantern_lc_reserve
     ENTER 0
     mov     x19, x0
     mov     x20, x1
@@ -251,7 +251,7 @@ LOCAL_FUNCTION lc_reserve
 1:  mov     x24, #LC_PART_HEADERS
 2:  mov     x0, x19
     mov     x1, x24
-    bl      lc_free_count
+    bl      lantern_lc_free_count
     cmp     x24, #LC_PART_COMMITTEES
     csel    x9, x20, x21, lo
     csel    x9, x22, x9, hi
@@ -259,7 +259,7 @@ LOCAL_FUNCTION lc_reserve
     b.hs    3f
     cbnz    x23, 9f
     mov     x0, x19
-    bl      lc_collect
+    bl      lantern_lc_collect
     mov     x23, #1
     b       1b
 3:  add     x24, x24, #1
@@ -269,15 +269,15 @@ LOCAL_FUNCTION lc_reserve
     LEAVE 0
 9:  mov     x0, #LANTERN_BUFFER_TOO_SMALL
     LEAVE 0
-END_FUNCTION lc_reserve
+END_FUNCTION lantern_lc_reserve
 
 /* L1: x0 = the index plus 1 of the LcBlock of the root at x1 in the store x0, or 0. Uses x8-x15. */
-LOCAL_FUNCTION lc_find_block
+LOCAL_FUNCTION lantern_lc_find_block
     FRAME 0
     ldr     x14, [x0, #LcStore_blocks]
     mov     x15, x1
     mov     x1, #LC_PART_BLOCKS
-    bl      lc_part
+    bl      lantern_lc_part
     mov     x8, #0
 1:  cmp     x8, x14
     b.hs    3f
@@ -289,13 +289,13 @@ LOCAL_FUNCTION lc_find_block
     b       1b
 3:  mov     x0, #0
     UNFRAME 0
-END_FUNCTION lc_find_block
+END_FUNCTION lantern_lc_find_block
 
 /*
  * L1: x0 = the entry (index plus 1) of the highest slot at most x2 along the parents from entry x1
  * of the store x0, or 0. Uses x8-x15.
  */
-LOCAL_FUNCTION lc_ancestor
+LOCAL_FUNCTION lantern_lc_ancestor
     FRAME 0
     mov     x14, x0
     mov     x15, x2
@@ -304,7 +304,7 @@ LOCAL_FUNCTION lc_ancestor
     mov     x0, x14
     mov     x1, #LC_PART_BLOCKS
     mov     x2, x8
-    bl      lc_ref
+    bl      lantern_lc_ref
     ldr     x9, [x0, #LcBlock_slot]
     cmp     x9, x15
     b.ls    2f
@@ -314,16 +314,16 @@ LOCAL_FUNCTION lc_ancestor
     UNFRAME 0
 3:  mov     x0, #0
     UNFRAME 0
-END_FUNCTION lc_ancestor
+END_FUNCTION lantern_lc_ancestor
 
 /* L1: x0 = the LcFinalized of the highest slot at most x1 and at least historical_tail_slot in the store x0, or 0. Uses x9-x15. */
-LOCAL_FUNCTION lc_finalized_at
+LOCAL_FUNCTION lantern_lc_finalized_at
     FRAME 0
     ldr     x13, [x0, #LcStore_finalized]
     ldr     x14, [x0, #LcStore_historical_tail_slot]
     mov     x15, x1
     mov     x1, #LC_PART_FINALIZED
-    bl      lc_part
+    bl      lantern_lc_part
     mov     x9, #LcFinalized__mem
     madd    x0, x13, x9, x0
 1:  cbz     x13, 3f
@@ -337,10 +337,10 @@ LOCAL_FUNCTION lc_finalized_at
     UNFRAME 0
 3:  mov     x0, #0
     UNFRAME 0
-END_FUNCTION lc_finalized_at
+END_FUNCTION lantern_lc_finalized_at
 
 /* L0: x0 = the set bits of the sync_committee_bits at x0. Uses x9-x11, v0. */
-LOCAL_FUNCTION lc_participants
+LOCAL_FUNCTION lantern_lc_participants
     UNWIND_END_PROLOGUE
     mov     x10, #(SYNC_COMMITTEE_SIZE / 8)
     mov     x11, #0
@@ -353,7 +353,7 @@ LOCAL_FUNCTION lc_participants
     b.ne    1b
     mov     x0, x11
     ret
-END_FUNCTION lc_participants
+END_FUNCTION lantern_lc_participants
 
 /* x9 = the roots of a sync committee branch, x10 of a finality branch, of the fork x9. */
 .macro LC_COUNTS
@@ -365,7 +365,7 @@ END_FUNCTION lc_participants
 .endm
 
 /* L0: x0 = 1 when the x2 bytes at x0 and x1 are equal, x2 a multiple of 8; else 0. Uses x9, x10. */
-LOCAL_FUNCTION lc_equal
+LOCAL_FUNCTION lantern_lc_equal
     UNWIND_END_PROLOGUE
 1:  cbz     x2, 2f
     ldr     x9, [x0], #8
@@ -377,14 +377,14 @@ LOCAL_FUNCTION lc_equal
     ret
 2:  mov     x0, #1
     ret
-END_FUNCTION lc_equal
+END_FUNCTION lantern_lc_equal
 
 /*
  * L1: x0 = an LcCommittee reference of the sync committee bytes x1 in the store x0: x2 or x3 (each
  * a reference or 0) when its bytes are equal, else a new record. x19 the store, x20 the bytes, x21
  * and x22 the candidates, x23 the reference.
  */
-LOCAL_FUNCTION lc_committee
+LOCAL_FUNCTION lantern_lc_committee
     ENTER 0
     mov     x19, x0
     mov     x20, x1
@@ -395,11 +395,11 @@ LOCAL_FUNCTION lc_committee
     mov     x0, x19
     mov     x1, #LC_PART_COMMITTEES
     mov     x2, x23
-    bl      lc_ref
+    bl      lantern_lc_ref
     add     x0, x0, #LcCommittee_committee
     mov     x1, x20
     MOVQ    x2, LC_COMMITTEE
-    bl      lc_equal
+    bl      lantern_lc_equal
     cbnz    x0, 4f
 2:  cmp     x23, x22
     b.eq    3f
@@ -407,26 +407,26 @@ LOCAL_FUNCTION lc_committee
     b       1b
 3:  mov     x0, x19
     mov     x1, #LC_PART_COMMITTEES
-    bl      lc_alloc
+    bl      lantern_lc_alloc
     mov     x23, x0
     mov     x1, #LC_PART_COMMITTEES
     mov     x2, x23
     mov     x0, x19
-    bl      lc_ref
+    bl      lantern_lc_ref
     add     x0, x0, #LcCommittee_committee
     mov     x1, x20
     MOVQ    x2, LC_COMMITTEE
     bl      lantern_copy
 4:  mov     x0, x23
     LEAVE 0
-END_FUNCTION lc_committee
+END_FUNCTION lantern_lc_committee
 
 /*
  * L1: hash_tree_root of the BeaconBlockHeader at x0 (its 112 SSZ bytes) at x1. x19 the header, x20
  * out, x21 the 8 chunks, x22 the pairs of the level, x23 the pair. Locals: L a ByteList, L + 32 a
  * digest, L + 64 the chunks.
  */
-LOCAL_FUNCTION lc_beacon_root
+LOCAL_FUNCTION lantern_lc_beacon_root
     ENTER 320
     mov     x19, x0
     mov     x20, x1
@@ -464,14 +464,14 @@ LOCAL_FUNCTION lc_beacon_root
     cbnz    x22, 1b
     COPY32  x20, x21
     LEAVE 320
-END_FUNCTION lc_beacon_root
+END_FUNCTION lantern_lc_beacon_root
 
 /*
  * L1: x0 = a new LcHeader of the fork x1 in the store x0 (reserved before), the empty header of the
  * fork: lantern_upgrade_lc_header of 112 zero bytes from altair. x19 the store, x20 the fork, x21
  * the reference. Locals: L the ByteList of the zero bytes.
  */
-LOCAL_FUNCTION lc_empty_header
+LOCAL_FUNCTION lantern_lc_empty_header
     ENTER 144
     mov     x19, x0
     mov     x20, x1
@@ -485,12 +485,12 @@ LOCAL_FUNCTION lc_empty_header
     str     x11, [sp, #(L + 16)]
     mov     x0, x19
     mov     x1, #LC_PART_HEADERS
-    bl      lc_alloc
+    bl      lantern_lc_alloc
     mov     x21, x0
     mov     x0, x19
     mov     x1, #LC_PART_HEADERS
     mov     x2, x21
-    bl      lc_ref
+    bl      lantern_lc_ref
     str     x20, [x0, #LcHeader_fork]
     MOVQ    x9, 24 + LC_HEADER_ROOM
     str     x9, [x0, #LcHeader_header]
@@ -501,7 +501,7 @@ LOCAL_FUNCTION lc_empty_header
     FORK_CALL upgrade_lc_header
     mov     x0, x21
     LEAVE 144
-END_FUNCTION lc_empty_header
+END_FUNCTION lantern_lc_empty_header
 
 /*
  * L1: x0 = a new LcUpdate (reserved before, with one LcHeader) in the store x0: the update of entry
@@ -510,7 +510,7 @@ END_FUNCTION lc_empty_header
  * the signature slot, x22 the aggregate, x23 the committee, x24 the entry, x25 the update's
  * reference, x26 the update, x27 its fork, x28 a finalized entry or header.
  */
-LOCAL_FUNCTION lc_make_update
+LOCAL_FUNCTION lantern_lc_make_update
     ENTER 0
     mov     x19, x0
     mov     x20, x1
@@ -519,21 +519,21 @@ LOCAL_FUNCTION lc_make_update
     mov     x23, x4
     mov     x1, #LC_PART_BLOCKS
     mov     x2, x20
-    bl      lc_ref
+    bl      lantern_lc_ref
     mov     x24, x0
     mov     x0, x19
     mov     x1, #LC_PART_UPDATES
-    bl      lc_alloc
+    bl      lantern_lc_alloc
     mov     x25, x0
     mov     x0, x19
     mov     x1, #LC_PART_UPDATES
     mov     x2, x25
-    bl      lc_ref
+    bl      lantern_lc_ref
     mov     x26, x0
     mov     x0, x19
     mov     x1, #LC_PART_HEADERS
     ldr     x2, [x24, #LcBlock_header]
-    bl      lc_ref
+    bl      lantern_lc_ref
     ldr     x27, [x0, #LcHeader_fork]
     str     x27, [x26, #LcUpdate_fork]
     ldr     x9, [x24, #LcBlock_header]
@@ -550,7 +550,7 @@ LOCAL_FUNCTION lc_make_update
     bl      lantern_copy
     mov     x0, x19                         /* the finalized block: the LcFinalized at the entry's finalized_slot */
     ldr     x1, [x24, #LcBlock_finalized_slot]
-    bl      lc_finalized_at
+    bl      lantern_lc_finalized_at
     cbz     x0, 5f
     mov     x28, x0
     ldr     x9, [x28, #LcFinalized_slot]
@@ -558,30 +558,30 @@ LOCAL_FUNCTION lc_make_update
     cbz     x9, 4f                          /* GENESIS_SLOT: the empty header, the branch */
     mov     x0, x19
     add     x1, x28, #LcFinalized_root
-    bl      lc_find_block
+    bl      lantern_lc_find_block
     cbz     x0, 5f
     mov     x2, x0
     mov     x0, x19
     mov     x1, #LC_PART_BLOCKS
-    bl      lc_ref
+    bl      lantern_lc_ref
     ldr     x9, [x0, #LcBlock_header]
     str     x9, [x26, #LcUpdate_finalized_header]
     mov     x2, x9
     mov     x0, x19
     mov     x1, #LC_PART_HEADERS
-    bl      lc_ref
+    bl      lantern_lc_ref
     mov     x28, x0
     ldr     x9, [x28, #LcHeader_fork]
     cmp     x9, x27
     b.eq    3f
     mov     x0, x19                         /* of an earlier fork: upgraded, in a new record */
     mov     x1, #LC_PART_HEADERS
-    bl      lc_alloc
+    bl      lantern_lc_alloc
     str     x0, [x26, #LcUpdate_finalized_header]
     mov     x2, x0
     mov     x0, x19
     mov     x1, #LC_PART_HEADERS
-    bl      lc_ref
+    bl      lantern_lc_ref
     str     x27, [x0, #LcHeader_fork]
     MOVQ    x9, 24 + LC_HEADER_ROOM
     str     x9, [x0, #LcHeader_header]
@@ -605,11 +605,11 @@ LOCAL_FUNCTION lc_make_update
     bl      lantern_zero
 6:  mov     x0, x19
     mov     x1, x27
-    bl      lc_empty_header
+    bl      lantern_lc_empty_header
     str     x0, [x26, #LcUpdate_finalized_header]
 7:  mov     x0, x25
     LEAVE 0
-END_FUNCTION lc_make_update
+END_FUNCTION lantern_lc_make_update
 
 /*
  * L1: x0 = 1 when lantern_is_better_update of the LcUpdate x1's fork gives 1 for it and the LcUpdate
@@ -618,7 +618,7 @@ END_FUNCTION lc_make_update
  * the new update's fork, x24 the fork of the update in the parts, x25 an update, x26 the parts.
  * Locals: L the parts, L + 72 the answer.
  */
-LOCAL_FUNCTION lc_better
+LOCAL_FUNCTION lantern_lc_better
     ENTER 80
     mov     x19, x0
     mov     x21, x2
@@ -626,12 +626,12 @@ LOCAL_FUNCTION lc_better
     add     x26, sp, #L
     mov     x2, x1
     mov     x1, #LC_PART_UPDATES
-    bl      lc_ref
+    bl      lantern_lc_ref
     mov     x20, x0
     ldr     x23, [x20, #LcUpdate_fork]
     mov     x25, x20                        /* the new update: buffer 1 */
     mov     x24, x23
-    bl      lc_better_parts
+    bl      lantern_lc_better_parts
     MOVQ    x9, 24 + LC_UPDATE_ROOM
     str     x9, [x22]
     mov     x0, #LC_OBJECT_UPDATE
@@ -643,10 +643,10 @@ LOCAL_FUNCTION lc_better
     mov     x0, x19                         /* the old one, its headers upgraded: buffer 2 */
     mov     x1, #LC_PART_UPDATES
     mov     x2, x21
-    bl      lc_ref
+    bl      lantern_lc_ref
     mov     x25, x0
     ldr     x24, [x25, #LcUpdate_fork]
-    bl      lc_better_parts
+    bl      lantern_lc_better_parts
     cmp     x24, x23
     b.eq    1f
     MOVQ    x9, 2 * (24 + LC_UPDATE_ROOM)   /* the headers' buffers, after the two updates' */
@@ -688,27 +688,27 @@ LOCAL_FUNCTION lc_better
     LEAVE 80
 9:  mov     x0, #0
     LEAVE 80
-END_FUNCTION lc_better
+END_FUNCTION lantern_lc_better
 
-/* L1, lc_better's: the LcParts x26 of the LcUpdate x25 of the fork x24 in the store x19, the branches at their counts. Uses x0-x2, x9-x12. */
-LOCAL_FUNCTION lc_better_parts
+/* L1, lantern_lc_better's: the LcParts x26 of the LcUpdate x25 of the fork x24 in the store x19, the branches at their counts. Uses x0-x2, x9-x12. */
+LOCAL_FUNCTION lantern_lc_better_parts
     FRAME 0
     mov     x0, x19
     mov     x1, #LC_PART_HEADERS
     ldr     x2, [x25, #LcUpdate_attested_header]
-    bl      lc_ref
+    bl      lantern_lc_ref
     add     x0, x0, #LcHeader_header
     str     x0, [x26, #LcParts_header]
     mov     x0, x19
     mov     x1, #LC_PART_HEADERS
     ldr     x2, [x25, #LcUpdate_finalized_header]
-    bl      lc_ref
+    bl      lantern_lc_ref
     add     x0, x0, #LcHeader_header
     str     x0, [x26, #LcParts_finalized_header]
     mov     x0, x19
     mov     x1, #LC_PART_COMMITTEES
     ldr     x2, [x25, #LcUpdate_next_sync_committee]
-    bl      lc_ref
+    bl      lantern_lc_ref
     add     x0, x0, #LcCommittee_committee
     str     x0, [x26, #LcParts_sync_committee]
     add     x0, x25, #LcUpdate_next_branch
@@ -724,7 +724,7 @@ LOCAL_FUNCTION lc_better_parts
     str     x9, [x26, #LcParts_branch_count]
     str     x10, [x26, #LcParts_finality_count]
     UNFRAME 0
-END_FUNCTION lc_better_parts
+END_FUNCTION lantern_lc_better_parts
 
 /*
  * L1: x0 = status: the LcBlock of the block x3 (ByteList) with its post-state x2 in the store x0,
@@ -734,7 +734,7 @@ END_FUNCTION lc_better_parts
  * reference, x28 the parent entry. Locals: L the anchor flag, L + 8 the slot, L + 16 the header's
  * bytes, L + 24 the root, L + 56 the parent's reference, L + 64 the update, L + 72 the header.
  */
-LOCAL_FUNCTION lc_add_block
+LOCAL_FUNCTION lantern_lc_add_block
     ENTER 80
     mov     x19, x0
     mov     x20, x1
@@ -747,7 +747,7 @@ LOCAL_FUNCTION lc_add_block
     mov     x1, #2
     mov     x2, #2
     mov     x3, #1
-    bl      lc_reserve
+    bl      lantern_lc_reserve
     cbnz    x0, 98f
     ldr     x9, [x19, #LcStore_blocks]
     ldr     x10, [x19, #(LcStore_room + LcRoom_blocks)]
@@ -771,16 +771,16 @@ LOCAL_FUNCTION lc_add_block
     b.hi    96f
     ldr     x0, [x9, x11]
 5:  mov     x1, x20
-    bl      node_fork
+    bl      lantern_node_fork
     mov     x26, x0
     mov     x0, x19                         /* the header */
     mov     x1, #LC_PART_HEADERS
-    bl      lc_alloc
+    bl      lantern_lc_alloc
     mov     x27, x0
     mov     x2, x0
     mov     x0, x19
     mov     x1, #LC_PART_HEADERS
-    bl      lc_ref
+    bl      lantern_lc_ref
     str     x0, [sp, #(L + 72)]
     mov     x9, #FORK_ALTAIR
     cmp     x26, x9
@@ -806,15 +806,15 @@ LOCAL_FUNCTION lc_add_block
     ldr     x9, [x0]
     str     x9, [sp, #(L + 8)]
     add     x1, sp, #(L + 24)
-    bl      lc_beacon_root
+    bl      lantern_lc_beacon_root
     mov     x0, x19
     add     x1, sp, #(L + 24)
-    bl      lc_find_block
+    bl      lantern_lc_find_block
     cbnz    x0, 95f
     mov     x0, x19                         /* the entry, at the end of blocks */
     mov     x1, #LC_PART_BLOCKS
     ldr     x2, [x19, #LcStore_blocks]
-    bl      lc_at
+    bl      lantern_lc_at
     mov     x25, x0
     MOVQ    x1, LcBlock__mem
     bl      lantern_zero
@@ -830,7 +830,7 @@ LOCAL_FUNCTION lc_add_block
     str     x27, [x25, #LcBlock_header]
     mov     x0, x19
     add     x1, x25, #LcBlock_parent_root
-    bl      lc_find_block
+    bl      lantern_lc_find_block
     str     x0, [x25, #LcBlock_parent]
     str     x0, [sp, #(L + 56)]
     ldr     x9, [sp, #L]                    /* from altair, but the anchor: the body's sync_aggregate */
@@ -885,13 +885,13 @@ LOCAL_FUNCTION lc_add_block
     mov     x0, x19
     mov     x1, #LC_PART_BLOCKS
     mov     x2, x28
-    bl      lc_ref
+    bl      lantern_lc_ref
     mov     x28, x0
     ldr     x2, [x28, #LcBlock_current_sync_committee]
     ldr     x3, [x28, #LcBlock_next_sync_committee]
 22: mov     x0, x19
     ADDQ    x1, x21, NODE_STATE_CURRENT_SYNC_COMMITTEE
-    bl      lc_committee
+    bl      lantern_lc_committee
     str     x0, [x25, #LcBlock_current_sync_committee]
     mov     x2, #0
     cbz     x28, 23f
@@ -899,7 +899,7 @@ LOCAL_FUNCTION lc_add_block
 23: ldr     x3, [x25, #LcBlock_current_sync_committee]
     mov     x0, x19
     ADDQ    x1, x21, NODE_STATE_NEXT_SYNC_COMMITTEE
-    bl      lc_committee
+    bl      lantern_lc_committee
     str     x0, [x25, #LcBlock_next_sync_committee]
     ldr     x9, [sp, #L]
     cbnz    x9, 50f                         /* the anchor: no best update, latest_signature_slot GENESIS_SLOT */
@@ -919,7 +919,7 @@ LOCAL_FUNCTION lc_add_block
     cmp     x11, x12
     cset    x27, ne                         /* x27: 1 when the periods differ */
     add     x0, x25, #LcBlock_sync_aggregate
-    bl      lc_participants
+    bl      lantern_lc_participants
     ldr     x9, [sp, #(L + 8)]
     cmp     x0, #MIN_SYNC_COMMITTEE_PARTICIPANTS
     b.hs    25f
@@ -932,14 +932,14 @@ LOCAL_FUNCTION lc_add_block
     ldr     x2, [sp, #(L + 8)]
     add     x3, x25, #LcBlock_sync_aggregate
     ldr     x4, [x25, #LcBlock_next_sync_committee]
-    bl      lc_make_update
+    bl      lantern_lc_make_update
     str     x0, [sp, #(L + 64)]
     ldr     x2, [x25, #LcBlock_best]
     cbz     x2, 40f
     mov     x1, x0
     mov     x0, x19
     mov     x3, x24
-    bl      lc_better
+    bl      lantern_lc_better
     cbz     x0, 50f
 40: ldr     x9, [sp, #(L + 64)]
     str     x9, [x25, #LcBlock_best]
@@ -963,19 +963,19 @@ LOCAL_FUNCTION lc_add_block
     LEAVE 80
 98: mov     x0, #LANTERN_BUFFER_TOO_SMALL
     LEAVE 80
-END_FUNCTION lc_add_block
+END_FUNCTION lantern_lc_add_block
 
 /*
  * L1: an LcBootstrap of the LcFinalized x1 in the store x0 (room checked before), when the store
  * holds none of its root and holds its LcBlock with data. x19 the store, x20 the LcFinalized, x21
  * the bootstraps, x22 their count, x23 the entry.
  */
-LOCAL_FUNCTION lc_add_bootstrap
+LOCAL_FUNCTION lantern_lc_add_bootstrap
     ENTER 0
     mov     x19, x0
     mov     x20, x1
     mov     x1, #LC_PART_BOOTSTRAPS
-    bl      lc_part
+    bl      lantern_lc_part
     mov     x21, x0
     ldr     x22, [x19, #LcStore_bootstraps]
     mov     x23, #0
@@ -990,12 +990,12 @@ LOCAL_FUNCTION lc_add_bootstrap
     b       1b
 2:  mov     x0, x19
     add     x1, x20, #LcFinalized_root
-    bl      lc_find_block
+    bl      lantern_lc_find_block
     cbz     x0, 9f
     mov     x2, x0
     mov     x0, x19
     mov     x1, #LC_PART_BLOCKS
-    bl      lc_ref
+    bl      lantern_lc_ref
     mov     x23, x0
     ldr     x9, [x23, #LcBlock_data]
     cbz     x9, 9f
@@ -1016,20 +1016,20 @@ LOCAL_FUNCTION lc_add_bootstrap
     add     x22, x22, #1
     str     x22, [x19, #LcStore_bootstraps]
 9:  LEAVE 0
-END_FUNCTION lc_add_bootstrap
+END_FUNCTION lantern_lc_add_bootstrap
 
 /*
  * L1: the LcPeriod of period x1 in the store x0 refers to update x2 (room checked before); with x2
  * 0, the period has none. x19 the store, x20 the period, x21 the update, x22 the periods, x23 their
  * count, x24 the index.
  */
-LOCAL_FUNCTION lc_set_period
+LOCAL_FUNCTION lantern_lc_set_period
     ENTER 0
     mov     x19, x0
     mov     x20, x1
     mov     x21, x2
     mov     x1, #LC_PART_PERIODS
-    bl      lc_part
+    bl      lantern_lc_part
     mov     x22, x0
     ldr     x23, [x19, #LcStore_periods]
     mov     x24, #0
@@ -1071,20 +1071,20 @@ LOCAL_FUNCTION lc_set_period
     add     x23, x23, #1
     str     x23, [x19, #LcStore_periods]
 9:  LEAVE 0
-END_FUNCTION lc_set_period
+END_FUNCTION lantern_lc_set_period
 
 /*
  * L1: the LcBlock entries of slots below x1 in the store x0 go, with the scratch x2 (8 bytes for
  * each entry, checked before) for their new indices. x19 the store, x20 the slot, x21 the indices,
  * x22 the entries, x23 their count, x24 the index, x25 the kept ones.
  */
-LOCAL_FUNCTION lc_prune
+LOCAL_FUNCTION lantern_lc_prune
     ENTER 0
     mov     x19, x0
     mov     x20, x1
     add     x21, x2, #8
     mov     x1, #LC_PART_BLOCKS
-    bl      lc_part
+    bl      lantern_lc_part
     mov     x22, x0
     ldr     x23, [x19, #LcStore_blocks]
     mov     x24, #0
@@ -1123,7 +1123,7 @@ LOCAL_FUNCTION lc_prune
     b       4b
 6:  str     x25, [x19, #LcStore_blocks]
     LEAVE 0
-END_FUNCTION lc_prune
+END_FUNCTION lantern_lc_prune
 
 
 /* (room, size) -> status: LC_STORE_FIXED plus each capacity times its bytes (light-client.md). */
@@ -1134,7 +1134,7 @@ FUNCTION lantern_lc_store_size
     MOVQ    x2, LC_STORE_FIXED
     mov     x1, #0
 1:  ldr     x4, [x13, x1, lsl #3]
-    bl      lc_mem
+    bl      lantern_lc_mem
     umulh   x9, x4, x12
     cbnz    x9, 9f
     mul     x4, x4, x12
@@ -1215,16 +1215,16 @@ FUNCTION lantern_lc_store_init
     mov     x4, #0
     mov     x5, x23
     mov     x6, #1
-    bl      lc_add_block
+    bl      lantern_lc_add_block
     cbnz    x0, 99f
     mov     x0, x24
     mov     x1, #LC_PART_BLOCKS
     mov     x2, #0
-    bl      lc_at
+    bl      lantern_lc_at
     mov     x25, x0
     mov     x0, x24
     mov     x1, #LC_PART_FINALIZED
-    bl      lc_part
+    bl      lantern_lc_part
     mov     x26, x0
     ldr     x9, [x25, #LcBlock_slot]
     str     x9, [x26, #LcFinalized_slot]
@@ -1234,7 +1234,7 @@ FUNCTION lantern_lc_store_init
     str     x9, [x24, #LcStore_finalized]
     mov     x0, x24
     mov     x1, x26
-    bl      lc_add_bootstrap
+    bl      lantern_lc_add_bootstrap
     mov     x0, #LANTERN_OK
     LEAVE 16
 98: mov     x0, #LANTERN_BUFFER_TOO_SMALL
@@ -1279,13 +1279,13 @@ FUNCTION lantern_lc_store_copy
     mov     x22, #0
 2:  mov     x0, x19
     mov     x1, x22
-    bl      lc_part
+    bl      lantern_lc_part
     mov     x23, x0
     mov     x0, x21
     mov     x1, x22
-    bl      lc_part
+    bl      lantern_lc_part
     mov     x24, x0
-    bl      lc_mem
+    bl      lantern_lc_mem
     mov     x25, x12
     cmp     x22, #LC_PART_BOOTSTRAPS
     b.hi    3f
@@ -1321,7 +1321,7 @@ END_FUNCTION lantern_lc_store_copy
 FUNCTION lantern_lc_on_block
     FRAME 0
     mov     x6, #0
-    bl      lc_add_block
+    bl      lantern_lc_add_block
     UNFRAME 0
 END_FUNCTION lantern_lc_on_block
 
@@ -1342,7 +1342,7 @@ FUNCTION lantern_lc_on_head
     mov     x23, x4
     mov     x0, x19
     mov     x1, x21
-    bl      lc_find_block
+    bl      lantern_lc_find_block
     cbz     x0, 94f
     mov     x24, x0
     mov     x25, #0
@@ -1350,12 +1350,12 @@ FUNCTION lantern_lc_on_head
     cbz     x9, 1f
     mov     x0, x19
     add     x1, x22, #8
-    bl      lc_find_block
+    bl      lantern_lc_find_block
     cbz     x0, 94f
     mov     x2, x0
     mov     x0, x19
     mov     x1, #LC_PART_BLOCKS
-    bl      lc_ref
+    bl      lantern_lc_ref
     ldr     x9, [x0, #LcBlock_slot]
     ldr     x10, [x19, #LcStore_latest_finalized_slot]
     cmp     x9, x10
@@ -1365,7 +1365,7 @@ FUNCTION lantern_lc_on_head
     mov     x1, #1
     mov     x2, #0
     mov     x3, #1
-    bl      lc_reserve
+    bl      lantern_lc_reserve
     cbnz    x0, 98f
     ldr     x9, [x19, #LcStore_blocks]
     lsl     x9, x9, #3
@@ -1376,7 +1376,7 @@ FUNCTION lantern_lc_on_head
     mov     x0, x19
     mov     x1, #LC_PART_BLOCKS
     mov     x2, x24
-    bl      lc_ref
+    bl      lantern_lc_ref
     mov     x26, x0
     ldr     x9, [x19, #LcStore_tail_slot]
     ldr     x10, [x19, #LcStore_latest_finalized_slot]
@@ -1408,7 +1408,7 @@ FUNCTION lantern_lc_on_head
     sub     x2, x2, #1
     mov     x0, x19
     mov     x1, #LC_PART_FINALIZED
-    bl      lc_at
+    bl      lantern_lc_at
     ldr     x9, [x0, #LcFinalized_slot]
     cmp     x9, x27
     csel    x27, x9, x27, hi
@@ -1418,7 +1418,7 @@ FUNCTION lantern_lc_on_head
     mov     x0, x19
     mov     x1, #LC_PART_BLOCKS
     mov     x2, x28
-    bl      lc_ref
+    bl      lantern_lc_ref
     ldr     x9, [x0, #LcBlock_slot]
     cmp     x9, x27
     b.ls    31f
@@ -1455,13 +1455,13 @@ FUNCTION lantern_lc_on_head
     sub     x2, x2, #1
     mov     x0, x19
     ldr     x1, [sp, #(L + 40)]
-    bl      lc_ancestor
+    bl      lantern_lc_ancestor
     cbz     x0, 10f
     str     x0, [sp, #(L + 40)]
     mov     x2, x0
     mov     x0, x19
     mov     x1, #LC_PART_BLOCKS
-    bl      lc_ref
+    bl      lantern_lc_ref
     ldr     x9, [x0, #LcBlock_slot]
     ldr     x10, [sp, #L]
     cmp     x9, x10
@@ -1471,16 +1471,16 @@ FUNCTION lantern_lc_on_head
     str     x2, [sp, #(L + 48)]
     mov     x0, x19
     mov     x1, #LC_PART_UPDATES
-    bl      lc_ref
+    bl      lantern_lc_ref
     add     x0, x0, #LcUpdate_sync_aggregate
-    bl      lc_participants
+    bl      lantern_lc_participants
     ldr     x2, [sp, #(L + 48)]
     cmp     x0, #MIN_SYNC_COMMITTEE_PARTICIPANTS
     b.hs    7f
     mov     x2, #0
 7:  mov     x0, x19
     mov     x1, x27
-    bl      lc_set_period
+    bl      lantern_lc_set_period
     cmp     x27, x28
     b.eq    10f
     sub     x27, x27, #1
@@ -1493,13 +1493,13 @@ FUNCTION lantern_lc_on_head
     mov     x0, x19
     mov     x1, x24
     mov     x2, x9
-    bl      lc_ancestor
+    bl      lantern_lc_ancestor
     cbz     x0, 12f
     str     x0, [sp, #(L + 40)]
     mov     x2, x0
     mov     x0, x19
     mov     x1, #LC_PART_BLOCKS
-    bl      lc_ref
+    bl      lantern_lc_ref
     mov     x27, x0
     ldr     x9, [x27, #LcBlock_slot]
     ldr     x10, [sp, #L]
@@ -1508,13 +1508,13 @@ FUNCTION lantern_lc_on_head
     sub     x2, x9, #1
     mov     x0, x19
     ldr     x1, [sp, #(L + 40)]
-    bl      lc_ancestor
+    bl      lantern_lc_ancestor
     cbz     x0, 12f
     mov     x28, x0
     mov     x2, x0
     mov     x0, x19
     mov     x1, #LC_PART_BLOCKS
-    bl      lc_ref
+    bl      lantern_lc_ref
     ldr     x9, [x0, #LcBlock_slot]
     ldr     x10, [sp, #L]
     cmp     x9, x10
@@ -1524,7 +1524,7 @@ FUNCTION lantern_lc_on_head
     ldr     x2, [sp, #(L + 48)]
     add     x3, x27, #LcBlock_sync_aggregate
     mov     x4, #0
-    bl      lc_make_update
+    bl      lantern_lc_make_update
     str     x0, [x19, #LcStore_latest]
     b       30f
 12: str     xzr, [x19, #LcStore_latest]
@@ -1542,12 +1542,12 @@ FUNCTION lantern_lc_on_head
     mov     x0, x19
     mov     x1, #LC_PART_BLOCKS
     mov     x2, x26
-    bl      lc_ref
+    bl      lantern_lc_ref
     mov     x24, x0
     mov     x0, x19
     mov     x1, #LC_PART_FINALIZED
     mov     x2, x28
-    bl      lc_at
+    bl      lantern_lc_at
     ldr     x9, [x24, #LcBlock_slot]
     str     x9, [x0, #LcFinalized_slot]
     add     x9, x0, #LcFinalized_root
@@ -1558,7 +1558,7 @@ FUNCTION lantern_lc_on_head
 33: mov     x0, x19
     mov     x1, #LC_PART_BLOCKS
     mov     x2, x25
-    bl      lc_ref
+    bl      lantern_lc_ref
     mov     x26, x0
     ldr     x9, [x22]
     str     x9, [x19, #LcStore_latest_finalized_epoch]
@@ -1580,7 +1580,7 @@ FUNCTION lantern_lc_on_head
     cmp     x1, x10
     b.lo    50f
     mov     x0, x19
-    bl      lc_finalized_at
+    bl      lantern_lc_finalized_at
     cbz     x0, 50f
     mov     x28, x0
     ldr     x9, [x28, #LcFinalized_slot]
@@ -1589,7 +1589,7 @@ FUNCTION lantern_lc_on_head
     b.lo    41f
     mov     x0, x19
     mov     x1, x28
-    bl      lc_add_bootstrap
+    bl      lantern_lc_add_bootstrap
 41: ldr     x9, [x28, #LcFinalized_slot]
     add     x9, x9, #(SLOTS_PER_EPOCH - 1)
     mov     x10, #SLOTS_PER_EPOCH
@@ -1603,7 +1603,7 @@ FUNCTION lantern_lc_on_head
 50: mov     x0, x19                         /* the entries below the checkpoint's go */
     ldr     x1, [x26, #LcBlock_slot]
     mov     x2, x23
-    bl      lc_prune
+    bl      lantern_lc_prune
 60: mov     x0, #LANTERN_OK
     LEAVE 64
 94: mov     x0, #LANTERN_INVALID_UNKNOWN_BLOCK
@@ -1628,7 +1628,7 @@ FUNCTION lantern_lc_read
     b.hi    97f
     cbnz    x20, 10f
     mov     x1, #LC_PART_BOOTSTRAPS         /* the bootstrap of the root */
-    bl      lc_part
+    bl      lantern_lc_part
     mov     x24, x0
     ldr     x25, [x19, #LcStore_bootstraps]
 1:  cbz     x25, 93f
@@ -1640,14 +1640,14 @@ FUNCTION lantern_lc_read
 3:  mov     x0, x19
     mov     x1, #LC_PART_HEADERS
     ldr     x2, [x24, #LcBootstrap_header]
-    bl      lc_ref
+    bl      lantern_lc_ref
     ldr     x26, [x0, #LcHeader_fork]
     add     x0, x0, #LcHeader_header
     str     x0, [sp, #(L + LcParts_header)]
     mov     x0, x19
     mov     x1, #LC_PART_COMMITTEES
     ldr     x2, [x24, #LcBootstrap_sync_committee]
-    bl      lc_ref
+    bl      lantern_lc_ref
     add     x0, x0, #LcCommittee_committee
     str     x0, [sp, #(L + LcParts_sync_committee)]
     add     x0, x24, #LcBootstrap_branch
@@ -1660,7 +1660,7 @@ FUNCTION lantern_lc_read
     b.ne    20f
     mov     x0, x19                         /* the period's update */
     mov     x1, #LC_PART_PERIODS
-    bl      lc_part
+    bl      lantern_lc_part
     ldr     x25, [x19, #LcStore_periods]
 11: cbz     x25, 93f
     ldr     x9, [x0, #LcPeriod_period]
@@ -1675,19 +1675,19 @@ FUNCTION lantern_lc_read
     cbz     x2, 93f
 21: mov     x0, x19
     mov     x1, #LC_PART_UPDATES
-    bl      lc_ref
+    bl      lantern_lc_ref
     mov     x24, x0
     ldr     x26, [x24, #LcUpdate_fork]
     mov     x0, x19
     mov     x1, #LC_PART_HEADERS
     ldr     x2, [x24, #LcUpdate_attested_header]
-    bl      lc_ref
+    bl      lantern_lc_ref
     add     x0, x0, #LcHeader_header
     str     x0, [sp, #(L + LcParts_header)]
     mov     x0, x19
     mov     x1, #LC_PART_HEADERS
     ldr     x2, [x24, #LcUpdate_finalized_header]
-    bl      lc_ref
+    bl      lantern_lc_ref
     add     x0, x0, #LcHeader_header
     str     x0, [sp, #(L + LcParts_finalized_header)]
     str     xzr, [sp, #(L + LcParts_sync_committee)]
@@ -1695,7 +1695,7 @@ FUNCTION lantern_lc_read
     cbz     x2, 22f
     mov     x0, x19
     mov     x1, #LC_PART_COMMITTEES
-    bl      lc_ref
+    bl      lantern_lc_ref
     add     x0, x0, #LcCommittee_committee
     str     x0, [sp, #(L + LcParts_sync_committee)]
 22: add     x0, x24, #LcUpdate_next_branch

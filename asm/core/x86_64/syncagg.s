@@ -5,7 +5,7 @@
 .set G1_POINT_BYTES, 144                                        /* asm-crypto G1Point: X, Y, Z */
 .set SYNC_KEYS_LIST, 24 + 48 * SYNC_COMMITTEE_SIZE              /* a BlsPublicKeyList of the committee */
 .set SYNC_AGG_EXTRA, SYNC_KEYS_LIST + SYNC_INDICES_BYTES + 3 * G1_POINT_BYTES + 48
-.set SYNC_TABLE_SLOTS, 2 * SYNC_COMMITTEE_SIZE                  /* find_pubkeys: slots of (fingerprint, member + 1) */
+.set SYNC_TABLE_SLOTS, 2 * SYNC_COMMITTEE_SIZE                  /* lantern_find_pubkeys: slots of (fingerprint, member + 1) */
 .set SYNC_TABLE_BYTES, 16 * SYNC_TABLE_SLOTS
 .if SYNC_TABLE_SLOTS & (SYNC_TABLE_SLOTS - 1)
 .error "find_pubkeys takes a slot number by a mask: SYNC_COMMITTEE_SIZE must be a power of 2"
@@ -93,7 +93,7 @@ SPEC_FUNCTION process_sync_aggregate
     mov     S7(%rsp), %rdx
     add     $LIST_FIXED, %rdx
     mov     %r15, %rcx                      # the hash table, where the keys go
-    call    find_pubkeys
+    call    lantern_find_pubkeys
     mov     %rax, %rcx
     mov     $LANTERN_INVALID_SYNC_AGGREGATE, %eax
     test    %rcx, %rcx
@@ -235,7 +235,7 @@ SPEC_FUNCTION process_sync_aggregate
     mov     %rbx, %rdi
     lea     (BeaconState_current_sync_committee + SyncCommittee_pubkeys)(%rbx), %rsi
     mov     %r15, %rcx                      # the hash table, where the keys were
-    call    find_pubkeys
+    call    lantern_find_pubkeys
     mov     %rax, %rcx
     mov     $LANTERN_INVALID_SYNC_AGGREGATE, %eax
     test    %rcx, %rcx
@@ -350,7 +350,7 @@ SPEC_END process_sync_aggregate
  * found yet, or 1 << 63 | j for a key that is that of member j < k.
  * rax = 0, or -1 when a key is missing. Uses rdi, r8-r11, xmm0-xmm5.
  */
-LOCAL_FUNCTION find_pubkeys
+LOCAL_FUNCTION lantern_find_pubkeys
     UNWIND_END_PROLOGUE
     mov     %rdi, (SYNC_TABLE_BYTES + 16)(%rcx)
     pxor    %xmm0, %xmm0                    # the table: empty
@@ -473,4 +473,4 @@ LOCAL_FUNCTION find_pubkeys
     ret
 13: xor     %eax, %eax
     ret
-END_FUNCTION find_pubkeys
+END_FUNCTION lantern_find_pubkeys

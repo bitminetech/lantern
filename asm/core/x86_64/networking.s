@@ -39,7 +39,7 @@ SPEC_FUNCTION get_custody_groups
     lea     L(%rsp), %rdi                   # sha256(uint_to_bytes(current_id))
     mov     $32, %esi
     lea     (L + 32)(%rsp), %rdx
-    call    sha256_short
+    call    lantern_sha256_short
     mov     (L + 32)(%rsp), %rax            # bytes_to_uint64(digest[0:8]) % NUMBER_OF_CUSTODY_GROUPS
     xor     %edx, %edx
     div     %rbp
@@ -117,7 +117,7 @@ SPEC_END compute_columns_for_custody_group
 .endif
 
 /* L0: rax = 1 when seen rdi holds the SeenKey (rsi kind, rdx a, rcx b, r8 c), else 0. A leaf; uses r9-r11. */
-LOCAL_FUNCTION seen_find_key
+LOCAL_FUNCTION lantern_seen_find_key
     UNWIND_END_PROLOGUE
     PART    %r9, %r10, %rdi, Seen_keys
 1:  test    %r10, %r10
@@ -137,20 +137,20 @@ LOCAL_FUNCTION seen_find_key
     ret
 4:  mov     $1, %eax
     ret
-END_FUNCTION seen_find_key
+END_FUNCTION lantern_seen_find_key
 
 /* L0: rax = the free SeenKey entries of seen rdi. A leaf. */
-LOCAL_FUNCTION seen_key_room
+LOCAL_FUNCTION lantern_seen_key_room
     UNWIND_END_PROLOGUE
     mov     Seen_bits(%rdi), %rax
     sub     Seen_keys(%rdi), %rax
     shr     $5, %rax
     sub     (Seen_keys + 8)(%rdi), %rax
     ret
-END_FUNCTION seen_key_room
+END_FUNCTION lantern_seen_key_room
 
 /* L0: append the SeenKey (rsi kind, rdx a, rcx b, r8 c) to seen rdi, which has room. A leaf; uses r9, r10. */
-LOCAL_FUNCTION seen_add_key
+LOCAL_FUNCTION lantern_seen_add_key
     UNWIND_END_PROLOGUE
     PART    %r9, %r10, %rdi, Seen_keys
     shl     $5, %r10
@@ -161,10 +161,10 @@ LOCAL_FUNCTION seen_add_key
     mov     %r8, 24(%r9)
     incq    (Seen_keys + 8)(%rdi)
     ret
-END_FUNCTION seen_add_key
+END_FUNCTION lantern_seen_add_key
 
 /* L0: rax = the free SeenBits entries of seen rdi. A leaf; uses rcx, rdx. */
-LOCAL_FUNCTION seen_bits_room
+LOCAL_FUNCTION lantern_seen_bits_room
     UNWIND_END_PROLOGUE
     mov     Seen_blocks(%rdi), %rax
     sub     Seen_bits(%rdi), %rax
@@ -173,14 +173,14 @@ LOCAL_FUNCTION seen_bits_room
     div     %rcx
     sub     (Seen_bits + 8)(%rdi), %rax
     ret
-END_FUNCTION seen_bits_room
+END_FUNCTION lantern_seen_bits_room
 
 /*
  * L0: is_non_strict_superset of the SeenBits of key (rsi kind, root at rdx, rcx a, r8 b) in seen rdi,
  * for the rax bits at r9: rax = 1 when one of them has every bit of r9 set. Uses rdi, r10, r11, xmm0-xmm2.
  * Locals: rsp+0 the length, rsp+8 its bytes, rsp+16 the entries left.
  */
-LOCAL_FUNCTION seen_superset
+LOCAL_FUNCTION lantern_seen_superset
     FRAME 32
     mov     %rax, 0(%rsp)
     add     $7, %rax
@@ -219,13 +219,13 @@ LOCAL_FUNCTION seen_superset
     UNFRAME 32
 9:  mov     $1, %eax
     UNFRAME 32
-END_FUNCTION seen_superset
+END_FUNCTION lantern_seen_superset
 
 /*
  * L0: append the SeenBits of key (rsi kind, root at rdx, rcx a, r8 b) and the rax bits at r9 to seen rdi,
  * which has room. Locals: rsp+0 entry, rsp+8 bits, rsp+16 length.
  */
-LOCAL_FUNCTION seen_add_bits
+LOCAL_FUNCTION lantern_seen_add_bits
     FRAME 32
     mov     %rax, 16(%rsp)
     mov     %r9, 8(%rsp)
@@ -251,10 +251,10 @@ LOCAL_FUNCTION seen_add_bits
     shr     $3, %rdx
     call    lantern_copy
     UNFRAME 32
-END_FUNCTION seen_add_bits
+END_FUNCTION lantern_seen_add_bits
 
 /* L0: rax = the SeenHeader of block root rsi in seen rdi, or 0. A leaf; uses rcx, rdx, r11, xmm0-xmm2. */
-LOCAL_FUNCTION seen_find_header
+LOCAL_FUNCTION lantern_seen_find_header
     UNWIND_END_PROLOGUE
     PART    %rax, %rcx, %rdi, Seen_headers
 1:  test    %rcx, %rcx
@@ -267,7 +267,7 @@ LOCAL_FUNCTION seen_find_header
     jmp     1b
 3:  xor     %eax, %eax
     ret
-END_FUNCTION seen_find_header
+END_FUNCTION lantern_seen_find_header
 
 /* ---------------------------------------------------------------- Gossip helpers */
 
@@ -291,8 +291,8 @@ END_FUNCTION seen_find_header
 99:
 .endm
 
-/* L0: rax = is_future_slot(store rdi, slot rsi, current_time_ms rdx). A leaf; uses rcx, r8. */
-LOCAL_FUNCTION is_future_slot
+/* L0: rax = lantern_is_future_slot(store rdi, slot rsi, current_time_ms rdx). A leaf; uses rcx, r8. */
+LOCAL_FUNCTION lantern_is_future_slot
     UNWIND_END_PROLOGUE
     mov     %rdx, %r8
     SLOT_TIME %rcx, %rdi, %rsi
@@ -301,10 +301,10 @@ LOCAL_FUNCTION is_future_slot
     cmp     %rcx, %rdx
     setb    %al
     ret
-END_FUNCTION is_future_slot
+END_FUNCTION lantern_is_future_slot
 
-/* L0: rax = is_within_slot_range(store rdi, slot rsi, slot_range rdx, current_time_ms rcx). A leaf; uses r8, r9. */
-LOCAL_FUNCTION is_within_slot_range
+/* L0: rax = lantern_is_within_slot_range(store rdi, slot rsi, slot_range rdx, current_time_ms rcx). A leaf; uses r8, r9. */
+LOCAL_FUNCTION lantern_is_within_slot_range
     UNWIND_END_PROLOGUE
     mov     %rdx, %r9
     SLOT_TIME %r8, %rdi, %rsi               # current_time_ms + MAXIMUM_GOSSIP_CLOCK_DISPARITY < start_time_ms
@@ -323,10 +323,10 @@ LOCAL_FUNCTION is_within_slot_range
     ret
 8:  xor     %eax, %eax
     ret
-END_FUNCTION is_within_slot_range
+END_FUNCTION lantern_is_within_slot_range
 
-/* L0: rax = is_current_or_previous_epoch(store rdi, epoch rsi, current_time_ms rdx). rbx store, rbp epoch, r12 time. */
-LOCAL_FUNCTION is_current_or_previous_epoch
+/* L0: rax = lantern_is_current_or_previous_epoch(store rdi, epoch rsi, current_time_ms rdx). rbx store, rbp epoch, r12 time. */
+LOCAL_FUNCTION lantern_is_current_or_previous_epoch
     ENTER 0
     mov     %rdi, %rbx
     mov     %rsi, %rbp
@@ -338,7 +338,7 @@ LOCAL_FUNCTION is_current_or_previous_epoch
     shl     $LOG2_SLOTS_PER_EPOCH, %rsi
     mov     $(SLOTS_PER_EPOCH - 1), %edx
     mov     %r12, %rcx
-    call    is_within_slot_range
+    call    lantern_is_within_slot_range
     test    %rax, %rax
     jnz     7f
 1:  lea     1(%rbp), %rsi                   # is_within_epoch(epoch + 1)
@@ -351,17 +351,17 @@ LOCAL_FUNCTION is_current_or_previous_epoch
     shl     $LOG2_SLOTS_PER_EPOCH, %rsi
     mov     $(SLOTS_PER_EPOCH - 1), %edx
     mov     %r12, %rcx
-    call    is_within_slot_range
+    call    lantern_is_within_slot_range
     jmp     7f
 6:  xor     %eax, %eax
 7:  LEAVE 0
-END_FUNCTION is_current_or_previous_epoch
+END_FUNCTION lantern_is_current_or_previous_epoch
 
 /*
- * L0: rax = is_future_epoch(store rdi, epoch rsi, current_time_ms rdx); true when the time with
+ * L0: rax = lantern_is_future_epoch(store rdi, epoch rsi, current_time_ms rdx); true when the time with
  * disparity is before genesis, where the spec's subtraction raises. A leaf; uses rcx, rdx.
  */
-LOCAL_FUNCTION is_future_epoch
+LOCAL_FUNCTION lantern_is_future_epoch
     UNWIND_END_PROLOGUE
     WITH_DISPARITY %rax, %rdi, %rdx
     sub     Store_genesis_time_ms(%rdi), %rax
@@ -375,10 +375,10 @@ LOCAL_FUNCTION is_future_epoch
     ret
 9:  mov     $1, %eax
     ret
-END_FUNCTION is_future_epoch
+END_FUNCTION lantern_is_future_epoch
 
 /* L0: rax = compute_start_slot_at_epoch(finalized epoch of store rdi), UINT64_MAX when it does not fit. A leaf; uses rcx. */
-LOCAL_FUNCTION finalized_slot
+LOCAL_FUNCTION lantern_finalized_slot
     UNWIND_END_PROLOGUE
     mov     (Store_finalized_checkpoint + Checkpoint_epoch)(%rdi), %rax
     mov     %rax, %rcx
@@ -388,17 +388,17 @@ LOCAL_FUNCTION finalized_slot
     ret
 9:  mov     $-1, %rax
     ret
-END_FUNCTION finalized_slot
+END_FUNCTION lantern_finalized_slot
 
 /*
  * L0: rax = status, rdx = 1 when get_checkpoint_block(store rdi, node rsi, epoch rdx) is the root at rcx, else 0.
  * Locals: rsp+0 store, rsp+8 root.
  */
-LOCAL_FUNCTION checkpoint_is
+LOCAL_FUNCTION lantern_checkpoint_is
     FRAME 16
     mov     %rdi, 0(%rsp)
     mov     %rcx, 8(%rsp)
-    call    checkpoint_block
+    call    lantern_checkpoint_block
     test    %rax, %rax
     jnz     7f
     mov     0(%rsp), %rdi
@@ -408,22 +408,22 @@ LOCAL_FUNCTION checkpoint_is
     NE32    %rsi, %rcx, 7f
     mov     $1, %edx
 7:  UNFRAME 16
-END_FUNCTION checkpoint_is
+END_FUNCTION lantern_checkpoint_is
 
-/* L0: checkpoint_is of the store's finalized checkpoint for node rsi of store rdi. */
-LOCAL_FUNCTION finalized_is_ancestor
+/* L0: lantern_checkpoint_is of the store's finalized checkpoint for node rsi of store rdi. */
+LOCAL_FUNCTION lantern_finalized_is_ancestor
     UNWIND_END_PROLOGUE
     mov     (Store_finalized_checkpoint + Checkpoint_epoch)(%rdi), %rdx
     lea     (Store_finalized_checkpoint + Checkpoint_root)(%rdi), %rcx
-    jmp     checkpoint_is
-END_FUNCTION finalized_is_ancestor
+    jmp     lantern_checkpoint_is
+END_FUNCTION lantern_finalized_is_ancestor
 
 /*
  * L0: rax = status, rdx = bls.Verify(public key rcx, compute_signing_root(object rdx of type rsi, domain rdi),
  * signature r8), with scratch r9. Locals: rsp+0 the root buffer (56: a ByteList header, then the root),
  * rsp+56 key, rsp+64 signature, rsp+72 scratch.
  */
-LOCAL_FUNCTION verify_with_domain
+LOCAL_FUNCTION lantern_verify_with_domain
     FRAME 80
     mov     %rcx, 56(%rsp)
     mov     %r8, 64(%rsp)
@@ -441,16 +441,16 @@ LOCAL_FUNCTION verify_with_domain
     mov     64(%rsp), %rsi
     mov     %rsp, %rdx
     mov     72(%rsp), %rcx
-    call    verify_root_signature
+    call    lantern_verify_root_signature
 7:  UNFRAME 80
-END_FUNCTION verify_with_domain
+END_FUNCTION lantern_verify_with_domain
 
 /*
- * L0: verify_with_domain with get_domain(state rdi, domain type esi, epoch rdx): object r8 of type rcx,
+ * L0: lantern_verify_with_domain with get_domain(state rdi, domain type esi, epoch rdx): object r8 of type rcx,
  * public key r9; the signature and scratch are the two stack arguments (the caller's S7 and S8).
  * Locals: rsp+0 domain type, rsp+8 epoch, rsp+16 domain (32), rsp+48 type, object, key.
  */
-LOCAL_FUNCTION verify_signed
+LOCAL_FUNCTION lantern_verify_signed
     FRAME 80
     mov     %esi, 0(%rsp)
     mov     %rdx, 8(%rsp)
@@ -470,9 +470,9 @@ LOCAL_FUNCTION verify_signed
     mov     64(%rsp), %rcx
     mov     (80 + 16)(%rsp), %r8            # the signature
     mov     (80 + 16 + 8)(%rsp), %r9
-    call    verify_with_domain
+    call    lantern_verify_with_domain
 7:  UNFRAME 80
-END_FUNCTION verify_signed
+END_FUNCTION lantern_verify_signed
 
 /* dst = &state.validators[idx] of state st; branch to fail when idx is not below the count. Uses r11. */
 .macro VALIDATOR_AT dst, st, idx, fail
@@ -485,13 +485,13 @@ END_FUNCTION verify_signed
  * L0: the block of the root at rdx, from store rdi and seen rsi: rax = its node or NODE_NONE, rdx = 2 for a node
  * of the store, 1 for a block of seen, 0 when unknown, rcx = its payload status. Locals: store, seen, root.
  */
-LOCAL_FUNCTION block_lookup
+LOCAL_FUNCTION lantern_block_lookup
     FRAME 32
     mov     %rdi, 0(%rsp)
     mov     %rsi, 8(%rsp)
     mov     %rdx, 16(%rsp)
     mov     %rdx, %rsi
-    call    find_node
+    call    lantern_find_node
     cmp     $-1, %rax
     je      1f
     mov     0(%rsp), %rdi
@@ -501,7 +501,7 @@ LOCAL_FUNCTION block_lookup
     UNFRAME 32
 1:  mov     8(%rsp), %rdi
     mov     16(%rsp), %rsi
-    call    seen_find_block
+    call    lantern_seen_find_block
     test    %rax, %rax
     jz      2f
     mov     SeenBlock_payload_status(%rax), %rcx
@@ -512,7 +512,7 @@ LOCAL_FUNCTION block_lookup
     xor     %edx, %edx
     mov     $PAYLOAD_STATUS_NOT_VALIDATED, %ecx
     UNFRAME 32
-END_FUNCTION block_lookup
+END_FUNCTION lantern_block_lookup
 
 /* The gossip results: rax into the Result whose pointer is in local slot off. Uses rcx. */
 .macro CHECK_RESULT off, fail, done
@@ -558,13 +558,13 @@ SPEC_FUNCTION validate_voluntary_exit_gossip
     mov     %rax, %rdx
     xor     %ecx, %ecx
     xor     %r8d, %r8d
-    call    seen_find_key
+    call    lantern_seen_find_key
     test    %rax, %rax
     jnz     4f
     mov     %rbp, %rdi                      # [IGNORE] the exit epoch is not in the future
     mov     (SignedVoluntaryExit_message + VoluntaryExit_epoch)(%r12), %rsi
     mov     %r13, %rdx
-    call    is_future_epoch
+    call    lantern_is_future_epoch
     test    %rax, %rax
     jnz     4f
     mov     S10(%rsp), %rax                 # [REJECT] the validator index is valid
@@ -605,7 +605,7 @@ SPEC_FUNCTION validate_voluntary_exit_gossip
     add     $Validator_pubkey, %rcx
     lea     SignedVoluntaryExit_signature(%r12), %r8
     mov     %r15, %r9
-    call    verify_with_domain
+    call    lantern_verify_with_domain
 .else
     lea     SignedVoluntaryExit_signature(%r12), %rax   # [REJECT] the signature: get_domain(state, DOMAIN_VOLUNTARY_EXIT, voluntary_exit.epoch)
     mov     %rax, S7(%rsp)
@@ -617,14 +617,14 @@ SPEC_FUNCTION validate_voluntary_exit_gossip
     lea     SignedVoluntaryExit_message(%r12), %r8
     mov     S9(%rsp), %r9
     add     $Validator_pubkey, %r9
-    call    verify_signed
+    call    lantern_verify_signed
 .endif
     test    %rax, %rax
     jnz     7f
     test    %rdx, %rdx
     jz      5f
     mov     %rbx, %rdi                      # seen.voluntary_exit_indices.add(validator_index)
-    call    seen_key_room
+    call    lantern_seen_key_room
     test    %rax, %rax
     jz      9f
     mov     %rbx, %rdi
@@ -632,7 +632,7 @@ SPEC_FUNCTION validate_voluntary_exit_gossip
     mov     S10(%rsp), %rdx
     xor     %ecx, %ecx
     xor     %r8d, %r8d
-    call    seen_add_key
+    call    lantern_seen_add_key
     jmp     8f
 3:  mov     $LANTERN_INVALID_OVERFLOW, %eax
     jmp     6f
@@ -660,7 +660,7 @@ SPEC_FUNCTION validate_proposer_slashing_gossip
     mov     %rax, %rdx
     xor     %ecx, %ecx
     xor     %r8d, %r8d
-    call    seen_find_key
+    call    lantern_seen_find_key
     test    %rax, %rax
     jnz     4f
     lea     (ProposerSlashing_signed_header_1 + SignedBeaconBlockHeader_message)(%r12), %rsi
@@ -703,7 +703,7 @@ SPEC_FUNCTION validate_proposer_slashing_gossip
     lea     SignedBeaconBlockHeader_message(%r13), %r8
     mov     S9(%rsp), %r9
     add     $Validator_pubkey, %r9
-    call    verify_signed
+    call    lantern_verify_signed
     test    %rax, %rax
     jnz     7f
     test    %rdx, %rdx
@@ -714,7 +714,7 @@ SPEC_FUNCTION validate_proposer_slashing_gossip
     mov     %rax, %r13
     jmp     21b
 22: mov     %rbx, %rdi                      # seen.proposer_slashing_indices.add(proposer_index)
-    call    seen_key_room
+    call    lantern_seen_key_room
     test    %rax, %rax
     jz      9f
     mov     %rbx, %rdi
@@ -722,7 +722,7 @@ SPEC_FUNCTION validate_proposer_slashing_gossip
     mov     S10(%rsp), %rdx
     xor     %ecx, %ecx
     xor     %r8d, %r8d
-    call    seen_add_key
+    call    lantern_seen_add_key
     jmp     8f
     GOSSIP_TAIL L, 32
 SPEC_END validate_proposer_slashing_gossip
@@ -751,13 +751,13 @@ SPEC_FUNCTION validate_bls_to_execution_change_gossip
     mov     %rax, %rdx
     xor     %ecx, %ecx
     xor     %r8d, %r8d
-    call    seen_find_key
+    call    lantern_seen_find_key
     test    %rax, %rax
     jnz     4f
     mov     %rbp, %rdi                      # [IGNORE] the current epoch is at or after CAPELLA_FORK_EPOCH
     mov     (Store_config + CONFIG_CAPELLA_FORK_EPOCH)(%rbp), %rsi
     mov     %r13, %rdx
-    call    is_future_epoch
+    call    lantern_is_future_epoch
     test    %rax, %rax
     jnz     4f
     mov     S10(%rsp), %rax                 # [REJECT] the validator index is valid
@@ -768,7 +768,7 @@ SPEC_FUNCTION validate_bls_to_execution_change_gossip
     lea     (SignedBLSToExecutionChange_message + BLSToExecutionChange_from_bls_pubkey)(%r12), %rdi
     mov     $48, %esi
     lea     (L + 8)(%rsp), %rdx
-    call    sha256_short                    # [REJECT] withdrawal_credentials[1:] == sha256(pubkey)[1:]
+    call    lantern_sha256_short                    # [REJECT] withdrawal_credentials[1:] == sha256(pubkey)[1:]
     movb    $BLS_WITHDRAWAL_PREFIX, (L + 8)(%rsp)
     mov     S9(%rsp), %rax
     add     $Validator_withdrawal_credentials, %rax
@@ -789,13 +789,13 @@ SPEC_FUNCTION validate_bls_to_execution_change_gossip
     lea     (SignedBLSToExecutionChange_message + BLSToExecutionChange_from_bls_pubkey)(%r12), %rcx
     lea     SignedBLSToExecutionChange_signature(%r12), %r8
     mov     %r15, %r9
-    call    verify_with_domain
+    call    lantern_verify_with_domain
     test    %rax, %rax
     jnz     7f
     test    %rdx, %rdx
     jz      5f
     mov     %rbx, %rdi                      # seen.bls_to_execution_change_indices.add(validator_index)
-    call    seen_key_room
+    call    lantern_seen_key_room
     test    %rax, %rax
     jz      9f
     mov     %rbx, %rdi
@@ -803,7 +803,7 @@ SPEC_FUNCTION validate_bls_to_execution_change_gossip
     mov     S10(%rsp), %rdx
     xor     %ecx, %ecx
     xor     %r8d, %r8d
-    call    seen_add_key
+    call    lantern_seen_add_key
     jmp     8f
     GOSSIP_TAIL L, 80
 SPEC_END validate_bls_to_execution_change_gossip
@@ -840,7 +840,7 @@ SPEC_FUNCTION validate_beacon_attestation_gossip
     mov     (SingleAttestation_data + AttestationData_target + Checkpoint_epoch)(%r12), %rdx
     mov     SingleAttestation_attester_index(%r12), %rcx
     xor     %r8d, %r8d
-    call    seen_find_key
+    call    lantern_seen_find_key
     test    %rax, %rax
     jnz     4f
     cmpq    $0, (SingleAttestation_data + AttestationData_index)(%r12)    # [REJECT] data.index is zero
@@ -848,7 +848,7 @@ SPEC_FUNCTION validate_beacon_attestation_gossip
     mov     %rbp, %rdi                      # [IGNORE] the block voted for has been seen; [REJECT] it passed validation
     mov     %rbx, %rsi
     lea     (SingleAttestation_data + AttestationData_beacon_block_root)(%r12), %rdx
-    call    block_lookup
+    call    lantern_block_lookup
     test    %rdx, %rdx
     jz      4f
     cmp     $2, %rdx
@@ -877,14 +877,14 @@ SPEC_FUNCTION validate_beacon_attestation_gossip
     mov     %rbp, %rdi                      # [IGNORE] not from a future slot
     mov     (SingleAttestation_data + AttestationData_slot)(%r12), %rsi
     mov     %r13, %rdx
-    call    is_future_slot
+    call    lantern_is_future_slot
     test    %rax, %rax
     jnz     4f
     mov     %rbp, %rdi                      # [IGNORE] the current or previous epoch
     mov     (SingleAttestation_data + AttestationData_slot)(%r12), %rsi
     shr     $LOG2_SLOTS_PER_EPOCH, %rsi
     mov     %r13, %rdx
-    call    is_current_or_previous_epoch
+    call    lantern_is_current_or_previous_epoch
     test    %rax, %rax
     jz      4f
     mov     (SingleAttestation_data + AttestationData_slot)(%r12), %rax    # [REJECT] the epoch matches the target
@@ -928,7 +928,7 @@ SPEC_FUNCTION validate_beacon_attestation_gossip
     ADDRESS %rcx, lantern_type_AttestationData
     lea     SingleAttestation_data(%r12), %r8
     add     $Validator_pubkey, %r9
-    call    verify_signed
+    call    lantern_verify_signed
     test    %rax, %rax
     jnz     7f
     test    %rdx, %rdx
@@ -937,18 +937,18 @@ SPEC_FUNCTION validate_beacon_attestation_gossip
     mov     (L + 32)(%rsp), %rsi
     mov     (SingleAttestation_data + AttestationData_target + Checkpoint_epoch)(%r12), %rdx
     lea     (SingleAttestation_data + AttestationData_target + Checkpoint_root)(%r12), %rcx
-    call    checkpoint_is
+    call    lantern_checkpoint_is
     CHECK_RESULT L, 7f, 8f
     test    %rdx, %rdx
     jz      5f
     mov     %rbp, %rdi                      # [IGNORE] the finalized checkpoint is an ancestor of the block
     mov     (L + 32)(%rsp), %rsi
-    call    finalized_is_ancestor
+    call    lantern_finalized_is_ancestor
     CHECK_RESULT L, 7f, 8f
     test    %rdx, %rdx
     jz      4f
     mov     %rbx, %rdi                      # seen.attestation_validator_epochs.add(...)
-    call    seen_key_room
+    call    lantern_seen_key_room
     test    %rax, %rax
     jz      9f
     mov     %rbx, %rdi
@@ -956,7 +956,7 @@ SPEC_FUNCTION validate_beacon_attestation_gossip
     mov     (SingleAttestation_data + AttestationData_target + Checkpoint_epoch)(%r12), %rdx
     mov     SingleAttestation_attester_index(%r12), %rcx
     xor     %r8d, %r8d
-    call    seen_add_key
+    call    lantern_seen_add_key
     jmp     8f
     GOSSIP_TAIL L, 48
 SPEC_END validate_beacon_attestation_gossip
@@ -987,7 +987,7 @@ SPEC_FUNCTION validate_beacon_attestation_gossip
     mov     %rbp, %rdi                      # [IGNORE] the block voted for has been seen; [REJECT] it passed validation
     mov     %rbx, %rsi
     lea     (Attestation_data + AttestationData_beacon_block_root)(%r12), %rdx
-    call    block_lookup
+    call    lantern_block_lookup
     test    %rdx, %rdx
     jz      4f
     cmp     $2, %rdx
@@ -1017,14 +1017,14 @@ SPEC_FUNCTION validate_beacon_attestation_gossip
     mov     %rbp, %rdi                      # [IGNORE] not from a future slot
     mov     (Attestation_data + AttestationData_slot)(%r12), %rsi
     mov     %r13, %rdx
-    call    is_future_slot
+    call    lantern_is_future_slot
     test    %rax, %rax
     jnz     4f
     mov     %rbp, %rdi                      # [IGNORE] the current or previous epoch
     mov     (Attestation_data + AttestationData_slot)(%r12), %rsi
     shr     $LOG2_SLOTS_PER_EPOCH, %rsi
     mov     %r13, %rdx
-    call    is_current_or_previous_epoch
+    call    lantern_is_current_or_previous_epoch
     test    %rax, %rax
     jz      4f
 .else
@@ -1032,7 +1032,7 @@ SPEC_FUNCTION validate_beacon_attestation_gossip
     mov     (Attestation_data + AttestationData_slot)(%r12), %rsi
     mov     (Store_config + CONFIG_ATTESTATION_PROPAGATION_SLOT_RANGE)(%rbp), %rdx
     mov     %r13, %rcx
-    call    is_within_slot_range
+    call    lantern_is_within_slot_range
     test    %rax, %rax
     jz      4f
 .endif
@@ -1077,7 +1077,7 @@ SPEC_FUNCTION validate_beacon_attestation_gossip
     mov     $SEEN_ATTESTATION, %esi
     mov     (Attestation_data + AttestationData_target + Checkpoint_epoch)(%r12), %rdx
     xor     %r8d, %r8d
-    call    seen_find_key
+    call    lantern_seen_find_key
     test    %rax, %rax
     jnz     4f
     mov     (L + 40)(%rsp), %rdx            # [REJECT] the signature: is_valid_indexed_attestation of the one attester
@@ -1094,7 +1094,7 @@ SPEC_FUNCTION validate_beacon_attestation_gossip
     ADDRESS %rcx, lantern_type_AttestationData
     lea     Attestation_data(%r12), %r8
     add     $Validator_pubkey, %r9
-    call    verify_signed
+    call    lantern_verify_signed
     test    %rax, %rax
     jnz     7f
     test    %rdx, %rdx
@@ -1103,18 +1103,18 @@ SPEC_FUNCTION validate_beacon_attestation_gossip
     mov     (L + 32)(%rsp), %rsi
     mov     (Attestation_data + AttestationData_target + Checkpoint_epoch)(%r12), %rdx
     lea     (Attestation_data + AttestationData_target + Checkpoint_root)(%r12), %rcx
-    call    checkpoint_is
+    call    lantern_checkpoint_is
     CHECK_RESULT L, 7f, 8f
     test    %rdx, %rdx
     jz      5f
     mov     %rbp, %rdi                      # [IGNORE] the finalized checkpoint is an ancestor of the block
     mov     (L + 32)(%rsp), %rsi
-    call    finalized_is_ancestor
+    call    lantern_finalized_is_ancestor
     CHECK_RESULT L, 7f, 8f
     test    %rdx, %rdx
     jz      4f
     mov     %rbx, %rdi                      # seen.attestation_validator_epochs.add(...)
-    call    seen_key_room
+    call    lantern_seen_key_room
     test    %rax, %rax
     jz      9f
     mov     %rbx, %rdi
@@ -1122,7 +1122,7 @@ SPEC_FUNCTION validate_beacon_attestation_gossip
     mov     (Attestation_data + AttestationData_target + Checkpoint_epoch)(%r12), %rdx
     mov     (L + 40)(%rsp), %rcx
     xor     %r8d, %r8d
-    call    seen_add_key
+    call    lantern_seen_add_key
     jmp     8f
     GOSSIP_TAIL L, 64
 SPEC_END validate_beacon_attestation_gossip
@@ -1212,7 +1212,7 @@ SPEC_FUNCTION validate_beacon_aggregate_and_proof_gossip
     xor     %ecx, %ecx                      # the key: the data root
 .endif
     xor     %r8d, %r8d
-    call    seen_superset
+    call    lantern_seen_superset
     test    %rax, %rax
     jnz     4f
     mov     %rbx, %rdi                      # [IGNORE] the first valid aggregate for (target epoch, aggregator)
@@ -1220,14 +1220,14 @@ SPEC_FUNCTION validate_beacon_aggregate_and_proof_gossip
     mov     (L + 136)(%rsp), %rdx
     mov     (L + 144)(%rsp), %rcx
     xor     %r8d, %r8d
-    call    seen_find_key
+    call    lantern_seen_find_key
     test    %rax, %rax
     jnz     4f
     mov     %rbp, %rdi                      # [IGNORE] the block voted for has been seen; [REJECT] it passed validation
     mov     %rbx, %rsi
     mov     S9(%rsp), %rdx
     add     $(Attestation_data + AttestationData_beacon_block_root), %rdx
-    call    block_lookup
+    call    lantern_block_lookup
     test    %rdx, %rdx
     jz      4f
     cmp     $2, %rdx
@@ -1248,7 +1248,7 @@ SPEC_FUNCTION validate_beacon_aggregate_and_proof_gossip
     mov     S9(%rsp), %rsi
     mov     (Attestation_data + AttestationData_slot)(%rsi), %rsi
     mov     %r13, %rdx
-    call    is_future_slot
+    call    lantern_is_future_slot
     test    %rax, %rax
     jnz     4f
     mov     %rbp, %rdi                      # [IGNORE] the current or previous epoch
@@ -1256,7 +1256,7 @@ SPEC_FUNCTION validate_beacon_aggregate_and_proof_gossip
     mov     (Attestation_data + AttestationData_slot)(%rsi), %rsi
     shr     $LOG2_SLOTS_PER_EPOCH, %rsi
     mov     %r13, %rdx
-    call    is_current_or_previous_epoch
+    call    lantern_is_current_or_previous_epoch
     test    %rax, %rax
     jz      4f
 .else
@@ -1265,7 +1265,7 @@ SPEC_FUNCTION validate_beacon_aggregate_and_proof_gossip
     mov     (Attestation_data + AttestationData_slot)(%rsi), %rsi
     mov     (Store_config + CONFIG_ATTESTATION_PROPAGATION_SLOT_RANGE)(%rbp), %rdx
     mov     %r13, %rcx
-    call    is_within_slot_range
+    call    lantern_is_within_slot_range
     test    %rax, %rax
     jz      4f
 .endif
@@ -1306,7 +1306,7 @@ SPEC_FUNCTION validate_beacon_aggregate_and_proof_gossip
     add     $AggregateAndProof_selection_proof, %rdi
     mov     $96, %esi
     lea     (L + 104)(%rsp), %rdx
-    call    sha256_short
+    call    lantern_sha256_short
     mov     (L + 64)(%rsp), %rcx
     mov     LIST_COUNT(%rcx), %rcx
     shr     $4, %rcx                        # len(committee) // TARGET_AGGREGATORS_PER_COMMITTEE, at least 1
@@ -1344,7 +1344,7 @@ SPEC_FUNCTION validate_beacon_aggregate_and_proof_gossip
     mov     S9(%rsp), %r8
     add     $(Attestation_data + AttestationData_slot), %r8
     add     $Validator_pubkey, %r9
-    call    verify_signed
+    call    lantern_verify_signed
     test    %rax, %rax
     jnz     7f
     test    %rdx, %rdx
@@ -1361,7 +1361,7 @@ SPEC_FUNCTION validate_beacon_aggregate_and_proof_gossip
     mov     S10(%rsp), %r8
     mov     (L + 96)(%rsp), %r9
     add     $Validator_pubkey, %r9
-    call    verify_signed
+    call    lantern_verify_signed
     test    %rax, %rax
     jnz     7f
     test    %rdx, %rdx
@@ -1384,7 +1384,7 @@ SPEC_FUNCTION validate_beacon_aggregate_and_proof_gossip
     mov     (Store_config + CONFIG_PUBKEY_CACHE)(%rbp), %rdx
     mov     S9(%rsp), %r9                   # with the aggregate and its CommitteeCache: key sums
     mov     (Store_config + CONFIG_COMMITTEE_CACHE)(%rbp), %r10
-    call    indexed_attestation_valid
+    call    lantern_indexed_attestation_valid
     CHECK_RESULT L, 7f, 8f
     cmpq    $0, (L + 96)(%rsp)
     je      5f
@@ -1393,22 +1393,22 @@ SPEC_FUNCTION validate_beacon_aggregate_and_proof_gossip
     mov     (L + 136)(%rsp), %rdx
     mov     S9(%rsp), %rcx
     add     $(Attestation_data + AttestationData_target + Checkpoint_root), %rcx
-    call    checkpoint_is
+    call    lantern_checkpoint_is
     CHECK_RESULT L, 7f, 8f
     test    %rdx, %rdx
     jz      5f
     mov     %rbp, %rdi                      # [IGNORE] the finalized checkpoint is an ancestor of the block
     mov     (L + 56)(%rsp), %rsi
-    call    finalized_is_ancestor
+    call    lantern_finalized_is_ancestor
     CHECK_RESULT L, 7f, 8f
     test    %rdx, %rdx
     jz      4f
     mov     %rbx, %rdi                      # seen: the aggregator epoch and the bits of the data root
-    call    seen_key_room
+    call    lantern_seen_key_room
     test    %rax, %rax
     jz      9f
     mov     %rbx, %rdi
-    call    seen_bits_room
+    call    lantern_seen_bits_room
     test    %rax, %rax
     jz      9f
     mov     %rbx, %rdi
@@ -1416,7 +1416,7 @@ SPEC_FUNCTION validate_beacon_aggregate_and_proof_gossip
     mov     (L + 136)(%rsp), %rdx
     mov     (L + 144)(%rsp), %rcx
     xor     %r8d, %r8d
-    call    seen_add_key
+    call    lantern_seen_add_key
     mov     S9(%rsp), %rax
     PART    %r9, %r10, %rax, Attestation_aggregation_bits
     mov     %r10, %rax
@@ -1429,7 +1429,7 @@ SPEC_FUNCTION validate_beacon_aggregate_and_proof_gossip
     xor     %ecx, %ecx                      # the key: the data root
 .endif
     xor     %r8d, %r8d
-    call    seen_add_bits
+    call    lantern_seen_add_bits
     jmp     8f
     GOSSIP_TAIL L, 160
 SPEC_END validate_beacon_aggregate_and_proof_gossip
@@ -1493,14 +1493,14 @@ SPEC_FUNCTION validate_sync_committee_message_gossip
     mov     SyncCommitteeMessage_slot(%r12), %rdx
     mov     SyncCommitteeMessage_validator_index(%r12), %rcx
     mov     (L + 8)(%rsp), %r8
-    call    seen_find_key
+    call    lantern_seen_find_key
     test    %rax, %rax
     jnz     4f
     mov     %rbp, %rdi                      # [IGNORE] is_current_slot
     mov     SyncCommitteeMessage_slot(%r12), %rsi
     xor     %edx, %edx
     mov     %r13, %rcx
-    call    is_within_slot_range
+    call    lantern_is_within_slot_range
     test    %rax, %rax
     jz      4f
     mov     SyncCommitteeMessage_validator_index(%r12), %rax   # [REJECT] the validator index is valid
@@ -1537,13 +1537,13 @@ SPEC_FUNCTION validate_sync_committee_message_gossip
     lea     SyncCommitteeMessage_beacon_block_root(%r12), %r8
     mov     S9(%rsp), %r9
     add     $Validator_pubkey, %r9
-    call    verify_signed
+    call    lantern_verify_signed
     test    %rax, %rax
     jnz     7f
     test    %rdx, %rdx
     jz      5f
     mov     %rbx, %rdi                      # seen.sync_message_validator_slots.add(...)
-    call    seen_key_room
+    call    lantern_seen_key_room
     test    %rax, %rax
     jz      9f
     mov     %rbx, %rdi
@@ -1551,7 +1551,7 @@ SPEC_FUNCTION validate_sync_committee_message_gossip
     mov     SyncCommitteeMessage_slot(%r12), %rdx
     mov     SyncCommitteeMessage_validator_index(%r12), %rcx
     mov     (L + 8)(%rsp), %r8
-    call    seen_add_key
+    call    lantern_seen_add_key
     jmp     8f
     GOSSIP_TAIL L, 32
 SPEC_END validate_sync_committee_message_gossip
@@ -1594,7 +1594,7 @@ SPEC_FUNCTION validate_sync_committee_contribution_and_proof_gossip
     mov     SyncCommitteeContribution_subcommittee_index(%r13), %r8
     lea     SyncCommitteeContribution_aggregation_bits(%r13), %r9
     mov     $SYNC_SUBCOMMITTEE_SIZE, %eax
-    call    seen_superset
+    call    lantern_seen_superset
     test    %rax, %rax
     jnz     4f
     mov     %rbx, %rdi                      # [IGNORE] the first valid contribution of (slot, aggregator, subcommittee)
@@ -1602,14 +1602,14 @@ SPEC_FUNCTION validate_sync_committee_contribution_and_proof_gossip
     mov     SyncCommitteeContribution_slot(%r13), %rdx
     mov     (SignedContributionAndProof_message + ContributionAndProof_aggregator_index)(%r12), %rcx
     mov     SyncCommitteeContribution_subcommittee_index(%r13), %r8
-    call    seen_find_key
+    call    lantern_seen_find_key
     test    %rax, %rax
     jnz     4f
     mov     %rbp, %rdi                      # [IGNORE] is_current_slot
     mov     SyncCommitteeContribution_slot(%r13), %rsi
     xor     %edx, %edx
     mov     (L + 8)(%rsp), %rcx
-    call    is_within_slot_range
+    call    lantern_is_within_slot_range
     test    %rax, %rax
     jz      4f
     cmpq    $SYNC_COMMITTEE_SUBNET_COUNT, SyncCommitteeContribution_subcommittee_index(%r13)  # [REJECT] the subcommittee index is in range
@@ -1627,7 +1627,7 @@ SPEC_FUNCTION validate_sync_committee_contribution_and_proof_gossip
     lea     (SignedContributionAndProof_message + ContributionAndProof_selection_proof)(%r12), %rdi
     mov     $96, %esi                       # [REJECT] is_sync_committee_aggregator(selection_proof)
     lea     (L + 32)(%rsp), %rdx
-    call    sha256_short
+    call    lantern_sha256_short
     mov     (L + 32)(%rsp), %rax
     xor     %edx, %edx
     mov     $SYNC_AGGREGATOR_MODULO, %ecx
@@ -1667,7 +1667,7 @@ SPEC_FUNCTION validate_sync_committee_contribution_and_proof_gossip
     lea     (L + 16)(%rsp), %r8
     mov     S9(%rsp), %r9
     add     $Validator_pubkey, %r9
-    call    verify_signed
+    call    lantern_verify_signed
     test    %rax, %rax
     jnz     7f
     test    %rdx, %rdx
@@ -1685,7 +1685,7 @@ SPEC_FUNCTION validate_sync_committee_contribution_and_proof_gossip
     lea     SignedContributionAndProof_message(%r12), %r8
     mov     S9(%rsp), %r9
     add     $Validator_pubkey, %r9
-    call    verify_signed
+    call    lantern_verify_signed
     test    %rax, %rax
     jnz     7f
     test    %rdx, %rdx
@@ -1742,11 +1742,11 @@ SPEC_FUNCTION validate_sync_committee_contribution_and_proof_gossip
     cmpq    $0, (L + 184)(%rsp)
     je      5f
     mov     %rbx, %rdi                      # seen: the aggregator slot and the bits of the contribution
-    call    seen_key_room
+    call    lantern_seen_key_room
     test    %rax, %rax
     jz      9f
     mov     %rbx, %rdi
-    call    seen_bits_room
+    call    lantern_seen_bits_room
     test    %rax, %rax
     jz      9f
     mov     %rbx, %rdi
@@ -1754,7 +1754,7 @@ SPEC_FUNCTION validate_sync_committee_contribution_and_proof_gossip
     mov     SyncCommitteeContribution_slot(%r13), %rdx
     mov     (SignedContributionAndProof_message + ContributionAndProof_aggregator_index)(%r12), %rcx
     mov     SyncCommitteeContribution_subcommittee_index(%r13), %r8
-    call    seen_add_key
+    call    lantern_seen_add_key
     mov     %rbx, %rdi
     mov     $SEEN_CONTRIBUTION, %esi
     lea     SyncCommitteeContribution_beacon_block_root(%r13), %rdx
@@ -1762,7 +1762,7 @@ SPEC_FUNCTION validate_sync_committee_contribution_and_proof_gossip
     mov     SyncCommitteeContribution_subcommittee_index(%r13), %r8
     lea     SyncCommitteeContribution_aggregation_bits(%r13), %r9
     mov     $SYNC_SUBCOMMITTEE_SIZE, %eax
-    call    seen_add_bits
+    call    lantern_seen_add_bits
     jmp     8f
     GOSSIP_TAIL L, 208
 SPEC_END validate_sync_committee_contribution_and_proof_gossip
@@ -1912,11 +1912,11 @@ SPEC_FUNCTION validate_attester_slashing_gossip
     mov     (L + 16)(%rsp), %rdi
     mov     LIST_COUNT(%rdi), %rsi
     add     $LIST_FIXED, %rdi
-    call    sort_u64
+    call    lantern_sort_u64
     mov     (L + 24)(%rsp), %rdi
     mov     LIST_COUNT(%rdi), %rsi
     add     $LIST_FIXED, %rdi
-    call    sort_u64
+    call    lantern_sort_u64
     mov     (L + 16)(%rsp), %rsi            # slashable_indices = their intersection, each index once
     mov     LIST_COUNT(%rsi), %rcx
     add     $LIST_FIXED, %rsi
@@ -1960,7 +1960,7 @@ SPEC_FUNCTION validate_attester_slashing_gossip
     mov     LIST_FIXED(%rax,%r13,8), %rdx
     xor     %ecx, %ecx
     xor     %r8d, %r8d
-    call    seen_find_key
+    call    lantern_seen_find_key
     test    %rax, %rax
     jnz     211f
     incq    (L + 40)(%rsp)
@@ -2017,7 +2017,7 @@ SPEC_FUNCTION validate_attester_slashing_gossip
     cmpq    $0, (L + 56)(%rsp)
     je      26b
     mov     %rbx, %rdi                      # seen.attester_slashing_indices.update(slashable_indices)
-    call    seen_key_room
+    call    lantern_seen_key_room
     cmp     (L + 40)(%rsp), %rax
     jb      9f
     xor     %r13d, %r13d
@@ -2029,7 +2029,7 @@ SPEC_FUNCTION validate_attester_slashing_gossip
     mov     LIST_FIXED(%rax,%r13,8), %rdx
     xor     %ecx, %ecx
     xor     %r8d, %r8d
-    call    seen_find_key
+    call    lantern_seen_find_key
     test    %rax, %rax
     jnz     28f
     mov     (L + 32)(%rsp), %rax
@@ -2038,7 +2038,7 @@ SPEC_FUNCTION validate_attester_slashing_gossip
     mov     LIST_FIXED(%rax,%r13,8), %rdx
     xor     %ecx, %ecx
     xor     %r8d, %r8d
-    call    seen_add_key
+    call    lantern_seen_add_key
 28: inc     %r13
     jmp     27b
     GOSSIP_TAIL L, 64
@@ -2086,23 +2086,23 @@ SPEC_FUNCTION \name
     mov     BeaconBlock_slot(%r15), %rdx
     mov     BeaconBlock_proposer_index(%r15), %rcx
     xor     %r8d, %r8d
-    call    seen_find_key
+    call    lantern_seen_find_key
     test    %rax, %rax
     jnz     4f
     mov     %rbp, %rdi                      # [IGNORE] not from a future slot
     mov     BeaconBlock_slot(%r15), %rsi
     mov     %r13, %rdx
-    call    is_future_slot
+    call    lantern_is_future_slot
     test    %rax, %rax
     jnz     4f
     mov     %rbp, %rdi                      # [IGNORE] after the finalized slot
-    call    finalized_slot
+    call    lantern_finalized_slot
     cmp     %rax, BeaconBlock_slot(%r15)
     jbe     4f
     mov     %rbp, %rdi                      # [IGNORE] the parent has been seen
     mov     %rbx, %rsi
     lea     BeaconBlock_parent_root(%r15), %rdx
-    call    block_lookup
+    call    lantern_block_lookup
     test    %rdx, %rdx
     jz      4f
     mov     %rax, S10(%rsp)
@@ -2148,7 +2148,7 @@ SPEC_FUNCTION \name
     ADDRESS %rcx, \type
     mov     %r15, %r8
     add     $Validator_pubkey, %r9
-    call    verify_signed
+    call    lantern_verify_signed
     test    %rax, %rax
     jnz     7f
     test    %rdx, %rdx
@@ -2186,7 +2186,7 @@ SPEC_FUNCTION \name
     jbe     5f
     mov     %rbp, %rdi                      # [REJECT] the finalized checkpoint is an ancestor
     mov     S10(%rsp), %rsi
-    call    finalized_is_ancestor
+    call    lantern_finalized_is_ancestor
     CHECK_RESULT L, 7f, 8f
     test    %rdx, %rdx
     jz      5f
@@ -2224,7 +2224,7 @@ SPEC_FUNCTION \name
     cmp     BeaconBlock_proposer_index(%r15), %rax
     jne     5f
     mov     %rbx, %rdi                      # seen.proposer_slots.add(...)
-    call    seen_key_room
+    call    lantern_seen_key_room
     test    %rax, %rax
     jz      9f
     mov     %rbx, %rdi
@@ -2232,7 +2232,7 @@ SPEC_FUNCTION \name
     mov     BeaconBlock_slot(%r15), %rdx
     mov     BeaconBlock_proposer_index(%r15), %rcx
     xor     %r8d, %r8d
-    call    seen_add_key
+    call    lantern_seen_add_key
     jmp     8f
     GOSSIP_TAIL L, 80
 SPEC_END \name
@@ -2291,7 +2291,7 @@ SPEC_END compute_subnet_for_data_column_sidecar
  * The list is hashed from a standalone copy at the end of scratch.
  * rbx scratch, rbp branch, r12 root, r13 i. Locals: L value (32), L+32 the two halves (64).
  */
-LOCAL_FUNCTION commitments_in_body
+LOCAL_FUNCTION lantern_commitments_in_body
     ENTER 96
     mov     %rdi, %rbx
     mov     %rcx, %rbp
@@ -2342,7 +2342,7 @@ LOCAL_FUNCTION commitments_in_body
 21: lea     (L + 32)(%rsp), %rdi
     mov     $64, %esi
     lea     L(%rsp), %rdx
-    call    sha256_short
+    call    lantern_sha256_short
     inc     %r13
     jmp     1b
 3:  lea     L(%rsp), %rax                   # value == root
@@ -2353,7 +2353,7 @@ LOCAL_FUNCTION commitments_in_body
 7:  LEAVE 96
 9:  mov     $LANTERN_BUFFER_TOO_SMALL, %eax
     LEAVE 96
-END_FUNCTION commitments_in_body
+END_FUNCTION lantern_commitments_in_body
 
 /* Locals: rsp+0 out. */
 SPEC_FUNCTION verify_data_column_sidecar_inclusion_proof
@@ -2365,7 +2365,7 @@ SPEC_FUNCTION verify_data_column_sidecar_inclusion_proof
     PART    %rsi, %rdx, %rax, DataColumnSidecar_kzg_commitments
     lea     DataColumnSidecar_kzg_commitments_inclusion_proof(%rax), %rcx
     lea     (DataColumnSidecar_signed_block_header + SignedBeaconBlockHeader_message + BeaconBlockHeader_body_root)(%rax), %r8
-    call    commitments_in_body
+    call    lantern_commitments_in_body
     test    %rax, %rax
     jnz     7f
     mov     0(%rsp), %rcx
@@ -2383,7 +2383,7 @@ SPEC_FUNCTION verify_partial_data_column_header_inclusion_proof
     PART    %rsi, %rdx, %rax, PartialDataColumnHeader_kzg_commitments
     lea     PartialDataColumnHeader_kzg_commitments_inclusion_proof(%rax), %rcx
     lea     (PartialDataColumnHeader_signed_block_header + SignedBeaconBlockHeader_message + BeaconBlockHeader_body_root)(%rax), %r8
-    call    commitments_in_body
+    call    lantern_commitments_in_body
     test    %rax, %rax
     jnz     7f
     mov     0(%rsp), %rcx
@@ -2503,24 +2503,24 @@ SPEC_END verify_partial_data_column_sidecar_kzg_proofs
 
 .if FORK >= FORK_DENEB
 /*
- * L0: the checks of a block header shared by the sidecar topics, from is_future_slot to the finalized ancestor:
+ * L0: the checks of a block header shared by the sidecar topics, from lantern_is_future_slot to the finalized ancestor:
  * rax = status, rdx = LANTERN_VALID, LANTERN_GOSSIP_IGNORE or LANTERN_GOSSIP_REJECT, rcx = the parent node.
  * Takes rbx seen, rbp store, r13 current_time_ms, r14 head state, r15 scratch, and rdi the SignedBeaconBlockHeader.
- * rbx-r15 are the caller's and stay unchanged. Locals: rsp+0 and rsp+8 the stack arguments of verify_signed,
+ * rbx-r15 are the caller's and stay unchanged. Locals: rsp+0 and rsp+8 the stack arguments of lantern_verify_signed,
  * rsp+16 header, rsp+24 parent node.
  */
-LOCAL_FUNCTION header_checks
+LOCAL_FUNCTION lantern_header_checks
     FRAME 32
     mov     %rdi, 16(%rsp)
     mov     %rbp, %rdi                      # [IGNORE] not from a future slot
     mov     16(%rsp), %rax
     mov     (SignedBeaconBlockHeader_message + BeaconBlockHeader_slot)(%rax), %rsi
     mov     %r13, %rdx
-    call    is_future_slot
+    call    lantern_is_future_slot
     test    %rax, %rax
     jnz     4f
     mov     %rbp, %rdi                      # [IGNORE] after the finalized slot
-    call    finalized_slot
+    call    lantern_finalized_slot
     mov     16(%rsp), %rcx
     cmp     %rax, (SignedBeaconBlockHeader_message + BeaconBlockHeader_slot)(%rcx)
     jbe     4f
@@ -2528,7 +2528,7 @@ LOCAL_FUNCTION header_checks
     mov     %rbx, %rsi
     mov     16(%rsp), %rdx
     add     $(SignedBeaconBlockHeader_message + BeaconBlockHeader_parent_root), %rdx
-    call    block_lookup
+    call    lantern_block_lookup
     test    %rdx, %rdx
     jz      4f
     cmp     $2, %rdx
@@ -2548,7 +2548,7 @@ LOCAL_FUNCTION header_checks
     ADDRESS %rcx, lantern_type_BeaconBlockHeader
     add     $SignedBeaconBlockHeader_message, %r8
     add     $Validator_pubkey, %r9
-    call    verify_signed
+    call    lantern_verify_signed
     test    %rax, %rax
     jnz     7f
     test    %rdx, %rdx
@@ -2561,7 +2561,7 @@ LOCAL_FUNCTION header_checks
     jbe     5f
     mov     %rbp, %rdi                      # [REJECT] the finalized checkpoint is an ancestor
     mov     24(%rsp), %rsi
-    call    finalized_is_ancestor
+    call    lantern_finalized_is_ancestor
     test    %rax, %rax
     jnz     6f
     test    %rdx, %rdx
@@ -2578,7 +2578,7 @@ LOCAL_FUNCTION header_checks
     je      7b
     mov     %rax, %rdx
     jmp     8b
-END_FUNCTION header_checks
+END_FUNCTION lantern_header_checks
 .endif
 
 /* ---------------------------------------------------------------- Blob sidecars */
@@ -2626,7 +2626,7 @@ SPEC_FUNCTION verify_blob_sidecar_inclusion_proof
     lea     L(%rsp), %rdi                   # hash_tree_root(Bytes48): its two chunks
     mov     $64, %esi
     lea     (L + 64)(%rsp), %rdx
-    call    sha256_short
+    call    lantern_sha256_short
     movq    $KZG_COMMITMENT_INCLUSION_PROOF_DEPTH, (L + 96)(%rsp)
     mov     BlobSidecar_index(%rbx), %rax   # field 11 of the body, the list's data root, then the index
     add     $(11 << (KZG_COMMITMENT_INCLUSION_PROOF_DEPTH - 4)), %rax
@@ -2677,7 +2677,7 @@ SPEC_FUNCTION validate_blob_sidecar_gossip
     mov     BeaconBlockHeader_slot(%rax), %rdx
     mov     BeaconBlockHeader_proposer_index(%rax), %rcx
     mov     BlobSidecar_index(%r12), %r8
-    call    seen_find_key
+    call    lantern_seen_find_key
     test    %rax, %rax
     jnz     4f
     mov     BlobSidecar_index(%r12), %rax   # [REJECT] the index is below the blob limit
@@ -2692,7 +2692,7 @@ SPEC_FUNCTION validate_blob_sidecar_gossip
     cmp     (L + 32)(%rsp), %rax
     jne     5f
     lea     BlobSidecar_signed_block_header(%r12), %rdi     # the header checks, through the finalized ancestor
-    call    header_checks
+    call    lantern_header_checks
     test    %rax, %rax
     jnz     7f
     test    %rdx, %rdx
@@ -2733,7 +2733,7 @@ SPEC_FUNCTION validate_blob_sidecar_gossip
     cmp     BeaconBlockHeader_proposer_index(%rcx), %rax
     jne     5f
     mov     %rbx, %rdi                      # seen.blob_sidecar_tuples.add(...)
-    call    seen_key_room
+    call    lantern_seen_key_room
     test    %rax, %rax
     jz      9f
     mov     S9(%rsp), %rax
@@ -2742,7 +2742,7 @@ SPEC_FUNCTION validate_blob_sidecar_gossip
     mov     BeaconBlockHeader_slot(%rax), %rdx
     mov     BeaconBlockHeader_proposer_index(%rax), %rcx
     mov     BlobSidecar_index(%r12), %r8
-    call    seen_add_key
+    call    lantern_seen_add_key
     jmp     8f
     GOSSIP_TAIL L, 48
 SPEC_END validate_blob_sidecar_gossip
@@ -2780,7 +2780,7 @@ SPEC_FUNCTION validate_data_column_sidecar_gossip
     mov     BeaconBlockHeader_slot(%rax), %rdx
     mov     BeaconBlockHeader_proposer_index(%rax), %rcx
     mov     DataColumnSidecar_index(%r12), %r8
-    call    seen_find_key
+    call    lantern_seen_find_key
     test    %rax, %rax
     jnz     4f
     mov     %r12, %rdi                      # [REJECT] verify_data_column_sidecar
@@ -2800,7 +2800,7 @@ SPEC_FUNCTION validate_data_column_sidecar_gossip
     cmp     (L + 32)(%rsp), %rax
     jne     5f
     lea     DataColumnSidecar_signed_block_header(%r12), %rdi   # the header checks, through the finalized ancestor
-    call    header_checks
+    call    lantern_header_checks
     test    %rax, %rax
     jnz     7f
     mov     %rcx, S10(%rsp)
@@ -2834,7 +2834,7 @@ SPEC_FUNCTION validate_data_column_sidecar_gossip
     cmp     BeaconBlockHeader_proposer_index(%rcx), %rax
     jne     5f
     mov     %rbx, %rdi                      # seen.data_column_sidecar_tuples.add(...)
-    call    seen_key_room
+    call    lantern_seen_key_room
     test    %rax, %rax
     jz      9f
     mov     S9(%rsp), %rax
@@ -2843,7 +2843,7 @@ SPEC_FUNCTION validate_data_column_sidecar_gossip
     mov     BeaconBlockHeader_slot(%rax), %rdx
     mov     BeaconBlockHeader_proposer_index(%rax), %rcx
     mov     DataColumnSidecar_index(%r12), %r8
-    call    seen_add_key
+    call    lantern_seen_add_key
     jmp     8f
     GOSSIP_TAIL L, 48
 SPEC_END validate_data_column_sidecar_gossip
@@ -2898,7 +2898,7 @@ SPEC_FUNCTION validate_partial_data_column_sidecar_gossip
     jnz     7f
     mov     %rbx, %rdi
     mov     (L + 8)(%rsp), %rsi
-    call    seen_find_header
+    call    lantern_seen_find_header
     test    %rax, %rax
     jz      2f
     add     $SeenHeader_header_root, %rax
@@ -2919,7 +2919,7 @@ SPEC_FUNCTION validate_partial_data_column_sidecar_gossip
     cmpq    $0, (PartialDataColumnHeader_kzg_commitments + 8)(%rax)    # [REJECT] the header has commitments
     je      5f
     lea     PartialDataColumnHeader_signed_block_header(%rax), %rdi    # the header checks, through the finalized ancestor
-    call    header_checks
+    call    lantern_header_checks
     test    %rax, %rax
     jnz     7f
     test    %rdx, %rdx
@@ -2944,7 +2944,7 @@ SPEC_FUNCTION validate_partial_data_column_sidecar_gossip
     jne     5f
     mov     %rbx, %rdi                      # seen.partial_data_column_headers[group_id.beacon_block_root] = header
     mov     (L + 8)(%rsp), %rsi
-    call    seen_find_header
+    call    lantern_seen_find_header
     test    %rax, %rax
     jnz     3f
     mov     S9(%rsp), %rsi                  # room for 64 + the header value
@@ -2972,7 +2972,7 @@ SPEC_FUNCTION validate_partial_data_column_sidecar_gossip
     je      8f
     mov     %rbx, %rdi                      # [IGNORE] a valid header for the group has been seen
     mov     (L + 8)(%rsp), %rsi
-    call    seen_find_header
+    call    lantern_seen_find_header
     test    %rax, %rax
     jz      4f
     add     $SeenHeader_header, %rax
@@ -2980,11 +2980,11 @@ SPEC_FUNCTION validate_partial_data_column_sidecar_gossip
     mov     %rbp, %rdi                      # [IGNORE] its slot is not in the future
     mov     (PartialDataColumnHeader_signed_block_header + SignedBeaconBlockHeader_message + BeaconBlockHeader_slot)(%rax), %rsi
     mov     %r13, %rdx
-    call    is_future_slot
+    call    lantern_is_future_slot
     test    %rax, %rax
     jnz     4f
     mov     %rbp, %rdi                      # [IGNORE] its slot is after the finalized slot
-    call    finalized_slot
+    call    lantern_finalized_slot
     mov     S9(%rsp), %rcx
     cmp     %rax, (PartialDataColumnHeader_signed_block_header + SignedBeaconBlockHeader_message + BeaconBlockHeader_slot)(%rcx)
     jbe     4f

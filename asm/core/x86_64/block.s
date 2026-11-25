@@ -40,7 +40,7 @@ SPEC_FUNCTION get_beacon_proposer_index
     lea     (L + 16)(%rsp), %rdi
     mov     $40, %esi
     lea     (L + 56)(%rsp), %rdx
-    call    sha256_short
+    call    lantern_sha256_short
     mov     (BeaconState_validators + 8)(%rbx), %rcx
     SCRATCH_LIST %r14, %rbp, %r13, 0, %rcx  # indices: the last list
     mov     %rbx, %rdi                      # indices = get_active_validator_indices(state, epoch)

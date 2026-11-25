@@ -87,7 +87,7 @@ SPEC_FUNCTION get_next_sync_committee_indices
     lea     (L + 48)(%rsp), %rdi            # random_bytes = sha256(seed + uint_to_bytes(i // 16))
     mov     $40, %esi
     lea     (L + 88)(%rsp), %rdx
-    call    sha256_short
+    call    lantern_sha256_short
     mov     %r14, %rax
 .if FORK >= FORK_ELECTRA
     and     $15, %eax

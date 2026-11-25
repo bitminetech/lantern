@@ -3,7 +3,7 @@
  */
 
 /* L0: digest rdx = sha256 of the rsi bytes at rdi; rsi is at most 96. Locals: a ByteList (24 + 96). */
-LOCAL_FUNCTION sha256_short
+LOCAL_FUNCTION lantern_sha256_short
     FRAME 128
     lea     24(%rsi), %rax                  # a ByteList: size, offset 24, count, then the bytes
     mov     %rax, 0(%rsp)
@@ -19,7 +19,7 @@ LOCAL_FUNCTION sha256_short
     CALL_GLOBAL crypto_sha256
     xor     %eax, %eax
     UNFRAME 128
-END_FUNCTION sha256_short
+END_FUNCTION lantern_sha256_short
 
 /*
  * rbx index count, rbp seed, r12 bucket hashes, r13 entries, r14 round, r15 pivot,
@@ -61,7 +61,7 @@ SPEC_FUNCTION compute_shuffled_permutation
     lea     L(%rsp), %rdi                   # pivot = bytes_to_uint64(sha256(seed + round_bytes)[0:8]) % index_count
     mov     $33, %esi
     lea     (L + 40)(%rsp), %rdx
-    call    sha256_short
+    call    lantern_sha256_short
     mov     (L + 40)(%rsp), %rax
     xor     %edx, %edx
     div     %rbx
@@ -75,7 +75,7 @@ SPEC_FUNCTION compute_shuffled_permutation
     mov     $37, %esi
     shl     $5, %rax
     lea     (%r12,%rax), %rdx
-    call    sha256_short
+    call    lantern_sha256_short
     incq    S8(%rsp)
     jmp     3b
 4:  xor     %r8d, %r8d                      # for i in range(index_count)
@@ -130,7 +130,7 @@ SPEC_FUNCTION compute_shuffled_index
     lea     L(%rsp), %rdi                   # pivot = bytes_to_uint64(sha256(seed + round_bytes)[0:8]) % index_count
     mov     $33, %esi
     lea     (L + 40)(%rsp), %rdx
-    call    sha256_short
+    call    lantern_sha256_short
     mov     (L + 40)(%rsp), %rax
     xor     %edx, %edx
     div     %rbp
@@ -149,7 +149,7 @@ SPEC_FUNCTION compute_shuffled_index
     lea     L(%rsp), %rdi                   # source = sha256(seed + round_bytes + position_bytes)
     mov     $37, %esi
     lea     (L + 40)(%rsp), %rdx
-    call    sha256_short
+    call    lantern_sha256_short
     mov     %r15, %rax                      # source[(position % 256) // 8]
     shr     $3, %rax
     and     $31, %eax
@@ -186,7 +186,7 @@ SPEC_FUNCTION get_seed
     mov     %rsp, %rdi
     mov     $44, %esi
     mov     56(%rsp), %rdx
-    call    sha256_short
+    call    lantern_sha256_short
     UNFRAME 64
 8:  mov     $LANTERN_INVALID_OVERFLOW, %eax
     UNFRAME 64
@@ -223,7 +223,7 @@ SPEC_FUNCTION compute_proposer_index
     lea     (L + 96)(%rsp), %rdi
     mov     $33, %esi
     lea     (L + 136)(%rsp), %rdx
-    call    sha256_short
+    call    lantern_sha256_short
     mov     (L + 136)(%rsp), %rax
     xor     %edx, %edx
     divq    (L + 8)(%rsp)
@@ -258,7 +258,7 @@ SPEC_FUNCTION compute_proposer_index
     lea     (L + 96)(%rsp), %rdi            # source = sha256(seed + round_bytes + position_bytes)
     mov     $37, %esi
     lea     (L + 136)(%rsp), %rdx
-    call    sha256_short
+    call    lantern_sha256_short
     mov     L(%rsp), %rax
     mov     %rax, %rcx                      # source[(position % 256) // 8]
     shr     $3, %rcx
@@ -288,7 +288,7 @@ SPEC_FUNCTION compute_proposer_index
     lea     (L + 24)(%rsp), %rdi
     mov     $40, %esi
     lea     (L + 64)(%rsp), %rdx
-    call    sha256_short
+    call    lantern_sha256_short
 14: mov     %r15, %rax
     and     $15, %eax
     movzwl  (L + 64)(%rsp,%rax,2), %ecx     # random_value
@@ -312,7 +312,7 @@ SPEC_FUNCTION compute_proposer_index
     lea     (L + 24)(%rsp), %rdi
     mov     $40, %esi
     lea     (L + 64)(%rsp), %rdx
-    call    sha256_short
+    call    lantern_sha256_short
 15: mov     %r15, %rax
     and     $31, %eax
     movzbl  (L + 64)(%rsp,%rax), %ecx       # random_byte
@@ -373,7 +373,7 @@ SPEC_FUNCTION compute_proposer_indices
     lea     (L + 8)(%rsp), %rdi
     mov     $40, %esi
     lea     (L + 48)(%rsp), %rdx
-    call    sha256_short
+    call    lantern_sha256_short
     mov     S8(%rsp), %rax
     mov     %rax, (%r13)
     mov     %rbx, %rdi

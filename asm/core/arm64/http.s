@@ -44,7 +44,7 @@ http_t_keep_alive:
 .endm
 
 /* L0: x0 = the index of the first byte w3 in [x1, x2) of x0's bytes, else x2. A leaf. Uses x9, x10. */
-LOCAL_FUNCTION http_find
+LOCAL_FUNCTION lantern_http_find
     UNWIND_END_PROLOGUE
     mov     x9, x0
 1:  cmp     x1, x2
@@ -56,10 +56,10 @@ LOCAL_FUNCTION http_find
     b       1b
 2:  mov     x0, x1
     ret
-END_FUNCTION http_find
+END_FUNCTION lantern_http_find
 
 /* L0: x0 = the index of the first CRLF that starts in [x1, x2 - 1) of x0's bytes, else x2. A leaf. Uses x9-x11. */
-LOCAL_FUNCTION http_crlf
+LOCAL_FUNCTION lantern_http_crlf
     UNWIND_END_PROLOGUE
     mov     x9, x0
     sub     x11, x2, #1
@@ -78,10 +78,10 @@ LOCAL_FUNCTION http_crlf
     ret
 4:  mov     x0, x1
     ret
-END_FUNCTION http_crlf
+END_FUNCTION lantern_http_crlf
 
 /* L0: x0 = 1 when [x1, x2) of x0's bytes is a token (RFC 9110 section 5.6.2), else 0. A leaf. Uses x9-x13. */
-LOCAL_FUNCTION http_token
+LOCAL_FUNCTION lantern_http_token
     UNWIND_END_PROLOGUE
     mov     x9, x0
     cmp     x1, x2
@@ -100,10 +100,10 @@ LOCAL_FUNCTION http_token
     ret
 9:  mov     x0, #1
     ret
-END_FUNCTION http_token
+END_FUNCTION lantern_http_token
 
 /* L0: x0 = 1 when the x1 bytes at x0 are the x3 lower case bytes at x2, without regard to ASCII case, else 0. A leaf. Uses x9-x11. */
-LOCAL_FUNCTION http_same
+LOCAL_FUNCTION lantern_http_same
     UNWIND_END_PROLOGUE
     cmp     x1, x3
     b.ne    8f
@@ -122,10 +122,10 @@ LOCAL_FUNCTION http_same
     ret
 9:  mov     x0, #1
     ret
-END_FUNCTION http_same
+END_FUNCTION lantern_http_same
 
 /* L0: [x1, x2) of x0's bytes without leading and trailing spaces and tabs: x0 = its start, x1 = its end. A leaf. Uses x9, x10. */
-LOCAL_FUNCTION http_trim
+LOCAL_FUNCTION lantern_http_trim
     UNWIND_END_PROLOGUE
     mov     x9, x0
 1:  cmp     x1, x2
@@ -148,13 +148,13 @@ LOCAL_FUNCTION http_trim
 4:  mov     x0, x1
     mov     x1, x2
     ret
-END_FUNCTION http_trim
+END_FUNCTION lantern_http_trim
 
 /*
  * L0: the x3 bytes at x2 become a part of HttpRequest x0 at offset x1, with its PartRef at x0 + x4:
  * x0 = x1 + x3 rounded up to a multiple of 8. A leaf. Uses x9, x10.
  */
-LOCAL_FUNCTION http_part
+LOCAL_FUNCTION lantern_http_part
     UNWIND_END_PROLOGUE
     add     x9, x0, x4
     stp     x1, x3, [x9]
@@ -168,7 +168,7 @@ LOCAL_FUNCTION http_part
 2:  add     x0, x1, #7
     and     x0, x0, #-8
     ret
-END_FUNCTION http_part
+END_FUNCTION lantern_http_part
 
 /*
  * L0: the chunked body that starts at index x3 of the x2 bytes at x1, with head_max x4 and body_max
@@ -176,7 +176,7 @@ END_FUNCTION http_part
  * trailers and x2 the body's bytes, LANTERN_HTTP_MORE, or LANTERN_INVALID_HTTP with x1 the HTTP
  * status. x0 = a destination: a body checked before, its bytes copied there. A leaf. Uses x6-x17.
  */
-LOCAL_FUNCTION http_chunks
+LOCAL_FUNCTION lantern_http_chunks
     UNWIND_END_PROLOGUE
     mov     x6, x0                          /* the destination, or 0 */
     mov     x7, #0                          /* the body's bytes */
@@ -312,7 +312,7 @@ LOCAL_FUNCTION http_chunks
     ret
 90: mov     x0, #LANTERN_HTTP_MORE
     ret
-END_FUNCTION http_chunks
+END_FUNCTION lantern_http_chunks
 
 /*
  * L0: the values of the field lines named by the x4 lower case bytes at x3, between index x1 and the
@@ -321,7 +321,7 @@ END_FUNCTION http_chunks
  * x19 bytes, x20 the line, x21 the head's end, x22 name, x23 its length, x24 out, x25 the offset, x26
  * the PartRef, x27 the line's end, x28 the part's end.
  */
-LOCAL_FUNCTION http_joined
+LOCAL_FUNCTION lantern_http_joined
     ENTER 16
     mov     x19, x0
     mov     x20, x1
@@ -338,26 +338,26 @@ LOCAL_FUNCTION http_joined
     mov     x0, x19
     mov     x1, x20
     add     x2, x21, #2
-    bl      http_crlf
+    bl      lantern_http_crlf
     mov     x27, x0
     mov     x0, x19
     mov     x1, x20
     mov     x2, x27
     mov     w3, #':'
-    bl      http_find
+    bl      lantern_http_find
     str     x0, [sp, #L]                    /* the colon */
     add     x0, x19, x20
     ldr     x1, [sp, #L]
     sub     x1, x1, x20
     mov     x2, x22
     mov     x3, x23
-    bl      http_same
+    bl      lantern_http_same
     cbz     x0, 5f
     mov     x0, x19
     ldr     x1, [sp, #L]
     add     x1, x1, #1
     mov     x2, x27
-    bl      http_trim
+    bl      lantern_http_trim
     ldr     x9, [x26, #8]                   /* ", " before all but the first line */
     cbz     x9, 2f
     mov     w9, #','
@@ -382,7 +382,7 @@ LOCAL_FUNCTION http_joined
     add     x0, x28, #7
     and     x0, x0, #-8
     LEAVE 16
-END_FUNCTION http_joined
+END_FUNCTION lantern_http_joined
 
 /*
  * The name of the field line at x26, x28 bytes before its colon, is the text at label: branch to dest.
@@ -393,7 +393,7 @@ END_FUNCTION http_joined
     mov     x1, x28
     ADDRESS x2, \label
     mov     x3, #\label\()_len
-    bl      http_same
+    bl      lantern_http_same
     cbnz    x0, \dest
 .endm
 
@@ -464,26 +464,26 @@ FUNCTION lantern_http_request
     mov     x0, x19                         /* the request line: method SP target SP version */
     mov     x1, x23
     add     x2, x24, #2
-    bl      http_crlf
+    bl      lantern_http_crlf
     mov     x25, x0
     mov     x0, x19
     mov     x1, x23
     mov     x2, x25
     mov     w3, #' '
-    bl      http_find
+    bl      lantern_http_find
     cmp     x0, x25
     b.eq    400f
     mov     x26, x0                         /* the first space */
     mov     x0, x19
     mov     x1, x23
     mov     x2, x26
-    bl      http_token
+    bl      lantern_http_token
     cbz     x0, 400f
     mov     x0, x19
     add     x1, x26, #1
     mov     x2, x25
     mov     w3, #' '
-    bl      http_find
+    bl      lantern_http_find
     cmp     x0, x25
     b.eq    400f
     mov     x27, x0                         /* the second space */
@@ -579,7 +579,7 @@ FUNCTION lantern_http_request
     mov     x0, x19
     mov     x1, x26
     add     x2, x24, #2
-    bl      http_crlf
+    bl      lantern_http_crlf
     mov     x27, x0
     ldrb    w10, [x19, x26]                 /* no folded line */
     cmp     w10, #' '
@@ -590,7 +590,7 @@ FUNCTION lantern_http_request
     mov     x1, x26
     mov     x2, x27
     mov     w3, #':'
-    bl      http_find
+    bl      lantern_http_find
     cmp     x0, x27
     b.eq    400f
     sub     x28, x0, x26                    /* the name's length */
@@ -598,13 +598,13 @@ FUNCTION lantern_http_request
     mov     x0, x19
     mov     x1, x26
     add     x2, x26, x28
-    bl      http_token
+    bl      lantern_http_token
     cbz     x0, 400f
     mov     x0, x19                         /* the value, without spaces and tabs around it */
     add     x1, x26, x28
     add     x1, x1, #1
     mov     x2, x27
-    bl      http_trim
+    bl      lantern_http_trim
     str     x0, [sp, #(L + 168)]
     str     x1, [sp, #(L + 176)]
     mov     x9, x0
@@ -638,12 +638,12 @@ FUNCTION lantern_http_request
     mov     x1, x26
     ldr     x2, [sp, #(L + 176)]
     mov     w3, #','
-    bl      http_find
+    bl      lantern_http_find
     mov     x28, x0
     mov     x0, x19
     mov     x1, x26
     mov     x2, x28
-    bl      http_trim
+    bl      lantern_http_trim
     cmp     x0, x1
     b.hs    218f                            /* empty */
     mov     x9, #0
@@ -686,7 +686,7 @@ FUNCTION lantern_http_request
     sub     x1, x10, x9
     ADDRESS x2, http_t_chunked
     mov     x3, #http_t_chunked_len
-    bl      http_same
+    bl      lantern_http_same
     str     x0, [sp, #(L + 48)]
     b       29f
 23: ldr     x26, [sp, #(L + 168)]           /* Connection: its tokens */
@@ -694,18 +694,18 @@ FUNCTION lantern_http_request
     mov     x1, x26
     ldr     x2, [sp, #(L + 176)]
     mov     w3, #','
-    bl      http_find
+    bl      lantern_http_find
     mov     x28, x0
     mov     x0, x19
     mov     x1, x26
     mov     x2, x28
-    bl      http_trim
+    bl      lantern_http_trim
     sub     x1, x1, x0
     stp     x0, x1, [sp, #(L + 200)]
     add     x0, x19, x0
     ADDRESS x2, http_t_close
     mov     x3, #http_t_close_len
-    bl      http_same
+    bl      lantern_http_same
     cbz     x0, 232f
     mov     x9, #1
     str     x9, [sp, #(L + 80)]
@@ -713,7 +713,7 @@ FUNCTION lantern_http_request
     add     x0, x19, x0
     ADDRESS x2, http_t_keep_alive
     mov     x3, #http_t_keep_alive_len
-    bl      http_same
+    bl      lantern_http_same
     cbz     x0, 233f
     mov     x9, #1
     str     x9, [sp, #(L + 88)]
@@ -790,7 +790,7 @@ FUNCTION lantern_http_request
     mov     x2, x20
     mov     x3, x26
     ldp     x4, x5, [x21]
-    bl      http_chunks
+    bl      lantern_http_chunks
     cmp     x0, #LANTERN_HTTP_MORE
     b.eq    98f
     cmp     x0, #LANTERN_INVALID_HTTP
@@ -803,7 +803,7 @@ FUNCTION lantern_http_request
     mov     x0, x19
     ldp     x1, x2, [sp, #(L + 16)]
     mov     w3, #'?'
-    bl      http_find
+    bl      lantern_http_find
     str     x0, [sp, #(L + 184)]            /* the path's end */
     mov     x12, #HTTP_REQUEST_FIXED
     ldr     x10, [sp, #(L + 16)]
@@ -840,7 +840,7 @@ FUNCTION lantern_http_request
     ldr     x3, [sp, #(L + 184)]
     sub     x3, x3, x9
     mov     x4, #HttpRequest_path
-    bl      http_part
+    bl      lantern_http_part
     mov     x1, x0                          /* query */
     mov     x0, x22
     ldr     x9, [sp, #(L + 184)]
@@ -852,7 +852,7 @@ FUNCTION lantern_http_request
     sub     x3, x10, x9
 42: add     x2, x19, x9
     mov     x4, #HttpRequest_query
-    bl      http_part
+    bl      lantern_http_part
     mov     x6, x0                          /* the three fields */
     mov     x0, x19
     add     x1, x25, #2
@@ -861,7 +861,7 @@ FUNCTION lantern_http_request
     mov     x4, #http_n_accept_len
     mov     x5, x22
     mov     x7, #HttpRequest_accept
-    bl      http_joined
+    bl      lantern_http_joined
     mov     x6, x0
     mov     x0, x19
     add     x1, x25, #2
@@ -870,7 +870,7 @@ FUNCTION lantern_http_request
     mov     x4, #http_n_type_len
     mov     x5, x22
     mov     x7, #HttpRequest_content_type
-    bl      http_joined
+    bl      lantern_http_joined
     mov     x6, x0
     mov     x0, x19
     add     x1, x25, #2
@@ -879,7 +879,7 @@ FUNCTION lantern_http_request
     mov     x4, #http_n_version_len
     mov     x5, x22
     mov     x7, #HttpRequest_consensus_version
-    bl      http_joined
+    bl      lantern_http_joined
     mov     x1, x0                          /* body */
     ldr     x9, [sp, #(L + 40)]
     cbnz    x9, 43f
@@ -888,7 +888,7 @@ FUNCTION lantern_http_request
     add     x2, x19, x9
     ldr     x3, [sp, #(L + 152)]
     mov     x4, #HttpRequest_body
-    bl      http_part
+    bl      lantern_http_part
     b       44f
 43: add     x9, x22, #HttpRequest_body      /* chunked: its bytes, unchunked */
     ldr     x10, [sp, #(L + 152)]
@@ -898,7 +898,7 @@ FUNCTION lantern_http_request
     mov     x2, x20
     ldr     x3, [sp, #(L + 144)]
     ldp     x4, x5, [x21]
-    bl      http_chunks
+    bl      lantern_http_chunks
 44: mov     x0, #LANTERN_OK
     LEAVE 224
 400: mov    x9, #400

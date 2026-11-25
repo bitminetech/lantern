@@ -6,7 +6,7 @@
 .include "app_options.inc"
 
 /* a0 = 0 and a1 = the u64 of the decimal digits a0 to a1, one or more; else a0 = 1. Uses t0-t3. */
-LOCAL_FUNCTION app_decimal
+LOCAL_FUNCTION lantern_app_decimal
     UNWIND_END_PROLOGUE
     bgeu    a0, a1, 9f
     li      t0, 0
@@ -29,13 +29,13 @@ LOCAL_FUNCTION app_decimal
     ret
 9:  li      a0, 1
     ret
-END_FUNCTION app_decimal
+END_FUNCTION lantern_app_decimal
 
 /*
  * a0 = 0 and a1 = the IPv4 address of the bytes a0 to a1, 4 decimal numbers of 0 to 255 with
  * dots between them, its 4 bytes in order in the low bytes; else a0 = 1. Uses t0-t6.
  */
-LOCAL_FUNCTION app_ipv4
+LOCAL_FUNCTION lantern_app_ipv4
     UNWIND_END_PROLOGUE
     li      t0, 0                           # the address
     li      t1, 0                           # the numbers
@@ -77,13 +77,13 @@ LOCAL_FUNCTION app_ipv4
     ret
 9:  li      a0, 1
     ret
-END_FUNCTION app_ipv4
+END_FUNCTION lantern_app_ipv4
 
 /*
  * a0 = 0 and a1 = the bits of the metrics categories a0 to a1, names of app_categories_table
  * with commas between them, none or more; else a0 = 1. Uses t0-t6.
  */
-LOCAL_FUNCTION app_categories
+LOCAL_FUNCTION lantern_app_categories
     UNWIND_END_PROLOGUE
     li      t0, 0                           # the bits
     beq     a0, a1, 8f                      # no category
@@ -121,7 +121,7 @@ LOCAL_FUNCTION app_categories
     ret
 9:  li      a0, 1
     ret
-END_FUNCTION app_categories
+END_FUNCTION lantern_app_categories
 
 /*
  * (args, options, fault): docs/reference/app.md. s1 args, s2 options, s3 fault, s4 the argument
@@ -197,7 +197,7 @@ FUNCTION lantern_app_options
     ld      a1, (L + 8)(sp)
     addi    a2, s7, 24
     ld      a3, 0(s7)
-    call    config_name_is
+    call    lantern_config_name_is
     bnez    a0, 4f
     addi    s7, s7, APP_OPTION_BYTES
     j       6b
@@ -236,7 +236,7 @@ FUNCTION lantern_app_options
     li      a1, 7
     ADDRESS a2, app_http
     li      a3, 7
-    call    config_name_is
+    call    lantern_config_name_is
     beqz    a0, 8f
     addi    s8, s8, 7
     addi    s9, s9, -7
@@ -252,7 +252,7 @@ FUNCTION lantern_app_options
     add     a1, a0, s9
     li      t1, APP_OPTION_ADDRESS
     beq     t0, t1, 21f
-    call    app_decimal
+    call    lantern_app_decimal
     bnez    a0, 90f
     beqz    a1, 90f
     ld      t0, 16(s7)
@@ -265,7 +265,7 @@ FUNCTION lantern_app_options
     li      t1, APP_MAX_HTTP_CONNECTIONS
 22: bgtu    a1, t1, 90f
     j       23f
-21: call    app_ipv4
+21: call    lantern_app_ipv4
     bnez    a0, 90f
 23: ld      t0, 8(s7)
     add     t0, s2, t0
@@ -283,7 +283,7 @@ FUNCTION lantern_app_options
     ADDRESS a3, app_level_lengths
     add     a3, a3, t0
     lbu     a3, 0(a3)
-    call    config_name_is
+    call    lantern_config_name_is
     bnez    a0, 26f
     ld      t0, (L + 24)(sp)
     addi    t0, t0, 1
@@ -293,7 +293,7 @@ FUNCTION lantern_app_options
     j       23b
 27: add     a0, s1, s8                      # metrics categories: their bits; an empty value has none
     add     a1, a0, s9
-    call    app_categories
+    call    lantern_app_categories
     bnez    a0, 90f
     j       23b
 50: mv      s10, s4                         # --network-dir is required

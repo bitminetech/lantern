@@ -38,7 +38,7 @@ SPEC_FUNCTION get_custody_groups
     add     x0, sp, #L                      /* sha256(uint_to_bytes(current_id)) */
     mov     x1, #32
     add     x2, sp, #(L + 32)
-    bl      sha256_short
+    bl      lantern_sha256_short
     ldr     x9, [sp, #(L + 32)]             /* bytes_to_uint64(digest[0:8]) % NUMBER_OF_CUSTODY_GROUPS */
     udiv    x10, x9, x20
     msub    x9, x10, x20, x9
@@ -116,7 +116,7 @@ SPEC_END compute_columns_for_custody_group
 .endif
 
 /* L0: x0 = 1 when seen x0 holds the SeenKey (x1 kind, x2 a, x3 b, x4 c), else 0. A leaf; uses x5-x8. */
-LOCAL_FUNCTION seen_find_key
+LOCAL_FUNCTION lantern_seen_find_key
     UNWIND_END_PROLOGUE
     PART    x5, x6, x0, Seen_keys
 1:  cbz     x6, 3f
@@ -135,10 +135,10 @@ LOCAL_FUNCTION seen_find_key
     ret
 4:  mov     x0, #1
     ret
-END_FUNCTION seen_find_key
+END_FUNCTION lantern_seen_find_key
 
 /* L0: x0 = the free SeenKey entries of seen x0. A leaf; uses x1-x2. */
-LOCAL_FUNCTION seen_key_room
+LOCAL_FUNCTION lantern_seen_key_room
     UNWIND_END_PROLOGUE
     ldr     x1, [x0, #Seen_keys]
     ldr     x2, [x0, #Seen_bits]
@@ -147,10 +147,10 @@ LOCAL_FUNCTION seen_key_room
     ldr     x1, [x0, #(Seen_keys + 8)]
     sub     x0, x2, x1
     ret
-END_FUNCTION seen_key_room
+END_FUNCTION lantern_seen_key_room
 
 /* L0: append the SeenKey (x1 kind, x2 a, x3 b, x4 c) to seen x0, which has room. A leaf; uses x5, x6. */
-LOCAL_FUNCTION seen_add_key
+LOCAL_FUNCTION lantern_seen_add_key
     UNWIND_END_PROLOGUE
     PART    x5, x6, x0, Seen_keys
     add     x5, x5, x6, lsl #5
@@ -159,10 +159,10 @@ LOCAL_FUNCTION seen_add_key
     add     x6, x6, #1
     str     x6, [x0, #(Seen_keys + 8)]
     ret
-END_FUNCTION seen_add_key
+END_FUNCTION lantern_seen_add_key
 
 /* L0: x0 = the free SeenBits entries of seen x0. A leaf; uses x1-x3. */
-LOCAL_FUNCTION seen_bits_room
+LOCAL_FUNCTION lantern_seen_bits_room
     UNWIND_END_PROLOGUE
     ldr     x1, [x0, #Seen_bits]
     ldr     x2, [x0, #Seen_blocks]
@@ -172,13 +172,13 @@ LOCAL_FUNCTION seen_bits_room
     ldr     x1, [x0, #(Seen_bits + 8)]
     sub     x0, x2, x1
     ret
-END_FUNCTION seen_bits_room
+END_FUNCTION lantern_seen_bits_room
 
 /*
  * L0: is_non_strict_superset of the SeenBits of key (x1 kind, root at x2, x3 a, x4 b) in seen x0,
  * for the x6 bits at x5: x0 = 1 when one of them has every bit of x5 set. A leaf; uses x7-x13.
  */
-LOCAL_FUNCTION seen_superset
+LOCAL_FUNCTION lantern_seen_superset
     UNWIND_END_PROLOGUE
     PART    x7, x8, x0, Seen_bits
     add     x9, x6, #7
@@ -221,10 +221,10 @@ LOCAL_FUNCTION seen_superset
     ret
 9:  mov     x0, #1
     ret
-END_FUNCTION seen_superset
+END_FUNCTION lantern_seen_superset
 
 /* L0: append the SeenBits of key (x1 kind, root at x2, x3 a, x4 b) and the x6 bits at x5 to seen x0, which has room. */
-LOCAL_FUNCTION seen_add_bits
+LOCAL_FUNCTION lantern_seen_add_bits
     FRAME 32
     PART    x7, x8, x0, Seen_bits
     mov     x9, #SeenBits__mem
@@ -248,10 +248,10 @@ LOCAL_FUNCTION seen_add_bits
     lsr     x2, x2, #3
     bl      lantern_copy
     UNFRAME 32
-END_FUNCTION seen_add_bits
+END_FUNCTION lantern_seen_add_bits
 
 /* L0: x0 = the SeenHeader of block root x1 in seen x0, or 0. A leaf; uses x2-x10. */
-LOCAL_FUNCTION seen_find_header
+LOCAL_FUNCTION lantern_seen_find_header
     UNWIND_END_PROLOGUE
     PART    x2, x3, x0, Seen_headers
     ldp     x4, x5, [x1]
@@ -274,7 +274,7 @@ LOCAL_FUNCTION seen_find_header
     ret
 4:  mov     x0, x2
     ret
-END_FUNCTION seen_find_header
+END_FUNCTION lantern_seen_find_header
 
 /* ---------------------------------------------------------------- Gossip helpers */
 
@@ -298,18 +298,18 @@ END_FUNCTION seen_find_header
     csinv   \dst, \dst, xzr, cc
 .endm
 
-/* L0: x0 = is_future_slot(store x0, slot x1, current_time_ms x2). A leaf; uses x3, x4, x16, x17. */
-LOCAL_FUNCTION is_future_slot
+/* L0: x0 = lantern_is_future_slot(store x0, slot x1, current_time_ms x2). A leaf; uses x3, x4, x16, x17. */
+LOCAL_FUNCTION lantern_is_future_slot
     UNWIND_END_PROLOGUE
     SLOT_TIME x3, x0, x1
     WITH_DISPARITY x4, x0, x2
     cmp     x4, x3
     cset    x0, lo
     ret
-END_FUNCTION is_future_slot
+END_FUNCTION lantern_is_future_slot
 
-/* L0: x0 = is_within_slot_range(store x0, slot x1, slot_range x2, current_time_ms x3). A leaf; uses x4-x6, x16, x17. */
-LOCAL_FUNCTION is_within_slot_range
+/* L0: x0 = lantern_is_within_slot_range(store x0, slot x1, slot_range x2, current_time_ms x3). A leaf; uses x4-x6, x16, x17. */
+LOCAL_FUNCTION lantern_is_within_slot_range
     UNWIND_END_PROLOGUE
     SLOT_TIME x4, x0, x1                    /* current_time_ms + MAXIMUM_GOSSIP_CLOCK_DISPARITY < start_time_ms */
     WITH_DISPARITY x5, x0, x3
@@ -327,10 +327,10 @@ LOCAL_FUNCTION is_within_slot_range
     ret
 8:  mov     x0, #0
     ret
-END_FUNCTION is_within_slot_range
+END_FUNCTION lantern_is_within_slot_range
 
-/* L0: x0 = is_current_or_previous_epoch(store x0, epoch x1, current_time_ms x2). x19 store, x20 epoch, x21 time. */
-LOCAL_FUNCTION is_current_or_previous_epoch
+/* L0: x0 = lantern_is_current_or_previous_epoch(store x0, epoch x1, current_time_ms x2). x19 store, x20 epoch, x21 time. */
+LOCAL_FUNCTION lantern_is_current_or_previous_epoch
     ENTER 0
     mov     x19, x0
     mov     x20, x1
@@ -340,7 +340,7 @@ LOCAL_FUNCTION is_current_or_previous_epoch
     lsl     x1, x20, #LOG2_SLOTS_PER_EPOCH
     mov     x2, #(SLOTS_PER_EPOCH - 1)
     mov     x3, x21
-    bl      is_within_slot_range
+    bl      lantern_is_within_slot_range
     cbnz    x0, 7f
 1:  adds    x9, x20, #1                     /* is_within_epoch(epoch + 1) */
     b.cs    6f
@@ -350,17 +350,17 @@ LOCAL_FUNCTION is_current_or_previous_epoch
     lsl     x1, x9, #LOG2_SLOTS_PER_EPOCH
     mov     x2, #(SLOTS_PER_EPOCH - 1)
     mov     x3, x21
-    bl      is_within_slot_range
+    bl      lantern_is_within_slot_range
     b       7f
 6:  mov     x0, #0
 7:  LEAVE 0
-END_FUNCTION is_current_or_previous_epoch
+END_FUNCTION lantern_is_current_or_previous_epoch
 
 /*
- * L0: x0 = is_future_epoch(store x0, epoch x1, current_time_ms x2); true when the time with
+ * L0: x0 = lantern_is_future_epoch(store x0, epoch x1, current_time_ms x2); true when the time with
  * disparity is before genesis, where the spec's subtraction raises. A leaf; uses x3, x4, x16.
  */
-LOCAL_FUNCTION is_future_epoch
+LOCAL_FUNCTION lantern_is_future_epoch
     UNWIND_END_PROLOGUE
     WITH_DISPARITY x3, x0, x2
     ldr     x4, [x0, #Store_genesis_time_ms]
@@ -374,10 +374,10 @@ LOCAL_FUNCTION is_future_epoch
     ret
 9:  mov     x0, #1
     ret
-END_FUNCTION is_future_epoch
+END_FUNCTION lantern_is_future_epoch
 
 /* L0: x0 = compute_start_slot_at_epoch(finalized epoch of store x0), UINT64_MAX when it does not fit. A leaf; uses x1. */
-LOCAL_FUNCTION finalized_slot
+LOCAL_FUNCTION lantern_finalized_slot
     UNWIND_END_PROLOGUE
     ldr     x0, [x0, #(Store_finalized_checkpoint + Checkpoint_epoch)]
     lsr     x1, x0, #(64 - LOG2_SLOTS_PER_EPOCH)
@@ -386,16 +386,16 @@ LOCAL_FUNCTION finalized_slot
     ret
 9:  mov     x0, #-1
     ret
-END_FUNCTION finalized_slot
+END_FUNCTION lantern_finalized_slot
 
 /*
  * L0: x0 = status, x1 = 1 when get_checkpoint_block(store x0, node x1, epoch x2) is the root at x3, else 0.
  * Locals: sp+16 store, sp+24 root.
  */
-LOCAL_FUNCTION checkpoint_is
+LOCAL_FUNCTION lantern_checkpoint_is
     FRAME 16
     stp     x0, x3, [sp, #16]
-    bl      checkpoint_block
+    bl      lantern_checkpoint_block
     cbnz    x0, 7f
     ldp     x0, x3, [sp, #16]
     NODE    x14, x0, x1
@@ -404,22 +404,22 @@ LOCAL_FUNCTION checkpoint_is
     mov     x1, #1
 6:  mov     x0, #LANTERN_OK
 7:  UNFRAME 16
-END_FUNCTION checkpoint_is
+END_FUNCTION lantern_checkpoint_is
 
-/* L0: checkpoint_is of the store's finalized checkpoint for node x1 of store x0. */
-LOCAL_FUNCTION finalized_is_ancestor
+/* L0: lantern_checkpoint_is of the store's finalized checkpoint for node x1 of store x0. */
+LOCAL_FUNCTION lantern_finalized_is_ancestor
     UNWIND_END_PROLOGUE
     ldr     x2, [x0, #(Store_finalized_checkpoint + Checkpoint_epoch)]
     add     x3, x0, #(Store_finalized_checkpoint + Checkpoint_root)
-    b       checkpoint_is
-END_FUNCTION finalized_is_ancestor
+    b       lantern_checkpoint_is
+END_FUNCTION lantern_finalized_is_ancestor
 
 /*
  * L0: x0 = status, x1 = bls.Verify(public key x3, compute_signing_root(object x2 of type x1, domain x0), signature x4),
  * with scratch x5. Locals: sp+16 the root buffer (56: a ByteList header, then the root), sp+72 key, sp+80 signature,
  * sp+88 scratch.
  */
-LOCAL_FUNCTION verify_with_domain
+LOCAL_FUNCTION lantern_verify_with_domain
     FRAME 80
     stp     x3, x4, [sp, #72]
     str     x5, [sp, #88]
@@ -434,16 +434,16 @@ LOCAL_FUNCTION verify_with_domain
     ldp     x0, x1, [sp, #72]
     add     x2, sp, #16
     ldr     x3, [sp, #88]
-    bl      verify_root_signature
+    bl      lantern_verify_root_signature
 7:  UNFRAME 80
-END_FUNCTION verify_with_domain
+END_FUNCTION lantern_verify_with_domain
 
 /*
- * L0: verify_with_domain with get_domain(state x0, domain type x1, epoch x2): object x4 of type x3,
+ * L0: lantern_verify_with_domain with get_domain(state x0, domain type x1, epoch x2): object x4 of type x3,
  * public key x5, signature x6, scratch x7. Locals: sp+16 domain type, sp+24 epoch, sp+32 domain (32),
  * sp+64 type, object, key, signature, scratch.
  */
-LOCAL_FUNCTION verify_signed
+LOCAL_FUNCTION lantern_verify_signed
     FRAME 96
     str     w1, [sp, #16]
     str     x2, [sp, #24]
@@ -460,9 +460,9 @@ LOCAL_FUNCTION verify_signed
     ldp     x1, x2, [sp, #64]
     ldp     x3, x4, [sp, #80]
     ldr     x5, [sp, #96]
-    bl      verify_with_domain
+    bl      lantern_verify_with_domain
 7:  UNFRAME 96
-END_FUNCTION verify_signed
+END_FUNCTION lantern_verify_signed
 
 /* dst = &state.validators[idx] of state st; branch to fail when idx is not below the count. Uses x16, x17. */
 .macro VALIDATOR_AT dst, st, idx, fail
@@ -495,12 +495,12 @@ SPEC_FUNCTION validate_voluntary_exit_gossip
     mov     x2, x27
     mov     x3, #0
     mov     x4, #0
-    bl      seen_find_key
+    bl      lantern_seen_find_key
     cbnz    x0, 4f
     mov     x0, x20                         /* [IGNORE] the exit epoch is not in the future */
     ldr     x1, [x21, #(SignedVoluntaryExit_message + VoluntaryExit_epoch)]
     mov     x2, x22
-    bl      is_future_epoch
+    bl      lantern_is_future_epoch
     cbnz    x0, 4f
     VALIDATOR_AT x26, x23, x27, 5f          /* [REJECT] the validator index is valid */
     mov     x0, x23
@@ -538,7 +538,7 @@ SPEC_FUNCTION validate_voluntary_exit_gossip
     add     x3, x26, #Validator_pubkey
     add     x4, x21, #SignedVoluntaryExit_signature
     mov     x5, x24
-    bl      verify_with_domain
+    bl      lantern_verify_with_domain
 .else
     mov     x0, x23                         /* [REJECT] the signature: get_domain(state, DOMAIN_VOLUNTARY_EXIT, voluntary_exit.epoch) */
     mov     w1, #DOMAIN_VOLUNTARY_EXIT
@@ -548,19 +548,19 @@ SPEC_FUNCTION validate_voluntary_exit_gossip
     add     x5, x26, #Validator_pubkey
     add     x6, x21, #SignedVoluntaryExit_signature
     mov     x7, x24
-    bl      verify_signed
+    bl      lantern_verify_signed
 .endif
     cbnz    x0, 7f
     cbz     x1, 5f
     mov     x0, x19                         /* seen.voluntary_exit_indices.add(validator_index) */
-    bl      seen_key_room
+    bl      lantern_seen_key_room
     cbz     x0, 9f
     mov     x0, x19
     mov     x1, #SEEN_VOLUNTARY_EXIT
     mov     x2, x27
     mov     x3, #0
     mov     x4, #0
-    bl      seen_add_key
+    bl      lantern_seen_add_key
     mov     x0, #LANTERN_OK
     b       7f
 3:  mov     x0, #LANTERN_INVALID_OVERFLOW
@@ -595,7 +595,7 @@ SPEC_FUNCTION validate_proposer_slashing_gossip
     mov     x2, x27
     mov     x3, #0
     mov     x4, #0
-    bl      seen_find_key
+    bl      lantern_seen_find_key
     cbnz    x0, 4f
     add     x9, x21, #(ProposerSlashing_signed_header_1 + SignedBeaconBlockHeader_message)
     add     x10, x21, #(ProposerSlashing_signed_header_2 + SignedBeaconBlockHeader_message)
@@ -636,7 +636,7 @@ SPEC_FUNCTION validate_proposer_slashing_gossip
     add     x5, x26, #Validator_pubkey
     add     x6, x28, #SignedBeaconBlockHeader_signature
     mov     x7, x24
-    bl      verify_signed
+    bl      lantern_verify_signed
     cbnz    x0, 7f
     cbz     x1, 5f
     add     x9, x21, #ProposerSlashing_signed_header_2
@@ -644,14 +644,14 @@ SPEC_FUNCTION validate_proposer_slashing_gossip
     mov     x28, x9
     b.ne    21b
     mov     x0, x19                         /* seen.proposer_slashing_indices.add(proposer_index) */
-    bl      seen_key_room
+    bl      lantern_seen_key_room
     cbz     x0, 9f
     mov     x0, x19
     mov     x1, #SEEN_PROPOSER_SLASHING
     mov     x2, x27
     mov     x3, #0
     mov     x4, #0
-    bl      seen_add_key
+    bl      lantern_seen_add_key
     mov     x0, #LANTERN_OK
     b       7f
 4:  mov     x0, #LANTERN_GOSSIP_IGNORE
@@ -686,12 +686,12 @@ SPEC_FUNCTION validate_bls_to_execution_change_gossip
     mov     x2, x27
     mov     x3, #0
     mov     x4, #0
-    bl      seen_find_key
+    bl      lantern_seen_find_key
     cbnz    x0, 4f
     mov     x0, x20                         /* [IGNORE] the current epoch is at or after CAPELLA_FORK_EPOCH */
     LDQ     x1, x20, Store_config + CONFIG_CAPELLA_FORK_EPOCH
     mov     x2, x22
-    bl      is_future_epoch
+    bl      lantern_is_future_epoch
     cbnz    x0, 4f
     VALIDATOR_AT x26, x23, x27, 5f          /* [REJECT] the validator index is valid */
     ldrb    w9, [x26, #Validator_withdrawal_credentials]    /* [REJECT] BLS withdrawal credentials */
@@ -700,7 +700,7 @@ SPEC_FUNCTION validate_bls_to_execution_change_gossip
     add     x0, x21, #(SignedBLSToExecutionChange_message + BLSToExecutionChange_from_bls_pubkey)
     mov     x1, #48
     add     x2, sp, #L
-    bl      sha256_short                    /* [REJECT] withdrawal_credentials[1:] == sha256(pubkey)[1:] */
+    bl      lantern_sha256_short                    /* [REJECT] withdrawal_credentials[1:] == sha256(pubkey)[1:] */
     mov     w9, #BLS_WITHDRAWAL_PREFIX
     strb    w9, [sp, #L]
     add     x14, x26, #Validator_withdrawal_credentials
@@ -721,18 +721,18 @@ SPEC_FUNCTION validate_bls_to_execution_change_gossip
     add     x3, x21, #(SignedBLSToExecutionChange_message + BLSToExecutionChange_from_bls_pubkey)
     add     x4, x21, #SignedBLSToExecutionChange_signature
     mov     x5, x24
-    bl      verify_with_domain
+    bl      lantern_verify_with_domain
     cbnz    x0, 7f
     cbz     x1, 5f
     mov     x0, x19                         /* seen.bls_to_execution_change_indices.add(validator_index) */
-    bl      seen_key_room
+    bl      lantern_seen_key_room
     cbz     x0, 9f
     mov     x0, x19
     mov     x1, #SEEN_BLS_CHANGE
     mov     x2, x27
     mov     x3, #0
     mov     x4, #0
-    bl      seen_add_key
+    bl      lantern_seen_add_key
     mov     x0, #LANTERN_OK
     b       7f
 4:  mov     x0, #LANTERN_GOSSIP_IGNORE
@@ -750,12 +750,12 @@ SPEC_END validate_bls_to_execution_change_gossip
  * L0: the block of the root at x2, from store x0 and seen x1: x0 = its node or NODE_NONE, x1 = 2 for a node
  * of the store, 1 for a block of seen, 0 when unknown, x2 = its payload status. Locals: store, seen, root.
  */
-LOCAL_FUNCTION block_lookup
+LOCAL_FUNCTION lantern_block_lookup
     FRAME 32
     stp     x0, x1, [sp, #16]
     str     x2, [sp, #32]
     mov     x1, x2
-    bl      find_node
+    bl      lantern_find_node
     cmn     x0, #1
     b.eq    1f
     ldr     x9, [sp, #16]
@@ -765,7 +765,7 @@ LOCAL_FUNCTION block_lookup
     UNFRAME 32
 1:  ldr     x0, [sp, #24]
     ldr     x1, [sp, #32]
-    bl      seen_find_block
+    bl      lantern_seen_find_block
     cbz     x0, 2f
     ldr     x2, [x0, #SeenBlock_payload_status]
     mov     x0, #-1
@@ -775,7 +775,7 @@ LOCAL_FUNCTION block_lookup
     mov     x1, #0
     mov     x2, #PAYLOAD_STATUS_NOT_VALIDATED
     UNFRAME 32
-END_FUNCTION block_lookup
+END_FUNCTION lantern_block_lookup
 
 /* ---------------------------------------------------------------- Gossip: attestations */
 
@@ -804,14 +804,14 @@ SPEC_FUNCTION validate_beacon_attestation_gossip
     ldr     x2, [x21, #(SingleAttestation_data + AttestationData_target + Checkpoint_epoch)]
     ldr     x3, [x21, #SingleAttestation_attester_index]
     mov     x4, #0
-    bl      seen_find_key
+    bl      lantern_seen_find_key
     cbnz    x0, 4f
     ldr     x9, [x21, #(SingleAttestation_data + AttestationData_index)]   /* [REJECT] data.index is zero */
     cbnz    x9, 5f
     mov     x0, x20                         /* [IGNORE] the block voted for has been seen; [REJECT] it passed validation */
     mov     x1, x19
     add     x2, x21, #(SingleAttestation_data + AttestationData_beacon_block_root)
-    bl      block_lookup
+    bl      lantern_block_lookup
     cbz     x1, 4f
     cmp     x1, #2
     b.ne    5f
@@ -837,13 +837,13 @@ SPEC_FUNCTION validate_beacon_attestation_gossip
     mov     x0, x20                         /* [IGNORE] not from a future slot */
     ldr     x1, [x21, #(SingleAttestation_data + AttestationData_slot)]
     mov     x2, x22
-    bl      is_future_slot
+    bl      lantern_is_future_slot
     cbnz    x0, 4f
     mov     x0, x20                         /* [IGNORE] the current or previous epoch */
     ldr     x1, [x21, #(SingleAttestation_data + AttestationData_slot)]
     lsr     x1, x1, #LOG2_SLOTS_PER_EPOCH
     mov     x2, x22
-    bl      is_current_or_previous_epoch
+    bl      lantern_is_current_or_previous_epoch
     cbz     x0, 4f
     ldr     x9, [x21, #(SingleAttestation_data + AttestationData_slot)]    /* [REJECT] the epoch matches the target */
     lsr     x9, x9, #LOG2_SLOTS_PER_EPOCH
@@ -881,30 +881,30 @@ SPEC_FUNCTION validate_beacon_attestation_gossip
     add     x5, x9, #Validator_pubkey
     add     x6, x21, #SingleAttestation_signature
     mov     x7, x24
-    bl      verify_signed
+    bl      lantern_verify_signed
     cbnz    x0, 7f
     cbz     x1, 5f
     mov     x0, x20                         /* [REJECT] the target block is an ancestor of the LMD vote block */
     ldr     x1, [sp, #(L + 16)]
     ldr     x2, [x21, #(SingleAttestation_data + AttestationData_target + Checkpoint_epoch)]
     add     x3, x21, #(SingleAttestation_data + AttestationData_target + Checkpoint_root)
-    bl      checkpoint_is
+    bl      lantern_checkpoint_is
     CHECK_STATUS x25, 7f, 8f
     cbz     x1, 5f
     mov     x0, x20                         /* [IGNORE] the finalized checkpoint is an ancestor of the block */
     ldr     x1, [sp, #(L + 16)]
-    bl      finalized_is_ancestor
+    bl      lantern_finalized_is_ancestor
     CHECK_STATUS x25, 7f, 8f
     cbz     x1, 4f
     mov     x0, x19                         /* seen.attestation_validator_epochs.add(...) */
-    bl      seen_key_room
+    bl      lantern_seen_key_room
     cbz     x0, 9f
     mov     x0, x19
     mov     x1, #SEEN_ATTESTATION
     ldr     x2, [x21, #(SingleAttestation_data + AttestationData_target + Checkpoint_epoch)]
     ldr     x3, [x21, #SingleAttestation_attester_index]
     mov     x4, #0
-    bl      seen_add_key
+    bl      lantern_seen_add_key
     b       8f
 4:  mov     x0, #LANTERN_GOSSIP_IGNORE
     b       6f
@@ -938,7 +938,7 @@ SPEC_FUNCTION validate_beacon_attestation_gossip
     mov     x0, x20                         /* [IGNORE] the block voted for has been seen; [REJECT] it passed validation */
     mov     x1, x19
     add     x2, x21, #(Attestation_data + AttestationData_beacon_block_root)
-    bl      block_lookup
+    bl      lantern_block_lookup
     cbz     x1, 4f
     cmp     x1, #2
     b.ne    5f
@@ -965,20 +965,20 @@ SPEC_FUNCTION validate_beacon_attestation_gossip
     mov     x0, x20                         /* [IGNORE] not from a future slot */
     ldr     x1, [x21, #(Attestation_data + AttestationData_slot)]
     mov     x2, x22
-    bl      is_future_slot
+    bl      lantern_is_future_slot
     cbnz    x0, 4f
     mov     x0, x20                         /* [IGNORE] the current or previous epoch */
     ldr     x1, [x21, #(Attestation_data + AttestationData_slot)]
     lsr     x1, x1, #LOG2_SLOTS_PER_EPOCH
     mov     x2, x22
-    bl      is_current_or_previous_epoch
+    bl      lantern_is_current_or_previous_epoch
     cbz     x0, 4f
 .else
     mov     x0, x20                         /* [IGNORE] the slot is within ATTESTATION_PROPAGATION_SLOT_RANGE */
     ldr     x1, [x21, #(Attestation_data + AttestationData_slot)]
     LDQ     x2, x20, Store_config + CONFIG_ATTESTATION_PROPAGATION_SLOT_RANGE
     mov     x3, x22
-    bl      is_within_slot_range
+    bl      lantern_is_within_slot_range
     cbz     x0, 4f
 .endif
     ldr     x9, [x21, #(Attestation_data + AttestationData_slot)]    /* [REJECT] the epoch matches the target */
@@ -1027,7 +1027,7 @@ SPEC_FUNCTION validate_beacon_attestation_gossip
     ldr     x2, [x21, #(Attestation_data + AttestationData_target + Checkpoint_epoch)]
     mov     x3, x11
     mov     x4, #0
-    bl      seen_find_key
+    bl      lantern_seen_find_key
     cbnz    x0, 4f
     ldr     x11, [sp, #(L + 24)]            /* [REJECT] the signature: is_valid_indexed_attestation of the one attester */
     VALIDATOR_AT x9, x23, x11, 5f
@@ -1040,30 +1040,30 @@ SPEC_FUNCTION validate_beacon_attestation_gossip
     add     x5, x9, #Validator_pubkey
     add     x6, x21, #Attestation_signature
     mov     x7, x24
-    bl      verify_signed
+    bl      lantern_verify_signed
     cbnz    x0, 7f
     cbz     x1, 5f
     mov     x0, x20                         /* [REJECT] the target block is an ancestor of the LMD vote block */
     ldr     x1, [sp, #(L + 16)]
     ldr     x2, [x21, #(Attestation_data + AttestationData_target + Checkpoint_epoch)]
     add     x3, x21, #(Attestation_data + AttestationData_target + Checkpoint_root)
-    bl      checkpoint_is
+    bl      lantern_checkpoint_is
     CHECK_STATUS x25, 7f, 8f
     cbz     x1, 5f
     mov     x0, x20                         /* [IGNORE] the finalized checkpoint is an ancestor of the block */
     ldr     x1, [sp, #(L + 16)]
-    bl      finalized_is_ancestor
+    bl      lantern_finalized_is_ancestor
     CHECK_STATUS x25, 7f, 8f
     cbz     x1, 4f
     mov     x0, x19                         /* seen.attestation_validator_epochs.add(...) */
-    bl      seen_key_room
+    bl      lantern_seen_key_room
     cbz     x0, 9f
     mov     x0, x19
     mov     x1, #SEEN_ATTESTATION
     ldr     x2, [x21, #(Attestation_data + AttestationData_target + Checkpoint_epoch)]
     ldr     x3, [sp, #(L + 24)]
     mov     x4, #0
-    bl      seen_add_key
+    bl      lantern_seen_add_key
     b       8f
 4:  mov     x0, #LANTERN_GOSSIP_IGNORE
     b       6f
@@ -1161,7 +1161,7 @@ SPEC_FUNCTION validate_beacon_aggregate_and_proof_gossip
     mov     x3, #0                          /* the key: the data root */
 .endif
     mov     x4, #0
-    bl      seen_superset
+    bl      lantern_seen_superset
     cbnz    x0, 4f
     mov     x0, x19                         /* [IGNORE] the first valid aggregate for (target epoch, aggregator) */
     mov     x1, #SEEN_AGGREGATOR_EPOCH
@@ -1169,12 +1169,12 @@ SPEC_FUNCTION validate_beacon_aggregate_and_proof_gossip
     ldr     x3, [sp, #(L + 128)]
     ldr     x3, [x3, #AggregateAndProof_aggregator_index]
     mov     x4, #0
-    bl      seen_find_key
+    bl      lantern_seen_find_key
     cbnz    x0, 4f
     mov     x0, x20                         /* [IGNORE] the block voted for has been seen; [REJECT] it passed validation */
     mov     x1, x19
     add     x2, x26, #(Attestation_data + AttestationData_beacon_block_root)
-    bl      block_lookup
+    bl      lantern_block_lookup
     cbz     x1, 4f
     cmp     x1, #2
     b.ne    5f
@@ -1193,20 +1193,20 @@ SPEC_FUNCTION validate_beacon_aggregate_and_proof_gossip
     mov     x0, x20                         /* [IGNORE] not from a future slot */
     ldr     x1, [x26, #(Attestation_data + AttestationData_slot)]
     mov     x2, x22
-    bl      is_future_slot
+    bl      lantern_is_future_slot
     cbnz    x0, 4f
     mov     x0, x20                         /* [IGNORE] the current or previous epoch */
     ldr     x1, [x26, #(Attestation_data + AttestationData_slot)]
     lsr     x1, x1, #LOG2_SLOTS_PER_EPOCH
     mov     x2, x22
-    bl      is_current_or_previous_epoch
+    bl      lantern_is_current_or_previous_epoch
     cbz     x0, 4f
 .else
     mov     x0, x20                         /* [IGNORE] the slot is within ATTESTATION_PROPAGATION_SLOT_RANGE */
     ldr     x1, [x26, #(Attestation_data + AttestationData_slot)]
     LDQ     x2, x20, Store_config + CONFIG_ATTESTATION_PROPAGATION_SLOT_RANGE
     mov     x3, x22
-    bl      is_within_slot_range
+    bl      lantern_is_within_slot_range
     cbz     x0, 4f
 .endif
     ldr     x9, [x26, #(Attestation_data + AttestationData_slot)]  /* [REJECT] the epoch matches the target */
@@ -1245,7 +1245,7 @@ SPEC_FUNCTION validate_beacon_aggregate_and_proof_gossip
     add     x0, x0, #AggregateAndProof_selection_proof
     mov     x1, #96
     add     x2, sp, #(L + 96)
-    bl      sha256_short
+    bl      lantern_sha256_short
     ldr     x9, [sp, #(L + 56)]
     ldr     x9, [x9, #LIST_COUNT]
     lsr     x9, x9, #4                      /* len(committee) // TARGET_AGGREGATORS_PER_COMMITTEE, at least 1 */
@@ -1279,7 +1279,7 @@ SPEC_FUNCTION validate_beacon_aggregate_and_proof_gossip
     ldr     x6, [sp, #(L + 128)]
     add     x6, x6, #AggregateAndProof_selection_proof
     mov     x7, x24
-    bl      verify_signed
+    bl      lantern_verify_signed
     cbnz    x0, 7f
     cbz     x1, 5f
     ldr     x9, [sp, #(L + 80)]             /* [REJECT] the aggregator signature */
@@ -1293,7 +1293,7 @@ SPEC_FUNCTION validate_beacon_aggregate_and_proof_gossip
     add     x5, x5, #Validator_pubkey
     add     x6, x21, #SignedAggregateAndProof_signature
     mov     x7, x24
-    bl      verify_signed
+    bl      lantern_verify_signed
     cbnz    x0, 7f
     cbz     x1, 5f
     ldr     x9, [sp, #(L + 80)]             /* [REJECT] the aggregate signature: is_valid_indexed_attestation(get_indexed_attestation) */
@@ -1314,7 +1314,7 @@ SPEC_FUNCTION validate_beacon_aggregate_and_proof_gossip
     ldr     x2, [x20, #(Store_config + CONFIG_PUBKEY_CACHE)]
     mov     x5, x26                         /* with the aggregate and its CommitteeCache: key sums */
     ldr     x6, [x20, #(Store_config + CONFIG_COMMITTEE_CACHE)]
-    bl      indexed_attestation_valid
+    bl      lantern_indexed_attestation_valid
     CHECK_STATUS x25, 7f, 8f
     ldr     x9, [sp, #(L + 88)]
     cbz     x9, 5f
@@ -1322,19 +1322,19 @@ SPEC_FUNCTION validate_beacon_aggregate_and_proof_gossip
     ldr     x1, [sp, #(L + 48)]
     ldr     x2, [sp, #(L + 136)]
     add     x3, x26, #(Attestation_data + AttestationData_target + Checkpoint_root)
-    bl      checkpoint_is
+    bl      lantern_checkpoint_is
     CHECK_STATUS x25, 7f, 8f
     cbz     x1, 5f
     mov     x0, x20                         /* [IGNORE] the finalized checkpoint is an ancestor of the block */
     ldr     x1, [sp, #(L + 48)]
-    bl      finalized_is_ancestor
+    bl      lantern_finalized_is_ancestor
     CHECK_STATUS x25, 7f, 8f
     cbz     x1, 4f
     mov     x0, x19                         /* seen: the aggregator epoch and the bits of the data root */
-    bl      seen_key_room
+    bl      lantern_seen_key_room
     cbz     x0, 9f
     mov     x0, x19
-    bl      seen_bits_room
+    bl      lantern_seen_bits_room
     cbz     x0, 9f
     mov     x0, x19
     mov     x1, #SEEN_AGGREGATOR_EPOCH
@@ -1342,7 +1342,7 @@ SPEC_FUNCTION validate_beacon_aggregate_and_proof_gossip
     ldr     x3, [sp, #(L + 128)]
     ldr     x3, [x3, #AggregateAndProof_aggregator_index]
     mov     x4, #0
-    bl      seen_add_key
+    bl      lantern_seen_add_key
     PART    x5, x6, x26, Attestation_aggregation_bits
     mov     x0, x19
     mov     x1, #SEEN_AGGREGATE
@@ -1353,7 +1353,7 @@ SPEC_FUNCTION validate_beacon_aggregate_and_proof_gossip
     mov     x3, #0
 .endif
     mov     x4, #0
-    bl      seen_add_bits
+    bl      lantern_seen_add_bits
     b       8f
 4:  mov     x0, #LANTERN_GOSSIP_IGNORE
     b       6f
@@ -1436,13 +1436,13 @@ SPEC_FUNCTION validate_sync_committee_message_gossip
     ldr     x2, [x21, #SyncCommitteeMessage_slot]
     ldr     x3, [x21, #SyncCommitteeMessage_validator_index]
     mov     x4, x26
-    bl      seen_find_key
+    bl      lantern_seen_find_key
     cbnz    x0, 4f
     mov     x0, x20                         /* [IGNORE] is_current_slot */
     ldr     x1, [x21, #SyncCommitteeMessage_slot]
     mov     x2, #0
     mov     x3, x22
-    bl      is_within_slot_range
+    bl      lantern_is_within_slot_range
     cbz     x0, 4f
     ldr     x9, [x21, #SyncCommitteeMessage_validator_index]   /* [REJECT] the validator index is valid */
     VALIDATOR_AT x27, x23, x9, 5f
@@ -1471,18 +1471,18 @@ SPEC_FUNCTION validate_sync_committee_message_gossip
     add     x5, x27, #Validator_pubkey
     add     x6, x21, #SyncCommitteeMessage_signature
     mov     x7, x24
-    bl      verify_signed
+    bl      lantern_verify_signed
     cbnz    x0, 7f
     cbz     x1, 5f
     mov     x0, x19                         /* seen.sync_message_validator_slots.add(...) */
-    bl      seen_key_room
+    bl      lantern_seen_key_room
     cbz     x0, 9f
     mov     x0, x19
     mov     x1, #SEEN_SYNC_MESSAGE
     ldr     x2, [x21, #SyncCommitteeMessage_slot]
     ldr     x3, [x21, #SyncCommitteeMessage_validator_index]
     mov     x4, x26
-    bl      seen_add_key
+    bl      lantern_seen_add_key
     b       8f
 4:  mov     x0, #LANTERN_GOSSIP_IGNORE
     b       6f
@@ -1530,20 +1530,20 @@ SPEC_FUNCTION validate_sync_committee_contribution_and_proof_gossip
     ldr     x4, [x26, #SyncCommitteeContribution_subcommittee_index]
     add     x5, x26, #SyncCommitteeContribution_aggregation_bits
     mov     x6, #SYNC_SUBCOMMITTEE_SIZE
-    bl      seen_superset
+    bl      lantern_seen_superset
     cbnz    x0, 4f
     mov     x0, x19                         /* [IGNORE] the first valid contribution of (slot, aggregator, subcommittee) */
     mov     x1, #SEEN_SYNC_CONTRIBUTION
     ldr     x2, [x26, #SyncCommitteeContribution_slot]
     ldr     x3, [x21, #(SignedContributionAndProof_message + ContributionAndProof_aggregator_index)]
     ldr     x4, [x26, #SyncCommitteeContribution_subcommittee_index]
-    bl      seen_find_key
+    bl      lantern_seen_find_key
     cbnz    x0, 4f
     mov     x0, x20                         /* [IGNORE] is_current_slot */
     ldr     x1, [x26, #SyncCommitteeContribution_slot]
     mov     x2, #0
     mov     x3, x22
-    bl      is_within_slot_range
+    bl      lantern_is_within_slot_range
     cbz     x0, 4f
     ldr     x9, [x26, #SyncCommitteeContribution_subcommittee_index]   /* [REJECT] the subcommittee index is in range */
     cmp     x9, #SYNC_COMMITTEE_SUBNET_COUNT
@@ -1561,7 +1561,7 @@ SPEC_FUNCTION validate_sync_committee_contribution_and_proof_gossip
     add     x0, x21, #(SignedContributionAndProof_message + ContributionAndProof_selection_proof)
     mov     x1, #96                         /* [REJECT] is_sync_committee_aggregator(selection_proof) */
     add     x2, sp, #(L + 16)
-    bl      sha256_short
+    bl      lantern_sha256_short
     ldr     x9, [sp, #(L + 16)]
     mov     x10, #SYNC_AGGREGATOR_MODULO
     udiv    x11, x9, x10
@@ -1594,7 +1594,7 @@ SPEC_FUNCTION validate_sync_committee_contribution_and_proof_gossip
     add     x5, x27, #Validator_pubkey
     add     x6, x21, #(SignedContributionAndProof_message + ContributionAndProof_selection_proof)
     mov     x7, x24
-    bl      verify_signed
+    bl      lantern_verify_signed
     cbnz    x0, 7f
     cbz     x1, 5f
     ldr     x9, [sp, #(L + 56)]             /* [REJECT] the aggregator signature */
@@ -1608,7 +1608,7 @@ SPEC_FUNCTION validate_sync_committee_contribution_and_proof_gossip
     add     x5, x27, #Validator_pubkey
     add     x6, x21, #SignedContributionAndProof_signature
     mov     x7, x24
-    bl      verify_signed
+    bl      lantern_verify_signed
     cbnz    x0, 7f
     cbz     x1, 5f
     mov     x22, #0                         /* participant_pubkeys: the keys of the set bits */
@@ -1667,17 +1667,17 @@ SPEC_FUNCTION validate_sync_committee_contribution_and_proof_gossip
     ldr     x9, [sp, #(L + 168)]
     cbz     x9, 5f
     mov     x0, x19                         /* seen: the aggregator slot and the bits of the contribution */
-    bl      seen_key_room
+    bl      lantern_seen_key_room
     cbz     x0, 9f
     mov     x0, x19
-    bl      seen_bits_room
+    bl      lantern_seen_bits_room
     cbz     x0, 9f
     mov     x0, x19
     mov     x1, #SEEN_SYNC_CONTRIBUTION
     ldr     x2, [x26, #SyncCommitteeContribution_slot]
     ldr     x3, [x21, #(SignedContributionAndProof_message + ContributionAndProof_aggregator_index)]
     ldr     x4, [x26, #SyncCommitteeContribution_subcommittee_index]
-    bl      seen_add_key
+    bl      lantern_seen_add_key
     mov     x0, x19
     mov     x1, #SEEN_CONTRIBUTION
     add     x2, x26, #SyncCommitteeContribution_beacon_block_root
@@ -1685,7 +1685,7 @@ SPEC_FUNCTION validate_sync_committee_contribution_and_proof_gossip
     ldr     x4, [x26, #SyncCommitteeContribution_subcommittee_index]
     add     x5, x26, #SyncCommitteeContribution_aggregation_bits
     mov     x6, #SYNC_SUBCOMMITTEE_SIZE
-    bl      seen_add_bits
+    bl      lantern_seen_add_bits
     b       8f
 4:  mov     x0, #LANTERN_GOSSIP_IGNORE
     b       6f
@@ -1839,11 +1839,11 @@ SPEC_FUNCTION validate_attester_slashing_gossip
     ldr     x0, [sp, #(L + 8)]
     ldr     x1, [x0, #LIST_COUNT]
     add     x0, x0, #LIST_FIXED
-    bl      sort_u64
+    bl      lantern_sort_u64
     ldr     x0, [sp, #(L + 16)]
     ldr     x1, [x0, #LIST_COUNT]
     add     x0, x0, #LIST_FIXED
-    bl      sort_u64
+    bl      lantern_sort_u64
     ldr     x9, [sp, #(L + 8)]              /* slashable_indices = their intersection, each index once */
     ldr     x10, [x9, #LIST_COUNT]
     add     x9, x9, #LIST_FIXED
@@ -1886,7 +1886,7 @@ SPEC_FUNCTION validate_attester_slashing_gossip
     ldr     x2, [x2, x22, lsl #3]
     mov     x3, #0
     mov     x4, #0
-    bl      seen_find_key
+    bl      lantern_seen_find_key
     ldr     x9, [sp, #(L + 24)]
     cmp     x0, #0
     cinc    x9, x9, eq
@@ -1941,7 +1941,7 @@ SPEC_FUNCTION validate_attester_slashing_gossip
     add     x22, x22, #1
     cbz     x9, 25b
     mov     x0, x19                         /* seen.attester_slashing_indices.update(slashable_indices) */
-    bl      seen_key_room
+    bl      lantern_seen_key_room
     ldr     x9, [sp, #(L + 24)]
     cmp     x0, x9
     b.lo    9f
@@ -1955,7 +1955,7 @@ SPEC_FUNCTION validate_attester_slashing_gossip
     ldr     x2, [x2, x22, lsl #3]
     mov     x3, #0
     mov     x4, #0
-    bl      seen_find_key
+    bl      lantern_seen_find_key
     cbnz    x0, 27f
     mov     x0, x19
     mov     x1, #SEEN_ATTESTER_SLASHING
@@ -1963,7 +1963,7 @@ SPEC_FUNCTION validate_attester_slashing_gossip
     ldr     x2, [x2, x22, lsl #3]
     mov     x3, #0
     mov     x4, #0
-    bl      seen_add_key
+    bl      lantern_seen_add_key
 27: add     x22, x22, #1
     b       26b
 4:  mov     x0, #LANTERN_GOSSIP_IGNORE
@@ -2013,22 +2013,22 @@ SPEC_FUNCTION \name
     ldr     x2, [x27, #BeaconBlock_slot]
     ldr     x3, [x27, #BeaconBlock_proposer_index]
     mov     x4, #0
-    bl      seen_find_key
+    bl      lantern_seen_find_key
     cbnz    x0, 4f
     mov     x0, x20                         /* [IGNORE] not from a future slot */
     ldr     x1, [x27, #BeaconBlock_slot]
     mov     x2, x22
-    bl      is_future_slot
+    bl      lantern_is_future_slot
     cbnz    x0, 4f
     mov     x0, x20                         /* [IGNORE] after the finalized slot */
-    bl      finalized_slot
+    bl      lantern_finalized_slot
     ldr     x9, [x27, #BeaconBlock_slot]
     cmp     x9, x0
     b.ls    4f
     mov     x0, x20                         /* [IGNORE] the parent has been seen */
     mov     x1, x19
     add     x2, x27, #BeaconBlock_parent_root
-    bl      block_lookup
+    bl      lantern_block_lookup
     cbz     x1, 4f
     mov     x28, x0
     cmp     x1, #2
@@ -2072,7 +2072,7 @@ SPEC_FUNCTION \name
     add     x5, x10, #Validator_pubkey
     add     x6, x21, #\sig
     mov     x7, x25
-    bl      verify_signed
+    bl      lantern_verify_signed
     cbnz    x0, 7f
     cbz     x1, 5f
 .if FORK == FORK_BELLATRIX && \blinded == 0
@@ -2110,7 +2110,7 @@ SPEC_FUNCTION \name
     b.ls    5f
     mov     x0, x20                         /* [REJECT] the finalized checkpoint is an ancestor */
     mov     x1, x28
-    bl      finalized_is_ancestor
+    bl      lantern_finalized_is_ancestor
     CHECK_STATUS x26, 7f, 8f
     cbz     x1, 5f
 .if FORK >= FORK_FULU
@@ -2147,14 +2147,14 @@ SPEC_FUNCTION \name
     cmp     x9, x10
     b.ne    5f
     mov     x0, x19                         /* seen.proposer_slots.add(...) */
-    bl      seen_key_room
+    bl      lantern_seen_key_room
     cbz     x0, 9f
     mov     x0, x19
     mov     x1, #SEEN_PROPOSER_SLOT
     ldr     x2, [x27, #BeaconBlock_slot]
     ldr     x3, [x27, #BeaconBlock_proposer_index]
     mov     x4, #0
-    bl      seen_add_key
+    bl      lantern_seen_add_key
     b       8f
 4:  mov     x0, #LANTERN_GOSSIP_IGNORE
     b       6f
@@ -2217,7 +2217,7 @@ SPEC_END compute_subnet_for_data_column_sidecar
  * The list is hashed from a standalone copy at the end of scratch.
  * x19 scratch, x20 branch, x21 root, x22 i. Locals: L value (32), L+32 the two halves (64).
  */
-LOCAL_FUNCTION commitments_in_body
+LOCAL_FUNCTION lantern_commitments_in_body
     ENTER 96
     mov     x19, x0
     mov     x20, x3
@@ -2268,7 +2268,7 @@ LOCAL_FUNCTION commitments_in_body
 21: add     x0, sp, #(L + 32)
     mov     x1, #64
     add     x2, sp, #L
-    bl      sha256_short
+    bl      lantern_sha256_short
     add     x22, x22, #1
     b       1b
 3:  add     x14, sp, #L                     /* value == root */
@@ -2279,7 +2279,7 @@ LOCAL_FUNCTION commitments_in_body
 7:  LEAVE 96
 9:  mov     x0, #LANTERN_BUFFER_TOO_SMALL
     LEAVE 96
-END_FUNCTION commitments_in_body
+END_FUNCTION lantern_commitments_in_body
 
 /* Locals: sp+16 out. */
 SPEC_FUNCTION verify_data_column_sidecar_inclusion_proof
@@ -2291,7 +2291,7 @@ SPEC_FUNCTION verify_data_column_sidecar_inclusion_proof
     PART    x1, x2, x9, DataColumnSidecar_kzg_commitments
     add     x3, x9, #DataColumnSidecar_kzg_commitments_inclusion_proof
     add     x4, x9, #(DataColumnSidecar_signed_block_header + SignedBeaconBlockHeader_message + BeaconBlockHeader_body_root)
-    bl      commitments_in_body
+    bl      lantern_commitments_in_body
     cbnz    x0, 7f
     ldr     x9, [sp, #16]
     str     x1, [x9]
@@ -2308,7 +2308,7 @@ SPEC_FUNCTION verify_partial_data_column_header_inclusion_proof
     PART    x1, x2, x9, PartialDataColumnHeader_kzg_commitments
     add     x3, x9, #PartialDataColumnHeader_kzg_commitments_inclusion_proof
     add     x4, x9, #(PartialDataColumnHeader_signed_block_header + SignedBeaconBlockHeader_message + BeaconBlockHeader_body_root)
-    bl      commitments_in_body
+    bl      lantern_commitments_in_body
     cbnz    x0, 7f
     ldr     x9, [sp, #16]
     str     x1, [x9]
@@ -2433,22 +2433,22 @@ SPEC_END verify_partial_data_column_sidecar_kzg_proofs
 
 .if FORK >= FORK_DENEB
 /*
- * L0: the checks of a block header shared by the sidecar topics, from is_future_slot to the finalized ancestor:
+ * L0: the checks of a block header shared by the sidecar topics, from lantern_is_future_slot to the finalized ancestor:
  * x0 = status, x1 = LANTERN_VALID, LANTERN_GOSSIP_IGNORE or LANTERN_GOSSIP_REJECT, x2 = the parent node.
  * Takes x19 seen, x20 store, x22 current_time_ms, x23 head state, x25 scratch, and x0 the SignedBeaconBlockHeader.
  * x19-x28 are the caller's and stay unchanged. Locals: sp+16 header, sp+24 parent node.
  */
-LOCAL_FUNCTION header_checks
+LOCAL_FUNCTION lantern_header_checks
     FRAME 16
     str     x0, [sp, #16]
     mov     x0, x20                         /* [IGNORE] not from a future slot */
     ldr     x9, [sp, #16]
     ldr     x1, [x9, #(SignedBeaconBlockHeader_message + BeaconBlockHeader_slot)]
     mov     x2, x22
-    bl      is_future_slot
+    bl      lantern_is_future_slot
     cbnz    x0, 4f
     mov     x0, x20                         /* [IGNORE] after the finalized slot */
-    bl      finalized_slot
+    bl      lantern_finalized_slot
     ldr     x9, [sp, #16]
     ldr     x9, [x9, #(SignedBeaconBlockHeader_message + BeaconBlockHeader_slot)]
     cmp     x9, x0
@@ -2457,7 +2457,7 @@ LOCAL_FUNCTION header_checks
     mov     x1, x19
     ldr     x2, [sp, #16]
     add     x2, x2, #(SignedBeaconBlockHeader_message + BeaconBlockHeader_parent_root)
-    bl      block_lookup
+    bl      lantern_block_lookup
     cbz     x1, 4f
     cmp     x1, #2
     b.ne    5f
@@ -2475,7 +2475,7 @@ LOCAL_FUNCTION header_checks
     add     x6, x4, #SignedBeaconBlockHeader_signature
     add     x4, x4, #SignedBeaconBlockHeader_message
     mov     x7, x25
-    bl      verify_signed
+    bl      lantern_verify_signed
     cbnz    x0, 7f
     cbz     x1, 5f
     ldr     x9, [sp, #24]                   /* [REJECT] a higher slot than the parent */
@@ -2487,7 +2487,7 @@ LOCAL_FUNCTION header_checks
     b.ls    5f
     mov     x0, x20                         /* [REJECT] the finalized checkpoint is an ancestor */
     ldr     x1, [sp, #24]
-    bl      finalized_is_ancestor
+    bl      lantern_finalized_is_ancestor
     cbnz    x0, 6f
     cbz     x1, 5f
     mov     x1, #LANTERN_VALID
@@ -2502,7 +2502,7 @@ LOCAL_FUNCTION header_checks
     b.eq    7b
     mov     x1, x0
     b       8b
-END_FUNCTION header_checks
+END_FUNCTION lantern_header_checks
 .endif
 
 /* ---------------------------------------------------------------- Blob sidecars */
@@ -2548,7 +2548,7 @@ SPEC_FUNCTION verify_blob_sidecar_inclusion_proof
     add     x0, sp, #L                      /* hash_tree_root(Bytes48): its two chunks */
     mov     x1, #64
     add     x2, sp, #(L + 64)
-    bl      sha256_short
+    bl      lantern_sha256_short
     mov     x9, #KZG_COMMITMENT_INCLUSION_PROOF_DEPTH
     str     x9, [sp, #(L + 96)]
     ldr     x9, [x19, #BlobSidecar_index]   /* field 11 of the body, the list's data root, then the index */
@@ -2595,7 +2595,7 @@ SPEC_FUNCTION validate_blob_sidecar_gossip
     ldr     x2, [x27, #BeaconBlockHeader_slot]
     ldr     x3, [x27, #BeaconBlockHeader_proposer_index]
     ldr     x4, [x21, #BlobSidecar_index]
-    bl      seen_find_key
+    bl      lantern_seen_find_key
     cbnz    x0, 4f
     ldr     x9, [x21, #BlobSidecar_index]   /* [REJECT] the index is below the blob limit */
     LDQ     x10, x20, Store_config + BLOB_LIMIT
@@ -2611,7 +2611,7 @@ SPEC_FUNCTION validate_blob_sidecar_gossip
     cmp     x9, x10
     b.ne    5f
     ADDQ    x0, x21, BlobSidecar_signed_block_header    /* the header checks, through the finalized ancestor */
-    bl      header_checks
+    bl      lantern_header_checks
     cbnz    x0, 7f
     cbz     x1, 1f
     mov     x0, x1
@@ -2646,14 +2646,14 @@ SPEC_FUNCTION validate_blob_sidecar_gossip
     cmp     x9, x10
     b.ne    5f
     mov     x0, x19                         /* seen.blob_sidecar_tuples.add(...) */
-    bl      seen_key_room
+    bl      lantern_seen_key_room
     cbz     x0, 9f
     mov     x0, x19
     mov     x1, #SEEN_BLOB_SIDECAR
     ldr     x2, [x27, #BeaconBlockHeader_slot]
     ldr     x3, [x27, #BeaconBlockHeader_proposer_index]
     ldr     x4, [x21, #BlobSidecar_index]
-    bl      seen_add_key
+    bl      lantern_seen_add_key
     b       8f
 4:  mov     x0, #LANTERN_GOSSIP_IGNORE
     b       6f
@@ -2694,7 +2694,7 @@ SPEC_FUNCTION validate_data_column_sidecar_gossip
     ldr     x2, [x27, #BeaconBlockHeader_slot]
     ldr     x3, [x27, #BeaconBlockHeader_proposer_index]
     ldr     x4, [x21, #DataColumnSidecar_index]
-    bl      seen_find_key
+    bl      lantern_seen_find_key
     cbnz    x0, 4f
     mov     x0, x21                         /* [REJECT] verify_data_column_sidecar */
     add     x1, x20, #Store_config
@@ -2713,7 +2713,7 @@ SPEC_FUNCTION validate_data_column_sidecar_gossip
     cmp     x9, x10
     b.ne    5f
     add     x0, x21, #DataColumnSidecar_signed_block_header     /* the header checks, through the finalized ancestor */
-    bl      header_checks
+    bl      lantern_header_checks
     cbnz    x0, 7f
     mov     x28, x2
     cbz     x1, 1f
@@ -2743,14 +2743,14 @@ SPEC_FUNCTION validate_data_column_sidecar_gossip
     cmp     x9, x10
     b.ne    5f
     mov     x0, x19                         /* seen.data_column_sidecar_tuples.add(...) */
-    bl      seen_key_room
+    bl      lantern_seen_key_room
     cbz     x0, 9f
     mov     x0, x19
     mov     x1, #SEEN_DATA_COLUMN
     ldr     x2, [x27, #BeaconBlockHeader_slot]
     ldr     x3, [x27, #BeaconBlockHeader_proposer_index]
     ldr     x4, [x21, #DataColumnSidecar_index]
-    bl      seen_add_key
+    bl      lantern_seen_add_key
     b       8f
 4:  mov     x0, #LANTERN_GOSSIP_IGNORE
     b       6f
@@ -2808,7 +2808,7 @@ SPEC_FUNCTION validate_partial_data_column_sidecar_gossip
     cbnz    x0, 7f
     mov     x0, x19
     ldr     x1, [sp, #L]
-    bl      seen_find_header
+    bl      lantern_seen_find_header
     cbz     x0, 2f
     add     x14, x0, #SeenHeader_header_root
     add     x15, sp, #(L + 32)
@@ -2825,7 +2825,7 @@ SPEC_FUNCTION validate_partial_data_column_sidecar_gossip
     LDQ     x9, x27, PartialDataColumnHeader_kzg_commitments + 8   /* [REJECT] the header has commitments */
     cbz     x9, 5f
     add     x0, x27, #PartialDataColumnHeader_signed_block_header  /* the header checks, through the finalized ancestor */
-    bl      header_checks
+    bl      lantern_header_checks
     cbnz    x0, 7f
     cbz     x1, 21f
     mov     x0, x1
@@ -2847,7 +2847,7 @@ SPEC_FUNCTION validate_partial_data_column_sidecar_gossip
     b.ne    5f
     mov     x0, x19                         /* seen.partial_data_column_headers[group_id.beacon_block_root] = header */
     ldr     x1, [sp, #L]
-    bl      seen_find_header
+    bl      lantern_seen_find_header
     cbnz    x0, 3f
     ldr     x9, [x27]                       /* room for 64 + the header value */
     add     x9, x9, #SeenHeader_header
@@ -2877,16 +2877,16 @@ SPEC_FUNCTION validate_partial_data_column_sidecar_gossip
 3:  cbz     x28, 8f                         /* has_cells */
     mov     x0, x19                         /* [IGNORE] a valid header for the group has been seen */
     ldr     x1, [sp, #L]
-    bl      seen_find_header
+    bl      lantern_seen_find_header
     cbz     x0, 4f
     add     x27, x0, #SeenHeader_header
     mov     x0, x20                         /* [IGNORE] its slot is not in the future */
     ldr     x1, [x27, #(PartialDataColumnHeader_signed_block_header + SignedBeaconBlockHeader_message + BeaconBlockHeader_slot)]
     mov     x2, x22
-    bl      is_future_slot
+    bl      lantern_is_future_slot
     cbnz    x0, 4f
     mov     x0, x20                         /* [IGNORE] its slot is after the finalized slot */
-    bl      finalized_slot
+    bl      lantern_finalized_slot
     ldr     x9, [x27, #(PartialDataColumnHeader_signed_block_header + SignedBeaconBlockHeader_message + BeaconBlockHeader_slot)]
     cmp     x9, x0
     b.ls    4f

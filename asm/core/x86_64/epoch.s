@@ -296,14 +296,14 @@ SPEC_END process_inactivity_updates
 /* ---------------------------------------------------------------- Rewards and penalties */
 
 /* Write count n to an output IndexList and zero its n entries. list rdi, n rsi. */
-LOCAL_FUNCTION zero_deltas
+LOCAL_FUNCTION lantern_zero_deltas
     UNWIND_END_PROLOGUE
     movq    $LIST_FIXED, LIST_OFFSET(%rdi)
     mov     %rsi, LIST_COUNT(%rdi)
     add     $LIST_FIXED, %rdi
     shl     $3, %rsi
     jmp     lantern_zero
-END_FUNCTION zero_deltas
+END_FUNCTION lantern_zero_deltas
 
 .if FORK >= FORK_ALTAIR
 /*
@@ -329,10 +329,10 @@ SPEC_FUNCTION get_flag_index_deltas
     jb      9f
     mov     %r13, %rdi
     mov     %rax, %rsi
-    call    zero_deltas
+    call    lantern_zero_deltas
     mov     %r14, %rdi
     mov     (BeaconState_validators + 8)(%rbx), %rsi
-    call    zero_deltas
+    call    lantern_zero_deltas
     mov     (%r12), %rax
     mov     %rax, (L + 88)(%rsp)
     mov     %rbx, %rdi
@@ -473,10 +473,10 @@ SPEC_FUNCTION get_inactivity_penalty_deltas
     jb      9f
     mov     %r13, %rdi
     mov     %rax, %rsi
-    call    zero_deltas
+    call    lantern_zero_deltas
     mov     %r14, %rdi
     mov     (BeaconState_validators + 8)(%rbx), %rsi
-    call    zero_deltas
+    call    lantern_zero_deltas
     mov     (%r12), %rax
     mov     %rax, (L + 40)(%rsp)
     mov     %rbx, %rdi
@@ -1702,13 +1702,13 @@ SPEC_FUNCTION process_epoch
     NEED_SCRATCH_B %r12, %rbx, EPOCH_LISTS, EPOCH_EXTRA, 9f
 .if FORK >= FORK_ELECTRA
     mov     %rbx, %rdi                      # room for the deposits of the epoch
-    call    validator_room
+    call    lantern_validator_room
     cmp     $MAX_PENDING_DEPOSITS_PER_EPOCH, %rax
     jb      9f
 .endif
 .if FORK == FORK_PHASE0
     mov     %rbx, %rdi                      # room for the current epoch's attestations in the previous list
-    call    record_room
+    call    lantern_record_room
     test    %rax, %rax
     jnz     9f
 .endif

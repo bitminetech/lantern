@@ -27,7 +27,7 @@
 # the participants, rdx attested_header.beacon.slot, rsi finalized_header.beacon.slot, rdi
 # signature_slot, r8 1 with a next_sync_committee_branch not all zero, r9 1 with a finality_branch
 # not all zero; rax = 1 for bytes that are no update of the fork. Uses r10, r11.
-LOCAL_FUNCTION lc_update_fields
+LOCAL_FUNCTION lantern_lc_update_fields
     UNWIND_END_PROLOGUE
     mov     8(%rdi), %r10
     add     %rdi, %r10                      # the bytes, r11 of them
@@ -89,7 +89,7 @@ LOCAL_FUNCTION lc_update_fields
     ret
 9:  mov     $1, %eax
     ret
-END_FUNCTION lc_update_fields
+END_FUNCTION lantern_lc_update_fields
 .endif
 
 # rax = the sync committee period of the slot src. Uses rcx, rdx.
@@ -111,7 +111,7 @@ SPEC_FUNCTION is_better_update
 .else
     mov     %rdx, %r12
     mov     %rsi, %r13
-    call    lc_update_fields
+    call    lantern_lc_update_fields
     test    %rax, %rax
     jnz     96f
     mov     %rcx, %rbx
@@ -121,7 +121,7 @@ SPEC_FUNCTION is_better_update
     mov     %r8, S7(%rsp)
     mov     %r9, S8(%rsp)
     mov     %r13, %rdi
-    call    lc_update_fields
+    call    lantern_lc_update_fields
     test    %rax, %rax
     jnz     96f
     mov     %rcx, L(%rsp)
@@ -216,7 +216,7 @@ SPEC_FUNCTION execution_branch
     ADDRESS %rdi, lantern_type_BeaconBlockBody
     mov     %rbx, %rsi
     mov     %rbp, %rdx
-    call    node_decode
+    call    lantern_node_decode
     cmp     $1, %rax
     je      99f
     test    %rax, %rax
@@ -294,7 +294,7 @@ SPEC_FUNCTION block_to_light_client_header
     ADDRESS %rdi, lantern_type_SignedBeaconBlock
     mov     %rbx, %rsi
     mov     %rbp, %rdx
-    call    node_decode
+    call    lantern_node_decode
     cmp     $1, %rax
     je      98f
     test    %rax, %rax

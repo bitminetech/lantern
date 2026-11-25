@@ -61,19 +61,19 @@ VALIDATOR_LISTS PART_SPEC
 .endm
 
 /* L0: rax = the fewest free entries in the validator lists of state rdi. */
-LOCAL_FUNCTION validator_room
+LOCAL_FUNCTION lantern_validator_room
     UNWIND_END_PROLOGUE
     mov     $-1, %r9
     VALIDATOR_LISTS LIST_ROOM
     mov     %r9, %rax
     ret
-END_FUNCTION validator_room
+END_FUNCTION lantern_validator_room
 
 /*
  * L0: rax = the index of the validator of state rdi with the 48-byte public key at rsi, or -1.
  * The first 8 bytes reject most keys; then all 48 are compared. Uses rcx, rdx, r8, r9, xmm0-xmm4.
  */
-LOCAL_FUNCTION find_pubkey
+LOCAL_FUNCTION lantern_find_pubkey
     UNWIND_END_PROLOGUE
     PART    %rcx, %rdx, %rdi, BeaconState_validators
     mov     (%rsi), %r8
@@ -101,7 +101,7 @@ LOCAL_FUNCTION find_pubkey
     jmp     1b
 3:  mov     $-1, %rax
 4:  ret
-END_FUNCTION find_pubkey
+END_FUNCTION lantern_find_pubkey
 
 /*
  * rbx deposit, rbp config, r12 scratch, r13 out. Locals: L domain type, L+8 zero root,
@@ -244,7 +244,7 @@ SPEC_FUNCTION add_validator_to_registry
     mov     %rsi, %rbp
     mov     %rdx, %r12
     mov     %rcx, %r13
-    call    validator_room
+    call    lantern_validator_room
     test    %rax, %rax
     jz      9f
     mov     %rbx, %rdi
@@ -312,11 +312,11 @@ SPEC_FUNCTION apply_deposit
     ja      9f
     mov     %rbx, %rdi
     lea     DepositData_pubkey(%rbp), %rsi  # if pubkey not in validator_pubkeys
-    call    find_pubkey
+    call    lantern_find_pubkey
     cmp     $-1, %rax
     jne     5f
     mov     %rbx, %rdi                      # room for the validator, before any change
-    call    validator_room
+    call    lantern_validator_room
     test    %rax, %rax
     jz      9f
     mov     %rbp, %rdi
@@ -343,7 +343,7 @@ SPEC_FUNCTION apply_deposit
     movq    $0, (L + 16 + PendingDeposit_slot)(%rsp)
     mov     %rbx, %rdi
     lea     (L + 16)(%rsp), %rsi
-    call    append_pending_deposit
+    call    lantern_append_pending_deposit
     jmp     7f
 8:  xor     %eax, %eax
 7:  LEAVE 208
@@ -365,11 +365,11 @@ SPEC_FUNCTION apply_deposit
     mov     %rdx, %r12
     mov     %rcx, %r13
     lea     DepositData_pubkey(%rbp), %rsi  # if pubkey not in validator_pubkeys
-    call    find_pubkey
+    call    lantern_find_pubkey
     cmp     $-1, %rax
     jne     5f
     mov     %rbx, %rdi                      # room for the validator, before any change
-    call    validator_room
+    call    lantern_validator_room
     test    %rax, %rax
     jz      9f
     mov     %rbp, %rdi
@@ -413,7 +413,7 @@ SPEC_FUNCTION process_deposit
     movq    $0, (%r14)
     mov     (%r13), %r15
     mov     %rbx, %rdi                      # room for a new validator, before any change
-    call    validator_room
+    call    lantern_validator_room
     test    %rax, %rax
     jz      9f
     ADDRESS %rdi, lantern_type_DepositData  # leaf = hash_tree_root(deposit.data)
@@ -467,7 +467,7 @@ SPEC_FUNCTION apply_pending_deposit
     mov     %rdx, %r12
     mov     %rcx, %r13
     lea     PendingDeposit_pubkey(%rbp), %rsi
-    call    find_pubkey
+    call    lantern_find_pubkey
     cmp     $-1, %rax
     jne     1f
     mov     %rbp, %rdi                      # a new public key: a validator when the signature is valid
@@ -514,7 +514,7 @@ SPEC_FUNCTION process_pending_deposits
     mov     %rcx, %r13
     NEED_SCRATCH_B %r12, %rbx, 1, POSTPONE_BYTES, 9f
     mov     %rbx, %rdi
-    call    validator_room
+    call    lantern_validator_room
     cmp     $MAX_PENDING_DEPOSITS_PER_EPOCH, %rax
     jb      9f
     movq    $0, (%r13)
@@ -573,7 +573,7 @@ SPEC_FUNCTION process_pending_deposits
     call    lantern_copy
     mov     %rbx, %rdi
     lea     (L + 40 + PendingDeposit_pubkey)(%rsp), %rsi
-    call    find_pubkey
+    call    lantern_find_pubkey
     cmp     $-1, %rax
     je      3f                              # not exited, not withdrawn
     mov     BeaconState_validators(%rbx), %rcx

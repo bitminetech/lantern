@@ -209,11 +209,11 @@ SPEC_FUNCTION process_proposer_slashing
     cbz     x9, 6f
     add     x25, x20, #ProposerSlashing_signed_header_1
     add     x0, sp, #L
-    bl      check_header_signature
+    bl      lantern_check_header_signature
     cbnz    x0, 3f
     add     x25, x20, #ProposerSlashing_signed_header_2
     add     x0, sp, #L
-    bl      check_header_signature
+    bl      lantern_check_header_signature
 3:  CHECK_STATUS x23, 7f, 8f
     mov     x0, x19                         /* slash_validator(state, header_1.proposer_index) */
     add     x1, sp, #(L + 112)
@@ -238,7 +238,7 @@ SPEC_END process_proposer_slashing
  * +16 domain type, +24 domain, +56 signing root as a ByteList. Returns x0: 0, a status,
  * or LANTERN_INVALID_PROPOSER_SLASHING.
  */
-LOCAL_FUNCTION check_header_signature
+LOCAL_FUNCTION lantern_check_header_signature
     FRAME 16
     str     x0, [sp, #16]
     mov     x9, x0
@@ -267,13 +267,13 @@ LOCAL_FUNCTION check_header_signature
     add     x1, x25, #SignedBeaconBlockHeader_signature
     add     x2, x9, #56
     mov     x3, x22
-    bl      verify_root_signature
+    bl      lantern_verify_root_signature
     cbnz    x0, 1f
     mov     x0, #LANTERN_INVALID_PROPOSER_SLASHING
     cmp     x1, #0
     csel    x0, x0, xzr, eq
 1:  UNFRAME 16
-END_FUNCTION check_header_signature
+END_FUNCTION lantern_check_header_signature
 
 /*
  * x19 state, x20 attester slashing, x21 config, x22 scratch, x23 result, x24 attestation_1,

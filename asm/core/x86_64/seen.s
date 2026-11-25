@@ -132,7 +132,7 @@ FUNCTION lantern_seen_add_block
     mov     %rdi, 0(%rsp)
     mov     %rsi, 8(%rsp)
     mov     %rdx, 16(%rsp)
-    call    seen_find_block
+    call    lantern_seen_find_block
     test    %rax, %rax
     jnz     2f
     mov     0(%rsp), %rdi

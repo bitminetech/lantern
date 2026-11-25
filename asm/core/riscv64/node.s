@@ -25,7 +25,7 @@
 .endif
 
 /* a0 = the fork of the slot a0 with the config a1: the last fork whose epoch is at most the slot's. Uses t0-t2. */
-LOCAL_FUNCTION node_fork
+LOCAL_FUNCTION lantern_node_fork
     UNWIND_END_PROLOGUE
     li      t0, SLOTS_PER_EPOCH
     divu    t0, a0, t0
@@ -38,10 +38,10 @@ LOCAL_FUNCTION node_fork
     j       1b
 2:  srli    a0, t1, 4
     ret
-END_FUNCTION node_fork
+END_FUNCTION lantern_node_fork
 
 /* a0 = the current slot of the store a0: (time_ms - genesis_time_ms) // SLOT_DURATION_MS, 0 before genesis. Uses t0-t2, a7. */
-LOCAL_FUNCTION node_store_slot
+LOCAL_FUNCTION lantern_node_store_slot
     UNWIND_END_PROLOGUE
     ld      t0, Store_time_ms(a0)
     ld      t1, Store_genesis_time_ms(a0)
@@ -54,7 +54,7 @@ LOCAL_FUNCTION node_store_slot
     beqz    t1, 1f
     divu    a0, t0, t1
 1:  ret
-END_FUNCTION node_store_slot
+END_FUNCTION lantern_node_store_slot
 
 /* t3 += the room a0 field times width; to 9f on overflow. Uses t0-t2. */
 .macro NODE_SIZE_ADD field, width
@@ -156,7 +156,7 @@ END_FUNCTION lantern_node_size
  * Lay out the parts of the node a0 for the room a1 at NODE_FIXED, with no entries; the
  * NodeResponse entries all made, each free. Uses t0-t3, a7.
  */
-LOCAL_FUNCTION node_layout
+LOCAL_FUNCTION lantern_node_layout
     UNWIND_END_PROLOGUE
     ld      t3, NodeRoom_request_bytes(a1)
     addi    t3, t3, NodeStream__fixed + 7
@@ -238,7 +238,7 @@ LOCAL_FUNCTION node_layout
     addi    t1, t1, -1
     j       1b
 2:  ret
-END_FUNCTION node_layout
+END_FUNCTION lantern_node_layout
 
 /*
  * (room, config, anchor, flags, node): a node whose one block is the anchor, imported, with
@@ -322,7 +322,7 @@ FUNCTION lantern_node_init
 2:  addi    a0, s3, NodeAnchor_node_id
     mv      a2, s2
     addi    a3, s6, Node_columns
-    call    node_custody_columns
+    call    lantern_node_custody_columns
     bnez    a0, 9f
     andi    t0, s5, NODE_FLAG_ENGINE        # the secret, the host, the first id, and a forkchoiceUpdated due
     beqz    t0, 1f
@@ -352,7 +352,7 @@ FUNCTION lantern_node_init
     call    lantern_copy
 16: mv      a0, s6
     mv      a1, s1
-    call    node_layout
+    call    lantern_node_layout
     PART    a0, t1, s6, Node_blocks         # the anchor block
     li      a1, NodeBlock__mem
     call    lantern_zero
@@ -499,7 +499,7 @@ FUNCTION lantern_node_copy
     call    lantern_copy
     mv      a0, s3
     mv      a1, s2
-    call    node_layout
+    call    lantern_node_layout
     ld      a0, Node_db(s1)                 # the Db, at its new room
     add     a0, s1, a0
     addi    a1, s2, NodeRoom_db_slots
@@ -584,7 +584,7 @@ END_FUNCTION lantern_node_copy
  */
 
 /* a0 = a new action of kind a0 and a1 bytes, its size and kind written. Uses t0-t2. */
-LOCAL_FUNCTION node_act
+LOCAL_FUNCTION lantern_node_act
     UNWIND_END_PROLOGUE
     ld      t0, 8(s6)
     ld      t1, 16(s6)
@@ -596,19 +596,19 @@ LOCAL_FUNCTION node_act
     sd      a0, 8(t2)
     mv      a0, t2
     ret
-END_FUNCTION node_act
+END_FUNCTION lantern_node_act
 
 /* a0 = a new BufferId. Uses t0. */
-LOCAL_FUNCTION node_new_id
+LOCAL_FUNCTION lantern_node_new_id
     UNWIND_END_PROLOGUE
     ld      a0, Node_next_id(s1)
     addi    t0, a0, 1
     sd      t0, Node_next_id(s1)
     ret
-END_FUNCTION node_new_id
+END_FUNCTION lantern_node_new_id
 
 /* a0 = the index of the block whose root is at a0 (8-aligned), or 2^64 - 1; a1 = its entry. Uses t0-t2, a6, a7. */
-LOCAL_FUNCTION node_find_block
+LOCAL_FUNCTION lantern_node_find_block
     UNWIND_END_PROLOGUE
     PART    t0, t1, s1, Node_blocks
     li      t2, 0
@@ -622,10 +622,10 @@ LOCAL_FUNCTION node_find_block
     j       1b
 3:  li      a0, -1
     ret
-END_FUNCTION node_find_block
+END_FUNCTION lantern_node_find_block
 
 /* a0 = the index of the checkpoint (epoch a0, root at a1, 4-aligned), or 2^64 - 1; a1 = its entry. Uses t0-t3, a6, a7. */
-LOCAL_FUNCTION node_find_checkpoint
+LOCAL_FUNCTION lantern_node_find_checkpoint
     UNWIND_END_PROLOGUE
     PART    t0, t1, s1, Node_checkpoints
     li      t2, 0
@@ -642,10 +642,10 @@ LOCAL_FUNCTION node_find_checkpoint
     j       1b
 3:  li      a0, -1
     ret
-END_FUNCTION node_find_checkpoint
+END_FUNCTION lantern_node_find_checkpoint
 
 /* a0 = a WORK action: kind a0, state_a a1, state_b a2, data a3, target a4, arg a5; state_c 0. Uses t0-t2. */
-LOCAL_FUNCTION node_work
+LOCAL_FUNCTION lantern_node_work
     UNWIND_END_PROLOGUE
     li      t0, NODE_WORK_BLOCK_ATTESTATION     # a block's vote: event_votes takes 1 more
     beq     a0, t0, 1f
@@ -673,13 +673,13 @@ LOCAL_FUNCTION node_work
     sd      a5, NodeAction_arg(t2)
     mv      a0, t2
     ret
-END_FUNCTION node_work
+END_FUNCTION lantern_node_work
 
 /*
  * An action of kind a0 with the two ids a1 and a2 (STATE_COPY: source, new; the FREE kinds: a1). A
  * STATE_FREE of the base state is none. Uses t0-t2, a7.
  */
-LOCAL_FUNCTION node_ids
+LOCAL_FUNCTION lantern_node_ids
     UNWIND_END_PROLOGUE
     li      t0, NODE_ACT_STATE_FREE         # a STATE_FREE of the state a validator stream reads goes to the entry: API_STREAM_OWN_STATE
     bne     a0, t0, 5f
@@ -756,7 +756,7 @@ LOCAL_FUNCTION node_ids
     sd      a1, 16(t2)
     sd      a2, 24(t2)
     ret
-END_FUNCTION node_ids
+END_FUNCTION lantern_node_ids
 
 /* ------------------------------------------------------------ the pool (node.md) */
 
@@ -766,7 +766,7 @@ END_FUNCTION node_ids
  * beacon_attestation (with its slot a4, committee index a5 and member a6), in the first free
  * entry, for an attestation one below 3/4 of the pool's capacity; else 0. Uses t0-t4, a7.
  */
-LOCAL_FUNCTION node_pool_add
+LOCAL_FUNCTION lantern_node_pool_add
     UNWIND_END_PROLOGUE
     li      t0, GOSSIP_VOLUNTARY_EXIT
     beq     a0, t0, 1f
@@ -824,13 +824,13 @@ LOCAL_FUNCTION node_pool_add
     ret
 8:  li      a0, 0
     ret
-END_FUNCTION node_pool_add
+END_FUNCTION lantern_node_pool_add
 
 /*
  * The pool entry a0 goes: it is free (topic 0), the pool's count drops past the free entries at
  * its end, and its bytes get a NODE_ACT_BYTES_FREE.
  */
-LOCAL_FUNCTION node_pool_drop
+LOCAL_FUNCTION lantern_node_pool_drop
     FRAME 0
     ld      a1, NodePool_data_id(a0)
     sd      zero, NodePool_topic(a0)
@@ -847,9 +847,9 @@ LOCAL_FUNCTION node_pool_drop
 2:  STQ     t1, s1, Node_pool + 8
     li      a0, NODE_ACT_BYTES_FREE
     li      a2, 0
-    call    node_ids
+    call    lantern_node_ids
     UNFRAME 0
-END_FUNCTION node_pool_drop
+END_FUNCTION lantern_node_pool_drop
 
 /*
  * At a new head, each attestation of the pool whose slot's epoch + 1 is below the epoch of the
@@ -858,11 +858,11 @@ END_FUNCTION node_pool_drop
  * and takes NODE_POOL_CHECKING; with a0 = 0, none. Locals: the state, the index, the epoch, the
  * slot.
  */
-LOCAL_FUNCTION node_pool_checks
+LOCAL_FUNCTION lantern_node_pool_checks
     FRAME 32
     sd      a0, 0(sp)
     mv      a0, s2
-    call    node_store_slot
+    call    lantern_node_store_slot
     sd      a0, 24(sp)
     li      t0, SLOTS_PER_EPOCH
     divu    t0, a0, t0
@@ -881,7 +881,7 @@ LOCAL_FUNCTION node_pool_checks
     addi    t2, t2, 1
     ld      t3, 24(sp)
     bgeu    t2, t3, 7f
-    call    node_pool_drop
+    call    lantern_node_pool_drop
     j       7f
 71: li      t3, GOSSIP_BEACON_ATTESTATION
     bne     t2, t3, 7f
@@ -891,7 +891,7 @@ LOCAL_FUNCTION node_pool_checks
     addi    t2, t2, 1
     ld      t3, 16(sp)
     bgeu    t2, t3, 7f
-    call    node_pool_drop
+    call    lantern_node_pool_drop
 7:  ld      t0, 8(sp)
     addi    t0, t0, 1
     sd      t0, 8(sp)
@@ -921,19 +921,19 @@ LOCAL_FUNCTION node_pool_checks
     li      a2, 0
     ld      a3, NodePool_data_id(t0)
     ld      a5, NodePool_topic(t0)
-    call    node_work
+    call    lantern_node_work
 2:  ld      t0, 8(sp)
     addi    t0, t0, 1
     sd      t0, 8(sp)
     j       1b
 9:  UNFRAME 32
-END_FUNCTION node_pool_checks
+END_FUNCTION lantern_node_pool_checks
 
 /*
  * The NODE_EV_WORK_DONE a0 of a NODE_WORK_POOL_CHECK, of the entry at index target in
  * NODE_POOL_CHECKING with its bytes: LANTERN_VALID, it takes NODE_POOL_KEPT; else it goes.
  */
-LOCAL_FUNCTION node_pool_check_done
+LOCAL_FUNCTION lantern_node_pool_check_done
     FRAME 0
     ld      t2, NodeAction_target(a0)
     PART    t0, t1, s1, Node_pool
@@ -955,20 +955,20 @@ LOCAL_FUNCTION node_pool_check_done
     sd      t1, NodePool_state(t0)
     j       9f
 1:  mv      a0, t0
-    call    node_pool_drop
+    call    lantern_node_pool_drop
 9:  UNFRAME 0
-END_FUNCTION node_pool_check_done
+END_FUNCTION lantern_node_pool_check_done
 
 /* a0 = the slot of the block of the store's finalized root, or 2^64 - 1 when the node keeps none. Uses t0-t2, a6, a7. */
-LOCAL_FUNCTION node_f_slot
+LOCAL_FUNCTION lantern_node_f_slot
     FRAME 0
     addi    a0, s2, Store_finalized_checkpoint + 8
-    call    node_find_block
+    call    lantern_node_find_block
     li      t0, -1
     beq     a0, t0, 1f
     ld      a0, NodeBlock_slot(a1)
 1:  UNFRAME 0
-END_FUNCTION node_f_slot
+END_FUNCTION lantern_node_f_slot
 
 /*
  * a0 = the post-state again of the imported block entry a0 above F's slot, or 0 (node.md): the path
@@ -978,7 +978,7 @@ END_FUNCTION node_f_slot
  * scratch, at most 8 bytes for each NodeBlock entry. s3 the block, s4 the list, s7 its count, s8 the
  * copy, s9 the ancestor's post-state, s10 the copy's slot. Locals: L the scratch size, L+8 an entry.
  */
-LOCAL_FUNCTION node_rebuild
+LOCAL_FUNCTION lantern_node_rebuild
     ENTER 16
     mv      s3, a0
     ld      t0, 0(s5)
@@ -1000,7 +1000,7 @@ LOCAL_FUNCTION node_rebuild
     sd      a0, 0(t2)
     addi    s7, s7, 1
     addi    a0, a0, NodeBlock_parent_root
-    call    node_find_block
+    call    lantern_node_find_block
     li      t0, -1
     beq     a0, t0, 7f
     ld      t0, NodeBlock_status(a1)
@@ -1010,12 +1010,12 @@ LOCAL_FUNCTION node_rebuild
     mv      a0, a1
     beqz    s9, 1b
     ld      s10, NodeBlock_slot(a1)         # the ancestor: a copy of its post-state
-    call    node_new_id
+    call    lantern_node_new_id
     mv      s8, a0
     li      a0, NODE_ACT_STATE_COPY
     mv      a1, s9
     mv      a2, s8
-    call    node_ids
+    call    lantern_node_ids
 2:  beqz    s7, 3f                          # each block, from the ancestor's child
     addi    s7, s7, -1
     slli    t2, s7, 3
@@ -1026,7 +1026,7 @@ LOCAL_FUNCTION node_rebuild
     mv      a1, s9
     mv      a2, s10
     ld      a3, NodeBlock_slot(t0)
-    call    node_cross
+    call    lantern_node_cross
     mv      s8, a0
     ld      t0, (L + 8)(sp)
     ld      s10, NodeBlock_slot(t0)
@@ -1036,7 +1036,7 @@ LOCAL_FUNCTION node_rebuild
     ld      a3, NodeBlock_data_id(t0)
     li      a4, 0
     li      a5, 0
-    call    node_work
+    call    lantern_node_work
     j       2b
 3:  sd      s8, NodeBlock_state_id(s3)
     ld      t0, L(sp)
@@ -1047,7 +1047,7 @@ LOCAL_FUNCTION node_rebuild
     sd      t0, 0(s5)
 8:  li      a0, 0
     LEAVE 16
-END_FUNCTION node_rebuild
+END_FUNCTION lantern_node_rebuild
 
 /*
  * The post-states the node can rebuild go (node.md): each imported block above F's slot with a
@@ -1058,14 +1058,14 @@ END_FUNCTION node_rebuild
  * s7 the store's slot, s8 F's slot, s9 a child, s10 the children. Locals: L the entries left to
  * look at.
  */
-LOCAL_FUNCTION node_shed
+LOCAL_FUNCTION lantern_node_shed
     ENTER 16
-    call    node_f_slot
+    call    lantern_node_f_slot
     mv      s8, a0
     li      t0, -1
     beq     s8, t0, 9f
     mv      a0, s2
-    call    node_store_slot
+    call    lantern_node_store_slot
     mv      s7, a0
     PART    s3, s4, s1, Node_blocks
 1:  beqz    s4, 7f
@@ -1115,13 +1115,13 @@ LOCAL_FUNCTION node_shed
     li      a0, NODE_ACT_STATE_FREE
     ld      a1, NodeBlock_state_id(s3)
     li      a2, 0
-    call    node_ids
+    call    lantern_node_ids
     sd      zero, NodeBlock_state_id(s3)
 6:  addi    s3, s3, NodeBlock__mem
     addi    s4, s4, -1
     j       1b
 7:  addi    a0, s1, Node_head_root          # a head with no post-state above F's slot: it again
-    call    node_find_block
+    call    lantern_node_find_block
     li      t0, -1
     beq     a0, t0, 9f
     ld      t0, NodeBlock_status(a1)
@@ -1132,9 +1132,9 @@ LOCAL_FUNCTION node_shed
     ld      t0, NodeBlock_slot(a1)
     bleu    t0, s8, 9f
     mv      a0, a1
-    call    node_rebuild
+    call    lantern_node_rebuild
 9:  LEAVE 16
-END_FUNCTION node_shed
+END_FUNCTION lantern_node_shed
 
 /*
  * a0 = the proposer state of a gossip message of the parent root at a0 and the slot a1 (node.md,
@@ -1144,7 +1144,7 @@ END_FUNCTION node_shed
  * post-state, s8 an entry, s9 the entries left, s10 the copy (s5 and s6 are the step's scratch and
  * actions).
  */
-LOCAL_FUNCTION node_gossip_state
+LOCAL_FUNCTION lantern_node_gossip_state
     ENTER 0
     mv      s3, a0
     mv      s4, a1
@@ -1172,25 +1172,25 @@ LOCAL_FUNCTION node_gossip_state
     addi    s8, s8, NodeGossipState__mem
     addi    s9, s9, -1
     bnez    s9, 3b
-    call    node_new_id                     # every entry in use: a copy for the message alone
+    call    lantern_node_new_id                     # every entry in use: a copy for the message alone
     mv      s10, a0
     mv      a2, a0
     li      a0, NODE_ACT_STATE_COPY
     mv      a1, s7
-    call    node_ids
+    call    lantern_node_ids
     mv      a0, s10
     LEAVE 0
 4:  ld      a1, NodeGossipState_state(s8)   # its old state goes
     beqz    a1, 5f
     li      a0, NODE_ACT_STATE_FREE
     li      a2, 0
-    call    node_ids
-5:  call    node_new_id
+    call    lantern_node_ids
+5:  call    lantern_node_new_id
     sd      a0, NodeGossipState_state(s8)
     mv      a2, a0
     li      a0, NODE_ACT_STATE_COPY
     mv      a1, s7
-    call    node_ids
+    call    lantern_node_ids
     addi    t1, s8, NodeGossipState_root
     COPY32  t1, s3
     sd      s4, NodeGossipState_slot(s8)
@@ -1198,10 +1198,10 @@ LOCAL_FUNCTION node_gossip_state
     sd      t0, NodeGossipState_uses(s8)
     ld      a0, NodeGossipState_state(s8)
     LEAVE 0
-END_FUNCTION node_gossip_state
+END_FUNCTION lantern_node_gossip_state
 
 # The end of a GOSSIP work of the proposer state a0 (node.md): its gossip_states entry has 1 use less; a state of no entry goes.
-LOCAL_FUNCTION node_gossip_state_done
+LOCAL_FUNCTION lantern_node_gossip_state_done
     ENTER 0
     beqz    a0, 9f
     ADDQ    t2, s1, Node_gossip_states
@@ -1219,19 +1219,19 @@ LOCAL_FUNCTION node_gossip_state_done
     mv      a1, a0
     li      a0, NODE_ACT_STATE_FREE
     li      a2, 0
-    call    node_ids
+    call    lantern_node_ids
 9:  LEAVE 0
-END_FUNCTION node_gossip_state_done
+END_FUNCTION lantern_node_gossip_state_done
 
 /*
  * The proposer states of gossip that no work uses go (node.md): each gossip_states entry with a
  * state, no use and a slot + 2 at most the store's slot, when the actions have room. s3 an entry,
  * s4 the store's slot, s7 the entries left.
  */
-LOCAL_FUNCTION node_gossip_shed
+LOCAL_FUNCTION lantern_node_gossip_shed
     ENTER 0
     mv      a0, s2
-    call    node_store_slot
+    call    lantern_node_store_slot
     mv      s4, a0
     ADDQ    s3, s1, Node_gossip_states
     li      s7, NODE_GOSSIP_STATES
@@ -1244,12 +1244,12 @@ LOCAL_FUNCTION node_gossip_shed
     bltu    t1, t0, 2f
     bltu    s4, t1, 2f
     li      a0, 32
-    call    node_room
+    call    lantern_node_room
     beqz    a0, 9f
     li      a0, NODE_ACT_STATE_FREE
     ld      a1, NodeGossipState_state(s3)
     li      a2, 0
-    call    node_ids
+    call    lantern_node_ids
     sd      zero, 0(s3)                     # the entry becomes zero
     sd      zero, 8(s3)
     sd      zero, 16(s3)
@@ -1261,7 +1261,7 @@ LOCAL_FUNCTION node_gossip_shed
     addi    s7, s7, -1
     bnez    s7, 1b
 9:  LEAVE 0
-END_FUNCTION node_gossip_shed
+END_FUNCTION lantern_node_gossip_shed
 
 /*
  * a0 = the id of the last copy: the copy a0 of the state of id a1, at slot a2, crosses each fork
@@ -1270,18 +1270,18 @@ END_FUNCTION node_gossip_shed
  * and a STATE_FREE of the copy before. s3 the copy's slot, s4 the upgrade's buffer, s7 the copy,
  * s8 the state a1, s9 the fork, s10 the last fork.
  */
-LOCAL_FUNCTION node_cross
+LOCAL_FUNCTION lantern_node_cross
     ENTER 0
     mv      s7, a0
     mv      s8, a1
     mv      s3, a2
     mv      a0, a3
     addi    a1, s1, Node_config
-    call    node_fork
+    call    lantern_node_fork
     mv      s10, a0
     mv      a0, s3
     addi    a1, s1, Node_config
-    call    node_fork
+    call    lantern_node_fork
     mv      s9, a0
 1:  bgeu    s9, s10, 9f
     addi    s9, s9, 1
@@ -1298,46 +1298,46 @@ LOCAL_FUNCTION node_cross
     li      a3, 0
     li      a4, 0
     mv      a5, s3
-    call    node_work
-2:  call    node_new_id                     # the upgrade's buffer: a copy of the state
+    call    lantern_node_work
+2:  call    lantern_node_new_id                     # the upgrade's buffer: a copy of the state
     mv      s4, a0
     li      a0, NODE_ACT_STATE_COPY
     mv      a1, s8
     mv      a2, s4
-    call    node_ids
+    call    lantern_node_ids
     li      a0, NODE_WORK_UPGRADE
     mv      a1, s7
     mv      a2, s4
     li      a3, 0
     li      a4, 0
     mv      a5, s9
-    call    node_work
+    call    lantern_node_work
     li      a0, NODE_ACT_STATE_FREE
     mv      a1, s7
     li      a2, 0
-    call    node_ids
+    call    lantern_node_ids
     mv      s7, s4
     j       1b
 9:  mv      a0, s7
     LEAVE 0
-END_FUNCTION node_cross
+END_FUNCTION lantern_node_cross
 
 /*
  * a0 = the state id of the checkpoint state of (epoch a0, root at a1, 8-aligned), or 0 when the
  * root's block has no post-state: a new checkpoint is a copy of that post-state and a
  * TARGET_STATE work. s3 epoch, s4 root, s7 the new id, s8 the block's state id.
  */
-LOCAL_FUNCTION node_checkpoint_state
+LOCAL_FUNCTION lantern_node_checkpoint_state
     ENTER 0
     mv      s3, a0
     mv      s4, a1
-    call    node_find_checkpoint
+    call    lantern_node_find_checkpoint
     li      t0, -1
     beq     a0, t0, 1f
     ld      a0, NodeCheckpoint_state_id(a1)
     LEAVE 0
 1:  mv      a0, s4                          # the root's block, imported
-    call    node_find_block
+    call    lantern_node_find_block
     li      t0, -1
     beq     a0, t0, 9f
     ld      t0, NodeBlock_status(a1)
@@ -1346,29 +1346,29 @@ LOCAL_FUNCTION node_checkpoint_state
     ld      s8, NodeBlock_state_id(a1)      # no post-state: above F's slot, rebuilt first; an ancestor of F keeps none
     bnez    s8, 2f
     mv      s10, a1
-    call    node_f_slot
+    call    lantern_node_f_slot
     ld      t0, NodeBlock_slot(s10)
     bleu    t0, a0, 9f
     mv      a0, s10
-    call    node_rebuild
+    call    lantern_node_rebuild
     mv      s8, a0
     beqz    s8, 9f
     mv      a1, s10
 2:  ld      s9, NodeBlock_slot(a1)
-    call    node_new_id
+    call    lantern_node_new_id
     mv      s7, a0
     li      a0, NODE_ACT_STATE_COPY
     mv      a1, s8
     mv      a2, s7
-    call    node_ids
+    call    lantern_node_ids
     mv      a0, s7                          # across the forks to the epoch's first slot
     mv      a1, s8
     mv      a2, s9
     li      t0, SLOTS_PER_EPOCH
     mul     a3, s3, t0
-    call    node_cross
+    call    lantern_node_cross
     mv      s7, a0
-    call    node_new_checkpoint             # the entry
+    call    lantern_node_new_checkpoint             # the entry
     mv      t1, a0
     sd      s3, NodeCheckpoint_epoch(t0)
     addi    t2, t0, NodeCheckpoint_root
@@ -1380,22 +1380,22 @@ LOCAL_FUNCTION node_checkpoint_state
     li      a3, 0
     mv      a4, t1
     mv      a5, s3
-    call    node_work
+    call    lantern_node_work
     mv      a0, s7
     LEAVE 0
 9:  li      a0, 0
     LEAVE 0
-END_FUNCTION node_checkpoint_state
+END_FUNCTION lantern_node_checkpoint_state
 
 /* A JUSTIFIED_STATE work for store.justified_checkpoint, unless one is queued. */
-LOCAL_FUNCTION node_justified
+LOCAL_FUNCTION lantern_node_justified
     ENTER 0
     ld      t0, Node_flags(s1)
     andi    t0, t0, NODE_FLAG_JUSTIFIED_PENDING
     bnez    t0, 9f
     LDQ     a0, s2, Store_justified_checkpoint      # a Checkpoint: the epoch, then the root at 8
     ADDQ    a1, s2, Store_justified_checkpoint + 8
-    call    node_checkpoint_state
+    call    lantern_node_checkpoint_state
     beqz    a0, 9f
     mv      a1, a0
     li      a0, NODE_WORK_JUSTIFIED_STATE
@@ -1403,19 +1403,19 @@ LOCAL_FUNCTION node_justified
     li      a3, 0
     li      a4, 0
     li      a5, 0
-    call    node_work
+    call    lantern_node_work
     ld      t0, Node_flags(s1)
     ori     t0, t0, NODE_FLAG_JUSTIFIED_PENDING
     sd      t0, Node_flags(s1)
 9:  LEAVE 0
-END_FUNCTION node_justified
+END_FUNCTION lantern_node_justified
 
 /*
  * The import of the block of index a0 when its parent has a post-state; a block whose parent is
  * invalid becomes invalid. With NODE_FLAG_ENGINE a block of bellatrix or later takes
  * NODE_BLOCK_PAYLOAD instead: its import waits for engine_newPayload. s3 index, s4 entry.
  */
-LOCAL_FUNCTION node_try_import
+LOCAL_FUNCTION lantern_node_try_import
     ENTER 0
     mv      s3, a0
     PART    s4, t0, s1, Node_blocks
@@ -1423,7 +1423,7 @@ LOCAL_FUNCTION node_try_import
     mul     t0, s3, t0
     add     s4, s4, t0
     addi    a0, s4, NodeBlock_parent_root
-    call    node_find_block
+    call    lantern_node_find_block
     li      t0, -1
     beq     a0, t0, 9f
     ld      t0, NodeBlock_status(a1)
@@ -1434,14 +1434,14 @@ LOCAL_FUNCTION node_try_import
     ld      t0, NodeBlock_state_id(a1)      # no post-state: above F's slot, rebuilt at the import; else an ancestor of F, no descendant of it
     bnez    t0, 2f
     ld      s8, NodeBlock_slot(a1)
-    call    node_f_slot
+    call    lantern_node_f_slot
     bleu    s8, a0, 8f
 2:  ld      t0, Node_flags(s1)
     andi    t0, t0, NODE_FLAG_ENGINE
     beqz    t0, 1f
     ld      a0, NodeBlock_slot(s4)
     addi    a1, s1, Node_config
-    call    node_fork
+    call    lantern_node_fork
     li      t0, FORK_BELLATRIX
     bltu    a0, t0, 1f
     li      t0, NODE_BLOCK_PAYLOAD
@@ -1454,19 +1454,19 @@ LOCAL_FUNCTION node_try_import
     beqz    t0, 2f
     li      a1, PAYLOAD_STATUS_NOT_VALIDATED
 2:  mv      a0, s3
-    call    node_import_now
+    call    lantern_node_import_now
     LEAVE 0
 8:  li      t0, NODE_BLOCK_INVALID
     sd      t0, NodeBlock_status(s4)
 9:  LEAVE 0
-END_FUNCTION node_try_import
+END_FUNCTION lantern_node_try_import
 
 /*
  * The import of the block of index a0, whose parent is imported, with the payload status a1: a
  * copy of the parent's post-state and an IMPORT_BLOCK work. s3 index, s4 entry, s8 the parent's
  * state id.
  */
-LOCAL_FUNCTION node_import_now
+LOCAL_FUNCTION lantern_node_import_now
     ENTER 0
     mv      s3, a0
     PART    s4, t0, s1, Node_blocks
@@ -1475,32 +1475,32 @@ LOCAL_FUNCTION node_import_now
     add     s4, s4, t0
     sd      a1, NodeBlock_payload_status(s4)
     addi    a0, s4, NodeBlock_parent_root
-    call    node_find_block
+    call    lantern_node_find_block
     li      t0, -1
     beq     a0, t0, 9f
     ld      s8, NodeBlock_state_id(a1)      # no post-state above F's slot: rebuilt first
     bnez    s8, 2f
     mv      s10, a1
-    call    node_f_slot
+    call    lantern_node_f_slot
     ld      t0, NodeBlock_slot(s10)
     bleu    t0, a0, 8f
     mv      a0, s10
-    call    node_rebuild
+    call    lantern_node_rebuild
     mv      s8, a0
     beqz    s8, 8f
     mv      a1, s10
 2:  ld      s9, NodeBlock_slot(a1)
-    call    node_new_id
+    call    lantern_node_new_id
     sd      a0, NodeBlock_state_id(s4)
     mv      a2, a0
     li      a0, NODE_ACT_STATE_COPY
     mv      a1, s8
-    call    node_ids
+    call    lantern_node_ids
     ld      a0, NodeBlock_state_id(s4)      # across the forks from the parent's slot to the block's
     mv      a1, s8
     mv      a2, s9
     ld      a3, NodeBlock_slot(s4)
-    call    node_cross
+    call    lantern_node_cross
     sd      a0, NodeBlock_state_id(s4)
     li      t0, NODE_BLOCK_IMPORTING
     sd      t0, NodeBlock_status(s4)
@@ -1510,20 +1510,20 @@ LOCAL_FUNCTION node_import_now
     ld      a3, NodeBlock_data_id(s4)
     mv      a4, s3
     li      a5, 0
-    call    node_work
+    call    lantern_node_work
 9:  LEAVE 0
 8:  li      t0, NODE_BLOCK_INVALID          # its parent is an ancestor of the finalized block
     sd      t0, NodeBlock_status(s4)
     li      a0, NODE_ACT_BYTES_FREE
     ld      a1, NodeBlock_data_id(s4)
     li      a2, 0
-    call    node_ids
+    call    lantern_node_ids
     sd      zero, NodeBlock_data_id(s4)
     LEAVE 0
-END_FUNCTION node_import_now
+END_FUNCTION lantern_node_import_now
 
 /* a0 = the index of the store's node whose root is at a0 (8-aligned), or 2^64 - 1; a1 = its entry. Uses t0-t2, a6, a7. */
-LOCAL_FUNCTION node_store_find
+LOCAL_FUNCTION lantern_node_store_find
     UNWIND_END_PROLOGUE
     PART    t0, t1, s2, Store_blocks
     li      t2, 0
@@ -1537,7 +1537,7 @@ LOCAL_FUNCTION node_store_find
     j       1b
 3:  li      a0, -1
     ret
-END_FUNCTION node_store_find
+END_FUNCTION lantern_node_store_find
 
 /*
  * With NODE_FLAG_ENGINE, the next engine call when none is in flight and the store's slot is at
@@ -1545,7 +1545,7 @@ END_FUNCTION node_store_find
  * at most the slot, else, with the slot at least fcu_wait, a preparation or with NODE_FLAG_FCU
  * from bellatrix on a FORKCHOICE work. s3 an entry, s4 the count, s7 the slot, s8 the index.
  */
-LOCAL_FUNCTION node_engine_next
+LOCAL_FUNCTION lantern_node_engine_next
     ENTER 0
     ld      t0, Node_flags(s1)
     andi    t0, t0, NODE_FLAG_ENGINE
@@ -1553,11 +1553,11 @@ LOCAL_FUNCTION node_engine_next
     ld      t0, Node_engine_method(s1)
     bnez    t0, 9f
     mv      a0, s2
-    call    node_store_slot
+    call    lantern_node_store_slot
     mv      s7, a0
     ld      t0, Node_engine_wait(s1)
     bltu    s7, t0, 9f
-    call    node_produce_engine             # a produceBlockV3 waiting for its payload goes first
+    call    lantern_node_produce_engine             # a produceBlockV3 waiting for its payload goes first
     bnez    a0, 9f
     PART    s3, s4, s1, Node_blocks
     li      s8, 0
@@ -1580,7 +1580,7 @@ LOCAL_FUNCTION node_engine_next
     li      a2, 0
     ld      a3, NodeBlock_data_id(s3)
     mv      a4, s8
-    call    node_work
+    call    lantern_node_work
     LEAVE 0
 2:  addi    s3, s3, NodeBlock__mem
     addi    s8, s8, 1
@@ -1588,14 +1588,14 @@ LOCAL_FUNCTION node_engine_next
 3:  LDQ     t0, s1, Node_fcu_wait           # after a failed forkchoiceUpdated, the next waits for fcu_wait
     bltu    s7, t0, 50f
     mv      a0, s7                          # a payload's preparation, when it is due
-    call    node_prepare
+    call    lantern_node_prepare
     bnez    a0, 9f
     ld      t0, Node_flags(s1)
     andi    t0, t0, NODE_FLAG_FCU
     beqz    t0, 50f
     mv      a0, s7
     addi    a1, s1, Node_config
-    call    node_fork
+    call    lantern_node_fork
     li      t0, FORK_BELLATRIX
     bltu    a0, t0, 50f
     ld      t0, Node_flags(s1)
@@ -1612,11 +1612,11 @@ LOCAL_FUNCTION node_engine_next
     li      a2, 0
     li      a3, 0
     li      a4, 0
-    call    node_work
+    call    lantern_node_work
     LEAVE 0
-50: call    node_eth1_next                  # then the eth1 follower's call
+50: call    lantern_node_eth1_next                  # then the eth1 follower's call
 9:  LEAVE 0
-END_FUNCTION node_engine_next
+END_FUNCTION lantern_node_engine_next
 
 /*
  * The preparation of a payload for slot a0 + 1, a0 the store's slot, when it is due (node.md,
@@ -1624,13 +1624,13 @@ END_FUNCTION node_engine_next
  * it with the next engine id, and the copy's STATE_FREE. a0 = 1 when it went, else 0. s3 the
  * head's entry, s4 the copy, s7 the store's slot, s8 the slot, s9 the copy's slot, s10 a fork.
  */
-LOCAL_FUNCTION node_prepare
+LOCAL_FUNCTION lantern_node_prepare
     ENTER 0
     mv      s7, a0
     addi    s8, a0, 1
     mv      a0, s8
     addi    a1, s1, Node_config
-    call    node_fork
+    call    lantern_node_fork
     li      t0, FORK_BELLATRIX
     bltu    a0, t0, 8f
     li      t0, SLOTS_PER_EPOCH             # a proposers entry past the store's epoch
@@ -1643,7 +1643,7 @@ LOCAL_FUNCTION node_prepare
     addi    t3, t3, -1
     j       1b
 2:  addi    a0, s1, Node_head_root          # the head's block, with its post-state
-    call    node_find_block
+    call    lantern_node_find_block
     li      t0, -1
     beq     a0, t0, 8f
     mv      s3, a1
@@ -1670,11 +1670,11 @@ LOCAL_FUNCTION node_prepare
     j       8f
 4:  mv      a0, s8
     li      a1, 0
-    call    node_prepare_go
+    call    lantern_node_prepare_go
     LEAVE 0
 8:  li      a0, 0
     LEAVE 0
-END_FUNCTION node_prepare
+END_FUNCTION lantern_node_prepare
 
 /*
  * L1: with no engine call in flight, the call of the first produceBlockV3 entry in
@@ -1683,7 +1683,7 @@ END_FUNCTION node_prepare
  * second that ends with no payloadId: 500). a0 = 1 when a call went. s3 an entry, s4 its index,
  * s7 the count.
  */
-LOCAL_FUNCTION node_produce_engine
+LOCAL_FUNCTION lantern_node_produce_engine
     ENTER 0
     PART    s3, s7, s1, Node_api
     li      s4, 0
@@ -1714,7 +1714,7 @@ LOCAL_FUNCTION node_produce_engine
     beqz    t0, 6f
     mv      a0, s3
     li      a1, 500
-    call    node_produce_fail
+    call    lantern_node_produce_fail
     li      a0, 0
     LEAVE 0
 4:  ld      t0, NodeApi_flags(s3)           # busy with its getPayload
@@ -1731,7 +1731,7 @@ LOCAL_FUNCTION node_produce_engine
     li      a2, 0
     li      a3, 0
     mv      a4, s4
-    call    node_work
+    call    lantern_node_work
     li      a0, 1
     LEAVE 0
 6:  ld      t0, NodeApi_flags(s3)
@@ -1740,18 +1740,18 @@ LOCAL_FUNCTION node_produce_engine
     sd      t0, NodeApi_flags(s3)
     ld      a0, NodeApi_slot(s3)
     li      a1, 1
-    call    node_prepare_go
+    call    lantern_node_prepare_go
     bnez    a0, 7f
     mv      a0, s3
     li      a1, 500
-    call    node_produce_fail
+    call    lantern_node_produce_fail
     li      a0, 0
     LEAVE 0
 7:  li      a0, 1
     LEAVE 0
 8:  li      a0, 0
     LEAVE 0
-END_FUNCTION node_produce_engine
+END_FUNCTION lantern_node_produce_engine
 
 /*
  * L1: the preparation of a payload for slot a0 on the head (node.md, Payload preparation), forced
@@ -1761,12 +1761,12 @@ END_FUNCTION node_produce_engine
  * post-state. s3 the head's entry, s4 the copy, s7 forced, s8 the slot, s9 the copy's slot, s10 a
  * fork.
  */
-LOCAL_FUNCTION node_prepare_go
+LOCAL_FUNCTION lantern_node_prepare_go
     ENTER 0
     mv      s8, a0
     mv      s7, a1
     addi    a0, s1, Node_head_root
-    call    node_find_block
+    call    lantern_node_find_block
     li      t0, -1
     beq     a0, t0, 8f
     mv      s3, a1
@@ -1782,26 +1782,26 @@ LOCAL_FUNCTION node_prepare_go
     sd      t0, Node_engine_method(s1)
     li      t0, 1
     sd      t0, Node_engine_target(s1)
-    call    node_new_id                     # the copy, across the fork boundaries to the slot
+    call    lantern_node_new_id                     # the copy, across the fork boundaries to the slot
     mv      s4, a0
     mv      a2, a0
     li      a0, NODE_ACT_STATE_COPY
     ld      a1, NodeBlock_state_id(s3)
-    call    node_ids
+    call    lantern_node_ids
     mv      a0, s4
     ld      a1, NodeBlock_state_id(s3)
     ld      a2, NodeBlock_slot(s3)
     mv      a3, s8
-    call    node_cross
+    call    lantern_node_cross
     mv      s4, a0
     ld      s9, NodeBlock_slot(s3)          # its slot: the first of the slot's fork, when it crossed one
     mv      a0, s9
     addi    a1, s1, Node_config
-    call    node_fork
+    call    lantern_node_fork
     mv      s10, a0
     mv      a0, s8
     addi    a1, s1, Node_config
-    call    node_fork
+    call    lantern_node_fork
     bleu    a0, s10, 5f
     slli    t0, a0, 4
     add     t0, s1, t0
@@ -1817,9 +1817,9 @@ LOCAL_FUNCTION node_prepare_go
     li      a3, 0
     li      a4, 0
     mv      a5, s8
-    call    node_work
+    call    lantern_node_work
 6:  li      a0, API_TOPIC_PAYLOAD_ATTRIBUTES  # target: 1 forced, + 2 with an entry of payload_attributes
-    call    node_api_subscribed
+    call    lantern_node_api_subscribed
     slli    a0, a0, 1
     or      s7, s7, a0
     ld      a5, Node_engine_id(s1)          # the work, of the call's id
@@ -1830,23 +1830,23 @@ LOCAL_FUNCTION node_prepare_go
     li      a2, 0
     li      a3, 0
     mv      a4, s7
-    call    node_work
+    call    lantern_node_work
     li      a0, NODE_ACT_STATE_FREE
     mv      a1, s4
     li      a2, 0
-    call    node_ids
+    call    lantern_node_ids
     li      a0, 1
     LEAVE 0
 8:  li      a0, 0
     LEAVE 0
-END_FUNCTION node_prepare_go
+END_FUNCTION lantern_node_prepare_go
 
 /*
  * The engine call in flight failed: an engine_newPayload's block takes NODE_BLOCK_PAYLOAD with
  * retry the store's slot + 1, an engine_forkchoiceUpdated sets NODE_FLAG_FCU again; fcu_wait for
  * a forkchoiceUpdated, else engine_wait, becomes the slot + 1, and the call ends.
  */
-LOCAL_FUNCTION node_engine_failed
+LOCAL_FUNCTION lantern_node_engine_failed
     ENTER 0
     ld      t0, Node_engine_method(s1)      # an eth1 call: the follower waits for the next head poll
     li      t1, ENGINE_METHOD_ETH_BLOCK
@@ -1858,7 +1858,7 @@ LOCAL_FUNCTION node_engine_failed
     STQ     t0, s1, Node_eth1_head_ms
     LEAVE 0
 11: mv      a0, s2
-    call    node_store_slot
+    call    lantern_node_store_slot
     addi    a0, a0, 1
     ld      t0, Node_engine_method(s1)
     li      t1, ENGINE_METHOD_FORKCHOICE_UPDATED
@@ -1881,17 +1881,17 @@ LOCAL_FUNCTION node_engine_failed
 1:  li      t1, ENGINE_METHOD_GET_PAYLOAD   # a getPayload's entry: 500
     bne     t0, t1, 2f
     ld      a0, Node_engine_target(s1)
-    call    node_produce_fail_at
+    call    lantern_node_produce_fail_at
     LEAVE 0
 2:  li      t1, ENGINE_METHOD_NEW_PAYLOAD
     bne     t0, t1, 9f
     ld      a0, Node_engine_target(s1)
-    call    node_payload_retry
+    call    lantern_node_payload_retry
 9:  LEAVE 0
-END_FUNCTION node_engine_failed
+END_FUNCTION lantern_node_engine_failed
 
 /* L1: the produceBlockV3 entry at index a0, while it waits for its payload: 500. */
-LOCAL_FUNCTION node_produce_fail_at
+LOCAL_FUNCTION lantern_node_produce_fail_at
     FRAME 0
     PART    t0, t1, s1, Node_api
     bgeu    a0, t1, 9f
@@ -1907,9 +1907,9 @@ LOCAL_FUNCTION node_produce_fail_at
     li      t2, NODE_PRODUCE_PAYLOAD
     bne     t1, t2, 9f
     li      a1, 500
-    call    node_produce_fail
+    call    lantern_node_produce_fail
 9:  UNFRAME 0
-END_FUNCTION node_produce_fail_at
+END_FUNCTION lantern_node_produce_fail_at
 
 /*
  * L2: the engine_getPayload body a0 (a ByteList in scratch s5, which stays short) with its
@@ -1918,7 +1918,7 @@ END_FUNCTION node_produce_fail_at
  * as filter_index before its fold; a result that does not decode: 500, and the action goes. s3
  * the body, s4 the entry, s7 the action, s8 its size. Locals: L a JsonFault (128).
  */
-LOCAL_FUNCTION node_produce_payload
+LOCAL_FUNCTION lantern_node_produce_payload
     ENTER 128
     mv      s3, a0
     ld      t0, Node_engine_target(s1)
@@ -1941,9 +1941,9 @@ LOCAL_FUNCTION node_produce_payload
     andi    t0, t0, API_STREAM_GONE
     beqz    t0, 1f
     mv      a0, s4
-    call    node_produce_release
+    call    lantern_node_produce_release
     mv      a0, s4
-    call    node_api_end
+    call    lantern_node_api_end
     LEAVE 128
 1:  ld      t0, EngineResponse_result_offset(a1)    # the body becomes the result's bytes
     ld      t1, EngineResponse_result_length(a1)
@@ -1956,9 +1956,9 @@ LOCAL_FUNCTION node_produce_payload
     andi    s8, s8, -8
     li      a0, NODE_ACT_BYTES_PUT
     mv      a1, s8
-    call    node_act
+    call    lantern_node_act
     mv      s7, a0
-    call    node_new_id
+    call    lantern_node_new_id
     sd      a0, 16(s7)
     addi    t0, s8, -24
     sd      t0, 24(s7)
@@ -1967,7 +1967,7 @@ LOCAL_FUNCTION node_produce_payload
     sd      zero, 40(s7)
     ld      a0, NodeApi_slot(s4)
     addi    a1, s1, Node_config
-    call    node_fork
+    call    lantern_node_fork
     mv      t6, a0
     mv      a0, s3
     mv      a1, s5
@@ -1981,19 +1981,19 @@ LOCAL_FUNCTION node_produce_payload
     sd      t0, NodeApi_member(s4)
     sd      zero, NodeApi_filter_slot(s4)
     mv      a0, s4
-    call    node_produce_next
+    call    lantern_node_produce_next
     LEAVE 128
 8:  ld      t0, 16(s6)                      # no result: the action goes, and 500
     sub     t0, t0, s8
     sd      t0, 16(s6)
     mv      a0, s4
     li      a1, 500
-    call    node_produce_fail
+    call    lantern_node_produce_fail
 9:  LEAVE 128
-END_FUNCTION node_produce_payload
+END_FUNCTION lantern_node_produce_payload
 
 /* The block of index a0, if NODE_BLOCK_EXECUTING, takes NODE_BLOCK_PAYLOAD with retry the store's slot + 1. s3 the entry. */
-LOCAL_FUNCTION node_payload_retry
+LOCAL_FUNCTION lantern_node_payload_retry
     ENTER 0
     PART    s3, t0, s1, Node_blocks
     bgeu    a0, t0, 9f
@@ -2006,11 +2006,11 @@ LOCAL_FUNCTION node_payload_retry
     li      t0, NODE_BLOCK_PAYLOAD
     sd      t0, NodeBlock_status(s3)
     mv      a0, s2
-    call    node_store_slot
+    call    lantern_node_store_slot
     addi    a0, a0, 1
     sd      a0, NodeBlock_retry(s3)
 9:  LEAVE 0
-END_FUNCTION node_payload_retry
+END_FUNCTION lantern_node_payload_retry
 
 /*
  * latestValidHash (optimistic-sync.md) from the store's node a0: up its chain by parent, each node
@@ -2019,7 +2019,7 @@ END_FUNCTION node_payload_retry
  * chain does not have, only the node a2 (2^64 - 1 for none) gets it. s3 a node, s4 the hash, s7
  * the node found, s8 the node a2. Locals: L a node, L+8 a status, L+16 a result.
  */
-LOCAL_FUNCTION node_lvh
+LOCAL_FUNCTION lantern_node_lvh
     ENTER 32
     mv      s3, a0
     mv      s4, a1
@@ -2066,10 +2066,10 @@ LOCAL_FUNCTION node_lvh
     li      t0, 1                           # the store changed: the head is due
     STQ     t0, s1, Node_head_due
 9:  LEAVE 32
-END_FUNCTION node_lvh
+END_FUNCTION lantern_node_lvh
 
 /* The first a1 bytes of the ByteList a0 (engine_in) leave it. */
-LOCAL_FUNCTION node_engine_consume
+LOCAL_FUNCTION lantern_node_engine_consume
     FRAME 0
     ld      t0, 16(a0)
     sub     a2, t0, a1
@@ -2078,7 +2078,7 @@ LOCAL_FUNCTION node_engine_consume
     add     a1, a0, a1
     call    lantern_copy
     UNFRAME 0
-END_FUNCTION node_engine_consume
+END_FUNCTION lantern_node_engine_consume
 
 /*
  * The bytes of engine_in: a whole HTTP response of the call in flight ends it. s3 engine_in, s4
@@ -2086,7 +2086,7 @@ END_FUNCTION node_engine_consume
  * Locals: L an HttpResponse (16), L+16 eof, L+24 the method, L+32 an EngineResponse (112), L+144 a
  * node, L+152 a status.
  */
-LOCAL_FUNCTION node_engine_read
+LOCAL_FUNCTION lantern_node_engine_read
     ENTER 160
     ld      s3, Node_engine_in(s1)
     add     s3, s1, s3
@@ -2133,14 +2133,14 @@ LOCAL_FUNCTION node_engine_read
     bne     t0, t1, 70f
     mv      a0, s3
     ld      a1, (L + 8)(sp)
-    call    node_engine_consume
+    call    lantern_node_engine_consume
     li      t0, ENGINE_METHOD_ETH_BLOCK     # the eth1 follower's calls: their result, with the body still in scratch
     beq     s4, t0, 43f
     li      t0, ENGINE_METHOD_ETH_LOGS
     bne     s4, t0, 45f
 43: mv      a0, s8
     addi    a1, sp, (L + 32)
-    call    node_eth1_answer
+    call    lantern_node_eth1_answer
     sd      s7, 0(s5)
     sd      zero, Node_engine_method(s1)
     j       9f
@@ -2148,7 +2148,7 @@ LOCAL_FUNCTION node_engine_read
     bne     s4, t0, 44f
     mv      a0, s8
     addi    a1, sp, (L + 32)
-    call    node_produce_payload
+    call    lantern_node_produce_payload
     sd      s7, 0(s5)
     sd      zero, Node_engine_method(s1)
     j       9f
@@ -2169,14 +2169,14 @@ LOCAL_FUNCTION node_engine_read
     li      t0, ENGINE_STATUS_VALID
     bne     s10, t0, 20f
     li      a1, PAYLOAD_STATUS_VALID        # VALID: the import
-    call    node_import_now
+    call    lantern_node_import_now
     j       9f
 20: li      t0, ENGINE_STATUS_SYNCING
     beq     s10, t0, 21f
     li      t0, ENGINE_STATUS_ACCEPTED
     bne     s10, t0, 30f
 21: addi    a0, s9, NodeBlock_parent_root   # SYNCING, ACCEPTED: optimistic when a candidate
-    call    node_store_find
+    call    lantern_node_store_find
     li      t0, -1
     beq     a0, t0, 23f
     ld      t0, BlockNode_block_hash(a1)
@@ -2188,27 +2188,27 @@ LOCAL_FUNCTION node_engine_read
     or      t0, t0, t1
     bnez    t0, 22f
 23: mv      a0, s2
-    call    node_store_slot
+    call    lantern_node_store_slot
     ld      t0, NodeBlock_slot(s9)
     li      t1, SAFE_SLOTS_TO_IMPORT_OPTIMISTICALLY
     add     t0, t0, t1
     bleu    t0, a0, 22f
     ld      a0, Node_engine_target(s1)      # no candidate: again in a later slot
-    call    node_payload_retry
+    call    lantern_node_payload_retry
     j       9f
 22: ld      a0, Node_engine_target(s1)
     li      a1, PAYLOAD_STATUS_NOT_VALIDATED
-    call    node_import_now
+    call    lantern_node_import_now
     j       9f
 30: li      t0, NODE_BLOCK_INVALID          # INVALID, INVALID_BLOCK_HASH: the block is invalid, latestValidHash from its parent
     sd      t0, NodeBlock_status(s9)
     li      a0, NODE_ACT_BYTES_FREE
     ld      a1, NodeBlock_data_id(s9)
     li      a2, 0
-    call    node_ids
+    call    lantern_node_ids
     sd      zero, NodeBlock_data_id(s9)
     addi    a0, s9, NodeBlock_parent_root
-    call    node_store_find
+    call    lantern_node_store_find
     li      t0, -1
     beq     a0, t0, 9f
     ld      t0, (L + 32 + EngineResponse_has_latest_valid_hash)(sp)
@@ -2216,7 +2216,7 @@ LOCAL_FUNCTION node_engine_read
     beqz    t0, 31f
     addi    a1, sp, L + 32 + EngineResponse_latest_valid_hash
 31: li      a2, -1
-    call    node_lvh
+    call    lantern_node_lvh
     j       9f
 40: ld      t0, Node_engine_target(s1)      # engine_forkchoiceUpdated of a preparation: its payloadId
     beqz    t0, 42f
@@ -2228,7 +2228,7 @@ LOCAL_FUNCTION node_engine_read
     li      t1, NODE_PAYLOAD_READY
 43: STQ     t1, s1, Node_payload_status
 42: addi    a0, s1, Node_head_root          # engine_forkchoiceUpdated: of the head
-    call    node_store_find
+    call    lantern_node_store_find
     li      t0, -1
     beq     a0, t0, 9f
     sd      a0, (L + 144)(sp)
@@ -2254,23 +2254,23 @@ LOCAL_FUNCTION node_engine_read
     li      a1, 0
     beqz    t0, 43f
     addi    a1, sp, L + 32 + EngineResponse_latest_valid_hash
-43: call    node_lvh
+43: call    lantern_node_lvh
 9:  LEAVE 160
 6:  sd      s7, 0(s5)                       # part of a response: more bytes
     LEAVE 160
 70: mv      a0, s3                          # a failed call, its response read
     ld      a1, (L + 8)(sp)
-    call    node_engine_consume
+    call    lantern_node_engine_consume
 7:  sd      s7, 0(s5)
-    call    node_engine_failed
+    call    lantern_node_engine_failed
 8:  ld      t0, Node_engine_in(s1)          # the bytes left go
     add     t0, s1, t0
     sd      zero, 16(t0)
     LEAVE 160
-END_FUNCTION node_engine_read
+END_FUNCTION lantern_node_engine_read
 
 /* The import of each waiting block whose parent is the block of the entry a0. s3 the root, s4 index. */
-LOCAL_FUNCTION node_children
+LOCAL_FUNCTION lantern_node_children
     ENTER 0
     mv      s3, a0
     li      s4, 0
@@ -2286,14 +2286,14 @@ LOCAL_FUNCTION node_children
     addi    t1, t0, NodeBlock_parent_root
     NE32    t1, s3, 2f
     mv      a0, s4
-    call    node_try_import
+    call    lantern_node_try_import
 2:  addi    s4, s4, 1
     j       1b
 9:  LEAVE 0
-END_FUNCTION node_children
+END_FUNCTION lantern_node_children
 
 /* a0 = the index, t0 = the zeroed entry, of a NODE_BLOCK_FREE block or a new one at the end. Uses t1, t2. */
-LOCAL_FUNCTION node_new_block
+LOCAL_FUNCTION lantern_node_new_block
     UNWIND_END_PROLOGUE
     PART    t0, t1, s1, Node_blocks
     li      a0, 0
@@ -2313,10 +2313,10 @@ LOCAL_FUNCTION node_new_block
     addi    t2, t2, -1
     bnez    t2, 4b
     ret
-END_FUNCTION node_new_block
+END_FUNCTION lantern_node_new_block
 
 /* a0 = the index, t0 = the zeroed entry, of a NODE_BLOB_FREE sidecar or a new one at the end. Uses t1, t2. */
-LOCAL_FUNCTION node_new_blob
+LOCAL_FUNCTION lantern_node_new_blob
     UNWIND_END_PROLOGUE
     PART    t0, t1, s1, Node_blobs
     li      a0, 0
@@ -2336,10 +2336,10 @@ LOCAL_FUNCTION node_new_blob
     addi    t2, t2, -1
     bnez    t2, 4b
     ret
-END_FUNCTION node_new_blob
+END_FUNCTION lantern_node_new_blob
 
 /* a0 = the index, t0 = the zeroed entry, of a free checkpoint (epoch 2^64 - 1) or a new one at the end. Uses t1, t2. */
-LOCAL_FUNCTION node_new_checkpoint
+LOCAL_FUNCTION lantern_node_new_checkpoint
     UNWIND_END_PROLOGUE
     PART    t0, t1, s1, Node_checkpoints
     li      a0, 0
@@ -2359,10 +2359,10 @@ LOCAL_FUNCTION node_new_checkpoint
     addi    t2, t2, -1
     bnez    t2, 4b
     ret
-END_FUNCTION node_new_checkpoint
+END_FUNCTION lantern_node_new_checkpoint
 
 /* a0 = 1 when a stream that serves lists the BufferId a0 at or after its next, else 0. Uses t0-t4. */
-LOCAL_FUNCTION node_serving
+LOCAL_FUNCTION lantern_node_serving
     UNWIND_END_PROLOGUE
     beqz    a0, 9f
     PART    t0, t1, s1, Node_streams
@@ -2390,7 +2390,7 @@ LOCAL_FUNCTION node_serving
     ret
 9:  li      a0, 0
     ret
-END_FUNCTION node_serving
+END_FUNCTION lantern_node_serving
 
 /*
  * At a new finalized epoch of the store, lantern_store_prune; then the node keeps the finalized
@@ -2399,7 +2399,7 @@ END_FUNCTION node_serving
  * finalized slot, and the checkpoints below the finalized epoch. Bytes a stream sends stay until
  * a later prune. s3 the finalized block, s4 its slot, s7 i, s8 an entry.
  */
-LOCAL_FUNCTION node_prune
+LOCAL_FUNCTION lantern_node_prune
     ENTER 0
     ld      t0, Store_finalized_checkpoint(s2)
     ld      t1, Node_pruned_epoch(s1)
@@ -2413,7 +2413,7 @@ LOCAL_FUNCTION node_prune
     ld      t0, Store_finalized_checkpoint(s2)
     sd      t0, Node_pruned_epoch(s1)
     addi    a0, s2, Store_finalized_checkpoint + 8
-    call    node_find_block
+    call    lantern_node_find_block
     li      t0, -1
     beq     a0, t0, 99f
     mv      s3, a1
@@ -2424,9 +2424,9 @@ LOCAL_FUNCTION node_prune
     ld      t0, NodeBlock_state_id(s3)
     bnez    t0, 5f
     mv      a0, s3
-    call    node_rebuild
+    call    lantern_node_rebuild
 5:  addi    a0, s3, NodeBlock_parent_root   # its ancestors: their states go
-1:  call    node_find_block
+1:  call    lantern_node_find_block
     li      t0, -1
     beq     a0, t0, 2f
     mv      s8, a1
@@ -2437,12 +2437,12 @@ LOCAL_FUNCTION node_prune
     beqz    a1, 4f
     li      a0, NODE_ACT_STATE_FREE
     li      a2, 0
-    call    node_ids
+    call    lantern_node_ids
     sd      zero, NodeBlock_state_id(s8)
 4:  addi    a0, s8, NodeBlock_parent_root
     j       1b
 2:  mv      a0, s3                          # with NODE_FLAG_DB, the archive
-    call    node_archive
+    call    lantern_node_archive
     li      s7, 0                           # each other block
 3:  ld      t0, (Node_blocks + 8)(s1)
     bgeu    s7, t0, 20f
@@ -2465,21 +2465,21 @@ LOCAL_FUNCTION node_prune
     ld      t1, Node_db_next_slot(s1)
     bgeu    t0, t1, 19f
     ld      a0, NodeBlock_data_id(s8)
-    call    node_serving
+    call    lantern_node_serving
     bnez    a0, 19f
     j       15f
 12: mv      a0, s8
-    call    node_store_find                 # a descendant: in the store
+    call    lantern_node_store_find                 # a descendant: in the store
     li      t0, -1
     bne     a0, t0, 19f
     ld      a0, NodeBlock_data_id(s8)       # another branch: its state and bytes go
-    call    node_serving
+    call    lantern_node_serving
     bnez    a0, 19f
     ld      a1, NodeBlock_state_id(s8)
     beqz    a1, 15f
     li      a0, NODE_ACT_STATE_FREE
     li      a2, 0
-    call    node_ids
+    call    lantern_node_ids
     j       15f
 10: li      t1, NODE_BLOCK_INVALID          # invalid or waiting, at or below the finalized slot
     beq     t0, t1, 11f
@@ -2492,13 +2492,13 @@ LOCAL_FUNCTION node_prune
 11: ld      t0, NodeBlock_slot(s8)
     bgtu    t0, s4, 19f
     ld      a0, NodeBlock_data_id(s8)
-    call    node_serving
+    call    lantern_node_serving
     bnez    a0, 19f
 15: ld      a1, NodeBlock_data_id(s8)       # the bytes go, and the entry is free
     beqz    a1, 16f
     li      a0, NODE_ACT_BYTES_FREE
     li      a2, 0
-    call    node_ids
+    call    lantern_node_ids
 16: li      t0, -1
     sd      t0, 0(s8)
     sd      t0, 8(s8)
@@ -2528,7 +2528,7 @@ LOCAL_FUNCTION node_prune
     ld      t0, NodeBlob_slot(s8)
     bgtu    t0, s4, 29f
     mv      a0, s8
-    call    node_find_block
+    call    lantern_node_find_block
     li      t0, -1
     beq     a0, t0, 25f
     ld      t0, NodeBlock_status(a1)
@@ -2543,12 +2543,12 @@ LOCAL_FUNCTION node_prune
     ld      t1, Node_db_next_slot(s1)
     bgeu    t0, t1, 29f
 25: ld      a0, NodeBlob_data_id(s8)
-    call    node_serving
+    call    lantern_node_serving
     bnez    a0, 29f
     li      a0, NODE_ACT_BYTES_FREE
     ld      a1, NodeBlob_data_id(s8)
     li      a2, 0
-    call    node_ids
+    call    lantern_node_ids
 26: li      t0, -1
     sd      t0, 0(s8)
     sd      t0, 8(s8)
@@ -2576,7 +2576,7 @@ LOCAL_FUNCTION node_prune
     beqz    a1, 32f
     li      a0, NODE_ACT_STATE_FREE
     li      a2, 0
-    call    node_ids
+    call    lantern_node_ids
 32: li      t0, -1
     sd      t0, NodeCheckpoint_epoch(s8)
     sd      t0, NodeCheckpoint_root(s8)
@@ -2587,7 +2587,7 @@ LOCAL_FUNCTION node_prune
 39: addi    s7, s7, 1
     j       31b
 99: LEAVE 0
-END_FUNCTION node_prune
+END_FUNCTION lantern_node_prune
 
 /* dst = the DbSlot of slot slot in the node's Db; to fail outside first_slot to end_slot. Uses t0, t1. */
 .macro DB_SLOT dst, slot, fail
@@ -2606,7 +2606,7 @@ END_FUNCTION node_prune
 .endm
 
 /* a0 = the DbSlot of slot a0 in the node's Db when it holds a block of that slot, else 0. Uses t0-t3. */
-LOCAL_FUNCTION node_db_slot
+LOCAL_FUNCTION lantern_node_db_slot
     UNWIND_END_PROLOGUE
     DB_SLOT t3, a0, 9f
     ld      t0, DbSlot_block(t3)
@@ -2615,10 +2615,10 @@ LOCAL_FUNCTION node_db_slot
     ret
 9:  li      a0, 0
     ret
-END_FUNCTION node_db_slot
+END_FUNCTION lantern_node_db_slot
 
 /* a0 = the NODE_DB_REF of the Db record of the block of slot a0, or 0. Uses t0-t3. */
-LOCAL_FUNCTION node_db_block
+LOCAL_FUNCTION lantern_node_db_block
     UNWIND_END_PROLOGUE
     DB_SLOT t2, a0, 9f
     ld      t3, DbSlot_block(t2)
@@ -2633,13 +2633,13 @@ LOCAL_FUNCTION node_db_block
     ret
 9:  li      a0, 0
     ret
-END_FUNCTION node_db_block
+END_FUNCTION lantern_node_db_block
 
 /*
  * a0 = the NODE_DB_REF of the Db record of the sidecar of index a1 of slot a0, or 0: at the
  * slot's first sidecar record, plus its size times the slot's indices below a1. Uses t0-t6.
  */
-LOCAL_FUNCTION node_db_sidecar
+LOCAL_FUNCTION lantern_node_db_sidecar
     UNWIND_END_PROLOGUE
     li      t0, DB_SIDECAR_INDICES
     bgeu    a1, t0, 9f
@@ -2693,14 +2693,14 @@ LOCAL_FUNCTION node_db_sidecar
     ret
 9:  li      a0, 0
     ret
-END_FUNCTION node_db_sidecar
+END_FUNCTION lantern_node_db_sidecar
 
 /*
  * a0 = the replay's base among the Db's state records (node.md, the replay) for the slot a0: the
  * highest slot at or below it with a state record, from archive_first and above base_slot when
  * that is at most a0, a1 = its DbSlot's state; a0 = 2^64 - 1 with none. Uses t0-t6, a7.
  */
-LOCAL_FUNCTION node_archive_base
+LOCAL_FUNCTION lantern_node_archive_base
     UNWIND_END_PROLOGUE
     LDQ     t4, s1, Node_archive_first
     li      t5, -1
@@ -2732,14 +2732,14 @@ LOCAL_FUNCTION node_archive_base
     j       2b
 9:  li      a0, -1
     ret
-END_FUNCTION node_archive_base
+END_FUNCTION lantern_node_archive_base
 
 /*
  * The archive (node.md) of the finalized NodeBlock a0 at slot a1, in the Db: with archive_slots
  * not 0, a post-state, archive_busy 0, and archive_slot 2^64 - 1 or below the slot by a run of
  * archive_slots, a NODE_ACT_DB_ARCHIVE of its post-state. s7 the block, s8 the slot.
  */
-LOCAL_FUNCTION node_archive_queue
+LOCAL_FUNCTION lantern_node_archive_queue
     ENTER 0
     mv      s7, a0
     mv      s8, a1
@@ -2757,7 +2757,7 @@ LOCAL_FUNCTION node_archive_queue
     bleu    t2, t3, 9f
 1:  li      a0, NODE_ACT_DB_ARCHIVE
     li      a1, NODE_ACT_DB_ARCHIVE_SIZE
-    call    node_act
+    call    lantern_node_act
     ld      t0, NodeBlock_state_id(s7)
     sd      t0, 16(a0)
     srli    t1, s8, DB_SEGMENT_SHIFT
@@ -2782,14 +2782,14 @@ LOCAL_FUNCTION node_archive_queue
     li      t0, 1
     STQ     t0, s1, Node_archive_busy
 9:  LEAVE 0
-END_FUNCTION node_archive_queue
+END_FUNCTION lantern_node_archive_queue
 
 /*
  * NODE_EV_DB_ARCHIVE a0 (node.md, the archive): archive_busy 0; a record of kind not 0, of the
  * segment of its slot, goes in the index with lantern_db_add, and on LANTERN_OK the archive's
  * fields take it. s7 the event.
  */
-LOCAL_FUNCTION node_archive_done
+LOCAL_FUNCTION lantern_node_archive_done
     ENTER 0
     mv      s7, a0
     STQ     zero, s1, Node_archive_busy
@@ -2819,7 +2819,7 @@ LOCAL_FUNCTION node_archive_done
     bgeu    t0, t1, 9f
     STQ     t0, s1, Node_archive_first
 9:  LEAVE 0
-END_FUNCTION node_archive_done
+END_FUNCTION lantern_node_archive_done
 
 /*
  * NODE_WORK_ARCHIVE_LOAD (node.md): (state a0, the full record's bytes a1 or 0, the record's bytes
@@ -2827,7 +2827,7 @@ END_FUNCTION node_archive_done
  * LANTERN_BUFFER_TOO_SMALL with nothing changed. s7 the state, s8 the bytes, s9 scratch, s10 its
  * size, s2 the node. Locals: L the patch's size.
  */
-LOCAL_FUNCTION node_run_archive
+LOCAL_FUNCTION lantern_node_run_archive
     ENTER 16
     mv      s7, a0
     mv      s8, a2
@@ -2866,7 +2866,7 @@ LOCAL_FUNCTION node_run_archive
     add     t0, s8, t0
     ld      a0, 40(t0)
     addi    a1, s2, Node_config
-    call    node_fork
+    call    lantern_node_fork
     mv      t6, a0
     mv      a0, s8
     ADDRESS a1, node_upgrade_room
@@ -2886,10 +2886,10 @@ LOCAL_FUNCTION node_run_archive
 7:  sd      s10, 0(s9)
     li      a0, LANTERN_INVALID_ENCODING
     LEAVE 16
-END_FUNCTION node_run_archive
+END_FUNCTION lantern_node_run_archive
 
 /* A DB_APPEND action: sidecars a0, BufferId a1, segment a2, offset a3, the DbRecord at a4 (8-aligned). Uses t0-t3. */
-LOCAL_FUNCTION node_db_append
+LOCAL_FUNCTION lantern_node_db_append
     UNWIND_END_PROLOGUE
     ld      t0, 8(s6)
     ld      t1, 16(s6)
@@ -2914,13 +2914,13 @@ LOCAL_FUNCTION node_db_append
     li      t0, DbRecord__mem
     bltu    t1, t0, 1b
     ret
-END_FUNCTION node_db_append
+END_FUNCTION lantern_node_db_append
 
 /*
  * L0: a0 = the end of the block segment a0: db_block_end for db_block_segment, else backfill_end
  * for backfill_segment, else 0, a new segment. Uses t1 only.
  */
-LOCAL_FUNCTION node_seg_end
+LOCAL_FUNCTION lantern_node_seg_end
     UNWIND_END_PROLOGUE
     ld      t1, Node_db_block_segment(s1)
     bne     a0, t1, 1f
@@ -2932,17 +2932,17 @@ LOCAL_FUNCTION node_seg_end
     ret
 2:  li      a0, 0
     ret
-END_FUNCTION node_seg_end
+END_FUNCTION lantern_node_seg_end
 
 /* L0: the NodeBlock entry a0 is free: its bytes go (a BYTES_FREE), root and parent_root all 0xff bytes. Locals: sp+0 the entry. */
-LOCAL_FUNCTION node_free_block
+LOCAL_FUNCTION lantern_node_free_block
     FRAME 16
     sd      a0, 0(sp)
     ld      a1, NodeBlock_data_id(a0)
     beqz    a1, 1f
     li      a0, NODE_ACT_BYTES_FREE
     li      a2, 0
-    call    node_ids
+    call    lantern_node_ids
 1:  ld      a0, 0(sp)
     li      t0, -1
     sd      t0, 0(a0)
@@ -2959,7 +2959,7 @@ LOCAL_FUNCTION node_free_block
     li      t0, NODE_BLOCK_FREE
     sd      t0, NodeBlock_status(a0)
     UNFRAME 16
-END_FUNCTION node_free_block
+END_FUNCTION lantern_node_free_block
 
 /*
  * With NODE_FLAG_DB, the backfill's blocks join the Db (node.md): while a block in
@@ -2969,7 +2969,7 @@ END_FUNCTION node_free_block
  * NODE_BLOCK_BACKFILL go, and the last request is weighed. s3 an entry, s4 the entries left, s7
  * its segment. Locals: L a DbRecord (80), L+80 the offset.
  */
-LOCAL_FUNCTION node_backfill_link
+LOCAL_FUNCTION lantern_node_backfill_link
     ENTER 96
     ld      t0, Node_flags(s1)
     andi    t0, t0, NODE_FLAG_DB
@@ -2989,7 +2989,7 @@ LOCAL_FUNCTION node_backfill_link
     addi    s4, s4, -1
     j       2b
 4:  mv      a0, s3                          # its sidecars first: else it waits, and the link ends
-    call    node_lacks_sidecars
+    call    lantern_node_lacks_sidecars
     bnez    a0, 20f
     li      t0, DB_BLOCK                    # its record
     sd      t0, L(sp)
@@ -3007,7 +3007,7 @@ LOCAL_FUNCTION node_backfill_link
     ld      s7, NodeBlock_slot(s3)
     srli    s7, s7, DB_SEGMENT_SHIFT
     mv      a0, s7
-    call    node_seg_end
+    call    lantern_node_seg_end
     sd      a0, (L + 80)(sp)
     ld      a0, Node_db(s1)
     add     a0, s1, a0
@@ -3020,7 +3020,7 @@ LOCAL_FUNCTION node_backfill_link
     mv      a2, s7
     ld      a3, (L + 80)(sp)
     addi    a4, sp, L
-    call    node_db_append
+    call    lantern_node_db_append
     ld      t0, (L + 72)(sp)                # the segment's new end, for each writer of it
     addi    t0, t0, DbRecord__mem + 7
     andi    t0, t0, -8
@@ -3033,7 +3033,7 @@ LOCAL_FUNCTION node_backfill_link
     sd      t1, Node_db_block_end(s1)
 5:  mv      a0, s3                          # its sidecars
     li      a1, 1
-    call    node_db_sidecars
+    call    lantern_node_db_sidecars
     ld      t0, NodeBlock_slot(s3)
     sd      t0, Node_backfill_slot(s1)
     ld      t1, Node_earliest_slot(s1)
@@ -3044,7 +3044,7 @@ LOCAL_FUNCTION node_backfill_link
     addi    t2, s3, NodeBlock_parent_root
     COPY32  t1, t2
     mv      a0, s3
-    call    node_free_block
+    call    lantern_node_free_block
     j       1b
 20: ld      t0, Node_backfill_handle(s1)    # no stream and no check left: the rest are of no chain
     bnez    t0, 99f
@@ -3089,7 +3089,7 @@ LOCAL_FUNCTION node_backfill_link
     li      t1, NODE_BLOCK_BACKFILL
     bne     t0, t1, 25f
     mv      a0, s3
-    call    node_free_block
+    call    lantern_node_free_block
 25: addi    s3, s3, NodeBlock__mem
     addi    s4, s4, -1
     j       24b
@@ -3103,7 +3103,7 @@ LOCAL_FUNCTION node_backfill_link
     j       29f
 27: ld      t0, Node_backfill_got(s1)
     bnez    t0, 28f
-    call    node_serve_slot                 # no block in the range: the range below
+    call    lantern_node_serve_slot                 # no block in the range: the range below
     ld      t0, Node_backfill_start(s1)
     bleu    t0, a0, 28f
     sd      t0, Node_backfill_next(s1)
@@ -3120,7 +3120,7 @@ LOCAL_FUNCTION node_backfill_link
 29: li      t0, -1
     sd      t0, Node_backfill_start(s1)
 99: LEAVE 96
-END_FUNCTION node_backfill_link
+END_FUNCTION lantern_node_backfill_link
 
 /*
  * With NODE_FLAG_DB, after the sync's requests: the backfill's BeaconBlocksByRange (node.md) of the
@@ -3130,7 +3130,7 @@ END_FUNCTION node_backfill_link
  * start slot, s9 the first index, s10 the peers checked. Locals: L the request (24), L+24 the index,
  * L+32 the fork, L+48 the pass: 1 for peers of any earliest_slot.
  */
-LOCAL_FUNCTION node_backfill_ask
+LOCAL_FUNCTION lantern_node_backfill_ask
     ENTER 64
     ld      t0, Node_flags(s1)
     andi    t0, t0, NODE_FLAG_DB
@@ -3159,7 +3159,7 @@ LOCAL_FUNCTION node_backfill_ask
     divu    t2, t2, t3
     addi    t1, t1, 3
     bgtu    t1, t2, 99f
-    call    node_serve_slot                 # the target
+    call    lantern_node_serve_slot                 # the target
     mv      s7, a0
     ld      t0, Node_backfill_next(s1)
     bleu    t0, s7, 99f
@@ -3203,9 +3203,9 @@ LOCAL_FUNCTION node_backfill_ask
     andi    t0, t0, NODE_PEER_METADATA
     bnez    t0, 41f
     mv      a0, s2
-    call    node_store_slot
+    call    lantern_node_store_slot
     addi    a1, s1, Node_config
-    call    node_fork
+    call    lantern_node_fork
     li      t0, FORK_FULU
     bgeu    a0, t0, 4b
 41:
@@ -3216,16 +3216,16 @@ LOCAL_FUNCTION node_backfill_ask
     li      t0, 1
     sd      t0, (L + 16)(sp)
     mv      a0, s2                          # the fork of the store's slot: the sidecar requests of the range first
-    call    node_store_slot
+    call    lantern_node_store_slot
     addi    a1, s1, Node_config
-    call    node_fork
+    call    lantern_node_fork
     sd      a0, (L + 32)(sp)
     mv      a3, a0
     mv      a0, s7
     ld      a1, L(sp)
     ld      a2, (L + 8)(sp)
     addi    a4, s1, Node_columns
-    call    node_sidecar_ask
+    call    lantern_node_sidecar_ask
     bnez    a0, 99f
     li      a1, 1                           # version 2 from altair on
     ld      a0, (L + 32)(sp)
@@ -3236,7 +3236,7 @@ LOCAL_FUNCTION node_backfill_ask
     ld      a2, NodePeer_handle(s7)
     addi    a3, sp, L
     li      a4, 24
-    call    node_open
+    call    lantern_node_open
     beqz    a0, 99f
     ld      t0, NodeStream_handle(a0)
     sd      t0, Node_backfill_handle(s1)
@@ -3245,7 +3245,7 @@ LOCAL_FUNCTION node_backfill_ask
     ld      t0, (L + 24)(sp)
     sd      t0, Node_backfill_peer(s1)
 99: LEAVE 64
-END_FUNCTION node_backfill_ask
+END_FUNCTION lantern_node_backfill_ask
 
 /* reg = the u32 at off(base), little endian, byte by byte: SSZ offsets need not be aligned. Uses tmp. */
 .macro LD32B reg, base, off, tmp
@@ -3267,7 +3267,7 @@ END_FUNCTION node_backfill_ask
  * 2^64 - 1 when the bytes do not hold it; for an index a2 below the count, a1 the item's SSZ bytes
  * and a2 their length, else 0 and 0. Uses t0-t6, a3-a5.
  */
-LOCAL_FUNCTION node_body_item
+LOCAL_FUNCTION lantern_node_body_item
     UNWIND_END_PROLOGUE
     ld      t0, 16(a0)                      # the length
     ld      t1, 8(a0)
@@ -3324,7 +3324,7 @@ LOCAL_FUNCTION node_body_item
     li      a1, 0
     li      a2, 0
     ret
-END_FUNCTION node_body_item
+END_FUNCTION lantern_node_body_item
 
 /*
  * The votes of the imported block entry a0 (node.md): a BLOCK_ATTESTATION of each of its a1
@@ -3332,7 +3332,7 @@ END_FUNCTION node_body_item
  * the justified root; at most NODE_VOTES_MAX in all. s3 the entry, s4 the index, s7 the
  * attestations, s8 the slashings, s9 the justified state.
  */
-LOCAL_FUNCTION node_votes
+LOCAL_FUNCTION lantern_node_votes
     ENTER 0
     mv      s3, a0
     li      t0, 128
@@ -3351,12 +3351,12 @@ LOCAL_FUNCTION node_votes
     ld      a3, NodeBlock_data_id(s3)
     li      a4, 0
     mv      a5, s4
-    call    node_work
+    call    lantern_node_work
     addi    s4, s4, 1
     j       3b
 4:  beqz    s8, 9f
     addi    a0, s2, Store_justified_checkpoint + 8
-    call    node_find_block
+    call    lantern_node_find_block
     li      s9, 0
     li      t0, -1
     beq     a0, t0, 5f
@@ -3369,18 +3369,18 @@ LOCAL_FUNCTION node_votes
     ld      a3, NodeBlock_data_id(s3)
     li      a4, 0
     mv      a5, s4
-    call    node_work
+    call    lantern_node_work
     addi    s4, s4, 1
     j       6b
 9:  LEAVE 0
-END_FUNCTION node_votes
+END_FUNCTION lantern_node_votes
 
 /*
  * L0: the aggregate of the SignedAggregateAndProof in the ByteList a0: a0 = 0 and a1 its SSZ bytes,
  * a2 their length; a0 = 2^64 - 1 when the bytes do not hold it. The message's offset is at byte 0,
  * the aggregate's at byte 8 of the message; the aggregate runs to the end. Uses t0-t3, t6.
  */
-LOCAL_FUNCTION node_aggregate
+LOCAL_FUNCTION lantern_node_aggregate
     UNWIND_END_PROLOGUE
     ld      t0, 16(a0)
     ld      t1, 8(a0)
@@ -3403,7 +3403,7 @@ LOCAL_FUNCTION node_aggregate
     li      a1, 0
     li      a2, 0
     ret
-END_FUNCTION node_aggregate
+END_FUNCTION lantern_node_aggregate
 
 /*
  * After the head (node.md): each NodeMessage in NODE_MESSAGE_VOTE whose slot is below the store's
@@ -3411,11 +3411,11 @@ END_FUNCTION node_aggregate
  * 4096 bytes. a0 = 1 when an entry is left waiting, else 0. s3 an entry, s4 the entries left, s7
  * the store's slot, s8 left waiting.
  */
-LOCAL_FUNCTION node_vote_due
+LOCAL_FUNCTION lantern_node_vote_due
     ENTER 0
     li      s8, 0
     mv      a0, s2
-    call    node_store_slot
+    call    lantern_node_store_slot
     mv      s7, a0
     PART    s3, s4, s1, Node_messages
 1:  beqz    s4, 9f
@@ -3425,7 +3425,7 @@ LOCAL_FUNCTION node_vote_due
     ld      t0, NodeMessage_slot(s3)
     bgeu    t0, s7, 2f
     li      a0, NODE_ACT_WORK_SIZE
-    call    node_room
+    call    lantern_node_room
     bnez    a0, 3f
     li      s8, 1
     j       9f
@@ -3435,7 +3435,7 @@ LOCAL_FUNCTION node_vote_due
     ld      a3, NodeMessage_data_id(s3)
     ld      a4, NodeMessage_handle(s3)
     li      a5, 0
-    call    node_work
+    call    lantern_node_work
     li      t0, NODE_MESSAGE_VOTING
     sd      t0, NodeMessage_state(s3)
 2:  addi    s3, s3, NodeMessage__mem
@@ -3443,13 +3443,13 @@ LOCAL_FUNCTION node_vote_due
     j       1b
 9:  mv      a0, s8
     LEAVE 0
-END_FUNCTION node_vote_due
+END_FUNCTION lantern_node_vote_due
 
 /*
  * L0: a0 = the end of the sidecar segment a0: db_sidecar_end for db_sidecar_segment, else
  * backfill_sidecar_end for backfill_sidecar_segment, else 0, a new segment. Uses t1 only.
  */
-LOCAL_FUNCTION node_side_end
+LOCAL_FUNCTION lantern_node_side_end
     UNWIND_END_PROLOGUE
     ld      t1, Node_db_sidecar_segment(s1)
     bne     a0, t1, 1f
@@ -3461,7 +3461,7 @@ LOCAL_FUNCTION node_side_end
     ret
 2:  li      a0, 0
     ret
-END_FUNCTION node_side_end
+END_FUNCTION lantern_node_side_end
 
 /*
  * Each NODE_BLOB_VALID sidecar of the block entry a0, by index, to the Db (node.md): its record at
@@ -3471,7 +3471,7 @@ END_FUNCTION node_side_end
  * the index, s10 its slot. Locals: L a DbRecord (80), L+80 the offset, L+88 the sidecar, L+96 the
  * writer, L+104 the segment.
  */
-LOCAL_FUNCTION node_db_sidecars
+LOCAL_FUNCTION lantern_node_db_sidecars
     ENTER 112
     mv      s8, a0
     ld      s10, NodeBlock_slot(s8)
@@ -3483,12 +3483,12 @@ LOCAL_FUNCTION node_db_sidecars
     bgeu    s9, t0, 9f
     mv      a0, s8
     mv      a1, s9
-    call    node_blob_held
+    call    lantern_node_blob_held
     beqz    a0, 19f
     sd      a0, (L + 88)(sp)
     mv      a0, s10                         # a column sidecar from fulu on, else a blob sidecar
     addi    a1, s1, Node_config
-    call    node_fork
+    call    lantern_node_fork
     li      t1, DB_BLOB_SIDECAR
     li      t0, FORK_FULU
     bltu    a0, t0, 41f
@@ -3505,7 +3505,7 @@ LOCAL_FUNCTION node_db_sidecars
     sd      t0, (L + DbRecord_bytes + 8)(sp)
     srli    a0, s10, DB_SEGMENT_SHIFT       # its segment, and its offset at the segment's end
     sd      a0, (L + 104)(sp)
-    call    node_side_end
+    call    lantern_node_side_end
     sd      a0, (L + 80)(sp)
     ld      a0, Node_db(s1)
     add     a0, s1, a0
@@ -3519,7 +3519,7 @@ LOCAL_FUNCTION node_db_sidecars
     ld      a2, (L + 104)(sp)
     ld      a3, (L + 80)(sp)
     addi    a4, sp, L
-    call    node_db_append
+    call    lantern_node_db_append
     ld      t0, (L + 72)(sp)                # the segment's new end: the writer's segment, each end of it
     addi    t0, t0, DbRecord__mem + 7
     andi    t0, t0, -8
@@ -3539,13 +3539,13 @@ LOCAL_FUNCTION node_db_sidecars
     sd      t1, Node_backfill_sidecar_end(s1)
 5:  ld      t0, (L + 88)(sp)                # its bytes and entry go, unless a stream sends them
     ld      a0, NodeBlob_data_id(t0)
-    call    node_serving
+    call    lantern_node_serving
     bnez    a0, 19f
     li      a0, NODE_ACT_BYTES_FREE
     ld      t0, (L + 88)(sp)
     ld      a1, NodeBlob_data_id(t0)
     li      a2, 0
-    call    node_ids
+    call    lantern_node_ids
     ld      t1, (L + 88)(sp)
     li      t0, -1
     sd      t0, 0(t1)
@@ -3559,7 +3559,7 @@ LOCAL_FUNCTION node_db_sidecars
 19: addi    s9, s9, 1
     j       4b
 9:  LEAVE 112
-END_FUNCTION node_db_sidecars
+END_FUNCTION lantern_node_db_sidecars
 
 /*
  * With NODE_FLAG_DB, the sidecars the node no longer serves go (node.md): the drop slot, the first
@@ -3568,18 +3568,18 @@ END_FUNCTION node_db_sidecars
  * DB_DROP of each sidecar segment below it from sidecar_floor's, lantern_db_drop_sidecars, and
  * sidecar_floor takes it. s3 the drop slot, s4 a segment. Locals: L the slot.
  */
-LOCAL_FUNCTION node_drop_sidecars
+LOCAL_FUNCTION lantern_node_drop_sidecars
     ENTER 16
     ld      t0, Node_flags(s1)
     andi    t0, t0, NODE_FLAG_DB
     beqz    t0, 9f
     LDQ     a0, s1, Node_config + CONFIG_MIN_EPOCHS_FOR_BLOB_SIDECARS_REQUESTS
     li      a1, FORK_DENEB
-    call    node_window
+    call    lantern_node_window
     mv      s3, a0
     LDQ     a0, s1, Node_config + CONFIG_MIN_EPOCHS_FOR_DATA_COLUMN_SIDECARS_REQUESTS
     li      a1, FORK_FULU
-    call    node_window
+    call    lantern_node_window
     bgeu    a0, s3, 1f
     mv      s3, a0
 1:  li      t0, SLOTS_PER_EPOCH
@@ -3605,7 +3605,7 @@ LOCAL_FUNCTION node_drop_sidecars
     bgeu    t0, s3, 6f
     li      a0, NODE_ACT_DB_DROP
     li      a1, NODE_ACT_DB_DROP_SIZE
-    call    node_act
+    call    lantern_node_act
     sd      s4, 16(a0)
     li      t0, 1
     sd      t0, 24(a0)
@@ -3626,7 +3626,7 @@ LOCAL_FUNCTION node_drop_sidecars
     bgeu    t1, t0, 9f
     sd      t2, Node_backfill_sidecar_segment(s1)
 9:  LEAVE 16
-END_FUNCTION node_drop_sidecars
+END_FUNCTION lantern_node_drop_sidecars
 
 /*
  * With NODE_FLAG_DB, the canonical blocks from db_next_slot to the finalized block a0 and their
@@ -3636,7 +3636,7 @@ END_FUNCTION node_drop_sidecars
  * chain (an entry address for each, at the end of scratch), s7 its count, s8 a block, s9 an
  * index, s10 the slot. Locals: L a DbRecord, L+64 an offset, L+72 a sidecar entry.
  */
-LOCAL_FUNCTION node_archive
+LOCAL_FUNCTION lantern_node_archive
     ENTER 96
     ld      t0, Node_flags(s1)
     andi    t0, t0, NODE_FLAG_DB
@@ -3662,7 +3662,7 @@ LOCAL_FUNCTION node_archive
     ld      t0, (Node_blocks + 8)(s1)
     bgeu    s7, t0, 2f
     addi    a0, a1, NodeBlock_parent_root
-    call    node_find_block
+    call    lantern_node_find_block
     li      t0, -1
     bne     a0, t0, 1b
 2:  beqz    s7, 99f                         # then from the lowest slot
@@ -3697,7 +3697,7 @@ LOCAL_FUNCTION node_archive
     ld      t1, Node_db_block_segment(s1)
     beq     t0, t1, 3f
     mv      a0, t0
-    call    node_seg_end
+    call    lantern_node_seg_end
     sd      t0, Node_db_block_segment(s1)
     sd      a0, Node_db_block_end(s1)
 3:  ld      t0, Node_db_block_end(s1)
@@ -3713,7 +3713,7 @@ LOCAL_FUNCTION node_archive
     ld      a2, Node_db_block_segment(s1)
     ld      a3, (L + 80)(sp)
     addi    a4, sp, L
-    call    node_db_append
+    call    lantern_node_db_append
     ld      t0, (L + 72)(sp)
     addi    t0, t0, DbRecord__mem + 7
     andi    t0, t0, -8
@@ -3726,7 +3726,7 @@ LOCAL_FUNCTION node_archive
     sd      t1, Node_backfill_end(s1)
 42: mv      a0, s8                          # each sidecar the node holds, by index
     li      a1, 0
-    call    node_db_sidecars
+    call    lantern_node_db_sidecars
 20: bne     s8, s3, 21f                     # the finalized block: its state and bytes to the shell, for a restart
     ld      t0, 8(s6)
     ld      t1, 16(s6)
@@ -3749,14 +3749,14 @@ LOCAL_FUNCTION node_archive
     sd      t0, 48(t2)
     mv      a0, s8                          # and the archive's state record
     mv      a1, s10
-    call    node_archive_queue
+    call    lantern_node_archive_queue
 21: ld      a0, NodeBlock_data_id(s8)       # the block's bytes go, unless a stream sends them
-    call    node_serving
+    call    lantern_node_serving
     bnez    a0, 30f
     li      a0, NODE_ACT_BYTES_FREE
     ld      a1, NodeBlock_data_id(s8)
     li      a2, 0
-    call    node_ids
+    call    lantern_node_ids
     sd      zero, NodeBlock_data_id(s8)
     beq     s8, s3, 30f                     # and its entry, but the finalized block's
     li      t0, -1
@@ -3781,17 +3781,17 @@ LOCAL_FUNCTION node_archive
     mv      a0, s8
     mv      a1, s9
     addi    s9, s9, 1
-    call    node_blob_held
+    call    lantern_node_blob_held
     beqz    a0, 41b
     sd      a0, (L + 88)(sp)
     ld      a0, NodeBlob_data_id(a0)
-    call    node_serving
+    call    lantern_node_serving
     bnez    a0, 41b
     li      a0, NODE_ACT_BYTES_FREE
     ld      t0, (L + 88)(sp)
     ld      a1, NodeBlob_data_id(t0)
     li      a2, 0
-    call    node_ids
+    call    lantern_node_ids
     ld      t1, (L + 88)(sp)
     li      t0, -1
     sd      t0, 0(t1)
@@ -3804,7 +3804,7 @@ LOCAL_FUNCTION node_archive
     sd      t0, NodeBlob_status(t1)
     j       41b
 99: LEAVE 96
-END_FUNCTION node_archive
+END_FUNCTION lantern_node_archive
 
 /*
  * (node, segment, sidecars, bytes, valid): lantern_db_scan of a segment's bytes into the node's
@@ -3923,16 +3923,16 @@ FUNCTION lantern_node_db_scan
 END_FUNCTION lantern_node_db_scan
 
 /* A BYTES_PUT action of the ByteList a0 with a new id: a0 = the id. s3 the ByteList, s4 the id. */
-LOCAL_FUNCTION node_put
+LOCAL_FUNCTION lantern_node_put
     ENTER 0
     mv      s3, a0
-    call    node_new_id
+    call    lantern_node_new_id
     mv      s4, a0
     ld      a1, 16(s3)                      # the header, 16 id, then a ByteList: size, offset 24, count, bytes
     addi    a1, a1, 48 + 7
     andi    a1, a1, -8
     li      a0, NODE_ACT_BYTES_PUT
-    call    node_act
+    call    lantern_node_act
     sd      s4, 16(a0)
     ld      t0, 0(a0)
     addi    t0, t0, -24
@@ -3947,10 +3947,10 @@ LOCAL_FUNCTION node_put
     call    lantern_copy
     mv      a0, s4
     LEAVE 0
-END_FUNCTION node_put
+END_FUNCTION lantern_node_put
 
 /* a0 = the node's NODE_BLOB_VALID entry of the root at a0 (8-aligned) and the index a1, or 0. Uses t0-t3, a6, a7. */
-LOCAL_FUNCTION node_blob_held
+LOCAL_FUNCTION lantern_node_blob_held
     UNWIND_END_PROLOGUE
     PART    t0, t1, s1, Node_blobs
 1:  beqz    t1, 3f
@@ -3967,13 +3967,13 @@ LOCAL_FUNCTION node_blob_held
     j       1b
 3:  li      a0, 0
     ret
-END_FUNCTION node_blob_held
+END_FUNCTION lantern_node_blob_held
 
 /*
  * a0 = 1 when the node holds a NODE_BLOB_VALID entry of the root at a0 (8-aligned) for each index
  * below a1 (1 to NODE_BLOB_MAX), else 0. Uses t0-t4, a6, a7.
  */
-LOCAL_FUNCTION node_blobs_held
+LOCAL_FUNCTION lantern_node_blobs_held
     UNWIND_END_PROLOGUE
     PART    t0, t1, s1, Node_blobs
     li      t4, 0                           # a bit for each index held
@@ -3997,10 +3997,10 @@ LOCAL_FUNCTION node_blobs_held
     sub     t3, t3, t4
     seqz    a0, t3
     ret
-END_FUNCTION node_blobs_held
+END_FUNCTION lantern_node_blobs_held
 
 /* a0 = 1 when the node s1 samples the column a0, else 0. A leaf; uses t0, t1. */
-LOCAL_FUNCTION node_sampled
+LOCAL_FUNCTION lantern_node_sampled
     UNWIND_END_PROLOGUE
     li      t0, 128
     bgeu    a0, t0, 1f
@@ -4013,10 +4013,10 @@ LOCAL_FUNCTION node_sampled
     ret
 1:  li      a0, 0
     ret
-END_FUNCTION node_sampled
+END_FUNCTION lantern_node_sampled
 
 /* a0 = the columns the node s1 samples: the bits of Node_columns. A leaf; uses t0, t1. */
-LOCAL_FUNCTION node_column_count
+LOCAL_FUNCTION lantern_node_column_count
     UNWIND_END_PROLOGUE
     li      a0, 0
     ld      t0, Node_columns(s1)
@@ -4032,14 +4032,14 @@ LOCAL_FUNCTION node_column_count
     addi    a0, a0, 1
     j       3b
 4:  ret
-END_FUNCTION node_column_count
+END_FUNCTION lantern_node_column_count
 
 /*
  * a0 = 1 when the node holds a NODE_BLOB_VALID entry of the root at a0 for each column it
  * samples, else 0; t4 and t5 = the columns it samples and lacks, below 64 and from 64. A leaf;
  * uses t0-t6, a6, a7.
  */
-LOCAL_FUNCTION node_columns_held
+LOCAL_FUNCTION lantern_node_columns_held
     UNWIND_END_PROLOGUE
     PART    t0, t1, s1, Node_blobs
     li      t4, 0                           # a bit for each column held: t4 below 64, t5 from 64
@@ -4071,18 +4071,18 @@ LOCAL_FUNCTION node_columns_held
     or      t2, t4, t5
     seqz    a0, t2
     ret
-END_FUNCTION node_columns_held
+END_FUNCTION lantern_node_columns_held
 
 /*
  * a0 = the first epoch of a sidecar window: max(the epoch of the store s2 - a0, the epoch of the
  * fork a1 in the node s1's config). Locals: 0 a0, 8 a1.
  */
-LOCAL_FUNCTION node_window
+LOCAL_FUNCTION lantern_node_window
     FRAME 16
     sd      a0, 0(sp)
     sd      a1, 8(sp)
     mv      a0, s2
-    call    node_store_slot
+    call    lantern_node_store_slot
     li      t0, SLOTS_PER_EPOCH
     divu    a0, a0, t0
     ld      t1, 0(sp)
@@ -4097,7 +4097,7 @@ LOCAL_FUNCTION node_window
     bgeu    a0, t1, 1f
     mv      a0, t1
 1:  UNFRAME 16
-END_FUNCTION node_window
+END_FUNCTION lantern_node_window
 
 /*
  * The columns of the groups of get_custody_groups(the NodeID at a0, a1 groups) of the config a2,
@@ -4105,7 +4105,7 @@ END_FUNCTION node_window
  * above NUMBER_OF_CUSTODY_GROUPS or 128). s1 config, s2 out, s3 a group, s4 the groups left, s5
  * NUMBER_OF_CUSTODY_GROUPS. Locals: L the count, L+16 an IndexList.
  */
-LOCAL_FUNCTION node_custody_columns
+LOCAL_FUNCTION lantern_node_custody_columns
     ENTER NODE_CUSTODY_LOCALS
     mv      s1, a2
     mv      s2, a3
@@ -4149,7 +4149,7 @@ LOCAL_FUNCTION node_custody_columns
     sd      zero, 8(s2)
     li      a0, LANTERN_INVALID_CUSTODY_GROUP
     LEAVE NODE_CUSTODY_LOCALS
-END_FUNCTION node_custody_columns
+END_FUNCTION lantern_node_custody_columns
 
 /*
  * The peer a0 takes NODE_PEER_METADATA, and as custody the columns of the groups of
@@ -4157,7 +4157,7 @@ END_FUNCTION node_custody_columns
  * decompresses; else no custody. s3 the peer, s4 the count. Locals: L the point (64), L+64 a
  * ByteList of the point (88), L+152 the digest (32), L+184 the NodeID (32).
  */
-LOCAL_FUNCTION node_peer_custody
+LOCAL_FUNCTION lantern_node_peer_custody
     ENTER 224
     mv      s3, a0
     mv      s4, a1
@@ -4204,15 +4204,15 @@ LOCAL_FUNCTION node_peer_custody
     mv      a1, s4
     addi    a2, s1, Node_config
     addi    a3, s3, NodePeer_custody
-    call    node_custody_columns
+    call    lantern_node_custody_columns
 9:  LEAVE 224
-END_FUNCTION node_peer_custody
+END_FUNCTION lantern_node_peer_custody
 
 /*
  * The peer room (node.md): a0 = the capacity of the peers part, a1 = its open room (the capacity
  * less capacity >> NODE_PEER_SPARE_SHIFT), a2 = dialing + the peers. A leaf; uses t0.
  */
-LOCAL_FUNCTION node_peer_room
+LOCAL_FUNCTION lantern_node_peer_room
     UNWIND_END_PROLOGUE
     ld      a0, Node_streams(s1)
     ld      t0, Node_peers(s1)
@@ -4225,13 +4225,13 @@ LOCAL_FUNCTION node_peer_room
     ld      t0, Node_dialing(s1)
     add     a2, a2, t0
     ret
-END_FUNCTION node_peer_room
+END_FUNCTION lantern_node_peer_room
 
 /*
  * a0 = 1 when the peer entry a0 serves the slot a1 (node.md, the peer room): NODE_PEER_STATUS, its
  * head_slot + SLOTS_PER_EPOCH at least the slot, its earliest_slot at most it; else 0. Uses t0, t1.
  */
-LOCAL_FUNCTION node_peer_serves
+LOCAL_FUNCTION lantern_node_peer_serves
     UNWIND_END_PROLOGUE
     ld      t0, NodePeer_flags(a0)
     andi    t0, t0, NODE_PEER_STATUS
@@ -4246,7 +4246,7 @@ LOCAL_FUNCTION node_peer_serves
     ret
 9:  li      a0, 0
     ret
-END_FUNCTION node_peer_serves
+END_FUNCTION lantern_node_peer_serves
 
 .if NODE_COLUMN_PEERS - 2
 .error "node_short_columns counts to 2 with two masks"
@@ -4257,13 +4257,13 @@ END_FUNCTION node_peer_serves
  * the store's slot hold in their custody; none before fulu. s3 a peer, s4 the peers left, s7 and
  * s8 the columns of one peer or more, s9 and s10 of two or more. Locals: L the store's slot.
  */
-LOCAL_FUNCTION node_short_columns
+LOCAL_FUNCTION lantern_node_short_columns
     ENTER 16
     mv      a0, s2
-    call    node_store_slot
+    call    lantern_node_store_slot
     sd      a0, L(sp)
     addi    a1, s1, Node_config
-    call    node_fork
+    call    lantern_node_fork
     li      t0, FORK_FULU
     bltu    a0, t0, 8f
     li      s7, 0
@@ -4277,7 +4277,7 @@ LOCAL_FUNCTION node_short_columns
     beqz    t0, 3f
     mv      a0, s3
     ld      a1, L(sp)
-    call    node_peer_serves
+    call    lantern_node_peer_serves
     beqz    a0, 3f
     ld      t0, NodePeer_custody(s3)        # two or more |= one or more & custody; one or more |= custody
     and     t1, t0, s7
@@ -4300,17 +4300,17 @@ LOCAL_FUNCTION node_short_columns
 8:  li      a0, 0
     li      a1, 0
     LEAVE 16
-END_FUNCTION node_short_columns
+END_FUNCTION lantern_node_short_columns
 
 /* L0: a0 = 1 when the block entry a0 needs blobs or columns it does not hold (node.md), else 0. s4 the entry, s7 its blob count. */
-LOCAL_FUNCTION node_lacks_sidecars
+LOCAL_FUNCTION lantern_node_lacks_sidecars
     ENTER 0
     mv      s4, a0
     ld      s7, NodeBlock_blobs(s4)
     beqz    s7, 5f
     ld      a0, NodeBlock_slot(s4)
     addi    a1, s1, Node_config
-    call    node_fork
+    call    lantern_node_fork
     li      t0, FORK_FULU
     bgeu    a0, t0, 6f
     li      t0, NODE_BLOB_MAX
@@ -4324,30 +4324,30 @@ LOCAL_FUNCTION node_lacks_sidecars
 2:  bgtu    s7, t1, 5f
     LDQ     a0, s1, Node_config + CONFIG_MIN_EPOCHS_FOR_BLOB_SIDECARS_REQUESTS   # the blob window
     li      a1, FORK_DENEB
-    call    node_window
+    call    lantern_node_window
     ld      t2, NodeBlock_slot(s4)
     li      t0, SLOTS_PER_EPOCH
     divu    t2, t2, t0
     bltu    t2, a0, 5f
     mv      a0, s4
     mv      a1, s7
-    call    node_blobs_held
+    call    lantern_node_blobs_held
     bnez    a0, 5f
 4:  li      a0, 1
     LEAVE 0
 6:  LDQ     a0, s1, Node_config + CONFIG_MIN_EPOCHS_FOR_DATA_COLUMN_SIDECARS_REQUESTS   # the column window
     li      a1, FORK_FULU
-    call    node_window
+    call    lantern_node_window
     ld      t2, NodeBlock_slot(s4)
     li      t0, SLOTS_PER_EPOCH
     divu    t2, t2, t0
     bltu    t2, a0, 5f
     mv      a0, s4
-    call    node_columns_held
+    call    lantern_node_columns_held
     beqz    a0, 4b
 5:  li      a0, 0
     LEAVE 0
-END_FUNCTION node_lacks_sidecars
+END_FUNCTION lantern_node_lacks_sidecars
 
 /*
  * The block of index a0, from the network, waits for its blobs or columns: NODE_BLOCK_BLOBS
@@ -4356,7 +4356,7 @@ END_FUNCTION node_lacks_sidecars
  * NODE_BLOB_MAX and its epoch is in the blob window. Fulu: it needs columns when its blob count is
  * above 0 and its epoch is in the column window. s3 the index, s4 the entry, s7 the count.
  */
-LOCAL_FUNCTION node_await
+LOCAL_FUNCTION lantern_node_await
     ENTER 0
     mv      s3, a0
     PART    s4, t0, s1, Node_blocks
@@ -4364,7 +4364,7 @@ LOCAL_FUNCTION node_await
     mul     t0, s3, t0
     add     s4, s4, t0
     mv      a0, s4
-    call    node_lacks_sidecars
+    call    lantern_node_lacks_sidecars
     beqz    a0, 5f
     li      t0, NODE_BLOCK_BLOBS
     sd      t0, NodeBlock_status(s4)
@@ -4374,39 +4374,39 @@ LOCAL_FUNCTION node_await
     li      t0, NODE_BLOCK_WAITING
     sd      t0, NodeBlock_status(s4)
     mv      a0, s3
-    call    node_try_import
+    call    lantern_node_try_import
     LEAVE 0
-END_FUNCTION node_await
+END_FUNCTION lantern_node_await
 
 /* A blob of the root at a0 became NODE_BLOB_VALID: the block of that root in NODE_BLOCK_BLOBS waits for its blobs again. */
-LOCAL_FUNCTION node_blob_added
+LOCAL_FUNCTION lantern_node_blob_added
     FRAME 0
-    call    node_find_block
+    call    lantern_node_find_block
     li      t0, -1
     beq     a0, t0, 9f
     ld      t0, NodeBlock_status(a1)
     li      t1, NODE_BLOCK_BLOBS
     bne     t0, t1, 9f
-    call    node_await
+    call    lantern_node_await
 9:  UNFRAME 0
-END_FUNCTION node_blob_added
+END_FUNCTION lantern_node_blob_added
 
 /*
  * A new head, the root at a0: NodeMetrics reorgs takes 1 when get_ancestor of it at the old head's
  * slot (of Node_head_root) is not the old head. With either not among the node's blocks, or a gap in
  * the new head's chain, nothing. Locals: the old head's slot, the root.
  */
-LOCAL_FUNCTION node_reorg_count
+LOCAL_FUNCTION lantern_node_reorg_count
     FRAME 16
     sd      a0, 8(sp)
     addi    a0, s1, Node_head_root
-    call    node_find_block
+    call    lantern_node_find_block
     li      t0, -1
     beq     a0, t0, 9f
     ld      t0, NodeBlock_slot(a1)
     sd      t0, 0(sp)
     ld      a0, 8(sp)
-1:  call    node_find_block                 # the new head's chain down to the old head's slot
+1:  call    lantern_node_find_block                 # the new head's chain down to the old head's slot
     li      t0, -1
     beq     a0, t0, 9f
     ld      t0, NodeBlock_slot(a1)
@@ -4421,13 +4421,13 @@ LOCAL_FUNCTION node_reorg_count
     addi    t0, t0, 1
     STQ     t0, s1, Node_metrics + NodeMetrics_reorgs
 9:  UNFRAME 16
-END_FUNCTION node_reorg_count
+END_FUNCTION lantern_node_reorg_count
 
 /* The head: the root of get_head of the fork of the store's slot into the node, or a JUSTIFIED_STATE work. Locals: L the node. */
-LOCAL_FUNCTION node_head
+LOCAL_FUNCTION lantern_node_head
     ENTER 16
     mv      a0, s2
-    call    node_store_slot
+    call    lantern_node_store_slot
     LDQ     t0, s1, Node_head_due           # only when the store changed: a work wrote it, or a new slot
     bnez    t0, 11f
     LDQ     t0, s1, Node_head_slot
@@ -4435,7 +4435,7 @@ LOCAL_FUNCTION node_head
 11: STQ     zero, s1, Node_head_due
     STQ     a0, s1, Node_head_slot
     addi    a1, s1, Node_config
-    call    node_fork
+    call    lantern_node_fork
     mv      t6, a0
     mv      a0, s2
     mv      a1, s5
@@ -4446,7 +4446,7 @@ LOCAL_FUNCTION node_head
     STQ     t0, s1, Node_head_due
     li      t0, LANTERN_NEED_JUSTIFIED_STATE
     bne     a0, t0, 9f
-    call    node_justified
+    call    lantern_node_justified
     LEAVE 16
 1:  ld      t0, L(sp)
     PART    t1, t2, s2, Store_blocks
@@ -4459,7 +4459,7 @@ LOCAL_FUNCTION node_head
     j       3f
 2:  sd      t1, (L + 8)(sp)
     mv      a0, t1
-    call    node_reorg_count
+    call    lantern_node_reorg_count
     ld      t1, (L + 8)(sp)
     addi    t0, s1, Node_head_root
     ld      t2, Node_flags(s1)
@@ -4470,13 +4470,13 @@ LOCAL_FUNCTION node_head
     STQ     zero, s1, Node_fcu_wait
 3:  COPY32  t0, t1
 9:  LEAVE 16
-END_FUNCTION node_head
+END_FUNCTION lantern_node_head
 
 /*
  * The event a0. s3 the event, s4 its ByteList, s7 its bytes, s8 a BufferId, s9 the root entry
  * a1 of the step's first pass for a BLOCK event. Locals: L+32 a result, L+40 the index.
  */
-LOCAL_FUNCTION node_event
+LOCAL_FUNCTION lantern_node_event
     ENTER 48
     mv      s3, a0
     mv      s9, a1
@@ -4495,7 +4495,7 @@ LOCAL_FUNCTION node_event
     beqz    t1, 1f
     divu    a0, t0, t1
 1:  addi    a1, s1, Node_config
-    call    node_fork
+    call    lantern_node_fork
     mv      t6, a0
     mv      a0, s2
     addi    a1, s3, 16
@@ -4507,16 +4507,16 @@ LOCAL_FUNCTION node_event
     ld      t0, 0(s9)                       # BLOCK: its root entry from the step's first pass
     bnez    t0, 19f
     addi    a0, s9, 8                       # a known block: nothing
-    call    node_find_block
+    call    lantern_node_find_block
     li      t0, -1
     bne     a0, t0, 19f
     addi    s4, s3, NodeEvent_bytes         # its bytes, then its entry
     ld      t0, 8(s4)
     add     s7, s4, t0
     mv      a0, s4
-    call    node_put
+    call    lantern_node_put
     mv      s8, a0
-    call    node_new_block
+    call    lantern_node_new_block
     sd      a0, (L + 40)(sp)
     addi    t2, s9, 8
     COPY32  t0, t2
@@ -4536,7 +4536,7 @@ LOCAL_FUNCTION node_event
     ld      t2, 16(s4)
     sd      t2, NodeBlock_length(t0)
     ld      a0, (L + 40)(sp)
-    call    node_try_import
+    call    lantern_node_try_import
 19: LEAVE 48
 20: li      t1, NODE_EV_ATTESTATION
     bne     t0, t1, 30f
@@ -4545,13 +4545,13 @@ LOCAL_FUNCTION node_event
     li      t1, 4 + 128 + 96
     bltu    t0, t1, 29f
     mv      a0, s4
-    call    node_put
+    call    lantern_node_put
     mv      s8, a0
     ld      t0, 8(s4)
     add     s7, s4, t0
     LDU64   a0, s7, 92, t0                  # data.target: the epoch, then the root
     addi    a1, s7, 100
-    call    node_find_checkpoint
+    call    lantern_node_find_checkpoint
     li      t0, -1
     li      t1, 0
     beq     a0, t0, 21f
@@ -4562,12 +4562,12 @@ LOCAL_FUNCTION node_event
     mv      a3, s8
     li      a4, 0
     ld      a5, 16(s3)                      # is_from_block
-    call    node_work
+    call    lantern_node_work
 29: LEAVE 48
 30: li      t1, NODE_EV_ATTESTER_SLASHING
     bne     t0, t1, 40f
     ADDQ    a0, s2, Store_justified_checkpoint + 8      # the justified root's post-state
-    call    node_find_block
+    call    lantern_node_find_block
     li      t0, -1
     beq     a0, t0, 39f
     ld      t0, NodeBlock_status(a1)
@@ -4575,14 +4575,14 @@ LOCAL_FUNCTION node_event
     bne     t0, t1, 39f
     ld      s7, NodeBlock_state_id(a1)
     addi    a0, s3, NodeEvent_bytes
-    call    node_put
+    call    lantern_node_put
     mv      a3, a0
     li      a0, NODE_WORK_ATTESTER_SLASHING
     mv      a1, s7
     li      a2, 0
     li      a4, 0
     li      a5, 0
-    call    node_work
+    call    lantern_node_work
 39: LEAVE 48
 40: li      t1, NODE_EV_POW_BLOCK
     bne     t0, t1, 45f
@@ -4608,7 +4608,7 @@ LOCAL_FUNCTION node_event
     ld      t0, Node_flags(s1)              # ENGINE 1: the connection failed; the engine is offline
     ori     t0, t0, NODE_FLAG_EL_OFFLINE
     sd      t0, Node_flags(s1)
-    call    node_engine_failed
+    call    lantern_node_engine_failed
     ld      t0, Node_engine_in(s1)
     add     t0, s1, t0
     sd      zero, 16(t0)
@@ -4625,26 +4625,26 @@ LOCAL_FUNCTION node_event
     add     t0, t0, a2
     sd      t0, 16(s7)
     call    lantern_copy
-    call    node_engine_read
+    call    lantern_node_engine_read
     LEAVE 48
 47: li      t1, NODE_EV_BUILDER             # BUILDER: the answer of a builder call
     bne     t0, t1, 470f
-    call    node_builder_event
+    call    lantern_node_builder_event
     LEAVE 48
 470: li     t1, NODE_EV_DB_ARCHIVE
     bne     t0, t1, 4701f
     mv      a0, s3                          # DB_ARCHIVE: the state record goes in the index
-    call    node_archive_done
+    call    lantern_node_archive_done
     LEAVE 48
 4701: li    t1, NODE_EV_ENR
     bne     t0, t1, 471f
     mv      a0, s3                          # ENR: a record discv5 found
-    call    node_enr
+    call    lantern_node_enr
     LEAVE 48
 471: li     t1, NODE_EV_API
     bne     t0, t1, 472f
     mv      a0, s3                          # API: the answer to a request
-    call    node_api_event
+    call    lantern_node_api_event
     LEAVE 48
 472: li     t1, NODE_EV_API_IDENTITY
     bne     t0, t1, 473f
@@ -4658,12 +4658,12 @@ LOCAL_FUNCTION node_event
 473: li     t1, NODE_EV_API_SENT
     bne     t0, t1, 474f
     ld      a0, 16(s3)                      # API_SENT: the next chunk of the connection's stream
-    call    node_api_sent
+    call    lantern_node_api_sent
     LEAVE 48
 474: li     t1, NODE_EV_API_CLOSED
     bne     t0, t1, 50f
     ld      a0, 16(s3)                      # API_CLOSED: the connection's stream ends
-    call    node_api_closed
+    call    lantern_node_api_closed
     LEAVE 48
 50: ld      t0, NodeAction_work_kind(s3)    # WORK_DONE
     li      t2, 63                          # a work that writes the store: the head is due
@@ -4694,14 +4694,14 @@ LOCAL_FUNCTION node_event
     sd      t1, NodeBlock_result(s4)
     li      t2, LANTERN_NEED_JUSTIFIED_STATE
     bne     t1, t2, 51f
-    call    node_justified                  # the justified state, then the same import again
+    call    lantern_node_justified                  # the justified state, then the same import again
     ld      a0, NodeAction_work_kind(s3)
     ld      a1, NodeAction_state_a(s3)
     ld      a2, NodeAction_state_b(s3)
     ld      a3, NodeAction_data(s3)
     ld      a4, NodeAction_target(s3)
     ld      a5, NodeAction_arg(s3)
-    call    node_work
+    call    lantern_node_work
     ld      t0, NodeAction_state_c(s3)
     sd      t0, NodeAction_state_c(a0)
     LEAVE 48
@@ -4709,49 +4709,49 @@ LOCAL_FUNCTION node_event
     li      t0, NODE_BLOCK_IMPORTED         # imported: the block event, its light client data, its votes, then its waiting children
     sd      t0, NodeBlock_status(s4)
     mv      a0, s4
-    call    node_api_block_event
+    call    lantern_node_api_block_event
     li      a0, NODE_WORK_LC_BLOCK
     ld      a1, NodeBlock_state_id(s4)
     li      a2, 0
     ld      a3, NodeBlock_data_id(s4)
     li      a4, 0
     li      a5, 0
-    call    node_work
+    call    lantern_node_work
     li      t0, NODE_LC_ID
     sd      t0, NodeAction_state_c(a0)
     mv      a0, s4
     ld      a1, NodeEvent_index(s3)
     ld      a2, NodeEvent_root(s3)
-    call    node_votes
+    call    lantern_node_votes
     mv      a0, s4
-    call    node_children
+    call    lantern_node_children
     LEAVE 48
 52: li      t0, NODE_BLOCK_INVALID          # invalid: its state copy is freed
     sd      t0, NodeBlock_status(s4)
     li      a0, NODE_ACT_STATE_FREE
     ld      a1, NodeBlock_state_id(s4)
     li      a2, 0
-    call    node_ids
+    call    lantern_node_ids
     sd      zero, NodeBlock_state_id(s4)
 59: LEAVE 48
 60: li      t2, NODE_WORK_LC_HEAD           # the light client events of a new latest update
     bne     t0, t2, 601f
-    call    node_lc_head_done
+    call    lantern_node_lc_head_done
     LEAVE 48
 601: li     t2, NODE_WORK_LC_BLOCK
     bne     t0, t2, 603f
     LEAVE 48
 603: li     t2, NODE_WORK_LC_SERVE          # the light client answer to its stream
     bne     t0, t2, 604f
-    call    node_lc_served
+    call    lantern_node_lc_served
     LEAVE 48
 604: li     t2, NODE_WORK_LC_GOSSIP         # the light client gossip: a message's validation, a publish
     bne     t0, t2, 605f
-    call    node_lc_validated
+    call    lantern_node_lc_validated
     LEAVE 48
 605: li     t2, NODE_WORK_LC_PUBLISH
     bne     t0, t2, 602f
-    call    node_lc_published
+    call    lantern_node_lc_published
     LEAVE 48
 602: li     t2, NODE_WORK_JUSTIFIED_STATE
     bne     t0, t2, 61f
@@ -4765,7 +4765,7 @@ LOCAL_FUNCTION node_event
     bne     t1, t2, 70f
     ld      a0, NodeEvent_checkpoint(s3)    # the target state, then the same attestation again
     addi    a1, s3, NodeEvent_checkpoint + 8
-    call    node_checkpoint_state
+    call    lantern_node_checkpoint_state
     beqz    a0, 71f
     mv      a1, a0
     li      a0, NODE_WORK_ATTESTATION
@@ -4773,7 +4773,7 @@ LOCAL_FUNCTION node_event
     ld      a3, NodeAction_data(s3)
     ld      a4, NodeAction_target(s3)
     ld      a5, NodeAction_arg(s3)
-    call    node_work
+    call    lantern_node_work
     LEAVE 48
 62: li      t2, NODE_WORK_BLOCK_ATTESTATION # BLOCK_ATTESTATION: with NEED_TARGET_STATE, the target state, then again
     bne     t0, t2, 622f
@@ -4781,7 +4781,7 @@ LOCAL_FUNCTION node_event
     bne     t1, t2, 79f
     ld      a0, NodeEvent_checkpoint(s3)
     addi    a1, s3, NodeEvent_checkpoint + 8
-    call    node_checkpoint_state
+    call    lantern_node_checkpoint_state
     beqz    a0, 79f
     mv      a1, a0
     li      a0, NODE_WORK_BLOCK_ATTESTATION
@@ -4789,7 +4789,7 @@ LOCAL_FUNCTION node_event
     ld      a3, NodeAction_data(s3)
     ld      a4, NodeAction_target(s3)
     ld      a5, NodeAction_arg(s3)
-    call    node_work
+    call    lantern_node_work
     LEAVE 48
 622: li     t2, NODE_WORK_GOSSIP_VOTE       # GOSSIP_VOTE: the target state; a future slot waits; else the entry goes
     bne     t0, t2, 623f
@@ -4797,7 +4797,7 @@ LOCAL_FUNCTION node_event
     bne     t1, t2, 6221f
     ld      a0, NodeEvent_checkpoint(s3)
     addi    a1, s3, NodeEvent_checkpoint + 8
-    call    node_checkpoint_state
+    call    lantern_node_checkpoint_state
     beqz    a0, 6221f
     mv      a1, a0
     li      a0, NODE_WORK_GOSSIP_VOTE
@@ -4805,10 +4805,10 @@ LOCAL_FUNCTION node_event
     ld      a3, NodeAction_data(s3)
     ld      a4, NodeAction_target(s3)
     ld      a5, NodeAction_arg(s3)
-    call    node_work
+    call    lantern_node_work
     LEAVE 48
 6221: ld    a0, NodeAction_target(s3)
-    call    node_find_message
+    call    lantern_node_find_message
     li      t0, -1
     beq     a0, t0, 79f
     mv      s4, a1
@@ -4821,14 +4821,14 @@ LOCAL_FUNCTION node_event
 6222: li    a0, NODE_ACT_BYTES_FREE
     ld      a1, NodeMessage_data_id(s4)
     li      a2, 0
-    call    node_ids
+    call    lantern_node_ids
     mv      a0, s4
-    call    node_drop_message
+    call    lantern_node_drop_message
     LEAVE 48
 623: li     t2, NODE_WORK_SERVE             # SERVE: the chunk to its stream, then the next block or the close
     bne     t0, t2, 63f
     ld      a0, NodeAction_target(s3)
-    call    node_find_stream
+    call    lantern_node_find_stream
     li      t0, -1
     beq     a0, t0, 69f
     mv      s4, a1
@@ -4838,7 +4838,7 @@ LOCAL_FUNCTION node_event
     addi    a0, s7, 32 + 7
     andi    a0, a0, -8
     sd      a0, (L + 32)(sp)
-    call    node_out
+    call    lantern_node_out
     beqz    a0, 68f
     ld      t0, (L + 32)(sp)
     li      t1, LIBP2P_EVENT_STREAM_WRITE
@@ -4862,15 +4862,15 @@ LOCAL_FUNCTION node_event
     LEAVE 48
 67: li      a0, LIBP2P_EVENT_STREAM_CLOSE
     ld      a1, NodeStream_handle(s4)
-    call    node_out_handle
+    call    lantern_node_out_handle
     mv      a0, s4
-    call    node_drop_stream
+    call    lantern_node_drop_stream
 69: LEAVE 48
 68: li      a0, LIBP2P_EVENT_STREAM_RESET   # no chunk, or no room for it: a reset
     ld      a1, NodeStream_handle(s4)
-    call    node_out_handle
+    call    lantern_node_out_handle
     mv      a0, s4
-    call    node_drop_stream
+    call    lantern_node_drop_stream
     LEAVE 48
 63: li      t2, NODE_WORK_GOSSIP            # GOSSIP: the VALIDATION, then a valid block to import
     bne     t0, t2, 75f
@@ -4882,24 +4882,24 @@ LOCAL_FUNCTION node_event
     li      s7, LIBP2P_REJECT
 631: ld     a0, NodeAction_target(s3)
     mv      a1, s7
-    call    node_validation
+    call    lantern_node_validation
     ld      a0, NodeAction_state_b(s3)      # the proposer state: 1 use less, or it goes
-    call    node_gossip_state_done
+    call    lantern_node_gossip_state_done
 64: ld      a0, NodeAction_target(s3)
-    call    node_find_message
+    call    lantern_node_find_message
     li      t0, -1
     beq     a0, t0, 66f
     mv      s4, a1
     li      t0, LIBP2P_ACCEPT
     bne     s7, t0, 65f
     mv      a0, s2                          # the event of an operation (node.md, The events), before its bytes go
-    call    node_store_slot
+    call    lantern_node_store_slot
     addi    a1, s1, Node_config
-    call    node_fork
+    call    lantern_node_fork
     mv      a2, a0
     ld      a0, NodeMessage_topic(s4)
     ld      a1, NodeAction_data(s3)
-    call    node_op_event
+    call    lantern_node_op_event
     ld      t0, NodeMessage_topic(s4)       # a block: its block_gossip event
     li      t1, GOSSIP_BEACON_BLOCK
     bne     t0, t1, 638f
@@ -4907,11 +4907,11 @@ LOCAL_FUNCTION node_event
     addi    a1, s3, NodeEvent_root
     ld      a2, NodeMessage_slot(s4)
     li      a3, 0
-    call    node_api_root_event
+    call    lantern_node_api_root_event
 638: mv     a0, s2                          # an operation of the pool keeps its bytes there too
-    call    node_store_slot
+    call    lantern_node_store_slot
     addi    a1, s1, Node_config
-    call    node_fork
+    call    lantern_node_fork
     mv      a3, a0
     ld      a0, NodeMessage_topic(s4)
     ld      a1, NodeAction_data(s3)
@@ -4919,13 +4919,13 @@ LOCAL_FUNCTION node_event
     ld      a4, NodeEvent_root(s3)          # an attestation: its slot, committee index and member
     ld      a5, (NodeEvent_root + 8)(s3)
     ld      a6, (NodeEvent_root + 16)(s3)
-    call    node_pool_add
+    call    lantern_node_pool_add
     beqz    a0, 639f
     ld      t0, NodeMessage_topic(s4)
     li      t1, GOSSIP_ATTESTER_SLASHING
     beq     t0, t1, 639f
     mv      a0, s4
-    call    node_drop_message
+    call    lantern_node_drop_message
     LEAVE 48
 639: ld     t0, NodeMessage_topic(s4)
     li      t1, GOSSIP_BEACON_AGGREGATE_AND_PROOF
@@ -4950,17 +4950,17 @@ LOCAL_FUNCTION node_event
     ld      a3, NodeAction_data(s3)
     li      a4, 0
     li      a5, 0
-    call    node_work
+    call    lantern_node_work
     mv      a0, s4
-    call    node_drop_message
+    call    lantern_node_drop_message
     LEAVE 48
 641: li     t1, GOSSIP_BEACON_BLOCK
     bne     t0, t1, 642f
     addi    a0, s3, NodeEvent_root          # a new block keeps the bytes
-    call    node_find_block
+    call    lantern_node_find_block
     li      t0, -1
     bne     a0, t0, 65f
-    call    node_new_block
+    call    lantern_node_new_block
     sd      a0, (L + 40)(sp)
     addi    t2, s3, NodeEvent_root
     COPY32  t0, t2
@@ -4981,22 +4981,22 @@ LOCAL_FUNCTION node_event
     ld      t2, NodeMessage_length(s4)
     sd      t2, NodeBlock_length(t0)
     mv      a0, s4
-    call    node_drop_message
+    call    lantern_node_drop_message
     ld      a0, (L + 40)(sp)
-    call    node_await
+    call    lantern_node_await
     LEAVE 48
 642: li     t1, GOSSIP_BLOB_SIDECAR         # a new valid sidecar keeps the bytes
     beq     t0, t1, 643f
     li      t1, GOSSIP_DATA_COLUMN_SIDECAR  # a column sidecar: of a column the node samples
     bne     t0, t1, 65f
     ld      a0, NodeEvent_index(s3)
-    call    node_sampled
+    call    lantern_node_sampled
     beqz    a0, 65f
 643: addi   a0, s3, NodeEvent_root
     ld      a1, NodeEvent_index(s3)
-    call    node_blob_held
+    call    lantern_node_blob_held
     bnez    a0, 65f
-    call    node_new_blob
+    call    lantern_node_new_blob
     addi    t2, s3, NodeEvent_root
     COPY32  t0, t2
     ld      t2, NodeEvent_index(s3)
@@ -5010,16 +5010,16 @@ LOCAL_FUNCTION node_event
     ld      t2, NodeMessage_length(s4)
     sd      t2, NodeBlob_length(t0)
     mv      a0, s4
-    call    node_drop_message
+    call    lantern_node_drop_message
     addi    a0, s3, NodeEvent_root
-    call    node_blob_added
+    call    lantern_node_blob_added
     LEAVE 48
 65: mv      a0, s4
-    call    node_drop_message
+    call    lantern_node_drop_message
 66: li      a0, NODE_ACT_BYTES_FREE         # else its bytes go
     ld      a1, NodeAction_data(s3)
     li      a2, 0
-    call    node_ids
+    call    lantern_node_ids
     LEAVE 48
 75: li      t2, NODE_WORK_BACKFILL          # BACKFILL: a block of the backfill, checked
     bne     t0, t2, 751f
@@ -5054,7 +5054,7 @@ LOCAL_FUNCTION node_event
     bne     t2, t3, 79f
     bnez    t1, 76f
     addi    a0, s3, NodeEvent_root          # a new root: the block waits for its parent
-    call    node_find_block
+    call    lantern_node_find_block
     li      t0, -1
     bne     a0, t0, 76f
     addi    t0, s3, NodeEvent_root          # the block waits for its blobs, then its parent
@@ -5063,14 +5063,14 @@ LOCAL_FUNCTION node_event
     sd      t0, NodeBlock_blobs(s4)
     sd      zero, NodeBlock_data_available(s4)
     ld      a0, (L + 40)(sp)
-    call    node_await
+    call    lantern_node_await
     LEAVE 48
 76: li      t0, NODE_BLOCK_INVALID          # not a block, or a known root: invalid, its bytes go
     sd      t0, NodeBlock_status(s4)
     li      a0, NODE_ACT_BYTES_FREE
     ld      a1, NodeBlock_data_id(s4)
     li      a2, 0
-    call    node_ids
+    call    lantern_node_ids
     sd      zero, NodeBlock_data_id(s4)
     LEAVE 48
 77: li      t2, NODE_WORK_BLOB              # BLOB: a sidecar of a response, checked
@@ -5087,27 +5087,27 @@ LOCAL_FUNCTION node_event
     bnez    t1, 78f
     ld      a0, NodeBlob_slot(s4)           # fulu: a column the node samples
     addi    a1, s1, Node_config
-    call    node_fork
+    call    lantern_node_fork
     li      t0, FORK_FULU
     bltu    a0, t0, 771f
     ld      a0, NodeBlob_index(s4)
-    call    node_sampled
+    call    lantern_node_sampled
     beqz    a0, 78f
 771: addi   a0, s3, NodeEvent_root          # valid, and not held yet: the entry takes the root
     ld      a1, NodeBlob_index(s4)
-    call    node_blob_held
+    call    lantern_node_blob_held
     bnez    a0, 78f
     addi    t0, s3, NodeEvent_root
     COPY32  s4, t0
     li      t0, NODE_BLOB_VALID
     sd      t0, NodeBlob_status(s4)
     mv      a0, s4
-    call    node_blob_added
+    call    lantern_node_blob_added
     LEAVE 48
 78: li      a0, NODE_ACT_BYTES_FREE         # not valid, or held: its bytes go, and the entry is free
     ld      a1, NodeBlob_data_id(s4)
     li      a2, 0
-    call    node_ids
+    call    lantern_node_ids
     li      t0, -1
     sd      t0, 0(s4)
     sd      t0, 8(s4)
@@ -5145,12 +5145,12 @@ LOCAL_FUNCTION node_event
     bgeu    t0, t1, 851f
     add     a0, s3, t0
     li      a1, API_TOPIC_PAYLOAD_ATTRIBUTES
-    call    node_api_events
+    call    lantern_node_api_events
 851: ld     s7, (NodeEvent_chunk + 16)(s3)
     addi    a1, s7, 48 + 7
     andi    a1, a1, -8
     li      a0, NODE_ACT_ENGINE
-    call    node_act
+    call    lantern_node_act
     sd      zero, 16(a0)
     ld      t0, 0(a0)
     addi    t0, t0, -24
@@ -5172,7 +5172,7 @@ LOCAL_FUNCTION node_event
 870: li     t2, NODE_WORK_GET_PAYLOAD
     bne     t0, t2, 871f
     ld      a0, NodeAction_target(s3)
-    call    node_produce_fail_at
+    call    lantern_node_produce_fail_at
     LEAVE 48
 871: li     t2, NODE_WORK_NEW_PAYLOAD
     bne     t0, t2, 79f
@@ -5188,45 +5188,45 @@ LOCAL_FUNCTION node_event
     li      t2, LANTERN_NO_PAYLOAD
     bne     t1, t2, 88f
     li      a1, PAYLOAD_STATUS_VALID        # no payload: the import
-    call    node_import_now
+    call    lantern_node_import_now
     LEAVE 48
 88: li      t0, NODE_BLOCK_INVALID
     sd      t0, NodeBlock_status(s4)
     li      a0, NODE_ACT_BYTES_FREE
     ld      a1, NodeBlock_data_id(s4)
     li      a2, 0
-    call    node_ids
+    call    lantern_node_ids
     sd      zero, NodeBlock_data_id(s4)
     LEAVE 48
 701: li     t2, NODE_WORK_API_ENCODE        # API_ENCODE: the response to its connection
     bne     t0, t2, 702f
     mv      a0, s3
-    call    node_api_done
+    call    lantern_node_api_done
     LEAVE 48
 702: li     t2, NODE_WORK_API_CHUNK         # API_CHUNK: the chunk to its connection
     bne     t0, t2, 703f
     mv      a0, s3
-    call    node_api_chunk_done
+    call    lantern_node_api_chunk_done
     LEAVE 48
 703: li     t2, NODE_WORK_API_LOOKUP        # API_LOOKUP: the answer for the slot it found
     bne     t0, t2, 704f
     mv      a0, s3
-    call    node_api_lookup_done
+    call    lantern_node_api_lookup_done
     LEAVE 48
 704: li     t2, NODE_WORK_API_EVENT         # API_EVENT: the text to the streams of its topic
     bne     t0, t2, 705f
     mv      a0, s3
-    call    node_api_event_done
+    call    lantern_node_api_event_done
     LEAVE 48
 705: li     t2, NODE_WORK_API_SUBMIT        # API_SUBMIT: the operations to the pool and out, then the answer
     bne     t0, t2, 706f
     mv      a0, s3
-    call    node_api_submit_done
+    call    lantern_node_api_submit_done
     LEAVE 48
 706: li     t2, NODE_WORK_POOL_CHECK        # POOL_CHECK: the entry stays, or goes
     bne     t0, t2, 707f
     mv      a0, s3
-    call    node_pool_check_done
+    call    lantern_node_pool_check_done
     LEAVE 48
 707: li     t2, NODE_WORK_PRODUCE_CHECK     # the works of block production: their entry goes on
     beq     t0, t2, 708f
@@ -5239,7 +5239,7 @@ LOCAL_FUNCTION node_event
     li      t2, NODE_WORK_PRODUCE_ETH1
     bne     t0, t2, 709f
 708: mv     a0, s3
-    call    node_produce_done
+    call    lantern_node_produce_done
     LEAVE 48
 709: li     t2, NODE_WORK_ETH1_CHECK        # ETH1_CHECK: the follower runs while the bridge is open
     bne     t0, t2, 7091f
@@ -5262,7 +5262,7 @@ LOCAL_FUNCTION node_event
 7097: li    a0, NODE_ACT_BYTES_FREE
     LDQ     a1, s1, Node_recon_buffer
     li      a2, 0
-    call    node_ids
+    call    lantern_node_ids
     ADDQ    a0, s1, Node_recon_failed
     ADDQ    a1, s1, Node_recon_root
     COPY32  a0, a1
@@ -5290,7 +5290,7 @@ LOCAL_FUNCTION node_event
     li      t1, NODE_WORK_PUBLISH_SIDECAR - NODE_WORK_PUBLISH_DECODE
     bgtu    t2, t1, 70f
     mv      a0, s3
-    call    node_publish_done
+    call    lantern_node_publish_done
     LEAVE 48
 70: li      t2, NODE_WORK_ATTESTATION       # done with an attestation or a slashing: free its bytes
     beq     t0, t2, 71f
@@ -5299,14 +5299,14 @@ LOCAL_FUNCTION node_event
 71: li      a0, NODE_ACT_BYTES_FREE
     ld      a1, NodeAction_data(s3)
     li      a2, 0
-    call    node_ids
+    call    lantern_node_ids
 79: LEAVE 48
-END_FUNCTION node_event
+END_FUNCTION lantern_node_event
 
 /* ------------------------------------------------------------ libp2p */
 
 /* a0 = room for an event of a0 bytes at the end of the node's queued libp2p events, its size written, or 0. Uses t0-t3. */
-LOCAL_FUNCTION node_out
+LOCAL_FUNCTION lantern_node_out
     UNWIND_END_PROLOGUE
     P2P_OUT t0
     ld      t1, 16(t0)
@@ -5323,25 +5323,25 @@ LOCAL_FUNCTION node_out
     ret
 1:  li      a0, 0
     ret
-END_FUNCTION node_out
+END_FUNCTION lantern_node_out
 
 /* A queued libp2p event of kind a0 with the handle a1: DISCONNECT, STREAM_CLOSE or STREAM_RESET. */
-LOCAL_FUNCTION node_out_handle
+LOCAL_FUNCTION lantern_node_out_handle
     FRAME 16
     sd      a0, F(sp)
     sd      a1, (F + 8)(sp)
     li      a0, 24
-    call    node_out
+    call    lantern_node_out
     beqz    a0, 1f
     ld      t0, F(sp)
     sd      t0, 8(a0)
     ld      t0, (F + 8)(sp)
     sd      t0, 16(a0)
 1:  UNFRAME 16
-END_FUNCTION node_out_handle
+END_FUNCTION lantern_node_out_handle
 
 /* Drops the first a0 queued libp2p events, which libp2p took. */
-LOCAL_FUNCTION node_out_consume
+LOCAL_FUNCTION lantern_node_out_consume
     FRAME 0
     P2P_OUT t4
     ld      t1, 16(t4)
@@ -5360,10 +5360,10 @@ LOCAL_FUNCTION node_out_consume
     add     a1, t0, t2
     call    lantern_copy
     UNFRAME 0
-END_FUNCTION node_out_consume
+END_FUNCTION lantern_node_out_consume
 
 /* a0 = the index of the peer of libp2p handle a0, or 2^64 - 1; a1 = its entry. Uses t0-t2. */
-LOCAL_FUNCTION node_find_peer
+LOCAL_FUNCTION lantern_node_find_peer
     UNWIND_END_PROLOGUE
     PART    a1, t1, s1, Node_peers
     li      t0, 0
@@ -5377,10 +5377,10 @@ LOCAL_FUNCTION node_find_peer
     ret
 3:  mv      a0, t0
     ret
-END_FUNCTION node_find_peer
+END_FUNCTION lantern_node_find_peer
 
 /* a0 = the index of the stream of libp2p handle a0, or 2^64 - 1; a1 = its entry. Uses t0-t3. */
-LOCAL_FUNCTION node_find_stream
+LOCAL_FUNCTION lantern_node_find_stream
     UNWIND_END_PROLOGUE
     PART    a1, t1, s1, Node_streams
     ld      t3, Node_stream_bytes(s1)
@@ -5395,10 +5395,10 @@ LOCAL_FUNCTION node_find_stream
     ret
 3:  mv      a0, t0
     ret
-END_FUNCTION node_find_stream
+END_FUNCTION lantern_node_find_stream
 
 /* Removes the stream entry a0, its NodeResponse free: the last entry takes its place. */
-LOCAL_FUNCTION node_drop_stream
+LOCAL_FUNCTION lantern_node_drop_stream
     FRAME 0
     ld      t0, NodeStream_response(a0)     # its NodeResponse is free
     beqz    t0, 2f
@@ -5419,10 +5419,10 @@ LOCAL_FUNCTION node_drop_stream
     mv      a2, t2
     call    lantern_copy
 1:  UNFRAME 0
-END_FUNCTION node_drop_stream
+END_FUNCTION lantern_node_drop_stream
 
 /* Removes the peer entry a0 and its streams. s3 the entry, s4 its handle. */
-LOCAL_FUNCTION node_drop_peer
+LOCAL_FUNCTION lantern_node_drop_peer
     ENTER 0
     mv      s3, a0
     ld      s4, NodePeer_handle(s3)
@@ -5431,7 +5431,7 @@ LOCAL_FUNCTION node_drop_peer
 2:  beqz    t1, 3f
     ld      t3, NodeStream_peer(a0)
     bne     t3, s4, 21f
-    call    node_end_stream
+    call    lantern_node_end_stream
     j       1b
 21: add     a0, a0, t2
     addi    t1, t1, -1
@@ -5447,13 +5447,13 @@ LOCAL_FUNCTION node_drop_peer
     li      a2, NodePeer__mem
     call    lantern_copy
 9:  LEAVE 0
-END_FUNCTION node_drop_peer
+END_FUNCTION lantern_node_drop_peer
 
 /*
  * a0 = the method of protocol index a0 of lantern_node_protocols, or 0; a1 = its version.
  * The protocols go by method, then by version. Uses t0-t4.
  */
-LOCAL_FUNCTION node_protocol
+LOCAL_FUNCTION lantern_node_protocol
     UNWIND_END_PROLOGUE
     ADDRESS t0, reqresp_names
     li      t1, 1
@@ -5480,7 +5480,7 @@ LOCAL_FUNCTION node_protocol
 8:  li      a0, 0
     li      a1, 0
     ret
-END_FUNCTION node_protocol
+END_FUNCTION lantern_node_protocol
 
 /*
  * A response of one chunk on the stream entry a0, result a1, payload a2 of a3 bytes: a
@@ -5488,7 +5488,7 @@ END_FUNCTION node_protocol
  * goes. s3 entry, s4 result, s7 payload, s8 its bytes then the chunk's, s9 the scratch size,
  * s10 the chunk's ByteList. Locals: L a ChunkHeader, L+48 a size, L+56 the payload's ByteList.
  */
-LOCAL_FUNCTION node_respond
+LOCAL_FUNCTION lantern_node_respond
     ENTER 64
     mv      s3, a0
     mv      s4, a1
@@ -5537,7 +5537,7 @@ LOCAL_FUNCTION node_respond
     andi    t0, t0, -8
     sd      t0, (L + 48)(sp)
     addi    a0, t0, 24
-    call    node_out
+    call    lantern_node_out
     beqz    a0, 8f
     ld      t0, (L + 48)(sp)
     li      t1, LIBP2P_EVENT_STREAM_WRITE
@@ -5560,26 +5560,26 @@ LOCAL_FUNCTION node_respond
     j       9f
 8:  li      a0, LIBP2P_EVENT_STREAM_RESET
     ld      a1, NodeStream_handle(s3)
-    call    node_out_handle
+    call    lantern_node_out_handle
 9:  sd      s9, 0(s5)
     mv      a0, s3
-    call    node_drop_stream
+    call    lantern_node_drop_stream
     LEAVE 64
-END_FUNCTION node_respond
+END_FUNCTION lantern_node_respond
 
 /*
  * a0 = the first slot of the epochs a node must serve blocks of: max(0, the store's epoch -
- * compute_min_epochs_for_block_requests) * SLOTS_PER_EPOCH. Apart from node_request, as FORK_CALL
+ * compute_min_epochs_for_block_requests) * SLOTS_PER_EPOCH. Apart from lantern_node_request, as FORK_CALL
  * takes the labels 81 to 89. s3 the epoch. Locals: L the epochs.
  */
-LOCAL_FUNCTION node_serve_slot
+LOCAL_FUNCTION lantern_node_serve_slot
     ENTER 16
     mv      a0, s2
-    call    node_store_slot
+    call    lantern_node_store_slot
     li      t0, SLOTS_PER_EPOCH
     divu    s3, a0, t0
     addi    a1, s1, Node_config
-    call    node_fork
+    call    lantern_node_fork
     mv      t6, a0
     li      t0, -1                          # no sum: every epoch
     sd      t0, L(sp)
@@ -5593,7 +5593,7 @@ LOCAL_FUNCTION node_serve_slot
 1:  li      t0, SLOTS_PER_EPOCH
     mul     a0, t1, t0
     LEAVE 16
-END_FUNCTION node_serve_slot
+END_FUNCTION lantern_node_serve_slot
 
 /*
  * The request of the stream entry a0, when its bytes are all there: Status, Ping and MetaData
@@ -5602,7 +5602,7 @@ END_FUNCTION node_serve_slot
  * Locals: L a ChunkHeader, L+48 consumed or an epoch, L+56 a length or a fork digest, L+64 eof
  * or a payload (96).
  */
-LOCAL_FUNCTION node_request
+LOCAL_FUNCTION lantern_node_request
     ENTER 208
     mv      s3, a0
     ld      t0, NodeStream_state(s3)        # a request already answered: nothing
@@ -5656,16 +5656,16 @@ LOCAL_FUNCTION node_request
     li      t0, REQRESP_DATA_COLUMN_SIDECARS_BY_ROOT
     bne     s4, t0, 92f
 21: mv      a0, s2
-    call    node_store_slot
+    call    lantern_node_store_slot
     addi    a1, s1, Node_config
-    call    node_fork
+    call    lantern_node_fork
     li      t0, FORK_FULU
     bgeu    a0, t0, 3f
     j       92f
 2:  mv      a0, s2
-    call    node_store_slot
+    call    lantern_node_store_slot
     addi    a1, s1, Node_config
-    call    node_fork
+    call    lantern_node_fork
     li      t0, FORK_DENEB
     bgeu    a0, t0, 3f
 92: li      a1, 3                           # ResourceUnavailable
@@ -5688,7 +5688,7 @@ LOCAL_FUNCTION node_request
     ld      t0, (L + ChunkHeader_length)(sp)        # by root
     andi    t0, t0, 31
     bnez    t0, 90f
-    call    node_max_blocks
+    call    lantern_node_max_blocks
     slli    a0, a0, 5
     ld      t0, (L + ChunkHeader_length)(sp)
     bgtu    t0, a0, 90f
@@ -5700,7 +5700,7 @@ LOCAL_FUNCTION node_request
     bnez    t2, 90f
     divu    t0, t0, t1
     sd      t0, (L + 72)(sp)
-    call    node_max_blobs
+    call    lantern_node_max_blobs
     ld      t0, (L + 72)(sp)
     bgtu    t0, a0, 90f
     ld      s7, (L + ChunkHeader_length)(sp)
@@ -5771,9 +5771,9 @@ LOCAL_FUNCTION node_request
     bne     s4, t0, 10f
     li      a0, LIBP2P_EVENT_STREAM_CLOSE   # Goodbye: a close
     ld      a1, NodeStream_handle(s3)
-    call    node_out_handle
+    call    lantern_node_out_handle
     mv      a0, s3
-    call    node_drop_stream
+    call    lantern_node_drop_stream
     LEAVE 208
 10: li      t0, REQRESP_PING
     bne     s4, t0, 20f
@@ -5783,19 +5783,19 @@ LOCAL_FUNCTION node_request
     li      a1, 0
     addi    a2, sp, L + 64
     li      a3, 8
-    call    node_respond
+    call    lantern_node_respond
     LEAVE 208
 20: ld      a0, NodeStream_peer(s3)         # Status: the peer's, then ours
     mv      a1, s9
     mv      a2, s7
-    call    node_peer_status
+    call    lantern_node_peer_status
     addi    a0, sp, L + 64
-    call    node_status_bytes
+    call    lantern_node_status_bytes
     mv      a0, s3
     li      a1, 0
     addi    a2, sp, L + 64
     mv      a3, s7
-    call    node_respond
+    call    lantern_node_respond
     LEAVE 208
 50: addi    a0, sp, L + 64                  # MetaData: seq_number, attnets, syncnets, custody_group_count
     li      a1, 32
@@ -5822,7 +5822,7 @@ LOCAL_FUNCTION node_request
 51: mv      a0, s3
     li      a1, 0
     addi    a2, sp, L + 64
-    call    node_respond
+    call    lantern_node_respond
     LEAVE 208
 60: ld      s7, 0(s9)                       # BlocksByRange: start_slot, count
     ld      s10, 8(s9)
@@ -5831,7 +5831,7 @@ LOCAL_FUNCTION node_request
     bleu    t0, t1, 601f
     mv      t0, t1
 601: bltu   s7, t0, 92b
-    call    node_max_blocks                 # at most the limit, and the room of the list
+    call    lantern_node_max_blocks                 # at most the limit, and the room of the list
     bleu    s10, a0, 65f
     mv      s10, a0
 65: add     t0, s7, s10                     # the end slot
@@ -5846,7 +5846,7 @@ LOCAL_FUNCTION node_request
     bgeu    a0, s10, 601f
     addi    t0, a0, 1
     sd      t0, (L + 144)(sp)
-    call    node_db_block
+    call    lantern_node_db_block
     beqz    a0, 600b
     slli    t2, s8, 3
     add     t2, t2, s3
@@ -5856,7 +5856,7 @@ LOCAL_FUNCTION node_request
 601: sd     s8, (L + 136)(sp)               # then the canonical blocks of the range from the head down, reversed
     addi    s9, s1, Node_head_root
 61: mv      a0, s9
-    call    node_find_block
+    call    lantern_node_find_block
     li      t0, -1
     beq     a0, t0, 63f
     ld      t0, NodeBlock_status(a1)
@@ -5903,7 +5903,7 @@ LOCAL_FUNCTION node_request
     mv      t0, t1
 1651: beqz   t0, 78f
     sd      t0, (L + 72)(sp)
-    call    node_max_blobs                  # at most the limit: the slots whose sidecars it can hold
+    call    lantern_node_max_blobs                  # at most the limit: the slots whose sidecars it can hold
     ld      t0, (L + 72)(sp)
     divu    t0, a0, t0
     bleu    s10, t0, 1652f
@@ -5919,7 +5919,7 @@ LOCAL_FUNCTION node_request
     bgeu    a0, t0, 653f
     bgeu    a0, s10, 653f
     addi    a1, s1, Node_config
-    call    node_fork
+    call    lantern_node_fork
     li      t0, FORK_DENEB
     beq     a0, t0, 654f
     li      t0, FORK_ELECTRA
@@ -5931,7 +5931,7 @@ LOCAL_FUNCTION node_request
     addi    t0, a1, 1
     sd      t0, (L + 152)(sp)
     ld      a0, (L + 144)(sp)
-    call    node_db_sidecar
+    call    lantern_node_db_sidecar
     beqz    a0, 651b
     slli    t2, s8, 3
     add     t2, t2, s3
@@ -5945,7 +5945,7 @@ LOCAL_FUNCTION node_request
 653: sd     s8, (L + 136)(sp)               # then those of the canonical blocks from the head down, reversed
     addi    s9, s1, Node_head_root
 166: mv     a0, s9
-    call    node_find_block
+    call    lantern_node_find_block
     li      t0, -1
     beq     a0, t0, 63b
     ld      t0, NodeBlock_status(a1)
@@ -5960,7 +5960,7 @@ LOCAL_FUNCTION node_request
     sd      a1, (L + 64)(sp)                # its indices, from the last, of a block of deneb or electra
     mv      a0, t0
     addi    a1, s1, Node_config
-    call    node_fork
+    call    lantern_node_fork
     li      t0, FORK_DENEB
     beq     a0, t0, 1661f
     li      t0, FORK_ELECTRA
@@ -5972,7 +5972,7 @@ LOCAL_FUNCTION node_request
     addi    a1, a1, -1
     sd      a1, (L + 80)(sp)
     ld      a0, (L + 64)(sp)
-    call    node_blob_held
+    call    lantern_node_blob_held
     beqz    a0, 167b
     ld      t1, NodeBlob_data_id(a0)
     slli    t2, s8, 3
@@ -5988,20 +5988,20 @@ LOCAL_FUNCTION node_request
     ld      a1, 32(s9)
     addi    s9, s9, 40
     addi    s7, s7, -1
-    call    node_blob_held
+    call    lantern_node_blob_held
     beqz    a0, 1762f
     sd      a0, (L + 72)(sp)
     ld      t0, NodeBlob_data_id(a0)
     sd      t0, (L + 64)(sp)
     ld      a0, NodeBlob_slot(a0)           # a sidecar of deneb or electra
     addi    a1, s1, Node_config
-    call    node_fork
+    call    lantern_node_fork
     li      t0, FORK_DENEB
     beq     a0, t0, 1761f
     li      t0, FORK_ELECTRA
     bne     a0, t0, 176b
 1761: ld    a0, (L + 72)(sp)
-    call    node_find_block                 # not of an invalid block
+    call    lantern_node_find_block                 # not of an invalid block
     li      t0, -1
     beq     a0, t0, 174f
     ld      t0, NodeBlock_status(a1)
@@ -6022,14 +6022,14 @@ LOCAL_FUNCTION node_request
     li      t0, -1
     beq     a0, t0, 176b
     addi    a1, s1, Node_config
-    call    node_fork
+    call    lantern_node_fork
     li      t0, FORK_DENEB
     beq     a0, t0, 1763f
     li      t0, FORK_ELECTRA
     bne     a0, t0, 176b
 1763: ld    a0, (L + 160)(sp)
     ld      a1, -8(s9)
-    call    node_db_sidecar
+    call    lantern_node_db_sidecar
     beqz    a0, 176b
     slli    t2, s8, 3
     add     t2, t2, s3
@@ -6040,7 +6040,7 @@ LOCAL_FUNCTION node_request
     li      s8, 0
 71: beqz    s7, 77f
     mv      a0, s9
-    call    node_find_block
+    call    lantern_node_find_block
     addi    s9, s9, 32
     addi    s7, s7, -1
     li      t0, -1
@@ -6058,7 +6058,7 @@ LOCAL_FUNCTION node_request
     ld      a0, (L + 160)(sp)
     li      t0, -1
     beq     a0, t0, 71b
-    call    node_db_block
+    call    lantern_node_db_block
     beqz    a0, 71b
     mv      t1, a0
 712: slli   t2, s8, 3
@@ -6075,21 +6075,21 @@ LOCAL_FUNCTION node_request
     LEAVE 208
 78: li      a0, LIBP2P_EVENT_STREAM_CLOSE   # no block: an empty answer
     ld      a1, NodeStream_handle(s3)
-    call    node_out_handle
+    call    lantern_node_out_handle
     mv      a0, s3
-    call    node_drop_stream
+    call    lantern_node_drop_stream
     LEAVE 208
 94: ld      t0, 32(s9)                      # BlocksByHead: the ancestry of beacon_root, from it, in descending slot order
     sd      t0, (L + 184)(sp)
-    call    node_max_blocks                 # at most count, the limit, and the room of the list
+    call    lantern_node_max_blocks                 # at most count, the limit, and the room of the list
     ld      t0, (L + 184)(sp)
     bgeu    a0, t0, 941f
     sd      a0, (L + 184)(sp)
-941: call   node_serve_slot                 # the first slot of the epochs the node serves: L+176
+941: call   lantern_node_serve_slot                 # the first slot of the epochs the node serves: L+176
     sd      a0, (L + 176)(sp)
     li      s8, 0
     mv      a0, s9
-    call    node_find_block
+    call    lantern_node_find_block
     li      t0, -1
     bne     a0, t0, 95f
     mv      a0, s9                          # a root the node does not keep: the Db's
@@ -6110,7 +6110,7 @@ LOCAL_FUNCTION node_request
     addi    s8, s8, 1
     addi    a0, a1, NodeBlock_parent_root
     sd      a0, (L + 192)(sp)
-    call    node_find_block
+    call    lantern_node_find_block
     li      t0, -1
     bne     a0, t0, 95b
     ld      a0, (L + 192)(sp)               # a parent the node does not keep: the Db's
@@ -6129,7 +6129,7 @@ LOCAL_FUNCTION node_request
     ld      t0, (L + 176)(sp)
     bltu    s10, t0, 77b
     mv      a0, s10
-    call    node_db_block
+    call    lantern_node_db_block
     beqz    a0, 981f
     slli    t2, s8, 3
     add     t2, t2, s3
@@ -6189,7 +6189,7 @@ LOCAL_FUNCTION node_request
     ld      s10, 8(s9)
     ld      t0, Node_earliest_slot(s1)
     bltu    s7, t0, 92b
-    call    node_max_columns                # at most the limit: the slots whose sidecars it can hold
+    call    lantern_node_max_columns                # at most the limit: the slots whose sidecars it can hold
     ld      t0, (L + 72)(sp)
     divu    t0, a0, t0
     bleu    s10, t0, 845f
@@ -6205,7 +6205,7 @@ LOCAL_FUNCTION node_request
     bgeu    a0, t0, 857f
     bgeu    a0, s10, 857f
     addi    a1, s1, Node_config
-    call    node_fork
+    call    lantern_node_fork
     li      t0, FORK_FULU
     bltu    a0, t0, 856f
     sd      zero, (L + 152)(sp)
@@ -6222,7 +6222,7 @@ LOCAL_FUNCTION node_request
     andi    t0, t0, 1
     beqz    t0, 855b
     ld      a0, (L + 144)(sp)
-    call    node_db_sidecar
+    call    lantern_node_db_sidecar
     beqz    a0, 855b
     slli    t2, s8, 3
     add     t2, t2, s3
@@ -6236,7 +6236,7 @@ LOCAL_FUNCTION node_request
 857: sd     s8, (L + 136)(sp)               # then those of the canonical blocks from the head down, reversed
     addi    s9, s1, Node_head_root
 85: mv      a0, s9
-    call    node_find_block
+    call    lantern_node_find_block
     li      t0, -1
     beq     a0, t0, 63b
     ld      t0, NodeBlock_status(a1)
@@ -6251,7 +6251,7 @@ LOCAL_FUNCTION node_request
     sd      a1, (L + 64)(sp)                # its columns, from the last, of a block of fulu or later
     mv      a0, t0
     addi    a1, s1, Node_config
-    call    node_fork
+    call    lantern_node_fork
     li      t0, FORK_FULU
     bltu    a0, t0, 85b
     li      t0, 128
@@ -6268,7 +6268,7 @@ LOCAL_FUNCTION node_request
     andi    t0, t0, 1
     beqz    t0, 851b
     ld      a0, (L + 64)(sp)
-    call    node_blob_held
+    call    lantern_node_blob_held
     beqz    a0, 851b
     ld      t1, NodeBlob_data_id(a0)
     slli    t2, s8, 3
@@ -6323,7 +6323,7 @@ LOCAL_FUNCTION node_request
     j       873b
 874: mv     t2, t4
     j       87b
-871: call   node_max_columns                # at most the limit of columns in all
+871: call   lantern_node_max_columns                # at most the limit of columns in all
     bgtu    s8, a0, 90f
     li      s8, 0                           # then the sidecars the node holds, in the request's order
     sd      zero, (L + 96)(sp)
@@ -6364,16 +6364,16 @@ LOCAL_FUNCTION node_request
     sd      t4, (L + 104)(sp)
     sd      a1, (L + 168)(sp)
     ld      a0, (L + 64)(sp)
-    call    node_blob_held
+    call    lantern_node_blob_held
     beqz    a0, 892f
     sd      a0, (L + 120)(sp)
     ld      a0, NodeBlob_slot(a0)           # a sidecar of fulu or later
     addi    a1, s1, Node_config
-    call    node_fork
+    call    lantern_node_fork
     li      t0, FORK_FULU
     bltu    a0, t0, 89b
     ld      a0, (L + 64)(sp)                # not of an invalid block
-    call    node_find_block
+    call    lantern_node_find_block
     li      t0, -1
     beq     a0, t0, 891f
     ld      t0, NodeBlock_status(a1)
@@ -6398,12 +6398,12 @@ LOCAL_FUNCTION node_request
     li      t0, -1
     beq     a0, t0, 89b
     addi    a1, s1, Node_config
-    call    node_fork
+    call    lantern_node_fork
     li      t0, FORK_FULU
     bltu    a0, t0, 89b
     ld      a0, (L + 160)(sp)
     ld      a1, (L + 168)(sp)
-    call    node_db_sidecar
+    call    lantern_node_db_sidecar
     beqz    a0, 89b
     slli    t2, s8, 3
     add     t2, t2, s3
@@ -6418,26 +6418,26 @@ LOCAL_FUNCTION node_request
 91: mv      a0, s3
     mv      a2, sp
     li      a3, 0
-    call    node_respond
+    call    lantern_node_respond
 99: LEAVE 208
 55: mv      a0, s3                          # a light client method: its work
     mv      a1, s9
     mv      a2, s7
-    call    node_lc_request
+    call    lantern_node_lc_request
     LEAVE 208
-END_FUNCTION node_request
+END_FUNCTION lantern_node_request
 
 /*
  * a0 = the blocks one request may name: MAX_REQUEST_BLOCKS_DENEB from deneb on, else
  * MAX_REQUEST_BLOCKS, of the fork of the store's slot; at most the BufferIds a stream's list
  * holds. Uses t0-t3, a7.
  */
-LOCAL_FUNCTION node_max_blocks
+LOCAL_FUNCTION lantern_node_max_blocks
     FRAME 0
     mv      a0, s2
-    call    node_store_slot
+    call    lantern_node_store_slot
     addi    a1, s1, Node_config
-    call    node_fork
+    call    lantern_node_fork
     li      t0, REQUEST_BLOCKS_LIMIT
     li      t1, FORK_DENEB
     bltu    a0, t1, 1f
@@ -6449,19 +6449,19 @@ LOCAL_FUNCTION node_max_blocks
     bleu    t0, t1, 2f
     mv      a0, t1
 2:  UNFRAME 0
-END_FUNCTION node_max_blocks
+END_FUNCTION lantern_node_max_blocks
 
 /*
  * a0 = the blob sidecars one response may hold: MAX_REQUEST_BLOCKS_DENEB times
  * MAX_BLOBS_PER_BLOCK (deneb) or MAX_BLOBS_PER_BLOCK_ELECTRA (electra and later) of the fork of
  * the store's slot; at most the BufferIds a stream's list holds. Uses t0-t2, a7.
  */
-LOCAL_FUNCTION node_max_blobs
+LOCAL_FUNCTION lantern_node_max_blobs
     FRAME 0
     mv      a0, s2
-    call    node_store_slot
+    call    lantern_node_store_slot
     addi    a1, s1, Node_config
-    call    node_fork
+    call    lantern_node_fork
     LDQ     t0, s1, Node_config + CONFIG_MAX_BLOBS_PER_BLOCK
     li      t1, FORK_ELECTRA
     bltu    a0, t1, 1f
@@ -6477,14 +6477,14 @@ LOCAL_FUNCTION node_max_blobs
     bleu    a0, t0, 3f
     mv      a0, t0
 3:  UNFRAME 0
-END_FUNCTION node_max_blobs
+END_FUNCTION lantern_node_max_blobs
 
 /*
  * a0 = the column sidecars one response may hold: compute_max_request_data_column_sidecars,
  * MAX_REQUEST_BLOCKS_DENEB times NUMBER_OF_COLUMNS; at most the BufferIds a stream's list holds.
  * A leaf; uses t0, t1.
  */
-LOCAL_FUNCTION node_max_columns
+LOCAL_FUNCTION lantern_node_max_columns
     UNWIND_END_PROLOGUE
     li      a0, REQUEST_BLOCKS_LIMIT_DENEB * NUMBER_OF_COLUMNS
     ld      t0, Node_stream_bytes(s1)
@@ -6493,14 +6493,14 @@ LOCAL_FUNCTION node_max_columns
     bleu    a0, t0, 1f
     mv      a0, t0
 1:  ret
-END_FUNCTION node_max_columns
+END_FUNCTION lantern_node_max_columns
 
 /*
  * a0 = 1 when a stream waits for room for its SERVE work, else 0: a SERVE work of the next
  * block of each stream in NODE_STREAM_SERVE, while the actions have room for it and 4096 bytes.
  * s3 a stream, s4 the streams left.
  */
-LOCAL_FUNCTION node_serve
+LOCAL_FUNCTION lantern_node_serve
     ENTER 0
     PART    s3, s4, s1, Node_streams
 1:  beqz    s4, 8f
@@ -6528,7 +6528,7 @@ LOCAL_FUNCTION node_serve
     slli    a5, a5, 8
     ld      t0, NodeStream_version(s3)
     add     a5, a5, t0
-    call    node_work
+    call    lantern_node_work
 2:  ld      t0, Node_stream_bytes(s1)
     add     s3, s3, t0
     addi    s4, s4, -1
@@ -6537,12 +6537,12 @@ LOCAL_FUNCTION node_serve
     LEAVE 0
 9:  li      a0, 1
     LEAVE 0
-END_FUNCTION node_serve
+END_FUNCTION lantern_node_serve
 
 /* ------------------------------------------------------------ gossip */
 
 /* a0 = the index of the message of libp2p handle a0, or 2^64 - 1; a1 = its entry. Uses t0-t2, a7. */
-LOCAL_FUNCTION node_find_message
+LOCAL_FUNCTION lantern_node_find_message
     UNWIND_END_PROLOGUE
     PART    a1, t1, s1, Node_messages
     li      t0, 0
@@ -6556,10 +6556,10 @@ LOCAL_FUNCTION node_find_message
     ret
 3:  mv      a0, t0
     ret
-END_FUNCTION node_find_message
+END_FUNCTION lantern_node_find_message
 
 /* Removes the message entry a0: the last entry takes its place. */
-LOCAL_FUNCTION node_drop_message
+LOCAL_FUNCTION lantern_node_drop_message
     FRAME 0
     PART    t0, t1, s1, Node_messages
     addi    t1, t1, -1
@@ -6571,10 +6571,10 @@ LOCAL_FUNCTION node_drop_message
     li      a2, NodeMessage__mem
     call    lantern_copy
 1:  UNFRAME 0
-END_FUNCTION node_drop_message
+END_FUNCTION lantern_node_drop_message
 
 /* a0 = 1 when the actions have room for a0 bytes and 4096 more, else 0. Uses t0-t3. */
-LOCAL_FUNCTION node_room
+LOCAL_FUNCTION lantern_node_room
     UNWIND_END_PROLOGUE
     ld      t0, 0(s6)
     ld      t1, 8(s6)
@@ -6586,15 +6586,15 @@ LOCAL_FUNCTION node_room
     sltu    a0, t0, t3
     xori    a0, a0, 1
     ret
-END_FUNCTION node_room
+END_FUNCTION lantern_node_room
 
 /* A VALIDATION of the libp2p message handle a0 with the result a1. */
-LOCAL_FUNCTION node_validation
+LOCAL_FUNCTION lantern_node_validation
     FRAME 16
     sd      a0, F(sp)
     sd      a1, (F + 8)(sp)
     li      a0, LIBP2P_EV_VALIDATION_SIZE
-    call    node_out
+    call    lantern_node_out
     beqz    a0, 1f
     li      t0, LIBP2P_EVENT_VALIDATION
     sd      t0, 8(a0)
@@ -6603,10 +6603,10 @@ LOCAL_FUNCTION node_validation
     ld      t0, (F + 8)(sp)
     sd      t0, 24(a0)
 1:  UNFRAME 16
-END_FUNCTION node_validation
+END_FUNCTION lantern_node_validation
 
 /* The gossip topic a0 with the subnet a1 at the ForkDigest a2: an event of kind a3 (SUBSCRIBE or UNSUBSCRIBE). s3 the topic's length, s4 the kind. Locals: L a GossipTopic, L+24 a ByteList of the topic. */
-LOCAL_FUNCTION node_sub
+LOCAL_FUNCTION lantern_node_sub
     ENTER 176
     mv      s4, a3
     sd      a2, (L + GossipTopic_fork_digest)(sp)
@@ -6624,7 +6624,7 @@ LOCAL_FUNCTION node_sub
     ld      s3, (L + 40)(sp)
     addi    a0, s3, 24 + 7
     andi    a0, a0, -8
-    call    node_out
+    call    lantern_node_out
     beqz    a0, 9f
     sd      s4, 8(a0)
     sd      s3, 16(a0)
@@ -6633,21 +6633,21 @@ LOCAL_FUNCTION node_sub
     mv      a2, s3
     call    lantern_copy
 9:  LEAVE 176
-END_FUNCTION node_sub
+END_FUNCTION lantern_node_sub
 
 /*
  * The node's Status at a0 (92 bytes: v2; v1 is its first 84): compute_fork_digest of the store's
  * epoch, the store's finalized checkpoint, head_root and its slot, and earliest_slot. s3 out, s4
  * the slot. Locals: L an epoch, L+8 a ForkDigest, L+16 a slot.
  */
-LOCAL_FUNCTION node_status_bytes
+LOCAL_FUNCTION lantern_node_status_bytes
     ENTER 32
     mv      s3, a0
     mv      a0, s2
-    call    node_store_slot
+    call    lantern_node_store_slot
     mv      s4, a0
     addi    a1, s1, Node_config
-    call    node_fork
+    call    lantern_node_fork
     mv      t6, a0
     li      t0, SLOTS_PER_EPOCH
     divu    t0, s4, t0
@@ -6681,7 +6681,7 @@ LOCAL_FUNCTION node_status_bytes
     li      a2, 32
     call    lantern_copy
     addi    a0, s1, Node_head_root
-    call    node_find_block
+    call    lantern_node_find_block
     li      t1, 0
     li      t0, -1
     beq     a0, t0, 1f
@@ -6696,7 +6696,7 @@ LOCAL_FUNCTION node_status_bytes
     bleu    t2, t1, 2f
     sd      t1, (L + 24)(sp)
     mv      a0, s2
-    call    node_store_slot
+    call    lantern_node_store_slot
     li      t0, SLOTS_PER_EPOCH
     divu    a0, a0, t0
     LDQ     t1, s1, Node_config + CONFIG_MIN_EPOCHS_FOR_DATA_COLUMN_SIDECARS_REQUESTS
@@ -6714,7 +6714,7 @@ LOCAL_FUNCTION node_status_bytes
     li      a2, 8
     call    lantern_copy
     LEAVE 32
-END_FUNCTION node_status_bytes
+END_FUNCTION lantern_node_status_bytes
 
 /* A SET_ENTRY event at s7 of the size, the key (its length and bytes, little end first) and the value length. Uses t0. */
 .macro ENR_ENTRY size, key_len, key, value_len
@@ -6738,7 +6738,7 @@ END_FUNCTION node_status_bytes
  * s3 the fork, s4 the action, s7 the next event. Locals: L the epoch.
  */
 .set NODE_ENR_ACTION, 48 + 64 + 56 * 4
-LOCAL_FUNCTION node_enr_entries
+LOCAL_FUNCTION lantern_node_enr_entries
     ENTER 16
     ld      t0, Node_flags(s1)
     andi    t0, t0, NODE_FLAG_DISCV5
@@ -6748,7 +6748,7 @@ LOCAL_FUNCTION node_enr_entries
     mv      s3, a1
     li      a0, NODE_ACT_DISCV5
     li      a1, NODE_ENR_ACTION
-    call    node_act
+    call    lantern_node_act
     mv      s4, a0
     sd      zero, 16(s4)
     li      t0, NODE_ENR_ACTION - 24
@@ -6811,13 +6811,13 @@ LOCAL_FUNCTION node_enr_entries
     sub     t0, s7, t0
     sd      t0, 40(s4)
 9:  LEAVE 16
-END_FUNCTION node_enr_entries
+END_FUNCTION lantern_node_enr_entries
 
 /*
  * a0 = the value of the byte string pair whose key is the a3 (at most 8) bytes of a2, little end
  * first, of the Enr a0 of the record bytes at a1, or 0; a1 = its length. Uses t0-t6.
  */
-LOCAL_FUNCTION node_enr_pair
+LOCAL_FUNCTION lantern_node_enr_pair
     UNWIND_END_PROLOGUE
     ld      t0, DISCV5_ENR_COUNT(a0)
     addi    t1, a0, DISCV5_ENR_PAIRS
@@ -6849,7 +6849,7 @@ LOCAL_FUNCTION node_enr_pair
 3:  li      a0, 0
     li      a1, 0
     ret
-END_FUNCTION node_enr_pair
+END_FUNCTION lantern_node_enr_pair
 
 /*
  * The node record of the NODE_EV_ENR a0: a DIAL of its TCP address when it has an ip, a tcp pair
@@ -6858,7 +6858,7 @@ END_FUNCTION node_enr_pair
  * return, s8 the port, s9 the DIAL. Locals: L the peer ID (39 bytes), L+48 the node's Status
  * (96), whose first 4 bytes are that digest.
  */
-LOCAL_FUNCTION node_enr
+LOCAL_FUNCTION lantern_node_enr
     ENTER 144
     addi    s3, a0, NodeEvent_bytes
     ld      s7, 0(s5)
@@ -6883,7 +6883,7 @@ LOCAL_FUNCTION node_enr
     add     a1, s3, a1
     li      a2, 0x706374
     li      a3, 3
-    call    node_enr_pair
+    call    lantern_node_enr_pair
     beqz    a0, 9f
     li      t0, 1
     bltu    a1, t0, 9f
@@ -6899,7 +6899,7 @@ LOCAL_FUNCTION node_enr
     add     a1, s3, a1
     li      a2, 0x32687465
     li      a3, 4
-    call    node_enr_pair
+    call    lantern_node_enr_pair
     beqz    a0, 9f
     li      t0, 4
     bltu    a1, t0, 9f
@@ -6915,7 +6915,7 @@ LOCAL_FUNCTION node_enr
     or      t0, t0, t1
     sw      t0, L(sp)
     addi    a0, sp, L + 48
-    call    node_status_bytes
+    call    lantern_node_status_bytes
     lwu     t0, L(sp)
     lwu     t1, (L + 48)(sp)
     bne     t0, t1, 9f
@@ -6942,10 +6942,10 @@ LOCAL_FUNCTION node_enr
 3:  addi    t0, t0, NodePeer__mem
     addi    t1, t1, -1
     j       2b
-4:  call    node_peer_room                  # room: below the open room, or below the capacity for a column dial
+4:  call    lantern_node_peer_room                  # room: below the open room, or below the capacity for a column dial
     bltu    a2, a1, 41f
     bgeu    a2, a0, 9f
-    call    node_short_columns
+    call    lantern_node_short_columns
     sd      a0, (L + 96)(sp)
     sd      a1, (L + 104)(sp)
     or      t0, a0, a1
@@ -6955,7 +6955,7 @@ LOCAL_FUNCTION node_enr
     add     a1, s3, a1
     li      a2, 0x636763
     li      a3, 3
-    call    node_enr_pair
+    call    lantern_node_enr_pair
     ld      t2, (Node_config + CONFIG_CUSTODY_REQUIREMENT)(s1)
     beqz    a0, 43f
     li      t0, 8
@@ -6981,7 +6981,7 @@ LOCAL_FUNCTION node_enr
     mv      a1, t2
     addi    a2, s1, Node_config
     addi    a3, sp, L + 80
-    call    node_custody_columns
+    call    lantern_node_custody_columns
     ld      t0, (L + 80)(sp)                # a short column in it: a column dial
     ld      t1, (L + 96)(sp)
     and     t0, t0, t1
@@ -6991,12 +6991,12 @@ LOCAL_FUNCTION node_enr
     or      t0, t0, t1
     beqz    t0, 9f
 41: li      a0, LIBP2P_EV_DIAL_SIZE         # the DIAL
-    call    node_out
+    call    lantern_node_out
     beqz    a0, 9f
     mv      s9, a0
     li      t0, LIBP2P_EVENT_DIAL
     sd      t0, 8(s9)
-    call    node_new_id
+    call    lantern_node_new_id
     li      t0, NODE_DIAL_TAG
     or      a0, a0, t0
     sd      a0, LIBP2P_EV_TAG(s9)
@@ -7024,7 +7024,7 @@ LOCAL_FUNCTION node_enr
     sd      t0, Node_dialing(s1)
 9:  sd      s7, 0(s5)
     LEAVE 144
-END_FUNCTION node_enr
+END_FUNCTION lantern_node_enr
 
 /*
  * With NODE_FLAG_DISCV5, below the open room or with short columns (node.md, the peer room), a
@@ -7034,7 +7034,7 @@ END_FUNCTION node_enr
  * node's columns. s3 the tick, then a peer; s4 the action, then the peers left; s7 and s8 the
  * short columns.
  */
-LOCAL_FUNCTION node_lookup
+LOCAL_FUNCTION lantern_node_lookup
     ENTER 0
     mv      s3, a0
     ld      t0, Node_flags(s1)
@@ -7046,19 +7046,19 @@ LOCAL_FUNCTION node_lookup
     li      t2, NODE_LOOKUP_MS
     add     t0, t0, t2
     bltu    t1, t0, 9f
-1:  call    node_short_columns
+1:  call    lantern_node_short_columns
     mv      s7, a0
     mv      s8, a1
-    call    node_peer_room
+    call    lantern_node_peer_room
     bltu    a2, a1, 2f
     or      t0, s7, s8
     beqz    t0, 9f
 2:  li      a0, 96                          # the action: 16, 24 a ByteList, 48 the LOOKUP
-    call    node_room
+    call    lantern_node_room
     beqz    a0, 9f
     li      a0, NODE_ACT_DISCV5
     li      a1, 96
-    call    node_act
+    call    lantern_node_act
     mv      s4, a0
     sd      zero, 16(s4)
     li      t0, 72
@@ -7080,7 +7080,7 @@ LOCAL_FUNCTION node_lookup
     sd      t0, Node_lookup_ms(s1)
     or      t0, s7, s8                      # short columns and no room: the last spare peer goes
     beqz    t0, 9f
-    call    node_peer_room
+    call    lantern_node_peer_room
     bltu    a2, a0, 9f
     PART    s3, s4, s1, Node_peers
     beqz    s4, 9f
@@ -7105,16 +7105,16 @@ LOCAL_FUNCTION node_lookup
     j       9f
 5:  li      a0, LIBP2P_EVENT_DISCONNECT
     ld      a1, NodePeer_handle(s3)
-    call    node_out_handle
+    call    lantern_node_out_handle
 9:  LEAVE 0
-END_FUNCTION node_lookup
+END_FUNCTION lantern_node_lookup
 
 /*
  * The gossip topics of the fork a0 at the ForkDigest a1: an event of kind a2 (SUBSCRIBE or
  * UNSUBSCRIBE) for each. s3 the fork, s4 a subnet, s7 the subnets. Locals: L the digest, L+8 the
  * kind.
  */
-LOCAL_FUNCTION node_topics
+LOCAL_FUNCTION lantern_node_topics
     ENTER 16
     mv      s3, a0
     sd      a1, L(sp)
@@ -7124,7 +7124,7 @@ LOCAL_FUNCTION node_topics
     li      a1, 0
     ld      a2, L(sp)
     ld      a3, (L + 8)(sp)
-    call    node_sub
+    call    lantern_node_sub
     .endr
     li      s4, 0                           # beacon_attestation of each subnet the node keeps
 10: li      t0, ATTESTATION_SUBNET_COUNT
@@ -7137,7 +7137,7 @@ LOCAL_FUNCTION node_topics
     mv      a1, s4
     ld      a2, L(sp)
     ld      a3, (L + 8)(sp)
-    call    node_sub
+    call    lantern_node_sub
 11: addi    s4, s4, 1
     j       10b
 12:
@@ -7147,7 +7147,7 @@ LOCAL_FUNCTION node_topics
     li      a1, 0
     ld      a2, L(sp)
     ld      a3, (L + 8)(sp)
-    call    node_sub
+    call    lantern_node_sub
     li      s4, 0                           # sync_committee of each sync subnet the node keeps
 13: li      t0, SYNC_COMMITTEE_SUBNET_COUNT
     bgeu    s4, t0, 14f
@@ -7159,26 +7159,26 @@ LOCAL_FUNCTION node_topics
     mv      a1, s4
     ld      a2, L(sp)
     ld      a3, (L + 8)(sp)
-    call    node_sub
+    call    lantern_node_sub
 15: addi    s4, s4, 1
     j       13b
 14: li      a0, GOSSIP_LIGHT_CLIENT_FINALITY_UPDATE    # the light client topics
     li      a1, 0
     ld      a2, L(sp)
     ld      a3, (L + 8)(sp)
-    call    node_sub
+    call    lantern_node_sub
     li      a0, GOSSIP_LIGHT_CLIENT_OPTIMISTIC_UPDATE
     li      a1, 0
     ld      a2, L(sp)
     ld      a3, (L + 8)(sp)
-    call    node_sub
+    call    lantern_node_sub
     li      t0, FORK_CAPELLA
     bltu    s3, t0, 9f
     li      a0, GOSSIP_BLS_TO_EXECUTION_CHANGE
     li      a1, 0
     ld      a2, L(sp)
     ld      a3, (L + 8)(sp)
-    call    node_sub
+    call    lantern_node_sub
     li      t0, FORK_DENEB                  # deneb and electra: every blob sidecar subnet
     bltu    s3, t0, 9f
     li      t0, FORK_FULU
@@ -7193,7 +7193,7 @@ LOCAL_FUNCTION node_topics
     mv      a1, s4
     ld      a2, L(sp)
     ld      a3, (L + 8)(sp)
-    call    node_sub
+    call    lantern_node_sub
     addi    s4, s4, 1
     j       3b
 4:  LDQ     s7, s1, Node_config + CONFIG_DATA_COLUMN_SIDECAR_SUBNET_COUNT   # fulu: the subnet of each column sampled, once
@@ -7204,7 +7204,7 @@ LOCAL_FUNCTION node_topics
 5:  li      t0, 128
     bgeu    s4, t0, 9f
     mv      a0, s4
-    call    node_sampled
+    call    lantern_node_sampled
     beqz    a0, 7f
     remu    a1, s4, s7                      # compute_subnet_for_data_column_sidecar: column % DATA_COLUMN_SIDECAR_SUBNET_COUNT
     li      t0, 1
@@ -7221,26 +7221,26 @@ LOCAL_FUNCTION node_topics
 61: li      a0, GOSSIP_DATA_COLUMN_SIDECAR
     ld      a2, L(sp)
     ld      a3, (L + 8)(sp)
-    call    node_sub
+    call    lantern_node_sub
 7:  addi    s4, s4, 1
     j       5b
 9:  LEAVE 16
-END_FUNCTION node_topics
+END_FUNCTION lantern_node_topics
 
 /*
  * L0: a0 = the attestation subnets of the node at epoch a0 (node.md), bit i for subnet i:
  * lantern_compute_subscribed_subnet of the node ID for each index below SUBNETS_PER_NODE, of the
- * fork of the store's slot; 0 on a failure. Apart from node_subscribe, as FORK_CALL takes the
+ * fork of the store's slot; 0 on a failure. Apart from lantern_node_subscribe, as FORK_CALL takes the
  * labels 81 to 89. s3 the index, s4 the subnets, s7 the fork. Locals: L the epoch, L+8 the index,
  * L+16 a subnet.
  */
-LOCAL_FUNCTION node_attnets
+LOCAL_FUNCTION lantern_node_attnets
     ENTER 32
     sd      a0, L(sp)
     mv      a0, s2
-    call    node_store_slot
+    call    lantern_node_store_slot
     addi    a1, s1, Node_config
-    call    node_fork
+    call    lantern_node_fork
     mv      s7, a0
     li      s4, 0
     li      s3, 0
@@ -7268,12 +7268,12 @@ LOCAL_FUNCTION node_attnets
 8:  li      s4, 0
 9:  mv      a0, s4
     LEAVE 32
-END_FUNCTION node_attnets
+END_FUNCTION lantern_node_attnets
 
 /* L0: attnets takes the subnets of epoch a0; a change adds 1 to metadata_seq. */
-LOCAL_FUNCTION node_attnets_set
+LOCAL_FUNCTION lantern_node_attnets_set
     FRAME 0
-    call    node_attnets
+    call    lantern_node_attnets
     ld      t0, Node_attnets(s1)
     beq     a0, t0, 1f
     sd      a0, Node_attnets(s1)
@@ -7281,14 +7281,14 @@ LOCAL_FUNCTION node_attnets_set
     addi    t0, t0, 1
     sd      t0, Node_metadata_seq(s1)
 1:  UNFRAME 0
-END_FUNCTION node_attnets_set
+END_FUNCTION lantern_node_attnets_set
 
 /*
  * L0: an event a1 (SUBSCRIBE or UNSUBSCRIBE) of the topic a2 (beacon_attestation or
  * sync_committee) of each subnet of a0, at fork_digest and at next_digest when it is not 0. s3 the
  * subnets, s4 the event, s5 the topic, s7 a subnet.
  */
-LOCAL_FUNCTION node_subnet_topics
+LOCAL_FUNCTION lantern_node_subnet_topics
     ENTER 0
     mv      s3, a0
     mv      s4, a1
@@ -7303,26 +7303,26 @@ LOCAL_FUNCTION node_subnet_topics
     mv      a1, s7
     ld      a2, Node_fork_digest(s1)
     mv      a3, s4
-    call    node_sub
+    call    lantern_node_sub
     ld      a2, Node_next_digest(s1)
     beqz    a2, 3f
     mv      a0, s5
     mv      a1, s7
     mv      a3, s4
-    call    node_sub
+    call    lantern_node_sub
 3:  addi    s7, s7, 1
     j       1b
 9:  LEAVE 0
-END_FUNCTION node_subnet_topics
+END_FUNCTION lantern_node_subnet_topics
 
 /*
  * L0: a0 = the beacon_attestation subnets the node keeps: those of attnets, and each whose
  * subnet_until is above the store s2's slot (an aggregator's subscription).
  */
-LOCAL_FUNCTION node_subnets_want
+LOCAL_FUNCTION lantern_node_subnets_want
     FRAME 0
     mv      a0, s2
-    call    node_store_slot
+    call    lantern_node_store_slot
     ld      t1, Node_attnets(s1)
     ADDQ    t2, s1, Node_subnet_until
     li      t3, 0
@@ -7339,13 +7339,13 @@ LOCAL_FUNCTION node_subnets_want
     j       1b
 9:  mv      a0, t1
     UNFRAME 0
-END_FUNCTION node_subnets_want
+END_FUNCTION lantern_node_subnets_want
 
 /* L0: a0 = the sync_committee subnets the node keeps: each whose sync_until is above the epoch of the store s2's slot. */
-LOCAL_FUNCTION node_syncnets_want
+LOCAL_FUNCTION lantern_node_syncnets_want
     FRAME 0
     mv      a0, s2
-    call    node_store_slot
+    call    lantern_node_store_slot
     li      t0, SLOTS_PER_EPOCH
     divu    a0, a0, t0
     li      t1, 0
@@ -7364,7 +7364,7 @@ LOCAL_FUNCTION node_syncnets_want
     j       1b
 9:  mv      a0, t1
     UNFRAME 0
-END_FUNCTION node_syncnets_want
+END_FUNCTION lantern_node_syncnets_want
 
 /*
  * A SUBSCRIBE of data_column_sidecar of each subnet of a column of columns that no column of the
@@ -7372,7 +7372,7 @@ END_FUNCTION node_syncnets_want
  * the old subnets below 64, s4 from 64, s5 the new ones below 64, s6 from 64, s7 a column, s8 the
  * old columns, s9 the subnet count.
  */
-LOCAL_FUNCTION node_column_raise_topics
+LOCAL_FUNCTION lantern_node_column_raise_topics
     ENTER 0
     mv      s8, a0
     li      s3, 0
@@ -7430,20 +7430,20 @@ LOCAL_FUNCTION node_column_raise_topics
     mv      a1, s7
     ld      a2, Node_fork_digest(s1)
     li      a3, LIBP2P_EVENT_SUBSCRIBE
-    call    node_sub
+    call    lantern_node_sub
     ld      a2, Node_next_digest(s1)
     beqz    a2, 7f
     li      a0, GOSSIP_DATA_COLUMN_SIDECAR
     mv      a1, s7
     li      a3, LIBP2P_EVENT_SUBSCRIBE
-    call    node_sub
+    call    lantern_node_sub
 7:  addi    s7, s7, 1
     j       6b
 9:  LEAVE 0
-END_FUNCTION node_column_raise_topics
+END_FUNCTION lantern_node_column_raise_topics
 
 /* L0: a0 = the NODE_BLOB_VALID entries of the root at a0. Uses t0-t4, a6, a7. */
-LOCAL_FUNCTION node_recon_count
+LOCAL_FUNCTION lantern_node_recon_count
     UNWIND_END_PROLOGUE
     PART    t0, t1, s1, Node_blobs
     li      t2, 0
@@ -7458,7 +7458,7 @@ LOCAL_FUNCTION node_recon_count
     j       1b
 9:  mv      a0, t2
     ret
-END_FUNCTION node_recon_count
+END_FUNCTION lantern_node_recon_count
 
 /*
  * L1: the reconstruction (node.md), at the quiet point: with recon_state 0, the first root of
@@ -7471,13 +7471,13 @@ END_FUNCTION node_recon_count
  * weighed, then the root's entry, s9 a column, s10 the joined id. Locals: 0 the join action, 8 the
  * ids written.
  */
-LOCAL_FUNCTION node_reconstruct_due
+LOCAL_FUNCTION lantern_node_reconstruct_due
     ENTER 16
     LDQ     t0, s1, Node_recon_state
     li      t1, 2
     beq     t0, t1, 50f
     bnez    t0, 99f
-    call    node_column_count               # fewer columns than half: no root has half
+    call    lantern_node_column_count               # fewer columns than half: no root has half
     li      t0, NUMBER_OF_COLUMNS / 2
     bltu    a0, t0, 99f
     li      s8, 0
@@ -7492,14 +7492,14 @@ LOCAL_FUNCTION node_reconstruct_due
 10: mv      s8, s3
     ld      a0, NodeBlob_slot(s3)
     addi    a1, s1, Node_config
-    call    node_fork
+    call    lantern_node_fork
     li      t0, FORK_FULU
     bltu    a0, t0, 3f
     ADDQ    t0, s1, Node_recon_failed
     NE32    t0, s3, 11f
     j       3f
 11: mv      a0, s3
-    call    node_recon_count
+    call    lantern_node_recon_count
     li      t0, NUMBER_OF_COLUMNS / 2
     bltu    a0, t0, 3f
     li      t0, NUMBER_OF_COLUMNS
@@ -7517,19 +7517,19 @@ LOCAL_FUNCTION node_reconstruct_due
     bltu    t0, t2, 3f
     slli    a0, s7, 3
     addi    a0, a0, 1024
-    call    node_room
+    call    lantern_node_room
     beqz    a0, 99f
     j       20f
 3:  addi    s3, s3, NodeBlob__mem
     addi    s4, s4, -1
     j       1b
 20: mv      s8, s3
-    call    node_new_id                     # the join of the held sidecars, by index
+    call    lantern_node_new_id                     # the join of the held sidecars, by index
     mv      s10, a0
     li      a0, NODE_ACT_BYTES_JOIN
     slli    a1, s7, 3
     addi    a1, a1, 32
-    call    node_act
+    call    lantern_node_act
     sd      s10, 16(a0)
     sd      s7, 24(a0)
     sd      a0, 0(sp)
@@ -7539,7 +7539,7 @@ LOCAL_FUNCTION node_reconstruct_due
     bgeu    s9, t0, 22f
     addi    a0, s8, NodeBlob_block_root
     mv      a1, s9
-    call    node_blob_held
+    call    lantern_node_blob_held
     beqz    a0, 23f
     ld      t0, 8(sp)
     bgeu    t0, s7, 23f
@@ -7552,11 +7552,11 @@ LOCAL_FUNCTION node_reconstruct_due
     sd      t0, 8(sp)
 23: addi    s9, s9, 1
     j       21b
-22: call    node_new_id                     # the buffer of every sidecar
+22: call    lantern_node_new_id                     # the buffer of every sidecar
     STQ     a0, s1, Node_recon_buffer
     li      a0, NODE_ACT_BYTES_NEW
     li      a1, NODE_ACT_BYTES_NEW_SIZE
-    call    node_act
+    call    lantern_node_act
     LDQ     t0, s1, Node_recon_buffer
     ld      t1, NodeBlob_length(s8)
     addi    t1, t1, 24 + 7
@@ -7572,11 +7572,11 @@ LOCAL_FUNCTION node_reconstruct_due
     mv      a3, s10
     li      a4, 0
     li      a5, 0
-    call    node_work
+    call    lantern_node_work
     li      a0, NODE_ACT_BYTES_FREE
     mv      a1, s10
     li      a2, 0
-    call    node_ids
+    call    lantern_node_ids
     ADDQ    a0, s1, Node_recon_root
     addi    a1, s8, NodeBlob_block_root
     COPY32  a0, a1
@@ -7590,12 +7590,12 @@ LOCAL_FUNCTION node_reconstruct_due
     bgeu    s9, t0, 59f
     ADDQ    a0, s1, Node_recon_root
     mv      a1, s9
-    call    node_blob_held
+    call    lantern_node_blob_held
     beqz    a0, 52f
     addi    s9, s9, 1
     j       51b
 52: li      a0, NODE_ACT_WORK_SIZE
-    call    node_room
+    call    lantern_node_room
     beqz    a0, 99f
     li      a0, NODE_WORK_PUBLISH_SIDECAR
     li      a1, 0
@@ -7603,7 +7603,7 @@ LOCAL_FUNCTION node_reconstruct_due
     li      a3, 0
     li      a4, -1
     mv      a5, s9
-    call    node_work
+    call    lantern_node_work
     addi    t0, s9, 1
     STQ     t0, s1, Node_recon_next
     li      t0, 3
@@ -7612,10 +7612,10 @@ LOCAL_FUNCTION node_reconstruct_due
 59: li      a0, NODE_ACT_BYTES_FREE         # none left: the buffer goes
     LDQ     a1, s1, Node_recon_buffer
     li      a2, 0
-    call    node_ids
+    call    lantern_node_ids
     STQ     zero, s1, Node_recon_state
 99: LEAVE 16
-END_FUNCTION node_reconstruct_due
+END_FUNCTION lantern_node_reconstruct_due
 
 /*
  * (data, settings, scratch, out): node.md, lantern_node_reconstruct: for each blob,
@@ -7855,15 +7855,15 @@ END_FUNCTION lantern_node_reconstruct
  * until_epoch is above the store's epoch and F's post-state held, a NODE_WORK_CUSTODY of it. s3
  * the epoch, s4 the epoch + 1.
  */
-LOCAL_FUNCTION node_custody_due
+LOCAL_FUNCTION lantern_node_custody_due
     ENTER 0
     mv      a0, s2
-    call    node_store_slot
+    call    lantern_node_store_slot
     li      t0, SLOTS_PER_EPOCH
     divu    s3, a0, t0
     addi    s4, s3, 1
     addi    a1, s1, Node_config
-    call    node_fork
+    call    lantern_node_fork
     li      t0, FORK_FULU
     bltu    a0, t0, 9f
     LDQ     t0, s1, Node_custody_epoch
@@ -7876,7 +7876,7 @@ LOCAL_FUNCTION node_custody_due
     addi    t1, t1, -1
     j       1b
 2:  addi    a0, s2, Store_finalized_checkpoint + 8
-    call    node_find_block
+    call    lantern_node_find_block
     li      t0, -1
     beq     a0, t0, 9f
     ld      a1, NodeBlock_state_id(a1)
@@ -7887,9 +7887,9 @@ LOCAL_FUNCTION node_custody_due
     li      a3, 0
     li      a4, 0
     li      a5, 0
-    call    node_work
+    call    lantern_node_work
 9:  LEAVE 0
-END_FUNCTION node_custody_due
+END_FUNCTION lantern_node_custody_due
 
 /*
  * The node's gossip topics (node.md; altair p2p-interface.md, Transitioning the gossip), one change
@@ -7899,7 +7899,7 @@ END_FUNCTION node_custody_due
  * the old digest's topics leave. s3 the epoch, s4 its fork, s7 its digest, s8 a fork, s9 a digest.
  * Locals: L an epoch, L+8 a ForkDigest.
  */
-LOCAL_FUNCTION node_subscribe
+LOCAL_FUNCTION lantern_node_subscribe
     ENTER 32
     P2P_OUT t0
     ld      t1, 0(t0)
@@ -7909,15 +7909,15 @@ LOCAL_FUNCTION node_subscribe
     li      t2, 64 * 128
     bltu    t1, t2, 9f
     li      a0, NODE_ENR_ACTION             # and the actions room for the record entries
-    call    node_room
+    call    lantern_node_room
     beqz    a0, 9f
     mv      a0, s2
-    call    node_store_slot
+    call    lantern_node_store_slot
     li      t0, SLOTS_PER_EPOCH
     divu    s3, a0, t0
     sd      s3, L(sp)
     addi    a1, s1, Node_config
-    call    node_fork
+    call    lantern_node_fork
     mv      s4, a0
     mv      t6, a0
     sd      zero, (L + 8)(sp)
@@ -7943,33 +7943,33 @@ LOCAL_FUNCTION node_subscribe
     li      t0, SLOTS_PER_EPOCH
     mul     a0, a0, t0
 11: addi    a1, s1, Node_config
-    call    node_fork
+    call    lantern_node_fork
     sd      a0, Node_old_fork(s1)
 1:  sd      s7, Node_fork_digest(s1)
     ld      t0, Node_flags(s1)
     ori     t0, t0, NODE_FLAG_SUBSCRIBED
     sd      t0, Node_flags(s1)
     mv      a0, s3                          # the subnets of the epoch, then those the node keeps
-    call    node_attnets_set
-    call    node_subnets_want
+    call    lantern_node_attnets_set
+    call    lantern_node_subnets_want
     STQ     a0, s1, Node_subnets
     addi    a0, sp, L                       # the record entries of the new digest
     mv      a1, s4
-    call    node_enr_entries
+    call    lantern_node_enr_entries
     ld      t0, Node_next_digest(s1)        # its topics, unless they are there ahead
     sd      zero, Node_next_digest(s1)
     beq     t0, s7, 9f
     mv      a0, s4
     mv      a1, s7
     li      a2, LIBP2P_EVENT_SUBSCRIBE
-    call    node_topics
+    call    lantern_node_topics
     j       9f
 20: addi    t0, s3, NODE_SUBSCRIBE_AHEAD    # ahead: the topics of the digest of a later epoch
     sd      t0, L(sp)
     li      t1, SLOTS_PER_EPOCH
     mul     a0, t0, t1
     addi    a1, s1, Node_config
-    call    node_fork
+    call    lantern_node_fork
     mv      s8, a0
     mv      t6, a0
     sd      zero, (L + 8)(sp)
@@ -7988,20 +7988,20 @@ LOCAL_FUNCTION node_subscribe
     mv      a0, s8
     mv      a1, s9
     li      a2, LIBP2P_EVENT_SUBSCRIBE
-    call    node_topics
+    call    lantern_node_topics
     j       9f
 30: mv      a0, s3                          # the subnets of the epoch, when they changed: attnets and the record
-    call    node_attnets
+    call    lantern_node_attnets
     ld      s9, Node_attnets(s1)
     beq     a0, s9, 32f
     mv      a0, s3
-    call    node_attnets_set
+    call    lantern_node_attnets_set
     sd      s3, L(sp)
     addi    a0, sp, L
     mv      a1, s4
-    call    node_enr_entries
+    call    lantern_node_enr_entries
     j       9f
-32: call    node_subnets_want               # the subnets the node keeps, when they changed
+32: call    lantern_node_subnets_want               # the subnets the node keeps, when they changed
     LDQ     s9, s1, Node_subnets
     beq     a0, s9, 33f
     mv      s8, a0
@@ -8009,17 +8009,17 @@ LOCAL_FUNCTION node_subscribe
     and     a0, a0, s9
     li      a1, LIBP2P_EVENT_UNSUBSCRIBE
     li      a2, GOSSIP_BEACON_ATTESTATION
-    call    node_subnet_topics
+    call    lantern_node_subnet_topics
     not     a0, s9
     and     a0, a0, s8
     li      a1, LIBP2P_EVENT_SUBSCRIBE
     li      a2, GOSSIP_BEACON_ATTESTATION
-    call    node_subnet_topics
+    call    lantern_node_subnet_topics
     STQ     s8, s1, Node_subnets
     j       9f
 33: li      t0, FORK_ALTAIR                 # the sync subnets the node keeps, when they changed: the MetaData and the record
     bltu    s4, t0, 34f
-    call    node_syncnets_want
+    call    lantern_node_syncnets_want
     LDQ     s9, s1, Node_syncnets
     beq     a0, s9, 34f
     mv      s8, a0
@@ -8027,12 +8027,12 @@ LOCAL_FUNCTION node_subscribe
     and     a0, a0, s9
     li      a1, LIBP2P_EVENT_UNSUBSCRIBE
     li      a2, GOSSIP_SYNC_COMMITTEE
-    call    node_subnet_topics
+    call    lantern_node_subnet_topics
     not     a0, s9
     and     a0, a0, s8
     li      a1, LIBP2P_EVENT_SUBSCRIBE
     li      a2, GOSSIP_SYNC_COMMITTEE
-    call    node_subnet_topics
+    call    lantern_node_subnet_topics
     STQ     s8, s1, Node_syncnets
     ld      t0, Node_metadata_seq(s1)
     addi    t0, t0, 1
@@ -8040,7 +8040,7 @@ LOCAL_FUNCTION node_subscribe
     sd      s3, L(sp)
     addi    a0, sp, L
     mv      a1, s4
-    call    node_enr_entries
+    call    lantern_node_enr_entries
     j       9f
 34: li      t0, FORK_FULU                   # validator custody: a raise of custody_count, its columns, topics, MetaData and record
     bltu    s4, t0, 31f
@@ -8049,7 +8049,7 @@ LOCAL_FUNCTION node_subscribe
     bleu    s8, s9, 31f
     STQ     s8, s1, Node_custody_count
     mv      a0, s2
-    call    node_store_slot
+    call    lantern_node_store_slot
     STQ     a0, s1, Node_custody_slot
     ld      t0, Node_columns(s1)
     ld      t1, (Node_columns + 8)(s1)
@@ -8061,16 +8061,16 @@ LOCAL_FUNCTION node_subscribe
 35: ADDQ    a0, s1, Node_node_id
     addi    a2, s1, Node_config
     addi    a3, s1, Node_columns
-    call    node_custody_columns
+    call    lantern_node_custody_columns
     addi    a0, sp, L + 16
-    call    node_column_raise_topics
+    call    lantern_node_column_raise_topics
     ld      t0, Node_metadata_seq(s1)
     addi    t0, t0, 1
     sd      t0, Node_metadata_seq(s1)
     sd      s3, L(sp)
     addi    a0, sp, L
     mv      a1, s4
-    call    node_enr_entries
+    call    lantern_node_enr_entries
     j       9f
 31: ld      a1, Node_old_digest(s1)         # the old digest's topics leave
     beqz    a1, 9f
@@ -8079,9 +8079,9 @@ LOCAL_FUNCTION node_subscribe
     sd      zero, Node_old_digest(s1)
     ld      a0, Node_old_fork(s1)
     li      a2, LIBP2P_EVENT_UNSUBSCRIBE
-    call    node_topics
+    call    lantern_node_topics
 9:  LEAVE 32
-END_FUNCTION node_subscribe
+END_FUNCTION lantern_node_subscribe
 
 /*
  * The MESSAGE a0 of libp2p, whose data is in the libp2p state a1: its MESSAGE_ID, then a
@@ -8089,7 +8089,7 @@ END_FUNCTION node_subscribe
  * s7 the entry, s8 the scratch size, restored on return, s9 the topic's ByteList, then the
  * bytes', s10 the data's ByteList. Locals: L a GossipTopic, L+24 the message-id, L+48 a length.
  */
-LOCAL_FUNCTION node_message
+LOCAL_FUNCTION lantern_node_message
     ENTER 64
     mv      s3, a0
     mv      s4, a1
@@ -8135,9 +8135,9 @@ LOCAL_FUNCTION node_message
     ld      t0, Node_fork_digest(s1)        # a topic of no name: as of the node's ForkDigest
     sd      t0, (L + GossipTopic_fork_digest)(sp)
 1:  mv      a0, s2                          # the message-id, of the fork of the store's slot
-    call    node_store_slot
+    call    lantern_node_store_slot
     addi    a1, s1, Node_config
-    call    node_fork
+    call    lantern_node_fork
     mv      t6, a0
     mv      a0, s9
     mv      a1, s10
@@ -8147,7 +8147,7 @@ LOCAL_FUNCTION node_message
     FORK_CALL compute_message_id
     bnez    a0, 99f
     li      a0, LIBP2P_EV_MSG_ID_SIZE       # MESSAGE_ID
-    call    node_out
+    call    lantern_node_out
     beqz    a0, 99f
     li      t0, LIBP2P_EVENT_MESSAGE_ID
     sd      t0, 8(a0)
@@ -8206,7 +8206,7 @@ LOCAL_FUNCTION node_message
     ld      t1, 0(s5)
     bltu    t1, t0, 99f
     addi    a0, t0, 48                      # room for its BYTES_PUT
-    call    node_room
+    call    lantern_node_room
     beqz    a0, 99f
     ld      t1, 0(s5)
     ld      t0, (L + 48)(sp)
@@ -8257,7 +8257,7 @@ LOCAL_FUNCTION node_message
 32: li      t3, GOSSIP_BEACON_AGGREGATE_AND_PROOF   # an aggregate: the slot of its data
     bne     t0, t3, 5f
     mv      a0, s9
-    call    node_aggregate
+    call    lantern_node_aggregate
     li      t3, -1
     bnez    a0, 33f
     li      t0, 12
@@ -8268,7 +8268,7 @@ LOCAL_FUNCTION node_message
     or      t3, t3, t4
 33: sd      t3, NodeMessage_slot(s7)
 5:  mv      a0, s9                          # the bytes, kept by the shell
-    call    node_put
+    call    lantern_node_put
     sd      a0, NodeMessage_data_id(s7)
     ld      t0, 16(s9)
     sd      t0, NodeMessage_length(s7)
@@ -8276,7 +8276,7 @@ LOCAL_FUNCTION node_message
     sd      t0, NodeMessage_state(s7)
 99: sd      s8, 0(s5)
     LEAVE 64
-END_FUNCTION node_message
+END_FUNCTION lantern_node_message
 
 /*
  * The MESSAGE_STATUS a0 of libp2p. NEW: a GOSSIP work with the head state, for a block or block
@@ -8284,11 +8284,11 @@ END_FUNCTION node_message
  * when the node holds no bytes for it. Else its bytes and its entry go. s3 the notice, s4 the
  * entry, s7 the head state, s8 the proposer state, s9 the justified state.
  */
-LOCAL_FUNCTION node_message_status
+LOCAL_FUNCTION lantern_node_message_status
     ENTER 0
     mv      s3, a0
     ld      a0, LIBP2P_ACT_HANDLE(s3)
-    call    node_find_message
+    call    lantern_node_find_message
     li      t0, -1
     beq     a0, t0, 99f
     mv      s4, a1
@@ -8303,10 +8303,10 @@ LOCAL_FUNCTION node_message_status
     bne     t0, t1, 70f
     li      a1, LIBP2P_REJECT
 70: ld      a0, NodeMessage_handle(s4)
-    call    node_validation
+    call    lantern_node_validation
     j       80f
 1:  li      a0, NODE_ACT_WORK_SIZE + 64     # room for the work, a state copy and a state free
-    call    node_room
+    call    lantern_node_room
     li      a1, LIBP2P_IGNORE
     beqz    a0, 70b
     ld      a5, NodeMessage_topic(s4)       # a light client update: matched against the light client store's
@@ -8318,7 +8318,7 @@ LOCAL_FUNCTION node_message_status
     li      a2, 0
     ld      a3, NodeMessage_data_id(s4)
     ld      a4, NodeMessage_handle(s4)
-    call    node_work
+    call    lantern_node_work
     li      t0, NODE_LC_ID
     sd      t0, NodeAction_state_c(a0)
     li      t0, NODE_MESSAGE_VALIDATING
@@ -8326,7 +8326,7 @@ LOCAL_FUNCTION node_message_status
     LEAVE 0
 11: li      s7, 0                           # the head state
     addi    a0, s1, Node_head_root
-    call    node_find_block
+    call    lantern_node_find_block
     li      t0, -1
     beq     a0, t0, 2f
     ld      s7, NodeBlock_state_id(a1)
@@ -8339,7 +8339,7 @@ LOCAL_FUNCTION node_message_status
     li      t1, GOSSIP_DATA_COLUMN_SIDECAR
     bne     t0, t1, 3f
 21: addi    a0, s4, NodeMessage_parent_root
-    call    node_find_block
+    call    lantern_node_find_block
     li      t0, -1
     beq     a0, t0, 3f
     ld      t0, NodeBlock_status(a1)
@@ -8351,31 +8351,31 @@ LOCAL_FUNCTION node_message_status
     ld      s9, NodeBlock_state_id(a1)
     bnez    s9, 22f
     mv      s10, a1                         # a parent with no post-state above F's slot: it again
-    call    node_f_slot
+    call    lantern_node_f_slot
     ld      t0, NodeBlock_slot(s10)
     bleu    t0, a0, 3f
     mv      a0, s10
-    call    node_rebuild
+    call    lantern_node_rebuild
     mv      s9, a0
     beqz    s9, 3f
     mv      a1, s10
 22: ld      t0, NodeBlock_slot(a1)
     mv      a0, t0                          # of the same fork
     addi    a1, s1, Node_config
-    call    node_fork
+    call    lantern_node_fork
     mv      s10, a0
     ld      a0, NodeMessage_slot(s4)
     addi    a1, s1, Node_config
-    call    node_fork
+    call    lantern_node_fork
     bne     a0, s10, 3f
     ADDQ    a0, s4, NodeMessage_parent_root # one proposer state for each parent root and slot
     ld      a1, NodeMessage_slot(s4)
     mv      a2, s9
-    call    node_gossip_state
+    call    lantern_node_gossip_state
     mv      s8, a0
 3:  li      s9, 0                           # the state of the justified root
     ADDQ    a0, s2, Store_justified_checkpoint + 8
-    call    node_find_block
+    call    lantern_node_find_block
     li      t0, -1
     beq     a0, t0, 4f
     ld      t0, NodeBlock_status(a1)
@@ -8391,7 +8391,7 @@ LOCAL_FUNCTION node_message_status
     slli    a5, a5, 8
     ld      t0, NodeMessage_topic(s4)
     or      a5, a5, t0
-    call    node_work
+    call    lantern_node_work
     sd      s9, NodeAction_state_c(a0)
     li      t0, NODE_MESSAGE_VALIDATING
     sd      t0, NodeMessage_state(s4)
@@ -8399,16 +8399,16 @@ LOCAL_FUNCTION node_message_status
 80: ld      a1, NodeMessage_data_id(s4)     # no work: its bytes and its entry go
     beqz    a1, 81f
     li      a0, 32
-    call    node_room
+    call    lantern_node_room
     beqz    a0, 81f
     li      a0, NODE_ACT_BYTES_FREE
     ld      a1, NodeMessage_data_id(s4)
     li      a2, 0
-    call    node_ids
+    call    lantern_node_ids
 81: mv      a0, s4
-    call    node_drop_message
+    call    lantern_node_drop_message
 99: LEAVE 0
-END_FUNCTION node_message_status
+END_FUNCTION lantern_node_message_status
 
 /* ------------------------------------------------------------ sync */
 
@@ -8419,11 +8419,11 @@ END_FUNCTION node_message_status
  * gives a DISCONNECT. s3 the bytes, then the peer's finalized epoch, s4 their size, then a slot, s7
  * the entry, s8 the Db. Locals: L the node's Status (92).
  */
-LOCAL_FUNCTION node_peer_status
+LOCAL_FUNCTION lantern_node_peer_status
     ENTER 96
     mv      s3, a1
     mv      s4, a2
-    call    node_find_peer
+    call    lantern_node_find_peer
     li      t0, -1
     beq     a0, t0, 9f
     mv      s7, a1
@@ -8449,7 +8449,7 @@ LOCAL_FUNCTION node_peer_status
     ld      t0, Node_time_ms(s1)
     sd      t0, NodePeer_status_ms(s7)
     addi    a0, sp, L                       # its fork_digest: the node's of the store's epoch, or the one ahead or before around a fork
-    call    node_status_bytes
+    call    lantern_node_status_bytes
     ld      t0, NodePeer_fork_digest(s7)
     lwu     t1, L(sp)
     beq     t0, t1, 2f
@@ -8493,15 +8493,15 @@ LOCAL_FUNCTION node_peer_status
     j       9f
 8:  li      a0, LIBP2P_EVENT_DISCONNECT     # a DISCONNECT; it syncs nothing until it goes
     ld      a1, NodePeer_handle(s7)
-    call    node_out_handle
+    call    lantern_node_out_handle
     ld      t0, NodePeer_flags(s7)
     andi    t0, t0, ~NODE_PEER_STATUS
     sd      t0, NodePeer_flags(s7)
 9:  LEAVE 96
-END_FUNCTION node_peer_status
+END_FUNCTION lantern_node_peer_status
 
 /* a0 = the index of the node's stream in NODE_STREAM_OPENING of tag a0, or 2^64 - 1; a1 = its entry. Uses t0-t4, a7. */
-LOCAL_FUNCTION node_find_opening
+LOCAL_FUNCTION lantern_node_find_opening
     UNWIND_END_PROLOGUE
     PART    a1, t1, s1, Node_streams
     ld      t3, Node_stream_bytes(s1)
@@ -8519,14 +8519,14 @@ LOCAL_FUNCTION node_find_opening
     ret
 3:  mv      a0, t0
     ret
-END_FUNCTION node_find_opening
+END_FUNCTION lantern_node_find_opening
 
 /*
  * The stream entry a0 goes; the node's BeaconBlocksByRange request ends with it. The sync's: with
  * blocks, sync_slot = max(sync_start, min(sync_got, sync_slot)); with none and not read to its end,
  * sync_start.
  */
-LOCAL_FUNCTION node_end_stream
+LOCAL_FUNCTION lantern_node_end_stream
     FRAME 0
     ld      t1, Node_backfill_handle(s1)    # the backfill's stream: the backfill has none
     beqz    t1, 2f
@@ -8555,9 +8555,9 @@ LOCAL_FUNCTION node_end_stream
     bgeu    t0, t1, 4f
     mv      t0, t1
 4:  sd      t0, Node_sync_slot(s1)
-1:  call    node_drop_stream
+1:  call    lantern_node_drop_stream
     UNFRAME 0
-END_FUNCTION node_end_stream
+END_FUNCTION lantern_node_end_stream
 
 /*
  * A request of the node: method a0, version a1, to the peer of handle a2, its SSZ bytes at a3 of
@@ -8569,7 +8569,7 @@ END_FUNCTION node_end_stream
  * ReqRespProtocol, L+64 a ByteList of the protocol ID (152), L+216 the tag, L+224 the
  * NodeResponse's index + 1, or 0.
  */
-LOCAL_FUNCTION node_open
+LOCAL_FUNCTION lantern_node_open
     ENTER 240
     sd      a0, (L + 48)(sp)
     sd      a1, (L + 56)(sp)
@@ -8647,13 +8647,13 @@ LOCAL_FUNCTION node_open
     addi    a1, sp, L + 64
     call    lantern_reqresp_protocol_id
     bnez    a0, 8f
-    call    node_new_id                     # the tag
+    call    lantern_node_new_id                     # the tag
     li      t0, 1
     slli    t0, t0, 63
     or      a0, a0, t0
     sd      a0, (L + 216)(sp)
     li      a0, 40 + LIBP2P_PROTO_SIZE      # OPEN_STREAM
-    call    node_out
+    call    lantern_node_out
     beqz    a0, 8f
     mv      s4, a0
     li      t0, LIBP2P_EVENT_OPEN_STREAM
@@ -8708,10 +8708,10 @@ LOCAL_FUNCTION node_open
 8:  sd      s7, 0(s5)
     li      a0, 0
     LEAVE 240
-END_FUNCTION node_open
+END_FUNCTION lantern_node_open
 
 /* a0 = the ByteList that holds the bytes of the stream entry a0: its NodeResponse's list, else its own. Uses t0, t1, a7. */
-LOCAL_FUNCTION node_stream_list
+LOCAL_FUNCTION lantern_node_stream_list
     UNWIND_END_PROLOGUE
     ld      t0, NodeStream_response(a0)
     beqz    t0, 1f
@@ -8725,10 +8725,10 @@ LOCAL_FUNCTION node_stream_list
     ret
 1:  addi    a0, a0, NodeStream_list
     ret
-END_FUNCTION node_stream_list
+END_FUNCTION lantern_node_stream_list
 
 /* a0 = the free NodeResponse entries. Uses t0-t3, a7. */
-LOCAL_FUNCTION node_free_responses
+LOCAL_FUNCTION lantern_node_free_responses
     UNWIND_END_PROLOGUE
     PART    t0, t1, s1, Node_responses
     LDQ     t2, s1, Node_response_bytes
@@ -8741,7 +8741,7 @@ LOCAL_FUNCTION node_free_responses
     addi    t1, t1, -1
     j       1b
 2:  ret
-END_FUNCTION node_free_responses
+END_FUNCTION lantern_node_free_responses
 
 /*
  * The first peer from the index a0 of the peers part, in its order and around, with a Status of
@@ -8749,7 +8749,7 @@ END_FUNCTION node_free_responses
  * set, and an earliest_slot at most a1 when bit 1 is: a0 = its index, or 2^64 - 1; a1 = its entry.
  * Uses t0-t6, a7.
  */
-LOCAL_FUNCTION node_next_peer
+LOCAL_FUNCTION lantern_node_next_peer
     UNWIND_END_PROLOGUE
     PART    t0, t1, s1, Node_peers
     beqz    t1, 3f
@@ -8784,7 +8784,7 @@ LOCAL_FUNCTION node_next_peer
     ret
 3:  li      a0, -1
     ret
-END_FUNCTION node_next_peer
+END_FUNCTION lantern_node_next_peer
 
 /*
  * a0 = 1 when the response bytes of the node's request stream a0 wait for room, else 0. Each
@@ -8795,15 +8795,15 @@ END_FUNCTION node_next_peer
  * return, s8 the payload's ByteList, s9 the SSZ size, s10 a block entry. A block of the sync's
  * stream moves sync_got past its slot; the end after STREAM_EOF with no bytes left makes next 2.
  * Locals: L a ChunkHeader, L+48 a length, then a block index, L+56 eof, L+64 the payload bytes
- * read, L+72 the ByteList of the response bytes (node_stream_list).
+ * read, L+72 the ByteList of the response bytes (lantern_node_stream_list).
  */
-LOCAL_FUNCTION node_response
+LOCAL_FUNCTION lantern_node_response
     ENTER 80
     mv      s3, a0
     ld      s4, NodeStream_method(s3)
     ld      s7, 0(s5)
     mv      a0, s3                          # the response bytes: in its NodeResponse, or its list
-    call    node_stream_list
+    call    lantern_node_stream_list
     sd      a0, (L + 72)(sp)
 1:  ld      t0, (L + 72)(sp)
     ld      t0, 16(t0)
@@ -8868,7 +8868,7 @@ LOCAL_FUNCTION node_response
     li      t0, NODE_BLOB_BYTES             # a blob sidecar: room for its BYTES_PUT, its work, its entry
     bne     s9, t0, 85f
     li      a0, NODE_BLOB_BYTES + 48 + NODE_ACT_WORK_SIZE + 7
-45: call    node_room
+45: call    lantern_node_room
     beqz    a0, 95f
     LDQ     t0, s1, Node_api                # the blobs' capacity: up to the api part
     ld      t1, Node_blobs(s1)
@@ -8883,7 +8883,7 @@ LOCAL_FUNCTION node_response
     LDQ     t0, s1, Node_config + CONFIG_MAX_PAYLOAD_SIZE
     bgtu    s9, t0, 85f
     addi    a0, s9, 48 + NODE_ACT_WORK_SIZE + 7
-    call    node_room
+    call    lantern_node_room
     beqz    a0, 95f
     ld      t0, Node_checkpoints(s1)
     ld      t1, Node_blocks(s1)
@@ -8921,12 +8921,12 @@ LOCAL_FUNCTION node_response
     ld      a0, NodeStream_peer(s3)         # Status: the peer's
     addi    a1, s8, 24
     mv      a2, s9
-    call    node_peer_status
+    call    lantern_node_peer_status
     j       7f
 6:  li      t0, REQRESP_METADATA
     bne     s4, t0, 62f
     ld      a0, NodeStream_peer(s3)         # MetaData: the peer's custody
-    call    node_find_peer
+    call    lantern_node_find_peer
     li      t0, -1
     beq     a0, t0, 7f
     mv      a0, a1
@@ -8939,7 +8939,7 @@ LOCAL_FUNCTION node_response
     addi    t0, t0, -1
     addi    t1, t1, -1
     bnez    t1, 631b
-    call    node_peer_custody
+    call    lantern_node_peer_custody
     j       7f
 62: li      t0, REQRESP_BLOB_SIDECARS_BY_RANGE
     beq     s4, t0, 61f
@@ -8947,7 +8947,7 @@ LOCAL_FUNCTION node_response
     beq     s4, t0, 63f
     li      t0, REQRESP_DATA_COLUMN_SIDECARS_BY_ROOT
     beq     s4, t0, 63f
-    call    node_new_block                  # a block: its entry, its bytes, the work of its root
+    call    lantern_node_new_block                  # a block: its entry, its bytes, the work of its root
     sd      a0, (L + 48)(sp)
     mv      s10, t0
     addi    t0, s8, 24                      # the slot at 4 mod 8
@@ -8966,7 +8966,7 @@ LOCAL_FUNCTION node_response
     li      t0, 1
     sd      t0, NodeBlock_data_available(s10)
     mv      a0, s8
-    call    node_put
+    call    lantern_node_put
     sd      a0, NodeBlock_data_id(s10)
     sd      a0, (L + 56)(sp)
     ld      t0, 16(s8)
@@ -8980,7 +8980,7 @@ LOCAL_FUNCTION node_response
     addi    t0, t0, 1
     sd      t0, Node_backfill_got(s1)
     addi    a0, s2, Store_finalized_checkpoint + 8  # BACKFILL: with F's post-state
-    call    node_find_block
+    call    lantern_node_find_block
     li      t0, -1
     li      a2, 0
     beq     a0, t0, 642f
@@ -8997,9 +8997,9 @@ LOCAL_FUNCTION node_response
     ld      a3, (L + 56)(sp)
     ld      a4, (L + 48)(sp)
     li      a5, 0
-    call    node_work
+    call    lantern_node_work
     j       7f
-61: call    node_new_blob                   # a blob sidecar: its entry, its bytes, the work of its checks
+61: call    lantern_node_new_blob                   # a blob sidecar: its entry, its bytes, the work of its checks
     sd      a0, (L + 48)(sp)
     mv      s10, t0
     ld      t0, 24(s8)                      # its index, and the slot of its block header
@@ -9009,7 +9009,7 @@ LOCAL_FUNCTION node_response
     li      t0, NODE_BLOB_VERIFYING
     sd      t0, NodeBlob_status(s10)
     mv      a0, s8
-    call    node_put
+    call    lantern_node_put
     sd      a0, NodeBlob_data_id(s10)
     ld      t0, 16(s8)
     sd      t0, NodeBlob_length(s10)
@@ -9019,9 +9019,9 @@ LOCAL_FUNCTION node_response
     li      a2, 0
     ld      a4, (L + 48)(sp)
     li      a5, 0
-    call    node_work
+    call    lantern_node_work
     j       7f
-63: call    node_new_blob                   # a column sidecar: its entry, its bytes, the work of its checks
+63: call    lantern_node_new_blob                   # a column sidecar: its entry, its bytes, the work of its checks
     sd      a0, (L + 48)(sp)
     mv      s10, t0
     ld      t0, 24(s8)                      # its index, and the slot of its block header, 4-aligned
@@ -9031,7 +9031,7 @@ LOCAL_FUNCTION node_response
     li      t0, NODE_BLOB_VERIFYING
     sd      t0, NodeBlob_status(s10)
     mv      a0, s8
-    call    node_put
+    call    lantern_node_put
     sd      a0, NodeBlob_data_id(s10)
     ld      t0, 16(s8)
     sd      t0, NodeBlob_length(s10)
@@ -9041,7 +9041,7 @@ LOCAL_FUNCTION node_response
     li      a2, 0
     ld      a4, (L + 48)(sp)
     li      a5, 1
-    call    node_work
+    call    lantern_node_work
 7:  sd      s7, 0(s5)                       # the chunk leaves the list
     ld      t0, (L + ChunkHeader_header_bytes)(sp)
     ld      t1, (L + 64)(sp)
@@ -9069,23 +9069,23 @@ LOCAL_FUNCTION node_response
 85: sd      s7, 0(s5)                       # a bad chunk: a reset
     li      a0, LIBP2P_EVENT_STREAM_RESET
     ld      a1, NodeStream_handle(s3)
-    call    node_out_handle
+    call    lantern_node_out_handle
 80: mv      a0, s3
-    call    node_end_stream
+    call    lantern_node_end_stream
     li      a0, 0
     LEAVE 80
-END_FUNCTION node_response
+END_FUNCTION lantern_node_response
 
 /*
  * The sidecar requests of a range (node.md): a BlobSidecarsByRange v1 to the peer a0 of the slots of
  * a1, count a2, in the blob window whose fork is deneb or electra, then from fulu (a3 the fork of the
  * store's slot) the DataColumnSidecarsByRange v1 of the slots in the column window to the peers with
  * NODE_PEER_METADATA, from sidecar_peer and around. a0 = 1 when a request has no room or the node cannot open it, else 0. Locals
- * as node_sync's: L the range, L+24 a request's range, L+40 the fork, L+48 the columns asked, L+64
+ * as lantern_node_sync's: L the range, L+24 a request's range, L+40 the fork, L+48 the columns asked, L+64
  * count or send, L+72 the column requests, L+80 the peer. s3 a peer, s4 the peers left, s10 the
  * scratch size.
  */
-LOCAL_FUNCTION node_sidecar_ask
+LOCAL_FUNCTION lantern_node_sidecar_ask
     ENTER 96
     sd      a0, (L + 80)(sp)
     sd      a4, (L + 16)(sp)
@@ -9095,7 +9095,7 @@ LOCAL_FUNCTION node_sidecar_ask
     mv      s3, a0
     LDQ     a0, s1, Node_config + CONFIG_MIN_EPOCHS_FOR_BLOB_SIDECARS_REQUESTS   # the blob window's first slot
     li      a1, FORK_DENEB
-    call    node_window
+    call    lantern_node_window
     li      t0, SLOTS_PER_EPOCH
     mulhu   t1, a0, t0
     bnez    t1, 66f
@@ -9117,7 +9117,7 @@ LOCAL_FUNCTION node_sidecar_ask
     sub     t3, t3, t2
     sd      t2, (L + 24)(sp)
     sd      t3, (L + 32)(sp)
-    call    node_free_responses             # two NodeResponse entries free, and room for it and the blocks' request
+    call    lantern_node_free_responses             # two NodeResponse entries free, and room for it and the blocks' request
     li      t0, 2
     bltu    a0, t0, 9f
     ld      t0, (Node_streams + 8)(s1)
@@ -9133,14 +9133,14 @@ LOCAL_FUNCTION node_sidecar_ask
     ld      a2, NodePeer_handle(s3)
     addi    a3, sp, L + 24
     li      a4, 16
-    call    node_open
+    call    lantern_node_open
     beqz    a0, 9f
 66: ld      t0, (L + 40)(sp)                # fulu: the column requests
     li      t1, FORK_FULU
     bltu    t0, t1, 71f
     LDQ     a0, s1, Node_config + CONFIG_MIN_EPOCHS_FOR_DATA_COLUMN_SIDECARS_REQUESTS   # the column window's first slot
     li      a1, FORK_FULU
-    call    node_window
+    call    lantern_node_window
     li      t0, SLOTS_PER_EPOCH
     mulhu   t1, a0, t0
     bnez    t1, 71f
@@ -9179,7 +9179,7 @@ LOCAL_FUNCTION node_sidecar_ask
     beqz    t0, 75f
     mv      a0, s3                          # it serves the range's first slot
     ld      a1, (L + 24)(sp)
-    call    node_peer_serves
+    call    lantern_node_peer_serves
     beqz    a0, 75f
     ld      t2, (L + 16)(sp)                # the columns asked for that it custodies, not asked yet
     ld      t0, 0(t2)
@@ -9234,7 +9234,7 @@ LOCAL_FUNCTION node_sidecar_ask
     ld      a2, NodePeer_handle(s3)
     mv      a3, s9
     sub     a4, t3, s9
-    call    node_open
+    call    lantern_node_open
     beqz    a0, 78f
 75: addi    s3, s3, NodePeer__mem
     addi    s4, s4, -1
@@ -9247,7 +9247,7 @@ LOCAL_FUNCTION node_sidecar_ask
     j       73b
 76: ld      t0, (L + 64)(sp)
     bnez    t0, 77f
-    call    node_free_responses             # as many NodeResponse entries free, and room for the column requests and the blocks' request
+    call    lantern_node_free_responses             # as many NodeResponse entries free, and room for the column requests and the blocks' request
     ld      t0, (L + 72)(sp)
     addi    t0, t0, 1
     bltu    a0, t0, 78f
@@ -9271,7 +9271,7 @@ LOCAL_FUNCTION node_sidecar_ask
     LEAVE 96
 9:  li      a0, 1
     LEAVE 96
-END_FUNCTION node_sidecar_ask
+END_FUNCTION lantern_node_sidecar_ask
 
 /*
  * The Status refresh (node.md): the first peer with NODE_PEER_STATUS whose status_ms +
@@ -9279,7 +9279,7 @@ END_FUNCTION node_sidecar_ask
  * before), when the streams part has room for it; its status_ms takes time_ms. s3 a peer, s4 the
  * peers left. Locals: L the Status (96), L+96 the refresh's time.
  */
-LOCAL_FUNCTION node_status_refresh
+LOCAL_FUNCTION lantern_node_status_refresh
     ENTER 112
     ld      t0, (Node_streams + 8)(s1)      # room for it
     ld      t1, Node_messages(s1)
@@ -9310,11 +9310,11 @@ LOCAL_FUNCTION node_status_refresh
     addi    s4, s4, -1
     j       1b
 3:  addi    a0, sp, L
-    call    node_status_bytes
+    call    lantern_node_status_bytes
     mv      a0, s2
-    call    node_store_slot
+    call    lantern_node_store_slot
     addi    a1, s1, Node_config
-    call    node_fork
+    call    lantern_node_fork
     li      a1, 1
     li      a4, 84
     li      t1, FORK_FULU
@@ -9324,12 +9324,12 @@ LOCAL_FUNCTION node_status_refresh
 4:  li      a0, REQRESP_STATUS
     ld      a2, NodePeer_handle(s3)
     addi    a3, sp, L
-    call    node_open
+    call    lantern_node_open
     beqz    a0, 9f
     ld      t0, Node_time_ms(s1)
     sd      t0, NodePeer_status_ms(s3)
 9:  LEAVE 112
-END_FUNCTION node_status_refresh
+END_FUNCTION lantern_node_status_refresh
 
 /*
  * The sidecar retry (node.md): with no BlobSidecarsByRange or DataColumnSidecarsByRange of the node
@@ -9339,7 +9339,7 @@ END_FUNCTION node_status_refresh
  * sidecar_ms takes time_ms, and sidecar_peer 1 more. s3 an entry, s4 the entries left, s7 the
  * lowest slot, s8 the highest, then the count, s9 the fork of the store's slot, s10 its slot.
  */
-LOCAL_FUNCTION node_sidecar_retry
+LOCAL_FUNCTION lantern_node_sidecar_retry
     ENTER 16
     LDQ     t0, s1, Node_sidecar_ms         # its time
     li      t1, NODE_SIDECAR_RETRY_MS
@@ -9369,7 +9369,7 @@ LOCAL_FUNCTION node_sidecar_retry
     addi    s4, s4, -1
     j       3b
 4:  mv      a0, s2                          # the slots of the blocks below the store's slot that wait for sidecars
-    call    node_store_slot
+    call    lantern_node_store_slot
     mv      s10, a0
     li      s7, -1
     li      s8, 0
@@ -9406,7 +9406,7 @@ LOCAL_FUNCTION node_sidecar_retry
     sub     t0, t0, s7
     bgeu    t0, s8, 71f
     mv      a0, s3
-    call    node_columns_held
+    call    lantern_node_columns_held
     ld      t0, L(sp)
     or      t0, t0, t4
     sd      t0, L(sp)
@@ -9418,7 +9418,7 @@ LOCAL_FUNCTION node_sidecar_retry
     j       7b
 8:  mv      a0, s10                         # the fork of the store's slot
     addi    a1, s1, Node_config
-    call    node_fork
+    call    lantern_node_fork
     mv      s9, a0
     LDQ     a0, s1, Node_sidecar_peer       # the blob request's peer: it serves the first slot
     mv      a1, s7
@@ -9426,7 +9426,7 @@ LOCAL_FUNCTION node_sidecar_retry
     sltu    a2, s9, t0
     xori    a2, a2, 1
     ori     a2, a2, 2
-    call    node_next_peer
+    call    lantern_node_next_peer
     li      t0, -1
     beq     a0, t0, 9f
     mv      a0, a1
@@ -9434,21 +9434,21 @@ LOCAL_FUNCTION node_sidecar_retry
     mv      a2, s8
     mv      a3, s9
     addi    a4, sp, L
-    call    node_sidecar_ask
+    call    lantern_node_sidecar_ask
     ld      t0, Node_time_ms(s1)
     STQ     t0, s1, Node_sidecar_ms
     LDQ     t0, s1, Node_sidecar_peer
     addi    t0, t0, 1
     STQ     t0, s1, Node_sidecar_peer
 9:  LEAVE 16
-END_FUNCTION node_sidecar_retry
+END_FUNCTION lantern_node_sidecar_retry
 
 /*
  * The gap rule (node.md): with no block in NODE_BLOCK_HASHING and a block in NODE_BLOCK_WAITING below
  * sync_slot whose parent root no block has, sync_slot takes the head's slot + 1. s3 an entry, s4 the
  * entries left, s7 1 once a waiting block lacks its parent.
  */
-LOCAL_FUNCTION node_sync_gap
+LOCAL_FUNCTION lantern_node_sync_gap
     ENTER 0
     li      s7, 0
     PART    s3, s4, s1, Node_blocks
@@ -9463,7 +9463,7 @@ LOCAL_FUNCTION node_sync_gap
     ld      t1, Node_sync_slot(s1)
     bgeu    t0, t1, 2f
     addi    a0, s3, NodeBlock_parent_root
-    call    node_find_block
+    call    lantern_node_find_block
     li      t0, -1
     bne     a0, t0, 2f
     li      s7, 1
@@ -9472,14 +9472,14 @@ LOCAL_FUNCTION node_sync_gap
     j       1b
 3:  beqz    s7, 9f
     addi    a0, s1, Node_head_root
-    call    node_find_block
+    call    lantern_node_find_block
     li      t0, -1
     beq     a0, t0, 9f
     ld      t0, NodeBlock_slot(a1)
     addi    t0, t0, 1
     sd      t0, Node_sync_slot(s1)
 9:  LEAVE 0
-END_FUNCTION node_sync_gap
+END_FUNCTION lantern_node_sync_gap
 
 /*
  * a0 = 1 when a response waits for room, else 0. The bytes of each response are read. From
@@ -9496,7 +9496,7 @@ END_FUNCTION node_sync_gap
  * pass (0 counts, 1 sends), L+72 the column requests, L+80 the peer of the blocks, L+96 its index.
  * Then the sidecar retry and the backfill's request.
  */
-LOCAL_FUNCTION node_sync
+LOCAL_FUNCTION lantern_node_sync
     ENTER 112
     li      s7, 0
     ld      s4, (Node_streams + 8)(s1)      # the responses, from the last stream: an end moves the last
@@ -9510,7 +9510,7 @@ LOCAL_FUNCTION node_sync
     ld      t0, NodeStream_state(a0)
     li      t1, NODE_STREAM_RESPONSE
     bne     t0, t1, 1b
-    call    node_response
+    call    lantern_node_response
     or      s7, s7, a0
     j       1b
 3:  ld      s4, (Node_streams + 8)(s1)      # the request timeout (node.md): from the last stream, an end moves the last
@@ -9544,14 +9544,14 @@ LOCAL_FUNCTION node_sync
     bne     t0, t1, 35f
     li      a0, LIBP2P_EVENT_STREAM_RESET
     ld      a1, NodeStream_handle(s3)
-    call    node_out_handle
+    call    lantern_node_out_handle
 35: mv      a0, s3
-    call    node_end_stream
+    call    lantern_node_end_stream
     j       33b
 34: mv      a0, s2                          # the fork of the store's slot
-    call    node_store_slot
+    call    lantern_node_store_slot
     addi    a1, s1, Node_config
-    call    node_fork
+    call    lantern_node_fork
     sd      a0, (L + 40)(sp)
     li      t0, FORK_FULU
     bltu    a0, t0, 31f
@@ -9575,7 +9575,7 @@ LOCAL_FUNCTION node_sync
     ld      a2, NodePeer_handle(s3)
     li      a3, 0
     li      a4, 0
-    call    node_open
+    call    lantern_node_open
     beqz    a0, 31f
     ld      t0, NodePeer_flags(s3)
     ori     t0, t0, NODE_PEER_METADATA_ASKED
@@ -9586,9 +9586,9 @@ LOCAL_FUNCTION node_sync
 31: ld      t0, Node_flags(s1)
     andi    t0, t0, NODE_FLAG_SYNCING
     bnez    t0, 9f
-    call    node_sync_gap
+    call    lantern_node_sync_gap
     addi    a0, s1, Node_head_root
-    call    node_find_block
+    call    lantern_node_find_block
     li      t0, -1
     beq     a0, t0, 9f
     ld      s8, NodeBlock_slot(a1)
@@ -9603,7 +9603,7 @@ LOCAL_FUNCTION node_sync
     sltu    a2, t1, t2
     xori    a2, a2, 1
     ori     a2, a2, 2
-    call    node_next_peer
+    call    lantern_node_next_peer
     li      t0, -1
     beq     a0, t0, 90f
     sd      a0, (L + 96)(sp)
@@ -9624,13 +9624,13 @@ LOCAL_FUNCTION node_sync
     ld      a2, (L + 8)(sp)
     ld      a3, (L + 40)(sp)
     addi    a4, s1, Node_columns
-    call    node_sidecar_ask
+    call    lantern_node_sidecar_ask
     bnez    a0, 9f
 71: ld      s3, (L + 80)(sp)
     mv      a0, s2                          # version 2 from altair on
-    call    node_store_slot
+    call    lantern_node_store_slot
     addi    a1, s1, Node_config
-    call    node_fork
+    call    lantern_node_fork
     li      a1, 1
     li      t0, FORK_ALTAIR
     bltu    a0, t0, 7f
@@ -9639,7 +9639,7 @@ LOCAL_FUNCTION node_sync
     ld      a2, NodePeer_handle(s3)
     addi    a3, sp, L
     li      a4, 24
-    call    node_open
+    call    lantern_node_open
     beqz    a0, 9f
     ld      t0, Node_flags(s1)
     ori     t0, t0, NODE_FLAG_SYNCING
@@ -9655,7 +9655,7 @@ LOCAL_FUNCTION node_sync
     STQ     t0, s1, Node_sync_peer
     j       9f
 90: mv      a0, s2                          # none: a fresh Status of a peer, when the store's slot is above the start
-    call    node_store_slot
+    call    lantern_node_store_slot
     bleu    a0, s8, 9f
     ld      t0, Node_status_ms(s1)          # at most each NODE_STATUS_MS
     beqz    t0, 91f
@@ -9674,14 +9674,14 @@ LOCAL_FUNCTION node_sync
     LDQ     a0, s1, Node_status_peer        # the first peer from status_peer with a Status of the node's fork_digest
     li      a1, 0
     li      a2, 0
-    call    node_next_peer
+    call    lantern_node_next_peer
     li      t0, -1
     beq     a0, t0, 9f
     sd      a0, (L + 96)(sp)
     mv      s3, a1
     ld      s9, (L + 40)(sp)                # the fork of the store's slot: v2 from fulu
     addi    a0, sp, L
-    call    node_status_bytes
+    call    lantern_node_status_bytes
     li      a1, 1
     li      a4, 84
     li      t0, FORK_FULU
@@ -9691,45 +9691,45 @@ LOCAL_FUNCTION node_sync
 95: li      a0, REQRESP_STATUS
     ld      a2, NodePeer_handle(s3)
     addi    a3, sp, L
-    call    node_open
+    call    lantern_node_open
     beqz    a0, 9f
     ld      t0, Node_time_ms(s1)
     sd      t0, Node_status_ms(s1)
     ld      t0, (L + 96)(sp)
     addi    t0, t0, 1
     STQ     t0, s1, Node_status_peer
-9:  call    node_status_refresh
-    call    node_sidecar_retry
-    call    node_backfill_ask
+9:  call    lantern_node_status_refresh
+    call    lantern_node_sidecar_retry
+    call    lantern_node_backfill_ask
     mv      a0, s7
     LEAVE 112
-END_FUNCTION node_sync
+END_FUNCTION lantern_node_sync
 
 /*
  * The libp2p application notice a0 of the libp2p state a1. s3 the notice, s4 an entry, s7 method,
  * s8 version. Locals: L a Status (96).
  */
-LOCAL_FUNCTION node_notice
+LOCAL_FUNCTION lantern_node_notice
     ENTER 96
     mv      s3, a0
     ld      t0, LIBP2P_ACT_KIND(s3)
     li      t1, LIBP2P_ACTION_MESSAGE
     bne     t0, t1, 60f
-    call    node_message                    # a0, a1 as given
+    call    lantern_node_message                    # a0, a1 as given
     LEAVE 96
 60: li      t1, LIBP2P_ACTION_MESSAGE_STATUS
     bne     t0, t1, 62f
-    call    node_message_status
+    call    lantern_node_message_status
     LEAVE 96
 62: li      t1, LIBP2P_ACTION_STREAM_OPENED
     bne     t0, t1, 63f
     ld      a0, LIBP2P_ACT_SO_TAG(s3)       # the node's request stream: the request, then the close of our side
-    call    node_find_opening
+    call    lantern_node_find_opening
     li      t0, -1
     bne     a0, t0, 620f
     li      a0, LIBP2P_EVENT_STREAM_RESET   # a tag of no stream of the node: the stream goes
     ld      a1, LIBP2P_ACT_STREAM(s3)
-    call    node_out_handle
+    call    lantern_node_out_handle
     LEAVE 96
 620: mv     s4, a1
     ld      t0, LIBP2P_ACT_STREAM(s3)
@@ -9746,7 +9746,7 @@ LOCAL_FUNCTION node_notice
     addi    s7, s8, 32 + 7
     andi    s7, s7, -8
     addi    a0, s7, 24
-    call    node_out
+    call    lantern_node_out
     beqz    a0, 68f
     sd      s7, 0(a0)
     li      t0, LIBP2P_EVENT_STREAM_WRITE
@@ -9767,7 +9767,7 @@ LOCAL_FUNCTION node_notice
     sd      zero, (NodeStream_list + 16)(s4)
 69: LEAVE 96
 66: li      a0, 24
-    call    node_out
+    call    lantern_node_out
     beqz    a0, 68f
     li      t0, LIBP2P_EVENT_STREAM_CLOSE
     sd      t0, 8(a0)
@@ -9776,18 +9776,18 @@ LOCAL_FUNCTION node_notice
     LEAVE 96
 68: li      a0, LIBP2P_EVENT_STREAM_RESET   # no room: a reset
     ld      a1, NodeStream_handle(s4)
-    call    node_out_handle
+    call    lantern_node_out_handle
     mv      a0, s4
-    call    node_end_stream
+    call    lantern_node_end_stream
     LEAVE 96
 63: li      t1, LIBP2P_ACTION_STREAM_FAILED
     bne     t0, t1, 61f
     ld      a0, LIBP2P_ACT_STREAM(s3)       # its tag
-    call    node_find_opening
+    call    lantern_node_find_opening
     li      t0, -1
     beq     a0, t0, 69b
     mv      a0, a1
-    call    node_end_stream
+    call    lantern_node_end_stream
     LEAVE 96
 61: li      t1, LIBP2P_ACTION_PEER_CONNECTED
     bne     t0, t1, 64f
@@ -9799,7 +9799,7 @@ LOCAL_FUNCTION node_notice
     beqz    t1, 65f
     addi    t1, t1, -1
     sd      t1, Node_dialing(s1)
-65: call    node_peer_room                  # a new peer: its entry; DISCONNECT when the table is full, or inbound past the open room
+65: call    lantern_node_peer_room                  # a new peer: its entry; DISCONNECT when the table is full, or inbound past the open room
     ld      t4, (Node_peers + 8)(s1)
     bgeu    t4, a0, 651f
     ld      t0, LIBP2P_ACT_PC_DIRECTION(s3)
@@ -9808,7 +9808,7 @@ LOCAL_FUNCTION node_notice
     bltu    a2, a1, 652f
 651: li     a0, LIBP2P_EVENT_DISCONNECT
     ld      a1, LIBP2P_ACT_PEER(s3)
-    call    node_out_handle
+    call    lantern_node_out_handle
     LEAVE 96
 652: li     t3, NodePeer__mem
 1:  mul     s4, t4, t3
@@ -9842,11 +9842,11 @@ LOCAL_FUNCTION node_notice
     li      t1, LIBP2P_OUTBOUND
     bne     t0, t1, 69b
     addi    a0, sp, L
-    call    node_status_bytes
+    call    lantern_node_status_bytes
     mv      a0, s2
-    call    node_store_slot
+    call    lantern_node_store_slot
     addi    a1, s1, Node_config
-    call    node_fork
+    call    lantern_node_fork
     li      a1, 1
     li      a4, 84
     li      t0, FORK_FULU
@@ -9856,7 +9856,7 @@ LOCAL_FUNCTION node_notice
 3:  li      a0, REQRESP_STATUS
     ld      a2, NodePeer_handle(s4)
     addi    a3, sp, L
-    call    node_open
+    call    lantern_node_open
     LEAVE 96
 64: li      t1, LIBP2P_ACTION_DIAL_FAILED
     bne     t0, t1, 10f
@@ -9872,16 +9872,16 @@ LOCAL_FUNCTION node_notice
 10: li      t1, LIBP2P_ACTION_PEER_DISCONNECTED
     bne     t0, t1, 20f
     ld      a0, LIBP2P_ACT_PEER(s3)
-    call    node_find_peer
+    call    lantern_node_find_peer
     li      t0, -1
     beq     a0, t0, 19f
     mv      a0, a1
-    call    node_drop_peer
+    call    lantern_node_drop_peer
 19: LEAVE 96
 20: li      t1, LIBP2P_ACTION_STREAM_INBOUND
     bne     t0, t1, 30f
     ld      a0, LIBP2P_ACT_SI_PROTOCOL(s3)  # a request stream: its entry, or a reset
-    call    node_protocol
+    call    lantern_node_protocol
     beqz    a0, 28f
     mv      s7, a0
     mv      s8, a1
@@ -9912,21 +9912,21 @@ LOCAL_FUNCTION node_notice
     sd      t0, (NodeStream_list + 8)(s4)
     sd      zero, (NodeStream_list + 16)(s4)
     mv      a0, s4
-    call    node_request
+    call    lantern_node_request
     LEAVE 96
 28: li      a0, LIBP2P_EVENT_STREAM_RESET
     ld      a1, LIBP2P_ACT_STREAM(s3)
-    call    node_out_handle
+    call    lantern_node_out_handle
     LEAVE 96
 30: li      t1, LIBP2P_ACTION_STREAM_DATA
     bne     t0, t1, 40f
     ld      a0, LIBP2P_ACT_STREAM(s3)       # request bytes: kept, then read
-    call    node_find_stream
+    call    lantern_node_find_stream
     li      t0, -1
     beq     a0, t0, 39f
     mv      s4, a1
     mv      a0, s4                          # its list: of its NodeResponse, else its own
-    call    node_stream_list
+    call    lantern_node_stream_list
     ld      t0, 16(a0)
     ld      a2, LIBP2P_ACT_SD_COUNT(s3)
     ld      t1, 0(a0)
@@ -9956,20 +9956,20 @@ LOCAL_FUNCTION node_notice
     ld      t0, NodeStream_state(s4)
     li      t1, NODE_STREAM_RESPONSE
     bne     t0, t1, 37f
-    call    node_response                   # response bytes of the node's request
+    call    lantern_node_response                   # response bytes of the node's request
     LEAVE 96
-37: call    node_request
+37: call    lantern_node_request
 39: LEAVE 96
 38: li      a0, LIBP2P_EVENT_STREAM_RESET   # more than the room: a reset
     ld      a1, NodeStream_handle(s4)
-    call    node_out_handle
+    call    lantern_node_out_handle
     mv      a0, s4
-    call    node_end_stream
+    call    lantern_node_end_stream
     LEAVE 96
 40: li      t1, LIBP2P_ACTION_STREAM_EOF
     bne     t0, t1, 50f
     ld      a0, LIBP2P_ACT_STREAM(s3)
-    call    node_find_stream
+    call    lantern_node_find_stream
     li      t0, -1
     beq     a0, t0, 49f
     ld      t0, NodeStream_state(a1)
@@ -9978,27 +9978,27 @@ LOCAL_FUNCTION node_notice
     li      t0, 1                           # the response is complete
     sd      t0, NodeStream_next(a1)
     mv      a0, a1
-    call    node_response
+    call    lantern_node_response
     LEAVE 96
 41: li      t1, NODE_STREAM_EOF             # while its request is read
     bgtu    t0, t1, 49f
     sd      t1, NodeStream_state(a1)
     mv      a0, a1
-    call    node_request
+    call    lantern_node_request
 49: LEAVE 96
 50: li      t1, LIBP2P_ACTION_STREAM_RESET
     bne     t0, t1, 59f
     ld      a0, LIBP2P_ACT_STREAM(s3)
-    call    node_find_stream
+    call    lantern_node_find_stream
     li      t0, -1
     beq     a0, t0, 59f
     mv      a0, a1
-    call    node_end_stream
+    call    lantern_node_end_stream
 59: LEAVE 96
-END_FUNCTION node_notice
+END_FUNCTION lantern_node_notice
 
 /* a0 = the WAKEUP time of the libp2p actions in the ByteList a0, after their application notices, of the libp2p state a1. s3 an action, s4 the end, s7 the time, s8 the state. */
-LOCAL_FUNCTION node_p2p_notices
+LOCAL_FUNCTION lantern_node_p2p_notices
     ENTER 0
     mv      s8, a1
     ld      t0, 8(a0)
@@ -10018,16 +10018,16 @@ LOCAL_FUNCTION node_p2p_notices
     bgeu    t0, t1, 3f
     mv      a0, s3
     mv      a1, s8
-    call    node_notice
+    call    lantern_node_notice
 3:  ld      t0, 0(s3)
     add     s3, s3, t0
     j       1b
 9:  mv      a0, s7
     LEAVE 0
-END_FUNCTION node_p2p_notices
+END_FUNCTION lantern_node_p2p_notices
 
 /* The libp2p events of the P2P events from a0 to a1 join the end of the node's queued events. s3, s4 the range, s7 the queue. */
-LOCAL_FUNCTION node_p2p_append
+LOCAL_FUNCTION lantern_node_p2p_append
     ENTER 0
     mv      s3, a0
     mv      s4, a1
@@ -10048,13 +10048,13 @@ LOCAL_FUNCTION node_p2p_append
     add     s3, s3, t0
     j       1b
 9:  LEAVE 0
-END_FUNCTION node_p2p_append
+END_FUNCTION lantern_node_p2p_append
 
 /*
  * Of the P2P events from a0 to a1, the first a2 were taken: a0 = the next P2P event, or a1;
  * a1 = the bytes of the libp2p events of the P2P events from there on. Uses t0-t2.
  */
-LOCAL_FUNCTION node_p2p_left
+LOCAL_FUNCTION lantern_node_p2p_left
     UNWIND_END_PROLOGUE
     mv      t0, a0
     mv      t1, a1
@@ -10075,10 +10075,10 @@ LOCAL_FUNCTION node_p2p_left
     add     t0, t0, t2
     j       1b
 9:  ret
-END_FUNCTION node_p2p_left
+END_FUNCTION lantern_node_p2p_left
 
 /* a0 = the events in the first a0 bytes of the node's queue. Uses t0-t3. */
-LOCAL_FUNCTION node_out_count
+LOCAL_FUNCTION lantern_node_out_count
     UNWIND_END_PROLOGUE
     P2P_OUT t0
     addi    t0, t0, 24
@@ -10092,7 +10092,7 @@ LOCAL_FUNCTION node_out_count
     j       1b
 2:  mv      a0, t2
     ret
-END_FUNCTION node_out_count
+END_FUNCTION lantern_node_out_count
 
 /*
  * libp2p_step of the state a0 with the tick a1, the event list a2 and the scratch a3, its
@@ -10100,7 +10100,7 @@ END_FUNCTION node_out_count
  * a5: a0 = 0 and a1 = the actions' ByteList; 1 when the room is short; or libp2p's status, with
  * no action added. s3 state, s4 tick, s7 list, s8 scratch, s9 result, s10 the action.
  */
-LOCAL_FUNCTION node_p2p_round
+LOCAL_FUNCTION lantern_node_p2p_round
     ENTER 0
     mv      s3, a0
     mv      s4, a1
@@ -10151,7 +10151,7 @@ LOCAL_FUNCTION node_p2p_round
     LEAVE 0
 8:  li      a0, 1
 9:  LEAVE 0
-END_FUNCTION node_p2p_round
+END_FUNCTION lantern_node_p2p_round
 
 /*
  * (out, count): the protocol IDs of the req/resp protocols the node answers, as libp2p
@@ -10165,7 +10165,7 @@ FUNCTION lantern_node_protocols
     mv      s2, a1
     li      s3, 0
 1:  mv      a0, s3
-    call    node_protocol
+    call    lantern_node_protocol
     beqz    a0, 2f
     addi    s3, s3, 1
     j       1b
@@ -10182,7 +10182,7 @@ FUNCTION lantern_node_protocols
     addi    s5, s1, 24
 3:  bgeu    s4, s3, 7f
     mv      a0, s4
-    call    node_protocol
+    call    lantern_node_protocol
     sd      a0, L(sp)
     sd      a1, (L + 8)(sp)
     mv      a0, s5
@@ -10215,7 +10215,7 @@ END_FUNCTION lantern_node_protocols
  * first u64 is not 0 when the bytes are no SignedBeaconBlock. a0 = the status. s3 the ByteList,
  * s4 the entry.
  */
-LOCAL_FUNCTION node_block_entry
+LOCAL_FUNCTION lantern_node_block_entry
     ENTER 16
     addi    s3, a0, NodeEvent_bytes
     mv      s4, a1
@@ -10228,7 +10228,7 @@ LOCAL_FUNCTION node_block_entry
     add     t0, s3, t0
     LDU64   a0, t0, 100, t1                 # the slot of the message
     addi    a1, s1, Node_config
-    call    node_fork
+    call    lantern_node_fork
     mv      t6, a0
     mv      a0, s3
     mv      a1, s5
@@ -10239,7 +10239,7 @@ LOCAL_FUNCTION node_block_entry
     LEAVE 16
 9:  li      a0, LANTERN_OK
     LEAVE 16
-END_FUNCTION node_block_entry
+END_FUNCTION lantern_node_block_entry
 
 /*
  * (node, store, p2p, tick, events, scratch, actions, result): s1 node, s2 store, s3 the events,
@@ -10418,7 +10418,7 @@ FUNCTION lantern_node_step
     bnez    t6, 22f
     mv      a0, t0
     mv      a1, t2
-    call    node_submit_check
+    call    lantern_node_submit_check
     bnez    a0, 7f
     add     s10, s10, t2                    # twice its bytes of actions
     ld      t4, Node_flags(s1)              # subscribed: p2p_out for its publishes, and scratch for one
@@ -10545,7 +10545,7 @@ FUNCTION lantern_node_step
     sd      t2, (L + 168)(sp)
     sd      t5, (L + 176)(sp)
     mv      a0, t0
-    call    node_api_check
+    call    lantern_node_api_check
     ld      t0, (L + 160)(sp)
     ld      t2, (L + 168)(sp)
     ld      t5, (L + 176)(sp)
@@ -10579,13 +10579,13 @@ FUNCTION lantern_node_step
     add     t0, t0, t2
     j       1b
 5:  sd      t5, L(sp)
-    call    node_column_count               # the columns sampled, for the blobs part
+    call    lantern_node_column_count               # the columns sampled, for the blobs part
     sd      a0, (L + 152)(sp)
-    call    node_api_publish_count          # an answer for each publishBlockV2 that waits
+    call    lantern_node_api_publish_count          # an answer for each publishBlockV2 that waits
     ld      t0, (L + 192)(sp)
     add     t0, t0, a0
     sd      t0, (L + 192)(sp)
-    call    node_api_event_count            # with event streams: NODE_API_SCRATCH of scratch, 1024 per event for each
+    call    lantern_node_api_event_count            # with event streams: NODE_API_SCRATCH of scratch, 1024 per event for each
     beqz    a0, 58f
     ld      t0, (L + 184)(sp)
     li      t1, NODE_API_SCRATCH
@@ -10628,7 +10628,7 @@ FUNCTION lantern_node_step
     li      t3, 1
     bne     t2, t3, 582f
     sd      t1, (L + 72)(sp)
-    call    node_eth1_snapshot_size
+    call    lantern_node_eth1_snapshot_size
     ld      t1, (L + 72)(sp)
     add     t1, t1, a0
     li      t2, 2048
@@ -10733,7 +10733,7 @@ FUNCTION lantern_node_step
 56:
     ld      t0, (L + 192)(sp)               # api: an entry free for each API event
     beqz    t0, 57f
-    call    node_api_free
+    call    lantern_node_api_free
     ld      t0, (L + 192)(sp)
     bltu    a0, t0, 95f
 57: LDQ     t0, s1, Node_eth1_state         # eth1_deposits: NODE_ETH1_ROOM entries free while the follower runs
@@ -10818,7 +10818,7 @@ FUNCTION lantern_node_step
     bne     t0, t1, 12f
     mv      a0, s9
     mv      a1, s10
-    call    node_block_entry
+    call    lantern_node_block_entry
     bnez    a0, 14f
     addi    s10, s10, NODE_ROOT_ENTRY
 12: ld      t0, 0(s9)
@@ -10838,14 +10838,14 @@ FUNCTION lantern_node_step
     call    lantern_copy
     mv      a0, s3
     mv      a1, s4
-    call    node_p2p_append
+    call    lantern_node_p2p_append
     ld      a0, (L + 16)(sp)
     ld      a1, (L + 24)(sp)
     mv      a2, s9
     ld      a3, (L + 48)(sp)
     ld      a4, (L + 72)(sp)
     addi    a5, sp, L + 88
-    call    node_p2p_round
+    call    lantern_node_p2p_round
     beqz    a0, 24f
     sd      a0, (L + 104)(sp)               # a status of libp2p: the queue as it was, and nothing else changed
     sd      s10, 16(s9)
@@ -10864,25 +10864,25 @@ FUNCTION lantern_node_step
     j       14f
 24: sd      a1, (L + 96)(sp)                # from here on the step holds
     mv      a0, s10                         # the P2P events libp2p took: k less the queued ones
-    call    node_out_count
+    call    lantern_node_out_count
     ld      t0, (L + 88)(sp)
     sub     a2, t0, a0
     bgeu    t0, a0, 25f
     li      a2, 0
 25: mv      a0, s3
     mv      a1, s4
-    call    node_p2p_left
+    call    lantern_node_p2p_left
     sd      a0, (L + 32)(sp)                # the step ends at the next one
     ld      t0, 16(s9)                      # the ones left go from the queue's end
     sub     t0, t0, a1
     sd      t0, 16(s9)
     ld      a0, (L + 88)(sp)                # the ones taken from its front
-    call    node_out_consume
+    call    lantern_node_out_consume
 29: ld      a0, (L + 96)(sp)
     ld      a1, (L + 16)(sp)
-    call    node_p2p_notices
+    call    lantern_node_p2p_notices
     sd      a0, (L + 80)(sp)
-30: call    node_prune                      # at a new finalized epoch, the prune; then each event, in order
+30: call    lantern_node_prune                      # at a new finalized epoch, the prune; then each event, in order
     ld      t0, 0(s5)
     add     s10, s5, t0
     li      s8, 0
@@ -10895,7 +10895,7 @@ FUNCTION lantern_node_step
     beq     t0, t1, 15f
     mv      a0, s9
     mv      a1, s10
-    call    node_event
+    call    lantern_node_event
     ld      t0, 8(s9)
     li      t1, NODE_EV_BLOCK
     bne     t0, t1, 15f
@@ -10903,36 +10903,36 @@ FUNCTION lantern_node_step
 15: ld      t0, 0(s9)
     add     s9, s9, t0
     j       6b
-9:  call    node_head
-    call    node_publish_poll               # the answers of the published blocks whose import ended
-    call    node_eth1_check_due             # the eth1 follower's check, each store epoch
-    call    node_custody_due                # validator custody's check, each store epoch
-    call    node_engine_next
-    call    node_shed                       # the post-states the node can rebuild go
-    call    node_gossip_shed                # the proposer states of gossip no work uses go
-    call    node_api_head_events            # the head and finalized_checkpoint events, at a quiet point
-    call    node_lc_due                     # the light client updates due on gossip
-    call    node_produce_due                # the produceBlockV3 entries whose bid is late
-    call    node_replay_due                 # the replay in flight: its next blocks
-    call    node_reconstruct_due            # the reconstruction of a block's columns, and its sidecars
-    call    node_backfill_link              # the backfill's blocks of the chain join the Db
-    call    node_drop_sidecars              # the sidecars the node no longer serves go
+9:  call    lantern_node_head
+    call    lantern_node_publish_poll               # the answers of the published blocks whose import ended
+    call    lantern_node_eth1_check_due             # the eth1 follower's check, each store epoch
+    call    lantern_node_custody_due                # validator custody's check, each store epoch
+    call    lantern_node_engine_next
+    call    lantern_node_shed                       # the post-states the node can rebuild go
+    call    lantern_node_gossip_shed                # the proposer states of gossip no work uses go
+    call    lantern_node_api_head_events            # the head and finalized_checkpoint events, at a quiet point
+    call    lantern_node_lc_due                     # the light client updates due on gossip
+    call    lantern_node_produce_due                # the produceBlockV3 entries whose bid is late
+    call    lantern_node_replay_due                 # the replay in flight: its next blocks
+    call    lantern_node_reconstruct_due            # the reconstruction of a block's columns, and its sidecars
+    call    lantern_node_backfill_link              # the backfill's blocks of the chain join the Db
+    call    lantern_node_drop_sidecars              # the sidecars the node no longer serves go
     sd      zero, (L + 112)(sp)
     ld      t0, (L + 16)(sp)                # the next block of each stream that serves, then libp2p again
     beqz    t0, 40f
-    call    node_subscribe
-    call    node_serve
+    call    lantern_node_subscribe
+    call    lantern_node_serve
     sd      a0, (L + 112)(sp)
-    call    node_vote_due                   # the votes of valid aggregates whose slot is past
+    call    lantern_node_vote_due                   # the votes of valid aggregates whose slot is past
     ld      t0, (L + 112)(sp)
     or      t0, t0, a0
     sd      t0, (L + 112)(sp)
-    call    node_sync
+    call    lantern_node_sync
     ld      t0, (L + 112)(sp)
     or      t0, t0, a0
     sd      t0, (L + 112)(sp)
     ld      a0, (L + 24)(sp)
-    call    node_lookup
+    call    lantern_node_lookup
     sd      zero, (L + 104)(sp)
 32: P2P_OUT a2
     ld      t0, 16(a2)
@@ -10947,14 +10947,14 @@ FUNCTION lantern_node_step
     ld      a3, (L + 48)(sp)
     li      a4, 4096
     addi    a5, sp, L + 88
-    call    node_p2p_round
+    call    lantern_node_p2p_round
     bnez    a0, 40f
     sd      a1, (L + 96)(sp)
     ld      a0, (L + 88)(sp)
-    call    node_out_consume
+    call    lantern_node_out_consume
     ld      a0, (L + 96)(sp)
     ld      a1, (L + 16)(sp)
-    call    node_p2p_notices
+    call    lantern_node_p2p_notices
     sd      a0, (L + 80)(sp)
     j       32b
 40: P2P_OUT t0                              # events left, or a stream that waits: the next step is due now
@@ -11057,7 +11057,7 @@ FUNCTION lantern_node_run
     mv      a4, s6
     mv      a5, s7
     mv      a6, s8
-    call    node_run_lc_serve
+    call    lantern_node_run_lc_serve
     LEAVE 192
 4:  addi    t1, t0, -NODE_WORK_LC_GOSSIP    # LC_GOSSIP, LC_PUBLISH: the latest update of a topic, in the event's room
     li      t2, NODE_WORK_LC_PUBLISH - NODE_WORK_LC_GOSSIP
@@ -11069,7 +11069,7 @@ FUNCTION lantern_node_run
     mv      a4, s6
     mv      a5, s7
     mv      a6, s8
-    call    node_run_lc_gossip
+    call    lantern_node_run_lc_gossip
     LEAVE 192
 41: addi    t1, t0, -NODE_WORK_LC_BLOCK     # the light client works: of the light client store, state_c
     li      t2, NODE_WORK_LC_HEAD - NODE_WORK_LC_BLOCK
@@ -11082,7 +11082,7 @@ FUNCTION lantern_node_run
     ld      a5, (L + 80)(sp)
     mv      a6, s6
     mv      a7, s7
-    call    node_run_lc
+    call    lantern_node_run_lc
     LEAVE 192
 5:  li      t1, NODE_WORK_IMPORT_BLOCK
     bne     t0, t1, 10f
@@ -11116,11 +11116,11 @@ FUNCTION lantern_node_run
     LDU64   a0, t0, 100, t1
     mv      s9, a0                          # the block's slot, then its fork
     addi    a1, s1, Node_config
-    call    node_fork
+    call    lantern_node_fork
     mv      s10, a0
     ld      a0, NODE_STATE_SLOT(s4)         # the state's slot of the block's fork
     addi    a1, s1, Node_config
-    call    node_fork
+    call    lantern_node_fork
     bne     a0, s10, 19f
     ld      a0, NODE_STATE_SLOT(s4)         # slots_done: the state at the block's slot, the first of its fork
     li      t3, 0
@@ -11128,7 +11128,7 @@ FUNCTION lantern_node_run
     beqz    a0, 11f
     addi    a0, a0, -1
     addi    a1, s1, Node_config
-    call    node_fork
+    call    lantern_node_fork
     sub     t3, a0, s10
     snez    t3, t3
 11: sd      t3, (L + BlockOptions_slots_done)(sp)
@@ -11151,7 +11151,7 @@ FUNCTION lantern_node_run
     bnez    t0, 973f
     mv      a0, s5
     mv      a1, s7
-    call    node_vote_counts
+    call    lantern_node_vote_counts
     li      a0, LANTERN_OK
 973: LEAVE 192
 18: li      t0, LANTERN_INVALID_ENCODING
@@ -11166,7 +11166,7 @@ FUNCTION lantern_node_run
     bne     t0, t1, 20f
     ld      a0, NODE_STATE_SLOT(s4)         # JUSTIFIED_STATE: the fork of the state's slot
     addi    a1, s1, Node_config
-    call    node_fork
+    call    lantern_node_fork
     mv      t6, a0
     mv      a0, s2
     mv      a1, s4
@@ -11176,7 +11176,7 @@ FUNCTION lantern_node_run
     bne     t0, t1, 30f
     ld      a0, NODE_STATE_SLOT(s4)         # TARGET_STATE: store_target_checkpoint_state of the checkpoint
     addi    a1, s1, Node_config
-    call    node_fork
+    call    lantern_node_fork
     mv      t6, a0
     ld      t0, NodeAction_target(s3)
     PART    a1, t1, s1, Node_checkpoints
@@ -11199,7 +11199,7 @@ FUNCTION lantern_node_run
     add     t0, s5, t0
     LDU64   a0, t0, 4, t1
     addi    a1, s1, Node_config
-    call    node_fork
+    call    lantern_node_fork
     mv      t6, a0
     mv      a0, s2
     mv      a1, s5
@@ -11213,14 +11213,14 @@ FUNCTION lantern_node_run
 40: li      t1, NODE_WORK_ATTESTER_SLASHING
     bne     t0, t1, 50f
     mv      a0, s2                          # ATTESTER_SLASHING: the fork of the store's slot
-    call    node_store_slot
+    call    lantern_node_store_slot
     addi    a1, s1, Node_config
-    call    node_fork
+    call    lantern_node_fork
     mv      s10, a0
     beqz    s4, 42f                         # no post-state of the justified root; a state of another fork: IGNORE
     ld      a0, NODE_STATE_SLOT(s4)
     addi    a1, s1, Node_config
-    call    node_fork
+    call    lantern_node_fork
     bne     a0, s10, 69f
 41: mv      t6, s10
     mv      a0, s2
@@ -11278,7 +11278,7 @@ FUNCTION lantern_node_run
 504: LDU64  s9, t0, NODE_COLUMN_HEADER, t1
 503: mv     a0, s9
     addi    a1, s1, Node_config
-    call    node_fork
+    call    lantern_node_fork
     mv      t6, a0
     li      t0, SLOTS_PER_EPOCH
     divu    t0, s9, t0
@@ -11330,14 +11330,14 @@ FUNCTION lantern_node_run
 60: li      t1, NODE_WORK_GOSSIP
     bne     t0, t1, 70f
     mv      a0, s2                          # GOSSIP: the fork of the store's slot; a head state of another: IGNORE
-    call    node_store_slot
+    call    lantern_node_store_slot
     addi    a1, s1, Node_config
-    call    node_fork
+    call    lantern_node_fork
     mv      s10, a0
     beqz    s4, 61f
     ld      a0, NODE_STATE_SLOT(s4)
     addi    a1, s1, Node_config
-    call    node_fork
+    call    lantern_node_fork
     bne     a0, s10, 69f
 61: ld      t0, (L + 64)(sp)                # the inputs of the fork's node_gossip
     sd      t0, (L + 96 + NodeGossip_seen)(sp)
@@ -11354,7 +11354,7 @@ FUNCTION lantern_node_run
     beqz    s9, 62f
     ld      a0, NODE_STATE_SLOT(s9)
     addi    a1, s1, Node_config
-    call    node_fork
+    call    lantern_node_fork
     beq     a0, s10, 62f
     li      s9, 0
 62: sd      s9, (L + 96 + NodeGossip_proposer)(sp)
@@ -11362,7 +11362,7 @@ FUNCTION lantern_node_run
     beqz    s9, 63f
     ld      a0, NODE_STATE_SLOT(s9)
     addi    a1, s1, Node_config
-    call    node_fork
+    call    lantern_node_fork
     beq     a0, s10, 63f
     li      s9, 0
 63: sd      s9, (L + 96 + NodeGossip_justified)(sp)
@@ -11392,7 +11392,7 @@ FUNCTION lantern_node_run
     add     t0, s5, t0
     LDU64   a0, t0, 100, t1
     addi    a1, s1, Node_config
-    call    node_fork
+    call    lantern_node_fork
     mv      t6, a0
     mv      a0, s5
     mv      a1, s6
@@ -11412,7 +11412,7 @@ FUNCTION lantern_node_run
     add     t0, s5, t0
     LDQ     a0, t0, NODE_BLOB_HEADER
     addi    a1, s1, Node_config
-    call    node_fork
+    call    lantern_node_fork
     mv      t6, a0
     mv      a0, s5
     addi    a1, s1, Node_config
@@ -11435,7 +11435,7 @@ FUNCTION lantern_node_run
     add     t0, s5, t0
     LDU64   a0, t0, NODE_COLUMN_HEADER, t1
     addi    a1, s1, Node_config
-    call    node_fork
+    call    lantern_node_fork
     li      t0, FORK_FULU
     bne     a0, t0, 18b
     mv      a0, s5
@@ -11455,7 +11455,7 @@ FUNCTION lantern_node_run
     add     t0, s5, t0
     LDU64   a0, t0, 100, t1
     addi    a1, s1, Node_config
-    call    node_fork
+    call    lantern_node_fork
     mv      t6, a0
     li      t0, FORK_BELLATRIX
     bltu    t6, t0, 86f
@@ -11481,28 +11481,28 @@ FUNCTION lantern_node_run
 83: li      t1, NODE_WORK_FORKCHOICE
     bne     t0, t1, 830f
     mv      a0, s2                          # FORKCHOICE: of the fork of the store's slot
-    call    node_store_slot
+    call    lantern_node_store_slot
     addi    a1, s1, Node_config
-    call    node_fork
+    call    lantern_node_fork
     mv      s10, a0
     li      t0, FORK_BELLATRIX
     bltu    s10, t0, 86f
     addi    a0, s1, Node_head_root          # the ForkchoiceState at L+96: head, safe (justified), finalized
-    call    node_store_find
+    call    lantern_node_store_find
     li      t0, -1
     beq     a0, t0, 87f
     addi    t0, sp, L + 96
     addi    t1, a1, BlockNode_block_hash
     COPY32  t0, t1
     addi    a0, s2, Store_justified_checkpoint + 8
-    call    node_store_find
+    call    lantern_node_store_find
     li      t0, -1
     beq     a0, t0, 87f
     addi    t0, sp, L + 128
     addi    t1, a1, BlockNode_block_hash
     COPY32  t0, t1
     addi    a0, s2, Store_finalized_checkpoint + 8
-    call    node_store_find
+    call    lantern_node_store_find
     li      t0, -1
     beq     a0, t0, 87f
     addi    t0, sp, L + 160
@@ -11610,7 +11610,7 @@ FUNCTION lantern_node_run
     li      t0, Node_payload_root
     add     a4, s1, t0
     mv      t6, s10
-    call    api_payload_event_text
+    call    lantern_api_payload_event_text
     bnez    a0, 842f
     ld      t0, 0(s7)
     add     t1, s7, t0
@@ -11643,7 +11643,7 @@ FUNCTION lantern_node_run
     sd      s4, (L + 32)(sp)
     ld      a0, NODE_STATE_SLOT(s4)
     addi    a1, s1, Node_config
-    call    node_fork
+    call    lantern_node_fork
     mv      s10, a0
     li      t0, FORK_BELLATRIX
     bltu    s10, t0, 836f
@@ -11682,21 +11682,21 @@ FUNCTION lantern_node_run
     sd      t0, (L + 24)(sp)
 8336:
     ADDQ    a0, s1, Node_payload_root       # the ForkchoiceState: the parent hash, safe (justified), finalized
-    call    node_store_find
+    call    lantern_node_store_find
     li      t0, -1
     beq     a0, t0, 839f
     addi    t0, sp, L + 96
     addi    t1, a1, BlockNode_block_hash
     COPY32  t0, t1
     addi    a0, s2, Store_justified_checkpoint + 8
-    call    node_store_find
+    call    lantern_node_store_find
     li      t0, -1
     beq     a0, t0, 839f
     addi    t0, sp, L + 128
     addi    t1, a1, BlockNode_block_hash
     COPY32  t0, t1
     addi    a0, s2, Store_finalized_checkpoint + 8
-    call    node_store_find
+    call    lantern_node_store_find
     li      t0, -1
     beq     a0, t0, 839f
     addi    t0, sp, L + 160
@@ -11749,7 +11749,7 @@ FUNCTION lantern_node_run
     beqz    s4, 837b                        # PRODUCE_CHECK: lantern_node_produce_check of the request in the entry's cursor
     ld      a0, NODE_STATE_SLOT(s4)
     addi    a1, s1, Node_config
-    call    node_fork
+    call    lantern_node_fork
     mv      t6, a0
     ld      t0, NodeAction_target(s3)
     PART    t1, t2, s1, Node_api
@@ -11777,7 +11777,7 @@ FUNCTION lantern_node_run
     add     t0, t1, t0
     ld      a0, NodeApi_slot(t0)
     addi    a1, s1, Node_config
-    call    node_fork
+    call    lantern_node_fork
     mv      s10, a0
     li      t0, NodeEvent_chunk + 24
     bltu    s8, t0, 8419f
@@ -11845,7 +11845,7 @@ FUNCTION lantern_node_run
     beqz    s5, 837b
     ld      a0, NODE_STATE_SLOT(s4)
     addi    a1, s1, Node_config
-    call    node_fork
+    call    lantern_node_fork
     mv      t6, a0
     mv      a0, s4
     ld      a1, (L + 72)(sp)
@@ -11866,7 +11866,7 @@ FUNCTION lantern_node_run
     beqz    t0, 837b
     ld      a0, NODE_STATE_SLOT(s4)
     addi    a1, s1, Node_config
-    call    node_fork
+    call    lantern_node_fork
     mv      t6, a0
     mv      a0, s4
     mv      a1, s5
@@ -11884,7 +11884,7 @@ FUNCTION lantern_node_run
     beqz    s4, 837b                        # ETH1_CHECK: lantern_node_eth1_check, its two words at index and checkpoint
     ld      a0, NODE_STATE_SLOT(s4)
     addi    a1, s1, Node_config
-    call    node_fork
+    call    lantern_node_fork
     mv      t6, a0
     mv      a0, s4
     addi    a1, sp, (L + 96)
@@ -11904,7 +11904,7 @@ FUNCTION lantern_node_run
     mv      a2, s5
     mv      a3, s6
     mv      a4, s1
-    call    node_run_archive
+    call    lantern_node_run_archive
     li      t0, LANTERN_BUFFER_TOO_SMALL
     beq     a0, t0, 8449f
     sd      a0, NodeEvent_result(s7)
@@ -11914,13 +11914,13 @@ FUNCTION lantern_node_run
     bne     t0, t1, 8429f
     beqz    s4, 837b                        # CUSTODY: lantern_node_custody with the store's epoch, its count at NodeEvent_index
     mv      a0, s2
-    call    node_store_slot
+    call    lantern_node_store_slot
     li      t0, SLOTS_PER_EPOCH
     divu    a0, a0, t0
     sd      a0, (L + 96)(sp)
     ld      a0, NODE_STATE_SLOT(s4)
     addi    a1, s1, Node_config
-    call    node_fork
+    call    lantern_node_fork
     mv      t6, a0
     mv      a0, s4
     mv      a1, s1
@@ -11979,7 +11979,7 @@ FUNCTION lantern_node_run
     sd      t0, (L + 144)(sp)
     ld      a0, NODE_STATE_SLOT(s4)
     addi    a1, s1, Node_config
-    call    node_fork
+    call    lantern_node_fork
     mv      t6, a0
     mv      a0, s4
     mv      a1, s5
@@ -12026,14 +12026,14 @@ FUNCTION lantern_node_run
     sd      t0, (L + 104)(sp)
     ld      a0, NODE_STATE_SLOT(s4)
     addi    a1, s1, Node_config
-    call    node_fork
+    call    lantern_node_fork
     sd      a0, (L + 152)(sp)
     ld      t0, 0(s6)                       # the scratch's size, back after the call
     sd      t0, (L + 160)(sp)
     mv      a2, a0
     mv      a0, s5
     mv      a1, s6
-    call    node_bid_data
+    call    lantern_node_bid_data
     bnez    a0, 8446f
     addi    t0, sp, (L + 168)               # a ByteList view of the data's text
     sub     t1, a1, t0
@@ -12137,7 +12137,7 @@ FUNCTION lantern_node_run
     sd      t0, (L + 168)(sp)
     ld      a0, NODE_STATE_SLOT(s4)
     addi    a1, s1, Node_config
-    call    node_fork
+    call    lantern_node_fork
     mv      t6, a0
     addi    a0, sp, (L + 96)
     mv      a1, s5
@@ -12180,7 +12180,7 @@ FUNCTION lantern_node_run
     sd      zero, 16(t0)
     ld      a0, NODE_STATE_SLOT(s4)
     addi    a1, s1, Node_config
-    call    node_fork
+    call    lantern_node_fork
     mv      t6, a0
     li      a0, NODE_JSON_BLINDED_BLOCK
     mv      a1, s5
@@ -12280,7 +12280,7 @@ FUNCTION lantern_node_run
     bne     t0, t1, 90f
     ld      a0, NODE_STATE_SLOT(s4)         # SLOTS: process_slots of the fork of the state's slot, to arg
     addi    a1, s1, Node_config
-    call    node_fork
+    call    lantern_node_fork
     mv      t6, a0
     mv      a0, s4
     addi    a1, s3, NodeAction_arg
@@ -12321,11 +12321,11 @@ FUNCTION lantern_node_run
     add     t0, s5, t0
     LDU64   a0, t0, 100, t1
     addi    a1, s1, Node_config
-    call    node_fork
+    call    lantern_node_fork
     mv      s10, a0
     ld      a0, NODE_STATE_SLOT(s4)
     addi    a1, s1, Node_config
-    call    node_fork
+    call    lantern_node_fork
     bne     a0, s10, 19b
     mv      t6, s10
     mv      a0, s5
@@ -12342,7 +12342,7 @@ FUNCTION lantern_node_run
     li      t1, NODE_WORK_BLOCK_SLASHING
     bne     t0, t1, 974f
 975: mv     a0, t0                          # BLOCK_ATTESTATION, BLOCK_SLASHING
-    call    node_run_vote
+    call    lantern_node_run_vote
     LEAVE 192
 974: li     t1, NODE_WORK_BACKFILL
     bne     t0, t1, 975f
@@ -12354,7 +12354,7 @@ FUNCTION lantern_node_run
     mv      a1, s4
     mv      a2, s6
     mv      a3, s7
-    call    node_run_backfill
+    call    lantern_node_run_backfill
     LEAVE 192
 975: li     t1, NODE_WORK_API_ENCODE
     bne     t0, t1, 976f
@@ -12367,7 +12367,7 @@ FUNCTION lantern_node_run
     mv      a6, s7
     mv      a7, s8
     addi    t0, sp, L + 64                  # the seen, state_b and state_c
-    call    node_api_run
+    call    lantern_node_api_run
     LEAVE 192
 976: li     t1, NODE_WORK_API_CHUNK
     bne     t0, t1, 977f
@@ -12378,7 +12378,7 @@ FUNCTION lantern_node_run
     mv      a4, s7
     mv      a5, s8
     mv      a6, s4
-    call    node_api_chunk_run
+    call    lantern_node_api_chunk_run
     LEAVE 192
 977: li     t1, NODE_WORK_API_EVENT
     bne     t0, t1, 978f
@@ -12390,7 +12390,7 @@ FUNCTION lantern_node_run
     mv      a5, s7
     mv      a6, s8
     ld      a7, (L + 80)(sp)
-    call    node_api_event_run
+    call    lantern_node_api_event_run
     LEAVE 192
 978: li     t1, NODE_WORK_API_SUBMIT
     bne     t0, t1, 979f
@@ -12403,7 +12403,7 @@ FUNCTION lantern_node_run
     mv      a6, s6
     mv      a7, s7
     mv      t0, s8
-    call    node_api_submit_run
+    call    lantern_node_api_submit_run
     LEAVE 192
 979: li     t1, NODE_WORK_POOL_CHECK
     bne     t0, t1, 9780f
@@ -12445,13 +12445,13 @@ FUNCTION lantern_node_run
     call    lantern_seen_init
     bnez    a0, 9782f
     mv      a0, s2
-    call    node_store_slot
+    call    lantern_node_store_slot
     addi    a1, s1, Node_config
-    call    node_fork
+    call    lantern_node_fork
     mv      s10, a0
     ld      a0, NODE_STATE_SLOT(s4)         # a head state of another fork: IGNORE, as for gossip
     addi    a1, s1, Node_config
-    call    node_fork
+    call    lantern_node_fork
     bne     a0, s10, 9782f
     sd      s9, (L + 96 + NodeGossip_seen)(sp)
     sd      s2, (L + 96 + NodeGossip_store)(sp)
@@ -12494,7 +12494,7 @@ FUNCTION lantern_node_run
     mv      a2, s4
     mv      a3, s6
     mv      a4, s7
-    call    node_api_lookup_run
+    call    lantern_node_api_lookup_run
     LEAVE 192
 8:  li      a0, LANTERN_INVALID_EVENT
     LEAVE 192
@@ -12503,13 +12503,13 @@ FUNCTION lantern_node_run
 END_FUNCTION lantern_node_run
 
 /* L0: the counts of the votes of the block in data a0, at NodeEvent_index and NodeEvent_root of the event a1. Locals: sp+0 data, sp+8 event. */
-LOCAL_FUNCTION node_vote_counts
+LOCAL_FUNCTION lantern_node_vote_counts
     FRAME 16
     sd      a0, 0(sp)
     sd      a1, 8(sp)
     li      a1, 1
     li      a2, -1
-    call    node_body_item
+    call    lantern_node_body_item
     li      t0, -1
     bne     a0, t0, 1f
     li      a0, 0
@@ -12518,14 +12518,14 @@ LOCAL_FUNCTION node_vote_counts
     ld      a0, 0(sp)
     li      a1, 0
     li      a2, -1
-    call    node_body_item
+    call    lantern_node_body_item
     li      t0, -1
     bne     a0, t0, 2f
     li      a0, 0
 2:  ld      t1, 8(sp)
     sd      a0, NodeEvent_root(t1)
     UNFRAME 16
-END_FUNCTION node_vote_counts
+END_FUNCTION lantern_node_vote_counts
 
 /*
  * L1: the BLOCK_ATTESTATION or BLOCK_SLASHING work a0 of lantern_node_run (node.md): the item at
@@ -12534,14 +12534,14 @@ END_FUNCTION node_vote_counts
  * slot. The run's s1 node, s2 store, s3 work, s4 state_a, s5 data, s6 scratch, s7 event. s8 the
  * kind, s9 the scratch size, s10 the ByteList. Locals: L is_from_block, L+8 a fork.
  */
-LOCAL_FUNCTION node_run_vote
+LOCAL_FUNCTION lantern_node_run_vote
     ENTER 16
     mv      s8, a0
     ld      s9, 0(s6)
     li      t0, NODE_WORK_GOSSIP_VOTE
     bne     s8, t0, 1f
     mv      a0, s5                          # GOSSIP_VOTE: the aggregate
-    call    node_aggregate
+    call    lantern_node_aggregate
     bnez    a0, 7f
     j       2f
 1:  li      t0, NODE_WORK_BLOCK_ATTESTATION
@@ -12549,7 +12549,7 @@ LOCAL_FUNCTION node_run_vote
     seqz    a1, t0
     mv      a0, s5
     ld      a2, NodeAction_arg(s3)
-    call    node_body_item
+    call    lantern_node_body_item
 2:  beqz    a2, 7f
     addi    t0, a2, 24 + 7                  # the ByteList at the end of scratch
     andi    t0, t0, -8
@@ -12570,7 +12570,7 @@ LOCAL_FUNCTION node_run_vote
     bltu    t0, t1, 61f
     LDU64   a0, s10, 24 + 4, t1
     addi    a1, s1, Node_config
-    call    node_fork
+    call    lantern_node_fork
     mv      t6, a0
     li      t0, NODE_WORK_BLOCK_ATTESTATION # is_from_block: 1 for a block's, 0 for an aggregate's
     sub     t0, s8, t0
@@ -12586,14 +12586,14 @@ LOCAL_FUNCTION node_run_vote
     FORK_CALL node_attestation
     j       9f
 3:  mv      a0, s2                          # SLASHING: the fork of the store's slot, a state of it
-    call    node_store_slot
+    call    lantern_node_store_slot
     addi    a1, s1, Node_config
-    call    node_fork
+    call    lantern_node_fork
     sd      a0, (L + 8)(sp)
     beqz    s4, 63f                         # no post-state of the justified root
     ld      a0, NODE_STATE_SLOT(s4)
     addi    a1, s1, Node_config
-    call    node_fork
+    call    lantern_node_fork
     ld      t0, (L + 8)(sp)
     bne     a0, t0, 62f
 4:  ld      t6, (L + 8)(sp)
@@ -12624,7 +12624,7 @@ LOCAL_FUNCTION node_run_vote
     LEAVE 16
 9:  sd      s9, 0(s6)
     LEAVE 16
-END_FUNCTION node_run_vote
+END_FUNCTION lantern_node_run_vote
 
 /*
  * L0: the BACKFILL work (node.md): node_block_root of the fork of the block's slot of data a0, its
@@ -12632,7 +12632,7 @@ END_FUNCTION node_run_vote
  * slot of the state a1, with scratch a2. s3 data, s4 state, s5 scratch, s6 event. Apart from
  * lantern_node_run, as FORK_CALL takes the labels 81 to 89.
  */
-LOCAL_FUNCTION node_run_backfill
+LOCAL_FUNCTION lantern_node_run_backfill
     ENTER 0
     mv      s3, a0
     mv      s4, a1
@@ -12642,7 +12642,7 @@ LOCAL_FUNCTION node_run_backfill
     add     t0, s3, t0
     LDU64   a0, t0, 100, t1
     addi    a1, s1, Node_config
-    call    node_fork
+    call    lantern_node_fork
     mv      t6, a0
     mv      a0, s3
     mv      a1, s5
@@ -12655,7 +12655,7 @@ LOCAL_FUNCTION node_run_backfill
     bnez    t0, 1f
     ld      a0, NODE_STATE_SLOT(s4)
     addi    a1, s1, Node_config
-    call    node_fork
+    call    lantern_node_fork
     mv      t6, a0
     mv      a0, s3
     mv      a1, s4
@@ -12665,4 +12665,4 @@ LOCAL_FUNCTION node_run_backfill
     addi    a5, s6, NodeEvent_result
     FORK_CALL node_backfill
 1:  LEAVE 0
-END_FUNCTION node_run_backfill
+END_FUNCTION lantern_node_run_backfill

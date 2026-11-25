@@ -12,7 +12,7 @@
 .include "jsonrpc_names.inc"
 
 /* L0: rdi = the cursor rdi after any whitespace. Uses eax. */
-LOCAL_FUNCTION jws
+LOCAL_FUNCTION lantern_jws
     UNWIND_END_PROLOGUE
 1:  cmp     %rbx, %rdi
     jae     2f
@@ -28,13 +28,13 @@ LOCAL_FUNCTION jws
 3:  inc     %rdi
     jmp     1b
 2:  ret
-END_FUNCTION jws
+END_FUNCTION lantern_jws
 
 /*
  * L0: a string at the cursor rdi, its quote included: rdi = the cursor after it, rsi = where its
  * bytes start, rdx = their count, rcx = 1 when it has an escape. Uses rax, r8, r9.
  */
-LOCAL_FUNCTION jstring
+LOCAL_FUNCTION lantern_jstring
     UNWIND_END_PROLOGUE
     cmp     %rbx, %rdi
     jae     9f
@@ -89,10 +89,10 @@ LOCAL_FUNCTION jstring
     ret
 9:  xor     %edi, %edi
     ret
-END_FUNCTION jstring
+END_FUNCTION lantern_jstring
 
 /* L0: a number at the cursor rdi, as RFC 8259 writes it: rdi = the cursor after it, rsi = 1 when it is digits only. Uses rax, r8. */
-LOCAL_FUNCTION jnumber
+LOCAL_FUNCTION lantern_jnumber
     UNWIND_END_PROLOGUE
     mov     $1, %esi
     cmp     %rbx, %rdi
@@ -166,7 +166,7 @@ LOCAL_FUNCTION jnumber
 7:  ret
 9:  xor     %edi, %edi
     ret
-END_FUNCTION jnumber
+END_FUNCTION lantern_jnumber
 
 /* Whether the rdx bytes at rsi are the literal label: eax = 1 or 0. Uses r8, r9, r10. */
 .macro JIS label
@@ -186,7 +186,7 @@ END_FUNCTION jnumber
 .endm
 
 /* L0: the literal at the cursor rdi of the rdx bytes at rsi: rdi = the cursor after it, or 0. Uses rax, r8. */
-LOCAL_FUNCTION jliteral
+LOCAL_FUNCTION lantern_jliteral
     UNWIND_END_PROLOGUE
     mov     %rbx, %rax
     sub     %rdi, %rax
@@ -203,7 +203,7 @@ LOCAL_FUNCTION jliteral
     ret
 9:  xor     %edi, %edi
     ret
-END_FUNCTION jliteral
+END_FUNCTION lantern_jliteral
 
 /*
  * L0: any value at the cursor rdi, as RFC 8259 writes it: rdi = the cursor after it. Brackets nest
@@ -211,7 +211,7 @@ END_FUNCTION jliteral
  * value, 1 a value or the array's end, 2 a name, 3 a name or the object's end. Uses rax, rcx, rdx,
  * rsi, r8, r9, r10.
  */
-LOCAL_FUNCTION jskip
+LOCAL_FUNCTION lantern_jskip
     push    %r13
     UNWIND_PUSH %r13
     push    %r14
@@ -220,7 +220,7 @@ LOCAL_FUNCTION jskip
     xor     %r13d, %r13d
     xor     %r14d, %r14d
     xor     %r10d, %r10d
-1:  call    jws
+1:  call    lantern_jws
     cmp     %rbx, %rdi
     jae     9f
     movzbl  (%rdi), %eax
@@ -233,10 +233,10 @@ LOCAL_FUNCTION jskip
     jmp     9f
 31: cmp     $'"', %eax
     jne     9f
-    call    jstring
+    call    lantern_jstring
     test    %rdi, %rdi
     jz      9f
-    call    jws
+    call    lantern_jws
     cmp     %rbx, %rdi
     jae     9f
     cmpb    $':', (%rdi)
@@ -251,7 +251,7 @@ LOCAL_FUNCTION jskip
     jmp     9f
 32: cmp     $'"', %eax
     jne     2f
-    call    jstring
+    call    lantern_jstring
     test    %rdi, %rdi
     jz      9f
     jmp     6f
@@ -275,7 +275,7 @@ LOCAL_FUNCTION jskip
     inc     %rdi
 6:  test    %r14, %r14                      # a whole value at depth 0
     jz      8f
-    call    jws                             # in a container: a comma, or the end of its kind
+    call    lantern_jws                             # in a container: a comma, or the end of its kind
     cmp     %rbx, %rdi
     jae     9f
     movzbl  (%rdi), %eax
@@ -297,7 +297,7 @@ LOCAL_FUNCTION jskip
     jne     11f
     lea     json_true(%rip), %rsi
     mov     $4, %edx
-    call    jliteral
+    call    lantern_jliteral
     test    %rdi, %rdi
     jz      9f
     jmp     6b
@@ -305,7 +305,7 @@ LOCAL_FUNCTION jskip
     jne     12f
     lea     json_false(%rip), %rsi
     mov     $5, %edx
-    call    jliteral
+    call    lantern_jliteral
     test    %rdi, %rdi
     jz      9f
     jmp     6b
@@ -313,11 +313,11 @@ LOCAL_FUNCTION jskip
     jne     13f
     lea     json_null(%rip), %rsi
     mov     $4, %edx
-    call    jliteral
+    call    lantern_jliteral
     test    %rdi, %rdi
     jz      9f
     jmp     6b
-13: call    jnumber
+13: call    lantern_jnumber
     test    %rdi, %rdi
     jz      9f
     jmp     6b
@@ -329,7 +329,7 @@ LOCAL_FUNCTION jskip
     UNWIND_POP %r13
     UNWIND_END_EPILOGUE
     ret
-END_FUNCTION jskip
+END_FUNCTION lantern_jskip
 
 /*
  * L0: the next member of an object, from the cursor rdi after its brace (rsi = 1) or after a
@@ -337,10 +337,10 @@ END_FUNCTION jskip
  * whitespace, rsi = where its name's bytes start, rdx = their count, 2^64 - 1 for a name with
  * an escape. rdi = 0 when the JSON is not valid. Uses rax, r8, r9, r11.
  */
-LOCAL_FUNCTION jmember
+LOCAL_FUNCTION lantern_jmember
     UNWIND_END_PROLOGUE
     mov     %rsi, %r11
-    call    jws
+    call    lantern_jws
     cmp     %rbx, %rdi
     jae     9f
     movzbl  (%rdi), %eax
@@ -354,31 +354,31 @@ LOCAL_FUNCTION jmember
     cmp     $',', %eax
     jne     9f
     inc     %rdi
-    call    jws
-2:  call    jstring
+    call    lantern_jws
+2:  call    lantern_jstring
     test    %rdi, %rdi
     jz      9f
     test    %rcx, %rcx
     jz      3f
     mov     $-1, %rdx
-3:  call    jws
+3:  call    lantern_jws
     cmp     %rbx, %rdi
     jae     9f
     cmpb    $':', (%rdi)
     jne     9f
     inc     %rdi
-    call    jws
+    call    lantern_jws
     xor     %ecx, %ecx
     ret
 9:  xor     %edi, %edi
     ret
-END_FUNCTION jmember
+END_FUNCTION lantern_jmember
 
 /*
  * L0: DATA of rdx bytes at the cursor rdi, or null when rsi = 1 allows it, to rcx:
  * rdi = the cursor after it, rsi = 1 when it is not null. Uses rax, rdx, r8-r11.
  */
-LOCAL_FUNCTION jdata_in
+LOCAL_FUNCTION lantern_jdata_in
     UNWIND_END_PROLOGUE
     mov     %rdx, %r10
     mov     %rcx, %r11
@@ -390,10 +390,10 @@ LOCAL_FUNCTION jdata_in
     jne     1f
     lea     json_null(%rip), %rsi
     mov     $4, %edx
-    call    jliteral
+    call    lantern_jliteral
     xor     %esi, %esi
     ret
-1:  call    jstring
+1:  call    lantern_jstring
     test    %rdi, %rdi
     jz      9f
     test    %rcx, %rcx                      # "0x", then 2 hex digits a byte
@@ -432,13 +432,13 @@ LOCAL_FUNCTION jdata_in
     ret
 9:  xor     %edi, %edi
     ret
-END_FUNCTION jdata_in
+END_FUNCTION lantern_jdata_in
 
 /*
  * L0: an entry of the table at r15 (a length byte and the bytes, then a 0 byte) that the rdx
  * bytes at rsi match: rax = its index, or 2^64 - 1. Uses r8, r9, r10, r11.
  */
-LOCAL_FUNCTION jtable
+LOCAL_FUNCTION lantern_jtable
     UNWIND_END_PROLOGUE
     mov     %r15, %r8
     xor     %eax, %eax
@@ -461,10 +461,10 @@ LOCAL_FUNCTION jtable
     jmp     1b
 4:  mov     $-1, %rax
     ret
-END_FUNCTION jtable
+END_FUNCTION lantern_jtable
 
 /* L0: a PayloadStatusV1 object at the cursor rdi, into rbp: rdi = the cursor after it. r13 1 when status is seen. */
-LOCAL_FUNCTION jpayload_status
+LOCAL_FUNCTION lantern_jpayload_status
     ENTER 0
     cmp     %rbx, %rdi
     jae     9f
@@ -473,7 +473,7 @@ LOCAL_FUNCTION jpayload_status
     inc     %rdi
     xor     %r13d, %r13d
     mov     $1, %esi
-1:  call    jmember
+1:  call    lantern_jmember
     test    %rdi, %rdi
     jz      9f
     test    %rcx, %rcx
@@ -481,13 +481,13 @@ LOCAL_FUNCTION jpayload_status
     JIS     json_status
     test    %eax, %eax
     jz      3f
-    call    jstring                         # status: one of the five
+    call    lantern_jstring                         # status: one of the five
     test    %rdi, %rdi
     jz      9f
     test    %rcx, %rcx
     jnz     9f
     lea     json_statuses(%rip), %r15
-    call    jtable
+    call    lantern_jtable
     cmp     $-1, %rax
     je      9f
     inc     %rax
@@ -500,12 +500,12 @@ LOCAL_FUNCTION jpayload_status
     mov     $1, %esi                        # latestValidHash: 32 bytes or null
     mov     $32, %edx
     lea     EngineResponse_latest_valid_hash(%rbp), %rcx
-    call    jdata_in
+    call    lantern_jdata_in
     test    %rdi, %rdi
     jz      9f
     mov     %rsi, EngineResponse_has_latest_valid_hash(%rbp)
     jmp     7f
-6:  call    jskip
+6:  call    lantern_jskip
     test    %rdi, %rdi
     jz      9f
 7:  xor     %esi, %esi
@@ -515,14 +515,14 @@ LOCAL_FUNCTION jpayload_status
     LEAVE 0
 9:  xor     %edi, %edi
     LEAVE 0
-END_FUNCTION jpayload_status
+END_FUNCTION lantern_jpayload_status
 
 /* L0: the result of the method in r12 at the cursor rdi, r15 the body's first byte: rdi = the cursor after it. */
-LOCAL_FUNCTION jresult
+LOCAL_FUNCTION lantern_jresult
     ENTER 0
     cmp     $ENGINE_METHOD_NEW_PAYLOAD, %r12
     jne     1f
-    call    jpayload_status
+    call    lantern_jpayload_status
     LEAVE 0
 1:  cmp     $ENGINE_METHOD_FORKCHOICE_UPDATED, %r12
     jne     5f
@@ -533,7 +533,7 @@ LOCAL_FUNCTION jresult
     inc     %rdi
     xor     %r14d, %r14d
     mov     $1, %esi
-2:  call    jmember
+2:  call    lantern_jmember
     test    %rdi, %rdi
     jz      9f
     test    %rcx, %rcx
@@ -541,7 +541,7 @@ LOCAL_FUNCTION jresult
     JIS     json_payload_status
     test    %eax, %eax
     jz      3f
-    call    jpayload_status
+    call    lantern_jpayload_status
     test    %rdi, %rdi
     jz      9f
     mov     $1, %r14d
@@ -553,13 +553,13 @@ LOCAL_FUNCTION jresult
     mov     $1, %esi                        # payloadId: 8 bytes or null
     mov     $8, %edx
     lea     EngineResponse_payload_id(%rbp), %rcx
-    call    jdata_in
+    call    lantern_jdata_in
     test    %rdi, %rdi
     jz      9f
     mov     %rsi, EngineResponse_has_payload_id(%rbp)
     xor     %esi, %esi
     jmp     2b
-6:  call    jskip
+6:  call    lantern_jskip
     test    %rdi, %rdi
     jz      9f
     xor     %esi, %esi
@@ -574,7 +574,7 @@ LOCAL_FUNCTION jresult
 51: mov     %rdi, %rax
     sub     %r15, %rax
     mov     %rax, EngineResponse_result_offset(%rbp)
-    call    jskip
+    call    lantern_jskip
     test    %rdi, %rdi
     jz      9f
     mov     %rdi, %rax
@@ -591,7 +591,7 @@ LOCAL_FUNCTION jresult
     mov     %rdi, %rax
     sub     %r15, %rax
     mov     %rax, EngineResponse_result_offset(%rbp)
-    call    jskip
+    call    lantern_jskip
     test    %rdi, %rdi
     jz      9f
     mov     %rdi, %rax
@@ -604,25 +604,25 @@ LOCAL_FUNCTION jresult
     cmpb    $'[', (%rdi)
     jne     9f
     inc     %rdi
-    call    jws
+    call    lantern_jws
     cmp     %rbx, %rdi
     jae     9f
     cmpb    $']', (%rdi)
     je      13f
-10: call    jstring
+10: call    lantern_jstring
     test    %rdi, %rdi
     jz      9f
     test    %rcx, %rcx                      # a name with an escape matches no method
     jnz     12f
     lea     json_methods(%rip), %r15
-    call    jtable
+    call    lantern_jtable
     cmp     $-1, %rax
     je      12f
     mov     %eax, %ecx
     mov     $1, %eax
     shl     %cl, %rax
     or      %rax, EngineResponse_capabilities(%rbp)
-12: call    jws
+12: call    lantern_jws
     cmp     %rbx, %rdi
     jae     9f
     movzbl  (%rdi), %eax
@@ -631,16 +631,16 @@ LOCAL_FUNCTION jresult
     je      16f
     cmp     $',', %eax
     jne     9f
-    call    jws
+    call    lantern_jws
     jmp     10b
 13: inc     %rdi
 16: LEAVE 0
 9:  xor     %edi, %edi
     LEAVE 0
-END_FUNCTION jresult
+END_FUNCTION lantern_jresult
 
 /* L0: an error object at the cursor rdi, into rbp: rdi = the cursor after it. r14 1 when code is seen. */
-LOCAL_FUNCTION jerror
+LOCAL_FUNCTION lantern_jerror
     ENTER 0
     cmp     %rbx, %rdi
     jae     9f
@@ -649,7 +649,7 @@ LOCAL_FUNCTION jerror
     inc     %rdi
     xor     %r14d, %r14d
     mov     $1, %esi
-1:  call    jmember
+1:  call    lantern_jmember
     test    %rdi, %rdi
     jz      9f
     test    %rcx, %rcx
@@ -658,7 +658,7 @@ LOCAL_FUNCTION jerror
     test    %eax, %eax
     jz      6f
     mov     %rdi, %r13                      # code: an integer from -2^63 to 2^63 - 1
-    call    jnumber
+    call    lantern_jnumber
     test    %rdi, %rdi
     jz      9f
     test    %rsi, %rsi
@@ -690,7 +690,7 @@ LOCAL_FUNCTION jerror
 5:  mov     %rax, EngineResponse_error_code(%rbp)
     mov     $1, %r14d
     jmp     7f
-6:  call    jskip
+6:  call    lantern_jskip
     test    %rdi, %rdi
     jz      9f
 7:  xor     %esi, %esi
@@ -700,7 +700,7 @@ LOCAL_FUNCTION jerror
     LEAVE 0
 9:  xor     %edi, %edi
     LEAVE 0
-END_FUNCTION jerror
+END_FUNCTION lantern_jerror
 
 /*
  * (body, method, out): rbx the end, rbp out, r12 method, r13 1 when id is seen, r14 1 for an
@@ -722,14 +722,14 @@ FUNCTION lantern_engine_parse_response
     jb      1b
     xor     %r13d, %r13d
     xor     %r14d, %r14d
-    call    jws
+    call    lantern_jws
     cmp     %rbx, %rdi
     jae     9f
     cmpb    $'{', (%rdi)
     jne     9f
     inc     %rdi
     mov     $1, %esi
-2:  call    jmember
+2:  call    lantern_jmember
     test    %rdi, %rdi
     jz      9f
     test    %rcx, %rcx
@@ -738,7 +738,7 @@ FUNCTION lantern_engine_parse_response
     test    %eax, %eax
     jz      4f
     mov     %rdi, %r11                      # id: digits, at most 2^64 - 1
-    call    jnumber
+    call    lantern_jnumber
     test    %rdi, %rdi
     jz      9f
     test    %rsi, %rsi
@@ -763,7 +763,7 @@ FUNCTION lantern_engine_parse_response
 4:  JIS     json_result
     test    %eax, %eax
     jz      6f
-    call    jresult
+    call    lantern_jresult
     test    %rdi, %rdi
     jz      9f
     or      $2, %r14
@@ -771,17 +771,17 @@ FUNCTION lantern_engine_parse_response
 6:  JIS     json_error
     test    %eax, %eax
     jz      10f
-    call    jerror
+    call    lantern_jerror
     test    %rdi, %rdi
     jz      9f
     or      $1, %r14
     jmp     7f
-10: call    jskip
+10: call    lantern_jskip
     test    %rdi, %rdi
     jz      9f
 7:  xor     %esi, %esi
     jmp     2b
-8:  call    jws                             # then nothing but whitespace
+8:  call    lantern_jws                             # then nothing but whitespace
     cmp     %rbx, %rdi
     jne     9f
     test    %r13, %r13

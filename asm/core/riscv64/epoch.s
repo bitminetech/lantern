@@ -286,7 +286,7 @@ SPEC_END process_inactivity_updates
 /* ---------------------------------------------------------------- Rewards and penalties */
 
 /* Write count n to an output IndexList and zero its n entries. list a0, n a1. */
-LOCAL_FUNCTION zero_deltas
+LOCAL_FUNCTION lantern_zero_deltas
     UNWIND_END_PROLOGUE
     li      a2, LIST_FIXED
     sd      a2, LIST_OFFSET(a0)
@@ -294,7 +294,7 @@ LOCAL_FUNCTION zero_deltas
     addi    a0, a0, LIST_FIXED
     slli    a1, a1, 3
     tail    lantern_zero
-END_FUNCTION zero_deltas
+END_FUNCTION lantern_zero_deltas
 
 .if FORK >= FORK_ALTAIR
 /*
@@ -321,10 +321,10 @@ SPEC_FUNCTION get_flag_index_deltas
     bltu    t1, t0, 9f
     mv      a0, s4
     mv      a1, s6
-    call    zero_deltas
+    call    lantern_zero_deltas
     mv      a0, s5
     mv      a1, s6
-    call    zero_deltas
+    call    lantern_zero_deltas
     ld      t0, 0(s3)
     sd      t0, (L + 88)(sp)
     mv      a0, s1
@@ -463,10 +463,10 @@ SPEC_FUNCTION get_inactivity_penalty_deltas
     bltu    t1, t0, 9f
     mv      a0, s4
     mv      a1, s6
-    call    zero_deltas
+    call    lantern_zero_deltas
     mv      a0, s5
     mv      a1, s6
-    call    zero_deltas
+    call    lantern_zero_deltas
     ld      t0, 0(s3)
     sd      t0, (L + 40)(sp)
     mv      a0, s1
@@ -1634,13 +1634,13 @@ SPEC_FUNCTION process_epoch
     NEED_SCRATCH_B s3, s1, EPOCH_LISTS, EPOCH_EXTRA, 9f
 .if FORK >= FORK_ELECTRA
     mv      a0, s1                          # room for the deposits of the epoch
-    call    validator_room
+    call    lantern_validator_room
     li      t0, MAX_PENDING_DEPOSITS_PER_EPOCH
     bltu    a0, t0, 9f
 .endif
 .if FORK == FORK_PHASE0
     mv      a0, s1                          # room for the current epoch's attestations in the previous list
-    call    record_room
+    call    lantern_record_room
     bnez    a0, 9f
 .endif
     mv      a0, s1                          # and for a historical batch root or summary when one is due

@@ -25,7 +25,7 @@
 .endm
 
 /* L0: DATA: "0x" and two lowercase hex digits for each of the rcx bytes at rsi, to rdi. Uses rax, rdx. */
-LOCAL_FUNCTION jdata
+LOCAL_FUNCTION lantern_jdata
     UNWIND_END_PROLOGUE
     movb    $'"', (%rdi)
     movb    $'0', 1(%rdi)
@@ -54,10 +54,10 @@ LOCAL_FUNCTION jdata
 3:  movb    $'"', (%rdi)
     inc     %rdi
     ret
-END_FUNCTION jdata
+END_FUNCTION lantern_jdata
 
 /* L0: QUANTITY of the rcx bytes, little endian, at rsi: "0x" and the hex with no leading zeros, to rdi. Uses rax, rdx, r8. */
-LOCAL_FUNCTION jquantity
+LOCAL_FUNCTION lantern_jquantity
     UNWIND_END_PROLOGUE
     movb    $'"', (%rdi)
     movb    $'0', 1(%rdi)
@@ -91,10 +91,10 @@ LOCAL_FUNCTION jquantity
     movb    $'"', (%rdi)
     inc     %rdi
     ret
-END_FUNCTION jquantity
+END_FUNCTION lantern_jquantity
 
 /* L0: the decimal digits of rax to rdi. Uses rax, rcx, rdx, r8. */
-LOCAL_FUNCTION jdecimal
+LOCAL_FUNCTION lantern_jdecimal
     UNWIND_END_PROLOGUE
     mov     $10, %ecx
     mov     %rax, %r8
@@ -113,20 +113,20 @@ LOCAL_FUNCTION jdecimal
     test    %rax, %rax
     jnz     2b
     ret
-END_FUNCTION jdecimal
+END_FUNCTION lantern_jdecimal
 
 /* QUANTITY of the u64 at base + off, to rdi. Uses rsi, rcx, rax, rdx, r8. */
 .macro JQ64 base, off
     lea     (\off)(\base), %rsi
     mov     $8, %ecx
-    call    jquantity
+    call    lantern_jquantity
 .endm
 
 /* DATA of the n bytes at base + off, to rdi. Uses rsi, rcx, rax, rdx. */
 .macro JDATA base, off, n
     lea     (\off)(\base), %rsi
     mov     $\n, %ecx
-    call    jdata
+    call    lantern_jdata
 .endm
 
 .set DEPOSIT_REQUEST_SSZ, 48 + 32 + 8 + 96 + 8
@@ -390,7 +390,7 @@ SPEC_FUNCTION engine_new_payload
     # {"jsonrpc":"2.0","id":id,"method":"engine_newPayloadVn","params":[
     JTEXT   j_open
     mov     %rbp, %rax
-    call    jdecimal
+    call    lantern_jdecimal
     JTEXT   j_method_np
 .if FORK == FORK_BELLATRIX
     JCHAR   49
@@ -425,11 +425,11 @@ SPEC_FUNCTION engine_new_payload
     JQ64    %r15, ExecutionPayload_timestamp
     JTEXT   j_extra_data
     PART    %rsi, %rcx, %r15, ExecutionPayload_extra_data
-    call    jdata
+    call    lantern_jdata
     JTEXT   j_base_fee
     lea     ExecutionPayload_base_fee_per_gas(%r15), %rsi
     mov     $32, %ecx
-    call    jquantity
+    call    lantern_jquantity
     JTEXT   j_block_hash
     JDATA   %r15, ExecutionPayload_block_hash, 32
     # each transaction: a nested ByteList value
@@ -445,7 +445,7 @@ SPEC_FUNCTION engine_new_payload
     mov     16(%rax), %rcx
     add     (%rax), %rax
     mov     %rax, S7(%rsp)
-    call    jdata
+    call    lantern_jdata
     decq    S8(%rsp)
     jz      2f
     JCHAR   44
@@ -535,7 +535,7 @@ SPEC_FUNCTION engine_new_payload
     mov     (%rax), %rcx
     lea     (%rsi,%rcx), %rax
     mov     %rax, S7(%rsp)
-    call    jdata
+    call    lantern_jdata
     mov     S7(%rsp), %rax
     cmp     S8(%rsp), %rax
     jae     9f
@@ -574,7 +574,7 @@ SPEC_FUNCTION engine_forkchoice_updated
     lea     24(%r12), %rdi
     JTEXT   j_open
     mov     %rbp, %rax
-    call    jdecimal
+    call    lantern_jdecimal
     JTEXT   j_method_fcu
 .if FORK == FORK_BELLATRIX
     JCHAR   49
@@ -650,7 +650,7 @@ SPEC_FUNCTION engine_get_payload
     lea     24(%r12), %rdi
     JTEXT   j_open
     mov     %rbp, %rax
-    call    jdecimal
+    call    lantern_jdecimal
     JTEXT   j_method_gp
 .if FORK == FORK_BELLATRIX
     JCHAR   49

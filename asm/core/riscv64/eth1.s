@@ -11,7 +11,7 @@ e1_digits:
     .ascii  "0123456789abcdef"
 
 # L0: the QUANTITY of a0 to the cursor a1: "0x", then hex digits with no leading zero; a1 = the end. Uses t0-t3.
-LOCAL_FUNCTION e1_qty
+LOCAL_FUNCTION lantern_e1_qty
     UNWIND_END_PROLOGUE
     li      t0, '0'
     sb      t0, 0(a1)
@@ -36,10 +36,10 @@ LOCAL_FUNCTION e1_qty
     addi    t0, t0, -4
     j       3b
 4:  ret
-END_FUNCTION e1_qty
+END_FUNCTION lantern_e1_qty
 
 # L0: the a2 bytes at a0 as lowercase hex to the cursor a1; a1 = the end. Uses t0-t3.
-LOCAL_FUNCTION e1_hex
+LOCAL_FUNCTION lantern_e1_hex
     UNWIND_END_PROLOGUE
     ADDRESS t2, e1_digits
 1:  beqz    a2, 2f
@@ -57,10 +57,10 @@ LOCAL_FUNCTION e1_hex
     addi    a2, a2, -1
     j       1b
 2:  ret
-END_FUNCTION e1_hex
+END_FUNCTION lantern_e1_hex
 
 # L0: the ByteList a0 holds the bytes from its byte 24 to the cursor a1: its offset 24 and its length. Uses t0.
-LOCAL_FUNCTION e1_close
+LOCAL_FUNCTION lantern_e1_close
     UNWIND_END_PROLOGUE
     addi    t0, a0, 24
     sub     t0, a1, t0
@@ -68,7 +68,7 @@ LOCAL_FUNCTION e1_close
     li      t0, 24
     sd      t0, 8(a0)
     ret
-END_FUNCTION e1_close
+END_FUNCTION lantern_e1_close
 
 # (number, id, out): eth_getBlockByNumber. s2 number, s3 id, s4 out.
 FUNCTION lantern_eth_get_block_by_number
@@ -82,30 +82,30 @@ FUNCTION lantern_eth_get_block_by_number
     ADDRESS a0, e1_open
     li      a1, e1_open_len
     addi    a2, s4, 24
-    call    put_bytes
+    call    lantern_put_bytes
     mv      a0, s3
     mv      a1, a2
-    call    decimal
+    call    lantern_decimal
     mv      a2, a1
     ADDRESS a0, e1_block
     li      a1, e1_block_len
-    call    put_bytes
+    call    lantern_put_bytes
     li      t0, -1                          # 2^64 - 1: latest
     bne     s2, t0, 1f
     ADDRESS a0, e1_latest
     li      a1, e1_latest_len
-    call    put_bytes
+    call    lantern_put_bytes
     j       2f
 1:  mv      a0, s2
     mv      a1, a2
-    call    e1_qty
+    call    lantern_e1_qty
     mv      a2, a1
 2:  ADDRESS a0, e1_bclose
     li      a1, e1_bclose_len
-    call    put_bytes
+    call    lantern_put_bytes
     mv      a0, s4
     mv      a1, a2
-    call    e1_close
+    call    lantern_e1_close
     li      a0, LANTERN_OK
     LEAVE 0
 8:  li      a0, LANTERN_BUFFER_TOO_SMALL
@@ -126,39 +126,39 @@ FUNCTION lantern_eth_get_deposit_logs
     ADDRESS a0, e1_open
     li      a1, e1_open_len
     addi    a2, s8, 24
-    call    put_bytes
+    call    lantern_put_bytes
     mv      a0, s7
     mv      a1, a2
-    call    decimal
+    call    lantern_decimal
     mv      a2, a1
     ADDRESS a0, e1_logs
     li      a1, e1_logs_len
-    call    put_bytes
+    call    lantern_put_bytes
     mv      a1, a2
     mv      a0, s2
     li      a2, 20
-    call    e1_hex
+    call    lantern_e1_hex
     mv      a2, a1
     ADDRESS a0, e1_topics
     li      a1, e1_topics_len
-    call    put_bytes
+    call    lantern_put_bytes
     mv      a0, s3
     mv      a1, a2
-    call    e1_qty
+    call    lantern_e1_qty
     mv      a2, a1
     ADDRESS a0, e1_to
     li      a1, e1_to_len
-    call    put_bytes
+    call    lantern_put_bytes
     mv      a0, s4
     mv      a1, a2
-    call    e1_qty
+    call    lantern_e1_qty
     mv      a2, a1
     ADDRESS a0, e1_lclose
     li      a1, e1_lclose_len
-    call    put_bytes
+    call    lantern_put_bytes
     mv      a0, s8
     mv      a1, a2
-    call    e1_close
+    call    lantern_e1_close
     li      a0, LANTERN_OK
     LEAVE 0
 8:  li      a0, LANTERN_BUFFER_TOO_SMALL
@@ -167,9 +167,9 @@ END_FUNCTION lantern_eth_get_deposit_logs
 
 # L1: a QUANTITY string at the cursor a0: a0 = the cursor after it and a1 its value, or a0 = 0 for
 # none: "0x", then 1 to 16 hex digits with no leading zero. Uses a1-a3, t0-t4.
-LOCAL_FUNCTION e1_qty_in
+LOCAL_FUNCTION lantern_e1_qty_in
     FRAME 16
-    call    jstring
+    call    lantern_jstring
     beqz    a0, 9f
     bnez    a3, 9f
     li      t0, 3
@@ -208,7 +208,7 @@ LOCAL_FUNCTION e1_qty_in
     UNFRAME 16
 9:  li      a0, 0
     UNFRAME 16
-END_FUNCTION e1_qty_in
+END_FUNCTION lantern_e1_qty_in
 
 # (json, out): the number, hash and timestamp of an eth_getBlockByNumber result. s1 the text's
 # end, s2 out, s3 the members read: 1 number, 2 hash, 4 timestamp.
@@ -231,26 +231,26 @@ FUNCTION lantern_eth1_block
     add     a0, a0, t0
     add     s1, a0, t1
     li      s3, 0
-    call    jws
+    call    lantern_jws
     bgeu    a0, s1, 9f
     lbu     t0, 0(a0)
     li      t1, '{'
     bne     t0, t1, 9f
     addi    a0, a0, 1
     li      a1, 1
-1:  call    jmember
+1:  call    lantern_jmember
     beqz    a0, 9f
     bnez    a3, 7f
     JIS     e1_n_number
     beqz    t0, 2f
-    call    e1_qty_in
+    call    lantern_e1_qty_in
     beqz    a0, 9f
     sd      a1, Eth1Block_number(s2)
     ori     s3, s3, 1
     j       6f
 2:  JIS     e1_n_timestamp
     beqz    t0, 3f
-    call    e1_qty_in
+    call    lantern_e1_qty_in
     beqz    a0, 9f
     sd      a1, Eth1Block_timestamp(s2)
     ori     s3, s3, 4
@@ -260,15 +260,15 @@ FUNCTION lantern_eth1_block
     li      a1, 0
     li      a2, 32
     addi    a3, s2, Eth1Block_hash
-    call    jdata_in
+    call    lantern_jdata_in
     beqz    a0, 9f
     ori     s3, s3, 2
     j       6f
-4:  call    jskip
+4:  call    lantern_jskip
     beqz    a0, 9f
 6:  li      a1, 0
     j       1b
-7:  call    jws                             # nothing after the object, and each of the three
+7:  call    lantern_jws                             # nothing after the object, and each of the three
     bne     a0, s1, 9f
     li      t0, 7
     bne     s3, t0, 9f
@@ -303,13 +303,13 @@ FUNCTION lantern_eth1_deposit_logs
     li      t0, 24
     sd      t0, 8(s2)
     sd      zero, 16(s2)
-    call    jws
+    call    lantern_jws
     bgeu    a0, s1, 90f
     lbu     t0, 0(a0)
     li      t1, '['
     bne     t0, t1, 90f
     addi    a0, a0, 1
-    call    jws
+    call    lantern_jws
     bgeu    a0, s1, 90f
     lbu     t0, 0(a0)
     li      t1, ']'
@@ -323,12 +323,12 @@ FUNCTION lantern_eth1_deposit_logs
     addi    a0, a0, 1
     li      s8, 0
     li      a1, 1
-2:  call    jmember
+2:  call    lantern_jmember
     beqz    a0, 90f
     bnez    a3, 40f
     JIS     e1_n_block_number
     beqz    t0, 3f
-    call    e1_qty_in
+    call    lantern_e1_qty_in
     beqz    a0, 90f
     mv      s9, a1
     ori     s8, s8, 1
@@ -339,12 +339,12 @@ FUNCTION lantern_eth1_deposit_logs
     mv      s10, a0
     ADDRESS a1, json_false
     li      a2, json_false_len
-    call    jliteral
+    call    lantern_jliteral
     bnez    a0, 30f
     mv      a0, s10
     ADDRESS a1, json_true
     li      a2, json_true_len
-    call    jliteral
+    call    lantern_jliteral
     beqz    a0, 90f
     ori     s8, s8, 8
     j       30f
@@ -355,11 +355,11 @@ FUNCTION lantern_eth1_deposit_logs
     li      t1, '['
     bne     t0, t1, 90f
     addi    a0, a0, 1
-    call    jws
+    call    lantern_jws
     li      a1, 0
     li      a2, 32
     addi    a3, sp, L
-    call    jdata_in
+    call    lantern_jdata_in
     beqz    a0, 90f
     addi    t0, sp, L
     ADDRESS t1, e1_topic
@@ -372,7 +372,7 @@ FUNCTION lantern_eth1_deposit_logs
     addi    t2, t2, 1
     li      t3, 32
     bltu    t2, t3, 43b
-41: call    jws
+41: call    lantern_jws
     bgeu    a0, s1, 90f
     lbu     t0, 0(a0)
     addi    a0, a0, 1
@@ -380,15 +380,15 @@ FUNCTION lantern_eth1_deposit_logs
     beq     t0, t1, 42f
     li      t1, ','
     bne     t0, t1, 90f
-    call    jws
-    call    jskip
+    call    lantern_jws
+    call    lantern_jskip
     beqz    a0, 90f
     j       41b
 42: ori     s8, s8, 2
     j       30f
 5:  JIS     e1_n_data
     beqz    t0, 6f
-    call    jstring                         # "0x", then 2 hex digits a byte; 576 bytes, else no deposit's
+    call    lantern_jstring                         # "0x", then 2 hex digits a byte; 576 bytes, else no deposit's
     beqz    a0, 90f
     bnez    a3, 90f
     li      t0, 2
@@ -436,7 +436,7 @@ FUNCTION lantern_eth1_deposit_logs
     j       52b
 55: ori     s8, s8, 4
     j       30f
-6:  call    jskip
+6:  call    lantern_jskip
     beqz    a0, 90f
 30: li      a1, 0
     j       2b
@@ -449,7 +449,7 @@ FUNCTION lantern_eth1_deposit_logs
     bnez    t0, 91f
     mv      s10, a0
     addi    a0, sp, (L + 32)                # the contract's encoding: the bytes of e1_abi but the values
-    call    e1_abi_check
+    call    lantern_e1_abi_check
     beqz    a0, 91f
     addi    t0, s3, Eth1Deposit__mem
     bgtu    t0, s7, 92f
@@ -472,17 +472,17 @@ FUNCTION lantern_eth1_deposit_logs
     call    lantern_copy
     addi    s3, s3, Eth1Deposit__mem
     mv      a0, s10
-70: call    jws                             # a comma and the next log, or the array's end
+70: call    lantern_jws                             # a comma and the next log, or the array's end
     bgeu    a0, s1, 90f
     lbu     t0, 0(a0)
     addi    a0, a0, 1
     li      t1, ','
     bne     t0, t1, 71f
-    call    jws
+    call    lantern_jws
     j       1b
 71: li      t1, ']'
     bne     t0, t1, 90f
-80: call    jws                             # nothing after the array
+80: call    lantern_jws                             # nothing after the array
     bne     a0, s1, 90f
     addi    t0, s2, 24
     sub     t0, s3, t0
@@ -499,7 +499,7 @@ END_FUNCTION lantern_eth1_deposit_logs
 
 # L0: a0 = 1 when the 576 bytes at a0 are e1_abi but in the values (pubkey 192, withdrawal
 # credentials 288, amount 352, signature 416, index 544), else 0. Uses t0-t4.
-LOCAL_FUNCTION e1_abi_check
+LOCAL_FUNCTION lantern_e1_abi_check
     UNWIND_END_PROLOGUE
     ADDRESS t1, e1_abi
     li      t0, 0
@@ -536,10 +536,10 @@ LOCAL_FUNCTION e1_abi_check
     ret
 9:  li      a0, 0
     ret
-END_FUNCTION e1_abi_check
+END_FUNCTION lantern_e1_abi_check
 
 # L1: SHA-256 of the 32 bytes at a0 and the 32 bytes at a1, to a2. Locals: out, then a ByteList of 64 bytes.
-LOCAL_FUNCTION e1_hash2
+LOCAL_FUNCTION lantern_e1_hash2
     FRAME 96
     sd      a2, 0(sp)
     li      t0, 88
@@ -556,7 +556,7 @@ LOCAL_FUNCTION e1_hash2
     ld      a1, 0(sp)
     CALL_GLOBAL crypto_sha256
     UNFRAME 96
-END_FUNCTION e1_hash2
+END_FUNCTION lantern_e1_hash2
 
 # (data, out): hash_tree_root of a DepositData, from a copy of its bytes (any alignment). s2 the
 # copy, s3 out. Locals: L the pubkey's last chunk, L+32 the pubkey's root, then the first half's,
@@ -579,15 +579,15 @@ FUNCTION lantern_deposit_leaf
     mv      a0, s2
     addi    a1, sp, L
     addi    a2, sp, (L + 32)
-    call    e1_hash2
+    call    lantern_e1_hash2
     addi    a0, sp, (L + 32)                # with withdrawal_credentials
     addi    a1, s2, 48
     addi    a2, sp, (L + 32)
-    call    e1_hash2
+    call    lantern_e1_hash2
     addi    a0, s2, 88                      # signature: its four chunks, the last zero
     addi    a1, s2, 120
     addi    a2, sp, (L + 64)
-    call    e1_hash2
+    call    lantern_e1_hash2
     sd      zero, (L + 128)(sp)
     sd      zero, (L + 136)(sp)
     sd      zero, (L + 144)(sp)
@@ -595,11 +595,11 @@ FUNCTION lantern_deposit_leaf
     addi    a0, s2, 152
     addi    a1, sp, (L + 128)
     addi    a2, sp, (L + 96)
-    call    e1_hash2
+    call    lantern_e1_hash2
     addi    a0, sp, (L + 64)
     addi    a1, sp, (L + 96)
     addi    a2, sp, (L + 64)
-    call    e1_hash2
+    call    lantern_e1_hash2
     ld      t0, 80(s2)                      # amount, then the signature
     sd      t0, (L + 96)(sp)
     sd      zero, (L + 104)(sp)
@@ -608,11 +608,11 @@ FUNCTION lantern_deposit_leaf
     addi    a0, sp, (L + 96)
     addi    a1, sp, (L + 64)
     addi    a2, sp, (L + 64)
-    call    e1_hash2
+    call    lantern_e1_hash2
     addi    a0, sp, (L + 32)                # the two halves
     addi    a1, sp, (L + 64)
     mv      a2, s3
-    call    e1_hash2
+    call    lantern_e1_hash2
     li      a0, LANTERN_OK
     LEAVE 352
 END_FUNCTION lantern_deposit_leaf
@@ -641,7 +641,7 @@ FUNCTION lantern_deposit_tree_push
     j       7f
 2:  addi    a1, sp, L
     addi    a2, sp, L
-    call    e1_hash2
+    call    lantern_e1_hash2
     srli    s3, s3, 1
     addi    s4, s4, 1
     li      t0, DEPOSIT_CONTRACT_TREE_DEPTH
@@ -677,11 +677,11 @@ FUNCTION lantern_deposit_tree_root
     addi    a0, sp, L                       # an even size: the node, then the zero hash
     addi    a1, sp, (L + 32)
 2:  addi    a2, sp, L
-    call    e1_hash2
+    call    lantern_e1_hash2
     addi    a0, sp, (L + 32)                # the zero hash of the next height
     mv      a1, a0
     mv      a2, a0
-    call    e1_hash2
+    call    lantern_e1_hash2
     srli    s4, s4, 1
     addi    s7, s7, 1
     li      t0, DEPOSIT_CONTRACT_TREE_DEPTH
@@ -694,7 +694,7 @@ FUNCTION lantern_deposit_tree_root
     addi    a0, sp, L
     addi    a1, sp, (L + 64)
     mv      a2, s3
-    call    e1_hash2
+    call    lantern_e1_hash2
     li      a0, LANTERN_OK
     LEAVE 96
 END_FUNCTION lantern_deposit_tree_root
@@ -745,7 +745,7 @@ FUNCTION lantern_deposit_proof
     slli    t1, t0, 5
     add     a1, s2, t1
 4:  addi    a2, sp, (L + 32)
-    call    e1_hash2
+    call    lantern_e1_hash2
     ld      t0, (L + 64)(sp)
     slli    t1, t0, 5
     add     a0, s9, t1
@@ -760,7 +760,7 @@ FUNCTION lantern_deposit_proof
     addi    a0, sp, L                       # the zero hash of the next height
     mv      a1, a0
     mv      a2, a0
-    call    e1_hash2
+    call    lantern_e1_hash2
     addi    s8, s8, 1
     li      t0, DEPOSIT_CONTRACT_TREE_DEPTH
     bltu    s8, t0, 1b

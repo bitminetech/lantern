@@ -48,7 +48,7 @@
 .endm
 
 /* L0: a0 = the fork of the slot a0 with the config a1: the last fork whose epoch is at most the slot's. Uses t0-t2. */
-LOCAL_FUNCTION app_fork
+LOCAL_FUNCTION lantern_app_fork
     UNWIND_END_PROLOGUE
     li      t0, SLOTS_PER_EPOCH
     divu    t0, a0, t0
@@ -61,10 +61,10 @@ LOCAL_FUNCTION app_fork
     j       1b
 2:  srli    a0, t1, 4
     ret
-END_FUNCTION app_fork
+END_FUNCTION lantern_app_fork
 
 /* L0: a0 = the current slot of the store a0: (time_ms - genesis_time_ms) // SLOT_DURATION_MS, 0 before genesis. Uses t0-t2, a7. */
-LOCAL_FUNCTION app_store_slot
+LOCAL_FUNCTION lantern_app_store_slot
     UNWIND_END_PROLOGUE
     LDQ     t0, a0, Store_time_ms
     LDQ     t1, a0, Store_genesis_time_ms
@@ -76,10 +76,10 @@ LOCAL_FUNCTION app_store_slot
     beqz    t1, 2f
     divu    a0, t2, t1
 2:  ret
-END_FUNCTION app_store_slot
+END_FUNCTION lantern_app_store_slot
 
 /* L0: a0 = 1 when the a1 bytes at a0 are the a3 bytes at a2, else 0. Uses t0, t1. */
-LOCAL_FUNCTION app_name_is
+LOCAL_FUNCTION lantern_app_name_is
     UNWIND_END_PROLOGUE
     bne     a1, a3, 2f
 1:  beqz    a1, 3f
@@ -94,10 +94,10 @@ LOCAL_FUNCTION app_name_is
     ret
 3:  li      a0, 1
     ret
-END_FUNCTION app_name_is
+END_FUNCTION lantern_app_name_is
 
 /* L1: a0 = memory of a0 bytes from lantern_shell_map, zeroed, or 0. Locals: the size, the address. */
-LOCAL_FUNCTION app_map
+LOCAL_FUNCTION lantern_app_map
     FRAME 16
     sd      a0, 0(sp)
     mv      a0, sp
@@ -105,7 +105,7 @@ LOCAL_FUNCTION app_map
     CALL_GLOBAL lantern_shell_map
     ld      a0, 8(sp)
     UNFRAME 16
-END_FUNCTION app_map
+END_FUNCTION lantern_app_map
 
 /*
  * L1: a StateCache, a CommitteeCache and a PubkeyCache for a0 / 121 + 65536 validators (a0 the anchor file's
@@ -113,7 +113,7 @@ END_FUNCTION app_map
  * memory. s1 the app.
  * Locals: sp+0 validators, sp+8 its bytes.
  */
-LOCAL_FUNCTION app_state_cache
+LOCAL_FUNCTION lantern_app_state_cache
     FRAME 16
     li      t0, 121
     divu    a0, a0, t0
@@ -125,7 +125,7 @@ LOCAL_FUNCTION app_state_cache
     LDQ     t6, s1, APP_FORK
     FORK_CALL state_cache_size
     ld      a0, 8(sp)
-    call    app_map
+    call    lantern_app_map
     beqz    a0, 1f
     ld      t0, 8(sp)
     sd      t0, 0(a0)
@@ -141,7 +141,7 @@ LOCAL_FUNCTION app_state_cache
     LDQ     t6, s1, APP_FORK
     FORK_CALL committee_cache_size
     ld      a0, 8(sp)
-    call    app_map
+    call    lantern_app_map
     beqz    a0, 2f
     ld      t0, 8(sp)
     sd      t0, 0(a0)
@@ -157,7 +157,7 @@ LOCAL_FUNCTION app_state_cache
     LDQ     t6, s1, APP_FORK
     FORK_CALL pubkey_cache_size
     ld      a0, 8(sp)
-    call    app_map
+    call    lantern_app_map
     beqz    a0, 3f
     ld      t0, 8(sp)
     sd      t0, 0(a0)
@@ -170,10 +170,10 @@ LOCAL_FUNCTION app_state_cache
     FORK_CALL pubkey_cache_init
 3:  li      a0, LANTERN_OK
     UNFRAME 16
-END_FUNCTION app_state_cache
+END_FUNCTION lantern_app_state_cache
 
 /* L1: the pair at s1 + a0 goes back to lantern_shell_unmap and becomes 0, 0. */
-LOCAL_FUNCTION app_unmap
+LOCAL_FUNCTION lantern_app_unmap
     FRAME 16
     add     t0, s1, a0
     sd      t0, 0(sp)
@@ -186,32 +186,32 @@ LOCAL_FUNCTION app_unmap
     sd      zero, 0(t0)
     sd      zero, 8(t0)
 1:  UNFRAME 16
-END_FUNCTION app_unmap
+END_FUNCTION lantern_app_unmap
 
 /* L1: the pair at s1 + a0 becomes new memory of a1 bytes, its first u64 the size: a0 = the memory, or 0. */
-LOCAL_FUNCTION app_alloc
+LOCAL_FUNCTION lantern_app_alloc
     ENTER 0
     add     s2, s1, a0
     mv      s3, a1
     mv      a0, a1
-    call    app_map
+    call    lantern_app_map
     beqz    a0, 1f
     sd      s3, 0(a0)
     sd      a0, 0(s2)
     sd      s3, 8(s2)
 1:  LEAVE 0
-END_FUNCTION app_alloc
+END_FUNCTION lantern_app_alloc
 
-/* L0: the log line starts, with room for the time and the level that app_line_end writes. Uses t0, a7. */
-LOCAL_FUNCTION app_line_start
+/* L0: the log line starts, with room for the time and the level that lantern_app_line_end writes. Uses t0, a7. */
+LOCAL_FUNCTION lantern_app_line_start
     UNWIND_END_PROLOGUE
     li      t0, APP_LOG_PREFIX
     STQ     t0, s1, (APP_LINE + 16)
     ret
-END_FUNCTION app_line_start
+END_FUNCTION lantern_app_line_start
 
 /* L0: a2 digits of a0, before the byte at a1. A leaf; uses a0-a2, t0, t1. */
-LOCAL_FUNCTION app_digits
+LOCAL_FUNCTION lantern_app_digits
     UNWIND_END_PROLOGUE
     li      t0, 10
 1:  remu    t1, a0, t0
@@ -222,14 +222,14 @@ LOCAL_FUNCTION app_digits
     addi    a2, a2, -1
     bnez    a2, 1b
     ret
-END_FUNCTION app_digits
+END_FUNCTION lantern_app_digits
 
 /*
  * L1: the UTC time of the Unix milliseconds a0, as YYYY-MM-DD HH:MM:SS.mmm, in the 23 bytes at
  * a1 (civil_from_days of the days since 1970). Locals: sp+0 out, +8 the milliseconds of the day,
  * +16 year, +24 month, +32 day.
  */
-LOCAL_FUNCTION app_time_text
+LOCAL_FUNCTION lantern_app_time_text
     FRAME 48
     sd      a1, 0(sp)
     li      t0, 86400000
@@ -299,17 +299,17 @@ LOCAL_FUNCTION app_time_text
     ld      a0, 16(sp)                      # the digits, each field from its end
     addi    a1, a1, 4
     li      a2, 4
-    call    app_digits
+    call    lantern_app_digits
     ld      a0, 24(sp)
     ld      a1, 0(sp)
     addi    a1, a1, 7
     li      a2, 2
-    call    app_digits
+    call    lantern_app_digits
     ld      a0, 32(sp)
     ld      a1, 0(sp)
     addi    a1, a1, 10
     li      a2, 2
-    call    app_digits
+    call    lantern_app_digits
     ld      t2, 8(sp)                       # hours
     li      t0, 3600000
     divu    a0, t2, t0
@@ -318,7 +318,7 @@ LOCAL_FUNCTION app_time_text
     ld      a1, 0(sp)
     addi    a1, a1, 13
     li      a2, 2
-    call    app_digits
+    call    lantern_app_digits
     ld      t2, 8(sp)                       # minutes
     li      t0, 60000
     divu    a0, t2, t0
@@ -327,7 +327,7 @@ LOCAL_FUNCTION app_time_text
     ld      a1, 0(sp)
     addi    a1, a1, 16
     li      a2, 2
-    call    app_digits
+    call    lantern_app_digits
     ld      t2, 8(sp)                       # seconds
     li      t0, 1000
     divu    a0, t2, t0
@@ -336,17 +336,17 @@ LOCAL_FUNCTION app_time_text
     ld      a1, 0(sp)
     addi    a1, a1, 19
     li      a2, 2
-    call    app_digits
+    call    lantern_app_digits
     ld      a0, 8(sp)                       # milliseconds
     ld      a1, 0(sp)
     addi    a1, a1, 23
     li      a2, 3
-    call    app_digits
+    call    lantern_app_digits
     UNFRAME 48
-END_FUNCTION app_time_text
+END_FUNCTION lantern_app_time_text
 
 /* L0: the a1 bytes at a0 join the log line, as far as it has room. Uses a0, a1, t0-t3, a7. */
-LOCAL_FUNCTION app_line_text
+LOCAL_FUNCTION lantern_app_line_text
     UNWIND_END_PROLOGUE
     ADDQ    t0, s1, APP_LINE
     ld      t1, 16(t0)
@@ -366,10 +366,10 @@ LOCAL_FUNCTION app_line_text
     addi    a1, a1, -1
     j       2b
 3:  ret
-END_FUNCTION app_line_text
+END_FUNCTION lantern_app_line_text
 
 /* L1: the decimal digits of a0 join the log line. Locals: 32 digit bytes. */
-LOCAL_FUNCTION app_line_u64
+LOCAL_FUNCTION lantern_app_line_u64
     FRAME 32
     addi    t0, sp, 32                      # the digits, from the end
     li      t1, 10
@@ -382,12 +382,12 @@ LOCAL_FUNCTION app_line_u64
     mv      a0, t0
     addi    a1, sp, 32
     sub     a1, a1, t0
-    call    app_line_text
+    call    lantern_app_line_text
     UNFRAME 32
-END_FUNCTION app_line_u64
+END_FUNCTION lantern_app_line_u64
 
 /* L1: the hex digits of the a1 bytes at a0 join the log line. Locals: a0, a1, then 2 digits. */
-LOCAL_FUNCTION app_line_hex
+LOCAL_FUNCTION lantern_app_line_hex
     FRAME 32
     sd      a0, 0(sp)
     sd      a1, 8(sp)
@@ -410,17 +410,17 @@ LOCAL_FUNCTION app_line_hex
     sb      t2, 17(sp)
     addi    a0, sp, 16
     li      a1, 2
-    call    app_line_text
+    call    lantern_app_line_text
     j       1b
 2:  UNFRAME 32
-END_FUNCTION app_line_hex
+END_FUNCTION lantern_app_line_hex
 
 /*
  * L1: the log line of kind a0 (APP_LOG_INFO, ERROR, WARN or DEBUG), when its level is at most the
  * log level: its time and level before it, an LF after it, to the standard error for ERROR and
  * WARN, else the standard output. Locals: sp+0 the level, +8 the time, +16 an LF.
  */
-LOCAL_FUNCTION app_line_end
+LOCAL_FUNCTION lantern_app_line_end
     FRAME 32
     ADDRESS t0, app_log_rank
     add     t0, t0, a0
@@ -437,7 +437,7 @@ LOCAL_FUNCTION app_line_end
     CALL_GLOBAL lantern_shell_time_ms
     ld      a0, 8(sp)
     ADDQ    a1, s1, (APP_LINE + 24)
-    call    app_time_text
+    call    lantern_app_time_text
     ADDQ    a1, s1, (APP_LINE + 24)
     li      t0, 0x20
     sb      t0, 23(a1)
@@ -458,14 +458,14 @@ LOCAL_FUNCTION app_line_end
     sb      t0, 16(sp)
     addi    a0, sp, 16
     li      a1, 1
-    call    app_line_text
+    call    lantern_app_line_text
     ld      t2, 0(sp)                       # the metrics: the line, by its level (0 error to 3 debug)
     AM_INC_AT log_lines, t2
     ADDQ    a0, s1, APP_STREAM
     ADDQ    a1, s1, APP_LINE
     CALL_GLOBAL lantern_shell_write
 9:  UNFRAME 32
-END_FUNCTION app_line_end
+END_FUNCTION lantern_app_line_end
 
 /*
  * L1: the log lines of a work that ran (app.md, the log): DEBUG work <kind> result <n>; for a
@@ -473,26 +473,26 @@ END_FUNCTION app_line_end
  * result <n>. a0 its kind, a1 its data entry or 0. Locals: sp+0 kind, +8 entry, +16 result,
  * +24 slot.
  */
-LOCAL_FUNCTION app_log_work
+LOCAL_FUNCTION lantern_app_log_work
     FRAME 32
     sd      a0, 0(sp)
     sd      a1, 8(sp)
     LDQ     t0, s1, APP_WORK_EVENT
     ld      t0, NodeEvent_result(t0)
     sd      t0, 16(sp)
-    call    app_line_start
+    call    lantern_app_line_start
     ADDRESS a0, app_m_log_work
     li      a1, app_m_log_work_len
-    call    app_line_text
+    call    lantern_app_line_text
     ld      a0, 0(sp)
-    call    app_line_u64
+    call    lantern_app_line_u64
     ADDRESS a0, app_m_log_result
     li      a1, app_m_log_result_len
-    call    app_line_text
+    call    lantern_app_line_text
     ld      a0, 16(sp)
-    call    app_line_u64
+    call    lantern_app_line_u64
     li      a0, APP_LOG_DEBUG
-    call    app_line_end
+    call    lantern_app_line_end
     ld      t0, 0(sp)
     li      t1, NODE_WORK_IMPORT_BLOCK
     bne     t0, t1, 9f
@@ -517,38 +517,38 @@ LOCAL_FUNCTION app_log_work
     addi    t2, t2, -1
     bgez    t2, 4b
     sd      t1, 24(sp)
-    call    app_line_start
+    call    lantern_app_line_start
     ADDRESS a0, app_m_log_block
     li      a1, app_m_log_block_len
-    call    app_line_text
+    call    lantern_app_line_text
     ld      a0, 24(sp)
-    call    app_line_u64
+    call    lantern_app_line_u64
     ld      t0, 16(sp)
     bnez    t0, 1f
     ADDRESS a0, app_m_log_imported
     li      a1, app_m_log_imported_len
-    call    app_line_text
+    call    lantern_app_line_text
     LDQ     t0, s1, APP_WORK_EVENT
     ld      a0, NodeEvent_index(t0)
-    call    app_line_u64
+    call    lantern_app_line_u64
     ADDRESS a0, app_m_log_attestations
     li      a1, app_m_log_attestations_len
-    call    app_line_text
+    call    lantern_app_line_text
     li      a0, APP_LOG_INFO
-    call    app_line_end
+    call    lantern_app_line_end
     j       9f
 1:  ADDRESS a0, app_m_log_not
     li      a1, app_m_log_not_len
-    call    app_line_text
+    call    lantern_app_line_text
     ld      a0, 16(sp)
-    call    app_line_u64
+    call    lantern_app_line_u64
     li      a0, APP_LOG_WARN
-    call    app_line_end
+    call    lantern_app_line_end
 9:  UNFRAME 32
-END_FUNCTION app_log_work
+END_FUNCTION lantern_app_log_work
 
 /* L1: the path of the a1 bytes of the name at a0 in the network directory: a ByteList at APP_PATH. s6 the ByteList. */
-LOCAL_FUNCTION app_path
+LOCAL_FUNCTION lantern_app_path
     ENTER 0
     mv      s2, a0
     mv      s3, a1
@@ -577,10 +577,10 @@ LOCAL_FUNCTION app_path
 1:  li      t0, (APP_PATH_MAX + 1)          # a count past the room: the shell gives its error
     sd      t0, 16(s6)
     LEAVE 0
-END_FUNCTION app_path
+END_FUNCTION lantern_app_path
 
 /* L1: the path of the log line: the bytes of APP_PATH, as far as they fit. */
-LOCAL_FUNCTION app_line_path
+LOCAL_FUNCTION lantern_app_line_path
     FRAME 0
     ADDQ    t0, s1, APP_PATH
     addi    a0, t0, 24
@@ -588,41 +588,41 @@ LOCAL_FUNCTION app_line_path
     li      t1, APP_PATH_MAX
     bleu    a1, t1, 1f
     mv      a1, t1
-1:  call    app_line_text
+1:  call    lantern_app_line_text
     UNFRAME 0
-END_FUNCTION app_line_path
+END_FUNCTION lantern_app_line_path
 
 /* L1: the file at APP_PATH, read into APP_FILE: a0 = 0, or 2 after a line on the standard error. */
-LOCAL_FUNCTION app_read
+LOCAL_FUNCTION lantern_app_read
     FRAME 0
     ADDQ    a0, s1, APP_PATH
     ADDQ    a1, s1, APP_FILE
     CALL_GLOBAL lantern_shell_read_file
     LDQ     t0, s1, APP_FILE
     beqz    t0, 1f
-    call    app_line_start                  # cannot read <path>: error <n>
+    call    lantern_app_line_start                  # cannot read <path>: error <n>
     ADDRESS a0, app_m_read
     li      a1, app_m_read_len
-    call    app_line_text
-    call    app_line_path
+    call    lantern_app_line_text
+    call    lantern_app_line_path
     ADDRESS a0, app_m_error
     li      a1, app_m_error_len
-    call    app_line_text
+    call    lantern_app_line_text
     LDQ     a0, s1, APP_FILE
-    call    app_line_u64
+    call    lantern_app_line_u64
     li      a0, APP_LOG_ERROR
-    call    app_line_end
+    call    lantern_app_line_end
     li      a0, 2
     UNFRAME 0
 1:  li      a0, 0
     UNFRAME 0
-END_FUNCTION app_read
+END_FUNCTION lantern_app_read
 
 /*
  * L1: APP_PATH holds the path of the Arg at a0, or a count past its room when the path does not
  * fit, so the shell gives its error.
  */
-LOCAL_FUNCTION app_arg_path
+LOCAL_FUNCTION lantern_app_arg_path
     FRAME 0
     ld      a1, 0(a0)
     ld      a2, 8(a0)
@@ -637,7 +637,7 @@ LOCAL_FUNCTION app_arg_path
 1:  li      t0, (APP_PATH_MAX + 1)
     STQ     t0, s1, (APP_PATH + 16)
     UNFRAME 0
-END_FUNCTION app_arg_path
+END_FUNCTION lantern_app_arg_path
 
 /*
  * L2: the anchor of --checkpoint-state and --checkpoint-block in APP_FILE, in the form of
@@ -646,11 +646,11 @@ END_FUNCTION app_arg_path
  * ByteList, s4 its bytes, s5 the state file's ByteList, s6 its bytes, s7 the buffer's size, s8 the
  * buffer. Locals: L the block file's address and mapped size.
  */
-LOCAL_FUNCTION app_checkpoint
+LOCAL_FUNCTION lantern_app_checkpoint
     ENTER 16
     ADDQ    a0, s1, (APP_OPTIONS + AppOptions_checkpoint_block)
-    call    app_arg_path
-    call    app_read
+    call    lantern_app_arg_path
+    call    lantern_app_read
     bnez    a0, 99f
     LDQ     s2, s1, (APP_FILE + 8)
     LDQ     s4, s1, (APP_FILE + 16)
@@ -661,8 +661,8 @@ LOCAL_FUNCTION app_checkpoint
     sd      t0, (L + 8)(sp)
     STQ     zero, s1, (APP_FILE + 8)
     ADDQ    a0, s1, (APP_OPTIONS + AppOptions_checkpoint_state)
-    call    app_arg_path
-    call    app_read
+    call    lantern_app_arg_path
+    call    lantern_app_read
     bnez    a0, 98f
     LDQ     s5, s1, (APP_FILE + 8)
     LDQ     s6, s1, (APP_FILE + 16)
@@ -672,7 +672,7 @@ LOCAL_FUNCTION app_checkpoint
     add     t0, t0, s4
     addi    s7, t0, -100
     mv      a0, s7
-    call    app_map
+    call    lantern_app_map
     beqz    a0, 97f
     mv      s8, a0
     li      t1, 24                          # the ByteList of both
@@ -702,7 +702,7 @@ LOCAL_FUNCTION app_checkpoint
     addi    a1, s2, (24 + 100)
     mv      a2, t3
     call    lantern_copy
-    call    app_file_free                   # the files go; the buffer takes their place
+    call    lantern_app_file_free                   # the files go; the buffer takes their place
     addi    a0, sp, L
     addi    a1, sp, (L + 8)
     CALL_GLOBAL lantern_shell_unmap
@@ -713,31 +713,31 @@ LOCAL_FUNCTION app_checkpoint
     STQ     s7, s1, (APP_FILE + 24)
     li      a0, 0
     LEAVE 16
-90: call    app_file_free                   # <path>: too short
-    call    app_line_start
-    call    app_line_path
+90: call    lantern_app_file_free                   # <path>: too short
+    call    lantern_app_line_start
+    call    lantern_app_line_path
     ADDRESS a0, app_m_short
     li      a1, app_m_short_len
-    call    app_line_text
+    call    lantern_app_line_text
     li      a0, APP_LOG_ERROR
-    call    app_line_end
+    call    lantern_app_line_end
     j       99f
-97: call    app_file_free                   # no memory
-    call    app_line_start
+97: call    lantern_app_file_free                   # no memory
+    call    lantern_app_line_start
     ADDRESS a0, app_m_memory
     li      a1, app_m_memory_len
-    call    app_line_text
+    call    lantern_app_line_text
     li      a0, APP_LOG_ERROR
-    call    app_line_end
+    call    lantern_app_line_end
 98: addi    a0, sp, L                       # the block file goes
     addi    a1, sp, (L + 8)
     CALL_GLOBAL lantern_shell_unmap
 99: li      a0, 2
     LEAVE 16
-END_FUNCTION app_checkpoint
+END_FUNCTION lantern_app_checkpoint
 
 /* L1: the memory of APP_FILE goes back. */
-LOCAL_FUNCTION app_file_free
+LOCAL_FUNCTION lantern_app_file_free
     FRAME 16
     LDQ     t0, s1, (APP_FILE + 8)
     beqz    t0, 1f
@@ -746,48 +746,48 @@ LOCAL_FUNCTION app_file_free
     CALL_GLOBAL lantern_shell_unmap
     STQ     zero, s1, (APP_FILE + 8)
 1:  UNFRAME 16
-END_FUNCTION app_file_free
+END_FUNCTION lantern_app_file_free
 
 /* L1: a line "<a1 bytes at a0>: status <a2>" on the standard error, then a0 = 2. Locals: a0-a2. */
-LOCAL_FUNCTION app_fail_status
+LOCAL_FUNCTION lantern_app_fail_status
     FRAME 32
     sd      a0, 0(sp)
     sd      a1, 8(sp)
     sd      a2, 16(sp)
-    call    app_line_start
+    call    lantern_app_line_start
     ld      a0, 0(sp)
     ld      a1, 8(sp)
-    call    app_line_text
+    call    lantern_app_line_text
     ADDRESS a0, app_m_status
     li      a1, app_m_status_len
-    call    app_line_text
+    call    lantern_app_line_text
     ld      a0, 16(sp)
-    call    app_line_u64
+    call    lantern_app_line_u64
     li      a0, APP_LOG_ERROR
-    call    app_line_end
+    call    lantern_app_line_end
     li      a0, 2
     UNFRAME 32
-END_FUNCTION app_fail_status
+END_FUNCTION lantern_app_fail_status
 
 /* L1: a0 = 2 after a line "lantern: no memory" on the standard error. */
-LOCAL_FUNCTION app_no_memory
+LOCAL_FUNCTION lantern_app_no_memory
     FRAME 0
-    call    app_line_start
+    call    lantern_app_line_start
     ADDRESS a0, app_m_memory
     li      a1, app_m_memory_len
-    call    app_line_text
+    call    lantern_app_line_text
     li      a0, APP_LOG_ERROR
-    call    app_line_end
+    call    lantern_app_line_end
     li      a0, 2
     UNFRAME 0
-END_FUNCTION app_no_memory
+END_FUNCTION lantern_app_no_memory
 
 /*
  * L2: the start of docs/reference/app.md: the config, the anchor of genesis.ssz, the store, the
  * node and the Seen: a0 = 0, or 2 after a line on the standard error. s2 a ByteList, s3 the
  * file's size, s4 a size, s5 a size, s6 the tries. Locals: L a line number or a size.
  */
-LOCAL_FUNCTION app_start
+LOCAL_FUNCTION lantern_app_start
     ENTER 16
     ADDRESS a0, app_builtin_config          # the config: the pinned config of the preset, then the network's
     ADDQ    a1, s1, APP_CONFIG
@@ -795,23 +795,23 @@ LOCAL_FUNCTION app_start
     CALL_GLOBAL lantern_config_parse
     ADDRESS a0, app_config_name
     li      a1, app_config_name_len
-    call    app_path
-    call    app_read
+    call    lantern_app_path
+    call    lantern_app_read
     bnez    a0, 99f
     LDQ     a0, s1, (APP_FILE + 8)
     ADDQ    a1, s1, APP_CONFIG
     addi    a2, sp, L
     CALL_GLOBAL lantern_config_parse
     mv      s2, a0
-    call    app_file_free
+    call    lantern_app_file_free
     beqz    s2, 1f
-    call    app_line_start                  # <path>: faulty line <n>
-    call    app_line_path
+    call    lantern_app_line_start                  # <path>: faulty line <n>
+    call    lantern_app_line_path
     ADDRESS a0, app_m_line
     li      a1, app_m_line_len
-    call    app_line_text
+    call    lantern_app_line_text
     ld      a0, L(sp)
-    call    app_line_u64
+    call    lantern_app_line_u64
     j       98f
 1:  li      s7, 0                           # with a data directory: its anchor.ssz, when there is one
     LDQ     t0, s1, (APP_OPTIONS + AppOptions_data_dir + 8)
@@ -819,7 +819,7 @@ LOCAL_FUNCTION app_start
     ADDRESS a0, app_anchor_name
     li      a1, app_anchor_name_len
     ADDQ    a2, s1, APP_PATH
-    call    app_db_file
+    call    lantern_app_db_file
     ADDQ    a0, s1, APP_PATH
     ADDQ    a1, s1, APP_FILE
     CALL_GLOBAL lantern_shell_read_file
@@ -829,25 +829,25 @@ LOCAL_FUNCTION app_start
     j       12f
 11: LDQ     t0, s1, (APP_OPTIONS + AppOptions_checkpoint_state + 8)  # else the checkpoint files
     beqz    t0, 111f
-    call    app_checkpoint
+    call    lantern_app_checkpoint
     bnez    a0, 99f
     li      s7, 2
     j       12f
 111: ADDRESS a0, app_genesis_name           # else genesis.ssz: the fork of its slot
     li      a1, app_genesis_name_len
-    call    app_path
-    call    app_read
+    call    lantern_app_path
+    call    lantern_app_read
     bnez    a0, 99f
 12:
     LDQ     s2, s1, (APP_FILE + 8)
     LDQ     s3, s1, (APP_FILE + 16)
     li      t0, (40 + 8)
     bgeu    s3, t0, 2f
-    call    app_line_start
-    call    app_line_path
+    call    lantern_app_line_start
+    call    lantern_app_line_path
     ADDRESS a0, app_m_short
     li      a1, app_m_short_len
-    call    app_line_text
+    call    lantern_app_line_text
     j       98f
 2:  snez    t0, s7                          # BeaconState.slot, after the ByteList header of anchor.ssz's state
     li      t1, 24
@@ -855,7 +855,7 @@ LOCAL_FUNCTION app_start
     add     t0, s2, t0
     ld      a0, (24 + 40)(t0)
     ADDQ    a1, s1, APP_CONFIG
-    call    app_fork
+    call    lantern_app_fork
     STQ     a0, s1, APP_FORK
     ADDQ    a0, s1, APP_STATE_ROOM
     ADDRESS a1, app_state_room
@@ -875,15 +875,15 @@ LOCAL_FUNCTION app_start
     add     s8, s3, t0
 3:  li      a0, APP_STATE
     mv      a1, s4
-    call    app_alloc
+    call    lantern_app_alloc
     beqz    a0, 97f
     li      a0, APP_SCRATCH
     mv      a1, s5
-    call    app_alloc
+    call    lantern_app_alloc
     beqz    a0, 97f
     li      a0, APP_BLOCK
     mv      a1, s8
-    call    app_alloc
+    call    lantern_app_alloc
     beqz    a0, 97f
     mv      a0, s2
     ADDQ    a1, s1, APP_STATE_ROOM
@@ -899,11 +899,11 @@ LOCAL_FUNCTION app_start
     li      t0, LANTERN_BUFFER_TOO_SMALL
     bne     a0, t0, 96f
     li      a0, APP_STATE                   # more room, a few times
-    call    app_unmap
+    call    lantern_app_unmap
     li      a0, APP_SCRATCH
-    call    app_unmap
+    call    lantern_app_unmap
     li      a0, APP_BLOCK
-    call    app_unmap
+    call    lantern_app_unmap
     slli    s4, s4, 1
     slli    s5, s5, 1
     slli    s8, s8, 1
@@ -924,11 +924,11 @@ LOCAL_FUNCTION app_start
     add     a0, t0, a0
     LDQ     a1, s1, (APP_OPTIONS + AppOptions_checkpoint_state + 8)
 961:
-    call    app_fail_status
+    call    lantern_app_fail_status
     j       99f
-4:  call    app_file_free
+4:  call    lantern_app_file_free
     mv      a0, s3
-    call    app_state_cache
+    call    lantern_app_state_cache
     li      t0, 121                         # the store: nodes, and validators below the file's bytes / 121
     divu    t1, s3, t0
     li      t0, 4096
@@ -941,7 +941,7 @@ LOCAL_FUNCTION app_start
     CALL_GLOBAL lantern_store_size
     li      a0, APP_STORE
     ld      a1, L(sp)
-    call    app_alloc
+    call    lantern_app_alloc
     beqz    a0, 97f
     LDQ     a0, s1, APP_STATE
     LDQ     a1, s1, APP_BLOCK
@@ -955,7 +955,7 @@ LOCAL_FUNCTION app_start
     li      t0, LANTERN_BUFFER_TOO_SMALL
     bne     a0, t0, 95f
     li      a0, APP_STORE
-    call    app_unmap
+    call    lantern_app_unmap
     LDQ     t0, s1, APP_STORE_ROOM
     LDQ     t1, s1, (APP_STORE_ROOM + 8)
     slli    t0, t0, 1
@@ -969,7 +969,7 @@ LOCAL_FUNCTION app_start
 95: mv      a2, a0                          # the store: status <n>
     ADDRESS a0, app_m_store
     li      a1, app_m_store_len
-    call    app_fail_status
+    call    lantern_app_fail_status
     j       99f
 6:  LDQ     t0, s1, APP_STORE               # the node's anchor: the store's node 0, the state's root
     LDQ     t1, t0, Store_blocks
@@ -994,11 +994,11 @@ LOCAL_FUNCTION app_start
     beqz    t1, 1f
     ori     t0, t0, NODE_FLAG_SUPERNODE
 1:  STQ     t0, s1, APP_FLAGS
-    call    app_engine_conf                 # the execution engine
+    call    lantern_app_engine_conf                 # the execution engine
     bnez    a0, 99f
-    call    app_builder_conf                # the builder
+    call    lantern_app_builder_conf                # the builder
     bnez    a0, 99f
-    call    app_key                         # the key, and the anchor's node ID
+    call    lantern_app_key                         # the key, and the anchor's node ID
     bnez    a0, 94f
     ADDQ    a0, s1, APP_NODE_ROOM           # the node
     ADDRESS a1, app_node_room
@@ -1008,10 +1008,10 @@ LOCAL_FUNCTION app_start
     STQ     t0, s1, (APP_NODE_ROOM + NodeRoom_peers)
     LDQ     t0, s1, (APP_OPTIONS + AppOptions_http_max_connections)
     STQ     t0, s1, (APP_NODE_ROOM + NodeRoom_api_streams)
-    call    app_db_start                    # the history's files
+    call    lantern_app_db_start                    # the history's files
     li      t0, 1
     bne     s7, t0, 13f
-    call    app_db_history                  # from anchor.ssz: the segments there
+    call    lantern_app_db_history                  # from anchor.ssz: the segments there
 13:
     ADDQ    a0, s1, APP_NODE_ROOM
     addi    a1, sp, L
@@ -1019,7 +1019,7 @@ LOCAL_FUNCTION app_start
     bnez    a0, 94f
     li      a0, APP_NODE
     ld      a1, L(sp)
-    call    app_alloc
+    call    lantern_app_alloc
     beqz    a0, 97f
     ADDQ    a0, s1, APP_NODE_ROOM
     ADDQ    a1, s1, APP_CONFIG
@@ -1031,27 +1031,27 @@ LOCAL_FUNCTION app_start
     beqz    s7, 14f
     li      t0, 1
     beq     s7, t0, 141f
-    call    app_line_start                  # checkpoint at slot <n>
+    call    lantern_app_line_start                  # checkpoint at slot <n>
     ADDRESS a0, app_m_checkpoint
     li      a1, app_m_checkpoint_len
-    call    app_line_text
+    call    lantern_app_line_text
     LDQ     a0, s1, (APP_ANCHOR + 32)
-    call    app_line_u64
+    call    lantern_app_line_u64
     li      a0, APP_LOG_INFO
-    call    app_line_end
+    call    lantern_app_line_end
     j       14f
-141: call   app_db_fit                      # from anchor.ssz: room for the Db from its first slot
+141: call   lantern_app_db_fit                      # from anchor.ssz: room for the Db from its first slot
     bnez    a0, 99f
-    call    app_db_scan_all                 # the history's segments to the node
+    call    lantern_app_db_scan_all                 # the history's segments to the node
     bnez    a0, 99f
-    call    app_line_start                  # restart at slot <n>
+    call    lantern_app_line_start                  # restart at slot <n>
     ADDRESS a0, app_m_restart
     li      a1, app_m_restart_len
-    call    app_line_text
+    call    lantern_app_line_text
     LDQ     a0, s1, (APP_ANCHOR + 32)
-    call    app_line_u64
+    call    lantern_app_line_u64
     li      a0, APP_LOG_INFO
-    call    app_line_end
+    call    lantern_app_line_end
 14:
     ADDQ    a0, s1, APP_SEEN_ROOM           # the Seen
     ADDRESS a1, app_seen_room
@@ -1062,7 +1062,7 @@ LOCAL_FUNCTION app_start
     CALL_GLOBAL lantern_seen_size
     li      a0, APP_SEEN
     ld      a1, L(sp)
-    call    app_alloc
+    call    lantern_app_alloc
     beqz    a0, 97f
     ADDQ    a0, s1, APP_SEEN_ROOM
     LDQ     a1, s1, APP_SEEN
@@ -1070,7 +1070,7 @@ LOCAL_FUNCTION app_start
     bnez    a0, 94f
     li      a0, APP_KZG                     # the KZG trusted setup
     li      a1, CRYPTO_KZG_SETTINGS_SIZE
-    call    app_alloc
+    call    lantern_app_alloc
     beqz    a0, 97f
     ADDRESS a0, app_kzg_g1_lagrange
     ADDRESS a1, app_kzg_g1_monomial
@@ -1079,7 +1079,7 @@ LOCAL_FUNCTION app_start
     CALL_GLOBAL crypto_kzg_trusted_setup_of_bytes
     bnez    a0, 93f
     li      a0, (APP_BUF_ENTRY * APP_BUFS_CAP)  # BufferId 1: the anchor state
-    call    app_map
+    call    lantern_app_map
     beqz    a0, 97f
     STQ     a0, s1, APP_BUFS
     li      t0, 1
@@ -1091,64 +1091,64 @@ LOCAL_FUNCTION app_start
     STQ     t0, s1, (APP_BUFS + 8)
     li      t1, APP_BUFS_CAP
     STQ     t1, s1, (APP_BUFS + 16)
-    call    app_lc_start                    # BufferId 2: the light client store
+    call    lantern_app_lc_start                    # BufferId 2: the light client store
     bnez    a0, 97f
     li      a0, APP_ACTIONS                 # the queues of a step
     li      a1, APP_QUEUE_BYTES
-    call    app_alloc
+    call    lantern_app_alloc
     beqz    a0, 97f
     li      a0, APP_EVENTS
     li      a1, APP_QUEUE_BYTES
-    call    app_alloc
+    call    lantern_app_alloc
     beqz    a0, 97f
     li      t0, 24
     sd      t0, 8(a0)
     sd      zero, 16(a0)
     li      a0, APP_WORK_EVENT
     li      a1, APP_QUEUE_BYTES
-    call    app_alloc
+    call    lantern_app_alloc
     beqz    a0, 97f
-    call    app_line_start                  # started at slot <s>, fork <f>, head 0x<root>
+    call    lantern_app_line_start                  # started at slot <s>, fork <f>, head 0x<root>
     ADDRESS a0, app_m_started
     li      a1, app_m_started_len
-    call    app_line_text
+    call    lantern_app_line_text
     LDQ     a0, s1, (APP_ANCHOR + 32)
-    call    app_line_u64
+    call    lantern_app_line_u64
     ADDRESS a0, app_m_fork
     li      a1, app_m_fork_len
-    call    app_line_text
+    call    lantern_app_line_text
     LDQ     a0, s1, APP_FORK
-    call    app_line_u64
+    call    lantern_app_line_u64
     ADDRESS a0, app_m_head
     li      a1, app_m_head_len
-    call    app_line_text
+    call    lantern_app_line_text
     ADDQ    a0, s1, APP_ANCHOR
     li      a1, 32
-    call    app_line_hex
+    call    lantern_app_line_hex
     li      a0, APP_LOG_INFO
-    call    app_line_end
+    call    lantern_app_line_end
     li      a0, 0
     LEAVE 16
 93: mv      a2, a0                          # the KZG trusted setup: status <n>
     ADDRESS a0, app_m_kzg
     li      a1, app_m_kzg_len
-    call    app_fail_status
+    call    lantern_app_fail_status
     j       99f
 94: mv      a2, a0                          # the node: status <n>
     ADDRESS a0, app_m_node
     li      a1, app_m_node_len
-    call    app_fail_status
+    call    lantern_app_fail_status
     j       99f
-97: call    app_no_memory
+97: call    lantern_app_no_memory
     j       99f
 98: li      a0, APP_LOG_ERROR
-    call    app_line_end
+    call    lantern_app_line_end
 99: li      a0, 2
     LEAVE 16
-END_FUNCTION app_start
+END_FUNCTION lantern_app_start
 
 /* L0: a0 = the BufferId table entry of the id a0, or 0. Uses t0-t2, a7. */
-LOCAL_FUNCTION app_buf_find
+LOCAL_FUNCTION lantern_app_buf_find
     UNWIND_END_PROLOGUE
     LDQ     t0, s1, APP_BUFS
     LDQ     t1, s1, (APP_BUFS + 8)
@@ -1162,18 +1162,18 @@ LOCAL_FUNCTION app_buf_find
     ret
 3:  mv      a0, t0
     ret
-END_FUNCTION app_buf_find
+END_FUNCTION lantern_app_buf_find
 
 /*
  * L1: the BufferId table with twice its room: new memory with its entries, the old memory back to
  * lantern_shell_unmap. a0 = 0, or 1 with no memory. Locals: the old address, its bytes.
  */
-LOCAL_FUNCTION app_buf_grow
+LOCAL_FUNCTION lantern_app_buf_grow
     FRAME 16
     LDQ     t0, s1, (APP_BUFS + 16)
     li      t1, 2 * APP_BUF_ENTRY
     mul     a0, t0, t1
-    call    app_map
+    call    lantern_app_map
     beqz    a0, 9f
     LDQ     t0, s1, APP_BUFS
     LDQ     t1, s1, (APP_BUFS + 16)
@@ -1195,22 +1195,22 @@ LOCAL_FUNCTION app_buf_grow
     UNFRAME 16
 9:  li      a0, 1
     UNFRAME 16
-END_FUNCTION app_buf_grow
+END_FUNCTION lantern_app_buf_grow
 
 /* L1: a table entry of the id a0 for the memory a1 of a2 bytes, the table twice as large when full: a0 = 0, or 1 for id 0, an id in use or no memory. */
-LOCAL_FUNCTION app_buf_add
+LOCAL_FUNCTION lantern_app_buf_add
     FRAME 32
     sd      a0, 0(sp)
     sd      a1, 8(sp)
     sd      a2, 16(sp)
     beqz    a0, 9f
-    call    app_buf_find
+    call    lantern_app_buf_find
     bnez    a0, 9f
     LDQ     t0, s1, APP_BUFS
     LDQ     t1, s1, (APP_BUFS + 8)
     LDQ     t2, s1, (APP_BUFS + 16)
     bltu    t1, t2, 1f
-    call    app_buf_grow                    # full: twice the room
+    call    lantern_app_buf_grow                    # full: twice the room
     bnez    a0, 9f
     LDQ     t0, s1, APP_BUFS
     LDQ     t1, s1, (APP_BUFS + 8)
@@ -1229,7 +1229,7 @@ LOCAL_FUNCTION app_buf_add
     UNFRAME 32
 9:  li      a0, 1
     UNFRAME 32
-END_FUNCTION app_buf_add
+END_FUNCTION lantern_app_buf_add
 
 /*
  * L1: NODE_ACT_BYTES_JOIN a0 (app.md): new memory with the ByteLists of the ids one after another,
@@ -1237,7 +1237,7 @@ END_FUNCTION app_buf_add
  * of no bytes. s2 the action, s3 the count, s4 the bytes, s5 an index, s6 the memory, s7 the
  * place, s8 a ByteList.
  */
-LOCAL_FUNCTION app_bytes_join
+LOCAL_FUNCTION lantern_app_bytes_join
     ENTER 0
     mv      s2, a0
     ld      s3, 24(s2)
@@ -1247,7 +1247,7 @@ LOCAL_FUNCTION app_bytes_join
     slli    t0, s5, 3
     add     t0, s2, t0
     ld      a0, 32(t0)
-    call    app_buf_find
+    call    lantern_app_buf_find
     beqz    a0, 5f
     ld      t0, 8(a0)
     ld      t0, 16(t0)
@@ -1259,7 +1259,7 @@ LOCAL_FUNCTION app_bytes_join
 5:  li      s4, 0                           # an id with no bytes: none
     li      s3, 0
 2:  addi    a0, s4, 24
-    call    app_map
+    call    lantern_app_map
     beqz    a0, 9f
     mv      s6, a0
     addi    t0, s4, 24
@@ -1273,7 +1273,7 @@ LOCAL_FUNCTION app_bytes_join
     slli    t0, s5, 3
     add     t0, s2, t0
     ld      a0, 32(t0)
-    call    app_buf_find
+    call    lantern_app_buf_find
     ld      s8, 8(a0)
     ld      t0, 16(s8)
     addi    t1, t0, 24
@@ -1295,14 +1295,14 @@ LOCAL_FUNCTION app_bytes_join
 4:  ld      a0, 16(s2)
     mv      a1, s6
     addi    a2, s4, 24
-    call    app_buf_add
+    call    lantern_app_buf_add
 9:  LEAVE 0
-END_FUNCTION app_bytes_join
+END_FUNCTION lantern_app_bytes_join
 
 /* L1: the buffer of the id a0 goes back to the OS, and the last entry takes its place. */
-LOCAL_FUNCTION app_buf_drop
+LOCAL_FUNCTION lantern_app_buf_drop
     FRAME 16
-    call    app_buf_find
+    call    lantern_app_buf_find
     beqz    a0, 9f
     sd      a0, 0(sp)
     addi    a1, a0, 16
@@ -1323,7 +1323,7 @@ LOCAL_FUNCTION app_buf_drop
     ld      t3, 16(t1)
     sd      t3, 16(t0)
 9:  UNFRAME 16
-END_FUNCTION app_buf_drop
+END_FUNCTION lantern_app_buf_drop
 
 /*
  * L1: a0 = new memory with a copy of the a1 bytes at a0, or 0. With a source at a multiple of 8,
@@ -1331,12 +1331,12 @@ END_FUNCTION app_buf_drop
  * already, and the OS keeps no memory for a page nobody writes; the last part of a page is copied. s2 the source, s3 the size,
  * s4 the copy, s5 the page's offset, s6 its bytes.
  */
-LOCAL_FUNCTION app_dup
+LOCAL_FUNCTION lantern_app_dup
     ENTER 0
     mv      s2, a0
     mv      s3, a1
     mv      a0, a1
-    call    app_map
+    call    lantern_app_map
     beqz    a0, 9f
     mv      s4, a0
     andi    t0, s2, 7
@@ -1367,13 +1367,13 @@ LOCAL_FUNCTION app_dup
     j       2b
 8:  mv      a0, s4
 9:  LEAVE 0
-END_FUNCTION app_dup
+END_FUNCTION lantern_app_dup
 
 /*
  * L1: the a1 bytes of the event at a0 join the events of the next step, which grow when full:
  * a0 = 0, or 1 with no memory. s2 the event, s3 its size, s4 the events, s5 a new size, s6 new memory.
  */
-LOCAL_FUNCTION app_event_put
+LOCAL_FUNCTION lantern_app_event_put
     ENTER 0
     mv      s2, a0
     mv      s3, a1
@@ -1386,7 +1386,7 @@ LOCAL_FUNCTION app_event_put
     slli    s5, t0, 1                       # twice the room, and the event
     add     s5, s5, s3
     mv      a0, s5
-    call    app_map
+    call    lantern_app_map
     beqz    a0, 9f
     mv      s6, a0
     mv      a1, s4
@@ -1395,7 +1395,7 @@ LOCAL_FUNCTION app_event_put
     call    lantern_copy
     sd      s5, 0(s6)
     li      a0, APP_EVENTS
-    call    app_unmap
+    call    lantern_app_unmap
     STQ     s6, s1, APP_EVENTS
     STQ     s5, s1, (APP_EVENTS + 8)
     j       1b
@@ -1412,14 +1412,14 @@ LOCAL_FUNCTION app_event_put
     LEAVE 0
 9:  li      a0, 1
     LEAVE 0
-END_FUNCTION app_event_put
+END_FUNCTION lantern_app_event_put
 
 /*
  * L1: the node (a0 = 0), the store (1) or the Seen (2) moves to new memory, with the field of its
  * room at byte offset a1 doubled, or each field for a1 = 2^64 - 1: a0 = 0, or 1. s2 the kind, s3 the pair, s4 the room, s5 the room's fields,
  * s6 the new memory. Locals: L a size, L+8 an address.
  */
-LOCAL_FUNCTION app_grow
+LOCAL_FUNCTION lantern_app_grow
     ENTER 16
     mv      s2, a0
     li      t0, APP_NODE
@@ -1469,7 +1469,7 @@ LOCAL_FUNCTION app_grow
 42: CALL_GLOBAL lantern_seen_size
 43: bnez    a0, 9f
     ld      a0, L(sp)
-    call    app_map
+    call    lantern_app_map
     beqz    a0, 9f
     mv      s6, a0
     ld      t0, L(sp)
@@ -1487,7 +1487,7 @@ LOCAL_FUNCTION app_grow
 52: CALL_GLOBAL lantern_seen_copy
 53: bnez    a0, 8f
     sub     a0, s3, s1
-    call    app_unmap
+    call    lantern_app_unmap
     ld      t0, L(sp)
     sd      s6, 0(s3)
     sd      t0, 8(s3)
@@ -1499,13 +1499,13 @@ LOCAL_FUNCTION app_grow
     CALL_GLOBAL lantern_shell_unmap
 9:  li      a0, 1
     LEAVE 16
-END_FUNCTION app_grow
+END_FUNCTION lantern_app_grow
 
 /*
  * L1: the state of the BufferId table entry a0 moves to new memory with twice the StateRoom of the
  * App: a0 = 0, or 1. s2 the entry, s3 the fork, s4 the new memory. Locals: L a size.
  */
-LOCAL_FUNCTION app_regrow
+LOCAL_FUNCTION lantern_app_regrow
     ENTER 16
     mv      s2, a0
     ADDQ    t0, s1, APP_STATE_ROOM
@@ -1520,7 +1520,7 @@ LOCAL_FUNCTION app_regrow
     ld      t0, 8(s2)                       # the fork of the state's slot
     LDQ     a0, t0, NODE_STATE_SLOT
     ADDQ    a1, s1, APP_CONFIG
-    call    app_fork
+    call    lantern_app_fork
     mv      s3, a0
     ld      a0, 8(s2)
     ADDQ    a1, s1, APP_STATE_ROOM
@@ -1528,7 +1528,7 @@ LOCAL_FUNCTION app_regrow
     mv      t6, s3
     FORK_CALL beacon_state_copy_size
     ld      a0, L(sp)
-    call    app_map
+    call    lantern_app_map
     beqz    a0, 9f
     mv      s4, a0
     ld      t0, L(sp)
@@ -1549,14 +1549,14 @@ LOCAL_FUNCTION app_regrow
     LEAVE 16
 9:  li      a0, 1
     LEAVE 16
-END_FUNCTION app_regrow
+END_FUNCTION lantern_app_regrow
 
 /*
  * L2: a0 = 0 with the light client store as BufferId 2 (node.md, lantern_node_init: Caller must):
  * lantern_lc_store_init of the anchor state and block with the APP_LC_* capacities; else 1. s2 the
  * store, s3 its size, s4 APP_TMP: the LcRoom, then the size.
  */
-LOCAL_FUNCTION app_lc_start
+LOCAL_FUNCTION lantern_app_lc_start
     ENTER 0
     li      t0, APP_TMP
     add     s4, s1, t0
@@ -1580,7 +1580,7 @@ LOCAL_FUNCTION app_lc_start
     bnez    a0, 9f
     ld      s3, LcRoom__mem(s4)
     mv      a0, s3
-    call    app_map
+    call    lantern_app_map
     beqz    a0, 9f
     mv      s2, a0
     sd      s3, 0(s2)
@@ -1596,19 +1596,19 @@ LOCAL_FUNCTION app_lc_start
     li      a0, NODE_LC_ID
     mv      a1, s2
     mv      a2, s3
-    call    app_buf_add
+    call    lantern_app_buf_add
     bnez    a0, 9f
     LEAVE 0
 9:  li      a0, 1
     LEAVE 0
-END_FUNCTION app_lc_start
+END_FUNCTION lantern_app_lc_start
 
 /*
  * L2: a0 = 0 when the light client store of the table entry a0 is in a new buffer with twice the
  * capacities of each part (lantern_lc_store_copy); else 1. s2 the entry, s3 the new buffer, s4 its
  * size, s5 APP_TMP: the LcRoom, then the size. Locals: L the new buffer and its size.
  */
-LOCAL_FUNCTION app_lc_grow
+LOCAL_FUNCTION lantern_app_lc_grow
     ENTER 16
     mv      s2, a0
     li      t0, APP_TMP
@@ -1630,7 +1630,7 @@ LOCAL_FUNCTION app_lc_grow
     bnez    a0, 9f
     ld      s4, LcRoom__mem(s5)
     mv      a0, s4
-    call    app_map
+    call    lantern_app_map
     beqz    a0, 9f
     mv      s3, a0
     sd      s4, 0(s3)
@@ -1653,35 +1653,35 @@ LOCAL_FUNCTION app_lc_grow
     CALL_GLOBAL lantern_shell_unmap
 9:  li      a0, 1
     LEAVE 16
-END_FUNCTION app_lc_grow
+END_FUNCTION lantern_app_lc_grow
 
 /*
  * L2: the WORK action a0, by lantern_node_run with its buffers, again with more room while it asks
  * for it; then its WORK_DONE event joins the next step's. s2 the action, s3-s6 the entries of
  * state_a, state_b, state_c and data (or 0), s7 the tries, s8 the kind, s9 a size.
  */
-LOCAL_FUNCTION app_work
+LOCAL_FUNCTION lantern_app_work
     ENTER 0
     mv      s2, a0
     LDQ     s8, s2, NodeAction_work_kind
     li      s7, 0
     LDQ     a0, s2, NodeAction_state_a
-    call    app_work_entry
+    call    lantern_app_work_entry
     mv      s3, a0
     LDQ     a0, s2, NodeAction_state_b
     li      a1, 1                           # ARCHIVE_LOAD: state_b a NODE_DB_REF too
     li      t0, NODE_WORK_ARCHIVE_LOAD
     bne     s8, t0, 101f
-    call    app_work_data
+    call    lantern_app_work_data
     j       102f
-101: call   app_work_entry
+101: call   lantern_app_work_entry
 102: mv     s4, a0
     LDQ     a0, s2, NodeAction_state_c
-    call    app_work_entry
+    call    lantern_app_work_entry
     mv      s5, a0
     LDQ     a0, s2, NodeAction_data
     li      a1, 0
-    call    app_work_data
+    call    lantern_app_work_data
     mv      s6, a0
     li      t0, -1                          # an id with no buffer
     beq     s3, t0, 90f
@@ -1693,7 +1693,7 @@ LOCAL_FUNCTION app_work
     ld      t0, 8(s3)
     ld      t0, NODE_STATE_SLOT(t0)
 100: STQ    t0, s1, APP_MET_S0
-    call    app_met_us
+    call    lantern_app_met_us
     STQ     a0, s1, APP_MET_T0
     li      t1, NodeEvent_api_bytes + 24 + NODE_API_CHUNK
     li      t0, NODE_WORK_API_CHUNK         # API_CHUNK: room for a whole chunk
@@ -1718,10 +1718,10 @@ LOCAL_FUNCTION app_work
     bgeu    t0, t1, 1f
     mv      s9, t1
     li      a0, APP_WORK_EVENT
-    call    app_unmap
+    call    lantern_app_unmap
     li      a0, APP_WORK_EVENT
     mv      a1, s9
-    call    app_alloc
+    call    lantern_app_alloc
     beqz    a0, 91f
 1:  LDQ     t0, s1, APP_WORK_EVENT          # the event's room
     LDQ     t1, s1, (APP_WORK_EVENT + 8)
@@ -1815,92 +1815,92 @@ LOCAL_FUNCTION app_work
     bltu    t0, t1, 4f
 5:  li      a0, 1                           # else the store
     li      a1, -1
-    call    app_grow
+    call    lantern_app_grow
     bnez    a0, 91f
     j       1b
 2:  LDQ     t0, s1, (APP_WORK_EVENT + 8)
     slli    s9, t0, 2
     li      a0, APP_WORK_EVENT
-    call    app_unmap
+    call    lantern_app_unmap
     li      a0, APP_WORK_EVENT
     mv      a1, s9
-    call    app_alloc
+    call    lantern_app_alloc
     beqz    a0, 91f
     j       1b
 3:  li      a0, 2                           # the Seen
     li      a1, -1
-    call    app_grow
+    call    lantern_app_grow
     bnez    a0, 91f
     beqz    s4, 1b
     mv      a0, s4
-    call    app_regrow
+    call    lantern_app_regrow
     bnez    a0, 91f
     j       1b
 31: li      a0, 2
     li      a1, -1
-    call    app_grow
+    call    lantern_app_grow
     bnez    a0, 91f
 4:  beqz    s3, 91f
     mv      a0, s3
-    call    app_regrow
+    call    lantern_app_regrow
     bnez    a0, 91f
     j       1b
 6:  beqz    s4, 91f
     mv      a0, s4
-    call    app_regrow
+    call    lantern_app_regrow
     bnez    a0, 91f
     j       1b
 17: beqz    s5, 91f
     mv      a0, s5
-    call    app_lc_grow
+    call    lantern_app_lc_grow
     bnez    a0, 91f
     j       1b
 18: beqz    s3, 91f
     mv      a0, s3
-    call    app_regrow
+    call    lantern_app_regrow
     bnez    a0, 91f
 181: LDQ    t0, s1, (APP_SCRATCH + 8)
     slli    s9, t0, 1
     li      a0, APP_SCRATCH
-    call    app_unmap
+    call    lantern_app_unmap
     li      a0, APP_SCRATCH
     mv      a1, s9
-    call    app_alloc
+    call    lantern_app_alloc
     beqz    a0, 91f
     j       1b
 7:  li      a0, 2
     li      a1, -1
-    call    app_grow
+    call    lantern_app_grow
     bnez    a0, 91f
     j       2b
 8:  mv      a0, s8
     mv      a1, s6
-    call    app_met_work
+    call    lantern_app_met_work
     mv      a0, s8
     mv      a1, s6
-    call    app_log_work
+    call    lantern_app_log_work
     LDQ     a0, s1, APP_WORK_EVENT          # the WORK_DONE event
     ld      a1, 0(a0)
-    call    app_event_put
+    call    lantern_app_event_put
     LEAVE 0
 90: ADDRESS a0, app_m_buffer                # an action's BufferId: status 0
     li      a1, app_m_buffer_len
     li      a2, 0
-    call    app_fail_status
+    call    lantern_app_fail_status
     LEAVE 0
 91: mv      a2, a0                          # a work: status <n>
     ADDRESS a0, app_m_work
     li      a1, app_m_work_len
-    call    app_fail_status
+    call    lantern_app_fail_status
     LEAVE 0
-END_FUNCTION app_work
+END_FUNCTION lantern_app_work
 
 /*
  * L1: the history's files: no file open, no segment mapped; with a data directory, the node gets
  * NODE_FLAG_DB and room for a segment of slots, and the directory is made (one already there
  * will do; a failure shows at its first file). s10 the AppDb.
  */
-LOCAL_FUNCTION app_db_start
+LOCAL_FUNCTION lantern_app_db_start
     ENTER 0
     ADDQ    s10, s1, APP_DB
     li      t0, -1
@@ -1952,7 +1952,7 @@ LOCAL_FUNCTION app_db_start
     ADDRESS a0, app_custody_name            # custody.bin: the anchor's custody_count and custody_slot
     li      a1, app_custody_name_len
     ADDQ    a2, s1, APP_PATH
-    call    app_db_file
+    call    lantern_app_db_file
     ADDQ    a0, s1, APP_PATH
     addi    a1, s10, AppDb_op
     CALL_GLOBAL lantern_shell_read_file
@@ -1972,7 +1972,7 @@ LOCAL_FUNCTION app_db_start
     addi    a1, s10, AppDb_op + 24
     CALL_GLOBAL lantern_shell_unmap_file
 9:  LEAVE 0
-END_FUNCTION app_db_start
+END_FUNCTION lantern_app_db_start
 
 /*
  * L1: the custody_count and custody_slot of the NODE_ACT_DB_STATE a0, when they are not those of
@@ -1980,7 +1980,7 @@ END_FUNCTION app_db_start
  * failure gives a cannot write line. s2 the action, s10 the AppDb. Locals: L a ByteList header,
  * L+24 a u64, L+32 a file.
  */
-LOCAL_FUNCTION app_db_custody
+LOCAL_FUNCTION lantern_app_db_custody
     ENTER 48
     mv      s2, a0
     ADDQ    s10, s1, APP_DB
@@ -1993,7 +1993,7 @@ LOCAL_FUNCTION app_db_custody
 1:  ADDRESS a0, app_custody_name
     li      a1, app_custody_name_len
     ADDQ    a2, s1, APP_PATH
-    call    app_db_file
+    call    lantern_app_db_file
     li      t0, 1
     sd      t0, (L + 24)(sp)
     ADDQ    a0, s1, APP_PATH
@@ -2046,23 +2046,23 @@ LOCAL_FUNCTION app_db_custody
 90: ld      t0, AppDb_op(s10)               # cannot write <path>: error <n>
     sd      t0, (L + 24)(sp)
     AM_INC  db_failures
-    call    app_line_start
+    call    lantern_app_line_start
     ADDRESS a0, app_m_write
     li      a1, app_m_write_len
-    call    app_line_text
-    call    app_line_path
+    call    lantern_app_line_text
+    call    lantern_app_line_path
     ADDRESS a0, app_m_error
     li      a1, app_m_error_len
-    call    app_line_text
+    call    lantern_app_line_text
     ld      a0, (L + 24)(sp)
-    call    app_line_u64
+    call    lantern_app_line_u64
     li      a0, APP_LOG_ERROR
-    call    app_line_end
+    call    lantern_app_line_end
     LEAVE 48
-END_FUNCTION app_db_custody
+END_FUNCTION lantern_app_db_custody
 
 /* L1: the path of segment a1 of blocks (a0 0), sidecars (1) or states (2) in the data directory, <dir>/b<n>.seg, <dir>/s<n>.seg or <dir>/a<n>.seg: a ByteList at APP_PATH. s2 the kind, s3 the segment, s4 the next byte. Locals: L 24 digits. */
-LOCAL_FUNCTION app_db_path
+LOCAL_FUNCTION lantern_app_db_path
     ENTER 32
     mv      s2, a0
     mv      s3, a1
@@ -2120,20 +2120,20 @@ LOCAL_FUNCTION app_db_path
     li      t1, APP_PATH_MAX + 1
     sd      t1, 16(t0)
     LEAVE 32
-END_FUNCTION app_db_path
+END_FUNCTION lantern_app_db_path
 
-/* L1: NODE_ACT_DB_APPEND a0: app_db_write of it with the table entry of its bytes. Locals: the action. */
-LOCAL_FUNCTION app_db_append
+/* L1: NODE_ACT_DB_APPEND a0: lantern_app_db_write of it with the table entry of its bytes. Locals: the action. */
+LOCAL_FUNCTION lantern_app_db_append
     FRAME 16
     sd      a0, 0(sp)
     ld      a0, 16(a0)
-    call    app_buf_find
+    call    lantern_app_buf_find
     beqz    a0, 9f
     mv      a1, a0
     ld      a0, 0(sp)
-    call    app_db_write
+    call    lantern_app_db_write
 9:  UNFRAME 16
-END_FUNCTION app_db_append
+END_FUNCTION lantern_app_db_append
 
 /*
  * L1: the record of a NODE_ACT_DB_APPEND a0 at the end of its segment file, with the bytes of the
@@ -2143,7 +2143,7 @@ END_FUNCTION app_db_append
  * else 1. s2 the action, s3 the kind (0 blocks, 1 sidecars, 2 states), s4 the bytes' table entry,
  * s5 the file, s10 the AppDb. Locals: L a ByteList header, L+24 a u64, L+32 zero bytes.
  */
-LOCAL_FUNCTION app_db_write
+LOCAL_FUNCTION lantern_app_db_write
     ENTER 48
     mv      s2, a0
     mv      s4, a1
@@ -2168,7 +2168,7 @@ LOCAL_FUNCTION app_db_write
     sd      t2, AppDb_segment(t1)
 1:  mv      a0, s3                          # the segment's file, to append to, cut to the offset
     ld      a1, 24(s2)
-    call    app_db_path
+    call    lantern_app_db_path
     li      t0, 1
     sd      t0, (L + 24)(sp)
     ADDQ    a0, s1, APP_PATH
@@ -2241,22 +2241,22 @@ LOCAL_FUNCTION app_db_write
     AM_INC  db_failures
     mv      a0, s3
     ld      a1, 24(s2)
-    call    app_db_path
-    call    app_line_start
+    call    lantern_app_db_path
+    call    lantern_app_line_start
     ADDRESS a0, app_m_write
     li      a1, app_m_write_len
-    call    app_line_text
-    call    app_line_path
+    call    lantern_app_line_text
+    call    lantern_app_line_path
     ADDRESS a0, app_m_error
     li      a1, app_m_error_len
-    call    app_line_text
+    call    lantern_app_line_text
     ld      a0, (L + 24)(sp)
-    call    app_line_u64
+    call    lantern_app_line_u64
     li      a0, APP_LOG_ERROR
-    call    app_line_end
+    call    lantern_app_line_end
     li      a0, 1
     LEAVE 48
-END_FUNCTION app_db_write
+END_FUNCTION lantern_app_db_write
 
 /*
  * L1: NODE_ACT_DB_ARCHIVE a0 (app.md): the state's SSZ bytes in new memory; above offset 0, the
@@ -2268,7 +2268,7 @@ END_FUNCTION app_db_write
  * s10 the AppDb. Locals: L the event (NODE_EV_DB_ARCHIVE_SIZE), L+112 an action of the kind's
  * record (16 to 127), L+240 a table entry, L+264 a ByteList header, L+288 a size, L+296 a fork.
  */
-LOCAL_FUNCTION app_db_archive
+LOCAL_FUNCTION lantern_app_db_archive
     ENTER 304
     mv      s2, a0
     ADDQ    s10, s1, APP_DB
@@ -2292,12 +2292,12 @@ LOCAL_FUNCTION app_db_archive
     li      a2, DbRecord__mem
     call    lantern_copy
     ld      a0, 16(s2)                      # the state's SSZ bytes
-    call    app_buf_find
+    call    lantern_app_buf_find
     beqz    a0, 60f
     mv      s3, a0
     ld      a0, (40 + DbRecord_slot)(s2)
     ADDQ    a1, s1, APP_CONFIG
-    call    app_fork
+    call    lantern_app_fork
     sd      a0, (L + 296)(sp)
     li      t0, 24
     sd      t0, (L + 264)(sp)
@@ -2312,7 +2312,7 @@ LOCAL_FUNCTION app_db_archive
     li      t0, 24
     bleu    s6, t0, 60f
     mv      a0, s6
-    call    app_map
+    call    lantern_app_map
     beqz    a0, 60f
     mv      s5, a0
     sd      s6, 0(s5)
@@ -2332,7 +2332,7 @@ LOCAL_FUNCTION app_db_archive
     slli    t0, t0, 61
     or      a0, a0, t0
     li      a1, 0
-    call    app_work_data
+    call    lantern_app_work_data
     li      t0, -1
     beq     a0, t0, 70f
     ld      s4, 8(a0)
@@ -2345,7 +2345,7 @@ LOCAL_FUNCTION app_db_archive
     CALL_GLOBAL lantern_db_state_diff
     ld      s8, (L + 288)(sp)
     mv      a0, s8
-    call    app_map
+    call    lantern_app_map
     beqz    a0, 70f
     mv      s7, a0
     sd      s8, 0(s7)
@@ -2368,7 +2368,7 @@ LOCAL_FUNCTION app_db_archive
     sd      t1, (L + 256)(sp)
     addi    a0, sp, L + 112
     addi    a1, sp, L + 240
-    call    app_db_write
+    call    lantern_app_db_write
     bnez    a0, 70f
     li      s9, 1
 70: beqz    s7, 71f                         # the memory goes
@@ -2391,16 +2391,16 @@ LOCAL_FUNCTION app_db_archive
     sd      zero, (L + 32 + DbRecord_kind)(sp)
 61: addi    a0, sp, L
     li      a1, NODE_EV_DB_ARCHIVE_SIZE
-    call    app_event_put
+    call    lantern_app_event_put
     LEAVE 304
-END_FUNCTION app_db_archive
+END_FUNCTION lantern_app_db_archive
 
 /*
  * L1: NODE_ACT_DB_DROP a0: the segment's file goes: the open file of its kind, when it is that
  * segment, closes; a map of it goes; then the file is deleted. s2 the action, s3 the kind (0
  * blocks, 1 sidecars), s4 the segment, s5 the map key, s6 a map's index, s7 a map, s10 the AppDb.
  */
-LOCAL_FUNCTION app_db_drop
+LOCAL_FUNCTION lantern_app_db_drop
     ENTER 0
     mv      s2, a0
     ADDQ    s10, s1, APP_DB
@@ -2439,19 +2439,19 @@ LOCAL_FUNCTION app_db_drop
     j       2b
 4:  mv      a0, s3                          # the file
     mv      a1, s4
-    call    app_db_path
+    call    lantern_app_db_path
     ADDQ    a0, s1, APP_PATH
     addi    a1, s10, AppDb_op
     CALL_GLOBAL lantern_shell_remove
     LEAVE 0
-END_FUNCTION app_db_drop
+END_FUNCTION lantern_app_db_drop
 
 /*
  * L0: a0 = the AppDb's view entry t6 of the record at offset a0 of the mapped segment a1: its
  * ByteList in place, at byte DbRecord_bytes of the record; 0 when the record is not all inside
  * the map, or its ByteList header is not of its bytes. Uses t0-t5, a7.
  */
-LOCAL_FUNCTION app_db_record
+LOCAL_FUNCTION lantern_app_db_record
     UNWIND_END_PROLOGUE
     ld      t0, 8(a1)
     beqz    t0, 8f
@@ -2476,19 +2476,19 @@ LOCAL_FUNCTION app_db_record
     ret
 8:  li      a0, 0
     ret
-END_FUNCTION app_db_record
+END_FUNCTION lantern_app_db_record
 
 /*
- * L1: a0 = the table entry of a work's data BufferId a0 as app_work_entry gives; for a
+ * L1: a0 = the table entry of a work's data BufferId a0 as lantern_app_work_entry gives; for a
  * NODE_DB_REF, the AppDb's view entry a1 (0 data, 1 state_b) of its record in the segment, mapped
  * again when the file grew past the map, or 2^64 - 1 when the record is not there. s2 the kind
  * (0 blocks, 1 sidecars, 2 states), s3 the segment, s4 the offset, s5 the map's key, s6 a map, s7
  * the view, s10 the AppDb.
  */
-LOCAL_FUNCTION app_work_data
+LOCAL_FUNCTION lantern_app_work_data
     ENTER 0
     bltz    a0, 1f
-    call    app_work_entry
+    call    lantern_app_work_entry
     LEAVE 0
 1:  ADDQ    s10, s1, APP_DB
     ADDQ    s7, s1, APP_DB + AppDb_view
@@ -2522,7 +2522,7 @@ LOCAL_FUNCTION app_work_data
 3:  mv      a0, s4
     mv      a1, s6
     mv      t6, s7
-    call    app_db_record
+    call    lantern_app_db_record
     bnez    a0, 9f
     j       6f
 5:  ld      t1, AppDb_next_map(s10)         # else the next entry in turn
@@ -2542,7 +2542,7 @@ LOCAL_FUNCTION app_work_data
     sd      zero, 8(s6)
     mv      a0, s2
     mv      a1, s3
-    call    app_db_path
+    call    lantern_app_db_path
     ADDQ    a0, s1, APP_PATH
     addi    a1, s10, AppDb_op
     CALL_GLOBAL lantern_shell_map_file
@@ -2559,14 +2559,14 @@ LOCAL_FUNCTION app_work_data
     mv      a0, s4
     mv      a1, s6
     mv      t6, s7
-    call    app_db_record
+    call    lantern_app_db_record
     bnez    a0, 9f
 8:  li      a0, -1
 9:  LEAVE 0
-END_FUNCTION app_work_data
+END_FUNCTION lantern_app_work_data
 
 /* L1: <dir>/<the a1 bytes of the name at a0> of the data directory, as a ByteList at a2 of APP_PATH_MAX bytes of room. s2 the name, s3 its length, s4 the ByteList. */
-LOCAL_FUNCTION app_db_file
+LOCAL_FUNCTION lantern_app_db_file
     ENTER 0
     mv      s2, a0
     mv      s3, a1
@@ -2599,15 +2599,15 @@ LOCAL_FUNCTION app_db_file
 8:  li      t0, APP_PATH_MAX + 1            # a count past the room: the shell gives its error
     sd      t0, 16(s4)
     LEAVE 0
-END_FUNCTION app_db_file
+END_FUNCTION lantern_app_db_file
 
 /* L1: a0 = 1 when the block segment a0's file is there (it opens to read), else 0. s10 the AppDb. Locals: L the mode. */
-LOCAL_FUNCTION app_db_exists
+LOCAL_FUNCTION lantern_app_db_exists
     ENTER 16
     ADDQ    s10, s1, APP_DB
     mv      a1, a0
     li      a0, 0
-    call    app_db_path
+    call    lantern_app_db_path
     sd      zero, L(sp)
     ADDQ    a0, s1, APP_PATH
     addi    a1, sp, L
@@ -2621,7 +2621,7 @@ LOCAL_FUNCTION app_db_exists
     LEAVE 16
 8:  li      a0, 0
     LEAVE 16
-END_FUNCTION app_db_exists
+END_FUNCTION lantern_app_db_exists
 
 /*
  * L1: for a start from anchor.ssz: the first block segment file there, from 0 to the anchor's
@@ -2629,7 +2629,7 @@ END_FUNCTION app_db_exists
  * block segment file there, from the anchor's on, and a segment more, and a power of two of roots
  * above twice them. s2 a segment, s3 the anchor's segment, s4 the first, s5 the last.
  */
-LOCAL_FUNCTION app_db_history
+LOCAL_FUNCTION lantern_app_db_history
     ENTER 0
     LDQ     s3, s1, (APP_ANCHOR + 32)
     srli    s3, s3, DB_SEGMENT_SHIFT
@@ -2637,7 +2637,7 @@ LOCAL_FUNCTION app_db_history
     li      s2, 0
 1:  bgtu    s2, s3, 2f
     mv      a0, s2
-    call    app_db_exists
+    call    lantern_app_db_exists
     bnez    a0, 11f
     addi    s2, s2, 1
     j       1b
@@ -2645,7 +2645,7 @@ LOCAL_FUNCTION app_db_history
 2:  mv      s5, s3
     addi    s2, s3, 1
 3:  mv      a0, s2
-    call    app_db_exists
+    call    lantern_app_db_exists
     beqz    a0, 4f
     mv      s5, s2
     addi    s2, s2, 1
@@ -2663,15 +2663,15 @@ LOCAL_FUNCTION app_db_history
     j       5b
 6:  STQ     t1, s1, (APP_NODE_ROOM + NodeRoom_db_roots)
     LEAVE 0
-END_FUNCTION app_db_history
+END_FUNCTION lantern_app_db_history
 
 /*
  * L2: for a start from anchor.ssz, after lantern_node_init: the Db's first_slot can be below
  * history_slot (the backfill's target, node.md), so db_slots doubles until the room covers the
- * slots from first_slot to the end app_db_history gave, then db_roots until it is above twice
+ * slots from first_slot to the end lantern_app_db_history gave, then db_roots until it is above twice
  * db_slots, each as a short room grows: a0 = 0, or 2 after a line on the standard error. s3 the end.
  */
-LOCAL_FUNCTION app_db_fit
+LOCAL_FUNCTION lantern_app_db_fit
     ENTER 0
     LDQ     s3, s1, (APP_ANCHOR + NodeAnchor_history_slot)
     LDQ     t0, s1, (APP_NODE_ROOM + NodeRoom_db_slots)
@@ -2685,7 +2685,7 @@ LOCAL_FUNCTION app_db_fit
     bgeu    t1, t0, 2f
     li      a0, 0
     li      a1, NodeRoom_db_slots
-    call    app_grow
+    call    lantern_app_grow
     bnez    a0, 8f
     j       1b
 2:  LDQ     t0, s1, (APP_NODE_ROOM + NodeRoom_db_slots)  # roots above twice them
@@ -2694,14 +2694,14 @@ LOCAL_FUNCTION app_db_fit
     bgtu    t1, t0, 7f
     li      a0, 0
     li      a1, NodeRoom_db_roots
-    call    app_grow
+    call    lantern_app_grow
     bnez    a0, 8f
     j       2b
 7:  li      a0, 0
     LEAVE 0
-8:  call    app_no_memory
+8:  call    lantern_app_no_memory
     LEAVE 0
-END_FUNCTION app_db_fit
+END_FUNCTION lantern_app_db_fit
 
 /*
  * L1: for a start from anchor.ssz: each segment file there, the blocks' then the sidecars', from
@@ -2711,7 +2711,7 @@ END_FUNCTION app_db_fit
  * ByteList header, L+24 valid, L+32 the segment, L+40 the kind, L+48 the file's size or a mode,
  * L+56 a file.
  */
-LOCAL_FUNCTION app_db_scan_all
+LOCAL_FUNCTION lantern_app_db_scan_all
     ENTER 64
     ADDQ    s10, s1, APP_DB
     LDQ     t0, s1, (APP_ANCHOR + NodeAnchor_history_slot)
@@ -2725,7 +2725,7 @@ LOCAL_FUNCTION app_db_scan_all
 2:  bgeu    s3, s4, 7f
     mv      a0, s2
     mv      a1, s3
-    call    app_db_path
+    call    lantern_app_db_path
     ADDQ    a0, s1, APP_PATH
     addi    a1, s10, AppDb_op
     CALL_GLOBAL lantern_shell_map_file
@@ -2784,9 +2784,9 @@ LOCAL_FUNCTION app_db_scan_all
     addi    a0, t0, 24
     ld      a1, 16(t0)
     mv      a2, s5
-    call    app_fail_status
+    call    lantern_app_fail_status
     LEAVE 64
-END_FUNCTION app_db_scan_all
+END_FUNCTION lantern_app_db_scan_all
 
 /*
  * L1: NODE_ACT_DB_STATE a0 of a block at the first slot of its epoch (the anchor of
@@ -2798,7 +2798,7 @@ END_FUNCTION app_db_scan_all
  * zero bytes, L+40 a size, L+48 the fork, L+56 the file, L+64 the message's ByteList header, L+88
  * the microseconds at the start. A written anchor joins db_anchors, and its run time anchor_seconds.
  */
-LOCAL_FUNCTION app_db_state
+LOCAL_FUNCTION lantern_app_db_state
     ENTER 96
     mv      s2, a0
     ADDQ    s10, s1, APP_DB
@@ -2810,14 +2810,14 @@ LOCAL_FUNCTION app_db_state
     addi    t0, t0, 1
     ld      t1, 32(s2)
     bltu    t1, t0, 99f
-    call    app_met_us
+    call    lantern_app_met_us
     sd      a0, (L + 88)(sp)
     ld      a0, 16(s2)
-    call    app_buf_find
+    call    lantern_app_buf_find
     beqz    a0, 99f
     mv      s3, a0
     ld      a0, 24(s2)
-    call    app_buf_find
+    call    lantern_app_buf_find
     beqz    a0, 99f
     mv      s4, a0
     ld      t0, AppDb_segment(s10)          # the open segment files are synced
@@ -2840,7 +2840,7 @@ LOCAL_FUNCTION app_db_state
     CALL_GLOBAL lantern_shell_sync
 3:  ld      a0, 32(s2)                      # the state's SSZ bytes: their size, then the bytes
     ADDQ    a1, s1, APP_CONFIG
-    call    app_fork
+    call    lantern_app_fork
     sd      a0, (L + 48)(sp)
     li      t0, 24
     sd      t0, L(sp)
@@ -2855,7 +2855,7 @@ LOCAL_FUNCTION app_db_state
     li      t0, 24
     bleu    s6, t0, 99f
     mv      a0, s6
-    call    app_map
+    call    lantern_app_map
     beqz    a0, 99f
     mv      s5, a0
     sd      s6, 0(s5)
@@ -2869,7 +2869,7 @@ LOCAL_FUNCTION app_db_state
     ADDRESS a0, app_anchor_tmp_name         # anchor.tmp, cut to 0
     li      a1, app_anchor_tmp_name_len
     ADDQ    a2, s1, APP_PATH
-    call    app_db_file
+    call    lantern_app_db_file
     li      t0, 1
     sd      t0, (L + 24)(sp)
     ADDQ    a0, s1, APP_PATH
@@ -2960,7 +2960,7 @@ LOCAL_FUNCTION app_db_state
     ADDRESS a0, app_anchor_name             # over anchor.ssz, and the directory synced
     li      a1, app_anchor_name_len
     ADDQ    a2, s1, APP_PATH2
-    call    app_db_file
+    call    lantern_app_db_file
     ADDQ    a0, s1, APP_PATH
     ADDQ    a1, s1, APP_PATH2
     addi    a2, s10, AppDb_op
@@ -2970,37 +2970,37 @@ LOCAL_FUNCTION app_db_state
     ADDRESS a0, app_anchor_name
     li      a1, 0
     ADDQ    a2, s1, APP_PATH
-    call    app_db_file
+    call    lantern_app_db_file
     ADDQ    a0, s1, APP_PATH
     addi    a1, s10, AppDb_op
     CALL_GLOBAL lantern_shell_sync_dir
     ld      t0, 32(s2)
     sd      t0, AppDb_anchor_slot(s10)
     AM_INC  db_anchors
-    call    app_met_us                      # its run time
+    call    lantern_app_met_us                      # its run time
     ld      t0, (L + 88)(sp)
     sub     a2, a0, t0
     li      a0, AppMetrics_anchor_seconds
     li      a1, METRIC_BOUNDS_DEFAULT
-    call    app_met_obs
+    call    lantern_app_met_obs
     j       98f
 89: addi    a0, sp, L + 56                  # the file closes
     CALL_GLOBAL lantern_shell_close
 90: ld      t0, AppDb_op(s10)               # cannot write <path>: error <n>
     sd      t0, (L + 24)(sp)
     AM_INC  db_failures
-    call    app_line_start
+    call    lantern_app_line_start
     ADDRESS a0, app_m_write
     li      a1, app_m_write_len
-    call    app_line_text
-    call    app_line_path
+    call    lantern_app_line_text
+    call    lantern_app_line_path
     ADDRESS a0, app_m_error
     li      a1, app_m_error_len
-    call    app_line_text
+    call    lantern_app_line_text
     ld      a0, (L + 24)(sp)
-    call    app_line_u64
+    call    lantern_app_line_u64
     li      a0, APP_LOG_ERROR
-    call    app_line_end
+    call    lantern_app_line_end
 98: beqz    s5, 99f                         # the bytes' memory goes back
     sd      s5, (L + 24)(sp)
     sd      s6, (L + 40)(sp)
@@ -3008,23 +3008,23 @@ LOCAL_FUNCTION app_db_state
     addi    a1, sp, L + 40
     CALL_GLOBAL lantern_shell_unmap
 99: LEAVE 96
-END_FUNCTION app_db_state
+END_FUNCTION lantern_app_db_state
 
 /* L1: a0 = the table entry of the BufferId a0, 0 for id 0, or 2^64 - 1 when no entry has it. */
-LOCAL_FUNCTION app_work_entry
+LOCAL_FUNCTION lantern_app_work_entry
     FRAME 0
     beqz    a0, 9f
-    call    app_buf_find
+    call    lantern_app_buf_find
     bnez    a0, 9f
     li      a0, -1
 9:  UNFRAME 0
-END_FUNCTION app_work_entry
+END_FUNCTION lantern_app_work_entry
 
 /*
  * L2: the actions of the step, in order: BYTES_PUT, STATE_COPY, STATE_FREE and BYTES_FREE on the
- * BufferId table, WORK by app_work. s2 the next action, s3 the end, s4 its size, s5 an entry.
+ * BufferId table, WORK by lantern_app_work. s2 the next action, s3 the end, s4 its size, s5 an entry.
  */
-LOCAL_FUNCTION app_actions
+LOCAL_FUNCTION lantern_app_actions
     ENTER 0
     LDQ     s2, s1, APP_ACTIONS
     ld      s3, 16(s2)
@@ -3036,7 +3036,7 @@ LOCAL_FUNCTION app_actions
     li      t1, NODE_ACT_DB_APPEND
     bne     t0, t1, 11f
     ld      a0, 16(s2)                      # the metrics: the record and its bytes, by kind
-    call    app_buf_find
+    call    lantern_app_buf_find
     ld      t2, 32(s2)
     andi    t2, t2, 1
     AM_INC_AT db_records, t2
@@ -3049,48 +3049,48 @@ LOCAL_FUNCTION app_actions
     add     t1, t1, t3
     sd      t1, 0(t0)
 190: mv     a0, s2                          # DB_APPEND: the record in its segment file
-    call    app_db_append
+    call    lantern_app_db_append
     j       8f
 11: li      t1, NODE_ACT_DB_DROP
     bne     t0, t1, 12f
     AM_INC  db_drops
     mv      a0, s2                          # DB_DROP: the segment's file goes
-    call    app_db_drop
+    call    lantern_app_db_drop
     j       8f
 12: li      t1, NODE_ACT_DB_STATE
     bne     t0, t1, 120f
     mv      a0, s2                          # DB_STATE: custody.bin, anchor.ssz
-    call    app_db_custody
+    call    lantern_app_db_custody
     mv      a0, s2
-    call    app_db_state
+    call    lantern_app_db_state
     j       8f
 120: li     t1, NODE_ACT_DB_ARCHIVE
     bne     t0, t1, 10f
     li      t2, 2
     AM_INC_AT db_records, t2
     mv      a0, s2                          # DB_ARCHIVE: a state record
-    call    app_db_archive
+    call    lantern_app_db_archive
     j       8f
 10: li      t1, NODE_ACT_STATE_BYTES
     bne     t0, t1, 13f
     mv      a0, s2                          # STATE_BYTES: the state's SSZ bytes
-    call    app_state_bytes
+    call    lantern_app_state_bytes
     j       8f
 13: li      t1, NODE_ACT_BYTES_PUT
     bne     t0, t1, 131f
     addi    a0, s2, 24                      # BYTES_PUT: a copy of the ByteList
     ld      a1, 24(s2)
-    call    app_dup
+    call    lantern_app_dup
     beqz    a0, 8f
     mv      a1, a0
     ld      a0, 16(s2)
     ld      a2, 24(s2)
-    call    app_buf_add
+    call    lantern_app_buf_add
     j       8f
 131: li     t1, NODE_ACT_BYTES_NEW
     bne     t0, t1, 132f
     ld      a0, 24(s2)                      # BYTES_NEW: a ByteList of the size, its bytes zero
-    call    app_map
+    call    lantern_app_map
     beqz    a0, 8f
     ld      t1, 24(s2)
     sd      t1, 0(a0)
@@ -3101,49 +3101,49 @@ LOCAL_FUNCTION app_actions
     mv      a1, a0
     ld      a0, 16(s2)
     ld      a2, 24(s2)
-    call    app_buf_add
+    call    lantern_app_buf_add
     j       8f
 132: li     t1, NODE_ACT_BYTES_JOIN
     bne     t0, t1, 2f
     mv      a0, s2                          # BYTES_JOIN: the ByteLists of the ids, one after another
-    call    app_bytes_join
+    call    lantern_app_bytes_join
     j       8f
 2:  li      t1, NODE_ACT_STATE_COPY
     bne     t0, t1, 3f
     ld      a0, 16(s2)                      # STATE_COPY: a copy of the source buffer
-    call    app_buf_find
+    call    lantern_app_buf_find
     beqz    a0, 8f
     mv      s5, a0
     ld      a0, 8(s5)
     ld      a1, 16(s5)
-    call    app_dup
+    call    lantern_app_dup
     beqz    a0, 8f
     mv      a1, a0
     ld      a0, 24(s2)
     ld      a2, 16(s5)
-    call    app_buf_add
+    call    lantern_app_buf_add
     j       8f
 3:  li      t1, NODE_ACT_STATE_FREE
     beq     t0, t1, 31f
     li      t1, NODE_ACT_BYTES_FREE
     bne     t0, t1, 4f
 31: ld      a0, 16(s2)                      # STATE_FREE, BYTES_FREE
-    call    app_buf_drop
+    call    lantern_app_buf_drop
     j       8f
 4:  li      t1, NODE_ACT_WORK
     bne     t0, t1, 5f
     mv      a0, s2
-    call    app_work
+    call    lantern_app_work
     j       8f
 5:  li      t1, NODE_ACT_ENGINE
     bne     t0, t1, 51f
     mv      a0, s2
-    call    app_engine_request
+    call    lantern_app_engine_request
     j       8f
 51: li      t1, NODE_ACT_BUILDER
     bne     t0, t1, 6f
     mv      a0, s2
-    call    app_builder_request
+    call    lantern_app_builder_request
     j       8f
 6:  li      t1, NODE_ACT_DISCV5
     bne     t0, t1, 7f
@@ -3152,7 +3152,7 @@ LOCAL_FUNCTION app_actions
     addi    a0, s2, 24
     add     a0, a0, t2
     ld      a1, (24 + 16)(s2)
-    call    app_dv_put
+    call    lantern_app_dv_put
     j       8f
 7:  li      t1, NODE_ACT_P2P_LIST
     bne     t0, t1, 71f
@@ -3166,24 +3166,24 @@ LOCAL_FUNCTION app_actions
     li      t1, NODE_ACT_API_CLOSE
     bne     t0, t1, 8f
 72: mv      a0, s2                          # API_SEND, API_CLOSE: to the Beacon API's connection
-    call    app_api_action
+    call    lantern_app_api_action
 8:  add     s2, s2, s4
     j       1b
-9:  call    app_api_flush                   # the answers go out now
+9:  call    lantern_app_api_flush                   # the answers go out now
     LEAVE 0
-END_FUNCTION app_actions
+END_FUNCTION lantern_app_actions
 
 /*
  * L2: lantern_node_step with the events of the App and the libp2p state a0 and Tick a1 (both 0 with
  * no network), again with a larger node and actions while it asks for them; then the accepted
  * events leave the queue and the actions run. s2 p2p, s3 tick, s4 the tries, s5 a size.
  */
-LOCAL_FUNCTION app_step
+LOCAL_FUNCTION lantern_app_step
     ENTER 0
     mv      s2, a0
     mv      s3, a1
     li      s4, 0
-1:  call    app_met_us                      # the step's run time (app.md, the metrics)
+1:  call    lantern_app_met_us                      # the step's run time (app.md, the metrics)
     STQ     a0, s1, APP_MET_T1
     LDQ     t0, s1, APP_ACTIONS
     li      t1, 24
@@ -3199,12 +3199,12 @@ LOCAL_FUNCTION app_step
     ADDQ    a7, s1, APP_RESULT
     CALL_GLOBAL lantern_node_step
     STQ     a0, s1, APP_MET_ST
-    call    app_met_us
+    call    lantern_app_met_us
     LDQ     t0, s1, APP_MET_T1
     sub     a2, a0, t0
     li      a0, AppMetrics_step_seconds
     li      a1, METRIC_BOUNDS_WORK
-    call    app_met_obs
+    call    lantern_app_met_obs
     LDQ     a0, s1, APP_MET_ST
     beqz    a0, 3f
     li      t0, LANTERN_BUFFER_TOO_SMALL
@@ -3217,7 +3217,7 @@ LOCAL_FUNCTION app_step
     bne     t0, t1, 11f
     li      a0, 0                           # the node: the field that is short
     LDQ     a1, s1, (APP_RESULT + NodeStepResult_room)
-    call    app_grow
+    call    lantern_app_grow
     bnez    a0, 21f
     j       1b
 11: li      s5, APP_ACTIONS                 # actions, or scratch: twice the room
@@ -3228,28 +3228,28 @@ LOCAL_FUNCTION app_step
     ld      s6, 8(t0)
     slli    s6, s6, 1
     mv      a0, s5
-    call    app_unmap
+    call    lantern_app_unmap
     mv      a0, s5
     mv      a1, s6
-    call    app_alloc
+    call    lantern_app_alloc
     beqz    a0, 21f
     j       1b
-21: call    app_line_start                  # a node step: no room in buffer <short>
+21: call    lantern_app_line_start                  # a node step: no room in buffer <short>
     ADDRESS a0, app_m_step
     li      a1, app_m_step_len
-    call    app_line_text
+    call    lantern_app_line_text
     ADDRESS a0, app_m_room
     li      a1, app_m_room_len
-    call    app_line_text
+    call    lantern_app_line_text
     LDQ     a0, s1, (APP_RESULT + NodeStepResult_short)
-    call    app_line_u64
+    call    lantern_app_line_u64
     li      a0, APP_LOG_ERROR
-    call    app_line_end
+    call    lantern_app_line_end
     LEAVE 0
 2:  mv      a2, a0                          # a node step: status <n>
     ADDRESS a0, app_m_step
     li      a1, app_m_step_len
-    call    app_fail_status
+    call    lantern_app_fail_status
     LEAVE 0
 3:  LDQ     t0, s1, APP_EVENTS              # the accepted events leave the queue
     ld      t1, 16(t0)
@@ -3268,16 +3268,16 @@ LOCAL_FUNCTION app_step
     mv      a0, t2
     add     a1, t2, t3
     call    lantern_copy
-    call    app_actions
+    call    lantern_app_actions
     LEAVE 0
-END_FUNCTION app_step
+END_FUNCTION lantern_app_step
 
 
 /*
- * L0: a0 = the bytes of the base64url text at a0 of a1 bytes (RFC 4648 section 5, with or without
+ * L0: a0 = the bytes of the lantern_base64url text at a0 of a1 bytes (RFC 4648 section 5, with or without
  * padding), written at a2, at most a3; or 2^64 - 1 for a byte of no digit or too many bytes. Uses t0-t5.
  */
-LOCAL_FUNCTION app_base64url
+LOCAL_FUNCTION lantern_app_base64url
     UNWIND_END_PROLOGUE
     li      t0, 0                           # the bits
     li      t1, 0                           # their count
@@ -3326,14 +3326,14 @@ LOCAL_FUNCTION app_base64url
     ret
 9:  li      a0, -1
     ret
-END_FUNCTION app_base64url
+END_FUNCTION lantern_app_base64url
 
 /*
  * L2: a NODE_EV_ENR event of each record of --boot-nodes, with commas between them; a line on
- * the standard error for one that is not "enr:" and base64url. s2 the next byte, s3 the end, s4
+ * the standard error for one that is not "enr:" and lantern_base64url. s2 the next byte, s3 the end, s4
  * the record's start, s5 the record's number, s6 the event at APP_RECORD. Locals: L the record's length.
  */
-LOCAL_FUNCTION app_boot_nodes
+LOCAL_FUNCTION lantern_app_boot_nodes
     ENTER 16
     ADDQ    s6, s1, APP_RECORD
     ld      t0, APP_ARGS(s1)
@@ -3360,14 +3360,14 @@ LOCAL_FUNCTION app_boot_nodes
     li      a1, 4
     ADDRESS a2, app_enr_prefix
     li      a3, 4
-    call    app_name_is
+    call    lantern_app_name_is
     beqz    a0, 7f
     addi    a0, s4, 4                       # its bytes, after the event and ByteList headers
     ld      a1, L(sp)
     addi    a1, a1, -4
     addi    a2, s6, 48
     li      a3, APP_RECORD_MAX
-    call    app_base64url
+    call    lantern_app_base64url
     li      t0, -1
     beq     a0, t0, 7f
     addi    t0, a0, (48 + 7)                # the event: size, NODE_EV_ENR, 0, then the ByteList
@@ -3383,7 +3383,7 @@ LOCAL_FUNCTION app_boot_nodes
     sd      a0, 40(s6)
     mv      a0, s6
     mv      a1, t0
-    call    app_event_put
+    call    lantern_app_event_put
     ld      t0, 40(s6)                      # and an ADD_NODE of discv5: size, kind, len, the record
     addi    t1, t0, (DISCV5_EV_ADD_DATA + 7)
     andi    t1, t1, -8
@@ -3393,22 +3393,22 @@ LOCAL_FUNCTION app_boot_nodes
     sd      t0, (24 + DISCV5_EV_ADD_LEN)(s6)
     addi    a0, s6, 24
     mv      a1, t1
-    call    app_dv_put
+    call    lantern_app_dv_put
     j       1b
-7:  call    app_line_start                  # boot node <n>: not an enr: record
+7:  call    lantern_app_line_start                  # boot node <n>: not an enr: record
     ADDRESS a0, app_m_boot
     li      a1, app_m_boot_len
-    call    app_line_text
+    call    lantern_app_line_text
     mv      a0, s5
-    call    app_line_u64
+    call    lantern_app_line_u64
     ADDRESS a0, app_m_not_enr
     li      a1, app_m_not_enr_len
-    call    app_line_text
+    call    lantern_app_line_text
     li      a0, APP_LOG_ERROR
-    call    app_line_end
+    call    lantern_app_line_end
     j       1b
 9:  LEAVE 16
-END_FUNCTION app_boot_nodes
+END_FUNCTION lantern_app_boot_nodes
 
 /*
  * L2: the network: a secp256k1 key, the libp2p state, the shell context with a TCP listener on
@@ -3422,7 +3422,7 @@ END_FUNCTION app_boot_nodes
  * Locals: L the public key (40), L+48 the point (64), L+112 a ByteList of the point (88), L+200
  * the digest (32).
  */
-LOCAL_FUNCTION app_key
+LOCAL_FUNCTION lantern_app_key
     ENTER 240
     li      s3, 0
     ADDQ    s4, s1, APP_KEY
@@ -3472,13 +3472,13 @@ LOCAL_FUNCTION app_key
     bnez    t2, 3b
     li      a0, 0
 9:  LEAVE 240
-END_FUNCTION app_key
+END_FUNCTION lantern_app_key
 
-LOCAL_FUNCTION app_net
+LOCAL_FUNCTION lantern_app_net
     ENTER 112
     li      a0, APP_P2P_CONFIG              # the config: the template, then the protocols
     li      a1, (LIBP2P_CFG_FIXED + 24 + APP_PROTOCOLS_MAX * LIBP2P_PROTO_SIZE)
-    call    app_alloc
+    call    lantern_app_alloc
     beqz    a0, 97f
     mv      s2, a0
     ADDRESS a1, app_p2p_config
@@ -3501,7 +3501,7 @@ LOCAL_FUNCTION app_net
     mul     t0, t0, t2
     add     t0, t0, t1
     sd      t0, 0(s2)
-    addi    a0, s2, 16                      # the key of app_key
+    addi    a0, s2, 16                      # the key of lantern_app_key
     ADDQ    a1, s1, APP_KEY
     li      a2, 32
     call    lantern_copy
@@ -3519,7 +3519,7 @@ LOCAL_FUNCTION app_net
     bnez    a0, 96f
     li      a0, APP_P2P
     ld      a1, L(sp)
-    call    app_alloc
+    call    lantern_app_alloc
     beqz    a0, 97f
     mv      a1, a0
     mv      a0, s2
@@ -3536,7 +3536,7 @@ LOCAL_FUNCTION app_net
     bnez    a0, 96f
     li      a0, APP_SHELL
     ld      a1, L(sp)
-    call    app_alloc
+    call    lantern_app_alloc
     beqz    a0, 97f
     mv      a1, a0
     addi    a0, sp, (L + 8)
@@ -3544,7 +3544,7 @@ LOCAL_FUNCTION app_net
     bnez    a0, 96f
     li      a0, APP_SHELL_EVENTS
     li      a1, APP_SHELL_EVENT_BYTES
-    call    app_alloc
+    call    lantern_app_alloc
     beqz    a0, 97f
     li      t0, 24
     sd      t0, 8(a0)
@@ -3552,7 +3552,7 @@ LOCAL_FUNCTION app_net
     ld      a1, 160(s2)                     # the engine's action: a SEND of up to send_window bytes
     addi    a1, a1, (24 + LIBP2P_ACT_SEND_DATA + 8)
     li      a0, APP_ENGINE_ACT
-    call    app_alloc
+    call    lantern_app_alloc
     beqz    a0, 97f
     li      t0, 24
     sd      t0, 8(a0)
@@ -3569,49 +3569,49 @@ LOCAL_FUNCTION app_net
     CALL_GLOBAL libp2p_shell_listen
     ld      t0, (L + 64)(sp)
     beqz    t0, 3f
-    call    app_line_start                  # listen on TCP port <p>: error <n>
+    call    lantern_app_line_start                  # listen on TCP port <p>: error <n>
     ADDRESS a0, app_m_listen
     li      a1, app_m_listen_len
-    call    app_line_text
+    call    lantern_app_line_text
     LDQ     a0, s1, (APP_OPTIONS + AppOptions_port)
-    call    app_line_u64
+    call    lantern_app_line_u64
     ADDRESS a0, app_m_error
     li      a1, app_m_error_len
-    call    app_line_text
+    call    lantern_app_line_text
     ld      a0, (L + 64)(sp)
-    call    app_line_u64
+    call    lantern_app_line_u64
     li      a0, APP_LOG_ERROR
-    call    app_line_end
+    call    lantern_app_line_end
     li      a0, 2
     LEAVE 112
-3:  call    app_api_start
+3:  call    lantern_app_api_start
     bnez    a0, 99f
-    call    app_met_start
+    call    lantern_app_met_start
     bnez    a0, 99f
-    call    app_dv_start
+    call    lantern_app_dv_start
     bnez    a0, 99f
-    call    app_boot_nodes
-    call    app_line_start                  # listening on TCP port <p>
+    call    lantern_app_boot_nodes
+    call    lantern_app_line_start                  # listening on TCP port <p>
     ADDRESS a0, app_m_listening
     li      a1, app_m_listening_len
-    call    app_line_text
+    call    lantern_app_line_text
     LDQ     a0, s1, (APP_OPTIONS + AppOptions_port)
-    call    app_line_u64
+    call    lantern_app_line_u64
     li      a0, APP_LOG_INFO
-    call    app_line_end
+    call    lantern_app_line_end
     li      a0, 0
 99: LEAVE 112
 96: mv      a2, a0                          # libp2p: status <n>
     ADDRESS a0, app_m_p2p
     li      a1, app_m_p2p_len
-    call    app_fail_status
+    call    lantern_app_fail_status
     LEAVE 112
-97: call    app_no_memory
+97: call    lantern_app_no_memory
     LEAVE 112
-END_FUNCTION app_net
+END_FUNCTION lantern_app_net
 
 /* L0: a0 = 0 and a1 = the u64 of the decimal digits a0 to a1, one or more; else a0 = 1. Uses t0-t3. */
-LOCAL_FUNCTION app_number
+LOCAL_FUNCTION lantern_app_number
     UNWIND_END_PROLOGUE
     bgeu    a0, a1, 9f
     li      t0, 0
@@ -3634,10 +3634,10 @@ LOCAL_FUNCTION app_number
     ret
 9:  li      a0, 1
     ret
-END_FUNCTION app_number
+END_FUNCTION lantern_app_number
 
 /* L0: a0 = 0 and a1 = the IPv4 address of the bytes a0 to a1, its 4 bytes in order in the low bytes; else a0 = 1. Uses t0-t6. */
-LOCAL_FUNCTION app_dotted
+LOCAL_FUNCTION lantern_app_dotted
     UNWIND_END_PROLOGUE
     li      t0, 0                           # the address
     li      t1, 0                           # the numbers
@@ -3679,7 +3679,7 @@ LOCAL_FUNCTION app_dotted
     ret
 9:  li      a0, 1
     ret
-END_FUNCTION app_dotted
+END_FUNCTION lantern_app_dotted
 
 /*
  * L2: with --execution-endpoint, the engine: its Address, the anchor's engine_host and the
@@ -3687,7 +3687,7 @@ END_FUNCTION app_dotted
  * error. s2 the endpoint's bytes, s3 their count (then a digit), s4 the colon, s5 the secret's
  * next byte, s6 its end.
  */
-LOCAL_FUNCTION app_engine_conf
+LOCAL_FUNCTION lantern_app_engine_conf
     ENTER 0
     LDQ     s3, s1, (APP_OPTIONS + AppOptions_execution + 8)
     beqz    s3, 8f
@@ -3711,7 +3711,7 @@ LOCAL_FUNCTION app_engine_conf
     add     a0, s2, s4                      # the port
     addi    a0, a0, 1
     add     a1, s2, s3
-    call    app_number
+    call    lantern_app_number
     bnez    a0, 90f
     beqz    a1, 90f
     li      t0, 65535
@@ -3725,12 +3725,12 @@ LOCAL_FUNCTION app_engine_conf
     mv      a1, s4
     ADDRESS a2, app_localhost
     li      a3, 9
-    call    app_name_is
+    call    lantern_app_name_is
     li      a1, 0x0100007f                  # 127.0.0.1
     bnez    a0, 2f
     mv      a0, s2
     add     a1, s2, s4
-    call    app_dotted
+    call    lantern_app_dotted
     bnez    a0, 90f
 2:  ADDQ    t0, s1, (APP_ENGINE_ADDR + 16)
     sw      a1, 0(t0)
@@ -3746,13 +3746,13 @@ LOCAL_FUNCTION app_engine_conf
     add     a1, t3, t0
     mv      a2, t1
     call    lantern_copy
-    call    app_read
+    call    lantern_app_read
     bnez    a0, 99f
     LDQ     t0, s1, (APP_FILE + 8)          # 64 hex digits, after 0x or not, with white space around them
     ld      t1, 16(t0)
     addi    s5, t0, 24
     add     s6, s5, t1
-    call    app_space
+    call    lantern_app_space
     sub     t0, s6, s5
     li      t1, 2
     bltu    t0, t1, 3f
@@ -3770,10 +3770,10 @@ LOCAL_FUNCTION app_engine_conf
     li      t1, 2
     bltu    t0, t1, 92f
     lbu     a0, 0(s5)
-    call    app_hex_digit
+    call    lantern_app_hex_digit
     mv      s3, a0
     lbu     a0, 1(s5)
-    call    app_hex_digit
+    call    lantern_app_hex_digit
     or      t0, a0, s3
     li      t1, 15
     bgtu    t0, t1, 92f
@@ -3785,9 +3785,9 @@ LOCAL_FUNCTION app_engine_conf
     addi    s5, s5, 2
     addi    s4, s4, 1
     j       4b
-5:  call    app_space
+5:  call    lantern_app_space
     bne     s5, s6, 92f
-    call    app_file_free
+    call    lantern_app_file_free
     LDQ     t0, s1, APP_FLAGS
     ori     t0, t0, NODE_FLAG_ENGINE
     li      t1, NODE_FLAG_ETH1              # and the eth1 follower on its connection
@@ -3795,30 +3795,30 @@ LOCAL_FUNCTION app_engine_conf
     STQ     t0, s1, APP_FLAGS
 8:  li      a0, 0
     LEAVE 0
-90: call    app_line_start                  # the endpoint's form
+90: call    lantern_app_line_start                  # the endpoint's form
     ADDRESS a0, app_m_endpoint
     li      a1, app_m_endpoint_len
-    call    app_line_text
+    call    lantern_app_line_text
     j       98f
-91: call    app_line_start                  # no secret
+91: call    lantern_app_line_start                  # no secret
     ADDRESS a0, app_m_jwt
     li      a1, app_m_jwt_len
-    call    app_line_text
+    call    lantern_app_line_text
     j       98f
-92: call    app_file_free                   # <path>: not 32 bytes in hex
-    call    app_line_start
-    call    app_line_path
+92: call    lantern_app_file_free                   # <path>: not 32 bytes in hex
+    call    lantern_app_line_start
+    call    lantern_app_line_path
     ADDRESS a0, app_m_hex
     li      a1, app_m_hex_len
-    call    app_line_text
+    call    lantern_app_line_text
 98: li      a0, APP_LOG_ERROR
-    call    app_line_end
+    call    lantern_app_line_end
 99: li      a0, 2
     LEAVE 0
-END_FUNCTION app_engine_conf
+END_FUNCTION lantern_app_engine_conf
 
 /* L0: s5 moves past spaces, tabs, CR and LF, to at most s6. Uses t0, t1. */
-LOCAL_FUNCTION app_space
+LOCAL_FUNCTION lantern_app_space
     UNWIND_END_PROLOGUE
 1:  bgeu    s5, s6, 2f
     lbu     t0, 0(s5)
@@ -3831,10 +3831,10 @@ LOCAL_FUNCTION app_space
 3:  addi    s5, s5, 1
     j       1b
 2:  ret
-END_FUNCTION app_space
+END_FUNCTION lantern_app_space
 
 /* L0: a0 = the value of the hex digit a0, or 16 when it is not one. Uses t0, t1. */
-LOCAL_FUNCTION app_hex_digit
+LOCAL_FUNCTION lantern_app_hex_digit
     UNWIND_END_PROLOGUE
     addi    t0, a0, -0x30
     li      t1, 10
@@ -3849,10 +3849,10 @@ LOCAL_FUNCTION app_hex_digit
     ret
 2:  addi    a0, t0, 10
     ret
-END_FUNCTION app_hex_digit
+END_FUNCTION lantern_app_hex_digit
 
 /* L0: a0 = the Handle of the engine's connection: the slot after libp2p's, at its generation. Uses t0, a7. */
-LOCAL_FUNCTION app_engine_handle
+LOCAL_FUNCTION lantern_app_engine_handle
     UNWIND_END_PROLOGUE
     LDQ     t0, s1, APP_P2P_CONFIG
     ld      a0, 88(t0)                      # max_connections
@@ -3860,13 +3860,13 @@ LOCAL_FUNCTION app_engine_handle
     slli    t0, t0, 32
     or      a0, a0, t0
     ret
-END_FUNCTION app_engine_handle
+END_FUNCTION lantern_app_engine_handle
 
 /*
  * L1: one shell action, the a1 bytes in the ByteList at APP_ENGINE_ACT, through
  * libp2p_shell_perform; its results join the shell's events.
  */
-LOCAL_FUNCTION app_engine_perform
+LOCAL_FUNCTION lantern_app_engine_perform
     FRAME 0
     LDQ     t0, s1, APP_ENGINE_ACT
     sd      a1, 16(t0)
@@ -3875,13 +3875,13 @@ LOCAL_FUNCTION app_engine_perform
     LDQ     a2, s1, APP_SHELL_EVENTS
     CALL_GLOBAL libp2p_shell_perform
     UNFRAME 0
-END_FUNCTION app_engine_perform
+END_FUNCTION lantern_app_engine_perform
 
 /*
  * L2: the next bytes of the request on the open connection, as far as the shell's send buffer has
  * room. s2 the action, s3 the bytes.
  */
-LOCAL_FUNCTION app_engine_send
+LOCAL_FUNCTION lantern_app_engine_send
     ENTER 0
     LDQ     t0, s1, APP_ENGINE
     li      t1, 2
@@ -3904,7 +3904,7 @@ LOCAL_FUNCTION app_engine_send
     sd      t0, 0(s2)
     li      t0, LIBP2P_ACTION_SEND
     sd      t0, 8(s2)
-    call    app_engine_handle
+    call    lantern_app_engine_handle
     sd      a0, LIBP2P_ACT_CONN(s2)
     sd      s3, (LIBP2P_ACT_CONN + 8)(s2)
     addi    a0, s2, LIBP2P_ACT_SEND_DATA
@@ -3921,25 +3921,25 @@ LOCAL_FUNCTION app_engine_send
     STQ     t0, s1, APP_ENGINE_FLIGHT
     mv      a0, s2
     ld      a1, 0(s2)
-    call    app_engine_perform
+    call    lantern_app_engine_perform
 9:  LEAVE 0
-END_FUNCTION app_engine_send
+END_FUNCTION lantern_app_engine_send
 
 /*
  * L2: the NODE_ACT_ENGINE a0: its request bytes wait in APP_ENGINE_OUT; they go on the open
  * connection, or after a DIAL of the engine's Address. s2 the ByteList, s3 the count.
  */
-LOCAL_FUNCTION app_engine_request
+LOCAL_FUNCTION lantern_app_engine_request
     ENTER 0
     addi    s2, a0, 24
     ld      s3, 16(s2)
     LDQ     t0, s1, (APP_ENGINE_OUT + 8)    # room for the request
     bleu    s3, t0, 1f
     li      a0, APP_ENGINE_OUT
-    call    app_unmap
+    call    lantern_app_unmap
     li      a0, APP_ENGINE_OUT
     mv      a1, s3
-    call    app_alloc
+    call    lantern_app_alloc
     beqz    a0, 9f
 1:  LDQ     a0, s1, APP_ENGINE_OUT
     ld      t0, 8(s2)
@@ -3951,7 +3951,7 @@ LOCAL_FUNCTION app_engine_request
     LDQ     t0, s1, APP_ENGINE
     li      t1, 2
     bne     t0, t1, 2f
-    call    app_engine_send
+    call    lantern_app_engine_send
     LEAVE 0
 2:  bnez    t0, 9f                          # no connection: a DIAL
     LDQ     t0, s1, APP_ENGINE_GEN
@@ -3966,7 +3966,7 @@ LOCAL_FUNCTION app_engine_request
     sd      t0, 0(s2)
     li      t0, LIBP2P_ACTION_DIAL
     sd      t0, 8(s2)
-    call    app_engine_handle
+    call    lantern_app_engine_handle
     sd      a0, LIBP2P_ACT_CONN(s2)
     addi    a0, s2, LIBP2P_ACT_DIAL_ADDR
     ADDQ    a1, s1, APP_ENGINE_ADDR
@@ -3974,9 +3974,9 @@ LOCAL_FUNCTION app_engine_request
     call    lantern_copy
     mv      a0, s2
     li      a1, LIBP2P_ACT_DIAL_SIZE
-    call    app_engine_perform
+    call    lantern_app_engine_perform
 9:  LEAVE 0
-END_FUNCTION app_engine_request
+END_FUNCTION lantern_app_engine_request
 
 /*
  * L2: a0 = 1 when the shell event a0 is of the engine's connection, which it then takes: CONNECTED
@@ -3984,7 +3984,7 @@ END_FUNCTION app_engine_request
  * CLOSED end it with a NODE_EV_ENGINE of failure while the node waits for an answer; else 0.
  * s2 the event, s3 its kind. Locals: L the header of an event.
  */
-LOCAL_FUNCTION app_engine_event
+LOCAL_FUNCTION lantern_app_engine_event
     ENTER 48
     mv      s2, a0
     ld      s3, 8(s2)
@@ -3994,7 +3994,7 @@ LOCAL_FUNCTION app_engine_event
     bgtu    s3, t0, 8f
     LDQ     t0, s1, APP_ENGINE
     beqz    t0, 8f
-    call    app_engine_handle
+    call    lantern_app_engine_handle
     ld      t0, LIBP2P_EV_CONN(s2)
     bne     t0, a0, 8f
     li      t0, LIBP2P_EVENT_CONNECTED
@@ -4032,12 +4032,12 @@ LOCAL_FUNCTION app_engine_event
     sd      t0, (L + 40)(sp)
     addi    a0, sp, L
     li      a1, 48
-    call    app_event_put
+    call    lantern_app_event_put
     addi    a0, s2, LIBP2P_EV_DATA
     ld      a1, LIBP2P_EV_COUNT(s2)
     addi    a1, a1, 7
     andi    a1, a1, -8
-    call    app_event_put
+    call    lantern_app_event_put
     j       9f
 3:  STQ     zero, s1, APP_ENGINE            # DIAL_FAILED, CLOSED
     STQ     zero, s1, APP_ENGINE_LEN
@@ -4053,17 +4053,17 @@ LOCAL_FUNCTION app_engine_event
     sd      t0, (L + 16)(sp)
     addi    a0, sp, L
     li      a1, 24
-    call    app_event_put
+    call    lantern_app_event_put
 9:  li      a0, 1
     LEAVE 48
 8:  li      a0, 0
     LEAVE 48
-END_FUNCTION app_engine_event
+END_FUNCTION lantern_app_engine_event
 
 # L2: with --builder, the builder: its Address, the anchor's builder_host, and NODE_FLAG_BUILDER
 # (app.md): a0 = 0, or 2 after a line on the standard error. s2 the endpoint's bytes, s3 their
 # count, s4 the colon.
-LOCAL_FUNCTION app_builder_conf
+LOCAL_FUNCTION lantern_app_builder_conf
     ENTER 0
     LDQ     s3, s1, (APP_OPTIONS + AppOptions_builder + 8)
     beqz    s3, 8f
@@ -4087,7 +4087,7 @@ LOCAL_FUNCTION app_builder_conf
     add     a0, s2, s4                      # the port
     addi    a0, a0, 1
     add     a1, s2, s3
-    call    app_number
+    call    lantern_app_number
     bnez    a0, 90f
     beqz    a1, 90f
     li      t0, 65535
@@ -4102,12 +4102,12 @@ LOCAL_FUNCTION app_builder_conf
     mv      a1, s4
     ADDRESS a2, app_localhost
     li      a3, 9
-    call    app_name_is
+    call    lantern_app_name_is
     li      a1, 0x0100007f                  # 127.0.0.1
     bnez    a0, 2f
     mv      a0, s2
     add     a1, s2, s4
-    call    app_dotted
+    call    lantern_app_dotted
     bnez    a0, 90f
 2:  ADDQ    t0, s1, APP_BUILDER
     sw      a1, 16(t0)
@@ -4117,18 +4117,18 @@ LOCAL_FUNCTION app_builder_conf
     STQ     t0, s1, APP_FLAGS
 8:  li      a0, 0
     LEAVE 0
-90: call    app_line_start                  # the endpoint's form
+90: call    lantern_app_line_start                  # the endpoint's form
     ADDRESS a0, app_m_builder
     li      a1, app_m_builder_len
-    call    app_line_text
+    call    lantern_app_line_text
     li      a0, APP_LOG_ERROR
-    call    app_line_end
+    call    lantern_app_line_end
     li      a0, 2
     LEAVE 0
-END_FUNCTION app_builder_conf
+END_FUNCTION lantern_app_builder_conf
 
 # L0: a0 = the Handle of the connection of the builder slot a0 (a1 its fields): the slots after the engine's, at its generation. Uses t0, a7.
-LOCAL_FUNCTION app_builder_handle
+LOCAL_FUNCTION lantern_app_builder_handle
     UNWIND_END_PROLOGUE
     LDQ     t0, s1, APP_P2P_CONFIG
     ld      t0, 88(t0)                      # max_connections, then the engine's
@@ -4138,10 +4138,10 @@ LOCAL_FUNCTION app_builder_handle
     slli    t0, t0, 32
     or      a0, a0, t0
     ret
-END_FUNCTION app_builder_handle
+END_FUNCTION lantern_app_builder_handle
 
 # L1: the NODE_EV_BUILDER of the failure of the call a0 joins the next step's events. Locals: the event.
-LOCAL_FUNCTION app_builder_fail
+LOCAL_FUNCTION lantern_app_builder_fail
     FRAME 32
     li      t0, 24
     sd      t0, 0(sp)
@@ -4151,20 +4151,20 @@ LOCAL_FUNCTION app_builder_fail
     sd      a0, 16(sp)
     mv      a0, sp
     li      a1, 24
-    call    app_event_put
+    call    lantern_app_event_put
     UNFRAME 32
-END_FUNCTION app_builder_fail
+END_FUNCTION lantern_app_builder_fail
 
 # L1: the NODE_EV_BUILDER of the slot fields a1 joins the next step's events: the call, with the
 # bytes the builder sent, or with the failure bit when it sent none; the slot is free. Locals: the
 # event's head, the fields.
-LOCAL_FUNCTION app_builder_answer
+LOCAL_FUNCTION lantern_app_builder_answer
     FRAME 64
     sd      a1, 48(sp)
     ld      t0, AppBuilder_got(a1)
     ld      a0, AppBuilder_call(a1)
     bnez    t0, 1f
-    call    app_builder_fail                # none: the failure bit
+    call    lantern_app_builder_fail                # none: the failure bit
     j       9f
 1:  addi    t1, t0, 48 + 7                  # size, kind, the call, a ByteList, the bytes
     andi    t1, t1, -8
@@ -4179,7 +4179,7 @@ LOCAL_FUNCTION app_builder_answer
     sd      t0, 40(sp)
     mv      a0, sp
     li      a1, 48
-    call    app_event_put
+    call    lantern_app_event_put
     ld      a1, 48(sp)
     ld      a0, AppBuilder_buf(a1)
     ld      t0, AppBuilder_len(a1)
@@ -4187,16 +4187,16 @@ LOCAL_FUNCTION app_builder_answer
     ld      a1, AppBuilder_got(a1)
     addi    a1, a1, 7
     andi    a1, a1, -8
-    call    app_event_put
+    call    lantern_app_event_put
 9:  ld      a1, 48(sp)
     sd      zero, AppBuilder_state(a1)
     UNFRAME 64
-END_FUNCTION app_builder_answer
+END_FUNCTION lantern_app_builder_answer
 
 # L2: the NODE_ACT_BUILDER a0 (app.md): a free slot takes its request and dials the builder; with
 # none, or no memory, its NODE_EV_BUILDER of failure. s2 the action, s3 the slot, s4 its fields, s5
 # the request's bytes, s6 their count.
-LOCAL_FUNCTION app_builder_request
+LOCAL_FUNCTION lantern_app_builder_request
     ENTER 0
     mv      s2, a0
     ld      t0, (24 + 8)(s2)
@@ -4223,12 +4223,12 @@ LOCAL_FUNCTION app_builder_request
     bgeu    t1, t0, 3f
     addi    a0, s4, AppBuilder_buf
     sub     a0, a0, s1
-    call    app_unmap
+    call    lantern_app_unmap
     addi    a0, s4, AppBuilder_buf
     sub     a0, a0, s1
     li      a1, APP_BUILDER_BUFFER + 8
     add     a1, a1, s6
-    call    app_alloc
+    call    lantern_app_alloc
     beqz    a0, 8f
 3:  ld      a0, AppBuilder_buf(s4)
     mv      a1, s5
@@ -4250,7 +4250,7 @@ LOCAL_FUNCTION app_builder_request
     sd      t0, 8(s2)
     mv      a0, s3
     mv      a1, s4
-    call    app_builder_handle
+    call    lantern_app_builder_handle
     sd      a0, LIBP2P_ACT_CONN(s2)
     addi    a0, s2, LIBP2P_ACT_DIAL_ADDR
     ADDQ    a1, s1, APP_BUILDER
@@ -4258,22 +4258,22 @@ LOCAL_FUNCTION app_builder_request
     call    lantern_copy
     mv      a0, s2
     li      a1, LIBP2P_ACT_DIAL_SIZE
-    call    app_engine_perform
+    call    lantern_app_engine_perform
     LEAVE 0
 7:  ld      a0, 16(s2)                      # no free slot: a failure
-    call    app_builder_fail
+    call    lantern_app_builder_fail
     LEAVE 0
 8:  sd      zero, AppBuilder_got(s4)        # no memory: a failure
     mv      a1, s4
-    call    app_builder_answer
+    call    lantern_app_builder_answer
     LEAVE 0
-END_FUNCTION app_builder_request
+END_FUNCTION lantern_app_builder_request
 
 # L2: a0 = 1 when the shell event a0 is of a builder slot's connection, which it then takes:
 # CONNECTED opens it, SENT frees its buffer, RECEIVED keeps the bytes (a full buffer closes it),
 # DIAL_FAILED and CLOSED give the call's NODE_EV_BUILDER; else 0. An event of an older connection
 # of a slot is dropped. s2 the event, s3 its kind, s4 the slot, s5 its fields.
-LOCAL_FUNCTION app_builder_event
+LOCAL_FUNCTION lantern_app_builder_event
     ENTER 0
     mv      s2, a0
     ld      s3, 8(s2)
@@ -4338,18 +4338,18 @@ LOCAL_FUNCTION app_builder_event
     call    lantern_copy
     j       9f
 3:  mv      a1, s5                          # DIAL_FAILED, CLOSED: the answer
-    call    app_builder_answer
+    call    lantern_app_builder_answer
 9:  li      a0, 1
     LEAVE 0
 8:  li      a0, 0
     LEAVE 0
-END_FUNCTION app_builder_event
+END_FUNCTION lantern_app_builder_event
 
 # L2: after the shell's events (app.md): for each slot, a call past APP_BUILDER_MS closes; an open
 # one sends its request's next bytes as the shell's send buffer has room; one to close (state 3)
 # gets its CLOSE, then waits for CLOSED (state 4). s2 the action, s3 the slot, s4 its fields, s5
 # the bytes.
-LOCAL_FUNCTION app_builder_due
+LOCAL_FUNCTION lantern_app_builder_due
     ENTER 0
     li      s3, 0
     ADDQ    s4, s1, APP_BUILDER_SLOT0
@@ -4389,7 +4389,7 @@ LOCAL_FUNCTION app_builder_due
     sd      t0, 8(s2)
     mv      a0, s3
     mv      a1, s4
-    call    app_builder_handle
+    call    lantern_app_builder_handle
     sd      a0, LIBP2P_ACT_CONN(s2)
     sd      s5, (LIBP2P_ACT_CONN + 8)(s2)
     addi    a0, s2, LIBP2P_ACT_SEND_DATA
@@ -4406,7 +4406,7 @@ LOCAL_FUNCTION app_builder_due
     sd      t0, AppBuilder_flight(s4)
     mv      a0, s2
     ld      a1, 0(s2)
-    call    app_engine_perform
+    call    lantern_app_engine_perform
     j       7f
 3:  ld      t1, AppBuilder_state(s4)        # to close: the CLOSE
     li      t0, 3
@@ -4421,19 +4421,19 @@ LOCAL_FUNCTION app_builder_due
     sd      t0, 8(s2)
     mv      a0, s3
     mv      a1, s4
-    call    app_builder_handle
+    call    lantern_app_builder_handle
     sd      a0, LIBP2P_ACT_CONN(s2)
     mv      a0, s2
     li      a1, LIBP2P_ACT_CLOSE_SIZE
-    call    app_engine_perform
+    call    lantern_app_engine_perform
 7:  addi    s4, s4, APP_BUILDER_SLOT
     addi    s3, s3, 1
     j       1b
 9:  LEAVE 0
-END_FUNCTION app_builder_due
+END_FUNCTION lantern_app_builder_due
 
-/* L1: the base64url text (RFC 4648 section 5, no padding) of the a1 bytes at a0 joins the log line. Locals: a0, a1, then 4 digits. */
-LOCAL_FUNCTION app_line_base64url
+/* L1: the lantern_base64url text (RFC 4648 section 5, no padding) of the a1 bytes at a0 joins the log line. Locals: a0, a1, then 4 digits. */
+LOCAL_FUNCTION lantern_app_line_base64url
     FRAME 48
     sd      a0, 0(sp)
     sd      a1, 8(sp)
@@ -4476,13 +4476,13 @@ LOCAL_FUNCTION app_line_base64url
     j       4b
 5:  addi    a0, sp, 24
     addi    a1, t1, 1
-    call    app_line_text
+    call    lantern_app_line_text
     j       1b
 9:  UNFRAME 48
-END_FUNCTION app_line_base64url
+END_FUNCTION lantern_app_line_base64url
 
 /* L1: the a1 bytes of the event at a0 join the next discv5 step's events, while they have room. Locals: the new count. */
-LOCAL_FUNCTION app_dv_put
+LOCAL_FUNCTION lantern_app_dv_put
     FRAME 16
     LDQ     t0, s1, APP_DV_EVENTS
     ld      t1, 16(t0)
@@ -4501,37 +4501,37 @@ LOCAL_FUNCTION app_dv_put
     LDQ     t0, s1, APP_DV_EVENTS
     sd      t2, 16(t0)
 9:  UNFRAME 16
-END_FUNCTION app_dv_put
+END_FUNCTION lantern_app_dv_put
 
 /*
  * L2: discv5 with the key of libp2p: its state, with --enr-address and --port in the record, its UDP
  * socket on --port, and the record entry tcp: a0 = 0, or 2 after a line on the standard error.
  * Locals: L the Config (152), then an Address and a BindResult, and the tcp event.
  */
-LOCAL_FUNCTION app_dv_start
+LOCAL_FUNCTION lantern_app_dv_start
     ENTER 256
     li      a0, APP_DV
     li      a1, DISCV5_STATE_SIZE
-    call    app_alloc
+    call    lantern_app_alloc
     beqz    a0, 97f
     li      a0, APP_DV_SCRATCH
     li      a1, DISCV5_SCRATCH_SIZE
-    call    app_alloc
+    call    lantern_app_alloc
     beqz    a0, 97f
     li      a0, APP_DV_EVENTS
     li      a1, APP_DV_EVENT_BYTES
-    call    app_alloc
+    call    lantern_app_alloc
     beqz    a0, 97f
     li      t0, 24
     sd      t0, 8(a0)
     sd      zero, 16(a0)
     li      a0, APP_DV_ACTIONS
     li      a1, (DISCV5_BL_FIXED + DISCV5_ACTIONS_BASE + 64 * DISCV5_ACTIONS_PER_EVENT)
-    call    app_alloc
+    call    lantern_app_alloc
     beqz    a0, 97f
     li      a0, APP_DV_OUT
     li      a1, APP_DV_OUT_BYTES
-    call    app_alloc
+    call    lantern_app_alloc
     beqz    a0, 97f
     li      t0, 24
     sd      t0, 8(a0)
@@ -4606,39 +4606,39 @@ LOCAL_FUNCTION app_dv_start
     sb      t0, (L + 49)(sp)
     addi    a0, sp, L
     li      a1, 56
-    call    app_dv_put
+    call    lantern_app_dv_put
     li      a0, 0
     LEAVE 256
-95: call    app_line_start                  # bind UDP port <p>: error <n>
+95: call    lantern_app_line_start                  # bind UDP port <p>: error <n>
     ADDRESS a0, app_m_bind
     li      a1, app_m_bind_len
-    call    app_line_text
+    call    lantern_app_line_text
     LDQ     a0, s1, (APP_OPTIONS + AppOptions_port)
-    call    app_line_u64
+    call    lantern_app_line_u64
     ADDRESS a0, app_m_error
     li      a1, app_m_error_len
-    call    app_line_text
+    call    lantern_app_line_text
     ld      a0, (L + 184 + LIBP2P_BR_ERROR)(sp)
-    call    app_line_u64
+    call    lantern_app_line_u64
     li      a0, APP_LOG_ERROR
-    call    app_line_end
+    call    lantern_app_line_end
     li      a0, 2
     LEAVE 256
 96: mv      a2, a0                          # discv5: status <n>
     AM_INC  dv_failures
     ADDRESS a0, app_m_discv5
     li      a1, app_m_discv5_len
-    call    app_fail_status
+    call    lantern_app_fail_status
     LEAVE 256
-97: call    app_no_memory
+97: call    lantern_app_no_memory
     LEAVE 256
-END_FUNCTION app_dv_start
+END_FUNCTION lantern_app_dv_start
 
 /*
  * L2: a0 = 1 when the shell event a0 is a DATAGRAM of discv5's socket, which then joins the next
  * discv5 step as a DATAGRAM event (the sender as an Endpoint); else 0. s2 the event. Locals: L the header.
  */
-LOCAL_FUNCTION app_dv_datagram
+LOCAL_FUNCTION lantern_app_dv_datagram
     ENTER 64
     mv      s2, a0
     ld      t0, 8(s2)
@@ -4674,16 +4674,16 @@ LOCAL_FUNCTION app_dv_datagram
     bgtu    t3, t4, 9f
     addi    a0, sp, L
     li      a1, DISCV5_EV_DG_DATA
-    call    app_dv_put
+    call    lantern_app_dv_put
     ld      t0, L(sp)
     addi    a1, t0, -DISCV5_EV_DG_DATA
     addi    a0, s2, LIBP2P_EV_DG_DATA
-    call    app_dv_put
+    call    lantern_app_dv_put
 9:  li      a0, 1
     LEAVE 64
 8:  li      a0, 0
     LEAVE 64
-END_FUNCTION app_dv_datagram
+END_FUNCTION lantern_app_dv_datagram
 
 /*
  * L2: a discv5 step when it has events or its WAKEUP is due; then its actions: SEND as the shell's
@@ -4691,7 +4691,7 @@ END_FUNCTION app_dv_datagram
  * as the next time. s2 the next action, s3 the end, s4 the datagrams, s5 an event count.
  * Locals: L the header of an event.
  */
-LOCAL_FUNCTION app_discv5
+LOCAL_FUNCTION lantern_app_discv5
     ENTER 64
     LDQ     t0, s1, APP_DV_EVENTS
     ld      t1, 16(t0)
@@ -4714,10 +4714,10 @@ LOCAL_FUNCTION app_discv5
     LDQ     t0, s1, (APP_DV_ACTIONS + 8)
     bleu    s5, t0, 4f
     li      a0, APP_DV_ACTIONS
-    call    app_unmap
+    call    lantern_app_unmap
     li      a0, APP_DV_ACTIONS
     mv      a1, s5
-    call    app_alloc
+    call    lantern_app_alloc
     beqz    a0, 98f
 4:  LDQ     t0, s1, (APP_TICK + LIBP2P_TICK_NOW)    # the Tick: now and fresh bytes
     STQ     t0, s1, APP_DV_TICK
@@ -4744,7 +4744,7 @@ LOCAL_FUNCTION app_discv5
     AM_INC  dv_failures
     ADDRESS a0, app_m_discv5
     li      a1, app_m_discv5_len
-    call    app_fail_status
+    call    lantern_app_fail_status
     LDQ     t0, s1, (APP_TICK + LIBP2P_TICK_NOW)
     addi    t0, t0, 1000
     STQ     t0, s1, APP_DV_WAKE
@@ -4809,35 +4809,35 @@ LOCAL_FUNCTION app_discv5
     sd      t2, (L + 40)(sp)
     addi    a0, sp, L
     li      a1, 48
-    call    app_event_put
+    call    lantern_app_event_put
     ADDQ    a0, s2, DISCV5_ACT_FOUND_DATA
     ld      t0, L(sp)
     addi    a1, t0, -48
-    call    app_event_put
+    call    lantern_app_event_put
     j       80f
 71: li      t1, DISCV5_ACTION_RECORD
     bne     t0, t1, 72f
-    call    app_line_clear                  # the view's enr: enr:<base64url>
+    call    lantern_app_line_clear                  # the view's enr: enr:<lantern_base64url>
     ADDRESS a0, app_t_enr
     li      a1, 4
-    call    app_line_text
+    call    lantern_app_line_text
     ADDQ    a0, s2, DISCV5_ACT_RECORD_DATA
     LDQ     a1, s2, DISCV5_ACT_RECORD_LEN
-    call    app_line_base64url
+    call    lantern_app_line_base64url
     LDQ     a0, s1, APP_IDENTITY
     addi    a0, a0, (48 + ApiIdentity_enr)
     li      a1, 512
-    call    app_line_to
-    call    app_identity_put                # the node's identity: the new record
-    call    app_line_start                  # record enr:<base64url>
+    call    lantern_app_line_to
+    call    lantern_app_identity_put                # the node's identity: the new record
+    call    lantern_app_line_start                  # record enr:<lantern_base64url>
     ADDRESS a0, app_m_record
     li      a1, app_m_record_len
-    call    app_line_text
+    call    lantern_app_line_text
     ADDQ    a0, s2, DISCV5_ACT_RECORD_DATA
     LDQ     a1, s2, DISCV5_ACT_RECORD_LEN
-    call    app_line_base64url
+    call    lantern_app_line_base64url
     li      a0, APP_LOG_INFO
-    call    app_line_end
+    call    lantern_app_line_end
     j       80f
 72: li      t1, DISCV5_ACTION_WAKEUP
     bne     t0, t1, 80f
@@ -4859,14 +4859,14 @@ LOCAL_FUNCTION app_discv5
 98: LDQ     t0, s1, APP_DV_EVENTS
     sd      zero, 16(t0)
 99: LEAVE 64
-END_FUNCTION app_discv5
+END_FUNCTION lantern_app_discv5
 
 /*
  * L2: a0 = the base58btc text of the a1 bytes at a0 (at most 48), written at a2: a 1 for each
  * leading zero byte, then the digits. a3: a work area of 72 bytes. s2 the bytes, s3 their count,
  * s4 the text, s5 the work area, s6 the leading zero bytes.
  */
-LOCAL_FUNCTION app_base58
+LOCAL_FUNCTION lantern_app_base58
     ENTER 0
     mv      s2, a0
     mv      s3, a1
@@ -4931,17 +4931,17 @@ LOCAL_FUNCTION app_base58
     addi    t1, t1, -1
     j       8b
 9:  LEAVE 0
-END_FUNCTION app_base58
+END_FUNCTION lantern_app_base58
 
 /* L0: the log line becomes empty: the text helpers then build a text in it. Uses a7. */
-LOCAL_FUNCTION app_line_clear
+LOCAL_FUNCTION lantern_app_line_clear
     UNWIND_END_PROLOGUE
     STQ     zero, s1, (APP_LINE + 16)
     ret
-END_FUNCTION app_line_clear
+END_FUNCTION lantern_app_line_clear
 
 /* L1: the bytes of the log line go to the text field at a0 of the view (its length, then its bytes, at most a1). */
-LOCAL_FUNCTION app_line_to
+LOCAL_FUNCTION lantern_app_line_to
     FRAME 0
     LDQ     a2, s1, (APP_LINE + 16)
     bleu    a2, a1, 1f
@@ -4951,16 +4951,16 @@ LOCAL_FUNCTION app_line_to
     ADDQ    a1, s1, (APP_LINE + 24)
     call    lantern_copy
     UNFRAME 0
-END_FUNCTION app_line_to
+END_FUNCTION lantern_app_line_to
 
 /* L1: the IPv4 address a0 (its bytes in order in the low bytes) joins the line in dotted decimal. Locals: the address, the count. */
-LOCAL_FUNCTION app_line_ip4
+LOCAL_FUNCTION lantern_app_line_ip4
     FRAME 16
     sd      a0, 0(sp)
     sd      zero, 8(sp)
 1:  ld      a0, 0(sp)
     andi    a0, a0, 0xff
-    call    app_line_u64
+    call    lantern_app_line_u64
     ld      a0, 0(sp)
     ld      t0, 8(sp)
     addi    t0, t0, 1
@@ -4971,13 +4971,13 @@ LOCAL_FUNCTION app_line_ip4
     bgeu    t0, t1, 2f
     ADDRESS a0, app_t_dot
     li      a1, 1
-    call    app_line_text
+    call    lantern_app_line_text
     j       1b
 2:  UNFRAME 16
-END_FUNCTION app_line_ip4
+END_FUNCTION lantern_app_line_ip4
 
 /* L1: a multiaddr /ip4/<--enr-address>/<a0: tcp or udp text>/<--port>/p2p/<peer id> to the view's field at a1, or length 0 with no --enr-address. Locals: a0, a1. */
-LOCAL_FUNCTION app_multiaddr
+LOCAL_FUNCTION lantern_app_multiaddr
     FRAME 16
     sd      a0, 0(sp)
     sd      a1, 8(sp)
@@ -4985,29 +4985,29 @@ LOCAL_FUNCTION app_multiaddr
     bnez    t0, 1f
     sd      zero, 0(a1)
     j       9f
-1:  call    app_line_clear
+1:  call    lantern_app_line_clear
     ADDRESS a0, app_t_ip4
     li      a1, 5
-    call    app_line_text
+    call    lantern_app_line_text
     LDQ     a0, s1, (APP_OPTIONS + AppOptions_enr_address)
-    call    app_line_ip4
+    call    lantern_app_line_ip4
     ld      a0, 0(sp)
     li      a1, 5
-    call    app_line_text
+    call    lantern_app_line_text
     LDQ     a0, s1, (APP_OPTIONS + AppOptions_port)
-    call    app_line_u64
+    call    lantern_app_line_u64
     ADDRESS a0, app_t_p2p
     li      a1, 5
-    call    app_line_text
+    call    lantern_app_line_text
     LDQ     t0, s1, APP_IDENTITY
     addi    a0, t0, (48 + ApiIdentity_peer_id + 8)
     ld      a1, (48 + ApiIdentity_peer_id)(t0)
-    call    app_line_text
+    call    lantern_app_line_text
     ld      a0, 8(sp)
     li      a1, 128
-    call    app_line_to
+    call    lantern_app_line_to
 9:  UNFRAME 16
-END_FUNCTION app_multiaddr
+END_FUNCTION lantern_app_multiaddr
 
 /*
  * L2: the Beacon API: a shell context with --http-max-connections slots that listens on
@@ -5016,7 +5016,7 @@ END_FUNCTION app_multiaddr
  * error. Locals: L ShellParams or an Address, L+32 a ListenResult or the public key, L+80 the peer
  * id's multihash, L+128 base58's work area.
  */
-LOCAL_FUNCTION app_api_start
+LOCAL_FUNCTION lantern_app_api_start
     ENTER 208
     LDQ     t0, s1, (APP_OPTIONS + AppOptions_http_max_connections)
     sd      t0, L(sp)
@@ -5028,7 +5028,7 @@ LOCAL_FUNCTION app_api_start
     bnez    a0, 97f
     li      a0, APP_API_SHELL
     ld      a1, (L + 32)(sp)
-    call    app_alloc
+    call    lantern_app_alloc
     beqz    a0, 97f
     mv      a1, a0
     addi    a0, sp, L
@@ -5036,38 +5036,38 @@ LOCAL_FUNCTION app_api_start
     bnez    a0, 97f
     li      a0, APP_API_EVENTS
     li      a1, APP_API_EVENT_BYTES
-    call    app_alloc
+    call    lantern_app_alloc
     beqz    a0, 97f
     li      t0, 24
     sd      t0, 8(a0)
     sd      zero, 16(a0)
     li      a0, APP_API_ACT
     li      a1, APP_API_ACT_BYTES
-    call    app_alloc
+    call    lantern_app_alloc
     beqz    a0, 97f
     li      t0, 24
     sd      t0, 8(a0)
     sd      zero, 16(a0)
     li      a0, APP_API_EVENT
     li      a1, (48 + HTTP_REQUEST_FIXED + APP_API_BUFFER + 64)
-    call    app_alloc
+    call    lantern_app_alloc
     beqz    a0, 97f
     LDQ     t0, s1, (APP_OPTIONS + AppOptions_http_max_connections)
     li      t1, APP_API_SLOT_BYTES
     mul     a1, t0, t1
     li      a0, APP_API_BUF
-    call    app_alloc
+    call    lantern_app_alloc
     beqz    a0, 97f
     LDQ     t0, s1, (APP_OPTIONS + AppOptions_http_max_connections)
     li      a1, APP_API_SLOT                # APP_API_SLOT bytes each
     mul     a1, t0, a1
     li      a0, APP_API_SLOTS
-    call    app_alloc
+    call    lantern_app_alloc
     beqz    a0, 97f
     sd      zero, 0(a0)
     li      a0, APP_IDENTITY
     li      a1, (48 + API_IDENTITY_SIZE)
-    call    app_alloc
+    call    lantern_app_alloc
     beqz    a0, 97f
     li      t0, 4                           # listen: TCP --http-address, --http-port
     sd      t0, L(sp)
@@ -5097,7 +5097,7 @@ LOCAL_FUNCTION app_api_start
     LDQ     a2, s1, APP_IDENTITY
     addi    a2, a2, (48 + ApiIdentity_peer_id + 8)
     addi    a3, sp, (L + 128)
-    call    app_base58
+    call    lantern_app_base58
     LDQ     t0, s1, APP_IDENTITY
     sd      a0, (48 + ApiIdentity_peer_id)(t0)
     LDQ     a0, s1, APP_IDENTITY            # the version
@@ -5111,55 +5111,55 @@ LOCAL_FUNCTION app_api_start
     ADDRESS a0, app_t_tcp                   # the addresses
     LDQ     a1, s1, APP_IDENTITY
     addi    a1, a1, (48 + ApiIdentity_p2p_address)
-    call    app_multiaddr
+    call    lantern_app_multiaddr
     ADDRESS a0, app_t_udp
     LDQ     a1, s1, APP_IDENTITY
     addi    a1, a1, (48 + ApiIdentity_discovery_address)
-    call    app_multiaddr
-    call    app_identity_put
-    call    app_line_start                  # Beacon API on TCP <address>:<port>, peer id <id>
+    call    lantern_app_multiaddr
+    call    lantern_app_identity_put
+    call    lantern_app_line_start                  # Beacon API on TCP <address>:<port>, peer id <id>
     ADDRESS a0, app_m_api
     li      a1, app_m_api_len
-    call    app_line_text
+    call    lantern_app_line_text
     LDQ     a0, s1, (APP_OPTIONS + AppOptions_http_address)
-    call    app_line_ip4
+    call    lantern_app_line_ip4
     ADDRESS a0, app_t_colon
     li      a1, 1
-    call    app_line_text
+    call    lantern_app_line_text
     LDQ     a0, s1, (APP_OPTIONS + AppOptions_http_port)
-    call    app_line_u64
+    call    lantern_app_line_u64
     ADDRESS a0, app_m_peer_id
     li      a1, app_m_peer_id_len
-    call    app_line_text
+    call    lantern_app_line_text
     LDQ     t0, s1, APP_IDENTITY
     addi    a0, t0, (48 + ApiIdentity_peer_id + 8)
     ld      a1, (48 + ApiIdentity_peer_id)(t0)
-    call    app_line_text
+    call    lantern_app_line_text
     li      a0, APP_LOG_INFO
-    call    app_line_end
+    call    lantern_app_line_end
     li      a0, 0
     LEAVE 208
-96: call    app_line_start                  # listen on TCP port <p>: error <n>
+96: call    lantern_app_line_start                  # listen on TCP port <p>: error <n>
     ADDRESS a0, app_m_listen
     li      a1, app_m_listen_len
-    call    app_line_text
+    call    lantern_app_line_text
     LDQ     a0, s1, (APP_OPTIONS + AppOptions_http_port)
-    call    app_line_u64
+    call    lantern_app_line_u64
     ADDRESS a0, app_m_error
     li      a1, app_m_error_len
-    call    app_line_text
+    call    lantern_app_line_text
     ld      a0, (L + 32)(sp)
-    call    app_line_u64
+    call    lantern_app_line_u64
     li      a0, APP_LOG_ERROR
-    call    app_line_end
+    call    lantern_app_line_end
     li      a0, 2
     LEAVE 208
-97: call    app_no_memory
+97: call    lantern_app_no_memory
     LEAVE 208
-END_FUNCTION app_api_start
+END_FUNCTION lantern_app_api_start
 
 /* L1: the identity's texts go to the next step in a NODE_EV_API_IDENTITY. */
-LOCAL_FUNCTION app_identity_put
+LOCAL_FUNCTION lantern_app_identity_put
     FRAME 0
     LDQ     a0, s1, APP_IDENTITY
     li      t0, (48 + API_IDENTITY_SIZE)
@@ -5174,12 +5174,12 @@ LOCAL_FUNCTION app_identity_put
     li      t0, API_IDENTITY_SIZE
     sd      t0, 40(a0)
     li      a1, (48 + API_IDENTITY_SIZE)
-    call    app_event_put
+    call    lantern_app_event_put
     UNFRAME 0
-END_FUNCTION app_identity_put
+END_FUNCTION lantern_app_identity_put
 
 /* L0: a0 = the slot of the connection a0, while it is open at that generation, else 0. Uses t0-t2, a7. */
-LOCAL_FUNCTION app_api_slot
+LOCAL_FUNCTION lantern_app_api_slot
     UNWIND_END_PROLOGUE
     slli    t0, a0, 32
     srli    t0, t0, 32
@@ -5198,10 +5198,10 @@ LOCAL_FUNCTION app_api_slot
     ret
 9:  li      a0, 0
     ret
-END_FUNCTION app_api_slot
+END_FUNCTION lantern_app_api_slot
 
 /* L1: the Beacon API's shell actions go out; their results come at the next poll. */
-LOCAL_FUNCTION app_api_flush
+LOCAL_FUNCTION lantern_app_api_flush
     FRAME 0
     LDQ     a1, s1, APP_API_ACT
     beqz    a1, 9f
@@ -5213,10 +5213,10 @@ LOCAL_FUNCTION app_api_flush
     LDQ     t0, s1, APP_API_ACT
     sd      zero, 16(t0)
 9:  UNFRAME 0
-END_FUNCTION app_api_flush
+END_FUNCTION lantern_app_api_flush
 
 /* L1: a0 = room for a shell action of a0 bytes at the end of the Beacon API's actions, its bytes counted, after a flush when they are full; 0 when it never fits. Locals: a0. */
-LOCAL_FUNCTION app_api_room
+LOCAL_FUNCTION lantern_app_api_room
     FRAME 16
     sd      a0, 0(sp)
     LDQ     t0, s1, APP_API_ACT
@@ -5226,7 +5226,7 @@ LOCAL_FUNCTION app_api_room
     ld      t2, 16(t0)
     add     t2, t2, a0
     bleu    t2, t1, 1f
-    call    app_api_flush
+    call    lantern_app_api_flush
 1:  LDQ     t0, s1, APP_API_ACT
     ld      t1, 16(t0)
     ld      t2, 0(sp)
@@ -5237,18 +5237,18 @@ LOCAL_FUNCTION app_api_room
     UNFRAME 16
 8:  li      a0, 0
     UNFRAME 16
-END_FUNCTION app_api_room
+END_FUNCTION lantern_app_api_room
 
 /* L1: a CLOSE of the connection a0, while it is open; its slot waits for the shell's CLOSED. Locals: a0. */
-LOCAL_FUNCTION app_api_close
+LOCAL_FUNCTION lantern_app_api_close
     FRAME 16
     sd      a0, 0(sp)
-    call    app_api_slot
+    call    lantern_app_api_slot
     beqz    a0, 9f
     li      t0, APP_API_CLOSING
     sd      t0, 8(a0)
     li      a0, LIBP2P_ACT_CLOSE_SIZE
-    call    app_api_room
+    call    lantern_app_api_room
     beqz    a0, 9f
     li      t0, LIBP2P_ACT_CLOSE_SIZE
     sd      t0, 0(a0)
@@ -5257,7 +5257,7 @@ LOCAL_FUNCTION app_api_close
     ld      t0, 0(sp)
     sd      t0, LIBP2P_ACT_CONN(a0)
 9:  UNFRAME 16
-END_FUNCTION app_api_close
+END_FUNCTION lantern_app_api_close
 
 /*
  * L2: the slot a0, when it waits for no answer: lantern_http_request of its bytes, then a
@@ -5266,7 +5266,7 @@ END_FUNCTION app_api_close
  * s5 its ByteList, s6 its bytes, s7 its index, s8 the event, s9 the HttpRequest's room. Locals:
  * L HttpLimits.
  */
-LOCAL_FUNCTION app_api_read
+LOCAL_FUNCTION lantern_app_api_read
     ENTER 16
     mv      s7, a0
     LDQ     s4, s1, APP_API_SLOTS
@@ -5333,25 +5333,25 @@ LOCAL_FUNCTION app_api_read
     sd      s9, 40(s8)
     mv      a0, s8
     addi    a1, s9, 48
-    call    app_event_put
+    call    lantern_app_event_put
     li      t0, APP_API_ANSWERING
     sd      t0, 8(s4)
     AM_INC  api_requests                    # the metrics: a request, its answer's first bytes owed
     li      t0, 1
     sd      t0, 48(s4)
 99: LEAVE 16
-END_FUNCTION app_api_read
+END_FUNCTION lantern_app_api_read
 
 /*
  * L2: the NODE_ACT_API_SEND or NODE_ACT_API_CLOSE a0 of the node: a SEND of its bytes, or the
  * close, on its connection; after the bytes with last 1, the slot's next request. An action of a
  * connection no longer open goes. s2 the action, s4 the slot, s5 the shell action.
  */
-LOCAL_FUNCTION app_api_action
+LOCAL_FUNCTION lantern_app_api_action
     ENTER 0
     mv      s2, a0
     ld      a0, 16(s2)
-    call    app_api_slot
+    call    lantern_app_api_slot
     beqz    a0, 99f
     mv      s4, a0
     ld      t0, 8(s4)
@@ -5363,7 +5363,7 @@ LOCAL_FUNCTION app_api_action
     ld      t0, 32(s4)                      # CLOSE: at once with no bytes in flight, else after them
     bnez    t0, 2f
     ld      a0, 16(s2)
-    call    app_api_close
+    call    lantern_app_api_close
     j       99f
 2:  li      t0, APP_API_DRAINING
     sd      t0, 8(s4)
@@ -5373,7 +5373,7 @@ LOCAL_FUNCTION app_api_action
 1:  ld      t0, 48(s2)                      # SEND: size, kind, connection, count, the bytes
     addi    a0, t0, (LIBP2P_ACT_SEND_DATA + 7)
     andi    a0, a0, -8
-    call    app_api_room
+    call    lantern_app_api_room
     beqz    a0, 98f
     mv      s5, a0
     ld      t0, 48(s2)
@@ -5412,7 +5412,7 @@ LOCAL_FUNCTION app_api_action
     sd      t0, 40(s4)
     mv      a0, s4
     ld      a1, 16(s2)
-    call    app_api_due
+    call    lantern_app_api_due
     j       99f
 97:
     li      t0, APP_API_READING
@@ -5422,15 +5422,15 @@ LOCAL_FUNCTION app_api_action
     ld      a0, 16(s2)
     slli    a0, a0, 32
     srli    a0, a0, 32
-    call    app_api_read
+    call    lantern_app_api_read
     j       99f
 98: ld      a0, 16(s2)                      # bytes that never fit: the connection closes
-    call    app_api_close
+    call    lantern_app_api_close
 99: LEAVE 0
-END_FUNCTION app_api_action
+END_FUNCTION lantern_app_api_action
 
 /* L1: a NODE_EV_API_SENT or NODE_EV_API_CLOSED (a0) of the connection a1 for the next step. Locals: the event. */
-LOCAL_FUNCTION app_api_note
+LOCAL_FUNCTION lantern_app_api_note
     FRAME 32
     li      t0, 24
     sd      t0, 0(sp)
@@ -5438,12 +5438,12 @@ LOCAL_FUNCTION app_api_note
     sd      a1, 16(sp)
     mv      a0, sp
     li      a1, 24
-    call    app_event_put
+    call    lantern_app_event_put
     UNFRAME 32
-END_FUNCTION app_api_note
+END_FUNCTION lantern_app_api_note
 
 /* L1: the slot a0 of the connection a1, owing an API_SENT: it goes once the slot's bytes in flight are at most APP_API_SEND_WINDOW - NODE_API_CHUNK. */
-LOCAL_FUNCTION app_api_due
+LOCAL_FUNCTION lantern_app_api_due
     FRAME 0
     ld      t0, 40(a0)
     beqz    t0, 9f
@@ -5452,9 +5452,9 @@ LOCAL_FUNCTION app_api_due
     bgtu    t0, t1, 9f
     sd      zero, 40(a0)
     li      a0, NODE_EV_API_SENT
-    call    app_api_note
+    call    lantern_app_api_note
 9:  UNFRAME 0
-END_FUNCTION app_api_due
+END_FUNCTION lantern_app_api_due
 
 /*
  * L2: the NODE_ACT_STATE_BYTES a0: lantern_node_state_bytes of the fork of the state's slot in new
@@ -5462,17 +5462,17 @@ END_FUNCTION app_api_due
  * s3 the state's entry, s4 the bytes' size, s5 the memory. Locals: L a ByteList, L+24 the size,
  * L+32 the fork.
  */
-LOCAL_FUNCTION app_state_bytes
+LOCAL_FUNCTION lantern_app_state_bytes
     ENTER 48
     mv      s2, a0
     ld      a0, 16(s2)
-    call    app_buf_find
+    call    lantern_app_buf_find
     beqz    a0, 9f
     mv      s3, a0
     ld      t0, 8(s3)
     ld      a0, NODE_STATE_SLOT(t0)
     ADDQ    a1, s1, APP_CONFIG
-    call    app_fork
+    call    lantern_app_fork
     sd      a0, (L + 32)(sp)
     li      t0, 24                          # the size first
     sd      t0, L(sp)
@@ -5487,7 +5487,7 @@ LOCAL_FUNCTION app_state_bytes
     li      t0, 24
     bleu    s4, t0, 8f
     mv      a0, s4
-    call    app_map
+    call    lantern_app_map
     beqz    a0, 8f
     mv      s5, a0
     sd      s4, 0(s5)
@@ -5504,7 +5504,7 @@ LOCAL_FUNCTION app_state_bytes
 7:  ld      a0, 24(s2)
     mv      a1, s5
     mv      a2, s4
-    call    app_buf_add
+    call    lantern_app_buf_add
     LEAVE 48
 8:  li      t0, 24                          # no memory: a ByteList of no bytes
     sd      t0, L(sp)
@@ -5512,14 +5512,14 @@ LOCAL_FUNCTION app_state_bytes
     sd      zero, (L + 16)(sp)
     addi    a0, sp, L
     li      a1, 24
-    call    app_dup
+    call    lantern_app_dup
     beqz    a0, 9f
     mv      a1, a0
     ld      a0, 24(s2)
     li      a2, 24
-    call    app_buf_add
+    call    lantern_app_buf_add
 9:  LEAVE 48
-END_FUNCTION app_state_bytes
+END_FUNCTION lantern_app_state_bytes
 
 /*
  * L2: the Beacon API's sockets, without waiting: ACCEPTED takes a free slot (ADOPT) or a REFUSE,
@@ -5528,7 +5528,7 @@ END_FUNCTION app_state_bytes
  * APP_API_IDLE_MS closes, as does a draining one; then the shell actions go out. s2 the
  * next event, s3 the end, s4 a slot, s5 an index, s6 the connection. Locals: L the wait.
  */
-LOCAL_FUNCTION app_api_poll
+LOCAL_FUNCTION lantern_app_api_poll
     ENTER 16
     sd      zero, L(sp)
     LDQ     a0, s1, APP_API_SHELL
@@ -5554,7 +5554,7 @@ LOCAL_FUNCTION app_api_poll
     addi    s5, s5, 1
     j       2b
 21: li      a0, LIBP2P_ACT_REFUSE_SIZE
-    call    app_api_room
+    call    lantern_app_api_room
     beqz    a0, 79f
     li      t0, LIBP2P_ACT_REFUSE_SIZE
     sd      t0, 0(a0)
@@ -5577,7 +5577,7 @@ LOCAL_FUNCTION app_api_poll
     slli    s6, t0, 32
     or      s6, s6, s5
     li      a0, LIBP2P_ACT_ADOPT_SIZE
-    call    app_api_room
+    call    lantern_app_api_room
     beqz    a0, 79f
     li      t0, LIBP2P_ACT_ADOPT_SIZE
     sd      t0, 0(a0)
@@ -5591,7 +5591,7 @@ LOCAL_FUNCTION app_api_poll
     bne     t0, t1, 30f
     ld      s6, LIBP2P_EV_CONN(s2)
     mv      a0, s6
-    call    app_api_slot
+    call    lantern_app_api_slot
     beqz    a0, 79f
     ld      t0, 32(a0)
     ld      t1, LIBP2P_EV_COUNT(s2)
@@ -5606,10 +5606,10 @@ LOCAL_FUNCTION app_api_poll
     sd      t1, 24(a0)
     bnez    t2, 79f
     mv      a0, s6
-    call    app_api_close
+    call    lantern_app_api_close
     j       79f
 302: mv     a1, s6
-    call    app_api_due
+    call    lantern_app_api_due
     j       79f
 30: li      t1, LIBP2P_EVENT_RECEIVED
     beq     t0, t1, 31f
@@ -5617,7 +5617,7 @@ LOCAL_FUNCTION app_api_poll
     bne     t0, t1, 79f
 31: ld      s6, LIBP2P_EV_CONN(s2)          # the slot of the connection, at its generation
     mv      a0, s6
-    call    app_api_slot
+    call    lantern_app_api_slot
     beqz    a0, 79f
     mv      s4, a0
     ld      t0, 8(s2)
@@ -5625,7 +5625,7 @@ LOCAL_FUNCTION app_api_poll
     bne     t0, t1, 4f
     li      a0, NODE_EV_API_CLOSED          # CLOSED: the node's stream ends, and the slot is free
     mv      a1, s6
-    call    app_api_note
+    call    lantern_app_api_note
     sd      zero, 8(s4)
     sd      zero, 16(s4)
     j       79f
@@ -5655,10 +5655,10 @@ LOCAL_FUNCTION app_api_poll
     addi    a1, s2, LIBP2P_EV_DATA
     call    lantern_copy
     mv      a0, s5
-    call    app_api_read
+    call    lantern_app_api_read
     j       79f
 6:  mv      a0, s6
-    call    app_api_close
+    call    lantern_app_api_close
 79: ld      t0, 0(s2)
     add     s2, s2, t0
     j       1b
@@ -5681,25 +5681,25 @@ LOCAL_FUNCTION app_api_poll
     ld      a0, 0(s4)
     slli    a0, a0, 32
     or      a0, a0, s5
-    call    app_api_close
+    call    lantern_app_api_close
 84: addi    s4, s4, APP_API_SLOT
     addi    s5, s5, 1
     j       81b
-85: call    app_api_flush
+85: call    lantern_app_api_flush
     LEAVE 16
-END_FUNCTION app_api_poll
+END_FUNCTION lantern_app_api_poll
 
 # L1: a0 = the monotonic microseconds of libp2p_shell_clock.
-LOCAL_FUNCTION app_met_us
+LOCAL_FUNCTION lantern_app_met_us
     FRAME 0
     ADDQ    a0, s1, APP_MET_TICK
     CALL_GLOBAL libp2p_shell_clock
     LDQ     a0, s1, APP_MET_TICK + LIBP2P_TICK_US
     UNFRAME 0
-END_FUNCTION app_met_us
+END_FUNCTION lantern_app_met_us
 
 # L1: the value a2 joins the AppMetrics Histogram at offset a0, of the bound set a1. Locals: the bound set, the value.
-LOCAL_FUNCTION app_met_obs
+LOCAL_FUNCTION lantern_app_met_obs
     FRAME 16
     sd      a1, 0(sp)
     sd      a2, 8(sp)
@@ -5709,10 +5709,10 @@ LOCAL_FUNCTION app_met_obs
     addi    a2, sp, 8
     CALL_GLOBAL lantern_metrics_observe
     UNFRAME 16
-END_FUNCTION app_met_obs
+END_FUNCTION lantern_app_met_obs
 
 # L1: the delay of a message of the slot a1, from its slot's start to the store's time, joins the AppMetrics Histogram at offset a0 (delay bounds).
-LOCAL_FUNCTION app_met_delay
+LOCAL_FUNCTION lantern_app_met_delay
     FRAME 0
     LDQ     t0, s1, APP_STORE
     LDQ     t1, s1, APP_CONFIG + CONFIG_SLOT_DURATION_MS
@@ -5726,9 +5726,9 @@ LOCAL_FUNCTION app_met_delay
 1:  li      t2, 1000
     mul     a2, a2, t2
     li      a1, METRIC_BOUNDS_DELAY
-    call    app_met_obs
+    call    lantern_app_met_obs
     UNFRAME 0
-END_FUNCTION app_met_delay
+END_FUNCTION lantern_app_met_delay
 
 /*
  * L2: the metrics of a work that ran (app.md, the metrics): its run time since APP_MET_T0 and a
@@ -5737,11 +5737,11 @@ END_FUNCTION app_met_delay
  * kind, a1 its data's table entry or 0. s2 the kind, s3 the data entry, s4 the microseconds, s5
  * the WORK_DONE event, s6 the kind's slot, s7 a topic, s8 a result's index.
  */
-LOCAL_FUNCTION app_met_work
+LOCAL_FUNCTION lantern_app_met_work
     ENTER 0
     mv      s2, a0
     mv      s3, a1
-    call    app_met_us
+    call    lantern_app_met_us
     LDQ     t0, s1, APP_MET_T0
     sub     s4, a0, t0
     LDQ     s5, s1, APP_WORK_EVENT
@@ -5756,7 +5756,7 @@ LOCAL_FUNCTION app_met_work
     add     a0, a0, t0
     li      a1, METRIC_BOUNDS_WORK
     mv      a2, s4
-    call    app_met_obs
+    call    lantern_app_met_obs
     ld      t0, NodeEvent_result(s5)
     beqz    t0, 1f
     AM_INC_AT work_failures, s6
@@ -5786,7 +5786,7 @@ LOCAL_FUNCTION app_met_work
     add     a0, a0, t0
     li      a1, METRIC_BOUNDS_WORK
     mv      a2, s4
-    call    app_met_obs
+    call    lantern_app_met_obs
     li      t0, GOSSIP_DATA_COLUMN_SIDECAR
     bne     s7, t0, 5f
     AM_INC  column_requests
@@ -5795,7 +5795,7 @@ LOCAL_FUNCTION app_met_work
 41: li      a0, AppMetrics_gossip_verification
     li      a1, METRIC_BOUNDS_DEFAULT
     mv      a2, s4
-    call    app_met_obs
+    call    lantern_app_met_obs
     j       99f
 5:  li      t0, GOSSIP_BEACON_AGGREGATE_AND_PROOF
     bne     s7, t0, 6f
@@ -5807,7 +5807,7 @@ LOCAL_FUNCTION app_met_work
     bnez    s8, 99f
     li      a0, AppMetrics_attestation_delay    # a valid one: its delay, its slot at NodeEvent_root
     ld      a1, NodeEvent_root(s5)
-    call    app_met_delay
+    call    lantern_app_met_delay
     j       99f
 7:  li      t0, GOSSIP_ATTESTER_SLASHING
     bne     s7, t0, 8f
@@ -5826,7 +5826,7 @@ LOCAL_FUNCTION app_met_work
     add     t1, t0, t1
     ld      a1, 100(t1)
     li      a0, AppMetrics_block_delay
-    call    app_met_delay
+    call    lantern_app_met_delay
     j       99f
 20: li      t0, NODE_WORK_SERVE
     bne     s2, t0, 30f
@@ -5841,7 +5841,7 @@ LOCAL_FUNCTION app_met_work
     li      a0, AppMetrics_reconstruction
     li      a1, METRIC_BOUNDS_DEFAULT
     mv      a2, s4
-    call    app_met_obs
+    call    lantern_app_met_obs
     ld      t0, NodeEvent_result(s5)
     bnez    t0, 99f
     beqz    s3, 99f
@@ -5868,7 +5868,7 @@ LOCAL_FUNCTION app_met_work
     li      a0, AppMetrics_computation
     li      a1, METRIC_BOUNDS_DEFAULT
     mv      a2, s4
-    call    app_met_obs
+    call    lantern_app_met_obs
     j       99f
 50: li      t0, NODE_WORK_BLOB              # BLOB of a column sidecar from a response: its check
     bne     s2, t0, 60f
@@ -5878,7 +5878,7 @@ LOCAL_FUNCTION app_met_work
     li      a0, AppMetrics_kzg_batch
     li      a1, METRIC_BOUNDS_KZG
     mv      a2, s4
-    call    app_met_obs
+    call    lantern_app_met_obs
     j       99f
 60: li      t0, NODE_WORK_PUBLISH_CHECK
     bne     s2, t0, 70f
@@ -5909,9 +5909,9 @@ LOCAL_FUNCTION app_met_work
     li      a0, AppMetrics_epoch_seconds
     li      a1, METRIC_BOUNDS_WORK
     mv      a2, s4
-    call    app_met_obs
+    call    lantern_app_met_obs
 99: LEAVE 0
-END_FUNCTION app_met_work
+END_FUNCTION lantern_app_met_work
 
 /*
  * L2: the metrics server (app.md): with --metrics categories, a shell context of APP_MET_CONNS
@@ -5922,9 +5922,9 @@ END_FUNCTION app_met_work
 .if 32 + LIBP2P_LR_SIZE > 80
 .error "app_met_start: its locals hold no ListenResult"
 .endif
-LOCAL_FUNCTION app_met_start
+LOCAL_FUNCTION lantern_app_met_start
     ENTER 80
-    call    app_met_us                      # the start, for the uptime
+    call    lantern_app_met_us                      # the start, for the uptime
     STQ     a0, s1, APP_MET_START_US
     LDQ     t0, s1, APP_MET_TICK + LIBP2P_TICK_UNIX
     STQ     t0, s1, APP_MET_START_S
@@ -5940,7 +5940,7 @@ LOCAL_FUNCTION app_met_start
     bnez    a0, 97f
     li      a0, APP_MET_SHELL
     ld      a1, (L + 32)(sp)
-    call    app_alloc
+    call    lantern_app_alloc
     beqz    a0, 97f
     mv      a1, a0
     addi    a0, sp, L
@@ -5948,14 +5948,14 @@ LOCAL_FUNCTION app_met_start
     bnez    a0, 97f
     li      a0, APP_MET_EVENTS
     li      a1, APP_MET_EVENT_BYTES
-    call    app_alloc
+    call    lantern_app_alloc
     beqz    a0, 97f
     li      t0, 24
     sd      t0, 8(a0)
     sd      zero, 16(a0)
     li      a0, APP_MET_ACT
     li      a1, APP_MET_ACT_BYTES
-    call    app_alloc
+    call    lantern_app_alloc
     beqz    a0, 97f
     li      t0, 24
     sd      t0, 8(a0)
@@ -5987,42 +5987,42 @@ LOCAL_FUNCTION app_met_start
     CALL_GLOBAL libp2p_shell_listen
     ld      t0, (L + 32)(sp)
     bnez    t0, 96f
-    call    app_line_start                  # metrics on TCP <address>:<port>
+    call    lantern_app_line_start                  # metrics on TCP <address>:<port>
     lla     a0, app_m_metrics
     li      a1, app_m_metrics_len
-    call    app_line_text
+    call    lantern_app_line_text
     LDQ     a0, s1, APP_OPTIONS + AppOptions_metrics_address
-    call    app_line_ip4
+    call    lantern_app_line_ip4
     lla     a0, app_t_colon
     li      a1, 1
-    call    app_line_text
+    call    lantern_app_line_text
     LDQ     a0, s1, APP_OPTIONS + AppOptions_metrics_port
-    call    app_line_u64
+    call    lantern_app_line_u64
     li      a0, APP_LOG_INFO
-    call    app_line_end
+    call    lantern_app_line_end
 8:  li      a0, 0
     LEAVE 80
-96: call    app_line_start                  # listen on TCP port <p>: error <n>
+96: call    lantern_app_line_start                  # listen on TCP port <p>: error <n>
     lla     a0, app_m_listen
     li      a1, app_m_listen_len
-    call    app_line_text
+    call    lantern_app_line_text
     LDQ     a0, s1, APP_OPTIONS + AppOptions_metrics_port
-    call    app_line_u64
+    call    lantern_app_line_u64
     lla     a0, app_m_error
     li      a1, app_m_error_len
-    call    app_line_text
+    call    lantern_app_line_text
     ld      a0, (L + 32)(sp)
-    call    app_line_u64
+    call    lantern_app_line_u64
     li      a0, APP_LOG_ERROR
-    call    app_line_end
+    call    lantern_app_line_end
     li      a0, 2
     LEAVE 80
-97: call    app_no_memory
+97: call    lantern_app_no_memory
     LEAVE 80
-END_FUNCTION app_met_start
+END_FUNCTION lantern_app_met_start
 
 # L0: a0 = the slot of the metrics connection a0, while open at its generation, or 0. Uses t0-t2, a7.
-LOCAL_FUNCTION app_met_slot
+LOCAL_FUNCTION lantern_app_met_slot
     UNWIND_END_PROLOGUE
     slli    t0, a0, 32
     srli    t0, t0, 32
@@ -6041,10 +6041,10 @@ LOCAL_FUNCTION app_met_slot
     ret
 9:  li      a0, 0
     ret
-END_FUNCTION app_met_slot
+END_FUNCTION lantern_app_met_slot
 
 # L1: the metrics server's shell actions go out; their results come at the next poll.
-LOCAL_FUNCTION app_met_flush
+LOCAL_FUNCTION lantern_app_met_flush
     FRAME 0
     LDQ     a1, s1, APP_MET_ACT
     ld      t0, 16(a1)
@@ -6055,10 +6055,10 @@ LOCAL_FUNCTION app_met_flush
     LDQ     t0, s1, APP_MET_ACT
     sd      zero, 16(t0)
 9:  UNFRAME 0
-END_FUNCTION app_met_flush
+END_FUNCTION lantern_app_met_flush
 
 # L1: a0 = room for a shell action of a0 bytes at the end of the metrics server's actions, its bytes counted, after a flush when they are full; 0 when it never fits. Locals: a0.
-LOCAL_FUNCTION app_met_room
+LOCAL_FUNCTION lantern_app_met_room
     FRAME 16
     sd      a0, 0(sp)
     LDQ     t0, s1, APP_MET_ACT
@@ -6068,7 +6068,7 @@ LOCAL_FUNCTION app_met_room
     ld      t2, 16(t0)
     add     t2, t2, a0
     bleu    t2, t1, 1f
-    call    app_met_flush
+    call    lantern_app_met_flush
 1:  LDQ     t0, s1, APP_MET_ACT
     ld      t1, 16(t0)
     ld      t2, 0(sp)
@@ -6079,18 +6079,18 @@ LOCAL_FUNCTION app_met_room
     UNFRAME 16
 8:  li      a0, 0
     UNFRAME 16
-END_FUNCTION app_met_room
+END_FUNCTION lantern_app_met_room
 
 # L1: a CLOSE of the metrics connection a0, while it is open; its slot waits for the shell's CLOSED. Locals: a0.
-LOCAL_FUNCTION app_met_close
+LOCAL_FUNCTION lantern_app_met_close
     FRAME 16
     sd      a0, 0(sp)
-    call    app_met_slot
+    call    lantern_app_met_slot
     beqz    a0, 9f
     li      t0, APP_MET_CLOSING
     sd      t0, 8(a0)
     li      a0, LIBP2P_ACT_CLOSE_SIZE
-    call    app_met_room
+    call    lantern_app_met_room
     beqz    a0, 9f
     li      t0, LIBP2P_ACT_CLOSE_SIZE
     sd      t0, 0(a0)
@@ -6099,14 +6099,14 @@ LOCAL_FUNCTION app_met_close
     ld      t0, 0(sp)
     sd      t0, LIBP2P_ACT_CONN(a0)
 9:  UNFRAME 16
-END_FUNCTION app_met_close
+END_FUNCTION lantern_app_met_close
 
 /*
  * L1: the sources of the metrics (app.md): lantern_metrics_node of the node and the store; the head
  * state's values by lantern_<fork>_metrics_state, again only for a new head state; the node's
  * counters; the app's run times. s2 MetricsSources. Locals: L the state, L+8 the block.
  */
-LOCAL_FUNCTION app_met_sources
+LOCAL_FUNCTION lantern_app_met_sources
     ENTER 16
     LDQ     a0, s1, APP_NODE
     LDQ     a1, s1, APP_STORE
@@ -6117,21 +6117,21 @@ LOCAL_FUNCTION app_met_sources
     beq     a0, t0, 5f
     STQ     zero, s1, APP_MET_STATE_ID
     STQ     zero, s1, APP_MET_STATE + MetricsState_present
-    call    app_buf_find
+    call    lantern_app_buf_find
     beqz    a0, 5f
     ld      t0, 8(a0)
     sd      t0, (L + 0)(sp)
     ADDQ    t0, s1, APP_MET_EMPTY           # the head block's bytes, or none
     sd      t0, (L + 8)(sp)
     LDQ     a0, s1, APP_MET_NODE + MetricsNode_head_block_id
-    call    app_buf_find
+    call    lantern_app_buf_find
     beqz    a0, 3f
     ld      t0, 8(a0)
     sd      t0, (L + 8)(sp)
 3:  ld      t0, (L + 0)(sp)
     ld      a0, NODE_STATE_SLOT(t0)
     ADDQ    a1, s1, APP_CONFIG
-    call    app_fork
+    call    lantern_app_fork
     mv      t6, a0
     ld      a0, (L + 0)(sp)
     ld      a1, (L + 8)(sp)
@@ -6172,7 +6172,7 @@ LOCAL_FUNCTION app_met_sources
 7:  sd      t2, MetricsProcess_buffer_bytes(s3)
     LDQ     t0, s1, APP_MET_START_S
     sd      t0, MetricsProcess_start_s(s3)
-    call    app_met_us
+    call    lantern_app_met_us
     LDQ     t0, s1, APP_MET_START_US
     sub     a0, a0, t0
     sd      a0, MetricsProcess_uptime_us(s3)
@@ -6194,14 +6194,14 @@ LOCAL_FUNCTION app_met_sources
     sd      zero, MetricsSources_gossip(s2)
     sd      zero, MetricsSources_profile(s2)
     LEAVE 16
-END_FUNCTION app_met_sources
+END_FUNCTION lantern_app_met_sources
 
 /*
  * L2: the slot index a0 sends more of its answer, while the shell's send buffer has room, in SENDs
  * of at most APP_MET_PIECE bytes; with the last bytes out and none in flight, the connection
  * closes. s2 the slot, s3 the connection, s4 the bytes of a SEND, s5 its action.
  */
-LOCAL_FUNCTION app_met_send
+LOCAL_FUNCTION lantern_app_met_send
     ENTER 0
     ADDQ    s2, s1, APP_MET_SLOT0
     li      t0, APP_MET_SLOT
@@ -6228,7 +6228,7 @@ LOCAL_FUNCTION app_met_send
     mv      s4, t0
 3:  addi    a0, s4, LIBP2P_ACT_SEND_DATA + 7
     andi    a0, a0, -8
-    call    app_met_room
+    call    lantern_app_met_room
     beqz    a0, 8f
     mv      s5, a0
     addi    t0, s4, LIBP2P_ACT_SEND_DATA + 7
@@ -6255,16 +6255,16 @@ LOCAL_FUNCTION app_met_send
 5:  ld      t0, 56(s2)                      # all out: the close once none is in flight
     bnez    t0, 9f
 8:  mv      a0, s3
-    call    app_met_close
+    call    lantern_app_met_close
 9:  LEAVE 0
-END_FUNCTION app_met_send
+END_FUNCTION lantern_app_met_send
 
 /*
  * L2: the slot index a0, while it reads: lantern_metrics_answer of its request bytes, in its
  * answer's memory, which doubles while short (APP_MET_TRIES times); then the answer goes. s2 the
  * slot, s3 the index, s4 the tries, s5 the pair's offset in the App. Locals: L a size.
  */
-LOCAL_FUNCTION app_met_answer
+LOCAL_FUNCTION lantern_app_met_answer
     ENTER 16
     mv      s3, a0
     li      t0, APP_MET_SLOT
@@ -6276,13 +6276,13 @@ LOCAL_FUNCTION app_met_answer
     ld      t0, 8(s2)
     li      t1, APP_MET_READING
     bne     t0, t1, 9f
-    call    app_met_sources
+    call    lantern_app_met_sources
     li      s4, 0
 1:  ld      t0, 24(s2)                      # the answer's memory: APP_MET_OUT at first
     bnez    t0, 2f
     mv      a0, s5
     li      a1, APP_MET_OUT
-    call    app_alloc
+    call    lantern_app_alloc
     beqz    a0, 8f
 2:  ld      a3, 24(s2)
     ld      t0, 32(s2)
@@ -6301,10 +6301,10 @@ LOCAL_FUNCTION app_met_answer
     slli    t0, t0, 1
     sd      t0, (L + 0)(sp)
     mv      a0, s5
-    call    app_unmap
+    call    lantern_app_unmap
     mv      a0, s5
     ld      a1, (L + 0)(sp)
-    call    app_alloc
+    call    lantern_app_alloc
     beqz    a0, 8f
     j       2b
 4:  ld      t0, 24(s2)                      # the answer goes
@@ -6314,14 +6314,14 @@ LOCAL_FUNCTION app_met_answer
     li      t0, APP_MET_SENDING
     sd      t0, 8(s2)
     mv      a0, s3
-    call    app_met_send
+    call    lantern_app_met_send
     j       9f
 8:  ld      a0, 0(s2)                       # no memory: the connection closes
     slli    a0, a0, 32
     or      a0, a0, s3
-    call    app_met_close
+    call    lantern_app_met_close
 9:  LEAVE 16
-END_FUNCTION app_met_answer
+END_FUNCTION lantern_app_met_answer
 
 /*
  * L2: the metrics server's sockets, without waiting (app.md): ACCEPTED takes a free slot (ADOPT) or
@@ -6330,7 +6330,7 @@ END_FUNCTION app_met_answer
  * shell actions go out. s2 the next event, s3 the end, s4 a slot, s5 an index, s6 the connection.
  * Locals: L the wait.
  */
-LOCAL_FUNCTION app_met_poll
+LOCAL_FUNCTION lantern_app_met_poll
     ENTER 16
     LDQ     a0, s1, APP_MET_SHELL
     beqz    a0, 99f
@@ -6358,7 +6358,7 @@ LOCAL_FUNCTION app_met_poll
     addi    s5, s5, 1
     j       2b
 21: li      a0, LIBP2P_ACT_REFUSE_SIZE
-    call    app_met_room
+    call    lantern_app_met_room
     beqz    a0, 79f
     li      t0, LIBP2P_ACT_REFUSE_SIZE
     sd      t0, 0(a0)
@@ -6379,7 +6379,7 @@ LOCAL_FUNCTION app_met_poll
     slli    s6, t0, 32
     or      s6, s6, s5
     li      a0, LIBP2P_ACT_ADOPT_SIZE
-    call    app_met_room
+    call    lantern_app_met_room
     beqz    a0, 79f
     li      t0, LIBP2P_ACT_ADOPT_SIZE
     sd      t0, 0(a0)
@@ -6391,7 +6391,7 @@ LOCAL_FUNCTION app_met_poll
     j       79f
 3:  ld      s6, LIBP2P_EV_CONN(s2)          # the others: the slot of the connection, at its generation
     mv      a0, s6
-    call    app_met_slot
+    call    lantern_app_met_slot
     beqz    a0, 79f
     mv      s4, a0
     slli    s5, s6, 32
@@ -6412,7 +6412,7 @@ LOCAL_FUNCTION app_met_poll
     li      t3, 0
 41: sd      t3, 56(s4)
     mv      a0, s5
-    call    app_met_send
+    call    lantern_app_met_send
     j       79f
 5:  li      t1, LIBP2P_EVENT_RECEIVED       # RECEIVED while reading: what fits joins the request bytes
     bne     t0, t1, 79f
@@ -6433,7 +6433,7 @@ LOCAL_FUNCTION app_met_poll
     addi    a1, s2, LIBP2P_EV_DATA
     call    lantern_copy
     mv      a0, s5
-    call    app_met_answer
+    call    lantern_app_met_answer
 79: ld      t0, 0(s2)
     add     s2, s2, t0
     j       1b
@@ -6456,17 +6456,17 @@ LOCAL_FUNCTION app_met_poll
     ld      a0, 0(s4)
     slli    a0, a0, 32
     or      a0, a0, s5
-    call    app_met_close
+    call    lantern_app_met_close
 84: li      t0, APP_MET_SLOT
     add     s4, s4, t0
     addi    s5, s5, 1
     j       81b
-85: call    app_met_flush
+85: call    lantern_app_met_flush
 99: LEAVE 16
-END_FUNCTION app_met_poll
+END_FUNCTION lantern_app_met_poll
 
 /* L2: each event of the shell becomes a NODE_EV_P2P event of the next step, but those of the engine's connection. s2 the next event, s3 the end. Locals: L the header. */
-LOCAL_FUNCTION app_p2p_events
+LOCAL_FUNCTION lantern_app_p2p_events
     ENTER 16
     LDQ     t0, s1, APP_SHELL_EVENTS
     ld      t1, 8(t0)
@@ -6475,16 +6475,16 @@ LOCAL_FUNCTION app_p2p_events
     add     s3, s2, t2
 1:  bgeu    s2, s3, 9f
     mv      a0, s2                          # a datagram of discv5
-    call    app_dv_datagram
+    call    lantern_app_dv_datagram
     beqz    a0, 11f
     AM_INC  dv_in
     j       2f
 11:
     mv      a0, s2                          # the engine's connection
-    call    app_engine_event
+    call    lantern_app_engine_event
     bnez    a0, 2f
     mv      a0, s2                          # a builder call's connection
-    call    app_builder_event
+    call    lantern_app_builder_event
     bnez    a0, 2f
     ld      t2, 8(s2)                       # the metrics of the transport (app.md)
     ld      t3, LIBP2P_EV_COUNT(s2)
@@ -6524,29 +6524,29 @@ LOCAL_FUNCTION app_p2p_events
     sd      t0, (L + 8)(sp)
     addi    a0, sp, L
     li      a1, 16
-    call    app_event_put
+    call    lantern_app_event_put
     mv      a0, s2
     ld      a1, 0(s2)
-    call    app_event_put
+    call    lantern_app_event_put
 2:  ld      t0, 0(s2)
     add     s2, s2, t0
     j       1b
 9:  LDQ     t0, s1, APP_SHELL_EVENTS
     sd      zero, 16(t0)
-    call    app_builder_due                 # the builder calls: their bytes, ends and time limits
+    call    lantern_app_builder_due                 # the builder calls: their bytes, ends and time limits
     LDQ     t0, s1, APP_ENGINE_DUE          # then more bytes of the request
     beqz    t0, 10f
     STQ     zero, s1, APP_ENGINE_DUE
-    call    app_engine_send
+    call    lantern_app_engine_send
 10: LEAVE 16
-END_FUNCTION app_p2p_events
+END_FUNCTION lantern_app_p2p_events
 
 /*
  * L2: the loop: the clock, a NODE_EV_TICK of the time and the shell's events, lantern_node_step
  * with libp2p, a line at each new slot, then a wait for the sockets until the node's wakeup, at
  * most APP_WAIT_MS. Locals: L the time, L+8 the wait, L+16 the NODE_EV_TICK.
  */
-LOCAL_FUNCTION app_loop
+LOCAL_FUNCTION lantern_app_loop
     ENTER 48
 1:  ADDQ    a0, s1, APP_TICK                # the clocks
     CALL_GLOBAL libp2p_shell_clock
@@ -6560,58 +6560,58 @@ LOCAL_FUNCTION app_loop
     sd      t0, (L + 32)(sp)
     addi    a0, sp, (L + 16)
     li      a1, 24
-    call    app_event_put
-    call    app_p2p_events
+    call    lantern_app_event_put
+    call    lantern_app_p2p_events
     LDQ     a0, s1, APP_P2P
     ADDQ    a1, s1, APP_TICK
-    call    app_step
-    call    app_discv5
+    call    lantern_app_step
+    call    lantern_app_discv5
     LDQ     a0, s1, APP_STORE               # a line at each new slot
-    call    app_store_slot
+    call    lantern_app_store_slot
     LDQ     t0, s1, APP_LAST_SLOT
     beq     a0, t0, 3f
     STQ     a0, s1, APP_LAST_SLOT
     sd      a0, (L + 8)(sp)
-    call    app_line_start                  # slot <s>, head 0x<root>, finalized epoch <e>
+    call    lantern_app_line_start                  # slot <s>, head 0x<root>, finalized epoch <e>
     ADDRESS a0, app_m_slot
     li      a1, app_m_slot_len
-    call    app_line_text
+    call    lantern_app_line_text
     ld      a0, (L + 8)(sp)
-    call    app_line_u64
+    call    lantern_app_line_u64
     ADDRESS a0, app_m_head
     li      a1, app_m_head_len
-    call    app_line_text
+    call    lantern_app_line_text
     LDQ     a0, s1, APP_NODE
     ADDQ    a0, a0, Node_head_root
     li      a1, 8
-    call    app_line_hex
+    call    lantern_app_line_hex
     ADDRESS a0, app_m_finalized
     li      a1, app_m_finalized_len
-    call    app_line_text
+    call    lantern_app_line_text
     LDQ     a0, s1, APP_STORE
     LDQ     a0, a0, Store_finalized_checkpoint
-    call    app_line_u64
+    call    lantern_app_line_u64
     ADDRESS a0, app_m_earliest              # the first slot the node serves blocks and sidecars from: the backfill's
     li      a1, app_m_earliest_len
-    call    app_line_text
+    call    lantern_app_line_text
     LDQ     a0, s1, APP_NODE
     LDQ     a0, a0, Node_earliest_slot
-    call    app_line_u64
+    call    lantern_app_line_u64
     li      a0, APP_LOG_INFO
-    call    app_line_end
+    call    lantern_app_line_end
 3:  LDQ     t0, s1, APP_NODE                # a line when the count of connected peers changes
     LDQ     t0, t0, (Node_peers + 8)
     LDQ     t1, s1, APP_PEERS
     beq     t0, t1, 4f
     STQ     t0, s1, APP_PEERS
-    call    app_line_start                  # peers <n>
+    call    lantern_app_line_start                  # peers <n>
     ADDRESS a0, app_m_peers
     li      a1, app_m_peers_len
-    call    app_line_text
+    call    lantern_app_line_text
     LDQ     a0, s1, APP_PEERS
-    call    app_line_u64
+    call    lantern_app_line_u64
     li      a0, APP_LOG_INFO
-    call    app_line_end
+    call    lantern_app_line_end
 4:  LDQ     t0, s1, (APP_RESULT + 8)        # the wait: to the node's or discv5's wakeup, at most APP_WAIT_MS
     LDQ     t1, s1, APP_DV_WAKE
     bgeu    t1, t0, 31f
@@ -6655,17 +6655,17 @@ LOCAL_FUNCTION app_loop
     addi    a1, sp, (L + 8)
     LDQ     a2, s1, APP_SHELL_EVENTS
     CALL_GLOBAL libp2p_shell_wait
-    call    app_api_poll
-    call    app_met_poll
+    call    lantern_app_api_poll
+    call    lantern_app_met_poll
     j       1b
-END_FUNCTION app_loop
+END_FUNCTION lantern_app_loop
 
 /* (args): docs/reference/app.md. s1 the App, s2 args. Locals: L the fault. */
 FUNCTION lantern_app_main
     ENTER 16
     mv      s2, a0
     li      a0, APP_SIZE
-    call    app_map
+    call    lantern_app_map
     beqz    a0, 9f
     mv      s1, a0
     sd      s2, APP_ARGS(s1)
@@ -6683,21 +6683,21 @@ FUNCTION lantern_app_main
     addi    a2, sp, L
     CALL_GLOBAL lantern_app_options
     beqz    a0, 1f
-    call    app_line_start                  # faulty option at argument <n>
+    call    lantern_app_line_start                  # faulty option at argument <n>
     ADDRESS a0, app_m_option
     li      a1, app_m_option_len
-    call    app_line_text
+    call    lantern_app_line_text
     ld      a0, L(sp)
-    call    app_line_u64
+    call    lantern_app_line_u64
     li      a0, APP_LOG_ERROR
-    call    app_line_end
+    call    lantern_app_line_end
     li      a0, 1
     LEAVE 16
-1:  call    app_start
+1:  call    lantern_app_start
     bnez    a0, 8f
-    call    app_net
+    call    lantern_app_net
     bnez    a0, 8f
-    call    app_loop
+    call    lantern_app_loop
 8:  LEAVE 16
 9:  li      a0, 2
     LEAVE 16

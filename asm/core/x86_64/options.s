@@ -6,7 +6,7 @@
 .include "app_options.inc"
 
 /* rax = 0 and rdx = the u64 of the decimal digits rdi to rsi, one or more; else rax = 1. Uses rcx, rdi, r8, r9. */
-LOCAL_FUNCTION app_decimal
+LOCAL_FUNCTION lantern_app_decimal
     UNWIND_END_PROLOGUE
     cmp     %rsi, %rdi
     jae     9f
@@ -31,13 +31,13 @@ LOCAL_FUNCTION app_decimal
     ret
 9:  mov     $1, %eax
     ret
-END_FUNCTION app_decimal
+END_FUNCTION lantern_app_decimal
 
 /*
  * rax = 0 and rdx = the IPv4 address of the bytes rdi to rsi, 4 decimal numbers of 0 to 255 with
  * dots between them, its 4 bytes in order in the low bytes; else rax = 1. Uses rcx, rdi, r8-r11.
  */
-LOCAL_FUNCTION app_ipv4
+LOCAL_FUNCTION lantern_app_ipv4
     UNWIND_END_PROLOGUE
     xor     %r8d, %r8d                      # the address
     xor     %r9d, %r9d                      # the numbers
@@ -81,13 +81,13 @@ LOCAL_FUNCTION app_ipv4
     ret
 9:  mov     $1, %eax
     ret
-END_FUNCTION app_ipv4
+END_FUNCTION lantern_app_ipv4
 
 /*
  * rax = 0 and rdx = the bits of the metrics categories rdi to rsi, names of app_categories_table
  * with commas between them, none or more; else rax = 1. Uses rcx, rdi, r8-r10.
  */
-LOCAL_FUNCTION app_categories
+LOCAL_FUNCTION lantern_app_categories
     UNWIND_END_PROLOGUE
     xor     %edx, %edx                      # the bits
     cmp     %rsi, %rdi
@@ -126,7 +126,7 @@ LOCAL_FUNCTION app_categories
     ret
 9:  mov     $1, %eax
     ret
-END_FUNCTION app_categories
+END_FUNCTION lantern_app_categories
 
 /*
  * (args, options, fault): docs/reference/app.md. rbx args, rbp options, r12 fault, r13 the
@@ -194,7 +194,7 @@ FUNCTION lantern_app_options
     mov     (L + 8)(%rsp), %rsi
     mov     (%rdx), %rcx
     add     $24, %rdx
-    call    config_name_is
+    call    lantern_config_name_is
     test    %rax, %rax
     jnz     4f
     addq    $APP_OPTION_BYTES, S7(%rsp)
@@ -247,7 +247,7 @@ FUNCTION lantern_app_options
     mov     $7, %esi
     lea     app_http(%rip), %rdx
     mov     $7, %ecx
-    call    config_name_is
+    call    lantern_config_name_is
     test    %rax, %rax
     jz      8f
     addq    $7, S8(%rsp)
@@ -268,7 +268,7 @@ FUNCTION lantern_app_options
     add     %rdi, %rsi
     cmp     $APP_OPTION_ADDRESS, %rax
     je      21f
-    call    app_decimal
+    call    lantern_app_decimal
     test    %rax, %rax
     jnz     90f
     test    %rdx, %rdx
@@ -284,7 +284,7 @@ FUNCTION lantern_app_options
 22: cmp     %rcx, %rdx
     ja      90f
     jmp     23f
-21: call    app_ipv4
+21: call    lantern_app_ipv4
     test    %rax, %rax
     jnz     90f
 23: mov     S7(%rsp), %rax
@@ -302,7 +302,7 @@ FUNCTION lantern_app_options
     lea     (%rdx,%rcx,8), %rdx
     ADDRESS %rax, app_level_lengths
     movzbl  (%rax,%rcx), %ecx
-    call    config_name_is
+    call    lantern_config_name_is
     test    %rax, %rax
     jnz     26f
     incq    (L + 24)(%rsp)
@@ -313,7 +313,7 @@ FUNCTION lantern_app_options
     add     %rbx, %rdi
     mov     S9(%rsp), %rsi
     add     %rdi, %rsi
-    call    app_categories
+    call    lantern_app_categories
     test    %rax, %rax
     jnz     90f
     jmp     23b

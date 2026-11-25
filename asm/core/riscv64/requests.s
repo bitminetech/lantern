@@ -6,7 +6,7 @@
 
 .if FORK >= FORK_ELECTRA
 /* Append the PendingDeposit at a1 to state a0; a0 = LANTERN_BUFFER_TOO_SMALL when it has no room. A non-leaf. */
-LOCAL_FUNCTION append_pending_deposit
+LOCAL_FUNCTION lantern_append_pending_deposit
     FRAME 16
     mv      t0, a0
     LDQ     t1, t0, BeaconState_pending_deposits
@@ -27,7 +27,7 @@ LOCAL_FUNCTION append_pending_deposit
     UNFRAME 16
 9:  li      a0, LANTERN_BUFFER_TOO_SMALL
     UNFRAME 16
-END_FUNCTION append_pending_deposit
+END_FUNCTION lantern_append_pending_deposit
 .endif
 
 /* ---------------------------------------------------------------- Voluntary exits and credential changes */
@@ -110,7 +110,7 @@ SPEC_FUNCTION process_voluntary_exit
     addi    a1, s2, SignedVoluntaryExit_signature
     addi    a2, sp, (L + 56)
     mv      a3, s4
-    call    verify_root_signature
+    call    lantern_verify_root_signature
     bnez    a0, 7f
     li      a0, LANTERN_INVALID_VOLUNTARY_EXIT
     beqz    a1, 6f
@@ -136,7 +136,7 @@ SPEC_END process_voluntary_exit
  * a2 an 8-aligned 56-byte buffer whose last 32 bytes hold the root (its first 24 become a
  * ByteList header), a3 scratch. Returns a0 status, a1 valid. Locals: sp+0 valid.
  */
-LOCAL_FUNCTION verify_root_signature
+LOCAL_FUNCTION lantern_verify_root_signature
     FRAME 16
     li      t0, 56
     sd      t0, 0(a2)
@@ -151,7 +151,7 @@ LOCAL_FUNCTION verify_root_signature
     CALL_GLOBAL crypto_bls_verify           # bls.Verify(public_key, signing_root, signature)
     ld      a1, 0(sp)
     UNFRAME 16
-END_FUNCTION verify_root_signature
+END_FUNCTION lantern_verify_root_signature
 
 .if FORK >= FORK_CAPELLA
 /*
@@ -179,7 +179,7 @@ SPEC_FUNCTION process_bls_to_execution_change
     addi    a0, s2, (SignedBLSToExecutionChange_message + BLSToExecutionChange_from_bls_pubkey)
     li      a1, 48
     addi    a2, sp, L
-    call    sha256_short                    # assert withdrawal_credentials[1:] == sha256(from_bls_pubkey)[1:]
+    call    lantern_sha256_short                    # assert withdrawal_credentials[1:] == sha256(from_bls_pubkey)[1:]
     li      t0, BLS_WITHDRAWAL_PREFIX       # the digest with its first byte set to the prefix just checked
     sb      t0, L(sp)
     addi    t0, s6, Validator_withdrawal_credentials
@@ -206,7 +206,7 @@ SPEC_FUNCTION process_bls_to_execution_change
     addi    a1, s2, SignedBLSToExecutionChange_signature
     addi    a2, sp, (L + 56)
     mv      a3, s4
-    call    verify_root_signature
+    call    lantern_verify_root_signature
     bnez    a0, 7f
     li      a0, LANTERN_INVALID_BLS_CHANGE
     beqz    a1, 6f
@@ -247,7 +247,7 @@ SPEC_FUNCTION process_deposit_request
     sd      t0, (L + PendingDeposit_slot)(sp)
     mv      a0, s1
     addi    a1, sp, L
-    call    append_pending_deposit
+    call    lantern_append_pending_deposit
     bnez    a0, 7f
 .if FORK == FORK_ELECTRA
     LDQ     t0, s1, BeaconState_deposit_requests_start_index
@@ -318,7 +318,7 @@ SPEC_FUNCTION process_withdrawal_request
     bne     s8, t1, 8f
 1:  mv      a0, s1
     addi    a1, s2, WithdrawalRequest_validator_pubkey
-    call    find_pubkey
+    call    lantern_find_pubkey
     li      t0, -1
     beq     a0, t0, 8f
     mv      s7, a0
@@ -433,7 +433,7 @@ SPEC_FUNCTION is_valid_switch_to_compounding_request
     NE48W   t0, t1, 8f
     mv      a0, s1
     mv      a1, t0
-    call    find_pubkey
+    call    lantern_find_pubkey
     li      t0, -1
     beq     a0, t0, 8f
     PART    s4, t0, s1, BeaconState_validators
@@ -504,7 +504,7 @@ SPEC_FUNCTION queue_excess_active_balance
     sd      t0, (L + PendingDeposit_slot)(sp)
     mv      a0, s1
     addi    a1, sp, L
-    call    append_pending_deposit
+    call    lantern_append_pending_deposit
     LEAVE 192
 8:  li      a0, LANTERN_OK
     LEAVE 192
@@ -653,7 +653,7 @@ SPEC_FUNCTION process_consolidation_request
     beqz    t0, 1f
     mv      a0, s1                          # switch_to_compounding_validator(state, source_index)
     addi    a1, s2, ConsolidationRequest_source_pubkey
-    call    find_pubkey
+    call    lantern_find_pubkey
     sd      a0, (L + 32)(sp)
     mv      a0, s1
     addi    a1, sp, (L + 32)
@@ -677,13 +677,13 @@ SPEC_FUNCTION process_consolidation_request
     bleu    t0, t1, 8f
     mv      a0, s1
     addi    a1, s2, ConsolidationRequest_source_pubkey
-    call    find_pubkey
+    call    lantern_find_pubkey
     li      t0, -1
     beq     a0, t0, 8f
     mv      s8, a0
     mv      a0, s1
     addi    a1, s2, ConsolidationRequest_target_pubkey
-    call    find_pubkey
+    call    lantern_find_pubkey
     li      t0, -1
     beq     a0, t0, 8f
     mv      s9, a0

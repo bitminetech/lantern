@@ -14,7 +14,7 @@
 .set GENESIS_EXTRA, TREE_BYTES + ZEROS_BYTES + BODY_BYTES
 
 /* Append the 32-byte leaf x1 to tree x0, as the deposit contract does. x19 tree, x20 size, x21 level. Locals: L a pair (64). */
-LOCAL_FUNCTION merkle_add
+LOCAL_FUNCTION lantern_merkle_add
     ENTER 64
     mov     x19, x0
     add     x9, sp, #(L + 32)               /* node = leaf, in the pair's right half */
@@ -31,7 +31,7 @@ LOCAL_FUNCTION merkle_add
     add     x0, sp, #L
     mov     x1, #64
     add     x2, sp, #(L + 32)
-    bl      sha256_short
+    bl      lantern_sha256_short
     lsr     x20, x20, #1
     add     x21, x21, #1
     cmp     x21, #MERKLE_DEPTH
@@ -42,13 +42,13 @@ LOCAL_FUNCTION merkle_add
     add     x10, sp, #(L + 32)
     COPY32  x9, x10
 3:  LEAVE 64
-END_FUNCTION merkle_add
+END_FUNCTION lantern_merkle_add
 
 /*
  * The root of tree x0 as a list of depth x2 levels, its length mixed in, at x3; x1 holds the zero hashes.
  * x19 tree, x20 zeros, x21 depth, x22 out, x23 size, x24 level. Locals: L a pair (64).
  */
-LOCAL_FUNCTION merkle_root
+LOCAL_FUNCTION lantern_merkle_root
     ENTER 64
     mov     x19, x0
     mov     x20, x1
@@ -76,7 +76,7 @@ LOCAL_FUNCTION merkle_root
 3:  add     x0, sp, #L
     mov     x1, #64
     add     x2, sp, #(L + 32)
-    bl      sha256_short
+    bl      lantern_sha256_short
     lsr     x23, x23, #1
     add     x24, x24, #1
     b       1b
@@ -91,12 +91,12 @@ LOCAL_FUNCTION merkle_root
     add     x0, sp, #L
     mov     x1, #64
     mov     x2, x22
-    bl      sha256_short
+    bl      lantern_sha256_short
     LEAVE 64
-END_FUNCTION merkle_root
+END_FUNCTION lantern_merkle_root
 
 /* The zero hashes of levels 0 to MERKLE_DEPTH - 1 at x0. x19 zeros, x20 level. Locals: L a pair (64). */
-LOCAL_FUNCTION merkle_zeros
+LOCAL_FUNCTION lantern_merkle_zeros
     ENTER 64
     mov     x19, x0
     mov     x1, #32
@@ -113,11 +113,11 @@ LOCAL_FUNCTION merkle_zeros
     add     x0, sp, #L
     mov     x1, #64
     add     x2, x19, x20, lsl #5
-    bl      sha256_short
+    bl      lantern_sha256_short
     add     x20, x20, #1
     b       1b
 2:  LEAVE 64
-END_FUNCTION merkle_zeros
+END_FUNCTION lantern_merkle_zeros
 
 /* x9 = the bytes of an empty part of the genesis state with room x20, for x25 deposits, rounded up to 8. Uses x13. */
 .macro GENESIS_CAPACITY ref, stride, room
@@ -238,7 +238,7 @@ SPEC_FUNCTION initialize_beacon_state_from_eth1
     str     xzr, [x28]                      /* the deposit tree: no leaves */
     MOVQ    x9, TREE_BYTES
     add     x0, x28, x9
-    bl      merkle_zeros
+    bl      lantern_merkle_zeros
     mov     x24, #0
 2:  cmp     x24, x25                        /* for index, deposit in enumerate(deposits) */
     b.hs    3f
@@ -255,13 +255,13 @@ SPEC_FUNCTION initialize_beacon_state_from_eth1
     cbnz    x0, 7f
     mov     x0, x28
     add     x1, sp, #(L + 24)
-    bl      merkle_add
+    bl      lantern_merkle_add
     mov     x0, x28                         /* eth1_data.deposit_root = hash_tree_root(deposit_data_list) */
     MOVQ    x9, TREE_BYTES
     add     x1, x28, x9
     mov     x2, #DEPOSIT_CONTRACT_TREE_DEPTH
     ADDQ    x3, x23, BeaconState_eth1_data + Eth1Data_deposit_root
-    bl      merkle_root
+    bl      lantern_merkle_root
     MOVQ    x9, GENESIS_EXTRA
     sub     x9, x27, x9
     str     x9, [x22]
@@ -312,7 +312,7 @@ SPEC_FUNCTION initialize_beacon_state_from_eth1
     cbnz    x0, 7f
     mov     x0, x28
     add     x1, sp, #(L + 24)
-    bl      merkle_add
+    bl      lantern_merkle_add
     add     x24, x24, #1
     b       51b
 52: mov     x0, x28
@@ -320,7 +320,7 @@ SPEC_FUNCTION initialize_beacon_state_from_eth1
     add     x1, x28, x9
     mov     x2, #MERKLE_DEPTH
     ADDQ    x3, x23, BeaconState_genesis_validators_root
-    bl      merkle_root
+    bl      lantern_merkle_root
 8:  mov     x0, #LANTERN_OK
 7:  str     x27, [x22]
     LEAVE 80

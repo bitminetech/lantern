@@ -24,7 +24,7 @@
  * the type); rdx = the value. The caller restores the size field. rbx type, rbp bytes,
  * r12 scratch, r13 the value's room, r14 the value. Locals: L the size.
  */
-LOCAL_FUNCTION node_decode
+LOCAL_FUNCTION lantern_node_decode
     ENTER 16
     mov     %rdi, %rbx
     mov     %rsi, %rbp
@@ -64,11 +64,11 @@ LOCAL_FUNCTION node_decode
     LEAVE 16
 9:  mov     $2, %eax
     LEAVE 16
-END_FUNCTION node_decode
+END_FUNCTION lantern_node_decode
 
 .if FORK == FORK_BELLATRIX
 /* rax = the PowBlock of the node rdi whose block_hash is the 32 bytes at rsi, or 0. Uses rcx, rdx, r8, r11, xmm0-xmm2. */
-LOCAL_FUNCTION node_pow_block
+LOCAL_FUNCTION lantern_node_pow_block
     UNWIND_END_PROLOGUE
     PART    %rcx, %rdx, %rdi, Node_pow_blocks
 1:  test    %rdx, %rdx
@@ -82,7 +82,7 @@ LOCAL_FUNCTION node_pow_block
     jmp     1b
 3:  xor     %eax, %eax
     ret
-END_FUNCTION node_pow_block
+END_FUNCTION lantern_node_pow_block
 .endif
 
 /*
@@ -106,7 +106,7 @@ SPEC_FUNCTION node_import
     ADDRESS %rdi, lantern_type_SignedBeaconBlock
     mov     %rbp, %rsi
     mov     %r14, %rdx
-    call    node_decode
+    call    lantern_node_decode
     cmp     $1, %rax
     je      8f
     ja      9f
@@ -117,13 +117,13 @@ SPEC_FUNCTION node_import
     PART    %rcx, %rax, %rdx, BeaconBlockBody_execution_payload
     mov     S7(%rsp), %rdi
     lea     ExecutionPayload_parent_hash(%rcx), %rsi
-    call    node_pow_block
+    call    lantern_node_pow_block
     mov     %rax, BlockOptions_pow_block(%r13)
     test    %rax, %rax
     jz      1f
     mov     S7(%rsp), %rdi
     lea     PowBlock_parent_hash(%rax), %rsi
-    call    node_pow_block
+    call    lantern_node_pow_block
 1:  mov     %rax, BlockOptions_pow_parent(%r13)
 .endif
     mov     %rbx, %rdi
@@ -162,7 +162,7 @@ SPEC_FUNCTION node_block_root
     ADDRESS %rdi, lantern_type_SignedBeaconBlock
     mov     %rbp, %rsi
     mov     %r12, %rdx
-    call    node_decode
+    call    lantern_node_decode
     cmp     $1, %rax
     je      8f
     ja      9f
@@ -223,7 +223,7 @@ SPEC_FUNCTION node_block_header
     ADDRESS %rdi, lantern_type_SignedBeaconBlock
     mov     %rbp, %rsi
     mov     %r12, %rdx
-    call    node_decode
+    call    lantern_node_decode
     cmp     $1, %rax
     je      8f
     ja      9f
@@ -880,7 +880,7 @@ SPEC_END node_liveness
  * process_sync_aggregate at the state (altair beacon-chain.md). Locals: 0 the total active
  * balance, 8 the base reward per increment, 16 the state, 24 the scratch.
  */
-LOCAL_FUNCTION node_sync_values
+LOCAL_FUNCTION lantern_node_sync_values
     FRAME 32
     mov     %rdi, 16(%rsp)
     mov     %rsi, 24(%rsp)
@@ -914,7 +914,7 @@ LOCAL_FUNCTION node_sync_values
     mov     %r8, %rdx
     xor     %eax, %eax
 9:  UNFRAME 32
-END_FUNCTION node_sync_values
+END_FUNCTION lantern_node_sync_values
 .endif
 
 .if FORK == FORK_PHASE0
@@ -1028,7 +1028,7 @@ SPEC_FUNCTION node_block_rewards
     mov     %rax, (L + 96)(%rsp)
     ADDRESS %rdi, lantern_type_SignedBeaconBlock
     mov     %r13, %rdx
-    call    node_decode                     # rsi: the block
+    call    lantern_node_decode                     # rsi: the block
     cmp     $1, %rax
     je      97f
     ja      96f
@@ -1154,7 +1154,7 @@ SPEC_FUNCTION node_block_rewards
     SCRATCH_GIVE %r13, %rax, 2, %r15
     mov     %rbx, %rdi
     mov     %r13, %rsi
-    call    node_sync_values
+    call    lantern_node_sync_values
     mov     S10(%rsp), %r8
     mov     %r8, (%r13)
     test    %rax, %rax
@@ -1427,7 +1427,7 @@ SPEC_END node_block_rewards
  * member), a new one with its balance in the state rcx and member 0 when there is none, rdx = the
  * count; rax = 0 for an index past the validators. Uses r8-r10.
  */
-LOCAL_FUNCTION node_reward_entry
+LOCAL_FUNCTION lantern_node_reward_entry
     UNWIND_END_PROLOGUE
     mov     %rsi, %rax
     mov     %rdx, %r8
@@ -1449,9 +1449,9 @@ LOCAL_FUNCTION node_reward_entry
 3:  ret
 4:  xor     %eax, %eax
     ret
-END_FUNCTION node_reward_entry
+END_FUNCTION lantern_node_reward_entry
 
-.set SYNC_REWARD_EXTRA, 8 * SYNC_COMMITTEE_SIZE + SYNC_TABLE_BYTES + 24   /* the places, the table of find_pubkeys and its 3 words */
+.set SYNC_REWARD_EXTRA, 8 * SYNC_COMMITTEE_SIZE + SYNC_TABLE_BYTES + 24   /* the places, the table of lantern_find_pubkeys and its 3 words */
 .if 24 * (SYNC_COMMITTEE_SIZE + 1) > SYNC_TABLE_BYTES
 .error "lantern_node_sync_rewards keeps its entries where the table of find_pubkeys was"
 .endif
@@ -1460,7 +1460,7 @@ END_FUNCTION node_reward_entry
  * (pre, block, scratch, out) -> rax: the balance changes of the block's sync aggregate on its
  * pre-state (node.md, lantern_node_sync_rewards). rbx pre, rbp the bits, r12 out, r13 scratch, r14
  * the places' validator indices (at the end of scratch, before the decoded block), r15 the hash
- * table of find_pubkeys, then the entries of node_reward_entry. Locals: L the scratch's size on
+ * table of lantern_find_pubkeys, then the entries of lantern_node_reward_entry. Locals: L the scratch's size on
  * entry, L+8 the proposer rewards it took, L+16 the entries' count, L+24 participant_reward, L+32
  * proposer_reward, L+40 the proposer, L+48 the place.
  */
@@ -1476,7 +1476,7 @@ SPEC_FUNCTION node_sync_rewards
     jb      97f
     ADDRESS %rdi, lantern_type_SignedBeaconBlock
     mov     %r13, %rdx
-    call    node_decode                     # rsi: the block
+    call    lantern_node_decode                     # rsi: the block
     cmp     $1, %rax
     je      97f
     ja      96f
@@ -1503,12 +1503,12 @@ SPEC_FUNCTION node_sync_rewards
     add     %rbx, %rsi
     mov     %r14, %rdx
     mov     %r15, %rcx
-    call    find_pubkeys
+    call    lantern_find_pubkeys
     test    %rax, %rax
     jnz     96f
     mov     %rbx, %rdi
     mov     %r13, %rsi
-    call    node_sync_values
+    call    lantern_node_sync_values
     test    %rax, %rax
     jnz     99f
     mov     %rdx, (L + 24)(%rsp)
@@ -1524,7 +1524,7 @@ SPEC_FUNCTION node_sync_rewards
     mov     %r15, %rsi
     mov     (L + 16)(%rsp), %rdx
     mov     %rbx, %rcx
-    call    node_reward_entry
+    call    lantern_node_reward_entry
     mov     %rdx, (L + 16)(%rsp)
     test    %rax, %rax
     jz      96f
@@ -1543,7 +1543,7 @@ SPEC_FUNCTION node_sync_rewards
     mov     %r15, %rsi
     mov     (L + 16)(%rsp), %rdx
     mov     %rbx, %rcx
-    call    node_reward_entry
+    call    lantern_node_reward_entry
     mov     %rdx, (L + 16)(%rsp)
     test    %rax, %rax
     jz      96f
@@ -2214,7 +2214,7 @@ SPEC_FUNCTION node_attestation_rewards
 SPEC_END node_attestation_rewards
 
 /* rdi = the fork's TypeDescriptor of the NODE_JSON_* kind r10, or 0. Uses rdi. */
-LOCAL_FUNCTION node_type_of_kind
+LOCAL_FUNCTION lantern_node_type_of_kind
     UNWIND_END_PROLOGUE
     ADDRESS %rdi, lantern_type_SignedBeaconBlock
     cmp     $NODE_JSON_BLOCK, %r10
@@ -2324,13 +2324,13 @@ LOCAL_FUNCTION node_type_of_kind
 .endif
     xor     %edi, %edi
 9:  ret
-END_FUNCTION node_type_of_kind
+END_FUNCTION lantern_node_type_of_kind
 
 /* (kind, ssz, cursor, out): lantern_json_encode_ssz with the fork's type of the NODE_JSON_* kind. */
 SPEC_FUNCTION node_json
     FRAME 0
     mov     %rdi, %r10
-    call    node_type_of_kind
+    call    lantern_node_type_of_kind
     test    %rdi, %rdi
     jz      8f
     CALL_GLOBAL lantern_json_encode_ssz
@@ -2346,7 +2346,7 @@ SPEC_END node_json
 SPEC_FUNCTION node_json_decode
     FRAME 0
     mov     %rdi, %r10
-    call    node_type_of_kind
+    call    lantern_node_type_of_kind
     test    %rdi, %rdi
     jz      8f
     CALL_GLOBAL lantern_json_decode
@@ -2362,7 +2362,7 @@ SPEC_END node_json_decode
  * descriptor, rbp the node, r12 out, r13 a field or element, r14 their end, r15 the bytes, S7
  * the first field or an index, S8 a size or a place in the fixed part.
  */
-LOCAL_FUNCTION node_ssz_default
+LOCAL_FUNCTION lantern_node_ssz_default
     ENTER 0
     mov     %rdi, %rbx
     mov     %rdx, %r12
@@ -2399,7 +2399,7 @@ LOCAL_FUNCTION node_ssz_default
     mov     %rbx, %rdi
     mov     %r13, %rsi
     lea     (%r12,%r15), %rdx
-    call    node_ssz_default
+    call    lantern_node_ssz_default
     add     %rax, %r15
     incq    S7(%rsp)
     jmp     4b
@@ -2449,13 +2449,13 @@ LOCAL_FUNCTION node_ssz_default
     mov     %rbx, %rdi
     mov     SSZ_FIELD_NODE(%rax), %rsi
     lea     (%r12,%r15), %rdx
-    call    node_ssz_default
+    call    lantern_node_ssz_default
     add     %rax, %r15
 73: inc     %r13
     jmp     71b
 9:  mov     %r15, %rax
     LEAVE 0
-END_FUNCTION node_ssz_default
+END_FUNCTION lantern_node_ssz_default
 
 /*
  * (data, room, scratch, state, block): the anchor state and block of the genesis state in data.
@@ -2475,7 +2475,7 @@ SPEC_FUNCTION node_anchor
     ADDRESS %rdi, lantern_type_BeaconState  # the state, decoded at the end of scratch, then copied with room
     mov     %rbx, %rsi
     mov     %r12, %rdx
-    call    node_decode
+    call    lantern_node_decode
     cmp     $1, %rax
     je      8f
     ja      7f
@@ -2544,7 +2544,7 @@ SPEC_FUNCTION node_anchor
     ADDRESS %rdi, lantern_type_BeaconBlockBody
     mov     SSZ_DESC_ROOT(%rdi), %rsi
     lea     (24 + 84)(%r15), %rdx
-    call    node_ssz_default
+    call    lantern_node_ssz_default
     ADDRESS %rdi, lantern_type_BeaconBlock
     mov     %r15, %rsi
     mov     %r12, %rdx
@@ -2646,7 +2646,7 @@ SPEC_FUNCTION node_archive_state
     mov     %rdi, %rsi
     ADDRESS %rdi, lantern_type_BeaconState
     mov     %r12, %rdx
-    call    node_decode
+    call    lantern_node_decode
     cmp     $1, %rax
     je      8f
     ja      7f
@@ -2714,7 +2714,7 @@ SPEC_FUNCTION node_anchor_block
     mov     %rcx, S10(%rsp)
     ADDRESS %rdi, lantern_type_BeaconState  # decoded, then copied with room
     mov     %r12, %rdx
-    call    node_decode
+    call    lantern_node_decode
     cmp     $1, %rax
     je      8f
     ja      7f
@@ -2867,7 +2867,7 @@ SPEC_FUNCTION node_replay
     ADDRESS %rdi, lantern_type_SignedBeaconBlock
     mov     %rbx, %rsi
     mov     %r13, %rdx
-    call    node_decode
+    call    lantern_node_decode
     cmp     $1, %rax
     je      8f
     ja      9f
@@ -2939,14 +2939,14 @@ SPEC_FUNCTION node_backfill
     lea     (L + 80)(%rsp), %rdi
     mov     $64, %esi
     lea     (L + 48)(%rsp), %rdx
-    call    sha256_short
+    call    lantern_sha256_short
     mov     S9(%rsp), %rdi
     add     $Validator_pubkey, %rdi
     mov     S8(%rsp), %rsi
     add     $4, %rsi
     lea     (L + 24)(%rsp), %rdx
     mov     %r14, %rcx
-    call    verify_root_signature
+    call    lantern_verify_root_signature
     test    %rax, %rax
     jnz     99f
     test    %rdx, %rdx
@@ -2987,7 +2987,7 @@ SPEC_FUNCTION node_attestation
     ADDRESS %rdi, lantern_type_Attestation
     mov     %rbp, %rsi
     mov     %r14, %rdx
-    call    node_decode
+    call    lantern_node_decode
     cmp     $1, %rax
     je      8f
     ja      9f
@@ -3048,7 +3048,7 @@ SPEC_FUNCTION node_attester_slashing
     ADDRESS %rdi, lantern_type_AttesterSlashing
     mov     %rbp, %rsi
     mov     %r13, %rdx
-    call    node_decode
+    call    lantern_node_decode
     cmp     $1, %rax
     je      8f
     ja      9f
@@ -3121,7 +3121,7 @@ SPEC_FUNCTION node_weights
     mov     %rbx, %rdi
     mov     %r12, %rsi
     mov     %r14, %rdx
-    call    weights
+    call    lantern_weights
     test    %rax, %rax
     jnz     7f
     xor     %ecx, %ecx                      # a sum past 2^64 - 1
@@ -3144,7 +3144,7 @@ SPEC_END node_weights
 /*
  * (state rdi, epoch rsi, scratch rdx, out rcx) -> rax: the index of each member of the state's
  * sync committee of the epoch (2^64 - 1: the state's epoch), current_sync_committee for the
- * period of the state's epoch, next_sync_committee for the next, by find_pubkeys with its table at
+ * period of the state's epoch, next_sync_committee for the next, by lantern_find_pubkeys with its table at
  * the end of scratch (node.md, lantern_node_sync_committee). Before altair, or another period:
  * LANTERN_NO_STATE_ANSWER.
  */
@@ -3176,7 +3176,7 @@ SPEC_FUNCTION node_sync_committee
     add     %rdi, %rsi
     mov     %rcx, %rdx
     lea     (%r8,%rax), %rcx
-    call    find_pubkeys
+    call    lantern_find_pubkeys
     test    %rax, %rax
     jnz     7f
     UNFRAME 0
@@ -3260,7 +3260,7 @@ SPEC_FUNCTION node_blinded_block
     ADDRESS %rdi, lantern_type_SignedBeaconBlock    # the decoded block's payload
     mov     (L + 16)(%rsp), %rsi
     mov     %r14, %rdx
-    call    node_decode
+    call    lantern_node_decode
     cmp     $1, %rax
     je      8f
     ja      91f
@@ -3276,7 +3276,7 @@ SPEC_FUNCTION node_blinded_block
     mov     %rdi, (L + 40)(%rsp)
     mov     %rax, %rsi
     mov     %r14, %rdx
-    call    build_payload_header
+    call    lantern_build_payload_header
     test    %rax, %rax
     jnz     6f
     mov     (L + 40)(%rsp), %rax            # its SSZ bytes, in a ByteList of 1024 bytes below it
@@ -3413,7 +3413,7 @@ SPEC_END node_proposer_lookahead
  * 2^16 times the committee's length, the committee a list at the end of the scratch r12; before
  * electra, 0. r13 the list, r15 the scratch's size. Locals: L the slot, L+8 the index.
  */
-LOCAL_FUNCTION node_gossip_member
+LOCAL_FUNCTION lantern_node_gossip_member
     ENTER 16
 .if FORK >= FORK_ELECTRA
     mov     (SingleAttestation_data + AttestationData_slot)(%rbp), %rax
@@ -3469,7 +3469,7 @@ LOCAL_FUNCTION node_gossip_member
 9:  LEAVE 16
 8:  mov     $LANTERN_BUFFER_TOO_SMALL, %eax
     LEAVE 16
-END_FUNCTION node_gossip_member
+END_FUNCTION lantern_node_gossip_member
 
 /*
  * (args, data, scratch, result, root, index): the gossip validation of the topic args.topic for
@@ -3548,7 +3548,7 @@ SPEC_FUNCTION node_gossip
     jmp     99f
 1:  mov     %rbp, %rsi
     mov     %r12, %rdx
-    call    node_decode
+    call    lantern_node_decode
     cmp     $1, %rax
     je      8f
     ja      7f
@@ -3678,7 +3678,7 @@ SPEC_FUNCTION node_gossip
     jnz     98f
     cmpq    $0, (%r13)                      # a valid attestation: its slot, committee index and member
     jne     99f
-    call    node_gossip_member
+    call    lantern_node_gossip_member
     jmp     98f
 32: cmp     $GOSSIP_VOLUNTARY_EXIT, %r15
     jne     33f
@@ -3837,7 +3837,7 @@ SPEC_FUNCTION node_blob_sidecar
     ADDRESS %rdi, lantern_type_BlobSidecar
     mov     %rbp, %rsi
     mov     %r12, %rdx
-    call    node_decode
+    call    lantern_node_decode
     cmp     $1, %rax
     je      8f
     ja      9f
@@ -3912,7 +3912,7 @@ SPEC_FUNCTION node_column_sidecar
     ADDRESS %rdi, lantern_type_DataColumnSidecar
     mov     %rbp, %rsi
     mov     %r12, %rdx
-    call    node_decode
+    call    lantern_node_decode
     cmp     $1, %rax
     je      8f
     ja      9f
@@ -3990,7 +3990,7 @@ SPEC_FUNCTION node_new_payload
     ADDRESS %rdi, lantern_type_SignedBeaconBlock
     mov     %rbp, %rsi
     mov     %r12, %rdx
-    call    node_decode
+    call    lantern_node_decode
     cmp     $1, %rax
     je      8f
     ja      9f
@@ -4083,7 +4083,7 @@ SPEC_END node_new_payload
  * lantern_node_produce_check: the skips before its slot, the epochs since finality, the skipped
  * slots of the last SLOTS_PER_EPOCH), else 0. Uses rcx, rdx, rsi, rdi, r8-r11.
  */
-LOCAL_FUNCTION produce_health
+LOCAL_FUNCTION lantern_produce_health
     UNWIND_END_PROLOGUE
     mov     BeaconState_slot(%rbx), %r8
     mov     (BeaconState_latest_block_header + BeaconBlockHeader_slot)(%rbx), %rax
@@ -4140,7 +4140,7 @@ LOCAL_FUNCTION produce_health
     ret
 8:  xor     %eax, %eax
     ret
-END_FUNCTION produce_health
+END_FUNCTION lantern_produce_health
 
 /*
  * (state, request, scratch, out): node.md, lantern_node_produce_check. rbx state, rbp request, r12
@@ -4176,7 +4176,7 @@ SPEC_FUNCTION node_produce_check
     jnz     7f
     mov     (L + 8)(%rsp), %rax
     mov     %rax, (%r13)
-    call    produce_health                  # the chain's health for a builder
+    call    lantern_produce_health                  # the chain's health for a builder
     mov     %rax, 8(%r13)
     cmpq    $0, 128(%rbp)                   # skip_randao_verification: the point at infinity
     je      1f
@@ -4217,7 +4217,7 @@ SPEC_FUNCTION node_produce_check
     mov     %rbp, %rsi
     lea     (L + 56)(%rsp), %rdx
     mov     %r12, %rcx
-    call    verify_root_signature
+    call    lantern_verify_root_signature
     test    %rax, %rax
     jnz     7f
     test    %rdx, %rdx
@@ -4320,7 +4320,7 @@ SPEC_FUNCTION node_produce_fold
     lea     PRODUCE_DRAFT_OPS(%r13), %rdx
     mov     %rbp, %rdi
     mov     %r12, %rsi
-    call    produce_takes_slashing
+    call    lantern_produce_takes_slashing
     test    %rax, %rax
     jz      8f
 4:  cmpq    $GOSSIP_VOLUNTARY_EXIT, S7(%rsp)
@@ -4329,7 +4329,7 @@ SPEC_FUNCTION node_produce_fold
     lea     PRODUCE_DRAFT_OPS(%r13), %rsi
     mov     ProduceDraft_ops(%r13), %rdx
     add     %rsi, %rdx
-    call    produce_slashed
+    call    lantern_produce_slashed
     test    %rax, %rax
     jnz     8f
 5:  mov     ProduceDraft_ops(%r13), %rcx
@@ -4503,7 +4503,7 @@ SPEC_FUNCTION node_produce_fold
     add     $DraftAggregate_signature, %rdi
     mov     (L + 8)(%rsp), %rsi
     mov     %r15, %rdx
-    call    produce_add_signature
+    call    lantern_produce_add_signature
     cmp     $LANTERN_BUFFER_TOO_SMALL, %rax
     je      9b
     test    %rax, %rax
@@ -4572,7 +4572,7 @@ SPEC_FUNCTION node_produce_fold
 203: lea    ProduceDraft_sync_signature(%r13), %rdi
     lea     48(%rbp), %rsi
     mov     %r15, %rdx
-    call    produce_add_signature
+    call    lantern_produce_add_signature
     cmp     $LANTERN_BUFFER_TOO_SMALL, %rax
     je      9b
 208: incq   S10(%rsp)
@@ -4587,7 +4587,7 @@ SPEC_END node_produce_fold
  * two at the end of scratch rdx: rax = LANTERN_OK, a status of crypto_bls_aggregate, or
  * LANTERN_BUFFER_TOO_SMALL. Locals: rsp+0 the aggregate, +8 the signature, +16 the list.
  */
-LOCAL_FUNCTION produce_add_signature
+LOCAL_FUNCTION lantern_produce_add_signature
     FRAME 32
     mov     %rdi, (%rsp)
     mov     %rsi, 8(%rsp)
@@ -4616,7 +4616,7 @@ LOCAL_FUNCTION produce_add_signature
     UNFRAME 32
 9:  mov     $LANTERN_BUFFER_TOO_SMALL, %eax
     UNFRAME 32
-END_FUNCTION produce_add_signature
+END_FUNCTION lantern_produce_add_signature
 
 /* ---------------------------------------------------------------- produceBlockV3: the builder's bid */
 
@@ -4717,7 +4717,7 @@ SPEC_FUNCTION node_produce_bid
     ADDRESS %rdi, lantern_type_SignedBuilderBid   # the signing root of the decoded message
     mov     %r14, %rsi
     mov     %r13, %rdx
-    call    node_decode
+    call    lantern_node_decode
     cmp     $1, %rax
     je      98f
     test    %rax, %rax
@@ -4735,7 +4735,7 @@ SPEC_FUNCTION node_produce_bid
     lea     4(%r14,%rsi), %rsi
     lea     (L + 184)(%rsp), %rdx
     mov     %r13, %rcx
-    call    verify_root_signature
+    call    lantern_verify_root_signature
     mov     S8(%rsp), %rcx
     mov     %rcx, (%r13)
     test    %rax, %rax
@@ -4918,7 +4918,7 @@ SPEC_END node_produce_bid
  * value // 100), the product saturating at 2^256 - 1; else 0. r12 params. Uses rcx, rdx, rsi,
  * rdi, r8-r11.
  */
-LOCAL_FUNCTION produce_choice
+LOCAL_FUNCTION lantern_produce_choice
     UNWIND_END_PROLOGUE
     mov     40(%r12), %rsi                  # the bid's value: in its message, from the offset at byte 0
     mov     8(%rsi), %rax
@@ -5000,14 +5000,14 @@ LOCAL_FUNCTION produce_choice
     ret
 8:  xor     %eax, %eax
     ret
-END_FUNCTION produce_choice
+END_FUNCTION lantern_produce_choice
 
 /*
  * L0: the parts of the winning bid at PBL_BID of the locals rdi: its message, header, from deneb
  * its commitments, from electra its requests (lantern_node_produce_bid checked its offsets).
  * Uses rax, rcx, rdx, rsi, r8, r9.
  */
-LOCAL_FUNCTION produce_bid_parts
+LOCAL_FUNCTION lantern_produce_bid_parts
     UNWIND_END_PROLOGUE
     mov     PBL_BID(%rdi), %rax
     mov     8(%rax), %rcx
@@ -5046,7 +5046,7 @@ LOCAL_FUNCTION produce_bid_parts
     mov     %rsi, PBL_HEADER(%rdi)
     mov     %rax, PBL_HEADER_LEN(%rdi)
     ret
-END_FUNCTION produce_bid_parts
+END_FUNCTION lantern_produce_bid_parts
 
 /*
  * L2: the stand-in payload of the winning bid (node.md, lantern_node_produce_block, with a bid),
@@ -5056,7 +5056,7 @@ END_FUNCTION produce_bid_parts
  * or another code. rbx state. Locals: 0 the locals, 8 the stand-in, 16 the withdrawals, 24 the
  * extra_data's bytes.
  */
-LOCAL_FUNCTION produce_standin
+LOCAL_FUNCTION lantern_produce_standin
     FRAME 32
     mov     %rdi, (%rsp)
     mov     (%r13), %rax
@@ -5154,7 +5154,7 @@ LOCAL_FUNCTION produce_standin
     UNFRAME 32
 98: mov     $LANTERN_BUFFER_TOO_SMALL, %eax
     UNFRAME 32
-END_FUNCTION produce_standin
+END_FUNCTION lantern_produce_standin
 
 /*
  * L2: the BlindedBeaconBlock of the block in out r14 (S7 of the locals rdi its bytes, S8 its body):
@@ -5163,7 +5163,7 @@ END_FUNCTION produce_standin
  * LANTERN_BUFFER_TOO_SMALL. Locals: 0 the locals, 8 the payload's place, 16 its end, 24 the tail's
  * copy, 32 its bytes, 40 the body.
  */
-LOCAL_FUNCTION produce_blind
+LOCAL_FUNCTION lantern_produce_blind
     FRAME 48
     mov     %rdi, (%rsp)
     mov     -24(%rdi), %rsi                 # the body, and the block
@@ -5238,7 +5238,7 @@ LOCAL_FUNCTION produce_blind
     UNFRAME 48
 98: mov     $LANTERN_BUFFER_TOO_SMALL, %eax
     UNFRAME 48
-END_FUNCTION produce_blind
+END_FUNCTION lantern_produce_blind
 
 /*
  * L2: the state root of the blinded block in out r14 (S7 of the locals rdi its bytes), as
@@ -5247,13 +5247,13 @@ END_FUNCTION produce_blind
  * latest_execution_payload_header's transactions_root the bid's header's; then lantern_state_root
  * into the block's state_root. rax = 0, or a status. r13 scratch. Locals: 0 the locals.
  */
-LOCAL_FUNCTION produce_blind_root
+LOCAL_FUNCTION lantern_produce_blind_root
     FRAME 16
     mov     %rdi, (%rsp)
     ADDRESS %rdi, lantern_type_BlindedBeaconBlock
     mov     %r14, %rsi
     mov     %r13, %rdx
-    call    node_decode
+    call    lantern_node_decode
     cmp     $1, %rax
     je      98f
     test    %rax, %rax
@@ -5292,7 +5292,7 @@ LOCAL_FUNCTION produce_blind_root
     mov     %rcx, (%r13)
     mov     $LANTERN_BUFFER_TOO_SMALL, %eax
     UNFRAME 16
-END_FUNCTION produce_blind_root
+END_FUNCTION lantern_produce_blind_root
 .endif
 
 /*
@@ -5399,15 +5399,15 @@ SPEC_FUNCTION node_produce_block
 .if FORK >= FORK_BELLATRIX
     cmpq    $0, 40(%r12)                    # a bid: the choice, then the stand-in payload of the winner
     je      51f
-    call    produce_choice
+    call    lantern_produce_choice
     test    %rax, %rax
     jz      51f
     mov     40(%r12), %rax
     mov     %rax, (L + PBL_BID)(%rsp)
     lea     L(%rsp), %rdi
-    call    produce_bid_parts
+    call    lantern_produce_bid_parts
     lea     L(%rsp), %rdi
-    call    produce_standin
+    call    lantern_produce_standin
     cmp     $LANTERN_BUFFER_TOO_SMALL, %rax
     je      98f
     test    %rax, %rax
@@ -5477,13 +5477,13 @@ SPEC_FUNCTION node_produce_block
     PB_OFFSET 200
     mov     $GOSSIP_PROPOSER_SLASHING, %edi
     mov     %r15, %rsi
-    call    produce_records
+    call    lantern_produce_records
     mov     %rdx, %r15
     test    %rax, %rax
     jnz     98f
     PB_OFFSET 204
     mov     %r15, %rdi
-    call    produce_attester_slashings
+    call    lantern_produce_attester_slashings
     mov     %rdx, %r15
     test    %rax, %rax
     jnz     98f
@@ -5491,7 +5491,7 @@ SPEC_FUNCTION node_produce_block
     PB_OFFSET 208
     lea     L(%rsp), %rdi
     mov     %r15, %rsi
-    call    produce_attestations
+    call    lantern_produce_attestations
     mov     %rdx, %r15
     cmp     $LANTERN_BUFFER_TOO_SMALL, %rax
     je      98f
@@ -5503,7 +5503,7 @@ SPEC_FUNCTION node_produce_block
     je      2f
     imul    $PRODUCE_DRAFT_DEPOSIT, (PRODUCE_DRAFT_ETH1 + 80)(%rbp), %rsi
     mov     %r15, %rdi
-    call    produce_room
+    call    lantern_produce_room
     test    %rax, %rax
     jnz     98f
     imul    $PRODUCE_DRAFT_DEPOSIT, (PRODUCE_DRAFT_ETH1 + 80)(%rbp), %rdx
@@ -5514,7 +5514,7 @@ SPEC_FUNCTION node_produce_block
 2:  PB_OFFSET 216
     mov     $GOSSIP_VOLUNTARY_EXIT, %edi
     mov     %r15, %rsi
-    call    produce_records
+    call    lantern_produce_records
     mov     %rdx, %r15
     test    %rax, %rax
     jnz     98f
@@ -5525,7 +5525,7 @@ SPEC_FUNCTION node_produce_block
 .if FORK == FORK_BELLATRIX
     mov     %r15, %rdi                      # ExecutionPayload.empty(): the offsets of extra_data and transactions at 508
     mov     $508, %esi
-    call    produce_room
+    call    lantern_produce_room
     test    %rax, %rax
     jnz     98f
     mov     %r15, %rdi
@@ -5540,7 +5540,7 @@ SPEC_FUNCTION node_produce_block
 .endif
 7:  mov     %r15, %rdi
     mov     (L + 32)(%rsp), %rsi
-    call    produce_room
+    call    lantern_produce_room
     test    %rax, %rax
     jnz     98f
     mov     %r15, %rdi
@@ -5555,7 +5555,7 @@ SPEC_FUNCTION node_produce_block
     PB_OFFSET PB_BLS
     mov     $GOSSIP_BLS_TO_EXECUTION_CHANGE, %edi
     mov     %r15, %rsi
-    call    produce_records
+    call    lantern_produce_records
     mov     %rdx, %r15
     test    %rax, %rax
     jnz     98f
@@ -5585,7 +5585,7 @@ SPEC_FUNCTION node_produce_block
     mov     %r9, (L + 16)(%rsp)
 73: mov     %r15, %rdi
     mov     %r9, %rsi
-    call    produce_room
+    call    lantern_produce_room
     test    %rax, %rax
     jnz     98f
     mov     %r15, %rdi
@@ -5600,7 +5600,7 @@ SPEC_FUNCTION node_produce_block
     je      74f
     mov     %r15, %rdi
     mov     (L + PBL_REQUESTS_LEN)(%rsp), %rsi
-    call    produce_room
+    call    lantern_produce_room
     test    %rax, %rax
     jnz     98f
     mov     %r15, %rdi
@@ -5661,7 +5661,7 @@ SPEC_FUNCTION node_produce_block
     ADDRESS %rdi, lantern_type_BeaconBlock  # the state root: process_block of the decoded block, then the state's root
     mov     %r14, %rsi
     mov     %r13, %rdx
-    call    node_decode
+    call    lantern_node_decode
     cmp     $1, %rax
     je      98f
     ja      96f
@@ -5740,11 +5740,11 @@ SPEC_FUNCTION node_produce_block
     add     $BID_VALUE, %rsi
     COPY32  %rdi, %rsi
     lea     L(%rsp), %rdi
-    call    produce_blind
+    call    lantern_produce_blind
     test    %rax, %rax
     jnz     98f
     lea     L(%rsp), %rdi
-    call    produce_blind_root
+    call    lantern_produce_blind_root
     cmp     $LANTERN_BUFFER_TOO_SMALL, %rax
     je      98f
     test    %rax, %rax
@@ -5757,7 +5757,7 @@ SPEC_FUNCTION node_produce_block
 .endif
 .if FORK >= FORK_DENEB
     lea     L(%rsp), %rdi                   # BlockContents: the block, the bundle's proofs and blobs
-    call    produce_contents
+    call    lantern_produce_contents
     test    %rax, %rax
     jnz     98f
 .endif
@@ -5795,7 +5795,7 @@ SPEC_FUNCTION node_eth1_check
 SPEC_END node_eth1_check
 
 /* rax = 1 when the Eth1Data at rdi is get_eth1_data of the Eth1Block at rsi, else 0. Uses rcx, rdx, r8. */
-LOCAL_FUNCTION e1v_match
+LOCAL_FUNCTION lantern_e1v_match
     UNWIND_END_PROLOGUE
     mov     Eth1Data_deposit_count(%rdi), %rax
     cmp     Eth1Block_deposit_count(%rsi), %rax
@@ -5814,10 +5814,10 @@ LOCAL_FUNCTION e1v_match
     ret
 9:  xor     %eax, %eax
     ret
-END_FUNCTION e1v_match
+END_FUNCTION lantern_e1v_match
 
 /* rax = 1 when the 72 bytes at rdi and rsi are equal, else 0. Uses rcx, rdx. */
-LOCAL_FUNCTION e1v_same
+LOCAL_FUNCTION lantern_e1v_same
     UNWIND_END_PROLOGUE
     xor     %ecx, %ecx
 1:  mov     (%rdi,%rcx), %rax
@@ -5830,7 +5830,7 @@ LOCAL_FUNCTION e1v_same
     ret
 9:  xor     %eax, %eax
     ret
-END_FUNCTION e1v_same
+END_FUNCTION lantern_e1v_same
 
 /*
  * rax = 1 when the Eth1Data at rdi is the data of a block of votes_to_consider (phase0
@@ -5838,7 +5838,7 @@ END_FUNCTION e1v_same
  * at least it) whose deposit_count is at least the state's. The blocks at rsi, their count rdx, the
  * period start and S * F at rcx, the state's deposit_count r8. Uses r9-r11.
  */
-LOCAL_FUNCTION e1v_consider
+LOCAL_FUNCTION lantern_e1v_consider
     FRAME 32
     mov     %rdi, (%rsp)
     mov     %rsi, 8(%rsp)
@@ -5858,7 +5858,7 @@ LOCAL_FUNCTION e1v_consider
     cmp     Eth1Block_deposit_count(%rsi), %r11
     ja      2f
     mov     (%rsp), %rdi
-    call    e1v_match
+    call    lantern_e1v_match
     test    %rax, %rax
     jnz     9f
 2:  addq    $Eth1Block__mem, 8(%rsp)
@@ -5866,7 +5866,7 @@ LOCAL_FUNCTION e1v_consider
     jmp     1b
 8:  xor     %eax, %eax
 9:  UNFRAME 32
-END_FUNCTION e1v_consider
+END_FUNCTION lantern_e1v_consider
 
 /*
  * (state, draft, snapshot, config, scratch): node.md, lantern_node_produce_eth1. rbx state, rbp the
@@ -5952,7 +5952,7 @@ SPEC_FUNCTION node_produce_eth1
     mov     Eth1Snapshot_blocks(%r12), %rdx
     lea     L(%rsp), %rcx
     mov     (BeaconState_eth1_data + Eth1Data_deposit_count)(%rbx), %r8
-    call    e1v_consider                    # a valid vote
+    call    lantern_e1v_consider                    # a valid vote
     test    %rax, %rax
     jz      7f
     movq    $0, (L + 32)(%rsp)              # its first: no equal vote before it
@@ -5963,7 +5963,7 @@ SPEC_FUNCTION node_produce_eth1
     add     S7(%rsp), %rdi
     imul    $Eth1Data__mem, S9(%rsp), %rsi
     add     S7(%rsp), %rsi
-    call    e1v_same
+    call    lantern_e1v_same
     test    %rax, %rax
     jnz     7f
     incq    (L + 32)(%rsp)
@@ -5978,7 +5978,7 @@ SPEC_FUNCTION node_produce_eth1
     add     S7(%rsp), %rdi
     imul    $Eth1Data__mem, S9(%rsp), %rsi
     add     S7(%rsp), %rsi
-    call    e1v_same
+    call    lantern_e1v_same
     add     %rax, (L + 24)(%rsp)
     incq    (L + 32)(%rsp)
     jmp     6b
@@ -6003,7 +6003,7 @@ SPEC_FUNCTION node_produce_eth1
     je      81f
     mov     S7(%rsp), %rdi
     mov     %r13, %rsi
-    call    e1v_same
+    call    lantern_e1v_same
     add     %rax, (L + 24)(%rsp)
     addq    $Eth1Data__mem, S7(%rsp)
     decq    S8(%rsp)
@@ -6103,7 +6103,7 @@ SPEC_FUNCTION node_produce_eth1
 SPEC_END node_produce_eth1
 
 /* L0: rax = 0 when rsi bytes from rdi fit in the ByteList r14, else 1. Uses rcx. */
-LOCAL_FUNCTION produce_room
+LOCAL_FUNCTION lantern_produce_room
     UNWIND_END_PROLOGUE
     mov     (%r14), %rcx
     add     %r14, %rcx
@@ -6112,13 +6112,13 @@ LOCAL_FUNCTION produce_room
     seta    %al
     movzbl  %al, %eax
     ret
-END_FUNCTION produce_room
+END_FUNCTION lantern_produce_room
 
 /*
  * L0: (index rdi, record rsi) -> rax = 1 when the index is in both attestations of the attester
  * slashing whose SSZ bytes follow the draft record rsi, else 0. Uses rcx, rdx, rsi, r8-r11.
  */
-LOCAL_FUNCTION produce_in_slashing
+LOCAL_FUNCTION lantern_produce_in_slashing
     UNWIND_END_PROLOGUE
     mov     8(%rsi), %r8                    # its length
     add     $16, %rsi
@@ -6149,14 +6149,14 @@ LOCAL_FUNCTION produce_in_slashing
     ret
 9:  xor     %eax, %eax
     ret
-END_FUNCTION produce_in_slashing
+END_FUNCTION lantern_produce_in_slashing
 
 /*
  * L2: (topic rdi, write position rsi) -> rax = 0, or 1 for a short out; rdx = the write position.
  * The SSZ bytes of the draft's records of the topic in their order, back to back. rbx the topic,
  * r12 a record, r13 the records' end, r15 the position.
  */
-LOCAL_FUNCTION produce_records
+LOCAL_FUNCTION lantern_produce_records
     ENTER 0
     mov     %rdi, %rbx
     mov     %rsi, %r15
@@ -6169,7 +6169,7 @@ LOCAL_FUNCTION produce_records
     jne     5f
     mov     %r15, %rdi
     mov     8(%r12), %rsi
-    call    produce_room
+    call    lantern_produce_room
     test    %rax, %rax
     jnz     9f
     mov     %r15, %rdi
@@ -6188,14 +6188,14 @@ LOCAL_FUNCTION produce_records
 9:  mov     $1, %eax
     mov     %r15, %rdx
     LEAVE 0
-END_FUNCTION produce_records
+END_FUNCTION lantern_produce_records
 
 /*
  * L2: (write position rdi) -> rax = 0, or 1 for a short out; rdx = the write position. The draft's
  * attester slashing records as an SSZ list: their offsets, then their bytes. rbx the next offset,
  * r12 a record, r13 the end, r15 the position; S7 the next offset's place.
  */
-LOCAL_FUNCTION produce_attester_slashings
+LOCAL_FUNCTION lantern_produce_attester_slashings
     ENTER 0
     mov     %rdi, %r15
     mov     ProduceDraft_ops(%rbp), %rax
@@ -6216,7 +6216,7 @@ LOCAL_FUNCTION produce_attester_slashings
 2:  shl     $2, %rbx                        # the offsets, the first slashing after them
     mov     %r15, %rdi
     mov     %rbx, %rsi
-    call    produce_room
+    call    lantern_produce_room
     test    %rax, %rax
     jnz     9f
     mov     %r15, S7(%rsp)
@@ -6231,7 +6231,7 @@ LOCAL_FUNCTION produce_attester_slashings
     add     8(%r12), %rbx
     mov     %r15, %rdi
     mov     8(%r12), %rsi
-    call    produce_room
+    call    lantern_produce_room
     test    %rax, %rax
     jnz     9f
     mov     %r15, %rdi
@@ -6250,14 +6250,14 @@ LOCAL_FUNCTION produce_attester_slashings
 9:  mov     $1, %eax
     mov     %r15, %rdx
     LEAVE 0
-END_FUNCTION produce_attester_slashings
+END_FUNCTION lantern_produce_attester_slashings
 
 /*
  * L1: (index rdi, records rsi, their end rdx) -> rax = 1 when a proposer slashing record of
  * [rsi, rdx) has the index as its proposer, or an attester slashing record has it in both
  * attestations; else 0. rbx the index, rbp a record, r12 the end.
  */
-LOCAL_FUNCTION produce_slashed
+LOCAL_FUNCTION lantern_produce_slashed
     ENTER 0
     mov     %rdi, %rbx
     mov     %rsi, %rbp
@@ -6274,7 +6274,7 @@ LOCAL_FUNCTION produce_slashed
     jne     3f
     mov     %rbx, %rdi
     mov     %rbp, %rsi
-    call    produce_in_slashing
+    call    lantern_produce_in_slashing
     test    %rax, %rax
     jnz     9f
 3:  mov     8(%rbp), %rax
@@ -6286,7 +6286,7 @@ LOCAL_FUNCTION produce_slashed
     LEAVE 0
 9:  mov     $1, %eax
     LEAVE 0
-END_FUNCTION produce_slashed
+END_FUNCTION lantern_produce_slashed
 
 /*
  * L1: (the attester slashing's bytes rdi, their count rsi, records rdx, their end rcx) -> rax = 1
@@ -6295,7 +6295,7 @@ END_FUNCTION produce_slashed
  * the bytes, rbp a place in the first list, r12 its end, r13 a place in the second, rsi its end,
  * r14 the records, r15 their end.
  */
-LOCAL_FUNCTION produce_takes_slashing
+LOCAL_FUNCTION lantern_produce_takes_slashing
     ENTER 0
     mov     %rdi, %rbx
     mov     %rdx, %r14
@@ -6351,7 +6351,7 @@ LOCAL_FUNCTION produce_takes_slashing
     LEAVE 0
 9:  mov     $1, %eax
     LEAVE 0
-END_FUNCTION produce_takes_slashing
+END_FUNCTION lantern_produce_takes_slashing
 
 .set PB_COMMITTEE_BITS, (MAX_COMMITTEES_PER_SLOT + 7) / 8
 /* An Attestation's fixed bytes: the bits' offset, data, signature, and from electra committee_bits */
@@ -6363,7 +6363,7 @@ END_FUNCTION produce_takes_slashing
 .set PB_ATT_FIXED, 228 + PB_ATT_COMMITTEE
 
 /* L0: rax = 1 when the 128 bytes at rdi and rsi are equal, else 0. Uses rcx, rdx. */
-LOCAL_FUNCTION produce_same_data
+LOCAL_FUNCTION lantern_produce_same_data
     UNWIND_END_PROLOGUE
     xor     %ecx, %ecx
 1:  mov     (%rdi,%rcx), %rdx
@@ -6376,7 +6376,7 @@ LOCAL_FUNCTION produce_same_data
     ret
 2:  xor     %eax, %eax
     ret
-END_FUNCTION produce_same_data
+END_FUNCTION lantern_produce_same_data
 
 /*
  * L2: (the block's locals rdi, write position rsi) -> rax = 0, 1 for a short out or scratch, or a
@@ -6388,7 +6388,7 @@ END_FUNCTION produce_same_data
  * after a flag byte for each aggregate), S8 the chosen count, S9 the chosen aggregate, S10 an
  * aggregate. Locals: L the scratch size, L+8 an index, L+16 the bits' cursor, L+24 a committee.
  */
-LOCAL_FUNCTION produce_attestations
+LOCAL_FUNCTION lantern_produce_attestations
     ENTER 32
     mov     %rsi, %r15
     mov     ProduceDraft_aggregates(%rbp), %rbx
@@ -6451,7 +6451,7 @@ LOCAL_FUNCTION produce_attestations
     add     %r12, %rsi
     mov     (L + 8)(%rsp), %rdi
     mov     %rcx, (L + 16)(%rsp)
-    call    produce_same_data
+    call    lantern_produce_same_data
     mov     (L + 16)(%rsp), %rcx
     test    %rax, %rax
     jz      25f
@@ -6468,7 +6468,7 @@ LOCAL_FUNCTION produce_attestations
     mov     %rax, (L + 24)(%rsp)
     mov     %r15, %rdi
     mov     %rax, %rsi
-    call    produce_room
+    call    lantern_produce_room
     test    %rax, %rax
     jnz     98f
     mov     (L + 24)(%rsp), %rax
@@ -6481,7 +6481,7 @@ LOCAL_FUNCTION produce_attestations
     mov     %eax, (%r15,%rcx,4)
     mov     S7(%rsp), %rax
     mov     (%rax,%rcx,8), %rdi
-    call    produce_att_bits
+    call    lantern_produce_att_bits
     add     $8, %rax                  # the bits: (length + 1 end bit) rounded up to bytes
     shr     $3, %rax
     add     $PB_ATT_FIXED, %rax
@@ -6498,13 +6498,13 @@ LOCAL_FUNCTION produce_attestations
     imul    $DraftAggregate__mem, %rdi, %rax
     add     %r12, %rax
     mov     %rax, S9(%rsp)                  # the chosen aggregate
-    call    produce_att_bits
+    call    lantern_produce_att_bits
     add     $8, %rax
     shr     $3, %rax
     add     $PB_ATT_FIXED, %rax
     mov     %r15, %rdi
     mov     %rax, %rsi
-    call    produce_room
+    call    lantern_produce_room
     test    %rax, %rax
     jnz     98f
     movl    $PB_ATT_FIXED, (%r15)
@@ -6520,7 +6520,7 @@ LOCAL_FUNCTION produce_attestations
     mov     (L + 8)(%rsp), %rcx             # from electra the committee bits; the aggregation bits, zero
     mov     S7(%rsp), %rax
     mov     (%rax,%rcx,8), %rdi
-    call    produce_att_bits
+    call    lantern_produce_att_bits
     lea     8(%rax), %rsi
     shr     $3, %rsi
     add     $PB_ATT_COMMITTEE, %rsi
@@ -6541,7 +6541,7 @@ LOCAL_FUNCTION produce_attestations
     cmp     %rcx, DraftAggregate_committee_index(%rsi)
     jne     65f
     mov     S9(%rsp), %rdi
-    call    produce_same_data
+    call    lantern_produce_same_data
     test    %rax, %rax
     jz      65f
     mov     S10(%rsp), %r8
@@ -6555,7 +6555,7 @@ LOCAL_FUNCTION produce_attestations
     lea     132(%r15), %rdi
     add     $DraftAggregate_signature, %rsi
     mov     %r13, %rdx
-    call    produce_add_signature
+    call    lantern_produce_add_signature
     cmp     $LANTERN_BUFFER_TOO_SMALL, %rax
     je      97f
     test    %rax, %rax
@@ -6563,7 +6563,7 @@ LOCAL_FUNCTION produce_attestations
     mov     S10(%rsp), %rsi
 63: lea     (228 + PB_COMMITTEE_BITS)(%r15), %rdi  # its bits at the cursor
     mov     (L + 16)(%rsp), %rdx
-    call    produce_copy_bits
+    call    lantern_produce_copy_bits
     mov     %rax, (L + 16)(%rsp)
     jmp     66f
 65: incq    S10(%rsp)
@@ -6574,7 +6574,7 @@ LOCAL_FUNCTION produce_attestations
     lea     228(%r15), %rdi
     mov     S9(%rsp), %rsi
     xor     %edx, %edx
-    call    produce_copy_bits
+    call    lantern_produce_copy_bits
     mov     %rax, (L + 16)(%rsp)
 .endif
 7:  mov     (L + 16)(%rsp), %rcx            # the end bit
@@ -6598,14 +6598,14 @@ LOCAL_FUNCTION produce_attestations
 98: mov     $1, %eax
     mov     %r15, %rdx
     LEAVE 32
-END_FUNCTION produce_attestations
+END_FUNCTION lantern_produce_attestations
 
 /*
  * L0: (index rdi) -> rax: the aggregation bits of the attestation of the draft's aggregate rdi, r12
  * the aggregates, rbx their count: its length; from electra the lengths of the aggregates of its
  * data. Uses rcx, rdx, rsi, r8, r9.
  */
-LOCAL_FUNCTION produce_att_bits
+LOCAL_FUNCTION lantern_produce_att_bits
     UNWIND_END_PROLOGUE
     imul    $DraftAggregate__mem, %rdi, %rsi
     add     %r12, %rsi
@@ -6631,10 +6631,10 @@ LOCAL_FUNCTION produce_att_bits
     mov     DraftAggregate_length(%rsi), %rax
     ret
 .endif
-END_FUNCTION produce_att_bits
+END_FUNCTION lantern_produce_att_bits
 
 /* L0: (bits rdi, aggregate rsi, cursor rdx) -> rax: the aggregate's length bits set at bit rdx of rdi on; the cursor after them. Uses rcx, r8. */
-LOCAL_FUNCTION produce_copy_bits
+LOCAL_FUNCTION lantern_produce_copy_bits
     UNWIND_END_PROLOGUE
     mov     DraftAggregate_length(%rsi), %r8
     xor     %ecx, %ecx
@@ -6648,7 +6648,7 @@ LOCAL_FUNCTION produce_copy_bits
     jmp     1b
 2:  lea     (%rdx,%r8), %rax
     ret
-END_FUNCTION produce_copy_bits
+END_FUNCTION lantern_produce_copy_bits
 
 .if FORK >= FORK_DENEB
 /*
@@ -6657,7 +6657,7 @@ END_FUNCTION produce_copy_bits
  * bundle's proofs and blobs (the bundle at locals + 40, its bytes at + 48). Locals: rsp+0 the
  * bundle, +8 the blobs' offset, +16 the proofs' bytes, +24 the blobs' bytes.
  */
-LOCAL_FUNCTION produce_contents
+LOCAL_FUNCTION lantern_produce_contents
     FRAME 32
     mov     40(%rdi), %rsi                  # the bundle: its offsets of commitments, proofs, blobs
     mov     48(%rdi), %rdx
@@ -6714,7 +6714,7 @@ LOCAL_FUNCTION produce_contents
     UNFRAME 32
 9:  mov     $1, %eax
     UNFRAME 32
-END_FUNCTION produce_contents
+END_FUNCTION lantern_produce_contents
 .endif
 
 /* ---------------------------------------------------------------- publishBlockV2 */
@@ -6772,7 +6772,7 @@ SPEC_FUNCTION node_publish_decode
 2:  mov     %r14, %rdi                      # a value of the type
     mov     %r13, %rsi
     mov     %r12, %rdx
-    call    node_decode
+    call    lantern_node_decode
     mov     (L + 136)(%rsp), %rcx
     mov     %rcx, (%r12)
     cmp     $1, %rax
@@ -6868,7 +6868,7 @@ SPEC_FUNCTION node_publish_decode
 52: mov     %r14, %rdi                      # a value of the type, and the root of its message
     mov     %r13, %rsi
     mov     %r12, %rdx
-    call    node_decode
+    call    lantern_node_decode
     cmp     $1, %rax
     je      59f
     test    %rax, %rax
@@ -6967,7 +6967,7 @@ SPEC_FUNCTION node_publish_check
     mov     %rbx, %rdi
     mov     %rbp, %rsi
     mov     %r14, %rdx
-    call    publish_gossip
+    call    lantern_publish_gossip
     test    %rax, %rax
     jnz     99f
 .if FORK >= FORK_DENEB
@@ -7002,7 +7002,7 @@ SPEC_FUNCTION node_publish_check
     mov     %rbx, %rdi
     mov     %r15, %rsi
     mov     %r14, %rdx
-    call    publish_gossip
+    call    lantern_publish_gossip
     test    %rax, %rax
     jnz     99f
     add     (%r15), %r15
@@ -7014,7 +7014,7 @@ SPEC_FUNCTION node_publish_check
     ADDRESS %rdi, lantern_type_SignedBeaconBlock
     mov     %rbp, %rsi
     mov     %r14, %rdx
-    call    node_decode
+    call    lantern_node_decode
     cmp     $1, %rax
     je      6f
     ja      8f
@@ -7079,7 +7079,7 @@ SPEC_FUNCTION node_publish_check
     mov     %rbx, %rdi
     mov     %rbp, %rsi
     mov     %r14, %rdx
-    call    publish_gossip
+    call    lantern_publish_gossip
     test    %rax, %rax
     jnz     99b
     cmp     $2, %r13
@@ -7087,7 +7087,7 @@ SPEC_FUNCTION node_publish_check
     mov     %rbx, %rdi
     mov     %rbp, %rsi
     mov     %r14, %rdx
-    call    publish_blinded_transition
+    call    lantern_publish_blinded_transition
     jmp     99b
 .endif
 SPEC_END node_publish_check
@@ -7102,7 +7102,7 @@ SPEC_END node_publish_check
  * the payload's place in the full block. Locals: L the extra_data's bytes, L+8 the stand-in's
  * bytes, L+16 the header's offset in the blinded block.
  */
-LOCAL_FUNCTION publish_unblind
+LOCAL_FUNCTION lantern_publish_unblind
     ENTER 32
     mov     8(%rdi), %rax
     lea     (%rdi,%rax), %rbx
@@ -7262,7 +7262,7 @@ LOCAL_FUNCTION publish_unblind
     LEAVE 32
 98: mov     $LANTERN_BUFFER_TOO_SMALL, %eax
     LEAVE 32
-END_FUNCTION publish_unblind
+END_FUNCTION lantern_publish_unblind
 
 /*
  * L2: (gossip rdi, block rsi, scratch rdx) -> rax: the blinded transition of the blinded block on
@@ -7273,7 +7273,7 @@ END_FUNCTION publish_unblind
  * state, r15 the scratch size. Locals: L the body's root, L+32 the transactions_root, L+64
  * execution_valid 1, L+72 a Result, L+80 the state root.
  */
-LOCAL_FUNCTION publish_blinded_transition
+LOCAL_FUNCTION lantern_publish_blinded_transition
     ENTER 112
     mov     %rdi, %rbx
     mov     %rsi, %rbp
@@ -7283,7 +7283,7 @@ LOCAL_FUNCTION publish_blinded_transition
     ADDRESS %rdi, lantern_type_SignedBlindedBeaconBlock # the root of its body
     mov     %rbp, %rsi
     mov     %r12, %rdx
-    call    node_decode
+    call    lantern_node_decode
     cmp     $1, %rax
     je      98f
     test    %rax, %rax
@@ -7311,13 +7311,13 @@ LOCAL_FUNCTION publish_blinded_transition
     mov     %rbp, %rdi                      # the full block of the stand-in, decoded
     mov     %r13, %rsi
     mov     %r12, %rdx
-    call    publish_unblind
+    call    lantern_publish_unblind
     test    %rax, %rax
     jnz     96f
     ADDRESS %rdi, lantern_type_SignedBeaconBlock
     mov     %rdx, %rsi
     mov     %r12, %rdx
-    call    node_decode
+    call    lantern_node_decode
     cmp     $1, %rax
     je      98f
     test    %rax, %rax
@@ -7369,14 +7369,14 @@ LOCAL_FUNCTION publish_blinded_transition
 98: mov     %r15, (%r12)
     mov     $LANTERN_BUFFER_TOO_SMALL, %eax
     LEAVE 112
-END_FUNCTION publish_blinded_transition
+END_FUNCTION lantern_publish_blinded_transition
 .endif
 
 /*
  * L1: (gossip rdi, data rsi, scratch rdx) -> rax: LANTERN_OK when lantern_node_gossip of the data
  * holds, else its status or its result. Locals: a Result, a root (32), an index.
  */
-LOCAL_FUNCTION publish_gossip
+LOCAL_FUNCTION lantern_publish_gossip
     FRAME 48
     mov     %rsp, %rcx
     lea     8(%rsp), %r8
@@ -7386,7 +7386,7 @@ LOCAL_FUNCTION publish_gossip
     jnz     9f
     mov     (%rsp), %rax
 9:  UNFRAME 48
-END_FUNCTION publish_gossip
+END_FUNCTION lantern_publish_gossip
 
 .if FORK >= FORK_DENEB
 /*
@@ -7436,7 +7436,7 @@ SPEC_FUNCTION node_publish_sidecars
 2:  ADDRESS %rdi, lantern_type_SignedBlockContents   # its value
     mov     %r12, %rsi
     mov     %rbx, %rdx
-    call    node_decode
+    call    lantern_node_decode
     cmp     $1, %rax
     je      8f
     ja      9f

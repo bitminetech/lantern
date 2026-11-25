@@ -40,7 +40,7 @@ config_max_name:
 .endm
 
 /* rax = 1 when the rsi bytes at rdi are the rcx bytes at rdx, else 0. Uses rdi, rsi, rdx. */
-LOCAL_FUNCTION config_name_is
+LOCAL_FUNCTION lantern_config_name_is
     UNWIND_END_PROLOGUE
     cmp     %rcx, %rsi
     jne     2f
@@ -57,10 +57,10 @@ LOCAL_FUNCTION config_name_is
     ret
 3:  mov     $1, %eax
     ret
-END_FUNCTION config_name_is
+END_FUNCTION lantern_config_name_is
 
 /* The value bytes rdi to rsi without a pair of quotes: rax = 0, rdi their start, rsi their end; rax = 1 for a quote with no end. Uses rcx. */
-LOCAL_FUNCTION config_unquote
+LOCAL_FUNCTION lantern_config_unquote
     UNWIND_END_PROLOGUE
     cmp     %rsi, %rdi
     jae     8f
@@ -81,10 +81,10 @@ LOCAL_FUNCTION config_unquote
     ret
 9:  mov     $1, %eax
     ret
-END_FUNCTION config_unquote
+END_FUNCTION lantern_config_unquote
 
 /* rax = 0 and rdx = the u64 of the bytes rdi to rsi: decimal, or 0x and 1 to 16 hex digits; else rax = 1. Uses rcx, rdi, r8-r10. */
-LOCAL_FUNCTION config_u64
+LOCAL_FUNCTION lantern_config_u64
     UNWIND_END_PROLOGUE
     mov     %rsi, %rcx
     sub     %rdi, %rcx
@@ -130,10 +130,10 @@ LOCAL_FUNCTION config_u64
     ret
 9:  mov     $1, %eax
     ret
-END_FUNCTION config_u64
+END_FUNCTION lantern_config_u64
 
 /* rax = 0 when the bytes rdi to rsi are 0x and 2 * rcx hex digits, whose rcx bytes go to rdx in order; else 1. Uses rcx, rdx, rdi, r8, r9. */
-LOCAL_FUNCTION config_hex_bytes
+LOCAL_FUNCTION lantern_config_hex_bytes
     UNWIND_END_PROLOGUE
     mov     %rsi, %rax
     sub     %rdi, %rax
@@ -166,10 +166,10 @@ LOCAL_FUNCTION config_hex_bytes
     ret
 9:  mov     $1, %eax
     ret
-END_FUNCTION config_hex_bytes
+END_FUNCTION lantern_config_hex_bytes
 
 /* rax = 0 when the bytes rdi to rsi are the decimal digits of a number below 2^256, then little endian at rdx (32 bytes); else 1. Uses rcx, rdx, rdi, r8-r10. */
-LOCAL_FUNCTION config_uint256
+LOCAL_FUNCTION lantern_config_uint256
     UNWIND_END_PROLOGUE
     mov     %rdx, %r8
     movq    $0, (%r8)
@@ -203,25 +203,25 @@ LOCAL_FUNCTION config_uint256
     ret
 9:  mov     $1, %eax
     ret
-END_FUNCTION config_uint256
+END_FUNCTION lantern_config_uint256
 
 /*
  * rax = 0 when the value bytes rsi to rdx, without a pair of quotes, are a value of the kind
  * rdi, then at rcx: 8 bytes (u64; Version: 4 bytes and 4 zero bytes) or 32 (Uint256, Hash32);
  * else 1. r12 the kind, r13 out.
  */
-LOCAL_FUNCTION config_value
+LOCAL_FUNCTION lantern_config_value
     ENTER 0
     mov     %rdi, %r12
     mov     %rcx, %r13
     mov     %rsi, %rdi
     mov     %rdx, %rsi
-    call    config_unquote
+    call    lantern_config_unquote
     test    %rax, %rax
     jnz     9f
     cmp     $CONFIG_KIND_U64, %r12
     jne     1f
-    call    config_u64
+    call    lantern_config_u64
     test    %rax, %rax
     jnz     9f
     mov     %rdx, (%r13)
@@ -231,18 +231,18 @@ LOCAL_FUNCTION config_value
     movq    $0, (%r13)
     mov     %r13, %rdx
     mov     $4, %ecx
-    call    config_hex_bytes
+    call    lantern_config_hex_bytes
     jmp     9f
 2:  cmp     $CONFIG_KIND_UINT256, %r12
     jne     3f
     mov     %r13, %rdx
-    call    config_uint256
+    call    lantern_config_uint256
     jmp     9f
 3:  cmp     $CONFIG_KIND_HASH32, %r12
     jne     4f
     mov     %r13, %rdx                      # Hash32
     mov     $32, %ecx
-    call    config_hex_bytes
+    call    lantern_config_hex_bytes
     jmp     9f
 4:  cmp     $CONFIG_KIND_ADDRESS, %r12
     jne     5f
@@ -251,19 +251,19 @@ LOCAL_FUNCTION config_value
     movups  %xmm0, 16(%r13)
     mov     %r13, %rdx
     mov     $20, %ecx
-    call    config_hex_bytes
+    call    lantern_config_hex_bytes
     jmp     9f
 5:  mov     %r13, %rdx                      # Text: to r13, when it is not 0
-    call    config_text
+    call    lantern_config_text
 9:  LEAVE 0
-END_FUNCTION config_value
+END_FUNCTION lantern_config_value
 
 /*
  * rax = 0 when the bytes rdi to rsi are a text (0 to CONFIG_TEXT_MAX bytes, each 0x20 to 0x7e but
  * " and \); then, when rdx is not 0, at rdx its count and CONFIG_TEXT_MAX bytes: its bytes, then
  * zero bytes. Else rax = 1. Uses rcx, r8, r9.
  */
-LOCAL_FUNCTION config_text
+LOCAL_FUNCTION lantern_config_text
     UNWIND_END_PROLOGUE
     mov     %rsi, %rcx
     sub     %rdi, %rcx
@@ -299,10 +299,10 @@ LOCAL_FUNCTION config_text
     ret
 9:  mov     $1, %eax
     ret
-END_FUNCTION config_text
+END_FUNCTION lantern_config_text
 
 /*
- * In config_scan: close the open entry of the schedule: to 80f (a fault at its line) without
+ * In lantern_config_scan: close the open entry of the schedule: to 80f (a fault at its line) without
  * both fields; else with write, its EPOCH and MAX_BLOBS_PER_BLOCK as schedule entry S8 - 1. Uses rax, rcx.
  */
 .macro CONFIG_ENTRY_END
@@ -340,7 +340,7 @@ END_FUNCTION config_text
  * MAX_BLOBS_PER_BLOCK, L+32 1 when the text gives BLOB_SCHEDULE, L+40 a value (32 bytes) or a
  * field, L+72 the value's start or a column, L+80 the key's length or a position.
  */
-LOCAL_FUNCTION config_scan
+LOCAL_FUNCTION lantern_config_scan
     ENTER 96
     mov     %rsi, %rbx
     mov     %rdx, S10(%rsp)
@@ -459,7 +459,7 @@ LOCAL_FUNCTION config_scan
     mov     (L + 80)(%rsp), %rsi
     lea     config_schedule_name(%rip), %rdx
     mov     $13, %ecx
-    call    config_name_is
+    call    lantern_config_name_is
     test    %rax, %rax
     jnz     30f
     lea     config_keys(%rip), %rax
@@ -472,7 +472,7 @@ LOCAL_FUNCTION config_scan
     mov     (L + 80)(%rsp), %rsi
     mov     (%rdx), %rcx
     add     $24, %rdx
-    call    config_name_is
+    call    lantern_config_name_is
     test    %rax, %rax
     jnz     28f
     addq    $CONFIG_KEY_BYTES, S7(%rsp)
@@ -491,7 +491,7 @@ LOCAL_FUNCTION config_scan
     je      280f
     mov     8(%rax), %rcx
     add     %rbx, %rcx
-280: call   config_value
+280: call   lantern_config_value
     test    %rax, %rax
     jnz     89f
     cmpq    $0, S10(%rsp)
@@ -590,7 +590,7 @@ LOCAL_FUNCTION config_scan
     mov     %rdx, (L + 56)(%rsp)
     lea     config_epoch_name(%rip), %rdx
     mov     $5, %ecx
-    call    config_name_is
+    call    lantern_config_name_is
     mov     $1, %r8d                        # EPOCH: bit 0
     test    %rax, %rax
     jnz     59f
@@ -598,7 +598,7 @@ LOCAL_FUNCTION config_scan
     mov     (L + 48)(%rsp), %rsi
     lea     config_max_name(%rip), %rdx
     mov     $19, %ecx
-    call    config_name_is
+    call    lantern_config_name_is
     test    %rax, %rax
     jz      89f
     mov     $2, %r8d                        # MAX_BLOBS_PER_BLOCK: bit 1
@@ -608,10 +608,10 @@ LOCAL_FUNCTION config_scan
     mov     %r8, (L + 64)(%rsp)
     mov     (L + 56)(%rsp), %rdi
     mov     %r15, %rsi
-    call    config_unquote
+    call    lantern_config_unquote
     test    %rax, %rax
     jnz     89f
-    call    config_u64
+    call    lantern_config_u64
     test    %rax, %rax
     jnz     89f
     mov     (L + 64)(%rsp), %rax
@@ -652,7 +652,7 @@ LOCAL_FUNCTION config_scan
 80: mov     L(%rsp), %r13                   # the line of the open entry
 89: mov     %r13, %rax
     LEAVE 96
-END_FUNCTION config_scan
+END_FUNCTION lantern_config_scan
 
 /* (text, config, line): docs/reference/config.md. r12 text, r13 config, r14 line. */
 FUNCTION lantern_config_parse
@@ -661,13 +661,13 @@ FUNCTION lantern_config_parse
     mov     %rsi, %r13
     mov     %rdx, %r14
     xor     %edx, %edx                      # check every line first
-    call    config_scan
+    call    lantern_config_scan
     test    %rax, %rax
     jnz     1f
     mov     %r12, %rdi
     mov     %r13, %rsi
     mov     $1, %edx
-    call    config_scan
+    call    lantern_config_scan
     movq    $0, (%r14)
     xor     %eax, %eax
     LEAVE 0

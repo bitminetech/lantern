@@ -14,7 +14,7 @@
 .set GENESIS_EXTRA, TREE_BYTES + ZEROS_BYTES + BODY_BYTES
 
 /* Append the 32-byte leaf rsi to tree rdi, as the deposit contract does. rbx tree, rbp size, r12 level. Locals: L a pair (64). */
-LOCAL_FUNCTION merkle_add
+LOCAL_FUNCTION lantern_merkle_add
     ENTER 64
     mov     %rdi, %rbx
     lea     (L + 32)(%rsp), %rax            # node = leaf, in the pair's right half
@@ -33,7 +33,7 @@ LOCAL_FUNCTION merkle_add
     lea     L(%rsp), %rdi
     mov     $64, %esi
     lea     (L + 32)(%rsp), %rdx
-    call    sha256_short
+    call    lantern_sha256_short
     shr     $1, %rbp
     inc     %r12
     cmp     $MERKLE_DEPTH, %r12
@@ -45,13 +45,13 @@ LOCAL_FUNCTION merkle_add
     lea     (L + 32)(%rsp), %rcx
     COPY32  %rax, %rcx
 3:  LEAVE 64
-END_FUNCTION merkle_add
+END_FUNCTION lantern_merkle_add
 
 /*
  * The root of tree rdi as a list of depth rdx levels, its length mixed in, at rcx; rsi holds the zero hashes.
  * rbx tree, rbp zeros, r12 depth, r13 out, r14 size, r15 level. Locals: L a pair (64).
  */
-LOCAL_FUNCTION merkle_root
+LOCAL_FUNCTION lantern_merkle_root
     ENTER 64
     mov     %rdi, %rbx
     mov     %rsi, %rbp
@@ -83,7 +83,7 @@ LOCAL_FUNCTION merkle_root
 3:  lea     L(%rsp), %rdi
     mov     $64, %esi
     lea     (L + 32)(%rsp), %rdx
-    call    sha256_short
+    call    lantern_sha256_short
     shr     $1, %r14
     inc     %r15
     jmp     1b
@@ -98,12 +98,12 @@ LOCAL_FUNCTION merkle_root
     lea     L(%rsp), %rdi
     mov     $64, %esi
     mov     %r13, %rdx
-    call    sha256_short
+    call    lantern_sha256_short
     LEAVE 64
-END_FUNCTION merkle_root
+END_FUNCTION lantern_merkle_root
 
 /* The zero hashes of levels 0 to MERKLE_DEPTH - 1 at rdi. rbx zeros, rbp level. Locals: L a pair (64). */
-LOCAL_FUNCTION merkle_zeros
+LOCAL_FUNCTION lantern_merkle_zeros
     ENTER 64
     mov     %rdi, %rbx
     mov     $32, %esi
@@ -123,11 +123,11 @@ LOCAL_FUNCTION merkle_zeros
     mov     %rbp, %rdx
     shl     $5, %rdx
     add     %rbx, %rdx
-    call    sha256_short
+    call    lantern_sha256_short
     inc     %rbp
     jmp     1b
 2:  LEAVE 64
-END_FUNCTION merkle_zeros
+END_FUNCTION lantern_merkle_zeros
 
 /* rcx = the bytes of an empty part of the genesis state with room rbp, for S7 deposits, rounded up to 8. */
 .macro GENESIS_CAPACITY ref, stride, room
@@ -250,7 +250,7 @@ SPEC_FUNCTION initialize_beacon_state_from_eth1
     mov     S10(%rsp), %rdi                 # the deposit tree: no leaves
     movq    $0, (%rdi)
     add     $TREE_BYTES, %rdi
-    call    merkle_zeros
+    call    lantern_merkle_zeros
     xor     %r15d, %r15d
 2:  cmp     S7(%rsp), %r15                  # for index, deposit in enumerate(deposits)
     jae     3f
@@ -268,12 +268,12 @@ SPEC_FUNCTION initialize_beacon_state_from_eth1
     jnz     7f
     mov     S10(%rsp), %rdi
     lea     (L + 24)(%rsp), %rsi
-    call    merkle_add
+    call    lantern_merkle_add
     mov     S10(%rsp), %rdi                 # eth1_data.deposit_root = hash_tree_root(deposit_data_list)
     lea     TREE_BYTES(%rdi), %rsi
     mov     $DEPOSIT_CONTRACT_TREE_DEPTH, %edx
     lea     (BeaconState_eth1_data + Eth1Data_deposit_root)(%r14), %rcx
-    call    merkle_root
+    call    lantern_merkle_root
     mov     S9(%rsp), %rax
     sub     $GENESIS_EXTRA, %rax
     mov     %rax, (%r13)
@@ -332,14 +332,14 @@ SPEC_FUNCTION initialize_beacon_state_from_eth1
     jnz     7f
     mov     S10(%rsp), %rdi
     lea     (L + 24)(%rsp), %rsi
-    call    merkle_add
+    call    lantern_merkle_add
     inc     %r15
     jmp     51b
 52: mov     S10(%rsp), %rdi
     lea     TREE_BYTES(%rdi), %rsi
     mov     $MERKLE_DEPTH, %edx
     lea     BeaconState_genesis_validators_root(%r14), %rcx
-    call    merkle_root
+    call    lantern_merkle_root
 8:  xor     %eax, %eax
 7:  mov     S9(%rsp), %rcx
     mov     %rcx, (%r13)

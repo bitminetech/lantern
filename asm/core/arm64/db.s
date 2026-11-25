@@ -30,7 +30,7 @@ FUNCTION lantern_db_size
 END_FUNCTION lantern_db_size
 
 /* L0: the parts of the Db x0 for the room x1: slots at DB_FIXED, then roots; their counts the capacities. Uses x9-x11. */
-LOCAL_FUNCTION db_layout
+LOCAL_FUNCTION lantern_db_layout
     UNWIND_END_PROLOGUE
     ldr     x9, [x1, #DbRoom_slots]
     mov     x10, #DB_FIXED
@@ -40,10 +40,10 @@ LOCAL_FUNCTION db_layout
     ldr     x9, [x1, #DbRoom_roots]
     stp     x10, x9, [x0, #Db_roots]
     ret
-END_FUNCTION db_layout
+END_FUNCTION lantern_db_layout
 
 /* L0: the root at x1 goes in the root table of the Db x0 with the value x2, at the first free entry from its first 8 bytes. Uses x9-x12. */
-LOCAL_FUNCTION db_insert
+LOCAL_FUNCTION lantern_db_insert
     UNWIND_END_PROLOGUE
     ldp     x9, x10, [x0, #Db_roots]
     add     x9, x0, x9
@@ -57,10 +57,10 @@ LOCAL_FUNCTION db_insert
     b       1b
 2:  str     x2, [x9, x11, lsl #3]
     ret
-END_FUNCTION db_insert
+END_FUNCTION lantern_db_insert
 
 /* L0: x0 = the entry index (slot - first_slot) of the block of the root at x1 in the Db x0, or 2^64 - 1. Uses x2, x3, x9-x17. */
-LOCAL_FUNCTION db_find
+LOCAL_FUNCTION lantern_db_find
     UNWIND_END_PROLOGUE
     ldp     x9, x10, [x0, #Db_roots]
     add     x9, x0, x9
@@ -94,13 +94,13 @@ LOCAL_FUNCTION db_find
     b       1b
 3:  mov     x0, #-1
     ret
-END_FUNCTION db_find
+END_FUNCTION lantern_db_find
 
 /*
  * L1: the root table of the Db x0 again from its entries: zeroed, then the root of each block;
  * blocks their count. x19 db, x20 an entry, x21 its index, x22 the entries in use.
  */
-LOCAL_FUNCTION db_rehash
+LOCAL_FUNCTION lantern_db_rehash
     ENTER 0
     mov     x19, x0
     ldp     x9, x10, [x19, #Db_roots]
@@ -120,7 +120,7 @@ LOCAL_FUNCTION db_rehash
     mov     x0, x19
     mov     x1, x20
     add     x2, x21, #1
-    bl      db_insert
+    bl      lantern_db_insert
     ldr     x9, [x19, #Db_blocks]
     add     x9, x9, #1
     str     x9, [x19, #Db_blocks]
@@ -128,7 +128,7 @@ LOCAL_FUNCTION db_rehash
     add     x21, x21, #1
     b       1b
 9:  LEAVE 0
-END_FUNCTION db_rehash
+END_FUNCTION lantern_db_rehash
 
 /* (room, slot, db): no records; first_slot and end_slot the slot. x19 room, x20 the slot, x21 db. Locals: L the size. */
 FUNCTION lantern_db_init
@@ -149,7 +149,7 @@ FUNCTION lantern_db_init
     stp     x20, x20, [x21, #Db_first_slot]
     mov     x0, x21
     mov     x1, x19
-    bl      db_layout
+    bl      lantern_db_layout
     mov     x0, #LANTERN_OK
 9:  LEAVE 16
 8:  mov     x0, #LANTERN_BUFFER_TOO_SMALL
@@ -191,7 +191,7 @@ FUNCTION lantern_db_copy
     stp     x9, x10, [x21, #Db_first_slot]
     mov     x0, x21
     mov     x1, x20
-    bl      db_layout
+    bl      lantern_db_layout
     ldr     x0, [x21, #Db_slots]            /* the entries in use, then each root again */
     add     x0, x21, x0
     ldr     x1, [x19, #Db_slots]
@@ -200,7 +200,7 @@ FUNCTION lantern_db_copy
     mul     x2, x22, x9
     bl      lantern_copy
     mov     x0, x21
-    bl      db_rehash
+    bl      lantern_db_rehash
     mov     x0, #LANTERN_OK
 9:  LEAVE 16
 8:  mov     x0, #LANTERN_BUFFER_TOO_SMALL
@@ -297,7 +297,7 @@ FUNCTION lantern_db_add
     cbnz    x9, 7f
     mov     x0, x19
     add     x1, x20, #DbRecord_root
-    bl      db_find
+    bl      lantern_db_find
     cmn     x0, #1
     b.ne    7f
     ldr     x9, [x19, #Db_blocks]           /* the table at most half full */
@@ -313,7 +313,7 @@ FUNCTION lantern_db_add
     mov     x0, x19
     add     x1, x20, #DbRecord_root
     add     x2, x22, #1
-    bl      db_insert
+    bl      lantern_db_insert
     ldr     x9, [x19, #Db_blocks]
     add     x9, x9, #1
     str     x9, [x19, #Db_blocks]
@@ -426,7 +426,7 @@ FUNCTION lantern_db_find_root
     FRAME 0
     mov     x6, x0
     mov     x7, x2
-    bl      db_find
+    bl      lantern_db_find
     cmn     x0, #1
     b.eq    1f
     ldr     x9, [x6, #Db_first_slot]
@@ -465,7 +465,7 @@ FUNCTION lantern_db_prune
     bl      lantern_zero
     str     x20, [x19, #Db_first_slot]
     mov     x0, x19
-    bl      db_rehash
+    bl      lantern_db_rehash
 9:  mov     x0, #LANTERN_OK
     LEAVE 0
 END_FUNCTION lantern_db_prune
@@ -499,7 +499,7 @@ FUNCTION lantern_db_drop_sidecars
 END_FUNCTION lantern_db_drop_sidecars
 
 /* L0: x0 = the u64 of the x2 bytes at x1 (as a signed count: 8 or more a whole word, 0 or less none), zero above them. Uses x9-x11. */
-LOCAL_FUNCTION db_word
+LOCAL_FUNCTION lantern_db_word
     UNWIND_END_PROLOGUE
     cmp     x2, #8
     b.lt    1f
@@ -518,14 +518,14 @@ LOCAL_FUNCTION db_word
     cmp     x10, x2
     b.lo    2b
 3:  ret
-END_FUNCTION db_word
+END_FUNCTION lantern_db_word
 
 /*
  * L1: x0 = 1 when word x1 of the state differs from the patch's start, else 0 (db.md, the state
  * diffs). Reads x19 the base's bytes, x20 min(its count, the state's), x21 the state's bytes, x22
  * their count. Uses x1, x2, x9-x14.
  */
-LOCAL_FUNCTION db_differ
+LOCAL_FUNCTION lantern_db_differ
     FRAME 0
     lsl     x13, x1, #3
     add     x12, x13, #8
@@ -536,15 +536,15 @@ LOCAL_FUNCTION db_differ
     b       2f
 1:  add     x1, x21, x13
     sub     x2, x22, x13
-    bl      db_word
+    bl      lantern_db_word
     mov     x14, x0
     add     x1, x19, x13
     sub     x2, x20, x13
-    bl      db_word
+    bl      lantern_db_word
 2:  cmp     x0, x14
     cset    x0, ne
     UNFRAME 0
-END_FUNCTION db_differ
+END_FUNCTION lantern_db_differ
 
 /*
  * (base, state, out, size): the diff of the state's bytes against the base's (db.md, the state
@@ -574,7 +574,7 @@ FUNCTION lantern_db_state_diff
 12: cmp     x26, x23
     b.hs    30f
     mov     x1, x26
-    bl      db_differ
+    bl      lantern_db_differ
     cbnz    x0, 13f
     add     x26, x26, #1
     b       12b
@@ -584,7 +584,7 @@ FUNCTION lantern_db_state_diff
 14: cmp     x26, x23
     b.hs    20f
     mov     x1, x26
-    bl      db_differ
+    bl      lantern_db_differ
     cbz     x0, 15f
     mov     x28, x26
     add     x26, x26, #1
@@ -594,7 +594,7 @@ FUNCTION lantern_db_state_diff
     cmp     x26, x23
     b.hs    20f
     mov     x1, x26
-    bl      db_differ
+    bl      lantern_db_differ
     cbz     x0, 16b
     ldr     x9, [sp, #(L + 16)]             /* at most 2 equal words between: the group goes on */
     sub     x9, x26, x9
@@ -622,7 +622,7 @@ FUNCTION lantern_db_state_diff
     lsl     x14, x13, #3
     add     x1, x21, x14
     sub     x2, x22, x14
-    bl      db_word
+    bl      lantern_db_word
     str     x0, [x12], #8
     add     x13, x13, #1
     b       21b

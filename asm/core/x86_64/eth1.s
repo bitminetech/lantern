@@ -11,7 +11,7 @@ e1_digits:
     .ascii  "0123456789abcdef"
 
 /* The QUANTITY of rax to the cursor rdi: "0x", then hex digits with no leading zero; rdi = the end. Uses rcx, rdx, r8. */
-LOCAL_FUNCTION e1_qty
+LOCAL_FUNCTION lantern_e1_qty
     UNWIND_END_PROLOGUE
     movw    $0x7830, (%rdi)                 # "0x"
     add     $2, %rdi
@@ -36,10 +36,10 @@ LOCAL_FUNCTION e1_qty
     sub     $4, %ecx
     jmp     3b
 4:  ret
-END_FUNCTION e1_qty
+END_FUNCTION lantern_e1_qty
 
 /* The rdx bytes at rsi as lowercase hex to the cursor rdi; rdi = the end. Uses rax, rcx, r8. */
-LOCAL_FUNCTION e1_hex
+LOCAL_FUNCTION lantern_e1_hex
     UNWIND_END_PROLOGUE
     lea     e1_digits(%rip), %r8
 1:  test    %rdx, %rdx
@@ -57,7 +57,7 @@ LOCAL_FUNCTION e1_hex
     dec     %rdx
     jmp     1b
 2:  ret
-END_FUNCTION e1_hex
+END_FUNCTION lantern_e1_hex
 
 /* (number, id, out): eth_getBlockByNumber. r12 number, r13 id, r14 out. */
 FUNCTION lantern_eth_get_block_by_number
@@ -72,7 +72,7 @@ FUNCTION lantern_eth_get_block_by_number
     mov     $e1_open_len, %ecx
     rep movsb
     mov     %r13, %rax
-    call    decimal
+    call    lantern_decimal
     lea     e1_block(%rip), %rsi
     mov     $e1_block_len, %ecx
     rep movsb
@@ -83,7 +83,7 @@ FUNCTION lantern_eth_get_block_by_number
     rep movsb
     jmp     2f
 1:  mov     %r12, %rax
-    call    e1_qty
+    call    lantern_e1_qty
 2:  lea     e1_bclose(%rip), %rsi
     mov     $e1_bclose_len, %ecx
     rep movsb
@@ -115,23 +115,23 @@ FUNCTION lantern_eth_get_deposit_logs
     mov     $e1_open_len, %ecx
     rep movsb
     mov     S9(%rsp), %rax
-    call    decimal
+    call    lantern_decimal
     lea     e1_logs(%rip), %rsi
     mov     $e1_logs_len, %ecx
     rep movsb
     mov     %r12, %rsi
     mov     $20, %edx
-    call    e1_hex
+    call    lantern_e1_hex
     lea     e1_topics(%rip), %rsi
     mov     $e1_topics_len, %ecx
     rep movsb
     mov     S7(%rsp), %rax
-    call    e1_qty
+    call    lantern_e1_qty
     lea     e1_to(%rip), %rsi
     mov     $e1_to_len, %ecx
     rep movsb
     mov     S8(%rsp), %rax
-    call    e1_qty
+    call    lantern_e1_qty
     lea     e1_lclose(%rip), %rsi
     mov     $e1_lclose_len, %ecx
     rep movsb
@@ -149,9 +149,9 @@ END_FUNCTION lantern_eth_get_deposit_logs
  * A QUANTITY string at the cursor rdi: rdi = the cursor after it and rsi its value, or rdi = 0 for
  * none: "0x", then 1 to 16 hex digits with no leading zero. Uses rax, rcx, rdx, r8, r9.
  */
-LOCAL_FUNCTION e1_qty_in
+LOCAL_FUNCTION lantern_e1_qty_in
     UNWIND_END_PROLOGUE
-    call    jstring
+    call    lantern_jstring
     test    %rdi, %rdi
     jz      9f
     test    %rcx, %rcx
@@ -187,7 +187,7 @@ LOCAL_FUNCTION e1_qty_in
     ret
 9:  xor     %edi, %edi
     ret
-END_FUNCTION e1_qty_in
+END_FUNCTION lantern_e1_qty_in
 
 /*
  * (json, out): the number, hash and timestamp of an eth_getBlockByNumber result. rbx the text's
@@ -208,14 +208,14 @@ FUNCTION lantern_eth1_block
     add     %rax, %rdi
     lea     (%rdi,%rcx), %rbx
     xor     %r13d, %r13d
-    call    jws
+    call    lantern_jws
     cmp     %rbx, %rdi
     jae     9f
     cmpb    $'{', (%rdi)
     jne     9f
     inc     %rdi
     mov     $1, %esi
-1:  call    jmember
+1:  call    lantern_jmember
     test    %rdi, %rdi
     jz      9f
     test    %rcx, %rcx
@@ -223,7 +223,7 @@ FUNCTION lantern_eth1_block
     JIS     e1_n_number
     test    %eax, %eax
     jz      2f
-    call    e1_qty_in
+    call    lantern_e1_qty_in
     test    %rdi, %rdi
     jz      9f
     mov     %rsi, Eth1Block_number(%r12)
@@ -232,7 +232,7 @@ FUNCTION lantern_eth1_block
 2:  JIS     e1_n_timestamp
     test    %eax, %eax
     jz      3f
-    call    e1_qty_in
+    call    lantern_e1_qty_in
     test    %rdi, %rdi
     jz      9f
     mov     %rsi, Eth1Block_timestamp(%r12)
@@ -244,17 +244,17 @@ FUNCTION lantern_eth1_block
     xor     %esi, %esi
     mov     $32, %edx
     lea     Eth1Block_hash(%r12), %rcx
-    call    jdata_in
+    call    lantern_jdata_in
     test    %rdi, %rdi
     jz      9f
     or      $2, %r13
     jmp     6f
-4:  call    jskip
+4:  call    lantern_jskip
     test    %rdi, %rdi
     jz      9f
 6:  xor     %esi, %esi
     jmp     1b
-7:  call    jws                             # nothing after the object, and each of the three
+7:  call    lantern_jws                             # nothing after the object, and each of the three
     cmp     %rbx, %rdi
     jne     9f
     cmp     $7, %r13
@@ -288,13 +288,13 @@ FUNCTION lantern_eth1_deposit_logs
     lea     24(%r12), %r13
     movq    $24, 8(%r12)
     movq    $0, 16(%r12)
-    call    jws
+    call    lantern_jws
     cmp     %rbx, %rdi
     jae     90f
     cmpb    $'[', (%rdi)
     jne     90f
     inc     %rdi
-    call    jws
+    call    lantern_jws
     cmp     %rbx, %rdi
     jae     90f
     cmpb    $']', (%rdi)
@@ -308,7 +308,7 @@ FUNCTION lantern_eth1_deposit_logs
     inc     %rdi
     xor     %r15d, %r15d
     mov     $1, %esi
-2:  call    jmember
+2:  call    lantern_jmember
     test    %rdi, %rdi
     jz      90f
     test    %rcx, %rcx
@@ -316,7 +316,7 @@ FUNCTION lantern_eth1_deposit_logs
     JIS     e1_n_block_number
     test    %eax, %eax
     jz      3f
-    call    e1_qty_in
+    call    lantern_e1_qty_in
     test    %rdi, %rdi
     jz      90f
     mov     %rsi, S7(%rsp)
@@ -329,13 +329,13 @@ FUNCTION lantern_eth1_deposit_logs
     mov     %rdi, S8(%rsp)
     lea     json_false(%rip), %rsi
     mov     $json_false_len, %edx
-    call    jliteral
+    call    lantern_jliteral
     test    %rdi, %rdi
     jnz     30f
     mov     S8(%rsp), %rdi
     lea     json_true(%rip), %rsi
     mov     $json_true_len, %edx
-    call    jliteral
+    call    lantern_jliteral
     test    %rdi, %rdi
     jz      90f
     or      $8, %r15
@@ -348,17 +348,17 @@ FUNCTION lantern_eth1_deposit_logs
     cmpb    $'[', (%rdi)
     jne     90f
     inc     %rdi
-    call    jws
+    call    lantern_jws
     xor     %esi, %esi
     mov     $32, %edx
     lea     L(%rsp), %rcx
-    call    jdata_in
+    call    lantern_jdata_in
     test    %rdi, %rdi
     jz      90f
     lea     L(%rsp), %rax
     lea     e1_topic(%rip), %rcx
     NE32    %rax, %rcx, 90f
-41: call    jws
+41: call    lantern_jws
     cmp     %rbx, %rdi
     jae     90f
     movzbl  (%rdi), %eax
@@ -367,8 +367,8 @@ FUNCTION lantern_eth1_deposit_logs
     je      42f
     cmp     $',', %eax
     jne     90f
-    call    jws
-    call    jskip
+    call    lantern_jws
+    call    lantern_jskip
     test    %rdi, %rdi
     jz      90f
     jmp     41b
@@ -377,7 +377,7 @@ FUNCTION lantern_eth1_deposit_logs
 5:  JIS     e1_n_data
     test    %eax, %eax
     jz      6f
-    call    jstring                         # "0x", then 2 hex digits a byte; 576 bytes, else no deposit's
+    call    lantern_jstring                         # "0x", then 2 hex digits a byte; 576 bytes, else no deposit's
     test    %rdi, %rdi
     jz      90f
     test    %rcx, %rcx
@@ -424,7 +424,7 @@ FUNCTION lantern_eth1_deposit_logs
     jmp     52b
 55: or      $4, %r15
     jmp     30f
-6:  call    jskip
+6:  call    lantern_jskip
     test    %rdi, %rdi
     jz      90f
 30: xor     %esi, %esi
@@ -439,7 +439,7 @@ FUNCTION lantern_eth1_deposit_logs
     jnz     91f
     mov     %rdi, S8(%rsp)
     lea     (L + 32)(%rsp), %rdi            # the contract's encoding: the bytes of e1_abi but the values
-    call    e1_abi_check
+    call    lantern_e1_abi_check
     test    %eax, %eax
     jz      91f
     lea     Eth1Deposit__mem(%r13), %rax
@@ -464,18 +464,18 @@ FUNCTION lantern_eth1_deposit_logs
     rep movsb
     add     $Eth1Deposit__mem, %r13
     mov     S8(%rsp), %rdi
-70: call    jws                             # a comma and the next log, or the array's end
+70: call    lantern_jws                             # a comma and the next log, or the array's end
     cmp     %rbx, %rdi
     jae     90f
     movzbl  (%rdi), %eax
     inc     %rdi
     cmp     $',', %eax
     jne     71f
-    call    jws
+    call    lantern_jws
     jmp     1b
 71: cmp     $']', %eax
     jne     90f
-80: call    jws                             # nothing after the array
+80: call    lantern_jws                             # nothing after the array
     cmp     %rbx, %rdi
     jne     90f
     lea     24(%r12), %rax
@@ -496,7 +496,7 @@ END_FUNCTION lantern_eth1_deposit_logs
  * eax = 1 when the 576 bytes at rdi are e1_abi but in the values (pubkey 192, withdrawal
  * credentials 288, amount 352, signature 416, index 544), else 0. Uses rcx, rdx, r8.
  */
-LOCAL_FUNCTION e1_abi_check
+LOCAL_FUNCTION lantern_e1_abi_check
     UNWIND_END_PROLOGUE
     lea     e1_abi(%rip), %r8
     xor     %ecx, %ecx
@@ -531,10 +531,10 @@ LOCAL_FUNCTION e1_abi_check
     ret
 9:  xor     %eax, %eax
     ret
-END_FUNCTION e1_abi_check
+END_FUNCTION lantern_e1_abi_check
 
 /* SHA-256 of the 32 bytes at rdi and the 32 bytes at rsi, to rdx. Locals: out, then a ByteList of 64 bytes. */
-LOCAL_FUNCTION e1_hash2
+LOCAL_FUNCTION lantern_e1_hash2
     FRAME 96
     mov     %rdx, (%rsp)
     movq    $88, 8(%rsp)
@@ -548,7 +548,7 @@ LOCAL_FUNCTION e1_hash2
     mov     (%rsp), %rsi
     CALL_GLOBAL crypto_sha256
     UNFRAME 96
-END_FUNCTION e1_hash2
+END_FUNCTION lantern_e1_hash2
 
 /*
  * (data, out): hash_tree_root of a DepositData. r12 data, r13 out. Locals: L the pubkey's last
@@ -566,26 +566,26 @@ FUNCTION lantern_deposit_leaf
     mov     %r12, %rdi
     lea     L(%rsp), %rsi
     lea     (L + 32)(%rsp), %rdx
-    call    e1_hash2
+    call    lantern_e1_hash2
     lea     (L + 32)(%rsp), %rdi            # with withdrawal_credentials
     lea     48(%r12), %rsi
     lea     (L + 32)(%rsp), %rdx
-    call    e1_hash2
+    call    lantern_e1_hash2
     lea     88(%r12), %rdi                  # signature: its four chunks, the last zero
     lea     120(%r12), %rsi
     lea     (L + 64)(%rsp), %rdx
-    call    e1_hash2
+    call    lantern_e1_hash2
     pxor    %xmm0, %xmm0
     movdqu  %xmm0, (L + 128)(%rsp)
     movdqu  %xmm0, (L + 144)(%rsp)
     lea     152(%r12), %rdi
     lea     (L + 128)(%rsp), %rsi
     lea     (L + 96)(%rsp), %rdx
-    call    e1_hash2
+    call    lantern_e1_hash2
     lea     (L + 64)(%rsp), %rdi
     lea     (L + 96)(%rsp), %rsi
     lea     (L + 64)(%rsp), %rdx
-    call    e1_hash2
+    call    lantern_e1_hash2
     pxor    %xmm0, %xmm0                    # amount, then the signature
     movdqu  %xmm0, (L + 96)(%rsp)
     movdqu  %xmm0, (L + 112)(%rsp)
@@ -594,11 +594,11 @@ FUNCTION lantern_deposit_leaf
     lea     (L + 96)(%rsp), %rdi
     lea     (L + 64)(%rsp), %rsi
     lea     (L + 64)(%rsp), %rdx
-    call    e1_hash2
+    call    lantern_e1_hash2
     lea     (L + 32)(%rsp), %rdi            # the two halves
     lea     (L + 64)(%rsp), %rsi
     mov     %r13, %rdx
-    call    e1_hash2
+    call    lantern_e1_hash2
     xor     %eax, %eax
     LEAVE 160
 END_FUNCTION lantern_deposit_leaf
@@ -627,7 +627,7 @@ FUNCTION lantern_deposit_tree_push
     jmp     7f
 2:  lea     L(%rsp), %rsi
     lea     L(%rsp), %rdx
-    call    e1_hash2
+    call    lantern_e1_hash2
     shr     %r13
     incq    S7(%rsp)
     cmpq    $DEPOSIT_CONTRACT_TREE_DEPTH, S7(%rsp)
@@ -663,11 +663,11 @@ FUNCTION lantern_deposit_tree_root
     lea     L(%rsp), %rdi                   # an even size: the node, then the zero hash
     lea     (L + 32)(%rsp), %rsi
 2:  lea     L(%rsp), %rdx
-    call    e1_hash2
+    call    lantern_e1_hash2
     lea     (L + 32)(%rsp), %rdi            # the zero hash of the next height
     mov     %rdi, %rsi
     mov     %rdi, %rdx
-    call    e1_hash2
+    call    lantern_e1_hash2
     shrq    S7(%rsp)
     incq    S8(%rsp)
     cmpq    $DEPOSIT_CONTRACT_TREE_DEPTH, S8(%rsp)
@@ -680,7 +680,7 @@ FUNCTION lantern_deposit_tree_root
     lea     L(%rsp), %rdi
     lea     (L + 64)(%rsp), %rsi
     mov     %r13, %rdx
-    call    e1_hash2
+    call    lantern_e1_hash2
     xor     %eax, %eax
     LEAVE 96
 END_FUNCTION lantern_deposit_tree_root
@@ -744,7 +744,7 @@ FUNCTION lantern_deposit_proof
     shl     $5, %rcx
     lea     (%r12,%rcx), %rsi
 4:  lea     (L + 32)(%rsp), %rdx
-    call    e1_hash2
+    call    lantern_e1_hash2
     mov     (L + 72)(%rsp), %rdi
     shl     $5, %rdi
     add     S10(%rsp), %rdi
@@ -758,7 +758,7 @@ FUNCTION lantern_deposit_proof
     lea     L(%rsp), %rdi                   # the zero hash of the next height
     mov     %rdi, %rsi
     mov     %rdi, %rdx
-    call    e1_hash2
+    call    lantern_e1_hash2
     incq    S9(%rsp)
     cmpq    $DEPOSIT_CONTRACT_TREE_DEPTH, S9(%rsp)
     jb      1b

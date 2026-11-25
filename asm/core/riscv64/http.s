@@ -38,7 +38,7 @@ http_t_keep_alive:
 .set http_t_keep_alive_len, 10
 
 /* L0: a0 = the index of the first byte a3 in [a1, a2) of a0's bytes, else a2. A leaf. Uses t0, t1. */
-LOCAL_FUNCTION http_find
+LOCAL_FUNCTION lantern_http_find
     UNWIND_END_PROLOGUE
 1:  bgeu    a1, a2, 2f
     add     t0, a0, a1
@@ -48,10 +48,10 @@ LOCAL_FUNCTION http_find
     j       1b
 2:  mv      a0, a1
     ret
-END_FUNCTION http_find
+END_FUNCTION lantern_http_find
 
 /* L0: a0 = the index of the first CRLF that starts in [a1, a2 - 1) of a0's bytes, else a2. A leaf. Uses t0-t3. */
-LOCAL_FUNCTION http_crlf
+LOCAL_FUNCTION lantern_http_crlf
     UNWIND_END_PROLOGUE
     addi    t2, a2, -1
     li      t3, 13
@@ -68,10 +68,10 @@ LOCAL_FUNCTION http_crlf
     ret
 4:  mv      a0, a1
     ret
-END_FUNCTION http_crlf
+END_FUNCTION lantern_http_crlf
 
 /* L0: a0 = 1 when [a1, a2) of a0's bytes is a token (RFC 9110 section 5.6.2), else 0. A leaf. Uses t0-t3. */
-LOCAL_FUNCTION http_token
+LOCAL_FUNCTION lantern_http_token
     UNWIND_END_PROLOGUE
     bgeu    a1, a2, 8f
     lla     t3, http_tchar
@@ -91,10 +91,10 @@ LOCAL_FUNCTION http_token
     ret
 9:  li      a0, 1
     ret
-END_FUNCTION http_token
+END_FUNCTION lantern_http_token
 
 /* L0: a0 = 1 when the a1 bytes at a0 are the a3 lower case bytes at a2, without regard to ASCII case, else 0. A leaf. Uses t0-t2. */
-LOCAL_FUNCTION http_same
+LOCAL_FUNCTION lantern_http_same
     UNWIND_END_PROLOGUE
     bne     a1, a3, 8f
 1:  beqz    a1, 9f
@@ -113,10 +113,10 @@ LOCAL_FUNCTION http_same
     ret
 9:  li      a0, 1
     ret
-END_FUNCTION http_same
+END_FUNCTION lantern_http_same
 
 /* L0: [a1, a2) of a0's bytes without leading and trailing spaces and tabs: a0 = its start, a1 = its end. A leaf. Uses t0-t2. */
-LOCAL_FUNCTION http_trim
+LOCAL_FUNCTION lantern_http_trim
     UNWIND_END_PROLOGUE
     li      t2, 9
 1:  bgeu    a1, a2, 3f
@@ -138,13 +138,13 @@ LOCAL_FUNCTION http_trim
 5:  mv      a0, a1
     mv      a1, a2
     ret
-END_FUNCTION http_trim
+END_FUNCTION lantern_http_trim
 
 /*
  * L0: the a3 bytes at a2 become a part of HttpRequest a0 at offset a1, with its PartRef at a0 + a4:
  * a0 = a1 + a3 rounded up to a multiple of 8. A leaf. Uses t0, t1.
  */
-LOCAL_FUNCTION http_part
+LOCAL_FUNCTION lantern_http_part
     UNWIND_END_PROLOGUE
     add     t0, a0, a4
     sd      a1, 0(t0)
@@ -161,7 +161,7 @@ LOCAL_FUNCTION http_part
 2:  addi    a0, a1, 7
     andi    a0, a0, -8
     ret
-END_FUNCTION http_part
+END_FUNCTION lantern_http_part
 
 /*
  * L0: the chunked body that starts at index a3 of the a2 bytes at a1, with head_max a4 and body_max
@@ -170,7 +170,7 @@ END_FUNCTION http_part
  * status. a0 = a destination: a body checked before, its bytes copied there. A leaf. Uses a6, a7, t0-t5.
  * a0 the destination, a7 the body's bytes, a6 a CRLF, t2 a size, t5 trailer bytes.
  */
-LOCAL_FUNCTION http_chunks
+LOCAL_FUNCTION lantern_http_chunks
     UNWIND_END_PROLOGUE
     li      a7, 0
 1:  mv      a6, a3                          # a size line: find its CRLF
@@ -298,7 +298,7 @@ LOCAL_FUNCTION http_chunks
     ret
 90: li      a0, LANTERN_HTTP_MORE
     ret
-END_FUNCTION http_chunks
+END_FUNCTION lantern_http_chunks
 
 /*
  * L0: the values of the field lines named by the a4 lower case bytes at a3, between index a1 and the
@@ -307,7 +307,7 @@ END_FUNCTION http_chunks
  * s1 bytes, s2 the line, s3 the head's end, s4 name, s5 its length, s6 out, s7 the offset, s8 the
  * PartRef, s9 the line's end, s10 the part's end; L the colon.
  */
-LOCAL_FUNCTION http_joined
+LOCAL_FUNCTION lantern_http_joined
     ENTER 16
     mv      s1, a0
     mv      s2, a1
@@ -323,25 +323,25 @@ LOCAL_FUNCTION http_joined
     mv      a0, s1
     mv      a1, s2
     addi    a2, s3, 2
-    call    http_crlf
+    call    lantern_http_crlf
     mv      s9, a0
     mv      a0, s1
     mv      a1, s2
     mv      a2, s9
     li      a3, 58
-    call    http_find
+    call    lantern_http_find
     sd      a0, L(sp)
     sub     a1, a0, s2
     add     a0, s1, s2
     mv      a2, s4
     mv      a3, s5
-    call    http_same
+    call    lantern_http_same
     beqz    a0, 5f
     mv      a0, s1
     ld      a1, L(sp)
     addi    a1, a1, 1
     mv      a2, s9
-    call    http_trim
+    call    lantern_http_trim
     ld      t0, 8(s8)                       # ", " before all but the first line
     beqz    t0, 2f
     add     t1, s6, s10
@@ -368,7 +368,7 @@ LOCAL_FUNCTION http_joined
     addi    a0, s10, 7
     andi    a0, a0, -8
     LEAVE 16
-END_FUNCTION http_joined
+END_FUNCTION lantern_http_joined
 
 /*
  * The name of the field line at s8, s10 bytes before its colon, is the text at label: branch to dest.
@@ -379,7 +379,7 @@ END_FUNCTION http_joined
     mv      a1, s10
     lla     a2, \label
     li      a3, \label\()_len
-    call    http_same
+    call    lantern_http_same
     bnez    a0, \dest
 .endm
 
@@ -451,25 +451,25 @@ FUNCTION lantern_http_request
     mv      a0, s1                          # the request line: method SP target SP version
     mv      a1, s5
     addi    a2, s6, 2
-    call    http_crlf
+    call    lantern_http_crlf
     mv      s7, a0
     mv      a0, s1
     mv      a1, s5
     mv      a2, s7
     li      a3, ' '
-    call    http_find
+    call    lantern_http_find
     beq     a0, s7, 400f
     mv      s8, a0                          # the first space
     mv      a0, s1
     mv      a1, s5
     mv      a2, s8
-    call    http_token
+    call    lantern_http_token
     beqz    a0, 400f
     mv      a0, s1
     addi    a1, s8, 1
     mv      a2, s7
     li      a3, ' '
-    call    http_find
+    call    lantern_http_find
     beq     a0, s7, 400f
     mv      s9, a0                          # the second space
     addi    t0, s8, 1                       # the target: / then visible bytes
@@ -560,7 +560,7 @@ FUNCTION lantern_http_request
     mv      a0, s1
     mv      a1, s8
     addi    a2, s6, 2
-    call    http_crlf
+    call    lantern_http_crlf
     mv      s9, a0
     add     t0, s1, s8                      # no folded line
     lbu     t0, 0(t0)
@@ -572,20 +572,20 @@ FUNCTION lantern_http_request
     mv      a1, s8
     mv      a2, s9
     li      a3, ':'
-    call    http_find
+    call    lantern_http_find
     beq     a0, s9, 400f
     sub     s10, a0, s8                     # the name's length
     beqz    s10, 400f
     mv      a0, s1
     mv      a1, s8
     add     a2, s8, s10
-    call    http_token
+    call    lantern_http_token
     beqz    a0, 400f
     mv      a0, s1                          # the value, without spaces and tabs around it
     add     a1, s8, s10
     addi    a1, a1, 1
     mv      a2, s9
-    call    http_trim
+    call    lantern_http_trim
     sd      a0, (L + 168)(sp)
     sd      a1, (L + 176)(sp)
     mv      t0, a0
@@ -619,12 +619,12 @@ FUNCTION lantern_http_request
     mv      a1, s8
     ld      a2, (L + 176)(sp)
     li      a3, ','
-    call    http_find
+    call    lantern_http_find
     mv      s10, a0
     mv      a0, s1
     mv      a1, s8
     mv      a2, s10
-    call    http_trim
+    call    lantern_http_trim
     bgeu    a0, a1, 218f                    # empty
     li      t0, 0
     li      t3, 10
@@ -665,7 +665,7 @@ FUNCTION lantern_http_request
     sub     a1, t1, t0
     lla     a2, http_t_chunked
     li      a3, http_t_chunked_len
-    call    http_same
+    call    lantern_http_same
     sd      a0, (L + 48)(sp)
     j       29f
 23: ld      s8, (L + 168)(sp)               # Connection: its tokens
@@ -673,19 +673,19 @@ FUNCTION lantern_http_request
     mv      a1, s8
     ld      a2, (L + 176)(sp)
     li      a3, ','
-    call    http_find
+    call    lantern_http_find
     mv      s10, a0
     mv      a0, s1
     mv      a1, s8
     mv      a2, s10
-    call    http_trim
+    call    lantern_http_trim
     sub     a1, a1, a0
     sd      a0, (L + 200)(sp)
     sd      a1, (L + 208)(sp)
     add     a0, s1, a0
     lla     a2, http_t_close
     li      a3, http_t_close_len
-    call    http_same
+    call    lantern_http_same
     beqz    a0, 232f
     li      t0, 1
     sd      t0, (L + 80)(sp)
@@ -694,7 +694,7 @@ FUNCTION lantern_http_request
     add     a0, s1, a0
     lla     a2, http_t_keep_alive
     li      a3, http_t_keep_alive_len
-    call    http_same
+    call    lantern_http_same
     beqz    a0, 233f
     li      t0, 1
     sd      t0, (L + 88)(sp)
@@ -772,7 +772,7 @@ FUNCTION lantern_http_request
     mv      a3, s8
     ld      a4, HttpLimits_head_max(s3)
     ld      a5, HttpLimits_body_max(s3)
-    call    http_chunks
+    call    lantern_http_chunks
     li      t0, LANTERN_HTTP_MORE
     beq     a0, t0, 98f
     li      t0, LANTERN_INVALID_HTTP
@@ -786,7 +786,7 @@ FUNCTION lantern_http_request
     ld      a1, (L + 16)(sp)
     ld      a2, (L + 24)(sp)
     li      a3, '?'
-    call    http_find
+    call    lantern_http_find
     sd      a0, (L + 184)(sp)               # the path's end
     li      t5, HTTP_REQUEST_FIXED
     ld      t1, (L + 16)(sp)
@@ -823,7 +823,7 @@ FUNCTION lantern_http_request
     ld      a3, (L + 184)(sp)
     sub     a3, a3, t0
     li      a4, HttpRequest_path
-    call    http_part
+    call    lantern_http_part
     mv      a1, a0                          # query
     mv      a0, s4
     ld      t0, (L + 184)(sp)
@@ -834,7 +834,7 @@ FUNCTION lantern_http_request
     sub     a3, t1, t0
 42: add     a2, s1, t0
     li      a4, HttpRequest_query
-    call    http_part
+    call    lantern_http_part
     mv      a6, a0                          # the three fields
     mv      a0, s1
     addi    a1, s7, 2
@@ -843,7 +843,7 @@ FUNCTION lantern_http_request
     li      a4, http_n_accept_len
     mv      a5, s4
     li      a7, HttpRequest_accept
-    call    http_joined
+    call    lantern_http_joined
     mv      a6, a0
     mv      a0, s1
     addi    a1, s7, 2
@@ -852,7 +852,7 @@ FUNCTION lantern_http_request
     li      a4, http_n_type_len
     mv      a5, s4
     li      a7, HttpRequest_content_type
-    call    http_joined
+    call    lantern_http_joined
     mv      a6, a0
     mv      a0, s1
     addi    a1, s7, 2
@@ -861,7 +861,7 @@ FUNCTION lantern_http_request
     li      a4, http_n_version_len
     mv      a5, s4
     li      a7, HttpRequest_consensus_version
-    call    http_joined
+    call    lantern_http_joined
     mv      a1, a0                          # body
     ld      t0, (L + 40)(sp)
     bnez    t0, 43f
@@ -870,7 +870,7 @@ FUNCTION lantern_http_request
     add     a2, s1, t0
     ld      a3, (L + 152)(sp)
     li      a4, HttpRequest_body
-    call    http_part
+    call    lantern_http_part
     j       44f
 43: ld      t1, (L + 152)(sp)               # chunked: its bytes, unchunked
     sd      a1, HttpRequest_body(s4)
@@ -881,7 +881,7 @@ FUNCTION lantern_http_request
     ld      a3, (L + 144)(sp)
     ld      a4, HttpLimits_head_max(s3)
     ld      a5, HttpLimits_body_max(s3)
-    call    http_chunks
+    call    lantern_http_chunks
 44: li      a0, LANTERN_OK
     LEAVE 224
 400: li     t0, 400

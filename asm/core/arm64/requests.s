@@ -5,7 +5,7 @@
 
 .if FORK >= FORK_ELECTRA
 /* Append the PendingDeposit at x1 to state x0; x0 = LANTERN_BUFFER_TOO_SMALL when it has no room. A non-leaf. */
-LOCAL_FUNCTION append_pending_deposit
+LOCAL_FUNCTION lantern_append_pending_deposit
     FRAME 16
     mov     x9, x0
     LDQ     x10, x9, BeaconState_pending_deposits
@@ -26,7 +26,7 @@ LOCAL_FUNCTION append_pending_deposit
     UNFRAME 16
 9:  mov     x0, #LANTERN_BUFFER_TOO_SMALL
     UNFRAME 16
-END_FUNCTION append_pending_deposit
+END_FUNCTION lantern_append_pending_deposit
 .endif
 
 /* ---------------------------------------------------------------- Voluntary exits and credential changes */
@@ -111,7 +111,7 @@ SPEC_FUNCTION process_voluntary_exit
     add     x1, x20, #SignedVoluntaryExit_signature
     add     x2, sp, #(L + 56)
     mov     x3, x22
-    bl      verify_root_signature           /* bls.Verify(validator.pubkey, signing_root, signature) */
+    bl      lantern_verify_root_signature           /* bls.Verify(validator.pubkey, signing_root, signature) */
     cbnz    x0, 7f
     mov     x0, #LANTERN_INVALID_VOLUNTARY_EXIT
     cbz     x1, 6f
@@ -137,7 +137,7 @@ SPEC_END process_voluntary_exit
  * x2 a 56-byte buffer whose last 32 bytes hold the root (its first 24 become a
  * ByteList header), x3 scratch. Returns x0 status, x1 valid.
  */
-LOCAL_FUNCTION verify_root_signature
+LOCAL_FUNCTION lantern_verify_root_signature
     FRAME 16
     mov     x11, #56
     str     x11, [x2]
@@ -152,7 +152,7 @@ LOCAL_FUNCTION verify_root_signature
     CALL_GLOBAL crypto_bls_verify           /* bls.Verify(public_key, signing_root, signature) */
     ldr     x1, [sp, #16]
     UNFRAME 16
-END_FUNCTION verify_root_signature
+END_FUNCTION lantern_verify_root_signature
 
 .if FORK >= FORK_CAPELLA
 /*
@@ -180,7 +180,7 @@ SPEC_FUNCTION process_bls_to_execution_change
     add     x0, x20, #(SignedBLSToExecutionChange_message + BLSToExecutionChange_from_bls_pubkey)
     mov     x1, #48
     add     x2, sp, #L
-    bl      sha256_short                    /* assert withdrawal_credentials[1:] == sha256(from_bls_pubkey)[1:] */
+    bl      lantern_sha256_short                    /* assert withdrawal_credentials[1:] == sha256(from_bls_pubkey)[1:] */
     mov     w9, #BLS_WITHDRAWAL_PREFIX      /* the digest with its first byte set to the prefix just checked */
     strb    w9, [sp, #L]
     add     x14, x24, #Validator_withdrawal_credentials
@@ -207,7 +207,7 @@ SPEC_FUNCTION process_bls_to_execution_change
     add     x1, x20, #SignedBLSToExecutionChange_signature
     add     x2, sp, #(L + 56)
     mov     x3, x22
-    bl      verify_root_signature
+    bl      lantern_verify_root_signature
     cbnz    x0, 7f
     mov     x0, #LANTERN_INVALID_BLS_CHANGE
     cbz     x1, 6f
@@ -250,7 +250,7 @@ SPEC_FUNCTION process_deposit_request
     str     x9, [sp, #(L + PendingDeposit_slot)]
     mov     x0, x19
     add     x1, sp, #L
-    bl      append_pending_deposit
+    bl      lantern_append_pending_deposit
     cbnz    x0, 7f
 .if FORK == FORK_ELECTRA
     LDQ     x9, x19, BeaconState_deposit_requests_start_index
@@ -316,7 +316,7 @@ SPEC_FUNCTION process_withdrawal_request
     b.ne    8f
     mov     x0, x19
     add     x1, x20, #WithdrawalRequest_validator_pubkey
-    bl      find_pubkey
+    bl      lantern_find_pubkey
     cmn     x0, #1
     b.eq    8f
     mov     x25, x0
@@ -445,7 +445,7 @@ SPEC_FUNCTION is_valid_switch_to_compounding_request
     b.ne    8f
     mov     x0, x19
     mov     x1, x14
-    bl      find_pubkey
+    bl      lantern_find_pubkey
     cmn     x0, #1
     b.eq    8f
     PART    x22, x9, x19, BeaconState_validators
@@ -515,7 +515,7 @@ SPEC_FUNCTION queue_excess_active_balance
     str     x9, [sp, #(L + PendingDeposit_slot)]
     mov     x0, x19
     add     x1, sp, #L
-    bl      append_pending_deposit
+    bl      lantern_append_pending_deposit
     LEAVE 192
 8:  mov     x0, #LANTERN_OK
     LEAVE 192
@@ -664,7 +664,7 @@ SPEC_FUNCTION process_consolidation_request
     cbz     x9, 1f
     mov     x0, x19                         /* switch_to_compounding_validator(state, source_index) */
     add     x1, x20, #ConsolidationRequest_source_pubkey
-    bl      find_pubkey
+    bl      lantern_find_pubkey
     str     x0, [sp, #(L + 32)]
     mov     x0, x19
     add     x1, sp, #(L + 32)
@@ -703,13 +703,13 @@ SPEC_FUNCTION process_consolidation_request
     b.ls    8f
     mov     x0, x19
     add     x1, x20, #ConsolidationRequest_source_pubkey
-    bl      find_pubkey
+    bl      lantern_find_pubkey
     cmn     x0, #1
     b.eq    8f
     mov     x26, x0
     mov     x0, x19
     add     x1, x20, #ConsolidationRequest_target_pubkey
-    bl      find_pubkey
+    bl      lantern_find_pubkey
     cmn     x0, #1
     b.eq    8f
     mov     x27, x0

@@ -1,6 +1,6 @@
 /*
  * lantern_api_route, x86-64: in the common object. Requirements: docs/reference/beacon-api.md.
- * Uses http_find, http_trim and http_same of http.s.
+ * Uses lantern_http_find, lantern_http_trim and lantern_http_same of http.s.
  */
 
     API_ROUTE_DATA
@@ -42,7 +42,7 @@ route_k_null:
 .endm
 
 # L0: rax = 1 when each % of the rsi bytes at rdi is followed by two hex digits, else 0. A leaf. Uses rcx, rdx, r8.
-LOCAL_FUNCTION route_pct_ok
+LOCAL_FUNCTION lantern_route_pct_ok
     UNWIND_END_PROLOGUE
     xor     %ecx, %ecx
 1:  cmp     %rsi, %rcx
@@ -64,11 +64,11 @@ LOCAL_FUNCTION route_pct_ok
     ret
 9:  mov     $1, %eax
     ret
-END_FUNCTION route_pct_ok
+END_FUNCTION lantern_route_pct_ok
 
 # L0: the rsi bytes at rdi, percent-decoded (each % is followed by two hex digits), to rdx: at most rcx
 # bytes written; rax = the decoded length, which may pass rcx. A leaf. Uses r8-r11.
-LOCAL_FUNCTION route_decode
+LOCAL_FUNCTION lantern_route_decode
     UNWIND_END_PROLOGUE
     xor     %r8d, %r8d
     xor     %r9d, %r9d
@@ -92,12 +92,12 @@ LOCAL_FUNCTION route_decode
     jmp     1b
 9:  mov     %r9, %rax
     ret
-END_FUNCTION route_decode
+END_FUNCTION lantern_route_decode
 
 # L0: one item of a list value: the bytes at rdi from index rsi to index rdx, percent-decoded, up to
 # the first decoded `,`, to rcx with at most r8 bytes written. rax = the index after the item and its
 # comma, rdx = the item's decoded length (it may pass r8), rcx = 1 when a comma ended it. A leaf. Uses r9-r11.
-LOCAL_FUNCTION route_next_item
+LOCAL_FUNCTION lantern_route_next_item
     UNWIND_END_PROLOGUE
     xor     %r9d, %r9d
 1:  cmp     %rdx, %rsi
@@ -126,10 +126,10 @@ LOCAL_FUNCTION route_next_item
 91: mov     %rsi, %rax
     mov     %r9, %rdx
     ret
-END_FUNCTION route_next_item
+END_FUNCTION lantern_route_next_item
 
 # L0: the rsi bytes at rdi as a decimal number below 2^64: rax = 0 and rdx = its value, else rax = 1. A leaf. Uses rcx, r8, r9.
-LOCAL_FUNCTION route_number
+LOCAL_FUNCTION lantern_route_number
     UNWIND_END_PROLOGUE
     test    %rsi, %rsi
     jz      8f
@@ -153,10 +153,10 @@ LOCAL_FUNCTION route_number
 9:  mov     %rax, %rdx
     xor     %eax, %eax
     ret
-END_FUNCTION route_number
+END_FUNCTION lantern_route_number
 
 # L0: the rsi bytes at rdi as 0x and the hex of rdx bytes: rax = 0 and the bytes at rcx, else rax = 1. A leaf. Uses r8, r9.
-LOCAL_FUNCTION route_hex
+LOCAL_FUNCTION lantern_route_hex
     UNWIND_END_PROLOGUE
     lea     2(%rdx,%rdx), %rax
     cmp     %rax, %rsi
@@ -183,10 +183,10 @@ LOCAL_FUNCTION route_hex
     ret
 9:  xor     %eax, %eax
     ret
-END_FUNCTION route_hex
+END_FUNCTION lantern_route_hex
 
 # L0: the word of api_words for parameter rdi that is the rdx bytes at rsi: rax = 1 and rdx = its value, else rax = 0. A leaf. Uses rcx, r8-r11.
-LOCAL_FUNCTION route_word
+LOCAL_FUNCTION lantern_route_word
     UNWIND_END_PROLOGUE
     lea     api_words(%rip), %r8
     lea     api_word_text(%rip), %r9
@@ -215,12 +215,12 @@ LOCAL_FUNCTION route_word
     jmp     1b
 8:  xor     %eax, %eax
     ret
-END_FUNCTION route_word
+END_FUNCTION lantern_route_word
 
 # L0: whether the rsi bytes at rdi, a path whose percent-encoding is good, match the template of rcx
 # bytes at rdx: rax = 1 or 0. Each parameter segment goes to the list at r8: its count, then for each
 # its API_PARAM_*, start and end in the path. rbx the path's index, rbp the template's, r12 the count.
-LOCAL_FUNCTION route_match
+LOCAL_FUNCTION lantern_route_match
     ENTER 0
     mov     $1, %ebx
     mov     $1, %ebp
@@ -281,12 +281,12 @@ LOCAL_FUNCTION route_match
     LEAVE 0
 7:  xor     %eax, %eax
     LEAVE 0
-END_FUNCTION route_match
+END_FUNCTION lantern_route_match
 
 # L0: the rcx decoded bytes at rdx as a value of parameter rsi, into ApiRoute rdi; an item of a list
 # goes to the 64 bytes at r8. rax = 0, or 1 when the value breaks its type.
 # rbx out, rbp the parameter, r12 bytes, r13 length, r14 the item's place, r15 the field.
-LOCAL_FUNCTION route_value
+LOCAL_FUNCTION lantern_route_value
     ENTER 0
     mov     %rdi, %rbx
     mov     %rsi, %rbp
@@ -334,7 +334,7 @@ LOCAL_FUNCTION route_value
     jmp     98f
 10: mov     %r12, %rdi                      # a number, to its field
     mov     %r13, %rsi
-    call    route_number
+    call    lantern_route_number
     test    %eax, %eax
     jnz     98f
     mov     %rdx, (%rbx,%r15)
@@ -342,14 +342,14 @@ LOCAL_FUNCTION route_value
 11: mov     %rbp, %rdi                      # state_id, block_id: a word, a slot or a root
     mov     %r12, %rsi
     mov     %r13, %rdx
-    call    route_word
+    call    lantern_route_word
     test    %eax, %eax
     jz      12f
     mov     %rdx, ApiRoute_id_kind(%rbx)
     jmp     90f
 12: mov     %r12, %rdi
     mov     %r13, %rsi
-    call    route_number
+    call    lantern_route_number
     test    %eax, %eax
     jnz     13f
     movq    $API_ID_SLOT, ApiRoute_id_kind(%rbx)
@@ -359,7 +359,7 @@ LOCAL_FUNCTION route_value
     mov     %r13, %rsi
     mov     $32, %edx
     lea     ApiRoute_id_root(%rbx), %rcx
-    call    route_hex
+    call    lantern_route_hex
     test    %eax, %eax
     jnz     98f
     movq    $API_ID_ROOT, ApiRoute_id_kind(%rbx)
@@ -376,7 +376,7 @@ LOCAL_FUNCTION route_value
     mov     %rax, 56(%r14)
     mov     %r12, %rdi
     mov     %r13, %rsi
-    call    route_number
+    call    lantern_route_number
     test    %eax, %eax
     jnz     151f
     movq    $API_VALIDATOR_INDEX, (%r14)
@@ -386,7 +386,7 @@ LOCAL_FUNCTION route_value
     mov     %r13, %rsi
     mov     $48, %edx
     lea     ValidatorRef_pubkey(%r14), %rcx
-    call    route_hex
+    call    lantern_route_hex
     test    %eax, %eax
     jnz     98f
     movq    $API_VALIDATOR_PUBKEY, (%r14)
@@ -408,7 +408,7 @@ LOCAL_FUNCTION route_value
     jmp     161b
 17: mov     %r12, %rdi                      # syncing_status: 100 to 599
     mov     %r13, %rsi
-    call    route_number
+    call    lantern_route_number
     test    %eax, %eax
     jnz     98f
     cmp     $100, %rdx
@@ -425,7 +425,7 @@ LOCAL_FUNCTION route_value
 26: mov     %r12, %rdi
     mov     %r13, %rsi
     lea     (%rbx,%r15), %rcx
-    call    route_hex
+    call    lantern_route_hex
     test    %eax, %eax
     jnz     98f
     jmp     90f
@@ -435,7 +435,7 @@ LOCAL_FUNCTION route_value
 22: mov     %rbp, %rdi                      # broadcast_validation: a word
     mov     %r12, %rsi
     mov     %r13, %rdx
-    call    route_word
+    call    lantern_route_word
     test    %eax, %eax
     jz      98f
     mov     %rdx, (%rbx,%r15)
@@ -443,14 +443,14 @@ LOCAL_FUNCTION route_value
 23: mov     %rbp, %rdi                      # a set: the word's bits
     mov     %r12, %rsi
     mov     %r13, %rdx
-    call    route_word
+    call    lantern_route_word
     test    %eax, %eax
     jz      98f
     or      %rdx, (%rbx,%r15)
     jmp     90f
 24: mov     %r12, %rdi                      # indices: a number
     mov     %r13, %rsi
-    call    route_number
+    call    lantern_route_number
     test    %eax, %eax
     jnz     98f
     mov     %rdx, (%r14)
@@ -459,17 +459,17 @@ LOCAL_FUNCTION route_value
     mov     %r13, %rsi
     mov     $32, %edx
     mov     %r14, %rcx
-    call    route_hex
+    call    lantern_route_hex
     test    %eax, %eax
     jnz     98f
 90: xor     %eax, %eax
     LEAVE 0
 98: mov     $1, %eax
     LEAVE 0
-END_FUNCTION route_value
+END_FUNCTION lantern_route_value
 
 # L0: r12 past the JSON white space (space, tab, LF, CR) before r13. A leaf. Uses rax.
-LOCAL_FUNCTION route_ws
+LOCAL_FUNCTION lantern_route_ws
     UNWIND_END_PROLOGUE
 1:  cmp     %r13, %r12
     jae     9f
@@ -485,10 +485,10 @@ LOCAL_FUNCTION route_ws
 2:  inc     %r12
     jmp     1b
 9:  ret
-END_FUNCTION route_ws
+END_FUNCTION lantern_route_ws
 
 # L0: eax = 1 when the rsi bytes at rdi start the bytes at r12 (before r13), r12 then past them; else 0. A leaf. Uses rax, rcx.
-LOCAL_FUNCTION route_lit
+LOCAL_FUNCTION lantern_route_lit
     UNWIND_END_PROLOGUE
     mov     %r13, %rax
     sub     %r12, %rax
@@ -507,13 +507,13 @@ LOCAL_FUNCTION route_lit
     ret
 8:  xor     %eax, %eax
     ret
-END_FUNCTION route_lit
+END_FUNCTION lantern_route_lit
 
 # L0: the JSON string at r12 (before r13), RFC 8259 section 7: its value, each escape decoded (a \u of
 # 0x80 or more as the byte 0x80), into the 200 bytes at r15 + L + 192; r12 then past it. eax = 0, or
 # 1 when it breaks the rules; rcx = the value's length, 201 when it is longer than 200. A leaf. Uses
 # rax, rcx, rdx, rsi, r8.
-LOCAL_FUNCTION route_string
+LOCAL_FUNCTION lantern_route_string
     UNWIND_END_PROLOGUE
     cmp     %r13, %r12
     jae     8f
@@ -591,10 +591,10 @@ LOCAL_FUNCTION route_string
     ret
 8:  mov     $1, %eax
     ret
-END_FUNCTION route_string
+END_FUNCTION lantern_route_string
 
 # L0: eax = API_PARAM_ID when the rcx bytes at r15 + L + 192 are ids, API_PARAM_STATUS when they are statuses, else 0. A leaf. Uses rax, rdx, rsi, rdi, r8.
-LOCAL_FUNCTION route_key
+LOCAL_FUNCTION lantern_route_key
     UNWIND_END_PROLOGUE
     lea     route_k_ids(%rip), %rsi
     mov     $3, %edx
@@ -617,19 +617,19 @@ LOCAL_FUNCTION route_key
     ret
 8:  xor     %eax, %eax
     ret
-END_FUNCTION route_key
+END_FUNCTION lantern_route_key
 
 # L1: null, or an array of strings, at r12 of a body that ends at r13: each string an item of the
 # parameter rdi (API_PARAM_ID: into the list of out rbp; API_PARAM_STATUS: its bits), its bit of
 # present set; r12 then past the value. rax = 0, or the fault + 1. r15 the rsp of
 # lantern_api_route: S8 present, S9 the list's items, L+56 1 when the list has no room, L+128 an
 # item. Locals: the parameter, an item's start.
-LOCAL_FUNCTION route_ids_array
+LOCAL_FUNCTION lantern_route_ids_array
     FRAME 16
     mov     %rdi, (%rsp)
     lea     route_k_null(%rip), %rdi
     mov     $4, %esi
-    call    route_lit
+    call    lantern_route_lit
     test    %eax, %eax
     jnz     7f
     cmp     %r13, %r12                      # [
@@ -638,15 +638,15 @@ LOCAL_FUNCTION route_ids_array
     inc     %r12
     cmp     $0x5b, %eax
     jne     8f
-    call    route_ws
+    call    lantern_route_ws
     cmp     %r13, %r12
     jae     8f
     cmpb    $0x5d, (%r12)
     jne     2f
     inc     %r12
     jmp     7f
-2:  call    route_ws                        # a string: its value is the item
-    call    route_string
+2:  call    lantern_route_ws                        # a string: its value is the item
+    call    lantern_route_string
     test    %eax, %eax
     jnz     8f
     cmp     $200, %rcx
@@ -655,7 +655,7 @@ LOCAL_FUNCTION route_ids_array
     mov     (%rsp), %rsi
     lea     (L + 192)(%r15), %rdx
     lea     (L + 128)(%r15), %r8
-    call    route_value
+    call    lantern_route_value
     test    %eax, %eax
     jnz     9f
     cmpq    $API_PARAM_STATUS, (%rsp)
@@ -683,7 +683,7 @@ LOCAL_FUNCTION route_ids_array
     mov     S8(%r15), %rax
     bts     %rcx, %rax
     mov     %rax, S8(%r15)
-    call    route_ws                        # then , or ]
+    call    lantern_route_ws                        # then , or ]
     cmp     %r13, %r12
     jae     8f
     movzbl  (%r12), %eax
@@ -699,14 +699,14 @@ LOCAL_FUNCTION route_ids_array
 9:  mov     (%rsp), %rax
     inc     %rax
     UNFRAME 16
-END_FUNCTION route_ids_array
+END_FUNCTION lantern_route_ids_array
 
 # L0: the weight, 0 to 1000, that the Accept value of rsi bytes at rdi gives the media type of rcx
 # lower case bytes at rdx (lantern_api_route's rules). rbx bytes, rbp length, r12 media, r13 its
 # length, r14 the best kind of range (-1 none, 0 any type, 1 any application type, 2 the type), r15
 # its weight; S7 an item's start, S8 its end, S9 a parameter's start, S10 a range's kind; L the
 # item's weight, L+8 the range's end or the next parameter's end.
-LOCAL_FUNCTION route_weight
+LOCAL_FUNCTION lantern_route_weight
     ENTER 16
     mov     %rdi, %rbx
     mov     %rsi, %rbp
@@ -721,18 +721,18 @@ LOCAL_FUNCTION route_weight
     mov     %rbx, %rdi
     mov     %rbp, %rdx
     mov     $0x2c, %ecx
-    call    http_find
+    call    lantern_http_find
     mov     %rax, S8(%rsp)
     mov     %rbx, %rdi                      # the range: up to the first ;
     mov     S7(%rsp), %rsi
     mov     %rax, %rdx
     mov     $0x3b, %ecx
-    call    http_find
+    call    lantern_http_find
     mov     %rax, S9(%rsp)
     mov     %rbx, %rdi
     mov     S7(%rsp), %rsi
     mov     %rax, %rdx
-    call    http_trim
+    call    lantern_http_trim
     mov     %rax, L(%rsp)
     mov     %rdx, (L + 8)(%rsp)
     lea     (%rbx,%rax), %rdi
@@ -740,7 +740,7 @@ LOCAL_FUNCTION route_weight
     sub     %rax, %rsi
     mov     %r12, %rdx
     mov     %r13, %rcx
-    call    http_same
+    call    lantern_http_same
     movq    $2, S10(%rsp)
     test    %eax, %eax
     jnz     3f
@@ -750,7 +750,7 @@ LOCAL_FUNCTION route_weight
     sub     %rax, %rsi
     lea     route_t_any_application(%rip), %rdx
     mov     $route_t_any_application_len, %ecx
-    call    http_same
+    call    lantern_http_same
     movq    $1, S10(%rsp)
     test    %eax, %eax
     jnz     3f
@@ -760,7 +760,7 @@ LOCAL_FUNCTION route_weight
     sub     %rax, %rsi
     lea     route_t_any(%rip), %rdx
     mov     $route_t_any_len, %ecx
-    call    http_same
+    call    lantern_http_same
     movq    $0, S10(%rsp)
     test    %eax, %eax
     jz      8f                              # a range of another type: skipped
@@ -773,12 +773,12 @@ LOCAL_FUNCTION route_weight
     mov     %rbx, %rdi
     mov     S8(%rsp), %rdx
     mov     $0x3b, %ecx
-    call    http_find
+    call    lantern_http_find
     mov     %rax, (L + 8)(%rsp)
     mov     %rbx, %rdi
     mov     S9(%rsp), %rsi
     mov     %rax, %rdx
-    call    http_trim
+    call    lantern_http_trim
     mov     (L + 8)(%rsp), %rcx
     mov     %rcx, S9(%rsp)
     mov     %rdx, %r8                       # rax, rdx: the parameter
@@ -855,7 +855,7 @@ LOCAL_FUNCTION route_weight
     js      91f
     mov     %r15, %rax
 91: LEAVE 16
-END_FUNCTION route_weight
+END_FUNCTION lantern_route_weight
 
 # rbx the request, rbp out, r12 a path parameter's entry or a query item's start, r13 their count or
 # the item's end, r14 the operation's entry of api_routes, r15 the query; S7 its length, S8 present,
@@ -895,7 +895,7 @@ FUNCTION lantern_api_route
     mov     %rax, S7(%rsp)
     mov     %r12, %rdi                      # the path: its percent-encoding, then its template
     mov     %r13, %rsi
-    call    route_pct_ok
+    call    lantern_route_pct_ok
     test    %eax, %eax
     jz      400f
     lea     api_routes(%rip), %r14
@@ -906,7 +906,7 @@ FUNCTION lantern_api_route
     mov     %r12, %rdi
     mov     %r13, %rsi
     lea     L(%rsp), %r8
-    call    route_match
+    call    lantern_route_match
     test    %eax, %eax
     jnz     4f
     add     $32, %r14
@@ -944,7 +944,7 @@ FUNCTION lantern_api_route
     mov     %rcx, ApiRoute_op(%rbp)
     mov     %r15, %rdi                      # the query's percent-encoding
     mov     S7(%rsp), %rsi
-    call    route_pct_ok
+    call    lantern_route_pct_ok
     test    %eax, %eax
     jz      400f
     lea     (L + 8)(%rsp), %r12             # the path parameters
@@ -961,7 +961,7 @@ FUNCTION lantern_api_route
     sub     %rax, %rsi
     lea     (L + 192)(%rsp), %rdx
     mov     $200, %ecx
-    call    route_decode
+    call    lantern_route_decode
     cmp     $200, %rax
     ja      401f
     mov     %rax, (L + 88)(%rsp)
@@ -970,7 +970,7 @@ FUNCTION lantern_api_route
     mov     S10(%rsp), %rsi
     lea     (L + 192)(%rsp), %rdx
     lea     (L + 128)(%rsp), %r8
-    call    route_value
+    call    lantern_route_value
     test    %eax, %eax
     jnz     401f
     mov     S10(%rsp), %rax
@@ -995,7 +995,7 @@ FUNCTION lantern_api_route
     mov     %r12, %rsi
     mov     S7(%rsp), %rdx
     mov     $0x26, %ecx
-    call    http_find
+    call    lantern_http_find
     mov     %rax, %r13
     cmp     %r12, %r13
     je      39f
@@ -1003,14 +1003,14 @@ FUNCTION lantern_api_route
     mov     %r12, %rsi
     mov     %r13, %rdx
     mov     $0x3d, %ecx
-    call    http_find
+    call    lantern_http_find
     mov     %rax, (L + 96)(%rsp)
     lea     (%r15,%r12), %rdi
     mov     %rax, %rsi
     sub     %r12, %rsi
     lea     (L + 192)(%rsp), %rdx
     mov     $32, %ecx
-    call    route_decode
+    call    lantern_route_decode
     cmp     $32, %rax
     ja      39f
     mov     16(%r14), %r8                   # a parameter the operation takes, by name
@@ -1061,7 +1061,7 @@ FUNCTION lantern_api_route
     sub     %rax, %rsi
     lea     (L + 192)(%rsp), %rdx
     mov     $200, %ecx
-    call    route_decode
+    call    lantern_route_decode
     cmp     $200, %rax
     ja      401f
     mov     %rax, %rcx
@@ -1069,7 +1069,7 @@ FUNCTION lantern_api_route
     mov     S10(%rsp), %rsi
     lea     (L + 192)(%rsp), %rdx
     lea     (L + 128)(%rsp), %r8
-    call    route_value
+    call    lantern_route_value
     test    %eax, %eax
     jnz     401f
     jmp     39f
@@ -1098,7 +1098,7 @@ FUNCTION lantern_api_route
     mov     %r13, %rdx
     lea     (L + 192)(%rsp), %rcx
     mov     $200, %r8d
-    call    route_next_item
+    call    lantern_route_next_item
     mov     %rax, (L + 104)(%rsp)
     mov     %rcx, (L + 112)(%rsp)
     test    %rdx, %rdx
@@ -1110,7 +1110,7 @@ FUNCTION lantern_api_route
     mov     S10(%rsp), %rsi
     lea     (L + 192)(%rsp), %rdx
     lea     (L + 128)(%rsp), %r8
-    call    route_value
+    call    lantern_route_value
     test    %eax, %eax
     jnz     401f
     mov     (L + 64)(%rsp), %rcx            # a list item: into out, while there is room
@@ -1153,7 +1153,7 @@ FUNCTION lantern_api_route
     mov     HttpRequest_consensus_version(%rbx), %rsi
     add     %rbx, %rsi
     mov     (HttpRequest_consensus_version + 8)(%rbx), %rdx
-    call    route_word
+    call    lantern_route_word
     test    %eax, %eax
     jz      401f
     mov     %rdx, ApiRoute_consensus_version(%rbp)
@@ -1173,11 +1173,11 @@ FUNCTION lantern_api_route
     mov     %r12, %rdi
     xor     %esi, %esi
     mov     $0x3b, %ecx
-    call    http_find
+    call    lantern_http_find
     mov     %rax, %rdx
     mov     %r12, %rdi
     xor     %esi, %esi
-    call    http_trim
+    call    lantern_http_trim
     add     %rax, %r12
     sub     %rax, %rdx
     mov     %rdx, %r13
@@ -1185,7 +1185,7 @@ FUNCTION lantern_api_route
     mov     %r13, %rsi
     lea     route_t_ssz(%rip), %rdx
     mov     $route_t_ssz_len, %ecx
-    call    http_same
+    call    lantern_http_same
     test    %eax, %eax
     jz      43f
     movq    $API_TYPE_SSZ, ApiRoute_body(%rbp)
@@ -1194,7 +1194,7 @@ FUNCTION lantern_api_route
     mov     %r13, %rsi
     lea     route_t_json(%rip), %rdx
     mov     $route_t_json_len, %ecx
-    call    http_same
+    call    lantern_http_same
     test    %eax, %eax
     jz      415f
 44: testl   $((API_FLAG_IDS_OBJECT | API_FLAG_IDS_ARRAY) << 24), 8(%r14)  # the JSON body of ids
@@ -1209,13 +1209,13 @@ FUNCTION lantern_api_route
     jnz     51f
     cmp     %r12, %r13                      # an array: no body, null, or the ids
     je      45f
-    call    route_ws
+    call    lantern_route_ws
     mov     $API_PARAM_ID, %edi
-    call    route_ids_array
+    call    lantern_route_ids_array
     test    %rax, %rax
     jnz     59f
     jmp     58f
-51: call    route_ws                        # an object: {"ids":…,"statuses":…}
+51: call    lantern_route_ws                        # an object: {"ids":…,"statuses":…}
     cmp     %r13, %r12
     jae     400f
     movzbl  (%r12), %eax
@@ -1223,18 +1223,18 @@ FUNCTION lantern_api_route
     cmp     $0x7b, %eax
     jne     400f
     movq    $0, (L + 96)(%rsp)              # the members seen: 1 ids, 2 statuses
-    call    route_ws
+    call    lantern_route_ws
     cmp     %r13, %r12
     jae     400f
     cmpb    $0x7d, (%r12)
     jne     52f
     inc     %r12
     jmp     58f
-52: call    route_ws                        # a member: its key, once
-    call    route_string
+52: call    lantern_route_ws                        # a member: its key, once
+    call    lantern_route_string
     test    %eax, %eax
     jnz     400f
-    call    route_key
+    call    lantern_route_key
     test    %eax, %eax
     jz      400f
     mov     %rax, S10(%rsp)
@@ -1245,19 +1245,19 @@ FUNCTION lantern_api_route
 53: test    %rcx, (L + 96)(%rsp)
     jnz     400f
     or      %rcx, (L + 96)(%rsp)
-    call    route_ws
+    call    lantern_route_ws
     cmp     %r13, %r12
     jae     400f
     movzbl  (%r12), %eax
     inc     %r12
     cmp     $0x3a, %eax
     jne     400f
-    call    route_ws
+    call    lantern_route_ws
     mov     S10(%rsp), %rdi
-    call    route_ids_array
+    call    lantern_route_ids_array
     test    %rax, %rax
     jnz     59f
-    call    route_ws                        # then , or }
+    call    lantern_route_ws                        # then , or }
     cmp     %r13, %r12
     jae     400f
     movzbl  (%r12), %eax
@@ -1266,7 +1266,7 @@ FUNCTION lantern_api_route
     je      52b
     cmp     $0x7d, %eax
     jne     400f
-58: call    route_ws                        # nothing after the value
+58: call    lantern_route_ws                        # nothing after the value
     cmp     %r13, %r12
     jne     400f
     jmp     45f
@@ -1285,13 +1285,13 @@ FUNCTION lantern_api_route
     mov     %r13, %rsi
     lea     route_t_json(%rip), %rdx
     mov     $route_t_json_len, %ecx
-    call    route_weight
+    call    lantern_route_weight
     mov     %rax, S10(%rsp)
     mov     %r12, %rdi
     mov     %r13, %rsi
     lea     route_t_ssz(%rip), %rdx
     mov     $route_t_ssz_len, %ecx
-    call    route_weight
+    call    lantern_route_weight
     mov     S10(%rsp), %rcx
     mov     %rax, %rdx
     or      %rcx, %rdx
@@ -1328,7 +1328,7 @@ FUNCTION lantern_api_route
     sub     %rax, %rsi
     lea     (%rbp,%r12), %rdx
     mov     %r13, %rcx
-    call    route_decode
+    call    lantern_route_decode
     lea     (%r12,%r13), %rax               # zero bytes up to a multiple of 8
 471: test   $7, %al
     jz      48f

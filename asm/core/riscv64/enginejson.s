@@ -15,7 +15,7 @@
 .macro JTEXT label
     ADDRESS a0, \label
     li      a1, \label\()_len
-    call    jput
+    call    lantern_jput
 .endm
 
 /* The byte c, a character code, to a2. Uses t0. */
@@ -26,7 +26,7 @@
 .endm
 
 /* L0: the a1 bytes at a0 to a2. Uses t0. */
-LOCAL_FUNCTION jput
+LOCAL_FUNCTION lantern_jput
     UNWIND_END_PROLOGUE
     beqz    a1, 2f
 1:  lbu     t0, 0(a0)
@@ -36,7 +36,7 @@ LOCAL_FUNCTION jput
     addi    a1, a1, -1
     bnez    a1, 1b
 2:  ret
-END_FUNCTION jput
+END_FUNCTION lantern_jput
 
 /* The lowercase hex digit of the value 0 to 15 in t1, to a2. Uses t2. */
 .macro JHEX
@@ -49,7 +49,7 @@ END_FUNCTION jput
 .endm
 
 /* L0: DATA: "0x" and two lowercase hex digits for each of the a1 bytes at a0, to a2. Uses t0-t2. */
-LOCAL_FUNCTION jdata
+LOCAL_FUNCTION lantern_jdata
     UNWIND_END_PROLOGUE
     li      t0, '"'
     sb      t0, 0(a2)
@@ -71,10 +71,10 @@ LOCAL_FUNCTION jdata
     sb      t0, 0(a2)
     addi    a2, a2, 1
     ret
-END_FUNCTION jdata
+END_FUNCTION lantern_jdata
 
 /* L0: QUANTITY of the a1 bytes, little endian, at a0: "0x" and the hex with no leading zeros, to a2. Uses t0-t4. */
-LOCAL_FUNCTION jquantity
+LOCAL_FUNCTION lantern_jquantity
     UNWIND_END_PROLOGUE
     li      t0, '"'
     sb      t0, 0(a2)
@@ -103,10 +103,10 @@ LOCAL_FUNCTION jquantity
     sb      t0, 0(a2)
     addi    a2, a2, 1
     ret
-END_FUNCTION jquantity
+END_FUNCTION lantern_jquantity
 
 /* L0: the decimal digits of a0 to a2. Uses t0-t3. */
-LOCAL_FUNCTION jdecimal
+LOCAL_FUNCTION lantern_jdecimal
     UNWIND_END_PROLOGUE
     li      t3, 10
     mv      t0, a0
@@ -121,20 +121,20 @@ LOCAL_FUNCTION jdecimal
     sb      t1, 0(t0)
     bnez    a0, 2b
     ret
-END_FUNCTION jdecimal
+END_FUNCTION lantern_jdecimal
 
 /* QUANTITY of the u64 at base + off, to a2. Uses a0, a1, t0-t4. */
 .macro JQ64 base, off
     ADDQ    a0, \base, \off
     li      a1, 8
-    call    jquantity
+    call    lantern_jquantity
 .endm
 
 /* DATA of the n bytes at base + off, to a2. Uses a0, a1, t0-t2. */
 .macro JDATA base, off, n
     ADDQ    a0, \base, \off
     li      a1, \n
-    call    jdata
+    call    lantern_jdata
 .endm
 
 .set DEPOSIT_REQUEST_SSZ, 48 + 32 + 8 + 96 + 8
@@ -412,7 +412,7 @@ SPEC_FUNCTION engine_new_payload
     # {"jsonrpc":"2.0","id":id,"method":"engine_newPayloadVn","params":[
     JTEXT   j_open
     mv      a0, s2
-    call    jdecimal
+    call    lantern_jdecimal
     JTEXT   j_method_np
 .if FORK == FORK_BELLATRIX
     JCHAR   49
@@ -447,11 +447,11 @@ SPEC_FUNCTION engine_new_payload
     JQ64    s6, ExecutionPayload_timestamp
     JTEXT   j_extra_data
     PART    a0, a1, s6, ExecutionPayload_extra_data
-    call    jdata
+    call    lantern_jdata
     JTEXT   j_base_fee
     ADDQ    a0, s6, ExecutionPayload_base_fee_per_gas
     li      a1, 32
-    call    jquantity
+    call    lantern_jquantity
     JTEXT   j_block_hash
     JDATA   s6, ExecutionPayload_block_hash, 32
     # each transaction: a nested ByteList value
@@ -463,7 +463,7 @@ SPEC_FUNCTION engine_new_payload
     ld      a1, 16(s8)
     ld      t0, 0(s8)
     add     s8, s8, t0
-    call    jdata
+    call    lantern_jdata
     addi    s9, s9, -1
     beqz    s9, 2f
     JCHAR   44
@@ -507,7 +507,7 @@ SPEC_FUNCTION engine_new_payload
     mv      a2, s7
     addi    a0, sp, L + 16
     li      a1, 32
-    call    jdata
+    call    lantern_jdata
     addi    s8, s8, 48
     addi    s9, s9, -1
     beqz    s9, 6f
@@ -550,7 +550,7 @@ SPEC_FUNCTION engine_new_payload
     or      a1, a1, t0
     addi    a0, s8, 8
     add     s8, a0, a1
-    call    jdata
+    call    lantern_jdata
     bgeu    s8, s9, 9f
     JCHAR   44
     j       7b
@@ -589,7 +589,7 @@ SPEC_FUNCTION engine_forkchoice_updated
     addi    a2, s3, 24
     JTEXT   j_open
     mv      a0, s2
-    call    jdecimal
+    call    lantern_jdecimal
     JTEXT   j_method_fcu
 .if FORK == FORK_BELLATRIX
     JCHAR   49
@@ -665,7 +665,7 @@ SPEC_FUNCTION engine_get_payload
     addi    a2, s3, 24
     JTEXT   j_open
     mv      a0, s2
-    call    jdecimal
+    call    lantern_jdecimal
     JTEXT   j_method_gp
 .if FORK == FORK_BELLATRIX
     JCHAR   49

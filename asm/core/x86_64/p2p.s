@@ -61,7 +61,7 @@ SPEC_FUNCTION compute_fork_digest
     lea     (L + 48)(%rsp), %rdi
     mov     $16, %esi
     lea     (L + 16)(%rsp), %rdx
-    call    sha256_short
+    call    lantern_sha256_short
     xor     (L + 16)(%rsp), %r15d
 1:
 .endif
@@ -92,7 +92,7 @@ SPEC_LEAF compute_min_epochs_for_block_requests
 SPEC_END compute_min_epochs_for_block_requests
 
 /* L0: rax = 32 + rax + rax // 6, with the carry flag set on overflow. Uses rcx, rdx, r8. */
-LOCAL_FUNCTION compressed_len
+LOCAL_FUNCTION lantern_compressed_len
     UNWIND_END_PROLOGUE
     mov     %rax, %r8
     xor     %edx, %edx
@@ -102,12 +102,12 @@ LOCAL_FUNCTION compressed_len
     jc      1f
     add     %r8, %rax
 1:  ret
-END_FUNCTION compressed_len
+END_FUNCTION lantern_compressed_len
 
 SPEC_LEAF max_compressed_len
     mov     (%rdi), %rax
     mov     %rsi, %rdi
-    call    compressed_len
+    call    lantern_compressed_len
     jc      9f
     mov     %rax, (%rdi)
     RETURN_OK
@@ -118,7 +118,7 @@ SPEC_END max_compressed_len
 SPEC_LEAF max_message_size
     mov     CONFIG_MAX_PAYLOAD_SIZE(%rdi), %rax
     mov     %rsi, %rdi
-    call    compressed_len                  # max_compressed_len(MAX_PAYLOAD_SIZE) + 1024
+    call    lantern_compressed_len                  # max_compressed_len(MAX_PAYLOAD_SIZE) + 1024
     jc      9f
     add     $1024, %rax
     jc      9f
@@ -174,7 +174,7 @@ SPEC_FUNCTION compute_subscribed_subnet
     lea     (L + 8)(%rsp), %rdi             # permutation_seed = sha256(uint_to_bytes(...))
     mov     $8, %esi
     lea     (L + 16)(%rsp), %rdx
-    call    sha256_short
+    call    lantern_sha256_short
     mov     S7(%rsp), %rcx
     cmp     $64, %rcx                       # Uint64(1 << prefix_bits) raises
     jae     9f
@@ -283,7 +283,7 @@ SPEC_END compute_max_request_data_column_sidecars
  * this fork above it, and from fulu on each BLOB_SCHEDULE epoch from FULU_FORK_EPOCH on; else
  * FAR_FUTURE_EPOCH. A leaf; uses rcx, rdx, r8, r9.
  */
-LOCAL_FUNCTION next_fork_epoch
+LOCAL_FUNCTION lantern_next_fork_epoch
     UNWIND_END_PROLOGUE
     mov     $-1, %rax
     mov     $(16 * FORK), %ecx
@@ -319,7 +319,7 @@ LOCAL_FUNCTION next_fork_epoch
 5:
 .endif
     ret
-END_FUNCTION next_fork_epoch
+END_FUNCTION lantern_next_fork_epoch
 
 /* rbx genesis_validators_root, rbp current_epoch, r12 config, r13 scratch, r14 out. Locals: L an epoch. */
 SPEC_FUNCTION compute_enr_fork_id
@@ -334,7 +334,7 @@ SPEC_FUNCTION compute_enr_fork_id
     jnz     9f
     mov     (%rbp), %rdi
     mov     %r12, %rsi
-    call    next_fork_epoch
+    call    lantern_next_fork_epoch
     mov     %rax, 8(%r14)                   # next_fork_epoch
     cmp     $-1, %rax                       # next_fork_version: at next_fork_epoch, or at current_epoch
     cmove   (%rbp), %rax
@@ -356,7 +356,7 @@ SPEC_FUNCTION compute_next_fork_digest
     mov     %r8, %r14
     mov     (%rsi), %rdi
     mov     %r12, %rsi
-    call    next_fork_epoch
+    call    lantern_next_fork_epoch
     cmp     $-1, %rax
     je      1f
     mov     %rax, L(%rsp)

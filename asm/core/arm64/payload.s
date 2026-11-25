@@ -29,7 +29,7 @@ SPEC_FUNCTION kzg_commitment_to_versioned_hash
     str     x1, [sp, #16]
     mov     x2, x1
     mov     x1, #48
-    bl      sha256_short
+    bl      lantern_sha256_short
     ldr     x1, [sp, #16]
     mov     w9, #VERSIONED_HASH_VERSION_KZG
     strb    w9, [x1]
@@ -80,7 +80,7 @@ SPEC_END compute_time_at_slot
 
 .if FORK == FORK_BELLATRIX
 /* L0: x0 = 1 when the n bytes x1 at x0 are all zero, else 0. A leaf. */
-LOCAL_FUNCTION all_zero
+LOCAL_FUNCTION lantern_all_zero
     UNWIND_END_PROLOGUE
 1:  cbz     x1, 2f
     ldrb    w9, [x0], #1
@@ -91,7 +91,7 @@ LOCAL_FUNCTION all_zero
     ret
 3:  mov     x0, #0
     ret
-END_FUNCTION all_zero
+END_FUNCTION lantern_all_zero
 
 /*
  * x0 = 1 when the fields that ExecutionPayload and ExecutionPayloadHeader share are all zero
@@ -102,18 +102,18 @@ END_FUNCTION all_zero
     mov     x19, x0
     add     x0, x19, #\type\()_parent_hash
     MOVQ    x1, \type\()_prev_randao + 32 - \type\()_parent_hash
-    bl      all_zero
+    bl      lantern_all_zero
     cbz     x0, 99f
     add     x0, x19, #\type\()_block_number
     mov     x1, #32
-    bl      all_zero
+    bl      lantern_all_zero
     cbz     x0, 99f
     LDQ     x9, x19, \type\()_extra_data + 8
     mov     x0, #0
     cbnz    x9, 99f
     add     x0, x19, #\type\()_base_fee_per_gas
     mov     x1, #64
-    bl      all_zero
+    bl      lantern_all_zero
 99:
 .endm
 .if (ExecutionPayload_block_hash != ExecutionPayload_base_fee_per_gas + 32) || (ExecutionPayloadHeader_block_hash != ExecutionPayloadHeader_base_fee_per_gas + 32) || (ExecutionPayload_timestamp != ExecutionPayload_block_number + 24) || (ExecutionPayloadHeader_timestamp != ExecutionPayloadHeader_block_number + 24)
@@ -130,7 +130,7 @@ SPEC_FUNCTION is_merge_transition_complete
     cbz     x0, 1f
     add     x0, x19, #ExecutionPayloadHeader_transactions_root
     mov     x1, #32
-    bl      all_zero
+    bl      lantern_all_zero
 1:  eor     x0, x0, #1
     ldr     x1, [sp, #L]
     str     x0, [x1]
@@ -265,7 +265,7 @@ SPEC_FUNCTION process_execution_payload
     sub     x9, x27, x9
     add     x26, x23, x9
     mov     x0, x26
-    bl      build_payload_header
+    bl      lantern_build_payload_header
     cbnz    x0, 7f
     LDQ     x9, x19, BeaconState_latest_execution_payload_header       /* state.latest_execution_payload_header = header */
     add     x0, x19, x9
@@ -289,7 +289,7 @@ SPEC_END process_execution_payload
  * HEADER_ROOM bytes hold x0. Uses the callee saved registers of
  * lantern_process_execution_payload, and saves its own.
  */
-LOCAL_FUNCTION build_payload_header
+LOCAL_FUNCTION lantern_build_payload_header
     ENTER 16
     mov     x19, x0
     MOVQ    x9, ExecutionPayloadHeader__fixed
@@ -376,7 +376,7 @@ LOCAL_FUNCTION build_payload_header
     add     x3, x19, #ExecutionPayloadHeader_transactions_root
     CALL_GLOBAL ssz_hash_tree_root
 7:  LEAVE 16
-END_FUNCTION build_payload_header
+END_FUNCTION lantern_build_payload_header
 .endif
 
 .if FORK >= FORK_BELLATRIX

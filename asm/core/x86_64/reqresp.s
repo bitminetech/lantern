@@ -119,7 +119,7 @@ FUNCTION lantern_reqresp_protocol_id
 END_FUNCTION lantern_reqresp_protocol_id
 
 /* L0: rax = the chunk bound of rax payload bytes: 25 + n + 8 * ceil(n / 65536); carry set on overflow. Uses rcx. */
-LOCAL_FUNCTION chunk_bound
+LOCAL_FUNCTION lantern_chunk_bound
     UNWIND_END_PROLOGUE
     mov     %rax, %rcx
     shr     $16, %rcx
@@ -131,12 +131,12 @@ LOCAL_FUNCTION chunk_bound
     shl     $3, %rcx
     add     %rcx, %rax
 2:  ret
-END_FUNCTION chunk_bound
+END_FUNCTION lantern_chunk_bound
 
 FUNCTION lantern_reqresp_chunk_size
     UNWIND_END_PROLOGUE
     mov     (%rdi), %rax
-    call    chunk_bound
+    call    lantern_chunk_bound
     jc      9f
     mov     %rax, (%rsi)
     xor     %eax, %eax
@@ -157,7 +157,7 @@ FUNCTION lantern_reqresp_write_chunk
     mov     %rcx, %r13
     mov     16(%rbp), %r14
     mov     %r14, %rax
-    call    chunk_bound
+    call    lantern_chunk_bound
     jc      8f
     mov     (%r13), %rcx                    # room in out: size - offset - count
     sub     8(%r13), %rcx
@@ -378,7 +378,7 @@ END_FUNCTION lantern_reqresp_read_payload
  * L0: (rdi descriptor, rsi node) -> rax min, rdx max, saturating at 2^64 - 1.
  * rbx descriptor, rbp node, r12 length or the last field, r13 element or field, r14 min, r15 max.
  */
-LOCAL_FUNCTION size_bounds
+LOCAL_FUNCTION lantern_size_bounds
     ENTER 0
     mov     %rdi, %rbx
     imul    $SSZ_NODE_STRIDE, %rsi, %rbp
@@ -407,7 +407,7 @@ LOCAL_FUNCTION size_bounds
     mov     SSZ_NODE_ELEMENT(%rbp), %r13    # a list or a vector: its element
     mov     %rbx, %rdi
     mov     %r13, %rsi
-    call    size_bounds
+    call    lantern_size_bounds
     mov     %rax, %r14
     mov     %rdx, %r15
     imul    $SSZ_NODE_STRIDE, %r13, %rcx
@@ -453,7 +453,7 @@ LOCAL_FUNCTION size_bounds
     testq   $SSZ_FIELD_VARIABLE, SSZ_FIELD_FLAGS(%rcx)
     jz      7f
     mov     %rbx, %rdi
-    call    size_bounds                     # a variable field: its offset and its bounds
+    call    lantern_size_bounds                     # a variable field: its offset and its bounds
     mov     %rdx, S7(%rsp)
     mov     $4, %ecx
     SAT_ADD
@@ -484,7 +484,7 @@ LOCAL_FUNCTION size_bounds
 8:  mov     %r14, %rax
     mov     %r15, %rdx
 9:  LEAVE 0
-END_FUNCTION size_bounds
+END_FUNCTION lantern_size_bounds
 
 FUNCTION lantern_ssz_size_bounds
     push    %rbx
@@ -492,7 +492,7 @@ FUNCTION lantern_ssz_size_bounds
     UNWIND_END_PROLOGUE
     mov     %rsi, %rbx
     mov     SSZ_DESC_ROOT(%rdi), %rsi
-    call    size_bounds
+    call    lantern_size_bounds
     mov     %rax, (%rbx)
     mov     %rdx, 8(%rbx)
     xor     %eax, %eax

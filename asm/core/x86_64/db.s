@@ -31,7 +31,7 @@ FUNCTION lantern_db_size
 END_FUNCTION lantern_db_size
 
 # The parts of the Db rdi for the room rsi: slots at DB_FIXED, then roots; their counts the capacities. Uses rax.
-LOCAL_FUNCTION db_layout
+LOCAL_FUNCTION lantern_db_layout
     UNWIND_END_PROLOGUE
     mov     DbRoom_slots(%rsi), %rax
     movq    $DB_FIXED, Db_slots(%rdi)
@@ -42,10 +42,10 @@ LOCAL_FUNCTION db_layout
     mov     DbRoom_roots(%rsi), %rax
     mov     %rax, (Db_roots + 8)(%rdi)
     ret
-END_FUNCTION db_layout
+END_FUNCTION lantern_db_layout
 
 # The root at rsi goes in the root table of the Db rdi with the value rdx, at the first free entry from its first 8 bytes. Uses rax, r8, r9.
-LOCAL_FUNCTION db_insert
+LOCAL_FUNCTION lantern_db_insert
     UNWIND_END_PROLOGUE
     mov     Db_roots(%rdi), %r8
     add     %rdi, %r8
@@ -60,10 +60,10 @@ LOCAL_FUNCTION db_insert
     jmp     1b
 2:  mov     %rdx, (%r8,%rax,8)
     ret
-END_FUNCTION db_insert
+END_FUNCTION lantern_db_insert
 
 # rax = the entry index (slot - first_slot) of the block of the root at rsi in the Db rdi, or 2^64 - 1. Uses rcx, rdx, rdi, r8-r11, xmm0-xmm2.
-LOCAL_FUNCTION db_find
+LOCAL_FUNCTION lantern_db_find
     UNWIND_END_PROLOGUE
     mov     Db_roots(%rdi), %r8
     add     %rdi, %r8
@@ -89,11 +89,11 @@ LOCAL_FUNCTION db_find
     jmp     1b
 3:  mov     $-1, %rax
     ret
-END_FUNCTION db_find
+END_FUNCTION lantern_db_find
 
 # The root table of the Db rdi again from its entries: zeroed, then the root of each block; blocks
 # their count. rbx db, r12 an entry, r13 its index, r14 the entries in use.
-LOCAL_FUNCTION db_rehash
+LOCAL_FUNCTION lantern_db_rehash
     ENTER 0
     mov     %rdi, %rbx
     mov     Db_roots(%rbx), %rdi
@@ -114,13 +114,13 @@ LOCAL_FUNCTION db_rehash
     mov     %rbx, %rdi
     mov     %r12, %rsi
     lea     1(%r13), %rdx
-    call    db_insert
+    call    lantern_db_insert
     incq    Db_blocks(%rbx)
 2:  add     $DbSlot__mem, %r12
     inc     %r13
     jmp     1b
 9:  LEAVE 0
-END_FUNCTION db_rehash
+END_FUNCTION lantern_db_rehash
 
 # (room, slot, db): no records; first_slot and end_slot the slot. rbx room, rbp the slot, r12 db. Locals: L the size.
 FUNCTION lantern_db_init
@@ -142,7 +142,7 @@ FUNCTION lantern_db_init
     mov     %rbp, Db_end_slot(%r12)
     mov     %r12, %rdi
     mov     %rbx, %rsi
-    call    db_layout
+    call    lantern_db_layout
     xor     %eax, %eax
 9:  LEAVE 16
 8:  mov     $LANTERN_BUFFER_TOO_SMALL, %eax
@@ -182,7 +182,7 @@ FUNCTION lantern_db_copy
     mov     %rax, Db_end_slot(%r12)
     mov     %r12, %rdi
     mov     %rbp, %rsi
-    call    db_layout
+    call    lantern_db_layout
     mov     Db_slots(%r12), %rdi            # the entries in use, then each root again
     add     %r12, %rdi
     mov     Db_slots(%rbx), %rsi
@@ -190,7 +190,7 @@ FUNCTION lantern_db_copy
     imul    $DbSlot__mem, %r13, %rdx
     call    lantern_copy
     mov     %r12, %rdi
-    call    db_rehash
+    call    lantern_db_rehash
     xor     %eax, %eax
 9:  LEAVE 16
 8:  mov     $LANTERN_BUFFER_TOO_SMALL, %eax
@@ -273,7 +273,7 @@ FUNCTION lantern_db_add
     jne     7f
     mov     %rbx, %rdi
     lea     DbRecord_root(%rbp), %rsi
-    call    db_find
+    call    lantern_db_find
     cmp     $-1, %rax
     jne     7f
     mov     Db_blocks(%rbx), %rax           # the table at most half full
@@ -288,7 +288,7 @@ FUNCTION lantern_db_add
     mov     %rbx, %rdi
     lea     DbRecord_root(%rbp), %rsi
     lea     1(%r13), %rdx
-    call    db_insert
+    call    lantern_db_insert
     incq    Db_blocks(%rbx)
     mov     DbRecord_slot(%rbp), %rax       # end_slot past it
     inc     %rax
@@ -397,7 +397,7 @@ FUNCTION lantern_db_find_root
     FRAME 16
     mov     %rdi, (%rsp)
     mov     %rdx, 8(%rsp)
-    call    db_find
+    call    lantern_db_find
     cmp     $-1, %rax
     je      1f
     mov     (%rsp), %rcx
@@ -439,7 +439,7 @@ FUNCTION lantern_db_prune
     call    lantern_zero
     mov     %rbp, Db_first_slot(%rbx)
     mov     %rbx, %rdi
-    call    db_rehash
+    call    lantern_db_rehash
 9:  xor     %eax, %eax
     LEAVE 0
 END_FUNCTION lantern_db_prune
@@ -476,7 +476,7 @@ FUNCTION lantern_db_drop_sidecars
 END_FUNCTION lantern_db_drop_sidecars
 
 # L0: rax = the u64 of the rsi bytes at rdi (as a signed count: 8 or more a whole word, 0 or less none), zero above them. Uses rcx, rdx, r8.
-LOCAL_FUNCTION db_word
+LOCAL_FUNCTION lantern_db_word
     UNWIND_END_PROLOGUE
     cmp     $8, %rsi
     jl      1f
@@ -495,12 +495,12 @@ LOCAL_FUNCTION db_word
     cmp     %rsi, %rdx
     jb      2b
 3:  ret
-END_FUNCTION db_word
+END_FUNCTION lantern_db_word
 
 # L1: rax = 1 when word rdi of the state differs from the patch's start, else 0 (db.md, the state
 # diffs). Reads rbx the base's bytes, rbp min(their count, the state's), r12 the state's bytes, r13
 # their count. Uses rcx, rdx, rsi, rdi, r8-r11.
-LOCAL_FUNCTION db_differ
+LOCAL_FUNCTION lantern_db_differ
     FRAME 0
     lea     0(,%rdi,8), %r9
     lea     8(%r9), %rax
@@ -512,19 +512,19 @@ LOCAL_FUNCTION db_differ
 1:  lea     (%r12,%r9), %rdi
     mov     %r13, %rsi
     sub     %r9, %rsi
-    call    db_word
+    call    lantern_db_word
     mov     %rax, %r11
     lea     (%rbx,%r9), %rdi
     mov     %rbp, %rsi
     sub     %r9, %rsi
-    call    db_word
+    call    lantern_db_word
     mov     %rax, %r10
     mov     %r11, %rax
 2:  cmp     %r10, %rax
     setne   %al
     movzbl  %al, %eax
     UNFRAME 0
-END_FUNCTION db_differ
+END_FUNCTION lantern_db_differ
 
 # (base, state, out, size): the diff of the state's bytes against the base's (db.md, the state
 # diffs): a pass that counts, then one that writes. rbx the base's bytes, rbp min(their count, the
@@ -554,7 +554,7 @@ FUNCTION lantern_db_state_diff
 12: mov     S8(%rsp), %rdi
     cmp     %r14, %rdi
     jae     30f
-    call    db_differ
+    call    lantern_db_differ
     test    %rax, %rax
     jnz     13f
     incq    S8(%rsp)
@@ -567,7 +567,7 @@ FUNCTION lantern_db_state_diff
 14: mov     S8(%rsp), %rdi
     cmp     %r14, %rdi
     jae     20f
-    call    db_differ
+    call    lantern_db_differ
     test    %rax, %rax
     jz      15f
     mov     S8(%rsp), %rax
@@ -580,7 +580,7 @@ FUNCTION lantern_db_state_diff
     mov     S8(%rsp), %rdi
     cmp     %r14, %rdi
     jae     20f
-    call    db_differ
+    call    lantern_db_differ
     test    %rax, %rax
     jz      16b
     mov     S8(%rsp), %rax                  # at most 2 equal words between: the group goes on
@@ -620,7 +620,7 @@ FUNCTION lantern_db_state_diff
     lea     (%r12,%rax), %rdi
     mov     %r13, %rsi
     sub     %rax, %rsi
-    call    db_word
+    call    lantern_db_word
     mov     (L + 24)(%rsp), %r10
     mov     %rax, (%r10)
     addq    $8, (L + 24)(%rsp)

@@ -131,7 +131,7 @@ state_root_fields:
  * not 0; rax = the bytes of the cache. rbx validators, rbp cache, r12 the table, r13 the offset of
  * the next tree's bytes, r14 the tree, r15 its header, S7 its capacity, S8 its copy bytes.
  */
-LOCAL_FUNCTION sr_layout
+LOCAL_FUNCTION lantern_sr_layout
     ENTER 16
     mov     %rdi, %rbx
     mov     %rsi, %rbp
@@ -196,7 +196,7 @@ LOCAL_FUNCTION sr_layout
     jb      1b
     mov     %r13, %rax
     LEAVE 16
-END_FUNCTION sr_layout
+END_FUNCTION lantern_sr_layout
 
 /* Locals: rsp+0 size. */
 SPEC_FUNCTION state_cache_size
@@ -204,7 +204,7 @@ SPEC_FUNCTION state_cache_size
     mov     %rsi, (%rsp)
     mov     (%rdi), %rdi
     xor     %esi, %esi
-    call    sr_layout
+    call    lantern_sr_layout
     mov     (%rsp), %rsi
     mov     %rax, (%rsi)
     xor     %eax, %eax
@@ -218,13 +218,13 @@ SPEC_FUNCTION state_cache_init
     mov     %rsi, (%rsp)
     mov     %rdi, 8(%rsp)
     xor     %esi, %esi
-    call    sr_layout
+    call    lantern_sr_layout
     mov     (%rsp), %rsi
     cmp     %rax, StateCache_size(%rsi)
     jb      9f
     mov     8(%rsp), %rdi
     mov     %rdi, StateCache_validators(%rsi)
-    call    sr_layout
+    call    lantern_sr_layout
     xor     %eax, %eax
     UNFRAME 16
 9:  mov     $LANTERN_BUFFER_TOO_SMALL, %eax
@@ -233,7 +233,7 @@ SPEC_END state_cache_init
 
 .if FORK > FORK_PHASE0
 /* L0: SHA-256 of the 32 bytes at rdi and the 32 bytes at rsi, to rdx, which may be rdi or rsi. r14 the area. */
-LOCAL_FUNCTION sr_hash
+LOCAL_FUNCTION lantern_sr_hash
     FRAME 16
     mov     %rdx, (%rsp)
     lea     (STATE_ROOT_HASH + 24)(%r14), %rax
@@ -244,10 +244,10 @@ LOCAL_FUNCTION sr_hash
     mov     (%rsp), %rsi
     CALL_GLOBAL crypto_sha256
     UNFRAME 16
-END_FUNCTION sr_hash
+END_FUNCTION lantern_sr_hash
 
 /* L0: the zero hash of each depth 0 to 40 in the area at r14. rbx the next, rbp the hashes left. */
-LOCAL_FUNCTION sr_zeros
+LOCAL_FUNCTION lantern_sr_zeros
     ENTER 16
     mov     %r14, %rbx
     pxor    %xmm0, %xmm0
@@ -257,12 +257,12 @@ LOCAL_FUNCTION sr_zeros
 1:  mov     %rbx, %rdi
     mov     %rbx, %rsi
     lea     32(%rbx), %rdx
-    call    sr_hash
+    call    lantern_sr_hash
     add     $32, %rbx
     dec     %rbp
     jnz     1b
     LEAVE 16
-END_FUNCTION sr_zeros
+END_FUNCTION lantern_sr_zeros
 
 /*
  * L0: the root of a field from tree rdi (a CacheTree): data rsi, count rdx elements, rcx the bytes
@@ -275,7 +275,7 @@ END_FUNCTION sr_zeros
  * L+32 list, L+40 out, L+48 the front's size, L+56 data bytes, L+64 the next level's nodes,
  * L+72 its dirty bits, L+80 a word, L+88 a parent, L+96 the leaves, L+104 a status.
  */
-LOCAL_FUNCTION sr_tree
+LOCAL_FUNCTION lantern_sr_tree
     ENTER 112
     mov     %rdi, %rbx
     mov     %rsi, %r13
@@ -465,7 +465,7 @@ LOCAL_FUNCTION sr_tree
 26: mov     %rcx, %rdx
     shl     $5, %rdx
     add     (L + 64)(%rsp), %rdx
-    call    sr_hash
+    call    lantern_sr_hash
     mov     (L + 88)(%rsp), %rcx            # the parent is dirty
     mov     (L + 72)(%rsp), %rax
     mov     %rcx, %rdx
@@ -508,7 +508,7 @@ LOCAL_FUNCTION sr_tree
     shl     $5, %rsi
     add     %r14, %rsi
     mov     %rdi, %rdx
-    call    sr_hash
+    call    lantern_sr_hash
     inc     %r13
     jmp     32b
 33: cmpq    $0, (L + 32)(%rsp)              # a list: mix_in_length
@@ -521,12 +521,12 @@ LOCAL_FUNCTION sr_tree
     movq    $0, 24(%rsi)
     mov     (L + 40)(%rsp), %rdi
     mov     %rdi, %rdx
-    call    sr_hash
+    call    lantern_sr_hash
 34: mov     (L + 96)(%rsp), %rax
     mov     %rax, CacheTree_count(%rbx)
     xor     %eax, %eax
     LEAVE 112
-END_FUNCTION sr_tree
+END_FUNCTION lantern_sr_tree
 .endif
 
 # The root of each field of the state into the leaves of the area, in field order: rbx state, rbp cache,
@@ -588,7 +588,7 @@ END_FUNCTION sr_tree
     imul    $CacheTree__mem, %rdi, %rdi
     lea     StateCache_trees(%rbp,%rdi), %rdi
     mov     S8(%rsp), %r9
-    call    sr_tree
+    call    lantern_sr_tree
     cmp     $(1), %rax
     je      90f
     test    %rax, %rax
@@ -624,7 +624,7 @@ SPEC_FUNCTION state_root
     movq    $(24 + 64), STATE_ROOT_HASH(%r14)   # the hash input: a ByteList of 64 bytes
     movq    $24, (STATE_ROOT_HASH + 8)(%r14)
     movq    $64, (STATE_ROOT_HASH + 16)(%r14)
-    call    sr_zeros
+    call    lantern_sr_zeros
     SR_FIELD_ROOTS
 50: lea     STATE_ROOT_LEAVES(%r14), %rdi   # zeros to the width, then merkleize
     pxor    %xmm0, %xmm0
@@ -650,7 +650,7 @@ SPEC_FUNCTION state_root
     lea     32(%rdi), %rsi
     shl     $5, %rax
     add     %rax, %rdx
-    call    sr_hash
+    call    lantern_sr_hash
     incq    S7(%rsp)
     cmp     %r15, S7(%rsp)
     jb      54b
@@ -712,7 +712,7 @@ SPEC_FUNCTION state_branch
     movq    $(24 + 64), STATE_ROOT_HASH(%r14)   # the hash input: a ByteList of 64 bytes
     movq    $24, (STATE_ROOT_HASH + 8)(%r14)
     movq    $64, (STATE_ROOT_HASH + 16)(%r14)
-    call    sr_zeros
+    call    lantern_sr_zeros
     SR_FIELD_ROOTS
     lea     STATE_ROOT_LEAVES(%r14), %rdi   # zeros to the width
     pxor    %xmm0, %xmm0
@@ -757,7 +757,7 @@ SPEC_FUNCTION state_branch
     lea     32(%rdi), %rsi
     shl     $5, %rax
     add     %rax, %rdx
-    call    sr_hash
+    call    lantern_sr_hash
     incq    S7(%rsp)
     cmp     %rbp, S7(%rsp)
     jb      6b

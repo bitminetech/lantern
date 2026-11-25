@@ -12,7 +12,7 @@
  * room: rax = 0 when the token is whole (done 0), else 1 (done counts the bytes written). Uses rcx,
  * rdx.
  */
-LOCAL_FUNCTION json_put
+LOCAL_FUNCTION lantern_json_put
     UNWIND_END_PROLOGUE
     mov     JsonCursor_done(%rbx), %rcx
 1:  cmp     %rsi, %rcx
@@ -30,14 +30,14 @@ LOCAL_FUNCTION json_put
 3:  mov     %rcx, JsonCursor_done(%rbx)
     mov     $1, %eax
     ret
-END_FUNCTION json_put
+END_FUNCTION lantern_json_put
 
 /*
  * The hex token of the byte or bit string of the level r12 (kind rdi): its bytes from the cursor's
  * done bytes on, while out has room: rax = 0 when whole, else 1. Uses rcx, rdx, rsi, r8-r11;
  * r10 holds the SSZ bytes until the token's length is known.
  */
-LOCAL_FUNCTION json_hex
+LOCAL_FUNCTION lantern_json_hex
     UNWIND_END_PROLOGUE
     mov     JsonLevel_base(%r12), %r8       # the bytes
     add     %rbp, %r8
@@ -106,13 +106,13 @@ LOCAL_FUNCTION json_hex
 9:  mov     %rcx, JsonCursor_done(%rbx)
     mov     $1, %eax
     ret
-END_FUNCTION json_hex
+END_FUNCTION lantern_json_hex
 
 /*
  * The token of the uint or Boolean of the level r12 (kind rdi): rax = 0 when whole, else 1.
  * Locals: the number's 32-bit words at 0, the text from its end at 128.
  */
-LOCAL_FUNCTION json_number
+LOCAL_FUNCTION lantern_json_number
     FRAME 128
     mov     JsonLevel_base(%r12), %rsi
     add     %rbp, %rsi
@@ -167,9 +167,9 @@ LOCAL_FUNCTION json_number
     mov     %r8, %rdi
     lea     120(%rsp), %rsi
     sub     %r8, %rsi
-9:  call    json_put
+9:  call    lantern_json_put
     UNFRAME 128
-END_FUNCTION json_number
+END_FUNCTION lantern_json_number
 
 /*
  * The level r12 for the type node rdi whose storage is at offset rsi of the value: inline when rdx
@@ -177,7 +177,7 @@ END_FUNCTION json_number
  * 2^64 - 1 and the type is of variable size; else a PartRef at rsi whose offset counts from rdx.
  * rcx the type's nodes. Uses rax, r8-r11.
  */
-LOCAL_FUNCTION json_open
+LOCAL_FUNCTION lantern_json_open
     UNWIND_END_PROLOGUE
     imul    $SSZ_NODE_STRIDE, %rdi, %r8
     add     %rcx, %r8
@@ -210,10 +210,10 @@ LOCAL_FUNCTION json_open
     mov     %rax, JsonLevel_base(%r12)
     mov     %rax, JsonLevel_next(%r12)
 9:  ret
-END_FUNCTION json_open
+END_FUNCTION lantern_json_open
 
 /* The next item of the compound level r12 at index item, one level deeper. rdi the nodes, rsi the fields. */
-LOCAL_FUNCTION json_child
+LOCAL_FUNCTION lantern_json_child
     FRAME 16
     mov     %rdi, (%rsp)
     imul    $SSZ_NODE_STRIDE, JsonLevel_node(%r12), %r8
@@ -250,15 +250,15 @@ LOCAL_FUNCTION json_child
 5:  incq    JsonCursor_depth(%rbx)
     add     $JSON_LEVEL_SIZE, %r12
     mov     (%rsp), %rcx
-    call    json_open
+    call    lantern_json_open
     UNFRAME 16
-END_FUNCTION json_child
+END_FUNCTION lantern_json_child
 
 /*
  * rax = the offset of the next variable field after field rsi of the container level r12 in an SSZ
  * encoding, or the level's end with none. rdi the nodes, rdx the fields. Uses rcx, r8-r11.
  */
-LOCAL_FUNCTION jss_field_end
+LOCAL_FUNCTION lantern_jss_field_end
     UNWIND_END_PROLOGUE
     imul    $SSZ_NODE_STRIDE, JsonLevel_node(%r12), %r8
     add     %rdi, %r8
@@ -280,13 +280,13 @@ LOCAL_FUNCTION jss_field_end
     ret
 9:  mov     JsonLevel_next(%r12), %rax
     ret
-END_FUNCTION jss_field_end
+END_FUNCTION lantern_jss_field_end
 
 /*
  * The level r12 for the type node rdi whose SSZ encoding is the bytes rsi to rdx of the encoding:
  * base and end (next), and the count of its items or bytes. rcx the nodes. Uses rax, r8-r11.
  */
-LOCAL_FUNCTION jss_open
+LOCAL_FUNCTION lantern_jss_open
     UNWIND_END_PROLOGUE
     imul    $SSZ_NODE_STRIDE, %rdi, %r8
     add     %rcx, %r8
@@ -324,10 +324,10 @@ LOCAL_FUNCTION jss_open
     shr     $2, %rax
 9:  mov     %rax, JsonLevel_count(%r12)
     ret
-END_FUNCTION jss_open
+END_FUNCTION lantern_jss_open
 
 /* The next item of the compound level r12 of an SSZ encoding at index item, one level deeper. rdi the nodes, rsi the fields. */
-LOCAL_FUNCTION jss_child
+LOCAL_FUNCTION lantern_jss_child
     FRAME 32
     mov     %rdi, (%rsp)
     mov     %rsi, 8(%rsp)
@@ -360,7 +360,7 @@ LOCAL_FUNCTION jss_child
     mov     (%rsp), %rdi
     mov     8(%rsp), %rdx
     mov     %r9, %rsi
-    call    jss_field_end
+    call    lantern_jss_field_end
     mov     %rax, %rdx
     mov     16(%rsp), %rdi
     mov     24(%rsp), %rsi
@@ -389,16 +389,16 @@ LOCAL_FUNCTION jss_child
 5:  incq    JsonCursor_depth(%rbx)
     add     $JSON_LEVEL_SIZE, %r12
     mov     (%rsp), %rcx
-    call    jss_open
+    call    lantern_jss_open
     UNFRAME 32
-END_FUNCTION jss_child
+END_FUNCTION lantern_jss_child
 
 /* (type, value, cursor, out): docs/reference/beacon-api.md. */
 FUNCTION lantern_json_encode
     FRAME 0
     xor     %r8d, %r8d
     xor     %r9d, %r9d
-    call    json_main
+    call    lantern_json_main
     UNFRAME 0
 END_FUNCTION lantern_json_encode
 
@@ -408,7 +408,7 @@ FUNCTION lantern_json_encode_ssz
     mov     16(%rsi), %r9
     add     8(%rsi), %rsi
     mov     $1, %r8d
-    call    json_main
+    call    lantern_json_main
     UNFRAME 0
 END_FUNCTION lantern_json_encode_ssz
 
@@ -417,7 +417,7 @@ END_FUNCTION lantern_json_encode_ssz
  * (mode 0) or of an encoding (mode 1). Locals: L a token of punctuation or a name, L+40 the kind,
  * L+48 the mode, L+56 the encoding's bytes.
  */
-LOCAL_FUNCTION json_main
+LOCAL_FUNCTION lantern_json_main
     ENTER 64
     mov     %r8, (L + 48)(%rsp)
     mov     %r9, (L + 56)(%rsp)
@@ -455,10 +455,10 @@ LOCAL_FUNCTION json_main
     cmpq    $0, (L + 48)(%rsp)
     jne     2f
     mov     $-1, %rdx
-    call    json_open
+    call    lantern_json_open
     jmp     1f
 2:  mov     (L + 56)(%rsp), %rdx
-    call    jss_open
+    call    lantern_jss_open
 1:  mov     JsonCursor_depth(%rbx), %rax
     dec     %rax
     imul    $JSON_LEVEL_SIZE, %rax, %rax
@@ -468,7 +468,7 @@ LOCAL_FUNCTION json_main
     mov     SSZ_NODE_KIND(%rax), %rdi
     cmp     $SSZ_KIND_BOOLEAN, %rdi
     ja      11f
-    call    json_number
+    call    lantern_json_number
     test    %rax, %rax
     jnz     91f
     jmp     50f
@@ -479,7 +479,7 @@ LOCAL_FUNCTION json_main
     cmpq    $0, (L + 48)(%rsp)
     je      12f
     mov     $SSZ_KIND_BYTE_LIST, %edi
-12: call    json_hex
+12: call    lantern_json_hex
     test    %rax, %rax
     jnz     91f
     jmp     50f
@@ -496,7 +496,7 @@ LOCAL_FUNCTION json_main
     mov     %cl, L(%rsp)                    # step 0: the opening
     lea     L(%rsp), %rdi
     mov     $1, %esi
-    call    json_put
+    call    lantern_json_put
     test    %rax, %rax
     jnz     91f
     movq    $1, JsonLevel_step(%r12)
@@ -509,7 +509,7 @@ LOCAL_FUNCTION json_main
     mov     %dl, L(%rsp)
     lea     L(%rsp), %rdi
     mov     $1, %esi
-    call    json_put
+    call    lantern_json_put
     test    %rax, %rax
     jnz     91f
     jmp     50f
@@ -518,7 +518,7 @@ LOCAL_FUNCTION json_main
     movb    $0x2c, L(%rsp)
     lea     L(%rsp), %rdi
     mov     $1, %esi
-    call    json_put
+    call    lantern_json_put
     test    %rax, %rax
     jnz     91f
 24: movq    $2, JsonLevel_step(%r12)
@@ -545,7 +545,7 @@ LOCAL_FUNCTION json_main
     movb    $0x3a, (L + 2)(%rsp,%rcx)
     lea     L(%rsp), %rdi
     lea     3(%rcx), %rsi
-    call    json_put
+    call    lantern_json_put
     test    %rax, %rax
     jnz     91f
 27: movq    $3, JsonLevel_step(%r12)
@@ -555,9 +555,9 @@ LOCAL_FUNCTION json_main
     mov     S9(%rsp), %rsi
     cmpq    $0, (L + 48)(%rsp)
     jne     28f
-    call    json_child
+    call    lantern_json_child
     jmp     10b
-28: call    jss_child
+28: call    lantern_jss_child
     jmp     10b
 50: decq    JsonCursor_depth(%rbx)          # the level is whole: up one, the next item there
     jz      80f
@@ -580,7 +580,7 @@ LOCAL_FUNCTION json_main
     LEAVE 64
 97: mov     $LANTERN_BUFFER_TOO_SMALL, %eax
     LEAVE 64
-END_FUNCTION json_main
+END_FUNCTION lantern_json_main
 
 /*
  * ---------------------------------------------------------------- lantern_json_decode
@@ -597,7 +597,7 @@ END_FUNCTION json_main
 .set JD_FAULT, 32
 
 /* rax = the first byte at or after rdi that is no white space. */
-LOCAL_FUNCTION jd_ws
+LOCAL_FUNCTION lantern_jd_ws
     UNWIND_END_PROLOGUE
     mov     %rdi, %rax
 1:  cmp     %r12, %rax
@@ -614,10 +614,10 @@ LOCAL_FUNCTION jd_ws
 2:  inc     %rax
     jmp     1b
 9:  ret
-END_FUNCTION jd_ws
+END_FUNCTION lantern_jd_ws
 
 /* The fault rdi at the byte rsi (the end when past it), at depth rdx: rax = 1. Uses rcx. */
-LOCAL_FUNCTION jd_fault
+LOCAL_FUNCTION lantern_jd_fault
     UNWIND_END_PROLOGUE
     cmp     %r12, %rsi
     cmova   %r12, %rsi
@@ -628,13 +628,13 @@ LOCAL_FUNCTION jd_fault
     mov     %rdx, JsonFault_depth(%rcx)
     mov     $1, %eax
     ret
-END_FUNCTION jd_fault
+END_FUNCTION lantern_jd_fault
 
 /*
  * The string at rdi (its quote): rdi = after its closing quote, r8 its first byte, r9 its end,
  * rax = 0; a \ or a byte below 0x20, or the end, is a fault at depth rdx (rax = 1). Uses rcx.
  */
-LOCAL_FUNCTION jd_string
+LOCAL_FUNCTION lantern_jd_string
     FRAME 0
     lea     1(%rdi), %r8
     mov     %r8, %r9
@@ -654,9 +654,9 @@ LOCAL_FUNCTION jd_string
     UNFRAME 0
 8:  mov     $JSON_FAULT_SYNTAX, %edi
     mov     %r9, %rsi
-    call    jd_fault
+    call    lantern_jd_fault
     UNFRAME 0
-END_FUNCTION jd_string
+END_FUNCTION lantern_jd_string
 
 /* ecx = 1 when the byte at reg is a decimal digit, below the end; else 0. */
 .macro JD_DIGIT at
@@ -672,7 +672,7 @@ END_FUNCTION jd_string
 .endm
 
 /* The number at rdi (RFC 8259 section 6): rdi = after it, rax = 0; else a fault at depth rdx. Uses rcx. */
-LOCAL_FUNCTION jd_number
+LOCAL_FUNCTION lantern_jd_number
     FRAME 0
     cmp     %r12, %rdi
     jae     8f
@@ -731,12 +731,12 @@ LOCAL_FUNCTION jd_number
     UNFRAME 0
 8:  mov     %rdi, %rsi
     mov     $JSON_FAULT_SYNTAX, %edi
-    call    jd_fault
+    call    lantern_jd_fault
     UNFRAME 0
-END_FUNCTION jd_number
+END_FUNCTION lantern_jd_number
 
 /* eax = 1 when the rdx bytes of text at rsi start at rdi below the end, else 0. Uses rcx, r8. */
-LOCAL_FUNCTION jd_literal
+LOCAL_FUNCTION lantern_jd_literal
     UNWIND_END_PROLOGUE
     lea     (%rdi,%rdx), %rcx
     cmp     %r12, %rcx
@@ -753,20 +753,20 @@ LOCAL_FUNCTION jd_literal
     ret
 8:  xor     %eax, %eax
     ret
-END_FUNCTION jd_literal
+END_FUNCTION lantern_jd_literal
 
 /* '"name":' at rdi, in a skipped object: rdi = its value's first byte, rax = 0; else a fault at depth rdx. Locals: rdx. */
-LOCAL_FUNCTION jd_key
+LOCAL_FUNCTION lantern_jd_key
     FRAME 16
     mov     %rdx, (%rsp)
     cmp     %r12, %rdi
     jae     8f
     cmpb    $0x22, (%rdi)
     jne     8f
-    call    jd_string
+    call    lantern_jd_string
     test    %rax, %rax
     jnz     9f
-    call    jd_ws
+    call    lantern_jd_ws
     mov     %rax, %rdi
     cmp     %r12, %rdi
     jae     8f
@@ -778,20 +778,20 @@ LOCAL_FUNCTION jd_key
 8:  mov     %rdi, %rsi
     mov     $JSON_FAULT_SYNTAX, %edi
     mov     (%rsp), %rdx
-    call    jd_fault
+    call    lantern_jd_fault
 9:  UNFRAME 16
-END_FUNCTION jd_key
+END_FUNCTION lantern_jd_key
 
 /*
  * The value at rdi, skipped with only the checks of the text, faults at depth rdx: rdi = after
  * it, rax = 0. Locals: the depth, the nesting (a bit each, 1 an object), its count.
  */
-LOCAL_FUNCTION jd_skip
+LOCAL_FUNCTION lantern_jd_skip
     FRAME 32
     mov     %rdx, (%rsp)
     movq    $0, 8(%rsp)
     movq    $0, 16(%rsp)
-1:  call    jd_ws                           # a value
+1:  call    lantern_jd_ws                           # a value
     mov     %rax, %rdi
     mov     (%rsp), %rdx
     cmp     %r12, %rdi
@@ -799,7 +799,7 @@ LOCAL_FUNCTION jd_skip
     movzbl  (%rdi), %ecx
     cmp     $0x22, %ecx
     jne     2f
-    call    jd_string
+    call    lantern_jd_string
     test    %rax, %rax
     jnz     99f
     jmp     10f
@@ -808,27 +808,27 @@ LOCAL_FUNCTION jd_skip
     sub     $0x30, %ecx
     cmp     $9, %ecx
     ja      3f
-21: call    jd_number
+21: call    lantern_jd_number
     test    %rax, %rax
     jnz     99f
     jmp     10f
 3:  lea     api_true(%rip), %rsi
     mov     $4, %edx
-    call    jd_literal
+    call    lantern_jd_literal
     test    %eax, %eax
     jz      31f
     add     $4, %rdi
     jmp     10f
 31: lea     api_false(%rip), %rsi
     mov     $5, %edx
-    call    jd_literal
+    call    lantern_jd_literal
     test    %eax, %eax
     jz      32f
     add     $5, %rdi
     jmp     10f
 32: lea     jd_null(%rip), %rsi
     mov     $4, %edx
-    call    jd_literal
+    call    lantern_jd_literal
     test    %eax, %eax
     jz      33f
     add     $4, %rdi
@@ -847,7 +847,7 @@ LOCAL_FUNCTION jd_skip
     orq     $1, 8(%rsp)
 332: incq   16(%rsp)
     inc     %rdi
-    call    jd_ws
+    call    lantern_jd_ws
     mov     %rax, %rdi
     mov     (%rsp), %rdx
     cmp     %r12, %rdi
@@ -863,13 +863,13 @@ LOCAL_FUNCTION jd_skip
     jmp     12f
 34: testq   $1, 8(%rsp)                     # an array: its first item; an object: its first key
     jz      1b
-    call    jd_key
+    call    lantern_jd_key
     test    %rax, %rax
     jnz     99f
     jmp     1b
 10: cmpq    $0, 16(%rsp)                    # after a value: done at the top, else , or the close
     je      98f
-    call    jd_ws
+    call    lantern_jd_ws
     mov     %rax, %rdi
     mov     (%rsp), %rdx
     cmp     %r12, %rdi
@@ -880,10 +880,10 @@ LOCAL_FUNCTION jd_skip
     inc     %rdi
     testq   $1, 8(%rsp)
     jz      1b
-    call    jd_ws
+    call    lantern_jd_ws
     mov     %rax, %rdi
     mov     (%rsp), %rdx
-    call    jd_key
+    call    lantern_jd_key
     test    %rax, %rax
     jnz     99f
     jmp     1b
@@ -899,14 +899,14 @@ LOCAL_FUNCTION jd_skip
     jmp     10b
 80: mov     %rdi, %rsi
     mov     $JSON_FAULT_SYNTAX, %edi
-    call    jd_fault
+    call    lantern_jd_fault
     jmp     99f
 98: xor     %eax, %eax
 99: UNFRAME 32
-END_FUNCTION jd_skip
+END_FUNCTION lantern_jd_skip
 
 /* The rsi bytes at rdi join the encoding, written when r15 is 1. Uses rcx, rdx. */
-LOCAL_FUNCTION jd_out
+LOCAL_FUNCTION lantern_jd_out
     UNWIND_END_PROLOGUE
     test    %r15, %r15
     jz      2f
@@ -922,19 +922,19 @@ LOCAL_FUNCTION jd_out
     jnz     3f
     add     %rsi, %r13
 3:  ret
-END_FUNCTION jd_out
+END_FUNCTION lantern_jd_out
 
 /* The 4-byte offset edi at byte rsi of the encoding, when r15 is 1. */
-LOCAL_FUNCTION jd_offset
+LOCAL_FUNCTION lantern_jd_offset
     UNWIND_END_PROLOGUE
     test    %r15, %r15
     jz      9f
     mov     %edi, (%r14,%rsi)
 9:  ret
-END_FUNCTION jd_offset
+END_FUNCTION lantern_jd_offset
 
 /* eax = the value of the hex digit in edi, or 16 for another byte. */
-LOCAL_FUNCTION jd_hexdigit
+LOCAL_FUNCTION lantern_jd_hexdigit
     UNWIND_END_PROLOGUE
     lea     -0x30(%rdi), %eax
     cmp     $9, %eax
@@ -948,7 +948,7 @@ LOCAL_FUNCTION jd_hexdigit
 1:  ret
 2:  mov     $16, %eax
     ret
-END_FUNCTION jd_hexdigit
+END_FUNCTION lantern_jd_hexdigit
 
 /*
  * The value of the type node rdi at rsi, at depth rdx: its encoding joins at r13; rdi = after it,
@@ -957,12 +957,12 @@ END_FUNCTION jd_hexdigit
  * cursor or a name's start, 80 the kind's node entry, 88 a string's end, 96 an element node, 104
  * an item's size, 112 the bytes of a number (32), 144 a string's content start, 152 its end.
  */
-LOCAL_FUNCTION jd_value
+LOCAL_FUNCTION lantern_jd_value
     FRAME 160
     mov     %rdi, (%rsp)
     mov     %rdx, 8(%rsp)
     mov     %rsi, %rdi
-    call    jd_ws
+    call    lantern_jd_ws
     mov     %rax, %rdi
     mov     %rdi, 16(%rsp)
     mov     8(%rsp), %rdx
@@ -981,7 +981,7 @@ LOCAL_FUNCTION jd_value
     je      300f
     cmp     $0x22, %ecx                     # a uint, a byte or bit string: a string
     jne     870f
-    call    jd_string
+    call    lantern_jd_string
     test    %rax, %rax
     jnz     899f
     mov     %rdi, 24(%rsp)
@@ -1042,7 +1042,7 @@ LOCAL_FUNCTION jd_value
     jae     3f
     movzbl  (%r8), %edi
     inc     %r8
-    call    jd_hexdigit
+    call    lantern_jd_hexdigit
     cmp     $16, %eax
     jae     860f
     mov     136(%rsp), %rcx                 # the 256-bit number times 16, plus the digit
@@ -1068,7 +1068,7 @@ LOCAL_FUNCTION jd_value
     inc     %rcx
     jmp     4b
 5:  lea     112(%rsp), %rdi
-    call    jd_out
+    call    lantern_jd_out
     mov     24(%rsp), %rdi
     xor     %eax, %eax
     UNFRAME 160
@@ -1085,7 +1085,7 @@ LOCAL_FUNCTION jd_value
     jae     42f
     movzbl  (%r11), %edi
     inc     %r11
-    call    jd_hexdigit
+    call    lantern_jd_hexdigit
     cmp     $16, %eax
     jae     850f
     jmp     41b
@@ -1112,11 +1112,11 @@ LOCAL_FUNCTION jd_value
     test    %r10, %r10
     jz      45f
     movzbl  -2(%r9), %edi
-    call    jd_hexdigit
+    call    lantern_jd_hexdigit
     shl     $4, %eax
     mov     %eax, %r11d
     movzbl  -1(%r9), %edi
-    call    jd_hexdigit
+    call    lantern_jd_hexdigit
     or      %eax, %r11d
 45: mov     80(%rsp), %rax
     mov     SSZ_NODE_KIND(%rax), %rcx
@@ -1148,15 +1148,15 @@ LOCAL_FUNCTION jd_value
 48: cmp     152(%rsp), %r11
     jae     49f
     movzbl  (%r11), %edi
-    call    jd_hexdigit
+    call    lantern_jd_hexdigit
     shl     $4, %eax
     mov     %eax, 112(%rsp)
     movzbl  1(%r11), %edi
-    call    jd_hexdigit
+    call    lantern_jd_hexdigit
     or      %al, 112(%rsp)
     lea     112(%rsp), %rdi
     mov     $1, %esi
-    call    jd_out
+    call    lantern_jd_out
     add     $2, %r11
     jmp     48b
 49: mov     24(%rsp), %rdi
@@ -1164,14 +1164,14 @@ LOCAL_FUNCTION jd_value
     UNFRAME 160
 300: lea    api_true(%rip), %rsi            # Boolean: true or false
     mov     $4, %edx
-    call    jd_literal
+    call    lantern_jd_literal
     movb    $1, 112(%rsp)
     test    %eax, %eax
     jnz     301f
     mov     16(%rsp), %rdi
     lea     api_false(%rip), %rsi
     mov     $5, %edx
-    call    jd_literal
+    call    lantern_jd_literal
     test    %eax, %eax
     jz      870f
     movb    $0, 112(%rsp)
@@ -1184,7 +1184,7 @@ LOCAL_FUNCTION jd_value
     mov     %rdi, 24(%rsp)
     lea     112(%rsp), %rdi
     mov     $1, %esi
-    call    jd_out
+    call    lantern_jd_out
     mov     24(%rsp), %rdi
     xor     %eax, %eax
     UNFRAME 160
@@ -1199,7 +1199,7 @@ LOCAL_FUNCTION jd_value
     call    lantern_zero
     mov     16(%rsp), %rdi
     inc     %rdi
-    call    jd_ws
+    call    lantern_jd_ws
     mov     %rax, %rdi
     mov     8(%rsp), %rdx
     cmp     %r12, %rdi
@@ -1213,7 +1213,7 @@ LOCAL_FUNCTION jd_value
     mov     8(%rsp), %rdx
     cmpb    $0x22, (%rdi)
     jne     880f
-    call    jd_string
+    call    lantern_jd_string
     test    %rax, %rax
     jnz     899f
     mov     %rdi, 88(%rsp)
@@ -1252,7 +1252,7 @@ LOCAL_FUNCTION jd_value
     jne     890f
     mov     %rsi, 32(%rsp)
     mov     88(%rsp), %rdi
-    call    jd_ws
+    call    lantern_jd_ws
     mov     %rax, %rdi
     mov     8(%rsp), %rdx
     cmp     %r12, %rdi
@@ -1260,7 +1260,7 @@ LOCAL_FUNCTION jd_value
     cmpb    $0x3a, (%rdi)
     jne     880f
     inc     %rdi
-    call    jd_ws
+    call    lantern_jd_ws
     mov     %rax, %rdi
     mov     64(%rsp), %rax                  # its value: kept, then skipped one level down
     mov     32(%rsp), %rsi
@@ -1272,10 +1272,10 @@ LOCAL_FUNCTION jd_value
     mov     JD_FAULT(%rbx), %rax
     mov     %rsi, JsonFault_path(%rax,%rdx,8)
     inc     %rdx
-    call    jd_skip
+    call    lantern_jd_skip
     test    %rax, %rax
     jnz     899f
-119: call   jd_ws
+119: call   lantern_jd_ws
     mov     %rax, %rdi
     mov     8(%rsp), %rdx
     cmp     %r12, %rdi
@@ -1283,7 +1283,7 @@ LOCAL_FUNCTION jd_value
     cmpb    $0x2c, (%rdi)
     jne     116f
     inc     %rdi
-    call    jd_ws
+    call    lantern_jd_ws
     mov     %rax, %rdi
     mov     8(%rsp), %rdx
     cmp     %r12, %rdi
@@ -1325,7 +1325,7 @@ LOCAL_FUNCTION jd_value
 1174: inc   %rsi
     jmp     117b
 118: mov    88(%rsp), %rdi                  # a member of no field: its value skipped
-    call    jd_ws
+    call    lantern_jd_ws
     mov     %rax, %rdi
     mov     8(%rsp), %rdx
     cmp     %r12, %rdi
@@ -1333,7 +1333,7 @@ LOCAL_FUNCTION jd_value
     cmpb    $0x3a, (%rdi)
     jne     880f
     inc     %rdi
-    call    jd_ws
+    call    lantern_jd_ws
     mov     %rax, %rdi
     mov     8(%rsp), %rdx                   # its faults at the path of the field count
     mov     80(%rsp), %rax
@@ -1341,7 +1341,7 @@ LOCAL_FUNCTION jd_value
     mov     JD_FAULT(%rbx), %rax
     mov     %rsi, JsonFault_path(%rax,%rdx,8)
     inc     %rdx
-    call    jd_skip
+    call    lantern_jd_skip
     test    %rax, %rax
     jnz     899f
     jmp     119b
@@ -1392,7 +1392,7 @@ LOCAL_FUNCTION jd_value
     mov     56(%rsp), %rdi                  # variable: its offset, then its bytes at the tail
     sub     48(%rsp), %rdi
     mov     %rcx, %rsi
-    call    jd_offset
+    call    lantern_jd_offset
     mov     56(%rsp), %r13
     jmp     137f
 136: mov    %rcx, %r13
@@ -1406,7 +1406,7 @@ LOCAL_FUNCTION jd_value
     lea     -1(%rbp,%rsi), %rsi
     mov     72(%rsp), %rax
     mov     SSZ_FIELD_NODE(%rax), %rdi
-    call    jd_value
+    call    lantern_jd_value
     test    %rax, %rax
     jnz     899f
     mov     72(%rsp), %rax
@@ -1423,7 +1423,7 @@ LOCAL_FUNCTION jd_value
     jne     870f
     mov     16(%rsp), %rdi
     inc     %rdi
-    call    jd_ws
+    call    lantern_jd_ws
     mov     %rax, %rdi
     mov     8(%rsp), %rdx
     cmp     %r12, %rdi
@@ -1439,11 +1439,11 @@ LOCAL_FUNCTION jd_value
     mov     JD_FAULT(%rbx), %rax
     mov     %rsi, JsonFault_path(%rax,%rdx,8)
     inc     %rdx
-    call    jd_skip
+    call    lantern_jd_skip
     test    %rax, %rax
     jnz     899f
     incq    40(%rsp)
-    call    jd_ws
+    call    lantern_jd_ws
     mov     %rax, %rdi
     mov     8(%rsp), %rdx
     cmp     %r12, %rdi
@@ -1451,7 +1451,7 @@ LOCAL_FUNCTION jd_value
     cmpb    $0x2c, (%rdi)
     jne     211f
     inc     %rdi
-    call    jd_ws
+    call    lantern_jd_ws
     mov     %rax, %rdi
     jmp     210b
 211: cmpb   $0x5d, (%rdi)
@@ -1479,7 +1479,7 @@ LOCAL_FUNCTION jd_value
     mov     %rax, 56(%rsp)
     mov     16(%rsp), %rdi
     inc     %rdi
-    call    jd_ws
+    call    lantern_jd_ws
     mov     %rax, 72(%rsp)
     movq    $0, 32(%rsp)
 222: mov    32(%rsp), %rsi
@@ -1491,7 +1491,7 @@ LOCAL_FUNCTION jd_value
     sub     48(%rsp), %rdi
     mov     48(%rsp), %rax
     lea     (%rax,%rsi,4), %rsi
-    call    jd_offset
+    call    lantern_jd_offset
     mov     56(%rsp), %r13
 223: mov    8(%rsp), %rdx
     mov     32(%rsp), %rsi
@@ -1500,20 +1500,20 @@ LOCAL_FUNCTION jd_value
     inc     %rdx
     mov     96(%rsp), %rdi
     mov     72(%rsp), %rsi
-    call    jd_value
+    call    lantern_jd_value
     test    %rax, %rax
     jnz     899f
     cmpq    $0, 104(%rsp)
     jne     224f
     mov     %r13, 56(%rsp)
-224: call   jd_ws                           # past the ,
+224: call   lantern_jd_ws                           # past the ,
     mov     %rax, %rdi
     cmp     %r12, %rdi
     jae     225f
     cmpb    $0x2c, (%rdi)
     jne     225f
     inc     %rdi
-    call    jd_ws
+    call    lantern_jd_ws
     mov     %rax, %rdi
 225: mov    %rdi, 72(%rsp)
     incq    32(%rsp)
@@ -1546,15 +1546,15 @@ LOCAL_FUNCTION jd_value
 890: mov    $JSON_FAULT_FIELD, %edi
     mov     72(%rsp), %rsi
 898: mov    8(%rsp), %rdx
-    call    jd_fault
+    call    lantern_jd_fault
 899: UNFRAME 160
-END_FUNCTION jd_value
+END_FUNCTION lantern_jd_value
 
 /* (type, json, scratch, out, fault): docs/reference/beacon-api.md. */
 FUNCTION lantern_json_decode
     FRAME 0
     xor     %r9d, %r9d
-    call    json_decode_mode
+    call    lantern_json_decode_mode
     UNFRAME 0
 END_FUNCTION lantern_json_decode
 
@@ -1562,7 +1562,7 @@ END_FUNCTION lantern_json_decode
 FUNCTION lantern_engine_json_decode
     FRAME 0
     mov     $1, %r9d
-    call    json_decode_mode
+    call    lantern_json_decode_mode
     UNFRAME 0
 END_FUNCTION lantern_engine_json_decode
 
@@ -1571,7 +1571,7 @@ END_FUNCTION lantern_engine_json_decode
  * JSON; lantern_engine_json_decode for mode 1, of the Engine API's: the mode at byte 56 of scratch,
  * before the field tables. Locals: L the context, L+40 out, L+48 the root, L+56 the mode.
  */
-LOCAL_FUNCTION json_decode_mode
+LOCAL_FUNCTION lantern_json_decode_mode
     ENTER 64
     mov     %rcx, (L + 40)(%rsp)
     mov     %r9, (L + 56)(%rsp)
@@ -1611,10 +1611,10 @@ LOCAL_FUNCTION json_decode_mode
     mov     %rax, %rdi
     mov     %rbp, %rsi
     xor     %edx, %edx
-    call    jd_value
+    call    lantern_jd_value
     test    %rax, %rax
     jnz     98f
-    call    jd_ws
+    call    lantern_jd_ws
     cmp     %r12, %rax
     jne     96f
     mov     (L + 40)(%rsp), %rax            # then the bytes, with room for them
@@ -1630,7 +1630,7 @@ LOCAL_FUNCTION json_decode_mode
     mov     (L + 48)(%rsp), %rdi
     mov     %rbp, %rsi
     xor     %edx, %edx
-    call    jd_value
+    call    lantern_jd_value
     xor     %eax, %eax
     LEAVE 64
 95: mov     JD_FAULT(%rbx), %rax
@@ -1640,10 +1640,10 @@ LOCAL_FUNCTION json_decode_mode
 96: mov     %rax, %rsi
     mov     $JSON_FAULT_SYNTAX, %edi
     xor     %edx, %edx
-    call    jd_fault
+    call    lantern_jd_fault
 98: mov     $LANTERN_INVALID_JSON, %eax
     LEAVE 64
-END_FUNCTION json_decode_mode
+END_FUNCTION lantern_json_decode_mode
 
     RODATA
 jd_null:

@@ -127,7 +127,7 @@ FUNCTION lantern_seen_add_block
     ldr     x2, [x2]
     stp     x0, x1, [sp, #16]
     str     x2, [sp, #32]
-    bl      seen_find_block
+    bl      lantern_seen_find_block
     cbnz    x0, 2f
     ldp     x0, x1, [sp, #16]
     PART    x9, x10, x0, Seen_blocks        /* room for one more */

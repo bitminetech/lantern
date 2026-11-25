@@ -180,7 +180,7 @@ SPEC_END get_balance_after_withdrawals
  * The list all = prior + new, for get_balance_after_withdrawals: a0 = all (a Withdrawals value),
  * a1 = prior, a2 = new. Uses a0-a3, t0-t3. A leaf.
  */
-LOCAL_FUNCTION concat_withdrawals
+LOCAL_FUNCTION lantern_concat_withdrawals
     UNWIND_END_PROLOGUE
     li      t0, LIST_FIXED
     sd      t0, LIST_OFFSET(a0)
@@ -209,13 +209,13 @@ LOCAL_FUNCTION concat_withdrawals
     addi    t1, t1, -1
     bnez    t1, 3b
 4:  ret
-END_FUNCTION concat_withdrawals
+END_FUNCTION lantern_concat_withdrawals
 
 /*
  * Append Withdrawal(index, validator_index, address of validator, amount) to Withdrawals a0.
  * a1 index, a2 validator index, a3 validator, a4 amount. The address is 4-aligned in the credentials.
  */
-LOCAL_FUNCTION append_withdrawal
+LOCAL_FUNCTION lantern_append_withdrawal
     UNWIND_END_PROLOGUE
     ld      t0, LIST_COUNT(a0)
     addi    t1, t0, 1
@@ -233,7 +233,7 @@ LOCAL_FUNCTION append_withdrawal
     sw      zero, (Withdrawal_address + 20)(t0)     # padding
     sd      a4, Withdrawal_amount(t0)
     ret
-END_FUNCTION append_withdrawal
+END_FUNCTION lantern_append_withdrawal
 
 .if FORK >= FORK_ELECTRA
 /*
@@ -275,7 +275,7 @@ SPEC_FUNCTION get_pending_partial_withdrawals
     mv      a0, s6                          # all_withdrawals = prior_withdrawals + withdrawals
     mv      a1, s3
     addi    a2, s5, 16
-    call    concat_withdrawals
+    call    lantern_concat_withdrawals
     ld      t0, PendingPartialWithdrawal_withdrawable_epoch(s8)
     ld      t1, L(sp)
     bgtu    t0, t1, 5f                      # not is_withdrawable
@@ -312,7 +312,7 @@ SPEC_FUNCTION get_pending_partial_withdrawals
     add     a3, a3, t0
     addi    a0, s5, 16
     mv      a1, s2
-    call    append_withdrawal
+    call    lantern_append_withdrawal
     addi    s2, s2, 1
 3:  addi    s10, s10, 1
     addi    s8, s8, PendingPartialWithdrawal__mem
@@ -372,7 +372,7 @@ SPEC_FUNCTION get_validators_sweep_withdrawals
     mv      a0, s6
     mv      a1, s3
     addi    a2, s5, 16
-    call    concat_withdrawals
+    call    lantern_concat_withdrawals
     ld      t0, LIST_COUNT(s6)
     li      t1, MAX_WITHDRAWALS_PER_PAYLOAD
     bgeu    t0, t1, 5f                      # has_reached_limit
@@ -423,7 +423,7 @@ SPEC_FUNCTION get_validators_sweep_withdrawals
     addi    a0, s5, 16
     mv      a1, s2
     mv      a2, s8
-    call    append_withdrawal
+    call    lantern_append_withdrawal
     addi    s2, s2, 1
 41: addi    s8, s8, 1                       # validator_index = (validator_index + 1) % len(state.validators)
     bltu    s8, s9, 42f
@@ -479,7 +479,7 @@ SPEC_FUNCTION get_expected_withdrawals
     addi    a0, s3, 16                      # withdrawals.extend(partial_withdrawals)
     addi    a1, s3, 16
     addi    a2, s5, 16
-    call    concat_withdrawals
+    call    lantern_concat_withdrawals
 .else
     sd      zero, 8(s5)                     # no partial withdrawals before electra
 .endif
@@ -500,7 +500,7 @@ SPEC_FUNCTION get_expected_withdrawals
     addi    a0, s3, 16
     addi    a1, s3, 16
     addi    a2, s6, 16
-    call    concat_withdrawals
+    call    lantern_concat_withdrawals
     ld      t0, 8(s5)
     sd      t0, 0(s3)                       # processed_partial_withdrawals_count
     ld      t0, 8(s6)

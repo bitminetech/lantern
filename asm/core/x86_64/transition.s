@@ -12,7 +12,7 @@
  */
 SPEC_LEAF process_randao
     xor     %r9d, %r9d
-    jmp     randao_step
+    jmp     lantern_randao_step
 SPEC_END process_randao
 
 /*
@@ -20,7 +20,7 @@ SPEC_END process_randao
  * reveal's signature (block production with skip_randao_verification, block-processing.md).
  * rbx state, rbp body, r12 config, r13 scratch, r14 result, r15 the proposer; S7 skip.
  */
-LOCAL_FUNCTION randao_step
+LOCAL_FUNCTION lantern_randao_step
     ENTER 176
     mov     %rdi, %rbx
     mov     %rsi, %rbp
@@ -82,7 +82,7 @@ LOCAL_FUNCTION randao_step
     lea     BeaconBlockBody_randao_reveal(%rbp), %rsi
     lea     (L + 56)(%rsp), %rdx
     mov     %r13, %rcx
-    call    verify_root_signature
+    call    lantern_verify_root_signature
     test    %rax, %rax
     jnz     7f
     mov     $LANTERN_INVALID_RANDAO_REVEAL, %eax
@@ -91,7 +91,7 @@ LOCAL_FUNCTION randao_step
 3:  lea     BeaconBlockBody_randao_reveal(%rbp), %rdi   # mix = xor(get_randao_mix(state, epoch), sha256(randao_reveal))
     mov     $96, %esi
     lea     (L + 112)(%rsp), %rdx
-    call    sha256_short
+    call    lantern_sha256_short
     mov     %rbx, %rdi
     lea     L(%rsp), %rsi
     lea     (L + 144)(%rsp), %rdx
@@ -110,7 +110,7 @@ LOCAL_FUNCTION randao_step
     LEAVE 176
 9:  mov     $LANTERN_BUFFER_TOO_SMALL, %eax
     LEAVE 176
-END_FUNCTION randao_step
+END_FUNCTION lantern_randao_step
 
 /* rbx state, rbp body, r12 result. */
 SPEC_FUNCTION process_eth1_data
@@ -270,7 +270,7 @@ SPEC_FUNCTION process_operations
 1:  FOR_FIXED %rbp, BeaconBlockBody_proposer_slashings, ProposerSlashing__mem, lantern_process_proposer_slashing
     FOR_VARIABLE %rbp, BeaconBlockBody_attester_slashings, lantern_process_attester_slashing
 .if FORK >= FORK_ALTAIR
-    FOR_VARIABLE %rbp, BeaconBlockBody_attestations, attestation_memo, 1
+    FOR_VARIABLE %rbp, BeaconBlockBody_attestations, lantern_attestation_memo, 1
 .else
     FOR_VARIABLE %rbp, BeaconBlockBody_attestations, lantern_process_attestation
 .endif
@@ -312,7 +312,7 @@ SPEC_END process_operations
  * L0: rax = LANTERN_OK when state rdi has room for the appends of the execution requests of
  * block body rsi and r10 more pending deposits, else LANTERN_BUFFER_TOO_SMALL. A leaf.
  */
-LOCAL_FUNCTION requests_room
+LOCAL_FUNCTION lantern_requests_room
     UNWIND_END_PROLOGUE
     PART    %r8, %r9, %rsi, BeaconBlockBody_execution_requests
     mov     (ExecutionRequests_deposits + 8)(%r8), %rsi
@@ -339,7 +339,7 @@ LOCAL_FUNCTION requests_room
     ret
 9:  mov     $LANTERN_BUFFER_TOO_SMALL, %eax
     ret
-END_FUNCTION requests_room
+END_FUNCTION lantern_requests_room
 
 .if FORK == FORK_ELECTRA
 /*
@@ -347,28 +347,28 @@ END_FUNCTION requests_room
  * LANTERN_BUFFER_TOO_SMALL: a validator and a pending deposit for each deposit, and the
  * appends of the execution requests. rbx state, rbp body.
  */
-LOCAL_FUNCTION block_room
+LOCAL_FUNCTION lantern_block_room
     ENTER 0
     mov     %rdi, %rbx
     mov     %rsi, %rbp
-    call    validator_room
+    call    lantern_validator_room
     mov     (BeaconBlockBody_deposits + 8)(%rbp), %r10
     cmp     %r10, %rax
     jb      9f
     mov     %rbx, %rdi
     mov     %rbp, %rsi
-    call    requests_room
+    call    lantern_requests_room
     LEAVE 0
 9:  mov     $LANTERN_BUFFER_TOO_SMALL, %eax
     LEAVE 0
-END_FUNCTION block_room
+END_FUNCTION lantern_block_room
 .else
-/* L0: requests_room with no deposits. */
-LOCAL_FUNCTION block_room
+/* L0: lantern_requests_room with no deposits. */
+LOCAL_FUNCTION lantern_block_room
     UNWIND_END_PROLOGUE
     xor     %r10d, %r10d
-    jmp     requests_room
-END_FUNCTION block_room
+    jmp     lantern_requests_room
+END_FUNCTION lantern_block_room
 .endif
 
 .else
@@ -397,7 +397,7 @@ END_FUNCTION block_room
  * a PendingAttestation for each attestation in each epoch's list.
  * rbx state, rbp body, r12 the bytes the attestations may add to one list.
  */
-LOCAL_FUNCTION block_room
+LOCAL_FUNCTION lantern_block_room
     ENTER 0
     mov     %rdi, %rbx
     mov     %rsi, %rbp
@@ -405,7 +405,7 @@ LOCAL_FUNCTION block_room
     cmp     $1, %rax
     jl      9f
     mov     %rbx, %rdi
-    call    validator_room
+    call    lantern_validator_room
     cmp     (BeaconBlockBody_deposits + 8)(%rbp), %rax
     jb      9f
 .if FORK == FORK_PHASE0
@@ -423,14 +423,14 @@ LOCAL_FUNCTION block_room
     LEAVE 0
 9:  mov     $LANTERN_BUFFER_TOO_SMALL, %eax
     LEAVE 0
-END_FUNCTION block_room
+END_FUNCTION lantern_block_room
 .endif
 
 /*
  * L0: rax = the scratch that lantern_process_block needs for body rsi, with rdx validators.
  * A leaf.
  */
-LOCAL_FUNCTION block_scratch
+LOCAL_FUNCTION lantern_block_scratch
     UNWIND_END_PROLOGUE
     lea     LIST_FIXED(,%rdx,8), %rcx       # L(n)
     imul    $10, %rcx, %rax                 # attestations: S(10) + ATTEST_EXTRA
@@ -448,7 +448,7 @@ LOCAL_FUNCTION block_scratch
     cmova   %rdx, %rax
 .endif
     ret
-END_FUNCTION block_scratch
+END_FUNCTION lantern_block_scratch
 
 /* One block step: stop at a failed status or a failed check. */
 .macro BLOCK_STEP
@@ -476,12 +476,12 @@ SPEC_FUNCTION process_block
     PART    %r15, %rax, %rbp, BeaconBlock_body
     mov     %rbx, %rdi
     mov     %r15, %rsi
-    call    block_room
+    call    lantern_block_room
     test    %rax, %rax
     jnz     7f
     mov     %r15, %rsi
     mov     (BeaconState_validators + 8)(%rbx), %rdx
-    call    block_scratch
+    call    lantern_block_scratch
     mov     (%r13), %rcx
     mov     %rcx, S8(%rsp)
     cmp     %rax, %rcx
@@ -540,7 +540,7 @@ SPEC_FUNCTION process_block
     mov     (%r9), %r9
     shr     $1, %r9
     and     $1, %r9d
-    call    randao_step
+    call    lantern_randao_step
     BLOCK_STEP
     SCRATCH_RESET
     mov     %rbx, %rdi
@@ -625,7 +625,7 @@ SPEC_END process_slot
  * crossed. Locals: rsp+0 the slot, rsp+8 scratch, rsp+16 the extra bytes, rsp+24 the validators
  * the epochs may add.
  */
-LOCAL_FUNCTION slots_room
+LOCAL_FUNCTION lantern_slots_room
     FRAME 32
     mov     %rsi, 0(%rsp)
     mov     %rdx, 8(%rsp)
@@ -717,7 +717,7 @@ LOCAL_FUNCTION slots_room
     UNFRAME 32
 9:  mov     $LANTERN_BUFFER_TOO_SMALL, %eax
     UNFRAME 32
-END_FUNCTION slots_room
+END_FUNCTION lantern_slots_room
 
 /* rbx state, rbp slot, r12 config, r13 scratch, r14 result, r15 scratch size. */
 SPEC_FUNCTION process_slots
@@ -736,7 +736,7 @@ SPEC_FUNCTION process_slots
     mov     %rbp, %rsi
     mov     %r13, %rdx
     xor     %ecx, %ecx
-    call    slots_room
+    call    lantern_slots_room
     test    %rax, %rax
     jnz     7f
     mov     (%r13), %r15
@@ -811,7 +811,7 @@ SPEC_FUNCTION verify_block_signature
     lea     SignedBeaconBlock_signature(%rbp), %rsi
     lea     (L + 48)(%rsp), %rdx
     mov     %r12, %rcx
-    call    verify_root_signature
+    call    lantern_verify_root_signature
     test    %rax, %rax
     jnz     7f
     mov     %rdx, (%r13)
@@ -839,7 +839,7 @@ SPEC_FUNCTION state_transition
     mov     %rcx, S8(%rsp)
     PART    %rsi, %rcx, %rax, BeaconBlock_body  # before any change: room and scratch for the slots and the block
     mov     %rbx, %rdi
-    call    block_room
+    call    lantern_block_room
     test    %rax, %rax
     jnz     7f
     mov     %rbx, %rdi                      # the epochs the slots cross
@@ -847,14 +847,14 @@ SPEC_FUNCTION state_transition
     mov     BeaconBlock_slot(%rax), %rsi
     mov     %r14, %rdx
     xor     %ecx, %ecx
-    call    slots_room
+    call    lantern_slots_room
     test    %rax, %rax
     jnz     7f
     imul    $MAX_PENDING_DEPOSITS_PER_EPOCH, %rdx, %rdx # the block's scratch, with every validator they may add
     add     (BeaconState_validators + 8)(%rbx), %rdx
     mov     S7(%rsp), %rax
     PART    %rsi, %rcx, %rax, BeaconBlock_body
-    call    block_scratch
+    call    lantern_block_scratch
     cmp     %rax, (%r14)
     jb      9f
     cmpq    $0, 16(%r12)                    # slots_done and a state at the block's slot: no process_slots

@@ -299,10 +299,10 @@ SPEC_FUNCTION get_attestation_component_deltas
     sd      t0, (L + 32)(sp)
     mv      a0, s4
     mv      a1, s6
-    call    zero_deltas
+    call    lantern_zero_deltas
     mv      a0, s5
     mv      a1, s6
-    call    zero_deltas
+    call    lantern_zero_deltas
     ld      t0, (L + 32)(sp)
     SCRATCH_LIST s7, s3, t0, 0, s6
     SCRATCH_LIST s8, s3, t0, 1, s6
@@ -451,10 +451,10 @@ SPEC_FUNCTION get_inclusion_delay_deltas
     LDQ     s7, s1, BeaconState_validators + 8
     mv      a0, s3
     mv      a1, s7
-    call    zero_deltas
+    call    lantern_zero_deltas
     mv      a0, s4
     mv      a1, s7
-    call    zero_deltas
+    call    lantern_zero_deltas
     TAKE_REFS s5, s2, s6
     SCRATCH_LIST s8, s2, s6, 0, s7
     SCRATCH_LIST s9, s2, s6, 1, s7
@@ -598,10 +598,10 @@ SPEC_FUNCTION get_inactivity_penalty_deltas
     LDQ     s7, s1, BeaconState_validators + 8
     mv      a0, s3
     mv      a1, s7
-    call    zero_deltas
+    call    lantern_zero_deltas
     mv      a0, s4
     mv      a1, s7
-    call    zero_deltas
+    call    lantern_zero_deltas
     mv      a0, s1
     addi    a1, sp, (L + 32)
     call    lantern_is_in_inactivity_leak
@@ -692,7 +692,7 @@ SPEC_FUNCTION get_inactivity_penalty_deltas
 SPEC_END get_inactivity_penalty_deltas
 
 /* L0: add the n entries (a2) of list a1 to those of list a0. a0 = LANTERN_OK, or LANTERN_INVALID_OVERFLOW. A leaf. */
-LOCAL_FUNCTION add_deltas
+LOCAL_FUNCTION lantern_add_deltas
     UNWIND_END_PROLOGUE
     addi    a0, a0, LIST_FIXED
     addi    a1, a1, LIST_FIXED
@@ -710,19 +710,19 @@ LOCAL_FUNCTION add_deltas
     ret
 3:  li      a0, LANTERN_INVALID_OVERFLOW
     ret
-END_FUNCTION add_deltas
+END_FUNCTION lantern_add_deltas
 
 /* Add the component's rewards and penalties to the totals. */
 .macro ADD_BOTH
     mv      a0, s3
     mv      a1, s7
     mv      a2, s6
-    call    add_deltas
+    call    lantern_add_deltas
     bnez    a0, 7f
     mv      a0, s4
     mv      a1, s8
     mv      a2, s6
-    call    add_deltas
+    call    lantern_add_deltas
     bnez    a0, 7f
 .endm
 
@@ -753,10 +753,10 @@ SPEC_FUNCTION get_attestation_deltas
     LDQ     s6, s1, BeaconState_validators + 8
     mv      a0, s3
     mv      a1, s6
-    call    zero_deltas
+    call    lantern_zero_deltas
     mv      a0, s4
     mv      a1, s6
-    call    zero_deltas
+    call    lantern_zero_deltas
     ld      s5, 0(s2)
     SCRATCH_LIST s7, s2, s5, 0, s6
     SCRATCH_LIST s8, s2, s5, 1, s6
@@ -772,7 +772,7 @@ SPEC_FUNCTION get_attestation_deltas
     mv      a0, s3                          # inclusion delay: rewards only
     mv      a1, s7
     mv      a2, s6
-    call    add_deltas
+    call    lantern_add_deltas
     bnez    a0, 7f
     sd      s5, 0(s2)                       # inactivity: penalties only
     mv      a0, s1
@@ -785,7 +785,7 @@ SPEC_FUNCTION get_attestation_deltas
     mv      a0, s4
     mv      a1, s8
     mv      a2, s6
-    call    add_deltas
+    call    lantern_add_deltas
 7:  LEAVE 16
 9:  li      a0, LANTERN_BUFFER_TOO_SMALL
     LEAVE 16
@@ -921,7 +921,7 @@ SPEC_END process_justification_and_finalization
  * L0: a0 = LANTERN_OK when state a0's previous_epoch_attestations can take the current ones,
  * else LANTERN_BUFFER_TOO_SMALL. A leaf. Uses t0-t4, a7.
  */
-LOCAL_FUNCTION record_room
+LOCAL_FUNCTION lantern_record_room
     UNWIND_END_PROLOGUE
     LDQ     t0, a0, BeaconState_current_epoch_attestations
     LDQ     t1, a0, BeaconState_current_epoch_attestations + 8
@@ -940,14 +940,14 @@ LOCAL_FUNCTION record_room
     ret
 9:  li      a0, LANTERN_BUFFER_TOO_SMALL
     ret
-END_FUNCTION record_room
+END_FUNCTION lantern_record_room
 
 /* s1 state, s2 result. */
 SPEC_FUNCTION process_participation_record_updates
     ENTER 0
     mv      s1, a0
     mv      s2, a3
-    call    record_room                     # previous_epoch_attestations = current_epoch_attestations
+    call    lantern_record_room                     # previous_epoch_attestations = current_epoch_attestations
     bnez    a0, 7f
     LDQ     t0, s1, BeaconState_current_epoch_attestations
     LDQ     t1, s1, BeaconState_current_epoch_attestations + 8

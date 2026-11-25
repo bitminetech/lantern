@@ -16,7 +16,7 @@
 .set LS_I2, 24                          /* the value index in the second */
 
 /* The x1 bytes at x0 go to the cursor. Uses x0, x1, x9, x10. */
-LOCAL_FUNCTION mt_put
+LOCAL_FUNCTION lantern_mt_put
     UNWIND_END_PROLOGUE
     cbnz    x22, 9f
     add     x9, x20, x1
@@ -30,23 +30,23 @@ LOCAL_FUNCTION mt_put
     ret
 8:  mov     x22, #1
 9:  ret
-END_FUNCTION mt_put
+END_FUNCTION lantern_mt_put
 
 /* The text at metrics_texts + x0, of x1 bytes. Uses x0, x1, x9, x10. */
-LOCAL_FUNCTION mt_text
+LOCAL_FUNCTION lantern_mt_text
     UNWIND_END_PROLOGUE
     add     x0, x19, x0
-    b       mt_put
-END_FUNCTION mt_text
+    b       lantern_mt_put
+END_FUNCTION lantern_mt_text
 
 .macro MT_TEXT label
     ADDRESS x0, \label
     mov     x1, #\label\()_len
-    bl      mt_put
+    bl      lantern_mt_put
 .endm
 
 /* The decimal digits of x0. Locals: the digits, from the end. Uses x0, x1, x9-x15. */
-LOCAL_FUNCTION mt_dec
+LOCAL_FUNCTION lantern_mt_dec
     FRAME 32
     add     x11, sp, #48
     mov     x12, x11
@@ -59,12 +59,12 @@ LOCAL_FUNCTION mt_dec
     cbnz    x0, 1b
     mov     x0, x12
     sub     x1, x11, x12
-    bl      mt_put
+    bl      lantern_mt_put
     UNFRAME 32
-END_FUNCTION mt_dec
+END_FUNCTION lantern_mt_dec
 
 /* x0 as a signed decimal. Locals: x0, the sign. */
-LOCAL_FUNCTION mt_sdec
+LOCAL_FUNCTION lantern_mt_sdec
     FRAME 16
     str     x0, [sp, #16]
     tbz     x0, #63, 1f
@@ -72,24 +72,24 @@ LOCAL_FUNCTION mt_sdec
     strb    w9, [sp, #24]
     add     x0, sp, #24
     mov     x1, #1
-    bl      mt_put
+    bl      lantern_mt_put
     ldr     x0, [sp, #16]
     neg     x0, x0
     str     x0, [sp, #16]
 1:  ldr     x0, [sp, #16]
-    bl      mt_dec
+    bl      lantern_mt_dec
     UNFRAME 16
-END_FUNCTION mt_sdec
+END_FUNCTION lantern_mt_sdec
 
 /* The microseconds x0 as seconds: the whole seconds, ".", six digits. Locals: the rest, the digits. */
-LOCAL_FUNCTION mt_seconds
+LOCAL_FUNCTION lantern_mt_seconds
     FRAME 32
     MOVQ    x9, 1000000
     udiv    x10, x0, x9
     msub    x11, x10, x9, x0
     str     x11, [sp, #16]
     mov     x0, x10
-    bl      mt_dec
+    bl      lantern_mt_dec
     mov     w9, #0x2e                       /* "." */
     strb    w9, [sp, #24]
     ldr     x0, [sp, #16]                   /* six digits, from the end */
@@ -105,15 +105,15 @@ LOCAL_FUNCTION mt_seconds
     b.ne    1b
     add     x0, sp, #24
     mov     x1, #7
-    bl      mt_put
+    bl      lantern_mt_put
     UNFRAME 32
-END_FUNCTION mt_seconds
+END_FUNCTION lantern_mt_seconds
 
 /*
  * The ticks x0 as microseconds: x0 * 10^6 / x1 by long division of the 128-bit product, or the
  * largest u64 when the quotient does not fit; 0 when x1 is 0. Uses x0, x9-x14.
  */
-LOCAL_FUNCTION mt_ticks_us
+LOCAL_FUNCTION lantern_mt_ticks_us
     UNWIND_END_PROLOGUE
     cbz     x1, 8f
     MOVQ    x9, 1000000
@@ -140,15 +140,15 @@ LOCAL_FUNCTION mt_ticks_us
     ret
 9:  mov     x0, #-1
     ret
-END_FUNCTION mt_ticks_us
+END_FUNCTION lantern_mt_ticks_us
 
 /* The entry x23's name. Uses x0, x1, x9, x10. */
-LOCAL_FUNCTION mt_name
+LOCAL_FUNCTION lantern_mt_name
     UNWIND_END_PROLOGUE
     ldr     w0, [x23, #MetricEntry_name]
     ldr     w1, [x23, #MetricEntry_name_len]
-    b       mt_text
-END_FUNCTION mt_name
+    b       lantern_mt_text
+END_FUNCTION lantern_mt_name
 
 /*
  * lantern_metrics_observe(histogram, bounds, value) -> status
@@ -186,12 +186,12 @@ LEAF lantern_metrics_observe
 END_FUNCTION lantern_metrics_observe
 
 /* `name="value"` of the label table record x0 and value index x1. Locals: x0, x1. */
-LOCAL_FUNCTION mt_label
+LOCAL_FUNCTION lantern_mt_label
     FRAME 16
     stp     x0, x1, [sp, #16]
     ldr     w1, [x0, #MetricLabel_name_len]
     ldr     w0, [x0, #MetricLabel_name]
-    bl      mt_text
+    bl      lantern_mt_text
     MT_TEXT mx_eq
     ldp     x9, x10, [sp, #16]              /* the value: metrics_label_values[first + index] */
     ldr     w11, [x9, #MetricLabel_first]
@@ -199,24 +199,24 @@ LOCAL_FUNCTION mt_label
     ADDRESS x12, metrics_label_values
     add     x12, x12, x11, lsl #3
     ldp     w0, w1, [x12]
-    bl      mt_text
+    bl      lantern_mt_text
     MT_TEXT mx_quote
     UNFRAME 16
-END_FUNCTION mt_label
+END_FUNCTION lantern_mt_label
 
 /*
  * A sample's start: the entry x23's name, the suffix of x1 bytes at x0 (none when x1 is 0), then "{"
  * and the labels of the LabelState x2 when it has a label. x0 = 1 when a "{" went out, else 0.
  * Locals: the LabelState, the flag, the suffix, its length.
  */
-LOCAL_FUNCTION mt_open
+LOCAL_FUNCTION lantern_mt_open
     FRAME 32
     stp     x2, xzr, [sp, #16]
     stp     x0, x1, [sp, #32]
-    bl      mt_name
+    bl      lantern_mt_name
     ldp     x0, x1, [sp, #32]
     cbz     x1, 1f
-    bl      mt_put
+    bl      lantern_mt_put
 1:  ldr     x9, [sp, #16]
     ldr     x10, [x9, #LS_LABEL1]
     cbz     x10, 9f
@@ -226,7 +226,7 @@ LOCAL_FUNCTION mt_open
     ldr     x9, [sp, #16]
     ldr     x0, [x9, #LS_LABEL1]
     ldr     x1, [x9, #LS_I1]
-    bl      mt_label
+    bl      lantern_mt_label
     ldr     x9, [sp, #16]
     ldr     x10, [x9, #LS_LABEL2]
     cbz     x10, 9f
@@ -234,26 +234,26 @@ LOCAL_FUNCTION mt_open
     ldr     x9, [sp, #16]
     ldr     x0, [x9, #LS_LABEL2]
     ldr     x1, [x9, #LS_I2]
-    bl      mt_label
+    bl      lantern_mt_label
 9:  ldr     x0, [sp, #24]
     UNFRAME 32
-END_FUNCTION mt_open
+END_FUNCTION lantern_mt_open
 
 /* A sample's end: "}" when x0 is 1, " ", then the decimal x1 and LF. Locals: x1. */
-LOCAL_FUNCTION mt_value
+LOCAL_FUNCTION lantern_mt_value
     FRAME 16
     str     x1, [sp, #16]
     cbz     x0, 1f
     MT_TEXT mx_rbrace
 1:  MT_TEXT mx_sp
     ldr     x0, [sp, #16]
-    bl      mt_dec
+    bl      lantern_mt_dec
     MT_TEXT mx_lf
     UNFRAME 16
-END_FUNCTION mt_value
+END_FUNCTION lantern_mt_value
 
 /* `{` when x0 is 0, else `,`; then `le="`. */
-LOCAL_FUNCTION mt_le
+LOCAL_FUNCTION lantern_mt_le
     FRAME 0
     cbnz    x0, 1f
     MT_TEXT mx_lbrace
@@ -262,14 +262,14 @@ LOCAL_FUNCTION mt_le
 2:  MT_TEXT mx_le
     MT_TEXT mx_eq
     UNFRAME 0
-END_FUNCTION mt_le
+END_FUNCTION lantern_mt_le
 
 /*
  * The histogram x0 of the bound set record x1, with the labels of the LabelState x2; x3 is the
  * ticks per second for a set of ticks. Locals: the Histogram, the bounds, the LabelState, the tick
  * rate, the bound index, the sum so far.
  */
-LOCAL_FUNCTION mt_histogram
+LOCAL_FUNCTION lantern_mt_histogram
     FRAME 48
     stp     x0, x1, [sp, #16]
     stp     x2, x3, [sp, #32]
@@ -287,8 +287,8 @@ LOCAL_FUNCTION mt_histogram
     ADDRESS x0, mx_bucket
     mov     x1, #mx_bucket_len
     ldr     x2, [sp, #32]
-    bl      mt_open
-    bl      mt_le
+    bl      lantern_mt_open
+    bl      lantern_mt_le
     ldr     x9, [sp, #48]                   /* the bound's text */
     ldr     x11, [sp, #24]
     ldr     w12, [x11, #MetricBounds_first]
@@ -297,11 +297,11 @@ LOCAL_FUNCTION mt_histogram
     add     x13, x13, x12, lsl #4
     ldr     w0, [x13, #MetricBound_text]
     ldr     w1, [x13, #MetricBound_text_len]
-    bl      mt_text
+    bl      lantern_mt_text
     MT_TEXT mx_quote
     mov     x0, #1
     ldr     x1, [sp, #56]
-    bl      mt_value
+    bl      lantern_mt_value
     ldr     x9, [sp, #48]
     add     x9, x9, #1
     str     x9, [sp, #48]
@@ -310,19 +310,19 @@ LOCAL_FUNCTION mt_histogram
 2:  ADDRESS x0, mx_bucket
     mov     x1, #mx_bucket_len
     ldr     x2, [sp, #32]
-    bl      mt_open
-    bl      mt_le
+    bl      lantern_mt_open
+    bl      lantern_mt_le
     MT_TEXT mx_inf
     MT_TEXT mx_quote
     mov     x0, #1
     ldr     x9, [sp, #16]
     ldr     x1, [x9, #Histogram_count]
-    bl      mt_value
+    bl      lantern_mt_value
     /* _sum in seconds */
     ADDRESS x0, mx_sum
     mov     x1, #mx_sum_len
     ldr     x2, [sp, #32]
-    bl      mt_open
+    bl      lantern_mt_open
     cbz     x0, 3f
     MT_TEXT mx_rbrace
 3:  MT_TEXT mx_sp
@@ -333,57 +333,57 @@ LOCAL_FUNCTION mt_histogram
     cmp     w12, #METRIC_UNIT_TICKS
     b.ne    4f
     ldr     x1, [sp, #40]                   /* ticks: sum * 10^6 / the rate, in microseconds */
-    bl      mt_ticks_us
-4:  bl      mt_seconds
+    bl      lantern_mt_ticks_us
+4:  bl      lantern_mt_seconds
     MT_TEXT mx_lf
     /* _count */
     ADDRESS x0, mx_count
     mov     x1, #mx_count_len
     ldr     x2, [sp, #32]
-    bl      mt_open
+    bl      lantern_mt_open
     ldr     x9, [sp, #16]
     ldr     x1, [x9, #Histogram_count]
-    bl      mt_value
+    bl      lantern_mt_value
     UNFRAME 48
-END_FUNCTION mt_histogram
+END_FUNCTION lantern_mt_histogram
 
 /* The entry x23's name and `{topic="<name>"` of the GossipTopic x0. Locals: the topic. */
-LOCAL_FUNCTION mt_topic
+LOCAL_FUNCTION lantern_mt_topic
     FRAME 16
     str     x0, [sp, #16]
-    bl      mt_name
+    bl      lantern_mt_name
     MT_TEXT mx_lbrace
     MT_TEXT mx_topic
     MT_TEXT mx_eq
     ldr     x9, [sp, #16]
     add     x0, x9, #GossipTopic_name
     ldr     x1, [x9, #GossipTopic_name_length]
-    bl      mt_put
+    bl      lantern_mt_put
     MT_TEXT mx_quote
     UNFRAME 16
-END_FUNCTION mt_topic
+END_FUNCTION lantern_mt_topic
 
 /* `,<name>="<value>"`: the name is x1 bytes at x0, the value x3 bytes at x2. Locals: the texts. */
-LOCAL_FUNCTION mt_pair
+LOCAL_FUNCTION lantern_mt_pair
     FRAME 32
     stp     x0, x1, [sp, #16]
     stp     x2, x3, [sp, #32]
     MT_TEXT mx_comma
     ldp     x0, x1, [sp, #16]
-    bl      mt_put
+    bl      lantern_mt_put
     MT_TEXT mx_eq
     ldp     x0, x1, [sp, #32]
-    bl      mt_put
+    bl      lantern_mt_put
     MT_TEXT mx_quote
     UNFRAME 32
-END_FUNCTION mt_pair
+END_FUNCTION lantern_mt_pair
 
 .macro MT_PAIR name, value
     ADDRESS x0, \name
     mov     x1, #\name\()_len
     ADDRESS x2, \value
     mov     x3, #\value\()_len
-    bl      mt_pair
+    bl      lantern_mt_pair
 .endm
 
 /* The element x28's label value indices into the LabelState: x28 / the second label's count, x28 % it. */
@@ -493,14 +493,14 @@ FUNCTION lantern_metrics_text
     b       21b
     /* # HELP <name> <help>; # TYPE <name> <type> */
 30: MT_TEXT mx_help
-    bl      mt_name
+    bl      lantern_mt_name
     MT_TEXT mx_sp
     ldr     w0, [x23, #MetricEntry_help]
     ldr     w1, [x23, #MetricEntry_help_len]
-    bl      mt_text
+    bl      lantern_mt_text
     MT_TEXT mx_lf
     MT_TEXT mx_type
-    bl      mt_name
+    bl      lantern_mt_name
     ldr     w9, [x23, #MetricEntry_type]
     cmp     w9, #METRIC_TYPE_COUNTER
     b.eq    31f
@@ -549,20 +549,20 @@ FUNCTION lantern_metrics_text
 40: mov     x0, #0                          /* a value */
     mov     x1, #0
     add     x2, sp, #(L + 32)
-    bl      mt_open
+    bl      lantern_mt_open
     ldr     x1, [x24]
-    bl      mt_value
+    bl      lantern_mt_value
     b       80f
-41: bl      mt_name                         /* a root, signed */
+41: bl      lantern_mt_name                         /* a root, signed */
     MT_TEXT mx_sp
     ldr     x0, [x24]
-    bl      mt_sdec
+    bl      lantern_mt_sdec
     MT_TEXT mx_lf
     b       80f
-42: bl      mt_name                         /* microseconds as seconds */
+42: bl      lantern_mt_name                         /* microseconds as seconds */
     MT_TEXT mx_sp
     ldr     x0, [x24]
-    bl      mt_seconds
+    bl      lantern_mt_seconds
     MT_TEXT mx_lf
     b       80f
 43: ldr     x9, [sp, #(L + 64)]             /* values by labels: element e at e * 8 */
@@ -572,9 +572,9 @@ FUNCTION lantern_metrics_text
     mov     x0, #0
     mov     x1, #0
     add     x2, sp, #(L + 32)
-    bl      mt_open
+    bl      lantern_mt_open
     ldr     x1, [x24, x28, lsl #3]
-    bl      mt_value
+    bl      lantern_mt_value
     add     x28, x28, #1
     b       43b
 44: ldr     x9, [sp, #(L + 64)]             /* histograms by labels: element e at e * Histogram__mem */
@@ -588,7 +588,7 @@ FUNCTION lantern_metrics_text
     add     x1, x1, x9, lsl #4
     add     x2, sp, #(L + 32)
     ldr     x3, [sp, #(L + 24)]
-    bl      mt_histogram
+    bl      lantern_mt_histogram
     add     x28, x28, #1
     b       44b
     /* gossipsub: each topic */
@@ -599,40 +599,40 @@ FUNCTION lantern_metrics_text
     ldr     x9, [x26, #GossipTopic_subnet]  /* main topics only */
     cbnz    x9, 59f
     mov     x0, x26
-    bl      mt_topic
+    bl      lantern_mt_topic
     mov     x0, #1
     ldr     x1, [x26, #GossipTopic_mesh_peers]
-    bl      mt_value
+    bl      lantern_mt_value
     b       59f
 52: cmp     w25, #METRIC_KIND_GOSSIP_SENT
     b.ne    53f
     mov     x0, x26
-    bl      mt_topic
+    bl      lantern_mt_topic
     MT_PAIR mx_partial, mx_false
     mov     x0, #1
     ldr     x1, [x26, #GossipTopic_sent_bytes]
-    bl      mt_value
+    bl      lantern_mt_value
     mov     x0, x26
-    bl      mt_topic
+    bl      lantern_mt_topic
     MT_PAIR mx_partial, mx_true
     mov     x0, #1
     ldr     x1, [x26, #GossipTopic_sent_partial_bytes]
-    bl      mt_value
+    bl      lantern_mt_value
     b       59f
 53: mov     x0, x26                         /* mesh peers by partial support */
-    bl      mt_topic
+    bl      lantern_mt_topic
     MT_PAIR mx_supports, mx_false
     mov     x0, #1
     ldr     x1, [x26, #GossipTopic_mesh_peers]
     ldr     x9, [x26, #GossipTopic_mesh_partial_peers]
     sub     x1, x1, x9
-    bl      mt_value
+    bl      lantern_mt_value
     mov     x0, x26
-    bl      mt_topic
+    bl      lantern_mt_topic
     MT_PAIR mx_supports, mx_true
     mov     x0, #1
     ldr     x1, [x26, #GossipTopic_mesh_partial_peers]
-    bl      mt_value
+    bl      lantern_mt_value
 59: add     x26, x26, #GossipTopic__mem
     sub     x27, x27, #1
     b       51b
@@ -672,7 +672,7 @@ FUNCTION lantern_metrics_node
     LDQ     x9, x19, Node_peers + 8
     str     x9, [x21, #MetricsNode_peers]
     mov     x0, x20
-    bl      node_store_slot
+    bl      lantern_node_store_slot
     mov     x22, x0
     mov     x9, #SLOTS_PER_EPOCH            /* the store's epoch: from fulu, the custody groups */
     udiv    x25, x22, x9
@@ -714,7 +714,7 @@ FUNCTION lantern_metrics_node
 6:  str     x11, [x21, #MetricsNode_local_validators]
     /* the head's block: its buffers and slot */
     ADDQ    x0, x19, Node_head_root
-    bl      node_find_block
+    bl      lantern_node_find_block
     mov     x23, #0
     mov     x9, #0
     cmn     x0, #1
@@ -803,7 +803,7 @@ FUNCTION lantern_metrics_node
     str     x1, [x9, x24, lsl #3]
     add     x24, x24, #1
     add     x0, x1, #NodeBlock_parent_root
-    bl      node_find_block
+    bl      lantern_node_find_block
     cmn     x0, #1
     b.ne    9b
     mov     x1, #0
@@ -897,7 +897,7 @@ FUNCTION lantern_metrics_answer
     MT_TEXT mx_http
     MT_TEXT mx_ok_head
     ldr     x0, [x23, #(METRICS_HEAD_ROOM + 16)]
-    bl      mt_dec
+    bl      lantern_mt_dec
     MT_TEXT mx_close
     mov     x0, x20
     add     x1, x23, #(METRICS_HEAD_ROOM + 24)
@@ -911,15 +911,15 @@ FUNCTION lantern_metrics_answer
     mov     x22, #0
     MT_TEXT mx_http
     mov     x0, x24
-    bl      mt_dec
+    bl      lantern_mt_dec
     MT_TEXT mx_sp
     mov     x0, x24
-    bl      api_code
+    bl      lantern_api_code
     cbz     x0, 51f
     ldp     x9, x1, [x0, #8]
     ADDRESS x0, api_texts
     add     x0, x0, x9
-    bl      mt_put
+    bl      lantern_mt_put
 51: MT_TEXT mx_crlf
     cmp     x24, #405
     b.ne    52f

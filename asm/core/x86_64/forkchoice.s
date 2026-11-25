@@ -76,7 +76,7 @@
     jne     \fail
 .endm
 
-/* The Checkpoint at dst = the one at src when src's epoch is greater (update_checkpoints). Uses r10, r11, xmm0, xmm1. */
+/* The Checkpoint at dst = the one at src when src's epoch is greater (lantern_update_checkpoints). Uses r10, r11, xmm0, xmm1. */
 .macro RAISE dst, src
     mov     Checkpoint_epoch(\src), %r10
     cmp     Checkpoint_epoch(\dst), %r10
@@ -121,7 +121,7 @@
 /* ---------------------------------------------------------------- Nodes */
 
 /* L0: rax = the node of the root at rsi in store rdi, or NODE_NONE. A leaf; uses rcx, rdx, r8-r11. */
-LOCAL_FUNCTION find_node
+LOCAL_FUNCTION lantern_find_node
     UNWIND_END_PROLOGUE
     PART    %rdx, %rcx, %rdi, Store_blocks
     mov     (%rsi), %r8
@@ -145,10 +145,10 @@ LOCAL_FUNCTION find_node
     ret
 9:  mov     $-1, %rax                       # NODE_NONE
     ret
-END_FUNCTION find_node
+END_FUNCTION lantern_find_node
 
 /* L0: rax = status, rdx = get_ancestor(store rdi, node rsi, slot rdx). A leaf; uses rcx, rsi, r8. */
-LOCAL_FUNCTION ancestor
+LOCAL_FUNCTION lantern_ancestor
     UNWIND_END_PROLOGUE
     mov     Store_blocks(%rdi), %rcx
     add     %rdi, %rcx
@@ -164,19 +164,19 @@ LOCAL_FUNCTION ancestor
 2:  mov     %rsi, %rdx
     xor     %eax, %eax
     ret
-END_FUNCTION ancestor
+END_FUNCTION lantern_ancestor
 
 /* L0: rax = status, rdx = the node of get_checkpoint_block(store rdi, node rsi, epoch rdx). A leaf. */
-LOCAL_FUNCTION checkpoint_block
+LOCAL_FUNCTION lantern_checkpoint_block
     UNWIND_END_PROLOGUE
     mov     %rdx, %rax
     shr     $(64 - LOG2_SLOTS_PER_EPOCH), %rax      # compute_start_slot_at_epoch(epoch) fits
     jnz     9f
     shl     $LOG2_SLOTS_PER_EPOCH, %rdx
-    jmp     ancestor
+    jmp     lantern_ancestor
 9:  mov     $LANTERN_INVALID_OVERFLOW, %eax
     ret
-END_FUNCTION checkpoint_block
+END_FUNCTION lantern_checkpoint_block
 
 SPEC_LEAF get_current_slot
     STORE_SLOT %rdi, 9f
@@ -200,7 +200,7 @@ SPEC_FUNCTION get_ancestor
     mov     %rcx, (%rsp)
     mov     (%rsi), %rsi
     mov     (%rdx), %rdx
-    call    ancestor
+    call    lantern_ancestor
     test    %rax, %rax
     jnz     1f
     mov     (%rsp), %rcx
@@ -215,13 +215,13 @@ SPEC_FUNCTION get_checkpoint_block
     mov     %rcx, 8(%rsp)
     mov     (%rdx), %rdx
     mov     %rdx, 16(%rsp)
-    call    find_node
+    call    lantern_find_node
     cmp     $-1, %rax
     je      8f
     mov     %rax, %rsi
     mov     (%rsp), %rdi
     mov     16(%rsp), %rdx
-    call    checkpoint_block
+    call    lantern_checkpoint_block
     test    %rax, %rax
     jnz     7f
     mov     (%rsp), %rdi
@@ -240,7 +240,7 @@ SPEC_END get_checkpoint_block
  * L0: rax = status, rdx = get_attestation_score(store rdi, node rsi) with the store's balances.
  * A leaf; uses rcx, rdi, r8-r11. An overflow is reported after the sum, as the spec's Gwei does.
  */
-LOCAL_FUNCTION attestation_score
+LOCAL_FUNCTION lantern_attestation_score
     UNWIND_END_PROLOGUE
     mov     Store_blocks(%rdi), %r8
     add     %rdi, %r8                       # the nodes
@@ -284,13 +284,13 @@ LOCAL_FUNCTION attestation_score
     ret
 9:  mov     $LANTERN_INVALID_OVERFLOW, %eax
     ret
-END_FUNCTION attestation_score
+END_FUNCTION lantern_attestation_score
 
 /*
  * L0: rax = status, rdx = calculate_committee_fraction(justified state, percent rsi), from the
  * store's total balance. A leaf; uses rcx.
  */
-LOCAL_FUNCTION committee_fraction
+LOCAL_FUNCTION lantern_committee_fraction
     UNWIND_END_PROLOGUE
     mov     Store_balances_total(%rdi), %rax
     shr     $LOG2_SLOTS_PER_EPOCH, %rax     # committee_weight = total_balance // SLOTS_PER_EPOCH
@@ -303,14 +303,14 @@ LOCAL_FUNCTION committee_fraction
     ret
 9:  mov     $LANTERN_INVALID_OVERFLOW, %eax
     ret
-END_FUNCTION committee_fraction
+END_FUNCTION lantern_committee_fraction
 
 /* L0: rax = status, rdx = get_weight(store rdi, node rsi) with the store's balances. rbx store, rbp node, r12 score. */
-LOCAL_FUNCTION weight
+LOCAL_FUNCTION lantern_weight
     ENTER 0
     mov     %rdi, %rbx
     mov     %rsi, %rbp
-    call    attestation_score
+    call    lantern_attestation_score
     test    %rax, %rax
     jnz     7f
     mov     %rdx, %r12
@@ -321,7 +321,7 @@ LOCAL_FUNCTION weight
     or      24(%rsi), %rax
     jz      6f                              # no proposer_boost_root: the attestation score
     mov     %rbx, %rdi
-    call    find_node
+    call    lantern_find_node
     cmp     $-1, %rax
     je      8f
     NODE    %rcx, %rbx, %rax                # no boost from an INVALIDATED block (optimistic sync)
@@ -331,14 +331,14 @@ LOCAL_FUNCTION weight
     NODE    %rcx, %rbx, %rbp
     mov     BlockNode_slot(%rcx), %rdx
     mov     %rbx, %rdi
-    call    ancestor
+    call    lantern_ancestor
     test    %rax, %rax
     jnz     7f
     cmp     %rbp, %rdx
     jne     6f
     mov     %rbx, %rdi                      # get_proposer_score(store)
     mov     (Store_config + CONFIG_PROPOSER_SCORE_BOOST)(%rbx), %rsi
-    call    committee_fraction
+    call    lantern_committee_fraction
     test    %rax, %rax
     jnz     7f
     add     %rdx, %r12
@@ -350,14 +350,14 @@ LOCAL_FUNCTION weight
     LEAVE 0
 9:  mov     $LANTERN_INVALID_OVERFLOW, %eax
     LEAVE 0
-END_FUNCTION weight
+END_FUNCTION lantern_weight
 
 SPEC_FUNCTION get_weight
     FRAME 16
     mov     %rdx, (%rsp)
     NEED_BALANCES %rdi, 8f
     mov     (%rsi), %rsi
-    call    weight
+    call    lantern_weight
     test    %rax, %rax
     jnz     7f
     mov     (%rsp), %rcx
@@ -375,7 +375,7 @@ SPEC_END get_weight
  * rbx store, rbp flags, r12 node count, r13 nodes, r14 i; S7 justified node, S8 current epoch,
  * S9 correct_justified.
  */
-LOCAL_FUNCTION filter_tree
+LOCAL_FUNCTION lantern_filter_tree
     ENTER 16
     mov     %rdi, %rbx
     mov     (Store_blocks + 8)(%rbx), %r12
@@ -392,7 +392,7 @@ LOCAL_FUNCTION filter_tree
     add     %rbx, %r13
     mov     %rbx, %rdi
     lea     (Store_justified_checkpoint + Checkpoint_root)(%rbx), %rsi
-    call    find_node
+    call    lantern_find_node
     cmp     $-1, %rax
     je      8f
     mov     %rax, S7(%rsp)
@@ -453,7 +453,7 @@ LOCAL_FUNCTION filter_tree
 34: mov     %rbx, %rdi                      # finalized_checkpoint_block
     mov     %r14, %rsi
     mov     (Store_finalized_checkpoint + Checkpoint_epoch)(%rbx), %rdx
-    call    checkpoint_block
+    call    lantern_checkpoint_block
     test    %rax, %rax
     jnz     7f
     cmpq    $0, (Store_finalized_checkpoint + Checkpoint_epoch)(%rbx)
@@ -481,7 +481,7 @@ LOCAL_FUNCTION filter_tree
     LEAVE 16
 10: mov     $LANTERN_INVALID_OVERFLOW, %eax
     LEAVE 16
-END_FUNCTION filter_tree
+END_FUNCTION lantern_filter_tree
 
 /*
  * L1: the weights of all nodes at once (fork-choice.md, lantern_get_head): store rdi, weights rsi
@@ -490,7 +490,7 @@ END_FUNCTION filter_tree
  * sets F_OVERFLOW in the flags of the node and of each node above it. rbx store, rbp flags, r12
  * node count, r13 nodes, r14 i, S8 the weights. Locals: L the status of the boost.
  */
-LOCAL_FUNCTION weights
+LOCAL_FUNCTION lantern_weights
     ENTER 16
     mov     %rdi, %rbx
     mov     %rsi, S8(%rsp)
@@ -531,7 +531,7 @@ LOCAL_FUNCTION weights
     or      24(%rsi), %rax
     jz      4f
     mov     %rbx, %rdi
-    call    find_node
+    call    lantern_find_node
     cmp     $-1, %rax
     jne     31f
     movq    $LANTERN_INVALID_UNKNOWN_BLOCK, L(%rsp)
@@ -542,7 +542,7 @@ LOCAL_FUNCTION weights
     je      4f
     mov     %rbx, %rdi                      # get_proposer_score(store)
     mov     (Store_config + CONFIG_PROPOSER_SCORE_BOOST)(%rbx), %rsi
-    call    committee_fraction
+    call    lantern_committee_fraction
     test    %rax, %rax
     jz      32f
     mov     %rax, L(%rsp)
@@ -570,7 +570,7 @@ LOCAL_FUNCTION weights
     jmp     41b
 60: mov     L(%rsp), %rax
     LEAVE 16
-END_FUNCTION weights
+END_FUNCTION lantern_weights
 
 /*
  * L0: rax = status, rdx = get_head(store rdi), with scratch rsi of S(2) for the node count. The
@@ -579,11 +579,11 @@ END_FUNCTION weights
  * rbx store, rbp flags, r12 node count, r13 nodes, r14 i, r15 head; S7 justified node, S8 the
  * weights, S9 best child, S10 best weight. Locals: L the status of the boost.
  */
-LOCAL_FUNCTION head
+LOCAL_FUNCTION lantern_head
     ENTER 16
     mov     %rdi, %rbx
     mov     (Store_blocks + 8)(%rbx), %r12
-    mov     (%rsi), %rax                    # the weights: 8 bytes a node, before filter_tree's flags
+    mov     (%rsi), %rax                    # the weights: 8 bytes a node, before lantern_filter_tree's flags
     mov     %r12, %rcx
     shl     $4, %rcx
     lea     (LIST_FIXED + LANTERN_SCRATCH_FIXED)(%rcx), %rdx
@@ -595,7 +595,7 @@ LOCAL_FUNCTION head
     add     %rsi, %rax
     mov     %rax, S8(%rsp)
     mov     %rbx, %rdi
-    call    filter_tree                     # nodes = get_filtered_node_tree(store)
+    call    lantern_filter_tree                     # nodes = get_filtered_node_tree(store)
     test    %rax, %rax
     jnz     7f
     mov     %rdx, %rbp
@@ -605,7 +605,7 @@ LOCAL_FUNCTION head
     mov     %rbx, %rdi                      # the weights of all nodes at once
     mov     S8(%rsp), %rsi
     mov     %rbp, %rdx
-    call    weights
+    call    lantern_weights
     mov     %rax, L(%rsp)
 60: mov     S7(%rsp), %r15                  # head = the justified node
 61: movq    $-1, S9(%rsp)                   # the best child so far
@@ -652,14 +652,14 @@ LOCAL_FUNCTION head
     LEAVE 16
 9:  mov     $LANTERN_BUFFER_TOO_SMALL, %eax
     LEAVE 16
-END_FUNCTION head
+END_FUNCTION lantern_head
 
 /* rbx store, rbp out. */
 SPEC_FUNCTION get_filtered_node_tree
     ENTER 0
     mov     %rdi, %rbx
     mov     %rdx, %rbp
-    call    filter_tree
+    call    lantern_filter_tree
     test    %rax, %rax
     jnz     7f
     mov     (Store_blocks + 8)(%rbx), %rcx
@@ -698,7 +698,7 @@ SPEC_FUNCTION get_head
     FRAME 16
     mov     %rdx, (%rsp)
     NEED_BALANCES %rdi, 8f
-    call    head
+    call    lantern_head
     test    %rax, %rax
     jnz     7f
     mov     (%rsp), %rcx
@@ -710,28 +710,28 @@ SPEC_END get_head
 
 /* ---------------------------------------------------------------- Checkpoints and time */
 
-/* L0: update_checkpoints(store rdi, justified rsi, finalized rdx). A leaf; uses rax, r10, r11, xmm0, xmm1. */
-LOCAL_FUNCTION update_checkpoints
+/* L0: lantern_update_checkpoints(store rdi, justified rsi, finalized rdx). A leaf; uses rax, r10, r11, xmm0, xmm1. */
+LOCAL_FUNCTION lantern_update_checkpoints
     UNWIND_END_PROLOGUE
     lea     Store_justified_checkpoint(%rdi), %rax
     RAISE   %rax, %rsi
     lea     Store_finalized_checkpoint(%rdi), %rax
     RAISE   %rax, %rdx
     ret
-END_FUNCTION update_checkpoints
+END_FUNCTION lantern_update_checkpoints
 
-/* L0: update_unrealized_checkpoints(store rdi, justified rsi, finalized rdx). A leaf; uses rax, r10, r11, xmm0, xmm1. */
-LOCAL_FUNCTION update_unrealized_checkpoints
+/* L0: lantern_update_unrealized_checkpoints(store rdi, justified rsi, finalized rdx). A leaf; uses rax, r10, r11, xmm0, xmm1. */
+LOCAL_FUNCTION lantern_update_unrealized_checkpoints
     UNWIND_END_PROLOGUE
     lea     Store_unrealized_justified_checkpoint(%rdi), %rax
     RAISE   %rax, %rsi
     lea     Store_unrealized_finalized_checkpoint(%rdi), %rax
     RAISE   %rax, %rdx
     ret
-END_FUNCTION update_unrealized_checkpoints
+END_FUNCTION lantern_update_unrealized_checkpoints
 
-/* L0: on_tick_per_slot(store rdi, time_ms rsi), with time_ms not before genesis_time_ms. A leaf. */
-LOCAL_FUNCTION on_tick_per_slot
+/* L0: lantern_on_tick_per_slot(store rdi, time_ms rsi), with time_ms not before genesis_time_ms. A leaf. */
+LOCAL_FUNCTION lantern_on_tick_per_slot
     UNWIND_END_PROLOGUE
     STORE_SLOT %rdi, 9f                     # previous_slot
     mov     %rax, %rcx
@@ -746,9 +746,9 @@ LOCAL_FUNCTION on_tick_per_slot
     jnz     9f
     lea     Store_unrealized_justified_checkpoint(%rdi), %rsi
     lea     Store_unrealized_finalized_checkpoint(%rdi), %rdx
-    jmp     update_checkpoints
+    jmp     lantern_update_checkpoints
 9:  ret
-END_FUNCTION on_tick_per_slot
+END_FUNCTION lantern_on_tick_per_slot
 
 /* rbx store, rbp time_ms, r12 result, r13 tick slot, r14 genesis_time_ms, r15 SLOT_DURATION_MS. */
 SPEC_FUNCTION on_tick
@@ -772,11 +772,11 @@ SPEC_FUNCTION on_tick
     imul    %r15, %rax                      # compute_time_at_slot_ms(genesis_time_ms, next_slot)
     lea     (%rax,%r14), %rsi
     mov     %rbx, %rdi
-    call    on_tick_per_slot
+    call    lantern_on_tick_per_slot
     jmp     1b
 2:  mov     %rbx, %rdi
     mov     %rbp, %rsi
-    call    on_tick_per_slot
+    call    lantern_on_tick_per_slot
     xor     %eax, %eax
     LEAVE 0
 6:  movq    $LANTERN_INVALID_OVERFLOW, (%r12)
@@ -993,7 +993,7 @@ SPEC_END get_forkchoice_store
  * L0: rax = validate_on_attestation(store rdi, data rsi, is_from_block rdx as a value), as a
  * status; rdx = the node of the head vote. rbx store, rbp data, r12 target node, r13 head node.
  */
-LOCAL_FUNCTION validate_attestation
+LOCAL_FUNCTION lantern_validate_attestation
     ENTER 0
     mov     %rdi, %rbx
     mov     %rsi, %rbp
@@ -1015,13 +1015,13 @@ LOCAL_FUNCTION validate_attestation
     jne     6f
     mov     %rbx, %rdi                      # target.root in store.blocks
     lea     (AttestationData_target + Checkpoint_root)(%rbp), %rsi
-    call    find_node
+    call    lantern_find_node
     cmp     $-1, %rax
     je      8f
     mov     %rax, %r12
     mov     %rbx, %rdi                      # beacon_block_root in store.blocks
     lea     AttestationData_beacon_block_root(%rbp), %rsi
-    call    find_node
+    call    lantern_find_node
     cmp     $-1, %rax
     je      8f
     mov     %rax, %r13
@@ -1032,7 +1032,7 @@ LOCAL_FUNCTION validate_attestation
     mov     %rbx, %rdi                      # target.root == get_checkpoint_block(beacon_block_root, target.epoch)
     mov     %r13, %rsi
     mov     (AttestationData_target + Checkpoint_epoch)(%rbp), %rdx
-    call    checkpoint_block
+    call    lantern_checkpoint_block
     test    %rax, %rax
     jnz     7f
     cmp     %r12, %rdx
@@ -1056,13 +1056,13 @@ LOCAL_FUNCTION validate_attestation
     LEAVE 0
 10: mov     $LANTERN_INVALID_OVERFLOW, %eax
     LEAVE 0
-END_FUNCTION validate_attestation
+END_FUNCTION lantern_validate_attestation
 
 SPEC_FUNCTION validate_on_attestation
     FRAME 0
     add     $Attestation_data, %rsi
     mov     (%rdx), %rdx
-    call    validate_attestation
+    call    lantern_validate_attestation
     UNFRAME 0
 SPEC_END validate_on_attestation
 
@@ -1113,7 +1113,7 @@ SPEC_FUNCTION on_attestation
     mov     %rbx, %rdi                      # validate_on_attestation(store, attestation, is_from_block)
     lea     Attestation_data(%rbp), %rsi
     mov     (%r12), %rdx
-    call    validate_attestation
+    call    lantern_validate_attestation
     test    %rax, %rax
     jnz     6f
     mov     %rdx, S9(%rsp)
@@ -1135,7 +1135,7 @@ SPEC_FUNCTION on_attestation
     mov     (Store_config + CONFIG_PUBKEY_CACHE)(%rbx), %rdx
     mov     %rbp, %r9                       # with the attestation and its CommitteeCache: key sums
     mov     (Store_config + CONFIG_COMMITTEE_CACHE)(%rbx), %r10
-    call    indexed_attestation_valid
+    call    lantern_indexed_attestation_valid
     CHECK_STATUS %r15, 7f, 8f
     mov     $LANTERN_INVALID_ATTESTATION, %eax
     cmpq    $0, L(%rsp)
@@ -1360,13 +1360,13 @@ SPEC_FUNCTION get_proposer_head
     jmp     7f
 31: mov     %rbx, %rdi                      # is_head_weak: reorg_threshold
     mov     (Store_config + CONFIG_REORG_HEAD_WEIGHT_THRESHOLD)(%rbx), %rsi
-    call    committee_fraction
+    call    lantern_committee_fraction
     test    %rax, %rax
     jnz     7f
     mov     %rdx, (L + 32)(%rsp)
     mov     %rbx, %rdi                      # head_weight = get_attestation_score(store, head_node, justified_state)
     mov     %rbp, %rsi
-    call    attestation_score
+    call    lantern_attestation_score
     test    %rax, %rax
     jnz     7f
     mov     %rdx, S10(%rsp)
@@ -1432,13 +1432,13 @@ SPEC_FUNCTION get_proposer_head
     orq     $32, S8(%rsp)
 61: mov     %rbx, %rdi                      # is_parent_strong
     mov     (Store_config + CONFIG_REORG_PARENT_WEIGHT_THRESHOLD)(%rbx), %rsi
-    call    committee_fraction
+    call    lantern_committee_fraction
     test    %rax, %rax
     jnz     7f
     mov     %rdx, S10(%rsp)
     mov     %rbx, %rdi
     mov     S7(%rsp), %rsi
-    call    attestation_score
+    call    lantern_attestation_score
     test    %rax, %rax
     jnz     7f
     cmp     S10(%rsp), %rdx
@@ -1501,7 +1501,7 @@ SPEC_END get_proposer_head
 
 .if FORK == FORK_BELLATRIX
 /* L0: rax = 1 when the Uint256 at rdi is below the one at rsi, else 0. A leaf. */
-LOCAL_FUNCTION u256_lo
+LOCAL_FUNCTION lantern_u256_lo
     UNWIND_END_PROLOGUE
     mov     $24, %ecx                       # from the most significant u64 down
 1:  mov     (%rdi,%rcx), %rax
@@ -1514,7 +1514,7 @@ LOCAL_FUNCTION u256_lo
     ret
 2:  mov     $1, %eax
     ret
-END_FUNCTION u256_lo
+END_FUNCTION lantern_u256_lo
 
 /* (block, parent, config, out). Locals: rsp+0 block, parent, config, out; rsp+32 the first condition. */
 SPEC_FUNCTION is_valid_terminal_pow_block
@@ -1525,14 +1525,14 @@ SPEC_FUNCTION is_valid_terminal_pow_block
     mov     %rcx, 24(%rsp)
     add     $PowBlock_total_difficulty, %rdi        # is_total_difficulty_reached = block.total_difficulty >= TERMINAL_TOTAL_DIFFICULTY
     lea     CONFIG_TERMINAL_TOTAL_DIFFICULTY(%rdx), %rsi
-    call    u256_lo
+    call    lantern_u256_lo
     xor     $1, %eax
     mov     %rax, 32(%rsp)
     mov     8(%rsp), %rdi                   # is_parent_total_difficulty_valid = parent.total_difficulty < TERMINAL_TOTAL_DIFFICULTY
     add     $PowBlock_total_difficulty, %rdi
     mov     16(%rsp), %rsi
     add     $CONFIG_TERMINAL_TOTAL_DIFFICULTY, %rsi
-    call    u256_lo
+    call    lantern_u256_lo
     and     32(%rsp), %rax
     mov     24(%rsp), %rcx
     mov     %rax, (%rcx)
@@ -1618,13 +1618,13 @@ SPEC_FUNCTION on_block
     jnz     7f
     mov     %rbx, %rdi                      # return early if the block is already known
     lea     L(%rsp), %rsi
-    call    find_node
+    call    lantern_find_node
     cmp     $-1, %rax
     jne     8f
     mov     %rbx, %rdi                      # assert block.parent_root in store.block_states
     mov     S7(%rsp), %rsi
     add     $BeaconBlock_parent_root, %rsi
-    call    find_node
+    call    lantern_find_node
     mov     %rax, S9(%rsp)
     cmp     $-1, %rax
     mov     $LANTERN_INVALID_UNKNOWN_BLOCK, %eax
@@ -1652,7 +1652,7 @@ SPEC_FUNCTION on_block
     jbe     6f
     mov     %rbx, %rdi                      # finalized_checkpoint_block of the parent
     mov     S9(%rsp), %rsi
-    call    checkpoint_block
+    call    lantern_checkpoint_block
     test    %rax, %rax
     jnz     6f
     NODE    %rcx, %rbx, %rdx
@@ -1719,7 +1719,7 @@ SPEC_FUNCTION on_block
     mov     %rax, (%r14)
     mov     %rbx, %rdi
     mov     %r14, %rsi
-    call    head
+    call    lantern_head
     test    %rax, %rax
     jnz     6f
     mov     %rdx, (L + 48)(%rsp)
@@ -1795,7 +1795,7 @@ SPEC_FUNCTION on_block
     mov     %rbx, %rdi                      # head_dependent_root
     mov     (L + 48)(%rsp), %rsi
     mov     %rax, %rdx
-    call    ancestor
+    call    lantern_ancestor
     test    %rax, %rax
     jnz     6f
     mov     %rdx, (L + 288)(%rsp)
@@ -1807,7 +1807,7 @@ SPEC_FUNCTION on_block
     mov     %rbx, %rdi
     mov     S9(%rsp), %rsi
     mov     S10(%rsp), %rdx
-    call    ancestor
+    call    lantern_ancestor
     test    %rax, %rax
     jnz     6f
     mov     %rdx, %rcx
@@ -1878,14 +1878,14 @@ SPEC_FUNCTION on_block
     lea     Store_proposer_boost_root(%rbx), %rdx
     lea     L(%rsp), %rcx
     COPY32  %rdx, %rcx
-42: mov     %rbx, %rdi                      # update_checkpoints(store, state.current_justified, state.finalized)
+42: mov     %rbx, %rdi                      # lantern_update_checkpoints(store, state.current_justified, state.finalized)
     lea     BeaconState_current_justified_checkpoint(%r12), %rsi
     lea     BeaconState_finalized_checkpoint(%r12), %rdx
-    call    update_checkpoints
+    call    lantern_update_checkpoints
     mov     %rbx, %rdi                      # compute_pulled_up_tip
     lea     (L + 64)(%rsp), %rsi
     lea     (L + 104)(%rsp), %rdx
-    call    update_unrealized_checkpoints
+    call    lantern_update_unrealized_checkpoints
     mov     S7(%rsp), %rax
     mov     BeaconBlock_slot(%rax), %rax
     shr     $LOG2_SLOTS_PER_EPOCH, %rax
@@ -1896,7 +1896,7 @@ SPEC_FUNCTION on_block
     mov     %rbx, %rdi
     lea     (L + 64)(%rsp), %rsi
     lea     (L + 104)(%rsp), %rdx
-    call    update_checkpoints
+    call    lantern_update_checkpoints
 8:  xor     %eax, %eax
 7:  LEAVE 304
 6:  mov     %rax, (%r15)

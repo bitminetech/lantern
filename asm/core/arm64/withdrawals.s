@@ -166,7 +166,7 @@ SPEC_END get_balance_after_withdrawals
  * The list all = prior + new, for get_balance_after_withdrawals: x0 = all (a Withdrawals value),
  * x1 = prior, x2 = new. Uses x0-x3, x9-x12. A leaf.
  */
-LOCAL_FUNCTION concat_withdrawals
+LOCAL_FUNCTION lantern_concat_withdrawals
     UNWIND_END_PROLOGUE
     mov     x9, #LIST_FIXED
     str     x9, [x0, #LIST_OFFSET]
@@ -191,10 +191,10 @@ LOCAL_FUNCTION concat_withdrawals
     subs    x10, x10, #1
     b.ne    3b
 4:  ret
-END_FUNCTION concat_withdrawals
+END_FUNCTION lantern_concat_withdrawals
 
 /* Append Withdrawal(index, validator_index, address of validator, amount) to Withdrawals x0. x1 index, x2 validator index, x3 validator, x4 amount. */
-LOCAL_FUNCTION append_withdrawal
+LOCAL_FUNCTION lantern_append_withdrawal
     UNWIND_END_PROLOGUE
     ldr     x9, [x0, #LIST_COUNT]
     add     x10, x9, #1
@@ -213,7 +213,7 @@ LOCAL_FUNCTION append_withdrawal
     str     wzr, [x9, #(Withdrawal_address + 20)]                 /* padding */
     str     x4, [x9, #Withdrawal_amount]
     ret
-END_FUNCTION append_withdrawal
+END_FUNCTION lantern_append_withdrawal
 
 .if FORK >= FORK_ELECTRA
 /*
@@ -257,7 +257,7 @@ SPEC_FUNCTION get_pending_partial_withdrawals
     mov     x0, x24                         /* all_withdrawals = prior_withdrawals + withdrawals */
     mov     x1, x21
     add     x2, x23, #16
-    bl      concat_withdrawals
+    bl      lantern_concat_withdrawals
     ldr     x9, [x26, #PendingPartialWithdrawal_withdrawable_epoch]
     ldr     x10, [sp, #L]
     cmp     x9, x10                         /* not is_withdrawable */
@@ -295,7 +295,7 @@ SPEC_FUNCTION get_pending_partial_withdrawals
     add     x3, x3, x2, lsl #7
     add     x0, x23, #16
     mov     x1, x20
-    bl      append_withdrawal
+    bl      lantern_append_withdrawal
     add     x20, x20, #1
 2:  add     x28, x28, #1
     add     x26, x26, #PendingPartialWithdrawal__mem
@@ -355,7 +355,7 @@ SPEC_FUNCTION get_validators_sweep_withdrawals
     mov     x0, x24
     mov     x1, x21
     add     x2, x23, #16
-    bl      concat_withdrawals
+    bl      lantern_concat_withdrawals
     ldr     x9, [x24, #LIST_COUNT]
     cmp     x9, #MAX_WITHDRAWALS_PER_PAYLOAD    /* has_reached_limit */
     b.hs    5f
@@ -403,7 +403,7 @@ SPEC_FUNCTION get_validators_sweep_withdrawals
     add     x0, x23, #16
     mov     x1, x20
     mov     x2, x26
-    bl      append_withdrawal
+    bl      lantern_append_withdrawal
     add     x20, x20, #1
 4:  add     x26, x26, #1                    /* validator_index = (validator_index + 1) % len(state.validators) */
     cmp     x26, x27
@@ -460,7 +460,7 @@ SPEC_FUNCTION get_expected_withdrawals
     add     x0, x21, #16                    /* withdrawals.extend(partial_withdrawals) */
     add     x1, x21, #16
     add     x2, x23, #16
-    bl      concat_withdrawals
+    bl      lantern_concat_withdrawals
 .else
     str     xzr, [x23, #8]                  /* no partial withdrawals before electra */
 .endif
@@ -481,7 +481,7 @@ SPEC_FUNCTION get_expected_withdrawals
     add     x0, x21, #16
     add     x1, x21, #16
     add     x2, x24, #16
-    bl      concat_withdrawals
+    bl      lantern_concat_withdrawals
     ldr     x9, [x23, #8]
     str     x9, [x21]                       /* processed_partial_withdrawals_count */
     ldr     x9, [x24, #8]

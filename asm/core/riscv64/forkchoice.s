@@ -68,7 +68,7 @@
     NE40    t5, t6, \fail
 .endm
 
-/* The Checkpoint at dst = the one at src when src's epoch is greater (update_checkpoints). Uses a6, a7. */
+/* The Checkpoint at dst = the one at src when src's epoch is greater (lantern_update_checkpoints). Uses a6, a7. */
 .macro RAISE dst, src
     ld      a6, Checkpoint_epoch(\src)
     ld      a7, Checkpoint_epoch(\dst)
@@ -108,7 +108,7 @@
 /* ---------------------------------------------------------------- Nodes */
 
 /* L0: a0 = the node of the root at a1 in store a0, or NODE_NONE. A leaf; uses a2-a5, t0-t4, a7. */
-LOCAL_FUNCTION find_node
+LOCAL_FUNCTION lantern_find_node
     UNWIND_END_PROLOGUE
     PART    a2, a3, a0, Store_blocks
     ld      a4, 0(a1)
@@ -132,10 +132,10 @@ LOCAL_FUNCTION find_node
     ret
 9:  li      a0, -1                          # NODE_NONE
     ret
-END_FUNCTION find_node
+END_FUNCTION lantern_find_node
 
 /* L0: a0 = status, a1 = get_ancestor(store a0, node a1, slot a2). A leaf; uses a3-a5, t0, t1. */
-LOCAL_FUNCTION ancestor
+LOCAL_FUNCTION lantern_ancestor
     UNWIND_END_PROLOGUE
     ld      a3, Store_blocks(a0)
     add     a3, a0, a3
@@ -151,18 +151,18 @@ LOCAL_FUNCTION ancestor
     ret
 2:  li      a0, LANTERN_OK
     ret
-END_FUNCTION ancestor
+END_FUNCTION lantern_ancestor
 
 /* L0: a0 = status, a1 = the node of get_checkpoint_block(store a0, node a1, epoch a2). A leaf. */
-LOCAL_FUNCTION checkpoint_block
+LOCAL_FUNCTION lantern_checkpoint_block
     UNWIND_END_PROLOGUE
     srli    a3, a2, (64 - LOG2_SLOTS_PER_EPOCH)     # compute_start_slot_at_epoch(epoch) fits
     bnez    a3, 9f
     slli    a2, a2, LOG2_SLOTS_PER_EPOCH
-    j       ancestor
+    j       lantern_ancestor
 9:  li      a0, LANTERN_INVALID_OVERFLOW
     ret
-END_FUNCTION checkpoint_block
+END_FUNCTION lantern_checkpoint_block
 
 SPEC_LEAF get_current_slot
     STORE_SLOT a2, a0, 9f
@@ -186,7 +186,7 @@ SPEC_FUNCTION get_ancestor
     sd      a3, F(sp)
     ld      a1, 0(a1)
     ld      a2, 0(a2)
-    call    ancestor
+    call    lantern_ancestor
     bnez    a0, 1f
     ld      a3, F(sp)
     sd      a1, 0(a3)
@@ -200,13 +200,13 @@ SPEC_FUNCTION get_checkpoint_block
     sd      a3, (F + 8)(sp)
     ld      a2, 0(a2)
     sd      a2, (F + 16)(sp)
-    call    find_node
+    call    lantern_find_node
     li      t0, -1
     beq     a0, t0, 8f
     mv      a1, a0
     ld      a0, F(sp)
     ld      a2, (F + 16)(sp)
-    call    checkpoint_block
+    call    lantern_checkpoint_block
     bnez    a0, 7f
     ld      a0, F(sp)
     ld      a3, (F + 8)(sp)
@@ -224,7 +224,7 @@ SPEC_END get_checkpoint_block
  * L0: a0 = status, a1 = get_attestation_score(store a0, node a1) with the store's balances.
  * A leaf; uses a2-a5, t0-t6. An overflow is reported after the sum, as the spec's Gwei does.
  */
-LOCAL_FUNCTION attestation_score
+LOCAL_FUNCTION lantern_attestation_score
     UNWIND_END_PROLOGUE
     ld      a2, Store_blocks(a0)
     add     a2, a0, a2                      # the nodes
@@ -271,13 +271,13 @@ LOCAL_FUNCTION attestation_score
     ret
 9:  li      a0, LANTERN_INVALID_OVERFLOW
     ret
-END_FUNCTION attestation_score
+END_FUNCTION lantern_attestation_score
 
 /*
  * L0: a0 = status, a1 = calculate_committee_fraction(justified state, percent a1), from the
  * store's total balance. A leaf; uses a2, a3.
  */
-LOCAL_FUNCTION committee_fraction
+LOCAL_FUNCTION lantern_committee_fraction
     UNWIND_END_PROLOGUE
     ld      a2, Store_balances_total(a0)
     srli    a2, a2, LOG2_SLOTS_PER_EPOCH    # committee_weight = total_balance // SLOTS_PER_EPOCH
@@ -290,14 +290,14 @@ LOCAL_FUNCTION committee_fraction
     ret
 9:  li      a0, LANTERN_INVALID_OVERFLOW
     ret
-END_FUNCTION committee_fraction
+END_FUNCTION lantern_committee_fraction
 
 /* L0: a0 = status, a1 = get_weight(store a0, node a1) with the store's balances. s1 store, s2 node, s3 score. */
-LOCAL_FUNCTION weight
+LOCAL_FUNCTION lantern_weight
     ENTER 0
     mv      s1, a0
     mv      s2, a1
-    call    attestation_score
+    call    lantern_attestation_score
     bnez    a0, 7f
     mv      s3, a1
     addi    a1, s1, Store_proposer_boost_root
@@ -310,7 +310,7 @@ LOCAL_FUNCTION weight
     or      t0, t0, t2
     beqz    t0, 6f                          # no proposer_boost_root: the attestation score
     mv      a0, s1
-    call    find_node
+    call    lantern_find_node
     li      t0, -1
     beq     a0, t0, 8f
     NODE    t0, s1, a0                      # no boost from an INVALIDATED block (optimistic sync)
@@ -321,12 +321,12 @@ LOCAL_FUNCTION weight
     NODE    t0, s1, s2
     ld      a2, BlockNode_slot(t0)
     mv      a0, s1
-    call    ancestor
+    call    lantern_ancestor
     bnez    a0, 7f
     bne     a1, s2, 6f
     mv      a0, s1                          # get_proposer_score(store)
     ld      a1, (Store_config + CONFIG_PROPOSER_SCORE_BOOST)(s1)
-    call    committee_fraction
+    call    lantern_committee_fraction
     bnez    a0, 7f
     add     t0, s3, a1
     bltu    t0, s3, 9f
@@ -338,14 +338,14 @@ LOCAL_FUNCTION weight
     LEAVE 0
 9:  li      a0, LANTERN_INVALID_OVERFLOW
     LEAVE 0
-END_FUNCTION weight
+END_FUNCTION lantern_weight
 
 SPEC_FUNCTION get_weight
     FRAME 16
     sd      a2, F(sp)
     NEED_BALANCES a0, 8f
     ld      a1, 0(a1)
-    call    weight
+    call    lantern_weight
     bnez    a0, 7f
     ld      a2, F(sp)
     sd      a1, 0(a2)
@@ -362,7 +362,7 @@ SPEC_END get_weight
  * s1 store, s2 flags, s3 node count, s4 justified node, s5 current epoch, s6 i,
  * s8 correct_justified, s10 nodes.
  */
-LOCAL_FUNCTION filter_tree
+LOCAL_FUNCTION lantern_filter_tree
     ENTER 16
     mv      s1, a0
     ld      s3, (Store_blocks + 8)(s1)
@@ -378,7 +378,7 @@ LOCAL_FUNCTION filter_tree
     add     s10, s1, s10
     mv      a0, s1
     addi    a1, s1, (Store_justified_checkpoint + Checkpoint_root)
-    call    find_node
+    call    lantern_find_node
     li      t0, -1
     beq     a0, t0, 8f
     mv      s4, a0
@@ -447,7 +447,7 @@ LOCAL_FUNCTION filter_tree
 34: mv      a0, s1                          # finalized_checkpoint_block
     mv      a1, s6
     ld      a2, (Store_finalized_checkpoint + Checkpoint_epoch)(s1)
-    call    checkpoint_block
+    call    lantern_checkpoint_block
     bnez    a0, 7f
     ld      t0, (Store_finalized_checkpoint + Checkpoint_epoch)(s1)
     beqz    t0, 35f                         # correct_finalized
@@ -482,7 +482,7 @@ LOCAL_FUNCTION filter_tree
     LEAVE 16
 10: li      a0, LANTERN_INVALID_OVERFLOW
     LEAVE 16
-END_FUNCTION filter_tree
+END_FUNCTION lantern_filter_tree
 
 /*
  * L1: the weights of all nodes at once (fork-choice.md, lantern_get_head): store a0, weights a1
@@ -491,7 +491,7 @@ END_FUNCTION filter_tree
  * F_OVERFLOW in the flags of the node and of each node above it. s1 store, s2 flags, s3 node
  * count, s5 the weights, s6 i, s10 nodes. Locals: L the status of the boost.
  */
-LOCAL_FUNCTION weights
+LOCAL_FUNCTION lantern_weights
     ENTER 16
     mv      s1, a0
     mv      s5, a1
@@ -542,7 +542,7 @@ LOCAL_FUNCTION weights
     or      t0, t0, t2
     beqz    t0, 4f
     mv      a0, s1
-    call    find_node
+    call    lantern_find_node
     li      t0, -1
     bne     a0, t0, 31f
     li      t0, LANTERN_INVALID_UNKNOWN_BLOCK
@@ -557,7 +557,7 @@ LOCAL_FUNCTION weights
     beq     t0, t1, 4f
     mv      a0, s1                          # get_proposer_score(store)
     ld      a1, (Store_config + CONFIG_PROPOSER_SCORE_BOOST)(s1)
-    call    committee_fraction
+    call    lantern_committee_fraction
     beqz    a0, 32f
     sd      a0, L(sp)
     j       4f
@@ -600,7 +600,7 @@ LOCAL_FUNCTION weights
     j       41b
 60: ld      a0, L(sp)
     LEAVE 16
-END_FUNCTION weights
+END_FUNCTION lantern_weights
 
 /*
  * L0: a0 = status, a1 = get_head(store a0), with scratch a1 of S(2) for the node count. The
@@ -609,11 +609,11 @@ END_FUNCTION weights
  * s1 store, s2 flags, s3 node count, s4 justified node, s5 the weights, s6 i, s7 head, s8 best
  * child, s9 best weight, s10 nodes. Locals: L the status of the boost.
  */
-LOCAL_FUNCTION head
+LOCAL_FUNCTION lantern_head
     ENTER 16
     mv      s1, a0
     ld      s3, (Store_blocks + 8)(s1)
-    ld      t0, 0(a1)                       # the weights: 8 bytes a node, before filter_tree's flags
+    ld      t0, 0(a1)                       # the weights: 8 bytes a node, before lantern_filter_tree's flags
     slli    t1, s3, 4
     li      t2, LIST_FIXED + LANTERN_SCRATCH_FIXED
     add     t2, t1, t2
@@ -621,7 +621,7 @@ LOCAL_FUNCTION head
     sub     t0, t0, t1
     add     s5, a1, t0
     mv      a0, s1
-    call    filter_tree                     # nodes = get_filtered_node_tree(store)
+    call    lantern_filter_tree                     # nodes = get_filtered_node_tree(store)
     bnez    a0, 7f
     mv      s2, a1
     mv      s4, a2
@@ -630,7 +630,7 @@ LOCAL_FUNCTION head
     mv      a0, s1                          # the weights of all nodes at once
     mv      a1, s5
     mv      a2, s2
-    call    weights
+    call    lantern_weights
     sd      a0, L(sp)
 60: mv      s7, s4                          # head = the justified node
 61: li      s8, -1                          # the best child so far
@@ -679,14 +679,14 @@ LOCAL_FUNCTION head
     LEAVE 16
 9:  li      a0, LANTERN_BUFFER_TOO_SMALL
     LEAVE 16
-END_FUNCTION head
+END_FUNCTION lantern_head
 
 /* s1 store, s2 out. */
 SPEC_FUNCTION get_filtered_node_tree
     ENTER 0
     mv      s1, a0
     mv      s2, a2
-    call    filter_tree
+    call    lantern_filter_tree
     bnez    a0, 7f
     ld      t0, (Store_blocks + 8)(s1)
     li      t1, 0                           # the nodes in the tree
@@ -729,7 +729,7 @@ SPEC_FUNCTION get_head
     FRAME 16
     sd      a2, F(sp)
     NEED_BALANCES a0, 8f
-    call    head
+    call    lantern_head
     bnez    a0, 7f
     ld      a2, F(sp)
     sd      a1, 0(a2)
@@ -740,28 +740,28 @@ SPEC_END get_head
 
 /* ---------------------------------------------------------------- Checkpoints and time */
 
-/* L0: update_checkpoints(store a0, justified a1, finalized a2). A leaf; uses a3, a6, a7. */
-LOCAL_FUNCTION update_checkpoints
+/* L0: lantern_update_checkpoints(store a0, justified a1, finalized a2). A leaf; uses a3, a6, a7. */
+LOCAL_FUNCTION lantern_update_checkpoints
     UNWIND_END_PROLOGUE
     addi    a3, a0, Store_justified_checkpoint
     RAISE   a3, a1
     addi    a3, a0, Store_finalized_checkpoint
     RAISE   a3, a2
     ret
-END_FUNCTION update_checkpoints
+END_FUNCTION lantern_update_checkpoints
 
-/* L0: update_unrealized_checkpoints(store a0, justified a1, finalized a2). A leaf; uses a3, a6, a7. */
-LOCAL_FUNCTION update_unrealized_checkpoints
+/* L0: lantern_update_unrealized_checkpoints(store a0, justified a1, finalized a2). A leaf; uses a3, a6, a7. */
+LOCAL_FUNCTION lantern_update_unrealized_checkpoints
     UNWIND_END_PROLOGUE
     addi    a3, a0, Store_unrealized_justified_checkpoint
     RAISE   a3, a1
     addi    a3, a0, Store_unrealized_finalized_checkpoint
     RAISE   a3, a2
     ret
-END_FUNCTION update_unrealized_checkpoints
+END_FUNCTION lantern_update_unrealized_checkpoints
 
-/* L0: on_tick_per_slot(store a0, time_ms a1), with time_ms not before genesis_time_ms. A leaf. */
-LOCAL_FUNCTION on_tick_per_slot
+/* L0: lantern_on_tick_per_slot(store a0, time_ms a1), with time_ms not before genesis_time_ms. A leaf. */
+LOCAL_FUNCTION lantern_on_tick_per_slot
     UNWIND_END_PROLOGUE
     STORE_SLOT a2, a0, 9f                   # previous_slot
     sd      a1, Store_time_ms(a0)
@@ -775,9 +775,9 @@ LOCAL_FUNCTION on_tick_per_slot
     bnez    a3, 9f
     addi    a1, a0, Store_unrealized_justified_checkpoint
     addi    a2, a0, Store_unrealized_finalized_checkpoint
-    j       update_checkpoints
+    j       lantern_update_checkpoints
 9:  ret
-END_FUNCTION on_tick_per_slot
+END_FUNCTION lantern_on_tick_per_slot
 
 /* s1 store, s2 time_ms, s3 result, s4 tick slot, s5 genesis_time_ms, s6 SLOT_DURATION_MS. */
 SPEC_FUNCTION on_tick
@@ -797,11 +797,11 @@ SPEC_FUNCTION on_tick
     mul     a1, t0, s6                      # compute_time_at_slot_ms(genesis_time_ms, next_slot)
     add     a1, a1, s5
     mv      a0, s1
-    call    on_tick_per_slot
+    call    lantern_on_tick_per_slot
     j       1b
 2:  mv      a0, s1
     mv      a1, s2
-    call    on_tick_per_slot
+    call    lantern_on_tick_per_slot
     li      a0, LANTERN_OK
     LEAVE 0
 6:  li      t0, LANTERN_INVALID_OVERFLOW
@@ -1017,7 +1017,7 @@ SPEC_END get_forkchoice_store
  * L0: a0 = validate_on_attestation(store a0, data a1, is_from_block a2 as a value), as a status;
  * a1 = the node of the head vote. s1 store, s2 data, s3 target node, s4 head node.
  */
-LOCAL_FUNCTION validate_attestation
+LOCAL_FUNCTION lantern_validate_attestation
     ENTER 0
     mv      s1, a0
     mv      s2, a1
@@ -1034,13 +1034,13 @@ LOCAL_FUNCTION validate_attestation
     bne     t0, t1, 6f
     mv      a0, s1                          # target.root in store.blocks
     addi    a1, s2, (AttestationData_target + Checkpoint_root)
-    call    find_node
+    call    lantern_find_node
     li      t0, -1
     beq     a0, t0, 8f
     mv      s3, a0
     mv      a0, s1                          # beacon_block_root in store.blocks
     addi    a1, s2, AttestationData_beacon_block_root
-    call    find_node
+    call    lantern_find_node
     li      t0, -1
     beq     a0, t0, 8f
     mv      s4, a0
@@ -1051,7 +1051,7 @@ LOCAL_FUNCTION validate_attestation
     mv      a0, s1                          # target.root == get_checkpoint_block(beacon_block_root, target.epoch)
     mv      a1, s4
     ld      a2, (AttestationData_target + Checkpoint_epoch)(s2)
-    call    checkpoint_block
+    call    lantern_checkpoint_block
     bnez    a0, 7f
     bne     a1, s3, 6f
     ld      t1, AttestationData_slot(s2)    # get_current_slot(store) >= slot + 1
@@ -1072,13 +1072,13 @@ LOCAL_FUNCTION validate_attestation
     LEAVE 0
 10: li      a0, LANTERN_INVALID_OVERFLOW
     LEAVE 0
-END_FUNCTION validate_attestation
+END_FUNCTION lantern_validate_attestation
 
 SPEC_FUNCTION validate_on_attestation
     FRAME 0
     addi    a1, a1, Attestation_data
     ld      a2, 0(a2)
-    call    validate_attestation
+    call    lantern_validate_attestation
     UNFRAME 0
 SPEC_END validate_on_attestation
 
@@ -1129,7 +1129,7 @@ SPEC_FUNCTION on_attestation
     mv      a0, s1                          # validate_on_attestation(store, attestation, is_from_block)
     addi    a1, s2, Attestation_data
     ld      a2, 0(s3)
-    call    validate_attestation
+    call    lantern_validate_attestation
     bnez    a0, 6f
     mv      s9, a1
     sd      s7, 0(s5)                       # get_indexed_attestation(target_state, attestation)
@@ -1148,7 +1148,7 @@ SPEC_FUNCTION on_attestation
     ld      a2, (Store_config + CONFIG_PUBKEY_CACHE)(s1)
     mv      a5, s2                          # with the attestation and its CommitteeCache: key sums
     ld      a6, (Store_config + CONFIG_COMMITTEE_CACHE)(s1)
-    call    indexed_attestation_valid
+    call    lantern_indexed_attestation_valid
     CHECK_STATUS s6, 7f, 8f
     ld      t0, L(sp)
     li      a0, LANTERN_INVALID_ATTESTATION
@@ -1356,12 +1356,12 @@ SPEC_FUNCTION get_proposer_head
     j       7f
 31: mv      a0, s1                          # is_head_weak: reorg_threshold
     ld      a1, (Store_config + CONFIG_REORG_HEAD_WEIGHT_THRESHOLD)(s1)
-    call    committee_fraction
+    call    lantern_committee_fraction
     bnez    a0, 7f
     sd      a1, (L + 32)(sp)
     mv      a0, s1                          # head_weight = get_attestation_score(store, head_node, justified_state)
     mv      a1, s2
-    call    attestation_score
+    call    lantern_attestation_score
     bnez    a0, 7f
     mv      s10, a1
     NODE    t0, s1, s2
@@ -1422,12 +1422,12 @@ SPEC_FUNCTION get_proposer_head
     ori     s8, s8, 32
 61: mv      a0, s1                          # is_parent_strong
     ld      a1, (Store_config + CONFIG_REORG_PARENT_WEIGHT_THRESHOLD)(s1)
-    call    committee_fraction
+    call    lantern_committee_fraction
     bnez    a0, 7f
     mv      s10, a1
     mv      a0, s1
     mv      a1, s7
-    call    attestation_score
+    call    lantern_attestation_score
     bnez    a0, 7f
     bgeu    s10, a1, 62f
     ori     s8, s8, 64
@@ -1484,7 +1484,7 @@ SPEC_END get_proposer_head
 
 .if FORK == FORK_BELLATRIX
 /* L0: a0 = 1 when the Uint256 at a0 is below the one at a1, else 0. A leaf. */
-LOCAL_FUNCTION u256_lo
+LOCAL_FUNCTION lantern_u256_lo
     UNWIND_END_PROLOGUE
     li      a4, 24                          # from the most significant u64 down
 1:  add     t0, a0, a4
@@ -1499,7 +1499,7 @@ LOCAL_FUNCTION u256_lo
     ret
 2:  li      a0, 1
     ret
-END_FUNCTION u256_lo
+END_FUNCTION lantern_u256_lo
 
 /* (block, parent, config, out). Locals: sp+0 block, parent, config, out; sp+32 the first condition. */
 SPEC_FUNCTION is_valid_terminal_pow_block
@@ -1510,14 +1510,14 @@ SPEC_FUNCTION is_valid_terminal_pow_block
     sd      a3, 24(sp)
     addi    a0, a0, PowBlock_total_difficulty   # is_total_difficulty_reached = block.total_difficulty >= TERMINAL_TOTAL_DIFFICULTY
     ADDQ    a1, a2, CONFIG_TERMINAL_TOTAL_DIFFICULTY
-    call    u256_lo
+    call    lantern_u256_lo
     xori    a0, a0, 1
     sd      a0, 32(sp)
     ld      a0, 8(sp)                       # is_parent_total_difficulty_valid = parent.total_difficulty < TERMINAL_TOTAL_DIFFICULTY
     addi    a0, a0, PowBlock_total_difficulty
     ld      a1, 16(sp)
     ADDQ    a1, a1, CONFIG_TERMINAL_TOTAL_DIFFICULTY
-    call    u256_lo
+    call    lantern_u256_lo
     ld      t0, 32(sp)
     and     a0, a0, t0
     ld      t1, 24(sp)
@@ -1602,12 +1602,12 @@ SPEC_FUNCTION on_block
     bnez    a0, 7f
     mv      a0, s1                          # return early if the block is already known
     addi    a1, sp, L
-    call    find_node
+    call    lantern_find_node
     li      t0, -1
     bne     a0, t0, 8f
     mv      a0, s1                          # assert block.parent_root in store.block_states
     addi    a1, s7, BeaconBlock_parent_root
-    call    find_node
+    call    lantern_find_node
     mv      s9, a0
     li      t0, -1
     li      a0, LANTERN_INVALID_UNKNOWN_BLOCK
@@ -1631,7 +1631,7 @@ SPEC_FUNCTION on_block
     mv      a0, s1                          # finalized_checkpoint_block of the parent
     mv      a1, s9
     mv      a2, t0
-    call    checkpoint_block
+    call    lantern_checkpoint_block
     bnez    a0, 6f
     NODE    t5, s1, a1
     addi    t6, s1, (Store_finalized_checkpoint + Checkpoint_root)
@@ -1693,7 +1693,7 @@ SPEC_FUNCTION on_block
     sd      s8, 0(s5)                       # head = get_head(store), before the block is added
     mv      a0, s1
     mv      a1, s5
-    call    head
+    call    lantern_head
     bnez    a0, 6f
     sd      a1, (L + 48)(sp)
     ADDQ    t5, s3, BeaconState_justification_bits  # compute_pulled_up_tip: on a copy of the fields it changes
@@ -1767,7 +1767,7 @@ SPEC_FUNCTION on_block
     mv      a0, s1                          # head_dependent_root
     ld      a1, (L + 48)(sp)
     mv      a2, s10
-    call    ancestor
+    call    lantern_ancestor
     bnez    a0, 6f
     sd      a1, (L + 288)(sp)
     ld      t1, (Store_blocks + 8)(s1)      # block_dependent_root: the new node, or an ancestor of its parent
@@ -1776,7 +1776,7 @@ SPEC_FUNCTION on_block
     mv      a0, s1
     mv      a1, s9
     mv      a2, s10
-    call    ancestor
+    call    lantern_ancestor
     bnez    a0, 6f
     mv      t1, a1
 41: ld      t0, (L + 288)(sp)
@@ -1848,14 +1848,14 @@ SPEC_FUNCTION on_block
     addi    t0, s1, Store_proposer_boost_root
     addi    t1, sp, L
     COPY32  t0, t1
-42: mv      a0, s1                          # update_checkpoints(store, state.current_justified, state.finalized)
+42: mv      a0, s1                          # lantern_update_checkpoints(store, state.current_justified, state.finalized)
     ADDQ    a1, s3, BeaconState_current_justified_checkpoint
     ADDQ    a2, s3, BeaconState_finalized_checkpoint
-    call    update_checkpoints
+    call    lantern_update_checkpoints
     mv      a0, s1                          # compute_pulled_up_tip
     addi    a1, sp, (L + 64)
     addi    a2, sp, (L + 104)
-    call    update_unrealized_checkpoints
+    call    lantern_update_unrealized_checkpoints
     ld      t0, BeaconBlock_slot(s7)
     srli    t0, t0, LOG2_SLOTS_PER_EPOCH
     ld      t1, (L + 56)(sp)
@@ -1864,7 +1864,7 @@ SPEC_FUNCTION on_block
     mv      a0, s1
     addi    a1, sp, (L + 64)
     addi    a2, sp, (L + 104)
-    call    update_checkpoints
+    call    lantern_update_checkpoints
 8:  li      a0, LANTERN_OK
 7:  LEAVE 304
 6:  sd      a0, 0(s6)

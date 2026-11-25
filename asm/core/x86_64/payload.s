@@ -33,7 +33,7 @@ SPEC_FUNCTION kzg_commitment_to_versioned_hash
     mov     %rsi, 0(%rsp)
     mov     %rsi, %rdx
     mov     $48, %esi
-    call    sha256_short
+    call    lantern_sha256_short
     mov     0(%rsp), %rsi
     movb    $VERSIONED_HASH_VERSION_KZG, (%rsi)
     xor     %eax, %eax
@@ -83,7 +83,7 @@ SPEC_END compute_time_at_slot
 
 .if FORK == FORK_BELLATRIX
 /* L0: rax = 1 when the rsi bytes at rdi are all zero, else 0. A leaf. */
-LOCAL_FUNCTION all_zero
+LOCAL_FUNCTION lantern_all_zero
     UNWIND_END_PROLOGUE
 1:  test    %rsi, %rsi
     jz      2f
@@ -96,7 +96,7 @@ LOCAL_FUNCTION all_zero
     ret
 3:  xor     %eax, %eax
     ret
-END_FUNCTION all_zero
+END_FUNCTION lantern_all_zero
 
 /*
  * rax = 1 when the fields that ExecutionPayload and ExecutionPayloadHeader share are all zero
@@ -107,12 +107,12 @@ END_FUNCTION all_zero
     mov     %rdi, %rbx
     lea     \type\()_parent_hash(%rbx), %rdi
     mov     $(\type\()_prev_randao + 32 - \type\()_parent_hash), %esi
-    call    all_zero
+    call    lantern_all_zero
     test    %rax, %rax
     jz      99f
     lea     \type\()_block_number(%rbx), %rdi
     mov     $32, %esi
-    call    all_zero
+    call    lantern_all_zero
     test    %rax, %rax
     jz      99f
     xor     %eax, %eax
@@ -120,7 +120,7 @@ END_FUNCTION all_zero
     jne     99f
     lea     \type\()_base_fee_per_gas(%rbx), %rdi
     mov     $64, %esi
-    call    all_zero
+    call    lantern_all_zero
 99:
 .endm
 .if (ExecutionPayload_block_hash != ExecutionPayload_base_fee_per_gas + 32) || (ExecutionPayloadHeader_block_hash != ExecutionPayloadHeader_base_fee_per_gas + 32) || (ExecutionPayload_timestamp != ExecutionPayload_block_number + 24) || (ExecutionPayloadHeader_timestamp != ExecutionPayloadHeader_block_number + 24)
@@ -137,7 +137,7 @@ SPEC_FUNCTION is_merge_transition_complete
     jz      1f
     lea     ExecutionPayloadHeader_transactions_root(%rbx), %rdi
     mov     $32, %esi
-    call    all_zero
+    call    lantern_all_zero
 1:  xor     $1, %eax
     mov     L(%rsp), %rcx
     mov     %rax, (%rcx)
@@ -274,7 +274,7 @@ SPEC_FUNCTION process_execution_payload
     mov     %r15, %rsi
     mov     %r13, %rdx
     mov     S9(%rsp), %rcx
-    call    build_payload_header
+    call    lantern_build_payload_header
     test    %rax, %rax
     jnz     7f
     mov     BeaconState_latest_execution_payload_header(%rbx), %rdi    # state.latest_execution_payload_header = header
@@ -299,7 +299,7 @@ SPEC_END process_execution_payload
  * HEADER_ROOM bytes hold rdi. rbx header, rbp payload, r12 scratch, r13 scratch size,
  * r14 a standalone value to hash, r15 bytes of the transactions part.
  */
-LOCAL_FUNCTION build_payload_header
+LOCAL_FUNCTION lantern_build_payload_header
     ENTER 16
     mov     %rdi, %rbx
     mov     %rsi, %rbp
@@ -378,7 +378,7 @@ LOCAL_FUNCTION build_payload_header
     lea     ExecutionPayloadHeader_transactions_root(%rbx), %rcx
     CALL_GLOBAL ssz_hash_tree_root
 7:  LEAVE 16
-END_FUNCTION build_payload_header
+END_FUNCTION lantern_build_payload_header
 .endif
 
 .if FORK >= FORK_BELLATRIX

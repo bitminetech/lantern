@@ -12,7 +12,7 @@
 .endm
 
 # L0: rax = the first entry or record of part rsi of the store rdi. Uses rcx.
-LOCAL_FUNCTION lc_part
+LOCAL_FUNCTION lantern_lc_part
     UNWIND_END_PROLOGUE
     mov     $LC_STORE_FIXED, %eax
     LC_PART_STEP 0, LcBlock__mem
@@ -23,10 +23,10 @@ LOCAL_FUNCTION lc_part
     LC_PART_STEP 5, LcCommittee__mem
 9:  add     %rdi, %rax
     ret
-END_FUNCTION lc_part
+END_FUNCTION lantern_lc_part
 
 # L0: rcx = the bytes of an entry or record of part rsi.
-LOCAL_FUNCTION lc_mem
+LOCAL_FUNCTION lantern_lc_mem
     UNWIND_END_PROLOGUE
     mov     $LcBlock__mem, %ecx
     cmp     $LC_PART_BLOCKS, %rsi
@@ -48,33 +48,33 @@ LOCAL_FUNCTION lc_mem
     je      1f
     mov     $LcUpdate__mem, %ecx
 1:  ret
-END_FUNCTION lc_mem
+END_FUNCTION lantern_lc_mem
 
 # L1: rax = entry or record rdx (an index) of part rsi of the store rdi; rdi, rsi, rdx, r9 kept. Uses rcx, r8.
-LOCAL_FUNCTION lc_at
+LOCAL_FUNCTION lantern_lc_at
     FRAME 0
-    call    lc_part
-    call    lc_mem
+    call    lantern_lc_part
+    call    lantern_lc_mem
     mov     %rcx, %r8
     imul    %rdx, %r8
     add     %r8, %rax
     UNFRAME 0
-END_FUNCTION lc_at
+END_FUNCTION lantern_lc_at
 
 # L1: rax = record rdx (a reference, not 0) of part rsi of the store rdi; rdi, rsi, rdx, r9 kept. Uses rcx, r8.
-LOCAL_FUNCTION lc_ref
+LOCAL_FUNCTION lantern_lc_ref
     FRAME 0
     dec     %rdx
-    call    lc_at
+    call    lantern_lc_at
     inc     %rdx
     UNFRAME 0
-END_FUNCTION lc_ref
+END_FUNCTION lantern_lc_ref
 
 # L1: rax = the reference of a free record of part rsi of the store rdi, now LC_USED; 0 with none. Uses rcx, rdx, r8.
-LOCAL_FUNCTION lc_alloc
+LOCAL_FUNCTION lantern_lc_alloc
     FRAME 0
-    call    lc_part
-    call    lc_mem
+    call    lantern_lc_part
+    call    lantern_lc_mem
     mov     LcStore_room(%rdi,%rsi,8), %r8
     xor     %edx, %edx
 1:  cmp     %r8, %rdx
@@ -89,13 +89,13 @@ LOCAL_FUNCTION lc_alloc
     UNFRAME 0
 8:  xor     %eax, %eax
     UNFRAME 0
-END_FUNCTION lc_alloc
+END_FUNCTION lantern_lc_alloc
 
 # L1: rax = the free records of part rsi of the store rdi. Uses rcx, rdx, r8, r9.
-LOCAL_FUNCTION lc_free_count
+LOCAL_FUNCTION lantern_lc_free_count
     FRAME 0
-    call    lc_part
-    call    lc_mem
+    call    lantern_lc_part
+    call    lantern_lc_mem
     mov     LcStore_room(%rdi,%rsi,8), %r8
     xor     %edx, %edx
 1:  test    %r8, %r8
@@ -109,33 +109,33 @@ LOCAL_FUNCTION lc_free_count
     jmp     1b
 2:  mov     %rdx, %rax
     UNFRAME 0
-END_FUNCTION lc_free_count
+END_FUNCTION lantern_lc_free_count
 
 # L1: record rdx (a reference, or 0 for none) of part rsi of the store rdi becomes LC_MARKED. Uses rax, rcx, r8.
-LOCAL_FUNCTION lc_mark
+LOCAL_FUNCTION lantern_lc_mark
     FRAME 0
     test    %rdx, %rdx
     jz      1f
-    call    lc_ref
+    call    lantern_lc_ref
     movq    $LC_MARKED, (%rax)
 1:  UNFRAME 0
-END_FUNCTION lc_mark
+END_FUNCTION lantern_lc_mark
 
-# L1: rbx's marks of field off of the entry rbp: lc_mark of part, with the store rbx.
+# L1: rbx's marks of field off of the entry rbp: lantern_lc_mark of part, with the store rbx.
 .macro LC_MARK_FIELD part, off
     mov     %rbx, %rdi
     mov     $\part, %esi
     mov     \off(%rbp), %rdx
-    call    lc_mark
+    call    lantern_lc_mark
 .endm
 
 # L1: the records of the store rdi that nothing refers to become LC_FREE (LcStore, Rules). rbx the
 # store, rbp an entry or record, r12 the ones left, r13 the part, r14 its bytes.
-LOCAL_FUNCTION lc_collect
+LOCAL_FUNCTION lantern_lc_collect
     ENTER 0
     mov     %rdi, %rbx
     mov     $LC_PART_BLOCKS, %esi           # the blocks' header, committees and best update
-    call    lc_part
+    call    lantern_lc_part
     mov     %rax, %rbp
     mov     LcStore_blocks(%rbx), %r12
 1:  test    %r12, %r12
@@ -149,7 +149,7 @@ LOCAL_FUNCTION lc_collect
     jmp     1b
 2:  mov     %rbx, %rdi                      # the bootstraps' header and committee
     mov     $LC_PART_BOOTSTRAPS, %esi
-    call    lc_part
+    call    lantern_lc_part
     mov     %rax, %rbp
     mov     LcStore_bootstraps(%rbx), %r12
 3:  test    %r12, %r12
@@ -161,7 +161,7 @@ LOCAL_FUNCTION lc_collect
     jmp     3b
 4:  mov     %rbx, %rdi                      # the periods' updates, and latest
     mov     $LC_PART_PERIODS, %esi
-    call    lc_part
+    call    lantern_lc_part
     mov     %rax, %rbp
     mov     LcStore_periods(%rbx), %r12
 5:  test    %r12, %r12
@@ -174,7 +174,7 @@ LOCAL_FUNCTION lc_collect
     LC_MARK_FIELD LC_PART_UPDATES, LcStore_latest
     mov     %rbx, %rdi                      # each marked update's headers and committee
     mov     $LC_PART_UPDATES, %esi
-    call    lc_part
+    call    lantern_lc_part
     mov     %rax, %rbp
     mov     (LcStore_room + LcRoom_updates)(%rbx), %r12
 7:  test    %r12, %r12
@@ -190,8 +190,8 @@ LOCAL_FUNCTION lc_collect
 10: mov     $LC_PART_HEADERS, %r13d         # the sweep: LC_USED goes, LC_MARKED stays
 11: mov     %rbx, %rdi
     mov     %r13, %rsi
-    call    lc_part
-    call    lc_mem
+    call    lantern_lc_part
+    call    lantern_lc_mem
     mov     %rax, %rbp
     mov     %rcx, %r14
     mov     LcStore_room(%rbx,%r13,8), %r12
@@ -208,12 +208,12 @@ LOCAL_FUNCTION lc_collect
     cmp     $LC_PART_UPDATES, %r13
     jbe     11b
     LEAVE 0
-END_FUNCTION lc_collect
+END_FUNCTION lantern_lc_collect
 
 # L1: rax = LANTERN_OK when the store rdi has rsi free headers, rdx committees and rcx updates, once
 # the records nothing refers to are freed; else LANTERN_BUFFER_TOO_SMALL. rbx the store, rbp, r12
 # and r13 the needs, r14 1 once collected, r15 the part.
-LOCAL_FUNCTION lc_reserve
+LOCAL_FUNCTION lantern_lc_reserve
     ENTER 0
     mov     %rdi, %rbx
     mov     %rsi, %rbp
@@ -223,7 +223,7 @@ LOCAL_FUNCTION lc_reserve
 1:  mov     $LC_PART_HEADERS, %r15d
 2:  mov     %rbx, %rdi
     mov     %r15, %rsi
-    call    lc_free_count
+    call    lantern_lc_free_count
     mov     %rbp, %rcx
     cmp     $LC_PART_COMMITTEES, %r15
     cmove   %r12, %rcx
@@ -233,7 +233,7 @@ LOCAL_FUNCTION lc_reserve
     test    %r14, %r14
     jnz     9f
     mov     %rbx, %rdi
-    call    lc_collect
+    call    lantern_lc_collect
     mov     $1, %r14d
     jmp     1b
 3:  inc     %r15
@@ -243,15 +243,15 @@ LOCAL_FUNCTION lc_reserve
     LEAVE 0
 9:  mov     $LANTERN_BUFFER_TOO_SMALL, %eax
     LEAVE 0
-END_FUNCTION lc_reserve
+END_FUNCTION lantern_lc_reserve
 
 # L1: rax = the index plus 1 of the LcBlock of the root at rsi in the store rdi, or 0. Uses rcx, rdx, rsi, r8, r9, r11, xmm0-xmm2.
-LOCAL_FUNCTION lc_find_block
+LOCAL_FUNCTION lantern_lc_find_block
     FRAME 0
     mov     LcStore_blocks(%rdi), %r9
     mov     %rsi, %r8
     mov     $LC_PART_BLOCKS, %esi
-    call    lc_part
+    call    lantern_lc_part
     xor     %edx, %edx
 1:  cmp     %r9, %rdx
     jae     3f
@@ -263,18 +263,18 @@ LOCAL_FUNCTION lc_find_block
     jmp     1b
 3:  xor     %eax, %eax
     UNFRAME 0
-END_FUNCTION lc_find_block
+END_FUNCTION lantern_lc_find_block
 
 # L1: rax = the entry (index plus 1) of the highest slot at most rdx along the parents from entry rsi
 # of the store rdi, or 0. Uses rcx, rdx, rsi, r8, r9.
-LOCAL_FUNCTION lc_ancestor
+LOCAL_FUNCTION lantern_lc_ancestor
     FRAME 0
     mov     %rdx, %r9
     mov     %rsi, %rdx
     mov     $LC_PART_BLOCKS, %esi
 1:  test    %rdx, %rdx
     jz      3f
-    call    lc_ref
+    call    lantern_lc_ref
     cmp     %r9, LcBlock_slot(%rax)
     jbe     2f
     mov     LcBlock_parent(%rax), %rdx
@@ -283,16 +283,16 @@ LOCAL_FUNCTION lc_ancestor
     UNFRAME 0
 3:  xor     %eax, %eax
     UNFRAME 0
-END_FUNCTION lc_ancestor
+END_FUNCTION lantern_lc_ancestor
 
 # L1: rax = the LcFinalized of the highest slot at most rsi and at least historical_tail_slot in the store rdi, or 0. Uses rcx, rdx, rsi, r8, r9.
-LOCAL_FUNCTION lc_finalized_at
+LOCAL_FUNCTION lantern_lc_finalized_at
     FRAME 0
     mov     LcStore_finalized(%rdi), %rdx
     mov     LcStore_historical_tail_slot(%rdi), %r9
     mov     %rsi, %r8
     mov     $LC_PART_FINALIZED, %esi
-    call    lc_part
+    call    lantern_lc_part
     imul    $LcFinalized__mem, %rdx, %rcx
     add     %rcx, %rax
 1:  test    %rdx, %rdx
@@ -307,10 +307,10 @@ LOCAL_FUNCTION lc_finalized_at
     UNFRAME 0
 3:  xor     %eax, %eax
     UNFRAME 0
-END_FUNCTION lc_finalized_at
+END_FUNCTION lantern_lc_finalized_at
 
 # L0: rax = the set bits of the sync_committee_bits at rdi. Uses rcx, rdx, rsi.
-LOCAL_FUNCTION lc_participants
+LOCAL_FUNCTION lantern_lc_participants
     UNWIND_END_PROLOGUE
     xor     %eax, %eax
     xor     %esi, %esi
@@ -326,7 +326,7 @@ LOCAL_FUNCTION lc_participants
 21: inc     %rsi
     jmp     1b
 3:  ret
-END_FUNCTION lc_participants
+END_FUNCTION lantern_lc_participants
 
 # rcx = the roots of a sync committee branch, rdx of a finality branch, of the fork rcx.
 .macro LC_COUNTS
@@ -338,7 +338,7 @@ END_FUNCTION lc_participants
 .endm
 
 # L0: rax = 1 when the rdx bytes at rdi and rsi are equal, rdx a multiple of 8; else 0. Uses rcx.
-LOCAL_FUNCTION lc_equal
+LOCAL_FUNCTION lantern_lc_equal
     UNWIND_END_PROLOGUE
 1:  test    %rdx, %rdx
     jz      2f
@@ -352,12 +352,12 @@ LOCAL_FUNCTION lc_equal
     ret
 2:  mov     $1, %eax
     ret
-END_FUNCTION lc_equal
+END_FUNCTION lantern_lc_equal
 
 # L1: rax = an LcCommittee reference of the sync committee bytes rsi in the store rdi: rdx or rcx
 # (each a reference or 0) when its bytes are equal, else a new record. rbx the store, rbp the
 # bytes, r12 and r13 the candidates, r14 the reference.
-LOCAL_FUNCTION lc_committee
+LOCAL_FUNCTION lantern_lc_committee
     ENTER 0
     mov     %rdi, %rbx
     mov     %rsi, %rbp
@@ -369,11 +369,11 @@ LOCAL_FUNCTION lc_committee
     mov     %rbx, %rdi
     mov     $LC_PART_COMMITTEES, %esi
     mov     %r14, %rdx
-    call    lc_ref
+    call    lantern_lc_ref
     lea     LcCommittee_committee(%rax), %rdi
     mov     %rbp, %rsi
     mov     $LC_COMMITTEE, %edx
-    call    lc_equal
+    call    lantern_lc_equal
     test    %rax, %rax
     jnz     4f
 2:  cmp     %r13, %r14
@@ -382,24 +382,24 @@ LOCAL_FUNCTION lc_committee
     jmp     1b
 3:  mov     %rbx, %rdi
     mov     $LC_PART_COMMITTEES, %esi
-    call    lc_alloc
+    call    lantern_lc_alloc
     mov     %rax, %r14
     mov     %rbx, %rdi
     mov     $LC_PART_COMMITTEES, %esi
     mov     %r14, %rdx
-    call    lc_ref
+    call    lantern_lc_ref
     lea     LcCommittee_committee(%rax), %rdi
     mov     %rbp, %rsi
     mov     $LC_COMMITTEE, %edx
     call    lantern_copy
 4:  mov     %r14, %rax
     LEAVE 0
-END_FUNCTION lc_committee
+END_FUNCTION lantern_lc_committee
 
 # L1: hash_tree_root of the BeaconBlockHeader at rdi (its 112 SSZ bytes) at rsi. rbx the header,
 # rbp out, r12 the 8 chunks, r13 the pairs of the level, r14 the pair. Locals: L a ByteList, L + 32
 # a digest, L + 64 the chunks.
-LOCAL_FUNCTION lc_beacon_root
+LOCAL_FUNCTION lantern_lc_beacon_root
     ENTER 320
     mov     %rdi, %rbx
     mov     %rsi, %rbp
@@ -439,12 +439,12 @@ LOCAL_FUNCTION lc_beacon_root
     jnz     1b
     COPY32  %rbp, %r12
     LEAVE 320
-END_FUNCTION lc_beacon_root
+END_FUNCTION lantern_lc_beacon_root
 
 # L1: rax = a new LcHeader of the fork rsi in the store rdi (reserved before), the empty header of
 # the fork: lantern_upgrade_lc_header of 112 zero bytes from altair. rbx the store, rbp the fork,
 # r12 the reference. Locals: L the ByteList of the zero bytes.
-LOCAL_FUNCTION lc_empty_header
+LOCAL_FUNCTION lantern_lc_empty_header
     ENTER 144
     mov     %rdi, %rbx
     mov     %rsi, %rbp
@@ -456,12 +456,12 @@ LOCAL_FUNCTION lc_empty_header
     movq    $112, (L + 16)(%rsp)
     mov     %rbx, %rdi
     mov     $LC_PART_HEADERS, %esi
-    call    lc_alloc
+    call    lantern_lc_alloc
     mov     %rax, %r12
     mov     %rbx, %rdi
     mov     $LC_PART_HEADERS, %esi
     mov     %r12, %rdx
-    call    lc_ref
+    call    lantern_lc_ref
     mov     %rbp, LcHeader_fork(%rax)
     movq    $(24 + LC_HEADER_ROOM), LcHeader_header(%rax)
     lea     LcHeader_header(%rax), %rdx
@@ -471,14 +471,14 @@ LOCAL_FUNCTION lc_empty_header
     FORK_CALL upgrade_lc_header
     mov     %r12, %rax
     LEAVE 144
-END_FUNCTION lc_empty_header
+END_FUNCTION lantern_lc_empty_header
 
 # L1: rax = a new LcUpdate (reserved before, with one LcHeader) in the store rdi: the update of
 # entry rsi (light-client.md, The update of an entry) with the signature slot rdx, the sync
 # aggregate at rcx and the LcCommittee r8 (0: a finality update). rbx the store, rbp the entry, r12
 # the update's reference, r13 the update, r14 its fork, r15 a finalized entry or header; S7 the
 # entry's reference, S8 the signature slot, S9 the aggregate, S10 the committee.
-LOCAL_FUNCTION lc_make_update
+LOCAL_FUNCTION lantern_lc_make_update
     ENTER 0
     mov     %rdi, %rbx
     mov     %rsi, S7(%rsp)
@@ -486,22 +486,22 @@ LOCAL_FUNCTION lc_make_update
     mov     %rcx, S9(%rsp)
     mov     %r8, S10(%rsp)
     mov     $LC_PART_UPDATES, %esi
-    call    lc_alloc
+    call    lantern_lc_alloc
     mov     %rax, %r12
     mov     %rbx, %rdi
     mov     $LC_PART_UPDATES, %esi
     mov     %r12, %rdx
-    call    lc_ref
+    call    lantern_lc_ref
     mov     %rax, %r13
     mov     %rbx, %rdi
     mov     $LC_PART_BLOCKS, %esi
     mov     S7(%rsp), %rdx
-    call    lc_ref
+    call    lantern_lc_ref
     mov     %rax, %rbp
     mov     %rbx, %rdi
     mov     $LC_PART_HEADERS, %esi
     mov     LcBlock_header(%rbp), %rdx
-    call    lc_ref
+    call    lantern_lc_ref
     mov     LcHeader_fork(%rax), %r14
     mov     %r14, LcUpdate_fork(%r13)
     mov     LcBlock_header(%rbp), %rax
@@ -520,7 +520,7 @@ LOCAL_FUNCTION lc_make_update
     call    lantern_copy
     mov     %rbx, %rdi                      # the finalized block: the LcFinalized at the entry's finalized_slot
     mov     LcBlock_finalized_slot(%rbp), %rsi
-    call    lc_finalized_at
+    call    lantern_lc_finalized_at
     test    %rax, %rax
     jz      5f
     mov     %rax, %r15
@@ -530,29 +530,29 @@ LOCAL_FUNCTION lc_make_update
     jz      4f                              # GENESIS_SLOT: the empty header, the branch
     mov     %rbx, %rdi
     lea     LcFinalized_root(%r15), %rsi
-    call    lc_find_block
+    call    lantern_lc_find_block
     test    %rax, %rax
     jz      5f
     mov     %rbx, %rdi
     mov     $LC_PART_BLOCKS, %esi
     mov     %rax, %rdx
-    call    lc_ref
+    call    lantern_lc_ref
     mov     LcBlock_header(%rax), %rdx
     mov     %rdx, LcUpdate_finalized_header(%r13)
     mov     %rbx, %rdi
     mov     $LC_PART_HEADERS, %esi
-    call    lc_ref
+    call    lantern_lc_ref
     mov     %rax, %r15
     cmp     %r14, LcHeader_fork(%r15)
     je      3f
     mov     %rbx, %rdi                      # of an earlier fork: upgraded, in a new record
     mov     $LC_PART_HEADERS, %esi
-    call    lc_alloc
+    call    lantern_lc_alloc
     mov     %rax, LcUpdate_finalized_header(%r13)
     mov     %rbx, %rdi
     mov     $LC_PART_HEADERS, %esi
     mov     %rax, %rdx
-    call    lc_ref
+    call    lantern_lc_ref
     mov     %r14, LcHeader_fork(%rax)
     movq    $(24 + LC_HEADER_ROOM), LcHeader_header(%rax)
     lea     LcHeader_header(%rax), %rdx
@@ -575,15 +575,15 @@ LOCAL_FUNCTION lc_make_update
     call    lantern_zero
 6:  mov     %rbx, %rdi
     mov     %r14, %rsi
-    call    lc_empty_header
+    call    lantern_lc_empty_header
     mov     %rax, LcUpdate_finalized_header(%r13)
 7:  mov     %r12, %rax
     LEAVE 0
-END_FUNCTION lc_make_update
+END_FUNCTION lantern_lc_make_update
 
-# L1, lc_better's: the LcParts rdx of the LcUpdate rsi of the fork rcx in the store rdi, the
+# L1, lantern_lc_better's: the LcParts rdx of the LcUpdate rsi of the fork rcx in the store rdi, the
 # branches at their counts. rbx the store, rbp the update, r12 the parts, r13 the fork.
-LOCAL_FUNCTION lc_better_parts
+LOCAL_FUNCTION lantern_lc_better_parts
     ENTER 0
     mov     %rdi, %rbx
     mov     %rsi, %rbp
@@ -591,19 +591,19 @@ LOCAL_FUNCTION lc_better_parts
     mov     %rcx, %r13
     mov     $LC_PART_HEADERS, %esi
     mov     LcUpdate_attested_header(%rbp), %rdx
-    call    lc_ref
+    call    lantern_lc_ref
     add     $LcHeader_header, %rax
     mov     %rax, LcParts_header(%r12)
     mov     %rbx, %rdi
     mov     $LC_PART_HEADERS, %esi
     mov     LcUpdate_finalized_header(%rbp), %rdx
-    call    lc_ref
+    call    lantern_lc_ref
     add     $LcHeader_header, %rax
     mov     %rax, LcParts_finalized_header(%r12)
     mov     %rbx, %rdi
     mov     $LC_PART_COMMITTEES, %esi
     mov     LcUpdate_next_sync_committee(%rbp), %rdx
-    call    lc_ref
+    call    lantern_lc_ref
     add     $LcCommittee_committee, %rax
     mov     %rax, LcParts_sync_committee(%r12)
     lea     LcUpdate_next_branch(%rbp), %rax
@@ -619,28 +619,28 @@ LOCAL_FUNCTION lc_better_parts
     mov     %rcx, LcParts_branch_count(%r12)
     mov     %rdx, LcParts_finality_count(%r12)
     LEAVE 0
-END_FUNCTION lc_better_parts
+END_FUNCTION lantern_lc_better_parts
 
 # L1: rax = 1 when lantern_is_better_update of the LcUpdate rsi's fork gives 1 for it and the
 # LcUpdate rdx upgraded to that fork, in the store rdi with the scratch rcx (LC_COMPARE_SCRATCH
 # bytes, checked before); else 0. rbx the store, rbp the new update, r12 the old one's reference,
 # r13 the scratch's buffers, r14 the new update's fork, r15 the old one's fork; S7 the old update.
 # Locals: L the parts, L + 72 the answer.
-LOCAL_FUNCTION lc_better
+LOCAL_FUNCTION lantern_lc_better
     ENTER 80
     mov     %rdi, %rbx
     mov     %rdx, %r12
     lea     8(%rcx), %r13
     mov     %rsi, %rdx
     mov     $LC_PART_UPDATES, %esi
-    call    lc_ref
+    call    lantern_lc_ref
     mov     %rax, %rbp
     mov     LcUpdate_fork(%rbp), %r14
     mov     %rbx, %rdi                      # the new update: buffer 1
     mov     %rbp, %rsi
     lea     L(%rsp), %rdx
     mov     %r14, %rcx
-    call    lc_better_parts
+    call    lantern_lc_better_parts
     movq    $(24 + LC_UPDATE_ROOM), (%r13)
     mov     $LC_OBJECT_UPDATE, %edi
     lea     L(%rsp), %rsi
@@ -652,14 +652,14 @@ LOCAL_FUNCTION lc_better
     mov     %rbx, %rdi                      # the old one, its headers upgraded: buffer 2
     mov     $LC_PART_UPDATES, %esi
     mov     %r12, %rdx
-    call    lc_ref
+    call    lantern_lc_ref
     mov     %rax, S7(%rsp)
     mov     LcUpdate_fork(%rax), %r15
     mov     %rbx, %rdi
     mov     %rax, %rsi
     lea     L(%rsp), %rdx
     mov     %r15, %rcx
-    call    lc_better_parts
+    call    lantern_lc_better_parts
     cmp     %r14, %r15
     je      1f
     lea     (2 * (24 + LC_UPDATE_ROOM))(%r13), %rdx   # the headers' buffers, after the two updates'
@@ -699,7 +699,7 @@ LOCAL_FUNCTION lc_better
     LEAVE 80
 9:  xor     %eax, %eax
     LEAVE 80
-END_FUNCTION lc_better
+END_FUNCTION lantern_lc_better
 
 # L1: rax = status: the LcBlock of the block rcx (ByteList) with its post-state rdx in the store
 # rdi, the config rsi, the StateCache r8 (or 0), the scratch r9; with rax 1 the anchor of
@@ -707,7 +707,7 @@ END_FUNCTION lc_better
 # r14 cache, r15 scratch; S7 the new entry, S8 the block's fork, S9 the header's reference, S10 the
 # parent entry. Locals: L the anchor flag, L + 8 the slot, L + 16 the header's bytes, L + 24 the
 # root, L + 56 the parent's reference, L + 64 the update, L + 72 the header.
-LOCAL_FUNCTION lc_add_block
+LOCAL_FUNCTION lantern_lc_add_block
     ENTER 80
     mov     %rax, L(%rsp)
     mov     %rdi, %rbx
@@ -720,7 +720,7 @@ LOCAL_FUNCTION lc_add_block
     mov     $2, %esi
     mov     $2, %edx
     mov     $1, %ecx
-    call    lc_reserve
+    call    lantern_lc_reserve
     test    %rax, %rax
     jnz     98f
     mov     LcStore_blocks(%rbx), %rax
@@ -742,16 +742,16 @@ LOCAL_FUNCTION lc_add_block
     ja      96f
     mov     (%rax,%rdx), %rdi
 5:  mov     %rbp, %rsi
-    call    node_fork
+    call    lantern_node_fork
     mov     %rax, S8(%rsp)
     mov     %rbx, %rdi                      # the header
     mov     $LC_PART_HEADERS, %esi
-    call    lc_alloc
+    call    lantern_lc_alloc
     mov     %rax, S9(%rsp)
     mov     %rbx, %rdi
     mov     $LC_PART_HEADERS, %esi
     mov     %rax, %rdx
-    call    lc_ref
+    call    lantern_lc_ref
     mov     %rax, (L + 72)(%rsp)
     mov     S8(%rsp), %rcx
     mov     $FORK_ALTAIR, %edx
@@ -778,16 +778,16 @@ LOCAL_FUNCTION lc_add_block
     mov     (%rdi), %rcx
     mov     %rcx, (L + 8)(%rsp)
     lea     (L + 24)(%rsp), %rsi
-    call    lc_beacon_root
+    call    lantern_lc_beacon_root
     mov     %rbx, %rdi
     lea     (L + 24)(%rsp), %rsi
-    call    lc_find_block
+    call    lantern_lc_find_block
     test    %rax, %rax
     jnz     95f
     mov     %rbx, %rdi                      # the entry, at the end of blocks
     mov     $LC_PART_BLOCKS, %esi
     mov     LcStore_blocks(%rbx), %rdx
-    call    lc_at
+    call    lantern_lc_at
     mov     %rax, S7(%rsp)
     mov     %rax, %rdi
     mov     $LcBlock__mem, %esi
@@ -805,7 +805,7 @@ LOCAL_FUNCTION lc_add_block
     mov     %rax, LcBlock_header(%rdi)
     lea     LcBlock_parent_root(%rdi), %rsi
     mov     %rbx, %rdi
-    call    lc_find_block
+    call    lantern_lc_find_block
     mov     S7(%rsp), %rdi
     mov     %rax, LcBlock_parent(%rdi)
     mov     %rax, (L + 56)(%rsp)
@@ -864,13 +864,13 @@ LOCAL_FUNCTION lc_add_block
     mov     %rbx, %rdi
     mov     $LC_PART_BLOCKS, %esi
     mov     %rax, %rdx
-    call    lc_ref
+    call    lantern_lc_ref
     mov     %rax, S10(%rsp)
     mov     LcBlock_current_sync_committee(%rax), %rdx
     mov     LcBlock_next_sync_committee(%rax), %rcx
 22: mov     %rbx, %rdi
     lea     NODE_STATE_CURRENT_SYNC_COMMITTEE(%r12), %rsi
-    call    lc_committee
+    call    lantern_lc_committee
     mov     S7(%rsp), %rcx
     mov     %rax, LcBlock_current_sync_committee(%rcx)
     xor     %edx, %edx
@@ -881,7 +881,7 @@ LOCAL_FUNCTION lc_add_block
 23: mov     LcBlock_current_sync_committee(%rcx), %rcx
     mov     %rbx, %rdi
     lea     NODE_STATE_NEXT_SYNC_COMMITTEE(%r12), %rsi
-    call    lc_committee
+    call    lantern_lc_committee
     mov     S7(%rsp), %rcx
     mov     %rax, LcBlock_next_sync_committee(%rcx)
     cmpq    $0, L(%rsp)
@@ -907,7 +907,7 @@ LOCAL_FUNCTION lc_add_block
     setne   %dl
     mov     %rdx, (L + 64)(%rsp)            # 1 when the periods differ
     lea     LcBlock_sync_aggregate(%rcx), %rdi
-    call    lc_participants
+    call    lantern_lc_participants
     mov     S7(%rsp), %rcx
     mov     S10(%rsp), %rsi
     mov     (L + 8)(%rsp), %rdx
@@ -924,7 +924,7 @@ LOCAL_FUNCTION lc_add_block
     lea     LcBlock_sync_aggregate(%rcx), %rax
     mov     LcBlock_next_sync_committee(%rcx), %r8
     mov     %rax, %rcx
-    call    lc_make_update
+    call    lantern_lc_make_update
     mov     %rax, (L + 64)(%rsp)
     mov     S7(%rsp), %rcx
     mov     LcBlock_best(%rcx), %rdx
@@ -933,7 +933,7 @@ LOCAL_FUNCTION lc_add_block
     mov     %rbx, %rdi
     mov     %rax, %rsi
     mov     %r15, %rcx
-    call    lc_better
+    call    lantern_lc_better
     test    %rax, %rax
     jz      50f
 40: mov     S7(%rsp), %rcx
@@ -957,17 +957,17 @@ LOCAL_FUNCTION lc_add_block
     LEAVE 80
 98: mov     $LANTERN_BUFFER_TOO_SMALL, %eax
     LEAVE 80
-END_FUNCTION lc_add_block
+END_FUNCTION lantern_lc_add_block
 
 # L1: an LcBootstrap of the LcFinalized rsi in the store rdi (room checked before), when the store
 # holds none of its root and holds its LcBlock with data. rbx the store, rbp the LcFinalized, r12
 # the bootstraps, r13 their count, r14 the index, r15 the entry.
-LOCAL_FUNCTION lc_add_bootstrap
+LOCAL_FUNCTION lantern_lc_add_bootstrap
     ENTER 0
     mov     %rdi, %rbx
     mov     %rsi, %rbp
     mov     $LC_PART_BOOTSTRAPS, %esi
-    call    lc_part
+    call    lantern_lc_part
     mov     %rax, %r12
     mov     LcStore_bootstraps(%rbx), %r13
     xor     %r14d, %r14d
@@ -982,13 +982,13 @@ LOCAL_FUNCTION lc_add_bootstrap
     jmp     1b
 2:  mov     %rbx, %rdi
     lea     LcFinalized_root(%rbp), %rsi
-    call    lc_find_block
+    call    lantern_lc_find_block
     test    %rax, %rax
     jz      9f
     mov     %rbx, %rdi
     mov     $LC_PART_BLOCKS, %esi
     mov     %rax, %rdx
-    call    lc_ref
+    call    lantern_lc_ref
     mov     %rax, %r15
     cmpq    $0, LcBlock_data(%r15)
     je      9f
@@ -1008,18 +1008,18 @@ LOCAL_FUNCTION lc_add_bootstrap
     call    lantern_copy
     incq    LcStore_bootstraps(%rbx)
 9:  LEAVE 0
-END_FUNCTION lc_add_bootstrap
+END_FUNCTION lantern_lc_add_bootstrap
 
 # L1: the LcPeriod of period rsi in the store rdi refers to update rdx (room checked before); with
 # rdx 0, the period has none. rbx the store, rbp the period, r12 the update, r13 the periods, r14
 # their count, r15 the index.
-LOCAL_FUNCTION lc_set_period
+LOCAL_FUNCTION lantern_lc_set_period
     ENTER 0
     mov     %rdi, %rbx
     mov     %rsi, %rbp
     mov     %rdx, %r12
     mov     $LC_PART_PERIODS, %esi
-    call    lc_part
+    call    lantern_lc_part
     mov     %rax, %r13
     mov     LcStore_periods(%rbx), %r14
     xor     %r15d, %r15d
@@ -1067,18 +1067,18 @@ LOCAL_FUNCTION lc_set_period
     inc     %r14
     mov     %r14, LcStore_periods(%rbx)
 9:  LEAVE 0
-END_FUNCTION lc_set_period
+END_FUNCTION lantern_lc_set_period
 
 # L1: the LcBlock entries of slots below rsi in the store rdi go, with the scratch rdx (8 bytes for
 # each entry, checked before) for their new indices. rbx the store, rbp the slot, r12 the indices,
 # r13 the entries, r14 their count, r15 the index; S7 the kept ones.
-LOCAL_FUNCTION lc_prune
+LOCAL_FUNCTION lantern_lc_prune
     ENTER 0
     mov     %rdi, %rbx
     mov     %rsi, %rbp
     lea     8(%rdx), %r12
     mov     $LC_PART_BLOCKS, %esi
-    call    lc_part
+    call    lantern_lc_part
     mov     %rax, %r13
     mov     LcStore_blocks(%rbx), %r14
     xor     %r15d, %r15d
@@ -1118,7 +1118,7 @@ LOCAL_FUNCTION lc_prune
 6:  mov     S7(%rsp), %rax
     mov     %rax, LcStore_blocks(%rbx)
     LEAVE 0
-END_FUNCTION lc_prune
+END_FUNCTION lantern_lc_prune
 
 # (room, size) -> status: LC_STORE_FIXED plus each capacity times its bytes (light-client.md).
 FUNCTION lantern_lc_store_size
@@ -1127,7 +1127,7 @@ FUNCTION lantern_lc_store_size
     mov     %rsi, %r9
     mov     $LC_STORE_FIXED, %edi
     xor     %esi, %esi
-1:  call    lc_mem
+1:  call    lantern_lc_mem
     mov     (%r8,%rsi,8), %rax
     mul     %rcx
     jc      9f
@@ -1204,17 +1204,17 @@ FUNCTION lantern_lc_store_init
     xor     %r8d, %r8d
     mov     %r14, %r9
     mov     $1, %eax
-    call    lc_add_block
+    call    lantern_lc_add_block
     test    %rax, %rax
     jnz     99f
     mov     %r15, %rdi
     mov     $LC_PART_BLOCKS, %esi
     xor     %edx, %edx
-    call    lc_at
+    call    lantern_lc_at
     mov     %rax, %rbx
     mov     %r15, %rdi
     mov     $LC_PART_FINALIZED, %esi
-    call    lc_part
+    call    lantern_lc_part
     mov     %rax, %rbp
     mov     LcBlock_slot(%rbx), %rax
     mov     %rax, LcFinalized_slot(%rbp)
@@ -1223,7 +1223,7 @@ FUNCTION lantern_lc_store_init
     movq    $1, LcStore_finalized(%r15)
     mov     %r15, %rdi
     mov     %rbp, %rsi
-    call    lc_add_bootstrap
+    call    lantern_lc_add_bootstrap
     xor     %eax, %eax
     LEAVE 16
 98: mov     $LANTERN_BUFFER_TOO_SMALL, %eax
@@ -1264,12 +1264,12 @@ FUNCTION lantern_lc_store_copy
     xor     %r13d, %r13d
 2:  mov     %rbx, %rdi
     mov     %r13, %rsi
-    call    lc_part
+    call    lantern_lc_part
     mov     %rax, %r14
     mov     %r12, %rdi
-    call    lc_part
+    call    lantern_lc_part
     mov     %rax, %r15
-    call    lc_mem
+    call    lantern_lc_mem
     mov     %rcx, S7(%rsp)
     cmp     $LC_PART_BOOTSTRAPS, %r13
     ja      3f
@@ -1304,7 +1304,7 @@ END_FUNCTION lantern_lc_store_copy
 FUNCTION lantern_lc_on_block
     FRAME 0
     xor     %eax, %eax
-    call    lc_add_block
+    call    lantern_lc_add_block
     UNFRAME 0
 END_FUNCTION lantern_lc_on_block
 
@@ -1322,7 +1322,7 @@ FUNCTION lantern_lc_on_head
     mov     %rcx, %r13
     mov     %r8, %r14
     mov     %r12, %rsi
-    call    lc_find_block
+    call    lantern_lc_find_block
     test    %rax, %rax
     jz      94f
     mov     %rax, %r15
@@ -1331,13 +1331,13 @@ FUNCTION lantern_lc_on_head
     je      1f
     mov     %rbx, %rdi
     lea     8(%r13), %rsi
-    call    lc_find_block
+    call    lantern_lc_find_block
     test    %rax, %rax
     jz      94f
     mov     %rbx, %rdi
     mov     $LC_PART_BLOCKS, %esi
     mov     %rax, %rdx
-    call    lc_ref
+    call    lantern_lc_ref
     mov     LcBlock_slot(%rax), %rax
     cmp     LcStore_latest_finalized_slot(%rbx), %rax
     jbe     1f
@@ -1346,7 +1346,7 @@ FUNCTION lantern_lc_on_head
     mov     $1, %esi
     xor     %edx, %edx
     mov     $1, %ecx
-    call    lc_reserve
+    call    lantern_lc_reserve
     test    %rax, %rax
     jnz     98f
     mov     LcStore_blocks(%rbx), %rax
@@ -1356,7 +1356,7 @@ FUNCTION lantern_lc_on_head
     mov     %rbx, %rdi
     mov     $LC_PART_BLOCKS, %esi
     mov     %r15, %rdx
-    call    lc_ref
+    call    lantern_lc_ref
     mov     %rax, S8(%rsp)
     mov     LcStore_tail_slot(%rbx), %rax
     mov     LcStore_latest_finalized_slot(%rbx), %rcx
@@ -1393,7 +1393,7 @@ FUNCTION lantern_lc_on_head
     dec     %rdx
     mov     %rbx, %rdi
     mov     $LC_PART_FINALIZED, %esi
-    call    lc_at
+    call    lantern_lc_at
     mov     LcFinalized_slot(%rax), %rax
     cmp     (L + 32)(%rsp), %rax
     jbe     21f
@@ -1403,7 +1403,7 @@ FUNCTION lantern_lc_on_head
     jz      31f
     mov     %rbx, %rdi
     mov     $LC_PART_BLOCKS, %esi
-    call    lc_ref
+    call    lantern_lc_ref
     mov     LcBlock_slot(%rax), %rcx
     cmp     (L + 32)(%rsp), %rcx
     jbe     31f
@@ -1440,14 +1440,14 @@ FUNCTION lantern_lc_on_head
     dec     %rdx
     mov     %rbx, %rdi
     mov     (L + 40)(%rsp), %rsi
-    call    lc_ancestor
+    call    lantern_lc_ancestor
     test    %rax, %rax
     jz      10f
     mov     %rax, (L + 40)(%rsp)
     mov     %rbx, %rdi
     mov     $LC_PART_BLOCKS, %esi
     mov     %rax, %rdx
-    call    lc_ref
+    call    lantern_lc_ref
     mov     LcBlock_slot(%rax), %rcx
     cmp     L(%rsp), %rcx
     jb      10f
@@ -1457,16 +1457,16 @@ FUNCTION lantern_lc_on_head
     mov     %rdx, (L + 48)(%rsp)
     mov     %rbx, %rdi
     mov     $LC_PART_UPDATES, %esi
-    call    lc_ref
+    call    lantern_lc_ref
     lea     LcUpdate_sync_aggregate(%rax), %rdi
-    call    lc_participants
+    call    lantern_lc_participants
     mov     (L + 48)(%rsp), %rdx
     cmp     $MIN_SYNC_COMMITTEE_PARTICIPANTS, %rax
     jae     7f
     xor     %edx, %edx
 7:  mov     %rbx, %rdi
     mov     S9(%rsp), %rsi
-    call    lc_set_period
+    call    lantern_lc_set_period
     mov     S9(%rsp), %rax
     cmp     S10(%rsp), %rax
     je      10f
@@ -1479,14 +1479,14 @@ FUNCTION lantern_lc_on_head
     jbe     12f
     mov     %rbx, %rdi
     mov     %r15, %rsi
-    call    lc_ancestor
+    call    lantern_lc_ancestor
     test    %rax, %rax
     jz      12f
     mov     %rax, (L + 40)(%rsp)
     mov     %rbx, %rdi
     mov     $LC_PART_BLOCKS, %esi
     mov     %rax, %rdx
-    call    lc_ref
+    call    lantern_lc_ref
     mov     %rax, S9(%rsp)
     mov     LcBlock_slot(%rax), %rdx
     cmp     L(%rsp), %rdx
@@ -1494,14 +1494,14 @@ FUNCTION lantern_lc_on_head
     dec     %rdx
     mov     %rbx, %rdi
     mov     (L + 40)(%rsp), %rsi
-    call    lc_ancestor
+    call    lantern_lc_ancestor
     test    %rax, %rax
     jz      12f
     mov     %rax, S10(%rsp)
     mov     %rbx, %rdi
     mov     $LC_PART_BLOCKS, %esi
     mov     %rax, %rdx
-    call    lc_ref
+    call    lantern_lc_ref
     mov     LcBlock_slot(%rax), %rax
     cmp     L(%rsp), %rax
     jb      12f
@@ -1511,7 +1511,7 @@ FUNCTION lantern_lc_on_head
     mov     S9(%rsp), %rcx
     add     $LcBlock_sync_aggregate, %rcx
     xor     %r8d, %r8d
-    call    lc_make_update
+    call    lantern_lc_make_update
     mov     %rax, LcStore_latest(%rbx)
     jmp     30f
 12: movq    $0, LcStore_latest(%rbx)
@@ -1530,12 +1530,12 @@ FUNCTION lantern_lc_on_head
     mov     %rbx, %rdi
     mov     $LC_PART_BLOCKS, %esi
     mov     S8(%rsp), %rdx
-    call    lc_ref
+    call    lantern_lc_ref
     mov     %rax, S9(%rsp)
     mov     %rbx, %rdi
     mov     $LC_PART_FINALIZED, %esi
     mov     S10(%rsp), %rdx
-    call    lc_at
+    call    lantern_lc_at
     mov     S9(%rsp), %rcx
     mov     LcBlock_slot(%rcx), %rdx
     mov     %rdx, LcFinalized_slot(%rax)
@@ -1548,7 +1548,7 @@ FUNCTION lantern_lc_on_head
 33: mov     %rbx, %rdi
     mov     $LC_PART_BLOCKS, %esi
     mov     S7(%rsp), %rdx
-    call    lc_ref
+    call    lantern_lc_ref
     mov     %rax, S8(%rsp)
     mov     (%r13), %rcx
     mov     %rcx, LcStore_latest_finalized_epoch(%rbx)
@@ -1571,7 +1571,7 @@ FUNCTION lantern_lc_on_head
     cmp     (L + 24)(%rsp), %rsi
     jb      50f
     mov     %rbx, %rdi
-    call    lc_finalized_at
+    call    lantern_lc_finalized_at
     test    %rax, %rax
     jz      50f
     mov     %rax, S10(%rsp)
@@ -1580,7 +1580,7 @@ FUNCTION lantern_lc_on_head
     jb      41f
     mov     %rbx, %rdi
     mov     %rax, %rsi
-    call    lc_add_bootstrap
+    call    lantern_lc_add_bootstrap
 41: mov     S10(%rsp), %rax
     mov     LcFinalized_slot(%rax), %rax
     add     $(SLOTS_PER_EPOCH - 1), %rax
@@ -1597,7 +1597,7 @@ FUNCTION lantern_lc_on_head
     mov     S8(%rsp), %rax
     mov     LcBlock_slot(%rax), %rsi
     mov     %r14, %rdx
-    call    lc_prune
+    call    lantern_lc_prune
 60: xor     %eax, %eax
     LEAVE 64
 94: mov     $LANTERN_INVALID_UNKNOWN_BLOCK, %eax
@@ -1620,7 +1620,7 @@ FUNCTION lantern_lc_read
     test    %rbp, %rbp
     jnz     10f
     mov     $LC_PART_BOOTSTRAPS, %esi       # the bootstrap of the root
-    call    lc_part
+    call    lantern_lc_part
     mov     %rax, %r15
     mov     LcStore_bootstraps(%rbx), %rcx
     mov     %rcx, S7(%rsp)
@@ -1634,7 +1634,7 @@ FUNCTION lantern_lc_read
 3:  mov     %rbx, %rdi
     mov     $LC_PART_HEADERS, %esi
     mov     LcBootstrap_header(%r15), %rdx
-    call    lc_ref
+    call    lantern_lc_ref
     mov     LcHeader_fork(%rax), %rcx
     mov     %rcx, S8(%rsp)
     add     $LcHeader_header, %rax
@@ -1642,7 +1642,7 @@ FUNCTION lantern_lc_read
     mov     %rbx, %rdi
     mov     $LC_PART_COMMITTEES, %esi
     mov     LcBootstrap_sync_committee(%r15), %rdx
-    call    lc_ref
+    call    lantern_lc_ref
     add     $LcCommittee_committee, %rax
     mov     %rax, (L + LcParts_sync_committee)(%rsp)
     lea     LcBootstrap_branch(%r15), %rax
@@ -1654,7 +1654,7 @@ FUNCTION lantern_lc_read
 10: cmp     $LC_OBJECT_UPDATE, %rbp
     jne     20f
     mov     $LC_PART_PERIODS, %esi          # the period's update
-    call    lc_part
+    call    lantern_lc_part
     mov     LcStore_periods(%rbx), %rcx
 11: test    %rcx, %rcx
     jz      93f
@@ -1670,20 +1670,20 @@ FUNCTION lantern_lc_read
     jz      93f
 21: mov     %rbx, %rdi
     mov     $LC_PART_UPDATES, %esi
-    call    lc_ref
+    call    lantern_lc_ref
     mov     %rax, %r15
     mov     LcUpdate_fork(%r15), %rax
     mov     %rax, S8(%rsp)
     mov     %rbx, %rdi
     mov     $LC_PART_HEADERS, %esi
     mov     LcUpdate_attested_header(%r15), %rdx
-    call    lc_ref
+    call    lantern_lc_ref
     add     $LcHeader_header, %rax
     mov     %rax, (L + LcParts_header)(%rsp)
     mov     %rbx, %rdi
     mov     $LC_PART_HEADERS, %esi
     mov     LcUpdate_finalized_header(%r15), %rdx
-    call    lc_ref
+    call    lantern_lc_ref
     add     $LcHeader_header, %rax
     mov     %rax, (L + LcParts_finalized_header)(%rsp)
     movq    $0, (L + LcParts_sync_committee)(%rsp)
@@ -1692,7 +1692,7 @@ FUNCTION lantern_lc_read
     jz      22f
     mov     %rbx, %rdi
     mov     $LC_PART_COMMITTEES, %esi
-    call    lc_ref
+    call    lantern_lc_ref
     add     $LcCommittee_committee, %rax
     mov     %rax, (L + LcParts_sync_committee)(%rsp)
 22: lea     LcUpdate_next_branch(%r15), %rax

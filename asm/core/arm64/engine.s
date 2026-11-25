@@ -3,8 +3,8 @@
  * Requirements: docs/reference/engine-api.md.
  */
 
-/* L0: base64url of the x1 bytes at x0, without padding, to x2; x2 = the end. Uses x9-x13. */
-LOCAL_FUNCTION base64url
+/* L0: lantern_base64url of the x1 bytes at x0, without padding, to x2; x2 = the end. Uses x9-x13. */
+LOCAL_FUNCTION lantern_base64url
     UNWIND_END_PROLOGUE
     ADDRESS x13, base64url_alphabet
 1:  cmp     x1, #3
@@ -48,10 +48,10 @@ LOCAL_FUNCTION base64url
     ldrb    w10, [x13, x10]
     strb    w10, [x2], #1
 4:  ret
-END_FUNCTION base64url
+END_FUNCTION lantern_base64url
 
 /* L0: the decimal digits of x0 to x1; x1 = the end. Uses x9-x12. */
-LOCAL_FUNCTION decimal
+LOCAL_FUNCTION lantern_decimal
     UNWIND_END_PROLOGUE
     mov     x12, #10                        /* count the digits, then write them from the last */
     mov     x9, x0
@@ -66,10 +66,10 @@ LOCAL_FUNCTION decimal
     mov     x0, x10
     cbnz    x0, 2b
     ret
-END_FUNCTION decimal
+END_FUNCTION lantern_decimal
 
 /* L0: the x1 bytes at x0 to x2; x2 = the end. Uses x9. */
-LOCAL_FUNCTION put_bytes
+LOCAL_FUNCTION lantern_put_bytes
     UNWIND_END_PROLOGUE
     cbz     x1, 2f
 1:  ldrb    w9, [x0], #1
@@ -77,7 +77,7 @@ LOCAL_FUNCTION put_bytes
     subs    x1, x1, #1
     b.ne    1b
 2:  ret
-END_FUNCTION put_bytes
+END_FUNCTION lantern_put_bytes
 
 /*
  * (secret, iat, scratch, out): x19 secret, x20 iat, x21 scratch, x22 out, x23 the token's end.
@@ -105,26 +105,26 @@ FUNCTION lantern_jwt_token
     stp     x9, x10, [x21, #32]
     ldp     x9, x10, [x19, #16]
     stp     x9, x10, [x21, #48]
-    ADDRESS x0, jwt_header                  /* base64url(header) + . */
+    ADDRESS x0, jwt_header                  /* lantern_base64url(header) + . */
     mov     x1, #37
     add     x2, x21, #88
-    bl      put_bytes
+    bl      lantern_put_bytes
     mov     x23, x2
     mov     w9, #'{'                        /* the claims: {"iat":<iat>} */
     strb    w9, [sp, #L]
     ADDRESS x0, jwt_claims
     mov     x1, #6
     add     x2, sp, #(L + 1)
-    bl      put_bytes
+    bl      lantern_put_bytes
     mov     x0, x20
     mov     x1, x2
-    bl      decimal
+    bl      lantern_decimal
     mov     w9, #'}'
     strb    w9, [x1], #1
     add     x0, sp, #L
     sub     x1, x1, x0
     mov     x2, x23
-    bl      base64url
+    bl      lantern_base64url
     add     x9, x21, #88                    /* the signing input's ByteList */
     sub     x10, x2, x9
     mov     x11, #24
@@ -141,15 +141,15 @@ FUNCTION lantern_jwt_token
     add     x3, sp, #(L + 32)
     CALL_GLOBAL crypto_hmac_sha256
     cbnz    x0, 8f
-    add     x0, x21, #88                    /* out: the signing input, ., base64url(mac) */
+    add     x0, x21, #88                    /* out: the signing input, ., lantern_base64url(mac) */
     sub     x1, x23, x0
     add     x2, x22, #24
-    bl      put_bytes
+    bl      lantern_put_bytes
     mov     w9, #'.'
     strb    w9, [x2], #1
     add     x0, sp, #(L + 32)
     mov     x1, #32
-    bl      base64url
+    bl      lantern_base64url
     add     x9, x22, #24
     sub     x10, x2, x9
     mov     x11, #24
@@ -169,7 +169,7 @@ FUNCTION lantern_http_post
     mov     x22, x3
     ldr     x0, [x21, #16]                  /* the body's length in decimal */
     add     x1, sp, #L
-    bl      decimal
+    bl      lantern_decimal
     add     x9, sp, #L
     sub     x24, x1, x9                     /* its digits */
     ldr     x23, [x19, #16]                 /* the request's length */
@@ -189,31 +189,31 @@ FUNCTION lantern_http_post
     add     x2, x22, #24
     ADDRESS x0, http_post_1                 /* POST / HTTP/1.1, Host: */
     mov     x1, #23
-    bl      put_bytes
+    bl      lantern_put_bytes
     ldr     x9, [x19, #8]
     add     x0, x19, x9
     ldr     x1, [x19, #16]
-    bl      put_bytes
+    bl      lantern_put_bytes
     ADDRESS x0, http_post_2                 /* Content-Type, Authorization: Bearer */
     mov     x1, #56
-    bl      put_bytes
+    bl      lantern_put_bytes
     ldr     x9, [x20, #8]
     add     x0, x20, x9
     ldr     x1, [x20, #16]
-    bl      put_bytes
+    bl      lantern_put_bytes
     ADDRESS x0, http_post_3                 /* Content-Length: */
     mov     x1, #18
-    bl      put_bytes
+    bl      lantern_put_bytes
     add     x0, sp, #L
     mov     x1, x24
-    bl      put_bytes
+    bl      lantern_put_bytes
     ADDRESS x0, http_crlf2
     mov     x1, #4
-    bl      put_bytes
+    bl      lantern_put_bytes
     ldr     x9, [x21, #8]
     add     x0, x21, x9
     ldr     x1, [x21, #16]
-    bl      put_bytes
+    bl      lantern_put_bytes
     mov     x0, #LANTERN_OK
     LEAVE 32
 8:  mov     x0, #LANTERN_BUFFER_TOO_SMALL
@@ -224,7 +224,7 @@ END_FUNCTION lantern_http_post
  * L0: x0 = the position of the CR LF at or after x2 in the x1 bytes at x0, or 2^64 - 1 when
  * there is none. Uses x9, x10.
  */
-LOCAL_FUNCTION find_crlf
+LOCAL_FUNCTION lantern_find_crlf
     UNWIND_END_PROLOGUE
     mov     x9, x2
 1:  add     x10, x9, #1
@@ -242,7 +242,7 @@ LOCAL_FUNCTION find_crlf
 3:  mov     x9, #-1
 4:  mov     x0, x9
     ret
-END_FUNCTION find_crlf
+END_FUNCTION lantern_find_crlf
 
 /* Whether the x11 bytes at x10 are the name at label (lowercase): x9 = 1 or 0. Uses x12-x14. */
 .macro HEADER_IS label, n
@@ -283,7 +283,7 @@ FUNCTION lantern_http_parse_response
     mov     x0, x19                         /* the status line */
     mov     x1, x20
     mov     x2, #0
-    bl      find_crlf
+    bl      lantern_find_crlf
     cmn     x0, #1
     b.eq    7f
     mov     x24, x0
@@ -335,7 +335,7 @@ FUNCTION lantern_http_parse_response
 5:  mov     x0, x19                         /* each header line, to the empty line */
     mov     x1, x20
     mov     x2, x24
-    bl      find_crlf
+    bl      lantern_find_crlf
     cmn     x0, #1
     b.eq    7f
     cmp     x0, x24
@@ -452,7 +452,7 @@ FUNCTION lantern_http_parse_response
 30: mov     x0, x19                         /* chunked: a chunk size line */
     mov     x1, x20
     mov     x2, x24
-    bl      find_crlf
+    bl      lantern_find_crlf
     cmn     x0, #1
     b.eq    7f
     mov     x9, #0
@@ -512,7 +512,7 @@ FUNCTION lantern_http_parse_response
 36: mov     x0, x19                         /* the trailer section, to its empty line */
     mov     x1, x20
     mov     x2, x24
-    bl      find_crlf
+    bl      lantern_find_crlf
     cmn     x0, #1
     b.eq    7f
     cmp     x0, x24
@@ -559,14 +559,14 @@ FUNCTION lantern_engine_exchange_capabilities
     ADDRESS x0, j_caps_open
     mov     x1, #j_caps_open_len
     add     x2, x20, #24
-    bl      put_bytes
+    bl      lantern_put_bytes
     mov     x0, x19
     mov     x1, x2
-    bl      decimal
+    bl      lantern_decimal
     mov     x2, x1
     ADDRESS x0, j_caps_close
     mov     x1, #j_caps_close_len
-    bl      put_bytes
+    bl      lantern_put_bytes
     add     x9, x20, #24
     sub     x9, x2, x9
     mov     x10, #24

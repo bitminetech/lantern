@@ -61,7 +61,7 @@ SPEC_FUNCTION compute_fork_digest
     addi    a0, sp, L + 48
     li      a1, 16
     addi    a2, sp, L + 16
-    call    sha256_short
+    call    lantern_sha256_short
     lw      t0, (L + 16)(sp)
     xor     s6, s6, t0
 1:
@@ -94,7 +94,7 @@ SPEC_LEAF compute_min_epochs_for_block_requests
 SPEC_END compute_min_epochs_for_block_requests
 
 /* L0: a0 = 32 + a0 + a0 // 6, and a1 = 1 on overflow, else 0. Uses t0, t1. */
-LOCAL_FUNCTION compressed_len
+LOCAL_FUNCTION lantern_compressed_len
     UNWIND_END_PROLOGUE
     li      t0, 6
     divu    t0, a0, t0
@@ -104,13 +104,13 @@ LOCAL_FUNCTION compressed_len
     add     a0, t1, t0
     sltu    a1, a0, t1
 1:  ret
-END_FUNCTION compressed_len
+END_FUNCTION lantern_compressed_len
 
 SPEC_FUNCTION max_compressed_len
     FRAME 16
     sd      a1, F(sp)
     ld      a0, 0(a0)
-    call    compressed_len
+    call    lantern_compressed_len
     bnez    a1, 9f
     ld      a1, F(sp)
     sd      a0, 0(a1)
@@ -124,7 +124,7 @@ SPEC_FUNCTION max_message_size
     FRAME 16
     sd      a1, F(sp)
     LDQ     a0, a0, CONFIG_MAX_PAYLOAD_SIZE
-    call    compressed_len                  # max_compressed_len(MAX_PAYLOAD_SIZE) + 1024
+    call    lantern_compressed_len                  # max_compressed_len(MAX_PAYLOAD_SIZE) + 1024
     bnez    a1, 9f
     addi    t0, a0, 1024
     bltu    t0, a0, 9f
@@ -185,7 +185,7 @@ SPEC_FUNCTION compute_subscribed_subnet
     addi    a0, sp, L + 8                   # permutation_seed = sha256(uint_to_bytes(...))
     li      a1, 8
     addi    a2, sp, L + 16
-    call    sha256_short
+    call    lantern_sha256_short
     li      t0, 64                          # Uint64(1 << prefix_bits) raises
     bgeu    s7, t0, 9f
     li      t1, 0                           # node_id_prefix = node_id >> (NODE_ID_BITS - prefix_bits)
@@ -290,7 +290,7 @@ SPEC_END compute_max_request_data_column_sidecars
  * fork above it, and from fulu on each BLOB_SCHEDULE epoch from FULU_FORK_EPOCH on; else
  * FAR_FUTURE_EPOCH. A leaf; uses a2-a5, t0, t1.
  */
-LOCAL_FUNCTION next_fork_epoch
+LOCAL_FUNCTION lantern_next_fork_epoch
     UNWIND_END_PROLOGUE
     li      a2, -1
     li      a3, (16 * FORK)
@@ -323,7 +323,7 @@ LOCAL_FUNCTION next_fork_epoch
 .endif
     mv      a0, a2
     ret
-END_FUNCTION next_fork_epoch
+END_FUNCTION lantern_next_fork_epoch
 
 /* s1 genesis_validators_root, s2 current_epoch, s3 config, s4 scratch, s5 out. Locals: L an epoch. */
 SPEC_FUNCTION compute_enr_fork_id
@@ -337,7 +337,7 @@ SPEC_FUNCTION compute_enr_fork_id
     bnez    a0, 9f
     ld      a0, 0(s2)
     mv      a1, s3
-    call    next_fork_epoch
+    call    lantern_next_fork_epoch
     sd      a0, 8(s5)                       # next_fork_epoch
     li      t0, -1                          # next_fork_version: at next_fork_epoch, or at current_epoch
     bne     a0, t0, 1f
@@ -360,7 +360,7 @@ SPEC_FUNCTION compute_next_fork_digest
     mv      s5, a4
     ld      a0, 0(a1)
     mv      a1, s3
-    call    next_fork_epoch
+    call    lantern_next_fork_epoch
     li      t0, -1
     beq     a0, t0, 1f
     sd      a0, L(sp)

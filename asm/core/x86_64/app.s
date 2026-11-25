@@ -35,7 +35,7 @@
 .endm
 
 /* L0: rax = the fork of the slot rdi with the config rsi: the last fork whose epoch is at most the slot's. Uses rcx, rdx. */
-LOCAL_FUNCTION app_fork
+LOCAL_FUNCTION lantern_app_fork
     UNWIND_END_PROLOGUE
     mov     %rdi, %rax
     xor     %edx, %edx
@@ -51,10 +51,10 @@ LOCAL_FUNCTION app_fork
 2:  mov     %rcx, %rax
     shr     $4, %rax
     ret
-END_FUNCTION app_fork
+END_FUNCTION lantern_app_fork
 
 /* L0: rax = the current slot of the store rdi: (time_ms - genesis_time_ms) // SLOT_DURATION_MS, 0 before genesis. Uses rcx, rdx. */
-LOCAL_FUNCTION app_store_slot
+LOCAL_FUNCTION lantern_app_store_slot
     UNWIND_END_PROLOGUE
     mov     Store_time_ms(%rdi), %rax
     sub     Store_genesis_time_ms(%rdi), %rax
@@ -68,10 +68,10 @@ LOCAL_FUNCTION app_store_slot
     ret
 2:  xor     %eax, %eax
     ret
-END_FUNCTION app_store_slot
+END_FUNCTION lantern_app_store_slot
 
 /* L0: rax = 1 when the rsi bytes at rdi are the rcx bytes at rdx, else 0. Uses rdi, rsi, rdx, r8. */
-LOCAL_FUNCTION app_name_is
+LOCAL_FUNCTION lantern_app_name_is
     UNWIND_END_PROLOGUE
     cmp     %rcx, %rsi
     jne     2f
@@ -88,10 +88,10 @@ LOCAL_FUNCTION app_name_is
     ret
 3:  mov     $1, %eax
     ret
-END_FUNCTION app_name_is
+END_FUNCTION lantern_app_name_is
 
 /* L1: rax = memory of rdi bytes from lantern_shell_map, zeroed, or 0. Locals: the size, the address. */
-LOCAL_FUNCTION app_map
+LOCAL_FUNCTION lantern_app_map
     FRAME 16
     mov     %rdi, (%rsp)
     mov     %rsp, %rdi
@@ -99,7 +99,7 @@ LOCAL_FUNCTION app_map
     CALL_GLOBAL lantern_shell_map
     mov     8(%rsp), %rax
     UNFRAME 16
-END_FUNCTION app_map
+END_FUNCTION lantern_app_map
 
 /*
  * L1: a StateCache, a CommitteeCache and a PubkeyCache for rdi / 121 + 65536 validators (rdi the anchor file's
@@ -107,7 +107,7 @@ END_FUNCTION app_map
  * memory. rbx the app.
  * Locals: rsp+0 validators, rsp+8 its bytes.
  */
-LOCAL_FUNCTION app_state_cache
+LOCAL_FUNCTION lantern_app_state_cache
     FRAME 16
     mov     %rdi, %rax
     xor     %edx, %edx
@@ -120,7 +120,7 @@ LOCAL_FUNCTION app_state_cache
     mov     APP_FORK(%rbx), %r10
     FORK_CALL state_cache_size
     mov     8(%rsp), %rdi
-    call    app_map
+    call    lantern_app_map
     test    %rax, %rax
     jz      1f
     mov     8(%rsp), %rcx
@@ -135,7 +135,7 @@ LOCAL_FUNCTION app_state_cache
     mov     APP_FORK(%rbx), %r10
     FORK_CALL committee_cache_size
     mov     8(%rsp), %rdi
-    call    app_map
+    call    lantern_app_map
     test    %rax, %rax
     jz      2f
     mov     8(%rsp), %rcx
@@ -150,7 +150,7 @@ LOCAL_FUNCTION app_state_cache
     mov     APP_FORK(%rbx), %r10
     FORK_CALL pubkey_cache_size
     mov     8(%rsp), %rdi
-    call    app_map
+    call    lantern_app_map
     test    %rax, %rax
     jz      3f
     mov     8(%rsp), %rcx
@@ -162,10 +162,10 @@ LOCAL_FUNCTION app_state_cache
     FORK_CALL pubkey_cache_init
 3:  xor     %eax, %eax
     UNFRAME 16
-END_FUNCTION app_state_cache
+END_FUNCTION lantern_app_state_cache
 
 /* L1: the pair at rbx + rdi goes back to lantern_shell_unmap and becomes 0, 0. */
-LOCAL_FUNCTION app_unmap
+LOCAL_FUNCTION lantern_app_unmap
     FRAME 16
     lea     (%rbx,%rdi), %rax
     mov     %rax, (%rsp)
@@ -178,32 +178,32 @@ LOCAL_FUNCTION app_unmap
     movq    $0, (%rax)
     movq    $0, 8(%rax)
 1:  UNFRAME 16
-END_FUNCTION app_unmap
+END_FUNCTION lantern_app_unmap
 
 /* L1: the pair at rbx + rdi becomes new memory of rsi bytes, its first u64 the size: rax = the memory, or 0. */
-LOCAL_FUNCTION app_alloc
+LOCAL_FUNCTION lantern_app_alloc
     ENTER 0
     lea     (%rbx,%rdi), %rbp
     mov     %rsi, %r12
     mov     %rsi, %rdi
-    call    app_map
+    call    lantern_app_map
     test    %rax, %rax
     jz      1f
     mov     %r12, (%rax)
     mov     %rax, (%rbp)
     mov     %r12, 8(%rbp)
 1:  LEAVE 0
-END_FUNCTION app_alloc
+END_FUNCTION lantern_app_alloc
 
-/* L0: the log line starts, with room for the time and the level that app_line_end writes. */
-LOCAL_FUNCTION app_line_start
+/* L0: the log line starts, with room for the time and the level that lantern_app_line_end writes. */
+LOCAL_FUNCTION lantern_app_line_start
     UNWIND_END_PROLOGUE
     movq    $APP_LOG_PREFIX, (APP_LINE + 16)(%rbx)
     ret
-END_FUNCTION app_line_start
+END_FUNCTION lantern_app_line_start
 
 /* L0: rdx digits of rdi, before the byte at rsi. A leaf; uses rax, rcx, rdx, rsi, r8. */
-LOCAL_FUNCTION app_digits
+LOCAL_FUNCTION lantern_app_digits
     UNWIND_END_PROLOGUE
     mov     %rdx, %r8
     mov     %rdi, %rax
@@ -216,14 +216,14 @@ LOCAL_FUNCTION app_digits
     dec     %r8
     jnz     1b
     ret
-END_FUNCTION app_digits
+END_FUNCTION lantern_app_digits
 
 /*
  * L1: the UTC time of the Unix milliseconds rdi, as YYYY-MM-DD HH:MM:SS.mmm, in the 23 bytes at
  * rsi (civil_from_days of the days since 1970). Locals: rsp+0 out, +8 the milliseconds of the
  * day, +16 year, +24 month, +32 day.
  */
-LOCAL_FUNCTION app_time_text
+LOCAL_FUNCTION lantern_app_time_text
     FRAME 48
     mov     %rsi, (%rsp)
     mov     %rdi, %rax
@@ -304,17 +304,17 @@ LOCAL_FUNCTION app_time_text
     mov     16(%rsp), %rdi                  # the digits, each field from its end
     add     $4, %rsi
     mov     $4, %edx
-    call    app_digits
+    call    lantern_app_digits
     mov     24(%rsp), %rdi
     mov     (%rsp), %rsi
     add     $7, %rsi
     mov     $2, %edx
-    call    app_digits
+    call    lantern_app_digits
     mov     32(%rsp), %rdi
     mov     (%rsp), %rsi
     add     $10, %rsi
     mov     $2, %edx
-    call    app_digits
+    call    lantern_app_digits
     mov     8(%rsp), %rax                   # hours
     xor     %edx, %edx
     mov     $3600000, %ecx
@@ -324,7 +324,7 @@ LOCAL_FUNCTION app_time_text
     mov     (%rsp), %rsi
     add     $13, %rsi
     mov     $2, %edx
-    call    app_digits
+    call    lantern_app_digits
     mov     8(%rsp), %rax                   # minutes
     xor     %edx, %edx
     mov     $60000, %ecx
@@ -334,7 +334,7 @@ LOCAL_FUNCTION app_time_text
     mov     (%rsp), %rsi
     add     $16, %rsi
     mov     $2, %edx
-    call    app_digits
+    call    lantern_app_digits
     mov     8(%rsp), %rax                   # seconds
     xor     %edx, %edx
     mov     $1000, %ecx
@@ -344,17 +344,17 @@ LOCAL_FUNCTION app_time_text
     mov     (%rsp), %rsi
     add     $19, %rsi
     mov     $2, %edx
-    call    app_digits
+    call    lantern_app_digits
     mov     8(%rsp), %rdi                   # milliseconds
     mov     (%rsp), %rsi
     add     $23, %rsi
     mov     $3, %edx
-    call    app_digits
+    call    lantern_app_digits
     UNFRAME 48
-END_FUNCTION app_time_text
+END_FUNCTION lantern_app_time_text
 
 /* L0: the rsi bytes at rdi join the log line, as far as it has room. Uses rax, rcx, rdx, rsi, rdi. */
-LOCAL_FUNCTION app_line_text
+LOCAL_FUNCTION lantern_app_line_text
     UNWIND_END_PROLOGUE
     lea     APP_LINE(%rbx), %rax
     mov     16(%rax), %rcx
@@ -375,10 +375,10 @@ LOCAL_FUNCTION app_line_text
     dec     %rsi
     jmp     2b
 3:  ret
-END_FUNCTION app_line_text
+END_FUNCTION lantern_app_line_text
 
 /* L1: the decimal digits of rdi join the log line. Locals: 32 digit bytes. */
-LOCAL_FUNCTION app_line_u64
+LOCAL_FUNCTION lantern_app_line_u64
     FRAME 32
     lea     32(%rsp), %rcx                  # the digits, from the end
     mov     %rdi, %rax
@@ -393,12 +393,12 @@ LOCAL_FUNCTION app_line_u64
     mov     %rcx, %rdi
     lea     32(%rsp), %rsi
     sub     %rcx, %rsi
-    call    app_line_text
+    call    lantern_app_line_text
     UNFRAME 32
-END_FUNCTION app_line_u64
+END_FUNCTION lantern_app_line_u64
 
 /* L1: the hex digits of the rsi bytes at rdi join the log line. Locals: rdi, rsi, then 2 digits. */
-LOCAL_FUNCTION app_line_hex
+LOCAL_FUNCTION lantern_app_line_hex
     FRAME 32
     mov     %rdi, (%rsp)
     mov     %rsi, 8(%rsp)
@@ -421,17 +421,17 @@ LOCAL_FUNCTION app_line_hex
     mov     %al, 17(%rsp)
     lea     16(%rsp), %rdi
     mov     $2, %esi
-    call    app_line_text
+    call    lantern_app_line_text
     jmp     1b
 2:  UNFRAME 32
-END_FUNCTION app_line_hex
+END_FUNCTION lantern_app_line_hex
 
 /*
  * L1: the log line of kind rdi (APP_LOG_INFO, ERROR, WARN or DEBUG), when its level is at most the
  * log level: its time and level before it, an LF after it, to the standard error for ERROR and
  * WARN, else the standard output. Locals: rsp+0 the level, +8 the time, +16 an LF.
  */
-LOCAL_FUNCTION app_line_end
+LOCAL_FUNCTION lantern_app_line_end
     FRAME 32
     ADDRESS %rax, app_log_rank
     movzbl  (%rax,%rdi), %eax
@@ -447,7 +447,7 @@ LOCAL_FUNCTION app_line_end
     CALL_GLOBAL lantern_shell_time_ms
     mov     8(%rsp), %rdi
     lea     (APP_LINE + 24)(%rbx), %rsi
-    call    app_time_text
+    call    lantern_app_time_text
     lea     (APP_LINE + 24)(%rbx), %rdi
     movb    $0x20, 23(%rdi)
     movb    $0x20, 29(%rdi)
@@ -460,14 +460,14 @@ LOCAL_FUNCTION app_line_end
     movb    $10, 16(%rsp)
     lea     16(%rsp), %rdi
     mov     $1, %esi
-    call    app_line_text
+    call    lantern_app_line_text
     mov     (%rsp), %rax                    # the metrics: the line, by its level (0 error to 3 debug)
     incq    (APP_METRICS + AppMetrics_log_lines)(%rbx,%rax,8)
     lea     APP_STREAM(%rbx), %rdi
     lea     APP_LINE(%rbx), %rsi
     CALL_GLOBAL lantern_shell_write
 9:  UNFRAME 32
-END_FUNCTION app_line_end
+END_FUNCTION lantern_app_line_end
 
 /*
  * L1: the log lines of a work that ran (app.md, the log): DEBUG work <kind> result <n>; for a
@@ -475,26 +475,26 @@ END_FUNCTION app_line_end
  * result <n>. rdi its kind, rsi its data entry or 0. Locals: rsp+0 kind, +8 entry, +16 result,
  * +24 slot.
  */
-LOCAL_FUNCTION app_log_work
+LOCAL_FUNCTION lantern_app_log_work
     FRAME 32
     mov     %rdi, (%rsp)
     mov     %rsi, 8(%rsp)
     mov     APP_WORK_EVENT(%rbx), %rax
     mov     NodeEvent_result(%rax), %rax
     mov     %rax, 16(%rsp)
-    call    app_line_start
+    call    lantern_app_line_start
     ADDRESS %rdi, app_m_log_work
     mov     $app_m_log_work_len, %esi
-    call    app_line_text
+    call    lantern_app_line_text
     mov     (%rsp), %rdi
-    call    app_line_u64
+    call    lantern_app_line_u64
     ADDRESS %rdi, app_m_log_result
     mov     $app_m_log_result_len, %esi
-    call    app_line_text
+    call    lantern_app_line_text
     mov     16(%rsp), %rdi
-    call    app_line_u64
+    call    lantern_app_line_u64
     mov     $APP_LOG_DEBUG, %edi
-    call    app_line_end
+    call    lantern_app_line_end
     cmpq    $NODE_WORK_IMPORT_BLOCK, (%rsp)
     jne     9f
     cmpq    $LANTERN_NEED_JUSTIFIED_STATE, 16(%rsp)
@@ -508,38 +508,38 @@ LOCAL_FUNCTION app_log_work
     mov     8(%rax), %rcx
     mov     100(%rax,%rcx), %rcx
     mov     %rcx, 24(%rsp)
-    call    app_line_start
+    call    lantern_app_line_start
     ADDRESS %rdi, app_m_log_block
     mov     $app_m_log_block_len, %esi
-    call    app_line_text
+    call    lantern_app_line_text
     mov     24(%rsp), %rdi
-    call    app_line_u64
+    call    lantern_app_line_u64
     cmpq    $0, 16(%rsp)
     jne     1f
     ADDRESS %rdi, app_m_log_imported
     mov     $app_m_log_imported_len, %esi
-    call    app_line_text
+    call    lantern_app_line_text
     mov     APP_WORK_EVENT(%rbx), %rax
     mov     NodeEvent_index(%rax), %rdi
-    call    app_line_u64
+    call    lantern_app_line_u64
     ADDRESS %rdi, app_m_log_attestations
     mov     $app_m_log_attestations_len, %esi
-    call    app_line_text
+    call    lantern_app_line_text
     mov     $APP_LOG_INFO, %edi
-    call    app_line_end
+    call    lantern_app_line_end
     jmp     9f
 1:  ADDRESS %rdi, app_m_log_not
     mov     $app_m_log_not_len, %esi
-    call    app_line_text
+    call    lantern_app_line_text
     mov     16(%rsp), %rdi
-    call    app_line_u64
+    call    lantern_app_line_u64
     mov     $APP_LOG_WARN, %edi
-    call    app_line_end
+    call    lantern_app_line_end
 9:  UNFRAME 32
-END_FUNCTION app_log_work
+END_FUNCTION lantern_app_log_work
 
 /* L1: the path of the rsi bytes of the name at rdi in the network directory: a ByteList at APP_PATH. */
-LOCAL_FUNCTION app_path
+LOCAL_FUNCTION lantern_app_path
     ENTER 0
     mov     %rdi, %rbp
     mov     %rsi, %r12
@@ -564,10 +564,10 @@ LOCAL_FUNCTION app_path
     LEAVE 0
 1:  movq    $(APP_PATH_MAX + 1), 16(%r15)   # a count past the room: the shell gives its error
     LEAVE 0
-END_FUNCTION app_path
+END_FUNCTION lantern_app_path
 
 /* L1: the path of the log line: the bytes of APP_PATH, as far as they fit. */
-LOCAL_FUNCTION app_line_path
+LOCAL_FUNCTION lantern_app_line_path
     FRAME 0
     lea     APP_PATH(%rbx), %rax
     lea     24(%rax), %rdi
@@ -575,41 +575,41 @@ LOCAL_FUNCTION app_line_path
     cmp     $APP_PATH_MAX, %rsi
     jbe     1f
     mov     $APP_PATH_MAX, %esi
-1:  call    app_line_text
+1:  call    lantern_app_line_text
     UNFRAME 0
-END_FUNCTION app_line_path
+END_FUNCTION lantern_app_line_path
 
 /* L1: the file at APP_PATH, read into APP_FILE: rax = 0, or 2 after a line on the standard error. */
-LOCAL_FUNCTION app_read
+LOCAL_FUNCTION lantern_app_read
     FRAME 0
     lea     APP_PATH(%rbx), %rdi
     lea     APP_FILE(%rbx), %rsi
     CALL_GLOBAL lantern_shell_read_file
     cmpq    $0, APP_FILE(%rbx)
     je      1f
-    call    app_line_start                  # cannot read <path>: error <n>
+    call    lantern_app_line_start                  # cannot read <path>: error <n>
     ADDRESS %rdi, app_m_read
     mov     $app_m_read_len, %esi
-    call    app_line_text
-    call    app_line_path
+    call    lantern_app_line_text
+    call    lantern_app_line_path
     ADDRESS %rdi, app_m_error
     mov     $app_m_error_len, %esi
-    call    app_line_text
+    call    lantern_app_line_text
     mov     APP_FILE(%rbx), %rdi
-    call    app_line_u64
+    call    lantern_app_line_u64
     mov     $APP_LOG_ERROR, %edi
-    call    app_line_end
+    call    lantern_app_line_end
     mov     $2, %eax
     UNFRAME 0
 1:  xor     %eax, %eax
     UNFRAME 0
-END_FUNCTION app_read
+END_FUNCTION lantern_app_read
 
 /*
  * L1: APP_PATH holds the path of the Arg at rdi, or a count past its room when the path does not
  * fit, so the shell gives its error.
  */
-LOCAL_FUNCTION app_arg_path
+LOCAL_FUNCTION lantern_app_arg_path
     FRAME 0
     mov     (%rdi), %rsi
     mov     8(%rdi), %rdx
@@ -622,7 +622,7 @@ LOCAL_FUNCTION app_arg_path
     UNFRAME 0
 1:  movq    $(APP_PATH_MAX + 1), (APP_PATH + 16)(%rbx)
     UNFRAME 0
-END_FUNCTION app_arg_path
+END_FUNCTION lantern_app_arg_path
 
 /*
  * L2: the anchor of --checkpoint-state and --checkpoint-block in APP_FILE, in the form of
@@ -631,11 +631,11 @@ END_FUNCTION app_arg_path
  * ByteList, r13 its bytes, r14 the state file's ByteList, r15 its bytes, S7 the buffer's size, S8
  * the buffer. Locals: L the block file's address and mapped size.
  */
-LOCAL_FUNCTION app_checkpoint
+LOCAL_FUNCTION lantern_app_checkpoint
     ENTER 16
     lea     (APP_OPTIONS + AppOptions_checkpoint_block)(%rbx), %rdi
-    call    app_arg_path
-    call    app_read
+    call    lantern_app_arg_path
+    call    lantern_app_read
     test    %rax, %rax
     jnz     99f
     mov     (APP_FILE + 8)(%rbx), %rbp
@@ -647,8 +647,8 @@ LOCAL_FUNCTION app_checkpoint
     mov     %rax, (L + 8)(%rsp)
     movq    $0, (APP_FILE + 8)(%rbx)
     lea     (APP_OPTIONS + AppOptions_checkpoint_state)(%rbx), %rdi
-    call    app_arg_path
-    call    app_read
+    call    lantern_app_arg_path
+    call    lantern_app_read
     test    %rax, %rax
     jnz     98f
     mov     (APP_FILE + 8)(%rbx), %r14
@@ -659,7 +659,7 @@ LOCAL_FUNCTION app_checkpoint
     sub     $100, %rax
     mov     %rax, S7(%rsp)
     mov     %rax, %rdi
-    call    app_map
+    call    lantern_app_map
     test    %rax, %rax
     jz      97f
     mov     %rax, S8(%rsp)
@@ -689,7 +689,7 @@ LOCAL_FUNCTION app_checkpoint
     lea     (24 + 100)(%rbp), %rsi
     mov     %rcx, %rdx
     call    lantern_copy
-    call    app_file_free                   # the files go; the buffer takes their place
+    call    lantern_app_file_free                   # the files go; the buffer takes their place
     lea     L(%rsp), %rdi
     lea     (L + 8)(%rsp), %rsi
     CALL_GLOBAL lantern_shell_unmap
@@ -702,31 +702,31 @@ LOCAL_FUNCTION app_checkpoint
     mov     %rax, (APP_FILE + 16)(%rbx)
     xor     %eax, %eax
     LEAVE 16
-90: call    app_file_free                   # <path>: too short
-    call    app_line_start
-    call    app_line_path
+90: call    lantern_app_file_free                   # <path>: too short
+    call    lantern_app_line_start
+    call    lantern_app_line_path
     ADDRESS %rdi, app_m_short
     mov     $app_m_short_len, %esi
-    call    app_line_text
+    call    lantern_app_line_text
     mov     $APP_LOG_ERROR, %edi
-    call    app_line_end
+    call    lantern_app_line_end
     jmp     99f
-97: call    app_file_free                   # no memory
-    call    app_line_start
+97: call    lantern_app_file_free                   # no memory
+    call    lantern_app_line_start
     ADDRESS %rdi, app_m_memory
     mov     $app_m_memory_len, %esi
-    call    app_line_text
+    call    lantern_app_line_text
     mov     $APP_LOG_ERROR, %edi
-    call    app_line_end
+    call    lantern_app_line_end
 98: lea     L(%rsp), %rdi                   # the block file goes
     lea     (L + 8)(%rsp), %rsi
     CALL_GLOBAL lantern_shell_unmap
 99: mov     $2, %eax
     LEAVE 16
-END_FUNCTION app_checkpoint
+END_FUNCTION lantern_app_checkpoint
 
 /* L1: the memory of APP_FILE goes back. */
-LOCAL_FUNCTION app_file_free
+LOCAL_FUNCTION lantern_app_file_free
     FRAME 16
     cmpq    $0, (APP_FILE + 8)(%rbx)
     je      1f
@@ -735,48 +735,48 @@ LOCAL_FUNCTION app_file_free
     CALL_GLOBAL lantern_shell_unmap
     movq    $0, (APP_FILE + 8)(%rbx)
 1:  UNFRAME 16
-END_FUNCTION app_file_free
+END_FUNCTION lantern_app_file_free
 
 /* L1: a line "<rsi bytes at rdi>: status <rdx>" on the standard error, then rax = 2. Locals: rdi, rsi, rdx. */
-LOCAL_FUNCTION app_fail_status
+LOCAL_FUNCTION lantern_app_fail_status
     FRAME 32
     mov     %rdi, (%rsp)
     mov     %rsi, 8(%rsp)
     mov     %rdx, 16(%rsp)
-    call    app_line_start
+    call    lantern_app_line_start
     mov     (%rsp), %rdi
     mov     8(%rsp), %rsi
-    call    app_line_text
+    call    lantern_app_line_text
     ADDRESS %rdi, app_m_status
     mov     $app_m_status_len, %esi
-    call    app_line_text
+    call    lantern_app_line_text
     mov     16(%rsp), %rdi
-    call    app_line_u64
+    call    lantern_app_line_u64
     mov     $APP_LOG_ERROR, %edi
-    call    app_line_end
+    call    lantern_app_line_end
     mov     $2, %eax
     UNFRAME 32
-END_FUNCTION app_fail_status
+END_FUNCTION lantern_app_fail_status
 
 /* L1: rax = 2 after a line "lantern: no memory" on the standard error. */
-LOCAL_FUNCTION app_no_memory
+LOCAL_FUNCTION lantern_app_no_memory
     FRAME 0
-    call    app_line_start
+    call    lantern_app_line_start
     ADDRESS %rdi, app_m_memory
     mov     $app_m_memory_len, %esi
-    call    app_line_text
+    call    lantern_app_line_text
     mov     $APP_LOG_ERROR, %edi
-    call    app_line_end
+    call    lantern_app_line_end
     mov     $2, %eax
     UNFRAME 0
-END_FUNCTION app_no_memory
+END_FUNCTION lantern_app_no_memory
 
 /*
  * L2: the start of docs/reference/app.md: the config, the anchor of genesis.ssz, the store, the
  * node and the Seen: rax = 0, or 2 after a line on the standard error. rbp a ByteList, r12 the
  * file's size, r13 a size, r14 a size, r15 the tries. Locals: L a line number or a size.
  */
-LOCAL_FUNCTION app_start
+LOCAL_FUNCTION lantern_app_start
     ENTER 16
     ADDRESS %rdi, app_builtin_config        # the config: the pinned config of the preset, then the network's
     lea     APP_CONFIG(%rbx), %rsi
@@ -784,8 +784,8 @@ LOCAL_FUNCTION app_start
     CALL_GLOBAL lantern_config_parse
     ADDRESS %rdi, app_config_name
     mov     $app_config_name_len, %esi
-    call    app_path
-    call    app_read
+    call    lantern_app_path
+    call    lantern_app_read
     test    %rax, %rax
     jnz     99f
     mov     (APP_FILE + 8)(%rbx), %rdi
@@ -793,16 +793,16 @@ LOCAL_FUNCTION app_start
     lea     L(%rsp), %rdx
     CALL_GLOBAL lantern_config_parse
     mov     %rax, %rbp
-    call    app_file_free
+    call    lantern_app_file_free
     test    %rbp, %rbp
     jz      1f
-    call    app_line_start                  # <path>: faulty line <n>
-    call    app_line_path
+    call    lantern_app_line_start                  # <path>: faulty line <n>
+    call    lantern_app_line_path
     ADDRESS %rdi, app_m_line
     mov     $app_m_line_len, %esi
-    call    app_line_text
+    call    lantern_app_line_text
     mov     L(%rsp), %rdi
-    call    app_line_u64
+    call    lantern_app_line_u64
     jmp     98f
 1:  movq    $0, S7(%rsp)                    # with a data directory: its anchor.ssz, when there is one
     cmpq    $0, (APP_OPTIONS + AppOptions_data_dir + 8)(%rbx)
@@ -810,7 +810,7 @@ LOCAL_FUNCTION app_start
     ADDRESS %rdi, app_anchor_name
     mov     $app_anchor_name_len, %esi
     lea     APP_PATH(%rbx), %rdx
-    call    app_db_file
+    call    lantern_app_db_file
     lea     APP_PATH(%rbx), %rdi
     lea     APP_FILE(%rbx), %rsi
     CALL_GLOBAL lantern_shell_read_file
@@ -820,15 +820,15 @@ LOCAL_FUNCTION app_start
     jmp     12f
 11: cmpq    $0, (APP_OPTIONS + AppOptions_checkpoint_state + 8)(%rbx)  # else the checkpoint files
     je      111f
-    call    app_checkpoint
+    call    lantern_app_checkpoint
     test    %rax, %rax
     jnz     99f
     movq    $2, S7(%rsp)
     jmp     12f
 111: ADDRESS %rdi, app_genesis_name         # else genesis.ssz: the fork of its slot
     mov     $app_genesis_name_len, %esi
-    call    app_path
-    call    app_read
+    call    lantern_app_path
+    call    lantern_app_read
     test    %rax, %rax
     jnz     99f
 12:
@@ -836,11 +836,11 @@ LOCAL_FUNCTION app_start
     mov     (APP_FILE + 16)(%rbx), %r12
     cmp     $(40 + 8), %r12
     jae     2f
-    call    app_line_start
-    call    app_line_path
+    call    lantern_app_line_start
+    call    lantern_app_line_path
     ADDRESS %rdi, app_m_short
     mov     $app_m_short_len, %esi
-    call    app_line_text
+    call    lantern_app_line_text
     jmp     98f
 2:  xor     %eax, %eax                      # BeaconState.slot, after the ByteList header of anchor.ssz's state
     mov     $24, %ecx
@@ -848,7 +848,7 @@ LOCAL_FUNCTION app_start
     cmovne  %rcx, %rax
     mov     (24 + 40)(%rbp,%rax), %rdi
     lea     APP_CONFIG(%rbx), %rsi
-    call    app_fork
+    call    lantern_app_fork
     mov     %rax, APP_FORK(%rbx)
     lea     APP_STATE_ROOM(%rbx), %rdi
     ADDRESS %rsi, app_state_room
@@ -866,17 +866,17 @@ LOCAL_FUNCTION app_start
     mov     %rax, S8(%rsp)
 3:  mov     $APP_STATE, %edi
     mov     %r13, %rsi
-    call    app_alloc
+    call    lantern_app_alloc
     test    %rax, %rax
     jz      97f
     mov     $APP_SCRATCH, %edi
     mov     %r14, %rsi
-    call    app_alloc
+    call    lantern_app_alloc
     test    %rax, %rax
     jz      97f
     mov     $APP_BLOCK, %edi
     mov     S8(%rsp), %rsi
-    call    app_alloc
+    call    lantern_app_alloc
     test    %rax, %rax
     jz      97f
     mov     %rbp, %rdi
@@ -895,11 +895,11 @@ LOCAL_FUNCTION app_start
     cmp     $LANTERN_BUFFER_TOO_SMALL, %rax
     jne     96f
     mov     $APP_STATE, %edi                # more room, a few times
-    call    app_unmap
+    call    lantern_app_unmap
     mov     $APP_SCRATCH, %edi
-    call    app_unmap
+    call    lantern_app_unmap
     mov     $APP_BLOCK, %edi
-    call    app_unmap
+    call    lantern_app_unmap
     shl     $1, %r13
     shl     $1, %r14
     shlq    $1, S8(%rsp)
@@ -920,11 +920,11 @@ LOCAL_FUNCTION app_start
     add     APP_ARGS(%rbx), %rdi
     mov     (APP_OPTIONS + AppOptions_checkpoint_state + 8)(%rbx), %rsi
 961:
-    call    app_fail_status
+    call    lantern_app_fail_status
     jmp     99f
-4:  call    app_file_free
+4:  call    lantern_app_file_free
     mov     %r12, %rdi
-    call    app_state_cache
+    call    lantern_app_state_cache
     mov     %r12, %rax                      # the store: nodes, and validators below the file's bytes / 121
     xor     %edx, %edx
     mov     $121, %ecx
@@ -938,7 +938,7 @@ LOCAL_FUNCTION app_start
     CALL_GLOBAL lantern_store_size
     mov     $APP_STORE, %edi
     mov     L(%rsp), %rsi
-    call    app_alloc
+    call    lantern_app_alloc
     test    %rax, %rax
     jz      97f
     mov     APP_STATE(%rbx), %rdi
@@ -954,7 +954,7 @@ LOCAL_FUNCTION app_start
     cmp     $LANTERN_BUFFER_TOO_SMALL, %rax
     jne     95f
     mov     $APP_STORE, %edi
-    call    app_unmap
+    call    lantern_app_unmap
     shlq    $1, APP_STORE_ROOM(%rbx)
     shlq    $1, (APP_STORE_ROOM + 8)(%rbx)
     inc     %r15
@@ -964,7 +964,7 @@ LOCAL_FUNCTION app_start
 95: mov     %rax, %rdx                      # the store: status <n>
     ADDRESS %rdi, app_m_store
     mov     $app_m_store_len, %esi
-    call    app_fail_status
+    call    lantern_app_fail_status
     jmp     99f
 6:  mov     APP_STORE(%rbx), %rax           # the node's anchor: the store's node 0, the state's root
     mov     Store_blocks(%rax), %rsi
@@ -988,13 +988,13 @@ LOCAL_FUNCTION app_start
     je      1f
     orq     $NODE_FLAG_SUPERNODE, APP_FLAGS(%rbx)
 1:
-    call    app_engine_conf                 # the execution engine
+    call    lantern_app_engine_conf                 # the execution engine
     test    %rax, %rax
     jnz     99f
-    call    app_builder_conf                # the builder
+    call    lantern_app_builder_conf                # the builder
     test    %rax, %rax
     jnz     99f
-    call    app_key                         # the key, and the anchor's node ID
+    call    lantern_app_key                         # the key, and the anchor's node ID
     test    %rax, %rax
     jnz     94f
     lea     APP_NODE_ROOM(%rbx), %rdi       # the node
@@ -1005,10 +1005,10 @@ LOCAL_FUNCTION app_start
     mov     %rax, (APP_NODE_ROOM + NodeRoom_peers)(%rbx)
     mov     (APP_OPTIONS + AppOptions_http_max_connections)(%rbx), %rax
     mov     %rax, (APP_NODE_ROOM + NodeRoom_api_streams)(%rbx)
-    call    app_db_start                    # the history's files
+    call    lantern_app_db_start                    # the history's files
     cmpq    $1, S7(%rsp)
     jne     13f
-    call    app_db_history                  # from anchor.ssz: the segments there
+    call    lantern_app_db_history                  # from anchor.ssz: the segments there
 13:
     lea     APP_NODE_ROOM(%rbx), %rdi
     lea     L(%rsp), %rsi
@@ -1017,7 +1017,7 @@ LOCAL_FUNCTION app_start
     jnz     94f
     mov     $APP_NODE, %edi
     mov     L(%rsp), %rsi
-    call    app_alloc
+    call    lantern_app_alloc
     test    %rax, %rax
     jz      97f
     lea     APP_NODE_ROOM(%rbx), %rdi
@@ -1032,29 +1032,29 @@ LOCAL_FUNCTION app_start
     je      14f
     cmpq    $1, S7(%rsp)
     je      141f
-    call    app_line_start                  # checkpoint at slot <n>
+    call    lantern_app_line_start                  # checkpoint at slot <n>
     ADDRESS %rdi, app_m_checkpoint
     mov     $app_m_checkpoint_len, %esi
-    call    app_line_text
+    call    lantern_app_line_text
     mov     (APP_ANCHOR + 32)(%rbx), %rdi
-    call    app_line_u64
+    call    lantern_app_line_u64
     mov     $APP_LOG_INFO, %edi
-    call    app_line_end
+    call    lantern_app_line_end
     jmp     14f
-141: call   app_db_fit                      # from anchor.ssz: room for the Db from its first slot
+141: call   lantern_app_db_fit                      # from anchor.ssz: room for the Db from its first slot
     test    %rax, %rax
     jnz     99f
-    call    app_db_scan_all                 # the history's segments to the node
+    call    lantern_app_db_scan_all                 # the history's segments to the node
     test    %rax, %rax
     jnz     99f
-    call    app_line_start                  # restart at slot <n>
+    call    lantern_app_line_start                  # restart at slot <n>
     ADDRESS %rdi, app_m_restart
     mov     $app_m_restart_len, %esi
-    call    app_line_text
+    call    lantern_app_line_text
     mov     (APP_ANCHOR + 32)(%rbx), %rdi
-    call    app_line_u64
+    call    lantern_app_line_u64
     mov     $APP_LOG_INFO, %edi
-    call    app_line_end
+    call    lantern_app_line_end
 14:
     lea     APP_SEEN_ROOM(%rbx), %rdi       # the Seen
     ADDRESS %rsi, app_seen_room
@@ -1065,7 +1065,7 @@ LOCAL_FUNCTION app_start
     CALL_GLOBAL lantern_seen_size
     mov     $APP_SEEN, %edi
     mov     L(%rsp), %rsi
-    call    app_alloc
+    call    lantern_app_alloc
     test    %rax, %rax
     jz      97f
     lea     APP_SEEN_ROOM(%rbx), %rdi
@@ -1075,7 +1075,7 @@ LOCAL_FUNCTION app_start
     jnz     94f
     mov     $APP_KZG, %edi                  # the KZG trusted setup
     mov     $CRYPTO_KZG_SETTINGS_SIZE, %esi
-    call    app_alloc
+    call    lantern_app_alloc
     test    %rax, %rax
     jz      97f
     ADDRESS %rdi, app_kzg_g1_lagrange
@@ -1086,7 +1086,7 @@ LOCAL_FUNCTION app_start
     test    %rax, %rax
     jnz     93f
     mov     $(APP_BUF_ENTRY * APP_BUFS_CAP), %edi  # BufferId 1: the anchor state
-    call    app_map
+    call    lantern_app_map
     test    %rax, %rax
     jz      97f
     mov     %rax, APP_BUFS(%rbx)
@@ -1097,67 +1097,67 @@ LOCAL_FUNCTION app_start
     mov     %rcx, 16(%rax)
     movq    $1, (APP_BUFS + 8)(%rbx)
     movq    $APP_BUFS_CAP, (APP_BUFS + 16)(%rbx)
-    call    app_lc_start                    # BufferId 2: the light client store
+    call    lantern_app_lc_start                    # BufferId 2: the light client store
     test    %rax, %rax
     jnz     97f
     mov     $APP_ACTIONS, %edi              # the queues of a step
     mov     $APP_QUEUE_BYTES, %esi
-    call    app_alloc
+    call    lantern_app_alloc
     test    %rax, %rax
     jz      97f
     mov     $APP_EVENTS, %edi
     mov     $APP_QUEUE_BYTES, %esi
-    call    app_alloc
+    call    lantern_app_alloc
     test    %rax, %rax
     jz      97f
     movq    $24, 8(%rax)
     movq    $0, 16(%rax)
     mov     $APP_WORK_EVENT, %edi
     mov     $APP_QUEUE_BYTES, %esi
-    call    app_alloc
+    call    lantern_app_alloc
     test    %rax, %rax
     jz      97f
-    call    app_line_start                  # started at slot <s>, fork <f>, head 0x<root>
+    call    lantern_app_line_start                  # started at slot <s>, fork <f>, head 0x<root>
     ADDRESS %rdi, app_m_started
     mov     $app_m_started_len, %esi
-    call    app_line_text
+    call    lantern_app_line_text
     mov     (APP_ANCHOR + 32)(%rbx), %rdi
-    call    app_line_u64
+    call    lantern_app_line_u64
     ADDRESS %rdi, app_m_fork
     mov     $app_m_fork_len, %esi
-    call    app_line_text
+    call    lantern_app_line_text
     mov     APP_FORK(%rbx), %rdi
-    call    app_line_u64
+    call    lantern_app_line_u64
     ADDRESS %rdi, app_m_head
     mov     $app_m_head_len, %esi
-    call    app_line_text
+    call    lantern_app_line_text
     lea     APP_ANCHOR(%rbx), %rdi
     mov     $32, %esi
-    call    app_line_hex
+    call    lantern_app_line_hex
     mov     $APP_LOG_INFO, %edi
-    call    app_line_end
+    call    lantern_app_line_end
     xor     %eax, %eax
     LEAVE 16
 93: mov     %rax, %rdx                      # the KZG trusted setup: status <n>
     ADDRESS %rdi, app_m_kzg
     mov     $app_m_kzg_len, %esi
-    call    app_fail_status
+    call    lantern_app_fail_status
     jmp     99f
 94: mov     %rax, %rdx                      # the node: status <n>
     ADDRESS %rdi, app_m_node
     mov     $app_m_node_len, %esi
-    call    app_fail_status
+    call    lantern_app_fail_status
     jmp     99f
-97: call    app_no_memory
+97: call    lantern_app_no_memory
     jmp     99f
 98: mov     $APP_LOG_ERROR, %edi
-    call    app_line_end
+    call    lantern_app_line_end
 99: mov     $2, %eax
     LEAVE 16
-END_FUNCTION app_start
+END_FUNCTION lantern_app_start
 
 /* L0: rax = the BufferId table entry of the id rdi, or 0. Uses rcx. */
-LOCAL_FUNCTION app_buf_find
+LOCAL_FUNCTION lantern_app_buf_find
     UNWIND_END_PROLOGUE
     mov     APP_BUFS(%rbx), %rax
     mov     (APP_BUFS + 8)(%rbx), %rcx
@@ -1170,16 +1170,16 @@ LOCAL_FUNCTION app_buf_find
     jmp     1b
 2:  xor     %eax, %eax
 3:  ret
-END_FUNCTION app_buf_find
+END_FUNCTION lantern_app_buf_find
 
 /*
  * L1: the BufferId table with twice its room: new memory with its entries, the old memory back to
  * lantern_shell_unmap. rax = 0, or 1 with no memory. Locals: the old address, its bytes.
  */
-LOCAL_FUNCTION app_buf_grow
+LOCAL_FUNCTION lantern_app_buf_grow
     FRAME 16
     imul    $(2 * APP_BUF_ENTRY), (APP_BUFS + 16)(%rbx), %rdi
-    call    app_map
+    call    lantern_app_map
     test    %rax, %rax
     jz      9f
     mov     APP_BUFS(%rbx), %rsi
@@ -1198,23 +1198,23 @@ LOCAL_FUNCTION app_buf_grow
     UNFRAME 16
 9:  mov     $1, %eax
     UNFRAME 16
-END_FUNCTION app_buf_grow
+END_FUNCTION lantern_app_buf_grow
 
 /* L1: a table entry of the id rdi for the memory rsi of rdx bytes, the table twice as large when full: rax = 0, or 1 for id 0, an id in use or no memory. */
-LOCAL_FUNCTION app_buf_add
+LOCAL_FUNCTION lantern_app_buf_add
     FRAME 32
     mov     %rdi, (%rsp)
     mov     %rsi, 8(%rsp)
     mov     %rdx, 16(%rsp)
     test    %rdi, %rdi
     jz      9f
-    call    app_buf_find
+    call    lantern_app_buf_find
     test    %rax, %rax
     jnz     9f
     mov     (APP_BUFS + 8)(%rbx), %rcx
     cmp     (APP_BUFS + 16)(%rbx), %rcx
     jb      1f
-    call    app_buf_grow                    # full: twice the room
+    call    lantern_app_buf_grow                    # full: twice the room
     test    %rax, %rax
     jnz     9f
     mov     (APP_BUFS + 8)(%rbx), %rcx
@@ -1232,7 +1232,7 @@ LOCAL_FUNCTION app_buf_add
     UNFRAME 32
 9:  mov     $1, %eax
     UNFRAME 32
-END_FUNCTION app_buf_add
+END_FUNCTION lantern_app_buf_add
 
 /*
  * L1: NODE_ACT_BYTES_JOIN rdi (app.md): new memory with the ByteLists of the ids one after another,
@@ -1240,7 +1240,7 @@ END_FUNCTION app_buf_add
  * of no bytes. r12 the action, r13 the count, r14 the bytes, rbp an index, r15 the memory, S7 the
  * place, S8 a ByteList.
  */
-LOCAL_FUNCTION app_bytes_join
+LOCAL_FUNCTION lantern_app_bytes_join
     ENTER 0
     mov     %rdi, %r12
     mov     24(%r12), %r13
@@ -1249,7 +1249,7 @@ LOCAL_FUNCTION app_bytes_join
 1:  cmp     %r13, %rbp
     jae     2f
     mov     32(%r12,%rbp,8), %rdi
-    call    app_buf_find
+    call    lantern_app_buf_find
     test    %rax, %rax
     jz      5f
     mov     8(%rax), %rcx
@@ -1262,7 +1262,7 @@ LOCAL_FUNCTION app_bytes_join
 5:  xor     %r14d, %r14d                    # an id with no bytes: none
     xor     %r13d, %r13d
 2:  lea     24(%r14), %rdi
-    call    app_map
+    call    lantern_app_map
     test    %rax, %rax
     jz      9f
     mov     %rax, %r15
@@ -1276,7 +1276,7 @@ LOCAL_FUNCTION app_bytes_join
 3:  cmp     %r13, %rbp
     jae     4f
     mov     32(%r12,%rbp,8), %rdi
-    call    app_buf_find
+    call    lantern_app_buf_find
     mov     8(%rax), %rax
     mov     %rax, S8(%rsp)
     mov     16(%rax), %rcx
@@ -1300,14 +1300,14 @@ LOCAL_FUNCTION app_bytes_join
 4:  mov     16(%r12), %rdi
     mov     %r15, %rsi
     lea     24(%r14), %rdx
-    call    app_buf_add
+    call    lantern_app_buf_add
 9:  LEAVE 0
-END_FUNCTION app_bytes_join
+END_FUNCTION lantern_app_bytes_join
 
 /* L1: the buffer of the id rdi goes back to the OS, and the last entry takes its place. */
-LOCAL_FUNCTION app_buf_drop
+LOCAL_FUNCTION lantern_app_buf_drop
     FRAME 16
-    call    app_buf_find
+    call    lantern_app_buf_find
     test    %rax, %rax
     jz      9f
     mov     %rax, (%rsp)
@@ -1327,7 +1327,7 @@ LOCAL_FUNCTION app_buf_drop
     mov     16(%rax), %rdx
     mov     %rdx, 16(%rdi)
 9:  UNFRAME 16
-END_FUNCTION app_buf_drop
+END_FUNCTION lantern_app_buf_drop
 
 /*
  * L1: rax = new memory with a copy of the rsi bytes at rdi, or 0. With a source at a multiple of
@@ -1335,12 +1335,12 @@ END_FUNCTION app_buf_drop
  * already, and the OS keeps no memory for a page nobody writes; the last part of a page is copied. rbp the source, r12 the
  * size, r13 the copy, r14 the page's offset, r15 its bytes.
  */
-LOCAL_FUNCTION app_dup
+LOCAL_FUNCTION lantern_app_dup
     ENTER 0
     mov     %rdi, %rbp
     mov     %rsi, %r12
     mov     %rsi, %rdi
-    call    app_map
+    call    lantern_app_map
     test    %rax, %rax
     jz      9f
     mov     %rax, %r13
@@ -1375,13 +1375,13 @@ LOCAL_FUNCTION app_dup
     jmp     2b
 8:  mov     %r13, %rax
 9:  LEAVE 0
-END_FUNCTION app_dup
+END_FUNCTION lantern_app_dup
 
 /*
  * L1: the rsi bytes of the event at rdi join the events of the next step, which grow when full:
  * rax = 0, or 1 with no memory. rbp the event, r12 its size, r13 the events, r14 a new size, r15 new memory.
  */
-LOCAL_FUNCTION app_event_put
+LOCAL_FUNCTION lantern_app_event_put
     ENTER 0
     mov     %rdi, %rbp
     mov     %rsi, %r12
@@ -1394,7 +1394,7 @@ LOCAL_FUNCTION app_event_put
     lea     (%rax,%rax), %r14               # twice the room, and the event
     add     %r12, %r14
     mov     %r14, %rdi
-    call    app_map
+    call    lantern_app_map
     test    %rax, %rax
     jz      9f
     mov     %rax, %r15
@@ -1405,7 +1405,7 @@ LOCAL_FUNCTION app_event_put
     call    lantern_copy
     mov     %r14, (%r15)
     mov     $APP_EVENTS, %edi
-    call    app_unmap
+    call    lantern_app_unmap
     mov     %r15, APP_EVENTS(%rbx)
     mov     %r14, (APP_EVENTS + 8)(%rbx)
     jmp     1b
@@ -1419,14 +1419,14 @@ LOCAL_FUNCTION app_event_put
     LEAVE 0
 9:  mov     $1, %eax
     LEAVE 0
-END_FUNCTION app_event_put
+END_FUNCTION lantern_app_event_put
 
 /*
  * L1: the node (rdi = 0), the store (1) or the Seen (2) moves to new memory, with the field of its
  * room at byte offset rsi doubled, or each field for rsi = 2^64 - 1: rax = 0, or 1. rbp the kind, r12 the pair, r13 the room, r14 the room's fields,
  * r15 the new memory. Locals: L a size, L+8 an address.
  */
-LOCAL_FUNCTION app_grow
+LOCAL_FUNCTION lantern_app_grow
     ENTER 16
     mov     %rdi, %rbp
     mov     $APP_NODE, %eax
@@ -1473,7 +1473,7 @@ LOCAL_FUNCTION app_grow
 43: test    %rax, %rax
     jnz     9f
     mov     L(%rsp), %rdi
-    call    app_map
+    call    lantern_app_map
     test    %rax, %rax
     jz      9f
     mov     %rax, %r15
@@ -1495,7 +1495,7 @@ LOCAL_FUNCTION app_grow
     jnz     8f
     mov     %r12, %rdi
     sub     %rbx, %rdi
-    call    app_unmap
+    call    lantern_app_unmap
     mov     L(%rsp), %rcx
     mov     %r15, (%r12)
     mov     %rcx, 8(%r12)
@@ -1507,13 +1507,13 @@ LOCAL_FUNCTION app_grow
     CALL_GLOBAL lantern_shell_unmap
 9:  mov     $1, %eax
     LEAVE 16
-END_FUNCTION app_grow
+END_FUNCTION lantern_app_grow
 
 /*
  * L1: the state of the BufferId table entry rdi moves to new memory with twice the StateRoom of the
  * App: rax = 0, or 1. rbp the entry, r12 the fork, r13 the new memory. Locals: L a size.
  */
-LOCAL_FUNCTION app_regrow
+LOCAL_FUNCTION lantern_app_regrow
     ENTER 16
     mov     %rdi, %rbp
     xor     %ecx, %ecx
@@ -1524,7 +1524,7 @@ LOCAL_FUNCTION app_regrow
     mov     8(%rbp), %rax                   # the fork of the state's slot
     mov     NODE_STATE_SLOT(%rax), %rdi
     lea     APP_CONFIG(%rbx), %rsi
-    call    app_fork
+    call    lantern_app_fork
     mov     %rax, %r12
     mov     8(%rbp), %rdi
     lea     APP_STATE_ROOM(%rbx), %rsi
@@ -1532,7 +1532,7 @@ LOCAL_FUNCTION app_regrow
     mov     %r12, %r10
     FORK_CALL beacon_state_copy_size
     mov     L(%rsp), %rdi
-    call    app_map
+    call    lantern_app_map
     test    %rax, %rax
     jz      9f
     mov     %rax, %r13
@@ -1555,14 +1555,14 @@ LOCAL_FUNCTION app_regrow
     LEAVE 16
 9:  mov     $1, %eax
     LEAVE 16
-END_FUNCTION app_regrow
+END_FUNCTION lantern_app_regrow
 
 /*
  * L2: rax = 0 with the light client store as BufferId 2 (node.md, lantern_node_init: Caller must):
  * lantern_lc_store_init of the anchor state and block with the APP_LC_* capacities; else 1. r12
  * the store, r13 its size. APP_TMP: the LcRoom, then the size.
  */
-LOCAL_FUNCTION app_lc_start
+LOCAL_FUNCTION lantern_app_lc_start
     ENTER 0
     lea     APP_TMP(%rbx), %rdi
     movq    $APP_LC_BLOCKS, (%rdi)
@@ -1578,7 +1578,7 @@ LOCAL_FUNCTION app_lc_start
     jnz     9f
     mov     (APP_TMP + LcRoom__mem)(%rbx), %r13
     mov     %r13, %rdi
-    call    app_map
+    call    lantern_app_map
     test    %rax, %rax
     jz      9f
     mov     %rax, %r12
@@ -1595,20 +1595,20 @@ LOCAL_FUNCTION app_lc_start
     mov     $NODE_LC_ID, %edi
     mov     %r12, %rsi
     mov     %r13, %rdx
-    call    app_buf_add
+    call    lantern_app_buf_add
     test    %rax, %rax
     jnz     9f
     LEAVE 0
 9:  mov     $1, %eax
     LEAVE 0
-END_FUNCTION app_lc_start
+END_FUNCTION lantern_app_lc_start
 
 /*
  * L2: rax = 0 when the light client store of the table entry rdi is in a new buffer with twice the
  * capacities of each part (lantern_lc_store_copy); else 1. r12 the entry, r13 the new buffer, r14
  * its size. APP_TMP: the LcRoom, then the size. Locals: L the new buffer and its size.
  */
-LOCAL_FUNCTION app_lc_grow
+LOCAL_FUNCTION lantern_app_lc_grow
     ENTER 16
     mov     %rdi, %r12
     mov     8(%r12), %rax
@@ -1626,7 +1626,7 @@ LOCAL_FUNCTION app_lc_grow
     jnz     9f
     mov     (APP_TMP + LcRoom__mem)(%rbx), %r14
     mov     %r14, %rdi
-    call    app_map
+    call    lantern_app_map
     test    %rax, %rax
     jz      9f
     mov     %rax, %r13
@@ -1651,36 +1651,36 @@ LOCAL_FUNCTION app_lc_grow
     CALL_GLOBAL lantern_shell_unmap
 9:  mov     $1, %eax
     LEAVE 16
-END_FUNCTION app_lc_grow
+END_FUNCTION lantern_app_lc_grow
 
 /*
  * L2: the WORK action rdi, by lantern_node_run with its buffers, again with more room while it asks
  * for it; then its WORK_DONE event joins the next step's. rbp the action, r12-r15 the entries of
  * state_a, state_b, state_c and data (or 0), S7 the tries, S8 the kind, S9 a size.
  */
-LOCAL_FUNCTION app_work
+LOCAL_FUNCTION lantern_app_work
     ENTER 0
     mov     %rdi, %rbp
     mov     NodeAction_work_kind(%rbp), %rax
     mov     %rax, S8(%rsp)
     movq    $0, S7(%rsp)
     mov     NodeAction_state_a(%rbp), %rdi
-    call    app_work_entry
+    call    lantern_app_work_entry
     mov     %rax, %r12
     mov     NodeAction_state_b(%rbp), %rdi
     mov     $1, %esi                        # ARCHIVE_LOAD: state_b a NODE_DB_REF too
     cmpq    $NODE_WORK_ARCHIVE_LOAD, S8(%rsp)
     jne     101f
-    call    app_work_data
+    call    lantern_app_work_data
     jmp     102f
-101: call   app_work_entry
+101: call   lantern_app_work_entry
 102: mov    %rax, %r13
     mov     NodeAction_state_c(%rbp), %rdi
-    call    app_work_entry
+    call    lantern_app_work_entry
     mov     %rax, %r14
     mov     NodeAction_data(%rbp), %rdi
     xor     %esi, %esi
-    call    app_work_data
+    call    lantern_app_work_data
     mov     %rax, %r15
     cmp     $-1, %r12                       # an id with no buffer
     je      90f
@@ -1696,7 +1696,7 @@ LOCAL_FUNCTION app_work
     mov     8(%r12), %rax
     mov     NODE_STATE_SLOT(%rax), %rax
 100: mov    %rax, APP_MET_S0(%rbx)
-    call    app_met_us
+    call    lantern_app_met_us
     mov     %rax, APP_MET_T0(%rbx)
     mov     $(NodeEvent_api_bytes + 24 + NODE_API_CHUNK), %eax
     cmpq    $NODE_WORK_API_CHUNK, S8(%rsp)  # API_CHUNK: room for a whole chunk
@@ -1720,10 +1720,10 @@ LOCAL_FUNCTION app_work
     jbe     1f
     mov     %rax, S9(%rsp)
     mov     $APP_WORK_EVENT, %edi
-    call    app_unmap
+    call    lantern_app_unmap
     mov     $APP_WORK_EVENT, %edi
     mov     S9(%rsp), %rsi
-    call    app_alloc
+    call    lantern_app_alloc
     test    %rax, %rax
     jz      91f
 1:  mov     APP_WORK_EVENT(%rbx), %rax      # the event's room
@@ -1826,7 +1826,7 @@ LOCAL_FUNCTION app_work
     jb      4f
 5:  mov     $1, %edi                        # else the store
     mov     $-1, %rsi
-    call    app_grow
+    call    lantern_app_grow
     test    %rax, %rax
     jnz     91f
     jmp     1b
@@ -1834,102 +1834,102 @@ LOCAL_FUNCTION app_work
     shl     $2, %rax
     mov     %rax, S9(%rsp)
     mov     $APP_WORK_EVENT, %edi
-    call    app_unmap
+    call    lantern_app_unmap
     mov     $APP_WORK_EVENT, %edi
     mov     S9(%rsp), %rsi
-    call    app_alloc
+    call    lantern_app_alloc
     test    %rax, %rax
     jz      91f
     jmp     1b
 3:  mov     $2, %edi                        # the Seen
     mov     $-1, %rsi
-    call    app_grow
+    call    lantern_app_grow
     test    %rax, %rax
     jnz     91f
     test    %r13, %r13
     jz      1b
     mov     %r13, %rdi
-    call    app_regrow
+    call    lantern_app_regrow
     test    %rax, %rax
     jnz     91f
     jmp     1b
 31: mov     $2, %edi
     mov     $-1, %rsi
-    call    app_grow
+    call    lantern_app_grow
     test    %rax, %rax
     jnz     91f
 4:  test    %r12, %r12
     jz      91f
     mov     %r12, %rdi
-    call    app_regrow
+    call    lantern_app_regrow
     test    %rax, %rax
     jnz     91f
     jmp     1b
 6:  test    %r13, %r13
     jz      91f
     mov     %r13, %rdi
-    call    app_regrow
+    call    lantern_app_regrow
     test    %rax, %rax
     jnz     91f
     jmp     1b
 17: test    %r14, %r14
     jz      91f
     mov     %r14, %rdi
-    call    app_lc_grow
+    call    lantern_app_lc_grow
     test    %rax, %rax
     jnz     91f
     jmp     1b
 18: test    %r12, %r12
     jz      91f
     mov     %r12, %rdi
-    call    app_regrow
+    call    lantern_app_regrow
     test    %rax, %rax
     jnz     91f
 181: mov    (APP_SCRATCH + 8)(%rbx), %rax
     shl     $1, %rax
     mov     %rax, S9(%rsp)
     mov     $APP_SCRATCH, %edi
-    call    app_unmap
+    call    lantern_app_unmap
     mov     $APP_SCRATCH, %edi
     mov     S9(%rsp), %rsi
-    call    app_alloc
+    call    lantern_app_alloc
     test    %rax, %rax
     jz      91f
     jmp     1b
 7:  mov     $2, %edi
     mov     $-1, %rsi
-    call    app_grow
+    call    lantern_app_grow
     test    %rax, %rax
     jnz     91f
     jmp     2b
 8:  mov     S8(%rsp), %rdi
     mov     %r15, %rsi
-    call    app_met_work
+    call    lantern_app_met_work
     mov     S8(%rsp), %rdi
     mov     %r15, %rsi
-    call    app_log_work
+    call    lantern_app_log_work
     mov     APP_WORK_EVENT(%rbx), %rdi      # the WORK_DONE event
     mov     (%rdi), %rsi
-    call    app_event_put
+    call    lantern_app_event_put
     LEAVE 0
 90: ADDRESS %rdi, app_m_buffer              # an action's BufferId: status 0
     mov     $app_m_buffer_len, %esi
     xor     %edx, %edx
-    call    app_fail_status
+    call    lantern_app_fail_status
     LEAVE 0
 91: mov     %rax, %rdx                      # a work: status <n>
     ADDRESS %rdi, app_m_work
     mov     $app_m_work_len, %esi
-    call    app_fail_status
+    call    lantern_app_fail_status
     LEAVE 0
-END_FUNCTION app_work
+END_FUNCTION lantern_app_work
 
 /*
  * L1: the history's files: no file open, no segment mapped; with a data directory, the node gets
  * NODE_FLAG_DB and room for a segment of slots, and the directory is made (one already there
  * will do; a failure shows at its first file). r15 the AppDb.
  */
-LOCAL_FUNCTION app_db_start
+LOCAL_FUNCTION lantern_app_db_start
     ENTER 0
     lea     APP_DB(%rbx), %r15
     movq    $-1, AppDb_segment(%r15)
@@ -1975,7 +1975,7 @@ LOCAL_FUNCTION app_db_start
     ADDRESS %rdi, app_custody_name          # custody.bin: the anchor's custody_count and custody_slot
     mov     $app_custody_name_len, %esi
     lea     APP_PATH(%rbx), %rdx
-    call    app_db_file
+    call    lantern_app_db_file
     lea     APP_PATH(%rbx), %rdi
     lea     AppDb_op(%r15), %rsi
     CALL_GLOBAL lantern_shell_read_file
@@ -1994,7 +1994,7 @@ LOCAL_FUNCTION app_db_start
     lea     (AppDb_op + 24)(%r15), %rsi
     CALL_GLOBAL lantern_shell_unmap_file
 9:  LEAVE 0
-END_FUNCTION app_db_start
+END_FUNCTION lantern_app_db_start
 
 /*
  * L1: the custody_count and custody_slot of the NODE_ACT_DB_STATE rdi, when they are not those of
@@ -2002,7 +2002,7 @@ END_FUNCTION app_db_start
  * failure gives a cannot write line. rbp the action, r15 the AppDb. Locals: L a ByteList header,
  * L+24 a u64, L+32 a file.
  */
-LOCAL_FUNCTION app_db_custody
+LOCAL_FUNCTION lantern_app_db_custody
     ENTER 48
     mov     %rdi, %rbp
     lea     APP_DB(%rbx), %r15
@@ -2015,7 +2015,7 @@ LOCAL_FUNCTION app_db_custody
 1:  ADDRESS %rdi, app_custody_name
     mov     $app_custody_name_len, %esi
     lea     APP_PATH(%rbx), %rdx
-    call    app_db_file
+    call    lantern_app_db_file
     movq    $1, (L + 24)(%rsp)
     lea     APP_PATH(%rbx), %rdi
     lea     (L + 24)(%rsp), %rsi
@@ -2065,23 +2065,23 @@ LOCAL_FUNCTION app_db_custody
 90: mov     AppDb_op(%r15), %rax            # cannot write <path>: error <n>
     mov     %rax, (L + 24)(%rsp)
     AM_INC  db_failures
-    call    app_line_start
+    call    lantern_app_line_start
     ADDRESS %rdi, app_m_write
     mov     $app_m_write_len, %esi
-    call    app_line_text
-    call    app_line_path
+    call    lantern_app_line_text
+    call    lantern_app_line_path
     ADDRESS %rdi, app_m_error
     mov     $app_m_error_len, %esi
-    call    app_line_text
+    call    lantern_app_line_text
     mov     (L + 24)(%rsp), %rdi
-    call    app_line_u64
+    call    lantern_app_line_u64
     mov     $APP_LOG_ERROR, %edi
-    call    app_line_end
+    call    lantern_app_line_end
     LEAVE 48
-END_FUNCTION app_db_custody
+END_FUNCTION lantern_app_db_custody
 
 /* L1: the path of segment rsi of blocks (rdi 0), sidecars (1) or states (2) in the data directory, <dir>/b<n>.seg, <dir>/s<n>.seg or <dir>/a<n>.seg: a ByteList at APP_PATH. rbp the kind, r12 the segment, r13 the next byte. Locals: L 24 digits. */
-LOCAL_FUNCTION app_db_path
+LOCAL_FUNCTION lantern_app_db_path
     ENTER 32
     mov     %rdi, %rbp
     mov     %rsi, %r12
@@ -2132,21 +2132,21 @@ LOCAL_FUNCTION app_db_path
 8:  lea     APP_PATH(%rbx), %rax            # a count past the room: the shell gives its error
     movq    $(APP_PATH_MAX + 1), 16(%rax)
     LEAVE 32
-END_FUNCTION app_db_path
+END_FUNCTION lantern_app_db_path
 
-/* L1: NODE_ACT_DB_APPEND rdi: app_db_write of it with the table entry of its bytes. Locals: the action. */
-LOCAL_FUNCTION app_db_append
+/* L1: NODE_ACT_DB_APPEND rdi: lantern_app_db_write of it with the table entry of its bytes. Locals: the action. */
+LOCAL_FUNCTION lantern_app_db_append
     FRAME 16
     mov     %rdi, (%rsp)
     mov     16(%rdi), %rdi
-    call    app_buf_find
+    call    lantern_app_buf_find
     test    %rax, %rax
     jz      9f
     mov     %rax, %rsi
     mov     (%rsp), %rdi
-    call    app_db_write
+    call    lantern_app_db_write
 9:  UNFRAME 16
-END_FUNCTION app_db_append
+END_FUNCTION lantern_app_db_append
 
 /*
  * L1: the record of a NODE_ACT_DB_APPEND rdi at the end of its segment file, with the bytes of the
@@ -2156,7 +2156,7 @@ END_FUNCTION app_db_append
  * else 1. rbp the action, r12 the kind (0 blocks, 1 sidecars, 2 states), r13 the bytes' table
  * entry, r14 the file, r15 the AppDb. Locals: L a ByteList header, L+24 a u64, L+32 zero bytes.
  */
-LOCAL_FUNCTION app_db_write
+LOCAL_FUNCTION lantern_app_db_write
     ENTER 48
     mov     %rdi, %rbp
     mov     %rsi, %r13
@@ -2175,7 +2175,7 @@ LOCAL_FUNCTION app_db_write
     movq    $-1, AppDb_segment(%r15,%r12,8)
 1:  mov     %r12, %rdi                      # the segment's file, to append to, cut to the offset
     mov     24(%rbp), %rsi
-    call    app_db_path
+    call    lantern_app_db_path
     movq    $1, (L + 24)(%rsp)
     lea     APP_PATH(%rbx), %rdi
     lea     (L + 24)(%rsp), %rsi
@@ -2238,22 +2238,22 @@ LOCAL_FUNCTION app_db_write
     AM_INC  db_failures
     mov     %r12, %rdi
     mov     24(%rbp), %rsi
-    call    app_db_path
-    call    app_line_start
+    call    lantern_app_db_path
+    call    lantern_app_line_start
     ADDRESS %rdi, app_m_write
     mov     $app_m_write_len, %esi
-    call    app_line_text
-    call    app_line_path
+    call    lantern_app_line_text
+    call    lantern_app_line_path
     ADDRESS %rdi, app_m_error
     mov     $app_m_error_len, %esi
-    call    app_line_text
+    call    lantern_app_line_text
     mov     (L + 24)(%rsp), %rdi
-    call    app_line_u64
+    call    lantern_app_line_u64
     mov     $APP_LOG_ERROR, %edi
-    call    app_line_end
+    call    lantern_app_line_end
     mov     $1, %eax
     LEAVE 48
-END_FUNCTION app_db_write
+END_FUNCTION lantern_app_db_write
 
 /*
  * L1: NODE_ACT_DB_ARCHIVE rdi (app.md): the state's SSZ bytes in new memory; above offset 0, the
@@ -2265,7 +2265,7 @@ END_FUNCTION app_db_write
  * once written. Locals: L the event (NODE_EV_DB_ARCHIVE_SIZE), L+112 an action of the kind's
  * record (16 to 127), L+240 a table entry, L+264 a ByteList header, L+288 a size, L+296 a fork.
  */
-LOCAL_FUNCTION app_db_archive
+LOCAL_FUNCTION lantern_app_db_archive
     ENTER 304
     mov     %rdi, %rbp
     lea     APP_DB(%rbx), %r15
@@ -2286,13 +2286,13 @@ LOCAL_FUNCTION app_db_archive
     mov     $DbRecord__mem, %edx
     call    lantern_copy
     mov     16(%rbp), %rdi                  # the state's SSZ bytes
-    call    app_buf_find
+    call    lantern_app_buf_find
     test    %rax, %rax
     jz      60f
     mov     %rax, %r12
     mov     (40 + DbRecord_slot)(%rbp), %rdi
     lea     APP_CONFIG(%rbx), %rsi
-    call    app_fork
+    call    lantern_app_fork
     mov     %rax, (L + 296)(%rsp)
     movq    $24, (L + 264)(%rsp)
     movq    $0, (L + 288)(%rsp)
@@ -2307,7 +2307,7 @@ LOCAL_FUNCTION app_db_archive
     jbe     60f
     mov     %rax, S7(%rsp)
     mov     %rax, %rdi
-    call    app_map
+    call    lantern_app_map
     test    %rax, %rax
     jz      60f
     mov     %rax, %r14
@@ -2329,7 +2329,7 @@ LOCAL_FUNCTION app_db_archive
     bts     $63, %rdi
     bts     $61, %rdi
     xor     %esi, %esi
-    call    app_work_data
+    call    lantern_app_work_data
     cmp     $-1, %rax
     je      70f
     mov     8(%rax), %r13
@@ -2342,7 +2342,7 @@ LOCAL_FUNCTION app_db_archive
     mov     (L + 288)(%rsp), %rax
     mov     %rax, S9(%rsp)
     mov     %rax, %rdi
-    call    app_map
+    call    lantern_app_map
     test    %rax, %rax
     jz      70f
     mov     %rax, S8(%rsp)
@@ -2368,7 +2368,7 @@ LOCAL_FUNCTION app_db_archive
     mov     %rcx, (L + 256)(%rsp)
     lea     (L + 112)(%rsp), %rdi
     lea     (L + 240)(%rsp), %rsi
-    call    app_db_write
+    call    lantern_app_db_write
     test    %rax, %rax
     jnz     70f
     movq    $1, S10(%rsp)
@@ -2398,16 +2398,16 @@ LOCAL_FUNCTION app_db_archive
     movq    $0, (L + 32 + DbRecord_kind)(%rsp)
 61: lea     L(%rsp), %rdi
     mov     $NODE_EV_DB_ARCHIVE_SIZE, %esi
-    call    app_event_put
+    call    lantern_app_event_put
     LEAVE 304
-END_FUNCTION app_db_archive
+END_FUNCTION lantern_app_db_archive
 
 /*
  * L1: NODE_ACT_DB_DROP rdi: the segment's file goes: the open file of its kind, when it is that
  * segment, closes; a map of it goes; then the file is deleted. r12 the action, r13 the kind (0
  * blocks, 1 sidecars), r14 the segment, r15 the AppDb, rbp a map, S7 the map key, S8 a map's index.
  */
-LOCAL_FUNCTION app_db_drop
+LOCAL_FUNCTION lantern_app_db_drop
     ENTER 0
     mov     %rdi, %r12
     lea     APP_DB(%rbx), %r15
@@ -2443,19 +2443,19 @@ LOCAL_FUNCTION app_db_drop
     jmp     2b
 4:  mov     %r13, %rdi                      # the file
     mov     %r14, %rsi
-    call    app_db_path
+    call    lantern_app_db_path
     lea     APP_PATH(%rbx), %rdi
     lea     AppDb_op(%r15), %rsi
     CALL_GLOBAL lantern_shell_remove
     LEAVE 0
-END_FUNCTION app_db_drop
+END_FUNCTION lantern_app_db_drop
 
 /*
  * L0: rax = the AppDb's view entry r10 of the record at offset rdi of the mapped segment rsi: its
  * ByteList in place, at byte DbRecord_bytes of the record; 0 when the record is not all inside
  * the map, or its ByteList header is not of its bytes. Uses rcx, rdx, r8, r9.
  */
-LOCAL_FUNCTION app_db_record
+LOCAL_FUNCTION lantern_app_db_record
     UNWIND_END_PROLOGUE
     mov     8(%rsi), %r8
     test    %r8, %r8
@@ -2482,20 +2482,20 @@ LOCAL_FUNCTION app_db_record
     ret
 8:  xor     %eax, %eax
     ret
-END_FUNCTION app_db_record
+END_FUNCTION lantern_app_db_record
 
 /*
- * L1: rax = the table entry of a work's data BufferId rdi as app_work_entry gives; for a
+ * L1: rax = the table entry of a work's data BufferId rdi as lantern_app_work_entry gives; for a
  * NODE_DB_REF, the AppDb's view entry rsi (0 data, 1 state_b) of its record in the segment, mapped
  * again when the file grew past the map, or 2^64 - 1 when the record is not there. rbp the kind
  * (0 blocks, 1 sidecars, 2 states), r12 the segment, r13 the offset, r14 a map, r15 the AppDb, S7
  * the map's key, S8 the view.
  */
-LOCAL_FUNCTION app_work_data
+LOCAL_FUNCTION lantern_app_work_data
     ENTER 0
     bt      $63, %rdi
     jc      1f
-    call    app_work_entry
+    call    lantern_app_work_entry
     LEAVE 0
 1:  lea     APP_DB(%rbx), %r15
     lea     (APP_DB + AppDb_view)(%rbx), %rax
@@ -2533,7 +2533,7 @@ LOCAL_FUNCTION app_work_data
 3:  mov     %r13, %rdi
     mov     %r14, %rsi
     mov     S8(%rsp), %r10
-    call    app_db_record
+    call    lantern_app_db_record
     test    %rax, %rax
     jnz     9f
     jmp     6f
@@ -2552,7 +2552,7 @@ LOCAL_FUNCTION app_work_data
     movq    $0, 8(%r14)
     mov     %rbp, %rdi
     mov     %r12, %rsi
-    call    app_db_path
+    call    lantern_app_db_path
     lea     APP_PATH(%rbx), %rdi
     lea     AppDb_op(%r15), %rsi
     CALL_GLOBAL lantern_shell_map_file
@@ -2571,15 +2571,15 @@ LOCAL_FUNCTION app_work_data
     mov     %r13, %rdi
     mov     %r14, %rsi
     mov     S8(%rsp), %r10
-    call    app_db_record
+    call    lantern_app_db_record
     test    %rax, %rax
     jnz     9f
 8:  mov     $-1, %rax
 9:  LEAVE 0
-END_FUNCTION app_work_data
+END_FUNCTION lantern_app_work_data
 
 /* L1: <dir>/<the rsi bytes of the name at rdi> of the data directory, as a ByteList at rdx of APP_PATH_MAX bytes of room. rbp the name, r12 its length, r13 the ByteList. */
-LOCAL_FUNCTION app_db_file
+LOCAL_FUNCTION lantern_app_db_file
     ENTER 0
     mov     %rdi, %rbp
     mov     %rsi, %r12
@@ -2605,15 +2605,15 @@ LOCAL_FUNCTION app_db_file
     LEAVE 0
 8:  movq    $(APP_PATH_MAX + 1), 16(%r13)   # a count past the room: the shell gives its error
     LEAVE 0
-END_FUNCTION app_db_file
+END_FUNCTION lantern_app_db_file
 
 /* L1: rax = 1 when the block segment rdi's file is there (it opens to read), else 0. r15 the AppDb. Locals: L the mode. */
-LOCAL_FUNCTION app_db_exists
+LOCAL_FUNCTION lantern_app_db_exists
     ENTER 16
     lea     APP_DB(%rbx), %r15
     mov     %rdi, %rsi
     xor     %edi, %edi
-    call    app_db_path
+    call    lantern_app_db_path
     movq    $0, L(%rsp)
     lea     APP_PATH(%rbx), %rdi
     lea     L(%rsp), %rsi
@@ -2627,7 +2627,7 @@ LOCAL_FUNCTION app_db_exists
     LEAVE 16
 8:  xor     %eax, %eax
     LEAVE 16
-END_FUNCTION app_db_exists
+END_FUNCTION lantern_app_db_exists
 
 /*
  * L1: for a start from anchor.ssz: the first block segment file there, from 0 to the anchor's
@@ -2635,7 +2635,7 @@ END_FUNCTION app_db_exists
  * block segment file there, from the anchor's on, and a segment more, and a power of two of roots
  * above twice them. rbp a segment, r12 the anchor's segment, r13 the first, r14 the last.
  */
-LOCAL_FUNCTION app_db_history
+LOCAL_FUNCTION lantern_app_db_history
     ENTER 0
     mov     (APP_ANCHOR + 32)(%rbx), %r12
     shr     $DB_SEGMENT_SHIFT, %r12
@@ -2644,7 +2644,7 @@ LOCAL_FUNCTION app_db_history
 1:  cmp     %r12, %rbp
     ja      2f
     mov     %rbp, %rdi
-    call    app_db_exists
+    call    lantern_app_db_exists
     test    %rax, %rax
     jnz     11f
     inc     %rbp
@@ -2653,7 +2653,7 @@ LOCAL_FUNCTION app_db_history
 2:  mov     %r12, %r14
     lea     1(%r12), %rbp
 3:  mov     %rbp, %rdi
-    call    app_db_exists
+    call    lantern_app_db_exists
     test    %rax, %rax
     jz      4f
     mov     %rbp, %r14
@@ -2674,15 +2674,15 @@ LOCAL_FUNCTION app_db_history
     shl     %cl, %rax
     mov     %rax, (APP_NODE_ROOM + NodeRoom_db_roots)(%rbx)
     LEAVE 0
-END_FUNCTION app_db_history
+END_FUNCTION lantern_app_db_history
 
 /*
  * L2: for a start from anchor.ssz, after lantern_node_init: the Db's first_slot can be below
  * history_slot (the backfill's target, node.md), so db_slots doubles until the room covers the
- * slots from first_slot to the end app_db_history gave, then db_roots until it is above twice
+ * slots from first_slot to the end lantern_app_db_history gave, then db_roots until it is above twice
  * db_slots, each as a short room grows: rax = 0, or 2 after a line on the standard error. r12 the end.
  */
-LOCAL_FUNCTION app_db_fit
+LOCAL_FUNCTION lantern_app_db_fit
     ENTER 0
     mov     (APP_ANCHOR + NodeAnchor_history_slot)(%rbx), %r12
     add     (APP_NODE_ROOM + NodeRoom_db_slots)(%rbx), %r12
@@ -2695,7 +2695,7 @@ LOCAL_FUNCTION app_db_fit
     jae     2f
     xor     %edi, %edi
     mov     $NodeRoom_db_slots, %esi
-    call    app_grow
+    call    lantern_app_grow
     test    %rax, %rax
     jnz     8f
     jmp     1b
@@ -2705,15 +2705,15 @@ LOCAL_FUNCTION app_db_fit
     ja      7f
     xor     %edi, %edi
     mov     $NodeRoom_db_roots, %esi
-    call    app_grow
+    call    lantern_app_grow
     test    %rax, %rax
     jnz     8f
     jmp     2b
 7:  xor     %eax, %eax
     LEAVE 0
-8:  call    app_no_memory
+8:  call    lantern_app_no_memory
     LEAVE 0
-END_FUNCTION app_db_fit
+END_FUNCTION lantern_app_db_fit
 
 /*
  * L1: for a start from anchor.ssz: each segment file there, the blocks' then the sidecars', from
@@ -2723,7 +2723,7 @@ END_FUNCTION app_db_fit
  * ByteList header, L+24 valid, L+32 the segment, L+40 the kind, L+48 the file's size or a mode,
  * L+56 a file.
  */
-LOCAL_FUNCTION app_db_scan_all
+LOCAL_FUNCTION lantern_app_db_scan_all
     ENTER 64
     lea     APP_DB(%rbx), %r15
     mov     (APP_ANCHOR + NodeAnchor_history_slot)(%rbx), %rax
@@ -2738,7 +2738,7 @@ LOCAL_FUNCTION app_db_scan_all
     jae     7f
     mov     %rbp, %rdi
     mov     %r12, %rsi
-    call    app_db_path
+    call    lantern_app_db_path
     lea     APP_PATH(%rbx), %rdi
     lea     AppDb_op(%r15), %rsi
     CALL_GLOBAL lantern_shell_map_file
@@ -2797,9 +2797,9 @@ LOCAL_FUNCTION app_db_scan_all
     lea     24(%rax), %rdi
     mov     16(%rax), %rsi
     mov     %r14, %rdx
-    call    app_fail_status
+    call    lantern_app_fail_status
     LEAVE 64
-END_FUNCTION app_db_scan_all
+END_FUNCTION lantern_app_db_scan_all
 
 /*
  * L1: NODE_ACT_DB_STATE rdi of a block at the first slot of its epoch (the anchor of
@@ -2811,7 +2811,7 @@ END_FUNCTION app_db_scan_all
  * zero bytes, L+40 a size, L+48 the fork, L+56 the file, L+64 the message's ByteList header, L+88
  * the microseconds at the start. A written anchor joins db_anchors, and its run time anchor_seconds.
  */
-LOCAL_FUNCTION app_db_state
+LOCAL_FUNCTION lantern_app_db_state
     ENTER 96
     mov     %rdi, %rbp
     lea     APP_DB(%rbx), %r15
@@ -2822,15 +2822,15 @@ LOCAL_FUNCTION app_db_state
     inc     %rax
     cmp     %rax, 32(%rbp)
     jb      99f
-    call    app_met_us
+    call    lantern_app_met_us
     mov     %rax, (L + 88)(%rsp)
     mov     16(%rbp), %rdi
-    call    app_buf_find
+    call    lantern_app_buf_find
     test    %rax, %rax
     jz      99f
     mov     %rax, %r12
     mov     24(%rbp), %rdi
-    call    app_buf_find
+    call    lantern_app_buf_find
     test    %rax, %rax
     jz      99f
     mov     %rax, %r13
@@ -2851,7 +2851,7 @@ LOCAL_FUNCTION app_db_state
     CALL_GLOBAL lantern_shell_sync
 3:  mov     32(%rbp), %rdi                  # the state's SSZ bytes: their size, then the bytes
     lea     APP_CONFIG(%rbx), %rsi
-    call    app_fork
+    call    lantern_app_fork
     mov     %rax, (L + 48)(%rsp)
     movq    $24, L(%rsp)
     movq    $0, (L + 40)(%rsp)
@@ -2866,7 +2866,7 @@ LOCAL_FUNCTION app_db_state
     jbe     99f
     mov     %rax, S7(%rsp)
     mov     %rax, %rdi
-    call    app_map
+    call    lantern_app_map
     test    %rax, %rax
     jz      99f
     mov     %rax, %r14
@@ -2883,7 +2883,7 @@ LOCAL_FUNCTION app_db_state
     ADDRESS %rdi, app_anchor_tmp_name       # anchor.tmp, cut to 0
     mov     $app_anchor_tmp_name_len, %esi
     lea     APP_PATH(%rbx), %rdx
-    call    app_db_file
+    call    lantern_app_db_file
     movq    $1, (L + 24)(%rsp)
     lea     APP_PATH(%rbx), %rdi
     lea     (L + 24)(%rsp), %rsi
@@ -2969,7 +2969,7 @@ LOCAL_FUNCTION app_db_state
     ADDRESS %rdi, app_anchor_name           # over anchor.ssz, and the directory synced
     mov     $app_anchor_name_len, %esi
     lea     APP_PATH2(%rbx), %rdx
-    call    app_db_file
+    call    lantern_app_db_file
     lea     APP_PATH(%rbx), %rdi
     lea     APP_PATH2(%rbx), %rsi
     lea     AppDb_op(%r15), %rdx
@@ -2979,37 +2979,37 @@ LOCAL_FUNCTION app_db_state
     ADDRESS %rdi, app_anchor_name
     xor     %esi, %esi
     lea     APP_PATH(%rbx), %rdx
-    call    app_db_file
+    call    lantern_app_db_file
     lea     APP_PATH(%rbx), %rdi
     lea     AppDb_op(%r15), %rsi
     CALL_GLOBAL lantern_shell_sync_dir
     mov     32(%rbp), %rax
     mov     %rax, AppDb_anchor_slot(%r15)
     AM_INC  db_anchors
-    call    app_met_us                      # its run time
+    call    lantern_app_met_us                      # its run time
     sub     (L + 88)(%rsp), %rax
     mov     %rax, %rdx
     mov     $AppMetrics_anchor_seconds, %edi
     mov     $METRIC_BOUNDS_DEFAULT, %esi
-    call    app_met_obs
+    call    lantern_app_met_obs
     jmp     98f
 89: lea     (L + 56)(%rsp), %rdi            # the file closes
     CALL_GLOBAL lantern_shell_close
 90: mov     AppDb_op(%r15), %rax            # cannot write <path>: error <n>
     mov     %rax, (L + 24)(%rsp)
     AM_INC  db_failures
-    call    app_line_start
+    call    lantern_app_line_start
     ADDRESS %rdi, app_m_write
     mov     $app_m_write_len, %esi
-    call    app_line_text
-    call    app_line_path
+    call    lantern_app_line_text
+    call    lantern_app_line_path
     ADDRESS %rdi, app_m_error
     mov     $app_m_error_len, %esi
-    call    app_line_text
+    call    lantern_app_line_text
     mov     (L + 24)(%rsp), %rdi
-    call    app_line_u64
+    call    lantern_app_line_u64
     mov     $APP_LOG_ERROR, %edi
-    call    app_line_end
+    call    lantern_app_line_end
 98: test    %r14, %r14                      # the bytes' memory goes back
     jz      99f
     mov     %r14, (L + 24)(%rsp)
@@ -3019,26 +3019,26 @@ LOCAL_FUNCTION app_db_state
     lea     (L + 40)(%rsp), %rsi
     CALL_GLOBAL lantern_shell_unmap
 99: LEAVE 96
-END_FUNCTION app_db_state
+END_FUNCTION lantern_app_db_state
 
 /* L1: rax = the table entry of the BufferId rdi, 0 for id 0, or 2^64 - 1 when no entry has it. */
-LOCAL_FUNCTION app_work_entry
+LOCAL_FUNCTION lantern_app_work_entry
     FRAME 0
     xor     %eax, %eax
     test    %rdi, %rdi
     jz      9f
-    call    app_buf_find
+    call    lantern_app_buf_find
     test    %rax, %rax
     jnz     9f
     mov     $-1, %rax
 9:  UNFRAME 0
-END_FUNCTION app_work_entry
+END_FUNCTION lantern_app_work_entry
 
 /*
  * L2: the actions of the step, in order: BYTES_PUT, STATE_COPY, STATE_FREE and BYTES_FREE on the
- * BufferId table, WORK by app_work. rbp the next action, r12 the end, r13 its size, r14 an entry.
+ * BufferId table, WORK by lantern_app_work. rbp the next action, r12 the end, r13 its size, r14 an entry.
  */
-LOCAL_FUNCTION app_actions
+LOCAL_FUNCTION lantern_app_actions
     ENTER 0
     mov     APP_ACTIONS(%rbx), %rbp
     mov     16(%rbp), %r12
@@ -3051,7 +3051,7 @@ LOCAL_FUNCTION app_actions
     cmp     $NODE_ACT_DB_APPEND, %rax
     jne     11f
     mov     16(%rbp), %rdi                  # the metrics: the record and its bytes, by kind
-    call    app_buf_find
+    call    lantern_app_buf_find
     mov     32(%rbp), %rdx
     and     $1, %edx
     incq    (APP_METRICS + AppMetrics_db_records)(%rbx,%rdx,8)
@@ -3060,48 +3060,48 @@ LOCAL_FUNCTION app_actions
     mov     16(%rax), %rcx
     add     %rcx, (APP_METRICS + AppMetrics_db_bytes)(%rbx,%rdx,8)
 190: mov    %rbp, %rdi                      # DB_APPEND: the record in its segment file
-    call    app_db_append
+    call    lantern_app_db_append
     jmp     8f
 11: cmp     $NODE_ACT_DB_DROP, %rax
     jne     12f
     AM_INC  db_drops
     mov     %rbp, %rdi                      # DB_DROP: the segment's file goes
-    call    app_db_drop
+    call    lantern_app_db_drop
     jmp     8f
 12: cmp     $NODE_ACT_DB_STATE, %rax
     jne     120f
     mov     %rbp, %rdi                      # DB_STATE: custody.bin, anchor.ssz
-    call    app_db_custody
+    call    lantern_app_db_custody
     mov     %rbp, %rdi
-    call    app_db_state
+    call    lantern_app_db_state
     jmp     8f
 120: cmp    $NODE_ACT_DB_ARCHIVE, %rax
     jne     10f
     incq    (APP_METRICS + AppMetrics_db_records + 16)(%rbx)
     mov     %rbp, %rdi                      # DB_ARCHIVE: a state record
-    call    app_db_archive
+    call    lantern_app_db_archive
     jmp     8f
 10: cmp     $NODE_ACT_STATE_BYTES, %rax
     jne     13f
     mov     %rbp, %rdi                      # STATE_BYTES: the state's SSZ bytes
-    call    app_state_bytes
+    call    lantern_app_state_bytes
     jmp     8f
 13: cmp     $NODE_ACT_BYTES_PUT, %rax
     jne     131f
     lea     24(%rbp), %rdi                  # BYTES_PUT: a copy of the ByteList
     mov     24(%rbp), %rsi
-    call    app_dup
+    call    lantern_app_dup
     test    %rax, %rax
     jz      8f
     mov     %rax, %rsi
     mov     16(%rbp), %rdi
     mov     24(%rbp), %rdx
-    call    app_buf_add
+    call    lantern_app_buf_add
     jmp     8f
 131: cmp    $NODE_ACT_BYTES_NEW, %rax
     jne     132f
     mov     24(%rbp), %rdi                  # BYTES_NEW: a ByteList of the size, its bytes zero
-    call    app_map
+    call    lantern_app_map
     test    %rax, %rax
     jz      8f
     mov     24(%rbp), %rcx
@@ -3112,51 +3112,51 @@ LOCAL_FUNCTION app_actions
     mov     %rax, %rsi
     mov     16(%rbp), %rdi
     mov     24(%rbp), %rdx
-    call    app_buf_add
+    call    lantern_app_buf_add
     jmp     8f
 132: cmp    $NODE_ACT_BYTES_JOIN, %rax
     jne     2f
     mov     %rbp, %rdi                      # BYTES_JOIN: the ByteLists of the ids, one after another
-    call    app_bytes_join
+    call    lantern_app_bytes_join
     jmp     8f
 2:  cmp     $NODE_ACT_STATE_COPY, %rax
     jne     3f
     mov     16(%rbp), %rdi                  # STATE_COPY: a copy of the source buffer
-    call    app_buf_find
+    call    lantern_app_buf_find
     test    %rax, %rax
     jz      8f
     mov     %rax, %r14
     mov     8(%r14), %rdi
     mov     16(%r14), %rsi
-    call    app_dup
+    call    lantern_app_dup
     test    %rax, %rax
     jz      8f
     mov     %rax, %rsi
     mov     24(%rbp), %rdi
     mov     16(%r14), %rdx
-    call    app_buf_add
+    call    lantern_app_buf_add
     jmp     8f
 3:  cmp     $NODE_ACT_STATE_FREE, %rax
     je      31f
     cmp     $NODE_ACT_BYTES_FREE, %rax
     jne     4f
 31: mov     16(%rbp), %rdi                  # STATE_FREE, BYTES_FREE
-    call    app_buf_drop
+    call    lantern_app_buf_drop
     jmp     8f
 4:  cmp     $NODE_ACT_WORK, %rax
     jne     5f
     mov     %rbp, %rdi
-    call    app_work
+    call    lantern_app_work
     jmp     8f
 5:  cmp     $NODE_ACT_ENGINE, %rax
     jne     51f
     mov     %rbp, %rdi
-    call    app_engine_request
+    call    lantern_app_engine_request
     jmp     8f
 51: cmp     $NODE_ACT_BUILDER, %rax
     jne     6f
     mov     %rbp, %rdi
-    call    app_builder_request
+    call    lantern_app_builder_request
     jmp     8f
 6:  cmp     $NODE_ACT_DISCV5, %rax
     jne     7f
@@ -3164,7 +3164,7 @@ LOCAL_FUNCTION app_actions
     mov     (24 + 8)(%rbp), %rax            # DISCV5: its events join discv5's
     lea     24(%rbp,%rax), %rdi
     mov     (24 + 16)(%rbp), %rsi
-    call    app_dv_put
+    call    lantern_app_dv_put
     jmp     8f
 7:  cmp     $NODE_ACT_P2P_LIST, %rax
     jne     71f
@@ -3178,24 +3178,24 @@ LOCAL_FUNCTION app_actions
     cmp     $NODE_ACT_API_CLOSE, %rax
     jne     8f
 72: mov     %rbp, %rdi                      # API_SEND, API_CLOSE: to the Beacon API's connection
-    call    app_api_action
+    call    lantern_app_api_action
 8:  add     %r13, %rbp
     jmp     1b
-9:  call    app_api_flush                   # the answers go out now
+9:  call    lantern_app_api_flush                   # the answers go out now
     LEAVE 0
-END_FUNCTION app_actions
+END_FUNCTION lantern_app_actions
 
 /*
  * L2: lantern_node_step with the events of the App and the libp2p state rdi and Tick rsi (both 0 with
  * no network), again with a larger node and actions while it asks for them; then the accepted
  * events leave the queue and the actions run. rbp p2p, r12 tick, r13 the tries, r14 a size.
  */
-LOCAL_FUNCTION app_step
+LOCAL_FUNCTION lantern_app_step
     ENTER 0
     mov     %rdi, %rbp
     mov     %rsi, %r12
     xor     %r13d, %r13d
-1:  call    app_met_us                      # the step's run time (app.md, the metrics)
+1:  call    lantern_app_met_us                      # the step's run time (app.md, the metrics)
     mov     %rax, APP_MET_T1(%rbx)
     mov     APP_ACTIONS(%rbx), %rax
     movq    $24, 8(%rax)
@@ -3213,12 +3213,12 @@ LOCAL_FUNCTION app_step
     CALL_GLOBAL lantern_node_step
     add     $16, %rsp
     mov     %rax, APP_MET_ST(%rbx)
-    call    app_met_us
+    call    lantern_app_met_us
     sub     APP_MET_T1(%rbx), %rax
     mov     %rax, %rdx
     mov     $AppMetrics_step_seconds, %edi
     mov     $METRIC_BOUNDS_WORK, %esi
-    call    app_met_obs
+    call    lantern_app_met_obs
     mov     APP_MET_ST(%rbx), %rax
     test    %rax, %rax
     jz      3f
@@ -3232,7 +3232,7 @@ LOCAL_FUNCTION app_step
     jne     11f
     xor     %edi, %edi                      # the node: the field that is short
     mov     (APP_RESULT + NodeStepResult_room)(%rbx), %rsi
-    call    app_grow
+    call    lantern_app_grow
     test    %rax, %rax
     jnz     21f
     jmp     1b
@@ -3243,29 +3243,29 @@ LOCAL_FUNCTION app_step
 12: mov     8(%rbx,%r14), %r15
     shl     $1, %r15
     mov     %r14, %rdi
-    call    app_unmap
+    call    lantern_app_unmap
     mov     %r14, %rdi
     mov     %r15, %rsi
-    call    app_alloc
+    call    lantern_app_alloc
     test    %rax, %rax
     jz      21f
     jmp     1b
-21: call    app_line_start                  # a node step: no room in buffer <short>
+21: call    lantern_app_line_start                  # a node step: no room in buffer <short>
     ADDRESS %rdi, app_m_step
     mov     $app_m_step_len, %esi
-    call    app_line_text
+    call    lantern_app_line_text
     ADDRESS %rdi, app_m_room
     mov     $app_m_room_len, %esi
-    call    app_line_text
+    call    lantern_app_line_text
     mov     (APP_RESULT + NodeStepResult_short)(%rbx), %rdi
-    call    app_line_u64
+    call    lantern_app_line_u64
     mov     $APP_LOG_ERROR, %edi
-    call    app_line_end
+    call    lantern_app_line_end
     LEAVE 0
 2:  mov     %rax, %rdx                      # a node step: status <n>
     ADDRESS %rdi, app_m_step
     mov     $app_m_step_len, %esi
-    call    app_fail_status
+    call    lantern_app_fail_status
     LEAVE 0
 3:  mov     APP_EVENTS(%rbx), %rax          # the accepted events leave the queue
     mov     16(%rax), %rcx
@@ -3285,17 +3285,17 @@ LOCAL_FUNCTION app_step
     add     %rdx, %rsi
     mov     %rcx, %rdx
     call    lantern_copy
-    call    app_actions
+    call    lantern_app_actions
     LEAVE 0
-END_FUNCTION app_step
+END_FUNCTION lantern_app_step
 
 
 /*
- * L0: rax = the bytes of the base64url text at rdi of rsi bytes (RFC 4648 section 5, with or without
+ * L0: rax = the bytes of the lantern_base64url text at rdi of rsi bytes (RFC 4648 section 5, with or without
  * padding), written at rdx, at most rcx; or 2^64 - 1 for a byte of no digit or too many bytes.
  * Uses rcx, rsi, rdi, r8-r11.
  */
-LOCAL_FUNCTION app_base64url
+LOCAL_FUNCTION lantern_app_base64url
     UNWIND_END_PROLOGUE
     mov     %rcx, %r11                      # the room
     xor     %r8d, %r8d                      # the bits
@@ -3346,14 +3346,14 @@ LOCAL_FUNCTION app_base64url
     ret
 9:  mov     $-1, %rax
     ret
-END_FUNCTION app_base64url
+END_FUNCTION lantern_app_base64url
 
 /*
  * L2: a NODE_EV_ENR event of each record of --boot-nodes, with commas between them; a line on
- * the standard error for one that is not "enr:" and base64url. rbp the next byte, r12 the end, r13
+ * the standard error for one that is not "enr:" and lantern_base64url. rbp the next byte, r12 the end, r13
  * the record's start, r14 the record's number, r15 the event at APP_RECORD. Locals: L the record's length.
  */
-LOCAL_FUNCTION app_boot_nodes
+LOCAL_FUNCTION lantern_app_boot_nodes
     ENTER 16
     lea     APP_RECORD(%rbx), %r15
     mov     (APP_OPTIONS + AppOptions_boot_nodes)(%rbx), %rbp
@@ -3381,7 +3381,7 @@ LOCAL_FUNCTION app_boot_nodes
     mov     $4, %esi
     ADDRESS %rdx, app_enr_prefix
     mov     $4, %ecx
-    call    app_name_is
+    call    lantern_app_name_is
     test    %rax, %rax
     jz      7f
     lea     4(%r13), %rdi                   # its bytes, after the event and ByteList headers
@@ -3389,7 +3389,7 @@ LOCAL_FUNCTION app_boot_nodes
     sub     $4, %rsi
     lea     48(%r15), %rdx
     mov     $APP_RECORD_MAX, %ecx
-    call    app_base64url
+    call    lantern_app_base64url
     cmp     $-1, %rax
     je      7f
     lea     (48 + 7)(%rax), %rcx            # the event: size, NODE_EV_ENR, 0, then the ByteList
@@ -3403,7 +3403,7 @@ LOCAL_FUNCTION app_boot_nodes
     mov     %rax, 40(%r15)
     mov     %r15, %rdi
     mov     %rcx, %rsi
-    call    app_event_put
+    call    lantern_app_event_put
     mov     40(%r15), %rax                  # and an ADD_NODE of discv5: size, kind, len, the record
     lea     (DISCV5_EV_ADD_DATA + 7)(%rax), %rcx
     and     $-8, %rcx
@@ -3412,22 +3412,22 @@ LOCAL_FUNCTION app_boot_nodes
     mov     %rax, (24 + DISCV5_EV_ADD_LEN)(%r15)
     lea     24(%r15), %rdi
     mov     %rcx, %rsi
-    call    app_dv_put
+    call    lantern_app_dv_put
     jmp     1b
-7:  call    app_line_start                  # boot node <n>: not an enr: record
+7:  call    lantern_app_line_start                  # boot node <n>: not an enr: record
     ADDRESS %rdi, app_m_boot
     mov     $app_m_boot_len, %esi
-    call    app_line_text
+    call    lantern_app_line_text
     mov     %r14, %rdi
-    call    app_line_u64
+    call    lantern_app_line_u64
     ADDRESS %rdi, app_m_not_enr
     mov     $app_m_not_enr_len, %esi
-    call    app_line_text
+    call    lantern_app_line_text
     mov     $APP_LOG_ERROR, %edi
-    call    app_line_end
+    call    lantern_app_line_end
     jmp     1b
 9:  LEAVE 16
-END_FUNCTION app_boot_nodes
+END_FUNCTION lantern_app_boot_nodes
 
 /*
  * L2: the network: a secp256k1 key, the libp2p state, the shell context with a TCP listener on
@@ -3440,7 +3440,7 @@ END_FUNCTION app_boot_nodes
  * point, x then y, in reverse byte order: rax = 0, or a status. r12 the tries. Locals: L the
  * public key (40), L+48 the point (64), L+112 a ByteList of the point (88), L+200 the digest (32).
  */
-LOCAL_FUNCTION app_key
+LOCAL_FUNCTION lantern_app_key
     ENTER 240
     xor     %r12d, %r12d
 1:  lea     APP_TICK(%rbx), %rdi
@@ -3490,13 +3490,13 @@ LOCAL_FUNCTION app_key
     mov     %rax, (APP_ANCHOR + NodeAnchor_node_id + 24)(%rbx)
     xor     %eax, %eax
 9:  LEAVE 240
-END_FUNCTION app_key
+END_FUNCTION lantern_app_key
 
-LOCAL_FUNCTION app_net
+LOCAL_FUNCTION lantern_app_net
     ENTER 112
     mov     $APP_P2P_CONFIG, %edi           # the config: the template, then the protocols
     mov     $(LIBP2P_CFG_FIXED + 24 + APP_PROTOCOLS_MAX * LIBP2P_PROTO_SIZE), %esi
-    call    app_alloc
+    call    lantern_app_alloc
     test    %rax, %rax
     jz      97f
     mov     %rax, %rbp
@@ -3519,7 +3519,7 @@ LOCAL_FUNCTION app_net
     imul    $LIBP2P_PROTO_SIZE, %rax, %rax
     add     %rcx, %rax
     mov     %rax, (%rbp)
-    lea     16(%rbp), %rdi                  # the key of app_key
+    lea     16(%rbp), %rdi                  # the key of lantern_app_key
     lea     APP_KEY(%rbx), %rsi
     mov     $32, %edx
     call    lantern_copy
@@ -3538,7 +3538,7 @@ LOCAL_FUNCTION app_net
     jnz     96f
     mov     $APP_P2P, %edi
     mov     L(%rsp), %rsi
-    call    app_alloc
+    call    lantern_app_alloc
     test    %rax, %rax
     jz      97f
     mov     %rax, %rsi
@@ -3558,7 +3558,7 @@ LOCAL_FUNCTION app_net
     jnz     96f
     mov     $APP_SHELL, %edi
     mov     L(%rsp), %rsi
-    call    app_alloc
+    call    lantern_app_alloc
     test    %rax, %rax
     jz      97f
     mov     %rax, %rsi
@@ -3568,7 +3568,7 @@ LOCAL_FUNCTION app_net
     jnz     96f
     mov     $APP_SHELL_EVENTS, %edi
     mov     $APP_SHELL_EVENT_BYTES, %esi
-    call    app_alloc
+    call    lantern_app_alloc
     test    %rax, %rax
     jz      97f
     movq    $24, 8(%rax)
@@ -3576,7 +3576,7 @@ LOCAL_FUNCTION app_net
     mov     160(%rbp), %rsi                 # the engine's action: a SEND of up to send_window bytes
     add     $(24 + LIBP2P_ACT_SEND_DATA + 8), %rsi
     mov     $APP_ENGINE_ACT, %edi
-    call    app_alloc
+    call    lantern_app_alloc
     test    %rax, %rax
     jz      97f
     movq    $24, 8(%rax)
@@ -3592,52 +3592,52 @@ LOCAL_FUNCTION app_net
     CALL_GLOBAL libp2p_shell_listen
     cmpq    $0, (L + 64)(%rsp)
     je      3f
-    call    app_line_start                  # listen on TCP port <p>: error <n>
+    call    lantern_app_line_start                  # listen on TCP port <p>: error <n>
     ADDRESS %rdi, app_m_listen
     mov     $app_m_listen_len, %esi
-    call    app_line_text
+    call    lantern_app_line_text
     mov     (APP_OPTIONS + AppOptions_port)(%rbx), %rdi
-    call    app_line_u64
+    call    lantern_app_line_u64
     ADDRESS %rdi, app_m_error
     mov     $app_m_error_len, %esi
-    call    app_line_text
+    call    lantern_app_line_text
     mov     (L + 64)(%rsp), %rdi
-    call    app_line_u64
+    call    lantern_app_line_u64
     mov     $APP_LOG_ERROR, %edi
-    call    app_line_end
+    call    lantern_app_line_end
     mov     $2, %eax
     LEAVE 112
-3:  call    app_api_start
+3:  call    lantern_app_api_start
     test    %rax, %rax
     jnz     99f
-    call    app_met_start
+    call    lantern_app_met_start
     test    %rax, %rax
     jnz     99f
-    call    app_dv_start
+    call    lantern_app_dv_start
     test    %rax, %rax
     jnz     99f
-    call    app_boot_nodes
-    call    app_line_start                  # listening on TCP port <p>
+    call    lantern_app_boot_nodes
+    call    lantern_app_line_start                  # listening on TCP port <p>
     ADDRESS %rdi, app_m_listening
     mov     $app_m_listening_len, %esi
-    call    app_line_text
+    call    lantern_app_line_text
     mov     (APP_OPTIONS + AppOptions_port)(%rbx), %rdi
-    call    app_line_u64
+    call    lantern_app_line_u64
     mov     $APP_LOG_INFO, %edi
-    call    app_line_end
+    call    lantern_app_line_end
     xor     %eax, %eax
 99: LEAVE 112
 96: mov     %rax, %rdx                      # libp2p: status <n>
     ADDRESS %rdi, app_m_p2p
     mov     $app_m_p2p_len, %esi
-    call    app_fail_status
+    call    lantern_app_fail_status
     LEAVE 112
-97: call    app_no_memory
+97: call    lantern_app_no_memory
     LEAVE 112
-END_FUNCTION app_net
+END_FUNCTION lantern_app_net
 
 /* L0: rax = 0 and rdx = the u64 of the decimal digits rdi to rsi, one or more; else rax = 1. Uses rcx, rdi, r8. */
-LOCAL_FUNCTION app_number
+LOCAL_FUNCTION lantern_app_number
     UNWIND_END_PROLOGUE
     cmp     %rsi, %rdi
     jae     9f
@@ -3662,10 +3662,10 @@ LOCAL_FUNCTION app_number
     ret
 9:  mov     $1, %eax
     ret
-END_FUNCTION app_number
+END_FUNCTION lantern_app_number
 
 /* L0: rax = 0 and rdx = the IPv4 address of the bytes rdi to rsi, its 4 bytes in order in the low bytes; else rax = 1. Uses rcx, rdi, r8-r11. */
-LOCAL_FUNCTION app_dotted
+LOCAL_FUNCTION lantern_app_dotted
     UNWIND_END_PROLOGUE
     xor     %r8d, %r8d                      # the address
     xor     %r9d, %r9d                      # the numbers
@@ -3709,7 +3709,7 @@ LOCAL_FUNCTION app_dotted
     ret
 9:  mov     $1, %eax
     ret
-END_FUNCTION app_dotted
+END_FUNCTION lantern_app_dotted
 
 /*
  * L2: with --execution-endpoint, the engine: its Address, the anchor's engine_host and the
@@ -3717,7 +3717,7 @@ END_FUNCTION app_dotted
  * error. rbp the endpoint's bytes, r12 their count, r13 the colon, r14 the secret's next byte, r15
  * its end.
  */
-LOCAL_FUNCTION app_engine_conf
+LOCAL_FUNCTION lantern_app_engine_conf
     ENTER 0
     mov     (APP_OPTIONS + AppOptions_execution + 8)(%rbx), %r12
     test    %r12, %r12
@@ -3739,7 +3739,7 @@ LOCAL_FUNCTION app_engine_conf
     jne     1b
     lea     1(%rbp,%r13), %rdi              # the port
     lea     (%rbp,%r12), %rsi
-    call    app_number
+    call    lantern_app_number
     test    %rax, %rax
     jnz     90f
     test    %rdx, %rdx
@@ -3754,13 +3754,13 @@ LOCAL_FUNCTION app_engine_conf
     mov     %r13, %rsi
     ADDRESS %rdx, app_localhost
     mov     $9, %ecx
-    call    app_name_is
+    call    lantern_app_name_is
     mov     $0x0100007f, %edx               # 127.0.0.1
     test    %rax, %rax
     jnz     2f
     mov     %rbp, %rdi
     lea     (%rbp,%r13), %rsi
-    call    app_dotted
+    call    lantern_app_dotted
     test    %rax, %rax
     jnz     90f
 2:  mov     %edx, (APP_ENGINE_ADDR + 16)(%rbx)
@@ -3774,14 +3774,14 @@ LOCAL_FUNCTION app_engine_conf
     mov     (APP_OPTIONS + AppOptions_jwt_secret)(%rbx), %rsi
     add     APP_ARGS(%rbx), %rsi
     call    lantern_copy
-    call    app_read
+    call    lantern_app_read
     test    %rax, %rax
     jnz     99f
     mov     (APP_FILE + 8)(%rbx), %rax      # 64 hex digits, after 0x or not, with white space around them
     mov     16(%rax), %rcx
     lea     24(%rax), %r14
     lea     (%r14,%rcx), %r15
-    call    app_space
+    call    lantern_app_space
     mov     %r15, %rax
     sub     %r14, %rax
     cmp     $2, %rax
@@ -3799,10 +3799,10 @@ LOCAL_FUNCTION app_engine_conf
     cmp     $2, %rax
     jb      92f
     movzbl  (%r14), %edi
-    call    app_hex_digit
+    call    lantern_app_hex_digit
     mov     %rax, %rsi
     movzbl  1(%r14), %edi
-    call    app_hex_digit
+    call    lantern_app_hex_digit
     mov     %rax, %rcx
     or      %rsi, %rcx
     cmp     $15, %rcx
@@ -3813,37 +3813,37 @@ LOCAL_FUNCTION app_engine_conf
     add     $2, %r14
     inc     %r13
     jmp     4b
-5:  call    app_space
+5:  call    lantern_app_space
     cmp     %r15, %r14
     jne     92f
-    call    app_file_free
+    call    lantern_app_file_free
     orq     $(NODE_FLAG_ENGINE | NODE_FLAG_ETH1), APP_FLAGS(%rbx)   # and the eth1 follower on its connection
 8:  xor     %eax, %eax
     LEAVE 0
-90: call    app_line_start                  # the endpoint's form
+90: call    lantern_app_line_start                  # the endpoint's form
     ADDRESS %rdi, app_m_endpoint
     mov     $app_m_endpoint_len, %esi
-    call    app_line_text
+    call    lantern_app_line_text
     jmp     98f
-91: call    app_line_start                  # no secret
+91: call    lantern_app_line_start                  # no secret
     ADDRESS %rdi, app_m_jwt
     mov     $app_m_jwt_len, %esi
-    call    app_line_text
+    call    lantern_app_line_text
     jmp     98f
-92: call    app_file_free                   # <path>: not 32 bytes in hex
-    call    app_line_start
-    call    app_line_path
+92: call    lantern_app_file_free                   # <path>: not 32 bytes in hex
+    call    lantern_app_line_start
+    call    lantern_app_line_path
     ADDRESS %rdi, app_m_hex
     mov     $app_m_hex_len, %esi
-    call    app_line_text
+    call    lantern_app_line_text
 98: mov     $APP_LOG_ERROR, %edi
-    call    app_line_end
+    call    lantern_app_line_end
 99: mov     $2, %eax
     LEAVE 0
-END_FUNCTION app_engine_conf
+END_FUNCTION lantern_app_engine_conf
 
 /* L0: r14 moves past spaces, tabs, CR and LF, to at most r15. Uses rax. */
-LOCAL_FUNCTION app_space
+LOCAL_FUNCTION lantern_app_space
     UNWIND_END_PROLOGUE
 1:  cmp     %r15, %r14
     jae     2f
@@ -3857,10 +3857,10 @@ LOCAL_FUNCTION app_space
 3:  inc     %r14
     jmp     1b
 2:  ret
-END_FUNCTION app_space
+END_FUNCTION lantern_app_space
 
 /* L0: rax = the value of the hex digit edi, or 16 when it is not one. Uses rdi. */
-LOCAL_FUNCTION app_hex_digit
+LOCAL_FUNCTION lantern_app_hex_digit
     UNWIND_END_PROLOGUE
     lea     -0x30(%rdi), %eax
     cmp     $10, %eax
@@ -3873,10 +3873,10 @@ LOCAL_FUNCTION app_hex_digit
 1:  ret
 2:  add     $10, %eax
     ret
-END_FUNCTION app_hex_digit
+END_FUNCTION lantern_app_hex_digit
 
 /* L0: rax = the Handle of the engine's connection: the slot after libp2p's, at its generation. Uses rcx. */
-LOCAL_FUNCTION app_engine_handle
+LOCAL_FUNCTION lantern_app_engine_handle
     UNWIND_END_PROLOGUE
     mov     APP_P2P_CONFIG(%rbx), %rax
     mov     88(%rax), %rax                  # max_connections
@@ -3884,13 +3884,13 @@ LOCAL_FUNCTION app_engine_handle
     shl     $32, %rcx
     or      %rcx, %rax
     ret
-END_FUNCTION app_engine_handle
+END_FUNCTION lantern_app_engine_handle
 
 /*
  * L1: one shell action, the rsi bytes in the ByteList at APP_ENGINE_ACT, through
  * libp2p_shell_perform; its results join the shell's events.
  */
-LOCAL_FUNCTION app_engine_perform
+LOCAL_FUNCTION lantern_app_engine_perform
     FRAME 0
     mov     APP_ENGINE_ACT(%rbx), %rax
     mov     %rsi, 16(%rax)
@@ -3899,13 +3899,13 @@ LOCAL_FUNCTION app_engine_perform
     mov     APP_SHELL_EVENTS(%rbx), %rdx
     CALL_GLOBAL libp2p_shell_perform
     UNFRAME 0
-END_FUNCTION app_engine_perform
+END_FUNCTION lantern_app_engine_perform
 
 /*
  * L2: the next bytes of the request on the open connection, as far as the shell's send buffer has
  * room. rbp the action, r12 the bytes.
  */
-LOCAL_FUNCTION app_engine_send
+LOCAL_FUNCTION lantern_app_engine_send
     ENTER 0
     cmpq    $2, APP_ENGINE(%rbx)
     jne     9f
@@ -3925,7 +3925,7 @@ LOCAL_FUNCTION app_engine_send
     and     $-8, %rax
     mov     %rax, (%rbp)
     movq    $LIBP2P_ACTION_SEND, 8(%rbp)
-    call    app_engine_handle
+    call    lantern_app_engine_handle
     mov     %rax, LIBP2P_ACT_CONN(%rbp)
     mov     %r12, (LIBP2P_ACT_CONN + 8)(%rbp)
     lea     LIBP2P_ACT_SEND_DATA(%rbp), %rdi
@@ -3937,25 +3937,25 @@ LOCAL_FUNCTION app_engine_send
     add     %r12, APP_ENGINE_FLIGHT(%rbx)
     mov     %rbp, %rdi
     mov     (%rbp), %rsi
-    call    app_engine_perform
+    call    lantern_app_engine_perform
 9:  LEAVE 0
-END_FUNCTION app_engine_send
+END_FUNCTION lantern_app_engine_send
 
 /*
  * L2: the NODE_ACT_ENGINE rdi: its request bytes wait in APP_ENGINE_OUT; they go on the open
  * connection, or after a DIAL of the engine's Address. rbp the ByteList, r12 the count.
  */
-LOCAL_FUNCTION app_engine_request
+LOCAL_FUNCTION lantern_app_engine_request
     ENTER 0
     lea     24(%rdi), %rbp
     mov     16(%rbp), %r12
     cmp     (APP_ENGINE_OUT + 8)(%rbx), %r12    # room for the request
     jbe     1f
     mov     $APP_ENGINE_OUT, %edi
-    call    app_unmap
+    call    lantern_app_unmap
     mov     $APP_ENGINE_OUT, %edi
     mov     %r12, %rsi
-    call    app_alloc
+    call    lantern_app_alloc
     test    %rax, %rax
     jz      9f
 1:  mov     APP_ENGINE_OUT(%rbx), %rdi
@@ -3968,7 +3968,7 @@ LOCAL_FUNCTION app_engine_request
     mov     APP_ENGINE(%rbx), %rax
     cmp     $2, %rax
     jne     2f
-    call    app_engine_send
+    call    lantern_app_engine_send
     LEAVE 0
 2:  test    %rax, %rax                      # no connection: a DIAL
     jnz     9f
@@ -3979,7 +3979,7 @@ LOCAL_FUNCTION app_engine_request
     add     $24, %rbp
     movq    $LIBP2P_ACT_DIAL_SIZE, (%rbp)
     movq    $LIBP2P_ACTION_DIAL, 8(%rbp)
-    call    app_engine_handle
+    call    lantern_app_engine_handle
     mov     %rax, LIBP2P_ACT_CONN(%rbp)
     lea     LIBP2P_ACT_DIAL_ADDR(%rbp), %rdi
     lea     APP_ENGINE_ADDR(%rbx), %rsi
@@ -3987,9 +3987,9 @@ LOCAL_FUNCTION app_engine_request
     call    lantern_copy
     mov     %rbp, %rdi
     mov     $LIBP2P_ACT_DIAL_SIZE, %esi
-    call    app_engine_perform
+    call    lantern_app_engine_perform
 9:  LEAVE 0
-END_FUNCTION app_engine_request
+END_FUNCTION lantern_app_engine_request
 
 /*
  * L2: rax = 1 when the shell event rdi is of the engine's connection, which it then takes: CONNECTED
@@ -3997,7 +3997,7 @@ END_FUNCTION app_engine_request
  * CLOSED end it with a NODE_EV_ENGINE of failure while the node waits for an answer; else 0.
  * rbp the event, r12 its kind. Locals: L the header of an event.
  */
-LOCAL_FUNCTION app_engine_event
+LOCAL_FUNCTION lantern_app_engine_event
     ENTER 48
     mov     %rdi, %rbp
     mov     8(%rbp), %r12
@@ -4007,7 +4007,7 @@ LOCAL_FUNCTION app_engine_event
     ja      8f
     cmpq    $0, APP_ENGINE(%rbx)
     je      8f
-    call    app_engine_handle
+    call    lantern_app_engine_handle
     cmp     LIBP2P_EV_CONN(%rbp), %rax
     jne     8f
     cmp     $LIBP2P_EVENT_CONNECTED, %r12
@@ -4039,12 +4039,12 @@ LOCAL_FUNCTION app_engine_event
     mov     %rax, (L + 40)(%rsp)
     lea     L(%rsp), %rdi
     mov     $48, %esi
-    call    app_event_put
+    call    lantern_app_event_put
     lea     LIBP2P_EV_DATA(%rbp), %rdi
     mov     LIBP2P_EV_COUNT(%rbp), %rsi
     add     $7, %rsi
     and     $-8, %rsi
-    call    app_event_put
+    call    lantern_app_event_put
     jmp     9f
 3:  movq    $0, APP_ENGINE(%rbx)            # DIAL_FAILED, CLOSED
     movq    $0, APP_ENGINE_LEN(%rbx)
@@ -4057,17 +4057,17 @@ LOCAL_FUNCTION app_engine_event
     movq    $1, (L + 16)(%rsp)
     lea     L(%rsp), %rdi
     mov     $24, %esi
-    call    app_event_put
+    call    lantern_app_event_put
 9:  mov     $1, %eax
     LEAVE 48
 8:  xor     %eax, %eax
     LEAVE 48
-END_FUNCTION app_engine_event
+END_FUNCTION lantern_app_engine_event
 
 # L2: with --builder, the builder: its Address, the anchor's builder_host, and NODE_FLAG_BUILDER
 # (app.md): rax = 0, or 2 after a line on the standard error. rbp the endpoint's bytes, r12 their
 # count, r13 the colon.
-LOCAL_FUNCTION app_builder_conf
+LOCAL_FUNCTION lantern_app_builder_conf
     ENTER 0
     mov     (APP_OPTIONS + AppOptions_builder + 8)(%rbx), %r12
     test    %r12, %r12
@@ -4089,7 +4089,7 @@ LOCAL_FUNCTION app_builder_conf
     jne     1b
     lea     1(%rbp,%r13), %rdi              # the port
     lea     (%rbp,%r12), %rsi
-    call    app_number
+    call    lantern_app_number
     test    %rax, %rax
     jnz     90f
     test    %rdx, %rdx
@@ -4105,31 +4105,31 @@ LOCAL_FUNCTION app_builder_conf
     mov     %r13, %rsi
     ADDRESS %rdx, app_localhost
     mov     $9, %ecx
-    call    app_name_is
+    call    lantern_app_name_is
     mov     $0x0100007f, %edx               # 127.0.0.1
     test    %rax, %rax
     jnz     2f
     mov     %rbp, %rdi
     lea     (%rbp,%r13), %rsi
-    call    app_dotted
+    call    lantern_app_dotted
     test    %rax, %rax
     jnz     90f
 2:  mov     %edx, (APP_BUILDER + 16)(%rbx)
     orq     $NODE_FLAG_BUILDER, APP_FLAGS(%rbx)
 8:  xor     %eax, %eax
     LEAVE 0
-90: call    app_line_start                  # the endpoint's form
+90: call    lantern_app_line_start                  # the endpoint's form
     ADDRESS %rdi, app_m_builder
     mov     $app_m_builder_len, %esi
-    call    app_line_text
+    call    lantern_app_line_text
     mov     $APP_LOG_ERROR, %edi
-    call    app_line_end
+    call    lantern_app_line_end
     mov     $2, %eax
     LEAVE 0
-END_FUNCTION app_builder_conf
+END_FUNCTION lantern_app_builder_conf
 
 # L0: rax = the Handle of the connection of the builder slot rdi (rsi its fields): the slots after the engine's, at its generation. Uses rcx.
-LOCAL_FUNCTION app_builder_handle
+LOCAL_FUNCTION lantern_app_builder_handle
     UNWIND_END_PROLOGUE
     mov     APP_P2P_CONFIG(%rbx), %rax
     mov     88(%rax), %rax                  # max_connections, then the engine's
@@ -4138,10 +4138,10 @@ LOCAL_FUNCTION app_builder_handle
     shl     $32, %rcx
     or      %rcx, %rax
     ret
-END_FUNCTION app_builder_handle
+END_FUNCTION lantern_app_builder_handle
 
 # L1: the NODE_EV_BUILDER of the failure of the call rdi joins the next step's events. Locals: the event.
-LOCAL_FUNCTION app_builder_fail
+LOCAL_FUNCTION lantern_app_builder_fail
     FRAME 32
     movq    $24, (%rsp)
     movq    $NODE_EV_BUILDER, 8(%rsp)
@@ -4149,21 +4149,21 @@ LOCAL_FUNCTION app_builder_fail
     mov     %rdi, 16(%rsp)
     mov     %rsp, %rdi
     mov     $24, %esi
-    call    app_event_put
+    call    lantern_app_event_put
     UNFRAME 32
-END_FUNCTION app_builder_fail
+END_FUNCTION lantern_app_builder_fail
 
 # L1: the NODE_EV_BUILDER of the slot fields rsi joins the next step's events: the call, with the
 # bytes the builder sent, or with the failure bit when it sent none; the slot is free. Locals: the
 # event's head, the fields.
-LOCAL_FUNCTION app_builder_answer
+LOCAL_FUNCTION lantern_app_builder_answer
     FRAME 64
     mov     %rsi, 48(%rsp)
     mov     AppBuilder_got(%rsi), %rax
     mov     AppBuilder_call(%rsi), %rdi
     test    %rax, %rax
     jnz     1f
-    call    app_builder_fail                # none: the failure bit
+    call    lantern_app_builder_fail                # none: the failure bit
     jmp     9f
 1:  lea     (48 + 7)(%rax), %rcx            # size, kind, the call, a ByteList, the bytes
     and     $-8, %rcx
@@ -4176,23 +4176,23 @@ LOCAL_FUNCTION app_builder_answer
     mov     %rax, 40(%rsp)
     mov     %rsp, %rdi
     mov     $48, %esi
-    call    app_event_put
+    call    lantern_app_event_put
     mov     48(%rsp), %rsi
     mov     AppBuilder_buf(%rsi), %rdi
     add     AppBuilder_len(%rsi), %rdi
     mov     AppBuilder_got(%rsi), %rsi
     add     $7, %rsi
     and     $-8, %rsi
-    call    app_event_put
+    call    lantern_app_event_put
 9:  mov     48(%rsp), %rsi
     movq    $0, AppBuilder_state(%rsi)
     UNFRAME 64
-END_FUNCTION app_builder_answer
+END_FUNCTION lantern_app_builder_answer
 
 # L2: the NODE_ACT_BUILDER rdi (app.md): a free slot takes its request and dials the builder; with
 # none, or no memory, its NODE_EV_BUILDER of failure. rbp the action, r12 the slot, r13 its fields,
 # r14 the request's bytes, r15 their count.
-LOCAL_FUNCTION app_builder_request
+LOCAL_FUNCTION lantern_app_builder_request
     ENTER 0
     mov     %rdi, %rbp
     mov     (24 + 8)(%rbp), %rax
@@ -4217,11 +4217,11 @@ LOCAL_FUNCTION app_builder_request
     jae     3f
     lea     AppBuilder_buf(%r13), %rdi
     sub     %rbx, %rdi
-    call    app_unmap
+    call    lantern_app_unmap
     lea     AppBuilder_buf(%r13), %rdi
     sub     %rbx, %rdi
     lea     (APP_BUILDER_BUFFER + 8)(%r15), %rsi
-    call    app_alloc
+    call    lantern_app_alloc
     test    %rax, %rax
     jz      8f
 3:  mov     AppBuilder_buf(%r13), %rdi
@@ -4239,7 +4239,7 @@ LOCAL_FUNCTION app_builder_request
     movq    $LIBP2P_ACTION_DIAL, 8(%rbp)
     mov     %r12, %rdi
     mov     %r13, %rsi
-    call    app_builder_handle
+    call    lantern_app_builder_handle
     mov     %rax, LIBP2P_ACT_CONN(%rbp)
     lea     LIBP2P_ACT_DIAL_ADDR(%rbp), %rdi
     lea     APP_BUILDER(%rbx), %rsi
@@ -4247,22 +4247,22 @@ LOCAL_FUNCTION app_builder_request
     call    lantern_copy
     mov     %rbp, %rdi
     mov     $LIBP2P_ACT_DIAL_SIZE, %esi
-    call    app_engine_perform
+    call    lantern_app_engine_perform
     LEAVE 0
 7:  mov     16(%rbp), %rdi                  # no free slot: a failure
-    call    app_builder_fail
+    call    lantern_app_builder_fail
     LEAVE 0
 8:  movq    $0, AppBuilder_got(%r13)        # no memory: a failure
     mov     %r13, %rsi
-    call    app_builder_answer
+    call    lantern_app_builder_answer
     LEAVE 0
-END_FUNCTION app_builder_request
+END_FUNCTION lantern_app_builder_request
 
 # L2: rax = 1 when the shell event rdi is of a builder slot's connection, which it then takes:
 # CONNECTED opens it, SENT frees its buffer, RECEIVED keeps the bytes (a full buffer closes it),
 # DIAL_FAILED and CLOSED give the call's NODE_EV_BUILDER; else 0. An event of an older connection
 # of a slot is dropped. rbp the event, r12 its kind, r13 the slot, r14 its fields.
-LOCAL_FUNCTION app_builder_event
+LOCAL_FUNCTION lantern_app_builder_event
     ENTER 0
     mov     %rdi, %rbp
     mov     8(%rbp), %r12
@@ -4317,18 +4317,18 @@ LOCAL_FUNCTION app_builder_event
     call    lantern_copy
     jmp     9f
 3:  mov     %r14, %rsi                      # DIAL_FAILED, CLOSED: the answer
-    call    app_builder_answer
+    call    lantern_app_builder_answer
 9:  mov     $1, %eax
     LEAVE 0
 8:  xor     %eax, %eax
     LEAVE 0
-END_FUNCTION app_builder_event
+END_FUNCTION lantern_app_builder_event
 
 # L2: after the shell's events (app.md): for each slot, a call past APP_BUILDER_MS closes; an open
 # one sends its request's next bytes as the shell's send buffer has room; one to close (state 3)
 # gets its CLOSE, then waits for CLOSED (state 4). rbp the action, r12 the slot, r13 its fields,
 # r14 the bytes.
-LOCAL_FUNCTION app_builder_due
+LOCAL_FUNCTION lantern_app_builder_due
     ENTER 0
     xor     %r12d, %r12d
     lea     APP_BUILDER_SLOT0(%rbx), %r13
@@ -4365,7 +4365,7 @@ LOCAL_FUNCTION app_builder_due
     movq    $LIBP2P_ACTION_SEND, 8(%rbp)
     mov     %r12, %rdi
     mov     %r13, %rsi
-    call    app_builder_handle
+    call    lantern_app_builder_handle
     mov     %rax, LIBP2P_ACT_CONN(%rbp)
     mov     %r14, (LIBP2P_ACT_CONN + 8)(%rbp)
     lea     LIBP2P_ACT_SEND_DATA(%rbp), %rdi
@@ -4377,7 +4377,7 @@ LOCAL_FUNCTION app_builder_due
     add     %r14, AppBuilder_flight(%r13)
     mov     %rbp, %rdi
     mov     (%rbp), %rsi
-    call    app_engine_perform
+    call    lantern_app_engine_perform
     jmp     7f
 3:  cmpq    $3, AppBuilder_state(%r13)      # to close: the CLOSE
     jne     7f
@@ -4388,19 +4388,19 @@ LOCAL_FUNCTION app_builder_due
     movq    $LIBP2P_ACTION_CLOSE, 8(%rbp)
     mov     %r12, %rdi
     mov     %r13, %rsi
-    call    app_builder_handle
+    call    lantern_app_builder_handle
     mov     %rax, LIBP2P_ACT_CONN(%rbp)
     mov     %rbp, %rdi
     mov     $LIBP2P_ACT_CLOSE_SIZE, %esi
-    call    app_engine_perform
+    call    lantern_app_engine_perform
 7:  add     $APP_BUILDER_SLOT, %r13
     inc     %r12
     jmp     1b
 9:  LEAVE 0
-END_FUNCTION app_builder_due
+END_FUNCTION lantern_app_builder_due
 
-/* L1: the base64url text (RFC 4648 section 5, no padding) of the rsi bytes at rdi joins the log line. Locals: rdi, rsi, then 4 digits. */
-LOCAL_FUNCTION app_line_base64url
+/* L1: the lantern_base64url text (RFC 4648 section 5, no padding) of the rsi bytes at rdi joins the log line. Locals: rdi, rsi, then 4 digits. */
+LOCAL_FUNCTION lantern_app_line_base64url
     FRAME 48
     mov     %rdi, (%rsp)
     mov     %rsi, 8(%rsp)
@@ -4442,13 +4442,13 @@ LOCAL_FUNCTION app_line_base64url
     jmp     4b
 5:  lea     24(%rsp), %rdi
     lea     1(%r9), %rsi
-    call    app_line_text
+    call    lantern_app_line_text
     jmp     1b
 9:  UNFRAME 48
-END_FUNCTION app_line_base64url
+END_FUNCTION lantern_app_line_base64url
 
 /* L1: the rsi bytes of the event at rdi join the next discv5 step's events, while they have room. Locals: the new count. */
-LOCAL_FUNCTION app_dv_put
+LOCAL_FUNCTION lantern_app_dv_put
     FRAME 16
     mov     APP_DV_EVENTS(%rbx), %rax
     mov     16(%rax), %rcx
@@ -4466,40 +4466,40 @@ LOCAL_FUNCTION app_dv_put
     mov     APP_DV_EVENTS(%rbx), %rax
     mov     %rdx, 16(%rax)
 9:  UNFRAME 16
-END_FUNCTION app_dv_put
+END_FUNCTION lantern_app_dv_put
 
 /*
  * L2: discv5 with the key of libp2p: its state, with --enr-address and --port in the record, its UDP
  * socket on --port, and the record entry tcp: rax = 0, or 2 after a line on the standard error.
  * Locals: L the Config (152), then an Address and a BindResult, and the tcp event.
  */
-LOCAL_FUNCTION app_dv_start
+LOCAL_FUNCTION lantern_app_dv_start
     ENTER 256
     mov     $APP_DV, %edi
     MOVQ    %rsi, DISCV5_STATE_SIZE
-    call    app_alloc
+    call    lantern_app_alloc
     test    %rax, %rax
     jz      97f
     mov     $APP_DV_SCRATCH, %edi
     MOVQ    %rsi, DISCV5_SCRATCH_SIZE
-    call    app_alloc
+    call    lantern_app_alloc
     test    %rax, %rax
     jz      97f
     mov     $APP_DV_EVENTS, %edi
     MOVQ    %rsi, APP_DV_EVENT_BYTES
-    call    app_alloc
+    call    lantern_app_alloc
     test    %rax, %rax
     jz      97f
     movq    $24, 8(%rax)
     movq    $0, 16(%rax)
     mov     $APP_DV_ACTIONS, %edi
     MOVQ    %rsi, DISCV5_BL_FIXED + DISCV5_ACTIONS_BASE + 64 * DISCV5_ACTIONS_PER_EVENT
-    call    app_alloc
+    call    lantern_app_alloc
     test    %rax, %rax
     jz      97f
     mov     $APP_DV_OUT, %edi
     MOVQ    %rsi, APP_DV_OUT_BYTES
-    call    app_alloc
+    call    lantern_app_alloc
     test    %rax, %rax
     jz      97f
     movq    $24, 8(%rax)
@@ -4564,39 +4564,39 @@ LOCAL_FUNCTION app_dv_start
     mov     %ax, (L + 48)(%rsp)
     lea     L(%rsp), %rdi
     mov     $56, %esi
-    call    app_dv_put
+    call    lantern_app_dv_put
     xor     %eax, %eax
     LEAVE 256
-95: call    app_line_start                  # bind UDP port <p>: error <n>
+95: call    lantern_app_line_start                  # bind UDP port <p>: error <n>
     ADDRESS %rdi, app_m_bind
     mov     $app_m_bind_len, %esi
-    call    app_line_text
+    call    lantern_app_line_text
     mov     (APP_OPTIONS + AppOptions_port)(%rbx), %rdi
-    call    app_line_u64
+    call    lantern_app_line_u64
     ADDRESS %rdi, app_m_error
     mov     $app_m_error_len, %esi
-    call    app_line_text
+    call    lantern_app_line_text
     mov     (L + 184 + LIBP2P_BR_ERROR)(%rsp), %rdi
-    call    app_line_u64
+    call    lantern_app_line_u64
     mov     $APP_LOG_ERROR, %edi
-    call    app_line_end
+    call    lantern_app_line_end
     mov     $2, %eax
     LEAVE 256
 96: mov     %rax, %rdx                      # discv5: status <n>
     AM_INC  dv_failures
     ADDRESS %rdi, app_m_discv5
     mov     $app_m_discv5_len, %esi
-    call    app_fail_status
+    call    lantern_app_fail_status
     LEAVE 256
-97: call    app_no_memory
+97: call    lantern_app_no_memory
     LEAVE 256
-END_FUNCTION app_dv_start
+END_FUNCTION lantern_app_dv_start
 
 /*
  * L2: rax = 1 when the shell event rdi is a DATAGRAM of discv5's socket, which then joins the next
  * discv5 step as a DATAGRAM event (the sender as an Endpoint); else 0. rbp the event. Locals: L the header.
  */
-LOCAL_FUNCTION app_dv_datagram
+LOCAL_FUNCTION lantern_app_dv_datagram
     ENTER 64
     mov     %rdi, %rbp
     cmpq    $LIBP2P_EVENT_DATAGRAM, 8(%rbp)
@@ -4629,16 +4629,16 @@ LOCAL_FUNCTION app_dv_datagram
     ja      9f
     lea     L(%rsp), %rdi
     mov     $DISCV5_EV_DG_DATA, %esi
-    call    app_dv_put
+    call    lantern_app_dv_put
     mov     L(%rsp), %rsi
     sub     $DISCV5_EV_DG_DATA, %rsi
     lea     LIBP2P_EV_DG_DATA(%rbp), %rdi
-    call    app_dv_put
+    call    lantern_app_dv_put
 9:  mov     $1, %eax
     LEAVE 64
 8:  xor     %eax, %eax
     LEAVE 64
-END_FUNCTION app_dv_datagram
+END_FUNCTION lantern_app_dv_datagram
 
 /*
  * L2: a discv5 step when it has events or its WAKEUP is due; then its actions: SEND as the shell's
@@ -4646,7 +4646,7 @@ END_FUNCTION app_dv_datagram
  * as the next time. rbp the next action, r12 the end, r13 the datagrams, r14 an event count.
  * Locals: L the header of an event.
  */
-LOCAL_FUNCTION app_discv5
+LOCAL_FUNCTION lantern_app_discv5
     ENTER 64
     mov     APP_DV_EVENTS(%rbx), %rax
     mov     16(%rax), %rcx
@@ -4670,10 +4670,10 @@ LOCAL_FUNCTION app_discv5
     cmp     (APP_DV_ACTIONS + 8)(%rbx), %r14
     jbe     4f
     mov     $APP_DV_ACTIONS, %edi
-    call    app_unmap
+    call    lantern_app_unmap
     mov     $APP_DV_ACTIONS, %edi
     mov     %r14, %rsi
-    call    app_alloc
+    call    lantern_app_alloc
     test    %rax, %rax
     jz      98f
 4:  mov     (APP_TICK + LIBP2P_TICK_NOW)(%rbx), %rax    # the Tick: now and fresh bytes
@@ -4702,7 +4702,7 @@ LOCAL_FUNCTION app_discv5
     AM_INC  dv_failures
     ADDRESS %rdi, app_m_discv5
     mov     $app_m_discv5_len, %esi
-    call    app_fail_status
+    call    lantern_app_fail_status
     mov     (APP_TICK + LIBP2P_TICK_NOW)(%rbx), %rax
     add     $1000, %rax
     mov     %rax, APP_DV_WAKE(%rbx)
@@ -4762,35 +4762,35 @@ LOCAL_FUNCTION app_discv5
     mov     %rax, (L + 40)(%rsp)
     lea     L(%rsp), %rdi
     mov     $48, %esi
-    call    app_event_put
+    call    lantern_app_event_put
     lea     DISCV5_ACT_FOUND_DATA(%rbp), %rdi
     mov     L(%rsp), %rsi
     sub     $48, %rsi
-    call    app_event_put
+    call    lantern_app_event_put
     jmp     80f
 71: cmp     $DISCV5_ACTION_RECORD, %rax
     jne     72f
-    call    app_line_clear                  # the view's enr: enr:<base64url>
+    call    lantern_app_line_clear                  # the view's enr: enr:<lantern_base64url>
     ADDRESS %rdi, app_t_enr
     mov     $4, %esi
-    call    app_line_text
+    call    lantern_app_line_text
     lea     DISCV5_ACT_RECORD_DATA(%rbp), %rdi
     mov     DISCV5_ACT_RECORD_LEN(%rbp), %rsi
-    call    app_line_base64url
+    call    lantern_app_line_base64url
     mov     APP_IDENTITY(%rbx), %rdi
     add     $(48 + ApiIdentity_enr), %rdi
     mov     $512, %esi
-    call    app_line_to
-    call    app_identity_put                # the node's identity: the new record
-    call    app_line_start                  # record enr:<base64url>
+    call    lantern_app_line_to
+    call    lantern_app_identity_put                # the node's identity: the new record
+    call    lantern_app_line_start                  # record enr:<lantern_base64url>
     ADDRESS %rdi, app_m_record
     mov     $app_m_record_len, %esi
-    call    app_line_text
+    call    lantern_app_line_text
     lea     DISCV5_ACT_RECORD_DATA(%rbp), %rdi
     mov     DISCV5_ACT_RECORD_LEN(%rbp), %rsi
-    call    app_line_base64url
+    call    lantern_app_line_base64url
     mov     $APP_LOG_INFO, %edi
-    call    app_line_end
+    call    lantern_app_line_end
     jmp     80f
 72: cmp     $DISCV5_ACTION_WAKEUP, %rax
     jne     80f
@@ -4811,14 +4811,14 @@ LOCAL_FUNCTION app_discv5
 98: mov     APP_DV_EVENTS(%rbx), %rax
     movq    $0, 16(%rax)
 99: LEAVE 64
-END_FUNCTION app_discv5
+END_FUNCTION lantern_app_discv5
 
 /*
  * L2: rax = the base58btc text of the rsi bytes at rdi (at most 48), written at rdx: a 1 for each
  * leading zero byte, then the digits. rcx: a work area of 72 bytes. r12 the bytes, r13 their count,
  * r14 the text, r15 the work area, rbp the leading zero bytes.
  */
-LOCAL_FUNCTION app_base58
+LOCAL_FUNCTION lantern_app_base58
     ENTER 0
     mov     %rdi, %r12
     mov     %rsi, %r13
@@ -4881,17 +4881,17 @@ LOCAL_FUNCTION app_base58
     dec     %r8
     jmp     8b
 9:  LEAVE 0
-END_FUNCTION app_base58
+END_FUNCTION lantern_app_base58
 
 /* L0: the log line becomes empty: the text helpers then build a text in it. */
-LOCAL_FUNCTION app_line_clear
+LOCAL_FUNCTION lantern_app_line_clear
     UNWIND_END_PROLOGUE
     movq    $0, (APP_LINE + 16)(%rbx)
     ret
-END_FUNCTION app_line_clear
+END_FUNCTION lantern_app_line_clear
 
 /* L1: the bytes of the log line go to the text field at rdi of the view (its length, then its bytes, at most rsi). */
-LOCAL_FUNCTION app_line_to
+LOCAL_FUNCTION lantern_app_line_to
     FRAME 0
     mov     (APP_LINE + 16)(%rbx), %rdx
     cmp     %rsi, %rdx
@@ -4902,28 +4902,28 @@ LOCAL_FUNCTION app_line_to
     lea     (APP_LINE + 24)(%rbx), %rsi
     call    lantern_copy
     UNFRAME 0
-END_FUNCTION app_line_to
+END_FUNCTION lantern_app_line_to
 
 /* L1: the IPv4 address rdi (its bytes in order in the low bytes) joins the line in dotted decimal. Locals: the address, the count. */
-LOCAL_FUNCTION app_line_ip4
+LOCAL_FUNCTION lantern_app_line_ip4
     FRAME 16
     mov     %rdi, (%rsp)
     movq    $0, 8(%rsp)
 1:  movzbl  (%rsp), %edi
-    call    app_line_u64
+    call    lantern_app_line_u64
     incq    8(%rsp)
     shrq    $8, (%rsp)
     cmpq    $4, 8(%rsp)
     jae     2f
     ADDRESS %rdi, app_t_dot
     mov     $1, %esi
-    call    app_line_text
+    call    lantern_app_line_text
     jmp     1b
 2:  UNFRAME 16
-END_FUNCTION app_line_ip4
+END_FUNCTION lantern_app_line_ip4
 
 /* L1: a multiaddr /ip4/<--enr-address>/<rdi: tcp or udp text>/<--port>/p2p/<peer id> to the view's field at rsi, or length 0 with no --enr-address. Locals: rdi, rsi. */
-LOCAL_FUNCTION app_multiaddr
+LOCAL_FUNCTION lantern_app_multiaddr
     FRAME 16
     mov     %rdi, (%rsp)
     mov     %rsi, 8(%rsp)
@@ -4931,29 +4931,29 @@ LOCAL_FUNCTION app_multiaddr
     jne     1f
     movq    $0, (%rsi)
     jmp     9f
-1:  call    app_line_clear
+1:  call    lantern_app_line_clear
     ADDRESS %rdi, app_t_ip4
     mov     $5, %esi
-    call    app_line_text
+    call    lantern_app_line_text
     mov     (APP_OPTIONS + AppOptions_enr_address)(%rbx), %rdi
-    call    app_line_ip4
+    call    lantern_app_line_ip4
     mov     (%rsp), %rdi
     mov     $5, %esi
-    call    app_line_text
+    call    lantern_app_line_text
     mov     (APP_OPTIONS + AppOptions_port)(%rbx), %rdi
-    call    app_line_u64
+    call    lantern_app_line_u64
     ADDRESS %rdi, app_t_p2p
     mov     $5, %esi
-    call    app_line_text
+    call    lantern_app_line_text
     mov     APP_IDENTITY(%rbx), %rax
     lea     (48 + ApiIdentity_peer_id + 8)(%rax), %rdi
     mov     (48 + ApiIdentity_peer_id)(%rax), %rsi
-    call    app_line_text
+    call    lantern_app_line_text
     mov     8(%rsp), %rdi
     mov     $128, %esi
-    call    app_line_to
+    call    lantern_app_line_to
 9:  UNFRAME 16
-END_FUNCTION app_multiaddr
+END_FUNCTION lantern_app_multiaddr
 
 /*
  * L2: the Beacon API: a shell context with --http-max-connections slots that listens on
@@ -4962,7 +4962,7 @@ END_FUNCTION app_multiaddr
  * standard error. Locals: L ShellParams or an Address, L+32 a ListenResult or the public key,
  * L+80 the peer id's multihash, L+128 base58's work area.
  */
-LOCAL_FUNCTION app_api_start
+LOCAL_FUNCTION lantern_app_api_start
     ENTER 208
     mov     (APP_OPTIONS + AppOptions_http_max_connections)(%rbx), %rax
     mov     %rax, L(%rsp)
@@ -4974,7 +4974,7 @@ LOCAL_FUNCTION app_api_start
     jnz     97f
     mov     $APP_API_SHELL, %edi
     mov     (L + 32)(%rsp), %rsi
-    call    app_alloc
+    call    lantern_app_alloc
     test    %rax, %rax
     jz      97f
     mov     %rax, %rsi
@@ -4984,39 +4984,39 @@ LOCAL_FUNCTION app_api_start
     jnz     97f
     mov     $APP_API_EVENTS, %edi
     mov     $APP_API_EVENT_BYTES, %esi
-    call    app_alloc
+    call    lantern_app_alloc
     test    %rax, %rax
     jz      97f
     movq    $24, 8(%rax)
     movq    $0, 16(%rax)
     mov     $APP_API_ACT, %edi
     mov     $APP_API_ACT_BYTES, %esi
-    call    app_alloc
+    call    lantern_app_alloc
     test    %rax, %rax
     jz      97f
     movq    $24, 8(%rax)
     movq    $0, 16(%rax)
     mov     $APP_API_EVENT, %edi
     MOVQ    %rsi, 48 + HTTP_REQUEST_FIXED + APP_API_BUFFER + 64
-    call    app_alloc
+    call    lantern_app_alloc
     test    %rax, %rax
     jz      97f
     mov     (APP_OPTIONS + AppOptions_http_max_connections)(%rbx), %rsi
     imul    $APP_API_SLOT_BYTES, %rsi, %rsi
     mov     $APP_API_BUF, %edi
-    call    app_alloc
+    call    lantern_app_alloc
     test    %rax, %rax
     jz      97f
     mov     (APP_OPTIONS + AppOptions_http_max_connections)(%rbx), %rsi
     imul    $APP_API_SLOT, %rsi, %rsi       # APP_API_SLOT bytes each
     mov     $APP_API_SLOTS, %edi
-    call    app_alloc
+    call    lantern_app_alloc
     test    %rax, %rax
     jz      97f
     movq    $0, (%rax)
     mov     $APP_IDENTITY, %edi
     mov     $(48 + API_IDENTITY_SIZE), %esi
-    call    app_alloc
+    call    lantern_app_alloc
     test    %rax, %rax
     jz      97f
     movq    $4, L(%rsp)                     # listen: TCP --http-address, --http-port
@@ -5047,7 +5047,7 @@ LOCAL_FUNCTION app_api_start
     mov     APP_IDENTITY(%rbx), %rdx
     add     $(48 + ApiIdentity_peer_id + 8), %rdx
     lea     (L + 128)(%rsp), %rcx
-    call    app_base58
+    call    lantern_app_base58
     mov     APP_IDENTITY(%rbx), %rcx
     mov     %rax, (48 + ApiIdentity_peer_id)(%rcx)
     mov     APP_IDENTITY(%rbx), %rdi        # the version
@@ -5060,55 +5060,55 @@ LOCAL_FUNCTION app_api_start
     ADDRESS %rdi, app_t_tcp                 # the addresses
     mov     APP_IDENTITY(%rbx), %rsi
     add     $(48 + ApiIdentity_p2p_address), %rsi
-    call    app_multiaddr
+    call    lantern_app_multiaddr
     ADDRESS %rdi, app_t_udp
     mov     APP_IDENTITY(%rbx), %rsi
     add     $(48 + ApiIdentity_discovery_address), %rsi
-    call    app_multiaddr
-    call    app_identity_put
-    call    app_line_start                  # Beacon API on TCP <address>:<port>, peer id <id>
+    call    lantern_app_multiaddr
+    call    lantern_app_identity_put
+    call    lantern_app_line_start                  # Beacon API on TCP <address>:<port>, peer id <id>
     ADDRESS %rdi, app_m_api
     mov     $app_m_api_len, %esi
-    call    app_line_text
+    call    lantern_app_line_text
     mov     (APP_OPTIONS + AppOptions_http_address)(%rbx), %rdi
-    call    app_line_ip4
+    call    lantern_app_line_ip4
     ADDRESS %rdi, app_t_colon
     mov     $1, %esi
-    call    app_line_text
+    call    lantern_app_line_text
     mov     (APP_OPTIONS + AppOptions_http_port)(%rbx), %rdi
-    call    app_line_u64
+    call    lantern_app_line_u64
     ADDRESS %rdi, app_m_peer_id
     mov     $app_m_peer_id_len, %esi
-    call    app_line_text
+    call    lantern_app_line_text
     mov     APP_IDENTITY(%rbx), %rax
     lea     (48 + ApiIdentity_peer_id + 8)(%rax), %rdi
     mov     (48 + ApiIdentity_peer_id)(%rax), %rsi
-    call    app_line_text
+    call    lantern_app_line_text
     mov     $APP_LOG_INFO, %edi
-    call    app_line_end
+    call    lantern_app_line_end
     xor     %eax, %eax
     LEAVE 208
-96: call    app_line_start                  # listen on TCP port <p>: error <n>
+96: call    lantern_app_line_start                  # listen on TCP port <p>: error <n>
     ADDRESS %rdi, app_m_listen
     mov     $app_m_listen_len, %esi
-    call    app_line_text
+    call    lantern_app_line_text
     mov     (APP_OPTIONS + AppOptions_http_port)(%rbx), %rdi
-    call    app_line_u64
+    call    lantern_app_line_u64
     ADDRESS %rdi, app_m_error
     mov     $app_m_error_len, %esi
-    call    app_line_text
+    call    lantern_app_line_text
     mov     (L + 32)(%rsp), %rdi
-    call    app_line_u64
+    call    lantern_app_line_u64
     mov     $APP_LOG_ERROR, %edi
-    call    app_line_end
+    call    lantern_app_line_end
     mov     $2, %eax
     LEAVE 208
-97: call    app_no_memory
+97: call    lantern_app_no_memory
     LEAVE 208
-END_FUNCTION app_api_start
+END_FUNCTION lantern_app_api_start
 
 /* L1: the identity's texts go to the next step in a NODE_EV_API_IDENTITY. */
-LOCAL_FUNCTION app_identity_put
+LOCAL_FUNCTION lantern_app_identity_put
     FRAME 0
     mov     APP_IDENTITY(%rbx), %rdi
     movq    $(48 + API_IDENTITY_SIZE), (%rdi)
@@ -5118,12 +5118,12 @@ LOCAL_FUNCTION app_identity_put
     movq    $24, 32(%rdi)
     movq    $API_IDENTITY_SIZE, 40(%rdi)
     mov     $(48 + API_IDENTITY_SIZE), %esi
-    call    app_event_put
+    call    lantern_app_event_put
     UNFRAME 0
-END_FUNCTION app_identity_put
+END_FUNCTION lantern_app_identity_put
 
 /* L0: rax = the slot of the connection rdi, while it is open at that generation, else 0. Uses rcx, rdx. */
-LOCAL_FUNCTION app_api_slot
+LOCAL_FUNCTION lantern_app_api_slot
     UNWIND_END_PROLOGUE
     mov     %edi, %ecx
     cmp     (APP_OPTIONS + AppOptions_http_max_connections)(%rbx), %rcx
@@ -5140,10 +5140,10 @@ LOCAL_FUNCTION app_api_slot
     ret
 9:  xor     %eax, %eax
     ret
-END_FUNCTION app_api_slot
+END_FUNCTION lantern_app_api_slot
 
 /* L1: the Beacon API's shell actions go out; their results come at the next poll. */
-LOCAL_FUNCTION app_api_flush
+LOCAL_FUNCTION lantern_app_api_flush
     FRAME 0
     mov     APP_API_ACT(%rbx), %rsi
     test    %rsi, %rsi
@@ -5156,10 +5156,10 @@ LOCAL_FUNCTION app_api_flush
     mov     APP_API_ACT(%rbx), %rax
     movq    $0, 16(%rax)
 9:  UNFRAME 0
-END_FUNCTION app_api_flush
+END_FUNCTION lantern_app_api_flush
 
 /* L1: rax = room for a shell action of rdi bytes at the end of the Beacon API's actions, its bytes counted, after a flush when they are full; 0 when it never fits. Locals: rdi. */
-LOCAL_FUNCTION app_api_room
+LOCAL_FUNCTION lantern_app_api_room
     FRAME 16
     mov     %rdi, (%rsp)
     mov     APP_API_ACT(%rbx), %rax
@@ -5171,7 +5171,7 @@ LOCAL_FUNCTION app_api_room
     add     %rdi, %rdx
     cmp     %rcx, %rdx
     jbe     1f
-    call    app_api_flush
+    call    lantern_app_api_flush
 1:  mov     APP_API_ACT(%rbx), %rax
     mov     16(%rax), %rcx
     mov     (%rsp), %rdx
@@ -5181,18 +5181,18 @@ LOCAL_FUNCTION app_api_room
     UNFRAME 16
 8:  xor     %eax, %eax
     UNFRAME 16
-END_FUNCTION app_api_room
+END_FUNCTION lantern_app_api_room
 
 /* L1: a CLOSE of the connection rdi, while it is open; its slot waits for the shell's CLOSED. Locals: rdi. */
-LOCAL_FUNCTION app_api_close
+LOCAL_FUNCTION lantern_app_api_close
     FRAME 16
     mov     %rdi, (%rsp)
-    call    app_api_slot
+    call    lantern_app_api_slot
     test    %rax, %rax
     jz      9f
     movq    $APP_API_CLOSING, 8(%rax)
     mov     $LIBP2P_ACT_CLOSE_SIZE, %edi
-    call    app_api_room
+    call    lantern_app_api_room
     test    %rax, %rax
     jz      9f
     movq    $LIBP2P_ACT_CLOSE_SIZE, (%rax)
@@ -5200,7 +5200,7 @@ LOCAL_FUNCTION app_api_close
     mov     (%rsp), %rcx
     mov     %rcx, LIBP2P_ACT_CONN(%rax)
 9:  UNFRAME 16
-END_FUNCTION app_api_close
+END_FUNCTION lantern_app_api_close
 
 /*
  * L2: the slot rdi, when it waits for no answer: lantern_http_request of its bytes, then a
@@ -5209,7 +5209,7 @@ END_FUNCTION app_api_close
  * r13 its ByteList, r14 its bytes, r15 its index, S7 the event, S8 the HttpRequest's room.
  * Locals: L HttpLimits.
  */
-LOCAL_FUNCTION app_api_read
+LOCAL_FUNCTION lantern_app_api_read
     ENTER 16
     mov     %rdi, %r15
     imul    $APP_API_SLOT, %rdi, %r12
@@ -5275,23 +5275,23 @@ LOCAL_FUNCTION app_api_read
     movq    $24, 32(%rdi)
     mov     %rcx, 40(%rdi)
     lea     48(%rcx), %rsi
-    call    app_event_put
+    call    lantern_app_event_put
     movq    $APP_API_ANSWERING, 8(%r12)
     AM_INC  api_requests                    # the metrics: a request, its answer's first bytes owed
     movq    $1, 48(%r12)
 99: LEAVE 16
-END_FUNCTION app_api_read
+END_FUNCTION lantern_app_api_read
 
 /*
  * L2: the NODE_ACT_API_SEND or NODE_ACT_API_CLOSE rdi of the node: a SEND of its bytes, or the
  * close, on its connection; after the bytes with last 1, the slot's next request. An action of a
  * connection no longer open goes. rbp the action, r12 the slot, r13 the shell action.
  */
-LOCAL_FUNCTION app_api_action
+LOCAL_FUNCTION lantern_app_api_action
     ENTER 0
     mov     %rdi, %rbp
     mov     16(%rbp), %rdi
-    call    app_api_slot
+    call    lantern_app_api_slot
     test    %rax, %rax
     jz      99f
     mov     %rax, %r12
@@ -5302,7 +5302,7 @@ LOCAL_FUNCTION app_api_action
     cmpq    $0, 32(%r12)                    # CLOSE: at once with no bytes in flight, else after them
     jne     2f
     mov     16(%rbp), %rdi
-    call    app_api_close
+    call    lantern_app_api_close
     jmp     99f
 2:  movq    $APP_API_DRAINING, 8(%r12)
     mov     (APP_TICK + LIBP2P_TICK_NOW)(%rbx), %rax
@@ -5311,7 +5311,7 @@ LOCAL_FUNCTION app_api_action
 1:  mov     48(%rbp), %rdi                  # SEND: size, kind, connection, count, the bytes
     add     $(LIBP2P_ACT_SEND_DATA + 7), %rdi
     and     $-8, %rdi
-    call    app_api_room
+    call    lantern_app_api_room
     test    %rax, %rax
     jz      98f
     mov     %rax, %r13
@@ -5347,34 +5347,34 @@ LOCAL_FUNCTION app_api_action
     movq    $1, 40(%r12)                    # else an API_SENT is owed
     mov     %r12, %rdi
     mov     16(%rbp), %rsi
-    call    app_api_due
+    call    lantern_app_api_due
     jmp     99f
 97:
     movq    $APP_API_READING, 8(%r12)
     mov     (APP_TICK + LIBP2P_TICK_NOW)(%rbx), %rax
     mov     %rax, 24(%r12)
     mov     16(%rbp), %edi
-    call    app_api_read
+    call    lantern_app_api_read
     jmp     99f
 98: mov     16(%rbp), %rdi                  # bytes that never fit: the connection closes
-    call    app_api_close
+    call    lantern_app_api_close
 99: LEAVE 0
-END_FUNCTION app_api_action
+END_FUNCTION lantern_app_api_action
 
 /* L1: a NODE_EV_API_SENT or NODE_EV_API_CLOSED (rdi) of the connection rsi for the next step. Locals: the event. */
-LOCAL_FUNCTION app_api_note
+LOCAL_FUNCTION lantern_app_api_note
     FRAME 32
     movq    $24, (%rsp)
     mov     %rdi, 8(%rsp)
     mov     %rsi, 16(%rsp)
     mov     %rsp, %rdi
     mov     $24, %esi
-    call    app_event_put
+    call    lantern_app_event_put
     UNFRAME 32
-END_FUNCTION app_api_note
+END_FUNCTION lantern_app_api_note
 
 /* L1: the slot rdi of the connection rsi, owing an API_SENT: it goes once the slot's bytes in flight are at most APP_API_SEND_WINDOW - NODE_API_CHUNK. */
-LOCAL_FUNCTION app_api_due
+LOCAL_FUNCTION lantern_app_api_due
     FRAME 0
     cmpq    $0, 40(%rdi)
     je      9f
@@ -5382,9 +5382,9 @@ LOCAL_FUNCTION app_api_due
     ja      9f
     movq    $0, 40(%rdi)
     mov     $NODE_EV_API_SENT, %edi
-    call    app_api_note
+    call    lantern_app_api_note
 9:  UNFRAME 0
-END_FUNCTION app_api_due
+END_FUNCTION lantern_app_api_due
 
 /*
  * L2: the NODE_ACT_STATE_BYTES rdi: lantern_node_state_bytes of the fork of the state's slot in new
@@ -5392,18 +5392,18 @@ END_FUNCTION app_api_due
  * r12 the state's entry, r13 the bytes' size, r14 the memory. Locals: L a ByteList, L+24 the size,
  * L+32 the fork.
  */
-LOCAL_FUNCTION app_state_bytes
+LOCAL_FUNCTION lantern_app_state_bytes
     ENTER 48
     mov     %rdi, %rbp
     mov     16(%rbp), %rdi
-    call    app_buf_find
+    call    lantern_app_buf_find
     test    %rax, %rax
     jz      9f
     mov     %rax, %r12
     mov     8(%r12), %rax
     mov     NODE_STATE_SLOT(%rax), %rdi
     lea     APP_CONFIG(%rbx), %rsi
-    call    app_fork
+    call    lantern_app_fork
     mov     %rax, (L + 32)(%rsp)
     movq    $24, L(%rsp)                    # the size first
     movq    $0, (L + 24)(%rsp)
@@ -5417,7 +5417,7 @@ LOCAL_FUNCTION app_state_bytes
     cmp     $24, %r13
     jbe     8f
     mov     %r13, %rdi
-    call    app_map
+    call    lantern_app_map
     test    %rax, %rax
     jz      8f
     mov     %rax, %r14
@@ -5435,22 +5435,22 @@ LOCAL_FUNCTION app_state_bytes
 7:  mov     24(%rbp), %rdi
     mov     %r14, %rsi
     mov     %r13, %rdx
-    call    app_buf_add
+    call    lantern_app_buf_add
     LEAVE 48
 8:  movq    $24, L(%rsp)                    # no memory: a ByteList of no bytes
     movq    $24, (L + 8)(%rsp)
     movq    $0, (L + 16)(%rsp)
     lea     L(%rsp), %rdi
     mov     $24, %esi
-    call    app_dup
+    call    lantern_app_dup
     test    %rax, %rax
     jz      9f
     mov     %rax, %rsi
     mov     24(%rbp), %rdi
     mov     $24, %edx
-    call    app_buf_add
+    call    lantern_app_buf_add
 9:  LEAVE 48
-END_FUNCTION app_state_bytes
+END_FUNCTION lantern_app_state_bytes
 
 /*
  * L2: the Beacon API's sockets, without waiting: ACCEPTED takes a free slot (ADOPT) or a REFUSE,
@@ -5459,7 +5459,7 @@ END_FUNCTION app_state_bytes
  * APP_API_IDLE_MS closes, as does a draining one; then the shell actions go out. rbp the
  * next event, r12 the end, r13 a slot, r14 an index, r15 the connection. Locals: L the wait.
  */
-LOCAL_FUNCTION app_api_poll
+LOCAL_FUNCTION lantern_app_api_poll
     ENTER 16
     movq    $0, L(%rsp)
     mov     APP_API_SHELL(%rbx), %rdi
@@ -5486,7 +5486,7 @@ LOCAL_FUNCTION app_api_poll
     inc     %r14
     jmp     2b
 21: mov     $LIBP2P_ACT_REFUSE_SIZE, %edi
-    call    app_api_room
+    call    lantern_app_api_room
     test    %rax, %rax
     jz      79f
     movq    $LIBP2P_ACT_REFUSE_SIZE, (%rax)
@@ -5508,7 +5508,7 @@ LOCAL_FUNCTION app_api_poll
     shl     $32, %r15
     or      %r14, %r15
     mov     $LIBP2P_ACT_ADOPT_SIZE, %edi
-    call    app_api_room
+    call    lantern_app_api_room
     test    %rax, %rax
     jz      79f
     movq    $LIBP2P_ACT_ADOPT_SIZE, (%rax)
@@ -5521,7 +5521,7 @@ LOCAL_FUNCTION app_api_poll
     jne     30f
     mov     LIBP2P_EV_CONN(%rbp), %r15
     mov     %r15, %rdi
-    call    app_api_slot
+    call    lantern_app_api_slot
     test    %rax, %rax
     jz      79f
     mov     32(%rax), %rcx
@@ -5536,11 +5536,11 @@ LOCAL_FUNCTION app_api_poll
     test    %rcx, %rcx
     jnz     79f
     mov     %r15, %rdi
-    call    app_api_close
+    call    lantern_app_api_close
     jmp     79f
 302: mov    %rax, %rdi
     mov     %r15, %rsi
-    call    app_api_due
+    call    lantern_app_api_due
     jmp     79f
 30: cmp     $LIBP2P_EVENT_RECEIVED, %rax
     je      31f
@@ -5548,7 +5548,7 @@ LOCAL_FUNCTION app_api_poll
     jne     79f
 31: mov     LIBP2P_EV_CONN(%rbp), %r15      # the slot of the connection, at its generation
     mov     %r15, %rdi
-    call    app_api_slot
+    call    lantern_app_api_slot
     test    %rax, %rax
     jz      79f
     mov     %rax, %r13
@@ -5556,7 +5556,7 @@ LOCAL_FUNCTION app_api_poll
     jne     4f
     mov     $NODE_EV_API_CLOSED, %edi       # CLOSED: the node's stream ends, and the slot is free
     mov     %r15, %rsi
-    call    app_api_note
+    call    lantern_app_api_note
     movq    $0, 8(%r13)
     movq    $0, 16(%r13)
     jmp     79f
@@ -5582,10 +5582,10 @@ LOCAL_FUNCTION app_api_poll
     lea     LIBP2P_EV_DATA(%rbp), %rsi
     call    lantern_copy
     mov     %r14, %rdi
-    call    app_api_read
+    call    lantern_app_api_read
     jmp     79f
 6:  mov     %r15, %rdi
-    call    app_api_close
+    call    lantern_app_api_close
 79: add     (%rbp), %rbp
     jmp     1b
 80: mov     APP_API_EVENTS(%rbx), %rax      # the idle connections close
@@ -5605,25 +5605,25 @@ LOCAL_FUNCTION app_api_poll
     mov     (%r13), %rdi
     shl     $32, %rdi
     or      %r14, %rdi
-    call    app_api_close
+    call    lantern_app_api_close
 84: add     $APP_API_SLOT, %r13
     inc     %r14
     jmp     81b
-85: call    app_api_flush
+85: call    lantern_app_api_flush
     LEAVE 16
-END_FUNCTION app_api_poll
+END_FUNCTION lantern_app_api_poll
 
 /* L1: rax = the monotonic microseconds of libp2p_shell_clock. */
-LOCAL_FUNCTION app_met_us
+LOCAL_FUNCTION lantern_app_met_us
     FRAME 0
     lea     APP_MET_TICK(%rbx), %rdi
     CALL_GLOBAL libp2p_shell_clock
     mov     (APP_MET_TICK + LIBP2P_TICK_US)(%rbx), %rax
     UNFRAME 0
-END_FUNCTION app_met_us
+END_FUNCTION lantern_app_met_us
 
 /* L1: the value rdx joins the AppMetrics Histogram at offset rdi, of the bound set rsi. Locals: the bound set, the value. */
-LOCAL_FUNCTION app_met_obs
+LOCAL_FUNCTION lantern_app_met_obs
     FRAME 16
     mov     %rsi, (%rsp)
     mov     %rdx, 8(%rsp)
@@ -5632,10 +5632,10 @@ LOCAL_FUNCTION app_met_obs
     lea     8(%rsp), %rdx
     CALL_GLOBAL lantern_metrics_observe
     UNFRAME 16
-END_FUNCTION app_met_obs
+END_FUNCTION lantern_app_met_obs
 
 /* L1: the delay of a message of the slot rsi, from its slot's start to the store's time, joins the AppMetrics Histogram at offset rdi (delay bounds). */
-LOCAL_FUNCTION app_met_delay
+LOCAL_FUNCTION lantern_app_met_delay
     FRAME 0
     mov     APP_STORE(%rbx), %rcx
     mov     (APP_CONFIG + CONFIG_SLOT_DURATION_MS)(%rbx), %rax
@@ -5647,9 +5647,9 @@ LOCAL_FUNCTION app_met_delay
     xor     %edx, %edx
 1:  imul    $1000, %rdx, %rdx
     mov     $METRIC_BOUNDS_DELAY, %esi
-    call    app_met_obs
+    call    lantern_app_met_obs
     UNFRAME 0
-END_FUNCTION app_met_delay
+END_FUNCTION lantern_app_met_delay
 
 /*
  * L2: the metrics of a work that ran (app.md, the metrics): its run time since APP_MET_T0 and a
@@ -5659,11 +5659,11 @@ END_FUNCTION app_met_delay
  * kind, rsi its data's table entry or 0. rbp the WORK_DONE event, r12 the kind, r13 the data
  * entry, r14 the microseconds, r15 the kind's slot. Locals: L the topic, L+8 the result's index.
  */
-LOCAL_FUNCTION app_met_work
+LOCAL_FUNCTION lantern_app_met_work
     ENTER 16
     mov     %rdi, %r12
     mov     %rsi, %r13
-    call    app_met_us
+    call    lantern_app_met_us
     sub     APP_MET_T0(%rbx), %rax
     mov     %rax, %r14
     mov     APP_WORK_EVENT(%rbx), %rbp
@@ -5675,7 +5675,7 @@ LOCAL_FUNCTION app_met_work
     add     $AppMetrics_work_seconds, %rdi
     mov     $METRIC_BOUNDS_WORK, %esi
     mov     %r14, %rdx
-    call    app_met_obs
+    call    lantern_app_met_obs
     cmpq    $0, NodeEvent_result(%rbp)
     je      1f
     incq    (APP_METRICS + AppMetrics_work_failures)(%rbx,%r15,8)
@@ -5705,7 +5705,7 @@ LOCAL_FUNCTION app_met_work
     add     $AppMetrics_gossip_seconds, %rdi
     mov     $METRIC_BOUNDS_WORK, %esi
     mov     %r14, %rdx
-    call    app_met_obs
+    call    lantern_app_met_obs
     mov     L(%rsp), %rcx
     mov     (L + 8)(%rsp), %rdx
     cmp     $GOSSIP_DATA_COLUMN_SIDECAR, %rcx
@@ -5717,7 +5717,7 @@ LOCAL_FUNCTION app_met_work
 41: mov     $AppMetrics_gossip_verification, %edi
     mov     $METRIC_BOUNDS_DEFAULT, %esi
     mov     %r14, %rdx
-    call    app_met_obs
+    call    lantern_app_met_obs
     jmp     99f
 5:  cmp     $GOSSIP_BEACON_AGGREGATE_AND_PROOF, %rcx
     jne     6f
@@ -5730,7 +5730,7 @@ LOCAL_FUNCTION app_met_work
     jnz     99f
     mov     $AppMetrics_attestation_delay, %edi  # a valid one: its delay, its slot at NodeEvent_root
     mov     NodeEvent_root(%rbp), %rsi
-    call    app_met_delay
+    call    lantern_app_met_delay
     jmp     99f
 7:  cmp     $GOSSIP_ATTESTER_SLASHING, %rcx
     jne     8f
@@ -5749,7 +5749,7 @@ LOCAL_FUNCTION app_met_work
     mov     8(%rax), %rcx
     mov     100(%rax,%rcx), %rsi
     mov     $AppMetrics_block_delay, %edi
-    call    app_met_delay
+    call    lantern_app_met_delay
     jmp     99f
 20: cmp     $NODE_WORK_SERVE, %r12
     jne     30f
@@ -5764,7 +5764,7 @@ LOCAL_FUNCTION app_met_work
     mov     $AppMetrics_reconstruction, %edi
     mov     $METRIC_BOUNDS_DEFAULT, %esi
     mov     %r14, %rdx
-    call    app_met_obs
+    call    lantern_app_met_obs
     cmpq    $0, NodeEvent_result(%rbp)
     jne     99f
     test    %r13, %r13                      # the columns it rebuilt: NUMBER_OF_COLUMNS less the ByteLists of data
@@ -5791,7 +5791,7 @@ LOCAL_FUNCTION app_met_work
     mov     $AppMetrics_computation, %edi
     mov     $METRIC_BOUNDS_DEFAULT, %esi
     mov     %r14, %rdx
-    call    app_met_obs
+    call    lantern_app_met_obs
     jmp     99f
 50: cmp     $NODE_WORK_BLOB, %r12           # BLOB of a column sidecar from a response: its check
     jne     60f
@@ -5800,7 +5800,7 @@ LOCAL_FUNCTION app_met_work
     mov     $AppMetrics_kzg_batch, %edi
     mov     $METRIC_BOUNDS_KZG, %esi
     mov     %r14, %rdx
-    call    app_met_obs
+    call    lantern_app_met_obs
     jmp     99f
 60: cmp     $NODE_WORK_PUBLISH_CHECK, %r12
     jne     70f
@@ -5834,9 +5834,9 @@ LOCAL_FUNCTION app_met_work
     mov     $AppMetrics_epoch_seconds, %edi
     mov     $METRIC_BOUNDS_WORK, %esi
     mov     %r14, %rdx
-    call    app_met_obs
+    call    lantern_app_met_obs
 99: LEAVE 16
-END_FUNCTION app_met_work
+END_FUNCTION lantern_app_met_work
 
 /*
  * L2: the metrics server (app.md): with --metrics categories, a shell context of APP_MET_CONNS
@@ -5847,9 +5847,9 @@ END_FUNCTION app_met_work
 .if 32 + LIBP2P_LR_SIZE > 80
 .error "app_met_start: its locals hold no ListenResult"
 .endif
-LOCAL_FUNCTION app_met_start
+LOCAL_FUNCTION lantern_app_met_start
     ENTER 80
-    call    app_met_us                      # the start, for the uptime
+    call    lantern_app_met_us                      # the start, for the uptime
     mov     %rax, APP_MET_START_US(%rbx)
     mov     (APP_MET_TICK + LIBP2P_TICK_UNIX)(%rbx), %rax
     mov     %rax, APP_MET_START_S(%rbx)
@@ -5864,7 +5864,7 @@ LOCAL_FUNCTION app_met_start
     jnz     97f
     mov     $APP_MET_SHELL, %edi
     mov     (L + 32)(%rsp), %rsi
-    call    app_alloc
+    call    lantern_app_alloc
     test    %rax, %rax
     jz      97f
     mov     %rax, %rsi
@@ -5874,14 +5874,14 @@ LOCAL_FUNCTION app_met_start
     jnz     97f
     mov     $APP_MET_EVENTS, %edi
     mov     $APP_MET_EVENT_BYTES, %esi
-    call    app_alloc
+    call    lantern_app_alloc
     test    %rax, %rax
     jz      97f
     movq    $24, 8(%rax)
     movq    $0, 16(%rax)
     mov     $APP_MET_ACT, %edi
     mov     $APP_MET_ACT_BYTES, %esi
-    call    app_alloc
+    call    lantern_app_alloc
     test    %rax, %rax
     jz      97f
     movq    $24, 8(%rax)
@@ -5909,42 +5909,42 @@ LOCAL_FUNCTION app_met_start
     CALL_GLOBAL libp2p_shell_listen
     cmpq    $0, (L + 32)(%rsp)
     jne     96f
-    call    app_line_start                  # metrics on TCP <address>:<port>
+    call    lantern_app_line_start                  # metrics on TCP <address>:<port>
     ADDRESS %rdi, app_m_metrics
     mov     $app_m_metrics_len, %esi
-    call    app_line_text
+    call    lantern_app_line_text
     mov     (APP_OPTIONS + AppOptions_metrics_address)(%rbx), %rdi
-    call    app_line_ip4
+    call    lantern_app_line_ip4
     ADDRESS %rdi, app_t_colon
     mov     $1, %esi
-    call    app_line_text
+    call    lantern_app_line_text
     mov     (APP_OPTIONS + AppOptions_metrics_port)(%rbx), %rdi
-    call    app_line_u64
+    call    lantern_app_line_u64
     mov     $APP_LOG_INFO, %edi
-    call    app_line_end
+    call    lantern_app_line_end
 8:  xor     %eax, %eax
     LEAVE 80
-96: call    app_line_start                  # listen on TCP port <p>: error <n>
+96: call    lantern_app_line_start                  # listen on TCP port <p>: error <n>
     ADDRESS %rdi, app_m_listen
     mov     $app_m_listen_len, %esi
-    call    app_line_text
+    call    lantern_app_line_text
     mov     (APP_OPTIONS + AppOptions_metrics_port)(%rbx), %rdi
-    call    app_line_u64
+    call    lantern_app_line_u64
     ADDRESS %rdi, app_m_error
     mov     $app_m_error_len, %esi
-    call    app_line_text
+    call    lantern_app_line_text
     mov     (L + 32)(%rsp), %rdi
-    call    app_line_u64
+    call    lantern_app_line_u64
     mov     $APP_LOG_ERROR, %edi
-    call    app_line_end
+    call    lantern_app_line_end
     mov     $2, %eax
     LEAVE 80
-97: call    app_no_memory
+97: call    lantern_app_no_memory
     LEAVE 80
-END_FUNCTION app_met_start
+END_FUNCTION lantern_app_met_start
 
 /* L0: rax = the slot of the metrics connection rdi, while open at its generation, or 0. Uses rcx, rdx. */
-LOCAL_FUNCTION app_met_slot
+LOCAL_FUNCTION lantern_app_met_slot
     UNWIND_END_PROLOGUE
     mov     %edi, %ecx
     cmp     $APP_MET_CONNS, %rcx
@@ -5960,10 +5960,10 @@ LOCAL_FUNCTION app_met_slot
     ret
 9:  xor     %eax, %eax
     ret
-END_FUNCTION app_met_slot
+END_FUNCTION lantern_app_met_slot
 
 /* L1: the metrics server's shell actions go out; their results come at the next poll. */
-LOCAL_FUNCTION app_met_flush
+LOCAL_FUNCTION lantern_app_met_flush
     FRAME 0
     mov     APP_MET_ACT(%rbx), %rsi
     cmpq    $0, 16(%rsi)
@@ -5974,10 +5974,10 @@ LOCAL_FUNCTION app_met_flush
     mov     APP_MET_ACT(%rbx), %rax
     movq    $0, 16(%rax)
 9:  UNFRAME 0
-END_FUNCTION app_met_flush
+END_FUNCTION lantern_app_met_flush
 
 /* L1: rax = room for a shell action of rdi bytes at the end of the metrics server's actions, its bytes counted, after a flush when they are full; 0 when it never fits. Locals: rdi. */
-LOCAL_FUNCTION app_met_room
+LOCAL_FUNCTION lantern_app_met_room
     FRAME 16
     mov     %rdi, (%rsp)
     mov     APP_MET_ACT(%rbx), %rax
@@ -5989,7 +5989,7 @@ LOCAL_FUNCTION app_met_room
     add     %rdi, %rdx
     cmp     %rcx, %rdx
     jbe     1f
-    call    app_met_flush
+    call    lantern_app_met_flush
 1:  mov     APP_MET_ACT(%rbx), %rax
     mov     16(%rax), %rcx
     mov     (%rsp), %rdx
@@ -5999,18 +5999,18 @@ LOCAL_FUNCTION app_met_room
     UNFRAME 16
 8:  xor     %eax, %eax
     UNFRAME 16
-END_FUNCTION app_met_room
+END_FUNCTION lantern_app_met_room
 
 /* L1: a CLOSE of the metrics connection rdi, while it is open; its slot waits for the shell's CLOSED. Locals: rdi. */
-LOCAL_FUNCTION app_met_close
+LOCAL_FUNCTION lantern_app_met_close
     FRAME 16
     mov     %rdi, (%rsp)
-    call    app_met_slot
+    call    lantern_app_met_slot
     test    %rax, %rax
     jz      9f
     movq    $APP_MET_CLOSING, 8(%rax)
     mov     $LIBP2P_ACT_CLOSE_SIZE, %edi
-    call    app_met_room
+    call    lantern_app_met_room
     test    %rax, %rax
     jz      9f
     movq    $LIBP2P_ACT_CLOSE_SIZE, (%rax)
@@ -6018,14 +6018,14 @@ LOCAL_FUNCTION app_met_close
     mov     (%rsp), %rcx
     mov     %rcx, LIBP2P_ACT_CONN(%rax)
 9:  UNFRAME 16
-END_FUNCTION app_met_close
+END_FUNCTION lantern_app_met_close
 
 /*
  * L1: the sources of the metrics (app.md): lantern_metrics_node of the node and the store; the head
  * state's values by lantern_<fork>_metrics_state, again only for a new head state; the node's
  * counters; the app's run times. Locals: L the state, L+8 the block.
  */
-LOCAL_FUNCTION app_met_sources
+LOCAL_FUNCTION lantern_app_met_sources
     ENTER 16
     mov     APP_NODE(%rbx), %rdi
     mov     APP_STORE(%rbx), %rsi
@@ -6036,7 +6036,7 @@ LOCAL_FUNCTION app_met_sources
     je      5f
     movq    $0, APP_MET_STATE_ID(%rbx)
     movq    $0, (APP_MET_STATE + MetricsState_present)(%rbx)
-    call    app_buf_find
+    call    lantern_app_buf_find
     test    %rax, %rax
     jz      5f
     mov     8(%rax), %rax
@@ -6044,7 +6044,7 @@ LOCAL_FUNCTION app_met_sources
     lea     APP_MET_EMPTY(%rbx), %rax       # the head block's bytes, or none
     mov     %rax, (L + 8)(%rsp)
     mov     (APP_MET_NODE + MetricsNode_head_block_id)(%rbx), %rdi
-    call    app_buf_find
+    call    lantern_app_buf_find
     test    %rax, %rax
     jz      3f
     mov     8(%rax), %rax
@@ -6052,7 +6052,7 @@ LOCAL_FUNCTION app_met_sources
 3:  mov     L(%rsp), %rax
     mov     NODE_STATE_SLOT(%rax), %rdi
     lea     APP_CONFIG(%rbx), %rsi
-    call    app_fork
+    call    lantern_app_fork
     mov     %rax, %r10
     mov     L(%rsp), %rdi
     mov     (L + 8)(%rsp), %rsi
@@ -6090,7 +6090,7 @@ LOCAL_FUNCTION app_met_sources
 7:  mov     %rax, (APP_MET_PROCESS + MetricsProcess_buffer_bytes)(%rbx)
     mov     APP_MET_START_S(%rbx), %rax
     mov     %rax, (APP_MET_PROCESS + MetricsProcess_start_s)(%rbx)
-    call    app_met_us
+    call    lantern_app_met_us
     sub     APP_MET_START_US(%rbx), %rax
     mov     %rax, (APP_MET_PROCESS + MetricsProcess_uptime_us)(%rbx)
     mov     APP_ENGINE(%rbx), %rax
@@ -6114,14 +6114,14 @@ LOCAL_FUNCTION app_met_sources
     movq    $0, (APP_MET_SOURCES + MetricsSources_gossip)(%rbx)
     movq    $0, (APP_MET_SOURCES + MetricsSources_profile)(%rbx)
     LEAVE 16
-END_FUNCTION app_met_sources
+END_FUNCTION lantern_app_met_sources
 
 /*
  * L2: the slot index rdi sends more of its answer, while the shell's send buffer has room, in
  * SENDs of at most APP_MET_PIECE bytes; with the last bytes out and none in flight, the connection
  * closes. r12 the slot, r13 the connection, r14 the bytes of a SEND, r15 its action.
  */
-LOCAL_FUNCTION app_met_send
+LOCAL_FUNCTION lantern_app_met_send
     ENTER 0
     imul    $APP_MET_SLOT, %rdi, %r12
     lea     APP_MET_SLOT0(%rbx,%r12), %r12
@@ -6144,7 +6144,7 @@ LOCAL_FUNCTION app_met_send
     mov     $APP_MET_PIECE, %r14d
 3:  lea     (LIBP2P_ACT_SEND_DATA + 7)(%r14), %rdi
     and     $-8, %rdi
-    call    app_met_room
+    call    lantern_app_met_room
     test    %rax, %rax
     jz      8f
     mov     %rax, %r15
@@ -6166,30 +6166,30 @@ LOCAL_FUNCTION app_met_send
 5:  cmpq    $0, 56(%r12)                    # all out: the close once none is in flight
     jne     9f
 8:  mov     %r13, %rdi
-    call    app_met_close
+    call    lantern_app_met_close
 9:  LEAVE 0
-END_FUNCTION app_met_send
+END_FUNCTION lantern_app_met_send
 
 /*
  * L2: the slot index rdi, while it reads: lantern_metrics_answer of its request bytes, in its
  * answer's memory, which doubles while short (APP_MET_TRIES times); then the answer goes. r12 the
  * slot, r13 the index, r14 the tries. Locals: L a size.
  */
-LOCAL_FUNCTION app_met_answer
+LOCAL_FUNCTION lantern_app_met_answer
     ENTER 16
     mov     %rdi, %r13
     imul    $APP_MET_SLOT, %rdi, %r12
     lea     APP_MET_SLOT0(%rbx,%r12), %r12
     cmpq    $APP_MET_READING, 8(%r12)
     jne     9f
-    call    app_met_sources
+    call    lantern_app_met_sources
     xor     %r14d, %r14d
 1:  cmpq    $0, 24(%r12)                    # the answer's memory: APP_MET_OUT at first
     jne     2f
     imul    $APP_MET_SLOT, %r13, %rdi
     add     $(APP_MET_SLOT0 + 24), %rdi
     mov     $APP_MET_OUT, %esi
-    call    app_alloc
+    call    lantern_app_alloc
     test    %rax, %rax
     jz      8f
 2:  mov     24(%r12), %rcx
@@ -6211,11 +6211,11 @@ LOCAL_FUNCTION app_met_answer
     mov     %rsi, L(%rsp)
     imul    $APP_MET_SLOT, %r13, %rdi
     add     $(APP_MET_SLOT0 + 24), %rdi
-    call    app_unmap
+    call    lantern_app_unmap
     imul    $APP_MET_SLOT, %r13, %rdi
     add     $(APP_MET_SLOT0 + 24), %rdi
     mov     L(%rsp), %rsi
-    call    app_alloc
+    call    lantern_app_alloc
     test    %rax, %rax
     jz      8f
     jmp     2b
@@ -6225,14 +6225,14 @@ LOCAL_FUNCTION app_met_answer
     movq    $0, 48(%r12)
     movq    $APP_MET_SENDING, 8(%r12)
     mov     %r13, %rdi
-    call    app_met_send
+    call    lantern_app_met_send
     jmp     9f
 8:  mov     (%r12), %rdi                    # no memory: the connection closes
     shl     $32, %rdi
     or      %r13, %rdi
-    call    app_met_close
+    call    lantern_app_met_close
 9:  LEAVE 16
-END_FUNCTION app_met_answer
+END_FUNCTION lantern_app_met_answer
 
 /*
  * L2: the metrics server's sockets, without waiting (app.md): ACCEPTED takes a free slot (ADOPT) or
@@ -6241,7 +6241,7 @@ END_FUNCTION app_met_answer
  * shell actions go out. rbp the next event, r12 the end, r13 a slot, r14 an index, r15 the
  * connection. Locals: L the wait.
  */
-LOCAL_FUNCTION app_met_poll
+LOCAL_FUNCTION lantern_app_met_poll
     ENTER 16
     cmpq    $0, APP_MET_SHELL(%rbx)
     je      99f
@@ -6270,7 +6270,7 @@ LOCAL_FUNCTION app_met_poll
     inc     %r14
     jmp     2b
 21: mov     $LIBP2P_ACT_REFUSE_SIZE, %edi
-    call    app_met_room
+    call    lantern_app_met_room
     test    %rax, %rax
     jz      79f
     movq    $LIBP2P_ACT_REFUSE_SIZE, (%rax)
@@ -6290,7 +6290,7 @@ LOCAL_FUNCTION app_met_poll
     shl     $32, %r15
     or      %r14, %r15
     mov     $LIBP2P_ACT_ADOPT_SIZE, %edi
-    call    app_met_room
+    call    lantern_app_met_room
     test    %rax, %rax
     jz      79f
     movq    $LIBP2P_ACT_ADOPT_SIZE, (%rax)
@@ -6301,7 +6301,7 @@ LOCAL_FUNCTION app_met_poll
     jmp     79f
 3:  mov     LIBP2P_EV_CONN(%rbp), %r15      # the others: the slot of the connection, at its generation
     mov     %r15, %rdi
-    call    app_met_slot
+    call    lantern_app_met_slot
     test    %rax, %rax
     jz      79f
     mov     %rax, %r13
@@ -6321,7 +6321,7 @@ LOCAL_FUNCTION app_met_poll
     xor     %ecx, %ecx
 41: mov     %rcx, 56(%r13)
     mov     %r14, %rdi
-    call    app_met_send
+    call    lantern_app_met_send
     jmp     79f
 5:  cmp     $LIBP2P_EVENT_RECEIVED, %rax    # RECEIVED while reading: what fits joins the request bytes
     jne     79f
@@ -6339,7 +6339,7 @@ LOCAL_FUNCTION app_met_poll
     lea     LIBP2P_EV_DATA(%rbp), %rsi
     call    lantern_copy
     mov     %r14, %rdi
-    call    app_met_answer
+    call    lantern_app_met_answer
 79: add     (%rbp), %rbp
     jmp     1b
 80: mov     APP_MET_EVENTS(%rbx), %rax      # the idle connections close
@@ -6359,16 +6359,16 @@ LOCAL_FUNCTION app_met_poll
     mov     (%r13), %rdi
     shl     $32, %rdi
     or      %r14, %rdi
-    call    app_met_close
+    call    lantern_app_met_close
 84: add     $APP_MET_SLOT, %r13
     inc     %r14
     jmp     81b
-85: call    app_met_flush
+85: call    lantern_app_met_flush
 99: LEAVE 16
-END_FUNCTION app_met_poll
+END_FUNCTION lantern_app_met_poll
 
 /* L2: each event of the shell becomes a NODE_EV_P2P event of the next step, but those of the engine's connection. rbp the next event, r12 the end. Locals: L the header. */
-LOCAL_FUNCTION app_p2p_events
+LOCAL_FUNCTION lantern_app_p2p_events
     ENTER 16
     mov     APP_SHELL_EVENTS(%rbx), %rax
     mov     8(%rax), %rbp
@@ -6378,18 +6378,18 @@ LOCAL_FUNCTION app_p2p_events
 1:  cmp     %r12, %rbp
     jae     9f
     mov     %rbp, %rdi                      # a datagram of discv5
-    call    app_dv_datagram
+    call    lantern_app_dv_datagram
     test    %rax, %rax
     jz      11f
     AM_INC  dv_in
     jmp     2f
 11:
     mov     %rbp, %rdi                      # the engine's connection
-    call    app_engine_event
+    call    lantern_app_engine_event
     test    %rax, %rax
     jnz     2f
     mov     %rbp, %rdi                      # a builder call's connection
-    call    app_builder_event
+    call    lantern_app_builder_event
     test    %rax, %rax
     jnz     2f
     mov     8(%rbp), %rax                   # the metrics of the transport (app.md)
@@ -6424,28 +6424,28 @@ LOCAL_FUNCTION app_p2p_events
     movq    $NODE_EV_P2P, (L + 8)(%rsp)
     lea     L(%rsp), %rdi
     mov     $16, %esi
-    call    app_event_put
+    call    lantern_app_event_put
     mov     %rbp, %rdi
     mov     (%rbp), %rsi
-    call    app_event_put
+    call    lantern_app_event_put
 2:  add     (%rbp), %rbp
     jmp     1b
 9:  mov     APP_SHELL_EVENTS(%rbx), %rax
     movq    $0, 16(%rax)
-    call    app_builder_due                 # the builder calls: their bytes, ends and time limits
+    call    lantern_app_builder_due                 # the builder calls: their bytes, ends and time limits
     cmpq    $0, APP_ENGINE_DUE(%rbx)        # then more bytes of the request
     je      10f
     movq    $0, APP_ENGINE_DUE(%rbx)
-    call    app_engine_send
+    call    lantern_app_engine_send
 10: LEAVE 16
-END_FUNCTION app_p2p_events
+END_FUNCTION lantern_app_p2p_events
 
 /*
  * L2: the loop: the clock, a NODE_EV_TICK of the time and the shell's events, lantern_node_step
  * with libp2p, a line at each new slot, then a wait for the sockets until the node's wakeup, at
  * most APP_WAIT_MS. Locals: L the time, L+8 the wait, L+16 the NODE_EV_TICK.
  */
-LOCAL_FUNCTION app_loop
+LOCAL_FUNCTION lantern_app_loop
     ENTER 48
 1:  lea     APP_TICK(%rbx), %rdi            # the clocks
     CALL_GLOBAL libp2p_shell_clock
@@ -6457,58 +6457,58 @@ LOCAL_FUNCTION app_loop
     mov     %rax, (L + 32)(%rsp)
     lea     (L + 16)(%rsp), %rdi
     mov     $24, %esi
-    call    app_event_put
-    call    app_p2p_events
+    call    lantern_app_event_put
+    call    lantern_app_p2p_events
     mov     APP_P2P(%rbx), %rdi
     lea     APP_TICK(%rbx), %rsi
-    call    app_step
-    call    app_discv5
+    call    lantern_app_step
+    call    lantern_app_discv5
     mov     APP_STORE(%rbx), %rdi           # a line at each new slot
-    call    app_store_slot
+    call    lantern_app_store_slot
     cmp     APP_LAST_SLOT(%rbx), %rax
     je      3f
     mov     %rax, APP_LAST_SLOT(%rbx)
     mov     %rax, (L + 8)(%rsp)
-    call    app_line_start                  # slot <s>, head 0x<root>, finalized epoch <e>
+    call    lantern_app_line_start                  # slot <s>, head 0x<root>, finalized epoch <e>
     ADDRESS %rdi, app_m_slot
     mov     $app_m_slot_len, %esi
-    call    app_line_text
+    call    lantern_app_line_text
     mov     (L + 8)(%rsp), %rdi
-    call    app_line_u64
+    call    lantern_app_line_u64
     ADDRESS %rdi, app_m_head
     mov     $app_m_head_len, %esi
-    call    app_line_text
+    call    lantern_app_line_text
     mov     APP_NODE(%rbx), %rdi
     add     $Node_head_root, %rdi
     mov     $8, %esi
-    call    app_line_hex
+    call    lantern_app_line_hex
     ADDRESS %rdi, app_m_finalized
     mov     $app_m_finalized_len, %esi
-    call    app_line_text
+    call    lantern_app_line_text
     mov     APP_STORE(%rbx), %rax
     mov     Store_finalized_checkpoint(%rax), %rdi
-    call    app_line_u64
+    call    lantern_app_line_u64
     ADDRESS %rdi, app_m_earliest            # the first slot the node serves blocks and sidecars from: the backfill's
     mov     $app_m_earliest_len, %esi
-    call    app_line_text
+    call    lantern_app_line_text
     mov     APP_NODE(%rbx), %rax
     mov     Node_earliest_slot(%rax), %rdi
-    call    app_line_u64
+    call    lantern_app_line_u64
     mov     $APP_LOG_INFO, %edi
-    call    app_line_end
+    call    lantern_app_line_end
 3:  mov     APP_NODE(%rbx), %rax            # a line when the count of connected peers changes
     mov     (Node_peers + 8)(%rax), %rax
     cmp     APP_PEERS(%rbx), %rax
     je      4f
     mov     %rax, APP_PEERS(%rbx)
-    call    app_line_start                  # peers <n>
+    call    lantern_app_line_start                  # peers <n>
     ADDRESS %rdi, app_m_peers
     mov     $app_m_peers_len, %esi
-    call    app_line_text
+    call    lantern_app_line_text
     mov     APP_PEERS(%rbx), %rdi
-    call    app_line_u64
+    call    lantern_app_line_u64
     mov     $APP_LOG_INFO, %edi
-    call    app_line_end
+    call    lantern_app_line_end
 4:  mov     (APP_RESULT + 8)(%rbx), %rax    # the wait: to the node's or discv5's wakeup, at most APP_WAIT_MS
     mov     APP_DV_WAKE(%rbx), %rcx
     cmp     %rax, %rcx
@@ -6553,17 +6553,17 @@ LOCAL_FUNCTION app_loop
     lea     (L + 8)(%rsp), %rsi
     mov     APP_SHELL_EVENTS(%rbx), %rdx
     CALL_GLOBAL libp2p_shell_wait
-    call    app_api_poll
-    call    app_met_poll
+    call    lantern_app_api_poll
+    call    lantern_app_met_poll
     jmp     1b
-END_FUNCTION app_loop
+END_FUNCTION lantern_app_loop
 
 /* (args): docs/reference/app.md. rbx the App, rbp args. Locals: L the fault. */
 FUNCTION lantern_app_main
     ENTER 16
     mov     %rdi, %rbp
     mov     $APP_SIZE, %edi
-    call    app_map
+    call    lantern_app_map
     test    %rax, %rax
     jz      9f
     mov     %rax, %rbx
@@ -6578,23 +6578,23 @@ FUNCTION lantern_app_main
     CALL_GLOBAL lantern_app_options
     test    %rax, %rax
     jz      1f
-    call    app_line_start                  # faulty option at argument <n>
+    call    lantern_app_line_start                  # faulty option at argument <n>
     ADDRESS %rdi, app_m_option
     mov     $app_m_option_len, %esi
-    call    app_line_text
+    call    lantern_app_line_text
     mov     L(%rsp), %rdi
-    call    app_line_u64
+    call    lantern_app_line_u64
     mov     $APP_LOG_ERROR, %edi
-    call    app_line_end
+    call    lantern_app_line_end
     mov     $1, %eax
     LEAVE 16
-1:  call    app_start
+1:  call    lantern_app_start
     test    %rax, %rax
     jnz     8f
-    call    app_net
+    call    lantern_app_net
     test    %rax, %rax
     jnz     8f
-    call    app_loop
+    call    lantern_app_loop
 8:  LEAVE 16
 9:  mov     $2, %eax
     LEAVE 16

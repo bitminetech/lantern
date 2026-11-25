@@ -142,7 +142,7 @@ FUNCTION lantern_reqresp_protocol_id
 END_FUNCTION lantern_reqresp_protocol_id
 
 /* L0: a0 = the chunk bound of a0 payload bytes: 25 + n + 8 * ceil(n / 65536); a1 = 1 on overflow, else 0. Uses t0, t1. */
-LOCAL_FUNCTION chunk_bound
+LOCAL_FUNCTION lantern_chunk_bound
     UNWIND_END_PROLOGUE
     srli    t0, a0, 16
     slli    t1, a0, 48
@@ -155,13 +155,13 @@ LOCAL_FUNCTION chunk_bound
     add     a0, t1, t0
     sltu    a1, a0, t1
 1:  ret
-END_FUNCTION chunk_bound
+END_FUNCTION lantern_chunk_bound
 
 FUNCTION lantern_reqresp_chunk_size
     FRAME 16
     sd      a1, F(sp)
     ld      a0, 0(a0)
-    call    chunk_bound
+    call    lantern_chunk_bound
     bnez    a1, 9f
     ld      a1, F(sp)
     sd      a0, 0(a1)
@@ -183,7 +183,7 @@ FUNCTION lantern_reqresp_write_chunk
     mv      s4, a3
     ld      s5, 16(s2)
     mv      a0, s5
-    call    chunk_bound
+    call    lantern_chunk_bound
     bnez    a1, 8f
     ld      t0, 0(s4)                       # room in out: size - offset - count
     ld      t1, 8(s4)
@@ -405,7 +405,7 @@ END_FUNCTION lantern_reqresp_read_payload
  * L0: (a0 descriptor, a1 node) -> a0 min, a1 max, saturating at 2^64 - 1.
  * s1 descriptor, s2 node, s3 length or the last field, s4 element or field, s5 min, s6 max.
  */
-LOCAL_FUNCTION size_bounds
+LOCAL_FUNCTION lantern_size_bounds
     ENTER 0
     mv      s1, a0
     li      t0, SSZ_NODE_STRIDE
@@ -434,7 +434,7 @@ LOCAL_FUNCTION size_bounds
     ld      s4, SSZ_NODE_ELEMENT(s2)        # a list or a vector: its element
     mv      a0, s1
     mv      a1, s4
-    call    size_bounds
+    call    lantern_size_bounds
     mv      s5, a0
     mv      s6, a1
     li      t0, SSZ_NODE_STRIDE
@@ -475,7 +475,7 @@ LOCAL_FUNCTION size_bounds
     andi    t1, t1, SSZ_FIELD_VARIABLE
     beqz    t1, 7f
     mv      a0, s1
-    call    size_bounds                     # a variable field: its offset and its bounds
+    call    lantern_size_bounds                     # a variable field: its offset and its bounds
     li      t0, 4
     SAT_ADD a0, t0
     SAT_ADD a1, t0
@@ -496,13 +496,13 @@ LOCAL_FUNCTION size_bounds
 8:  mv      a0, s5
     mv      a1, s6
 9:  LEAVE 0
-END_FUNCTION size_bounds
+END_FUNCTION lantern_size_bounds
 
 FUNCTION lantern_ssz_size_bounds
     FRAME 16
     sd      a1, F(sp)
     ld      a1, SSZ_DESC_ROOT(a0)
-    call    size_bounds
+    call    lantern_size_bounds
     ld      t0, F(sp)
     sd      a0, 0(t0)
     sd      a1, 8(t0)

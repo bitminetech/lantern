@@ -130,7 +130,7 @@ FUNCTION lantern_reqresp_protocol_id
 END_FUNCTION lantern_reqresp_protocol_id
 
 /* L0: x0 = the chunk bound of x0 payload bytes: 25 + n + 8 * ceil(n / 65536); carry set on overflow. Uses x9. */
-LOCAL_FUNCTION chunk_bound
+LOCAL_FUNCTION lantern_chunk_bound
     UNWIND_END_PROLOGUE
     lsr     x9, x0, #16
     tst     x0, #0xffff
@@ -139,13 +139,13 @@ LOCAL_FUNCTION chunk_bound
     b.cs    1f
     adds    x0, x0, x9, lsl #3
 1:  ret
-END_FUNCTION chunk_bound
+END_FUNCTION lantern_chunk_bound
 
 FUNCTION lantern_reqresp_chunk_size
     FRAME 16
     str     x1, [sp, #16]
     ldr     x0, [x0]
-    bl      chunk_bound
+    bl      lantern_chunk_bound
     b.cs    9f
     ldr     x1, [sp, #16]
     str     x0, [x1]
@@ -167,7 +167,7 @@ FUNCTION lantern_reqresp_write_chunk
     mov     x22, x3
     ldr     x23, [x20, #16]
     mov     x0, x23
-    bl      chunk_bound
+    bl      lantern_chunk_bound
     b.cs    8f
     mov     x24, x0
     ldp     x9, x10, [x22, #8]              /* room in out: size - offset - count */
@@ -363,7 +363,7 @@ FUNCTION lantern_reqresp_read_payload
 END_FUNCTION lantern_reqresp_read_payload
 
 /* L0: (x0 descriptor, x1 node) -> x0 min, x1 max, saturating at 2^64 - 1. x19 descriptor, x20 node, x21-x24 work. */
-LOCAL_FUNCTION size_bounds
+LOCAL_FUNCTION lantern_size_bounds
     ENTER 0
     mov     x19, x0
     ldr     x9, [x19, #SSZ_DESC_NODES_OFFSET]
@@ -391,7 +391,7 @@ LOCAL_FUNCTION size_bounds
     ldr     x22, [x20, #SSZ_NODE_ELEMENT]   /* a list or a vector: its element */
     mov     x0, x19
     mov     x1, x22
-    bl      size_bounds
+    bl      lantern_size_bounds
     ldr     x9, [x19, #SSZ_DESC_NODES_OFFSET]
     add     x10, x19, x9
     mov     x9, #SSZ_NODE_STRIDE
@@ -435,7 +435,7 @@ LOCAL_FUNCTION size_bounds
     ldr     x10, [x9, #SSZ_FIELD_FLAGS]
     tbz     x10, #0, 7f
     mov     x0, x19
-    bl      size_bounds                     /* a variable field: its offset and its bounds */
+    bl      lantern_size_bounds                     /* a variable field: its offset and its bounds */
     adds    x0, x0, #4
     csinv   x0, x0, xzr, cc
     adds    x1, x1, #4
@@ -456,13 +456,13 @@ LOCAL_FUNCTION size_bounds
 8:  mov     x0, x23
     mov     x1, x24
 9:  LEAVE 0
-END_FUNCTION size_bounds
+END_FUNCTION lantern_size_bounds
 
 FUNCTION lantern_ssz_size_bounds
     FRAME 16
     str     x1, [sp, #16]
     ldr     x1, [x0, #SSZ_DESC_ROOT]
-    bl      size_bounds
+    bl      lantern_size_bounds
     ldr     x9, [sp, #16]
     stp     x0, x1, [x9]
     mov     x0, #LANTERN_OK

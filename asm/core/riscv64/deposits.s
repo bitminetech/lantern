@@ -63,19 +63,19 @@ VALIDATOR_LISTS PART_SPEC
 .endm
 
 /* L0: a0 = the fewest free entries in the validator lists of state a0. */
-LOCAL_FUNCTION validator_room
+LOCAL_FUNCTION lantern_validator_room
     UNWIND_END_PROLOGUE
     li      t0, -1
     VALIDATOR_LISTS LIST_ROOM
     mv      a0, t0
     ret
-END_FUNCTION validator_room
+END_FUNCTION lantern_validator_room
 
 /*
  * L0: a0 = the index of the validator of state a0 with the 48-byte public key at a1, or -1.
  * The key is 4-aligned: request keys sit at offset 20 and 68.
  */
-LOCAL_FUNCTION find_pubkey
+LOCAL_FUNCTION lantern_find_pubkey
     UNWIND_END_PROLOGUE
     PART    t0, t1, a0, BeaconState_validators
     LDU64   a2, a1, 0, t2
@@ -105,7 +105,7 @@ LOCAL_FUNCTION find_pubkey
     j       1b
 3:  li      a0, -1
     ret
-END_FUNCTION find_pubkey
+END_FUNCTION lantern_find_pubkey
 
 /*
  * s1 deposit, s2 config, s3 scratch, s4 out. Locals: L domain type, L+8 zero root,
@@ -247,7 +247,7 @@ SPEC_FUNCTION add_validator_to_registry
     mv      s3, a2
     mv      s4, a3
     mv      a0, s1
-    call    validator_room
+    call    lantern_validator_room
     beqz    a0, 9f
     mv      a0, s1
     addi    a1, sp, (L + 128)
@@ -314,11 +314,11 @@ SPEC_FUNCTION apply_deposit
     bgtu    t2, t3, 9f
     mv      a0, s1
     addi    a1, s2, DepositData_pubkey      # if pubkey not in validator_pubkeys
-    call    find_pubkey
+    call    lantern_find_pubkey
     li      t0, -1
     bne     a0, t0, 5f
     mv      a0, s1                          # room for the validator, before any change
-    call    validator_room
+    call    lantern_validator_room
     beqz    a0, 9f
     mv      a0, s2
     mv      a1, s3
@@ -342,7 +342,7 @@ SPEC_FUNCTION apply_deposit
     sd      zero, (L + 16 + PendingDeposit_slot)(sp)
     mv      a0, s1
     addi    a1, sp, (L + 16)
-    call    append_pending_deposit
+    call    lantern_append_pending_deposit
     j       7f
 8:  li      a0, LANTERN_OK
 7:  LEAVE 208
@@ -364,11 +364,11 @@ SPEC_FUNCTION apply_deposit
     mv      s3, a2
     mv      s4, a3
     addi    a1, s2, DepositData_pubkey      # if pubkey not in validator_pubkeys
-    call    find_pubkey
+    call    lantern_find_pubkey
     li      t0, -1
     bne     a0, t0, 5f
     mv      a0, s1                          # room for the validator, before any change
-    call    validator_room
+    call    lantern_validator_room
     beqz    a0, 9f
     mv      a0, s2
     mv      a1, s3
@@ -410,7 +410,7 @@ SPEC_FUNCTION process_deposit
     sd      zero, 0(s5)
     ld      s6, 0(s4)
     mv      a0, s1                          # room for a new validator, before any change
-    call    validator_room
+    call    lantern_validator_room
     beqz    a0, 9f
     ADDRESS a0, lantern_type_DepositData    # leaf = hash_tree_root(deposit.data)
     ADDQ    a1, s2, Deposit_data
@@ -463,7 +463,7 @@ SPEC_FUNCTION apply_pending_deposit
     mv      s4, a3
     mv      a0, s1
     addi    a1, s2, PendingDeposit_pubkey
-    call    find_pubkey
+    call    lantern_find_pubkey
     li      t0, -1
     bne     a0, t0, 1f
     mv      a0, s2                          # a new public key: a validator when the signature is valid
@@ -509,7 +509,7 @@ SPEC_FUNCTION process_pending_deposits
     mv      s4, a3
     NEED_SCRATCH_B s3, s1, 1, POSTPONE_BYTES, 9f
     mv      a0, s1
-    call    validator_room
+    call    lantern_validator_room
     li      t0, MAX_PENDING_DEPOSITS_PER_EPOCH
     bltu    a0, t0, 9f
     sd      zero, 0(s4)
@@ -567,7 +567,7 @@ SPEC_FUNCTION process_pending_deposits
     call    lantern_copy
     mv      a0, s1
     addi    a1, sp, (L + 40 + PendingDeposit_pubkey)
-    call    find_pubkey
+    call    lantern_find_pubkey
     li      t0, -1
     beq     a0, t0, 3f                      # not exited, not withdrawn
     PART    t0, t1, s1, BeaconState_validators

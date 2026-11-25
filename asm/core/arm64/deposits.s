@@ -62,16 +62,16 @@ VALIDATOR_LISTS PART_SPEC
 .endm
 
 /* L0: x0 = the fewest free entries in the validator lists of state x0. */
-LOCAL_FUNCTION validator_room
+LOCAL_FUNCTION lantern_validator_room
     UNWIND_END_PROLOGUE
     mov     x9, #-1
     VALIDATOR_LISTS LIST_ROOM
     mov     x0, x9
     ret
-END_FUNCTION validator_room
+END_FUNCTION lantern_validator_room
 
 /* L0: x0 = the index of the validator of state x0 with the 48-byte public key at x1, or -1. */
-LOCAL_FUNCTION find_pubkey
+LOCAL_FUNCTION lantern_find_pubkey
     UNWIND_END_PROLOGUE
     PART    x9, x10, x0, BeaconState_validators
     ldp     x2, x3, [x1]
@@ -99,7 +99,7 @@ LOCAL_FUNCTION find_pubkey
     b       1b
 3:  mov     x0, #-1
     ret
-END_FUNCTION find_pubkey
+END_FUNCTION lantern_find_pubkey
 
 /*
  * x19 deposit, x20 config, x21 scratch, x22 out. Locals: L domain type, L+8 zero root,
@@ -241,7 +241,7 @@ SPEC_FUNCTION add_validator_to_registry
     mov     x21, x2
     mov     x22, x3
     mov     x0, x19
-    bl      validator_room
+    bl      lantern_validator_room
     cbz     x0, 9f
     mov     x0, x19
     add     x1, sp, #(L + 128)
@@ -309,11 +309,11 @@ SPEC_FUNCTION apply_deposit
     b.hi    9f
     mov     x0, x19                         /* if pubkey not in validator_pubkeys */
     add     x1, x20, #DepositData_pubkey
-    bl      find_pubkey
+    bl      lantern_find_pubkey
     cmn     x0, #1
     b.ne    5f
     mov     x0, x19                         /* room for the validator, before any change */
-    bl      validator_room
+    bl      lantern_validator_room
     cbz     x0, 9f
     mov     x0, x20
     mov     x1, x21
@@ -337,7 +337,7 @@ SPEC_FUNCTION apply_deposit
     str     xzr, [sp, #(L + 16 + PendingDeposit_slot)]
     mov     x0, x19
     add     x1, sp, #(L + 16)
-    bl      append_pending_deposit
+    bl      lantern_append_pending_deposit
     b       7f
 8:  mov     x0, #LANTERN_OK
 7:  LEAVE 208
@@ -362,11 +362,11 @@ SPEC_FUNCTION apply_deposit
     ldr     x23, [x22]
     mov     x0, x19                         /* if pubkey not in validator_pubkeys */
     add     x1, x20, #DepositData_pubkey
-    bl      find_pubkey
+    bl      lantern_find_pubkey
     cmn     x0, #1
     b.ne    5f
     mov     x0, x19                         /* room for the validator, before any change */
-    bl      validator_room
+    bl      lantern_validator_room
     cbz     x0, 9f
     mov     x0, x20
     mov     x1, x21
@@ -408,7 +408,7 @@ SPEC_FUNCTION process_deposit
     str     xzr, [x23]
     ldr     x24, [x22]
     mov     x0, x19                         /* room for a new validator, before any change */
-    bl      validator_room
+    bl      lantern_validator_room
     cbz     x0, 9f
     ADDRESS x0, lantern_type_DepositData    /* leaf = hash_tree_root(deposit.data) */
     add     x1, x20, #Deposit_data
@@ -461,7 +461,7 @@ SPEC_FUNCTION apply_pending_deposit
     mov     x22, x3
     mov     x0, x19
     add     x1, x20, #PendingDeposit_pubkey
-    bl      find_pubkey
+    bl      lantern_find_pubkey
     cmn     x0, #1
     b.ne    1f
     mov     x0, x20                         /* a new public key: a validator when the signature is valid */
@@ -507,7 +507,7 @@ SPEC_FUNCTION process_pending_deposits
     mov     x22, x3
     NEED_SCRATCH_B x21, x19, 1, POSTPONE_BYTES, 9f
     mov     x0, x19
-    bl      validator_room
+    bl      lantern_validator_room
     cmp     x0, #MAX_PENDING_DEPOSITS_PER_EPOCH
     b.lo    9f
     str     xzr, [x22]
@@ -567,7 +567,7 @@ SPEC_FUNCTION process_pending_deposits
     bl      lantern_copy
     mov     x0, x19
     add     x1, sp, #(L + 40 + PendingDeposit_pubkey)
-    bl      find_pubkey
+    bl      lantern_find_pubkey
     cmn     x0, #1
     b.eq    3f                              /* not exited, not withdrawn */
     PART    x9, x10, x19, BeaconState_validators

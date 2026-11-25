@@ -192,7 +192,7 @@ SPEC_FUNCTION is_valid_merkle_branch
 21: addi    a0, sp, (L + 32)
     li      a1, 64
     addi    a2, sp, L
-    call    sha256_short
+    call    lantern_sha256_short
     addi    s6, s6, 1
     j       1b
 3:  addi    t0, sp, L                       # value == root

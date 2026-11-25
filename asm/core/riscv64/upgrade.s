@@ -183,16 +183,16 @@ STATE_PARTS STATE_PART_COUNT
     mul     a1, t0, t2
     call    lantern_zero
 .elseif (\how) == UP_HEADER_EMPTY
-    call    upgrade_empty_header
+    call    lantern_upgrade_empty_header
 .elseif (\how) == UP_HEADER
     PART    a1, a2, s1, PRE_BeaconState_latest_execution_payload_header
-    call    upgrade_header
+    call    lantern_upgrade_header
 .endif
 .endm
 
 .if FORK == FORK_BELLATRIX
 /* ExecutionPayloadHeader() at a0. Locals: sp+0 the header. */
-LOCAL_FUNCTION upgrade_empty_header
+LOCAL_FUNCTION lantern_upgrade_empty_header
     FRAME 16
     sd      a0, 0(sp)
     li      a1, ExecutionPayloadHeader__fixed
@@ -202,7 +202,7 @@ LOCAL_FUNCTION upgrade_empty_header
     sd      t0, 0(a0)                       # its size
     STQ     t0, a0, ExecutionPayloadHeader_extra_data   # the empty extra_data part, after the fixed fields
     UNFRAME 16
-END_FUNCTION upgrade_empty_header
+END_FUNCTION lantern_upgrade_empty_header
 .endif
 
 .if FORK == FORK_CAPELLA || FORK == FORK_DENEB
@@ -236,7 +236,7 @@ END_FUNCTION upgrade_empty_header
 .endm
 
 /* The header of the fork at a0 from the header a1 of the fork before: its fields and extra_data, the new fields zero. */
-LOCAL_FUNCTION upgrade_header
+LOCAL_FUNCTION lantern_upgrade_header
     FRAME 16
     sd      a0, 0(sp)
     sd      a1, 8(sp)
@@ -256,12 +256,12 @@ LOCAL_FUNCTION upgrade_header
     add     a0, a0, t0
     call    lantern_copy
     UNFRAME 16
-END_FUNCTION upgrade_header
+END_FUNCTION lantern_upgrade_header
 .endif
 
 .if FORK == FORK_ELECTRA
 /* L0: a0 = the pending deposits that upgrade_to_electra appends for the state before a0. A leaf. */
-LOCAL_FUNCTION upgrade_deposit_count
+LOCAL_FUNCTION lantern_upgrade_deposit_count
     UNWIND_END_PROLOGUE
     PART    a1, a2, a0, PRE_BeaconState_validators
     PART    a3, a4, a0, PRE_BeaconState_balances
@@ -282,7 +282,7 @@ LOCAL_FUNCTION upgrade_deposit_count
     addi    a2, a2, -1
     j       1b
 3:  ret
-END_FUNCTION upgrade_deposit_count
+END_FUNCTION lantern_upgrade_deposit_count
 
 /* dst = 1 when the key of validator index a is above that of b, else 0; the key is (activation_eligibility_epoch, index). Uses t5, t6. */
 .macro KEY_GT dst, a, b
@@ -330,7 +330,7 @@ END_FUNCTION upgrade_deposit_count
 .endm
 
 /* L0: sort the a1 validator indices at a0 by (activation_eligibility_epoch, index) of the validators at a2 (heapsort). A leaf. */
-LOCAL_FUNCTION sort_by_eligibility
+LOCAL_FUNCTION lantern_sort_by_eligibility
     UNWIND_END_PROLOGUE
     li      t0, 2
     bltu    a1, t0, 9f
@@ -353,7 +353,7 @@ LOCAL_FUNCTION sort_by_eligibility
     ELIGIBILITY_SIFT a4, a5
     j       3b
 9:  ret
-END_FUNCTION sort_by_eligibility
+END_FUNCTION lantern_sort_by_eligibility
 
 .if (Validator_pubkey != PendingDeposit_pubkey) || (Validator_withdrawal_credentials != PendingDeposit_withdrawal_credentials) || (PendingDeposit_amount != 80)
 .error "upgrade_to_electra copies the pubkey and credentials of a Validator into a PendingDeposit in one block"
@@ -368,7 +368,7 @@ SPEC_FUNCTION upgrade_size
     mv      s2, a1
     mv      s3, a2
 .if FORK == FORK_ELECTRA
-    call    upgrade_deposit_count
+    call    lantern_upgrade_deposit_count
     mv      s8, a0
 .endif
     li      s6, BeaconState__fixed
@@ -530,7 +530,7 @@ SPEC_FUNCTION \name
     LDQ     s7, s1, PRE_BeaconState_validators + 8
 .if FORK == FORK_ELECTRA
     mv      a0, s1
-    call    upgrade_deposit_count
+    call    lantern_upgrade_deposit_count
     mv      s8, a0
 .endif
     addi    a0, s5, 8                       # the fixed part, after out's own size: zero, then the shared fields
@@ -628,7 +628,7 @@ SPEC_FUNCTION \name
     addi    a0, s10, LIST_FIXED             # sorted by (activation_eligibility_epoch, index)
     mv      a1, t3
     PART    a2, t0, s5, BeaconState_validators
-    call    sort_by_eligibility
+    call    lantern_sort_by_eligibility
     addi    a0, sp, (L + 32 + PendingDeposit_signature)   # signature: G2_POINT_AT_INFINITY; slot: GENESIS_SLOT
     li      a1, 96
     call    lantern_zero
@@ -662,7 +662,7 @@ SPEC_FUNCTION \name
     call    lantern_copy
     mv      a0, s5
     addi    a1, sp, (L + 32)
-    call    append_pending_deposit
+    call    lantern_append_pending_deposit
     bnez    a0, 7f
     j       5b
 55: li      s10, 0

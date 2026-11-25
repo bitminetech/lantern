@@ -290,7 +290,7 @@ SPEC_END process_inactivity_updates
 /* ---------------------------------------------------------------- Rewards and penalties */
 
 /* Write count n to an output IndexList and zero its n entries. list x0, n x1. Uses x0-x3. */
-LOCAL_FUNCTION zero_deltas
+LOCAL_FUNCTION lantern_zero_deltas
     UNWIND_END_PROLOGUE
     mov     x2, #LIST_FIXED
     str     x2, [x0, #LIST_OFFSET]
@@ -298,7 +298,7 @@ LOCAL_FUNCTION zero_deltas
     add     x0, x0, #LIST_FIXED
     lsl     x1, x1, #3
     b       lantern_zero
-END_FUNCTION zero_deltas
+END_FUNCTION lantern_zero_deltas
 
 .if FORK >= FORK_ALTAIR
 /*
@@ -327,10 +327,10 @@ SPEC_FUNCTION get_flag_index_deltas
     b.lo    9f
     mov     x0, x22
     mov     x1, x24
-    bl      zero_deltas
+    bl      lantern_zero_deltas
     mov     x0, x23
     mov     x1, x24
-    bl      zero_deltas
+    bl      lantern_zero_deltas
     ldr     x9, [x21]
     str     x9, [sp, #(L + 88)]             /* the scratch size on entry */
     mov     x0, x19
@@ -477,10 +477,10 @@ SPEC_FUNCTION get_inactivity_penalty_deltas
     b.lo    9f
     mov     x0, x22
     mov     x1, x24
-    bl      zero_deltas
+    bl      lantern_zero_deltas
     mov     x0, x23
     mov     x1, x24
-    bl      zero_deltas
+    bl      lantern_zero_deltas
     ldr     x9, [x21]
     str     x9, [sp, #(L + 40)]             /* the scratch size on entry */
     mov     x0, x19
@@ -1617,13 +1617,13 @@ SPEC_FUNCTION process_epoch
     NEED_SCRATCH_B x21, x19, EPOCH_LISTS, EPOCH_EXTRA, 9f
 .if FORK >= FORK_ELECTRA
     mov     x0, x19                         /* room for the deposits of the epoch */
-    bl      validator_room
+    bl      lantern_validator_room
     cmp     x0, #MAX_PENDING_DEPOSITS_PER_EPOCH
     b.lo    9f
 .endif
 .if FORK == FORK_PHASE0
     mov     x0, x19                         /* room for the current epoch's attestations in the previous list */
-    bl      record_room
+    bl      lantern_record_room
     cbnz    x0, 9f
 .endif
     mov     x0, x19                         /* and for a historical batch root or summary when one is due */

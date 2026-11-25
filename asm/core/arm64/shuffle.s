@@ -3,7 +3,7 @@
  */
 
 /* L0: digest x2 = sha256 of the x1 bytes at x0; x1 is at most 96. */
-LOCAL_FUNCTION sha256_short
+LOCAL_FUNCTION lantern_sha256_short
     FRAME 128
     add     x9, sp, #16                     /* a ByteList: size, offset 24, count, then the bytes */
     add     x10, x1, #24
@@ -22,7 +22,7 @@ LOCAL_FUNCTION sha256_short
     CALL_GLOBAL crypto_sha256
     mov     x0, #LANTERN_OK
     UNFRAME 128
-END_FUNCTION sha256_short
+END_FUNCTION lantern_sha256_short
 
 /*
  * x19 index count, x20 seed, x21 scratch, x22 out, x23 entries, x24 round, x25 pivot,
@@ -66,7 +66,7 @@ SPEC_FUNCTION compute_shuffled_permutation
     add     x0, sp, #L                      /* pivot = bytes_to_uint64(sha256(seed + round_bytes)[0:8]) % index_count */
     mov     x1, #33
     add     x2, sp, #(L + 40)
-    bl      sha256_short
+    bl      lantern_sha256_short
     ldr     x9, [sp, #(L + 40)]
     udiv    x10, x9, x19
     msub    x25, x10, x19, x9
@@ -77,7 +77,7 @@ SPEC_FUNCTION compute_shuffled_permutation
     add     x0, sp, #L
     mov     x1, #37
     add     x2, x27, x28, lsl #5
-    bl      sha256_short
+    bl      lantern_sha256_short
     add     x28, x28, #1
     b       3b
 4:  mov     x9, #0                          /* for i in range(index_count) */
@@ -129,7 +129,7 @@ SPEC_FUNCTION compute_shuffled_index
     add     x0, sp, #L                      /* pivot = bytes_to_uint64(sha256(seed + round_bytes)[0:8]) % index_count */
     mov     x1, #33
     add     x2, sp, #(L + 40)
-    bl      sha256_short
+    bl      lantern_sha256_short
     ldr     x9, [sp, #(L + 40)]
     udiv    x10, x9, x20
     msub    x9, x10, x20, x9
@@ -145,7 +145,7 @@ SPEC_FUNCTION compute_shuffled_index
     add     x0, sp, #L                      /* source = sha256(seed + round_bytes + position_bytes) */
     mov     x1, #37
     add     x2, sp, #(L + 40)
-    bl      sha256_short
+    bl      lantern_sha256_short
     ubfx    x9, x24, #3, #5                 /* source[(position % 256) // 8] */
     add     x10, sp, #(L + 40)
     ldrb    w9, [x10, x9]
@@ -180,7 +180,7 @@ SPEC_FUNCTION get_seed
     add     x0, sp, #16
     mov     x1, #44
     ldr     x2, [sp, #72]
-    bl      sha256_short
+    bl      lantern_sha256_short
     UNFRAME 64
 8:  mov     x0, #LANTERN_INVALID_OVERFLOW
     UNFRAME 64
@@ -218,7 +218,7 @@ SPEC_FUNCTION compute_proposer_index
     add     x0, sp, #(PI_L + 96)
     mov     x1, #33
     add     x2, sp, #(PI_L + 136)
-    bl      sha256_short
+    bl      lantern_sha256_short
     ldr     x9, [sp, #(PI_L + 136)]
     udiv    x10, x9, x25
     msub    x9, x10, x25, x9
@@ -247,7 +247,7 @@ SPEC_FUNCTION compute_proposer_index
     add     x0, sp, #(PI_L + 96)               /* source = sha256(seed + round_bytes + position_bytes) */
     mov     x1, #37
     add     x2, sp, #(PI_L + 136)
-    bl      sha256_short
+    bl      lantern_sha256_short
     ldr     x9, [sp, #(PI_L + 8)]
     ubfx    x10, x9, #3, #5                 /* source[(position % 256) // 8] */
     add     x11, sp, #(PI_L + 136)
@@ -270,7 +270,7 @@ SPEC_FUNCTION compute_proposer_index
     add     x0, sp, #(PI_L + 24)
     mov     x1, #40
     add     x2, sp, #(PI_L + 64)
-    bl      sha256_short
+    bl      lantern_sha256_short
 13: and     x9, x24, #15
     lsl     x9, x9, #1
     add     x10, sp, #(PI_L + 64)
@@ -294,7 +294,7 @@ SPEC_FUNCTION compute_proposer_index
     add     x0, sp, #(PI_L + 24)
     mov     x1, #40
     add     x2, sp, #(PI_L + 64)
-    bl      sha256_short
+    bl      lantern_sha256_short
 14: and     x9, x24, #31
     add     x10, sp, #(PI_L + 64)
     ldrb    w9, [x10, x9]                   /* random_byte */
@@ -350,7 +350,7 @@ SPEC_FUNCTION compute_proposer_indices
     add     x0, sp, #(L + 8)
     mov     x1, #40
     add     x2, sp, #(L + 48)
-    bl      sha256_short
+    bl      lantern_sha256_short
     str     x26, [x22]
     mov     x0, x19
     mov     x1, x21

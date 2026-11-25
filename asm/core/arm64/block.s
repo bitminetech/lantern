@@ -41,7 +41,7 @@ SPEC_FUNCTION get_beacon_proposer_index
     add     x0, sp, #(L + 16)
     mov     x1, #40
     add     x2, sp, #(L + 56)
-    bl      sha256_short
+    bl      lantern_sha256_short
     LDQ     x9, x19, BeaconState_validators + 8
     SCRATCH_LIST x23, x20, x22, 0, x9       /* indices: the last list */
     mov     x0, x19                         /* indices = get_active_validator_indices(state, epoch) */

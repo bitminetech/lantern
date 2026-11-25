@@ -180,16 +180,16 @@ STATE_PARTS STATE_PART_COUNT
     imul    $(\stride), %rax, %rsi
     call    lantern_zero
 .elseif (\how) == UP_HEADER_EMPTY
-    call    upgrade_empty_header
+    call    lantern_upgrade_empty_header
 .elseif (\how) == UP_HEADER
     PART    %rsi, %rdx, %rbx, PRE_BeaconState_latest_execution_payload_header
-    call    upgrade_header
+    call    lantern_upgrade_header
 .endif
 .endm
 
 .if FORK == FORK_BELLATRIX
 /* ExecutionPayloadHeader() at rdi. Locals: rsp+0 the header. */
-LOCAL_FUNCTION upgrade_empty_header
+LOCAL_FUNCTION lantern_upgrade_empty_header
     FRAME 16
     mov     %rdi, 0(%rsp)
     MOVQ    %rsi, ExecutionPayloadHeader__fixed
@@ -198,7 +198,7 @@ LOCAL_FUNCTION upgrade_empty_header
     movq    $ExecutionPayloadHeader__fixed, (%rdi)  # its size
     movq    $ExecutionPayloadHeader__fixed, ExecutionPayloadHeader_extra_data(%rdi)    # the empty extra_data part, after the fixed fields
     UNFRAME 16
-END_FUNCTION upgrade_empty_header
+END_FUNCTION lantern_upgrade_empty_header
 .endif
 
 .if FORK == FORK_CAPELLA || FORK == FORK_DENEB
@@ -232,7 +232,7 @@ END_FUNCTION upgrade_empty_header
 .endm
 
 /* The header of the fork at rdi from the header rsi of the fork before: its fields and extra_data, the new fields zero. */
-LOCAL_FUNCTION upgrade_header
+LOCAL_FUNCTION lantern_upgrade_header
     FRAME 16
     mov     %rdi, 0(%rsp)
     mov     %rsi, 8(%rsp)
@@ -250,12 +250,12 @@ LOCAL_FUNCTION upgrade_header
     add     $ExecutionPayloadHeader__fixed, %rdi
     call    lantern_copy
     UNFRAME 16
-END_FUNCTION upgrade_header
+END_FUNCTION lantern_upgrade_header
 .endif
 
 .if FORK == FORK_ELECTRA
 /* L0: rax = the pending deposits that upgrade_to_electra appends for the state before rdi. A leaf. */
-LOCAL_FUNCTION upgrade_deposit_count
+LOCAL_FUNCTION lantern_upgrade_deposit_count
     UNWIND_END_PROLOGUE
     PART    %rsi, %rcx, %rdi, PRE_BeaconState_validators
     PART    %rdx, %r8, %rdi, PRE_BeaconState_balances
@@ -275,7 +275,7 @@ LOCAL_FUNCTION upgrade_deposit_count
     dec     %rcx
     jmp     1b
 3:  ret
-END_FUNCTION upgrade_deposit_count
+END_FUNCTION lantern_upgrade_deposit_count
 
 /* Flags: ja when the key of validator index a is above that of b; the key is (activation_eligibility_epoch, index). Uses r10, r11. */
 .macro ELIGIBILITY_CMP a, b
@@ -316,7 +316,7 @@ END_FUNCTION upgrade_deposit_count
 .endm
 
 /* Sort the rsi validator indices at rdi by (activation_eligibility_epoch, index) of the validators at rdx (heapsort). r12 the loop. */
-LOCAL_FUNCTION sort_by_eligibility
+LOCAL_FUNCTION lantern_sort_by_eligibility
     ENTER 0
     cmp     $2, %rsi
     jb      9f
@@ -339,7 +339,7 @@ LOCAL_FUNCTION sort_by_eligibility
     ELIGIBILITY_SIFT %rcx, %r12
     jmp     3b
 9:  LEAVE 0
-END_FUNCTION sort_by_eligibility
+END_FUNCTION lantern_sort_by_eligibility
 
 .if (Validator_pubkey != PendingDeposit_pubkey) || (Validator_withdrawal_credentials != PendingDeposit_withdrawal_credentials) || (PendingDeposit_amount != 80)
 .error "upgrade_to_electra copies the pubkey and credentials of a Validator into a PendingDeposit in one block"
@@ -354,7 +354,7 @@ SPEC_FUNCTION upgrade_size
     mov     %rsi, %rbp
     mov     %rdx, %r12
 .if FORK == FORK_ELECTRA
-    call    upgrade_deposit_count
+    call    lantern_upgrade_deposit_count
     mov     %rax, S8(%rsp)
 .endif
     MOVQ    %r15, BeaconState__fixed
@@ -515,7 +515,7 @@ SPEC_FUNCTION \name
     mov     %rax, S7(%rsp)
 .if FORK == FORK_ELECTRA
     mov     %rbx, %rdi
-    call    upgrade_deposit_count
+    call    lantern_upgrade_deposit_count
     mov     %rax, S8(%rsp)
 .endif
     lea     8(%r14), %rdi                   # the fixed part, after out's own size: zero, then the shared fields
@@ -625,7 +625,7 @@ SPEC_FUNCTION \name
     mov     %rdi, %rsi                      # sorted by (activation_eligibility_epoch, index)
     lea     LIST_FIXED(%rax), %rdi
     PART    %rdx, %r8, %r14, BeaconState_validators
-    call    sort_by_eligibility
+    call    lantern_sort_by_eligibility
     lea     (L + 32 + PendingDeposit_signature)(%rsp), %rdi    # signature: G2_POINT_AT_INFINITY; slot: GENESIS_SLOT
     mov     $96, %esi
     call    lantern_zero
@@ -654,7 +654,7 @@ SPEC_FUNCTION \name
     call    lantern_copy
     mov     %r14, %rdi
     lea     (L + 32)(%rsp), %rsi
-    call    append_pending_deposit
+    call    lantern_append_pending_deposit
     test    %rax, %rax
     jnz     7f
     jmp     5b

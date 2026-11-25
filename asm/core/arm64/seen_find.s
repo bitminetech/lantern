@@ -4,7 +4,7 @@
  */
 
 /* L0: x0 = the SeenBlock of root x1 in seen x0, or 0. A leaf; uses x2-x9. */
-LOCAL_FUNCTION seen_find_block
+LOCAL_FUNCTION lantern_seen_find_block
     UNWIND_END_PROLOGUE
     PART    x2, x3, x0, Seen_blocks
     ldp     x4, x5, [x1]
@@ -25,4 +25,4 @@ LOCAL_FUNCTION seen_find_block
     ret
 4:  mov     x0, x2
     ret
-END_FUNCTION seen_find_block
+END_FUNCTION lantern_seen_find_block

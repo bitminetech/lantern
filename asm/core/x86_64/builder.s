@@ -79,7 +79,7 @@ bld_hex_digits:
     .ascii  "0123456789abcdef"
 
 # L0: rax = the count of decimal digits of rdi. Uses rcx, rdx, r8.
-LOCAL_FUNCTION bld_digits
+LOCAL_FUNCTION lantern_bld_digits
     UNWIND_END_PROLOGUE
     mov     %rdi, %rax
     mov     $1, %ecx
@@ -92,14 +92,14 @@ LOCAL_FUNCTION bld_digits
     jmp     1b
 2:  mov     %rcx, %rax
     ret
-END_FUNCTION bld_digits
+END_FUNCTION lantern_bld_digits
 
 # L1: rax = the cursor rdi past the decimal digits of rsi, written there. Uses rcx, rdx, r8-r11.
-LOCAL_FUNCTION bld_dec
+LOCAL_FUNCTION lantern_bld_dec
     FRAME 0
     mov     %rdi, %r10                      # the start
     mov     %rsi, %rdi
-    call    bld_digits
+    call    lantern_bld_digits
     lea     (%r10,%rax), %r9                # the end; the digits from the last back
     mov     %r9, %r11
     mov     %rsi, %rax
@@ -113,10 +113,10 @@ LOCAL_FUNCTION bld_dec
     ja      1b
     mov     %r9, %rax
     UNFRAME 0
-END_FUNCTION bld_dec
+END_FUNCTION lantern_bld_dec
 
 # L0: rax = the cursor rdi past the lower case hex digits of the rdx bytes at rsi, written there. Uses rcx, r8, r9.
-LOCAL_FUNCTION bld_hex
+LOCAL_FUNCTION lantern_bld_hex
     UNWIND_END_PROLOGUE
     ADDRESS %r9, bld_hex_digits
 1:  test    %rdx, %rdx
@@ -135,10 +135,10 @@ LOCAL_FUNCTION bld_hex
     jmp     1b
 2:  mov     %rdi, %rax
     ret
-END_FUNCTION bld_hex
+END_FUNCTION lantern_bld_hex
 
 # L1: rax = the cursor rdi past the rdx bytes at rsi, copied there. Locals: the cursor, the count.
-LOCAL_FUNCTION bld_put
+LOCAL_FUNCTION lantern_bld_put
     FRAME 16
     mov     %rdi, (%rsp)
     mov     %rdx, 8(%rsp)
@@ -146,11 +146,11 @@ LOCAL_FUNCTION bld_put
     mov     (%rsp), %rax
     add     8(%rsp), %rax
     UNFRAME 16
-END_FUNCTION bld_put
+END_FUNCTION lantern_bld_put
 
 # L0: rax = the index of a free entry of builder_calls (node.md, the builder calls), now of the kind
 # rdi, the NodeApi entry rsi and time_ms; 2^64 - 1 with none free. rbx the node. Uses rcx, rdx.
-LOCAL_FUNCTION node_builder_call
+LOCAL_FUNCTION lantern_node_builder_call
     UNWIND_END_PROLOGUE
     lea     Node_builder_calls(%rbx), %rcx
     xor     %eax, %eax
@@ -168,14 +168,14 @@ LOCAL_FUNCTION node_builder_call
     ret
 8:  mov     $-1, %rax
     ret
-END_FUNCTION node_builder_call
+END_FUNCTION lantern_node_builder_call
 
 # L2: the NODE_EV_BUILDER r12 (node.md, the builder calls): a header call still awaited by its
 # produceBlockV3 entry ends there, the answer's bytes in a NODE_ACT_BYTES_PUT to a new id at
 # PRODUCE_BID when the call did not fail and the actions have room; then the call's entry goes
 # free. rbx the node, r15 the actions; r13 the call, r14 its entry; S7 the failure bit, S8 the
 # NodeApi entry.
-LOCAL_FUNCTION node_builder_event
+LOCAL_FUNCTION lantern_node_builder_event
     ENTER 0
     mov     %r14, S9(%rsp)                  # the step's scratch
     mov     16(%r12), %rax
@@ -208,11 +208,11 @@ LOCAL_FUNCTION node_builder_event
     jne     8f
     mov     (24 + 16)(%r12), %rdi           # the answer's bytes
     add     $(48 + 7), %rdi
-    call    node_room
+    call    lantern_node_room
     test    %rax, %rax
     jz      8f
     lea     24(%r12), %rdi
-    call    node_put
+    call    lantern_node_put
     mov     S8(%rsp), %rcx
     mov     %rax, (NodeApi_cursor + PRODUCE_BID)(%rcx)
     jmp     8f
@@ -239,22 +239,22 @@ LOCAL_FUNCTION node_builder_event
     jne     22f
     lea     24(%r12), %rdi
     mov     S9(%rsp), %rsi
-    call    bld_status
+    call    lantern_bld_status
     mov     $500, %esi
     mov     $200, %ecx
     cmp     $202, %rax
     cmove   %ecx, %esi
 22: mov     S8(%rsp), %rdi
-    call    node_publish_answer
+    call    lantern_node_publish_answer
     LEAVE 0
 8:  movq    $0, (%r14)
 9:  LEAVE 0
-END_FUNCTION node_builder_event
+END_FUNCTION lantern_node_builder_event
 
 # L2: rax = the status of the HTTP answer in the ByteList rdi (lantern_http_parse_response with eof
 # 1, its body at the end of the scratch rsi), or 0 when it is none. rbx the answer, rbp scratch.
 # Locals: L the HttpResponse (16), L+16 eof, L+24 the scratch size.
-LOCAL_FUNCTION bld_status
+LOCAL_FUNCTION lantern_bld_status
     ENTER 32
     mov     %rdi, %rbx
     mov     %rsi, %rbp
@@ -283,14 +283,14 @@ LOCAL_FUNCTION bld_status
     LEAVE 32
 8:  xor     %eax, %eax
     LEAVE 32
-END_FUNCTION bld_status
+END_FUNCTION lantern_bld_status
 
 # L2: (entry rdi, JSON rsi) -> rax: the submitBlindedBlockV2 call of the publishBlindedBlockV2 entry
 # rdi (node.md, NODE_PUBLISH_SUBMIT), the block's JSON in the ByteList rsi: 0 once it went, the entry
 # in NODE_PUBLISH_SUBMIT with the call + 1 at PUBLISH_CALL; 500 with no builder, no free call or no
 # room. rbx the node, r15 the actions; r12 the entry, r13 the JSON, r14 its bytes, rbp the fork's
 # name; S7 the request's bytes, S8 the call.
-LOCAL_FUNCTION node_publish_submit
+LOCAL_FUNCTION lantern_node_publish_submit
     ENTER 16
     mov     %rdi, %r12
     mov     %rsi, %r13
@@ -298,7 +298,7 @@ LOCAL_FUNCTION node_publish_submit
     jz      8f
     mov     16(%r13), %r14
     mov     %r14, %rdi
-    call    bld_digits
+    call    lantern_bld_digits
     add     Node_builder_host_len(%rbx), %rax
     add     $BLD_SUBMIT_FIXED, %rax
     add     %r14, %rax
@@ -310,7 +310,7 @@ LOCAL_FUNCTION node_publish_submit
     add     %rcx, %rax
     mov     %rax, S7(%rsp)
     lea     (48 + 7)(%rax), %rdi
-    call    node_room
+    call    lantern_node_room
     test    %rax, %rax
     jz      8f
     PART    %rcx, %rdx, %rbx, Node_api
@@ -321,7 +321,7 @@ LOCAL_FUNCTION node_publish_submit
     div     %rcx
     mov     %rax, %rsi
     mov     $NODE_BUILDER_SUBMIT, %edi
-    call    node_builder_call
+    call    lantern_node_builder_call
     cmp     $-1, %rax
     je      8f
     mov     %rax, S8(%rsp)
@@ -332,7 +332,7 @@ LOCAL_FUNCTION node_publish_submit
     add     $(48 + 7), %rsi
     and     $-8, %rsi
     mov     $NODE_ACT_BUILDER, %edi
-    call    node_act
+    call    lantern_node_act
     mov     S8(%rsp), %rcx
     mov     %rcx, 16(%rax)
     mov     (%rax), %rcx
@@ -344,40 +344,40 @@ LOCAL_FUNCTION node_publish_submit
     lea     48(%rax), %rdi
     ADDRESS %rsi, bld_post_blinded
     mov     $bld_post_blinded_len, %edx
-    call    bld_put
+    call    lantern_bld_put
     mov     %rax, %rdi
     lea     Node_builder_host(%rbx), %rsi
     mov     Node_builder_host_len(%rbx), %rdx
-    call    bld_put
+    call    lantern_bld_put
     mov     %rax, %rdi
     ADDRESS %rsi, bld_submit_1
     mov     $bld_submit_1_len, %edx
-    call    bld_put
+    call    lantern_bld_put
     mov     %rax, %rdi
     lea     1(%rbp), %rsi
     movzbl  (%rbp), %edx
-    call    bld_put
+    call    lantern_bld_put
     mov     %rax, %rdi
     ADDRESS %rsi, bld_submit_2
     mov     $bld_submit_2_len, %edx
-    call    bld_put
+    call    lantern_bld_put
     mov     %rax, %rdi
     mov     %r14, %rsi
-    call    bld_dec
+    call    lantern_bld_dec
     mov     %rax, %rdi
     ADDRESS %rsi, bld_head_end
     mov     $bld_head_end_len, %edx
-    call    bld_put
+    call    lantern_bld_put
     mov     %rax, %rdi
     mov     8(%r13), %rsi
     add     %r13, %rsi
     mov     %r14, %rdx
-    call    bld_put
+    call    lantern_bld_put
     xor     %eax, %eax
     LEAVE 16
 8:  mov     $500, %eax
     LEAVE 16
-END_FUNCTION node_publish_submit
+END_FUNCTION lantern_node_publish_submit
 
 # L2: on the way into NODE_PRODUCE_PAYLOAD of the produceBlockV3 entry rdi (node.md, Block
 # production), the event rsi of its PRODUCE_CHECK and the head's block_hash at rdx: with
@@ -387,7 +387,7 @@ END_FUNCTION node_publish_submit
 # keeps the call + 1 and the registration's fee recipient. None with no free call or no room in
 # the actions. rbx the node, r15 the actions; r12 the entry, r13 the event, r14 the hash, rbp the
 # NodeProposer; S7 the request's bytes, S8 the call.
-LOCAL_FUNCTION node_produce_header
+LOCAL_FUNCTION lantern_node_produce_header
     ENTER 16
     mov     %rdi, %r12
     mov     %rsi, %r13
@@ -410,18 +410,18 @@ LOCAL_FUNCTION node_produce_header
     dec     %rcx
     jmp     1b
 3:  lea     Node_head_root(%rbx), %rdi      # the head is not optimistic
-    call    node_find_block
+    call    lantern_node_find_block
     cmp     $-1, %rax
     je      9f
     cmpq    $PAYLOAD_STATUS_NOT_VALIDATED, NodeBlock_payload_status(%rdx)
     je      9f
     mov     NodeApi_slot(%r12), %rdi        # the request's bytes
-    call    bld_digits
+    call    lantern_bld_digits
     add     Node_builder_host_len(%rbx), %rax
     add     $BLD_GET_FIXED, %rax
     mov     %rax, S7(%rsp)
     lea     (48 + 7)(%rax), %rdi
-    call    node_room
+    call    lantern_node_room
     test    %rax, %rax
     jz      9f
     PART    %rcx, %rdx, %rbx, Node_api
@@ -432,7 +432,7 @@ LOCAL_FUNCTION node_produce_header
     div     %rcx
     mov     %rax, %rsi
     mov     $NODE_BUILDER_HEADER, %edi
-    call    node_builder_call
+    call    lantern_node_builder_call
     cmp     $-1, %rax
     je      9f
     mov     %rax, S8(%rsp)
@@ -446,7 +446,7 @@ LOCAL_FUNCTION node_produce_header
     add     $(48 + 7), %rsi
     and     $-8, %rsi
     mov     $NODE_ACT_BUILDER, %edi
-    call    node_act
+    call    lantern_node_act
     mov     S8(%rsp), %rcx
     mov     %rcx, 16(%rax)
     mov     (%rax), %rcx
@@ -458,43 +458,43 @@ LOCAL_FUNCTION node_produce_header
     lea     48(%rax), %rdi
     ADDRESS %rsi, bld_get_header
     mov     $bld_get_header_len, %edx
-    call    bld_put
+    call    lantern_bld_put
     mov     %rax, %rdi
     mov     NodeApi_slot(%r12), %rsi
-    call    bld_dec
+    call    lantern_bld_dec
     mov     %rax, %rdi
     ADDRESS %rsi, bld_get_0x
     mov     $bld_get_0x_len, %edx
-    call    bld_put
+    call    lantern_bld_put
     mov     %rax, %rdi
     mov     %r14, %rsi
     mov     $32, %edx
-    call    bld_hex
+    call    lantern_bld_hex
     mov     %rax, %rdi
     ADDRESS %rsi, bld_get_0x
     mov     $bld_get_0x_len, %edx
-    call    bld_put
+    call    lantern_bld_put
     mov     %rax, %rdi
     lea     NodeProposer_pubkey(%rbp), %rsi
     mov     $48, %edx
-    call    bld_hex
+    call    lantern_bld_hex
     mov     %rax, %rdi
     ADDRESS %rsi, bld_get_http
     mov     $bld_get_http_len, %edx
-    call    bld_put
+    call    lantern_bld_put
     mov     %rax, %rdi
     lea     Node_builder_host(%rbx), %rsi
     mov     Node_builder_host_len(%rbx), %rdx
-    call    bld_put
+    call    lantern_bld_put
     mov     %rax, %rdi
     ADDRESS %rsi, bld_get_end
     mov     $bld_get_end_len, %edx
-    call    bld_put
+    call    lantern_bld_put
 9:  LEAVE 16
-END_FUNCTION node_produce_header
+END_FUNCTION lantern_node_produce_header
 
 # L0: rax = 1 when the rcx bytes at rdi are the rdx bytes at rsi, else 0. Uses rdi, rsi, rdx.
-LOCAL_FUNCTION bld_same
+LOCAL_FUNCTION lantern_bld_same
     UNWIND_END_PROLOGUE
     cmp     %rcx, %rdx
     jne     8f
@@ -511,7 +511,7 @@ LOCAL_FUNCTION bld_same
     ret
 8:  xor     %eax, %eax
     ret
-END_FUNCTION bld_same
+END_FUNCTION lantern_bld_same
 
 # L2: (answer rdi, scratch rsi, fork rdx) -> rax: the JSON text of the bid in a builder's getHeader
 # answer (node.md, NODE_WORK_PRODUCE_BID): lantern_http_parse_response with eof 1, the body
@@ -522,7 +522,7 @@ END_FUNCTION bld_same
 # LANTERN_BUFFER_TOO_SMALL. rbx the body's end (the JSON scan's), rbp scratch, r12 the fork, r13
 # the body, r14 the version's text or 0, r15 its bytes; S7 the data or 0, S8 its end, S9 the
 # answer. Locals: L the HttpResponse (16), L+16 eof, L+24 a name and its bytes, L+40 the cursor.
-LOCAL_FUNCTION node_bid_data
+LOCAL_FUNCTION lantern_node_bid_data
     ENTER 48
     mov     %rdi, S9(%rsp)
     mov     %rsi, %rbp
@@ -556,14 +556,14 @@ LOCAL_FUNCTION node_bid_data
     add     %rdi, %rbx
     xor     %r14d, %r14d
     movq    $0, S7(%rsp)
-    call    jws
+    call    lantern_jws
     cmp     %rbx, %rdi
     jae     95f
     cmpb    $'{', (%rdi)
     jne     95f
     inc     %rdi
     mov     $1, %esi
-1:  call    jmember
+1:  call    lantern_jmember
     test    %rdi, %rdi
     jz      95f
     test    %rcx, %rcx
@@ -575,13 +575,13 @@ LOCAL_FUNCTION node_bid_data
     mov     %rdx, %rcx
     ADDRESS %rsi, bld_version
     mov     $7, %edx
-    call    bld_same
+    call    lantern_bld_same
     mov     (L + 40)(%rsp), %rdi
     test    %rax, %rax
     jz      2f
     test    %r14, %r14
     jnz     2f
-    call    jstring                         # version: a string with no escape
+    call    lantern_jstring                         # version: a string with no escape
     test    %rdi, %rdi
     jz      95f
     test    %rcx, %rcx
@@ -594,25 +594,25 @@ LOCAL_FUNCTION node_bid_data
     mov     (L + 32)(%rsp), %rcx
     ADDRESS %rsi, bld_data
     mov     $4, %edx
-    call    bld_same
+    call    lantern_bld_same
     mov     (L + 40)(%rsp), %rdi
     test    %rax, %rax
     jz      3f
     cmpq    $0, S7(%rsp)
     jne     3f
     mov     %rdi, S7(%rsp)                  # data: its text
-    call    jskip
+    call    lantern_jskip
     test    %rdi, %rdi
     jz      95f
     mov     %rdi, S8(%rsp)
     xor     %esi, %esi
     jmp     1b
-3:  call    jskip                           # another member: skipped
+3:  call    lantern_jskip                           # another member: skipped
     test    %rdi, %rdi
     jz      95f
     xor     %esi, %esi
     jmp     1b
-5:  call    jws                             # nothing after the object
+5:  call    lantern_jws                             # nothing after the object
     cmp     %rbx, %rdi
     jne     95f
     test    %r14, %r14
@@ -627,7 +627,7 @@ LOCAL_FUNCTION node_bid_data
     inc     %rdi
     mov     %r14, %rsi
     mov     %r15, %rdx
-    call    bld_same
+    call    lantern_bld_same
     test    %rax, %rax
     jz      94f
     xor     %eax, %eax
@@ -645,82 +645,82 @@ LOCAL_FUNCTION node_bid_data
     LEAVE 48
 98: mov     $LANTERN_BUFFER_TOO_SMALL, %eax
     LEAVE 48
-END_FUNCTION node_bid_data
+END_FUNCTION lantern_node_bid_data
 
 # L1: rax = the bytes of the JSON of the SignedValidatorRegistrationV1 at rdi (180 bytes). Locals: the registration, a count.
-LOCAL_FUNCTION bld_reg_len
+LOCAL_FUNCTION lantern_bld_reg_len
     FRAME 16
     mov     %rdi, (%rsp)
     mov     20(%rdi), %rdi                  # gas_limit
-    call    bld_digits
+    call    lantern_bld_digits
     mov     %rax, 8(%rsp)
     mov     (%rsp), %rdi
     mov     28(%rdi), %rdi                  # timestamp
-    call    bld_digits
+    call    lantern_bld_digits
     add     8(%rsp), %rax
     add     $BLD_REG_FIXED, %rax
     UNFRAME 16
-END_FUNCTION bld_reg_len
+END_FUNCTION lantern_bld_reg_len
 
 # L1: rax = the cursor rdi past the JSON of the SignedValidatorRegistrationV1 at rsi, written there
 # (node.md, NODE_WORK_API_SUBMIT of registerValidator). Locals: the registration.
-LOCAL_FUNCTION bld_reg_json
+LOCAL_FUNCTION lantern_bld_reg_json
     FRAME 16
     mov     %rsi, (%rsp)
     ADDRESS %rsi, bld_reg_1
     mov     $bld_reg_1_len, %edx
-    call    bld_put
+    call    lantern_bld_put
     mov     %rax, %rdi
     mov     (%rsp), %rsi                    # fee_recipient
     mov     $20, %edx
-    call    bld_hex
+    call    lantern_bld_hex
     mov     %rax, %rdi
     ADDRESS %rsi, bld_reg_2
     mov     $bld_reg_2_len, %edx
-    call    bld_put
+    call    lantern_bld_put
     mov     %rax, %rdi
     mov     (%rsp), %rsi
     mov     20(%rsi), %rsi                  # gas_limit
-    call    bld_dec
+    call    lantern_bld_dec
     mov     %rax, %rdi
     ADDRESS %rsi, bld_reg_3
     mov     $bld_reg_3_len, %edx
-    call    bld_put
+    call    lantern_bld_put
     mov     %rax, %rdi
     mov     (%rsp), %rsi
     mov     28(%rsi), %rsi                  # timestamp
-    call    bld_dec
+    call    lantern_bld_dec
     mov     %rax, %rdi
     ADDRESS %rsi, bld_reg_4
     mov     $bld_reg_4_len, %edx
-    call    bld_put
+    call    lantern_bld_put
     mov     %rax, %rdi
     mov     (%rsp), %rsi                    # pubkey
     add     $36, %rsi
     mov     $48, %edx
-    call    bld_hex
+    call    lantern_bld_hex
     mov     %rax, %rdi
     ADDRESS %rsi, bld_reg_5
     mov     $bld_reg_5_len, %edx
-    call    bld_put
+    call    lantern_bld_put
     mov     %rax, %rdi
     mov     (%rsp), %rsi                    # signature
     add     $84, %rsi
     mov     $96, %edx
-    call    bld_hex
+    call    lantern_bld_hex
     mov     %rax, %rdi
     ADDRESS %rsi, bld_reg_6
     mov     $bld_reg_6_len, %edx
-    call    bld_put
+    call    lantern_bld_put
     UNFRAME 16
-END_FUNCTION bld_reg_json
+END_FUNCTION lantern_bld_reg_json
 
 # L2: the NODE_EV_WORK_DONE r12 of a NODE_WORK_API_SUBMIT of registerValidator, with
 # NODE_FLAG_BUILDER (node.md): a NODE_BUILDER_REGISTER call of the JSON array of the registrations
 # of LANTERN_VALID; none with none, with no free call, or with no room in the actions. rbx the
 # node, r15 the actions; r13 a record, r14 the records left, rbp the body's bytes, S7 the valid
 # ones, S8 the request's bytes, S9 the call, S10 the cursor.
-LOCAL_FUNCTION node_builder_register
+LOCAL_FUNCTION lantern_node_builder_register
     ENTER 0
     testq   $NODE_FLAG_BUILDER, Node_flags(%rbx)
     jz      9f
@@ -737,7 +737,7 @@ LOCAL_FUNCTION node_builder_register
     jne     11f
     mov     (16 + 8)(%r13), %rdi
     lea     16(%r13,%rdi), %rdi
-    call    bld_reg_len
+    call    lantern_bld_reg_len
     add     %rax, %rbp
     cmpq    $0, S7(%rsp)
     je      12f
@@ -750,18 +750,18 @@ LOCAL_FUNCTION node_builder_register
 2:  cmpq    $0, S7(%rsp)
     je      9f
     mov     %rbp, %rdi                      # the request: the head, then the body
-    call    bld_digits
+    call    lantern_bld_digits
     add     Node_builder_host_len(%rbx), %rax
     add     $BLD_HEAD_FIXED, %rax
     add     %rbp, %rax
     mov     %rax, S8(%rsp)
     lea     (48 + 7)(%rax), %rdi
-    call    node_room
+    call    lantern_node_room
     test    %rax, %rax
     jz      9f
     mov     $NODE_BUILDER_REGISTER, %edi
     mov     $-1, %rsi
-    call    node_builder_call
+    call    lantern_node_builder_call
     cmp     $-1, %rax
     je      9f
     mov     %rax, S9(%rsp)
@@ -769,7 +769,7 @@ LOCAL_FUNCTION node_builder_register
     add     $(48 + 7), %rsi
     and     $-8, %rsi
     mov     $NODE_ACT_BUILDER, %edi
-    call    node_act
+    call    lantern_node_act
     mov     S9(%rsp), %rcx
     mov     %rcx, 16(%rax)
     mov     (%rax), %rcx
@@ -781,22 +781,22 @@ LOCAL_FUNCTION node_builder_register
     lea     48(%rax), %rdi
     ADDRESS %rsi, bld_post_validators
     mov     $bld_post_validators_len, %edx
-    call    bld_put
+    call    lantern_bld_put
     mov     %rax, %rdi
     lea     Node_builder_host(%rbx), %rsi
     mov     Node_builder_host_len(%rbx), %rdx
-    call    bld_put
+    call    lantern_bld_put
     mov     %rax, %rdi
     ADDRESS %rsi, bld_head_json
     mov     $bld_head_json_len, %edx
-    call    bld_put
+    call    lantern_bld_put
     mov     %rax, %rdi
     mov     %rbp, %rsi
-    call    bld_dec
+    call    lantern_bld_dec
     mov     %rax, %rdi
     ADDRESS %rsi, bld_head_end
     mov     $bld_head_end_len, %edx
-    call    bld_put
+    call    lantern_bld_put
     movb    $'[', (%rax)
     inc     %rax
     mov     %rax, S10(%rsp)
@@ -819,7 +819,7 @@ LOCAL_FUNCTION node_builder_register
     mov     (16 + 8)(%r13), %rsi
     lea     16(%r13,%rsi), %rsi
     mov     S10(%rsp), %rdi
-    call    bld_reg_json
+    call    lantern_bld_reg_json
     mov     %rax, S10(%rsp)
 31: mov     16(%r13), %rax
     lea     16(%r13,%rax), %r13
@@ -828,21 +828,21 @@ LOCAL_FUNCTION node_builder_register
 4:  mov     S10(%rsp), %rax
     movb    $']', (%rax)
 9:  LEAVE 0
-END_FUNCTION node_builder_register
+END_FUNCTION lantern_node_builder_register
 
 # L1: the registration of LANTERN_VALID at rdi (a ByteList of its 180 SSZ bytes) of the validator rsi
 # (beacon-api.md, registerValidator): its NodeProposer entry takes it, unless the entry holds one of a
 # later timestamp; with none, the first free entry (until_epoch at most the store rbp's epoch,
 # registered 0), else a new one when the part has room; else none. rbx the node. Locals: the bytes,
 # the index, the epoch.
-LOCAL_FUNCTION node_registration_put
+LOCAL_FUNCTION lantern_node_registration_put
     FRAME 32
     mov     8(%rdi), %rax
     add     %rdi, %rax
     mov     %rax, (%rsp)
     mov     %rsi, 8(%rsp)
     mov     %rbp, %rdi
-    call    node_store_slot
+    call    lantern_node_store_slot
     xor     %edx, %edx
     mov     $SLOTS_PER_EPOCH, %ecx
     div     %rcx
@@ -907,7 +907,7 @@ LOCAL_FUNCTION node_registration_put
     mov     $48, %edx
     call    lantern_copy
 9:  UNFRAME 32
-END_FUNCTION node_registration_put
+END_FUNCTION lantern_node_registration_put
 
 # The table slot of the pubkey at key in out: its bytes 8 to 16 and 16 to 24, mixed, and the mask.
 .macro BLD_HASH out, key, mask, t
@@ -927,7 +927,7 @@ END_FUNCTION node_registration_put
 # LANTERN_OK, or LANTERN_BUFFER_TOO_SMALL with no room for the table. rbx state, r12 records, r13
 # count, r14 the table, r15 the mask, rbp a validator; S7 the validators left, S8 its index, S9
 # the epoch.
-LOCAL_FUNCTION node_registrations_find
+LOCAL_FUNCTION lantern_node_registrations_find
     ENTER 0
     mov     %rdi, %rbx
     mov     %rsi, %r12
@@ -1008,4 +1008,4 @@ LOCAL_FUNCTION node_registrations_find
     LEAVE 0
 98: mov     $LANTERN_BUFFER_TOO_SMALL, %eax
     LEAVE 0
-END_FUNCTION node_registrations_find
+END_FUNCTION lantern_node_registrations_find

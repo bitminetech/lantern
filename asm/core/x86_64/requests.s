@@ -5,7 +5,7 @@
 
 .if FORK >= FORK_ELECTRA
 /* Append the PendingDeposit at rsi to state rdi; rax = LANTERN_BUFFER_TOO_SMALL when it has no room. */
-LOCAL_FUNCTION append_pending_deposit
+LOCAL_FUNCTION lantern_append_pending_deposit
     UNWIND_END_PROLOGUE
     mov     BeaconState_pending_deposits(%rdi), %rax
     mov     (BeaconState_pending_deposits + 8)(%rdi), %rcx
@@ -23,7 +23,7 @@ LOCAL_FUNCTION append_pending_deposit
     jmp     lantern_copy
 9:  mov     $LANTERN_BUFFER_TOO_SMALL, %eax
     ret
-END_FUNCTION append_pending_deposit
+END_FUNCTION lantern_append_pending_deposit
 .endif
 
 /* ---------------------------------------------------------------- Voluntary exits and credential changes */
@@ -105,7 +105,7 @@ SPEC_FUNCTION process_voluntary_exit
     lea     SignedVoluntaryExit_signature(%rbp), %rsi
     lea     (L + 56)(%rsp), %rdx
     mov     %r13, %rcx
-    call    verify_root_signature
+    call    lantern_verify_root_signature
     test    %rax, %rax
     jnz     7f
     mov     $LANTERN_INVALID_VOLUNTARY_EXIT, %eax
@@ -133,7 +133,7 @@ SPEC_END process_voluntary_exit
  * rdx a 56-byte buffer whose last 32 bytes hold the root (its first 24 become a
  * ByteList header), rcx scratch. Returns rax status, rdx valid. Locals: rsp+0 valid.
  */
-LOCAL_FUNCTION verify_root_signature
+LOCAL_FUNCTION lantern_verify_root_signature
     FRAME 16
     movq    $56, (%rdx)
     movq    $24, 8(%rdx)
@@ -145,7 +145,7 @@ LOCAL_FUNCTION verify_root_signature
     CALL_GLOBAL crypto_bls_verify           # bls.Verify(public_key, signing_root, signature)
     mov     0(%rsp), %rdx
     UNFRAME 16
-END_FUNCTION verify_root_signature
+END_FUNCTION lantern_verify_root_signature
 
 .if FORK >= FORK_CAPELLA
 /*
@@ -171,7 +171,7 @@ SPEC_FUNCTION process_bls_to_execution_change
     lea     (SignedBLSToExecutionChange_message + BLSToExecutionChange_from_bls_pubkey)(%rbp), %rdi
     mov     $48, %esi
     lea     L(%rsp), %rdx
-    call    sha256_short                    # assert withdrawal_credentials[1:] == sha256(from_bls_pubkey)[1:]
+    call    lantern_sha256_short                    # assert withdrawal_credentials[1:] == sha256(from_bls_pubkey)[1:]
     movb    $BLS_WITHDRAWAL_PREFIX, L(%rsp) # the digest with its first byte set to the prefix just checked
     lea     Validator_withdrawal_credentials(%r15), %rcx
     lea     L(%rsp), %rdx
@@ -198,7 +198,7 @@ SPEC_FUNCTION process_bls_to_execution_change
     lea     SignedBLSToExecutionChange_signature(%rbp), %rsi
     lea     (L + 56)(%rsp), %rdx
     mov     %r13, %rcx
-    call    verify_root_signature
+    call    lantern_verify_root_signature
     test    %rax, %rax
     jnz     7f
     mov     $LANTERN_INVALID_BLS_CHANGE, %eax
@@ -239,7 +239,7 @@ SPEC_FUNCTION process_deposit_request
     mov     %rax, (L + PendingDeposit_slot)(%rsp)
     mov     %rbx, %rdi
     lea     L(%rsp), %rsi
-    call    append_pending_deposit
+    call    lantern_append_pending_deposit
     test    %rax, %rax
     jnz     7f
 .if FORK == FORK_ELECTRA
@@ -328,7 +328,7 @@ SPEC_FUNCTION process_withdrawal_request
     jne     8f
 1:  mov     %rbx, %rdi
     lea     WithdrawalRequest_validator_pubkey(%rbp), %rsi
-    call    find_pubkey
+    call    lantern_find_pubkey
     cmp     $-1, %rax
     je      8f
     mov     %rax, (L + 16)(%rsp)
@@ -442,7 +442,7 @@ SPEC_FUNCTION is_valid_switch_to_compounding_request
     NE48    %rax, %rcx, 8f
     mov     %rbx, %rdi
     lea     ConsolidationRequest_source_pubkey(%rbp), %rsi
-    call    find_pubkey
+    call    lantern_find_pubkey
     cmp     $-1, %rax
     je      8f
     VALIDATOR %r13, %rbx, %rax
@@ -506,7 +506,7 @@ SPEC_FUNCTION queue_excess_active_balance
     movq    $GENESIS_SLOT, (L + PendingDeposit_slot)(%rsp)
     mov     %rbx, %rdi
     lea     L(%rsp), %rsi
-    call    append_pending_deposit
+    call    lantern_append_pending_deposit
     LEAVE 192
 8:  xor     %eax, %eax
     LEAVE 192
@@ -641,7 +641,7 @@ SPEC_FUNCTION process_consolidation_request
     je      1f
     mov     %rbx, %rdi                      # switch_to_compounding_validator(state, source_index)
     lea     ConsolidationRequest_source_pubkey(%rbp), %rsi
-    call    find_pubkey
+    call    lantern_find_pubkey
     mov     %rax, (L + 32)(%rsp)
     mov     %rbx, %rdi
     lea     (L + 32)(%rsp), %rsi
@@ -666,13 +666,13 @@ SPEC_FUNCTION process_consolidation_request
     jbe     8f
     mov     %rbx, %rdi
     lea     ConsolidationRequest_source_pubkey(%rbp), %rsi
-    call    find_pubkey
+    call    lantern_find_pubkey
     cmp     $-1, %rax
     je      8f
     mov     %rax, S8(%rsp)
     mov     %rbx, %rdi
     lea     ConsolidationRequest_target_pubkey(%rbp), %rsi
-    call    find_pubkey
+    call    lantern_find_pubkey
     cmp     $-1, %rax
     je      8f
     mov     %rax, S9(%rsp)

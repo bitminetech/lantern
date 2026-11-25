@@ -312,10 +312,10 @@ SPEC_FUNCTION get_attestation_component_deltas
     mov     %rax, (L + 32)(%rsp)
     mov     %r13, %rdi
     mov     %r15, %rsi
-    call    zero_deltas
+    call    lantern_zero_deltas
     mov     %r14, %rdi
     mov     %r15, %rsi
-    call    zero_deltas
+    call    lantern_zero_deltas
     mov     (L + 32)(%rsp), %rcx
     SCRATCH_LIST %rax, %r12, %rcx, 0, %r15
     mov     %rax, S7(%rsp)
@@ -472,10 +472,10 @@ SPEC_FUNCTION get_inclusion_delay_deltas
     mov     %rax, (L + 24)(%rsp)
     mov     %r12, %rdi
     mov     (L + 24)(%rsp), %rsi
-    call    zero_deltas
+    call    lantern_zero_deltas
     mov     %r13, %rdi
     mov     (L + 24)(%rsp), %rsi
-    call    zero_deltas
+    call    lantern_zero_deltas
     TAKE_REFS %r14, %rbp, %r15
     mov     (L + 24)(%rsp), %rcx
     SCRATCH_LIST %rax, %rbp, %r15, 0, %rcx
@@ -627,10 +627,10 @@ SPEC_FUNCTION get_inactivity_penalty_deltas
     mov     %rax, S9(%rsp)
     mov     %r12, %rdi
     mov     S9(%rsp), %rsi
-    call    zero_deltas
+    call    lantern_zero_deltas
     mov     %r13, %rdi
     mov     S9(%rsp), %rsi
-    call    zero_deltas
+    call    lantern_zero_deltas
     mov     %rbx, %rdi
     lea     (L + 32)(%rsp), %rsi
     call    lantern_is_in_inactivity_leak
@@ -724,7 +724,7 @@ SPEC_FUNCTION get_inactivity_penalty_deltas
 SPEC_END get_inactivity_penalty_deltas
 
 /* L0: add the n entries (rdx) of list rsi to those of list rdi. rax = LANTERN_OK, or LANTERN_INVALID_OVERFLOW. A leaf. */
-LOCAL_FUNCTION add_deltas
+LOCAL_FUNCTION lantern_add_deltas
     UNWIND_END_PROLOGUE
     add     $LIST_FIXED, %rdi
     add     $LIST_FIXED, %rsi
@@ -741,20 +741,20 @@ LOCAL_FUNCTION add_deltas
     ret
 3:  mov     $LANTERN_INVALID_OVERFLOW, %eax
     ret
-END_FUNCTION add_deltas
+END_FUNCTION lantern_add_deltas
 
 /* Add the component's rewards and penalties to the totals. */
 .macro ADD_BOTH
     mov     %r12, %rdi
     mov     S7(%rsp), %rsi
     mov     %r15, %rdx
-    call    add_deltas
+    call    lantern_add_deltas
     test    %rax, %rax
     jnz     7f
     mov     %r13, %rdi
     mov     S8(%rsp), %rsi
     mov     %r15, %rdx
-    call    add_deltas
+    call    lantern_add_deltas
     test    %rax, %rax
     jnz     7f
 .endm
@@ -787,10 +787,10 @@ SPEC_FUNCTION get_attestation_deltas
     mov     (BeaconState_validators + 8)(%rbx), %r15
     mov     %r12, %rdi
     mov     %r15, %rsi
-    call    zero_deltas
+    call    lantern_zero_deltas
     mov     %r13, %rdi
     mov     %r15, %rsi
-    call    zero_deltas
+    call    lantern_zero_deltas
     mov     (%rbp), %r14
     SCRATCH_LIST %rax, %rbp, %r14, 0, %r15
     mov     %rax, S7(%rsp)
@@ -808,7 +808,7 @@ SPEC_FUNCTION get_attestation_deltas
     mov     %r12, %rdi                      # inclusion delay: rewards only
     mov     S7(%rsp), %rsi
     mov     %r15, %rdx
-    call    add_deltas
+    call    lantern_add_deltas
     test    %rax, %rax
     jnz     7f
     mov     %r14, (%rbp)                    # inactivity: penalties only
@@ -823,7 +823,7 @@ SPEC_FUNCTION get_attestation_deltas
     mov     %r13, %rdi
     mov     S8(%rsp), %rsi
     mov     %r15, %rdx
-    call    add_deltas
+    call    lantern_add_deltas
 7:  LEAVE 16
 9:  mov     $LANTERN_BUFFER_TOO_SMALL, %eax
     LEAVE 16
@@ -956,7 +956,7 @@ SPEC_END process_justification_and_finalization
  * L0: rax = LANTERN_OK when state rdi's previous_epoch_attestations can take the current ones,
  * else LANTERN_BUFFER_TOO_SMALL. A leaf. Uses rcx, rdx, rsi, r8.
  */
-LOCAL_FUNCTION record_room
+LOCAL_FUNCTION lantern_record_room
     UNWIND_END_PROLOGUE
     mov     BeaconState_current_epoch_attestations(%rdi), %rcx
     mov     (BeaconState_current_epoch_attestations + 8)(%rdi), %rdx
@@ -975,14 +975,14 @@ LOCAL_FUNCTION record_room
     ret
 9:  mov     $LANTERN_BUFFER_TOO_SMALL, %eax
     ret
-END_FUNCTION record_room
+END_FUNCTION lantern_record_room
 
 /* rbx state, rbp result. */
 SPEC_FUNCTION process_participation_record_updates
     ENTER 0
     mov     %rdi, %rbx
     mov     %rcx, %rbp
-    call    record_room                     # previous_epoch_attestations = current_epoch_attestations
+    call    lantern_record_room                     # previous_epoch_attestations = current_epoch_attestations
     test    %rax, %rax
     jnz     7f
     mov     BeaconState_current_epoch_attestations(%rbx), %rcx

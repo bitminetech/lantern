@@ -38,7 +38,7 @@ config_max_name:
 .endm
 
 /* a0 = 1 when the a1 bytes at a0 are the a3 bytes at a2, else 0. Uses t0, t1. */
-LOCAL_FUNCTION config_name_is
+LOCAL_FUNCTION lantern_config_name_is
     UNWIND_END_PROLOGUE
     bne     a1, a3, 2f
 1:  beqz    a1, 3f
@@ -53,10 +53,10 @@ LOCAL_FUNCTION config_name_is
     ret
 3:  li      a0, 1
     ret
-END_FUNCTION config_name_is
+END_FUNCTION lantern_config_name_is
 
 /* The value bytes a0 to a1 without a pair of quotes: a0 = 0, a1 their start, a2 their end; a0 = 1 for a quote with no end. Uses t0-t2. */
-LOCAL_FUNCTION config_unquote
+LOCAL_FUNCTION lantern_config_unquote
     UNWIND_END_PROLOGUE
     mv      a2, a1
     mv      a1, a0
@@ -77,10 +77,10 @@ LOCAL_FUNCTION config_unquote
     ret
 9:  li      a0, 1
     ret
-END_FUNCTION config_unquote
+END_FUNCTION lantern_config_unquote
 
 /* a0 = 0 and a1 = the u64 of the bytes a0 to a1: decimal, or 0x and 1 to 16 hex digits; else a0 = 1. Uses t0-t4. */
-LOCAL_FUNCTION config_u64
+LOCAL_FUNCTION lantern_config_u64
     UNWIND_END_PROLOGUE
     sub     t0, a1, a0
     beqz    t0, 9f
@@ -125,10 +125,10 @@ LOCAL_FUNCTION config_u64
     ret
 9:  li      a0, 1
     ret
-END_FUNCTION config_u64
+END_FUNCTION lantern_config_u64
 
 /* a0 = 0 when the bytes a0 to a1 are 0x and 2 * a3 hex digits, whose a3 bytes go to a2 in order; else 1. Uses t0-t3. */
-LOCAL_FUNCTION config_hex_bytes
+LOCAL_FUNCTION lantern_config_hex_bytes
     UNWIND_END_PROLOGUE
     sub     t0, a1, a0
     slli    t1, a3, 1
@@ -161,10 +161,10 @@ LOCAL_FUNCTION config_hex_bytes
     ret
 9:  li      a0, 1
     ret
-END_FUNCTION config_hex_bytes
+END_FUNCTION lantern_config_hex_bytes
 
 /* a0 = 0 when the bytes a0 to a1 are the decimal digits of a number below 2^256, then little endian at a2 (32 bytes); else 1. Uses t0-t6. */
-LOCAL_FUNCTION config_uint256
+LOCAL_FUNCTION lantern_config_uint256
     UNWIND_END_PROLOGUE
     sd      zero, 0(a2)
     sd      zero, 8(a2)
@@ -196,26 +196,26 @@ LOCAL_FUNCTION config_uint256
     ret
 9:  li      a0, 1
     ret
-END_FUNCTION config_uint256
+END_FUNCTION lantern_config_uint256
 
 /*
  * a0 = 0 when the value bytes a1 to a2, without a pair of quotes, are a value of the kind a0,
  * then at a3: 8 bytes (u64; Version: 4 bytes and 4 zero bytes) or 32 (Uint256, Hash32); else 1.
  * s1 the kind, s2 out.
  */
-LOCAL_FUNCTION config_value
+LOCAL_FUNCTION lantern_config_value
     ENTER 0
     mv      s1, a0
     mv      s2, a3
     mv      a0, a1
     mv      a1, a2
-    call    config_unquote
+    call    lantern_config_unquote
     bnez    a0, 9f
     mv      a0, a1
     mv      a1, a2
     li      t0, CONFIG_KIND_U64
     bne     s1, t0, 1f
-    call    config_u64
+    call    lantern_config_u64
     bnez    a0, 9f
     sd      a1, 0(s2)
     j       9f
@@ -224,18 +224,18 @@ LOCAL_FUNCTION config_value
     sd      zero, 0(s2)
     mv      a2, s2
     li      a3, 4
-    call    config_hex_bytes
+    call    lantern_config_hex_bytes
     j       9f
 2:  li      t0, CONFIG_KIND_UINT256
     bne     s1, t0, 3f
     mv      a2, s2
-    call    config_uint256
+    call    lantern_config_uint256
     j       9f
 3:  li      t0, CONFIG_KIND_HASH32
     bne     s1, t0, 4f
     mv      a2, s2                          # Hash32
     li      a3, 32
-    call    config_hex_bytes
+    call    lantern_config_hex_bytes
     j       9f
 4:  li      t0, CONFIG_KIND_ADDRESS
     bne     s1, t0, 5f
@@ -245,19 +245,19 @@ LOCAL_FUNCTION config_value
     sd      zero, 24(s2)
     mv      a2, s2
     li      a3, 20
-    call    config_hex_bytes
+    call    lantern_config_hex_bytes
     j       9f
 5:  mv      a2, s2                          # Text: to s2, when it is not 0
-    call    config_text
+    call    lantern_config_text
 9:  LEAVE 0
-END_FUNCTION config_value
+END_FUNCTION lantern_config_value
 
 /*
  * a0 = 0 when the bytes a0 to a1 are a text (0 to CONFIG_TEXT_MAX bytes, each 0x20 to 0x7e but
  * " and \); then, when a2 is not 0, at a2 its count and CONFIG_TEXT_MAX bytes: its bytes, then
  * zero bytes. Else a0 = 1. Uses t0-t3.
  */
-LOCAL_FUNCTION config_text
+LOCAL_FUNCTION lantern_config_text
     UNWIND_END_PROLOGUE
     sub     t0, a1, a0
     li      t1, CONFIG_TEXT_MAX
@@ -291,10 +291,10 @@ LOCAL_FUNCTION config_text
     ret
 9:  li      a0, 1
     ret
-END_FUNCTION config_text
+END_FUNCTION lantern_config_text
 
 /*
- * In config_scan: close the open entry of the schedule: to 80f (a fault at its line) without
+ * In lantern_config_scan: close the open entry of the schedule: to 80f (a fault at its line) without
  * both fields; else with write, its EPOCH and MAX_BLOBS_PER_BLOCK as schedule entry s9 - 1. Uses t0, t1.
  */
 .macro CONFIG_ENTRY_END
@@ -329,7 +329,7 @@ END_FUNCTION config_text
  * MAX_BLOBS_PER_BLOCK, L+32 1 when the text gives BLOB_SCHEDULE, L+40 a value (32 bytes) or a
  * field, L+72 the value's start or a column, L+80 the key's length or a position.
  */
-LOCAL_FUNCTION config_scan
+LOCAL_FUNCTION lantern_config_scan
     ENTER 96
     mv      s1, a1
     mv      s2, a2
@@ -441,7 +441,7 @@ LOCAL_FUNCTION config_scan
     ld      a1, (L + 80)(sp)
     ADDRESS a2, config_schedule_name
     li      a3, 13
-    call    config_name_is
+    call    lantern_config_name_is
     bnez    a0, 30f
     ADDRESS s6, config_keys
 26: ADDRESS t0, config_keys_end
@@ -450,7 +450,7 @@ LOCAL_FUNCTION config_scan
     ld      a1, (L + 80)(sp)
     addi    a2, s6, 24
     ld      a3, 0(s6)
-    call    config_name_is
+    call    lantern_config_name_is
     bnez    a0, 28f
     addi    s6, s6, CONFIG_KEY_BYTES
     j       26b
@@ -466,7 +466,7 @@ LOCAL_FUNCTION config_scan
     beqz    s2, 280f
     ld      a3, 8(s6)
     add     a3, s1, a3
-280: call   config_value
+280: call   lantern_config_value
     bnez    a0, 89f
     beqz    s2, 29f
     ld      t2, 16(s6)
@@ -566,14 +566,14 @@ LOCAL_FUNCTION config_scan
     mv      a1, t4
     ADDRESS a2, config_epoch_name
     li      a3, 5
-    call    config_name_is
+    call    lantern_config_name_is
     li      t0, 1                           # EPOCH: bit 0
     bnez    a0, 59f
     ld      a0, (L + 40)(sp)
     ld      a1, (L + 48)(sp)
     ADDRESS a2, config_max_name
     li      a3, 19
-    call    config_name_is
+    call    lantern_config_name_is
     beqz    a0, 89f
     li      t0, 2                           # MAX_BLOBS_PER_BLOCK: bit 1
 59: and     t1, s10, t0
@@ -582,11 +582,11 @@ LOCAL_FUNCTION config_scan
     sd      t0, (L + 64)(sp)
     ld      a0, (L + 56)(sp)
     mv      a1, s8
-    call    config_unquote
+    call    lantern_config_unquote
     bnez    a0, 89f
     mv      a0, a1
     mv      a1, a2
-    call    config_u64
+    call    lantern_config_u64
     bnez    a0, 89f
     ld      t0, (L + 64)(sp)                # L+16 or L+24
     slli    t0, t0, 3
@@ -622,7 +622,7 @@ LOCAL_FUNCTION config_scan
 80: ld      s5, L(sp)                       # the line of the open entry
 89: mv      a0, s5
     LEAVE 96
-END_FUNCTION config_scan
+END_FUNCTION lantern_config_scan
 
 /* (text, config, line): docs/reference/config.md. s1 text, s2 config, s3 line. */
 FUNCTION lantern_config_parse
@@ -631,12 +631,12 @@ FUNCTION lantern_config_parse
     mv      s2, a1
     mv      s3, a2
     li      a2, 0                           # check every line first
-    call    config_scan
+    call    lantern_config_scan
     bnez    a0, 1f
     mv      a0, s1
     mv      a1, s2
     li      a2, 1
-    call    config_scan
+    call    lantern_config_scan
     sd      zero, 0(s3)
     li      a0, LANTERN_OK
     LEAVE 0

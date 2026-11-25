@@ -11,7 +11,7 @@
  * The bytes a0 .. a0 + a1 of a token go out from the cursor's done bytes on, while out has room:
  * a0 = 0 when the token is whole (done 0), else 1 (done counts the bytes written). Uses t0, t1.
  */
-LOCAL_FUNCTION json_put
+LOCAL_FUNCTION lantern_json_put
     UNWIND_END_PROLOGUE
     ld      t0, JsonCursor_done(s3)
 1:  bgeu    t0, a1, 2f
@@ -28,13 +28,13 @@ LOCAL_FUNCTION json_put
 3:  sd      t0, JsonCursor_done(s3)
     li      a0, 1
     ret
-END_FUNCTION json_put
+END_FUNCTION lantern_json_put
 
 /*
  * The hex token of the byte or bit string of the level s10 (kind a0): its bytes from the cursor's
  * done bytes on, while out has room: a0 = 0 when whole, else 1. Uses t0-t6, a1-a5.
  */
-LOCAL_FUNCTION json_hex
+LOCAL_FUNCTION lantern_json_hex
     UNWIND_END_PROLOGUE
     ld      a2, JsonLevel_base(s10)         # the bytes
     add     a2, s2, a2
@@ -99,13 +99,13 @@ LOCAL_FUNCTION json_hex
 9:  sd      t0, JsonCursor_done(s3)
     li      a0, 1
     ret
-END_FUNCTION json_hex
+END_FUNCTION lantern_json_hex
 
 /*
  * The token of the uint or Boolean of the level s10 (kind a0): a0 = 0 when whole, else 1.
  * Locals: the number's 32-bit words at 0, the text from its end at 120.
  */
-LOCAL_FUNCTION json_number
+LOCAL_FUNCTION lantern_json_number
     FRAME 128
     ld      a2, JsonLevel_base(s10)
     add     a2, s2, a2
@@ -168,9 +168,9 @@ LOCAL_FUNCTION json_number
     mv      a0, t2
     addi    a1, sp, 120
     sub     a1, a1, t2
-9:  call    json_put
+9:  call    lantern_json_put
     UNFRAME 128
-END_FUNCTION json_number
+END_FUNCTION lantern_json_number
 
 /*
  * The level s10 for the type node a0 whose storage is at offset a1 of the value: inline when a2
@@ -178,7 +178,7 @@ END_FUNCTION json_number
  * 2^64 - 1 and the type is of variable size; else a PartRef at a1 whose offset counts from a2.
  * Uses t0-t4.
  */
-LOCAL_FUNCTION json_open
+LOCAL_FUNCTION lantern_json_open
     UNWIND_END_PROLOGUE
     li      t0, SSZ_NODE_STRIDE
     mul     t0, a0, t0
@@ -214,10 +214,10 @@ LOCAL_FUNCTION json_open
     sd      t1, JsonLevel_base(s10)
     sd      t1, JsonLevel_next(s10)
 9:  ret
-END_FUNCTION json_open
+END_FUNCTION lantern_json_open
 
 /* The next item of the compound level s10 at index item, one level deeper. */
-LOCAL_FUNCTION json_child
+LOCAL_FUNCTION lantern_json_child
     FRAME 0
     ld      t0, JsonLevel_node(s10)
     li      t1, SSZ_NODE_STRIDE
@@ -261,15 +261,15 @@ LOCAL_FUNCTION json_child
     addi    t0, t0, 1
     sd      t0, JsonCursor_depth(s3)
     addi    s10, s10, JSON_LEVEL_SIZE
-    call    json_open
+    call    lantern_json_open
     UNFRAME 0
-END_FUNCTION json_child
+END_FUNCTION lantern_json_child
 
 /*
  * a0 = the offset of the next variable field after field a1 of the container level s10 in an SSZ
  * encoding, or the level's end with none. Uses t0-t5.
  */
-LOCAL_FUNCTION jss_field_end
+LOCAL_FUNCTION lantern_jss_field_end
     UNWIND_END_PROLOGUE
     ld      t0, JsonLevel_node(s10)
     li      t1, SSZ_NODE_STRIDE
@@ -294,13 +294,13 @@ LOCAL_FUNCTION jss_field_end
     ret
 9:  ld      a0, JsonLevel_next(s10)
     ret
-END_FUNCTION jss_field_end
+END_FUNCTION lantern_jss_field_end
 
 /*
  * The level s10 for the type node a0 whose SSZ encoding is the bytes a1 to a2 of the encoding:
  * base and end (next), and the count of its items or bytes. Uses t0-t4.
  */
-LOCAL_FUNCTION jss_open
+LOCAL_FUNCTION lantern_jss_open
     UNWIND_END_PROLOGUE
     li      t0, SSZ_NODE_STRIDE
     mul     t0, a0, t0
@@ -336,10 +336,10 @@ LOCAL_FUNCTION jss_open
     srli    t2, t2, 2
 9:  sd      t2, JsonLevel_count(s10)
     ret
-END_FUNCTION jss_open
+END_FUNCTION lantern_jss_open
 
 /* The next item of the compound level s10 of an SSZ encoding at index item, one level deeper. Locals: a field's node, its start. */
-LOCAL_FUNCTION jss_child
+LOCAL_FUNCTION lantern_jss_child
     FRAME 16
     ld      t0, JsonLevel_node(s10)
     li      t1, SSZ_NODE_STRIDE
@@ -373,7 +373,7 @@ LOCAL_FUNCTION jss_child
     sd      a0, 0(sp)
     sd      t6, 8(sp)
     mv      a1, t2
-    call    jss_field_end
+    call    lantern_jss_field_end
     mv      a2, a0
     ld      a0, 0(sp)
     ld      a1, 8(sp)
@@ -406,16 +406,16 @@ LOCAL_FUNCTION jss_child
     addi    t0, t0, 1
     sd      t0, JsonCursor_depth(s3)
     addi    s10, s10, JSON_LEVEL_SIZE
-    call    jss_open
+    call    lantern_jss_open
     UNFRAME 16
-END_FUNCTION jss_child
+END_FUNCTION lantern_jss_child
 
 /* (type, value, cursor, out): docs/reference/beacon-api.md. */
 FUNCTION lantern_json_encode
     FRAME 0
     li      a4, 0
     li      a5, 0
-    call    json_main
+    call    lantern_json_main
     UNFRAME 0
 END_FUNCTION lantern_json_encode
 
@@ -426,7 +426,7 @@ FUNCTION lantern_json_encode_ssz
     ld      a5, 16(a1)
     add     a1, a1, t0
     li      a4, 1
-    call    json_main
+    call    lantern_json_main
     UNFRAME 0
 END_FUNCTION lantern_json_encode_ssz
 
@@ -435,7 +435,7 @@ END_FUNCTION lantern_json_encode_ssz
  * (mode 0) or of an encoding (mode 1). Locals: L a token of punctuation or a name, L+40 the kind,
  * L+48 the mode, L+56 the encoding's bytes.
  */
-LOCAL_FUNCTION json_main
+LOCAL_FUNCTION lantern_json_main
     ENTER 64
     sd      a4, (L + 48)(sp)
     sd      a5, (L + 56)(sp)
@@ -470,10 +470,10 @@ LOCAL_FUNCTION json_main
     ld      t0, (L + 48)(sp)
     bnez    t0, 2f
     li      a2, -1
-    call    json_open
+    call    lantern_json_open
     j       1f
 2:  ld      a2, (L + 56)(sp)
-    call    jss_open
+    call    lantern_jss_open
 1:  ld      t0, JsonCursor_depth(s3)
     addi    t0, t0, -1
     li      t1, JSON_LEVEL_SIZE
@@ -487,7 +487,7 @@ LOCAL_FUNCTION json_main
     ld      a0, SSZ_NODE_KIND(t0)
     li      t1, SSZ_KIND_BOOLEAN
     bgtu    a0, t1, 11f
-    call    json_number
+    call    lantern_json_number
     bnez    a0, 91f
     j       50f
 11: li      t1, SSZ_KIND_VECTOR
@@ -497,7 +497,7 @@ LOCAL_FUNCTION json_main
     ld      t1, (L + 48)(sp)
     beqz    t1, 12f
     li      a0, SSZ_KIND_BYTE_LIST
-12: call    json_hex
+12: call    lantern_json_hex
     bnez    a0, 91f
     j       50f
 20: sd      a0, (L + 40)(sp)                # a list, vector or container
@@ -512,7 +512,7 @@ LOCAL_FUNCTION json_main
     sb      t2, (L + 0)(sp)                 # step 0: the opening
     addi    a0, sp, L
     li      a1, 1
-    call    json_put
+    call    lantern_json_put
     bnez    a0, 91f
     li      t0, 1
     sd      t0, JsonLevel_step(s10)
@@ -525,7 +525,7 @@ LOCAL_FUNCTION json_main
     sb      t3, (L + 0)(sp)
     addi    a0, sp, L
     li      a1, 1
-    call    json_put
+    call    lantern_json_put
     bnez    a0, 91f
     j       50f
 23: beqz    t4, 24f
@@ -533,7 +533,7 @@ LOCAL_FUNCTION json_main
     sb      t1, (L + 0)(sp)
     addi    a0, sp, L
     li      a1, 1
-    call    json_put
+    call    lantern_json_put
     bnez    a0, 91f
 24: li      t0, 2
     sd      t0, JsonLevel_step(s10)
@@ -569,7 +569,7 @@ LOCAL_FUNCTION json_main
     sb      t3, (L + 2)(t4)
     addi    a0, sp, L
     addi    a1, t2, 3
-    call    json_put
+    call    lantern_json_put
     bnez    a0, 91f
 27: li      t0, 3
     sd      t0, JsonLevel_step(s10)
@@ -578,9 +578,9 @@ LOCAL_FUNCTION json_main
     bgeu    t0, t1, 97f
     ld      t0, (L + 48)(sp)
     bnez    t0, 28f
-    call    json_child
+    call    lantern_json_child
     j       10b
-28: call    jss_child
+28: call    lantern_jss_child
     j       10b
 50: ld      t0, JsonCursor_depth(s3)        # the level is whole: up one, the next item there
     addi    t0, t0, -1
@@ -609,7 +609,7 @@ LOCAL_FUNCTION json_main
     LEAVE 64
 97: li      a0, LANTERN_BUFFER_TOO_SMALL
     LEAVE 64
-END_FUNCTION json_main
+END_FUNCTION lantern_json_main
 
 /*
  * ---------------------------------------------------------------- lantern_json_decode
@@ -621,7 +621,7 @@ END_FUNCTION json_main
  */
 
 /* a0 = the first byte at or after a0 that is no white space. Uses t0. */
-LOCAL_FUNCTION jd_ws
+LOCAL_FUNCTION lantern_jd_ws
     UNWIND_END_PROLOGUE
 1:  bgeu    a0, s2, 9f
     lbu     t0, 0(a0)
@@ -636,10 +636,10 @@ LOCAL_FUNCTION jd_ws
 2:  addi    a0, a0, 1
     j       1b
 9:  ret
-END_FUNCTION jd_ws
+END_FUNCTION lantern_jd_ws
 
 /* The fault a0 at the byte a1 (the end when past it), at depth a2: a1 = 1. Uses t0. */
-LOCAL_FUNCTION jd_fault
+LOCAL_FUNCTION lantern_jd_fault
     UNWIND_END_PROLOGUE
     bleu    a1, s2, 1f
     mv      a1, s2
@@ -649,13 +649,13 @@ LOCAL_FUNCTION jd_fault
     sd      a2, JsonFault_depth(s10)
     li      a1, 1
     ret
-END_FUNCTION jd_fault
+END_FUNCTION lantern_jd_fault
 
 /*
  * The string at a0 (its quote): a0 = after its closing quote, a3 its first byte, a4 its end,
  * a1 = 0; a \ or a byte below 0x20, or the end, is a fault at depth a2 (a1 = 1). Uses t0, t1.
  */
-LOCAL_FUNCTION jd_string
+LOCAL_FUNCTION lantern_jd_string
     FRAME 0
     addi    a3, a0, 1
     mv      a4, a3
@@ -674,9 +674,9 @@ LOCAL_FUNCTION jd_string
     UNFRAME 0
 8:  li      a0, JSON_FAULT_SYNTAX
     mv      a1, a4
-    call    jd_fault
+    call    lantern_jd_fault
     UNFRAME 0
-END_FUNCTION jd_string
+END_FUNCTION lantern_jd_string
 
 /* dst = 1 when the byte at reg is a decimal digit, below the end; else 0. Uses t0. */
 .macro JD_DIGIT dst, at
@@ -689,7 +689,7 @@ END_FUNCTION jd_string
 .endm
 
 /* The number at a0 (RFC 8259 section 6): a0 = after it, a1 = 0; else a fault at depth a2. Uses t0, t1. */
-LOCAL_FUNCTION jd_number
+LOCAL_FUNCTION lantern_jd_number
     FRAME 0
     bgeu    a0, s2, 8f
     lbu     t0, 0(a0)
@@ -740,12 +740,12 @@ LOCAL_FUNCTION jd_number
     UNFRAME 0
 8:  mv      a1, a0
     li      a0, JSON_FAULT_SYNTAX
-    call    jd_fault
+    call    lantern_jd_fault
     UNFRAME 0
-END_FUNCTION jd_number
+END_FUNCTION lantern_jd_number
 
 /* a1 = 1 when the a2 bytes of text at a1 start at a0 below the end, else 0. Uses t0-t3. */
-LOCAL_FUNCTION jd_literal
+LOCAL_FUNCTION lantern_jd_literal
     UNWIND_END_PROLOGUE
     add     t0, a0, a2
     bgtu    t0, s2, 8f
@@ -762,19 +762,19 @@ LOCAL_FUNCTION jd_literal
     ret
 8:  li      a1, 0
     ret
-END_FUNCTION jd_literal
+END_FUNCTION lantern_jd_literal
 
 /* '"name":' at a0, in a skipped object: a0 = its value's first byte, a1 = 0; else a fault at depth a2. Locals: a2. */
-LOCAL_FUNCTION jd_key
+LOCAL_FUNCTION lantern_jd_key
     FRAME 16
     sd      a2, 0(sp)
     bgeu    a0, s2, 8f
     lbu     t0, 0(a0)
     li      t1, 0x22
     bne     t0, t1, 8f
-    call    jd_string
+    call    lantern_jd_string
     bnez    a1, 9f
-    call    jd_ws
+    call    lantern_jd_ws
     bgeu    a0, s2, 8f
     lbu     t0, 0(a0)
     li      t1, 0x3a
@@ -785,26 +785,26 @@ LOCAL_FUNCTION jd_key
 8:  mv      a1, a0
     li      a0, JSON_FAULT_SYNTAX
     ld      a2, 0(sp)
-    call    jd_fault
+    call    lantern_jd_fault
 9:  UNFRAME 16
-END_FUNCTION jd_key
+END_FUNCTION lantern_jd_key
 
 /*
  * The value at a0, skipped with only the checks of the text, faults at depth a2: a0 = after it,
  * a1 = 0. Locals: the depth, the nesting (a bit each, 1 an object), its count.
  */
-LOCAL_FUNCTION jd_skip
+LOCAL_FUNCTION lantern_jd_skip
     FRAME 32
     sd      a2, 0(sp)
     sd      zero, 8(sp)
     sd      zero, 16(sp)
-1:  call    jd_ws                           # a value
+1:  call    lantern_jd_ws                           # a value
     ld      a2, 0(sp)
     bgeu    a0, s2, 80f
     lbu     t0, 0(a0)
     li      t1, 0x22
     bne     t0, t1, 2f
-    call    jd_string
+    call    lantern_jd_string
     bnez    a1, 99f
     j       10f
 2:  li      t1, 0x2d
@@ -812,24 +812,24 @@ LOCAL_FUNCTION jd_skip
     addi    t1, t0, -0x30
     li      t2, 9
     bgtu    t1, t2, 3f
-21: call    jd_number
+21: call    lantern_jd_number
     bnez    a1, 99f
     j       10f
 3:  ADDRESS a1, api_true
     li      a2, 4
-    call    jd_literal
+    call    lantern_jd_literal
     beqz    a1, 31f
     addi    a0, a0, 4
     j       10f
 31: ADDRESS a1, api_false
     li      a2, 5
-    call    jd_literal
+    call    lantern_jd_literal
     beqz    a1, 32f
     addi    a0, a0, 5
     j       10f
 32: ADDRESS a1, jd_null
     li      a2, 4
-    call    jd_literal
+    call    lantern_jd_literal
     beqz    a1, 33f
     addi    a0, a0, 4
     j       10f
@@ -851,7 +851,7 @@ LOCAL_FUNCTION jd_skip
     ori     t2, t2, 1
 332: sd     t2, 8(sp)
     addi    a0, a0, 1
-    call    jd_ws
+    call    lantern_jd_ws
     ld      a2, 0(sp)
     bgeu    a0, s2, 80f
     lbu     t0, 0(a0)
@@ -864,12 +864,12 @@ LOCAL_FUNCTION jd_skip
     addi    a0, a0, 1                       # empty: closed at once
     j       12f
 34: beqz    t3, 1b                          # an array: its first item; an object: its first key
-    call    jd_key
+    call    lantern_jd_key
     bnez    a1, 99f
     j       1b
 10: ld      t2, 16(sp)                      # after a value: done at the top, else , or the close
     beqz    t2, 98f
-    call    jd_ws
+    call    lantern_jd_ws
     ld      a2, 0(sp)
     bgeu    a0, s2, 80f
     lbu     t0, 0(a0)
@@ -879,9 +879,9 @@ LOCAL_FUNCTION jd_skip
     bne     t0, t1, 11f
     addi    a0, a0, 1
     beqz    t3, 1b
-    call    jd_ws
+    call    lantern_jd_ws
     ld      a2, 0(sp)
-    call    jd_key
+    call    lantern_jd_key
     bnez    a1, 99f
     j       1b
 11: li      t1, 0x5d
@@ -898,14 +898,14 @@ LOCAL_FUNCTION jd_skip
     j       10b
 80: mv      a1, a0
     li      a0, JSON_FAULT_SYNTAX
-    call    jd_fault
+    call    lantern_jd_fault
     j       99f
 98: li      a1, 0
 99: UNFRAME 32
-END_FUNCTION jd_skip
+END_FUNCTION lantern_jd_skip
 
 /* The a1 bytes at a0 join the encoding, written when s6 is 1. Uses t0, t1. */
-LOCAL_FUNCTION jd_out
+LOCAL_FUNCTION lantern_jd_out
     UNWIND_END_PROLOGUE
     beqz    s6, 2f
     add     t0, s4, s5
@@ -919,19 +919,19 @@ LOCAL_FUNCTION jd_out
     j       1b
 2:  add     s5, s5, a1
 3:  ret
-END_FUNCTION jd_out
+END_FUNCTION lantern_jd_out
 
 /* The 4-byte offset a0 at byte a1 of the encoding, when s6 is 1. Uses t0. */
-LOCAL_FUNCTION jd_offset
+LOCAL_FUNCTION lantern_jd_offset
     UNWIND_END_PROLOGUE
     beqz    s6, 9f
     add     t0, s4, a1
     sw      a0, 0(t0)
 9:  ret
-END_FUNCTION jd_offset
+END_FUNCTION lantern_jd_offset
 
 /* a0 = the value of the hex digit in a0, or 16 for another byte. Uses t0. */
-LOCAL_FUNCTION jd_hexdigit
+LOCAL_FUNCTION lantern_jd_hexdigit
     UNWIND_END_PROLOGUE
     addi    t0, a0, -0x30
     sltiu   t1, t0, 10
@@ -945,7 +945,7 @@ LOCAL_FUNCTION jd_hexdigit
     ret
 2:  li      a0, 16
     ret
-END_FUNCTION jd_hexdigit
+END_FUNCTION lantern_jd_hexdigit
 
 /*
  * The value of the type node a0 at a1, at depth a2: its encoding joins at s5; a0 = after it,
@@ -954,12 +954,12 @@ END_FUNCTION jd_hexdigit
  * cursor or a name's start, 80 the kind's node entry, 88 a string's end, 96 an element node, 104
  * an item's size, 112 the bytes of a number (32), 144 a string's content start, 152 its end.
  */
-LOCAL_FUNCTION jd_value
+LOCAL_FUNCTION lantern_jd_value
     FRAME 160
     sd      a0, 0(sp)
     sd      a2, 8(sp)
     mv      a0, a1
-    call    jd_ws
+    call    lantern_jd_ws
     sd      a0, 16(sp)
     ld      a2, 8(sp)
     bgeu    a0, s2, 880f
@@ -978,7 +978,7 @@ LOCAL_FUNCTION jd_value
     beq     t1, t3, 300f
     li      t3, 0x22                        # a uint, a byte or bit string: a string
     bne     t2, t3, 870f
-    call    jd_string
+    call    lantern_jd_string
     bnez    a1, 899f
     sd      a0, 24(sp)
     sd      a3, 144(sp)
@@ -1041,7 +1041,7 @@ LOCAL_FUNCTION jd_value
 152: bgeu   a3, a4, 3f
     lbu     a0, 0(a3)
     addi    a3, a3, 1
-    call    jd_hexdigit
+    call    lantern_jd_hexdigit
     li      t2, 16
     bgeu    a0, t2, 860f
     ld      t2, 136(sp)                     # the 256-bit number times 16, plus the digit
@@ -1078,7 +1078,7 @@ LOCAL_FUNCTION jd_value
     j       4b
 5:  addi    a0, sp, 112
     mv      a1, t1
-    call    jd_out
+    call    lantern_jd_out
     ld      a0, 24(sp)
     li      a1, 0
     UNFRAME 160
@@ -1097,7 +1097,7 @@ LOCAL_FUNCTION jd_value
     bgeu    a3, a4, 42f
     lbu     a0, 0(a3)
     addi    a3, a3, 1
-    call    jd_hexdigit
+    call    lantern_jd_hexdigit
     li      t2, 16
     bgeu    a0, t2, 850f
     j       41b
@@ -1122,11 +1122,11 @@ LOCAL_FUNCTION jd_value
     ld      t3, 40(sp)
     beqz    t3, 45f
     lbu     a0, -2(a4)
-    call    jd_hexdigit
+    call    lantern_jd_hexdigit
     slli    a5, a0, 4
     ld      a4, 152(sp)
     lbu     a0, -1(a4)
-    call    jd_hexdigit
+    call    lantern_jd_hexdigit
     or      a5, a5, a0
 45: ld      t0, 80(sp)
     ld      t1, SSZ_NODE_KIND(t0)
@@ -1160,18 +1160,18 @@ LOCAL_FUNCTION jd_value
     ld      a4, 152(sp)
     bgeu    a3, a4, 49f
     lbu     a0, 0(a3)
-    call    jd_hexdigit
+    call    lantern_jd_hexdigit
     slli    t3, a0, 4
     sb      t3, 112(sp)
     ld      a3, 32(sp)
     lbu     a0, 1(a3)
-    call    jd_hexdigit
+    call    lantern_jd_hexdigit
     lbu     t3, 112(sp)
     or      t3, t3, a0
     sb      t3, 112(sp)
     addi    a0, sp, 112
     li      a1, 1
-    call    jd_out
+    call    lantern_jd_out
     ld      a3, 32(sp)
     addi    a3, a3, 2
     sd      a3, 32(sp)
@@ -1181,13 +1181,13 @@ LOCAL_FUNCTION jd_value
     UNFRAME 160
 300: ADDRESS a1, api_true                   # Boolean: true or false
     li      a2, 4
-    call    jd_literal
+    call    lantern_jd_literal
     li      t3, 1
     bnez    a1, 301f
     ld      a0, 16(sp)
     ADDRESS a1, api_false
     li      a2, 5
-    call    jd_literal
+    call    lantern_jd_literal
     beqz    a1, 870f
     li      t3, 0
 301: sb     t3, 112(sp)
@@ -1201,7 +1201,7 @@ LOCAL_FUNCTION jd_value
     sd      a0, 24(sp)
     addi    a0, sp, 112
     li      a1, 1
-    call    jd_out
+    call    lantern_jd_out
     ld      a0, 24(sp)
     li      a1, 0
     UNFRAME 160
@@ -1216,7 +1216,7 @@ LOCAL_FUNCTION jd_value
     call    lantern_zero
     ld      a0, 16(sp)
     addi    a0, a0, 1
-    call    jd_ws
+    call    lantern_jd_ws
     ld      a2, 8(sp)
     bgeu    a0, s2, 880f
     lbu     t0, 0(a0)
@@ -1230,7 +1230,7 @@ LOCAL_FUNCTION jd_value
     lbu     t0, 0(a0)
     li      t1, 0x22
     bne     t0, t1, 880f
-    call    jd_string
+    call    lantern_jd_string
     bnez    a1, 899f
     sd      a0, 88(sp)
     ld      t0, 80(sp)
@@ -1269,14 +1269,14 @@ LOCAL_FUNCTION jd_value
     bnez    t1, 890f
     sd      t3, 32(sp)
     ld      a0, 88(sp)
-    call    jd_ws
+    call    lantern_jd_ws
     ld      a2, 8(sp)
     bgeu    a0, s2, 880f
     lbu     t0, 0(a0)
     li      t1, 0x3a
     bne     t0, t1, 880f
     addi    a0, a0, 1
-    call    jd_ws
+    call    lantern_jd_ws
     ld      t0, 64(sp)                      # its value: kept, then skipped one level down
     ld      t3, 32(sp)
     slli    t1, t3, 3
@@ -1289,16 +1289,16 @@ LOCAL_FUNCTION jd_value
     add     t1, s10, t1
     sd      t3, JsonFault_path(t1)
     addi    a2, a2, 1
-    call    jd_skip
+    call    lantern_jd_skip
     bnez    a1, 899f
-119: call   jd_ws
+119: call   lantern_jd_ws
     ld      a2, 8(sp)
     bgeu    a0, s2, 880f
     lbu     t0, 0(a0)
     li      t1, 0x2c
     bne     t0, t1, 116f
     addi    a0, a0, 1
-    call    jd_ws
+    call    lantern_jd_ws
     ld      a2, 8(sp)
     bgeu    a0, s2, 880f
     j       110b
@@ -1336,14 +1336,14 @@ LOCAL_FUNCTION jd_value
 1174: addi  t3, t3, 1
     j       117b
 118: ld     a0, 88(sp)                      # a member of no field: its value skipped
-    call    jd_ws
+    call    lantern_jd_ws
     ld      a2, 8(sp)
     bgeu    a0, s2, 880f
     lbu     t0, 0(a0)
     li      t1, 0x3a
     bne     t0, t1, 880f
     addi    a0, a0, 1
-    call    jd_ws
+    call    lantern_jd_ws
     ld      a2, 8(sp)                       # its faults at the path of the field count
     ld      t0, 80(sp)
     ld      t1, SSZ_NODE_LENGTH(t0)
@@ -1351,7 +1351,7 @@ LOCAL_FUNCTION jd_value
     add     t2, s10, t2
     sd      t1, JsonFault_path(t2)
     addi    a2, a2, 1
-    call    jd_skip
+    call    lantern_jd_skip
     bnez    a1, 899f
     j       119b
 130: ld     t0, 80(sp)                      # each field given
@@ -1407,7 +1407,7 @@ LOCAL_FUNCTION jd_value
     ld      t6, 48(sp)
     sub     a0, a0, t6
     mv      a1, t4
-    call    jd_offset
+    call    lantern_jd_offset
     ld      s5, 56(sp)
     j       137f
 136: mv     s5, t4
@@ -1425,7 +1425,7 @@ LOCAL_FUNCTION jd_value
     add     a1, s1, a1
     ld      t5, 72(sp)
     ld      a0, SSZ_FIELD_NODE(t5)
-    call    jd_value
+    call    lantern_jd_value
     bnez    a1, 899f
     ld      t5, 72(sp)
     ld      t6, SSZ_FIELD_FLAGS(t5)
@@ -1444,7 +1444,7 @@ LOCAL_FUNCTION jd_value
     bne     t2, t3, 870f
     ld      a0, 16(sp)
     addi    a0, a0, 1
-    call    jd_ws
+    call    lantern_jd_ws
     ld      a2, 8(sp)
     bgeu    a0, s2, 880f
     sd      zero, 40(sp)
@@ -1460,19 +1460,19 @@ LOCAL_FUNCTION jd_value
     add     t1, s10, t1
     sd      t3, JsonFault_path(t1)
     addi    a2, a2, 1
-    call    jd_skip
+    call    lantern_jd_skip
     bnez    a1, 899f
     ld      t3, 40(sp)
     addi    t3, t3, 1
     sd      t3, 40(sp)
-    call    jd_ws
+    call    lantern_jd_ws
     ld      a2, 8(sp)
     bgeu    a0, s2, 880f
     lbu     t0, 0(a0)
     li      t1, 0x2c
     bne     t0, t1, 211f
     addi    a0, a0, 1
-    call    jd_ws
+    call    lantern_jd_ws
     j       210b
 211: li     t1, 0x5d
     bne     t0, t1, 880f
@@ -1501,7 +1501,7 @@ LOCAL_FUNCTION jd_value
 2211: sd    t5, 56(sp)
     ld      a0, 16(sp)
     addi    a0, a0, 1
-    call    jd_ws
+    call    lantern_jd_ws
     sd      a0, 72(sp)
     sd      zero, 32(sp)
 222: ld     t3, 32(sp)
@@ -1514,7 +1514,7 @@ LOCAL_FUNCTION jd_value
     sub     a0, t6, t5
     slli    a1, t3, 2
     add     a1, t5, a1
-    call    jd_offset
+    call    lantern_jd_offset
     ld      s5, 56(sp)
 223: ld     a2, 8(sp)
     ld      t3, 32(sp)
@@ -1524,18 +1524,18 @@ LOCAL_FUNCTION jd_value
     addi    a2, a2, 1
     ld      a0, 96(sp)
     ld      a1, 72(sp)
-    call    jd_value
+    call    lantern_jd_value
     bnez    a1, 899f
     ld      t4, 104(sp)
     bnez    t4, 224f
     sd      s5, 56(sp)
-224: call   jd_ws                           # past the ,
+224: call   lantern_jd_ws                           # past the ,
     bgeu    a0, s2, 225f
     lbu     t0, 0(a0)
     li      t1, 0x2c
     bne     t0, t1, 225f
     addi    a0, a0, 1
-    call    jd_ws
+    call    lantern_jd_ws
 225: sd     a0, 72(sp)
     ld      t3, 32(sp)
     addi    t3, t3, 1
@@ -1569,15 +1569,15 @@ LOCAL_FUNCTION jd_value
 890: li     a0, JSON_FAULT_FIELD
     ld      a1, 72(sp)
 898: ld     a2, 8(sp)
-    call    jd_fault
+    call    lantern_jd_fault
 899: UNFRAME 160
-END_FUNCTION jd_value
+END_FUNCTION lantern_jd_value
 
 /* (type, json, scratch, out, fault): docs/reference/beacon-api.md. */
 FUNCTION lantern_json_decode
     FRAME 0
     li      a5, 0
-    call    json_decode_mode
+    call    lantern_json_decode_mode
     UNFRAME 0
 END_FUNCTION lantern_json_decode
 
@@ -1585,7 +1585,7 @@ END_FUNCTION lantern_json_decode
 FUNCTION lantern_engine_json_decode
     FRAME 0
     li      a5, 1
-    call    json_decode_mode
+    call    lantern_json_decode_mode
     UNFRAME 0
 END_FUNCTION lantern_engine_json_decode
 
@@ -1594,7 +1594,7 @@ END_FUNCTION lantern_engine_json_decode
  * JSON; lantern_engine_json_decode for mode 1, of the Engine API's: the mode at byte 56 of scratch,
  * before the field tables. Locals: L out, L+8 the root, L+16 the mode.
  */
-LOCAL_FUNCTION json_decode_mode
+LOCAL_FUNCTION lantern_json_decode_mode
     ENTER 32
     sd      a3, (L + 0)(sp)
     sd      a5, (L + 16)(sp)
@@ -1629,9 +1629,9 @@ LOCAL_FUNCTION json_decode_mode
     ld      a0, (L + 8)(sp)
     mv      a1, s1
     li      a2, 0
-    call    jd_value
+    call    lantern_jd_value
     bnez    a1, 98f
-    call    jd_ws
+    call    lantern_jd_ws
     bne     a0, s2, 96f
     ld      t0, (L + 0)(sp)                 # then the bytes, with room for them
     ld      t1, 0(t0)
@@ -1646,7 +1646,7 @@ LOCAL_FUNCTION json_decode_mode
     ld      a0, (L + 8)(sp)
     mv      a1, s1
     li      a2, 0
-    call    jd_value
+    call    lantern_jd_value
     li      a0, LANTERN_OK
     LEAVE 32
 95: sd      s5, JsonFault_size(s10)
@@ -1655,10 +1655,10 @@ LOCAL_FUNCTION json_decode_mode
 96: mv      a1, a0
     li      a0, JSON_FAULT_SYNTAX
     li      a2, 0
-    call    jd_fault
+    call    lantern_jd_fault
 98: li      a0, LANTERN_INVALID_JSON
     LEAVE 32
-END_FUNCTION json_decode_mode
+END_FUNCTION lantern_json_decode_mode
 
     RODATA
 jd_null:

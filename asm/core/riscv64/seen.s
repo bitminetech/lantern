@@ -138,7 +138,7 @@ FUNCTION lantern_seen_add_block
     sd      a0, 0(sp)
     sd      a1, 8(sp)
     sd      a2, 16(sp)
-    call    seen_find_block
+    call    lantern_seen_find_block
     bnez    a0, 2f
     ld      a0, 0(sp)
     ld      a1, 8(sp)

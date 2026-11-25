@@ -61,7 +61,7 @@ SPEC_FUNCTION compute_fork_digest
     add     x0, sp, #(L + 48)
     mov     x1, #16
     add     x2, sp, #(L + 16)
-    bl      sha256_short
+    bl      lantern_sha256_short
     ldr     w9, [sp, #(L + 16)]
     eor     w24, w24, w9
 1:
@@ -93,7 +93,7 @@ SPEC_LEAF compute_min_epochs_for_block_requests
 SPEC_END compute_min_epochs_for_block_requests
 
 /* L0: x0 = 32 + x0 + x0 // 6, with the carry flag set on overflow. Uses x9, x10. */
-LOCAL_FUNCTION compressed_len
+LOCAL_FUNCTION lantern_compressed_len
     UNWIND_END_PROLOGUE
     mov     x9, #6
     udiv    x9, x0, x9
@@ -101,13 +101,13 @@ LOCAL_FUNCTION compressed_len
     b.cs    1f
     adds    x0, x0, x9
 1:  ret
-END_FUNCTION compressed_len
+END_FUNCTION lantern_compressed_len
 
 SPEC_FUNCTION max_compressed_len
     FRAME 16
     str     x1, [sp, #16]
     ldr     x0, [x0]
-    bl      compressed_len
+    bl      lantern_compressed_len
     b.cs    9f
     ldr     x1, [sp, #16]
     str     x0, [x1]
@@ -121,7 +121,7 @@ SPEC_FUNCTION max_message_size
     FRAME 16
     str     x1, [sp, #16]
     LDQ     x0, x0, CONFIG_MAX_PAYLOAD_SIZE
-    bl      compressed_len                  /* max_compressed_len(MAX_PAYLOAD_SIZE) + 1024 */
+    bl      lantern_compressed_len                  /* max_compressed_len(MAX_PAYLOAD_SIZE) + 1024 */
     b.cs    9f
     adds    x0, x0, #1024
     b.cs    9f
@@ -182,7 +182,7 @@ SPEC_FUNCTION compute_subscribed_subnet
     add     x0, sp, #(L + 8)                /* permutation_seed = sha256(uint_to_bytes(...)) */
     mov     x1, #8
     add     x2, sp, #(L + 16)
-    bl      sha256_short
+    bl      lantern_sha256_short
     cmp     x25, #64                        /* Uint64(1 << prefix_bits) raises */
     b.hs    9f
     mov     x9, #0                          /* node_id_prefix = node_id >> (NODE_ID_BITS - prefix_bits) */
@@ -289,7 +289,7 @@ SPEC_END compute_max_request_data_column_sidecars
  * fork above it, and from fulu on each BLOB_SCHEDULE epoch from FULU_FORK_EPOCH on; else
  * FAR_FUTURE_EPOCH. A leaf; uses x2-x7.
  */
-LOCAL_FUNCTION next_fork_epoch
+LOCAL_FUNCTION lantern_next_fork_epoch
     UNWIND_END_PROLOGUE
     mov     x2, #FAR_FUTURE_EPOCH
     mov     x3, #(16 * FORK)
@@ -323,7 +323,7 @@ LOCAL_FUNCTION next_fork_epoch
 .endif
     mov     x0, x2
     ret
-END_FUNCTION next_fork_epoch
+END_FUNCTION lantern_next_fork_epoch
 
 /* x19 genesis_validators_root, x20 current_epoch, x21 config, x22 scratch, x23 out. Locals: L an epoch. */
 SPEC_FUNCTION compute_enr_fork_id
@@ -338,7 +338,7 @@ SPEC_FUNCTION compute_enr_fork_id
     cbnz    x0, 9f
     ldr     x0, [x20]
     mov     x1, x21
-    bl      next_fork_epoch
+    bl      lantern_next_fork_epoch
     str     x0, [x23, #8]                   /* next_fork_epoch */
     ldr     x9, [x20]                       /* next_fork_version: at next_fork_epoch, or at current_epoch */
     cmn     x0, #1
@@ -361,7 +361,7 @@ SPEC_FUNCTION compute_next_fork_digest
     mov     x23, x4
     ldr     x0, [x1]
     mov     x1, x21
-    bl      next_fork_epoch
+    bl      lantern_next_fork_epoch
     cmn     x0, #1
     b.eq    1f
     str     x0, [sp, #L]

@@ -31,7 +31,7 @@
  * not all zero; x0 = 1 for bytes that are no update of the fork. Uses x7-x15.
  */
 .if FORK >= FORK_ALTAIR
-LOCAL_FUNCTION lc_update_fields
+LOCAL_FUNCTION lantern_lc_update_fields
     UNWIND_END_PROLOGUE
     ldr     x9, [x0, #8]
     add     x7, x0, x9                      /* the bytes, x8 of them */
@@ -95,7 +95,7 @@ LOCAL_FUNCTION lc_update_fields
     ret
 9:  mov     x0, #1
     ret
-END_FUNCTION lc_update_fields
+END_FUNCTION lantern_lc_update_fields
 .endif
 
 /* L0: x9 = the sync committee period of the slot x9. Uses x10. */
@@ -117,7 +117,7 @@ SPEC_FUNCTION is_better_update
 .else
     mov     x19, x2
     mov     x26, x1
-    bl      lc_update_fields
+    bl      lantern_lc_update_fields
     cbnz    x0, 96f
     mov     x20, x1
     mov     x21, x2
@@ -126,7 +126,7 @@ SPEC_FUNCTION is_better_update
     mov     x24, x5
     mov     x25, x6
     mov     x0, x26
-    bl      lc_update_fields
+    bl      lantern_lc_update_fields
     cbnz    x0, 96f
     stp     x1, x2, [sp, #L]                /* old: L participants, L+8 attested, L+16 finalized, L+24 signature, L+32, L+40 the branches */
     stp     x3, x4, [sp, #(L + 16)]
@@ -225,7 +225,7 @@ SPEC_FUNCTION execution_branch
     ADDRESS x0, lantern_type_BeaconBlockBody
     mov     x1, x19
     mov     x2, x20
-    bl      node_decode
+    bl      lantern_node_decode
     cmp     x0, #1
     b.eq    99f
     cbnz    x0, 96f
@@ -300,7 +300,7 @@ SPEC_FUNCTION block_to_light_client_header
     ADDRESS x0, lantern_type_SignedBeaconBlock
     mov     x1, x19
     mov     x2, x20
-    bl      node_decode
+    bl      lantern_node_decode
     cmp     x0, #1
     b.eq    98f
     cbnz    x0, 96f

@@ -15,7 +15,7 @@
 .macro JTEXT label
     ADDRESS x0, \label
     mov     x1, #\label\()_len
-    bl      jput
+    bl      lantern_jput
 .endm
 
 /* The byte c, a character code, to x2. Uses x9. */
@@ -25,7 +25,7 @@
 .endm
 
 /* L0: the x1 bytes at x0 to x2. Uses x9. */
-LOCAL_FUNCTION jput
+LOCAL_FUNCTION lantern_jput
     UNWIND_END_PROLOGUE
     cbz     x1, 2f
 1:  ldrb    w9, [x0], #1
@@ -33,10 +33,10 @@ LOCAL_FUNCTION jput
     subs    x1, x1, #1
     b.ne    1b
 2:  ret
-END_FUNCTION jput
+END_FUNCTION lantern_jput
 
 /* L0: DATA: "0x" and two lowercase hex digits for each of the x1 bytes at x0, to x2. Uses x9-x11. */
-LOCAL_FUNCTION jdata
+LOCAL_FUNCTION lantern_jdata
     UNWIND_END_PROLOGUE
     mov     w9, #'"'
     strb    w9, [x2], #1
@@ -63,10 +63,10 @@ LOCAL_FUNCTION jdata
 3:  mov     w9, #'"'
     strb    w9, [x2], #1
     ret
-END_FUNCTION jdata
+END_FUNCTION lantern_jdata
 
 /* L0: QUANTITY of the x1 bytes, little endian, at x0: "0x" and the hex with no leading zeros, to x2. Uses x9-x12. */
-LOCAL_FUNCTION jquantity
+LOCAL_FUNCTION lantern_jquantity
     UNWIND_END_PROLOGUE
     mov     w9, #'"'
     strb    w9, [x2], #1
@@ -96,10 +96,10 @@ LOCAL_FUNCTION jquantity
     mov     w9, #'"'
     strb    w9, [x2], #1
     ret
-END_FUNCTION jquantity
+END_FUNCTION lantern_jquantity
 
 /* L0: the decimal digits of x0 to x2. Uses x9-x12. */
-LOCAL_FUNCTION jdecimal
+LOCAL_FUNCTION lantern_jdecimal
     UNWIND_END_PROLOGUE
     mov     x12, #10
     mov     x9, x0
@@ -114,20 +114,20 @@ LOCAL_FUNCTION jdecimal
     mov     x0, x10
     cbnz    x0, 2b
     ret
-END_FUNCTION jdecimal
+END_FUNCTION lantern_jdecimal
 
 /* QUANTITY of the u64 at base + off, to x2. Uses x0, x1, x9-x12. */
 .macro JQ64 base, off
     add     x0, \base, #(\off)
     mov     x1, #8
-    bl      jquantity
+    bl      lantern_jquantity
 .endm
 
 /* DATA of the n bytes at base + off, to x2. Uses x0, x1, x9-x11. */
 .macro JDATA base, off, n
     ADDQ    x0, \base, \off
     mov     x1, #\n
-    bl      jdata
+    bl      lantern_jdata
 .endm
 
 /* The SSZ bytes of one request of each kind, and the copies that make them from a value. */
@@ -395,7 +395,7 @@ SPEC_FUNCTION engine_new_payload
     /* {"jsonrpc":"2.0","id":id,"method":"engine_newPayloadVn","params":[ */
     JTEXT   j_open
     mov     x0, x20
-    bl      jdecimal
+    bl      lantern_jdecimal
     JTEXT   j_method_np
 .if FORK == FORK_BELLATRIX
     JCHAR   49
@@ -430,11 +430,11 @@ SPEC_FUNCTION engine_new_payload
     JQ64    x24, ExecutionPayload_timestamp
     JTEXT   j_extra_data
     PART    x0, x1, x24, ExecutionPayload_extra_data
-    bl      jdata
+    bl      lantern_jdata
     JTEXT   j_base_fee
     ADDQ    x0, x24, ExecutionPayload_base_fee_per_gas
     mov     x1, #32
-    bl      jquantity
+    bl      lantern_jquantity
     JTEXT   j_block_hash
     JDATA   x24, ExecutionPayload_block_hash, 32
     /* each transaction: a nested ByteList value */
@@ -444,7 +444,7 @@ SPEC_FUNCTION engine_new_payload
 1:  ldr     x9, [x26, #8]
     add     x0, x26, x9
     ldr     x1, [x26, #16]
-    bl      jdata
+    bl      lantern_jdata
     ldr     x9, [x26]
     add     x26, x26, x9
     subs    x27, x27, #1
@@ -489,7 +489,7 @@ SPEC_FUNCTION engine_new_payload
     mov     x2, x25
     add     x0, sp, #(L + 16)
     mov     x1, #32
-    bl      jdata
+    bl      lantern_jdata
     add     x26, x26, #48
     subs    x27, x27, #1
     b.eq    6f
@@ -522,7 +522,7 @@ SPEC_FUNCTION engine_new_payload
     add     x0, x26, #8
     ldr     x1, [x26]
     add     x26, x0, x1
-    bl      jdata
+    bl      lantern_jdata
     cmp     x26, x27
     b.hs    9f
     JCHAR   44
@@ -561,7 +561,7 @@ SPEC_FUNCTION engine_forkchoice_updated
     add     x2, x21, #24
     JTEXT   j_open
     mov     x0, x20
-    bl      jdecimal
+    bl      lantern_jdecimal
     JTEXT   j_method_fcu
 .if FORK == FORK_BELLATRIX
     JCHAR   49
@@ -636,7 +636,7 @@ SPEC_FUNCTION engine_get_payload
     add     x2, x21, #24
     JTEXT   j_open
     mov     x0, x20
-    bl      jdecimal
+    bl      lantern_jdecimal
     JTEXT   j_method_gp
 .if FORK == FORK_BELLATRIX
     JCHAR   49

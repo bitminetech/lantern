@@ -1,6 +1,6 @@
 /*
  * lantern_api_route, RISC-V: in the common object. Requirements: docs/reference/beacon-api.md.
- * Uses http_find, http_trim and http_same of http.s.
+ * Uses lantern_http_find, lantern_http_trim and lantern_http_same of http.s.
  */
 
     API_ROUTE_DATA
@@ -40,7 +40,7 @@ route_k_null:
 .endm
 
 /* L0: a0 = 1 when each % of the a1 bytes at a0 is followed by two hex digits, else 0. A leaf. Uses t0-t5. */
-LOCAL_FUNCTION route_pct_ok
+LOCAL_FUNCTION lantern_route_pct_ok
     UNWIND_END_PROLOGUE
     li      t0, 0
     li      t5, '%'
@@ -61,13 +61,13 @@ LOCAL_FUNCTION route_pct_ok
     ret
 9:  li      a0, 1
     ret
-END_FUNCTION route_pct_ok
+END_FUNCTION lantern_route_pct_ok
 
 /*
  * L0: the a1 bytes at a0, percent-decoded (each % is followed by two hex digits), to a2: at most a3
  * bytes written; a0 = the decoded length, which may pass a3. A leaf. Uses t0-t6.
  */
-LOCAL_FUNCTION route_decode
+LOCAL_FUNCTION lantern_route_decode
     UNWIND_END_PROLOGUE
     li      t0, 0
     li      t1, 0
@@ -91,14 +91,14 @@ LOCAL_FUNCTION route_decode
     j       1b
 9:  mv      a0, t1
     ret
-END_FUNCTION route_decode
+END_FUNCTION lantern_route_decode
 
 /*
  * L0: one item of a list value: the bytes at a0 from index a1 to index a2, percent-decoded, up to
  * the first decoded `,`, to a3 with at most a4 bytes written. a0 = the index after the item and its
  * comma, a1 = the item's decoded length (it may pass a4), a2 = 1 when a comma ended it. A leaf. Uses a5, t0-t6.
  */
-LOCAL_FUNCTION route_next_item
+LOCAL_FUNCTION lantern_route_next_item
     UNWIND_END_PROLOGUE
     li      t1, 0
     li      a5, 0
@@ -127,10 +127,10 @@ LOCAL_FUNCTION route_next_item
     mv      a1, t1
     mv      a2, a5
     ret
-END_FUNCTION route_next_item
+END_FUNCTION lantern_route_next_item
 
 /* L0: the a1 bytes at a0 as a decimal number below 2^64: a0 = 0 and a1 = its value, else a0 = 1. A leaf. Uses t0-t4. */
-LOCAL_FUNCTION route_number
+LOCAL_FUNCTION lantern_route_number
     UNWIND_END_PROLOGUE
     beqz    a1, 8f
     li      t0, 0
@@ -153,10 +153,10 @@ LOCAL_FUNCTION route_number
 9:  mv      a1, t0
     li      a0, 0
     ret
-END_FUNCTION route_number
+END_FUNCTION lantern_route_number
 
 /* L0: the a1 bytes at a0 as 0x and the hex of a2 bytes: a0 = 0 and the bytes at a3, else a0 = 1. A leaf. Uses t0-t3. */
-LOCAL_FUNCTION route_hex
+LOCAL_FUNCTION lantern_route_hex
     UNWIND_END_PROLOGUE
     slli    t0, a2, 1
     addi    t0, t0, 2
@@ -184,10 +184,10 @@ LOCAL_FUNCTION route_hex
     ret
 9:  li      a0, 0
     ret
-END_FUNCTION route_hex
+END_FUNCTION lantern_route_hex
 
 /* L0: the word of api_words for parameter a0 that is the a2 bytes at a1: a0 = 1 and a1 = its value, else a0 = 0. A leaf. Uses t0-t6. */
-LOCAL_FUNCTION route_word
+LOCAL_FUNCTION lantern_route_word
     UNWIND_END_PROLOGUE
     lla     t0, api_words
     lla     t1, api_word_text
@@ -216,14 +216,14 @@ LOCAL_FUNCTION route_word
     j       1b
 8:  li      a0, 0
     ret
-END_FUNCTION route_word
+END_FUNCTION lantern_route_word
 
 /*
  * L0: whether the a1 bytes at a0, a path whose percent-encoding is good, match the template of a3
  * bytes at a2: a0 = 1 or 0. Each parameter segment goes to the list at a4: its count, then for each
  * its API_PARAM_*, start and end in the path. A leaf. Uses a5, a6, t0-t6.
  */
-LOCAL_FUNCTION route_match
+LOCAL_FUNCTION lantern_route_match
     UNWIND_END_PROLOGUE
     li      t0, 1
     li      t1, 1
@@ -283,14 +283,14 @@ LOCAL_FUNCTION route_match
     ret
 7:  li      a0, 0
     ret
-END_FUNCTION route_match
+END_FUNCTION lantern_route_match
 
 /*
  * L0: the a3 decoded bytes at a2 as a value of parameter a1, into ApiRoute a0; an item of a list
  * goes to the 64 bytes at a4. a0 = 0, or 1 when the value breaks its type.
  * s1 out, s2 the parameter, s3 bytes, s4 length, s5 the item's place, s6 the field.
  */
-LOCAL_FUNCTION route_value
+LOCAL_FUNCTION lantern_route_value
     ENTER 0
     mv      s1, a0
     mv      s2, a1
@@ -337,7 +337,7 @@ LOCAL_FUNCTION route_value
     j       98f
 10: mv      a0, s3                          # a number, to its field
     mv      a1, s4
-    call    route_number
+    call    lantern_route_number
     bnez    a0, 98f
     add     t0, s1, s6
     sd      a1, 0(t0)
@@ -345,13 +345,13 @@ LOCAL_FUNCTION route_value
 11: mv      a0, s2                          # state_id, block_id: a word, a slot or a root
     mv      a1, s3
     mv      a2, s4
-    call    route_word
+    call    lantern_route_word
     beqz    a0, 12f
     sd      a1, ApiRoute_id_kind(s1)
     j       90f
 12: mv      a0, s3
     mv      a1, s4
-    call    route_number
+    call    lantern_route_number
     bnez    a0, 13f
     li      t0, API_ID_SLOT
     sd      t0, ApiRoute_id_kind(s1)
@@ -361,7 +361,7 @@ LOCAL_FUNCTION route_value
     mv      a1, s4
     li      a2, 32
     addi    a3, s1, ApiRoute_id_root
-    call    route_hex
+    call    lantern_route_hex
     bnez    a0, 98f
     li      t0, API_ID_ROOT
     sd      t0, ApiRoute_id_kind(s1)
@@ -377,7 +377,7 @@ LOCAL_FUNCTION route_value
     sd      zero, 56(s5)
     mv      a0, s3
     mv      a1, s4
-    call    route_number
+    call    lantern_route_number
     bnez    a0, 151f
     li      t0, API_VALIDATOR_INDEX
     sd      t0, 0(s5)
@@ -387,7 +387,7 @@ LOCAL_FUNCTION route_value
     mv      a1, s4
     li      a2, 48
     addi    a3, s5, ValidatorRef_pubkey
-    call    route_hex
+    call    lantern_route_hex
     bnez    a0, 98f
     li      t0, API_VALIDATOR_PUBKEY
     sd      t0, 0(s5)
@@ -413,7 +413,7 @@ LOCAL_FUNCTION route_value
     j       161b
 17: mv      a0, s3                          # syncing_status: 100 to 599
     mv      a1, s4
-    call    route_number
+    call    lantern_route_number
     bnez    a0, 98f
     li      t0, 100
     bltu    a1, t0, 98f
@@ -430,7 +430,7 @@ LOCAL_FUNCTION route_value
 26: mv      a0, s3
     mv      a1, s4
     add     a3, s1, s6
-    call    route_hex
+    call    lantern_route_hex
     bnez    a0, 98f
     j       90f
 21: bnez    s4, 98f                         # skip_randao_verification: empty
@@ -438,7 +438,7 @@ LOCAL_FUNCTION route_value
 22: mv      a0, s2                          # broadcast_validation: a word
     mv      a1, s3
     mv      a2, s4
-    call    route_word
+    call    lantern_route_word
     beqz    a0, 98f
     add     t0, s1, s6
     sd      a1, 0(t0)
@@ -446,7 +446,7 @@ LOCAL_FUNCTION route_value
 23: mv      a0, s2                          # a set: the word's bits
     mv      a1, s3
     mv      a2, s4
-    call    route_word
+    call    lantern_route_word
     beqz    a0, 98f
     add     t0, s1, s6
     ld      t1, 0(t0)
@@ -455,7 +455,7 @@ LOCAL_FUNCTION route_value
     j       90f
 24: mv      a0, s3                          # indices: a number
     mv      a1, s4
-    call    route_number
+    call    lantern_route_number
     bnez    a0, 98f
     sd      a1, 0(s5)
     j       90f
@@ -463,13 +463,13 @@ LOCAL_FUNCTION route_value
     mv      a1, s4
     li      a2, 32
     mv      a3, s5
-    call    route_hex
+    call    lantern_route_hex
     bnez    a0, 98f
 90: li      a0, 0
     LEAVE 0
 98: li      a0, 1
     LEAVE 0
-END_FUNCTION route_value
+END_FUNCTION lantern_route_value
 
 /*
  * L0: the weight, 0 to 1000, that the Accept value of a1 bytes at a0 gives the media type of a3
@@ -478,7 +478,7 @@ END_FUNCTION route_value
  * weight, s7 an item's start, s8 its end, s9 a parameter's start, s10 a range's kind; L the item's
  * weight, L+8 the range's end or the next parameter's end.
  */
-LOCAL_FUNCTION route_weight
+LOCAL_FUNCTION lantern_route_weight
     ENTER 16
     mv      s1, a0
     mv      s2, a1
@@ -492,25 +492,25 @@ LOCAL_FUNCTION route_weight
     mv      a1, s7
     mv      a2, s2
     li      a3, ','
-    call    http_find
+    call    lantern_http_find
     mv      s8, a0
     mv      a0, s1                          # the range: up to the first ;
     mv      a1, s7
     mv      a2, s8
     li      a3, ';'
-    call    http_find
+    call    lantern_http_find
     mv      s9, a0
     mv      a0, s1
     mv      a1, s7
     mv      a2, s9
-    call    http_trim
+    call    lantern_http_trim
     sd      a0, L(sp)
     sd      a1, (L + 8)(sp)
     sub     a1, a1, a0
     add     a0, s1, a0
     mv      a2, s3
     mv      a3, s4
-    call    http_same
+    call    lantern_http_same
     li      s10, 2
     bnez    a0, 3f
     ld      t0, L(sp)
@@ -519,7 +519,7 @@ LOCAL_FUNCTION route_weight
     add     a0, s1, t0
     lla     a2, route_t_any_application
     li      a3, route_t_any_application_len
-    call    http_same
+    call    lantern_http_same
     li      s10, 1
     bnez    a0, 3f
     ld      t0, L(sp)
@@ -528,7 +528,7 @@ LOCAL_FUNCTION route_weight
     add     a0, s1, t0
     lla     a2, route_t_any
     li      a3, route_t_any_len
-    call    http_same
+    call    lantern_http_same
     li      s10, 0
     beqz    a0, 8f                          # a range of another type: skipped
 3:  li      t0, 1000                        # the parameters: q= sets the weight
@@ -539,12 +539,12 @@ LOCAL_FUNCTION route_weight
     mv      a1, s9
     mv      a2, s8
     li      a3, ';'
-    call    http_find
+    call    lantern_http_find
     sd      a0, (L + 8)(sp)
     mv      a2, a0
     mv      a0, s1
     mv      a1, s9
-    call    http_trim
+    call    lantern_http_trim
     ld      s9, (L + 8)(sp)
     sub     t0, a1, a0                      # a0, a1: the parameter
     li      t1, 2
@@ -617,10 +617,10 @@ LOCAL_FUNCTION route_weight
     bltz    s5, 91f
     mv      a0, s6
 91: LEAVE 16
-END_FUNCTION route_weight
+END_FUNCTION lantern_route_weight
 
 /* L0: s3 past the JSON white space (space, tab, LF, CR) before s4. A leaf. Uses t0, t1. */
-LOCAL_FUNCTION route_ws
+LOCAL_FUNCTION lantern_route_ws
     UNWIND_END_PROLOGUE
 1:  bgeu    s3, s4, 9f
     lbu     t0, 0(s3)
@@ -635,10 +635,10 @@ LOCAL_FUNCTION route_ws
 2:  addi    s3, s3, 1
     j       1b
 9:  ret
-END_FUNCTION route_ws
+END_FUNCTION lantern_route_ws
 
 /* L0: a0 = 1 when the a1 bytes at a0 start the bytes at s3 (before s4), s3 then past them; else 0. A leaf. Uses t0-t2. */
-LOCAL_FUNCTION route_lit
+LOCAL_FUNCTION lantern_route_lit
     UNWIND_END_PROLOGUE
     sub     t0, s4, s3
     bltu    t0, a1, 8f
@@ -656,7 +656,7 @@ LOCAL_FUNCTION route_lit
     ret
 8:  li      a0, 0
     ret
-END_FUNCTION route_lit
+END_FUNCTION lantern_route_lit
 
 /*
  * L0: the JSON string at s3 (before s4), RFC 8259 section 7: its value, each escape decoded (a \u
@@ -664,7 +664,7 @@ END_FUNCTION route_lit
  * or 1 when it breaks the rules; a1 = the value's length, 201 when it is longer than 200. A leaf.
  * Uses t0-t3.
  */
-LOCAL_FUNCTION route_string
+LOCAL_FUNCTION lantern_route_string
     UNWIND_END_PROLOGUE
     bgeu    s3, s4, 8f
     lbu     t0, 0(s3)
@@ -736,10 +736,10 @@ LOCAL_FUNCTION route_string
     ret
 8:  li      a0, 1
     ret
-END_FUNCTION route_string
+END_FUNCTION lantern_route_string
 
 /* L0: a0 = API_PARAM_ID when the a1 bytes at s6 + L + 192 are ids, API_PARAM_STATUS when they are statuses, else 0. A leaf. Uses t0-t3, a2. */
-LOCAL_FUNCTION route_key
+LOCAL_FUNCTION lantern_route_key
     UNWIND_END_PROLOGUE
     lla     t0, route_k_ids
     li      t1, 3
@@ -762,7 +762,7 @@ LOCAL_FUNCTION route_key
     ret
 8:  li      a0, 0
     ret
-END_FUNCTION route_key
+END_FUNCTION lantern_route_key
 
 /*
  * L1: null, or an array of strings, at s3 of a body that ends at s4: each string an item of the
@@ -771,27 +771,27 @@ END_FUNCTION route_key
  * lantern_api_route: L+56 1 when the list has no room, L+128 an item. Locals: the parameter, an
  * item's start.
  */
-LOCAL_FUNCTION route_ids_array
+LOCAL_FUNCTION lantern_route_ids_array
     FRAME 16
     sd      a0, 0(sp)
     lla     a0, route_k_null
     li      a1, 4
-    call    route_lit
+    call    lantern_route_lit
     bnez    a0, 7f
     bgeu    s3, s4, 8f                      # [
     lbu     t0, 0(s3)
     addi    s3, s3, 1
     li      t1, 0x5b
     bne     t0, t1, 8f
-    call    route_ws
+    call    lantern_route_ws
     bgeu    s3, s4, 8f
     lbu     t0, 0(s3)
     li      t1, 0x5d
     bne     t0, t1, 2f
     addi    s3, s3, 1
     j       7f
-2:  call    route_ws                        # a string: its value is the item
-    call    route_string
+2:  call    lantern_route_ws                        # a string: its value is the item
+    call    lantern_route_string
     bnez    a0, 8f
     li      t0, 200
     bgtu    a1, t0, 9f
@@ -800,7 +800,7 @@ LOCAL_FUNCTION route_ids_array
     ld      a1, 0(sp)
     addi    a2, s6, (L + 192)
     addi    a4, s6, (L + 128)
-    call    route_value
+    call    lantern_route_value
     bnez    a0, 9f
     ld      t0, 0(sp)
     li      t1, API_PARAM_STATUS
@@ -828,7 +828,7 @@ LOCAL_FUNCTION route_ids_array
     li      t1, 1
     sll     t1, t1, t0
     or      s8, s8, t1
-    call    route_ws                        # then , or ]
+    call    lantern_route_ws                        # then , or ]
     bgeu    s3, s4, 8f
     lbu     t0, 0(s3)
     addi    s3, s3, 1
@@ -843,7 +843,7 @@ LOCAL_FUNCTION route_ids_array
 9:  ld      a0, 0(sp)
     addi    a0, a0, 1
     UNFRAME 16
-END_FUNCTION route_ids_array
+END_FUNCTION lantern_route_ids_array
 
 /*
  * s1 the request, s2 out, s3 a path parameter's entry or a query item's start, s4 their count or
@@ -884,7 +884,7 @@ FUNCTION lantern_api_route
     ld      s7, (HttpRequest_query + 8)(s1)
     mv      a0, s3                          # the path: its percent-encoding, then its template
     mv      a1, s4
-    call    route_pct_ok
+    call    lantern_route_pct_ok
     beqz    a0, 400f
     lla     s5, api_routes
     li      t0, API_OPS
@@ -896,7 +896,7 @@ FUNCTION lantern_api_route
     mv      a0, s3
     mv      a1, s4
     addi    a4, sp, L
-    call    route_match
+    call    lantern_route_match
     bnez    a0, 4f
     addi    s5, s5, 32
     ld      t0, (L + 120)(sp)
@@ -933,7 +933,7 @@ FUNCTION lantern_api_route
     sd      t0, ApiRoute_op(s2)
     mv      a0, s6                          # the query's percent-encoding
     mv      a1, s7
-    call    route_pct_ok
+    call    lantern_route_pct_ok
     beqz    a0, 400f
     addi    s3, sp, (L + 8)                 # the path parameters
     ld      s4, L(sp)
@@ -947,7 +947,7 @@ FUNCTION lantern_api_route
     sub     a1, a1, t0
     addi    a2, sp, (L + 192)
     li      a3, 200
-    call    route_decode
+    call    lantern_route_decode
     li      t0, 200
     bgtu    a0, t0, 401f
     sd      a0, (L + 88)(sp)
@@ -956,7 +956,7 @@ FUNCTION lantern_api_route
     mv      a1, s10
     addi    a2, sp, (L + 192)
     addi    a4, sp, (L + 128)
-    call    route_value
+    call    lantern_route_value
     bnez    a0, 401f
     li      t0, 1
     sll     t0, t0, s10
@@ -978,20 +978,20 @@ FUNCTION lantern_api_route
     mv      a1, s3
     mv      a2, s7
     li      a3, '&'
-    call    http_find
+    call    lantern_http_find
     mv      s4, a0
     beq     s4, s3, 39f
     mv      a0, s6                          # the name, up to the first =
     mv      a1, s3
     mv      a2, s4
     li      a3, '='
-    call    http_find
+    call    lantern_http_find
     sd      a0, (L + 96)(sp)
     sub     a1, a0, s3
     add     a0, s6, s3
     addi    a2, sp, (L + 192)
     li      a3, 32
-    call    route_decode
+    call    lantern_route_decode
     li      t0, 32
     bgtu    a0, t0, 39f
     ld      t0, 16(s5)                      # a parameter the operation takes, by name
@@ -1040,7 +1040,7 @@ FUNCTION lantern_api_route
     sub     a1, s4, t0
     addi    a2, sp, (L + 192)
     li      a3, 200
-    call    route_decode
+    call    lantern_route_decode
     li      t0, 200
     bgtu    a0, t0, 401f
     mv      a3, a0
@@ -1048,7 +1048,7 @@ FUNCTION lantern_api_route
     mv      a1, s10
     addi    a2, sp, (L + 192)
     addi    a4, sp, (L + 128)
-    call    route_value
+    call    lantern_route_value
     bnez    a0, 401f
     j       39f
 30: or      s8, s8, t1                      # a list or a set: each item
@@ -1076,7 +1076,7 @@ FUNCTION lantern_api_route
     mv      a2, s4
     addi    a3, sp, (L + 192)
     li      a4, 200
-    call    route_next_item
+    call    lantern_route_next_item
     sd      a0, (L + 104)(sp)
     sd      a2, (L + 112)(sp)
     beqz    a1, 401f
@@ -1087,7 +1087,7 @@ FUNCTION lantern_api_route
     mv      a1, s10
     addi    a2, sp, (L + 192)
     addi    a4, sp, (L + 128)
-    call    route_value
+    call    lantern_route_value
     bnez    a0, 401f
     ld      t0, (L + 64)(sp)                # a list item: into out, while there is room
     beqz    t0, 36f
@@ -1132,7 +1132,7 @@ FUNCTION lantern_api_route
     ld      t0, HttpRequest_consensus_version(s1)
     add     a1, s1, t0
     ld      a2, (HttpRequest_consensus_version + 8)(s1)
-    call    route_word
+    call    lantern_route_word
     beqz    a0, 401f
     sd      a1, ApiRoute_consensus_version(s2)
     li      t0, 1
@@ -1154,18 +1154,18 @@ FUNCTION lantern_api_route
     mv      a0, s3
     li      a1, 0
     li      a3, ';'
-    call    http_find
+    call    lantern_http_find
     mv      a2, a0
     mv      a0, s3
     li      a1, 0
-    call    http_trim
+    call    lantern_http_trim
     add     s3, s3, a0
     sub     s4, a1, a0
     mv      a0, s3
     mv      a1, s4
     lla     a2, route_t_ssz
     li      a3, route_t_ssz_len
-    call    http_same
+    call    lantern_http_same
     beqz    a0, 43f
     li      t0, API_TYPE_SSZ
     sd      t0, ApiRoute_body(s2)
@@ -1174,7 +1174,7 @@ FUNCTION lantern_api_route
     mv      a1, s4
     lla     a2, route_t_json
     li      a3, route_t_json_len
-    call    http_same
+    call    lantern_http_same
     beqz    a0, 415f
 44: ld      t0, 8(s5)                       # the JSON body of ids
     li      t1, ((API_FLAG_IDS_OBJECT | API_FLAG_IDS_ARRAY) << 24)
@@ -1191,29 +1191,29 @@ FUNCTION lantern_api_route
     and     t2, t0, t2
     bnez    t2, 51f
     beqz    t1, 45f                         # an array: no body, null, or the ids
-    call    route_ws
+    call    lantern_route_ws
     li      a0, API_PARAM_ID
-    call    route_ids_array
+    call    lantern_route_ids_array
     bnez    a0, 59f
     j       58f
-51: call    route_ws                        # an object: {"ids":…,"statuses":…}
+51: call    lantern_route_ws                        # an object: {"ids":…,"statuses":…}
     bgeu    s3, s4, 400f
     lbu     t0, 0(s3)
     addi    s3, s3, 1
     li      t1, 0x7b
     bne     t0, t1, 400f
     sd      zero, (L + 96)(sp)              # the members seen: 1 ids, 2 statuses
-    call    route_ws
+    call    lantern_route_ws
     bgeu    s3, s4, 400f
     lbu     t0, 0(s3)
     li      t1, 0x7d
     bne     t0, t1, 52f
     addi    s3, s3, 1
     j       58f
-52: call    route_ws                        # a member: its key, once
-    call    route_string
+52: call    lantern_route_ws                        # a member: its key, once
+    call    lantern_route_string
     bnez    a0, 400f
-    call    route_key
+    call    lantern_route_key
     beqz    a0, 400f
     mv      s10, a0
     li      s7, 1
@@ -1225,17 +1225,17 @@ FUNCTION lantern_api_route
     bnez    t1, 400f
     or      t0, t0, s7
     sd      t0, (L + 96)(sp)
-    call    route_ws
+    call    lantern_route_ws
     bgeu    s3, s4, 400f
     lbu     t0, 0(s3)
     addi    s3, s3, 1
     li      t1, 0x3a
     bne     t0, t1, 400f
-    call    route_ws
+    call    lantern_route_ws
     mv      a0, s10
-    call    route_ids_array
+    call    lantern_route_ids_array
     bnez    a0, 59f
-    call    route_ws                        # then , or }
+    call    lantern_route_ws                        # then , or }
     bgeu    s3, s4, 400f
     lbu     t0, 0(s3)
     addi    s3, s3, 1
@@ -1243,7 +1243,7 @@ FUNCTION lantern_api_route
     beq     t0, t1, 52b
     li      t1, 0x7d
     bne     t0, t1, 400f
-58: call    route_ws                        # nothing after the value
+58: call    lantern_route_ws                        # nothing after the value
     bne     s3, s4, 400f
     j       45f
 59: addi    s10, a0, -1                     # the fault
@@ -1262,13 +1262,13 @@ FUNCTION lantern_api_route
     mv      a1, s4
     lla     a2, route_t_json
     li      a3, route_t_json_len
-    call    route_weight
+    call    lantern_route_weight
     mv      s10, a0
     mv      a0, s3
     mv      a1, s4
     lla     a2, route_t_ssz
     li      a3, route_t_ssz_len
-    call    route_weight
+    call    lantern_route_weight
     or      t0, a0, s10
     beqz    t0, 406f
     bleu    a0, s10, 46f
@@ -1301,7 +1301,7 @@ FUNCTION lantern_api_route
     sub     a1, a1, t0
     add     a2, s2, s3
     mv      a3, s4
-    call    route_decode
+    call    lantern_route_decode
     add     t0, s3, s4                      # zero bytes up to a multiple of 8
 471: andi   t1, t0, 7
     beqz    t1, 48f

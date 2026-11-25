@@ -81,7 +81,7 @@ SPEC_FUNCTION get_next_sync_committee_indices
     add     x0, sp, #(L + 48)               /* random_bytes = sha256(seed + uint_to_bytes(i // 16)) */
     mov     x1, #40
     add     x2, sp, #(L + 88)
-    bl      sha256_short
+    bl      lantern_sha256_short
 .if FORK >= FORK_ELECTRA
     and     x9, x26, #15
     lsl     x9, x9, #1

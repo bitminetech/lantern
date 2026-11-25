@@ -12,7 +12,7 @@
  */
 SPEC_LEAF process_randao
     mov     x5, #0
-    b       randao_step
+    b       lantern_randao_step
 SPEC_END process_randao
 
 /*
@@ -20,7 +20,7 @@ SPEC_END process_randao
  * reveal's signature (block production with skip_randao_verification, block-processing.md).
  * x19 state, x20 body, x21 config, x22 scratch, x23 result, x24 the proposer, x25 skip.
  */
-LOCAL_FUNCTION randao_step
+LOCAL_FUNCTION lantern_randao_step
     ENTER 176
     mov     x19, x0
     mov     x20, x1
@@ -80,14 +80,14 @@ LOCAL_FUNCTION randao_step
     add     x1, x20, #BeaconBlockBody_randao_reveal
     add     x2, sp, #(L + 56)
     mov     x3, x22
-    bl      verify_root_signature
+    bl      lantern_verify_root_signature
     cbnz    x0, 7f
     mov     x0, #LANTERN_INVALID_RANDAO_REVEAL
     cbz     x1, 6f
 3:  add     x0, x20, #BeaconBlockBody_randao_reveal     /* mix = xor(get_randao_mix(state, epoch), sha256(randao_reveal)) */
     mov     x1, #96
     add     x2, sp, #(L + 112)
-    bl      sha256_short
+    bl      lantern_sha256_short
     mov     x0, x19
     add     x1, sp, #L
     add     x2, sp, #(L + 144)
@@ -106,7 +106,7 @@ LOCAL_FUNCTION randao_step
     LEAVE 176
 9:  mov     x0, #LANTERN_BUFFER_TOO_SMALL
     LEAVE 176
-END_FUNCTION randao_step
+END_FUNCTION lantern_randao_step
 
 /* x19 state, x20 body, x21 result. */
 SPEC_FUNCTION process_eth1_data
@@ -259,7 +259,7 @@ SPEC_FUNCTION process_operations
 1:  FOR_FIXED x20, BeaconBlockBody_proposer_slashings, ProposerSlashing__mem, lantern_process_proposer_slashing
     FOR_VARIABLE x20, BeaconBlockBody_attester_slashings, lantern_process_attester_slashing
 .if FORK >= FORK_ALTAIR
-    FOR_VARIABLE x20, BeaconBlockBody_attestations, attestation_memo, 1
+    FOR_VARIABLE x20, BeaconBlockBody_attestations, lantern_attestation_memo, 1
 .else
     FOR_VARIABLE x20, BeaconBlockBody_attestations, lantern_process_attestation
 .endif
@@ -298,7 +298,7 @@ SPEC_END process_operations
  * L0: x0 = LANTERN_OK when state x0 has room for the appends of the execution requests of
  * block body x1 and x6 more pending deposits, else LANTERN_BUFFER_TOO_SMALL. A leaf.
  */
-LOCAL_FUNCTION requests_room
+LOCAL_FUNCTION lantern_requests_room
     UNWIND_END_PROLOGUE
     PART    x2, x3, x1, BeaconBlockBody_execution_requests
     LDQ     x3, x2, ExecutionRequests_deposits + 8
@@ -327,7 +327,7 @@ LOCAL_FUNCTION requests_room
     ret
 9:  mov     x0, #LANTERN_BUFFER_TOO_SMALL
     ret
-END_FUNCTION requests_room
+END_FUNCTION lantern_requests_room
 
 .if FORK == FORK_ELECTRA
 /*
@@ -335,28 +335,28 @@ END_FUNCTION requests_room
  * LANTERN_BUFFER_TOO_SMALL: a validator and a pending deposit for each deposit, and the
  * appends of the execution requests. x19 state, x20 body.
  */
-LOCAL_FUNCTION block_room
+LOCAL_FUNCTION lantern_block_room
     ENTER 0
     mov     x19, x0
     mov     x20, x1
-    bl      validator_room
+    bl      lantern_validator_room
     LDQ     x6, x20, BeaconBlockBody_deposits + 8
     cmp     x0, x6
     b.lo    9f
     mov     x0, x19
     mov     x1, x20
-    bl      requests_room
+    bl      lantern_requests_room
     LEAVE 0
 9:  mov     x0, #LANTERN_BUFFER_TOO_SMALL
     LEAVE 0
-END_FUNCTION block_room
+END_FUNCTION lantern_block_room
 .else
-/* L0: requests_room with no deposits. */
-LOCAL_FUNCTION block_room
+/* L0: lantern_requests_room with no deposits. */
+LOCAL_FUNCTION lantern_block_room
     UNWIND_END_PROLOGUE
     mov     x6, #0
-    b       requests_room
-END_FUNCTION block_room
+    b       lantern_requests_room
+END_FUNCTION lantern_block_room
 .endif
 .else
 .if FORK == FORK_PHASE0
@@ -382,7 +382,7 @@ END_FUNCTION block_room
  * a PendingAttestation for each attestation in each epoch's list.
  * x19 state, x20 body.
  */
-LOCAL_FUNCTION block_room
+LOCAL_FUNCTION lantern_block_room
     ENTER 0
     mov     x19, x0
     mov     x20, x1
@@ -390,7 +390,7 @@ LOCAL_FUNCTION block_room
     cmp     x9, #1
     b.lt    9f
     mov     x0, x19
-    bl      validator_room
+    bl      lantern_validator_room
     LDQ     x9, x20, BeaconBlockBody_deposits + 8
     cmp     x0, x9
     b.lo    9f
@@ -412,14 +412,14 @@ LOCAL_FUNCTION block_room
     LEAVE 0
 9:  mov     x0, #LANTERN_BUFFER_TOO_SMALL
     LEAVE 0
-END_FUNCTION block_room
+END_FUNCTION lantern_block_room
 .endif
 
 /*
  * L0: x0 = the scratch that lantern_process_block needs for body x1, with x2 validators.
  * A leaf.
  */
-LOCAL_FUNCTION block_scratch
+LOCAL_FUNCTION lantern_block_scratch
     UNWIND_END_PROLOGUE
     lsl     x9, x2, #3
     add     x9, x9, #LIST_FIXED             /* L(n) */
@@ -443,7 +443,7 @@ LOCAL_FUNCTION block_scratch
 .endif
     mov     x0, x10
     ret
-END_FUNCTION block_scratch
+END_FUNCTION lantern_block_scratch
 
 /* One block step: stop at a failed status or a failed check. */
 .macro BLOCK_STEP
@@ -464,11 +464,11 @@ SPEC_FUNCTION process_block
     PART    x25, x9, x20, BeaconBlock_body
     mov     x0, x19
     mov     x1, x25
-    bl      block_room
+    bl      lantern_block_room
     cbnz    x0, 7f
     mov     x1, x25
     LDQ     x2, x19, BeaconState_validators + 8
-    bl      block_scratch
+    bl      lantern_block_scratch
     ldr     x26, [x23]
     cmp     x26, x0
     b.lo    9f
@@ -524,7 +524,7 @@ SPEC_FUNCTION process_block
     mov     x4, x24
     ldr     x5, [x21]                       /* bit 1 of execution_valid: no check of the reveal's signature */
     ubfx    x5, x5, #1, #1
-    bl      randao_step
+    bl      lantern_randao_step
     BLOCK_STEP
     str     x26, [x23]
     mov     x0, x19
@@ -606,7 +606,7 @@ SPEC_END process_slot
  * (a value), plus x3 more scratch bytes; else LANTERN_BUFFER_TOO_SMALL. Also x1 = the epochs
  * crossed. A leaf.
  */
-LOCAL_FUNCTION slots_room
+LOCAL_FUNCTION lantern_slots_room
     UNWIND_END_PROLOGUE
     LDQ     x4, x0, BeaconState_slot
     lsr     x5, x1, #LOG2_SLOTS_PER_EPOCH
@@ -688,7 +688,7 @@ LOCAL_FUNCTION slots_room
     ret
 9:  mov     x0, #LANTERN_BUFFER_TOO_SMALL
     ret
-END_FUNCTION slots_room
+END_FUNCTION lantern_slots_room
 
 /* x19 state, x20 slot, x21 config, x22 scratch, x23 result, x24 scratch size. */
 SPEC_FUNCTION process_slots
@@ -709,7 +709,7 @@ SPEC_FUNCTION process_slots
     mov     x1, x20
     mov     x2, x22
     mov     x3, #0
-    bl      slots_room
+    bl      lantern_slots_room
     cbnz    x0, 7f
     ldr     x24, [x22]
 2:  LDQ     x9, x19, BeaconState_slot
@@ -784,7 +784,7 @@ SPEC_FUNCTION verify_block_signature
     add     x1, x20, #SignedBeaconBlock_signature
     add     x2, sp, #(L + 48)
     mov     x3, x21
-    bl      verify_root_signature
+    bl      lantern_verify_root_signature
     cbnz    x0, 7f
     str     x1, [x22]
 7:  LEAVE 112
@@ -809,19 +809,19 @@ SPEC_FUNCTION state_transition
     ldr     x26, [x23]
     PART    x1, x9, x25, BeaconBlock_body   /* before any change: room and scratch for the slots and the block */
     mov     x0, x19
-    bl      block_room
+    bl      lantern_block_room
     cbnz    x0, 7f
     mov     x0, x19                         /* the epochs the slots cross */
     ldr     x1, [x25, #BeaconBlock_slot]
     mov     x2, x23
     mov     x3, #0
-    bl      slots_room
+    bl      lantern_slots_room
     cbnz    x0, 7f
     mov     x9, #MAX_PENDING_DEPOSITS_PER_EPOCH    /* the block's scratch, with every validator they may add */
     LDQ     x2, x19, BeaconState_validators + 8
     madd    x2, x1, x9, x2
     PART    x1, x9, x25, BeaconBlock_body
-    bl      block_scratch
+    bl      lantern_block_scratch
     ldr     x9, [x23]
     cmp     x9, x0
     b.lo    9f

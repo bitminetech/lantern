@@ -131,7 +131,7 @@ state_root_fields:
  * 0; a0 = the bytes of the cache. A leaf. t0 the table, t1 the offset of the next tree's bytes,
  * t2 the tree, t3 its capacity, t4 its copy bytes, t5 its header.
  */
-LOCAL_FUNCTION sr_layout
+LOCAL_FUNCTION lantern_sr_layout
     UNWIND_END_PROLOGUE
     ADDRESS t0, state_cache_trees
     li      t1, STATE_CACHE_FIXED
@@ -190,7 +190,7 @@ LOCAL_FUNCTION sr_layout
     bltu    t2, a5, 1b
     mv      a0, t1
     ret
-END_FUNCTION sr_layout
+END_FUNCTION lantern_sr_layout
 
 /* Locals: sp+0 size. */
 SPEC_FUNCTION state_cache_size
@@ -198,7 +198,7 @@ SPEC_FUNCTION state_cache_size
     sd      a1, 0(sp)
     ld      a0, 0(a0)
     li      a1, 0
-    call    sr_layout
+    call    lantern_sr_layout
     ld      a1, 0(sp)
     sd      a0, 0(a1)
     li      a0, LANTERN_OK
@@ -212,13 +212,13 @@ SPEC_FUNCTION state_cache_init
     sd      a1, 0(sp)
     sd      a0, 8(sp)
     li      a1, 0
-    call    sr_layout
+    call    lantern_sr_layout
     ld      a1, 0(sp)
     ld      t0, StateCache_size(a1)
     bltu    t0, a0, 9f
     ld      a0, 8(sp)
     sd      a0, StateCache_validators(a1)
-    call    sr_layout
+    call    lantern_sr_layout
     li      a0, LANTERN_OK
     UNFRAME 16
 9:  li      a0, LANTERN_BUFFER_TOO_SMALL
@@ -227,7 +227,7 @@ SPEC_END state_cache_init
 
 .if FORK > FORK_PHASE0
 /* L0: SHA-256 of the 32 bytes at a0 and the 32 bytes at a1, to a2, which may be a0 or a1. s5 the area. */
-LOCAL_FUNCTION sr_hash
+LOCAL_FUNCTION lantern_sr_hash
     FRAME 16
     sd      a2, 0(sp)
     li      t0, STATE_ROOT_HASH + 24
@@ -240,10 +240,10 @@ LOCAL_FUNCTION sr_hash
     ld      a1, 0(sp)
     CALL_GLOBAL crypto_sha256
     UNFRAME 16
-END_FUNCTION sr_hash
+END_FUNCTION lantern_sr_hash
 
 /* L0: the zero hash of each depth 0 to 40 in the area at s5. s1 the next, s2 the hashes left. */
-LOCAL_FUNCTION sr_zeros
+LOCAL_FUNCTION lantern_sr_zeros
     ENTER 16
     mv      s1, s5
     sd      zero, 0(s1)
@@ -254,12 +254,12 @@ LOCAL_FUNCTION sr_zeros
 1:  mv      a0, s1
     mv      a1, s1
     addi    a2, s1, 32
-    call    sr_hash
+    call    lantern_sr_hash
     addi    s1, s1, 32
     addi    s2, s2, -1
     bnez    s2, 1b
     LEAVE 16
-END_FUNCTION sr_zeros
+END_FUNCTION lantern_sr_zeros
 
 /*
  * L0: the root of a field from tree a0 (a CacheTree): data a1, count a2 elements, a3 the bytes of
@@ -272,7 +272,7 @@ END_FUNCTION sr_zeros
  * front's size, L+56 data bytes, L+64 the next level's nodes, L+72 its dirty bits, L+80 a word,
  * L+88 a parent, L+96 the leaves, L+104 a status.
  */
-LOCAL_FUNCTION sr_tree
+LOCAL_FUNCTION lantern_sr_tree
     ENTER 112
     mv      s1, a0
     mv      s4, a1
@@ -480,7 +480,7 @@ LOCAL_FUNCTION sr_tree
 26: ld      a2, (L + 64)(sp)
     slli    t5, t4, 5
     add     a2, a2, t5
-    call    sr_hash
+    call    lantern_sr_hash
     ld      t4, (L + 88)(sp)                # the parent is dirty
     ld      t0, (L + 72)(sp)
     srli    t1, t4, 6
@@ -518,7 +518,7 @@ LOCAL_FUNCTION sr_tree
     slli    a1, s4, 5
     add     a1, s5, a1
     mv      a2, a0
-    call    sr_hash
+    call    lantern_sr_hash
     addi    s4, s4, 1
     j       32b
 33: ld      t0, (L + 32)(sp)                # a list: mix_in_length
@@ -532,12 +532,12 @@ LOCAL_FUNCTION sr_tree
     sd      zero, 24(a1)
     ld      a0, (L + 40)(sp)
     mv      a2, a0
-    call    sr_hash
+    call    lantern_sr_hash
 34: ld      t0, (L + 96)(sp)
     sd      t0, CacheTree_count(s1)
     li      a0, 0
     LEAVE 112
-END_FUNCTION sr_tree
+END_FUNCTION lantern_sr_tree
 .endif
 
 # The root of each field of the state into the leaves of the area, in field order: s1 state, s2 cache, s3
@@ -610,7 +610,7 @@ END_FUNCTION sr_tree
     addi    a0, a0, StateCache_trees
     ld      a5, 32(s6)
     mv      a7, s8
-    call    sr_tree
+    call    lantern_sr_tree
     li      t0, 1
     beq     a0, t0, 90f
     bnez    a0, 98f
@@ -650,7 +650,7 @@ SPEC_FUNCTION state_root
     sd      t0, 8(t1)
     li      t0, 64
     sd      t0, 16(t1)
-    call    sr_zeros
+    call    lantern_sr_zeros
     SR_FIELD_ROOTS
 50: li      s7, SR_COUNT                    # zeros to the width, then merkleize
 51: li      t0, STATE_ROOT_WIDTH
@@ -675,7 +675,7 @@ SPEC_FUNCTION state_root
     addi    a1, a0, 32
     slli    a2, s7, 5
     add     a2, t0, a2
-    call    sr_hash
+    call    lantern_sr_hash
     addi    s7, s7, 1
     bltu    s7, s6, 54b
     j       53b
@@ -741,7 +741,7 @@ SPEC_FUNCTION state_branch
     sd      t0, 8(t1)
     li      t0, 64
     sd      t0, 16(t1)
-    call    sr_zeros
+    call    lantern_sr_zeros
     SR_FIELD_ROOTS
     li      s7, SR_COUNT                    # zeros to the width
 2:  li      t0, STATE_ROOT_WIDTH
@@ -784,7 +784,7 @@ SPEC_FUNCTION state_branch
     addi    a1, a0, 32
     slli    a2, s2, 5
     add     a2, t0, a2
-    call    sr_hash
+    call    lantern_sr_hash
     addi    s2, s2, 1
     bltu    s2, s7, 6b
     srli    s6, s6, 1

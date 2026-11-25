@@ -5,7 +5,7 @@
 # NODE_WORK_API_ENCODE with the light client store as state_c; 0. The node rbx, the actions r15.
 # r12 the route, r13 the connection, r14 the answer flags, rbp the operation; S7 the bytes' id.
 # Locals: L a ByteList of the bytes put.
-LOCAL_FUNCTION node_api_lc
+LOCAL_FUNCTION lantern_node_api_lc
     ENTER 64
     mov     %rdi, %r12
     mov     %rsi, %r13
@@ -42,7 +42,7 @@ LOCAL_FUNCTION node_api_lc
     mov     %rax, 24(%rdx)
     mov     %rcx, 32(%rdx)
 3:  lea     L(%rsp), %rdi
-    call    node_put
+    call    lantern_node_put
     mov     %rax, S7(%rsp)
 4:  mov     $NODE_WORK_API_ENCODE, %edi
     xor     %esi, %esi
@@ -52,11 +52,11 @@ LOCAL_FUNCTION node_api_lc
     mov     %r14, %r9
     shl     $8, %r9
     or      %rbp, %r9
-    call    node_work
+    call    lantern_node_work
     movq    $NODE_LC_ID, NodeAction_state_c(%rax)
     xor     %eax, %eax
     LEAVE 64
-END_FUNCTION node_api_lc
+END_FUNCTION lantern_node_api_lc
 
 # L2: (lc, work, data, scratch, view) -> status, the node rbx: the light client read of a
 # NODE_WORK_API_ENCODE (node.md) into the view: for getLightClientUpdatesByRange its store, periods,
@@ -65,7 +65,7 @@ END_FUNCTION node_api_lc
 # JSON, 500. LANTERN_INVALID_EVENT without the store or the work's bytes; LANTERN_BUFFER_TOO_SMALL
 # with too little scratch. rbp lc, r12 work, r13 data, r14 scratch, r15 view; S7 the kind, S8 the
 # object, S9 the JSON, S10 the cursor. Locals: L the fork, L + 8 1 for SSZ, L + 16 the node.
-LOCAL_FUNCTION node_api_lc_read
+LOCAL_FUNCTION lantern_node_api_lc_read
     ENTER 32
     mov     %rbx, (L + 16)(%rsp)
     mov     %rdi, %rbp
@@ -191,13 +191,13 @@ LOCAL_FUNCTION node_api_lc_read
     LEAVE 32
 98: mov     $LANTERN_BUFFER_TOO_SMALL, %eax
     LEAVE 32
-END_FUNCTION node_api_lc_read
+END_FUNCTION lantern_node_api_lc_read
 
 # L2: the body of getLightClientUpdatesByRange (beacon-api.md) of the view rbp (its node
-# ApiView_node), with the writer of api_put: from the first period with an update, each update to
+# ApiView_node), with the writer of lantern_api_put: from the first period with an update, each update to
 # the first period of none. Locals: 0 the fork, 8 1 once an update is in, 16 the period, 24 a
 # chunk's length, 32 an epoch, 40 a digest.
-LOCAL_FUNCTION api_lc_updates_body
+LOCAL_FUNCTION lantern_api_lc_updates_body
     FRAME 48
     movq    $0, (%rsp)
     movq    $0, 8(%rsp)
@@ -230,7 +230,7 @@ LOCAL_FUNCTION api_lc_updates_body
     mov     %rcx, 24(%rsp)
     lea     24(%rsp), %rdi
     mov     $8, %esi
-    call    api_put
+    call    lantern_api_put
     mov     ApiView_lc_bytes(%rbp), %rax
     mov     8(%rax), %rcx
     add     %rcx, %rax
@@ -254,19 +254,19 @@ LOCAL_FUNCTION api_lc_updates_body
     FORK_CALL compute_fork_digest
     lea     40(%rsp), %rdi
     mov     $4, %esi
-    call    api_put
+    call    lantern_api_put
     mov     ApiView_lc_bytes(%rbp), %rax
     mov     8(%rax), %rdi
     add     %rax, %rdi
     mov     16(%rax), %rsi
-    call    api_put
+    call    lantern_api_put
     jmp     4f
 3:  cmpq    $0, 8(%rsp)                     # JSON: {"version":…,"data":…}, with , between
     je      31f
     API_LIT api_lc_comma
 31: API_LIT api_j_version
     mov     (%rsp), %rdi
-    call    api_fork_name
+    call    lantern_api_fork_name
     API_LIT api_g_data
     mov     ApiView_lc_json(%rbp), %rax
     movq    $(24 + 4 * LC_UPDATE_ROOM + 4096), (%rax)
@@ -287,7 +287,7 @@ LOCAL_FUNCTION api_lc_updates_body
     mov     8(%rax), %rdi
     add     %rax, %rdi
     mov     16(%rax), %rsi
-    call    api_put
+    call    lantern_api_put
     API_LIT api_end1
 4:  movq    $1, 8(%rsp)
     incq    16(%rsp)
@@ -296,12 +296,12 @@ LOCAL_FUNCTION api_lc_updates_body
     jne     9f
     API_LIT api_lc_close
 9:  UNFRAME 48
-END_FUNCTION api_lc_updates_body
+END_FUNCTION lantern_api_lc_updates_body
 
 # L2: (node, store, work, state_a, data, state_c; scratch r10, event r11) -> status: a
 # NODE_WORK_LC_BLOCK or NODE_WORK_LC_HEAD of lantern_node_run (node.md). rbx node, rbp store, r12
 # work, r13 state_a, r14 data, r15 the LcStore; S7 scratch, S8 event.
-LOCAL_FUNCTION node_run_lc
+LOCAL_FUNCTION lantern_node_run_lc
     ENTER 0
     mov     %rdi, %rbx
     mov     %rsi, %rbp
@@ -346,17 +346,17 @@ LOCAL_FUNCTION node_run_lc
     jnz     8f
     mov     %r15, %rdi                      # the latest update's fields
     mov     S8(%rsp), %rsi
-    call    node_lc_slots
+    call    lantern_node_lc_slots
 8:  xor     %eax, %eax
     LEAVE 0
 9:  LEAVE 0
 97: mov     $LANTERN_INVALID_EVENT, %eax
     LEAVE 0
-END_FUNCTION node_run_lc
+END_FUNCTION lantern_node_run_lc
 
 # L1: (event, topic) -> rax: 1 when the update of the fields of the light client work's event rdi is
 # new for the topic rsi (node.md, The light client gossip), else 0. rbx the node. Uses rcx.
-LOCAL_FUNCTION node_lc_new
+LOCAL_FUNCTION lantern_node_lc_new
     UNWIND_END_PROLOGUE
     cmp     $GOSSIP_LIGHT_CLIENT_FINALITY_UPDATE, %rsi
     jne     2f
@@ -376,10 +376,10 @@ LOCAL_FUNCTION node_lc_new
     ret
 9:  xor     %eax, %eax
     ret
-END_FUNCTION node_lc_new
+END_FUNCTION lantern_node_lc_new
 
 # L1: the fields of the topic rsi take the update of the light client work's event rdi (node.md, The light client gossip). rbx the node. Uses rcx.
-LOCAL_FUNCTION node_lc_set
+LOCAL_FUNCTION lantern_node_lc_set
     UNWIND_END_PROLOGUE
     cmp     $GOSSIP_LIGHT_CLIENT_FINALITY_UPDATE, %rsi
     jne     2f
@@ -391,12 +391,12 @@ LOCAL_FUNCTION node_lc_set
 2:  mov     NodeEvent_root(%rdi), %rcx
     mov     %rcx, Node_lc_optimistic_slot(%rbx)
     ret
-END_FUNCTION node_lc_set
+END_FUNCTION lantern_node_lc_set
 
 # L1: rax = the due time in Unix ms of an update of signature slot rdi (node.md, The light client
 # gossip): genesis time + the slot times SLOT_DURATION_MS + get_sync_message_due_ms(). rbx the
 # node, rbp the store. Uses rcx, rdx.
-LOCAL_FUNCTION node_lc_due_ms
+LOCAL_FUNCTION lantern_node_lc_due_ms
     UNWIND_END_PROLOGUE
     mov     (Node_config + CONFIG_SYNC_MESSAGE_DUE_BPS)(%rbx), %rax
     mulq    (Node_config + CONFIG_SLOT_DURATION_MS)(%rbx)
@@ -408,12 +408,12 @@ LOCAL_FUNCTION node_lc_due_ms
     add     %rcx, %rax
     add     Store_genesis_time_ms(%rbp), %rax
     ret
-END_FUNCTION node_lc_due_ms
+END_FUNCTION lantern_node_lc_due_ms
 
 # L1: the NODE_EV_WORK_DONE r12 of a NODE_WORK_LC_HEAD (node.md, The light client gossip): with a
 # latest update, the bit of each topic it is new for joins lc_pending, and lc_due becomes its due
 # time. rbx the node, rbp the store, r15 the actions; r13 the bits.
-LOCAL_FUNCTION node_lc_head_done
+LOCAL_FUNCTION lantern_node_lc_head_done
     ENTER 0
     cmpq    $0, NodeEvent_result(%r12)
     jne     9f
@@ -421,25 +421,25 @@ LOCAL_FUNCTION node_lc_head_done
     je      9f
     mov     %r12, %rdi
     mov     $GOSSIP_LIGHT_CLIENT_FINALITY_UPDATE, %esi
-    call    node_lc_new
+    call    lantern_node_lc_new
     mov     %rax, %r13
     mov     %r12, %rdi
     mov     $GOSSIP_LIGHT_CLIENT_OPTIMISTIC_UPDATE, %esi
-    call    node_lc_new
+    call    lantern_node_lc_new
     lea     (%r13,%rax,2), %r13
     test    %r13, %r13
     jz      9f
     or      %r13, Node_lc_pending(%rbx)
     mov     (NodeEvent_root + 24)(%r12), %rdi
-    call    node_lc_due_ms
+    call    lantern_node_lc_due_ms
     mov     %rax, Node_lc_due(%rbx)
 9:  LEAVE 0
-END_FUNCTION node_lc_head_done
+END_FUNCTION lantern_node_lc_head_done
 
 # L1: after the head (node.md, The light client gossip): with lc_pending not 0, time_ms at least
 # lc_due and room for two works, a NODE_WORK_LC_PUBLISH of each topic of lc_pending, which becomes
 # 0. rbx the node, r15 the actions; r12 the bits.
-LOCAL_FUNCTION node_lc_due
+LOCAL_FUNCTION lantern_node_lc_due
     ENTER 0
     mov     Node_lc_pending(%rbx), %r12
     test    %r12, %r12
@@ -448,23 +448,23 @@ LOCAL_FUNCTION node_lc_due
     cmp     Node_lc_due(%rbx), %rax
     jb      9f
     mov     $(2 * NODE_ACT_WORK_SIZE), %edi
-    call    node_room
+    call    lantern_node_room
     test    %rax, %rax
     jz      9f
     movq    $0, Node_lc_pending(%rbx)
     test    $1, %r12
     jz      1f
     mov     $GOSSIP_LIGHT_CLIENT_FINALITY_UPDATE, %edi
-    call    node_lc_publish_work
+    call    lantern_node_lc_publish_work
 1:  test    $2, %r12
     jz      9f
     mov     $GOSSIP_LIGHT_CLIENT_OPTIMISTIC_UPDATE, %edi
-    call    node_lc_publish_work
+    call    lantern_node_lc_publish_work
 9:  LEAVE 0
-END_FUNCTION node_lc_due
+END_FUNCTION lantern_node_lc_due
 
 # L1: a NODE_WORK_LC_PUBLISH of the topic rdi with the light client store as state_c.
-LOCAL_FUNCTION node_lc_publish_work
+LOCAL_FUNCTION lantern_node_lc_publish_work
     FRAME 16
     mov     %rdi, %r9
     mov     $NODE_WORK_LC_PUBLISH, %edi
@@ -472,10 +472,10 @@ LOCAL_FUNCTION node_lc_publish_work
     xor     %edx, %edx
     xor     %ecx, %ecx
     xor     %r8d, %r8d
-    call    node_work
+    call    lantern_node_work
     movq    $NODE_LC_ID, NodeAction_state_c(%rax)
     UNFRAME 16
-END_FUNCTION node_lc_publish_work
+END_FUNCTION lantern_node_lc_publish_work
 
 # rdi = the event topic of the light client gossip topic in reg. Uses rax.
 .macro LC_API_TOPIC reg
@@ -489,36 +489,36 @@ END_FUNCTION node_lc_publish_work
 # LANTERN_VALID of an update new for its topic sets the topic's fields, then with
 # NODE_FLAG_SUBSCRIBED its bytes at NodeEvent_chunk go out on the topic, and its event. rbx the
 # node, rbp the store, r14 the scratch, r15 the actions; r13 the topic.
-LOCAL_FUNCTION node_lc_published
+LOCAL_FUNCTION lantern_node_lc_published
     ENTER 0
     cmpq    $0, NodeEvent_result(%r12)
     jne     9f
     mov     NodeAction_arg(%r12), %r13
     mov     %r12, %rdi
     mov     %r13, %rsi
-    call    node_lc_new
+    call    lantern_node_lc_new
     test    %rax, %rax
     jz      9f
     mov     %r12, %rdi
     mov     %r13, %rsi
-    call    node_lc_set
+    call    lantern_node_lc_set
     testq   $NODE_FLAG_SUBSCRIBED, Node_flags(%rbx)
     jz      1f
     mov     %r13, %rdi
     lea     NodeEvent_chunk(%r12), %rsi
     xor     %edx, %edx
-    call    node_publish
+    call    lantern_node_publish
 1:  LC_API_TOPIC %r13
-    call    node_lc_event
+    call    lantern_node_lc_event
 9:  LEAVE 0
-END_FUNCTION node_lc_published
+END_FUNCTION lantern_node_lc_published
 
 # L1: the NODE_EV_WORK_DONE r12 of a NODE_WORK_LC_GOSSIP (node.md, The light client gossip): an
 # ACCEPT for LANTERN_VALID of an update new for its topic that is due by time_ms +
 # MAXIMUM_GOSSIP_CLOCK_DISPARITY, with the topic's fields and its event; else an IGNORE. Then its
 # bytes and the message's entry go. rbx the node, rbp the store, r15 the actions; r13 the topic,
 # S7 the result.
-LOCAL_FUNCTION node_lc_validated
+LOCAL_FUNCTION lantern_node_lc_validated
     ENTER 0
     mov     NodeAction_arg(%r12), %r13
     movq    $LIBP2P_IGNORE, S7(%rsp)
@@ -526,11 +526,11 @@ LOCAL_FUNCTION node_lc_validated
     jne     1f
     mov     %r12, %rdi
     mov     %r13, %rsi
-    call    node_lc_new
+    call    lantern_node_lc_new
     test    %rax, %rax
     jz      1f
     mov     (NodeEvent_root + 24)(%r12), %rdi   # due, with the clock disparity
-    call    node_lc_due_ms
+    call    lantern_node_lc_due_ms
     mov     Node_time_ms(%rbx), %rcx
     add     (Node_config + CONFIG_MAXIMUM_GOSSIP_CLOCK_DISPARITY)(%rbx), %rcx
     cmp     %rax, %rcx
@@ -538,32 +538,32 @@ LOCAL_FUNCTION node_lc_validated
     movq    $LIBP2P_ACCEPT, S7(%rsp)
     mov     %r12, %rdi
     mov     %r13, %rsi
-    call    node_lc_set
+    call    lantern_node_lc_set
     LC_API_TOPIC %r13
-    call    node_lc_event
+    call    lantern_node_lc_event
 1:  mov     NodeAction_target(%r12), %rdi
     mov     S7(%rsp), %rsi
-    call    node_validation
+    call    lantern_node_validation
     mov     NodeAction_data(%r12), %rsi
     test    %rsi, %rsi
     jz      2f
     mov     $NODE_ACT_BYTES_FREE, %edi
     xor     %edx, %edx
-    call    node_ids
+    call    lantern_node_ids
 2:  mov     NodeAction_target(%r12), %rdi
-    call    node_find_message
+    call    lantern_node_find_message
     cmp     $-1, %rax
     je      9f
     mov     %rdx, %rdi
-    call    node_drop_message
+    call    lantern_node_drop_message
 9:  LEAVE 0
-END_FUNCTION node_lc_validated
+END_FUNCTION lantern_node_lc_validated
 
 # L1: a NODE_WORK_API_EVENT of the topic rdi with the light client store as state_c, when an entry has the topic.
-LOCAL_FUNCTION node_lc_event
+LOCAL_FUNCTION lantern_node_lc_event
     FRAME 16
     mov     %rdi, (%rsp)
-    call    node_api_subscribed
+    call    lantern_node_api_subscribed
     test    %rax, %rax
     jz      9f
     mov     $NODE_WORK_API_EVENT, %edi
@@ -572,17 +572,17 @@ LOCAL_FUNCTION node_lc_event
     xor     %ecx, %ecx
     xor     %r8d, %r8d
     mov     (%rsp), %r9
-    call    node_work
+    call    lantern_node_work
     movq    $NODE_LC_ID, NodeAction_state_c(%rax)
 9:  UNFRAME 16
-END_FUNCTION node_lc_event
+END_FUNCTION lantern_node_lc_event
 
 # L2: (out, topic, lc, scratch) -> rax: the text of a light client event (beacon-api.md, eventstream):
 # event: <topic> LF data: {"version":…,"data":…} LF LF, into the ByteList out, its count set;
 # LANTERN_OK, LANTERN_NO_STATE_ANSWER with no update, LANTERN_BUFFER_TOO_SMALL. The writer's
 # registers r12-r15; rbx out, rbp the topic; S7 lc, S8 scratch, S9 the object, S10 the kind.
 # Locals: L the fork, L + 8 the scratch's size.
-LOCAL_FUNCTION api_lc_event_text
+LOCAL_FUNCTION lantern_api_lc_event_text
     ENTER 16
     mov     %rdi, %rbx
     mov     %rsi, %rbp
@@ -624,7 +624,7 @@ LOCAL_FUNCTION api_lc_event_text
 2:  API_LIT api_ev_data
     API_LIT api_j_version
     mov     L(%rsp), %rdi
-    call    api_fork_name
+    call    lantern_api_fork_name
     API_LIT api_g_data
     test    %r15, %r15
     jnz     98f
@@ -672,14 +672,14 @@ LOCAL_FUNCTION api_lc_event_text
     jmp     9b
 98: mov     $LANTERN_BUFFER_TOO_SMALL, %eax
     jmp     9b
-END_FUNCTION api_lc_event_text
+END_FUNCTION lantern_api_lc_event_text
 
 # L2: (node, work, data, lc, scratch, event; room r10) -> status: a NODE_WORK_LC_SERVE of
 # lantern_node_run (node.md): the response chunks of the light client method arg at NodeEvent_chunk
 # of the event. rbx node, r12 work, r13 data, r14 lc, r15 scratch, rbp event; S7 the chunks'
 # ByteList, S8 the object at the end of scratch, S9 the period, S10 the end period. Locals: L the
 # scratch's size, L + 8 1 once an update is in, L + 16 an empty ByteList.
-LOCAL_FUNCTION node_run_lc_serve
+LOCAL_FUNCTION lantern_node_run_lc_serve
     ENTER 48
     mov     %rdi, %rbx
     mov     %rsi, %r12
@@ -731,7 +731,7 @@ LOCAL_FUNCTION node_run_lc_serve
     mov     S7(%rsp), %r8
     mov     %r15, %r9
     mov     %rbx, %r10
-    call    node_lc_chunk
+    call    lantern_node_lc_chunk
     cmp     $LANTERN_BUFFER_TOO_SMALL, %rax
     je      98f
     cmp     $LANTERN_NO_STATE_ANSWER, %rax
@@ -743,7 +743,7 @@ LOCAL_FUNCTION node_run_lc_serve
     lea     (L + 16)(%rsp), %rsi
     mov     %r15, %rdx
     mov     S7(%rsp), %rcx
-    call    node_lc_error_chunk
+    call    lantern_node_lc_error_chunk
     test    %rax, %rax
     jnz     98f
     jmp     20f
@@ -776,7 +776,7 @@ LOCAL_FUNCTION node_run_lc_serve
     mov     S7(%rsp), %r8
     mov     %r15, %r9
     mov     %rbx, %r10
-    call    node_lc_chunk
+    call    lantern_node_lc_chunk
     cmp     $LANTERN_BUFFER_TOO_SMALL, %rax
     je      98f
     incq    S9(%rsp)
@@ -809,14 +809,14 @@ LOCAL_FUNCTION node_run_lc_serve
     mov     %rax, (%r15)
     mov     $LANTERN_BUFFER_TOO_SMALL, %eax
     LEAVE 48
-END_FUNCTION node_run_lc_serve
+END_FUNCTION lantern_node_run_lc_serve
 
 # L2: (lc, kind, key, object, out, scratch; node r10) -> status: lantern_lc_read of the kind and key
 # into the object, then its response chunk after the bytes of out: result 0, the context
 # compute_fork_digest of the epoch of its attested slot. The statuses of lantern_lc_read and
 # lantern_reqresp_write_chunk. The scratch's size as it came. rbx node, r12 the object, r13 out, r14
 # scratch. Locals: L a ChunkHeader, L + 48 the fork, L + 56 the epoch, L + 64 the scratch's size.
-LOCAL_FUNCTION node_lc_chunk
+LOCAL_FUNCTION lantern_node_lc_chunk
     ENTER 80
     mov     %rcx, %r12
     mov     %r8, %r13
@@ -865,10 +865,10 @@ LOCAL_FUNCTION node_lc_chunk
     LEAVE 80
 8:  mov     $LANTERN_INVALID_ENCODING, %eax
     jmp     9b
-END_FUNCTION node_lc_chunk
+END_FUNCTION lantern_node_lc_chunk
 
 # L1: (result, payload, scratch, out) -> status: a response chunk of the result, with no context bytes, after the bytes of out. Locals: 0 a ChunkHeader.
-LOCAL_FUNCTION node_lc_error_chunk
+LOCAL_FUNCTION lantern_node_lc_error_chunk
     FRAME 48
     movq    $CHUNK_RESPONSE, ChunkHeader_kind(%rsp)
     movq    $0, ChunkHeader_context_length(%rsp)
@@ -877,12 +877,12 @@ LOCAL_FUNCTION node_lc_error_chunk
     mov     %rsp, %rdi
     call    lantern_reqresp_write_chunk
     UNFRAME 48
-END_FUNCTION node_lc_error_chunk
+END_FUNCTION lantern_node_lc_error_chunk
 
 # L1: a light client request of the stream entry rdi (node.md): its rdx bytes at rsi (none with 0) to
 # a new id, a NODE_WORK_LC_SERVE of them with the light client store as state_c; the stream takes
 # NODE_STREAM_SERVING, its list empty. r12 the entry, r13 the id. Locals: L a ByteList of the bytes.
-LOCAL_FUNCTION node_lc_request
+LOCAL_FUNCTION lantern_node_lc_request
     ENTER 64
     mov     %rdi, %r12
     xor     %r13d, %r13d
@@ -895,7 +895,7 @@ LOCAL_FUNCTION node_lc_request
     lea     (L + 24)(%rsp), %rdi
     call    lantern_copy
     lea     L(%rsp), %rdi
-    call    node_put
+    call    lantern_node_put
     mov     %rax, %r13
 1:  mov     $NODE_WORK_LC_SERVE, %edi
     xor     %esi, %esi
@@ -903,26 +903,26 @@ LOCAL_FUNCTION node_lc_request
     mov     %r13, %rcx
     mov     NodeStream_handle(%r12), %r8
     mov     NodeStream_method(%r12), %r9
-    call    node_work
+    call    lantern_node_work
     movq    $NODE_LC_ID, NodeAction_state_c(%rax)
     movq    $NODE_STREAM_SERVING, NodeStream_state(%r12)
     movq    $0, (NodeStream_list + 16)(%r12)
     LEAVE 64
-END_FUNCTION node_lc_request
+END_FUNCTION lantern_node_lc_request
 
 # L1: the NODE_EV_WORK_DONE r12 of a NODE_WORK_LC_SERVE (node.md): its bytes go, then the chunks to
 # the stream in a STREAM_WRITE and a STREAM_CLOSE, or a STREAM_RESET; then the stream goes. rbx
 # the node, r15 the actions; r13 the stream, r14 the chunks' bytes, rbp the event's size.
-LOCAL_FUNCTION node_lc_served
+LOCAL_FUNCTION lantern_node_lc_served
     ENTER 0
     mov     NodeAction_data(%r12), %rsi
     test    %rsi, %rsi
     jz      1f
     mov     $NODE_ACT_BYTES_FREE, %edi
     xor     %edx, %edx
-    call    node_ids
+    call    lantern_node_ids
 1:  mov     NodeAction_target(%r12), %rdi
-    call    node_find_stream
+    call    lantern_node_find_stream
     cmp     $-1, %rax
     je      9f
     mov     %rdx, %r13
@@ -934,7 +934,7 @@ LOCAL_FUNCTION node_lc_served
     lea     (32 + 7)(%r14), %rbp
     and     $-8, %rbp
     mov     %rbp, %rdi
-    call    node_out
+    call    lantern_node_out
     test    %rax, %rax
     jz      8f
     mov     %rbp, (%rax)
@@ -948,23 +948,23 @@ LOCAL_FUNCTION node_lc_served
     call    lantern_copy
 7:  mov     $LIBP2P_EVENT_STREAM_CLOSE, %edi
     mov     NodeStream_handle(%r13), %rsi
-    call    node_out_handle
+    call    lantern_node_out_handle
     mov     %r13, %rdi
-    call    node_drop_stream
+    call    lantern_node_drop_stream
 9:  LEAVE 0
 8:  mov     $LIBP2P_EVENT_STREAM_RESET, %edi
     mov     NodeStream_handle(%r13), %rsi
-    call    node_out_handle
+    call    lantern_node_out_handle
     mov     %r13, %rdi
-    call    node_drop_stream
+    call    lantern_node_drop_stream
     LEAVE 0
-END_FUNCTION node_lc_served
+END_FUNCTION lantern_node_lc_served
 
 # L1: (lc, event) -> rax: the latest update's fields of a light client work at NodeEvent_index and
 # NodeEvent_root (node.md, NODE_WORK_LC_HEAD): its finalized slot; its attested slot, its
 # supermajority, 1, its signature slot. 1, or 0 with no latest update. r12 lc, r13 event, r14 the
 # update.
-LOCAL_FUNCTION node_lc_slots
+LOCAL_FUNCTION lantern_node_lc_slots
     ENTER 0
     mov     %rdi, %r12
     mov     %rsi, %r13
@@ -974,12 +974,12 @@ LOCAL_FUNCTION node_lc_slots
     jz      9f
     mov     %r12, %rdi
     mov     $LC_PART_UPDATES, %esi
-    call    lc_ref
+    call    lantern_lc_ref
     mov     %rax, %r14
     mov     %r12, %rdi
     mov     $LC_PART_HEADERS, %esi
     mov     LcUpdate_finalized_header(%r14), %rdx
-    call    lc_ref
+    call    lantern_lc_ref
     lea     LcHeader_header(%rax), %rax
     mov     8(%rax), %rcx
     mov     (%rax,%rcx), %rcx
@@ -987,13 +987,13 @@ LOCAL_FUNCTION node_lc_slots
     mov     %r12, %rdi
     mov     $LC_PART_HEADERS, %esi
     mov     LcUpdate_attested_header(%r14), %rdx
-    call    lc_ref
+    call    lantern_lc_ref
     lea     LcHeader_header(%rax), %rax
     mov     8(%rax), %rcx
     mov     (%rax,%rcx), %rcx
     mov     %rcx, NodeEvent_root(%r13)
     lea     LcUpdate_sync_aggregate(%r14), %rdi
-    call    lc_participants
+    call    lantern_lc_participants
     imul    $3, %rax, %rax
     xor     %ecx, %ecx
     cmp     $(SYNC_COMMITTEE_SIZE * 2), %rax
@@ -1004,7 +1004,7 @@ LOCAL_FUNCTION node_lc_slots
     mov     %rcx, (NodeEvent_root + 24)(%r13)
     mov     $1, %eax
 9:  LEAVE 0
-END_FUNCTION node_lc_slots
+END_FUNCTION lantern_node_lc_slots
 
 # L2: (node, work, data, lc, scratch, event; room r10) -> status: a NODE_WORK_LC_PUBLISH or
 # NODE_WORK_LC_GOSSIP of lantern_node_run (node.md): the latest update of the topic arg, as a
@@ -1012,7 +1012,7 @@ END_FUNCTION node_lc_slots
 # against data), its fields, and the result. rbx node, r12 work, r13 data, r14 lc, r15 scratch,
 # rbp event; S7 the object, S8 the kind, S9 1 for a publish. Locals: L the scratch's size, L + 8
 # the fork, L + 16 the epoch, L + 24 a ForkDigest.
-LOCAL_FUNCTION node_run_lc_gossip
+LOCAL_FUNCTION lantern_node_run_lc_gossip
     ENTER 32
     mov     %rdi, %rbx
     mov     %rsi, %r12
@@ -1113,7 +1113,7 @@ LOCAL_FUNCTION node_run_lc_gossip
     jmp     6b
 7:  mov     %r14, %rdi                      # the latest update's fields
     mov     %rbp, %rsi
-    call    node_lc_slots
+    call    lantern_node_lc_slots
     test    %rax, %rax
     jz      96f
     cmpq    $0, S9(%rsp)
@@ -1144,4 +1144,4 @@ LOCAL_FUNCTION node_run_lc_gossip
     mov     %rax, (%r15)
     mov     $LANTERN_BUFFER_TOO_SMALL, %eax
     LEAVE 32
-END_FUNCTION node_run_lc_gossip
+END_FUNCTION lantern_node_run_lc_gossip

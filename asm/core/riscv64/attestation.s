@@ -36,7 +36,7 @@
 .endm
 
 /* L0: sort the a1 u64 entries at a0, ascending (heapsort). A leaf; uses a2-a4, t0-t4. */
-LOCAL_FUNCTION sort_u64
+LOCAL_FUNCTION lantern_sort_u64
     UNWIND_END_PROLOGUE
     li      t0, 2
     bltu    a1, t0, 9f
@@ -59,7 +59,7 @@ LOCAL_FUNCTION sort_u64
     SIFT    a3, a4
     j       3b
 9:  ret
-END_FUNCTION sort_u64
+END_FUNCTION lantern_sort_u64
 
 /* ---------------------------------------------------------------- Committees */
 
@@ -95,7 +95,7 @@ SPEC_END get_committee_indices
  * DOMAIN_BEACON_ATTESTER, the decision root, the genesis validators root. s1 state, s2 epoch,
  * s3 key. Locals: L epoch, L+8 domain type.
  */
-LOCAL_FUNCTION committee_key
+LOCAL_FUNCTION lantern_committee_key
     ENTER 16
     mv      s1, a0
     mv      s2, a1
@@ -136,10 +136,10 @@ LOCAL_FUNCTION committee_key
     COPY32  t2, t1
     li      a0, LANTERN_OK
 7:  LEAVE 16
-END_FUNCTION committee_key
+END_FUNCTION lantern_committee_key
 
 /* L0: a0 = the valid entry of cache a0 for epoch a1 and the key at a2, or 0. A leaf. */
-LOCAL_FUNCTION committee_find
+LOCAL_FUNCTION lantern_committee_find
     UNWIND_END_PROLOGUE
     ld      t0, CommitteeCache_validators(a0)
     slli    t0, t0, 3
@@ -167,7 +167,7 @@ LOCAL_FUNCTION committee_find
     bnez    t2, 1b
     li      a0, 0
     ret
-END_FUNCTION committee_find
+END_FUNCTION lantern_committee_find
 
 SPEC_FUNCTION committee_cache_size
     FRAME 16
@@ -259,12 +259,12 @@ SPEC_FUNCTION get_committee_count_per_slot
     mv      a0, s1                          # an entry of the cache: its count
     ld      a1, 0(s2)
     addi    a2, sp, L
-    call    committee_key
+    call    lantern_committee_key
     bnez    a0, 3f
     mv      a0, s6
     ld      a1, 0(s2)
     addi    a2, sp, L
-    call    committee_find
+    call    lantern_committee_find
     beqz    a0, 3f
     ld      t0, CommitteeEntry_count(a0)
     j       4f
@@ -376,12 +376,12 @@ SPEC_FUNCTION get_beacon_committee
     mv      a0, s1                          # the cache's entry of the epoch
     ld      a1, L(sp)
     addi    a2, sp, (L + 72)
-    call    committee_key
+    call    lantern_committee_key
     bnez    a0, 20f
     mv      a0, s9
     ld      a1, L(sp)
     addi    a2, sp, (L + 72)
-    call    committee_find
+    call    lantern_committee_find
     mv      s10, a0
     bnez    s10, 30f
     SCRATCH_LIST s8, s4, s6, 0, s7          # a new entry: the active validators, shuffled
@@ -620,7 +620,7 @@ SPEC_FUNCTION get_attesting_indices
     j       1b
 4:  addi    a0, s4, LIST_FIXED              # a set: ascending
     ld      a1, LIST_COUNT(s4)
-    call    sort_u64
+    call    lantern_sort_u64
     li      a0, LANTERN_OK
 7:  LEAVE 48
 8:  li      a0, LANTERN_INVALID_ATTESTATION
@@ -690,7 +690,7 @@ SPEC_FUNCTION get_attesting_indices
 3:  sd      t4, LIST_COUNT(s4)
     addi    a0, s4, LIST_FIXED              # a set: ascending
     mv      a1, t4
-    call    sort_u64
+    call    lantern_sort_u64
     li      a0, LANTERN_OK
 7:  LEAVE 16
 8:  li      a0, LANTERN_INVALID_ATTESTATION
@@ -757,7 +757,7 @@ SPEC_END get_indexed_attestation
 SPEC_LEAF is_valid_indexed_attestation
     li      a5, 0
     li      a6, 0
-    j       indexed_attestation_valid
+    j       lantern_indexed_attestation_valid
 SPEC_END is_valid_indexed_attestation
 
 /*
@@ -767,7 +767,7 @@ SPEC_END is_valid_indexed_attestation
  * Locals as is_valid_indexed_attestation's, then L+96 the attestation, L+104 the committee
  * cache, L+112 the keys' sum (G1Point), L+256 its compressed form (48).
  */
-LOCAL_FUNCTION indexed_attestation_valid
+LOCAL_FUNCTION lantern_indexed_attestation_valid
     ENTER 304
     sd      a5, (L + 96)(sp)
     sd      a6, (L + 104)(sp)
@@ -877,7 +877,7 @@ LOCAL_FUNCTION indexed_attestation_valid
     addi    a5, sp, (L + 40)
     addi    a6, s2, IndexedAttestation_signature
     mv      a7, s3
-    call    attestation_key_sum
+    call    lantern_attestation_key_sum
     beqz    a0, 41f
     addi    a0, sp, (L + 112)               # bls.FastAggregateVerify: CoreVerify of point_to_pubkey(sum)
     addi    a1, sp, (L + 256)
@@ -899,7 +899,7 @@ LOCAL_FUNCTION indexed_attestation_valid
     mv      a6, s4
     CALL_GLOBAL crypto_bls_fast_aggregate_verify_cached
     LEAVE 304
-END_FUNCTION indexed_attestation_valid
+END_FUNCTION lantern_indexed_attestation_valid
 
 # 1 in Montgomery form: 2^384 mod p of BLS12-381, the z of an affine point as a G1Point.
     RODATA
@@ -947,7 +947,7 @@ keysum_one:
  * keys (state validators at a2), each also written at a4 when a4 is not 0; or -1 when a member
  * is at or past the cache's count, or its entry has status 2 and its key. A leaf.
  */
-LOCAL_FUNCTION key_sum_scan
+LOCAL_FUNCTION lantern_key_sum_scan
     UNWIND_END_PROLOGUE
     ld      a5, CRYPTO_BLS_CACHE_COUNT(a3)
     ld      a6, CRYPTO_BLS_CACHE_OFFSET(a3)
@@ -982,7 +982,7 @@ LOCAL_FUNCTION key_sum_scan
     ret
 6:  li      a0, -1
     ret
-END_FUNCTION key_sum_scan
+END_FUNCTION lantern_key_sum_scan
 
 /*
  * L0: makes the KeySum a0 of the a2 members at a1 (state validators at a3, PubkeyCache a4).
@@ -993,7 +993,7 @@ END_FUNCTION key_sum_scan
  * s7 signature, s8 scratch, s9 list, s10 i. Locals: L the scratch size, L+8 valid,
  * L+48 the sum, L+192 the next, L+336 a key.
  */
-LOCAL_FUNCTION key_sum_make
+LOCAL_FUNCTION lantern_key_sum_make
     ENTER 480
     mv      s1, a0
     mv      s2, a1
@@ -1008,7 +1008,7 @@ LOCAL_FUNCTION key_sum_make
     mv      a2, s4
     mv      a3, s5
     li      a4, 0
-    call    key_sum_scan
+    call    lantern_key_sum_scan
     li      t0, -1
     beq     a0, t0, 8f
     beqz    a0, 3f
@@ -1028,7 +1028,7 @@ LOCAL_FUNCTION key_sum_make
     mv      a2, s4
     mv      a3, s5
     addi    a4, s9, LIST_FIXED
-    call    key_sum_scan
+    call    lantern_key_sum_scan
     addi    a0, s4, Validator_pubkey
     mv      a1, s9
     mv      a2, s5
@@ -1045,7 +1045,7 @@ LOCAL_FUNCTION key_sum_make
     mv      a2, s4
     mv      a3, s5
     li      a4, 0
-    call    key_sum_scan
+    call    lantern_key_sum_scan
     bnez    a0, 8f                          # an entry still without its key: never tried again
 3:  .irp o, 0, 8, 16, 24, 32, 40, 48, 56, 64, 72, 80, 88, 96, 104, 112, 120, 128, 136
     sd      zero, (L + 48 + \o)(sp)         # the point at infinity
@@ -1079,9 +1079,9 @@ LOCAL_FUNCTION key_sum_make
     LEAVE 480
 9:  li      a0, 0
     LEAVE 480
-END_FUNCTION key_sum_make
+END_FUNCTION lantern_key_sum_make
 
-/* Within attestation_key_sum: the key of member s10 at L+528 when its entry holds it, else to fail. */
+/* Within lantern_attestation_key_sum: the key of member s10 at L+528 when its entry holds it, else to fail. */
 .macro MEMBER_POINT fail
     ld      t0, (L + 72)(sp)
     slli    t1, s10, 3
@@ -1110,7 +1110,7 @@ END_FUNCTION key_sum_make
 /*
  * L0: the sum of the keys of the attesting validators of attestation a1 (state a0), from the
  * key sums of CommitteeCache a2 and the entries of PubkeyCache a3, at a4 (G1Point); a5 the
- * message, a6 the signature, a7 the scratch, for key_sum_make. a0 = 1 when a4 holds the sum,
+ * message, a6 the signature, a7 the scratch, for lantern_key_sum_make. a0 = 1 when a4 holds the sum,
  * else 0. s1 state, s2 attestation, s3 PubkeyCache, s4 validators, s5 the entry, s6 committees
  * of the epoch, s7 its active validators, s8 bits, s9 bit count, s10 member i.
  * Locals: L epoch, +8 committee index, +16 committee offset, +24 the block of key sums,
@@ -1119,7 +1119,7 @@ END_FUNCTION key_sum_make
  * key (96), +240 the sum, +384 the next, +528 a key, +672 its negation, +816 the pass: 0 counts
  * the additions the key sums save, 1 adds; +824 that count.
  */
-LOCAL_FUNCTION attestation_key_sum
+LOCAL_FUNCTION lantern_attestation_key_sum
     ENTER 832
     mv      s1, a0
     mv      s2, a1
@@ -1135,12 +1135,12 @@ LOCAL_FUNCTION attestation_key_sum
     mv      a0, s1                          # the entry of the epoch
     mv      a1, t0
     addi    a2, sp, (L + 112)
-    call    committee_key
+    call    lantern_committee_key
     bnez    a0, 90f
     ld      a0, (L + 104)(sp)
     ld      a1, L(sp)
     addi    a2, sp, (L + 112)
-    call    committee_find
+    call    lantern_committee_find
     beqz    a0, 90f
     mv      s5, a0
     ld      t0, (L + 104)(sp)               # its block of key sums
@@ -1249,7 +1249,7 @@ LOCAL_FUNCTION attestation_key_sum
     ld      a5, (L + 48)(sp)
     ld      a6, (L + 56)(sp)
     ld      a7, (L + 64)(sp)
-    call    key_sum_make
+    call    lantern_key_sum_make
     li      t0, 1
     bne     a0, t0, 90f
 20: addi    a0, sp, (L + 240)
@@ -1314,7 +1314,7 @@ LOCAL_FUNCTION attestation_key_sum
     LEAVE 832
 90: li      a0, 0
     LEAVE 832
-END_FUNCTION attestation_key_sum
+END_FUNCTION lantern_attestation_key_sum
 
 .if FORK >= FORK_ALTAIR
 /*
@@ -1593,12 +1593,12 @@ SPEC_END process_attestation
  * attestation, L+152 the attesting list, L+160 the scratch size callees get, L+168 participation,
  * L+176 base reward per increment.
  */
-/* process_attestation of the spec: attestation_memo with a base reward factor of its own. */
+/* process_attestation of the spec: lantern_attestation_memo with a base reward factor of its own. */
 SPEC_FUNCTION process_attestation
     ENTER 16
     sd      zero, L(sp)
     addi    a5, sp, L
-    call    attestation_memo
+    call    lantern_attestation_memo
     LEAVE 16
 SPEC_END process_attestation
 
@@ -1607,7 +1607,7 @@ SPEC_END process_attestation
  * 0 until an attestation finds it, which stores it there. The operations of one block change no
  * effective balance and no active validator of the current epoch, so its attestations share it.
  */
-LOCAL_FUNCTION attestation_memo
+LOCAL_FUNCTION lantern_attestation_memo
     ENTER 192
     sd      a5, (L + 184)(sp)
     mv      s1, a0
@@ -1787,7 +1787,7 @@ LOCAL_FUNCTION attestation_memo
     ld      a2, CONFIG_PUBKEY_CACHE(s3)
     mv      a5, s2
     ld      a6, CONFIG_COMMITTEE_CACHE(s3)
-    call    indexed_attestation_valid
+    call    lantern_indexed_attestation_valid
     CHECK_STATUS s5, 7f, 8f
     ld      t0, (L + 40)(sp)
     li      a0, LANTERN_INVALID_ATTESTATION
@@ -1910,7 +1910,7 @@ LOCAL_FUNCTION attestation_memo
     LEAVE 192
 9:  li      a0, LANTERN_BUFFER_TOO_SMALL
     LEAVE 192
-END_FUNCTION attestation_memo
+END_FUNCTION lantern_attestation_memo
 .endif
 
 .if TIMELY_SOURCE_WEIGHT != TIMELY_HEAD_WEIGHT

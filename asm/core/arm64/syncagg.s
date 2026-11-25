@@ -5,7 +5,7 @@
 .set G1_POINT_BYTES, 144                                        /* asm-crypto G1Point: X, Y, Z */
 .set SYNC_KEYS_LIST, 24 + 48 * SYNC_COMMITTEE_SIZE              /* a BlsPublicKeyList of the committee */
 .set SYNC_AGG_EXTRA, SYNC_KEYS_LIST + SYNC_INDICES_BYTES + 3 * G1_POINT_BYTES + 48
-.set SYNC_TABLE_SLOTS, 2 * SYNC_COMMITTEE_SIZE                  /* find_pubkeys: slots of (fingerprint, member + 1) */
+.set SYNC_TABLE_SLOTS, 2 * SYNC_COMMITTEE_SIZE                  /* lantern_find_pubkeys: slots of (fingerprint, member + 1) */
 .set SYNC_TABLE_BYTES, 16 * SYNC_TABLE_SLOTS
 .if SYNC_TABLE_SLOTS & (SYNC_TABLE_SLOTS - 1)
 .error "find_pubkeys takes a slot number by a mask: SYNC_COMMITTEE_SIZE must be a power of 2"
@@ -90,7 +90,7 @@ SPEC_FUNCTION process_sync_aggregate
     add     x1, x19, x1
     add     x2, x26, #LIST_FIXED
     mov     x3, x25                         /* the hash table, where the keys go */
-    bl      find_pubkeys
+    bl      lantern_find_pubkeys
     mov     x9, x0
     mov     x0, #LANTERN_INVALID_SYNC_AGGREGATE
     cbnz    x9, 6f
@@ -245,7 +245,7 @@ SPEC_FUNCTION process_sync_aggregate
     add     x1, x19, x1
     mov     x2, x27
     mov     x3, x25                         /* the hash table, where the keys were */
-    bl      find_pubkeys
+    bl      lantern_find_pubkeys
     mov     x9, x0
     mov     x0, #LANTERN_INVALID_SYNC_AGGREGATE
     cbnz    x9, 6f
@@ -353,7 +353,7 @@ SPEC_END process_sync_aggregate
  * -1 for a key not found yet, or 1 << 63 | j for a key that is that of member j < k.
  * x0 = 0, or -1 when a key is missing. Uses x4-x7, x9-x17.
  */
-LOCAL_FUNCTION find_pubkeys
+LOCAL_FUNCTION lantern_find_pubkeys
     UNWIND_END_PROLOGUE
     mov     x9, x3                          /* the table: empty */
     MOVQ    x10, SYNC_TABLE_BYTES
@@ -469,4 +469,4 @@ LOCAL_FUNCTION find_pubkeys
     ret
 13: mov     x0, #0
     ret
-END_FUNCTION find_pubkeys
+END_FUNCTION lantern_find_pubkeys

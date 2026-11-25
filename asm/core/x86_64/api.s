@@ -4,7 +4,7 @@
  *
  * The writer: r12 the cursor, r13 the pass (0 counts the bytes, 1 writes them), r14 the end of
  * the room, r15 1 when the room ran out, rbp the ApiView. The writer's functions keep r12-r15
- * and rbp for it; only api_respond calls them.
+ * and rbp for it; only lantern_api_respond calls them.
  */
 
     RODATA
@@ -27,11 +27,11 @@ api_spec_keys_end:
 .macro API_LIT label
     lea     \label(%rip), %rdi
     mov     $\label\()_len, %esi
-    call    api_put
+    call    lantern_api_put
 .endm
 
 /* The rsi bytes at rdi join the response; the first pass only counts them. Uses rax, rcx, rsi, rdi. */
-LOCAL_FUNCTION api_put
+LOCAL_FUNCTION lantern_api_put
     UNWIND_END_PROLOGUE
     test    %r13, %r13
     jz      2f
@@ -48,10 +48,10 @@ LOCAL_FUNCTION api_put
     ret
 3:  mov     $1, %r15d
     ret
-END_FUNCTION api_put
+END_FUNCTION lantern_api_put
 
 /* The decimal digits of rdi join the response. Locals: the digits, from the end. */
-LOCAL_FUNCTION api_dec
+LOCAL_FUNCTION lantern_api_dec
     FRAME 32
     lea     32(%rsp), %r8
     mov     %rdi, %rax
@@ -66,12 +66,12 @@ LOCAL_FUNCTION api_dec
     mov     %r8, %rdi
     lea     32(%rsp), %rsi
     sub     %r8, %rsi
-    call    api_put
+    call    lantern_api_put
     UNFRAME 32
-END_FUNCTION api_dec
+END_FUNCTION lantern_api_dec
 
 /* The decimal digits of the 256-bit little-endian number at rdi join the response. Locals: its four words, then the digits from the end. */
-LOCAL_FUNCTION api_dec256
+LOCAL_FUNCTION lantern_api_dec256
     FRAME 128
     mov     (%rdi), %rax
     mov     %rax, (%rsp)
@@ -100,34 +100,34 @@ LOCAL_FUNCTION api_dec256
     mov     %r8, %rdi
     lea     128(%rsp), %rsi
     sub     %r8, %rsi
-    call    api_put
+    call    lantern_api_put
     UNFRAME 128
-END_FUNCTION api_dec256
+END_FUNCTION lantern_api_dec256
 
 /* The Gwei rdi in Wei, decimal digits, join the response. Locals: rdi. */
-LOCAL_FUNCTION api_wei
+LOCAL_FUNCTION lantern_api_wei
     FRAME 16
     mov     %rdi, (%rsp)
-    call    api_dec
+    call    lantern_api_dec
     cmpq    $0, (%rsp)
     je      1f
     API_LIT api_nines
 1:  UNFRAME 16
-END_FUNCTION api_wei
+END_FUNCTION lantern_api_wei
 
 /* The decimal digits of rdi, in quotes. Locals: rdi. */
-LOCAL_FUNCTION api_qdec
+LOCAL_FUNCTION lantern_api_qdec
     FRAME 16
     mov     %rdi, (%rsp)
     API_LIT api_quote
     mov     (%rsp), %rdi
-    call    api_dec
+    call    lantern_api_dec
     API_LIT api_quote
     UNFRAME 16
-END_FUNCTION api_qdec
+END_FUNCTION lantern_api_qdec
 
 /* "0x" and the lower case hex of the rsi bytes at rdi, in quotes. Locals: rdi, rsi, then 2 digits. */
-LOCAL_FUNCTION api_qhex
+LOCAL_FUNCTION lantern_api_qhex
     FRAME 32
     mov     %rdi, (%rsp)
     mov     %rsi, 8(%rsp)
@@ -152,27 +152,27 @@ LOCAL_FUNCTION api_qhex
     mov     %al, 17(%rsp)
     lea     16(%rsp), %rdi
     mov     $2, %esi
-    call    api_put
+    call    lantern_api_put
     jmp     1b
 2:  API_LIT api_quote
     UNFRAME 32
-END_FUNCTION api_qhex
+END_FUNCTION lantern_api_qhex
 
 /* The text at rdi (its length, then its bytes), in quotes. Locals: rdi. */
-LOCAL_FUNCTION api_text
+LOCAL_FUNCTION lantern_api_text
     FRAME 16
     mov     %rdi, (%rsp)
     API_LIT api_quote
     mov     (%rsp), %rax
     mov     (%rax), %rsi
     lea     8(%rax), %rdi
-    call    api_put
+    call    lantern_api_put
     API_LIT api_quote
     UNFRAME 16
-END_FUNCTION api_text
+END_FUNCTION lantern_api_text
 
 /* true when rdi is not 0, else false. */
-LOCAL_FUNCTION api_bool
+LOCAL_FUNCTION lantern_api_bool
     FRAME 0
     test    %rdi, %rdi
     jz      1f
@@ -180,27 +180,27 @@ LOCAL_FUNCTION api_bool
     UNFRAME 0
 1:  API_LIT api_false
     UNFRAME 0
-END_FUNCTION api_bool
+END_FUNCTION lantern_api_bool
 
 /* A Checkpoint of the view at rdi: {"epoch":…,"root":…}. Locals: rdi. */
-LOCAL_FUNCTION api_checkpoint
+LOCAL_FUNCTION lantern_api_checkpoint
     FRAME 16
     mov     %rdi, (%rsp)
     API_LIT api_f_epoch
     mov     (%rsp), %rax
     mov     (%rax), %rdi
-    call    api_qdec
+    call    lantern_api_qdec
     API_LIT api_f_root
     mov     (%rsp), %rdi
     add     $8, %rdi
     mov     $32, %esi
-    call    api_qhex
+    call    lantern_api_qhex
     API_LIT api_end1
     UNFRAME 16
-END_FUNCTION api_checkpoint
+END_FUNCTION lantern_api_checkpoint
 
 /* rax = the api_codes entry of the status rdi, or 0. Uses rcx. */
-LOCAL_FUNCTION api_code
+LOCAL_FUNCTION lantern_api_code
     UNWIND_END_PROLOGUE
     lea     api_codes(%rip), %rax
     lea     api_codes_end(%rip), %rcx
@@ -212,10 +212,10 @@ LOCAL_FUNCTION api_code
     jmp     1b
 2:  xor     %eax, %eax
 3:  ret
-END_FUNCTION api_code
+END_FUNCTION lantern_api_code
 
 /* The text of the api_codes entry rdi at its byte rsi (8 the reason, 24 the message), or none for no entry. */
-LOCAL_FUNCTION api_code_text
+LOCAL_FUNCTION lantern_api_code_text
     FRAME 0
     test    %rdi, %rdi
     jz      9f
@@ -223,16 +223,16 @@ LOCAL_FUNCTION api_code_text
     mov     8(%rdi,%rsi), %rsi
     lea     api_texts(%rip), %rdi
     add     %rax, %rdi
-    call    api_put
+    call    lantern_api_put
 9:  UNFRAME 0
-END_FUNCTION api_code_text
+END_FUNCTION lantern_api_code_text
 
 /*
  * The body of the kind rsi for the view rbp: an error body of the status at (rdi), or the JSON of
  * an operation (beacon-api.md, Common rules). Locals: rdi, rsi.
  */
 /* The decimal digits of the Uint256 at rdi, little endian, in quotes. Locals: its eight 32-bit words, then the text from its end. */
-LOCAL_FUNCTION api_qdec256
+LOCAL_FUNCTION lantern_api_qdec256
     FRAME 128
     mov     (%rdi), %rax
     mov     %rax, (%rsp)
@@ -265,15 +265,15 @@ LOCAL_FUNCTION api_qdec256
     mov     %r8, %rdi
     lea     128(%rsp), %rsi
     sub     %r8, %rsi
-    call    api_put
+    call    lantern_api_put
     UNFRAME 128
-END_FUNCTION api_qdec256
+END_FUNCTION lantern_api_qdec256
 
 /*
  * The body of getSpec (beacon-api.md, Common rules): each key of API_SPEC_KEYS, with the config
  * of the view rbp. Locals: the record, an index, 32 bytes of a value, a count.
  */
-LOCAL_FUNCTION api_spec
+LOCAL_FUNCTION lantern_api_spec
     FRAME 64
     lea     api_spec_keys(%rip), %rax
     mov     %rax, (%rsp)
@@ -289,7 +289,7 @@ LOCAL_FUNCTION api_spec
 2:  mov     (%rsp), %rax                    # "<name>":
     mov     (%rax), %rsi
     lea     24(%rax), %rdi
-    call    api_put
+    call    lantern_api_put
     API_LIT api_p_key
     mov     (%rsp), %rax
     mov     8(%rax), %rcx                   # the kind, the value
@@ -304,20 +304,20 @@ LOCAL_FUNCTION api_spec
     mov     %rdx, 48(%rsp)
     cmp     $SPEC_NUMBER, %ecx
     jne     3f
-    call    api_qdec
+    call    lantern_api_qdec
     jmp     1b
 3:  cmp     $SPEC_HEX, %ecx
     jne     4f
     lea     16(%rsp), %rdi
     mov     %rdx, %rsi
-    call    api_qhex
+    call    lantern_api_qhex
     jmp     1b
 4:  cmp     $SPEC_TEXT, %ecx
     jne     5f
     API_LIT api_quote
     lea     16(%rsp), %rdi
     mov     48(%rsp), %rsi
-    call    api_put
+    call    lantern_api_put
     API_LIT api_quote
     jmp     1b
 5:  cmp     $SPEC_LIST, %ecx
@@ -334,7 +334,7 @@ LOCAL_FUNCTION api_spec
     movzbl  16(%rsp,%rax), %edi
     inc     %rax
     mov     %rax, 8(%rsp)
-    call    api_qdec
+    call    lantern_api_qdec
     jmp     51b
 52: API_LIT api_p_rbracket
     jmp     1b
@@ -346,22 +346,22 @@ LOCAL_FUNCTION api_spec
     mov     $1000, %ecx
     div     %rcx
     mov     %rax, %rdi
-    call    api_qdec
+    call    lantern_api_qdec
     jmp     1b
 7:  cmp     $SPEC_CONFIG, %ecx
     jne     8f
     cmp     $CONFIG_KIND_U64, %rdx
     jne     71f
     mov     (%rdi), %rdi
-    call    api_qdec
+    call    lantern_api_qdec
     jmp     1b
 71: cmp     $CONFIG_KIND_UINT256, %rdx
     jne     72f
-    call    api_qdec256
+    call    lantern_api_qdec256
     jmp     1b
 72: cmp     $CONFIG_KIND_TEXT, %rdx
     jne     73f
-    call    api_text                        # in quotes
+    call    lantern_api_text                        # in quotes
     jmp     1b
 73: mov     $4, %esi                        # Version: 4 bytes; Hash32: 32; Address: 20
     mov     $32, %eax
@@ -370,7 +370,7 @@ LOCAL_FUNCTION api_spec
     mov     $20, %eax
     cmp     $CONFIG_KIND_ADDRESS, %rdx
     cmove   %eax, %esi
-    call    api_qhex
+    call    lantern_api_qhex
     jmp     1b
     # SPEC_SCHEDULE: [{"EPOCH":…,"MAX_BLOBS_PER_BLOCK":…},…]
 8:  API_LIT api_p_lbracket
@@ -387,13 +387,13 @@ LOCAL_FUNCTION api_spec
     shl     $4, %rax
     add     ApiView_config(%rbp), %rax
     mov     CONFIG_BLOB_SCHEDULE(%rax), %rdi
-    call    api_qdec
+    call    lantern_api_qdec
     API_LIT api_p_max
     mov     8(%rsp), %rax
     shl     $4, %rax
     add     ApiView_config(%rbp), %rax
     mov     (CONFIG_BLOB_SCHEDULE + 8)(%rax), %rdi
-    call    api_qdec
+    call    lantern_api_qdec
     API_LIT api_end1
     incq    8(%rsp)
     jmp     81b
@@ -401,14 +401,14 @@ LOCAL_FUNCTION api_spec
     jmp     1b
 9:  API_LIT api_end2
     UNFRAME 64
-END_FUNCTION api_spec
+END_FUNCTION lantern_api_spec
 
 /*
  * The body of getForkSchedule (beacon-api.md, Common rules), with the config of the view rbp:
  * phase0, then each fork to fulu whose epoch is below 2^64 - 1. Locals: the fork, the previous
  * version, the version, the epoch.
  */
-LOCAL_FUNCTION api_fork_schedule
+LOCAL_FUNCTION lantern_api_fork_schedule
     FRAME 32
     API_LIT api_o_open
     mov     ApiView_config(%rbp), %rax
@@ -436,28 +436,28 @@ LOCAL_FUNCTION api_fork_schedule
 2:  API_LIT api_o_entry
     lea     8(%rsp), %rdi
     mov     $4, %esi
-    call    api_qhex
+    call    lantern_api_qhex
     API_LIT api_k_current
     lea     16(%rsp), %rdi
     mov     $4, %esi
-    call    api_qhex
+    call    lantern_api_qhex
     API_LIT api_k_epoch
     mov     24(%rsp), %rdi
-    call    api_qdec
+    call    lantern_api_qdec
     API_LIT api_end1
     mov     16(%rsp), %rax                  # the next fork's previous version
     mov     %rax, 8(%rsp)
     jmp     1b
 9:  API_LIT api_o_end
     UNFRAME 32
-END_FUNCTION api_fork_schedule
+END_FUNCTION lantern_api_fork_schedule
 
 # ---------------------------------------------------------------- Validators (beacon-api.md, Common rules)
 
 .set API_ITEM_MAX, 576                      # the most bytes of an item and its comma
 
 # rax = the API_STATUS_* of the validator at rdi at the epoch rsi. A leaf. Uses rax, rcx, rdx.
-LOCAL_FUNCTION api_validator_status
+LOCAL_FUNCTION lantern_api_validator_status
     UNWIND_END_PROLOGUE
     cmp     %rsi, NODE_VALIDATOR_WITHDRAWABLE(%rdi)
     ja      1f
@@ -490,12 +490,12 @@ LOCAL_FUNCTION api_validator_status
     jne     9f
     mov     $API_STATUS_PENDING_INITIALIZED, %eax
 9:  ret
-END_FUNCTION api_validator_status
+END_FUNCTION lantern_api_validator_status
 
 # The item of the validator rsi of the state rdi: rdx 0 for getStateValidators, 1 for the balances,
 # 2 for the identities, 3 for their SSZ (64 bytes). Locals: the validator, the index, the kind, the
 # balance, the epoch, then an SSZ item at 48.
-LOCAL_FUNCTION api_validator_item
+LOCAL_FUNCTION lantern_api_validator_item
     FRAME 112
     mov     %rsi, 8(%rsp)
     mov     %rdx, 16(%rsp)
@@ -525,78 +525,78 @@ LOCAL_FUNCTION api_validator_item
     mov     %rax, 104(%rsp)
     lea     48(%rsp), %rdi
     mov     $64, %esi
-    call    api_put
+    call    lantern_api_put
     UNFRAME 112
 1:  API_LIT api_v_index
     mov     8(%rsp), %rdi
-    call    api_qdec
+    call    lantern_api_qdec
     cmpq    $2, 16(%rsp)
     je      2f
     API_LIT api_v_balance
     mov     24(%rsp), %rdi
-    call    api_qdec
+    call    lantern_api_qdec
     cmpq    $0, 16(%rsp)
     jne     9f
     API_LIT api_v_status
     mov     (%rsp), %rdi
     mov     32(%rsp), %rsi
-    call    api_validator_status
+    call    lantern_api_validator_status
     lea     api_v_statuses(%rip), %rdi
     imul    $24, %rax, %rax
     add     %rax, %rdi
     movzbl  (%rdi), %esi
     inc     %rdi
-    call    api_put
+    call    lantern_api_put
     API_LIT api_v_validator
     mov     (%rsp), %rdi
     mov     $48, %esi
-    call    api_qhex
+    call    lantern_api_qhex
     API_LIT api_v_credentials
     mov     (%rsp), %rdi
     add     $NODE_VALIDATOR_CREDENTIALS, %rdi
     mov     $32, %esi
-    call    api_qhex
+    call    lantern_api_qhex
     API_LIT api_v_effective
     mov     (%rsp), %rax
     mov     NODE_VALIDATOR_EFFECTIVE_BALANCE(%rax), %rdi
-    call    api_qdec
+    call    lantern_api_qdec
     API_LIT api_v_slashed
     mov     (%rsp), %rax
     movzbl  NODE_VALIDATOR_SLASHED(%rax), %edi
-    call    api_bool
+    call    lantern_api_bool
     API_LIT api_v_eligibility
     mov     (%rsp), %rax
     mov     NODE_VALIDATOR_ELIGIBILITY(%rax), %rdi
-    call    api_qdec
+    call    lantern_api_qdec
     API_LIT api_v_activation
     mov     (%rsp), %rax
     mov     NODE_VALIDATOR_ACTIVATION(%rax), %rdi
-    call    api_qdec
+    call    lantern_api_qdec
     API_LIT api_v_exit
     mov     (%rsp), %rax
     mov     NODE_VALIDATOR_EXIT(%rax), %rdi
-    call    api_qdec
+    call    lantern_api_qdec
     API_LIT api_v_withdrawable
     mov     (%rsp), %rax
     mov     NODE_VALIDATOR_WITHDRAWABLE(%rax), %rdi
-    call    api_qdec
+    call    lantern_api_qdec
     API_LIT api_end2
     UNFRAME 112
     # identities
 2:  API_LIT api_v_pubkey
     mov     (%rsp), %rdi
     mov     $48, %esi
-    call    api_qhex
+    call    lantern_api_qhex
     API_LIT api_v_activation
     mov     (%rsp), %rax
     mov     NODE_VALIDATOR_ACTIVATION(%rax), %rdi
-    call    api_qdec
+    call    lantern_api_qdec
 9:  API_LIT api_end1
     UNFRAME 112
-END_FUNCTION api_validator_item
+END_FUNCTION lantern_api_validator_item
 
 # rax = the index of the validator of the ValidatorRef in the ByteList rsi in the state rdi, or 2^64 - 1. A leaf. Uses rax, rcx, rdx, rsi, r8, r9.
-LOCAL_FUNCTION node_api_find_validator
+LOCAL_FUNCTION lantern_node_api_find_validator
     UNWIND_END_PROLOGUE
     cmpq    $64, 16(%rsi)
     jne     8f
@@ -624,7 +624,7 @@ LOCAL_FUNCTION node_api_find_validator
     jmp     3b
 8:  mov     $-1, %rax
     ret
-END_FUNCTION node_api_find_validator
+END_FUNCTION lantern_node_api_find_validator
 
 # The selection of a chunk of a validator stream (node.md, NODE_WORK_API_CHUNK), at the cursor at
 # NodeEvent_api + 16 of the event rbp: +16 a bitmap, in the scratch rdi, of the validators of the
@@ -632,7 +632,7 @@ END_FUNCTION node_api_find_validator
 # state's slot; +40 the count of the validators selected. rax = 0, or LANTERN_BUFFER_TOO_SMALL.
 # Locals: the scratch's next byte, its end, the validators, their count, the items, their count, the
 # table of the public keys, its mask.
-LOCAL_FUNCTION node_api_validators_prep
+LOCAL_FUNCTION lantern_node_api_validators_prep
     FRAME 64
     mov     (%rdi), %rax
     add     %rdi, %rax
@@ -773,13 +773,13 @@ LOCAL_FUNCTION node_api_validators_prep
     UNFRAME 64
 97: mov     $LANTERN_BUFFER_TOO_SMALL, %eax
     UNFRAME 64
-END_FUNCTION node_api_validators_prep
+END_FUNCTION lantern_node_api_validators_prep
 
 # The items of the pending stream of the entry rbx, of the state rdi (node.md, NODE_WORK_API_CHUNK),
 # from the index at NodeEvent_api + 16 of the event rbp, at the writer's cursor r12 up to r14, with
 # , between; then ]} once they are all written. rax = 1 when whole, 0 when more is to come, 2 when
 # the state has no such list. Locals: lantern_node_pending's out, the kind.
-LOCAL_FUNCTION api_pending_json
+LOCAL_FUNCTION lantern_api_pending_json
     FRAME 32
     mov     NodeApi_op(%rbx), %rax          # the kind: 0 deposits, 1 partial withdrawals, 2 consolidations
     lea     -API_OP_GET_PENDING_DEPOSITS(%rax), %rsi
@@ -806,7 +806,7 @@ LOCAL_FUNCTION api_pending_json
     imul    16(%rsp), %rdi
     add     (%rsp), %rdi
     mov     24(%rsp), %rsi
-    call    api_pending_item
+    call    lantern_api_pending_item
     incq    (NodeEvent_api + 16)(%rbp)
     jmp     1b
 8:  API_LIT api_v_end
@@ -816,11 +816,11 @@ LOCAL_FUNCTION api_pending_json
     UNFRAME 32
 7:  mov     $2, %eax
     UNFRAME 32
-END_FUNCTION api_pending_json
+END_FUNCTION lantern_api_pending_json
 
 # The JSON of the pending item at rdi of the kind rsi (lantern_node_pending): a PendingDeposit, a
 # PendingPartialWithdrawal or a PendingConsolidation, from its SSZ fields. Locals: the item.
-LOCAL_FUNCTION api_pending_item
+LOCAL_FUNCTION lantern_api_pending_item
     FRAME 16
     mov     %rdi, (%rsp)
     cmp     $1, %rsi
@@ -830,58 +830,58 @@ LOCAL_FUNCTION api_pending_item
     API_LIT api_q_pubkey
     mov     (%rsp), %rdi
     mov     $48, %esi
-    call    api_qhex
+    call    lantern_api_qhex
     API_LIT api_q_credentials
     mov     (%rsp), %rdi
     add     $48, %rdi
     mov     $32, %esi
-    call    api_qhex
+    call    lantern_api_qhex
     API_LIT api_q_amount
     mov     (%rsp), %rax
     mov     80(%rax), %rdi
-    call    api_qdec
+    call    lantern_api_qdec
     API_LIT api_q_signature
     mov     (%rsp), %rdi
     add     $88, %rdi
     mov     $96, %esi
-    call    api_qhex
+    call    lantern_api_qhex
     API_LIT api_q_slot
     mov     (%rsp), %rax
     mov     184(%rax), %rdi
-    call    api_qdec
+    call    lantern_api_qdec
     jmp     9f
     # {"validator_index":…,"amount":…,"withdrawable_epoch":…}
 20: API_LIT api_q_validator
     mov     (%rsp), %rax
     mov     (%rax), %rdi
-    call    api_qdec
+    call    lantern_api_qdec
     API_LIT api_q_amount
     mov     (%rsp), %rax
     mov     8(%rax), %rdi
-    call    api_qdec
+    call    lantern_api_qdec
     API_LIT api_q_withdrawable
     mov     (%rsp), %rax
     mov     16(%rax), %rdi
-    call    api_qdec
+    call    lantern_api_qdec
     jmp     9f
     # {"source_index":…,"target_index":…}
 30: API_LIT api_q_source
     mov     (%rsp), %rax
     mov     (%rax), %rdi
-    call    api_qdec
+    call    lantern_api_qdec
     API_LIT api_q_target
     mov     (%rsp), %rax
     mov     8(%rax), %rdi
-    call    api_qdec
+    call    lantern_api_qdec
 9:  API_LIT api_end1
     UNFRAME 16
-END_FUNCTION api_pending_item
+END_FUNCTION lantern_api_pending_item
 
 # The items of the validator stream of the entry rbx, of the state rdi, from the cursor at
 # NodeEvent_api + 16 of the event rbp (+0 the next index, +8 the status bits, +16 the bitmap, +24
 # the epoch, +32 the items written), at the writer's cursor r12 up to r14; then ]} for JSON once they
 # are all written. rax = 1 when whole, else 0. Locals: the state, the kind, the validators' count.
-LOCAL_FUNCTION api_validators_json
+LOCAL_FUNCTION lantern_api_validators_json
     FRAME 32
     mov     %rdi, (%rsp)
     xor     %eax, %eax                      # the kind: 0, 1 the balances, 2 the identities, 3 their SSZ
@@ -926,7 +926,7 @@ LOCAL_FUNCTION api_validators_json
     shl     $7, %rcx
     lea     (%rax,%rcx), %rdi
     mov     (NodeEvent_api + 16 + 24)(%rbp), %rsi
-    call    api_validator_status
+    call    lantern_api_validator_status
     mov     (NodeEvent_api + 16 + 8)(%rbp), %rdx
     bt      %rax, %rdx
     jc      4f
@@ -945,7 +945,7 @@ LOCAL_FUNCTION api_validators_json
     mov     (%rsp), %rdi
     mov     (NodeEvent_api + 16)(%rbp), %rsi
     mov     8(%rsp), %rdx
-    call    api_validator_item
+    call    lantern_api_validator_item
     incq    (NodeEvent_api + 16)(%rbp)
     jmp     2b
 8:  cmpq    $3, 8(%rsp)                     # all: ]} for JSON
@@ -959,39 +959,39 @@ LOCAL_FUNCTION api_validators_json
     UNFRAME 32
 9:  xor     %eax, %eax
     UNFRAME 32
-END_FUNCTION api_validators_json
+END_FUNCTION lantern_api_validators_json
 
 # The fields ,"head":…,"target":…,"source":…,"inactivity":…} of the 48-byte item rdi of
 # lantern_node_attestation_rewards, with ,"inclusion_delay":… before inactivity when the fork of the
 # entry rbx is phase0. Locals: the item.
-LOCAL_FUNCTION api_reward_fields
+LOCAL_FUNCTION lantern_api_reward_fields
     FRAME 16
     mov     %rdi, (%rsp)
     API_LIT api_ar_head
     mov     (%rsp), %rax
     mov     (%rax), %rdi
-    call    api_qint
+    call    lantern_api_qint
     API_LIT api_ar_target
     mov     (%rsp), %rax
     mov     8(%rax), %rdi
-    call    api_qint
+    call    lantern_api_qint
     API_LIT api_ar_source
     mov     (%rsp), %rax
     mov     16(%rax), %rdi
-    call    api_qint
+    call    lantern_api_qint
     cmpq    $0, NodeApi_fork(%rbx)
     jne     1f
     API_LIT api_ar_inclusion
     mov     (%rsp), %rax
     mov     24(%rax), %rdi
-    call    api_qdec
+    call    lantern_api_qdec
 1:  API_LIT api_ar_inactivity
     mov     (%rsp), %rax
     mov     32(%rax), %rdi
-    call    api_qint
+    call    lantern_api_qint
     API_LIT api_end1
     UNFRAME 16
-END_FUNCTION api_reward_fields
+END_FUNCTION lantern_api_reward_fields
 
 .set API_REWARD_WINDOW, 256                 # the validators of one call of lantern_node_attestation_rewards
 .set API_REWARD_ITEM_MAX, 256               # the room an item may take
@@ -1003,7 +1003,7 @@ END_FUNCTION api_reward_fields
 # writer's cursor r12 up to r14; then ]}} once all are written. rax = 1 when whole, 0 when more is
 # to come, 2 for a state the functions refuse, 3 for a scratch too small. Locals: the state, the
 # cursor, the window's items, its first validator, its count, a value, an ideal item (48).
-LOCAL_FUNCTION api_rewards_json
+LOCAL_FUNCTION lantern_api_rewards_json
     FRAME 96
     mov     %rdi, (%rsp)
     lea     (NodeEvent_api + 16)(%rbp), %rax
@@ -1050,9 +1050,9 @@ LOCAL_FUNCTION api_rewards_json
     API_LIT api_p_comma
 31: API_LIT api_ar_eb
     mov     40(%rsp), %rdi
-    call    api_qdec
+    call    lantern_api_qdec
     lea     48(%rsp), %rdi
-    call    api_reward_fields
+    call    lantern_api_reward_fields
     mov     8(%rsp), %rax
     incq    (%rax)
     jmp     3b
@@ -1139,11 +1139,11 @@ LOCAL_FUNCTION api_rewards_json
 63: API_LIT api_q_validator
     mov     24(%rsp), %rdi
     add     40(%rsp), %rdi
-    call    api_qdec
+    call    lantern_api_qdec
     mov     40(%rsp), %rdi
     imul    $48, %rdi, %rdi
     add     16(%rsp), %rdi
-    call    api_reward_fields
+    call    lantern_api_reward_fields
 69: incq    40(%rsp)
     jmp     6b
 68: mov     24(%rsp), %rcx                  # no room: the next chunk goes on from this validator
@@ -1169,22 +1169,22 @@ LOCAL_FUNCTION api_rewards_json
     UNFRAME 96
 93: mov     $3, %eax
     UNFRAME 96
-END_FUNCTION api_rewards_json
+END_FUNCTION lantern_api_rewards_json
 
 /*
  * The answer of a state operation (beacon-api.md) for the connection rdi, the route rsi, the answer
- * flags rdx and the view rcx whose state node_api_state found: the state at head_slot, then a
+ * flags rdx and the view rcx whose state lantern_node_api_state found: the state at head_slot, then a
  * stream or a work. A validator operation's ids: look_data when it is not 0, else the route's.
  * rax = 0, or the status of an error. r12 the flags, r13 the route, S7 the view, S8 the connection.
  */
-LOCAL_FUNCTION node_api_state_answer
+LOCAL_FUNCTION lantern_node_api_state_answer
     ENTER 0
     mov     %rdi, S8(%rsp)
     mov     %rsi, %r13
     mov     %rdx, %r12
     mov     %rcx, S7(%rsp)
     mov     %rcx, %rdi
-    call    node_api_advance
+    call    lantern_node_api_advance
     mov     ApiRoute_op(%r13), %rcx
     cmp     $API_OP_GET_STATE_V2, %rcx
     je      64f
@@ -1208,7 +1208,7 @@ LOCAL_FUNCTION node_api_state_answer
     jnz     4f
     movq    $-1, ApiRoute_epoch(%r13)
 4:  lea     ApiRoute_epoch(%r13), %rdi
-    call    node_api_put8
+    call    lantern_node_api_put8
     mov     S7(%rsp), %rcx
     mov     %rax, ApiView_look_data(%rcx)
     jmp     67f
@@ -1219,7 +1219,7 @@ LOCAL_FUNCTION node_api_state_answer
     cmpq    $0, ApiView_look_data(%rcx)
     jne     6f
     mov     %r13, %rdi
-    call    node_api_ids
+    call    lantern_node_api_ids
     mov     S7(%rsp), %rcx
     mov     %rax, ApiView_look_data(%rcx)
 6:  cmpq    $API_OP_GET_STATE_VALIDATOR, ApiRoute_op(%r13)
@@ -1228,20 +1228,20 @@ LOCAL_FUNCTION node_api_state_answer
     mov     S8(%rsp), %rsi
     mov     %r12, %rdx
     mov     S7(%rsp), %rcx
-    call    node_api_encode
+    call    lantern_node_api_encode
     LEAVE 0
 64: mov     S8(%rsp), %rdi                  # a stream of the answer
     mov     %r13, %rsi
     mov     %r12, %rdx
     mov     S7(%rsp), %rcx
-    call    node_api_stream
+    call    lantern_node_api_stream
     LEAVE 0
-END_FUNCTION node_api_state_answer
+END_FUNCTION lantern_node_api_state_answer
 
 # rax = the epoch of getEpochCommittees of the route rdi and the state of the view rsi (beacon-api.md,
 # Common rules), or 2^64 - 1 for 400: an epoch above the state's + 1, one whose seed's RANDAO mix the
 # state no longer holds, or a slot of another epoch. A leaf. Uses rax, rcx, rdx, r8, r9.
-LOCAL_FUNCTION node_api_committees_check
+LOCAL_FUNCTION lantern_node_api_committees_check
     UNWIND_END_PROLOGUE
     mov     ApiView_head_slot(%rsi), %rax   # the state's epoch at r8, the epoch at r9
     xor     %edx, %edx
@@ -1276,12 +1276,12 @@ LOCAL_FUNCTION node_api_committees_check
     ret
 8:  mov     $-1, %rax
     ret
-END_FUNCTION node_api_committees_check
+END_FUNCTION lantern_node_api_committees_check
 
 # The cursor of the getEpochCommittees stream of the entry rdi, for the route rsi and the epoch rdx
 # (node.md, NODE_EV_API): the first slot at 0, the first index at 8, the epoch at 24, the slot and the
 # index asked at 40 and 48 (2^64 - 1 for none). A leaf. Uses rax, rcx.
-LOCAL_FUNCTION node_api_committees_cursor
+LOCAL_FUNCTION lantern_node_api_committees_cursor
     UNWIND_END_PROLOGUE
     mov     %rdx, (NodeApi_cursor + 24)(%rdi)
     imul    $SLOTS_PER_EPOCH, %rdx, %rax
@@ -1301,15 +1301,15 @@ LOCAL_FUNCTION node_api_committees_cursor
 2:  mov     %rax, (NodeApi_cursor + 8)(%rdi)
     mov     %rcx, (NodeApi_cursor + 48)(%rdi)
     ret
-END_FUNCTION node_api_committees_cursor
+END_FUNCTION lantern_node_api_committees_cursor
 
 # A chunk's start of a getEpochCommittees stream (node.md, NODE_WORK_API_CHUNK), at the cursor at
 # NodeEvent_api + 16 of the event rbp: +56 get_committee_count_per_slot of the state rsi at the epoch
-# at +24; +72 the scratch rdi and +80 the CommitteeCache of the node rdx, for api_committees_json.
+# at +24; +72 the scratch rdi and +80 the CommitteeCache of the node rdx, for lantern_api_committees_json.
 # rax = 0; 400 for an index asked at or past the count, in the first chunk; LANTERN_BUFFER_TOO_SMALL
 # for a scratch with no room for a committee and lantern_get_beacon_committee; else the status of the
 # count. Locals: the epoch, the count, the state.
-LOCAL_FUNCTION node_api_committees_prep
+LOCAL_FUNCTION lantern_node_api_committees_prep
     FRAME 32
     mov     %rdi, (NodeEvent_api + 16 + 72)(%rbp)
     mov     %rsi, 16(%rsp)
@@ -1353,7 +1353,7 @@ LOCAL_FUNCTION node_api_committees_prep
 9:  UNFRAME 32
 97: mov     $LANTERN_BUFFER_TOO_SMALL, %eax
     UNFRAME 32
-END_FUNCTION node_api_committees_prep
+END_FUNCTION lantern_node_api_committees_prep
 
 # The items of the getEpochCommittees stream of the entry rbx, of the state rdi, from the cursor at
 # NodeEvent_api + 16 of the event rbp (+0 the slot, +8 the index, +16 the member, +24 the epoch, +32
@@ -1361,7 +1361,7 @@ END_FUNCTION node_api_committees_prep
 # slot, +64 1 within an item, +72 the scratch, +80 the CommitteeCache), at the writer's cursor r12 up
 # to r14; then ]} once they are all written. rax = 1 when whole, 0 when more is to come, 2 when a
 # committee fails. Locals: the slot, the index, the committee's list, the state.
-LOCAL_FUNCTION api_committees_json
+LOCAL_FUNCTION lantern_api_committees_json
     FRAME 48
     mov     %rdi, 32(%rsp)
 1:  mov     (NodeEvent_api + 16)(%rbp), %rax        # the slot and the index
@@ -1403,10 +1403,10 @@ LOCAL_FUNCTION api_committees_json
     movq    $0, (NodeEvent_api + 16 + 16)(%rbp)
     API_LIT api_v_index
     mov     (NodeEvent_api + 16 + 8)(%rbp), %rdi
-    call    api_qdec
+    call    lantern_api_qdec
     API_LIT api_c_slot
     mov     (NodeEvent_api + 16)(%rbp), %rdi
-    call    api_qdec
+    call    lantern_api_qdec
     API_LIT api_c_validators
 4:  mov     (NodeEvent_api + 16)(%rbp), %rax        # the committee, in a list after 16 bytes of the scratch
     mov     %rax, (%rsp)
@@ -1453,7 +1453,7 @@ LOCAL_FUNCTION api_committees_json
     mov     16(%rsp), %rax
     mov     LIST_FIXED(%rax,%rcx,8), %rdi
     incq    (NodeEvent_api + 16 + 16)(%rbp)
-    call    api_qdec
+    call    lantern_api_qdec
     jmp     41b
 5:  mov     %r14, %rax                      # the item's end: ]}
     sub     %r12, %rax
@@ -1474,12 +1474,12 @@ LOCAL_FUNCTION api_committees_json
     UNFRAME 48
 9:  xor     %eax, %eax
     UNFRAME 48
-END_FUNCTION api_committees_json
+END_FUNCTION lantern_api_committees_json
 
 # rax = the new id of a NODE_ACT_BYTES_PUT of the ValidatorRef items of the validator operation of
 # the route rdi (getStateValidator: its validator_id), or 0 with none (node.md, NODE_EV_API).
 # Locals: a ByteList head whose offset reaches the items.
-LOCAL_FUNCTION node_api_ids
+LOCAL_FUNCTION lantern_node_api_ids
     FRAME 32
     cmpq    $API_OP_GET_STATE_VALIDATOR, ApiRoute_op(%rdi)
     jne     1f
@@ -1498,11 +1498,11 @@ LOCAL_FUNCTION node_api_ids
     mov     %rcx, (%rdi)
     mov     %rax, 8(%rdi)
     mov     %rcx, 16(%rdi)
-    call    node_put
+    call    lantern_node_put
     UNFRAME 32
-END_FUNCTION node_api_ids
+END_FUNCTION lantern_node_api_ids
 
-LOCAL_FUNCTION api_body
+LOCAL_FUNCTION lantern_api_body
     FRAME 16
     mov     %rdi, (%rsp)
     mov     %rsi, 8(%rsp)
@@ -1512,19 +1512,19 @@ LOCAL_FUNCTION api_body
     API_LIT api_e_code
     mov     (%rsp), %rax
     mov     (%rax), %rdi
-    call    api_dec
+    call    lantern_api_dec
     API_LIT api_e_message
     mov     (%rsp), %rax
     mov     (%rax), %rdi
-    call    api_code
+    call    lantern_api_code
     mov     %rax, %rdi
     mov     $24, %esi
-    call    api_code_text
+    call    lantern_api_code_text
     API_LIT api_e_end
     UNFRAME 16
 1:  cmp     $API_OP_GET_LIGHT_CLIENT_UPDATES_BY_RANGE, %rsi
     jne     102f
-    call    api_lc_updates_body
+    call    lantern_api_lc_updates_body
     UNFRAME 16
 102: lea    -API_OP_GET_LIGHT_CLIENT_BOOTSTRAP(%rsi), %rax   # the light client reads: SSZ, or {"version":…,"data":…}
     cmp     $(API_OP_GET_LIGHT_CLIENT_OPTIMISTIC_UPDATE - API_OP_GET_LIGHT_CLIENT_BOOTSTRAP), %rax
@@ -1535,17 +1535,17 @@ LOCAL_FUNCTION api_body
     mov     8(%rax), %rdi
     add     %rax, %rdi
     mov     16(%rax), %rsi
-    call    api_put
+    call    lantern_api_put
     UNFRAME 16
 101: API_LIT api_j_version
     mov     ApiView_fork(%rbp), %rdi
-    call    api_fork_name
+    call    lantern_api_fork_name
     API_LIT api_g_data
     mov     ApiView_lc_json(%rbp), %rax
     mov     8(%rax), %rdi
     add     %rax, %rdi
     mov     16(%rax), %rsi
-    call    api_put
+    call    lantern_api_put
     API_LIT api_end1
     UNFRAME 16
 10: mov     8(%rsp), %rsi
@@ -1555,37 +1555,37 @@ LOCAL_FUNCTION api_body
     API_LIT api_e_code
     mov     (%rsp), %rax
     mov     (%rax), %rdi
-    call    api_dec
+    call    lantern_api_dec
     API_LIT api_e_message
     mov     (%rsp), %rax
     mov     (%rax), %rdi
-    call    api_code
+    call    lantern_api_code
     mov     %rax, %rdi
     mov     $24, %esi
-    call    api_code_text
+    call    lantern_api_code_text
     API_LIT api_f_list
-    call    api_failures
+    call    lantern_api_failures
     UNFRAME 16
 11: mov     8(%rsp), %rsi
     cmp     $API_OP_GET_PEERS, %rsi
     jne     116f
-    call    api_peers_body
+    call    lantern_api_peers_body
     UNFRAME 16
 116: cmp    $API_OP_GET_PEER, %rsi
     jne     117f
     API_LIT api_pe_data
     mov     ApiView_peer(%rbp), %rdi
-    call    api_peer_item
+    call    lantern_api_peer_item
     API_LIT api_end1
     UNFRAME 16
 117: mov    8(%rsp), %rsi
     cmp     $API_OP_GET_DEBUG_CHAIN_HEADS_V2, %rsi
     jne     110f
-    call    api_heads_body
+    call    lantern_api_heads_body
     UNFRAME 16
 110: cmp    $API_OP_GET_DEBUG_FORK_CHOICE, %rsi
     jne     115f
-    call    api_fork_choice_body
+    call    lantern_api_fork_choice_body
     UNFRAME 16
 115: cmp    $API_OP_GET_STATE_RANDAO, %rsi
     je      113f
@@ -1594,7 +1594,7 @@ LOCAL_FUNCTION api_body
     cmp     $API_OP_GET_PROPOSER_LOOKAHEAD, %rsi
     jne     114f
 113: mov    (%rsp), %rdi                    # the state reads
-    call    api_state_read_body
+    call    lantern_api_state_read_body
     UNFRAME 16
 114: cmp    $API_OP_PRODUCE_ATTESTATION_DATA, %rsi
     jne     12f
@@ -1603,153 +1603,153 @@ LOCAL_FUNCTION api_body
     jz      13f
     lea     ApiView_att(%rbp), %rdi
     mov     $128, %esi
-    call    api_put
+    call    lantern_api_put
     UNFRAME 16
     # {"data":{"slot":…,"index":…,"beacon_block_root":…,"source":…,"target":…}}
 13: API_LIT api_a_slot
     mov     ApiView_att(%rbp), %rdi
-    call    api_qdec
+    call    lantern_api_qdec
     API_LIT api_a_index
     mov     (ApiView_att + 8)(%rbp), %rdi
-    call    api_qdec
+    call    lantern_api_qdec
     API_LIT api_a_root
     lea     (ApiView_att + 16)(%rbp), %rdi
     mov     $32, %esi
-    call    api_qhex
+    call    lantern_api_qhex
     API_LIT api_a_source
     lea     (ApiView_att + 48)(%rbp), %rdi
-    call    api_checkpoint
+    call    lantern_api_checkpoint
     API_LIT api_a_target
     lea     (ApiView_att + 88)(%rbp), %rdi
-    call    api_checkpoint
+    call    lantern_api_checkpoint
     API_LIT api_end2
     UNFRAME 16
 12: cmp     $API_OP_GET_NETWORK_IDENTITY, %rsi
     jne     2f
     API_LIT api_i_peer_id
     lea     ApiView_peer_id(%rbp), %rdi
-    call    api_text
+    call    lantern_api_text
     API_LIT api_i_enr
     lea     ApiView_enr(%rbp), %rdi
-    call    api_text
+    call    lantern_api_text
     API_LIT api_i_p2p
     cmpq    $0, ApiView_p2p_address(%rbp)
     je      14f
     lea     ApiView_p2p_address(%rbp), %rdi
-    call    api_text
+    call    lantern_api_text
 14: API_LIT api_i_discovery
     cmpq    $0, ApiView_discovery_address(%rbp)
     je      15f
     lea     ApiView_discovery_address(%rbp), %rdi
-    call    api_text
+    call    lantern_api_text
 15: API_LIT api_i_seq
     mov     ApiView_seq_number(%rbp), %rdi
-    call    api_qdec
+    call    lantern_api_qdec
     API_LIT api_i_attnets
     lea     ApiView_attnets(%rbp), %rdi
     mov     $8, %esi
-    call    api_qhex
+    call    lantern_api_qhex
     cmpq    $FORK_ALTAIR, ApiView_fork(%rbp)
     jb      16f
     API_LIT api_i_syncnets
     lea     ApiView_syncnets(%rbp), %rdi
     mov     $1, %esi
-    call    api_qhex
+    call    lantern_api_qhex
     cmpq    $FORK_FULU, ApiView_fork(%rbp)
     jb      16f
     API_LIT api_i_cgc
     mov     ApiView_custody_group_count(%rbp), %rdi
-    call    api_qdec
+    call    lantern_api_qdec
 16: API_LIT api_end3
     UNFRAME 16
 2:  cmp     $API_OP_GET_NODE_VERSION, %rsi
     jne     3f
     API_LIT api_v_version
     lea     ApiView_version(%rbp), %rdi
-    call    api_text
+    call    lantern_api_text
     API_LIT api_end2
     UNFRAME 16
 3:  cmp     $API_OP_GET_SYNCING_STATUS, %rsi
     jne     4f
     API_LIT api_s_head
     mov     ApiView_head_slot(%rbp), %rdi
-    call    api_qdec
+    call    lantern_api_qdec
     API_LIT api_s_distance
     mov     ApiView_current_slot(%rbp), %rdi
     sub     ApiView_head_slot(%rbp), %rdi
     jae     31f
     xor     %edi, %edi
-31: call    api_qdec
+31: call    lantern_api_qdec
     API_LIT api_s_syncing
     mov     ApiView_is_syncing(%rbp), %rdi
-    call    api_bool
+    call    lantern_api_bool
     API_LIT api_s_optimistic
     mov     ApiView_is_optimistic(%rbp), %rdi
-    call    api_bool
+    call    lantern_api_bool
     API_LIT api_s_offline
     mov     ApiView_el_offline(%rbp), %rdi
-    call    api_bool
+    call    lantern_api_bool
     API_LIT api_end2
     UNFRAME 16
 4:  cmp     $API_OP_GET_PEER_COUNT, %rsi
     jne     5f
     API_LIT api_c_connected
     mov     ApiView_peers(%rbp), %rdi
-    call    api_qdec
+    call    lantern_api_qdec
     API_LIT api_c_end
     UNFRAME 16
 5:  cmp     $API_OP_GET_GENESIS, %rsi
     jne     6f
     API_LIT api_g_time
     mov     ApiView_genesis_time(%rbp), %rdi
-    call    api_qdec
+    call    lantern_api_qdec
     API_LIT api_g_root
     lea     ApiView_genesis_validators_root(%rbp), %rdi
     mov     $32, %esi
-    call    api_qhex
+    call    lantern_api_qhex
     API_LIT api_g_version
     lea     ApiView_genesis_fork_version(%rbp), %rdi
     mov     $4, %esi
-    call    api_qhex
+    call    lantern_api_qhex
     API_LIT api_end2
     UNFRAME 16
 6:  cmp     $API_OP_GET_BLOCK_HEADER, %rsi
     jne     7f
     API_LIT api_x_optimistic
     mov     ApiView_is_optimistic(%rbp), %rdi
-    call    api_bool
+    call    lantern_api_bool
     API_LIT api_x_finalized
     mov     ApiView_head_finalized(%rbp), %rdi
-    call    api_bool
+    call    lantern_api_bool
     API_LIT api_x_data
     API_LIT api_h_root
     lea     ApiView_head_root(%rbp), %rdi
     mov     $32, %esi
-    call    api_qhex
+    call    lantern_api_qhex
     mov     ApiView_head_slot(%rbp), %rdi
     lea     ApiView_proposer_index(%rbp), %rsi
     mov     ApiView_canonical(%rbp), %rdx
-    call    api_header_json
+    call    lantern_api_header_json
     API_LIT api_end3
     UNFRAME 16
 7:  cmp     $API_OP_GET_STATE_FINALITY_CHECKPOINTS, %rsi
     jne     9f
     API_LIT api_x_optimistic
     mov     ApiView_is_optimistic(%rbp), %rdi
-    call    api_bool
+    call    lantern_api_bool
     API_LIT api_x_finalized
     mov     ApiView_head_finalized(%rbp), %rdi
-    call    api_bool
+    call    lantern_api_bool
     API_LIT api_x_data
     API_LIT api_f_previous
     lea     ApiView_previous_justified(%rbp), %rdi
-    call    api_checkpoint
+    call    lantern_api_checkpoint
     API_LIT api_f_current
     lea     ApiView_current_justified(%rbp), %rdi
-    call    api_checkpoint
+    call    lantern_api_checkpoint
     API_LIT api_f_finalized
     lea     ApiView_finalized(%rbp), %rdi
-    call    api_checkpoint
+    call    lantern_api_checkpoint
     API_LIT api_end2
     UNFRAME 16
 9:  cmp     $API_OP_GET_BLOCK_ROOT, %rsi    # getBlockRoot, getStateRoot: {"execution_optimistic":…,"finalized":…,"data":{"root":…}}
@@ -1761,67 +1761,67 @@ LOCAL_FUNCTION api_body
 10: mov     %rsi, 8(%rsp)
     API_LIT api_x_optimistic
     mov     ApiView_is_optimistic(%rbp), %rdi
-    call    api_bool
+    call    lantern_api_bool
     API_LIT api_x_finalized
     mov     ApiView_head_finalized(%rbp), %rdi
-    call    api_bool
+    call    lantern_api_bool
     API_LIT api_x_data
     cmpq    $API_OP_GET_STATE_FORK, 8(%rsp)
     je      11f
     API_LIT api_h_root
     lea     ApiView_head_root(%rbp), %rdi
     mov     $32, %esi
-    call    api_qhex
+    call    lantern_api_qhex
     API_LIT api_end2
     UNFRAME 16
     # getStateFork: {"previous_version":…,"current_version":…,"epoch":…}
 11: API_LIT api_k_previous
     lea     ApiView_state_fork(%rbp), %rdi
     mov     $4, %esi
-    call    api_qhex
+    call    lantern_api_qhex
     API_LIT api_k_current
     lea     (ApiView_state_fork + 4)(%rbp), %rdi
     mov     $4, %esi
-    call    api_qhex
+    call    lantern_api_qhex
     API_LIT api_k_epoch
     mov     (ApiView_state_fork + 8)(%rbp), %rdi
-    call    api_qdec
+    call    lantern_api_qdec
     API_LIT api_end2
     UNFRAME 16
 12: cmp     $API_OP_GET_SPEC, %rsi
     jne     13f
-    call    api_spec
+    call    lantern_api_spec
     UNFRAME 16
 13: cmp     $API_OP_GET_FORK_SCHEDULE, %rsi
     jne     17f
-    call    api_fork_schedule
+    call    lantern_api_fork_schedule
     UNFRAME 16
 17: cmp     $API_OP_GET_DEPOSIT_CONTRACT, %rsi  # {"data":{"chain_id":…,"address":…}}
     jne     18f
     API_LIT api_d_chain
     mov     ApiView_config(%rbp), %rax
     mov     CONFIG_DEPOSIT_CHAIN_ID(%rax), %rdi
-    call    api_qdec
+    call    lantern_api_qdec
     API_LIT api_d_address
     mov     ApiView_config(%rbp), %rdi
     add     $CONFIG_DEPOSIT_CONTRACT_ADDRESS, %rdi
     mov     $20, %esi
-    call    api_qhex
+    call    lantern_api_qhex
     API_LIT api_end2
     UNFRAME 16
 18: cmp     $API_OP_GET_STATE_VALIDATOR, %rsi   # {"execution_optimistic":…,"finalized":…,"data":<item>}
     jne     19f
     API_LIT api_v_open
     mov     ApiView_is_optimistic(%rbp), %rdi
-    call    api_bool
+    call    lantern_api_bool
     API_LIT api_x_finalized
     mov     ApiView_head_finalized(%rbp), %rdi
-    call    api_bool
+    call    lantern_api_bool
     API_LIT api_v_data
     mov     ApiView_val_state(%rbp), %rdi
     mov     ApiView_val_index(%rbp), %rsi
     xor     %edx, %edx
-    call    api_validator_item
+    call    lantern_api_validator_item
     API_LIT api_end1
     UNFRAME 16
     # getProposerDuties and getProposerDutiesV2: {"dependent_root":…,"execution_optimistic":…,"data":[{"pubkey":…,"validator_index":…,"slot":…},…]}
@@ -1832,10 +1832,10 @@ LOCAL_FUNCTION api_body
 190: API_LIT api_u_root
     lea     ApiView_duties(%rbp), %rdi
     mov     $32, %esi
-    call    api_qhex
+    call    lantern_api_qhex
     API_LIT api_u_optimistic
     mov     ApiView_is_optimistic(%rbp), %rdi
-    call    api_bool
+    call    lantern_api_bool
     API_LIT api_v_list
     movq    $0, 8(%rsp)                     # the slot's place in the epoch
 20: mov     8(%rsp), %rax
@@ -1857,16 +1857,16 @@ LOCAL_FUNCTION api_body
     shl     $7, %rsi                        # NODE_VALIDATOR_MEM: the pubkey first
     lea     (%rax,%rsi), %rdi
     mov     $48, %esi
-    call    api_qhex
+    call    lantern_api_qhex
     API_LIT api_u_index
     mov     8(%rsp), %rcx
     mov     (ApiView_duties + 32)(%rbp,%rcx,8), %rdi
-    call    api_qdec
+    call    lantern_api_qdec
     API_LIT api_c_slot
     mov     ApiView_val_state(%rbp), %rax
     mov     NODE_STATE_SLOT(%rax), %rdi
     add     8(%rsp), %rdi
-    call    api_qdec
+    call    lantern_api_qdec
     API_LIT api_end1
 23: incq    8(%rsp)
     jmp     20b
@@ -1874,28 +1874,28 @@ LOCAL_FUNCTION api_body
     UNFRAME 16
 18: cmp     $API_OP_GET_SYNC_COMMITTEE_DUTIES, %rsi
     jne     181f
-    call    api_sync_duties_body
+    call    lantern_api_sync_duties_body
     UNFRAME 16
 181: cmp    $API_OP_GET_ATTESTER_DUTIES, %rsi
     jne     182f
-    call    api_duties_json
+    call    lantern_api_duties_json
     UNFRAME 16
 182: cmp    $API_OP_GET_LIVENESS, %rsi      # getLiveness: {"data":[{"index":…,"is_live":…},…]}
     jne     183f
-    call    api_liveness_body
+    call    lantern_api_liveness_body
     UNFRAME 16
 183: cmp    $API_OP_GET_BLOCK_REWARDS, %rsi # getBlockRewards and getSyncCommitteeRewards
     jne     184f
-    call    api_rewards_body
+    call    lantern_api_rewards_body
     UNFRAME 16
 184: cmp    $API_OP_GET_SYNC_COMMITTEE_REWARDS, %rsi
     jne     99f
-    call    api_sync_rewards_body
+    call    lantern_api_sync_rewards_body
 99: UNFRAME 16
-END_FUNCTION api_body
+END_FUNCTION lantern_api_body
 
 # rax = 1 when the ValidatorRef items of the ByteList rdx name the validator rdi of the state rsi, by its index or its pubkey, else 0. A leaf. Uses rax, rcx, r8-r11.
-LOCAL_FUNCTION api_names
+LOCAL_FUNCTION lantern_api_names
     UNWIND_END_PROLOGUE
     PART    %r8, %r9, %rsi, NODE_STATE_VALIDATORS
     imul    $NODE_VALIDATOR_MEM, %rdi, %rax
@@ -1926,10 +1926,10 @@ LOCAL_FUNCTION api_names
     ret
 9:  mov     $1, %eax
     ret
-END_FUNCTION api_names
+END_FUNCTION lantern_api_names
 
 # The signed (two's complement) rdi in decimal, in quotes, with - before a value below 0. Locals: rdi.
-LOCAL_FUNCTION api_qint
+LOCAL_FUNCTION lantern_api_qint
     FRAME 16
     mov     %rdi, (%rsp)
     API_LIT api_quote
@@ -1939,29 +1939,29 @@ LOCAL_FUNCTION api_qint
     API_LIT api_rw_minus
     mov     (%rsp), %rdi
     neg     %rdi
-1:  call    api_dec
+1:  call    lantern_api_dec
     API_LIT api_quote
     UNFRAME 16
-END_FUNCTION api_qint
+END_FUNCTION lantern_api_qint
 
 .macro REWARD_FIELD text, off
     API_LIT \text
     mov     ApiView_live_out(%rbp), %rax
     mov     \off(%rax), %rdi
-    call    api_qdec
+    call    lantern_api_qdec
 .endm
 
 # The body of getBlockRewards (beacon-api.md) from the view rbp: {"execution_optimistic":…,"finalized":…,"data":{"proposer_index":…,
 # "total":…,"attestations":…,"sync_aggregate":…,"proposer_slashings":…,"attester_slashings":…}} of the 48 bytes of
 # lantern_node_block_rewards at ApiView_live_out.
-LOCAL_FUNCTION api_rewards_body
+LOCAL_FUNCTION lantern_api_rewards_body
     FRAME 0
     API_LIT api_x_optimistic
     mov     ApiView_is_optimistic(%rbp), %rdi
-    call    api_bool
+    call    lantern_api_bool
     API_LIT api_x_finalized
     mov     ApiView_head_finalized(%rbp), %rdi
-    call    api_bool
+    call    lantern_api_bool
     API_LIT api_x_data
     REWARD_FIELD api_rw_proposer, 0
     REWARD_FIELD api_rw_total, 8
@@ -1971,19 +1971,19 @@ LOCAL_FUNCTION api_rewards_body
     REWARD_FIELD api_rw_attester_slashings, 40
     API_LIT api_end2
     UNFRAME 0
-END_FUNCTION api_rewards_body
+END_FUNCTION lantern_api_rewards_body
 
 # The body of getSyncCommitteeRewards (beacon-api.md) from the view rbp: {"execution_optimistic":…,"finalized":…,"data":[
 # {"validator_index":…,"reward":…},…]} of the items of lantern_node_sync_rewards at ApiView_live_out; with ValidatorRef
 # items at ApiView_sd_ids, those of the validators of ApiView_val_state that one names. Locals: the item, the items written.
-LOCAL_FUNCTION api_sync_rewards_body
+LOCAL_FUNCTION lantern_api_sync_rewards_body
     FRAME 16
     API_LIT api_x_optimistic
     mov     ApiView_is_optimistic(%rbp), %rdi
-    call    api_bool
+    call    lantern_api_bool
     API_LIT api_x_finalized
     mov     ApiView_head_finalized(%rbp), %rdi
-    call    api_bool
+    call    lantern_api_bool
     API_LIT api_v_list
     movq    $0, (%rsp)
     movq    $0, 8(%rsp)
@@ -2001,7 +2001,7 @@ LOCAL_FUNCTION api_sync_rewards_body
     test    %rdx, %rdx
     jz      2f
     mov     ApiView_val_state(%rbp), %rsi
-    call    api_names
+    call    lantern_api_names
     test    %rax, %rax
     jz      5f
 2:  cmpq    $0, 8(%rsp)
@@ -2014,7 +2014,7 @@ LOCAL_FUNCTION api_sync_rewards_body
     mov     (%rsp), %rdx
     shl     $4, %rdx
     mov     (%rcx,%rdx), %rdi
-    call    api_qdec
+    call    lantern_api_qdec
     API_LIT api_rw_reward
     mov     ApiView_live_out(%rbp), %rax
     mov     8(%rax), %rcx
@@ -2022,21 +2022,21 @@ LOCAL_FUNCTION api_sync_rewards_body
     mov     (%rsp), %rdx
     shl     $4, %rdx
     mov     8(%rcx,%rdx), %rdi
-    call    api_qint
+    call    lantern_api_qint
     API_LIT api_end1
     incq    8(%rsp)
 5:  incq    (%rsp)
     jmp     1b
 9:  API_LIT api_v_end
     UNFRAME 16
-END_FUNCTION api_sync_rewards_body
+END_FUNCTION lantern_api_sync_rewards_body
 
 /*
  * The body of getLiveness (beacon-api.md) from the view rbp: {"data":[{"index":…,"is_live":…},…]}
  * of the ValidatorRef items at ApiView_sd_ids, each by its byte at ApiView_live_out. Locals: the
  * item's index.
  */
-LOCAL_FUNCTION api_liveness_body
+LOCAL_FUNCTION lantern_api_liveness_body
     FRAME 16
     API_LIT api_p_data
     movq    $0, (%rsp)
@@ -2056,33 +2056,33 @@ LOCAL_FUNCTION api_liveness_body
     mov     (%rsp), %rdx
     shl     $6, %rdx
     mov     8(%rcx,%rdx), %rdi
-    call    api_qdec
+    call    lantern_api_qdec
     API_LIT api_l_live
     mov     ApiView_live_out(%rbp), %rax
     mov     (%rsp), %rdx
     movzbl  (%rax,%rdx), %edi
-    call    api_bool
+    call    lantern_api_bool
     API_LIT api_end1
     incq    (%rsp)
     jmp     1b
 9:  API_LIT api_v_end
     UNFRAME 16
-END_FUNCTION api_liveness_body
+END_FUNCTION lantern_api_liveness_body
 
 /*
  * The JSON of getAttesterDuties from the view rbp: {"dependent_root":…,"execution_optimistic":…,
  * "data":[{"pubkey":…,…,"slot":…},…]}, an item for each record with an assignment. Locals: a
  * record's place, the items written, the record.
  */
-LOCAL_FUNCTION api_duties_json
+LOCAL_FUNCTION lantern_api_duties_json
     FRAME 32
     API_LIT api_u_root
     mov     ApiView_ad_out(%rbp), %rdi
     mov     $32, %esi
-    call    api_qhex
+    call    lantern_api_qhex
     API_LIT api_u_optimistic
     mov     ApiView_is_optimistic(%rbp), %rdi
-    call    api_bool
+    call    lantern_api_bool
     API_LIT api_v_list
     movq    $0, (%rsp)
     movq    $0, 8(%rsp)
@@ -2107,44 +2107,44 @@ LOCAL_FUNCTION api_duties_json
     shl     $7, %rsi                        # NODE_VALIDATOR_MEM: the pubkey first
     lea     (%rax,%rsi), %rdi
     mov     $48, %esi
-    call    api_qhex
+    call    lantern_api_qhex
     API_LIT api_u_index
     mov     16(%rsp), %rax
     mov     40(%rax), %rdi
-    call    api_qdec
+    call    lantern_api_qdec
     API_LIT api_t_committee_index
     mov     16(%rsp), %rax
     mov     16(%rax), %rdi
-    call    api_qdec
+    call    lantern_api_qdec
     API_LIT api_t_committee_length
     mov     16(%rsp), %rax
     mov     24(%rax), %rdi
-    call    api_qdec
+    call    lantern_api_qdec
     API_LIT api_t_committees_at_slot
     mov     ApiView_ad_out(%rbp), %rax
     mov     32(%rax), %rdi
-    call    api_qdec
+    call    lantern_api_qdec
     API_LIT api_t_validator_committee_index
     mov     16(%rsp), %rax
     mov     32(%rax), %rdi
-    call    api_qdec
+    call    lantern_api_qdec
     API_LIT api_c_slot
     mov     16(%rsp), %rax
     mov     8(%rax), %rdi
-    call    api_qdec
+    call    lantern_api_qdec
     API_LIT api_end1
 8:  incq    (%rsp)
     jmp     1b
 9:  API_LIT api_v_end
     UNFRAME 32
-END_FUNCTION api_duties_json
+END_FUNCTION lantern_api_duties_json
 
 /*
  * L1: the body of getDebugChainHeadsV2 (beacon-api.md): {"data":[{"root":…,"slot":…,"execution_optimistic":…},…]}
  * of the store nodes at ApiView_val_state of the view rbp whose byte at ApiView_heads is 0. Locals: the
  * index, 1 once an item is written, the node.
  */
-LOCAL_FUNCTION api_heads_body
+LOCAL_FUNCTION lantern_api_heads_body
     FRAME 32
     API_LIT api_p_data
     movq    $0, (%rsp)
@@ -2168,39 +2168,39 @@ LOCAL_FUNCTION api_heads_body
     add     %rcx, %rdi
     mov     %rdi, 16(%rsp)
     mov     $32, %esi
-    call    api_qhex
+    call    lantern_api_qhex
     API_LIT api_q_slot
     mov     16(%rsp), %rax
     mov     BlockNode_slot(%rax), %rdi
-    call    api_qdec
+    call    lantern_api_qdec
     API_LIT api_ch_optimistic
     mov     16(%rsp), %rax
     xor     %edi, %edi
     cmpq    $PAYLOAD_STATUS_NOT_VALIDATED, BlockNode_payload_status(%rax)
     sete    %dil
-    call    api_bool
+    call    lantern_api_bool
     API_LIT api_end1
 8:  incq    (%rsp)
     jmp     1b
 9:  API_LIT api_v_end
     UNFRAME 32
-END_FUNCTION api_heads_body
+END_FUNCTION lantern_api_heads_body
 
 /*
  * L1: the body of getDebugForkChoice (beacon-api.md): {"justified_checkpoint":…,"finalized_checkpoint":…,
  * "fork_choice_nodes":[…]} of the store at ApiView_val_state of the view rbp, each node's weight at
  * ApiView_weights. Locals: the index, the node.
  */
-LOCAL_FUNCTION api_fork_choice_body
+LOCAL_FUNCTION lantern_api_fork_choice_body
     FRAME 16
     API_LIT api_fc_justified
     mov     ApiView_val_state(%rbp), %rdi
     add     $Store_justified_checkpoint, %rdi
-    call    api_checkpoint
+    call    lantern_api_checkpoint
     API_LIT api_fc_finalized
     mov     ApiView_val_state(%rbp), %rdi
     add     $Store_finalized_checkpoint, %rdi
-    call    api_checkpoint
+    call    lantern_api_checkpoint
     API_LIT api_fc_nodes
     movq    $0, (%rsp)
 1:  mov     ApiView_val_state(%rbp), %rax
@@ -2219,29 +2219,29 @@ LOCAL_FUNCTION api_fork_choice_body
     API_LIT api_fc_slot
     mov     8(%rsp), %rax
     mov     BlockNode_slot(%rax), %rdi
-    call    api_qdec
+    call    lantern_api_qdec
     API_LIT api_fc_block_root
     mov     8(%rsp), %rdi
     mov     $32, %esi
-    call    api_qhex
+    call    lantern_api_qhex
     API_LIT api_h_parent
     mov     8(%rsp), %rdi
     add     $BlockNode_parent_root, %rdi
     mov     $32, %esi
-    call    api_qhex
+    call    lantern_api_qhex
     API_LIT api_fc_justified_epoch
     mov     8(%rsp), %rax
     mov     BlockNode_justified_checkpoint(%rax), %rdi   # its epoch, the Checkpoint's first field
-    call    api_qdec
+    call    lantern_api_qdec
     API_LIT api_fc_finalized_epoch
     mov     8(%rsp), %rax
     mov     BlockNode_finalized_epoch(%rax), %rdi
-    call    api_qdec
+    call    lantern_api_qdec
     API_LIT api_fc_weight
     mov     ApiView_weights(%rbp), %rax
     mov     (%rsp), %rcx
     mov     (%rax,%rcx,8), %rdi
-    call    api_qdec
+    call    lantern_api_qdec
     API_LIT api_fc_validity
     mov     8(%rsp), %rax
     mov     BlockNode_payload_status(%rax), %rax
@@ -2258,64 +2258,64 @@ LOCAL_FUNCTION api_fork_choice_body
     mov     8(%rsp), %rdi
     add     $BlockNode_block_hash, %rdi
     mov     $32, %esi
-    call    api_qhex
+    call    lantern_api_qhex
     API_LIT api_end1
     incq    (%rsp)
     jmp     1b
 9:  API_LIT api_v_end
     UNFRAME 16
-END_FUNCTION api_fork_choice_body
+END_FUNCTION lantern_api_fork_choice_body
 
 # ,"canonical":…,"header":{"message":{"slot":…,"proposer_index":…,"parent_root":…,"state_root":…,"body_root":…},"signature":…
 # of the slot rdi, canonical rdx, and at rsi the header's proposer_index, parent_root, state_root,
 # body_root and signature, in that order. Locals: rdi, rsi, rdx.
-LOCAL_FUNCTION api_header_json
+LOCAL_FUNCTION lantern_api_header_json
     FRAME 32
     mov     %rdi, (%rsp)
     mov     %rsi, 8(%rsp)
     mov     %rdx, 16(%rsp)
     API_LIT api_h_canonical
     mov     16(%rsp), %rdi
-    call    api_bool
+    call    lantern_api_bool
     API_LIT api_h_slot
     mov     (%rsp), %rdi
-    call    api_qdec
+    call    lantern_api_qdec
     API_LIT api_h_proposer
     mov     8(%rsp), %rax
     mov     (%rax), %rdi
-    call    api_qdec
+    call    lantern_api_qdec
     API_LIT api_h_parent
     mov     8(%rsp), %rdi
     add     $(ApiView_parent_root - ApiView_proposer_index), %rdi
     mov     $32, %esi
-    call    api_qhex
+    call    lantern_api_qhex
     API_LIT api_h_state
     mov     8(%rsp), %rdi
     add     $(ApiView_state_root - ApiView_proposer_index), %rdi
     mov     $32, %esi
-    call    api_qhex
+    call    lantern_api_qhex
     API_LIT api_h_body
     mov     8(%rsp), %rdi
     add     $(ApiView_body_root - ApiView_proposer_index), %rdi
     mov     $32, %esi
-    call    api_qhex
+    call    lantern_api_qhex
     API_LIT api_h_signature
     mov     8(%rsp), %rdi
     add     $(ApiView_signature - ApiView_proposer_index), %rdi
     mov     $96, %esi
-    call    api_qhex
+    call    lantern_api_qhex
     UNFRAME 32
-END_FUNCTION api_header_json
+END_FUNCTION lantern_api_header_json
 .if ApiView_parent_root - ApiView_proposer_index != 8 || ApiView_state_root - ApiView_proposer_index != 40 || ApiView_body_root - ApiView_proposer_index != 72 || ApiView_signature - ApiView_proposer_index != 104
 .error "api_header_json reads the fields of a SignedBeaconBlockHeader after its slot"
 .endif
 
-# getBlockHeaders' JSON, as api_stream_json: with rdi, the address of an item's header (its slot,
-# then the fields api_header_json reads), the item {"root":…,"canonical":…,"header":…}, its root at
+# getBlockHeaders' JSON, as lantern_api_stream_json: with rdi, the address of an item's header (its slot,
+# then the fields lantern_api_header_json reads), the item {"root":…,"canonical":…,"header":…}, its root at
 # byte 0 of the entry rbx's cursor and canonical bit 0 of its member, after , when API_STREAM_ITEMS
 # is set; then API_STREAM_ITEMS and API_STREAM_ITEM_DONE in the event rbp. With rdi = 0: ]}. rax = 1
 # when the answer is whole, else 0. Locals: rdi.
-LOCAL_FUNCTION api_headers_json
+LOCAL_FUNCTION lantern_api_headers_json
     FRAME 16
     mov     %rdi, (%rsp)
     test    %rdi, %rdi
@@ -2329,25 +2329,25 @@ LOCAL_FUNCTION api_headers_json
 2:  API_LIT api_ch_root
     lea     NodeApi_cursor(%rbx), %rdi
     mov     $32, %esi
-    call    api_qhex
+    call    lantern_api_qhex
     mov     (%rsp), %rsi
     mov     (%rsi), %rdi
     add     $8, %rsi
     mov     NodeApi_member(%rbx), %rdx
     and     $1, %edx
-    call    api_header_json
+    call    lantern_api_header_json
     API_LIT api_end2
     orq     $(API_STREAM_ITEMS | API_STREAM_ITEM_DONE), (NodeEvent_api + 8)(%rbp)
     xor     %eax, %eax
     UNFRAME 16
-END_FUNCTION api_headers_json
+END_FUNCTION lantern_api_headers_json
 
 /*
  * L2: rax = the base58btc text of the rsi bytes at rdi (at most 48), written at rdx: a 1 for each
  * leading zero byte, then the digits. rcx: a work area of 72 bytes. r12 the bytes, r13 their count,
  * r14 the text, r15 the work area, rbp the leading zero bytes.
  */
-LOCAL_FUNCTION api_base58
+LOCAL_FUNCTION lantern_api_base58
     ENTER 0
     mov     %rdi, %r12
     mov     %rsi, %r13
@@ -2410,12 +2410,12 @@ LOCAL_FUNCTION api_base58
     dec     %r8
     jmp     8b
 9:  LEAVE 0
-END_FUNCTION api_base58
+END_FUNCTION lantern_api_base58
 
 # A peer of getPeers and getPeer (beacon-api.md): {"peer_id":…,"enr":null,"last_seen_p2p_address":…,
 # "state":"connected","direction":…} of the NodePeer rdi. Locals: the peer, the text's length, an
 # index, the text (72 bytes), base58's work area (72 bytes).
-LOCAL_FUNCTION api_peer_item
+LOCAL_FUNCTION lantern_api_peer_item
     FRAME 176
     mov     %rdi, (%rsp)
     lea     NodePeer_id(%rdi), %rdi
@@ -2423,12 +2423,12 @@ LOCAL_FUNCTION api_peer_item
     mov     NodePeer_id_len(%rax), %rsi
     lea     24(%rsp), %rdx
     lea     96(%rsp), %rcx
-    call    api_base58
+    call    lantern_api_base58
     mov     %rax, 8(%rsp)
     API_LIT api_pe_open
     lea     24(%rsp), %rdi
     mov     8(%rsp), %rsi
-    call    api_put
+    call    lantern_api_put
     API_LIT api_pe_enr
     mov     (%rsp), %rax
     cmpq    $6, NodePeer_address(%rax)      # the family
@@ -2439,7 +2439,7 @@ LOCAL_FUNCTION api_peer_item
 1:  mov     (%rsp), %rax
     mov     16(%rsp), %rcx
     movzbl  (NodePeer_address + 16)(%rax,%rcx), %edi
-    call    api_dec
+    call    lantern_api_dec
     incq    16(%rsp)
     cmpq    $4, 16(%rsp)
     jae     5f
@@ -2454,7 +2454,7 @@ LOCAL_FUNCTION api_peer_item
     shl     $8, %edi
     movzbl  (NodePeer_address + 17)(%rax,%rcx,2), %edx
     or      %edx, %edi
-    call    api_hex16
+    call    lantern_api_hex16
     incq    16(%rsp)
     cmpq    $8, 16(%rsp)
     jae     5f
@@ -2466,17 +2466,17 @@ LOCAL_FUNCTION api_peer_item
     API_LIT api_pe_tcp
     mov     (%rsp), %rax
     mov     (NodePeer_address + 8)(%rax), %rdi
-    call    api_dec
+    call    lantern_api_dec
     jmp     7f
 6:  API_LIT api_pe_udp
     mov     (%rsp), %rax
     mov     (NodePeer_address + 8)(%rax), %rdi
-    call    api_dec
+    call    lantern_api_dec
     API_LIT api_pe_quic
 7:  API_LIT api_pe_p2p
     lea     24(%rsp), %rdi
     mov     8(%rsp), %rsi
-    call    api_put
+    call    lantern_api_put
     API_LIT api_pe_state
     mov     (%rsp), %rax
     cmpq    $LIBP2P_OUTBOUND, NodePeer_direction(%rax)
@@ -2485,10 +2485,10 @@ LOCAL_FUNCTION api_peer_item
     UNFRAME 176
 8:  API_LIT api_pe_outbound
     UNFRAME 176
-END_FUNCTION api_peer_item
+END_FUNCTION lantern_api_peer_item
 
 # The lower case hex digits of the 16 bits rdi, with no leading zeros, join the response. Locals: rdi, a shift.
-LOCAL_FUNCTION api_hex16
+LOCAL_FUNCTION lantern_api_hex16
     FRAME 16
     mov     %rdi, (%rsp)
     mov     $12, %ecx
@@ -2508,7 +2508,7 @@ LOCAL_FUNCTION api_hex16
     ADDRESS %rdi, api_hex
     add     %rax, %rdi
     mov     $1, %esi
-    call    api_put
+    call    lantern_api_put
     mov     8(%rsp), %rcx
     test    %rcx, %rcx
     jz      9f
@@ -2516,12 +2516,12 @@ LOCAL_FUNCTION api_hex16
     mov     %rcx, 8(%rsp)
     jmp     3b
 9:  UNFRAME 16
-END_FUNCTION api_hex16
+END_FUNCTION lantern_api_hex16
 
 # getPeers' body (beacon-api.md): {"data":[<peer>,…],"meta":{"count":…}} of the NodePeers of the
 # Node at ApiView_node of the view rbp whose state and direction are in the sets at
 # ApiView_peer_states and ApiView_peer_directions. Locals: the index, the count, the peer.
-LOCAL_FUNCTION api_peers_body
+LOCAL_FUNCTION lantern_api_peers_body
     FRAME 32
     API_LIT api_p_data
     movq    $0, (%rsp)
@@ -2547,21 +2547,21 @@ LOCAL_FUNCTION api_peers_body
     API_LIT api_p_comma
 2:  incq    8(%rsp)
     mov     16(%rsp), %rdi
-    call    api_peer_item
+    call    lantern_api_peer_item
     jmp     1b
 9:  API_LIT api_pe_meta
     mov     8(%rsp), %rdi
-    call    api_dec
+    call    lantern_api_dec
     API_LIT api_end2
     UNFRAME 32
-END_FUNCTION api_peers_body
+END_FUNCTION lantern_api_peers_body
 .if API_DIRECTION_INBOUND != LIBP2P_INBOUND || API_DIRECTION_OUTBOUND != LIBP2P_OUTBOUND
 .error "api_peers_body: the direction bits are the libp2p directions"
 .endif
 
 # (route rdi) -> rax: the NodePeer whose peer ID's base58btc text is the route's peer_id, or 0. rbx
 # the node. Locals: the route, the index, the text (72 bytes), base58's work area (72 bytes).
-LOCAL_FUNCTION node_api_find_peer
+LOCAL_FUNCTION lantern_node_api_find_peer
     FRAME 176
     mov     %rdi, (%rsp)
     movq    $0, 8(%rsp)
@@ -2576,7 +2576,7 @@ LOCAL_FUNCTION node_api_find_peer
     mov     NodePeer_id_len(%rax), %rsi
     lea     24(%rsp), %rdx
     lea     96(%rsp), %rcx
-    call    api_base58
+    call    lantern_api_base58
     mov     (%rsp), %rdi
     PART    %rsi, %rdx, %rdi, ApiRoute_peer_id
     cmp     %rdx, %rax
@@ -2597,7 +2597,7 @@ LOCAL_FUNCTION node_api_find_peer
     UNFRAME 176
 8:  xor     %eax, %eax
     UNFRAME 176
-END_FUNCTION node_api_find_peer
+END_FUNCTION lantern_node_api_find_peer
 
 /*
  * The body of getSyncCommitteeDuties (beacon-api.md): {"execution_optimistic":…,"data":[{"pubkey":…,
@@ -2606,11 +2606,11 @@ END_FUNCTION node_api_find_peer
  * those of the state at ApiView_val_state. Locals: the item's index, the items written, the
  * validator, the place, its places written.
  */
-LOCAL_FUNCTION api_sync_duties_body
+LOCAL_FUNCTION lantern_api_sync_duties_body
     FRAME 48
     API_LIT api_x_optimistic
     mov     ApiView_is_optimistic(%rbp), %rdi
-    call    api_bool
+    call    lantern_api_bool
     API_LIT api_v_list
     movq    $0, (%rsp)
     movq    $0, 8(%rsp)
@@ -2653,17 +2653,17 @@ LOCAL_FUNCTION api_sync_duties_body
     shl     $7, %rcx                        # NODE_VALIDATOR_MEM: the pubkey first
     add     %rcx, %rdi
     mov     $48, %esi
-    call    api_qhex
+    call    lantern_api_qhex
     API_LIT api_u_index
     mov     16(%rsp), %rdi
-    call    api_qdec
+    call    lantern_api_qdec
     API_LIT api_sd_indices
     jmp     6f
 5:  API_LIT api_p_comma
 6:  incq    32(%rsp)
     mov     24(%rsp), %rdi
     dec     %rdi
-    call    api_qdec
+    call    lantern_api_qdec
     jmp     2b
 7:  cmpq    $0, 32(%rsp)                    # places written: the item's end
     je      1b
@@ -2671,16 +2671,16 @@ LOCAL_FUNCTION api_sync_duties_body
     jmp     1b
 9:  API_LIT api_v_end
     UNFRAME 48
-END_FUNCTION api_sync_duties_body
+END_FUNCTION lantern_api_sync_duties_body
 .if NODE_VALIDATOR_MEM != 128
 .error "api_sync_duties_body reads a pubkey at index * 128"
 .endif
 
 /*
  * The bodies of getStateRandao, getEpochSyncCommittees and getProposerLookahead (beacon-api.md), as
- * api_body: rdi its locals (flags at 8), rsi the kind, rbp the view. Locals: those, an index, the kind.
+ * lantern_api_body: rdi its locals (flags at 8), rsi the kind, rbp the view. Locals: those, an index, the kind.
  */
-LOCAL_FUNCTION api_state_read_body
+LOCAL_FUNCTION lantern_api_state_read_body
     FRAME 32
     mov     %rdi, (%rsp)
     mov     %rsi, 16(%rsp)
@@ -2689,10 +2689,10 @@ LOCAL_FUNCTION api_state_read_body
     # {"execution_optimistic":…,"finalized":…,"data":{
     API_LIT api_x_optimistic
     mov     ApiView_is_optimistic(%rbp), %rdi
-    call    api_bool
+    call    lantern_api_bool
     API_LIT api_x_finalized
     mov     ApiView_head_finalized(%rbp), %rdi
-    call    api_bool
+    call    lantern_api_bool
     API_LIT api_x_data
     cmpq    $API_OP_GET_STATE_RANDAO, 16(%rsp)
     jne     10f
@@ -2700,7 +2700,7 @@ LOCAL_FUNCTION api_state_read_body
     API_LIT api_r_randao
     lea     ApiView_randao(%rbp), %rdi
     mov     $32, %esi
-    call    api_qhex
+    call    lantern_api_qhex
     API_LIT api_end2
     UNFRAME 32
     # "validators":[…],"validator_aggregates":[[…],…]}}
@@ -2715,7 +2715,7 @@ LOCAL_FUNCTION api_state_read_body
 12: mov     8(%rsp), %rax
     mov     ApiView_sync_out(%rbp), %rcx
     mov     (%rcx,%rax,8), %rdi
-    call    api_qdec
+    call    lantern_api_qdec
     incq    8(%rsp)
     jmp     11b
 13: API_LIT api_s_aggregates
@@ -2735,7 +2735,7 @@ LOCAL_FUNCTION api_state_read_body
 17: mov     8(%rsp), %rax
     mov     ApiView_sync_out(%rbp), %rcx
     mov     (%rcx,%rax,8), %rdi
-    call    api_qdec
+    call    lantern_api_qdec
     incq    8(%rsp)
     jmp     14b
 18: API_LIT api_p_rbracket
@@ -2746,18 +2746,18 @@ LOCAL_FUNCTION api_state_read_body
     jz      31f
     lea     ApiView_lookahead(%rbp), %rdi
     mov     $(8 * API_LOOKAHEAD_SLOTS), %esi
-    call    api_put
+    call    lantern_api_put
     UNFRAME 32
     # {"version":"<fork>","execution_optimistic":…,"finalized":…,"data":[…]}
 31: API_LIT api_j_version
     mov     ApiView_fork(%rbp), %rdi
-    call    api_fork_name
+    call    lantern_api_fork_name
     API_LIT api_j_optimistic
     mov     ApiView_is_optimistic(%rbp), %rdi
-    call    api_bool
+    call    lantern_api_bool
     API_LIT api_x_finalized
     mov     ApiView_head_finalized(%rbp), %rdi
-    call    api_bool
+    call    lantern_api_bool
     API_LIT api_v_list
     movq    $0, 8(%rsp)
 32: mov     8(%rsp), %rax
@@ -2768,12 +2768,12 @@ LOCAL_FUNCTION api_state_read_body
     API_LIT api_p_comma
 33: mov     8(%rsp), %rax
     mov     ApiView_lookahead(%rbp,%rax,8), %rdi
-    call    api_qdec
+    call    lantern_api_qdec
     incq    8(%rsp)
     jmp     32b
 34: API_LIT api_v_end
     UNFRAME 32
-END_FUNCTION api_state_read_body
+END_FUNCTION lantern_api_state_read_body
 
 /*
  * (view rdi, out rsi, status rdx, body rcx, flags r8) -> rax: the HTTP response of beacon-api.md,
@@ -2783,7 +2783,7 @@ END_FUNCTION api_state_read_body
  * LANTERN_BUFFER_TOO_SMALL when out has too little room. rbx out. Locals: L status, L+8 flags,
  * L+16 the body's bytes, L+24 the body's kind.
  */
-LOCAL_FUNCTION api_respond
+LOCAL_FUNCTION lantern_api_respond
     ENTER 32
     mov     %rdi, %rbp
     mov     %rsi, %rbx
@@ -2797,7 +2797,7 @@ LOCAL_FUNCTION api_respond
     jz      1f
     lea     L(%rsp), %rdi
     mov     %rcx, %rsi
-    call    api_body
+    call    lantern_api_body
 1:  mov     %r12, (L + 16)(%rsp)
     mov     $1, %r13d                       # the response
     lea     24(%rbx), %r12
@@ -2806,15 +2806,15 @@ LOCAL_FUNCTION api_respond
     # HTTP/1.1 <code> <reason> CRLF
     API_LIT api_http
     mov     L(%rsp), %rdi
-    call    api_dec
+    call    lantern_api_dec
     API_LIT api_sp
     testq   $API_R_NO_REASON, (L + 8)(%rsp)
     jnz     2f
     mov     L(%rsp), %rdi
-    call    api_code
+    call    lantern_api_code
     mov     %rax, %rdi
     mov     $8, %esi
-    call    api_code_text
+    call    lantern_api_code_text
 2:  API_LIT api_crlf
     cmpq    $0, (L + 16)(%rsp)
     je      3f
@@ -2827,11 +2827,11 @@ LOCAL_FUNCTION api_respond
     jz      3f
     API_LIT api_version
     mov     ApiView_fork(%rbp), %rdi
-    call    api_fork_name
+    call    lantern_api_fork_name
     API_LIT api_crlf
 3:  API_LIT api_length
     mov     (L + 16)(%rsp), %rdi
-    call    api_dec
+    call    lantern_api_dec
     API_LIT api_crlf
     cmpq    $405, L(%rsp)
     jne     5f
@@ -2859,7 +2859,7 @@ LOCAL_FUNCTION api_respond
     je      8f
     lea     L(%rsp), %rdi
     mov     (L + 24)(%rsp), %rsi
-    call    api_body
+    call    lantern_api_body
 8:  test    %r15, %r15
     jnz     9f
     lea     24(%rbx), %rax
@@ -2871,13 +2871,13 @@ LOCAL_FUNCTION api_respond
     LEAVE 32
 9:  mov     $LANTERN_BUFFER_TOO_SMALL, %eax
     LEAVE 32
-END_FUNCTION api_respond
+END_FUNCTION lantern_api_respond
 
 /*
  * The values of the ApiView rdi that the node, rbx, and the store, rbp, give (beacon-api.md,
  * Common rules); the header and the checkpoints zero. Locals: the view.
  */
-LOCAL_FUNCTION node_api_view
+LOCAL_FUNCTION lantern_node_api_view
     FRAME 16
     mov     %rdi, (%rsp)
     mov     $ApiView__size, %esi
@@ -2896,7 +2896,7 @@ LOCAL_FUNCTION node_api_view
     lea     Node_config(%rbx), %rax
     mov     %rax, ApiView_config(%rdi)
     lea     Node_head_root(%rbx), %rdi      # the head
-    call    node_find_block
+    call    lantern_node_find_block
     cmp     $-1, %rax
     je      1f
     mov     (%rsp), %rdi
@@ -2909,12 +2909,12 @@ LOCAL_FUNCTION node_api_view
     lea     ApiView_head_root(%rdi), %rax
     COPY32  %rax, %rdx
 1:  mov     %rbp, %rdi                      # the clock, sync, peers, MetaData
-    call    node_store_slot
+    call    lantern_node_store_slot
     mov     (%rsp), %rdi
     mov     %rax, ApiView_current_slot(%rdi)
     mov     %rax, %rdi
     lea     Node_config(%rbx), %rsi
-    call    node_fork
+    call    lantern_node_fork
     mov     (%rsp), %rdi
     mov     %rax, ApiView_fork(%rdi)
     mov     Node_flags(%rbx), %rax
@@ -2938,12 +2938,12 @@ LOCAL_FUNCTION node_api_view
     mov     $API_IDENTITY_SIZE, %edx
     call    lantern_copy
     mov     (%rsp), %rdi
-    call    api_view_finalized
+    call    lantern_api_view_finalized
     UNFRAME 16
-END_FUNCTION node_api_view
+END_FUNCTION lantern_node_api_view
 
 /* ApiView_head_finalized of the view rdi: 1 when its head_root is the root of the store rbp's finalized checkpoint. Uses rax, rsi, xmm0-xmm2. */
-LOCAL_FUNCTION api_view_finalized
+LOCAL_FUNCTION lantern_api_view_finalized
     UNWIND_END_PROLOGUE
     lea     ApiView_head_root(%rdi), %rax
     lea     (Store_finalized_checkpoint + 8)(%rbp), %rsi
@@ -2951,15 +2951,15 @@ LOCAL_FUNCTION api_view_finalized
     NE32    %rax, %rsi, 1f
     movq    $1, ApiView_head_finalized(%rdi)
 1:  ret
-END_FUNCTION api_view_finalized
+END_FUNCTION lantern_api_view_finalized
 
 /*
  * One NODE_ACT_API_SEND of the connection rdi, with last 1, at the end of the actions r15: the
- * response of api_respond with the view rsi, the status rdx, the body rcx and the flags r8; when it
+ * response of lantern_api_respond with the view rsi, the status rdx, the body rcx and the flags r8; when it
  * does not fit, the error 500. With API_R_CLOSE, then a NODE_ACT_API_CLOSE. Locals: the
  * connection, the flags, the action, its size.
  */
-LOCAL_FUNCTION node_api_send
+LOCAL_FUNCTION lantern_node_api_send
     FRAME 32
     mov     %rdi, (%rsp)
     mov     %r8, 8(%rsp)
@@ -2975,7 +2975,7 @@ LOCAL_FUNCTION node_api_send
     mov     %r9, 32(%rax)                   # its ByteList at 32
     mov     %rsi, %rdi
     lea     32(%rax), %rsi
-    call    api_respond
+    call    lantern_api_respond
     test    %eax, %eax
     jz      1f
     xor     %edi, %edi                      # no room: the error 500
@@ -2985,7 +2985,7 @@ LOCAL_FUNCTION node_api_send
     mov     $API_BODY_ERROR, %ecx
     mov     8(%rsp), %r8
     and     $(API_R_CLOSE | API_R_KEEP), %r8
-    call    api_respond
+    call    lantern_api_respond
 1:  mov     16(%rsp), %rax
     mov     48(%rax), %rcx                  # the count; the size to a multiple of 8, zero bytes after
     lea     (56 + 7)(%rcx), %rdx
@@ -3010,18 +3010,18 @@ LOCAL_FUNCTION node_api_send
     jz      9f
     mov     $NODE_ACT_API_CLOSE, %edi
     mov     $NODE_ACT_API_CLOSE_SIZE, %esi
-    call    node_act
+    call    lantern_node_act
     mov     (%rsp), %rcx
     mov     %rcx, 16(%rax)
 9:  UNFRAME 32
-END_FUNCTION node_api_send
+END_FUNCTION lantern_node_api_send
 
 /*
  * The NODE_EV_API or NODE_EV_API_IDENTITY rdi, whose ByteList at 24 is inside it (node.md,
  * NodeEvent): rax = 0 when it keeps its rules, else 1; rdx = the scratch it needs. Uses rcx,
  * rsi, r8-r11.
  */
-LOCAL_FUNCTION node_api_check
+LOCAL_FUNCTION lantern_node_api_check
     UNWIND_END_PROLOGUE
     mov     (NodeEvent_bytes + 16)(%rdi), %r8   # the count
     lea     (NodeEvent_bytes + 24)(%rdi), %rsi  # the bytes
@@ -3091,10 +3091,10 @@ LOCAL_FUNCTION node_api_check
 8:  mov     $1, %eax
     xor     %edx, %edx
     ret
-END_FUNCTION node_api_check
+END_FUNCTION lantern_node_api_check
 
 /* rax = the NODE_DB_REF of the Db's record of the block at rdi, or 0. Locals: the slot. */
-LOCAL_FUNCTION node_api_db_ref
+LOCAL_FUNCTION lantern_node_api_db_ref
     FRAME 16
     testq   $NODE_FLAG_DB, Node_flags(%rbx)
     jz      9f
@@ -3106,18 +3106,18 @@ LOCAL_FUNCTION node_api_db_ref
     mov     (%rsp), %rdi
     cmp     $-1, %rdi
     je      9f
-    call    node_db_block
+    call    lantern_node_db_block
     UNFRAME 16
 9:  xor     %eax, %eax
     UNFRAME 16
-END_FUNCTION node_api_db_ref
+END_FUNCTION lantern_node_api_db_ref
 
 /*
  * The answer to the NODE_EV_API rdi (node.md, lantern_node_step): rbx the node, rbp the store,
  * r14 the scratch, r15 the actions. r12 the event, r13 its HttpRequest, S7 the ApiRoute, S8 the
- * ApiView, S9 the connection, S10 the flags of api_respond. Locals: L the scratch's size.
+ * ApiView, S9 the connection, S10 the flags of lantern_api_respond. Locals: L the scratch's size.
  */
-LOCAL_FUNCTION node_api_event
+LOCAL_FUNCTION lantern_node_api_event
     ENTER 16
     mov     %rdi, %r12
     mov     16(%r12), %rax
@@ -3136,7 +3136,7 @@ LOCAL_FUNCTION node_api_event
 2:  mov     (%r14), %rax                    # the ApiView, then the ApiRoute, at the end of scratch
     mov     %rax, L(%rsp)
     mov     %r12, %rdi
-    call    node_api_check
+    call    lantern_node_api_check
     mov     L(%rsp), %rax
     sub     %rdx, %rax
     mov     %rax, (%r14)
@@ -3147,7 +3147,7 @@ LOCAL_FUNCTION node_api_event
     sub     $ApiView__size, %rdx
     mov     %rdx, (%rcx)
     mov     %rax, %rdi
-    call    node_api_view
+    call    lantern_node_api_view
     mov     HttpRequest_status(%r13), %rdx  # a fault of the request: its status
     test    %rdx, %rdx
     jnz     80f
@@ -3301,7 +3301,7 @@ LOCAL_FUNCTION node_api_event
     cmp     $API_OP_PUBLISH_BLINDED_BLOCK_V2, %rcx
     je      545f
     mov     %rcx, %rdi
-    call    node_submit_topic
+    call    lantern_node_submit_topic
     test    %rax, %rax
     jnz     60f
     mov     S7(%rsp), %rax
@@ -3318,7 +3318,7 @@ LOCAL_FUNCTION node_api_event
     mov     %rax, %rsi
     mov     %r12, %rdx
     xor     %ecx, %ecx
-    call    node_api_lookup
+    call    lantern_node_api_lookup
     mov     %rax, %rdx
     test    %rax, %rax
     jnz     80f
@@ -3326,7 +3326,7 @@ LOCAL_FUNCTION node_api_event
 69: mov     S8(%rsp), %rsi                  # a state: its lookup, then the state at its slot; the replay may come
     movq    $1, ApiView_look_replay(%rsi)
     mov     S7(%rsp), %rdi
-    call    node_api_state
+    call    lantern_node_api_state
     mov     %rax, %rdx
     cmp     $1, %rax
     je      698f
@@ -3337,7 +3337,7 @@ LOCAL_FUNCTION node_api_event
     mov     S9(%rsp), %rdi
     mov     S7(%rsp), %rsi
     mov     %r12, %rdx
-    call    node_api_state_answer
+    call    lantern_node_api_state_answer
     mov     %rax, %rdx
     test    %rax, %rax
     jnz     80f
@@ -3346,7 +3346,7 @@ LOCAL_FUNCTION node_api_event
     mov     S7(%rsp), %rsi
     mov     %r12, %rdx
     mov     $1, %ecx
-    call    node_api_lookup
+    call    lantern_node_api_lookup
     mov     %rax, %rdx
     test    %rax, %rax
     jnz     80f
@@ -3368,7 +3368,7 @@ LOCAL_FUNCTION node_api_event
     dec     %rcx
     jnz     531b
     mov     %rbp, %rdi
-    call    node_store_slot
+    call    lantern_node_store_slot
     xor     %edx, %edx
     mov     $(SLOTS_PER_EPOCH * EPOCHS_PER_SYNC_COMMITTEE_PERIOD), %ecx
     div     %rcx
@@ -3384,16 +3384,16 @@ LOCAL_FUNCTION node_api_event
     ja      80f
     mov     %rax, (L + 8)(%rsp)             # the epoch's period
     lea     Node_head_root(%rbx), %rdi      # the head's post-state, of altair on, at the epoch's period or the one before
-    call    node_find_block
+    call    lantern_node_find_block
     cmp     $-1, %rax
     je      532f
     mov     NodeBlock_slot(%rdx), %rdi
     lea     Node_config(%rbx), %rsi
-    call    node_fork
+    call    lantern_node_fork
     cmp     $FORK_ALTAIR, %rax
     jb      532f
     lea     Node_head_root(%rbx), %rdi
-    call    node_find_block
+    call    lantern_node_find_block
     mov     NodeBlock_slot(%rdx), %rax
     xor     %edx, %edx
     mov     $(SLOTS_PER_EPOCH * EPOCHS_PER_SYNC_COMMITTEE_PERIOD), %ecx
@@ -3407,7 +3407,7 @@ LOCAL_FUNCTION node_api_event
     mov     S7(%rsp), %rdi
     movq    $API_ID_HEAD, ApiRoute_id_kind(%rdi)
     mov     S8(%rsp), %rsi
-    call    node_api_state
+    call    lantern_node_api_state
     mov     $400, %edx
     test    %rax, %rax
     jnz     80f
@@ -3415,12 +3415,12 @@ LOCAL_FUNCTION node_api_event
     mov     (L + 8)(%rsp), %rax
     mov     %rax, ApiView_next_period(%rdi)
     mov     S7(%rsp), %rdi                  # its ids in the work's data
-    call    node_api_ids
+    call    lantern_node_api_ids
     mov     S8(%rsp), %rcx
     mov     %rax, ApiView_look_data(%rcx)
     jmp     67f
 532: mov    %rbp, %rdi                      # else the state of the epoch's first slot, as getAttesterDuties
-    call    node_store_slot
+    call    lantern_node_store_slot
     mov     %rax, %rsi
     mov     S7(%rsp), %rdi
     mov     ApiRoute_epoch(%rdi), %rcx
@@ -3442,7 +3442,7 @@ LOCAL_FUNCTION node_api_event
     dec     %rcx
     jnz     521b
     mov     %rbp, %rdi
-    call    node_store_slot
+    call    lantern_node_store_slot
     xor     %edx, %edx
     mov     $SLOTS_PER_EPOCH, %ecx
     div     %rcx                            # the store's epoch
@@ -3459,7 +3459,7 @@ LOCAL_FUNCTION node_api_event
     jb      80f
 522: movq   $API_ID_HEAD, ApiRoute_id_kind(%rdi)  # the head's post-state at its slot; none: 500
     mov     S8(%rsp), %rsi
-    call    node_api_state
+    call    lantern_node_api_state
     mov     $500, %edx
     test    %rax, %rax
     jnz     80f
@@ -3467,7 +3467,7 @@ LOCAL_FUNCTION node_api_event
     mov     ApiRoute_epoch(%rdi), %rax
     mov     S8(%rsp), %rcx
     mov     %rax, ApiView_head_slot(%rcx)
-    call    node_api_ids                    # its ids in the work's data
+    call    lantern_node_api_ids                    # its ids in the work's data
     mov     S8(%rsp), %rcx
     mov     %rax, ApiView_look_data(%rcx)
     jmp     67f
@@ -3488,7 +3488,7 @@ LOCAL_FUNCTION node_api_event
     dec     %rcx
     jnz     581b
     mov     %rbp, %rdi
-    call    node_store_slot
+    call    lantern_node_store_slot
     mov     %rax, %rsi
     xor     %edx, %edx
     mov     $SLOTS_PER_EPOCH, %ecx
@@ -3511,7 +3511,7 @@ LOCAL_FUNCTION node_api_event
     cmpq    $API_ID_SLOT, ApiRoute_id_kind(%rdi)
     jne     584f
     movq    $1, ApiView_look_replay(%rsi)
-584: call   node_api_state
+584: call   lantern_node_api_state
     mov     %rax, %rdx
     cmp     $1, %rax
     je      698b
@@ -3522,9 +3522,9 @@ LOCAL_FUNCTION node_api_event
     mov     ApiRoute_id_slot(%rax), %rax
     mov     S8(%rsp), %rdi
     mov     %rax, ApiView_head_slot(%rdi)
-    call    node_api_advance
+    call    lantern_node_api_advance
     mov     S7(%rsp), %rdi                  # its ids in the work's data
-    call    node_api_ids
+    call    lantern_node_api_ids
     mov     S8(%rsp), %rcx
     mov     %rax, ApiView_look_data(%rcx)
     jmp     67f
@@ -3533,7 +3533,7 @@ LOCAL_FUNCTION node_api_event
     cmpq    $0, ApiView_is_syncing(%rax)
     jne     80f
     mov     %rbp, %rdi
-    call    node_store_slot
+    call    lantern_node_store_slot
     mov     S7(%rsp), %rdi
     mov     ApiRoute_slot(%rdi), %rcx
     mov     $400, %edx
@@ -3545,7 +3545,7 @@ LOCAL_FUNCTION node_api_event
     jbe     80f
     movq    $API_ID_HEAD, ApiRoute_id_kind(%rdi)    # the head's post-state brought to the slot, which may be past the store's
     mov     S8(%rsp), %rsi
-    call    node_api_state
+    call    lantern_node_api_state
     mov     $500, %edx
     test    %rax, %rax
     jnz     80f
@@ -3553,12 +3553,12 @@ LOCAL_FUNCTION node_api_event
     mov     ApiRoute_slot(%rax), %rax
     mov     S8(%rsp), %rdi
     mov     %rax, ApiView_head_slot(%rdi)
-    call    node_api_advance
+    call    lantern_node_api_advance
     mov     S9(%rsp), %rdi
     mov     S7(%rsp), %rsi
     mov     %r12, %rdx
     mov     S8(%rsp), %rcx
-    call    node_api_produce
+    call    lantern_node_api_produce
     mov     %rax, %rdx
     test    %rax, %rax
     jnz     80f
@@ -3568,7 +3568,7 @@ LOCAL_FUNCTION node_api_event
     cmpq    $0, ApiView_is_syncing(%rax)
     jne     80f
     mov     %rbp, %rdi
-    call    node_store_slot
+    call    lantern_node_store_slot
     mov     S7(%rsp), %rdi
     mov     ApiRoute_slot(%rdi), %rcx
     mov     $400, %edx
@@ -3577,7 +3577,7 @@ LOCAL_FUNCTION node_api_event
     movq    $API_ID_SLOT, ApiRoute_id_kind(%rdi)    # the state of the slot, as a state_id of it; none: 400
     mov     %rcx, ApiRoute_id_slot(%rdi)
     mov     S8(%rsp), %rsi
-    call    node_api_state
+    call    lantern_node_api_state
     mov     $400, %edx
     test    %rax, %rax
     jnz     80f
@@ -3585,10 +3585,10 @@ LOCAL_FUNCTION node_api_event
     mov     S8(%rsp), %rdi
     cmpq    $0, ApiView_is_optimistic(%rdi)
     jne     80f
-    call    node_api_advance
+    call    lantern_node_api_advance
     mov     S7(%rsp), %rdi                  # its committee index in the work's data
     add     $ApiRoute_committee_index, %rdi
-    call    node_api_put8
+    call    lantern_node_api_put8
     mov     S8(%rsp), %rcx
     mov     %rax, ApiView_look_data(%rcx)
     mov     S7(%rsp), %rax                  # SSZ: an answer flag
@@ -3613,7 +3613,7 @@ LOCAL_FUNCTION node_api_event
     mov     $API_OP_GET_PEERS, %ecx
     jmp     81f
 55: mov     S7(%rsp), %rdi                  # getPeer: the peer of its peer_id, else 404
-    call    node_api_find_peer
+    call    lantern_node_api_find_peer
     mov     $404, %edx
     test    %rax, %rax
     jz      80f
@@ -3625,13 +3625,13 @@ LOCAL_FUNCTION node_api_event
 57: mov     S9(%rsp), %rdi                  # getBlockHeaders: a stream of the blocks of its query
     mov     S7(%rsp), %rsi
     mov     %r12, %rdx
-    call    node_api_headers_stream
+    call    lantern_node_api_headers_stream
     jmp     90f
 68: mov     S9(%rsp), %rdi                  # a pool GET: a stream of the pool; getAggregatedAttestationV2 with none 404
     mov     S7(%rsp), %rsi
     mov     %r12, %rdx
     mov     S8(%rsp), %rcx
-    call    node_api_pool_stream
+    call    lantern_node_api_pool_stream
     mov     %rax, %rdx
     test    %rax, %rax
     jnz     80f
@@ -3643,7 +3643,7 @@ LOCAL_FUNCTION node_api_event
     jc      80f
     mov     %rcx, (L + 8)(%rsp)
     mov     %rbp, %rdi
-    call    node_store_slot
+    call    lantern_node_store_slot
     inc     %rax
     xor     %edx, %edx
     mov     $SLOTS_PER_EPOCH, %ecx
@@ -3658,14 +3658,14 @@ LOCAL_FUNCTION node_api_event
     movq    $API_ID_SLOT, ApiRoute_id_kind(%rdi)
     mov     %rcx, ApiRoute_id_slot(%rdi)
     mov     S8(%rsp), %rsi
-    call    node_api_state
+    call    lantern_node_api_state
     mov     %rax, %rdx
     test    %rax, %rax
     jnz     80f
     mov     S8(%rsp), %rdi
-    call    node_api_advance
+    call    lantern_node_api_advance
     mov     S7(%rsp), %rdi                  # its ids, as a validator stream's
-    call    node_api_ids
+    call    lantern_node_api_ids
     mov     S8(%rsp), %rcx
     mov     %rax, ApiView_look_data(%rcx)
     jmp     64f
@@ -3673,7 +3673,7 @@ LOCAL_FUNCTION node_api_event
     mov     S7(%rsp), %rsi
     mov     %r12, %rdx
     mov     S8(%rsp), %rcx
-    call    node_api_rewards
+    call    lantern_node_api_rewards
     mov     %rax, %rdx
     test    %rax, %rax
     jnz     80f
@@ -3686,7 +3686,7 @@ LOCAL_FUNCTION node_api_event
     mov     S7(%rsp), %rsi
     mov     %r12, %rdx
     mov     %r13, %rcx
-    call    node_api_publish
+    call    lantern_node_api_publish
     mov     %rax, %rdx
     test    %rax, %rax
     jnz     80f
@@ -3696,7 +3696,7 @@ LOCAL_FUNCTION node_api_event
     mov     %r12, %rdx
     mov     %r13, %rcx
     mov     S8(%rsp), %r8
-    call    node_api_submit
+    call    lantern_node_api_submit
     mov     %rax, %rdx
     test    %rax, %rax
     jnz     80f
@@ -3704,14 +3704,14 @@ LOCAL_FUNCTION node_api_event
 61: mov     S9(%rsp), %rdi                  # eventstream: an entry, and the head
     mov     S7(%rsp), %rsi
     mov     %r12, %rdx
-    call    node_api_subscribe
+    call    lantern_node_api_subscribe
     jmp     90f
 63: mov     $503, %edx                      # getProposerDuties and V2: 503 while syncing; 400 past the next epoch
     mov     S8(%rsp), %rax
     cmpq    $0, ApiView_is_syncing(%rax)
     jne     80f
     mov     %rbp, %rdi
-    call    node_store_slot
+    call    lantern_node_store_slot
     mov     %rax, %rsi
     xor     %edx, %edx
     mov     $SLOTS_PER_EPOCH, %ecx
@@ -3732,7 +3732,7 @@ LOCAL_FUNCTION node_api_event
     cmpq    $API_ID_SLOT, ApiRoute_id_kind(%rdi)    # a slot: the replay may come
     jne     621f
     movq    $1, ApiView_look_replay(%rsi)
-621: call   node_api_state
+621: call   lantern_node_api_state
     mov     %rax, %rdx
     cmp     $1, %rax
     je      698b
@@ -3742,11 +3742,11 @@ LOCAL_FUNCTION node_api_event
     mov     ApiRoute_id_slot(%rax), %rax
     mov     S8(%rsp), %rdi
     mov     %rax, ApiView_head_slot(%rdi)
-    call    node_api_advance
+    call    lantern_node_api_advance
     jmp     67f
 65: mov     S7(%rsp), %rdi                  # a block: its lookup
     mov     S8(%rsp), %rsi
-    call    node_api_block
+    call    lantern_node_api_block
     mov     %rax, %rdx
     test    %rax, %rax
     jnz     80f
@@ -3772,7 +3772,7 @@ LOCAL_FUNCTION node_api_event
     mov     S9(%rsp), %rsi
     mov     %r12, %rdx
     mov     S8(%rsp), %rcx
-    call    node_api_encode
+    call    lantern_node_api_encode
     mov     %rax, %rdx
     test    %rax, %rax
     jnz     80f
@@ -3780,7 +3780,7 @@ LOCAL_FUNCTION node_api_event
 549: mov    S7(%rsp), %rdi                  # the light client reads: a work
     mov     S9(%rsp), %rsi
     mov     %r12, %rdx
-    call    node_api_lc
+    call    lantern_node_api_lc
     mov     %rax, %rdx
     test    %rax, %rax
     jnz     80f
@@ -3789,7 +3789,7 @@ LOCAL_FUNCTION node_api_event
     mov     S7(%rsp), %rsi
     mov     %r12, %rdx
     mov     S8(%rsp), %rcx
-    call    node_api_sidecar_stream
+    call    lantern_node_api_sidecar_stream
     test    %rax, %rax
     jz      90f
     mov     %rax, %rdx
@@ -3798,7 +3798,7 @@ LOCAL_FUNCTION node_api_event
     mov     S7(%rsp), %rsi
     mov     %r12, %rdx
     mov     S8(%rsp), %rcx
-    call    node_api_blob_stream
+    call    lantern_node_api_blob_stream
     test    %rax, %rax
     jz      90f
     mov     %rax, %rdx
@@ -3807,7 +3807,7 @@ LOCAL_FUNCTION node_api_event
     mov     S7(%rsp), %rsi
     mov     %r12, %rdx
     mov     S8(%rsp), %rcx
-    call    node_api_stream
+    call    lantern_node_api_stream
     test    %rax, %rax
     jz      90f
     mov     %rax, %rdx
@@ -3817,22 +3817,22 @@ LOCAL_FUNCTION node_api_event
 81: mov     S9(%rsp), %rdi
     mov     S8(%rsp), %rsi
     mov     S10(%rsp), %r8
-    call    node_api_send
+    call    lantern_node_api_send
 90: mov     L(%rsp), %rax
     mov     %rax, (%r14)
     LEAVE 16
-END_FUNCTION node_api_event
+END_FUNCTION lantern_node_api_event
 
 /*
  * The state of the chain at the slot rdi, as for a state_id of it, and past the store's slot the
  * head's post-state brought to it (beacon-api.md, getBlockRewards), with the route r12 and the view
  * r13: rax = 0 or 404, rdx its id, rcx 1 when it is a copy. Locals: L the slot.
  */
-LOCAL_FUNCTION node_api_rewards_state
+LOCAL_FUNCTION lantern_node_api_rewards_state
     ENTER 16
     mov     %rdi, L(%rsp)
     mov     %rbp, %rdi
-    call    node_store_slot
+    call    lantern_node_store_slot
     mov     L(%rsp), %rcx
     movq    $API_ID_SLOT, ApiRoute_id_kind(%r12)
     cmp     %rax, %rcx
@@ -3842,18 +3842,18 @@ LOCAL_FUNCTION node_api_rewards_state
     movq    $0, ApiView_look_copy(%r13)
     mov     %r12, %rdi
     mov     %r13, %rsi
-    call    node_api_state
+    call    lantern_node_api_state
     test    %rax, %rax
     jnz     9f
     mov     L(%rsp), %rax
     mov     %rax, ApiView_head_slot(%r13)
     mov     %r13, %rdi
-    call    node_api_advance
+    call    lantern_node_api_advance
     mov     ApiView_look_state(%r13), %rdx
     mov     ApiView_look_copy(%r13), %rcx
     xor     %eax, %eax
 9:  LEAVE 16
-END_FUNCTION node_api_rewards_state
+END_FUNCTION lantern_node_api_rewards_state
 
 /*
  * getBlockRewards and getSyncCommitteeRewards (node.md, NODE_EV_API): the block, a NodeBlock with
@@ -3864,7 +3864,7 @@ END_FUNCTION node_api_rewards_state
  * L+24 state_b, L+32 state_c, L+40 1 when state_b is a copy, L+48 1 when state_c is, L+56 the block's
  * slot, L+64 its values, L+72 its bytes, L+80 its fork, L+88 a slot, L+96 the status, L+104 the parent.
  */
-LOCAL_FUNCTION node_api_rewards
+LOCAL_FUNCTION lantern_node_api_rewards
     ENTER 112
     mov     %rdi, L(%rsp)
     mov     %rdx, (L + 8)(%rsp)
@@ -3872,7 +3872,7 @@ LOCAL_FUNCTION node_api_rewards
     mov     %rcx, %r13
     mov     %r12, %rdi
     mov     %r13, %rsi
-    call    node_api_block
+    call    lantern_node_api_block
     test    %rax, %rax
     jnz     9f
     mov     $404, %eax
@@ -3885,7 +3885,7 @@ LOCAL_FUNCTION node_api_rewards
     mov     ApiView_head_slot(%r13), %rdi
     mov     %rdi, (L + 56)(%rsp)
     lea     Node_config(%rbx), %rsi
-    call    node_fork
+    call    lantern_node_fork
     mov     %rax, (L + 80)(%rsp)
     cmpq    $API_OP_GET_SYNC_COMMITTEE_REWARDS, ApiRoute_op(%r12)  # getSyncCommitteeRewards of a phase0 block: 400
     jne     1f
@@ -3902,11 +3902,11 @@ LOCAL_FUNCTION node_api_rewards
     or      %rcx, %rax
     mov     %rax, (L + 64)(%rsp)
     lea     ApiView_head_root(%r13), %rdi   # the parent, imported, with a post-state
-    call    node_find_block
+    call    lantern_node_find_block
     cmp     $-1, %rax
     je      8f
     lea     NodeBlock_parent_root(%rdx), %rdi
-    call    node_find_block
+    call    lantern_node_find_block
     cmp     $-1, %rax
     je      8f
     mov     %rdx, (L + 104)(%rsp)
@@ -3915,13 +3915,13 @@ LOCAL_FUNCTION node_api_rewards
     mov     NodeBlock_state_id(%rdx), %rax
     test    %rax, %rax
     jnz     2f
-    call    node_f_slot
+    call    lantern_node_f_slot
     mov     (L + 104)(%rsp), %rdi
     cmp     $-1, %rax
     je      8f
     cmp     %rax, NodeBlock_slot(%rdi)
     jbe     8f
-    call    node_rebuild
+    call    lantern_node_rebuild
     test    %rax, %rax
     jz      8f
 2:  mov     %rax, ApiView_look_state(%r13)  # P: a copy brought to the block's slot
@@ -3931,7 +3931,7 @@ LOCAL_FUNCTION node_api_rewards
     mov     (L + 56)(%rsp), %rax
     mov     %rax, ApiView_head_slot(%r13)
     mov     %r13, %rdi
-    call    node_api_advance
+    call    lantern_node_api_advance
     mov     ApiView_look_state(%r13), %rax
     mov     %rax, (L + 16)(%rsp)
     xor     %eax, %eax
@@ -3943,7 +3943,7 @@ LOCAL_FUNCTION node_api_rewards
     cmpq    $API_OP_GET_SYNC_COMMITTEE_REWARDS, ApiRoute_op(%r12)
     jne     3f
     mov     %r12, %rdi                      # getSyncCommitteeRewards: its ids as state_b
-    call    node_api_ids
+    call    lantern_node_api_ids
     mov     %rax, (L + 24)(%rsp)
     jmp     6f
 3:  cmpq    $0, (L + 80)(%rsp)              # getBlockRewards of a phase0 block of epoch b: the E states
@@ -3957,7 +3957,7 @@ LOCAL_FUNCTION node_api_rewards
     inc     %rax                            # early: the state at the last slot of b
     imul    $SLOTS_PER_EPOCH, %rax, %rdi
     dec     %rdi
-    call    node_api_rewards_state
+    call    lantern_node_api_rewards_state
     mov     %rax, (L + 96)(%rsp)
     test    %rax, %rax
     jnz     7f
@@ -3972,17 +3972,17 @@ LOCAL_FUNCTION node_api_rewards
     dec     %rdi
     mov     %rdi, (L + 88)(%rsp)
     lea     Node_config(%rbx), %rsi
-    call    node_fork
+    call    lantern_node_fork
     test    %rax, %rax
     jnz     6f
     mov     (L + 88)(%rsp), %rdi
-    call    node_api_rewards_state
+    call    lantern_node_api_rewards_state
     mov     %rax, (L + 96)(%rsp)
     test    %rax, %rax
     jnz     7f
     mov     %rdx, (L + 32)(%rsp)
     mov     %rcx, (L + 48)(%rsp)
-6:  mov     ApiRoute_op(%r12), %r9          # the work: arg as node_api_encode packs it
+6:  mov     ApiRoute_op(%r12), %r9          # the work: arg as lantern_node_api_encode packs it
     mov     (L + 8)(%rsp), %rax
     shl     $8, %rax
     or      %rax, %r9
@@ -3997,37 +3997,37 @@ LOCAL_FUNCTION node_api_rewards
     mov     (L + 24)(%rsp), %rdx
     mov     (L + 72)(%rsp), %rcx
     mov     L(%rsp), %r8
-    call    node_work
+    call    lantern_node_work
     mov     (L + 32)(%rsp), %rcx
     mov     %rcx, NodeAction_state_c(%rax)
 7:  mov     $NODE_ACT_STATE_FREE, %edi      # the copies go after the work
     mov     (L + 16)(%rsp), %rsi
     xor     %edx, %edx
-    call    node_ids
+    call    lantern_node_ids
     cmpq    $0, (L + 40)(%rsp)
     je      71f
     mov     $NODE_ACT_STATE_FREE, %edi
     mov     (L + 24)(%rsp), %rsi
     xor     %edx, %edx
-    call    node_ids
+    call    lantern_node_ids
 71: cmpq    $0, (L + 48)(%rsp)
     je      72f
     mov     $NODE_ACT_STATE_FREE, %edi
     mov     (L + 32)(%rsp), %rsi
     xor     %edx, %edx
-    call    node_ids
+    call    lantern_node_ids
 72: mov     (L + 96)(%rsp), %rax
 9:  LEAVE 112
 8:  mov     $404, %eax
     LEAVE 112
-END_FUNCTION node_api_rewards
+END_FUNCTION lantern_node_api_rewards
 
 /*
  * The NODE_EV_WORK_DONE rdi of a NODE_WORK_API_ENCODE (node.md, lantern_node_step): its response
  * to the connection, or the error 500. rbx the node, r15 the actions. r12 the event, r13 the
  * action, S7 the flags.
  */
-LOCAL_FUNCTION node_api_done
+LOCAL_FUNCTION lantern_node_api_done
     ENTER 0
     mov     %rdi, %r12
     movzbl  NodeAction_arg(%r12), %eax      # getSyncCommitteeRewards: its ids in state_b go
@@ -4038,7 +4038,7 @@ LOCAL_FUNCTION node_api_done
     jz      4f
     mov     $NODE_ACT_BYTES_FREE, %edi
     xor     %edx, %edx
-    call    node_ids
+    call    lantern_node_ids
 4:  movzbl  NodeAction_arg(%r12), %eax      # getStateValidator: its ids go; produceAttestationData its index
     cmp     $API_OP_GET_STATE_VALIDATOR, %eax
     je      3f
@@ -4063,7 +4063,7 @@ LOCAL_FUNCTION node_api_done
     jz      2f
     mov     $NODE_ACT_BYTES_FREE, %edi
     xor     %edx, %edx
-    call    node_ids
+    call    lantern_node_ids
 2:  mov     NodeAction_arg(%r12), %rax
     shr     $8, %rax
     movzbl  %al, %eax
@@ -4080,7 +4080,7 @@ LOCAL_FUNCTION node_api_done
     add     $(56 + 7), %rsi
     and     $~7, %rsi
     mov     $NODE_ACT_API_SEND, %edi
-    call    node_act
+    call    lantern_node_act
     mov     %rax, %r13
     mov     NodeAction_target(%r12), %rax
     mov     %rax, 16(%r13)
@@ -4105,7 +4105,7 @@ LOCAL_FUNCTION node_api_done
     jz      9f
     mov     $NODE_ACT_API_CLOSE, %edi
     mov     $NODE_ACT_API_CLOSE_SIZE, %esi
-    call    node_act
+    call    lantern_node_act
     mov     NodeAction_target(%r12), %rcx
     mov     %rcx, 16(%rax)
     LEAVE 0
@@ -4114,9 +4114,9 @@ LOCAL_FUNCTION node_api_done
     mov     $500, %edx
     mov     $API_BODY_ERROR, %ecx
     mov     S7(%rsp), %r8
-    call    node_api_send
+    call    lantern_node_api_send
 9:  LEAVE 0
-END_FUNCTION node_api_done
+END_FUNCTION lantern_node_api_done
 
 /*
  * (node rdi, store rsi, work rdx, state_a rcx, data r8, scratch r9, event r10, room r11, seen rax)
@@ -4126,7 +4126,7 @@ END_FUNCTION node_api_done
  * S10 the room. Locals: L the scratch's size, L+8 the fork, L+16 a Result, L+24 a blob count, L+32
  * the seen.
  */
-LOCAL_FUNCTION node_api_run
+LOCAL_FUNCTION lantern_node_api_run
     ENTER 64
     mov     %rdi, %rbx
     mov     %rsi, %rbp
@@ -4206,7 +4206,7 @@ LOCAL_FUNCTION node_api_run
     add     %r14, %rax
     mov     %rax, S8(%rsp)
     mov     %rax, %rdi
-    call    node_api_view
+    call    lantern_node_api_view
     mov     S8(%rsp), %rdi
     mov     NodeAction_arg(%r12), %rax
     mov     %rax, %rcx
@@ -4233,7 +4233,7 @@ LOCAL_FUNCTION node_api_run
     mov     S7(%rsp), %rdx
     mov     %r14, %rcx
     mov     S8(%rsp), %r8
-    call    node_api_lc_read
+    call    lantern_node_api_lc_read
     test    %rax, %rax
     jz      5f
     cmp     $LANTERN_BUFFER_TOO_SMALL, %rax
@@ -4254,7 +4254,7 @@ LOCAL_FUNCTION node_api_run
     cmp     %rax, %rdi
     jne     42f
 43: lea     Node_config(%rbx), %rsi
-    call    node_fork
+    call    lantern_node_fork
     mov     %rax, %r10
     cmpq    $API_OP_GET_BLOCK_REWARDS, S9(%rsp)
     je      277f
@@ -4266,7 +4266,7 @@ LOCAL_FUNCTION node_api_run
     mov     S7(%rsp), %rsi
     test    %rsi, %rsi
     jz      8f
-    call    node_api_find_validator
+    call    lantern_node_api_find_validator
     mov     S8(%rsp), %rdi
     mov     %r13, ApiView_val_state(%rdi)
     mov     %rax, ApiView_val_index(%rdi)
@@ -4507,7 +4507,7 @@ LOCAL_FUNCTION node_api_run
 263: mov    %rax, (L + 56)(%rsp)
     mov     NODE_STATE_SLOT(%r13), %rdi
     lea     Node_config(%rbx), %rsi
-    call    node_fork
+    call    lantern_node_fork
     mov     %rax, %r10
     mov     %r13, %rdi
     lea     (L + 56)(%rsp), %rsi
@@ -4556,7 +4556,7 @@ LOCAL_FUNCTION node_api_run
     add     %rdi, %rax
     mov     100(%rax), %rdi
     lea     Node_config(%rbx), %rsi
-    call    node_fork
+    call    lantern_node_fork
     mov     %rax, %r10
     mov     %rax, (L + 8)(%rsp)
     mov     S7(%rsp), %rdi
@@ -4603,7 +4603,7 @@ LOCAL_FUNCTION node_api_run
     jnz     34f
     mov     NODE_STATE_SLOT(%r13), %rdi     # a zero state_root: the state's root
     lea     Node_config(%rbx), %rsi
-    call    node_fork
+    call    lantern_node_fork
     mov     %rax, %r10
     mov     %r13, %rdi
     mov     (Node_config + CONFIG_STATE_CACHE)(%rbx), %rsi
@@ -4669,7 +4669,7 @@ LOCAL_FUNCTION node_api_run
     cmpq    $API_OP_GET_LIGHT_CLIENT_UPDATES_BY_RANGE, S9(%rsp)  # no version: of each item
     je      54f
 531: or     $API_R_VERSION, %r8
-54: call    api_respond
+54: call    lantern_api_respond
     test    %rax, %rax
     jnz     71f
     mov     (NodeEvent_chunk + 16)(%r15), %rax  # the event's size covers the chunk
@@ -4725,7 +4725,7 @@ LOCAL_FUNCTION node_api_run
     mov     %rbp, ApiView_val_state(%rdi)
     mov     ApiView_head_slot(%rdi), %rdi
     lea     Node_config(%rbx), %rsi
-    call    node_fork
+    call    lantern_node_fork
     mov     %rax, %r10
     mov     %rbp, %rdi
     mov     %r14, %rsi
@@ -4752,33 +4752,33 @@ LOCAL_FUNCTION node_api_run
     mov     %rax, (%r14)
 7:  mov     $LANTERN_BUFFER_TOO_SMALL, %eax
     LEAVE 64
-END_FUNCTION node_api_run
+END_FUNCTION lantern_node_api_run
 
 /* ---------------------------------------------------------------- Lookup (beacon-api.md, Common rules) */
 
 /* rax = the NodeBlock index of the imported parent of the entry rdi, or 2^64 - 1; rdx = its entry. Uses rcx, r11, xmm0-xmm2. */
-LOCAL_FUNCTION node_api_parent
+LOCAL_FUNCTION lantern_node_api_parent
     FRAME 0
     add     $NodeBlock_parent_root, %rdi
-    call    node_find_block
+    call    lantern_node_find_block
     cmp     $-1, %rax
     je      9f
     cmpq    $NODE_BLOCK_IMPORTED, NodeBlock_status(%rdx)
     je      9f
     mov     $-1, %rax
 9:  UNFRAME 0
-END_FUNCTION node_api_parent
+END_FUNCTION lantern_node_api_parent
 
 /*
  * The block of the chain at or below the slot rdi: rax = its NodeBlock index, rdx = its entry; or
  * rax = 2^64 - 1 when the lowest block of the chain the node keeps, rdx (0 with no head), is above
  * the slot. Locals: the slot, an entry.
  */
-LOCAL_FUNCTION node_api_below
+LOCAL_FUNCTION lantern_node_api_below
     FRAME 16
     mov     %rdi, (%rsp)
     lea     Node_head_root(%rbx), %rdi
-    call    node_find_block
+    call    lantern_node_find_block
     cmp     $-1, %rax
     jne     1f
     xor     %edx, %edx
@@ -4788,19 +4788,19 @@ LOCAL_FUNCTION node_api_below
     jbe     9f
     mov     %rdx, 8(%rsp)
     mov     %rdx, %rdi
-    call    node_api_parent
+    call    lantern_node_api_parent
     cmp     $-1, %rax
     jne     1b
     mov     8(%rsp), %rdx
 9:  UNFRAME 16
-END_FUNCTION node_api_below
+END_FUNCTION lantern_node_api_below
 
 /* rax = 1 when the block entry rdi is on the chain, else 0. Locals: the entry. */
-LOCAL_FUNCTION node_api_on_chain
+LOCAL_FUNCTION lantern_node_api_on_chain
     FRAME 16
     mov     %rdi, (%rsp)
     mov     NodeBlock_slot(%rdi), %rdi
-    call    node_api_below
+    call    lantern_node_api_below
     cmp     $-1, %rax
     je      8f
     xor     %eax, %eax
@@ -4809,13 +4809,13 @@ LOCAL_FUNCTION node_api_on_chain
     UNFRAME 16
 8:  xor     %eax, %eax
     UNFRAME 16
-END_FUNCTION node_api_on_chain
+END_FUNCTION lantern_node_api_on_chain
 
 /* rax = 1 when the slot rdi is at most that of the block of the store's finalized root, else 0. Locals: rdi. */
-LOCAL_FUNCTION node_api_final_block
+LOCAL_FUNCTION lantern_node_api_final_block
     FRAME 16
     mov     %rdi, (%rsp)
-    call    node_f_slot
+    call    lantern_node_f_slot
     cmp     $-1, %rax
     je      8f
     mov     (%rsp), %rcx
@@ -4825,7 +4825,7 @@ LOCAL_FUNCTION node_api_final_block
     UNFRAME 16
 8:  xor     %eax, %eax
     UNFRAME 16
-END_FUNCTION node_api_final_block
+END_FUNCTION lantern_node_api_final_block
 
 /*
  * The block of the block_id of the ApiRoute rdi into the ApiView rsi (beacon-api.md, Common rules):
@@ -4833,7 +4833,7 @@ END_FUNCTION node_api_final_block
  * block the node keeps look_state and look_state_slot. rax = 0, or 404 for none. rbx the node, rbp
  * the store. r12 the route, r13 the view, S7 the entry, S8 the slot. Locals: L the Db's slot.
  */
-LOCAL_FUNCTION node_api_block
+LOCAL_FUNCTION lantern_node_api_block
     ENTER 16
     mov     %rdi, %r12
     mov     %rsi, %r13
@@ -4851,7 +4851,7 @@ LOCAL_FUNCTION node_api_block
     cmp     $API_ID_ROOT, %rax
     jne     3f
     lea     ApiRoute_id_root(%r12), %rdi    # a root: the node's imported block, else the Db's
-    call    node_find_block
+    call    lantern_node_find_block
     cmp     $-1, %rax
     je      1f
     cmpq    $NODE_BLOCK_IMPORTED, NodeBlock_status(%rdx)
@@ -4875,7 +4875,7 @@ LOCAL_FUNCTION node_api_block
     mov     ApiRoute_id_slot(%r12), %rcx
 31: mov     %rcx, S8(%rsp)
     mov     %rcx, %rdi
-    call    node_api_below
+    call    lantern_node_api_below
     cmp     $-1, %rax
     je      32f
     mov     S8(%rsp), %rcx
@@ -4885,11 +4885,11 @@ LOCAL_FUNCTION node_api_block
 32: testq   $NODE_FLAG_DB, Node_flags(%rbx) # below the chain's blocks the node keeps: the Db's
     jz      80f
     mov     S8(%rsp), %rdi
-    call    node_db_slot
+    call    lantern_node_db_slot
     test    %rax, %rax
     jz      80f
     jmp     6f                              # DbSlot_root is at 0
-4:  call    node_find_block                 # head, finalized: the block of that root
+4:  call    lantern_node_find_block                 # head, finalized: the block of that root
     cmp     $-1, %rax
     je      80f
 5:  mov     %rdx, S7(%rsp)                  # a block the node keeps
@@ -4910,15 +4910,15 @@ LOCAL_FUNCTION node_api_block
     test    %rax, %rax
     jnz     51f
     mov     %rdx, %rdi
-    call    node_api_db_ref
+    call    lantern_node_api_db_ref
 51: mov     %rax, ApiView_look_data(%r13)
     mov     S7(%rsp), %rdi
-    call    node_api_on_chain
+    call    lantern_node_api_on_chain
     mov     %rax, ApiView_canonical(%r13)
     test    %rax, %rax
     jz      52f
     mov     S8(%rsp), %rdi
-    call    node_api_final_block
+    call    lantern_node_api_final_block
 52: mov     %rax, ApiView_head_finalized(%r13)
     xor     %eax, %eax
     LEAVE 16
@@ -4928,16 +4928,16 @@ LOCAL_FUNCTION node_api_block
     mov     %rdi, ApiView_head_slot(%r13)
     movq    $0, ApiView_is_optimistic(%r13)
     movq    $1, ApiView_canonical(%r13)
-    call    node_db_block
+    call    lantern_node_db_block
     mov     %rax, ApiView_look_data(%r13)
     mov     S8(%rsp), %rdi
-    call    node_api_final_block
+    call    lantern_node_api_final_block
     mov     %rax, ApiView_head_finalized(%r13)
     xor     %eax, %eax
     LEAVE 16
 80: mov     $404, %eax
     LEAVE 16
-END_FUNCTION node_api_block
+END_FUNCTION lantern_node_api_block
 
 /*
  * The state of the state_id of the ApiRoute rdi into the ApiView rsi (beacon-api.md, Common
@@ -4948,7 +4948,7 @@ END_FUNCTION node_api_block
  * route, r13 the view, S7 the block's entry, then the slot scanned, S8 the slot, S9 the checkpoint.
  * Locals: L look_replay.
  */
-LOCAL_FUNCTION node_api_state
+LOCAL_FUNCTION lantern_node_api_state
     ENTER 16
     mov     %rdi, %r12
     mov     %rsi, %r13
@@ -4962,7 +4962,7 @@ LOCAL_FUNCTION node_api_state
     cmp     $API_ID_HEAD, %rax
     jne     1f
     lea     Node_head_root(%rbx), %rdi      # head: its post-state at its slot
-    call    node_find_block
+    call    lantern_node_find_block
     cmp     $-1, %rax
     je      80f
     mov     NodeBlock_slot(%rdx), %rax
@@ -4979,7 +4979,7 @@ LOCAL_FUNCTION node_api_state
     imul    $SLOTS_PER_EPOCH, %rax, %rax
     mov     %rax, S8(%rsp)
     lea     8(%rcx), %rdi                   # the optimistic status of its block
-    call    node_find_block
+    call    lantern_node_find_block
     xor     %ecx, %ecx
     cmp     $-1, %rax
     je      21f
@@ -4989,7 +4989,7 @@ LOCAL_FUNCTION node_api_state
     mov     S9(%rsp), %rsi                  # its NodeCheckpoint's state, else its block's post-state
     mov     (%rsi), %rdi
     add     $8, %rsi
-    call    node_find_checkpoint
+    call    lantern_node_find_checkpoint
     cmp     $-1, %rax
     je      22f
     mov     NodeCheckpoint_state_id(%rdx), %rax
@@ -5001,7 +5001,7 @@ LOCAL_FUNCTION node_api_state
     jmp     7f
 22: mov     S9(%rsp), %rdi
     add     $8, %rdi
-    call    node_find_block
+    call    lantern_node_find_block
     cmp     $-1, %rax
     je      80f
     jmp     5f
@@ -5013,11 +5013,11 @@ LOCAL_FUNCTION node_api_state
     mov     ApiRoute_id_slot(%r12), %rcx
 31: mov     %rcx, S8(%rsp)
     mov     %rbp, %rdi
-    call    node_store_slot
+    call    lantern_node_store_slot
     cmp     %rax, S8(%rsp)
     ja      80f
     mov     S8(%rsp), %rdi
-    call    node_api_below
+    call    lantern_node_api_below
     cmp     $-1, %rax
     je      75f
 5:  mov     %rdx, S7(%rsp)                  # the block's post-state, again when the node let it go
@@ -5028,13 +5028,13 @@ LOCAL_FUNCTION node_api_state
     mov     NodeBlock_state_id(%rdx), %rax
     test    %rax, %rax
     jnz     6f
-    call    node_f_slot
+    call    lantern_node_f_slot
     cmp     $-1, %rax
     je      80f
     mov     S7(%rsp), %rdi
     cmp     %rax, NodeBlock_slot(%rdi)
     jbe     70f
-    call    node_rebuild
+    call    lantern_node_rebuild
     test    %rax, %rax
     jz      80f
 6:  mov     %rax, ApiView_look_state(%r13)
@@ -5064,7 +5064,7 @@ LOCAL_FUNCTION node_api_state
     cmp     Node_archive_first(%rbx), %rax  # below the base's slot: from the lowest state record on
     jb      80f
 78: mov     S7(%rsp), %rdi
-    call    node_db_slot
+    call    lantern_node_db_slot
     mov     %rax, %rdi
     mov     S7(%rsp), %rsi
     test    %rax, %rax
@@ -5076,7 +5076,7 @@ LOCAL_FUNCTION node_api_state
 76: mov     S7(%rsp), %rdi
     cmp     Node_base_slot(%rbx), %rdi
     jbe     77f
-    call    node_db_slot
+    call    lantern_node_db_slot
     mov     %rax, %rdi                      # its DbSlot: the root at 0
     mov     S7(%rsp), %rsi
     test    %rax, %rax
@@ -5087,7 +5087,7 @@ LOCAL_FUNCTION node_api_state
     mov     Node_base_slot(%rbx), %rsi
 71: cmpq    $0, L(%rsp)
     je      80f
-    call    node_replay_get
+    call    lantern_node_replay_get
     test    %rax, %rax
     jz      80f
     cmp     $1, %rax
@@ -5100,7 +5100,7 @@ LOCAL_FUNCTION node_api_state
 79: LEAVE 16
 80: mov     $404, %eax
     LEAVE 16
-END_FUNCTION node_api_state
+END_FUNCTION lantern_node_api_state
 
 /*
  * (root rdi, or 0 for the base, slot rsi): the post-state of the block of root rdi at slot rsi, at
@@ -5108,7 +5108,7 @@ END_FUNCTION node_api_state
  * its slot; 1 when the request waits for the replay; 0 for none. r12 the root, S7 the slot, S8 the
  * state, S9 the copy.
  */
-LOCAL_FUNCTION node_replay_get
+LOCAL_FUNCTION lantern_node_replay_get
     ENTER 0
     mov     %rdi, %r12
     mov     %rsi, S7(%rsp)
@@ -5128,12 +5128,12 @@ LOCAL_FUNCTION node_replay_get
     NE32    %rdi, %r12, 2f
     mov     Node_replay_state(%rbx), %rax
 5:  mov     %rax, S8(%rsp)                  # a copy for the answer
-    call    node_new_id
+    call    lantern_node_new_id
     mov     %rax, S9(%rsp)
     mov     $NODE_ACT_STATE_COPY, %edi
     mov     S8(%rsp), %rsi
     mov     %rax, %rdx
-    call    node_ids
+    call    lantern_node_ids
     mov     S9(%rsp), %rax
     mov     S7(%rsp), %rdx
     LEAVE 0
@@ -5144,24 +5144,24 @@ LOCAL_FUNCTION node_replay_get
     jz      3f
     mov     $NODE_ACT_STATE_FREE, %edi
     xor     %edx, %edx
-    call    node_ids
+    call    lantern_node_ids
     movq    $0, Node_replay_state(%rbx)
 3:  lea     Node_replay_root(%rbx), %rdi
     COPY32  %rdi, %r12
     mov     S7(%rsp), %rax
     mov     %rax, Node_replay_slot(%rbx)
-    call    node_new_id
+    call    lantern_node_new_id
     mov     %rax, Node_replay_copy(%rbx)
     mov     %rax, %rdx
     mov     $NODE_ACT_STATE_COPY, %edi
     mov     Node_anchor_state_id(%rbx), %rsi
-    call    node_ids
+    call    lantern_node_ids
     mov     Node_base_slot(%rbx), %rax
     mov     %rax, Node_replay_copy_slot(%rbx)
     inc     %rax
     mov     %rax, Node_replay_next(%rbx)
     mov     S7(%rsp), %rdi                  # a nearer base among the state records: the copy loads it
-    call    node_archive_base
+    call    lantern_node_archive_base
     cmp     $-1, %rax
     je      7f
     mov     %rax, Node_replay_copy_slot(%rbx)
@@ -5182,12 +5182,12 @@ LOCAL_FUNCTION node_replay_get
     mov     Node_replay_copy(%rbx), %rsi
     xor     %r8d, %r8d
     xor     %r9d, %r9d
-    call    node_work
+    call    lantern_node_work
 7:  mov     $1, %eax
     LEAVE 0
 8:  xor     %eax, %eax
     LEAVE 0
-END_FUNCTION node_replay_get
+END_FUNCTION lantern_node_replay_get
 
 /*
  * The state of the ApiView rdi at its slot (node.md, NODE_EV_API): when head_slot is past
@@ -5195,32 +5195,32 @@ END_FUNCTION node_replay_get
  * and a SLOTS work of it to head_slot when it is below it; look_state is the copy, look_copy 1.
  * r12 the view, r13 the copy, S7 the copy's slot, S8 the fork of look_state_slot.
  */
-LOCAL_FUNCTION node_api_advance
+LOCAL_FUNCTION lantern_node_api_advance
     ENTER 0
     mov     %rdi, %r12
     mov     ApiView_head_slot(%r12), %rax
     cmp     ApiView_look_state_slot(%r12), %rax
     jbe     9f
-    call    node_new_id
+    call    lantern_node_new_id
     mov     %rax, %r13
     mov     $NODE_ACT_STATE_COPY, %edi
     mov     ApiView_look_state(%r12), %rsi
     mov     %r13, %rdx
-    call    node_ids
+    call    lantern_node_ids
     mov     %r13, %rdi
     mov     ApiView_look_state(%r12), %rsi
     mov     ApiView_look_state_slot(%r12), %rdx
     mov     ApiView_head_slot(%r12), %rcx
-    call    node_cross
+    call    lantern_node_cross
     mov     %rax, %r13
     mov     ApiView_look_state_slot(%r12), %rdi     # the copy's slot: the first of the target's fork, when it crossed one
     mov     %rdi, S7(%rsp)
     lea     Node_config(%rbx), %rsi
-    call    node_fork
+    call    lantern_node_fork
     mov     %rax, S8(%rsp)
     mov     ApiView_head_slot(%r12), %rdi
     lea     Node_config(%rbx), %rsi
-    call    node_fork
+    call    lantern_node_fork
     cmp     S8(%rsp), %rax
     jbe     1f
     shl     $4, %rax
@@ -5237,18 +5237,18 @@ LOCAL_FUNCTION node_api_advance
     xor     %edx, %edx
     xor     %ecx, %ecx
     xor     %r8d, %r8d
-    call    node_work
+    call    lantern_node_work
 2:  mov     %r13, ApiView_look_state(%r12)
     movq    $1, ApiView_look_copy(%r12)
 9:  LEAVE 0
-END_FUNCTION node_api_advance
+END_FUNCTION lantern_node_api_advance
 
 /*
  * A NODE_WORK_API_ENCODE of the operation rdi for the connection rsi with the answer flags rdx,
  * from the lookup in the ApiView rcx (node.md, NODE_EV_API); then a STATE_FREE of the state when it
  * is a copy. rax = 0, or 404 for a header with neither bytes nor a post-state. Locals: the view.
  */
-LOCAL_FUNCTION node_api_encode
+LOCAL_FUNCTION lantern_node_api_encode
     FRAME 16
     mov     %rcx, (%rsp)
     mov     %rsi, %r8
@@ -5313,17 +5313,17 @@ LOCAL_FUNCTION node_api_encode
     cmove   %rax, %rcx
 3:  mov     $NODE_WORK_API_ENCODE, %edi
     xor     %edx, %edx
-    call    node_work
+    call    lantern_node_work
     mov     (%rsp), %rax                    # a copy goes after the work
     cmpq    $0, ApiView_look_copy(%rax)
     je      9f
     mov     $NODE_ACT_STATE_FREE, %edi
     mov     ApiView_look_state(%rax), %rsi
     xor     %edx, %edx
-    call    node_ids
+    call    lantern_node_ids
 9:  xor     %eax, %eax
     UNFRAME 16
-END_FUNCTION node_api_encode
+END_FUNCTION lantern_node_api_encode
 
 /*
  * (connection rdi, route rsi, answer flags rdx, wait rcx) -> rax: a state_id of a root (node.md,
@@ -5333,7 +5333,7 @@ END_FUNCTION node_api_encode
  * head post-state. rbx the node, r15 the actions. r12 the route, S7 the flags, S9 the connection,
  * S8 the head's post-state, S10 wait. Locals: L the entry's index.
  */
-LOCAL_FUNCTION node_api_lookup
+LOCAL_FUNCTION lantern_node_api_lookup
     ENTER 16
     mov     %rdi, S9(%rsp)
     mov     %rsi, %r12
@@ -5347,14 +5347,14 @@ LOCAL_FUNCTION node_api_lookup
     or      $API_STREAM_SSZ, %rdx
 1:  mov     %rdx, S7(%rsp)
     lea     Node_head_root(%rbx), %rdi
-    call    node_find_block
+    call    lantern_node_find_block
     cmp     $-1, %rax
     je      80f
     mov     NodeBlock_state_id(%rdx), %rax
     test    %rax, %rax
     jz      80f
     mov     %rax, S8(%rsp)
-    call    node_api_new
+    call    lantern_node_api_new
     mov     %rax, L(%rsp)
     mov     %rdx, %r13
     mov     %rdx, %rdi
@@ -5391,7 +5391,7 @@ LOCAL_FUNCTION node_api_lookup
     cmp     $(API_OP_GET_EPOCH_COMMITTEES - API_OP_GET_STATE_VALIDATORS), %rax
     ja      2f
 21: mov     %r12, %rdi
-    call    node_api_ids
+    call    lantern_node_api_ids
     mov     %rax, NodeApi_data(%r13)
     test    %rax, %rax
     jz      2f
@@ -5411,18 +5411,18 @@ LOCAL_FUNCTION node_api_lookup
     xor     %ecx, %ecx
     mov     S9(%rsp), %r8
     mov     L(%rsp), %r9
-    call    node_work
+    call    lantern_node_work
     xor     %eax, %eax
     LEAVE 16
 80: mov     $404, %eax
     LEAVE 16
-END_FUNCTION node_api_lookup
+END_FUNCTION lantern_node_api_lookup
 
 /*
  * The NODE_EV_WORK_DONE rdi of a NODE_WORK_API_LOOKUP (node.md, lantern_node_step): its entry goes
- * on with the slot found (node_api_rerun), the replay allowed. r12 the event.
+ * on with the slot found (lantern_node_api_rerun), the replay allowed. r12 the event.
  */
-LOCAL_FUNCTION node_api_lookup_done
+LOCAL_FUNCTION lantern_node_api_lookup_done
     ENTER 0
     mov     %rdi, %r12
     mov     NodeAction_arg(%r12), %rax
@@ -5440,9 +5440,9 @@ LOCAL_FUNCTION node_api_lookup_done
     jz      99f
     mov     NodeEvent_index(%r12), %rsi
     mov     $1, %edx
-    call    node_api_rerun
+    call    lantern_node_api_rerun
 99: LEAVE 0
-END_FUNCTION node_api_lookup_done
+END_FUNCTION lantern_node_api_lookup_done
 
 /*
  * (entry rdi, slot rsi, replay rdx): a lookup entry goes on with the slot of its state_id (node.md,
@@ -5454,7 +5454,7 @@ END_FUNCTION node_api_lookup_done
  * the scratch's size, L+16 the ids, L+24 statuses, L+32 validator (64), L+96 epoch, slot, index and
  * present, L+128 the slot, L+136 replay, then the status.
  */
-LOCAL_FUNCTION node_api_rerun
+LOCAL_FUNCTION lantern_node_api_rerun
     ENTER 144
     mov     %rdi, %r12
     mov     %rsi, (L + 128)(%rsp)
@@ -5468,7 +5468,7 @@ LOCAL_FUNCTION node_api_rerun
     test    $API_STREAM_GONE, %eax
     jz      1f
     mov     %r12, %rdi
-    call    node_api_end                    # API_STREAM_GONE: the entry ends, its ids with it
+    call    lantern_node_api_end                    # API_STREAM_GONE: the entry ends, its ids with it
     jmp     99f
 1:  mov     NodeApi_data(%r12), %rcx        # its ids, statuses and validator_id go to the answer
     mov     %rcx, (L + 16)(%rsp)
@@ -5489,7 +5489,7 @@ LOCAL_FUNCTION node_api_rerun
     add     %r14, %rax
     mov     %rax, S8(%rsp)
     mov     %rax, %rdi
-    call    node_api_view
+    call    lantern_node_api_view
     mov     S8(%rsp), %r13
     add     $ApiView__size, %r13
     mov     %r13, %rdi
@@ -5527,7 +5527,7 @@ LOCAL_FUNCTION node_api_rerun
     mov     (L + 136)(%rsp), %rax
     mov     %rax, ApiView_look_replay(%rsi)
     mov     %r13, %rdi
-    call    node_api_state
+    call    lantern_node_api_state
     mov     %rax, %rdx
     cmp     $1, %rax
     jne     70f
@@ -5545,7 +5545,7 @@ LOCAL_FUNCTION node_api_rerun
     and     $~API_STREAM_OWN, %rax          # the entry ends; it owns no bytes
     mov     %rax, NodeApi_flags(%r12)
     mov     %r12, %rdi
-    call    node_api_end
+    call    lantern_node_api_end
     mov     (L + 136)(%rsp), %rdx
     test    %rdx, %rdx
     jnz     80f
@@ -5558,7 +5558,7 @@ LOCAL_FUNCTION node_api_rerun
     mov     S7(%rsp), %rdx
     and     $(API_STREAM_CLOSE | API_STREAM_HTTP10), %edx
     mov     S8(%rsp), %rcx
-    call    node_api_state_answer
+    call    lantern_node_api_state_answer
     mov     %rax, %rdx
     test    %rax, %rax
     jz      90f
@@ -5568,7 +5568,7 @@ LOCAL_FUNCTION node_api_rerun
     mov     %rdx, (L + 24)(%rsp)
     mov     $NODE_ACT_BYTES_FREE, %edi
     xor     %edx, %edx
-    call    node_ids
+    call    lantern_node_ids
     mov     (L + 24)(%rsp), %rdx
 82: mov     S9(%rsp), %rdi                  # an error: with close, or keep-alive for HTTP/1.0
     xor     %esi, %esi
@@ -5579,18 +5579,18 @@ LOCAL_FUNCTION node_api_rerun
     testq   $API_STREAM_HTTP10, S7(%rsp)
     jz      81f
     mov     $API_R_KEEP, %r8d
-81: call    node_api_send
+81: call    lantern_node_api_send
 90: mov     L(%rsp), %rax
     mov     %rax, (%r14)
 99: LEAVE 144
-END_FUNCTION node_api_rerun
+END_FUNCTION lantern_node_api_rerun
 
 /*
  * (data rdi, slot rsi): the copy of the replay in flight crosses the fork boundaries to the slot
  * rsi, then a NODE_WORK_REPLAY of it with the block's bytes rdi (node.md, the replay). S7 the data,
  * S8 the slot.
  */
-LOCAL_FUNCTION node_replay_block
+LOCAL_FUNCTION lantern_node_replay_block
     ENTER 0
     mov     %rdi, S7(%rsp)
     mov     %rsi, S8(%rsp)
@@ -5598,7 +5598,7 @@ LOCAL_FUNCTION node_replay_block
     mov     Node_anchor_state_id(%rbx), %rsi
     mov     Node_replay_copy_slot(%rbx), %rdx
     mov     S8(%rsp), %rcx
-    call    node_cross
+    call    lantern_node_cross
     mov     %rax, Node_replay_copy(%rbx)
     mov     S8(%rsp), %rcx
     mov     %rcx, Node_replay_copy_slot(%rbx)
@@ -5608,9 +5608,9 @@ LOCAL_FUNCTION node_replay_block
     mov     S7(%rsp), %rcx
     xor     %r8d, %r8d
     xor     %r9d, %r9d
-    call    node_work
+    call    lantern_node_work
     LEAVE 0
-END_FUNCTION node_replay_block
+END_FUNCTION lantern_node_replay_block
 
 /*
  * The replay in flight queues its next blocks (node.md, the replay): at most NODE_REPLAY_CHUNK, the
@@ -5621,7 +5621,7 @@ END_FUNCTION node_replay_block
  * S7 a block's data, then the path's count, S8 the path list, S9 an entry, S10 the entries left.
  * Locals: L the scratch's size, L+16 replay.
  */
-LOCAL_FUNCTION node_replay_due
+LOCAL_FUNCTION lantern_node_replay_due
     ENTER 32
     cmpq    $0, Node_replay_copy(%rbx)
     je      99f
@@ -5643,7 +5643,7 @@ LOCAL_FUNCTION node_replay_due
     cmp     Node_db_next_slot(%rbx), %r12
     jae     10f
     mov     %r12, %rdi
-    call    node_db_block
+    call    lantern_node_db_block
     test    %rax, %rax
     jz      3f
     mov     %rax, S7(%rsp)
@@ -5652,17 +5652,17 @@ LOCAL_FUNCTION node_replay_due
     test    %r13, %r13
     jz      2f
     mov     $1024, %edi
-    call    node_room
+    call    lantern_node_room
     test    %rax, %rax
     jz      40f
 2:  mov     S7(%rsp), %rdi
     mov     %r12, %rsi
-    call    node_replay_block
+    call    lantern_node_replay_block
     inc     %r13
 3:  inc     %r12
     jmp     1b
 10: lea     Node_replay_root(%rbx), %rdi    # the NodeBlock path from the replay's block, down to the next slot
-    call    node_find_block
+    call    lantern_node_find_block
     cmp     $-1, %rax
     je      60f
     mov     (%r14), %rax
@@ -5685,7 +5685,7 @@ LOCAL_FUNCTION node_replay_due
     mov     %rdx, (%rax,%rcx,8)
     incq    S7(%rsp)
     lea     NodeBlock_parent_root(%rdx), %rdi
-    call    node_find_block
+    call    lantern_node_find_block
     cmp     $-1, %rax
     jne     11b
 14: cmpq    $0, S7(%rsp)                    # from the lowest
@@ -5695,7 +5695,7 @@ LOCAL_FUNCTION node_replay_due
     test    %r13, %r13
     jz      16f
     mov     $1024, %edi
-    call    node_room
+    call    lantern_node_room
     test    %rax, %rax
     jz      40f
 16: decq    S7(%rsp)
@@ -5705,7 +5705,7 @@ LOCAL_FUNCTION node_replay_due
     mov     NodeBlock_data_id(%rax), %rdi
     mov     NodeBlock_slot(%rax), %rsi
     lea     1(%rsi), %r12
-    call    node_replay_block
+    call    lantern_node_replay_block
     inc     %r13
     jmp     14b
 15: mov     Node_replay_slot(%rbx), %r12    # the path's last: the replay's block
@@ -5721,7 +5721,7 @@ LOCAL_FUNCTION node_replay_due
 60: mov     $NODE_ACT_STATE_FREE, %edi      # a block it cannot find: no replay
     mov     Node_replay_copy(%rbx), %rsi
     xor     %edx, %edx
-    call    node_ids
+    call    lantern_node_ids
     movq    $0, Node_replay_copy(%rbx)
     lea     Node_replay_root(%rbx), %rdi
     mov     $32, %esi
@@ -5744,14 +5744,14 @@ LOCAL_FUNCTION node_replay_due
     mov     %rax, NodeApi_flags(%rdi)
     mov     (NodeApi_cursor + API_REPLAY_SLOT)(%rdi), %rsi
     mov     (L + 16)(%rsp), %rdx
-    call    node_api_rerun
+    call    lantern_node_api_rerun
 72: addq    $NodeApi__mem, S9(%rsp)
     decq    S10(%rsp)
     jmp     71b
 90: mov     L(%rsp), %rax
     mov     %rax, (%r14)
 99: LEAVE 32
-END_FUNCTION node_replay_due
+END_FUNCTION lantern_node_replay_due
 
 /*
  * (node rdi, work rsi, state_a rdx, scratch rcx, event r8) -> rax: a NODE_WORK_API_LOOKUP of
@@ -5759,7 +5759,7 @@ END_FUNCTION node_replay_due
  * state_a has the root of the NodeApi entry at the work's arg, or 2^64 - 1. rbx the node, r12 the
  * state, r13 the event, r14 the root, r15 the slot, S7 the lowest slot.
  */
-LOCAL_FUNCTION node_api_lookup_run
+LOCAL_FUNCTION lantern_node_api_lookup_run
     ENTER 0
     mov     %rdi, %rbx
     mov     %rdx, %r12
@@ -5779,7 +5779,7 @@ LOCAL_FUNCTION node_api_lookup_run
     mov     %rcx, S8(%rsp)
     mov     NODE_STATE_SLOT(%r12), %rdi     # the state's own root
     lea     Node_config(%rbx), %rsi
-    call    node_fork
+    call    lantern_node_fork
     mov     %rax, %r10
     mov     %r12, %rdi
     mov     (Node_config + CONFIG_STATE_CACHE)(%rbx), %rsi
@@ -5816,12 +5816,12 @@ LOCAL_FUNCTION node_api_lookup_run
     LEAVE 0
 98: mov     $LANTERN_INVALID_EVENT, %eax
     LEAVE 0
-END_FUNCTION node_api_lookup_run
+END_FUNCTION lantern_node_api_lookup_run
 
 /* ---------------------------------------------------------------- Streams (node.md, NodeApi) */
 
 /* rax = the free NodeApi entries of the node rbx: the capacity past the count, and the free ones below it. Uses rcx, rdx, rsi, r10. */
-LOCAL_FUNCTION node_api_free
+LOCAL_FUNCTION lantern_node_api_free
     UNWIND_END_PROLOGUE
     PART    %rsi, %r10, %rbx, Node_api
     mov     Node_pool(%rbx), %rax
@@ -5839,10 +5839,10 @@ LOCAL_FUNCTION node_api_free
     dec     %r10
     jmp     1b
 9:  ret
-END_FUNCTION node_api_free
+END_FUNCTION lantern_node_api_free
 
 /* rax = the index of the NodeApi entry of the connection rdi, or 2^64 - 1; rdx = the entry. Uses rcx, r10. */
-LOCAL_FUNCTION node_api_find
+LOCAL_FUNCTION lantern_node_api_find
     UNWIND_END_PROLOGUE
     PART    %rdx, %r10, %rbx, Node_api
     xor     %eax, %eax
@@ -5857,7 +5857,7 @@ LOCAL_FUNCTION node_api_find
     jmp     1b
 3:  mov     $-1, %rax
 4:  ret
-END_FUNCTION node_api_find
+END_FUNCTION lantern_node_api_find
 
 /*
  * (connection rdi, route rsi, flags rdx, view rcx) -> rax: produceBlockV3 (node.md, Block
@@ -5866,7 +5866,7 @@ END_FUNCTION node_api_find
  * else the status of the error to answer. r12 the entry, r13 its index; S7 the route, S8 the view,
  * S9 the connection, S10 the flags.
  */
-LOCAL_FUNCTION node_api_produce
+LOCAL_FUNCTION lantern_node_api_produce
     ENTER 0
     mov     %rdi, S9(%rsp)
     mov     %rsi, S7(%rsp)
@@ -5878,7 +5878,7 @@ LOCAL_FUNCTION node_api_produce
     cmpq    $0, ApiView_look_copy(%rcx)     # the state: a copy at the slot; busy with its check
     je      8f
     orq     $(API_STREAM_OWN_STATE | API_STREAM_BUSY), S10(%rsp)
-    call    node_api_new
+    call    lantern_node_api_new
     mov     %rax, %r13
     mov     %rdx, %r12
     mov     %rdx, %rdi
@@ -5896,7 +5896,7 @@ LOCAL_FUNCTION node_api_produce
     mov     ApiRoute_slot(%rax), %rdi
     mov     %rdi, NodeApi_slot(%r12)
     lea     Node_config(%rbx), %rsi
-    call    node_fork
+    call    lantern_node_fork
     mov     %rax, NodeApi_fork(%r12)
     movq    $NODE_PRODUCE_STATE, NodeApi_member(%r12)
     lea     NodeApi_cursor(%r12), %rdi      # the request: randao_reveal, graffiti, the skip flag
@@ -5926,19 +5926,19 @@ LOCAL_FUNCTION node_api_produce
     xor     %ecx, %ecx
     mov     %r13, %r8
     xor     %r9d, %r9d
-    call    node_work
+    call    lantern_node_work
     xor     %eax, %eax
     LEAVE 0
 8:  mov     $500, %eax
     LEAVE 0
-END_FUNCTION node_api_produce
+END_FUNCTION lantern_node_api_produce
 
 /*
  * The NODE_EV_WORK_DONE rdi of a work of block production (node.md, Block production): the
  * produceBlockV3 entry at its target goes on, or answers its error. r12 the event, r13 the entry;
  * S7 the result.
  */
-LOCAL_FUNCTION node_produce_done
+LOCAL_FUNCTION lantern_node_produce_done
     ENTER 0
     mov     %rdi, %r12
     mov     NodeAction_target(%r12), %rax
@@ -5963,14 +5963,14 @@ LOCAL_FUNCTION node_produce_done
     movq    $0, NodeApi_root(%r13)
     mov     $NODE_ACT_BYTES_FREE, %edi
     xor     %edx, %edx
-    call    node_ids
+    call    lantern_node_ids
 1:  movq    $0, NodeApi_root(%r13)
 2:  testq   $API_STREAM_GONE, NodeApi_flags(%r13)  # the connection closed meanwhile: the entry ends
     jz      3f
     mov     %r13, %rdi
-    call    node_produce_release
+    call    lantern_node_produce_release
     mov     %r13, %rdi
-    call    node_api_end
+    call    lantern_node_api_end
     LEAVE 0
 3:  mov     S7(%rsp), %rax
     mov     NodeAction_work_kind(%r12), %rcx
@@ -5984,11 +5984,11 @@ LOCAL_FUNCTION node_produce_done
     jnz     8f
     mov     NodeApi_slot(%r13), %rdi        # from bellatrix with a head of a payload: the engine's payload first
     lea     Node_config(%rbx), %rsi
-    call    node_fork
+    call    lantern_node_fork
     cmp     $FORK_BELLATRIX, %rax
     jb      10f
     lea     Node_head_root(%rbx), %rdi
-    call    node_store_find
+    call    lantern_node_store_find
     cmp     $-1, %rax
     je      10f
     mov     BlockNode_block_hash(%rdx), %rax
@@ -6000,17 +6000,17 @@ LOCAL_FUNCTION node_produce_done
     mov     %r13, %rdi                      # with a builder: its getHeader
     mov     %r12, %rsi
     lea     BlockNode_block_hash(%rdx), %rdx
-    call    node_produce_header
+    call    lantern_node_produce_header
     LEAVE 0
 10: movq    $NODE_PRODUCE_FOLD, NodeApi_member(%r13)
     movq    $0, NodeApi_filter_slot(%r13)
     mov     %r13, %rdi
-    call    node_produce_next
+    call    lantern_node_produce_next
     LEAVE 0
 20: cmp     $NODE_WORK_PRODUCE_FOLD, %rcx   # the draft holds the entry, or the rules left it out: the next
     jne     25f
     mov     %r13, %rdi
-    call    node_produce_next
+    call    lantern_node_produce_next
     LEAVE 0
 25: cmp     $NODE_WORK_PRODUCE_ETH1, %rcx   # PRODUCE_ETH1: the snapshot goes; then the header call's wait, at the quiet point
     jne     30f
@@ -6018,7 +6018,7 @@ LOCAL_FUNCTION node_produce_done
     movq    $0, (NodeApi_cursor + PRODUCE_ETH1_SNAP)(%r13)
     mov     $NODE_ACT_BYTES_FREE, %edi
     xor     %edx, %edx
-    call    node_ids
+    call    lantern_node_ids
     mov     $500, %esi
     cmpq    $0, S7(%rsp)
     jne     8f
@@ -6030,22 +6030,22 @@ LOCAL_FUNCTION node_produce_done
     movq    $0, (NodeApi_cursor + PRODUCE_BID)(%r13)
     mov     $NODE_ACT_BYTES_FREE, %edi
     xor     %edx, %edx
-    call    node_ids
+    call    lantern_node_ids
     cmpq    $0, S7(%rsp)
     jne     32f
     lea     NodeEvent_chunk(%r12), %rdi
-    call    node_put
+    call    lantern_node_put
     mov     %rax, (NodeApi_cursor + PRODUCE_BID)(%r13)
 32: mov     %r13, %rdi
-    call    node_produce_build
+    call    lantern_node_produce_build
     LEAVE 0
 31: mov     $500, %esi                      # PRODUCE_BLOCK: the block's bytes, answered as a block's
     cmpq    $0, S7(%rsp)
     jne     8f
     mov     %r13, %rdi
-    call    node_produce_release
+    call    lantern_node_produce_release
     lea     NodeEvent_chunk(%r12), %rdi
-    call    node_put
+    call    lantern_node_put
     mov     %rax, NodeApi_data(%r13)
     orq     $API_STREAM_OWN, NodeApi_flags(%r13)
     cmpq    $0, NodeEvent_checkpoint(%r12)  # a blinded block
@@ -6060,15 +6060,15 @@ LOCAL_FUNCTION node_produce_done
     mov     $(NodeApi_slot - NodeApi_cursor), %esi
     call    lantern_zero
     mov     %r13, %rdi
-    call    node_produce_answer
+    call    lantern_node_produce_answer
     LEAVE 0
 8:  mov     %r13, %rdi
-    call    node_produce_fail
+    call    lantern_node_produce_fail
 9:  LEAVE 0
-END_FUNCTION node_produce_done
+END_FUNCTION lantern_node_produce_done
 
 /* The answer of the produceBlockV3 entry rdi, whose block's bytes are its data: its first chunk. Uses rax, rcx, rdx, r10. */
-LOCAL_FUNCTION node_produce_answer
+LOCAL_FUNCTION lantern_node_produce_answer
     FRAME 0
     PART    %rcx, %r10, %rbx, Node_api
     mov     %rdi, %rax
@@ -6077,9 +6077,9 @@ LOCAL_FUNCTION node_produce_answer
     mov     $NodeApi__mem, %ecx
     div     %rcx
     mov     %rdi, %rdx
-    call    node_api_chunk_work
+    call    lantern_node_api_chunk_work
     UNFRAME 0
-END_FUNCTION node_produce_answer
+END_FUNCTION lantern_node_produce_answer
 
 /*
  * (connection rdi, route rsi, flags rdx, request rcx) -> rax: publishBlockV2 (node.md, Block
@@ -6088,7 +6088,7 @@ END_FUNCTION node_produce_answer
  * entry, r13 its index; S7 the route, S8 the request, S9 the connection, S10 the flags. Locals: L a
  * ByteList view of the body.
  */
-LOCAL_FUNCTION node_api_publish
+LOCAL_FUNCTION lantern_node_api_publish
     ENTER 32
     mov     %rdi, S9(%rsp)
     mov     %rsi, S7(%rsp)
@@ -6104,7 +6104,7 @@ LOCAL_FUNCTION node_api_publish
     mov     %rdx, L(%rsp)
     mov     %rax, (L + 8)(%rsp)
     mov     %rdx, (L + 16)(%rsp)
-    call    node_api_new
+    call    lantern_node_api_new
     mov     %rax, %r13
     mov     %rdx, %r12
     mov     %rdx, %rdi
@@ -6133,7 +6133,7 @@ LOCAL_FUNCTION node_api_publish
     setae   %al
 1:  mov     %rax, (NodeApi_cursor + PUBLISH_BLINDED)(%r12)
     lea     L(%rsp), %rdi
-    call    node_put
+    call    lantern_node_put
     mov     %rax, NodeApi_data(%r12)
     mov     $NODE_WORK_PUBLISH_DECODE, %edi
     xor     %esi, %esi
@@ -6147,25 +6147,25 @@ LOCAL_FUNCTION node_api_publish
     mov     (NodeApi_cursor + PUBLISH_BLINDED)(%r12), %rax
     shl     $9, %rax
     or      %rax, %r9
-    call    node_work
+    call    lantern_node_work
     xor     %eax, %eax
     LEAVE 32
 8:  mov     $400, %eax
     LEAVE 32
-END_FUNCTION node_api_publish
+END_FUNCTION lantern_node_api_publish
 
 /*
  * The NODE_EV_WORK_DONE rdi of a work of block publishing (node.md, Block publishing): the
  * publishBlockV2 entry at its target goes on, or answers. r12 the event, r13 the entry; S7 the
  * block's index.
  */
-LOCAL_FUNCTION node_publish_done
+LOCAL_FUNCTION lantern_node_publish_done
     ENTER 0
     mov     %rdi, %r12
     mov     NodeAction_target(%r12), %rax
     cmp     $-1, %rax                       # a sidecar of the reconstruction
     jne     100f
-    call    node_recon_sidecar_done
+    call    lantern_node_recon_sidecar_done
     LEAVE 0
 100: PART   %r13, %rcx, %rbx, Node_api
     cmp     %rcx, %rax
@@ -6186,7 +6186,7 @@ LOCAL_FUNCTION node_publish_done
     cmpq    $0, NodeEvent_result(%r12)
     je      1f
 2:  mov     %r13, %rdi
-    call    node_publish_end
+    call    lantern_node_publish_end
     LEAVE 0
 1:  cmpq    $NODE_WORK_PUBLISH_SIDECAR, NodeAction_work_kind(%r12)  # a sidecar past the last: the sidecars end
     jne     12f
@@ -6194,7 +6194,7 @@ LOCAL_FUNCTION node_publish_done
     je      12f
     movq    $0, (NodeApi_cursor + 40)(%r13)
     mov     %r13, %rdi
-    call    node_publish_drop
+    call    lantern_node_publish_drop
     LEAVE 0
 12: mov     $400, %esi                      # a check that fails: 400
     cmpq    $0, NodeEvent_result(%r12)
@@ -6203,7 +6203,7 @@ LOCAL_FUNCTION node_publish_done
     cmp     $NODE_WORK_PUBLISH_DECODE, %rax
     jne     20f
     lea     NodeEvent_chunk(%r12), %rdi     # DECODE: the block's bytes, root, slot, blob count, parent
-    call    node_put
+    call    lantern_node_put
     mov     %rax, NodeApi_filter_slot(%r13)
     lea     NodeApi_root(%r13), %rdi
     lea     NodeEvent_root(%r12), %rsi
@@ -6218,12 +6218,12 @@ LOCAL_FUNCTION node_publish_done
     COPY32  %rdi, %rsi
     mov     NodeApi_slot(%r13), %rdi        # a slot of another fork than consensus_version's: 400
     lea     Node_config(%rbx), %rsi
-    call    node_fork
+    call    lantern_node_fork
     mov     $400, %esi
     cmp     NodeApi_fork(%r13), %rax
     jne     90f
     lea     NodeApi_root(%r13), %rdi        # a block the node holds: 200
-    call    node_find_block
+    call    lantern_node_find_block
     cmp     $-1, %rax
     je      11f
     mov     $200, %esi
@@ -6234,7 +6234,7 @@ LOCAL_FUNCTION node_publish_done
     cmpq    $0, (NodeApi_cursor + 16)(%r13)    # with blobs: the sidecars, else the check
     je      30f
     mov     %r13, %rdi
-    call    node_publish_sidecars_work
+    call    lantern_node_publish_sidecars_work
     LEAVE 0
 20: cmp     $NODE_WORK_PUBLISH_SIDECARS, %rax  # SIDECARS: the check
     je      30f
@@ -6242,7 +6242,7 @@ LOCAL_FUNCTION node_publish_done
     jne     22f
     mov     %r13, %rdi                      # SIDECAR: it goes out and stays, then the next
     mov     %r12, %rsi
-    call    node_publish_sidecar_done
+    call    lantern_node_publish_sidecar_done
     LEAVE 0
 22: cmp     $NODE_WORK_PUBLISH_CHECK, %rax
     jne     99f
@@ -6250,12 +6250,12 @@ LOCAL_FUNCTION node_publish_done
     je      25f
     mov     %r13, %rdi
     lea     NodeEvent_chunk(%r12), %rsi
-    call    node_publish_submit
+    call    lantern_node_publish_submit
     test    %rax, %rax
     jz      99f
     mov     %rax, %rsi
     jmp     90f
-25: call    node_new_block                  # CHECK: the block's NodeBlock, before the publish
+25: call    lantern_node_new_block                  # CHECK: the block's NodeBlock, before the publish
     mov     %rax, S7(%rsp)
     mov     %rdi, %rdx
     lea     NodeBlock_root(%rdx), %rdi
@@ -6279,41 +6279,41 @@ LOCAL_FUNCTION node_publish_done
     lea     NodeApi_root(%r13), %rsi
     mov     NodeApi_slot(%r13), %rdx
     xor     %ecx, %ecx
-    call    node_api_root_event
+    call    lantern_node_api_root_event
     testq   $NODE_FLAG_SUBSCRIBED, Node_flags(%rbx)  # subscribed: the block out on beacon_block
     jz      21f
     mov     $GOSSIP_BEACON_BLOCK, %edi
     lea     NodeEvent_chunk(%r12), %rsi
     xor     %edx, %edx
-    call    node_publish
+    call    lantern_node_publish
 21: movq    $NODE_PUBLISH_IMPORT, NodeApi_member(%r13)  # the import, the sidecars one at a time, then the answer
     cmpq    $0, NodeApi_filter_index(%r13)
     je      23f
     movq    $0, (NodeApi_cursor + 40)(%r13)
     mov     %r13, %rdi
-    call    node_publish_sidecar_work
+    call    lantern_node_publish_sidecar_work
     jmp     24f
 23: mov     %r13, %rdi
-    call    node_publish_drop
+    call    lantern_node_publish_drop
 24: mov     S7(%rsp), %rdi
-    call    node_try_import
+    call    lantern_node_try_import
     LEAVE 0
 30: mov     %r13, %rdi                      # the check
-    call    node_publish_check_work
+    call    lantern_node_publish_check_work
     test    %rax, %rax
     jz      99f
     mov     %rax, %rsi
 90: mov     %r13, %rdi
-    call    node_publish_answer
+    call    lantern_node_publish_answer
 99: LEAVE 0
-END_FUNCTION node_publish_done
+END_FUNCTION lantern_node_publish_done
 
 /*
  * The PUBLISH_SIDECARS of the publishBlockV2 entry rdi (node.md, NODE_PUBLISH_SIDECARS): a
  * BYTES_NEW of the sidecars' room, its id the entry's filter_index, then the work. Locals: the
  * entry, the room, the action.
  */
-LOCAL_FUNCTION node_publish_sidecars_work
+LOCAL_FUNCTION lantern_node_publish_sidecars_work
     FRAME 32
     mov     %rdi, (%rsp)
     mov     (NodeApi_cursor + 16)(%rdi), %rax   # the blob count
@@ -6329,9 +6329,9 @@ LOCAL_FUNCTION node_publish_sidecars_work
     mov     %rax, 8(%rsp)
     mov     $NODE_ACT_BYTES_NEW, %edi
     mov     $NODE_ACT_BYTES_NEW_SIZE, %esi
-    call    node_act
+    call    lantern_node_act
     mov     %rax, 16(%rsp)
-    call    node_new_id
+    call    lantern_node_new_id
     mov     16(%rsp), %rcx
     mov     %rax, 16(%rcx)
     mov     8(%rsp), %rdx
@@ -6360,12 +6360,12 @@ LOCAL_FUNCTION node_publish_sidecars_work
     mov     24(%rsp), %rcx
     mov     $NODE_WORK_PUBLISH_SIDECARS, %edi
     xor     %esi, %esi
-    call    node_work
+    call    lantern_node_work
     UNFRAME 32
-END_FUNCTION node_publish_sidecars_work
+END_FUNCTION lantern_node_publish_sidecars_work
 
 /* The PUBLISH_SIDECAR of the next sidecar (cursor + 40) of the publishBlockV2 entry rdi in NODE_PUBLISH_IMPORT. */
-LOCAL_FUNCTION node_publish_sidecar_work
+LOCAL_FUNCTION lantern_node_publish_sidecar_work
     FRAME 0
     orq     $API_STREAM_BUSY, NodeApi_flags(%rdi)
     mov     NodeApi_filter_index(%rdi), %rdx
@@ -6382,9 +6382,9 @@ LOCAL_FUNCTION node_publish_sidecar_work
     mov     $NODE_WORK_PUBLISH_SIDECAR, %edi
     xor     %esi, %esi
     xor     %ecx, %ecx
-    call    node_work
+    call    lantern_node_work
     UNFRAME 0
-END_FUNCTION node_publish_sidecar_work
+END_FUNCTION lantern_node_publish_sidecar_work
 
 /*
  * The WORK_DONE rdi of a PUBLISH_SIDECAR of the reconstruction (node.md): recon_state 2; a valid
@@ -6392,7 +6392,7 @@ END_FUNCTION node_publish_sidecar_work
  * NODE_FLAG_SUBSCRIBED, a column of columns and recon_slot above F's slot. r13 the event, S7 the
  * sidecar's id.
  */
-LOCAL_FUNCTION node_recon_sidecar_done
+LOCAL_FUNCTION lantern_node_recon_sidecar_done
     ENTER 0
     mov     %rdi, %r13
     movq    $2, Node_recon_state(%rbx)
@@ -6400,13 +6400,13 @@ LOCAL_FUNCTION node_recon_sidecar_done
     jne     9f
     lea     NodeEvent_root(%r13), %rdi
     mov     NodeEvent_index(%r13), %rsi
-    call    node_blob_held
+    call    lantern_node_blob_held
     test    %rax, %rax
     jnz     3f
     lea     NodeEvent_chunk(%r13), %rdi
-    call    node_put
+    call    lantern_node_put
     mov     %rax, S7(%rsp)
-    call    node_new_blob
+    call    lantern_node_new_blob
     mov     %rdi, %rdx
     lea     NodeBlob_block_root(%rdx), %rdi
     lea     NodeEvent_root(%r13), %rsi
@@ -6421,11 +6421,11 @@ LOCAL_FUNCTION node_recon_sidecar_done
     mov     (NodeEvent_chunk + 16)(%r13), %rax
     mov     %rax, NodeBlob_length(%rdx)
     lea     NodeEvent_root(%r13), %rdi
-    call    node_blob_added
+    call    lantern_node_blob_added
 3:  testq   $NODE_FLAG_SUBSCRIBED, Node_flags(%rbx)  # subscribed: out on its subnet's topic
     jz      9f
     mov     NodeEvent_index(%r13), %rdi
-    call    node_sampled
+    call    lantern_node_sampled
     test    %rax, %rax
     jz      9f
     mov     Store_finalized_checkpoint(%rbp), %rax
@@ -6440,9 +6440,9 @@ LOCAL_FUNCTION node_recon_sidecar_done
     div     %rcx
     mov     $GOSSIP_DATA_COLUMN_SIDECAR, %edi
     lea     NodeEvent_chunk(%r13), %rsi
-    call    node_publish
+    call    lantern_node_publish
 9:  LEAVE 0
-END_FUNCTION node_recon_sidecar_done
+END_FUNCTION lantern_node_recon_sidecar_done
 
 /*
  * The WORK_DONE rsi of a valid PUBLISH_SIDECAR of the publishBlockV2 entry rdi: the sidecar stays
@@ -6450,7 +6450,7 @@ END_FUNCTION node_recon_sidecar_done
  * out on its subnet's topic with NODE_FLAG_SUBSCRIBED, then the next. r12 the entry, r13 the
  * event; S7 the sidecar's id. Step code keeps r14 and r15.
  */
-LOCAL_FUNCTION node_publish_sidecar_done
+LOCAL_FUNCTION lantern_node_publish_sidecar_done
     ENTER 0
     mov     %rdi, %r12
     mov     %rsi, %r13
@@ -6458,18 +6458,18 @@ LOCAL_FUNCTION node_publish_sidecar_done
     cmpq    $FORK_FULU, NodeApi_fork(%r12)
     jb      1f
     mov     NodeEvent_index(%r13), %rdi     # a column the node samples
-    call    node_sampled
+    call    lantern_node_sampled
     test    %rax, %rax
     jz      3f
 1:  lea     NodeEvent_root(%r13), %rdi      # one the node does not hold yet
     mov     NodeEvent_index(%r13), %rsi
-    call    node_blob_held
+    call    lantern_node_blob_held
     test    %rax, %rax
     jnz     3f
     lea     NodeEvent_chunk(%r13), %rdi
-    call    node_put
+    call    lantern_node_put
     mov     %rax, S7(%rsp)
-    call    node_new_blob
+    call    lantern_node_new_blob
     mov     %rdi, %rdx
     lea     NodeBlob_block_root(%rdx), %rdi
     lea     NodeEvent_root(%r13), %rsi
@@ -6484,14 +6484,14 @@ LOCAL_FUNCTION node_publish_sidecar_done
     mov     (NodeEvent_chunk + 16)(%r13), %rax
     mov     %rax, NodeBlob_length(%rdx)
     lea     NodeEvent_root(%r13), %rdi
-    call    node_blob_added
+    call    lantern_node_blob_added
 3:  mov     $API_TOPIC_BLOB_SIDECAR, %eax   # its event: of its NodeBlob's bytes, else of a copy for the work
     mov     $API_TOPIC_DATA_COLUMN_SIDECAR, %ecx
     cmpq    $FORK_FULU, NodeApi_fork(%r12)
     cmovae  %rcx, %rax
     mov     %rax, S8(%rsp)
     mov     %rax, %rdi
-    call    node_api_subscribed
+    call    lantern_node_api_subscribed
     test    %rax, %rax
     jz      39f
     mov     S7(%rsp), %rax
@@ -6499,7 +6499,7 @@ LOCAL_FUNCTION node_publish_sidecar_done
     test    %rax, %rax
     jnz     38f
     lea     NodeEvent_chunk(%r13), %rdi
-    call    node_put
+    call    lantern_node_put
     mov     %rax, S9(%rsp)
 38: mov     $NODE_WORK_API_EVENT, %edi
     xor     %esi, %esi
@@ -6509,14 +6509,14 @@ LOCAL_FUNCTION node_publish_sidecar_done
     mov     NodeApi_fork(%r12), %r9
     shl     $16, %r9
     or      S8(%rsp), %r9
-    call    node_work
+    call    lantern_node_work
     mov     S9(%rsp), %rax
     cmp     S7(%rsp), %rax
     je      39f
     mov     $NODE_ACT_BYTES_FREE, %edi
     mov     S9(%rsp), %rsi
     xor     %edx, %edx
-    call    node_ids
+    call    lantern_node_ids
 39: testq   $NODE_FLAG_SUBSCRIBED, Node_flags(%rbx)  # subscribed: out on its subnet's topic
     jz      4f
     mov     NodeEvent_index(%r13), %rax
@@ -6537,7 +6537,7 @@ LOCAL_FUNCTION node_publish_sidecar_done
     xor     %edx, %edx
     div     %rcx
     lea     NodeEvent_chunk(%r13), %rsi
-    call    node_publish
+    call    lantern_node_publish
 4:  mov     (NodeApi_cursor + 40)(%r12), %rax   # the next sidecar; after the last, the body and the sidecars go
     inc     %rax
     mov     %rax, (NodeApi_cursor + 40)(%r12)
@@ -6548,11 +6548,11 @@ LOCAL_FUNCTION node_publish_sidecar_done
     mov     %r12, %rdi
     cmp     %rcx, %rax
     jae     5f
-    call    node_publish_sidecar_work
+    call    lantern_node_publish_sidecar_work
     LEAVE 0
-5:  call    node_publish_drop
+5:  call    lantern_node_publish_drop
     LEAVE 0
-END_FUNCTION node_publish_sidecar_done
+END_FUNCTION lantern_node_publish_sidecar_done
 
 /*
  * The PUBLISH_CHECK of the publishBlockV2 entry rdi (node.md, NODE_PUBLISH_CHECK): rax = 0 once
@@ -6560,11 +6560,11 @@ END_FUNCTION node_publish_sidecar_done
  * entry, r13 the parent's entry; S7 the copy, S8 the head's state id, S9 the parent's fork, S10
  * the copy's slot.
  */
-LOCAL_FUNCTION node_publish_check_work
+LOCAL_FUNCTION lantern_node_publish_check_work
     ENTER 0
     mov     %rdi, %r12
     lea     Node_head_root(%rbx), %rdi
-    call    node_find_block
+    call    lantern_node_find_block
     cmp     $-1, %rax
     je      9f
     mov     NodeBlock_state_id(%rdx), %rax
@@ -6572,7 +6572,7 @@ LOCAL_FUNCTION node_publish_check_work
     jz      9f
     mov     %rax, S8(%rsp)
     lea     (NodeApi_cursor + 32)(%r12), %rdi
-    call    node_find_block
+    call    lantern_node_find_block
     cmp     $-1, %rax
     je      8f
     mov     %rdx, %r13
@@ -6580,25 +6580,25 @@ LOCAL_FUNCTION node_publish_check_work
     je      8f
     movq    $NODE_PUBLISH_CHECK, NodeApi_member(%r12)
     orq     $API_STREAM_BUSY, NodeApi_flags(%r12)
-    call    node_new_id                     # the copy, across the fork boundaries to the slot
+    call    lantern_node_new_id                     # the copy, across the fork boundaries to the slot
     mov     %rax, S7(%rsp)
     mov     $NODE_ACT_STATE_COPY, %edi
     mov     NodeBlock_state_id(%r13), %rsi
     mov     %rax, %rdx
-    call    node_ids
+    call    lantern_node_ids
     mov     S7(%rsp), %rdi
     mov     NodeBlock_state_id(%r13), %rsi
     mov     NodeBlock_slot(%r13), %rdx
     mov     NodeApi_slot(%r12), %rcx
-    call    node_cross
+    call    lantern_node_cross
     mov     %rax, S7(%rsp)
     mov     NodeBlock_slot(%r13), %rdi      # the copy's slot: the parent's, or the first of the block's fork after an upgrade
     lea     Node_config(%rbx), %rsi
-    call    node_fork
+    call    lantern_node_fork
     mov     %rax, S9(%rsp)
     mov     NodeApi_slot(%r12), %rdi
     lea     Node_config(%rbx), %rsi
-    call    node_fork
+    call    lantern_node_fork
     mov     NodeBlock_slot(%r13), %rcx
     mov     %rcx, S10(%rsp)
     cmp     S9(%rsp), %rax
@@ -6617,7 +6617,7 @@ LOCAL_FUNCTION node_publish_check_work
     xor     %edx, %edx
     xor     %ecx, %ecx
     xor     %r8d, %r8d
-    call    node_work
+    call    lantern_node_work
 2:  PART    %rcx, %rdx, %rbx, Node_api      # the entry's index
     mov     %r12, %rax
     sub     %rcx, %rax
@@ -6633,32 +6633,32 @@ LOCAL_FUNCTION node_publish_check_work
     mov     (NodeApi_cursor + PUBLISH_BLINDED)(%r12), %rax  # a blinded block's check
     shl     $8, %rax
     or      %rax, %r9
-    call    node_work
+    call    lantern_node_work
     mov     S8(%rsp), %rcx
     mov     %rcx, NodeAction_state_c(%rax)
     mov     $NODE_ACT_STATE_FREE, %edi
     mov     S7(%rsp), %rsi
     xor     %edx, %edx
-    call    node_ids
+    call    lantern_node_ids
     xor     %eax, %eax
     LEAVE 0
 8:  mov     $400, %eax
     LEAVE 0
 9:  mov     $500, %eax
     LEAVE 0
-END_FUNCTION node_publish_check_work
+END_FUNCTION lantern_node_publish_check_work
 
 /* The ids of the publishBlockV2 entry rdi but the block's bytes go: its body and sidecars. Locals: the entry. */
-LOCAL_FUNCTION node_publish_drop
+LOCAL_FUNCTION lantern_node_publish_drop
     FRAME 16
     mov     %rdi, (%rsp)
-    mov     NodeApi_data(%rdi), %rsi        # each field cleared first: node_ids leaves an entry's own bytes to it
+    mov     NodeApi_data(%rdi), %rsi        # each field cleared first: lantern_node_ids leaves an entry's own bytes to it
     movq    $0, NodeApi_data(%rdi)
     test    %rsi, %rsi
     jz      1f
     mov     $NODE_ACT_BYTES_FREE, %edi
     xor     %edx, %edx
-    call    node_ids
+    call    lantern_node_ids
 1:  mov     (%rsp), %rdi
     mov     NodeApi_filter_index(%rdi), %rsi
     movq    $0, NodeApi_filter_index(%rdi)
@@ -6666,12 +6666,12 @@ LOCAL_FUNCTION node_publish_drop
     jz      2f
     mov     $NODE_ACT_BYTES_FREE, %edi
     xor     %edx, %edx
-    call    node_ids
+    call    lantern_node_ids
 2:  UNFRAME 16
-END_FUNCTION node_publish_drop
+END_FUNCTION lantern_node_publish_drop
 
 /* The end of the publishBlockV2 entry rdi, its ids with it. Locals: the entry. */
-LOCAL_FUNCTION node_publish_end
+LOCAL_FUNCTION lantern_node_publish_end
     FRAME 16
     mov     %rdi, (%rsp)
     mov     (NodeApi_cursor + PUBLISH_CALL)(%rdi), %rax     # its builder call in flight answers no entry
@@ -6682,7 +6682,7 @@ LOCAL_FUNCTION node_publish_end
     imul    $NODE_BUILDER_CALL_SIZE, %rax, %rax
     movq    $-1, (Node_builder_calls + 8)(%rbx,%rax)
 2:  mov     (%rsp), %rdi
-    call    node_publish_drop
+    call    lantern_node_publish_drop
     mov     (%rsp), %rdi
     mov     NodeApi_filter_slot(%rdi), %rsi
     movq    $0, NodeApi_filter_slot(%rdi)
@@ -6690,17 +6690,17 @@ LOCAL_FUNCTION node_publish_end
     jz      1f
     mov     $NODE_ACT_BYTES_FREE, %edi
     xor     %edx, %edx
-    call    node_ids
+    call    lantern_node_ids
 1:  mov     (%rsp), %rdi
-    call    node_api_end
+    call    lantern_node_api_end
     UNFRAME 16
-END_FUNCTION node_publish_end
+END_FUNCTION lantern_node_publish_end
 
 /*
  * The answer rsi (200, 202, or an error) of the publishBlockV2 entry rdi, then its end; with
  * API_STREAM_GONE no answer. Locals: the entry.
  */
-LOCAL_FUNCTION node_publish_answer
+LOCAL_FUNCTION lantern_node_publish_answer
     FRAME 16
     mov     %rdi, (%rsp)
     mov     NodeApi_flags(%rdi), %rax
@@ -6719,17 +6719,17 @@ LOCAL_FUNCTION node_publish_answer
     test    $API_STREAM_HTTP10, %rax
     jz      1f
     mov     $API_R_KEEP, %r8d
-1:  call    node_api_send
+1:  call    lantern_node_api_send
 2:  mov     (%rsp), %rdi
-    call    node_publish_end
+    call    lantern_node_publish_end
     UNFRAME 16
-END_FUNCTION node_publish_answer
+END_FUNCTION lantern_node_publish_answer
 
 /*
  * After the head (node.md, NODE_PUBLISH_IMPORT): each publishBlockV2 entry whose block's import
  * ended answers, 200 for a block the node imported, 202 for another. r12 an entry, r13 the count.
  */
-LOCAL_FUNCTION node_publish_poll
+LOCAL_FUNCTION lantern_node_publish_poll
     ENTER 0
     PART    %r12, %r13, %rbx, Node_api
 1:  test    %r13, %r13
@@ -6743,7 +6743,7 @@ LOCAL_FUNCTION node_publish_poll
     testq   $API_STREAM_BUSY, NodeApi_flags(%r12)   # a work of it in flight
     jnz     2f
     lea     NodeApi_root(%r12), %rdi
-    call    node_find_block
+    call    lantern_node_find_block
     mov     $202, %esi
     cmp     $-1, %rax
     je      3f
@@ -6754,15 +6754,15 @@ LOCAL_FUNCTION node_publish_poll
     jne     2f
     mov     $200, %esi
 3:  mov     %r12, %rdi
-    call    node_publish_answer
+    call    lantern_node_publish_answer
 2:  add     $NodeApi__mem, %r12
     dec     %r13
     jmp     1b
 9:  LEAVE 0
-END_FUNCTION node_publish_poll
+END_FUNCTION lantern_node_publish_poll
 
 /* rax = the count of the publishBlockV2 entries. Uses rcx, rdx, rsi. */
-LOCAL_FUNCTION node_api_publish_count
+LOCAL_FUNCTION lantern_node_api_publish_count
     UNWIND_END_PROLOGUE
     xor     %eax, %eax
     PART    %rcx, %rdx, %rbx, Node_api
@@ -6777,7 +6777,7 @@ LOCAL_FUNCTION node_api_publish_count
     dec     %rdx
     jmp     1b
 9:  ret
-END_FUNCTION node_api_publish_count
+END_FUNCTION lantern_node_api_publish_count
 
 /*
  * The next work of the produceBlockV3 entry rdi in NODE_PRODUCE_FOLD: a PRODUCE_FOLD of the next
@@ -6785,7 +6785,7 @@ END_FUNCTION node_api_publish_count
  * api_produce_kinds; after the last, NODE_PRODUCE_BUILD and its PRODUCE_BLOCK. r12 the entry, r13
  * its index; S7 the draft's action, S8 the pool index, S9 the kind's index, S10 its topic.
  */
-LOCAL_FUNCTION node_produce_next
+LOCAL_FUNCTION lantern_node_produce_next
     ENTER 0
     mov     %rdi, %r12
     PART    %rcx, %r10, %rbx, Node_api
@@ -6800,9 +6800,9 @@ LOCAL_FUNCTION node_produce_next
     jne     11f
     mov     $NODE_ACT_BYTES_NEW, %edi
     mov     $NODE_ACT_BYTES_NEW_SIZE, %esi
-    call    node_act
+    call    lantern_node_act
     mov     %rax, S7(%rsp)
-    call    node_new_id
+    call    lantern_node_new_id
     mov     S7(%rsp), %rcx
     mov     %rax, 16(%rcx)
     mov     %rax, NodeApi_data(%r12)
@@ -6849,13 +6849,13 @@ LOCAL_FUNCTION node_produce_next
     mov     NodeApi_data(%r12), %rcx
     mov     %r13, %r8
     mov     NodeApi_state(%r12), %rsi
-    call    node_work
+    call    lantern_node_work
     LEAVE 0
 3:  incq    S9(%rsp)                        # the next kind, from the pool's first entry
     movq    $0, S8(%rsp)
     jmp     1b
 5:  movq    $NODE_PRODUCE_ETH1, NodeApi_member(%r12)  # after the last fold: the eth1 vote and deposits from the follower's snapshot
-    call    node_eth1_snapshot
+    call    lantern_node_eth1_snapshot
     mov     %rax, (NodeApi_cursor + PRODUCE_ETH1_SNAP)(%r12)
     mov     $NODE_WORK_PRODUCE_ETH1, %edi
     mov     NodeApi_state(%r12), %rsi
@@ -6863,16 +6863,16 @@ LOCAL_FUNCTION node_produce_next
     mov     NodeApi_data(%r12), %rcx
     mov     %r13, %r8
     xor     %r9d, %r9d
-    call    node_work
+    call    lantern_node_work
     LEAVE 0
-END_FUNCTION node_produce_next
+END_FUNCTION lantern_node_produce_next
 
 /*
  * The produceBlockV3 entry rdi in NODE_PRODUCE_BID with no call in flight goes on (node.md, Block
  * production): with the builder's answer at PRODUCE_BID a PRODUCE_BID work of it, else the build.
  * r12 the entry, r13 its index.
  */
-LOCAL_FUNCTION node_produce_bid_go
+LOCAL_FUNCTION lantern_node_produce_bid_go
     ENTER 0
     mov     %rdi, %r12
     PART    %rcx, %r10, %rbx, Node_api
@@ -6891,19 +6891,19 @@ LOCAL_FUNCTION node_produce_bid_go
     xor     %edx, %edx
     mov     %r13, %r8
     xor     %r9d, %r9d
-    call    node_work
+    call    lantern_node_work
     LEAVE 0
 5:  mov     %r12, %rdi
-    call    node_produce_build
+    call    lantern_node_produce_build
     LEAVE 0
-END_FUNCTION node_produce_bid_go
+END_FUNCTION lantern_node_produce_bid_go
 
 /*
  * The build of the produceBlockV3 entry rdi (node.md, Block production): NODE_PRODUCE_BUILD and
  * its PRODUCE_BLOCK of the copy, the engine's result, the draft and the bid at PRODUCE_BID as
  * state_c. r12 the entry, r13 its index.
  */
-LOCAL_FUNCTION node_produce_build
+LOCAL_FUNCTION lantern_node_produce_build
     ENTER 0
     mov     %rdi, %r12
     PART    %rcx, %r10, %rbx, Node_api
@@ -6921,11 +6921,11 @@ LOCAL_FUNCTION node_produce_build
     mov     NodeApi_data(%r12), %rcx
     mov     %r13, %r8
     xor     %r9d, %r9d
-    call    node_work
+    call    lantern_node_work
     mov     (NodeApi_cursor + PRODUCE_BID)(%r12), %rcx
     mov     %rcx, NodeAction_state_c(%rax)
     LEAVE 0
-END_FUNCTION node_produce_build
+END_FUNCTION lantern_node_produce_build
 
 /*
  * At a quiet point (node.md, Block production, NODE_PRODUCE_BID): each produceBlockV3 entry
@@ -6934,7 +6934,7 @@ END_FUNCTION node_produce_build
  * while the actions have room for two works. rbx the node, r15 the actions; r12 an entry, r13
  * the entries left.
  */
-LOCAL_FUNCTION node_produce_due
+LOCAL_FUNCTION lantern_node_produce_due
     ENTER 0
     PART    %r12, %r13, %rbx, Node_api
 1:  test    %r13, %r13
@@ -6960,28 +6960,28 @@ LOCAL_FUNCTION node_produce_due
     movq    $-1, 8(%rcx)
     movq    $0, (NodeApi_cursor + PRODUCE_CALL)(%r12)
 3:  mov     $(2 * NODE_ACT_WORK_SIZE), %edi
-    call    node_room
+    call    lantern_node_room
     test    %rax, %rax
     jz      9f
     mov     %r12, %rdi
-    call    node_produce_bid_go
+    call    lantern_node_produce_bid_go
 2:  add     $NodeApi__mem, %r12
     dec     %r13
     jmp     1b
 9:  LEAVE 0
-END_FUNCTION node_produce_due
+END_FUNCTION lantern_node_produce_due
 
 /* The draft and the engine's result of the produceBlockV3 entry rdi go. Locals: the entry. */
-LOCAL_FUNCTION node_produce_release
+LOCAL_FUNCTION lantern_node_produce_release
     FRAME 16
     mov     %rdi, (%rsp)
-    mov     NodeApi_data(%rdi), %rsi        # each field cleared first: node_ids leaves an entry's own bytes to it
+    mov     NodeApi_data(%rdi), %rsi        # each field cleared first: lantern_node_ids leaves an entry's own bytes to it
     movq    $0, NodeApi_data(%rdi)
     test    %rsi, %rsi
     jz      1f
     mov     $NODE_ACT_BYTES_FREE, %edi
     xor     %edx, %edx
-    call    node_ids
+    call    lantern_node_ids
 1:  mov     (%rsp), %rdi
     mov     NodeApi_filter_index(%rdi), %rsi
     movq    $0, NodeApi_filter_index(%rdi)
@@ -6989,7 +6989,7 @@ LOCAL_FUNCTION node_produce_release
     jz      2f
     mov     $NODE_ACT_BYTES_FREE, %edi
     xor     %edx, %edx
-    call    node_ids
+    call    lantern_node_ids
 2:  mov     (%rsp), %rdi                    # the eth1 snapshot of a work in flight
     mov     (NodeApi_cursor + PRODUCE_ETH1_SNAP)(%rdi), %rsi
     movq    $0, (NodeApi_cursor + PRODUCE_ETH1_SNAP)(%rdi)
@@ -6997,7 +6997,7 @@ LOCAL_FUNCTION node_produce_release
     jz      21f
     mov     $NODE_ACT_BYTES_FREE, %edi
     xor     %edx, %edx
-    call    node_ids
+    call    lantern_node_ids
 21: mov     (%rsp), %rdi                    # the builder's answer or bid
     mov     (NodeApi_cursor + PRODUCE_BID)(%rdi), %rsi
     movq    $0, (NodeApi_cursor + PRODUCE_BID)(%rdi)
@@ -7005,7 +7005,7 @@ LOCAL_FUNCTION node_produce_release
     jz      3f
     mov     $NODE_ACT_BYTES_FREE, %edi
     xor     %edx, %edx
-    call    node_ids
+    call    lantern_node_ids
 3:  mov     (%rsp), %rdi                    # its header call in flight answers no entry
     mov     (NodeApi_cursor + PRODUCE_CALL)(%rdi), %rax
     movq    $0, (NodeApi_cursor + PRODUCE_CALL)(%rdi)
@@ -7015,13 +7015,13 @@ LOCAL_FUNCTION node_produce_release
     imul    $NODE_BUILDER_CALL_SIZE, %rax, %rax
     movq    $-1, (Node_builder_calls + 8)(%rbx,%rax)
 4:  UNFRAME 16
-END_FUNCTION node_produce_release
+END_FUNCTION lantern_node_produce_release
 
 /*
  * The error rsi to the produceBlockV3 entry rdi, then its end: its draft and engine result go,
  * and its state with API_STREAM_OWN_STATE. Locals: the entry.
  */
-LOCAL_FUNCTION node_produce_fail
+LOCAL_FUNCTION lantern_node_produce_fail
     FRAME 16
     mov     %rdi, (%rsp)
     mov     %rsi, %rdx
@@ -7037,16 +7037,16 @@ LOCAL_FUNCTION node_produce_fail
     test    $API_STREAM_HTTP10, %rax
     jz      1f
     mov     $API_R_KEEP, %r8d
-1:  call    node_api_send
+1:  call    lantern_node_api_send
 2:  mov     (%rsp), %rdi
-    call    node_produce_release
+    call    lantern_node_produce_release
     mov     (%rsp), %rdi
-    call    node_api_end
+    call    lantern_node_api_end
     UNFRAME 16
-END_FUNCTION node_produce_fail
+END_FUNCTION lantern_node_produce_fail
 
 /* rax = the index of a free NodeApi entry (the first free, else the next; the step checked one is free), rdx = the entry. Uses r10. */
-LOCAL_FUNCTION node_api_new
+LOCAL_FUNCTION lantern_node_api_new
     UNWIND_END_PROLOGUE
     PART    %rdx, %r10, %rbx, Node_api
     xor     %eax, %eax
@@ -7059,14 +7059,14 @@ LOCAL_FUNCTION node_api_new
     jmp     1b
 2:  incq    (Node_api + 8)(%rbx)
 3:  ret
-END_FUNCTION node_api_new
+END_FUNCTION lantern_node_api_new
 
 /*
  * The end of the stream of the NodeApi entry rdi: the entry is free, the api part's count drops
- * past the free entries at its end; with API_STREAM_OWN, a BYTES_FREE of its data, which node_ids
+ * past the free entries at its end; with API_STREAM_OWN, a BYTES_FREE of its data, which lantern_node_ids
  * gives to another entry that sends the same bytes.
  */
-LOCAL_FUNCTION node_api_end
+LOCAL_FUNCTION lantern_node_api_end
     FRAME 16
     movq    $0, NodeApi_connection(%rdi)
     mov     %rdi, (%rsp)
@@ -7084,19 +7084,19 @@ LOCAL_FUNCTION node_api_end
     mov     NodeApi_data(%rdi), %rsi
     mov     $NODE_ACT_BYTES_FREE, %edi
     xor     %edx, %edx
-    call    node_ids
+    call    lantern_node_ids
 8:  mov     (%rsp), %rdi
     testq   $API_STREAM_OWN_STATE, NodeApi_flags(%rdi)
     jz      9f
     mov     NodeApi_state(%rdi), %rsi
     mov     $NODE_ACT_STATE_FREE, %edi
     xor     %edx, %edx
-    call    node_ids
+    call    lantern_node_ids
 9:  UNFRAME 16
-END_FUNCTION node_api_end
+END_FUNCTION lantern_node_api_end
 
 /* A NODE_WORK_API_CHUNK of the NodeApi entry rdx at index rax, which takes API_STREAM_BUSY. */
-LOCAL_FUNCTION node_api_chunk_work
+LOCAL_FUNCTION lantern_node_api_chunk_work
     UNWIND_END_PROLOGUE
     orq     $API_STREAM_BUSY, NodeApi_flags(%rdx)
     mov     %rax, %r9
@@ -7105,13 +7105,13 @@ LOCAL_FUNCTION node_api_chunk_work
     mov     NodeApi_state(%rdx), %rsi       # a validator stream's state
     mov     $NODE_WORK_API_CHUNK, %edi
     xor     %edx, %edx
-    jmp     node_work
-END_FUNCTION node_api_chunk_work
+    jmp     lantern_node_work
+END_FUNCTION lantern_node_api_chunk_work
 
 /* NODE_EV_API_SENT of the connection rdi: the next chunk of its stream, unless one is queued. */
-LOCAL_FUNCTION node_api_sent
+LOCAL_FUNCTION lantern_node_api_sent
     FRAME 0
-    call    node_api_find
+    call    lantern_node_api_find
     cmp     $-1, %rax
     je      9f
     cmpq    $API_OP_EVENTSTREAM, NodeApi_op(%rdx)  # an event stream: its sent is 0
@@ -7120,9 +7120,9 @@ LOCAL_FUNCTION node_api_sent
     jmp     9f
 1:  testq   $API_STREAM_BUSY, NodeApi_flags(%rdx)
     jnz     9f
-    call    node_api_chunk_work
+    call    lantern_node_api_chunk_work
 9:  UNFRAME 0
-END_FUNCTION node_api_sent
+END_FUNCTION lantern_node_api_sent
 
 # ---------------------------------------------------------------- Events (beacon-api.md, eventstream)
 
@@ -7133,7 +7133,7 @@ END_FUNCTION node_api_sent
  * ApiView at the end of scratch, S9 the topic, S10 the room. Locals: L the scratch's size, L+8 a
  * Result, L+16 a blob count.
  */
-LOCAL_FUNCTION node_api_event_run
+LOCAL_FUNCTION lantern_node_api_event_run
     ENTER 32
     mov     %r11, (L + 24)(%rsp)            # state_c: the light client store
     mov     %rdi, %rbx
@@ -7173,7 +7173,7 @@ LOCAL_FUNCTION node_api_event_run
     mov     S8(%rsp), %rax
     mov     %rdi, ApiView_event_slot(%rax)
     lea     Node_config(%rbx), %rsi
-    call    node_fork
+    call    lantern_node_fork
     mov     %rax, %r10
     mov     S8(%rsp), %rcx                  # head_v2's version
     mov     %rax, ApiView_fork(%rcx)
@@ -7196,7 +7196,7 @@ LOCAL_FUNCTION node_api_event_run
     add     %rcx, %rax
     mov     100(%rax), %rdi
     lea     Node_config(%rbx), %rsi
-    call    node_fork
+    call    lantern_node_fork
     mov     %rax, %r10
     mov     S7(%rsp), %rcx
     mov     8(%rcx), %rax
@@ -7227,7 +7227,7 @@ LOCAL_FUNCTION node_api_event_run
     mov     S8(%rsp), %rdi
     lea     NodeEvent_chunk(%r15), %rsi
     mov     S9(%rsp), %rdx
-    call    api_event_text
+    call    lantern_api_event_text
     test    %rax, %rax
     jnz     71f
 55: mov     (NodeEvent_chunk + 16)(%r15), %rax  # the event's size covers the text
@@ -7245,7 +7245,7 @@ LOCAL_FUNCTION node_api_event_run
     mov     S8(%rsp), %rax
     mov     %rdi, ApiView_event_slot(%rax)
     lea     Node_config(%rbx), %rsi
-    call    node_fork
+    call    lantern_node_fork
     mov     %rax, %r10
     mov     %r13, %rdi
     lea     Node_config(%rbx), %rsi
@@ -7266,7 +7266,7 @@ LOCAL_FUNCTION node_api_event_run
     add     %rcx, %rax
     mov     100(%rax), %rdi
     lea     Node_config(%rbx), %rsi
-    call    node_fork
+    call    lantern_node_fork
     mov     %rax, %r10
     mov     S7(%rsp), %rcx
     mov     8(%rcx), %rax
@@ -7306,7 +7306,7 @@ LOCAL_FUNCTION node_api_event_run
     lea     NodeEvent_chunk(%r15), %rdi
     mov     S9(%rsp), %rsi
     mov     %r14, %rcx
-    call    api_lc_event_text
+    call    lantern_api_lc_event_text
     cmp     $LANTERN_BUFFER_TOO_SMALL, %rax
     je      71f
     test    %rax, %rax
@@ -7352,7 +7352,7 @@ LOCAL_FUNCTION node_api_event_run
     mov     %rax, NodeEvent_chunk(%r15)
     lea     NodeEvent_chunk(%r15), %rdi
     mov     S9(%rsp), %rsi
-    call    api_op_event_text
+    call    lantern_api_op_event_text
     cmp     $LANTERN_BUFFER_TOO_SMALL, %rax
     je      71f
     test    %rax, %rax
@@ -7375,7 +7375,7 @@ LOCAL_FUNCTION node_api_event_run
     mov     S9(%rsp), %rsi
     mov     S7(%rsp), %rdx
     mov     %r14, %rcx
-    call    api_sidecar_event_text
+    call    lantern_api_sidecar_event_text
     cmp     $LANTERN_BUFFER_TOO_SMALL, %rax
     je      71f
     test    %rax, %rax
@@ -7393,13 +7393,13 @@ LOCAL_FUNCTION node_api_event_run
     mov     %rax, (%r14)
 7:  mov     $LANTERN_BUFFER_TOO_SMALL, %eax
     LEAVE 32
-END_FUNCTION node_api_event_run
+END_FUNCTION lantern_node_api_event_run
 
 /*
  * (out rdi, answer flags rsi) -> rax: the head of an eventstream answer into the ByteList out, its
  * count set; LANTERN_OK, or LANTERN_BUFFER_TOO_SMALL. The writer's registers; rbx out, S7 the flags.
  */
-LOCAL_FUNCTION api_sse_head
+LOCAL_FUNCTION lantern_api_sse_head
     ENTER 0
     mov     %rdi, %rbx
     mov     %rsi, S7(%rsp)
@@ -7427,14 +7427,14 @@ LOCAL_FUNCTION api_sse_head
     LEAVE 0
 9:  mov     $LANTERN_BUFFER_TOO_SMALL, %eax
     LEAVE 0
-END_FUNCTION api_sse_head
+END_FUNCTION lantern_api_sse_head
 
 /*
  * (view rdi, out rsi, topic rdx) -> rax: the text of the event of the topic, from the view's event
  * fields, into the ByteList out, its count set; LANTERN_OK, or LANTERN_BUFFER_TOO_SMALL. The
  * writer's registers; rbx out, S7 the topic.
  */
-LOCAL_FUNCTION api_event_text
+LOCAL_FUNCTION lantern_api_event_text
     ENTER 0
     mov     %rdi, %rbp
     mov     %rsi, %rbx
@@ -7456,36 +7456,36 @@ LOCAL_FUNCTION api_event_text
     API_LIT api_ev_data
     API_LIT api_pa_version
     mov     ApiView_fork(%rbp), %rdi
-    call    api_fork_name
+    call    lantern_api_fork_name
     API_LIT api_ev_v2_slot
     mov     ApiView_event_slot(%rbp), %rdi
-    call    api_qdec
+    call    lantern_api_qdec
     API_LIT api_ev_block
     lea     ApiView_event_block(%rbp), %rdi
     mov     $32, %esi
-    call    api_qhex
+    call    lantern_api_qhex
     API_LIT api_ev_state
     lea     ApiView_event_state(%rbp), %rdi
     mov     $32, %esi
-    call    api_qhex
+    call    lantern_api_qhex
     API_LIT api_ev_full
     API_LIT api_ev_transition
     mov     ApiView_event_flags(%rbp), %rdi
     and     $1, %edi
-    call    api_bool
+    call    lantern_api_bool
     API_LIT api_ev_current_epoch
     lea     ApiView_event_previous(%rbp), %rdi
     mov     $32, %esi
-    call    api_qhex
+    call    lantern_api_qhex
     API_LIT api_ev_next_epoch
     lea     ApiView_event_current(%rbp), %rdi
     mov     $32, %esi
-    call    api_qhex
+    call    lantern_api_qhex
     API_LIT api_u_optimistic
     mov     ApiView_event_flags(%rbp), %rdi
     shr     $1, %rdi
     and     $1, %edi
-    call    api_bool
+    call    lantern_api_bool
     API_LIT api_end1
     jmp     61f
 1:  cmpq    $API_TOPIC_BLOCK, S7(%rsp)
@@ -7509,11 +7509,11 @@ LOCAL_FUNCTION api_event_text
     # block, block_gossip and head: {"slot":…,"block":…
     API_LIT api_ev_slot
     mov     ApiView_event_slot(%rbp), %rdi
-    call    api_qdec
+    call    lantern_api_qdec
     API_LIT api_ev_block
     lea     ApiView_event_block(%rbp), %rdi
     mov     $32, %esi
-    call    api_qhex
+    call    lantern_api_qhex
     cmpq    $API_TOPIC_BLOCK_GOSSIP, S7(%rsp)
     je      61f
     cmpq    $API_TOPIC_HEAD, S7(%rsp)
@@ -7522,68 +7522,68 @@ LOCAL_FUNCTION api_event_text
     API_LIT api_ev_state
     lea     ApiView_event_state(%rbp), %rdi
     mov     $32, %esi
-    call    api_qhex
+    call    lantern_api_qhex
     API_LIT api_ev_transition
     mov     ApiView_event_flags(%rbp), %rdi
     and     $1, %edi
-    call    api_bool
+    call    lantern_api_bool
     API_LIT api_ev_previous
     lea     ApiView_event_previous(%rbp), %rdi
     mov     $32, %esi
-    call    api_qhex
+    call    lantern_api_qhex
     API_LIT api_ev_current
     lea     ApiView_event_current(%rbp), %rdi
     mov     $32, %esi
-    call    api_qhex
+    call    lantern_api_qhex
     jmp     6f
     # finalized_checkpoint: {"block":…,"state":…,"epoch":…
 5:  API_LIT api_ev_block1
     lea     ApiView_event_block(%rbp), %rdi
     mov     $32, %esi
-    call    api_qhex
+    call    lantern_api_qhex
     API_LIT api_ev_state
     lea     ApiView_event_state(%rbp), %rdi
     mov     $32, %esi
-    call    api_qhex
+    call    lantern_api_qhex
     API_LIT api_k_epoch
     mov     ApiView_event_epoch(%rbp), %rdi
-    call    api_qdec
+    call    lantern_api_qdec
     jmp     6f
     # chain_reorg: {"slot":…,"depth":…,"old_head_block":…,"new_head_block":…,"old_head_state":…,"new_head_state":…,"epoch":…
 7:  API_LIT api_ev_slot
     mov     ApiView_event_slot(%rbp), %rdi
-    call    api_qdec
+    call    lantern_api_qdec
     API_LIT api_cr_depth
     mov     ApiView_event_epoch(%rbp), %rdi
-    call    api_qdec
+    call    lantern_api_qdec
     API_LIT api_cr_old_block
     lea     ApiView_event_old_block(%rbp), %rdi
     mov     $32, %esi
-    call    api_qhex
+    call    lantern_api_qhex
     API_LIT api_cr_new_block
     lea     ApiView_event_block(%rbp), %rdi
     mov     $32, %esi
-    call    api_qhex
+    call    lantern_api_qhex
     API_LIT api_cr_old_state
     lea     ApiView_event_old_state(%rbp), %rdi
     mov     $32, %esi
-    call    api_qhex
+    call    lantern_api_qhex
     API_LIT api_cr_new_state
     lea     ApiView_event_state(%rbp), %rdi
     mov     $32, %esi
-    call    api_qhex
+    call    lantern_api_qhex
     API_LIT api_k_epoch
     mov     ApiView_event_slot(%rbp), %rax
     xor     %edx, %edx
     mov     $SLOTS_PER_EPOCH, %ecx
     div     %rcx
     mov     %rax, %rdi
-    call    api_qdec
+    call    lantern_api_qdec
 6:  API_LIT api_u_optimistic
     mov     ApiView_event_flags(%rbp), %rdi
     shr     $1, %rdi
     and     $1, %edi
-    call    api_bool
+    call    lantern_api_bool
 61: API_LIT api_ev_end
     test    %r15, %r15
     jnz     9f
@@ -7596,7 +7596,7 @@ LOCAL_FUNCTION api_event_text
     LEAVE 0
 9:  mov     $LANTERN_BUFFER_TOO_SMALL, %eax
     LEAVE 0
-END_FUNCTION api_event_text
+END_FUNCTION lantern_api_event_text
 
 /*
  * (out rdi, topic rsi, kind rdx, ssz rcx, cursor r8; the fork in r10) -> rax: the text of the event
@@ -7605,7 +7605,7 @@ END_FUNCTION api_event_text
  * LANTERN_BUFFER_TOO_SMALL, or LANTERN_INVALID_ENCODING. The writer's registers; rbx out, S7 the
  * topic, S8 the kind, S9 the ssz, S10 the cursor. Locals: L the fork.
  */
-LOCAL_FUNCTION api_op_event_text
+LOCAL_FUNCTION lantern_api_op_event_text
     ENTER 16
     mov     %rdi, %rbx
     mov     %rsi, S7(%rsp)
@@ -7683,7 +7683,7 @@ LOCAL_FUNCTION api_op_event_text
     LEAVE 16
 9:  mov     $LANTERN_BUFFER_TOO_SMALL, %eax
     LEAVE 16
-END_FUNCTION api_op_event_text
+END_FUNCTION lantern_api_op_event_text
 
 /*
  * (out rdi, state rsi, attributes rdx, proposer rcx, head root r8; the fork in r10) -> rax: the
@@ -7693,7 +7693,7 @@ END_FUNCTION api_op_event_text
  * S7 the state, S8 the proposer, S9 the head root, S10 the fork. Locals: L the parent's block
  * number and hash (40), L+40 a withdrawal's index, L+48 the withdrawal.
  */
-LOCAL_FUNCTION api_payload_event_text
+LOCAL_FUNCTION lantern_api_payload_event_text
     ENTER 64
     mov     %rdi, %rbx
     mov     %rsi, S7(%rsp)
@@ -7716,37 +7716,37 @@ LOCAL_FUNCTION api_payload_event_text
     API_LIT api_ev_data
     API_LIT api_pa_version
     mov     S10(%rsp), %rdi
-    call    api_fork_name
+    call    lantern_api_fork_name
     API_LIT api_pa_proposer
     mov     S8(%rsp), %rdi
-    call    api_qdec
+    call    lantern_api_qdec
     API_LIT api_pa_slot
     mov     S7(%rsp), %rax
     mov     NODE_STATE_SLOT(%rax), %rdi
-    call    api_qdec
+    call    lantern_api_qdec
     API_LIT api_pa_number
     mov     L(%rsp), %rdi
-    call    api_qdec
+    call    lantern_api_qdec
     API_LIT api_pa_root
     mov     S9(%rsp), %rdi
     mov     $32, %esi
-    call    api_qhex
+    call    lantern_api_qhex
     API_LIT api_pa_hash
     lea     (L + 8)(%rsp), %rdi
     mov     $32, %esi
-    call    api_qhex
+    call    lantern_api_qhex
     # the PayloadAttributes (engine-api.md)
     API_LIT api_pa_time
     mov     (%rbp), %rdi
-    call    api_qdec
+    call    lantern_api_qdec
     API_LIT api_pa_randao
     lea     8(%rbp), %rdi
     mov     $32, %esi
-    call    api_qhex
+    call    lantern_api_qhex
     API_LIT api_pa_fee
     lea     40(%rbp), %rdi
     mov     $20, %esi
-    call    api_qhex
+    call    lantern_api_qhex
     cmpq    $FORK_CAPELLA, S10(%rsp)        # from capella, the withdrawals: each 44 SSZ bytes
     jb      3f
     API_LIT api_pa_withdrawals
@@ -7764,20 +7764,20 @@ LOCAL_FUNCTION api_payload_event_text
     API_LIT api_pa_index
     mov     (L + 48)(%rsp), %rax
     mov     (%rax), %rdi
-    call    api_qdec
+    call    lantern_api_qdec
     API_LIT api_u_index
     mov     (L + 48)(%rsp), %rax
     mov     8(%rax), %rdi
-    call    api_qdec
+    call    lantern_api_qdec
     API_LIT api_pa_address
     mov     (L + 48)(%rsp), %rdi
     add     $16, %rdi
     mov     $20, %esi
-    call    api_qhex
+    call    lantern_api_qhex
     API_LIT api_pa_amount
     mov     (L + 48)(%rsp), %rax
     mov     36(%rax), %rdi
-    call    api_qdec
+    call    lantern_api_qdec
     API_LIT api_end1
     incq    (L + 40)(%rsp)
     jmp     1b
@@ -7787,7 +7787,7 @@ LOCAL_FUNCTION api_payload_event_text
     API_LIT api_pa_parent
     lea     64(%rbp), %rdi
     mov     $32, %esi
-    call    api_qhex
+    call    lantern_api_qhex
 4:  API_LIT api_pa_end
     test    %r15, %r15
     jnz     9f
@@ -7800,7 +7800,7 @@ LOCAL_FUNCTION api_payload_event_text
     LEAVE 64
 9:  mov     $LANTERN_BUFFER_TOO_SMALL, %eax
     LEAVE 64
-END_FUNCTION api_payload_event_text
+END_FUNCTION lantern_api_payload_event_text
 
 /*
  * (out rdi, topic rsi, ssz rdx, scratch rcx; the fork in r10) -> rax: the text of the event of a
@@ -7810,7 +7810,7 @@ END_FUNCTION api_payload_event_text
  * bytes, S7 the topic, S8 their count, S9 a commitment's index. Locals: L the block root, L+32 a
  * versioned hash, L+64 a ByteList of a commitment (24 + 48).
  */
-LOCAL_FUNCTION api_sidecar_event_text
+LOCAL_FUNCTION lantern_api_sidecar_event_text
     ENTER 144
     mov     %rdi, %rbx
     mov     %rsi, S7(%rsp)
@@ -7841,19 +7841,19 @@ LOCAL_FUNCTION api_sidecar_event_text
     API_LIT api_sc_root
     lea     L(%rsp), %rdi
     mov     $32, %esi
-    call    api_qhex
+    call    lantern_api_qhex
     API_LIT api_sc_index
     mov     (%rbp), %rdi
-    call    api_qdec
+    call    lantern_api_qdec
     API_LIT api_c_slot
     cmpq    $API_TOPIC_BLOB_SIDECAR, S7(%rsp)
     jne     4f
     mov     (8 + PUB_BLOB_BYTES + 96)(%rbp), %rdi   # a BlobSidecar: the header's slot, the commitment, its versioned hash
-    call    api_qdec
+    call    lantern_api_qdec
     API_LIT api_sc_commitment
     lea     (8 + PUB_BLOB_BYTES)(%rbp), %rdi
     mov     $48, %esi
-    call    api_qhex
+    call    lantern_api_qhex
     API_LIT api_sc_hash
     lea     (L + 88)(%rsp), %rdi
     lea     (8 + PUB_BLOB_BYTES)(%rbp), %rsi
@@ -7870,11 +7870,11 @@ LOCAL_FUNCTION api_sidecar_event_text
     movb    $VERSIONED_HASH_VERSION_KZG, (L + 32)(%rsp)
     lea     (L + 32)(%rsp), %rdi
     mov     $32, %esi
-    call    api_qhex
+    call    lantern_api_qhex
     API_LIT api_end1
     jmp     7f
 4:  mov     20(%rbp), %rdi                  # a DataColumnSidecar: the header's slot, then the commitments
-    call    api_qdec
+    call    lantern_api_qdec
     API_LIT api_sc_commitments
     mov     12(%rbp), %eax
     mov     16(%rbp), %ecx
@@ -7907,7 +7907,7 @@ LOCAL_FUNCTION api_sidecar_event_text
     add     %rax, %rdi
     add     %rbp, %rdi
     mov     $48, %esi
-    call    api_qhex
+    call    lantern_api_qhex
     incq    S9(%rsp)
     jmp     5b
 6:  API_LIT api_v_end
@@ -7925,14 +7925,14 @@ LOCAL_FUNCTION api_sidecar_event_text
     LEAVE 144
 9:  mov     $LANTERN_BUFFER_TOO_SMALL, %eax
     LEAVE 144
-END_FUNCTION api_sidecar_event_text
+END_FUNCTION lantern_api_sidecar_event_text
 
 /*
  * The event of a valid operation of the gossip topic rdi, its bytes rsi, of the fork rdx (node.md,
  * The events): a NODE_WORK_API_EVENT of its event topic when an entry has the topic. Locals: the
  * bytes, the work's arg.
  */
-LOCAL_FUNCTION node_op_event
+LOCAL_FUNCTION lantern_node_op_event
     FRAME 16
     mov     %rsi, (%rsp)
     mov     $API_TOPIC_VOLUNTARY_EXIT, %eax
@@ -7966,7 +7966,7 @@ LOCAL_FUNCTION node_op_event
     or      %rdx, %rax
     mov     %rax, 8(%rsp)
     movzbl  %al, %edi
-    call    node_api_subscribed
+    call    lantern_node_api_subscribed
     test    %rax, %rax
     jz      9f
     mov     $NODE_WORK_API_EVENT, %edi
@@ -7975,12 +7975,12 @@ LOCAL_FUNCTION node_op_event
     mov     (%rsp), %rcx
     xor     %r8d, %r8d
     mov     8(%rsp), %r9
-    call    node_work
+    call    lantern_node_work
 9:  UNFRAME 16
-END_FUNCTION node_op_event
+END_FUNCTION lantern_node_op_event
 
 /* rax = 1 when a NodeApi entry of eventstream has the topic rdi, else 0. Uses rcx, rdx, r10. */
-LOCAL_FUNCTION node_api_subscribed
+LOCAL_FUNCTION lantern_node_api_subscribed
     UNWIND_END_PROLOGUE
     PART    %rdx, %r10, %rbx, Node_api
     mov     %rdi, %rcx
@@ -8000,10 +8000,10 @@ LOCAL_FUNCTION node_api_subscribed
     ret
 9:  mov     $1, %eax
     ret
-END_FUNCTION node_api_subscribed
+END_FUNCTION lantern_node_api_subscribed
 
 /* rax = the NodeApi entries of eventstream. Uses rcx, rdx. */
-LOCAL_FUNCTION node_api_event_count
+LOCAL_FUNCTION lantern_node_api_event_count
     UNWIND_END_PROLOGUE
     xor     %eax, %eax
     PART    %rdx, %rcx, %rbx, Node_api
@@ -8018,19 +8018,19 @@ LOCAL_FUNCTION node_api_event_count
     dec     %rcx
     jmp     1b
 9:  ret
-END_FUNCTION node_api_event_count
+END_FUNCTION lantern_node_api_event_count
 
 /*
  * eventstream of the connection rdi with the route rsi and the answer flags rdx (node.md,
  * NODE_EV_API): a NodeApi entry of the route's topics, and a SEND of the head with last 0, its bytes
  * the entry's sent. r12 the connection, r13 the route, then the action. Locals: L the flags, L+8 the entry.
  */
-LOCAL_FUNCTION node_api_subscribe
+LOCAL_FUNCTION lantern_node_api_subscribe
     ENTER 16
     mov     %rdi, %r12
     mov     %rsi, %r13
     mov     %rdx, L(%rsp)
-    call    node_api_new
+    call    lantern_node_api_new
     mov     %rdx, (L + 8)(%rsp)
     mov     %rdx, %rdi
     mov     $NodeApi__mem, %esi
@@ -8052,7 +8052,7 @@ LOCAL_FUNCTION node_api_subscribe
     mov     %rax, NodeApi_cursor(%rdx)
     mov     $NODE_ACT_API_SEND, %edi        # the head: 56 + 128 bytes of room
     mov     $(56 + 128), %esi
-    call    node_act
+    call    lantern_node_act
     mov     %rax, %r13
     lea     16(%rax), %rdi
     mov     $(56 + 128 - 16), %esi
@@ -8061,12 +8061,12 @@ LOCAL_FUNCTION node_api_subscribe
     movq    $(128 + 24), 32(%r13)
     lea     32(%r13), %rdi
     mov     L(%rsp), %rsi
-    call    api_sse_head
+    call    lantern_api_sse_head
     mov     48(%r13), %rax
     mov     (L + 8)(%rsp), %rdx
     mov     %rax, NodeApi_sent(%rdx)
     LEAVE 16
-END_FUNCTION node_api_subscribe
+END_FUNCTION lantern_node_api_subscribe
 
 /*
  * The event text of the ByteList rdi, of the topic rsi, to each NodeApi entry of eventstream of the
@@ -8074,7 +8074,7 @@ END_FUNCTION node_api_subscribe
  * to the entry's sent; an entry whose sent would pass NODE_API_CHUNK gets a CLOSE and ends. r12 the
  * text, r13 the topic. Locals: L the index, L+8 the entry, L+16 the bytes sent, L+24 the action.
  */
-LOCAL_FUNCTION node_api_events
+LOCAL_FUNCTION lantern_node_api_events
     ENTER 32
     mov     %rdi, %r12
     mov     %rsi, %r13
@@ -8106,7 +8106,7 @@ LOCAL_FUNCTION node_api_events
     add     $(56 + 7), %rsi
     and     $-8, %rsi
     mov     $NODE_ACT_API_SEND, %edi
-    call    node_act
+    call    lantern_node_act
     mov     %rax, (L + 24)(%rsp)
     lea     16(%rax), %rdi
     mov     (%rax), %rsi
@@ -8152,18 +8152,18 @@ LOCAL_FUNCTION node_api_events
     jmp     8f
 5:  mov     $NODE_ACT_API_CLOSE, %edi       # the stream falls behind: a CLOSE, and it ends
     mov     $NODE_ACT_API_CLOSE_SIZE, %esi
-    call    node_act
+    call    lantern_node_act
     mov     (L + 8)(%rsp), %rdi
     mov     NodeApi_connection(%rdi), %rcx
     mov     %rcx, 16(%rax)
-    call    node_api_end
+    call    lantern_node_api_end
 8:  incq    L(%rsp)
     jmp     1b
 9:  LEAVE 32
-END_FUNCTION node_api_events
+END_FUNCTION lantern_node_api_events
 
 /* The block event of the NodeBlock entry rdi (node.md, The events): its slot and root, execution_optimistic from its payload status. */
-LOCAL_FUNCTION node_api_block_event
+LOCAL_FUNCTION lantern_node_api_block_event
     FRAME 0
     xor     %ecx, %ecx
     cmpq    $PAYLOAD_STATUS_NOT_VALIDATED, NodeBlock_payload_status(%rdi)
@@ -8172,9 +8172,9 @@ LOCAL_FUNCTION node_api_block_event
     mov     NodeBlock_slot(%rdi), %rdx
     lea     NodeBlock_root(%rdi), %rsi
     mov     $API_TOPIC_BLOCK, %edi
-    call    node_api_root_event
+    call    lantern_node_api_root_event
     UNFRAME 0
-END_FUNCTION node_api_block_event
+END_FUNCTION lantern_node_api_block_event
 
 /*
  * The event of the topic rdi (block or block_gossip) of the block root rsi and slot rdx, with the
@@ -8182,13 +8182,13 @@ END_FUNCTION node_api_block_event
  * of scratch, after the ApiView of its values. r12 the root, r13 the view. Locals: L the scratch's
  * size, L+8 the ByteList, L+16 the topic, L+24 the slot, L+32 the values.
  */
-LOCAL_FUNCTION node_api_root_event
+LOCAL_FUNCTION lantern_node_api_root_event
     ENTER 48
     mov     %rsi, %r12
     mov     %rdi, (L + 16)(%rsp)
     mov     %rdx, (L + 24)(%rsp)
     mov     %rcx, (L + 32)(%rsp)
-    call    node_api_subscribed
+    call    lantern_node_api_subscribed
     test    %rax, %rax
     jz      9f
     mov     (%r14), %rax
@@ -8211,16 +8211,16 @@ LOCAL_FUNCTION node_api_root_event
     mov     %r13, %rdi
     mov     (L + 8)(%rsp), %rsi
     mov     (L + 16)(%rsp), %rdx
-    call    api_event_text
+    call    lantern_api_event_text
     test    %rax, %rax
     jnz     8f
     mov     (L + 8)(%rsp), %rdi
     mov     (L + 16)(%rsp), %rsi
-    call    node_api_events
+    call    lantern_node_api_events
 8:  mov     L(%rsp), %rax
     mov     %rax, (%r14)
 9:  LEAVE 48
-END_FUNCTION node_api_root_event
+END_FUNCTION lantern_node_api_root_event
 
 /*
  * (old head root rdi, new head entry rsi) -> rax: the depth of the reorg from the old head to the
@@ -8230,10 +8230,10 @@ END_FUNCTION node_api_root_event
  * the new head's, r14 the old chain's block, S7 the new chain's, S8 and S9 the blocks each walk
  * left last.
  */
-LOCAL_FUNCTION node_api_reorg
+LOCAL_FUNCTION lantern_node_api_reorg
     ENTER 0
     mov     %rsi, %r13
-    call    node_find_block
+    call    lantern_node_find_block
     cmp     $-1, %rax
     je      8f
     mov     %rdx, %r12
@@ -8260,14 +8260,14 @@ LOCAL_FUNCTION node_api_reorg
     jb      3f
     mov     %r14, S8(%rsp)                  # the old chain's block, a step down
     lea     NodeBlock_parent_root(%r14), %rdi
-    call    node_find_block
+    call    lantern_node_find_block
     cmp     $-1, %rax
     je      8f
     mov     %rdx, %r14
     jmp     1b
 3:  mov     %rcx, S9(%rsp)                  # the new chain's block, a step down
     lea     NodeBlock_parent_root(%rcx), %rdi
-    call    node_find_block
+    call    lantern_node_find_block
     cmp     $-1, %rax
     je      8f
     mov     %rdx, S7(%rsp)
@@ -8300,7 +8300,7 @@ LOCAL_FUNCTION node_api_reorg
     LEAVE 0
 8:  mov     $-1, %rax
     LEAVE 0
-END_FUNCTION node_api_reorg
+END_FUNCTION lantern_node_api_reorg
 
 /*
  * The head and finalized_checkpoint events at a quiet point (node.md, The events): with no block
@@ -8310,7 +8310,7 @@ END_FUNCTION node_api_reorg
 .if API_TOPIC_HEAD
 .error "node_api_head_events: the arg of a head event takes API_TOPIC_HEAD as 0"
 .endif
-LOCAL_FUNCTION node_api_head_events
+LOCAL_FUNCTION lantern_node_api_head_events
     ENTER 0
     cmpq    $0, Node_event_votes(%rbx)
     jne     9f
@@ -8327,7 +8327,7 @@ LOCAL_FUNCTION node_api_head_events
     pmovmskb %xmm0, %eax
     cmp     $0xffff, %eax
     je      5f
-1:  call    node_find_block
+1:  call    lantern_node_find_block
     cmp     $-1, %rax
     je      5f
     mov     %rdx, %r12
@@ -8337,7 +8337,7 @@ LOCAL_FUNCTION node_api_head_events
     xor     %ecx, %ecx
     xor     %r8d, %r8d
     xor     %r9d, %r9d
-    call    node_work
+    call    lantern_node_work
     movq    $NODE_LC_ID, NodeAction_state_c(%rax)
     mov     NodeBlock_slot(%r12), %rax      # epoch_transition, execution_optimistic
     xor     %edx, %edx
@@ -8355,14 +8355,14 @@ LOCAL_FUNCTION node_api_head_events
     sete    %al
     lea     (%r8,%rax,2), %r13
     mov     $API_TOPIC_CHAIN_REORG, %edi    # chain_reorg, before the head event: the new head's chain lacks the old head
-    call    node_api_subscribed
+    call    lantern_node_api_subscribed
     test    %rax, %rax
     jz      12f
     cmpq    $0, NodeBlock_state_id(%r12)
     je      12f
     lea     Node_event_head(%rbx), %rdi
     mov     %r12, %rsi
-    call    node_api_reorg
+    call    lantern_node_api_reorg
     cmp     $-1, %rax
     je      12f
     mov     NodeBlock_data_id(%rdx), %rcx
@@ -8379,15 +8379,15 @@ LOCAL_FUNCTION node_api_head_events
     mov     NodeBlock_state_id(%r12), %rsi
     xor     %edx, %edx
     xor     %r8d, %r8d
-    call    node_work
+    call    lantern_node_work
 12: mov     NodeBlock_slot(%r12), %rax
     mov     %rax, Node_event_slot(%rbx)
     lea     Node_event_head(%rbx), %rax
     COPY32  %rax, %r12
     mov     NodeBlock_state_id(%r12), %rdi  # the pool's checks at the new head
-    call    node_pool_checks
+    call    lantern_node_pool_checks
     mov     $API_TOPIC_HEAD, %edi
-    call    node_api_subscribed
+    call    lantern_node_api_subscribed
     test    %rax, %rax
     jz      13f
     mov     NodeBlock_state_id(%r12), %rsi
@@ -8399,9 +8399,9 @@ LOCAL_FUNCTION node_api_head_events
     xor     %r8d, %r8d
     mov     %r13, %r9
     shl     $8, %r9                         # API_TOPIC_HEAD is 0
-    call    node_work
+    call    lantern_node_work
 13: mov     $API_TOPIC_HEAD_V2, %edi        # head_v2: the same values, its own text
-    call    node_api_subscribed
+    call    lantern_node_api_subscribed
     test    %rax, %rax
     jz      5f
     mov     NodeBlock_state_id(%r12), %rsi
@@ -8414,17 +8414,17 @@ LOCAL_FUNCTION node_api_head_events
     mov     %r13, %r9
     shl     $8, %r9
     add     $API_TOPIC_HEAD_V2, %r9
-    call    node_work
+    call    lantern_node_work
 5:  mov     Store_finalized_checkpoint(%rbp), %rax
     cmp     Node_event_epoch(%rbx), %rax
     jbe     9f
     mov     %rax, Node_event_epoch(%rbx)
     mov     $API_TOPIC_FINALIZED_CHECKPOINT, %edi
-    call    node_api_subscribed
+    call    lantern_node_api_subscribed
     test    %rax, %rax
     jz      9f
     lea     (Store_finalized_checkpoint + 8)(%rbp), %rdi
-    call    node_find_block
+    call    lantern_node_find_block
     cmp     $-1, %rax
     je      9f
     xor     %eax, %eax
@@ -8446,25 +8446,25 @@ LOCAL_FUNCTION node_api_head_events
     mov     $NODE_WORK_API_EVENT, %edi
     xor     %edx, %edx
     xor     %r8d, %r8d
-    call    node_work
+    call    lantern_node_work
 9:  LEAVE 0
-END_FUNCTION node_api_head_events
+END_FUNCTION lantern_node_api_head_events
 
 /* NODE_EV_WORK_DONE rdi of a NODE_WORK_API_EVENT: LANTERN_VALID, its text to the entries of its topic. */
-LOCAL_FUNCTION node_api_event_done
+LOCAL_FUNCTION lantern_node_api_event_done
     FRAME 0
     cmpq    $0, NodeEvent_result(%rdi)
     jne     9f
     movzbl  NodeAction_arg(%rdi), %esi
     add     $NodeEvent_chunk, %rdi
-    call    node_api_events
+    call    lantern_node_api_events
 9:  UNFRAME 0
-END_FUNCTION node_api_event_done
+END_FUNCTION lantern_node_api_event_done
 
 /* NODE_EV_API_CLOSED of the connection rdi: its stream ends, or with a chunk or work queued takes API_STREAM_GONE. Locals: the entry. */
-LOCAL_FUNCTION node_api_closed
+LOCAL_FUNCTION lantern_node_api_closed
     FRAME 16
-    call    node_api_find
+    call    lantern_node_api_find
     cmp     $-1, %rax
     je      9f
     testq   $API_STREAM_BUSY, NodeApi_flags(%rdx)
@@ -8475,9 +8475,9 @@ LOCAL_FUNCTION node_api_closed
     cmpq    $API_OP_PRODUCE_BLOCK_V3, NodeApi_op(%rdx)  # a produceBlockV3: its draft and engine result go too
     jne     3f
     mov     %rdx, %rdi
-    call    node_produce_release
+    call    lantern_node_produce_release
 2:  mov     (%rsp), %rdi
-    call    node_api_end
+    call    lantern_node_api_end
 9:  UNFRAME 16
 3:  cmpq    $API_OP_PUBLISH_BLOCK_V2, NodeApi_op(%rdx)  # a publishBlockV2: its ids; in NODE_PUBLISH_IMPORT it goes on unanswered
     jne     2b
@@ -8486,9 +8486,9 @@ LOCAL_FUNCTION node_api_closed
     orq     $API_STREAM_GONE, NodeApi_flags(%rdx)
     UNFRAME 16
 4:  mov     %rdx, %rdi
-    call    node_publish_end
+    call    lantern_node_publish_end
     UNFRAME 16
-END_FUNCTION node_api_closed
+END_FUNCTION lantern_node_api_closed
 
 /*
  * (connection rdi, route rsi, flags rdx, view rcx) -> rax: a stream of getBlockV2, getStateV2 or a validator operation of
@@ -8497,7 +8497,7 @@ END_FUNCTION node_api_closed
  * data, S7 the route, S8 the view, S9 the connection, S10 the flags. Locals: L the entry's index,
  * L+8 the entry.
  */
-LOCAL_FUNCTION node_api_stream
+LOCAL_FUNCTION lantern_node_api_stream
     ENTER 32
     movq    $0, (L + 16)(%rsp)
     mov     %rdi, S9(%rsp)
@@ -8534,7 +8534,7 @@ LOCAL_FUNCTION node_api_stream
     jne     34f
     mov     %rsi, %rdi
     mov     %rcx, %rsi
-    call    node_api_committees_check
+    call    lantern_node_api_committees_check
     mov     %rax, (L + 24)(%rsp)
     cmp     $-1, %rax
     jne     6f
@@ -8545,7 +8545,7 @@ LOCAL_FUNCTION node_api_stream
     ja      6f
     mov     ApiView_head_slot(%rcx), %rdi
     lea     Node_config(%rbx), %rsi
-    call    node_fork
+    call    lantern_node_fork
     mov     S7(%rsp), %rsi
     mov     S8(%rsp), %rcx
     cmp     $FORK_ELECTRA, %rax
@@ -8556,18 +8556,18 @@ LOCAL_FUNCTION node_api_stream
     mov     $NODE_ACT_STATE_FREE, %edi
     mov     ApiView_look_state(%rcx), %rsi
     xor     %edx, %edx
-    call    node_ids
+    call    lantern_node_ids
 33: mov     $400, %eax
     LEAVE 32
 4:  mov     ApiView_look_data(%rcx), %r12   # getBlockV2: the block's bytes
     test    %r12, %r12
     jz      80f
     jmp     6f
-5:  call    node_new_id                     # getStateV2: the state's SSZ bytes, as a new id the stream owns
+5:  call    lantern_node_new_id                     # getStateV2: the state's SSZ bytes, as a new id the stream owns
     mov     %rax, %r12
     mov     $NODE_ACT_STATE_BYTES, %edi
     mov     $NODE_ACT_STATE_BYTES_SIZE, %esi
-    call    node_act
+    call    lantern_node_act
     mov     S8(%rsp), %rcx
     mov     ApiView_look_state(%rcx), %rdx
     mov     %rdx, 16(%rax)
@@ -8578,8 +8578,8 @@ LOCAL_FUNCTION node_api_stream
     mov     $NODE_ACT_STATE_FREE, %edi
     mov     ApiView_look_state(%rcx), %rsi
     xor     %edx, %edx
-    call    node_ids
-6:  call    node_api_new                    # the entry
+    call    lantern_node_ids
+6:  call    lantern_node_api_new                    # the entry
     mov     %rax, L(%rsp)
     mov     %rdx, (L + 8)(%rsp)
     mov     %rdx, %rdi
@@ -8590,7 +8590,7 @@ LOCAL_FUNCTION node_api_stream
     mov     (L + 8)(%rsp), %rdx
     mov     %rdi, NodeApi_slot(%rdx)
     lea     Node_config(%rbx), %rsi
-    call    node_fork
+    call    lantern_node_fork
     mov     (L + 8)(%rsp), %rdx
     mov     %rax, NodeApi_fork(%rdx)
     mov     S9(%rsp), %rax
@@ -8611,21 +8611,21 @@ LOCAL_FUNCTION node_api_stream
     jne     7f
     mov     %rdx, %rdi
     mov     (L + 24)(%rsp), %rdx
-    call    node_api_committees_cursor
+    call    lantern_node_api_committees_cursor
     mov     (L + 8)(%rsp), %rdx
 7:  mov     L(%rsp), %rax
-    call    node_api_chunk_work
+    call    lantern_node_api_chunk_work
     xor     %eax, %eax
     LEAVE 32
 80: mov     $404, %eax
     LEAVE 32
-END_FUNCTION node_api_stream
+END_FUNCTION lantern_node_api_stream
 
 /*
  * The NODE_EV_WORK_DONE rdi of a NODE_WORK_API_CHUNK (node.md, lantern_node_step). rbx the node,
  * r15 the actions. r12 the event, r13 the entry, r14 the action, S7 the flags.
  */
-LOCAL_FUNCTION node_api_chunk_done
+LOCAL_FUNCTION lantern_node_api_chunk_done
     ENTER 0
     mov     %rdi, %r12
     mov     NodeAction_arg(%r12), %rax
@@ -8667,11 +8667,11 @@ LOCAL_FUNCTION node_api_chunk_done
     jne     2f
     mov     NodeApi_slot(%r13), %rsi
     inc     %rsi
-    call    node_headers_next
+    call    lantern_node_headers_next
     jmp     3f
 2:  cmpq    $API_OP_GET_BLOBS, NodeApi_op(%r13)   # the blob stream: its next sidecar or cell
     jne     21f
-    call    node_blob_advance
+    call    lantern_node_blob_advance
     jmp     3f
 21: cmpq    $API_OP_GET_BLOB_SIDECARS, NodeApi_op(%r13)    # a sidecar stream: its sidecar from member + 1 on
     je      4f
@@ -8679,9 +8679,9 @@ LOCAL_FUNCTION node_api_chunk_done
     jne     5f
 4:  mov     NodeApi_member(%r13), %rsi
     inc     %rsi
-    call    node_sidecar_next
+    call    lantern_node_sidecar_next
     jmp     3f
-5:  call    node_api_pool_advance
+5:  call    lantern_node_api_pool_advance
 3:  mov     NodeApi_flags(%r13), %rax
     mov     %rax, S7(%rsp)
 1:  testq   $API_STREAM_FOLD, S7(%rsp)      # API_STREAM_FOLD: no send, and the next chunk at once
@@ -8698,7 +8698,7 @@ LOCAL_FUNCTION node_api_chunk_done
     cmpq    $API_OP_PRODUCE_SYNC_COMMITTEE_CONTRIBUTION, NodeApi_op(%r13)
     jne     15f
     lea     NodeApi_cursor(%r13), %rdi
-15: call    node_store_find
+15: call    lantern_node_store_find
     cmp     $-1, %rax
     je      12f
     cmpq    $PAYLOAD_STATUS_NOT_VALIDATED, BlockNode_payload_status(%rdx)
@@ -8706,7 +8706,7 @@ LOCAL_FUNCTION node_api_chunk_done
     orq     $API_STREAM_OPTIMISTIC, NodeApi_flags(%r13)
     jmp     12f
 14: lea     NodeEvent_api_bytes(%r12), %rdi # they become the stream's own data; the answer from sent 0
-    call    node_put
+    call    lantern_node_put
     mov     %rax, NodeApi_data(%r13)
     mov     NodeApi_flags(%r13), %rax
     and     $~API_STREAM_FOLD, %rax
@@ -8718,13 +8718,13 @@ LOCAL_FUNCTION node_api_chunk_done
     call    lantern_zero
 12: mov     NodeAction_arg(%r12), %rax
     mov     %r13, %rdx
-    call    node_api_chunk_work
+    call    lantern_node_api_chunk_work
     jmp     99f
 11: mov     (NodeEvent_api_bytes + 16)(%r12), %rsi  # the chunk in a SEND
     add     $(56 + 7), %rsi
     and     $~7, %rsi
     mov     $NODE_ACT_API_SEND, %edi
-    call    node_act
+    call    lantern_node_act
     mov     %rax, %r14
     mov     NodeApi_connection(%r13), %rax
     mov     %rax, 16(%r14)
@@ -8765,35 +8765,35 @@ LOCAL_FUNCTION node_api_chunk_done
     testq   $API_STREAM_HTTP10, S7(%rsp)
     jz      51f
     mov     $API_R_KEEP, %r8d
-51: call    node_api_send
+51: call    lantern_node_api_send
     jmp     90f
 60: mov     $NODE_ACT_API_CLOSE, %edi
     mov     $NODE_ACT_API_CLOSE_SIZE, %esi
-    call    node_act
+    call    lantern_node_act
     mov     NodeApi_connection(%r13), %rcx
     mov     %rcx, 16(%rax)
 90: mov     %r13, %rdi
-    call    node_api_end
+    call    lantern_node_api_end
 99: LEAVE 0
-END_FUNCTION node_api_chunk_done
+END_FUNCTION lantern_node_api_chunk_done
 
 /* The name of the fork rdi joins the response. */
-LOCAL_FUNCTION api_fork_name
+LOCAL_FUNCTION lantern_api_fork_name
     UNWIND_END_PROLOGUE
     lea     api_forks(%rip), %rax
     shl     $4, %rdi
     add     %rax, %rdi
     movzbl  (%rdi), %esi
     inc     %rdi
-    jmp     api_put
-END_FUNCTION api_fork_name
+    jmp     lantern_api_put
+END_FUNCTION lantern_api_fork_name
 
 /*
  * The head of a streamed answer (beacon-api.md, Common rules) for the flags at NodeEvent_api + 8
  * of the event rbp and the fork of the entry rbx: with Content-Length rdi, or for rdi = 2^64 - 1
  * Transfer-Encoding: chunked when API_STREAM_CHUNKED is set, else neither. Locals: rdi.
  */
-LOCAL_FUNCTION api_stream_head
+LOCAL_FUNCTION lantern_api_stream_head
     FRAME 16
     mov     %rdi, (%rsp)
     API_LIT api_ok
@@ -8828,13 +8828,13 @@ LOCAL_FUNCTION api_stream_head
     ja      22f
 21: API_LIT api_version
     mov     NodeApi_fork(%rbx), %rdi
-    call    api_fork_name
+    call    lantern_api_fork_name
     API_LIT api_crlf
     jmp     22f
     /* produceBlockV3: and its three headers */
 23: API_LIT api_version
     mov     NodeApi_fork(%rbx), %rdi
-    call    api_fork_name
+    call    lantern_api_fork_name
     API_LIT api_crlf
     testq   $API_STREAM_PRODUCE_BLINDED, NodeApi_flags(%rbx)  # blinded with API_STREAM_PRODUCE_BLINDED
     jnz     231f
@@ -8842,17 +8842,17 @@ LOCAL_FUNCTION api_stream_head
     jmp     232f
 231: API_LIT api_h_blinded_true
 232: lea    NodeApi_root(%rbx), %rdi
-    call    api_dec256
+    call    lantern_api_dec256
     API_LIT api_h_block_value
     mov     NodeApi_filter_slot(%rbx), %rdi
-    call    api_wei
+    call    lantern_api_wei
     API_LIT api_crlf
 22: mov     (%rsp), %rdi
     cmp     $-1, %rdi
     je      3f
     API_LIT api_length
     mov     (%rsp), %rdi
-    call    api_dec
+    call    lantern_api_dec
     API_LIT api_crlf
     jmp     4f
 3:  testq   $API_STREAM_CHUNKED, (NodeEvent_api + 8)(%rbp)
@@ -8867,10 +8867,10 @@ LOCAL_FUNCTION api_stream_head
     API_LIT api_keep
 6:  API_LIT api_crlf
     UNFRAME 16
-END_FUNCTION api_stream_head
+END_FUNCTION lantern_api_stream_head
 
 /* The 4 lower case hex digits of rdi at rsi. Uses rax, rcx, rdx, rdi. */
-LOCAL_FUNCTION api_hex4
+LOCAL_FUNCTION lantern_api_hex4
     UNWIND_END_PROLOGUE
     lea     api_hex(%rip), %rax
     mov     $3, %ecx
@@ -8882,7 +8882,7 @@ LOCAL_FUNCTION api_hex4
     dec     %ecx
     jns     1b
     ret
-END_FUNCTION api_hex4
+END_FUNCTION lantern_api_hex4
 
 /*
  * The JSON of the entry rbx's SSZ bytes rdi from the cursor at NodeEvent_api + 16 of the event
@@ -8890,7 +8890,7 @@ END_FUNCTION api_hex4
  * NodeEvent_api_bytes; then } once it is whole. rax = 1 when whole, 0 when more is to come, 2
  * for bytes that are no encoding.
  */
-LOCAL_FUNCTION api_stream_json
+LOCAL_FUNCTION lantern_api_stream_json
     FRAME 0
     mov     NodeApi_op(%rbx), %rax          # a pool stream: its entries
     cmp     $API_OP_GET_POOL_VOLUNTARY_EXITS, %rax
@@ -8903,27 +8903,27 @@ LOCAL_FUNCTION api_stream_json
     je      4f
     cmp     $API_OP_GET_POOL_BLS_TO_EXECUTION_CHANGES, %rax
     jne     3f
-4:  call    api_pool_json
+4:  call    lantern_api_pool_json
     UNFRAME 0
 3:  cmpq    $API_OP_GET_BLOCK_HEADERS, NodeApi_op(%rbx)
     jne     32f
-    call    api_headers_json
+    call    lantern_api_headers_json
     UNFRAME 0
 32: cmpq    $API_OP_GET_BLOBS, NodeApi_op(%rbx)   # the blob stream: the sidecar rdi, the versioned hashes rsi
     jne     35f
-    call    api_blob_body
+    call    lantern_api_blob_body
     UNFRAME 0
 35: cmpq    $API_OP_GET_BLOB_SIDECARS, NodeApi_op(%rbx)
     je      33f
     cmpq    $API_OP_GET_DEBUG_DATA_COLUMN_SIDECARS, NodeApi_op(%rbx)
     jne     34f
-33: call    api_sidecar_body
+33: call    lantern_api_sidecar_body
     UNFRAME 0
 34: mov     NodeApi_op(%rbx), %rax          # the pending streams: their items, of the state rdi
     sub     $API_OP_GET_PENDING_CONSOLIDATIONS, %rax
     cmp     $2, %rax
     ja      31f
-    call    api_pending_json
+    call    lantern_api_pending_json
     UNFRAME 0
 31: cmpq    $API_OP_GET_BLOCK_V2, NodeApi_op(%rbx)  # the validator streams: their items, of the state rdi
     je      1f
@@ -8943,11 +8943,11 @@ LOCAL_FUNCTION api_stream_json
     je      35f
     cmpq    $API_OP_GET_EPOCH_COMMITTEES, NodeApi_op(%rbx)
     je      2f
-    call    api_validators_json
+    call    lantern_api_validators_json
     UNFRAME 0
-35: call    api_rewards_json
+35: call    lantern_api_rewards_json
     UNFRAME 0
-2:  call    api_committees_json
+2:  call    lantern_api_committees_json
     UNFRAME 0
 1:  lea     NodeEvent_api_bytes(%rbp), %rsi # the ByteList: its room to r14 - 1, its bytes to r12
     lea     -1(%r14), %rax
@@ -9001,18 +9001,18 @@ LOCAL_FUNCTION api_stream_json
     UNFRAME 0
 8:  xor     %eax, %eax
     UNFRAME 0
-END_FUNCTION api_stream_json
+END_FUNCTION lantern_api_stream_json
 
 /*
  * (node rdi, work rsi, data rdx, scratch rcx, event r8, room r9, state_a r10) -> rax: a
  * NODE_WORK_API_CHUNK of lantern_node_run (node.md): the next chunk of the NodeApi entry at the
  * work's arg, from the SSZ bytes in data, or for a validator stream from state_a and the ids in
  * data, at NodeEvent_api of the event, whose buffer has room bytes. rbx the entry, rbp the event;
- * the writer's r12-r15 (api_put). Locals: L the end of the chunk's room, L+8 the SSZ bytes, L+16
+ * the writer's r12-r15 (lantern_api_put). Locals: L the end of the chunk's room, L+8 the SSZ bytes, L+16
  * their count, L+24 the body's start, L+32 the head's bytes, L+40 data (a validator stream's state
  * once its selection is made), L+48 state_a, L+56 1 for a validator stream, L+64 the scratch.
  */
-LOCAL_FUNCTION node_api_chunk_run
+LOCAL_FUNCTION lantern_node_api_chunk_run
     ENTER 80
     mov     %rdx, (L + 40)(%rsp)
     mov     %r10, (L + 48)(%rsp)
@@ -9236,7 +9236,7 @@ LOCAL_FUNCTION node_api_chunk_run
     mov     $1, %r13d
     mov     L(%rsp), %r14
     xor     %r15d, %r15d
-    cmpq    $0, (L + 56)(%rsp)              # a validator stream: its selection; getEpochCommittees its count; then the state is what api_stream_json reads
+    cmpq    $0, (L + 56)(%rsp)              # a validator stream: its selection; getEpochCommittees its count; then the state is what lantern_api_stream_json reads
     je      6f
     cmpq    $3, (L + 56)(%rsp)
     je      67f
@@ -9253,7 +9253,7 @@ LOCAL_FUNCTION node_api_chunk_run
     cmpq    $2, (L + 56)(%rsp)
     je      63f
     mov     (L + 40)(%rsp), %rdx
-    call    node_api_validators_prep
+    call    lantern_node_api_validators_prep
     test    %rax, %rax
     jnz     97f
     cmpq    $API_OP_GET_ATTESTATIONS_REWARDS, NodeApi_op(%rbx)  # getAttestationsRewards: the scratch after the bitmap at +592 of the cursor, the node's config at +584
@@ -9288,7 +9288,7 @@ LOCAL_FUNCTION node_api_chunk_run
     mov     (L + 16)(%rsp), %rax
     imul    (L + 24)(%rsp), %rax
     mov     %rax, (L + 16)(%rsp)
-    mov     (L + 48)(%rsp), %rax            # the state is what api_stream_json reads
+    mov     (L + 48)(%rsp), %rax            # the state is what lantern_api_stream_json reads
     mov     %rax, (L + 40)(%rsp)
     jmp     6f
 69: mov     (L + 40)(%rsp), %rax            # getBlockHeaders: an item's header at the end of scratch, at L+40
@@ -9312,7 +9312,7 @@ LOCAL_FUNCTION node_api_chunk_run
     mov     100(%rax), %rdi
     mov     (L + 72)(%rsp), %rsi
     add     $Node_config, %rsi
-    call    node_fork
+    call    lantern_node_fork
     mov     %rax, %r10
     mov     (L + 40)(%rsp), %rdi
     mov     (L + 64)(%rsp), %rsi
@@ -9345,7 +9345,7 @@ LOCAL_FUNCTION node_api_chunk_run
     mov     NODE_STATE_SLOT(%rax), %rdi
     mov     (L + 72)(%rsp), %rsi
     add     $Node_config, %rsi
-    call    node_fork
+    call    lantern_node_fork
     mov     %rax, %r10
     mov     (L + 48)(%rsp), %rdi
     mov     (L + 72)(%rsp), %rsi
@@ -9362,7 +9362,7 @@ LOCAL_FUNCTION node_api_chunk_run
     mov     %rax, (L + 40)(%rsp)
     jmp     6f
 63: mov     (L + 72)(%rsp), %rdx
-    call    node_api_committees_prep
+    call    lantern_node_api_committees_prep
     cmp     $400, %rax
     je      64f
     test    %rax, %rax
@@ -9379,7 +9379,7 @@ LOCAL_FUNCTION node_api_chunk_run
     jb      6f
     mov     (L + 64)(%rsp), %rdi
     mov     NodeApi_member(%rbx), %rdx
-    call    node_pool_attestation
+    call    lantern_node_pool_attestation
     cmp     $1, %rax
     je      96f
     ja      97f
@@ -9393,10 +9393,10 @@ LOCAL_FUNCTION node_api_chunk_run
     mov     (L + 64)(%rsp), %rdi            # a fold of the entry: no bytes
     cmpq    $API_OP_PRODUCE_SYNC_COMMITTEE_CONTRIBUTION, NodeApi_op(%rbx)
     je      74f
-    call    node_api_fold
+    call    lantern_node_api_fold
     jmp     75f
 74: mov     (L + 48)(%rsp), %rdx
-    call    node_api_sync_fold
+    call    lantern_node_api_sync_fold
 75: cmp     $1, %rax
     je      96f
     ja      97f
@@ -9411,9 +9411,9 @@ LOCAL_FUNCTION node_api_chunk_run
     mov     %r12, %rdi
     cmpq    $API_OP_PRODUCE_SYNC_COMMITTEE_CONTRIBUTION, NodeApi_op(%rbx)
     je      76f
-    call    node_api_aggregate
+    call    lantern_node_api_aggregate
     jmp     77f
-76: call    node_api_contribution
+76: call    lantern_node_api_contribution
 77: test    %rax, %rax
     jnz     96f
     add     %rdx, %r12
@@ -9444,7 +9444,7 @@ LOCAL_FUNCTION node_api_chunk_run
 65: xor     %edi, %edi
     mov     (L + 32)(%rsp), %rdx
     mov     $API_BODY_ERROR, %ecx
-    call    api_respond
+    call    lantern_api_respond
     test    %rax, %rax
     jnz     97f
     mov     (NodeEvent_api_bytes + 16)(%rbp), %rax
@@ -9465,7 +9465,7 @@ LOCAL_FUNCTION node_api_chunk_run
 601: test   $API_STREAM_STARTED, %eax
     jnz     11f
     mov     (L + 16)(%rsp), %rdi            # SSZ: the head first, with Content-Length
-    call    api_stream_head
+    call    lantern_api_stream_head
 11: mov     (L + 16)(%rsp), %rdx            # then the bytes from sent, as many as fit
     mov     NodeEvent_api(%rbp), %rax
     sub     %rax, %rdx
@@ -9490,9 +9490,9 @@ LOCAL_FUNCTION node_api_chunk_run
     jnz     61f
     mov     (NodeEvent_api + 16 + 40)(%rbp), %rdi
     shl     $6, %rdi
-    call    api_stream_head
+    call    lantern_api_stream_head
 61: mov     (L + 40)(%rsp), %rdi
-    call    api_validators_json
+    call    lantern_api_validators_json
     orq     $API_STREAM_STARTED, (NodeEvent_api + 8)(%rbp)
     test    %rax, %rax
     jz      80f
@@ -9527,7 +9527,7 @@ LOCAL_FUNCTION node_api_chunk_run
     jmp     36f
 395: API_LIT api_j_version
     mov     NodeApi_fork(%rbx), %rdi
-    call    api_fork_name
+    call    lantern_api_fork_name
     API_LIT api_g_data
     jmp     36f
 394: cmpq   $3, (L + 56)(%rsp)
@@ -9538,7 +9538,7 @@ LOCAL_FUNCTION node_api_chunk_run
     jne     39f
 391: API_LIT api_j_version
     mov     NodeApi_fork(%rbx), %rdi
-    call    api_fork_name
+    call    lantern_api_fork_name
     API_LIT api_p_version
     jmp     36f
 39: API_LIT api_p_data
@@ -9548,12 +9548,12 @@ LOCAL_FUNCTION node_api_chunk_run
     mov     (NodeEvent_api + 8)(%rbp), %rdi
     shr     $8, %rdi
     and     $1, %edi
-    call    api_bool
+    call    lantern_api_bool
     API_LIT api_x_finalized
     mov     (NodeEvent_api + 8)(%rbp), %rdi
     shr     $9, %rdi
     and     $1, %edi
-    call    api_bool
+    call    lantern_api_bool
     cmpq    $API_OP_GET_ATTESTATIONS_REWARDS, NodeApi_op(%rbx)  # getAttestationsRewards: ,"data":{"ideal_rewards":[
     jne     381f
     API_LIT api_ar_open
@@ -9563,17 +9563,17 @@ LOCAL_FUNCTION node_api_chunk_run
     /* the pending streams: {"version":"<fork>","execution_optimistic":…,"finalized":…,"data":[ */
 392: API_LIT api_j_version
     mov     NodeApi_fork(%rbx), %rdi
-    call    api_fork_name
+    call    lantern_api_fork_name
     API_LIT api_j_optimistic
     mov     (NodeEvent_api + 8)(%rbp), %rdi
     shr     $8, %rdi
     and     $1, %edi
-    call    api_bool
+    call    lantern_api_bool
     API_LIT api_x_finalized
     mov     (NodeEvent_api + 8)(%rbp), %rdi
     shr     $9, %rdi
     and     $1, %edi
-    call    api_bool
+    call    lantern_api_bool
     API_LIT api_v_list
     jmp     36f
     /* {"version":"<fork>","execution_optimistic":…,"finalized":…,"data": */
@@ -9581,36 +9581,36 @@ LOCAL_FUNCTION node_api_chunk_run
     jne     351f
     API_LIT api_j_version
     mov     NodeApi_fork(%rbx), %rdi
-    call    api_fork_name
+    call    lantern_api_fork_name
     testq   $API_STREAM_PRODUCE_BLINDED, NodeApi_flags(%rbx)  # blinded with API_STREAM_PRODUCE_BLINDED
     jnz     3521f
     API_LIT api_pb_head
     jmp     3522f
 3521: API_LIT api_pb_head_true
 3522: lea   NodeApi_root(%rbx), %rdi
-    call    api_dec256
+    call    lantern_api_dec256
     API_LIT api_pb_block_value
     mov     NodeApi_filter_slot(%rbx), %rdi
-    call    api_wei
+    call    lantern_api_wei
     API_LIT api_g_data
     jmp     36f
 351: API_LIT api_j_version
     mov     NodeApi_fork(%rbx), %rdi
-    call    api_fork_name
+    call    lantern_api_fork_name
     API_LIT api_j_optimistic
     mov     (NodeEvent_api + 8)(%rbp), %rdi
     shr     $8, %rdi
     and     $1, %edi
-    call    api_bool
+    call    lantern_api_bool
     API_LIT api_x_finalized
     mov     (NodeEvent_api + 8)(%rbp), %rdi
     shr     $9, %rdi
     and     $1, %edi
-    call    api_bool
+    call    lantern_api_bool
     API_LIT api_j_data
 36: mov     (L + 40)(%rsp), %rdi
     mov     (L + 48)(%rsp), %rsi            # state_a: the blob stream's versioned hashes
-    call    api_stream_json
+    call    lantern_api_stream_json
     cmp     $3, %rax
     je      97f
     cmp     $2, %rax
@@ -9637,7 +9637,7 @@ LOCAL_FUNCTION node_api_chunk_run
     xor     %r13d, %r13d                    # the head's bytes: a pass that counts
     xor     %r12d, %r12d
     mov     (L + 32)(%rsp), %rdi
-    call    api_stream_head
+    call    lantern_api_stream_head
     lea     (NodeEvent_api_bytes + 24)(%rbp,%r12), %rdi # the body after the head, and a size line when chunked
     testq   $API_STREAM_CHUNKED, (NodeEvent_api + 8)(%rbp)
     jz      34f
@@ -9651,12 +9651,12 @@ LOCAL_FUNCTION node_api_chunk_run
     lea     (NodeEvent_api_bytes + 24)(%rbp), %r12
     mov     L(%rsp), %r14
     mov     (L + 32)(%rsp), %rdi
-    call    api_stream_head
+    call    lantern_api_stream_head
     testq   $API_STREAM_CHUNKED, (NodeEvent_api + 8)(%rbp)
     jz      37f
     mov     (L + 16)(%rsp), %rdi            # chunked: the size line, then CRLF after the bytes
     mov     %r12, %rsi
-    call    api_hex4
+    call    lantern_api_hex4
     movw    $0x0a0d, 4(%r12)
     mov     (L + 24)(%rsp), %r12
     API_LIT api_crlf
@@ -9670,7 +9670,7 @@ LOCAL_FUNCTION node_api_chunk_run
     sub     $7, %r14
     mov     (L + 40)(%rsp), %rdi
     mov     (L + 48)(%rsp), %rsi
-    call    api_stream_json
+    call    lantern_api_stream_json
     cmp     $3, %rax
     je      97f
     cmp     $2, %rax
@@ -9689,7 +9689,7 @@ LOCAL_FUNCTION node_api_chunk_run
     mov     %r12, %rdi
     sub     %rsi, %rdi
     sub     $6, %rdi
-    call    api_hex4
+    call    lantern_api_hex4
     movw    $0x0a0d, (NodeEvent_api_bytes + 24 + 4)(%rbp)
     mov     L(%rsp), %r14
     API_LIT api_crlf
@@ -9699,7 +9699,7 @@ LOCAL_FUNCTION node_api_chunk_run
     jmp     44f
 45: mov     (L + 40)(%rsp), %rdi            # HTTP/1.0: the bytes alone
     mov     (L + 48)(%rsp), %rsi
-    call    api_stream_json
+    call    lantern_api_stream_json
     cmp     $3, %rax
     je      97f
     cmp     $2, %rax
@@ -9734,7 +9734,7 @@ LOCAL_FUNCTION node_api_chunk_run
     LEAVE 80
 98: mov     $LANTERN_INVALID_EVENT, %eax
     LEAVE 80
-END_FUNCTION node_api_chunk_run
+END_FUNCTION lantern_node_api_chunk_run
 
 /* ------------------------------------------------------------ The pools (beacon-api.md, node.md) */
 
@@ -9748,7 +9748,7 @@ END_FUNCTION node_api_chunk_run
  * NODE_POOL_ATTESTATION_ROOM bytes. Locals: the ByteList, the SingleAttestation, the committee
  * index, the place, the length.
  */
-LOCAL_FUNCTION node_pool_attestation
+LOCAL_FUNCTION lantern_node_pool_attestation
     FRAME 48
     cmpq    $240, 16(%rsi)
     jne     81f
@@ -9818,10 +9818,10 @@ LOCAL_FUNCTION node_pool_attestation
     UNFRAME 48
 82: mov     $2, %eax
     UNFRAME 48
-END_FUNCTION node_pool_attestation
+END_FUNCTION lantern_node_pool_attestation
 
 /* rax = the new id of a NODE_ACT_BYTES_PUT of the 8 bytes at rdi. Locals: a ByteList head whose offset reaches them. */
-LOCAL_FUNCTION node_api_put8
+LOCAL_FUNCTION lantern_node_api_put8
     FRAME 32
     mov     %rdi, %rax
     sub     %rsp, %rax
@@ -9829,12 +9829,12 @@ LOCAL_FUNCTION node_api_put8
     mov     %rax, 8(%rsp)
     movq    $8, 16(%rsp)
     mov     %rsp, %rdi
-    call    node_put
+    call    lantern_node_put
     UNFRAME 32
-END_FUNCTION node_api_put8
+END_FUNCTION lantern_node_api_put8
 
 /* rax = the gossip topic of the pool POST rdi, or 0. */
-LOCAL_FUNCTION node_submit_topic
+LOCAL_FUNCTION lantern_node_submit_topic
     UNWIND_END_PROLOGUE
     mov     $GOSSIP_VOLUNTARY_EXIT, %eax
     cmp     $API_OP_SUBMIT_POOL_VOLUNTARY_EXIT, %rdi
@@ -9862,17 +9862,17 @@ LOCAL_FUNCTION node_submit_topic
     je      9f
     xor     %eax, %eax
 9:  ret
-END_FUNCTION node_submit_topic
+END_FUNCTION lantern_node_submit_topic
 
 /* rax = the lantern_node_json kind of the pool operation of the gossip topic rdi. */
-LOCAL_FUNCTION node_pool_kind
+LOCAL_FUNCTION lantern_node_pool_kind
     UNWIND_END_PROLOGUE
     lea     -(GOSSIP_VOLUNTARY_EXIT - NODE_JSON_EXIT)(%rdi), %rax
     cmp     $GOSSIP_BLS_TO_EXECUTION_CHANGE, %rdi
     jne     9f
     mov     $NODE_JSON_BLS_CHANGE, %eax
 9:  ret
-END_FUNCTION node_pool_kind
+END_FUNCTION lantern_node_pool_kind
 .if GOSSIP_PROPOSER_SLASHING - GOSSIP_VOLUNTARY_EXIT != NODE_JSON_PROPOSER_SLASHING - NODE_JSON_EXIT || GOSSIP_ATTESTER_SLASHING - GOSSIP_VOLUNTARY_EXIT != NODE_JSON_ATTESTER_SLASHING - NODE_JSON_EXIT
 .error "node_pool_kind: the kinds follow the topics"
 .endif
@@ -9883,7 +9883,7 @@ END_FUNCTION node_pool_kind
  * of the type of its fork, and for getPoolAttestationsV2 of its filters; else 2^64 - 1. rdx = the
  * entry. rbx the node. Uses rcx, r8, r9, r10, r11.
  */
-LOCAL_FUNCTION node_pool_next
+LOCAL_FUNCTION lantern_node_pool_next
     UNWIND_END_PROLOGUE
     mov     NodeApi_op(%rsi), %rax
     mov     $GOSSIP_VOLUNTARY_EXIT, %ecx
@@ -9947,7 +9947,7 @@ LOCAL_FUNCTION node_pool_next
 4:  ret
 8:  mov     $-1, %rax
     ret
-END_FUNCTION node_pool_next
+END_FUNCTION lantern_node_pool_next
 
 /*
  * (connection rdi, route rsi, flags rdx, view rcx): a stream of a pool GET (node.md, NODE_EV_API):
@@ -9955,14 +9955,14 @@ END_FUNCTION node_pool_next
  * its bytes, sent its fork, member its member; data 0 with none. flags: API_STREAM_CLOSE and API_STREAM_HTTP10. Locals: the connection, the route, the
  * flags, the fork, the entry's index and address.
  */
-LOCAL_FUNCTION node_api_pool_stream
+LOCAL_FUNCTION lantern_node_api_pool_stream
     FRAME 48
     mov     %rdi, (%rsp)
     mov     %rsi, 8(%rsp)
     mov     %rdx, 16(%rsp)
     mov     ApiView_fork(%rcx), %rax
     mov     %rax, 24(%rsp)
-    call    node_api_new
+    call    lantern_node_api_new
     mov     %rax, 32(%rsp)
     mov     %rdx, 40(%rsp)
     mov     %rdx, %rdi
@@ -10008,7 +10008,7 @@ LOCAL_FUNCTION node_api_pool_stream
     mov     %rcx, NodeApi_filter_index(%rdx)
 2:  xor     %edi, %edi
     mov     %rdx, %rsi
-    call    node_pool_next
+    call    lantern_node_pool_next
     mov     40(%rsp), %rcx
     cmp     $-1, %rax
     je      1f
@@ -10021,7 +10021,7 @@ LOCAL_FUNCTION node_api_pool_stream
     mov     %rax, NodeApi_member(%rcx)
 6:  mov     32(%rsp), %rax
     mov     40(%rsp), %rdx
-    call    node_api_chunk_work
+    call    lantern_node_api_chunk_work
     xor     %eax, %eax
     UNFRAME 48
 1:  cmpq    $API_OP_GET_AGGREGATED_ATTESTATION_V2, NodeApi_op(%rcx)  # none: the folds 404, and no stream
@@ -10029,7 +10029,7 @@ LOCAL_FUNCTION node_api_pool_stream
     cmpq    $API_OP_PRODUCE_SYNC_COMMITTEE_CONTRIBUTION, NodeApi_op(%rcx)
     jne     6b
 7:  mov     %rcx, %rdi
-    call    node_api_end
+    call    lantern_node_api_end
     mov     $404, %eax
     UNFRAME 48
 23: mov     8(%rsp), %rax                   # produceSyncCommitteeContribution: a fold of slot and subcommittee_index,
@@ -10045,7 +10045,7 @@ LOCAL_FUNCTION node_api_pool_stream
     movdqu  %xmm0, NodeApi_cursor(%rdx)
     movdqu  %xmm1, (NodeApi_cursor + 16)(%rdx)
     lea     Node_head_root(%rbx), %rdi
-    call    node_find_block
+    call    lantern_node_find_block
     cmp     $-1, %rax
     je      26f
     mov     NodeBlock_state_id(%rdx), %rax
@@ -10055,14 +10055,14 @@ LOCAL_FUNCTION node_api_pool_stream
     mov     %rax, NodeApi_state(%rdx)
     jmp     2b
 25: mov     40(%rsp), %rdi
-    call    node_api_end
+    call    lantern_node_api_end
     mov     $400, %eax
     UNFRAME 48
 26: mov     40(%rsp), %rdi
-    call    node_api_end
+    call    lantern_node_api_end
     mov     $500, %eax
     UNFRAME 48
-END_FUNCTION node_api_pool_stream
+END_FUNCTION lantern_node_api_pool_stream
 
 /*
  * The item of the getBlockHeaders stream rdi at or after the position rsi (node.md, NODE_EV_API, an
@@ -10072,7 +10072,7 @@ END_FUNCTION node_api_pool_stream
  * store. r12 the entry, r13 the position, r14 the slot of the query or 2^64 - 1, r15 the address of
  * its parent_root or 0. Locals: L, L+8 the member, L+16 a slot or a NodeBlock entry.
  */
-LOCAL_FUNCTION node_headers_next
+LOCAL_FUNCTION lantern_node_headers_next
     ENTER 32
     mov     %rdi, %r12
     mov     %rsi, %r13
@@ -10088,14 +10088,14 @@ LOCAL_FUNCTION node_headers_next
     test    %r15, %r15
     jz      15f
     mov     %r15, %rdi                      # with parent_root: its slot r, of the node's imported block on the chain, else of the Db
-    call    node_find_block
+    call    lantern_node_find_block
     cmp     $-1, %rax
     je      11f
     cmpq    $NODE_BLOCK_IMPORTED, NodeBlock_status(%rdx)
     jne     11f
     mov     %rdx, (L + 16)(%rsp)
     mov     %rdx, %rdi
-    call    node_api_on_chain
+    call    lantern_node_api_on_chain
     test    %rax, %rax
     jz      19f
     mov     (L + 16)(%rsp), %rax
@@ -10113,11 +10113,11 @@ LOCAL_FUNCTION node_headers_next
     cmp     %r14, (L + 16)(%rsp)
     ja      19f                             # with slot: at most slot
     mov     (L + 16)(%rsp), %rdi
-    call    node_api_below
+    call    lantern_node_api_below
     cmp     $-1, %rax
     jne     19f
     mov     (L + 16)(%rsp), %rdi
-    call    node_db_slot
+    call    lantern_node_db_slot
     test    %rax, %rax
     jz      12b
     cmp     $-1, %r14
@@ -10127,22 +10127,22 @@ LOCAL_FUNCTION node_headers_next
     jmp     16f
 15: mov     %r14, (L + 16)(%rsp)            # slot alone: the Db's block of slot, below the chain the node keeps
     mov     %r14, %rdi
-    call    node_api_below
+    call    lantern_node_api_below
     cmp     $-1, %rax
     jne     19f
     mov     %r14, %rdi
-    call    node_db_slot
+    call    lantern_node_db_slot
     test    %rax, %rax
     jz      19f
 16: lea     NodeApi_cursor(%r12), %rdi      # the Db's block of the slot at L + 16: its DbSlot rax, the root at 0
     COPY32  %rdi, %rax
     mov     (L + 16)(%rsp), %rdi
-    call    node_db_block
+    call    lantern_node_db_block
     mov     %rax, NodeApi_data(%r12)
     movq    $0, NodeApi_state(%r12)
     movq    $0, NodeApi_slot(%r12)
     mov     (L + 16)(%rsp), %rdi
-    call    node_api_final_block
+    call    lantern_node_api_final_block
     shl     $2, %rax
     or      $1, %rax                        # on the chain, not optimistic
     mov     %rax, NodeApi_member(%r12)
@@ -10170,7 +10170,7 @@ LOCAL_FUNCTION node_headers_next
     test    %rax, %rax
     jnz     24f
     mov     %rsi, %rdi
-    call    node_api_db_ref
+    call    lantern_node_api_db_ref
 24: mov     (L + 16)(%rsp), %rsi
     mov     %rax, NodeApi_data(%r12)
     xor     %ecx, %ecx
@@ -10189,13 +10189,13 @@ LOCAL_FUNCTION node_headers_next
     shl     $1, %eax
     mov     %rax, (L + 8)(%rsp)
     mov     %rsi, %rdi
-    call    node_api_on_chain
+    call    lantern_node_api_on_chain
     or      %rax, (L + 8)(%rsp)
     test    %rax, %rax
     jz      26f
     mov     (L + 16)(%rsp), %rsi
     mov     NodeBlock_slot(%rsi), %rdi
-    call    node_api_final_block
+    call    lantern_node_api_final_block
     shl     $2, %rax
     or      %rax, (L + 8)(%rsp)
 26: mov     (L + 8)(%rsp), %rax
@@ -10208,7 +10208,7 @@ LOCAL_FUNCTION node_headers_next
     movq    $0, NodeApi_state(%r12)
     xor     %eax, %eax
     LEAVE 32
-END_FUNCTION node_headers_next
+END_FUNCTION lantern_node_headers_next
 
 /*
  * (connection rdi, route rsi, flags rdx): the getBlockHeaders stream of the route's query (node.md,
@@ -10218,12 +10218,12 @@ END_FUNCTION node_headers_next
  * node. Locals: the connection, the route then the items, the flags, the entry's index and address,
  * the position.
  */
-LOCAL_FUNCTION node_api_headers_stream
+LOCAL_FUNCTION lantern_node_api_headers_stream
     FRAME 48
     mov     %rdi, (%rsp)
     mov     %rsi, 8(%rsp)
     mov     %rdx, 16(%rsp)
-    call    node_api_new
+    call    lantern_node_api_new
     mov     %rax, 24(%rsp)
     mov     %rdx, 32(%rsp)
     mov     %rdx, %rdi
@@ -10244,7 +10244,7 @@ LOCAL_FUNCTION node_api_headers_stream
     movq    $-1, NodeApi_filter_slot(%rdx)
     jmp     2f
 1:  lea     Node_head_root(%rbx), %rdi      # neither: the head's slot
-    call    node_find_block
+    call    lantern_node_find_block
     mov     $-1, %rcx
     cmp     $-1, %rax
     je      11f
@@ -10263,7 +10263,7 @@ LOCAL_FUNCTION node_api_headers_stream
     movq    $0, 40(%rsp)
 4:  mov     32(%rsp), %rdi
     mov     40(%rsp), %rsi
-    call    node_headers_next
+    call    lantern_node_headers_next
     mov     32(%rsp), %rdx
     test    %rax, %rax
     jz      5f
@@ -10284,22 +10284,22 @@ LOCAL_FUNCTION node_api_headers_stream
     andq    $~API_STREAM_FINALIZED, NodeApi_flags(%rdx)
 6:  mov     32(%rsp), %rdi                  # the first item
     xor     %esi, %esi
-    call    node_headers_next
+    call    lantern_node_headers_next
     mov     24(%rsp), %rax
     mov     32(%rsp), %rdx
-    call    node_api_chunk_work
+    call    lantern_node_api_chunk_work
     UNFRAME 48
-END_FUNCTION node_api_headers_stream
+END_FUNCTION lantern_node_api_headers_stream
 
 # rax = the data of the sidecar of index rdx of the block of the root at rdi and the slot rsi, as a
 # sidecar stream finds it (node.md): the NODE_BLOB_VALID entry's bytes, else with NODE_FLAG_DB the
 # NODE_DB_REF of the Db's record; 0 with none. rbx the node. Locals: the slot, the index.
-LOCAL_FUNCTION node_sidecar_of
+LOCAL_FUNCTION lantern_node_sidecar_of
     FRAME 16
     mov     %rsi, (%rsp)
     mov     %rdx, 8(%rsp)
     mov     %rdx, %rsi
-    call    node_blob_held
+    call    lantern_node_blob_held
     test    %rax, %rax
     jz      1f
     mov     NodeBlob_data_id(%rax), %rax
@@ -10308,18 +10308,18 @@ LOCAL_FUNCTION node_sidecar_of
     jz      9f
     mov     (%rsp), %rdi
     mov     8(%rsp), %rsi
-    call    node_db_sidecar
+    call    lantern_node_db_sidecar
     UNFRAME 16
 9:  xor     %eax, %eax
     UNFRAME 16
-END_FUNCTION node_sidecar_of
+END_FUNCTION lantern_node_sidecar_of
 
 # (connection rdi, route rsi, flags rdx, view rcx) -> rax: the blob stream of the block of the view
 # (node.md, NODE_EV_API, the blob stream): 0, or 404 for a fulu block of which the node holds a
 # column sidecar but not one of each of the first NUMBER_OF_COLUMNS / 2 columns. rbx the node.
 # Locals: the connection, the route, the flags, the view, the fork, the entry's index and address, a
 # column, the count of the first half's columns held, 1 with any held, a ByteList head (24).
-LOCAL_FUNCTION node_api_blob_stream
+LOCAL_FUNCTION lantern_node_api_blob_stream
     FRAME 112
     mov     %rdi, (%rsp)
     mov     %rsi, 8(%rsp)
@@ -10327,7 +10327,7 @@ LOCAL_FUNCTION node_api_blob_stream
     mov     %rcx, 24(%rsp)
     mov     ApiView_head_slot(%rcx), %rdi
     lea     Node_config(%rbx), %rsi
-    call    node_fork
+    call    lantern_node_fork
     mov     %rax, 32(%rsp)
     movq    $0, 64(%rsp)
     movq    $0, 72(%rsp)
@@ -10340,7 +10340,7 @@ LOCAL_FUNCTION node_api_blob_stream
     mov     24(%rsp), %rcx
     lea     ApiView_head_root(%rcx), %rdi
     mov     ApiView_head_slot(%rcx), %rsi
-    call    node_sidecar_of
+    call    lantern_node_sidecar_of
     mov     56(%rsp), %rdx
     incq    56(%rsp)
     test    %rax, %rax
@@ -10354,7 +10354,7 @@ LOCAL_FUNCTION node_api_blob_stream
     je      2f
     cmpq    $0, 72(%rsp)
     jne     8f                              # some, but not each of the first half: 404
-2:  call    node_api_new
+2:  call    lantern_node_api_new
     mov     %rax, 40(%rsp)
     mov     %rdx, 48(%rsp)
     mov     %rdx, %rdi
@@ -10395,7 +10395,7 @@ LOCAL_FUNCTION node_api_blob_stream
     mov     %rcx, (%rdi)
     mov     %rax, 8(%rdi)
     mov     %rcx, 16(%rdi)
-    call    node_put
+    call    lantern_node_put
     mov     48(%rsp), %rdx
     mov     %rax, NodeApi_state(%rdx)
     orq     $API_STREAM_OWN_STATE, NodeApi_flags(%rdx)
@@ -10409,30 +10409,30 @@ LOCAL_FUNCTION node_api_blob_stream
     movq    $-1, NodeApi_filter_index(%rdx)
     mov     %rdx, %rdi
     xor     %esi, %esi
-    call    node_sidecar_next
+    call    lantern_node_sidecar_next
     jmp     7f
 6:  cmpq    $(NUMBER_OF_COLUMNS / 2), 64(%rsp)  # fulu: blob 0 and column 0 with the first half; else none
     jne     7f
     lea     NodeApi_root(%rdx), %rdi
     mov     NodeApi_slot(%rdx), %rsi
     xor     %edx, %edx
-    call    node_sidecar_of
+    call    lantern_node_sidecar_of
     mov     48(%rsp), %rdx
     mov     %rax, NodeApi_data(%rdx)
 7:  mov     40(%rsp), %rax
     mov     48(%rsp), %rdx
-    call    node_api_chunk_work
+    call    lantern_node_api_chunk_work
     xor     %eax, %eax
     UNFRAME 112
 8:  mov     $404, %eax
     UNFRAME 112
-END_FUNCTION node_api_blob_stream
+END_FUNCTION lantern_node_api_blob_stream
 
 # The blob stream rdi after a chunk that ended its item (node.md, NODE_EV_API, the blob stream):
 # deneb and electra the sidecar from member + 1 on; fulu the next cell, of blob filter_slot + 1 and
 # column 0 after API_STREAM_BLOB_SKIP or the first half's last column, else of column member + 1,
 # with sent 0. API_STREAM_BLOB_SKIP clears. rbx the node. r12 the entry, r13 its flags.
-LOCAL_FUNCTION node_blob_advance
+LOCAL_FUNCTION lantern_node_blob_advance
     ENTER 0
     mov     %rdi, %r12
     mov     NodeApi_flags(%r12), %r13
@@ -10442,7 +10442,7 @@ LOCAL_FUNCTION node_blob_advance
     mov     %r12, %rdi
     mov     NodeApi_member(%r12), %rsi
     inc     %rsi
-    call    node_sidecar_next
+    call    lantern_node_sidecar_next
     LEAVE 0
 1:  mov     NodeApi_member(%r12), %rax
     mov     NodeApi_filter_slot(%r12), %rcx
@@ -10459,16 +10459,16 @@ LOCAL_FUNCTION node_blob_advance
     lea     NodeApi_root(%r12), %rdi
     mov     NodeApi_slot(%r12), %rsi
     mov     %rax, %rdx
-    call    node_sidecar_of
+    call    lantern_node_sidecar_of
     mov     %rax, NodeApi_data(%r12)
     LEAVE 0
-END_FUNCTION node_blob_advance
+END_FUNCTION lantern_node_blob_advance
 
 # rax = 1 when kzg_commitment_to_versioned_hash of the 48-byte commitment at rdi (deneb
 # beacon-chain.md: VERSIONED_HASH_VERSION_KZG, then the last 31 bytes of its sha256) is one of the
 # Root items of the ByteList rsi, else 0. Locals: the ByteList rsi, a ByteList of the commitment
 # (72), the hash (32).
-LOCAL_FUNCTION api_blob_wanted
+LOCAL_FUNCTION lantern_api_blob_wanted
     FRAME 112
     mov     %rsi, (%rsp)
     movq    $72, 8(%rsp)
@@ -10498,15 +10498,15 @@ LOCAL_FUNCTION api_blob_wanted
     jmp     1b
 8:  xor     %eax, %eax
     UNFRAME 112
-END_FUNCTION api_blob_wanted
+END_FUNCTION lantern_api_blob_wanted
 
-# The blob stream's body, as api_stream_json (node.md, NODE_WORK_API_CHUNK, the blob stream): with
+# The blob stream's body, as lantern_api_stream_json (node.md, NODE_WORK_API_CHUNK, the blob stream): with
 # the sidecar rdi and the versioned hashes rsi (or 0), the bytes of its blob, or of its cell, from
 # sent (NodeEvent_api), as many as fit, as JSON in lower case hex; with rdi = 0, or a blob past the
 # last, ]} as JSON. rax = 1 when the answer is whole, 0 when more is to come, 2 for bytes that are
 # no encoding. Locals: the sidecar, the hashes, the piece's bytes, their count, 1 at a blob's first
 # piece, 1 at its last, the offsets of column and kzg_commitments.
-LOCAL_FUNCTION api_blob_body
+LOCAL_FUNCTION lantern_api_blob_body
     FRAME 64
     mov     %rdi, (%rsp)
     mov     %rsi, 8(%rsp)
@@ -10530,7 +10530,7 @@ LOCAL_FUNCTION api_blob_body
     je      30f
     lea     (8 + PUB_BLOB_BYTES)(%r8), %rdi
     mov     8(%rsp), %rsi
-    call    api_blob_wanted
+    call    lantern_api_blob_wanted
     test    %rax, %rax
     jnz     30f
     jmp     88f
@@ -10563,7 +10563,7 @@ LOCAL_FUNCTION api_blob_body
     add     56(%rsp), %rdi
     add     %r8, %rdi
     mov     8(%rsp), %rsi
-    call    api_blob_wanted
+    call    lantern_api_blob_wanted
     test    %rax, %rax
     jz      87f
     mov     (%rsp), %rdi
@@ -10683,14 +10683,14 @@ LOCAL_FUNCTION api_blob_body
     UNFRAME 64
 92: mov     $2, %eax
     UNFRAME 64
-END_FUNCTION api_blob_body
+END_FUNCTION lantern_api_blob_body
 
 /*
  * The sidecar of the sidecar stream rdi from the index rsi on (node.md, NODE_EV_API, a sidecar of a
  * sidecar stream): member, data, sent 0 and cursor zero; rax = 1, or 0 with data 0 for none. rbx
  * the node. r12 the entry, r13 the index.
  */
-LOCAL_FUNCTION node_sidecar_next
+LOCAL_FUNCTION lantern_node_sidecar_next
     ENTER 0
     mov     %rdi, %r12
     mov     %rsi, %r13
@@ -10707,7 +10707,7 @@ LOCAL_FUNCTION node_sidecar_next
     jz      7f
     lea     NodeApi_root(%r12), %rdi        # the node's NODE_BLOB_VALID entry, else the Db's record
     mov     %r13, %rsi
-    call    node_blob_held
+    call    lantern_node_blob_held
     test    %rax, %rax
     jz      3f
     mov     NodeBlob_data_id(%rax), %rax
@@ -10716,7 +10716,7 @@ LOCAL_FUNCTION node_sidecar_next
     jz      7f
     mov     NodeApi_slot(%r12), %rdi
     mov     %r13, %rsi
-    call    node_db_sidecar
+    call    lantern_node_db_sidecar
     test    %rax, %rax
     jz      7f
 5:  mov     %rax, NodeApi_data(%r12)
@@ -10732,7 +10732,7 @@ LOCAL_FUNCTION node_sidecar_next
 8:  movq    $0, NodeApi_data(%r12)
     xor     %eax, %eax
     LEAVE 0
-END_FUNCTION node_sidecar_next
+END_FUNCTION lantern_node_sidecar_next
 
 /*
  * (connection rdi, route rsi, flags rdx, view rcx) -> rax: the sidecar stream of the block of the
@@ -10740,7 +10740,7 @@ END_FUNCTION node_sidecar_next
  * the node. Locals: the connection, the route, the flags, the view, the fork, the entry's index and
  * address.
  */
-LOCAL_FUNCTION node_api_sidecar_stream
+LOCAL_FUNCTION lantern_node_api_sidecar_stream
     FRAME 64
     mov     %rdi, (%rsp)
     mov     %rsi, 8(%rsp)
@@ -10748,7 +10748,7 @@ LOCAL_FUNCTION node_api_sidecar_stream
     mov     %rcx, 24(%rsp)
     mov     ApiView_head_slot(%rcx), %rdi
     lea     Node_config(%rbx), %rsi
-    call    node_fork
+    call    lantern_node_fork
     mov     %rax, 32(%rsp)
     mov     8(%rsp), %rcx
     cmpq    $API_OP_GET_BLOB_SIDECARS, ApiRoute_op(%rcx)
@@ -10760,7 +10760,7 @@ LOCAL_FUNCTION node_api_sidecar_stream
     jmp     2f
 1:  cmp     $FORK_FULU, %rax                # getDebugDataColumnSidecars: fulu and later
     jb      8f
-2:  call    node_api_new
+2:  call    lantern_node_api_new
     mov     %rax, 40(%rsp)
     mov     %rdx, 48(%rsp)
     mov     %rdx, %rdi
@@ -10820,18 +10820,18 @@ LOCAL_FUNCTION node_api_sidecar_stream
     mov     %r9, NodeApi_filter_index(%rdx)
     mov     %rdx, %rdi
     xor     %esi, %esi
-    call    node_sidecar_next
+    call    lantern_node_sidecar_next
     mov     40(%rsp), %rax
     mov     48(%rsp), %rdx
-    call    node_api_chunk_work
+    call    lantern_node_api_chunk_work
     xor     %eax, %eax
     UNFRAME 64
 8:  mov     $400, %eax
     UNFRAME 64
-END_FUNCTION node_api_sidecar_stream
+END_FUNCTION lantern_node_api_sidecar_stream
 
 /*
- * A sidecar stream's body, as api_stream_json (node.md, NODE_WORK_API_CHUNK, the sidecar streams):
+ * A sidecar stream's body, as lantern_api_stream_json (node.md, NODE_WORK_API_CHUNK, the sidecar streams):
  * with the bytes rdi, as JSON the JSON of the sidecar from the cursor at NodeEvent_api + 16 by
  * lantern_node_json of the entry's fork and the kind of the operation, after , when API_STREAM_ITEMS
  * is set and the cursor is at its start; as SSZ its bytes from sent (NodeEvent_api), as many as fit;
@@ -10839,7 +10839,7 @@ END_FUNCTION node_api_sidecar_stream
  * JSON, nothing as SSZ. rax = 1 when the answer is whole, 0 when more is to come, 2 for bytes that
  * are no encoding. Locals: the bytes.
  */
-LOCAL_FUNCTION api_sidecar_body
+LOCAL_FUNCTION lantern_api_sidecar_body
     FRAME 16
     mov     %rdi, (%rsp)
     test    %rdi, %rdi
@@ -10908,14 +10908,14 @@ LOCAL_FUNCTION api_sidecar_body
     UNFRAME 16
 7:  mov     $2, %eax
     UNFRAME 16
-END_FUNCTION api_sidecar_body
+END_FUNCTION lantern_api_sidecar_body
 
 /*
  * The pool stream of the NodeApi entry rdi goes to its next entry after slot (node.md,
  * NODE_WORK_API_CHUNK): its slot, data, sent and member, a zero cursor; data 0 with none. Bytes it owned
  * get a NODE_ACT_BYTES_FREE, and API_STREAM_OWN clears. Locals: the entry, the old data, the flags.
  */
-LOCAL_FUNCTION node_api_pool_advance
+LOCAL_FUNCTION lantern_node_api_pool_advance
     FRAME 32
     mov     %rdi, (%rsp)
     mov     NodeApi_data(%rdi), %rax
@@ -10925,7 +10925,7 @@ LOCAL_FUNCTION node_api_pool_advance
     mov     %rdi, %rsi
     mov     NodeApi_slot(%rdi), %rdi
     inc     %rdi
-    call    node_pool_next
+    call    lantern_node_pool_next
     mov     (%rsp), %rcx
     xor     %r8d, %r8d
     cmp     $-1, %rax
@@ -10948,9 +10948,9 @@ LOCAL_FUNCTION node_api_pool_advance
     mov     $NODE_ACT_BYTES_FREE, %edi
     mov     8(%rsp), %rsi
     xor     %edx, %edx
-    call    node_ids
+    call    lantern_node_ids
 9:  UNFRAME 32
-END_FUNCTION node_api_pool_advance
+END_FUNCTION lantern_node_api_pool_advance
 
 /*
  * (scratch rdi, data rsi) -> rax: the pool entry's bytes data folded into the aggregate in the
@@ -10962,7 +10962,7 @@ END_FUNCTION node_api_pool_advance
  * them. rax = 0; 1 for bytes that are no attestation or a signature crypto_bls_aggregate rejects;
  * 2 for a short scratch. Locals: scratch, data, signature, length, place, the root (then the list).
  */
-LOCAL_FUNCTION node_api_fold
+LOCAL_FUNCTION lantern_node_api_fold
     FRAME 80
     mov     %rdi, (%rsp)
     mov     8(%rsi), %rax
@@ -11089,7 +11089,7 @@ LOCAL_FUNCTION node_api_fold
     UNFRAME 80
 72: mov     $2, %eax
     UNFRAME 80
-END_FUNCTION node_api_fold
+END_FUNCTION lantern_node_api_fold
 .if MAX_VALIDATORS_PER_COMMITTEE > 2048 || 48 + 128 + 96 + 2048 / 8 > JSON_CURSOR_SIZE
 .error "node_api_fold: the aggregate's bits fit the cursor from byte 272"
 .endif
@@ -11107,7 +11107,7 @@ END_FUNCTION node_api_fold
  * rejects; 2 for a short scratch. Locals: scratch, the state, the bytes, the places
  * (SYNC_COMMITTEE_SIZE / 8 bytes), the subcommittee's places, the place, the list.
  */
-LOCAL_FUNCTION node_api_sync_fold
+LOCAL_FUNCTION lantern_node_api_sync_fold
     FRAME 128
     mov     %rdi, (%rsp)
     cmpq    $144, 16(%rsi)
@@ -11208,7 +11208,7 @@ LOCAL_FUNCTION node_api_sync_fold
     UNFRAME 128
 72: mov     $2, %eax
     UNFRAME 128
-END_FUNCTION node_api_sync_fold
+END_FUNCTION lantern_node_api_sync_fold
 .if SYNC_COMMITTEE_SIZE / 8 > 64 || API_SYNC_SUBCOMMITTEE_SIZE % 8 || 144 + API_SYNC_SUBCOMMITTEE_SIZE / 8 > JSON_CURSOR_SIZE
 .error "node_api_sync_fold: the places fit its locals, a subcommittee's places are whole bytes"
 .endif
@@ -11219,7 +11219,7 @@ END_FUNCTION node_api_sync_fold
  * produceSyncCommitteeContribution): slot filter_slot, the beacon_block_root, subcommittee_index
  * filter_index of the entry rbx, the bits, the signature. rax = 0. Locals: out.
  */
-LOCAL_FUNCTION node_api_contribution
+LOCAL_FUNCTION lantern_node_api_contribution
     FRAME 16
     mov     %rdi, (%rsp)
     mov     NodeApi_filter_slot(%rbx), %rax
@@ -11243,7 +11243,7 @@ LOCAL_FUNCTION node_api_contribution
     mov     $(48 + API_SYNC_SUBCOMMITTEE_SIZE / 8 + 96), %edx
     xor     %eax, %eax
     UNFRAME 16
-END_FUNCTION node_api_contribution
+END_FUNCTION lantern_node_api_contribution
 
 /*
  * (out rdi) -> rax: the aggregate in the cursor at NodeEvent_api + 16 of the event rbp as the SSZ
@@ -11252,7 +11252,7 @@ END_FUNCTION node_api_contribution
  * signature; from electra committee_bits with the bit of filter_index. rax = 0; 1 for a committee
  * index not below MAX_COMMITTEES_PER_SLOT. Locals: out, the fixed part's size, the count.
  */
-LOCAL_FUNCTION node_api_aggregate
+LOCAL_FUNCTION lantern_node_api_aggregate
     FRAME 32
     mov     %rdi, (%rsp)
     mov     $228, %ecx                      # the fixed part: 228 bytes, from electra with committee_bits
@@ -11309,19 +11309,19 @@ LOCAL_FUNCTION node_api_aggregate
     UNFRAME 32
 71: mov     $1, %eax
     UNFRAME 32
-END_FUNCTION node_api_aggregate
+END_FUNCTION lantern_node_api_aggregate
 .if NODE_API_FIRST_ROOM < API_HEAD_ROOM + NODE_POOL_ATTESTATION_FIXED + MAX_VALIDATORS_PER_COMMITTEE / 8 + 1
 .error "node_api_aggregate: an Attestation of one committee fits the first chunk"
 .endif
 
 /*
- * A pool stream's JSON, as api_stream_json: with the bytes rdi, the JSON of the pool entry from
+ * A pool stream's JSON, as lantern_api_stream_json: with the bytes rdi, the JSON of the pool entry from
  * the cursor at NodeEvent_api + 16, by lantern_node_json of the fork in sent (NodeEvent_api) and
  * the kind of the GET, after , when API_STREAM_ITEMS is set and the cursor is at its start; once
  * whole, API_STREAM_ITEMS and API_STREAM_ITEM_DONE in the event. With rdi = 0: ]}. rax = 1 when
  * the answer is whole, 0 when more is to come, 2 for bytes that are no encoding. Locals: the bytes.
  */
-LOCAL_FUNCTION api_pool_json
+LOCAL_FUNCTION lantern_api_pool_json
     FRAME 16
     mov     %rdi, (%rsp)
     test    %rdi, %rdi
@@ -11373,14 +11373,14 @@ LOCAL_FUNCTION api_pool_json
     UNFRAME 16
 7:  mov     $2, %eax
     UNFRAME 16
-END_FUNCTION api_pool_json
+END_FUNCTION lantern_api_pool_json
 
 /*
  * The failures of the event rbp of a NODE_WORK_API_SUBMIT: {"index":<i>,"message":"REJECT"} for
  * each record of LANTERN_GOSSIP_REJECT, with , between, then ]}. Locals: the record, its index,
  * the failures written.
  */
-LOCAL_FUNCTION api_failures
+LOCAL_FUNCTION lantern_api_failures
     FRAME 32
     mov     (NodeEvent_chunk + 8)(%rbp), %rax
     lea     NodeEvent_chunk(%rbp,%rax), %rax
@@ -11398,7 +11398,7 @@ LOCAL_FUNCTION api_failures
     API_LIT api_p_comma
 2:  API_LIT api_f_index
     mov     8(%rsp), %rdi
-    call    api_dec
+    call    lantern_api_dec
     API_LIT api_f_reject
     incq    16(%rsp)
 3:  mov     (%rsp), %rax                    # the next record: its code, its subnet, then its ByteList
@@ -11409,7 +11409,7 @@ LOCAL_FUNCTION api_failures
     jmp     1b
 9:  API_LIT api_v_end
     UNFRAME 32
-END_FUNCTION api_failures
+END_FUNCTION lantern_api_failures
 
 /*
  * (connection rdi, route rsi, flags rdx, request rcx, view r8) -> rax: a pool POST (node.md,
@@ -11417,7 +11417,7 @@ END_FUNCTION api_failures
  * the status of the error to answer. Locals: the connection, the flags, the route, the view, the
  * head's post-state, a ByteList head whose offset reaches the body.
  */
-LOCAL_FUNCTION node_api_submit
+LOCAL_FUNCTION lantern_node_api_submit
     FRAME 64
     mov     %rdi, (%rsp)
     mov     %rdx, 8(%rsp)
@@ -11452,7 +11452,7 @@ LOCAL_FUNCTION node_api_submit
     mov     %rdx, 48(%rsp)
     mov     %rax, 56(%rsp)
     lea     Node_head_root(%rbx), %rdi      # the head's post-state, else 500
-    call    node_find_block
+    call    lantern_node_find_block
     cmp     $-1, %rax
     je      81f
     mov     NodeBlock_state_id(%rdx), %rax
@@ -11460,7 +11460,7 @@ LOCAL_FUNCTION node_api_submit
     jz      81f
     mov     %rax, 32(%rsp)
     lea     40(%rsp), %rdi
-    call    node_put
+    call    lantern_node_put
     mov     %rax, %rcx
     mov     $NODE_WORK_API_SUBMIT, %edi
     mov     32(%rsp), %rsi
@@ -11475,14 +11475,14 @@ LOCAL_FUNCTION node_api_submit
     mov     ApiView_fork(%rax), %rax
     shl     $16, %rax
     or      %rax, %r9
-    call    node_work
+    call    lantern_node_work
     xor     %eax, %eax
     UNFRAME 64
 80: mov     $400, %eax
     UNFRAME 64
 81: mov     $500, %eax
     UNFRAME 64
-END_FUNCTION node_api_submit
+END_FUNCTION lantern_node_api_submit
 
 /*
  * rax = 0 when the NODE_EV_WORK_DONE rdi of rcx bytes of a valid NODE_WORK_API_SUBMIT holds its
@@ -11490,7 +11490,7 @@ END_FUNCTION node_api_submit
  * records in its bytes, each a code and a ByteList of offset 24 whose size is a multiple of 8;
  * else 1. Uses rdx, rsi.
  */
-LOCAL_FUNCTION node_submit_check
+LOCAL_FUNCTION lantern_node_submit_check
     UNWIND_END_PROLOGUE
     cmp     $(NodeEvent_chunk + 24), %rcx
     jb      8f
@@ -11529,7 +11529,7 @@ LOCAL_FUNCTION node_submit_check
     ret
 8:  mov     $1, %eax
     ret
-END_FUNCTION node_submit_check
+END_FUNCTION lantern_node_submit_check
 
 /*
  * The ProposerPreparation at rdi (beacon-api.md, prepareBeaconProposer): the NodeProposer of its
@@ -11537,11 +11537,11 @@ END_FUNCTION node_submit_check
  * the first entry whose until_epoch is at most that epoch, else a new one when the part has room;
  * else none. Locals: the item, the epoch.
  */
-LOCAL_FUNCTION node_proposer_put
+LOCAL_FUNCTION lantern_node_proposer_put
     FRAME 16
     mov     %rdi, (%rsp)
     mov     %rbp, %rdi
-    call    node_store_slot
+    call    lantern_node_store_slot
     xor     %edx, %edx
     mov     $SLOTS_PER_EPOCH, %ecx
     div     %rcx
@@ -11591,7 +11591,7 @@ LOCAL_FUNCTION node_proposer_put
     mov     $20, %edx
     call    lantern_copy
 9:  UNFRAME 16
-END_FUNCTION node_proposer_put
+END_FUNCTION lantern_node_proposer_put
 
 /*
  * The NODE_EV_WORK_DONE rdi of a NODE_WORK_API_SUBMIT (node.md, lantern_node_step): the body's
@@ -11601,13 +11601,13 @@ END_FUNCTION node_proposer_put
  * S9 the topic, S10 the new id. Locals: L 1 when the pool keeps it, L+8 the answer's flags,
  * L+16 an attestation's slot, committee index and member.
  */
-LOCAL_FUNCTION node_api_submit_done
+LOCAL_FUNCTION lantern_node_api_submit_done
     ENTER 48
     mov     %rdi, %r12
     mov     $NODE_ACT_BYTES_FREE, %edi
     mov     NodeAction_data(%r12), %rsi
     xor     %edx, %edx
-    call    node_ids
+    call    lantern_node_ids
     mov     NodeAction_arg(%r12), %rax      # the answer's flags: API_STREAM_CLOSE (1), API_STREAM_HTTP10 (2)
     shr     $8, %rax
     mov     $API_R_CLOSE, %ecx
@@ -11619,7 +11619,7 @@ LOCAL_FUNCTION node_api_submit_done
     mov     $API_R_KEEP, %ecx
 1:  mov     %rcx, (L + 8)(%rsp)
     movzbl  NodeAction_arg(%r12), %edi
-    call    node_submit_topic
+    call    lantern_node_submit_topic
     mov     %rax, S9(%rsp)
     cmpq    $0, NodeEvent_result(%r12)
     jne     80f
@@ -11639,13 +11639,13 @@ LOCAL_FUNCTION node_api_submit_done
     cmpq    $0, S9(%rsp)                    # no topic: a subscription
     je      40f
     lea     16(%r13), %rdi                  # valid: its bytes to a new id, kept by the pool when it has room
-    call    node_put
+    call    lantern_node_put
     mov     %rax, S10(%rsp)
     mov     S9(%rsp), %rdi                  # its event (node.md, The events), before its bytes go
     mov     %rax, %rsi
     mov     NodeAction_arg(%r12), %rdx
     shr     $16, %rdx
-    call    node_op_event
+    call    lantern_node_op_event
     xor     %eax, %eax                      # the metrics (metrics.md): an attestation that goes out
     cmpq    $GOSSIP_BEACON_ATTESTATION, S9(%rsp)
     sete    %al
@@ -11688,7 +11688,7 @@ LOCAL_FUNCTION node_api_submit_done
     mov     NodeAction_arg(%r12), %rcx
     shr     $16, %rcx
     lea     (L + 16)(%rsp), %r8
-    call    node_pool_add
+    call    lantern_node_pool_add
     mov     %rax, L(%rsp)
     testq   $NODE_FLAG_SUBSCRIBED, Node_flags(%rbx) # NODE_FLAG_SUBSCRIBED: out on its topic, an attestation on its subnet
     jz      3f
@@ -11697,7 +11697,7 @@ LOCAL_FUNCTION node_api_submit_done
     mov     S9(%rsp), %rdi
     lea     16(%r13), %rsi
     mov     8(%r13), %edx
-    call    node_publish
+    call    lantern_node_publish
     jmp     3f
 25: movq    $0, (L + 40)(%rsp)              # a sync message: on each of its subnets
 26: mov     (L + 40)(%rsp), %rdx
@@ -11708,13 +11708,13 @@ LOCAL_FUNCTION node_api_submit_done
     jnc     27f
     mov     S9(%rsp), %rdi
     lea     16(%r13), %rsi
-    call    node_publish
+    call    lantern_node_publish
 27: incq    (L + 40)(%rsp)
     jmp     26b
 3:  cmpq    $GOSSIP_ATTESTER_SLASHING, S9(%rsp) # an attester slashing: on_attester_slashing with the justified root's state
     jne     4f
     lea     (Store_justified_checkpoint + 8)(%rbp), %rdi
-    call    node_find_block
+    call    lantern_node_find_block
     cmp     $-1, %rax
     je      4f
     cmpq    $NODE_BLOCK_IMPORTED, NodeBlock_status(%rdx)
@@ -11727,14 +11727,14 @@ LOCAL_FUNCTION node_api_submit_done
     mov     S10(%rsp), %rcx
     xor     %r8d, %r8d
     xor     %r9d, %r9d
-    call    node_work
+    call    lantern_node_work
     jmp     6f
 4:  cmpq    $0, L(%rsp)                     # bytes no entry keeps and no work reads go
     jne     6f
     mov     $NODE_ACT_BYTES_FREE, %edi
     mov     S10(%rsp), %rsi
     xor     %edx, %edx
-    call    node_ids
+    call    lantern_node_ids
 6:  mov     16(%r13), %rax
     lea     16(%r13,%rax), %r13
     decq    S7(%rsp)
@@ -11778,15 +11778,15 @@ LOCAL_FUNCTION node_api_submit_done
     sub     $8, %rdi
     jmp     43b
 45: mov     %rax, %rdi                      # a fee recipient: through the store's epoch + 2
-    call    node_proposer_put
+    call    lantern_node_proposer_put
     jmp     6b
 46: lea     16(%r13), %rdi                  # a registration: its validator's NodeProposer entry
     mov     8(%r13), %rsi
-    call    node_registration_put
+    call    lantern_node_registration_put
     jmp     6b
 70: cmpb    $API_OP_REGISTER_VALIDATOR, NodeAction_arg(%r12)   # registerValidator: the builder's call, then the answer
     jne     701f
-    call    node_builder_register
+    call    lantern_node_builder_register
 701: mov    NodeAction_target(%r12), %rdi   # the answer: 200, or 400 with the failures
     cmpq    $0, S8(%rsp)
     je      71f
@@ -11805,22 +11805,22 @@ LOCAL_FUNCTION node_api_submit_done
     mov     $400, %edx
     mov     $API_OP_SUBMIT_POOL_BLS_TO_EXECUTION_CHANGE, %ecx
     mov     (L + 8)(%rsp), %r8
-    call    node_api_send
+    call    lantern_node_api_send
     LEAVE 48
 71: xor     %esi, %esi
     mov     $200, %edx
     xor     %ecx, %ecx
     mov     (L + 8)(%rsp), %r8
-    call    node_api_send
+    call    lantern_node_api_send
     LEAVE 48
 80: mov     NodeAction_target(%r12), %rdi
     xor     %esi, %esi
     mov     $400, %edx
     mov     $API_BODY_ERROR, %ecx
     mov     (L + 8)(%rsp), %r8
-    call    node_api_send
+    call    lantern_node_api_send
     LEAVE 48
-END_FUNCTION node_api_submit_done
+END_FUNCTION lantern_node_api_submit_done
 
 /*
  * The publish of the SSZ bytes of the ByteList rsi on the gossip topic rdi of the subnet rdx (node.md, the
@@ -11830,7 +11830,7 @@ END_FUNCTION node_api_submit_done
  * GossipTopic, L+24 the topic's ByteList (24 + 128), L+176 a size, L+184 the message-id (24),
  * L+208 the topic's length, L+216 the data's offset in the event, L+224 the event's room.
  */
-LOCAL_FUNCTION node_publish
+LOCAL_FUNCTION lantern_node_publish
     ENTER 240
     mov     %rsi, %r12
     mov     Node_fork_digest(%rbx), %eax
@@ -11862,7 +11862,7 @@ LOCAL_FUNCTION node_publish
     and     $-8, %rax
     mov     %rax, (L + 224)(%rsp)
     mov     %rax, %rdi
-    call    node_out
+    call    lantern_node_out
     test    %rax, %rax
     jz      9f
     mov     %rax, %r13
@@ -11878,10 +11878,10 @@ LOCAL_FUNCTION node_publish
     test    %rax, %rax
     jnz     8f
     mov     %rbp, %rdi                      # the message-id: of the fork of the store's slot
-    call    node_store_slot
+    call    lantern_node_store_slot
     mov     %rax, %rdi
     lea     Node_config(%rbx), %rsi
-    call    node_fork
+    call    lantern_node_fork
     mov     %rax, %r10
     lea     (L + 24)(%rsp), %rdi
     mov     (L + 216)(%rsp), %rsi
@@ -11938,16 +11938,16 @@ LOCAL_FUNCTION node_publish
     sub     (L + 224)(%rsp), %rax
     mov     %rax, 16(%rdx)
     LEAVE 240
-END_FUNCTION node_publish
+END_FUNCTION lantern_node_publish
 
 /*
  * (text rdi to rsi, kind rdx, fork rcx, fault r8, record r9, the event's end r10) -> rax: the
  * JSON text decoded by lantern_node_json_decode into the record r9 (r15 the scratch of
- * node_api_submit_run): code and subnet 0, then a ByteList of the SSZ bytes, its size to a multiple of 8;
+ * lantern_node_api_submit_run): code and subnet 0, then a ByteList of the SSZ bytes, its size to a multiple of 8;
  * rdx the next record. rax = 0, 1 for a text that is no such value, 2 for too little room.
  * Locals: a ByteList head of the text, the record.
  */
-LOCAL_FUNCTION node_submit_decode
+LOCAL_FUNCTION lantern_node_submit_decode
     FRAME 32
     mov     %r9, 24(%rsp)
     sub     %rdi, %rsi
@@ -11993,14 +11993,14 @@ LOCAL_FUNCTION node_submit_decode
     UNFRAME 32
 8:  mov     $2, %eax
     UNFRAME 32
-END_FUNCTION node_submit_decode
+END_FUNCTION lantern_node_submit_decode
 
 /*
  * (bytes rdi, length rsi, record r9, the event's end r10) -> rax: the bytes as the record r9 of
- * node_api_submit_run: code and subnet 0, then a ByteList of them, its size to a multiple of 8;
+ * lantern_node_api_submit_run: code and subnet 0, then a ByteList of them, its size to a multiple of 8;
  * rdx the next record. rax = 0, or 2 for too little room. Locals: the record, its size, the length.
  */
-LOCAL_FUNCTION node_submit_copy
+LOCAL_FUNCTION lantern_node_submit_copy
     FRAME 32
     lea     (16 + 24 + 7)(%rsi), %rax
     and     $-8, %rax
@@ -12033,7 +12033,7 @@ LOCAL_FUNCTION node_submit_copy
     UNFRAME 32
 8:  mov     $2, %eax
     UNFRAME 32
-END_FUNCTION node_submit_copy
+END_FUNCTION lantern_node_submit_copy
 
 /*
  * (node rdi, store rsi, seen rdx, work rcx, state_a r8, data r9, scratch r10, event r11, room rax)
@@ -12044,7 +12044,7 @@ END_FUNCTION node_submit_copy
  * the topic, L+24 the fork, L+32 the operations, L+40 1 for a list, L+48 where the text goes on,
  * L+56 an item's start, L+64 a NodeGossip, L+144 a JsonFault, L+272 a root, L+304 an index.
  */
-LOCAL_FUNCTION node_api_submit_run
+LOCAL_FUNCTION lantern_node_api_submit_run
     ENTER 320
     mov     %rdi, %rbx
     mov     %rsi, %rbp
@@ -12092,7 +12092,7 @@ LOCAL_FUNCTION node_api_submit_run
     or      %cl, %al
     mov     %rax, (L + 40)(%rsp)
     mov     %rdi, (L + 48)(%rsp)
-    call    node_submit_topic
+    call    lantern_node_submit_topic
     mov     %rax, (L + 16)(%rsp)
     test    %rax, %rax
     jnz     17f
@@ -12131,7 +12131,7 @@ LOCAL_FUNCTION node_api_submit_run
     cmovae  %rcx, %rax
     jmp     13f
 12: mov     %rax, %rdi
-    call    node_pool_kind
+    call    lantern_node_pool_kind
 13: mov     %rax, (L + 8)(%rsp)
     test    %r13, %r13
     jz      98f
@@ -12164,7 +12164,7 @@ LOCAL_FUNCTION node_api_submit_run
     lea     (L + 144)(%rsp), %r8
     mov     S9(%rsp), %r9
     mov     S8(%rsp), %r10
-    call    node_submit_decode
+    call    lantern_node_submit_decode
     cmp     $1, %rax
     je      90f
     ja      97f
@@ -12177,13 +12177,13 @@ LOCAL_FUNCTION node_api_submit_run
     jb      90f
 201:
     mov     S10(%rsp), %rsi
-    call    submit_ws
+    call    lantern_submit_ws
     cmp     %rsi, %rdi
     jae     90f
     cmpb    $'[', (%rdi)
     jne     90f
     inc     %rdi
-    call    submit_ws
+    call    lantern_submit_ws
     cmp     %rsi, %rdi
     jae     90f
     cmpb    $']', (%rdi)
@@ -12239,7 +12239,7 @@ LOCAL_FUNCTION node_api_submit_run
     lea     (L + 144)(%rsp), %r8
     mov     S9(%rsp), %r9
     mov     S8(%rsp), %r10
-    call    node_submit_decode
+    call    lantern_node_submit_decode
     cmp     $1, %rax
     je      90f
     ja      97f
@@ -12254,7 +12254,7 @@ LOCAL_FUNCTION node_api_submit_run
     cmp     $']', %eax
     jne     90f
 28: mov     S10(%rsp), %rsi                 # then only white space
-    call    submit_ws
+    call    lantern_submit_ws
     cmp     %rsi, %rdi
     jne     90f
     jmp     30f
@@ -12279,7 +12279,7 @@ LOCAL_FUNCTION node_api_submit_run
     mov     $240, %esi
     mov     S9(%rsp), %r9
     mov     S8(%rsp), %r10
-    call    node_submit_copy
+    call    lantern_node_submit_copy
     test    %rax, %rax
     jnz     97f
     mov     %rdx, S9(%rsp)
@@ -12299,7 +12299,7 @@ LOCAL_FUNCTION node_api_submit_run
     mov     $180, %esi
     mov     S9(%rsp), %r9
     mov     S8(%rsp), %r10
-    call    node_submit_copy
+    call    lantern_node_submit_copy
     test    %rax, %rax
     jnz     97f
     mov     %rdx, S9(%rsp)
@@ -12343,7 +12343,7 @@ LOCAL_FUNCTION node_api_submit_run
     sub     %r8, %rsi
     mov     S9(%rsp), %r9
     mov     S8(%rsp), %r10
-    call    node_submit_copy
+    call    lantern_node_submit_copy
     test    %rax, %rax
     jnz     97f
     mov     %rdx, S9(%rsp)
@@ -12589,7 +12589,7 @@ LOCAL_FUNCTION node_api_submit_run
     mov     %r13, %rdi                      # one scan of the state's validators
     mov     %rcx, %rsi
     mov     %r15, %rcx
-    call    node_registrations_find
+    call    lantern_node_registrations_find
     test    %rax, %rax
     jnz     97f
     jmp     39b
@@ -12602,10 +12602,10 @@ LOCAL_FUNCTION node_api_submit_run
     LEAVE 320
 98: mov     $LANTERN_INVALID_EVENT, %eax
 99: LEAVE 320
-END_FUNCTION node_api_submit_run
+END_FUNCTION lantern_node_api_submit_run
 
 /* rdi = rdi past the JSON white space (space, tab, LF, CR) before rsi. Uses rax. */
-LOCAL_FUNCTION submit_ws
+LOCAL_FUNCTION lantern_submit_ws
     UNWIND_END_PROLOGUE
 1:  cmp     %rsi, %rdi
     jae     9f
@@ -12621,7 +12621,7 @@ LOCAL_FUNCTION submit_ws
 2:  inc     %rdi
     jmp     1b
 9:  ret
-END_FUNCTION submit_ws
+END_FUNCTION lantern_submit_ws
 
     RODATA
     .p2align 3

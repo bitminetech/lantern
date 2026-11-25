@@ -4,7 +4,7 @@
  */
 
 /* L0: a0 = the SeenBlock of root a1 in seen a0, or 0. A leaf; uses a2-a5, t0-t3. */
-LOCAL_FUNCTION seen_find_block
+LOCAL_FUNCTION lantern_seen_find_block
     UNWIND_END_PROLOGUE
     PART    a2, a3, a0, Seen_blocks
 1:  beqz    a3, 3f
@@ -27,4 +27,4 @@ LOCAL_FUNCTION seen_find_block
     ret
 4:  mv      a0, a2
     ret
-END_FUNCTION seen_find_block
+END_FUNCTION lantern_seen_find_block

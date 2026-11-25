@@ -4,7 +4,7 @@
  */
 
 /* L0: rax = the SeenBlock of root rsi in seen rdi, or 0. A leaf; uses rcx, rdx, xmm0-xmm2, r11. */
-LOCAL_FUNCTION seen_find_block
+LOCAL_FUNCTION lantern_seen_find_block
     UNWIND_END_PROLOGUE
     PART    %rax, %rcx, %rdi, Seen_blocks
 1:  test    %rcx, %rcx
@@ -16,4 +16,4 @@ LOCAL_FUNCTION seen_find_block
     jmp     1b
 3:  xor     %eax, %eax
     ret
-END_FUNCTION seen_find_block
+END_FUNCTION lantern_seen_find_block

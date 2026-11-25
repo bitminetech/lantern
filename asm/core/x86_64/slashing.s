@@ -206,12 +206,12 @@ SPEC_FUNCTION process_proposer_slashing
     je      6f
     lea     L(%rsp), %rdi
     lea     ProposerSlashing_signed_header_1(%rbp), %rsi
-    call    check_header_signature
+    call    lantern_check_header_signature
     test    %rax, %rax
     jnz     3f
     lea     L(%rsp), %rdi
     lea     ProposerSlashing_signed_header_2(%rbp), %rsi
-    call    check_header_signature
+    call    lantern_check_header_signature
 3:  CHECK_STATUS %r14, 7f, 8f
     mov     %rbx, %rdi                      # slash_validator(state, header_1.proposer_index)
     lea     (L + 112)(%rsp), %rsi
@@ -236,7 +236,7 @@ SPEC_END process_proposer_slashing
  * +16 domain type, +24 domain, +56 signing root as a ByteList. Returns rax: 0, a status,
  * or LANTERN_INVALID_PROPOSER_SLASHING. Locals: rsp+0 the caller's locals, rsp+8 the header.
  */
-LOCAL_FUNCTION check_header_signature
+LOCAL_FUNCTION lantern_check_header_signature
     FRAME 16
     mov     %rdi, 0(%rsp)
     mov     %rsi, 8(%rsp)
@@ -268,14 +268,14 @@ LOCAL_FUNCTION check_header_signature
     add     $SignedBeaconBlockHeader_signature, %rsi
     lea     56(%rax), %rdx
     mov     %r13, %rcx
-    call    verify_root_signature
+    call    lantern_verify_root_signature
     test    %rax, %rax
     jnz     1f
     test    %rdx, %rdx
     jnz     1f
     mov     $LANTERN_INVALID_PROPOSER_SLASHING, %eax
 1:  UNFRAME 16
-END_FUNCTION check_header_signature
+END_FUNCTION lantern_check_header_signature
 
 /*
  * rbx state, rbp attestation_1, r12 config, r13 scratch, r14 result, r15 cursor 1,

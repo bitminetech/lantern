@@ -37,7 +37,7 @@ config_max_name:
 .endm
 
 /* L0: x0 = 1 when the x1 bytes at x0 are the x3 bytes at x2, else 0. Uses x9, x10. */
-LOCAL_FUNCTION config_name_is
+LOCAL_FUNCTION lantern_config_name_is
     UNWIND_END_PROLOGUE
     cmp     x1, x3
     b.ne    2f
@@ -52,10 +52,10 @@ LOCAL_FUNCTION config_name_is
     ret
 3:  mov     x0, #1
     ret
-END_FUNCTION config_name_is
+END_FUNCTION lantern_config_name_is
 
 /* L0: the value bytes x0 to x1 without a pair of quotes: x0 = 0, x1 their start, x2 their end; x0 = 1 for a quote with no end. Uses x9, x10. */
-LOCAL_FUNCTION config_unquote
+LOCAL_FUNCTION lantern_config_unquote
     UNWIND_END_PROLOGUE
     mov     x2, x1
     mov     x1, x0
@@ -78,10 +78,10 @@ LOCAL_FUNCTION config_unquote
     ret
 9:  mov     x0, #1
     ret
-END_FUNCTION config_unquote
+END_FUNCTION lantern_config_unquote
 
 /* L0: x0 = 0 and x1 = the u64 of the bytes x0 to x1: decimal, or 0x and 1 to 16 hex digits; else x0 = 1. Uses x9-x13. */
-LOCAL_FUNCTION config_u64
+LOCAL_FUNCTION lantern_config_u64
     UNWIND_END_PROLOGUE
     sub     x9, x1, x0
     cbz     x9, 9f
@@ -124,10 +124,10 @@ LOCAL_FUNCTION config_u64
     ret
 9:  mov     x0, #1
     ret
-END_FUNCTION config_u64
+END_FUNCTION lantern_config_u64
 
 /* L0: x0 = 0 when the bytes x0 to x1 are 0x and 2 * x3 hex digits, whose x3 bytes go to x2 in order; else 1. Uses x9-x12. */
-LOCAL_FUNCTION config_hex_bytes
+LOCAL_FUNCTION lantern_config_hex_bytes
     UNWIND_END_PROLOGUE
     sub     x9, x1, x0
     lsl     x10, x3, #1
@@ -158,10 +158,10 @@ LOCAL_FUNCTION config_hex_bytes
     ret
 9:  mov     x0, #1
     ret
-END_FUNCTION config_hex_bytes
+END_FUNCTION lantern_config_hex_bytes
 
 /* L0: x0 = 0 when the bytes x0 to x1 are the decimal digits of a number below 2^256, then little endian at x2 (32 bytes); else 1. Uses x9-x14. */
-LOCAL_FUNCTION config_uint256
+LOCAL_FUNCTION lantern_config_uint256
     UNWIND_END_PROLOGUE
     stp     xzr, xzr, [x2]
     stp     xzr, xzr, [x2, #16]
@@ -190,26 +190,26 @@ LOCAL_FUNCTION config_uint256
     ret
 9:  mov     x0, #1
     ret
-END_FUNCTION config_uint256
+END_FUNCTION lantern_config_uint256
 
 /*
  * L1: x0 = 0 when the value bytes x1 to x2, without a pair of quotes, are a value of the kind
  * x0, then at x3: 8 bytes (u64; Version: 4 bytes and 4 zero bytes) or 32 (Uint256, Hash32);
  * else 1. x19 the kind, x20 out.
  */
-LOCAL_FUNCTION config_value
+LOCAL_FUNCTION lantern_config_value
     ENTER 0
     mov     x19, x0
     mov     x20, x3
     mov     x0, x1
     mov     x1, x2
-    bl      config_unquote
+    bl      lantern_config_unquote
     cbnz    x0, 9f
     mov     x0, x1
     mov     x1, x2
     cmp     x19, #CONFIG_KIND_U64
     b.ne    1f
-    bl      config_u64
+    bl      lantern_config_u64
     cbnz    x0, 9f
     str     x1, [x20]
     b       9f
@@ -218,18 +218,18 @@ LOCAL_FUNCTION config_value
     str     xzr, [x20]
     mov     x2, x20
     mov     x3, #4
-    bl      config_hex_bytes
+    bl      lantern_config_hex_bytes
     b       9f
 2:  cmp     x19, #CONFIG_KIND_UINT256
     b.ne    3f
     mov     x2, x20
-    bl      config_uint256
+    bl      lantern_config_uint256
     b       9f
 3:  cmp     x19, #CONFIG_KIND_HASH32
     b.ne    4f
     mov     x2, x20                         /* Hash32 */
     mov     x3, #32
-    bl      config_hex_bytes
+    bl      lantern_config_hex_bytes
     b       9f
 4:  cmp     x19, #CONFIG_KIND_ADDRESS
     b.ne    5f
@@ -237,19 +237,19 @@ LOCAL_FUNCTION config_value
     stp     xzr, xzr, [x20, #16]
     mov     x2, x20
     mov     x3, #20
-    bl      config_hex_bytes
+    bl      lantern_config_hex_bytes
     b       9f
 5:  mov     x2, x20                         /* Text: to x20, when it is not 0 */
-    bl      config_text
+    bl      lantern_config_text
 9:  LEAVE 0
-END_FUNCTION config_value
+END_FUNCTION lantern_config_value
 
 /*
  * L0: x0 = 0 when the bytes x0 to x1 are a text (0 to CONFIG_TEXT_MAX bytes, each 0x20 to 0x7e but
  * " and \); then, when x2 is not 0, at x2 its count and CONFIG_TEXT_MAX bytes: its bytes, then zero
  * bytes. Else x0 = 1. Uses x9-x12.
  */
-LOCAL_FUNCTION config_text
+LOCAL_FUNCTION lantern_config_text
     UNWIND_END_PROLOGUE
     sub     x9, x1, x0
     cmp     x9, #CONFIG_TEXT_MAX
@@ -282,10 +282,10 @@ LOCAL_FUNCTION config_text
     ret
 9:  mov     x0, #1
     ret
-END_FUNCTION config_text
+END_FUNCTION lantern_config_text
 
 /*
- * In config_scan: close the open entry of the schedule: to 80f (a fault at its line) without
+ * In lantern_config_scan: close the open entry of the schedule: to 80f (a fault at its line) without
  * both fields; else with write, its EPOCH and MAX_BLOBS_PER_BLOCK as schedule entry x27 - 1. Uses x9-x12.
  */
 .macro CONFIG_ENTRY_END
@@ -317,7 +317,7 @@ END_FUNCTION config_text
  * MAX_BLOBS_PER_BLOCK, L+32 1 when the text gives BLOB_SCHEDULE, L+40 a value (32 bytes) or a
  * field, L+72 the value's start, L+80 the key's length.
  */
-LOCAL_FUNCTION config_scan
+LOCAL_FUNCTION lantern_config_scan
     ENTER 96
     mov     x19, x1
     mov     x20, x2
@@ -441,7 +441,7 @@ LOCAL_FUNCTION config_scan
     mov     x1, x12
     ADDRESS x2, config_schedule_name
     mov     x3, #13
-    bl      config_name_is
+    bl      lantern_config_name_is
     cbnz    x0, 30f
     ADDRESS x24, config_keys
 26: ADDRESS x9, config_keys_end
@@ -451,7 +451,7 @@ LOCAL_FUNCTION config_scan
     ldr     x1, [sp, #(L + 80)]
     add     x2, x24, #24
     ldr     x3, [x24]
-    bl      config_name_is
+    bl      lantern_config_name_is
     cbnz    x0, 28f
     add     x24, x24, #CONFIG_KEY_BYTES
     b       26b
@@ -467,7 +467,7 @@ LOCAL_FUNCTION config_scan
     cbz     x20, 280f
     ldr     x3, [x24, #8]
     add     x3, x19, x3
-280: bl     config_value
+280: bl     lantern_config_value
     cbnz    x0, 89f
     cbz     x20, 29f
     ldr     x10, [x24, #16]
@@ -567,13 +567,13 @@ LOCAL_FUNCTION config_scan
     mov     x1, x11
     ADDRESS x2, config_epoch_name
     mov     x3, #5
-    bl      config_name_is
+    bl      lantern_config_name_is
     mov     x9, #1                          /* EPOCH: bit 0 */
     cbnz    x0, 59f
     ldp     x0, x1, [sp, #(L + 40)]
     ADDRESS x2, config_max_name
     mov     x3, #19
-    bl      config_name_is
+    bl      lantern_config_name_is
     cbz     x0, 89f
     mov     x9, #2                          /* MAX_BLOBS_PER_BLOCK: bit 1 */
 59: tst     x28, x9
@@ -582,11 +582,11 @@ LOCAL_FUNCTION config_scan
     str     x9, [sp, #(L + 64)]
     ldr     x0, [sp, #(L + 56)]
     mov     x1, x26
-    bl      config_unquote
+    bl      lantern_config_unquote
     cbnz    x0, 89f
     mov     x0, x1
     mov     x1, x2
-    bl      config_u64
+    bl      lantern_config_u64
     cbnz    x0, 89f
     ldr     x9, [sp, #(L + 64)]
     add     x10, sp, #(L + 8)
@@ -619,7 +619,7 @@ LOCAL_FUNCTION config_scan
 80: ldr     x23, [sp, #L]                   /* the line of the open entry */
 89: mov     x0, x23
     LEAVE 96
-END_FUNCTION config_scan
+END_FUNCTION lantern_config_scan
 
 /* (text, config, line): docs/reference/config.md. x19 text, x20 config, x21 line. */
 FUNCTION lantern_config_parse
@@ -628,12 +628,12 @@ FUNCTION lantern_config_parse
     mov     x20, x1
     mov     x21, x2
     mov     x2, #0                          /* check every line first */
-    bl      config_scan
+    bl      lantern_config_scan
     cbnz    x0, 1f
     mov     x0, x19
     mov     x1, x20
     mov     x2, #1
-    bl      config_scan
+    bl      lantern_config_scan
     str     xzr, [x21]
     mov     x0, #LANTERN_OK
     LEAVE 0

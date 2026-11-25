@@ -191,7 +191,7 @@ SPEC_FUNCTION is_valid_merkle_branch
 21: add     x0, sp, #(L + 32)
     mov     x1, #64
     add     x2, sp, #L
-    bl      sha256_short
+    bl      lantern_sha256_short
     add     x24, x24, #1
     b       1b
 3:  add     x14, sp, #L                     /* value == root */

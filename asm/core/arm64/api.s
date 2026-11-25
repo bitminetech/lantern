@@ -4,7 +4,7 @@
  *
  * The writer: x24 the cursor, x25 the pass (0 counts the bytes, 1 writes them), x26 the end of
  * the room, x27 1 when the room ran out, x22 the ApiView, x28 the body kind. The writer's
- * functions keep x22 and x24-x28 for it; only api_respond calls them.
+ * functions keep x22 and x24-x28 for it; only lantern_api_respond calls them.
  */
 
     RODATA
@@ -27,11 +27,11 @@ api_spec_keys_end:
 .macro API_LIT label
     ADDRESS x0, \label
     mov     x1, #\label\()_len
-    bl      api_put
+    bl      lantern_api_put
 .endm
 
 /* L0: the x1 bytes at x0 join the response; the first pass only counts them. Uses x0, x1, x9, x10. */
-LOCAL_FUNCTION api_put
+LOCAL_FUNCTION lantern_api_put
     UNWIND_END_PROLOGUE
     cbz     x25, 2f
     add     x9, x24, x1
@@ -46,10 +46,10 @@ LOCAL_FUNCTION api_put
 9:  ret
 3:  mov     x27, #1
     ret
-END_FUNCTION api_put
+END_FUNCTION lantern_api_put
 
 /* L1: the decimal digits of x0 join the response. Locals: the digits, from the end. */
-LOCAL_FUNCTION api_dec
+LOCAL_FUNCTION lantern_api_dec
     FRAME 32
     add     x9, sp, #48
     mov     x10, #10
@@ -62,15 +62,15 @@ LOCAL_FUNCTION api_dec
     mov     x0, x9
     add     x1, sp, #48
     sub     x1, x1, x9
-    bl      api_put
+    bl      lantern_api_put
     UNFRAME 32
-END_FUNCTION api_dec
+END_FUNCTION lantern_api_dec
 
 /*
  * L1: the decimal digits of the 256-bit little-endian number at x0 join the response. Locals: its
  * eight 32-bit words, then the digits from the end.
  */
-LOCAL_FUNCTION api_dec256
+LOCAL_FUNCTION lantern_api_dec256
     FRAME 128
     ldp     x10, x11, [x0]
     stp     x10, x11, [sp, #16]
@@ -96,34 +96,34 @@ LOCAL_FUNCTION api_dec256
     cbnz    x6, 1b
     mov     x0, x9
     sub     x1, x13, x9
-    bl      api_put
+    bl      lantern_api_put
     UNFRAME 128
-END_FUNCTION api_dec256
+END_FUNCTION lantern_api_dec256
 
 /* L1: the Gwei x0 in Wei, decimal digits, join the response. Locals: x0. */
-LOCAL_FUNCTION api_wei
+LOCAL_FUNCTION lantern_api_wei
     FRAME 16
     str     x0, [sp, #16]
-    bl      api_dec
+    bl      lantern_api_dec
     ldr     x0, [sp, #16]
     cbz     x0, 1f
     API_LIT api_nines
 1:  UNFRAME 16
-END_FUNCTION api_wei
+END_FUNCTION lantern_api_wei
 
 /* L1: the decimal digits of x0, in quotes. Locals: x0. */
-LOCAL_FUNCTION api_qdec
+LOCAL_FUNCTION lantern_api_qdec
     FRAME 16
     str     x0, [sp, #16]
     API_LIT api_quote
     ldr     x0, [sp, #16]
-    bl      api_dec
+    bl      lantern_api_dec
     API_LIT api_quote
     UNFRAME 16
-END_FUNCTION api_qdec
+END_FUNCTION lantern_api_qdec
 
 /* L1: "0x" and the lower case hex of the x1 bytes at x0, in quotes. Locals: x0, x1, then 2 digits. */
-LOCAL_FUNCTION api_qhex
+LOCAL_FUNCTION lantern_api_qhex
     FRAME 32
     stp     x0, x1, [sp, #16]
     API_LIT api_quote
@@ -142,54 +142,54 @@ LOCAL_FUNCTION api_qhex
     strb    w11, [sp, #33]
     add     x0, sp, #32
     mov     x1, #2
-    bl      api_put
+    bl      lantern_api_put
     b       1b
 2:  API_LIT api_quote
     UNFRAME 32
-END_FUNCTION api_qhex
+END_FUNCTION lantern_api_qhex
 
 /* L1: the text at x0 (its length, then its bytes), in quotes. Locals: x0. */
-LOCAL_FUNCTION api_text
+LOCAL_FUNCTION lantern_api_text
     FRAME 16
     str     x0, [sp, #16]
     API_LIT api_quote
     ldr     x9, [sp, #16]
     ldr     x1, [x9]
     add     x0, x9, #8
-    bl      api_put
+    bl      lantern_api_put
     API_LIT api_quote
     UNFRAME 16
-END_FUNCTION api_text
+END_FUNCTION lantern_api_text
 
 /* L1: true when x0 is not 0, else false. */
-LOCAL_FUNCTION api_bool
+LOCAL_FUNCTION lantern_api_bool
     FRAME 0
     cbz     x0, 1f
     API_LIT api_true
     UNFRAME 0
 1:  API_LIT api_false
     UNFRAME 0
-END_FUNCTION api_bool
+END_FUNCTION lantern_api_bool
 
 /* L1: a Checkpoint of the view at x0: {"epoch":…,"root":…}. Locals: x0. */
-LOCAL_FUNCTION api_checkpoint
+LOCAL_FUNCTION lantern_api_checkpoint
     FRAME 16
     str     x0, [sp, #16]
     API_LIT api_f_epoch
     ldr     x9, [sp, #16]
     ldr     x0, [x9]
-    bl      api_qdec
+    bl      lantern_api_qdec
     API_LIT api_f_root
     ldr     x0, [sp, #16]
     add     x0, x0, #8
     mov     x1, #32
-    bl      api_qhex
+    bl      lantern_api_qhex
     API_LIT api_end1
     UNFRAME 16
-END_FUNCTION api_checkpoint
+END_FUNCTION lantern_api_checkpoint
 
 /* L0: x0 = the api_codes entry of the status x0, or 0. Uses x9-x11. */
-LOCAL_FUNCTION api_code
+LOCAL_FUNCTION lantern_api_code
     UNWIND_END_PROLOGUE
     ADDRESS x9, api_codes
     ADDRESS x10, api_codes_end
@@ -204,22 +204,22 @@ LOCAL_FUNCTION api_code
     ret
 3:  mov     x0, x9
     ret
-END_FUNCTION api_code
+END_FUNCTION lantern_api_code
 
 /* L1: the text of the api_codes entry x0 at its byte x1 (8 the reason, 24 the message), or none for no entry. */
-LOCAL_FUNCTION api_code_text
+LOCAL_FUNCTION lantern_api_code_text
     FRAME 0
     cbz     x0, 9f
     add     x9, x0, x1
     ldp     x10, x1, [x9]
     ADDRESS x0, api_texts
     add     x0, x0, x10
-    bl      api_put
+    bl      lantern_api_put
 9:  UNFRAME 0
-END_FUNCTION api_code_text
+END_FUNCTION lantern_api_code_text
 
 /* L1: the decimal digits of the Uint256 at x0, little endian, in quotes. Locals: its eight 32-bit words, then the text from its end. */
-LOCAL_FUNCTION api_qdec256
+LOCAL_FUNCTION lantern_api_qdec256
     FRAME 128
     ldp     x10, x11, [x0]
     stp     x10, x11, [sp, #16]
@@ -249,15 +249,15 @@ LOCAL_FUNCTION api_qdec256
     mov     x0, x9
     add     x1, sp, #(16 + 128)
     sub     x1, x1, x9
-    bl      api_put
+    bl      lantern_api_put
     UNFRAME 128
-END_FUNCTION api_qdec256
+END_FUNCTION lantern_api_qdec256
 
 /*
  * L2: the body of getSpec (beacon-api.md, Common rules): each key of API_SPEC_KEYS, with the
  * config of the view x22. Locals: L the record, L+8 an index, L+16 32 bytes of a value, L+48 a count.
  */
-LOCAL_FUNCTION api_spec
+LOCAL_FUNCTION lantern_api_spec
     FRAME 64
     ADDRESS x9, api_spec_keys
     str     x9, [sp, #16]
@@ -273,7 +273,7 @@ LOCAL_FUNCTION api_spec
 2:  ldr     x9, [sp, #16]                   /* "<name>": */
     ldr     x1, [x9]
     add     x0, x9, #24
-    bl      api_put
+    bl      lantern_api_put
     API_LIT api_p_key
     ldr     x9, [sp, #16]
     ldp     x10, x0, [x9, #8]               /* the kind, the value */
@@ -284,20 +284,20 @@ LOCAL_FUNCTION api_spec
     str     x12, [sp, #64]
     cmp     x10, #SPEC_NUMBER
     b.ne    3f
-    bl      api_qdec
+    bl      lantern_api_qdec
     b       1b
 3:  cmp     x10, #SPEC_HEX
     b.ne    4f
     add     x0, sp, #32
     mov     x1, x12
-    bl      api_qhex
+    bl      lantern_api_qhex
     b       1b
 4:  cmp     x10, #SPEC_TEXT
     b.ne    5f
     API_LIT api_quote
     add     x0, sp, #32
     ldr     x1, [sp, #64]
-    bl      api_put
+    bl      lantern_api_put
     API_LIT api_quote
     b       1b
 5:  cmp     x10, #SPEC_LIST
@@ -315,7 +315,7 @@ LOCAL_FUNCTION api_spec
     ldrb    w0, [x10, x9]
     add     x9, x9, #1
     str     x9, [sp, #24]
-    bl      api_qdec
+    bl      lantern_api_qdec
     b       51b
 52: API_LIT api_p_rbracket
     b       1b
@@ -326,22 +326,22 @@ LOCAL_FUNCTION api_spec
     ldr     x0, [x0]
     mov     x9, #1000
     udiv    x0, x0, x9
-    bl      api_qdec
+    bl      lantern_api_qdec
     b       1b
 7:  cmp     x10, #SPEC_CONFIG
     b.ne    8f
     cmp     x12, #CONFIG_KIND_U64
     b.ne    71f
     ldr     x0, [x0]
-    bl      api_qdec
+    bl      lantern_api_qdec
     b       1b
 71: cmp     x12, #CONFIG_KIND_UINT256
     b.ne    72f
-    bl      api_qdec256
+    bl      lantern_api_qdec256
     b       1b
 72: cmp     x12, #CONFIG_KIND_TEXT
     b.ne    73f
-    bl      api_text                        /* in quotes */
+    bl      lantern_api_text                        /* in quotes */
     b       1b
 73: mov     x1, #4                          /* Version: 4 bytes; Hash32: 32; Address: 20 */
     cmp     x12, #CONFIG_KIND_HASH32
@@ -350,7 +350,7 @@ LOCAL_FUNCTION api_spec
     cmp     x12, #CONFIG_KIND_ADDRESS
     mov     x9, #20
     csel    x1, x9, x1, eq
-    bl      api_qhex
+    bl      lantern_api_qhex
     b       1b
     /* SPEC_SCHEDULE: [{"EPOCH":…,"MAX_BLOBS_PER_BLOCK":…},…] */
 8:  API_LIT api_p_lbracket
@@ -368,14 +368,14 @@ LOCAL_FUNCTION api_spec
     add     x11, x11, #CONFIG_BLOB_SCHEDULE
     add     x11, x11, x9, lsl #4
     ldr     x0, [x11]
-    bl      api_qdec
+    bl      lantern_api_qdec
     API_LIT api_p_max
     ldr     x9, [sp, #24]
     ldr     x11, [x22, #ApiView_config]
     add     x11, x11, #(CONFIG_BLOB_SCHEDULE + 8)
     add     x11, x11, x9, lsl #4
     ldr     x0, [x11]
-    bl      api_qdec
+    bl      lantern_api_qdec
     API_LIT api_end1
     ldr     x9, [sp, #24]
     add     x9, x9, #1
@@ -385,14 +385,14 @@ LOCAL_FUNCTION api_spec
     b       1b
 9:  API_LIT api_end2
     UNFRAME 64
-END_FUNCTION api_spec
+END_FUNCTION lantern_api_spec
 
 /*
  * L2: the body of getForkSchedule (beacon-api.md, Common rules), with the config of the view x22:
  * phase0, then each fork to fulu whose epoch is below 2^64 - 1. Locals: L the fork, L+8 the
  * previous version, L+16 the version, L+24 the epoch.
  */
-LOCAL_FUNCTION api_fork_schedule
+LOCAL_FUNCTION lantern_api_fork_schedule
     FRAME 32
     API_LIT api_o_open
     ldr     x9, [x22, #ApiView_config]
@@ -417,28 +417,28 @@ LOCAL_FUNCTION api_fork_schedule
 2:  API_LIT api_o_entry
     add     x0, sp, #24
     mov     x1, #4
-    bl      api_qhex
+    bl      lantern_api_qhex
     API_LIT api_k_current
     add     x0, sp, #32
     mov     x1, #4
-    bl      api_qhex
+    bl      lantern_api_qhex
     API_LIT api_k_epoch
     ldr     x0, [sp, #40]
-    bl      api_qdec
+    bl      lantern_api_qdec
     API_LIT api_end1
     ldr     x9, [sp, #32]                   /* the next fork's previous version */
     str     x9, [sp, #24]
     b       1b
 9:  API_LIT api_o_end
     UNFRAME 32
-END_FUNCTION api_fork_schedule
+END_FUNCTION lantern_api_fork_schedule
 
 /* ---------------------------------------------------------------- Validators (beacon-api.md, Common rules) */
 
 .set API_ITEM_MAX, 576                      /* the most bytes of an item and its comma */
 
 /* L0: x0 = the API_STATUS_* of the validator at x0 at the epoch x1. A leaf. Uses x9-x12. */
-LOCAL_FUNCTION api_validator_status
+LOCAL_FUNCTION lantern_api_validator_status
     UNWIND_END_PROLOGUE
     ldr     x9, [x0, #NODE_VALIDATOR_WITHDRAWABLE]
     cmp     x9, x1
@@ -476,14 +476,14 @@ LOCAL_FUNCTION api_validator_status
     mov     x11, #API_STATUS_PENDING_QUEUED
     csel    x0, x10, x11, eq
     ret
-END_FUNCTION api_validator_status
+END_FUNCTION lantern_api_validator_status
 
 /*
  * L1: the item of the validator x1 of the state x0: x2 0 for getStateValidators, 1 for the
  * balances, 2 for the identities, 3 for their SSZ (64 bytes). Locals: L the validator, L+8 the
  * index, L+16 the kind, L+24 the balance, L+32 the epoch, L+48 an SSZ item.
  */
-LOCAL_FUNCTION api_validator_item
+LOCAL_FUNCTION lantern_api_validator_item
     FRAME 112
     stp     x1, x2, [sp, #24]
     PART    x9, x10, x0, NODE_STATE_BALANCES
@@ -508,79 +508,79 @@ LOCAL_FUNCTION api_validator_item
     str     x10, [sp, #120]
     add     x0, sp, #64
     mov     x1, #64
-    bl      api_put
+    bl      lantern_api_put
     UNFRAME 112
 1:  API_LIT api_v_index
     ldr     x0, [sp, #24]
-    bl      api_qdec
+    bl      lantern_api_qdec
     ldr     x9, [sp, #32]
     cmp     x9, #2
     b.eq    2f
     API_LIT api_v_balance
     ldr     x0, [sp, #40]
-    bl      api_qdec
+    bl      lantern_api_qdec
     ldr     x9, [sp, #32]
     cbnz    x9, 9f
     API_LIT api_v_status
     ldr     x0, [sp, #16]
     ldr     x1, [sp, #48]
-    bl      api_validator_status
+    bl      lantern_api_validator_status
     ADDRESS x9, api_v_statuses
     mov     x10, #24
     madd    x9, x0, x10, x9
     ldrb    w1, [x9], #1
     mov     x0, x9
-    bl      api_put
+    bl      lantern_api_put
     API_LIT api_v_validator
     ldr     x0, [sp, #16]
     mov     x1, #48
-    bl      api_qhex
+    bl      lantern_api_qhex
     API_LIT api_v_credentials
     ldr     x0, [sp, #16]
     add     x0, x0, #NODE_VALIDATOR_CREDENTIALS
     mov     x1, #32
-    bl      api_qhex
+    bl      lantern_api_qhex
     API_LIT api_v_effective
     ldr     x9, [sp, #16]
     ldr     x0, [x9, #NODE_VALIDATOR_EFFECTIVE_BALANCE]
-    bl      api_qdec
+    bl      lantern_api_qdec
     API_LIT api_v_slashed
     ldr     x9, [sp, #16]
     ldrb    w0, [x9, #NODE_VALIDATOR_SLASHED]
-    bl      api_bool
+    bl      lantern_api_bool
     API_LIT api_v_eligibility
     ldr     x9, [sp, #16]
     ldr     x0, [x9, #NODE_VALIDATOR_ELIGIBILITY]
-    bl      api_qdec
+    bl      lantern_api_qdec
     API_LIT api_v_activation
     ldr     x9, [sp, #16]
     ldr     x0, [x9, #NODE_VALIDATOR_ACTIVATION]
-    bl      api_qdec
+    bl      lantern_api_qdec
     API_LIT api_v_exit
     ldr     x9, [sp, #16]
     ldr     x0, [x9, #NODE_VALIDATOR_EXIT]
-    bl      api_qdec
+    bl      lantern_api_qdec
     API_LIT api_v_withdrawable
     ldr     x9, [sp, #16]
     ldr     x0, [x9, #NODE_VALIDATOR_WITHDRAWABLE]
-    bl      api_qdec
+    bl      lantern_api_qdec
     API_LIT api_end2
     UNFRAME 112
     /* identities */
 2:  API_LIT api_v_pubkey
     ldr     x0, [sp, #16]
     mov     x1, #48
-    bl      api_qhex
+    bl      lantern_api_qhex
     API_LIT api_v_activation
     ldr     x9, [sp, #16]
     ldr     x0, [x9, #NODE_VALIDATOR_ACTIVATION]
-    bl      api_qdec
+    bl      lantern_api_qdec
 9:  API_LIT api_end1
     UNFRAME 112
-END_FUNCTION api_validator_item
+END_FUNCTION lantern_api_validator_item
 
 /* L0: x0 = the index of the validator of the ValidatorRef in the ByteList x1 in the state x0, or 2^64 - 1. A leaf. Uses x0-x5, x9-x16. */
-LOCAL_FUNCTION node_api_find_validator
+LOCAL_FUNCTION lantern_node_api_find_validator
     UNWIND_END_PROLOGUE
     ldr     x9, [x1, #16]
     cmp     x9, #64
@@ -618,7 +618,7 @@ LOCAL_FUNCTION node_api_find_validator
     b       3b
 8:  mov     x0, #-1
 9:  ret
-END_FUNCTION node_api_find_validator
+END_FUNCTION lantern_node_api_find_validator
 
 /*
  * L1: the selection of a chunk of a validator stream (node.md, NODE_WORK_API_CHUNK), at the cursor
@@ -628,7 +628,7 @@ END_FUNCTION node_api_find_validator
  * Locals: L the scratch's next byte, L+8 its end, L+16 the validators, L+24 their count, L+32 the
  * items, L+40 their count, L+48 the table of the public keys, L+56 its mask.
  */
-LOCAL_FUNCTION node_api_validators_prep
+LOCAL_FUNCTION lantern_node_api_validators_prep
     FRAME 64
     ldr     x9, [x0]
     add     x10, x0, x9
@@ -781,7 +781,7 @@ LOCAL_FUNCTION node_api_validators_prep
     UNFRAME 64
 97: mov     x0, #LANTERN_BUFFER_TOO_SMALL
     UNFRAME 64
-END_FUNCTION node_api_validators_prep
+END_FUNCTION lantern_node_api_validators_prep
 
 /*
  * L1: the items of the pending stream of the entry x22, of the state x20 (node.md,
@@ -790,7 +790,7 @@ END_FUNCTION node_api_validators_prep
  * when more is to come, 2 when the state has no such list. Locals: L the cursor, L+8
  * lantern_node_pending's out, L+32 the kind.
  */
-LOCAL_FUNCTION api_pending_json
+LOCAL_FUNCTION lantern_api_pending_json
     FRAME 48
     add     x9, x23, #(NodeEvent_api + 16)
     str     x9, [sp, #16]
@@ -821,7 +821,7 @@ LOCAL_FUNCTION api_pending_json
     ldr     x12, [sp, #40]
     madd    x0, x10, x12, x11
     ldr     x1, [sp, #48]
-    bl      api_pending_item
+    bl      lantern_api_pending_item
     ldr     x9, [sp, #16]
     ldr     x10, [x9]
     add     x10, x10, #1
@@ -834,13 +834,13 @@ LOCAL_FUNCTION api_pending_json
     UNFRAME 48
 7:  mov     x0, #2
     UNFRAME 48
-END_FUNCTION api_pending_json
+END_FUNCTION lantern_api_pending_json
 
 /*
  * L1: the JSON of the pending item at x0 of the kind x1 (lantern_node_pending): a PendingDeposit,
  * a PendingPartialWithdrawal or a PendingConsolidation, from its SSZ fields. Locals: the item.
  */
-LOCAL_FUNCTION api_pending_item
+LOCAL_FUNCTION lantern_api_pending_item
     FRAME 16
     str     x0, [sp, #16]
     cmp     x1, #1
@@ -850,52 +850,52 @@ LOCAL_FUNCTION api_pending_item
     API_LIT api_q_pubkey
     ldr     x0, [sp, #16]
     mov     x1, #48
-    bl      api_qhex
+    bl      lantern_api_qhex
     API_LIT api_q_credentials
     ldr     x0, [sp, #16]
     add     x0, x0, #48
     mov     x1, #32
-    bl      api_qhex
+    bl      lantern_api_qhex
     API_LIT api_q_amount
     ldr     x9, [sp, #16]
     ldr     x0, [x9, #80]
-    bl      api_qdec
+    bl      lantern_api_qdec
     API_LIT api_q_signature
     ldr     x0, [sp, #16]
     add     x0, x0, #88
     mov     x1, #96
-    bl      api_qhex
+    bl      lantern_api_qhex
     API_LIT api_q_slot
     ldr     x9, [sp, #16]
     ldr     x0, [x9, #184]
-    bl      api_qdec
+    bl      lantern_api_qdec
     b       9f
     /* {"validator_index":…,"amount":…,"withdrawable_epoch":…} */
 20: API_LIT api_q_validator
     ldr     x9, [sp, #16]
     ldr     x0, [x9]
-    bl      api_qdec
+    bl      lantern_api_qdec
     API_LIT api_q_amount
     ldr     x9, [sp, #16]
     ldr     x0, [x9, #8]
-    bl      api_qdec
+    bl      lantern_api_qdec
     API_LIT api_q_withdrawable
     ldr     x9, [sp, #16]
     ldr     x0, [x9, #16]
-    bl      api_qdec
+    bl      lantern_api_qdec
     b       9f
     /* {"source_index":…,"target_index":…} */
 30: API_LIT api_q_source
     ldr     x9, [sp, #16]
     ldr     x0, [x9]
-    bl      api_qdec
+    bl      lantern_api_qdec
     API_LIT api_q_target
     ldr     x9, [sp, #16]
     ldr     x0, [x9, #8]
-    bl      api_qdec
+    bl      lantern_api_qdec
 9:  API_LIT api_end1
     UNFRAME 16
-END_FUNCTION api_pending_item
+END_FUNCTION lantern_api_pending_item
 
 /*
  * L1: the items of the validator stream of the entry x22, of the state x20, from the cursor at
@@ -904,7 +904,7 @@ END_FUNCTION api_pending_item
  * once they are all written. x0 = 1 when whole, else 0. Locals: L the cursor, L+8 the kind of
  * the items, L+16 the validators' count.
  */
-LOCAL_FUNCTION api_validators_json
+LOCAL_FUNCTION lantern_api_validators_json
     FRAME 32
     add     x9, x23, #(NodeEvent_api + 16)
     str     x9, [sp, #16]
@@ -949,7 +949,7 @@ LOCAL_FUNCTION api_validators_json
     PART    x13, x14, x20, NODE_STATE_VALIDATORS
     add     x0, x13, x10, lsl #7
     ldr     x1, [x9, #24]
-    bl      api_validator_status
+    bl      lantern_api_validator_status
     ldr     x9, [sp, #16]
     ldr     x12, [x9, #8]
     lsr     x12, x12, x0
@@ -975,7 +975,7 @@ LOCAL_FUNCTION api_validators_json
     mov     x0, x20
     ldr     x1, [x9]
     ldr     x2, [sp, #24]
-    bl      api_validator_item
+    bl      lantern_api_validator_item
     ldr     x9, [sp, #16]
     ldr     x10, [x9]
     add     x10, x10, #1
@@ -992,40 +992,40 @@ LOCAL_FUNCTION api_validators_json
     UNFRAME 32
 9:  mov     x0, #0
     UNFRAME 32
-END_FUNCTION api_validators_json
+END_FUNCTION lantern_api_validators_json
 
 /*
  * L1: ,"head":…,"target":…,"source":…,"inactivity":…} of the 48-byte item x0 of lantern_node_attestation_rewards,
  * with ,"inclusion_delay":… before inactivity when the fork of the entry x22 is phase0. Locals: the item.
  */
-LOCAL_FUNCTION api_reward_fields
+LOCAL_FUNCTION lantern_api_reward_fields
     FRAME 16
     str     x0, [sp, #16]
     API_LIT api_ar_head
     ldr     x9, [sp, #16]
     ldr     x0, [x9]
-    bl      api_qint
+    bl      lantern_api_qint
     API_LIT api_ar_target
     ldr     x9, [sp, #16]
     ldr     x0, [x9, #8]
-    bl      api_qint
+    bl      lantern_api_qint
     API_LIT api_ar_source
     ldr     x9, [sp, #16]
     ldr     x0, [x9, #16]
-    bl      api_qint
+    bl      lantern_api_qint
     ldr     x9, [x22, #NodeApi_fork]
     cbnz    x9, 1f
     API_LIT api_ar_inclusion
     ldr     x9, [sp, #16]
     ldr     x0, [x9, #24]
-    bl      api_qdec
+    bl      lantern_api_qdec
 1:  API_LIT api_ar_inactivity
     ldr     x9, [sp, #16]
     ldr     x0, [x9, #32]
-    bl      api_qint
+    bl      lantern_api_qint
     API_LIT api_end1
     UNFRAME 16
-END_FUNCTION api_reward_fields
+END_FUNCTION lantern_api_reward_fields
 
 .set API_REWARD_WINDOW, 256                 /* the validators of one call of lantern_node_attestation_rewards */
 .set API_REWARD_ITEM_MAX, 256               /* the room an item may take */
@@ -1039,7 +1039,7 @@ END_FUNCTION api_reward_fields
  * refuse, 3 for a scratch too small. Locals: sp+16 the cursor, sp+24 the window's items, sp+32 its
  * first validator, sp+40 its count, sp+48 a value, sp+56 an ideal item (48).
  */
-LOCAL_FUNCTION api_rewards_json
+LOCAL_FUNCTION lantern_api_rewards_json
     FRAME 96
     add     x9, x23, #(NodeEvent_api + 16)
     str     x9, [sp, #16]
@@ -1086,9 +1086,9 @@ LOCAL_FUNCTION api_rewards_json
     API_LIT api_p_comma
 31: API_LIT api_ar_eb
     ldr     x0, [sp, #48]
-    bl      api_qdec
+    bl      lantern_api_qdec
     add     x0, sp, #56
-    bl      api_reward_fields
+    bl      lantern_api_reward_fields
     ldr     x9, [sp, #16]
     ldr     x10, [x9]
     add     x10, x10, #1
@@ -1171,12 +1171,12 @@ LOCAL_FUNCTION api_rewards_json
     ldp     x11, x12, [sp, #32]
     ldr     x10, [sp, #48]
     add     x0, x11, x10
-    bl      api_qdec
+    bl      lantern_api_qdec
     ldr     x10, [sp, #48]
     ldr     x14, [sp, #24]
     mov     x15, #48
     madd    x0, x10, x15, x14
-    bl      api_reward_fields
+    bl      lantern_api_reward_fields
 69: ldr     x10, [sp, #48]
     add     x10, x10, #1
     str     x10, [sp, #48]
@@ -1204,14 +1204,14 @@ LOCAL_FUNCTION api_rewards_json
     UNFRAME 96
 93: mov     x0, #3
     UNFRAME 96
-END_FUNCTION api_rewards_json
+END_FUNCTION lantern_api_rewards_json
 
 /*
  * L0: x0 = the epoch of getEpochCommittees of the route x0 and the state of the view x1 (beacon-api.md,
  * Common rules), or 2^64 - 1 for 400: an epoch above the state's + 1, one whose seed's RANDAO mix the
  * state no longer holds, or a slot of another epoch. A leaf. Uses x9-x13.
  */
-LOCAL_FUNCTION node_api_committees_check
+LOCAL_FUNCTION lantern_node_api_committees_check
     UNWIND_END_PROLOGUE
     ldr     x9, [x1, #ApiView_head_slot]    /* the state's epoch */
     mov     x10, #SLOTS_PER_EPOCH
@@ -1240,14 +1240,14 @@ LOCAL_FUNCTION node_api_committees_check
     ret
 8:  mov     x0, #-1
     ret
-END_FUNCTION node_api_committees_check
+END_FUNCTION lantern_node_api_committees_check
 
 /*
  * L0: the cursor of the getEpochCommittees stream of the entry x0, for the route x1 and the epoch x2
  * (node.md, NODE_EV_API): the first slot at 0, the first index at 8, the epoch at 24, the slot and
  * the index asked at 40 and 48 (2^64 - 1 for none). A leaf. Uses x9-x12.
  */
-LOCAL_FUNCTION node_api_committees_cursor
+LOCAL_FUNCTION lantern_node_api_committees_cursor
     UNWIND_END_PROLOGUE
     add     x9, x0, #NodeApi_cursor
     str     x2, [x9, #24]
@@ -1268,16 +1268,16 @@ LOCAL_FUNCTION node_api_committees_cursor
 2:  str     x11, [x9, #8]
     str     x12, [x9, #48]
     ret
-END_FUNCTION node_api_committees_cursor
+END_FUNCTION lantern_node_api_committees_cursor
 
 /*
  * L1: a chunk's start of a getEpochCommittees stream (node.md, NODE_WORK_API_CHUNK), at the cursor at
  * NodeEvent_api + 16 of the event x23: +56 get_committee_count_per_slot of the state x20 at the epoch
- * at +24; +72 the scratch x0, for api_committees_json. x0 = 0; 400 for an index asked at or past the
+ * at +24; +72 the scratch x0, for lantern_api_committees_json. x0 = 0; 400 for an index asked at or past the
  * count, in the first chunk; LANTERN_BUFFER_TOO_SMALL for a scratch with no room for a committee and
  * lantern_get_beacon_committee; else the status of the count. Locals: L the epoch, L+8 the count.
  */
-LOCAL_FUNCTION node_api_committees_prep
+LOCAL_FUNCTION lantern_node_api_committees_prep
     FRAME 16
     add     x9, x23, #(NodeEvent_api + 16)
     str     x0, [x9, #72]
@@ -1322,7 +1322,7 @@ LOCAL_FUNCTION node_api_committees_prep
 9:  UNFRAME 16
 97: mov     x0, #LANTERN_BUFFER_TOO_SMALL
     UNFRAME 16
-END_FUNCTION node_api_committees_prep
+END_FUNCTION lantern_node_api_committees_prep
 
 /*
  * L1: the items of the getEpochCommittees stream of the entry x22, of the state x20, from the cursor
@@ -1332,7 +1332,7 @@ END_FUNCTION node_api_committees_prep
  * they are all written. x0 = 1 when whole, 0 when more is to come, 2 when a committee fails.
  * Locals: L the cursor, L+8 the slot, L+16 the index, L+24 the committee's list.
  */
-LOCAL_FUNCTION api_committees_json
+LOCAL_FUNCTION lantern_api_committees_json
     FRAME 48
     add     x9, x23, #(NodeEvent_api + 16)
     str     x9, [sp, #16]
@@ -1378,11 +1378,11 @@ LOCAL_FUNCTION api_committees_json
     API_LIT api_v_index
     ldr     x9, [sp, #16]
     ldr     x0, [x9, #8]
-    bl      api_qdec
+    bl      lantern_api_qdec
     API_LIT api_c_slot
     ldr     x9, [sp, #16]
     ldr     x0, [x9]
-    bl      api_qdec
+    bl      lantern_api_qdec
     API_LIT api_c_validators
 4:  ldr     x9, [sp, #16]                   /* the committee, in a list after 16 bytes of the scratch */
     ldp     x10, x11, [x9]
@@ -1429,7 +1429,7 @@ LOCAL_FUNCTION api_committees_json
     ldr     x0, [x11, x10, lsl #3]
     add     x10, x10, #1
     str     x10, [x9, #16]
-    bl      api_qdec
+    bl      lantern_api_qdec
     b       41b
 5:  sub     x13, x26, x24                   /* the item's end: ]} */
     cmp     x13, #2
@@ -1451,14 +1451,14 @@ LOCAL_FUNCTION api_committees_json
     UNFRAME 48
 9:  mov     x0, #0
     UNFRAME 48
-END_FUNCTION api_committees_json
+END_FUNCTION lantern_api_committees_json
 
 /*
  * L1: the ids of the validator operation of the route x0 (node.md, NODE_EV_API): x0 = the new id
  * of a NODE_ACT_BYTES_PUT of its ValidatorRef items (getStateValidator: its validator_id), or 0
  * with none. Locals: a ByteList head whose offset reaches the items.
  */
-LOCAL_FUNCTION node_api_ids
+LOCAL_FUNCTION lantern_node_api_ids
     FRAME 32
     ldr     x9, [x0, #ApiRoute_op]
     cmp     x9, #API_OP_GET_STATE_VALIDATOR
@@ -1476,15 +1476,15 @@ LOCAL_FUNCTION node_api_ids
     stp     x11, x13, [x12]
     str     x11, [x12, #16]
     mov     x0, x12
-    bl      node_put
+    bl      lantern_node_put
 9:  UNFRAME 32
-END_FUNCTION node_api_ids
+END_FUNCTION lantern_node_api_ids
 
 /*
  * L1: the body of the kind x28 for the view x22: an error body of the status at [x0], or the
  * JSON of an operation (beacon-api.md, Common rules). Locals: x0.
  */
-LOCAL_FUNCTION api_body
+LOCAL_FUNCTION lantern_api_body
     FRAME 16
     str     x0, [sp, #16]
     cmp     x28, #API_BODY_ERROR
@@ -1493,18 +1493,18 @@ LOCAL_FUNCTION api_body
     API_LIT api_e_code
     ldr     x9, [sp, #16]
     ldr     x0, [x9]
-    bl      api_dec
+    bl      lantern_api_dec
     API_LIT api_e_message
     ldr     x9, [sp, #16]
     ldr     x0, [x9]
-    bl      api_code
+    bl      lantern_api_code
     mov     x1, #24
-    bl      api_code_text
+    bl      lantern_api_code_text
     API_LIT api_e_end
     UNFRAME 16
 1:  cmp     x28, #API_OP_GET_LIGHT_CLIENT_UPDATES_BY_RANGE
     b.ne    102f
-    bl      api_lc_updates_body
+    bl      lantern_api_lc_updates_body
     UNFRAME 16
 102: sub    x9, x28, #API_OP_GET_LIGHT_CLIENT_BOOTSTRAP   /* the light client reads: SSZ, or {"version":…,"data":…} */
     cmp     x9, #(API_OP_GET_LIGHT_CLIENT_OPTIMISTIC_UPDATE - API_OP_GET_LIGHT_CLIENT_BOOTSTRAP)
@@ -1515,17 +1515,17 @@ LOCAL_FUNCTION api_body
     ldr     x10, [x9, #8]
     add     x0, x9, x10
     ldr     x1, [x9, #16]
-    bl      api_put
+    bl      lantern_api_put
     UNFRAME 16
 101: API_LIT api_j_version
     ldr     x0, [x22, #ApiView_fork]
-    bl      api_fork_name
+    bl      lantern_api_fork_name
     API_LIT api_g_data
     LDQ     x9, x22, ApiView_lc_json
     ldr     x10, [x9, #8]
     add     x0, x9, x10
     ldr     x1, [x9, #16]
-    bl      api_put
+    bl      lantern_api_put
     API_LIT api_end1
     UNFRAME 16
 10: cmp     x28, #API_OP_SUBMIT_POOL_BLS_TO_EXECUTION_CHANGE
@@ -1534,34 +1534,34 @@ LOCAL_FUNCTION api_body
     API_LIT api_e_code
     ldr     x9, [sp, #16]
     ldr     x0, [x9]
-    bl      api_dec
+    bl      lantern_api_dec
     API_LIT api_e_message
     ldr     x9, [sp, #16]
     ldr     x0, [x9]
-    bl      api_code
+    bl      lantern_api_code
     mov     x1, #24
-    bl      api_code_text
+    bl      lantern_api_code_text
     API_LIT api_f_list
-    bl      api_failures
+    bl      lantern_api_failures
     UNFRAME 16
 11: cmp     x28, #API_OP_GET_PEERS
     b.ne    116f
-    bl      api_peers_body
+    bl      lantern_api_peers_body
     UNFRAME 16
 116: cmp    x28, #API_OP_GET_PEER
     b.ne    117f
     API_LIT api_pe_data
     ldr     x0, [x22, #ApiView_peer]
-    bl      api_peer_item
+    bl      lantern_api_peer_item
     API_LIT api_end1
     UNFRAME 16
 117: cmp    x28, #API_OP_GET_DEBUG_CHAIN_HEADS_V2
     b.ne    110f
-    bl      api_heads_body
+    bl      lantern_api_heads_body
     UNFRAME 16
 110: cmp    x28, #API_OP_GET_DEBUG_FORK_CHOICE
     b.ne    115f
-    bl      api_fork_choice_body
+    bl      lantern_api_fork_choice_body
     UNFRAME 16
 115: cmp    x28, #API_OP_GET_STATE_RANDAO
     b.eq    111f
@@ -1575,162 +1575,162 @@ LOCAL_FUNCTION api_body
 111:
 112:
 113: ldr    x0, [sp, #16]                   /* the state reads */
-    bl      api_state_read_body
+    bl      lantern_api_state_read_body
     UNFRAME 16
 114: ldr    x9, [sp, #16]                   /* SSZ: its 128 bytes */
     ldr     x9, [x9, #8]
     tbz     x9, #3, 13f
     ADDQ    x0, x22, ApiView_att
     mov     x1, #128
-    bl      api_put
+    bl      lantern_api_put
     UNFRAME 16
     /* {"data":{"slot":…,"index":…,"beacon_block_root":…,"source":…,"target":…}} */
 13: API_LIT api_a_slot
     LDQ     x0, x22, ApiView_att
-    bl      api_qdec
+    bl      lantern_api_qdec
     API_LIT api_a_index
     LDQ     x0, x22, ApiView_att + 8
-    bl      api_qdec
+    bl      lantern_api_qdec
     API_LIT api_a_root
     ADDQ    x0, x22, ApiView_att + 16
     mov     x1, #32
-    bl      api_qhex
+    bl      lantern_api_qhex
     API_LIT api_a_source
     ADDQ    x0, x22, ApiView_att + 48
-    bl      api_checkpoint
+    bl      lantern_api_checkpoint
     API_LIT api_a_target
     ADDQ    x0, x22, ApiView_att + 88
-    bl      api_checkpoint
+    bl      lantern_api_checkpoint
     API_LIT api_end2
     UNFRAME 16
 12: cmp     x28, #API_OP_GET_NETWORK_IDENTITY
     b.ne    2f
     API_LIT api_i_peer_id
     add     x0, x22, #ApiView_peer_id
-    bl      api_text
+    bl      lantern_api_text
     API_LIT api_i_enr
     add     x0, x22, #ApiView_enr
-    bl      api_text
+    bl      lantern_api_text
     API_LIT api_i_p2p
     ldr     x9, [x22, #ApiView_p2p_address]
     cbz     x9, 14f
     add     x0, x22, #ApiView_p2p_address
-    bl      api_text
+    bl      lantern_api_text
 14: API_LIT api_i_discovery
     ldr     x9, [x22, #ApiView_discovery_address]
     cbz     x9, 15f
     add     x0, x22, #ApiView_discovery_address
-    bl      api_text
+    bl      lantern_api_text
 15: API_LIT api_i_seq
     ldr     x0, [x22, #ApiView_seq_number]
-    bl      api_qdec
+    bl      lantern_api_qdec
     API_LIT api_i_attnets
     add     x0, x22, #ApiView_attnets
     mov     x1, #8
-    bl      api_qhex
+    bl      lantern_api_qhex
     ldr     x9, [x22, #ApiView_fork]
     cmp     x9, #FORK_ALTAIR
     b.lo    16f
     API_LIT api_i_syncnets
     add     x0, x22, #ApiView_syncnets
     mov     x1, #1
-    bl      api_qhex
+    bl      lantern_api_qhex
     ldr     x9, [x22, #ApiView_fork]
     cmp     x9, #FORK_FULU
     b.lo    16f
     API_LIT api_i_cgc
     ldr     x0, [x22, #ApiView_custody_group_count]
-    bl      api_qdec
+    bl      lantern_api_qdec
 16: API_LIT api_end3
     UNFRAME 16
 2:  cmp     x28, #API_OP_GET_NODE_VERSION
     b.ne    3f
     API_LIT api_v_version
     add     x0, x22, #ApiView_version
-    bl      api_text
+    bl      lantern_api_text
     API_LIT api_end2
     UNFRAME 16
 3:  cmp     x28, #API_OP_GET_SYNCING_STATUS
     b.ne    4f
     API_LIT api_s_head
     ldr     x0, [x22, #ApiView_head_slot]
-    bl      api_qdec
+    bl      lantern_api_qdec
     API_LIT api_s_distance
     ldr     x9, [x22, #ApiView_current_slot]
     ldr     x10, [x22, #ApiView_head_slot]
     subs    x0, x9, x10
     csel    x0, xzr, x0, lo
-    bl      api_qdec
+    bl      lantern_api_qdec
     API_LIT api_s_syncing
     ldr     x0, [x22, #ApiView_is_syncing]
-    bl      api_bool
+    bl      lantern_api_bool
     API_LIT api_s_optimistic
     ldr     x0, [x22, #ApiView_is_optimistic]
-    bl      api_bool
+    bl      lantern_api_bool
     API_LIT api_s_offline
     ldr     x0, [x22, #ApiView_el_offline]
-    bl      api_bool
+    bl      lantern_api_bool
     API_LIT api_end2
     UNFRAME 16
 4:  cmp     x28, #API_OP_GET_PEER_COUNT
     b.ne    5f
     API_LIT api_c_connected
     ldr     x0, [x22, #ApiView_peers]
-    bl      api_qdec
+    bl      lantern_api_qdec
     API_LIT api_c_end
     UNFRAME 16
 5:  cmp     x28, #API_OP_GET_GENESIS
     b.ne    6f
     API_LIT api_g_time
     ldr     x0, [x22, #ApiView_genesis_time]
-    bl      api_qdec
+    bl      lantern_api_qdec
     API_LIT api_g_root
     add     x0, x22, #ApiView_genesis_validators_root
     mov     x1, #32
-    bl      api_qhex
+    bl      lantern_api_qhex
     API_LIT api_g_version
     add     x0, x22, #ApiView_genesis_fork_version
     mov     x1, #4
-    bl      api_qhex
+    bl      lantern_api_qhex
     API_LIT api_end2
     UNFRAME 16
 6:  cmp     x28, #API_OP_GET_BLOCK_HEADER
     b.ne    7f
     API_LIT api_x_optimistic
     ldr     x0, [x22, #ApiView_is_optimistic]
-    bl      api_bool
+    bl      lantern_api_bool
     API_LIT api_x_finalized
     LDQ     x0, x22, ApiView_head_finalized
-    bl      api_bool
+    bl      lantern_api_bool
     API_LIT api_x_data
     API_LIT api_h_root
     add     x0, x22, #ApiView_head_root
     mov     x1, #32
-    bl      api_qhex
+    bl      lantern_api_qhex
     ldr     x0, [x22, #ApiView_head_slot]
     add     x1, x22, #ApiView_proposer_index
     ldr     x2, [x22, #ApiView_canonical]
-    bl      api_header_json
+    bl      lantern_api_header_json
     API_LIT api_end3
     UNFRAME 16
 7:  cmp     x28, #API_OP_GET_STATE_FINALITY_CHECKPOINTS
     b.ne    9f
     API_LIT api_x_optimistic
     ldr     x0, [x22, #ApiView_is_optimistic]
-    bl      api_bool
+    bl      lantern_api_bool
     API_LIT api_x_finalized
     LDQ     x0, x22, ApiView_head_finalized
-    bl      api_bool
+    bl      lantern_api_bool
     API_LIT api_x_data
     API_LIT api_f_previous
     add     x0, x22, #ApiView_previous_justified
-    bl      api_checkpoint
+    bl      lantern_api_checkpoint
     API_LIT api_f_current
     add     x0, x22, #ApiView_current_justified
-    bl      api_checkpoint
+    bl      lantern_api_checkpoint
     API_LIT api_f_finalized
     add     x0, x22, #ApiView_finalized
-    bl      api_checkpoint
+    bl      lantern_api_checkpoint
     API_LIT api_end2
     UNFRAME 16
 9:  cmp     x28, #API_OP_GET_BLOCK_ROOT     /* getBlockRoot, getStateRoot: {"execution_optimistic":…,"finalized":…,"data":{"root":…}} */
@@ -1741,67 +1741,67 @@ LOCAL_FUNCTION api_body
     b.ne    12f
 10: API_LIT api_x_optimistic
     ldr     x0, [x22, #ApiView_is_optimistic]
-    bl      api_bool
+    bl      lantern_api_bool
     API_LIT api_x_finalized
     LDQ     x0, x22, ApiView_head_finalized
-    bl      api_bool
+    bl      lantern_api_bool
     API_LIT api_x_data
     cmp     x28, #API_OP_GET_STATE_FORK
     b.eq    11f
     API_LIT api_h_root
     add     x0, x22, #ApiView_head_root
     mov     x1, #32
-    bl      api_qhex
+    bl      lantern_api_qhex
     API_LIT api_end2
     UNFRAME 16
     /* getStateFork: {"previous_version":…,"current_version":…,"epoch":…} */
 11: API_LIT api_k_previous
     ADDQ    x0, x22, ApiView_state_fork
     mov     x1, #4
-    bl      api_qhex
+    bl      lantern_api_qhex
     API_LIT api_k_current
     ADDQ    x0, x22, ApiView_state_fork + 4
     mov     x1, #4
-    bl      api_qhex
+    bl      lantern_api_qhex
     API_LIT api_k_epoch
     LDQ     x0, x22, ApiView_state_fork + 8
-    bl      api_qdec
+    bl      lantern_api_qdec
     API_LIT api_end2
     UNFRAME 16
 12: cmp     x28, #API_OP_GET_SPEC
     b.ne    13f
-    bl      api_spec
+    bl      lantern_api_spec
     UNFRAME 16
 13: cmp     x28, #API_OP_GET_FORK_SCHEDULE
     b.ne    17f
-    bl      api_fork_schedule
+    bl      lantern_api_fork_schedule
     UNFRAME 16
 17: cmp     x28, #API_OP_GET_DEPOSIT_CONTRACT   /* {"data":{"chain_id":…,"address":…}} */
     b.ne    18f
     API_LIT api_d_chain
     ldr     x9, [x22, #ApiView_config]
     LDQ     x0, x9, CONFIG_DEPOSIT_CHAIN_ID
-    bl      api_qdec
+    bl      lantern_api_qdec
     API_LIT api_d_address
     ldr     x9, [x22, #ApiView_config]
     ADDQ    x0, x9, CONFIG_DEPOSIT_CONTRACT_ADDRESS
     mov     x1, #20
-    bl      api_qhex
+    bl      lantern_api_qhex
     API_LIT api_end2
     UNFRAME 16
 18: cmp     x28, #API_OP_GET_STATE_VALIDATOR    /* {"execution_optimistic":…,"finalized":…,"data":<item>} */
     b.ne    19f
     API_LIT api_v_open
     ldr     x0, [x22, #ApiView_is_optimistic]
-    bl      api_bool
+    bl      lantern_api_bool
     API_LIT api_x_finalized
     LDQ     x0, x22, ApiView_head_finalized
-    bl      api_bool
+    bl      lantern_api_bool
     API_LIT api_v_data
     ldr     x0, [x22, #ApiView_val_state]
     ldr     x1, [x22, #ApiView_val_index]
     mov     x2, #0
-    bl      api_validator_item
+    bl      lantern_api_validator_item
     API_LIT api_end1
     UNFRAME 16
     /* getProposerDuties and getProposerDutiesV2: {"dependent_root":…,"execution_optimistic":…,"data":[{"pubkey":…,"validator_index":…,"slot":…},…]} */
@@ -1812,10 +1812,10 @@ LOCAL_FUNCTION api_body
 190: API_LIT api_u_root
     add     x0, x22, #ApiView_duties
     mov     x1, #32
-    bl      api_qhex
+    bl      lantern_api_qhex
     API_LIT api_u_optimistic
     ldr     x0, [x22, #ApiView_is_optimistic]
-    bl      api_bool
+    bl      lantern_api_bool
     API_LIT api_v_list
     str     xzr, [sp, #24]
 20: ldr     x9, [sp, #24]
@@ -1837,18 +1837,18 @@ LOCAL_FUNCTION api_body
     PART    x9, x10, x0, NODE_STATE_VALIDATORS
     add     x0, x9, x1, lsl #7              /* NODE_VALIDATOR_MEM: the pubkey first */
     mov     x1, #48
-    bl      api_qhex
+    bl      lantern_api_qhex
     API_LIT api_u_index
     ldr     x9, [sp, #24]
     add     x10, x22, #(ApiView_duties + 32)
     ldr     x0, [x10, x9, lsl #3]
-    bl      api_qdec
+    bl      lantern_api_qdec
     API_LIT api_c_slot
     ldr     x9, [x22, #ApiView_val_state]
     ldr     x0, [x9, #NODE_STATE_SLOT]
     ldr     x9, [sp, #24]
     add     x0, x0, x9
-    bl      api_qdec
+    bl      lantern_api_qdec
     API_LIT api_end1
 23: ldr     x9, [sp, #24]
     add     x9, x9, #1
@@ -1859,17 +1859,17 @@ LOCAL_FUNCTION api_body
     /* {"dependent_root":…,"execution_optimistic":…,"data":[{"pubkey":…,…,"slot":…},…]}, x21 the items written */
 18: cmp     x28, #API_OP_GET_SYNC_COMMITTEE_DUTIES
     b.ne    181f
-    bl      api_sync_duties_body
+    bl      lantern_api_sync_duties_body
     UNFRAME 16
 181: cmp    x28, #API_OP_GET_ATTESTER_DUTIES
     b.ne    182f
     API_LIT api_u_root
     LDQ     x0, x22, ApiView_ad_out
     mov     x1, #32
-    bl      api_qhex
+    bl      lantern_api_qhex
     API_LIT api_u_optimistic
     ldr     x0, [x22, #ApiView_is_optimistic]
-    bl      api_bool
+    bl      lantern_api_bool
     API_LIT api_v_list
     mov     x21, #0
     str     xzr, [sp, #24]
@@ -1894,31 +1894,31 @@ LOCAL_FUNCTION api_body
     ldr     x11, [x11, #40]
     add     x0, x9, x11, lsl #7             /* NODE_VALIDATOR_MEM: the pubkey first */
     mov     x1, #48
-    bl      api_qhex
+    bl      lantern_api_qhex
     API_LIT api_u_index
     ldr     x9, [sp, #16]
     ldr     x0, [x9, #40]
-    bl      api_qdec
+    bl      lantern_api_qdec
     API_LIT api_t_committee_index
     ldr     x9, [sp, #16]
     ldr     x0, [x9, #16]
-    bl      api_qdec
+    bl      lantern_api_qdec
     API_LIT api_t_committee_length
     ldr     x9, [sp, #16]
     ldr     x0, [x9, #24]
-    bl      api_qdec
+    bl      lantern_api_qdec
     API_LIT api_t_committees_at_slot
     LDQ     x9, x22, ApiView_ad_out
     ldr     x0, [x9, #32]
-    bl      api_qdec
+    bl      lantern_api_qdec
     API_LIT api_t_validator_committee_index
     ldr     x9, [sp, #16]
     ldr     x0, [x9, #32]
-    bl      api_qdec
+    bl      lantern_api_qdec
     API_LIT api_c_slot
     ldr     x9, [sp, #16]
     ldr     x0, [x9, #8]
-    bl      api_qdec
+    bl      lantern_api_qdec
     API_LIT api_end1
 15: ldr     x9, [sp, #24]
     add     x9, x9, #1
@@ -1929,21 +1929,21 @@ LOCAL_FUNCTION api_body
     /* getLiveness: {"data":[{"index":…,"is_live":…},…]} */
 182: cmp    x28, #API_OP_GET_LIVENESS
     b.ne    183f
-    bl      api_liveness_body
+    bl      lantern_api_liveness_body
     b       99f
     /* getBlockRewards and getSyncCommitteeRewards */
 183: cmp    x28, #API_OP_GET_BLOCK_REWARDS
     b.ne    184f
-    bl      api_rewards_body
+    bl      lantern_api_rewards_body
     b       99f
 184: cmp    x28, #API_OP_GET_SYNC_COMMITTEE_REWARDS
     b.ne    99f
-    bl      api_sync_rewards_body
+    bl      lantern_api_sync_rewards_body
 99: UNFRAME 16
-END_FUNCTION api_body
+END_FUNCTION lantern_api_body
 
 /* L0: the 48 bytes of the pubkey of validator x0 of the state x1 among the ValidatorRef items of the ByteList x2, or its index: x0 = 1, else 0. Uses x3-x13. */
-LOCAL_FUNCTION api_names
+LOCAL_FUNCTION lantern_api_names
     UNWIND_END_PROLOGUE
     PART    x3, x4, x1, NODE_STATE_VALIDATORS
     mov     x5, #NODE_VALIDATOR_MEM
@@ -1982,10 +1982,10 @@ LOCAL_FUNCTION api_names
     ret
 9:  mov     x0, #1
     ret
-END_FUNCTION api_names
+END_FUNCTION lantern_api_names
 
 /* L1: the signed (two's complement) x0 in decimal, in quotes, with - before a value below 0. Locals: x0. */
-LOCAL_FUNCTION api_qint
+LOCAL_FUNCTION lantern_api_qint
     FRAME 16
     str     x0, [sp, #16]
     API_LIT api_quote
@@ -1994,10 +1994,10 @@ LOCAL_FUNCTION api_qint
     API_LIT api_rw_minus
     ldr     x0, [sp, #16]
     neg     x0, x0
-1:  bl      api_dec
+1:  bl      lantern_api_dec
     API_LIT api_quote
     UNFRAME 16
-END_FUNCTION api_qint
+END_FUNCTION lantern_api_qint
 
 /*
  * L1: the body of getBlockRewards (beacon-api.md): {"execution_optimistic":…,"finalized":…,"data":{"proposer_index":…,
@@ -2008,16 +2008,16 @@ END_FUNCTION api_qint
     API_LIT \text
     LDQ     x9, x22, ApiView_live_out
     ldr     x0, [x9, #\off]
-    bl      api_qdec
+    bl      lantern_api_qdec
 .endm
-LOCAL_FUNCTION api_rewards_body
+LOCAL_FUNCTION lantern_api_rewards_body
     FRAME 0
     API_LIT api_x_optimistic
     ldr     x0, [x22, #ApiView_is_optimistic]
-    bl      api_bool
+    bl      lantern_api_bool
     API_LIT api_x_finalized
     LDQ     x0, x22, ApiView_head_finalized
-    bl      api_bool
+    bl      lantern_api_bool
     API_LIT api_x_data
     REWARD_FIELD api_rw_proposer, 0
     REWARD_FIELD api_rw_total, 8
@@ -2027,21 +2027,21 @@ LOCAL_FUNCTION api_rewards_body
     REWARD_FIELD api_rw_attester_slashings, 40
     API_LIT api_end2
     UNFRAME 0
-END_FUNCTION api_rewards_body
+END_FUNCTION lantern_api_rewards_body
 
 /*
  * L1: the body of getSyncCommitteeRewards (beacon-api.md): {"execution_optimistic":…,"finalized":…,"data":[{"validator_index":…,
  * "reward":…},…]} of the items of lantern_node_sync_rewards at ApiView_live_out of the view x22; with ValidatorRef items at
  * ApiView_sd_ids, those of the validators of ApiView_val_state that one names. Locals: the item, the items written.
  */
-LOCAL_FUNCTION api_sync_rewards_body
+LOCAL_FUNCTION lantern_api_sync_rewards_body
     FRAME 16
     API_LIT api_x_optimistic
     ldr     x0, [x22, #ApiView_is_optimistic]
-    bl      api_bool
+    bl      lantern_api_bool
     API_LIT api_x_finalized
     LDQ     x0, x22, ApiView_head_finalized
-    bl      api_bool
+    bl      lantern_api_bool
     API_LIT api_v_list
     stp     xzr, xzr, [sp, #16]
 1:  LDQ     x9, x22, ApiView_live_out
@@ -2057,7 +2057,7 @@ LOCAL_FUNCTION api_sync_rewards_body
     LDQ     x2, x22, ApiView_sd_ids
     cbz     x2, 2f
     ldr     x1, [x22, #ApiView_val_state]
-    bl      api_names
+    bl      lantern_api_names
     cbz     x0, 5f
 2:  ldr     x11, [sp, #24]
     cbz     x11, 3f
@@ -2069,7 +2069,7 @@ LOCAL_FUNCTION api_sync_rewards_body
     ldr     x11, [sp, #16]
     add     x12, x12, x11, lsl #4
     ldr     x0, [x12]
-    bl      api_qdec
+    bl      lantern_api_qdec
     API_LIT api_rw_reward
     LDQ     x9, x22, ApiView_live_out
     ldr     x12, [x9, #8]
@@ -2077,7 +2077,7 @@ LOCAL_FUNCTION api_sync_rewards_body
     ldr     x11, [sp, #16]
     add     x12, x12, x11, lsl #4
     ldr     x0, [x12, #8]
-    bl      api_qint
+    bl      lantern_api_qint
     API_LIT api_end1
     ldr     x11, [sp, #24]
     add     x11, x11, #1
@@ -2088,14 +2088,14 @@ LOCAL_FUNCTION api_sync_rewards_body
     b       1b
 9:  API_LIT api_v_end
     UNFRAME 16
-END_FUNCTION api_sync_rewards_body
+END_FUNCTION lantern_api_sync_rewards_body
 
 /*
  * L1: the body of getLiveness (beacon-api.md): {"data":[{"index":…,"is_live":…},…]} of the
  * ValidatorRef items at ApiView_sd_ids of the view x22, each by its byte at ApiView_live_out.
  * Locals: the item's index.
  */
-LOCAL_FUNCTION api_liveness_body
+LOCAL_FUNCTION lantern_api_liveness_body
     FRAME 16
     API_LIT api_p_data
     str     xzr, [sp, #16]
@@ -2114,12 +2114,12 @@ LOCAL_FUNCTION api_liveness_body
     ldr     x11, [sp, #16]
     add     x10, x10, x11, lsl #6
     ldr     x0, [x10, #8]
-    bl      api_qdec
+    bl      lantern_api_qdec
     API_LIT api_l_live
     LDQ     x9, x22, ApiView_live_out
     ldr     x11, [sp, #16]
     ldrb    w0, [x9, x11]
-    bl      api_bool
+    bl      lantern_api_bool
     API_LIT api_end1
     ldr     x9, [sp, #16]
     add     x9, x9, #1
@@ -2127,7 +2127,7 @@ LOCAL_FUNCTION api_liveness_body
     b       1b
 9:  API_LIT api_v_end
     UNFRAME 16
-END_FUNCTION api_liveness_body
+END_FUNCTION lantern_api_liveness_body
 
 /*
  * L1: the body of getSyncCommitteeDuties (beacon-api.md): {"execution_optimistic":…,"data":[{"pubkey":…,
@@ -2136,11 +2136,11 @@ END_FUNCTION api_liveness_body
  * pubkeys those of the state at ApiView_val_state. Locals: the item's index, the items written,
  * the validator, the place, its places written.
  */
-LOCAL_FUNCTION api_sync_duties_body
+LOCAL_FUNCTION lantern_api_sync_duties_body
     FRAME 48
     API_LIT api_x_optimistic
     ldr     x0, [x22, #ApiView_is_optimistic]
-    bl      api_bool
+    bl      lantern_api_bool
     API_LIT api_v_list
     stp     xzr, xzr, [sp, #16]
 1:  LDQ     x9, x22, ApiView_sd_ids         /* each item: a validator index the state has */
@@ -2185,10 +2185,10 @@ LOCAL_FUNCTION api_sync_duties_body
     ldr     x11, [sp, #32]
     add     x0, x9, x11, lsl #7             /* NODE_VALIDATOR_MEM: the pubkey first */
     mov     x1, #48
-    bl      api_qhex
+    bl      lantern_api_qhex
     API_LIT api_u_index
     ldr     x0, [sp, #32]
-    bl      api_qdec
+    bl      lantern_api_qdec
     API_LIT api_sd_indices
     b       6f
 5:  API_LIT api_p_comma
@@ -2197,7 +2197,7 @@ LOCAL_FUNCTION api_sync_duties_body
     str     x9, [sp, #48]
     ldr     x0, [sp, #40]
     sub     x0, x0, #1
-    bl      api_qdec
+    bl      lantern_api_qdec
     b       2b
 7:  ldr     x9, [sp, #48]                   /* places written: the item's end */
     cbz     x9, 1b
@@ -2205,7 +2205,7 @@ LOCAL_FUNCTION api_sync_duties_body
     b       1b
 9:  API_LIT api_v_end
     UNFRAME 48
-END_FUNCTION api_sync_duties_body
+END_FUNCTION lantern_api_sync_duties_body
 .if NODE_VALIDATOR_MEM != 128
 .error "api_sync_duties_body reads a pubkey at index * 128"
 .endif
@@ -2215,7 +2215,7 @@ END_FUNCTION api_sync_duties_body
  * of the store nodes at ApiView_val_state of the view x22 whose byte at ApiView_heads is 0. Locals: the
  * index, 1 once an item is written, the node.
  */
-LOCAL_FUNCTION api_heads_body
+LOCAL_FUNCTION lantern_api_heads_body
     FRAME 32
     API_LIT api_p_data
     stp     xzr, xzr, [sp, #16]
@@ -2241,17 +2241,17 @@ LOCAL_FUNCTION api_heads_body
     madd    x0, x11, x12, x10
     str     x0, [sp, #32]
     mov     x1, #32
-    bl      api_qhex
+    bl      lantern_api_qhex
     API_LIT api_q_slot
     ldr     x0, [sp, #32]
     ldr     x0, [x0, #BlockNode_slot]
-    bl      api_qdec
+    bl      lantern_api_qdec
     API_LIT api_ch_optimistic
     ldr     x0, [sp, #32]
     ldr     x0, [x0, #BlockNode_payload_status]
     cmp     x0, #PAYLOAD_STATUS_NOT_VALIDATED
     cset    x0, eq
-    bl      api_bool
+    bl      lantern_api_bool
     API_LIT api_end1
 8:  ldr     x11, [sp, #16]
     add     x11, x11, #1
@@ -2259,23 +2259,23 @@ LOCAL_FUNCTION api_heads_body
     b       1b
 9:  API_LIT api_v_end
     UNFRAME 32
-END_FUNCTION api_heads_body
+END_FUNCTION lantern_api_heads_body
 
 /*
  * L1: the body of getDebugForkChoice (beacon-api.md): {"justified_checkpoint":…,"finalized_checkpoint":…,
  * "fork_choice_nodes":[…]} of the store at ApiView_val_state of the view x22, each node's weight at
  * ApiView_weights. Locals: the index, the node.
  */
-LOCAL_FUNCTION api_fork_choice_body
+LOCAL_FUNCTION lantern_api_fork_choice_body
     FRAME 16
     API_LIT api_fc_justified
     ldr     x0, [x22, #ApiView_val_state]
     add     x0, x0, #Store_justified_checkpoint
-    bl      api_checkpoint
+    bl      lantern_api_checkpoint
     API_LIT api_fc_finalized
     ldr     x0, [x22, #ApiView_val_state]
     add     x0, x0, #Store_finalized_checkpoint
-    bl      api_checkpoint
+    bl      lantern_api_checkpoint
     API_LIT api_fc_nodes
     str     xzr, [sp, #16]
 1:  ldr     x9, [x22, #ApiView_val_state]
@@ -2295,29 +2295,29 @@ LOCAL_FUNCTION api_fork_choice_body
     API_LIT api_fc_slot
     ldr     x0, [sp, #24]
     ldr     x0, [x0, #BlockNode_slot]
-    bl      api_qdec
+    bl      lantern_api_qdec
     API_LIT api_fc_block_root
     ldr     x0, [sp, #24]
     mov     x1, #32
-    bl      api_qhex
+    bl      lantern_api_qhex
     API_LIT api_h_parent
     ldr     x0, [sp, #24]
     add     x0, x0, #BlockNode_parent_root
     mov     x1, #32
-    bl      api_qhex
+    bl      lantern_api_qhex
     API_LIT api_fc_justified_epoch
     ldr     x0, [sp, #24]
     ldr     x0, [x0, #BlockNode_justified_checkpoint]   /* its epoch, the Checkpoint's first field */
-    bl      api_qdec
+    bl      lantern_api_qdec
     API_LIT api_fc_finalized_epoch
     ldr     x0, [sp, #24]
     ldr     x0, [x0, #BlockNode_finalized_epoch]
-    bl      api_qdec
+    bl      lantern_api_qdec
     API_LIT api_fc_weight
     LDQ     x9, x22, ApiView_weights
     ldr     x11, [sp, #16]
     ldr     x0, [x9, x11, lsl #3]
-    bl      api_qdec
+    bl      lantern_api_qdec
     API_LIT api_fc_validity
     ldr     x0, [sp, #24]
     ldr     x0, [x0, #BlockNode_payload_status]
@@ -2334,7 +2334,7 @@ LOCAL_FUNCTION api_fork_choice_body
     ldr     x0, [sp, #24]
     add     x0, x0, #BlockNode_block_hash
     mov     x1, #32
-    bl      api_qhex
+    bl      lantern_api_qhex
     API_LIT api_end1
     ldr     x11, [sp, #16]
     add     x11, x11, #1
@@ -2342,61 +2342,61 @@ LOCAL_FUNCTION api_fork_choice_body
     b       1b
 9:  API_LIT api_v_end
     UNFRAME 16
-END_FUNCTION api_fork_choice_body
+END_FUNCTION lantern_api_fork_choice_body
 
 /*
  * L1: ,"canonical":…,"header":{"message":{"slot":…,"proposer_index":…,"parent_root":…,"state_root":…,"body_root":…},"signature":…
  * of the slot x0, canonical x2, and at x1 the header's proposer_index, parent_root, state_root,
  * body_root and signature, in that order. Locals: x0, x1, x2.
  */
-LOCAL_FUNCTION api_header_json
+LOCAL_FUNCTION lantern_api_header_json
     FRAME 32
     stp     x0, x1, [sp, #16]
     str     x2, [sp, #32]
     API_LIT api_h_canonical
     ldr     x0, [sp, #32]
-    bl      api_bool
+    bl      lantern_api_bool
     API_LIT api_h_slot
     ldr     x0, [sp, #16]
-    bl      api_qdec
+    bl      lantern_api_qdec
     API_LIT api_h_proposer
     ldr     x9, [sp, #24]
     ldr     x0, [x9]
-    bl      api_qdec
+    bl      lantern_api_qdec
     API_LIT api_h_parent
     ldr     x0, [sp, #24]
     add     x0, x0, #(ApiView_parent_root - ApiView_proposer_index)
     mov     x1, #32
-    bl      api_qhex
+    bl      lantern_api_qhex
     API_LIT api_h_state
     ldr     x0, [sp, #24]
     add     x0, x0, #(ApiView_state_root - ApiView_proposer_index)
     mov     x1, #32
-    bl      api_qhex
+    bl      lantern_api_qhex
     API_LIT api_h_body
     ldr     x0, [sp, #24]
     add     x0, x0, #(ApiView_body_root - ApiView_proposer_index)
     mov     x1, #32
-    bl      api_qhex
+    bl      lantern_api_qhex
     API_LIT api_h_signature
     ldr     x0, [sp, #24]
     add     x0, x0, #(ApiView_signature - ApiView_proposer_index)
     mov     x1, #96
-    bl      api_qhex
+    bl      lantern_api_qhex
     UNFRAME 32
-END_FUNCTION api_header_json
+END_FUNCTION lantern_api_header_json
 .if ApiView_parent_root - ApiView_proposer_index != 8 || ApiView_state_root - ApiView_proposer_index != 40 || ApiView_body_root - ApiView_proposer_index != 72 || ApiView_signature - ApiView_proposer_index != 104
 .error "api_header_json reads the fields of a SignedBeaconBlockHeader after its slot"
 .endif
 
 /*
- * L1: getBlockHeaders' JSON, as api_stream_json: with x21, the address of an item's header (its
- * slot, then the fields api_header_json reads), the item {"root":…,"canonical":…,"header":…}, its
+ * L1: getBlockHeaders' JSON, as lantern_api_stream_json: with x21, the address of an item's header (its
+ * slot, then the fields lantern_api_header_json reads), the item {"root":…,"canonical":…,"header":…}, its
  * root at byte 0 of the entry x22's cursor and canonical bit 0 of its member, after , when
  * API_STREAM_ITEMS is set; then API_STREAM_ITEMS and API_STREAM_ITEM_DONE in the event. With x21 = 0:
  * ]}. x0 = 1 when the answer is whole, else 0.
  */
-LOCAL_FUNCTION api_headers_json
+LOCAL_FUNCTION lantern_api_headers_json
     FRAME 0
     cbnz    x21, 1f
     API_LIT api_v_end
@@ -2408,25 +2408,25 @@ LOCAL_FUNCTION api_headers_json
 2:  API_LIT api_ch_root
     add     x0, x22, #NodeApi_cursor
     mov     x1, #32
-    bl      api_qhex
+    bl      lantern_api_qhex
     ldr     x0, [x21]
     add     x1, x21, #8
     ldr     x2, [x22, #NodeApi_member]
     and     x2, x2, #1
-    bl      api_header_json
+    bl      lantern_api_header_json
     API_LIT api_end2
     ldr     x9, [x23, #(NodeEvent_api + 8)]
     orr     x9, x9, #(API_STREAM_ITEMS | API_STREAM_ITEM_DONE)
     str     x9, [x23, #(NodeEvent_api + 8)]
     mov     x0, #0
     UNFRAME 0
-END_FUNCTION api_headers_json
+END_FUNCTION lantern_api_headers_json
 
 /*
  * L0: x0 = the base58btc text of the x1 bytes at x0 (at most 48), written at x2: a 1 for each
  * leading zero byte, then the digits. x3: a work area of 72 bytes. Uses x4, x9-x15.
  */
-LOCAL_FUNCTION api_base58
+LOCAL_FUNCTION lantern_api_base58
     UNWIND_END_PROLOGUE
     mov     x9, #0                          /* the leading zero bytes */
 1:  cmp     x9, x1
@@ -2485,14 +2485,14 @@ LOCAL_FUNCTION api_base58
     sub     x11, x11, #1
     b       8b
 9:  ret
-END_FUNCTION api_base58
+END_FUNCTION lantern_api_base58
 
 /*
  * L1: a peer of getPeers and getPeer (beacon-api.md): {"peer_id":…,"enr":null,"last_seen_p2p_address":…,
  * "state":"connected","direction":…} of the NodePeer x0. Locals: the peer, the text's length, an
  * index, the text (72 bytes), base58's work area (72 bytes).
  */
-LOCAL_FUNCTION api_peer_item
+LOCAL_FUNCTION lantern_api_peer_item
     FRAME 176
     str     x0, [sp, #16]
     add     x0, x0, #NodePeer_id
@@ -2500,12 +2500,12 @@ LOCAL_FUNCTION api_peer_item
     ldr     x1, [x9, #NodePeer_id_len]
     add     x2, sp, #40
     add     x3, sp, #112
-    bl      api_base58
+    bl      lantern_api_base58
     str     x0, [sp, #24]
     API_LIT api_pe_open
     add     x0, sp, #40
     ldr     x1, [sp, #24]
-    bl      api_put
+    bl      lantern_api_put
     API_LIT api_pe_enr
     ldr     x9, [sp, #16]
     ldr     x10, [x9, #NodePeer_address]    /* the family */
@@ -2518,7 +2518,7 @@ LOCAL_FUNCTION api_peer_item
     ldr     x10, [sp, #32]
     add     x9, x9, x10
     ldrb    w0, [x9, #(NodePeer_address + 16)]
-    bl      api_dec
+    bl      lantern_api_dec
     ldr     x10, [sp, #32]
     add     x10, x10, #1
     str     x10, [sp, #32]
@@ -2535,7 +2535,7 @@ LOCAL_FUNCTION api_peer_item
     ldrb    w11, [x9, #(NodePeer_address + 16)]
     ldrb    w12, [x9, #(NodePeer_address + 17)]
     orr     x0, x12, x11, lsl #8
-    bl      api_hex16
+    bl      lantern_api_hex16
     ldr     x10, [sp, #32]
     add     x10, x10, #1
     str     x10, [sp, #32]
@@ -2550,17 +2550,17 @@ LOCAL_FUNCTION api_peer_item
     API_LIT api_pe_tcp
     ldr     x9, [sp, #16]
     ldr     x0, [x9, #(NodePeer_address + 8)]
-    bl      api_dec
+    bl      lantern_api_dec
     b       7f
 6:  API_LIT api_pe_udp
     ldr     x9, [sp, #16]
     ldr     x0, [x9, #(NodePeer_address + 8)]
-    bl      api_dec
+    bl      lantern_api_dec
     API_LIT api_pe_quic
 7:  API_LIT api_pe_p2p
     add     x0, sp, #40
     ldr     x1, [sp, #24]
-    bl      api_put
+    bl      lantern_api_put
     API_LIT api_pe_state
     ldr     x9, [sp, #16]
     ldr     x10, [x9, #NodePeer_direction]
@@ -2570,10 +2570,10 @@ LOCAL_FUNCTION api_peer_item
     UNFRAME 176
 8:  API_LIT api_pe_outbound
     UNFRAME 176
-END_FUNCTION api_peer_item
+END_FUNCTION lantern_api_peer_item
 
 /* L1: the lower case hex digits of the 16 bits x0, with no leading zeros, join the response. Locals: x0, a shift. */
-LOCAL_FUNCTION api_hex16
+LOCAL_FUNCTION lantern_api_hex16
     FRAME 16
     str     x0, [sp, #16]
     mov     x9, #12
@@ -2589,21 +2589,21 @@ LOCAL_FUNCTION api_hex16
     ADDRESS x0, api_hex
     add     x0, x0, x10
     mov     x1, #1
-    bl      api_put
+    bl      lantern_api_put
     ldr     x9, [sp, #24]
     cbz     x9, 9f
     sub     x9, x9, #4
     str     x9, [sp, #24]
     b       3b
 9:  UNFRAME 16
-END_FUNCTION api_hex16
+END_FUNCTION lantern_api_hex16
 
 /*
  * L1: getPeers' body (beacon-api.md): {"data":[<peer>,…],"meta":{"count":…}} of the NodePeers of the
  * Node at ApiView_node of the view x22 whose state and direction are in the sets at
  * ApiView_peer_states and ApiView_peer_directions. Locals: the index, the count, the peer.
  */
-LOCAL_FUNCTION api_peers_body
+LOCAL_FUNCTION lantern_api_peers_body
     FRAME 32
     API_LIT api_p_data
     stp     xzr, xzr, [sp, #16]
@@ -2630,14 +2630,14 @@ LOCAL_FUNCTION api_peers_body
     add     x9, x9, #1
     str     x9, [sp, #24]
     ldr     x0, [sp, #32]
-    bl      api_peer_item
+    bl      lantern_api_peer_item
     b       1b
 9:  API_LIT api_pe_meta
     ldr     x0, [sp, #24]
-    bl      api_dec
+    bl      lantern_api_dec
     API_LIT api_end2
     UNFRAME 32
-END_FUNCTION api_peers_body
+END_FUNCTION lantern_api_peers_body
 .if API_DIRECTION_INBOUND != LIBP2P_INBOUND || API_DIRECTION_OUTBOUND != LIBP2P_OUTBOUND
 .error "api_peers_body: the direction bits are the libp2p directions"
 .endif
@@ -2646,7 +2646,7 @@ END_FUNCTION api_peers_body
  * L1: (route x0) -> x0: the NodePeer whose peer ID's base58btc text is the route's peer_id, or 0.
  * Locals: the route, the index, the text (72 bytes), base58's work area (72 bytes).
  */
-LOCAL_FUNCTION node_api_find_peer
+LOCAL_FUNCTION lantern_node_api_find_peer
     FRAME 176
     stp     x0, xzr, [sp, #16]
 1:  PART    x10, x11, x19, Node_peers
@@ -2661,7 +2661,7 @@ LOCAL_FUNCTION node_api_find_peer
     ldr     x1, [x13, #NodePeer_id_len]
     add     x2, sp, #40
     add     x3, sp, #112
-    bl      api_base58
+    bl      lantern_api_base58
     ldr     x9, [sp, #16]
     PART    x10, x11, x9, ApiRoute_peer_id
     cmp     x0, x11
@@ -2684,13 +2684,13 @@ LOCAL_FUNCTION node_api_find_peer
     UNFRAME 176
 8:  mov     x0, #0
     UNFRAME 176
-END_FUNCTION node_api_find_peer
+END_FUNCTION lantern_node_api_find_peer
 
 /*
  * L1: the bodies of getStateRandao, getEpochSyncCommittees and getProposerLookahead (beacon-api.md),
- * as api_body: x22 the view, the local at x0 + 8 the flags. Locals: an index.
+ * as lantern_api_body: x22 the view, the local at x0 + 8 the flags. Locals: an index.
  */
-LOCAL_FUNCTION api_state_read_body
+LOCAL_FUNCTION lantern_api_state_read_body
     FRAME 16
     str     x0, [sp, #16]
     cmp     x28, #API_OP_GET_PROPOSER_LOOKAHEAD
@@ -2698,10 +2698,10 @@ LOCAL_FUNCTION api_state_read_body
     /* {"execution_optimistic":…,"finalized":…,"data":{ */
     API_LIT api_x_optimistic
     ldr     x0, [x22, #ApiView_is_optimistic]
-    bl      api_bool
+    bl      lantern_api_bool
     API_LIT api_x_finalized
     LDQ     x0, x22, ApiView_head_finalized
-    bl      api_bool
+    bl      lantern_api_bool
     API_LIT api_x_data
     cmp     x28, #API_OP_GET_STATE_RANDAO
     b.ne    10f
@@ -2709,7 +2709,7 @@ LOCAL_FUNCTION api_state_read_body
     API_LIT api_r_randao
     ADDQ    x0, x22, ApiView_randao
     mov     x1, #32
-    bl      api_qhex
+    bl      lantern_api_qhex
     API_LIT api_end2
     UNFRAME 16
     /* "validators":[…],"validator_aggregates":[[…],…]}} */
@@ -2723,7 +2723,7 @@ LOCAL_FUNCTION api_state_read_body
 12: ldr     x9, [sp, #24]
     ldr     x10, [x22, #ApiView_sync_out]
     ldr     x0, [x10, x9, lsl #3]
-    bl      api_qdec
+    bl      lantern_api_qdec
     ldr     x9, [sp, #24]
     add     x9, x9, #1
     str     x9, [sp, #24]
@@ -2744,7 +2744,7 @@ LOCAL_FUNCTION api_state_read_body
 17: ldr     x9, [sp, #24]
     ldr     x10, [x22, #ApiView_sync_out]
     ldr     x0, [x10, x9, lsl #3]
-    bl      api_qdec
+    bl      lantern_api_qdec
     ldr     x9, [sp, #24]
     add     x9, x9, #1
     str     x9, [sp, #24]
@@ -2757,18 +2757,18 @@ LOCAL_FUNCTION api_state_read_body
     tbz     x9, #3, 31f
     ADDQ    x0, x22, ApiView_lookahead
     mov     x1, #(8 * API_LOOKAHEAD_SLOTS)
-    bl      api_put
+    bl      lantern_api_put
     UNFRAME 16
     /* {"version":"<fork>","execution_optimistic":…,"finalized":…,"data":[…]} */
 31: API_LIT api_j_version
     ldr     x0, [x22, #ApiView_fork]
-    bl      api_fork_name
+    bl      lantern_api_fork_name
     API_LIT api_j_optimistic
     ldr     x0, [x22, #ApiView_is_optimistic]
-    bl      api_bool
+    bl      lantern_api_bool
     API_LIT api_x_finalized
     LDQ     x0, x22, ApiView_head_finalized
-    bl      api_bool
+    bl      lantern_api_bool
     API_LIT api_v_list
     str     xzr, [sp, #24]
 32: ldr     x9, [sp, #24]
@@ -2779,14 +2779,14 @@ LOCAL_FUNCTION api_state_read_body
 33: ADDQ    x10, x22, ApiView_lookahead
     ldr     x9, [sp, #24]
     ldr     x0, [x10, x9, lsl #3]
-    bl      api_qdec
+    bl      lantern_api_qdec
     ldr     x9, [sp, #24]
     add     x9, x9, #1
     str     x9, [sp, #24]
     b       32b
 34: API_LIT api_v_end
     UNFRAME 16
-END_FUNCTION api_state_read_body
+END_FUNCTION lantern_api_state_read_body
 .if SYNC_COMMITTEE_SIZE % SYNC_COMMITTEE_SUBNET_COUNT || (SYNC_COMMITTEE_SIZE / SYNC_COMMITTEE_SUBNET_COUNT) & (SYNC_COMMITTEE_SIZE / SYNC_COMMITTEE_SUBNET_COUNT - 1)
 .error "api_state_read_body takes a sync subcommittee's size as a power of two"
 .endif
@@ -2799,7 +2799,7 @@ END_FUNCTION api_state_read_body
  * LANTERN_BUFFER_TOO_SMALL when out has too little room. Locals: L status, L+8 flags, L+16 the
  * body's bytes.
  */
-LOCAL_FUNCTION api_respond
+LOCAL_FUNCTION lantern_api_respond
     ENTER 32
     mov     x22, x0
     mov     x23, x1
@@ -2810,7 +2810,7 @@ LOCAL_FUNCTION api_respond
     mov     x27, #0
     cbz     x28, 1f
     add     x0, sp, #L
-    bl      api_body
+    bl      lantern_api_body
 1:  str     x24, [sp, #(L + 16)]
     mov     x25, #1                         /* the response */
     add     x24, x23, #24
@@ -2819,14 +2819,14 @@ LOCAL_FUNCTION api_respond
     /* HTTP/1.1 <code> <reason> CRLF */
     API_LIT api_http
     ldr     x0, [sp, #L]
-    bl      api_dec
+    bl      lantern_api_dec
     API_LIT api_sp
     ldr     x9, [sp, #(L + 8)]
     tbnz    x9, #2, 2f
     ldr     x0, [sp, #L]
-    bl      api_code
+    bl      lantern_api_code
     mov     x1, #8
-    bl      api_code_text
+    bl      lantern_api_code_text
 2:  API_LIT api_crlf
     ldr     x9, [sp, #(L + 16)]
     cbz     x9, 3f
@@ -2839,11 +2839,11 @@ LOCAL_FUNCTION api_respond
     tbz     x9, #4, 3f
     API_LIT api_version
     ldr     x0, [x22, #ApiView_fork]
-    bl      api_fork_name
+    bl      lantern_api_fork_name
     API_LIT api_crlf
 3:  API_LIT api_length
     ldr     x0, [sp, #(L + 16)]
-    bl      api_dec
+    bl      lantern_api_dec
     API_LIT api_crlf
     ldr     x9, [sp, #L]
     cmp     x9, #405
@@ -2869,7 +2869,7 @@ LOCAL_FUNCTION api_respond
 7:  API_LIT api_crlf
     cbz     x28, 8f
     add     x0, sp, #L
-    bl      api_body
+    bl      lantern_api_body
 8:  cbnz    x27, 9f
     add     x9, x23, #24
     sub     x9, x24, x9
@@ -2879,13 +2879,13 @@ LOCAL_FUNCTION api_respond
     LEAVE 32
 9:  mov     x0, #LANTERN_BUFFER_TOO_SMALL
     LEAVE 32
-END_FUNCTION api_respond
+END_FUNCTION lantern_api_respond
 
 /*
  * L1: the values of the ApiView x0 that the node, x19, and the store, x20, give (beacon-api.md,
  * Common rules); the header and the checkpoints zero. Locals: L the view.
  */
-LOCAL_FUNCTION node_api_view
+LOCAL_FUNCTION lantern_node_api_view
     FRAME 16
     str     x0, [sp, #16]
     MOVQ    x1, ApiView__size
@@ -2905,7 +2905,7 @@ LOCAL_FUNCTION node_api_view
     add     x9, x19, #Node_config
     STQ     x9, x0, ApiView_config
     add     x0, x19, #Node_head_root        /* the head */
-    bl      node_find_block
+    bl      lantern_node_find_block
     cmn     x0, #1
     b.eq    1f
     ldr     x0, [sp, #16]
@@ -2918,11 +2918,11 @@ LOCAL_FUNCTION node_api_view
     add     x0, x0, #ApiView_head_root
     bl      lantern_copy_root
 1:  mov     x0, x20                         /* the clock, sync, peers, MetaData */
-    bl      node_store_slot
+    bl      lantern_node_store_slot
     ldr     x9, [sp, #16]
     str     x0, [x9, #ApiView_current_slot]
     add     x1, x19, #Node_config
-    bl      node_fork
+    bl      lantern_node_fork
     ldr     x9, [sp, #16]
     str     x0, [x9, #ApiView_fork]
     ldr     x10, [x19, #Node_flags]
@@ -2943,12 +2943,12 @@ LOCAL_FUNCTION node_api_view
     mov     x2, #API_IDENTITY_SIZE
     bl      lantern_copy
     ldr     x0, [sp, #16]
-    bl      api_view_finalized
+    bl      lantern_api_view_finalized
     UNFRAME 16
-END_FUNCTION node_api_view
+END_FUNCTION lantern_node_api_view
 
 /* L0: ApiView_head_finalized of the view x0: 1 when its head_root is the root of the store x20's finalized checkpoint. Uses x9-x16. */
-LOCAL_FUNCTION api_view_finalized
+LOCAL_FUNCTION lantern_api_view_finalized
     UNWIND_END_PROLOGUE
     add     x9, x0, #ApiView_head_root
     add     x10, x20, #(Store_finalized_checkpoint + 8)
@@ -2965,7 +2965,7 @@ LOCAL_FUNCTION api_view_finalized
     cset    x13, eq
 1:  STQ     x13, x0, ApiView_head_finalized
     ret
-END_FUNCTION api_view_finalized
+END_FUNCTION lantern_api_view_finalized
 
 /* L0: the 32 bytes at x1 to x0. Uses x16, x17. */
 LOCAL_FUNCTION lantern_copy_root
@@ -2976,11 +2976,11 @@ END_FUNCTION lantern_copy_root
 
 /*
  * L1: one NODE_ACT_API_SEND of the connection x0, with last 1, at the end of the actions x24: the
- * response of api_respond with the view x1, the status x2, the body x3 and the flags x4; when it
+ * response of lantern_api_respond with the view x1, the status x2, the body x3 and the flags x4; when it
  * does not fit, the error 500. With API_R_CLOSE, then a NODE_ACT_API_CLOSE. Locals: L the
  * connection, L+8 the flags, L+16 the action.
  */
-LOCAL_FUNCTION node_api_send
+LOCAL_FUNCTION lantern_node_api_send
     FRAME 48
     stp     x0, x4, [sp, #16]
     ldp     x9, x10, [x24, #8]              /* the action, and the room after it */
@@ -2995,7 +2995,7 @@ LOCAL_FUNCTION node_api_send
     str     x12, [x11, #32]                 /* its ByteList at 32 */
     mov     x0, x1
     add     x1, x11, #32
-    bl      api_respond
+    bl      lantern_api_respond
     cbz     x0, 1f
     mov     x0, #0                          /* no room: the error 500 */
     ldr     x1, [sp, #32]
@@ -3004,7 +3004,7 @@ LOCAL_FUNCTION node_api_send
     mov     x3, #API_BODY_ERROR
     ldr     x4, [sp, #24]
     and     x4, x4, #(API_R_CLOSE | API_R_KEEP)
-    bl      api_respond
+    bl      lantern_api_respond
 1:  ldr     x11, [sp, #32]
     ldr     x9, [x11, #48]                  /* the count; the size to a multiple of 8, zero bytes after */
     add     x0, x11, #56
@@ -3031,18 +3031,18 @@ LOCAL_FUNCTION node_api_send
     tbz     x9, #0, 9f
     mov     x0, #NODE_ACT_API_CLOSE
     mov     x1, #NODE_ACT_API_CLOSE_SIZE
-    bl      node_act
+    bl      lantern_node_act
     ldr     x9, [sp, #16]
     str     x9, [x0, #16]
 9:  UNFRAME 48
-END_FUNCTION node_api_send
+END_FUNCTION lantern_node_api_send
 
 /*
  * L0: the NODE_EV_API or NODE_EV_API_IDENTITY x0 of size x1, whose ByteList at 24 is inside it
  * (node.md, NodeEvent): x0 = 0 when it keeps its rules, else 1; x1 = the scratch it needs. Uses
  * x9-x15.
  */
-LOCAL_FUNCTION node_api_check
+LOCAL_FUNCTION lantern_node_api_check
     UNWIND_END_PROLOGUE
     ldr     x9, [x0, #8]
     ldr     x10, [x0, #(NodeEvent_bytes + 16)]  /* the count */
@@ -3110,10 +3110,10 @@ LOCAL_FUNCTION node_api_check
 8:  mov     x0, #1
     mov     x1, #0
     ret
-END_FUNCTION node_api_check
+END_FUNCTION lantern_node_api_check
 
 /* L0: x0 = the NODE_DB_REF of the Db's record of the block at x0, or 0. Uses x9-x13, and the stack. */
-LOCAL_FUNCTION node_api_db_ref
+LOCAL_FUNCTION lantern_node_api_db_ref
     FRAME 16
     ldr     x9, [x19, #Node_flags]
     tst     x9, #NODE_FLAG_DB
@@ -3126,18 +3126,18 @@ LOCAL_FUNCTION node_api_db_ref
     ldr     x0, [sp, #16]
     cmn     x0, #1
     b.eq    9f
-    bl      node_db_block
+    bl      lantern_node_db_block
     UNFRAME 16
 9:  mov     x0, #0
     UNFRAME 16
-END_FUNCTION node_api_db_ref
+END_FUNCTION lantern_node_api_db_ref
 
 /*
  * L2: the answer to the NODE_EV_API x0 (node.md, lantern_node_step): x19 the node, x20 the store,
  * x23 the scratch, x24 the actions. x21 the event, x22 its HttpRequest, x25 the ApiRoute, x26 the
- * ApiView, x27 the connection, x28 the flags of api_respond. Locals: L the scratch's size.
+ * ApiView, x27 the connection, x28 the flags of lantern_api_respond. Locals: L the scratch's size.
  */
-LOCAL_FUNCTION node_api_event
+LOCAL_FUNCTION lantern_node_api_event
     ENTER 16
     mov     x21, x0
     ldr     x27, [x21, #16]
@@ -3158,7 +3158,7 @@ LOCAL_FUNCTION node_api_event
 2:  ldr     x9, [x23]                       /* the ApiView, then the ApiRoute, at the end of scratch */
     str     x9, [sp, #L]
     mov     x0, x21
-    bl      node_api_check
+    bl      lantern_node_api_check
     ldr     x9, [sp, #L]
     sub     x9, x9, x1
     str     x9, [x23]
@@ -3168,7 +3168,7 @@ LOCAL_FUNCTION node_api_event
     sub     x9, x1, x9
     str     x9, [x25]
     mov     x0, x26
-    bl      node_api_view
+    bl      lantern_node_api_view
     ldr     x2, [x22, #HttpRequest_status]  /* a fault of the request: its status */
     cbnz    x2, 80f
     mov     x0, x22
@@ -3315,7 +3315,7 @@ LOCAL_FUNCTION node_api_event
     cmp     x3, #API_OP_PUBLISH_BLINDED_BLOCK_V2
     b.eq    545f
     mov     x0, x3
-    bl      node_submit_topic
+    bl      lantern_node_submit_topic
     cbnz    x0, 60f
     ldr     x3, [x25, #ApiRoute_op]
     sub     x9, x3, #API_OP_GET_STATE_VALIDATORS   /* the six validator operations and getEpochCommittees: a state */
@@ -3330,7 +3330,7 @@ LOCAL_FUNCTION node_api_event
     mov     x1, x25
     mov     x2, x21
     mov     x3, #0
-    bl      node_api_lookup
+    bl      lantern_node_api_lookup
     mov     x2, x0
     cbnz    x0, 80f
     b       90f
@@ -3338,7 +3338,7 @@ LOCAL_FUNCTION node_api_event
     STQ     x9, x26, ApiView_look_replay
     mov     x0, x25
     mov     x1, x26
-    bl      node_api_state
+    bl      lantern_node_api_state
     mov     x2, x0
     cmp     x0, #1
     b.eq    698f
@@ -3348,7 +3348,7 @@ LOCAL_FUNCTION node_api_event
     mov     x1, x25
     mov     x2, x21
     mov     x3, x26
-    bl      node_api_state_answer
+    bl      lantern_node_api_state_answer
     mov     x2, x0
     cbnz    x0, 80f
     b       90f
@@ -3356,7 +3356,7 @@ LOCAL_FUNCTION node_api_event
     mov     x1, x25
     mov     x2, x21
     mov     x3, #1
-    bl      node_api_lookup
+    bl      lantern_node_api_lookup
     mov     x2, x0
     cbnz    x0, 80f
     b       90f
@@ -3373,7 +3373,7 @@ LOCAL_FUNCTION node_api_event
     subs    x11, x11, #1
     b.ne    531b
     mov     x0, x20
-    bl      node_store_slot
+    bl      lantern_node_store_slot
     MOVQ    x11, SLOTS_PER_EPOCH * EPOCHS_PER_SYNC_COMMITTEE_PERIOD
     udiv    x9, x0, x11
     add     x9, x9, #1
@@ -3384,16 +3384,16 @@ LOCAL_FUNCTION node_api_event
     cmp     x12, x9
     b.hi    80f
     add     x0, x19, #Node_head_root        /* the head's post-state, of altair on, at the epoch's period or the one before */
-    bl      node_find_block
+    bl      lantern_node_find_block
     cmn     x0, #1
     b.eq    532f
     ldr     x0, [x1, #NodeBlock_slot]
     add     x1, x19, #Node_config
-    bl      node_fork
+    bl      lantern_node_fork
     cmp     x0, #FORK_ALTAIR
     b.lo    532f
     add     x0, x19, #Node_head_root
-    bl      node_find_block
+    bl      lantern_node_find_block
     ldr     x9, [x1, #NodeBlock_slot]
     MOVQ    x11, SLOTS_PER_EPOCH * EPOCHS_PER_SYNC_COMMITTEE_PERIOD
     udiv    x9, x9, x11                     /* the head's period */
@@ -3409,17 +3409,17 @@ LOCAL_FUNCTION node_api_event
     str     x9, [x25, #ApiRoute_id_kind]
     mov     x0, x25
     mov     x1, x26
-    bl      node_api_state
+    bl      lantern_node_api_state
     mov     x2, #400
     cbnz    x0, 80f
     ldr     x9, [sp, #(L + 8)]
     STQ     x9, x26, ApiView_next_period
     mov     x0, x25                         /* its ids in the work's data */
-    bl      node_api_ids
+    bl      lantern_node_api_ids
     str     x0, [x26, #ApiView_look_data]
     b       67f
 532: mov    x0, x20                         /* else the state of the epoch's first slot, as getAttesterDuties */
-    bl      node_store_slot
+    bl      lantern_node_store_slot
     ldr     x10, [x25, #ApiRoute_epoch]
     mov     x11, #SLOTS_PER_EPOCH
     b       583f
@@ -3436,7 +3436,7 @@ LOCAL_FUNCTION node_api_event
     subs    x11, x11, #1
     b.ne    521b
     mov     x0, x20
-    bl      node_store_slot
+    bl      lantern_node_store_slot
     mov     x11, #SLOTS_PER_EPOCH
     udiv    x9, x0, x11                     /* the store's epoch */
     ldr     x10, [x25, #ApiRoute_epoch]
@@ -3452,13 +3452,13 @@ LOCAL_FUNCTION node_api_event
     str     x9, [x25, #ApiRoute_id_kind]
     mov     x0, x25
     mov     x1, x26
-    bl      node_api_state
+    bl      lantern_node_api_state
     mov     x2, #500
     cbnz    x0, 80f
     ldr     x9, [x25, #ApiRoute_epoch]      /* the epoch in the work's arg, in place of the slot */
     str     x9, [x26, #ApiView_head_slot]
     mov     x0, x25                         /* its ids in the work's data */
-    bl      node_api_ids
+    bl      lantern_node_api_ids
     str     x0, [x26, #ApiView_look_data]
     b       67f
 58: mov     x2, #503                        /* getAttesterDuties: 503 while syncing; 400 past the next epoch, with no index or a key */
@@ -3474,7 +3474,7 @@ LOCAL_FUNCTION node_api_event
     subs    x11, x11, #1
     b.ne    581b
     mov     x0, x20
-    bl      node_store_slot
+    bl      lantern_node_store_slot
     mov     x11, #SLOTS_PER_EPOCH
     udiv    x9, x0, x11
     add     x9, x9, #1
@@ -3496,7 +3496,7 @@ LOCAL_FUNCTION node_api_event
     STQ     x12, x26, ApiView_look_replay
 584: mov    x0, x25
     mov     x1, x26
-    bl      node_api_state
+    bl      lantern_node_api_state
     cmp     x0, #1
     b.eq    698b
     mov     x2, #400
@@ -3504,16 +3504,16 @@ LOCAL_FUNCTION node_api_event
     ldr     x9, [x25, #ApiRoute_id_slot]
     str     x9, [x26, #ApiView_head_slot]
     mov     x0, x26
-    bl      node_api_advance
+    bl      lantern_node_api_advance
     mov     x0, x25                         /* its ids in the work's data */
-    bl      node_api_ids
+    bl      lantern_node_api_ids
     str     x0, [x26, #ApiView_look_data]
     b       67f
 540: mov    x2, #503                        /* produceBlockV3: 503 while syncing; 400 at or below the head's slot, or past the store's slot + 1 */
     ldr     x9, [x26, #ApiView_is_syncing]
     cbnz    x9, 80f
     mov     x0, x20
-    bl      node_store_slot
+    bl      lantern_node_store_slot
     ldr     x10, [x25, #ApiRoute_slot]
     mov     x2, #400
     add     x0, x0, #1
@@ -3526,18 +3526,18 @@ LOCAL_FUNCTION node_api_event
     str     x9, [x25, #ApiRoute_id_kind]
     mov     x0, x25
     mov     x1, x26
-    bl      node_api_state
+    bl      lantern_node_api_state
     mov     x2, #500
     cbnz    x0, 80f
     ldr     x9, [x25, #ApiRoute_slot]
     str     x9, [x26, #ApiView_head_slot]
     mov     x0, x26
-    bl      node_api_advance
+    bl      lantern_node_api_advance
     mov     x0, x27
     mov     x1, x25
     mov     x2, x21
     mov     x3, x26
-    bl      node_api_produce
+    bl      lantern_node_api_produce
     mov     x2, x0
     cbnz    x0, 80f
     b       90f
@@ -3545,7 +3545,7 @@ LOCAL_FUNCTION node_api_event
     ldr     x9, [x26, #ApiView_is_syncing]
     cbnz    x9, 80f
     mov     x0, x20
-    bl      node_store_slot
+    bl      lantern_node_store_slot
     ldr     x10, [x25, #ApiRoute_slot]
     mov     x2, #400
     cmp     x10, x0
@@ -3554,16 +3554,16 @@ LOCAL_FUNCTION node_api_event
     stp     x9, x10, [x25, #ApiRoute_id_kind]
     mov     x0, x25
     mov     x1, x26
-    bl      node_api_state
+    bl      lantern_node_api_state
     mov     x2, #400
     cbnz    x0, 80f
     mov     x2, #503                        /* an optimistic block: 503 */
     ldr     x9, [x26, #ApiView_is_optimistic]
     cbnz    x9, 80f
     mov     x0, x26
-    bl      node_api_advance
+    bl      lantern_node_api_advance
     add     x0, x25, #ApiRoute_committee_index  /* its committee index in the work's data */
-    bl      node_api_put8
+    bl      lantern_node_api_put8
     str     x0, [x26, #ApiView_look_data]
     ldr     x9, [x25, #ApiRoute_response]   /* SSZ: an answer flag */
     cmp     x9, #API_TYPE_SSZ
@@ -3586,7 +3586,7 @@ LOCAL_FUNCTION node_api_event
     mov     x3, #API_OP_GET_PEERS
     b       81f
 55: mov     x0, x25                         /* getPeer: the peer of its peer_id, else 404 */
-    bl      node_api_find_peer
+    bl      lantern_node_api_find_peer
     mov     x2, #404
     cbz     x0, 80f
     str     x0, [x26, #ApiView_peer]
@@ -3596,13 +3596,13 @@ LOCAL_FUNCTION node_api_event
 57: mov     x0, x27                         /* getBlockHeaders: a stream of the blocks of its query */
     mov     x1, x25
     mov     x2, x21
-    bl      node_api_headers_stream
+    bl      lantern_node_api_headers_stream
     b       90f
 68: mov     x0, x27                         /* a pool GET: a stream of the pool; getAggregatedAttestationV2 with none 404 */
     mov     x1, x25
     mov     x2, x21
     mov     x3, x26
-    bl      node_api_pool_stream
+    bl      lantern_node_api_pool_stream
     cbz     x0, 90f
     mov     x2, x0
     b       80f
@@ -3611,7 +3611,7 @@ LOCAL_FUNCTION node_api_event
     adds    x10, x10, #2
     b.cs    80f
     mov     x0, x20
-    bl      node_store_slot
+    bl      lantern_node_store_slot
     add     x11, x0, #1
     mov     x12, #SLOTS_PER_EPOCH
     udiv    x11, x11, x12
@@ -3626,20 +3626,20 @@ LOCAL_FUNCTION node_api_event
     stp     x9, x10, [x25, #ApiRoute_id_kind]
     mov     x0, x25
     mov     x1, x26
-    bl      node_api_state
+    bl      lantern_node_api_state
     mov     x2, x0
     cbnz    x0, 80f
     mov     x0, x26
-    bl      node_api_advance
+    bl      lantern_node_api_advance
     mov     x0, x25                         /* its ids, as a validator stream's */
-    bl      node_api_ids
+    bl      lantern_node_api_ids
     str     x0, [x26, #ApiView_look_data]
     b       64f
 547: mov    x0, x27                         /* getBlockRewards, getSyncCommitteeRewards: a work of the block on its pre-state */
     mov     x1, x25
     mov     x2, x21
     mov     x3, x26
-    bl      node_api_rewards
+    bl      lantern_node_api_rewards
     mov     x2, x0
     cbnz    x0, 80f
     b       90f
@@ -3650,7 +3650,7 @@ LOCAL_FUNCTION node_api_event
     mov     x1, x25
     mov     x2, x21
     mov     x3, x22
-    bl      node_api_publish
+    bl      lantern_node_api_publish
     mov     x2, x0
     cbnz    x0, 80f
     b       90f
@@ -3659,20 +3659,20 @@ LOCAL_FUNCTION node_api_event
     mov     x2, x21
     mov     x3, x22
     mov     x4, x26
-    bl      node_api_submit
+    bl      lantern_node_api_submit
     mov     x2, x0
     cbnz    x0, 80f
     b       90f
 61: mov     x0, x27                         /* eventstream: an entry, and the head */
     mov     x1, x25
     mov     x2, x21
-    bl      node_api_subscribe
+    bl      lantern_node_api_subscribe
     b       90f
 63: mov     x2, #503                        /* getProposerDuties: 503 while syncing; 400 past the next epoch */
     ldr     x9, [x26, #ApiView_is_syncing]
     cbnz    x9, 80f
     mov     x0, x20
-    bl      node_store_slot
+    bl      lantern_node_store_slot
     mov     x11, #SLOTS_PER_EPOCH
     udiv    x9, x0, x11
     add     x9, x9, #1
@@ -3692,7 +3692,7 @@ LOCAL_FUNCTION node_api_event
     STQ     x9, x26, ApiView_look_replay
 621: mov    x0, x25
     mov     x1, x26
-    bl      node_api_state
+    bl      lantern_node_api_state
     mov     x2, x0
     cmp     x0, #1
     b.eq    698b
@@ -3700,11 +3700,11 @@ LOCAL_FUNCTION node_api_event
     ldr     x9, [x25, #ApiRoute_id_slot]    /* brought to the first slot */
     str     x9, [x26, #ApiView_head_slot]
     mov     x0, x26
-    bl      node_api_advance
+    bl      lantern_node_api_advance
     b       67f
 65: mov     x0, x25                         /* a block: its lookup */
     mov     x1, x26
-    bl      node_api_block
+    bl      lantern_node_api_block
     mov     x2, x0
     cbnz    x0, 80f
     ldr     x3, [x25, #ApiRoute_op]
@@ -3727,14 +3727,14 @@ LOCAL_FUNCTION node_api_event
     mov     x1, x27
     mov     x2, x21
     mov     x3, x26
-    bl      node_api_encode
+    bl      lantern_node_api_encode
     mov     x2, x0
     cbnz    x0, 80f
     b       90f
 549: mov    x0, x25                         /* the light client reads: a work */
     mov     x1, x27
     mov     x2, x21
-    bl      node_api_lc
+    bl      lantern_node_api_lc
     mov     x2, x0
     cbnz    x0, 80f
     b       90f
@@ -3742,7 +3742,7 @@ LOCAL_FUNCTION node_api_event
     mov     x1, x25
     mov     x2, x21
     mov     x3, x26
-    bl      node_api_sidecar_stream
+    bl      lantern_node_api_sidecar_stream
     cbz     x0, 90f
     mov     x2, x0
     b       80f
@@ -3750,7 +3750,7 @@ LOCAL_FUNCTION node_api_event
     mov     x1, x25
     mov     x2, x21
     mov     x3, x26
-    bl      node_api_blob_stream
+    bl      lantern_node_api_blob_stream
     cbz     x0, 90f
     mov     x2, x0
     b       80f
@@ -3758,7 +3758,7 @@ LOCAL_FUNCTION node_api_event
     mov     x1, x25
     mov     x2, x21
     mov     x3, x26
-    bl      node_api_stream
+    bl      lantern_node_api_stream
     cbz     x0, 90f
     mov     x2, x0
     b       80f
@@ -3767,26 +3767,26 @@ LOCAL_FUNCTION node_api_event
 81: mov     x0, x27
     mov     x1, x26
     mov     x4, x28
-    bl      node_api_send
+    bl      lantern_node_api_send
 90: ldr     x9, [sp, #L]
     str     x9, [x23]
     LEAVE 16
-END_FUNCTION node_api_event
+END_FUNCTION lantern_node_api_event
 
 /*
  * L2: the answer of a state operation (beacon-api.md) for the connection x0, the route x1, the
- * answer flags x2 and the view x3 whose state node_api_state found: the state at head_slot, then a
+ * answer flags x2 and the view x3 whose state lantern_node_api_state found: the state at head_slot, then a
  * stream or a work. A validator operation's ids: look_data when it is not 0, else the route's.
  * x0 = 0, or the status of an error. x21 the flags, x25 the route, x26 the view, x27 the connection.
  */
-LOCAL_FUNCTION node_api_state_answer
+LOCAL_FUNCTION lantern_node_api_state_answer
     ENTER 0
     mov     x27, x0
     mov     x25, x1
     mov     x21, x2
     mov     x26, x3
     mov     x0, x26
-    bl      node_api_advance
+    bl      lantern_node_api_advance
     ldr     x0, [x25, #ApiRoute_op]
     cmp     x0, #API_OP_GET_STATE_V2
     b.eq    64f
@@ -3803,7 +3803,7 @@ LOCAL_FUNCTION node_api_state_answer
     mov     x10, #-1
     str     x10, [x25, #ApiRoute_epoch]
 2:  add     x0, x25, #ApiRoute_epoch
-    bl      node_api_put8
+    bl      lantern_node_api_put8
     str     x0, [x26, #ApiView_look_data]
     b       67f
 1:  cmp     x0, #API_OP_GET_PROPOSER_LOOKAHEAD  /* getProposerLookahead: SSZ, an answer flag */
@@ -3819,7 +3819,7 @@ LOCAL_FUNCTION node_api_state_answer
     ldr     x9, [x26, #ApiView_look_data]   /* the validator operations: their ids; getStateValidator a work, the others a stream */
     cbnz    x9, 4f
     mov     x0, x25
-    bl      node_api_ids
+    bl      lantern_node_api_ids
     str     x0, [x26, #ApiView_look_data]
 4:  ldr     x0, [x25, #ApiRoute_op]
     cmp     x0, #API_OP_GET_STATE_VALIDATOR
@@ -3828,26 +3828,26 @@ LOCAL_FUNCTION node_api_state_answer
     mov     x1, x27
     mov     x2, x21
     mov     x3, x26
-    bl      node_api_encode
+    bl      lantern_node_api_encode
     LEAVE 0
 64: mov     x0, x27                         /* a stream of the answer */
     mov     x1, x25
     mov     x2, x21
     mov     x3, x26
-    bl      node_api_stream
+    bl      lantern_node_api_stream
     LEAVE 0
-END_FUNCTION node_api_state_answer
+END_FUNCTION lantern_node_api_state_answer
 
 /*
  * L3: the state of the chain at the slot x0, as for a state_id of it, and past the store's slot the
  * head's post-state brought to it (beacon-api.md, getBlockRewards), with the route x21 and the view
  * x22: x0 = 0 or 404, x1 its id, x2 1 when it is a copy. Locals: L the slot.
  */
-LOCAL_FUNCTION node_api_rewards_state
+LOCAL_FUNCTION lantern_node_api_rewards_state
     ENTER 16
     str     x0, [sp, #L]
     mov     x0, x20
-    bl      node_store_slot
+    bl      lantern_node_store_slot
     ldr     x10, [sp, #L]
     mov     x9, #API_ID_SLOT
     cmp     x10, x0
@@ -3857,17 +3857,17 @@ LOCAL_FUNCTION node_api_rewards_state
     str     xzr, [x22, #ApiView_look_copy]
     mov     x0, x21
     mov     x1, x22
-    bl      node_api_state
+    bl      lantern_node_api_state
     cbnz    x0, 9f
     ldr     x9, [sp, #L]
     str     x9, [x22, #ApiView_head_slot]
     mov     x0, x22
-    bl      node_api_advance
+    bl      lantern_node_api_advance
     ldr     x1, [x22, #ApiView_look_state]
     ldr     x2, [x22, #ApiView_look_copy]
     mov     x0, #0
 9:  LEAVE 16
-END_FUNCTION node_api_rewards_state
+END_FUNCTION lantern_node_api_rewards_state
 
 /*
  * L2: getBlockRewards and getSyncCommitteeRewards (node.md, NODE_EV_API): the block, a NodeBlock with
@@ -3878,14 +3878,14 @@ END_FUNCTION node_api_rewards_state
  * L+24 state_b, L+32 state_c, L+40 1 when state_b is a copy, L+48 1 when state_c is, L+56 the block's
  * slot, L+64 its values, L+72 its bytes, L+80 its fork, L+88 a slot, L+96 the status.
  */
-LOCAL_FUNCTION node_api_rewards
+LOCAL_FUNCTION lantern_node_api_rewards
     ENTER 112
     stp     x0, x2, [sp, #L]
     mov     x21, x1
     mov     x22, x3
     mov     x0, x21
     mov     x1, x22
-    bl      node_api_block
+    bl      lantern_node_api_block
     cbnz    x0, 9f
     mov     x0, #404
     ldr     x9, [x22, #ApiView_look_index]  /* a NodeBlock with bytes */
@@ -3897,7 +3897,7 @@ LOCAL_FUNCTION node_api_rewards
     ldr     x0, [x22, #ApiView_head_slot]
     str     x0, [sp, #(L + 56)]
     add     x1, x19, #Node_config
-    bl      node_fork
+    bl      lantern_node_fork
     str     x0, [sp, #(L + 80)]
     ldr     x9, [x21, #ApiRoute_op]         /* getSyncCommitteeRewards of a phase0 block: 400 */
     cmp     x9, #API_OP_GET_SYNC_COMMITTEE_REWARDS
@@ -3912,13 +3912,13 @@ LOCAL_FUNCTION node_api_rewards
     orr     x9, x9, x11, lsl #2
     str     x9, [sp, #(L + 64)]
     add     x0, x22, #ApiView_head_root     /* the parent, imported, with a post-state */
-    bl      node_find_block
+    bl      lantern_node_find_block
     mov     x9, x0
     mov     x0, #404
     cmn     x9, #1
     b.eq    9f
     add     x0, x1, #NodeBlock_parent_root
-    bl      node_find_block
+    bl      lantern_node_find_block
     mov     x9, x0
     mov     x0, #404
     cmn     x9, #1
@@ -3929,14 +3929,14 @@ LOCAL_FUNCTION node_api_rewards
     b.ne    9f
     ldr     x0, [x25, #NodeBlock_state_id]
     cbnz    x0, 2f
-    bl      node_f_slot
+    bl      lantern_node_f_slot
     ldr     x9, [x25, #NodeBlock_slot]
     cmn     x0, #1
     b.eq    8f
     cmp     x9, x0
     b.ls    8f
     mov     x0, x25
-    bl      node_rebuild
+    bl      lantern_node_rebuild
     cbz     x0, 8f
 2:  str     x0, [x22, #ApiView_look_state]  /* P: a copy brought to the block's slot */
     ldr     x9, [x25, #NodeBlock_slot]
@@ -3944,7 +3944,7 @@ LOCAL_FUNCTION node_api_rewards
     ldr     x9, [sp, #(L + 56)]
     str     x9, [x22, #ApiView_head_slot]
     mov     x0, x22
-    bl      node_api_advance
+    bl      lantern_node_api_advance
     ldr     x9, [x22, #ApiView_look_state]
     str     x9, [sp, #(L + 16)]
     stp     xzr, xzr, [sp, #(L + 24)]
@@ -3954,7 +3954,7 @@ LOCAL_FUNCTION node_api_rewards
     cmp     x9, #API_OP_GET_SYNC_COMMITTEE_REWARDS
     b.ne    3f
     mov     x0, x21                         /* getSyncCommitteeRewards: its ids as state_b */
-    bl      node_api_ids
+    bl      lantern_node_api_ids
     str     x0, [sp, #(L + 24)]
     b       6f
 3:  ldr     x9, [sp, #(L + 80)]             /* getBlockRewards of a phase0 block of epoch b: the E states */
@@ -3966,7 +3966,7 @@ LOCAL_FUNCTION node_api_rewards
     add     x0, x9, #1                      /* early: the state at the last slot of b */
     mul     x0, x0, x10
     sub     x0, x0, #1
-    bl      node_api_rewards_state
+    bl      lantern_node_api_rewards_state
     str     x0, [sp, #(L + 96)]
     cbnz    x0, 7f
     str     x1, [sp, #(L + 24)]
@@ -3979,15 +3979,15 @@ LOCAL_FUNCTION node_api_rewards
     sub     x0, x0, #1
     str     x0, [sp, #(L + 88)]
     add     x1, x19, #Node_config
-    bl      node_fork
+    bl      lantern_node_fork
     cbnz    x0, 6f
     ldr     x0, [sp, #(L + 88)]
-    bl      node_api_rewards_state
+    bl      lantern_node_api_rewards_state
     str     x0, [sp, #(L + 96)]
     cbnz    x0, 7f
     str     x1, [sp, #(L + 32)]
     str     x2, [sp, #(L + 48)]
-6:  ldp     x4, x10, [sp, #L]               /* the work: arg as node_api_encode packs it */
+6:  ldp     x4, x10, [sp, #L]               /* the work: arg as lantern_node_api_encode packs it */
     ldr     x11, [x21, #ApiRoute_op]
     orr     x5, x11, x10, lsl #8
     ldr     x12, [sp, #(L + 64)]
@@ -3998,37 +3998,37 @@ LOCAL_FUNCTION node_api_rewards
     ldr     x1, [sp, #(L + 16)]
     ldr     x2, [sp, #(L + 24)]
     ldr     x3, [sp, #(L + 72)]
-    bl      node_work
+    bl      lantern_node_work
     ldr     x9, [sp, #(L + 32)]
     str     x9, [x0, #NodeAction_state_c]
 7:  mov     x0, #NODE_ACT_STATE_FREE        /* the copies go after the work */
     ldr     x1, [sp, #(L + 16)]
     mov     x2, #0
-    bl      node_ids
+    bl      lantern_node_ids
     ldr     x9, [sp, #(L + 40)]
     cbz     x9, 71f
     mov     x0, #NODE_ACT_STATE_FREE
     ldr     x1, [sp, #(L + 24)]
     mov     x2, #0
-    bl      node_ids
+    bl      lantern_node_ids
 71: ldr     x9, [sp, #(L + 48)]
     cbz     x9, 72f
     mov     x0, #NODE_ACT_STATE_FREE
     ldr     x1, [sp, #(L + 32)]
     mov     x2, #0
-    bl      node_ids
+    bl      lantern_node_ids
 72: ldr     x0, [sp, #(L + 96)]
 9:  LEAVE 112
 8:  mov     x0, #404
     LEAVE 112
-END_FUNCTION node_api_rewards
+END_FUNCTION lantern_node_api_rewards
 
 /*
  * L2: the NODE_EV_WORK_DONE x0 of a NODE_WORK_API_ENCODE (node.md, lantern_node_step): its
  * response to the connection, or the error 500. x19 the node, x24 the actions. x21 the event,
  * x22 the action, x23 the response's bytes, x25 the flags.
  */
-LOCAL_FUNCTION node_api_done
+LOCAL_FUNCTION lantern_node_api_done
     ENTER 0
     mov     x21, x0
     ldr     x9, [x21, #NodeAction_arg]
@@ -4039,7 +4039,7 @@ LOCAL_FUNCTION node_api_done
     cbz     x1, 3f
     mov     x0, #NODE_ACT_BYTES_FREE
     mov     x2, #0
-    bl      node_ids
+    bl      lantern_node_ids
     ldr     x9, [x21, #NodeAction_arg]
 3:
     and     x10, x9, #255                   /* getStateValidator: its ids go; produceAttestationData its index; the epoch reads their epoch */
@@ -4063,7 +4063,7 @@ LOCAL_FUNCTION node_api_done
     cbz     x1, 2f
     mov     x0, #NODE_ACT_BYTES_FREE
     mov     x2, #0
-    bl      node_ids
+    bl      lantern_node_ids
     ldr     x9, [x21, #NodeAction_arg]
 2:  ubfx    x10, x9, #8, #8
     and     x25, x10, #API_ANSWER_CLOSE     /* API_R_CLOSE, or API_R_KEEP for HTTP/1.0 kept open */
@@ -4077,7 +4077,7 @@ LOCAL_FUNCTION node_api_done
     add     x1, x9, #(56 + 7)
     and     x1, x1, #~7
     mov     x0, #NODE_ACT_API_SEND
-    bl      node_act
+    bl      lantern_node_act
     mov     x22, x0
     ldr     x9, [x21, #NodeAction_target]
     mov     x10, #1
@@ -4103,7 +4103,7 @@ LOCAL_FUNCTION node_api_done
     tbz     x25, #0, 9f
     mov     x0, #NODE_ACT_API_CLOSE
     mov     x1, #NODE_ACT_API_CLOSE_SIZE
-    bl      node_act
+    bl      lantern_node_act
     ldr     x9, [x21, #NodeAction_target]
     str     x9, [x0, #16]
     LEAVE 0
@@ -4112,9 +4112,9 @@ LOCAL_FUNCTION node_api_done
     mov     x2, #500
     mov     x3, #API_BODY_ERROR
     mov     x4, x25
-    bl      node_api_send
+    bl      lantern_node_api_send
 9:  LEAVE 0
-END_FUNCTION node_api_done
+END_FUNCTION lantern_node_api_done
 
 /*
  * (node, store, work, state_a, data, scratch, event, room; the seen in x8) -> status: a
@@ -4123,7 +4123,7 @@ END_FUNCTION node_api_done
  * the scratch, x25 the event, x26 the ApiView at the end of scratch, x27 the operation, x28 the room.
  * Locals: L the scratch's size, L+8 a kept word, L+16 a Result, L+24 a blob count, L+32 the seen.
  */
-LOCAL_FUNCTION node_api_run
+LOCAL_FUNCTION lantern_node_api_run
     ENTER 64
     ldr     x9, [x8]                        /* x8: the seen, state_b and state_c */
     str     x9, [sp, #(L + 32)]
@@ -4201,7 +4201,7 @@ LOCAL_FUNCTION node_api_run
     str     x9, [x24]
     add     x26, x24, x9
     mov     x0, x26
-    bl      node_api_view
+    bl      lantern_node_api_view
     ldr     x9, [x21, #NodeAction_arg]
     ubfx    x10, x9, #16, #1
     str     x10, [x26, #ApiView_canonical]
@@ -4220,7 +4220,7 @@ LOCAL_FUNCTION node_api_run
     mov     x2, x23
     mov     x3, x24
     mov     x4, x26
-    bl      node_api_lc_read
+    bl      lantern_node_api_lc_read
     cbz     x0, 5f
     cmp     x0, #LANTERN_BUFFER_TOO_SMALL
     b.eq    71f
@@ -4240,7 +4240,7 @@ LOCAL_FUNCTION node_api_run
     cmp     x0, x9
     b.ne    42f
 43: add     x1, x19, #Node_config
-    bl      node_fork
+    bl      lantern_node_fork
     mov     x15, x0
     cmp     x27, #API_OP_GET_BLOCK_REWARDS
     b.eq    277f
@@ -4251,7 +4251,7 @@ LOCAL_FUNCTION node_api_run
     mov     x0, x22                         /* getStateValidator: the validator of its ids */
     mov     x1, x23
     cbz     x1, 8f
-    bl      node_api_find_validator
+    bl      lantern_node_api_find_validator
     str     x22, [x26, #ApiView_val_state]
     str     x0, [x26, #ApiView_val_index]
     b       5f
@@ -4454,7 +4454,7 @@ LOCAL_FUNCTION node_api_run
     csel    x9, x9, xzr, hs
     str     x9, [sp, #(L + 56)]
     add     x1, x19, #Node_config
-    bl      node_fork
+    bl      lantern_node_fork
     mov     x15, x0
     mov     x0, x22
     add     x1, sp, #(L + 56)
@@ -4495,7 +4495,7 @@ LOCAL_FUNCTION node_api_run
     add     x9, x23, x9
     ldr     x0, [x9, #100]
     add     x1, x19, #Node_config
-    bl      node_fork
+    bl      lantern_node_fork
     mov     x15, x0
     str     x15, [sp, #(L + 24)]
     mov     x0, x23
@@ -4537,7 +4537,7 @@ LOCAL_FUNCTION node_api_run
     cbnz    x9, 34f
     ldr     x0, [x22, #NODE_STATE_SLOT]     /* a zero state_root: the state's root */
     add     x1, x19, #Node_config
-    bl      node_fork
+    bl      lantern_node_fork
     mov     x15, x0
     mov     x0, x22
     LDQ     x1, x19, Node_config + CONFIG_STATE_CACHE
@@ -4596,7 +4596,7 @@ LOCAL_FUNCTION node_api_run
     cmp     x27, #API_OP_GET_LIGHT_CLIENT_UPDATES_BY_RANGE  /* no version: of each item */
     b.eq    54f
 531: orr    x4, x4, #API_R_VERSION
-54: bl      api_respond
+54: bl      lantern_api_respond
     cbnz    x0, 71f
     ldr     x9, [x25, #(NodeEvent_chunk + 16)]  /* the event's size covers the chunk */
     add     x9, x9, #(NodeEvent_chunk + 24 + 7)
@@ -4653,7 +4653,7 @@ LOCAL_FUNCTION node_api_run
     str     x20, [x26, #ApiView_val_state]
     ldr     x0, [x26, #ApiView_head_slot]
     add     x1, x19, #Node_config
-    bl      node_fork
+    bl      lantern_node_fork
     mov     x15, x0
     mov     x0, x20
     mov     x1, x24
@@ -4680,7 +4680,7 @@ LOCAL_FUNCTION node_api_run
     str     x9, [x24]
 7:  mov     x0, #LANTERN_BUFFER_TOO_SMALL
     LEAVE 64
-END_FUNCTION node_api_run
+END_FUNCTION lantern_node_api_run
 
 /*
  * (node, work, state_a, data, scratch, event, room) -> status: a NODE_WORK_API_EVENT of
@@ -4689,7 +4689,7 @@ END_FUNCTION node_api_run
  * x26 the ApiView at the end of scratch, x27 the topic, x28 the room. Locals: L the scratch's
  * size, L+8 a Result, L+16 a blob count.
  */
-LOCAL_FUNCTION node_api_event_run
+LOCAL_FUNCTION lantern_node_api_event_run
     ENTER 32
     mov     x19, x0
     mov     x21, x1
@@ -4726,7 +4726,7 @@ LOCAL_FUNCTION node_api_event_run
     ldr     x0, [x22, #NODE_STATE_SLOT]
     str     x0, [x26, #ApiView_event_slot]
     add     x1, x19, #Node_config
-    bl      node_fork
+    bl      lantern_node_fork
     mov     x15, x0
     str     x0, [x26, #ApiView_fork]        /* head_v2's version */
     mov     x0, x22
@@ -4746,7 +4746,7 @@ LOCAL_FUNCTION node_api_event_run
     add     x9, x23, x9
     ldr     x0, [x9, #100]
     add     x1, x19, #Node_config
-    bl      node_fork
+    bl      lantern_node_fork
     mov     x15, x0
     ldr     x9, [x23, #8]
     add     x9, x23, x9
@@ -4772,7 +4772,7 @@ LOCAL_FUNCTION node_api_event_run
     mov     x0, x26
     add     x1, x25, #NodeEvent_chunk
     mov     x2, x27
-    bl      api_event_text
+    bl      lantern_api_event_text
     cbnz    x0, 71f
 55: ldr     x9, [x25, #(NodeEvent_chunk + 16)]  /* the event's size covers the text */
     add     x9, x9, #(NodeEvent_chunk + 24 + 7)
@@ -4786,7 +4786,7 @@ LOCAL_FUNCTION node_api_event_run
     ldr     x0, [x22, #NODE_STATE_SLOT]
     str     x0, [x26, #ApiView_event_slot]
     add     x1, x19, #Node_config
-    bl      node_fork
+    bl      lantern_node_fork
     mov     x15, x0
     mov     x0, x22
     add     x1, x19, #Node_config
@@ -4805,7 +4805,7 @@ LOCAL_FUNCTION node_api_event_run
     add     x9, x23, x9
     ldr     x0, [x9, #100]
     add     x1, x19, #Node_config
-    bl      node_fork
+    bl      lantern_node_fork
     mov     x15, x0
     ldr     x9, [x23, #8]
     add     x9, x23, x9
@@ -4837,7 +4837,7 @@ LOCAL_FUNCTION node_api_event_run
     add     x0, x25, #NodeEvent_chunk
     mov     x1, x27
     mov     x3, x24
-    bl      api_lc_event_text
+    bl      lantern_api_lc_event_text
     cmp     x0, #LANTERN_BUFFER_TOO_SMALL
     b.eq    71f
     cbz     x0, 55b
@@ -4881,7 +4881,7 @@ LOCAL_FUNCTION node_api_event_run
     mov     x1, x27
     mov     x2, x14
     mov     x3, x23
-    bl      api_op_event_text
+    bl      lantern_api_op_event_text
     cmp     x0, #LANTERN_BUFFER_TOO_SMALL
     b.eq    71f
     cbz     x0, 55b
@@ -4901,7 +4901,7 @@ LOCAL_FUNCTION node_api_event_run
     mov     x1, x27
     mov     x2, x23
     mov     x3, x24
-    bl      api_sidecar_event_text
+    bl      lantern_api_sidecar_event_text
     cmp     x0, #LANTERN_BUFFER_TOO_SMALL
     b.eq    71f
     cbz     x0, 55b
@@ -4919,15 +4919,15 @@ LOCAL_FUNCTION node_api_event_run
     str     x9, [x24]
 7:  mov     x0, #LANTERN_BUFFER_TOO_SMALL
     LEAVE 32
-END_FUNCTION node_api_event_run
+END_FUNCTION lantern_node_api_event_run
 
 /* ---------------------------------------------------------------- Lookup (beacon-api.md, Common rules) */
 
 /* L1: x0 = the NodeBlock index of the imported parent of the entry x0, or 2^64 - 1; x1 = its entry. Uses x9-x15. */
-LOCAL_FUNCTION node_api_parent
+LOCAL_FUNCTION lantern_node_api_parent
     FRAME 0
     add     x0, x0, #NodeBlock_parent_root
-    bl      node_find_block
+    bl      lantern_node_find_block
     cmn     x0, #1
     b.eq    9f
     ldr     x9, [x1, #NodeBlock_status]
@@ -4935,18 +4935,18 @@ LOCAL_FUNCTION node_api_parent
     b.eq    9f
     mov     x0, #-1
 9:  UNFRAME 0
-END_FUNCTION node_api_parent
+END_FUNCTION lantern_node_api_parent
 
 /*
  * L1: the block of the chain at or below the slot x0: x0 = its NodeBlock index, x1 = its entry; or
  * x0 = 2^64 - 1 when the lowest block of the chain the node keeps, x1 (0 with no head), is above
  * the slot. Locals: L the slot, L+8 an entry.
  */
-LOCAL_FUNCTION node_api_below
+LOCAL_FUNCTION lantern_node_api_below
     FRAME 32
     str     x0, [sp, #16]
     add     x0, x19, #Node_head_root
-    bl      node_find_block
+    bl      lantern_node_find_block
     cmn     x0, #1
     b.ne    1f
     mov     x1, #0
@@ -4957,19 +4957,19 @@ LOCAL_FUNCTION node_api_below
     b.ls    9f
     str     x1, [sp, #24]
     mov     x0, x1
-    bl      node_api_parent
+    bl      lantern_node_api_parent
     cmn     x0, #1
     b.ne    1b
     ldr     x1, [sp, #24]
 9:  UNFRAME 32
-END_FUNCTION node_api_below
+END_FUNCTION lantern_node_api_below
 
 /* L1: x0 = 1 when the block entry x0 is on the chain, else 0. Locals: L the entry. */
-LOCAL_FUNCTION node_api_on_chain
+LOCAL_FUNCTION lantern_node_api_on_chain
     FRAME 16
     str     x0, [sp, #16]
     ldr     x0, [x0, #NodeBlock_slot]
-    bl      node_api_below
+    bl      lantern_node_api_below
     cmn     x0, #1
     b.eq    8f
     ldr     x9, [sp, #16]
@@ -4978,13 +4978,13 @@ LOCAL_FUNCTION node_api_on_chain
     UNFRAME 16
 8:  mov     x0, #0
     UNFRAME 16
-END_FUNCTION node_api_on_chain
+END_FUNCTION lantern_node_api_on_chain
 
 /* L1: x0 = 1 when the slot x0 is at most that of the block of the store's finalized root, else 0. Locals: x0. */
-LOCAL_FUNCTION node_api_final_block
+LOCAL_FUNCTION lantern_node_api_final_block
     FRAME 16
     str     x0, [sp, #16]
-    bl      node_f_slot
+    bl      lantern_node_f_slot
     ldr     x9, [sp, #16]
     cmn     x0, #1
     b.eq    8f
@@ -4993,7 +4993,7 @@ LOCAL_FUNCTION node_api_final_block
     UNFRAME 16
 8:  mov     x0, #0
     UNFRAME 16
-END_FUNCTION node_api_final_block
+END_FUNCTION lantern_node_api_final_block
 
 /*
  * L2: the block of the block_id of the ApiRoute x0 into the ApiView x1 (beacon-api.md, Common
@@ -5001,7 +5001,7 @@ END_FUNCTION node_api_final_block
  * and for a block the node keeps look_state and look_state_slot. x0 = 0, or 404 for none. x21 the
  * route, x22 the view, x25 the entry, x26 the slot. Locals: L the Db's slot.
  */
-LOCAL_FUNCTION node_api_block
+LOCAL_FUNCTION lantern_node_api_block
     ENTER 16
     mov     x21, x0
     mov     x22, x1
@@ -5020,7 +5020,7 @@ LOCAL_FUNCTION node_api_block
     cmp     x9, #API_ID_ROOT
     b.ne    3f
     add     x0, x21, #ApiRoute_id_root      /* a root: the node's imported block, else the Db's */
-    bl      node_find_block
+    bl      lantern_node_find_block
     cmn     x0, #1
     b.eq    1f
     ldr     x9, [x1, #NodeBlock_status]
@@ -5044,7 +5044,7 @@ LOCAL_FUNCTION node_api_block
     b.ne    31f
     ldr     x26, [x21, #ApiRoute_id_slot]
 31: mov     x0, x26
-    bl      node_api_below
+    bl      lantern_node_api_below
     cmn     x0, #1
     b.eq    32f
     ldr     x9, [x1, #NodeBlock_slot]
@@ -5055,10 +5055,10 @@ LOCAL_FUNCTION node_api_block
     tst     x9, #NODE_FLAG_DB
     b.eq    80f
     mov     x0, x26
-    bl      node_db_slot
+    bl      lantern_node_db_slot
     cbz     x0, 80f
     b       6f                              /* DbSlot_root is at 0 */
-4:  bl      node_find_block                 /* head, finalized: the block of that root */
+4:  bl      lantern_node_find_block                 /* head, finalized: the block of that root */
     cmn     x0, #1
     b.eq    80f
 5:  mov     x25, x1                         /* a block the node keeps */
@@ -5077,14 +5077,14 @@ LOCAL_FUNCTION node_api_block
     ldr     x0, [x25, #NodeBlock_data_id]
     cbnz    x0, 51f
     mov     x0, x25
-    bl      node_api_db_ref
+    bl      lantern_node_api_db_ref
 51: str     x0, [x22, #ApiView_look_data]
     mov     x0, x25
-    bl      node_api_on_chain
+    bl      lantern_node_api_on_chain
     str     x0, [x22, #ApiView_canonical]
     cbz     x0, 52f
     mov     x0, x26
-    bl      node_api_final_block
+    bl      lantern_node_api_final_block
 52: STQ     x0, x22, ApiView_head_finalized
     mov     x0, #0
     LEAVE 16
@@ -5096,16 +5096,16 @@ LOCAL_FUNCTION node_api_block
     mov     x9, #1
     str     x9, [x22, #ApiView_canonical]
     mov     x0, x26
-    bl      node_db_block
+    bl      lantern_node_db_block
     str     x0, [x22, #ApiView_look_data]
     mov     x0, x26
-    bl      node_api_final_block
+    bl      lantern_node_api_final_block
     STQ     x0, x22, ApiView_head_finalized
     mov     x0, #0
     LEAVE 16
 80: mov     x0, #404
     LEAVE 16
-END_FUNCTION node_api_block
+END_FUNCTION lantern_node_api_block
 
 /*
  * L2: the state of the state_id of the ApiRoute x0 into the ApiView x1 (beacon-api.md, Common
@@ -5115,7 +5115,7 @@ END_FUNCTION node_api_block
  * request waits for it. x21 the route, x22 the view, x25 the block's entry, x26 the slot, x27 the
  * checkpoint, then the base's slot. Locals: L look_replay.
  */
-LOCAL_FUNCTION node_api_state
+LOCAL_FUNCTION lantern_node_api_state
     ENTER 16
     mov     x21, x0
     mov     x22, x1
@@ -5130,7 +5130,7 @@ LOCAL_FUNCTION node_api_state
     cmp     x9, #API_ID_HEAD
     b.ne    1f
     add     x0, x19, #Node_head_root        /* head: its post-state at its slot */
-    bl      node_find_block
+    bl      lantern_node_find_block
     cmn     x0, #1
     b.eq    80f
     ldr     x26, [x1, #NodeBlock_slot]
@@ -5145,7 +5145,7 @@ LOCAL_FUNCTION node_api_state
     mov     x9, #SLOTS_PER_EPOCH
     mul     x26, x26, x9
     add     x0, x27, #8
-    bl      node_find_block                 /* the optimistic status of its block */
+    bl      lantern_node_find_block                 /* the optimistic status of its block */
     mov     x9, #0
     cmn     x0, #1
     b.eq    21f
@@ -5156,7 +5156,7 @@ LOCAL_FUNCTION node_api_state
 21: str     x9, [x22, #ApiView_is_optimistic]
     ldr     x0, [x27]                       /* its NodeCheckpoint's state, else its block's post-state */
     add     x1, x27, #8
-    bl      node_find_checkpoint
+    bl      lantern_node_find_checkpoint
     cmn     x0, #1
     b.eq    22f
     ldr     x9, [x1, #NodeCheckpoint_state_id]
@@ -5165,7 +5165,7 @@ LOCAL_FUNCTION node_api_state
     str     x26, [x22, #ApiView_look_state_slot]
     b       7f
 22: add     x0, x27, #8
-    bl      node_find_block
+    bl      lantern_node_find_block
     cmn     x0, #1
     b.eq    80f
     b       5f
@@ -5176,11 +5176,11 @@ LOCAL_FUNCTION node_api_state
     b.ne    31f
     ldr     x26, [x21, #ApiRoute_id_slot]
 31: mov     x0, x20
-    bl      node_store_slot
+    bl      lantern_node_store_slot
     cmp     x26, x0
     b.hi    80f
     mov     x0, x26
-    bl      node_api_below
+    bl      lantern_node_api_below
     cmn     x0, #1
     b.eq    75f
 5:  mov     x25, x1                         /* the block's post-state, again when the node let it go */
@@ -5190,14 +5190,14 @@ LOCAL_FUNCTION node_api_state
     str     x9, [x22, #ApiView_is_optimistic]
     ldr     x0, [x25, #NodeBlock_state_id]
     cbnz    x0, 6f
-    bl      node_f_slot
+    bl      lantern_node_f_slot
     ldr     x9, [x25, #NodeBlock_slot]
     cmn     x0, #1
     b.eq    80f
     cmp     x9, x0
     b.ls    70f
     mov     x0, x25
-    bl      node_rebuild
+    bl      lantern_node_rebuild
     cbz     x0, 80f
 6:  str     x0, [x22, #ApiView_look_state]
     ldr     x9, [x25, #NodeBlock_slot]
@@ -5225,7 +5225,7 @@ LOCAL_FUNCTION node_api_state
     cmp     x25, x9
     b.lo    80f
 78: mov     x0, x25
-    bl      node_db_slot
+    bl      lantern_node_db_slot
     mov     x1, x25
     cbnz    x0, 71f
     cbz     x25, 80f
@@ -5234,7 +5234,7 @@ LOCAL_FUNCTION node_api_state
 76: cmp     x25, x27
     b.ls    77f
     mov     x0, x25
-    bl      node_db_slot
+    bl      lantern_node_db_slot
     mov     x1, x25
     cbnz    x0, 71f                         /* its DbSlot: the root at 0 */
     sub     x25, x25, #1
@@ -5243,7 +5243,7 @@ LOCAL_FUNCTION node_api_state
     mov     x1, x27
 71: ldr     x9, [sp, #L]
     cbz     x9, 80f
-    bl      node_replay_get
+    bl      lantern_node_replay_get
     cbz     x0, 80f
     cmp     x0, #1
     b.eq    79f
@@ -5256,7 +5256,7 @@ LOCAL_FUNCTION node_api_state
 79: LEAVE 16
 80: mov     x0, #404
     LEAVE 16
-END_FUNCTION node_api_state
+END_FUNCTION lantern_node_api_state
 
 /*
  * L2: (root x0, or 0 for the base, slot x1) with the view x22: the post-state of the block of root
@@ -5264,7 +5264,7 @@ END_FUNCTION node_api_state
  * copy of it and x1 its slot; 1 when the request waits for the replay; 0 for none. x21 the root,
  * x25 the slot, x26 the state, x27 the copy.
  */
-LOCAL_FUNCTION node_replay_get
+LOCAL_FUNCTION lantern_node_replay_get
     ENTER 0
     mov     x21, x0
     mov     x25, x1
@@ -5282,12 +5282,12 @@ LOCAL_FUNCTION node_replay_get
     cbz     x26, 2f
     ADDQ    x9, x19, Node_replay_root
     NE32    x9, x21, 2f
-5:  bl      node_new_id                     /* a copy for the answer */
+5:  bl      lantern_node_new_id                     /* a copy for the answer */
     mov     x27, x0
     mov     x0, #NODE_ACT_STATE_COPY
     mov     x1, x26
     mov     x2, x27
-    bl      node_ids
+    bl      lantern_node_ids
     mov     x0, x27
     mov     x1, x25
     LEAVE 0
@@ -5297,23 +5297,23 @@ LOCAL_FUNCTION node_replay_get
     cbz     x1, 3f
     mov     x0, #NODE_ACT_STATE_FREE
     mov     x2, #0
-    bl      node_ids
+    bl      lantern_node_ids
     STQ     xzr, x19, Node_replay_state
 3:  ADDQ    x0, x19, Node_replay_root
     COPY32  x0, x21
     STQ     x25, x19, Node_replay_slot
-    bl      node_new_id
+    bl      lantern_node_new_id
     STQ     x0, x19, Node_replay_copy
     mov     x2, x0
     mov     x0, #NODE_ACT_STATE_COPY
     ldr     x1, [x19, #Node_anchor_state_id]
-    bl      node_ids
+    bl      lantern_node_ids
     LDQ     x9, x19, Node_base_slot
     STQ     x9, x19, Node_replay_copy_slot
     add     x9, x9, #1
     STQ     x9, x19, Node_replay_next
     mov     x0, x25                         /* a nearer base among the state records: the copy loads it */
-    bl      node_archive_base
+    bl      lantern_node_archive_base
     cmn     x0, #1
     b.eq    7f
     STQ     x0, x19, Node_replay_copy_slot
@@ -5334,12 +5334,12 @@ LOCAL_FUNCTION node_replay_get
     LDQ     x1, x19, Node_replay_copy
     mov     x4, #0
     mov     x5, #0
-    bl      node_work
+    bl      lantern_node_work
 7:  mov     x0, #1
     LEAVE 0
 8:  mov     x0, #0
     LEAVE 0
-END_FUNCTION node_replay_get
+END_FUNCTION lantern_node_replay_get
 
 /*
  * L2: the state of the ApiView x0 at its slot (node.md, NODE_EV_API): when head_slot is past
@@ -5347,33 +5347,33 @@ END_FUNCTION node_replay_get
  * and a SLOTS work of it to head_slot when it is below it; look_state is the copy, look_copy 1.
  * x21 the view, x22 the copy, x25 the copy's slot.
  */
-LOCAL_FUNCTION node_api_advance
+LOCAL_FUNCTION lantern_node_api_advance
     ENTER 0
     mov     x21, x0
     ldr     x9, [x21, #ApiView_look_state_slot]
     ldr     x10, [x21, #ApiView_head_slot]
     cmp     x10, x9
     b.ls    9f
-    bl      node_new_id
+    bl      lantern_node_new_id
     mov     x22, x0
     mov     x2, x0
     mov     x0, #NODE_ACT_STATE_COPY
     ldr     x1, [x21, #ApiView_look_state]
-    bl      node_ids
+    bl      lantern_node_ids
     mov     x0, x22
     ldr     x1, [x21, #ApiView_look_state]
     ldr     x2, [x21, #ApiView_look_state_slot]
     ldr     x3, [x21, #ApiView_head_slot]
-    bl      node_cross
+    bl      lantern_node_cross
     mov     x22, x0
     ldr     x25, [x21, #ApiView_look_state_slot]    /* the copy's slot: the first of the target's fork, when it crossed one */
     mov     x0, x25
     add     x1, x19, #Node_config
-    bl      node_fork
+    bl      lantern_node_fork
     mov     x26, x0
     ldr     x0, [x21, #ApiView_head_slot]
     add     x1, x19, #Node_config
-    bl      node_fork
+    bl      lantern_node_fork
     cmp     x0, x26
     b.ls    1f
     add     x9, x19, #Node_config
@@ -5391,19 +5391,19 @@ LOCAL_FUNCTION node_api_advance
     mov     x2, #0
     mov     x3, #0
     mov     x4, #0
-    bl      node_work
+    bl      lantern_node_work
 2:  str     x22, [x21, #ApiView_look_state]
     mov     x9, #1
     str     x9, [x21, #ApiView_look_copy]
 9:  LEAVE 0
-END_FUNCTION node_api_advance
+END_FUNCTION lantern_node_api_advance
 
 /*
  * L1: a NODE_WORK_API_ENCODE of the operation x0 for the connection x1 with the answer flags x2,
  * from the lookup in the ApiView x3 (node.md, NODE_EV_API); then a STATE_FREE of the state when it
  * is a copy. x0 = 0, or 404 for a header with neither bytes nor a post-state. Locals: L the view.
  */
-LOCAL_FUNCTION node_api_encode
+LOCAL_FUNCTION lantern_node_api_encode
     FRAME 16
     str     x3, [sp, #16]
     ldr     x9, [x3, #ApiView_canonical]
@@ -5456,17 +5456,17 @@ LOCAL_FUNCTION node_api_encode
     csel    x3, x9, xzr, eq
 3:  mov     x0, #NODE_WORK_API_ENCODE
     mov     x2, #0
-    bl      node_work
+    bl      lantern_node_work
     ldr     x9, [sp, #16]                   /* a copy goes after the work */
     ldr     x10, [x9, #ApiView_look_copy]
     cbz     x10, 9f
     mov     x0, #NODE_ACT_STATE_FREE
     ldr     x1, [x9, #ApiView_look_state]
     mov     x2, #0
-    bl      node_ids
+    bl      lantern_node_ids
 9:  mov     x0, #0
     UNFRAME 16
-END_FUNCTION node_api_encode
+END_FUNCTION lantern_node_api_encode
 
 /*
  * L2: (connection x0, route x1, answer flags x2, wait x3) -> x0: a state_id of a root (node.md,
@@ -5476,7 +5476,7 @@ END_FUNCTION node_api_encode
  * head post-state. x21 the route, x25 the flags, x26 wait, x27 the connection. Locals: L the
  * entry's index, L+8 the entry.
  */
-LOCAL_FUNCTION node_api_lookup
+LOCAL_FUNCTION lantern_node_api_lookup
     ENTER 16
     mov     x27, x0
     mov     x21, x1
@@ -5490,12 +5490,12 @@ LOCAL_FUNCTION node_api_lookup
     b.ne    1f
     orr     x25, x25, #API_STREAM_SSZ
 1:  add     x0, x19, #Node_head_root
-    bl      node_find_block
+    bl      lantern_node_find_block
     cmn     x0, #1
     b.eq    80f
     ldr     x9, [x1, #NodeBlock_state_id]
     cbz     x9, 80f
-    bl      node_api_new
+    bl      lantern_node_api_new
     stp     x0, x1, [sp, #L]
     mov     x0, x1
     mov     x1, #NodeApi__mem
@@ -5529,7 +5529,7 @@ LOCAL_FUNCTION node_api_lookup
     cmp     x9, #(API_OP_GET_EPOCH_COMMITTEES - API_OP_GET_STATE_VALIDATORS)
     b.hi    2f
 5:  mov     x0, x21
-    bl      node_api_ids
+    bl      lantern_node_api_ids
     ldr     x1, [sp, #(L + 8)]
     str     x0, [x1, #NodeApi_data]
     cbz     x0, 2f
@@ -5546,25 +5546,25 @@ LOCAL_FUNCTION node_api_lookup
     mov     x0, #0
     LEAVE 16
 4:  add     x0, x19, #Node_head_root
-    bl      node_find_block
+    bl      lantern_node_find_block
     ldr     x1, [x1, #NodeBlock_state_id]
     mov     x0, #NODE_WORK_API_LOOKUP
     mov     x2, #0
     mov     x3, #0
     mov     x4, x27
     ldr     x5, [sp, #L]
-    bl      node_work
+    bl      lantern_node_work
     mov     x0, #0
     LEAVE 16
 80: mov     x0, #404
     LEAVE 16
-END_FUNCTION node_api_lookup
+END_FUNCTION lantern_node_api_lookup
 
 /*
  * L2: the NODE_EV_WORK_DONE x0 of a NODE_WORK_API_LOOKUP (node.md, lantern_node_step): its entry
- * goes on with the slot found (node_api_rerun), the replay allowed. x21 the event, x22 the entry.
+ * goes on with the slot found (lantern_node_api_rerun), the replay allowed. x21 the event, x22 the entry.
  */
-LOCAL_FUNCTION node_api_lookup_done
+LOCAL_FUNCTION lantern_node_api_lookup_done
     ENTER 0
     mov     x21, x0
     ldr     x9, [x21, #NodeAction_arg]
@@ -5584,9 +5584,9 @@ LOCAL_FUNCTION node_api_lookup_done
     mov     x0, x22
     ldr     x1, [x21, #NodeEvent_index]
     mov     x2, #1
-    bl      node_api_rerun
+    bl      lantern_node_api_rerun
 99: LEAVE 0
-END_FUNCTION node_api_lookup_done
+END_FUNCTION lantern_node_api_lookup_done
 
 /*
  * L2: (entry x0, slot x1, replay x2): a lookup entry goes on with the slot of its state_id (node.md,
@@ -5598,7 +5598,7 @@ END_FUNCTION node_api_lookup_done
  * scratch's size, L+8 the route, L+16 the ids, L+24 statuses, L+32 validator (64), L+96 epoch,
  * slot, index and present, L+128 the slot, L+136 replay, then the status.
  */
-LOCAL_FUNCTION node_api_rerun
+LOCAL_FUNCTION lantern_node_api_rerun
     ENTER 144
     mov     x22, x0
     str     x1, [sp, #(L + 128)]
@@ -5608,7 +5608,7 @@ LOCAL_FUNCTION node_api_rerun
     ldr     x28, [x22, #NodeApi_op]
     tbz     x25, #5, 1f                     /* API_STREAM_GONE: the entry ends, its ids with it */
     mov     x0, x22
-    bl      node_api_end
+    bl      lantern_node_api_end
     b       99f
 1:  ldr     x9, [x22, #NodeApi_data]        /* its ids, statuses and validator_id go to the answer */
     str     x9, [sp, #(L + 16)]
@@ -5629,7 +5629,7 @@ LOCAL_FUNCTION node_api_rerun
     str     x9, [x23]
     add     x26, x23, x9
     mov     x0, x26
-    bl      node_api_view
+    bl      lantern_node_api_view
     MOVQ    x9, ApiView__size
     add     x0, x26, x9
     str     x0, [sp, #(L + 8)]
@@ -5667,7 +5667,7 @@ LOCAL_FUNCTION node_api_rerun
     ldr     x9, [sp, #(L + 136)]
     STQ     x9, x26, ApiView_look_replay
     mov     x1, x26
-    bl      node_api_state
+    bl      lantern_node_api_state
     mov     x2, x0
     cmp     x0, #1
     b.ne    70f
@@ -5686,7 +5686,7 @@ LOCAL_FUNCTION node_api_rerun
     and     x9, x25, #~API_STREAM_OWN       /* the entry ends; it owns no bytes */
     str     x9, [x22, #NodeApi_flags]
     mov     x0, x22
-    bl      node_api_end
+    bl      lantern_node_api_end
     ldr     x2, [sp, #(L + 136)]
     cbnz    x2, 80f
     ldr     x9, [sp, #(L + 16)]             /* the ids go to the answer */
@@ -5696,7 +5696,7 @@ LOCAL_FUNCTION node_api_rerun
     ldr     x1, [sp, #(L + 8)]
     and     x2, x25, #(API_STREAM_CLOSE | API_STREAM_HTTP10)
     mov     x3, x26
-    bl      node_api_state_answer
+    bl      lantern_node_api_state_answer
     mov     x2, x0
     cbz     x0, 90f
 80: ldr     x1, [sp, #(L + 16)]             /* ids no answer took: they go */
@@ -5704,7 +5704,7 @@ LOCAL_FUNCTION node_api_rerun
     str     x2, [sp, #(L + 24)]
     mov     x0, #NODE_ACT_BYTES_FREE
     mov     x2, #0
-    bl      node_ids
+    bl      lantern_node_ids
     ldr     x2, [sp, #(L + 24)]
 82: mov     x0, x27                         /* an error: with close, or keep-alive for HTTP/1.0 */
     mov     x1, #0
@@ -5714,18 +5714,18 @@ LOCAL_FUNCTION node_api_rerun
     tst     x25, #API_STREAM_HTTP10
     mov     x9, #API_R_KEEP
     csel    x4, x9, xzr, ne
-81: bl      node_api_send
+81: bl      lantern_node_api_send
 90: ldr     x9, [sp, #L]
     str     x9, [x23]
 99: LEAVE 144
-END_FUNCTION node_api_rerun
+END_FUNCTION lantern_node_api_rerun
 
 /*
  * L2: (data x0, slot x1): the copy of the replay in flight crosses the fork boundaries to the slot
  * x1, then a NODE_WORK_REPLAY of it with the block's bytes x0 (node.md, the replay). x21 the data,
  * x25 the slot.
  */
-LOCAL_FUNCTION node_replay_block
+LOCAL_FUNCTION lantern_node_replay_block
     ENTER 0
     mov     x21, x0
     mov     x25, x1
@@ -5733,7 +5733,7 @@ LOCAL_FUNCTION node_replay_block
     ldr     x1, [x19, #Node_anchor_state_id]
     LDQ     x2, x19, Node_replay_copy_slot
     mov     x3, x25
-    bl      node_cross
+    bl      lantern_node_cross
     STQ     x0, x19, Node_replay_copy
     STQ     x25, x19, Node_replay_copy_slot
     mov     x1, x0
@@ -5742,9 +5742,9 @@ LOCAL_FUNCTION node_replay_block
     mov     x3, x21
     mov     x4, #0
     mov     x5, #0
-    bl      node_work
+    bl      lantern_node_work
     LEAVE 0
-END_FUNCTION node_replay_block
+END_FUNCTION lantern_node_replay_block
 
 /*
  * L2: the replay in flight queues its next blocks (node.md, the replay): at most NODE_REPLAY_CHUNK,
@@ -5755,7 +5755,7 @@ END_FUNCTION node_replay_block
  * the next slot, x26 the block's slot, x27 the blocks queued, x28 a block's data, then the path's
  * count. Locals: L the scratch's size, L+8 the path list, L+16 replay.
  */
-LOCAL_FUNCTION node_replay_due
+LOCAL_FUNCTION lantern_node_replay_due
     ENTER 32
     LDQ     x9, x19, Node_replay_copy
     cbz     x9, 99f
@@ -5779,23 +5779,23 @@ LOCAL_FUNCTION node_replay_due
     cmp     x25, x9
     b.hs    10f
     mov     x0, x25
-    bl      node_db_block
+    bl      lantern_node_db_block
     cbz     x0, 3f
     mov     x28, x0
     cmp     x27, #NODE_REPLAY_CHUNK
     b.hs    40f
     cbz     x27, 2f
     mov     x0, #1024
-    bl      node_room
+    bl      lantern_node_room
     cbz     x0, 40f
 2:  mov     x0, x28
     mov     x1, x25
-    bl      node_replay_block
+    bl      lantern_node_replay_block
     add     x27, x27, #1
 3:  add     x25, x25, #1
     b       1b
 10: ADDQ    x0, x19, Node_replay_root       /* the NodeBlock path from the replay's block, down to the next slot */
-    bl      node_find_block
+    bl      lantern_node_find_block
     cmn     x0, #1
     b.eq    60f
     ldr     x9, [x23]
@@ -5820,7 +5820,7 @@ LOCAL_FUNCTION node_replay_due
     str     x0, [x10, x28, lsl #3]
     add     x28, x28, #1
     add     x0, x0, #NodeBlock_parent_root
-    bl      node_find_block
+    bl      lantern_node_find_block
     cmn     x0, #1
     b.eq    14f
     mov     x0, x1
@@ -5830,7 +5830,7 @@ LOCAL_FUNCTION node_replay_due
     b.hs    40f
     cbz     x27, 16f
     mov     x0, #1024
-    bl      node_room
+    bl      lantern_node_room
     cbz     x0, 40f
 16: sub     x28, x28, #1
     ldr     x10, [sp, #(L + 8)]
@@ -5838,7 +5838,7 @@ LOCAL_FUNCTION node_replay_due
     ldr     x0, [x9, #NodeBlock_data_id]
     ldr     x1, [x9, #NodeBlock_slot]
     add     x25, x1, #1
-    bl      node_replay_block
+    bl      lantern_node_replay_block
     add     x27, x27, #1
     b       14b
 15: add     x25, x26, #1                    /* the path's last: the replay's block */
@@ -5853,7 +5853,7 @@ LOCAL_FUNCTION node_replay_due
 60: LDQ     x1, x19, Node_replay_copy       /* a block it cannot find: no replay */
     mov     x0, #NODE_ACT_STATE_FREE
     mov     x2, #0
-    bl      node_ids
+    bl      lantern_node_ids
     STQ     xzr, x19, Node_replay_copy
     ADDQ    x0, x19, Node_replay_root
     mov     x1, #32
@@ -5874,14 +5874,14 @@ LOCAL_FUNCTION node_replay_due
     mov     x0, x21
     ldr     x1, [x21, #(NodeApi_cursor + API_REPLAY_SLOT)]
     ldr     x2, [sp, #(L + 16)]
-    bl      node_api_rerun
+    bl      lantern_node_api_rerun
 72: add     x21, x21, #NodeApi__mem
     sub     x22, x22, #1
     b       71b
 90: ldr     x9, [sp, #L]
     str     x9, [x23]
 99: LEAVE 32
-END_FUNCTION node_replay_due
+END_FUNCTION lantern_node_replay_due
 
 /*
  * (node, work, state_a, scratch, event) -> status: a NODE_WORK_API_LOOKUP of lantern_node_run
@@ -5889,7 +5889,7 @@ END_FUNCTION node_replay_due
  * root of the NodeApi entry at the work's arg, or 2^64 - 1. x19 the node, x21 the work, x22 the
  * state, x23 the event, x24 the root, x25 the slot, x26 the lowest slot.
  */
-LOCAL_FUNCTION node_api_lookup_run
+LOCAL_FUNCTION lantern_node_api_lookup_run
     ENTER 0
     mov     x19, x0
     mov     x21, x1
@@ -5910,7 +5910,7 @@ LOCAL_FUNCTION node_api_lookup_run
     add     x24, x10, #NodeApi_cursor
     ldr     x0, [x22, #NODE_STATE_SLOT]     /* the state's own root */
     add     x1, x19, #Node_config
-    bl      node_fork
+    bl      lantern_node_fork
     mov     x15, x0
     mov     x0, x22
     LDQ     x1, x19, Node_config + CONFIG_STATE_CACHE
@@ -5921,7 +5921,7 @@ LOCAL_FUNCTION node_api_lookup_run
     ldr     x25, [x22, #NODE_STATE_SLOT]
     add     x0, x23, #NodeEvent_root
     mov     x1, x24
-    bl      node_api_same_root
+    bl      lantern_node_api_same_root
     cbnz    x0, 80f
     subs    x26, x25, #SLOTS_PER_HISTORICAL_ROOT    /* then its state_roots, from the slot below it down */
     csel    x26, xzr, x26, lo
@@ -5932,7 +5932,7 @@ LOCAL_FUNCTION node_api_lookup_run
     ADDQ    x0, x22, NODE_STATE_STATE_ROOTS
     add     x0, x0, x9, lsl #5
     mov     x1, x24
-    bl      node_api_same_root
+    bl      lantern_node_api_same_root
     cbz     x0, 1b
 80: str     x25, [x23, #NodeEvent_index]
 90: mov     x0, #LANTERN_OK
@@ -5946,10 +5946,10 @@ LOCAL_FUNCTION node_api_lookup_run
     LEAVE 0
 98: mov     x0, #LANTERN_INVALID_EVENT
     LEAVE 0
-END_FUNCTION node_api_lookup_run
+END_FUNCTION lantern_node_api_lookup_run
 
 /* L0: x0 = 1 when the 32 bytes at x0 and x1 are the same, else 0. Uses x9-x12. */
-LOCAL_FUNCTION node_api_same_root
+LOCAL_FUNCTION lantern_node_api_same_root
     UNWIND_END_PROLOGUE
     ldp     x9, x10, [x0]
     ldp     x11, x12, [x1]
@@ -5964,12 +5964,12 @@ LOCAL_FUNCTION node_api_same_root
     ret
 8:  mov     x0, #0
     ret
-END_FUNCTION node_api_same_root
+END_FUNCTION lantern_node_api_same_root
 
 /* ---------------------------------------------------------------- Streams (node.md, NodeApi) */
 
 /* L0: x0 = the free NodeApi entries of the node x19: the capacity past the count, and the free ones below it. Uses x9-x12, x16. */
-LOCAL_FUNCTION node_api_free
+LOCAL_FUNCTION lantern_node_api_free
     UNWIND_END_PROLOGUE
     PART    x9, x10, x19, Node_api
     LDQ     x11, x19, Node_pool
@@ -5986,10 +5986,10 @@ LOCAL_FUNCTION node_api_free
     sub     x10, x10, #1
     b       1b
 9:  ret
-END_FUNCTION node_api_free
+END_FUNCTION lantern_node_api_free
 
 /* L0: x0 = the index of the NodeApi entry of the connection x0, or 2^64 - 1; x1 = the entry. Uses x9-x12, x16. */
-LOCAL_FUNCTION node_api_find
+LOCAL_FUNCTION lantern_node_api_find
     UNWIND_END_PROLOGUE
     PART    x9, x10, x19, Node_api
     mov     x11, #0
@@ -6007,7 +6007,7 @@ LOCAL_FUNCTION node_api_find
 4:  mov     x0, x11
     mov     x1, x9
     ret
-END_FUNCTION node_api_find
+END_FUNCTION lantern_node_api_find
 
 /*
  * L2: (connection x0, route x1, flags x2, view x3) -> x0: produceBlockV3 (node.md, Block
@@ -6016,7 +6016,7 @@ END_FUNCTION node_api_find
  * else the status of the error to answer. x21 the entry, x22 its index, x25 the route, x26 the
  * view, x27 the connection, x28 the flags.
  */
-LOCAL_FUNCTION node_api_produce
+LOCAL_FUNCTION lantern_node_api_produce
     ENTER 0
     mov     x27, x0
     mov     x25, x1
@@ -6030,7 +6030,7 @@ LOCAL_FUNCTION node_api_produce
     cbz     x9, 8f
     orr     x28, x28, #API_STREAM_OWN_STATE
     orr     x28, x28, #API_STREAM_BUSY
-    bl      node_api_new
+    bl      lantern_node_api_new
     mov     x22, x0
     mov     x21, x1
     mov     x0, x21
@@ -6045,7 +6045,7 @@ LOCAL_FUNCTION node_api_produce
     ldr     x0, [x25, #ApiRoute_slot]
     str     x0, [x21, #NodeApi_slot]
     add     x1, x19, #Node_config
-    bl      node_fork
+    bl      lantern_node_fork
     str     x0, [x21, #NodeApi_fork]
     mov     x9, #NODE_PRODUCE_STATE
     str     x9, [x21, #NodeApi_member]
@@ -6072,19 +6072,19 @@ LOCAL_FUNCTION node_api_produce
     mov     x3, #0
     mov     x4, x22
     mov     x5, #0
-    bl      node_work
+    bl      lantern_node_work
     mov     x0, #0
     LEAVE 0
 8:  mov     x0, #500
     LEAVE 0
-END_FUNCTION node_api_produce
+END_FUNCTION lantern_node_api_produce
 
 /*
  * L2: the NODE_EV_WORK_DONE x0 of a work of block production (node.md, Block production): the
  * produceBlockV3 entry at its target goes on, or answers its error. x21 the event, x22 the entry,
  * x25 the result.
  */
-LOCAL_FUNCTION node_produce_done
+LOCAL_FUNCTION lantern_node_produce_done
     ENTER 0
     mov     x21, x0
     ldr     x9, [x21, #NodeAction_target]
@@ -6113,14 +6113,14 @@ LOCAL_FUNCTION node_produce_done
     str     xzr, [x22, #NodeApi_root]
     mov     x0, #NODE_ACT_BYTES_FREE
     mov     x2, #0
-    bl      node_ids
+    bl      lantern_node_ids
 1:  str     xzr, [x22, #NodeApi_root]
 2:  ldr     x9, [x22, #NodeApi_flags]       /* the connection closed meanwhile: the entry ends */
     tbz     x9, #5, 3f                      /* API_STREAM_GONE */
     mov     x0, x22
-    bl      node_produce_release
+    bl      lantern_node_produce_release
     mov     x0, x22
-    bl      node_api_end
+    bl      lantern_node_api_end
     LEAVE 0
 3:  ldr     x9, [x21, #NodeAction_work_kind]
     cmp     x9, #NODE_WORK_PRODUCE_CHECK
@@ -6132,11 +6132,11 @@ LOCAL_FUNCTION node_produce_done
     cbnz    x25, 8f
     ldr     x0, [x22, #NodeApi_slot]        /* from bellatrix with a head of a payload: the engine's payload first */
     add     x1, x19, #Node_config
-    bl      node_fork
+    bl      lantern_node_fork
     cmp     x0, #FORK_BELLATRIX
     b.lo    10f
     add     x0, x19, #Node_head_root
-    bl      node_store_find
+    bl      lantern_node_store_find
     cmn     x0, #1
     b.eq    10f
     ldp     x9, x10, [x1, #BlockNode_block_hash]
@@ -6150,18 +6150,18 @@ LOCAL_FUNCTION node_produce_done
     add     x2, x1, #BlockNode_block_hash   /* with a builder: its getHeader */
     mov     x0, x22
     mov     x1, x21
-    bl      node_produce_header
+    bl      lantern_node_produce_header
     LEAVE 0
 10: mov     x9, #NODE_PRODUCE_FOLD
     str     x9, [x22, #NodeApi_member]
     str     xzr, [x22, #NodeApi_filter_slot]
     mov     x0, x22
-    bl      node_produce_next
+    bl      lantern_node_produce_next
     LEAVE 0
 20: cmp     x9, #NODE_WORK_PRODUCE_FOLD     /* the draft holds the entry, or the rules left it out: the next */
     b.ne    25f
     mov     x0, x22
-    bl      node_produce_next
+    bl      lantern_node_produce_next
     LEAVE 0
 25: cmp     x9, #NODE_WORK_PRODUCE_ETH1     /* PRODUCE_ETH1: the snapshot goes; then the header call's wait, at the quiet point */
     b.ne    30f
@@ -6169,7 +6169,7 @@ LOCAL_FUNCTION node_produce_done
     str     xzr, [x22, #(NodeApi_cursor + PRODUCE_ETH1_SNAP)]
     mov     x0, #NODE_ACT_BYTES_FREE
     mov     x2, #0
-    bl      node_ids
+    bl      lantern_node_ids
     mov     x1, #500
     cbnz    x25, 8f
     mov     x9, #NODE_PRODUCE_BID
@@ -6181,20 +6181,20 @@ LOCAL_FUNCTION node_produce_done
     str     xzr, [x22, #(NodeApi_cursor + PRODUCE_BID)]
     mov     x0, #NODE_ACT_BYTES_FREE
     mov     x2, #0
-    bl      node_ids
+    bl      lantern_node_ids
     cbnz    x25, 32f
     add     x0, x21, #NodeEvent_chunk
-    bl      node_put
+    bl      lantern_node_put
     str     x0, [x22, #(NodeApi_cursor + PRODUCE_BID)]
 32: mov     x0, x22
-    bl      node_produce_build
+    bl      lantern_node_produce_build
     LEAVE 0
 31: mov     x1, #500                        /* PRODUCE_BLOCK: the block's bytes, answered as a block's */
     cbnz    x25, 8f
     mov     x0, x22
-    bl      node_produce_release
+    bl      lantern_node_produce_release
     add     x0, x21, #NodeEvent_chunk
-    bl      node_put
+    bl      lantern_node_put
     str     x0, [x22, #NodeApi_data]
     ldr     x9, [x22, #NodeApi_flags]
     orr     x9, x9, #API_STREAM_OWN
@@ -6211,24 +6211,24 @@ LOCAL_FUNCTION node_produce_done
     mov     x1, #(NodeApi_slot - NodeApi_cursor)
     bl      lantern_zero
     mov     x0, x22
-    bl      node_produce_answer
+    bl      lantern_node_produce_answer
     LEAVE 0
 8:  mov     x0, x22
-    bl      node_produce_fail
+    bl      lantern_node_produce_fail
 9:  LEAVE 0
-END_FUNCTION node_produce_done
+END_FUNCTION lantern_node_produce_done
 
 /* L1: the answer of the produceBlockV3 entry x0, whose block's bytes are its data: its first chunk. Uses x9-x12. */
-LOCAL_FUNCTION node_produce_answer
+LOCAL_FUNCTION lantern_node_produce_answer
     FRAME 0
     mov     x1, x0
     PART    x9, x10, x19, Node_api
     sub     x0, x1, x9
     mov     x11, #NodeApi__mem
     udiv    x0, x0, x11
-    bl      node_api_chunk_work
+    bl      lantern_node_api_chunk_work
     UNFRAME 0
-END_FUNCTION node_produce_answer
+END_FUNCTION lantern_node_produce_answer
 
 /*
  * L2: the next work of the produceBlockV3 entry x0 in NODE_PRODUCE_FOLD: a PRODUCE_FOLD of the
@@ -6236,7 +6236,7 @@ END_FUNCTION node_produce_answer
  * of api_produce_kinds; after the last, NODE_PRODUCE_BUILD and its PRODUCE_BLOCK. x21 the entry,
  * x22 its index, x25 a pool entry, x26 the pool index, x27 the kind's index, x28 its topic.
  */
-LOCAL_FUNCTION node_produce_next
+LOCAL_FUNCTION lantern_node_produce_next
     ENTER 0
     mov     x21, x0
     PART    x9, x10, x19, Node_api
@@ -6250,9 +6250,9 @@ LOCAL_FUNCTION node_produce_next
     cbnz    x9, 11f
     mov     x0, #NODE_ACT_BYTES_NEW
     mov     x1, #NODE_ACT_BYTES_NEW_SIZE
-    bl      node_act
+    bl      lantern_node_act
     mov     x25, x0
-    bl      node_new_id
+    bl      lantern_node_new_id
     str     x0, [x25, #16]
     str     x0, [x21, #NodeApi_data]
     MOVQ    x9, ProduceDraft__size + 24
@@ -6289,14 +6289,14 @@ LOCAL_FUNCTION node_produce_next
     ldr     x2, [x25, #NodePool_data_id]
     ldr     x3, [x21, #NodeApi_data]
     mov     x4, x22
-    bl      node_work
+    bl      lantern_node_work
     LEAVE 0
 3:  add     x27, x27, #1                    /* the next kind, from the pool's first entry */
     mov     x26, #0
     b       1b
 5:  mov     x9, #NODE_PRODUCE_ETH1          /* after the last fold: the eth1 vote and deposits from the follower's snapshot */
     str     x9, [x21, #NodeApi_member]
-    bl      node_eth1_snapshot
+    bl      lantern_node_eth1_snapshot
     str     x0, [x21, #(NodeApi_cursor + PRODUCE_ETH1_SNAP)]
     mov     x2, x0
     mov     x0, #NODE_WORK_PRODUCE_ETH1
@@ -6304,16 +6304,16 @@ LOCAL_FUNCTION node_produce_next
     ldr     x3, [x21, #NodeApi_data]
     mov     x4, x22
     mov     x5, #0
-    bl      node_work
+    bl      lantern_node_work
     LEAVE 0
-END_FUNCTION node_produce_next
+END_FUNCTION lantern_node_produce_next
 
 /*
  * L2: the produceBlockV3 entry x0 in NODE_PRODUCE_BID with no call in flight goes on (node.md,
  * Block production): with the builder's answer at PRODUCE_BID a PRODUCE_BID work of it, else the
  * build. x21 the entry, x22 its index.
  */
-LOCAL_FUNCTION node_produce_bid_go
+LOCAL_FUNCTION lantern_node_produce_bid_go
     ENTER 0
     mov     x21, x0
     PART    x9, x10, x19, Node_api
@@ -6330,19 +6330,19 @@ LOCAL_FUNCTION node_produce_bid_go
     mov     x2, #0
     mov     x4, x22
     mov     x5, #0
-    bl      node_work
+    bl      lantern_node_work
     LEAVE 0
 5:  mov     x0, x21
-    bl      node_produce_build
+    bl      lantern_node_produce_build
     LEAVE 0
-END_FUNCTION node_produce_bid_go
+END_FUNCTION lantern_node_produce_bid_go
 
 /*
  * L2: the build of the produceBlockV3 entry x0 (node.md, Block production): NODE_PRODUCE_BUILD and
  * its PRODUCE_BLOCK of the copy, the engine's result, the draft and the bid at PRODUCE_BID as
  * state_c. x21 the entry, x22 its index.
  */
-LOCAL_FUNCTION node_produce_build
+LOCAL_FUNCTION lantern_node_produce_build
     ENTER 0
     mov     x21, x0
     PART    x9, x10, x19, Node_api
@@ -6360,11 +6360,11 @@ LOCAL_FUNCTION node_produce_build
     ldr     x3, [x21, #NodeApi_data]
     mov     x4, x22
     mov     x5, #0
-    bl      node_work
+    bl      lantern_node_work
     ldr     x9, [x21, #(NodeApi_cursor + PRODUCE_BID)]
     str     x9, [x0, #NodeAction_state_c]
     LEAVE 0
-END_FUNCTION node_produce_build
+END_FUNCTION lantern_node_produce_build
 
 /*
  * L1: at a quiet point (node.md, Block production, NODE_PRODUCE_BID): each produceBlockV3 entry
@@ -6373,7 +6373,7 @@ END_FUNCTION node_produce_build
  * while the actions have room for two works. x19 the node, x24 the actions; x21 an entry, x22 its
  * index, x26 the count.
  */
-LOCAL_FUNCTION node_produce_due
+LOCAL_FUNCTION lantern_node_produce_due
     ENTER 0
     PART    x21, x26, x19, Node_api
     mov     x22, #0
@@ -6404,47 +6404,47 @@ LOCAL_FUNCTION node_produce_due
     str     x11, [x10, #8]
     str     xzr, [x21, #(NodeApi_cursor + PRODUCE_CALL)]
 3:  mov     x0, #(2 * NODE_ACT_WORK_SIZE)
-    bl      node_room
+    bl      lantern_node_room
     cbz     x0, 9f
     mov     x0, x21
-    bl      node_produce_bid_go
+    bl      lantern_node_produce_bid_go
 2:  add     x21, x21, #NodeApi__mem
     add     x22, x22, #1
     b       1b
 9:  LEAVE 0
-END_FUNCTION node_produce_due
+END_FUNCTION lantern_node_produce_due
 
 /* L1: the draft and the engine's result of the produceBlockV3 entry x0 go. Locals: L the entry. */
-LOCAL_FUNCTION node_produce_release
+LOCAL_FUNCTION lantern_node_produce_release
     FRAME 16
     str     x0, [sp, #16]
-    ldr     x1, [x0, #NodeApi_data]         /* each field cleared first: node_ids leaves an entry's own bytes to it */
+    ldr     x1, [x0, #NodeApi_data]         /* each field cleared first: lantern_node_ids leaves an entry's own bytes to it */
     str     xzr, [x0, #NodeApi_data]
     cbz     x1, 1f
     mov     x0, #NODE_ACT_BYTES_FREE
     mov     x2, #0
-    bl      node_ids
+    bl      lantern_node_ids
 1:  ldr     x0, [sp, #16]
     ldr     x1, [x0, #NodeApi_filter_index]
     str     xzr, [x0, #NodeApi_filter_index]
     cbz     x1, 2f
     mov     x0, #NODE_ACT_BYTES_FREE
     mov     x2, #0
-    bl      node_ids
+    bl      lantern_node_ids
 2:  ldr     x0, [sp, #16]                   /* the eth1 snapshot of a work in flight */
     ldr     x1, [x0, #(NodeApi_cursor + PRODUCE_ETH1_SNAP)]
     str     xzr, [x0, #(NodeApi_cursor + PRODUCE_ETH1_SNAP)]
     cbz     x1, 21f
     mov     x0, #NODE_ACT_BYTES_FREE
     mov     x2, #0
-    bl      node_ids
+    bl      lantern_node_ids
 21: ldr     x0, [sp, #16]                   /* the builder's answer or bid */
     ldr     x1, [x0, #(NodeApi_cursor + PRODUCE_BID)]
     str     xzr, [x0, #(NodeApi_cursor + PRODUCE_BID)]
     cbz     x1, 3f
     mov     x0, #NODE_ACT_BYTES_FREE
     mov     x2, #0
-    bl      node_ids
+    bl      lantern_node_ids
 3:  ldr     x0, [sp, #16]                   /* its header call in flight answers no entry */
     ldr     x9, [x0, #(NodeApi_cursor + PRODUCE_CALL)]
     str     xzr, [x0, #(NodeApi_cursor + PRODUCE_CALL)]
@@ -6456,13 +6456,13 @@ LOCAL_FUNCTION node_produce_release
     mov     x11, #-1
     str     x11, [x10, #8]
 4:  UNFRAME 16
-END_FUNCTION node_produce_release
+END_FUNCTION lantern_node_produce_release
 
 /*
  * L2: the error x1 to the produceBlockV3 entry x0, then its end: its draft and engine result go,
  * and its state with API_STREAM_OWN_STATE. Locals: L the entry.
  */
-LOCAL_FUNCTION node_produce_fail
+LOCAL_FUNCTION lantern_node_produce_fail
     FRAME 16
     str     x0, [sp, #16]
     mov     x2, x1
@@ -6476,13 +6476,13 @@ LOCAL_FUNCTION node_produce_fail
     tst     x9, #API_STREAM_HTTP10
     mov     x10, #API_R_KEEP
     csel    x4, x10, xzr, ne
-1:  bl      node_api_send
+1:  bl      lantern_node_api_send
 2:  ldr     x0, [sp, #16]
-    bl      node_produce_release
+    bl      lantern_node_produce_release
     ldr     x0, [sp, #16]
-    bl      node_api_end
+    bl      lantern_node_api_end
     UNFRAME 16
-END_FUNCTION node_produce_fail
+END_FUNCTION lantern_node_produce_fail
 
 /*
  * L2: (connection x0, route x1, flags x2, request x3) -> x0: publishBlockV2 (node.md, Block
@@ -6491,7 +6491,7 @@ END_FUNCTION node_produce_fail
  * entry, x22 its index, x25 the route, x26 the request, x27 the connection, x28 the flags.
  * Locals: L a ByteList view of the body.
  */
-LOCAL_FUNCTION node_api_publish
+LOCAL_FUNCTION lantern_node_api_publish
     ENTER 32
     mov     x27, x0
     mov     x25, x1
@@ -6504,7 +6504,7 @@ LOCAL_FUNCTION node_api_publish
     sub     x13, x10, x12
     stp     x11, x13, [x12]
     str     x11, [x12, #16]
-    bl      node_api_new
+    bl      lantern_node_api_new
     mov     x22, x0
     mov     x21, x1
     mov     x0, x21
@@ -6533,7 +6533,7 @@ LOCAL_FUNCTION node_api_publish
     csel    x9, xzr, x9, lo
     str     x9, [x21, #(NodeApi_cursor + PUBLISH_BLINDED)]
     add     x0, sp, #L
-    bl      node_put
+    bl      lantern_node_put
     str     x0, [x21, #NodeApi_data]
     mov     x3, x0
     mov     x0, #NODE_WORK_PUBLISH_DECODE
@@ -6546,25 +6546,25 @@ LOCAL_FUNCTION node_api_publish
     orr     x5, x5, x9, lsl #8
     ldr     x9, [x21, #(NodeApi_cursor + PUBLISH_BLINDED)]
     orr     x5, x5, x9, lsl #9
-    bl      node_work
+    bl      lantern_node_work
     mov     x0, #0
     LEAVE 32
 8:  mov     x0, #400
     LEAVE 32
-END_FUNCTION node_api_publish
+END_FUNCTION lantern_node_api_publish
 
 /*
  * L2: the NODE_EV_WORK_DONE x0 of a work of block publishing (node.md, Block publishing): the
  * publishBlockV2 entry at its target goes on, or answers. x21 the event, x22 the entry, x25 the
  * result, x26 the kind, x27 the block's bytes in the event.
  */
-LOCAL_FUNCTION node_publish_done
+LOCAL_FUNCTION lantern_node_publish_done
     ENTER 16
     mov     x21, x0
     ldr     x9, [x21, #NodeAction_target]
     cmn     x9, #1                          /* a sidecar of the reconstruction */
     b.ne    100f
-    bl      node_recon_sidecar_done
+    bl      lantern_node_recon_sidecar_done
     LEAVE 16
 100: PART   x22, x10, x19, Node_api
     cmp     x9, x10
@@ -6587,7 +6587,7 @@ LOCAL_FUNCTION node_publish_done
     ldr     x10, [x21, #NodeEvent_result]
     cbz     x10, 1f
 2:  mov     x0, x22
-    bl      node_publish_end
+    bl      lantern_node_publish_end
     LEAVE 16
 1:  ldr     x25, [x21, #NodeEvent_result]
     ldr     x26, [x21, #NodeAction_work_kind]
@@ -6596,7 +6596,7 @@ LOCAL_FUNCTION node_publish_done
     cbz     x25, 12f
     str     xzr, [x22, #(NodeApi_cursor + 40)]
     mov     x0, x22
-    bl      node_publish_drop
+    bl      lantern_node_publish_drop
     LEAVE 16
 12: mov     x1, #400                        /* a check that fails: 400 */
     cbnz    x25, 90f
@@ -6604,7 +6604,7 @@ LOCAL_FUNCTION node_publish_done
     cmp     x26, #NODE_WORK_PUBLISH_DECODE
     b.ne    20f
     mov     x0, x27                         /* DECODE: the block's bytes, root, slot, blob count, parent */
-    bl      node_put
+    bl      lantern_node_put
     str     x0, [x22, #NodeApi_filter_slot]
     add     x0, x22, #NodeApi_root
     add     x1, x21, #NodeEvent_root
@@ -6620,13 +6620,13 @@ LOCAL_FUNCTION node_publish_done
     bl      lantern_copy_root
     ldr     x0, [x22, #NodeApi_slot]        /* a slot of another fork than consensus_version's: 400 */
     add     x1, x19, #Node_config
-    bl      node_fork
+    bl      lantern_node_fork
     ldr     x9, [x22, #NodeApi_fork]
     mov     x1, #400
     cmp     x0, x9
     b.ne    90f
     add     x0, x22, #NodeApi_root          /* a block the node holds: 200 */
-    bl      node_find_block
+    bl      lantern_node_find_block
     cmn     x0, #1
     b.eq    11f
     ldr     x9, [x1, #NodeBlock_status]
@@ -6638,7 +6638,7 @@ LOCAL_FUNCTION node_publish_done
     ldr     x9, [x22, #(NodeApi_cursor + 16)]   /* with blobs: the sidecars, else the check */
     cbz     x9, 30f
     mov     x0, x22
-    bl      node_publish_sidecars_work
+    bl      lantern_node_publish_sidecars_work
     LEAVE 16
 20: cmp     x26, #NODE_WORK_PUBLISH_SIDECARS    /* SIDECARS: the check */
     b.eq    30f
@@ -6646,7 +6646,7 @@ LOCAL_FUNCTION node_publish_done
     b.ne    22f
     mov     x0, x22                         /* SIDECAR: it goes out and stays, then the next */
     mov     x1, x21
-    bl      node_publish_sidecar_done
+    bl      lantern_node_publish_sidecar_done
     LEAVE 16
 22: cmp     x26, #NODE_WORK_PUBLISH_CHECK
     b.ne    99f
@@ -6654,11 +6654,11 @@ LOCAL_FUNCTION node_publish_done
     cbz     x9, 25f
     mov     x0, x22
     mov     x1, x27
-    bl      node_publish_submit
+    bl      lantern_node_publish_submit
     cbz     x0, 99f
     mov     x1, x0
     b       90f
-25: bl      node_new_block                  /* CHECK: the block's NodeBlock, before the publish */
+25: bl      lantern_node_new_block                  /* CHECK: the block's NodeBlock, before the publish */
     str     x0, [sp, #L]
     add     x0, x1, #NodeBlock_root
     add     x9, x22, #NodeApi_root
@@ -6683,41 +6683,41 @@ LOCAL_FUNCTION node_publish_done
     add     x1, x22, #NodeApi_root
     ldr     x2, [x22, #NodeApi_slot]
     mov     x3, #0
-    bl      node_api_root_event
+    bl      lantern_node_api_root_event
     ldr     x9, [x19, #Node_flags]          /* subscribed: the block out on beacon_block */
     tbz     x9, #2, 21f
     mov     x0, #GOSSIP_BEACON_BLOCK
     mov     x1, x27
     mov     x2, #0
-    bl      node_publish
+    bl      lantern_node_publish
 21: mov     x9, #NODE_PUBLISH_IMPORT        /* the import, the sidecars one at a time, then the answer */
     str     x9, [x22, #NodeApi_member]
     ldr     x9, [x22, #NodeApi_filter_index]
     cbz     x9, 23f
     str     xzr, [x22, #(NodeApi_cursor + 40)]
     mov     x0, x22
-    bl      node_publish_sidecar_work
+    bl      lantern_node_publish_sidecar_work
     b       24f
 23: mov     x0, x22
-    bl      node_publish_drop
+    bl      lantern_node_publish_drop
 24: ldr     x0, [sp, #L]
-    bl      node_try_import
+    bl      lantern_node_try_import
     LEAVE 16
 30: mov     x0, x22                         /* the check */
-    bl      node_publish_check_work
+    bl      lantern_node_publish_check_work
     cbz     x0, 99f
     mov     x1, x0
 90: mov     x0, x22
-    bl      node_publish_answer
+    bl      lantern_node_publish_answer
 99: LEAVE 16
-END_FUNCTION node_publish_done
+END_FUNCTION lantern_node_publish_done
 
 /*
  * L1: the PUBLISH_SIDECARS of the publishBlockV2 entry x0 (node.md, NODE_PUBLISH_SIDECARS): a
  * BYTES_NEW of the sidecars' room, its id the entry's filter_index, then the work. Locals: the
  * entry, the room, the action.
  */
-LOCAL_FUNCTION node_publish_sidecars_work
+LOCAL_FUNCTION lantern_node_publish_sidecars_work
     FRAME 32
     str     x0, [sp, #16]
     ldr     x9, [x0, #(NodeApi_cursor + 16)]    /* the blob count */
@@ -6737,9 +6737,9 @@ LOCAL_FUNCTION node_publish_sidecars_work
     str     x11, [sp, #24]
     mov     x0, #NODE_ACT_BYTES_NEW
     mov     x1, #NODE_ACT_BYTES_NEW_SIZE
-    bl      node_act
+    bl      lantern_node_act
     str     x0, [sp, #32]
-    bl      node_new_id
+    bl      lantern_node_new_id
     ldr     x9, [sp, #32]
     str     x0, [x9, #16]
     ldr     x10, [sp, #24]
@@ -6763,15 +6763,15 @@ LOCAL_FUNCTION node_publish_sidecars_work
     orr     x5, x5, x10, lsl #8
     mov     x0, #NODE_WORK_PUBLISH_SIDECARS
     mov     x1, #0
-    bl      node_work
+    bl      lantern_node_work
     UNFRAME 32
-END_FUNCTION node_publish_sidecars_work
+END_FUNCTION lantern_node_publish_sidecars_work
 
 /*
  * L1: the PUBLISH_SIDECAR of the next sidecar (cursor + 40) of the publishBlockV2 entry x0 in
  * NODE_PUBLISH_IMPORT. Locals: the entry.
  */
-LOCAL_FUNCTION node_publish_sidecar_work
+LOCAL_FUNCTION lantern_node_publish_sidecar_work
     FRAME 16
     str     x0, [sp, #16]
     ldr     x10, [x0, #NodeApi_flags]
@@ -6786,9 +6786,9 @@ LOCAL_FUNCTION node_publish_sidecar_work
     mov     x0, #NODE_WORK_PUBLISH_SIDECAR
     mov     x1, #0
     mov     x3, #0
-    bl      node_work
+    bl      lantern_node_work
     UNFRAME 16
-END_FUNCTION node_publish_sidecar_work
+END_FUNCTION lantern_node_publish_sidecar_work
 
 /*
  * L2: the WORK_DONE x0 of a PUBLISH_SIDECAR of the reconstruction (node.md): recon_state 2; a
@@ -6796,7 +6796,7 @@ END_FUNCTION node_publish_sidecar_work
  * NODE_FLAG_SUBSCRIBED, a column of columns and recon_slot above F's slot. x22 the event, x25 the
  * sidecar's ByteList.
  */
-LOCAL_FUNCTION node_recon_sidecar_done
+LOCAL_FUNCTION lantern_node_recon_sidecar_done
     ENTER 0
     mov     x22, x0
     mov     x9, #2
@@ -6806,12 +6806,12 @@ LOCAL_FUNCTION node_recon_sidecar_done
     add     x25, x22, #NodeEvent_chunk
     add     x0, x22, #NodeEvent_root
     ldr     x1, [x22, #NodeEvent_index]
-    bl      node_blob_held
+    bl      lantern_node_blob_held
     cbnz    x0, 3f
     mov     x0, x25
-    bl      node_put
+    bl      lantern_node_put
     mov     x26, x0
-    bl      node_new_blob
+    bl      lantern_node_new_blob
     add     x0, x1, #NodeBlob_block_root
     add     x9, x22, #NodeEvent_root
     COPY32  x0, x9
@@ -6825,11 +6825,11 @@ LOCAL_FUNCTION node_recon_sidecar_done
     ldr     x9, [x25, #16]
     str     x9, [x1, #NodeBlob_length]
     add     x0, x22, #NodeEvent_root
-    bl      node_blob_added
+    bl      lantern_node_blob_added
 3:  ldr     x9, [x19, #Node_flags]          /* subscribed: out on its subnet's topic */
     tbz     x9, #2, 9f
     ldr     x0, [x22, #NodeEvent_index]
-    bl      node_sampled
+    bl      lantern_node_sampled
     cbz     x0, 9f
     ldr     x9, [x20, #Store_finalized_checkpoint]
     mov     x10, #SLOTS_PER_EPOCH
@@ -6844,9 +6844,9 @@ LOCAL_FUNCTION node_recon_sidecar_done
     msub    x2, x13, x12, x10
     mov     x0, #GOSSIP_DATA_COLUMN_SIDECAR
     mov     x1, x25
-    bl      node_publish
+    bl      lantern_node_publish
 9:  LEAVE 0
-END_FUNCTION node_recon_sidecar_done
+END_FUNCTION lantern_node_recon_sidecar_done
 
 /*
  * L2: the WORK_DONE x1 of a valid PUBLISH_SIDECAR of the publishBlockV2 entry x0: the sidecar
@@ -6854,7 +6854,7 @@ END_FUNCTION node_recon_sidecar_done
  * goes out on its subnet's topic with NODE_FLAG_SUBSCRIBED, then the next. x21 the entry, x22 the
  * event, x25 the sidecar's ByteList, x26 its id. Step code keeps x23 and x24.
  */
-LOCAL_FUNCTION node_publish_sidecar_done
+LOCAL_FUNCTION lantern_node_publish_sidecar_done
     ENTER 0
     mov     x21, x0
     mov     x22, x1
@@ -6864,16 +6864,16 @@ LOCAL_FUNCTION node_publish_sidecar_done
     cmp     x9, #FORK_FULU
     b.lo    1f
     ldr     x0, [x22, #NodeEvent_index]     /* a column the node samples */
-    bl      node_sampled
+    bl      lantern_node_sampled
     cbz     x0, 3f
 1:  add     x0, x22, #NodeEvent_root        /* one the node does not hold yet */
     ldr     x1, [x22, #NodeEvent_index]
-    bl      node_blob_held
+    bl      lantern_node_blob_held
     cbnz    x0, 3f
     mov     x0, x25
-    bl      node_put
+    bl      lantern_node_put
     mov     x26, x0
-    bl      node_new_blob
+    bl      lantern_node_new_blob
     add     x0, x1, #NodeBlob_block_root
     add     x9, x22, #NodeEvent_root
     COPY32  x0, x9
@@ -6887,19 +6887,19 @@ LOCAL_FUNCTION node_publish_sidecar_done
     ldr     x9, [x25, #16]
     str     x9, [x1, #NodeBlob_length]
     add     x0, x22, #NodeEvent_root
-    bl      node_blob_added
+    bl      lantern_node_blob_added
 3:  ldr     x9, [x21, #NodeApi_fork]        /* its event: of its NodeBlob's bytes, else of a copy for the work */
     mov     x27, #API_TOPIC_BLOB_SIDECAR
     mov     x10, #API_TOPIC_DATA_COLUMN_SIDECAR
     cmp     x9, #FORK_FULU
     csel    x27, x10, x27, hs
     mov     x0, x27
-    bl      node_api_subscribed
+    bl      lantern_node_api_subscribed
     cbz     x0, 39f
     mov     x28, x26
     cbnz    x28, 38f
     mov     x0, x25
-    bl      node_put
+    bl      lantern_node_put
     mov     x28, x0
 38: mov     x0, #NODE_WORK_API_EVENT
     mov     x1, #0
@@ -6909,13 +6909,13 @@ LOCAL_FUNCTION node_publish_sidecar_done
     ldr     x5, [x21, #NodeApi_fork]
     lsl     x5, x5, #16
     orr     x5, x5, x27
-    bl      node_work
+    bl      lantern_node_work
     cmp     x28, x26
     b.eq    39f
     mov     x0, #NODE_ACT_BYTES_FREE
     mov     x1, x28
     mov     x2, #0
-    bl      node_ids
+    bl      lantern_node_ids
 39: ldr     x9, [x19, #Node_flags]          /* subscribed: out on its subnet's topic */
     tbz     x9, #2, 4f
     ldr     x10, [x22, #NodeEvent_index]
@@ -6936,7 +6936,7 @@ LOCAL_FUNCTION node_publish_sidecar_done
     udiv    x13, x10, x12
     msub    x2, x13, x12, x10
     mov     x1, x25
-    bl      node_publish
+    bl      lantern_node_publish
 4:  ldr     x9, [x21, #(NodeApi_cursor + 40)]   /* the next sidecar; after the last, the body and the sidecars go */
     add     x9, x9, #1
     str     x9, [x21, #(NodeApi_cursor + 40)]
@@ -6948,11 +6948,11 @@ LOCAL_FUNCTION node_publish_sidecar_done
     mov     x0, x21
     cmp     x9, x10
     b.hs    5f
-    bl      node_publish_sidecar_work
+    bl      lantern_node_publish_sidecar_work
     LEAVE 0
-5:  bl      node_publish_drop
+5:  bl      lantern_node_publish_drop
     LEAVE 0
-END_FUNCTION node_publish_sidecar_done
+END_FUNCTION lantern_node_publish_sidecar_done
 
 /*
  * L2: the PUBLISH_CHECK of the publishBlockV2 entry x0 (node.md, NODE_PUBLISH_CHECK): x0 = 0 once
@@ -6960,17 +6960,17 @@ END_FUNCTION node_publish_sidecar_done
  * entry, x22 the parent's entry, x25 the copy, x26 the head's state id, x27 the copy's slot, x28
  * the parent's fork.
  */
-LOCAL_FUNCTION node_publish_check_work
+LOCAL_FUNCTION lantern_node_publish_check_work
     ENTER 0
     mov     x21, x0
     add     x0, x19, #Node_head_root
-    bl      node_find_block
+    bl      lantern_node_find_block
     cmn     x0, #1
     b.eq    9f
     ldr     x26, [x1, #NodeBlock_state_id]
     cbz     x26, 9f
     add     x0, x21, #(NodeApi_cursor + 32)
-    bl      node_find_block
+    bl      lantern_node_find_block
     cmn     x0, #1
     b.eq    8f
     mov     x22, x1
@@ -6981,25 +6981,25 @@ LOCAL_FUNCTION node_publish_check_work
     ldr     x9, [x21, #NodeApi_flags]
     orr     x9, x9, #API_STREAM_BUSY
     str     x9, [x21, #NodeApi_flags]
-    bl      node_new_id                     /* the copy, across the fork boundaries to the slot */
+    bl      lantern_node_new_id                     /* the copy, across the fork boundaries to the slot */
     mov     x25, x0
     mov     x2, x0
     mov     x0, #NODE_ACT_STATE_COPY
     ldr     x1, [x22, #NodeBlock_state_id]
-    bl      node_ids
+    bl      lantern_node_ids
     mov     x0, x25
     ldr     x1, [x22, #NodeBlock_state_id]
     ldr     x2, [x22, #NodeBlock_slot]
     ldr     x3, [x21, #NodeApi_slot]
-    bl      node_cross
+    bl      lantern_node_cross
     mov     x25, x0
     ldr     x0, [x22, #NodeBlock_slot]      /* the copy's slot: the parent's, or the first of the block's fork after an upgrade */
     add     x1, x19, #Node_config
-    bl      node_fork
+    bl      lantern_node_fork
     mov     x28, x0
     ldr     x0, [x21, #NodeApi_slot]
     add     x1, x19, #Node_config
-    bl      node_fork
+    bl      lantern_node_fork
     ldr     x27, [x22, #NodeBlock_slot]
     cmp     x0, x28
     b.ls    1f
@@ -7018,7 +7018,7 @@ LOCAL_FUNCTION node_publish_check_work
     mov     x2, #0
     mov     x3, #0
     mov     x4, #0
-    bl      node_work
+    bl      lantern_node_work
 2:  PART    x9, x10, x19, Node_api
     sub     x4, x21, x9
     mov     x10, #NodeApi__mem
@@ -7030,42 +7030,42 @@ LOCAL_FUNCTION node_publish_check_work
     ldr     x5, [x21, #NodeApi_cursor]
     ldr     x9, [x21, #(NodeApi_cursor + PUBLISH_BLINDED)]   /* a blinded block's check */
     orr     x5, x5, x9, lsl #8
-    bl      node_work
+    bl      lantern_node_work
     str     x26, [x0, #NodeAction_state_c]
     mov     x0, #NODE_ACT_STATE_FREE
     mov     x1, x25
     mov     x2, #0
-    bl      node_ids
+    bl      lantern_node_ids
     mov     x0, #0
     LEAVE 0
 8:  mov     x0, #400
     LEAVE 0
 9:  mov     x0, #500
     LEAVE 0
-END_FUNCTION node_publish_check_work
+END_FUNCTION lantern_node_publish_check_work
 
 /* L1: the ids of the publishBlockV2 entry x0 but the block's bytes go: its body and sidecars. Locals: the entry. */
-LOCAL_FUNCTION node_publish_drop
+LOCAL_FUNCTION lantern_node_publish_drop
     FRAME 16
     str     x0, [sp, #16]
-    ldr     x1, [x0, #NodeApi_data]         /* each field cleared first: node_ids leaves an entry's own bytes to it */
+    ldr     x1, [x0, #NodeApi_data]         /* each field cleared first: lantern_node_ids leaves an entry's own bytes to it */
     str     xzr, [x0, #NodeApi_data]
     cbz     x1, 1f
     mov     x0, #NODE_ACT_BYTES_FREE
     mov     x2, #0
-    bl      node_ids
+    bl      lantern_node_ids
 1:  ldr     x0, [sp, #16]
     ldr     x1, [x0, #NodeApi_filter_index]
     str     xzr, [x0, #NodeApi_filter_index]
     cbz     x1, 2f
     mov     x0, #NODE_ACT_BYTES_FREE
     mov     x2, #0
-    bl      node_ids
+    bl      lantern_node_ids
 2:  UNFRAME 16
-END_FUNCTION node_publish_drop
+END_FUNCTION lantern_node_publish_drop
 
 /* L1: the end of the publishBlockV2 entry x0, its ids with it; its builder call in flight answers no entry. Locals: the entry. */
-LOCAL_FUNCTION node_publish_end
+LOCAL_FUNCTION lantern_node_publish_end
     FRAME 16
     str     x0, [sp, #16]
     ldr     x9, [x0, #(NodeApi_cursor + PUBLISH_CALL)]
@@ -7078,24 +7078,24 @@ LOCAL_FUNCTION node_publish_end
     mov     x11, #-1
     str     x11, [x10, #8]
 1:  ldr     x0, [sp, #16]
-    bl      node_publish_drop
+    bl      lantern_node_publish_drop
     ldr     x0, [sp, #16]
     ldr     x1, [x0, #NodeApi_filter_slot]
     str     xzr, [x0, #NodeApi_filter_slot]
     cbz     x1, 1f
     mov     x0, #NODE_ACT_BYTES_FREE
     mov     x2, #0
-    bl      node_ids
+    bl      lantern_node_ids
 1:  ldr     x0, [sp, #16]
-    bl      node_api_end
+    bl      lantern_node_api_end
     UNFRAME 16
-END_FUNCTION node_publish_end
+END_FUNCTION lantern_node_publish_end
 
 /*
  * L2: the answer x1 (200, 202, or an error) of the publishBlockV2 entry x0, then its end; with
  * API_STREAM_GONE no answer. Locals: the entry.
  */
-LOCAL_FUNCTION node_publish_answer
+LOCAL_FUNCTION lantern_node_publish_answer
     FRAME 16
     str     x0, [sp, #16]
     mov     x2, x1
@@ -7112,17 +7112,17 @@ LOCAL_FUNCTION node_publish_answer
     tst     x9, #API_STREAM_HTTP10
     mov     x10, #API_R_KEEP
     csel    x4, x10, xzr, ne
-1:  bl      node_api_send
+1:  bl      lantern_node_api_send
 2:  ldr     x0, [sp, #16]
-    bl      node_publish_end
+    bl      lantern_node_publish_end
     UNFRAME 16
-END_FUNCTION node_publish_answer
+END_FUNCTION lantern_node_publish_answer
 
 /*
  * L1: after the head (node.md, NODE_PUBLISH_IMPORT): each publishBlockV2 entry whose block's import
  * ended answers, 200 for a block the node imported, 202 for another. x21 an entry, x22 the count.
  */
-LOCAL_FUNCTION node_publish_poll
+LOCAL_FUNCTION lantern_node_publish_poll
     ENTER 0
     PART    x21, x22, x19, Node_api
 1:  cbz     x22, 9f
@@ -7137,7 +7137,7 @@ LOCAL_FUNCTION node_publish_poll
     ldr     x9, [x21, #NodeApi_flags]
     tbnz    x9, #4, 2f                      /* API_STREAM_BUSY: a work of it in flight */
     add     x0, x21, #NodeApi_root
-    bl      node_find_block
+    bl      lantern_node_find_block
     mov     x2, #202
     cmn     x0, #1
     b.eq    3f
@@ -7149,15 +7149,15 @@ LOCAL_FUNCTION node_publish_poll
     mov     x2, #200
 3:  mov     x0, x21
     mov     x1, x2
-    bl      node_publish_answer
+    bl      lantern_node_publish_answer
 2:  add     x21, x21, #NodeApi__mem
     sub     x22, x22, #1
     b       1b
 9:  LEAVE 0
-END_FUNCTION node_publish_poll
+END_FUNCTION lantern_node_publish_poll
 
 /* L0: x0 = the count of the publishBlockV2 entries. Uses x9-x12. */
-LOCAL_FUNCTION node_api_publish_count
+LOCAL_FUNCTION lantern_node_api_publish_count
     UNWIND_END_PROLOGUE
     mov     x0, #0
     PART    x9, x10, x19, Node_api
@@ -7171,10 +7171,10 @@ LOCAL_FUNCTION node_api_publish_count
     sub     x10, x10, #1
     b       1b
 9:  ret
-END_FUNCTION node_api_publish_count
+END_FUNCTION lantern_node_api_publish_count
 
 /* L0: x0 = the index of a free NodeApi entry (the first free, else the next; the step checked one is free), x1 = the entry. Uses x9-x12, x16. */
-LOCAL_FUNCTION node_api_new
+LOCAL_FUNCTION lantern_node_api_new
     UNWIND_END_PROLOGUE
     PART    x9, x10, x19, Node_api
     mov     x11, #0
@@ -7190,14 +7190,14 @@ LOCAL_FUNCTION node_api_new
 3:  mov     x0, x11
     mov     x1, x9
     ret
-END_FUNCTION node_api_new
+END_FUNCTION lantern_node_api_new
 
 /*
  * L1: the end of the stream of the NodeApi entry x0: the entry is free, the api part's count drops
- * past the free entries at its end; with API_STREAM_OWN, a BYTES_FREE of its data, which node_ids
+ * past the free entries at its end; with API_STREAM_OWN, a BYTES_FREE of its data, which lantern_node_ids
  * gives to another entry that sends the same bytes. Locals: L data, L+8 flags.
  */
-LOCAL_FUNCTION node_api_end
+LOCAL_FUNCTION lantern_node_api_end
     FRAME 32
     ldp     x9, x10, [x0, #NodeApi_flags]
     stp     x10, x9, [sp, #16]
@@ -7219,18 +7219,18 @@ LOCAL_FUNCTION node_api_end
     mov     x0, #NODE_ACT_BYTES_FREE
     ldr     x1, [sp, #16]
     mov     x2, #0
-    bl      node_ids
+    bl      lantern_node_ids
 8:  ldr     x9, [sp, #24]
     tbz     x9, #12, 9f                     /* API_STREAM_OWN_STATE */
     mov     x0, #NODE_ACT_STATE_FREE
     ldr     x1, [sp, #32]
     mov     x2, #0
-    bl      node_ids
+    bl      lantern_node_ids
 9:  UNFRAME 32
-END_FUNCTION node_api_end
+END_FUNCTION lantern_node_api_end
 
 /* L1: a NODE_WORK_API_CHUNK of the NodeApi entry x1 at index x0, which takes API_STREAM_BUSY. */
-LOCAL_FUNCTION node_api_chunk_work
+LOCAL_FUNCTION lantern_node_api_chunk_work
     FRAME 0
     ldr     x9, [x1, #NodeApi_flags]
     orr     x9, x9, #API_STREAM_BUSY
@@ -7241,14 +7241,14 @@ LOCAL_FUNCTION node_api_chunk_work
     ldr     x1, [x1, #NodeApi_state]        /* a validator stream's state */
     mov     x0, #NODE_WORK_API_CHUNK
     mov     x2, #0
-    bl      node_work
+    bl      lantern_node_work
     UNFRAME 0
-END_FUNCTION node_api_chunk_work
+END_FUNCTION lantern_node_api_chunk_work
 
 /* L1: NODE_EV_API_SENT of the connection x0: an event stream's sent is 0; another stream's next chunk, unless one is queued. */
-LOCAL_FUNCTION node_api_sent
+LOCAL_FUNCTION lantern_node_api_sent
     FRAME 0
-    bl      node_api_find
+    bl      lantern_node_api_find
     cmn     x0, #1
     b.eq    9f
     ldr     x9, [x1, #NodeApi_op]
@@ -7258,9 +7258,9 @@ LOCAL_FUNCTION node_api_sent
     b       9f
 1:  ldr     x9, [x1, #NodeApi_flags]
     tbnz    x9, #4, 9f                      /* API_STREAM_BUSY */
-    bl      node_api_chunk_work
+    bl      lantern_node_api_chunk_work
 9:  UNFRAME 0
-END_FUNCTION node_api_sent
+END_FUNCTION lantern_node_api_sent
 
 /* ---------------------------------------------------------------- Events (beacon-api.md, eventstream) */
 
@@ -7268,7 +7268,7 @@ END_FUNCTION node_api_sent
  * L1: (out x0, answer flags x1) -> x0: the head of an eventstream answer into the ByteList out, its
  * count set; LANTERN_OK, or LANTERN_BUFFER_TOO_SMALL. The writer's registers.
  */
-LOCAL_FUNCTION api_sse_head
+LOCAL_FUNCTION lantern_api_sse_head
     ENTER 0
     mov     x23, x0
     mov     x28, x1
@@ -7292,14 +7292,14 @@ LOCAL_FUNCTION api_sse_head
     LEAVE 0
 9:  mov     x0, #LANTERN_BUFFER_TOO_SMALL
     LEAVE 0
-END_FUNCTION api_sse_head
+END_FUNCTION lantern_api_sse_head
 
 /*
  * L1: (view x0, out x1, topic x2) -> x0: the text of the event of the topic, from the view's event
  * fields, into the ByteList out, its count set; LANTERN_OK, or LANTERN_BUFFER_TOO_SMALL. The
  * writer's registers; x28 the topic.
  */
-LOCAL_FUNCTION api_event_text
+LOCAL_FUNCTION lantern_api_event_text
     ENTER 0
     mov     x22, x0
     mov     x23, x1
@@ -7321,35 +7321,35 @@ LOCAL_FUNCTION api_event_text
     API_LIT api_ev_data
     API_LIT api_pa_version
     ldr     x0, [x22, #ApiView_fork]
-    bl      api_fork_name
+    bl      lantern_api_fork_name
     API_LIT api_ev_v2_slot
     ldr     x0, [x22, #ApiView_event_slot]
-    bl      api_qdec
+    bl      lantern_api_qdec
     API_LIT api_ev_block
     add     x0, x22, #ApiView_event_block
     mov     x1, #32
-    bl      api_qhex
+    bl      lantern_api_qhex
     API_LIT api_ev_state
     add     x0, x22, #ApiView_event_state
     mov     x1, #32
-    bl      api_qhex
+    bl      lantern_api_qhex
     API_LIT api_ev_full
     API_LIT api_ev_transition
     ldr     x0, [x22, #ApiView_event_flags]
     and     x0, x0, #1
-    bl      api_bool
+    bl      lantern_api_bool
     API_LIT api_ev_current_epoch
     add     x0, x22, #ApiView_event_previous
     mov     x1, #32
-    bl      api_qhex
+    bl      lantern_api_qhex
     API_LIT api_ev_next_epoch
     add     x0, x22, #ApiView_event_current
     mov     x1, #32
-    bl      api_qhex
+    bl      lantern_api_qhex
     API_LIT api_u_optimistic
     ldr     x0, [x22, #ApiView_event_flags]
     ubfx    x0, x0, #1, #1
-    bl      api_bool
+    bl      lantern_api_bool
     API_LIT api_end1
     b       61f
 1:  cmp     x28, #API_TOPIC_BLOCK
@@ -7373,11 +7373,11 @@ LOCAL_FUNCTION api_event_text
     /* block, block_gossip and head: {"slot":…,"block":… */
     API_LIT api_ev_slot
     ldr     x0, [x22, #ApiView_event_slot]
-    bl      api_qdec
+    bl      lantern_api_qdec
     API_LIT api_ev_block
     add     x0, x22, #ApiView_event_block
     mov     x1, #32
-    bl      api_qhex
+    bl      lantern_api_qhex
     cmp     x28, #API_TOPIC_BLOCK_GOSSIP
     b.eq    61f
     cmp     x28, #API_TOPIC_HEAD
@@ -7386,65 +7386,65 @@ LOCAL_FUNCTION api_event_text
     API_LIT api_ev_state
     add     x0, x22, #ApiView_event_state
     mov     x1, #32
-    bl      api_qhex
+    bl      lantern_api_qhex
     API_LIT api_ev_transition
     ldr     x0, [x22, #ApiView_event_flags]
     and     x0, x0, #1
-    bl      api_bool
+    bl      lantern_api_bool
     API_LIT api_ev_previous
     add     x0, x22, #ApiView_event_previous
     mov     x1, #32
-    bl      api_qhex
+    bl      lantern_api_qhex
     API_LIT api_ev_current
     add     x0, x22, #ApiView_event_current
     mov     x1, #32
-    bl      api_qhex
+    bl      lantern_api_qhex
     b       6f
     /* finalized_checkpoint: {"block":…,"state":…,"epoch":… */
 5:  API_LIT api_ev_block1
     add     x0, x22, #ApiView_event_block
     mov     x1, #32
-    bl      api_qhex
+    bl      lantern_api_qhex
     API_LIT api_ev_state
     add     x0, x22, #ApiView_event_state
     mov     x1, #32
-    bl      api_qhex
+    bl      lantern_api_qhex
     API_LIT api_k_epoch
     ldr     x0, [x22, #ApiView_event_epoch]
-    bl      api_qdec
+    bl      lantern_api_qdec
     b       6f
     /* chain_reorg: {"slot":…,"depth":…,"old_head_block":…,"new_head_block":…,"old_head_state":…,"new_head_state":…,"epoch":… */
 7:  API_LIT api_ev_slot
     ldr     x0, [x22, #ApiView_event_slot]
-    bl      api_qdec
+    bl      lantern_api_qdec
     API_LIT api_cr_depth
     ldr     x0, [x22, #ApiView_event_epoch]
-    bl      api_qdec
+    bl      lantern_api_qdec
     API_LIT api_cr_old_block
     add     x0, x22, #ApiView_event_old_block
     mov     x1, #32
-    bl      api_qhex
+    bl      lantern_api_qhex
     API_LIT api_cr_new_block
     add     x0, x22, #ApiView_event_block
     mov     x1, #32
-    bl      api_qhex
+    bl      lantern_api_qhex
     API_LIT api_cr_old_state
     add     x0, x22, #ApiView_event_old_state
     mov     x1, #32
-    bl      api_qhex
+    bl      lantern_api_qhex
     API_LIT api_cr_new_state
     add     x0, x22, #ApiView_event_state
     mov     x1, #32
-    bl      api_qhex
+    bl      lantern_api_qhex
     API_LIT api_k_epoch
     ldr     x0, [x22, #ApiView_event_slot]
     mov     x9, #SLOTS_PER_EPOCH
     udiv    x0, x0, x9
-    bl      api_qdec
+    bl      lantern_api_qdec
 6:  API_LIT api_u_optimistic
     ldr     x0, [x22, #ApiView_event_flags]
     ubfx    x0, x0, #1, #1
-    bl      api_bool
+    bl      lantern_api_bool
 61: API_LIT api_ev_end
     cbnz    x27, 9f
     add     x9, x23, #24
@@ -7455,7 +7455,7 @@ LOCAL_FUNCTION api_event_text
     LEAVE 0
 9:  mov     x0, #LANTERN_BUFFER_TOO_SMALL
     LEAVE 0
-END_FUNCTION api_event_text
+END_FUNCTION lantern_api_event_text
 
 /*
  * L1: (out x0, topic x1, kind x2, ssz x3, cursor x4; the fork in x15) -> x0: the text of the event of
@@ -7464,7 +7464,7 @@ END_FUNCTION api_event_text
  * or LANTERN_INVALID_ENCODING. The writer's registers; x19 the kind, x20 the ssz, x21 the cursor,
  * x22 the fork, x23 out, x28 the topic.
  */
-LOCAL_FUNCTION api_op_event_text
+LOCAL_FUNCTION lantern_api_op_event_text
     ENTER 0
     mov     x23, x0
     mov     x28, x1
@@ -7538,7 +7538,7 @@ LOCAL_FUNCTION api_op_event_text
     LEAVE 0
 9:  mov     x0, #LANTERN_BUFFER_TOO_SMALL
     LEAVE 0
-END_FUNCTION api_op_event_text
+END_FUNCTION lantern_api_op_event_text
 
 /*
  * L1: (out x0, state x1, attributes x2, proposer x3, head root x4; the fork in x15) -> x0: the text
@@ -7548,7 +7548,7 @@ END_FUNCTION api_op_event_text
  * state, x21 the fork, x22 the head root, x23 out, x28 the proposer. Locals: L the parent's block
  * number and hash (40), L+40 a withdrawal's index.
  */
-LOCAL_FUNCTION api_payload_event_text
+LOCAL_FUNCTION lantern_api_payload_event_text
     ENTER 48
     mov     x23, x0
     mov     x20, x1
@@ -7570,36 +7570,36 @@ LOCAL_FUNCTION api_payload_event_text
     API_LIT api_ev_data
     API_LIT api_pa_version
     mov     x0, x21
-    bl      api_fork_name
+    bl      lantern_api_fork_name
     API_LIT api_pa_proposer
     mov     x0, x28
-    bl      api_qdec
+    bl      lantern_api_qdec
     API_LIT api_pa_slot
     ldr     x0, [x20, #NODE_STATE_SLOT]
-    bl      api_qdec
+    bl      lantern_api_qdec
     API_LIT api_pa_number
     ldr     x0, [sp, #L]
-    bl      api_qdec
+    bl      lantern_api_qdec
     API_LIT api_pa_root
     mov     x0, x22
     mov     x1, #32
-    bl      api_qhex
+    bl      lantern_api_qhex
     API_LIT api_pa_hash
     add     x0, sp, #(L + 8)
     mov     x1, #32
-    bl      api_qhex
+    bl      lantern_api_qhex
     /* the PayloadAttributes (engine-api.md) */
     API_LIT api_pa_time
     ldr     x0, [x19]
-    bl      api_qdec
+    bl      lantern_api_qdec
     API_LIT api_pa_randao
     add     x0, x19, #8
     mov     x1, #32
-    bl      api_qhex
+    bl      lantern_api_qhex
     API_LIT api_pa_fee
     add     x0, x19, #40
     mov     x1, #20
-    bl      api_qhex
+    bl      lantern_api_qhex
     cmp     x21, #FORK_CAPELLA              /* from capella, the withdrawals: each 44 SSZ bytes */
     b.lo    3f
     API_LIT api_pa_withdrawals
@@ -7618,20 +7618,20 @@ LOCAL_FUNCTION api_payload_event_text
     API_LIT api_pa_index
     ldr     x9, [sp, #(L + 32)]
     ldr     x0, [x9]
-    bl      api_qdec
+    bl      lantern_api_qdec
     API_LIT api_u_index
     ldr     x9, [sp, #(L + 32)]
     ldr     x0, [x9, #8]
-    bl      api_qdec
+    bl      lantern_api_qdec
     API_LIT api_pa_address
     ldr     x9, [sp, #(L + 32)]
     add     x0, x9, #16
     mov     x1, #20
-    bl      api_qhex
+    bl      lantern_api_qhex
     API_LIT api_pa_amount
     ldr     x9, [sp, #(L + 32)]
     ldr     x0, [x9, #36]
-    bl      api_qdec
+    bl      lantern_api_qdec
     API_LIT api_end1
     ldr     x9, [sp, #(L + 40)]
     add     x9, x9, #1
@@ -7643,7 +7643,7 @@ LOCAL_FUNCTION api_payload_event_text
     API_LIT api_pa_parent
     add     x0, x19, #64
     mov     x1, #32
-    bl      api_qhex
+    bl      lantern_api_qhex
 4:  API_LIT api_pa_end
     cbnz    x27, 9f
     add     x9, x23, #24
@@ -7654,7 +7654,7 @@ LOCAL_FUNCTION api_payload_event_text
     LEAVE 48
 9:  mov     x0, #LANTERN_BUFFER_TOO_SMALL
     LEAVE 48
-END_FUNCTION api_payload_event_text
+END_FUNCTION lantern_api_payload_event_text
 
 /*
  * L1: (out x0, topic x1, ssz x2, scratch x3; the fork in x15) -> x0: the text of the event of a
@@ -7664,7 +7664,7 @@ END_FUNCTION api_payload_event_text
  * x20 their count, x21 the fork, x23 out, x28 the topic. Locals: L the block root, L+32 a versioned
  * hash, L+64 a ByteList of a commitment (24 + 48), L+136 a commitment's index.
  */
-LOCAL_FUNCTION api_sidecar_event_text
+LOCAL_FUNCTION lantern_api_sidecar_event_text
     ENTER 144
     mov     x23, x0
     mov     x28, x1
@@ -7694,21 +7694,21 @@ LOCAL_FUNCTION api_sidecar_event_text
     API_LIT api_sc_root
     add     x0, sp, #L
     mov     x1, #32
-    bl      api_qhex
+    bl      lantern_api_qhex
     API_LIT api_sc_index
     ldr     x0, [x19]
-    bl      api_qdec
+    bl      lantern_api_qdec
     API_LIT api_c_slot
     cmp     x28, #API_TOPIC_BLOB_SIDECAR
     b.ne    4f
     MOVQ    x9, 8 + PUB_BLOB_BYTES + 96     /* a BlobSidecar: the header's slot, the commitment, its versioned hash */
     ldr     x0, [x19, x9]
-    bl      api_qdec
+    bl      lantern_api_qdec
     API_LIT api_sc_commitment
     MOVQ    x9, 8 + PUB_BLOB_BYTES
     add     x0, x19, x9
     mov     x1, #48
-    bl      api_qhex
+    bl      lantern_api_qhex
     API_LIT api_sc_hash
     add     x0, sp, #(L + 88)
     MOVQ    x9, 8 + PUB_BLOB_BYTES
@@ -7729,11 +7729,11 @@ LOCAL_FUNCTION api_sidecar_event_text
     strb    w9, [sp, #(L + 32)]
     add     x0, sp, #(L + 32)
     mov     x1, #32
-    bl      api_qhex
+    bl      lantern_api_qhex
     API_LIT api_end1
     b       7f
 4:  ldr     x0, [x19, #20]                  /* a DataColumnSidecar: the header's slot, then the commitments */
-    bl      api_qdec
+    bl      lantern_api_qdec
     API_LIT api_sc_commitments
     ldr     w9, [x19, #12]
     ldr     w10, [x19, #16]
@@ -7764,7 +7764,7 @@ LOCAL_FUNCTION api_sidecar_event_text
     madd    x0, x10, x11, x9
     add     x0, x19, x0
     mov     x1, #48
-    bl      api_qhex
+    bl      lantern_api_qhex
     ldr     x10, [sp, #(L + 136)]
     add     x10, x10, #1
     str     x10, [sp, #(L + 136)]
@@ -7782,14 +7782,14 @@ LOCAL_FUNCTION api_sidecar_event_text
     LEAVE 144
 9:  mov     x0, #LANTERN_BUFFER_TOO_SMALL
     LEAVE 144
-END_FUNCTION api_sidecar_event_text
+END_FUNCTION lantern_api_sidecar_event_text
 
 /*
  * L1: the event of a valid operation of the gossip topic x0, its bytes x1, of the fork x2 (node.md,
  * The events): a NODE_WORK_API_EVENT of its event topic when an entry has the topic. Locals: the
  * bytes, the work's arg.
  */
-LOCAL_FUNCTION node_op_event
+LOCAL_FUNCTION lantern_node_op_event
     FRAME 16
     str     x1, [sp, #16]
     mov     x9, #API_TOPIC_VOLUNTARY_EXIT
@@ -7822,7 +7822,7 @@ LOCAL_FUNCTION node_op_event
 1:  orr     x9, x9, x2, lsl #16
     str     x9, [sp, #24]
     and     x0, x9, #255
-    bl      node_api_subscribed
+    bl      lantern_node_api_subscribed
     cbz     x0, 9f
     mov     x0, #NODE_WORK_API_EVENT
     mov     x1, #0
@@ -7830,12 +7830,12 @@ LOCAL_FUNCTION node_op_event
     ldr     x3, [sp, #16]
     mov     x4, #0
     ldr     x5, [sp, #24]
-    bl      node_work
+    bl      lantern_node_work
 9:  UNFRAME 16
-END_FUNCTION node_op_event
+END_FUNCTION lantern_node_op_event
 
 /* L0: x0 = 1 when a NodeApi entry of eventstream has the topic x0, else 0. Uses x9-x13. */
-LOCAL_FUNCTION node_api_subscribed
+LOCAL_FUNCTION lantern_node_api_subscribed
     UNWIND_END_PROLOGUE
     PART    x9, x10, x19, Node_api
 1:  cbz     x10, 8f
@@ -7854,10 +7854,10 @@ LOCAL_FUNCTION node_api_subscribed
     ret
 9:  mov     x0, #1
     ret
-END_FUNCTION node_api_subscribed
+END_FUNCTION lantern_node_api_subscribed
 
 /* L0: x0 = the NodeApi entries of eventstream. Uses x9-x12. */
-LOCAL_FUNCTION node_api_event_count
+LOCAL_FUNCTION lantern_node_api_event_count
     UNWIND_END_PROLOGUE
     mov     x0, #0
     PART    x9, x10, x19, Node_api
@@ -7871,19 +7871,19 @@ LOCAL_FUNCTION node_api_event_count
     sub     x10, x10, #1
     b       1b
 9:  ret
-END_FUNCTION node_api_event_count
+END_FUNCTION lantern_node_api_event_count
 
 /*
  * L1: eventstream of the connection x0 with the route x1 and the answer flags x2 (node.md,
  * NODE_EV_API): a NodeApi entry of the route's topics, and a SEND of the head with last 0, its
  * bytes the entry's sent. Locals: L the entry, L+8 the action.
  */
-LOCAL_FUNCTION node_api_subscribe
+LOCAL_FUNCTION lantern_node_api_subscribe
     ENTER 16
     mov     x21, x0
     mov     x22, x1
     mov     x25, x2
-    bl      node_api_new
+    bl      lantern_node_api_new
     str     x1, [sp, #L]
     mov     x0, x1
     mov     x1, #NodeApi__mem
@@ -7904,7 +7904,7 @@ LOCAL_FUNCTION node_api_subscribe
     str     x9, [x1, #NodeApi_cursor]
     mov     x0, #NODE_ACT_API_SEND          /* the head: 56 + 128 bytes of room */
     mov     x1, #(56 + 128)
-    bl      node_act
+    bl      lantern_node_act
     str     x0, [sp, #(L + 8)]
     add     x0, x0, #16
     mov     x1, #(56 + 128 - 16)
@@ -7915,13 +7915,13 @@ LOCAL_FUNCTION node_api_subscribe
     str     x9, [x0, #32]
     add     x0, x0, #32
     mov     x1, x25
-    bl      api_sse_head
+    bl      lantern_api_sse_head
     ldr     x0, [sp, #(L + 8)]
     ldr     x9, [x0, #48]
     ldr     x1, [sp, #L]
     str     x9, [x1, #NodeApi_sent]
     LEAVE 16
-END_FUNCTION node_api_subscribe
+END_FUNCTION lantern_node_api_subscribe
 
 /*
  * L1: the event text of the ByteList x0, of the topic x1, to each NodeApi entry of eventstream of
@@ -7929,7 +7929,7 @@ END_FUNCTION node_api_subscribe
  * added to the entry's sent; an entry whose sent would pass NODE_API_CHUNK gets a CLOSE and ends.
  * x21 the text, x22 the topic, x25 the entry, x26 its index, x27 the bytes sent, x28 the action.
  */
-LOCAL_FUNCTION node_api_events
+LOCAL_FUNCTION lantern_node_api_events
     ENTER 0
     mov     x21, x0
     mov     x22, x1
@@ -7961,7 +7961,7 @@ LOCAL_FUNCTION node_api_events
     add     x1, x27, #(56 + 7)
     and     x1, x1, #~7
     mov     x0, #NODE_ACT_API_SEND
-    bl      node_act
+    bl      lantern_node_act
     mov     x28, x0
     add     x0, x28, #16
     ldr     x1, [x28]
@@ -8002,18 +8002,18 @@ LOCAL_FUNCTION node_api_events
     b       8f
 5:  mov     x0, #NODE_ACT_API_CLOSE         /* the stream falls behind: a CLOSE, and it ends */
     mov     x1, #NODE_ACT_API_CLOSE_SIZE
-    bl      node_act
+    bl      lantern_node_act
     ldr     x9, [x25, #NodeApi_connection]
     str     x9, [x0, #16]
     mov     x0, x25
-    bl      node_api_end
+    bl      lantern_node_api_end
 8:  add     x26, x26, #1
     b       1b
 9:  LEAVE 0
-END_FUNCTION node_api_events
+END_FUNCTION lantern_node_api_events
 
 /* L1: the block event of the NodeBlock entry x0 (node.md, The events): its slot and root, execution_optimistic from its payload status. */
-LOCAL_FUNCTION node_api_block_event
+LOCAL_FUNCTION lantern_node_api_block_event
     FRAME 0
     ldr     x9, [x0, #NodeBlock_payload_status]
     cmp     x9, #PAYLOAD_STATUS_NOT_VALIDATED
@@ -8022,9 +8022,9 @@ LOCAL_FUNCTION node_api_block_event
     ldr     x2, [x0, #NodeBlock_slot]
     add     x1, x0, #NodeBlock_root
     mov     x0, #API_TOPIC_BLOCK
-    bl      node_api_root_event
+    bl      lantern_node_api_root_event
     UNFRAME 0
-END_FUNCTION node_api_block_event
+END_FUNCTION lantern_node_api_block_event
 
 /*
  * L1: the event of the topic x0 (block or block_gossip) of the block root x1 and slot x2, with the
@@ -8032,13 +8032,13 @@ END_FUNCTION node_api_block_event
  * scratch, after the ApiView of its values. x21 the root, x22 the view, x26 the ByteList, x25 the
  * topic, x27 the slot, x28 the values. Locals: L the scratch's size.
  */
-LOCAL_FUNCTION node_api_root_event
+LOCAL_FUNCTION lantern_node_api_root_event
     ENTER 16
     mov     x25, x0
     mov     x21, x1
     mov     x27, x2
     mov     x28, x3
-    bl      node_api_subscribed
+    bl      lantern_node_api_subscribed
     cbz     x0, 9f
     ldr     x9, [x23]
     str     x9, [sp, #L]
@@ -8060,15 +8060,15 @@ LOCAL_FUNCTION node_api_root_event
     mov     x0, x22
     mov     x1, x26
     mov     x2, x25
-    bl      api_event_text
+    bl      lantern_api_event_text
     cbnz    x0, 8f
     mov     x0, x26
     mov     x1, x25
-    bl      node_api_events
+    bl      lantern_node_api_events
 8:  ldr     x9, [sp, #L]
     str     x9, [x23]
 9:  LEAVE 16
-END_FUNCTION node_api_root_event
+END_FUNCTION lantern_node_api_root_event
 
 /*
  * L1: the head and finalized_checkpoint events at a quiet point (node.md, The events): with no
@@ -8078,7 +8078,7 @@ END_FUNCTION node_api_root_event
 .if API_TOPIC_HEAD
 .error "node_api_head_events: the arg of a head event takes API_TOPIC_HEAD as 0"
 .endif
-LOCAL_FUNCTION node_api_head_events
+LOCAL_FUNCTION lantern_node_api_head_events
     ENTER 0
     LDQ     x9, x19, Node_event_votes
     cbnz    x9, 9f
@@ -8094,7 +8094,7 @@ LOCAL_FUNCTION node_api_head_events
     cmp     x9, x11
     ccmp    x10, x12, #0, eq
     b.eq    5f
-1:  bl      node_find_block
+1:  bl      lantern_node_find_block
     cmn     x0, #1
     b.eq    5f
     mov     x21, x1
@@ -8104,7 +8104,7 @@ LOCAL_FUNCTION node_api_head_events
     mov     x3, #0
     mov     x4, #0
     mov     x5, #0
-    bl      node_work
+    bl      lantern_node_work
     mov     x9, #NODE_LC_ID
     str     x9, [x0, #NodeAction_state_c]
     ldr     x9, [x21, #NodeBlock_slot]      /* epoch_transition, execution_optimistic */
@@ -8119,13 +8119,13 @@ LOCAL_FUNCTION node_api_head_events
     cset    x10, eq
     orr     x22, x22, x10, lsl #1
     mov     x0, #API_TOPIC_CHAIN_REORG      /* chain_reorg, before the head event: the new head's chain lacks the old head */
-    bl      node_api_subscribed
+    bl      lantern_node_api_subscribed
     cbz     x0, 12f
     ldr     x9, [x21, #NodeBlock_state_id]
     cbz     x9, 12f
     ADDQ    x0, x19, Node_event_head
     mov     x1, x21
-    bl      node_api_reorg
+    bl      lantern_node_api_reorg
     cmn     x0, #1
     b.eq    12f
     ldr     x3, [x1, #NodeBlock_data_id]
@@ -8138,16 +8138,16 @@ LOCAL_FUNCTION node_api_head_events
     ldr     x1, [x21, #NodeBlock_state_id]
     mov     x2, #0
     mov     x4, #0
-    bl      node_work
+    bl      lantern_node_work
 12: ldr     x9, [x21, #NodeBlock_slot]
     STQ     x9, x19, Node_event_slot
     ADDQ    x0, x19, Node_event_head
     add     x1, x21, #NodeBlock_root
     bl      lantern_copy_root
     ldr     x0, [x21, #NodeBlock_state_id]  /* the pool's checks at the new head */
-    bl      node_pool_checks
+    bl      lantern_node_pool_checks
     mov     x0, #API_TOPIC_HEAD
-    bl      node_api_subscribed
+    bl      lantern_node_api_subscribed
     cbz     x0, 13f
     ldr     x1, [x21, #NodeBlock_state_id]
     cbz     x1, 5f
@@ -8156,9 +8156,9 @@ LOCAL_FUNCTION node_api_head_events
     mov     x3, #0
     mov     x4, #0
     lsl     x5, x22, #8                     /* API_TOPIC_HEAD is 0 */
-    bl      node_work
+    bl      lantern_node_work
 13: mov     x0, #API_TOPIC_HEAD_V2          /* head_v2: the same values, its own text */
-    bl      node_api_subscribed
+    bl      lantern_node_api_subscribed
     cbz     x0, 5f
     ldr     x1, [x21, #NodeBlock_state_id]
     cbz     x1, 5f
@@ -8168,17 +8168,17 @@ LOCAL_FUNCTION node_api_head_events
     mov     x4, #0
     lsl     x5, x22, #8
     add     x5, x5, #API_TOPIC_HEAD_V2
-    bl      node_work
+    bl      lantern_node_work
 5:  ldr     x9, [x20, #Store_finalized_checkpoint]
     LDQ     x10, x19, Node_event_epoch
     cmp     x9, x10
     b.ls    9f
     STQ     x9, x19, Node_event_epoch
     mov     x0, #API_TOPIC_FINALIZED_CHECKPOINT
-    bl      node_api_subscribed
+    bl      lantern_node_api_subscribed
     cbz     x0, 9f
     add     x0, x20, #(Store_finalized_checkpoint + 8)
-    bl      node_find_block
+    bl      lantern_node_find_block
     cmn     x0, #1
     b.eq    9f
     ldr     x9, [x1, #NodeBlock_payload_status]
@@ -8197,9 +8197,9 @@ LOCAL_FUNCTION node_api_head_events
     mov     x0, #NODE_WORK_API_EVENT
     mov     x2, #0
     mov     x4, #0
-    bl      node_work
+    bl      lantern_node_work
 9:  LEAVE 0
-END_FUNCTION node_api_head_events
+END_FUNCTION lantern_node_api_head_events
 
 /*
  * L1: (old head root x0, new head entry x1) -> x0: the depth of the reorg from the old head to the
@@ -8208,10 +8208,10 @@ END_FUNCTION node_api_head_events
  * by parent_root from both, the one at the higher slot first. x21 the old head's entry, x22 the new
  * head's, x25 the old chain's block, x26 the new chain's, x27 and x28 the blocks each walk left last.
  */
-LOCAL_FUNCTION node_api_reorg
+LOCAL_FUNCTION lantern_node_api_reorg
     ENTER 0
     mov     x22, x1
-    bl      node_find_block
+    bl      lantern_node_find_block
     cmn     x0, #1
     b.eq    8f
     mov     x21, x1
@@ -8235,14 +8235,14 @@ LOCAL_FUNCTION node_api_reorg
     b.lo    3f
     mov     x27, x25                        /* the old chain's block, a step down */
     add     x0, x25, #NodeBlock_parent_root
-    bl      node_find_block
+    bl      lantern_node_find_block
     cmn     x0, #1
     b.eq    8f
     mov     x25, x1
     b       1b
 3:  mov     x28, x26                        /* the new chain's block, a step down */
     add     x0, x26, #NodeBlock_parent_root
-    bl      node_find_block
+    bl      lantern_node_find_block
     cmn     x0, #1
     b.eq    8f
     mov     x26, x1
@@ -8269,24 +8269,24 @@ LOCAL_FUNCTION node_api_reorg
     LEAVE 0
 8:  mov     x0, #-1
     LEAVE 0
-END_FUNCTION node_api_reorg
+END_FUNCTION lantern_node_api_reorg
 
 /* L1: NODE_EV_WORK_DONE x0 of a NODE_WORK_API_EVENT: LANTERN_VALID, its text to the entries of its topic. */
-LOCAL_FUNCTION node_api_event_done
+LOCAL_FUNCTION lantern_node_api_event_done
     FRAME 0
     ldr     x9, [x0, #NodeEvent_result]
     cbnz    x9, 9f
     ldr     x1, [x0, #NodeAction_arg]
     and     x1, x1, #255
     add     x0, x0, #NodeEvent_chunk
-    bl      node_api_events
+    bl      lantern_node_api_events
 9:  UNFRAME 0
-END_FUNCTION node_api_event_done
+END_FUNCTION lantern_node_api_event_done
 
 /* L1: NODE_EV_API_CLOSED of the connection x0: its stream ends, or with a chunk or work queued takes API_STREAM_GONE. Locals: L the entry. */
-LOCAL_FUNCTION node_api_closed
+LOCAL_FUNCTION lantern_node_api_closed
     FRAME 16
-    bl      node_api_find
+    bl      lantern_node_api_find
     cmn     x0, #1
     b.eq    9f
     ldr     x9, [x1, #NodeApi_flags]
@@ -8299,9 +8299,9 @@ LOCAL_FUNCTION node_api_closed
     cmp     x9, #API_OP_PRODUCE_BLOCK_V3
     b.ne    3f
     mov     x0, x1
-    bl      node_produce_release
+    bl      lantern_node_produce_release
 2:  ldr     x0, [sp, #16]
-    bl      node_api_end
+    bl      lantern_node_api_end
 9:  UNFRAME 16
 3:  cmp     x9, #API_OP_PUBLISH_BLOCK_V2    /* a publishBlockV2: its ids; in NODE_PUBLISH_IMPORT it goes on unanswered */
     b.ne    2b
@@ -8313,9 +8313,9 @@ LOCAL_FUNCTION node_api_closed
     str     x9, [x1, #NodeApi_flags]
     UNFRAME 16
 4:  mov     x0, x1
-    bl      node_publish_end
+    bl      lantern_node_publish_end
     UNFRAME 16
-END_FUNCTION node_api_closed
+END_FUNCTION lantern_node_api_closed
 
 /*
  * L2: (connection x0, route x1, flags x2, view x3) -> x0: a stream of getBlockV2, getStateV2 or a validator operation of
@@ -8324,7 +8324,7 @@ END_FUNCTION node_api_closed
  * data, x25 the route, x26 the view, x27 the connection, x28 the flags. Locals: L the entry's
  * index, L+8 the entry.
  */
-LOCAL_FUNCTION node_api_stream
+LOCAL_FUNCTION lantern_node_api_stream
     ENTER 32
     str     xzr, [sp, #(L + 16)]
     mov     x27, x0
@@ -8363,7 +8363,7 @@ LOCAL_FUNCTION node_api_stream
     b.ne    34f
     mov     x0, x25
     mov     x1, x26
-    bl      node_api_committees_check
+    bl      lantern_node_api_committees_check
     str     x0, [sp, #(L + 24)]
     cmn     x0, #1
     b.ne    6f
@@ -8373,7 +8373,7 @@ LOCAL_FUNCTION node_api_stream
     b.hi    6f
     ldr     x0, [x26, #ApiView_head_slot]
     add     x1, x19, #Node_config
-    bl      node_fork
+    bl      lantern_node_fork
     cmp     x0, #FORK_ELECTRA
     b.hs    6f
 331: ldr    x9, [x26, #ApiView_look_copy]
@@ -8381,17 +8381,17 @@ LOCAL_FUNCTION node_api_stream
     mov     x0, #NODE_ACT_STATE_FREE
     ldr     x1, [x26, #ApiView_look_state]
     mov     x2, #0
-    bl      node_ids
+    bl      lantern_node_ids
 33: mov     x0, #400
     LEAVE 32
 4:  ldr     x21, [x26, #ApiView_look_data]  /* getBlockV2: the block's bytes */
     cbz     x21, 80f
     b       6f
-5:  bl      node_new_id                     /* getStateV2: the state's SSZ bytes, as a new id the stream owns */
+5:  bl      lantern_node_new_id                     /* getStateV2: the state's SSZ bytes, as a new id the stream owns */
     mov     x21, x0
     mov     x0, #NODE_ACT_STATE_BYTES
     mov     x1, #NODE_ACT_STATE_BYTES_SIZE
-    bl      node_act
+    bl      lantern_node_act
     ldr     x9, [x26, #ApiView_look_state]
     stp     x9, x21, [x0, #16]
     orr     x28, x28, #API_STREAM_OWN
@@ -8400,8 +8400,8 @@ LOCAL_FUNCTION node_api_stream
     mov     x0, #NODE_ACT_STATE_FREE
     ldr     x1, [x26, #ApiView_look_state]
     mov     x2, #0
-    bl      node_ids
-6:  bl      node_api_new                    /* the entry */
+    bl      lantern_node_ids
+6:  bl      lantern_node_api_new                    /* the entry */
     stp     x0, x1, [sp, #L]
     mov     x0, x1
     mov     x1, #NodeApi__mem
@@ -8410,7 +8410,7 @@ LOCAL_FUNCTION node_api_stream
     ldr     x1, [sp, #(L + 8)]
     str     x0, [x1, #NodeApi_slot]
     add     x1, x19, #Node_config
-    bl      node_fork
+    bl      lantern_node_fork
     ldr     x1, [sp, #(L + 8)]
     str     x0, [x1, #NodeApi_fork]
     str     x27, [x1, #NodeApi_connection]
@@ -8427,20 +8427,20 @@ LOCAL_FUNCTION node_api_stream
     mov     x0, x1
     mov     x1, x25
     ldr     x2, [sp, #(L + 24)]
-    bl      node_api_committees_cursor
+    bl      lantern_node_api_committees_cursor
 7:  ldp     x0, x1, [sp, #L]
-    bl      node_api_chunk_work
+    bl      lantern_node_api_chunk_work
     mov     x0, #0
     LEAVE 32
 80: mov     x0, #404
     LEAVE 32
-END_FUNCTION node_api_stream
+END_FUNCTION lantern_node_api_stream
 
 /*
  * L2: the NODE_EV_WORK_DONE x0 of a NODE_WORK_API_CHUNK (node.md, lantern_node_step). x19 the
  * node, x24 the actions. x21 the event, x22 the entry, x23 the action, x25 the flags.
  */
-LOCAL_FUNCTION node_api_chunk_done
+LOCAL_FUNCTION lantern_node_api_chunk_done
     ENTER 0
     mov     x21, x0
     ldr     x9, [x21, #NodeAction_arg]
@@ -8480,11 +8480,11 @@ LOCAL_FUNCTION node_api_chunk_done
     b.ne    2f
     ldr     x1, [x22, #NodeApi_slot]
     add     x1, x1, #1
-    bl      node_headers_next
+    bl      lantern_node_headers_next
     b       3f
 2:  cmp     x9, #API_OP_GET_BLOBS          /* the blob stream: its next sidecar or cell */
     b.ne    21f
-    bl      node_blob_advance
+    bl      lantern_node_blob_advance
     b       3f
 21: cmp     x9, #API_OP_GET_BLOB_SIDECARS   /* a sidecar stream: its sidecar from member + 1 on */
     b.eq    4f
@@ -8492,9 +8492,9 @@ LOCAL_FUNCTION node_api_chunk_done
     b.ne    5f
 4:  ldr     x1, [x22, #NodeApi_member]
     add     x1, x1, #1
-    bl      node_sidecar_next
+    bl      lantern_node_sidecar_next
     b       3f
-5:  bl      node_api_pool_advance
+5:  bl      lantern_node_api_pool_advance
 3:  ldr     x25, [x22, #NodeApi_flags]
 1:  tbz     x25, #15, 11f                   /* API_STREAM_FOLD: no send, and the next chunk at once */
     tbnz    x25, #10, 11f                   /* the error that ends it goes */
@@ -8509,7 +8509,7 @@ LOCAL_FUNCTION node_api_chunk_done
     cmp     x9, #API_OP_PRODUCE_SYNC_COMMITTEE_CONTRIBUTION
     add     x9, x22, #NodeApi_cursor
     csel    x0, x9, x0, eq
-    bl      node_store_find
+    bl      lantern_node_store_find
     cmn     x0, #1
     b.eq    12f
     ldr     x9, [x1, #BlockNode_payload_status]
@@ -8519,7 +8519,7 @@ LOCAL_FUNCTION node_api_chunk_done
     str     x25, [x22, #NodeApi_flags]
     b       12f
 14: add     x0, x21, #NodeEvent_api_bytes   /* they become the stream's own data; the answer from sent 0 */
-    bl      node_put
+    bl      lantern_node_put
     str     x0, [x22, #NodeApi_data]
     and     x25, x25, #~API_STREAM_FOLD
     orr     x25, x25, #API_STREAM_OWN
@@ -8530,13 +8530,13 @@ LOCAL_FUNCTION node_api_chunk_done
     bl      lantern_zero
 12: ldr     x0, [x21, #NodeAction_arg]
     mov     x1, x22
-    bl      node_api_chunk_work
+    bl      lantern_node_api_chunk_work
     b       99f
 11: ldr     x9, [x21, #(NodeEvent_api_bytes + 16)]  /* the chunk in a SEND */
     add     x1, x9, #(56 + 7)
     and     x1, x1, #~7
     mov     x0, #NODE_ACT_API_SEND
-    bl      node_act
+    bl      lantern_node_act
     mov     x23, x0
     ldr     x9, [x22, #NodeApi_connection]
     ubfx    x10, x25, #10, #1               /* last: API_STREAM_DONE */
@@ -8572,28 +8572,28 @@ LOCAL_FUNCTION node_api_chunk_done
     tst     x25, #API_STREAM_HTTP10
     mov     x9, #API_R_KEEP
     csel    x4, x9, xzr, ne
-51: bl      node_api_send
+51: bl      lantern_node_api_send
     b       90f
 60: mov     x0, #NODE_ACT_API_CLOSE
     mov     x1, #NODE_ACT_API_CLOSE_SIZE
-    bl      node_act
+    bl      lantern_node_act
     ldr     x9, [x22, #NodeApi_connection]
     str     x9, [x0, #16]
 90: mov     x0, x22
-    bl      node_api_end
+    bl      lantern_node_api_end
 99: LEAVE 0
-END_FUNCTION node_api_chunk_done
+END_FUNCTION lantern_node_api_chunk_done
 
 /* L1: the name of the fork x0 joins the response. */
-LOCAL_FUNCTION api_fork_name
+LOCAL_FUNCTION lantern_api_fork_name
     FRAME 0
     ADDRESS x9, api_forks
     add     x9, x9, x0, lsl #4
     ldrb    w1, [x9], #1
     mov     x0, x9
-    bl      api_put
+    bl      lantern_api_put
     UNFRAME 0
-END_FUNCTION api_fork_name
+END_FUNCTION lantern_api_fork_name
 
 /*
  * L1: the head of a streamed answer (beacon-api.md, Common rules) for the flags at
@@ -8601,7 +8601,7 @@ END_FUNCTION api_fork_name
  * for x0 = 2^64 - 1 Transfer-Encoding: chunked when API_STREAM_CHUNKED is set, else neither.
  * Locals: x0.
  */
-LOCAL_FUNCTION api_stream_head
+LOCAL_FUNCTION lantern_api_stream_head
     FRAME 16
     str     x0, [sp, #16]
     API_LIT api_ok
@@ -8636,13 +8636,13 @@ LOCAL_FUNCTION api_stream_head
     b.hi    22f
 21: API_LIT api_version
     ldr     x0, [x22, #NodeApi_fork]
-    bl      api_fork_name
+    bl      lantern_api_fork_name
     API_LIT api_crlf
     b       22f
     /* produceBlockV3: and its three headers */
 23: API_LIT api_version
     ldr     x0, [x22, #NodeApi_fork]
-    bl      api_fork_name
+    bl      lantern_api_fork_name
     API_LIT api_crlf
     ldr     x9, [x22, #NodeApi_flags]       /* blinded with API_STREAM_PRODUCE_BLINDED */
     tbnz    x9, #19, 231f
@@ -8650,17 +8650,17 @@ LOCAL_FUNCTION api_stream_head
     b       232f
 231: API_LIT api_h_blinded_true
 232: add    x0, x22, #NodeApi_root
-    bl      api_dec256
+    bl      lantern_api_dec256
     API_LIT api_h_block_value
     ldr     x0, [x22, #NodeApi_filter_slot]
-    bl      api_wei
+    bl      lantern_api_wei
     API_LIT api_crlf
 22: ldr     x0, [sp, #16]
     cmn     x0, #1
     b.eq    3f
     API_LIT api_length
     ldr     x0, [sp, #16]
-    bl      api_dec
+    bl      lantern_api_dec
     API_LIT api_crlf
     b       4f
 3:  ldr     x9, [x23, #(NodeEvent_api + 8)]
@@ -8674,10 +8674,10 @@ LOCAL_FUNCTION api_stream_head
     API_LIT api_keep
 6:  API_LIT api_crlf
     UNFRAME 16
-END_FUNCTION api_stream_head
+END_FUNCTION lantern_api_stream_head
 
 /* L0: the 4 lower case hex digits of x0 at x1. Uses x9, x10. */
-LOCAL_FUNCTION api_hex4
+LOCAL_FUNCTION lantern_api_hex4
     UNWIND_END_PROLOGUE
     ADDRESS x9, api_hex
     ubfx    x10, x0, #12, #4
@@ -8693,7 +8693,7 @@ LOCAL_FUNCTION api_hex4
     ldrb    w10, [x9, x10]
     strb    w10, [x1, #3]
     ret
-END_FUNCTION api_hex4
+END_FUNCTION lantern_api_hex4
 
 /*
  * L1: the JSON of the entry x22's SSZ bytes x21 from the cursor at NodeEvent_api + 16 of the event
@@ -8701,7 +8701,7 @@ END_FUNCTION api_hex4
  * NodeEvent_api_bytes whose bytes start at x28; then } once it is whole. x0 = 1 when whole, 0
  * when more is to come, 2 for bytes that are no encoding.
  */
-LOCAL_FUNCTION api_stream_json
+LOCAL_FUNCTION lantern_api_stream_json
     FRAME 0
     ldr     x9, [x22, #NodeApi_op]          /* the validator streams: their items */
     cmp     x9, #API_OP_GET_POOL_VOLUNTARY_EXITS
@@ -8714,26 +8714,26 @@ LOCAL_FUNCTION api_stream_json
     b.eq    4f
     cmp     x9, #API_OP_GET_POOL_BLS_TO_EXECUTION_CHANGES
     b.ne    3f
-4:  bl      api_pool_json
+4:  bl      lantern_api_pool_json
     UNFRAME 0
 3:  cmp     x9, #API_OP_GET_BLOCK_HEADERS
     b.ne    32f
-    bl      api_headers_json
+    bl      lantern_api_headers_json
     UNFRAME 0
 32: cmp     x9, #API_OP_GET_BLOBS
     b.ne    35f
-    bl      api_blob_body
+    bl      lantern_api_blob_body
     UNFRAME 0
 35: cmp     x9, #API_OP_GET_BLOB_SIDECARS
     b.eq    33f
     cmp     x9, #API_OP_GET_DEBUG_DATA_COLUMN_SIDECARS
     b.ne    34f
-33: bl      api_sidecar_body
+33: bl      lantern_api_sidecar_body
     UNFRAME 0
 34: sub     x10, x9, #API_OP_GET_PENDING_CONSOLIDATIONS /* the pending streams: their items */
     cmp     x10, #2
     b.hi    31f
-    bl      api_pending_json
+    bl      lantern_api_pending_json
     UNFRAME 0
 31: cmp     x9, #API_OP_GET_BLOCK_V2
     b.eq    1f
@@ -8753,11 +8753,11 @@ LOCAL_FUNCTION api_stream_json
     b.eq    35f
     cmp     x9, #API_OP_GET_EPOCH_COMMITTEES
     b.eq    2f
-    bl      api_validators_json
+    bl      lantern_api_validators_json
     UNFRAME 0
-35: bl      api_rewards_json
+35: bl      lantern_api_rewards_json
     UNFRAME 0
-2:  bl      api_committees_json
+2:  bl      lantern_api_committees_json
     UNFRAME 0
 1:  add     x9, x23, #NodeEvent_api_bytes   /* the ByteList: its room to x26 - 1, its bytes to x24 */
     sub     x10, x26, #1
@@ -8809,18 +8809,18 @@ LOCAL_FUNCTION api_stream_json
     UNFRAME 0
 8:  mov     x0, #0
     UNFRAME 0
-END_FUNCTION api_stream_json
+END_FUNCTION lantern_api_stream_json
 
 /*
  * (node, work, data, scratch, event, room, state_a) -> status: a NODE_WORK_API_CHUNK of
  * lantern_node_run (node.md): the next chunk of the NodeApi entry at the work's arg, from the SSZ
  * bytes in data, or for a validator stream from state_a and the ids in data, at NodeEvent_api of
  * the event, whose buffer has room bytes. x19 the node, x20 state_a, x21 data, x22 the entry, x23
- * the event; the writer's x24-x27 (api_put); x28 where the chunk's bytes start. Locals: L the end
+ * the event; the writer's x24-x27 (lantern_api_put); x28 where the chunk's bytes start. Locals: L the end
  * of the chunk's room, L+8 the SSZ bytes, L+16 their count, L+24 the body's start, L+32 the head's
  * bytes, L+40 1 for a validator stream, L+48 the scratch.
  */
-LOCAL_FUNCTION node_api_chunk_run
+LOCAL_FUNCTION lantern_node_api_chunk_run
     ENTER 64
     mov     x19, x0
     mov     x20, x1
@@ -9061,7 +9061,7 @@ LOCAL_FUNCTION node_api_chunk_run
     ldr     x0, [sp, #(L + 48)]
     cmp     x9, #2
     b.eq    63f
-    bl      node_api_validators_prep
+    bl      lantern_node_api_validators_prep
     cbnz    x0, 97f
     ldr     x9, [x22, #NodeApi_op]          /* getAttestationsRewards: the scratch after the bitmap, at +592 of the cursor */
     cmp     x9, #API_OP_GET_ATTESTATIONS_REWARDS
@@ -9090,7 +9090,7 @@ LOCAL_FUNCTION node_api_chunk_run
     ldr     x0, [sp, #(L + 48)]
     mov     x1, x21
     ldr     x2, [x22, #NodeApi_member]
-    bl      node_pool_attestation
+    bl      lantern_node_pool_attestation
     cmp     x0, #1
     b.eq    96f
     b.hi    97f
@@ -9103,9 +9103,9 @@ LOCAL_FUNCTION node_api_chunk_run
     ldr     x10, [x22, #NodeApi_op]
     cmp     x10, #API_OP_PRODUCE_SYNC_COMMITTEE_CONTRIBUTION
     b.eq    694f
-    bl      node_api_fold
+    bl      lantern_node_api_fold
     b       695f
-694: bl     node_api_sync_fold
+694: bl     lantern_node_api_sync_fold
 695: cmp    x0, #1
     b.eq    96f
     b.hi    97f
@@ -9122,9 +9122,9 @@ LOCAL_FUNCTION node_api_chunk_run
     ldr     x10, [x22, #NodeApi_op]
     cmp     x10, #API_OP_PRODUCE_SYNC_COMMITTEE_CONTRIBUTION
     b.eq    696f
-    bl      node_api_aggregate
+    bl      lantern_node_api_aggregate
     b       697f
-696: bl     node_api_contribution
+696: bl     lantern_node_api_contribution
 697: cbnz   x0, 96f
     add     x24, x28, x1
     b       80f
@@ -9167,7 +9167,7 @@ LOCAL_FUNCTION node_api_chunk_run
     add     x9, x21, x9
     ldr     x0, [x9, #100]
     add     x1, x19, #Node_config
-    bl      node_fork
+    bl      lantern_node_fork
     mov     x15, x0
     mov     x0, x21
     mov     x1, x25
@@ -9194,7 +9194,7 @@ LOCAL_FUNCTION node_api_chunk_run
     cbnz    x9, 683f
     ldr     x0, [x20, #NODE_STATE_SLOT]     /* a zero state_root: the state's root */
     add     x1, x19, #Node_config
-    bl      node_fork
+    bl      lantern_node_fork
     mov     x15, x0
     mov     x0, x20
     LDQ     x1, x19, Node_config + CONFIG_STATE_CACHE
@@ -9208,7 +9208,7 @@ LOCAL_FUNCTION node_api_chunk_run
     mov     x25, #1                         /* the writer's x25 and x27 again */
     mov     x27, #0
     b       6f
-63: bl      node_api_committees_prep
+63: bl      lantern_node_api_committees_prep
     cmp     x0, #400
     b.eq    64f
     cbnz    x0, 97f
@@ -9228,7 +9228,7 @@ LOCAL_FUNCTION node_api_chunk_run
 65: mov     x0, #0
     ldr     x2, [sp, #(L + 32)]
     mov     x3, #API_BODY_ERROR
-    bl      api_respond
+    bl      lantern_api_respond
     cbnz    x0, 97f
     ldr     x9, [x23, #(NodeEvent_api_bytes + 16)]
     add     x24, x28, x9
@@ -9249,7 +9249,7 @@ LOCAL_FUNCTION node_api_chunk_run
     cbnz    x10, 60f
 601: tbnz   x9, #6, 11f                     /* SSZ: the head first, with Content-Length */
     ldr     x0, [sp, #(L + 16)]
-    bl      api_stream_head
+    bl      lantern_api_stream_head
 11: ldp     x1, x10, [sp, #(L + 8)]         /* then the bytes from sent, as many as fit */
     ldr     x9, [x23, #NodeEvent_api]
     sub     x2, x10, x9
@@ -9275,8 +9275,8 @@ LOCAL_FUNCTION node_api_chunk_run
     add     x9, x23, #(NodeEvent_api + 16)
     ldr     x0, [x9, #40]
     lsl     x0, x0, #6
-    bl      api_stream_head
-61: bl      api_validators_json
+    bl      lantern_api_stream_head
+61: bl      lantern_api_validators_json
     ldr     x11, [x23, #(NodeEvent_api + 8)]
     orr     x11, x11, #API_STREAM_STARTED
     cbz     x0, 62f
@@ -9314,7 +9314,7 @@ LOCAL_FUNCTION node_api_chunk_run
     b       36f
 395: API_LIT api_j_version
     ldr     x0, [x22, #NodeApi_fork]
-    bl      api_fork_name
+    bl      lantern_api_fork_name
     API_LIT api_g_data
     b       36f
 394: cmp    x9, #3
@@ -9327,7 +9327,7 @@ LOCAL_FUNCTION node_api_chunk_run
 39:
     API_LIT api_j_version
     ldr     x0, [x22, #NodeApi_fork]
-    bl      api_fork_name
+    bl      lantern_api_fork_name
     API_LIT api_p_version
     b       36f
 38: API_LIT api_p_data
@@ -9336,11 +9336,11 @@ LOCAL_FUNCTION node_api_chunk_run
 37: API_LIT api_v_open
     ldr     x9, [x23, #(NodeEvent_api + 8)]
     ubfx    x0, x9, #8, #1
-    bl      api_bool
+    bl      lantern_api_bool
     API_LIT api_x_finalized
     ldr     x9, [x23, #(NodeEvent_api + 8)]
     ubfx    x0, x9, #9, #1
-    bl      api_bool
+    bl      lantern_api_bool
     ldr     x9, [x22, #NodeApi_op]          /* getAttestationsRewards: ,"data":{"ideal_rewards":[ */
     cmp     x9, #API_OP_GET_ATTESTATIONS_REWARDS
     b.ne    371f
@@ -9351,15 +9351,15 @@ LOCAL_FUNCTION node_api_chunk_run
     /* the pending streams: {"version":"<fork>","execution_optimistic":…,"finalized":…,"data":[ */
 392: API_LIT api_j_version
     ldr     x0, [x22, #NodeApi_fork]
-    bl      api_fork_name
+    bl      lantern_api_fork_name
     API_LIT api_j_optimistic
     ldr     x9, [x23, #(NodeEvent_api + 8)]
     ubfx    x0, x9, #8, #1
-    bl      api_bool
+    bl      lantern_api_bool
     API_LIT api_x_finalized
     ldr     x9, [x23, #(NodeEvent_api + 8)]
     ubfx    x0, x9, #9, #1
-    bl      api_bool
+    bl      lantern_api_bool
     API_LIT api_v_list
     b       36f
     /* {"version":"<fork>","execution_optimistic":…,"finalized":…,"data": */
@@ -9368,32 +9368,32 @@ LOCAL_FUNCTION node_api_chunk_run
     b.ne    351f
     API_LIT api_j_version
     ldr     x0, [x22, #NodeApi_fork]
-    bl      api_fork_name
+    bl      lantern_api_fork_name
     ldr     x9, [x22, #NodeApi_flags]       /* blinded with API_STREAM_PRODUCE_BLINDED */
     tbnz    x9, #19, 3521f
     API_LIT api_pb_head
     b       3522f
 3521: API_LIT api_pb_head_true
 3522: add   x0, x22, #NodeApi_root
-    bl      api_dec256
+    bl      lantern_api_dec256
     API_LIT api_pb_block_value
     ldr     x0, [x22, #NodeApi_filter_slot]
-    bl      api_wei
+    bl      lantern_api_wei
     API_LIT api_g_data
     b       36f
 351: API_LIT api_j_version
     ldr     x0, [x22, #NodeApi_fork]
-    bl      api_fork_name
+    bl      lantern_api_fork_name
     API_LIT api_j_optimistic
     ldr     x9, [x23, #(NodeEvent_api + 8)]
     ubfx    x0, x9, #8, #1
-    bl      api_bool
+    bl      lantern_api_bool
     API_LIT api_x_finalized
     ldr     x9, [x23, #(NodeEvent_api + 8)]
     ubfx    x0, x9, #9, #1
-    bl      api_bool
+    bl      lantern_api_bool
     API_LIT api_j_data
-36: bl      api_stream_json
+36: bl      lantern_api_stream_json
     cmp     x0, #3
     b.eq    97f
     cmp     x0, #2
@@ -9419,7 +9419,7 @@ LOCAL_FUNCTION node_api_chunk_run
     mov     x25, #0                         /* the head's bytes: a pass that counts */
     mov     x24, #0
     ldr     x0, [sp, #(L + 32)]
-    bl      api_stream_head
+    bl      lantern_api_stream_head
     add     x0, x28, x24                    /* the body after the head, and a size line when chunked */
     ldr     x9, [x23, #(NodeEvent_api + 8)]
     tst     x9, #API_STREAM_CHUNKED
@@ -9434,12 +9434,12 @@ LOCAL_FUNCTION node_api_chunk_run
     mov     x24, x28
     ldr     x26, [sp, #L]
     ldr     x0, [sp, #(L + 32)]
-    bl      api_stream_head
+    bl      lantern_api_stream_head
     ldr     x9, [x23, #(NodeEvent_api + 8)]
     tbz     x9, #7, 34f
     ldr     x0, [sp, #(L + 16)]             /* chunked: the size line, then CRLF after the bytes */
     mov     x1, x24
-    bl      api_hex4
+    bl      lantern_api_hex4
     mov     w9, #0x0a0d
     strh    w9, [x24, #4]
     ldr     x24, [sp, #(L + 24)]
@@ -9451,7 +9451,7 @@ LOCAL_FUNCTION node_api_chunk_run
     add     x24, x28, #6
     ldr     x9, [sp, #L]
     sub     x26, x9, #7
-    bl      api_stream_json
+    bl      lantern_api_stream_json
     cmp     x0, #3
     b.eq    97f
     cmp     x0, #2
@@ -9468,7 +9468,7 @@ LOCAL_FUNCTION node_api_chunk_run
 41: sub     x0, x24, x28
     sub     x0, x0, #6
     mov     x1, x28
-    bl      api_hex4
+    bl      lantern_api_hex4
     mov     w9, #0x0a0d
     strh    w9, [x28, #4]
     ldr     x26, [sp, #L]
@@ -9477,7 +9477,7 @@ LOCAL_FUNCTION node_api_chunk_run
     cbz     x9, 80f
     API_LIT api_last_chunk
     b       44f
-45: bl      api_stream_json                 /* HTTP/1.0: the bytes alone */
+45: bl      lantern_api_stream_json                 /* HTTP/1.0: the bytes alone */
     cmp     x0, #3
     b.eq    97f
     cmp     x0, #2
@@ -9513,7 +9513,7 @@ LOCAL_FUNCTION node_api_chunk_run
     LEAVE 64
 98: mov     x0, #LANTERN_INVALID_EVENT
     LEAVE 64
-END_FUNCTION node_api_chunk_run
+END_FUNCTION lantern_node_api_chunk_run
 
 /* ------------------------------------------------------------ The pools (beacon-api.md, node.md) */
 
@@ -9526,7 +9526,7 @@ END_FUNCTION node_api_chunk_run
  * not below MAX_COMMITTEES_PER_SLOT; 2 for a scratch without NODE_POOL_ATTESTATION_ROOM bytes.
  * Locals: the ByteList, the SingleAttestation, the committee index, the place, the length.
  */
-LOCAL_FUNCTION node_pool_attestation
+LOCAL_FUNCTION lantern_node_pool_attestation
     FRAME 48
     ldr     x9, [x1, #16]
     cmp     x9, #240
@@ -9599,10 +9599,10 @@ LOCAL_FUNCTION node_pool_attestation
     UNFRAME 48
 82: mov     x0, #2
     UNFRAME 48
-END_FUNCTION node_pool_attestation
+END_FUNCTION lantern_node_pool_attestation
 
 /* L1: x0 = the new id of a NODE_ACT_BYTES_PUT of the 8 bytes at x0. Locals: a ByteList head whose offset reaches them. */
-LOCAL_FUNCTION node_api_put8
+LOCAL_FUNCTION lantern_node_api_put8
     FRAME 32
     add     x9, sp, #16
     sub     x10, x0, x9
@@ -9610,12 +9610,12 @@ LOCAL_FUNCTION node_api_put8
     stp     x11, x10, [x9]
     str     x11, [x9, #16]
     mov     x0, x9
-    bl      node_put
+    bl      lantern_node_put
     UNFRAME 32
-END_FUNCTION node_api_put8
+END_FUNCTION lantern_node_api_put8
 
 /* L0: x0 = the gossip topic of the pool POST x0, or 0. Uses x9. */
-LOCAL_FUNCTION node_submit_topic
+LOCAL_FUNCTION lantern_node_submit_topic
     UNWIND_END_PROLOGUE
     mov     x9, x0
     mov     x0, #GOSSIP_VOLUNTARY_EXIT
@@ -9644,17 +9644,17 @@ LOCAL_FUNCTION node_submit_topic
     b.eq    9f
     mov     x0, #0
 9:  ret
-END_FUNCTION node_submit_topic
+END_FUNCTION lantern_node_submit_topic
 
 /* L0: x0 = the lantern_node_json kind of the pool operation of the gossip topic x0. Uses x9. */
-LOCAL_FUNCTION node_pool_kind
+LOCAL_FUNCTION lantern_node_pool_kind
     UNWIND_END_PROLOGUE
     cmp     x0, #GOSSIP_BLS_TO_EXECUTION_CHANGE
     mov     x9, #NODE_JSON_BLS_CHANGE
     sub     x0, x0, #(GOSSIP_VOLUNTARY_EXIT - NODE_JSON_EXIT)
     csel    x0, x9, x0, eq
     ret
-END_FUNCTION node_pool_kind
+END_FUNCTION lantern_node_pool_kind
 .if GOSSIP_PROPOSER_SLASHING - GOSSIP_VOLUNTARY_EXIT != NODE_JSON_PROPOSER_SLASHING - NODE_JSON_EXIT || GOSSIP_ATTESTER_SLASHING - GOSSIP_VOLUNTARY_EXIT != NODE_JSON_ATTESTER_SLASHING - NODE_JSON_EXIT
 .error "node_pool_kind: the kinds follow the topics"
 .endif
@@ -9665,7 +9665,7 @@ END_FUNCTION node_pool_kind
  * of the type of its fork, and for getPoolAttestationsV2 of its filters; else 2^64 - 1. x1 = the
  * entry. Uses x2, x9-x14.
  */
-LOCAL_FUNCTION node_pool_next
+LOCAL_FUNCTION lantern_node_pool_next
     UNWIND_END_PROLOGUE
     ldr     x10, [x1, #NodeApi_op]
     mov     x9, #GOSSIP_VOLUNTARY_EXIT
@@ -9733,7 +9733,7 @@ LOCAL_FUNCTION node_pool_next
     ret
 8:  mov     x0, #-1
     ret
-END_FUNCTION node_pool_next
+END_FUNCTION lantern_node_pool_next
 
 /*
  * L1: (connection x0, route x1, flags x2, view x3): a stream of a pool GET (node.md, NODE_EV_API):
@@ -9742,13 +9742,13 @@ END_FUNCTION node_pool_next
  * API_STREAM_HTTP10. Locals: the connection, the route, the flags, the fork, the entry's index
  * and address.
  */
-LOCAL_FUNCTION node_api_pool_stream
+LOCAL_FUNCTION lantern_node_api_pool_stream
     FRAME 48
     stp     x0, x1, [sp, #16]
     str     x2, [sp, #32]
     ldr     x9, [x3, #ApiView_fork]
     str     x9, [sp, #40]
-    bl      node_api_new
+    bl      lantern_node_api_new
     stp     x0, x1, [sp, #48]
     mov     x0, x1
     mov     x1, #NodeApi__mem
@@ -9792,7 +9792,7 @@ LOCAL_FUNCTION node_api_pool_stream
 2:  str     x12, [x1, #NodeApi_filter_slot]
     str     x13, [x1, #NodeApi_filter_index]
 24: mov     x0, #0
-    bl      node_pool_next
+    bl      lantern_node_pool_next
     ldr     x9, [sp, #56]
     cmn     x0, #1
     b.eq    1f
@@ -9804,7 +9804,7 @@ LOCAL_FUNCTION node_api_pool_stream
     ldr     x10, [x1, #NodePool_member]
     str     x10, [x9, #NodeApi_member]
 3:  ldp     x0, x1, [sp, #48]
-    bl      node_api_chunk_work
+    bl      lantern_node_api_chunk_work
     mov     x0, #0
     UNFRAME 48
 1:  ldr     x10, [x9, #NodeApi_op]          /* none: the folds 404, and no stream */
@@ -9813,7 +9813,7 @@ LOCAL_FUNCTION node_api_pool_stream
     ccmp    x10, x11, #4, ne
     b.ne    3b
     mov     x0, x9
-    bl      node_api_end
+    bl      lantern_node_api_end
     mov     x0, #404
     UNFRAME 48
 23: ldr     x9, [x10, #ApiRoute_subcommittee_index] /* produceSyncCommitteeContribution: a fold of slot and subcommittee_index, */
@@ -9831,7 +9831,7 @@ LOCAL_FUNCTION node_api_pool_stream
     ldp     x15, x9, [x14, #16]
     stp     x15, x9, [x1, #(NodeApi_cursor + 16)]
     add     x0, x19, #Node_head_root
-    bl      node_find_block
+    bl      lantern_node_find_block
     cmn     x0, #1
     b.eq    26f
     ldr     x9, [x1, #NodeBlock_state_id]
@@ -9840,14 +9840,14 @@ LOCAL_FUNCTION node_api_pool_stream
     str     x9, [x1, #NodeApi_state]
     b       24b
 25: ldr     x0, [sp, #56]
-    bl      node_api_end
+    bl      lantern_node_api_end
     mov     x0, #400
     UNFRAME 48
 26: ldr     x0, [sp, #56]
-    bl      node_api_end
+    bl      lantern_node_api_end
     mov     x0, #500
     UNFRAME 48
-END_FUNCTION node_api_pool_stream
+END_FUNCTION lantern_node_api_pool_stream
 
 /*
  * L1: the item of the getBlockHeaders stream x0 at or after the position x1 (node.md, NODE_EV_API, an
@@ -9857,7 +9857,7 @@ END_FUNCTION node_api_pool_stream
  * position, x23 the slot of the query or 2^64 - 1, x24 the address of its parent_root or 0, x25 a
  * NodeBlock index, x26 a slot or an entry, x27 the member. Locals: L a slot.
  */
-LOCAL_FUNCTION node_headers_next
+LOCAL_FUNCTION lantern_node_headers_next
     ENTER 16
     mov     x21, x0
     mov     x22, x1
@@ -9872,7 +9872,7 @@ LOCAL_FUNCTION node_headers_next
     b.eq    19f
     cbz     x24, 15f
     mov     x0, x24                         /* with parent_root: its slot r, of the node's imported block on the chain, else of the Db */
-    bl      node_find_block
+    bl      lantern_node_find_block
     cmn     x0, #1
     b.eq    11f
     ldr     x9, [x1, #NodeBlock_status]
@@ -9880,7 +9880,7 @@ LOCAL_FUNCTION node_headers_next
     b.ne    11f
     mov     x25, x1
     mov     x0, x1
-    bl      node_api_on_chain
+    bl      lantern_node_api_on_chain
     cbz     x0, 19f
     ldr     x26, [x25, #NodeBlock_slot]
     b       12f
@@ -9896,11 +9896,11 @@ LOCAL_FUNCTION node_headers_next
     cmp     x26, x23
     b.hi    19f                             /* with slot: at most slot */
     mov     x0, x26
-    bl      node_api_below
+    bl      lantern_node_api_below
     cmn     x0, #1
     b.ne    19f
     mov     x0, x26
-    bl      node_db_slot
+    bl      lantern_node_db_slot
     cbz     x0, 12b
     cmn     x23, #1
     b.eq    16f
@@ -9909,22 +9909,22 @@ LOCAL_FUNCTION node_headers_next
     b       16f
 15: mov     x26, x23                        /* slot alone: the Db's block of slot, below the chain the node keeps */
     mov     x0, x26
-    bl      node_api_below
+    bl      lantern_node_api_below
     cmn     x0, #1
     b.ne    19f
     mov     x0, x26
-    bl      node_db_slot
+    bl      lantern_node_db_slot
     cbz     x0, 19f
 16: mov     x1, x0                          /* the Db's block of slot x26: its DbSlot x0, the root at 0 */
     add     x0, x21, #NodeApi_cursor
     bl      lantern_copy_root
     mov     x0, x26
-    bl      node_db_block
+    bl      lantern_node_db_block
     str     x0, [x21, #NodeApi_data]
     str     xzr, [x21, #NodeApi_state]
     str     xzr, [x21, #NodeApi_slot]
     mov     x0, x26
-    bl      node_api_final_block
+    bl      lantern_node_api_final_block
     lsl     x27, x0, #2
     orr     x27, x27, #1                    /* on the chain, not optimistic */
     str     x27, [x21, #NodeApi_member]
@@ -9951,7 +9951,7 @@ LOCAL_FUNCTION node_headers_next
 23: ldr     x0, [x26, #NodeBlock_data_id]   /* its bytes, else its Db record, else its post-state */
     cbnz    x0, 24f
     mov     x0, x26
-    bl      node_api_db_ref
+    bl      lantern_node_api_db_ref
 24: str     x0, [x21, #NodeApi_data]
     mov     x9, #0
     cbnz    x0, 25f
@@ -9967,11 +9967,11 @@ LOCAL_FUNCTION node_headers_next
     cset    x27, eq
     lsl     x27, x27, #1
     mov     x0, x26
-    bl      node_api_on_chain
+    bl      lantern_node_api_on_chain
     orr     x27, x27, x0
     cbz     x0, 26f
     ldr     x0, [x26, #NodeBlock_slot]
-    bl      node_api_final_block
+    bl      lantern_node_api_final_block
     orr     x27, x27, x0, lsl #2
 26: str     x27, [x21, #NodeApi_member]
     mov     x0, #1
@@ -9982,7 +9982,7 @@ LOCAL_FUNCTION node_headers_next
     str     xzr, [x21, #NodeApi_state]
     mov     x0, #0
     LEAVE 16
-END_FUNCTION node_headers_next
+END_FUNCTION lantern_node_headers_next
 
 /*
  * L1: (connection x0, route x1, flags x2): the getBlockHeaders stream of the route's query (node.md,
@@ -9991,11 +9991,11 @@ END_FUNCTION node_headers_next
  * API_STREAM_FINALIZED of all its items; then its first item and a NODE_WORK_API_CHUNK. Locals: the
  * connection, the route, the flags, the entry's index and address, the position.
  */
-LOCAL_FUNCTION node_api_headers_stream
+LOCAL_FUNCTION lantern_node_api_headers_stream
     FRAME 48
     stp     x0, x1, [sp, #16]
     str     x2, [sp, #32]
-    bl      node_api_new
+    bl      lantern_node_api_new
     stp     x0, x1, [sp, #40]
     mov     x0, x1
     mov     x1, #NodeApi__mem
@@ -10018,7 +10018,7 @@ LOCAL_FUNCTION node_api_headers_stream
     mov     x12, #-1
     b       2f
 1:  add     x0, x19, #Node_head_root        /* neither: the head's slot */
-    bl      node_find_block
+    bl      lantern_node_find_block
     mov     x12, #-1
     cmn     x0, #1
     b.eq    2f
@@ -10039,7 +10039,7 @@ LOCAL_FUNCTION node_api_headers_stream
     str     x9, [sp, #24]
 3:  ldr     x0, [sp, #48]
     ldr     x1, [sp, #56]
-    bl      node_headers_next
+    bl      lantern_node_headers_next
     ldr     x1, [sp, #48]
     cbz     x0, 5f
     ldr     x9, [sp, #24]
@@ -10065,22 +10065,22 @@ LOCAL_FUNCTION node_api_headers_stream
     str     x11, [x1, #NodeApi_flags]
 6:  ldr     x0, [sp, #48]                   /* the first item */
     mov     x1, #0
-    bl      node_headers_next
+    bl      lantern_node_headers_next
     ldp     x0, x1, [sp, #40]
-    bl      node_api_chunk_work
+    bl      lantern_node_api_chunk_work
     UNFRAME 48
-END_FUNCTION node_api_headers_stream
+END_FUNCTION lantern_node_api_headers_stream
 
 /*
  * L1: x0 = the data of the sidecar of index x2 of the block of the root at x0 and the slot x1, as a
  * sidecar stream finds it (node.md): the NODE_BLOB_VALID entry's bytes, else with NODE_FLAG_DB the
  * NODE_DB_REF of the Db's record; 0 with none. Locals: the slot, the index.
  */
-LOCAL_FUNCTION node_sidecar_of
+LOCAL_FUNCTION lantern_node_sidecar_of
     FRAME 16
     stp     x1, x2, [sp, #16]
     mov     x1, x2
-    bl      node_blob_held
+    bl      lantern_node_blob_held
     cbz     x0, 1f
     ldr     x0, [x0, #NodeBlob_data_id]
     UNFRAME 16
@@ -10088,11 +10088,11 @@ LOCAL_FUNCTION node_sidecar_of
     tst     x9, #NODE_FLAG_DB
     b.eq    9f
     ldp     x0, x1, [sp, #16]
-    bl      node_db_sidecar
+    bl      lantern_node_db_sidecar
     UNFRAME 16
 9:  mov     x0, #0
     UNFRAME 16
-END_FUNCTION node_sidecar_of
+END_FUNCTION lantern_node_sidecar_of
 
 /*
  * L1: (connection x0, route x1, flags x2, view x3) -> x0: the blob stream of the block of the
@@ -10101,13 +10101,13 @@ END_FUNCTION node_sidecar_of
  * connection, the route, the flags, the view, the fork, the entry's index and address, a column,
  * the count of the first half's columns held, 1 with any held, a ByteList head (24).
  */
-LOCAL_FUNCTION node_api_blob_stream
+LOCAL_FUNCTION lantern_node_api_blob_stream
     FRAME 112
     stp     x0, x1, [sp, #16]
     stp     x2, x3, [sp, #32]
     ldr     x0, [x3, #ApiView_head_slot]
     add     x1, x19, #Node_config
-    bl      node_fork
+    bl      lantern_node_fork
     str     x0, [sp, #48]
     stp     xzr, xzr, [sp, #80]
     cmp     x0, #FORK_FULU
@@ -10119,7 +10119,7 @@ LOCAL_FUNCTION node_api_blob_stream
     ldr     x3, [sp, #40]
     add     x0, x3, #ApiView_head_root
     ldr     x1, [x3, #ApiView_head_slot]
-    bl      node_sidecar_of
+    bl      lantern_node_sidecar_of
     ldr     x2, [sp, #72]
     add     x9, x2, #1
     str     x9, [sp, #72]
@@ -10136,7 +10136,7 @@ LOCAL_FUNCTION node_api_blob_stream
     cmp     x9, #(NUMBER_OF_COLUMNS / 2)
     b.eq    2f
     cbnz    x10, 8f                         /* some, but not each of the first half: 404 */
-2:  bl      node_api_new
+2:  bl      lantern_node_api_new
     stp     x0, x1, [sp, #56]
     mov     x0, x1
     mov     x1, #NodeApi__mem
@@ -10178,7 +10178,7 @@ LOCAL_FUNCTION node_api_blob_stream
     stp     x12, x14, [x13]
     str     x12, [x13, #16]
     mov     x0, x13
-    bl      node_put
+    bl      lantern_node_put
     ldr     x1, [sp, #64]
     str     x0, [x1, #NodeApi_state]
     ldr     x9, [x1, #NodeApi_flags]
@@ -10195,7 +10195,7 @@ LOCAL_FUNCTION node_api_blob_stream
     str     x9, [x1, #NodeApi_filter_index]
     mov     x0, x1
     mov     x1, #0
-    bl      node_sidecar_next
+    bl      lantern_node_sidecar_next
     b       7f
 6:  ldr     x9, [sp, #80]                   /* fulu: blob 0 and column 0 with the first half; else none */
     cmp     x9, #(NUMBER_OF_COLUMNS / 2)
@@ -10203,16 +10203,16 @@ LOCAL_FUNCTION node_api_blob_stream
     add     x0, x1, #NodeApi_root
     ldr     x1, [x1, #NodeApi_slot]
     mov     x2, #0
-    bl      node_sidecar_of
+    bl      lantern_node_sidecar_of
     ldr     x1, [sp, #64]
     str     x0, [x1, #NodeApi_data]
 7:  ldp     x0, x1, [sp, #56]
-    bl      node_api_chunk_work
+    bl      lantern_node_api_chunk_work
     mov     x0, #0
     UNFRAME 112
 8:  mov     x0, #404
     UNFRAME 112
-END_FUNCTION node_api_blob_stream
+END_FUNCTION lantern_node_api_blob_stream
 
 /*
  * L1: the blob stream x0 after a chunk that ended its item (node.md, NODE_EV_API, the blob stream):
@@ -10220,7 +10220,7 @@ END_FUNCTION node_api_blob_stream
  * and column 0 after API_STREAM_BLOB_SKIP or the first half's last column, else of column member
  * + 1, with sent 0. API_STREAM_BLOB_SKIP clears. x21 the entry.
  */
-LOCAL_FUNCTION node_blob_advance
+LOCAL_FUNCTION lantern_node_blob_advance
     ENTER 0
     mov     x21, x0
     ldr     x9, [x21, #NodeApi_flags]
@@ -10231,7 +10231,7 @@ LOCAL_FUNCTION node_blob_advance
     b.hs    1f
     ldr     x1, [x21, #NodeApi_member]
     add     x1, x1, #1
-    bl      node_sidecar_next
+    bl      lantern_node_sidecar_next
     LEAVE 0
 1:  ldr     x10, [x21, #NodeApi_member]
     ldr     x11, [x21, #NodeApi_filter_slot]
@@ -10248,17 +10248,17 @@ LOCAL_FUNCTION node_blob_advance
     add     x0, x21, #NodeApi_root
     ldr     x1, [x21, #NodeApi_slot]
     mov     x2, x10
-    bl      node_sidecar_of
+    bl      lantern_node_sidecar_of
     str     x0, [x21, #NodeApi_data]
     LEAVE 0
-END_FUNCTION node_blob_advance
+END_FUNCTION lantern_node_blob_advance
 
 /*
  * L1: x0 = 1 when kzg_commitment_to_versioned_hash of the 48-byte commitment at x0 (deneb
  * beacon-chain.md: VERSIONED_HASH_VERSION_KZG, then the last 31 bytes of its sha256) is one of the
  * Root items of the ByteList x20, else 0. Locals: a ByteList of the commitment (72), the hash (32).
  */
-LOCAL_FUNCTION api_blob_wanted
+LOCAL_FUNCTION lantern_api_blob_wanted
     FRAME 112
     add     x9, sp, #16
     mov     x10, #72
@@ -10297,17 +10297,17 @@ LOCAL_FUNCTION api_blob_wanted
     b       1b
 8:  mov     x0, #0
     UNFRAME 112
-END_FUNCTION api_blob_wanted
+END_FUNCTION lantern_api_blob_wanted
 
 /*
- * L1: the blob stream's body, as api_stream_json (node.md, NODE_WORK_API_CHUNK, the blob stream):
+ * L1: the blob stream's body, as lantern_api_stream_json (node.md, NODE_WORK_API_CHUNK, the blob stream):
  * with the sidecar x21 and the versioned hashes x20 (or 0), the bytes of its blob, or of its cell,
  * from sent (NodeEvent_api), as many as fit, as JSON in lower case hex; with x21 = 0, or a blob past
  * the last, ]} as JSON. x0 = 1 when the answer is whole, 0 when more is to come, 2 for bytes that
  * are no encoding. Locals: sp+16 the piece's bytes, sp+24 their count, sp+32 1 at a blob's first
  * piece, sp+40 1 at its last.
  */
-LOCAL_FUNCTION api_blob_body
+LOCAL_FUNCTION lantern_api_blob_body
     FRAME 32
     cbz     x21, 90f
     ldr     x9, [x21, #8]
@@ -10329,7 +10329,7 @@ LOCAL_FUNCTION api_blob_body
     cbz     x20, 30f
     MOVQ    x9, (8 + PUB_BLOB_BYTES)
     add     x0, x10, x9
-    bl      api_blob_wanted
+    bl      lantern_api_blob_wanted
     cbnz    x0, 30f
     b       88f
 20: cmp     x11, #PUB_COLUMN_FIXED          /* fulu: a DataColumnSidecar; the offsets of column, kzg_commitments, kzg_proofs */
@@ -10356,7 +10356,7 @@ LOCAL_FUNCTION api_blob_body
     cbz     x20, 22f
     madd    x9, x7, x8, x13                 /* with hashes: the versioned hash of commitment b */
     add     x0, x10, x9
-    bl      api_blob_wanted
+    bl      lantern_api_blob_wanted
     cbz     x0, 87f
     ldr     x9, [x21, #8]
     add     x10, x21, x9
@@ -10465,14 +10465,14 @@ LOCAL_FUNCTION api_blob_body
     UNFRAME 32
 92: mov     x0, #2
     UNFRAME 32
-END_FUNCTION api_blob_body
+END_FUNCTION lantern_api_blob_body
 
 /*
  * L1: the sidecar of the sidecar stream x0 from the index x1 on (node.md, NODE_EV_API, a sidecar of a
  * sidecar stream): member, data, sent 0 and cursor zero; x0 = 1, or 0 with data 0 for none. x21 the
  * entry, x22 the index.
  */
-LOCAL_FUNCTION node_sidecar_next
+LOCAL_FUNCTION lantern_node_sidecar_next
     ENTER 0
     mov     x21, x0
     mov     x22, x1
@@ -10488,7 +10488,7 @@ LOCAL_FUNCTION node_sidecar_next
     tbz     x9, #0, 7f
     add     x0, x21, #NodeApi_root          /* the node's NODE_BLOB_VALID entry, else the Db's record */
     mov     x1, x22
-    bl      node_blob_held
+    bl      lantern_node_blob_held
     cbz     x0, 3f
     ldr     x0, [x0, #NodeBlob_data_id]
     b       5f
@@ -10497,7 +10497,7 @@ LOCAL_FUNCTION node_sidecar_next
     b.eq    7f
     ldr     x0, [x21, #NodeApi_slot]
     mov     x1, x22
-    bl      node_db_sidecar
+    bl      lantern_node_db_sidecar
     cbz     x0, 7f
 5:  str     x0, [x21, #NodeApi_data]
     str     x22, [x21, #NodeApi_member]
@@ -10512,20 +10512,20 @@ LOCAL_FUNCTION node_sidecar_next
 8:  str     xzr, [x21, #NodeApi_data]
     mov     x0, #0
     LEAVE 0
-END_FUNCTION node_sidecar_next
+END_FUNCTION lantern_node_sidecar_next
 
 /*
  * L1: (connection x0, route x1, flags x2, view x3) -> x0: the sidecar stream of the block of the
  * view (node.md, NODE_EV_API): 0, or 400 for a block whose slot's fork is not the operation's.
  * Locals: the connection, the route, the flags, the view, the fork, the entry's index and address.
  */
-LOCAL_FUNCTION node_api_sidecar_stream
+LOCAL_FUNCTION lantern_node_api_sidecar_stream
     FRAME 64
     stp     x0, x1, [sp, #16]
     stp     x2, x3, [sp, #32]
     ldr     x0, [x3, #ApiView_head_slot]
     add     x1, x19, #Node_config
-    bl      node_fork
+    bl      lantern_node_fork
     str     x0, [sp, #48]
     ldr     x9, [sp, #24]
     ldr     x9, [x9, #ApiRoute_op]
@@ -10538,7 +10538,7 @@ LOCAL_FUNCTION node_api_sidecar_stream
     b       2f
 1:  cmp     x0, #FORK_FULU                  /* getDebugDataColumnSidecars: fulu and later */
     b.lo    8f
-2:  bl      node_api_new
+2:  bl      lantern_node_api_new
     stp     x0, x1, [sp, #56]
     mov     x0, x1
     mov     x1, #NodeApi__mem
@@ -10597,17 +10597,17 @@ LOCAL_FUNCTION node_api_sidecar_stream
     str     x13, [x1, #NodeApi_filter_index]
     mov     x0, x1
     mov     x1, #0
-    bl      node_sidecar_next
+    bl      lantern_node_sidecar_next
     ldp     x0, x1, [sp, #56]
-    bl      node_api_chunk_work
+    bl      lantern_node_api_chunk_work
     mov     x0, #0
     UNFRAME 64
 8:  mov     x0, #400
     UNFRAME 64
-END_FUNCTION node_api_sidecar_stream
+END_FUNCTION lantern_node_api_sidecar_stream
 
 /*
- * L1: a sidecar stream's body, as api_stream_json (node.md, NODE_WORK_API_CHUNK, the sidecar
+ * L1: a sidecar stream's body, as lantern_api_stream_json (node.md, NODE_WORK_API_CHUNK, the sidecar
  * streams): with the bytes x21, as JSON the JSON of the sidecar from the cursor at NodeEvent_api + 16
  * by lantern_node_json of the entry's fork and the kind of the operation, after , when
  * API_STREAM_ITEMS is set and the cursor is at its start; as SSZ its bytes from sent (NodeEvent_api),
@@ -10615,7 +10615,7 @@ END_FUNCTION node_api_sidecar_stream
  * x21 = 0: ]} as JSON, nothing as SSZ. x0 = 1 when the answer is whole, 0 when more is to come, 2
  * for bytes that are no encoding.
  */
-LOCAL_FUNCTION api_sidecar_body
+LOCAL_FUNCTION lantern_api_sidecar_body
     FRAME 0
     ldr     x9, [x23, #(NodeEvent_api + 8)]
     cbnz    x21, 1f
@@ -10681,14 +10681,14 @@ LOCAL_FUNCTION api_sidecar_body
     UNFRAME 0
 7:  mov     x0, #2
     UNFRAME 0
-END_FUNCTION api_sidecar_body
+END_FUNCTION lantern_api_sidecar_body
 
 /*
  * L1: the pool stream of the NodeApi entry x0 goes to its next entry after slot (node.md,
  * NODE_WORK_API_CHUNK): its slot, data, sent and member, a zero cursor; data 0 with none. Bytes it owned
  * get a NODE_ACT_BYTES_FREE, and API_STREAM_OWN clears. Locals: the entry, the old data, the flags.
  */
-LOCAL_FUNCTION node_api_pool_advance
+LOCAL_FUNCTION lantern_node_api_pool_advance
     FRAME 32
     str     x0, [sp, #16]
     ldr     x9, [x0, #NodeApi_data]
@@ -10697,7 +10697,7 @@ LOCAL_FUNCTION node_api_pool_advance
     ldr     x9, [x0, #NodeApi_slot]
     mov     x1, x0
     add     x0, x9, #1
-    bl      node_pool_next
+    bl      lantern_node_pool_next
     ldr     x9, [sp, #16]
     mov     x10, #0
     cmn     x0, #1
@@ -10721,18 +10721,18 @@ LOCAL_FUNCTION node_api_pool_advance
     mov     x0, #NODE_ACT_BYTES_FREE
     ldr     x1, [sp, #24]
     mov     x2, #0
-    bl      node_ids
+    bl      lantern_node_ids
 9:  UNFRAME 32
-END_FUNCTION node_api_pool_advance
+END_FUNCTION lantern_node_api_pool_advance
 
 /*
- * L1: a pool stream's JSON, as api_stream_json: with the bytes x21, the JSON of the pool entry
+ * L1: a pool stream's JSON, as lantern_api_stream_json: with the bytes x21, the JSON of the pool entry
  * from the cursor at NodeEvent_api + 16, by lantern_node_json of the fork in sent (NodeEvent_api)
  * and the kind of the GET, after , when API_STREAM_ITEMS is set and the cursor is at its start;
  * once whole, API_STREAM_ITEMS and API_STREAM_ITEM_DONE in the event. With x21 = 0: ]}. x0 = 1
  * when the answer is whole, 0 when more is to come, 2 for bytes that are no encoding.
  */
-LOCAL_FUNCTION api_pool_json
+LOCAL_FUNCTION lantern_api_pool_json
     FRAME 0
     cbnz    x21, 1f
     API_LIT api_v_end
@@ -10781,7 +10781,7 @@ LOCAL_FUNCTION api_pool_json
     UNFRAME 0
 7:  mov     x0, #2
     UNFRAME 0
-END_FUNCTION api_pool_json
+END_FUNCTION lantern_api_pool_json
 
 /*
  * L1: (scratch x0) -> x0: the pool entry's bytes x21 folded into the aggregate in the cursor at
@@ -10793,7 +10793,7 @@ END_FUNCTION api_pool_json
  * bytes that are no attestation or a signature crypto_bls_aggregate rejects; 2 for a short scratch.
  * Locals: scratch, data, signature, length, place, the root (then the list).
  */
-LOCAL_FUNCTION node_api_fold
+LOCAL_FUNCTION lantern_node_api_fold
     FRAME 80
     str     x0, [sp, #16]
     ldr     x9, [x21, #8]
@@ -10931,7 +10931,7 @@ LOCAL_FUNCTION node_api_fold
     UNFRAME 80
 72: mov     x0, #2
     UNFRAME 80
-END_FUNCTION node_api_fold
+END_FUNCTION lantern_node_api_fold
 .if MAX_VALIDATORS_PER_COMMITTEE > 2048 || 48 + 128 + 96 + 2048 / 8 > JSON_CURSOR_SIZE
 .error "node_api_fold: the aggregate's bits fit the cursor from byte 272"
 .endif
@@ -10949,7 +10949,7 @@ END_FUNCTION node_api_fold
  * rejects; 2 for a short scratch. Locals: scratch, the bytes, the places (SYNC_COMMITTEE_SIZE / 8
  * bytes), the subcommittee's places, the place, the list.
  */
-LOCAL_FUNCTION node_api_sync_fold
+LOCAL_FUNCTION lantern_node_api_sync_fold
     FRAME 128
     str     x0, [sp, #16]
     ldr     x9, [x21, #16]
@@ -11061,7 +11061,7 @@ LOCAL_FUNCTION node_api_sync_fold
     UNFRAME 128
 72: mov     x0, #2
     UNFRAME 128
-END_FUNCTION node_api_sync_fold
+END_FUNCTION lantern_node_api_sync_fold
 .if SYNC_COMMITTEE_SIZE / 8 > 64 || API_SYNC_SUBCOMMITTEE_SIZE % 8 || 144 + API_SYNC_SUBCOMMITTEE_SIZE / 8 > JSON_CURSOR_SIZE
 .error "node_api_sync_fold: the places fit its locals, a subcommittee's places are whole bytes"
 .endif
@@ -11072,7 +11072,7 @@ END_FUNCTION node_api_sync_fold
  * produceSyncCommitteeContribution): slot filter_slot, the beacon_block_root, subcommittee_index
  * filter_index of the entry x22, the bits, the signature. x0 = 0.
  */
-LOCAL_FUNCTION node_api_contribution
+LOCAL_FUNCTION lantern_node_api_contribution
     FRAME 16
     str     x0, [sp, #16]
     ldr     x9, [x22, #NodeApi_filter_slot]
@@ -11096,7 +11096,7 @@ LOCAL_FUNCTION node_api_contribution
     mov     x1, #(48 + API_SYNC_SUBCOMMITTEE_SIZE / 8 + 96)
     mov     x0, #0
     UNFRAME 16
-END_FUNCTION node_api_contribution
+END_FUNCTION lantern_node_api_contribution
 
 /*
  * L1: (out x0) -> x0: the aggregate in the cursor at NodeEvent_api + 16 of the event x23 as the
@@ -11105,7 +11105,7 @@ END_FUNCTION node_api_contribution
  * signature; from electra committee_bits with the bit of filter_index. x0 = 0; 1 for a committee
  * index not below MAX_COMMITTEES_PER_SLOT. Locals: out, the fixed part's size, the count.
  */
-LOCAL_FUNCTION node_api_aggregate
+LOCAL_FUNCTION lantern_node_api_aggregate
     FRAME 32
     str     x0, [sp, #16]
     mov     x9, #228                        /* the fixed part: 228 bytes, from electra with committee_bits */
@@ -11159,7 +11159,7 @@ LOCAL_FUNCTION node_api_aggregate
     UNFRAME 32
 71: mov     x0, #1
     UNFRAME 32
-END_FUNCTION node_api_aggregate
+END_FUNCTION lantern_node_api_aggregate
 .if NODE_API_FIRST_ROOM < API_HEAD_ROOM + NODE_POOL_ATTESTATION_FIXED + MAX_VALIDATORS_PER_COMMITTEE / 8 + 1
 .error "node_api_aggregate: an Attestation of one committee fits the first chunk"
 .endif
@@ -11169,7 +11169,7 @@ END_FUNCTION node_api_aggregate
  * for each record of LANTERN_GOSSIP_REJECT, with , between, then ]}. Locals: the record, its
  * index, the failures written.
  */
-LOCAL_FUNCTION api_failures
+LOCAL_FUNCTION lantern_api_failures
     FRAME 32
     add     x10, x22, #NodeEvent_chunk
     ldr     x9, [x10, #8]
@@ -11189,7 +11189,7 @@ LOCAL_FUNCTION api_failures
     API_LIT api_p_comma
 2:  API_LIT api_f_index
     ldr     x0, [sp, #24]
-    bl      api_dec
+    bl      lantern_api_dec
     API_LIT api_f_reject
     ldr     x12, [sp, #32]
     add     x12, x12, #1
@@ -11205,7 +11205,7 @@ LOCAL_FUNCTION api_failures
     b       1b
 9:  API_LIT api_v_end
     UNFRAME 32
-END_FUNCTION api_failures
+END_FUNCTION lantern_api_failures
 
 /*
  * L1: (connection x0, route x1, flags x2, request x3, view x4) -> x0: a pool POST (node.md,
@@ -11213,7 +11213,7 @@ END_FUNCTION api_failures
  * the status of the error to answer. Locals: the connection, the flags, the route, the view, the
  * head's post-state, a ByteList head whose offset reaches the body.
  */
-LOCAL_FUNCTION node_api_submit
+LOCAL_FUNCTION lantern_node_api_submit
     FRAME 80
     stp     x0, x2, [sp, #16]
     stp     x1, x4, [sp, #32]
@@ -11245,14 +11245,14 @@ LOCAL_FUNCTION node_api_submit
     stp     x11, x13, [x12]
     str     x11, [x12, #16]
     add     x0, x19, #Node_head_root        /* the head's post-state, else 500 */
-    bl      node_find_block
+    bl      lantern_node_find_block
     cmn     x0, #1
     b.eq    81f
     ldr     x9, [x1, #NodeBlock_state_id]
     cbz     x9, 81f
     str     x9, [sp, #48]
     add     x0, sp, #64
-    bl      node_put
+    bl      lantern_node_put
     mov     x3, x0
     mov     x0, #NODE_WORK_API_SUBMIT
     ldr     x1, [sp, #48]
@@ -11265,14 +11265,14 @@ LOCAL_FUNCTION node_api_submit
     ldr     x10, [sp, #40]
     ldr     x10, [x10, #ApiView_fork]
     orr     x5, x5, x10, lsl #16
-    bl      node_work
+    bl      lantern_node_work
     mov     x0, #0
     UNFRAME 80
 80: mov     x0, #400
     UNFRAME 80
 81: mov     x0, #500
     UNFRAME 80
-END_FUNCTION node_api_submit
+END_FUNCTION lantern_node_api_submit
 
 /*
  * L0: x0 = 0 when the NODE_EV_WORK_DONE x0 of x1 bytes of a valid NODE_WORK_API_SUBMIT holds its
@@ -11280,7 +11280,7 @@ END_FUNCTION node_api_submit
  * records in its bytes, each a code and a ByteList of offset 24 whose size is a multiple of 8;
  * else 1. Uses x9-x15.
  */
-LOCAL_FUNCTION node_submit_check
+LOCAL_FUNCTION lantern_node_submit_check
     UNWIND_END_PROLOGUE
     cmp     x1, #(NodeEvent_chunk + 24)
     b.lo    8f
@@ -11320,7 +11320,7 @@ LOCAL_FUNCTION node_submit_check
     ret
 8:  mov     x0, #1
     ret
-END_FUNCTION node_submit_check
+END_FUNCTION lantern_node_submit_check
 
 /*
  * L1: the ProposerPreparation at x0 (beacon-api.md, prepareBeaconProposer): the NodeProposer of its
@@ -11328,11 +11328,11 @@ END_FUNCTION node_submit_check
  * the first entry whose until_epoch is at most that epoch, else a new one when the part has room;
  * else none. Locals: the item, the epoch.
  */
-LOCAL_FUNCTION node_proposer_put
+LOCAL_FUNCTION lantern_node_proposer_put
     FRAME 16
     str     x0, [sp, #16]
     mov     x0, x20
-    bl      node_store_slot
+    bl      lantern_node_store_slot
     mov     x9, #SLOTS_PER_EPOCH
     udiv    x0, x0, x9
     str     x0, [sp, #24]
@@ -11381,7 +11381,7 @@ LOCAL_FUNCTION node_proposer_put
     mov     x2, #20
     bl      lantern_copy
 9:  UNFRAME 16
-END_FUNCTION node_proposer_put
+END_FUNCTION lantern_node_proposer_put
 
 /*
  * L2: the NODE_EV_WORK_DONE x0 of a NODE_WORK_API_SUBMIT (node.md, lantern_node_step): the body's
@@ -11391,13 +11391,13 @@ END_FUNCTION node_proposer_put
  * the topic, x27 the new id, x28 the answer's flags. Locals: L 1 when the pool keeps it, L+8 the
  * records left, L+16 a sync message's subnet.
  */
-LOCAL_FUNCTION node_api_submit_done
+LOCAL_FUNCTION lantern_node_api_submit_done
     ENTER 32
     mov     x21, x0
     mov     x0, #NODE_ACT_BYTES_FREE
     ldr     x1, [x21, #NodeAction_data]
     mov     x2, #0
-    bl      node_ids
+    bl      lantern_node_ids
     ldr     x9, [x21, #NodeAction_arg]      /* the answer's flags: API_STREAM_CLOSE (1), API_STREAM_HTTP10 (2) */
     ubfx    x10, x9, #8, #8
     mov     x28, #API_R_CLOSE
@@ -11406,7 +11406,7 @@ LOCAL_FUNCTION node_api_submit_done
     mov     x11, #API_R_KEEP
     csel    x28, x11, xzr, ne
 1:  and     x0, x9, #255
-    bl      node_submit_topic
+    bl      lantern_node_submit_topic
     mov     x26, x0
     ldr     x9, [x21, #NodeEvent_result]
     cbnz    x9, 80f
@@ -11424,13 +11424,13 @@ LOCAL_FUNCTION node_api_submit_done
     cbnz    x9, 6f
     cbz     x26, 40f                        /* no topic: a subscription */
     add     x0, x22, #16                    /* valid: its bytes to a new id, kept by the pool when it has room */
-    bl      node_put
+    bl      lantern_node_put
     mov     x27, x0
     mov     x0, x26                         /* its event (node.md, The events), before its bytes go */
     mov     x1, x27
     ldr     x2, [x21, #NodeAction_arg]
     lsr     x2, x2, #16
-    bl      node_op_event
+    bl      lantern_node_op_event
     cmp     x26, #GOSSIP_BEACON_ATTESTATION /* the metrics (metrics.md): an attestation that goes out */
     cset    x9, eq
     LDQ     x10, x19, Node_metrics + NodeMetrics_attestations_published
@@ -11467,7 +11467,7 @@ LOCAL_FUNCTION node_api_submit_done
     ldr     x2, [x22, #32]
     ldr     x3, [x21, #NodeAction_arg]
     lsr     x3, x3, #16
-    bl      node_pool_add
+    bl      lantern_node_pool_add
     str     x0, [sp, #L]
     ldr     x9, [x19, #Node_flags]
     tbz     x9, #2, 3f                      /* NODE_FLAG_SUBSCRIBED: out on its topic, an attestation on its subnet */
@@ -11476,7 +11476,7 @@ LOCAL_FUNCTION node_api_submit_done
     mov     x0, x26
     add     x1, x22, #16
     ldr     w2, [x22, #8]
-    bl      node_publish
+    bl      lantern_node_publish
     b       3f
 24: str     xzr, [sp, #(L + 16)]            /* a sync message: on each of its subnets */
 25: ldr     x2, [sp, #(L + 16)]
@@ -11487,7 +11487,7 @@ LOCAL_FUNCTION node_api_submit_done
     tbz     x9, #0, 26f
     mov     x0, x26
     add     x1, x22, #16
-    bl      node_publish
+    bl      lantern_node_publish
 26: ldr     x9, [sp, #(L + 16)]
     add     x9, x9, #1
     str     x9, [sp, #(L + 16)]
@@ -11495,7 +11495,7 @@ LOCAL_FUNCTION node_api_submit_done
 3:  cmp     x26, #GOSSIP_ATTESTER_SLASHING  /* an attester slashing: on_attester_slashing with the justified root's state */
     b.ne    4f
     add     x0, x20, #(Store_justified_checkpoint + 8)
-    bl      node_find_block
+    bl      lantern_node_find_block
     cmn     x0, #1
     b.eq    4f
     ldr     x9, [x1, #NodeBlock_status]
@@ -11508,14 +11508,14 @@ LOCAL_FUNCTION node_api_submit_done
     mov     x3, x27
     mov     x4, #0
     mov     x5, #0
-    bl      node_work
+    bl      lantern_node_work
     b       6f
 4:  ldr     x9, [sp, #L]                    /* bytes no entry keeps and no work reads go */
     cbnz    x9, 6f
     mov     x0, #NODE_ACT_BYTES_FREE
     mov     x1, x27
     mov     x2, #0
-    bl      node_ids
+    bl      lantern_node_ids
 6:  ldr     x9, [x22, #16]
     add     x22, x22, #16
     add     x22, x22, x9
@@ -11566,17 +11566,17 @@ LOCAL_FUNCTION node_api_submit_done
     sub     x13, x13, #8
     b       43b
 45: mov     x0, x9                          /* a fee recipient: through the store's epoch + 2 */
-    bl      node_proposer_put
+    bl      lantern_node_proposer_put
     b       6b
 46: add     x0, x22, #16                    /* a registration: its validator's NodeProposer entry */
     ldr     x1, [x22, #8]
-    bl      node_registration_put
+    bl      lantern_node_registration_put
     b       6b
 70: ldr     x9, [x21, #NodeAction_arg]      /* registerValidator: the builder's call, then the answer */
     and     x9, x9, #255
     cmp     x9, #API_OP_REGISTER_VALIDATOR
     b.ne    701f
-    bl      node_builder_register
+    bl      lantern_node_builder_register
 701: ldr    x0, [x21, #NodeAction_target]   /* the answer: 200, or 400 with the failures */
     cbz     x25, 71f
     ldr     x9, [x21, #NodeAction_arg]      /* a list: the failures */
@@ -11595,22 +11595,22 @@ LOCAL_FUNCTION node_api_submit_done
     mov     x2, #400
     mov     x3, #API_OP_SUBMIT_POOL_BLS_TO_EXECUTION_CHANGE
     mov     x4, x28
-    bl      node_api_send
+    bl      lantern_node_api_send
     LEAVE 32
 71: mov     x1, #0
     mov     x2, #200
     mov     x3, #0
     mov     x4, x28
-    bl      node_api_send
+    bl      lantern_node_api_send
     LEAVE 32
 80: ldr     x0, [x21, #NodeAction_target]
     mov     x1, #0
     mov     x2, #400
     mov     x3, #API_BODY_ERROR
     mov     x4, x28
-    bl      node_api_send
+    bl      lantern_node_api_send
     LEAVE 32
-END_FUNCTION node_api_submit_done
+END_FUNCTION lantern_node_api_submit_done
 
 /*
  * L2: the publish of the SSZ bytes of the ByteList x1 on the gossip topic x0 of the subnet x2 (node.md, the
@@ -11620,7 +11620,7 @@ END_FUNCTION node_api_submit_done
  * Locals: L a GossipTopic, L+24 the topic's ByteList (24 + 128), L+176 a size, L+184 the
  * message-id (24).
  */
-LOCAL_FUNCTION node_publish
+LOCAL_FUNCTION lantern_node_publish
     ENTER 208
     mov     x21, x1
     ldr     w9, [x19, #Node_fork_digest]
@@ -11647,7 +11647,7 @@ LOCAL_FUNCTION node_publish
     add     x27, x27, #7
     and     x27, x27, #~7
     mov     x0, x27
-    bl      node_out
+    bl      lantern_node_out
     cbz     x0, 9f
     mov     x22, x0
     add     x2, x22, x26                    /* the data's ByteList head before it: its room to the event's end */
@@ -11660,9 +11660,9 @@ LOCAL_FUNCTION node_publish
     CALL_GLOBAL snappy_compress
     cbnz    x0, 8f
     mov     x0, x20                         /* the message-id: of the fork of the store's slot */
-    bl      node_store_slot
+    bl      lantern_node_store_slot
     add     x1, x19, #Node_config
-    bl      node_fork
+    bl      lantern_node_fork
     mov     x15, x0
     add     x0, sp, #(L + 24)
     add     x1, x22, x26
@@ -11716,15 +11716,15 @@ LOCAL_FUNCTION node_publish
     sub     x14, x14, x27
     str     x14, [x13, #16]
     LEAVE 208
-END_FUNCTION node_publish
+END_FUNCTION lantern_node_publish
 
 /*
  * L1: (text x0 to x1, kind x2, fork x3, fault x4) -> x0: the JSON text decoded by lantern_node_json_decode
- * into the record at x27 of node_api_submit_run (x24 its scratch, x26 the event's end): code and
+ * into the record at x27 of lantern_node_api_submit_run (x24 its scratch, x26 the event's end): code and
  * subnet 0, then a ByteList of the SSZ bytes, its size to a multiple of 8; x27 then the next record. x0 = 0,
  * 1 for a text that is no such value, 2 for too little room. Locals: a ByteList head of the text.
  */
-LOCAL_FUNCTION node_submit_decode
+LOCAL_FUNCTION lantern_node_submit_decode
     FRAME 32
     add     x9, sp, #16
     sub     x10, x0, x9
@@ -11765,14 +11765,14 @@ LOCAL_FUNCTION node_submit_decode
     UNFRAME 32
 8:  mov     x0, #2
     UNFRAME 32
-END_FUNCTION node_submit_decode
+END_FUNCTION lantern_node_submit_decode
 
 /*
- * L1: (bytes x0, length x1) -> x0: the bytes as the record at x27 of node_api_submit_run (x26 the
+ * L1: (bytes x0, length x1) -> x0: the bytes as the record at x27 of lantern_node_api_submit_run (x26 the
  * event's end): code and subnet 0, then a ByteList of them, its size to a multiple of 8; x27 then
  * the next record. x0 = 0, or 2 for too little room. Locals: the record's size, the length.
  */
-LOCAL_FUNCTION node_submit_copy
+LOCAL_FUNCTION lantern_node_submit_copy
     FRAME 16
     add     x9, x1, #(16 + 24 + 7)
     and     x9, x9, #~7
@@ -11801,7 +11801,7 @@ LOCAL_FUNCTION node_submit_copy
     UNFRAME 16
 8:  mov     x0, #2
     UNFRAME 16
-END_FUNCTION node_submit_copy
+END_FUNCTION lantern_node_submit_copy
 
 /*
  * (node x0, store x1, seen x2, work x3, state_a x4, data x5, scratch x6, event x7, room x8) -> status:
@@ -11813,7 +11813,7 @@ END_FUNCTION node_submit_copy
  * a list, L+48 where the text goes on, L+56 an item's start, L+64 a NodeGossip, L+152 a JsonFault,
  * L+280 a root, L+312 an index.
  */
-LOCAL_FUNCTION node_api_submit_run
+LOCAL_FUNCTION lantern_node_api_submit_run
     ENTER 320
     mov     x19, x0
     mov     x20, x1
@@ -11849,7 +11849,7 @@ LOCAL_FUNCTION node_api_submit_run
     ccmp    x0, x10, #4, ne
     cset    x9, eq
     str     x9, [sp, #(L + 40)]
-    bl      node_submit_topic
+    bl      lantern_node_submit_topic
     str     x0, [sp, #(L + 16)]
     cbnz    x0, 15f
     ldr     x9, [x21, #NodeAction_arg]      /* no topic: a subscription's type, else no such work */
@@ -11885,7 +11885,7 @@ LOCAL_FUNCTION node_api_submit_run
     mov     x10, #NODE_JSON_SINGLE_ATTESTATION
     csel    x0, x10, x0, hs
     b       13f
-12: bl      node_pool_kind
+12: bl      lantern_node_pool_kind
     b       13f
 14: mov     x0, x9
 13: str     x0, [sp, #(L + 8)]
@@ -11913,7 +11913,7 @@ LOCAL_FUNCTION node_api_submit_run
     ldp     x2, x3, [sp, #(L + 8)]
     ldr     x3, [sp, #(L + 24)]
     add     x4, sp, #(L + 152)
-    bl      node_submit_decode
+    bl      lantern_node_submit_decode
     cmp     x0, #1
     b.eq    90f
     b.hi    97f
@@ -11927,14 +11927,14 @@ LOCAL_FUNCTION node_api_submit_run
     cmp     x9, #FORK_CAPELLA
     b.lo    90f
 201:
-    bl      submit_ws
+    bl      lantern_submit_ws
     cmp     x0, x28
     b.hs    90f
     ldrb    w9, [x0]
     cmp     w9, #'['
     b.ne    90f
     add     x0, x0, #1
-    bl      submit_ws
+    bl      lantern_submit_ws
     cmp     x0, x28
     b.hs    90f
     ldrb    w9, [x0]
@@ -11989,7 +11989,7 @@ LOCAL_FUNCTION node_api_submit_run
     ldr     x2, [sp, #(L + 8)]
     ldr     x3, [sp, #(L + 24)]
     add     x4, sp, #(L + 152)
-    bl      node_submit_decode
+    bl      lantern_node_submit_decode
     cmp     x0, #1
     b.eq    90f
     b.hi    97f
@@ -12003,7 +12003,7 @@ LOCAL_FUNCTION node_api_submit_run
     b.eq    23b
     cmp     w9, #']'
     b.ne    90f
-28: bl      submit_ws                       /* then only white space */
+28: bl      lantern_submit_ws                       /* then only white space */
     cmp     x0, x28
     b.ne    90f
     b       30f
@@ -12026,7 +12026,7 @@ LOCAL_FUNCTION node_api_submit_run
 41: ldp     x0, x12, [sp, #(L + 48)]
     cbz     x12, 30f
     mov     x1, #240
-    bl      node_submit_copy
+    bl      lantern_node_submit_copy
     cbnz    x0, 97f
     ldp     x0, x12, [sp, #(L + 48)]
     add     x0, x0, #240
@@ -12044,7 +12044,7 @@ LOCAL_FUNCTION node_api_submit_run
 47: ldp     x0, x12, [sp, #(L + 48)]
     cbz     x12, 30f
     mov     x1, #180
-    bl      node_submit_copy
+    bl      lantern_node_submit_copy
     cbnz    x0, 97f
     ldp     x0, x12, [sp, #(L + 48)]
     add     x0, x0, #180
@@ -12085,7 +12085,7 @@ LOCAL_FUNCTION node_api_submit_run
     b.hi    90f
     add     x0, x0, x14
     sub     x1, x9, x14
-    bl      node_submit_copy
+    bl      lantern_node_submit_copy
     cbnz    x0, 97f
     ldr     x13, [sp, #(L + 56)]
     add     x13, x13, #1
@@ -12327,7 +12327,7 @@ LOCAL_FUNCTION node_api_submit_run
     mov     x1, x27
     mov     x2, x28
     mov     x3, x24
-    bl      node_registrations_find
+    bl      lantern_node_registrations_find
     cbnz    x0, 97f
     b       39b
 90: mov     x9, #LANTERN_INVALID_ENCODING   /* a body that is no such text */
@@ -12340,10 +12340,10 @@ LOCAL_FUNCTION node_api_submit_run
     LEAVE 320
 98: mov     x0, #LANTERN_INVALID_EVENT
 99: LEAVE 320
-END_FUNCTION node_api_submit_run
+END_FUNCTION lantern_node_api_submit_run
 
 /* L0: x0 = x0 past the JSON white space (space, tab, LF, CR) before x28. Uses x9. */
-LOCAL_FUNCTION submit_ws
+LOCAL_FUNCTION lantern_submit_ws
     UNWIND_END_PROLOGUE
 1:  cmp     x0, x28
     b.hs    9f
@@ -12356,7 +12356,7 @@ LOCAL_FUNCTION submit_ws
     add     x0, x0, #1
     b       1b
 9:  ret
-END_FUNCTION submit_ws
+END_FUNCTION lantern_submit_ws
 
     RODATA
     .p2align 3

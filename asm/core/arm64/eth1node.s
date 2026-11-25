@@ -10,7 +10,7 @@
  * L2: with NODE_FLAG_ENGINE and NODE_FLAG_ETH1, after the head: when the store's epoch + 1 is above eth1_check_epoch
  * and the head's post-state is held, an ETH1_CHECK work of it. x21 the epoch + 1.
  */
-LOCAL_FUNCTION node_eth1_check_due
+LOCAL_FUNCTION lantern_node_eth1_check_due
     ENTER 0
     ldr     x9, [x19, #Node_flags]
     tst     x9, #NODE_FLAG_ENGINE
@@ -18,7 +18,7 @@ LOCAL_FUNCTION node_eth1_check_due
     tst     x9, #NODE_FLAG_ETH1
     b.eq    9f
     mov     x0, x20
-    bl      node_store_slot
+    bl      lantern_node_store_slot
     mov     x9, #SLOTS_PER_EPOCH
     udiv    x21, x0, x9
     add     x21, x21, #1
@@ -26,7 +26,7 @@ LOCAL_FUNCTION node_eth1_check_due
     cmp     x21, x9
     b.ls    9f
     add     x0, x19, #Node_head_root
-    bl      node_find_block
+    bl      lantern_node_find_block
     cmn     x0, #1
     b.eq    9f
     ldr     x1, [x1, #NodeBlock_state_id]
@@ -37,15 +37,15 @@ LOCAL_FUNCTION node_eth1_check_due
     mov     x3, #0
     mov     x4, #0
     mov     x5, #0
-    bl      node_work
+    bl      lantern_node_work
 9:  LEAVE 0
-END_FUNCTION node_eth1_check_due
+END_FUNCTION lantern_node_eth1_check_due
 
 /* L1: x0 = the start in seconds of the voting period of the store's slot (phase0 voting_period_start_time). Uses x9-x11. */
-LOCAL_FUNCTION node_eth1_period
+LOCAL_FUNCTION lantern_node_eth1_period
     FRAME 0
     mov     x0, x20
-    bl      node_store_slot
+    bl      lantern_node_store_slot
     MOVQ    x9, EPOCHS_PER_ETH1_VOTING_PERIOD * SLOTS_PER_EPOCH
     udiv    x10, x0, x9
     mul     x10, x10, x9
@@ -56,17 +56,17 @@ LOCAL_FUNCTION node_eth1_period
     mov     x11, #1000
     udiv    x0, x10, x11
     UNFRAME 0
-END_FUNCTION node_eth1_period
+END_FUNCTION lantern_node_eth1_period
 
 /* L0: x0 = 2 * SECONDS_PER_ETH1_BLOCK * ETH1_FOLLOW_DISTANCE of the config. Uses x9, x10. */
-LOCAL_FUNCTION node_eth1_reach
+LOCAL_FUNCTION lantern_node_eth1_reach
     UNWIND_END_PROLOGUE
     LDQ     x9, x19, Node_config + CONFIG_SECONDS_PER_ETH1_BLOCK
     LDQ     x10, x19, Node_config + CONFIG_ETH1_FOLLOW_DISTANCE
     mul     x0, x9, x10
     lsl     x0, x0, #1
     ret
-END_FUNCTION node_eth1_reach
+END_FUNCTION lantern_node_eth1_reach
 
 /*
  * L2: with eth1_state 1, the next eth1 call (node.md, the eth1 follower): the latest block when its
@@ -74,7 +74,7 @@ END_FUNCTION node_eth1_reach
  * went, else 0. x21 the blocks, x22 their count, x25 the follow head, x26 a block's number or the
  * logs' first, x27 the logs' last, x28 the method.
  */
-LOCAL_FUNCTION node_eth1_next
+LOCAL_FUNCTION lantern_node_eth1_next
     ENTER 0
     LDQ     x9, x19, Node_eth1_state
     cmp     x9, #1
@@ -115,9 +115,9 @@ LOCAL_FUNCTION node_eth1_next
     b.lo    5f
     ldr     x26, [x21, #Eth1Block_number]
     cbz     x26, 8f
-    bl      node_eth1_period
+    bl      lantern_node_eth1_period
     mov     x27, x0
-    bl      node_eth1_reach
+    bl      lantern_node_eth1_reach
     ldr     x9, [x21, #Eth1Block_timestamp]
     add     x9, x9, x0
     cmp     x9, x27
@@ -126,11 +126,11 @@ LOCAL_FUNCTION node_eth1_next
 5:  mov     x0, x28
     mov     x1, x26
     mov     x2, x27
-    bl      node_eth1_send
+    bl      lantern_node_eth1_send
     LEAVE 0
 8:  mov     x0, #0
     LEAVE 0
-END_FUNCTION node_eth1_next
+END_FUNCTION lantern_node_eth1_next
 
 /*
  * L2: (method x0, number or first x1, last x2): the eth1 call's request, with the id engine_id, in
@@ -139,13 +139,13 @@ END_FUNCTION node_eth1_next
  * x22 the number or first, x25 the last, x26 the body, x27 the token, x28 the host. Locals: L the
  * scratch's size, L+8 the id, L+16 and L+24 arguments.
  */
-LOCAL_FUNCTION node_eth1_send
+LOCAL_FUNCTION lantern_node_eth1_send
     ENTER 32
     mov     x21, x0
     mov     x22, x1
     mov     x25, x2
     mov     x0, #(48 + 1024 + 7)
-    bl      node_room
+    bl      lantern_node_room
     cbz     x0, 7f
     ldr     x9, [x23]
     str     x9, [sp, #L]
@@ -201,7 +201,7 @@ LOCAL_FUNCTION node_eth1_send
     cbnz    x0, 8f
     mov     x0, #NODE_ACT_ENGINE            /* the request in the action */
     mov     x1, #(48 + 1024)
-    bl      node_act
+    bl      lantern_node_act
     str     xzr, [x0, #16]
     mov     x9, #(24 + 1024)
     mov     x10, #24
@@ -227,7 +227,7 @@ LOCAL_FUNCTION node_eth1_send
     str     x9, [x23]
 7:  mov     x0, #0
     LEAVE 32
-END_FUNCTION node_eth1_send
+END_FUNCTION lantern_node_eth1_send
 
 /*
  * L2: the eth1 call in flight answered: the body x0 (a ByteList in scratch, which stays short)
@@ -236,7 +236,7 @@ END_FUNCTION node_eth1_send
  * x25 an entry, x26 the entries left, x27 a part's base, x28 a count's entry. Locals: L the
  * result's ByteList (24), L+24 an Eth1Block (88), L+112 the scratch's size.
  */
-LOCAL_FUNCTION node_eth1_answer
+LOCAL_FUNCTION lantern_node_eth1_answer
     ENTER 128
     ldr     x9, [x0, #8]                    /* the result's ByteList: its bytes in the body */
     add     x9, x0, x9
@@ -266,7 +266,7 @@ LOCAL_FUNCTION node_eth1_answer
 10: cmp     x10, x9
     b.ne    80f
     add     x0, sp, #(L + 24)
-    bl      node_eth1_block_add
+    bl      lantern_node_eth1_block_add
     LEAVE 128
 20: ldr     x9, [x23]                       /* the logs: the deposits' list in scratch */
     str     x9, [sp, #(L + 112)]
@@ -351,7 +351,7 @@ LOCAL_FUNCTION node_eth1_answer
 80: ldr     x9, [x19, #Node_time_ms]        /* a failed call: the next head poll */
     STQ     x9, x19, Node_eth1_head_ms
     LEAVE 128
-END_FUNCTION node_eth1_answer
+END_FUNCTION lantern_node_eth1_answer
 
 /*
  * L2: the Eth1Block x0 of an answer, its number, hash and timestamp set, joins eth1_blocks after the
@@ -359,7 +359,7 @@ END_FUNCTION node_eth1_answer
  * eth1_counts entry at or below its number. x21 the block, x22 its number, x25 the entries, x26
  * their count, x27 the capacity. Locals: L a DepositTree count of 0.
  */
-LOCAL_FUNCTION node_eth1_block_add
+LOCAL_FUNCTION lantern_node_eth1_block_add
     ENTER 16
     mov     x21, x0
     ldr     x22, [x21, #Eth1Block_number]
@@ -421,7 +421,7 @@ LOCAL_FUNCTION node_eth1_block_add
     b       6f
 5:  cmp     x26, x27                        /* after the highest; no room: the lowest goes first */
     b.lo    51f
-    bl      node_eth1_block_drop
+    bl      lantern_node_eth1_block_drop
     PART    x25, x26, x19, Node_eth1_blocks
 51: mov     x10, #Eth1Block__mem
     madd    x0, x26, x10, x25
@@ -430,9 +430,9 @@ LOCAL_FUNCTION node_eth1_block_add
     mov     x1, x21
     mov     x2, #Eth1Block__mem
     bl      lantern_copy
-6:  bl      node_eth1_period                /* while the second entry is before the period's reach, the lowest goes */
+6:  bl      lantern_node_eth1_period                /* while the second entry is before the period's reach, the lowest goes */
     mov     x21, x0
-    bl      node_eth1_reach
+    bl      lantern_node_eth1_reach
     mov     x22, x0
 7:  PART    x25, x26, x19, Node_eth1_blocks
     cmp     x26, #1
@@ -441,13 +441,13 @@ LOCAL_FUNCTION node_eth1_block_add
     add     x9, x9, x22
     cmp     x9, x21
     b.hs    9f
-    bl      node_eth1_block_drop
+    bl      lantern_node_eth1_block_drop
     b       7b
 9:  LEAVE 16
-END_FUNCTION node_eth1_block_add
+END_FUNCTION lantern_node_eth1_block_add
 
 /* L2: the lowest eth1_blocks entry goes: each other one down. x21 the entries, x22 the count, x25 the index. */
-LOCAL_FUNCTION node_eth1_block_drop
+LOCAL_FUNCTION lantern_node_eth1_block_drop
     ENTER 0
     PART    x21, x22, x19, Node_eth1_blocks
     cbz     x22, 9f
@@ -464,14 +464,14 @@ LOCAL_FUNCTION node_eth1_block_drop
 2:  sub     x22, x22, #1
     str     x22, [x19, #(Node_eth1_blocks + 8)]
 9:  LEAVE 0
-END_FUNCTION node_eth1_block_drop
+END_FUNCTION lantern_node_eth1_block_drop
 
 /*
  * L0: x0 = the bytes of the follower's Eth1Snapshot (node.md): with eth1_state 1 its blocks, the
  * deposits from eth1_deposit_index, at most MAX_DEPOSITS, and every leaf; else none. x1 the
  * blocks, x2 the deposits, x3 the leaves, x4 the first deposit. Uses x9-x12.
  */
-LOCAL_FUNCTION node_eth1_snapshot_size
+LOCAL_FUNCTION lantern_node_eth1_snapshot_size
     UNWIND_END_PROLOGUE
     mov     x1, #0
     mov     x2, #0
@@ -496,18 +496,18 @@ LOCAL_FUNCTION node_eth1_snapshot_size
     madd    x0, x2, x9, x0
     add     x0, x0, x3, lsl #5
     ret
-END_FUNCTION node_eth1_snapshot_size
+END_FUNCTION lantern_node_eth1_snapshot_size
 
 /*
  * L2: x0 = the id of a new BYTES_PUT of the follower's Eth1Snapshot (node.md, NODE_PRODUCE_ETH1).
  * x21 the blocks, x22 the deposits, x25 the leaves, x26 the first deposit, x27 the snapshot, x28
  * the id.
  */
-LOCAL_FUNCTION node_eth1_snapshot
+LOCAL_FUNCTION lantern_node_eth1_snapshot
     ENTER 0
-    bl      node_new_id
+    bl      lantern_node_new_id
     mov     x28, x0
-    bl      node_eth1_snapshot_size
+    bl      lantern_node_eth1_snapshot_size
     mov     x21, x1
     mov     x22, x2
     mov     x25, x3
@@ -516,7 +516,7 @@ LOCAL_FUNCTION node_eth1_snapshot
     add     x1, x0, #(48 + 7)
     and     x1, x1, #~7
     mov     x0, #NODE_ACT_BYTES_PUT
-    bl      node_act
+    bl      lantern_node_act
     str     x28, [x0, #16]
     ldr     x9, [x0]
     sub     x9, x9, #24
@@ -548,4 +548,4 @@ LOCAL_FUNCTION node_eth1_snapshot
     bl      lantern_copy
     mov     x0, x28
     LEAVE 0
-END_FUNCTION node_eth1_snapshot
+END_FUNCTION lantern_node_eth1_snapshot

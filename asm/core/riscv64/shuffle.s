@@ -3,7 +3,7 @@
  */
 
 /* L0: digest a2 = sha256 of the a1 bytes at a0; a1 is at most 96. */
-LOCAL_FUNCTION sha256_short
+LOCAL_FUNCTION lantern_sha256_short
     FRAME 128
     addi    t0, a1, 24                      # a ByteList: size, offset 24, count, then the bytes
     sd      t0, 0(sp)
@@ -23,7 +23,7 @@ LOCAL_FUNCTION sha256_short
     CALL_GLOBAL crypto_sha256
     li      a0, LANTERN_OK
     UNFRAME 128
-END_FUNCTION sha256_short
+END_FUNCTION lantern_sha256_short
 
 /*
  * s1 index count, s2 seed, s3 scratch, s4 out, s5 entries, s6 round, s7 pivot,
@@ -66,7 +66,7 @@ SPEC_FUNCTION compute_shuffled_permutation
     addi    a0, sp, L                       # pivot = bytes_to_uint64(sha256(seed + round_bytes)[0:8]) % index_count
     li      a1, 33
     addi    a2, sp, (L + 40)
-    call    sha256_short
+    call    lantern_sha256_short
     ld      t0, (L + 40)(sp)
     remu    s7, t0, s1
     li      s10, 0                          # the source of each bucket of positions
@@ -82,7 +82,7 @@ SPEC_FUNCTION compute_shuffled_permutation
     li      a1, 37
     slli    a2, s10, 5
     add     a2, s9, a2
-    call    sha256_short
+    call    lantern_sha256_short
     addi    s10, s10, 1
     j       3b
 4:  li      t0, 0                           # for i in range(index_count)
@@ -136,7 +136,7 @@ SPEC_FUNCTION compute_shuffled_index
     addi    a0, sp, L                       # pivot = bytes_to_uint64(sha256(seed + round_bytes)[0:8]) % index_count
     li      a1, 33
     addi    a2, sp, (L + 40)
-    call    sha256_short
+    call    lantern_sha256_short
     ld      t0, (L + 40)(sp)
     remu    t0, t0, s2
     add     s4, t0, s2
@@ -157,7 +157,7 @@ SPEC_FUNCTION compute_shuffled_index
     addi    a0, sp, L                       # source = sha256(seed + round_bytes + position_bytes)
     li      a1, 37
     addi    a2, sp, (L + 40)
-    call    sha256_short
+    call    lantern_sha256_short
     srli    t0, s6, 3                       # source[(position % 256) // 8]
     andi    t0, t0, 31
     add     t0, sp, t0
@@ -203,7 +203,7 @@ SPEC_FUNCTION get_seed
     mv      a0, sp
     li      a1, 44
     ld      a2, 56(sp)
-    call    sha256_short
+    call    lantern_sha256_short
     UNFRAME 96
 8:  li      a0, LANTERN_INVALID_OVERFLOW
     UNFRAME 96
@@ -238,7 +238,7 @@ SPEC_FUNCTION compute_proposer_index
     addi    a0, sp, (L + 96)
     li      a1, 33
     addi    a2, sp, (L + 136)
-    call    sha256_short
+    call    lantern_sha256_short
     ld      t1, (L + 136)(sp)
     remu    t1, t1, s7
     ld      t0, (L + 888)(sp)
@@ -277,7 +277,7 @@ SPEC_FUNCTION compute_proposer_index
     addi    a0, sp, (L + 96)                # source = sha256(seed + round_bytes + position_bytes)
     li      a1, 37
     addi    a2, sp, (L + 136)
-    call    sha256_short
+    call    lantern_sha256_short
     ld      t2, L(sp)
     srli    t0, t2, 3                       # source[(position % 256) // 8]
     andi    t0, t0, 31
@@ -304,7 +304,7 @@ SPEC_FUNCTION compute_proposer_index
     addi    a0, sp, (L + 24)
     li      a1, 40
     addi    a2, sp, (L + 64)
-    call    sha256_short
+    call    lantern_sha256_short
 14: andi    t0, s6, 15
     slli    t0, t0, 1
     add     t0, sp, t0
@@ -327,7 +327,7 @@ SPEC_FUNCTION compute_proposer_index
     addi    a0, sp, (L + 24)
     li      a1, 40
     addi    a2, sp, (L + 64)
-    call    sha256_short
+    call    lantern_sha256_short
 15: andi    t0, s6, 31
     add     t0, sp, t0
     lbu     t0, (L + 64)(t0)                # random_byte
@@ -383,7 +383,7 @@ SPEC_FUNCTION compute_proposer_indices
     addi    a0, sp, (L + 8)
     li      a1, 40
     addi    a2, sp, (L + 48)
-    call    sha256_short
+    call    lantern_sha256_short
     sd      s8, 0(s4)
     mv      a0, s1
     mv      a1, s3

@@ -12,7 +12,7 @@
 .include "jsonrpc_names.inc"
 
 /* L0: a0 = the cursor a0 after any whitespace. Uses t0, t1. */
-LOCAL_FUNCTION jws
+LOCAL_FUNCTION lantern_jws
     UNWIND_END_PROLOGUE
 1:  bgeu    a0, s1, 2f
     lbu     t0, 0(a0)
@@ -27,13 +27,13 @@ LOCAL_FUNCTION jws
 3:  addi    a0, a0, 1
     j       1b
 2:  ret
-END_FUNCTION jws
+END_FUNCTION lantern_jws
 
 /*
  * L0: a string at the cursor a0, its quote included: a0 = the cursor after it, a1 = where its
  * bytes start, a2 = their count, a3 = 1 when it has an escape. Uses t0-t3.
  */
-LOCAL_FUNCTION jstring
+LOCAL_FUNCTION lantern_jstring
     UNWIND_END_PROLOGUE
     bgeu    a0, s1, 9f
     lbu     t0, 0(a0)
@@ -84,7 +84,7 @@ LOCAL_FUNCTION jstring
     ret
 9:  li      a0, 0
     ret
-END_FUNCTION jstring
+END_FUNCTION lantern_jstring
 
 /* The digit at a0 below the end: t0 = its value, branch to label when there is none. Uses t1. */
 .macro JDIGIT none
@@ -96,7 +96,7 @@ END_FUNCTION jstring
 .endm
 
 /* L0: a number at the cursor a0, as RFC 8259 writes it: a0 = the cursor after it, a1 = 1 when it is digits only. Uses t0-t2. */
-LOCAL_FUNCTION jnumber
+LOCAL_FUNCTION lantern_jnumber
     UNWIND_END_PROLOGUE
     li      a1, 1
     bgeu    a0, s1, 9f
@@ -150,7 +150,7 @@ LOCAL_FUNCTION jnumber
 7:  ret
 9:  li      a0, 0
     ret
-END_FUNCTION jnumber
+END_FUNCTION lantern_jnumber
 
 /* Whether the a2 bytes at a1 are the literal label: t0 = 1 or 0. Uses t1-t4. */
 .macro JIS label
@@ -171,7 +171,7 @@ END_FUNCTION jnumber
 .endm
 
 /* L0: the literal at the cursor a0 of the a2 bytes at a1: a0 = the cursor after it, or 0. Uses t0-t2. */
-LOCAL_FUNCTION jliteral
+LOCAL_FUNCTION lantern_jliteral
     UNWIND_END_PROLOGUE
     sub     t0, s1, a0
     bltu    t0, a2, 9f
@@ -187,21 +187,21 @@ LOCAL_FUNCTION jliteral
     ret
 9:  li      a0, 0
     ret
-END_FUNCTION jliteral
+END_FUNCTION lantern_jliteral
 
 /*
  * L0: any value at the cursor a0, as RFC 8259 writes it: a0 = the cursor after it. Brackets nest
  * to 64 levels, their kinds in s4 (1 for an object), the depth in s5; t5 what comes next: 0 a
  * value, 1 a value or the array's end, 2 a name, 3 a name or the object's end. Uses a1-a3, t0-t5.
  */
-LOCAL_FUNCTION jskip
+LOCAL_FUNCTION lantern_jskip
     FRAME 16
     sd      s4, F + 0(sp)
     sd      s5, F + 8(sp)
     li      s4, 0
     li      s5, 0
     li      t5, 0
-1:  call    jws
+1:  call    lantern_jws
     bgeu    a0, s1, 9f
     lbu     t0, 0(a0)
     li      t1, 2
@@ -213,9 +213,9 @@ LOCAL_FUNCTION jskip
     j       9f
 31: li      t1, '"'
     bne     t0, t1, 9f
-    call    jstring
+    call    lantern_jstring
     beqz    a0, 9f
-    call    jws
+    call    lantern_jws
     bgeu    a0, s1, 9f
     lbu     t0, 0(a0)
     li      t1, ':'
@@ -230,7 +230,7 @@ LOCAL_FUNCTION jskip
     j       9f
 32: li      t1, '"'
     bne     t0, t1, 2f
-    call    jstring
+    call    lantern_jstring
     beqz    a0, 9f
     j       6f
 2:  li      t1, '{'
@@ -252,7 +252,7 @@ LOCAL_FUNCTION jskip
     addi    s5, s5, -1
     addi    a0, a0, 1
 6:  beqz    s5, 8f                          # a whole value at depth 0
-    call    jws                             # in a container: a comma, or the end of its kind
+    call    lantern_jws                             # in a container: a comma, or the end of its kind
     bgeu    a0, s1, 9f
     lbu     t0, 0(a0)
     andi    t4, s4, 1
@@ -270,31 +270,31 @@ LOCAL_FUNCTION jskip
     bne     t0, t1, 11f
     ADDRESS a1, json_true
     li      a2, 4
-    call    jliteral
+    call    lantern_jliteral
     beqz    a0, 9f
     j       6b
 11: li      t1, 'f'
     bne     t0, t1, 12f
     ADDRESS a1, json_false
     li      a2, 5
-    call    jliteral
+    call    lantern_jliteral
     beqz    a0, 9f
     j       6b
 12: li      t1, 'n'
     bne     t0, t1, 13f
     ADDRESS a1, json_null
     li      a2, 4
-    call    jliteral
+    call    lantern_jliteral
     beqz    a0, 9f
     j       6b
-13: call    jnumber
+13: call    lantern_jnumber
     beqz    a0, 9f
     j       6b
 9:  li      a0, 0
 8:  ld      s4, F + 0(sp)
     ld      s5, F + 8(sp)
     UNFRAME 16
-END_FUNCTION jskip
+END_FUNCTION lantern_jskip
 
 /*
  * L0: the next member of an object, from the cursor a0 after its brace (a1 = 1) or after a
@@ -302,11 +302,11 @@ END_FUNCTION jskip
  * whitespace, a1 = where its name's bytes start, a2 = their count, 2^64 - 1 for a name with
  * an escape. a0 = 0 when the JSON is not valid. Uses t0-t3, t5.
  */
-LOCAL_FUNCTION jmember
+LOCAL_FUNCTION lantern_jmember
     FRAME 16
     mv      t5, a1
     sd      t5, F(sp)
-    call    jws
+    call    lantern_jws
     bgeu    a0, s1, 9f
     lbu     t0, 0(a0)
     li      t1, '}'
@@ -319,29 +319,29 @@ LOCAL_FUNCTION jmember
     li      t1, ','
     bne     t0, t1, 9f
     addi    a0, a0, 1
-    call    jws
-2:  call    jstring
+    call    lantern_jws
+2:  call    lantern_jstring
     beqz    a0, 9f
     beqz    a3, 3f
     li      a2, -1
-3:  call    jws
+3:  call    lantern_jws
     bgeu    a0, s1, 9f
     lbu     t0, 0(a0)
     li      t1, ':'
     bne     t0, t1, 9f
     addi    a0, a0, 1
-    call    jws
+    call    lantern_jws
     li      a3, 0
     UNFRAME 16
 9:  li      a0, 0
     UNFRAME 16
-END_FUNCTION jmember
+END_FUNCTION lantern_jmember
 
 /*
  * L0: DATA of a2 bytes at the cursor a0, or null when a1 = 1 allows it, to a3:
  * a0 = the cursor after it, a1 = 1 when it is not null. Uses t0-t6, a4, a5.
  */
-LOCAL_FUNCTION jdata_in
+LOCAL_FUNCTION lantern_jdata_in
     FRAME 16
     mv      a4, a2
     mv      a5, a3
@@ -354,10 +354,10 @@ LOCAL_FUNCTION jdata_in
     bne     t0, t1, 1f
     ADDRESS a1, json_null
     li      a2, 4
-    call    jliteral
+    call    lantern_jliteral
     li      a1, 0
     UNFRAME 16
-1:  call    jstring
+1:  call    lantern_jstring
     beqz    a0, 9f
     bnez    a3, 9f                          # "0x", then 2 hex digits a byte
     ld      a4, F + 0(sp)
@@ -397,13 +397,13 @@ LOCAL_FUNCTION jdata_in
     UNFRAME 16
 9:  li      a0, 0
     UNFRAME 16
-END_FUNCTION jdata_in
+END_FUNCTION lantern_jdata_in
 
 /*
  * L0: an entry of the table at a4 (a length byte and the bytes, then a 0 byte) that the a2
  * bytes at a1 match: a5 = its index, or 2^64 - 1. Uses t0-t3.
  */
-LOCAL_FUNCTION jtable
+LOCAL_FUNCTION lantern_jtable
     UNWIND_END_PROLOGUE
     li      a5, 0
 1:  lbu     t0, 0(a4)
@@ -424,10 +424,10 @@ LOCAL_FUNCTION jtable
     j       1b
 4:  li      a5, -1
     ret
-END_FUNCTION jtable
+END_FUNCTION lantern_jtable
 
 /* L0: a PayloadStatusV1 object at the cursor a0, into s2: a0 = the cursor after it. s6 1 when status is seen. */
-LOCAL_FUNCTION jpayload_status
+LOCAL_FUNCTION lantern_jpayload_status
     ENTER 0
     bgeu    a0, s1, 9f
     lbu     t0, 0(a0)
@@ -436,16 +436,16 @@ LOCAL_FUNCTION jpayload_status
     addi    a0, a0, 1
     li      s6, 0
     li      a1, 1
-1:  call    jmember
+1:  call    lantern_jmember
     beqz    a0, 9f
     bnez    a3, 8f
     JIS     json_status
     beqz    t0, 3f
-    call    jstring                         # status: one of the five
+    call    lantern_jstring                         # status: one of the five
     beqz    a0, 9f
     bnez    a3, 9f
     ADDRESS a4, json_statuses
-    call    jtable
+    call    lantern_jtable
     li      t0, -1
     beq     a5, t0, 9f
     addi    a5, a5, 1
@@ -457,11 +457,11 @@ LOCAL_FUNCTION jpayload_status
     li      a1, 1                           # latestValidHash: 32 bytes or null
     li      a2, 32
     addi    a3, s2, EngineResponse_latest_valid_hash
-    call    jdata_in
+    call    lantern_jdata_in
     beqz    a0, 9f
     sd      a1, EngineResponse_has_latest_valid_hash(s2)
     j       7f
-6:  call    jskip
+6:  call    lantern_jskip
     beqz    a0, 9f
 7:  li      a1, 0
     j       1b
@@ -469,14 +469,14 @@ LOCAL_FUNCTION jpayload_status
     LEAVE 0
 9:  li      a0, 0
     LEAVE 0
-END_FUNCTION jpayload_status
+END_FUNCTION lantern_jpayload_status
 
 /* L0: the result of the method in s3 at the cursor a0, s8 the body's first byte: a0 = the cursor after it. */
-LOCAL_FUNCTION jresult
+LOCAL_FUNCTION lantern_jresult
     ENTER 0
     li      t0, ENGINE_METHOD_NEW_PAYLOAD
     bne     s3, t0, 1f
-    call    jpayload_status
+    call    lantern_jpayload_status
     LEAVE 0
 1:  li      t0, ENGINE_METHOD_FORKCHOICE_UPDATED
     bne     s3, t0, 5f
@@ -487,12 +487,12 @@ LOCAL_FUNCTION jresult
     addi    a0, a0, 1
     li      s7, 0
     li      a1, 1
-2:  call    jmember
+2:  call    lantern_jmember
     beqz    a0, 9f
     bnez    a3, 4f
     JIS     json_payload_status
     beqz    t0, 3f
-    call    jpayload_status
+    call    lantern_jpayload_status
     beqz    a0, 9f
     li      s7, 1
     li      a1, 0
@@ -502,12 +502,12 @@ LOCAL_FUNCTION jresult
     li      a1, 1                           # payloadId: 8 bytes or null
     li      a2, 8
     addi    a3, s2, EngineResponse_payload_id
-    call    jdata_in
+    call    lantern_jdata_in
     beqz    a0, 9f
     sd      a1, EngineResponse_has_payload_id(s2)
     li      a1, 0
     j       2b
-6:  call    jskip
+6:  call    lantern_jskip
     beqz    a0, 9f
     li      a1, 0
     j       2b
@@ -519,7 +519,7 @@ LOCAL_FUNCTION jresult
     bne     s3, t0, 52f
 51: sub     t0, a0, s8
     sd      t0, EngineResponse_result_offset(s2)
-    call    jskip
+    call    lantern_jskip
     beqz    a0, 9f
     sub     t0, a0, s8
     ld      t1, EngineResponse_result_offset(s2)
@@ -534,7 +534,7 @@ LOCAL_FUNCTION jresult
     bne     t0, t1, 9f
     sub     t0, a0, s8
     sd      t0, EngineResponse_result_offset(s2)
-    call    jskip
+    call    lantern_jskip
     beqz    a0, 9f
     sub     t0, a0, s8
     ld      t1, EngineResponse_result_offset(s2)
@@ -546,16 +546,16 @@ LOCAL_FUNCTION jresult
     li      t1, '['
     bne     t0, t1, 9f
     addi    a0, a0, 1
-    call    jws
+    call    lantern_jws
     bgeu    a0, s1, 9f
     lbu     t0, 0(a0)
     li      t1, ']'
     beq     t0, t1, 13f
-10: call    jstring
+10: call    lantern_jstring
     beqz    a0, 9f
     bnez    a3, 12f                         # a name with an escape matches no method
     ADDRESS a4, json_methods
-    call    jtable
+    call    lantern_jtable
     li      t0, -1
     beq     a5, t0, 12f
     li      t0, 1
@@ -563,7 +563,7 @@ LOCAL_FUNCTION jresult
     ld      t1, EngineResponse_capabilities(s2)
     or      t1, t1, t0
     sd      t1, EngineResponse_capabilities(s2)
-12: call    jws
+12: call    lantern_jws
     bgeu    a0, s1, 9f
     lbu     t0, 0(a0)
     addi    a0, a0, 1
@@ -571,16 +571,16 @@ LOCAL_FUNCTION jresult
     beq     t0, t1, 16f
     li      t1, ','
     bne     t0, t1, 9f
-    call    jws
+    call    lantern_jws
     j       10b
 13: addi    a0, a0, 1
 16: LEAVE 0
 9:  li      a0, 0
     LEAVE 0
-END_FUNCTION jresult
+END_FUNCTION lantern_jresult
 
 /* L0: an error object at the cursor a0, into s2: a0 = the cursor after it. s7 1 when code is seen. */
-LOCAL_FUNCTION jerror
+LOCAL_FUNCTION lantern_jerror
     ENTER 0
     bgeu    a0, s1, 9f
     lbu     t0, 0(a0)
@@ -589,13 +589,13 @@ LOCAL_FUNCTION jerror
     addi    a0, a0, 1
     li      s7, 0
     li      a1, 1
-1:  call    jmember
+1:  call    lantern_jmember
     beqz    a0, 9f
     bnez    a3, 8f
     JIS     json_code
     beqz    t0, 6f
     mv      s8, a0                          # code: an integer from -2^63 to 2^63 - 1
-    call    jnumber
+    call    lantern_jnumber
     beqz    a0, 9f
     beqz    a1, 9f
     li      s9, 0                           # 1 for a minus
@@ -626,7 +626,7 @@ LOCAL_FUNCTION jerror
 5:  sd      t2, EngineResponse_error_code(s2)
     li      s7, 1
     j       7f
-6:  call    jskip
+6:  call    lantern_jskip
     beqz    a0, 9f
 7:  li      a1, 0
     j       1b
@@ -634,7 +634,7 @@ LOCAL_FUNCTION jerror
     LEAVE 0
 9:  li      a0, 0
     LEAVE 0
-END_FUNCTION jerror
+END_FUNCTION lantern_jerror
 
 /*
  * (body, method, out): s1 the end, s2 out, s3 method, s4 1 when id is seen, s5 1 for an error, 2
@@ -657,20 +657,20 @@ FUNCTION lantern_engine_parse_response
     bltu    t0, t1, 1b
     li      s4, 0
     li      s5, 0
-    call    jws
+    call    lantern_jws
     bgeu    a0, s1, 9f
     lbu     t0, 0(a0)
     li      t1, '{'
     bne     t0, t1, 9f
     addi    a0, a0, 1
     li      a1, 1
-2:  call    jmember
+2:  call    lantern_jmember
     beqz    a0, 9f
     bnez    a3, 8f
     JIS     json_id
     beqz    t0, 4f
     mv      s6, a0                          # id: digits, at most 2^64 - 1
-    call    jnumber
+    call    lantern_jnumber
     beqz    a0, 9f
     beqz    a1, 9f
     lbu     t0, 0(s6)
@@ -694,21 +694,21 @@ FUNCTION lantern_engine_parse_response
     j       7f
 4:  JIS     json_result
     beqz    t0, 6f
-    call    jresult
+    call    lantern_jresult
     beqz    a0, 9f
     ori     s5, s5, 2
     j       7f
 6:  JIS     json_error
     beqz    t0, 10f
-    call    jerror
+    call    lantern_jerror
     beqz    a0, 9f
     ori     s5, s5, 1
     j       7f
-10: call    jskip
+10: call    lantern_jskip
     beqz    a0, 9f
 7:  li      a1, 0
     j       2b
-8:  call    jws                             # then nothing but whitespace
+8:  call    lantern_jws                             # then nothing but whitespace
     bne     a0, s1, 9f
     beqz    s4, 9f
     beqz    s5, 9f

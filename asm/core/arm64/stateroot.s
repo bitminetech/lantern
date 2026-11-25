@@ -130,7 +130,7 @@ state_root_fields:
  * L0: lays out the trees of the StateCache table for x0 validators, into cache x1 when it is not
  * 0; x0 = the bytes of the cache. A leaf.
  */
-LOCAL_FUNCTION sr_layout
+LOCAL_FUNCTION lantern_sr_layout
     UNWIND_END_PROLOGUE
     ADDRESS x2, state_cache_trees
     MOVQ    x3, STATE_CACHE_FIXED           /* the offset of the next tree's bytes */
@@ -184,7 +184,7 @@ LOCAL_FUNCTION sr_layout
     b.lo    1b
     mov     x0, x3
     ret
-END_FUNCTION sr_layout
+END_FUNCTION lantern_sr_layout
 
 /* Locals: sp+16 size. */
 SPEC_FUNCTION state_cache_size
@@ -192,7 +192,7 @@ SPEC_FUNCTION state_cache_size
     str     x1, [sp, #16]
     ldr     x0, [x0]
     mov     x1, #0
-    bl      sr_layout
+    bl      lantern_sr_layout
     ldr     x1, [sp, #16]
     str     x0, [x1]
     mov     x0, #LANTERN_OK
@@ -205,14 +205,14 @@ SPEC_FUNCTION state_cache_init
     ldr     x0, [x0]
     stp     x1, x0, [sp, #16]
     mov     x1, #0
-    bl      sr_layout
+    bl      lantern_sr_layout
     ldp     x1, x9, [sp, #16]
     ldr     x10, [x1, #StateCache_size]
     cmp     x10, x0
     b.lo    9f
     str     x9, [x1, #StateCache_validators]
     mov     x0, x9
-    bl      sr_layout
+    bl      lantern_sr_layout
     mov     x0, #LANTERN_OK
     UNFRAME 16
 9:  mov     x0, #LANTERN_BUFFER_TOO_SMALL
@@ -221,7 +221,7 @@ SPEC_END state_cache_init
 
 .if FORK > FORK_PHASE0
 /* L0: SHA-256 of the 32 bytes at x0 and the 32 bytes at x1, to x2, which may be x0 or x1. x23 the area. */
-LOCAL_FUNCTION sr_hash
+LOCAL_FUNCTION lantern_sr_hash
     FRAME 16
     str     x2, [sp, #16]
     add     x9, x23, #(STATE_ROOT_HASH + 24)
@@ -232,10 +232,10 @@ LOCAL_FUNCTION sr_hash
     ldr     x1, [sp, #16]
     CALL_GLOBAL crypto_sha256
     UNFRAME 16
-END_FUNCTION sr_hash
+END_FUNCTION lantern_sr_hash
 
 /* L0: the zero hash of each depth 0 to 40 in the area at x23. x19 the next, x20 the hashes left. */
-LOCAL_FUNCTION sr_zeros
+LOCAL_FUNCTION lantern_sr_zeros
     ENTER 16
     mov     x19, x23
     stp     xzr, xzr, [x19]
@@ -244,12 +244,12 @@ LOCAL_FUNCTION sr_zeros
 1:  mov     x0, x19
     mov     x1, x19
     add     x2, x19, #32
-    bl      sr_hash
+    bl      lantern_sr_hash
     add     x19, x19, #32
     subs    x20, x20, #1
     b.ne    1b
     LEAVE 16
-END_FUNCTION sr_zeros
+END_FUNCTION lantern_sr_zeros
 
 /*
  * L0: the root of a field from tree x0 (a CacheTree): data x1, count x2 elements, x3 the bytes of
@@ -262,7 +262,7 @@ END_FUNCTION sr_zeros
  * L+48 the front's size, L+56 data bytes, L+64 the next level's nodes, L+72 its dirty bits,
  * L+80 a word, L+88 a parent, L+96 the leaves, L+104 a status.
  */
-LOCAL_FUNCTION sr_tree
+LOCAL_FUNCTION lantern_sr_tree
     ENTER 112
     mov     x19, x0
     mov     x22, x1
@@ -424,7 +424,7 @@ LOCAL_FUNCTION sr_tree
     add     x1, x23, x22, lsl #5
 26: ldr     x2, [sp, #(L + 64)]
     add     x2, x2, x13, lsl #5
-    bl      sr_hash
+    bl      lantern_sr_hash
     ldp     x12, x13, [sp, #(L + 80)]
     ldr     x10, [sp, #(L + 72)]            /* the parent is dirty */
     lsr     x9, x13, #6
@@ -458,7 +458,7 @@ LOCAL_FUNCTION sr_tree
     ldr     x0, [sp, #(L + 40)]
     add     x1, x23, x22, lsl #5
     mov     x2, x0
-    bl      sr_hash
+    bl      lantern_sr_hash
     add     x22, x22, #1
     b       32b
 33: ldr     x9, [sp, #(L + 32)]             /* a list: mix_in_length */
@@ -469,12 +469,12 @@ LOCAL_FUNCTION sr_tree
     stp     xzr, xzr, [x1, #16]
     ldr     x0, [sp, #(L + 40)]
     mov     x2, x0
-    bl      sr_hash
+    bl      lantern_sr_hash
 34: ldr     x9, [sp, #(L + 96)]
     str     x9, [x19, #CacheTree_count]
     mov     x0, #0
     LEAVE 112
-END_FUNCTION sr_tree
+END_FUNCTION lantern_sr_tree
 .endif
 
 /*
@@ -545,7 +545,7 @@ END_FUNCTION sr_tree
     add     x0, x0, #StateCache_trees
     ldr     x5, [x24, #32]
     mov     x7, x26
-    bl      sr_tree
+    bl      lantern_sr_tree
     cmp     x0, #1
     b.eq    90f
     cbnz    x0, 98f
@@ -581,7 +581,7 @@ SPEC_FUNCTION state_root
     add     x12, x23, #STATE_ROOT_HASH
     stp     x9, x10, [x12]
     str     x11, [x12, #16]
-    bl      sr_zeros
+    bl      lantern_sr_zeros
     SR_FIELD_ROOTS
 50: mov     x25, #SR_COUNT                  /* zeros to the width, then merkleize */
 51: cmp     x25, #STATE_ROOT_WIDTH
@@ -601,7 +601,7 @@ SPEC_FUNCTION state_root
     add     x0, x2, x24, lsl #6
     add     x1, x0, #32
     add     x2, x2, x24, lsl #5
-    bl      sr_hash
+    bl      lantern_sr_hash
     add     x24, x24, #1
     cmp     x24, x25
     b.lo    54b
@@ -663,7 +663,7 @@ SPEC_FUNCTION state_branch
     add     x12, x23, #STATE_ROOT_HASH
     stp     x9, x10, [x12]
     str     x11, [x12, #16]
-    bl      sr_zeros
+    bl      lantern_sr_zeros
     SR_FIELD_ROOTS
     mov     x25, #SR_COUNT                  /* zeros to the width */
 2:  cmp     x25, #STATE_ROOT_WIDTH
@@ -698,7 +698,7 @@ SPEC_FUNCTION state_branch
     add     x0, x2, x20, lsl #6
     add     x1, x0, #32
     add     x2, x2, x20, lsl #5
-    bl      sr_hash
+    bl      lantern_sr_hash
     add     x20, x20, #1
     cmp     x20, x25
     b.lo    6b

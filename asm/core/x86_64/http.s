@@ -38,7 +38,7 @@ http_t_keep_alive:
 .set http_t_keep_alive_len, 10
 
 # L0: rax = the index of the first byte cl in [rsi, rdx) of rdi's bytes, else rdx. A leaf.
-LOCAL_FUNCTION http_find
+LOCAL_FUNCTION lantern_http_find
     UNWIND_END_PROLOGUE
 1:  cmp     %rdx, %rsi
     jae     2f
@@ -48,10 +48,10 @@ LOCAL_FUNCTION http_find
     jmp     1b
 2:  mov     %rsi, %rax
     ret
-END_FUNCTION http_find
+END_FUNCTION lantern_http_find
 
 # L0: rax = the index of the first CRLF that starts in [rsi, rdx - 1) of rdi's bytes, else rdx. A leaf. Uses r8.
-LOCAL_FUNCTION http_crlf
+LOCAL_FUNCTION lantern_http_crlf
     UNWIND_END_PROLOGUE
     lea     -1(%rdx), %r8
 1:  cmp     %r8, %rsi
@@ -66,10 +66,10 @@ LOCAL_FUNCTION http_crlf
     ret
 4:  mov     %rsi, %rax
     ret
-END_FUNCTION http_crlf
+END_FUNCTION lantern_http_crlf
 
 # L0: rax = 1 when [rsi, rdx) of rdi's bytes is a token (RFC 9110 section 5.6.2), else 0. A leaf. Uses r8.
-LOCAL_FUNCTION http_token
+LOCAL_FUNCTION lantern_http_token
     UNWIND_END_PROLOGUE
     cmp     %rdx, %rsi
     jae     8f
@@ -85,10 +85,10 @@ LOCAL_FUNCTION http_token
     ret
 9:  mov     $1, %eax
     ret
-END_FUNCTION http_token
+END_FUNCTION lantern_http_token
 
 # L0: rax = 1 when the rsi bytes at rdi are the rcx lower case bytes at rdx, without regard to ASCII case, else 0. A leaf. Uses r8.
-LOCAL_FUNCTION http_same
+LOCAL_FUNCTION lantern_http_same
     UNWIND_END_PROLOGUE
     cmp     %rcx, %rsi
     jne     8f
@@ -109,10 +109,10 @@ LOCAL_FUNCTION http_same
     ret
 9:  mov     $1, %eax
     ret
-END_FUNCTION http_same
+END_FUNCTION lantern_http_same
 
 # L0: [rsi, rdx) of rdi's bytes without leading and trailing spaces and tabs: rax = its start, rdx = its end. A leaf.
-LOCAL_FUNCTION http_trim
+LOCAL_FUNCTION lantern_http_trim
     UNWIND_END_PROLOGUE
 1:  cmp     %rdx, %rsi
     jae     3f
@@ -134,11 +134,11 @@ LOCAL_FUNCTION http_trim
     jmp     3b
 5:  mov     %rsi, %rax
     ret
-END_FUNCTION http_trim
+END_FUNCTION lantern_http_trim
 
 # L0: the rcx bytes at rdx become a part of HttpRequest rdi at offset rsi, with its PartRef at rdi + r8:
 # rax = rsi + rcx rounded up to a multiple of 8. A leaf. Uses r9.
-LOCAL_FUNCTION http_part
+LOCAL_FUNCTION lantern_http_part
     UNWIND_END_PROLOGUE
     mov     %rsi, (%rdi,%r8)
     mov     %rcx, 8(%rdi,%r8)
@@ -155,7 +155,7 @@ LOCAL_FUNCTION http_part
 2:  lea     7(%rsi), %rax
     and     $-8, %rax
     ret
-END_FUNCTION http_part
+END_FUNCTION lantern_http_part
 
 # L0: the chunked body that starts at index rcx of the rdx bytes at rsi, with head_max r8 and body_max
 # r9 (lantern_http_request's rules). rdi = 0 checks it: rax = LANTERN_OK with rdx the index past the
@@ -163,7 +163,7 @@ END_FUNCTION http_part
 # status. rdi = a destination: a body checked before, its bytes copied there.
 # rbx data, rbp count, r12 destination, r13 body bytes, r14 a CRLF, r15 a size, S7 head_max, S8
 # body_max, S9 trailer bytes, rcx the index.
-LOCAL_FUNCTION http_chunks
+LOCAL_FUNCTION lantern_http_chunks
     ENTER 16
     mov     %rsi, %rbx
     mov     %rdx, %rbp
@@ -305,7 +305,7 @@ LOCAL_FUNCTION http_chunks
     LEAVE 16
 90: mov     $LANTERN_HTTP_MORE, %eax
     LEAVE 16
-END_FUNCTION http_chunks
+END_FUNCTION lantern_http_chunks
 
 # L0: the values of the field lines named by the r8 lower case bytes at rcx, between index rsi and the
 # head's CRLF CRLF at rdx of the bytes at rdi, joined with ", ", become a part of HttpRequest r9 at
@@ -313,7 +313,7 @@ END_FUNCTION http_chunks
 # The lines are checked before. rbx bytes, rbp the line, r12 the head's end, r13 out, r14 the PartRef,
 # r15 the part's end; locals: L name, L+8 its length, L+16 the offset, L+24 the line's end, L+32 the colon.
 .set HJ_LOCALS, 48
-LOCAL_FUNCTION http_joined
+LOCAL_FUNCTION lantern_http_joined
     ENTER HJ_LOCALS
     mov     %rdi, %rbx
     mov     %rsi, %rbp
@@ -332,27 +332,27 @@ LOCAL_FUNCTION http_joined
     mov     %rbx, %rdi
     mov     %rbp, %rsi
     lea     2(%r12), %rdx
-    call    http_crlf
+    call    lantern_http_crlf
     mov     %rax, (L + 24)(%rsp)
     mov     %rbx, %rdi
     mov     %rbp, %rsi
     mov     %rax, %rdx
     mov     $':', %ecx
-    call    http_find
+    call    lantern_http_find
     mov     %rax, (L + 32)(%rsp)
     lea     (%rbx,%rbp), %rdi
     mov     %rax, %rsi
     sub     %rbp, %rsi
     mov     L(%rsp), %rdx
     mov     (L + 8)(%rsp), %rcx
-    call    http_same
+    call    lantern_http_same
     test    %rax, %rax
     jz      5f
     mov     %rbx, %rdi
     mov     (L + 32)(%rsp), %rsi
     inc     %rsi
     mov     (L + 24)(%rsp), %rdx
-    call    http_trim
+    call    lantern_http_trim
     cmpq    $0, 8(%r14)                     # ", " before all but the first line
     je      2f
     movb    $',', (%r13,%r15)
@@ -377,7 +377,7 @@ LOCAL_FUNCTION http_joined
     lea     7(%r15), %rax
     and     $-8, %rax
     LEAVE HJ_LOCALS
-END_FUNCTION http_joined
+END_FUNCTION lantern_http_joined
 
 # The name of the field line at the cursor, the name length's bytes before its colon, is the text at label: jump to dest.
 .macro HTTP_NAME label, dest
@@ -386,12 +386,12 @@ END_FUNCTION http_joined
     mov     (L + 240)(%rsp), %rsi
     lea     \label(%rip), %rdx
     mov     $\label\()_len, %ecx
-    call    http_same
+    call    lantern_http_same
     test    %rax, %rax
     jnz     \dest
 .endm
 
-# http_joined of the field name at label into the part at field of out, from the offset in rax:
+# lantern_http_joined of the field name at label into the part at field of out, from the offset in rax:
 # the 7th and 8th arguments go at S7 and S8. rax = the next part's offset.
 .macro HTTP_JOINED label, field
     mov     %rax, S7(%rsp)
@@ -403,7 +403,7 @@ END_FUNCTION http_joined
     lea     \label(%rip), %rcx
     mov     $\label\()_len, %r8d
     mov     %r13, %r9
-    call    http_joined
+    call    lantern_http_joined
 .endm
 
 # acc += rax rounded up to a multiple of 8. Uses rax.
@@ -466,20 +466,20 @@ FUNCTION lantern_http_request
     mov     %rbx, %rdi                      # the request line: method SP target SP version
     mov     %r14, %rsi
     lea     2(%r15), %rdx
-    call    http_crlf
+    call    lantern_http_crlf
     mov     %rax, (L + 216)(%rsp)
     mov     %rbx, %rdi
     mov     %r14, %rsi
     mov     %rax, %rdx
     mov     $' ', %ecx
-    call    http_find
+    call    lantern_http_find
     cmp     (L + 216)(%rsp), %rax
     je      400f
     mov     %rax, (L + 224)(%rsp)           # the first space
     mov     %rbx, %rdi
     mov     %r14, %rsi
     mov     %rax, %rdx
-    call    http_token
+    call    lantern_http_token
     test    %rax, %rax
     jz      400f
     mov     %rbx, %rdi
@@ -487,7 +487,7 @@ FUNCTION lantern_http_request
     inc     %rsi
     mov     (L + 216)(%rsp), %rdx
     mov     $' ', %ecx
-    call    http_find
+    call    lantern_http_find
     cmp     (L + 216)(%rsp), %rax
     je      400f
     mov     %rax, (L + 232)(%rsp)           # the second space
@@ -567,7 +567,7 @@ FUNCTION lantern_http_request
     ja      30f
     mov     %rbx, %rdi
     lea     2(%r15), %rdx
-    call    http_crlf
+    call    lantern_http_crlf
     mov     %rax, (L + 232)(%rsp)
     mov     (L + 224)(%rsp), %rsi
     movzbl  (%rbx,%rsi), %ecx               # no folded line
@@ -578,7 +578,7 @@ FUNCTION lantern_http_request
     mov     %rbx, %rdi
     mov     %rax, %rdx
     mov     $':', %ecx
-    call    http_find
+    call    lantern_http_find
     cmp     (L + 232)(%rsp), %rax
     je      400f
     mov     (L + 224)(%rsp), %rsi
@@ -587,7 +587,7 @@ FUNCTION lantern_http_request
     mov     %rax, (L + 240)(%rsp)
     mov     %rbx, %rdi
     lea     (%rsi,%rax), %rdx
-    call    http_token
+    call    lantern_http_token
     test    %rax, %rax
     jz      400f
     mov     %rbx, %rdi                      # the value, without spaces and tabs around it
@@ -595,7 +595,7 @@ FUNCTION lantern_http_request
     add     (L + 240)(%rsp), %rsi
     inc     %rsi
     mov     (L + 232)(%rsp), %rdx
-    call    http_trim
+    call    lantern_http_trim
     mov     %rax, (L + 168)(%rsp)
     mov     %rdx, (L + 176)(%rsp)
 13: cmp     %rdx, %rax                      # no CR, LF or NUL
@@ -626,12 +626,12 @@ FUNCTION lantern_http_request
     mov     (L + 224)(%rsp), %rsi
     mov     (L + 176)(%rsp), %rdx
     mov     $',', %ecx
-    call    http_find
+    call    lantern_http_find
     mov     %rax, (L + 240)(%rsp)
     mov     %rbx, %rdi
     mov     (L + 224)(%rsp), %rsi
     mov     %rax, %rdx
-    call    http_trim
+    call    lantern_http_trim
     cmp     %rdx, %rax
     jae     218f                            # empty
     xor     %ecx, %ecx
@@ -675,7 +675,7 @@ FUNCTION lantern_http_request
     add     %rbx, %rdi
     lea     http_t_chunked(%rip), %rdx
     mov     $http_t_chunked_len, %ecx
-    call    http_same
+    call    lantern_http_same
     mov     %rax, (L + 48)(%rsp)
     jmp     29f
 23: mov     (L + 168)(%rsp), %rax           # Connection: its tokens
@@ -684,12 +684,12 @@ FUNCTION lantern_http_request
     mov     (L + 224)(%rsp), %rsi
     mov     (L + 176)(%rsp), %rdx
     mov     $',', %ecx
-    call    http_find
+    call    lantern_http_find
     mov     %rax, (L + 240)(%rsp)
     mov     %rbx, %rdi
     mov     (L + 224)(%rsp), %rsi
     mov     %rax, %rdx
-    call    http_trim
+    call    lantern_http_trim
     sub     %rax, %rdx
     mov     %rax, (L + 200)(%rsp)
     mov     %rdx, (L + 208)(%rsp)
@@ -697,7 +697,7 @@ FUNCTION lantern_http_request
     mov     %rdx, %rsi
     lea     http_t_close(%rip), %rdx
     mov     $http_t_close_len, %ecx
-    call    http_same
+    call    lantern_http_same
     test    %rax, %rax
     jz      232f
     movq    $1, (L + 80)(%rsp)
@@ -706,7 +706,7 @@ FUNCTION lantern_http_request
     mov     (L + 208)(%rsp), %rsi
     lea     http_t_keep_alive(%rip), %rdx
     mov     $http_t_keep_alive_len, %ecx
-    call    http_same
+    call    lantern_http_same
     test    %rax, %rax
     jz      233f
     movq    $1, (L + 88)(%rsp)
@@ -786,7 +786,7 @@ FUNCTION lantern_http_request
     mov     %rbp, %rdx
     mov     HttpLimits_head_max(%r12), %r8
     mov     HttpLimits_body_max(%r12), %r9
-    call    http_chunks
+    call    lantern_http_chunks
     cmp     $LANTERN_HTTP_MORE, %rax
     je      98f
     cmp     $LANTERN_INVALID_HTTP, %rax
@@ -800,7 +800,7 @@ FUNCTION lantern_http_request
     mov     (L + 16)(%rsp), %rsi
     mov     (L + 24)(%rsp), %rdx
     mov     $'?', %ecx
-    call    http_find
+    call    lantern_http_find
     mov     %rax, (L + 184)(%rsp)           # the path's end
     mov     $HTTP_REQUEST_FIXED, %r8d
     sub     (L + 16)(%rsp), %rax
@@ -836,7 +836,7 @@ FUNCTION lantern_http_request
     sub     %rdx, %rcx
     add     %rbx, %rdx
     mov     $HttpRequest_path, %r8d
-    call    http_part
+    call    lantern_http_part
     mov     %r13, %rdi                      # query
     mov     %rax, %rsi
     mov     (L + 184)(%rsp), %rdx
@@ -849,7 +849,7 @@ FUNCTION lantern_http_request
     sub     %rdx, %rcx
 42: add     %rbx, %rdx
     mov     $HttpRequest_query, %r8d
-    call    http_part
+    call    lantern_http_part
     HTTP_JOINED http_n_accept, HttpRequest_accept     # the three fields
     HTTP_JOINED http_n_type, HttpRequest_content_type
     HTTP_JOINED http_n_version, HttpRequest_consensus_version
@@ -861,7 +861,7 @@ FUNCTION lantern_http_request
     add     %rbx, %rdx
     mov     (L + 152)(%rsp), %rcx
     mov     $HttpRequest_body, %r8d
-    call    http_part
+    call    lantern_http_part
     jmp     45f
 44: mov     %rsi, HttpRequest_body(%r13)    # chunked: its bytes, unchunked
     mov     (L + 152)(%rsp), %rax
@@ -872,7 +872,7 @@ FUNCTION lantern_http_request
     mov     (L + 144)(%rsp), %rcx
     mov     HttpLimits_head_max(%r12), %r8
     mov     HttpLimits_body_max(%r12), %r9
-    call    http_chunks
+    call    lantern_http_chunks
 45: xor     %eax, %eax
     LEAVE HR_LOCALS
 400: mov    $400, %eax

@@ -199,7 +199,7 @@ SPEC_FUNCTION is_valid_merkle_branch
 21: lea     (L + 32)(%rsp), %rdi
     mov     $64, %esi
     lea     L(%rsp), %rdx
-    call    sha256_short
+    call    lantern_sha256_short
     inc     %r15
     jmp     1b
 3:  lea     L(%rsp), %rax                   # value == root

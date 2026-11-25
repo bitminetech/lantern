@@ -15,7 +15,7 @@
 .set LS_I2, 24                          /* the value index in the second */
 
 /* The rsi bytes at rdi go to the cursor. Uses rax, rcx, rsi, rdi. */
-LOCAL_FUNCTION mt_put
+LOCAL_FUNCTION lantern_mt_put
     UNWIND_END_PROLOGUE
     test    %r15, %r15
     jnz     9f
@@ -30,23 +30,23 @@ LOCAL_FUNCTION mt_put
     ret
 8:  mov     $1, %r15d
 9:  ret
-END_FUNCTION mt_put
+END_FUNCTION lantern_mt_put
 
 /* The text at metrics_texts + rdi, of rsi bytes. Uses rax, rcx, rsi, rdi. */
-LOCAL_FUNCTION mt_text
+LOCAL_FUNCTION lantern_mt_text
     UNWIND_END_PROLOGUE
     add     %rbx, %rdi
-    jmp     mt_put
-END_FUNCTION mt_text
+    jmp     lantern_mt_put
+END_FUNCTION lantern_mt_text
 
 .macro MT_TEXT label
     lea     \label(%rip), %rdi
     mov     $\label\()_len, %esi
-    call    mt_put
+    call    lantern_mt_put
 .endm
 
 /* The decimal digits of rdi. Locals: the digits, from the end. Uses rax, rcx, rdx, rsi, rdi, r8. */
-LOCAL_FUNCTION mt_dec
+LOCAL_FUNCTION lantern_mt_dec
     FRAME 32
     lea     32(%rsp), %r8
     mov     %rdi, %rax
@@ -61,12 +61,12 @@ LOCAL_FUNCTION mt_dec
     mov     %r8, %rdi
     lea     32(%rsp), %rsi
     sub     %r8, %rsi
-    call    mt_put
+    call    lantern_mt_put
     UNFRAME 32
-END_FUNCTION mt_dec
+END_FUNCTION lantern_mt_dec
 
 /* rdi as a signed decimal. Locals: rdi. */
-LOCAL_FUNCTION mt_sdec
+LOCAL_FUNCTION lantern_mt_sdec
     FRAME 16
     mov     %rdi, (%rsp)
     test    %rdi, %rdi
@@ -74,15 +74,15 @@ LOCAL_FUNCTION mt_sdec
     movb    $0x2d, 8(%rsp)                  # "-", then the digits of 0 - rdi (2^63 stays 2^63, unsigned)
     lea     8(%rsp), %rdi
     mov     $1, %esi
-    call    mt_put
+    call    lantern_mt_put
     negq    (%rsp)
 1:  mov     (%rsp), %rdi
-    call    mt_dec
+    call    lantern_mt_dec
     UNFRAME 16
-END_FUNCTION mt_sdec
+END_FUNCTION lantern_mt_sdec
 
 /* The microseconds rdi as seconds: the whole seconds, ".", six digits. Locals: rdi, the digits. */
-LOCAL_FUNCTION mt_seconds
+LOCAL_FUNCTION lantern_mt_seconds
     FRAME 32
     mov     %rdi, %rax
     xor     %edx, %edx
@@ -90,7 +90,7 @@ LOCAL_FUNCTION mt_seconds
     div     %rcx
     mov     %rdx, (%rsp)
     mov     %rax, %rdi
-    call    mt_dec
+    call    lantern_mt_dec
     movb    $0x2e, 8(%rsp)                  # "."
     mov     (%rsp), %rax                    # six digits, from the end
     mov     $10, %ecx
@@ -103,17 +103,17 @@ LOCAL_FUNCTION mt_seconds
     jnz     1b
     lea     8(%rsp), %rdi
     mov     $7, %esi
-    call    mt_put
+    call    lantern_mt_put
     UNFRAME 32
-END_FUNCTION mt_seconds
+END_FUNCTION lantern_mt_seconds
 
 /* The entry r14's name. Uses rax, rcx, rsi, rdi. */
-LOCAL_FUNCTION mt_name
+LOCAL_FUNCTION lantern_mt_name
     UNWIND_END_PROLOGUE
     mov     MetricEntry_name(%r14), %edi
     mov     MetricEntry_name_len(%r14), %esi
-    jmp     mt_text
-END_FUNCTION mt_name
+    jmp     lantern_mt_text
+END_FUNCTION lantern_mt_name
 
 /*
  * lantern_metrics_observe(histogram, bounds, value) -> status
@@ -147,14 +147,14 @@ LEAF lantern_metrics_observe
 END_FUNCTION lantern_metrics_observe
 
 /* `name="value"` of the label table record rdi and value index rsi. Locals: rdi, rsi. */
-LOCAL_FUNCTION mt_label
+LOCAL_FUNCTION lantern_mt_label
     FRAME 16
     mov     %rdi, (%rsp)
     mov     %rsi, 8(%rsp)
     mov     MetricLabel_name(%rdi), %eax
     mov     MetricLabel_name_len(%rdi), %esi
     mov     %rax, %rdi
-    call    mt_text
+    call    lantern_mt_text
     MT_TEXT mx_eq
     mov     (%rsp), %rdi                    # the value: metrics_label_values[first + index]
     mov     MetricLabel_first(%rdi), %eax
@@ -162,28 +162,28 @@ LOCAL_FUNCTION mt_label
     lea     metrics_label_values(%rip), %rcx
     mov     (%rcx,%rax,8), %edi
     mov     4(%rcx,%rax,8), %esi
-    call    mt_text
+    call    lantern_mt_text
     MT_TEXT mx_quote
     UNFRAME 16
-END_FUNCTION mt_label
+END_FUNCTION lantern_mt_label
 
 /*
  * A sample's start: the entry r14's name, the suffix of rsi bytes at rdi (none when rsi is 0), then
  * "{" and the labels of the LabelState rdx when it has a label. rax = 1 when a "{" went out, else 0.
  * Locals: the LabelState, the flag, the suffix, its length.
  */
-LOCAL_FUNCTION mt_open
+LOCAL_FUNCTION lantern_mt_open
     FRAME 32
     mov     %rdx, (%rsp)
     movq    $0, 8(%rsp)
     mov     %rdi, 16(%rsp)
     mov     %rsi, 24(%rsp)
-    call    mt_name
+    call    lantern_mt_name
     mov     24(%rsp), %rsi
     test    %rsi, %rsi
     jz      1f
     mov     16(%rsp), %rdi
-    call    mt_put
+    call    lantern_mt_put
 1:  mov     (%rsp), %rax
     cmpq    $0, LS_LABEL1(%rax)
     je      9f
@@ -192,7 +192,7 @@ LOCAL_FUNCTION mt_open
     mov     (%rsp), %rax
     mov     LS_LABEL1(%rax), %rdi
     mov     LS_I1(%rax), %rsi
-    call    mt_label
+    call    lantern_mt_label
     mov     (%rsp), %rax
     cmpq    $0, LS_LABEL2(%rax)
     je      9f
@@ -200,13 +200,13 @@ LOCAL_FUNCTION mt_open
     mov     (%rsp), %rax
     mov     LS_LABEL2(%rax), %rdi
     mov     LS_I2(%rax), %rsi
-    call    mt_label
+    call    lantern_mt_label
 9:  mov     8(%rsp), %rax
     UNFRAME 32
-END_FUNCTION mt_open
+END_FUNCTION lantern_mt_open
 
 /* A sample's end: "}" when rdi is 1, " ", then the decimal rsi and LF. Locals: rsi. */
-LOCAL_FUNCTION mt_value
+LOCAL_FUNCTION lantern_mt_value
     FRAME 16
     mov     %rsi, (%rsp)
     test    %rdi, %rdi
@@ -214,13 +214,13 @@ LOCAL_FUNCTION mt_value
     MT_TEXT mx_rbrace
 1:  MT_TEXT mx_sp
     mov     (%rsp), %rdi
-    call    mt_dec
+    call    lantern_mt_dec
     MT_TEXT mx_lf
     UNFRAME 16
-END_FUNCTION mt_value
+END_FUNCTION lantern_mt_value
 
 /* `{` when rdi is 0, else `,`; then `le="`. Uses rax, rcx, rsi, rdi. */
-LOCAL_FUNCTION mt_le
+LOCAL_FUNCTION lantern_mt_le
     FRAME 0
     test    %rdi, %rdi
     jnz     1f
@@ -230,14 +230,14 @@ LOCAL_FUNCTION mt_le
 2:  MT_TEXT mx_le
     MT_TEXT mx_eq
     UNFRAME 0
-END_FUNCTION mt_le
+END_FUNCTION lantern_mt_le
 
 /*
  * The histogram rdi of the bound set record rsi, with the labels of the LabelState rdx; rcx is the
  * ticks per second for a set of ticks. Locals: the Histogram, the bounds, the LabelState, the tick
  * rate, the bound index, the sum so far.
  */
-LOCAL_FUNCTION mt_histogram
+LOCAL_FUNCTION lantern_mt_histogram
     FRAME 48
     mov     %rdi, (%rsp)
     mov     %rsi, 8(%rsp)
@@ -256,9 +256,9 @@ LOCAL_FUNCTION mt_histogram
     lea     mx_bucket(%rip), %rdi
     mov     $mx_bucket_len, %esi
     mov     16(%rsp), %rdx
-    call    mt_open
+    call    lantern_mt_open
     mov     %rax, %rdi
-    call    mt_le
+    call    lantern_mt_le
     mov     8(%rsp), %rcx                   # the bound's text
     mov     MetricBounds_first(%rcx), %eax
     add     32(%rsp), %rax
@@ -266,29 +266,29 @@ LOCAL_FUNCTION mt_histogram
     lea     metrics_bound_values(%rip), %rcx
     mov     MetricBound_text(%rcx,%rax), %edi
     mov     MetricBound_text_len(%rcx,%rax), %esi
-    call    mt_text
+    call    lantern_mt_text
     MT_TEXT mx_quote
     mov     $1, %edi
     mov     40(%rsp), %rsi
-    call    mt_value
+    call    lantern_mt_value
     incq    32(%rsp)
     jmp     1b
 2:  lea     mx_bucket(%rip), %rdi           # +Inf: every value
     mov     $mx_bucket_len, %esi
     mov     16(%rsp), %rdx
-    call    mt_open
+    call    lantern_mt_open
     mov     %rax, %rdi
-    call    mt_le
+    call    lantern_mt_le
     MT_TEXT mx_inf
     MT_TEXT mx_quote
     mov     $1, %edi
     mov     (%rsp), %rax
     mov     Histogram_count(%rax), %rsi
-    call    mt_value
+    call    lantern_mt_value
     lea     mx_sum(%rip), %rdi              # _sum in seconds
     mov     $mx_sum_len, %esi
     mov     16(%rsp), %rdx
-    call    mt_open
+    call    lantern_mt_open
     test    %rax, %rax
     jz      3f
     MT_TEXT mx_rbrace
@@ -311,37 +311,37 @@ LOCAL_FUNCTION mt_histogram
     jmp     4f
 6:  mov     $-1, %rax
 4:  mov     %rax, %rdi
-5:  call    mt_seconds
+5:  call    lantern_mt_seconds
     MT_TEXT mx_lf
     lea     mx_count(%rip), %rdi            # _count
     mov     $mx_count_len, %esi
     mov     16(%rsp), %rdx
-    call    mt_open
+    call    lantern_mt_open
     mov     %rax, %rdi
     mov     (%rsp), %rax
     mov     Histogram_count(%rax), %rsi
-    call    mt_value
+    call    lantern_mt_value
     UNFRAME 48
-END_FUNCTION mt_histogram
+END_FUNCTION lantern_mt_histogram
 
 /* The entry r14's name and `{topic="<name>"` of the GossipTopic rdi. Locals: the topic. */
-LOCAL_FUNCTION mt_topic
+LOCAL_FUNCTION lantern_mt_topic
     FRAME 16
     mov     %rdi, (%rsp)
-    call    mt_name
+    call    lantern_mt_name
     MT_TEXT mx_lbrace
     MT_TEXT mx_topic
     MT_TEXT mx_eq
     mov     (%rsp), %rax
     lea     GossipTopic_name(%rax), %rdi
     mov     GossipTopic_name_length(%rax), %rsi
-    call    mt_put
+    call    lantern_mt_put
     MT_TEXT mx_quote
     UNFRAME 16
-END_FUNCTION mt_topic
+END_FUNCTION lantern_mt_topic
 
 /* `,<name>="<value>"`: the name is rsi bytes at rdi, the value rcx bytes at rdx. Locals: the texts. */
-LOCAL_FUNCTION mt_pair
+LOCAL_FUNCTION lantern_mt_pair
     FRAME 32
     mov     %rdi, (%rsp)
     mov     %rsi, 8(%rsp)
@@ -350,21 +350,21 @@ LOCAL_FUNCTION mt_pair
     MT_TEXT mx_comma
     mov     (%rsp), %rdi
     mov     8(%rsp), %rsi
-    call    mt_put
+    call    lantern_mt_put
     MT_TEXT mx_eq
     mov     16(%rsp), %rdi
     mov     24(%rsp), %rsi
-    call    mt_put
+    call    lantern_mt_put
     MT_TEXT mx_quote
     UNFRAME 32
-END_FUNCTION mt_pair
+END_FUNCTION lantern_mt_pair
 
 .macro MT_PAIR name, value
     lea     \name(%rip), %rdi
     mov     $\name\()_len, %esi
     lea     \value(%rip), %rdx
     mov     $\value\()_len, %ecx
-    call    mt_pair
+    call    lantern_mt_pair
 .endm
 
 /*
@@ -476,14 +476,14 @@ FUNCTION lantern_metrics_text
     dec     %rsi
     jmp     21b
 30: MT_TEXT mx_help                         # # HELP <name> <help>, # TYPE <name> <type>
-    call    mt_name
+    call    lantern_mt_name
     MT_TEXT mx_sp
     mov     MetricEntry_help(%r14), %edi
     mov     MetricEntry_help_len(%r14), %esi
-    call    mt_text
+    call    lantern_mt_text
     MT_TEXT mx_lf
     MT_TEXT mx_type
-    call    mt_name
+    call    lantern_mt_name
     mov     MetricEntry_type(%r14), %eax
     cmp     $METRIC_TYPE_COUNTER, %eax
     je      31f
@@ -538,21 +538,21 @@ FUNCTION lantern_metrics_text
 40: xor     %edi, %edi                      # a value
     xor     %esi, %esi
     lea     (L + 32)(%rsp), %rdx
-    call    mt_open
+    call    lantern_mt_open
     mov     %rax, %rdi
     mov     (%rbp), %rsi
-    call    mt_value
+    call    lantern_mt_value
     jmp     80f
-41: call    mt_name                         # a root, signed
+41: call    lantern_mt_name                         # a root, signed
     MT_TEXT mx_sp
     mov     (%rbp), %rdi
-    call    mt_sdec
+    call    lantern_mt_sdec
     MT_TEXT mx_lf
     jmp     80f
-42: call    mt_name                         # microseconds as seconds
+42: call    lantern_mt_name                         # microseconds as seconds
     MT_TEXT mx_sp
     mov     (%rbp), %rdi
-    call    mt_seconds
+    call    lantern_mt_seconds
     MT_TEXT mx_lf
     jmp     80f
 43: mov     (L + 64)(%rsp), %rax            # values by labels: element e at e * 8, its label
@@ -565,11 +565,11 @@ FUNCTION lantern_metrics_text
     xor     %edi, %edi
     xor     %esi, %esi
     lea     (L + 32)(%rsp), %rdx
-    call    mt_open
+    call    lantern_mt_open
     mov     %rax, %rdi
     mov     (L + 64)(%rsp), %rax
     mov     (%rbp,%rax,8), %rsi
-    call    mt_value
+    call    lantern_mt_value
     incq    (L + 64)(%rsp)
     jmp     43b
 44: mov     (L + 64)(%rsp), %rax            # histograms by labels: element e at e * Histogram__mem
@@ -588,7 +588,7 @@ FUNCTION lantern_metrics_text
     add     %rax, %rsi
     lea     (L + 32)(%rsp), %rdx
     mov     (L + 24)(%rsp), %rcx
-    call    mt_histogram
+    call    lantern_mt_histogram
     incq    (L + 64)(%rsp)
     jmp     44b
 50: PART    %rcx, %rsi, %rbp, MetricsGossip_topics  # gossipsub: each topic
@@ -603,39 +603,39 @@ FUNCTION lantern_metrics_text
     cmpq    $0, GossipTopic_subnet(%rbp)    # main topics only
     jne     59f
     mov     %rbp, %rdi
-    call    mt_topic
+    call    lantern_mt_topic
     mov     $1, %edi
     mov     GossipTopic_mesh_peers(%rbp), %rsi
-    call    mt_value
+    call    lantern_mt_value
     jmp     59f
 52: cmp     $METRIC_KIND_GOSSIP_SENT, %eax
     jne     53f
     mov     %rbp, %rdi
-    call    mt_topic
+    call    lantern_mt_topic
     MT_PAIR mx_partial, mx_false
     mov     $1, %edi
     mov     GossipTopic_sent_bytes(%rbp), %rsi
-    call    mt_value
+    call    lantern_mt_value
     mov     %rbp, %rdi
-    call    mt_topic
+    call    lantern_mt_topic
     MT_PAIR mx_partial, mx_true
     mov     $1, %edi
     mov     GossipTopic_sent_partial_bytes(%rbp), %rsi
-    call    mt_value
+    call    lantern_mt_value
     jmp     59f
 53: mov     %rbp, %rdi                      # mesh peers by partial support
-    call    mt_topic
+    call    lantern_mt_topic
     MT_PAIR mx_supports, mx_false
     mov     $1, %edi
     mov     GossipTopic_mesh_peers(%rbp), %rsi
     sub     GossipTopic_mesh_partial_peers(%rbp), %rsi
-    call    mt_value
+    call    lantern_mt_value
     mov     %rbp, %rdi
-    call    mt_topic
+    call    lantern_mt_topic
     MT_PAIR mx_supports, mx_true
     mov     $1, %edi
     mov     GossipTopic_mesh_partial_peers(%rbp), %rsi
-    call    mt_value
+    call    lantern_mt_value
 59: addq    $GossipTopic__mem, (L + 96)(%rsp)
     decq    (L + 104)(%rsp)
     jmp     51b
@@ -673,7 +673,7 @@ FUNCTION lantern_metrics_node
     mov     (Node_peers + 8)(%rbx), %rax
     mov     %rax, MetricsNode_peers(%rbp)
     mov     %r12, %rdi
-    call    node_store_slot
+    call    lantern_node_store_slot
     mov     %rax, %r13
     xor     %edx, %edx                      # the store's epoch: from fulu, the custody groups
     mov     $SLOTS_PER_EPOCH, %ecx
@@ -714,7 +714,7 @@ FUNCTION lantern_metrics_node
     jmp     4b
 5:  mov     %rax, MetricsNode_local_validators(%rbp)
     lea     Node_head_root(%rbx), %rdi      # the head's block: its buffers and slot
-    call    node_find_block
+    call    lantern_node_find_block
     xor     %r14d, %r14d
     xor     %ecx, %ecx
     cmp     $-1, %rax
@@ -802,7 +802,7 @@ FUNCTION lantern_metrics_node
     mov     %rdx, L(%rsp,%r15,8)
     inc     %r15
     lea     NodeBlock_parent_root(%rdx), %rdi
-    call    node_find_block
+    call    lantern_node_find_block
     cmp     $-1, %rax
     jne     9b
     xor     %edx, %edx
@@ -894,7 +894,7 @@ FUNCTION lantern_metrics_answer
     MT_TEXT mx_http
     MT_TEXT mx_ok_head
     mov     (METRICS_HEAD_ROOM + 16)(%r14), %rdi
-    call    mt_dec
+    call    lantern_mt_dec
     MT_TEXT mx_close
     mov     %r12, %rdi
     lea     (METRICS_HEAD_ROOM + 24)(%r14), %rsi
@@ -907,17 +907,17 @@ FUNCTION lantern_metrics_answer
     xor     %r15d, %r15d
     MT_TEXT mx_http
     mov     %rbp, %rdi
-    call    mt_dec
+    call    lantern_mt_dec
     MT_TEXT mx_sp
     mov     %rbp, %rdi
-    call    api_code
+    call    lantern_api_code
     test    %rax, %rax
     jz      51f
     mov     8(%rax), %rdi
     mov     16(%rax), %rsi
     lea     api_texts(%rip), %rcx
     add     %rcx, %rdi
-    call    mt_put
+    call    lantern_mt_put
 51: MT_TEXT mx_crlf
     cmp     $405, %rbp
     jne     52f

@@ -11,7 +11,7 @@
 .include "jsonrpc_names.inc"
 
 /* L0: x0 = the cursor x0 after any whitespace. Uses x9. */
-LOCAL_FUNCTION jws
+LOCAL_FUNCTION lantern_jws
     UNWIND_END_PROLOGUE
 1:  cmp     x0, x19
     b.hs    2f
@@ -27,13 +27,13 @@ LOCAL_FUNCTION jws
 3:  add     x0, x0, #1
     b       1b
 2:  ret
-END_FUNCTION jws
+END_FUNCTION lantern_jws
 
 /*
  * L0: a string at the cursor x0, its quote included: x0 = the cursor after it, x1 = where its
  * bytes start, x2 = their count, x3 = 1 when it has an escape. Uses x9, x10.
  */
-LOCAL_FUNCTION jstring
+LOCAL_FUNCTION lantern_jstring
     UNWIND_END_PROLOGUE
     cmp     x0, x19
     b.hs    9f
@@ -85,10 +85,10 @@ LOCAL_FUNCTION jstring
     ret
 9:  mov     x0, #0
     ret
-END_FUNCTION jstring
+END_FUNCTION lantern_jstring
 
 /* L0: a number at the cursor x0, as RFC 8259 writes it: x0 = the cursor after it, x1 = 1 when it is digits only. Uses x9, x10. */
-LOCAL_FUNCTION jnumber
+LOCAL_FUNCTION lantern_jnumber
     UNWIND_END_PROLOGUE
     mov     x1, #1
     cmp     x0, x19
@@ -161,7 +161,7 @@ LOCAL_FUNCTION jnumber
 7:  ret
 9:  mov     x0, #0
     ret
-END_FUNCTION jnumber
+END_FUNCTION lantern_jnumber
 
 /* L0: whether the x2 bytes at x1 are the literal label: x9 = 1 or 0. Uses x10, x11. */
 .macro JIS label
@@ -184,7 +184,7 @@ END_FUNCTION jnumber
 /*
  * L0: the literal at the cursor x0 of the x2 bytes at x1: x0 = the cursor after it, or 0. Uses x9-x11.
  */
-LOCAL_FUNCTION jliteral
+LOCAL_FUNCTION lantern_jliteral
     UNWIND_END_PROLOGUE
     sub     x9, x19, x0
     cmp     x9, x2
@@ -201,7 +201,7 @@ LOCAL_FUNCTION jliteral
     ret
 9:  mov     x0, #0
     ret
-END_FUNCTION jliteral
+END_FUNCTION lantern_jliteral
 
 /*
  * L0: any value at the cursor x0, as RFC 8259 writes it: x0 = the cursor after it. Brackets nest
@@ -209,13 +209,13 @@ END_FUNCTION jliteral
  * value, 1 a value or the array's end, 2 a name, 3 a name or the object's end. Uses x1-x3,
  * x9-x12.
  */
-LOCAL_FUNCTION jskip
+LOCAL_FUNCTION lantern_jskip
     FRAME 16
     stp     x21, x22, [sp, #16]
     mov     x21, #0
     mov     x22, #0
     mov     x12, #0
-1:  bl      jws
+1:  bl      lantern_jws
     cmp     x0, x19
     b.hs    9f
     ldrb    w9, [x0]
@@ -228,9 +228,9 @@ LOCAL_FUNCTION jskip
     b       9f
 31: cmp     w9, #'"'
     b.ne    9f
-    bl      jstring
+    bl      lantern_jstring
     cbz     x0, 9f
-    bl      jws
+    bl      lantern_jws
     cmp     x0, x19
     b.hs    9f
     ldrb    w9, [x0]
@@ -246,7 +246,7 @@ LOCAL_FUNCTION jskip
     b       9f
 32: cmp     w9, #'"'
     b.ne    2f
-    bl      jstring
+    bl      lantern_jstring
     cbz     x0, 9f
     b       6f
 2:  cmp     w9, #'{'
@@ -268,7 +268,7 @@ LOCAL_FUNCTION jskip
     sub     x22, x22, #1
     add     x0, x0, #1
 6:  cbz     x22, 8f                         /* a whole value at depth 0 */
-    bl      jws                             /* in a container: a comma, or the end of its kind */
+    bl      lantern_jws                             /* in a container: a comma, or the end of its kind */
     cmp     x0, x19
     b.hs    9f
     ldrb    w9, [x0]
@@ -290,24 +290,24 @@ LOCAL_FUNCTION jskip
     b.ne    11f
     ADDRESS x1, json_true
     mov     x2, #4
-    bl      jliteral
+    bl      lantern_jliteral
     cbz     x0, 9f
     b       6b
 11: cmp     w9, #'f'
     b.ne    12f
     ADDRESS x1, json_false
     mov     x2, #5
-    bl      jliteral
+    bl      lantern_jliteral
     cbz     x0, 9f
     b       6b
 12: cmp     w9, #'n'
     b.ne    13f
     ADDRESS x1, json_null
     mov     x2, #4
-    bl      jliteral
+    bl      lantern_jliteral
     cbz     x0, 9f
     b       6b
-13: bl      jnumber
+13: bl      lantern_jnumber
     cbz     x0, 9f
     b       6b
 8:  ldp     x21, x22, [sp, #16]
@@ -315,7 +315,7 @@ LOCAL_FUNCTION jskip
 9:  mov     x0, #0
     ldp     x21, x22, [sp, #16]
     UNFRAME 16
-END_FUNCTION jskip
+END_FUNCTION lantern_jskip
 
 /*
  * L0: the next member of an object, from the cursor x0 after its brace (x1 = 1) or after a
@@ -323,10 +323,10 @@ END_FUNCTION jskip
  * whitespace, x1 = where its name's bytes start, x2 = their count, 2^64 - 1 for a name with
  * an escape. x0 = 0 when the JSON is not valid.
  */
-LOCAL_FUNCTION jmember
+LOCAL_FUNCTION lantern_jmember
     FRAME 16
     str     x1, [sp, #16]
-    bl      jws
+    bl      lantern_jws
     cmp     x0, x19
     b.hs    9f
     ldrb    w9, [x0]
@@ -341,31 +341,31 @@ LOCAL_FUNCTION jmember
     cmp     w9, #','
     b.ne    9f
     add     x0, x0, #1
-    bl      jws
-2:  bl      jstring
+    bl      lantern_jws
+2:  bl      lantern_jstring
     cbz     x0, 9f
     cbz     x3, 3f
     mov     x2, #-1
 3:  stp     x1, x2, [sp, #16]
-    bl      jws
+    bl      lantern_jws
     cmp     x0, x19
     b.hs    9f
     ldrb    w9, [x0], #1
     cmp     w9, #':'
     b.ne    9f
-    bl      jws
+    bl      lantern_jws
     ldp     x1, x2, [sp, #16]
     mov     x3, #0
     UNFRAME 16
 9:  mov     x0, #0
     UNFRAME 16
-END_FUNCTION jmember
+END_FUNCTION lantern_jmember
 
 /*
  * L0: DATA of x2 bytes at the cursor x0, or null when x1 = 1 allows it, to x3:
  * x0 = the cursor after it, x1 = 1 when it is not null. Uses x9-x13.
  */
-LOCAL_FUNCTION jdata_in
+LOCAL_FUNCTION lantern_jdata_in
     FRAME 32
     stp     x2, x3, [sp, #16]
     cbz     x1, 1f
@@ -376,10 +376,10 @@ LOCAL_FUNCTION jdata_in
     b.ne    1f
     ADDRESS x1, json_null
     mov     x2, #4
-    bl      jliteral
+    bl      lantern_jliteral
     mov     x1, #0
     UNFRAME 32
-1:  bl      jstring
+1:  bl      lantern_jstring
     cbz     x0, 9f
     cbnz    x3, 9f                          /* "0x", then 2 hex digits a byte */
     ldp     x10, x11, [sp, #16]
@@ -416,10 +416,10 @@ LOCAL_FUNCTION jdata_in
     UNFRAME 32
 9:  mov     x0, #0
     UNFRAME 32
-END_FUNCTION jdata_in
+END_FUNCTION lantern_jdata_in
 
 /* L0: a PayloadStatusV1 object at the cursor x0, into x20: x0 = the cursor after it. x23 1 when status is seen. */
-LOCAL_FUNCTION jpayload_status
+LOCAL_FUNCTION lantern_jpayload_status
     ENTER 0
     cmp     x0, x19
     b.hs    9f
@@ -428,12 +428,12 @@ LOCAL_FUNCTION jpayload_status
     b.ne    9f
     mov     x23, #0
     mov     x1, #1
-1:  bl      jmember
+1:  bl      lantern_jmember
     cbz     x0, 9f
     cbnz    x3, 8f
     JIS     json_status
     cbz     x9, 3f
-    bl      jstring                         /* status: one of the five */
+    bl      lantern_jstring                         /* status: one of the five */
     cbz     x0, 9f
     cbnz    x3, 9f
     mov     x24, x0
@@ -463,11 +463,11 @@ LOCAL_FUNCTION jpayload_status
     mov     x1, #1                          /* latestValidHash: 32 bytes or null */
     mov     x2, #32
     add     x3, x20, #EngineResponse_latest_valid_hash
-    bl      jdata_in
+    bl      lantern_jdata_in
     cbz     x0, 9f
     str     x1, [x20, #EngineResponse_has_latest_valid_hash]
     b       7f
-6:  bl      jskip
+6:  bl      lantern_jskip
     cbz     x0, 9f
 7:  mov     x1, #0
     b       1b
@@ -475,14 +475,14 @@ LOCAL_FUNCTION jpayload_status
     LEAVE 0
 9:  mov     x0, #0
     LEAVE 0
-END_FUNCTION jpayload_status
+END_FUNCTION lantern_jpayload_status
 
 /* L0: the result of the method in x21 at the cursor x0: x0 = the cursor after it. */
-LOCAL_FUNCTION jresult
+LOCAL_FUNCTION lantern_jresult
     ENTER 0
     cmp     x21, #ENGINE_METHOD_NEW_PAYLOAD
     b.ne    1f
-    bl      jpayload_status
+    bl      lantern_jpayload_status
     LEAVE 0
 1:  cmp     x21, #ENGINE_METHOD_FORKCHOICE_UPDATED
     b.ne    5f
@@ -493,12 +493,12 @@ LOCAL_FUNCTION jresult
     b.ne    9f
     mov     x28, #0
     mov     x1, #1
-2:  bl      jmember
+2:  bl      lantern_jmember
     cbz     x0, 9f
     cbnz    x3, 4f
     JIS     json_payload_status
     cbz     x9, 3f
-    bl      jpayload_status
+    bl      lantern_jpayload_status
     cbz     x0, 9f
     mov     x28, #1
     mov     x1, #0
@@ -508,12 +508,12 @@ LOCAL_FUNCTION jresult
     mov     x1, #1                          /* payloadId: 8 bytes or null */
     mov     x2, #8
     add     x3, x20, #EngineResponse_payload_id
-    bl      jdata_in
+    bl      lantern_jdata_in
     cbz     x0, 9f
     str     x1, [x20, #EngineResponse_has_payload_id]
     mov     x1, #0
     b       2b
-6:  bl      jskip
+6:  bl      lantern_jskip
     cbz     x0, 9f
     mov     x1, #0
     b       2b
@@ -524,7 +524,7 @@ LOCAL_FUNCTION jresult
     b.ne    51f
     sub     x9, x0, x24
     str     x9, [x20, #EngineResponse_result_offset]
-    bl      jskip
+    bl      lantern_jskip
     cbz     x0, 9f
     sub     x9, x0, x24
     ldr     x10, [x20, #EngineResponse_result_offset]
@@ -540,7 +540,7 @@ LOCAL_FUNCTION jresult
     b.ne    9f
     sub     x9, x0, x24
     str     x9, [x20, #EngineResponse_result_offset]
-    bl      jskip
+    bl      lantern_jskip
     cbz     x0, 9f
     sub     x9, x0, x24
     ldr     x10, [x20, #EngineResponse_result_offset]
@@ -552,13 +552,13 @@ LOCAL_FUNCTION jresult
     ldrb    w9, [x0], #1
     cmp     w9, #'['
     b.ne    9f
-    bl      jws
+    bl      lantern_jws
     cmp     x0, x19
     b.hs    9f
     ldrb    w9, [x0]
     cmp     w9, #']'
     b.eq    13f
-10: bl      jstring
+10: bl      lantern_jstring
     cbz     x0, 9f
     cbnz    x3, 12f                         /* a name with an escape matches no method */
     ADDRESS x26, json_methods
@@ -584,7 +584,7 @@ LOCAL_FUNCTION jresult
 14: add     x26, x26, x27
     add     x25, x25, #1
     b       11b
-12: bl      jws
+12: bl      lantern_jws
     cmp     x0, x19
     b.hs    9f
     ldrb    w9, [x0], #1
@@ -592,16 +592,16 @@ LOCAL_FUNCTION jresult
     b.eq    16f
     cmp     w9, #','
     b.ne    9f
-    bl      jws
+    bl      lantern_jws
     b       10b
 13: add     x0, x0, #1
 16: LEAVE 0
 9:  mov     x0, #0
     LEAVE 0
-END_FUNCTION jresult
+END_FUNCTION lantern_jresult
 
 /* L0: an error object at the cursor x0, into x20: x0 = the cursor after it. x28 1 when code is seen. */
-LOCAL_FUNCTION jerror
+LOCAL_FUNCTION lantern_jerror
     ENTER 0
     cmp     x0, x19
     b.hs    9f
@@ -610,13 +610,13 @@ LOCAL_FUNCTION jerror
     b.ne    9f
     mov     x28, #0
     mov     x1, #1
-1:  bl      jmember
+1:  bl      lantern_jmember
     cbz     x0, 9f
     cbnz    x3, 8f
     JIS     json_code
     cbz     x9, 6f
     mov     x23, x0                         /* code: an integer from -2^63 to 2^63 - 1 */
-    bl      jnumber
+    bl      lantern_jnumber
     cbz     x0, 9f
     cbz     x1, 9f
     mov     x24, x0
@@ -650,7 +650,7 @@ LOCAL_FUNCTION jerror
     mov     x28, #1
     mov     x0, x24
     b       7f
-6:  bl      jskip
+6:  bl      lantern_jskip
     cbz     x0, 9f
 7:  mov     x1, #0
     b       1b
@@ -658,7 +658,7 @@ LOCAL_FUNCTION jerror
     LEAVE 0
 9:  mov     x0, #0
     LEAVE 0
-END_FUNCTION jerror
+END_FUNCTION lantern_jerror
 
 /*
  * (body, method, out): x19 the end, x20 out, x21 method, x22 1 when id is seen, x23 2 for an
@@ -679,20 +679,20 @@ FUNCTION lantern_engine_parse_response
     mov     x22, #0
     mov     x25, #0                         /* 1 for an error, 2 for a result */
     mov     x0, x24
-    bl      jws
+    bl      lantern_jws
     cmp     x0, x19
     b.hs    9f
     ldrb    w9, [x0], #1
     cmp     w9, #'{'
     b.ne    9f
     mov     x1, #1
-2:  bl      jmember
+2:  bl      lantern_jmember
     cbz     x0, 9f
     cbnz    x3, 8f
     JIS     json_id
     cbz     x9, 4f
     mov     x23, x0                         /* id: digits, at most 2^64 - 1 */
-    bl      jnumber
+    bl      lantern_jnumber
     cbz     x0, 9f
     cbz     x1, 9f
     ldrb    w9, [x23]
@@ -715,21 +715,21 @@ FUNCTION lantern_engine_parse_response
     b       7f
 4:  JIS     json_result
     cbz     x9, 6f
-    bl      jresult
+    bl      lantern_jresult
     cbz     x0, 9f
     orr     x25, x25, #2
     b       7f
 6:  JIS     json_error
     cbz     x9, 10f
-    bl      jerror
+    bl      lantern_jerror
     cbz     x0, 9f
     orr     x25, x25, #1
     b       7f
-10: bl      jskip
+10: bl      lantern_jskip
     cbz     x0, 9f
 7:  mov     x1, #0
     b       2b
-8:  bl      jws                             /* then nothing but whitespace */
+8:  bl      lantern_jws                             /* then nothing but whitespace */
     cmp     x0, x19
     b.ne    9f
     cbz     x22, 9f

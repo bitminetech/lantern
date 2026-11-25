@@ -291,10 +291,10 @@ SPEC_FUNCTION get_attestation_component_deltas
     str     x9, [sp, #(L + 32)]
     mov     x0, x22
     mov     x1, x24
-    bl      zero_deltas
+    bl      lantern_zero_deltas
     mov     x0, x23
     mov     x1, x24
-    bl      zero_deltas
+    bl      lantern_zero_deltas
     ldr     x9, [sp, #(L + 32)]
     SCRATCH_LIST x25, x21, x9, 0, x24
     SCRATCH_LIST x26, x21, x9, 1, x24
@@ -437,10 +437,10 @@ SPEC_FUNCTION get_inclusion_delay_deltas
     LDQ     x25, x19, BeaconState_validators + 8
     mov     x0, x21
     mov     x1, x25
-    bl      zero_deltas
+    bl      lantern_zero_deltas
     mov     x0, x22
     mov     x1, x25
-    bl      zero_deltas
+    bl      lantern_zero_deltas
     TAKE_REFS x23, x20, x24
     SCRATCH_LIST x26, x20, x24, 0, x25
     SCRATCH_LIST x27, x20, x24, 1, x25
@@ -569,10 +569,10 @@ SPEC_FUNCTION get_inactivity_penalty_deltas
     LDQ     x25, x19, BeaconState_validators + 8
     mov     x0, x21
     mov     x1, x25
-    bl      zero_deltas
+    bl      lantern_zero_deltas
     mov     x0, x22
     mov     x1, x25
-    bl      zero_deltas
+    bl      lantern_zero_deltas
     mov     x0, x19
     add     x1, sp, #(L + 32)
     bl      lantern_is_in_inactivity_leak
@@ -655,7 +655,7 @@ SPEC_FUNCTION get_inactivity_penalty_deltas
 SPEC_END get_inactivity_penalty_deltas
 
 /* L0: add the n entries of list x1 to those of list x0. x0 = LANTERN_OK, or LANTERN_INVALID_OVERFLOW. A leaf. */
-LOCAL_FUNCTION add_deltas
+LOCAL_FUNCTION lantern_add_deltas
     UNWIND_END_PROLOGUE
     add     x0, x0, #LIST_FIXED
     add     x1, x1, #LIST_FIXED
@@ -671,19 +671,19 @@ LOCAL_FUNCTION add_deltas
     ret
 3:  mov     x0, #LANTERN_INVALID_OVERFLOW
     ret
-END_FUNCTION add_deltas
+END_FUNCTION lantern_add_deltas
 
 /* Add the component's rewards and penalties to the totals. */
 .macro ADD_BOTH
     mov     x0, x21
     mov     x1, x25
     mov     x2, x24
-    bl      add_deltas
+    bl      lantern_add_deltas
     cbnz    x0, 7f
     mov     x0, x22
     mov     x1, x26
     mov     x2, x24
-    bl      add_deltas
+    bl      lantern_add_deltas
     cbnz    x0, 7f
 .endm
 
@@ -714,10 +714,10 @@ SPEC_FUNCTION get_attestation_deltas
     LDQ     x24, x19, BeaconState_validators + 8
     mov     x0, x21
     mov     x1, x24
-    bl      zero_deltas
+    bl      lantern_zero_deltas
     mov     x0, x22
     mov     x1, x24
-    bl      zero_deltas
+    bl      lantern_zero_deltas
     ldr     x23, [x20]
     SCRATCH_LIST x25, x20, x23, 0, x24
     SCRATCH_LIST x26, x20, x23, 1, x24
@@ -733,7 +733,7 @@ SPEC_FUNCTION get_attestation_deltas
     mov     x0, x21                         /* inclusion delay: rewards only */
     mov     x1, x25
     mov     x2, x24
-    bl      add_deltas
+    bl      lantern_add_deltas
     cbnz    x0, 7f
     str     x23, [x20]                      /* inactivity: penalties only */
     mov     x0, x19
@@ -746,7 +746,7 @@ SPEC_FUNCTION get_attestation_deltas
     mov     x0, x22
     mov     x1, x26
     mov     x2, x24
-    bl      add_deltas
+    bl      lantern_add_deltas
 7:  LEAVE 16
 9:  mov     x0, #LANTERN_BUFFER_TOO_SMALL
     LEAVE 16
@@ -894,7 +894,7 @@ SPEC_END process_justification_and_finalization
 .endm
 
 /* L0: x0 = LANTERN_OK when state x0's previous_epoch_attestations can take the current ones, else LANTERN_BUFFER_TOO_SMALL. A leaf. */
-LOCAL_FUNCTION record_room
+LOCAL_FUNCTION lantern_record_room
     UNWIND_END_PROLOGUE
     MOVQ    x1, BeaconState_current_epoch_attestations
     PENDING_BYTES
@@ -907,14 +907,14 @@ LOCAL_FUNCTION record_room
     ret
 9:  mov     x0, #LANTERN_BUFFER_TOO_SMALL
     ret
-END_FUNCTION record_room
+END_FUNCTION lantern_record_room
 
 /* x19 state, x20 result. */
 SPEC_FUNCTION process_participation_record_updates
     ENTER 0
     mov     x19, x0
     mov     x20, x3
-    bl      record_room                     /* previous_epoch_attestations = current_epoch_attestations */
+    bl      lantern_record_room                     /* previous_epoch_attestations = current_epoch_attestations */
     cbnz    x0, 7f
     mov     x0, x19
     MOVQ    x1, BeaconState_current_epoch_attestations

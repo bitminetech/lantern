@@ -30,7 +30,7 @@ FUNCTION lantern_db_size
 END_FUNCTION lantern_db_size
 
 # The parts of the Db a0 for the room a1: slots at DB_FIXED, then roots; their counts the capacities. Uses t0, t1.
-LOCAL_FUNCTION db_layout
+LOCAL_FUNCTION lantern_db_layout
     UNWIND_END_PROLOGUE
     ld      t0, DbRoom_slots(a1)
     li      t1, DB_FIXED
@@ -43,10 +43,10 @@ LOCAL_FUNCTION db_layout
     ld      t0, DbRoom_roots(a1)
     sd      t0, (Db_roots + 8)(a0)
     ret
-END_FUNCTION db_layout
+END_FUNCTION lantern_db_layout
 
 # The root at a1 goes in the root table of the Db a0 with the value a2, at the first free entry from its first 8 bytes. Uses t0-t3.
-LOCAL_FUNCTION db_insert
+LOCAL_FUNCTION lantern_db_insert
     UNWIND_END_PROLOGUE
     ld      t0, Db_roots(a0)
     add     t0, a0, t0
@@ -65,10 +65,10 @@ LOCAL_FUNCTION db_insert
     add     t3, t0, t3
     sd      a2, 0(t3)
     ret
-END_FUNCTION db_insert
+END_FUNCTION lantern_db_insert
 
 # a0 = the entry index (slot - first_slot) of the block of the root at a1 in the Db a0, or 2^64 - 1. Uses t0-t6, a2, a6, a7.
-LOCAL_FUNCTION db_find
+LOCAL_FUNCTION lantern_db_find
     UNWIND_END_PROLOGUE
     ld      t0, Db_roots(a0)
     add     t0, a0, t0
@@ -96,11 +96,11 @@ LOCAL_FUNCTION db_find
     j       1b
 3:  li      a0, -1
     ret
-END_FUNCTION db_find
+END_FUNCTION lantern_db_find
 
 # The root table of the Db a0 again from its entries: zeroed, then the root of each block; blocks
 # their count. s1 db, s2 an entry, s3 its index, s4 the entries in use.
-LOCAL_FUNCTION db_rehash
+LOCAL_FUNCTION lantern_db_rehash
     ENTER 0
     mv      s1, a0
     ld      t0, Db_roots(s1)
@@ -121,7 +121,7 @@ LOCAL_FUNCTION db_rehash
     mv      a0, s1
     mv      a1, s2
     addi    a2, s3, 1
-    call    db_insert
+    call    lantern_db_insert
     ld      t0, Db_blocks(s1)
     addi    t0, t0, 1
     sd      t0, Db_blocks(s1)
@@ -129,7 +129,7 @@ LOCAL_FUNCTION db_rehash
     addi    s3, s3, 1
     j       1b
 9:  LEAVE 0
-END_FUNCTION db_rehash
+END_FUNCTION lantern_db_rehash
 
 # (room, slot, db): no records; first_slot and end_slot the slot. s1 room, s2 the slot, s3 db. Locals: L the size.
 FUNCTION lantern_db_init
@@ -150,7 +150,7 @@ FUNCTION lantern_db_init
     sd      s2, Db_end_slot(s3)
     mv      a0, s3
     mv      a1, s1
-    call    db_layout
+    call    lantern_db_layout
     li      a0, LANTERN_OK
 9:  LEAVE 16
 8:  li      a0, LANTERN_BUFFER_TOO_SMALL
@@ -190,7 +190,7 @@ FUNCTION lantern_db_copy
     sd      t0, Db_end_slot(s3)
     mv      a0, s3
     mv      a1, s2
-    call    db_layout
+    call    lantern_db_layout
     ld      t0, Db_slots(s3)                # the entries in use, then each root again
     add     a0, s3, t0
     ld      t0, Db_slots(s1)
@@ -199,7 +199,7 @@ FUNCTION lantern_db_copy
     mul     a2, s4, t0
     call    lantern_copy
     mv      a0, s3
-    call    db_rehash
+    call    lantern_db_rehash
     li      a0, LANTERN_OK
 9:  LEAVE 16
 8:  li      a0, LANTERN_BUFFER_TOO_SMALL
@@ -290,7 +290,7 @@ FUNCTION lantern_db_add
     bnez    t0, 7f
     mv      a0, s1
     addi    a1, s2, DbRecord_root
-    call    db_find
+    call    lantern_db_find
     li      t0, -1
     bne     a0, t0, 7f
     ld      t0, Db_blocks(s1)               # the table at most half full
@@ -305,7 +305,7 @@ FUNCTION lantern_db_add
     mv      a0, s1
     addi    a1, s2, DbRecord_root
     addi    a2, s4, 1
-    call    db_insert
+    call    lantern_db_insert
     ld      t0, Db_blocks(s1)
     addi    t0, t0, 1
     sd      t0, Db_blocks(s1)
@@ -406,7 +406,7 @@ FUNCTION lantern_db_find_root
     FRAME 16
     sd      a0, 0(sp)
     sd      a2, 8(sp)
-    call    db_find
+    call    lantern_db_find
     li      t0, -1
     beq     a0, t0, 1f
     ld      t0, 0(sp)
@@ -447,7 +447,7 @@ FUNCTION lantern_db_prune
     call    lantern_zero
     sd      s2, Db_first_slot(s1)
     mv      a0, s1
-    call    db_rehash
+    call    lantern_db_rehash
 9:  li      a0, LANTERN_OK
     LEAVE 0
 END_FUNCTION lantern_db_prune
@@ -481,7 +481,7 @@ FUNCTION lantern_db_drop_sidecars
 END_FUNCTION lantern_db_drop_sidecars
 
 # L0: a0 = the u64 of the a1 bytes at a0 (as a signed count: 8 or more a whole word, 0 or less none), zero above them. Uses t0-t3.
-LOCAL_FUNCTION db_word
+LOCAL_FUNCTION lantern_db_word
     UNWIND_END_PROLOGUE
     li      t0, 8
     blt     a1, t0, 1f
@@ -499,12 +499,12 @@ LOCAL_FUNCTION db_word
     addi    t0, t0, 1
     bltu    t0, a1, 2b
 3:  ret
-END_FUNCTION db_word
+END_FUNCTION lantern_db_word
 
 # L1: a0 = 1 when word a0 of the state differs from the patch's start, else 0 (db.md, the state
 # diffs). Reads s1 the base's bytes, s2 min(their count, the state's), s3 the state's bytes, s4
 # their count. Uses a1, t0-t6.
-LOCAL_FUNCTION db_differ
+LOCAL_FUNCTION lantern_db_differ
     FRAME 0
     slli    t5, a0, 3
     addi    t4, t5, 8
@@ -516,16 +516,16 @@ LOCAL_FUNCTION db_differ
     j       2f
 1:  add     a0, s3, t5
     sub     a1, s4, t5
-    call    db_word
+    call    lantern_db_word
     mv      t6, a0
     add     a0, s1, t5
     sub     a1, s2, t5
-    call    db_word
+    call    lantern_db_word
     mv      t4, a0
 2:  sub     a0, t6, t4
     snez    a0, a0
     UNFRAME 0
-END_FUNCTION db_differ
+END_FUNCTION lantern_db_differ
 
 # (base, state, out, size): the diff of the state's bytes against the base's (db.md, the state
 # diffs): a pass that counts, then one that writes. s1 the base's bytes, s2 min(their count, the
@@ -553,7 +553,7 @@ FUNCTION lantern_db_state_diff
 11: li      s8, 0
 12: bgeu    s8, s5, 30f
     mv      a0, s8
-    call    db_differ
+    call    lantern_db_differ
     bnez    a0, 13f
     addi    s8, s8, 1
     j       12b
@@ -562,7 +562,7 @@ FUNCTION lantern_db_state_diff
     addi    s8, s8, 1
 14: bgeu    s8, s5, 20f
     mv      a0, s8
-    call    db_differ
+    call    lantern_db_differ
     beqz    a0, 15f
     mv      s10, s8
     addi    s8, s8, 1
@@ -571,7 +571,7 @@ FUNCTION lantern_db_state_diff
 16: addi    s8, s8, 1
     bgeu    s8, s5, 20f
     mv      a0, s8
-    call    db_differ
+    call    lantern_db_differ
     beqz    a0, 16b
     ld      t0, (L + 16)(sp)                # at most 2 equal words between: the group goes on
     sub     t0, s8, t0
@@ -601,7 +601,7 @@ FUNCTION lantern_db_state_diff
     slli    t0, t0, 3
     add     a0, s3, t0
     sub     a1, s4, t0
-    call    db_word
+    call    lantern_db_word
     ld      t3, (L + 24)(sp)
     sd      a0, 0(t3)
     addi    t3, t3, 8

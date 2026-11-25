@@ -3,8 +3,8 @@
  * Requirements: docs/reference/engine-api.md.
  */
 
-/* L0: base64url of the rsi bytes at rdi, without padding, to rdx; rdx = the end. Uses rax, rcx, r8, r9. */
-LOCAL_FUNCTION base64url
+/* L0: lantern_base64url of the rsi bytes at rdi, without padding, to rdx; rdx = the end. Uses rax, rcx, r8, r9. */
+LOCAL_FUNCTION lantern_base64url
     UNWIND_END_PROLOGUE
     lea     base64url_alphabet(%rip), %r9
 1:  cmp     $3, %rsi
@@ -64,10 +64,10 @@ LOCAL_FUNCTION base64url
     mov     %r8b, (%rdx)
     inc     %rdx
 4:  ret
-END_FUNCTION base64url
+END_FUNCTION lantern_base64url
 
 /* L0: the decimal digits of rax to rdi; rdi = the end. Uses rax, rcx, rdx, r8. */
-LOCAL_FUNCTION decimal
+LOCAL_FUNCTION lantern_decimal
     UNWIND_END_PROLOGUE
     mov     $10, %ecx                       # count the digits, then write them from the last
     mov     %rax, %r8
@@ -86,7 +86,7 @@ LOCAL_FUNCTION decimal
     test    %rax, %rax
     jnz     2b
     ret
-END_FUNCTION decimal
+END_FUNCTION lantern_decimal
 
 /*
  * (secret, iat, scratch, out): rbx secret, rbp iat, r12 scratch, r13 out, r14 the token's end.
@@ -110,7 +110,7 @@ FUNCTION lantern_jwt_token
     movdqu  %xmm0, 32(%r12)
     movdqu  16(%rbx), %xmm0
     movdqu  %xmm0, 48(%r12)
-    lea     jwt_header(%rip), %rsi          # base64url(header) + .
+    lea     jwt_header(%rip), %rsi          # lantern_base64url(header) + .
     lea     88(%r12), %rdi
     mov     $37, %ecx
     rep movsb
@@ -121,7 +121,7 @@ FUNCTION lantern_jwt_token
     mov     $6, %ecx
     rep movsb
     mov     %rbp, %rax
-    call    decimal
+    call    lantern_decimal
     movb    $'}', (%rdi)
     inc     %rdi
     lea     L(%rsp), %rax
@@ -129,7 +129,7 @@ FUNCTION lantern_jwt_token
     sub     %rax, %rsi
     mov     %rax, %rdi
     mov     %r14, %rdx
-    call    base64url
+    call    lantern_base64url
     lea     88(%r12), %rax                  # the signing input's ByteList
     mov     %rdx, %r14
     sub     %rax, %rdx
@@ -146,7 +146,7 @@ FUNCTION lantern_jwt_token
     CALL_GLOBAL crypto_hmac_sha256
     test    %rax, %rax
     jnz     8f
-    lea     88(%r12), %rsi                  # out: the signing input, ., base64url(mac)
+    lea     88(%r12), %rsi                  # out: the signing input, ., lantern_base64url(mac)
     mov     %r14, %rcx
     sub     %rsi, %rcx
     lea     24(%r13), %rdi
@@ -155,7 +155,7 @@ FUNCTION lantern_jwt_token
     lea     1(%rdi), %rdx
     lea     (L + 32)(%rsp), %rdi
     mov     $32, %esi
-    call    base64url
+    call    lantern_base64url
     lea     24(%r13), %rax
     sub     %rax, %rdx
     movq    $24, 8(%r13)
@@ -175,7 +175,7 @@ FUNCTION lantern_http_post
     mov     %rcx, %r13
     mov     16(%r12), %rax                  # the body's length in decimal
     lea     L(%rsp), %rdi
-    call    decimal
+    call    lantern_decimal
     lea     L(%rsp), %rax
     mov     %rdi, %r15
     sub     %rax, %r15
@@ -226,7 +226,7 @@ FUNCTION lantern_http_post
 END_FUNCTION lantern_http_post
 
 /* L0: rax = the position of the CR LF at or after rdx in the rsi bytes at rdi, or 2^64 - 1. Uses rcx. */
-LOCAL_FUNCTION find_crlf
+LOCAL_FUNCTION lantern_find_crlf
     UNWIND_END_PROLOGUE
     mov     %rdx, %rax
 1:  lea     1(%rax), %rcx
@@ -240,7 +240,7 @@ LOCAL_FUNCTION find_crlf
     jmp     1b
 3:  mov     $-1, %rax
 4:  ret
-END_FUNCTION find_crlf
+END_FUNCTION lantern_find_crlf
 
 /* Whether the rcx bytes at rsi are the n byte name at label (lowercase): al = 1 or 0. Uses r8, r9, r10. */
 .macro HEADER_IS label, n
@@ -282,7 +282,7 @@ FUNCTION lantern_http_parse_response
     mov     %rbx, %rdi                      # the status line
     mov     %rbp, %rsi
     xor     %edx, %edx
-    call    find_crlf
+    call    lantern_find_crlf
     cmp     $-1, %rax
     je      7f
     mov     %rax, %r14
@@ -331,7 +331,7 @@ FUNCTION lantern_http_parse_response
 5:  mov     %rbx, %rdi                      # each header line, to the empty line
     mov     %rbp, %rsi
     mov     %r14, %rdx
-    call    find_crlf
+    call    lantern_find_crlf
     cmp     $-1, %rax
     je      7f
     cmp     %r14, %rax
@@ -460,7 +460,7 @@ FUNCTION lantern_http_parse_response
 30: mov     %rbx, %rdi                      # chunked: a chunk size line
     mov     %rbp, %rsi
     mov     %r14, %rdx
-    call    find_crlf
+    call    lantern_find_crlf
     cmp     $-1, %rax
     je      7f
     xor     %edx, %edx
@@ -520,7 +520,7 @@ FUNCTION lantern_http_parse_response
 36: mov     %rbx, %rdi                      # the trailer section, to its empty line
     mov     %rbp, %rsi
     mov     %r14, %rdx
-    call    find_crlf
+    call    lantern_find_crlf
     cmp     $-1, %rax
     je      7f
     cmp     %r14, %rax
@@ -569,7 +569,7 @@ FUNCTION lantern_engine_exchange_capabilities
     lea     j_caps_open(%rip), %rsi
     mov     $j_caps_open_len, %ecx
     rep movsb
-    call    decimal
+    call    lantern_decimal
     lea     j_caps_close(%rip), %rsi
     mov     $j_caps_close_len, %ecx
     rep movsb
