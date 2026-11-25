@@ -1015,17 +1015,17 @@ The spec's `Seen` of every fork, and the blocks of `store.blocks` that have no p
 
 | ISA | Linux | Windows | macOS | `equal` |
 |---|---|---|---|---|
-| x86-64 | ✅ | ✅ |  |  |
+| x86-64 | ✅ | ✅ | ✅ |  |
 | ARM64 | ✅ | ✅ | ✅ |  |
-| RISC-V |  |  |  |  |
+| RISC-V | ✅ |  |  |  |
 
 ### `lantern_compute_columns_for_custody_group`
 
 | ISA | Linux | Windows | macOS | `equal` |
 |---|---|---|---|---|
-| x86-64 | ✅ | ✅ |  |  |
+| x86-64 | ✅ | ✅ | ✅ |  |
 | ARM64 | ✅ | ✅ | ✅ |  |
-| RISC-V |  |  |  |  |
+| RISC-V | ✅ |  |  |  |
 
 ### `lantern_compute_subnet_for_data_column_sidecar`
 
@@ -1047,9 +1047,9 @@ The spec's `Seen` of every fork, and the blocks of `store.blocks` that have no p
 
 | ISA | Linux | Windows | macOS | `equal` |
 |---|---|---|---|---|
-| x86-64 | ✅ | ✅ |  |  |
+| x86-64 | ✅ | ✅ | ✅ |  |
 | ARM64 | ✅ | ✅ | ✅ |  |
-| RISC-V |  |  |  |  |
+| RISC-V | ✅ |  |  |  |
 
 ### `lantern_verify_partial_data_column_sidecar_kzg_proofs`
 
@@ -1063,166 +1063,166 @@ The spec's `Seen` of every fork, and the blocks of `store.blocks` that have no p
 
 | ISA | Linux | Windows | macOS | `equal` |
 |---|---|---|---|---|
-| x86-64 | ✅ | ✅ |  |  |
+| x86-64 | ✅ | ✅ | ✅ |  |
 | ARM64 | ✅ | ✅ | ✅ |  |
-| RISC-V |  |  |  |  |
+| RISC-V | ✅ |  |  |  |
 
 ### `lantern_verify_blob_sidecar_inclusion_proof`
 
 | ISA | Linux | Windows | macOS | `equal` |
 |---|---|---|---|---|
-| x86-64 | ✅ | ✅ |  |  |
+| x86-64 | ✅ | ✅ | ✅ |  |
 | ARM64 | ✅ | ✅ | ✅ |  |
-| RISC-V |  |  |  |  |
+| RISC-V | ✅ |  |  |  |
 
 ### `lantern_compute_fork_version`
 
 | ISA | Linux | Windows | macOS | `equal` |
 |---|---|---|---|---|
-| x86-64 | ✅ | ✅ |  |  |
+| x86-64 | ✅ | ✅ | ✅ |  |
 | ARM64 | ✅ | ✅ | ✅ |  |
-| RISC-V |  |  |  |  |
+| RISC-V | ✅ |  |  |  |
 
 ### `lantern_compute_fork_digest`
 
 | ISA | Linux | Windows | macOS | `equal` |
 |---|---|---|---|---|
-| x86-64 | ✅ | ✅ |  |  |
+| x86-64 | ✅ | ✅ | ✅ |  |
 | ARM64 | ✅ | ✅ | ✅ |  |
-| RISC-V |  |  |  |  |
+| RISC-V | ✅ |  |  |  |
 
 ### `lantern_compute_attestation_subnet_prefix_bits`
 
 | ISA | Linux | Windows | macOS | `equal` |
 |---|---|---|---|---|
-| x86-64 | ✅ | ✅ |  |  |
+| x86-64 | ✅ | ✅ | ✅ |  |
 | ARM64 | ✅ | ✅ | ✅ |  |
-| RISC-V |  |  |  |  |
+| RISC-V | ✅ |  |  |  |
 
 ### `lantern_compute_min_epochs_for_block_requests`
 
 | ISA | Linux | Windows | macOS | `equal` |
 |---|---|---|---|---|
-| x86-64 | ✅ | ✅ |  |  |
+| x86-64 | ✅ | ✅ | ✅ |  |
 | ARM64 | ✅ | ✅ | ✅ |  |
-| RISC-V |  |  |  |  |
+| RISC-V | ✅ |  |  |  |
 
 ### `lantern_max_compressed_len`
 
 | ISA | Linux | Windows | macOS | `equal` |
 |---|---|---|---|---|
-| x86-64 | ✅ | ✅ |  |  |
+| x86-64 | ✅ | ✅ | ✅ |  |
 | ARM64 | ✅ | ✅ | ✅ |  |
-| RISC-V |  |  |  |  |
+| RISC-V | ✅ |  |  |  |
 
 ### `lantern_max_message_size`
 
 | ISA | Linux | Windows | macOS | `equal` |
 |---|---|---|---|---|
-| x86-64 | ✅ | ✅ |  |  |
+| x86-64 | ✅ | ✅ | ✅ |  |
 | ARM64 | ✅ | ✅ | ✅ |  |
-| RISC-V |  |  |  |  |
+| RISC-V | ✅ |  |  |  |
 
 ### `lantern_compute_subscribed_subnet`
 
 | ISA | Linux | Windows | macOS | `equal` |
 |---|---|---|---|---|
-| x86-64 | ✅ | ✅ |  |  |
+| x86-64 | ✅ | ✅ | ✅ |  |
 | ARM64 | ✅ | ✅ | ✅ |  |
-| RISC-V |  |  |  |  |
+| RISC-V | ✅ |  |  |  |
 
 ### `lantern_compute_subscribed_subnets`
 
 | ISA | Linux | Windows | macOS | `equal` |
 |---|---|---|---|---|
-| x86-64 | ✅ | ✅ |  |  |
+| x86-64 | ✅ | ✅ | ✅ |  |
 | ARM64 | ✅ | ✅ | ✅ |  |
-| RISC-V |  |  |  |  |
+| RISC-V | ✅ |  |  |  |
 
 ### `lantern_compute_max_request_blob_sidecars`
 
 | ISA | Linux | Windows | macOS | `equal` |
 |---|---|---|---|---|
-| x86-64 | ✅ | ✅ |  |  |
+| x86-64 | ✅ | ✅ | ✅ |  |
 | ARM64 | ✅ | ✅ | ✅ |  |
-| RISC-V |  |  |  |  |
+| RISC-V | ✅ |  |  |  |
 
 ### `lantern_compute_max_request_data_column_sidecars`
 
 | ISA | Linux | Windows | macOS | `equal` |
 |---|---|---|---|---|
-| x86-64 | ✅ | ✅ |  |  |
+| x86-64 | ✅ | ✅ | ✅ |  |
 | ARM64 | ✅ | ✅ | ✅ |  |
-| RISC-V |  |  |  |  |
+| RISC-V | ✅ |  |  |  |
 
 ### `lantern_compute_enr_fork_id`
 
 | ISA | Linux | Windows | macOS | `equal` |
 |---|---|---|---|---|
-| x86-64 | ✅ | ✅ |  |  |
+| x86-64 | ✅ | ✅ | ✅ |  |
 | ARM64 | ✅ | ✅ | ✅ |  |
-| RISC-V |  |  |  |  |
+| RISC-V | ✅ |  |  |  |
 
 ### `lantern_compute_next_fork_digest`
 
 | ISA | Linux | Windows | macOS | `equal` |
 |---|---|---|---|---|
-| x86-64 | ✅ | ✅ |  |  |
+| x86-64 | ✅ | ✅ | ✅ |  |
 | ARM64 | ✅ | ✅ | ✅ |  |
-| RISC-V |  |  |  |  |
+| RISC-V | ✅ |  |  |  |
 
 ### `lantern_gossip_topic`
 
 | ISA | Linux | Windows | macOS | `equal` |
 |---|---|---|---|---|
-| x86-64 | ✅ | ✅ |  |  |
+| x86-64 | ✅ | ✅ | ✅ |  |
 | ARM64 | ✅ | ✅ | ✅ |  |
-| RISC-V |  |  |  |  |
+| RISC-V | ✅ |  |  |  |
 
 ### `lantern_gossip_topic_parse`
 
 | ISA | Linux | Windows | macOS | `equal` |
 |---|---|---|---|---|
-| x86-64 | ✅ | ✅ |  |  |
+| x86-64 | ✅ | ✅ | ✅ |  |
 | ARM64 | ✅ | ✅ | ✅ |  |
-| RISC-V |  |  |  |  |
+| RISC-V | ✅ |  |  |  |
 
 ### `lantern_compute_message_id`
 
 | ISA | Linux | Windows | macOS | `equal` |
 |---|---|---|---|---|
-| x86-64 | ✅ | ✅ |  |  |
+| x86-64 | ✅ | ✅ | ✅ |  |
 | ARM64 | ✅ | ✅ | ✅ |  |
-| RISC-V |  |  |  |  |
+| RISC-V | ✅ |  |  |  |
 
 ### `lantern_seen_size`
 
 | ISA | Linux | Windows | macOS | `equal` |
 |---|---|---|---|---|
-| x86-64 | ✅ | ✅ |  |  |
+| x86-64 | ✅ | ✅ | ✅ |  |
 | ARM64 | ✅ | ✅ | ✅ |  |
-| RISC-V |  |  |  |  |
+| RISC-V | ✅ |  |  |  |
 
 ### `lantern_seen_init`
 
 | ISA | Linux | Windows | macOS | `equal` |
 |---|---|---|---|---|
-| x86-64 | ✅ | ✅ |  |  |
+| x86-64 | ✅ | ✅ | ✅ |  |
 | ARM64 | ✅ | ✅ | ✅ |  |
-| RISC-V |  |  |  |  |
+| RISC-V | ✅ |  |  |  |
 
 ### `lantern_seen_copy`
 
 | ISA | Linux | Windows | macOS | `equal` |
 |---|---|---|---|---|
-| x86-64 | ✅ | ✅ |  |  |
+| x86-64 | ✅ | ✅ | ✅ |  |
 | ARM64 | ✅ | ✅ | ✅ |  |
-| RISC-V |  |  |  |  |
+| RISC-V | ✅ |  |  |  |
 
 ### `lantern_seen_add_block`
 
 | ISA | Linux | Windows | macOS | `equal` |
 |---|---|---|---|---|
-| x86-64 | ✅ | ✅ |  |  |
+| x86-64 | ✅ | ✅ | ✅ |  |
 | ARM64 | ✅ | ✅ | ✅ |  |
-| RISC-V |  |  |  |  |
+| RISC-V | ✅ |  |  |  |

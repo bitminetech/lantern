@@ -349,17 +349,17 @@ The Merkle tree of one field of the last state hashed.
 
 | ISA | Linux | Windows | macOS | `equal` |
 |---|---|---|---|---|
-| x86-64 | ✅ | ✅ |  |  |
+| x86-64 | ✅ | ✅ | ✅ |  |
 | ARM64 | ✅ | ✅ | ✅ |  |
-| RISC-V |  |  |  |  |
+| RISC-V | ✅ |  |  |  |
 
 ### `lantern_beacon_state_copy`
 
 | ISA | Linux | Windows | macOS | `equal` |
 |---|---|---|---|---|
-| x86-64 | ✅ | ✅ |  |  |
+| x86-64 | ✅ | ✅ | ✅ |  |
 | ARM64 | ✅ | ✅ | ✅ |  |
-| RISC-V |  |  |  |  |
+| RISC-V | ✅ |  |  |  |
 
 ### `lantern_copy`
 
@@ -373,22 +373,22 @@ The Merkle tree of one field of the last state hashed.
 
 | ISA | Linux | Windows | macOS | `equal` |
 |---|---|---|---|---|
-| x86-64 | ✅ | ✅ |  |  |
+| x86-64 | ✅ | ✅ | ✅ |  |
 | ARM64 | ✅ | ✅ | ✅ |  |
-| RISC-V |  |  |  |  |
+| RISC-V | ✅ |  |  |  |
 
 ### `lantern_state_cache_init`
 
 | ISA | Linux | Windows | macOS | `equal` |
 |---|---|---|---|---|
-| x86-64 | ✅ | ✅ |  |  |
+| x86-64 | ✅ | ✅ | ✅ |  |
 | ARM64 | ✅ | ✅ | ✅ |  |
-| RISC-V |  |  |  |  |
+| RISC-V | ✅ |  |  |  |
 
 ### `lantern_state_root`
 
 | ISA | Linux | Windows | macOS | `equal` |
 |---|---|---|---|---|
-| x86-64 | ✅ | ✅ |  |  |
+| x86-64 | ✅ | ✅ | ✅ |  |
 | ARM64 | ✅ | ✅ | ✅ |  |
-| RISC-V |  |  |  |  |
+| RISC-V | ✅ |  |  |  |

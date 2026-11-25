@@ -1289,9 +1289,9 @@ Where a list of a `BeaconState` is, for lantern_set_or_append_list.
 
 | ISA | Linux | Windows | macOS | `equal` |
 |---|---|---|---|---|
-| x86-64 | ✅ | ✅ |  |  |
+| x86-64 | ✅ | ✅ | ✅ |  |
 | ARM64 | ✅ | ✅ | ✅ |  |
-| RISC-V |  |  |  |  |
+| RISC-V | ✅ |  |  |  |
 
 ### `lantern_get_matching_source_attestations`
 
@@ -1345,33 +1345,33 @@ Where a list of a `BeaconState` is, for lantern_set_or_append_list.
 
 | ISA | Linux | Windows | macOS | `equal` |
 |---|---|---|---|---|
-| x86-64 | ✅ | ✅ |  |  |
+| x86-64 | ✅ | ✅ | ✅ |  |
 | ARM64 | ✅ | ✅ | ✅ |  |
-| RISC-V |  |  |  |  |
+| RISC-V | ✅ |  |  |  |
 
 ### `lantern_process_rewards_and_penalties`
 
 | ISA | Linux | Windows | macOS | `equal` |
 |---|---|---|---|---|
-| x86-64 | ✅ | ✅ |  |  |
+| x86-64 | ✅ | ✅ | ✅ |  |
 | ARM64 | ✅ | ✅ | ✅ |  |
-| RISC-V |  |  |  |  |
+| RISC-V | ✅ |  |  |  |
 
 ### `lantern_get_flag_index_deltas`
 
 | ISA | Linux | Windows | macOS | `equal` |
 |---|---|---|---|---|
-| x86-64 | ✅ | ✅ |  |  |
+| x86-64 | ✅ | ✅ | ✅ |  |
 | ARM64 | ✅ | ✅ | ✅ |  |
-| RISC-V |  |  |  |  |
+| RISC-V | ✅ |  |  |  |
 
 ### `lantern_get_inactivity_penalty_deltas`
 
 | ISA | Linux | Windows | macOS | `equal` |
 |---|---|---|---|---|
-| x86-64 | ✅ | ✅ |  |  |
+| x86-64 | ✅ | ✅ | ✅ |  |
 | ARM64 | ✅ | ✅ | ✅ |  |
-| RISC-V |  |  |  |  |
+| RISC-V | ✅ |  |  |  |
 
 ### `lantern_get_proposer_reward`
 
@@ -1393,33 +1393,33 @@ Where a list of a `BeaconState` is, for lantern_set_or_append_list.
 
 | ISA | Linux | Windows | macOS | `equal` |
 |---|---|---|---|---|
-| x86-64 | ✅ | ✅ |  |  |
+| x86-64 | ✅ | ✅ | ✅ |  |
 | ARM64 | ✅ | ✅ | ✅ |  |
-| RISC-V |  |  |  |  |
+| RISC-V | ✅ |  |  |  |
 
 ### `lantern_get_target_deltas`
 
 | ISA | Linux | Windows | macOS | `equal` |
 |---|---|---|---|---|
-| x86-64 | ✅ | ✅ |  |  |
+| x86-64 | ✅ | ✅ | ✅ |  |
 | ARM64 | ✅ | ✅ | ✅ |  |
-| RISC-V |  |  |  |  |
+| RISC-V | ✅ |  |  |  |
 
 ### `lantern_get_head_deltas`
 
 | ISA | Linux | Windows | macOS | `equal` |
 |---|---|---|---|---|
-| x86-64 | ✅ | ✅ |  |  |
+| x86-64 | ✅ | ✅ | ✅ |  |
 | ARM64 | ✅ | ✅ | ✅ |  |
-| RISC-V |  |  |  |  |
+| RISC-V | ✅ |  |  |  |
 
 ### `lantern_get_inclusion_delay_deltas`
 
 | ISA | Linux | Windows | macOS | `equal` |
 |---|---|---|---|---|
-| x86-64 | ✅ | ✅ |  |  |
+| x86-64 | ✅ | ✅ | ✅ |  |
 | ARM64 | ✅ | ✅ | ✅ |  |
-| RISC-V |  |  |  |  |
+| RISC-V | ✅ |  |  |  |
 
 ### `lantern_get_attestation_deltas`
 
@@ -1433,89 +1433,89 @@ Where a list of a `BeaconState` is, for lantern_set_or_append_list.
 
 | ISA | Linux | Windows | macOS | `equal` |
 |---|---|---|---|---|
-| x86-64 | ✅ | ✅ |  |  |
+| x86-64 | ✅ | ✅ | ✅ |  |
 | ARM64 | ✅ | ✅ | ✅ |  |
-| RISC-V |  |  |  |  |
+| RISC-V | ✅ |  |  |  |
 
 ### `lantern_process_slashings`
 
 | ISA | Linux | Windows | macOS | `equal` |
 |---|---|---|---|---|
-| x86-64 | ✅ | ✅ |  |  |
+| x86-64 | ✅ | ✅ | ✅ |  |
 | ARM64 | ✅ | ✅ | ✅ |  |
-| RISC-V |  |  |  |  |
+| RISC-V | ✅ |  |  |  |
 
 ### `lantern_process_eth1_data_reset`
 
 | ISA | Linux | Windows | macOS | `equal` |
 |---|---|---|---|---|
-| x86-64 | ✅ | ✅ |  |  |
+| x86-64 | ✅ | ✅ | ✅ |  |
 | ARM64 | ✅ | ✅ | ✅ |  |
-| RISC-V |  |  |  |  |
+| RISC-V | ✅ |  |  |  |
 
 ### `lantern_process_pending_consolidations`
 
 | ISA | Linux | Windows | macOS | `equal` |
 |---|---|---|---|---|
-| x86-64 | ✅ | ✅ |  |  |
+| x86-64 | ✅ | ✅ | ✅ |  |
 | ARM64 | ✅ | ✅ | ✅ |  |
-| RISC-V |  |  |  |  |
+| RISC-V | ✅ |  |  |  |
 
 ### `lantern_process_effective_balance_updates`
 
 | ISA | Linux | Windows | macOS | `equal` |
 |---|---|---|---|---|
-| x86-64 | ✅ | ✅ |  |  |
+| x86-64 | ✅ | ✅ | ✅ |  |
 | ARM64 | ✅ | ✅ | ✅ |  |
-| RISC-V |  |  |  |  |
+| RISC-V | ✅ |  |  |  |
 
 ### `lantern_process_slashings_reset`
 
 | ISA | Linux | Windows | macOS | `equal` |
 |---|---|---|---|---|
-| x86-64 | ✅ | ✅ |  |  |
+| x86-64 | ✅ | ✅ | ✅ |  |
 | ARM64 | ✅ | ✅ | ✅ |  |
-| RISC-V |  |  |  |  |
+| RISC-V | ✅ |  |  |  |
 
 ### `lantern_process_randao_mixes_reset`
 
 | ISA | Linux | Windows | macOS | `equal` |
 |---|---|---|---|---|
-| x86-64 | ✅ | ✅ |  |  |
+| x86-64 | ✅ | ✅ | ✅ |  |
 | ARM64 | ✅ | ✅ | ✅ |  |
-| RISC-V |  |  |  |  |
+| RISC-V | ✅ |  |  |  |
 
 ### `lantern_process_historical_roots_update`
 
 | ISA | Linux | Windows | macOS | `equal` |
 |---|---|---|---|---|
-| x86-64 | ✅ | ✅ |  |  |
+| x86-64 | ✅ | ✅ | ✅ |  |
 | ARM64 | ✅ | ✅ | ✅ |  |
-| RISC-V |  |  |  |  |
+| RISC-V | ✅ |  |  |  |
 
 ### `lantern_process_historical_summaries_update`
 
 | ISA | Linux | Windows | macOS | `equal` |
 |---|---|---|---|---|
-| x86-64 | ✅ | ✅ |  |  |
+| x86-64 | ✅ | ✅ | ✅ |  |
 | ARM64 | ✅ | ✅ | ✅ |  |
-| RISC-V |  |  |  |  |
+| RISC-V | ✅ |  |  |  |
 
 ### `lantern_process_participation_flag_updates`
 
 | ISA | Linux | Windows | macOS | `equal` |
 |---|---|---|---|---|
-| x86-64 | ✅ | ✅ |  |  |
+| x86-64 | ✅ | ✅ | ✅ |  |
 | ARM64 | ✅ | ✅ | ✅ |  |
-| RISC-V |  |  |  |  |
+| RISC-V | ✅ |  |  |  |
 
 ### `lantern_process_participation_record_updates`
 
 | ISA | Linux | Windows | macOS | `equal` |
 |---|---|---|---|---|
-| x86-64 | ✅ | ✅ |  |  |
+| x86-64 | ✅ | ✅ | ✅ |  |
 | ARM64 | ✅ | ✅ | ✅ |  |
-| RISC-V |  |  |  |  |
+| RISC-V | ✅ |  |  |  |
 
 ### `lantern_initiate_validator_exit`
 
@@ -1577,9 +1577,9 @@ Where a list of a `BeaconState` is, for lantern_set_or_append_list.
 
 | ISA | Linux | Windows | macOS | `equal` |
 |---|---|---|---|---|
-| x86-64 | ✅ | ✅ |  |  |
+| x86-64 | ✅ | ✅ | ✅ |  |
 | ARM64 | ✅ | ✅ | ✅ |  |
-| RISC-V |  |  |  |  |
+| RISC-V | ✅ |  |  |  |
 
 ### `lantern_apply_pending_deposit`
 
@@ -1633,9 +1633,9 @@ Where a list of a `BeaconState` is, for lantern_set_or_append_list.
 
 | ISA | Linux | Windows | macOS | `equal` |
 |---|---|---|---|---|
-| x86-64 | ✅ | ✅ |  |  |
+| x86-64 | ✅ | ✅ | ✅ |  |
 | ARM64 | ✅ | ✅ | ✅ |  |
-| RISC-V |  |  |  |  |
+| RISC-V | ✅ |  |  |  |
 
 ### `lantern_get_next_sync_committee`
 
@@ -1657,14 +1657,14 @@ Where a list of a `BeaconState` is, for lantern_set_or_append_list.
 
 | ISA | Linux | Windows | macOS | `equal` |
 |---|---|---|---|---|
-| x86-64 | ✅ | ✅ |  |  |
+| x86-64 | ✅ | ✅ | ✅ |  |
 | ARM64 | ✅ | ✅ | ✅ |  |
-| RISC-V |  |  |  |  |
+| RISC-V | ✅ |  |  |  |
 
 ### `lantern_process_epoch`
 
 | ISA | Linux | Windows | macOS | `equal` |
 |---|---|---|---|---|
-| x86-64 | ✅ | ✅ |  |  |
+| x86-64 | ✅ | ✅ | ✅ |  |
 | ARM64 | ✅ | ✅ | ✅ |  |
-| RISC-V |  |  |  |  |
+| RISC-V | ✅ |  |  |  |

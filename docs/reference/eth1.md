@@ -270,62 +270,62 @@ lantern_deposit_proof(leaves, count, index, scratch, out) -> status
 
 | ISA | Linux | Windows | macOS | `equal` |
 |---|---|---|---|---|
-| x86-64 | ✅ | ✅ |  |  |
+| x86-64 | ✅ | ✅ | ✅ |  |
 | ARM64 | ✅ | ✅ | ✅ |  |
-| RISC-V |  |  |  |  |
+| RISC-V | ✅ |  |  |  |
 
 ### `lantern_eth_get_deposit_logs`
 
 | ISA | Linux | Windows | macOS | `equal` |
 |---|---|---|---|---|
-| x86-64 | ✅ | ✅ |  |  |
+| x86-64 | ✅ | ✅ | ✅ |  |
 | ARM64 | ✅ | ✅ | ✅ |  |
-| RISC-V |  |  |  |  |
+| RISC-V | ✅ |  |  |  |
 
 ### `lantern_eth1_block`
 
 | ISA | Linux | Windows | macOS | `equal` |
 |---|---|---|---|---|
-| x86-64 | ✅ | ✅ |  |  |
+| x86-64 | ✅ | ✅ | ✅ |  |
 | ARM64 | ✅ | ✅ | ✅ |  |
-| RISC-V |  |  |  |  |
+| RISC-V | ✅ |  |  |  |
 
 ### `lantern_eth1_deposit_logs`
 
 | ISA | Linux | Windows | macOS | `equal` |
 |---|---|---|---|---|
-| x86-64 | ✅ | ✅ |  |  |
+| x86-64 | ✅ | ✅ | ✅ |  |
 | ARM64 | ✅ | ✅ | ✅ |  |
-| RISC-V |  |  |  |  |
+| RISC-V | ✅ |  |  |  |
 
 ### `lantern_deposit_leaf`
 
 | ISA | Linux | Windows | macOS | `equal` |
 |---|---|---|---|---|
-| x86-64 | ✅ | ✅ |  |  |
+| x86-64 | ✅ | ✅ | ✅ |  |
 | ARM64 | ✅ | ✅ | ✅ |  |
-| RISC-V |  |  |  |  |
+| RISC-V | ✅ |  |  |  |
 
 ### `lantern_deposit_tree_push`
 
 | ISA | Linux | Windows | macOS | `equal` |
 |---|---|---|---|---|
-| x86-64 | ✅ | ✅ |  |  |
+| x86-64 | ✅ | ✅ | ✅ |  |
 | ARM64 | ✅ | ✅ | ✅ |  |
-| RISC-V |  |  |  |  |
+| RISC-V | ✅ |  |  |  |
 
 ### `lantern_deposit_tree_root`
 
 | ISA | Linux | Windows | macOS | `equal` |
 |---|---|---|---|---|
-| x86-64 | ✅ | ✅ |  |  |
+| x86-64 | ✅ | ✅ | ✅ |  |
 | ARM64 | ✅ | ✅ | ✅ |  |
-| RISC-V |  |  |  |  |
+| RISC-V | ✅ |  |  |  |
 
 ### `lantern_deposit_proof`
 
 | ISA | Linux | Windows | macOS | `equal` |
 |---|---|---|---|---|
-| x86-64 | ✅ | ✅ |  |  |
+| x86-64 | ✅ | ✅ | ✅ |  |
 | ARM64 | ✅ | ✅ | ✅ |  |
-| RISC-V |  |  |  |  |
+| RISC-V | ✅ |  |  |  |
