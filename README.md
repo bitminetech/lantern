@@ -4,7 +4,7 @@ An Ethereum consensus client, a beacon node, in assembly.
 
 The beacon chain on mainnet, every fork from phase0 to Fulu: state transition, fork choice, data availability, gossip and req/resp, sync, the Engine API client and storage. It runs no validators.
 
-Standard: [asm-standard@2a19d3f](https://github.com/bitminetech/asm-standard/blob/2a19d3f7fa737af1c01720b6e891703e53a682aa/ARCHITECTURE.md)
+Standard: [asm-standard@185917b](https://github.com/bitminetech/asm-standard/blob/185917bedc54ff034e40069318add463c58f4db8/ARCHITECTURE.md)
 
 <!-- CI generates the verification heatmap here. -->
 <table><tr><td>
