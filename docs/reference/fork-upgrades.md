@@ -19,15 +19,6 @@
 - Document: [consensus-specs v1.7.0-beta.4](https://github.com/ethereum/consensus-specs/tree/aa16bb4c156184e9548a997d53efaf2a228a6304/specs), `fork.md` of altair, bellatrix, capella, deneb, electra and fulu.
 - Section: Fork to each fork: upgrade_to_<fork> and the helpers it calls.
 
-## Common rules
-
-- As in [block-processing.md](block-processing.md#common-rules).
-- `pre` is a valid `BeaconState` value of the fork before; `out` gets a valid `BeaconState` value of the function's fork.
-- The object of a fork reads `pre` with the layouts of the fork before: include/types.inc for that fork, with each type name under the prefix `PRE_` (include/ssz_types.inc, `SSZ_NAMES`).
-- `out` holds the fixed part, then the parts in field order, each with the room that `room` ([`StateRoom`](state.md#type-stateroom)) gives as in lantern_beacon_state_copy; the last part also has the rest of the buffer.
-- The caller sets the `size` field of `out` to its buffer size, and keeps `pre` and `out` apart.
-- An upgrade changes nothing in `pre`.
-
 ## Function `lantern_upgrade_size`
 
 The bytes that lantern_upgrade_to_<fork> of the same object needs for the state it writes from pre with room.
@@ -50,18 +41,33 @@ lantern_upgrade_size(pre, room, size) -> status
 
 - `LANTERN_OK`, always.
 
+### Caller must
+
+- `pre` is a valid `BeaconState` value of the fork before.
+- `out` is apart from `pre`.
+
 ### Function does
 
 - Adds the fixed part of the fork's state and, for each part, the bytes of its entries after the upgrade plus the room for its kind, rounded up to 8, as lantern_beacon_state_copy_size.
 - Electra: pending_deposits holds one entry for each validator with activation_epoch FAR_FUTURE_EPOCH, and one for each other validator with a compounding credential and a balance above MIN_ACTIVATION_BALANCE.
+- Reads `pre` with the layouts of the fork before: include/types.inc of that fork, each type name under the prefix `PRE_` (include/ssz_types.inc, `SSZ_NAMES`).
+
+### Function never
+
+- Makes an OS call.
+- Keeps a pointer after it returns.
+- Changes `pre`.
+
+### Limits
+
+- Stack of its own: 112 bytes on x86-64 (return address included), 112 bytes on ARM64, 112 bytes on RISC-V.
 
 ### ABI
 
-- Role: L1.
-- Symbol: `lantern_<fork>_upgrade_size`, as in [helpers.md](helpers.md#common-rules).
+- Role: L0.
+- Symbol: `lantern_<fork>_upgrade_size` in the object of altair to fulu, with `_` before it on macOS; `lantern_upgrade_size` inside the object.
 - Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
 - Argument order: `pre`, `room`, `size`.
-- Forks: altair and later.
 
 ## Function `lantern_upgrade_to_altair`
 
@@ -89,20 +95,39 @@ lantern_upgrade_to_altair(pre, room, config, scratch, out) -> status
 - `LANTERN_BUFFER_TOO_SMALL`: the `size` of `out` is below what lantern_upgrade_size gives, or `scratch` is short. Checked before `out` is written.
 - The statuses of lantern_translate_participation and lantern_get_next_sync_committee.
 
+### Caller must
+
+- `scratch` is S(k) of [Type Scratch](helpers.md#type-scratch), with k under Limits.
+- `pre` is a valid `BeaconState` value of the fork before.
+- The `size` field of `out` is its buffer size.
+- `out` is apart from `pre`.
+
 ### Function does
 
 - fork = Fork(pre.fork.current_version, ALTAIR_FORK_VERSION, the current epoch).
 - Copies the fields that phase0 and altair share.
 - Gives previous_epoch_participation, current_epoch_participation and inactivity_scores one zero entry for each validator.
 - Calls lantern_translate_participation with pre's previous_epoch_attestations, then sets current_sync_committee and next_sync_committee each to lantern_get_next_sync_committee of `out`.
+- Reads `pre` with the layouts of the fork before: include/types.inc of that fork, each type name under the prefix `PRE_` (include/ssz_types.inc, `SSZ_NAMES`).
+- Writes into `out` a valid `BeaconState` value of its fork: the fixed part, then the parts in field order, each with the room that `room` ([`StateRoom`](state.md#type-stateroom)) gives, as lantern_beacon_state_copy does; the last part also has the rest of the buffer.
+
+### Function never
+
+- Makes an OS call.
+- Keeps a pointer after it returns.
+- Changes `pre`.
 
 ### Limits
 
+- Stack of its own: 336 bytes on x86-64 (return address included), 336 bytes on ARM64, 336 bytes on RISC-V.
 - Scratch: S(2) + the scratch of lantern_get_next_sync_committee.
 
 ### ABI
 
-- Forks: altair.
+- Role: L1.
+- Symbol: `lantern_<fork>_upgrade_to_altair` in the object of altair, with `_` before it on macOS; `lantern_upgrade_to_altair` inside the object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6); each argument is a pointer, and numbers are u64.
+- Argument order: `pre`, `room`, `config`, `scratch`, `out`.
 
 ## Function `lantern_translate_participation`
 
@@ -128,17 +153,35 @@ lantern_translate_participation(state, pre, scratch) -> status
 - `LANTERN_BUFFER_TOO_SMALL`: `scratch` is short.
 - The statuses of lantern_get_beacon_committee and lantern_get_attestation_participation_flag_indices.
 
+### Caller must
+
+- `state` is a valid `BeaconState` value (include/types.inc) with every PartRef in range.
+- `scratch` is S(k) of [Type Scratch](helpers.md#type-scratch), with k under Limits.
+- `pre` is a valid `BeaconState` value of the fork before.
+- `out` is apart from `pre`.
+
 ### Function does
 
 - Takes the attesters from the committee of each attestation's data.slot and data.index and its aggregation_bits.
+- Reads `pre` with the layouts of the fork before: include/types.inc of that fork, each type name under the prefix `PRE_` (include/ssz_types.inc, `SSZ_NAMES`).
+
+### Function never
+
+- Makes an OS call.
+- Keeps a pointer after it returns.
+- Changes `pre`.
 
 ### Limits
 
+- Stack of its own: 160 bytes on x86-64 (return address included), 160 bytes on ARM64, 160 bytes on RISC-V.
 - Scratch: S(2).
 
 ### ABI
 
-- Forks: altair.
+- Role: L1.
+- Symbol: `lantern_<fork>_translate_participation` in the object of altair, with `_` before it on macOS; `lantern_translate_participation` inside the object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6); each argument is a pointer, and numbers are u64.
+- Argument order: `state`, `pre`, `scratch`.
 
 ## Function `lantern_upgrade_to_bellatrix`
 
@@ -150,22 +193,51 @@ The bellatrix state of an altair state: the shared fields and an empty latest_ex
 lantern_upgrade_to_bellatrix(pre, room, config, scratch, out) -> status
 ```
 
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `pre` | input | `BeaconState` of the fork before |
+| `room` | input | [`StateRoom`](state.md#type-stateroom) |
+| `config` | input | [`Config`](helpers.md#type-config) |
+| `scratch` | scratch | [`Scratch`](helpers.md#type-scratch) |
+| `out` | output | `BeaconState` of bellatrix, its `size` set by the caller |
+
 ### Returns
 
 - `LANTERN_OK`: `out` holds the upgraded state.
 - `LANTERN_BUFFER_TOO_SMALL`: the `size` of `out` is below what lantern_upgrade_size gives. Checked before `out` is written.
 
+### Caller must
+
+- `scratch` is S(k) of [Type Scratch](helpers.md#type-scratch), with k under Limits.
+- `pre` is a valid `BeaconState` value of the fork before.
+- The `size` field of `out` is its buffer size.
+- `out` is apart from `pre`.
+
 ### Function does
 
 - fork = Fork(pre.fork.current_version, BELLATRIX_FORK_VERSION, the current epoch).
+- Reads `pre` with the layouts of the fork before: include/types.inc of that fork, each type name under the prefix `PRE_` (include/ssz_types.inc, `SSZ_NAMES`).
+- Writes into `out` a valid `BeaconState` value of its fork: the fixed part, then the parts in field order, each with the room that `room` ([`StateRoom`](state.md#type-stateroom)) gives, as lantern_beacon_state_copy does; the last part also has the rest of the buffer.
+
+### Function never
+
+- Makes an OS call.
+- Keeps a pointer after it returns.
+- Changes `pre`.
 
 ### Limits
 
+- Stack of its own: 336 bytes on x86-64 (return address included), 336 bytes on ARM64, 336 bytes on RISC-V.
 - Scratch: S(0).
 
 ### ABI
 
-- Forks: bellatrix.
+- Role: L1.
+- Symbol: `lantern_<fork>_upgrade_to_bellatrix` in the object of bellatrix, with `_` before it on macOS; `lantern_upgrade_to_bellatrix` inside the object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6); each argument is a pointer, and numbers are u64.
+- Argument order: `pre`, `room`, `config`, `scratch`, `out`.
 
 ## Function `lantern_upgrade_to_capella`
 
@@ -177,21 +249,50 @@ The capella state of a bellatrix state: the shared fields, pre's payload header 
 lantern_upgrade_to_capella(pre, room, config, scratch, out) -> status
 ```
 
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `pre` | input | `BeaconState` of the fork before |
+| `room` | input | [`StateRoom`](state.md#type-stateroom) |
+| `config` | input | [`Config`](helpers.md#type-config) |
+| `scratch` | scratch | [`Scratch`](helpers.md#type-scratch) |
+| `out` | output | `BeaconState` of capella, its `size` set by the caller |
+
 ### Returns
 
 - As lantern_upgrade_to_bellatrix.
 
+### Caller must
+
+- `scratch` is S(k) of [Type Scratch](helpers.md#type-scratch), with k under Limits.
+- `pre` is a valid `BeaconState` value of the fork before.
+- The `size` field of `out` is its buffer size.
+- `out` is apart from `pre`.
+
 ### Function does
 
 - fork = Fork(pre.fork.current_version, CAPELLA_FORK_VERSION, the current epoch).
+- Reads `pre` with the layouts of the fork before: include/types.inc of that fork, each type name under the prefix `PRE_` (include/ssz_types.inc, `SSZ_NAMES`).
+- Writes into `out` a valid `BeaconState` value of its fork: the fixed part, then the parts in field order, each with the room that `room` ([`StateRoom`](state.md#type-stateroom)) gives, as lantern_beacon_state_copy does; the last part also has the rest of the buffer.
+
+### Function never
+
+- Makes an OS call.
+- Keeps a pointer after it returns.
+- Changes `pre`.
 
 ### Limits
 
+- Stack of its own: 336 bytes on x86-64 (return address included), 336 bytes on ARM64, 336 bytes on RISC-V.
 - Scratch: S(0).
 
 ### ABI
 
-- Forks: capella.
+- Role: L1.
+- Symbol: `lantern_<fork>_upgrade_to_capella` in the object of capella, with `_` before it on macOS; `lantern_upgrade_to_capella` inside the object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6); each argument is a pointer, and numbers are u64.
+- Argument order: `pre`, `room`, `config`, `scratch`, `out`.
 
 ## Function `lantern_upgrade_to_deneb`
 
@@ -203,21 +304,50 @@ The deneb state of a capella state: the shared fields, and pre's payload header 
 lantern_upgrade_to_deneb(pre, room, config, scratch, out) -> status
 ```
 
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `pre` | input | `BeaconState` of the fork before |
+| `room` | input | [`StateRoom`](state.md#type-stateroom) |
+| `config` | input | [`Config`](helpers.md#type-config) |
+| `scratch` | scratch | [`Scratch`](helpers.md#type-scratch) |
+| `out` | output | `BeaconState` of deneb, its `size` set by the caller |
+
 ### Returns
 
 - As lantern_upgrade_to_bellatrix.
 
+### Caller must
+
+- `scratch` is S(k) of [Type Scratch](helpers.md#type-scratch), with k under Limits.
+- `pre` is a valid `BeaconState` value of the fork before.
+- The `size` field of `out` is its buffer size.
+- `out` is apart from `pre`.
+
 ### Function does
 
 - fork = Fork(pre.fork.current_version, DENEB_FORK_VERSION, the current epoch).
+- Reads `pre` with the layouts of the fork before: include/types.inc of that fork, each type name under the prefix `PRE_` (include/ssz_types.inc, `SSZ_NAMES`).
+- Writes into `out` a valid `BeaconState` value of its fork: the fixed part, then the parts in field order, each with the room that `room` ([`StateRoom`](state.md#type-stateroom)) gives, as lantern_beacon_state_copy does; the last part also has the rest of the buffer.
+
+### Function never
+
+- Makes an OS call.
+- Keeps a pointer after it returns.
+- Changes `pre`.
 
 ### Limits
 
+- Stack of its own: 336 bytes on x86-64 (return address included), 336 bytes on ARM64, 336 bytes on RISC-V.
 - Scratch: S(0).
 
 ### ABI
 
-- Forks: deneb.
+- Role: L1.
+- Symbol: `lantern_<fork>_upgrade_to_deneb` in the object of deneb, with `_` before it on macOS; `lantern_upgrade_to_deneb` inside the object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6); each argument is a pointer, and numbers are u64.
+- Argument order: `pre`, `room`, `config`, `scratch`, `out`.
 
 ## Function `lantern_upgrade_to_electra`
 
@@ -229,11 +359,28 @@ The electra state of a deneb state: the shared fields, the churn fields, and pen
 lantern_upgrade_to_electra(pre, room, config, scratch, out) -> status
 ```
 
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `pre` | input | `BeaconState` of the fork before |
+| `room` | input | [`StateRoom`](state.md#type-stateroom) |
+| `config` | input | [`Config`](helpers.md#type-config) |
+| `scratch` | scratch | [`Scratch`](helpers.md#type-scratch) |
+| `out` | output | `BeaconState` of electra, its `size` set by the caller |
+
 ### Returns
 
 - `LANTERN_OK`: `out` holds the upgraded state.
 - `LANTERN_BUFFER_TOO_SMALL`: the `size` of `out` is below what lantern_upgrade_size gives, or `scratch` is short. Checked before `out` is written.
 - The statuses of the churn limit functions and lantern_queue_excess_active_balance.
+
+### Caller must
+
+- `scratch` is S(k) of [Type Scratch](helpers.md#type-scratch), with k under Limits.
+- `pre` is a valid `BeaconState` value of the fork before.
+- The `size` field of `out` is its buffer size.
+- `out` is apart from `pre`.
 
 ### Function does
 
@@ -242,14 +389,26 @@ lantern_upgrade_to_electra(pre, room, config, scratch, out) -> status
 - exit_balance_to_consume = lantern_get_activation_exit_churn_limit; consolidation_balance_to_consume = lantern_get_consolidation_churn_limit, of `out`.
 - In the order of (activation_eligibility_epoch, index), each validator with activation_epoch FAR_FUTURE_EPOCH gets balance 0, effective_balance 0 and activation_eligibility_epoch FAR_FUTURE_EPOCH, and its balance goes to a PendingDeposit with its pubkey and credentials, the G2 point at infinity as signature and GENESIS_SLOT.
 - Then lantern_queue_excess_active_balance for each validator with a compounding credential, in index order.
+- Reads `pre` with the layouts of the fork before: include/types.inc of that fork, each type name under the prefix `PRE_` (include/ssz_types.inc, `SSZ_NAMES`).
+- Writes into `out` a valid `BeaconState` value of its fork: the fixed part, then the parts in field order, each with the room that `room` ([`StateRoom`](state.md#type-stateroom)) gives, as lantern_beacon_state_copy does; the last part also has the rest of the buffer.
+
+### Function never
+
+- Makes an OS call.
+- Keeps a pointer after it returns.
+- Changes `pre`.
 
 ### Limits
 
+- Stack of its own: 336 bytes on x86-64 (return address included), 336 bytes on ARM64, 336 bytes on RISC-V.
 - Scratch: S(1).
 
 ### ABI
 
-- Forks: electra.
+- Role: L1.
+- Symbol: `lantern_<fork>_upgrade_to_electra` in the object of electra, with `_` before it on macOS; `lantern_upgrade_to_electra` inside the object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6); each argument is a pointer, and numbers are u64.
+- Argument order: `pre`, `room`, `config`, `scratch`, `out`.
 
 ## Function `lantern_upgrade_to_fulu`
 
@@ -261,23 +420,52 @@ The fulu state of an electra state: the shared fields and proposer_lookahead fro
 lantern_upgrade_to_fulu(pre, room, config, scratch, out) -> status
 ```
 
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `pre` | input | `BeaconState` of the fork before |
+| `room` | input | [`StateRoom`](state.md#type-stateroom) |
+| `config` | input | [`Config`](helpers.md#type-config) |
+| `scratch` | scratch | [`Scratch`](helpers.md#type-scratch) |
+| `out` | output | `BeaconState` of fulu, its `size` set by the caller |
+
 ### Returns
 
 - `LANTERN_OK`: `out` holds the upgraded state.
 - `LANTERN_BUFFER_TOO_SMALL`: the `size` of `out` is below what lantern_upgrade_size gives, or `scratch` is short. Checked before `out` is written.
 - The statuses of lantern_initialize_proposer_lookahead.
 
+### Caller must
+
+- `scratch` is S(k) of [Type Scratch](helpers.md#type-scratch), with k under Limits.
+- `pre` is a valid `BeaconState` value of the fork before.
+- The `size` field of `out` is its buffer size.
+- `out` is apart from `pre`.
+
 ### Function does
 
 - fork = Fork(pre.fork.current_version, FULU_FORK_VERSION, the current epoch).
+- Reads `pre` with the layouts of the fork before: include/types.inc of that fork, each type name under the prefix `PRE_` (include/ssz_types.inc, `SSZ_NAMES`).
+- Writes into `out` a valid `BeaconState` value of its fork: the fixed part, then the parts in field order, each with the room that `room` ([`StateRoom`](state.md#type-stateroom)) gives, as lantern_beacon_state_copy does; the last part also has the rest of the buffer.
+
+### Function never
+
+- Makes an OS call.
+- Keeps a pointer after it returns.
+- Changes `pre`.
 
 ### Limits
 
+- Stack of its own: 336 bytes on x86-64 (return address included), 336 bytes on ARM64, 336 bytes on RISC-V.
 - Scratch: the scratch of lantern_initialize_proposer_lookahead.
 
 ### ABI
 
-- Forks: fulu.
+- Role: L1.
+- Symbol: `lantern_<fork>_upgrade_to_fulu` in the object of fulu, with `_` before it on macOS; `lantern_upgrade_to_fulu` inside the object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6); each argument is a pointer, and numbers are u64.
+- Argument order: `pre`, `room`, `config`, `scratch`, `out`.
 
 ## Function `lantern_initialize_proposer_lookahead`
 
@@ -302,13 +490,28 @@ lantern_initialize_proposer_lookahead(state, scratch, out) -> status
 - `LANTERN_OK`: `out` holds the lookahead.
 - The statuses of lantern_get_beacon_proposer_indices.
 
+### Caller must
+
+- `state` is a valid `BeaconState` value (include/types.inc) with every PartRef in range.
+- `scratch` is S(k) of [Type Scratch](helpers.md#type-scratch), with k under Limits.
+- The `size` field of `out` is its buffer size.
+
+### Function never
+
+- Makes an OS call.
+- Keeps a pointer after it returns.
+
 ### Limits
 
+- Stack of its own: 112 bytes on x86-64 (return address included), 112 bytes on ARM64, 112 bytes on RISC-V.
 - Scratch: the scratch of lantern_get_beacon_proposer_indices.
 
 ### ABI
 
-- Forks: fulu.
+- Role: L1.
+- Symbol: `lantern_<fork>_initialize_proposer_lookahead` in the object of fulu, with `_` before it on macOS; `lantern_initialize_proposer_lookahead` inside the object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6); each argument is a pointer, and numbers are u64.
+- Argument order: `state`, `scratch`, `out`.
 
 ## Test vectors
 

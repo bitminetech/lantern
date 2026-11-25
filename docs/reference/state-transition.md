@@ -18,10 +18,6 @@
 - Document: [consensus-specs v1.7.0-beta.4](https://github.com/ethereum/consensus-specs/tree/aa16bb4c156184e9548a997d53efaf2a228a6304/specs/phase0/beacon-chain.md).
 - Section: Beacon chain state transition function, phase0, with the blocks and epochs of each fork.
 
-## Common rules
-
-- As in [block-processing.md](block-processing.md#common-rules).
-
 ## Function `lantern_state_transition`
 
 process_slots to the block's slot; with validate_result, the block signature check; process_block; with validate_result, the state root check. With `slots_done` 1 and a state at the block's slot already, no process_slots: `fork.md` of each fork runs its upgrade inside process_slots, as the slot reaches the fork's first slot, and lantern's upgrade writes a new state there (lantern_upgrade_to_<fork>), so a block at the fork's first slot goes on from that state.
@@ -48,13 +44,33 @@ lantern_state_transition(state, signed_block, options, config, scratch, result) 
 - `LANTERN_OK`: `result` is `LANTERN_VALID` or the first failed check.
 - `LANTERN_BUFFER_TOO_SMALL`: scratch, or room for the slots' epochs and the block's appends, is short. Checked before the state changes.
 
+### Caller must
+
+- `state` is a valid `BeaconState` value (include/types.inc) with every PartRef in range.
+- Each block, body and operation argument is a valid asm-ssz Value of its type.
+- `scratch` is S(k) of [Type Scratch](helpers.md#type-scratch), with k under Limits.
+
 ### Function does
 
 - The state root of the check is lantern_state_root with the `StateCache` at `CONFIG_STATE_CACHE` of `config`.
+- Checks the scratch and the room of `state` before any change to `state`.
+
+### Function never
+
+- Makes an OS call.
+- Keeps a pointer after it returns.
 
 ### Limits
 
+- Stack of its own: 144 bytes on x86-64 (return address included), 144 bytes on ARM64, 144 bytes on RISC-V.
 - Scratch: the most of lantern_process_slots and lantern_process_block.
+
+### ABI
+
+- Role: L1.
+- Symbol: `lantern_<fork>_state_transition` in the object of every fork, with `_` before it on macOS; `lantern_state_transition` inside the object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6); each argument is a pointer, and numbers are u64.
+- Argument order: `state`, `signed_block`, `options`, `config`, `scratch`, `result`.
 
 ## Function `lantern_verify_block_signature`
 
@@ -66,15 +82,43 @@ bls.Verify(proposer pubkey, signing root of the block in the proposer domain of 
 lantern_verify_block_signature(state, signed_block, scratch, out) -> status
 ```
 
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `state` | input | `BeaconState` |
+| `signed_block` | input | `SignedBeaconBlock` |
+| `scratch` | scratch | [`Scratch`](helpers.md#type-scratch) |
+| `out` | output | u64: 1 or 0 |
+
 ### Returns
 
 - `LANTERN_OK`: `out` holds 1 or 0.
 - `LANTERN_BUFFER_TOO_SMALL`: scratch is short.
 - `LANTERN_INVALID_VALIDATOR_INDEX`: the proposer index names no validator.
 
+### Caller must
+
+- `state` is a valid `BeaconState` value (include/types.inc) with every PartRef in range.
+- Each block, body and operation argument is a valid asm-ssz Value of its type.
+- `scratch` is S(k) of [Type Scratch](helpers.md#type-scratch), with k under Limits.
+
+### Function never
+
+- Makes an OS call.
+- Keeps a pointer after it returns.
+
 ### Limits
 
+- Stack of its own: 208 bytes on x86-64 (return address included), 208 bytes on ARM64, 208 bytes on RISC-V.
 - Scratch: S(0).
+
+### ABI
+
+- Role: L1.
+- Symbol: `lantern_<fork>_verify_block_signature` in the object of every fork, with `_` before it on macOS; `lantern_verify_block_signature` inside the object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6); each argument is a pointer, and numbers are u64.
+- Argument order: `state`, `signed_block`, `scratch`, `out`.
 
 ## Function `lantern_process_slots`
 
@@ -86,14 +130,46 @@ process_slot for each slot up to slot, with process_epoch at the end of each epo
 lantern_process_slots(state, slot, config, scratch, result) -> status
 ```
 
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `state` | state | `BeaconState` |
+| `slot` | input | u64 |
+| `config` | input | [`Config`](helpers.md#type-config) |
+| `scratch` | scratch | [`Scratch`](helpers.md#type-scratch) |
+| `result` | output | [`Result`](helpers.md#type-result) |
+
 ### Returns
 
 - `LANTERN_OK`: `result` is `LANTERN_VALID`, `LANTERN_INVALID_SLOT` when slot is not after state.slot, or the failed check of an epoch.
 - `LANTERN_BUFFER_TOO_SMALL`: scratch, or room for the epochs crossed, is short. Checked before the state changes.
 
+### Caller must
+
+- `state` is a valid `BeaconState` value (include/types.inc) with every PartRef in range.
+- `scratch` is S(k) of [Type Scratch](helpers.md#type-scratch), with k under Limits.
+
+### Function does
+
+- Checks the scratch and the room of `state` before any change to `state`.
+
+### Function never
+
+- Makes an OS call.
+- Keeps a pointer after it returns.
+
 ### Limits
 
+- Stack of its own: 112 bytes on x86-64 (return address included), 112 bytes on ARM64, 112 bytes on RISC-V.
 - Scratch: as lantern_process_epoch.
+
+### ABI
+
+- Role: L1.
+- Symbol: `lantern_<fork>_process_slots` in the object of every fork, with `_` before it on macOS; `lantern_process_slots` inside the object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6); each argument is a pointer, and numbers are u64.
+- Argument order: `state`, `slot`, `config`, `scratch`, `result`.
 
 ## Function `lantern_process_slot`
 
@@ -105,18 +181,44 @@ Stores the state root, fills the latest header's state root when it is zero, and
 lantern_process_slot(state, config, scratch) -> status
 ```
 
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `state` | state | `BeaconState` |
+| `config` | input | [`Config`](helpers.md#type-config) |
+| `scratch` | scratch | [`Scratch`](helpers.md#type-scratch) |
+
 ### Returns
 
 - `LANTERN_OK`: done.
 - `LANTERN_BUFFER_TOO_SMALL`: scratch is short; the state is unchanged.
 
+### Caller must
+
+- `state` is a valid `BeaconState` value (include/types.inc) with every PartRef in range.
+- `scratch` is S(k) of [Type Scratch](helpers.md#type-scratch), with k under Limits.
+
 ### Function does
 
 - The state root is lantern_state_root with the `StateCache` at `CONFIG_STATE_CACHE` of `config`; the header root, `ssz_hash_tree_root` of asm-ssz.
 
+### Function never
+
+- Makes an OS call.
+- Keeps a pointer after it returns.
+
 ### Limits
 
+- Stack of its own: 160 bytes on x86-64 (return address included), 160 bytes on ARM64, 160 bytes on RISC-V.
 - Scratch: S(0).
+
+### ABI
+
+- Role: L1.
+- Symbol: `lantern_<fork>_process_slot` in the object of every fork, with `_` before it on macOS; `lantern_process_slot` inside the object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6); each argument is a pointer, and numbers are u64.
+- Argument order: `state`, `config`, `scratch`.
 
 ## Type `TransitionOptions`
 

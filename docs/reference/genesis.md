@@ -13,13 +13,6 @@
 - Document: [consensus-specs v1.7.0-beta.4](https://github.com/ethereum/consensus-specs/tree/aa16bb4c156184e9548a997d53efaf2a228a6304/specs/phase0/beacon-chain.md).
 - Section: Genesis, phase0. The spec defines genesis in phase0 only.
 
-## Common rules
-
-- As in [block-processing.md](block-processing.md#common-rules).
-- `out` gets a valid phase0 `BeaconState` value: its fixed part, then its parts in field order, each with the room of [`StateRoom`](state.md#type-stateroom) as lantern_beacon_state_copy gives; the validator lists also get one entry for each deposit.
-- The caller sets the `size` field of `out` to its buffer size.
-- Config: GENESIS_FORK_VERSION, GENESIS_DELAY, MIN_GENESIS_TIME and MIN_GENESIS_ACTIVE_VALIDATOR_COUNT of [`Config`](helpers.md#type-config).
-
 ## Function `lantern_initialize_beacon_state_from_eth1_size`
 
 The bytes that lantern_initialize_beacon_state_from_eth1 needs for deposit_count deposits and room.
@@ -42,12 +35,21 @@ lantern_initialize_beacon_state_from_eth1_size(deposit_count, room, size) -> sta
 
 - `LANTERN_OK`, always.
 
+### Function never
+
+- Makes an OS call.
+- Keeps a pointer after it returns.
+
+### Limits
+
+- Stack of its own: 112 bytes on x86-64 (return address included), 112 bytes on ARM64, 112 bytes on RISC-V.
+
 ### ABI
 
-- Role: L1.
-- Symbol: `lantern_phase0_initialize_beacon_state_from_eth1_size`, as in [helpers.md](helpers.md#common-rules).
+- Role: L0.
+- Symbol: `lantern_<fork>_initialize_beacon_state_from_eth1_size` in the object of phase0, with `_` before it on macOS; `lantern_initialize_beacon_state_from_eth1_size` inside the object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6); each argument is a pointer, and numbers are u64.
 - Argument order: `deposit_count`, `room`, `size`.
-- Forks: phase0.
 
 ## Function `lantern_initialize_beacon_state_from_eth1`
 
@@ -79,18 +81,34 @@ lantern_initialize_beacon_state_from_eth1(eth1_block_hash, eth1_timestamp, depos
 - `LANTERN_INVALID_OVERFLOW`: eth1_timestamp + GENESIS_DELAY leaves the Uint64 range.
 - The failed check of a deposit in lantern_process_deposit, which the spec asserts.
 
+### Caller must
+
+- `scratch` is S(k) of [Type Scratch](helpers.md#type-scratch), with k under Limits.
+- The `size` field of `out` is its buffer size.
+- `config` is a [`Config`](helpers.md#type-config); this section reads its GENESIS_FORK_VERSION, GENESIS_DELAY, MIN_GENESIS_TIME and MIN_GENESIS_ACTIVE_VALIDATOR_COUNT.
+
 ### Function does
 
 - The deposit root of each step is the root of the list of the deposits' data up to it, of DEPOSIT_CONTRACT_TREE_DEPTH levels with its length mixed in, kept as the deposit contract keeps it: one branch node for each level.
 - genesis_validators_root is the root of the validators as a list of VALIDATOR_REGISTRY_LIMIT entries, kept the same way.
+- Writes into `out` a valid phase0 `BeaconState` value: the fixed part, then the parts in field order, each with the room of `room` ([`StateRoom`](state.md#type-stateroom)) as lantern_beacon_state_copy gives; the validator lists also get one entry for each deposit.
+
+### Function never
+
+- Makes an OS call.
+- Keeps a pointer after it returns.
 
 ### Limits
 
+- Stack of its own: 176 bytes on x86-64 (return address included), 176 bytes on ARM64, 176 bytes on RISC-V.
 - Scratch: the scratch of lantern_process_deposit, plus about 2.6 KiB for the trees and an empty `BeaconBlockBody`.
 
 ### ABI
 
-- Forks: phase0.
+- Role: L1.
+- Symbol: `lantern_<fork>_initialize_beacon_state_from_eth1` in the object of phase0, with `_` before it on macOS; `lantern_initialize_beacon_state_from_eth1` inside the object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6); each argument is a pointer, and numbers are u64.
+- Argument order: `eth1_block_hash`, `eth1_timestamp`, `deposits`, `deposit_count`, `room`, `config`, `scratch`, `out`.
 
 ## Function `lantern_is_valid_genesis_state`
 
@@ -102,13 +120,39 @@ genesis_time >= MIN_GENESIS_TIME, and at least MIN_GENESIS_ACTIVE_VALIDATOR_COUN
 lantern_is_valid_genesis_state(state, config, out) -> status
 ```
 
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `state` | input | `BeaconState` |
+| `config` | input | [`Config`](helpers.md#type-config) |
+| `out` | output | u64: 1 or 0 |
+
 ### Returns
 
 - `LANTERN_OK`, always: `out` is 1 or 0.
 
+### Caller must
+
+- `state` is a valid `BeaconState` value (include/types.inc) with every PartRef in range.
+- The `size` field of `out` is its buffer size.
+- `config` is a [`Config`](helpers.md#type-config); this section reads its GENESIS_FORK_VERSION, GENESIS_DELAY, MIN_GENESIS_TIME and MIN_GENESIS_ACTIVE_VALIDATOR_COUNT.
+
+### Function never
+
+- Makes an OS call.
+- Keeps a pointer after it returns.
+
+### Limits
+
+- Stack of its own: 8 bytes on x86-64 (return address included), 0 bytes on ARM64, 0 bytes on RISC-V.
+
 ### ABI
 
-- Forks: phase0.
+- Role: L1.
+- Symbol: `lantern_<fork>_is_valid_genesis_state` in the object of phase0, with `_` before it on macOS; `lantern_is_valid_genesis_state` inside the object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6); each argument is a pointer, and numbers are u64.
+- Argument order: `state`, `config`, `out`.
 
 ## Test vectors
 

@@ -35,7 +35,6 @@
 - [`lantern_get_unslashed_participating_indices`](#function-lantern_get_unslashed_participating_indices): the unslashed active validators with a flag.
 - [`lantern_get_base_reward_per_increment`](#function-lantern_get_base_reward_per_increment): the base reward of one balance increment.
 - [`lantern_get_base_reward`](#function-lantern_get_base_reward): the base reward of a validator.
-
 - [`lantern_compute_shuffled_permutation`](#function-lantern_compute_shuffled_permutation): the swap or not shuffle of 0 to index_count - 1.
 - [`lantern_compute_shuffled_index`](#function-lantern_compute_shuffled_index): where one index lands in the shuffle.
 - [`lantern_get_seed`](#function-lantern_get_seed): the seed of an epoch for a domain type.
@@ -58,16 +57,6 @@
 
 - Document: [consensus-specs v1.7.0-beta.4](https://github.com/ethereum/consensus-specs/tree/aa16bb4c156184e9548a997d53efaf2a228a6304/specs), each function at its definition in the fork of its object (include/forks.inc).
 - Section: Helper functions of `beacon-chain.md` in phase0, altair, electra and fulu.
-
-## Common rules
-
-- Each argument is a pointer. A Uint64 argument points at a u64; a Boolean output is a u64 of 0 or 1.
-- Each function returns its status in the ABI integer return register: `LANTERN_OK`, `LANTERN_BUFFER_TOO_SMALL`, or the `LANTERN_INVALID_*` code of a failed spec check (include/lantern.inc).
-- `state` is a valid `BeaconState` value (include/types.inc) with every PartRef in range.
-- A function never makes an OS call and never keeps a pointer after it returns.
-- Role: L1. Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
-- Forks: the state transition is in the object of every fork. A function says under Function does what the forks change, and under ABI the forks that have it when not all do.
-- Symbol: `lantern_<fork>_<name>` for the function `lantern_<name>`, in the object of each fork that the core builds (`FORKS` in platform/objects.sh), with `_` before it on macOS. Calls inside an object use its local label `lantern_<name>`.
 
 ## Function `lantern_integer_squareroot`
 
@@ -94,8 +83,20 @@ lantern_integer_squareroot(n, out) -> status
 
 - Writes 4294967295 when n is 2^64 - 1, else runs the spec's Newton loop.
 
+### Function never
+
+- Makes an OS call.
+- Keeps a pointer after it returns.
+
+### Limits
+
+- Stack of its own: 8 bytes on x86-64 (return address included), 0 bytes on ARM64, 0 bytes on RISC-V.
+
 ### ABI
 
+- Role: L1.
+- Symbol: `lantern_<fork>_integer_squareroot` in the object of every fork, with `_` before it on macOS; `lantern_integer_squareroot` inside the object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6); each argument is a pointer: a Uint64 argument points at a u64, and a Boolean output is a u64 of 0 or 1.
 - Argument order: `n`, `out`.
 
 ## Function `lantern_saturating_sub`
@@ -120,8 +121,20 @@ lantern_saturating_sub(a, b, out) -> status
 
 - `LANTERN_OK`, always.
 
+### Function never
+
+- Makes an OS call.
+- Keeps a pointer after it returns.
+
+### Limits
+
+- Stack of its own: 8 bytes on x86-64 (return address included), 0 bytes on ARM64, 0 bytes on RISC-V.
+
 ### ABI
 
+- Role: L1.
+- Symbol: `lantern_<fork>_saturating_sub` in the object of every fork, with `_` before it on macOS; `lantern_saturating_sub` inside the object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6); each argument is a pointer: a Uint64 argument points at a u64, and a Boolean output is a u64 of 0 or 1.
 - Argument order: `a`, `b`, `out`.
 
 ## Function `lantern_is_active_validator`
@@ -146,8 +159,20 @@ lantern_is_active_validator(validator, epoch, out) -> status
 
 - `LANTERN_OK`, always.
 
+### Function never
+
+- Makes an OS call.
+- Keeps a pointer after it returns.
+
+### Limits
+
+- Stack of its own: 8 bytes on x86-64 (return address included), 0 bytes on ARM64, 0 bytes on RISC-V.
+
 ### ABI
 
+- Role: L1.
+- Symbol: `lantern_<fork>_is_active_validator` in the object of every fork, with `_` before it on macOS; `lantern_is_active_validator` inside the object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6); each argument is a pointer: a Uint64 argument points at a u64, and a Boolean output is a u64 of 0 or 1.
 - Argument order: `validator`, `epoch`, `out`.
 
 ## Function `lantern_is_eligible_for_activation_queue`
@@ -175,8 +200,20 @@ lantern_is_eligible_for_activation_queue(validator, out) -> status
 
 - Before electra: effective_balance == MAX_EFFECTIVE_BALANCE; electra and later: effective_balance >= MIN_ACTIVATION_BALANCE.
 
+### Function never
+
+- Makes an OS call.
+- Keeps a pointer after it returns.
+
+### Limits
+
+- Stack of its own: 8 bytes on x86-64 (return address included), 0 bytes on ARM64, 0 bytes on RISC-V.
+
 ### ABI
 
+- Role: L1.
+- Symbol: `lantern_<fork>_is_eligible_for_activation_queue` in the object of every fork, with `_` before it on macOS; `lantern_is_eligible_for_activation_queue` inside the object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6); each argument is a pointer: a Uint64 argument points at a u64, and a Boolean output is a u64 of 0 or 1.
 - Argument order: `validator`, `out`.
 
 ## Function `lantern_is_eligible_for_activation`
@@ -201,8 +238,24 @@ lantern_is_eligible_for_activation(state, validator, out) -> status
 
 - `LANTERN_OK`, always.
 
+### Caller must
+
+- `state` is a valid `BeaconState` value (include/types.inc) with every PartRef in range.
+
+### Function never
+
+- Makes an OS call.
+- Keeps a pointer after it returns.
+
+### Limits
+
+- Stack of its own: 8 bytes on x86-64 (return address included), 0 bytes on ARM64, 0 bytes on RISC-V.
+
 ### ABI
 
+- Role: L1.
+- Symbol: `lantern_<fork>_is_eligible_for_activation` in the object of every fork, with `_` before it on macOS; `lantern_is_eligible_for_activation` inside the object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6); each argument is a pointer: a Uint64 argument points at a u64, and a Boolean output is a u64 of 0 or 1.
 - Argument order: `state`, `validator`, `out`.
 
 ## Function `lantern_is_slashable_validator`
@@ -227,8 +280,20 @@ lantern_is_slashable_validator(validator, epoch, out) -> status
 
 - `LANTERN_OK`, always.
 
+### Function never
+
+- Makes an OS call.
+- Keeps a pointer after it returns.
+
+### Limits
+
+- Stack of its own: 8 bytes on x86-64 (return address included), 0 bytes on ARM64, 0 bytes on RISC-V.
+
 ### ABI
 
+- Role: L1.
+- Symbol: `lantern_<fork>_is_slashable_validator` in the object of every fork, with `_` before it on macOS; `lantern_is_slashable_validator` inside the object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6); each argument is a pointer: a Uint64 argument points at a u64, and a Boolean output is a u64 of 0 or 1.
 - Argument order: `validator`, `epoch`, `out`.
 
 ## Function `lantern_is_compounding_withdrawal_credential`
@@ -252,10 +317,21 @@ lantern_is_compounding_withdrawal_credential(withdrawal_credentials, out) -> sta
 
 - `LANTERN_OK`, always.
 
+### Function never
+
+- Makes an OS call.
+- Keeps a pointer after it returns.
+
+### Limits
+
+- Stack of its own: 8 bytes on x86-64 (return address included), 0 bytes on ARM64, 0 bytes on RISC-V.
+
 ### ABI
 
+- Role: L1.
+- Symbol: `lantern_<fork>_is_compounding_withdrawal_credential` in the object of electra to fulu, with `_` before it on macOS; `lantern_is_compounding_withdrawal_credential` inside the object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6); each argument is a pointer: a Uint64 argument points at a u64, and a Boolean output is a u64 of 0 or 1.
 - Argument order: `withdrawal_credentials`, `out`.
-- Forks: electra and later.
 
 ## Function `lantern_has_compounding_withdrawal_credential`
 
@@ -278,10 +354,21 @@ lantern_has_compounding_withdrawal_credential(validator, out) -> status
 
 - `LANTERN_OK`, always.
 
+### Function never
+
+- Makes an OS call.
+- Keeps a pointer after it returns.
+
+### Limits
+
+- Stack of its own: 8 bytes on x86-64 (return address included), 16 bytes on ARM64, 16 bytes on RISC-V.
+
 ### ABI
 
+- Role: L1.
+- Symbol: `lantern_<fork>_has_compounding_withdrawal_credential` in the object of electra to fulu, with `_` before it on macOS; `lantern_has_compounding_withdrawal_credential` inside the object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6); each argument is a pointer: a Uint64 argument points at a u64, and a Boolean output is a u64 of 0 or 1.
 - Argument order: `validator`, `out`.
-- Forks: electra and later.
 
 ## Function `lantern_get_max_effective_balance`
 
@@ -304,10 +391,21 @@ lantern_get_max_effective_balance(validator, out) -> status
 
 - `LANTERN_OK`, always.
 
+### Function never
+
+- Makes an OS call.
+- Keeps a pointer after it returns.
+
+### Limits
+
+- Stack of its own: 32 bytes on x86-64 (return address included), 32 bytes on ARM64, 32 bytes on RISC-V.
+
 ### ABI
 
+- Role: L1.
+- Symbol: `lantern_<fork>_get_max_effective_balance` in the object of electra to fulu, with `_` before it on macOS; `lantern_get_max_effective_balance` inside the object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6); each argument is a pointer: a Uint64 argument points at a u64, and a Boolean output is a u64 of 0 or 1.
 - Argument order: `validator`, `out`.
-- Forks: electra and later.
 
 ## Function `lantern_compute_epoch_at_slot`
 
@@ -330,8 +428,20 @@ lantern_compute_epoch_at_slot(slot, out) -> status
 
 - `LANTERN_OK`, always.
 
+### Function never
+
+- Makes an OS call.
+- Keeps a pointer after it returns.
+
+### Limits
+
+- Stack of its own: 8 bytes on x86-64 (return address included), 0 bytes on ARM64, 0 bytes on RISC-V.
+
 ### ABI
 
+- Role: L1.
+- Symbol: `lantern_<fork>_compute_epoch_at_slot` in the object of every fork, with `_` before it on macOS; `lantern_compute_epoch_at_slot` inside the object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6); each argument is a pointer: a Uint64 argument points at a u64, and a Boolean output is a u64 of 0 or 1.
 - Argument order: `slot`, `out`.
 
 ## Function `lantern_compute_start_slot_at_epoch`
@@ -356,8 +466,20 @@ lantern_compute_start_slot_at_epoch(epoch, out) -> status
 - `LANTERN_OK`: `out` holds the slot.
 - `LANTERN_INVALID_OVERFLOW`: the slot leaves the Uint64 range.
 
+### Function never
+
+- Makes an OS call.
+- Keeps a pointer after it returns.
+
+### Limits
+
+- Stack of its own: 8 bytes on x86-64 (return address included), 0 bytes on ARM64, 0 bytes on RISC-V.
+
 ### ABI
 
+- Role: L1.
+- Symbol: `lantern_<fork>_compute_start_slot_at_epoch` in the object of every fork, with `_` before it on macOS; `lantern_compute_start_slot_at_epoch` inside the object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6); each argument is a pointer: a Uint64 argument points at a u64, and a Boolean output is a u64 of 0 or 1.
 - Argument order: `epoch`, `out`.
 
 ## Function `lantern_compute_activation_exit_epoch`
@@ -382,8 +504,20 @@ lantern_compute_activation_exit_epoch(epoch, out) -> status
 - `LANTERN_OK`: `out` holds the epoch.
 - `LANTERN_INVALID_OVERFLOW`: the epoch leaves the Uint64 range.
 
+### Function never
+
+- Makes an OS call.
+- Keeps a pointer after it returns.
+
+### Limits
+
+- Stack of its own: 8 bytes on x86-64 (return address included), 0 bytes on ARM64, 0 bytes on RISC-V.
+
 ### ABI
 
+- Role: L1.
+- Symbol: `lantern_<fork>_compute_activation_exit_epoch` in the object of every fork, with `_` before it on macOS; `lantern_compute_activation_exit_epoch` inside the object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6); each argument is a pointer: a Uint64 argument points at a u64, and a Boolean output is a u64 of 0 or 1.
 - Argument order: `epoch`, `out`.
 
 ## Function `lantern_is_valid_merkle_branch`
@@ -411,6 +545,22 @@ lantern_is_valid_merkle_branch(leaf, branch, depth, index, root, out) -> status
 
 - `LANTERN_OK`, always.
 
+### Function never
+
+- Makes an OS call.
+- Keeps a pointer after it returns.
+
+### Limits
+
+- Stack of its own: 192 bytes on x86-64 (return address included), 192 bytes on ARM64, 192 bytes on RISC-V.
+
+### ABI
+
+- Role: L1.
+- Symbol: `lantern_<fork>_is_valid_merkle_branch` in the object of every fork, with `_` before it on macOS; `lantern_is_valid_merkle_branch` inside the object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6); each argument is a pointer: a Uint64 argument points at a u64, and a Boolean output is a u64 of 0 or 1.
+- Argument order: `leaf`, `branch`, `depth`, `index`, `root`, `out`.
+
 ## Function `lantern_get_current_epoch`
 
 The epoch of state.slot.
@@ -432,8 +582,24 @@ lantern_get_current_epoch(state, out) -> status
 
 - `LANTERN_OK`, always.
 
+### Caller must
+
+- `state` is a valid `BeaconState` value (include/types.inc) with every PartRef in range.
+
+### Function never
+
+- Makes an OS call.
+- Keeps a pointer after it returns.
+
+### Limits
+
+- Stack of its own: 8 bytes on x86-64 (return address included), 16 bytes on ARM64, 16 bytes on RISC-V.
+
 ### ABI
 
+- Role: L1.
+- Symbol: `lantern_<fork>_get_current_epoch` in the object of every fork, with `_` before it on macOS; `lantern_get_current_epoch` inside the object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6); each argument is a pointer: a Uint64 argument points at a u64, and a Boolean output is a u64 of 0 or 1.
 - Argument order: `state`, `out`.
 
 ## Function `lantern_get_previous_epoch`
@@ -457,8 +623,24 @@ lantern_get_previous_epoch(state, out) -> status
 
 - `LANTERN_OK`, always.
 
+### Caller must
+
+- `state` is a valid `BeaconState` value (include/types.inc) with every PartRef in range.
+
+### Function never
+
+- Makes an OS call.
+- Keeps a pointer after it returns.
+
+### Limits
+
+- Stack of its own: 48 bytes on x86-64 (return address included), 48 bytes on ARM64, 48 bytes on RISC-V.
+
 ### ABI
 
+- Role: L1.
+- Symbol: `lantern_<fork>_get_previous_epoch` in the object of every fork, with `_` before it on macOS; `lantern_get_previous_epoch` inside the object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6); each argument is a pointer: a Uint64 argument points at a u64, and a Boolean output is a u64 of 0 or 1.
 - Argument order: `state`, `out`.
 
 ## Function `lantern_get_block_root_at_slot`
@@ -484,8 +666,24 @@ lantern_get_block_root_at_slot(state, slot, out) -> status
 - `LANTERN_OK`: `out` holds the root.
 - `LANTERN_INVALID_BLOCK_ROOT_SLOT`: the check slot < state.slot <= slot + SLOTS_PER_HISTORICAL_ROOT failed; `out` is unwritten.
 
+### Caller must
+
+- `state` is a valid `BeaconState` value (include/types.inc) with every PartRef in range.
+
+### Function never
+
+- Makes an OS call.
+- Keeps a pointer after it returns.
+
+### Limits
+
+- Stack of its own: 8 bytes on x86-64 (return address included), 0 bytes on ARM64, 0 bytes on RISC-V.
+
 ### ABI
 
+- Role: L1.
+- Symbol: `lantern_<fork>_get_block_root_at_slot` in the object of every fork, with `_` before it on macOS; `lantern_get_block_root_at_slot` inside the object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6); each argument is a pointer: a Uint64 argument points at a u64, and a Boolean output is a u64 of 0 or 1.
 - Argument order: `state`, `slot`, `out`.
 
 ## Function `lantern_get_block_root`
@@ -511,8 +709,24 @@ lantern_get_block_root(state, epoch, out) -> status
 - `LANTERN_OK`: `out` holds the root.
 - `LANTERN_INVALID_BLOCK_ROOT_SLOT`: the check of lantern_get_block_root_at_slot failed.
 
+### Caller must
+
+- `state` is a valid `BeaconState` value (include/types.inc) with every PartRef in range.
+
+### Function never
+
+- Makes an OS call.
+- Keeps a pointer after it returns.
+
+### Limits
+
+- Stack of its own: 48 bytes on x86-64 (return address included), 48 bytes on ARM64, 48 bytes on RISC-V.
+
 ### ABI
 
+- Role: L1.
+- Symbol: `lantern_<fork>_get_block_root` in the object of every fork, with `_` before it on macOS; `lantern_get_block_root` inside the object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6); each argument is a pointer: a Uint64 argument points at a u64, and a Boolean output is a u64 of 0 or 1.
 - Argument order: `state`, `epoch`, `out`.
 
 ## Function `lantern_get_randao_mix`
@@ -537,8 +751,24 @@ lantern_get_randao_mix(state, epoch, out) -> status
 
 - `LANTERN_OK`, always.
 
+### Caller must
+
+- `state` is a valid `BeaconState` value (include/types.inc) with every PartRef in range.
+
+### Function never
+
+- Makes an OS call.
+- Keeps a pointer after it returns.
+
+### Limits
+
+- Stack of its own: 8 bytes on x86-64 (return address included), 0 bytes on ARM64, 0 bytes on RISC-V.
+
 ### ABI
 
+- Role: L1.
+- Symbol: `lantern_<fork>_get_randao_mix` in the object of every fork, with `_` before it on macOS; `lantern_get_randao_mix` inside the object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6); each argument is a pointer: a Uint64 argument points at a u64, and a Boolean output is a u64 of 0 or 1.
 - Argument order: `state`, `epoch`, `out`.
 
 ## Function `lantern_get_active_validator_indices`
@@ -567,9 +797,22 @@ lantern_get_active_validator_indices(state, epoch, out) -> status
 ### Caller must
 
 - Set `out`'s size to its buffer size.
+- `state` is a valid `BeaconState` value (include/types.inc) with every PartRef in range.
+
+### Function never
+
+- Makes an OS call.
+- Keeps a pointer after it returns.
+
+### Limits
+
+- Stack of its own: 112 bytes on x86-64 (return address included), 112 bytes on ARM64, 112 bytes on RISC-V.
 
 ### ABI
 
+- Role: L1.
+- Symbol: `lantern_<fork>_get_active_validator_indices` in the object of every fork, with `_` before it on macOS; `lantern_get_active_validator_indices` inside the object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6); each argument is a pointer: a Uint64 argument points at a u64, and a Boolean output is a u64 of 0 or 1.
 - Argument order: `state`, `epoch`, `out`.
 
 ## Function `lantern_get_total_balance`
@@ -597,9 +840,22 @@ lantern_get_total_balance(state, indices, out) -> status
 ### Caller must
 
 - Pass distinct indices, each below the number of validators.
+- `state` is a valid `BeaconState` value (include/types.inc) with every PartRef in range.
+
+### Function never
+
+- Makes an OS call.
+- Keeps a pointer after it returns.
+
+### Limits
+
+- Stack of its own: 8 bytes on x86-64 (return address included), 0 bytes on ARM64, 0 bytes on RISC-V.
 
 ### ABI
 
+- Role: L1.
+- Symbol: `lantern_<fork>_get_total_balance` in the object of every fork, with `_` before it on macOS; `lantern_get_total_balance` inside the object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6); each argument is a pointer: a Uint64 argument points at a u64, and a Boolean output is a u64 of 0 or 1.
 - Argument order: `state`, `indices`, `out`.
 
 ## Function `lantern_get_total_active_balance`
@@ -625,13 +881,29 @@ lantern_get_total_active_balance(state, scratch, out) -> status
 - `LANTERN_OK`: `out` holds the total.
 - `LANTERN_BUFFER_TOO_SMALL`: `scratch` has fewer than S(1) bytes.
 
+### Caller must
+
+- `state` is a valid `BeaconState` value (include/types.inc) with every PartRef in range.
+
 ### Function does
 
 - One pass over the validators sums the effective balances of those active in the current epoch, with get_active_validator_indices and get_total_balance inline.
 - Fails with `LANTERN_BUFFER_TOO_SMALL` when the index list of every validator would not fit in the scratch after its size field, as get_active_validator_indices does.
 
+### Function never
+
+- Makes an OS call.
+- Keeps a pointer after it returns.
+
+### Limits
+
+- Stack of its own: 112 bytes on x86-64 (return address included), 48 bytes on ARM64, 112 bytes on RISC-V.
+
 ### ABI
 
+- Role: L1.
+- Symbol: `lantern_<fork>_get_total_active_balance` in the object of every fork, with `_` before it on macOS; `lantern_get_total_active_balance` inside the object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6); each argument is a pointer: a Uint64 argument points at a u64, and a Boolean output is a u64 of 0 or 1.
 - Argument order: `state`, `scratch`, `out`.
 
 ## Function `lantern_increase_balance`
@@ -659,9 +931,22 @@ lantern_increase_balance(state, index, delta) -> status
 ### Caller must
 
 - Pass an index below the number of balances.
+- `state` is a valid `BeaconState` value (include/types.inc) with every PartRef in range.
+
+### Function never
+
+- Makes an OS call.
+- Keeps a pointer after it returns.
+
+### Limits
+
+- Stack of its own: 8 bytes on x86-64 (return address included), 0 bytes on ARM64, 0 bytes on RISC-V.
 
 ### ABI
 
+- Role: L1.
+- Symbol: `lantern_<fork>_increase_balance` in the object of every fork, with `_` before it on macOS; `lantern_increase_balance` inside the object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6); each argument is a pointer: a Uint64 argument points at a u64, and a Boolean output is a u64 of 0 or 1.
 - Argument order: `state`, `index`, `delta`.
 
 ## Function `lantern_decrease_balance`
@@ -689,9 +974,22 @@ lantern_decrease_balance(state, index, delta) -> status
 ### Caller must
 
 - Pass an index below the number of balances.
+- `state` is a valid `BeaconState` value (include/types.inc) with every PartRef in range.
+
+### Function never
+
+- Makes an OS call.
+- Keeps a pointer after it returns.
+
+### Limits
+
+- Stack of its own: 8 bytes on x86-64 (return address included), 16 bytes on ARM64, 16 bytes on RISC-V.
 
 ### ABI
 
+- Role: L1.
+- Symbol: `lantern_<fork>_decrease_balance` in the object of every fork, with `_` before it on macOS; `lantern_decrease_balance` inside the object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6); each argument is a pointer: a Uint64 argument points at a u64, and a Boolean output is a u64 of 0 or 1.
 - Argument order: `state`, `index`, `delta`.
 
 ## Function `lantern_has_flag`
@@ -716,10 +1014,21 @@ lantern_has_flag(flags, flag_index, out) -> status
 
 - `LANTERN_OK`, always.
 
+### Function never
+
+- Makes an OS call.
+- Keeps a pointer after it returns.
+
+### Limits
+
+- Stack of its own: 8 bytes on x86-64 (return address included), 0 bytes on ARM64, 0 bytes on RISC-V.
+
 ### ABI
 
+- Role: L1.
+- Symbol: `lantern_<fork>_has_flag` in the object of altair to fulu, with `_` before it on macOS; `lantern_has_flag` inside the object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6); each argument is a pointer: a Uint64 argument points at a u64, and a Boolean output is a u64 of 0 or 1.
 - Argument order: `flags`, `flag_index`, `out`.
-- Forks: altair and later.
 
 ## Function `lantern_add_flag`
 
@@ -743,10 +1052,21 @@ lantern_add_flag(flags, flag_index, out) -> status
 
 - `LANTERN_OK`, always.
 
+### Function never
+
+- Makes an OS call.
+- Keeps a pointer after it returns.
+
+### Limits
+
+- Stack of its own: 8 bytes on x86-64 (return address included), 0 bytes on ARM64, 0 bytes on RISC-V.
+
 ### ABI
 
+- Role: L1.
+- Symbol: `lantern_<fork>_add_flag` in the object of altair to fulu, with `_` before it on macOS; `lantern_add_flag` inside the object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6); each argument is a pointer: a Uint64 argument points at a u64, and a Boolean output is a u64 of 0 or 1.
 - Argument order: `flags`, `flag_index`, `out`.
-- Forks: altair and later.
 
 ## Function `lantern_get_finality_delay`
 
@@ -769,8 +1089,24 @@ lantern_get_finality_delay(state, out) -> status
 
 - `LANTERN_OK`, always.
 
+### Caller must
+
+- `state` is a valid `BeaconState` value (include/types.inc) with every PartRef in range.
+
+### Function never
+
+- Makes an OS call.
+- Keeps a pointer after it returns.
+
+### Limits
+
+- Stack of its own: 48 bytes on x86-64 (return address included), 48 bytes on ARM64, 48 bytes on RISC-V.
+
 ### ABI
 
+- Role: L1.
+- Symbol: `lantern_<fork>_get_finality_delay` in the object of every fork, with `_` before it on macOS; `lantern_get_finality_delay` inside the object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6); each argument is a pointer: a Uint64 argument points at a u64, and a Boolean output is a u64 of 0 or 1.
 - Argument order: `state`, `out`.
 
 ## Function `lantern_is_in_inactivity_leak`
@@ -794,8 +1130,24 @@ lantern_is_in_inactivity_leak(state, out) -> status
 
 - `LANTERN_OK`, always.
 
+### Caller must
+
+- `state` is a valid `BeaconState` value (include/types.inc) with every PartRef in range.
+
+### Function never
+
+- Makes an OS call.
+- Keeps a pointer after it returns.
+
+### Limits
+
+- Stack of its own: 32 bytes on x86-64 (return address included), 32 bytes on ARM64, 32 bytes on RISC-V.
+
 ### ABI
 
+- Role: L1.
+- Symbol: `lantern_<fork>_is_in_inactivity_leak` in the object of every fork, with `_` before it on macOS; `lantern_is_in_inactivity_leak` inside the object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6); each argument is a pointer: a Uint64 argument points at a u64, and a Boolean output is a u64 of 0 or 1.
 - Argument order: `state`, `out`.
 
 ## Function `lantern_get_eligible_validator_indices`
@@ -820,8 +1172,24 @@ lantern_get_eligible_validator_indices(state, out) -> status
 - `LANTERN_OK`: `out` holds the indices.
 - `LANTERN_BUFFER_TOO_SMALL`: `out` has room for fewer entries than there are validators.
 
+### Caller must
+
+- `state` is a valid `BeaconState` value (include/types.inc) with every PartRef in range.
+
+### Function never
+
+- Makes an OS call.
+- Keeps a pointer after it returns.
+
+### Limits
+
+- Stack of its own: 112 bytes on x86-64 (return address included), 112 bytes on ARM64, 112 bytes on RISC-V.
+
 ### ABI
 
+- Role: L1.
+- Symbol: `lantern_<fork>_get_eligible_validator_indices` in the object of every fork, with `_` before it on macOS; `lantern_get_eligible_validator_indices` inside the object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6); each argument is a pointer: a Uint64 argument points at a u64, and a Boolean output is a u64 of 0 or 1.
 - Argument order: `state`, `out`.
 
 ## Function `lantern_get_unslashed_participating_indices`
@@ -850,10 +1218,25 @@ lantern_get_unslashed_participating_indices(state, flag_index, epoch, scratch, o
 - `LANTERN_BUFFER_TOO_SMALL`: `scratch` has fewer than S(1) bytes, or `out` has room for fewer entries than there are validators.
 - `LANTERN_INVALID_PARTICIPATION_EPOCH`: epoch is neither the previous nor the current epoch.
 
+### Caller must
+
+- `state` is a valid `BeaconState` value (include/types.inc) with every PartRef in range.
+
+### Function never
+
+- Makes an OS call.
+- Keeps a pointer after it returns.
+
+### Limits
+
+- Stack of its own: 128 bytes on x86-64 (return address included), 128 bytes on ARM64, 128 bytes on RISC-V.
+
 ### ABI
 
+- Role: L1.
+- Symbol: `lantern_<fork>_get_unslashed_participating_indices` in the object of altair to fulu, with `_` before it on macOS; `lantern_get_unslashed_participating_indices` inside the object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6); each argument is a pointer: a Uint64 argument points at a u64, and a Boolean output is a u64 of 0 or 1.
 - Argument order: `state`, `flag_index`, `epoch`, `scratch`, `out`.
-- Forks: altair and later.
 
 ## Function `lantern_get_base_reward_per_increment`
 
@@ -878,10 +1261,25 @@ lantern_get_base_reward_per_increment(state, scratch, out) -> status
 - `LANTERN_OK`: `out` holds the reward.
 - `LANTERN_BUFFER_TOO_SMALL`: `scratch` has fewer than S(1) bytes.
 
+### Caller must
+
+- `state` is a valid `BeaconState` value (include/types.inc) with every PartRef in range.
+
+### Function never
+
+- Makes an OS call.
+- Keeps a pointer after it returns.
+
+### Limits
+
+- Stack of its own: 48 bytes on x86-64 (return address included), 48 bytes on ARM64, 48 bytes on RISC-V.
+
 ### ABI
 
+- Role: L1.
+- Symbol: `lantern_<fork>_get_base_reward_per_increment` in the object of altair to fulu, with `_` before it on macOS; `lantern_get_base_reward_per_increment` inside the object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6); each argument is a pointer: a Uint64 argument points at a u64, and a Boolean output is a u64 of 0 or 1.
 - Argument order: `state`, `scratch`, `out`.
-- Forks: altair and later.
 
 ## Function `lantern_get_base_reward`
 
@@ -910,14 +1308,27 @@ lantern_get_base_reward(state, index, scratch, out) -> status
 ### Caller must
 
 - Pass an index below the number of validators.
+- `state` is a valid `BeaconState` value (include/types.inc) with every PartRef in range.
 
 ### Function does
 
 - Phase0: effective_balance * BASE_REWARD_FACTOR // integer_squareroot(total active balance) // BASE_REWARDS_PER_EPOCH.
 - Altair and later: the effective balance increments times lantern_get_base_reward_per_increment.
 
+### Function never
+
+- Makes an OS call.
+- Keeps a pointer after it returns.
+
+### Limits
+
+- Stack of its own: 64 bytes on x86-64 (return address included), 64 bytes on ARM64, 64 bytes on RISC-V.
+
 ### ABI
 
+- Role: L1.
+- Symbol: `lantern_<fork>_get_base_reward` in the object of every fork, with `_` before it on macOS; `lantern_get_base_reward` inside the object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6); each argument is a pointer: a Uint64 argument points at a u64, and a Boolean output is a u64 of 0 or 1.
 - Argument order: `state`, `index`, `scratch`, `out`.
 
 ## Function `lantern_compute_shuffled_permutation`
@@ -950,8 +1361,20 @@ lantern_compute_shuffled_permutation(index_count, seed, scratch, out) -> status
 - Hashes the round's bucket sources once per round, in scratch; the spec hashes each the first time it reads it, which gives the same bytes.
 - Hashes with `crypto_sha256` of asm-crypto.
 
+### Function never
+
+- Makes an OS call.
+- Keeps a pointer after it returns.
+
+### Limits
+
+- Stack of its own: 176 bytes on x86-64 (return address included), 176 bytes on ARM64, 176 bytes on RISC-V.
+
 ### ABI
 
+- Role: L1.
+- Symbol: `lantern_<fork>_compute_shuffled_permutation` in the object of every fork, with `_` before it on macOS; `lantern_compute_shuffled_permutation` inside the object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6); each argument is a pointer: a Uint64 argument points at a u64, and a Boolean output is a u64 of 0 or 1.
 - Argument order: `index_count`, `seed`, `scratch`, `out`.
 
 ## Function `lantern_compute_shuffled_index`
@@ -983,8 +1406,20 @@ lantern_compute_shuffled_index(index, index_count, seed, scratch, out) -> status
 
 - The spec's compute_shuffled_index: `SHUFFLE_ROUND_COUNT` rounds on the one index, each with the pivot digest and the digest of the position's bucket.
 
+### Function never
+
+- Makes an OS call.
+- Keeps a pointer after it returns.
+
+### Limits
+
+- Stack of its own: 176 bytes on x86-64 (return address included), 176 bytes on ARM64, 176 bytes on RISC-V.
+
 ### ABI
 
+- Role: L1.
+- Symbol: `lantern_<fork>_compute_shuffled_index` in the object of every fork, with `_` before it on macOS; `lantern_compute_shuffled_index` inside the object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6); each argument is a pointer: a Uint64 argument points at a u64, and a Boolean output is a u64 of 0 or 1.
 - Argument order: `index`, `index_count`, `seed`, `scratch`, `out`.
 
 ## Function `lantern_get_seed`
@@ -1011,8 +1446,24 @@ lantern_get_seed(state, epoch, domain_type, out) -> status
 - `LANTERN_OK`: `out` holds the seed.
 - `LANTERN_INVALID_OVERFLOW`: epoch + EPOCHS_PER_HISTORICAL_VECTOR leaves the Uint64 range.
 
+### Caller must
+
+- `state` is a valid `BeaconState` value (include/types.inc) with every PartRef in range.
+
+### Function never
+
+- Makes an OS call.
+- Keeps a pointer after it returns.
+
+### Limits
+
+- Stack of its own: 80 bytes on x86-64 (return address included), 80 bytes on ARM64, 112 bytes on RISC-V.
+
 ### ABI
 
+- Role: L1.
+- Symbol: `lantern_<fork>_get_seed` in the object of every fork, with `_` before it on macOS; `lantern_get_seed` inside the object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6); each argument is a pointer: a Uint64 argument points at a u64, and a Boolean output is a u64 of 0 or 1.
 - Argument order: `state`, `epoch`, `domain_type`, `out`.
 
 ## Function `lantern_compute_proposer_index`
@@ -1043,6 +1494,7 @@ lantern_compute_proposer_index(state, indices, seed, scratch, out) -> status
 ### Caller must
 
 - Pass indices below the number of validators.
+- `state` is a valid `BeaconState` value (include/types.inc) with every PartRef in range.
 
 ### Function does
 
@@ -1051,8 +1503,21 @@ lantern_compute_proposer_index(state, indices, seed, scratch, out) -> status
 - Runs compute_shuffled_index of each candidate inline: the pivot of each of the `SHUFFLE_ROUND_COUNT` rounds, bytes_to_uint64(sha256(seed + round)[0:8]) % total, once for the seed, then one digest of the position's bucket a round for each candidate. The pivots depend only on the seed, the round and the total, so each candidate gets the spec's index.
 - Hashes the random bytes once for each 16 candidates (32 before electra): the candidates of one i // 16 (i // 32) read the same digest, as the spec's steps do.
 
+### Function never
+
+- Makes an OS call.
+- Keeps a pointer after it returns.
+
+### Limits
+
+- Stack of its own with the mainnet preset: 992 bytes on x86-64 (return address included), 992 bytes on ARM64, 992 bytes on RISC-V.
+- Stack of its own with the minimal preset: 992 bytes on x86-64 (return address included), 352 bytes on ARM64, 992 bytes on RISC-V.
+
 ### ABI
 
+- Role: L1.
+- Symbol: `lantern_<fork>_compute_proposer_index` in the object of every fork, with `_` before it on macOS; `lantern_compute_proposer_index` inside the object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6); each argument is a pointer: a Uint64 argument points at a u64, and a Boolean output is a u64 of 0 or 1.
 - Argument order: `state`, `indices`, `seed`, `scratch`, `out`.
 
 ## Function `lantern_compute_proposer_indices`
@@ -1081,10 +1546,25 @@ lantern_compute_proposer_indices(state, epoch, seed, indices, scratch, out) -> s
 - `LANTERN_OK`: `out` holds the proposers.
 - A `LANTERN_INVALID_*` code: a check of lantern_compute_proposer_index failed, or the start slot leaves the Uint64 range.
 
+### Caller must
+
+- `state` is a valid `BeaconState` value (include/types.inc) with every PartRef in range.
+
+### Function never
+
+- Makes an OS call.
+- Keeps a pointer after it returns.
+
+### Limits
+
+- Stack of its own: 176 bytes on x86-64 (return address included), 176 bytes on ARM64, 176 bytes on RISC-V.
+
 ### ABI
 
+- Role: L1.
+- Symbol: `lantern_<fork>_compute_proposer_indices` in the object of every fork, with `_` before it on macOS; `lantern_compute_proposer_indices` inside the object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6); each argument is a pointer: a Uint64 argument points at a u64, and a Boolean output is a u64 of 0 or 1.
 - Argument order: `state`, `epoch`, `seed`, `indices`, `scratch`, `out`.
-- Forks: fulu; every fork object exports it too, for lantern_node_proposers (node.md).
 
 ## Function `lantern_get_beacon_proposer_indices`
 
@@ -1111,10 +1591,25 @@ lantern_get_beacon_proposer_indices(state, epoch, scratch, out) -> status
 - `LANTERN_BUFFER_TOO_SMALL`: `scratch` has fewer than S(2) bytes.
 - A `LANTERN_INVALID_*` code: a check of a callee failed.
 
+### Caller must
+
+- `state` is a valid `BeaconState` value (include/types.inc) with every PartRef in range.
+
+### Function never
+
+- Makes an OS call.
+- Keeps a pointer after it returns.
+
+### Limits
+
+- Stack of its own: 144 bytes on x86-64 (return address included), 144 bytes on ARM64, 144 bytes on RISC-V.
+
 ### ABI
 
+- Role: L1.
+- Symbol: `lantern_<fork>_get_beacon_proposer_indices` in the object of every fork, with `_` before it on macOS; `lantern_get_beacon_proposer_indices` inside the object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6); each argument is a pointer: a Uint64 argument points at a u64, and a Boolean output is a u64 of 0 or 1.
 - Argument order: `state`, `epoch`, `scratch`, `out`.
-- Forks: fulu; every fork object exports it too, for lantern_node_proposers (node.md).
 
 ## Function `lantern_compute_fork_data_root`
 
@@ -1140,8 +1635,20 @@ lantern_compute_fork_data_root(current_version, genesis_validators_root, scratch
 - `LANTERN_OK`: `out` holds the root.
 - `LANTERN_BUFFER_TOO_SMALL`: `scratch` has fewer than `LANTERN_SCRATCH_FIXED` bytes.
 
+### Function never
+
+- Makes an OS call.
+- Keeps a pointer after it returns.
+
+### Limits
+
+- Stack of its own: 64 bytes on x86-64 (return address included), 64 bytes on ARM64, 64 bytes on RISC-V.
+
 ### ABI
 
+- Role: L1.
+- Symbol: `lantern_<fork>_compute_fork_data_root` in the object of every fork, with `_` before it on macOS; `lantern_compute_fork_data_root` inside the object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6); each argument is a pointer: a Uint64 argument points at a u64, and a Boolean output is a u64 of 0 or 1.
 - Argument order: `current_version`, `genesis_validators_root`, `scratch`, `out`.
 
 ## Function `lantern_compute_domain`
@@ -1173,8 +1680,20 @@ lantern_compute_domain(domain_type, fork_version, genesis_validators_root, scrat
 
 - Pass the spec's default values itself: GENESIS_FORK_VERSION of the config and a zero root.
 
+### Function never
+
+- Makes an OS call.
+- Keeps a pointer after it returns.
+
+### Limits
+
+- Stack of its own: 64 bytes on x86-64 (return address included), 64 bytes on ARM64, 64 bytes on RISC-V.
+
 ### ABI
 
+- Role: L1.
+- Symbol: `lantern_<fork>_compute_domain` in the object of every fork, with `_` before it on macOS; `lantern_compute_domain` inside the object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6); each argument is a pointer: a Uint64 argument points at a u64, and a Boolean output is a u64 of 0 or 1.
 - Argument order: `domain_type`, `fork_version`, `genesis_validators_root`, `scratch`, `out`.
 
 ## Function `lantern_get_domain`
@@ -1205,9 +1724,22 @@ lantern_get_domain(state, domain_type, epoch, scratch, out) -> status
 ### Caller must
 
 - Pass the current epoch when the spec passes None.
+- `state` is a valid `BeaconState` value (include/types.inc) with every PartRef in range.
+
+### Function never
+
+- Makes an OS call.
+- Keeps a pointer after it returns.
+
+### Limits
+
+- Stack of its own: 8 bytes on x86-64 (return address included), 16 bytes on ARM64, 16 bytes on RISC-V.
 
 ### ABI
 
+- Role: L1.
+- Symbol: `lantern_<fork>_get_domain` in the object of every fork, with `_` before it on macOS; `lantern_get_domain` inside the object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6); each argument is a pointer: a Uint64 argument points at a u64, and a Boolean output is a u64 of 0 or 1.
 - Argument order: `state`, `domain_type`, `epoch`, `scratch`, `out`.
 
 ## Function `lantern_compute_signing_root`
@@ -1235,8 +1767,20 @@ lantern_compute_signing_root(type, object, domain, scratch, out) -> status
 - `LANTERN_OK`: `out` holds the root.
 - `LANTERN_BUFFER_TOO_SMALL`: `scratch` has fewer than `LANTERN_SCRATCH_FIXED` bytes, or fewer than the root node of `type` needs.
 
+### Function never
+
+- Makes an OS call.
+- Keeps a pointer after it returns.
+
+### Limits
+
+- Stack of its own: 112 bytes on x86-64 (return address included), 112 bytes on ARM64, 112 bytes on RISC-V.
+
 ### ABI
 
+- Role: L1.
+- Symbol: `lantern_<fork>_compute_signing_root` in the object of every fork, with `_` before it on macOS; `lantern_compute_signing_root` inside the object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6); each argument is a pointer: a Uint64 argument points at a u64, and a Boolean output is a u64 of 0 or 1.
 - Argument order: `type`, `object`, `domain`, `scratch`, `out`.
 
 ## Type `Config`
