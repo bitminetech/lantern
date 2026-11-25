@@ -81,6 +81,10 @@ jobs:
         run: |
           docker build -q -t lantern-build -f platform/linux/Dockerfile platform/linux
           docker run --rm -v "$PWD:/src" lantern-build platform/build-all.sh ${{ matrix.os }}-${{ matrix.isa }}
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
+        with:
+          name: functions-${{ matrix.os }}-${{ matrix.isa }}
+          path: build/${{ matrix.os }}-${{ matrix.isa }}/functions.txt
       - if: matrix.os == 'linux'
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
         with:
@@ -113,11 +117,27 @@ jobs:
           docker run --rm -v "$PWD:/src" lantern-build platform/build-all.sh macos-${{ matrix.isa }}
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
         with:
+          name: functions-macos-${{ matrix.isa }}
+          path: build/macos-${{ matrix.isa }}/functions.txt
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
+        with:
           name: build-macos-${{ matrix.isa }}
           path: |
             build/macos-${{ matrix.isa }}/
             !build/macos-${{ matrix.isa }}/mainnet/
             !build/macos-${{ matrix.isa }}/minimal/
+
+  # Check that the docs and the code name the same functions, with the functions of
+  # all 7 targets (platform/check.py; ARCHITECTURE.md sections 5 and 11).
+  docs:
+    needs: [build, build-macos]
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333  # v8.0.2
+        with: { pattern: functions-*, path: functions }
+      - name: Check the docs against the functions of every target
+        run: python3 -I platform/check.py --docs functions/*/functions.txt
 
   linux:
     needs: [key, vectors, build]

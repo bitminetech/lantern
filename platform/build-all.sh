@@ -1,6 +1,7 @@
 #!/bin/sh
 # Build lantern for the supported targets into build/<os>-<isa>/, with the test
-# runners for Linux and Windows.
+# runners for Linux and Windows. Then check each target's functions against the
+# docs (check.py), which writes build/<os>-<isa>/functions.txt.
 # Usage: platform/build-all.sh [TARGET ...]
 # A TARGET is linux-x86_64, linux-arm64, linux-riscv64, windows-x86_64,
 # windows-arm64, macos-x86_64 or macos-arm64; with none, all 7.
@@ -20,3 +21,4 @@ platform/deps.sh
 for target in $targets; do
     platform/${target%%-*}/build.sh ${target#*-} build/$target
 done
+python3 -I platform/check.py $(for target in $targets; do echo build/$target; done)

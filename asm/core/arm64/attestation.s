@@ -1235,7 +1235,7 @@ LOCAL_FUNCTION lantern_attestation_key_sum
     and     x12, x10, #7
     lsr     w11, w11, w12
     tbnz    w11, #0, 22f
-    bl      member_point                    /* sp+288: the key of member x21 */
+    bl      70f                             /* sp+288: the key of member x21 */
     cbz     x0, 90f
     add     x0, sp, #288
     add     x1, sp, #432
@@ -1259,7 +1259,7 @@ LOCAL_FUNCTION lantern_attestation_key_sum
     and     x12, x10, #7
     lsr     w11, w11, w12
     tbz     w11, #0, 32f
-    bl      member_point
+    bl      70f
     cbz     x0, 90f
     mov     x0, sp
     add     x1, sp, #288
@@ -1295,10 +1295,10 @@ LOCAL_FUNCTION lantern_attestation_key_sum
     LEAVE_OUT 224, AKS_OUT
 
 /*
- * Within lantern_attestation_key_sum, by bl (sp unchanged): the key of member x21 of the committee as a
+ * 70: within lantern_attestation_key_sum, by bl (sp unchanged): the key of member x21 of the committee as a
  * G1Point at sp+288, when its entry holds it; x0 = 1, else 0. Uses x9-x17.
  */
-member_point:
+70:
     ldr     x9, [sp, #(AKS_L + 72)]
     ldr     x9, [x9, x21, lsl #3]           /* the validator index */
     ldr     x10, [x22, #CRYPTO_BLS_CACHE_COUNT]

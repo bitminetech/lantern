@@ -112,6 +112,7 @@ Standard: [asm-standard@2a19d3f](https://github.com/bitminetech/asm-standard/blo
 |---|---|
 | Vector generator | [tests/generator/](tests/generator/) |
 | Test runner | [tests/runner/](tests/runner/README.md) |
+| Check that the docs and the code name the same functions | [platform/check.py](platform/check.py) |
 | Fuzzing of the HTTP parser and the JSON decoders | [tests/runner/](tests/runner/README.md) (`LANTERN_FUZZ`) |
 | Signatures-off runner, for cases with `bls_setting` 2 | [tests/runner/bls_off.c](tests/runner/bls_off.c) |
 | Shell test of each target | [tests/shell/shell.c](tests/shell/shell.c) |
