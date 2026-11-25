@@ -28,13 +28,6 @@
 - The caller sets the `size` field of `out` to its buffer size, and keeps `pre` and `out` apart.
 - An upgrade changes nothing in `pre`.
 
-## Test vectors
-
-- consensus-spec-tests v1.7.0-beta.4, `tests/<preset>/<fork>/fork/fork/` of altair to fulu, for mainnet and minimal: `pre` in the fork before, `post` in the fork.
-- `tests/<preset>/<fork>/transition/core/`: blocks across `fork_epoch`. The runner applies the blocks up to `fork_block` with the fork before, then lantern_process_slots of the fork before to the first slot of `fork_epoch`, then lantern_upgrade_to_<fork>, then the other blocks with the fork.
-  - File: `mainnet.tar.gz` and `minimal.tar.gz` of the release, with the SHA-256 in tests/generator/generate.py.
-  - Cases with `bls_setting` 2 run in `runner-<preset>-<fork>-bls-off`, as in block-processing.md.
-
 ## Function `lantern_upgrade_size`
 
 The bytes that lantern_upgrade_to_<fork> of the same object needs for the state it writes from pre with room.
@@ -316,6 +309,13 @@ lantern_initialize_proposer_lookahead(state, scratch, out) -> status
 ### ABI
 
 - Forks: fulu.
+
+## Test vectors
+
+- consensus-spec-tests v1.7.0-beta.4, `tests/<preset>/<fork>/fork/fork/` of altair to fulu, for mainnet and minimal: `pre` in the fork before, `post` in the fork.
+- `tests/<preset>/<fork>/transition/core/`: blocks across `fork_epoch`. The runner applies the blocks up to `fork_block` with the fork before, then lantern_process_slots of the fork before to the first slot of `fork_epoch`, then lantern_upgrade_to_<fork>, then the other blocks with the fork.
+  - File: `mainnet.tar.gz` and `minimal.tar.gz` of the release, with the SHA-256 in tests/generator/generate.py.
+  - Cases with `bls_setting` 2 run in `runner-<preset>-<fork>-bls-off`, as in block-processing.md.
 
 ## Results
 

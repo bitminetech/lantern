@@ -34,14 +34,6 @@
 - A leaf of the deposit tree is hash_tree_root of the deposit's `DepositData`.
 - Every function is in the common object of the core (asm/core/<ISA>/eth1.s), and its symbol is its name. Every u64 argument is passed by its address.
 
-## Test vectors
-
-- Lantern's cases `<preset>-phase0-eth1-<kind>.bin` (`requests`, `block`, `logs`, `tree`), made by tests/generator/eth1.py:
-  - Requests: block numbers, `latest`, address and block ranges, and the JSON the rules above give.
-  - Blocks: eth_getBlockByNumber results that Python's `json` module writes with several spacings and member orders and with members the parser skips; texts with a bad `QUANTITY` or `DATA`.
-  - Logs: arrays of logs whose `data` is the ABI encoding of random `DepositData` and indices, with `removed` absent and false; logs with `removed` true, another topic, a non canonical encoding, and bad JSON.
-  - The tree: random `DepositData` lists; lantern_deposit_leaf of each must be the spec's hash_tree_root; after each push the root must be the spec's (hash_tree_root of the list, as process_deposit checks it), and each proof of a leaf below a count must pass is_valid_merkle_branch against the root of the first `count` leaves.
-
 ## Function `lantern_eth_get_block_by_number`
 
 The JSON-RPC request `{"jsonrpc":"2.0","id":id,"method":"eth_getBlockByNumber","params":["<number>",false]}`: the number as a `QUANTITY`, or `latest` for 2^64 - 1.
@@ -261,6 +253,14 @@ lantern_deposit_proof(leaves, count, index, scratch, out) -> status
 | 0 | `count` | u64 | The leaves pushed |
 | 8 | `branch` | `DEPOSIT_CONTRACT_TREE_DEPTH` Roots | The deposit contract's `branch`: at level i the root of the last whole subtree of 2^i leaves |
 | 8 + 32 * `DEPOSIT_CONTRACT_TREE_DEPTH` | | | Size |
+
+## Test vectors
+
+- Lantern's cases `<preset>-phase0-eth1-<kind>.bin` (`requests`, `block`, `logs`, `tree`), made by tests/generator/eth1.py:
+  - Requests: block numbers, `latest`, address and block ranges, and the JSON the rules above give.
+  - Blocks: eth_getBlockByNumber results that Python's `json` module writes with several spacings and member orders and with members the parser skips; texts with a bad `QUANTITY` or `DATA`.
+  - Logs: arrays of logs whose `data` is the ABI encoding of random `DepositData` and indices, with `removed` absent and false; logs with `removed` true, another topic, a non canonical encoding, and bad JSON.
+  - The tree: random `DepositData` lists; lantern_deposit_leaf of each must be the spec's hash_tree_root; after each push the root must be the spec's (hash_tree_root of the list, as process_deposit checks it), and each proof of a leaf below a count must pass is_valid_merkle_branch against the root of the first `count` leaves.
 
 ## Results
 

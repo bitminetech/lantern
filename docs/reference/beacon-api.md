@@ -346,24 +346,6 @@ The answers of the node (node.md, `NODE_EV_API`) follow these rules.
   - The answer: 200 with no body, once the registrations apply.
 - Every other operation: 501.
 
-## Test vectors
-
-- The answers: the `api` cases of [node.md](node.md#test-vectors), through lantern_node_step and lantern_node_run, and the getBlockV2 and getStateV2 checks of its fork_choice cases in node mode.
-- tests/generator/http_request.py: requests and the `HttpRequest` or fault of each, by the rules of lantern_http_request, apart from the assembly. Each case also runs with its bytes cut short at every length (`LANTERN_HTTP_MORE`, or the same fault once the faulty byte is in), and with `out` one byte short. File: `<preset>-phase0-http-request.bin`.
-  - Request lines: each method, origin forms with and without a query, both versions, HTTP/2.0 (505), and broken lines.
-  - Fields: each read field, names in mixed case, repeated lines joined, white space before a colon, folded lines, no `Host`, two `Host` lines.
-  - Bodies: `Content-Length` (zero, exact, past `body_max`, two equal values, two different values), chunked (one and many chunks, extensions, trailers, bad sizes, past `body_max`), both fields together, another coding.
-  - Limits: a head of exactly `head_max` bytes and one byte more.
-  - Pipelining: two requests in one buffer; `used` ends the first.
-- tests/generator/json_codec.py: values of every container type of each fork's spec module (get_random_ssz_object of the pinned spec's test helpers: in minimal the modes zero, one, random and max with lists of at most 4 items and byte lists of at most 64 bytes; in mainnet the mode zero) and the JSON of each, written by the rules of lantern_json_encode, apart from the assembly. The runner reads each value with the type of the fork's type table of that name, when lantern has it, and counts the others in a NOTE; each case also runs in chunks of 1, 7 and 64 bytes of room, and with `out` one byte short of the whole JSON (`LANTERN_JSON_MORE`), then with no room (`LANTERN_BUFFER_TOO_SMALL`). The runner also gives each case's SSZ bytes to lantern_json_encode_ssz, in the same rooms. File: `<preset>-<fork>-json-encode.bin`.
-- tests/generator/json_codec.py also makes the cases of lantern_json_decode: the JSON of each `json-encode` case, with white space between its tokens and its fields in reverse order in a second copy, must give the case's SSZ bytes; then for some types, texts that break one rule each, with the `JsonFault` of each (its kind, offset and path). Each valid case also runs with `out` one byte short. File: `<preset>-<fork>-json-decode.bin`.
-- tests/generator/api_route.py: requests and the `ApiRoute` or fault of each, by the rules of lantern_api_route, apart from the assembly. It reads the operations from the beacon-APIs clone at the pinned commit, so the table of the assembly is checked against the spec; a parameter of the spec that the rules below do not name stops it. Each case with `LANTERN_OK` also runs with `out` one byte short. File: `<preset>-phase0-api-route.bin`.
-  - Every operation: its method and path with every required parameter; then each optional parameter.
-  - Every path: each other method (405, `allow`), a trailing `/`, a missing and an extra segment (404).
-  - Every parameter: each form of its type, and values that break it (400 and `fault`).
-  - Query: repeated names, comma lists, empty items, names the operation does not take, percent-encoding (good and broken), 65 ids (414).
-  - Headers: `Accept` with q-values, wildcards, parameters and broken items (406); `Content-Type` (415); `Eth-Consensus-Version` of each fork, missing and wrong (400).
-
 ## Function `lantern_api_route`
 
 Finds the operation of one request and reads its parameters, by their types.
@@ -835,6 +817,24 @@ A validator by its index or by its public key.
 | 8 | `index` | u64 | With `API_VALIDATOR_INDEX` |
 | 16 | `pubkey` | BLSPubkey | With `API_VALIDATOR_PUBKEY` |
 | 64 | | | Size |
+
+## Test vectors
+
+- The answers: the `api` cases of [node.md](node.md#test-vectors), through lantern_node_step and lantern_node_run, and the getBlockV2 and getStateV2 checks of its fork_choice cases in node mode.
+- tests/generator/http_request.py: requests and the `HttpRequest` or fault of each, by the rules of lantern_http_request, apart from the assembly. Each case also runs with its bytes cut short at every length (`LANTERN_HTTP_MORE`, or the same fault once the faulty byte is in), and with `out` one byte short. File: `<preset>-phase0-http-request.bin`.
+  - Request lines: each method, origin forms with and without a query, both versions, HTTP/2.0 (505), and broken lines.
+  - Fields: each read field, names in mixed case, repeated lines joined, white space before a colon, folded lines, no `Host`, two `Host` lines.
+  - Bodies: `Content-Length` (zero, exact, past `body_max`, two equal values, two different values), chunked (one and many chunks, extensions, trailers, bad sizes, past `body_max`), both fields together, another coding.
+  - Limits: a head of exactly `head_max` bytes and one byte more.
+  - Pipelining: two requests in one buffer; `used` ends the first.
+- tests/generator/json_codec.py: values of every container type of each fork's spec module (get_random_ssz_object of the pinned spec's test helpers: in minimal the modes zero, one, random and max with lists of at most 4 items and byte lists of at most 64 bytes; in mainnet the mode zero) and the JSON of each, written by the rules of lantern_json_encode, apart from the assembly. The runner reads each value with the type of the fork's type table of that name, when lantern has it, and counts the others in a NOTE; each case also runs in chunks of 1, 7 and 64 bytes of room, and with `out` one byte short of the whole JSON (`LANTERN_JSON_MORE`), then with no room (`LANTERN_BUFFER_TOO_SMALL`). The runner also gives each case's SSZ bytes to lantern_json_encode_ssz, in the same rooms. File: `<preset>-<fork>-json-encode.bin`.
+- tests/generator/json_codec.py also makes the cases of lantern_json_decode: the JSON of each `json-encode` case, with white space between its tokens and its fields in reverse order in a second copy, must give the case's SSZ bytes; then for some types, texts that break one rule each, with the `JsonFault` of each (its kind, offset and path). Each valid case also runs with `out` one byte short. File: `<preset>-<fork>-json-decode.bin`.
+- tests/generator/api_route.py: requests and the `ApiRoute` or fault of each, by the rules of lantern_api_route, apart from the assembly. It reads the operations from the beacon-APIs clone at the pinned commit, so the table of the assembly is checked against the spec; a parameter of the spec that the rules below do not name stops it. Each case with `LANTERN_OK` also runs with `out` one byte short. File: `<preset>-phase0-api-route.bin`.
+  - Every operation: its method and path with every required parameter; then each optional parameter.
+  - Every path: each other method (405, `allow`), a trailing `/`, a missing and an extra segment (404).
+  - Every parameter: each form of its type, and values that break it (400 and `fault`).
+  - Query: repeated names, comma lists, empty items, names the operation does not take, percent-encoding (good and broken), 65 ids (414).
+  - Headers: `Accept` with q-values, wildcards, parameters and broken items (406); `Content-Type` (415); `Eth-Consensus-Version` of each fork, missing and wrong (400).
 
 ## Results
 

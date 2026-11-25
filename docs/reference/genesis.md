@@ -20,11 +20,6 @@
 - The caller sets the `size` field of `out` to its buffer size.
 - Config: GENESIS_FORK_VERSION, GENESIS_DELAY, MIN_GENESIS_TIME and MIN_GENESIS_ACTIVE_VALIDATOR_COUNT of [`Config`](helpers.md#type-config).
 
-## Test vectors
-
-- consensus-spec-tests v1.7.0-beta.4, `tests/minimal/phase0/genesis/initialization/` and `genesis/validity/`.
-  - File: `minimal.tar.gz` of the release, with the SHA-256 in tests/generator/generate.py.
-
 ## Function `lantern_initialize_beacon_state_from_eth1_size`
 
 The bytes that lantern_initialize_beacon_state_from_eth1 needs for deposit_count deposits and room.
@@ -114,6 +109,11 @@ lantern_is_valid_genesis_state(state, config, out) -> status
 ### ABI
 
 - Forks: phase0.
+
+## Test vectors
+
+- consensus-spec-tests v1.7.0-beta.4, `tests/minimal/phase0/genesis/initialization/` and `genesis/validity/`.
+  - File: `minimal.tar.gz` of the release, with the SHA-256 in tests/generator/generate.py.
 
 ## Results
 

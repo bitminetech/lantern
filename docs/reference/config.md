@@ -12,18 +12,6 @@
 - Section: Configurations, Format: each configuration is a key and value mapping in YAML; a key is in `UPPER_SNAKE_CASE`; a value is an unsigned integer or a hexadecimal string with the prefix `0x`; comments may describe the values.
 - The pinned `configs/mainnet.yaml` and `configs/minimal.yaml` also hold `TERMINAL_TOTAL_DIFFICULTY` above 64 bits, quoted strings, the list of mappings `BLOB_SCHEDULE`, and the empty list `[]`.
 
-## Test vectors
-
-- The pinned `configs/mainnet.yaml` and `configs/minimal.yaml`, whole: the result must be the values the YAML parser of the generator reads from them.
-- Cases of tests/generator/config.py, each with its expected values or fault line:
-  - Comments, single and double quotes, CR LF line ends, and `---`.
-  - Keys lantern does not read, with nested lists and maps under them.
-  - A `BLOB_SCHEDULE` out of EPOCH order, which must come out sorted, and `BLOB_SCHEDULE: []`.
-  - A text with a few keys, which must leave every other value of the config as it was.
-  - `DEPOSIT_CONTRACT_ADDRESS` in mixed case, and `CONFIG_NAME` and `PRESET_BASE` quoted, with a `#` inside quotes, and empty.
-  - Faults: a value that is not a number, a u64 above 2^64 - 1, a Version of 3 bytes, a Hash32 of 31 bytes, an Address of 19 bytes, a Text of 65 bytes, a Text with a `"` inside `'`, 33 schedule entries, a schedule entry without `MAX_BLOBS_PER_BLOCK`, a line that is not a key, a quote with no end, and an indentation with a tab.
-- File: `<preset>-phase0-config-parse.bin`.
-
 ## Function `lantern_config_parse`
 
 Writes into a config the value of each key that a network config file gives and lantern reads.
@@ -94,6 +82,18 @@ lantern_config_parse(text, config, line) -> status
 - Symbol: `lantern_config_parse` (`_lantern_config_parse` on macOS).
 - Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
 - Argument order: `text`, `config`, `line`.
+
+## Test vectors
+
+- The pinned `configs/mainnet.yaml` and `configs/minimal.yaml`, whole: the result must be the values the YAML parser of the generator reads from them.
+- Cases of tests/generator/config.py, each with its expected values or fault line:
+  - Comments, single and double quotes, CR LF line ends, and `---`.
+  - Keys lantern does not read, with nested lists and maps under them.
+  - A `BLOB_SCHEDULE` out of EPOCH order, which must come out sorted, and `BLOB_SCHEDULE: []`.
+  - A text with a few keys, which must leave every other value of the config as it was.
+  - `DEPOSIT_CONTRACT_ADDRESS` in mixed case, and `CONFIG_NAME` and `PRESET_BASE` quoted, with a `#` inside quotes, and empty.
+  - Faults: a value that is not a number, a u64 above 2^64 - 1, a Version of 3 bytes, a Hash32 of 31 bytes, an Address of 19 bytes, a Text of 65 bytes, a Text with a `"` inside `'`, 33 schedule entries, a schedule entry without `MAX_BLOBS_PER_BLOCK`, a line that is not a key, a quote with no end, and an indentation with a tab.
+- File: `<preset>-phase0-config-parse.bin`.
 
 ## Results
 

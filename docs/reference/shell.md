@@ -50,12 +50,6 @@
 - A file is a u64: a file descriptor on Linux and macOS, a HANDLE on Windows. Each u64 argument is passed by its address.
 - An OS call that Linux or macOS ends early with `EINTR` goes again.
 
-## Test vectors
-
-- tests/shell/shell.c, linked with the shell object of the target: it maps and unmaps memory, reads a file it wrote, an empty file, a missing file and a path of 5000 bytes, writes a line to the standard output, and reads the time.
-- It also makes a directory, then the same one again (an error), appends to a new file in it in two writes, syncs it and the directory, maps it and finds both writes, truncates it and maps it again, opens it again to append and finds the new end, opens it to read, opens with a faulty mode (an error), maps an empty file (address 0), renames the empty file over the first and maps the result, removes it, and maps and removes the missing file (each an error).
-- platform/linux/build.sh builds it as `shell-test` for each Linux ISA, and platform/macos/link-runner.sh for each macOS ISA; CI runs it.
-
 ## Function `lantern_shell_map`
 
 Gives memory of a size, zeroed, readable and writable.
@@ -609,6 +603,47 @@ The outcome of `lantern_shell_read_file` and `lantern_shell_map_file`.
 | 16 | `size` | u64 | The bytes of the file |
 | 24 | `mapped` | u64 | The size given to lantern_shell_map, for lantern_shell_unmap |
 
+## Function `lantern_shell_process`
+
+Reads the process's CPU time, highest resident memory and open file limit, for the metrics ([metrics.md](metrics.md)).
+
+### Signature
+
+```
+lantern_shell_process(out) -> status
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `out` | output | 24 bytes: `cpu_us`, `max_rss_bytes`, `max_fds`, each a u64 |
+
+### Returns
+
+- `LANTERN_OK`.
+
+### Function does
+
+- `cpu_us`: the process's user and system CPU time, in microseconds.
+- `max_rss_bytes`: the highest resident memory of the process, in bytes.
+- `max_fds`: the soft limit of open files; 0 when the OS reports none or the call fails.
+- Linux: getrusage(RUSAGE_SELF) (`ru_maxrss` in KiB) and prlimit64(0, RLIMIT_NOFILE).
+- macOS: getrusage and getrlimit(RLIMIT_NOFILE) of libSystem (`ru_maxrss` in bytes).
+- Windows: GetProcessTimes and K32GetProcessMemoryInfo (`PeakWorkingSetSize`) of the current process; `max_fds` 0.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_shell_process` (`_lantern_shell_process` on macOS).
+- Argument order: `out`.
+
+## Test vectors
+
+- tests/shell/shell.c, linked with the shell object of the target: it maps and unmaps memory, reads a file it wrote, an empty file, a missing file and a path of 5000 bytes, writes a line to the standard output, and reads the time.
+- It also makes a directory, then the same one again (an error), appends to a new file in it in two writes, syncs it and the directory, maps it and finds both writes, truncates it and maps it again, opens it again to append and finds the new end, opens it to read, opens with a faulty mode (an error), maps an empty file (address 0), renames the empty file over the first and maps the result, removes it, and maps and removes the missing file (each an error).
+- platform/linux/build.sh builds it as `shell-test` for each Linux ISA, and platform/macos/link-runner.sh for each macOS ISA; CI runs it.
+
 ## Results
 
 <!-- CI generates the tick table for each function here. -->
@@ -748,38 +783,3 @@ The outcome of `lantern_shell_read_file` and `lantern_shell_map_file`.
 | x86-64 |  |  |  |  |
 | ARM64 |  |  |  |  |
 | RISC-V |  |  |  |  |
-
-## Function `lantern_shell_process`
-
-Reads the process's CPU time, highest resident memory and open file limit, for the metrics ([metrics.md](metrics.md)).
-
-### Signature
-
-```
-lantern_shell_process(out) -> status
-```
-
-### Arguments
-
-| Name | Role | Type |
-|---|---|---|
-| `out` | output | 24 bytes: `cpu_us`, `max_rss_bytes`, `max_fds`, each a u64 |
-
-### Returns
-
-- `LANTERN_OK`.
-
-### Function does
-
-- `cpu_us`: the process's user and system CPU time, in microseconds.
-- `max_rss_bytes`: the highest resident memory of the process, in bytes.
-- `max_fds`: the soft limit of open files; 0 when the OS reports none or the call fails.
-- Linux: getrusage(RUSAGE_SELF) (`ru_maxrss` in KiB) and prlimit64(0, RLIMIT_NOFILE).
-- macOS: getrusage and getrlimit(RLIMIT_NOFILE) of libSystem (`ru_maxrss` in bytes).
-- Windows: GetProcessTimes and K32GetProcessMemoryInfo (`PeakWorkingSetSize`) of the current process; `max_fds` 0.
-
-### ABI
-
-- Role: L0.
-- Symbol: `lantern_shell_process` (`_lantern_shell_process` on macOS).
-- Argument order: `out`.

@@ -58,21 +58,6 @@
 - Optimistic sync: each node keeps the execution engine's answer for its payload as a `PayloadValidationStatus` (`PAYLOAD_STATUS_*` of bellatrix p2p-interface.md). An `INVALIDATED` node is removed from fork choice ("Consensus engines MUST support removing blocks from fork choice that transition from `NOT_VALIDATED` to `INVALIDATED`"): it and its subtree are not in the tree of get_filtered_node_tree, so get_head never walks to them, and get_weight counts neither the latest messages for them nor a proposer boost of them.
 - Spec helpers that only these functions call are L0 helpers of `asm/core/<ISA>/forkchoice.s`, named by the spec: get_voting_source, get_attestation_score, get_proposer_score, calculate_committee_fraction, update_checkpoints, update_unrealized_checkpoints, on_tick_per_slot, record_block_timeliness, get_shuffling_dependent_root, update_proposer_boost_root, compute_pulled_up_tip, update_latest_messages, is_head_weak, is_parent_strong and is_proposer_equivocation.
 
-## Test vectors
-
-- consensus-spec-tests v1.7.0-beta.4, `tests/<preset>/<fork>/fork_choice/<handler>/` of altair to fulu, for mainnet and minimal.
-  - File: `mainnet.tar.gz` and `minimal.tar.gz` of the release, with the SHA-256 in tests/generator/generate.py.
-  - The runner follows `tests/formats/fork_choice/README.md` of the spec: it keeps the block states and checkpoint states, runs the attestations and attester slashings of each valid block after it, and checks `head` with lantern_get_head and `get_proposer_head` with lantern_get_proposer_head at the head and the current slot.
-  - Bellatrix: the `pow_block` steps are the PowBlocks of get_pow_block; the runner passes the one whose hash is the payload's parent_hash, and its parent, in `BlockOptions`.
-  - Deneb and electra: the `blobs` and `proofs` of a block step go to lantern_is_data_available with the body's blob_kzg_commitments. Fulu: the `columns` of a block step go to lantern_is_data_available.
-- consensus-spec-tests v1.7.0-beta.4, `tests/<preset>/<fork>/sync/optimistic/` of bellatrix to fulu: the fork choice format with `payload_status` steps.
-  - The runner maps `VALID` to `PAYLOAD_STATUS_VALID`, `SYNCING` and `ACCEPTED` to `NOT_VALIDATED`, `INVALID` and `INVALID_BLOCK_HASH` to `INVALIDATED`, and passes it in `BlockOptions`.
-  - For `INVALID` with a `latest_valid_hash`, it first sets `INVALIDATED` with lantern_store_payload_status on each ancestor of the block whose `block_hash` is not that hash, as the spec's test helper `add_optimistic_block` does.
-- The fork choice compliance cases of the release, `comptests.tar.gz` with the SHA-256 in tests/generator/generate.py: `tests/minimal/<fork>/fork_choice_compliance/<handler>/` of altair to fulu, as `minimal-<fork>-fork_choice_compliance-<handler>.bin`.
-  - Every case has `bls_setting` 2, so `runner-minimal-<fork>-bls-off` runs them.
-  - The runner follows the spec's compliance runner (`tests/generators/compliance_runners/fork_choice/runner/test_run.py`): it ignores invalid attestations and attester slashings inside a valid block, and checks `viable_for_head_roots_and_weights` with lantern_get_filtered_node_tree and lantern_get_weight, and lantern_node_weights (node.md) against lantern_get_weight for every node.
-- The KZG trusted setup: `presets/<preset>/trusted_setups/trusted_setup_4096.json` of the pinned spec, as `<preset>-kzg_setup.bin`.
-
 ## Function `lantern_get_forkchoice_store`
 
 The store of the anchor: its block as the only node, its epoch and root as all four checkpoints, its state as the justified checkpoint state.
@@ -832,6 +817,21 @@ The fork choice store: a value with two parts.
 ## Type `ColumnSidecars`
 
 A standalone asm-ssz Value of List[DataColumnSidecar, NUMBER_OF_COLUMNS]: size, then a `PartRef` at 8 to the nested sidecar values.
+
+## Test vectors
+
+- consensus-spec-tests v1.7.0-beta.4, `tests/<preset>/<fork>/fork_choice/<handler>/` of altair to fulu, for mainnet and minimal.
+  - File: `mainnet.tar.gz` and `minimal.tar.gz` of the release, with the SHA-256 in tests/generator/generate.py.
+  - The runner follows `tests/formats/fork_choice/README.md` of the spec: it keeps the block states and checkpoint states, runs the attestations and attester slashings of each valid block after it, and checks `head` with lantern_get_head and `get_proposer_head` with lantern_get_proposer_head at the head and the current slot.
+  - Bellatrix: the `pow_block` steps are the PowBlocks of get_pow_block; the runner passes the one whose hash is the payload's parent_hash, and its parent, in `BlockOptions`.
+  - Deneb and electra: the `blobs` and `proofs` of a block step go to lantern_is_data_available with the body's blob_kzg_commitments. Fulu: the `columns` of a block step go to lantern_is_data_available.
+- consensus-spec-tests v1.7.0-beta.4, `tests/<preset>/<fork>/sync/optimistic/` of bellatrix to fulu: the fork choice format with `payload_status` steps.
+  - The runner maps `VALID` to `PAYLOAD_STATUS_VALID`, `SYNCING` and `ACCEPTED` to `NOT_VALIDATED`, `INVALID` and `INVALID_BLOCK_HASH` to `INVALIDATED`, and passes it in `BlockOptions`.
+  - For `INVALID` with a `latest_valid_hash`, it first sets `INVALIDATED` with lantern_store_payload_status on each ancestor of the block whose `block_hash` is not that hash, as the spec's test helper `add_optimistic_block` does.
+- The fork choice compliance cases of the release, `comptests.tar.gz` with the SHA-256 in tests/generator/generate.py: `tests/minimal/<fork>/fork_choice_compliance/<handler>/` of altair to fulu, as `minimal-<fork>-fork_choice_compliance-<handler>.bin`.
+  - Every case has `bls_setting` 2, so `runner-minimal-<fork>-bls-off` runs them.
+  - The runner follows the spec's compliance runner (`tests/generators/compliance_runners/fork_choice/runner/test_run.py`): it ignores invalid attestations and attester slashings inside a valid block, and checks `viable_for_head_roots_and_weights` with lantern_get_filtered_node_tree and lantern_get_weight, and lantern_node_weights (node.md) against lantern_get_weight for every node.
+- The KZG trusted setup: `presets/<preset>/trusted_setups/trusted_setup_4096.json` of the pinned spec, as `<preset>-kzg_setup.bin`.
 
 ## Results
 

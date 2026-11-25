@@ -73,11 +73,6 @@
 - Role, convention and symbol: as in [helpers.md](helpers.md#common-rules).
 - The `process_*` functions take (`state`, `config`, `scratch`, `result`) in that order.
 
-## Test vectors
-
-- consensus-spec-tests v1.7.0-beta.4, `tests/<preset>/<fork>/epoch_processing/<handler>/` of each fork, for mainnet and minimal.
-  - File: `mainnet.tar.gz` and `minimal.tar.gz` of the release, with the SHA-256 in tests/generator/generate.py.
-
 ## Function `lantern_process_justification_and_finalization`
 
 Does nothing in the first two epochs; else weighs the target balances of the previous and current epochs.
@@ -1280,6 +1275,11 @@ Where a list of a `BeaconState` is, for lantern_set_or_append_list.
 ### Rules
 
 - 24 bytes.
+
+## Test vectors
+
+- consensus-spec-tests v1.7.0-beta.4, `tests/<preset>/<fork>/epoch_processing/<handler>/` of each fork, for mainnet and minimal.
+  - File: `mainnet.tar.gz` and `minimal.tar.gz` of the release, with the SHA-256 in tests/generator/generate.py.
 
 ## Results
 

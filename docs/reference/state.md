@@ -23,11 +23,6 @@
 - Section: lantern's own functions. The state transition appends to the lists of a `BeaconState` within the room of their parts.
 - lantern_state_root: `hash_tree_root` of ssz-specs v0.1.0, as [asm-ssz](https://github.com/bitminetech/asm-ssz/blob/3c8c9b405efe432bc0153aa3d0a9a5d31e6d3328/docs/reference/merkleization.md) gives it: `merkleize` with the zero hashes of each depth, and `mix_in_length` for a list.
 
-## Test vectors
-
-- Each runner process keeps one `StateCache` of lantern_state_cache_size(4096) from lantern_state_cache_init, and the config of every call names it at `CONFIG_STATE_CACHE`, so each state transition of the vectors hashes through it.
-- The state of each case that the runner compares with a `post` state: lantern_state_root with that cache, and with 0, must give ssz_hash_tree_root of the state. The runner counts them in a NOTE.
-
 ## Function `lantern_beacon_state_copy_size`
 
 The bytes that lantern_beacon_state_copy needs for a copy of state with room.
@@ -340,6 +335,11 @@ The Merkle tree of one field of the last state hashed.
 - 48 bytes.
 - Level 0 holds the leaves: a chunk, or an element's root.
 - Its nodes below `count` at each level are those of the last root; its dirty bits are 0 between calls.
+
+## Test vectors
+
+- Each runner process keeps one `StateCache` of lantern_state_cache_size(4096) from lantern_state_cache_init, and the config of every call names it at `CONFIG_STATE_CACHE`, so each state transition of the vectors hashes through it.
+- The state of each case that the runner compares with a `post` state: lantern_state_root with that cache, and with 0, must give ssz_hash_tree_root of the state. The runner counts them in a NOTE.
 
 ## Results
 

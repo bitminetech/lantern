@@ -40,18 +40,6 @@
 - JSON is written compact, with no spaces, in the field order of the spec's lists. A `QUANTITY` is lowercase hex with no leading zeros, `0x0` for zero; `DATA` is lowercase hex, two digits a byte.
 - lantern_get_execution_requests_list, lantern_get_execution_requests, lantern_engine_new_payload_size, lantern_engine_new_payload, lantern_engine_forkchoice_updated, lantern_engine_get_payload and lantern_get_payload_attributes read the fork's layouts, and are in the objects of bellatrix and later (electra and later for the first two). lantern_engine_exchange_capabilities, lantern_engine_parse_response, lantern_jwt_token, lantern_http_post and lantern_http_parse_response read no fork's layouts. Each is in the common object of the core (asm/core/<ISA>/common.s), and its symbol is its name.
 
-## Test vectors
-
-- Lantern's cases, `<preset>-<fork>-engine-<function>.bin` of phase0 to fulu, made by tests/generator/engine.py: no official cases test these functions.
-  - Requests: random blocks of the fork from the spec's `debug/random_value.py`, in each of its modes, and the JSON that the encoding rules of `common.md` give for them, with `kzg_commitment_to_versioned_hash` and `get_execution_requests_list` of the spec module.
-  - Responses: JSON-RPC responses of each method that Python's `json` module writes with several spacings and member orders, with members the parser ignores, and with values the spec does not allow.
-  - Payload attributes: random `PayloadAttributes` of the fork, as engine_forkchoiceUpdated requests with the fork's `PayloadAttributesVn`.
-  - Payload attributes of states, `<preset>-<fork>-engine-payload_attributes.bin`: the pre states of the spec's operations cases of execution_payload and withdrawals, each at a block's slot, with random fee recipients, and the attributes that the spec's prepare_execution_payload gives the execution engine. Bellatrix states before the merge are left out.
-  - getPayload results: random `GetPayloadResult` values of the fork in the JSON of `common.md` (`QUANTITY` and `DATA`, camelCase names), with several spacings, member orders and members the decoder skips; and texts it refuses: a `QUANTITY` with a leading zero, of no digit or past its width, a `DATA` of odd length, a missing or repeated field.
-  - Request lists: the `get_execution_requests_list` of random `ExecutionRequests`, and lists the spec's asserts of get_execution_requests reject.
-  - JWTs: the token of RFC 7519 with Python's `hmac`, `hashlib` and `base64` modules.
-  - HTTP responses: messages that follow RFC 9112, split at every byte to test the `LANTERN_HTTP_MORE` results, and malformed ones.
-
 ## Function `lantern_get_execution_requests_list`
 
 request_type + ssz_serialize(requests) for the deposits, the withdrawals and the consolidations of execution_requests, in that order, each list that is not empty.
@@ -502,6 +490,18 @@ lantern_http_parse_response(input, eof, body, out) -> status
 |---|---|---|---|
 | 0 | `status` | u64 | The status code |
 | 8 | `consumed` | u64 | The bytes of `input` the response took |
+
+## Test vectors
+
+- Lantern's cases, `<preset>-<fork>-engine-<function>.bin` of phase0 to fulu, made by tests/generator/engine.py: no official cases test these functions.
+  - Requests: random blocks of the fork from the spec's `debug/random_value.py`, in each of its modes, and the JSON that the encoding rules of `common.md` give for them, with `kzg_commitment_to_versioned_hash` and `get_execution_requests_list` of the spec module.
+  - Responses: JSON-RPC responses of each method that Python's `json` module writes with several spacings and member orders, with members the parser ignores, and with values the spec does not allow.
+  - Payload attributes: random `PayloadAttributes` of the fork, as engine_forkchoiceUpdated requests with the fork's `PayloadAttributesVn`.
+  - Payload attributes of states, `<preset>-<fork>-engine-payload_attributes.bin`: the pre states of the spec's operations cases of execution_payload and withdrawals, each at a block's slot, with random fee recipients, and the attributes that the spec's prepare_execution_payload gives the execution engine. Bellatrix states before the merge are left out.
+  - getPayload results: random `GetPayloadResult` values of the fork in the JSON of `common.md` (`QUANTITY` and `DATA`, camelCase names), with several spacings, member orders and members the decoder skips; and texts it refuses: a `QUANTITY` with a leading zero, of no digit or past its width, a `DATA` of odd length, a missing or repeated field.
+  - Request lists: the `get_execution_requests_list` of random `ExecutionRequests`, and lists the spec's asserts of get_execution_requests reject.
+  - JWTs: the token of RFC 7519 with Python's `hmac`, `hashlib` and `base64` modules.
+  - HTTP responses: messages that follow RFC 9112, split at every byte to test the `LANTERN_HTTP_MORE` results, and malformed ones.
 
 ## Results
 

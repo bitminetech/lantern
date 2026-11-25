@@ -49,21 +49,6 @@
 - The runs lantern_db_state_diff writes: the words are the 8 byte pieces of the state's bytes from 0, the last one cut at `length`; a word differs when its bytes are not those of the patch's start (the first part of `base`, then zero bytes) at the same place. A run covers a group of differing words in which neighbours have at most 2 equal words between them; 3 or more equal words end a group, as another run's 16 bytes of header then cost less than those words. Its `offset` is its first word's, its end its last word's.
 - So a diff holds at most 24 + `length` rounded up to a multiple of 8 bytes: a run's header costs 16 bytes, and a second run leaves out 24 bytes or more.
 
-## Test vectors
-
-- Lantern's cases `<preset>-phase0-db-index.bin`, made by tests/generator/db.py, a model of the rules of this file: block and sidecar segments of made up records over several segments, each with its index.
-  - lantern_db_scan of each segment's bytes must give the case's valid length, and the `Db` after all segments must hold the case's `DbSlot` entries.
-  - lantern_db_find_root of each block root of the case must give its slot, and of made up roots no slot.
-  - Segments that end inside a record, or whose next record breaks a rule, must give the valid length up to that record.
-  - lantern_db_prune to a later first slot must leave the entries from it, and lantern_db_find_root of a dropped root no slot.
-  - lantern_db_drop_sidecars to the first slot of the second segment must leave no sidecar below it, and every block and every later sidecar as they were.
-  - A `Db` of small room must give `LANTERN_BUFFER_TOO_SMALL`, and lantern_db_copy to twice the room must hold the same index.
-  - State segments: a full state and diffs at slots with blocks, scanned after the block segments; a diff at offset 0, a full state above it, a state at a slot with no block, of another root, or a second at its slot must end the scan.
-- Lantern's cases `<preset>-phase0-db-state_diff.bin`, made by tests/generator/db.py from the state diffs' rules: pairs of made up bytes as a full state and a later state, with equal bytes, changed words near and apart, longer and shorter states, and lengths that are no multiple of 8.
-  - lantern_db_state_diff of the pair must give the case's diff; with an `out` of fewer bytes `LANTERN_BUFFER_TOO_SMALL` and the same `size`.
-  - lantern_db_state_patch of the full state and the diff must give the state's bytes; with an `out` of fewer bytes `LANTERN_BUFFER_TOO_SMALL` and the same `size`.
-  - Diffs that break a rule (a run past `length`, out of order, of `count` 0, at an `offset` no multiple of 8, with padding not zero, cut short, or with bytes after its last run) must give `LANTERN_INVALID_ENCODING` from lantern_db_state_patch.
-
 ## Function `lantern_db_size`
 
 The bytes of a `Db` whose parts have the capacities of a `DbRoom`.
@@ -399,6 +384,21 @@ The header of a record.
 - A record's size: 80 + `length`, rounded up to a multiple of 8.
 - The ByteList at 56 is valid in place, so the record's bytes in a mapped segment need no copy: lantern_db_add refuses another `size` or `offset`.
 - `DB_RECORD_MAX`: 2^32 bytes of `length`.
+
+## Test vectors
+
+- Lantern's cases `<preset>-phase0-db-index.bin`, made by tests/generator/db.py, a model of the rules of this file: block and sidecar segments of made up records over several segments, each with its index.
+  - lantern_db_scan of each segment's bytes must give the case's valid length, and the `Db` after all segments must hold the case's `DbSlot` entries.
+  - lantern_db_find_root of each block root of the case must give its slot, and of made up roots no slot.
+  - Segments that end inside a record, or whose next record breaks a rule, must give the valid length up to that record.
+  - lantern_db_prune to a later first slot must leave the entries from it, and lantern_db_find_root of a dropped root no slot.
+  - lantern_db_drop_sidecars to the first slot of the second segment must leave no sidecar below it, and every block and every later sidecar as they were.
+  - A `Db` of small room must give `LANTERN_BUFFER_TOO_SMALL`, and lantern_db_copy to twice the room must hold the same index.
+  - State segments: a full state and diffs at slots with blocks, scanned after the block segments; a diff at offset 0, a full state above it, a state at a slot with no block, of another root, or a second at its slot must end the scan.
+- Lantern's cases `<preset>-phase0-db-state_diff.bin`, made by tests/generator/db.py from the state diffs' rules: pairs of made up bytes as a full state and a later state, with equal bytes, changed words near and apart, longer and shorter states, and lengths that are no multiple of 8.
+  - lantern_db_state_diff of the pair must give the case's diff; with an `out` of fewer bytes `LANTERN_BUFFER_TOO_SMALL` and the same `size`.
+  - lantern_db_state_patch of the full state and the diff must give the state's bytes; with an `out` of fewer bytes `LANTERN_BUFFER_TOO_SMALL` and the same `size`.
+  - Diffs that break a rule (a run past `length`, out of order, of `count` 0, at an `offset` no multiple of 8, with padding not zero, cut short, or with bytes after its last run) must give `LANTERN_INVALID_ENCODING` from lantern_db_state_patch.
 
 ## Results
 

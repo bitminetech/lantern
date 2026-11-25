@@ -68,22 +68,6 @@
 - Signatures are verified with `crypto_bls_verify` and `crypto_bls_eth_fast_aggregate_verify` of asm-crypto, KZG proofs with `crypto_kzg_verify_blob_kzg_proof` (deneb, electra) and `crypto_kzg_verify_cell_kzg_proof_batch` (fulu).
 - lantern_seen_size, lantern_seen_init, lantern_seen_copy and lantern_seen_add_block read no fork's layouts. Each is in the common object of the core (asm/core/<ISA>/common.s), and its symbol is its name.
 
-## Test vectors
-
-- consensus-spec-tests v1.7.0-beta.4, `tests/<preset>/<fork>/networking/<handler>/` of phase0 to fulu, for mainnet and minimal.
-  - File: `mainnet.tar.gz` and `minimal.tar.gz` of the release, with the SHA-256 in tests/generator/generate.py.
-  - Handlers `get_custody_groups` and `compute_columns_for_custody_group` (fulu): the runner compares `result` with the output list.
-  - Handlers `gossip_<topic>`: the runner follows `tests/formats/networking/gossip_validation.md` of the spec. It builds the store with lantern_get_forkchoice_store and lantern_on_block, records a `failed` or `pending` block with lantern_seen_add_block, sets a block's `payload_status` with lantern_store_payload_status, writes `finalized_checkpoint` into the store and, for fulu, `seen_partial_data_column_headers` into `seen`, then validates each message in order and compares `valid`, `ignore` or `reject`.
-  - Bellatrix: the runner passes as `justified_state` the state it keeps for the root of the store's `justified_checkpoint`.
-  - The runner applies the `config` part of a gossip case over the preset's config.
-- Lantern's cases of the p2p helpers, `<preset>-<fork>-p2p-<function>.bin` of phase0 to fulu, made by tests/generator/p2p.py: no official cases test these functions.
-  - The expected results of the spec functions come from the spec modules of consensus-specs v1.7.0-beta.4 (aa16bb4), which the generator builds: each case runs the function with the case's `config` part over the preset's config. A null `output` is where the spec raises; the runner then expects the error the function documents.
-  - lantern_compute_enr_fork_id and lantern_compute_next_fork_digest follow the text of the `eth2` field and Next fork digest sections, with compute_fork_digest and compute_fork_version of the spec module. lantern_gossip_topic, lantern_gossip_topic_parse and lantern_compute_message_id follow the text of Topics and messages of phase0 and of the message-id of phase0 and altair, with python-snappy 0.7.3.
-  - The runner also checks each output buffer one entry or byte short, and the guard bytes after every output.
-- consensus-spec-tests v1.7.0-beta.4, `tests/<preset>/<fork>/merkle_proof/single_merkle_proof/BeaconBlockBody/` of deneb to fulu.
-  - Deneb and electra: the runner builds a `BlobSidecar` of the commitment that the case's `leaf_index` names, the case's `branch` and a block header with the body's root, and checks that lantern_verify_blob_sidecar_inclusion_proof accepts it, and rejects it with one branch byte changed.
-  - Fulu: the runner builds a `PartialDataColumnHeader` of the body's `blob_kzg_commitments`, the case's `branch` and a block header with the body's root, and checks that lantern_verify_partial_data_column_header_inclusion_proof accepts it, and rejects it with one branch byte changed.
-
 ## Function `lantern_get_custody_groups`
 
 The custody_group_count custody groups of node_id, in ascending order.
@@ -1006,6 +990,22 @@ The spec's `Seen` of every fork, and the blocks of `store.blocks` that have no p
 | 0 | `block_root` | Root | The key of `partial_data_column_headers` |
 | 32 | `header_root` | Root | hash_tree_root of the header |
 | 64 | `header` | `PartialDataColumnHeader` | The header's value; its size is the entry's size minus 64 |
+
+## Test vectors
+
+- consensus-spec-tests v1.7.0-beta.4, `tests/<preset>/<fork>/networking/<handler>/` of phase0 to fulu, for mainnet and minimal.
+  - File: `mainnet.tar.gz` and `minimal.tar.gz` of the release, with the SHA-256 in tests/generator/generate.py.
+  - Handlers `get_custody_groups` and `compute_columns_for_custody_group` (fulu): the runner compares `result` with the output list.
+  - Handlers `gossip_<topic>`: the runner follows `tests/formats/networking/gossip_validation.md` of the spec. It builds the store with lantern_get_forkchoice_store and lantern_on_block, records a `failed` or `pending` block with lantern_seen_add_block, sets a block's `payload_status` with lantern_store_payload_status, writes `finalized_checkpoint` into the store and, for fulu, `seen_partial_data_column_headers` into `seen`, then validates each message in order and compares `valid`, `ignore` or `reject`.
+  - Bellatrix: the runner passes as `justified_state` the state it keeps for the root of the store's `justified_checkpoint`.
+  - The runner applies the `config` part of a gossip case over the preset's config.
+- Lantern's cases of the p2p helpers, `<preset>-<fork>-p2p-<function>.bin` of phase0 to fulu, made by tests/generator/p2p.py: no official cases test these functions.
+  - The expected results of the spec functions come from the spec modules of consensus-specs v1.7.0-beta.4 (aa16bb4), which the generator builds: each case runs the function with the case's `config` part over the preset's config. A null `output` is where the spec raises; the runner then expects the error the function documents.
+  - lantern_compute_enr_fork_id and lantern_compute_next_fork_digest follow the text of the `eth2` field and Next fork digest sections, with compute_fork_digest and compute_fork_version of the spec module. lantern_gossip_topic, lantern_gossip_topic_parse and lantern_compute_message_id follow the text of Topics and messages of phase0 and of the message-id of phase0 and altair, with python-snappy 0.7.3.
+  - The runner also checks each output buffer one entry or byte short, and the guard bytes after every output.
+- consensus-spec-tests v1.7.0-beta.4, `tests/<preset>/<fork>/merkle_proof/single_merkle_proof/BeaconBlockBody/` of deneb to fulu.
+  - Deneb and electra: the runner builds a `BlobSidecar` of the commitment that the case's `leaf_index` names, the case's `branch` and a block header with the body's root, and checks that lantern_verify_blob_sidecar_inclusion_proof accepts it, and rejects it with one branch byte changed.
+  - Fulu: the runner builds a `PartialDataColumnHeader` of the body's `blob_kzg_commitments`, the case's `branch` and a block header with the body's root, and checks that lantern_verify_partial_data_column_header_inclusion_proof accepts it, and rejects it with one branch byte changed.
 
 ## Results
 

@@ -89,14 +89,6 @@
 - The `process_*` operation functions take (`state`, the operation, `config`, `scratch`, `result`) in that order.
 - Signatures are verified with `crypto_bls_verify`, `crypto_bls_fast_aggregate_verify` and `crypto_bls_eth_fast_aggregate_verify` of asm-crypto; keys are combined with its `crypto_bls_g1_*` functions.
 
-## Test vectors
-
-- consensus-spec-tests v1.7.0-beta.4, `tests/<preset>/<fork>/operations/<handler>/` of each fork, for mainnet and minimal.
-  - File: `mainnet.tar.gz` and `minimal.tar.gz` of the release, with the SHA-256 in tests/generator/generate.py.
-  - Cases with `bls_setting` 2 were made with signature checks turned off. `runner-<preset>` skips them; `runner-<preset>-bls-off` runs only them, with the three asm-crypto signature checks replaced by tests/runner/bls_off.c as in the spec's test mode.
-- Each runner process keeps one `PubkeyCache` of lantern_pubkey_cache_size(4096), named at `CONFIG_PUBKEY_CACHE` of every call's config; `runner-<preset>-bls-off` names none, as the spec's tests with signatures off check no key.
-- Each runner process keeps one `CommitteeCache` of lantern_committee_cache_size(4096); the config of every call names it at `CONFIG_COMMITTEE_CACHE`, and lantern_committee_cache_init empties it before each case, so the states of one case are those of one chain.
-
 ## Function `lantern_process_block`
 
 process_block_header, process_withdrawals, process_execution_payload, process_randao, process_eth1_data, process_operations and process_sync_aggregate; stops at the first failed check.
@@ -1426,6 +1418,14 @@ An epoch and the blob limit from it.
 |---|---|---|---|
 | 0 | `epoch` | u64 | First epoch of the limit |
 | 8 | `max_blobs_per_block` | u64 | The limit |
+
+## Test vectors
+
+- consensus-spec-tests v1.7.0-beta.4, `tests/<preset>/<fork>/operations/<handler>/` of each fork, for mainnet and minimal.
+  - File: `mainnet.tar.gz` and `minimal.tar.gz` of the release, with the SHA-256 in tests/generator/generate.py.
+  - Cases with `bls_setting` 2 were made with signature checks turned off. `runner-<preset>` skips them; `runner-<preset>-bls-off` runs only them, with the three asm-crypto signature checks replaced by tests/runner/bls_off.c as in the spec's test mode.
+- Each runner process keeps one `PubkeyCache` of lantern_pubkey_cache_size(4096), named at `CONFIG_PUBKEY_CACHE` of every call's config; `runner-<preset>-bls-off` names none, as the spec's tests with signatures off check no key.
+- Each runner process keeps one `CommitteeCache` of lantern_committee_cache_size(4096); the config of every call names it at `CONFIG_COMMITTEE_CACHE`, and lantern_committee_cache_init empties it before each case, so the states of one case are those of one chain.
 
 ## Results
 

@@ -30,14 +30,6 @@
 - A stream carries one request, then the chunks of its response. The functions here encode and decode one chunk; the caller keeps the stream's bytes and its state.
 - Every function reads no fork's layouts. Each is in the common object of the core (asm/core/<ISA>/common.s), and its symbol is its name.
 
-## Test vectors
-
-- Lantern's cases, `<preset>-<fork>-reqresp-<function>.bin` of phase0 to fulu, made by tests/generator/reqresp.py: no official cases test the encoding.
-  - The chunks come from the spec's text with python-snappy 0.7.3 framing: valid chunks of each message type, and chunks the spec calls invalid input (a length prefix over 10 bytes or over 2^64 - 1, a payload that ends early, a compressed payload over max_compressed_len, a bad frame).
-  - The size bounds come from the SSZ types of the spec modules, by the rules of remerkleable's `min_byte_length` and `max_byte_length`, the reference that the spec's "What are SSZ type size bounds" links.
-  - The message types of [include/types.inc](../../include/types.inc) also have reference descriptors in `<preset>-<fork>-descriptors.bin`, built from the spec's text by the same file.
-  - lantern_reqresp_write_chunk has no expected bytes, since two Snappy compressors may differ: the runner reads each chunk it writes back with lantern_reqresp_read_header and lantern_reqresp_read_payload.
-
 ## Function `lantern_reqresp_protocol_parse`
 
 The method and version of a protocol ID `/eth2/beacon_chain/req/` + the method name + `/` + the version + `/ssz_snappy`.
@@ -288,6 +280,14 @@ lantern_ssz_size_bounds(type, out) -> status
 |---|---|---|---|
 | 0 | `min` | u64 | The least bytes |
 | 8 | `max` | u64 | The most bytes |
+
+## Test vectors
+
+- Lantern's cases, `<preset>-<fork>-reqresp-<function>.bin` of phase0 to fulu, made by tests/generator/reqresp.py: no official cases test the encoding.
+  - The chunks come from the spec's text with python-snappy 0.7.3 framing: valid chunks of each message type, and chunks the spec calls invalid input (a length prefix over 10 bytes or over 2^64 - 1, a payload that ends early, a compressed payload over max_compressed_len, a bad frame).
+  - The size bounds come from the SSZ types of the spec modules, by the rules of remerkleable's `min_byte_length` and `max_byte_length`, the reference that the spec's "What are SSZ type size bounds" links.
+  - The message types of [include/types.inc](../../include/types.inc) also have reference descriptors in `<preset>-<fork>-descriptors.bin`, built from the spec's text by the same file.
+  - lantern_reqresp_write_chunk has no expected bytes, since two Snappy compressors may differ: the runner reads each chunk it writes back with lantern_reqresp_read_header and lantern_reqresp_read_payload.
 
 ## Results
 

@@ -22,11 +22,6 @@
 
 - As in [block-processing.md](block-processing.md#common-rules).
 
-## Test vectors
-
-- consensus-spec-tests v1.7.0-beta.4, `tests/<preset>/<fork>/sanity/slots/`, `sanity/blocks/`, `finality/finality/` and `random/random/` of each fork, for mainnet and minimal.
-  - File: `mainnet.tar.gz` and `minimal.tar.gz` of the release, with the SHA-256 in tests/generator/generate.py.
-
 ## Function `lantern_state_transition`
 
 process_slots to the block's slot; with validate_result, the block signature check; process_block; with validate_result, the state root check. With `slots_done` 1 and a state at the block's slot already, no process_slots: `fork.md` of each fork runs its upgrade inside process_slots, as the slot reaches the fork's first slot, and lantern's upgrade writes a new state there (lantern_upgrade_to_<fork>), so a block at the fork's first slot goes on from that state.
@@ -138,6 +133,11 @@ The spec's validate_result, the answer of the execution engine to the block's pa
 ### Rules
 
 - 24 bytes.
+
+## Test vectors
+
+- consensus-spec-tests v1.7.0-beta.4, `tests/<preset>/<fork>/sanity/slots/`, `sanity/blocks/`, `finality/finality/` and `random/random/` of each fork, for mainnet and minimal.
+  - File: `mainnet.tar.gz` and `minimal.tar.gz` of the release, with the SHA-256 in tests/generator/generate.py.
 
 ## Results
 
