@@ -58,7 +58,7 @@ lantern_metrics_text(categories, sources, out) -> status
 
 | Name | Role | Type |
 |---|---|---|
-| `categories` | input | u64: the bits of the sub categories ([Categories](#categories)) |
+| `categories` | input | u64: the bits of the sub categories ([`MetricEntry`](#type-metricentry)) |
 | `sources` | input | [`MetricsSources`](#type-metricssources) |
 | `out` | output | `ByteList`, its `size` set by the caller |
 
