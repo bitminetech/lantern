@@ -13,7 +13,6 @@
 - [`lantern_node_import`](#function-lantern_node_import): on_block of a block's SSZ bytes, for one fork.
 - [`lantern_node_block_root`](#function-lantern_node_block_root): the root of a block's SSZ bytes, for one fork.
 - [`lantern_node_proposers`](#function-lantern_node_proposers): the proposers of an epoch and its dependent root, from the state at its first slot, for one fork.
-- [`lantern_node_event_roots`](#function-lantern_node_event_roots): the block root, state root and dependent roots of a block's post-state, for one fork.
 - [`lantern_node_attestation_data`](#function-lantern_node_attestation_data): the `AttestationData` of a state's slot, for one fork.
 - [`lantern_node_attester_duties`](#function-lantern_node_attester_duties): the committee assignments of validators in an epoch, for one fork.
 - [`lantern_node_liveness`](#function-lantern_node_liveness): whether validators were seen live in an epoch, from a state and a `Seen`, for one fork.
@@ -28,10 +27,9 @@
 - [`lantern_node_sync_committee`](#function-lantern_node_sync_committee): the validator indices of a state's sync committee of an epoch, for one fork.
 - [`lantern_node_proposer_lookahead`](#function-lantern_node_proposer_lookahead): a state's `proposer_lookahead`, for one fork.
 - [`lantern_node_weights`](#function-lantern_node_weights): get_weight of each node of a store, for one fork.
+- [`lantern_node_data_root`](#function-lantern_node_data_root): hash_tree_root of an `AttestationData`'s SSZ bytes, for one fork.
 - [`lantern_node_sync_subnets`](#function-lantern_node_sync_subnets): compute_subnets_for_sync_committee of a validator, for one fork.
 - [`lantern_node_sync_positions`](#function-lantern_node_sync_positions): the places of a validator in that sync committee, for one fork.
-- [`lantern_node_data_root`](#function-lantern_node_data_root): hash_tree_root of an `AttestationData`'s SSZ bytes, for one fork.
-- [`lantern_node_pending`](#function-lantern_node_pending): the items of a pending list of a state, for one fork.
 - [`lantern_node_produce_check`](#function-lantern_node_produce_check): the proposer of a state's slot, its randao reveal checked, for one fork.
 - [`lantern_node_payload_result`](#function-lantern_node_payload_result): the SSZ bytes of an engine_getPayload result, for one fork.
 - [`lantern_node_produce_fold`](#function-lantern_node_produce_fold): a pool entry added to the body draft of a block to produce, for one fork.
@@ -44,13 +42,14 @@
 - [`lantern_node_publish_decode`](#function-lantern_node_publish_decode): the signed block of a publishBlockV2 body, for one fork.
 - [`lantern_node_publish_sidecars`](#function-lantern_node_publish_sidecars): the sidecars of a publishBlockV2 body, for one fork from deneb.
 - [`lantern_node_publish_check`](#function-lantern_node_publish_check): the checks of `broadcast_validation` of a block to publish, for one fork.
+- [`lantern_node_pending`](#function-lantern_node_pending): the items of a pending list of a state, for one fork.
 - [`lantern_node_blinded_block`](#function-lantern_node_blinded_block): the blinded block of a block's SSZ bytes, for one fork.
+- [`lantern_node_event_roots`](#function-lantern_node_event_roots): the block root, state root and dependent roots of a block's post-state, for one fork.
 - [`lantern_node_attestation`](#function-lantern_node_attestation): on_attestation of an attestation's SSZ bytes, for one fork.
 - [`lantern_node_attester_slashing`](#function-lantern_node_attester_slashing): on_attester_slashing of a slashing's SSZ bytes, for one fork.
 - [`lantern_node_gossip`](#function-lantern_node_gossip): the gossip validation of a message's SSZ bytes, for one fork.
 - [`lantern_node_blob_sidecar`](#function-lantern_node_blob_sidecar): the checks of a blob sidecar of a response, for deneb or electra.
 - [`lantern_node_column_sidecar`](#function-lantern_node_column_sidecar): the checks of a column sidecar of a response, for fulu.
-- [`lantern_node_new_payload`](#function-lantern_node_new_payload): the HTTP request of engine_newPayload for a block's SSZ bytes, for one fork.
 - [`lantern_node_db_scan`](#function-lantern_node_db_scan): adds a segment file's records to the node's `Db`.
 - [`lantern_node_anchor`](#function-lantern_node_anchor): the anchor state and block of a genesis state's SSZ bytes, for one fork.
 - [`lantern_node_anchor_block`](#function-lantern_node_anchor_block): the anchor state and block of a finalized state and its block, for one fork.
@@ -60,66 +59,59 @@
 - [`lantern_node_backfill`](#function-lantern_node_backfill): the proposer signature of an older block of the backfill, for the fork of a state.
 - [`lantern_node_block_header`](#function-lantern_node_block_header): the signed header of a block's SSZ bytes, for one fork.
 - [`lantern_node_state_checkpoints`](#function-lantern_node_state_checkpoints): the three checkpoints of a state, for one fork.
+- [`lantern_node_new_payload`](#function-lantern_node_new_payload): the HTTP request of engine_newPayload for a block's SSZ bytes, for one fork.
 - [`lantern_node_json`](#function-lantern_node_json): the JSON of a block's or a state's SSZ bytes, a chunk at a time, for one fork.
 
 ### Types
 
+- [`ProduceParams`](#type-produceparams): | Offset | Field | Type | Meaning |.
 - [`Node`](#type-node): the state of the node.
 - [`NodeRoom`](#type-noderoom): the capacities of a `Node`.
+- [`Eth1Count`](#type-eth1count): the deposits of the contract after an eth1 block with deposits (the eth1 follower).
+- [`NodeProposer`](#type-nodeproposer): a validator's fee recipient (beacon-api.md, prepareBeaconProposer).
+- [`ProduceDraft`](#type-producedraft): the body draft of a produceBlockV3 (beacon-api.md), which the fold works fill in place.
+- [`Eth1Snapshot`](#type-eth1snapshot): what the eth1 follower holds for a block to produce (lantern_node_produce_eth1).
+- [`DraftAggregate`](#type-draftaggregate): the aggregate of the pool's attestations of one `AttestationData` and committee.
+- [`NodePool`](#type-nodepool): an operation of the pool (beacon-api.md, the pools).
 - [`NodeBlock`](#type-nodeblock): a block the node knows.
 - [`NodeCheckpoint`](#type-nodecheckpoint): a checkpoint state the node keeps.
 - [`NodePeer`](#type-nodepeer): a connected libp2p peer.
 - [`NodeStream`](#type-nodestream): a req/resp stream a peer opened.
+- [`NodeResponse`](#type-noderesponse): the response bytes of a request of the node.
+- [`NodeGossipState`](#type-nodegossipstate): a proposer state of gossip messages: a copy of a parent's post-state that the messages of that parent root and slot share.
 - [`NodeMessage`](#type-nodemessage): a gossip message the node holds.
 - [`NodeBlob`](#type-nodeblob): a blob sidecar, or from fulu a column sidecar, the node holds.
 - [`NodeApi`](#type-nodeapi): a Beacon API answer the node streams.
 - [`NodeGossip`](#type-nodegossip): the inputs of lantern_node_gossip.
 - [`NodeAnchor`](#type-nodeanchor): the anchor of lantern_node_init.
 - [`NodeStepResult`](#type-nodestepresult): the output of lantern_node_step.
-- [`NodeEvents`](#type-nodeevents), [`NodeEvent`](#type-nodeevent): the events of lantern_node_step.
-- [`NodeActions`](#type-nodeactions), [`NodeAction`](#type-nodeaction): the actions of lantern_node_step.
+- [`NodeEvents`](#type-nodeevents): the events of one step: a ByteList whose bytes are `NodeEvent` entries one after another.
+- [`NodeEvent`](#type-nodeevent): NodeEvent.
+- [`NodeActions`](#type-nodeactions): the actions of one step: a ByteList whose bytes are `NodeAction` entries one after another. The step adds after its `count` bytes.
+- [`NodeAction`](#type-nodeaction): NodeAction.
+- [`BufferId`](#type-bufferid): the name of a beacon state or a stored byte string that the shell holds: a u64 the node gives.
 
 ## Spec
 
 - Document: [consensus-specs v1.7.0-beta.4](https://github.com/ethereum/consensus-specs/tree/aa16bb4c156184e9548a997d53efaf2a228a6304/specs), `fork-choice.md` of phase0 to fulu: the handlers, `store.block_states` and `store.checkpoint_states`.
-- `fork.md` of altair to fulu, Fork transition: the upgrade runs once process_slots has set the slot to the fork's first slot; the block of that slot then goes on from the upgraded state. A state of an older fork crosses each fork boundary in turn.
-- `p2p-interface.md` of phase0, altair and fulu, The Req/Resp domain: Status, Goodbye, Ping and MetaData, their versions, and the result codes.
-- `p2p-interface.md` of phase0, Status: once the handshake completes, the client with the lower `head_slot` requests blocks with BeaconBlocksByRange; after some rounds of it, a client may send Status again to learn of a higher head. Clients SHOULD disconnect on another `fork_digest`, or on a finalized checkpoint not in their chain at its epoch.
-- `p2p-interface.md` of phase0 to fulu, The gossip domain: the topics of each fork, the message-id, `MAX_PAYLOAD_SIZE`, and the validation of each topic, as [networking.md](networking.md) gives it.
-- `fork-choice.md` of deneb, `is_data_available`: a block is not valid until its blobs are downloaded; the network does not promise sidecars outside `MIN_EPOCHS_FOR_BLOB_SIDECARS_REQUESTS`.
-- `p2p-interface.md` of deneb, BlobSidecarsByRange v1: the reader checks each sidecar's format, inclusion proof and KZG proof before the next chunk.
-- `p2p-interface.md` of fulu, BeaconBlocksByHead v1: the blocks of the ancestry of `beacon_root`, inclusive, in descending slot order, until `min(count, MAX_REQUEST_BLOCKS_DENEB)` blocks or an ancestor outside the epochs a node must serve; at least one block when the node has the block at `beacon_root`; a ForkDigest context for each chunk.
-- `p2p-interface.md` of deneb, BlobSidecarsByRange v1 and BlobSidecarsByRoot v1: the server sends the sidecars of the head's chain in (slot, index) order, or of the requested identifiers in their order, at most compute_max_request_blob_sidecars; of electra, its limit; of fulu, the deprecation: sidecars before `FULU_FORK_EPOCH`, an empty list at or after it.
-- `fork-choice.md` of fulu, `is_data_available`: every column sidecar the node samples passes verify_data_column_sidecar and verify_data_column_sidecar_kzg_proofs; the network does not promise sidecars outside `MIN_EPOCHS_FOR_DATA_COLUMN_SIDECARS_REQUESTS`.
-- `das-core.md` of fulu, Custody sampling: the node samples the columns of the groups of get_custody_groups(node_id, max(`SAMPLES_PER_SLOT`, custody_group_count)); its custody groups are the first custody_group_count of them. Column gossip: the node joins the subnets of the columns it samples. A node may custody more than `CUSTODY_REQUIREMENT` groups, "up to `NUMBER_OF_CUSTODY_GROUPS`, indicating a super-full node": with `NODE_FLAG_SUPERNODE`, lantern's custody_group_count is `NUMBER_OF_CUSTODY_GROUPS`, so it samples every column.
-- `p2p-interface.md` of fulu, DataColumnSidecarsByRange v1 and DataColumnSidecarsByRoot v1: the reader checks each sidecar's format, inclusion proof and KZG proofs before the next chunk; the server sends the sidecars of the head's chain in (slot, column index) order, or of the requested identifiers in their order, at most compute_max_request_data_column_sidecars. GetMetaData v3: the peer's `custody_group_count`.
-- `validator.md` of fulu, Validator custody: a node with validators attached custodies get_validators_custody_requirement of the latest finalized state and their indices, advertises that count in its MetaData and record, never advertises a lower one, keeps it across restarts, and its Status v2 `earliest_available_slot` is the slot from which it serves all its sidecars (`p2p-interface.md` of fulu, Status v2).
-- `das-core.md` of fulu, Reconstruction and cross-seeding: with 50% or more of the columns of a block the node rebuilds the others (recover_matrix with recover_cells_and_kzg_proofs), after a delay the spec allows, keeps and serves them as if received, and sends those of its subnets on gossip.
+- Section: `fork.md` of altair to fulu, Fork transition: the upgrade runs once process_slots has set the slot to the fork's first slot; the block of that slot then goes on from the upgraded state. A state of an older fork crosses each fork boundary in turn.
+- Section: `p2p-interface.md` of phase0, altair and fulu, The Req/Resp domain: Status, Goodbye, Ping and MetaData, their versions, and the result codes.
+- Section: `p2p-interface.md` of phase0, Status: once the handshake completes, the client with the lower `head_slot` requests blocks with BeaconBlocksByRange; after some rounds of it, a client may send Status again to learn of a higher head. Clients SHOULD disconnect on another `fork_digest`, or on a finalized checkpoint not in their chain at its epoch.
+- Section: `p2p-interface.md` of phase0 to fulu, The gossip domain: the topics of each fork, the message-id, `MAX_PAYLOAD_SIZE`, and the validation of each topic, as [networking.md](networking.md) gives it.
+- Section: `fork-choice.md` of deneb, `is_data_available`: a block is not valid until its blobs are downloaded; the network does not promise sidecars outside `MIN_EPOCHS_FOR_BLOB_SIDECARS_REQUESTS`.
+- Section: `p2p-interface.md` of deneb, BlobSidecarsByRange v1: the reader checks each sidecar's format, inclusion proof and KZG proof before the next chunk.
+- Section: `p2p-interface.md` of fulu, BeaconBlocksByHead v1: the blocks of the ancestry of `beacon_root`, inclusive, in descending slot order, until `min(count, MAX_REQUEST_BLOCKS_DENEB)` blocks or an ancestor outside the epochs a node must serve; at least one block when the node has the block at `beacon_root`; a ForkDigest context for each chunk.
+- Section: `p2p-interface.md` of deneb, BlobSidecarsByRange v1 and BlobSidecarsByRoot v1: the server sends the sidecars of the head's chain in (slot, index) order, or of the requested identifiers in their order, at most compute_max_request_blob_sidecars; of electra, its limit; of fulu, the deprecation: sidecars before `FULU_FORK_EPOCH`, an empty list at or after it.
+- Section: `fork-choice.md` of fulu, `is_data_available`: every column sidecar the node samples passes verify_data_column_sidecar and verify_data_column_sidecar_kzg_proofs; the network does not promise sidecars outside `MIN_EPOCHS_FOR_DATA_COLUMN_SIDECARS_REQUESTS`.
+- Section: `das-core.md` of fulu, Custody sampling: the node samples the columns of the groups of get_custody_groups(node_id, max(`SAMPLES_PER_SLOT`, custody_group_count)); its custody groups are the first custody_group_count of them. Column gossip: the node joins the subnets of the columns it samples. A node may custody more than `CUSTODY_REQUIREMENT` groups, "up to `NUMBER_OF_CUSTODY_GROUPS`, indicating a super-full node": with `NODE_FLAG_SUPERNODE`, lantern's custody_group_count is `NUMBER_OF_CUSTODY_GROUPS`, so it samples every column.
+- Section: `p2p-interface.md` of fulu, DataColumnSidecarsByRange v1 and DataColumnSidecarsByRoot v1: the reader checks each sidecar's format, inclusion proof and KZG proofs before the next chunk; the server sends the sidecars of the head's chain in (slot, column index) order, or of the requested identifiers in their order, at most compute_max_request_data_column_sidecars. GetMetaData v3: the peer's `custody_group_count`.
+- Section: `validator.md` of fulu, Validator custody: a node with validators attached custodies get_validators_custody_requirement of the latest finalized state and their indices, advertises that count in its MetaData and record, never advertises a lower one, keeps it across restarts, and its Status v2 `earliest_available_slot` is the slot from which it serves all its sidecars (`p2p-interface.md` of fulu, Status v2).
+- Section: `das-core.md` of fulu, Reconstruction and cross-seeding: with 50% or more of the columns of a block the node rebuilds the others (recover_matrix with recover_cells_and_kzg_proofs), after a delay the spec allows, keeps and serves them as if received, and sends those of its subnets on gossip.
 - The node ID of a secp256k1 key: keccak256 of the key's 64-byte uncompressed point (x then y), the discv5 identity scheme "v4" (EIP-778). get_custody_groups reads those 32 bytes as a big-endian number, as Lighthouse does (`U256::from_be_slice` in consensus/types/src/data/data_column_custody_group.rs); a `NodeID` holds them in reverse order.
-- `p2p-interface.md` of phase0 to fulu, The discovery domain: discv5: the ENR keys `eth2` (`ENRForkID`), `attnets`, `syncnets` (altair), `cgc` and `nfd` (fulu); peers whose `eth2` fork digest is the node's. The Req/Resp domain, Status: the dialing client MUST send a Status request upon connection.
-- `optimistic-sync.md` of bellatrix: optimistic import, the optimistic candidate, how to apply `latestValidHash`, execution engine errors.
+- Section: `p2p-interface.md` of phase0 to fulu, The discovery domain: discv5: the ENR keys `eth2` (`ENRForkID`), `attnets`, `syncnets` (altair), `cgc` and `nfd` (fulu); peers whose `eth2` fork digest is the node's. The Req/Resp domain, Status: the dialing client MUST send a Status request upon connection.
+- Section: `optimistic-sync.md` of bellatrix: optimistic import, the optimistic candidate, how to apply `latestValidHash`, execution engine errors.
 - [execution-apis 981aa66](https://github.com/ethereum/execution-apis/tree/981aa66d79364be8322a9c358aaf0a571cca0873/src/engine): engine_newPayload and engine_forkchoiceUpdated, with the requests and answers of [engine-api.md](engine-api.md). The safe block is the justified checkpoint's root (fork-choice `safe-block.md`).
 - ARCHITECTURE.md sections 2 and 6: the event and action model; section 7: the calls to asm-libp2p.
-
-## Common rules
-
-- As in [helpers.md](helpers.md#common-rules) and [fork-choice.md](fork-choice.md#common-rules).
-- The shell owns every buffer. The core names a beacon state or a stored byte string by a `BufferId`: a u64 from 1 that the node gives. 0 names none. The shell maps each id to its buffer.
-- lantern_node_step reads no beacon state. Work on beacon states and stored bytes is a `NODE_ACT_WORK` action.
-- The shell does the actions of one step in order. For a `NODE_ACT_WORK` action it calls lantern_node_run with the buffers of its ids, and passes the event that run writes to a later step.
-- The node keeps `store.block_states` as the post-state id of each imported `NodeBlock`, and `store.checkpoint_states` as its `NodeCheckpoint` entries.
-- The fork of a slot is the last fork whose epoch in the node's config is at most the slot's epoch. The node calls the functions of the fork of the block, the attestation, the state or the store's slot it works on.
-- A state's slot is the u64 at `NODE_STATE_SLOT` of its value in every fork.
-- The node owns a libp2p `State` of asm-libp2p, built by the shell with `libp2p_init` from a config whose protocol list is lantern_node_protocols. lantern_node_step calls `libp2p_step` with it: first with the libp2p events of the `NODE_EV_P2P` events and the events the node queued, then with the events the node queued in that step, up to `NODE_P2P_ROUNDS` times.
-- The application's shell may run asm-discv5 for the node (`NODE_FLAG_DISCV5`): it passes each record discv5 finds, and each bootnode record, in a `NODE_EV_ENR`, and the asm-discv5 events of each `NODE_ACT_DISCV5` to discv5_step.
-- libp2p's actions go out in a `NODE_ACT_P2P_LIST` action. The shell does its shell requests in order; the node took its application notices.
-- The node's queue (`p2p_out`) is one ByteList of libp2p events inside the node. libp2p_step reads it in place.
-- A stream carries one request and one answer, as the req/resp functions of [req-resp.md](req-resp.md) encode them.
-- The node answers the Beacon API ([beacon-api.md](beacon-api.md)). The shell keeps the connections: it reads each request with lantern_http_request and passes it in a `NODE_EV_API`, one request of a connection at a time, and writes the bytes of each `NODE_ACT_API_SEND` to its connection. A connection is a u64 the shell gives. The node keeps a `NodeApi` entry for each answer it sends in more than one chunk, and no other state of a connection.
-- A streamed answer goes one chunk at a time: the shell passes a `NODE_EV_API_SENT` of the connection once it has room for the next chunk, and a `NODE_EV_API_CLOSED` when the connection closes.
-- lantern_node_size, lantern_node_init, lantern_node_copy, lantern_node_step, lantern_node_run and lantern_node_protocols are in the common object of the core (asm/core/<ISA>/node.s), and each symbol is its name.
-- lantern_node_import, lantern_node_block_root, lantern_node_attestation, lantern_node_attester_slashing, lantern_node_gossip and lantern_node_json are in each fork object (asm/core/<ISA>/nodehooks.s), exported as `lantern_<fork>_<name>`. lantern_node_blob_sidecar is in the deneb and electra objects only, lantern_node_column_sidecar in the fulu object only, lantern_node_new_payload in the bellatrix and later objects.
-
 ## Function `lantern_node_size`
 
 The bytes of a `Node` whose parts have the capacities of a `NodeRoom`.
@@ -141,6 +133,21 @@ lantern_node_size(room, size) -> status
 
 - `LANTERN_OK`: `size` holds `NODE_FIXED` plus the bytes of each part.
 - `LANTERN_INVALID_OVERFLOW`: the size is 2^64 or more, or `db_roots` is not a power of two.
+
+### Function never
+
+- Makes an OS call.
+
+### Limits
+
+- Stack of its own: 8 bytes on x86-64 (return address included), 0 bytes on ARM64, 0 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_node_size`, with `_` before it on macOS.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6); each argument is a pointer: a Uint64 argument points at a u64, and a Boolean output is a u64 of 0 or 1.
+- Argument order: `room`, `size`.
 
 ## Function `lantern_node_init`
 
@@ -170,6 +177,11 @@ lantern_node_init(room, config, anchor, flags, node) -> status
 - `LANTERN_INVALID_EVENT`: with `NODE_FLAG_ENGINE`, `engine_host_len` is above `NODE_ENGINE_HOST_MAX`; with `NODE_FLAG_BUILDER`, `builder_host_len` is.
 - `LANTERN_INVALID_CUSTODY_GROUP`: max(`SAMPLES_PER_SLOT`, the node's custody group count) of `config` is above `NUMBER_OF_CUSTODY_GROUPS` or 128.
 
+### Caller must
+
+- Keep the anchor state as `BufferId` 1, and the light client store as `BufferId` 2: an `LcStore` of lantern_lc_store_init (light-client.md) of the anchor state and its block, with capacities of the caller's choice.
+- Make the store with lantern_get_forkchoice_store of the same anchor.
+
 ### Function does
 
 - The node keeps the anchor's `node_id`; `attnets` is 0 until its first subscription.
@@ -180,10 +192,20 @@ lantern_node_init(room, config, anchor, flags, node) -> status
 - With `NODE_FLAG_DB`, the node keeps the anchor's `archive_slots`; `archive_slot`, `archive_first` and `archive_segment` are 2^64 - 1.
 - With `NODE_FLAG_ENGINE`, the node keeps the anchor's `jwt_secret` and `engine_host`; its first JSON-RPC id is 1, and it takes `NODE_FLAG_FCU`, so the anchor's head goes to the engine first.
 
-### Caller must
+### Function never
 
-- Keep the anchor state as `BufferId` 1, and the light client store as `BufferId` 2: an `LcStore` of lantern_lc_store_init (light-client.md) of the anchor state and its block, with capacities of the caller's choice.
-- Make the store with lantern_get_forkchoice_store of the same anchor.
+- Makes an OS call.
+
+### Limits
+
+- Stack of its own: 112 bytes on x86-64 (return address included), 112 bytes on ARM64, 112 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_node_init`, with `_` before it on macOS.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6); each argument is a pointer: a Uint64 argument points at a u64, and a Boolean output is a u64 of 0 or 1.
+- Argument order: `room`, `config`, `anchor`, `flags`, `node`.
 
 ## Function `lantern_node_copy`
 
@@ -208,6 +230,21 @@ lantern_node_copy(node, room, out) -> status
 - `LANTERN_OK`: `out` holds the node.
 - `LANTERN_BUFFER_TOO_SMALL`: `out` is smaller than lantern_node_size of `room`, a capacity of `room` is below the entries of its part, or lantern_db_copy of the `Db` to `db_slots` and `db_roots` fails.
 - `LANTERN_INVALID_OVERFLOW`: as lantern_node_size.
+
+### Function never
+
+- Makes an OS call.
+
+### Limits
+
+- Stack of its own: 112 bytes on x86-64 (return address included), 112 bytes on ARM64, 112 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_node_copy`, with `_` before it on macOS.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6); each argument is a pointer: a Uint64 argument points at a u64, and a Boolean output is a u64 of 0 or 1.
+- Argument order: `node`, `room`, `out`.
 
 ## Function `lantern_node_step`
 
@@ -244,6 +281,10 @@ lantern_node_step(node, store, p2p, tick, events, scratch, actions, result) -> s
 - Pass the events after `accepted` again in the next step, before new ones.
 - Step again by `wakeup`.
 - On `LANTERN_BUFFER_TOO_SMALL`, grow the buffer that `short` names (the node with lantern_node_copy and more of the `NodeRoom` capacity that `room` names, or more room for `actions` or `scratch`), then call again with the same events.
+- The shell does the actions of one step in order. For a `NODE_ACT_WORK` action it calls lantern_node_run with the buffers of its ids, and passes the event that run writes to a later step.
+- The shell builds the node's libp2p `State` of asm-libp2p with `libp2p_init`, from a config whose protocol list is lantern_node_protocols.
+- The application's shell may run asm-discv5 for the node (`NODE_FLAG_DISCV5`): it passes each record discv5 finds, and each bootnode record, in a `NODE_EV_ENR`, and the asm-discv5 events of each `NODE_ACT_DISCV5` to discv5_step.
+- The shell keeps the Beacon API's connections: it reads each request with lantern_http_request and passes it in a `NODE_EV_API`, one request of a connection at a time, and writes the bytes of each `NODE_ACT_API_SEND` to its connection. A connection is a u64 the shell gives.
 
 ### Function does
 
@@ -459,7 +500,6 @@ lantern_node_step(node, store, p2p, tick, events, scratch, actions, result) -> s
   - The room: while `eth1_state` is 1, before any change, `eth1_deposits` has room for `NODE_ETH1_ROOM` (1024) entries more, else `LANTERN_BUFFER_TOO_SMALL` with `NODE_SHORT_NODE` and `room` the offset of `eth1_deposits` in `NodeRoom`. A logs answer with more deposits than the room left, or than the scratch holds, fails. No room in `eth1_blocks`: the lowest entry goes first.
 - `latestValidHash` applies from a block of the store: up the chain from it, by `parent_root`, each block whose `block_hash` is not `latestValidHash` gets lantern_store_payload_status with `PAYLOAD_STATUS_INVALIDATED`, until the block whose `block_hash` is `latestValidHash`. A zero hash stops at the first block whose `block_hash` is zero. With null, or a hash no block of the chain has, only the block in question (a block of the store) gets it.
 - `NODE_EV_WORK_DONE` of `NODE_WORK_GOSSIP`: a `VALIDATION` of `LIBP2P_ACCEPT` for `LANTERN_VALID`, `LIBP2P_REJECT` for `LANTERN_GOSSIP_REJECT`, else `LIBP2P_IGNORE`. The proposer state: the `gossip_states` entry of its id has 1 use less; a state of no entry gets a `NODE_ACT_STATE_FREE`. A valid beacon_block of a root the node does not know keeps its bytes as a `NodeBlock` with the blob count at `NodeEvent_index`, which waits for its blobs. A valid blob_sidecar keeps its bytes as a `NodeBlob` in `NODE_BLOB_VALID` of the root at `NodeEvent_root`, the index at `NodeEvent_index` and the message's slot, when the node holds no `NODE_BLOB_VALID` entry of that root and index. A valid data_column_sidecar of a column of `columns` keeps its bytes as a `NodeBlob` in `NODE_BLOB_VALID` of the root at `NodeEvent_root`, the index at `NodeEvent_index` and the message's slot, when the node holds no `NODE_BLOB_VALID` entry of that root and index. A valid attester_slashing with a justified state keeps its bytes for a `NODE_WORK_ATTESTER_SLASHING` with that state. A valid voluntary_exit, proposer_slashing, attester_slashing or bls_to_execution_change keeps its bytes as a `NodePool` entry too (the pool, below), when the pool has an entry free. A valid beacon_attestation keeps its bytes as a `NodePool` entry with the slot, the committee index and the member at `NodeEvent_root`, when the pool has an entry free for it. A valid beacon_aggregate_and_proof keeps its bytes and its entry, in `NODE_MESSAGE_VOTE`, for fork choice from the slot after its aggregate's (phase0 `fork-choice.md`: an attestation affects the fork choice of later slots only), when the messages part has more than half its capacity free after it. Else the bytes go. The entry goes, but an entry kept for its vote.
-
 - `NODE_EV_API` (beacon-api.md, Common rules): the answer to the request, in one `NODE_ACT_API_SEND` of its connection with `last` 1, then a `NODE_ACT_API_CLOSE` of it when the connection closes after the answer.
   - An `HttpRequest` with a `status`: the error of that status.
   - Else lantern_api_route of the request, its `ApiRoute` in `scratch`. `LANTERN_INVALID_ROUTE`: the error of its `status`.
@@ -542,10 +582,26 @@ lantern_node_step(node, store, p2p, tick, events, scratch, actions, result) -> s
 - `NODE_EV_API_IDENTITY`: the node's `api_identity` takes the event's `ApiIdentity`.
 - `NODE_EV_WORK_DONE` of `NODE_WORK_API_ENCODE`: `LANTERN_VALID`, the response at `NodeEvent_chunk` in a `NODE_ACT_API_SEND` of the connection `target` with `last` 1; another result, the error 500. With `API_ANSWER_CLOSE` in `arg`, a `NODE_ACT_API_CLOSE` after it.
 - With `NODE_FLAG_ENGINE`: a `NODE_EV_ENGINE` with arg 1 sets `NODE_FLAG_EL_OFFLINE`; a whole response of lantern_http_parse_response in `engine_in` clears it.
+- Reads no beacon state: work on beacon states and stored bytes is a `NODE_ACT_WORK` action.
+- Calls `libp2p_step` with the node's libp2p state: first with the libp2p events of the `NODE_EV_P2P` events and the events the node queued, then with the events the node queued in that step, up to `NODE_P2P_ROUNDS` times.
+- libp2p's actions go out in a `NODE_ACT_P2P_LIST` action. The shell does its shell requests in order; the node took its application notices.
+- Calls the functions of the fork of the block, the attestation, the state or the store's slot it works on: the fork of a slot is the last fork whose epoch in the node's config is at most the slot's epoch.
 
 ### Function never
 
 - Reads a beacon state or keeps an argument's address.
+- Makes an OS call.
+
+### Limits
+
+- Stack of its own: 336 bytes on x86-64 (return address included), 304 bytes on ARM64, 304 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_node_step`, with `_` before it on macOS.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6); each argument is a pointer: a Uint64 argument points at a u64, and a Boolean output is a u64 of 0 or 1.
+- Argument order: `node`, `store`, `p2p`, `tick`, `events`, `scratch`, `actions`, `result`.
 
 ## Function `lantern_node_run`
 
@@ -687,6 +743,21 @@ lantern_node_run(node, store, seen, work, state_a, state_b, state_c, data, setti
   - Without `API_STREAM_FOLD`: the answer from `data`, as getBlockV2's: as SSZ its bytes with `Content-Length`; as JSON the head and `{"version":"<fork>","data":`, the JSON by lantern_node_json of the fork `fork` and `NODE_JSON_ATTESTATION` from `cursor`, and `}`; produceSyncCommitteeContribution: `{"data":`, `NODE_JSON_SYNC_CONTRIBUTION`, and no `Eth-Consensus-Version`. `data` 0 gives the result `LANTERN_INVALID_ENCODING`.
 - Bytes too short for their type give the result `LANTERN_INVALID_ENCODING`.
 
+### Function never
+
+- Makes an OS call.
+
+### Limits
+
+- Stack of its own: 288 bytes on x86-64 (return address included), 288 bytes on ARM64, 288 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_node_run`, with `_` before it on macOS.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6); each argument is a pointer: a Uint64 argument points at a u64, and a Boolean output is a u64 of 0 or 1.
+- Argument order: `node`, `store`, `seen`, `work`, `state_a`, `state_b`, `state_c`, `data`, `settings`, `scratch`, `event`.
+
 ## Function `lantern_node_protocols`
 
 The protocol IDs of every req/resp method and version of [req-resp.md](req-resp.md), by method, then by version: the protocol list of the node's libp2p config. A `STREAM_INBOUND` names its protocol by its index here.
@@ -708,6 +779,21 @@ lantern_node_protocols(out, count) -> status
 
 - `LANTERN_OK`: `out` holds the entries and `count` their number.
 - `LANTERN_BUFFER_TOO_SMALL`: `out` has room for fewer entries.
+
+### Function never
+
+- Makes an OS call.
+
+### Limits
+
+- Stack of its own: 272 bytes on x86-64 (return address included), 272 bytes on ARM64, 272 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_node_protocols`, with `_` before it on macOS.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6); each argument is a pointer: a Uint64 argument points at a u64, and a Boolean output is a u64 of 0 or 1.
+- Argument order: `out`, `count`.
 
 ## Function `lantern_node_import`
 
@@ -736,14 +822,29 @@ lantern_node_import(store, node, data, state, options, scratch, result) -> statu
 - `LANTERN_OK`: `result` is that of lantern_on_block, or `LANTERN_INVALID_ENCODING` when `data` is no `SignedBeaconBlock`.
 - `LANTERN_BUFFER_TOO_SMALL` and `LANTERN_NEED_JUSTIFIED_STATE`: as lantern_on_block, or `scratch` cannot hold the decoded block.
 
+### Caller must
+
+- `state` is a valid `BeaconState` value (include/types.inc) with every PartRef in range.
+
 ### Function does
 
 - Decodes into the end of `scratch` and passes the rest to lantern_on_block; the scratch `size` is restored on return.
 - Bellatrix: sets `pow_block` and `pow_parent` of `options` from the node's `PowBlock` entries.
 
+### Function never
+
+- Makes an OS call.
+
+### Limits
+
+- Stack of its own: 96 bytes on x86-64 (return address included), 96 bytes on ARM64, 96 bytes on RISC-V.
+
 ### ABI
 
-- Export: `lantern_<fork>_node_import` of each fork object.
+- Role: L0.
+- Symbol: `lantern_<fork>_node_import` in the object of every fork, with `_` before it on macOS; `lantern_node_import` inside the object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6); each argument is a pointer: a Uint64 argument points at a u64, and a Boolean output is a u64 of 0 or 1.
+- Argument order: `store`, `node`, `data`, `state`, `options`, `scratch`, `result`.
 
 ## Function `lantern_node_block_root`
 
@@ -770,9 +871,20 @@ lantern_node_block_root(data, scratch, root, result, blobs) -> status
 - `LANTERN_OK`: `result` is `LANTERN_VALID`, `root` holds the root and `blobs` the length of the body's `blob_kzg_commitments` (0 before deneb), or `result` is `LANTERN_INVALID_ENCODING`.
 - `LANTERN_BUFFER_TOO_SMALL`: `scratch` cannot hold the decoded block.
 
+### Function never
+
+- Makes an OS call.
+
+### Limits
+
+- Stack of its own: 96 bytes on x86-64 (return address included), 96 bytes on ARM64, 96 bytes on RISC-V.
+
 ### ABI
 
-- Export: `lantern_<fork>_node_block_root` of each fork object.
+- Role: L0.
+- Symbol: `lantern_<fork>_node_block_root` in the object of every fork, with `_` before it on macOS; `lantern_node_block_root` inside the object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6); each argument is a pointer: a Uint64 argument points at a u64, and a Boolean output is a u64 of 0 or 1.
+- Argument order: `data`, `scratch`, `root`, `result`, `blobs`.
 
 ## Function `lantern_node_proposers`
 
@@ -801,14 +913,28 @@ lantern_node_proposers(state, config, scratch, out) -> status
 - `LANTERN_BUFFER_TOO_SMALL`: `scratch` has fewer than S(2) bytes.
 - The statuses of lantern_get_beacon_proposer_indices and lantern_state_root.
 
+### Caller must
+
+- `state` is a valid `BeaconState` value (include/types.inc) with every PartRef in range.
+
 ### Function does
 
 - The dependent root: get_block_root_at_slot(state, slot - 1); at slot 0, hash_tree_root of `latest_block_header` with lantern_state_root of the state as `state_root` when it is zero.
 - The proposers: from fulu, the first `SLOTS_PER_EPOCH` entries of `proposer_lookahead`; before, lantern_get_beacon_proposer_indices of the epoch, which every fork object exports for this function.
 
+### Function never
+
+- Makes an OS call.
+
+### Limits
+
+- Stack of its own: 224 bytes on x86-64 (return address included), 224 bytes on ARM64, 224 bytes on RISC-V.
+
 ### ABI
 
-- Export: `lantern_<fork>_node_proposers` of each fork object.
+- Role: L0.
+- Symbol: `lantern_<fork>_node_proposers` in the object of every fork, with `_` before it on macOS; `lantern_node_proposers` inside the object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6); each argument is a pointer: a Uint64 argument points at a u64, and a Boolean output is a u64 of 0 or 1.
 - Argument order: `state`, `config`, `scratch`, `out`.
 
 ## Function `lantern_node_attestation_data`
@@ -837,6 +963,10 @@ lantern_node_attestation_data(state, config, index, scratch, out) -> status
 - `LANTERN_BUFFER_TOO_SMALL`: `scratch` has fewer than S(2) bytes.
 - The statuses of lantern_node_event_roots.
 
+### Caller must
+
+- `state` is a valid `BeaconState` value (include/types.inc) with every PartRef in range.
+
 ### Function does
 
 - `slot`: the state's slot. `index`: `index` before electra, 0 from electra.
@@ -844,9 +974,19 @@ lantern_node_attestation_data(state, config, index, scratch, out) -> status
 - `source`: the state's `current_justified_checkpoint`.
 - `target`: the epoch of the state's slot; its root the block root when the slot is the epoch's first, else get_block_root(state, epoch), the `block_roots` entry of the epoch's first slot.
 
+### Function never
+
+- Makes an OS call.
+
+### Limits
+
+- Stack of its own: 224 bytes on x86-64 (return address included), 224 bytes on ARM64, 224 bytes on RISC-V.
+
 ### ABI
 
-- Export: `lantern_<fork>_node_attestation_data` of each fork object.
+- Role: L0.
+- Symbol: `lantern_<fork>_node_attestation_data` in the object of every fork, with `_` before it on macOS; `lantern_node_attestation_data` inside the object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6); each argument is a pointer: a Uint64 argument points at a u64, and a Boolean output is a u64 of 0 or 1.
 - Argument order: `state`, `config`, `index`, `scratch`, `out`.
 
 ## Function `lantern_node_attester_duties`
@@ -876,15 +1016,29 @@ lantern_node_attester_duties(state, config, ids, scratch, out) -> status
 - `LANTERN_BUFFER_TOO_SMALL`: `scratch` has fewer than S(2) bytes, a bit for each validator, and the room of lantern_get_beacon_committee.
 - The statuses of lantern_node_event_roots, lantern_get_committee_count_per_slot and lantern_get_beacon_committee.
 
+### Caller must
+
+- `state` is a valid `BeaconState` value (include/types.inc) with every PartRef in range.
+
 ### Function does
 
 - The dependent root: the previous duty dependent root of lantern_node_event_roots of the state.
 - The committees at a slot: get_committee_count_per_slot(state, epoch).
 - Each committee of each slot of the epoch, in order, with lantern_get_beacon_committee and the `CommitteeCache`; each member that an item names (a bit set for each item's index below the validator count) gives each such item its assignment, as get_committee_assignment finds it.
 
+### Function never
+
+- Makes an OS call.
+
+### Limits
+
+- Stack of its own: 288 bytes on x86-64 (return address included), 288 bytes on ARM64, 288 bytes on RISC-V.
+
 ### ABI
 
-- Export: `lantern_<fork>_node_attester_duties` of each fork object.
+- Role: L0.
+- Symbol: `lantern_<fork>_node_attester_duties` in the object of every fork, with `_` before it on macOS; `lantern_node_attester_duties` inside the object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6); each argument is a pointer: a Uint64 argument points at a u64, and a Boolean output is a u64 of 0 or 1.
 - Argument order: `state`, `config`, `ids`, `scratch`, `out`.
 
 ## Function `lantern_node_liveness`
@@ -915,6 +1069,10 @@ lantern_node_liveness(state, config, seen, ids, epoch, scratch, out) -> status
 - `LANTERN_BUFFER_TOO_SMALL`: `scratch` is short of the room under Limits.
 - In phase0, the statuses of lantern_get_attesting_indices.
 
+### Caller must
+
+- `state` is a valid `BeaconState` value (include/types.inc) with every PartRef in range.
+
 ### Function does
 
 - A byte for each validator of the state, in `scratch`, starts at 0.
@@ -926,14 +1084,18 @@ lantern_node_liveness(state, config, seen, ids, epoch, scratch, out) -> status
 ### Function never
 
 - Writes `seen` or `state`.
+- Makes an OS call.
 
 ### Limits
 
+- Stack of its own: 144 bytes on x86-64 (return address included), 144 bytes on ARM64, 144 bytes on RISC-V.
 - Scratch: S(1) from altair; S(6) in phase0, the bytes and the attesting indices of one attestation, then the S(4) of lantern_get_attesting_indices.
 
 ### ABI
 
-- Export: `lantern_<fork>_node_liveness` of each fork object.
+- Role: L0.
+- Symbol: `lantern_<fork>_node_liveness` in the object of every fork, with `_` before it on macOS; `lantern_node_liveness` inside the object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6); each argument is a pointer: a Uint64 argument points at a u64, and a Boolean output is a u64 of 0 or 1.
 - Argument order: `state`, `config`, `seen`, `ids`, `epoch`, `scratch`, `out`.
 
 ## Function `lantern_node_block_rewards`
@@ -976,14 +1138,18 @@ lantern_node_block_rewards(pre, block, early, late, config, scratch, out) -> sta
 ### Function never
 
 - Writes `pre`, `early`, `late` or `block`.
+- Makes an OS call.
 
 ### Limits
 
+- Stack of its own: 256 bytes on x86-64 (return address included), 256 bytes on ARM64, 256 bytes on RISC-V.
 - Scratch: S(6) of the validator count of `pre`, and in phase0 of each of `early` and `late` that is not 0: S(1) for the bytes of the validators, S(1) for the attesting indices of one attestation, and the S(4) of lantern_get_attesting_indices. The decoded block takes the end of `scratch` first.
 
 ### ABI
 
-- Export: `lantern_<fork>_node_block_rewards` of each fork object.
+- Role: L0.
+- Symbol: `lantern_<fork>_node_block_rewards` in the object of every fork, with `_` before it on macOS; `lantern_node_block_rewards` inside the object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6); each argument is a pointer: a Uint64 argument points at a u64, and a Boolean output is a u64 of 0 or 1.
 - Argument order: `pre`, `block`, `early`, `late`, `config`, `scratch`, `out`.
 
 ## Function `lantern_node_sync_rewards`
@@ -1022,14 +1188,18 @@ lantern_node_sync_rewards(pre, block, scratch, out) -> status
 ### Function never
 
 - Writes `pre` or `block`.
+- Makes an OS call.
 
 ### Limits
 
+- Stack of its own: 160 bytes on x86-64 (return address included), 112 bytes on ARM64, 128 bytes on RISC-V.
 - Scratch: S(1), then at its end, before the decoded block, 8 * `SYNC_COMMITTEE_SIZE` bytes for the places and `SYNC_TABLE_BYTES` + 24 for the hash table of process_sync_aggregate's committee_indices, where the entries go after it.
 
 ### ABI
 
-- Export: `lantern_<fork>_node_sync_rewards` of each fork object.
+- Role: L0.
+- Symbol: `lantern_<fork>_node_sync_rewards` in the object of every fork, with `_` before it on macOS; `lantern_node_sync_rewards` inside the object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6); each argument is a pointer: a Uint64 argument points at a u64, and a Boolean output is a u64 of 0 or 1.
 - Argument order: `pre`, `block`, `scratch`, `out`.
 
 ## Function `lantern_node_reward_totals`
@@ -1058,6 +1228,10 @@ lantern_node_reward_totals(state, config, mode, scratch, out) -> status
 - `LANTERN_BUFFER_TOO_SMALL`: `scratch` is short of the room under Limits.
 - The statuses of the functions it calls, as lantern_get_block_root's.
 
+### Caller must
+
+- `state` is a valid `BeaconState` value (include/types.inc) with every PartRef in range.
+
 ### Function does
 
 - `out`, each a u64: at 0 get_previous_epoch; at 8 get_finality_delay; at 16 1 in an inactivity leak (that delay above `MIN_EPOCHS_TO_INACTIVITY_PENALTY`), else 0; at 24 get_total_active_balance; at 32 from altair get_base_reward_per_increment, in phase0 integer_squareroot of the total active balance; at 40, 48 and 56 the balances of the source, target and head votes of the previous epoch (from altair get_total_balance of get_unslashed_participating_indices of each flag; in phase0 lantern_get_attesting_balance of the matching source, target and head attestations); at 64 `mode`; at 72 the largest effective balance of the fork of the previous epoch (`MAX_EFFECTIVE_BALANCE_ELECTRA` from electra, else `MAX_EFFECTIVE_BALANCE`; in electra, a previous epoch below the epoch of the state's `fork` is deneb's); at 80 and 88 `INACTIVITY_SCORE_BIAS` and `INACTIVITY_SCORE_RECOVERY_RATE` of the config.
@@ -1066,14 +1240,18 @@ lantern_node_reward_totals(state, config, mode, scratch, out) -> status
 ### Function never
 
 - Writes `state`.
+- Makes an OS call.
 
 ### Limits
 
+- Stack of its own: 128 bytes on x86-64 (return address included), 128 bytes on ARM64, 128 bytes on RISC-V.
 - Scratch: S(3); in phase0 S(6) and the matching attestations.
 
 ### ABI
 
-- Export: `lantern_<fork>_node_reward_totals` of each fork object.
+- Role: L0.
+- Symbol: `lantern_<fork>_node_reward_totals` in the object of every fork, with `_` before it on macOS; `lantern_node_reward_totals` inside the object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6); each argument is a pointer: a Uint64 argument points at a u64, and a Boolean output is a u64 of 0 or 1.
 - Argument order: `state`, `config`, `mode`, `scratch`, `out`.
 
 ## Function `lantern_node_attestation_rewards`
@@ -1105,6 +1283,10 @@ lantern_node_attestation_rewards(state, config, totals, first, count, scratch, o
 - `LANTERN_BUFFER_TOO_SMALL`: `scratch` is short of the room under Limits.
 - In phase0, the statuses of lantern_get_attesting_indices and lantern_get_block_root.
 
+### Caller must
+
+- `state` is a valid `BeaconState` value (include/types.inc) with every PartRef in range.
+
 ### Function does
 
 - The values of beacon-api.md, getAttestationsRewards, `total_rewards`; all 0 for a validator that is not eligible (get_eligible_validator_indices).
@@ -1114,14 +1296,18 @@ lantern_node_attestation_rewards(state, config, totals, first, count, scratch, o
 ### Function never
 
 - Writes `state` or `totals`.
+- Makes an OS call.
 
 ### Limits
 
+- Stack of its own: 176 bytes on x86-64 (return address included), 144 bytes on ARM64, 144 bytes on RISC-V.
 - Scratch: S(1) from altair; in phase0 S(6), 2 bytes for each validator of the window, and the matching attestations.
 
 ### ABI
 
-- Export: `lantern_<fork>_node_attestation_rewards` of each fork object.
+- Role: L0.
+- Symbol: `lantern_<fork>_node_attestation_rewards` in the object of every fork, with `_` before it on macOS; `lantern_node_attestation_rewards` inside the object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6); each argument is a pointer: a Uint64 argument points at a u64, and a Boolean output is a u64 of 0 or 1.
 - Argument order: `state`, `config`, `totals`, `first`, `count`, `scratch`, `out`.
 
 ## Function `lantern_node_ideal_reward`
@@ -1146,9 +1332,19 @@ lantern_node_ideal_reward(totals, effective_balance, out) -> status
 
 - `LANTERN_OK`: `out` holds the item.
 
+### Function never
+
+- Makes an OS call.
+
+### Limits
+
+- Stack of its own: 8 bytes on x86-64 (return address included), 0 bytes on ARM64, 0 bytes on RISC-V.
+
 ### ABI
 
-- Export: `lantern_<fork>_node_ideal_reward` of each fork object.
+- Role: L0.
+- Symbol: `lantern_<fork>_node_ideal_reward` in the object of every fork, with `_` before it on macOS; `lantern_node_ideal_reward` inside the object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6); each argument is a pointer: a Uint64 argument points at a u64, and a Boolean output is a u64 of 0 or 1.
 - Argument order: `totals`, `effective_balance`, `out`.
 
 ## Function `lantern_node_payload_parent`
@@ -1173,9 +1369,23 @@ lantern_node_payload_parent(state, out) -> status
 - `LANTERN_OK`: `out` holds them.
 - `LANTERN_INVALID_EVENT`: a fork before bellatrix.
 
+### Caller must
+
+- `state` is a valid `BeaconState` value (include/types.inc) with every PartRef in range.
+
+### Function never
+
+- Makes an OS call.
+
+### Limits
+
+- Stack of its own: 96 bytes on x86-64 (return address included), 96 bytes on ARM64, 96 bytes on RISC-V.
+
 ### ABI
 
-- Export: `lantern_<fork>_node_payload_parent` of each fork object.
+- Role: L0.
+- Symbol: `lantern_<fork>_node_payload_parent` in the object of every fork, with `_` before it on macOS; `lantern_node_payload_parent` inside the object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6); each argument is a pointer: a Uint64 argument points at a u64, and a Boolean output is a u64 of 0 or 1.
 - Argument order: `state`, `out`.
 
 ## Function `lantern_node_sidecar_root`
@@ -1208,9 +1418,19 @@ lantern_node_sidecar_root(ssz, scratch, out) -> status
 - The header: at byte 8 + `BYTES_PER_BLOB` + 96 of a `BlobSidecar`; at byte 20 of a `DataColumnSidecar`, after its index and three offsets.
 - ssz_hash_tree_root of `BeaconBlockHeader` of its 112 bytes, whose layout is that of the value.
 
+### Function never
+
+- Makes an OS call.
+
+### Limits
+
+- Stack of its own: 96 bytes on x86-64 (return address included), 96 bytes on ARM64, 208 bytes on RISC-V.
+
 ### ABI
 
-- Export: `lantern_<fork>_node_sidecar_root` of each fork object.
+- Role: L0.
+- Symbol: `lantern_<fork>_node_sidecar_root` in the object of every fork, with `_` before it on macOS; `lantern_node_sidecar_root` inside the object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6); each argument is a pointer: a Uint64 argument points at a u64, and a Boolean output is a u64 of 0 or 1.
 - Argument order: `ssz`, `scratch`, `out`.
 
 ## Function `lantern_node_randao`
@@ -1236,13 +1456,27 @@ lantern_node_randao(state, epoch, out) -> status
 - `LANTERN_OK`: `out` holds get_randao_mix(state, epoch).
 - `LANTERN_NO_STATE_ANSWER`: the epoch is above the state's epoch, or EPOCHS_PER_HISTORICAL_VECTOR or more below it.
 
+### Caller must
+
+- `state` is a valid `BeaconState` value (include/types.inc) with every PartRef in range.
+
 ### Function does
 
 - get_randao_mix reads `randao_mixes[epoch % EPOCHS_PER_HISTORICAL_VECTOR]`, which holds the mix of `epoch` only from the state's epoch - EPOCHS_PER_HISTORICAL_VECTOR + 1 to the state's epoch; Lighthouse v8.3.3 takes the same range (get_randao_mix_index).
 
+### Function never
+
+- Makes an OS call.
+
+### Limits
+
+- Stack of its own: 16 bytes on x86-64 (return address included), 16 bytes on ARM64, 16 bytes on RISC-V.
+
 ### ABI
 
-- Export: `lantern_<fork>_node_randao` of each fork object.
+- Role: L0.
+- Symbol: `lantern_<fork>_node_randao` in the object of every fork, with `_` before it on macOS; `lantern_node_randao` inside the object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6); each argument is a pointer: a Uint64 argument points at a u64, and a Boolean output is a u64 of 0 or 1.
 - Argument order: `state`, `epoch`, `out`.
 
 ## Function `lantern_node_sync_committee`
@@ -1271,14 +1505,28 @@ lantern_node_sync_committee(state, epoch, scratch, out) -> status
 - `LANTERN_INVALID_ENCODING`: a member's key is the key of no validator of the state.
 - `LANTERN_BUFFER_TOO_SMALL`: `scratch` has fewer than the bytes of the key table below.
 
+### Caller must
+
+- `state` is a valid `BeaconState` value (include/types.inc) with every PartRef in range.
+
 ### Function does
 
 - The committee: `current_sync_committee` for the period of the state's epoch, `next_sync_committee` for the next (compute_sync_committee_period); Lighthouse v8.3.3 takes the same two (get_built_sync_committee).
 - Each member's index: all_pubkeys.index(pubkey), the first validator with the key, as process_sync_aggregate finds it (block-processing.md), with the key table at the end of `scratch`.
 
+### Function never
+
+- Makes an OS call.
+
+### Limits
+
+- Stack of its own: 16 bytes on x86-64 (return address included), 16 bytes on ARM64, 16 bytes on RISC-V.
+
 ### ABI
 
-- Export: `lantern_<fork>_node_sync_committee` of each fork object.
+- Role: L0.
+- Symbol: `lantern_<fork>_node_sync_committee` in the object of every fork, with `_` before it on macOS; `lantern_node_sync_committee` inside the object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6); each argument is a pointer: a Uint64 argument points at a u64, and a Boolean output is a u64 of 0 or 1.
 - Argument order: `state`, `epoch`, `scratch`, `out`.
 
 ## Function `lantern_node_proposer_lookahead`
@@ -1303,9 +1551,23 @@ lantern_node_proposer_lookahead(state, out) -> status
 - `LANTERN_OK`: `out` holds them.
 - `LANTERN_NO_STATE_ANSWER`: the fork is before fulu, whose `BeaconState` has no `proposer_lookahead`.
 
+### Caller must
+
+- `state` is a valid `BeaconState` value (include/types.inc) with every PartRef in range.
+
+### Function never
+
+- Makes an OS call.
+
+### Limits
+
+- Stack of its own: 16 bytes on x86-64 (return address included), 16 bytes on ARM64, 16 bytes on RISC-V.
+
 ### ABI
 
-- Export: `lantern_<fork>_node_proposer_lookahead` of each fork object.
+- Role: L0.
+- Symbol: `lantern_<fork>_node_proposer_lookahead` in the object of every fork, with `_` before it on macOS; `lantern_node_proposer_lookahead` inside the object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6); each argument is a pointer: a Uint64 argument points at a u64, and a Boolean output is a u64 of 0 or 1.
 - Argument order: `state`, `out`.
 
 ## Function `lantern_node_weights`
@@ -1333,17 +1595,27 @@ lantern_node_weights(store, scratch, out) -> status
 - `LANTERN_NEED_JUSTIFIED_STATE`: the store's balances are not those of its justified checkpoint (fork-choice.md, Common rules).
 - `LANTERN_INVALID_UNKNOWN_BLOCK`, `LANTERN_INVALID_OVERFLOW`: a failure of the proposer boost's node or get_proposer_score, or a weight past 2^64 - 1.
 
-### Function does
-
-- The weights of all nodes at once, as lantern_get_head computes them (fork-choice.md), for every node of the store: each the weight lantern_get_weight gives the node.
-
 ### Caller must
 
 - Keep `out` apart from `scratch`.
 
+### Function does
+
+- The weights of all nodes at once, as lantern_get_head computes them (fork-choice.md), for every node of the store: each the weight lantern_get_weight gives the node.
+
+### Function never
+
+- Makes an OS call.
+
+### Limits
+
+- Stack of its own: 96 bytes on x86-64 (return address included), 96 bytes on ARM64, 96 bytes on RISC-V.
+
 ### ABI
 
-- Export: `lantern_<fork>_node_weights` of each fork object.
+- Role: L0.
+- Symbol: `lantern_<fork>_node_weights` in the object of every fork, with `_` before it on macOS; `lantern_node_weights` inside the object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6); each argument is a pointer: a Uint64 argument points at a u64, and a Boolean output is a u64 of 0 or 1.
 - Argument order: `store`, `scratch`, `out`.
 
 ## Function `lantern_node_data_root`
@@ -1373,13 +1645,19 @@ lantern_node_data_root(data, scratch, root) -> status
 
 - ssz_hash_tree_root of the fork's `AttestationData` type, whose value is its 128 SSZ bytes (the build checks the layout).
 
-### Tests
+### Function never
 
-- The runner checks it against the root of each `ssz_static` case of `AttestationData`.
+- Makes an OS call.
+
+### Limits
+
+- Stack of its own: 16 bytes on x86-64 (return address included), 16 bytes on ARM64, 160 bytes on RISC-V.
 
 ### ABI
 
-- Export: `lantern_<fork>_node_data_root` of each fork object.
+- Role: L0.
+- Symbol: `lantern_<fork>_node_data_root` in the object of every fork, with `_` before it on macOS; `lantern_node_data_root` inside the object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6); each argument is a pointer: a Uint64 argument points at a u64, and a Boolean output is a u64 of 0 or 1.
 - Argument order: `data`, `scratch`, `root`.
 
 ## Function `lantern_node_sync_subnets`
@@ -1404,13 +1682,23 @@ lantern_node_sync_subnets(state, validator_index, out) -> status
 
 - `LANTERN_OK`: `out` holds the subnets: the sync committee is `current_sync_committee` when the period of the state's epoch is that of the epoch of its slot + 1, else `next_sync_committee`; subnet i for each place p of the validator's public key in its `pubkeys` with p / (SYNC_COMMITTEE_SIZE / SYNC_COMMITTEE_SUBNET_COUNT) = i. 0 for an index past the validators, and before altair.
 
-### Tests
+### Caller must
 
-- The node-api cases of submitPoolSyncCommitteeSignatures: their answers and publishes come from the spec module's compute_subnets_for_sync_committee.
+- `state` is a valid `BeaconState` value (include/types.inc) with every PartRef in range.
+
+### Function never
+
+- Makes an OS call.
+
+### Limits
+
+- Stack of its own: 8 bytes on x86-64 (return address included), 0 bytes on ARM64, 0 bytes on RISC-V.
 
 ### ABI
 
-- Export: `lantern_<fork>_node_sync_subnets` of each fork object (asm/core/<ISA>/networking.s, beside the sync committee gossip checks).
+- Role: L0.
+- Symbol: `lantern_<fork>_node_sync_subnets` in the object of every fork, with `_` before it on macOS; `lantern_node_sync_subnets` inside the object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6); each argument is a pointer: a Uint64 argument points at a u64, and a Boolean output is a u64 of 0 or 1.
 - Argument order: `state`, `validator_index`, `out`.
 
 ## Function `lantern_node_sync_positions`
@@ -1435,13 +1723,23 @@ lantern_node_sync_positions(state, validator_index, out) -> status
 
 - `LANTERN_OK`: `out` holds bit p, of byte p / 8 at bit p % 8, for each place p of the validator's public key in the sync committee of lantern_node_sync_subnets; none for an index past the validators, and before altair.
 
-### Tests
+### Caller must
 
-- The node-api cases of produceSyncCommitteeContribution: their answers come from the spec module's sync committee and the validator guide's rules.
+- `state` is a valid `BeaconState` value (include/types.inc) with every PartRef in range.
+
+### Function never
+
+- Makes an OS call.
+
+### Limits
+
+- Stack of its own: 8 bytes on x86-64 (return address included), 0 bytes on ARM64, 0 bytes on RISC-V.
 
 ### ABI
 
-- Export: `lantern_<fork>_node_sync_positions` of each fork object (asm/core/<ISA>/networking.s).
+- Role: L0.
+- Symbol: `lantern_<fork>_node_sync_positions` in the object of every fork, with `_` before it on macOS; `lantern_node_sync_positions` inside the object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6); each argument is a pointer: a Uint64 argument points at a u64, and a Boolean output is a u64 of 0 or 1.
 - Argument order: `state`, `validator_index`, `out`.
 
 ## Function `lantern_node_produce_check`
@@ -1470,6 +1768,10 @@ lantern_node_produce_check(state, request, scratch, out) -> status
 - `LANTERN_BUFFER_TOO_SMALL`: `scratch` is short.
 - Another `LANTERN_INVALID_*` code: a check of a callee failed.
 
+### Caller must
+
+- `state` is a valid `BeaconState` value (include/types.inc) with every PartRef in range.
+
 ### Function does
 
 - The state is not changed: the reveal is checked without mixing it in.
@@ -1478,13 +1780,19 @@ lantern_node_produce_check(state, request, scratch, out) -> status
   - max(compute_epoch_at_slot(S) - `finalized_checkpoint.epoch`, 0) is at most `BUILDER_FALLBACK_EPOCHS_SINCE_FINALIZATION` (3).
   - Of the slots s from max(S - `SLOTS_PER_EPOCH`, 0) below S, at most `BUILDER_FALLBACK_SKIPS_PER_EPOCH` (8) are skipped: s above 0 and `block_roots[s % SLOTS_PER_HISTORICAL_ROOT]` equal to `block_roots[(s - 1) % SLOTS_PER_HISTORICAL_ROOT]` (Lighthouse's block_root_at_slot_skips_none).
 
-### Tests
+### Function never
 
-- The node-produce cases: their answers come from the spec module's block proposal; the builder cases need the health (`builder_unhealthy` its lack).
+- Makes an OS call.
+
+### Limits
+
+- Stack of its own: 208 bytes on x86-64 (return address included), 208 bytes on ARM64, 208 bytes on RISC-V.
 
 ### ABI
 
-- Export: `lantern_<fork>_node_produce_check` of each fork object (asm/core/<ISA>/nodehooks.s).
+- Role: L0.
+- Symbol: `lantern_<fork>_node_produce_check` in the object of every fork, with `_` before it on macOS; `lantern_node_produce_check` inside the object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6); each argument is a pointer: a Uint64 argument points at a u64, and a Boolean output is a u64 of 0 or 1.
 - Argument order: `state`, `request`, `scratch`, `out`.
 
 ## Function `lantern_node_payload_result`
@@ -1499,19 +1807,30 @@ lantern_node_payload_result(json, scratch, out, fault) -> status
 
 ### Arguments
 
-As lantern_engine_json_decode, without `type`.
+| Name | Role | Type |
+|---|---|---|
+| `json` | input | ByteList: the JSON text |
+| `scratch` | scratch | [`Scratch`](helpers.md#type-scratch): at least `JSON_DECODE_SCRATCH` bytes |
+| `out` | output | ByteList, its `size` set: the SSZ encoding goes from its offset 24 |
+| `fault` | output | [`JsonFault`](beacon-api.md#type-jsonfault) |
 
 ### Returns
 
-As lantern_engine_json_decode of the fork's `ExecutionPayload` (bellatrix) or `GetPayloadResult` (capella and later).
+- As lantern_engine_json_decode of the fork's `ExecutionPayload` (bellatrix) or `GetPayloadResult` (capella and later).
 
-### Tests
+### Function never
 
-- The node-produce cases: the engine's answer there is the spec module's payload in the JSON of execution-apis.
+- Makes an OS call.
+
+### Limits
+
+- Stack of its own: 16 bytes on x86-64 (return address included), 16 bytes on ARM64, 16 bytes on RISC-V.
 
 ### ABI
 
-- Export: `lantern_<fork>_node_payload_result` of the objects of bellatrix and later (asm/core/<ISA>/nodehooks.s).
+- Role: L0.
+- Symbol: `lantern_<fork>_node_payload_result` in the object of bellatrix to fulu, with `_` before it on macOS; `lantern_node_payload_result` inside the object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6); each argument is a pointer: a Uint64 argument points at a u64, and a Boolean output is a u64 of 0 or 1.
 - Argument order: `json`, `scratch`, `out`, `fault`.
 
 ## Function `lantern_node_produce_fold`
@@ -1540,19 +1859,29 @@ lantern_node_produce_fold(state, entry, draft, arg, scratch) -> status
 - `LANTERN_INVALID_ENCODING`: the rules left it out, or the bytes are no entry of the topic; the draft is not changed.
 - `LANTERN_BUFFER_TOO_SMALL`: `scratch` is short.
 
+### Caller must
+
+- `state` is a valid `BeaconState` value (include/types.inc) with every PartRef in range.
+
 ### Function does
 
 - A voluntary exit, proposer slashing, BLS change (from capella) or attester slashing of the fork's type: a record in the operations area while the kind has fewer than its limit, and when it does not clash with the draft's records (the kinds before it fold first): an attester slashing needs an index in both attestations (sorted, as is_valid_indexed_attestation holds them) that is no proposer slashing's proposer; a voluntary exit's validator must be no proposer slashing's proposer and in both attestations of no attester slashing.
 - An attestation of the fork's type (`SingleAttestation` from electra, its place and length from `member`; an `Attestation` before, its place its one bit): when process_attestation's checks of slot, target and source hold at the state, its place joins the `DraftAggregate` of its data and committee index, a new one when there is none; a place already set, or another length, leaves it out. Its signature joins the aggregate's by crypto_bls_aggregate.
 - A sync committee message (from altair) of the state's slot - 1 with the block's parent root: each place of its validator's public key in the state's `current_sync_committee` not set yet is set, and for each its signature joins the aggregate's.
 
-### Tests
+### Function never
 
-- The node-produce cases.
+- Makes an OS call.
+
+### Limits
+
+- Stack of its own: 192 bytes on x86-64 (return address included), 192 bytes on ARM64, 192 bytes on RISC-V.
 
 ### ABI
 
-- Export: `lantern_<fork>_node_produce_fold` of each fork object (asm/core/<ISA>/nodehooks.s).
+- Role: L0.
+- Symbol: `lantern_<fork>_node_produce_fold` in the object of every fork, with `_` before it on macOS; `lantern_node_produce_fold` inside the object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6); each argument is a pointer: a Uint64 argument points at a u64, and a Boolean output is a u64 of 0 or 1.
 - Argument order: `state`, `entry`, `draft`, `arg`, `scratch`.
 
 ## Function `lantern_node_reconstruct`
@@ -1586,9 +1915,20 @@ lantern_node_reconstruct(data, settings, scratch, out) -> status
 - For each blob r, crypto_kzg_recover_cells_and_kzg_proofs of the held sidecars' indices and their cell r: the 128 cells and proofs of row r.
 - Sidecar c: `index` c, `column` cell c of each row, `kzg_commitments`, `signed_block_header` and `kzg_commitments_inclusion_proof` of the first sidecar, `kzg_proofs` proof c of each row.
 
+### Function never
+
+- Makes an OS call.
+
+### Limits
+
+- Stack of its own: 192 bytes on x86-64 (return address included), 160 bytes on ARM64, 160 bytes on RISC-V.
+
 ### ABI
 
-- Export: `lantern_node_reconstruct` of the common object.
+- Role: L0.
+- Symbol: `lantern_node_reconstruct`, with `_` before it on macOS.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6); each argument is a pointer: a Uint64 argument points at a u64, and a Boolean output is a u64 of 0 or 1.
+- Argument order: `data`, `settings`, `scratch`, `out`.
 
 ## Function `lantern_node_custody`
 
@@ -1613,14 +1953,29 @@ lantern_node_custody(state, node, epoch, count) -> status
 
 - `LANTERN_OK`: `count` holds it.
 
+### Caller must
+
+- `state` is a valid `BeaconState` value (include/types.inc) with every PartRef in range.
+
 ### Function does
 
 - The validators: the `validator_index` of each `NodeProposer` entry of the node whose `until_epoch` is above `epoch`; an index past the state's validators adds no balance.
 - `count`: get_validators_custody_requirement of the state and those validators, with the node's config: min(max(the sum of their `effective_balance` // `BALANCE_PER_ADDITIONAL_CUSTODY_GROUP`, `VALIDATOR_CUSTODY_REQUIREMENT`), `NUMBER_OF_CUSTODY_GROUPS`); 0 with no validator.
 
+### Function never
+
+- Makes an OS call.
+
+### Limits
+
+- Stack of its own: 8 bytes on x86-64 (return address included), 0 bytes on ARM64, 0 bytes on RISC-V.
+
 ### ABI
 
-- Export: `lantern_<fork>_node_custody` of each fork object.
+- Role: L0.
+- Symbol: `lantern_<fork>_node_custody` in the object of every fork, with `_` before it on macOS; `lantern_node_custody` inside the object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6); each argument is a pointer: a Uint64 argument points at a u64, and a Boolean output is a u64 of 0 or 1.
+- Argument order: `state`, `node`, `epoch`, `count`.
 
 ## Function `lantern_node_eth1_check`
 
@@ -1643,13 +1998,28 @@ lantern_node_eth1_check(state, out) -> status
 
 - `LANTERN_OK`: `out` holds them.
 
+### Caller must
+
+- `state` is a valid `BeaconState` value (include/types.inc) with every PartRef in range.
+
 ### Function does
 
 - Open: before electra always; in electra while `eth1_deposit_index` is not `deposit_requests_start_index`; never from fulu, whose pinned spec deprecates get_eth1_vote and get_eth1_pending_deposit_count (pysetup's fulu builder).
 
+### Function never
+
+- Makes an OS call.
+
+### Limits
+
+- Stack of its own: 96 bytes on x86-64 (return address included), 96 bytes on ARM64, 96 bytes on RISC-V.
+
 ### ABI
 
-- Export: `lantern_<fork>_node_eth1_check` of each fork object.
+- Role: L0.
+- Symbol: `lantern_<fork>_node_eth1_check` in the object of every fork, with `_` before it on macOS; `lantern_node_eth1_check` inside the object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6); each argument is a pointer: a Uint64 argument points at a u64, and a Boolean output is a u64 of 0 or 1.
+- Argument order: `state`, `out`.
 
 ## Function `lantern_node_produce_eth1`
 
@@ -1677,15 +2047,30 @@ lantern_node_produce_eth1(state, draft, snapshot, config, scratch) -> status
 - `LANTERN_INVALID_DEPOSITS`: the block needs a deposit the snapshot lacks: one of `eth1_deposit_index` to the expected count is not among its deposits, or its leaves are fewer than the deposit count.
 - `LANTERN_BUFFER_TOO_SMALL`: `scratch` is short.
 
+### Caller must
+
+- `state` is a valid `BeaconState` value (include/types.inc) with every PartRef in range.
+
 ### Function does
 
 - The vote: get_eth1_vote of the fork (phase0; electra's in electra) with `eth1_chain` the snapshot's blocks in number order and get_eth1_data of a block its `deposit_root`, `deposit_count` and `hash`. From fulu, which deprecates get_eth1_vote, the state's `eth1_data`.
 - The deposit data after the vote: the vote's when its count in `eth1_data_votes`, plus 1, times 2 is above `EPOCHS_PER_ETH1_VOTING_PERIOD` * `SLOTS_PER_EPOCH` (process_eth1_data), else the state's `eth1_data`.
 - The deposits: their count, with that deposit data, phase0's min(`MAX_DEPOSITS`, `deposit_count` - `eth1_deposit_index`), electra's get_eth1_pending_deposit_count, none from fulu; each the snapshot's deposit of index `eth1_deposit_index` + i, its proof lantern_deposit_proof of the snapshot's leaves, `deposit_count` and its index.
 
+### Function never
+
+- Makes an OS call.
+
+### Limits
+
+- Stack of its own: 336 bytes on x86-64 (return address included), 336 bytes on ARM64, 336 bytes on RISC-V.
+
 ### ABI
 
-- Export: `lantern_<fork>_node_produce_eth1` of each fork object.
+- Role: L0.
+- Symbol: `lantern_<fork>_node_produce_eth1` in the object of every fork, with `_` before it on macOS; `lantern_node_produce_eth1` inside the object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6); each argument is a pointer: a Uint64 argument points at a u64, and a Boolean output is a u64 of 0 or 1.
+- Argument order: `state`, `draft`, `snapshot`, `config`, `scratch`.
 
 ## Function `lantern_node_produce_block`
 
@@ -1713,6 +2098,10 @@ lantern_node_produce_block(state, draft, params, scratch, out) -> status
 - `LANTERN_BUFFER_TOO_SMALL`: `scratch` or `out` is short.
 - Another code: the engine's result does not decode, or process_block rejects the block (its result).
 
+### Caller must
+
+- `state` is a valid `BeaconState` value (include/types.inc) with every PartRef in range.
+
 ### Function does
 
 - The body of beacon-api.md: the operations in the draft's record order; the attestations of the draft's aggregates by `data.slot` descending, then `order`, at most the fork's limit, from electra those of one data joined; the draft's sync aggregate; the payload, commitments and requests of the result (bellatrix: the result is the payload; with no result, before the merge, the empty payload).
@@ -1726,13 +2115,19 @@ lantern_node_produce_block(state, draft, params, scratch, out) -> status
   - `execution_payload_value`: the bid's `value`; `consensus_block_value` as above, with the stand-in's withdrawals; 1 at `blinded`.
   - The bid is not checked again: lantern_node_produce_bid checks it.
 
-### Tests
+### Function never
 
-- The node-produce cases.
+- Makes an OS call.
+
+### Limits
+
+- Stack of its own: 384 bytes on x86-64 (return address included), 384 bytes on ARM64, 384 bytes on RISC-V.
 
 ### ABI
 
-- Export: `lantern_<fork>_node_produce_block` of each fork object (asm/core/<ISA>/nodehooks.s).
+- Role: L0.
+- Symbol: `lantern_<fork>_node_produce_block` in the object of every fork, with `_` before it on macOS; `lantern_node_produce_block` inside the object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6); each argument is a pointer: a Uint64 argument points at a u64, and a Boolean output is a u64 of 0 or 1.
 - Argument order: `state`, `draft`, `params`, `scratch`, `out`.
 
 ## Function `lantern_node_produce_bid`
@@ -1763,21 +2158,35 @@ lantern_node_produce_bid(state, bid, params, scratch, out) -> status
 - `LANTERN_BUFFER_TOO_SMALL`: `scratch` or `out` is short.
 - Another code: a callee's check failed.
 
+### Caller must
+
+- `state` is a valid `BeaconState` value (include/types.inc) with every PartRef in range.
+
 ### Function does
 
 - The checks of beacon-api.md (process_bid, and those of process_execution_payload that need no transactions), in that order; the fee recipient is that at byte 168 of the request.
 - Its `scratch`: `JSON_DECODE_SCRATCH`, the decoded bid, and that of lantern_get_expected_withdrawals.
 
-### Tests
+### Function never
 
-- The node-produce cases of a builder.
+- Makes an OS call.
+
+### Limits
+
+- Stack of its own: 416 bytes on x86-64 (return address included), 416 bytes on ARM64, 576 bytes on RISC-V.
 
 ### ABI
 
-- Export: `lantern_<fork>_node_produce_bid` of each fork object (asm/core/<ISA>/nodehooks.s); before bellatrix `LANTERN_INVALID_BID`.
+- Role: L0.
+- Symbol: `lantern_<fork>_node_produce_bid` in the object of every fork, with `_` before it on macOS; `lantern_node_produce_bid` inside the object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6); each argument is a pointer: a Uint64 argument points at a u64, and a Boolean output is a u64 of 0 or 1.
 - Argument order: `state`, `bid`, `params`, `scratch`, `out`.
 
 ## Type `ProduceParams`
+
+The arguments of lantern_node_produce_block after its first two: the addresses of its inputs and outputs.
+
+### Layout
 
 | Offset | Field | Type | Meaning |
 |---|---|---|---|
@@ -1815,13 +2224,19 @@ lantern_node_publish_decode(body, json, scratch, out, facts) -> status
 - `LANTERN_INVALID_ENCODING`: the body is no value of the fork's type (`SignedBeaconBlock` before deneb, lantern's `SignedBlockContents` from deneb, `SignedBlindedBeaconBlock` for a blinded block), or from deneb its counts of `kzg_proofs` and `blobs` do not fit the body's `blob_kzg_commitments` (beacon-api.md), or a blinded block's header has a `block_hash` of zero.
 - `LANTERN_BUFFER_TOO_SMALL`: `scratch` or `out` is short.
 
-### Tests
+### Function never
 
-- The node-publish cases.
+- Makes an OS call.
+
+### Limits
+
+- Stack of its own: 240 bytes on x86-64 (return address included), 224 bytes on ARM64, 224 bytes on RISC-V.
 
 ### ABI
 
-- Export: `lantern_<fork>_node_publish_decode` of each fork object (asm/core/<ISA>/nodehooks.s).
+- Role: L0.
+- Symbol: `lantern_<fork>_node_publish_decode` in the object of every fork, with `_` before it on macOS; `lantern_node_publish_decode` inside the object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6); each argument is a pointer: a Uint64 argument points at a u64, and a Boolean output is a u64 of 0 or 1.
 - Argument order: `body`, `json`, `scratch`, `out`, `facts`.
 
 ## Function `lantern_node_publish_sidecars`
@@ -1854,13 +2269,19 @@ lantern_node_publish_sidecars(body, json, scratch, out) -> status
 - Deneb and electra: get_blob_sidecars of the block, `blobs` and `kzg_proofs`, each `kzg_commitment_inclusion_proof` by ssz_build_proof of the body.
 - Fulu: get_data_column_sidecars_from_block of the block and, for each blob, crypto_kzg_compute_cells of it and its `CELLS_PER_EXT_BLOB` proofs; `NUMBER_OF_COLUMNS` sidecars.
 
-### Tests
+### Function never
 
-- The node-publish cases.
+- Makes an OS call.
+
+### Limits
+
+- Stack of its own: 512 bytes on x86-64 (return address included), 496 bytes on ARM64, 496 bytes on RISC-V.
 
 ### ABI
 
-- Export: `lantern_<fork>_node_publish_sidecars` of each fork object from deneb (asm/core/<ISA>/nodehooks.s).
+- Role: L0.
+- Symbol: `lantern_<fork>_node_publish_sidecars` in the object of deneb to fulu, with `_` before it on macOS; `lantern_node_publish_sidecars` inside the object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6); each argument is a pointer: a Uint64 argument points at a u64, and a Boolean output is a u64 of 0 or 1.
 - Argument order: `body`, `json`, `scratch`, `out`.
 
 ## Function `lantern_node_publish_check`
@@ -1895,13 +2316,19 @@ lantern_node_publish_check(gossip, block, sidecars, level, scratch) -> status
 - A blinded block: lantern_validate_blinded_block_gossip in place of the beacon_block topic's checks; from level 2 the blinded transition of beacon-api.md (the block with the stand-in payload, in scratch, decoded, then process_block; the state's `latest_block_header.body_root` and `latest_execution_payload_header.transactions_root` then the roots of the blinded block's body and header). The checks leave `seen` as it was in every case, so the full block passes the beacon_block topic's checks when the builder's broadcast brings it.
 - A status or result but `LANTERN_OK` leaves `seen` as it was: the counts of its parts (`keys`, `bits`, `blocks`, `headers`, `header_bytes`) go back to those before the call, so the entries the checks added go. The checks of these topics only add entries.
 
-### Tests
+### Function never
 
-- The node-publish cases.
+- Makes an OS call.
+
+### Limits
+
+- Stack of its own: 208 bytes on x86-64 (return address included), 208 bytes on ARM64, 208 bytes on RISC-V.
 
 ### ABI
 
-- Export: `lantern_<fork>_node_publish_check` of each fork object (asm/core/<ISA>/nodehooks.s).
+- Role: L0.
+- Symbol: `lantern_<fork>_node_publish_check` in the object of every fork, with `_` before it on macOS; `lantern_node_publish_check` inside the object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6); each argument is a pointer: a Uint64 argument points at a u64, and a Boolean output is a u64 of 0 or 1.
 - Argument order: `gossip`, `block`, `sidecars`, `level`, `scratch`.
 
 ## Function `lantern_node_pending`
@@ -1927,13 +2354,27 @@ lantern_node_pending(state, kind, out) -> status
 - `LANTERN_OK`: `out` holds them.
 - `LANTERN_NO_STATE_ANSWER`: the fork is before electra, whose `BeaconState` has no such list, or `kind` is above 2.
 
+### Caller must
+
+- `state` is a valid `BeaconState` value (include/types.inc) with every PartRef in range.
+
 ### Function does
 
 - The items lie one after another in the state, each in its SSZ encoding: `PendingDeposit` 192 bytes (`pubkey` 0, `withdrawal_credentials` 48, `amount` 80, `signature` 88, `slot` 184), `PendingPartialWithdrawal` 24 (`validator_index` 0, `amount` 8, `withdrawable_epoch` 16), `PendingConsolidation` 16 (`source_index` 0, `target_index` 8).
 
+### Function never
+
+- Makes an OS call.
+
+### Limits
+
+- Stack of its own: 16 bytes on x86-64 (return address included), 16 bytes on ARM64, 16 bytes on RISC-V.
+
 ### ABI
 
-- Export: `lantern_<fork>_node_pending` of each fork object.
+- Role: L0.
+- Symbol: `lantern_<fork>_node_pending` in the object of every fork, with `_` before it on macOS; `lantern_node_pending` inside the object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6); each argument is a pointer: a Uint64 argument points at a u64, and a Boolean output is a u64 of 0 or 1.
 - Argument order: `state`, `kind`, `out`.
 
 ## Function `lantern_node_blinded_block`
@@ -1966,9 +2407,19 @@ lantern_node_blinded_block(block, scratch, out) -> status
 - The other bytes are those of `block`: the `SignedBlindedBeaconBlock` has the fields of the `SignedBeaconBlock` in their order, the body's `execution_payload_header` where its `execution_payload` is. The offsets in the body's fixed part of the fields after it (from capella `bls_to_execution_changes`, from deneb `blob_kzg_commitments`, from electra `execution_requests`) grow by the header's bytes less the payload's.
 - So the blinded block has the block's hash_tree_root.
 
+### Function never
+
+- Makes an OS call.
+
+### Limits
+
+- Stack of its own: 144 bytes on x86-64 (return address included), 128 bytes on ARM64, 144 bytes on RISC-V.
+
 ### ABI
 
-- Export: `lantern_<fork>_node_blinded_block` of each fork object.
+- Role: L0.
+- Symbol: `lantern_<fork>_node_blinded_block` in the object of every fork, with `_` before it on macOS; `lantern_node_blinded_block` inside the object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6); each argument is a pointer: a Uint64 argument points at a u64, and a Boolean output is a u64 of 0 or 1.
 - Argument order: `block`, `scratch`, `out`.
 
 ## Function `lantern_node_event_roots`
@@ -1996,15 +2447,29 @@ lantern_node_event_roots(state, config, scratch, out) -> status
 - `LANTERN_BUFFER_TOO_SMALL`: `scratch` has fewer than S(2) bytes.
 - The statuses of lantern_get_block_root_at_slot and lantern_state_root.
 
+### Caller must
+
+- `state` is a valid `BeaconState` value (include/types.inc) with every PartRef in range.
+
 ### Function does
 
 - The state root: the `state_root` of `latest_block_header`; when it is zero, lantern_state_root of the state.
 - The block root: hash_tree_root of `latest_block_header` with the state root as `state_root`.
 - With e the epoch of the state's slot: get_block_root_at_slot(state, compute_start_slot_at_epoch(e - 1) - 1) and get_block_root_at_slot(state, compute_start_slot_at_epoch(e) - 1). Each that underflows is the genesis block root: get_block_root_at_slot(state, 0) when the state's slot is above 0, else the block root.
 
+### Function never
+
+- Makes an OS call.
+
+### Limits
+
+- Stack of its own: 224 bytes on x86-64 (return address included), 224 bytes on ARM64, 224 bytes on RISC-V.
+
 ### ABI
 
-- Export: `lantern_<fork>_node_event_roots` of each fork object.
+- Role: L0.
+- Symbol: `lantern_<fork>_node_event_roots` in the object of every fork, with `_` before it on macOS; `lantern_node_event_roots` inside the object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6); each argument is a pointer: a Uint64 argument points at a u64, and a Boolean output is a u64 of 0 or 1.
 - Argument order: `state`, `config`, `scratch`, `out`.
 
 ## Function `lantern_node_attestation`
@@ -2034,9 +2499,24 @@ lantern_node_attestation(store, data, is_from_block, state, scratch, result, tar
 - `LANTERN_OK`: `result` is a code of lantern_validate_on_attestation, `LANTERN_NEED_TARGET_STATE` with the target in `target` when `state` is 0, that of lantern_on_attestation, or `LANTERN_INVALID_ENCODING`.
 - `LANTERN_BUFFER_TOO_SMALL`: as lantern_on_attestation, or `scratch` cannot hold the decoded attestation.
 
+### Caller must
+
+- `state` is a valid `BeaconState` value (include/types.inc) with every PartRef in range.
+
+### Function never
+
+- Makes an OS call.
+
+### Limits
+
+- Stack of its own: 96 bytes on x86-64 (return address included), 96 bytes on ARM64, 96 bytes on RISC-V.
+
 ### ABI
 
-- Export: `lantern_<fork>_node_attestation` of each fork object.
+- Role: L0.
+- Symbol: `lantern_<fork>_node_attestation` in the object of every fork, with `_` before it on macOS; `lantern_node_attestation` inside the object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6); each argument is a pointer: a Uint64 argument points at a u64, and a Boolean output is a u64 of 0 or 1.
+- Argument order: `store`, `data`, `is_from_block`, `state`, `scratch`, `result`, `target`.
 
 ## Function `lantern_node_attester_slashing`
 
@@ -2063,9 +2543,24 @@ lantern_node_attester_slashing(store, data, state, scratch, result) -> status
 - `LANTERN_OK`: `result` is that of lantern_on_attester_slashing, or `LANTERN_INVALID_ENCODING`.
 - `LANTERN_BUFFER_TOO_SMALL`: as lantern_on_attester_slashing, or `scratch` cannot hold the decoded slashing.
 
+### Caller must
+
+- `state` is a valid `BeaconState` value (include/types.inc) with every PartRef in range.
+
+### Function never
+
+- Makes an OS call.
+
+### Limits
+
+- Stack of its own: 96 bytes on x86-64 (return address included), 96 bytes on ARM64, 96 bytes on RISC-V.
+
 ### ABI
 
-- Export: `lantern_<fork>_node_attester_slashing` of each fork object.
+- Role: L0.
+- Symbol: `lantern_<fork>_node_attester_slashing` in the object of every fork, with `_` before it on macOS; `lantern_node_attester_slashing` inside the object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6); each argument is a pointer: a Uint64 argument points at a u64, and a Boolean output is a u64 of 0 or 1.
+- Argument order: `store`, `data`, `state`, `scratch`, `result`.
 
 ## Function `lantern_node_gossip`
 
@@ -2104,9 +2599,20 @@ lantern_node_gossip(args, data, scratch, result, root, index) -> status
 - A valid beacon_attestation: in `root` four u64, its `data.slot`, its committee index (`data.index` before electra, `committee_index` from electra), its member and 0. The member, from electra: the place of `attester_index` in lantern_get_beacon_committee of the head state, that slot and that committee index (with the `CommitteeCache` of the config) + 2^16 times the committee's length; before electra 0. The spec's validation reads that committee of the head state too.
 - Decodes into the end of `scratch`; the scratch `size` is restored on return.
 
+### Function never
+
+- Makes an OS call.
+
+### Limits
+
+- Stack of its own: 144 bytes on x86-64 (return address included), 128 bytes on ARM64, 128 bytes on RISC-V.
+
 ### ABI
 
-- Export: `lantern_<fork>_node_gossip` of each fork object.
+- Role: L0.
+- Symbol: `lantern_<fork>_node_gossip` in the object of every fork, with `_` before it on macOS; `lantern_node_gossip` inside the object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6); each argument is a pointer: a Uint64 argument points at a u64, and a Boolean output is a u64 of 0 or 1.
+- Argument order: `args`, `data`, `scratch`, `result`, `root`, `index`.
 
 ## Function `lantern_node_blob_sidecar`
 
@@ -2139,9 +2645,20 @@ lantern_node_blob_sidecar(data, config, settings, scratch, result, root) -> stat
 - The checks, in order: `index` is below `MAX_BLOBS_PER_BLOCK` (deneb) or `MAX_BLOBS_PER_BLOCK_ELECTRA` (electra) of `config`; lantern_verify_blob_sidecar_inclusion_proof; `crypto_kzg_verify_blob_kzg_proof` of `blob`, `kzg_commitment` and `kzg_proof`. A blob, commitment or proof it cannot decode fails.
 - Decodes into the end of `scratch`; the scratch `size` is restored on return.
 
+### Function never
+
+- Makes an OS call.
+
+### Limits
+
+- Stack of its own: 112 bytes on x86-64 (return address included), 112 bytes on ARM64, 112 bytes on RISC-V.
+
 ### ABI
 
-- Export: `lantern_<fork>_node_blob_sidecar` of the deneb and electra objects.
+- Role: L0.
+- Symbol: `lantern_<fork>_node_blob_sidecar` in the object of deneb to electra, with `_` before it on macOS; `lantern_node_blob_sidecar` inside the object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6); each argument is a pointer: a Uint64 argument points at a u64, and a Boolean output is a u64 of 0 or 1.
+- Argument order: `data`, `config`, `settings`, `scratch`, `result`, `root`.
 
 ## Function `lantern_node_column_sidecar`
 
@@ -2174,9 +2691,20 @@ lantern_node_column_sidecar(data, config, settings, scratch, result, root) -> st
 - The checks, in order: lantern_verify_data_column_sidecar with `config`; lantern_verify_data_column_sidecar_inclusion_proof; lantern_verify_data_column_sidecar_kzg_proofs with `settings`.
 - Decodes into the end of `scratch`; the scratch `size` is restored on return.
 
+### Function never
+
+- Makes an OS call.
+
+### Limits
+
+- Stack of its own: 112 bytes on x86-64 (return address included), 112 bytes on ARM64, 112 bytes on RISC-V.
+
 ### ABI
 
-- Export: `lantern_fulu_node_column_sidecar` of the fulu object.
+- Role: L0.
+- Symbol: `lantern_<fork>_node_column_sidecar` in the object of fulu, with `_` before it on macOS; `lantern_node_column_sidecar` inside the object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6); each argument is a pointer: a Uint64 argument points at a u64, and a Boolean output is a u64 of 0 or 1.
+- Argument order: `data`, `config`, `settings`, `scratch`, `result`, `root`.
 
 ## Function `lantern_node_db_scan`
 
@@ -2202,6 +2730,10 @@ lantern_node_db_scan(node, segment, segment_kind, bytes, valid) -> status
 
 - `LANTERN_OK`, or a status of lantern_db_scan of the node's `Db` ([db.md](db.md#function-lantern_db_scan)).
 
+### Caller must
+
+- Pass each segment once, in ascending order, the block segments before the sidecar segments and those before the state segments, before the node's first step; cut each file to `valid` before the node appends to it.
+
 ### Function does
 
 - lantern_db_scan of the node's `Db`.
@@ -2210,15 +2742,20 @@ lantern_node_db_scan(node, segment, segment_kind, bytes, valid) -> status
 - A state segment: it is `archive_segment`, at `valid` (`archive_end`), unless that one is higher; `archive_slot` takes the highest slot of its state records when that is more, and `archive_first` the lowest when that is less.
 - A sidecar segment: it is the backfill's sidecar segment, at `valid`, when `backfill_sidecar_segment` is 2^64 - 1. A block segment: it is the backfill's segment, at `valid`, when `backfill_segment` is 2^64 - 1. Each of its block records with a slot below `backfill_slot`: `backfill_slot` and `backfill_next` take the slot and `backfill_root` the record's `parent_root` (bytes 116 to 147 of its SSZ bytes).
 
-### Caller must
+### Function never
 
-- Pass each segment once, in ascending order, the block segments before the sidecar segments and those before the state segments, before the node's first step; cut each file to `valid` before the node appends to it.
+- Makes an OS call.
+
+### Limits
+
+- Stack of its own: 96 bytes on x86-64 (return address included), 96 bytes on ARM64, 96 bytes on RISC-V.
 
 ### ABI
 
-- Role: L2.
-- Symbol: `lantern_node_db_scan` (`_lantern_node_db_scan` on macOS), in the common object.
-- Argument order: `node`, `segment`, `sidecars`, `bytes`, `valid`.
+- Role: L0.
+- Symbol: `lantern_node_db_scan`, with `_` before it on macOS.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6); each argument is a pointer: a Uint64 argument points at a u64, and a Boolean output is a u64 of 0 or 1.
+- Argument order: `node`, `segment`, `segment_kind`, `bytes`, `valid`.
 
 ## Function `lantern_node_anchor`
 
@@ -2247,17 +2784,30 @@ lantern_node_anchor(data, room, scratch, state, block) -> status
 - `LANTERN_INVALID_ENCODING`: `data` is not the SSZ bytes of a `BeaconState` of the fork.
 - `LANTERN_INVALID_ANCHOR`: the `body_root` of the state's `latest_block_header` is not hash_tree_root of the default `BeaconBlockBody` of the fork, so the state is not at a block with the default body, such as genesis.
 
+### Caller must
+
+- `state` is a valid `BeaconState` value (include/types.inc) with every PartRef in range.
+
 ### Function does
 
 - `state`: the decoded state, as lantern_beacon_state_copy gives it with `room`.
 - `block`: the `slot`, `proposer_index` and `parent_root` of the state's `latest_block_header`; its `state_root` when not zero, else hash_tree_root of the state, as process_slot fills it; and the default `BeaconBlockBody` of the fork (the SSZ default value: zero fixed fields and empty lists).
 - Restores the `size` field of `scratch`.
 
+### Function never
+
+- Makes an OS call.
+
+### Limits
+
+- Stack of its own: 144 bytes on x86-64 (return address included), 144 bytes on ARM64, 144 bytes on RISC-V.
+
 ### ABI
 
-- Export: `lantern_<fork>_node_anchor` of each fork object.
+- Role: L0.
+- Symbol: `lantern_<fork>_node_anchor` in the object of every fork, with `_` before it on macOS; `lantern_node_anchor` inside the object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6); each argument is a pointer: a Uint64 argument points at a u64, and a Boolean output is a u64 of 0 or 1.
 - Argument order: `data`, `room`, `scratch`, `state`, `block`.
-
 
 ## Function `lantern_node_anchor_block`
 
@@ -2286,15 +2836,29 @@ lantern_node_anchor_block(data, room, scratch, state, block) -> status
 - `LANTERN_INVALID_ENCODING`: `data` is not of that form (each ByteList with `offset` 24 and `size` 24 + `count`, inside `data`), or a part is not the SSZ bytes of its type.
 - `LANTERN_INVALID_ANCHOR`: the block's slot is not the state's, or its `state_root` is not hash_tree_root of the state.
 
+### Caller must
+
+- `state` is a valid `BeaconState` value (include/types.inc) with every PartRef in range.
+
 ### Function does
 
 - `state`: the decoded state, as lantern_beacon_state_copy gives it with `room`.
 - `block`: the decoded block.
 - Restores the `size` field of `scratch`.
 
+### Function never
+
+- Makes an OS call.
+
+### Limits
+
+- Stack of its own: 144 bytes on x86-64 (return address included), 144 bytes on ARM64, 144 bytes on RISC-V.
+
 ### ABI
 
-- Export: `lantern_<fork>_node_anchor_block` of each fork object.
+- Role: L0.
+- Symbol: `lantern_<fork>_node_anchor_block` in the object of every fork, with `_` before it on macOS; `lantern_node_anchor_block` inside the object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6); each argument is a pointer: a Uint64 argument points at a u64, and a Boolean output is a u64 of 0 or 1.
 - Argument order: `data`, `room`, `scratch`, `state`, `block`.
 
 ## Function `lantern_node_state_bytes`
@@ -2321,15 +2885,30 @@ lantern_node_state_bytes(state, scratch, out, size) -> status
 - `LANTERN_OK`: `out` holds the encoding at offset 24.
 - `LANTERN_BUFFER_TOO_SMALL`: `out` is below `size`, or `scratch` is short; `size` is written all the same when `scratch` holds what ssz_serialize_size needs.
 
+### Caller must
+
+- `state` is a valid `BeaconState` value (include/types.inc) with every PartRef in range.
+
 ### Function does
 
 - ssz_serialize_size, then ssz_serialize of asm-ssz with the fork's `BeaconState` type.
 - Restores the `size` field of `scratch`.
 
+### Function never
+
+- Makes an OS call.
+
+### Limits
+
+- Stack of its own: 96 bytes on x86-64 (return address included), 96 bytes on ARM64, 96 bytes on RISC-V.
+
 ### ABI
 
-- Export: `lantern_<fork>_node_state_bytes` of each fork object.
+- Role: L0.
+- Symbol: `lantern_<fork>_node_state_bytes` in the object of every fork, with `_` before it on macOS; `lantern_node_state_bytes` inside the object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6); each argument is a pointer: a Uint64 argument points at a u64, and a Boolean output is a u64 of 0 or 1.
 - Argument order: `state`, `scratch`, `out`, `size`.
+
 ## Function `lantern_node_upgrade`
 
 upgrade_to_<fork> of the object's fork: the state of the fork from a state of the fork before, at the fork's first slot.
@@ -2361,9 +2940,19 @@ lantern_node_upgrade(pre, room, config, scratch, out) -> status
 
 - lantern_upgrade_size, then lantern_upgrade_to_<fork> of [fork-upgrades.md](fork-upgrades.md).
 
+### Function never
+
+- Makes an OS call.
+
+### Limits
+
+- Stack of its own: 96 bytes on x86-64 (return address included), 96 bytes on ARM64, 96 bytes on RISC-V.
+
 ### ABI
 
-- Export: `lantern_<fork>_node_upgrade` of each fork object.
+- Role: L0.
+- Symbol: `lantern_<fork>_node_upgrade` in the object of every fork, with `_` before it on macOS; `lantern_node_upgrade` inside the object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6); each argument is a pointer: a Uint64 argument points at a u64, and a Boolean output is a u64 of 0 or 1.
 - Argument order: `pre`, `room`, `config`, `scratch`, `out`.
 
 ## Function `lantern_node_replay`
@@ -2391,14 +2980,28 @@ lantern_node_replay(data, state, config, scratch, result) -> status
 - `LANTERN_OK`: `result` is that of lantern_state_transition, or `LANTERN_INVALID_ENCODING` when `data` is no `SignedBeaconBlock`.
 - `LANTERN_BUFFER_TOO_SMALL`: as lantern_state_transition, or `scratch` cannot hold the decoded block.
 
+### Caller must
+
+- `state` is a valid `BeaconState` value (include/types.inc) with every PartRef in range.
+
 ### Function does
 
 - lantern_state_transition with `TransitionOptions` of validate_result 0, execution_valid 1 and slots_done 1.
 - Restores the `size` field of `scratch`.
 
+### Function never
+
+- Makes an OS call.
+
+### Limits
+
+- Stack of its own: 128 bytes on x86-64 (return address included), 128 bytes on ARM64, 128 bytes on RISC-V.
+
 ### ABI
 
-- Export: `lantern_<fork>_node_replay` of each fork object.
+- Role: L0.
+- Symbol: `lantern_<fork>_node_replay` in the object of every fork, with `_` before it on macOS; `lantern_node_replay` inside the object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6); each argument is a pointer: a Uint64 argument points at a u64, and a Boolean output is a u64 of 0 or 1.
 - Argument order: `data`, `state`, `config`, `scratch`, `result`.
 
 ## Function `lantern_node_backfill`
@@ -2427,15 +3030,29 @@ lantern_node_backfill(data, state, config, root, scratch, result) -> status
 - `LANTERN_OK`: `result` is `LANTERN_VALID`, `LANTERN_INVALID_ENCODING` for fewer than 184 bytes, `LANTERN_INVALID_PROPOSER_INDEX` for a `proposer_index` of no validator, or `LANTERN_INVALID_BLOCK_SIGNATURE`.
 - `LANTERN_BUFFER_TOO_SMALL`: `scratch` cannot hold the check.
 
+### Caller must
+
+- `state` is a valid `BeaconState` value (include/types.inc) with every PartRef in range.
+
 ### Function does
 
 - The block's `slot` and `proposer_index` are bytes 100 and 108 of `data`, and its signature bytes 4 to 99, in every fork.
 - A block at `GENESIS_SLOT`: `LANTERN_VALID`; the genesis block has no proposer.
 - Else `LANTERN_VALID` when `proposer_index` is below the length of the state's validators and bls.Verify(the validator's pubkey, compute_signing_root(`root`, domain), signature), with domain compute_domain(`DOMAIN_BEACON_PROPOSER`, compute_fork_version(the epoch of the slot), the state's `genesis_validators_root`): the block's own fork version, as its proposer signed it. A validator's index and pubkey never change, so a later state has them.
 
+### Function never
+
+- Makes an OS call.
+
+### Limits
+
+- Stack of its own: 240 bytes on x86-64 (return address included), 240 bytes on ARM64, 240 bytes on RISC-V.
+
 ### ABI
 
-- Export: `lantern_<fork>_node_backfill` of each fork object.
+- Role: L0.
+- Symbol: `lantern_<fork>_node_backfill` in the object of every fork, with `_` before it on macOS; `lantern_node_backfill` inside the object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6); each argument is a pointer: a Uint64 argument points at a u64, and a Boolean output is a u64 of 0 or 1.
 - Argument order: `data`, `state`, `config`, `root`, `scratch`, `result`.
 
 ## Function `lantern_node_block_header`
@@ -2466,9 +3083,19 @@ lantern_node_block_header(data, scratch, out) -> status
 
 - Restores the `size` field of `scratch`.
 
+### Function never
+
+- Makes an OS call.
+
+### Limits
+
+- Stack of its own: 96 bytes on x86-64 (return address included), 96 bytes on ARM64, 96 bytes on RISC-V.
+
 ### ABI
 
-- Export: `lantern_<fork>_node_block_header` of each fork object.
+- Role: L0.
+- Symbol: `lantern_<fork>_node_block_header` in the object of every fork, with `_` before it on macOS; `lantern_node_block_header` inside the object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6); each argument is a pointer: a Uint64 argument points at a u64, and a Boolean output is a u64 of 0 or 1.
 - Argument order: `data`, `scratch`, `out`.
 
 ## Function `lantern_node_state_checkpoints`
@@ -2492,9 +3119,23 @@ lantern_node_state_checkpoints(state, out) -> status
 
 - `LANTERN_OK`, always.
 
+### Caller must
+
+- `state` is a valid `BeaconState` value (include/types.inc) with every PartRef in range.
+
+### Function never
+
+- Makes an OS call.
+
+### Limits
+
+- Stack of its own: 16 bytes on x86-64 (return address included), 32 bytes on ARM64, 16 bytes on RISC-V.
+
 ### ABI
 
-- Export: `lantern_<fork>_node_state_checkpoints` of each fork object.
+- Role: L0.
+- Symbol: `lantern_<fork>_node_state_checkpoints` in the object of every fork, with `_` before it on macOS; `lantern_node_state_checkpoints` inside the object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6); each argument is a pointer: a Uint64 argument points at a u64, and a Boolean output is a u64 of 0 or 1.
 - Argument order: `state`, `out`.
 
 ## Function `lantern_node_new_payload`
@@ -2529,9 +3170,20 @@ lantern_node_new_payload(data, node, id, scratch, out, result) -> status
 - A payload with zero `block_hash` and `parent_hash` is the empty payload before the merge, or one that process_execution_payload rejects after it, since `parent_hash` must then be the header's `block_hash`.
 - Decodes into the end of `scratch`; the scratch `size` is restored on return.
 
+### Function never
+
+- Makes an OS call.
+
+### Limits
+
+- Stack of its own: 112 bytes on x86-64 (return address included), 112 bytes on ARM64, 112 bytes on RISC-V.
+
 ### ABI
 
-- Export: `lantern_<fork>_node_new_payload` of the bellatrix and later objects.
+- Role: L0.
+- Symbol: `lantern_<fork>_node_new_payload` in the object of bellatrix to fulu, with `_` before it on macOS; `lantern_node_new_payload` inside the object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6); each argument is a pointer: a Uint64 argument points at a u64, and a Boolean output is a u64 of 0 or 1.
+- Argument order: `data`, `node`, `id`, `scratch`, `out`, `result`.
 
 ## Function `lantern_node_json`
 
@@ -2560,9 +3212,19 @@ lantern_node_json(kind, ssz, cursor, out) -> status
 
 - lantern_json_encode_ssz with the fork's type of the kind, of include/descriptors.inc.
 
+### Function never
+
+- Makes an OS call.
+
+### Limits
+
+- Stack of its own: 16 bytes on x86-64 (return address included), 16 bytes on ARM64, 16 bytes on RISC-V.
+
 ### ABI
 
-- Export: `lantern_<fork>_node_json` of each fork object.
+- Role: L0.
+- Symbol: `lantern_<fork>_node_json` in the object of every fork, with `_` before it on macOS; `lantern_node_json` inside the object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6); each argument is a pointer: a Uint64 argument points at a u64, and a Boolean output is a u64 of 0 or 1.
 - Argument order: `kind`, `ssz`, `cursor`, `out`.
 
 ## Type `Node`
@@ -2726,8 +3388,11 @@ The state of the node: a value with parts.
 - `NODE_FLAG_SUPERNODE`: the node custodies every custody group: `columns` holds every column, and `custody_count` is `NUMBER_OF_CUSTODY_GROUPS` (lantern_node_init).
 - `NODE_FLAG_BUILDER` (2048): the node has a builder (app.md `--builder`): it keeps the anchor's `builder_host`, and makes the builder calls (below).
 - `columns` has room for `NUMBER_OF_COLUMNS` of the preset, at most 128.
+- The node's queue (`p2p_out`) is one ByteList of libp2p events inside the node. libp2p_step reads it in place.
 
 ## Type `NodeRoom`
+
+The capacities of the parts of a Node.
 
 ### Layout
 
@@ -2869,6 +3534,8 @@ An operation of the pool (beacon-api.md, the pools).
 
 ## Type `NodeBlock`
 
+A block the node knows: its root, slot, parent, post-state and status.
+
 ### Layout
 
 | Offset | Field | Type | Meaning |
@@ -2892,8 +3559,11 @@ An operation of the pool (beacon-api.md, the pools).
 - With `NODE_FLAG_ENGINE`, the status `NODE_BLOCK_PAYLOAD` while its engine_newPayload is due, and `NODE_BLOCK_EXECUTING` while it is queued or sent.
 - A block of the backfill: `NODE_BLOCK_BF_CHECKING` while its `NODE_WORK_BACKFILL` is queued, then `NODE_BLOCK_BACKFILL` with its root until it joins the `Db` or goes. Neither is a block of the store.
 - `NODE_BLOCK_FREE`: an entry the prune freed, with `root` and `parent_root` all 0xff bytes, `slot` 2^64 - 1, and `data_id` and `state_id` 0. A new block takes the first free entry, else the next.
+- The node keeps `store.block_states` as the post-state id of each imported `NodeBlock`.
 
 ## Type `NodeCheckpoint`
+
+A checkpoint state the node keeps.
 
 ### Layout
 
@@ -2907,8 +3577,11 @@ An operation of the pool (beacon-api.md, the pools).
 
 - `NodeCheckpoint__mem` (48) bytes. The first 40 bytes are a `Checkpoint`.
 - An entry the prune freed has `epoch` 2^64 - 1, a `root` of all 0xff bytes and `state_id` 0. A new checkpoint takes the first free entry, else the next.
+- The node keeps `store.checkpoint_states` as its `NodeCheckpoint` entries.
 
 ## Type `NodePeer`
+
+A connected peer of the node.
 
 ### Layout
 
@@ -2936,6 +3609,8 @@ An operation of the pool (beacon-api.md, the pools).
 
 ## Type `NodeStream`
 
+A req/resp stream of the node.
+
 ### Layout
 
 | Offset | Field | Type | Meaning |
@@ -2953,6 +3628,7 @@ An operation of the pool (beacon-api.md, the pools).
 ### Rules
 
 - `stream_bytes` of the node: `NodeStream__fixed` (88) + the request room.
+- A stream carries one request and one answer, as the req/resp functions of [req-resp.md](req-resp.md) encode them.
 
 ## Type `NodeResponse`
 
@@ -2989,6 +3665,8 @@ A proposer state of gossip messages: a copy of a parent's post-state that the me
 
 ## Type `NodeMessage`
 
+A gossip message that waits for its validation.
+
 ### Layout
 
 | Offset | Field | Type | Meaning |
@@ -2996,7 +3674,7 @@ A proposer state of gossip messages: a copy of a parent's post-state that the me
 | 0 | `handle` | u64 | The libp2p message Handle |
 | 8 | `peer` | u64 | The libp2p peer Handle |
 | 16 | `topic` | u64 | `GOSSIP_*`, or 0 for a topic of no name |
-| 24 | `subnet` | u64 | |
+| 24 | `subnet` | u64 | The subnet of a subnet topic |
 | 32 | `data_id` | u64 | `BufferId` of the uncompressed bytes, or 0 |
 | 40 | `state` | u64 | `NODE_MESSAGE_ID`, `NODE_MESSAGE_VALIDATING`, `NODE_MESSAGE_NO_ROOM`, `NODE_MESSAGE_CORRUPT`, `NODE_MESSAGE_OTHER_DIGEST`, or for a valid aggregate `NODE_MESSAGE_VOTE` and `NODE_MESSAGE_VOTING` |
 | 48 | `slot` | u64 | The slot of its block header, or of an aggregate's data |
@@ -3009,12 +3687,14 @@ A proposer state of gossip messages: a copy of a parent's post-state that the me
 
 ## Type `NodeBlob`
 
+A blob or column sidecar the node holds.
+
 ### Layout
 
 | Offset | Field | Type | Meaning |
 |---|---|---|---|
 | 0 | `block_root` | Root | hash_tree_root of its `signed_block_header.message`, 0 while `NODE_BLOB_VERIFYING` |
-| 32 | `index` | u64 | |
+| 32 | `index` | u64 | The blob's index, or the column's |
 | 40 | `slot` | u64 | The slot of its block header |
 | 48 | `data_id` | u64 | `BufferId` of the `BlobSidecar`'s SSZ bytes, or for a slot of fulu or later the `DataColumnSidecar`'s |
 | 56 | `status` | u64 | `NODE_BLOB_VERIFYING` while a `NODE_WORK_BLOB` of it is queued, `NODE_BLOB_VALID`, or `NODE_BLOB_FREE` after the prune or a failed check, with `block_root` all 0xff bytes and `slot` 2^64 - 1 |
@@ -3053,8 +3733,12 @@ A Beacon API answer the node sends in chunks.
 - `NodeApi__mem` (720) bytes.
 - `flags`: `API_STREAM_CLOSE` (1) the connection closes after the answer; `API_STREAM_HTTP10` (2) an HTTP/1.0 request; `API_STREAM_SSZ` (4) the answer is SSZ, else JSON; `API_STREAM_OWN` (8) the stream frees `data` at its end; `API_STREAM_BUSY` (16) a `NODE_WORK_API_CHUNK` is queued; `API_STREAM_GONE` (32) the connection closed; `API_STREAM_STARTED` (64) the head went; `API_STREAM_CHUNKED` (128) the body goes with `Transfer-Encoding: chunked`; `API_STREAM_OPTIMISTIC` (256) and `API_STREAM_FINALIZED` (512) the JSON's `execution_optimistic` and `finalized`; `API_STREAM_DONE` (1024), in a `NODE_EV_WORK_DONE` only, the chunk ends the answer; `API_STREAM_LOOKUP` (2048) the entry waits for a `NODE_WORK_API_LOOKUP`, and sends no chunk; `API_STREAM_OWN_STATE` (4096) the stream frees `state` at its end; `API_STREAM_ITEMS` (8192) a pool stream wrote an entry; `API_STREAM_ITEM_DONE` (16384), in a `NODE_EV_WORK_DONE` only, the chunk ends an entry; `API_STREAM_FOLD` (32768) getAggregatedAttestationV2 folds its entries; `API_STREAM_PRODUCE_OWN` (65536) a produceBlockV3 frees the pool bytes of its fold in flight; `API_STREAM_PRODUCE_FORCED` (131072) a produceBlockV3 made its own payload preparation; `API_STREAM_BLOB_SKIP` (262144), in a `NODE_EV_WORK_DONE` only, the blob stream skips the rest of a blob; `API_STREAM_PRODUCE_BLINDED` (524288) a produceBlockV3 answers a blinded block; `API_STREAM_REPLAY` (1048576) a lookup entry waits for the replay.
 - A `NODE_ACT_API_SEND` with `last` 0 is never more than `NODE_API_CHUNK` bytes, so a shell with room for two chunks in flight can take the next chunk at each `NODE_EV_API_SENT`.
+- The node keeps a `NodeApi` entry for each answer it sends in more than one chunk, and no other state of a connection.
+- A streamed answer goes one chunk at a time: the shell passes a `NODE_EV_API_SENT` of the connection once it has room for the next chunk, and a `NODE_EV_API_CLOSED` when the connection closes.
 
 ## Type `NodeGossip`
+
+The arguments of a gossip validation work.
 
 ### Layout
 
@@ -3077,12 +3761,14 @@ A Beacon API answer the node sends in chunks.
 
 ## Type `NodeAnchor`
 
+The anchor the node starts from.
+
 ### Layout
 
 | Offset | Field | Type | Meaning |
 |---|---|---|---|
 | 0 | `root` | Root | hash_tree_root of the anchor block |
-| 32 | `slot` | u64 | |
+| 32 | `slot` | u64 | The anchor block's slot |
 | 40 | `genesis_validators_root` | Root | Of the anchor state |
 | 72 | `jwt_secret` | Bytes32 | With `NODE_FLAG_ENGINE` |
 | 104 | `engine_host_len` | u64 | With `NODE_FLAG_ENGINE`, at most `NODE_ENGINE_HOST_MAX` (64) |
@@ -3098,6 +3784,8 @@ A Beacon API answer the node sends in chunks.
 
 ## Type `NodeStepResult`
 
+What lantern_node_step reports besides its status.
+
 ### Layout
 
 | Offset | Field | Type | Meaning |
@@ -3112,7 +3800,17 @@ A Beacon API answer the node sends in chunks.
 
 The events of one step: a ByteList whose bytes are `NodeEvent` entries one after another.
 
+### Layout
+
+| Offset | Field | Type | Meaning |
+|---|---|---|---|
+| 0 | `size` | u64 | Bytes of the buffer |
+| 8 | `offset` | u64 | Where the bytes start |
+| 16 | `count` | u64 | The bytes in use |
+
 ## Type `NodeEvent`
+
+One event of a step.
 
 ### Layout
 
@@ -3141,9 +3839,23 @@ The events of one step: a ByteList whose bytes are `NodeEvent` entries one after
 
 ## Type `NodeActions`
 
-The actions of one step: a ByteList whose bytes are `NodeAction` entries one after another. The step adds after its `count` bytes.
+The actions of one step: a ByteList whose bytes are `NodeAction` entries one after another.
+
+### Layout
+
+| Offset | Field | Type | Meaning |
+|---|---|---|---|
+| 0 | `size` | u64 | Bytes of the buffer |
+| 8 | `offset` | u64 | Where the bytes start |
+| 16 | `count` | u64 | The bytes in use |
+
+### Rules
+
+- The step adds its actions after the `count` bytes.
 
 ## Type `NodeAction`
+
+One action of a step.
 
 ### Layout
 
@@ -3180,6 +3892,21 @@ The actions of one step: a ByteList whose bytes are `NodeAction` entries one aft
 - `NODE_ACT_STATE_BYTES` (`NODE_ACT_STATE_BYTES_SIZE`, 32 bytes): 16 the id of a state, 24 a new id: keep lantern_node_state_bytes of the fork of the state's slot as the bytes of the new id, a ByteList as `NODE_ACT_BYTES_PUT` keeps one. With no room for them, keep a ByteList of no bytes.
 - An API action of a connection that closed is dropped.
 - `NODE_ACT_ENGINE`: a ByteList at 24, offset 24: write its bytes to the connection to the execution engine, opening one when there is none, and pass what the engine sends in `NODE_EV_ENGINE` events; a connection that fails or closes before an answer is a `NODE_EV_ENGINE` with arg 1.
+
+## Type `BufferId`
+
+The name of a beacon state or a stored byte string that the shell holds: a u64 the node gives.
+
+### Layout
+
+| Offset | Field | Type | Meaning |
+|---|---|---|---|
+| 0 | `id` | u64 | From 1; 0 names none |
+
+### Rules
+
+- The shell owns every buffer, and maps each id to its buffer.
+- A state's slot is the u64 at `NODE_STATE_SLOT` of its value in every fork.
 
 ## Test vectors
 
@@ -3371,6 +4098,17 @@ The actions of one step: a ByteList whose bytes are `NodeAction` entries one aft
   - A step with fewer proofs than blobs gives the sidecars of the indices that have both.
 - In gossip mode, the sidecars of a valid block go from the peer after the block, each on the blob_sidecar topic of its subnet; the node must import the block.
 - In gossip mode in fulu, the node's `node_id` is as in the sync, and the column sidecars of the node's columns of a valid block go from the peer after the block, each on the data_column_sidecar topic of its subnet; the node must import the block.
+- lantern_node_data_root: the runner checks it against the root of each `ssz_static` case of `AttestationData`.
+- lantern_node_sync_subnets: the node-api cases of submitPoolSyncCommitteeSignatures: their answers and publishes come from the spec module's compute_subnets_for_sync_committee.
+- lantern_node_sync_positions: the node-api cases of produceSyncCommitteeContribution: their answers come from the spec module's sync committee and the validator guide's rules.
+- lantern_node_produce_check: the node-produce cases: their answers come from the spec module's block proposal; the builder cases need the health (`builder_unhealthy` its lack).
+- lantern_node_payload_result: the node-produce cases: the engine's answer there is the spec module's payload in the JSON of execution-apis.
+- lantern_node_produce_fold: the node-produce cases.
+- lantern_node_produce_block: the node-produce cases.
+- lantern_node_produce_bid: the node-produce cases of a builder.
+- lantern_node_publish_decode: the node-publish cases.
+- lantern_node_publish_sidecars: the node-publish cases.
+- lantern_node_publish_check: the node-publish cases.
 
 ## Results
 
