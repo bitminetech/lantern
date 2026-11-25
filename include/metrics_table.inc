@@ -678,422 +678,428 @@ mt_s223:
     .ascii "Anchor states written for a restart"
 .set mt_s223_len, 35
 mt_s224:
-    .ascii "lantern_node_storage_segments_dropped_total"
-.set mt_s224_len, 43
+    .ascii "lantern_node_storage_anchor_write_seconds"
+.set mt_s224_len, 41
 mt_s225:
-    .ascii "Segment files deleted"
-.set mt_s225_len, 21
+    .ascii "Run time of each anchor state write, from its bytes to the synced directory"
+.set mt_s225_len, 75
 mt_s226:
-    .ascii "lantern_node_storage_write_failures_total"
-.set mt_s226_len, 41
+    .ascii "lantern_node_storage_segments_dropped_total"
+.set mt_s226_len, 43
 mt_s227:
-    .ascii "Writes to the data directory that failed"
-.set mt_s227_len, 40
+    .ascii "Segment files deleted"
+.set mt_s227_len, 21
 mt_s228:
-    .ascii "status"
-.set mt_s228_len, 6
+    .ascii "lantern_node_storage_write_failures_total"
+.set mt_s228_len, 41
 mt_s229:
-    .ascii "pending"
-.set mt_s229_len, 7
+    .ascii "Writes to the data directory that failed"
+.set mt_s229_len, 40
 mt_s230:
-    .ascii "active"
+    .ascii "status"
 .set mt_s230_len, 6
 mt_s231:
-    .ascii "exited"
-.set mt_s231_len, 6
+    .ascii "pending"
+.set mt_s231_len, 7
 mt_s232:
-    .ascii "withdrawable"
-.set mt_s232_len, 12
+    .ascii "active"
+.set mt_s232_len, 6
 mt_s233:
-    .ascii "topic"
-.set mt_s233_len, 5
+    .ascii "exited"
+.set mt_s233_len, 6
 mt_s234:
-    .ascii "other"
-.set mt_s234_len, 5
+    .ascii "withdrawable"
+.set mt_s234_len, 12
 mt_s235:
-    .ascii "beacon_block"
-.set mt_s235_len, 12
+    .ascii "topic"
+.set mt_s235_len, 5
 mt_s236:
-    .ascii "beacon_aggregate_and_proof"
-.set mt_s236_len, 26
+    .ascii "other"
+.set mt_s236_len, 5
 mt_s237:
-    .ascii "beacon_attestation"
-.set mt_s237_len, 18
+    .ascii "beacon_block"
+.set mt_s237_len, 12
 mt_s238:
-    .ascii "voluntary_exit"
-.set mt_s238_len, 14
+    .ascii "beacon_aggregate_and_proof"
+.set mt_s238_len, 26
 mt_s239:
-    .ascii "proposer_slashing"
-.set mt_s239_len, 17
+    .ascii "beacon_attestation"
+.set mt_s239_len, 18
 mt_s240:
-    .ascii "attester_slashing"
-.set mt_s240_len, 17
+    .ascii "voluntary_exit"
+.set mt_s240_len, 14
 mt_s241:
-    .ascii "sync_committee_contribution_and_proof"
-.set mt_s241_len, 37
+    .ascii "proposer_slashing"
+.set mt_s241_len, 17
 mt_s242:
-    .ascii "sync_committee"
-.set mt_s242_len, 14
+    .ascii "attester_slashing"
+.set mt_s242_len, 17
 mt_s243:
-    .ascii "bls_to_execution_change"
-.set mt_s243_len, 23
+    .ascii "sync_committee_contribution_and_proof"
+.set mt_s243_len, 37
 mt_s244:
-    .ascii "blob_sidecar"
-.set mt_s244_len, 12
+    .ascii "sync_committee"
+.set mt_s244_len, 14
 mt_s245:
-    .ascii "data_column_sidecar"
-.set mt_s245_len, 19
+    .ascii "bls_to_execution_change"
+.set mt_s245_len, 23
 mt_s246:
-    .ascii "light_client_finality_update"
-.set mt_s246_len, 28
+    .ascii "blob_sidecar"
+.set mt_s246_len, 12
 mt_s247:
-    .ascii "light_client_optimistic_update"
-.set mt_s247_len, 30
+    .ascii "data_column_sidecar"
+.set mt_s247_len, 19
 mt_s248:
-    .ascii "result"
-.set mt_s248_len, 6
+    .ascii "light_client_finality_update"
+.set mt_s248_len, 28
 mt_s249:
-    .ascii "accept"
-.set mt_s249_len, 6
+    .ascii "light_client_optimistic_update"
+.set mt_s249_len, 30
 mt_s250:
-    .ascii "ignore"
+    .ascii "result"
 .set mt_s250_len, 6
 mt_s251:
-    .ascii "reject"
+    .ascii "accept"
 .set mt_s251_len, 6
 mt_s252:
-    .ascii "method"
+    .ascii "ignore"
 .set mt_s252_len, 6
 mt_s253:
-    .ascii "goodbye"
-.set mt_s253_len, 7
+    .ascii "reject"
+.set mt_s253_len, 6
 mt_s254:
-    .ascii "beacon_blocks_by_range"
-.set mt_s254_len, 22
+    .ascii "method"
+.set mt_s254_len, 6
 mt_s255:
-    .ascii "beacon_blocks_by_root"
-.set mt_s255_len, 21
+    .ascii "goodbye"
+.set mt_s255_len, 7
 mt_s256:
-    .ascii "ping"
-.set mt_s256_len, 4
+    .ascii "beacon_blocks_by_range"
+.set mt_s256_len, 22
 mt_s257:
-    .ascii "metadata"
-.set mt_s257_len, 8
+    .ascii "beacon_blocks_by_root"
+.set mt_s257_len, 21
 mt_s258:
-    .ascii "blob_sidecars_by_range"
-.set mt_s258_len, 22
+    .ascii "ping"
+.set mt_s258_len, 4
 mt_s259:
-    .ascii "blob_sidecars_by_root"
-.set mt_s259_len, 21
+    .ascii "metadata"
+.set mt_s259_len, 8
 mt_s260:
-    .ascii "data_column_sidecars_by_range"
-.set mt_s260_len, 29
+    .ascii "blob_sidecars_by_range"
+.set mt_s260_len, 22
 mt_s261:
-    .ascii "data_column_sidecars_by_root"
-.set mt_s261_len, 28
+    .ascii "blob_sidecars_by_root"
+.set mt_s261_len, 21
 mt_s262:
-    .ascii "beacon_blocks_by_head"
-.set mt_s262_len, 21
+    .ascii "data_column_sidecars_by_range"
+.set mt_s262_len, 29
 mt_s263:
-    .ascii "light_client_bootstrap"
-.set mt_s263_len, 22
+    .ascii "data_column_sidecars_by_root"
+.set mt_s263_len, 28
 mt_s264:
-    .ascii "light_client_updates_by_range"
-.set mt_s264_len, 29
+    .ascii "beacon_blocks_by_head"
+.set mt_s264_len, 21
 mt_s265:
-    .ascii "direction"
-.set mt_s265_len, 9
+    .ascii "light_client_bootstrap"
+.set mt_s265_len, 22
 mt_s266:
-    .ascii "inbound"
-.set mt_s266_len, 7
+    .ascii "light_client_updates_by_range"
+.set mt_s266_len, 29
 mt_s267:
-    .ascii "outbound"
-.set mt_s267_len, 8
+    .ascii "direction"
+.set mt_s267_len, 9
 mt_s268:
-    .ascii "level"
-.set mt_s268_len, 5
+    .ascii "inbound"
+.set mt_s268_len, 7
 mt_s269:
-    .ascii "error"
-.set mt_s269_len, 5
+    .ascii "outbound"
+.set mt_s269_len, 8
 mt_s270:
-    .ascii "warn"
-.set mt_s270_len, 4
+    .ascii "level"
+.set mt_s270_len, 5
 mt_s271:
-    .ascii "info"
-.set mt_s271_len, 4
+    .ascii "error"
+.set mt_s271_len, 5
 mt_s272:
-    .ascii "debug"
-.set mt_s272_len, 5
+    .ascii "warn"
+.set mt_s272_len, 4
 mt_s273:
-    .ascii "class"
-.set mt_s273_len, 5
+    .ascii "info"
+.set mt_s273_len, 4
 mt_s274:
-    .ascii "2xx"
-.set mt_s274_len, 3
+    .ascii "debug"
+.set mt_s274_len, 5
 mt_s275:
-    .ascii "3xx"
-.set mt_s275_len, 3
+    .ascii "class"
+.set mt_s275_len, 5
 mt_s276:
-    .ascii "4xx"
+    .ascii "2xx"
 .set mt_s276_len, 3
 mt_s277:
-    .ascii "5xx"
+    .ascii "3xx"
 .set mt_s277_len, 3
 mt_s278:
-    .ascii "kind"
-.set mt_s278_len, 4
+    .ascii "4xx"
+.set mt_s278_len, 3
 mt_s279:
-    .ascii "block"
-.set mt_s279_len, 5
+    .ascii "5xx"
+.set mt_s279_len, 3
 mt_s280:
-    .ascii "sidecar"
-.set mt_s280_len, 7
+    .ascii "kind"
+.set mt_s280_len, 4
 mt_s281:
-    .ascii "state"
+    .ascii "block"
 .set mt_s281_len, 5
 mt_s282:
-    .ascii "work"
-.set mt_s282_len, 4
+    .ascii "sidecar"
+.set mt_s282_len, 7
 mt_s283:
-    .ascii "import_block"
-.set mt_s283_len, 12
+    .ascii "state"
+.set mt_s283_len, 5
 mt_s284:
-    .ascii "sync_block"
-.set mt_s284_len, 10
+    .ascii "work"
+.set mt_s284_len, 4
 mt_s285:
-    .ascii "block_attestation"
-.set mt_s285_len, 17
+    .ascii "import_block"
+.set mt_s285_len, 12
 mt_s286:
-    .ascii "block_slashing"
-.set mt_s286_len, 14
+    .ascii "sync_block"
+.set mt_s286_len, 10
 mt_s287:
-    .ascii "replay"
-.set mt_s287_len, 6
+    .ascii "block_attestation"
+.set mt_s287_len, 17
 mt_s288:
-    .ascii "justified_state"
-.set mt_s288_len, 15
+    .ascii "block_slashing"
+.set mt_s288_len, 14
 mt_s289:
-    .ascii "target_state"
-.set mt_s289_len, 12
+    .ascii "replay"
+.set mt_s289_len, 6
 mt_s290:
-    .ascii "slots"
-.set mt_s290_len, 5
+    .ascii "justified_state"
+.set mt_s290_len, 15
 mt_s291:
-    .ascii "upgrade"
-.set mt_s291_len, 7
+    .ascii "target_state"
+.set mt_s291_len, 12
 mt_s292:
-    .ascii "attestation"
-.set mt_s292_len, 11
+    .ascii "slots"
+.set mt_s292_len, 5
 mt_s293:
-    .ascii "gossip_vote"
-.set mt_s293_len, 11
+    .ascii "upgrade"
+.set mt_s293_len, 7
 mt_s294:
-    .ascii "blob"
-.set mt_s294_len, 4
+    .ascii "attestation"
+.set mt_s294_len, 11
 mt_s295:
-    .ascii "reconstruct"
+    .ascii "gossip_vote"
 .set mt_s295_len, 11
 mt_s296:
-    .ascii "custody"
-.set mt_s296_len, 7
+    .ascii "blob"
+.set mt_s296_len, 4
 mt_s297:
-    .ascii "gossip"
-.set mt_s297_len, 6
+    .ascii "reconstruct"
+.set mt_s297_len, 11
 mt_s298:
-    .ascii "new_payload"
-.set mt_s298_len, 11
+    .ascii "custody"
+.set mt_s298_len, 7
 mt_s299:
-    .ascii "forkchoice"
-.set mt_s299_len, 10
+    .ascii "gossip"
+.set mt_s299_len, 6
 mt_s300:
-    .ascii "prepare_payload"
-.set mt_s300_len, 15
+    .ascii "new_payload"
+.set mt_s300_len, 11
 mt_s301:
-    .ascii "get_payload"
-.set mt_s301_len, 11
+    .ascii "forkchoice"
+.set mt_s301_len, 10
 mt_s302:
-    .ascii "eth1_check"
-.set mt_s302_len, 10
+    .ascii "prepare_payload"
+.set mt_s302_len, 15
 mt_s303:
-    .ascii "produce_bid"
+    .ascii "get_payload"
 .set mt_s303_len, 11
 mt_s304:
-    .ascii "lc_block"
-.set mt_s304_len, 8
+    .ascii "eth1_check"
+.set mt_s304_len, 10
 mt_s305:
-    .ascii "lc_head"
-.set mt_s305_len, 7
+    .ascii "produce_bid"
+.set mt_s305_len, 11
 mt_s306:
-    .ascii "lc_serve"
+    .ascii "lc_block"
 .set mt_s306_len, 8
 mt_s307:
-    .ascii "lc_gossip"
-.set mt_s307_len, 9
+    .ascii "lc_head"
+.set mt_s307_len, 7
 mt_s308:
-    .ascii "lc_publish"
-.set mt_s308_len, 10
+    .ascii "lc_serve"
+.set mt_s308_len, 8
 mt_s309:
-    .ascii "backfill"
-.set mt_s309_len, 8
+    .ascii "lc_gossip"
+.set mt_s309_len, 9
 mt_s310:
-    .ascii "archive_load"
-.set mt_s310_len, 12
+    .ascii "lc_publish"
+.set mt_s310_len, 10
 mt_s311:
-    .ascii "serve"
-.set mt_s311_len, 5
+    .ascii "backfill"
+.set mt_s311_len, 8
 mt_s312:
-    .ascii "api_encode"
-.set mt_s312_len, 10
+    .ascii "archive_load"
+.set mt_s312_len, 12
 mt_s313:
-    .ascii "api_chunk"
-.set mt_s313_len, 9
+    .ascii "serve"
+.set mt_s313_len, 5
 mt_s314:
-    .ascii "api_lookup"
+    .ascii "api_encode"
 .set mt_s314_len, 10
 mt_s315:
-    .ascii "api_event"
+    .ascii "api_chunk"
 .set mt_s315_len, 9
 mt_s316:
-    .ascii "api_submit"
+    .ascii "api_lookup"
 .set mt_s316_len, 10
 mt_s317:
-    .ascii "pool_check"
-.set mt_s317_len, 10
+    .ascii "api_event"
+.set mt_s317_len, 9
 mt_s318:
-    .ascii "produce_check"
-.set mt_s318_len, 13
+    .ascii "api_submit"
+.set mt_s318_len, 10
 mt_s319:
-    .ascii "produce_fold"
-.set mt_s319_len, 12
+    .ascii "pool_check"
+.set mt_s319_len, 10
 mt_s320:
-    .ascii "produce_block"
+    .ascii "produce_check"
 .set mt_s320_len, 13
 mt_s321:
-    .ascii "publish_decode"
-.set mt_s321_len, 14
+    .ascii "produce_fold"
+.set mt_s321_len, 12
 mt_s322:
-    .ascii "publish_sidecars"
-.set mt_s322_len, 16
+    .ascii "produce_block"
+.set mt_s322_len, 13
 mt_s323:
-    .ascii "publish_check"
-.set mt_s323_len, 13
+    .ascii "publish_decode"
+.set mt_s323_len, 14
 mt_s324:
-    .ascii "publish_sidecar"
-.set mt_s324_len, 15
+    .ascii "publish_sidecars"
+.set mt_s324_len, 16
 mt_s325:
-    .ascii "produce_eth1"
-.set mt_s325_len, 12
+    .ascii "publish_check"
+.set mt_s325_len, 13
 mt_s326:
-    .ascii "0.005"
-.set mt_s326_len, 5
+    .ascii "publish_sidecar"
+.set mt_s326_len, 15
 mt_s327:
-    .ascii "0.01"
-.set mt_s327_len, 4
+    .ascii "produce_eth1"
+.set mt_s327_len, 12
 mt_s328:
-    .ascii "0.025"
+    .ascii "0.005"
 .set mt_s328_len, 5
 mt_s329:
-    .ascii "0.05"
+    .ascii "0.01"
 .set mt_s329_len, 4
 mt_s330:
-    .ascii "0.1"
-.set mt_s330_len, 3
+    .ascii "0.025"
+.set mt_s330_len, 5
 mt_s331:
-    .ascii "0.25"
+    .ascii "0.05"
 .set mt_s331_len, 4
 mt_s332:
-    .ascii "0.5"
+    .ascii "0.1"
 .set mt_s332_len, 3
 mt_s333:
-    .ascii "1"
-.set mt_s333_len, 1
+    .ascii "0.25"
+.set mt_s333_len, 4
 mt_s334:
-    .ascii "2.5"
+    .ascii "0.5"
 .set mt_s334_len, 3
 mt_s335:
-    .ascii "5"
+    .ascii "1"
 .set mt_s335_len, 1
 mt_s336:
-    .ascii "10"
-.set mt_s336_len, 2
+    .ascii "2.5"
+.set mt_s336_len, 3
 mt_s337:
-    .ascii "0.002"
-.set mt_s337_len, 5
+    .ascii "5"
+.set mt_s337_len, 1
 mt_s338:
-    .ascii "0.004"
-.set mt_s338_len, 5
+    .ascii "10"
+.set mt_s338_len, 2
 mt_s339:
-    .ascii "0.008"
+    .ascii "0.002"
 .set mt_s339_len, 5
 mt_s340:
-    .ascii "0.016"
+    .ascii "0.004"
 .set mt_s340_len, 5
 mt_s341:
-    .ascii "0.032"
+    .ascii "0.008"
 .set mt_s341_len, 5
 mt_s342:
-    .ascii "0.064"
+    .ascii "0.016"
 .set mt_s342_len, 5
 mt_s343:
-    .ascii "0.128"
+    .ascii "0.032"
 .set mt_s343_len, 5
 mt_s344:
-    .ascii "0.256"
+    .ascii "0.064"
 .set mt_s344_len, 5
 mt_s345:
-    .ascii "0.512"
+    .ascii "0.128"
 .set mt_s345_len, 5
 mt_s346:
-    .ascii "1.024"
+    .ascii "0.256"
 .set mt_s346_len, 5
 mt_s347:
-    .ascii "2"
-.set mt_s347_len, 1
+    .ascii "0.512"
+.set mt_s347_len, 5
 mt_s348:
-    .ascii "3"
-.set mt_s348_len, 1
+    .ascii "1.024"
+.set mt_s348_len, 5
 mt_s349:
-    .ascii "4"
+    .ascii "2"
 .set mt_s349_len, 1
 mt_s350:
-    .ascii "6"
+    .ascii "3"
 .set mt_s350_len, 1
 mt_s351:
-    .ascii "8"
+    .ascii "4"
 .set mt_s351_len, 1
 mt_s352:
-    .ascii "12"
-.set mt_s352_len, 2
+    .ascii "6"
+.set mt_s352_len, 1
 mt_s353:
-    .ascii "24"
-.set mt_s353_len, 2
+    .ascii "8"
+.set mt_s353_len, 1
 mt_s354:
-    .ascii "0.000001"
-.set mt_s354_len, 8
+    .ascii "12"
+.set mt_s354_len, 2
 mt_s355:
-    .ascii "0.000004"
-.set mt_s355_len, 8
+    .ascii "24"
+.set mt_s355_len, 2
 mt_s356:
-    .ascii "0.000016"
+    .ascii "0.000001"
 .set mt_s356_len, 8
 mt_s357:
-    .ascii "0.000064"
+    .ascii "0.000004"
 .set mt_s357_len, 8
 mt_s358:
-    .ascii "0.000256"
+    .ascii "0.000016"
 .set mt_s358_len, 8
 mt_s359:
-    .ascii "0.001"
-.set mt_s359_len, 5
+    .ascii "0.000064"
+.set mt_s359_len, 8
 mt_s360:
-    .ascii "0.00001"
-.set mt_s360_len, 7
+    .ascii "0.000256"
+.set mt_s360_len, 8
 mt_s361:
-    .ascii "0.0001"
-.set mt_s361_len, 6
+    .ascii "0.001"
+.set mt_s361_len, 5
 mt_s362:
+    .ascii "0.00001"
+.set mt_s362_len, 7
+mt_s363:
+    .ascii "0.0001"
+.set mt_s363_len, 6
+mt_s364:
     .ascii "0.0005"
-.set mt_s362_len, 6
+.set mt_s364_len, 6
 mx_help:
     .ascii "# HELP "
 .set mx_help_len, 7
@@ -1183,31 +1189,29 @@ mx_path:
 .set mx_path_len, 8
     .p2align 3
 metrics_labels:                  /* by id from 1: name, name length, count, first value */
-    .long mt_s228 - metrics_texts, mt_s228_len, 4, 0
-    .long mt_s233 - metrics_texts, mt_s233_len, 14, 4
-    .long mt_s248 - metrics_texts, mt_s248_len, 3, 18
-    .long mt_s252 - metrics_texts, mt_s252_len, 16, 21
-    .long mt_s265 - metrics_texts, mt_s265_len, 2, 37
-    .long mt_s268 - metrics_texts, mt_s268_len, 4, 39
-    .long mt_s273 - metrics_texts, mt_s273_len, 4, 43
-    .long mt_s278 - metrics_texts, mt_s278_len, 3, 47
-    .long mt_s282 - metrics_texts, mt_s282_len, 5, 50
-    .long mt_s282 - metrics_texts, mt_s282_len, 4, 55
-    .long mt_s282 - metrics_texts, mt_s282_len, 3, 59
-    .long mt_s282 - metrics_texts, mt_s282_len, 3, 62
-    .long mt_s282 - metrics_texts, mt_s282_len, 1, 65
-    .long mt_s282 - metrics_texts, mt_s282_len, 5, 66
-    .long mt_s282 - metrics_texts, mt_s282_len, 1, 71
-    .long mt_s282 - metrics_texts, mt_s282_len, 5, 72
-    .long mt_s282 - metrics_texts, mt_s282_len, 3, 77
-    .long mt_s282 - metrics_texts, mt_s282_len, 14, 80
+    .long mt_s230 - metrics_texts, mt_s230_len, 4, 0
+    .long mt_s235 - metrics_texts, mt_s235_len, 14, 4
+    .long mt_s250 - metrics_texts, mt_s250_len, 3, 18
+    .long mt_s254 - metrics_texts, mt_s254_len, 16, 21
+    .long mt_s267 - metrics_texts, mt_s267_len, 2, 37
+    .long mt_s270 - metrics_texts, mt_s270_len, 4, 39
+    .long mt_s275 - metrics_texts, mt_s275_len, 4, 43
+    .long mt_s280 - metrics_texts, mt_s280_len, 3, 47
+    .long mt_s284 - metrics_texts, mt_s284_len, 5, 50
+    .long mt_s284 - metrics_texts, mt_s284_len, 4, 55
+    .long mt_s284 - metrics_texts, mt_s284_len, 3, 59
+    .long mt_s284 - metrics_texts, mt_s284_len, 3, 62
+    .long mt_s284 - metrics_texts, mt_s284_len, 1, 65
+    .long mt_s284 - metrics_texts, mt_s284_len, 5, 66
+    .long mt_s284 - metrics_texts, mt_s284_len, 1, 71
+    .long mt_s284 - metrics_texts, mt_s284_len, 5, 72
+    .long mt_s284 - metrics_texts, mt_s284_len, 3, 77
+    .long mt_s284 - metrics_texts, mt_s284_len, 14, 80
 metrics_label_values:            /* text offset, length */
-    .long mt_s229 - metrics_texts, mt_s229_len
-    .long mt_s230 - metrics_texts, mt_s230_len
     .long mt_s231 - metrics_texts, mt_s231_len
     .long mt_s232 - metrics_texts, mt_s232_len
+    .long mt_s233 - metrics_texts, mt_s233_len
     .long mt_s234 - metrics_texts, mt_s234_len
-    .long mt_s235 - metrics_texts, mt_s235_len
     .long mt_s236 - metrics_texts, mt_s236_len
     .long mt_s237 - metrics_texts, mt_s237_len
     .long mt_s238 - metrics_texts, mt_s238_len
@@ -1220,13 +1224,13 @@ metrics_label_values:            /* text offset, length */
     .long mt_s245 - metrics_texts, mt_s245_len
     .long mt_s246 - metrics_texts, mt_s246_len
     .long mt_s247 - metrics_texts, mt_s247_len
+    .long mt_s248 - metrics_texts, mt_s248_len
     .long mt_s249 - metrics_texts, mt_s249_len
-    .long mt_s250 - metrics_texts, mt_s250_len
     .long mt_s251 - metrics_texts, mt_s251_len
-    .long mt_s234 - metrics_texts, mt_s234_len
-    .long mt_s228 - metrics_texts, mt_s228_len
+    .long mt_s252 - metrics_texts, mt_s252_len
     .long mt_s253 - metrics_texts, mt_s253_len
-    .long mt_s254 - metrics_texts, mt_s254_len
+    .long mt_s236 - metrics_texts, mt_s236_len
+    .long mt_s230 - metrics_texts, mt_s230_len
     .long mt_s255 - metrics_texts, mt_s255_len
     .long mt_s256 - metrics_texts, mt_s256_len
     .long mt_s257 - metrics_texts, mt_s257_len
@@ -1237,23 +1241,23 @@ metrics_label_values:            /* text offset, length */
     .long mt_s262 - metrics_texts, mt_s262_len
     .long mt_s263 - metrics_texts, mt_s263_len
     .long mt_s264 - metrics_texts, mt_s264_len
-    .long mt_s246 - metrics_texts, mt_s246_len
-    .long mt_s247 - metrics_texts, mt_s247_len
+    .long mt_s265 - metrics_texts, mt_s265_len
     .long mt_s266 - metrics_texts, mt_s266_len
-    .long mt_s267 - metrics_texts, mt_s267_len
+    .long mt_s248 - metrics_texts, mt_s248_len
+    .long mt_s249 - metrics_texts, mt_s249_len
+    .long mt_s268 - metrics_texts, mt_s268_len
     .long mt_s269 - metrics_texts, mt_s269_len
-    .long mt_s270 - metrics_texts, mt_s270_len
     .long mt_s271 - metrics_texts, mt_s271_len
     .long mt_s272 - metrics_texts, mt_s272_len
+    .long mt_s273 - metrics_texts, mt_s273_len
     .long mt_s274 - metrics_texts, mt_s274_len
-    .long mt_s275 - metrics_texts, mt_s275_len
     .long mt_s276 - metrics_texts, mt_s276_len
     .long mt_s277 - metrics_texts, mt_s277_len
+    .long mt_s278 - metrics_texts, mt_s278_len
     .long mt_s279 - metrics_texts, mt_s279_len
-    .long mt_s280 - metrics_texts, mt_s280_len
     .long mt_s281 - metrics_texts, mt_s281_len
+    .long mt_s282 - metrics_texts, mt_s282_len
     .long mt_s283 - metrics_texts, mt_s283_len
-    .long mt_s284 - metrics_texts, mt_s284_len
     .long mt_s285 - metrics_texts, mt_s285_len
     .long mt_s286 - metrics_texts, mt_s286_len
     .long mt_s287 - metrics_texts, mt_s287_len
@@ -1262,9 +1266,9 @@ metrics_label_values:            /* text offset, length */
     .long mt_s290 - metrics_texts, mt_s290_len
     .long mt_s291 - metrics_texts, mt_s291_len
     .long mt_s292 - metrics_texts, mt_s292_len
-    .long mt_s240 - metrics_texts, mt_s240_len
     .long mt_s293 - metrics_texts, mt_s293_len
     .long mt_s294 - metrics_texts, mt_s294_len
+    .long mt_s242 - metrics_texts, mt_s242_len
     .long mt_s295 - metrics_texts, mt_s295_len
     .long mt_s296 - metrics_texts, mt_s296_len
     .long mt_s297 - metrics_texts, mt_s297_len
@@ -1296,6 +1300,8 @@ metrics_label_values:            /* text offset, length */
     .long mt_s323 - metrics_texts, mt_s323_len
     .long mt_s324 - metrics_texts, mt_s324_len
     .long mt_s325 - metrics_texts, mt_s325_len
+    .long mt_s326 - metrics_texts, mt_s326_len
+    .long mt_s327 - metrics_texts, mt_s327_len
     .p2align 3
 metrics_bounds:                  /* by METRIC_BOUNDS_*: count, unit, first bound */
     .long 11, 0, 0, 0
@@ -1305,109 +1311,109 @@ metrics_bounds:                  /* by METRIC_BOUNDS_*: count, unit, first bound
     .long 11, 0, 41, 0
 metrics_bound_values:            /* microseconds (or the Profile's bound index), text offset, length */
     .quad 5000
-    .long mt_s326 - metrics_texts, mt_s326_len
-    .quad 10000
-    .long mt_s327 - metrics_texts, mt_s327_len
-    .quad 25000
     .long mt_s328 - metrics_texts, mt_s328_len
-    .quad 50000
-    .long mt_s329 - metrics_texts, mt_s329_len
-    .quad 100000
-    .long mt_s330 - metrics_texts, mt_s330_len
-    .quad 250000
-    .long mt_s331 - metrics_texts, mt_s331_len
-    .quad 500000
-    .long mt_s332 - metrics_texts, mt_s332_len
-    .quad 1000000
-    .long mt_s333 - metrics_texts, mt_s333_len
-    .quad 2500000
-    .long mt_s334 - metrics_texts, mt_s334_len
-    .quad 5000000
-    .long mt_s335 - metrics_texts, mt_s335_len
-    .quad 10000000
-    .long mt_s336 - metrics_texts, mt_s336_len
-    .quad 2000
-    .long mt_s337 - metrics_texts, mt_s337_len
-    .quad 4000
-    .long mt_s338 - metrics_texts, mt_s338_len
-    .quad 8000
-    .long mt_s339 - metrics_texts, mt_s339_len
-    .quad 16000
-    .long mt_s340 - metrics_texts, mt_s340_len
-    .quad 32000
-    .long mt_s341 - metrics_texts, mt_s341_len
-    .quad 64000
-    .long mt_s342 - metrics_texts, mt_s342_len
-    .quad 128000
-    .long mt_s343 - metrics_texts, mt_s343_len
-    .quad 256000
-    .long mt_s344 - metrics_texts, mt_s344_len
-    .quad 512000
-    .long mt_s345 - metrics_texts, mt_s345_len
-    .quad 1024000
-    .long mt_s346 - metrics_texts, mt_s346_len
-    .quad 500000
-    .long mt_s332 - metrics_texts, mt_s332_len
-    .quad 1000000
-    .long mt_s333 - metrics_texts, mt_s333_len
-    .quad 2000000
-    .long mt_s347 - metrics_texts, mt_s347_len
-    .quad 3000000
-    .long mt_s348 - metrics_texts, mt_s348_len
-    .quad 4000000
-    .long mt_s349 - metrics_texts, mt_s349_len
-    .quad 6000000
-    .long mt_s350 - metrics_texts, mt_s350_len
-    .quad 8000000
-    .long mt_s351 - metrics_texts, mt_s351_len
-    .quad 12000000
-    .long mt_s352 - metrics_texts, mt_s352_len
-    .quad 24000000
-    .long mt_s353 - metrics_texts, mt_s353_len
-    .quad 0
-    .long mt_s354 - metrics_texts, mt_s354_len
-    .quad 1
-    .long mt_s355 - metrics_texts, mt_s355_len
-    .quad 2
-    .long mt_s356 - metrics_texts, mt_s356_len
-    .quad 3
-    .long mt_s357 - metrics_texts, mt_s357_len
-    .quad 4
-    .long mt_s358 - metrics_texts, mt_s358_len
-    .quad 5
-    .long mt_s359 - metrics_texts, mt_s359_len
-    .quad 6
-    .long mt_s338 - metrics_texts, mt_s338_len
-    .quad 7
-    .long mt_s340 - metrics_texts, mt_s340_len
-    .quad 8
-    .long mt_s342 - metrics_texts, mt_s342_len
-    .quad 9
-    .long mt_s344 - metrics_texts, mt_s344_len
-    .quad 10
-    .long mt_s333 - metrics_texts, mt_s333_len
-    .quad 10
-    .long mt_s360 - metrics_texts, mt_s360_len
-    .quad 100
-    .long mt_s361 - metrics_texts, mt_s361_len
-    .quad 500
-    .long mt_s362 - metrics_texts, mt_s362_len
-    .quad 1000
-    .long mt_s359 - metrics_texts, mt_s359_len
-    .quad 5000
-    .long mt_s326 - metrics_texts, mt_s326_len
     .quad 10000
-    .long mt_s327 - metrics_texts, mt_s327_len
-    .quad 50000
     .long mt_s329 - metrics_texts, mt_s329_len
-    .quad 100000
+    .quad 25000
     .long mt_s330 - metrics_texts, mt_s330_len
-    .quad 500000
+    .quad 50000
+    .long mt_s331 - metrics_texts, mt_s331_len
+    .quad 100000
     .long mt_s332 - metrics_texts, mt_s332_len
-    .quad 1000000
+    .quad 250000
     .long mt_s333 - metrics_texts, mt_s333_len
-    .quad 5000000
+    .quad 500000
+    .long mt_s334 - metrics_texts, mt_s334_len
+    .quad 1000000
     .long mt_s335 - metrics_texts, mt_s335_len
+    .quad 2500000
+    .long mt_s336 - metrics_texts, mt_s336_len
+    .quad 5000000
+    .long mt_s337 - metrics_texts, mt_s337_len
+    .quad 10000000
+    .long mt_s338 - metrics_texts, mt_s338_len
+    .quad 2000
+    .long mt_s339 - metrics_texts, mt_s339_len
+    .quad 4000
+    .long mt_s340 - metrics_texts, mt_s340_len
+    .quad 8000
+    .long mt_s341 - metrics_texts, mt_s341_len
+    .quad 16000
+    .long mt_s342 - metrics_texts, mt_s342_len
+    .quad 32000
+    .long mt_s343 - metrics_texts, mt_s343_len
+    .quad 64000
+    .long mt_s344 - metrics_texts, mt_s344_len
+    .quad 128000
+    .long mt_s345 - metrics_texts, mt_s345_len
+    .quad 256000
+    .long mt_s346 - metrics_texts, mt_s346_len
+    .quad 512000
+    .long mt_s347 - metrics_texts, mt_s347_len
+    .quad 1024000
+    .long mt_s348 - metrics_texts, mt_s348_len
+    .quad 500000
+    .long mt_s334 - metrics_texts, mt_s334_len
+    .quad 1000000
+    .long mt_s335 - metrics_texts, mt_s335_len
+    .quad 2000000
+    .long mt_s349 - metrics_texts, mt_s349_len
+    .quad 3000000
+    .long mt_s350 - metrics_texts, mt_s350_len
+    .quad 4000000
+    .long mt_s351 - metrics_texts, mt_s351_len
+    .quad 6000000
+    .long mt_s352 - metrics_texts, mt_s352_len
+    .quad 8000000
+    .long mt_s353 - metrics_texts, mt_s353_len
+    .quad 12000000
+    .long mt_s354 - metrics_texts, mt_s354_len
+    .quad 24000000
+    .long mt_s355 - metrics_texts, mt_s355_len
+    .quad 0
+    .long mt_s356 - metrics_texts, mt_s356_len
+    .quad 1
+    .long mt_s357 - metrics_texts, mt_s357_len
+    .quad 2
+    .long mt_s358 - metrics_texts, mt_s358_len
+    .quad 3
+    .long mt_s359 - metrics_texts, mt_s359_len
+    .quad 4
+    .long mt_s360 - metrics_texts, mt_s360_len
+    .quad 5
+    .long mt_s361 - metrics_texts, mt_s361_len
+    .quad 6
+    .long mt_s340 - metrics_texts, mt_s340_len
+    .quad 7
+    .long mt_s342 - metrics_texts, mt_s342_len
+    .quad 8
+    .long mt_s344 - metrics_texts, mt_s344_len
+    .quad 9
+    .long mt_s346 - metrics_texts, mt_s346_len
+    .quad 10
+    .long mt_s335 - metrics_texts, mt_s335_len
+    .quad 10
+    .long mt_s362 - metrics_texts, mt_s362_len
+    .quad 100
+    .long mt_s363 - metrics_texts, mt_s363_len
+    .quad 500
+    .long mt_s364 - metrics_texts, mt_s364_len
+    .quad 1000
+    .long mt_s361 - metrics_texts, mt_s361_len
+    .quad 5000
+    .long mt_s328 - metrics_texts, mt_s328_len
+    .quad 10000
+    .long mt_s329 - metrics_texts, mt_s329_len
+    .quad 50000
+    .long mt_s331 - metrics_texts, mt_s331_len
+    .quad 100000
+    .long mt_s332 - metrics_texts, mt_s332_len
+    .quad 500000
+    .long mt_s334 - metrics_texts, mt_s334_len
+    .quad 1000000
+    .long mt_s335 - metrics_texts, mt_s335_len
+    .quad 5000000
+    .long mt_s337 - metrics_texts, mt_s337_len
     .p2align 3
 metrics_table:
     .long mt_s0 - metrics_texts, mt_s0_len, mt_s1 - metrics_texts, mt_s1_len, METRIC_TYPE_GAUGE, METRIC_SRC_NODE, MetricsNode_peers
@@ -1970,12 +1976,17 @@ metrics_table:
     .long METRIC_BIT_NODE_STORAGE
     .short 0, 0
     .long 0, 1
-    .long mt_s224 - metrics_texts, mt_s224_len, mt_s225 - metrics_texts, mt_s225_len, METRIC_TYPE_COUNTER, METRIC_SRC_APP, AppMetrics_db_drops
+    .long mt_s224 - metrics_texts, mt_s224_len, mt_s225 - metrics_texts, mt_s225_len, METRIC_TYPE_HISTOGRAM, METRIC_SRC_APP, AppMetrics_anchor_seconds
+    .short METRIC_KIND_HIST, METRIC_COND_NONE
+    .long METRIC_BIT_NODE_STORAGE
+    .short 0, 0
+    .long METRIC_BOUNDS_DEFAULT, 1
+    .long mt_s226 - metrics_texts, mt_s226_len, mt_s227 - metrics_texts, mt_s227_len, METRIC_TYPE_COUNTER, METRIC_SRC_APP, AppMetrics_db_drops
     .short METRIC_KIND_U64, METRIC_COND_NONE
     .long METRIC_BIT_NODE_STORAGE
     .short 0, 0
     .long 0, 1
-    .long mt_s226 - metrics_texts, mt_s226_len, mt_s227 - metrics_texts, mt_s227_len, METRIC_TYPE_COUNTER, METRIC_SRC_APP, AppMetrics_db_failures
+    .long mt_s228 - metrics_texts, mt_s228_len, mt_s229 - metrics_texts, mt_s229_len, METRIC_TYPE_COUNTER, METRIC_SRC_APP, AppMetrics_db_failures
     .short METRIC_KIND_U64, METRIC_COND_NONE
     .long METRIC_BIT_NODE_STORAGE
     .short 0, 0

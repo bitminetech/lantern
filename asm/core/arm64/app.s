@@ -2676,12 +2676,13 @@ END_FUNCTION app_db_scan_all
 
 /*
  * L1: NODE_ACT_DB_STATE x0 of a block at the first slot of its epoch (the anchor of
- * get_forkchoice_store), with no anchor written in this run or one DB_SEGMENT_SLOTS slots back: the open segment files are synced; <dir>/anchor.tmp gets two ByteLists, the second at the
+ * get_forkchoice_store), above the slot of the last anchor this run wrote: the open segment files are synced; <dir>/anchor.tmp gets two ByteLists, the second at the
  * first multiple of 8 after the first: the state's SSZ bytes, then those of its block's message;
  * it is synced and renamed over <dir>/anchor.ssz, and the directory is synced. A failure gives a
  * line on the standard error. x20 the action, x21 the state's entry, x22 the block's entry, x23
  * the state's ByteList, x24 its size, x27 the AppDb. Locals: L a ByteList header, L+24 a u64,
- * L+32 zero bytes, L+40 a size, L+48 the fork, L+56 the file, L+64 the message's ByteList header.
+ * L+32 zero bytes, L+40 a size, L+48 the fork, L+56 the file, L+64 the message's ByteList header,
+ * L+88 the microseconds at the start. A written anchor joins db_anchors, and its run time anchor_seconds.
  */
 LOCAL_FUNCTION app_db_state
     ENTER 96
@@ -2691,15 +2692,14 @@ LOCAL_FUNCTION app_db_state
     ldr     x9, [x20, #32]                  /* a block at the first slot of its epoch only */
     tst     x9, #(SLOTS_PER_EPOCH - 1)
     b.ne    99f
-    ldr     x9, [x27, #AppDb_anchor_slot]
-    cmn     x9, #1
-    b.eq    1f
-    MOVQ    x10, DB_SEGMENT_SLOTS
-    add     x9, x9, x10
+    ldr     x9, [x27, #AppDb_anchor_slot]   /* above the last anchor written: 2^64 - 1 is none */
+    add     x9, x9, #1
     ldr     x10, [x20, #32]
     cmp     x10, x9
     b.lo    99f
-1:  ldr     x0, [x20, #16]
+    bl      app_met_us
+    str     x0, [sp, #(L + 88)]
+    ldr     x0, [x20, #16]
     bl      app_buf_find
     cbz     x0, 99f
     mov     x21, x0
@@ -2856,6 +2856,13 @@ LOCAL_FUNCTION app_db_state
     CALL_GLOBAL lantern_shell_sync_dir
     ldr     x9, [x20, #32]
     str     x9, [x27, #AppDb_anchor_slot]
+    AM_INC  db_anchors
+    bl      app_met_us                      /* its run time */
+    ldr     x9, [sp, #(L + 88)]
+    sub     x2, x0, x9
+    MOVQ    x0, AppMetrics_anchor_seconds
+    mov     x1, #METRIC_BOUNDS_DEFAULT
+    bl      app_met_obs
     b       98f
 89: add     x0, sp, #(L + 56)               /* the file closes */
     CALL_GLOBAL lantern_shell_close
@@ -2933,7 +2940,6 @@ LOCAL_FUNCTION app_actions
     b       8f
 12: cmp     x9, #NODE_ACT_DB_STATE
     b.ne    120f
-    AM_INC  db_anchors
     mov     x0, x20                         /* DB_STATE: custody.bin, anchor.ssz */
     bl      app_db_custody
     mov     x0, x20

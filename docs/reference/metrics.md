@@ -198,6 +198,7 @@
 | `lantern_node_storage_records_total` | `storage` | counter | `AppMetrics.db_records`, by `kind` | Records appended to the history's segment files, by kind |
 | `lantern_node_storage_record_bytes_total` | `storage` | counter | `AppMetrics.db_bytes`, by `kind` | Bytes of those records |
 | `lantern_node_storage_anchors_total` | `storage` | counter | `AppMetrics.db_anchors` | Anchor states written for a restart |
+| `lantern_node_storage_anchor_write_seconds` | `storage` | histogram | `AppMetrics.anchor_seconds` | Run time of each anchor state write, from its bytes to the synced directory |
 | `lantern_node_storage_segments_dropped_total` | `storage` | counter | `AppMetrics.db_drops` | Segment files deleted |
 | `lantern_node_storage_write_failures_total` | `storage` | counter | `AppMetrics.db_failures` | Writes to the data directory that failed |
 
@@ -577,10 +578,11 @@ The counters and run time histograms of the metrics that the app keeps (app.md, 
 | 8424 | `api_classes` | u64 x 4 | Answers by `class`: the status's first digit 2 to 5 |
 | 8456 | `db_records` | u64 x 3 | NODE_ACT_DB_APPEND by `kind` (block, sidecar), NODE_ACT_DB_ARCHIVE (state) |
 | 8480 | `db_bytes` | u64 x 3 | Bytes of the appended records' buffers, by `kind` |
-| 8504 | `db_anchors` | u64 | NODE_ACT_DB_STATE actions |
+| 8504 | `db_anchors` | u64 | anchor.ssz files written (app.md, `NODE_ACT_DB_STATE`) |
 | 8512 | `db_drops` | u64 | NODE_ACT_DB_DROP actions |
 | 8520 | `db_failures` | u64 | Writes to the data directory that failed (a cannot write line) |
-| 8528 | | | Size |
+| 8528 | `anchor_seconds` | [`Histogram`](#type-histogram) | Run time of each anchor.ssz write, from lantern_node_state_bytes to the synced directory, default bounds |
+| 8640 | | | Size |
 
 ## Type `Histogram`
 

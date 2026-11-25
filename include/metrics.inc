@@ -213,7 +213,8 @@
 .set AppMetrics_db_anchors, 8504
 .set AppMetrics_db_drops, 8512
 .set AppMetrics_db_failures, 8520
-.set AppMetrics__mem, 8528
+.set AppMetrics_anchor_seconds, 8528
+.set AppMetrics__mem, 8640
 .set MetricsProcess_cpu_us, 0
 .set MetricsProcess_max_fds, 8
 .set MetricsProcess_max_rss_bytes, 16
@@ -312,6 +313,6 @@
 .set METRIC_BOUNDS_DELAY, 2
 .set METRIC_BOUNDS_TICKS, 3
 .set METRIC_BOUNDS_WORK, 4
-.set METRIC_COUNT, 114
+.set METRIC_COUNT, 115
 .set METRICS_HEAD_MAX, 4096                 /* lantern_metrics_answer: HttpLimits head_max */
 .set METRICS_HEAD_ROOM, 256                 /* out bytes before the text's ByteList */
