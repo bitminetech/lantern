@@ -127,7 +127,7 @@ state_root_fields:
     .text
 
 /*
- * L0: lays out the trees of the StateCache table for rdi validators, into cache rsi when it is
+ * Lays out the trees of the StateCache table for rdi validators, into cache rsi when it is
  * not 0; rax = the bytes of the cache. rbx validators, rbp cache, r12 the table, r13 the offset of
  * the next tree's bytes, r14 the tree, r15 its header, S7 its capacity, S8 its copy bytes.
  */
@@ -232,7 +232,7 @@ SPEC_FUNCTION state_cache_init
 SPEC_END state_cache_init
 
 .if FORK > FORK_PHASE0
-/* L0: SHA-256 of the 32 bytes at rdi and the 32 bytes at rsi, to rdx, which may be rdi or rsi. r14 the area. */
+/* SHA-256 of the 32 bytes at rdi and the 32 bytes at rsi, to rdx, which may be rdi or rsi. r14 the area. */
 LOCAL_FUNCTION lantern_sr_hash
     FRAME 16
     mov     %rdx, (%rsp)
@@ -246,7 +246,7 @@ LOCAL_FUNCTION lantern_sr_hash
     UNFRAME 16
 END_FUNCTION lantern_sr_hash
 
-/* L0: the zero hash of each depth 0 to 40 in the area at r14. rbx the next, rbp the hashes left. */
+/* The zero hash of each depth 0 to 40 in the area at r14. rbx the next, rbp the hashes left. */
 LOCAL_FUNCTION lantern_sr_zeros
     ENTER 16
     mov     %r14, %rbx
@@ -265,7 +265,7 @@ LOCAL_FUNCTION lantern_sr_zeros
 END_FUNCTION lantern_sr_zeros
 
 /*
- * L0: the root of a field from tree rdi (a CacheTree): data rsi, count rdx elements, rcx the bytes
+ * The root of a field from tree rdi (a CacheTree): data rsi, count rdx elements, rcx the bytes
  * of an element of a basic type, or the descriptor of a container type (an address above 4095),
  * r8 the limit's depth + 256 for a list (mixed with the count), the root to r9. rax = 0, 1 when
  * the leaves pass the capacity, or a status of ssz_hash_tree_root. rbp the cache, r12 scratch with

@@ -116,7 +116,7 @@ SPEC_END compute_columns_for_custody_group
 .error "the gossip code assumes the Seen layouts of include/lantern.inc"
 .endif
 
-/* L0: rax = 1 when seen rdi holds the SeenKey (rsi kind, rdx a, rcx b, r8 c), else 0. A leaf; uses r9-r11. */
+/* rax = 1 when seen rdi holds the SeenKey (rsi kind, rdx a, rcx b, r8 c), else 0. A leaf; uses r9-r11. */
 LOCAL_FUNCTION lantern_seen_find_key
     UNWIND_END_PROLOGUE
     PART    %r9, %r10, %rdi, Seen_keys
@@ -139,7 +139,7 @@ LOCAL_FUNCTION lantern_seen_find_key
     ret
 END_FUNCTION lantern_seen_find_key
 
-/* L0: rax = the free SeenKey entries of seen rdi. A leaf. */
+/* rax = the free SeenKey entries of seen rdi. A leaf. */
 LOCAL_FUNCTION lantern_seen_key_room
     UNWIND_END_PROLOGUE
     mov     Seen_bits(%rdi), %rax
@@ -149,7 +149,7 @@ LOCAL_FUNCTION lantern_seen_key_room
     ret
 END_FUNCTION lantern_seen_key_room
 
-/* L0: append the SeenKey (rsi kind, rdx a, rcx b, r8 c) to seen rdi, which has room. A leaf; uses r9, r10. */
+/* Append the SeenKey (rsi kind, rdx a, rcx b, r8 c) to seen rdi, which has room. A leaf; uses r9, r10. */
 LOCAL_FUNCTION lantern_seen_add_key
     UNWIND_END_PROLOGUE
     PART    %r9, %r10, %rdi, Seen_keys
@@ -163,7 +163,7 @@ LOCAL_FUNCTION lantern_seen_add_key
     ret
 END_FUNCTION lantern_seen_add_key
 
-/* L0: rax = the free SeenBits entries of seen rdi. A leaf; uses rcx, rdx. */
+/* rax = the free SeenBits entries of seen rdi. A leaf; uses rcx, rdx. */
 LOCAL_FUNCTION lantern_seen_bits_room
     UNWIND_END_PROLOGUE
     mov     Seen_blocks(%rdi), %rax
@@ -176,7 +176,7 @@ LOCAL_FUNCTION lantern_seen_bits_room
 END_FUNCTION lantern_seen_bits_room
 
 /*
- * L0: is_non_strict_superset of the SeenBits of key (rsi kind, root at rdx, rcx a, r8 b) in seen rdi,
+ * is_non_strict_superset of the SeenBits of key (rsi kind, root at rdx, rcx a, r8 b) in seen rdi,
  * for the rax bits at r9: rax = 1 when one of them has every bit of r9 set. Uses rdi, r10, r11, xmm0-xmm2.
  * Locals: rsp+0 the length, rsp+8 its bytes, rsp+16 the entries left.
  */
@@ -222,7 +222,7 @@ LOCAL_FUNCTION lantern_seen_superset
 END_FUNCTION lantern_seen_superset
 
 /*
- * L0: append the SeenBits of key (rsi kind, root at rdx, rcx a, r8 b) and the rax bits at r9 to seen rdi,
+ * Append the SeenBits of key (rsi kind, root at rdx, rcx a, r8 b) and the rax bits at r9 to seen rdi,
  * which has room. Locals: rsp+0 entry, rsp+8 bits, rsp+16 length.
  */
 LOCAL_FUNCTION lantern_seen_add_bits
@@ -253,7 +253,7 @@ LOCAL_FUNCTION lantern_seen_add_bits
     UNFRAME 32
 END_FUNCTION lantern_seen_add_bits
 
-/* L0: rax = the SeenHeader of block root rsi in seen rdi, or 0. A leaf; uses rcx, rdx, r11, xmm0-xmm2. */
+/* rax = the SeenHeader of block root rsi in seen rdi, or 0. A leaf; uses rcx, rdx, r11, xmm0-xmm2. */
 LOCAL_FUNCTION lantern_seen_find_header
     UNWIND_END_PROLOGUE
     PART    %rax, %rcx, %rdi, Seen_headers
@@ -291,7 +291,7 @@ END_FUNCTION lantern_seen_find_header
 99:
 .endm
 
-/* L0: rax = lantern_is_future_slot(store rdi, slot rsi, current_time_ms rdx). A leaf; uses rcx, r8. */
+/* rax = lantern_is_future_slot(store rdi, slot rsi, current_time_ms rdx). A leaf; uses rcx, r8. */
 LOCAL_FUNCTION lantern_is_future_slot
     UNWIND_END_PROLOGUE
     mov     %rdx, %r8
@@ -303,7 +303,7 @@ LOCAL_FUNCTION lantern_is_future_slot
     ret
 END_FUNCTION lantern_is_future_slot
 
-/* L0: rax = lantern_is_within_slot_range(store rdi, slot rsi, slot_range rdx, current_time_ms rcx). A leaf; uses r8, r9. */
+/* rax = lantern_is_within_slot_range(store rdi, slot rsi, slot_range rdx, current_time_ms rcx). A leaf; uses r8, r9. */
 LOCAL_FUNCTION lantern_is_within_slot_range
     UNWIND_END_PROLOGUE
     mov     %rdx, %r9
@@ -325,7 +325,7 @@ LOCAL_FUNCTION lantern_is_within_slot_range
     ret
 END_FUNCTION lantern_is_within_slot_range
 
-/* L0: rax = lantern_is_current_or_previous_epoch(store rdi, epoch rsi, current_time_ms rdx). rbx store, rbp epoch, r12 time. */
+/* rax = lantern_is_current_or_previous_epoch(store rdi, epoch rsi, current_time_ms rdx). rbx store, rbp epoch, r12 time. */
 LOCAL_FUNCTION lantern_is_current_or_previous_epoch
     ENTER 0
     mov     %rdi, %rbx
@@ -358,7 +358,7 @@ LOCAL_FUNCTION lantern_is_current_or_previous_epoch
 END_FUNCTION lantern_is_current_or_previous_epoch
 
 /*
- * L0: rax = lantern_is_future_epoch(store rdi, epoch rsi, current_time_ms rdx); true when the time with
+ * rax = lantern_is_future_epoch(store rdi, epoch rsi, current_time_ms rdx); true when the time with
  * disparity is before genesis, where the spec's subtraction raises. A leaf; uses rcx, rdx.
  */
 LOCAL_FUNCTION lantern_is_future_epoch
@@ -377,7 +377,7 @@ LOCAL_FUNCTION lantern_is_future_epoch
     ret
 END_FUNCTION lantern_is_future_epoch
 
-/* L0: rax = compute_start_slot_at_epoch(finalized epoch of store rdi), UINT64_MAX when it does not fit. A leaf; uses rcx. */
+/* rax = compute_start_slot_at_epoch(finalized epoch of store rdi), UINT64_MAX when it does not fit. A leaf; uses rcx. */
 LOCAL_FUNCTION lantern_finalized_slot
     UNWIND_END_PROLOGUE
     mov     (Store_finalized_checkpoint + Checkpoint_epoch)(%rdi), %rax
@@ -391,7 +391,7 @@ LOCAL_FUNCTION lantern_finalized_slot
 END_FUNCTION lantern_finalized_slot
 
 /*
- * L0: rax = status, rdx = 1 when get_checkpoint_block(store rdi, node rsi, epoch rdx) is the root at rcx, else 0.
+ * rax = status, rdx = 1 when get_checkpoint_block(store rdi, node rsi, epoch rdx) is the root at rcx, else 0.
  * Locals: rsp+0 store, rsp+8 root.
  */
 LOCAL_FUNCTION lantern_checkpoint_is
@@ -410,7 +410,7 @@ LOCAL_FUNCTION lantern_checkpoint_is
 7:  UNFRAME 16
 END_FUNCTION lantern_checkpoint_is
 
-/* L0: lantern_checkpoint_is of the store's finalized checkpoint for node rsi of store rdi. */
+/* lantern_checkpoint_is of the store's finalized checkpoint for node rsi of store rdi. */
 LOCAL_FUNCTION lantern_finalized_is_ancestor
     UNWIND_END_PROLOGUE
     mov     (Store_finalized_checkpoint + Checkpoint_epoch)(%rdi), %rdx
@@ -419,7 +419,7 @@ LOCAL_FUNCTION lantern_finalized_is_ancestor
 END_FUNCTION lantern_finalized_is_ancestor
 
 /*
- * L0: rax = status, rdx = bls.Verify(public key rcx, compute_signing_root(object rdx of type rsi, domain rdi),
+ * rax = status, rdx = bls.Verify(public key rcx, compute_signing_root(object rdx of type rsi, domain rdi),
  * signature r8), with scratch r9. Locals: rsp+0 the root buffer (56: a ByteList header, then the root),
  * rsp+56 key, rsp+64 signature, rsp+72 scratch.
  */
@@ -446,7 +446,7 @@ LOCAL_FUNCTION lantern_verify_with_domain
 END_FUNCTION lantern_verify_with_domain
 
 /*
- * L0: lantern_verify_with_domain with get_domain(state rdi, domain type esi, epoch rdx): object r8 of type rcx,
+ * lantern_verify_with_domain with get_domain(state rdi, domain type esi, epoch rdx): object r8 of type rcx,
  * public key r9; the signature and scratch are the two stack arguments (the caller's S7 and S8).
  * Locals: rsp+0 domain type, rsp+8 epoch, rsp+16 domain (32), rsp+48 type, object, key.
  */
@@ -482,7 +482,7 @@ END_FUNCTION lantern_verify_signed
 .endm
 
 /*
- * L0: the block of the root at rdx, from store rdi and seen rsi: rax = its node or NODE_NONE, rdx = 2 for a node
+ * The block of the root at rdx, from store rdi and seen rsi: rax = its node or NODE_NONE, rdx = 2 for a node
  * of the store, 1 for a block of seen, 0 when unknown, rcx = its payload status. Locals: store, seen, root.
  */
 LOCAL_FUNCTION lantern_block_lookup
@@ -2286,7 +2286,7 @@ SPEC_LEAF compute_subnet_for_data_column_sidecar
 SPEC_END compute_subnet_for_data_column_sidecar
 
 /*
- * L0: rax = status, rdx = is_valid_merkle_branch(hash_tree_root of the rdx commitments at rsi, the branch at rcx,
+ * rax = status, rdx = is_valid_merkle_branch(hash_tree_root of the rdx commitments at rsi, the branch at rcx,
  * KZG_COMMITMENTS_INCLUSION_PROOF_DEPTH, BLOB_KZG_COMMITMENTS_SUBTREE_INDEX, the root at r8), with scratch rdi.
  * The list is hashed from a standalone copy at the end of scratch.
  * rbx scratch, rbp branch, r12 root, r13 i. Locals: L value (32), L+32 the two halves (64).
@@ -2503,7 +2503,7 @@ SPEC_END verify_partial_data_column_sidecar_kzg_proofs
 
 .if FORK >= FORK_DENEB
 /*
- * L0: the checks of a block header shared by the sidecar topics, from lantern_is_future_slot to the finalized ancestor:
+ * The checks of a block header shared by the sidecar topics, from lantern_is_future_slot to the finalized ancestor:
  * rax = status, rdx = LANTERN_VALID, LANTERN_GOSSIP_IGNORE or LANTERN_GOSSIP_REJECT, rcx = the parent node.
  * Takes rbx seen, rbp store, r13 current_time_ms, r14 head state, r15 scratch, and rdi the SignedBeaconBlockHeader.
  * rbx-r15 are the caller's and stay unchanged. Locals: rsp+0 and rsp+8 the stack arguments of lantern_verify_signed,

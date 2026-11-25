@@ -7,7 +7,7 @@
  */
 
 /*
- * L2: with NODE_FLAG_ENGINE and NODE_FLAG_ETH1, after the head: when the store's epoch + 1 is above eth1_check_epoch
+ * With NODE_FLAG_ENGINE and NODE_FLAG_ETH1, after the head: when the store's epoch + 1 is above eth1_check_epoch
  * and the head's post-state is held, an ETH1_CHECK work of it. x21 the epoch + 1.
  */
 LOCAL_FUNCTION lantern_node_eth1_check_due
@@ -41,7 +41,7 @@ LOCAL_FUNCTION lantern_node_eth1_check_due
 9:  LEAVE 0
 END_FUNCTION lantern_node_eth1_check_due
 
-/* L1: x0 = the start in seconds of the voting period of the store's slot (phase0 voting_period_start_time). Uses x9-x11. */
+/* x0 = the start in seconds of the voting period of the store's slot (phase0 voting_period_start_time). Uses x9-x11. */
 LOCAL_FUNCTION lantern_node_eth1_period
     FRAME 0
     mov     x0, x20
@@ -58,7 +58,7 @@ LOCAL_FUNCTION lantern_node_eth1_period
     UNFRAME 0
 END_FUNCTION lantern_node_eth1_period
 
-/* L0: x0 = 2 * SECONDS_PER_ETH1_BLOCK * ETH1_FOLLOW_DISTANCE of the config. Uses x9, x10. */
+/* x0 = 2 * SECONDS_PER_ETH1_BLOCK * ETH1_FOLLOW_DISTANCE of the config. Uses x9, x10. */
 LOCAL_FUNCTION lantern_node_eth1_reach
     UNWIND_END_PROLOGUE
     LDQ     x9, x19, Node_config + CONFIG_SECONDS_PER_ETH1_BLOCK
@@ -69,7 +69,7 @@ LOCAL_FUNCTION lantern_node_eth1_reach
 END_FUNCTION lantern_node_eth1_reach
 
 /*
- * L2: with eth1_state 1, the next eth1 call (node.md, the eth1 follower): the latest block when its
+ * With eth1_state 1, the next eth1 call (node.md, the eth1 follower): the latest block when its
  * poll is due, else the logs up to the follow head, else a block of the window. x0 = 1 when one
  * went, else 0. x21 the blocks, x22 their count, x25 the follow head, x26 a block's number or the
  * logs' first, x27 the logs' last, x28 the method.
@@ -133,7 +133,7 @@ LOCAL_FUNCTION lantern_node_eth1_next
 END_FUNCTION lantern_node_eth1_next
 
 /*
- * L2: (method x0, number or first x1, last x2): the eth1 call's request, with the id engine_id, in
+ * (method x0, number or first x1, last x2): the eth1 call's request, with the id engine_id, in
  * lantern_http_post with the JWT of time_ms / 1000, in a NODE_ACT_ENGINE; engine_method the
  * method and eth1_call the block asked or the last. x0 = 1 when it went, else 0. x21 the method,
  * x22 the number or first, x25 the last, x26 the body, x27 the token, x28 the host. Locals: L the
@@ -230,7 +230,7 @@ LOCAL_FUNCTION lantern_node_eth1_send
 END_FUNCTION lantern_node_eth1_send
 
 /*
- * L2: the eth1 call in flight answered: the body x0 (a ByteList in scratch, which stays short)
+ * The eth1 call in flight answered: the body x0 (a ByteList in scratch, which stays short)
  * with its EngineResponse x1 (node.md, the eth1 follower). A result the follower refuses, or a
  * block of another number, makes eth1_head_ms time_ms. x21 the deposits' list, x22 its entries,
  * x25 an entry, x26 the entries left, x27 a part's base, x28 a count's entry. Locals: L the
@@ -354,7 +354,7 @@ LOCAL_FUNCTION lantern_node_eth1_answer
 END_FUNCTION lantern_node_eth1_answer
 
 /*
- * L2: the Eth1Block x0 of an answer, its number, hash and timestamp set, joins eth1_blocks after the
+ * The Eth1Block x0 of an answer, its number, hash and timestamp set, joins eth1_blocks after the
  * highest or before the lowest (node.md, the eth1 follower), its count and root those of the last
  * eth1_counts entry at or below its number. x21 the block, x22 its number, x25 the entries, x26
  * their count, x27 the capacity. Locals: L a DepositTree count of 0.
@@ -446,7 +446,7 @@ LOCAL_FUNCTION lantern_node_eth1_block_add
 9:  LEAVE 16
 END_FUNCTION lantern_node_eth1_block_add
 
-/* L2: the lowest eth1_blocks entry goes: each other one down. x21 the entries, x22 the count, x25 the index. */
+/* The lowest eth1_blocks entry goes: each other one down. x21 the entries, x22 the count, x25 the index. */
 LOCAL_FUNCTION lantern_node_eth1_block_drop
     ENTER 0
     PART    x21, x22, x19, Node_eth1_blocks
@@ -467,7 +467,7 @@ LOCAL_FUNCTION lantern_node_eth1_block_drop
 END_FUNCTION lantern_node_eth1_block_drop
 
 /*
- * L0: x0 = the bytes of the follower's Eth1Snapshot (node.md): with eth1_state 1 its blocks, the
+ * x0 = the bytes of the follower's Eth1Snapshot (node.md): with eth1_state 1 its blocks, the
  * deposits from eth1_deposit_index, at most MAX_DEPOSITS, and every leaf; else none. x1 the
  * blocks, x2 the deposits, x3 the leaves, x4 the first deposit. Uses x9-x12.
  */
@@ -499,7 +499,7 @@ LOCAL_FUNCTION lantern_node_eth1_snapshot_size
 END_FUNCTION lantern_node_eth1_snapshot_size
 
 /*
- * L2: x0 = the id of a new BYTES_PUT of the follower's Eth1Snapshot (node.md, NODE_PRODUCE_ETH1).
+ * x0 = the id of a new BYTES_PUT of the follower's Eth1Snapshot (node.md, NODE_PRODUCE_ETH1).
  * x21 the blocks, x22 the deposits, x25 the leaves, x26 the first deposit, x27 the snapshot, x28
  * the id.
  */

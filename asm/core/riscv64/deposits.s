@@ -62,7 +62,7 @@ VALIDATOR_LISTS PART_SPEC
 1:
 .endm
 
-/* L0: a0 = the fewest free entries in the validator lists of state a0. */
+/* a0 = the fewest free entries in the validator lists of state a0. */
 LOCAL_FUNCTION lantern_validator_room
     UNWIND_END_PROLOGUE
     li      t0, -1
@@ -72,7 +72,7 @@ LOCAL_FUNCTION lantern_validator_room
 END_FUNCTION lantern_validator_room
 
 /*
- * L0: a0 = the index of the validator of state a0 with the 48-byte public key at a1, or -1.
+ * a0 = the index of the validator of state a0 with the 48-byte public key at a1, or -1.
  * The key is 4-aligned: request keys sit at offset 20 and 68.
  */
 LOCAL_FUNCTION lantern_find_pubkey

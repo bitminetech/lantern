@@ -1,5 +1,5 @@
 /*
- * Copy and zero, ARM64: L0 helpers that every object of the core includes.
+ * Copy and zero, ARM64: helpers that every object of the core includes.
  */
 
 LOCAL_FUNCTION lantern_copy

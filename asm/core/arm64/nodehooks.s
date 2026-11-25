@@ -19,7 +19,7 @@
 .endif
 
 /*
- * L0: decode the ByteList x1 as the type x0 into the end of the scratch x2, whose size field
+ * Decode the ByteList x1 as the type x0 into the end of the scratch x2, whose size field
  * then shrinks by the value's room: x0 = 0, 1 (scratch too small) or 2 (not an encoding of
  * the type); x1 = the value. The caller restores the size field. Locals: L the size.
  */
@@ -64,7 +64,7 @@ LOCAL_FUNCTION lantern_node_decode
 END_FUNCTION lantern_node_decode
 
 .if FORK == FORK_BELLATRIX
-/* L0: x0 = the PowBlock of the node x0 whose block_hash is the 32 bytes at x1, or 0. Uses x9-x13. */
+/* x0 = the PowBlock of the node x0 whose block_hash is the 32 bytes at x1, or 0. Uses x9-x13. */
 LOCAL_FUNCTION lantern_node_pow_block
     UNWIND_END_PROLOGUE
     PART    x9, x10, x0, Node_pow_blocks
@@ -867,7 +867,7 @@ SPEC_END node_liveness
 
 .if FORK >= FORK_ALTAIR
 /*
- * L1: (state x0, scratch x1) -> x0 status, x1 participant_reward, x2 proposer_reward of
+ * (state x0, scratch x1) -> x0 status, x1 participant_reward, x2 proposer_reward of
  * process_sync_aggregate at the state (altair beacon-chain.md). Locals: sp+16 the total active
  * balance, sp+24 the base reward per increment, sp+32 the state, sp+40 the scratch.
  */
@@ -1340,7 +1340,7 @@ SPEC_END node_block_rewards
 
 .if FORK >= FORK_ALTAIR
 /*
- * L0: the entry of the validator x0 among the x2 entries of 24 bytes at x1 (index, balance, member),
+ * The entry of the validator x0 among the x2 entries of 24 bytes at x1 (index, balance, member),
  * a new one with its balance in the state x3 and member 0 when there is none: x0 = the entry, x2 =
  * the count; x0 = 0 for an index past the validators. Uses x4-x7, x16.
  */
@@ -2041,7 +2041,7 @@ SPEC_FUNCTION node_attestation_rewards
     LEAVE 48
 SPEC_END node_attestation_rewards
 
-/* L0: x0 = the fork's TypeDescriptor of the NODE_JSON_* kind x9, or 0. Uses x0. */
+/* x0 = the fork's TypeDescriptor of the NODE_JSON_* kind x9, or 0. Uses x0. */
 LOCAL_FUNCTION lantern_node_type_of_kind
     UNWIND_END_PROLOGUE
     ADDRESS x0, lantern_type_SignedBeaconBlock
@@ -2182,7 +2182,7 @@ SPEC_FUNCTION node_json_decode
 SPEC_END node_json_decode
 
 /*
- * L0: x0 = the bytes of the SSZ default value of the type node x1 of the TypeDescriptor x0, written
+ * x0 = the bytes of the SSZ default value of the type node x1 of the TypeDescriptor x0, written
  * at x2: zero bytes for a fixed size type, none for a list, the byte 1 for a bitlist, and for a
  * variable container or vector its fixed part with the offsets, then each variable part. x19 the
  * descriptor, x20 the node, x21 out, x22 a field or element, x23 their end, x24 the bytes, x25
@@ -3217,7 +3217,7 @@ SPEC_FUNCTION node_proposer_lookahead
 SPEC_END node_proposer_lookahead
 
 /*
- * L1: x0 = a status: in the root x23 of lantern_node_gossip for the valid beacon_attestation x20,
+ * x0 = a status: in the root x23 of lantern_node_gossip for the valid beacon_attestation x20,
  * its data.slot, its committee index, its member and 0 (node.md): from electra, the member is the
  * place of attester_index in lantern_get_beacon_committee of the head state x19.head, + 2^16 times
  * the committee's length, the committee a list at the end of the scratch x21; before electra, 0.
@@ -3859,7 +3859,7 @@ SPEC_END node_new_payload
 .endif
 
 /*
- * L0: x0 = 1 when the chain of the state x19 is healthy for a builder (node.md,
+ * x0 = 1 when the chain of the state x19 is healthy for a builder (node.md,
  * lantern_node_produce_check: the skips before its slot, the epochs since finality, the skipped
  * slots of the last SLOTS_PER_EPOCH), else 0. Uses x1-x17.
  */
@@ -4366,7 +4366,7 @@ SPEC_FUNCTION node_produce_fold
 SPEC_END node_produce_fold
 
 /*
- * L1: the signature x1 added to the aggregate x0 with crypto_bls_aggregate, through a list of the
+ * The signature x1 added to the aggregate x0 with crypto_bls_aggregate, through a list of the
  * two at the end of scratch x2: x0 = LANTERN_OK, a status of crypto_bls_aggregate, or
  * LANTERN_BUFFER_TOO_SMALL. Locals: L the aggregate, L+8 the signature, L+16 the list.
  */
@@ -4688,7 +4688,7 @@ SPEC_END node_produce_bid
 .endm
 
 /*
- * L0: x0 = 1 when the bid [x21 + 40] wins the choice (beacon-api.md, produceBlockV3): the engine's
+ * x0 = 1 when the bid [x21 + 40] wins the choice (beacon-api.md, produceBlockV3): the engine's
  * block_value (0 in bellatrix or with no result) below builder_boost_factor * (the bid's value //
  * 100), the product saturating at 2^256 - 1; else 0. x21 params. Uses x1-x17.
  */
@@ -4759,7 +4759,7 @@ LOCAL_FUNCTION lantern_produce_choice
 END_FUNCTION lantern_produce_choice
 
 /*
- * L0: the parts of the winning bid at PBL_BID of the locals x0: its message, header, from deneb
+ * The parts of the winning bid at PBL_BID of the locals x0: its message, header, from deneb
  * its commitments, from electra its requests (lantern_node_produce_bid checked its offsets).
  * Uses x9-x14.
  */
@@ -4799,7 +4799,7 @@ LOCAL_FUNCTION lantern_produce_bid_parts
 END_FUNCTION lantern_produce_bid_parts
 
 /*
- * L2: the stand-in payload of the winning bid (node.md, lantern_node_produce_block, with a bid),
+ * The stand-in payload of the winning bid (node.md, lantern_node_produce_block, with a bid),
  * at the end of the scratch x22 below its expected withdrawals, whose size then drops below both:
  * the header's fields, its extra_data, no transactions, from capella the expected withdrawals in
  * SSZ. Its bytes and their count at 24 of the locals x0. x0 = 0, or LANTERN_BUFFER_TOO_SMALL, or
@@ -4906,7 +4906,7 @@ LOCAL_FUNCTION lantern_produce_standin
 END_FUNCTION lantern_produce_standin
 
 /*
- * L2: the BlindedBeaconBlock of the block in out x23 (x25 its bytes, x26 its body): the header of
+ * The BlindedBeaconBlock of the block in out x23 (x25 its bytes, x26 its body): the header of
  * the winning bid in the payload's place, the tail after it moved through the end of the scratch
  * x22, the body's offsets after the payload's grown by the difference. x0 = 0, or
  * LANTERN_BUFFER_TOO_SMALL. Locals: L the locals, L+8 the payload's place, L+16 its end, L+24 the
@@ -4993,7 +4993,7 @@ LOCAL_FUNCTION lantern_produce_blind
 END_FUNCTION lantern_produce_blind
 
 /*
- * L2: the state root of the blinded block in out x23 (x25 its bytes), as process_block of the
+ * The state root of the blinded block in out x23 (x25 its bytes), as process_block of the
  * builder's full block gives it: the state x19's latest_block_header.body_root becomes the
  * hash_tree_root of the blinded body (the full body's), its latest_execution_payload_header's
  * transactions_root the bid's header's; then lantern_state_root into the block's state_root.
@@ -5500,7 +5500,7 @@ SPEC_FUNCTION node_eth1_check
     LEAVE 0
 SPEC_END node_eth1_check
 
-/* L0: x0 = 1 when the Eth1Data at x0 is get_eth1_data of the Eth1Block at x1, else 0. Uses x9-x12. */
+/* x0 = 1 when the Eth1Data at x0 is get_eth1_data of the Eth1Block at x1, else 0. Uses x9-x12. */
 LOCAL_FUNCTION lantern_e1v_match
     UNWIND_END_PROLOGUE
     ldr     x9, [x0, #Eth1Data_deposit_count]
@@ -5528,7 +5528,7 @@ LOCAL_FUNCTION lantern_e1v_match
     ret
 END_FUNCTION lantern_e1v_match
 
-/* L0: x0 = 1 when the 72 bytes at x0 and x1 are equal, else 0. Uses x9-x11. */
+/* x0 = 1 when the 72 bytes at x0 and x1 are equal, else 0. Uses x9-x11. */
 LOCAL_FUNCTION lantern_e1v_same
     UNWIND_END_PROLOGUE
     mov     x11, #0
@@ -5546,7 +5546,7 @@ LOCAL_FUNCTION lantern_e1v_same
 END_FUNCTION lantern_e1v_same
 
 /*
- * L1: x0 = 1 when the Eth1Data at x0 is the data of a block of votes_to_consider (phase0
+ * x0 = 1 when the Eth1Data at x0 is the data of a block of votes_to_consider (phase0
  * get_eth1_vote): a candidate block (its timestamp + S * F at most the period start L, + 2 * S * F
  * at least it) whose deposit_count is at least the state's. x23 the blocks, x24 their count, x19
  * the state; L+8 S * F of the caller's locals at x28. Uses x9-x14.
@@ -5812,7 +5812,7 @@ SPEC_FUNCTION node_produce_eth1
     LEAVE 240
 SPEC_END node_produce_eth1
 
-/* L0: x0 = 0 when x1 bytes from x0 fit in the ByteList x23, else 1. Uses x16, x17. */
+/* x0 = 0 when x1 bytes from x0 fit in the ByteList x23, else 1. Uses x16, x17. */
 LOCAL_FUNCTION lantern_produce_room
     UNWIND_END_PROLOGUE
     ldr     x16, [x23]
@@ -5824,7 +5824,7 @@ LOCAL_FUNCTION lantern_produce_room
 END_FUNCTION lantern_produce_room
 
 /*
- * L0: (index x0, record x1) -> x0 = 1 when the index is in both attestations of the attester
+ * (index x0, record x1) -> x0 = 1 when the index is in both attestations of the attester
  * slashing whose SSZ bytes follow the draft record x1, else 0. Uses x7, x9-x15.
  */
 LOCAL_FUNCTION lantern_produce_in_slashing
@@ -5862,7 +5862,7 @@ LOCAL_FUNCTION lantern_produce_in_slashing
 END_FUNCTION lantern_produce_in_slashing
 
 /*
- * L2: (topic x0, write position x1) -> x0 = 0, or 1 for a short out; x1 = the write position. The
+ * (topic x0, write position x1) -> x0 = 0, or 1 for a short out; x1 = the write position. The
  * SSZ bytes of the draft's records of the topic in their order, back to back. x21 a record, x22
  * the records' end, x25 the topic, x27 the position.
  */
@@ -5900,7 +5900,7 @@ LOCAL_FUNCTION lantern_produce_records
 END_FUNCTION lantern_produce_records
 
 /*
- * L2: (write position x0) -> x0 = 0, or 1 for a short out; x1 = the write position. The draft's
+ * (write position x0) -> x0 = 0, or 1 for a short out; x1 = the write position. The draft's
  * attester slashing records as an SSZ list: their offsets, then their bytes. x21 a record, x22 the
  * end, x25 their count, x26 the next offset, x27 the position, x28 the next offset's place.
  */
@@ -5958,7 +5958,7 @@ LOCAL_FUNCTION lantern_produce_attester_slashings
 END_FUNCTION lantern_produce_attester_slashings
 
 /*
- * L1: (index x0, records x1, their end x2) -> x0 = 1 when a proposer slashing record of [x1, x2)
+ * (index x0, records x1, their end x2) -> x0 = 1 when a proposer slashing record of [x1, x2)
  * has the index as its proposer, or an attester slashing record has it in both attestations;
  * else 0. x19 the index, x20 a record, x21 the end.
  */
@@ -5994,7 +5994,7 @@ LOCAL_FUNCTION lantern_produce_slashed
 END_FUNCTION lantern_produce_slashed
 
 /*
- * L0: (the attester slashing's bytes x0, their count x1, records x2, their end x3) -> x0 = 1 when
+ * (the attester slashing's bytes x0, their count x1, records x2, their end x3) -> x0 = 1 when
  * an index is in both attestations (whose indices are sorted, as is_valid_indexed_attestation
  * holds them) and no proposer slashing record of [x2, x3) has it as its proposer; else 0. x4 a
  * place in the first list, x5 its end, x6 a place in the second, x7 its end. Uses x9-x13.
@@ -6064,7 +6064,7 @@ END_FUNCTION lantern_produce_takes_slashing
 .endif
 .set PB_ATT_FIXED, 228 + PB_ATT_COMMITTEE
 
-/* L0: x0 = 1 when the 128 bytes at x0 and x1 are equal, else 0. Uses x9-x12. */
+/* x0 = 1 when the 128 bytes at x0 and x1 are equal, else 0. Uses x9-x12. */
 LOCAL_FUNCTION lantern_produce_same_data
     UNWIND_END_PROLOGUE
     mov     x9, #0
@@ -6082,7 +6082,7 @@ LOCAL_FUNCTION lantern_produce_same_data
 END_FUNCTION lantern_produce_same_data
 
 /*
- * L2: (the block's locals x0, write position x1) -> x0 = 0, 1 for a short out or scratch, or a
+ * (the block's locals x0, write position x1) -> x0 = 0, 1 for a short out or scratch, or a
  * status of crypto_bls_aggregate; x1 = the write position. The draft's aggregates chosen by
  * data.slot descending, then order, at most the fork's limit; before electra an Attestation of
  * each, from electra one Attestation for each data of the aggregates of every committee
@@ -6314,7 +6314,7 @@ LOCAL_FUNCTION lantern_produce_attestations
 END_FUNCTION lantern_produce_attestations
 
 /*
- * L0: (index x0) -> x0: the aggregation bits of the attestation of the draft's aggregate x0, x21
+ * (index x0) -> x0: the aggregation bits of the attestation of the draft's aggregate x0, x21
  * the aggregates, x25 their count: its length; from electra the lengths of the aggregates of its
  * data. Uses x1-x4, x13-x15: its callers keep x9-x12.
  */
@@ -6347,7 +6347,7 @@ LOCAL_FUNCTION lantern_produce_att_bits
 .endif
 END_FUNCTION lantern_produce_att_bits
 
-/* L0: (bits x0, aggregate x1, cursor x2) -> x0: the aggregate's length bits set at bit x2 of x0 on; the cursor after them. Uses x9-x15. */
+/* (bits x0, aggregate x1, cursor x2) -> x0: the aggregate's length bits set at bit x2 of x0 on; the cursor after them. Uses x9-x15. */
 LOCAL_FUNCTION lantern_produce_copy_bits
     UNWIND_END_PROLOGUE
     ldr     x9, [x1, #DraftAggregate_length]
@@ -6376,7 +6376,7 @@ END_FUNCTION lantern_produce_copy_bits
 
 .if FORK >= FORK_DENEB
 /*
- * L1: (the block's locals x0) -> x0 = 0, or 1 for a short out: out x23 holds the block from offset
+ * (the block's locals x0) -> x0 = 0, or 1 for a short out: out x23 holds the block from offset
  * 24; it becomes the BlockContents: the block moved 12 bytes on, the three offsets, the bundle's
  * proofs and blobs (the bundle at locals + 40, its bytes at + 48). Uses x1-x15.
  */
@@ -6791,12 +6791,12 @@ SPEC_FUNCTION node_publish_check
 SPEC_END node_publish_check
 
 /*
- * L1: (gossip x0, data x1, scratch x2) -> x0: LANTERN_OK when lantern_node_gossip of the data
+ * (gossip x0, data x1, scratch x2) -> x0: LANTERN_OK when lantern_node_gossip of the data
  * holds, else its status or its result. Locals: a Result, a root (32), an index.
  */
 .if FORK >= FORK_BELLATRIX
 /*
- * L2: (blinded ByteList x0, state x1, scratch x2) -> x0 status, x1: the SignedBeaconBlock of the
+ * (blinded ByteList x0, state x1, scratch x2) -> x0 status, x1: the SignedBeaconBlock of the
  * blinded block with the stand-in payload of its header (node.md, lantern_node_publish_check),
  * as a ByteList at the end of scratch, whose size drops below it and its expected withdrawals
  * (the caller restores it). x19 the blinded bytes, x20 their count, x21 scratch, x22 the state,
@@ -6961,7 +6961,7 @@ LOCAL_FUNCTION lantern_publish_unblind
 END_FUNCTION lantern_publish_unblind
 
 /*
- * L2: (gossip x0, block x1, scratch x2) -> x0: the blinded transition of the blinded block x1 on
+ * (gossip x0, block x1, scratch x2) -> x0: the blinded transition of the blinded block x1 on
  * the proposer state of the gossip (node.md, lantern_node_publish_check): its body's root and
  * header's transactions_root, then process_block of the block with the stand-in payload, those
  * roots in the state, and its state root against the block's: LANTERN_OK, its result, or

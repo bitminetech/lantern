@@ -11,7 +11,7 @@
     RODATA
 .include "jsonrpc_names.inc"
 
-/* L0: a0 = the cursor a0 after any whitespace. Uses t0, t1. */
+/* a0 = the cursor a0 after any whitespace. Uses t0, t1. */
 LOCAL_FUNCTION lantern_jws
     UNWIND_END_PROLOGUE
 1:  bgeu    a0, s1, 2f
@@ -30,7 +30,7 @@ LOCAL_FUNCTION lantern_jws
 END_FUNCTION lantern_jws
 
 /*
- * L0: a string at the cursor a0, its quote included: a0 = the cursor after it, a1 = where its
+ * A string at the cursor a0, its quote included: a0 = the cursor after it, a1 = where its
  * bytes start, a2 = their count, a3 = 1 when it has an escape. Uses t0-t3.
  */
 LOCAL_FUNCTION lantern_jstring
@@ -95,7 +95,7 @@ END_FUNCTION lantern_jstring
     bgeu    t0, t1, \none
 .endm
 
-/* L0: a number at the cursor a0, as RFC 8259 writes it: a0 = the cursor after it, a1 = 1 when it is digits only. Uses t0-t2. */
+/* A number at the cursor a0, as RFC 8259 writes it: a0 = the cursor after it, a1 = 1 when it is digits only. Uses t0-t2. */
 LOCAL_FUNCTION lantern_jnumber
     UNWIND_END_PROLOGUE
     li      a1, 1
@@ -170,7 +170,7 @@ END_FUNCTION lantern_jnumber
 93:
 .endm
 
-/* L0: the literal at the cursor a0 of the a2 bytes at a1: a0 = the cursor after it, or 0. Uses t0-t2. */
+/* The literal at the cursor a0 of the a2 bytes at a1: a0 = the cursor after it, or 0. Uses t0-t2. */
 LOCAL_FUNCTION lantern_jliteral
     UNWIND_END_PROLOGUE
     sub     t0, s1, a0
@@ -190,7 +190,7 @@ LOCAL_FUNCTION lantern_jliteral
 END_FUNCTION lantern_jliteral
 
 /*
- * L0: any value at the cursor a0, as RFC 8259 writes it: a0 = the cursor after it. Brackets nest
+ * Any value at the cursor a0, as RFC 8259 writes it: a0 = the cursor after it. Brackets nest
  * to 64 levels, their kinds in s4 (1 for an object), the depth in s5; t5 what comes next: 0 a
  * value, 1 a value or the array's end, 2 a name, 3 a name or the object's end. Uses a1-a3, t0-t5.
  */
@@ -297,7 +297,7 @@ LOCAL_FUNCTION lantern_jskip
 END_FUNCTION lantern_jskip
 
 /*
- * L0: the next member of an object, from the cursor a0 after its brace (a1 = 1) or after a
+ * The next member of an object, from the cursor a0 after its brace (a1 = 1) or after a
  * value (a1 = 0): a3 = 1 at the closing brace, a0 after it; else a0 = its value after
  * whitespace, a1 = where its name's bytes start, a2 = their count, 2^64 - 1 for a name with
  * an escape. a0 = 0 when the JSON is not valid. Uses t0-t3, t5.
@@ -338,7 +338,7 @@ LOCAL_FUNCTION lantern_jmember
 END_FUNCTION lantern_jmember
 
 /*
- * L0: DATA of a2 bytes at the cursor a0, or null when a1 = 1 allows it, to a3:
+ * DATA of a2 bytes at the cursor a0, or null when a1 = 1 allows it, to a3:
  * a0 = the cursor after it, a1 = 1 when it is not null. Uses t0-t6, a4, a5.
  */
 LOCAL_FUNCTION lantern_jdata_in
@@ -400,7 +400,7 @@ LOCAL_FUNCTION lantern_jdata_in
 END_FUNCTION lantern_jdata_in
 
 /*
- * L0: an entry of the table at a4 (a length byte and the bytes, then a 0 byte) that the a2
+ * An entry of the table at a4 (a length byte and the bytes, then a 0 byte) that the a2
  * bytes at a1 match: a5 = its index, or 2^64 - 1. Uses t0-t3.
  */
 LOCAL_FUNCTION lantern_jtable
@@ -426,7 +426,7 @@ LOCAL_FUNCTION lantern_jtable
     ret
 END_FUNCTION lantern_jtable
 
-/* L0: a PayloadStatusV1 object at the cursor a0, into s2: a0 = the cursor after it. s6 1 when status is seen. */
+/* A PayloadStatusV1 object at the cursor a0, into s2: a0 = the cursor after it. s6 1 when status is seen. */
 LOCAL_FUNCTION lantern_jpayload_status
     ENTER 0
     bgeu    a0, s1, 9f
@@ -471,7 +471,7 @@ LOCAL_FUNCTION lantern_jpayload_status
     LEAVE 0
 END_FUNCTION lantern_jpayload_status
 
-/* L0: the result of the method in s3 at the cursor a0, s8 the body's first byte: a0 = the cursor after it. */
+/* The result of the method in s3 at the cursor a0, s8 the body's first byte: a0 = the cursor after it. */
 LOCAL_FUNCTION lantern_jresult
     ENTER 0
     li      t0, ENGINE_METHOD_NEW_PAYLOAD
@@ -579,7 +579,7 @@ LOCAL_FUNCTION lantern_jresult
     LEAVE 0
 END_FUNCTION lantern_jresult
 
-/* L0: an error object at the cursor a0, into s2: a0 = the cursor after it. s7 1 when code is seen. */
+/* An error object at the cursor a0, into s2: a0 = the cursor after it. s7 1 when code is seen. */
 LOCAL_FUNCTION lantern_jerror
     ENTER 0
     bgeu    a0, s1, 9f

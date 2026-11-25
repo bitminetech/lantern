@@ -34,7 +34,7 @@
     mov     %r11, (\reg)
 .endm
 
-/* L0: rax = the fork of the slot rdi with the config rsi: the last fork whose epoch is at most the slot's. Uses rcx, rdx. */
+/* rax = the fork of the slot rdi with the config rsi: the last fork whose epoch is at most the slot's. Uses rcx, rdx. */
 LOCAL_FUNCTION lantern_app_fork
     UNWIND_END_PROLOGUE
     mov     %rdi, %rax
@@ -53,7 +53,7 @@ LOCAL_FUNCTION lantern_app_fork
     ret
 END_FUNCTION lantern_app_fork
 
-/* L0: rax = the current slot of the store rdi: (time_ms - genesis_time_ms) // SLOT_DURATION_MS, 0 before genesis. Uses rcx, rdx. */
+/* rax = the current slot of the store rdi: (time_ms - genesis_time_ms) // SLOT_DURATION_MS, 0 before genesis. Uses rcx, rdx. */
 LOCAL_FUNCTION lantern_app_store_slot
     UNWIND_END_PROLOGUE
     mov     Store_time_ms(%rdi), %rax
@@ -70,7 +70,7 @@ LOCAL_FUNCTION lantern_app_store_slot
     ret
 END_FUNCTION lantern_app_store_slot
 
-/* L0: rax = 1 when the rsi bytes at rdi are the rcx bytes at rdx, else 0. Uses rdi, rsi, rdx, r8. */
+/* rax = 1 when the rsi bytes at rdi are the rcx bytes at rdx, else 0. Uses rdi, rsi, rdx, r8. */
 LOCAL_FUNCTION lantern_app_name_is
     UNWIND_END_PROLOGUE
     cmp     %rcx, %rsi
@@ -90,7 +90,7 @@ LOCAL_FUNCTION lantern_app_name_is
     ret
 END_FUNCTION lantern_app_name_is
 
-/* L1: rax = memory of rdi bytes from lantern_shell_map, zeroed, or 0. Locals: the size, the address. */
+/* rax = memory of rdi bytes from lantern_shell_map, zeroed, or 0. Locals: the size, the address. */
 LOCAL_FUNCTION lantern_app_map
     FRAME 16
     mov     %rdi, (%rsp)
@@ -102,7 +102,7 @@ LOCAL_FUNCTION lantern_app_map
 END_FUNCTION lantern_app_map
 
 /*
- * L1: a StateCache, a CommitteeCache and a PubkeyCache for rdi / 121 + 65536 validators (rdi the anchor file's
+ * A StateCache, a CommitteeCache and a PubkeyCache for rdi / 121 + 65536 validators (rdi the anchor file's
  * bytes), at CONFIG_STATE_CACHE and CONFIG_COMMITTEE_CACHE of the app's config; none with no
  * memory. rbx the app.
  * Locals: rsp+0 validators, rsp+8 its bytes.
@@ -164,7 +164,7 @@ LOCAL_FUNCTION lantern_app_state_cache
     UNFRAME 16
 END_FUNCTION lantern_app_state_cache
 
-/* L1: the pair at rbx + rdi goes back to lantern_shell_unmap and becomes 0, 0. */
+/* The pair at rbx + rdi goes back to lantern_shell_unmap and becomes 0, 0. */
 LOCAL_FUNCTION lantern_app_unmap
     FRAME 16
     lea     (%rbx,%rdi), %rax
@@ -180,7 +180,7 @@ LOCAL_FUNCTION lantern_app_unmap
 1:  UNFRAME 16
 END_FUNCTION lantern_app_unmap
 
-/* L1: the pair at rbx + rdi becomes new memory of rsi bytes, its first u64 the size: rax = the memory, or 0. */
+/* The pair at rbx + rdi becomes new memory of rsi bytes, its first u64 the size: rax = the memory, or 0. */
 LOCAL_FUNCTION lantern_app_alloc
     ENTER 0
     lea     (%rbx,%rdi), %rbp
@@ -195,14 +195,14 @@ LOCAL_FUNCTION lantern_app_alloc
 1:  LEAVE 0
 END_FUNCTION lantern_app_alloc
 
-/* L0: the log line starts, with room for the time and the level that lantern_app_line_end writes. */
+/* The log line starts, with room for the time and the level that lantern_app_line_end writes. */
 LOCAL_FUNCTION lantern_app_line_start
     UNWIND_END_PROLOGUE
     movq    $APP_LOG_PREFIX, (APP_LINE + 16)(%rbx)
     ret
 END_FUNCTION lantern_app_line_start
 
-/* L0: rdx digits of rdi, before the byte at rsi. A leaf; uses rax, rcx, rdx, rsi, r8. */
+/* rdx digits of rdi, before the byte at rsi. A leaf; uses rax, rcx, rdx, rsi, r8. */
 LOCAL_FUNCTION lantern_app_digits
     UNWIND_END_PROLOGUE
     mov     %rdx, %r8
@@ -219,7 +219,7 @@ LOCAL_FUNCTION lantern_app_digits
 END_FUNCTION lantern_app_digits
 
 /*
- * L1: the UTC time of the Unix milliseconds rdi, as YYYY-MM-DD HH:MM:SS.mmm, in the 23 bytes at
+ * The UTC time of the Unix milliseconds rdi, as YYYY-MM-DD HH:MM:SS.mmm, in the 23 bytes at
  * rsi (civil_from_days of the days since 1970). Locals: rsp+0 out, +8 the milliseconds of the
  * day, +16 year, +24 month, +32 day.
  */
@@ -353,7 +353,7 @@ LOCAL_FUNCTION lantern_app_time_text
     UNFRAME 48
 END_FUNCTION lantern_app_time_text
 
-/* L0: the rsi bytes at rdi join the log line, as far as it has room. Uses rax, rcx, rdx, rsi, rdi. */
+/* The rsi bytes at rdi join the log line, as far as it has room. Uses rax, rcx, rdx, rsi, rdi. */
 LOCAL_FUNCTION lantern_app_line_text
     UNWIND_END_PROLOGUE
     lea     APP_LINE(%rbx), %rax
@@ -377,7 +377,7 @@ LOCAL_FUNCTION lantern_app_line_text
 3:  ret
 END_FUNCTION lantern_app_line_text
 
-/* L1: the decimal digits of rdi join the log line. Locals: 32 digit bytes. */
+/* The decimal digits of rdi join the log line. Locals: 32 digit bytes. */
 LOCAL_FUNCTION lantern_app_line_u64
     FRAME 32
     lea     32(%rsp), %rcx                  # the digits, from the end
@@ -397,7 +397,7 @@ LOCAL_FUNCTION lantern_app_line_u64
     UNFRAME 32
 END_FUNCTION lantern_app_line_u64
 
-/* L1: the hex digits of the rsi bytes at rdi join the log line. Locals: rdi, rsi, then 2 digits. */
+/* The hex digits of the rsi bytes at rdi join the log line. Locals: rdi, rsi, then 2 digits. */
 LOCAL_FUNCTION lantern_app_line_hex
     FRAME 32
     mov     %rdi, (%rsp)
@@ -427,7 +427,7 @@ LOCAL_FUNCTION lantern_app_line_hex
 END_FUNCTION lantern_app_line_hex
 
 /*
- * L1: the log line of kind rdi (APP_LOG_INFO, ERROR, WARN or DEBUG), when its level is at most the
+ * The log line of kind rdi (APP_LOG_INFO, ERROR, WARN or DEBUG), when its level is at most the
  * log level: its time and level before it, an LF after it, to the standard error for ERROR and
  * WARN, else the standard output. Locals: rsp+0 the level, +8 the time, +16 an LF.
  */
@@ -470,7 +470,7 @@ LOCAL_FUNCTION lantern_app_line_end
 END_FUNCTION lantern_app_line_end
 
 /*
- * L1: the log lines of a work that ran (app.md, the log): DEBUG work <kind> result <n>; for a
+ * The log lines of a work that ran (app.md, the log): DEBUG work <kind> result <n>; for a
  * block's import, INFO block <slot> imported, <a> attestations, or WARN block <slot> not imported:
  * result <n>. rdi its kind, rsi its data entry or 0. Locals: rsp+0 kind, +8 entry, +16 result,
  * +24 slot.
@@ -538,7 +538,7 @@ LOCAL_FUNCTION lantern_app_log_work
 9:  UNFRAME 32
 END_FUNCTION lantern_app_log_work
 
-/* L1: the path of the rsi bytes of the name at rdi in the network directory: a ByteList at APP_PATH. */
+/* The path of the rsi bytes of the name at rdi in the network directory: a ByteList at APP_PATH. */
 LOCAL_FUNCTION lantern_app_path
     ENTER 0
     mov     %rdi, %rbp
@@ -566,7 +566,7 @@ LOCAL_FUNCTION lantern_app_path
     LEAVE 0
 END_FUNCTION lantern_app_path
 
-/* L1: the path of the log line: the bytes of APP_PATH, as far as they fit. */
+/* The path of the log line: the bytes of APP_PATH, as far as they fit. */
 LOCAL_FUNCTION lantern_app_line_path
     FRAME 0
     lea     APP_PATH(%rbx), %rax
@@ -579,7 +579,7 @@ LOCAL_FUNCTION lantern_app_line_path
     UNFRAME 0
 END_FUNCTION lantern_app_line_path
 
-/* L1: the file at APP_PATH, read into APP_FILE: rax = 0, or 2 after a line on the standard error. */
+/* The file at APP_PATH, read into APP_FILE: rax = 0, or 2 after a line on the standard error. */
 LOCAL_FUNCTION lantern_app_read
     FRAME 0
     lea     APP_PATH(%rbx), %rdi
@@ -606,7 +606,7 @@ LOCAL_FUNCTION lantern_app_read
 END_FUNCTION lantern_app_read
 
 /*
- * L1: APP_PATH holds the path of the Arg at rdi, or a count past its room when the path does not
+ * APP_PATH holds the path of the Arg at rdi, or a count past its room when the path does not
  * fit, so the shell gives its error.
  */
 LOCAL_FUNCTION lantern_app_arg_path
@@ -625,7 +625,7 @@ LOCAL_FUNCTION lantern_app_arg_path
 END_FUNCTION lantern_app_arg_path
 
 /*
- * L2: the anchor of --checkpoint-state and --checkpoint-block in APP_FILE, in the form of
+ * The anchor of --checkpoint-state and --checkpoint-block in APP_FILE, in the form of
  * anchor.ssz: one ByteList of two, the state's bytes, then the block's message from byte 100 of
  * its SignedBeaconBlock: rax = 0, or 2 after a line on the standard error. rbp the block file's
  * ByteList, r13 its bytes, r14 the state file's ByteList, r15 its bytes, S7 the buffer's size, S8
@@ -725,7 +725,7 @@ LOCAL_FUNCTION lantern_app_checkpoint
     LEAVE 16
 END_FUNCTION lantern_app_checkpoint
 
-/* L1: the memory of APP_FILE goes back. */
+/* The memory of APP_FILE goes back. */
 LOCAL_FUNCTION lantern_app_file_free
     FRAME 16
     cmpq    $0, (APP_FILE + 8)(%rbx)
@@ -737,7 +737,7 @@ LOCAL_FUNCTION lantern_app_file_free
 1:  UNFRAME 16
 END_FUNCTION lantern_app_file_free
 
-/* L1: a line "<rsi bytes at rdi>: status <rdx>" on the standard error, then rax = 2. Locals: rdi, rsi, rdx. */
+/* A line "<rsi bytes at rdi>: status <rdx>" on the standard error, then rax = 2. Locals: rdi, rsi, rdx. */
 LOCAL_FUNCTION lantern_app_fail_status
     FRAME 32
     mov     %rdi, (%rsp)
@@ -758,7 +758,7 @@ LOCAL_FUNCTION lantern_app_fail_status
     UNFRAME 32
 END_FUNCTION lantern_app_fail_status
 
-/* L1: rax = 2 after a line "lantern: no memory" on the standard error. */
+/* rax = 2 after a line "lantern: no memory" on the standard error. */
 LOCAL_FUNCTION lantern_app_no_memory
     FRAME 0
     call    lantern_app_line_start
@@ -772,7 +772,7 @@ LOCAL_FUNCTION lantern_app_no_memory
 END_FUNCTION lantern_app_no_memory
 
 /*
- * L2: the start of docs/reference/app.md: the config, the anchor of genesis.ssz, the store, the
+ * The start of docs/reference/app.md: the config, the anchor of genesis.ssz, the store, the
  * node and the Seen: rax = 0, or 2 after a line on the standard error. rbp a ByteList, r12 the
  * file's size, r13 a size, r14 a size, r15 the tries. Locals: L a line number or a size.
  */
@@ -1156,7 +1156,7 @@ LOCAL_FUNCTION lantern_app_start
     LEAVE 16
 END_FUNCTION lantern_app_start
 
-/* L0: rax = the BufferId table entry of the id rdi, or 0. Uses rcx. */
+/* rax = the BufferId table entry of the id rdi, or 0. Uses rcx. */
 LOCAL_FUNCTION lantern_app_buf_find
     UNWIND_END_PROLOGUE
     mov     APP_BUFS(%rbx), %rax
@@ -1173,7 +1173,7 @@ LOCAL_FUNCTION lantern_app_buf_find
 END_FUNCTION lantern_app_buf_find
 
 /*
- * L1: the BufferId table with twice its room: new memory with its entries, the old memory back to
+ * The BufferId table with twice its room: new memory with its entries, the old memory back to
  * lantern_shell_unmap. rax = 0, or 1 with no memory. Locals: the old address, its bytes.
  */
 LOCAL_FUNCTION lantern_app_buf_grow
@@ -1200,7 +1200,7 @@ LOCAL_FUNCTION lantern_app_buf_grow
     UNFRAME 16
 END_FUNCTION lantern_app_buf_grow
 
-/* L1: a table entry of the id rdi for the memory rsi of rdx bytes, the table twice as large when full: rax = 0, or 1 for id 0, an id in use or no memory. */
+/* A table entry of the id rdi for the memory rsi of rdx bytes, the table twice as large when full: rax = 0, or 1 for id 0, an id in use or no memory. */
 LOCAL_FUNCTION lantern_app_buf_add
     FRAME 32
     mov     %rdi, (%rsp)
@@ -1235,7 +1235,7 @@ LOCAL_FUNCTION lantern_app_buf_add
 END_FUNCTION lantern_app_buf_add
 
 /*
- * L1: NODE_ACT_BYTES_JOIN rdi (app.md): new memory with the ByteLists of the ids one after another,
+ * NODE_ACT_BYTES_JOIN rdi (app.md): new memory with the ByteLists of the ids one after another,
  * each at a multiple of 8, kept as the new id's; with no memory or an id with no bytes, a ByteList
  * of no bytes. r12 the action, r13 the count, r14 the bytes, rbp an index, r15 the memory, S7 the
  * place, S8 a ByteList.
@@ -1304,7 +1304,7 @@ LOCAL_FUNCTION lantern_app_bytes_join
 9:  LEAVE 0
 END_FUNCTION lantern_app_bytes_join
 
-/* L1: the buffer of the id rdi goes back to the OS, and the last entry takes its place. */
+/* The buffer of the id rdi goes back to the OS, and the last entry takes its place. */
 LOCAL_FUNCTION lantern_app_buf_drop
     FRAME 16
     call    lantern_app_buf_find
@@ -1330,7 +1330,7 @@ LOCAL_FUNCTION lantern_app_buf_drop
 END_FUNCTION lantern_app_buf_drop
 
 /*
- * L1: rax = new memory with a copy of the rsi bytes at rdi, or 0. With a source at a multiple of
+ * rax = new memory with a copy of the rsi bytes at rdi, or 0. With a source at a multiple of
  * 8, a whole page of the source that is all zero bytes is not written: the new memory is zero
  * already, and the OS keeps no memory for a page nobody writes; the last part of a page is copied. rbp the source, r12 the
  * size, r13 the copy, r14 the page's offset, r15 its bytes.
@@ -1378,7 +1378,7 @@ LOCAL_FUNCTION lantern_app_dup
 END_FUNCTION lantern_app_dup
 
 /*
- * L1: the rsi bytes of the event at rdi join the events of the next step, which grow when full:
+ * The rsi bytes of the event at rdi join the events of the next step, which grow when full:
  * rax = 0, or 1 with no memory. rbp the event, r12 its size, r13 the events, r14 a new size, r15 new memory.
  */
 LOCAL_FUNCTION lantern_app_event_put
@@ -1422,7 +1422,7 @@ LOCAL_FUNCTION lantern_app_event_put
 END_FUNCTION lantern_app_event_put
 
 /*
- * L1: the node (rdi = 0), the store (1) or the Seen (2) moves to new memory, with the field of its
+ * The node (rdi = 0), the store (1) or the Seen (2) moves to new memory, with the field of its
  * room at byte offset rsi doubled, or each field for rsi = 2^64 - 1: rax = 0, or 1. rbp the kind, r12 the pair, r13 the room, r14 the room's fields,
  * r15 the new memory. Locals: L a size, L+8 an address.
  */
@@ -1510,7 +1510,7 @@ LOCAL_FUNCTION lantern_app_grow
 END_FUNCTION lantern_app_grow
 
 /*
- * L1: the state of the BufferId table entry rdi moves to new memory with twice the StateRoom of the
+ * The state of the BufferId table entry rdi moves to new memory with twice the StateRoom of the
  * App: rax = 0, or 1. rbp the entry, r12 the fork, r13 the new memory. Locals: L a size.
  */
 LOCAL_FUNCTION lantern_app_regrow
@@ -1558,7 +1558,7 @@ LOCAL_FUNCTION lantern_app_regrow
 END_FUNCTION lantern_app_regrow
 
 /*
- * L2: rax = 0 with the light client store as BufferId 2 (node.md, lantern_node_init: Caller must):
+ * rax = 0 with the light client store as BufferId 2 (node.md, lantern_node_init: Caller must):
  * lantern_lc_store_init of the anchor state and block with the APP_LC_* capacities; else 1. r12
  * the store, r13 its size. APP_TMP: the LcRoom, then the size.
  */
@@ -1604,7 +1604,7 @@ LOCAL_FUNCTION lantern_app_lc_start
 END_FUNCTION lantern_app_lc_start
 
 /*
- * L2: rax = 0 when the light client store of the table entry rdi is in a new buffer with twice the
+ * rax = 0 when the light client store of the table entry rdi is in a new buffer with twice the
  * capacities of each part (lantern_lc_store_copy); else 1. r12 the entry, r13 the new buffer, r14
  * its size. APP_TMP: the LcRoom, then the size. Locals: L the new buffer and its size.
  */
@@ -1654,7 +1654,7 @@ LOCAL_FUNCTION lantern_app_lc_grow
 END_FUNCTION lantern_app_lc_grow
 
 /*
- * L2: the WORK action rdi, by lantern_node_run with its buffers, again with more room while it asks
+ * The WORK action rdi, by lantern_node_run with its buffers, again with more room while it asks
  * for it; then its WORK_DONE event joins the next step's. rbp the action, r12-r15 the entries of
  * state_a, state_b, state_c and data (or 0), S7 the tries, S8 the kind, S9 a size.
  */
@@ -1925,7 +1925,7 @@ LOCAL_FUNCTION lantern_app_work
 END_FUNCTION lantern_app_work
 
 /*
- * L1: the history's files: no file open, no segment mapped; with a data directory, the node gets
+ * The history's files: no file open, no segment mapped; with a data directory, the node gets
  * NODE_FLAG_DB and room for a segment of slots, and the directory is made (one already there
  * will do; a failure shows at its first file). r15 the AppDb.
  */
@@ -1997,7 +1997,7 @@ LOCAL_FUNCTION lantern_app_db_start
 END_FUNCTION lantern_app_db_start
 
 /*
- * L1: the custody_count and custody_slot of the NODE_ACT_DB_STATE rdi, when they are not those of
+ * The custody_count and custody_slot of the NODE_ACT_DB_STATE rdi, when they are not those of
  * AppDb_custody: <dir>/custody.bin gets them, 16 bytes, synced, and AppDb_custody takes them; a
  * failure gives a cannot write line. rbp the action, r15 the AppDb. Locals: L a ByteList header,
  * L+24 a u64, L+32 a file.
@@ -2080,7 +2080,7 @@ LOCAL_FUNCTION lantern_app_db_custody
     LEAVE 48
 END_FUNCTION lantern_app_db_custody
 
-/* L1: the path of segment rsi of blocks (rdi 0), sidecars (1) or states (2) in the data directory, <dir>/b<n>.seg, <dir>/s<n>.seg or <dir>/a<n>.seg: a ByteList at APP_PATH. rbp the kind, r12 the segment, r13 the next byte. Locals: L 24 digits. */
+/* The path of segment rsi of blocks (rdi 0), sidecars (1) or states (2) in the data directory, <dir>/b<n>.seg, <dir>/s<n>.seg or <dir>/a<n>.seg: a ByteList at APP_PATH. rbp the kind, r12 the segment, r13 the next byte. Locals: L 24 digits. */
 LOCAL_FUNCTION lantern_app_db_path
     ENTER 32
     mov     %rdi, %rbp
@@ -2134,7 +2134,7 @@ LOCAL_FUNCTION lantern_app_db_path
     LEAVE 32
 END_FUNCTION lantern_app_db_path
 
-/* L1: NODE_ACT_DB_APPEND rdi: lantern_app_db_write of it with the table entry of its bytes. Locals: the action. */
+/* NODE_ACT_DB_APPEND rdi: lantern_app_db_write of it with the table entry of its bytes. Locals: the action. */
 LOCAL_FUNCTION lantern_app_db_append
     FRAME 16
     mov     %rdi, (%rsp)
@@ -2149,7 +2149,7 @@ LOCAL_FUNCTION lantern_app_db_append
 END_FUNCTION lantern_app_db_append
 
 /*
- * L1: the record of a NODE_ACT_DB_APPEND rdi at the end of its segment file, with the bytes of the
+ * The record of a NODE_ACT_DB_APPEND rdi at the end of its segment file, with the bytes of the
  * table entry rsi: its DbRecord, its bytes and zero bytes to a multiple of 8. A file that is not
  * the open one of its kind opens, and is cut to the record's offset first. A failure gives a line
  * on the standard error, and the file closes, so the next record opens it again: rax = 0 written,
@@ -2256,7 +2256,7 @@ LOCAL_FUNCTION lantern_app_db_write
 END_FUNCTION lantern_app_db_write
 
 /*
- * L1: NODE_ACT_DB_ARCHIVE rdi (app.md): the state's SSZ bytes in new memory; above offset 0, the
+ * NODE_ACT_DB_ARCHIVE rdi (app.md): the state's SSZ bytes in new memory; above offset 0, the
  * diff of them against the record at offset 0 of the segment's file, in new memory too; the
  * record goes as a DB_APPEND's does, in the state segments' file; the memory is freed; then the
  * NODE_EV_DB_ARCHIVE of the segment, the offset and the record (kind 0 when none was written)
@@ -2403,7 +2403,7 @@ LOCAL_FUNCTION lantern_app_db_archive
 END_FUNCTION lantern_app_db_archive
 
 /*
- * L1: NODE_ACT_DB_DROP rdi: the segment's file goes: the open file of its kind, when it is that
+ * NODE_ACT_DB_DROP rdi: the segment's file goes: the open file of its kind, when it is that
  * segment, closes; a map of it goes; then the file is deleted. r12 the action, r13 the kind (0
  * blocks, 1 sidecars), r14 the segment, r15 the AppDb, rbp a map, S7 the map key, S8 a map's index.
  */
@@ -2451,7 +2451,7 @@ LOCAL_FUNCTION lantern_app_db_drop
 END_FUNCTION lantern_app_db_drop
 
 /*
- * L0: rax = the AppDb's view entry r10 of the record at offset rdi of the mapped segment rsi: its
+ * rax = the AppDb's view entry r10 of the record at offset rdi of the mapped segment rsi: its
  * ByteList in place, at byte DbRecord_bytes of the record; 0 when the record is not all inside
  * the map, or its ByteList header is not of its bytes. Uses rcx, rdx, r8, r9.
  */
@@ -2485,7 +2485,7 @@ LOCAL_FUNCTION lantern_app_db_record
 END_FUNCTION lantern_app_db_record
 
 /*
- * L1: rax = the table entry of a work's data BufferId rdi as lantern_app_work_entry gives; for a
+ * rax = the table entry of a work's data BufferId rdi as lantern_app_work_entry gives; for a
  * NODE_DB_REF, the AppDb's view entry rsi (0 data, 1 state_b) of its record in the segment, mapped
  * again when the file grew past the map, or 2^64 - 1 when the record is not there. rbp the kind
  * (0 blocks, 1 sidecars, 2 states), r12 the segment, r13 the offset, r14 a map, r15 the AppDb, S7
@@ -2578,7 +2578,7 @@ LOCAL_FUNCTION lantern_app_work_data
 9:  LEAVE 0
 END_FUNCTION lantern_app_work_data
 
-/* L1: <dir>/<the rsi bytes of the name at rdi> of the data directory, as a ByteList at rdx of APP_PATH_MAX bytes of room. rbp the name, r12 its length, r13 the ByteList. */
+/* <dir>/<the rsi bytes of the name at rdi> of the data directory, as a ByteList at rdx of APP_PATH_MAX bytes of room. rbp the name, r12 its length, r13 the ByteList. */
 LOCAL_FUNCTION lantern_app_db_file
     ENTER 0
     mov     %rdi, %rbp
@@ -2607,7 +2607,7 @@ LOCAL_FUNCTION lantern_app_db_file
     LEAVE 0
 END_FUNCTION lantern_app_db_file
 
-/* L1: rax = 1 when the block segment rdi's file is there (it opens to read), else 0. r15 the AppDb. Locals: L the mode. */
+/* rax = 1 when the block segment rdi's file is there (it opens to read), else 0. r15 the AppDb. Locals: L the mode. */
 LOCAL_FUNCTION lantern_app_db_exists
     ENTER 16
     lea     APP_DB(%rbx), %r15
@@ -2630,7 +2630,7 @@ LOCAL_FUNCTION lantern_app_db_exists
 END_FUNCTION lantern_app_db_exists
 
 /*
- * L1: for a start from anchor.ssz: the first block segment file there, from 0 to the anchor's
+ * For a start from anchor.ssz: the first block segment file there, from 0 to the anchor's
  * segment, gives the anchor's history_slot; the Db has room for the slots from it to the last
  * block segment file there, from the anchor's on, and a segment more, and a power of two of roots
  * above twice them. rbp a segment, r12 the anchor's segment, r13 the first, r14 the last.
@@ -2677,7 +2677,7 @@ LOCAL_FUNCTION lantern_app_db_history
 END_FUNCTION lantern_app_db_history
 
 /*
- * L2: for a start from anchor.ssz, after lantern_node_init: the Db's first_slot can be below
+ * For a start from anchor.ssz, after lantern_node_init: the Db's first_slot can be below
  * history_slot (the backfill's target, node.md), so db_slots doubles until the room covers the
  * slots from first_slot to the end lantern_app_db_history gave, then db_roots until it is above twice
  * db_slots, each as a short room grows: rax = 0, or 2 after a line on the standard error. r12 the end.
@@ -2716,7 +2716,7 @@ LOCAL_FUNCTION lantern_app_db_fit
 END_FUNCTION lantern_app_db_fit
 
 /*
- * L1: for a start from anchor.ssz: each segment file there, the blocks' then the sidecars', from
+ * For a start from anchor.ssz: each segment file there, the blocks' then the sidecars', from
  * the segment of history_slot to the end of the Db's room, goes to lantern_node_db_scan; a file
  * with bytes after its last whole record is cut there: rax = 0, or 2 after a line on the standard
  * error. rbp the kind, r12 the segment, r13 the end, r14 a status, r15 the AppDb. Locals: L a
@@ -2802,7 +2802,7 @@ LOCAL_FUNCTION lantern_app_db_scan_all
 END_FUNCTION lantern_app_db_scan_all
 
 /*
- * L1: NODE_ACT_DB_STATE rdi of a block at the first slot of its epoch (the anchor of
+ * NODE_ACT_DB_STATE rdi of a block at the first slot of its epoch (the anchor of
  * get_forkchoice_store), above the slot of the last anchor this run wrote: the open segment files are synced; <dir>/anchor.tmp gets two ByteLists, the second at the
  * first multiple of 8 after the first: the state's SSZ bytes, then those of its block's message;
  * it is synced and renamed over <dir>/anchor.ssz, and the directory is synced. A failure gives a
@@ -3021,7 +3021,7 @@ LOCAL_FUNCTION lantern_app_db_state
 99: LEAVE 96
 END_FUNCTION lantern_app_db_state
 
-/* L1: rax = the table entry of the BufferId rdi, 0 for id 0, or 2^64 - 1 when no entry has it. */
+/* rax = the table entry of the BufferId rdi, 0 for id 0, or 2^64 - 1 when no entry has it. */
 LOCAL_FUNCTION lantern_app_work_entry
     FRAME 0
     xor     %eax, %eax
@@ -3035,7 +3035,7 @@ LOCAL_FUNCTION lantern_app_work_entry
 END_FUNCTION lantern_app_work_entry
 
 /*
- * L2: the actions of the step, in order: BYTES_PUT, STATE_COPY, STATE_FREE and BYTES_FREE on the
+ * The actions of the step, in order: BYTES_PUT, STATE_COPY, STATE_FREE and BYTES_FREE on the
  * BufferId table, WORK by lantern_app_work. rbp the next action, r12 the end, r13 its size, r14 an entry.
  */
 LOCAL_FUNCTION lantern_app_actions
@@ -3186,7 +3186,7 @@ LOCAL_FUNCTION lantern_app_actions
 END_FUNCTION lantern_app_actions
 
 /*
- * L2: lantern_node_step with the events of the App and the libp2p state rdi and Tick rsi (both 0 with
+ * lantern_node_step with the events of the App and the libp2p state rdi and Tick rsi (both 0 with
  * no network), again with a larger node and actions while it asks for them; then the accepted
  * events leave the queue and the actions run. rbp p2p, r12 tick, r13 the tries, r14 a size.
  */
@@ -3291,7 +3291,7 @@ END_FUNCTION lantern_app_step
 
 
 /*
- * L0: rax = the bytes of the lantern_base64url text at rdi of rsi bytes (RFC 4648 section 5, with or without
+ * rax = the bytes of the lantern_base64url text at rdi of rsi bytes (RFC 4648 section 5, with or without
  * padding), written at rdx, at most rcx; or 2^64 - 1 for a byte of no digit or too many bytes.
  * Uses rcx, rsi, rdi, r8-r11.
  */
@@ -3349,7 +3349,7 @@ LOCAL_FUNCTION lantern_app_base64url
 END_FUNCTION lantern_app_base64url
 
 /*
- * L2: a NODE_EV_ENR event of each record of --boot-nodes, with commas between them; a line on
+ * A NODE_EV_ENR event of each record of --boot-nodes, with commas between them; a line on
  * the standard error for one that is not "enr:" and lantern_base64url. rbp the next byte, r12 the end, r13
  * the record's start, r14 the record's number, r15 the event at APP_RECORD. Locals: L the record's length.
  */
@@ -3430,7 +3430,7 @@ LOCAL_FUNCTION lantern_app_boot_nodes
 END_FUNCTION lantern_app_boot_nodes
 
 /*
- * L2: the network: a secp256k1 key, the libp2p state, the shell context with a TCP listener on
+ * The network: a secp256k1 key, the libp2p state, the shell context with a TCP listener on
  * --port, and the boot nodes: rax = 0, or 2 after a line on the standard error. rbp the config,
  * r12 the tries. Locals: L a size or a status, L+8 ShellParams, L+32 an Address, L+64 a ListenResult.
  */
@@ -3636,7 +3636,7 @@ LOCAL_FUNCTION lantern_app_net
     LEAVE 112
 END_FUNCTION lantern_app_net
 
-/* L0: rax = 0 and rdx = the u64 of the decimal digits rdi to rsi, one or more; else rax = 1. Uses rcx, rdi, r8. */
+/* rax = 0 and rdx = the u64 of the decimal digits rdi to rsi, one or more; else rax = 1. Uses rcx, rdi, r8. */
 LOCAL_FUNCTION lantern_app_number
     UNWIND_END_PROLOGUE
     cmp     %rsi, %rdi
@@ -3664,7 +3664,7 @@ LOCAL_FUNCTION lantern_app_number
     ret
 END_FUNCTION lantern_app_number
 
-/* L0: rax = 0 and rdx = the IPv4 address of the bytes rdi to rsi, its 4 bytes in order in the low bytes; else rax = 1. Uses rcx, rdi, r8-r11. */
+/* rax = 0 and rdx = the IPv4 address of the bytes rdi to rsi, its 4 bytes in order in the low bytes; else rax = 1. Uses rcx, rdi, r8-r11. */
 LOCAL_FUNCTION lantern_app_dotted
     UNWIND_END_PROLOGUE
     xor     %r8d, %r8d                      # the address
@@ -3712,7 +3712,7 @@ LOCAL_FUNCTION lantern_app_dotted
 END_FUNCTION lantern_app_dotted
 
 /*
- * L2: with --execution-endpoint, the engine: its Address, the anchor's engine_host and the
+ * With --execution-endpoint, the engine: its Address, the anchor's engine_host and the
  * jwt_secret of --jwt-secret, and NODE_FLAG_ENGINE: rax = 0, or 2 after a line on the standard
  * error. rbp the endpoint's bytes, r12 their count, r13 the colon, r14 the secret's next byte, r15
  * its end.
@@ -3842,7 +3842,7 @@ LOCAL_FUNCTION lantern_app_engine_conf
     LEAVE 0
 END_FUNCTION lantern_app_engine_conf
 
-/* L0: r14 moves past spaces, tabs, CR and LF, to at most r15. Uses rax. */
+/* r14 moves past spaces, tabs, CR and LF, to at most r15. Uses rax. */
 LOCAL_FUNCTION lantern_app_space
     UNWIND_END_PROLOGUE
 1:  cmp     %r15, %r14
@@ -3859,7 +3859,7 @@ LOCAL_FUNCTION lantern_app_space
 2:  ret
 END_FUNCTION lantern_app_space
 
-/* L0: rax = the value of the hex digit edi, or 16 when it is not one. Uses rdi. */
+/* rax = the value of the hex digit edi, or 16 when it is not one. Uses rdi. */
 LOCAL_FUNCTION lantern_app_hex_digit
     UNWIND_END_PROLOGUE
     lea     -0x30(%rdi), %eax
@@ -3875,7 +3875,7 @@ LOCAL_FUNCTION lantern_app_hex_digit
     ret
 END_FUNCTION lantern_app_hex_digit
 
-/* L0: rax = the Handle of the engine's connection: the slot after libp2p's, at its generation. Uses rcx. */
+/* rax = the Handle of the engine's connection: the slot after libp2p's, at its generation. Uses rcx. */
 LOCAL_FUNCTION lantern_app_engine_handle
     UNWIND_END_PROLOGUE
     mov     APP_P2P_CONFIG(%rbx), %rax
@@ -3887,7 +3887,7 @@ LOCAL_FUNCTION lantern_app_engine_handle
 END_FUNCTION lantern_app_engine_handle
 
 /*
- * L1: one shell action, the rsi bytes in the ByteList at APP_ENGINE_ACT, through
+ * One shell action, the rsi bytes in the ByteList at APP_ENGINE_ACT, through
  * libp2p_shell_perform; its results join the shell's events.
  */
 LOCAL_FUNCTION lantern_app_engine_perform
@@ -3902,7 +3902,7 @@ LOCAL_FUNCTION lantern_app_engine_perform
 END_FUNCTION lantern_app_engine_perform
 
 /*
- * L2: the next bytes of the request on the open connection, as far as the shell's send buffer has
+ * The next bytes of the request on the open connection, as far as the shell's send buffer has
  * room. rbp the action, r12 the bytes.
  */
 LOCAL_FUNCTION lantern_app_engine_send
@@ -3942,7 +3942,7 @@ LOCAL_FUNCTION lantern_app_engine_send
 END_FUNCTION lantern_app_engine_send
 
 /*
- * L2: the NODE_ACT_ENGINE rdi: its request bytes wait in APP_ENGINE_OUT; they go on the open
+ * The NODE_ACT_ENGINE rdi: its request bytes wait in APP_ENGINE_OUT; they go on the open
  * connection, or after a DIAL of the engine's Address. rbp the ByteList, r12 the count.
  */
 LOCAL_FUNCTION lantern_app_engine_request
@@ -3992,7 +3992,7 @@ LOCAL_FUNCTION lantern_app_engine_request
 END_FUNCTION lantern_app_engine_request
 
 /*
- * L2: rax = 1 when the shell event rdi is of the engine's connection, which it then takes: CONNECTED
+ * rax = 1 when the shell event rdi is of the engine's connection, which it then takes: CONNECTED
  * opens it, SENT frees its buffer, RECEIVED gives a NODE_EV_ENGINE of the bytes, DIAL_FAILED and
  * CLOSED end it with a NODE_EV_ENGINE of failure while the node waits for an answer; else 0.
  * rbp the event, r12 its kind. Locals: L the header of an event.
@@ -4064,7 +4064,7 @@ LOCAL_FUNCTION lantern_app_engine_event
     LEAVE 48
 END_FUNCTION lantern_app_engine_event
 
-# L2: with --builder, the builder: its Address, the anchor's builder_host, and NODE_FLAG_BUILDER
+# With --builder, the builder: its Address, the anchor's builder_host, and NODE_FLAG_BUILDER
 # (app.md): rax = 0, or 2 after a line on the standard error. rbp the endpoint's bytes, r12 their
 # count, r13 the colon.
 LOCAL_FUNCTION lantern_app_builder_conf
@@ -4128,7 +4128,7 @@ LOCAL_FUNCTION lantern_app_builder_conf
     LEAVE 0
 END_FUNCTION lantern_app_builder_conf
 
-# L0: rax = the Handle of the connection of the builder slot rdi (rsi its fields): the slots after the engine's, at its generation. Uses rcx.
+# rax = the Handle of the connection of the builder slot rdi (rsi its fields): the slots after the engine's, at its generation. Uses rcx.
 LOCAL_FUNCTION lantern_app_builder_handle
     UNWIND_END_PROLOGUE
     mov     APP_P2P_CONFIG(%rbx), %rax
@@ -4140,7 +4140,7 @@ LOCAL_FUNCTION lantern_app_builder_handle
     ret
 END_FUNCTION lantern_app_builder_handle
 
-# L1: the NODE_EV_BUILDER of the failure of the call rdi joins the next step's events. Locals: the event.
+# The NODE_EV_BUILDER of the failure of the call rdi joins the next step's events. Locals: the event.
 LOCAL_FUNCTION lantern_app_builder_fail
     FRAME 32
     movq    $24, (%rsp)
@@ -4153,7 +4153,7 @@ LOCAL_FUNCTION lantern_app_builder_fail
     UNFRAME 32
 END_FUNCTION lantern_app_builder_fail
 
-# L1: the NODE_EV_BUILDER of the slot fields rsi joins the next step's events: the call, with the
+# The NODE_EV_BUILDER of the slot fields rsi joins the next step's events: the call, with the
 # bytes the builder sent, or with the failure bit when it sent none; the slot is free. Locals: the
 # event's head, the fields.
 LOCAL_FUNCTION lantern_app_builder_answer
@@ -4189,7 +4189,7 @@ LOCAL_FUNCTION lantern_app_builder_answer
     UNFRAME 64
 END_FUNCTION lantern_app_builder_answer
 
-# L2: the NODE_ACT_BUILDER rdi (app.md): a free slot takes its request and dials the builder; with
+# The NODE_ACT_BUILDER rdi (app.md): a free slot takes its request and dials the builder; with
 # none, or no memory, its NODE_EV_BUILDER of failure. rbp the action, r12 the slot, r13 its fields,
 # r14 the request's bytes, r15 their count.
 LOCAL_FUNCTION lantern_app_builder_request
@@ -4258,7 +4258,7 @@ LOCAL_FUNCTION lantern_app_builder_request
     LEAVE 0
 END_FUNCTION lantern_app_builder_request
 
-# L2: rax = 1 when the shell event rdi is of a builder slot's connection, which it then takes:
+# rax = 1 when the shell event rdi is of a builder slot's connection, which it then takes:
 # CONNECTED opens it, SENT frees its buffer, RECEIVED keeps the bytes (a full buffer closes it),
 # DIAL_FAILED and CLOSED give the call's NODE_EV_BUILDER; else 0. An event of an older connection
 # of a slot is dropped. rbp the event, r12 its kind, r13 the slot, r14 its fields.
@@ -4324,7 +4324,7 @@ LOCAL_FUNCTION lantern_app_builder_event
     LEAVE 0
 END_FUNCTION lantern_app_builder_event
 
-# L2: after the shell's events (app.md): for each slot, a call past APP_BUILDER_MS closes; an open
+# After the shell's events (app.md): for each slot, a call past APP_BUILDER_MS closes; an open
 # one sends its request's next bytes as the shell's send buffer has room; one to close (state 3)
 # gets its CLOSE, then waits for CLOSED (state 4). rbp the action, r12 the slot, r13 its fields,
 # r14 the bytes.
@@ -4399,7 +4399,7 @@ LOCAL_FUNCTION lantern_app_builder_due
 9:  LEAVE 0
 END_FUNCTION lantern_app_builder_due
 
-/* L1: the lantern_base64url text (RFC 4648 section 5, no padding) of the rsi bytes at rdi joins the log line. Locals: rdi, rsi, then 4 digits. */
+/* The lantern_base64url text (RFC 4648 section 5, no padding) of the rsi bytes at rdi joins the log line. Locals: rdi, rsi, then 4 digits. */
 LOCAL_FUNCTION lantern_app_line_base64url
     FRAME 48
     mov     %rdi, (%rsp)
@@ -4447,7 +4447,7 @@ LOCAL_FUNCTION lantern_app_line_base64url
 9:  UNFRAME 48
 END_FUNCTION lantern_app_line_base64url
 
-/* L1: the rsi bytes of the event at rdi join the next discv5 step's events, while they have room. Locals: the new count. */
+/* The rsi bytes of the event at rdi join the next discv5 step's events, while they have room. Locals: the new count. */
 LOCAL_FUNCTION lantern_app_dv_put
     FRAME 16
     mov     APP_DV_EVENTS(%rbx), %rax
@@ -4469,7 +4469,7 @@ LOCAL_FUNCTION lantern_app_dv_put
 END_FUNCTION lantern_app_dv_put
 
 /*
- * L2: discv5 with the key of libp2p: its state, with --enr-address and --port in the record, its UDP
+ * discv5 with the key of libp2p: its state, with --enr-address and --port in the record, its UDP
  * socket on --port, and the record entry tcp: rax = 0, or 2 after a line on the standard error.
  * Locals: L the Config (152), then an Address and a BindResult, and the tcp event.
  */
@@ -4593,7 +4593,7 @@ LOCAL_FUNCTION lantern_app_dv_start
 END_FUNCTION lantern_app_dv_start
 
 /*
- * L2: rax = 1 when the shell event rdi is a DATAGRAM of discv5's socket, which then joins the next
+ * rax = 1 when the shell event rdi is a DATAGRAM of discv5's socket, which then joins the next
  * discv5 step as a DATAGRAM event (the sender as an Endpoint); else 0. rbp the event. Locals: L the header.
  */
 LOCAL_FUNCTION lantern_app_dv_datagram
@@ -4641,7 +4641,7 @@ LOCAL_FUNCTION lantern_app_dv_datagram
 END_FUNCTION lantern_app_dv_datagram
 
 /*
- * L2: a discv5 step when it has events or its WAKEUP is due; then its actions: SEND as the shell's
+ * A discv5 step when it has events or its WAKEUP is due; then its actions: SEND as the shell's
  * SEND_DATAGRAM, NODE_FOUND as a NODE_EV_ENR of the next node step, RECORD as a log line, WAKEUP
  * as the next time. rbp the next action, r12 the end, r13 the datagrams, r14 an event count.
  * Locals: L the header of an event.
@@ -4814,7 +4814,7 @@ LOCAL_FUNCTION lantern_app_discv5
 END_FUNCTION lantern_app_discv5
 
 /*
- * L2: rax = the base58btc text of the rsi bytes at rdi (at most 48), written at rdx: a 1 for each
+ * rax = the base58btc text of the rsi bytes at rdi (at most 48), written at rdx: a 1 for each
  * leading zero byte, then the digits. rcx: a work area of 72 bytes. r12 the bytes, r13 their count,
  * r14 the text, r15 the work area, rbp the leading zero bytes.
  */
@@ -4883,14 +4883,14 @@ LOCAL_FUNCTION lantern_app_base58
 9:  LEAVE 0
 END_FUNCTION lantern_app_base58
 
-/* L0: the log line becomes empty: the text helpers then build a text in it. */
+/* The log line becomes empty: the text helpers then build a text in it. */
 LOCAL_FUNCTION lantern_app_line_clear
     UNWIND_END_PROLOGUE
     movq    $0, (APP_LINE + 16)(%rbx)
     ret
 END_FUNCTION lantern_app_line_clear
 
-/* L1: the bytes of the log line go to the text field at rdi of the view (its length, then its bytes, at most rsi). */
+/* The bytes of the log line go to the text field at rdi of the view (its length, then its bytes, at most rsi). */
 LOCAL_FUNCTION lantern_app_line_to
     FRAME 0
     mov     (APP_LINE + 16)(%rbx), %rdx
@@ -4904,7 +4904,7 @@ LOCAL_FUNCTION lantern_app_line_to
     UNFRAME 0
 END_FUNCTION lantern_app_line_to
 
-/* L1: the IPv4 address rdi (its bytes in order in the low bytes) joins the line in dotted decimal. Locals: the address, the count. */
+/* The IPv4 address rdi (its bytes in order in the low bytes) joins the line in dotted decimal. Locals: the address, the count. */
 LOCAL_FUNCTION lantern_app_line_ip4
     FRAME 16
     mov     %rdi, (%rsp)
@@ -4922,7 +4922,7 @@ LOCAL_FUNCTION lantern_app_line_ip4
 2:  UNFRAME 16
 END_FUNCTION lantern_app_line_ip4
 
-/* L1: a multiaddr /ip4/<--enr-address>/<rdi: tcp or udp text>/<--port>/p2p/<peer id> to the view's field at rsi, or length 0 with no --enr-address. Locals: rdi, rsi. */
+/* A multiaddr /ip4/<--enr-address>/<rdi: tcp or udp text>/<--port>/p2p/<peer id> to the view's field at rsi, or length 0 with no --enr-address. Locals: rdi, rsi. */
 LOCAL_FUNCTION lantern_app_multiaddr
     FRAME 16
     mov     %rdi, (%rsp)
@@ -4956,7 +4956,7 @@ LOCAL_FUNCTION lantern_app_multiaddr
 END_FUNCTION lantern_app_multiaddr
 
 /*
- * L2: the Beacon API: a shell context with --http-max-connections slots that listens on
+ * The Beacon API: a shell context with --http-max-connections slots that listens on
  * --http-address and --http-port, the slots' buffers, and the identity's texts: the peer id, the
  * addresses and the version, in a NODE_EV_API_IDENTITY: rax = 0, or 2 after a line on the
  * standard error. Locals: L ShellParams or an Address, L+32 a ListenResult or the public key,
@@ -5107,7 +5107,7 @@ LOCAL_FUNCTION lantern_app_api_start
     LEAVE 208
 END_FUNCTION lantern_app_api_start
 
-/* L1: the identity's texts go to the next step in a NODE_EV_API_IDENTITY. */
+/* The identity's texts go to the next step in a NODE_EV_API_IDENTITY. */
 LOCAL_FUNCTION lantern_app_identity_put
     FRAME 0
     mov     APP_IDENTITY(%rbx), %rdi
@@ -5122,7 +5122,7 @@ LOCAL_FUNCTION lantern_app_identity_put
     UNFRAME 0
 END_FUNCTION lantern_app_identity_put
 
-/* L0: rax = the slot of the connection rdi, while it is open at that generation, else 0. Uses rcx, rdx. */
+/* rax = the slot of the connection rdi, while it is open at that generation, else 0. Uses rcx, rdx. */
 LOCAL_FUNCTION lantern_app_api_slot
     UNWIND_END_PROLOGUE
     mov     %edi, %ecx
@@ -5142,7 +5142,7 @@ LOCAL_FUNCTION lantern_app_api_slot
     ret
 END_FUNCTION lantern_app_api_slot
 
-/* L1: the Beacon API's shell actions go out; their results come at the next poll. */
+/* The Beacon API's shell actions go out; their results come at the next poll. */
 LOCAL_FUNCTION lantern_app_api_flush
     FRAME 0
     mov     APP_API_ACT(%rbx), %rsi
@@ -5158,7 +5158,7 @@ LOCAL_FUNCTION lantern_app_api_flush
 9:  UNFRAME 0
 END_FUNCTION lantern_app_api_flush
 
-/* L1: rax = room for a shell action of rdi bytes at the end of the Beacon API's actions, its bytes counted, after a flush when they are full; 0 when it never fits. Locals: rdi. */
+/* rax = room for a shell action of rdi bytes at the end of the Beacon API's actions, its bytes counted, after a flush when they are full; 0 when it never fits. Locals: rdi. */
 LOCAL_FUNCTION lantern_app_api_room
     FRAME 16
     mov     %rdi, (%rsp)
@@ -5183,7 +5183,7 @@ LOCAL_FUNCTION lantern_app_api_room
     UNFRAME 16
 END_FUNCTION lantern_app_api_room
 
-/* L1: a CLOSE of the connection rdi, while it is open; its slot waits for the shell's CLOSED. Locals: rdi. */
+/* A CLOSE of the connection rdi, while it is open; its slot waits for the shell's CLOSED. Locals: rdi. */
 LOCAL_FUNCTION lantern_app_api_close
     FRAME 16
     mov     %rdi, (%rsp)
@@ -5203,7 +5203,7 @@ LOCAL_FUNCTION lantern_app_api_close
 END_FUNCTION lantern_app_api_close
 
 /*
- * L2: the slot rdi, when it waits for no answer: lantern_http_request of its bytes, then a
+ * The slot rdi, when it waits for no answer: lantern_http_request of its bytes, then a
  * NODE_EV_API of the request, or of a fault's status (413 for a full buffer with no whole
  * request); the request's bytes leave the buffer, and the slot waits for the answer. r12 the slot,
  * r13 its ByteList, r14 its bytes, r15 its index, S7 the event, S8 the HttpRequest's room.
@@ -5283,7 +5283,7 @@ LOCAL_FUNCTION lantern_app_api_read
 END_FUNCTION lantern_app_api_read
 
 /*
- * L2: the NODE_ACT_API_SEND or NODE_ACT_API_CLOSE rdi of the node: a SEND of its bytes, or the
+ * The NODE_ACT_API_SEND or NODE_ACT_API_CLOSE rdi of the node: a SEND of its bytes, or the
  * close, on its connection; after the bytes with last 1, the slot's next request. An action of a
  * connection no longer open goes. rbp the action, r12 the slot, r13 the shell action.
  */
@@ -5361,7 +5361,7 @@ LOCAL_FUNCTION lantern_app_api_action
 99: LEAVE 0
 END_FUNCTION lantern_app_api_action
 
-/* L1: a NODE_EV_API_SENT or NODE_EV_API_CLOSED (rdi) of the connection rsi for the next step. Locals: the event. */
+/* A NODE_EV_API_SENT or NODE_EV_API_CLOSED (rdi) of the connection rsi for the next step. Locals: the event. */
 LOCAL_FUNCTION lantern_app_api_note
     FRAME 32
     movq    $24, (%rsp)
@@ -5373,7 +5373,7 @@ LOCAL_FUNCTION lantern_app_api_note
     UNFRAME 32
 END_FUNCTION lantern_app_api_note
 
-/* L1: the slot rdi of the connection rsi, owing an API_SENT: it goes once the slot's bytes in flight are at most APP_API_SEND_WINDOW - NODE_API_CHUNK. */
+/* The slot rdi of the connection rsi, owing an API_SENT: it goes once the slot's bytes in flight are at most APP_API_SEND_WINDOW - NODE_API_CHUNK. */
 LOCAL_FUNCTION lantern_app_api_due
     FRAME 0
     cmpq    $0, 40(%rdi)
@@ -5387,7 +5387,7 @@ LOCAL_FUNCTION lantern_app_api_due
 END_FUNCTION lantern_app_api_due
 
 /*
- * L2: the NODE_ACT_STATE_BYTES rdi: lantern_node_state_bytes of the fork of the state's slot in new
+ * The NODE_ACT_STATE_BYTES rdi: lantern_node_state_bytes of the fork of the state's slot in new
  * memory, kept as the bytes of the new id; with no memory, a ByteList of no bytes. rbp the action,
  * r12 the state's entry, r13 the bytes' size, r14 the memory. Locals: L a ByteList, L+24 the size,
  * L+32 the fork.
@@ -5453,7 +5453,7 @@ LOCAL_FUNCTION lantern_app_state_bytes
 END_FUNCTION lantern_app_state_bytes
 
 /*
- * L2: the Beacon API's sockets, without waiting: ACCEPTED takes a free slot (ADOPT) or a REFUSE,
+ * The Beacon API's sockets, without waiting: ACCEPTED takes a free slot (ADOPT) or a REFUSE,
  * RECEIVED joins its slot's buffer and the slot reads it, SENT ends a slot's draining once its bytes
  * are out, CLOSED frees the slot; a slot that waits for no answer with no bytes for
  * APP_API_IDLE_MS closes, as does a draining one; then the shell actions go out. rbp the
@@ -5613,7 +5613,7 @@ LOCAL_FUNCTION lantern_app_api_poll
     LEAVE 16
 END_FUNCTION lantern_app_api_poll
 
-/* L1: rax = the monotonic microseconds of libp2p_shell_clock. */
+/* rax = the monotonic microseconds of libp2p_shell_clock. */
 LOCAL_FUNCTION lantern_app_met_us
     FRAME 0
     lea     APP_MET_TICK(%rbx), %rdi
@@ -5622,7 +5622,7 @@ LOCAL_FUNCTION lantern_app_met_us
     UNFRAME 0
 END_FUNCTION lantern_app_met_us
 
-/* L1: the value rdx joins the AppMetrics Histogram at offset rdi, of the bound set rsi. Locals: the bound set, the value. */
+/* The value rdx joins the AppMetrics Histogram at offset rdi, of the bound set rsi. Locals: the bound set, the value. */
 LOCAL_FUNCTION lantern_app_met_obs
     FRAME 16
     mov     %rsi, (%rsp)
@@ -5634,7 +5634,7 @@ LOCAL_FUNCTION lantern_app_met_obs
     UNFRAME 16
 END_FUNCTION lantern_app_met_obs
 
-/* L1: the delay of a message of the slot rsi, from its slot's start to the store's time, joins the AppMetrics Histogram at offset rdi (delay bounds). */
+/* The delay of a message of the slot rsi, from its slot's start to the store's time, joins the AppMetrics Histogram at offset rdi (delay bounds). */
 LOCAL_FUNCTION lantern_app_met_delay
     FRAME 0
     mov     APP_STORE(%rbx), %rcx
@@ -5652,7 +5652,7 @@ LOCAL_FUNCTION lantern_app_met_delay
 END_FUNCTION lantern_app_met_delay
 
 /*
- * L2: the metrics of a work that ran (app.md, the metrics): its run time since APP_MET_T0 and a
+ * The metrics of a work that ran (app.md, the metrics): its run time since APP_MET_T0 and a
  * result other than LANTERN_OK, by kind; then by kind: gossip by topic and result, the requests
  * served by method, the column times and counts, a published block, an epoch crossed by a block
  * import or slot processing. rdi its
@@ -5839,7 +5839,7 @@ LOCAL_FUNCTION lantern_app_met_work
 END_FUNCTION lantern_app_met_work
 
 /*
- * L2: the metrics server (app.md): with --metrics categories, a shell context of APP_MET_CONNS
+ * The metrics server (app.md): with --metrics categories, a shell context of APP_MET_CONNS
  * connections that listens on --metrics-address and --metrics-port, and its buffers: rax = 0, or 2
  * after a line on the standard error. Locals: L ShellParams or an Address, L+32 a size or a
  * ListenResult (LIBP2P_LR_SIZE, 40 bytes).
@@ -5943,7 +5943,7 @@ LOCAL_FUNCTION lantern_app_met_start
     LEAVE 80
 END_FUNCTION lantern_app_met_start
 
-/* L0: rax = the slot of the metrics connection rdi, while open at its generation, or 0. Uses rcx, rdx. */
+/* rax = the slot of the metrics connection rdi, while open at its generation, or 0. Uses rcx, rdx. */
 LOCAL_FUNCTION lantern_app_met_slot
     UNWIND_END_PROLOGUE
     mov     %edi, %ecx
@@ -5962,7 +5962,7 @@ LOCAL_FUNCTION lantern_app_met_slot
     ret
 END_FUNCTION lantern_app_met_slot
 
-/* L1: the metrics server's shell actions go out; their results come at the next poll. */
+/* The metrics server's shell actions go out; their results come at the next poll. */
 LOCAL_FUNCTION lantern_app_met_flush
     FRAME 0
     mov     APP_MET_ACT(%rbx), %rsi
@@ -5976,7 +5976,7 @@ LOCAL_FUNCTION lantern_app_met_flush
 9:  UNFRAME 0
 END_FUNCTION lantern_app_met_flush
 
-/* L1: rax = room for a shell action of rdi bytes at the end of the metrics server's actions, its bytes counted, after a flush when they are full; 0 when it never fits. Locals: rdi. */
+/* rax = room for a shell action of rdi bytes at the end of the metrics server's actions, its bytes counted, after a flush when they are full; 0 when it never fits. Locals: rdi. */
 LOCAL_FUNCTION lantern_app_met_room
     FRAME 16
     mov     %rdi, (%rsp)
@@ -6001,7 +6001,7 @@ LOCAL_FUNCTION lantern_app_met_room
     UNFRAME 16
 END_FUNCTION lantern_app_met_room
 
-/* L1: a CLOSE of the metrics connection rdi, while it is open; its slot waits for the shell's CLOSED. Locals: rdi. */
+/* A CLOSE of the metrics connection rdi, while it is open; its slot waits for the shell's CLOSED. Locals: rdi. */
 LOCAL_FUNCTION lantern_app_met_close
     FRAME 16
     mov     %rdi, (%rsp)
@@ -6021,7 +6021,7 @@ LOCAL_FUNCTION lantern_app_met_close
 END_FUNCTION lantern_app_met_close
 
 /*
- * L1: the sources of the metrics (app.md): lantern_metrics_node of the node and the store; the head
+ * The sources of the metrics (app.md): lantern_metrics_node of the node and the store; the head
  * state's values by lantern_<fork>_metrics_state, again only for a new head state; the node's
  * counters; the app's run times. Locals: L the state, L+8 the block.
  */
@@ -6117,7 +6117,7 @@ LOCAL_FUNCTION lantern_app_met_sources
 END_FUNCTION lantern_app_met_sources
 
 /*
- * L2: the slot index rdi sends more of its answer, while the shell's send buffer has room, in
+ * The slot index rdi sends more of its answer, while the shell's send buffer has room, in
  * SENDs of at most APP_MET_PIECE bytes; with the last bytes out and none in flight, the connection
  * closes. r12 the slot, r13 the connection, r14 the bytes of a SEND, r15 its action.
  */
@@ -6171,7 +6171,7 @@ LOCAL_FUNCTION lantern_app_met_send
 END_FUNCTION lantern_app_met_send
 
 /*
- * L2: the slot index rdi, while it reads: lantern_metrics_answer of its request bytes, in its
+ * The slot index rdi, while it reads: lantern_metrics_answer of its request bytes, in its
  * answer's memory, which doubles while short (APP_MET_TRIES times); then the answer goes. r12 the
  * slot, r13 the index, r14 the tries. Locals: L a size.
  */
@@ -6235,7 +6235,7 @@ LOCAL_FUNCTION lantern_app_met_answer
 END_FUNCTION lantern_app_met_answer
 
 /*
- * L2: the metrics server's sockets, without waiting (app.md): ACCEPTED takes a free slot (ADOPT) or
+ * The metrics server's sockets, without waiting (app.md): ACCEPTED takes a free slot (ADOPT) or
  * a REFUSE; RECEIVED joins a reading slot's request bytes, and the slot answers; SENT sends more of
  * the answer; CLOSED frees the slot; a slot with no bytes for APP_API_IDLE_MS closes; then the
  * shell actions go out. rbp the next event, r12 the end, r13 a slot, r14 an index, r15 the
@@ -6367,7 +6367,7 @@ LOCAL_FUNCTION lantern_app_met_poll
 99: LEAVE 16
 END_FUNCTION lantern_app_met_poll
 
-/* L2: each event of the shell becomes a NODE_EV_P2P event of the next step, but those of the engine's connection. rbp the next event, r12 the end. Locals: L the header. */
+/* Each event of the shell becomes a NODE_EV_P2P event of the next step, but those of the engine's connection. rbp the next event, r12 the end. Locals: L the header. */
 LOCAL_FUNCTION lantern_app_p2p_events
     ENTER 16
     mov     APP_SHELL_EVENTS(%rbx), %rax
@@ -6441,7 +6441,7 @@ LOCAL_FUNCTION lantern_app_p2p_events
 END_FUNCTION lantern_app_p2p_events
 
 /*
- * L2: the loop: the clock, a NODE_EV_TICK of the time and the shell's events, lantern_node_step
+ * The loop: the clock, a NODE_EV_TICK of the time and the shell's events, lantern_node_step
  * with libp2p, a line at each new slot, then a wait for the sockets until the node's wakeup, at
  * most APP_WAIT_MS. Locals: L the time, L+8 the wait, L+16 the NODE_EV_TICK.
  */

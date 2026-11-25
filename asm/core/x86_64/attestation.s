@@ -32,7 +32,7 @@
 98:
 .endm
 
-/* L0: sort the rsi u64 entries at rdi, ascending (heapsort). A leaf; uses rax, rcx, rdx, r8-r11. */
+/* Sort the rsi u64 entries at rdi, ascending (heapsort). A leaf; uses rax, rcx, rdx, r8-r11. */
 LOCAL_FUNCTION lantern_sort_u64
     UNWIND_END_PROLOGUE
     cmp     $2, %rsi
@@ -82,7 +82,7 @@ SPEC_END get_committee_indices
 .endif
 
 /*
- * L0: the key of epoch rsi of state rdi at rdx (CommitteeEntry_seed onward): get_seed with
+ * The key of epoch rsi of state rdi at rdx (CommitteeEntry_seed onward): get_seed with
  * DOMAIN_BEACON_ATTESTER, the decision root, the genesis validators root. rbx state, rbp epoch,
  * r12 key. Locals: L epoch, L+8 domain type.
  */
@@ -127,7 +127,7 @@ LOCAL_FUNCTION lantern_committee_key
 7:  LEAVE 16
 END_FUNCTION lantern_committee_key
 
-/* L0: rax = the valid entry of cache rdi for epoch rsi and the key at rdx, or 0. A leaf. */
+/* rax = the valid entry of cache rdi for epoch rsi and the key at rdx, or 0. A leaf. */
 LOCAL_FUNCTION lantern_committee_find
     UNWIND_END_PROLOGUE
     mov     CommitteeCache_validators(%rdi), %rcx
@@ -746,7 +746,7 @@ SPEC_LEAF is_valid_indexed_attestation
 SPEC_END is_valid_indexed_attestation
 
 /*
- * L0: is_valid_indexed_attestation with r9 the attestation that the indexed attestation rsi
+ * is_valid_indexed_attestation with r9 the attestation that the indexed attestation rsi
  * is get_indexed_attestation of, with the CommitteeCache r10 (each 0 or not); with both and a
  * PubkeyCache, the keys' sum may come from the cache's key sums (block-processing.md).
  * Locals as is_valid_indexed_attestation's, then L+96 the attestation, L+104 the committee
@@ -918,7 +918,7 @@ keysum_one:
 .endm
 
 /*
- * L0: rax = the members of the rsi indices at rdi whose PubkeyCache rcx entries do not hold
+ * rax = the members of the rsi indices at rdi whose PubkeyCache rcx entries do not hold
  * their keys (state validators at rdx), each also written at r8 when r8 is not 0; or -1 when a
  * member is at or past the cache's count, or its entry has status 2 and its key.
  * rbx members, rbp left, r12 validators, r13 cache, r14 list, r15 count.
@@ -968,7 +968,7 @@ LOCAL_FUNCTION lantern_key_sum_scan
 END_FUNCTION lantern_key_sum_scan
 
 /*
- * L0: makes the KeySum rdi of the rdx members at rsi (state validators at rcx, PubkeyCache r8).
+ * Makes the KeySum rdi of the rdx members at rsi (state validators at rcx, PubkeyCache r8).
  * Members whose entries do not hold their keys: crypto_bls_fast_aggregate_verify_cached of
  * them first, with message r9, signature r10 and scratch r11 (its last bytes take their list),
  * to fill their entries. rax = 1 when the KeySum has status 1, 2 when it has status 2, 0 when
@@ -1086,7 +1086,7 @@ END_FUNCTION lantern_key_sum_make
 .endm
 
 /*
- * L0: the sum of the keys of the attesting validators of attestation rsi (state rdi), from the
+ * The sum of the keys of the attesting validators of attestation rsi (state rdi), from the
  * key sums of CommitteeCache rdx and the entries of PubkeyCache rcx, at r8 (G1Point); r9 the
  * message, r10 the signature, r11 the scratch, for lantern_key_sum_make. rax = 1 when r8 holds the sum,
  * else 0. rbx state, rbp attestation, r12 PubkeyCache, r13 validators, r14 bits, r15 member i.
@@ -1593,7 +1593,7 @@ SPEC_FUNCTION process_attestation
 SPEC_END process_attestation
 
 /*
- * L0: process_attestation, with r9 the address of the block's get_base_reward_per_increment(state):
+ * process_attestation, with r9 the address of the block's get_base_reward_per_increment(state):
  * 0 until an attestation finds it, which stores it there. The operations of one block change no
  * effective balance and no active validator of the current epoch, so its attestations share it.
  * L+192: that address.

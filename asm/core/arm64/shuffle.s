@@ -2,7 +2,7 @@
  * Shuffling, seeds and proposer selection, ARM64. Requirements: docs/reference/helpers.md.
  */
 
-/* L0: digest x2 = sha256 of the x1 bytes at x0; x1 is at most 96. */
+/* Digest x2 = sha256 of the x1 bytes at x0; x1 is at most 96. */
 LOCAL_FUNCTION lantern_sha256_short
     FRAME 128
     add     x9, sp, #16                     /* a ByteList: size, offset 24, count, then the bytes */

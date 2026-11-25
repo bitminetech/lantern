@@ -2169,7 +2169,7 @@ LOCAL_FUNCTION lantern_api_duties_json
 END_FUNCTION lantern_api_duties_json
 
 /*
- * L1: the body of getDebugChainHeadsV2 (beacon-api.md): {"data":[{"root":…,"slot":…,"execution_optimistic":…},…]}
+ * The body of getDebugChainHeadsV2 (beacon-api.md): {"data":[{"root":…,"slot":…,"execution_optimistic":…},…]}
  * of the store nodes at ApiView_val_state of the view s4 whose byte at ApiView_heads is 0. Locals: the
  * index, 1 once an item is written, the node.
  */
@@ -2222,7 +2222,7 @@ LOCAL_FUNCTION lantern_api_heads_body
 END_FUNCTION lantern_api_heads_body
 
 /*
- * L1: the body of getDebugForkChoice (beacon-api.md): {"justified_checkpoint":…,"finalized_checkpoint":…,
+ * The body of getDebugForkChoice (beacon-api.md): {"justified_checkpoint":…,"finalized_checkpoint":…,
  * "fork_choice_nodes":[…]} of the store at ApiView_val_state of the view s4, each node's weight at
  * ApiView_weights. Locals: the index, the node.
  */
@@ -2385,7 +2385,7 @@ LOCAL_FUNCTION lantern_api_headers_json
 END_FUNCTION lantern_api_headers_json
 
 /*
- * L2: a0 = the base58btc text of the a1 bytes at a0 (at most 48), written at a2: a 1 for each
+ * a0 = the base58btc text of the a1 bytes at a0 (at most 48), written at a2: a 1 for each
  * leading zero byte, then the digits. a3: a work area of 72 bytes. s2 the bytes, s3 their count,
  * s4 the text, s5 the work area, s6 the leading zero bytes.
  */
@@ -5845,7 +5845,7 @@ LOCAL_FUNCTION lantern_node_api_find
 END_FUNCTION lantern_node_api_find
 
 /*
- * L2: (connection a0, route a1, flags a2, request a3) -> a0: publishBlockV2 (node.md, Block
+ * (connection a0, route a1, flags a2, request a3) -> a0: publishBlockV2 (node.md, Block
  * publishing): a NodeApi entry in NODE_PUBLISH_DECODE, the body's bytes as its data, and a
  * PUBLISH_DECODE work of them; 0 once it started, else the status of the error to answer. s3 the
  * entry, s4 its index, s7 the route, s8 the request, s9 the connection, s10 the flags. Locals: L a
@@ -5919,7 +5919,7 @@ LOCAL_FUNCTION lantern_node_api_publish
 END_FUNCTION lantern_node_api_publish
 
 /*
- * L2: the NODE_EV_WORK_DONE a0 of a work of block publishing (node.md, Block publishing): the
+ * The NODE_EV_WORK_DONE a0 of a work of block publishing (node.md, Block publishing): the
  * publishBlockV2 entry at its target goes on, or answers. s3 the event, s4 the entry, s7 the
  * kind. Locals: L the block's index.
  */
@@ -6080,7 +6080,7 @@ LOCAL_FUNCTION lantern_node_publish_done
 END_FUNCTION lantern_node_publish_done
 
 /*
- * L1: the PUBLISH_SIDECARS of the publishBlockV2 entry a0 (node.md, NODE_PUBLISH_SIDECARS): a
+ * The PUBLISH_SIDECARS of the publishBlockV2 entry a0 (node.md, NODE_PUBLISH_SIDECARS): a
  * BYTES_NEW of the sidecars' room, its id the entry's filter_index, then the work. Locals: the
  * entry, the room, the action.
  */
@@ -6136,7 +6136,7 @@ LOCAL_FUNCTION lantern_node_publish_sidecars_work
     UNFRAME 32
 END_FUNCTION lantern_node_publish_sidecars_work
 
-/* L1: the PUBLISH_SIDECAR of the next sidecar (cursor + 40) of the publishBlockV2 entry a0 in NODE_PUBLISH_IMPORT. */
+/* The PUBLISH_SIDECAR of the next sidecar (cursor + 40) of the publishBlockV2 entry a0 in NODE_PUBLISH_IMPORT. */
 LOCAL_FUNCTION lantern_node_publish_sidecar_work
     FRAME 16
     ld      t1, NodeApi_flags(a0)
@@ -6156,7 +6156,7 @@ LOCAL_FUNCTION lantern_node_publish_sidecar_work
 END_FUNCTION lantern_node_publish_sidecar_work
 
 /*
- * L2: the WORK_DONE a0 of a PUBLISH_SIDECAR of the reconstruction (node.md): recon_state 2; a
+ * The WORK_DONE a0 of a PUBLISH_SIDECAR of the reconstruction (node.md): recon_state 2; a
  * valid one stays as a NodeBlob when the node lacks it, and goes out on its subnet's topic with
  * NODE_FLAG_SUBSCRIBED, a column of columns and recon_slot above F's slot. s4 the event, s7 the
  * sidecar's ByteList, s8 its id.
@@ -6213,7 +6213,7 @@ LOCAL_FUNCTION lantern_node_recon_sidecar_done
 END_FUNCTION lantern_node_recon_sidecar_done
 
 /*
- * L2: the WORK_DONE a1 of a valid PUBLISH_SIDECAR of the publishBlockV2 entry a0: the sidecar
+ * The WORK_DONE a1 of a valid PUBLISH_SIDECAR of the publishBlockV2 entry a0: the sidecar
  * stays as a NodeBlob when the node keeps it (each blob sidecar; the column sidecars it samples),
  * goes out on its subnet's topic with NODE_FLAG_SUBSCRIBED, then the next. s3 the entry, s4 the
  * event, s7 the sidecar's ByteList, s8 its id. Step code keeps s5 and s6.
@@ -6316,7 +6316,7 @@ LOCAL_FUNCTION lantern_node_publish_sidecar_done
 END_FUNCTION lantern_node_publish_sidecar_done
 
 /*
- * L2: the PUBLISH_CHECK of the publishBlockV2 entry a0 (node.md, NODE_PUBLISH_CHECK): a0 = 0 once
+ * The PUBLISH_CHECK of the publishBlockV2 entry a0 (node.md, NODE_PUBLISH_CHECK): a0 = 0 once
  * it went, else 400 with no post-state of the parent, or 500 with no head post-state. s3 the
  * entry, s4 the parent's entry, s7 the copy, s8 the head's state id, s9 the parent's fork, s10
  * the copy's slot.
@@ -6404,7 +6404,7 @@ LOCAL_FUNCTION lantern_node_publish_check_work
     LEAVE 0
 END_FUNCTION lantern_node_publish_check_work
 
-/* L1: the ids of the publishBlockV2 entry a0 but the block's bytes go: its body and sidecars. Locals: the entry. */
+/* The ids of the publishBlockV2 entry a0 but the block's bytes go: its body and sidecars. Locals: the entry. */
 LOCAL_FUNCTION lantern_node_publish_drop
     FRAME 16
     sd      a0, 0(sp)
@@ -6424,7 +6424,7 @@ LOCAL_FUNCTION lantern_node_publish_drop
 2:  UNFRAME 16
 END_FUNCTION lantern_node_publish_drop
 
-/* L1: the end of the publishBlockV2 entry a0, its ids with it; its builder call in flight answers no entry. Locals: the entry. */
+/* The end of the publishBlockV2 entry a0, its ids with it; its builder call in flight answers no entry. Locals: the entry. */
 LOCAL_FUNCTION lantern_node_publish_end
     FRAME 16
     sd      a0, 0(sp)
@@ -6453,7 +6453,7 @@ LOCAL_FUNCTION lantern_node_publish_end
 END_FUNCTION lantern_node_publish_end
 
 /*
- * L2: the answer a1 (200, 202, or an error) of the publishBlockV2 entry a0, then its end; with
+ * The answer a1 (200, 202, or an error) of the publishBlockV2 entry a0, then its end; with
  * API_STREAM_GONE no answer. Locals: the entry.
  */
 LOCAL_FUNCTION lantern_node_publish_answer
@@ -6481,7 +6481,7 @@ LOCAL_FUNCTION lantern_node_publish_answer
 END_FUNCTION lantern_node_publish_answer
 
 /*
- * L1: after the head (node.md, NODE_PUBLISH_IMPORT): each publishBlockV2 entry whose block's import
+ * After the head (node.md, NODE_PUBLISH_IMPORT): each publishBlockV2 entry whose block's import
  * ended answers, 200 for a block the node imported, 202 for another. s3 an entry, s4 the count.
  */
 LOCAL_FUNCTION lantern_node_publish_poll
@@ -6519,7 +6519,7 @@ LOCAL_FUNCTION lantern_node_publish_poll
 9:  LEAVE 0
 END_FUNCTION lantern_node_publish_poll
 
-/* L0: a0 = the count of the publishBlockV2 entries. Uses t0-t3. */
+/* a0 = the count of the publishBlockV2 entries. Uses t0-t3. */
 LOCAL_FUNCTION lantern_node_api_publish_count
     UNWIND_END_PROLOGUE
     li      a0, 0
@@ -6538,7 +6538,7 @@ LOCAL_FUNCTION lantern_node_api_publish_count
 END_FUNCTION lantern_node_api_publish_count
 
 /*
- * L2: (connection a0, route a1, flags a2, view a3) -> a0: produceBlockV3 (node.md, Block
+ * (connection a0, route a1, flags a2, view a3) -> a0: produceBlockV3 (node.md, Block
  * production): a NodeApi entry in NODE_PRODUCE_STATE that owns the state of the view, a copy at
  * the slot, with the request in its cursor, and a PRODUCE_CHECK work of it; 0 once it started,
  * else the status of the error to answer. s3 the entry, s4 its index, s7 the route, s8 the view,
@@ -6613,7 +6613,7 @@ LOCAL_FUNCTION lantern_node_api_produce
 END_FUNCTION lantern_node_api_produce
 
 /*
- * L2: the NODE_EV_WORK_DONE a0 of a work of block production (node.md, Block production): the
+ * The NODE_EV_WORK_DONE a0 of a work of block production (node.md, Block production): the
  * produceBlockV3 entry at its target goes on, or answers its error. s3 the event, s4 the entry,
  * s7 the result.
  */
@@ -6757,7 +6757,7 @@ LOCAL_FUNCTION lantern_node_produce_done
 9:  LEAVE 0
 END_FUNCTION lantern_node_produce_done
 
-/* L1: the answer of the produceBlockV3 entry a0, whose block's bytes are its data: its first chunk. Uses t0-t2, a7. */
+/* The answer of the produceBlockV3 entry a0, whose block's bytes are its data: its first chunk. Uses t0-t2, a7. */
 LOCAL_FUNCTION lantern_node_produce_answer
     FRAME 0
     mv      a1, a0
@@ -6770,7 +6770,7 @@ LOCAL_FUNCTION lantern_node_produce_answer
 END_FUNCTION lantern_node_produce_answer
 
 /*
- * L2: the next work of the produceBlockV3 entry a0 in NODE_PRODUCE_FOLD: a PRODUCE_FOLD of the
+ * The next work of the produceBlockV3 entry a0 in NODE_PRODUCE_FOLD: a PRODUCE_FOLD of the
  * next kept pool entry of the kind at cursor + 144 from index filter_slot, the kinds in the order
  * of api_produce_kinds; after the last, NODE_PRODUCE_BUILD and its PRODUCE_BLOCK. s3 the entry,
  * s4 its index, s7 a pool entry, s8 the pool index, s9 the kind's index, s10 its topic.
@@ -6850,7 +6850,7 @@ LOCAL_FUNCTION lantern_node_produce_next
 END_FUNCTION lantern_node_produce_next
 
 /*
- * L2: the produceBlockV3 entry a0 in NODE_PRODUCE_BID with no call in flight goes on (node.md,
+ * The produceBlockV3 entry a0 in NODE_PRODUCE_BID with no call in flight goes on (node.md,
  * Block production): with the builder's answer at PRODUCE_BID a PRODUCE_BID work of it, else the
  * build. s3 the entry, s4 its index.
  */
@@ -6879,7 +6879,7 @@ LOCAL_FUNCTION lantern_node_produce_bid_go
 END_FUNCTION lantern_node_produce_bid_go
 
 /*
- * L2: the build of the produceBlockV3 entry a0 (node.md, Block production): NODE_PRODUCE_BUILD and
+ * The build of the produceBlockV3 entry a0 (node.md, Block production): NODE_PRODUCE_BUILD and
  * its PRODUCE_BLOCK of the copy, the engine's result, the draft and the bid at PRODUCE_BID as
  * state_c. s3 the entry, s4 its index.
  */
@@ -6908,7 +6908,7 @@ LOCAL_FUNCTION lantern_node_produce_build
 END_FUNCTION lantern_node_produce_build
 
 /*
- * L1: at a quiet point (node.md, Block production, NODE_PRODUCE_BID): each produceBlockV3 entry
+ * At a quiet point (node.md, Block production, NODE_PRODUCE_BID): each produceBlockV3 entry
  * waiting for its bid, with no work in flight: a header call in flight past
  * BUILDER_PROPOSAL_DELAY_TOLERANCE_MS answers no entry; with no call in flight, the entry goes on
  * while the actions have room for two works. s1 the node, s6 the actions; s3 an entry, s4 the
@@ -6955,7 +6955,7 @@ LOCAL_FUNCTION lantern_node_produce_due
 9:  LEAVE 0
 END_FUNCTION lantern_node_produce_due
 
-/* L1: the draft and the engine's result of the produceBlockV3 entry a0 go. Locals: F the entry. */
+/* The draft and the engine's result of the produceBlockV3 entry a0 go. Locals: F the entry. */
 LOCAL_FUNCTION lantern_node_produce_release
     FRAME 16
     sd      a0, 0(sp)
@@ -7001,7 +7001,7 @@ LOCAL_FUNCTION lantern_node_produce_release
 END_FUNCTION lantern_node_produce_release
 
 /*
- * L2: the error a1 to the produceBlockV3 entry a0, then its end: its draft and engine result go,
+ * The error a1 to the produceBlockV3 entry a0, then its end: its draft and engine result go,
  * and its state with API_STREAM_OWN_STATE. Locals: F the entry.
  */
 LOCAL_FUNCTION lantern_node_produce_fail

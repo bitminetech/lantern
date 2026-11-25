@@ -236,7 +236,7 @@ SPEC_FUNCTION process_proposer_slashing
 SPEC_END process_proposer_slashing
 
 /*
- * L0 of lantern_process_proposer_slashing: check the signature of signed header s7 by
+ * A helper of lantern_process_proposer_slashing: check the signature of signed header s7 by
  * proposer s6, with state s1 and scratch s4. a0 points at the caller's locals: +8 epoch,
  * +16 domain type, +24 domain, +56 signing root as a ByteList. Returns a0: 0, a status,
  * or LANTERN_INVALID_PROPOSER_SLASHING. Locals: sp+0 the caller's locals.

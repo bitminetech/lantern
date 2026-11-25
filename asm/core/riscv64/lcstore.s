@@ -24,7 +24,7 @@
     add     t0, t0, t2
 .endm
 
-# L0: a0 = the first entry or record of part a1 of the store a0. Uses t0-t3.
+# a0 = the first entry or record of part a1 of the store a0. Uses t0-t3.
 LOCAL_FUNCTION lantern_lc_part
     UNWIND_END_PROLOGUE
     li      t0, LC_STORE_FIXED
@@ -38,7 +38,7 @@ LOCAL_FUNCTION lantern_lc_part
     ret
 END_FUNCTION lantern_lc_part
 
-# L0: t3 = the bytes of an entry or record of part a1.
+# t3 = the bytes of an entry or record of part a1.
 LOCAL_FUNCTION lantern_lc_mem
     UNWIND_END_PROLOGUE
     li      t3, LcBlock__mem
@@ -62,7 +62,7 @@ LOCAL_FUNCTION lantern_lc_mem
 1:  ret
 END_FUNCTION lantern_lc_mem
 
-# L1: a0 = entry or record a2 (an index) of part a1 of the store a0; a1-a5 kept. Uses t0-t4, a7.
+# a0 = entry or record a2 (an index) of part a1 of the store a0; a1-a5 kept. Uses t0-t4, a7.
 LOCAL_FUNCTION lantern_lc_at
     FRAME 0
     call    lantern_lc_part
@@ -72,7 +72,7 @@ LOCAL_FUNCTION lantern_lc_at
     UNFRAME 0
 END_FUNCTION lantern_lc_at
 
-# L1: a0 = record a2 (a reference, not 0) of part a1 of the store a0; a1-a5 kept. Uses t0-t4, a7.
+# a0 = record a2 (a reference, not 0) of part a1 of the store a0; a1-a5 kept. Uses t0-t4, a7.
 LOCAL_FUNCTION lantern_lc_ref
     FRAME 0
     addi    a2, a2, -1
@@ -81,7 +81,7 @@ LOCAL_FUNCTION lantern_lc_ref
     UNFRAME 0
 END_FUNCTION lantern_lc_ref
 
-# L1: a0 = the reference of a free record of part a1 of the store a0, now LC_USED; 0 with none. Uses t0-t4, a2-a4, a7.
+# a0 = the reference of a free record of part a1 of the store a0, now LC_USED; 0 with none. Uses t0-t4, a2-a4, a7.
 LOCAL_FUNCTION lantern_lc_alloc
     FRAME 0
     mv      a4, a0
@@ -105,7 +105,7 @@ LOCAL_FUNCTION lantern_lc_alloc
     UNFRAME 0
 END_FUNCTION lantern_lc_alloc
 
-# L1: a0 = the free records of part a1 of the store a0. Uses t0-t4, a2-a4, a7.
+# a0 = the free records of part a1 of the store a0. Uses t0-t4, a2-a4, a7.
 LOCAL_FUNCTION lantern_lc_free_count
     FRAME 0
     mv      a4, a0
@@ -126,7 +126,7 @@ LOCAL_FUNCTION lantern_lc_free_count
     UNFRAME 0
 END_FUNCTION lantern_lc_free_count
 
-# L1: record a2 (a reference, or 0 for none) of part a1 of the store a0 becomes LC_MARKED. Uses t0-t4, a7.
+# Record a2 (a reference, or 0 for none) of part a1 of the store a0 becomes LC_MARKED. Uses t0-t4, a7.
 LOCAL_FUNCTION lantern_lc_mark
     FRAME 0
     beqz    a2, 1f
@@ -144,7 +144,7 @@ END_FUNCTION lantern_lc_mark
     call    lantern_lc_mark
 .endm
 
-# L1: the records of the store a0 that nothing refers to become LC_FREE (LcStore, Rules). s1 the
+# The records of the store a0 that nothing refers to become LC_FREE (LcStore, Rules). s1 the
 # store, s2 an entry or record, s3 the ones left, s4 the part, s5 its bytes.
 LOCAL_FUNCTION lantern_lc_collect
     ENTER 0
@@ -223,7 +223,7 @@ LOCAL_FUNCTION lantern_lc_collect
     LEAVE 0
 END_FUNCTION lantern_lc_collect
 
-# L1: a0 = LANTERN_OK when the store a0 has a1 free headers, a2 committees and a3 updates, once the
+# a0 = LANTERN_OK when the store a0 has a1 free headers, a2 committees and a3 updates, once the
 # records nothing refers to are freed; else LANTERN_BUFFER_TOO_SMALL. s1 the store, s2-s4 the
 # needs, s5 1 once collected, s6 the part.
 LOCAL_FUNCTION lantern_lc_reserve
@@ -258,7 +258,7 @@ LOCAL_FUNCTION lantern_lc_reserve
     LEAVE 0
 END_FUNCTION lantern_lc_reserve
 
-# L1: a0 = the index plus 1 of the LcBlock of the root at a1 in the store a0, or 0. Uses t0-t3, a1, a3-a7.
+# a0 = the index plus 1 of the LcBlock of the root at a1 in the store a0, or 0. Uses t0-t3, a1, a3-a7.
 LOCAL_FUNCTION lantern_lc_find_block
     FRAME 0
     ld      a3, LcStore_blocks(a0)
@@ -277,7 +277,7 @@ LOCAL_FUNCTION lantern_lc_find_block
     UNFRAME 0
 END_FUNCTION lantern_lc_find_block
 
-# L1: a0 = the entry (index plus 1) of the highest slot at most a2 along the parents from entry a1
+# a0 = the entry (index plus 1) of the highest slot at most a2 along the parents from entry a1
 # of the store a0, or 0. Uses t0-t4, a1-a5, a7.
 LOCAL_FUNCTION lantern_lc_ancestor
     FRAME 0
@@ -298,7 +298,7 @@ LOCAL_FUNCTION lantern_lc_ancestor
     UNFRAME 0
 END_FUNCTION lantern_lc_ancestor
 
-# L1: a0 = the LcFinalized of the highest slot at most a1 and at least historical_tail_slot in the store a0, or 0. Uses t0-t3, a1-a5.
+# a0 = the LcFinalized of the highest slot at most a1 and at least historical_tail_slot in the store a0, or 0. Uses t0-t3, a1-a5.
 LOCAL_FUNCTION lantern_lc_finalized_at
     FRAME 0
     ld      a3, LcStore_finalized(a0)
@@ -320,7 +320,7 @@ LOCAL_FUNCTION lantern_lc_finalized_at
     UNFRAME 0
 END_FUNCTION lantern_lc_finalized_at
 
-# L0: a0 = the set bits of the sync_committee_bits at a0. Uses t0-t3.
+# a0 = the set bits of the sync_committee_bits at a0. Uses t0-t3.
 LOCAL_FUNCTION lantern_lc_participants
     UNWIND_END_PROLOGUE
     li      t1, SYNC_COMMITTEE_SIZE / 8
@@ -346,7 +346,7 @@ END_FUNCTION lantern_lc_participants
     addi    t1, t1, 6
 .endm
 
-# L0: a0 = 1 when the a2 bytes at a0 and a1 are equal, a2 a multiple of 8, both 8-aligned; else 0. Uses t0, t1.
+# a0 = 1 when the a2 bytes at a0 and a1 are equal, a2 a multiple of 8, both 8-aligned; else 0. Uses t0, t1.
 LOCAL_FUNCTION lantern_lc_equal
     UNWIND_END_PROLOGUE
 1:  beqz    a2, 2f
@@ -362,7 +362,7 @@ LOCAL_FUNCTION lantern_lc_equal
     ret
 END_FUNCTION lantern_lc_equal
 
-# L1: a0 = an LcCommittee reference of the sync committee bytes a1 in the store a0: a2 or a3 (each
+# a0 = an LcCommittee reference of the sync committee bytes a1 in the store a0: a2 or a3 (each
 # a reference or 0) when its bytes are equal, else a new record. s1 the store, s2 the bytes, s3
 # and s4 the candidates, s5 the reference. The bytes are 8-aligned, as in a state's value.
 LOCAL_FUNCTION lantern_lc_committee
@@ -401,7 +401,7 @@ LOCAL_FUNCTION lantern_lc_committee
     LEAVE 0
 END_FUNCTION lantern_lc_committee
 
-# L1: hash_tree_root of the BeaconBlockHeader at a0 (its 112 SSZ bytes, 8-aligned) at a1. s1 the
+# hash_tree_root of the BeaconBlockHeader at a0 (its 112 SSZ bytes, 8-aligned) at a1. s1 the
 # header, s2 out, s3 the 8 chunks, s4 the pairs of the level, s5 the pair. Locals: L a ByteList,
 # L + 32 a digest, L + 64 the chunks.
 LOCAL_FUNCTION lantern_lc_beacon_root
@@ -444,7 +444,7 @@ LOCAL_FUNCTION lantern_lc_beacon_root
     LEAVE 320
 END_FUNCTION lantern_lc_beacon_root
 
-# L1: a0 = a new LcHeader of the fork a1 in the store a0 (reserved before), the empty header of the
+# a0 = a new LcHeader of the fork a1 in the store a0 (reserved before), the empty header of the
 # fork: lantern_upgrade_lc_header of 112 zero bytes from altair. s1 the store, s2 the fork, s3 the
 # reference. Locals: L the ByteList of the zero bytes.
 LOCAL_FUNCTION lantern_lc_empty_header
@@ -480,7 +480,7 @@ LOCAL_FUNCTION lantern_lc_empty_header
     LEAVE 144
 END_FUNCTION lantern_lc_empty_header
 
-# L1: a0 = a new LcUpdate (reserved before, with one LcHeader) in the store a0: the update of entry
+# a0 = a new LcUpdate (reserved before, with one LcHeader) in the store a0: the update of entry
 # a1 (light-client.md, The update of an entry) with the signature slot a2, the sync aggregate at a3
 # and the LcCommittee a4 (0: a finality update). s1 the store, s2 the entry's reference, s3 the
 # signature slot, s4 the aggregate, s5 the committee, s6 the entry, s7 the update's reference, s8
@@ -624,7 +624,7 @@ LOCAL_FUNCTION lantern_lc_better_parts
     LEAVE 0
 END_FUNCTION lantern_lc_better_parts
 
-# L1: a0 = 1 when lantern_is_better_update of the LcUpdate a1's fork gives 1 for it and the
+# a0 = 1 when lantern_is_better_update of the LcUpdate a1's fork gives 1 for it and the
 # LcUpdate a2 upgraded to that fork, in the store a0 with the scratch a3 (LC_COMPARE_SCRATCH bytes,
 # checked before); else 0. s1 the store, s2 the new update, s3 the old one's reference, s4 the
 # scratch's buffers, s5 the new update's fork, s6 the old one's fork, s7 the old update. Locals: L
@@ -705,7 +705,7 @@ LOCAL_FUNCTION lantern_lc_better
     LEAVE 80
 END_FUNCTION lantern_lc_better
 
-# L1: a0 = status: the LcBlock of the block a3 (ByteList) with its post-state a2 in the store a0,
+# a0 = status: the LcBlock of the block a3 (ByteList) with its post-state a2 in the store a0,
 # the config a1, the StateCache a4 (or 0), the scratch a5; with a6 1 the anchor of
 # lantern_lc_store_init, else lantern_lc_on_block. s1 the store, s2 config, s3 state, s4 block, s5
 # cache, s6 scratch, s7 the new entry, s8 the block's fork, s9 the header's reference, s10 the
@@ -940,7 +940,7 @@ LOCAL_FUNCTION lantern_lc_add_block
     LEAVE 80
 END_FUNCTION lantern_lc_add_block
 
-# L1: an LcBootstrap of the LcFinalized a1 in the store a0 (room checked before), when the store
+# An LcBootstrap of the LcFinalized a1 in the store a0 (room checked before), when the store
 # holds none of its root and holds its LcBlock with data. s1 the store, s2 the LcFinalized, s3 the
 # bootstraps, s4 their count, s5 the index, s6 the entry.
 LOCAL_FUNCTION lantern_lc_add_bootstrap
@@ -992,7 +992,7 @@ LOCAL_FUNCTION lantern_lc_add_bootstrap
 9:  LEAVE 0
 END_FUNCTION lantern_lc_add_bootstrap
 
-# L1: the LcPeriod of period a1 in the store a0 refers to update a2 (room checked before); with a2
+# The LcPeriod of period a1 in the store a0 refers to update a2 (room checked before); with a2
 # 0, the period has none. s1 the store, s2 the period, s3 the update, s4 the periods, s5 their
 # count, s6 the index.
 LOCAL_FUNCTION lantern_lc_set_period
@@ -1046,7 +1046,7 @@ LOCAL_FUNCTION lantern_lc_set_period
 9:  LEAVE 0
 END_FUNCTION lantern_lc_set_period
 
-# L1: the LcBlock entries of slots below a1 in the store a0 go, with the scratch a2 (8 bytes for
+# The LcBlock entries of slots below a1 in the store a0 go, with the scratch a2 (8 bytes for
 # each entry, checked before) for their new indices. s1 the store, s2 the slot, s3 the indices, s4
 # the entries, s5 their count, s6 the index, s7 the kept ones.
 LOCAL_FUNCTION lantern_lc_prune

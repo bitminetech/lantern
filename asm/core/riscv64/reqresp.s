@@ -141,7 +141,7 @@ FUNCTION lantern_reqresp_protocol_id
     ret
 END_FUNCTION lantern_reqresp_protocol_id
 
-/* L0: a0 = the chunk bound of a0 payload bytes: 25 + n + 8 * ceil(n / 65536); a1 = 1 on overflow, else 0. Uses t0, t1. */
+/* a0 = the chunk bound of a0 payload bytes: 25 + n + 8 * ceil(n / 65536); a1 = 1 on overflow, else 0. Uses t0, t1. */
 LOCAL_FUNCTION lantern_chunk_bound
     UNWIND_END_PROLOGUE
     srli    t0, a0, 16
@@ -402,7 +402,7 @@ END_FUNCTION lantern_reqresp_read_payload
 .endm
 
 /*
- * L0: (a0 descriptor, a1 node) -> a0 min, a1 max, saturating at 2^64 - 1.
+ * (a0 descriptor, a1 node) -> a0 min, a1 max, saturating at 2^64 - 1.
  * s1 descriptor, s2 node, s3 length or the last field, s4 element or field, s5 min, s6 max.
  */
 LOCAL_FUNCTION lantern_size_bounds

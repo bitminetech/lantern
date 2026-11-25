@@ -1,5 +1,5 @@
 /*
- * Copy and zero, RISC-V: L0 helpers that every object of the core includes.
+ * Copy and zero, RISC-V: helpers that every object of the core includes.
  */
 
 /* dst a0, src a1, n a2: 32 bytes at a time when both are 8-aligned, else a byte at a time. */

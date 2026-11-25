@@ -129,7 +129,7 @@ SPEC_FUNCTION process_voluntary_exit
 SPEC_END process_voluntary_exit
 
 /*
- * L0: verify a BLS signature over a signing root. rdi public key, rsi signature,
+ * Verify a BLS signature over a signing root. rdi public key, rsi signature,
  * rdx a 56-byte buffer whose last 32 bytes hold the root (its first 24 become a
  * ByteList header), rcx scratch. Returns rax status, rdx valid. Locals: rsp+0 valid.
  */

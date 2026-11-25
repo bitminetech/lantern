@@ -115,7 +115,7 @@
 
 /* ---------------------------------------------------------------- Nodes */
 
-/* L0: x0 = the node of the root at x1 in store x0, or NODE_NONE. A leaf; uses x2-x11. */
+/* x0 = the node of the root at x1 in store x0, or NODE_NONE. A leaf; uses x2-x11. */
 LOCAL_FUNCTION lantern_find_node
     UNWIND_END_PROLOGUE
     PART    x2, x3, x0, Store_blocks
@@ -139,7 +139,7 @@ LOCAL_FUNCTION lantern_find_node
     ret
 END_FUNCTION lantern_find_node
 
-/* L0: x0 = status, x1 = get_ancestor(store x0, node x1, slot x2). A leaf; uses x3-x6, x16. */
+/* x0 = status, x1 = get_ancestor(store x0, node x1, slot x2). A leaf; uses x3-x6, x16. */
 LOCAL_FUNCTION lantern_ancestor
     UNWIND_END_PROLOGUE
     LDQ     x3, x0, Store_blocks
@@ -158,7 +158,7 @@ LOCAL_FUNCTION lantern_ancestor
     ret
 END_FUNCTION lantern_ancestor
 
-/* L0: x0 = status, x1 = the node of get_checkpoint_block(store x0, node x1, epoch x2). A leaf. */
+/* x0 = status, x1 = the node of get_checkpoint_block(store x0, node x1, epoch x2). A leaf. */
 LOCAL_FUNCTION lantern_checkpoint_block
     UNWIND_END_PROLOGUE
     lsr     x3, x2, #(64 - LOG2_SLOTS_PER_EPOCH)    /* compute_start_slot_at_epoch(epoch) fits */
@@ -224,7 +224,7 @@ SPEC_END get_checkpoint_block
 /* ---------------------------------------------------------------- Weights */
 
 /*
- * L0: x0 = status, x1 = get_attestation_score(store x0, node x1) with the store's balances.
+ * x0 = status, x1 = get_attestation_score(store x0, node x1) with the store's balances.
  * A leaf; uses x2-x13. An overflow is reported after the sum, as the spec's Gwei does.
  */
 LOCAL_FUNCTION lantern_attestation_score
@@ -275,7 +275,7 @@ LOCAL_FUNCTION lantern_attestation_score
 END_FUNCTION lantern_attestation_score
 
 /*
- * L0: x0 = status, x1 = calculate_committee_fraction(justified state, percent x1), from the
+ * x0 = status, x1 = calculate_committee_fraction(justified state, percent x1), from the
  * store's total balance. A leaf; uses x2, x3.
  */
 LOCAL_FUNCTION lantern_committee_fraction
@@ -293,7 +293,7 @@ LOCAL_FUNCTION lantern_committee_fraction
     ret
 END_FUNCTION lantern_committee_fraction
 
-/* L0: x0 = status, x1 = get_weight(store x0, node x1) with the store's balances. x19 store, x20 node, x21 score. */
+/* x0 = status, x1 = get_weight(store x0, node x1) with the store's balances. x19 store, x20 node, x21 score. */
 LOCAL_FUNCTION lantern_weight
     ENTER 0
     mov     x19, x0
@@ -356,7 +356,7 @@ SPEC_END get_weight
 /* ---------------------------------------------------------------- get_head */
 
 /*
- * L0: get_filtered_node_tree(store x0), with scratch x1 of S(1) for the node count: x0 = status,
+ * get_filtered_node_tree(store x0), with scratch x1 of S(1) for the node count: x0 = status,
  * x1 = the flags of each node at the end of scratch (F_VIABLE: in the tree), x2 = the justified node.
  * x19 store, x20 flags, x21 node count, x22 justified node, x23 current epoch, x24 i,
  * x26 correct_justified, x28 nodes.
@@ -472,7 +472,7 @@ LOCAL_FUNCTION lantern_filter_tree
 END_FUNCTION lantern_filter_tree
 
 /*
- * L1: the weights of all nodes at once (fork-choice.md, lantern_get_head): store x0, weights x1 and
+ * The weights of all nodes at once (fork-choice.md, lantern_get_head): store x0, weights x1 and
  * flags x2, 8 bytes a node: x0 = the status of the proposer boost, LANTERN_OK or a failure of its
  * node or get_proposer_score. Each weight is get_weight of its node; a sum past 2^64 - 1 sets
  * F_OVERFLOW in the flags of the node and of each node above it. x19 store, x20 flags, x21 node
@@ -573,7 +573,7 @@ LOCAL_FUNCTION lantern_weights
 END_FUNCTION lantern_weights
 
 /*
- * L0: get_head(store x0) with scratch x1 of S(2) for the node count: x0 = status, x1 = the head
+ * get_head(store x0) with scratch x1 of S(2) for the node count: x0 = status, x1 = the head
  * node, with the weights of weights. x19 store, x20 flags, x21 node count, x22 justified node,
  * x23 the weights, x24 i, x25 head, x26 the best child, x27 its weight, x28 nodes. Locals: L the
  * status of the boost.
@@ -702,7 +702,7 @@ SPEC_END get_head
 
 /* ---------------------------------------------------------------- Checkpoints and time */
 
-/* L0: lantern_update_checkpoints(store x0, justified x1, finalized x2). A leaf; uses x3, x16, x17. */
+/* lantern_update_checkpoints(store x0, justified x1, finalized x2). A leaf; uses x3, x16, x17. */
 LOCAL_FUNCTION lantern_update_checkpoints
     UNWIND_END_PROLOGUE
     add     x3, x0, #Store_justified_checkpoint
@@ -712,7 +712,7 @@ LOCAL_FUNCTION lantern_update_checkpoints
     ret
 END_FUNCTION lantern_update_checkpoints
 
-/* L0: lantern_update_unrealized_checkpoints(store x0, justified x1, finalized x2). A leaf; uses x3, x16, x17. */
+/* lantern_update_unrealized_checkpoints(store x0, justified x1, finalized x2). A leaf; uses x3, x16, x17. */
 LOCAL_FUNCTION lantern_update_unrealized_checkpoints
     UNWIND_END_PROLOGUE
     add     x3, x0, #Store_unrealized_justified_checkpoint
@@ -722,7 +722,7 @@ LOCAL_FUNCTION lantern_update_unrealized_checkpoints
     ret
 END_FUNCTION lantern_update_unrealized_checkpoints
 
-/* L0: lantern_on_tick_per_slot(store x0, time_ms x1), with time_ms not before genesis_time_ms. A leaf. */
+/* lantern_on_tick_per_slot(store x0, time_ms x1), with time_ms not before genesis_time_ms. A leaf. */
 LOCAL_FUNCTION lantern_on_tick_per_slot
     UNWIND_END_PROLOGUE
     STORE_SLOT x2, x0, 9f                   /* previous_slot */
@@ -976,7 +976,7 @@ SPEC_END get_forkchoice_store
 /* ---------------------------------------------------------------- Attestations */
 
 /*
- * L0: x0 = validate_on_attestation(store x0, data x1, is_from_block x2 as a value), as a status;
+ * x0 = validate_on_attestation(store x0, data x1, is_from_block x2 as a value), as a status;
  * x1 = the node of the head vote. x19 store, x20 data, x21 target node, x22 head node.
  */
 LOCAL_FUNCTION lantern_validate_attestation
@@ -1448,7 +1448,7 @@ SPEC_END get_proposer_head
 /* ---------------------------------------------------------------- The merge block */
 
 .if FORK == FORK_BELLATRIX
-/* L0: x0 = 1 when the Uint256 at x0 is below the one at x1, else 0. A leaf; uses x2-x4. */
+/* x0 = 1 when the Uint256 at x0 is below the one at x1, else 0. A leaf; uses x2-x4. */
 LOCAL_FUNCTION lantern_u256_lo
     UNWIND_END_PROLOGUE
     mov     x4, #24                         /* from the most significant u64 down */

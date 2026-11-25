@@ -8,7 +8,7 @@
  */
 
 /*
- * L0: the bytes x0 .. x0 + x1 of a token go out from the cursor's done bytes on, while out has
+ * The bytes x0 .. x0 + x1 of a token go out from the cursor's done bytes on, while out has
  * room: x0 = 0 when the token is whole (done 0), else 1 (done counts the bytes written). Uses
  * x9-x12.
  */
@@ -32,7 +32,7 @@ LOCAL_FUNCTION lantern_json_put
 END_FUNCTION lantern_json_put
 
 /*
- * L0: the hex token of the byte or bit string of the level x28 (kind x0): its bytes from the
+ * The hex token of the byte or bit string of the level x28 (kind x0): its bytes from the
  * cursor's done bytes on, while out has room: x0 = 0 when whole, else 1. Uses x1-x7, x9-x15.
  */
 LOCAL_FUNCTION lantern_json_hex
@@ -104,7 +104,7 @@ LOCAL_FUNCTION lantern_json_hex
 END_FUNCTION lantern_json_hex
 
 /*
- * L1: the token of the uint or Boolean of the level x28 (kind x0): x0 = 0 when whole, else 1.
+ * The token of the uint or Boolean of the level x28 (kind x0): x0 = 0 when whole, else 1.
  * Locals: the text, from its end, and the number's 32-bit words.
  */
 LOCAL_FUNCTION lantern_json_number
@@ -168,7 +168,7 @@ LOCAL_FUNCTION lantern_json_number
 END_FUNCTION lantern_json_number
 
 /*
- * L0: the level x28 for the type node x0 whose storage is at offset x1 of the value: inline when
+ * The level x28 for the type node x0 whose storage is at offset x1 of the value: inline when
  * x2 is 2^64 - 1 and the type is of fixed size; a value of its own with its size first when x2 is
  * 2^64 - 1 and the type is of variable size; else a PartRef at x1 whose offset counts from x2.
  * Uses x3-x7, x9-x12.
@@ -208,7 +208,7 @@ LOCAL_FUNCTION lantern_json_open
 END_FUNCTION lantern_json_open
 
 /*
- * L1: the next item of the compound level x28 at index item, one level deeper. Uses the lantern_json_open
+ * The next item of the compound level x28 at index item, one level deeper. Uses the lantern_json_open
  * registers.
  */
 LOCAL_FUNCTION lantern_json_child
@@ -255,7 +255,7 @@ LOCAL_FUNCTION lantern_json_child
 END_FUNCTION lantern_json_child
 
 /*
- * L0: x0 = the offset of the next variable field after field x1 of the container level x28 in an
+ * x0 = the offset of the next variable field after field x1 of the container level x28 in an
  * SSZ encoding, or the level's end with none. Uses x9-x13.
  */
 LOCAL_FUNCTION lantern_jss_field_end
@@ -283,7 +283,7 @@ LOCAL_FUNCTION lantern_jss_field_end
 END_FUNCTION lantern_jss_field_end
 
 /*
- * L0: the level x28 for the type node x0 whose SSZ encoding is the bytes x1 to x2 of the
+ * The level x28 for the type node x0 whose SSZ encoding is the bytes x1 to x2 of the
  * encoding: base and end (next), and the count of its items or bytes. Uses x3-x5, x9-x12.
  */
 LOCAL_FUNCTION lantern_jss_open
@@ -319,7 +319,7 @@ LOCAL_FUNCTION lantern_jss_open
     ret
 END_FUNCTION lantern_jss_open
 
-/* L1: the next item of the compound level x28 of an SSZ encoding at index item, one level deeper. */
+/* The next item of the compound level x28 of an SSZ encoding at index item, one level deeper. */
 LOCAL_FUNCTION lantern_jss_child
     FRAME 16
     ldr     x9, [x28, #JsonLevel_node]
@@ -400,7 +400,7 @@ FUNCTION lantern_json_encode_ssz
 END_FUNCTION lantern_json_encode_ssz
 
 /*
- * L1: (type, value or encoding, cursor, out, mode, the encoding's bytes): the JSON of a value
+ * (type, value or encoding, cursor, out, mode, the encoding's bytes): the JSON of a value
  * (mode 0) or of an encoding (mode 1). Locals: L a token of punctuation or a name, L+48 the mode,
  * L+56 the encoding's bytes.
  */
@@ -581,7 +581,7 @@ END_FUNCTION lantern_json_main
  * x28 the JsonFault, whose path the levels fill as they go down.
  */
 
-/* L0: x0 = the first byte at or after x0 that is no white space. Uses x9. */
+/* x0 = the first byte at or after x0 that is no white space. Uses x9. */
 LOCAL_FUNCTION lantern_jd_ws
     UNWIND_END_PROLOGUE
 1:  cmp     x0, x20
@@ -600,7 +600,7 @@ LOCAL_FUNCTION lantern_jd_ws
 9:  ret
 END_FUNCTION lantern_jd_ws
 
-/* L0: the fault x0 at the byte x1 (the end when past it), at depth x2: x1 = 1. Uses x9. */
+/* The fault x0 at the byte x1 (the end when past it), at depth x2: x1 = 1. Uses x9. */
 LOCAL_FUNCTION lantern_jd_fault
     UNWIND_END_PROLOGUE
     cmp     x1, x20
@@ -613,7 +613,7 @@ LOCAL_FUNCTION lantern_jd_fault
 END_FUNCTION lantern_jd_fault
 
 /*
- * L1: the string at x0 (its quote): x0 = after its closing quote, x3 its first byte, x4 its end,
+ * The string at x0 (its quote): x0 = after its closing quote, x3 its first byte, x4 its end,
  * x1 = 0; a \ or a byte below 0x20, or the end, is a fault at depth x2 (x1 = 1). Uses x9.
  */
 LOCAL_FUNCTION lantern_jd_string
@@ -640,7 +640,7 @@ LOCAL_FUNCTION lantern_jd_string
     UNFRAME 0
 END_FUNCTION lantern_jd_string
 
-/* L0: x0 = 1 when the byte at x0 is a decimal digit, below the end; else 0. Uses x9. */
+/* x0 = 1 when the byte at x0 is a decimal digit, below the end; else 0. Uses x9. */
 .macro JD_DIGIT dst, at
     mov     \dst, #0
     cmp     \at, x20
@@ -652,7 +652,7 @@ END_FUNCTION lantern_jd_string
 77:
 .endm
 
-/* L1: the number at x0 (RFC 8259 section 6): x0 = after it, x1 = 0; else a fault at depth x2. Uses x3, x9, x10. */
+/* The number at x0 (RFC 8259 section 6): x0 = after it, x1 = 0; else a fault at depth x2. Uses x3, x9, x10. */
 LOCAL_FUNCTION lantern_jd_number
     FRAME 0
     cmp     x0, x20
@@ -713,7 +713,7 @@ LOCAL_FUNCTION lantern_jd_number
     UNFRAME 0
 END_FUNCTION lantern_jd_number
 
-/* L0: x1 = 1 when the x2 bytes of text at x1 start at x0 below the end, else 0. Uses x9-x12. */
+/* x1 = 1 when the x2 bytes of text at x1 start at x0 below the end, else 0. Uses x9-x12. */
 LOCAL_FUNCTION lantern_jd_literal
     UNWIND_END_PROLOGUE
     add     x9, x0, x2
@@ -735,7 +735,7 @@ LOCAL_FUNCTION lantern_jd_literal
 END_FUNCTION lantern_jd_literal
 
 /*
- * L1: '"name":' at x0, in a skipped object: x0 = its value's first byte, x1 = 0; else a fault at
+ * '"name":' at x0, in a skipped object: x0 = its value's first byte, x1 = 0; else a fault at
  * depth x2. Locals: x2.
  */
 LOCAL_FUNCTION lantern_jd_key
@@ -765,7 +765,7 @@ LOCAL_FUNCTION lantern_jd_key
 END_FUNCTION lantern_jd_key
 
 /*
- * L1: the value at x0, skipped with only the checks of the text, faults at depth x2: x0 = after
+ * The value at x0, skipped with only the checks of the text, faults at depth x2: x0 = after
  * it, x1 = 0. Locals: L the depth, L+8 the nesting, a bit each (1 an object), L+16 its count.
  */
 LOCAL_FUNCTION lantern_jd_skip
@@ -879,7 +879,7 @@ LOCAL_FUNCTION lantern_jd_skip
 99: UNFRAME 32
 END_FUNCTION lantern_jd_skip
 
-/* L0: the x1 bytes at x0 join the encoding, written when x24 is 1. Uses x0, x1, x9, x10. */
+/* The x1 bytes at x0 join the encoding, written when x24 is 1. Uses x0, x1, x9, x10. */
 LOCAL_FUNCTION lantern_jd_out
     UNWIND_END_PROLOGUE
     cbz     x24, 2f
@@ -894,7 +894,7 @@ LOCAL_FUNCTION lantern_jd_out
     ret
 END_FUNCTION lantern_jd_out
 
-/* L0: the 4-byte offset x0 at byte x1 of the encoding, when x24 is 1. Uses x9. */
+/* The 4-byte offset x0 at byte x1 of the encoding, when x24 is 1. Uses x9. */
 LOCAL_FUNCTION lantern_jd_offset
     UNWIND_END_PROLOGUE
     cbz     x24, 9f
@@ -903,7 +903,7 @@ LOCAL_FUNCTION lantern_jd_offset
 9:  ret
 END_FUNCTION lantern_jd_offset
 
-/* L0: x0 = the value of the hex digit in w0, or 16 for another byte. */
+/* x0 = the value of the hex digit in w0, or 16 for another byte. */
 LOCAL_FUNCTION lantern_jd_hexdigit
     UNWIND_END_PROLOGUE
     sub     w9, w0, #0x30
@@ -921,7 +921,7 @@ LOCAL_FUNCTION lantern_jd_hexdigit
 END_FUNCTION lantern_jd_hexdigit
 
 /*
- * L1: the value of the type node x0 at x1, at depth x2: its encoding joins at x23; x0 = after it,
+ * The value of the type node x0 at x1, at depth x2: its encoding joins at x23; x0 = after it,
  * x1 = 0, else a fault (x1 = 1). Locals: L node, L+8 depth, L+16 the value's first byte, L+24 the
  * end, L+32 an index, L+40 the count, L+48 the encoding's start, L+56 its tail, L+64 the field
  * table, L+72 the text cursor, L+80 the kind's node entry, L+88 bytes of a number.
@@ -1520,7 +1520,7 @@ FUNCTION lantern_engine_json_decode
 END_FUNCTION lantern_engine_json_decode
 
 /*
- * L2: (type, json, scratch, out, fault, mode): lantern_json_decode for mode 0, of the Beacon API's
+ * (type, json, scratch, out, fault, mode): lantern_json_decode for mode 0, of the Beacon API's
  * JSON; lantern_engine_json_decode for mode 1, of the Engine API's: the mode at byte 56 of scratch,
  * before the field tables. Locals: L out, L+8 the root node, L+16 the mode.
  */

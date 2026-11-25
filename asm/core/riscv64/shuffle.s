@@ -2,7 +2,7 @@
  * Shuffling, seeds and proposer selection, RISC-V. Requirements: docs/reference/helpers.md.
  */
 
-/* L0: digest a2 = sha256 of the a1 bytes at a0; a1 is at most 96. */
+/* Digest a2 = sha256 of the a1 bytes at a0; a1 is at most 96. */
 LOCAL_FUNCTION lantern_sha256_short
     FRAME 128
     addi    t0, a1, 24                      # a ByteList: size, offset 24, count, then the bytes

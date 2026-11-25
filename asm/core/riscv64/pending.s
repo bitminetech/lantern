@@ -691,7 +691,7 @@ SPEC_FUNCTION get_inactivity_penalty_deltas
     LEAVE 48
 SPEC_END get_inactivity_penalty_deltas
 
-/* L0: add the n entries (a2) of list a1 to those of list a0. a0 = LANTERN_OK, or LANTERN_INVALID_OVERFLOW. A leaf. */
+/* Add the n entries (a2) of list a1 to those of list a0. a0 = LANTERN_OK, or LANTERN_INVALID_OVERFLOW. A leaf. */
 LOCAL_FUNCTION lantern_add_deltas
     UNWIND_END_PROLOGUE
     addi    a0, a0, LIST_FIXED
@@ -918,7 +918,7 @@ SPEC_END process_justification_and_finalization
 /* ---------------------------------------------------------------- Record updates */
 
 /*
- * L0: a0 = LANTERN_OK when state a0's previous_epoch_attestations can take the current ones,
+ * a0 = LANTERN_OK when state a0's previous_epoch_attestations can take the current ones,
  * else LANTERN_BUFFER_TOO_SMALL. A leaf. Uses t0-t4, a7.
  */
 LOCAL_FUNCTION lantern_record_room

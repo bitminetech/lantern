@@ -1,9 +1,9 @@
 /*
- * Finding a block of Seen, RISC-V: an L0 helper of the common object and of each fork's object.
+ * Finding a block of Seen, RISC-V: a helper of the common object and of each fork's object.
  * Requirements: docs/reference/networking.md.
  */
 
-/* L0: a0 = the SeenBlock of root a1 in seen a0, or 0. A leaf; uses a2-a5, t0-t3. */
+/* a0 = the SeenBlock of root a1 in seen a0, or 0. A leaf; uses a2-a5, t0-t3. */
 LOCAL_FUNCTION lantern_seen_find_block
     UNWIND_END_PROLOGUE
     PART    a2, a3, a0, Seen_blocks

@@ -231,7 +231,7 @@ SPEC_FUNCTION process_proposer_slashing
 SPEC_END process_proposer_slashing
 
 /*
- * L0 of lantern_process_proposer_slashing: check the signature of signed header rsi by
+ * A helper of lantern_process_proposer_slashing: check the signature of signed header rsi by
  * proposer r15, with state rbx and scratch r13. rdi points at the caller's locals: +8 epoch,
  * +16 domain type, +24 domain, +56 signing root as a ByteList. Returns rax: 0, a status,
  * or LANTERN_INVALID_PROPOSER_SLASHING. Locals: rsp+0 the caller's locals, rsp+8 the header.

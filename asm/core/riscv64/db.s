@@ -480,7 +480,7 @@ FUNCTION lantern_db_drop_sidecars
     LEAVE 0
 END_FUNCTION lantern_db_drop_sidecars
 
-# L0: a0 = the u64 of the a1 bytes at a0 (as a signed count: 8 or more a whole word, 0 or less none), zero above them. Uses t0-t3.
+# a0 = the u64 of the a1 bytes at a0 (as a signed count: 8 or more a whole word, 0 or less none), zero above them. Uses t0-t3.
 LOCAL_FUNCTION lantern_db_word
     UNWIND_END_PROLOGUE
     li      t0, 8
@@ -501,7 +501,7 @@ LOCAL_FUNCTION lantern_db_word
 3:  ret
 END_FUNCTION lantern_db_word
 
-# L1: a0 = 1 when word a0 of the state differs from the patch's start, else 0 (db.md, the state
+# a0 = 1 when word a0 of the state differs from the patch's start, else 0 (db.md, the state
 # diffs). Reads s1 the base's bytes, s2 min(their count, the state's), s3 the state's bytes, s4
 # their count. Uses a1, t0-t6.
 LOCAL_FUNCTION lantern_db_differ

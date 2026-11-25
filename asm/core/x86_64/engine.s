@@ -3,7 +3,7 @@
  * Requirements: docs/reference/engine-api.md.
  */
 
-/* L0: lantern_base64url of the rsi bytes at rdi, without padding, to rdx; rdx = the end. Uses rax, rcx, r8, r9. */
+/* lantern_base64url of the rsi bytes at rdi, without padding, to rdx; rdx = the end. Uses rax, rcx, r8, r9. */
 LOCAL_FUNCTION lantern_base64url
     UNWIND_END_PROLOGUE
     lea     base64url_alphabet(%rip), %r9
@@ -66,7 +66,7 @@ LOCAL_FUNCTION lantern_base64url
 4:  ret
 END_FUNCTION lantern_base64url
 
-/* L0: the decimal digits of rax to rdi; rdi = the end. Uses rax, rcx, rdx, r8. */
+/* The decimal digits of rax to rdi; rdi = the end. Uses rax, rcx, rdx, r8. */
 LOCAL_FUNCTION lantern_decimal
     UNWIND_END_PROLOGUE
     mov     $10, %ecx                       # count the digits, then write them from the last
@@ -225,7 +225,7 @@ FUNCTION lantern_http_post
     LEAVE 32
 END_FUNCTION lantern_http_post
 
-/* L0: rax = the position of the CR LF at or after rdx in the rsi bytes at rdi, or 2^64 - 1. Uses rcx. */
+/* rax = the position of the CR LF at or after rdx in the rsi bytes at rdi, or 2^64 - 1. Uses rcx. */
 LOCAL_FUNCTION lantern_find_crlf
     UNWIND_END_PROLOGUE
     mov     %rdx, %rax

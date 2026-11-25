@@ -32,7 +32,7 @@
 98:
 .endm
 
-/* L0: sort the x1 u64 entries at x0, ascending (heapsort). A leaf; uses x2-x8. */
+/* Sort the x1 u64 entries at x0, ascending (heapsort). A leaf; uses x2-x8. */
 LOCAL_FUNCTION lantern_sort_u64
     UNWIND_END_PROLOGUE
     cmp     x1, #2
@@ -83,7 +83,7 @@ SPEC_END get_committee_indices
 .endif
 
 /*
- * L0: the key of epoch x1 of state x0 at x2 (CommitteeEntry_seed onward): get_seed with
+ * The key of epoch x1 of state x0 at x2 (CommitteeEntry_seed onward): get_seed with
  * DOMAIN_BEACON_ATTESTER, the decision root, the genesis validators root. x19 state, x20 epoch,
  * x21 key. Locals: L epoch, L+8 domain type.
  */
@@ -128,7 +128,7 @@ LOCAL_FUNCTION lantern_committee_key
 7:  LEAVE 16
 END_FUNCTION lantern_committee_key
 
-/* L0: x0 = the valid entry of cache x0 for epoch x1 and the key at x2, or 0. A leaf. */
+/* x0 = the valid entry of cache x0 for epoch x1 and the key at x2, or 0. A leaf. */
 LOCAL_FUNCTION lantern_committee_find
     UNWIND_END_PROLOGUE
     ldr     x3, [x0, #CommitteeCache_validators]
@@ -750,7 +750,7 @@ SPEC_LEAF is_valid_indexed_attestation
 SPEC_END is_valid_indexed_attestation
 
 /*
- * L0: is_valid_indexed_attestation with x5 the attestation that the indexed attestation x1
+ * is_valid_indexed_attestation with x5 the attestation that the indexed attestation x1
  * is get_indexed_attestation of, with the CommitteeCache x6 (each 0 or not); with both and a
  * PubkeyCache, the keys' sum may come from the cache's key sums (block-processing.md).
  * Locals as is_valid_indexed_attestation's, then L+96 the attestation, L+104 the committee
@@ -920,7 +920,7 @@ keysum_one:
 .endm
 
 /*
- * L0: x0 = the members of the x1 indices at x0 whose PubkeyCache x3 entries do not hold their
+ * x0 = the members of the x1 indices at x0 whose PubkeyCache x3 entries do not hold their
  * keys (state validators at x2), each also written at x4 when x4 is not 0; or -1 when a member
  * is at or past the cache's count, or its entry has status 2 and its key. A leaf.
  */
@@ -961,7 +961,7 @@ LOCAL_FUNCTION lantern_key_sum_scan
 END_FUNCTION lantern_key_sum_scan
 
 /*
- * L0: makes the KeySum x0 of the x2 members at x1 (state validators at x3, PubkeyCache x4).
+ * Makes the KeySum x0 of the x2 members at x1 (state validators at x3, PubkeyCache x4).
  * Members whose entries do not hold their keys: crypto_bls_fast_aggregate_verify_cached of
  * them first, with message x5, signature x6 and scratch x7 (its last bytes take their list),
  * to fill their entries. x0 = 1 when the KeySum has status 1, 2 when it has status 2, 0 when
@@ -1062,7 +1062,7 @@ LOCAL_FUNCTION lantern_key_sum_make
 END_FUNCTION lantern_key_sum_make
 
 /*
- * L0: the sum of the keys of the attesting validators of attestation x1 (state x0), from the
+ * The sum of the keys of the attesting validators of attestation x1 (state x0), from the
  * key sums of CommitteeCache x2 and the entries of PubkeyCache x3, at x4 (G1Point); x5 the
  * message, x6 the signature, x7 the scratch, for lantern_key_sum_make. x0 = 1 when x4 holds the sum,
  * else 0. x19 state, x20 attestation, x21 member i, x22 PubkeyCache, x23 validators, x24 the
@@ -1621,7 +1621,7 @@ SPEC_FUNCTION process_attestation
 SPEC_END process_attestation
 
 /*
- * L0: process_attestation, with x5 the address of the block's get_base_reward_per_increment(state):
+ * process_attestation, with x5 the address of the block's get_base_reward_per_increment(state):
  * 0 until an attestation finds it, which stores it there. The operations of one block change no
  * effective balance and no active validator of the current epoch, so its attestations share it.
  */

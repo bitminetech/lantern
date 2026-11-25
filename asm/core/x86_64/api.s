@@ -2140,7 +2140,7 @@ LOCAL_FUNCTION lantern_api_duties_json
 END_FUNCTION lantern_api_duties_json
 
 /*
- * L1: the body of getDebugChainHeadsV2 (beacon-api.md): {"data":[{"root":…,"slot":…,"execution_optimistic":…},…]}
+ * The body of getDebugChainHeadsV2 (beacon-api.md): {"data":[{"root":…,"slot":…,"execution_optimistic":…},…]}
  * of the store nodes at ApiView_val_state of the view rbp whose byte at ApiView_heads is 0. Locals: the
  * index, 1 once an item is written, the node.
  */
@@ -2187,7 +2187,7 @@ LOCAL_FUNCTION lantern_api_heads_body
 END_FUNCTION lantern_api_heads_body
 
 /*
- * L1: the body of getDebugForkChoice (beacon-api.md): {"justified_checkpoint":…,"finalized_checkpoint":…,
+ * The body of getDebugForkChoice (beacon-api.md): {"justified_checkpoint":…,"finalized_checkpoint":…,
  * "fork_choice_nodes":[…]} of the store at ApiView_val_state of the view rbp, each node's weight at
  * ApiView_weights. Locals: the index, the node.
  */
@@ -2343,7 +2343,7 @@ LOCAL_FUNCTION lantern_api_headers_json
 END_FUNCTION lantern_api_headers_json
 
 /*
- * L2: rax = the base58btc text of the rsi bytes at rdi (at most 48), written at rdx: a 1 for each
+ * rax = the base58btc text of the rsi bytes at rdi (at most 48), written at rdx: a 1 for each
  * leading zero byte, then the digits. rcx: a work area of 72 bytes. r12 the bytes, r13 their count,
  * r14 the text, r15 the work area, rbp the leading zero bytes.
  */

@@ -41,7 +41,7 @@ route_k_null:
 77: mov     \tmp, \reg
 .endm
 
-# L0: rax = 1 when each % of the rsi bytes at rdi is followed by two hex digits, else 0. A leaf. Uses rcx, rdx, r8.
+# rax = 1 when each % of the rsi bytes at rdi is followed by two hex digits, else 0. A leaf. Uses rcx, rdx, r8.
 LOCAL_FUNCTION lantern_route_pct_ok
     UNWIND_END_PROLOGUE
     xor     %ecx, %ecx
@@ -66,7 +66,7 @@ LOCAL_FUNCTION lantern_route_pct_ok
     ret
 END_FUNCTION lantern_route_pct_ok
 
-# L0: the rsi bytes at rdi, percent-decoded (each % is followed by two hex digits), to rdx: at most rcx
+# The rsi bytes at rdi, percent-decoded (each % is followed by two hex digits), to rdx: at most rcx
 # bytes written; rax = the decoded length, which may pass rcx. A leaf. Uses r8-r11.
 LOCAL_FUNCTION lantern_route_decode
     UNWIND_END_PROLOGUE
@@ -94,7 +94,7 @@ LOCAL_FUNCTION lantern_route_decode
     ret
 END_FUNCTION lantern_route_decode
 
-# L0: one item of a list value: the bytes at rdi from index rsi to index rdx, percent-decoded, up to
+# One item of a list value: the bytes at rdi from index rsi to index rdx, percent-decoded, up to
 # the first decoded `,`, to rcx with at most r8 bytes written. rax = the index after the item and its
 # comma, rdx = the item's decoded length (it may pass r8), rcx = 1 when a comma ended it. A leaf. Uses r9-r11.
 LOCAL_FUNCTION lantern_route_next_item
@@ -128,7 +128,7 @@ LOCAL_FUNCTION lantern_route_next_item
     ret
 END_FUNCTION lantern_route_next_item
 
-# L0: the rsi bytes at rdi as a decimal number below 2^64: rax = 0 and rdx = its value, else rax = 1. A leaf. Uses rcx, r8, r9.
+# The rsi bytes at rdi as a decimal number below 2^64: rax = 0 and rdx = its value, else rax = 1. A leaf. Uses rcx, r8, r9.
 LOCAL_FUNCTION lantern_route_number
     UNWIND_END_PROLOGUE
     test    %rsi, %rsi
@@ -155,7 +155,7 @@ LOCAL_FUNCTION lantern_route_number
     ret
 END_FUNCTION lantern_route_number
 
-# L0: the rsi bytes at rdi as 0x and the hex of rdx bytes: rax = 0 and the bytes at rcx, else rax = 1. A leaf. Uses r8, r9.
+# The rsi bytes at rdi as 0x and the hex of rdx bytes: rax = 0 and the bytes at rcx, else rax = 1. A leaf. Uses r8, r9.
 LOCAL_FUNCTION lantern_route_hex
     UNWIND_END_PROLOGUE
     lea     2(%rdx,%rdx), %rax
@@ -185,7 +185,7 @@ LOCAL_FUNCTION lantern_route_hex
     ret
 END_FUNCTION lantern_route_hex
 
-# L0: the word of api_words for parameter rdi that is the rdx bytes at rsi: rax = 1 and rdx = its value, else rax = 0. A leaf. Uses rcx, r8-r11.
+# The word of api_words for parameter rdi that is the rdx bytes at rsi: rax = 1 and rdx = its value, else rax = 0. A leaf. Uses rcx, r8-r11.
 LOCAL_FUNCTION lantern_route_word
     UNWIND_END_PROLOGUE
     lea     api_words(%rip), %r8
@@ -217,7 +217,7 @@ LOCAL_FUNCTION lantern_route_word
     ret
 END_FUNCTION lantern_route_word
 
-# L0: whether the rsi bytes at rdi, a path whose percent-encoding is good, match the template of rcx
+# Whether the rsi bytes at rdi, a path whose percent-encoding is good, match the template of rcx
 # bytes at rdx: rax = 1 or 0. Each parameter segment goes to the list at r8: its count, then for each
 # its API_PARAM_*, start and end in the path. rbx the path's index, rbp the template's, r12 the count.
 LOCAL_FUNCTION lantern_route_match
@@ -283,7 +283,7 @@ LOCAL_FUNCTION lantern_route_match
     LEAVE 0
 END_FUNCTION lantern_route_match
 
-# L0: the rcx decoded bytes at rdx as a value of parameter rsi, into ApiRoute rdi; an item of a list
+# The rcx decoded bytes at rdx as a value of parameter rsi, into ApiRoute rdi; an item of a list
 # goes to the 64 bytes at r8. rax = 0, or 1 when the value breaks its type.
 # rbx out, rbp the parameter, r12 bytes, r13 length, r14 the item's place, r15 the field.
 LOCAL_FUNCTION lantern_route_value
@@ -468,7 +468,7 @@ LOCAL_FUNCTION lantern_route_value
     LEAVE 0
 END_FUNCTION lantern_route_value
 
-# L0: r12 past the JSON white space (space, tab, LF, CR) before r13. A leaf. Uses rax.
+# r12 past the JSON white space (space, tab, LF, CR) before r13. A leaf. Uses rax.
 LOCAL_FUNCTION lantern_route_ws
     UNWIND_END_PROLOGUE
 1:  cmp     %r13, %r12
@@ -487,7 +487,7 @@ LOCAL_FUNCTION lantern_route_ws
 9:  ret
 END_FUNCTION lantern_route_ws
 
-# L0: eax = 1 when the rsi bytes at rdi start the bytes at r12 (before r13), r12 then past them; else 0. A leaf. Uses rax, rcx.
+# eax = 1 when the rsi bytes at rdi start the bytes at r12 (before r13), r12 then past them; else 0. A leaf. Uses rax, rcx.
 LOCAL_FUNCTION lantern_route_lit
     UNWIND_END_PROLOGUE
     mov     %r13, %rax
@@ -509,7 +509,7 @@ LOCAL_FUNCTION lantern_route_lit
     ret
 END_FUNCTION lantern_route_lit
 
-# L0: the JSON string at r12 (before r13), RFC 8259 section 7: its value, each escape decoded (a \u of
+# The JSON string at r12 (before r13), RFC 8259 section 7: its value, each escape decoded (a \u of
 # 0x80 or more as the byte 0x80), into the 200 bytes at r15 + L + 192; r12 then past it. eax = 0, or
 # 1 when it breaks the rules; rcx = the value's length, 201 when it is longer than 200. A leaf. Uses
 # rax, rcx, rdx, rsi, r8.
@@ -593,7 +593,7 @@ LOCAL_FUNCTION lantern_route_string
     ret
 END_FUNCTION lantern_route_string
 
-# L0: eax = API_PARAM_ID when the rcx bytes at r15 + L + 192 are ids, API_PARAM_STATUS when they are statuses, else 0. A leaf. Uses rax, rdx, rsi, rdi, r8.
+# eax = API_PARAM_ID when the rcx bytes at r15 + L + 192 are ids, API_PARAM_STATUS when they are statuses, else 0. A leaf. Uses rax, rdx, rsi, rdi, r8.
 LOCAL_FUNCTION lantern_route_key
     UNWIND_END_PROLOGUE
     lea     route_k_ids(%rip), %rsi
@@ -619,7 +619,7 @@ LOCAL_FUNCTION lantern_route_key
     ret
 END_FUNCTION lantern_route_key
 
-# L1: null, or an array of strings, at r12 of a body that ends at r13: each string an item of the
+# Null, or an array of strings, at r12 of a body that ends at r13: each string an item of the
 # parameter rdi (API_PARAM_ID: into the list of out rbp; API_PARAM_STATUS: its bits), its bit of
 # present set; r12 then past the value. rax = 0, or the fault + 1. r15 the rsp of
 # lantern_api_route: S8 present, S9 the list's items, L+56 1 when the list has no room, L+128 an
@@ -701,7 +701,7 @@ LOCAL_FUNCTION lantern_route_ids_array
     UNFRAME 16
 END_FUNCTION lantern_route_ids_array
 
-# L0: the weight, 0 to 1000, that the Accept value of rsi bytes at rdi gives the media type of rcx
+# The weight, 0 to 1000, that the Accept value of rsi bytes at rdi gives the media type of rcx
 # lower case bytes at rdx (lantern_api_route's rules). rbx bytes, rbp length, r12 media, r13 its
 # length, r14 the best kind of range (-1 none, 0 any type, 1 any application type, 2 the type), r15
 # its weight; S7 an item's start, S8 its end, S9 a parameter's start, S10 a range's kind; L the

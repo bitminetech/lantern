@@ -25,7 +25,7 @@
     addi    a2, a2, 1
 .endm
 
-/* L0: the a1 bytes at a0 to a2. Uses t0. */
+/* The a1 bytes at a0 to a2. Uses t0. */
 LOCAL_FUNCTION lantern_jput
     UNWIND_END_PROLOGUE
     beqz    a1, 2f
@@ -48,7 +48,7 @@ END_FUNCTION lantern_jput
     addi    a2, a2, 1
 .endm
 
-/* L0: DATA: "0x" and two lowercase hex digits for each of the a1 bytes at a0, to a2. Uses t0-t2. */
+/* DATA: "0x" and two lowercase hex digits for each of the a1 bytes at a0, to a2. Uses t0-t2. */
 LOCAL_FUNCTION lantern_jdata
     UNWIND_END_PROLOGUE
     li      t0, '"'
@@ -73,7 +73,7 @@ LOCAL_FUNCTION lantern_jdata
     ret
 END_FUNCTION lantern_jdata
 
-/* L0: QUANTITY of the a1 bytes, little endian, at a0: "0x" and the hex with no leading zeros, to a2. Uses t0-t4. */
+/* QUANTITY of the a1 bytes, little endian, at a0: "0x" and the hex with no leading zeros, to a2. Uses t0-t4. */
 LOCAL_FUNCTION lantern_jquantity
     UNWIND_END_PROLOGUE
     li      t0, '"'
@@ -105,7 +105,7 @@ LOCAL_FUNCTION lantern_jquantity
     ret
 END_FUNCTION lantern_jquantity
 
-/* L0: the decimal digits of a0 to a2. Uses t0-t3. */
+/* The decimal digits of a0 to a2. Uses t0-t3. */
 LOCAL_FUNCTION lantern_jdecimal
     UNWIND_END_PROLOGUE
     li      t3, 10

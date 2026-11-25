@@ -115,7 +115,7 @@ SPEC_END compute_columns_for_custody_group
 .error "the gossip code assumes the Seen layouts of include/lantern.inc"
 .endif
 
-/* L0: x0 = 1 when seen x0 holds the SeenKey (x1 kind, x2 a, x3 b, x4 c), else 0. A leaf; uses x5-x8. */
+/* x0 = 1 when seen x0 holds the SeenKey (x1 kind, x2 a, x3 b, x4 c), else 0. A leaf; uses x5-x8. */
 LOCAL_FUNCTION lantern_seen_find_key
     UNWIND_END_PROLOGUE
     PART    x5, x6, x0, Seen_keys
@@ -137,7 +137,7 @@ LOCAL_FUNCTION lantern_seen_find_key
     ret
 END_FUNCTION lantern_seen_find_key
 
-/* L0: x0 = the free SeenKey entries of seen x0. A leaf; uses x1-x2. */
+/* x0 = the free SeenKey entries of seen x0. A leaf; uses x1-x2. */
 LOCAL_FUNCTION lantern_seen_key_room
     UNWIND_END_PROLOGUE
     ldr     x1, [x0, #Seen_keys]
@@ -149,7 +149,7 @@ LOCAL_FUNCTION lantern_seen_key_room
     ret
 END_FUNCTION lantern_seen_key_room
 
-/* L0: append the SeenKey (x1 kind, x2 a, x3 b, x4 c) to seen x0, which has room. A leaf; uses x5, x6. */
+/* Append the SeenKey (x1 kind, x2 a, x3 b, x4 c) to seen x0, which has room. A leaf; uses x5, x6. */
 LOCAL_FUNCTION lantern_seen_add_key
     UNWIND_END_PROLOGUE
     PART    x5, x6, x0, Seen_keys
@@ -161,7 +161,7 @@ LOCAL_FUNCTION lantern_seen_add_key
     ret
 END_FUNCTION lantern_seen_add_key
 
-/* L0: x0 = the free SeenBits entries of seen x0. A leaf; uses x1-x3. */
+/* x0 = the free SeenBits entries of seen x0. A leaf; uses x1-x3. */
 LOCAL_FUNCTION lantern_seen_bits_room
     UNWIND_END_PROLOGUE
     ldr     x1, [x0, #Seen_bits]
@@ -175,7 +175,7 @@ LOCAL_FUNCTION lantern_seen_bits_room
 END_FUNCTION lantern_seen_bits_room
 
 /*
- * L0: is_non_strict_superset of the SeenBits of key (x1 kind, root at x2, x3 a, x4 b) in seen x0,
+ * is_non_strict_superset of the SeenBits of key (x1 kind, root at x2, x3 a, x4 b) in seen x0,
  * for the x6 bits at x5: x0 = 1 when one of them has every bit of x5 set. A leaf; uses x7-x13.
  */
 LOCAL_FUNCTION lantern_seen_superset
@@ -223,7 +223,7 @@ LOCAL_FUNCTION lantern_seen_superset
     ret
 END_FUNCTION lantern_seen_superset
 
-/* L0: append the SeenBits of key (x1 kind, root at x2, x3 a, x4 b) and the x6 bits at x5 to seen x0, which has room. */
+/* Append the SeenBits of key (x1 kind, root at x2, x3 a, x4 b) and the x6 bits at x5 to seen x0, which has room. */
 LOCAL_FUNCTION lantern_seen_add_bits
     FRAME 32
     PART    x7, x8, x0, Seen_bits
@@ -250,7 +250,7 @@ LOCAL_FUNCTION lantern_seen_add_bits
     UNFRAME 32
 END_FUNCTION lantern_seen_add_bits
 
-/* L0: x0 = the SeenHeader of block root x1 in seen x0, or 0. A leaf; uses x2-x10. */
+/* x0 = the SeenHeader of block root x1 in seen x0, or 0. A leaf; uses x2-x10. */
 LOCAL_FUNCTION lantern_seen_find_header
     UNWIND_END_PROLOGUE
     PART    x2, x3, x0, Seen_headers
@@ -298,7 +298,7 @@ END_FUNCTION lantern_seen_find_header
     csinv   \dst, \dst, xzr, cc
 .endm
 
-/* L0: x0 = lantern_is_future_slot(store x0, slot x1, current_time_ms x2). A leaf; uses x3, x4, x16, x17. */
+/* x0 = lantern_is_future_slot(store x0, slot x1, current_time_ms x2). A leaf; uses x3, x4, x16, x17. */
 LOCAL_FUNCTION lantern_is_future_slot
     UNWIND_END_PROLOGUE
     SLOT_TIME x3, x0, x1
@@ -308,7 +308,7 @@ LOCAL_FUNCTION lantern_is_future_slot
     ret
 END_FUNCTION lantern_is_future_slot
 
-/* L0: x0 = lantern_is_within_slot_range(store x0, slot x1, slot_range x2, current_time_ms x3). A leaf; uses x4-x6, x16, x17. */
+/* x0 = lantern_is_within_slot_range(store x0, slot x1, slot_range x2, current_time_ms x3). A leaf; uses x4-x6, x16, x17. */
 LOCAL_FUNCTION lantern_is_within_slot_range
     UNWIND_END_PROLOGUE
     SLOT_TIME x4, x0, x1                    /* current_time_ms + MAXIMUM_GOSSIP_CLOCK_DISPARITY < start_time_ms */
@@ -329,7 +329,7 @@ LOCAL_FUNCTION lantern_is_within_slot_range
     ret
 END_FUNCTION lantern_is_within_slot_range
 
-/* L0: x0 = lantern_is_current_or_previous_epoch(store x0, epoch x1, current_time_ms x2). x19 store, x20 epoch, x21 time. */
+/* x0 = lantern_is_current_or_previous_epoch(store x0, epoch x1, current_time_ms x2). x19 store, x20 epoch, x21 time. */
 LOCAL_FUNCTION lantern_is_current_or_previous_epoch
     ENTER 0
     mov     x19, x0
@@ -357,7 +357,7 @@ LOCAL_FUNCTION lantern_is_current_or_previous_epoch
 END_FUNCTION lantern_is_current_or_previous_epoch
 
 /*
- * L0: x0 = lantern_is_future_epoch(store x0, epoch x1, current_time_ms x2); true when the time with
+ * x0 = lantern_is_future_epoch(store x0, epoch x1, current_time_ms x2); true when the time with
  * disparity is before genesis, where the spec's subtraction raises. A leaf; uses x3, x4, x16.
  */
 LOCAL_FUNCTION lantern_is_future_epoch
@@ -376,7 +376,7 @@ LOCAL_FUNCTION lantern_is_future_epoch
     ret
 END_FUNCTION lantern_is_future_epoch
 
-/* L0: x0 = compute_start_slot_at_epoch(finalized epoch of store x0), UINT64_MAX when it does not fit. A leaf; uses x1. */
+/* x0 = compute_start_slot_at_epoch(finalized epoch of store x0), UINT64_MAX when it does not fit. A leaf; uses x1. */
 LOCAL_FUNCTION lantern_finalized_slot
     UNWIND_END_PROLOGUE
     ldr     x0, [x0, #(Store_finalized_checkpoint + Checkpoint_epoch)]
@@ -389,7 +389,7 @@ LOCAL_FUNCTION lantern_finalized_slot
 END_FUNCTION lantern_finalized_slot
 
 /*
- * L0: x0 = status, x1 = 1 when get_checkpoint_block(store x0, node x1, epoch x2) is the root at x3, else 0.
+ * x0 = status, x1 = 1 when get_checkpoint_block(store x0, node x1, epoch x2) is the root at x3, else 0.
  * Locals: sp+16 store, sp+24 root.
  */
 LOCAL_FUNCTION lantern_checkpoint_is
@@ -406,7 +406,7 @@ LOCAL_FUNCTION lantern_checkpoint_is
 7:  UNFRAME 16
 END_FUNCTION lantern_checkpoint_is
 
-/* L0: lantern_checkpoint_is of the store's finalized checkpoint for node x1 of store x0. */
+/* lantern_checkpoint_is of the store's finalized checkpoint for node x1 of store x0. */
 LOCAL_FUNCTION lantern_finalized_is_ancestor
     UNWIND_END_PROLOGUE
     ldr     x2, [x0, #(Store_finalized_checkpoint + Checkpoint_epoch)]
@@ -415,7 +415,7 @@ LOCAL_FUNCTION lantern_finalized_is_ancestor
 END_FUNCTION lantern_finalized_is_ancestor
 
 /*
- * L0: x0 = status, x1 = bls.Verify(public key x3, compute_signing_root(object x2 of type x1, domain x0), signature x4),
+ * x0 = status, x1 = bls.Verify(public key x3, compute_signing_root(object x2 of type x1, domain x0), signature x4),
  * with scratch x5. Locals: sp+16 the root buffer (56: a ByteList header, then the root), sp+72 key, sp+80 signature,
  * sp+88 scratch.
  */
@@ -439,7 +439,7 @@ LOCAL_FUNCTION lantern_verify_with_domain
 END_FUNCTION lantern_verify_with_domain
 
 /*
- * L0: lantern_verify_with_domain with get_domain(state x0, domain type x1, epoch x2): object x4 of type x3,
+ * lantern_verify_with_domain with get_domain(state x0, domain type x1, epoch x2): object x4 of type x3,
  * public key x5, signature x6, scratch x7. Locals: sp+16 domain type, sp+24 epoch, sp+32 domain (32),
  * sp+64 type, object, key, signature, scratch.
  */
@@ -747,7 +747,7 @@ SPEC_END validate_bls_to_execution_change_gossip
 .endif
 
 /*
- * L0: the block of the root at x2, from store x0 and seen x1: x0 = its node or NODE_NONE, x1 = 2 for a node
+ * The block of the root at x2, from store x0 and seen x1: x0 = its node or NODE_NONE, x1 = 2 for a node
  * of the store, 1 for a block of seen, 0 when unknown, x2 = its payload status. Locals: store, seen, root.
  */
 LOCAL_FUNCTION lantern_block_lookup
@@ -2212,7 +2212,7 @@ SPEC_LEAF compute_subnet_for_data_column_sidecar
 SPEC_END compute_subnet_for_data_column_sidecar
 
 /*
- * L0: x0 = status, x1 = is_valid_merkle_branch(hash_tree_root of the x2 commitments at x1, the branch at x3,
+ * x0 = status, x1 = is_valid_merkle_branch(hash_tree_root of the x2 commitments at x1, the branch at x3,
  * KZG_COMMITMENTS_INCLUSION_PROOF_DEPTH, BLOB_KZG_COMMITMENTS_SUBTREE_INDEX, the root at x4), with scratch x0.
  * The list is hashed from a standalone copy at the end of scratch.
  * x19 scratch, x20 branch, x21 root, x22 i. Locals: L value (32), L+32 the two halves (64).
@@ -2433,7 +2433,7 @@ SPEC_END verify_partial_data_column_sidecar_kzg_proofs
 
 .if FORK >= FORK_DENEB
 /*
- * L0: the checks of a block header shared by the sidecar topics, from lantern_is_future_slot to the finalized ancestor:
+ * The checks of a block header shared by the sidecar topics, from lantern_is_future_slot to the finalized ancestor:
  * x0 = status, x1 = LANTERN_VALID, LANTERN_GOSSIP_IGNORE or LANTERN_GOSSIP_REJECT, x2 = the parent node.
  * Takes x19 seen, x20 store, x22 current_time_ms, x23 head state, x25 scratch, and x0 the SignedBeaconBlockHeader.
  * x19-x28 are the caller's and stay unchanged. Locals: sp+16 header, sp+24 parent node.

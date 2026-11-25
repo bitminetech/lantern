@@ -2,7 +2,7 @@
  * Shuffling, seeds and proposer selection, x86-64. Requirements: docs/reference/helpers.md.
  */
 
-/* L0: digest rdx = sha256 of the rsi bytes at rdi; rsi is at most 96. Locals: a ByteList (24 + 96). */
+/* Digest rdx = sha256 of the rsi bytes at rdi; rsi is at most 96. Locals: a ByteList (24 + 96). */
 LOCAL_FUNCTION lantern_sha256_short
     FRAME 128
     lea     24(%rsi), %rax                  # a ByteList: size, offset 24, count, then the bytes

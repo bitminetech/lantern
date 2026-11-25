@@ -92,7 +92,7 @@ SPEC_LEAF compute_min_epochs_for_block_requests
     ret
 SPEC_END compute_min_epochs_for_block_requests
 
-/* L0: x0 = 32 + x0 + x0 // 6, with the carry flag set on overflow. Uses x9, x10. */
+/* x0 = 32 + x0 + x0 // 6, with the carry flag set on overflow. Uses x9, x10. */
 LOCAL_FUNCTION lantern_compressed_len
     UNWIND_END_PROLOGUE
     mov     x9, #6
@@ -285,7 +285,7 @@ SPEC_END compute_max_request_data_column_sidecars
 .endif
 
 /*
- * L0: x0 = next_fork_epoch after epoch x0, config x1: the least fork epoch of altair up to this
+ * x0 = next_fork_epoch after epoch x0, config x1: the least fork epoch of altair up to this
  * fork above it, and from fulu on each BLOB_SCHEDULE epoch from FULU_FORK_EPOCH on; else
  * FAR_FUTURE_EPOCH. A leaf; uses x2-x7.
  */

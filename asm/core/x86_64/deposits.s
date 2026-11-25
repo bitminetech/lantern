@@ -60,7 +60,7 @@ VALIDATOR_LISTS PART_SPEC
     cmovb   %rax, %r9
 .endm
 
-/* L0: rax = the fewest free entries in the validator lists of state rdi. */
+/* rax = the fewest free entries in the validator lists of state rdi. */
 LOCAL_FUNCTION lantern_validator_room
     UNWIND_END_PROLOGUE
     mov     $-1, %r9
@@ -70,7 +70,7 @@ LOCAL_FUNCTION lantern_validator_room
 END_FUNCTION lantern_validator_room
 
 /*
- * L0: rax = the index of the validator of state rdi with the 48-byte public key at rsi, or -1.
+ * rax = the index of the validator of state rdi with the 48-byte public key at rsi, or -1.
  * The first 8 bytes reject most keys; then all 48 are compared. Uses rcx, rdx, r8, r9, xmm0-xmm4.
  */
 LOCAL_FUNCTION lantern_find_pubkey

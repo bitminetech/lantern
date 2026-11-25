@@ -1677,7 +1677,7 @@ LOCAL_FUNCTION lantern_node_prepare
 END_FUNCTION lantern_node_prepare
 
 /*
- * L1: with no engine call in flight, the call of the first produceBlockV3 entry in
+ * With no engine call in flight, the call of the first produceBlockV3 entry in
  * NODE_PRODUCE_PAYLOAD (node.md, Block production): a GET_PAYLOAD of payload_id when the payload
  * of its slot on the head is NODE_PAYLOAD_READY; else a forced preparation of its slot, once (a
  * second that ends with no payloadId: 500). a0 = 1 when a call went. s3 an entry, s4 its index,
@@ -1754,7 +1754,7 @@ LOCAL_FUNCTION lantern_node_produce_engine
 END_FUNCTION lantern_node_produce_engine
 
 /*
- * L1: the preparation of a payload for slot a0 on the head (node.md, Payload preparation), forced
+ * The preparation of a payload for slot a0 on the head (node.md, Payload preparation), forced
  * with a1 = 1 (a fee recipient of zero bytes when the proposer has none): a copy of the head's
  * post-state at that slot, a PREPARE_PAYLOAD work of it with the next engine id and a1 as its
  * target, and the copy's STATE_FREE; it is the call in flight. a0 = 1 when it went, 0 with no head
@@ -1890,7 +1890,7 @@ LOCAL_FUNCTION lantern_node_engine_failed
 9:  LEAVE 0
 END_FUNCTION lantern_node_engine_failed
 
-/* L1: the produceBlockV3 entry at index a0, while it waits for its payload: 500. */
+/* The produceBlockV3 entry at index a0, while it waits for its payload: 500. */
 LOCAL_FUNCTION lantern_node_produce_fail_at
     FRAME 0
     PART    t0, t1, s1, Node_api
@@ -1912,7 +1912,7 @@ LOCAL_FUNCTION lantern_node_produce_fail_at
 END_FUNCTION lantern_node_produce_fail_at
 
 /*
- * L2: the engine_getPayload body a0 (a ByteList in scratch s5, which stays short) with its
+ * The engine_getPayload body a0 (a ByteList in scratch s5, which stays short) with its
  * EngineResponse a1, for the produceBlockV3 entry at engine_target in NODE_PRODUCE_PAYLOAD: its
  * result decoded by lantern_node_payload_result into a BYTES_PUT action, whose id the entry keeps
  * as filter_index before its fold; a result that does not decode: 500, and the action goes. s3
@@ -2917,7 +2917,7 @@ LOCAL_FUNCTION lantern_node_db_append
 END_FUNCTION lantern_node_db_append
 
 /*
- * L0: a0 = the end of the block segment a0: db_block_end for db_block_segment, else backfill_end
+ * a0 = the end of the block segment a0: db_block_end for db_block_segment, else backfill_end
  * for backfill_segment, else 0, a new segment. Uses t1 only.
  */
 LOCAL_FUNCTION lantern_node_seg_end
@@ -2934,7 +2934,7 @@ LOCAL_FUNCTION lantern_node_seg_end
     ret
 END_FUNCTION lantern_node_seg_end
 
-/* L0: the NodeBlock entry a0 is free: its bytes go (a BYTES_FREE), root and parent_root all 0xff bytes. Locals: sp+0 the entry. */
+/* The NodeBlock entry a0 is free: its bytes go (a BYTES_FREE), root and parent_root all 0xff bytes. Locals: sp+0 the entry. */
 LOCAL_FUNCTION lantern_node_free_block
     FRAME 16
     sd      a0, 0(sp)
@@ -3262,7 +3262,7 @@ END_FUNCTION lantern_node_backfill_ask
 .endm
 
 /*
- * L0: the list of the body of the SignedBeaconBlock in the ByteList a0: a1 0 attester_slashings,
+ * The list of the body of the SignedBeaconBlock in the ByteList a0: a1 0 attester_slashings,
  * 1 attestations (offsets at bytes 204 and 208 of the body in every fork). a0 = its count, or
  * 2^64 - 1 when the bytes do not hold it; for an index a2 below the count, a1 the item's SSZ bytes
  * and a2 their length, else 0 and 0. Uses t0-t6, a3-a5.
@@ -3376,7 +3376,7 @@ LOCAL_FUNCTION lantern_node_votes
 END_FUNCTION lantern_node_votes
 
 /*
- * L0: the aggregate of the SignedAggregateAndProof in the ByteList a0: a0 = 0 and a1 its SSZ bytes,
+ * The aggregate of the SignedAggregateAndProof in the ByteList a0: a0 = 0 and a1 its SSZ bytes,
  * a2 their length; a0 = 2^64 - 1 when the bytes do not hold it. The message's offset is at byte 0,
  * the aggregate's at byte 8 of the message; the aggregate runs to the end. Uses t0-t3, t6.
  */
@@ -3446,7 +3446,7 @@ LOCAL_FUNCTION lantern_node_vote_due
 END_FUNCTION lantern_node_vote_due
 
 /*
- * L0: a0 = the end of the sidecar segment a0: db_sidecar_end for db_sidecar_segment, else
+ * a0 = the end of the sidecar segment a0: db_sidecar_end for db_sidecar_segment, else
  * backfill_sidecar_end for backfill_sidecar_segment, else 0, a new segment. Uses t1 only.
  */
 LOCAL_FUNCTION lantern_node_side_end
@@ -4302,7 +4302,7 @@ LOCAL_FUNCTION lantern_node_short_columns
     LEAVE 16
 END_FUNCTION lantern_node_short_columns
 
-/* L0: a0 = 1 when the block entry a0 needs blobs or columns it does not hold (node.md), else 0. s4 the entry, s7 its blob count. */
+/* a0 = 1 when the block entry a0 needs blobs or columns it does not hold (node.md), else 0. s4 the entry, s7 its blob count. */
 LOCAL_FUNCTION lantern_node_lacks_sidecars
     ENTER 0
     mv      s4, a0
@@ -7228,7 +7228,7 @@ LOCAL_FUNCTION lantern_node_topics
 END_FUNCTION lantern_node_topics
 
 /*
- * L0: a0 = the attestation subnets of the node at epoch a0 (node.md), bit i for subnet i:
+ * a0 = the attestation subnets of the node at epoch a0 (node.md), bit i for subnet i:
  * lantern_compute_subscribed_subnet of the node ID for each index below SUBNETS_PER_NODE, of the
  * fork of the store's slot; 0 on a failure. Apart from lantern_node_subscribe, as FORK_CALL takes the
  * labels 81 to 89. s3 the index, s4 the subnets, s7 the fork. Locals: L the epoch, L+8 the index,
@@ -7270,7 +7270,7 @@ LOCAL_FUNCTION lantern_node_attnets
     LEAVE 32
 END_FUNCTION lantern_node_attnets
 
-/* L0: attnets takes the subnets of epoch a0; a change adds 1 to metadata_seq. */
+/* Attnets takes the subnets of epoch a0; a change adds 1 to metadata_seq. */
 LOCAL_FUNCTION lantern_node_attnets_set
     FRAME 0
     call    lantern_node_attnets
@@ -7284,7 +7284,7 @@ LOCAL_FUNCTION lantern_node_attnets_set
 END_FUNCTION lantern_node_attnets_set
 
 /*
- * L0: an event a1 (SUBSCRIBE or UNSUBSCRIBE) of the topic a2 (beacon_attestation or
+ * An event a1 (SUBSCRIBE or UNSUBSCRIBE) of the topic a2 (beacon_attestation or
  * sync_committee) of each subnet of a0, at fork_digest and at next_digest when it is not 0. s3 the
  * subnets, s4 the event, s5 the topic, s7 a subnet.
  */
@@ -7316,7 +7316,7 @@ LOCAL_FUNCTION lantern_node_subnet_topics
 END_FUNCTION lantern_node_subnet_topics
 
 /*
- * L0: a0 = the beacon_attestation subnets the node keeps: those of attnets, and each whose
+ * a0 = the beacon_attestation subnets the node keeps: those of attnets, and each whose
  * subnet_until is above the store s2's slot (an aggregator's subscription).
  */
 LOCAL_FUNCTION lantern_node_subnets_want
@@ -7341,7 +7341,7 @@ LOCAL_FUNCTION lantern_node_subnets_want
     UNFRAME 0
 END_FUNCTION lantern_node_subnets_want
 
-/* L0: a0 = the sync_committee subnets the node keeps: each whose sync_until is above the epoch of the store s2's slot. */
+/* a0 = the sync_committee subnets the node keeps: each whose sync_until is above the epoch of the store s2's slot. */
 LOCAL_FUNCTION lantern_node_syncnets_want
     FRAME 0
     mv      a0, s2
@@ -7442,7 +7442,7 @@ LOCAL_FUNCTION lantern_node_column_raise_topics
 9:  LEAVE 0
 END_FUNCTION lantern_node_column_raise_topics
 
-/* L0: a0 = the NODE_BLOB_VALID entries of the root at a0. Uses t0-t4, a6, a7. */
+/* a0 = the NODE_BLOB_VALID entries of the root at a0. Uses t0-t4, a6, a7. */
 LOCAL_FUNCTION lantern_node_recon_count
     UNWIND_END_PROLOGUE
     PART    t0, t1, s1, Node_blobs
@@ -7461,7 +7461,7 @@ LOCAL_FUNCTION lantern_node_recon_count
 END_FUNCTION lantern_node_recon_count
 
 /*
- * L1: the reconstruction (node.md), at the quiet point: with recon_state 0, the first root of
+ * The reconstruction (node.md), at the quiet point: with recon_state 0, the first root of
  * NODE_BLOB_VALID column sidecars of a fulu slot, NUMBER_OF_COLUMNS / 2 or more and fewer than
  * NUMBER_OF_COLUMNS, not recon_failed, a third of its slot past: the join of their bytes, the
  * buffer of all sidecars, the work; with recon_state 2, a PUBLISH_SIDECAR of the next column the
@@ -12502,7 +12502,7 @@ FUNCTION lantern_node_run
     LEAVE 192
 END_FUNCTION lantern_node_run
 
-/* L0: the counts of the votes of the block in data a0, at NodeEvent_index and NodeEvent_root of the event a1. Locals: sp+0 data, sp+8 event. */
+/* The counts of the votes of the block in data a0, at NodeEvent_index and NodeEvent_root of the event a1. Locals: sp+0 data, sp+8 event. */
 LOCAL_FUNCTION lantern_node_vote_counts
     FRAME 16
     sd      a0, 0(sp)
@@ -12528,7 +12528,7 @@ LOCAL_FUNCTION lantern_node_vote_counts
 END_FUNCTION lantern_node_vote_counts
 
 /*
- * L1: the BLOCK_ATTESTATION or BLOCK_SLASHING work a0 of lantern_node_run (node.md): the item at
+ * The BLOCK_ATTESTATION or BLOCK_SLASHING work a0 of lantern_node_run (node.md): the item at
  * index arg of the block's body, as a ByteList at the end of scratch, then node_attestation with
  * is_from_block 1 of the fork of its slot, or node_attester_slashing of the fork of the store's
  * slot. The run's s1 node, s2 store, s3 work, s4 state_a, s5 data, s6 scratch, s7 event. s8 the
@@ -12627,7 +12627,7 @@ LOCAL_FUNCTION lantern_node_run_vote
 END_FUNCTION lantern_node_run_vote
 
 /*
- * L0: the BACKFILL work (node.md): node_block_root of the fork of the block's slot of data a0, its
+ * The BACKFILL work (node.md): node_block_root of the fork of the block's slot of data a0, its
  * root at NodeEvent_root of the event a3; then, for LANTERN_VALID, node_backfill of the fork of the
  * slot of the state a1, with scratch a2. s3 data, s4 state, s5 scratch, s6 event. Apart from
  * lantern_node_run, as FORK_CALL takes the labels 81 to 89.

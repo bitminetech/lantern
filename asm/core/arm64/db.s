@@ -29,7 +29,7 @@ FUNCTION lantern_db_size
     ret
 END_FUNCTION lantern_db_size
 
-/* L0: the parts of the Db x0 for the room x1: slots at DB_FIXED, then roots; their counts the capacities. Uses x9-x11. */
+/* The parts of the Db x0 for the room x1: slots at DB_FIXED, then roots; their counts the capacities. Uses x9-x11. */
 LOCAL_FUNCTION lantern_db_layout
     UNWIND_END_PROLOGUE
     ldr     x9, [x1, #DbRoom_slots]
@@ -42,7 +42,7 @@ LOCAL_FUNCTION lantern_db_layout
     ret
 END_FUNCTION lantern_db_layout
 
-/* L0: the root at x1 goes in the root table of the Db x0 with the value x2, at the first free entry from its first 8 bytes. Uses x9-x12. */
+/* The root at x1 goes in the root table of the Db x0 with the value x2, at the first free entry from its first 8 bytes. Uses x9-x12. */
 LOCAL_FUNCTION lantern_db_insert
     UNWIND_END_PROLOGUE
     ldp     x9, x10, [x0, #Db_roots]
@@ -59,7 +59,7 @@ LOCAL_FUNCTION lantern_db_insert
     ret
 END_FUNCTION lantern_db_insert
 
-/* L0: x0 = the entry index (slot - first_slot) of the block of the root at x1 in the Db x0, or 2^64 - 1. Uses x2, x3, x9-x17. */
+/* x0 = the entry index (slot - first_slot) of the block of the root at x1 in the Db x0, or 2^64 - 1. Uses x2, x3, x9-x17. */
 LOCAL_FUNCTION lantern_db_find
     UNWIND_END_PROLOGUE
     ldp     x9, x10, [x0, #Db_roots]
@@ -97,7 +97,7 @@ LOCAL_FUNCTION lantern_db_find
 END_FUNCTION lantern_db_find
 
 /*
- * L1: the root table of the Db x0 again from its entries: zeroed, then the root of each block;
+ * The root table of the Db x0 again from its entries: zeroed, then the root of each block;
  * blocks their count. x19 db, x20 an entry, x21 its index, x22 the entries in use.
  */
 LOCAL_FUNCTION lantern_db_rehash
@@ -498,7 +498,7 @@ FUNCTION lantern_db_drop_sidecars
     LEAVE 0
 END_FUNCTION lantern_db_drop_sidecars
 
-/* L0: x0 = the u64 of the x2 bytes at x1 (as a signed count: 8 or more a whole word, 0 or less none), zero above them. Uses x9-x11. */
+/* x0 = the u64 of the x2 bytes at x1 (as a signed count: 8 or more a whole word, 0 or less none), zero above them. Uses x9-x11. */
 LOCAL_FUNCTION lantern_db_word
     UNWIND_END_PROLOGUE
     cmp     x2, #8
@@ -521,7 +521,7 @@ LOCAL_FUNCTION lantern_db_word
 END_FUNCTION lantern_db_word
 
 /*
- * L1: x0 = 1 when word x1 of the state differs from the patch's start, else 0 (db.md, the state
+ * x0 = 1 when word x1 of the state differs from the patch's start, else 0 (db.md, the state
  * diffs). Reads x19 the base's bytes, x20 min(its count, the state's), x21 the state's bytes, x22
  * their count. Uses x1, x2, x9-x14.
  */

@@ -10,7 +10,7 @@
     RODATA
 .include "jsonrpc_names.inc"
 
-/* L0: x0 = the cursor x0 after any whitespace. Uses x9. */
+/* x0 = the cursor x0 after any whitespace. Uses x9. */
 LOCAL_FUNCTION lantern_jws
     UNWIND_END_PROLOGUE
 1:  cmp     x0, x19
@@ -30,7 +30,7 @@ LOCAL_FUNCTION lantern_jws
 END_FUNCTION lantern_jws
 
 /*
- * L0: a string at the cursor x0, its quote included: x0 = the cursor after it, x1 = where its
+ * A string at the cursor x0, its quote included: x0 = the cursor after it, x1 = where its
  * bytes start, x2 = their count, x3 = 1 when it has an escape. Uses x9, x10.
  */
 LOCAL_FUNCTION lantern_jstring
@@ -87,7 +87,7 @@ LOCAL_FUNCTION lantern_jstring
     ret
 END_FUNCTION lantern_jstring
 
-/* L0: a number at the cursor x0, as RFC 8259 writes it: x0 = the cursor after it, x1 = 1 when it is digits only. Uses x9, x10. */
+/* A number at the cursor x0, as RFC 8259 writes it: x0 = the cursor after it, x1 = 1 when it is digits only. Uses x9, x10. */
 LOCAL_FUNCTION lantern_jnumber
     UNWIND_END_PROLOGUE
     mov     x1, #1
@@ -163,7 +163,7 @@ LOCAL_FUNCTION lantern_jnumber
     ret
 END_FUNCTION lantern_jnumber
 
-/* L0: whether the x2 bytes at x1 are the literal label: x9 = 1 or 0. Uses x10, x11. */
+/* Whether the x2 bytes at x1 are the literal label: x9 = 1 or 0. Uses x10, x11. */
 .macro JIS label
     mov     x9, #0
     cmp     x2, #\label\()_len
@@ -182,7 +182,7 @@ END_FUNCTION lantern_jnumber
 .endm
 
 /*
- * L0: the literal at the cursor x0 of the x2 bytes at x1: x0 = the cursor after it, or 0. Uses x9-x11.
+ * The literal at the cursor x0 of the x2 bytes at x1: x0 = the cursor after it, or 0. Uses x9-x11.
  */
 LOCAL_FUNCTION lantern_jliteral
     UNWIND_END_PROLOGUE
@@ -204,7 +204,7 @@ LOCAL_FUNCTION lantern_jliteral
 END_FUNCTION lantern_jliteral
 
 /*
- * L0: any value at the cursor x0, as RFC 8259 writes it: x0 = the cursor after it. Brackets nest
+ * Any value at the cursor x0, as RFC 8259 writes it: x0 = the cursor after it. Brackets nest
  * to 64 levels, their kinds in x21 (1 for an object), the depth in x22; x12 what comes next: 0 a
  * value, 1 a value or the array's end, 2 a name, 3 a name or the object's end. Uses x1-x3,
  * x9-x12.
@@ -318,7 +318,7 @@ LOCAL_FUNCTION lantern_jskip
 END_FUNCTION lantern_jskip
 
 /*
- * L0: the next member of an object, from the cursor x0 after its brace (x1 = 1) or after a
+ * The next member of an object, from the cursor x0 after its brace (x1 = 1) or after a
  * value (x1 = 0): x3 = 1 at the closing brace, x0 after it; else x0 = its value after
  * whitespace, x1 = where its name's bytes start, x2 = their count, 2^64 - 1 for a name with
  * an escape. x0 = 0 when the JSON is not valid.
@@ -362,7 +362,7 @@ LOCAL_FUNCTION lantern_jmember
 END_FUNCTION lantern_jmember
 
 /*
- * L0: DATA of x2 bytes at the cursor x0, or null when x1 = 1 allows it, to x3:
+ * DATA of x2 bytes at the cursor x0, or null when x1 = 1 allows it, to x3:
  * x0 = the cursor after it, x1 = 1 when it is not null. Uses x9-x13.
  */
 LOCAL_FUNCTION lantern_jdata_in
@@ -418,7 +418,7 @@ LOCAL_FUNCTION lantern_jdata_in
     UNFRAME 32
 END_FUNCTION lantern_jdata_in
 
-/* L0: a PayloadStatusV1 object at the cursor x0, into x20: x0 = the cursor after it. x23 1 when status is seen. */
+/* A PayloadStatusV1 object at the cursor x0, into x20: x0 = the cursor after it. x23 1 when status is seen. */
 LOCAL_FUNCTION lantern_jpayload_status
     ENTER 0
     cmp     x0, x19
@@ -477,7 +477,7 @@ LOCAL_FUNCTION lantern_jpayload_status
     LEAVE 0
 END_FUNCTION lantern_jpayload_status
 
-/* L0: the result of the method in x21 at the cursor x0: x0 = the cursor after it. */
+/* The result of the method in x21 at the cursor x0: x0 = the cursor after it. */
 LOCAL_FUNCTION lantern_jresult
     ENTER 0
     cmp     x21, #ENGINE_METHOD_NEW_PAYLOAD
@@ -600,7 +600,7 @@ LOCAL_FUNCTION lantern_jresult
     LEAVE 0
 END_FUNCTION lantern_jresult
 
-/* L0: an error object at the cursor x0, into x20: x0 = the cursor after it. x28 1 when code is seen. */
+/* An error object at the cursor x0, into x20: x0 = the cursor after it. x28 1 when code is seen. */
 LOCAL_FUNCTION lantern_jerror
     ENTER 0
     cmp     x0, x19

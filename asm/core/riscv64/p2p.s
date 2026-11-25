@@ -93,7 +93,7 @@ SPEC_LEAF compute_min_epochs_for_block_requests
     ret
 SPEC_END compute_min_epochs_for_block_requests
 
-/* L0: a0 = 32 + a0 + a0 // 6, and a1 = 1 on overflow, else 0. Uses t0, t1. */
+/* a0 = 32 + a0 + a0 // 6, and a1 = 1 on overflow, else 0. Uses t0, t1. */
 LOCAL_FUNCTION lantern_compressed_len
     UNWIND_END_PROLOGUE
     li      t0, 6
@@ -286,7 +286,7 @@ SPEC_END compute_max_request_data_column_sidecars
 .endif
 
 /*
- * L0: a0 = next_fork_epoch after epoch a0, config a1: the least fork epoch of altair up to this
+ * a0 = next_fork_epoch after epoch a0, config a1: the least fork epoch of altair up to this
  * fork above it, and from fulu on each BLOB_SCHEDULE epoch from FULU_FORK_EPOCH on; else
  * FAR_FUTURE_EPOCH. A leaf; uses a2-a5, t0, t1.
  */

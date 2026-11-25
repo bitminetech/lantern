@@ -39,7 +39,7 @@ LOCAL_FUNCTION lantern_node_eth1_check_due
 9:  LEAVE 0
 END_FUNCTION lantern_node_eth1_check_due
 
-# L1: a0 = the start in seconds of the voting period of the store's slot (phase0 voting_period_start_time). Uses t0-t2, a7.
+# a0 = the start in seconds of the voting period of the store's slot (phase0 voting_period_start_time). Uses t0-t2, a7.
 LOCAL_FUNCTION lantern_node_eth1_period
     FRAME 0
     mv      a0, s2
@@ -56,7 +56,7 @@ LOCAL_FUNCTION lantern_node_eth1_period
     UNFRAME 0
 END_FUNCTION lantern_node_eth1_period
 
-# L0: a0 = 2 * SECONDS_PER_ETH1_BLOCK * ETH1_FOLLOW_DISTANCE of the config. Uses t0, a7.
+# a0 = 2 * SECONDS_PER_ETH1_BLOCK * ETH1_FOLLOW_DISTANCE of the config. Uses t0, a7.
 LOCAL_FUNCTION lantern_node_eth1_reach
     UNWIND_END_PROLOGUE
     LDQ     t0, s1, Node_config + CONFIG_SECONDS_PER_ETH1_BLOCK
@@ -471,7 +471,7 @@ LOCAL_FUNCTION lantern_node_eth1_block_drop
 9:  LEAVE 0
 END_FUNCTION lantern_node_eth1_block_drop
 
-# L0: a0 = the bytes of the follower's Eth1Snapshot (node.md): with eth1_state 1 its blocks, the
+# a0 = the bytes of the follower's Eth1Snapshot (node.md): with eth1_state 1 its blocks, the
 # deposits from eth1_deposit_index, at most MAX_DEPOSITS, and every leaf; else none. a1 the blocks,
 # a2 the deposits, a3 the leaves, a4 the first deposit. Uses t0-t2, a7.
 LOCAL_FUNCTION lantern_node_eth1_snapshot_size

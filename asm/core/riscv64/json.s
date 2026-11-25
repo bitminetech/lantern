@@ -1590,7 +1590,7 @@ FUNCTION lantern_engine_json_decode
 END_FUNCTION lantern_engine_json_decode
 
 /*
- * L2: (type, json, scratch, out, fault, mode): lantern_json_decode for mode 0, of the Beacon API's
+ * (type, json, scratch, out, fault, mode): lantern_json_decode for mode 0, of the Beacon API's
  * JSON; lantern_engine_json_decode for mode 1, of the Engine API's: the mode at byte 56 of scratch,
  * before the field tables. Locals: L out, L+8 the root, L+16 the mode.
  */

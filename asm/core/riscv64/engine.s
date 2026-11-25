@@ -11,7 +11,7 @@
     addi    a2, a2, 1
 .endm
 
-/* L0: lantern_base64url of the a1 bytes at a0, without padding, to a2; a2 = the end. Uses t0-t2, t6. */
+/* lantern_base64url of the a1 bytes at a0, without padding, to a2; a2 = the end. Uses t0-t2, t6. */
 LOCAL_FUNCTION lantern_base64url
     UNWIND_END_PROLOGUE
     ADDRESS t6, base64url_alphabet
@@ -58,7 +58,7 @@ LOCAL_FUNCTION lantern_base64url
 4:  ret
 END_FUNCTION lantern_base64url
 
-/* L0: the decimal digits of a0 to a1; a1 = the end. Uses t0-t3. */
+/* The decimal digits of a0 to a1; a1 = the end. Uses t0-t3. */
 LOCAL_FUNCTION lantern_decimal
     UNWIND_END_PROLOGUE
     li      t3, 10                          # count the digits, then write them from the last
@@ -162,7 +162,7 @@ FUNCTION lantern_jwt_token
     LEAVE 64
 END_FUNCTION lantern_jwt_token
 
-/* L0: the a1 bytes at a0 to a2; a2 = the end. Uses t0. */
+/* The a1 bytes at a0 to a2; a2 = the end. Uses t0. */
 LOCAL_FUNCTION lantern_put_bytes
     UNWIND_END_PROLOGUE
     beqz    a1, 2f
@@ -235,7 +235,7 @@ FUNCTION lantern_http_post
     LEAVE 32
 END_FUNCTION lantern_http_post
 
-/* L0: a0 = the position of the CR LF at or after a2 in the a1 bytes at a0, or 2^64 - 1. Uses t0-t2. */
+/* a0 = the position of the CR LF at or after a2 in the a1 bytes at a0, or 2^64 - 1. Uses t0-t2. */
 LOCAL_FUNCTION lantern_find_crlf
     UNWIND_END_PROLOGUE
     mv      t0, a2

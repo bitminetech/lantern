@@ -254,7 +254,7 @@ END_FUNCTION lantern_upgrade_header
 .endif
 
 .if FORK == FORK_ELECTRA
-/* L0: rax = the pending deposits that upgrade_to_electra appends for the state before rdi. A leaf. */
+/* rax = the pending deposits that upgrade_to_electra appends for the state before rdi. A leaf. */
 LOCAL_FUNCTION lantern_upgrade_deposit_count
     UNWIND_END_PROLOGUE
     PART    %rsi, %rcx, %rdi, PRE_BeaconState_validators

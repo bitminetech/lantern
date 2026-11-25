@@ -11,7 +11,7 @@
     add     %rcx, %rax
 .endm
 
-# L0: rax = the first entry or record of part rsi of the store rdi. Uses rcx.
+# rax = the first entry or record of part rsi of the store rdi. Uses rcx.
 LOCAL_FUNCTION lantern_lc_part
     UNWIND_END_PROLOGUE
     mov     $LC_STORE_FIXED, %eax
@@ -25,7 +25,7 @@ LOCAL_FUNCTION lantern_lc_part
     ret
 END_FUNCTION lantern_lc_part
 
-# L0: rcx = the bytes of an entry or record of part rsi.
+# rcx = the bytes of an entry or record of part rsi.
 LOCAL_FUNCTION lantern_lc_mem
     UNWIND_END_PROLOGUE
     mov     $LcBlock__mem, %ecx
@@ -50,7 +50,7 @@ LOCAL_FUNCTION lantern_lc_mem
 1:  ret
 END_FUNCTION lantern_lc_mem
 
-# L1: rax = entry or record rdx (an index) of part rsi of the store rdi; rdi, rsi, rdx, r9 kept. Uses rcx, r8.
+# rax = entry or record rdx (an index) of part rsi of the store rdi; rdi, rsi, rdx, r9 kept. Uses rcx, r8.
 LOCAL_FUNCTION lantern_lc_at
     FRAME 0
     call    lantern_lc_part
@@ -61,7 +61,7 @@ LOCAL_FUNCTION lantern_lc_at
     UNFRAME 0
 END_FUNCTION lantern_lc_at
 
-# L1: rax = record rdx (a reference, not 0) of part rsi of the store rdi; rdi, rsi, rdx, r9 kept. Uses rcx, r8.
+# rax = record rdx (a reference, not 0) of part rsi of the store rdi; rdi, rsi, rdx, r9 kept. Uses rcx, r8.
 LOCAL_FUNCTION lantern_lc_ref
     FRAME 0
     dec     %rdx
@@ -70,7 +70,7 @@ LOCAL_FUNCTION lantern_lc_ref
     UNFRAME 0
 END_FUNCTION lantern_lc_ref
 
-# L1: rax = the reference of a free record of part rsi of the store rdi, now LC_USED; 0 with none. Uses rcx, rdx, r8.
+# rax = the reference of a free record of part rsi of the store rdi, now LC_USED; 0 with none. Uses rcx, rdx, r8.
 LOCAL_FUNCTION lantern_lc_alloc
     FRAME 0
     call    lantern_lc_part
@@ -91,7 +91,7 @@ LOCAL_FUNCTION lantern_lc_alloc
     UNFRAME 0
 END_FUNCTION lantern_lc_alloc
 
-# L1: rax = the free records of part rsi of the store rdi. Uses rcx, rdx, r8, r9.
+# rax = the free records of part rsi of the store rdi. Uses rcx, rdx, r8, r9.
 LOCAL_FUNCTION lantern_lc_free_count
     FRAME 0
     call    lantern_lc_part
@@ -111,7 +111,7 @@ LOCAL_FUNCTION lantern_lc_free_count
     UNFRAME 0
 END_FUNCTION lantern_lc_free_count
 
-# L1: record rdx (a reference, or 0 for none) of part rsi of the store rdi becomes LC_MARKED. Uses rax, rcx, r8.
+# Record rdx (a reference, or 0 for none) of part rsi of the store rdi becomes LC_MARKED. Uses rax, rcx, r8.
 LOCAL_FUNCTION lantern_lc_mark
     FRAME 0
     test    %rdx, %rdx
@@ -121,7 +121,7 @@ LOCAL_FUNCTION lantern_lc_mark
 1:  UNFRAME 0
 END_FUNCTION lantern_lc_mark
 
-# L1: rbx's marks of field off of the entry rbp: lantern_lc_mark of part, with the store rbx.
+# rbx's marks of field off of the entry rbp: lantern_lc_mark of part, with the store rbx.
 .macro LC_MARK_FIELD part, off
     mov     %rbx, %rdi
     mov     $\part, %esi
@@ -129,7 +129,7 @@ END_FUNCTION lantern_lc_mark
     call    lantern_lc_mark
 .endm
 
-# L1: the records of the store rdi that nothing refers to become LC_FREE (LcStore, Rules). rbx the
+# The records of the store rdi that nothing refers to become LC_FREE (LcStore, Rules). rbx the
 # store, rbp an entry or record, r12 the ones left, r13 the part, r14 its bytes.
 LOCAL_FUNCTION lantern_lc_collect
     ENTER 0
@@ -210,7 +210,7 @@ LOCAL_FUNCTION lantern_lc_collect
     LEAVE 0
 END_FUNCTION lantern_lc_collect
 
-# L1: rax = LANTERN_OK when the store rdi has rsi free headers, rdx committees and rcx updates, once
+# rax = LANTERN_OK when the store rdi has rsi free headers, rdx committees and rcx updates, once
 # the records nothing refers to are freed; else LANTERN_BUFFER_TOO_SMALL. rbx the store, rbp, r12
 # and r13 the needs, r14 1 once collected, r15 the part.
 LOCAL_FUNCTION lantern_lc_reserve
@@ -245,7 +245,7 @@ LOCAL_FUNCTION lantern_lc_reserve
     LEAVE 0
 END_FUNCTION lantern_lc_reserve
 
-# L1: rax = the index plus 1 of the LcBlock of the root at rsi in the store rdi, or 0. Uses rcx, rdx, rsi, r8, r9, r11, xmm0-xmm2.
+# rax = the index plus 1 of the LcBlock of the root at rsi in the store rdi, or 0. Uses rcx, rdx, rsi, r8, r9, r11, xmm0-xmm2.
 LOCAL_FUNCTION lantern_lc_find_block
     FRAME 0
     mov     LcStore_blocks(%rdi), %r9
@@ -265,7 +265,7 @@ LOCAL_FUNCTION lantern_lc_find_block
     UNFRAME 0
 END_FUNCTION lantern_lc_find_block
 
-# L1: rax = the entry (index plus 1) of the highest slot at most rdx along the parents from entry rsi
+# rax = the entry (index plus 1) of the highest slot at most rdx along the parents from entry rsi
 # of the store rdi, or 0. Uses rcx, rdx, rsi, r8, r9.
 LOCAL_FUNCTION lantern_lc_ancestor
     FRAME 0
@@ -285,7 +285,7 @@ LOCAL_FUNCTION lantern_lc_ancestor
     UNFRAME 0
 END_FUNCTION lantern_lc_ancestor
 
-# L1: rax = the LcFinalized of the highest slot at most rsi and at least historical_tail_slot in the store rdi, or 0. Uses rcx, rdx, rsi, r8, r9.
+# rax = the LcFinalized of the highest slot at most rsi and at least historical_tail_slot in the store rdi, or 0. Uses rcx, rdx, rsi, r8, r9.
 LOCAL_FUNCTION lantern_lc_finalized_at
     FRAME 0
     mov     LcStore_finalized(%rdi), %rdx
@@ -309,7 +309,7 @@ LOCAL_FUNCTION lantern_lc_finalized_at
     UNFRAME 0
 END_FUNCTION lantern_lc_finalized_at
 
-# L0: rax = the set bits of the sync_committee_bits at rdi. Uses rcx, rdx, rsi.
+# rax = the set bits of the sync_committee_bits at rdi. Uses rcx, rdx, rsi.
 LOCAL_FUNCTION lantern_lc_participants
     UNWIND_END_PROLOGUE
     xor     %eax, %eax
@@ -337,7 +337,7 @@ END_FUNCTION lantern_lc_participants
     add     $(6), %edx
 .endm
 
-# L0: rax = 1 when the rdx bytes at rdi and rsi are equal, rdx a multiple of 8; else 0. Uses rcx.
+# rax = 1 when the rdx bytes at rdi and rsi are equal, rdx a multiple of 8; else 0. Uses rcx.
 LOCAL_FUNCTION lantern_lc_equal
     UNWIND_END_PROLOGUE
 1:  test    %rdx, %rdx
@@ -354,7 +354,7 @@ LOCAL_FUNCTION lantern_lc_equal
     ret
 END_FUNCTION lantern_lc_equal
 
-# L1: rax = an LcCommittee reference of the sync committee bytes rsi in the store rdi: rdx or rcx
+# rax = an LcCommittee reference of the sync committee bytes rsi in the store rdi: rdx or rcx
 # (each a reference or 0) when its bytes are equal, else a new record. rbx the store, rbp the
 # bytes, r12 and r13 the candidates, r14 the reference.
 LOCAL_FUNCTION lantern_lc_committee
@@ -396,7 +396,7 @@ LOCAL_FUNCTION lantern_lc_committee
     LEAVE 0
 END_FUNCTION lantern_lc_committee
 
-# L1: hash_tree_root of the BeaconBlockHeader at rdi (its 112 SSZ bytes) at rsi. rbx the header,
+# hash_tree_root of the BeaconBlockHeader at rdi (its 112 SSZ bytes) at rsi. rbx the header,
 # rbp out, r12 the 8 chunks, r13 the pairs of the level, r14 the pair. Locals: L a ByteList, L + 32
 # a digest, L + 64 the chunks.
 LOCAL_FUNCTION lantern_lc_beacon_root
@@ -441,7 +441,7 @@ LOCAL_FUNCTION lantern_lc_beacon_root
     LEAVE 320
 END_FUNCTION lantern_lc_beacon_root
 
-# L1: rax = a new LcHeader of the fork rsi in the store rdi (reserved before), the empty header of
+# rax = a new LcHeader of the fork rsi in the store rdi (reserved before), the empty header of
 # the fork: lantern_upgrade_lc_header of 112 zero bytes from altair. rbx the store, rbp the fork,
 # r12 the reference. Locals: L the ByteList of the zero bytes.
 LOCAL_FUNCTION lantern_lc_empty_header
@@ -473,7 +473,7 @@ LOCAL_FUNCTION lantern_lc_empty_header
     LEAVE 144
 END_FUNCTION lantern_lc_empty_header
 
-# L1: rax = a new LcUpdate (reserved before, with one LcHeader) in the store rdi: the update of
+# rax = a new LcUpdate (reserved before, with one LcHeader) in the store rdi: the update of
 # entry rsi (light-client.md, The update of an entry) with the signature slot rdx, the sync
 # aggregate at rcx and the LcCommittee r8 (0: a finality update). rbx the store, rbp the entry, r12
 # the update's reference, r13 the update, r14 its fork, r15 a finalized entry or header; S7 the
@@ -621,7 +621,7 @@ LOCAL_FUNCTION lantern_lc_better_parts
     LEAVE 0
 END_FUNCTION lantern_lc_better_parts
 
-# L1: rax = 1 when lantern_is_better_update of the LcUpdate rsi's fork gives 1 for it and the
+# rax = 1 when lantern_is_better_update of the LcUpdate rsi's fork gives 1 for it and the
 # LcUpdate rdx upgraded to that fork, in the store rdi with the scratch rcx (LC_COMPARE_SCRATCH
 # bytes, checked before); else 0. rbx the store, rbp the new update, r12 the old one's reference,
 # r13 the scratch's buffers, r14 the new update's fork, r15 the old one's fork; S7 the old update.
@@ -701,7 +701,7 @@ LOCAL_FUNCTION lantern_lc_better
     LEAVE 80
 END_FUNCTION lantern_lc_better
 
-# L1: rax = status: the LcBlock of the block rcx (ByteList) with its post-state rdx in the store
+# rax = status: the LcBlock of the block rcx (ByteList) with its post-state rdx in the store
 # rdi, the config rsi, the StateCache r8 (or 0), the scratch r9; with rax 1 the anchor of
 # lantern_lc_store_init, else lantern_lc_on_block. rbx the store, rbp config, r12 state, r13 block,
 # r14 cache, r15 scratch; S7 the new entry, S8 the block's fork, S9 the header's reference, S10 the
@@ -959,7 +959,7 @@ LOCAL_FUNCTION lantern_lc_add_block
     LEAVE 80
 END_FUNCTION lantern_lc_add_block
 
-# L1: an LcBootstrap of the LcFinalized rsi in the store rdi (room checked before), when the store
+# An LcBootstrap of the LcFinalized rsi in the store rdi (room checked before), when the store
 # holds none of its root and holds its LcBlock with data. rbx the store, rbp the LcFinalized, r12
 # the bootstraps, r13 their count, r14 the index, r15 the entry.
 LOCAL_FUNCTION lantern_lc_add_bootstrap
@@ -1010,7 +1010,7 @@ LOCAL_FUNCTION lantern_lc_add_bootstrap
 9:  LEAVE 0
 END_FUNCTION lantern_lc_add_bootstrap
 
-# L1: the LcPeriod of period rsi in the store rdi refers to update rdx (room checked before); with
+# The LcPeriod of period rsi in the store rdi refers to update rdx (room checked before); with
 # rdx 0, the period has none. rbx the store, rbp the period, r12 the update, r13 the periods, r14
 # their count, r15 the index.
 LOCAL_FUNCTION lantern_lc_set_period
@@ -1069,7 +1069,7 @@ LOCAL_FUNCTION lantern_lc_set_period
 9:  LEAVE 0
 END_FUNCTION lantern_lc_set_period
 
-# L1: the LcBlock entries of slots below rsi in the store rdi go, with the scratch rdx (8 bytes for
+# The LcBlock entries of slots below rsi in the store rdi go, with the scratch rdx (8 bytes for
 # each entry, checked before) for their new indices. rbx the store, rbp the slot, r12 the indices,
 # r13 the entries, r14 their count, r15 the index; S7 the kept ones.
 LOCAL_FUNCTION lantern_lc_prune

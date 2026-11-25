@@ -132,7 +132,7 @@ SPEC_FUNCTION process_voluntary_exit
 SPEC_END process_voluntary_exit
 
 /*
- * L0: verify a BLS signature over a signing root. a0 public key, a1 signature,
+ * Verify a BLS signature over a signing root. a0 public key, a1 signature,
  * a2 an 8-aligned 56-byte buffer whose last 32 bytes hold the root (its first 24 become a
  * ByteList header), a3 scratch. Returns a0 status, a1 valid. Locals: sp+0 valid.
  */

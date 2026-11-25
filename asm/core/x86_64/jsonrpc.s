@@ -11,7 +11,7 @@
     RODATA
 .include "jsonrpc_names.inc"
 
-/* L0: rdi = the cursor rdi after any whitespace. Uses eax. */
+/* rdi = the cursor rdi after any whitespace. Uses eax. */
 LOCAL_FUNCTION lantern_jws
     UNWIND_END_PROLOGUE
 1:  cmp     %rbx, %rdi
@@ -31,7 +31,7 @@ LOCAL_FUNCTION lantern_jws
 END_FUNCTION lantern_jws
 
 /*
- * L0: a string at the cursor rdi, its quote included: rdi = the cursor after it, rsi = where its
+ * A string at the cursor rdi, its quote included: rdi = the cursor after it, rsi = where its
  * bytes start, rdx = their count, rcx = 1 when it has an escape. Uses rax, r8, r9.
  */
 LOCAL_FUNCTION lantern_jstring
@@ -91,7 +91,7 @@ LOCAL_FUNCTION lantern_jstring
     ret
 END_FUNCTION lantern_jstring
 
-/* L0: a number at the cursor rdi, as RFC 8259 writes it: rdi = the cursor after it, rsi = 1 when it is digits only. Uses rax, r8. */
+/* A number at the cursor rdi, as RFC 8259 writes it: rdi = the cursor after it, rsi = 1 when it is digits only. Uses rax, r8. */
 LOCAL_FUNCTION lantern_jnumber
     UNWIND_END_PROLOGUE
     mov     $1, %esi
@@ -185,7 +185,7 @@ END_FUNCTION lantern_jnumber
 93:
 .endm
 
-/* L0: the literal at the cursor rdi of the rdx bytes at rsi: rdi = the cursor after it, or 0. Uses rax, r8. */
+/* The literal at the cursor rdi of the rdx bytes at rsi: rdi = the cursor after it, or 0. Uses rax, r8. */
 LOCAL_FUNCTION lantern_jliteral
     UNWIND_END_PROLOGUE
     mov     %rbx, %rax
@@ -206,7 +206,7 @@ LOCAL_FUNCTION lantern_jliteral
 END_FUNCTION lantern_jliteral
 
 /*
- * L0: any value at the cursor rdi, as RFC 8259 writes it: rdi = the cursor after it. Brackets nest
+ * Any value at the cursor rdi, as RFC 8259 writes it: rdi = the cursor after it. Brackets nest
  * to 64 levels, their kinds in r13 (1 for an object), the depth in r14; r10 what comes next: 0 a
  * value, 1 a value or the array's end, 2 a name, 3 a name or the object's end. Uses rax, rcx, rdx,
  * rsi, r8, r9, r10.
@@ -332,7 +332,7 @@ LOCAL_FUNCTION lantern_jskip
 END_FUNCTION lantern_jskip
 
 /*
- * L0: the next member of an object, from the cursor rdi after its brace (rsi = 1) or after a
+ * The next member of an object, from the cursor rdi after its brace (rsi = 1) or after a
  * value (rsi = 0): rcx = 1 at the closing brace, rdi after it; else rdi = its value after
  * whitespace, rsi = where its name's bytes start, rdx = their count, 2^64 - 1 for a name with
  * an escape. rdi = 0 when the JSON is not valid. Uses rax, r8, r9, r11.
@@ -375,7 +375,7 @@ LOCAL_FUNCTION lantern_jmember
 END_FUNCTION lantern_jmember
 
 /*
- * L0: DATA of rdx bytes at the cursor rdi, or null when rsi = 1 allows it, to rcx:
+ * DATA of rdx bytes at the cursor rdi, or null when rsi = 1 allows it, to rcx:
  * rdi = the cursor after it, rsi = 1 when it is not null. Uses rax, rdx, r8-r11.
  */
 LOCAL_FUNCTION lantern_jdata_in
@@ -435,7 +435,7 @@ LOCAL_FUNCTION lantern_jdata_in
 END_FUNCTION lantern_jdata_in
 
 /*
- * L0: an entry of the table at r15 (a length byte and the bytes, then a 0 byte) that the rdx
+ * An entry of the table at r15 (a length byte and the bytes, then a 0 byte) that the rdx
  * bytes at rsi match: rax = its index, or 2^64 - 1. Uses r8, r9, r10, r11.
  */
 LOCAL_FUNCTION lantern_jtable
@@ -463,7 +463,7 @@ LOCAL_FUNCTION lantern_jtable
     ret
 END_FUNCTION lantern_jtable
 
-/* L0: a PayloadStatusV1 object at the cursor rdi, into rbp: rdi = the cursor after it. r13 1 when status is seen. */
+/* A PayloadStatusV1 object at the cursor rdi, into rbp: rdi = the cursor after it. r13 1 when status is seen. */
 LOCAL_FUNCTION lantern_jpayload_status
     ENTER 0
     cmp     %rbx, %rdi
@@ -517,7 +517,7 @@ LOCAL_FUNCTION lantern_jpayload_status
     LEAVE 0
 END_FUNCTION lantern_jpayload_status
 
-/* L0: the result of the method in r12 at the cursor rdi, r15 the body's first byte: rdi = the cursor after it. */
+/* The result of the method in r12 at the cursor rdi, r15 the body's first byte: rdi = the cursor after it. */
 LOCAL_FUNCTION lantern_jresult
     ENTER 0
     cmp     $ENGINE_METHOD_NEW_PAYLOAD, %r12
@@ -639,7 +639,7 @@ LOCAL_FUNCTION lantern_jresult
     LEAVE 0
 END_FUNCTION lantern_jresult
 
-/* L0: an error object at the cursor rdi, into rbp: rdi = the cursor after it. r14 1 when code is seen. */
+/* An error object at the cursor rdi, into rbp: rdi = the cursor after it. r14 1 when code is seen. */
 LOCAL_FUNCTION lantern_jerror
     ENTER 0
     cmp     %rbx, %rdi

@@ -39,7 +39,7 @@ route_k_null:
 77: mv      \reg, \tmp
 .endm
 
-/* L0: a0 = 1 when each % of the a1 bytes at a0 is followed by two hex digits, else 0. A leaf. Uses t0-t5. */
+/* a0 = 1 when each % of the a1 bytes at a0 is followed by two hex digits, else 0. A leaf. Uses t0-t5. */
 LOCAL_FUNCTION lantern_route_pct_ok
     UNWIND_END_PROLOGUE
     li      t0, 0
@@ -64,7 +64,7 @@ LOCAL_FUNCTION lantern_route_pct_ok
 END_FUNCTION lantern_route_pct_ok
 
 /*
- * L0: the a1 bytes at a0, percent-decoded (each % is followed by two hex digits), to a2: at most a3
+ * The a1 bytes at a0, percent-decoded (each % is followed by two hex digits), to a2: at most a3
  * bytes written; a0 = the decoded length, which may pass a3. A leaf. Uses t0-t6.
  */
 LOCAL_FUNCTION lantern_route_decode
@@ -94,7 +94,7 @@ LOCAL_FUNCTION lantern_route_decode
 END_FUNCTION lantern_route_decode
 
 /*
- * L0: one item of a list value: the bytes at a0 from index a1 to index a2, percent-decoded, up to
+ * One item of a list value: the bytes at a0 from index a1 to index a2, percent-decoded, up to
  * the first decoded `,`, to a3 with at most a4 bytes written. a0 = the index after the item and its
  * comma, a1 = the item's decoded length (it may pass a4), a2 = 1 when a comma ended it. A leaf. Uses a5, t0-t6.
  */
@@ -129,7 +129,7 @@ LOCAL_FUNCTION lantern_route_next_item
     ret
 END_FUNCTION lantern_route_next_item
 
-/* L0: the a1 bytes at a0 as a decimal number below 2^64: a0 = 0 and a1 = its value, else a0 = 1. A leaf. Uses t0-t4. */
+/* The a1 bytes at a0 as a decimal number below 2^64: a0 = 0 and a1 = its value, else a0 = 1. A leaf. Uses t0-t4. */
 LOCAL_FUNCTION lantern_route_number
     UNWIND_END_PROLOGUE
     beqz    a1, 8f
@@ -155,7 +155,7 @@ LOCAL_FUNCTION lantern_route_number
     ret
 END_FUNCTION lantern_route_number
 
-/* L0: the a1 bytes at a0 as 0x and the hex of a2 bytes: a0 = 0 and the bytes at a3, else a0 = 1. A leaf. Uses t0-t3. */
+/* The a1 bytes at a0 as 0x and the hex of a2 bytes: a0 = 0 and the bytes at a3, else a0 = 1. A leaf. Uses t0-t3. */
 LOCAL_FUNCTION lantern_route_hex
     UNWIND_END_PROLOGUE
     slli    t0, a2, 1
@@ -186,7 +186,7 @@ LOCAL_FUNCTION lantern_route_hex
     ret
 END_FUNCTION lantern_route_hex
 
-/* L0: the word of api_words for parameter a0 that is the a2 bytes at a1: a0 = 1 and a1 = its value, else a0 = 0. A leaf. Uses t0-t6. */
+/* The word of api_words for parameter a0 that is the a2 bytes at a1: a0 = 1 and a1 = its value, else a0 = 0. A leaf. Uses t0-t6. */
 LOCAL_FUNCTION lantern_route_word
     UNWIND_END_PROLOGUE
     lla     t0, api_words
@@ -219,7 +219,7 @@ LOCAL_FUNCTION lantern_route_word
 END_FUNCTION lantern_route_word
 
 /*
- * L0: whether the a1 bytes at a0, a path whose percent-encoding is good, match the template of a3
+ * Whether the a1 bytes at a0, a path whose percent-encoding is good, match the template of a3
  * bytes at a2: a0 = 1 or 0. Each parameter segment goes to the list at a4: its count, then for each
  * its API_PARAM_*, start and end in the path. A leaf. Uses a5, a6, t0-t6.
  */
@@ -286,7 +286,7 @@ LOCAL_FUNCTION lantern_route_match
 END_FUNCTION lantern_route_match
 
 /*
- * L0: the a3 decoded bytes at a2 as a value of parameter a1, into ApiRoute a0; an item of a list
+ * The a3 decoded bytes at a2 as a value of parameter a1, into ApiRoute a0; an item of a list
  * goes to the 64 bytes at a4. a0 = 0, or 1 when the value breaks its type.
  * s1 out, s2 the parameter, s3 bytes, s4 length, s5 the item's place, s6 the field.
  */
@@ -472,7 +472,7 @@ LOCAL_FUNCTION lantern_route_value
 END_FUNCTION lantern_route_value
 
 /*
- * L0: the weight, 0 to 1000, that the Accept value of a1 bytes at a0 gives the media type of a3
+ * The weight, 0 to 1000, that the Accept value of a1 bytes at a0 gives the media type of a3
  * lower case bytes at a2 (lantern_api_route's rules). s1 bytes, s2 length, s3 media, s4 its length,
  * s5 the best kind of range (-1 none, 0 any type, 1 any application type, 2 the type), s6 its
  * weight, s7 an item's start, s8 its end, s9 a parameter's start, s10 a range's kind; L the item's
@@ -619,7 +619,7 @@ LOCAL_FUNCTION lantern_route_weight
 91: LEAVE 16
 END_FUNCTION lantern_route_weight
 
-/* L0: s3 past the JSON white space (space, tab, LF, CR) before s4. A leaf. Uses t0, t1. */
+/* s3 past the JSON white space (space, tab, LF, CR) before s4. A leaf. Uses t0, t1. */
 LOCAL_FUNCTION lantern_route_ws
     UNWIND_END_PROLOGUE
 1:  bgeu    s3, s4, 9f
@@ -637,7 +637,7 @@ LOCAL_FUNCTION lantern_route_ws
 9:  ret
 END_FUNCTION lantern_route_ws
 
-/* L0: a0 = 1 when the a1 bytes at a0 start the bytes at s3 (before s4), s3 then past them; else 0. A leaf. Uses t0-t2. */
+/* a0 = 1 when the a1 bytes at a0 start the bytes at s3 (before s4), s3 then past them; else 0. A leaf. Uses t0-t2. */
 LOCAL_FUNCTION lantern_route_lit
     UNWIND_END_PROLOGUE
     sub     t0, s4, s3
@@ -659,7 +659,7 @@ LOCAL_FUNCTION lantern_route_lit
 END_FUNCTION lantern_route_lit
 
 /*
- * L0: the JSON string at s3 (before s4), RFC 8259 section 7: its value, each escape decoded (a \u
+ * The JSON string at s3 (before s4), RFC 8259 section 7: its value, each escape decoded (a \u
  * of 0x80 or more as the byte 0x80), into the 200 bytes at s6 + L + 192; s3 then past it. a0 = 0,
  * or 1 when it breaks the rules; a1 = the value's length, 201 when it is longer than 200. A leaf.
  * Uses t0-t3.
@@ -738,7 +738,7 @@ LOCAL_FUNCTION lantern_route_string
     ret
 END_FUNCTION lantern_route_string
 
-/* L0: a0 = API_PARAM_ID when the a1 bytes at s6 + L + 192 are ids, API_PARAM_STATUS when they are statuses, else 0. A leaf. Uses t0-t3, a2. */
+/* a0 = API_PARAM_ID when the a1 bytes at s6 + L + 192 are ids, API_PARAM_STATUS when they are statuses, else 0. A leaf. Uses t0-t3, a2. */
 LOCAL_FUNCTION lantern_route_key
     UNWIND_END_PROLOGUE
     lla     t0, route_k_ids
@@ -765,7 +765,7 @@ LOCAL_FUNCTION lantern_route_key
 END_FUNCTION lantern_route_key
 
 /*
- * L1: null, or an array of strings, at s3 of a body that ends at s4: each string an item of the
+ * Null, or an array of strings, at s3 of a body that ends at s4: each string an item of the
  * parameter a0 (API_PARAM_ID: into the list of out s2, s9 items; API_PARAM_STATUS: its bits), its
  * bit of present (s8) set; s3 then past the value. a0 = 0, or the fault + 1. s6 the sp of
  * lantern_api_route: L+56 1 when the list has no room, L+128 an item. Locals: the parameter, an

@@ -1,9 +1,9 @@
 /*
- * Finding a block of Seen, x86-64: an L0 helper of the common object and of each fork's object.
+ * Finding a block of Seen, x86-64: a helper of the common object and of each fork's object.
  * Requirements: docs/reference/networking.md.
  */
 
-/* L0: rax = the SeenBlock of root rsi in seen rdi, or 0. A leaf; uses rcx, rdx, xmm0-xmm2, r11. */
+/* rax = the SeenBlock of root rsi in seen rdi, or 0. A leaf; uses rcx, rdx, xmm0-xmm2, r11. */
 LOCAL_FUNCTION lantern_seen_find_block
     UNWIND_END_PROLOGUE
     PART    %rax, %rcx, %rdi, Seen_blocks

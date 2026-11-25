@@ -127,7 +127,7 @@ state_root_fields:
     .text
 
 /*
- * L0: lays out the trees of the StateCache table for x0 validators, into cache x1 when it is not
+ * Lays out the trees of the StateCache table for x0 validators, into cache x1 when it is not
  * 0; x0 = the bytes of the cache. A leaf.
  */
 LOCAL_FUNCTION lantern_sr_layout
@@ -220,7 +220,7 @@ SPEC_FUNCTION state_cache_init
 SPEC_END state_cache_init
 
 .if FORK > FORK_PHASE0
-/* L0: SHA-256 of the 32 bytes at x0 and the 32 bytes at x1, to x2, which may be x0 or x1. x23 the area. */
+/* SHA-256 of the 32 bytes at x0 and the 32 bytes at x1, to x2, which may be x0 or x1. x23 the area. */
 LOCAL_FUNCTION lantern_sr_hash
     FRAME 16
     str     x2, [sp, #16]
@@ -234,7 +234,7 @@ LOCAL_FUNCTION lantern_sr_hash
     UNFRAME 16
 END_FUNCTION lantern_sr_hash
 
-/* L0: the zero hash of each depth 0 to 40 in the area at x23. x19 the next, x20 the hashes left. */
+/* The zero hash of each depth 0 to 40 in the area at x23. x19 the next, x20 the hashes left. */
 LOCAL_FUNCTION lantern_sr_zeros
     ENTER 16
     mov     x19, x23
@@ -252,7 +252,7 @@ LOCAL_FUNCTION lantern_sr_zeros
 END_FUNCTION lantern_sr_zeros
 
 /*
- * L0: the root of a field from tree x0 (a CacheTree): data x1, count x2 elements, x3 the bytes of
+ * The root of a field from tree x0 (a CacheTree): data x1, count x2 elements, x3 the bytes of
  * an element of a basic type or 0 for containers of descriptor x4, the limit's depth x5, x6 1 for
  * a list (mixed with the count), the root to x7. x0 = 0, 1 when the leaves pass the capacity, or a
  * status of ssz_hash_tree_root. x20 the cache, x21 scratch with its front's size set, x23 the area.

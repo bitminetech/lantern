@@ -5,7 +5,7 @@
     RODATA
 .include "app_options.inc"
 
-/* L0: x0 = 0 and x1 = the u64 of the decimal digits x0 to x1, one or more; else x0 = 1. Uses x9-x12. */
+/* x0 = 0 and x1 = the u64 of the decimal digits x0 to x1, one or more; else x0 = 1. Uses x9-x12. */
 LOCAL_FUNCTION lantern_app_decimal
     UNWIND_END_PROLOGUE
     cmp     x0, x1
@@ -32,7 +32,7 @@ LOCAL_FUNCTION lantern_app_decimal
 END_FUNCTION lantern_app_decimal
 
 /*
- * L0: x0 = 0 and x1 = the IPv4 address of the bytes x0 to x1, 4 decimal numbers of 0 to 255 with
+ * x0 = 0 and x1 = the IPv4 address of the bytes x0 to x1, 4 decimal numbers of 0 to 255 with
  * dots between them, its 4 bytes in order in the low bytes; else x0 = 1. Uses x9-x14.
  */
 LOCAL_FUNCTION lantern_app_ipv4
@@ -81,7 +81,7 @@ LOCAL_FUNCTION lantern_app_ipv4
 END_FUNCTION lantern_app_ipv4
 
 /*
- * L0: x0 = 0 and x1 = the bits of the metrics categories x0 to x1, names of app_categories_table
+ * x0 = 0 and x1 = the bits of the metrics categories x0 to x1, names of app_categories_table
  * with commas between them, none or more; else x0 = 1. Uses x9-x15.
  */
 LOCAL_FUNCTION lantern_app_categories

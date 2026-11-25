@@ -79,7 +79,7 @@ SPEC_END compute_time_at_slot
 .endif
 
 .if FORK == FORK_BELLATRIX
-/* L0: x0 = 1 when the n bytes x1 at x0 are all zero, else 0. A leaf. */
+/* x0 = 1 when the n bytes x1 at x0 are all zero, else 0. A leaf. */
 LOCAL_FUNCTION lantern_all_zero
     UNWIND_END_PROLOGUE
 1:  cbz     x1, 2f

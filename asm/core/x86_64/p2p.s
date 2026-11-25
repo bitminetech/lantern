@@ -91,7 +91,7 @@ SPEC_LEAF compute_min_epochs_for_block_requests
     ret
 SPEC_END compute_min_epochs_for_block_requests
 
-/* L0: rax = 32 + rax + rax // 6, with the carry flag set on overflow. Uses rcx, rdx, r8. */
+/* rax = 32 + rax + rax // 6, with the carry flag set on overflow. Uses rcx, rdx, r8. */
 LOCAL_FUNCTION lantern_compressed_len
     UNWIND_END_PROLOGUE
     mov     %rax, %r8
@@ -279,7 +279,7 @@ SPEC_END compute_max_request_data_column_sidecars
 .endif
 
 /*
- * L0: rax = next_fork_epoch after epoch rdi, config rsi: the least fork epoch of altair up to
+ * rax = next_fork_epoch after epoch rdi, config rsi: the least fork epoch of altair up to
  * this fork above it, and from fulu on each BLOB_SCHEDULE epoch from FULU_FORK_EPOCH on; else
  * FAR_FUTURE_EPOCH. A leaf; uses rcx, rdx, r8, r9.
  */

@@ -295,7 +295,7 @@ SPEC_END process_operations
 
 .if FORK >= FORK_ELECTRA
 /*
- * L0: x0 = LANTERN_OK when state x0 has room for the appends of the execution requests of
+ * x0 = LANTERN_OK when state x0 has room for the appends of the execution requests of
  * block body x1 and x6 more pending deposits, else LANTERN_BUFFER_TOO_SMALL. A leaf.
  */
 LOCAL_FUNCTION lantern_requests_room
@@ -331,7 +331,7 @@ END_FUNCTION lantern_requests_room
 
 .if FORK == FORK_ELECTRA
 /*
- * L0: x0 = LANTERN_OK when state x0 has room for the appends of block body x1, else
+ * x0 = LANTERN_OK when state x0 has room for the appends of block body x1, else
  * LANTERN_BUFFER_TOO_SMALL: a validator and a pending deposit for each deposit, and the
  * appends of the execution requests. x19 state, x20 body.
  */
@@ -351,7 +351,7 @@ LOCAL_FUNCTION lantern_block_room
     LEAVE 0
 END_FUNCTION lantern_block_room
 .else
-/* L0: lantern_requests_room with no deposits. */
+/* lantern_requests_room with no deposits. */
 LOCAL_FUNCTION lantern_block_room
     UNWIND_END_PROLOGUE
     mov     x6, #0
@@ -377,7 +377,7 @@ END_FUNCTION lantern_block_room
 .endif
 
 /*
- * L0: x0 = LANTERN_OK when state x0 has room for the appends of block body x1, else
+ * x0 = LANTERN_OK when state x0 has room for the appends of block body x1, else
  * LANTERN_BUFFER_TOO_SMALL: an eth1 data vote, a validator for each deposit and, in phase0,
  * a PendingAttestation for each attestation in each epoch's list.
  * x19 state, x20 body.
@@ -416,7 +416,7 @@ END_FUNCTION lantern_block_room
 .endif
 
 /*
- * L0: x0 = the scratch that lantern_process_block needs for body x1, with x2 validators.
+ * x0 = the scratch that lantern_process_block needs for body x1, with x2 validators.
  * A leaf.
  */
 LOCAL_FUNCTION lantern_block_scratch
@@ -602,7 +602,7 @@ SPEC_FUNCTION process_slot
 SPEC_END process_slot
 
 /*
- * L0: x0 = LANTERN_OK when state x0 has the room and scratch x2 the bytes to reach slot x1
+ * x0 = LANTERN_OK when state x0 has the room and scratch x2 the bytes to reach slot x1
  * (a value), plus x3 more scratch bytes; else LANTERN_BUFFER_TOO_SMALL. Also x1 = the epochs
  * crossed. A leaf.
  */

@@ -118,7 +118,7 @@ FUNCTION lantern_reqresp_protocol_id
     ret
 END_FUNCTION lantern_reqresp_protocol_id
 
-/* L0: rax = the chunk bound of rax payload bytes: 25 + n + 8 * ceil(n / 65536); carry set on overflow. Uses rcx. */
+/* rax = the chunk bound of rax payload bytes: 25 + n + 8 * ceil(n / 65536); carry set on overflow. Uses rcx. */
 LOCAL_FUNCTION lantern_chunk_bound
     UNWIND_END_PROLOGUE
     mov     %rax, %rcx
@@ -375,7 +375,7 @@ END_FUNCTION lantern_reqresp_read_payload
 .endm
 
 /*
- * L0: (rdi descriptor, rsi node) -> rax min, rdx max, saturating at 2^64 - 1.
+ * (rdi descriptor, rsi node) -> rax min, rdx max, saturating at 2^64 - 1.
  * rbx descriptor, rbp node, r12 length or the last field, r13 element or field, r14 min, r15 max.
  */
 LOCAL_FUNCTION lantern_size_bounds

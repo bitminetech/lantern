@@ -1,5 +1,5 @@
 /*
- * Copy and zero, x86-64: L0 helpers that every object of the core includes.
+ * Copy and zero, x86-64: helpers that every object of the core includes.
  */
 
 /* dst rdi, src rsi, n rdx: forward, so a copy to a lower, overlapping place is right. */

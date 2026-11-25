@@ -39,7 +39,7 @@ route_k_null:
 77: mov     \reg, \tmp
 .endm
 
-/* L0: x0 = 1 when each % of the x1 bytes at x0 is followed by two hex digits, else 0. A leaf. Uses x9-x12. */
+/* x0 = 1 when each % of the x1 bytes at x0 is followed by two hex digits, else 0. A leaf. Uses x9-x12. */
 LOCAL_FUNCTION lantern_route_pct_ok
     UNWIND_END_PROLOGUE
     mov     x9, #0
@@ -66,7 +66,7 @@ LOCAL_FUNCTION lantern_route_pct_ok
 END_FUNCTION lantern_route_pct_ok
 
 /*
- * L0: the x1 bytes at x0, percent-decoded (each % is followed by two hex digits), to x2: at most x3
+ * The x1 bytes at x0, percent-decoded (each % is followed by two hex digits), to x2: at most x3
  * bytes written; x0 = the decoded length, which may pass x3. A leaf. Uses x9-x13.
  */
 LOCAL_FUNCTION lantern_route_decode
@@ -96,7 +96,7 @@ LOCAL_FUNCTION lantern_route_decode
 END_FUNCTION lantern_route_decode
 
 /*
- * L0: one item of a list value: the bytes at x0 from index x1 to index x2, percent-decoded, up to
+ * One item of a list value: the bytes at x0 from index x1 to index x2, percent-decoded, up to
  * the first decoded `,`, to x3 with at most x4 bytes written. x0 = the index after the item and its
  * comma, x1 = the item's decoded length (it may pass x4), x2 = 1 when a comma ended it. A leaf. Uses x5, x9-x13.
  */
@@ -131,7 +131,7 @@ LOCAL_FUNCTION lantern_route_next_item
     ret
 END_FUNCTION lantern_route_next_item
 
-/* L0: the x1 bytes at x0 as a decimal number below 2^64: x0 = 0 and x1 = its value, else x0 = 1. A leaf. Uses x9-x13. */
+/* The x1 bytes at x0 as a decimal number below 2^64: x0 = 0 and x1 = its value, else x0 = 1. A leaf. Uses x9-x13. */
 LOCAL_FUNCTION lantern_route_number
     UNWIND_END_PROLOGUE
     cbz     x1, 8f
@@ -158,7 +158,7 @@ LOCAL_FUNCTION lantern_route_number
     ret
 END_FUNCTION lantern_route_number
 
-/* L0: the x1 bytes at x0 as 0x and the hex of x2 bytes: x0 = 0 and the bytes at x3, else x0 = 1. A leaf. Uses x9-x12. */
+/* The x1 bytes at x0 as 0x and the hex of x2 bytes: x0 = 0 and the bytes at x3, else x0 = 1. A leaf. Uses x9-x12. */
 LOCAL_FUNCTION lantern_route_hex
     UNWIND_END_PROLOGUE
     lsl     x9, x2, #1
@@ -187,7 +187,7 @@ LOCAL_FUNCTION lantern_route_hex
     ret
 END_FUNCTION lantern_route_hex
 
-/* L0: the word of api_words for parameter x0 that is the x2 bytes at x1: x0 = 1 and x1 = its value, else x0 = 0. A leaf. Uses x6, x7, x9-x14. */
+/* The word of api_words for parameter x0 that is the x2 bytes at x1: x0 = 1 and x1 = its value, else x0 = 0. A leaf. Uses x6, x7, x9-x14. */
 LOCAL_FUNCTION lantern_route_word
     UNWIND_END_PROLOGUE
     ADDRESS x9, api_words
@@ -222,7 +222,7 @@ LOCAL_FUNCTION lantern_route_word
 END_FUNCTION lantern_route_word
 
 /*
- * L0: whether the x1 bytes at x0, a path whose percent-encoding is good, match the template of x3
+ * Whether the x1 bytes at x0, a path whose percent-encoding is good, match the template of x3
  * bytes at x2: x0 = 1 or 0. Each parameter segment goes to the list at x4: its count, then for each
  * its API_PARAM_*, start and end in the path. A leaf. Uses x9-x15.
  */
@@ -290,7 +290,7 @@ LOCAL_FUNCTION lantern_route_match
 END_FUNCTION lantern_route_match
 
 /*
- * L0: the x3 decoded bytes at x2 as a value of parameter x1, into ApiRoute x0; an item of a list
+ * The x3 decoded bytes at x2 as a value of parameter x1, into ApiRoute x0; an item of a list
  * goes to the 64 bytes at x4. x0 = 0, or 1 when the value breaks its type.
  * x19 out, x20 the parameter, x21 bytes, x22 length, x23 the item's place, x24 the field.
  */
@@ -461,7 +461,7 @@ LOCAL_FUNCTION lantern_route_value
     LEAVE 0
 END_FUNCTION lantern_route_value
 
-/* L0: x21 past the JSON white space (space, tab, LF, CR) before x25. A leaf. Uses x9. */
+/* x21 past the JSON white space (space, tab, LF, CR) before x25. A leaf. Uses x9. */
 LOCAL_FUNCTION lantern_route_ws
     UNWIND_END_PROLOGUE
 1:  cmp     x21, x25
@@ -480,7 +480,7 @@ LOCAL_FUNCTION lantern_route_ws
 9:  ret
 END_FUNCTION lantern_route_ws
 
-/* L0: x0 = 1 when the x1 bytes at x0 start the bytes at x21 (before x25), x21 then past them; else 0. A leaf. Uses x9-x11. */
+/* x0 = 1 when the x1 bytes at x0 start the bytes at x21 (before x25), x21 then past them; else 0. A leaf. Uses x9-x11. */
 LOCAL_FUNCTION lantern_route_lit
     UNWIND_END_PROLOGUE
     sub     x9, x25, x21
@@ -503,7 +503,7 @@ LOCAL_FUNCTION lantern_route_lit
 END_FUNCTION lantern_route_lit
 
 /*
- * L0: the JSON string at x21 (before x25), RFC 8259 section 7: its value, each escape decoded (a \u
+ * The JSON string at x21 (before x25), RFC 8259 section 7: its value, each escape decoded (a \u
  * of 0x80 or more as the byte 0x80), into the 200 bytes at x22 + 192; x21 then past it. x0 = 0, or
  * 1 when it breaks the rules; x1 = the value's length, 201 when it is longer than 200. A leaf. Uses
  * x9-x13.
@@ -583,7 +583,7 @@ LOCAL_FUNCTION lantern_route_string
     ret
 END_FUNCTION lantern_route_string
 
-/* L0: x0 = API_PARAM_ID when the x1 bytes at x22 + 192 are ids, API_PARAM_STATUS when they are statuses, else 0. A leaf. Uses x9-x13. */
+/* x0 = API_PARAM_ID when the x1 bytes at x22 + 192 are ids, API_PARAM_STATUS when they are statuses, else 0. A leaf. Uses x9-x13. */
 LOCAL_FUNCTION lantern_route_key
     UNWIND_END_PROLOGUE
     ADDRESS x9, route_k_ids
@@ -609,7 +609,7 @@ LOCAL_FUNCTION lantern_route_key
 END_FUNCTION lantern_route_key
 
 /*
- * L1: null, or an array of strings, at x21 of a body that ends at x25: each string an item of the
+ * Null, or an array of strings, at x21 of a body that ends at x25: each string an item of the
  * parameter x0 (API_PARAM_ID: into the list of out x20, x27 items; API_PARAM_STATUS: its bits), its
  * bit of present (x26) set; x21 then past the value. x0 = 0, or the fault + 1. x22 the locals of
  * lantern_api_route: +56 1 when the list has no room, +128 an item. Locals: the parameter, an
@@ -689,7 +689,7 @@ LOCAL_FUNCTION lantern_route_ids_array
 END_FUNCTION lantern_route_ids_array
 
 /*
- * L0: the weight, 0 to 1000, that the Accept value of x1 bytes at x0 gives the media type of x3
+ * The weight, 0 to 1000, that the Accept value of x1 bytes at x0 gives the media type of x3
  * lower case bytes at x2 (lantern_api_route's rules). x19 bytes, x20 length, x21 media, x22 its
  * length, x23 the best kind of range (-1 none, 0 any type, 1 any application type, 2 the type), x24 its weight,
  * x25 an item's start, x26 its end, x27 a parameter's start, x28 a range's kind; L the item's weight.

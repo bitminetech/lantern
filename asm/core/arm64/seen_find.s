@@ -1,9 +1,9 @@
 /*
- * Finding a block of Seen, ARM64: an L0 helper of the common object and of each fork's object.
+ * Finding a block of Seen, ARM64: a helper of the common object and of each fork's object.
  * Requirements: docs/reference/networking.md.
  */
 
-/* L0: x0 = the SeenBlock of root x1 in seen x0, or 0. A leaf; uses x2-x9. */
+/* x0 = the SeenBlock of root x1 in seen x0, or 0. A leaf; uses x2-x9. */
 LOCAL_FUNCTION lantern_seen_find_block
     UNWIND_END_PROLOGUE
     PART    x2, x3, x0, Seen_blocks

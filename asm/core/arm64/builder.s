@@ -78,7 +78,7 @@ bld_data:
 bld_hex_digits:
     .ascii  "0123456789abcdef"
 
-/* L0: x0 = the count of decimal digits of x0. Uses x9, x10. */
+/* x0 = the count of decimal digits of x0. Uses x9, x10. */
 LOCAL_FUNCTION lantern_bld_digits
     UNWIND_END_PROLOGUE
     mov     x9, #1
@@ -92,7 +92,7 @@ LOCAL_FUNCTION lantern_bld_digits
     ret
 END_FUNCTION lantern_bld_digits
 
-/* L0: x0 = the cursor x0 past the decimal digits of x1, written there. Uses x9-x13. */
+/* x0 = the cursor x0 past the decimal digits of x1, written there. Uses x9-x13. */
 LOCAL_FUNCTION lantern_bld_dec
     UNWIND_END_PROLOGUE
     mov     x9, #1                          /* the digits */
@@ -115,7 +115,7 @@ LOCAL_FUNCTION lantern_bld_dec
     ret
 END_FUNCTION lantern_bld_dec
 
-/* L0: x0 = the cursor x0 past the lower case hex digits of the x2 bytes at x1, written there. Uses x9-x12. */
+/* x0 = the cursor x0 past the lower case hex digits of the x2 bytes at x1, written there. Uses x9-x12. */
 LOCAL_FUNCTION lantern_bld_hex
     UNWIND_END_PROLOGUE
     ADDRESS x9, bld_hex_digits
@@ -132,7 +132,7 @@ LOCAL_FUNCTION lantern_bld_hex
 2:  ret
 END_FUNCTION lantern_bld_hex
 
-/* L1: x0 = the cursor x0 past the x2 bytes at x1, copied there. */
+/* x0 = the cursor x0 past the x2 bytes at x1, copied there. */
 LOCAL_FUNCTION lantern_bld_put
     FRAME 16
     str     x0, [sp, #16]
@@ -144,7 +144,7 @@ LOCAL_FUNCTION lantern_bld_put
 END_FUNCTION lantern_bld_put
 
 /*
- * L0: x0 = the index of a free entry of builder_calls (node.md, the builder calls), now of the kind
+ * x0 = the index of a free entry of builder_calls (node.md, the builder calls), now of the kind
  * x0, the NodeApi entry x1 and time_ms; 2^64 - 1 with none free. x19 the node. Uses x9-x12, x16.
  */
 LOCAL_FUNCTION lantern_node_builder_call
@@ -168,7 +168,7 @@ LOCAL_FUNCTION lantern_node_builder_call
 END_FUNCTION lantern_node_builder_call
 
 /*
- * L2: the NODE_EV_BUILDER x21 (node.md, the builder calls): a header call still awaited by its
+ * The NODE_EV_BUILDER x21 (node.md, the builder calls): a header call still awaited by its
  * produceBlockV3 entry ends there, the answer's bytes in a NODE_ACT_BYTES_PUT to a new id at
  * PRODUCE_BID when the call did not fail and the actions have room; then the call's entry goes
  * free; a submit call answers its publish entry. x19 the node, x23 scratch, x24 the actions;
@@ -249,7 +249,7 @@ LOCAL_FUNCTION lantern_node_builder_event
 END_FUNCTION lantern_node_builder_event
 
 /*
- * L2: x0 = the status of the HTTP answer in the ByteList x0 (lantern_http_parse_response with eof
+ * x0 = the status of the HTTP answer in the ByteList x0 (lantern_http_parse_response with eof
  * 1, its body at the end of the scratch x1), or 0 when it is none. Locals: L the HttpResponse
  * (16), L+16 eof, L+24 the scratch size.
  */
@@ -285,7 +285,7 @@ LOCAL_FUNCTION lantern_bld_status
 END_FUNCTION lantern_bld_status
 
 /*
- * L2: (entry x0, JSON x1) -> x0: the submitBlindedBlockV2 call of the publishBlindedBlockV2 entry
+ * (entry x0, JSON x1) -> x0: the submitBlindedBlockV2 call of the publishBlindedBlockV2 entry
  * x0 (node.md, NODE_PUBLISH_SUBMIT), the block's JSON in the ByteList x1: 0 once it went, the
  * entry in NODE_PUBLISH_SUBMIT with the call + 1 at PUBLISH_CALL; 500 with no builder, no free
  * call or no room. x21 the entry, x22 the JSON, x25 its bytes, x26 the fork's name, x27 the
@@ -368,7 +368,7 @@ LOCAL_FUNCTION lantern_node_publish_submit
 END_FUNCTION lantern_node_publish_submit
 
 /*
- * L2: on the way into NODE_PRODUCE_PAYLOAD of the produceBlockV3 entry x0 (node.md, Block
+ * On the way into NODE_PRODUCE_PAYLOAD of the produceBlockV3 entry x0 (node.md, Block
  * production), the event x1 of its PRODUCE_CHECK and the head's block_hash at x2: with
  * NODE_FLAG_BUILDER, a NODE_BUILDER_HEADER call of its slot, the hash and the pubkey of the
  * proposer's NodeProposer entry, when builder_boost_factor is not 0, the entry has registered 1,
@@ -470,7 +470,7 @@ LOCAL_FUNCTION lantern_node_produce_header
 9:  LEAVE 16
 END_FUNCTION lantern_node_produce_header
 
-/* L0: x0 = 1 when the x2 bytes at x1 are the x3 bytes at x0, else 0. Uses x9-x10. */
+/* x0 = 1 when the x2 bytes at x1 are the x3 bytes at x0, else 0. Uses x9-x10. */
 LOCAL_FUNCTION lantern_bld_same
     UNWIND_END_PROLOGUE
     cmp     x2, x3
@@ -489,7 +489,7 @@ LOCAL_FUNCTION lantern_bld_same
 END_FUNCTION lantern_bld_same
 
 /*
- * L2: (answer x0, scratch x1, fork x2) -> x0: the JSON text of the bid in a builder's getHeader
+ * (answer x0, scratch x1, fork x2) -> x0: the JSON text of the bid in a builder's getHeader
  * answer (node.md, NODE_WORK_PRODUCE_BID): lantern_http_parse_response with eof 1, the body
  * unchunked at the end of scratch, whose size drops below it (the caller restores it); status
  * 200; the body an object whose first member version is a string, the fork's name, and whose
@@ -610,7 +610,7 @@ LOCAL_FUNCTION lantern_node_bid_data
     LEAVE 32
 END_FUNCTION lantern_node_bid_data
 
-/* L0: x0 = the bytes of the JSON of the SignedValidatorRegistrationV1 at x0 (180 bytes). Uses x9-x12. */
+/* x0 = the bytes of the JSON of the SignedValidatorRegistrationV1 at x0 (180 bytes). Uses x9-x12. */
 LOCAL_FUNCTION lantern_bld_reg_len
     FRAME 16
     str     x0, [sp, #16]
@@ -628,7 +628,7 @@ LOCAL_FUNCTION lantern_bld_reg_len
 END_FUNCTION lantern_bld_reg_len
 
 /*
- * L1: the cursor x0 past the JSON of the SignedValidatorRegistrationV1 at x1, written there
+ * The cursor x0 past the JSON of the SignedValidatorRegistrationV1 at x1, written there
  * (node.md, NODE_WORK_API_SUBMIT of registerValidator). x20 the registration (callee-saved by
  * the caller's frame: kept in the locals). Locals: the cursor, the registration.
  */
@@ -674,7 +674,7 @@ LOCAL_FUNCTION lantern_bld_reg_json
 END_FUNCTION lantern_bld_reg_json
 
 /*
- * L2: the NODE_EV_WORK_DONE x21 of a NODE_WORK_API_SUBMIT of registerValidator, with
+ * The NODE_EV_WORK_DONE x21 of a NODE_WORK_API_SUBMIT of registerValidator, with
  * NODE_FLAG_BUILDER (node.md): a NODE_BUILDER_REGISTER call of the JSON array of the registrations
  * of LANTERN_VALID; none with none, with no free call, or with no room in the actions. x19 the
  * node, x24 the actions; x22 a record, x23 the records left, x25 the body's bytes, x26 the valid
@@ -786,7 +786,7 @@ LOCAL_FUNCTION lantern_node_builder_register
 END_FUNCTION lantern_node_builder_register
 
 /*
- * L1: the registration of LANTERN_VALID at x0 (a ByteList of its 180 SSZ bytes) of the validator x1
+ * The registration of LANTERN_VALID at x0 (a ByteList of its 180 SSZ bytes) of the validator x1
  * (beacon-api.md, registerValidator): its NodeProposer entry takes it, unless the entry holds one of
  * a later timestamp; with none, the first free entry (until_epoch at most the store x20's epoch,
  * registered 0), else a new one when the part has room; else none. Locals: the bytes, the index,
@@ -876,7 +876,7 @@ END_FUNCTION lantern_node_registration_put
 .endm
 
 /*
- * L1: (state, records, count, scratch) -> x0: the validators of the records of a registerValidator
+ * (state, records, count, scratch) -> x0: the validators of the records of a registerValidator
  * (node.md, NODE_WORK_API_SUBMIT): one scan of the state's validators, through a table of the
  * records' pubkeys at the end of scratch (a power of two of slots, at least twice the count, each
  * a record or 0); each record whose pubkey is of a validator eligible at the state's epoch

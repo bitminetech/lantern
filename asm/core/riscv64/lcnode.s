@@ -1,7 +1,7 @@
 # The light client data of the node, RISC-V: in the common object. Requirements: docs/reference/node.md,
 # beacon-api.md and light-client.md.
 
-# L2: (route, connection, flags) -> a0: a light client read of NODE_EV_API (node.md): a
+# (route, connection, flags) -> a0: a light client read of NODE_EV_API (node.md): a
 # NODE_WORK_API_ENCODE with the light client store as state_c; 0. The node s1, the actions s6. s2
 # the route, s3 the connection, s4 the answer flags, s5 the operation, s7 the bytes' id. Locals: L
 # a ByteList of the bytes put.
@@ -65,7 +65,7 @@ LOCAL_FUNCTION lantern_node_api_lc
     LEAVE 64
 END_FUNCTION lantern_node_api_lc
 
-# L2: (lc, work, data, scratch, view) -> status, the node s1: the light client read of a
+# (lc, work, data, scratch, view) -> status, the node s1: the light client read of a
 # NODE_WORK_API_ENCODE (node.md) into the view: for getLightClientUpdatesByRange its store, periods,
 # node, JSON room and cursor, which its body reads; else the object's SSZ bytes (ApiView_lc_bytes),
 # its fork, and as JSON its JSON (ApiView_lc_json). With none, ApiView_status 404; a fault of the
@@ -194,7 +194,7 @@ LOCAL_FUNCTION lantern_node_api_lc_read
     LEAVE 32
 END_FUNCTION lantern_node_api_lc_read
 
-# L2: the body of getLightClientUpdatesByRange (beacon-api.md) of the view s4 (its node
+# The body of getLightClientUpdatesByRange (beacon-api.md) of the view s4 (its node
 # ApiView_node), with the writer of lantern_api_put: from the first period with an update, each update to
 # the first period of none. Locals: 0 the fork, 8 1 once an update is in, 16 the period, 24 a
 # chunk's length, 32 an epoch, 40 a digest.
@@ -307,7 +307,7 @@ LOCAL_FUNCTION lantern_api_lc_updates_body
 9:  UNFRAME 48
 END_FUNCTION lantern_api_lc_updates_body
 
-# L2: (node, store, work, state_a, data, state_c, scratch, event) -> status: a NODE_WORK_LC_BLOCK or
+# (node, store, work, state_a, data, state_c, scratch, event) -> status: a NODE_WORK_LC_BLOCK or
 # NODE_WORK_LC_HEAD of lantern_node_run (node.md). s1 node, s2 store, s3 work, s4 state_a, s5 data,
 # s6 the LcStore, s7 scratch, s8 event.
 LOCAL_FUNCTION lantern_node_run_lc
@@ -360,7 +360,7 @@ LOCAL_FUNCTION lantern_node_run_lc
     LEAVE 0
 END_FUNCTION lantern_node_run_lc
 
-# L1: (event, topic) -> a0: 1 when the update of the fields of the light client work's event a0 is
+# (event, topic) -> a0: 1 when the update of the fields of the light client work's event a0 is
 # new for the topic a1 (node.md, The light client gossip), else 0. s1 the node. Uses t0, t1, a7.
 LOCAL_FUNCTION lantern_node_lc_new
     UNWIND_END_PROLOGUE
@@ -384,7 +384,7 @@ LOCAL_FUNCTION lantern_node_lc_new
     ret
 END_FUNCTION lantern_node_lc_new
 
-# L1: the fields of the topic a1 take the update of the light client work's event a0 (node.md, The light client gossip). s1 the node. Uses t0, t1, a7.
+# The fields of the topic a1 take the update of the light client work's event a0 (node.md, The light client gossip). s1 the node. Uses t0, t1, a7.
 LOCAL_FUNCTION lantern_node_lc_set
     UNWIND_END_PROLOGUE
     li      t1, GOSSIP_LIGHT_CLIENT_FINALITY_UPDATE
@@ -399,7 +399,7 @@ LOCAL_FUNCTION lantern_node_lc_set
     ret
 END_FUNCTION lantern_node_lc_set
 
-# L1: a0 = the due time in Unix ms of an update of signature slot a0 (node.md, The light client
+# a0 = the due time in Unix ms of an update of signature slot a0 (node.md, The light client
 # gossip): genesis time + the slot times SLOT_DURATION_MS + get_sync_message_due_ms(). s1 the
 # node, s2 the store. Uses t0-t2, a7.
 LOCAL_FUNCTION lantern_node_lc_due_ms
@@ -416,7 +416,7 @@ LOCAL_FUNCTION lantern_node_lc_due_ms
     ret
 END_FUNCTION lantern_node_lc_due_ms
 
-# L1: the NODE_EV_WORK_DONE s3 of a NODE_WORK_LC_HEAD (node.md, The light client gossip): with a
+# The NODE_EV_WORK_DONE s3 of a NODE_WORK_LC_HEAD (node.md, The light client gossip): with a
 # latest update, the bit of each topic it is new for joins lc_pending, and lc_due becomes its due
 # time. s1 the node, s2 the store, s6 the actions; s7 the bits.
 LOCAL_FUNCTION lantern_node_lc_head_done
@@ -444,7 +444,7 @@ LOCAL_FUNCTION lantern_node_lc_head_done
 9:  LEAVE 0
 END_FUNCTION lantern_node_lc_head_done
 
-# L1: after the head (node.md, The light client gossip): with lc_pending not 0, time_ms at least
+# After the head (node.md, The light client gossip): with lc_pending not 0, time_ms at least
 # lc_due and room for two works, a NODE_WORK_LC_PUBLISH of each topic of lc_pending, which becomes
 # 0. s1 the node, s6 the actions; s7 the bits.
 LOCAL_FUNCTION lantern_node_lc_due
@@ -469,7 +469,7 @@ LOCAL_FUNCTION lantern_node_lc_due
 9:  LEAVE 0
 END_FUNCTION lantern_node_lc_due
 
-# L1: a NODE_WORK_LC_PUBLISH of the topic a0 with the light client store as state_c.
+# A NODE_WORK_LC_PUBLISH of the topic a0 with the light client store as state_c.
 LOCAL_FUNCTION lantern_node_lc_publish_work
     FRAME 16
     mv      a5, a0
@@ -494,7 +494,7 @@ END_FUNCTION lantern_node_lc_publish_work
     add     a0, a0, t1
 .endm
 
-# L1: the NODE_EV_WORK_DONE s3 of a NODE_WORK_LC_PUBLISH (node.md, The light client gossip):
+# The NODE_EV_WORK_DONE s3 of a NODE_WORK_LC_PUBLISH (node.md, The light client gossip):
 # LANTERN_VALID of an update new for its topic sets the topic's fields, then with
 # NODE_FLAG_SUBSCRIBED its bytes at NodeEvent_chunk go out on the topic, and its event. s1 the
 # node, s2 the store, s5 the scratch, s6 the actions; s4 the topic.
@@ -522,7 +522,7 @@ LOCAL_FUNCTION lantern_node_lc_published
 9:  LEAVE 0
 END_FUNCTION lantern_node_lc_published
 
-# L1: the NODE_EV_WORK_DONE s3 of a NODE_WORK_LC_GOSSIP (node.md, The light client gossip): an
+# The NODE_EV_WORK_DONE s3 of a NODE_WORK_LC_GOSSIP (node.md, The light client gossip): an
 # ACCEPT for LANTERN_VALID of an update new for its topic that is due by time_ms +
 # MAXIMUM_GOSSIP_CLOCK_DISPARITY, with the topic's fields and its event; else an IGNORE. Then its
 # bytes and the message's entry go. s1 the node, s2 the store, s6 the actions; s4 the topic, s7
@@ -566,7 +566,7 @@ LOCAL_FUNCTION lantern_node_lc_validated
 9:  LEAVE 0
 END_FUNCTION lantern_node_lc_validated
 
-# L1: a NODE_WORK_API_EVENT of the topic a0 with the light client store as state_c, when an entry has the topic.
+# A NODE_WORK_API_EVENT of the topic a0 with the light client store as state_c, when an entry has the topic.
 LOCAL_FUNCTION lantern_node_lc_event
     FRAME 16
     sd      a0, 0(sp)
@@ -584,7 +584,7 @@ LOCAL_FUNCTION lantern_node_lc_event
 9:  UNFRAME 16
 END_FUNCTION lantern_node_lc_event
 
-# L2: (out, topic, lc, scratch) -> a0: the text of a light client event (beacon-api.md, eventstream):
+# (out, topic, lc, scratch) -> a0: the text of a light client event (beacon-api.md, eventstream):
 # event: <topic> LF data: {"version":…,"data":…} LF LF, into the ByteList out, its count set;
 # LANTERN_OK, LANTERN_NO_STATE_ANSWER with no update, LANTERN_BUFFER_TOO_SMALL. The writer's
 # registers s6-s9; s1 out, s2 the topic, s3 lc, s4 scratch, s5 the object, s10 the kind. Locals: L
@@ -679,7 +679,7 @@ LOCAL_FUNCTION lantern_api_lc_event_text
     j       9b
 END_FUNCTION lantern_api_lc_event_text
 
-# L2: (node, work, data, lc, scratch, event, room) -> status: a NODE_WORK_LC_SERVE of
+# (node, work, data, lc, scratch, event, room) -> status: a NODE_WORK_LC_SERVE of
 # lantern_node_run (node.md): the response chunks of the light client method arg at NodeEvent_chunk
 # of the event. s1 node, s2 work, s3 data, s4 lc, s5 scratch, s6 event, s7 the chunks' ByteList,
 # s8 the object at the end of scratch, s9 the period, s10 the end period. Locals: 0 the scratch's
@@ -811,7 +811,7 @@ LOCAL_FUNCTION lantern_node_run_lc_serve
     LEAVE 48
 END_FUNCTION lantern_node_run_lc_serve
 
-# L2: (lc, kind, key, object, out, scratch, node) -> status: lantern_lc_read of the kind and key into
+# (lc, kind, key, object, out, scratch, node) -> status: lantern_lc_read of the kind and key into
 # the object, then its response chunk after the bytes of out: result 0, the context
 # compute_fork_digest of the epoch of its attested slot. The statuses of lantern_lc_read and
 # lantern_reqresp_write_chunk. The scratch's size as it came. s1 node, s2 the object, s3 out, s4
@@ -868,7 +868,7 @@ LOCAL_FUNCTION lantern_node_lc_chunk
     j       9b
 END_FUNCTION lantern_node_lc_chunk
 
-# L1: (result, payload, scratch, out) -> status: a response chunk of the result, with no context bytes, after the bytes of out. Locals: 0 a ChunkHeader.
+# (result, payload, scratch, out) -> status: a response chunk of the result, with no context bytes, after the bytes of out. Locals: 0 a ChunkHeader.
 LOCAL_FUNCTION lantern_node_lc_error_chunk
     FRAME 48
     li      t0, CHUNK_RESPONSE
@@ -881,7 +881,7 @@ LOCAL_FUNCTION lantern_node_lc_error_chunk
     UNFRAME 48
 END_FUNCTION lantern_node_lc_error_chunk
 
-# L1: a light client request of the stream entry a0 (node.md): its a2 bytes at a1 (none with 0) to a
+# A light client request of the stream entry a0 (node.md): its a2 bytes at a1 (none with 0) to a
 # new id, a NODE_WORK_LC_SERVE of them with the light client store as state_c; the stream takes
 # NODE_STREAM_SERVING, its list empty. s3 the entry, s4 the id. Locals: 0 a ByteList of the bytes.
 LOCAL_FUNCTION lantern_node_lc_request
@@ -914,7 +914,7 @@ LOCAL_FUNCTION lantern_node_lc_request
     LEAVE 64
 END_FUNCTION lantern_node_lc_request
 
-# L1: the NODE_EV_WORK_DONE s3 of a NODE_WORK_LC_SERVE (node.md): its bytes go, then the chunks to
+# The NODE_EV_WORK_DONE s3 of a NODE_WORK_LC_SERVE (node.md): its bytes go, then the chunks to
 # the stream in a STREAM_WRITE and a STREAM_CLOSE, or a STREAM_RESET; then the stream goes. s1 the
 # node, s6 the actions; s4 the stream, s5 the chunks' bytes, s7 the event's size.
 LOCAL_FUNCTION lantern_node_lc_served
@@ -962,7 +962,7 @@ LOCAL_FUNCTION lantern_node_lc_served
     LEAVE 0
 END_FUNCTION lantern_node_lc_served
 
-# L1: (lc, event) -> a0: the latest update's fields of a light client work at NodeEvent_index and
+# (lc, event) -> a0: the latest update's fields of a light client work at NodeEvent_index and
 # NodeEvent_root (node.md, NODE_WORK_LC_HEAD): its finalized slot; its attested slot, its
 # supermajority, 1, its signature slot. 1, or 0 with no latest update. s1 lc, s2 event, s3 the
 # update.
@@ -1011,7 +1011,7 @@ LOCAL_FUNCTION lantern_node_lc_slots
 9:  LEAVE 0
 END_FUNCTION lantern_node_lc_slots
 
-# L2: (node, work, data, lc, scratch, event, room) -> status: a NODE_WORK_LC_PUBLISH or
+# (node, work, data, lc, scratch, event, room) -> status: a NODE_WORK_LC_PUBLISH or
 # NODE_WORK_LC_GOSSIP of lantern_node_run (node.md): the latest update of the topic arg, as a
 # ByteList at NodeEvent_chunk of the event (PUBLISH) or at the end of scratch (GOSSIP, matched
 # against data), its fields, and the result. s1 node, s2 work, s3 data, s4 lc, s5 scratch, s6

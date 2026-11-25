@@ -475,7 +475,7 @@ FUNCTION lantern_db_drop_sidecars
     LEAVE 0
 END_FUNCTION lantern_db_drop_sidecars
 
-# L0: rax = the u64 of the rsi bytes at rdi (as a signed count: 8 or more a whole word, 0 or less none), zero above them. Uses rcx, rdx, r8.
+# rax = the u64 of the rsi bytes at rdi (as a signed count: 8 or more a whole word, 0 or less none), zero above them. Uses rcx, rdx, r8.
 LOCAL_FUNCTION lantern_db_word
     UNWIND_END_PROLOGUE
     cmp     $8, %rsi
@@ -497,7 +497,7 @@ LOCAL_FUNCTION lantern_db_word
 3:  ret
 END_FUNCTION lantern_db_word
 
-# L1: rax = 1 when word rdi of the state differs from the patch's start, else 0 (db.md, the state
+# rax = 1 when word rdi of the state differs from the patch's start, else 0 (db.md, the state
 # diffs). Reads rbx the base's bytes, rbp min(their count, the state's), r12 the state's bytes, r13
 # their count. Uses rcx, rdx, rsi, rdi, r8-r11.
 LOCAL_FUNCTION lantern_db_differ

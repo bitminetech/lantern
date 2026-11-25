@@ -3,7 +3,7 @@
  * Requirements: docs/reference/engine-api.md.
  */
 
-/* L0: lantern_base64url of the x1 bytes at x0, without padding, to x2; x2 = the end. Uses x9-x13. */
+/* lantern_base64url of the x1 bytes at x0, without padding, to x2; x2 = the end. Uses x9-x13. */
 LOCAL_FUNCTION lantern_base64url
     UNWIND_END_PROLOGUE
     ADDRESS x13, base64url_alphabet
@@ -50,7 +50,7 @@ LOCAL_FUNCTION lantern_base64url
 4:  ret
 END_FUNCTION lantern_base64url
 
-/* L0: the decimal digits of x0 to x1; x1 = the end. Uses x9-x12. */
+/* The decimal digits of x0 to x1; x1 = the end. Uses x9-x12. */
 LOCAL_FUNCTION lantern_decimal
     UNWIND_END_PROLOGUE
     mov     x12, #10                        /* count the digits, then write them from the last */
@@ -68,7 +68,7 @@ LOCAL_FUNCTION lantern_decimal
     ret
 END_FUNCTION lantern_decimal
 
-/* L0: the x1 bytes at x0 to x2; x2 = the end. Uses x9. */
+/* The x1 bytes at x0 to x2; x2 = the end. Uses x9. */
 LOCAL_FUNCTION lantern_put_bytes
     UNWIND_END_PROLOGUE
     cbz     x1, 2f
@@ -221,7 +221,7 @@ FUNCTION lantern_http_post
 END_FUNCTION lantern_http_post
 
 /*
- * L0: x0 = the position of the CR LF at or after x2 in the x1 bytes at x0, or 2^64 - 1 when
+ * x0 = the position of the CR LF at or after x2 in the x1 bytes at x0, or 2^64 - 1 when
  * there is none. Uses x9, x10.
  */
 LOCAL_FUNCTION lantern_find_crlf

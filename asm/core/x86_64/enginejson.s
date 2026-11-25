@@ -24,7 +24,7 @@
     inc     %rdi
 .endm
 
-/* L0: DATA: "0x" and two lowercase hex digits for each of the rcx bytes at rsi, to rdi. Uses rax, rdx. */
+/* DATA: "0x" and two lowercase hex digits for each of the rcx bytes at rsi, to rdi. Uses rax, rdx. */
 LOCAL_FUNCTION lantern_jdata
     UNWIND_END_PROLOGUE
     movb    $'"', (%rdi)
@@ -56,7 +56,7 @@ LOCAL_FUNCTION lantern_jdata
     ret
 END_FUNCTION lantern_jdata
 
-/* L0: QUANTITY of the rcx bytes, little endian, at rsi: "0x" and the hex with no leading zeros, to rdi. Uses rax, rdx, r8. */
+/* QUANTITY of the rcx bytes, little endian, at rsi: "0x" and the hex with no leading zeros, to rdi. Uses rax, rdx, r8. */
 LOCAL_FUNCTION lantern_jquantity
     UNWIND_END_PROLOGUE
     movb    $'"', (%rdi)
@@ -93,7 +93,7 @@ LOCAL_FUNCTION lantern_jquantity
     ret
 END_FUNCTION lantern_jquantity
 
-/* L0: the decimal digits of rax to rdi. Uses rax, rcx, rdx, r8. */
+/* The decimal digits of rax to rdi. Uses rax, rcx, rdx, r8. */
 LOCAL_FUNCTION lantern_jdecimal
     UNWIND_END_PROLOGUE
     mov     $10, %ecx

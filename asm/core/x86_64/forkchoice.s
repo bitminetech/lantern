@@ -1,7 +1,7 @@
 /*
  * Fork choice, x86-64. Requirements: docs/reference/fork-choice.md.
  * A ForkChoiceNode is the index of its BlockNode in the store.
- * An L0 helper returns its status in rax and its value in rdx.
+ * A helper returns its status in rax and its value in rdx.
  */
 
 .set FC_ATTEST_EXTRA, IndexedAttestation__fixed + 8 + CIDX_BYTES
@@ -120,7 +120,7 @@
 
 /* ---------------------------------------------------------------- Nodes */
 
-/* L0: rax = the node of the root at rsi in store rdi, or NODE_NONE. A leaf; uses rcx, rdx, r8-r11. */
+/* rax = the node of the root at rsi in store rdi, or NODE_NONE. A leaf; uses rcx, rdx, r8-r11. */
 LOCAL_FUNCTION lantern_find_node
     UNWIND_END_PROLOGUE
     PART    %rdx, %rcx, %rdi, Store_blocks
@@ -147,7 +147,7 @@ LOCAL_FUNCTION lantern_find_node
     ret
 END_FUNCTION lantern_find_node
 
-/* L0: rax = status, rdx = get_ancestor(store rdi, node rsi, slot rdx). A leaf; uses rcx, rsi, r8. */
+/* rax = status, rdx = get_ancestor(store rdi, node rsi, slot rdx). A leaf; uses rcx, rsi, r8. */
 LOCAL_FUNCTION lantern_ancestor
     UNWIND_END_PROLOGUE
     mov     Store_blocks(%rdi), %rcx
@@ -166,7 +166,7 @@ LOCAL_FUNCTION lantern_ancestor
     ret
 END_FUNCTION lantern_ancestor
 
-/* L0: rax = status, rdx = the node of get_checkpoint_block(store rdi, node rsi, epoch rdx). A leaf. */
+/* rax = status, rdx = the node of get_checkpoint_block(store rdi, node rsi, epoch rdx). A leaf. */
 LOCAL_FUNCTION lantern_checkpoint_block
     UNWIND_END_PROLOGUE
     mov     %rdx, %rax
@@ -237,7 +237,7 @@ SPEC_END get_checkpoint_block
 /* ---------------------------------------------------------------- Weights */
 
 /*
- * L0: rax = status, rdx = get_attestation_score(store rdi, node rsi) with the store's balances.
+ * rax = status, rdx = get_attestation_score(store rdi, node rsi) with the store's balances.
  * A leaf; uses rcx, rdi, r8-r11. An overflow is reported after the sum, as the spec's Gwei does.
  */
 LOCAL_FUNCTION lantern_attestation_score
@@ -287,7 +287,7 @@ LOCAL_FUNCTION lantern_attestation_score
 END_FUNCTION lantern_attestation_score
 
 /*
- * L0: rax = status, rdx = calculate_committee_fraction(justified state, percent rsi), from the
+ * rax = status, rdx = calculate_committee_fraction(justified state, percent rsi), from the
  * store's total balance. A leaf; uses rcx.
  */
 LOCAL_FUNCTION lantern_committee_fraction
@@ -305,7 +305,7 @@ LOCAL_FUNCTION lantern_committee_fraction
     ret
 END_FUNCTION lantern_committee_fraction
 
-/* L0: rax = status, rdx = get_weight(store rdi, node rsi) with the store's balances. rbx store, rbp node, r12 score. */
+/* rax = status, rdx = get_weight(store rdi, node rsi) with the store's balances. rbx store, rbp node, r12 score. */
 LOCAL_FUNCTION lantern_weight
     ENTER 0
     mov     %rdi, %rbx
@@ -370,7 +370,7 @@ SPEC_END get_weight
 /* ---------------------------------------------------------------- get_head */
 
 /*
- * L0: get_filtered_node_tree(store rdi), with scratch rsi of S(1) for the node count: rax = status,
+ * get_filtered_node_tree(store rdi), with scratch rsi of S(1) for the node count: rax = status,
  * rdx = the flags of each node at the end of scratch (F_VIABLE: in the tree), rcx = the justified node.
  * rbx store, rbp flags, r12 node count, r13 nodes, r14 i; S7 justified node, S8 current epoch,
  * S9 correct_justified.
@@ -484,7 +484,7 @@ LOCAL_FUNCTION lantern_filter_tree
 END_FUNCTION lantern_filter_tree
 
 /*
- * L1: the weights of all nodes at once (fork-choice.md, lantern_get_head): store rdi, weights rsi
+ * The weights of all nodes at once (fork-choice.md, lantern_get_head): store rdi, weights rsi
  * and flags rdx, 8 bytes a node: rax = the status of the proposer boost, LANTERN_OK or a failure
  * of its node or get_proposer_score. Each weight is get_weight of its node; a sum past 2^64 - 1
  * sets F_OVERFLOW in the flags of the node and of each node above it. rbx store, rbp flags, r12
@@ -573,7 +573,7 @@ LOCAL_FUNCTION lantern_weights
 END_FUNCTION lantern_weights
 
 /*
- * L0: rax = status, rdx = get_head(store rdi), with scratch rsi of S(2) for the node count. The
+ * rax = status, rdx = get_head(store rdi), with scratch rsi of S(2) for the node count. The
  * weights of all nodes at once (fork-choice.md, lantern_get_head): each latest message's balance on
  * its node, the boost on the boost node, then each node's weight onto its parent's.
  * rbx store, rbp flags, r12 node count, r13 nodes, r14 i, r15 head; S7 justified node, S8 the
@@ -710,7 +710,7 @@ SPEC_END get_head
 
 /* ---------------------------------------------------------------- Checkpoints and time */
 
-/* L0: lantern_update_checkpoints(store rdi, justified rsi, finalized rdx). A leaf; uses rax, r10, r11, xmm0, xmm1. */
+/* lantern_update_checkpoints(store rdi, justified rsi, finalized rdx). A leaf; uses rax, r10, r11, xmm0, xmm1. */
 LOCAL_FUNCTION lantern_update_checkpoints
     UNWIND_END_PROLOGUE
     lea     Store_justified_checkpoint(%rdi), %rax
@@ -720,7 +720,7 @@ LOCAL_FUNCTION lantern_update_checkpoints
     ret
 END_FUNCTION lantern_update_checkpoints
 
-/* L0: lantern_update_unrealized_checkpoints(store rdi, justified rsi, finalized rdx). A leaf; uses rax, r10, r11, xmm0, xmm1. */
+/* lantern_update_unrealized_checkpoints(store rdi, justified rsi, finalized rdx). A leaf; uses rax, r10, r11, xmm0, xmm1. */
 LOCAL_FUNCTION lantern_update_unrealized_checkpoints
     UNWIND_END_PROLOGUE
     lea     Store_unrealized_justified_checkpoint(%rdi), %rax
@@ -730,7 +730,7 @@ LOCAL_FUNCTION lantern_update_unrealized_checkpoints
     ret
 END_FUNCTION lantern_update_unrealized_checkpoints
 
-/* L0: lantern_on_tick_per_slot(store rdi, time_ms rsi), with time_ms not before genesis_time_ms. A leaf. */
+/* lantern_on_tick_per_slot(store rdi, time_ms rsi), with time_ms not before genesis_time_ms. A leaf. */
 LOCAL_FUNCTION lantern_on_tick_per_slot
     UNWIND_END_PROLOGUE
     STORE_SLOT %rdi, 9f                     # previous_slot
@@ -990,7 +990,7 @@ SPEC_END get_forkchoice_store
 /* ---------------------------------------------------------------- Attestations */
 
 /*
- * L0: rax = validate_on_attestation(store rdi, data rsi, is_from_block rdx as a value), as a
+ * rax = validate_on_attestation(store rdi, data rsi, is_from_block rdx as a value), as a
  * status; rdx = the node of the head vote. rbx store, rbp data, r12 target node, r13 head node.
  */
 LOCAL_FUNCTION lantern_validate_attestation
@@ -1500,7 +1500,7 @@ SPEC_END get_proposer_head
 /* ---------------------------------------------------------------- The merge block */
 
 .if FORK == FORK_BELLATRIX
-/* L0: rax = 1 when the Uint256 at rdi is below the one at rsi, else 0. A leaf. */
+/* rax = 1 when the Uint256 at rdi is below the one at rsi, else 0. A leaf. */
 LOCAL_FUNCTION lantern_u256_lo
     UNWIND_END_PROLOGUE
     mov     $24, %ecx                       # from the most significant u64 down

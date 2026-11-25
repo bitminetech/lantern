@@ -24,7 +24,7 @@
     strb    w9, [x2], #1
 .endm
 
-/* L0: the x1 bytes at x0 to x2. Uses x9. */
+/* The x1 bytes at x0 to x2. Uses x9. */
 LOCAL_FUNCTION lantern_jput
     UNWIND_END_PROLOGUE
     cbz     x1, 2f
@@ -35,7 +35,7 @@ LOCAL_FUNCTION lantern_jput
 2:  ret
 END_FUNCTION lantern_jput
 
-/* L0: DATA: "0x" and two lowercase hex digits for each of the x1 bytes at x0, to x2. Uses x9-x11. */
+/* DATA: "0x" and two lowercase hex digits for each of the x1 bytes at x0, to x2. Uses x9-x11. */
 LOCAL_FUNCTION lantern_jdata
     UNWIND_END_PROLOGUE
     mov     w9, #'"'
@@ -65,7 +65,7 @@ LOCAL_FUNCTION lantern_jdata
     ret
 END_FUNCTION lantern_jdata
 
-/* L0: QUANTITY of the x1 bytes, little endian, at x0: "0x" and the hex with no leading zeros, to x2. Uses x9-x12. */
+/* QUANTITY of the x1 bytes, little endian, at x0: "0x" and the hex with no leading zeros, to x2. Uses x9-x12. */
 LOCAL_FUNCTION lantern_jquantity
     UNWIND_END_PROLOGUE
     mov     w9, #'"'
@@ -98,7 +98,7 @@ LOCAL_FUNCTION lantern_jquantity
     ret
 END_FUNCTION lantern_jquantity
 
-/* L0: the decimal digits of x0 to x2. Uses x9-x12. */
+/* The decimal digits of x0 to x2. Uses x9-x12. */
 LOCAL_FUNCTION lantern_jdecimal
     UNWIND_END_PROLOGUE
     mov     x12, #10

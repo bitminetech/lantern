@@ -82,7 +82,7 @@ SPEC_END compute_time_at_slot
 .endif
 
 .if FORK == FORK_BELLATRIX
-/* L0: rax = 1 when the rsi bytes at rdi are all zero, else 0. A leaf. */
+/* rax = 1 when the rsi bytes at rdi are all zero, else 0. A leaf. */
 LOCAL_FUNCTION lantern_all_zero
     UNWIND_END_PROLOGUE
 1:  test    %rsi, %rsi

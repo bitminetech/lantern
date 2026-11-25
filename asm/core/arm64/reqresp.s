@@ -129,7 +129,7 @@ FUNCTION lantern_reqresp_protocol_id
     ret
 END_FUNCTION lantern_reqresp_protocol_id
 
-/* L0: x0 = the chunk bound of x0 payload bytes: 25 + n + 8 * ceil(n / 65536); carry set on overflow. Uses x9. */
+/* x0 = the chunk bound of x0 payload bytes: 25 + n + 8 * ceil(n / 65536); carry set on overflow. Uses x9. */
 LOCAL_FUNCTION lantern_chunk_bound
     UNWIND_END_PROLOGUE
     lsr     x9, x0, #16
@@ -362,7 +362,7 @@ FUNCTION lantern_reqresp_read_payload
     LEAVE 16
 END_FUNCTION lantern_reqresp_read_payload
 
-/* L0: (x0 descriptor, x1 node) -> x0 min, x1 max, saturating at 2^64 - 1. x19 descriptor, x20 node, x21-x24 work. */
+/* (x0 descriptor, x1 node) -> x0 min, x1 max, saturating at 2^64 - 1. x19 descriptor, x20 node, x21-x24 work. */
 LOCAL_FUNCTION lantern_size_bounds
     ENTER 0
     mov     x19, x0

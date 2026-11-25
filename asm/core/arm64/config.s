@@ -36,7 +36,7 @@ config_max_name:
 91:
 .endm
 
-/* L0: x0 = 1 when the x1 bytes at x0 are the x3 bytes at x2, else 0. Uses x9, x10. */
+/* x0 = 1 when the x1 bytes at x0 are the x3 bytes at x2, else 0. Uses x9, x10. */
 LOCAL_FUNCTION lantern_config_name_is
     UNWIND_END_PROLOGUE
     cmp     x1, x3
@@ -54,7 +54,7 @@ LOCAL_FUNCTION lantern_config_name_is
     ret
 END_FUNCTION lantern_config_name_is
 
-/* L0: the value bytes x0 to x1 without a pair of quotes: x0 = 0, x1 their start, x2 their end; x0 = 1 for a quote with no end. Uses x9, x10. */
+/* The value bytes x0 to x1 without a pair of quotes: x0 = 0, x1 their start, x2 their end; x0 = 1 for a quote with no end. Uses x9, x10. */
 LOCAL_FUNCTION lantern_config_unquote
     UNWIND_END_PROLOGUE
     mov     x2, x1
@@ -80,7 +80,7 @@ LOCAL_FUNCTION lantern_config_unquote
     ret
 END_FUNCTION lantern_config_unquote
 
-/* L0: x0 = 0 and x1 = the u64 of the bytes x0 to x1: decimal, or 0x and 1 to 16 hex digits; else x0 = 1. Uses x9-x13. */
+/* x0 = 0 and x1 = the u64 of the bytes x0 to x1: decimal, or 0x and 1 to 16 hex digits; else x0 = 1. Uses x9-x13. */
 LOCAL_FUNCTION lantern_config_u64
     UNWIND_END_PROLOGUE
     sub     x9, x1, x0
@@ -126,7 +126,7 @@ LOCAL_FUNCTION lantern_config_u64
     ret
 END_FUNCTION lantern_config_u64
 
-/* L0: x0 = 0 when the bytes x0 to x1 are 0x and 2 * x3 hex digits, whose x3 bytes go to x2 in order; else 1. Uses x9-x12. */
+/* x0 = 0 when the bytes x0 to x1 are 0x and 2 * x3 hex digits, whose x3 bytes go to x2 in order; else 1. Uses x9-x12. */
 LOCAL_FUNCTION lantern_config_hex_bytes
     UNWIND_END_PROLOGUE
     sub     x9, x1, x0
@@ -160,7 +160,7 @@ LOCAL_FUNCTION lantern_config_hex_bytes
     ret
 END_FUNCTION lantern_config_hex_bytes
 
-/* L0: x0 = 0 when the bytes x0 to x1 are the decimal digits of a number below 2^256, then little endian at x2 (32 bytes); else 1. Uses x9-x14. */
+/* x0 = 0 when the bytes x0 to x1 are the decimal digits of a number below 2^256, then little endian at x2 (32 bytes); else 1. Uses x9-x14. */
 LOCAL_FUNCTION lantern_config_uint256
     UNWIND_END_PROLOGUE
     stp     xzr, xzr, [x2]
@@ -193,7 +193,7 @@ LOCAL_FUNCTION lantern_config_uint256
 END_FUNCTION lantern_config_uint256
 
 /*
- * L1: x0 = 0 when the value bytes x1 to x2, without a pair of quotes, are a value of the kind
+ * x0 = 0 when the value bytes x1 to x2, without a pair of quotes, are a value of the kind
  * x0, then at x3: 8 bytes (u64; Version: 4 bytes and 4 zero bytes) or 32 (Uint256, Hash32);
  * else 1. x19 the kind, x20 out.
  */
@@ -245,7 +245,7 @@ LOCAL_FUNCTION lantern_config_value
 END_FUNCTION lantern_config_value
 
 /*
- * L0: x0 = 0 when the bytes x0 to x1 are a text (0 to CONFIG_TEXT_MAX bytes, each 0x20 to 0x7e but
+ * x0 = 0 when the bytes x0 to x1 are a text (0 to CONFIG_TEXT_MAX bytes, each 0x20 to 0x7e but
  * " and \); then, when x2 is not 0, at x2 its count and CONFIG_TEXT_MAX bytes: its bytes, then zero
  * bytes. Else x0 = 1. Uses x9-x12.
  */
@@ -309,7 +309,7 @@ END_FUNCTION lantern_config_text
 .set CONFIG_MODE_SCHEDULE, 3                /* the entries of BLOB_SCHEDULE */
 
 /*
- * L1: x0 = 0, or the number of the first faulty line, of the config text x0 (a ByteList); with
+ * x0 = 0, or the number of the first faulty line, of the config text x0 (a ByteList); with
  * x2 = 1, writes its values into the config x1. x19 config, x20 write, x21 the next line, x22 the
  * text end, x23 the line number, x24 the mode or a key record, x25 the line start, x26 the line
  * end, x27 the schedule's entries, x28 the open entry: bit 0 EPOCH, bit 1 MAX_BLOBS_PER_BLOCK,

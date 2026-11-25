@@ -61,7 +61,7 @@ VALIDATOR_LISTS PART_SPEC
     csel    x9, x12, x9, lo
 .endm
 
-/* L0: x0 = the fewest free entries in the validator lists of state x0. */
+/* x0 = the fewest free entries in the validator lists of state x0. */
 LOCAL_FUNCTION lantern_validator_room
     UNWIND_END_PROLOGUE
     mov     x9, #-1
@@ -70,7 +70,7 @@ LOCAL_FUNCTION lantern_validator_room
     ret
 END_FUNCTION lantern_validator_room
 
-/* L0: x0 = the index of the validator of state x0 with the 48-byte public key at x1, or -1. */
+/* x0 = the index of the validator of state x0 with the 48-byte public key at x1, or -1. */
 LOCAL_FUNCTION lantern_find_pubkey
     UNWIND_END_PROLOGUE
     PART    x9, x10, x0, BeaconState_validators

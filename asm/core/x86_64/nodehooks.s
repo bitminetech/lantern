@@ -4079,7 +4079,7 @@ SPEC_END node_new_payload
 .endif
 
 /*
- * L0: rax = 1 when the chain of the state rbx is healthy for a builder (node.md,
+ * rax = 1 when the chain of the state rbx is healthy for a builder (node.md,
  * lantern_node_produce_check: the skips before its slot, the epochs since finality, the skipped
  * slots of the last SLOTS_PER_EPOCH), else 0. Uses rcx, rdx, rsi, rdi, r8-r11.
  */
@@ -4583,7 +4583,7 @@ SPEC_FUNCTION node_produce_fold
 SPEC_END node_produce_fold
 
 /*
- * L1: the signature rsi added to the aggregate rdi with crypto_bls_aggregate, through a list of the
+ * The signature rsi added to the aggregate rdi with crypto_bls_aggregate, through a list of the
  * two at the end of scratch rdx: rax = LANTERN_OK, a status of crypto_bls_aggregate, or
  * LANTERN_BUFFER_TOO_SMALL. Locals: rsp+0 the aggregate, +8 the signature, +16 the list.
  */
@@ -4913,7 +4913,7 @@ SPEC_END node_produce_bid
 
 .if FORK >= FORK_BELLATRIX
 /*
- * L0: rax = 1 when the bid at 40(r12) wins the choice (beacon-api.md, produceBlockV3): the
+ * rax = 1 when the bid at 40(r12) wins the choice (beacon-api.md, produceBlockV3): the
  * engine's block_value (0 in bellatrix or with no result) below builder_boost_factor * (the bid's
  * value // 100), the product saturating at 2^256 - 1; else 0. r12 params. Uses rcx, rdx, rsi,
  * rdi, r8-r11.
@@ -5003,7 +5003,7 @@ LOCAL_FUNCTION lantern_produce_choice
 END_FUNCTION lantern_produce_choice
 
 /*
- * L0: the parts of the winning bid at PBL_BID of the locals rdi: its message, header, from deneb
+ * The parts of the winning bid at PBL_BID of the locals rdi: its message, header, from deneb
  * its commitments, from electra its requests (lantern_node_produce_bid checked its offsets).
  * Uses rax, rcx, rdx, rsi, r8, r9.
  */
@@ -5049,7 +5049,7 @@ LOCAL_FUNCTION lantern_produce_bid_parts
 END_FUNCTION lantern_produce_bid_parts
 
 /*
- * L2: the stand-in payload of the winning bid (node.md, lantern_node_produce_block, with a bid),
+ * The stand-in payload of the winning bid (node.md, lantern_node_produce_block, with a bid),
  * at the end of the scratch r13 below its expected withdrawals, whose size then drops below both:
  * the header's fields, its extra_data, no transactions, from capella the expected withdrawals in
  * SSZ. Its bytes and their count at 24 of the locals rdi. rax = 0, or LANTERN_BUFFER_TOO_SMALL,
@@ -5157,7 +5157,7 @@ LOCAL_FUNCTION lantern_produce_standin
 END_FUNCTION lantern_produce_standin
 
 /*
- * L2: the BlindedBeaconBlock of the block in out r14 (S7 of the locals rdi its bytes, S8 its body):
+ * The BlindedBeaconBlock of the block in out r14 (S7 of the locals rdi its bytes, S8 its body):
  * the header of the winning bid in the payload's place, the tail after it moved through the end of
  * the scratch r13, the body's offsets after the payload's grown by the difference. rax = 0, or
  * LANTERN_BUFFER_TOO_SMALL. Locals: 0 the locals, 8 the payload's place, 16 its end, 24 the tail's
@@ -5241,7 +5241,7 @@ LOCAL_FUNCTION lantern_produce_blind
 END_FUNCTION lantern_produce_blind
 
 /*
- * L2: the state root of the blinded block in out r14 (S7 of the locals rdi its bytes), as
+ * The state root of the blinded block in out r14 (S7 of the locals rdi its bytes), as
  * process_block of the builder's full block gives it: the state rbx's latest_block_header.body_root
  * becomes the hash_tree_root of the blinded body (the full body's), its
  * latest_execution_payload_header's transactions_root the bid's header's; then lantern_state_root
@@ -6102,7 +6102,7 @@ SPEC_FUNCTION node_produce_eth1
     LEAVE 240
 SPEC_END node_produce_eth1
 
-/* L0: rax = 0 when rsi bytes from rdi fit in the ByteList r14, else 1. Uses rcx. */
+/* rax = 0 when rsi bytes from rdi fit in the ByteList r14, else 1. Uses rcx. */
 LOCAL_FUNCTION lantern_produce_room
     UNWIND_END_PROLOGUE
     mov     (%r14), %rcx
@@ -6115,7 +6115,7 @@ LOCAL_FUNCTION lantern_produce_room
 END_FUNCTION lantern_produce_room
 
 /*
- * L0: (index rdi, record rsi) -> rax = 1 when the index is in both attestations of the attester
+ * (index rdi, record rsi) -> rax = 1 when the index is in both attestations of the attester
  * slashing whose SSZ bytes follow the draft record rsi, else 0. Uses rcx, rdx, rsi, r8-r11.
  */
 LOCAL_FUNCTION lantern_produce_in_slashing
@@ -6152,7 +6152,7 @@ LOCAL_FUNCTION lantern_produce_in_slashing
 END_FUNCTION lantern_produce_in_slashing
 
 /*
- * L2: (topic rdi, write position rsi) -> rax = 0, or 1 for a short out; rdx = the write position.
+ * (topic rdi, write position rsi) -> rax = 0, or 1 for a short out; rdx = the write position.
  * The SSZ bytes of the draft's records of the topic in their order, back to back. rbx the topic,
  * r12 a record, r13 the records' end, r15 the position.
  */
@@ -6191,7 +6191,7 @@ LOCAL_FUNCTION lantern_produce_records
 END_FUNCTION lantern_produce_records
 
 /*
- * L2: (write position rdi) -> rax = 0, or 1 for a short out; rdx = the write position. The draft's
+ * (write position rdi) -> rax = 0, or 1 for a short out; rdx = the write position. The draft's
  * attester slashing records as an SSZ list: their offsets, then their bytes. rbx the next offset,
  * r12 a record, r13 the end, r15 the position; S7 the next offset's place.
  */
@@ -6253,7 +6253,7 @@ LOCAL_FUNCTION lantern_produce_attester_slashings
 END_FUNCTION lantern_produce_attester_slashings
 
 /*
- * L1: (index rdi, records rsi, their end rdx) -> rax = 1 when a proposer slashing record of
+ * (index rdi, records rsi, their end rdx) -> rax = 1 when a proposer slashing record of
  * [rsi, rdx) has the index as its proposer, or an attester slashing record has it in both
  * attestations; else 0. rbx the index, rbp a record, r12 the end.
  */
@@ -6289,7 +6289,7 @@ LOCAL_FUNCTION lantern_produce_slashed
 END_FUNCTION lantern_produce_slashed
 
 /*
- * L1: (the attester slashing's bytes rdi, their count rsi, records rdx, their end rcx) -> rax = 1
+ * (the attester slashing's bytes rdi, their count rsi, records rdx, their end rcx) -> rax = 1
  * when an index is in both attestations (whose indices are sorted, as is_valid_indexed_attestation
  * holds them) and no proposer slashing record of [rdx, rcx) has it as its proposer; else 0. rbx
  * the bytes, rbp a place in the first list, r12 its end, r13 a place in the second, rsi its end,
@@ -6362,7 +6362,7 @@ END_FUNCTION lantern_produce_takes_slashing
 .endif
 .set PB_ATT_FIXED, 228 + PB_ATT_COMMITTEE
 
-/* L0: rax = 1 when the 128 bytes at rdi and rsi are equal, else 0. Uses rcx, rdx. */
+/* rax = 1 when the 128 bytes at rdi and rsi are equal, else 0. Uses rcx, rdx. */
 LOCAL_FUNCTION lantern_produce_same_data
     UNWIND_END_PROLOGUE
     xor     %ecx, %ecx
@@ -6379,7 +6379,7 @@ LOCAL_FUNCTION lantern_produce_same_data
 END_FUNCTION lantern_produce_same_data
 
 /*
- * L2: (the block's locals rdi, write position rsi) -> rax = 0, 1 for a short out or scratch, or a
+ * (the block's locals rdi, write position rsi) -> rax = 0, 1 for a short out or scratch, or a
  * status of crypto_bls_aggregate; rdx = the write position. The draft's aggregates chosen by
  * data.slot descending, then order, at most the fork's limit; before electra an Attestation of
  * each, from electra one Attestation for each data of the aggregates of every committee
@@ -6601,7 +6601,7 @@ LOCAL_FUNCTION lantern_produce_attestations
 END_FUNCTION lantern_produce_attestations
 
 /*
- * L0: (index rdi) -> rax: the aggregation bits of the attestation of the draft's aggregate rdi, r12
+ * (index rdi) -> rax: the aggregation bits of the attestation of the draft's aggregate rdi, r12
  * the aggregates, rbx their count: its length; from electra the lengths of the aggregates of its
  * data. Uses rcx, rdx, rsi, r8, r9.
  */
@@ -6633,7 +6633,7 @@ LOCAL_FUNCTION lantern_produce_att_bits
 .endif
 END_FUNCTION lantern_produce_att_bits
 
-/* L0: (bits rdi, aggregate rsi, cursor rdx) -> rax: the aggregate's length bits set at bit rdx of rdi on; the cursor after them. Uses rcx, r8. */
+/* (bits rdi, aggregate rsi, cursor rdx) -> rax: the aggregate's length bits set at bit rdx of rdi on; the cursor after them. Uses rcx, r8. */
 LOCAL_FUNCTION lantern_produce_copy_bits
     UNWIND_END_PROLOGUE
     mov     DraftAggregate_length(%rsi), %r8
@@ -6652,7 +6652,7 @@ END_FUNCTION lantern_produce_copy_bits
 
 .if FORK >= FORK_DENEB
 /*
- * L1: (the block's locals rdi) -> rax = 0, or 1 for a short out: out r14 holds the block from
+ * (the block's locals rdi) -> rax = 0, or 1 for a short out: out r14 holds the block from
  * offset 24; it becomes the BlockContents: the block moved 12 bytes on, the three offsets, the
  * bundle's proofs and blobs (the bundle at locals + 40, its bytes at + 48). Locals: rsp+0 the
  * bundle, +8 the blobs' offset, +16 the proofs' bytes, +24 the blobs' bytes.
@@ -7094,7 +7094,7 @@ SPEC_END node_publish_check
 
 .if FORK >= FORK_BELLATRIX
 /*
- * L2: (blinded ByteList rdi, state rsi, scratch rdx) -> rax status, rdx: the SignedBeaconBlock of
+ * (blinded ByteList rdi, state rsi, scratch rdx) -> rax status, rdx: the SignedBeaconBlock of
  * the blinded block with the stand-in payload of its header (node.md, lantern_node_publish_check),
  * as a ByteList at the end of scratch, whose size drops below it and its expected withdrawals (the
  * caller restores it). rbx the blinded bytes, rbp their count, r12 scratch, r13 the state, r14
@@ -7265,7 +7265,7 @@ LOCAL_FUNCTION lantern_publish_unblind
 END_FUNCTION lantern_publish_unblind
 
 /*
- * L2: (gossip rdi, block rsi, scratch rdx) -> rax: the blinded transition of the blinded block on
+ * (gossip rdi, block rsi, scratch rdx) -> rax: the blinded transition of the blinded block on
  * the proposer state of the gossip (node.md, lantern_node_publish_check): its body's root and
  * header's transactions_root, then process_block of the block with the stand-in payload, those
  * roots in the state, and its state root against the block's: LANTERN_OK, its result, or
@@ -7373,7 +7373,7 @@ END_FUNCTION lantern_publish_blinded_transition
 .endif
 
 /*
- * L1: (gossip rdi, data rsi, scratch rdx) -> rax: LANTERN_OK when lantern_node_gossip of the data
+ * (gossip rdi, data rsi, scratch rdx) -> rax: LANTERN_OK when lantern_node_gossip of the data
  * holds, else its status or its result. Locals: a Result, a root (32), an index.
  */
 LOCAL_FUNCTION lantern_publish_gossip

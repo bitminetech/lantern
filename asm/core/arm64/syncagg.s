@@ -346,7 +346,7 @@ SPEC_END process_sync_aggregate
 .endif
 
 /*
- * L0: all_pubkeys.index(pubkey) of state x0 for each of the SYNC_COMMITTEE_SIZE 48-byte keys at
+ * all_pubkeys.index(pubkey) of state x0 for each of the SYNC_COMMITTEE_SIZE 48-byte keys at
  * x1, written to the u64 entries at x2: the first validator with the key. One pass over the
  * validators, with the distinct keys in a hash table at x3 (SYNC_TABLE_BYTES): a slot holds the
  * key's bytes 8 to 15, then its member + 1, or 0 when empty. While the pass runs, an entry holds

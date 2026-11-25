@@ -43,7 +43,7 @@ http_t_keep_alive:
     mov     x1, #\label\()_len
 .endm
 
-/* L0: x0 = the index of the first byte w3 in [x1, x2) of x0's bytes, else x2. A leaf. Uses x9, x10. */
+/* x0 = the index of the first byte w3 in [x1, x2) of x0's bytes, else x2. A leaf. Uses x9, x10. */
 LOCAL_FUNCTION lantern_http_find
     UNWIND_END_PROLOGUE
     mov     x9, x0
@@ -58,7 +58,7 @@ LOCAL_FUNCTION lantern_http_find
     ret
 END_FUNCTION lantern_http_find
 
-/* L0: x0 = the index of the first CRLF that starts in [x1, x2 - 1) of x0's bytes, else x2. A leaf. Uses x9-x11. */
+/* x0 = the index of the first CRLF that starts in [x1, x2 - 1) of x0's bytes, else x2. A leaf. Uses x9-x11. */
 LOCAL_FUNCTION lantern_http_crlf
     UNWIND_END_PROLOGUE
     mov     x9, x0
@@ -80,7 +80,7 @@ LOCAL_FUNCTION lantern_http_crlf
     ret
 END_FUNCTION lantern_http_crlf
 
-/* L0: x0 = 1 when [x1, x2) of x0's bytes is a token (RFC 9110 section 5.6.2), else 0. A leaf. Uses x9-x13. */
+/* x0 = 1 when [x1, x2) of x0's bytes is a token (RFC 9110 section 5.6.2), else 0. A leaf. Uses x9-x13. */
 LOCAL_FUNCTION lantern_http_token
     UNWIND_END_PROLOGUE
     mov     x9, x0
@@ -102,7 +102,7 @@ LOCAL_FUNCTION lantern_http_token
     ret
 END_FUNCTION lantern_http_token
 
-/* L0: x0 = 1 when the x1 bytes at x0 are the x3 lower case bytes at x2, without regard to ASCII case, else 0. A leaf. Uses x9-x11. */
+/* x0 = 1 when the x1 bytes at x0 are the x3 lower case bytes at x2, without regard to ASCII case, else 0. A leaf. Uses x9-x11. */
 LOCAL_FUNCTION lantern_http_same
     UNWIND_END_PROLOGUE
     cmp     x1, x3
@@ -124,7 +124,7 @@ LOCAL_FUNCTION lantern_http_same
     ret
 END_FUNCTION lantern_http_same
 
-/* L0: [x1, x2) of x0's bytes without leading and trailing spaces and tabs: x0 = its start, x1 = its end. A leaf. Uses x9, x10. */
+/* [x1, x2) of x0's bytes without leading and trailing spaces and tabs: x0 = its start, x1 = its end. A leaf. Uses x9, x10. */
 LOCAL_FUNCTION lantern_http_trim
     UNWIND_END_PROLOGUE
     mov     x9, x0
@@ -151,7 +151,7 @@ LOCAL_FUNCTION lantern_http_trim
 END_FUNCTION lantern_http_trim
 
 /*
- * L0: the x3 bytes at x2 become a part of HttpRequest x0 at offset x1, with its PartRef at x0 + x4:
+ * The x3 bytes at x2 become a part of HttpRequest x0 at offset x1, with its PartRef at x0 + x4:
  * x0 = x1 + x3 rounded up to a multiple of 8. A leaf. Uses x9, x10.
  */
 LOCAL_FUNCTION lantern_http_part
@@ -171,7 +171,7 @@ LOCAL_FUNCTION lantern_http_part
 END_FUNCTION lantern_http_part
 
 /*
- * L0: the chunked body that starts at index x3 of the x2 bytes at x1, with head_max x4 and body_max
+ * The chunked body that starts at index x3 of the x2 bytes at x1, with head_max x4 and body_max
  * x5 (lantern_http_request's rules). x0 = 0 checks it: x0 = LANTERN_OK with x1 the index past the
  * trailers and x2 the body's bytes, LANTERN_HTTP_MORE, or LANTERN_INVALID_HTTP with x1 the HTTP
  * status. x0 = a destination: a body checked before, its bytes copied there. A leaf. Uses x6-x17.
@@ -315,7 +315,7 @@ LOCAL_FUNCTION lantern_http_chunks
 END_FUNCTION lantern_http_chunks
 
 /*
- * L0: the values of the field lines named by the x4 lower case bytes at x3, between index x1 and the
+ * The values of the field lines named by the x4 lower case bytes at x3, between index x1 and the
  * head's CRLF CRLF at x2 of the bytes at x0, joined with ", ", become a part of HttpRequest x5 at
  * offset x6 with its PartRef at x5 + x7: x0 = the next part's offset. The lines are checked before.
  * x19 bytes, x20 the line, x21 the head's end, x22 name, x23 its length, x24 out, x25 the offset, x26

@@ -37,7 +37,7 @@ http_t_keep_alive:
     .ascii  "keep-alive"
 .set http_t_keep_alive_len, 10
 
-# L0: rax = the index of the first byte cl in [rsi, rdx) of rdi's bytes, else rdx. A leaf.
+# rax = the index of the first byte cl in [rsi, rdx) of rdi's bytes, else rdx. A leaf.
 LOCAL_FUNCTION lantern_http_find
     UNWIND_END_PROLOGUE
 1:  cmp     %rdx, %rsi
@@ -50,7 +50,7 @@ LOCAL_FUNCTION lantern_http_find
     ret
 END_FUNCTION lantern_http_find
 
-# L0: rax = the index of the first CRLF that starts in [rsi, rdx - 1) of rdi's bytes, else rdx. A leaf. Uses r8.
+# rax = the index of the first CRLF that starts in [rsi, rdx - 1) of rdi's bytes, else rdx. A leaf. Uses r8.
 LOCAL_FUNCTION lantern_http_crlf
     UNWIND_END_PROLOGUE
     lea     -1(%rdx), %r8
@@ -68,7 +68,7 @@ LOCAL_FUNCTION lantern_http_crlf
     ret
 END_FUNCTION lantern_http_crlf
 
-# L0: rax = 1 when [rsi, rdx) of rdi's bytes is a token (RFC 9110 section 5.6.2), else 0. A leaf. Uses r8.
+# rax = 1 when [rsi, rdx) of rdi's bytes is a token (RFC 9110 section 5.6.2), else 0. A leaf. Uses r8.
 LOCAL_FUNCTION lantern_http_token
     UNWIND_END_PROLOGUE
     cmp     %rdx, %rsi
@@ -87,7 +87,7 @@ LOCAL_FUNCTION lantern_http_token
     ret
 END_FUNCTION lantern_http_token
 
-# L0: rax = 1 when the rsi bytes at rdi are the rcx lower case bytes at rdx, without regard to ASCII case, else 0. A leaf. Uses r8.
+# rax = 1 when the rsi bytes at rdi are the rcx lower case bytes at rdx, without regard to ASCII case, else 0. A leaf. Uses r8.
 LOCAL_FUNCTION lantern_http_same
     UNWIND_END_PROLOGUE
     cmp     %rcx, %rsi
@@ -111,7 +111,7 @@ LOCAL_FUNCTION lantern_http_same
     ret
 END_FUNCTION lantern_http_same
 
-# L0: [rsi, rdx) of rdi's bytes without leading and trailing spaces and tabs: rax = its start, rdx = its end. A leaf.
+# [rsi, rdx) of rdi's bytes without leading and trailing spaces and tabs: rax = its start, rdx = its end. A leaf.
 LOCAL_FUNCTION lantern_http_trim
     UNWIND_END_PROLOGUE
 1:  cmp     %rdx, %rsi
@@ -136,7 +136,7 @@ LOCAL_FUNCTION lantern_http_trim
     ret
 END_FUNCTION lantern_http_trim
 
-# L0: the rcx bytes at rdx become a part of HttpRequest rdi at offset rsi, with its PartRef at rdi + r8:
+# The rcx bytes at rdx become a part of HttpRequest rdi at offset rsi, with its PartRef at rdi + r8:
 # rax = rsi + rcx rounded up to a multiple of 8. A leaf. Uses r9.
 LOCAL_FUNCTION lantern_http_part
     UNWIND_END_PROLOGUE
@@ -157,7 +157,7 @@ LOCAL_FUNCTION lantern_http_part
     ret
 END_FUNCTION lantern_http_part
 
-# L0: the chunked body that starts at index rcx of the rdx bytes at rsi, with head_max r8 and body_max
+# The chunked body that starts at index rcx of the rdx bytes at rsi, with head_max r8 and body_max
 # r9 (lantern_http_request's rules). rdi = 0 checks it: rax = LANTERN_OK with rdx the index past the
 # trailers and rcx the body's bytes, LANTERN_HTTP_MORE, or LANTERN_INVALID_HTTP with rdx the HTTP
 # status. rdi = a destination: a body checked before, its bytes copied there.
@@ -307,7 +307,7 @@ LOCAL_FUNCTION lantern_http_chunks
     LEAVE 16
 END_FUNCTION lantern_http_chunks
 
-# L0: the values of the field lines named by the r8 lower case bytes at rcx, between index rsi and the
+# The values of the field lines named by the r8 lower case bytes at rcx, between index rsi and the
 # head's CRLF CRLF at rdx of the bytes at rdi, joined with ", ", become a part of HttpRequest r9 at
 # the offset of the 7th argument, with its PartRef at r9 + the 8th: rax = the next part's offset.
 # The lines are checked before. rbx bytes, rbp the line, r12 the head's end, r13 out, r14 the PartRef,

@@ -309,7 +309,7 @@ SPEC_END process_operations
 
 .if FORK >= FORK_ELECTRA
 /*
- * L0: rax = LANTERN_OK when state rdi has room for the appends of the execution requests of
+ * rax = LANTERN_OK when state rdi has room for the appends of the execution requests of
  * block body rsi and r10 more pending deposits, else LANTERN_BUFFER_TOO_SMALL. A leaf.
  */
 LOCAL_FUNCTION lantern_requests_room
@@ -343,7 +343,7 @@ END_FUNCTION lantern_requests_room
 
 .if FORK == FORK_ELECTRA
 /*
- * L0: rax = LANTERN_OK when state rdi has room for the appends of block body rsi, else
+ * rax = LANTERN_OK when state rdi has room for the appends of block body rsi, else
  * LANTERN_BUFFER_TOO_SMALL: a validator and a pending deposit for each deposit, and the
  * appends of the execution requests. rbx state, rbp body.
  */
@@ -363,7 +363,7 @@ LOCAL_FUNCTION lantern_block_room
     LEAVE 0
 END_FUNCTION lantern_block_room
 .else
-/* L0: lantern_requests_room with no deposits. */
+/* lantern_requests_room with no deposits. */
 LOCAL_FUNCTION lantern_block_room
     UNWIND_END_PROLOGUE
     xor     %r10d, %r10d
@@ -392,7 +392,7 @@ END_FUNCTION lantern_block_room
 .endif
 
 /*
- * L0: rax = LANTERN_OK when state rdi has room for the appends of block body rsi, else
+ * rax = LANTERN_OK when state rdi has room for the appends of block body rsi, else
  * LANTERN_BUFFER_TOO_SMALL: an eth1 data vote, a validator for each deposit and, in phase0,
  * a PendingAttestation for each attestation in each epoch's list.
  * rbx state, rbp body, r12 the bytes the attestations may add to one list.
@@ -427,7 +427,7 @@ END_FUNCTION lantern_block_room
 .endif
 
 /*
- * L0: rax = the scratch that lantern_process_block needs for body rsi, with rdx validators.
+ * rax = the scratch that lantern_process_block needs for body rsi, with rdx validators.
  * A leaf.
  */
 LOCAL_FUNCTION lantern_block_scratch
@@ -620,7 +620,7 @@ SPEC_FUNCTION process_slot
 SPEC_END process_slot
 
 /*
- * L0: rax = LANTERN_OK when state rdi has the room and scratch rdx the bytes to reach slot rsi
+ * rax = LANTERN_OK when state rdi has the room and scratch rdx the bytes to reach slot rsi
  * (a value), plus rcx more scratch bytes; else LANTERN_BUFFER_TOO_SMALL. Also rdx = the epochs
  * crossed. Locals: rsp+0 the slot, rsp+8 scratch, rsp+16 the extra bytes, rsp+24 the validators
  * the epochs may add.

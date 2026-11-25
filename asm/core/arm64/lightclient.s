@@ -25,7 +25,7 @@
 .endif
 
 /*
- * L0: the fields of the LightClientUpdate ByteList x0 that is_better_update compares: x0 = 0 with
+ * The fields of the LightClientUpdate ByteList x0 that is_better_update compares: x0 = 0 with
  * x1 the participants, x2 attested_header.beacon.slot, x3 finalized_header.beacon.slot, x4
  * signature_slot, x5 1 with a next_sync_committee_branch not all zero, x6 1 with a finality_branch
  * not all zero; x0 = 1 for bytes that are no update of the fork. Uses x7-x15.
@@ -98,7 +98,7 @@ LOCAL_FUNCTION lantern_lc_update_fields
 END_FUNCTION lantern_lc_update_fields
 .endif
 
-/* L0: x9 = the sync committee period of the slot x9. Uses x10. */
+/* x9 = the sync committee period of the slot x9. Uses x10. */
 .macro LC_PERIOD
     MOVQ    x10, SLOTS_PER_EPOCH * EPOCHS_PER_SYNC_COMMITTEE_PERIOD
     udiv    x9, x9, x10

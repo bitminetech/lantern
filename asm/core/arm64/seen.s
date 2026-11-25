@@ -7,7 +7,7 @@
 .error "the gossip code assumes the Seen layouts of include/lantern.inc"
 .endif
 
-/* L0: copy the count entries of stride x3 of part x2 of seen x19 into out x21, and set the part's count. */
+/* Copy the count entries of stride x3 of part x2 of seen x19 into out x21, and set the part's count. */
 .macro SEEN_PART_COPY ref, stride
     PART    x1, x22, x19, \ref
     LDQ     x0, x21, \ref

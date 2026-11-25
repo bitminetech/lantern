@@ -260,7 +260,7 @@ END_FUNCTION lantern_upgrade_header
 .endif
 
 .if FORK == FORK_ELECTRA
-/* L0: a0 = the pending deposits that upgrade_to_electra appends for the state before a0. A leaf. */
+/* a0 = the pending deposits that upgrade_to_electra appends for the state before a0. A leaf. */
 LOCAL_FUNCTION lantern_upgrade_deposit_count
     UNWIND_END_PROLOGUE
     PART    a1, a2, a0, PRE_BeaconState_validators
@@ -329,7 +329,7 @@ END_FUNCTION lantern_upgrade_deposit_count
 98:
 .endm
 
-/* L0: sort the a1 validator indices at a0 by (activation_eligibility_epoch, index) of the validators at a2 (heapsort). A leaf. */
+/* Sort the a1 validator indices at a0 by (activation_eligibility_epoch, index) of the validators at a2 (heapsort). A leaf. */
 LOCAL_FUNCTION lantern_sort_by_eligibility
     UNWIND_END_PROLOGUE
     li      t0, 2

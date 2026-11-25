@@ -654,7 +654,7 @@ SPEC_FUNCTION get_inactivity_penalty_deltas
     LEAVE 48
 SPEC_END get_inactivity_penalty_deltas
 
-/* L0: add the n entries of list x1 to those of list x0. x0 = LANTERN_OK, or LANTERN_INVALID_OVERFLOW. A leaf. */
+/* Add the n entries of list x1 to those of list x0. x0 = LANTERN_OK, or LANTERN_INVALID_OVERFLOW. A leaf. */
 LOCAL_FUNCTION lantern_add_deltas
     UNWIND_END_PROLOGUE
     add     x0, x0, #LIST_FIXED
@@ -876,7 +876,7 @@ SPEC_END process_justification_and_finalization
 /* ---------------------------------------------------------------- Record updates */
 
 /*
- * L0: x9 = the bytes of the entries of state x0's PendingAttestation list at PartRef offset x1,
+ * x9 = the bytes of the entries of state x0's PendingAttestation list at PartRef offset x1,
  * x10 = their start. Uses x11, x12.
  */
 .macro PENDING_BYTES
@@ -893,7 +893,7 @@ SPEC_END process_justification_and_finalization
 92:
 .endm
 
-/* L0: x0 = LANTERN_OK when state x0's previous_epoch_attestations can take the current ones, else LANTERN_BUFFER_TOO_SMALL. A leaf. */
+/* x0 = LANTERN_OK when state x0's previous_epoch_attestations can take the current ones, else LANTERN_BUFFER_TOO_SMALL. A leaf. */
 LOCAL_FUNCTION lantern_record_room
     UNWIND_END_PROLOGUE
     MOVQ    x1, BeaconState_current_epoch_attestations

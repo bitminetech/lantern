@@ -10,7 +10,7 @@
 e1_digits:
     .ascii  "0123456789abcdef"
 
-# L0: the QUANTITY of a0 to the cursor a1: "0x", then hex digits with no leading zero; a1 = the end. Uses t0-t3.
+# The QUANTITY of a0 to the cursor a1: "0x", then hex digits with no leading zero; a1 = the end. Uses t0-t3.
 LOCAL_FUNCTION lantern_e1_qty
     UNWIND_END_PROLOGUE
     li      t0, '0'
@@ -38,7 +38,7 @@ LOCAL_FUNCTION lantern_e1_qty
 4:  ret
 END_FUNCTION lantern_e1_qty
 
-# L0: the a2 bytes at a0 as lowercase hex to the cursor a1; a1 = the end. Uses t0-t3.
+# The a2 bytes at a0 as lowercase hex to the cursor a1; a1 = the end. Uses t0-t3.
 LOCAL_FUNCTION lantern_e1_hex
     UNWIND_END_PROLOGUE
     ADDRESS t2, e1_digits
@@ -59,7 +59,7 @@ LOCAL_FUNCTION lantern_e1_hex
 2:  ret
 END_FUNCTION lantern_e1_hex
 
-# L0: the ByteList a0 holds the bytes from its byte 24 to the cursor a1: its offset 24 and its length. Uses t0.
+# The ByteList a0 holds the bytes from its byte 24 to the cursor a1: its offset 24 and its length. Uses t0.
 LOCAL_FUNCTION lantern_e1_close
     UNWIND_END_PROLOGUE
     addi    t0, a0, 24
@@ -165,7 +165,7 @@ FUNCTION lantern_eth_get_deposit_logs
     LEAVE 0
 END_FUNCTION lantern_eth_get_deposit_logs
 
-# L1: a QUANTITY string at the cursor a0: a0 = the cursor after it and a1 its value, or a0 = 0 for
+# A QUANTITY string at the cursor a0: a0 = the cursor after it and a1 its value, or a0 = 0 for
 # none: "0x", then 1 to 16 hex digits with no leading zero. Uses a1-a3, t0-t4.
 LOCAL_FUNCTION lantern_e1_qty_in
     FRAME 16
@@ -497,7 +497,7 @@ FUNCTION lantern_eth1_deposit_logs
     LEAVE 624
 END_FUNCTION lantern_eth1_deposit_logs
 
-# L0: a0 = 1 when the 576 bytes at a0 are e1_abi but in the values (pubkey 192, withdrawal
+# a0 = 1 when the 576 bytes at a0 are e1_abi but in the values (pubkey 192, withdrawal
 # credentials 288, amount 352, signature 416, index 544), else 0. Uses t0-t4.
 LOCAL_FUNCTION lantern_e1_abi_check
     UNWIND_END_PROLOGUE
@@ -538,7 +538,7 @@ LOCAL_FUNCTION lantern_e1_abi_check
     ret
 END_FUNCTION lantern_e1_abi_check
 
-# L1: SHA-256 of the 32 bytes at a0 and the 32 bytes at a1, to a2. Locals: out, then a ByteList of 64 bytes.
+# SHA-256 of the 32 bytes at a0 and the 32 bytes at a1, to a2. Locals: out, then a ByteList of 64 bytes.
 LOCAL_FUNCTION lantern_e1_hash2
     FRAME 96
     sd      a2, 0(sp)
