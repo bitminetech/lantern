@@ -12,6 +12,12 @@
 - [`lantern_deposit_tree_push`](#function-lantern_deposit_tree_push): adds one deposit's leaf to a `DepositTree`.
 - [`lantern_deposit_tree_root`](#function-lantern_deposit_tree_root): the deposit root of a `DepositTree`.
 - [`lantern_deposit_proof`](#function-lantern_deposit_proof): the proof of one deposit against the root of the first leaves.
+- [`lantern_e1_abi_check`](#function-lantern_e1_abi_check): whether 576 bytes of a DepositEvent's data have the ABI layout of its five byte strings.
+- [`lantern_e1_close`](#function-lantern_e1_close): closes a ByteList written from its byte 24 to a cursor.
+- [`lantern_e1_hash2`](#function-lantern_e1_hash2): sHA-256 of two 32-byte nodes.
+- [`lantern_e1_hex`](#function-lantern_e1_hex): writes bytes as lowercase hex at a cursor.
+- [`lantern_e1_qty`](#function-lantern_e1_qty): writes a QUANTITY at a cursor.
+- [`lantern_e1_qty_in`](#function-lantern_e1_qty_in): reads a QUANTITY string at a cursor.
 
 ### Types
 
@@ -21,19 +27,13 @@
 
 ## Spec
 
-- Document: [consensus-specs v1.7.0-beta.4](https://github.com/ethereum/consensus-specs/tree/aa16bb4c156184e9548a997d53efaf2a228a6304/specs): phase0 `deposit-contract.md`, `validator.md` (Eth1 Data, Deposits) and `beacon-chain.md` (`DepositData`, `DEPOSIT_CONTRACT_TREE_DEPTH`, process_deposit's is_valid_merkle_branch); electra `validator.md`.
-- Document: [execution-apis 981aa66](https://github.com/ethereum/execution-apis/tree/981aa66d79364be8322a9c358aaf0a571cca0873/src/engine) `common.md`: the Engine API connection also serves `eth_getBlockByNumber` and `eth_getLogs`, with the same JWT.
-- Document: the deposit contract's source, [solidity-deposit-contract](https://github.com/ethereum/solidity-deposit-contract/blob/master/deposit_contract.sol), which `deposit-contract.md` names: the `DepositEvent` log, its little endian `amount` and `index`, and get_deposit_root.
+- Document: [consensus-specs v1.7.0-beta.4](https://github.com/ethereum/consensus-specs/tree/aa16bb4c156184e9548a997d53efaf2a228a6304/specs).
+- Section: phase0 `deposit-contract.md`, `validator.md` (Eth1 Data, Deposits) and `beacon-chain.md` (`DepositData`, `DEPOSIT_CONTRACT_TREE_DEPTH`, process_deposit's is_valid_merkle_branch); electra `validator.md`.
+- Document: [execution-apis 981aa66](https://github.com/ethereum/execution-apis/tree/981aa66d79364be8322a9c358aaf0a571cca0873/src/engine) `common.md`.
+- Section: the Engine API connection also serves `eth_getBlockByNumber` and `eth_getLogs`, with the same JWT.
+- Document: the deposit contract's source, [solidity-deposit-contract](https://github.com/ethereum/solidity-deposit-contract/blob/master/deposit_contract.sol), which `deposit-contract.md` names.
+- Section: the `DepositEvent` log, its little endian `amount` and `index`, and get_deposit_root.
 - Document: the Solidity ABI encoding of a log's `data`: five dynamic `bytes` values.
-
-## Common rules
-
-- As in [helpers.md](helpers.md#common-rules).
-- JSON is written compact, as in [engine-api.md](engine-api.md#common-rules): a `QUANTITY` is lowercase hex with no leading zeros, `0x0` for zero; `DATA` is lowercase hex, two digits a byte.
-- The `DepositEvent` topic: keccak256 of `DepositEvent(bytes,bytes,bytes,bytes,bytes)`, `0x649bbc62d0e31342afea4e5cd82d4049e7e1ee912fc0889aa790803be39038c5`.
-- A leaf of the deposit tree is hash_tree_root of the deposit's `DepositData`.
-- Every function is in the common object of the core (asm/core/<ISA>/eth1.s), and its symbol is its name. Every u64 argument is passed by its address.
-
 ## Function `lantern_eth_get_block_by_number`
 
 The JSON-RPC request `{"jsonrpc":"2.0","id":id,"method":"eth_getBlockByNumber","params":["<number>",false]}`: the number as a `QUANTITY`, or `latest` for 2^64 - 1.
@@ -56,6 +56,26 @@ lantern_eth_get_block_by_number(number, id, out) -> status
 
 - `LANTERN_OK`: `out` holds the request.
 - `LANTERN_BUFFER_TOO_SMALL`: `out` has room for fewer than 128 bytes.
+
+### Function does
+
+- Writes JSON compact, with no spaces, in the field order of the spec's lists: a `QUANTITY` is lowercase hex with no leading zeros, `0x0` for zero; `DATA` is lowercase hex, two digits a byte.
+
+### Function never
+
+- Makes an OS call.
+- Keeps a pointer after it returns.
+
+### Limits
+
+- Stack of its own: 96 bytes on x86-64 (return address included), 96 bytes on ARM64, 96 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_eth_get_block_by_number`, with `_` before it on macOS.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6); every u64 argument is passed by its address.
+- Argument order: `number`, `id`, `out`.
 
 ## Function `lantern_eth_get_deposit_logs`
 
@@ -82,6 +102,26 @@ lantern_eth_get_deposit_logs(address, from, to, id, out) -> status
 - `LANTERN_OK`: `out` holds the request.
 - `LANTERN_BUFFER_TOO_SMALL`: `out` has room for fewer than 384 bytes.
 
+### Function does
+
+- Writes JSON compact, with no spaces, in the field order of the spec's lists: a `QUANTITY` is lowercase hex with no leading zeros, `0x0` for zero; `DATA` is lowercase hex, two digits a byte.
+
+### Function never
+
+- Makes an OS call.
+- Keeps a pointer after it returns.
+
+### Limits
+
+- Stack of its own: 96 bytes on x86-64 (return address included), 96 bytes on ARM64, 96 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_eth_get_deposit_logs`, with `_` before it on macOS.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6); every u64 argument is passed by its address.
+- Argument order: `address`, `from`, `to`, `id`, `out`.
+
 ## Function `lantern_eth1_block`
 
 The `number`, `hash` and `timestamp` of the `result` of eth_getBlockByNumber.
@@ -107,6 +147,22 @@ lantern_eth1_block(json, out) -> status
 ### Function does
 
 - Takes JSON as RFC 8259 writes it, with whitespace between tokens and around the value. Skips each member it does not read, whatever its value; takes a later member of the same name over an earlier one.
+
+### Function never
+
+- Makes an OS call.
+- Keeps a pointer after it returns.
+
+### Limits
+
+- Stack of its own: 96 bytes on x86-64 (return address included), 96 bytes on ARM64, 96 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_eth1_block`, with `_` before it on macOS.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6); every u64 argument is passed by its address.
+- Argument order: `json`, `out`.
 
 ## Function `lantern_eth1_deposit_logs`
 
@@ -135,6 +191,23 @@ lantern_eth1_deposit_logs(json, out) -> status
 ### Function does
 
 - The entry: the log's `blockNumber`; `index` the little endian u64 of the fifth value; the `DepositData` of the first four values, `amount` their little endian u64.
+- Takes the logs of the `DepositEvent` topic: keccak256 of `DepositEvent(bytes,bytes,bytes,bytes,bytes)`, `0x649bbc62d0e31342afea4e5cd82d4049e7e1ee912fc0889aa790803be39038c5`.
+
+### Function never
+
+- Makes an OS call.
+- Keeps a pointer after it returns.
+
+### Limits
+
+- Stack of its own: 704 bytes on x86-64 (return address included), 704 bytes on ARM64, 720 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_eth1_deposit_logs`, with `_` before it on macOS.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6); every u64 argument is passed by its address.
+- Argument order: `json`, `out`.
 
 ## Function `lantern_deposit_leaf`
 
@@ -156,6 +229,26 @@ lantern_deposit_leaf(data, out) -> status
 ### Returns
 
 - `LANTERN_OK`: `out` holds the root.
+
+### Function does
+
+- A leaf of the deposit tree is hash_tree_root of the deposit's `DepositData`.
+
+### Function never
+
+- Makes an OS call.
+- Keeps a pointer after it returns.
+
+### Limits
+
+- Stack of its own: 256 bytes on x86-64 (return address included), 256 bytes on ARM64, 448 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_deposit_leaf`, with `_` before it on macOS.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6); every u64 argument is passed by its address.
+- Argument order: `data`, `out`.
 
 ## Function `lantern_deposit_tree_push`
 
@@ -179,6 +272,22 @@ lantern_deposit_tree_push(tree, leaf) -> status
 - `LANTERN_OK`: the tree holds one leaf more.
 - `LANTERN_INVALID_OVERFLOW`: it holds 2^`DEPOSIT_CONTRACT_TREE_DEPTH` - 1 leaves already.
 
+### Function never
+
+- Makes an OS call.
+- Keeps a pointer after it returns.
+
+### Limits
+
+- Stack of its own: 128 bytes on x86-64 (return address included), 128 bytes on ARM64, 128 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_deposit_tree_push`, with `_` before it on macOS.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6); every u64 argument is passed by its address.
+- Argument order: `tree`, `leaf`.
+
 ## Function `lantern_deposit_tree_root`
 
 get_deposit_root of the deposit contract: the root of the tree's leaves, then the count as 8 little endian bytes and 24 zero bytes, hashed: hash_tree_root of the list of the deposits' `DepositData`.
@@ -199,6 +308,22 @@ lantern_deposit_tree_root(tree, out) -> status
 ### Returns
 
 - `LANTERN_OK`: `out` holds the root.
+
+### Function never
+
+- Makes an OS call.
+- Keeps a pointer after it returns.
+
+### Limits
+
+- Stack of its own: 192 bytes on x86-64 (return address included), 192 bytes on ARM64, 192 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_deposit_tree_root`, with `_` before it on macOS.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6); every u64 argument is passed by its address.
+- Argument order: `tree`, `out`.
 
 ## Function `lantern_deposit_proof`
 
@@ -226,7 +351,256 @@ lantern_deposit_proof(leaves, count, index, scratch, out) -> status
 - `LANTERN_INVALID_INDEX`: `index` is not below `count`, or `count` is above the leaves of `leaves`.
 - `LANTERN_BUFFER_TOO_SMALL`: `scratch` is too small.
 
+### Function never
+
+- Makes an OS call.
+- Keeps a pointer after it returns.
+
+### Limits
+
+- Stack of its own: 176 bytes on x86-64 (return address included), 160 bytes on ARM64, 176 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_deposit_proof`, with `_` before it on macOS.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6); every u64 argument is passed by its address.
+- Argument order: `leaves`, `count`, `index`, `scratch`, `out`.
+
+## Function `lantern_e1_abi_check`
+
+Whether 576 bytes of a DepositEvent's data have the ABI layout of its five byte strings.
+
+### Signature
+
+```
+lantern_e1_abi_check(data) -> flag
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `data` | input | 576 bytes: the log's data |
+
+### Function does
+
+- Returns 1 when the bytes match the expected ABI words but in the values (pubkey at 192, withdrawal credentials at 288, amount at 352, signature at 416, index at 544), else 0.
+
+### Function never
+
+- Calls another function.
+- Writes memory.
+- Makes an OS call.
+
+### Limits
+
+- Stack of its own: 8 bytes on x86-64 (return address included), 0 bytes on ARM64, 0 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_e1_abi_check`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- Registers it changes, on ARM64, x86-64, RISC-V: x0, x9 to x13; rax, rcx, rdx, r8; a0, t0 to t4.
+- Argument order: `data`.
+
+## Function `lantern_e1_close`
+
+Closes a ByteList written from its byte 24 to a cursor.
+
+### Signature
+
+```
+lantern_e1_close(list, cursor)
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `list` | state | ByteList |
+| `cursor` | input | the address after the last byte written |
+
+### Function does
+
+- Sets the ByteList's offset to 24 and its length to the bytes from byte 24 to `cursor`.
+
+### Function never
+
+- Calls another function.
+- Makes an OS call.
+
+### Limits
+
+- Stack of its own: 0 bytes on ARM64, 0 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_e1_close`, local to its object. Only ARM64 and RISC-V have it.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- Registers it changes, on ARM64 and RISC-V: x9, x10; t0.
+- Argument order: `list`, `cursor`.
+
+## Function `lantern_e1_hash2`
+
+SHA-256 of two 32-byte nodes.
+
+### Signature
+
+```
+lantern_e1_hash2(left, right, out)
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `left` | input | 32 bytes |
+| `right` | input | 32 bytes |
+| `out` | output | 32 bytes |
+
+### Function does
+
+- Writes SHA-256 of `left` then `right` to `out`, with crypto_sha256 of asm-crypto and a ByteList of 64 bytes on its own stack.
+
+### Function never
+
+- Makes an OS call.
+
+### Limits
+
+- Stack of its own: 112 bytes on x86-64 (return address included), 112 bytes on ARM64, 112 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_e1_hash2`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- Argument order: `left`, `right`, `out`.
+
+## Function `lantern_e1_hex`
+
+Writes bytes as lowercase hex at a cursor.
+
+### Signature
+
+```
+lantern_e1_hex(bytes, cursor, n) -> end
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `bytes` | input | `n` bytes |
+| `cursor` | output | where the text goes |
+| `n` | input | u64 in a register |
+
+### Function does
+
+- Writes two lowercase hex digits for each byte and returns the cursor after them.
+
+### Function never
+
+- Calls another function.
+- Makes an OS call.
+
+### Limits
+
+- Stack of its own: 8 bytes on x86-64 (return address included), 0 bytes on ARM64, 0 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_e1_hex`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- On x86-64 `cursor` is in rdi, `bytes` in rsi and the end comes back in rdi; on ARM64 and RISC-V the end comes back in x1 and a1.
+- Registers it changes, on ARM64, x86-64, RISC-V: x1, x9 to x12; rax, rcx, rdi, r8; a1, t0 to t3.
+- Argument order: `bytes`, `cursor`, `n`.
+
+## Function `lantern_e1_qty`
+
+Writes a QUANTITY at a cursor.
+
+### Signature
+
+```
+lantern_e1_qty(value, cursor) -> end
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `value` | input | u64 in a register |
+| `cursor` | output | where the text goes |
+
+### Function does
+
+- Writes "0x", then the hex digits of `value` with no leading zero (`0x0` for zero), and returns the cursor after them.
+
+### Function never
+
+- Calls another function.
+- Makes an OS call.
+
+### Limits
+
+- Stack of its own: 8 bytes on x86-64 (return address included), 0 bytes on ARM64, 0 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_e1_qty`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- `value` is in x0, rax, a0 and `cursor` in x1, rdi, a1 on ARM64, x86-64, RISC-V; the end comes back in `cursor`'s register.
+- Registers it changes, on ARM64, x86-64, RISC-V: x1, x9 to x12; rcx, rdx, rdi, r8; a1, t0 to t3.
+- Argument order: `value`, `cursor`.
+
+## Function `lantern_e1_qty_in`
+
+Reads a QUANTITY string at a cursor.
+
+### Signature
+
+```
+lantern_e1_qty_in(cursor) -> (cursor, value)
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `cursor` | input | the JSON text |
+
+### Function does
+
+- Returns the cursor after the string and its value, or a cursor of 0 when the bytes are not "0x" and 1 to 16 hex digits with no leading zero.
+
+### Function never
+
+- Makes an OS call.
+
+### Limits
+
+- Stack of its own: 8 bytes on x86-64 (return address included), 32 bytes on ARM64, 32 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_e1_qty_in`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- The value comes back in x1 on ARM64, rsi on x86-64 and a1 on RISC-V; the cursor in x0, rdi, a0.
+- Registers it changes, on ARM64, x86-64, RISC-V: x0 to x3, x9 to x11; rax, rcx, rdx, rsi, rdi, r8, r9; a0 to a3, t0 to t4.
+- Argument order: `cursor`.
+
 ## Type `Eth1Block`
+
+What lantern_eth1_block reads of an execution block.
+
+### Layout
 
 | Offset | Field | Type | Meaning |
 |---|---|---|---|
@@ -239,6 +613,10 @@ lantern_deposit_proof(leaves, count, index, scratch, out) -> status
 
 ## Type `Eth1Deposit`
 
+One deposit that lantern_eth1_deposit_logs reads from a DepositEvent log.
+
+### Layout
+
 | Offset | Field | Type | Meaning |
 |---|---|---|---|
 | 0 | `block_number` | u64 | The block of the log |
@@ -247,6 +625,10 @@ lantern_deposit_proof(leaves, count, index, scratch, out) -> status
 | 200 | | | Size |
 
 ## Type `DepositTree`
+
+The deposit tree of the deposit contract, as the eth1 follower keeps it.
+
+### Layout
 
 | Offset | Field | Type | Meaning |
 |---|---|---|---|

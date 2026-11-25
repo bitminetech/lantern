@@ -21,34 +21,21 @@
 - [`lantern_shell_mkdir`](#function-lantern_shell_mkdir): makes a directory.
 - [`lantern_shell_sync_dir`](#function-lantern_shell_sync_dir): makes a directory's entries durable.
 - [`lantern_shell_process`](#function-lantern_shell_process): reads the process's CPU time, highest resident memory and open file limit.
+- [`lantern_shell_wide`](#function-lantern_shell_wide): a path in UTF-16 with a zero after it, for the Windows calls.
+- [`main`](#function-main): the entry point of the binary on macOS.
+- [`mainCRTStartup`](#function-maincrtstartup): the entry point of the binary on Windows.
+- [`_start`](#function-_start): the entry point of the binary on Linux.
 
 ### Types
 
-- [`FileResult`](#type-fileresult): the outcome of `lantern_shell_read_file` and `lantern_shell_map_file`.
 - [`FileOp`](#type-fileop): the outcome of the other file functions.
+- [`FileResult`](#type-fileresult): the outcome of `lantern_shell_read_file` and `lantern_shell_map_file`.
 
 ## Spec
 
 - Document: ARCHITECTURE.md section 2 (core and shell) and section 7 (operating systems).
 - Section: the shell of the lantern binary: memory, files, the log and the clock, for Linux (system calls), macOS (libSystem) and Windows (kernel32). Sockets, the monotonic clock and random bytes come from the shell of asm-libp2p.
 - The file functions serve the database of [db.md](db.md): files written once at their end, made durable, mapped to read, renamed into place, and deleted whole.
-
-## Common rules
-
-- Each OS and ISA has one shell, `asm/shell/<OS>/<ISA>/shell.s`, with the functions below and the entry point of the binary.
-- The entry point copies the program's arguments into an [`ArgList`](app.md#type-arglist) in memory from lantern_shell_map, calls lantern_app_main ([app.md](app.md)) with it, and ends the process with the status it returns as the exit code.
-- On x86-64 and ARM64 it first checks the CPU features of the `sha` variant (README, Target profile), with baseline instructions only. With all of them it calls `lx_lantern_app_main`, lantern_app_main of the copy built with that variant; else lantern_app_main.
-  - x86-64: `cpuid`.
-  - Linux ARM64: the `AT_HWCAP` entry of the auxiliary vector, after the environment pointers on the stack the kernel builds.
-  - macOS ARM64: `sysctlbyname`.
-  - Windows ARM64: `IsProcessorFeaturePresent`.
-  - Linux: `_start`; the arguments from the stack the kernel builds, without the program name.
-  - macOS: `main`; `argv` without the program name.
-  - Windows: `mainCRTStartup`; `GetCommandLineW` split by the rules of `CommandLineToArgvW`, each argument converted to UTF-8, without the program name.
-- A function returns `LANTERN_OK` when its result is written, also when the OS call failed; the result then holds the OS error.
-- A path is a ByteList in UTF-8 without a terminating zero, at most `SHELL_PATH_MAX` (4095) bytes; a longer one gives Linux and macOS `ENAMETOOLONG`, Windows `ERROR_FILENAME_EXCED_RANGE`. Windows converts it to UTF-16.
-- A file is a u64: a file descriptor on Linux and macOS, a HANDLE on Windows. Each u64 argument is passed by its address.
-- An OS call that Linux or macOS ends early with `EINTR` goes again.
 
 ## Function `lantern_shell_map`
 
@@ -75,11 +62,17 @@ lantern_shell_map(size, out) -> status
 
 - Linux: `mmap` of anonymous private memory. macOS: `mmap` of libSystem. Windows: `VirtualAlloc` with MEM_COMMIT and MEM_RESERVE.
 - The address is a multiple of 4096.
+- Returns `LANTERN_OK` when its result is written, also when the OS call failed; the result then holds the OS error.
+- Makes an OS call again when Linux or macOS ends it early with `EINTR`.
+
+### Limits
+
+- Stack of its own on Linux: 32 bytes on x86-64 (return address included), 0 bytes on ARM64, 0 bytes on RISC-V.
 
 ### ABI
 
-- Role: L2.
-- Symbol: `lantern_shell_map` (`_lantern_shell_map` on macOS).
+- Role: L0.
+- Symbol: `lantern_shell_map`, with `_` before it on macOS.
 - Convention: the core ABI for each ISA (ARCHITECTURE.md section 6); OS calls use the native convention.
 - Argument order: `size`, `out`.
 
@@ -107,11 +100,17 @@ lantern_shell_unmap(address, size) -> status
 ### Function does
 
 - Linux and macOS: `munmap`. Windows: `VirtualFree` with MEM_RELEASE.
+- Returns `LANTERN_OK` when its result is written, also when the OS call failed; the result then holds the OS error.
+- Makes an OS call again when Linux or macOS ends it early with `EINTR`.
+
+### Limits
+
+- Stack of its own on Linux: 16 bytes on x86-64 (return address included), 0 bytes on ARM64, 0 bytes on RISC-V.
 
 ### ABI
 
-- Role: L2.
-- Symbol: `lantern_shell_unmap` (`_lantern_shell_unmap` on macOS).
+- Role: L0.
+- Symbol: `lantern_shell_unmap`, with `_` before it on macOS.
 - Convention: as `lantern_shell_map`.
 - Argument order: `address`, `size`.
 
@@ -136,16 +135,27 @@ lantern_shell_read_file(path, result) -> status
 
 - `LANTERN_OK`, always.
 
+### Caller must
+
+- `path` is a ByteList in UTF-8 without a terminating zero, at most `SHELL_PATH_MAX` (4095) bytes; a longer one gives Linux and macOS `ENAMETOOLONG`, Windows `ERROR_FILENAME_EXCED_RANGE`.
+
 ### Function does
 
 - Opens the file for reading, reads its size, maps 24 bytes more than that size with lantern_shell_map, reads every byte after the first 24, and closes the file.
 - The memory is a ByteList: `size` the bytes mapped, `offset` 24, `count` the file's size.
 - An OS error of any step, a path above 4095 bytes (Linux and macOS `ENAMETOOLONG`, Windows `ERROR_FILENAME_EXCED_RANGE`), or a file that ends before its size: `error` holds it, the memory goes back, and `address` is 0.
+- Returns `LANTERN_OK` when its result is written, also when the OS call failed; the result then holds the OS error.
+- Makes an OS call again when Linux or macOS ends it early with `EINTR`.
+- Windows converts the path to UTF-16.
+
+### Limits
+
+- Stack of its own on Linux: 4400 bytes on x86-64 (return address included), 2 bytes on ARM64, 0 bytes on RISC-V.
 
 ### ABI
 
-- Role: L2.
-- Symbol: `lantern_shell_read_file` (`_lantern_shell_read_file` on macOS).
+- Role: L0.
+- Symbol: `lantern_shell_read_file`, with `_` before it on macOS.
 - Convention: as `lantern_shell_map`.
 - Argument order: `path`, `result`.
 
@@ -174,11 +184,17 @@ lantern_shell_write(stream, bytes) -> status
 
 - Writes until every byte is written or the OS gives an error; an error drops the rest.
 - Linux and macOS: `write` to file descriptor 1 or 2. Windows: `WriteFile` to `GetStdHandle` of STD_OUTPUT_HANDLE or STD_ERROR_HANDLE.
+- Returns `LANTERN_OK` when its result is written, also when the OS call failed; the result then holds the OS error.
+- Makes an OS call again when Linux or macOS ends it early with `EINTR`.
+
+### Limits
+
+- Stack of its own on Linux: 96 bytes on x86-64 (return address included), 0 bytes on ARM64, 0 bytes on RISC-V.
 
 ### ABI
 
-- Role: L2.
-- Symbol: `lantern_shell_write` (`_lantern_shell_write` on macOS).
+- Role: L0.
+- Symbol: `lantern_shell_write`, with `_` before it on macOS.
 - Convention: as `lantern_shell_map`.
 - Argument order: `stream`, `bytes`.
 
@@ -205,11 +221,17 @@ lantern_shell_time_ms(out) -> status
 ### Function does
 
 - Linux: `clock_gettime` of CLOCK_REALTIME. macOS: `clock_gettime_nsec_np` of CLOCK_REALTIME. Windows: `GetSystemTimePreciseAsFileTime`, less the 11644473600 seconds from 1601 to 1970.
+- Returns `LANTERN_OK` when its result is written, also when the OS call failed; the result then holds the OS error.
+- Makes an OS call again when Linux or macOS ends it early with `EINTR`.
+
+### Limits
+
+- Stack of its own on Linux: 48 bytes on x86-64 (return address included), 16 bytes on ARM64, 16 bytes on RISC-V.
 
 ### ABI
 
-- Role: L2.
-- Symbol: `lantern_shell_time_ms` (`_lantern_shell_time_ms` on macOS).
+- Role: L0.
+- Symbol: `lantern_shell_time_ms`, with `_` before it on macOS.
 - Convention: as `lantern_shell_map`.
 - Argument order: `out`.
 
@@ -235,17 +257,28 @@ lantern_shell_open(path, mode, result) -> status
 
 - `LANTERN_OK`, always.
 
+### Caller must
+
+- `path` is a ByteList in UTF-8 without a terminating zero, at most `SHELL_PATH_MAX` (4095) bytes; a longer one gives Linux and macOS `ENAMETOOLONG`, Windows `ERROR_FILENAME_EXCED_RANGE`.
+
 ### Function does
 
 - `SHELL_OPEN_READ`: Linux `openat` and macOS `open` with O_RDONLY and O_CLOEXEC; Windows `CreateFileW` with GENERIC_READ and OPEN_EXISTING.
 - `SHELL_OPEN_APPEND`: Linux and macOS with O_WRONLY, O_CREAT, O_APPEND and O_CLOEXEC, mode 0644; Windows `CreateFileW` with GENERIC_WRITE and OPEN_ALWAYS.
 - Windows shares the file for reading, writing and deleting.
 - Another mode: Linux and macOS `EINVAL`, Windows `ERROR_INVALID_PARAMETER`.
+- Returns `LANTERN_OK` when its result is written, also when the OS call failed; the result then holds the OS error.
+- Makes an OS call again when Linux or macOS ends it early with `EINTR`.
+- Windows converts the path to UTF-16.
+
+### Limits
+
+- Stack of its own on Linux: 4208 bytes on x86-64 (return address included), 1 bytes on ARM64, 0 bytes on RISC-V.
 
 ### ABI
 
-- Role: L2.
-- Symbol: `lantern_shell_open` (`_lantern_shell_open` on macOS).
+- Role: L0.
+- Symbol: `lantern_shell_open`, with `_` before it on macOS.
 - Convention: as `lantern_shell_map`.
 - Argument order: `path`, `mode`, `result`.
 
@@ -271,16 +304,26 @@ lantern_shell_append(file, bytes, result) -> status
 
 - `LANTERN_OK`, always.
 
+### Caller must
+
+- `file` is a u64: a file descriptor on Linux and macOS, a HANDLE on Windows.
+
 ### Function does
 
 - Writes until every byte is written or the OS gives an error; `value` then holds the bytes written before it.
 - A call that writes no bytes is an error: Linux and macOS `EIO`, Windows `ERROR_WRITE_FAULT`.
 - Linux: `write`, which O_APPEND puts at the end. macOS: the same, at most 2^30 bytes a call, as its `write` refuses more than INT_MAX. Windows: `SetFilePointerEx` to the end, then `WriteFile`, at most 2^30 bytes a call.
+- Returns `LANTERN_OK` when its result is written, also when the OS call failed; the result then holds the OS error.
+- Makes an OS call again when Linux or macOS ends it early with `EINTR`.
+
+### Limits
+
+- Stack of its own on Linux: 32 bytes on x86-64 (return address included), 0 bytes on ARM64, 0 bytes on RISC-V.
 
 ### ABI
 
-- Role: L2.
-- Symbol: `lantern_shell_append` (`_lantern_shell_append` on macOS).
+- Role: L0.
+- Symbol: `lantern_shell_append`, with `_` before it on macOS.
 - Convention: as `lantern_shell_map`.
 - Argument order: `file`, `bytes`, `result`.
 
@@ -305,14 +348,24 @@ lantern_shell_sync(file, result) -> status
 
 - `LANTERN_OK`, always.
 
+### Caller must
+
+- `file` is a u64: a file descriptor on Linux and macOS, a HANDLE on Windows.
+
 ### Function does
 
 - Linux: `fdatasync`. macOS: `fcntl` with F_FULLFSYNC, as `fsync` alone leaves the bytes in the drive's cache; `fsync` when that `fcntl` gives an error, as on a file system without F_FULLFSYNC. Windows: `FlushFileBuffers`.
+- Returns `LANTERN_OK` when its result is written, also when the OS call failed; the result then holds the OS error.
+- Makes an OS call again when Linux or macOS ends it early with `EINTR`.
+
+### Limits
+
+- Stack of its own on Linux: 8 bytes on x86-64 (return address included), 0 bytes on ARM64, 0 bytes on RISC-V.
 
 ### ABI
 
-- Role: L2.
-- Symbol: `lantern_shell_sync` (`_lantern_shell_sync` on macOS).
+- Role: L0.
+- Symbol: `lantern_shell_sync`, with `_` before it on macOS.
 - Convention: as `lantern_shell_map`.
 - Argument order: `file`, `result`.
 
@@ -338,14 +391,24 @@ lantern_shell_truncate(file, size, result) -> status
 
 - `LANTERN_OK`, always.
 
+### Caller must
+
+- `file` is a u64: a file descriptor on Linux and macOS, a HANDLE on Windows.
+
 ### Function does
 
 - Linux and macOS: `ftruncate`. Windows: `SetFilePointerEx` to the size, then `SetEndOfFile`.
+- Returns `LANTERN_OK` when its result is written, also when the OS call failed; the result then holds the OS error.
+- Makes an OS call again when Linux or macOS ends it early with `EINTR`.
+
+### Limits
+
+- Stack of its own on Linux: 8 bytes on x86-64 (return address included), 0 bytes on ARM64, 0 bytes on RISC-V.
 
 ### ABI
 
-- Role: L2.
-- Symbol: `lantern_shell_truncate` (`_lantern_shell_truncate` on macOS).
+- Role: L0.
+- Symbol: `lantern_shell_truncate`, with `_` before it on macOS.
 - Convention: as `lantern_shell_map`.
 - Argument order: `file`, `size`, `result`.
 
@@ -369,14 +432,24 @@ lantern_shell_close(file) -> status
 
 - `LANTERN_OK`, always.
 
+### Caller must
+
+- `file` is a u64: a file descriptor on Linux and macOS, a HANDLE on Windows.
+
 ### Function does
 
 - Linux and macOS: `close`. Windows: `CloseHandle`.
+- Returns `LANTERN_OK` when its result is written, also when the OS call failed; the result then holds the OS error.
+- Makes an OS call again when Linux or macOS ends it early with `EINTR`.
+
+### Limits
+
+- Stack of its own on Linux: 8 bytes on x86-64 (return address included), 0 bytes on ARM64, 0 bytes on RISC-V.
 
 ### ABI
 
-- Role: L2.
-- Symbol: `lantern_shell_close` (`_lantern_shell_close` on macOS).
+- Role: L0.
+- Symbol: `lantern_shell_close`, with `_` before it on macOS.
 - Convention: as `lantern_shell_map`.
 - Argument order: `file`.
 
@@ -401,20 +474,28 @@ lantern_shell_map_file(path, result) -> status
 
 - `LANTERN_OK`, always.
 
+### Caller must
+
+- Unmap a file before it renames over it, deletes it or truncates it: Windows refuses those while a view is mapped.
+- `path` is a ByteList in UTF-8 without a terminating zero, at most `SHELL_PATH_MAX` (4095) bytes; a longer one gives Linux and macOS `ENAMETOOLONG`, Windows `ERROR_FILENAME_EXCED_RANGE`.
+
 ### Function does
 
 - Linux and macOS: opens the file read only, reads its size, `mmap` with PROT_READ and MAP_SHARED, and closes it. Windows: `CreateFileW` with GENERIC_READ, `GetFileSizeEx`, `CreateFileMappingW` with PAGE_READONLY, `MapViewOfFile` with FILE_MAP_READ, and closes both handles.
 - A file of no bytes: `address` 0, `size` 0 and no error.
 - The bytes stay readable until lantern_shell_unmap_file.
+- Returns `LANTERN_OK` when its result is written, also when the OS call failed; the result then holds the OS error.
+- Makes an OS call again when Linux or macOS ends it early with `EINTR`.
+- Windows converts the path to UTF-16.
 
-### Caller must
+### Limits
 
-- Unmap a file before it renames over it, deletes it or truncates it: Windows refuses those while a view is mapped.
+- Stack of its own on Linux: 4400 bytes on x86-64 (return address included), 2 bytes on ARM64, 0 bytes on RISC-V.
 
 ### ABI
 
-- Role: L2.
-- Symbol: `lantern_shell_map_file` (`_lantern_shell_map_file` on macOS).
+- Role: L0.
+- Symbol: `lantern_shell_map_file`, with `_` before it on macOS.
 - Convention: as `lantern_shell_map`.
 - Argument order: `path`, `result`.
 
@@ -442,11 +523,17 @@ lantern_shell_unmap_file(address, size) -> status
 ### Function does
 
 - Linux and macOS: `munmap`. Windows: `UnmapViewOfFile`.
+- Returns `LANTERN_OK` when its result is written, also when the OS call failed; the result then holds the OS error.
+- Makes an OS call again when Linux or macOS ends it early with `EINTR`.
+
+### Limits
+
+- Stack of its own on Linux: 8 bytes on x86-64 (return address included), 0 bytes on ARM64, 0 bytes on RISC-V.
 
 ### ABI
 
-- Role: L2.
-- Symbol: `lantern_shell_unmap_file` (`_lantern_shell_unmap_file` on macOS).
+- Role: L0.
+- Symbol: `lantern_shell_unmap_file`, with `_` before it on macOS.
 - Convention: as `lantern_shell_map`.
 - Argument order: `address`, `size`.
 
@@ -471,14 +558,25 @@ lantern_shell_remove(path, result) -> status
 
 - `LANTERN_OK`, always.
 
+### Caller must
+
+- `path` is a ByteList in UTF-8 without a terminating zero, at most `SHELL_PATH_MAX` (4095) bytes; a longer one gives Linux and macOS `ENAMETOOLONG`, Windows `ERROR_FILENAME_EXCED_RANGE`.
+
 ### Function does
 
 - Linux: `unlinkat`. macOS: `unlink`. Windows: `DeleteFileW`.
+- Returns `LANTERN_OK` when its result is written, also when the OS call failed; the result then holds the OS error.
+- Makes an OS call again when Linux or macOS ends it early with `EINTR`.
+- Windows converts the path to UTF-16.
+
+### Limits
+
+- Stack of its own on Linux: 4208 bytes on x86-64 (return address included), 1 bytes on ARM64, 0 bytes on RISC-V.
 
 ### ABI
 
-- Role: L2.
-- Symbol: `lantern_shell_remove` (`_lantern_shell_remove` on macOS).
+- Role: L0.
+- Symbol: `lantern_shell_remove`, with `_` before it on macOS.
 - Convention: as `lantern_shell_map`.
 - Argument order: `path`, `result`.
 
@@ -507,11 +605,17 @@ lantern_shell_rename(from, to, result) -> status
 ### Function does
 
 - Linux: `renameat2` with no flags. macOS: `rename`. Windows: `MoveFileExW` with MOVEFILE_REPLACE_EXISTING and MOVEFILE_WRITE_THROUGH.
+- Returns `LANTERN_OK` when its result is written, also when the OS call failed; the result then holds the OS error.
+- Makes an OS call again when Linux or macOS ends it early with `EINTR`.
+
+### Limits
+
+- Stack of its own on Linux: 8304 bytes on x86-64 (return address included), 2 bytes on ARM64, 0 bytes on RISC-V.
 
 ### ABI
 
-- Role: L2.
-- Symbol: `lantern_shell_rename` (`_lantern_shell_rename` on macOS).
+- Role: L0.
+- Symbol: `lantern_shell_rename`, with `_` before it on macOS.
 - Convention: as `lantern_shell_map`.
 - Argument order: `from`, `to`, `result`.
 
@@ -536,14 +640,25 @@ lantern_shell_mkdir(path, result) -> status
 
 - `LANTERN_OK`, always.
 
+### Caller must
+
+- `path` is a ByteList in UTF-8 without a terminating zero, at most `SHELL_PATH_MAX` (4095) bytes; a longer one gives Linux and macOS `ENAMETOOLONG`, Windows `ERROR_FILENAME_EXCED_RANGE`.
+
 ### Function does
 
 - Linux: `mkdirat`, mode 0755. macOS: `mkdir`, mode 0755. Windows: `CreateDirectoryW`.
+- Returns `LANTERN_OK` when its result is written, also when the OS call failed; the result then holds the OS error.
+- Makes an OS call again when Linux or macOS ends it early with `EINTR`.
+- Windows converts the path to UTF-16.
+
+### Limits
+
+- Stack of its own on Linux: 4208 bytes on x86-64 (return address included), 1 bytes on ARM64, 0 bytes on RISC-V.
 
 ### ABI
 
-- Role: L2.
-- Symbol: `lantern_shell_mkdir` (`_lantern_shell_mkdir` on macOS).
+- Role: L0.
+- Symbol: `lantern_shell_mkdir`, with `_` before it on macOS.
 - Convention: as `lantern_shell_map`.
 - Argument order: `path`, `result`.
 
@@ -568,14 +683,25 @@ lantern_shell_sync_dir(path, result) -> status
 
 - `LANTERN_OK`, always.
 
+### Caller must
+
+- `path` is a ByteList in UTF-8 without a terminating zero, at most `SHELL_PATH_MAX` (4095) bytes; a longer one gives Linux and macOS `ENAMETOOLONG`, Windows `ERROR_FILENAME_EXCED_RANGE`.
+
 ### Function does
 
 - Linux and macOS: opens the directory read only, `fsync`, and closes it. Windows: nothing, with no error: NTFS journals its directory changes, and lantern_shell_rename writes through.
+- Returns `LANTERN_OK` when its result is written, also when the OS call failed; the result then holds the OS error.
+- Makes an OS call again when Linux or macOS ends it early with `EINTR`.
+- Windows converts the path to UTF-16.
+
+### Limits
+
+- Stack of its own on Linux: 4208 bytes on x86-64 (return address included), 1 bytes on ARM64, 0 bytes on RISC-V.
 
 ### ABI
 
-- Role: L2.
-- Symbol: `lantern_shell_sync_dir` (`_lantern_shell_sync_dir` on macOS).
+- Role: L0.
+- Symbol: `lantern_shell_sync_dir`, with `_` before it on macOS.
 - Convention: as `lantern_shell_map`.
 - Argument order: `path`, `result`.
 
@@ -632,11 +758,126 @@ lantern_shell_process(out) -> status
 - macOS: getrusage and getrlimit(RLIMIT_NOFILE) of libSystem (`ru_maxrss` in bytes).
 - Windows: GetProcessTimes and K32GetProcessMemoryInfo (`PeakWorkingSetSize`) of the current process; `max_fds` 0.
 
+### Limits
+
+- Stack of its own on Linux: 192 bytes on x86-64 (return address included), 176 bytes on ARM64, 0 bytes on RISC-V.
+
 ### ABI
 
 - Role: L0.
-- Symbol: `lantern_shell_process` (`_lantern_shell_process` on macOS).
+- Symbol: `lantern_shell_process`, with `_` before it on macOS.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6); each u64 argument is passed by its address.
 - Argument order: `out`.
+
+## Function `lantern_shell_wide`
+
+A path in UTF-16 with a zero after it, for the Windows calls.
+
+### Signature
+
+```
+lantern_shell_wide(path, to) -> error
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `path` | input | ByteList: the path in UTF-8 |
+| `to` | output | at most `SHELL_WIDE_BYTES` bytes |
+
+### Caller must
+
+- `path` is a ByteList in UTF-8 without a terminating zero, at most `SHELL_PATH_MAX` (4095) bytes; a longer one gives Linux and macOS `ENAMETOOLONG`, Windows `ERROR_FILENAME_EXCED_RANGE`.
+
+### Function does
+
+- Writes the path in UTF-16 with a zero after it to `to`, and returns 0, or the error.
+- Windows converts the path to UTF-16.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_shell_wide`, with `_` before it on macOS. Only the Windows shells have it. Only x86-64 and ARM64 have it.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6); each u64 argument is passed by its address.
+- Argument order: `path`, `to`.
+
+## Function `main`
+
+The entry point of the binary on macOS.
+
+### Signature
+
+```
+main(argc, argv) -> exit code
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `argc` | input | u64 in a register |
+| `argv` | input | the arguments |
+
+### Function does
+
+- Copies `argv` without the program name into an [`ArgList`](app.md#type-arglist) in memory from lantern_shell_map.
+- Checks the CPU features of the `sha` variant: `cpuid` on x86-64, `sysctlbyname` on ARM64; with all of them calls `lx_lantern_app_main`, else lantern_app_main, with the ArgList.
+- Returns the status lantern_app_main returns as the exit code.
+
+### ABI
+
+- Role: L0.
+- Symbol: `main`, the entry point the OS calls, in the macOS shell of each ISA.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- Convention of the macOS C runtime's `main`.
+- Argument order: `argc`, `argv`.
+
+## Function `mainCRTStartup`
+
+The entry point of the binary on Windows.
+
+### Signature
+
+```
+mainCRTStartup() -> exit code
+```
+
+### Function does
+
+- Splits `GetCommandLineW` by the rules of `CommandLineToArgvW`, converts each argument to UTF-8, and copies them without the program name into an [`ArgList`](app.md#type-arglist) in memory from lantern_shell_map.
+- Checks the CPU features of the `sha` variant: `cpuid` on x86-64, `IsProcessorFeaturePresent` on ARM64; with all of them calls `lx_lantern_app_main`, else lantern_app_main, with the ArgList.
+- Ends the process with the status lantern_app_main returns as the exit code.
+
+### ABI
+
+- Role: L0.
+- Symbol: `mainCRTStartup`, the entry point the OS calls, in the Windows shell of each ISA.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- Convention of the Windows process entry point.
+
+## Function `_start`
+
+The entry point of the binary on Linux.
+
+### Signature
+
+```
+_start() -> exit code
+```
+
+### Function does
+
+- Copies the arguments from the stack the kernel builds, without the program name, into an [`ArgList`](app.md#type-arglist) in memory from lantern_shell_map.
+- On x86-64 and ARM64 checks the CPU features of the `sha` variant: `cpuid` on x86-64, the `AT_HWCAP` entry of the auxiliary vector on ARM64; with all of them calls `lx_lantern_app_main`, else lantern_app_main, with the ArgList.
+- Ends the process with `exit_group` and the status lantern_app_main returns.
+
+### ABI
+
+- Role: L0.
+- Symbol: `_start`, the entry point the OS calls, in the Linux shell of each ISA.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- Convention of the Linux process entry: the stack holds argc, then argv, a 0, envp, a 0, then the auxiliary vector.
 
 ## Test vectors
 
