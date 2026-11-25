@@ -9,6 +9,20 @@
 - [`lantern_metrics_observe`](#function-lantern_metrics_observe): a value joins a Histogram.
 - [`lantern_metrics_state`](#function-lantern_metrics_state): the head state's values of the metrics.
 - [`lantern_metrics_node`](#function-lantern_metrics_node): the node's and store's values of the metrics.
+- [`lantern_mt_dec`](#function-lantern_mt_dec): writes the decimal digits of a number.
+- [`lantern_mt_histogram`](#function-lantern_mt_histogram): writes the samples of a histogram.
+- [`lantern_mt_label`](#function-lantern_mt_label): writes one label of a sample.
+- [`lantern_mt_le`](#function-lantern_mt_le): writes the start of a histogram bound's label.
+- [`lantern_mt_name`](#function-lantern_mt_name): writes the name of the current table entry.
+- [`lantern_mt_open`](#function-lantern_mt_open): writes the start of a sample.
+- [`lantern_mt_pair`](#function-lantern_mt_pair): writes a label pair of a sample.
+- [`lantern_mt_put`](#function-lantern_mt_put): writes bytes at the cursor.
+- [`lantern_mt_sdec`](#function-lantern_mt_sdec): writes a signed decimal number.
+- [`lantern_mt_seconds`](#function-lantern_mt_seconds): writes microseconds as seconds.
+- [`lantern_mt_text`](#function-lantern_mt_text): writes a text of the metric table.
+- [`lantern_mt_ticks_us`](#function-lantern_mt_ticks_us): cPU counter ticks as microseconds.
+- [`lantern_mt_topic`](#function-lantern_mt_topic): writes the name of the current entry and the topic label of a GossipTopic.
+- [`lantern_mt_value`](#function-lantern_mt_value): writes the end of a sample.
 
 ### Types
 
@@ -21,211 +35,14 @@
 - [`MetricsProcess`](#type-metricsprocess): the process's values.
 - [`MetricsGossip`](#type-metricsgossip): gossipsub's values for each topic.
 - [`Profile`](#type-profile): the tick rate and tick bounds of the function timers.
-
-### Constants
-
-- `METRIC_BIT_<CATEGORY>_<SUB>`: the bit of a sub category, by the table of [Categories](#categories); `METRIC_BIT_BEACON` (0) for `beacon`.
-- `METRICS_BEACON`, `METRICS_NETWORK`, `METRICS_PROCESSING`, `METRICS_NODE`: the bits of each category's sub categories.
-- `METRICS_ALL`: the bits of every category.
-- `METRICS_HEAD_MAX` (4096): the longest request head of the metrics server.
-- `METRICS_HEAD_ROOM` (256): the bytes of `out` that lantern_metrics_answer keeps before the text.
+- [`MetricEntry`](#type-metricentry): one family of the metric table (include/metrics_table.inc), which lantern_metrics_text writes.
+- [`MetricLabel`](#type-metriclabel): a label table of the metric table: a label's name and its values in element order.
 
 ## Spec
 
 - Document: [ethereum/beacon-metrics 0af554b](https://github.com/ethereum/beacon-metrics/blob/0af554b0787887887b66e429c373f190b932c223/metrics.md): the metric names, types and Usage texts; an informative spec ("implementations are not required to implement all recommendations").
 - Document: [Prometheus text exposition format 0.0.4](https://prometheus.io/docs/instrumenting/exposition_formats/#text-based-format): the text.
 - Section: Interop Metrics, PeerDAS Metrics (Data column, kzg, custody metrics), Additional Metrics, Prometheus metrics collection.
-
-## Categories
-
-| Category | Sub categories, by bit |
-|---|---|
-| `beacon` | none: bit 0 |
-| `network` | `peer` 1, `discovery` 2, `transport` 3, `gossip` 4, `reqresp` 5 |
-| `processing` | `block` 8, `epoch` 9, `state` 10, `forkchoice` 11, `availability` 12, `gossip` 13, `engine` 14, `builder` 15, `lightclient` 16, `history` 17, `validator` 18 |
-| `node` | `resource` 24, `sync` 25, `health` 26, `pool` 27, `log` 28, `api` 29, `storage` 30 |
-
-- `beacon`: the metrics of ethereum/beacon-metrics that lantern has a source for, by their names there.
-- `network`: what lantern's peers, discovery, connections, gossipsub and requests do.
-- `processing`: the work on data, by stage: its counts, failures and run times, down to single functions.
-- `node`: the process and the node as a whole: its resources, sync, health, pools, log, Beacon API and database.
-- The metrics of a sub category are named `lantern_<category>_<sub>_<measure>`; those of `beacon` keep beacon-metrics' names.
-
-## Common rules
-
-- A category is a set of metrics a node may expose. The `beacon` category holds the metrics of the table below, in that order: those of beacon-metrics that lantern has a source for.
-- The metric table (include/metrics_table.inc) holds every family of every category, in the order of the text; tests/generator/metrics.py writes it and include/metrics.inc from its lists. A family's entry gives its name, HELP text, type, sub category bit, source, place in the source, kind, condition, label tables and bound set.
-- Each family has a source: the head's post-state (`MetricsState`), the node and the store (`MetricsNode`), the node step's counters (`NodeMetrics`), the app (`AppMetrics`, `MetricsProcess`), gossipsub (`MetricsGossip`) or the function timers (`Profile`).
-- beacon-metrics leaves these out of the `beacon` category, as lantern has no source for them: the fast confirmation metrics (lantern runs no fast confirmation rule), the engine_getBlobsV2 and engine_getBlobsV3 metrics (lantern calls neither), the partial message metrics and `beacon_useful_full_columns_received_total` (lantern sends and takes no partial column messages), `beacon_custody_groups_backfilled` (lantern backfills no custody group after a raise), `beacon_data_column_sidecar_inclusion_proof_verification_seconds` (the inclusion proof check runs inside a larger work, with no run time of its own), `store_beacon_block_cache_hit_total` and `beacon_state_data_cache_misses_total` (lantern has no such caches), and `beacon_attestor_slashing_created_total` (lantern runs no slasher).
-- A root as a number: bytes 24 to 32 of the root as a little-endian signed 64-bit integer (beacon-metrics: `int.from_bytes(root[24:32], byteorder='little', signed=True)`).
-- `lantern_metrics_text`, `lantern_metrics_answer` and `lantern_metrics_node` are in the common object of the core (asm/core/<ISA>/metrics.s), and each symbol is its name. `lantern_metrics_state` is in the object of each fork, as `lantern_<fork>_metrics_state`. Every u64 argument is passed by its address.
-
-## The `beacon` category
-
-| Metric | Type | Value |
-|---|---|---|
-| `libp2p_peers` | gauge | `MetricsNode.peers` |
-| `beacon_head_slot` | gauge | `MetricsState.slot` |
-| `beacon_finalized_epoch` | gauge | `MetricsState.finalized_epoch` |
-| `beacon_current_justified_epoch` | gauge | `MetricsState.current_justified_epoch` |
-| `beacon_previous_justified_epoch` | gauge | `MetricsState.previous_justified_epoch` |
-| `beacon_current_active_validators` | gauge | `MetricsState.active_validators` |
-| `beacon_reorgs_total` | counter | `NodeMetrics.reorgs` |
-| `beacon_processed_deposits_total` | gauge | `MetricsState.deposit_count` |
-| `beacon_data_column_sidecar_processing_requests_total` | counter | `AppMetrics.column_requests` |
-| `beacon_data_column_sidecar_processing_successes_total` | counter | `AppMetrics.column_successes` |
-| `beacon_data_column_sidecar_gossip_verification_seconds` | histogram | `AppMetrics.gossip_verification`, default bounds |
-| `beacon_data_availability_reconstructed_columns_total` | counter | `AppMetrics.reconstructed_columns` |
-| `beacon_data_availability_reconstruction_time_seconds` | histogram | `AppMetrics.reconstruction`, default bounds |
-| `beacon_data_column_sidecar_computation_seconds` | histogram | `AppMetrics.computation`, default bounds |
-| `beacon_kzg_verification_data_column_batch_seconds` | histogram | `AppMetrics.kzg_batch`, kzg bounds |
-| `beacon_custody_groups` | gauge | `MetricsNode.custody_groups` |
-| `beacon_current_validators` | gauge | `MetricsState.current_validators`, by `status` |
-| `beacon_previous_validators` | gauge | `MetricsState.previous_validators`, by `status` |
-| `beacon_current_live_validators` | gauge | `MetricsState.current_live` |
-| `beacon_previous_live_validators` | gauge | `MetricsState.previous_live` |
-| `beacon_pending_deposits` | gauge | `MetricsState.pending_deposits` |
-| `beacon_pending_partial_withdrawals` | gauge | `MetricsState.pending_partial_withdrawals` |
-| `beacon_pending_consolidations` | gauge | `MetricsState.pending_consolidations` |
-| `beacon_pending_exits` | gauge | `MetricsNode.pending_exits` |
-| `beacon_previous_epoch_orphaned_blocks` | gauge | `MetricsNode.orphaned_blocks` |
-| `gossipsub_mesh_peers_per_main_topic` | gauge | `MetricsGossip`: `mesh_peers` of each topic with no subnet, by `topic` |
-| `beacon_attestation_delay_count` | histogram | `AppMetrics.attestation_delay`, delay bounds |
-| `local_validator_count` | gauge | `MetricsNode.local_validators` |
-| `beacon_head_state_finalized_root` | gauge | `MetricsState.finalized_root` |
-| `beacon_previous_justified_root` | gauge | `MetricsState.previous_justified_root` |
-| `beacon_aggregates_received_total` | gauge | `AppMetrics.aggregates_received` |
-| `beacon_block_delay_count` | histogram | `AppMetrics.block_delay`, delay bounds |
-| `beacon_attestor_slashing_received_total` | gauge | `AppMetrics.attester_slashings_received` |
-| `beacon_block_proposed_total` | gauge | `AppMetrics.blocks_proposed` |
-| `beacon_attestations_published_total` | gauge | `NodeMetrics.attestations_published` |
-| `beacon_processor_gossip_block_imported_total` | gauge | `AppMetrics.gossip_blocks_imported` |
-| `libp2p_pubsub_validation_failure_total` | gauge | `AppMetrics.validation_failures` |
-| `beacon_head_state_root` | gauge | `MetricsState.state_root` |
-| `beacon_attestations_received_total` | gauge | `AppMetrics.attestations_received` |
-| `beacon_http_api_requests_total` | gauge | `AppMetrics.api_requests` |
-| `beacon_http_api_successes_total` | gauge | `AppMetrics.api_successes` |
-| `beacon_sync_state` | gauge | `MetricsNode.sync_state` |
-| `process_cpu_seconds_total` | gauge | `MetricsProcess.cpu_us`, in seconds |
-| `process_max_fds` | gauge | `MetricsProcess.max_fds` |
-| `gossipsub_topic_msg_sent_bytes` | counter | `MetricsGossip`: `sent_bytes` and `sent_partial_bytes` of each topic, by `topic` and `partial` |
-| `gossipsub_mesh_peer_counts` | gauge | `MetricsGossip`: mesh peers of each topic by `topic` and `supports_partial` |
-
-- Each metric's HELP text is the Usage text of beacon-metrics, and its type the Metric type there.
-- Tick bounds (the function timers of `Profile`): 0.000001, 0.000004, 0.000016, 0.000064, 0.000256, 0.001, 0.004, 0.016, 0.064, 0.256, 1.
-- Default bounds (Prometheus's, as Lighthouse v8.3.3 uses for these): 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10.
-- KZG bounds (Lighthouse v8.3.3, `exponential_buckets(0.002, 2.0, 10)`): 0.002, 0.004, 0.008, 0.016, 0.032, 0.064, 0.128, 0.256, 0.512, 1.024.
-- Delay bounds (beacon-metrics sets none: "bucket size yet to be decided"): 0.5, 1, 2, 3, 4, 6, 8, 12, 24.
-- `status`, in this order: `pending`, `active`, `exited`, `withdrawable`.
-
-## The `network` category
-
-| Metric | Sub category | Type | Value | Meaning |
-|---|---|---|---|---|
-| `lantern_network_peer_connected` | `peer` | gauge | `MetricsNode.peers` | Connected peers |
-| `lantern_network_peer_direction` | `peer` | gauge | `MetricsNode.peer_directions`, by `direction` | Connected peers by the direction of their connection |
-| `lantern_network_peer_dialing` | `peer` | gauge | `MetricsNode.dialing` | Dials of the node not yet connected or failed |
-| `lantern_network_peer_connections_total` | `peer` | counter | `AppMetrics.connections`, by `direction` | Connections made, by direction |
-| `lantern_network_peer_dial_failures_total` | `peer` | counter | `AppMetrics.dial_failures` | Dials that failed |
-| `lantern_network_peer_disconnections_total` | `peer` | counter | `AppMetrics.closed` | Connections that closed |
-| `lantern_network_discovery_records_total` | `discovery` | counter | `AppMetrics.records` | Node records discv5 found and gave to the node |
-| `lantern_network_discovery_lookups_total` | `discovery` | counter | `AppMetrics.lookups` | Lookups the node asked discv5 for |
-| `lantern_network_discovery_datagrams_received_total` | `discovery` | counter | `AppMetrics.dv_in` | UDP datagrams discv5 received |
-| `lantern_network_discovery_datagrams_sent_total` | `discovery` | counter | `AppMetrics.dv_out` | UDP datagrams discv5 sent |
-| `lantern_network_discovery_step_failures_total` | `discovery` | counter | `AppMetrics.dv_failures` | discv5 steps that failed |
-| `lantern_network_transport_received_bytes_total` | `transport` | counter | `AppMetrics.rx_bytes` | Bytes received on libp2p connections |
-| `lantern_network_transport_sent_bytes_total` | `transport` | counter | `AppMetrics.tx_bytes` | Bytes sent on libp2p connections |
-| `lantern_network_gossip_messages_total` | `gossip` | counter | `AppMetrics.gossip_results`, by `topic` and `result` | Gossip messages validated, by topic and result |
-| `lantern_network_gossip_messages_held` | `gossip` | gauge | `MetricsNode.messages` | Gossip messages the node holds |
-| `lantern_network_reqresp_served_total` | `reqresp` | counter | `AppMetrics.served`, by `method` | Requests of peers the node served, by method |
-| `lantern_network_reqresp_streams_open` | `reqresp` | gauge | `MetricsNode.streams` | Request streams open |
-
-## The `processing` category
-
-| Metric | Sub category | Type | Value | Meaning |
-|---|---|---|---|---|
-| `lantern_processing_block_work_seconds` | `block` | histogram | `AppMetrics.work_seconds`, by `work`, work bounds | Run time of each node work of the block stage, by work kind |
-| `lantern_processing_block_work_failures_total` | `block` | counter | `AppMetrics.work_failures`, by `work` | Node works of the block stage whose result was not LANTERN_OK, by work kind |
-| `lantern_processing_state_work_seconds` | `state` | histogram | `AppMetrics.work_seconds`, by `work`, from element 5, work bounds | Run time of each node work of the state stage, by work kind |
-| `lantern_processing_state_work_failures_total` | `state` | counter | `AppMetrics.work_failures`, by `work`, from element 5 | Node works of the state stage whose result was not LANTERN_OK, by work kind |
-| `lantern_processing_forkchoice_work_seconds` | `forkchoice` | histogram | `AppMetrics.work_seconds`, by `work`, from element 9, work bounds | Run time of each node work of the forkchoice stage, by work kind |
-| `lantern_processing_forkchoice_work_failures_total` | `forkchoice` | counter | `AppMetrics.work_failures`, by `work`, from element 9 | Node works of the forkchoice stage whose result was not LANTERN_OK, by work kind |
-| `lantern_processing_availability_work_seconds` | `availability` | histogram | `AppMetrics.work_seconds`, by `work`, from element 12, work bounds | Run time of each node work of the availability stage, by work kind |
-| `lantern_processing_availability_work_failures_total` | `availability` | counter | `AppMetrics.work_failures`, by `work`, from element 12 | Node works of the availability stage whose result was not LANTERN_OK, by work kind |
-| `lantern_processing_gossip_work_seconds` | `gossip` | histogram | `AppMetrics.work_seconds`, by `work`, from element 15, work bounds | Run time of each node work of the gossip stage, by work kind |
-| `lantern_processing_gossip_work_failures_total` | `gossip` | counter | `AppMetrics.work_failures`, by `work`, from element 15 | Node works of the gossip stage whose result was not LANTERN_OK, by work kind |
-| `lantern_processing_engine_work_seconds` | `engine` | histogram | `AppMetrics.work_seconds`, by `work`, from element 16, work bounds | Run time of each node work of the engine stage, by work kind |
-| `lantern_processing_engine_work_failures_total` | `engine` | counter | `AppMetrics.work_failures`, by `work`, from element 16 | Node works of the engine stage whose result was not LANTERN_OK, by work kind |
-| `lantern_processing_builder_work_seconds` | `builder` | histogram | `AppMetrics.work_seconds`, by `work`, from element 21, work bounds | Run time of each node work of the builder stage, by work kind |
-| `lantern_processing_builder_work_failures_total` | `builder` | counter | `AppMetrics.work_failures`, by `work`, from element 21 | Node works of the builder stage whose result was not LANTERN_OK, by work kind |
-| `lantern_processing_lightclient_work_seconds` | `lightclient` | histogram | `AppMetrics.work_seconds`, by `work`, from element 22, work bounds | Run time of each node work of the lightclient stage, by work kind |
-| `lantern_processing_lightclient_work_failures_total` | `lightclient` | counter | `AppMetrics.work_failures`, by `work`, from element 22 | Node works of the lightclient stage whose result was not LANTERN_OK, by work kind |
-| `lantern_processing_history_work_seconds` | `history` | histogram | `AppMetrics.work_seconds`, by `work`, from element 27, work bounds | Run time of each node work of the history stage, by work kind |
-| `lantern_processing_history_work_failures_total` | `history` | counter | `AppMetrics.work_failures`, by `work`, from element 27 | Node works of the history stage whose result was not LANTERN_OK, by work kind |
-| `lantern_processing_validator_work_seconds` | `validator` | histogram | `AppMetrics.work_seconds`, by `work`, from element 30, work bounds | Run time of each node work of the validator stage, by work kind |
-| `lantern_processing_validator_work_failures_total` | `validator` | counter | `AppMetrics.work_failures`, by `work`, from element 30 | Node works of the validator stage whose result was not LANTERN_OK, by work kind |
-| `lantern_processing_epoch_transitions_total` | `epoch` | counter | `AppMetrics.epoch_transitions` | Block imports and slot processing works that crossed an epoch boundary |
-| `lantern_processing_epoch_transition_seconds` | `epoch` | histogram | `AppMetrics.epoch_seconds`, work bounds | Run time of each block import or slot processing work that crossed an epoch boundary |
-| `lantern_processing_gossip_validation_seconds` | `gossip` | histogram | `AppMetrics.gossip_seconds`, by `topic`, work bounds | Run time of each gossip validation, by topic |
-
-## The `node` category
-
-| Metric | Sub category | Type | Value | Meaning |
-|---|---|---|---|---|
-| `lantern_node_resource_cpu_seconds_total` | `resource` | counter | `MetricsProcess.cpu_us`, in seconds | User and system CPU time |
-| `lantern_node_resource_max_resident_memory_bytes` | `resource` | gauge | `MetricsProcess.max_rss_bytes` | Highest resident memory since the start |
-| `lantern_node_resource_max_fds` | `resource` | gauge | `MetricsProcess.max_fds`; condition `max_fds` | The soft limit of open files |
-| `lantern_node_resource_buffers` | `resource` | gauge | `MetricsProcess.buffers` | Buffers the app holds for the node |
-| `lantern_node_resource_buffer_bytes` | `resource` | gauge | `MetricsProcess.buffer_bytes` | Bytes of those buffers |
-| `lantern_node_resource_start_time_seconds` | `resource` | gauge | `MetricsProcess.start_s` | Unix time of the start |
-| `lantern_node_sync_head_slot` | `sync` | gauge | `MetricsNode.head_slot` | Slot of the head block |
-| `lantern_node_sync_store_slot` | `sync` | gauge | `MetricsNode.store_slot` | Slot of the store's time |
-| `lantern_node_sync_distance` | `sync` | gauge | `MetricsNode.distance` | Slots from the head to the store's slot |
-| `lantern_node_sync_state` | `sync` | gauge | `MetricsNode.sync_state` | 0 behind and not syncing, 1 synced, 2 syncing |
-| `lantern_node_sync_earliest_slot` | `sync` | gauge | `MetricsNode.earliest_slot` | First slot whose blocks the node serves |
-| `lantern_node_sync_backfill_slot` | `sync` | gauge | `MetricsNode.backfill_slot` | Slot below which the backfill looks for blocks |
-| `lantern_node_sync_finalized_epoch` | `sync` | gauge | `MetricsNode.finalized_epoch` | The store's finalized epoch |
-| `lantern_node_sync_justified_epoch` | `sync` | gauge | `MetricsNode.justified_epoch` | The store's justified epoch |
-| `lantern_node_health_uptime_seconds` | `health` | gauge | `MetricsProcess.uptime_us`, in seconds | Time since the start |
-| `lantern_node_health_execution_engine` | `health` | gauge | `MetricsProcess.engine` | Connection to the execution engine: 0 none, 1 dialing, 2 open |
-| `lantern_node_health_step_seconds` | `health` | histogram | `AppMetrics.step_seconds`, work bounds | Run time of each node step |
-| `lantern_node_pool_operations` | `pool` | gauge | `MetricsNode.pool`, by `topic` | Operations in the pool, by topic |
-| `lantern_node_pool_proposers` | `pool` | gauge | `MetricsNode.local_validators` | Validators with a fee recipient from prepareBeaconProposer |
-| `lantern_node_log_lines_total` | `log` | counter | `AppMetrics.log_lines`, by `level` | Log lines written, by level |
-| `lantern_node_api_requests_total` | `api` | counter | `AppMetrics.api_requests` | Beacon API requests |
-| `lantern_node_api_answers_total` | `api` | counter | `AppMetrics.api_classes`, by `class` | Beacon API answers, by status class |
-| `lantern_node_api_connections_open` | `api` | gauge | `MetricsProcess.api_open` | Beacon API connections open |
-| `lantern_node_storage_records_total` | `storage` | counter | `AppMetrics.db_records`, by `kind` | Records appended to the history's segment files, by kind |
-| `lantern_node_storage_record_bytes_total` | `storage` | counter | `AppMetrics.db_bytes`, by `kind` | Bytes of those records |
-| `lantern_node_storage_anchors_total` | `storage` | counter | `AppMetrics.db_anchors` | Anchor states written for a restart |
-| `lantern_node_storage_anchor_write_seconds` | `storage` | histogram | `AppMetrics.anchor_seconds` | Run time of each anchor state write, from its bytes to the synced directory |
-| `lantern_node_storage_segments_dropped_total` | `storage` | counter | `AppMetrics.db_drops` | Segment files deleted |
-| `lantern_node_storage_write_failures_total` | `storage` | counter | `AppMetrics.db_failures` | Writes to the data directory that failed |
-
-## Label tables
-
-Each label table's name, its label's name, and its values in element order.
-
-- `status` (`status`): `pending`, `active`, `exited`, `withdrawable`.
-- `topic` (`topic`): `other`, `beacon_block`, `beacon_aggregate_and_proof`, `beacon_attestation`, `voluntary_exit`, `proposer_slashing`, `attester_slashing`, `sync_committee_contribution_and_proof`, `sync_committee`, `bls_to_execution_change`, `blob_sidecar`, `data_column_sidecar`, `light_client_finality_update`, `light_client_optimistic_update`.
-- `result` (`result`): `accept`, `ignore`, `reject`.
-- `method` (`method`): `other`, `status`, `goodbye`, `beacon_blocks_by_range`, `beacon_blocks_by_root`, `ping`, `metadata`, `blob_sidecars_by_range`, `blob_sidecars_by_root`, `data_column_sidecars_by_range`, `data_column_sidecars_by_root`, `beacon_blocks_by_head`, `light_client_bootstrap`, `light_client_updates_by_range`, `light_client_finality_update`, `light_client_optimistic_update`.
-- `direction` (`direction`): `inbound`, `outbound`.
-- `level` (`level`): `error`, `warn`, `info`, `debug`.
-- `class` (`class`): `2xx`, `3xx`, `4xx`, `5xx`.
-- `kind` (`kind`): `block`, `sidecar`, `state`.
-- `work_block` (`work`): `import_block`, `sync_block`, `block_attestation`, `block_slashing`, `replay`.
-- `work_state` (`work`): `justified_state`, `target_state`, `slots`, `upgrade`.
-- `work_forkchoice` (`work`): `attestation`, `attester_slashing`, `gossip_vote`.
-- `work_availability` (`work`): `blob`, `reconstruct`, `custody`.
-- `work_gossip` (`work`): `gossip`.
-- `work_engine` (`work`): `new_payload`, `forkchoice`, `prepare_payload`, `get_payload`, `eth1_check`.
-- `work_builder` (`work`): `produce_bid`.
-- `work_lightclient` (`work`): `lc_block`, `lc_head`, `lc_serve`, `lc_gossip`, `lc_publish`.
-- `work_history` (`work`): `backfill`, `archive_load`, `serve`.
-- `work_validator` (`work`): `api_encode`, `api_chunk`, `api_lookup`, `api_event`, `api_submit`, `pool_check`, `produce_check`, `produce_fold`, `produce_block`, `publish_decode`, `publish_sidecars`, `publish_check`, `publish_sidecar`, `produce_eth1`.
-
-- Work bounds (the `work` bound set): 0.00001, 0.0001, 0.0005, 0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1, 5.
 
 ## Function `lantern_metrics_text`
 
@@ -270,11 +87,16 @@ lantern_metrics_text(categories, sources, out) -> status
 
 - Writes past `out`'s `size`.
 - Reads a source whose address is 0.
+- Makes an OS call.
+
+### Limits
+
+- Stack of its own: 208 bytes on x86-64 (return address included), 176 bytes on ARM64, 176 bytes on RISC-V.
 
 ### ABI
 
-- Role: L1.
-- Symbol: `lantern_metrics_text` (`_lantern_metrics_text` on macOS).
+- Role: L0.
+- Symbol: `lantern_metrics_text`, with `_` before it on macOS.
 - Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
 - Argument order: `categories`, `sources`, `out`.
 
@@ -313,11 +135,16 @@ lantern_metrics_answer(bytes, categories, sources, out) -> status
 ### Function never
 
 - Writes past `out`'s `size`.
+- Makes an OS call.
+
+### Limits
+
+- Stack of its own: 144 bytes on x86-64 (return address included), 144 bytes on ARM64, 144 bytes on RISC-V.
 
 ### ABI
 
-- Role: L1.
-- Symbol: `lantern_metrics_answer` (`_lantern_metrics_answer` on macOS).
+- Role: L0.
+- Symbol: `lantern_metrics_answer`, with `_` before it on macOS.
 - Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
 - Argument order: `bytes`, `categories`, `sources`, `out`.
 
@@ -335,7 +162,7 @@ lantern_metrics_observe(histogram, bounds, value) -> status
 
 | Name | Role | Type |
 |---|---|---|
-| `histogram` | input and output | [`Histogram`](#type-histogram) |
+| `histogram` | state | [`Histogram`](#type-histogram) |
 | `bounds` | input | u64: `METRIC_BOUNDS_*` of a bound set of microseconds (default, kzg, delay, work) |
 | `value` | input | u64: microseconds |
 
@@ -347,10 +174,18 @@ lantern_metrics_observe(histogram, bounds, value) -> status
 
 - `count` takes 1 more and `sum` the value more, each modulo 2^64; the bucket of the first bound at or above the value takes 1 more, or the one after the last bound when it is above them all.
 
+### Function never
+
+- Makes an OS call.
+
+### Limits
+
+- Stack of its own: 8 bytes on x86-64 (return address included), 0 bytes on ARM64, 0 bytes on RISC-V.
+
 ### ABI
 
 - Role: L0.
-- Symbol: `lantern_metrics_observe` (`_lantern_metrics_observe` on macOS).
+- Symbol: `lantern_metrics_observe`, with `_` before it on macOS.
 - Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
 - Argument order: `histogram`, `bounds`, `value`.
 
@@ -361,7 +196,7 @@ The values of the metrics from a head's post-state and its block, of one fork.
 ### Signature
 
 ```
-lantern_<fork>_metrics_state(state, block, out) -> status
+lantern_metrics_state(state, block, out) -> status
 ```
 
 ### Arguments
@@ -386,14 +221,18 @@ lantern_<fork>_metrics_state(state, block, out) -> status
 - From electra: `electra` 1, and the entries of `pending_deposits`, `pending_partial_withdrawals` and `pending_consolidations`.
 - `state_root_present` 1 and `state_root` the `state_root` of the block's message as a number (bytes 148 to 180 of a `SignedBeaconBlock`), when `block` holds at least 180 bytes; else 0 and 0.
 
-### Forks
+### Function never
 
-- Every fork defines it. Altair on counts the live validators from the participation flags; electra adds the pending lists.
+- Makes an OS call.
+
+### Limits
+
+- Stack of its own: 8 bytes on x86-64 (return address included), 0 bytes on ARM64, 0 bytes on RISC-V.
 
 ### ABI
 
-- Role: L1.
-- Symbol: `lantern_<fork>_metrics_state`.
+- Role: L0.
+- Symbol: `lantern_<fork>_metrics_state` in the object of every fork, with `_` before it on macOS; `lantern_metrics_state` inside the object.
 - Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
 - Argument order: `state`, `block`, `out`.
 
@@ -434,12 +273,546 @@ lantern_metrics_node(node, store, out) -> status
 - `head_slot`, `store_slot` and `distance`: the head block's slot (0 with none), the store's slot, and `store_slot` - `head_slot` when above 0, else 0.
 - `earliest_slot`, `backfill_slot`, `finalized_epoch` and `justified_epoch`: the node's, and the store's checkpoints' epochs.
 
+### Function never
+
+- Makes an OS call.
+
+### Limits
+
+- Stack of its own with the mainnet preset: 624 bytes on x86-64 (return address included), 608 bytes on ARM64, 608 bytes on RISC-V.
+- Stack of its own with the minimal preset: 240 bytes on x86-64 (return address included), 224 bytes on ARM64, 224 bytes on RISC-V.
+
 ### ABI
 
-- Role: L1.
-- Symbol: `lantern_metrics_node` (`_lantern_metrics_node` on macOS).
+- Role: L0.
+- Symbol: `lantern_metrics_node`, with `_` before it on macOS.
 - Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
 - Argument order: `node`, `store`, `out`.
+
+## Function `lantern_mt_dec`
+
+Writes the decimal digits of a number.
+
+### Signature
+
+```
+lantern_mt_dec(value)
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `value` | input | u64 in a register |
+
+### Function does
+
+- Writes the decimal digits of `value` at the cursor.
+
+### Function never
+
+- Makes an OS call.
+
+### Limits
+
+- Stack of its own: 48 bytes on x86-64 (return address included), 48 bytes on ARM64, 48 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_mt_dec`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- Registers it uses, on ARM64, x86-64, RISC-V: the cursor in x20, r12, s2; the end of the room in x21, r13, s3; the full flag in x22, r15, s4, which becomes 1 when the room runs out, and nothing is written from then on.
+- Registers it changes, on ARM64, x86-64, RISC-V: x0, x1, x9 to x15; rax, rcx, rdx, rsi, rdi, r8; a0, a1, t0 to t5.
+- Argument order: `value`.
+
+## Function `lantern_mt_histogram`
+
+Writes the samples of a histogram.
+
+### Signature
+
+```
+lantern_mt_histogram(histogram, bounds, labels, rate)
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `histogram` | input | [`Histogram`](#type-histogram) |
+| `bounds` | input | the bound set's record |
+| `labels` | input | the LabelState of the family |
+| `rate` | input | u64 in a register: the ticks per second, for a set of ticks |
+
+### Function does
+
+- Writes a `_bucket` sample for each bound with `le`, then `_sum` and `_count`, with the family's labels.
+- Writes the bounds and the sum in seconds; a set of ticks is turned into microseconds with `rate` first (lantern_mt_ticks_us).
+
+### Function never
+
+- Makes an OS call.
+
+### Limits
+
+- Stack of its own: 64 bytes on x86-64 (return address included), 64 bytes on ARM64, 64 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_mt_histogram`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- Registers it uses, on ARM64, x86-64, RISC-V: the cursor in x20, r12, s2; the end of the room in x21, r13, s3; the full flag in x22, r15, s4, which becomes 1 when the room runs out, and nothing is written from then on.
+- Registers it reads, on ARM64, x86-64, RISC-V: the table entry in x23, r14, s5.
+- Argument order: `histogram`, `bounds`, `labels`, `rate`.
+
+## Function `lantern_mt_label`
+
+Writes one label of a sample.
+
+### Signature
+
+```
+lantern_mt_label(table, index)
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `table` | input | [`MetricLabel`](#type-metriclabel): a label table's record |
+| `index` | input | u64 in a register: the value index |
+
+### Function does
+
+- Writes `name="value"` of the label table and the value.
+
+### Function never
+
+- Makes an OS call.
+
+### Limits
+
+- Stack of its own: 32 bytes on x86-64 (return address included), 32 bytes on ARM64, 32 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_mt_label`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- Registers it uses, on ARM64, x86-64, RISC-V: the cursor in x20, r12, s2; the end of the room in x21, r13, s3; the full flag in x22, r15, s4, which becomes 1 when the room runs out, and nothing is written from then on.
+- Argument order: `table`, `index`.
+
+## Function `lantern_mt_le`
+
+Writes the start of a histogram bound's label.
+
+### Signature
+
+```
+lantern_mt_le(first)
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `first` | input | u64 in a register: 0 for the first label |
+
+### Function does
+
+- Writes `{` when `first` is 0, else `,`; then `le="`.
+
+### Function never
+
+- Makes an OS call.
+
+### Limits
+
+- Stack of its own: 16 bytes on x86-64 (return address included), 16 bytes on ARM64, 16 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_mt_le`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- Registers it uses, on ARM64, x86-64, RISC-V: the cursor in x20, r12, s2; the end of the room in x21, r13, s3; the full flag in x22, r15, s4, which becomes 1 when the room runs out, and nothing is written from then on.
+- Registers it changes, on x86-64: rax, rcx, rsi, rdi.
+- Argument order: `first`.
+
+## Function `lantern_mt_name`
+
+Writes the name of the current table entry.
+
+### Signature
+
+```
+lantern_mt_name()
+```
+
+### Function does
+
+- Writes the name of the entry.
+
+### Function never
+
+- Makes an OS call.
+
+### Limits
+
+- Stack of its own: 8 bytes on x86-64 (return address included), 0 bytes on ARM64, 0 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_mt_name`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- Registers it uses, on ARM64, x86-64, RISC-V: the cursor in x20, r12, s2; the end of the room in x21, r13, s3; the full flag in x22, r15, s4, which becomes 1 when the room runs out, and nothing is written from then on.
+- Registers it reads, on ARM64, x86-64, RISC-V: the table entry in x23, r14, s5.
+- Registers it changes, on ARM64, x86-64, RISC-V: x0, x1, x9, x10; rax, rcx, rsi, rdi; a0, a1, t0, t1.
+
+## Function `lantern_mt_open`
+
+Writes the start of a sample.
+
+### Signature
+
+```
+lantern_mt_open(suffix, length, labels) -> brace
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `suffix` | input | `length` bytes, or none |
+| `length` | input | u64 in a register: 0 for no suffix |
+| `labels` | input | the LabelState of the family |
+
+### Function does
+
+- Writes the entry's name, the suffix, then `{` and the labels when the LabelState has a label.
+- Returns 1 when a `{` went out, else 0.
+
+### Function never
+
+- Makes an OS call.
+
+### Limits
+
+- Stack of its own: 48 bytes on x86-64 (return address included), 48 bytes on ARM64, 48 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_mt_open`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- Registers it uses, on ARM64, x86-64, RISC-V: the cursor in x20, r12, s2; the end of the room in x21, r13, s3; the full flag in x22, r15, s4, which becomes 1 when the room runs out, and nothing is written from then on.
+- Registers it reads, on ARM64, x86-64, RISC-V: the table entry in x23, r14, s5.
+- Argument order: `suffix`, `length`, `labels`.
+
+## Function `lantern_mt_pair`
+
+Writes a label pair of a sample.
+
+### Signature
+
+```
+lantern_mt_pair(name, name_length, value, value_length)
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `name` | input | `name_length` bytes |
+| `name_length` | input | u64 in a register |
+| `value` | input | `value_length` bytes |
+| `value_length` | input | u64 in a register |
+
+### Function does
+
+- Writes `,<name>="<value>"`.
+
+### Function never
+
+- Makes an OS call.
+
+### Limits
+
+- Stack of its own: 48 bytes on x86-64 (return address included), 48 bytes on ARM64, 48 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_mt_pair`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- Registers it uses, on ARM64, x86-64, RISC-V: the cursor in x20, r12, s2; the end of the room in x21, r13, s3; the full flag in x22, r15, s4, which becomes 1 when the room runs out, and nothing is written from then on.
+- Argument order: `name`, `name_length`, `value`, `value_length`.
+
+## Function `lantern_mt_put`
+
+Writes bytes at the cursor.
+
+### Signature
+
+```
+lantern_mt_put(bytes, n)
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `bytes` | input | `n` bytes |
+| `n` | input | u64 in a register |
+
+### Function does
+
+- Copies the bytes to the cursor and moves it, when they fit in the room; else sets the full flag.
+
+### Function never
+
+- Calls another function.
+- Makes an OS call.
+
+### Limits
+
+- Stack of its own: 8 bytes on x86-64 (return address included), 0 bytes on ARM64, 0 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_mt_put`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- Registers it uses, on ARM64, x86-64, RISC-V: the cursor in x20, r12, s2; the end of the room in x21, r13, s3; the full flag in x22, r15, s4, which becomes 1 when the room runs out, and nothing is written from then on.
+- Registers it changes, on ARM64, x86-64, RISC-V: x0, x1, x9, x10; rax, rcx, rsi, rdi; a0, a1, t0, t1.
+- Argument order: `bytes`, `n`.
+
+## Function `lantern_mt_sdec`
+
+Writes a signed decimal number.
+
+### Signature
+
+```
+lantern_mt_sdec(value)
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `value` | input | i64 in a register |
+
+### Function does
+
+- Writes `-` for a negative value, then its decimal digits.
+
+### Function never
+
+- Makes an OS call.
+
+### Limits
+
+- Stack of its own: 32 bytes on x86-64 (return address included), 32 bytes on ARM64, 32 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_mt_sdec`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- Registers it uses, on ARM64, x86-64, RISC-V: the cursor in x20, r12, s2; the end of the room in x21, r13, s3; the full flag in x22, r15, s4, which becomes 1 when the room runs out, and nothing is written from then on.
+- Argument order: `value`.
+
+## Function `lantern_mt_seconds`
+
+Writes microseconds as seconds.
+
+### Signature
+
+```
+lantern_mt_seconds(us)
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `us` | input | u64 in a register: microseconds |
+
+### Function does
+
+- Writes the whole seconds, `.`, then six digits.
+
+### Function never
+
+- Makes an OS call.
+
+### Limits
+
+- Stack of its own: 48 bytes on x86-64 (return address included), 48 bytes on ARM64, 48 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_mt_seconds`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- Registers it uses, on ARM64, x86-64, RISC-V: the cursor in x20, r12, s2; the end of the room in x21, r13, s3; the full flag in x22, r15, s4, which becomes 1 when the room runs out, and nothing is written from then on.
+- Argument order: `us`.
+
+## Function `lantern_mt_text`
+
+Writes a text of the metric table.
+
+### Signature
+
+```
+lantern_mt_text(offset, length)
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `offset` | input | u32 in a register: its offset in `metrics_texts` |
+| `length` | input | u64 in a register |
+
+### Function does
+
+- Writes the `length` bytes at `metrics_texts` + `offset`.
+
+### Function never
+
+- Makes an OS call.
+
+### Limits
+
+- Stack of its own: 8 bytes on x86-64 (return address included), 0 bytes on ARM64, 0 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_mt_text`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- Registers it uses, on ARM64, x86-64, RISC-V: the cursor in x20, r12, s2; the end of the room in x21, r13, s3; the full flag in x22, r15, s4, which becomes 1 when the room runs out, and nothing is written from then on.
+- Registers it reads, on ARM64: `metrics_texts` in x19.
+- Registers it changes, on ARM64, x86-64, RISC-V: x0, x1, x9, x10; rax, rcx, rsi, rdi; a0, a1, t0, t1.
+- Argument order: `offset`, `length`.
+
+## Function `lantern_mt_ticks_us`
+
+CPU counter ticks as microseconds.
+
+### Signature
+
+```
+lantern_mt_ticks_us(ticks, rate) -> us
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `ticks` | input | u64 in a register |
+| `rate` | input | u64 in a register: ticks per second |
+
+### Function does
+
+- Returns `ticks` * 10^6 / `rate` by long division of the 128-bit product, the largest u64 when the quotient does not fit, and 0 when `rate` is 0.
+
+### Function never
+
+- Calls another function.
+- Writes memory.
+- Makes an OS call.
+
+### Limits
+
+- Stack of its own: 0 bytes on ARM64, 0 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_mt_ticks_us`, local to its object. Only ARM64 and RISC-V have it.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- Registers it changes, on ARM64 and RISC-V: x0, x9 to x14; a0, t0 to t5.
+- Argument order: `ticks`, `rate`.
+
+## Function `lantern_mt_topic`
+
+Writes the name of the current entry and the topic label of a GossipTopic.
+
+### Signature
+
+```
+lantern_mt_topic(topic)
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `topic` | input | `GossipTopic` of `MetricsGossip` |
+
+### Function does
+
+- Writes the entry's name and `{topic="<name>"`.
+
+### Function never
+
+- Makes an OS call.
+
+### Limits
+
+- Stack of its own: 32 bytes on x86-64 (return address included), 32 bytes on ARM64, 32 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_mt_topic`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- Registers it uses, on ARM64, x86-64, RISC-V: the cursor in x20, r12, s2; the end of the room in x21, r13, s3; the full flag in x22, r15, s4, which becomes 1 when the room runs out, and nothing is written from then on.
+- Registers it reads, on ARM64, x86-64, RISC-V: the table entry in x23, r14, s5.
+- Argument order: `topic`.
+
+## Function `lantern_mt_value`
+
+Writes the end of a sample.
+
+### Signature
+
+```
+lantern_mt_value(brace, value)
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `brace` | input | u64 in a register: 1 when a `{` went out |
+| `value` | input | u64 in a register |
+
+### Function does
+
+- Writes `}` when `brace` is 1, then a space, the decimal `value` and LF.
+
+### Function never
+
+- Makes an OS call.
+
+### Limits
+
+- Stack of its own: 32 bytes on x86-64 (return address included), 32 bytes on ARM64, 32 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_mt_value`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- Registers it uses, on ARM64, x86-64, RISC-V: the cursor in x20, r12, s2; the end of the room in x21, r13, s3; the full flag in x22, r15, s4, which becomes 1 when the room runs out, and nothing is written from then on.
+- Argument order: `brace`, `value`.
 
 ## Type `MetricsSources`
 
@@ -660,6 +1033,201 @@ The tick rate and the tick bounds of the function timers. The core reads the CPU
 ### Rules
 
 - The app finds `ticks_per_second` against its clock and writes `bounds` before the first timed function.
+
+## Type `MetricEntry`
+
+One family of the metric table (include/metrics_table.inc), which lantern_metrics_text writes.
+
+### Layout
+
+| Offset | Field | Type | Meaning |
+|---|---|---|---|
+| 0 | `name` | u32 | Offset of the name in `metrics_texts` |
+| 4 | `name_len` | u32 | Bytes of the name |
+| 8 | `help` | u32 | Offset of the HELP text in `metrics_texts` |
+| 12 | `help_len` | u32 | Bytes of the HELP text |
+| 16 | `type` | u32 | `METRIC_TYPE_*`: gauge, counter or histogram |
+| 20 | `source` | u32 | `METRIC_SRC_*`: the source of its values |
+| 24 | `offset` | u32 | The place of its value in the source |
+| 28 | `kind` | u16 | `METRIC_KIND_*`: how the value is read |
+| 30 | `cond` | u16 | `METRIC_COND_*`: when the family is written |
+| 32 | `bit` | u32 | `METRIC_BIT_*`: its sub category |
+| 36 | `label1` | u16 | Its first label table, or 0 |
+| 38 | `label2` | u16 | Its second label table, or 0 |
+| 40 | `bounds` | u32 | `METRIC_BOUNDS_*`: its bound set, or 0 |
+| 44 | `count` | u32 | Its series: the product of the value counts of its label tables |
+
+### Rules
+
+- Category `beacon`: sub categories by bit: none, bit 0.
+- Category `network`: sub categories by bit: `peer` 1, `discovery` 2, `transport` 3, `gossip` 4, `reqresp` 5.
+- Category `processing`: sub categories by bit: `block` 8, `epoch` 9, `state` 10, `forkchoice` 11, `availability` 12, `gossip` 13, `engine` 14, `builder` 15, `lightclient` 16, `history` 17, `validator` 18.
+- Category `node`: sub categories by bit: `resource` 24, `sync` 25, `health` 26, `pool` 27, `log` 28, `api` 29, `storage` 30.
+- `beacon`: the metrics of ethereum/beacon-metrics that lantern has a source for, by their names there.
+- `network`: what lantern's peers, discovery, connections, gossipsub and requests do.
+- `processing`: the work on data, by stage: its counts, failures and run times, down to single functions.
+- `node`: the process and the node as a whole: its resources, sync, health, pools, log, Beacon API and database.
+- The metrics of a sub category are named `lantern_<category>_<sub>_<measure>`; those of `beacon` keep beacon-metrics' names.
+- A category is a set of metrics a node may expose. The `beacon` category holds the metrics of the table below, in that order: those of beacon-metrics that lantern has a source for.
+- The table (include/metrics_table.inc) holds every family of every category, in the order of the text; tests/generator/metrics.py writes it and include/metrics.inc from its lists.
+- Each family has a source: the head's post-state (`MetricsState`), the node and the store (`MetricsNode`), the node step's counters (`NodeMetrics`), the app (`AppMetrics`, `MetricsProcess`), gossipsub (`MetricsGossip`) or the function timers (`Profile`).
+- A root as a number: bytes 24 to 32 of the root as a little-endian signed 64-bit integer (beacon-metrics: `int.from_bytes(root[24:32], byteorder='little', signed=True)`).
+- `libp2p_peers`: category `beacon`, gauge, from `MetricsNode.peers`.
+- `beacon_head_slot`: category `beacon`, gauge, from `MetricsState.slot`.
+- `beacon_finalized_epoch`: category `beacon`, gauge, from `MetricsState.finalized_epoch`.
+- `beacon_current_justified_epoch`: category `beacon`, gauge, from `MetricsState.current_justified_epoch`.
+- `beacon_previous_justified_epoch`: category `beacon`, gauge, from `MetricsState.previous_justified_epoch`.
+- `beacon_current_active_validators`: category `beacon`, gauge, from `MetricsState.active_validators`.
+- `beacon_reorgs_total`: category `beacon`, counter, from `NodeMetrics.reorgs`.
+- `beacon_processed_deposits_total`: category `beacon`, gauge, from `MetricsState.deposit_count`.
+- `beacon_data_column_sidecar_processing_requests_total`: category `beacon`, counter, from `AppMetrics.column_requests`.
+- `beacon_data_column_sidecar_processing_successes_total`: category `beacon`, counter, from `AppMetrics.column_successes`.
+- `beacon_data_column_sidecar_gossip_verification_seconds`: category `beacon`, histogram, from `AppMetrics.gossip_verification`, default bounds.
+- `beacon_data_availability_reconstructed_columns_total`: category `beacon`, counter, from `AppMetrics.reconstructed_columns`.
+- `beacon_data_availability_reconstruction_time_seconds`: category `beacon`, histogram, from `AppMetrics.reconstruction`, default bounds.
+- `beacon_data_column_sidecar_computation_seconds`: category `beacon`, histogram, from `AppMetrics.computation`, default bounds.
+- `beacon_kzg_verification_data_column_batch_seconds`: category `beacon`, histogram, from `AppMetrics.kzg_batch`, kzg bounds.
+- `beacon_custody_groups`: category `beacon`, gauge, from `MetricsNode.custody_groups`.
+- `beacon_current_validators`: category `beacon`, gauge, from `MetricsState.current_validators`, by `status`.
+- `beacon_previous_validators`: category `beacon`, gauge, from `MetricsState.previous_validators`, by `status`.
+- `beacon_current_live_validators`: category `beacon`, gauge, from `MetricsState.current_live`.
+- `beacon_previous_live_validators`: category `beacon`, gauge, from `MetricsState.previous_live`.
+- `beacon_pending_deposits`: category `beacon`, gauge, from `MetricsState.pending_deposits`.
+- `beacon_pending_partial_withdrawals`: category `beacon`, gauge, from `MetricsState.pending_partial_withdrawals`.
+- `beacon_pending_consolidations`: category `beacon`, gauge, from `MetricsState.pending_consolidations`.
+- `beacon_pending_exits`: category `beacon`, gauge, from `MetricsNode.pending_exits`.
+- `beacon_previous_epoch_orphaned_blocks`: category `beacon`, gauge, from `MetricsNode.orphaned_blocks`.
+- `gossipsub_mesh_peers_per_main_topic`: category `beacon`, gauge, from `MetricsGossip`: `mesh_peers` of each topic with no subnet, by `topic`.
+- `beacon_attestation_delay_count`: category `beacon`, histogram, from `AppMetrics.attestation_delay`, delay bounds.
+- `local_validator_count`: category `beacon`, gauge, from `MetricsNode.local_validators`.
+- `beacon_head_state_finalized_root`: category `beacon`, gauge, from `MetricsState.finalized_root`.
+- `beacon_previous_justified_root`: category `beacon`, gauge, from `MetricsState.previous_justified_root`.
+- `beacon_aggregates_received_total`: category `beacon`, gauge, from `AppMetrics.aggregates_received`.
+- `beacon_block_delay_count`: category `beacon`, histogram, from `AppMetrics.block_delay`, delay bounds.
+- `beacon_attestor_slashing_received_total`: category `beacon`, gauge, from `AppMetrics.attester_slashings_received`.
+- `beacon_block_proposed_total`: category `beacon`, gauge, from `AppMetrics.blocks_proposed`.
+- `beacon_attestations_published_total`: category `beacon`, gauge, from `NodeMetrics.attestations_published`.
+- `beacon_processor_gossip_block_imported_total`: category `beacon`, gauge, from `AppMetrics.gossip_blocks_imported`.
+- `libp2p_pubsub_validation_failure_total`: category `beacon`, gauge, from `AppMetrics.validation_failures`.
+- `beacon_head_state_root`: category `beacon`, gauge, from `MetricsState.state_root`.
+- `beacon_attestations_received_total`: category `beacon`, gauge, from `AppMetrics.attestations_received`.
+- `beacon_http_api_requests_total`: category `beacon`, gauge, from `AppMetrics.api_requests`.
+- `beacon_http_api_successes_total`: category `beacon`, gauge, from `AppMetrics.api_successes`.
+- `beacon_sync_state`: category `beacon`, gauge, from `MetricsNode.sync_state`.
+- `process_cpu_seconds_total`: category `beacon`, gauge, from `MetricsProcess.cpu_us`, in seconds.
+- `process_max_fds`: category `beacon`, gauge, from `MetricsProcess.max_fds`.
+- `gossipsub_topic_msg_sent_bytes`: category `beacon`, counter, from `MetricsGossip`: `sent_bytes` and `sent_partial_bytes` of each topic, by `topic` and `partial`.
+- `gossipsub_mesh_peer_counts`: category `beacon`, gauge, from `MetricsGossip`: mesh peers of each topic by `topic` and `supports_partial`.
+- Each metric's HELP text is the Usage text of beacon-metrics, and its type the Metric type there.
+- Tick bounds (the function timers of `Profile`): 0.000001, 0.000004, 0.000016, 0.000064, 0.000256, 0.001, 0.004, 0.016, 0.064, 0.256, 1.
+- Default bounds (Prometheus's, as Lighthouse v8.3.3 uses for these): 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10.
+- KZG bounds (Lighthouse v8.3.3, `exponential_buckets(0.002, 2.0, 10)`): 0.002, 0.004, 0.008, 0.016, 0.032, 0.064, 0.128, 0.256, 0.512, 1.024.
+- Delay bounds (beacon-metrics sets none: "bucket size yet to be decided"): 0.5, 1, 2, 3, 4, 6, 8, 12, 24.
+- `status`, in this order: `pending`, `active`, `exited`, `withdrawable`.
+- `lantern_network_peer_connected`: category `network`, sub category `peer`, gauge, from `MetricsNode.peers`: connected peers.
+- `lantern_network_peer_direction`: category `network`, sub category `peer`, gauge, from `MetricsNode.peer_directions`, by `direction`: connected peers by the direction of their connection.
+- `lantern_network_peer_dialing`: category `network`, sub category `peer`, gauge, from `MetricsNode.dialing`: dials of the node not yet connected or failed.
+- `lantern_network_peer_connections_total`: category `network`, sub category `peer`, counter, from `AppMetrics.connections`, by `direction`: connections made, by direction.
+- `lantern_network_peer_dial_failures_total`: category `network`, sub category `peer`, counter, from `AppMetrics.dial_failures`: dials that failed.
+- `lantern_network_peer_disconnections_total`: category `network`, sub category `peer`, counter, from `AppMetrics.closed`: connections that closed.
+- `lantern_network_discovery_records_total`: category `network`, sub category `discovery`, counter, from `AppMetrics.records`: node records discv5 found and gave to the node.
+- `lantern_network_discovery_lookups_total`: category `network`, sub category `discovery`, counter, from `AppMetrics.lookups`: lookups the node asked discv5 for.
+- `lantern_network_discovery_datagrams_received_total`: category `network`, sub category `discovery`, counter, from `AppMetrics.dv_in`: uDP datagrams discv5 received.
+- `lantern_network_discovery_datagrams_sent_total`: category `network`, sub category `discovery`, counter, from `AppMetrics.dv_out`: uDP datagrams discv5 sent.
+- `lantern_network_discovery_step_failures_total`: category `network`, sub category `discovery`, counter, from `AppMetrics.dv_failures`: discv5 steps that failed.
+- `lantern_network_transport_received_bytes_total`: category `network`, sub category `transport`, counter, from `AppMetrics.rx_bytes`: bytes received on libp2p connections.
+- `lantern_network_transport_sent_bytes_total`: category `network`, sub category `transport`, counter, from `AppMetrics.tx_bytes`: bytes sent on libp2p connections.
+- `lantern_network_gossip_messages_total`: category `network`, sub category `gossip`, counter, from `AppMetrics.gossip_results`, by `topic` and `result`: gossip messages validated, by topic and result.
+- `lantern_network_gossip_messages_held`: category `network`, sub category `gossip`, gauge, from `MetricsNode.messages`: gossip messages the node holds.
+- `lantern_network_reqresp_served_total`: category `network`, sub category `reqresp`, counter, from `AppMetrics.served`, by `method`: requests of peers the node served, by method.
+- `lantern_network_reqresp_streams_open`: category `network`, sub category `reqresp`, gauge, from `MetricsNode.streams`: request streams open.
+- `lantern_processing_block_work_seconds`: category `processing`, sub category `block`, histogram, from `AppMetrics.work_seconds`, by `work`, work bounds: run time of each node work of the block stage, by work kind.
+- `lantern_processing_block_work_failures_total`: category `processing`, sub category `block`, counter, from `AppMetrics.work_failures`, by `work`: node works of the block stage whose result was not LANTERN_OK, by work kind.
+- `lantern_processing_state_work_seconds`: category `processing`, sub category `state`, histogram, from `AppMetrics.work_seconds`, by `work`, from element 5, work bounds: run time of each node work of the state stage, by work kind.
+- `lantern_processing_state_work_failures_total`: category `processing`, sub category `state`, counter, from `AppMetrics.work_failures`, by `work`, from element 5: node works of the state stage whose result was not LANTERN_OK, by work kind.
+- `lantern_processing_forkchoice_work_seconds`: category `processing`, sub category `forkchoice`, histogram, from `AppMetrics.work_seconds`, by `work`, from element 9, work bounds: run time of each node work of the forkchoice stage, by work kind.
+- `lantern_processing_forkchoice_work_failures_total`: category `processing`, sub category `forkchoice`, counter, from `AppMetrics.work_failures`, by `work`, from element 9: node works of the forkchoice stage whose result was not LANTERN_OK, by work kind.
+- `lantern_processing_availability_work_seconds`: category `processing`, sub category `availability`, histogram, from `AppMetrics.work_seconds`, by `work`, from element 12, work bounds: run time of each node work of the availability stage, by work kind.
+- `lantern_processing_availability_work_failures_total`: category `processing`, sub category `availability`, counter, from `AppMetrics.work_failures`, by `work`, from element 12: node works of the availability stage whose result was not LANTERN_OK, by work kind.
+- `lantern_processing_gossip_work_seconds`: category `processing`, sub category `gossip`, histogram, from `AppMetrics.work_seconds`, by `work`, from element 15, work bounds: run time of each node work of the gossip stage, by work kind.
+- `lantern_processing_gossip_work_failures_total`: category `processing`, sub category `gossip`, counter, from `AppMetrics.work_failures`, by `work`, from element 15: node works of the gossip stage whose result was not LANTERN_OK, by work kind.
+- `lantern_processing_engine_work_seconds`: category `processing`, sub category `engine`, histogram, from `AppMetrics.work_seconds`, by `work`, from element 16, work bounds: run time of each node work of the engine stage, by work kind.
+- `lantern_processing_engine_work_failures_total`: category `processing`, sub category `engine`, counter, from `AppMetrics.work_failures`, by `work`, from element 16: node works of the engine stage whose result was not LANTERN_OK, by work kind.
+- `lantern_processing_builder_work_seconds`: category `processing`, sub category `builder`, histogram, from `AppMetrics.work_seconds`, by `work`, from element 21, work bounds: run time of each node work of the builder stage, by work kind.
+- `lantern_processing_builder_work_failures_total`: category `processing`, sub category `builder`, counter, from `AppMetrics.work_failures`, by `work`, from element 21: node works of the builder stage whose result was not LANTERN_OK, by work kind.
+- `lantern_processing_lightclient_work_seconds`: category `processing`, sub category `lightclient`, histogram, from `AppMetrics.work_seconds`, by `work`, from element 22, work bounds: run time of each node work of the lightclient stage, by work kind.
+- `lantern_processing_lightclient_work_failures_total`: category `processing`, sub category `lightclient`, counter, from `AppMetrics.work_failures`, by `work`, from element 22: node works of the lightclient stage whose result was not LANTERN_OK, by work kind.
+- `lantern_processing_history_work_seconds`: category `processing`, sub category `history`, histogram, from `AppMetrics.work_seconds`, by `work`, from element 27, work bounds: run time of each node work of the history stage, by work kind.
+- `lantern_processing_history_work_failures_total`: category `processing`, sub category `history`, counter, from `AppMetrics.work_failures`, by `work`, from element 27: node works of the history stage whose result was not LANTERN_OK, by work kind.
+- `lantern_processing_validator_work_seconds`: category `processing`, sub category `validator`, histogram, from `AppMetrics.work_seconds`, by `work`, from element 30, work bounds: run time of each node work of the validator stage, by work kind.
+- `lantern_processing_validator_work_failures_total`: category `processing`, sub category `validator`, counter, from `AppMetrics.work_failures`, by `work`, from element 30: node works of the validator stage whose result was not LANTERN_OK, by work kind.
+- `lantern_processing_epoch_transitions_total`: category `processing`, sub category `epoch`, counter, from `AppMetrics.epoch_transitions`: block imports and slot processing works that crossed an epoch boundary.
+- `lantern_processing_epoch_transition_seconds`: category `processing`, sub category `epoch`, histogram, from `AppMetrics.epoch_seconds`, work bounds: run time of each block import or slot processing work that crossed an epoch boundary.
+- `lantern_processing_gossip_validation_seconds`: category `processing`, sub category `gossip`, histogram, from `AppMetrics.gossip_seconds`, by `topic`, work bounds: run time of each gossip validation, by topic.
+- `lantern_node_resource_cpu_seconds_total`: category `node`, sub category `resource`, counter, from `MetricsProcess.cpu_us`, in seconds: user and system CPU time.
+- `lantern_node_resource_max_resident_memory_bytes`: category `node`, sub category `resource`, gauge, from `MetricsProcess.max_rss_bytes`: highest resident memory since the start.
+- `lantern_node_resource_max_fds`: category `node`, sub category `resource`, gauge, from `MetricsProcess.max_fds`; condition `max_fds`: the soft limit of open files.
+- `lantern_node_resource_buffers`: category `node`, sub category `resource`, gauge, from `MetricsProcess.buffers`: buffers the app holds for the node.
+- `lantern_node_resource_buffer_bytes`: category `node`, sub category `resource`, gauge, from `MetricsProcess.buffer_bytes`: bytes of those buffers.
+- `lantern_node_resource_start_time_seconds`: category `node`, sub category `resource`, gauge, from `MetricsProcess.start_s`: unix time of the start.
+- `lantern_node_sync_head_slot`: category `node`, sub category `sync`, gauge, from `MetricsNode.head_slot`: slot of the head block.
+- `lantern_node_sync_store_slot`: category `node`, sub category `sync`, gauge, from `MetricsNode.store_slot`: slot of the store's time.
+- `lantern_node_sync_distance`: category `node`, sub category `sync`, gauge, from `MetricsNode.distance`: slots from the head to the store's slot.
+- `lantern_node_sync_state`: category `node`, sub category `sync`, gauge, from `MetricsNode.sync_state`: 0 behind and not syncing, 1 synced, 2 syncing.
+- `lantern_node_sync_earliest_slot`: category `node`, sub category `sync`, gauge, from `MetricsNode.earliest_slot`: first slot whose blocks the node serves.
+- `lantern_node_sync_backfill_slot`: category `node`, sub category `sync`, gauge, from `MetricsNode.backfill_slot`: slot below which the backfill looks for blocks.
+- `lantern_node_sync_finalized_epoch`: category `node`, sub category `sync`, gauge, from `MetricsNode.finalized_epoch`: the store's finalized epoch.
+- `lantern_node_sync_justified_epoch`: category `node`, sub category `sync`, gauge, from `MetricsNode.justified_epoch`: the store's justified epoch.
+- `lantern_node_health_uptime_seconds`: category `node`, sub category `health`, gauge, from `MetricsProcess.uptime_us`, in seconds: time since the start.
+- `lantern_node_health_execution_engine`: category `node`, sub category `health`, gauge, from `MetricsProcess.engine`: connection to the execution engine: 0 none, 1 dialing, 2 open.
+- `lantern_node_health_step_seconds`: category `node`, sub category `health`, histogram, from `AppMetrics.step_seconds`, work bounds: run time of each node step.
+- `lantern_node_pool_operations`: category `node`, sub category `pool`, gauge, from `MetricsNode.pool`, by `topic`: operations in the pool, by topic.
+- `lantern_node_pool_proposers`: category `node`, sub category `pool`, gauge, from `MetricsNode.local_validators`: validators with a fee recipient from prepareBeaconProposer.
+- `lantern_node_log_lines_total`: category `node`, sub category `log`, counter, from `AppMetrics.log_lines`, by `level`: log lines written, by level.
+- `lantern_node_api_requests_total`: category `node`, sub category `api`, counter, from `AppMetrics.api_requests`: beacon API requests.
+- `lantern_node_api_answers_total`: category `node`, sub category `api`, counter, from `AppMetrics.api_classes`, by `class`: beacon API answers, by status class.
+- `lantern_node_api_connections_open`: category `node`, sub category `api`, gauge, from `MetricsProcess.api_open`: beacon API connections open.
+- `lantern_node_storage_records_total`: category `node`, sub category `storage`, counter, from `AppMetrics.db_records`, by `kind`: records appended to the history's segment files, by kind.
+- `lantern_node_storage_record_bytes_total`: category `node`, sub category `storage`, counter, from `AppMetrics.db_bytes`, by `kind`: bytes of those records.
+- `lantern_node_storage_anchors_total`: category `node`, sub category `storage`, counter, from `AppMetrics.db_anchors`: anchor states written for a restart.
+- `lantern_node_storage_anchor_write_seconds`: category `node`, sub category `storage`, histogram, from `AppMetrics.anchor_seconds`: run time of each anchor state write, from its bytes to the synced directory.
+- `lantern_node_storage_segments_dropped_total`: category `node`, sub category `storage`, counter, from `AppMetrics.db_drops`: segment files deleted.
+- `lantern_node_storage_write_failures_total`: category `node`, sub category `storage`, counter, from `AppMetrics.db_failures`: writes to the data directory that failed.
+
+## Type `MetricLabel`
+
+A label table of the metric table: a label's name and its values in element order.
+
+### Layout
+
+| Offset | Field | Type | Meaning |
+|---|---|---|---|
+| 0 | `name` | u32 | Offset of the label's name in `metrics_texts` |
+| 4 | `name_len` | u32 | Bytes of the name |
+| 8 | `count` | u32 | The values |
+| 12 | `first` | u32 | The first of its values in `metrics_label_values` |
+
+### Rules
+
+- `status` (`status`): `pending`, `active`, `exited`, `withdrawable`.
+- `topic` (`topic`): `other`, `beacon_block`, `beacon_aggregate_and_proof`, `beacon_attestation`, `voluntary_exit`, `proposer_slashing`, `attester_slashing`, `sync_committee_contribution_and_proof`, `sync_committee`, `bls_to_execution_change`, `blob_sidecar`, `data_column_sidecar`, `light_client_finality_update`, `light_client_optimistic_update`.
+- `result` (`result`): `accept`, `ignore`, `reject`.
+- `method` (`method`): `other`, `status`, `goodbye`, `beacon_blocks_by_range`, `beacon_blocks_by_root`, `ping`, `metadata`, `blob_sidecars_by_range`, `blob_sidecars_by_root`, `data_column_sidecars_by_range`, `data_column_sidecars_by_root`, `beacon_blocks_by_head`, `light_client_bootstrap`, `light_client_updates_by_range`, `light_client_finality_update`, `light_client_optimistic_update`.
+- `direction` (`direction`): `inbound`, `outbound`.
+- `level` (`level`): `error`, `warn`, `info`, `debug`.
+- `class` (`class`): `2xx`, `3xx`, `4xx`, `5xx`.
+- `kind` (`kind`): `block`, `sidecar`, `state`.
+- `work_block` (`work`): `import_block`, `sync_block`, `block_attestation`, `block_slashing`, `replay`.
+- `work_state` (`work`): `justified_state`, `target_state`, `slots`, `upgrade`.
+- `work_forkchoice` (`work`): `attestation`, `attester_slashing`, `gossip_vote`.
+- `work_availability` (`work`): `blob`, `reconstruct`, `custody`.
+- `work_gossip` (`work`): `gossip`.
+- `work_engine` (`work`): `new_payload`, `forkchoice`, `prepare_payload`, `get_payload`, `eth1_check`.
+- `work_builder` (`work`): `produce_bid`.
+- `work_lightclient` (`work`): `lc_block`, `lc_head`, `lc_serve`, `lc_gossip`, `lc_publish`.
+- `work_history` (`work`): `backfill`, `archive_load`, `serve`.
+- `work_validator` (`work`): `api_encode`, `api_chunk`, `api_lookup`, `api_event`, `api_submit`, `pool_check`, `produce_check`, `produce_fold`, `produce_block`, `publish_decode`, `publish_sidecars`, `publish_check`, `publish_sidecar`, `produce_eth1`.
+- Work bounds (the `work` bound set): 0.00001, 0.0001, 0.0005, 0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1, 5.
 
 ## Test vectors
 
