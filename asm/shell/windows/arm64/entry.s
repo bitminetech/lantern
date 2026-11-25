@@ -2,7 +2,7 @@
  * The entry point of the lantern binary for Windows on ARM64: mainCRTStartup; the command line
  * of GetCommandLineW split by CommandLineToArgvW, without the program name, each argument in
  * UTF-8, as an ArgList; then lantern_app_main; then ExitProcess with its status.
- * Requirements: docs/reference/shell.md, Common rules. x19 the argument count, x20 the wide
+ * Requirements: docs/reference/shell.md, mainCRTStartup. x19 the argument count, x20 the wide
  * arguments, x21 the UTF-8 bytes, x22 the ArgList's size, x23 the ArgList, x24 an argument's
  * number, x25 the next byte, x26 an Arg entry. Locals: L argc, L+8 the size, L+16 the address.
  */

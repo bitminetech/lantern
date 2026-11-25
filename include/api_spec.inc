@@ -1,5 +1,5 @@
 /*
- * The keys of getSpec (docs/reference/beacon-api.md, Common rules), in the order of the answer:
+ * The keys of getSpec (docs/reference/beacon-api.md, lantern_node_api_event), in the order of the answer:
  * m name, kind, value. The kind's arg is the kind / 256. From consensus-specs v1.7.0-beta.4
  * (aa16bb4): the keys of configs/<preset>.yaml that lantern_config_parse reads, in file order
  * (the same in both); presets/<preset>/<fork>.yaml, phase0 to fulu; the Constants tables of

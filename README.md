@@ -139,7 +139,7 @@ Standard: [asm-standard@2a19d3f](https://github.com/bitminetech/asm-standard/blo
 | Item | Value |
 |---|---|
 | macOS objects | Marked for macOS 11.0 or later |
-| `sha` variant | asm-crypto's `sha` variant: its `asm/core/<ISA>/sha256x.s` in place of `sha256.s`. On x86-64 and ARM64 the binary holds a second copy of the core and of the dependency cores, built with it, each symbol with the prefix `lx_`. The entry point runs that copy when the CPU has the features of its row above (shell.md, Common rules). |
+| `sha` variant | asm-crypto's `sha` variant: its `asm/core/<ISA>/sha256x.s` in place of `sha256.s`. On x86-64 and ARM64 the binary holds a second copy of the core and of the dependency cores, built with it, each symbol with the prefix `lx_`. The entry point runs that copy when the CPU has the features of its row above (shell.md: `main`, `mainCRTStartup`, `_start`). |
 | Proof claims | Only the baseline copy. |
 
 ## Environment boundaries

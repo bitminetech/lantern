@@ -524,31 +524,26 @@ The Merkle trees of the large fields of the last state that lantern_state_root h
 |---|---|---|---|
 | 0 | `size` | u64 | Bytes of the buffer, this field included |
 | 8 | `validators` | u64 | The validators it was laid out for |
-| 16 | `trees` | `CacheTree` × `STATE_CACHE_TREES` | The trees, in the order of the table |
-
-### Trees
-
-| Tree | Field | Leaves | Capacity |
-|---|---|---|---|
-| 0 | validators | Validator roots, copies of 128 bytes | `validators` |
-| 1 | balances | Chunks | ceil(`validators` / 4) |
-| 2 | inactivity_scores | Chunks | ceil(`validators` / 4) |
-| 3 | previous_epoch_participation | Chunks | ceil(`validators` / 32) |
-| 4 | current_epoch_participation | Chunks | ceil(`validators` / 32) |
-| 5 | block_roots | Chunks | SLOTS_PER_HISTORICAL_ROOT |
-| 6 | state_roots | Chunks | SLOTS_PER_HISTORICAL_ROOT |
-| 7 | randao_mixes | Chunks | EPOCHS_PER_HISTORICAL_VECTOR |
-| 8 | slashings | Chunks | EPOCHS_PER_SLASHINGS_VECTOR / 4 |
-| 9 | historical_roots | Chunks | `STATE_CACHE_HISTORICAL_ROOTS` |
-| 10 | eth1_data_votes | Eth1Data roots, copies of `Eth1Data__mem` bytes | EPOCHS_PER_ETH1_VOTING_PERIOD * SLOTS_PER_EPOCH |
-| 11 | historical_summaries | HistoricalSummary roots, copies of `HistoricalSummary__mem` bytes | `STATE_CACHE_LIST` |
-| 12 | pending_deposits | PendingDeposit roots, copies of `PendingDeposit__mem` bytes | `STATE_CACHE_PENDING_DEPOSITS` |
-| 13 | pending_partial_withdrawals | PendingPartialWithdrawal roots, copies of `PendingPartialWithdrawal__mem` bytes | `STATE_CACHE_LIST` |
-| 14 | pending_consolidations | PendingConsolidation roots, copies of `PendingConsolidation__mem` bytes | `STATE_CACHE_LIST` |
-| 15 | proposer_lookahead | Chunks | (MIN_SEED_LOOKAHEAD + 1) * SLOTS_PER_EPOCH / 4 |
+| 16 | `trees` | `CacheTree` × `STATE_CACHE_TREES` | The trees, in the order of the Rules |
 
 ### Rules
 
+- Tree 0, validators: Validator roots, copies of 128 bytes; capacity `validators`.
+- Tree 1, balances: Chunks; capacity ceil(`validators` / 4).
+- Tree 2, inactivity_scores: Chunks; capacity ceil(`validators` / 4).
+- Tree 3, previous_epoch_participation: Chunks; capacity ceil(`validators` / 32).
+- Tree 4, current_epoch_participation: Chunks; capacity ceil(`validators` / 32).
+- Tree 5, block_roots: Chunks; capacity SLOTS_PER_HISTORICAL_ROOT.
+- Tree 6, state_roots: Chunks; capacity SLOTS_PER_HISTORICAL_ROOT.
+- Tree 7, randao_mixes: Chunks; capacity EPOCHS_PER_HISTORICAL_VECTOR.
+- Tree 8, slashings: Chunks; capacity EPOCHS_PER_SLASHINGS_VECTOR / 4.
+- Tree 9, historical_roots: Chunks; capacity `STATE_CACHE_HISTORICAL_ROOTS`.
+- Tree 10, eth1_data_votes: Eth1Data roots, copies of `Eth1Data__mem` bytes; capacity EPOCHS_PER_ETH1_VOTING_PERIOD * SLOTS_PER_EPOCH.
+- Tree 11, historical_summaries: HistoricalSummary roots, copies of `HistoricalSummary__mem` bytes; capacity `STATE_CACHE_LIST`.
+- Tree 12, pending_deposits: PendingDeposit roots, copies of `PendingDeposit__mem` bytes; capacity `STATE_CACHE_PENDING_DEPOSITS`.
+- Tree 13, pending_partial_withdrawals: PendingPartialWithdrawal roots, copies of `PendingPartialWithdrawal__mem` bytes; capacity `STATE_CACHE_LIST`.
+- Tree 14, pending_consolidations: PendingConsolidation roots, copies of `PendingConsolidation__mem` bytes; capacity `STATE_CACHE_LIST`.
+- Tree 15, proposer_lookahead: Chunks; capacity (MIN_SEED_LOOKAHEAD + 1) * SLOTS_PER_EPOCH / 4.
 - 16 + 48 * `STATE_CACHE_TREES` bytes of header, then the bytes of each tree.
 - A tree of a field that the state's fork does not hold keeps its `count`.
 

@@ -1962,7 +1962,7 @@ static void run_rewards(const char *file, case_file *f) {
 /*
  * The fork choice tests: tests/formats/fork_choice/README.md of the spec. The
  * runner plays the node: it keeps store.block_states and store.checkpoint_states
- * (docs/reference/fork-choice.md, Common rules), grows the store and the states
+ * (docs/reference/fork-choice.md, Store), grows the store and the states
  * when lantern asks for room, and gives the justified checkpoint state when
  * lantern asks for it.
  */

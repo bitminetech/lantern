@@ -1,7 +1,7 @@
 /*
  * The entry point of the lantern binary for Linux on x86-64: the arguments, without the program
  * name, as an ArgList; then lantern_app_main; then exit_group with its status.
- * Requirements: docs/reference/shell.md, Common rules. At _start, rsp holds argc, then argv.
+ * Requirements: docs/reference/shell.md, _start. At _start, rsp holds argc, then argv.
  * r12 the argument count, r13 argv, r14 the argument bytes, r15 the ArgList's size, rbx the ArgList.
  */
 .set ISA_X86_64, 1

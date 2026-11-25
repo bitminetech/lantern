@@ -1,7 +1,7 @@
 /*
  * The entry point of the lantern binary for Linux on RISC-V: the arguments, without the program
  * name, as an ArgList; then lantern_app_main; then exit_group with its status.
- * Requirements: docs/reference/shell.md, Common rules. At _start, sp holds argc, then argv.
+ * Requirements: docs/reference/shell.md, _start. At _start, sp holds argc, then argv.
  * s1 the argument count, s2 argv, s3 the argument bytes, s4 the ArgList's size, s5 the ArgList,
  * s6 the next byte.
  */

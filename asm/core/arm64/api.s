@@ -1,6 +1,6 @@
 /*
  * The Beacon API answers of the node, ARM64: in the common object. Requirements:
- * docs/reference/beacon-api.md (Common rules) and docs/reference/node.md (NODE_EV_API).
+ * docs/reference/beacon-api.md (lantern_node_api_event) and docs/reference/node.md (NODE_EV_API).
  *
  * The writer: x24 the cursor, x25 the pass (0 counts the bytes, 1 writes them), x26 the end of
  * the room, x27 1 when the room ran out, x22 the ApiView, x28 the body kind. The writer's
@@ -254,7 +254,7 @@ LOCAL_FUNCTION lantern_api_qdec256
 END_FUNCTION lantern_api_qdec256
 
 /*
- * L2: the body of getSpec (beacon-api.md, Common rules): each key of API_SPEC_KEYS, with the
+ * L2: the body of getSpec (beacon-api.md, lantern_node_api_event): each key of API_SPEC_KEYS, with the
  * config of the view x22. Locals: L the record, L+8 an index, L+16 32 bytes of a value, L+48 a count.
  */
 LOCAL_FUNCTION lantern_api_spec
@@ -388,7 +388,7 @@ LOCAL_FUNCTION lantern_api_spec
 END_FUNCTION lantern_api_spec
 
 /*
- * L2: the body of getForkSchedule (beacon-api.md, Common rules), with the config of the view x22:
+ * L2: the body of getForkSchedule (beacon-api.md, lantern_node_api_event), with the config of the view x22:
  * phase0, then each fork to fulu whose epoch is below 2^64 - 1. Locals: L the fork, L+8 the
  * previous version, L+16 the version, L+24 the epoch.
  */
@@ -433,7 +433,7 @@ LOCAL_FUNCTION lantern_api_fork_schedule
     UNFRAME 32
 END_FUNCTION lantern_api_fork_schedule
 
-/* ---------------------------------------------------------------- Validators (beacon-api.md, Common rules) */
+/* ---------------------------------------------------------------- Validators (beacon-api.md, lantern_node_api_event) */
 
 .set API_ITEM_MAX, 576                      /* the most bytes of an item and its comma */
 
@@ -1208,7 +1208,7 @@ END_FUNCTION lantern_api_rewards_json
 
 /*
  * L0: x0 = the epoch of getEpochCommittees of the route x0 and the state of the view x1 (beacon-api.md,
- * Common rules), or 2^64 - 1 for 400: an epoch above the state's + 1, one whose seed's RANDAO mix the
+ * lantern_node_api_event), or 2^64 - 1 for 400: an epoch above the state's + 1, one whose seed's RANDAO mix the
  * state no longer holds, or a slot of another epoch. A leaf. Uses x9-x13.
  */
 LOCAL_FUNCTION lantern_node_api_committees_check
@@ -1482,7 +1482,7 @@ END_FUNCTION lantern_node_api_ids
 
 /*
  * L1: the body of the kind x28 for the view x22: an error body of the status at [x0], or the
- * JSON of an operation (beacon-api.md, Common rules). Locals: x0.
+ * JSON of an operation (beacon-api.md, lantern_node_api_event). Locals: x0.
  */
 LOCAL_FUNCTION lantern_api_body
     FRAME 16
@@ -2883,7 +2883,7 @@ END_FUNCTION lantern_api_respond
 
 /*
  * L1: the values of the ApiView x0 that the node, x19, and the store, x20, give (beacon-api.md,
- * Common rules); the header and the checkpoints zero. Locals: L the view.
+ * lantern_node_api_event); the header and the checkpoints zero. Locals: L the view.
  */
 LOCAL_FUNCTION lantern_node_api_view
     FRAME 16
@@ -4921,7 +4921,7 @@ LOCAL_FUNCTION lantern_node_api_event_run
     LEAVE 32
 END_FUNCTION lantern_node_api_event_run
 
-/* ---------------------------------------------------------------- Lookup (beacon-api.md, Common rules) */
+/* ---------------------------------------------------------------- Lookup (beacon-api.md, lantern_node_api_event) */
 
 /* L1: x0 = the NodeBlock index of the imported parent of the entry x0, or 2^64 - 1; x1 = its entry. Uses x9-x15. */
 LOCAL_FUNCTION lantern_node_api_parent
@@ -8596,7 +8596,7 @@ LOCAL_FUNCTION lantern_api_fork_name
 END_FUNCTION lantern_api_fork_name
 
 /*
- * L1: the head of a streamed answer (beacon-api.md, Common rules) for the flags at
+ * L1: the head of a streamed answer (beacon-api.md, lantern_node_api_event) for the flags at
  * NodeEvent_api + 8 of the event x23 and the fork of the entry x22: with Content-Length x0, or
  * for x0 = 2^64 - 1 Transfer-Encoding: chunked when API_STREAM_CHUNKED is set, else neither.
  * Locals: x0.

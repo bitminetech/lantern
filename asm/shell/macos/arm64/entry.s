@@ -1,7 +1,7 @@
 /*
  * The entry point of the lantern binary for macOS on ARM64: main, which libSystem calls with argc
  * and argv; the arguments, without the program name, as an ArgList; then lantern_app_main, whose
- * status main returns as the exit code. Requirements: docs/reference/shell.md, Common rules.
+ * status main returns as the exit code. Requirements: docs/reference/shell.md, main.
  * x19 the argument count, x20 argv, x21 the argument bytes, x22 the ArgList's size, x23 the
  * ArgList, x24 the next byte. Locals: L the size, L+8 the address.
  */

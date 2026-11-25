@@ -1,5 +1,5 @@
 /*
- * The texts of the Beacon API answers (docs/reference/beacon-api.md, Common rules), in RODATA:
+ * The texts of the Beacon API answers (docs/reference/beacon-api.md, lantern_node_api_event), in RODATA:
  * each label with its length in bytes as <label>_len, after api_texts. The same on every ISA.
  */
 api_texts:

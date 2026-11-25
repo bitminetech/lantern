@@ -2300,7 +2300,7 @@ def run_strict(spec, config, f):
         spec.config = base
 
 
-# ---------------------------------------------------------------- The Beacon API (beacon-api.md, Common rules)
+# ---------------------------------------------------------------- The Beacon API (beacon-api.md, lantern_node_api_event)
 
 REASONS = {200: b"OK", 202: b"Accepted", 206: b"Partial Content", 400: b"Bad Request", 404: b"Not Found", 405: b"Method Not Allowed",
            406: b"Not Acceptable", 413: b"Content Too Large", 414: b"URI Too Long", 415: b"Unsupported Media Type",
@@ -2363,7 +2363,7 @@ def response(code, body=b"", close=False, keep_alive=False, allow=0, reason=True
 
 
 def streamed(fork, body, ssz=False, close=False, keep_alive=False):
-    """A streamed answer (beacon-api.md, Common rules) in its form with Content-Length; with fork None, no
+    """A streamed answer (beacon-api.md, lantern_node_api_event) in its form with Content-Length; with fork None, no
     Eth-Consensus-Version."""
     out = b"HTTP/1.1 200 OK\r\nContent-Type: " + (b"application/octet-stream" if ssz else b"application/json") + b"\r\n"
     if fork is not None:
@@ -2416,7 +2416,7 @@ def constants(path):
 
 
 def config_bodies(fork, preset):
-    """The bodies of getSpec, getForkSchedule and getDepositContract (beacon-api.md, Common rules): the
+    """The bodies of getSpec, getForkSchedule and getDepositContract (beacon-api.md, lantern_node_api_event): the
     pinned config with the fork epochs of schedule(fork), the presets, and the constants of the fulu
     module. The config keys and their kinds: CONFIG_KEYS of include/lantern.inc (config.md)."""
     import re
@@ -2531,7 +2531,7 @@ def api_values(spec, fork, state, block):
 
 
 def status_of(spec, val, epoch):
-    """The status of a validator at an epoch (beacon-api.md, Common rules)."""
+    """The status of a validator at an epoch (beacon-api.md, lantern_node_api_event)."""
     if val.withdrawable_epoch <= epoch:
         return "withdrawal_done" if val.effective_balance == 0 else "withdrawal_possible"
     if val.exit_epoch <= epoch:
@@ -2623,7 +2623,7 @@ def state_read_answer(v, name, route, s, slot, values, kw):
 
 
 def committees_answer(v, route, s, values, kw):
-    """The answer of getEpochCommittees for the state s (beacon-api.md, Common rules)."""
+    """The answer of getEpochCommittees for the state s (beacon-api.md, lantern_node_api_event)."""
     import api_route
     spec = v["spec"]
     state_epoch = int(spec.get_current_epoch(s))
@@ -2647,7 +2647,7 @@ def committees_answer(v, route, s, values, kw):
 
 
 def duties_answer(v, route, kw, syncing, v2=False):
-    """The answer of getProposerDuties, or with v2 of getProposerDutiesV2 (beacon-api.md, Common rules)."""
+    """The answer of getProposerDuties, or with v2 of getProposerDutiesV2 (beacon-api.md, lantern_node_api_event)."""
     spec = v["spec"]
     if syncing:
         return error(503, **kw)

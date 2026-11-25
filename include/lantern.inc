@@ -1219,7 +1219,7 @@
 .set DB_RECORD_MAX, 1 << 32
 .set DB_SIDECAR_INDICES, 128           /* a sidecar's index is below this */
 
-/* ApiView: the values the node's Beacon API answers show (beacon-api.md, Common rules), in scratch; internal. A text field is a length, then its bytes. */
+/* ApiView: the values the node's Beacon API answers show (beacon-api.md, lantern_node_api_event), in scratch; internal. A text field is a length, then its bytes. */
 .set ApiView_genesis_time, 0
 .set ApiView_genesis_validators_root, 8
 .set ApiView_genesis_fork_version, 40

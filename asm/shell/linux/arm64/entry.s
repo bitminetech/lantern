@@ -1,7 +1,7 @@
 /*
  * The entry point of the lantern binary for Linux on ARM64: the arguments, without the program
  * name, as an ArgList; then lantern_app_main; then exit_group with its status.
- * Requirements: docs/reference/shell.md, Common rules. At _start, sp holds argc, then argv,
+ * Requirements: docs/reference/shell.md, _start. At _start, sp holds argc, then argv,
  * a 0, envp, a 0, then the auxiliary vector. x19 the argument count, x20 argv, x21 the argument
  * bytes, x22 the ArgList's size, x23 the ArgList, x24 the next byte, x25 1 when the CPU has
  * FEAT_SHA256 (README, Target profile).
