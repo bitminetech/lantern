@@ -4671,20 +4671,22 @@ END_FUNCTION lantern_produce_add_signature
 .endif
 
 /*
- * (state, bid, params, scratch, out): node.md, lantern_node_produce_bid. rbx state, rbp the bid's
- * JSON, r12 params, r13 scratch, r14 out, r15 the message's bytes; S7 the header's bytes, S8 the
+ * (state, bid, request, config, scratch, out): node.md, lantern_node_produce_bid. rbx state, rbp the
+ * bid's JSON, r12 its table of the request and the config at L+320, r13 scratch, r14 out, r15 the message's bytes; S7 the header's bytes, S8 the
  * scratch size, S9 the expected withdrawals, S10 the message's count. Locals: L a JsonFault (128),
  * L+128 the epoch, L+136 the domain type, L+144 the domain (32), L+176 the time, L+184 the signing
  * root after a ByteList header (56), L+240 a mix or the blob parameters (32), L+272 a zero root,
  * then a root (32).
  */
 SPEC_FUNCTION node_produce_bid
-    ENTER 320
+    ENTER 336
     mov     %rdi, %rbx
     mov     %rsi, %rbp
-    mov     %rdx, %r12
-    mov     %rcx, %r13
-    mov     %r8, %r14
+    lea     (L + 320)(%rsp), %r12           # the request and the config, in a table of its own
+    mov     %rdx, (%r12)
+    mov     %rcx, 8(%r12)
+    mov     %r8, %r13
+    mov     %r9, %r14
     mov     (%r13), %rax
     mov     %rax, S8(%rsp)
     ADDRESS %rdi, lantern_type_SignedBuilderBid   # the bid's SSZ bytes in out
@@ -4846,20 +4848,20 @@ SPEC_FUNCTION node_produce_bid
     ja      96f
 .endif
     xor     %eax, %eax
-99: LEAVE 320
+99: LEAVE 336
 95: mov     S8(%rsp), %rcx
     mov     %rcx, (%r13)
     mov     $LANTERN_INVALID_JSON, %eax
-    LEAVE 320
+    LEAVE 336
 96: mov     $LANTERN_INVALID_BID, %eax
-    LEAVE 320
+    LEAVE 336
 97: mov     S8(%rsp), %rcx
     mov     %rcx, (%r13)
-    LEAVE 320
+    LEAVE 336
 98: mov     S8(%rsp), %rcx
     mov     %rcx, (%r13)
     mov     $LANTERN_BUFFER_TOO_SMALL, %eax
-    LEAVE 320
+    LEAVE 336
 SPEC_END node_produce_bid
 .else
 /* Before bellatrix: no bid (node.md, lantern_node_produce_bid). */
@@ -5317,20 +5319,32 @@ END_FUNCTION lantern_produce_blind_root
 .endif
 
 /*
- * (state, draft, params, scratch, out): node.md, lantern_node_produce_block. rbx state, rbp the
- * draft, r12 params, r13 scratch, r14 out, r15 the write position; S7 the block, S8 the body.
+ * (state, draft, request, config, result, bid, scratch, out, values): node.md,
+ * lantern_node_produce_block. rbx state, rbp the draft, r12 its params at L+288: request, config,
+ * result, payload_value, block_value, bid, blinded (the last three in values), r13 scratch, r14 out, r15 the write position; S7 the block, S8 the body.
  * Locals: L proposer, L+8 the result's bytes, L+16 their count, L+24 the payload, L+32 its count,
  * L+40 the bundle, L+48 its count, L+56 balance before, L+64 1, L+72 a Result, L+80 the scratch
- * size, L+88 a ByteList view of the request lists (electra), L+256 24 bytes kept aside.
+ * size, L+88 a ByteList view of the request lists (electra), L+256 24 bytes kept aside, L+288 the
+ * params (56 bytes).
  */
 SPEC_FUNCTION node_produce_block
-    ENTER 288
+    ENTER 352
     mov     %rdi, %rbx
     mov     8(%rsi), %rax
     lea     (%rsi,%rax), %rbp
-    mov     %rdx, %r12
-    mov     %rcx, %r13
-    mov     %r8, %r14
+    lea     (L + 288)(%rsp), %r12           # its params, in a table of its own
+    mov     %rdx, (%r12)                    # request
+    mov     %rcx, 8(%r12)                   # config
+    mov     %r8, 16(%r12)                   # result
+    mov     %r9, 40(%r12)                   # bid
+    mov     (352 + 96 + 16)(%rsp), %rax     # the ninth argument: values
+    mov     %rax, 48(%r12)                  # blinded
+    lea     8(%rax), %rcx
+    mov     %rcx, 24(%r12)                  # payload_value
+    lea     40(%rax), %rcx
+    mov     %rcx, 32(%r12)                  # block_value
+    mov     (352 + 96)(%rsp), %r13          # the seventh and eighth arguments: scratch, out
+    mov     (352 + 96 + 8)(%rsp), %r14
     mov     (%r13), %rax
     mov     %rax, (L + 80)(%rsp)
     mov     (%r12), %rax                    # execution_valid 1, + 2 with skip_randao_verification
@@ -5773,7 +5787,7 @@ SPEC_FUNCTION node_produce_block
     mov     48(%r12), %rax
     movq    $1, (%rax)
     xor     %eax, %eax
-    LEAVE 288
+    LEAVE 352
 77:
 .endif
 .if FORK >= FORK_DENEB
@@ -5783,18 +5797,18 @@ SPEC_FUNCTION node_produce_block
     jnz     98f
 .endif
     xor     %eax, %eax
-99: LEAVE 288
+99: LEAVE 352
 95: mov     (L + 80)(%rsp), %rcx
     mov     %rcx, (%r13)
-    LEAVE 288
+    LEAVE 352
 96: mov     $LANTERN_INVALID_ENCODING, %eax
-    LEAVE 288
+    LEAVE 352
 97: mov     $LANTERN_INVALID_VALIDATOR_INDEX, %eax
-    LEAVE 288
+    LEAVE 352
 98: mov     (L + 80)(%rsp), %rcx
     mov     %rcx, (%r13)
     mov     $LANTERN_BUFFER_TOO_SMALL, %eax
-    LEAVE 288
+    LEAVE 352
 SPEC_END node_produce_block
 
 /* (state, out): node.md, lantern_node_eth1_check. */

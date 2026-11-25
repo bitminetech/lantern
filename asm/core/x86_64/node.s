@@ -12027,31 +12027,26 @@ FUNCTION lantern_node_run
     jae     837b
     imul    $NodeApi__mem, %rax, %rax
     lea     NodeApi_cursor(%rsi,%rax), %rax
-    mov     %rax, (L + 96)(%rsp)            # ProduceParams at L+96: request, config, result, values
-    lea     Node_config(%rbx), %rax
-    mov     %rax, (L + 104)(%rsp)
-    mov     (L + 72)(%rsp), %rax
-    mov     %rax, (L + 112)(%rsp)
-    mov     S8(%rsp), %rcx
-    lea     NodeEvent_root(%rcx), %rax
-    mov     %rax, (L + 120)(%rsp)
-    lea     NodeEvent_index(%rcx), %rax
-    mov     %rax, (L + 128)(%rsp)
-    mov     (L + 80)(%rsp), %rax            # the bid: state_c; then where blinded goes
-    mov     %rax, (L + 136)(%rsp)
-    lea     NodeEvent_checkpoint(%rcx), %rax
-    mov     %rax, (L + 144)(%rsp)
+    mov     %rax, (L + 96)(%rsp)            # the request: the entry's cursor
     mov     NODE_STATE_SLOT(%r13), %rdi
     lea     Node_config(%rbx), %rsi
     call    lantern_node_fork
     mov     %rax, %r10
+    sub     $32, %rsp                       # the seventh to ninth arguments: scratch, out, values
+    mov     %r15, (%rsp)
+    mov     (32 + S8)(%rsp), %rcx
+    lea     NodeEvent_chunk(%rcx), %rax
+    mov     %rax, 8(%rsp)
+    lea     NodeEvent_checkpoint(%rcx), %rax  # the values: blinded, payload value, block value
+    mov     %rax, 16(%rsp)
     mov     %r13, %rdi
     mov     %r14, %rsi
-    lea     (L + 96)(%rsp), %rdx
-    mov     %r15, %rcx
-    mov     S8(%rsp), %r8
-    add     $NodeEvent_chunk, %r8
+    mov     (32 + L + 96)(%rsp), %rdx       # the request
+    lea     Node_config(%rbx), %rcx
+    mov     (32 + L + 72)(%rsp), %r8        # the result: state_b
+    mov     (32 + L + 80)(%rsp), %r9        # the bid: state_c
     FORK_CALL node_produce_block
+    add     $32, %rsp
 8440: cmp   $LANTERN_BUFFER_TOO_SMALL, %rax
     je      8449f
     test    %rax, %rax
@@ -12085,7 +12080,7 @@ FUNCTION lantern_node_run
     mov     %rax, NodeEvent_chunk(%rcx)
     movq    $24, (NodeEvent_chunk + 8)(%rcx)
     movq    $0, (NodeEvent_chunk + 16)(%rcx)
-    mov     NodeAction_target(%r12), %rax   # ProduceParams at L+96: the entry's cursor, the config
+    mov     NodeAction_target(%r12), %rax   # at L+96: the request (the entry's cursor), the config
     PART    %rsi, %rcx, %rbx, Node_api
     cmp     %rcx, %rax
     jae     837b
@@ -12116,10 +12111,11 @@ FUNCTION lantern_node_run
     mov     (L + 152)(%rsp), %r10
     mov     %r13, %rdi
     lea     (L + 168)(%rsp), %rsi
-    lea     (L + 96)(%rsp), %rdx
-    mov     %r15, %rcx
-    mov     S8(%rsp), %r8
-    add     $NodeEvent_chunk, %r8
+    mov     (L + 96)(%rsp), %rdx
+    mov     (L + 104)(%rsp), %rcx
+    mov     %r15, %r8
+    mov     S8(%rsp), %r9
+    add     $NodeEvent_chunk, %r9
     FORK_CALL node_produce_bid
 8446: mov   (L + 160)(%rsp), %rcx
     mov     %rcx, (%r15)

@@ -11964,29 +11964,24 @@ FUNCTION lantern_node_run
     mul     t0, t0, t2
     add     t0, t1, t0
     addi    t0, t0, NodeApi_cursor
-    sd      t0, (L + 96)(sp)                # ProduceParams at L+96: request, config, result, values
-    addi    t0, s1, Node_config
-    sd      t0, (L + 104)(sp)
-    ld      t0, (L + 72)(sp)
-    sd      t0, (L + 112)(sp)
-    addi    t0, s7, NodeEvent_root
-    sd      t0, (L + 120)(sp)
-    addi    t0, s7, NodeEvent_index
-    sd      t0, (L + 128)(sp)
-    ld      t0, (L + 80)(sp)                # the bid: state_c; then where blinded goes
-    sd      t0, (L + 136)(sp)
-    addi    t0, s7, NodeEvent_checkpoint
-    sd      t0, (L + 144)(sp)
+    sd      t0, (L + 96)(sp)                # the request: the entry's cursor
     ld      a0, NODE_STATE_SLOT(s4)
     addi    a1, s1, Node_config
     call    lantern_node_fork
     mv      t6, a0
     mv      a0, s4
     mv      a1, s5
-    addi    a2, sp, (L + 96)
-    mv      a3, s6
-    addi    a4, s7, NodeEvent_chunk
+    ld      a2, (L + 96)(sp)                # the request
+    addi    a3, s1, Node_config
+    ld      a4, (L + 72)(sp)                # the result: state_b
+    ld      a5, (L + 80)(sp)                # the bid: state_c
+    mv      a6, s6
+    addi    a7, s7, NodeEvent_chunk
+    addi    t0, s7, NodeEvent_checkpoint    # the values: blinded, payload value, block value
+    addi    sp, sp, -16                     # the ninth argument
+    sd      t0, 0(sp)
     FORK_CALL node_produce_block
+    addi    sp, sp, 16
 8440: li    t0, LANTERN_BUFFER_TOO_SMALL
     beq     a0, t0, 8449f
     beqz    a0, 8441f
@@ -12014,7 +12009,7 @@ FUNCTION lantern_node_run
     li      t1, 24
     sd      t1, 8(t0)
     sd      zero, 16(t0)
-    ld      t0, NodeAction_target(s3)       # ProduceParams at L+96: the entry's cursor, the config
+    ld      t0, NodeAction_target(s3)       # at L+96: the request (the entry's cursor), the config
     PART    t1, t2, s1, Node_api
     bgeu    t0, t2, 837b
     li      t2, NodeApi__mem
@@ -12044,9 +12039,10 @@ FUNCTION lantern_node_run
     ld      t6, (L + 152)(sp)
     mv      a0, s4
     addi    a1, sp, (L + 168)
-    addi    a2, sp, (L + 96)
-    mv      a3, s6
-    addi    a4, s7, NodeEvent_chunk
+    ld      a2, (L + 96)(sp)
+    ld      a3, (L + 104)(sp)
+    mv      a4, s6
+    addi    a5, s7, NodeEvent_chunk
     FORK_CALL node_produce_bid
 8446: ld    t0, (L + 160)(sp)
     sd      t0, 0(s6)

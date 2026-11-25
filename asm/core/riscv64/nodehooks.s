@@ -4599,8 +4599,8 @@ END_FUNCTION lantern_produce_differ
 .endif
 
 /*
- * (state, bid, params, scratch, out): node.md, lantern_node_produce_bid. s1 state, s2 the bid's
- * JSON, s3 params, s4 scratch, s5 out, s6 the message's bytes, s7 the header's bytes, s8 the
+ * (state, bid, request, config, scratch, out): node.md, lantern_node_produce_bid. s1 state, s2 the bid's
+ * JSON, s3 its table of the request and the config at L+480, s4 scratch, s5 out, s6 the message's bytes, s7 the header's bytes, s8 the
  * scratch size, s9 the expected withdrawals, s10 the message's count. The bid's SSZ bytes have no
  * alignment. Locals: L a JsonFault (128), L+128 the epoch, L+136 the domain type, L+144 the domain
  * (32), L+176 the time, L+184 the signing root after a ByteList header (56), L+240 a mix or the
@@ -4608,12 +4608,14 @@ END_FUNCTION lantern_produce_differ
  * signature (96).
  */
 SPEC_FUNCTION node_produce_bid
-    ENTER 480
+    ENTER 496
     mv      s1, a0
     mv      s2, a1
-    mv      s3, a2
-    mv      s4, a3
-    mv      s5, a4
+    addi    s3, sp, L + 480                 # the request and the config, in a table of its own
+    sd      a2, 0(s3)
+    sd      a3, 8(s3)
+    mv      s4, a4
+    mv      s5, a5
     ld      s8, 0(s4)
     ADDRESS a0, lantern_type_SignedBuilderBid   # the bid's SSZ bytes in out
     mv      a1, s2
@@ -4766,17 +4768,17 @@ SPEC_FUNCTION node_produce_bid
     bgtu    t0, t3, 96f
 .endif
     li      a0, LANTERN_OK
-99: LEAVE 480
+99: LEAVE 496
 95: sd      s8, 0(s4)
     li      a0, LANTERN_INVALID_JSON
-    LEAVE 480
+    LEAVE 496
 96: li      a0, LANTERN_INVALID_BID
-    LEAVE 480
+    LEAVE 496
 97: sd      s8, 0(s4)
-    LEAVE 480
+    LEAVE 496
 98: sd      s8, 0(s4)
     li      a0, LANTERN_BUFFER_TOO_SMALL
-    LEAVE 480
+    LEAVE 496
 SPEC_END node_produce_bid
 .else
 /* Before bellatrix: no bid (node.md, lantern_node_produce_bid). */
@@ -5239,21 +5241,32 @@ END_FUNCTION lantern_produce_blind_root
 .endif
 
 /*
- * (state, draft, params, scratch, out): node.md, lantern_node_produce_block. s1 state, s2 the
- * draft, s3 params, s4 scratch, s5 out, s6 the write position, s7 the block, s8 the body. Locals:
+ * (state, draft, request, config, result, bid, scratch, out, values): node.md,
+ * lantern_node_produce_block. s1 state, s2 the draft, s3 its params at L+288: request, config,
+ * result, payload_value, block_value, bid, blinded (the last three in values), s4 scratch, s5 out, s6 the write position, s7 the block, s8 the body. Locals:
  * L proposer, L+8 the result's bytes, L+16 their count, L+24 the payload, L+32 its count, L+40
  * the bundle, L+48 its count, L+56 balance before, L+64 1, L+72 a Result, L+80 the scratch size,
- * L+88 a ByteList view of the request lists (electra), L+256 24 bytes kept aside. The engine's
- * result and the block's parts after the attestations have no alignment.
+ * L+88 a ByteList view of the request lists (electra), L+256 24 bytes kept aside, L+288 the params
+ * (56 bytes). The engine's result and the block's parts after the attestations have no alignment.
  */
 SPEC_FUNCTION node_produce_block
-    ENTER 288
+    ENTER 352
     mv      s1, a0
     ld      t0, 8(a1)
     add     s2, a1, t0
-    mv      s3, a2
-    mv      s4, a3
-    mv      s5, a4
+    addi    s3, sp, L + 288                 # its params, in a table of its own
+    sd      a2, 0(s3)                       # request
+    sd      a3, 8(s3)                       # config
+    sd      a4, 16(s3)                      # result
+    sd      a5, 40(s3)                      # bid
+    ld      t0, (352 + 96)(sp)              # the ninth argument: values
+    sd      t0, 48(s3)                      # blinded
+    addi    t1, t0, 8
+    sd      t1, 24(s3)                      # payload_value
+    addi    t1, t0, 40
+    sd      t1, 32(s3)                      # block_value
+    mv      s4, a6
+    mv      s5, a7
     ld      t0, 0(s4)
     sd      t0, (L + 80)(sp)
     ld      t0, 0(s3)                       # execution_valid 1, + 2 with skip_randao_verification
@@ -5668,7 +5681,7 @@ SPEC_FUNCTION node_produce_block
     li      t1, 1
     sd      t1, 0(t0)
     li      a0, LANTERN_OK
-    LEAVE 288
+    LEAVE 352
 77:
 .endif
 .if FORK >= FORK_DENEB
@@ -5677,18 +5690,18 @@ SPEC_FUNCTION node_produce_block
     bnez    a0, 98f
 .endif
     li      a0, LANTERN_OK
-99: LEAVE 288
+99: LEAVE 352
 95: ld      t0, (L + 80)(sp)
     sd      t0, 0(s4)
-    LEAVE 288
+    LEAVE 352
 96: li      a0, LANTERN_INVALID_ENCODING
-    LEAVE 288
+    LEAVE 352
 97: li      a0, LANTERN_INVALID_VALIDATOR_INDEX
-    LEAVE 288
+    LEAVE 352
 98: ld      t0, (L + 80)(sp)
     sd      t0, 0(s4)
     li      a0, LANTERN_BUFFER_TOO_SMALL
-    LEAVE 288
+    LEAVE 352
 SPEC_END node_produce_block
 
 /* (state, out): node.md, lantern_node_eth1_check. */

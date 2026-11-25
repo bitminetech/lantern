@@ -249,7 +249,7 @@
 
 ### Types
 
-- [`ProduceParams`](#type-produceparams): | Offset | Field | Type | Meaning |.
+- [`ProduceValues`](#type-producevalues): the values lantern_node_produce_block writes besides the block.
 - [`Node`](#type-node): the state of the node.
 - [`NodeRoom`](#type-noderoom): the capacities of a `Node`.
 - [`Eth1Count`](#type-eth1count): the deposits of the contract after an eth1 block with deposits (the eth1 follower).
@@ -934,7 +934,7 @@ lantern_node_run(node, store, seen, work, state_a, state_b, state_c, data, setti
 
 ### Limits
 
-- Stack of its own: 288 bytes on x86-64 (return address included), 288 bytes on ARM64, 288 bytes on RISC-V.
+- Stack of its own: 320 bytes on x86-64 (return address included), 304 bytes on ARM64, 304 bytes on RISC-V.
 
 ### ABI
 
@@ -2265,7 +2265,7 @@ The block of produceBlockV3 (beacon-api.md) from a state at its slot, its `Produ
 ### Signature
 
 ```
-lantern_node_produce_block(state, draft, params, scratch, out) -> status
+lantern_node_produce_block(state, draft, request, config, result, bid, scratch, out, values) -> status
 ```
 
 ### Arguments
@@ -2274,9 +2274,13 @@ lantern_node_produce_block(state, draft, params, scratch, out) -> status
 |---|---|---|
 | `state` | state | `BeaconState`: at the slot of the block; process_block runs on it |
 | `draft` | input | ByteList: a `ProduceDraft` from offset 24 |
-| `params` | input | `ProduceParams` |
+| `request` | input | The 188 bytes of the entry's `cursor`: lantern_node_produce_check's `request`, `builder_boost_factor` at byte 136, the registration's fee recipient at byte 168 |
+| `config` | input | `Config` |
+| `result` | input | ByteList: the SSZ bytes of the engine's result, or 0 |
+| `bid` | input | ByteList: the SSZ bytes of a valid `SignedBuilderBid` of the fork, or 0 |
 | `scratch` | scratch | `Scratch` |
 | `out` | output | ByteList, its `size` set: the SSZ bytes of the fork's `BeaconBlock`, from deneb of `BlockContents`; a blinded block: of `BlindedBeaconBlock` |
+| `values` | output | [`ProduceValues`](#type-producevalues) |
 
 ### Returns
 
@@ -2307,14 +2311,14 @@ lantern_node_produce_block(state, draft, params, scratch, out) -> status
 
 ### Limits
 
-- Stack of its own: 384 bytes on x86-64 (return address included), 384 bytes on ARM64, 384 bytes on RISC-V.
+- Stack of its own: 448 bytes on x86-64 (return address included), 448 bytes on ARM64, 448 bytes on RISC-V.
 
 ### ABI
 
 - Role: L0.
 - Symbol: `lantern_<fork>_node_produce_block` in the object of every fork, with `_` before it on macOS; `lantern_node_produce_block` inside the object.
 - Convention: the core ABI for each ISA (ARCHITECTURE.md section 6); each argument is a pointer: a Uint64 argument points at a u64, and a Boolean output is a u64 of 0 or 1.
-- Argument order: `state`, `draft`, `params`, `scratch`, `out`.
+- Argument order: `state`, `draft`, `request`, `config`, `result`, `bid`, `scratch`, `out`, `values`.
 
 ## Function `lantern_node_produce_bid`
 
@@ -2323,7 +2327,7 @@ The bid of a builder's answer to getHeader, when it is valid for a block to prod
 ### Signature
 
 ```
-lantern_node_produce_bid(state, bid, params, scratch, out) -> status
+lantern_node_produce_bid(state, bid, request, config, scratch, out) -> status
 ```
 
 ### Arguments
@@ -2332,7 +2336,8 @@ lantern_node_produce_bid(state, bid, params, scratch, out) -> status
 |---|---|---|
 | `state` | input | `BeaconState`: at the slot of the block |
 | `bid` | input | ByteList: the JSON text of the `data` of the builder's getHeader answer |
-| `params` | input | `ProduceParams`: its `request` and `config` |
+| `request` | input | The 188 bytes of the entry's `cursor`, as lantern_node_produce_block's `request` |
+| `config` | input | `Config` |
 | `scratch` | scratch | `Scratch` |
 | `out` | output | ByteList, its `size` set: the SSZ bytes of the fork's `SignedBuilderBid` |
 
@@ -2359,31 +2364,30 @@ lantern_node_produce_bid(state, bid, params, scratch, out) -> status
 
 ### Limits
 
-- Stack of its own: 416 bytes on x86-64 (return address included), 416 bytes on ARM64, 576 bytes on RISC-V.
+- Stack of its own: 432 bytes on x86-64 (return address included), 432 bytes on ARM64, 592 bytes on RISC-V.
 
 ### ABI
 
 - Role: L0.
 - Symbol: `lantern_<fork>_node_produce_bid` in the object of every fork, with `_` before it on macOS; `lantern_node_produce_bid` inside the object.
 - Convention: the core ABI for each ISA (ARCHITECTURE.md section 6); each argument is a pointer: a Uint64 argument points at a u64, and a Boolean output is a u64 of 0 or 1.
-- Argument order: `state`, `bid`, `params`, `scratch`, `out`.
+- Argument order: `state`, `bid`, `request`, `config`, `scratch`, `out`.
 
-## Type `ProduceParams`
+## Type `ProduceValues`
 
-The arguments of lantern_node_produce_block after its first two: the addresses of its inputs and outputs.
+The values lantern_node_produce_block writes besides the block.
 
 ### Layout
 
 | Offset | Field | Type | Meaning |
 |---|---|---|---|
-| 0 | `request` | address | The 188 bytes of the entry's `cursor`: lantern_node_produce_check's `request`, `builder_boost_factor` at byte 136, the registration's fee recipient at byte 168 |
-| 8 | `config` | address | `Config` |
-| 16 | `result` | address | ByteList: the SSZ bytes of the engine's result, or 0 |
-| 24 | `payload_value` | address | Where execution_payload_value goes: 32 bytes, little endian |
-| 32 | `block_value` | address | Where consensus_block_value goes: u64, in Gwei |
-| 40 | `bid` | address | ByteList: the SSZ bytes of a valid `SignedBuilderBid` of the fork, or 0 |
-| 48 | `blinded` | address | Where 1 goes for a blinded block, else 0: u64 |
+| 0 | `blinded` | u64 | 1 for a blinded block, else 0 |
+| 8 | `payload_value` | 32 bytes, little endian | execution_payload_value |
+| 40 | `block_value` | u64 | consensus_block_value, in Gwei |
 
+### Rules
+
+- 48 bytes: the node passes its `NodeEvent` at `NodeEvent_checkpoint`, whose fields `checkpoint`, `root` and `index` hold them.
 ## Function `lantern_node_publish_decode`
 
 The signed block of a publishBlockV2 body (beacon-api.md).
@@ -9799,7 +9803,7 @@ lantern_produce_choice() -> flag
 - Role: L0.
 - Symbol: `lantern_produce_choice`, local to its object.
 - Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
-- Registers it reads, on ARM64, x86-64, RISC-V: the registers of lantern_node_produce_block: the params in x21, r12, s3; the bid at 40 of them.
+- Registers it reads, on ARM64, x86-64, RISC-V: the registers of lantern_node_produce_block: its params table in x21, r12, s3; the bid at 40 of it.
 - Registers it changes, on ARM64, x86-64, RISC-V: x0 to x17; rax, rcx, rdx, rsi, rdi, r8 to r11; a0 to a7, t0 to t6.
 
 ## Function `lantern_produce_contents`

@@ -11859,23 +11859,19 @@ FUNCTION lantern_node_run
     add     x1, x19, #Node_config
     bl      lantern_node_fork
     mov     x15, x0
-    add     x9, x19, #Node_config           /* ProduceParams at L+96: request, config, result, values, bid, blinded */
-    ldr     x10, [sp, #(L + 32)]
-    stp     x10, x9, [sp, #(L + 96)]
-    ldr     x9, [sp, #(L + 72)]
-    add     x10, x25, #NodeEvent_root
-    stp     x9, x10, [sp, #(L + 112)]
-    add     x9, x25, #NodeEvent_index
-    ldr     x10, [sp, #(L + 80)]            /* the bid: state_c */
-    stp     x9, x10, [sp, #(L + 128)]
-    add     x9, x25, #NodeEvent_checkpoint
-    str     x9, [sp, #(L + 144)]
     mov     x0, x22
     mov     x1, x23
-    add     x2, sp, #(L + 96)
-    mov     x3, x24
-    add     x4, x25, #NodeEvent_chunk
+    ldr     x2, [sp, #(L + 32)]             /* the request */
+    add     x3, x19, #Node_config
+    ldr     x4, [sp, #(L + 72)]             /* the result: state_b */
+    ldr     x5, [sp, #(L + 80)]             /* the bid: state_c */
+    mov     x6, x24
+    add     x7, x25, #NodeEvent_chunk
+    add     x9, x25, #NodeEvent_checkpoint  /* the values: blinded, payload value, block value */
+    sub     sp, sp, #16                     /* the ninth argument */
+    str     x9, [sp]
     FORK_CALL node_produce_block
+    add     sp, sp, #16
 8440: cmp   x0, #LANTERN_BUFFER_TOO_SMALL
     b.eq    8449f
     cbz     x0, 8441f
@@ -11902,7 +11898,7 @@ FUNCTION lantern_node_run
     mov     x11, #24
     stp     x10, x11, [x9]
     str     xzr, [x9, #16]
-    ldr     x9, [x21, #NodeAction_target]   /* ProduceParams at L+96: the entry's cursor, the config */
+    ldr     x9, [x21, #NodeAction_target]   /* at L+96: the request (the entry's cursor), the config */
     PART    x10, x11, x19, Node_api
     cmp     x9, x11
     b.hs    837b
@@ -11930,9 +11926,9 @@ FUNCTION lantern_node_run
     ldr     x15, [sp, #(L + 152)]
     mov     x0, x22
     add     x1, sp, #(L + 168)
-    add     x2, sp, #(L + 96)
-    mov     x3, x24
-    add     x4, x25, #NodeEvent_chunk
+    ldp     x2, x3, [sp, #(L + 96)]
+    mov     x4, x24
+    add     x5, x25, #NodeEvent_chunk
     FORK_CALL node_produce_bid
 8446: ldr   x9, [sp, #(L + 160)]
     str     x9, [x24]
