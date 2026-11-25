@@ -283,7 +283,7 @@ END_FUNCTION lantern_shell_time_ms
  * (path at x0, to at x1): the path ByteList in UTF-16 with a zero after it, at most
  * SHELL_WIDE_BYTES; x0 0, or the error. x19 the path, x20 to.
  */
-LOCAL_FUNCTION shell_wide
+LOCAL_FUNCTION lantern_shell_wide
     ENTER 0
     mov     x19, x0
     mov     x20, x1
@@ -304,7 +304,7 @@ LOCAL_FUNCTION shell_wide
     b       9f
 8:  OS_LAST_ERROR
 9:  LEAVE 0
-END_FUNCTION shell_wide
+END_FUNCTION lantern_shell_wide
 
 /*
  * (path, mode, result): docs/reference/shell.md. x19 result, x20 the path, x22 the wide path,
@@ -326,7 +326,7 @@ FUNCTION lantern_shell_open
 1:  WIDE_ALLOC SHELL_WIDE_BYTES, 90f
     mov     x0, x20
     mov     x1, x22
-    bl      shell_wide
+    bl      lantern_shell_wide
     cbnz    x0, 85f
     mov     x0, x22
     mov     w1, w23
@@ -452,7 +452,7 @@ FUNCTION lantern_shell_map_file
     WIDE_ALLOC SHELL_WIDE_BYTES, 90f
     mov     x0, x20
     mov     x1, x22
-    bl      shell_wide
+    bl      lantern_shell_wide
     cbnz    x0, 85f
     mov     x0, x22                         /* open it */
     mov     w1, #OS_GENERIC_READ
@@ -526,7 +526,7 @@ FUNCTION lantern_shell_remove
     WIDE_ALLOC SHELL_WIDE_BYTES, 90f
     mov     x0, x20
     mov     x1, x22
-    bl      shell_wide
+    bl      lantern_shell_wide
     cbnz    x0, 85f
     mov     x0, x22
     CALL_GLOBAL DeleteFileW
@@ -550,11 +550,11 @@ FUNCTION lantern_shell_rename
     WIDE_ALLOC (2 * SHELL_WIDE_BYTES), 90f
     mov     x0, x20
     mov     x1, x22
-    bl      shell_wide
+    bl      lantern_shell_wide
     cbnz    x0, 85f
     mov     x0, x21
     add     x1, x22, #SHELL_WIDE_BYTES
-    bl      shell_wide
+    bl      lantern_shell_wide
     cbnz    x0, 85f
     mov     x0, x22
     add     x1, x22, #SHELL_WIDE_BYTES
@@ -579,7 +579,7 @@ FUNCTION lantern_shell_mkdir
     WIDE_ALLOC SHELL_WIDE_BYTES, 90f
     mov     x0, x20
     mov     x1, x22
-    bl      shell_wide
+    bl      lantern_shell_wide
     cbnz    x0, 85f
     mov     x0, x22
     mov     x1, #0

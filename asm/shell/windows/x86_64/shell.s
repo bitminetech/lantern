@@ -303,7 +303,7 @@ END_FUNCTION lantern_shell_time_ms
  * (path at rdi, to at rsi): the path ByteList in UTF-16 with a zero after it, at most
  * SHELL_WIDE_BYTES; rax 0, or the error. Locals: L the stack arguments of a call.
  */
-LOCAL_FUNCTION shell_wide
+LOCAL_FUNCTION lantern_shell_wide
     ENTER 16
     mov     %rdi, %rbx
     mov     %rsi, %rbp
@@ -326,7 +326,7 @@ LOCAL_FUNCTION shell_wide
     jmp     9f
 8:  OS_LAST_ERROR
 9:  LEAVE 16
-END_FUNCTION shell_wide
+END_FUNCTION lantern_shell_wide
 
 /*
  * (path, mode, result): docs/reference/shell.md. rbx result, rbp the path, r12 the wide path,
@@ -349,7 +349,7 @@ FUNCTION lantern_shell_open
 1:  WIDE_ALLOC SHELL_WIDE_BYTES, 90f
     mov     %rbp, %rdi
     mov     %r12, %rsi
-    call    shell_wide
+    call    lantern_shell_wide
     test    %rax, %rax
     jnz     85f
     mov     %r12, %rcx
@@ -489,7 +489,7 @@ FUNCTION lantern_shell_map_file
     WIDE_ALLOC SHELL_WIDE_BYTES, 90f
     mov     %rbp, %rdi
     mov     %r12, %rsi
-    call    shell_wide
+    call    lantern_shell_wide
     test    %rax, %rax
     jnz     85f
     mov     %r12, %rcx                      # open it
@@ -572,7 +572,7 @@ FUNCTION lantern_shell_remove
     WIDE_ALLOC SHELL_WIDE_BYTES, 90f
     mov     %rbp, %rdi
     mov     %r12, %rsi
-    call    shell_wide
+    call    lantern_shell_wide
     test    %rax, %rax
     jnz     85f
     mov     %r12, %rcx
@@ -599,12 +599,12 @@ FUNCTION lantern_shell_rename
     WIDE_ALLOC (2 * SHELL_WIDE_BYTES), 90f
     mov     %rbp, %rdi
     mov     %r12, %rsi
-    call    shell_wide
+    call    lantern_shell_wide
     test    %rax, %rax
     jnz     85f
     mov     %r13, %rdi
     lea     SHELL_WIDE_BYTES(%r12), %rsi
-    call    shell_wide
+    call    lantern_shell_wide
     test    %rax, %rax
     jnz     85f
     mov     %r12, %rcx
@@ -632,7 +632,7 @@ FUNCTION lantern_shell_mkdir
     WIDE_ALLOC SHELL_WIDE_BYTES, 90f
     mov     %rbp, %rdi
     mov     %r12, %rsi
-    call    shell_wide
+    call    lantern_shell_wide
     test    %rax, %rax
     jnz     85f
     mov     %r12, %rcx
