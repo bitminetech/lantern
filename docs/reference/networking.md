@@ -31,19 +31,39 @@
 - [`lantern_seen_init`](#function-lantern_seen_init): an empty `Seen`.
 - [`lantern_seen_copy`](#function-lantern_seen_copy): copies a `Seen` into a buffer with more capacity.
 - [`lantern_seen_add_block`](#function-lantern_seen_add_block): records a block that is known but has no post-state.
-- [`lantern_validate_beacon_block_gossip`](#gossip-validation-functions): topic `beacon_block`.
-- [`lantern_validate_blinded_block_gossip`](#gossip-validation-functions): the checks of topic `beacon_block` on a blinded block (beacon-api.md, publishBlindedBlockV2), from bellatrix.
-- [`lantern_validate_beacon_aggregate_and_proof_gossip`](#gossip-validation-functions): topic `beacon_aggregate_and_proof`.
-- [`lantern_validate_beacon_attestation_gossip`](#gossip-validation-functions): topic `beacon_attestation_{subnet_id}`.
-- [`lantern_validate_voluntary_exit_gossip`](#gossip-validation-functions): topic `voluntary_exit`.
-- [`lantern_validate_proposer_slashing_gossip`](#gossip-validation-functions): topic `proposer_slashing`.
-- [`lantern_validate_attester_slashing_gossip`](#gossip-validation-functions): topic `attester_slashing`.
-- [`lantern_validate_sync_committee_contribution_and_proof_gossip`](#gossip-validation-functions): topic `sync_committee_contribution_and_proof`.
-- [`lantern_validate_sync_committee_message_gossip`](#gossip-validation-functions): topic `sync_committee_{subnet_id}`.
-- [`lantern_validate_bls_to_execution_change_gossip`](#gossip-validation-functions): topic `bls_to_execution_change`.
-- [`lantern_validate_blob_sidecar_gossip`](#gossip-validation-functions): topic `blob_sidecar_{subnet_id}`.
-- [`lantern_validate_data_column_sidecar_gossip`](#gossip-validation-functions): topic `data_column_sidecar_{subnet_id}`.
-- [`lantern_validate_partial_data_column_sidecar_gossip`](#gossip-validation-functions): partial messages of `data_column_sidecar_{subnet_id}`.
+- [`lantern_validate_beacon_block_gossip`](#function-lantern_validate_beacon_block_gossip): topic `beacon_block`.
+- [`lantern_validate_blinded_block_gossip`](#function-lantern_validate_blinded_block_gossip): the checks of topic `beacon_block` on a blinded block (beacon-api.md, publishBlindedBlockV2), from bellatrix.
+- [`lantern_validate_beacon_aggregate_and_proof_gossip`](#function-lantern_validate_beacon_aggregate_and_proof_gossip): topic `beacon_aggregate_and_proof`.
+- [`lantern_validate_beacon_attestation_gossip`](#function-lantern_validate_beacon_attestation_gossip): topic `beacon_attestation_{subnet_id}`.
+- [`lantern_validate_voluntary_exit_gossip`](#function-lantern_validate_voluntary_exit_gossip): topic `voluntary_exit`.
+- [`lantern_validate_proposer_slashing_gossip`](#function-lantern_validate_proposer_slashing_gossip): topic `proposer_slashing`.
+- [`lantern_validate_attester_slashing_gossip`](#function-lantern_validate_attester_slashing_gossip): topic `attester_slashing`.
+- [`lantern_validate_sync_committee_contribution_and_proof_gossip`](#function-lantern_validate_sync_committee_contribution_and_proof_gossip): topic `sync_committee_contribution_and_proof`.
+- [`lantern_validate_sync_committee_message_gossip`](#function-lantern_validate_sync_committee_message_gossip): topic `sync_committee_{subnet_id}`.
+- [`lantern_validate_bls_to_execution_change_gossip`](#function-lantern_validate_bls_to_execution_change_gossip): topic `bls_to_execution_change`.
+- [`lantern_validate_blob_sidecar_gossip`](#function-lantern_validate_blob_sidecar_gossip): topic `blob_sidecar_{subnet_id}`.
+- [`lantern_validate_data_column_sidecar_gossip`](#function-lantern_validate_data_column_sidecar_gossip): topic `data_column_sidecar_{subnet_id}`.
+- [`lantern_validate_partial_data_column_sidecar_gossip`](#function-lantern_validate_partial_data_column_sidecar_gossip): partial messages of `data_column_sidecar_{subnet_id}`.
+- [`lantern_block_lookup`](#function-lantern_block_lookup): where a block root is known: as a node of the store, as a block of seen, or not at all.
+- [`lantern_checkpoint_is`](#function-lantern_checkpoint_is): whether get_checkpoint_block of a node is a root.
+- [`lantern_commitments_in_body`](#function-lantern_commitments_in_body): is_valid_merkle_branch of a list of KZG commitments against a body root.
+- [`lantern_finalized_is_ancestor`](#function-lantern_finalized_is_ancestor): whether the store's finalized checkpoint is the checkpoint block of a node.
+- [`lantern_finalized_slot`](#function-lantern_finalized_slot): the first slot of the store's finalized epoch.
+- [`lantern_header_checks`](#function-lantern_header_checks): the checks of a block header that the sidecar topics share.
+- [`lantern_is_current_or_previous_epoch`](#function-lantern_is_current_or_previous_epoch): is_current_or_previous_epoch of the p2p spec.
+- [`lantern_is_future_epoch`](#function-lantern_is_future_epoch): is_future_epoch of the p2p spec.
+- [`lantern_is_future_slot`](#function-lantern_is_future_slot): is_future_slot of the p2p spec.
+- [`lantern_is_within_slot_range`](#function-lantern_is_within_slot_range): is_within_slot_range of the p2p spec.
+- [`lantern_seen_add_bits`](#function-lantern_seen_add_bits): appends a SeenBits entry to seen.
+- [`lantern_seen_add_key`](#function-lantern_seen_add_key): appends a SeenKey entry to seen.
+- [`lantern_seen_bits_room`](#function-lantern_seen_bits_room): the free SeenBits entries of seen.
+- [`lantern_seen_find_block`](#function-lantern_seen_find_block): the SeenBlock of a root in seen.
+- [`lantern_seen_find_header`](#function-lantern_seen_find_header): the SeenHeader of a block root in seen.
+- [`lantern_seen_find_key`](#function-lantern_seen_find_key): whether seen holds a SeenKey.
+- [`lantern_seen_key_room`](#function-lantern_seen_key_room): the free SeenKey entries of seen.
+- [`lantern_seen_superset`](#function-lantern_seen_superset): is_non_strict_superset of the SeenBits of a key, for some bits.
+- [`lantern_verify_signed`](#function-lantern_verify_signed): lantern_verify_with_domain with get_domain of a state.
+- [`lantern_verify_with_domain`](#function-lantern_verify_with_domain): bls.Verify of a public key, the signing root of an object under a domain, and a signature.
 
 ### Types
 
@@ -51,22 +71,15 @@
 - [`GossipTopic`](#type-gossiptopic): a gossip topic: its fork digest, name and subnet.
 - [`Seen`](#type-seen): the spec's `Seen`, and the blocks known without a post-state.
 - [`SeenRoom`](#type-seenroom): the capacities of a `Seen`.
-- [`SeenKey`](#type-seenkey), [`SeenBits`](#type-seenbits), [`SeenBlock`](#type-seenblock), [`SeenHeader`](#type-seenheader): its entries.
+- [`SeenKey`](#type-seenkey): | Offset | Field | Type | Meaning |.
+- [`SeenBits`](#type-seenbits): | Offset | Field | Type | Meaning |.
+- [`SeenBlock`](#type-seenblock): | Offset | Field | Type | Meaning |.
+- [`SeenHeader`](#type-seenheader): | Offset | Field | Type | Meaning |.
 
 ## Spec
 
 - Document: [consensus-specs v1.7.0-beta.4](https://github.com/ethereum/consensus-specs/tree/aa16bb4c156184e9548a997d53efaf2a228a6304/specs), each function at its latest definition from phase0 to fulu.
 - Section: `fulu/das-core.md`, Custody; `p2p-interface.md` of phase0, altair, bellatrix, capella, deneb, electra and fulu, and `fulu/partial-columns/p2p-interface.md`: Helpers, Maximum message sizes, The gossip domain, ENR structure, Attestation subnet subscription; `fulu/beacon-chain.md`, compute_fork_digest; the helpers they call from `validator.md` of phase0, altair, deneb and electra.
-
-## Common rules
-
-- As in [helpers.md](helpers.md#common-rules).
-- The config values are those of the `config` argument ([Type Config](helpers.md#type-config)), or of the store's copy for a function that takes a `store`; `NUMBER_OF_COLUMNS` is a preset value.
-- `store` is a [`Store`](fork-choice.md#type-store). As in [fork-choice.md](fork-choice.md#common-rules), the caller keeps `store.block_states`.
-- `store.blocks` of the spec is the store's nodes and the `blocks` of `seen`: a root in `seen` names a block that is known, but failed its state transition or waits to be imported, so it has no post-state. A root in `store.block_states` is a node of the store.
-- `block_payload_statuses` of the spec is `BlockNode.payload_status` for a node and `SeenBlock.payload_status` for a block of `seen`.
-- Signatures are verified with `crypto_bls_verify` and `crypto_bls_eth_fast_aggregate_verify` of asm-crypto, KZG proofs with `crypto_kzg_verify_blob_kzg_proof` (deneb, electra) and `crypto_kzg_verify_cell_kzg_proof_batch` (fulu).
-- lantern_seen_size, lantern_seen_init, lantern_seen_copy and lantern_seen_add_block read no fork's layouts. Each is in the common object of the core (asm/core/<ISA>/common.s), and its symbol is its name.
 
 ## Function `lantern_get_custody_groups`
 
@@ -93,6 +106,10 @@ lantern_get_custody_groups(node_id, custody_group_count, config, out) -> status
 - `LANTERN_BUFFER_TOO_SMALL`: `out` has room for fewer than custody_group_count entries.
 - `LANTERN_INVALID_CUSTODY_GROUP`: custody_group_count is above `NUMBER_OF_CUSTODY_GROUPS`.
 
+### Caller must
+
+- The values of `config` are those of [Type Config](helpers.md#type-config); `NUMBER_OF_COLUMNS` is a preset value.
+
 ### Function does
 
 - With custody_group_count equal to `NUMBER_OF_CUSTODY_GROUPS`, writes 0 to `NUMBER_OF_CUSTODY_GROUPS` - 1.
@@ -100,10 +117,21 @@ lantern_get_custody_groups(node_id, custody_group_count, config, out) -> status
 - Keeps the groups sorted as it adds them, so a group already in the list is found where it would go; the spec appends, then sorts.
 - current_id wraps from UINT256_MAX to 0, as a 256-bit add does.
 
+### Function never
+
+- Makes an OS call.
+- Keeps a pointer after it returns.
+
+### Limits
+
+- Stack of its own: 160 bytes on x86-64 (return address included), 160 bytes on ARM64, 160 bytes on RISC-V.
+
 ### ABI
 
+- Role: L1.
+- Symbol: `lantern_<fork>_get_custody_groups` in the object of fulu, with `_` before it on macOS; `lantern_get_custody_groups` inside the object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6); each argument is a pointer: a Uint64 argument points at a u64, and a Boolean output is a u64 of 0 or 1.
 - Argument order: `node_id`, `custody_group_count`, `config`, `out`.
-- Forks: fulu.
 
 ## Function `lantern_compute_columns_for_custody_group`
 
@@ -129,10 +157,25 @@ lantern_compute_columns_for_custody_group(custody_group, config, out) -> status
 - `LANTERN_BUFFER_TOO_SMALL`: `out` has room for fewer than `NUMBER_OF_COLUMNS` // `NUMBER_OF_CUSTODY_GROUPS` entries.
 - `LANTERN_INVALID_CUSTODY_GROUP`: custody_group is not below `NUMBER_OF_CUSTODY_GROUPS`.
 
+### Caller must
+
+- The values of `config` are those of [Type Config](helpers.md#type-config); `NUMBER_OF_COLUMNS` is a preset value.
+
+### Function never
+
+- Makes an OS call.
+- Keeps a pointer after it returns.
+
+### Limits
+
+- Stack of its own: 8 bytes on x86-64 (return address included), 0 bytes on ARM64, 0 bytes on RISC-V.
+
 ### ABI
 
+- Role: L1.
+- Symbol: `lantern_<fork>_compute_columns_for_custody_group` in the object of fulu, with `_` before it on macOS; `lantern_compute_columns_for_custody_group` inside the object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6); each argument is a pointer: a Uint64 argument points at a u64, and a Boolean output is a u64 of 0 or 1.
 - Argument order: `custody_group`, `config`, `out`.
-- Forks: fulu.
 
 ## Function `lantern_compute_subnet_for_data_column_sidecar`
 
@@ -157,10 +200,25 @@ lantern_compute_subnet_for_data_column_sidecar(column_index, config, out) -> sta
 - `LANTERN_OK`: `out` holds the subnet.
 - `LANTERN_INVALID_OVERFLOW`: `DATA_COLUMN_SIDECAR_SUBNET_COUNT` is 0, so the spec's modulo raises.
 
+### Caller must
+
+- The values of `config` are those of [Type Config](helpers.md#type-config); `NUMBER_OF_COLUMNS` is a preset value.
+
+### Function never
+
+- Makes an OS call.
+- Keeps a pointer after it returns.
+
+### Limits
+
+- Stack of its own: 8 bytes on x86-64 (return address included), 0 bytes on ARM64, 0 bytes on RISC-V.
+
 ### ABI
 
+- Role: L1.
+- Symbol: `lantern_<fork>_compute_subnet_for_data_column_sidecar` in the object of fulu, with `_` before it on macOS; `lantern_compute_subnet_for_data_column_sidecar` inside the object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6); each argument is a pointer: a Uint64 argument points at a u64, and a Boolean output is a u64 of 0 or 1.
 - Argument order: `column_index`, `config`, `out`.
-- Forks: fulu.
 
 ## Function `lantern_verify_data_column_sidecar_inclusion_proof`
 
@@ -190,10 +248,21 @@ lantern_verify_data_column_sidecar_inclusion_proof(sidecar, scratch, out) -> sta
 - The subtree index is get_subtree_index(get_generalized_index(BeaconBlockBody, "blob_kzg_commitments")): 11, from the body's 13 fields.
 - Hashes the list from a standalone copy in scratch, with the descriptor `lantern_type_BlobKZGCommitments`.
 
+### Function never
+
+- Makes an OS call.
+- Keeps a pointer after it returns.
+
+### Limits
+
+- Stack of its own: 32 bytes on x86-64 (return address included), 32 bytes on ARM64, 32 bytes on RISC-V.
+
 ### ABI
 
+- Role: L1.
+- Symbol: `lantern_<fork>_verify_data_column_sidecar_inclusion_proof` in the object of fulu, with `_` before it on macOS; `lantern_verify_data_column_sidecar_inclusion_proof` inside the object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6); each argument is a pointer: a Uint64 argument points at a u64, and a Boolean output is a u64 of 0 or 1.
 - Argument order: `sidecar`, `scratch`, `out`.
-- Forks: fulu.
 
 ## Function `lantern_verify_partial_data_column_header_inclusion_proof`
 
@@ -217,10 +286,21 @@ lantern_verify_partial_data_column_header_inclusion_proof(header, scratch, out) 
 
 - As lantern_verify_data_column_sidecar_inclusion_proof.
 
+### Function never
+
+- Makes an OS call.
+- Keeps a pointer after it returns.
+
+### Limits
+
+- Stack of its own: 32 bytes on x86-64 (return address included), 32 bytes on ARM64, 32 bytes on RISC-V.
+
 ### ABI
 
+- Role: L1.
+- Symbol: `lantern_<fork>_verify_partial_data_column_header_inclusion_proof` in the object of fulu, with `_` before it on macOS; `lantern_verify_partial_data_column_header_inclusion_proof` inside the object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6); each argument is a pointer: a Uint64 argument points at a u64, and a Boolean output is a u64 of 0 or 1.
 - Argument order: `header`, `scratch`, `out`.
-- Forks: fulu.
 
 ## Function `lantern_verify_partial_data_column_sidecar_kzg_proofs`
 
@@ -248,10 +328,25 @@ lantern_verify_partial_data_column_sidecar_kzg_proofs(sidecar, header, column_in
 - `LANTERN_OK`: `out` holds the result; 0 also when a set bit of the bitmap is not below the number of commitments, where the spec's indexing raises, or when the cells and proofs are not one per set bit.
 - `LANTERN_BUFFER_TOO_SMALL`: `scratch` has fewer than `DA_SCRATCH_FIXED` + n * `DA_SCRATCH_PER_BLOB` bytes, n the number of cells.
 
+### Function does
+
+- Verifies the KZG proofs of cells with `crypto_kzg_verify_cell_kzg_proof_batch` of asm-crypto.
+
+### Function never
+
+- Makes an OS call.
+- Keeps a pointer after it returns.
+
+### Limits
+
+- Stack of its own: 128 bytes on x86-64 (return address included), 128 bytes on ARM64, 128 bytes on RISC-V.
+
 ### ABI
 
+- Role: L1.
+- Symbol: `lantern_<fork>_verify_partial_data_column_sidecar_kzg_proofs` in the object of fulu, with `_` before it on macOS; `lantern_verify_partial_data_column_sidecar_kzg_proofs` inside the object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6); each argument is a pointer: a Uint64 argument points at a u64, and a Boolean output is a u64 of 0 or 1.
 - Argument order: `sidecar`, `header`, `column_index`, `settings`, `scratch`, `out`.
-- Forks: fulu.
 
 ## Function `lantern_compute_subnet_for_blob_sidecar`
 
@@ -276,10 +371,25 @@ lantern_compute_subnet_for_blob_sidecar(blob_index, config, out) -> status
 - `LANTERN_OK`: `out` holds the subnet.
 - `LANTERN_INVALID_OVERFLOW`: the subnet count is 0, so the spec's modulo raises.
 
+### Caller must
+
+- The values of `config` are those of [Type Config](helpers.md#type-config); `NUMBER_OF_COLUMNS` is a preset value.
+
+### Function never
+
+- Makes an OS call.
+- Keeps a pointer after it returns.
+
+### Limits
+
+- Stack of its own: 8 bytes on x86-64 (return address included), 0 bytes on ARM64, 0 bytes on RISC-V.
+
 ### ABI
 
+- Role: L1.
+- Symbol: `lantern_<fork>_compute_subnet_for_blob_sidecar` in the object of deneb to electra, with `_` before it on macOS; `lantern_compute_subnet_for_blob_sidecar` inside the object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6); each argument is a pointer: a Uint64 argument points at a u64, and a Boolean output is a u64 of 0 or 1.
 - Argument order: `blob_index`, `config`, `out`.
-- Forks: deneb and electra.
 
 ## Function `lantern_verify_blob_sidecar_inclusion_proof`
 
@@ -308,10 +418,21 @@ lantern_verify_blob_sidecar_inclusion_proof(sidecar, out) -> status
 - hash_tree_root of the commitment is the SHA-256 of its 48 bytes and 16 zero bytes.
 - The core does not assemble when 2^(`KZG_COMMITMENT_INCLUSION_PROOF_DEPTH` - 5) is not `MAX_BLOB_COMMITMENTS_PER_BLOCK`.
 
+### Function never
+
+- Makes an OS call.
+- Keeps a pointer after it returns.
+
+### Limits
+
+- Stack of its own: 208 bytes on x86-64 (return address included), 208 bytes on ARM64, 208 bytes on RISC-V.
+
 ### ABI
 
+- Role: L1.
+- Symbol: `lantern_<fork>_verify_blob_sidecar_inclusion_proof` in the object of deneb to electra, with `_` before it on macOS; `lantern_verify_blob_sidecar_inclusion_proof` inside the object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6); each argument is a pointer: a Uint64 argument points at a u64, and a Boolean output is a u64 of 0 or 1.
 - Argument order: `sidecar`, `out`.
-- Forks: deneb and electra.
 
 ## Function `lantern_compute_fork_version`
 
@@ -335,12 +456,28 @@ lantern_compute_fork_version(epoch, config, out) -> status
 
 - `LANTERN_OK`, always.
 
+### Caller must
+
+- The values of `config` are those of [Type Config](helpers.md#type-config); `NUMBER_OF_COLUMNS` is a preset value.
+
 ### Function does
 
 - Phase0 gives `GENESIS_FORK_VERSION` for every epoch. Each later fork adds its own fork's epoch and version, as its p2p-interface.md does.
 
+### Function never
+
+- Makes an OS call.
+- Keeps a pointer after it returns.
+
+### Limits
+
+- Stack of its own: 8 bytes on x86-64 (return address included), 0 bytes on ARM64, 0 bytes on RISC-V.
+
 ### ABI
 
+- Role: L1.
+- Symbol: `lantern_<fork>_compute_fork_version` in the object of every fork, with `_` before it on macOS; `lantern_compute_fork_version` inside the object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6); each argument is a pointer: a Uint64 argument points at a u64, and a Boolean output is a u64 of 0 or 1.
 - Argument order: `epoch`, `config`, `out`.
 
 ## Function `lantern_compute_fork_digest`
@@ -368,12 +505,28 @@ lantern_compute_fork_digest(genesis_validators_root, epoch, config, scratch, out
 - `LANTERN_OK`: `out` holds the digest.
 - `LANTERN_BUFFER_TOO_SMALL`: `scratch` has fewer than `LANTERN_SCRATCH_FIXED` bytes.
 
+### Caller must
+
+- The values of `config` are those of [Type Config](helpers.md#type-config); `NUMBER_OF_COLUMNS` is a preset value.
+
 ### Function does
 
 - Fulu: at an epoch from `FULU_FORK_EPOCH` on, xors the 4 bytes with the first 4 bytes of sha256(uint_to_bytes(epoch) + uint_to_bytes(max_blobs_per_block)) of get_blob_parameters(epoch).
 
+### Function never
+
+- Makes an OS call.
+- Keeps a pointer after it returns.
+
+### Limits
+
+- Stack of its own: 160 bytes on x86-64 (return address included), 160 bytes on ARM64, 160 bytes on RISC-V.
+
 ### ABI
 
+- Role: L1.
+- Symbol: `lantern_<fork>_compute_fork_digest` in the object of every fork, with `_` before it on macOS; `lantern_compute_fork_digest` inside the object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6); each argument is a pointer: a Uint64 argument points at a u64, and a Boolean output is a u64 of 0 or 1.
 - Argument order: `genesis_validators_root`, `epoch`, `config`, `scratch`, `out`.
 
 ## Function `lantern_compute_attestation_subnet_prefix_bits`
@@ -386,13 +539,36 @@ ceillog2(`ATTESTATION_SUBNET_COUNT`) + `ATTESTATION_SUBNET_EXTRA_BITS`.
 lantern_compute_attestation_subnet_prefix_bits(config, out) -> status
 ```
 
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `config` | input | [`Config`](helpers.md#type-config) |
+| `out` | output | u64 |
+
 ### Returns
 
 - `LANTERN_OK`: `out` holds the number of bits.
 - `LANTERN_INVALID_OVERFLOW`: the sum does not fit in a u64.
 
+### Caller must
+
+- The values of `config` are those of [Type Config](helpers.md#type-config); `NUMBER_OF_COLUMNS` is a preset value.
+
+### Function never
+
+- Makes an OS call.
+- Keeps a pointer after it returns.
+
+### Limits
+
+- Stack of its own: 8 bytes on x86-64 (return address included), 0 bytes on ARM64, 0 bytes on RISC-V.
+
 ### ABI
 
+- Role: L1.
+- Symbol: `lantern_<fork>_compute_attestation_subnet_prefix_bits` in the object of every fork, with `_` before it on macOS; `lantern_compute_attestation_subnet_prefix_bits` inside the object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6); each argument is a pointer: a Uint64 argument points at a u64, and a Boolean output is a u64 of 0 or 1.
 - Argument order: `config`, `out`.
 
 ## Function `lantern_compute_min_epochs_for_block_requests`
@@ -405,13 +581,36 @@ lantern_compute_attestation_subnet_prefix_bits(config, out) -> status
 lantern_compute_min_epochs_for_block_requests(config, out) -> status
 ```
 
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `config` | input | [`Config`](helpers.md#type-config) |
+| `out` | output | u64 |
+
 ### Returns
 
 - `LANTERN_OK`: `out` holds the epochs.
 - `LANTERN_INVALID_OVERFLOW`: the sum does not fit in a u64.
 
+### Caller must
+
+- The values of `config` are those of [Type Config](helpers.md#type-config); `NUMBER_OF_COLUMNS` is a preset value.
+
+### Function never
+
+- Makes an OS call.
+- Keeps a pointer after it returns.
+
+### Limits
+
+- Stack of its own: 8 bytes on x86-64 (return address included), 0 bytes on ARM64, 0 bytes on RISC-V.
+
 ### ABI
 
+- Role: L1.
+- Symbol: `lantern_<fork>_compute_min_epochs_for_block_requests` in the object of every fork, with `_` before it on macOS; `lantern_compute_min_epochs_for_block_requests` inside the object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6); each argument is a pointer: a Uint64 argument points at a u64, and a Boolean output is a u64 of 0 or 1.
 - Argument order: `config`, `out`.
 
 ## Function `lantern_max_compressed_len`
@@ -424,13 +623,32 @@ lantern_compute_min_epochs_for_block_requests(config, out) -> status
 lantern_max_compressed_len(n, out) -> status
 ```
 
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `n` | input | u64 |
+| `out` | output | u64 |
+
 ### Returns
 
 - `LANTERN_OK`: `out` holds the length.
 - `LANTERN_INVALID_OVERFLOW`: the length does not fit in a u64.
 
+### Function never
+
+- Makes an OS call.
+- Keeps a pointer after it returns.
+
+### Limits
+
+- Stack of its own: 8 bytes on x86-64 (return address included), 32 bytes on ARM64, 32 bytes on RISC-V.
+
 ### ABI
 
+- Role: L1.
+- Symbol: `lantern_<fork>_max_compressed_len` in the object of every fork, with `_` before it on macOS; `lantern_max_compressed_len` inside the object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6); each argument is a pointer: a Uint64 argument points at a u64, and a Boolean output is a u64 of 0 or 1.
 - Argument order: `n`, `out`.
 
 ## Function `lantern_max_message_size`
@@ -443,13 +661,36 @@ max(max_compressed_len(`MAX_PAYLOAD_SIZE`) + 1024, 1048576).
 lantern_max_message_size(config, out) -> status
 ```
 
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `config` | input | [`Config`](helpers.md#type-config) |
+| `out` | output | u64 |
+
 ### Returns
 
 - `LANTERN_OK`: `out` holds the size.
 - `LANTERN_INVALID_OVERFLOW`: a sum does not fit in a u64.
 
+### Caller must
+
+- The values of `config` are those of [Type Config](helpers.md#type-config); `NUMBER_OF_COLUMNS` is a preset value.
+
+### Function never
+
+- Makes an OS call.
+- Keeps a pointer after it returns.
+
+### Limits
+
+- Stack of its own: 8 bytes on x86-64 (return address included), 32 bytes on ARM64, 32 bytes on RISC-V.
+
 ### ABI
 
+- Role: L1.
+- Symbol: `lantern_<fork>_max_message_size` in the object of every fork, with `_` before it on macOS; `lantern_max_message_size` inside the object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6); each argument is a pointer: a Uint64 argument points at a u64, and a Boolean output is a u64 of 0 or 1.
 - Argument order: `config`, `out`.
 
 ## Function `lantern_compute_subscribed_subnet`
@@ -478,13 +719,29 @@ lantern_compute_subscribed_subnet(node_id, epoch, index, config, scratch, out) -
 - `LANTERN_OK`: `out` holds the subnet.
 - `LANTERN_INVALID_OVERFLOW`: where the spec raises: `EPOCHS_PER_SUBNET_SUBSCRIPTION` is 0, epoch + the node offset or the shuffled prefix + index does not fit in a u64, or prefix_bits is 64 or more, so 1 << prefix_bits is not a Uint64.
 
+### Caller must
+
+- The values of `config` are those of [Type Config](helpers.md#type-config); `NUMBER_OF_COLUMNS` is a preset value.
+
 ### Function does
 
 - prefix_bits is lantern_compute_attestation_subnet_prefix_bits; the node offset is node_id % `EPOCHS_PER_SUBNET_SUBSCRIPTION`, over all 256 bits.
 - The permutation seed is sha256(uint_to_bytes((epoch + node offset) // `EPOCHS_PER_SUBNET_SUBSCRIPTION`)).
 
+### Function never
+
+- Makes an OS call.
+- Keeps a pointer after it returns.
+
+### Limits
+
+- Stack of its own: 176 bytes on x86-64 (return address included), 176 bytes on ARM64, 176 bytes on RISC-V.
+
 ### ABI
 
+- Role: L1.
+- Symbol: `lantern_<fork>_compute_subscribed_subnet` in the object of every fork, with `_` before it on macOS; `lantern_compute_subscribed_subnet` inside the object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6); each argument is a pointer: a Uint64 argument points at a u64, and a Boolean output is a u64 of 0 or 1.
 - Argument order: `node_id`, `epoch`, `index`, `config`, `scratch`, `out`.
 
 ## Function `lantern_compute_subscribed_subnets`
@@ -513,8 +770,24 @@ lantern_compute_subscribed_subnets(node_id, epoch, config, scratch, out) -> stat
 - `LANTERN_BUFFER_TOO_SMALL`: `out` has room for fewer than `SUBNETS_PER_NODE` entries, or `scratch` is short.
 - `LANTERN_INVALID_OVERFLOW`: as lantern_compute_subscribed_subnet.
 
+### Caller must
+
+- The values of `config` are those of [Type Config](helpers.md#type-config); `NUMBER_OF_COLUMNS` is a preset value.
+
+### Function never
+
+- Makes an OS call.
+- Keeps a pointer after it returns.
+
+### Limits
+
+- Stack of its own: 112 bytes on x86-64 (return address included), 112 bytes on ARM64, 112 bytes on RISC-V.
+
 ### ABI
 
+- Role: L1.
+- Symbol: `lantern_<fork>_compute_subscribed_subnets` in the object of every fork, with `_` before it on macOS; `lantern_compute_subscribed_subnets` inside the object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6); each argument is a pointer: a Uint64 argument points at a u64, and a Boolean output is a u64 of 0 or 1.
 - Argument order: `node_id`, `epoch`, `config`, `scratch`, `out`.
 
 ## Function `lantern_compute_max_request_blob_sidecars`
@@ -527,15 +800,37 @@ lantern_compute_subscribed_subnets(node_id, epoch, config, scratch, out) -> stat
 lantern_compute_max_request_blob_sidecars(config, out) -> status
 ```
 
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `config` | input | [`Config`](helpers.md#type-config) |
+| `out` | output | u64 |
+
 ### Returns
 
 - `LANTERN_OK`: `out` holds the number.
 - `LANTERN_INVALID_OVERFLOW`: the product does not fit in a u64.
 
+### Caller must
+
+- The values of `config` are those of [Type Config](helpers.md#type-config); `NUMBER_OF_COLUMNS` is a preset value.
+
+### Function never
+
+- Makes an OS call.
+- Keeps a pointer after it returns.
+
+### Limits
+
+- Stack of its own: 8 bytes on x86-64 (return address included), 0 bytes on ARM64, 0 bytes on RISC-V.
+
 ### ABI
 
+- Role: L1.
+- Symbol: `lantern_<fork>_compute_max_request_blob_sidecars` in the object of deneb to electra, with `_` before it on macOS; `lantern_compute_max_request_blob_sidecars` inside the object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6); each argument is a pointer: a Uint64 argument points at a u64, and a Boolean output is a u64 of 0 or 1.
 - Argument order: `config`, `out`.
-- Forks: deneb and electra.
 
 ## Function `lantern_compute_max_request_data_column_sidecars`
 
@@ -547,15 +842,37 @@ lantern_compute_max_request_blob_sidecars(config, out) -> status
 lantern_compute_max_request_data_column_sidecars(config, out) -> status
 ```
 
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `config` | input | [`Config`](helpers.md#type-config) |
+| `out` | output | u64 |
+
 ### Returns
 
 - `LANTERN_OK`: `out` holds the number.
 - `LANTERN_INVALID_OVERFLOW`: the product does not fit in a u64.
 
+### Caller must
+
+- The values of `config` are those of [Type Config](helpers.md#type-config); `NUMBER_OF_COLUMNS` is a preset value.
+
+### Function never
+
+- Makes an OS call.
+- Keeps a pointer after it returns.
+
+### Limits
+
+- Stack of its own: 8 bytes on x86-64 (return address included), 0 bytes on ARM64, 0 bytes on RISC-V.
+
 ### ABI
 
+- Role: L1.
+- Symbol: `lantern_<fork>_compute_max_request_data_column_sidecars` in the object of fulu, with `_` before it on macOS; `lantern_compute_max_request_data_column_sidecars` inside the object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6); each argument is a pointer: a Uint64 argument points at a u64, and a Boolean output is a u64 of 0 or 1.
 - Argument order: `config`, `out`.
-- Forks: fulu.
 
 ## Function `lantern_compute_enr_fork_id`
 
@@ -582,14 +899,30 @@ lantern_compute_enr_fork_id(genesis_validators_root, current_epoch, config, scra
 - `LANTERN_OK`: `out` holds the value.
 - `LANTERN_BUFFER_TOO_SMALL`: `scratch` has fewer than `LANTERN_SCRATCH_FIXED` bytes.
 
+### Caller must
+
+- The values of `config` are those of [Type Config](helpers.md#type-config); `NUMBER_OF_COLUMNS` is a preset value.
+
 ### Function does
 
 - fork_digest is lantern_compute_fork_digest(genesis_validators_root, current_epoch).
 - next_fork_epoch is the least epoch after current_epoch of the forks from altair up to the object's fork, a fork epoch of `FAR_FUTURE_EPOCH` left out; fulu adds each `BLOB_SCHEDULE` epoch from `FULU_FORK_EPOCH` on, the BPO forks. With none, it is `FAR_FUTURE_EPOCH`.
 - next_fork_version is lantern_compute_fork_version(next_fork_epoch), or lantern_compute_fork_version(current_epoch) when next_fork_epoch is `FAR_FUTURE_EPOCH`.
 
+### Function never
+
+- Makes an OS call.
+- Keeps a pointer after it returns.
+
+### Limits
+
+- Stack of its own: 112 bytes on x86-64 (return address included), 112 bytes on ARM64, 112 bytes on RISC-V.
+
 ### ABI
 
+- Role: L0.
+- Symbol: `lantern_<fork>_compute_enr_fork_id` in the object of every fork, with `_` before it on macOS; `lantern_compute_enr_fork_id` inside the object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
 - Argument order: `genesis_validators_root`, `current_epoch`, `config`, `scratch`, `out`.
 
 ## Function `lantern_compute_next_fork_digest`
@@ -602,15 +935,40 @@ The value of the ENR `nfd` key: lantern_compute_fork_digest at the next_fork_epo
 lantern_compute_next_fork_digest(genesis_validators_root, current_epoch, config, scratch, out) -> status
 ```
 
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `genesis_validators_root` | input | Bytes32 |
+| `current_epoch` | input | u64 |
+| `config` | input | [`Config`](helpers.md#type-config) |
+| `scratch` | scratch | [`Scratch`](helpers.md#type-scratch) |
+| `out` | output | `ForkDigest`: 4 bytes |
+
 ### Returns
 
 - `LANTERN_OK`: `out` holds the 4 bytes.
 - `LANTERN_BUFFER_TOO_SMALL`: `scratch` has fewer than `LANTERN_SCRATCH_FIXED` bytes.
 
+### Caller must
+
+- The values of `config` are those of [Type Config](helpers.md#type-config); `NUMBER_OF_COLUMNS` is a preset value.
+
+### Function never
+
+- Makes an OS call.
+- Keeps a pointer after it returns.
+
+### Limits
+
+- Stack of its own: 112 bytes on x86-64 (return address included), 112 bytes on ARM64, 112 bytes on RISC-V.
+
 ### ABI
 
+- Role: L0.
+- Symbol: `lantern_<fork>_compute_next_fork_digest` in the object of fulu, with `_` before it on macOS; `lantern_compute_next_fork_digest` inside the object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
 - Argument order: `genesis_validators_root`, `current_epoch`, `config`, `scratch`, `out`.
-- Forks: fulu.
 
 ## Function `lantern_gossip_topic`
 
@@ -639,10 +997,21 @@ lantern_gossip_topic(topic, out) -> status
 
 - Ignores `subnet_id` for a topic with no subnet.
 
+### Function never
+
+- Makes an OS call.
+- Keeps a pointer after it returns.
+
+### Limits
+
+- Stack of its own: 8 bytes on x86-64 (return address included), 0 bytes on ARM64, 0 bytes on RISC-V.
+
 ### ABI
 
+- Role: L0.
+- Symbol: `lantern_gossip_topic`, with `_` before it on macOS.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
 - Argument order: `topic`, `out`.
-- Forks: none; in the common object, its symbol is its name.
 
 ## Function `lantern_gossip_topic_parse`
 
@@ -670,10 +1039,21 @@ lantern_gossip_topic_parse(string, out) -> status
 
 - Gives exactly the strings lantern_gossip_topic writes, so that topic and string map one to one.
 
+### Function never
+
+- Makes an OS call.
+- Keeps a pointer after it returns.
+
+### Limits
+
+- Stack of its own: 40 bytes on x86-64 (return address included), 0 bytes on ARM64, 0 bytes on RISC-V.
+
 ### ABI
 
+- Role: L0.
+- Symbol: `lantern_gossip_topic_parse`, with `_` before it on macOS.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
 - Argument order: `string`, `out`.
-- Forks: none; in the common object, its symbol is its name.
 
 ## Function `lantern_compute_message_id`
 
@@ -700,14 +1080,30 @@ lantern_compute_message_id(topic, data, config, scratch, out) -> status
 - `LANTERN_OK`: `out` holds the message-id.
 - `LANTERN_BUFFER_TOO_SMALL`: `scratch` has fewer than 64 + the topic's bytes + n bytes, n the larger of the data's bytes and the length in its Snappy header when that length is at most `MAX_PAYLOAD_SIZE`.
 
+### Caller must
+
+- The values of `config` are those of [Type Config](helpers.md#type-config); `NUMBER_OF_COLUMNS` is a preset value.
+
 ### Function does
 
 - When data has a valid Snappy block decompression: the first 20 bytes of sha256(`MESSAGE_DOMAIN_VALID_SNAPPY` + the decompressed bytes). Otherwise: of sha256(`MESSAGE_DOMAIN_INVALID_SNAPPY` + data).
 - Altair and later put uint_to_bytes(len(topic)) + topic after the domain, as altair p2p-interface.md says.
 - A valid decompression is one that `snappy_uncompress` of asm-snappy accepts with a length of at most `MAX_PAYLOAD_SIZE`. The spec states no bound; a message above it fails the gossip size limits.
 
+### Function never
+
+- Makes an OS call.
+- Keeps a pointer after it returns.
+
+### Limits
+
+- Stack of its own: 144 bytes on x86-64 (return address included), 144 bytes on ARM64, 144 bytes on RISC-V.
+
 ### ABI
 
+- Role: L0.
+- Symbol: `lantern_<fork>_compute_message_id` in the object of every fork, with `_` before it on macOS; `lantern_compute_message_id` inside the object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
 - Argument order: `topic`, `data`, `config`, `scratch`, `out`.
 
 ## Function `lantern_seen_size`
@@ -720,10 +1116,33 @@ The bytes of a `Seen` with the capacities of room.
 lantern_seen_size(room, size) -> status
 ```
 
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `room` | input | [`SeenRoom`](#type-seenroom) |
+| `size` | output | u64 |
+
 ### Returns
 
 - `LANTERN_OK`: `size` holds `SEEN_FIXED` + `room.keys` * `SeenKey__mem` + `room.bits` * `SeenBits__mem` + `room.blocks` * `SeenBlock__mem` + `room.header_bytes`.
 - `LANTERN_INVALID_OVERFLOW`: the size does not fit in a u64.
+
+### Function never
+
+- Makes an OS call.
+- Keeps a pointer after it returns.
+
+### Limits
+
+- Stack of its own: 8 bytes on x86-64 (return address included), 0 bytes on ARM64, 0 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_seen_size`, with `_` before it on macOS.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- Argument order: `room`, `size`.
 
 ## Function `lantern_seen_init`
 
@@ -747,6 +1166,22 @@ lantern_seen_init(room, seen) -> status
 - `LANTERN_OK`: `seen` is empty, with the capacities of room.
 - `LANTERN_BUFFER_TOO_SMALL`: `seen` is below lantern_seen_size of room.
 
+### Function never
+
+- Makes an OS call.
+- Keeps a pointer after it returns.
+
+### Limits
+
+- Stack of its own: 48 bytes on x86-64 (return address included), 48 bytes on ARM64, 48 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_seen_init`, with `_` before it on macOS.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- Argument order: `room`, `seen`.
+
 ## Function `lantern_seen_copy`
 
 Copies seen into out with the capacities of room: the resize function of `Seen` (ARCHITECTURE.md section 6).
@@ -757,10 +1192,34 @@ Copies seen into out with the capacities of room: the resize function of `Seen` 
 lantern_seen_copy(seen, room, out) -> status
 ```
 
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `seen` | input | [`Seen`](#type-seen) |
+| `room` | input | [`SeenRoom`](#type-seenroom) |
+| `out` | output | [`Seen`](#type-seen), its `size` set by the caller |
+
 ### Returns
 
 - `LANTERN_OK`: `out` holds the entries of seen.
 - `LANTERN_BUFFER_TOO_SMALL`: `out` is below lantern_seen_size of room, or a capacity is below what seen holds.
+
+### Function never
+
+- Makes an OS call.
+- Keeps a pointer after it returns.
+
+### Limits
+
+- Stack of its own: 96 bytes on x86-64 (return address included), 96 bytes on ARM64, 96 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_seen_copy`, with `_` before it on macOS.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- Argument order: `seen`, `room`, `out`.
 
 ## Function `lantern_seen_add_block`
 
@@ -785,51 +1244,50 @@ lantern_seen_add_block(seen, root, payload_status) -> status
 - `LANTERN_OK`: root is in `seen.blocks` with payload_status; a root already there takes the new status.
 - `LANTERN_BUFFER_TOO_SMALL`: `blocks` is full. Nothing is changed.
 
-## Gossip validation functions
+### Function never
 
-Each function is the spec function of its name, for one message of its topic.
+- Makes an OS call.
+- Keeps a pointer after it returns.
 
-### Signatures
+### Limits
+
+- Stack of its own: 48 bytes on x86-64 (return address included), 48 bytes on ARM64, 48 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_seen_add_block`, with `_` before it on macOS.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- Argument order: `seen`, `root`, `payload_status`.
+
+## Function `lantern_validate_beacon_block_gossip`
+
+The spec's validate_beacon_block_gossip for one message of `beacon_block`.
+
+### Signature
 
 ```
-lantern_validate_beacon_block_gossip(seen, store, signed_beacon_block, current_time_ms, head_state, proposer_state, scratch, result) -> status
-lantern_validate_blinded_block_gossip(seen, store, signed_blinded_beacon_block, current_time_ms, head_state, proposer_state, scratch, result) -> status
-lantern_validate_beacon_aggregate_and_proof_gossip(seen, store, signed_aggregate_and_proof, current_time_ms, head_state, scratch, result) -> status
-lantern_validate_beacon_attestation_gossip(seen, store, attestation, current_time_ms, subnet_id, head_state, scratch, result) -> status
-lantern_validate_voluntary_exit_gossip(seen, store, signed_voluntary_exit, current_time_ms, head_state, scratch, result) -> status
-lantern_validate_proposer_slashing_gossip(seen, store, proposer_slashing, head_state, scratch, result) -> status
-lantern_validate_attester_slashing_gossip(seen, store, attester_slashing, head_state, scratch, result) -> status
-lantern_validate_sync_committee_contribution_and_proof_gossip(seen, store, signed_contribution_and_proof, current_time_ms, head_state, scratch, result) -> status
-lantern_validate_sync_committee_message_gossip(seen, store, sync_committee_message, current_time_ms, subnet_id, head_state, scratch, result) -> status
-lantern_validate_bls_to_execution_change_gossip(seen, store, signed_bls_to_execution_change, current_time_ms, head_state, scratch, result) -> status
-lantern_validate_blob_sidecar_gossip(seen, store, blob_sidecar, current_time_ms, subnet_id, head_state, proposer_state, settings, scratch, result) -> status
-lantern_validate_data_column_sidecar_gossip(seen, store, sidecar, current_time_ms, subnet_id, head_state, proposer_state, settings, scratch, result) -> status
-lantern_validate_partial_data_column_sidecar_gossip(seen, store, sidecar, current_time_ms, group_id, column_index, head_state, proposer_state, settings, scratch, result) -> status
+lantern_validate_beacon_block_gossip(seen, store, signed_beacon_block, current_time_ms, head_state, proposer_state, scratch, result) -> status                (phase0, altair, capella and later)
+lantern_validate_beacon_block_gossip(seen, store, signed_beacon_block, current_time_ms, head_state, proposer_state, justified_state, scratch, result) -> status   (bellatrix)
 ```
-
-- Bellatrix: lantern_validate_beacon_block_gossip and lantern_validate_blinded_block_gossip take `justified_state` after `proposer_state`: (seen, store, signed_beacon_block, current_time_ms, head_state, proposer_state, justified_state, scratch, result).
 
 ### Arguments
 
 | Name | Role | Type |
 |---|---|---|
-| `seen` | state | `Seen` |
-| `store` | input | `Store` |
-| the message | input | the topic's type of the fork: `SignedBeaconBlock`, `SignedAggregateAndProof`, `Attestation` (phase0 to deneb) or `SingleAttestation` (electra and later), `SignedVoluntaryExit`, `ProposerSlashing`, `AttesterSlashing`, `SignedContributionAndProof`, `SyncCommitteeMessage`, `SignedBLSToExecutionChange`, `BlobSidecar`, `DataColumnSidecar` or `PartialDataColumnSidecar` |
+| `seen` | state | [`Seen`](#type-seen) |
+| `store` | input | [`Store`](fork-choice.md#type-store) |
+| `signed_beacon_block` | input | `SignedBeaconBlock` of the fork |
 | `current_time_ms` | input | u64 |
-| `subnet_id` | input | u64 |
-| `group_id` | input | `PartialDataColumnGroupID` |
-| `column_index` | input | u64 |
 | `head_state` | input | `BeaconState`: `store.block_states[get_head(store).root]` |
 | `proposer_state` | input | `BeaconState`: a copy of `store.block_states` of the message's parent block after process_slots to the message's slot; read only when the parent is a node of the store and the message's slot is after the parent's |
-| `justified_state` | input | `BeaconState`: `store.block_states[store.justified_checkpoint.root]` |
-| `settings` | input | asm-crypto `KzgSettings` |
-| `scratch` | scratch | `Scratch` |
-| `result` | output | `Result` |
+| `justified_state` | input | `BeaconState`: `store.block_states[store.justified_checkpoint.root]`; bellatrix only |
+| `scratch` | scratch | [`Scratch`](helpers.md#type-scratch) |
+| `result` | output | [`Result`](helpers.md#type-result) |
 
 ### Returns
 
-- `LANTERN_OK`: `result` is `LANTERN_VALID` when every check holds and seen holds the message, `LANTERN_GOSSIP_IGNORE` or `LANTERN_GOSSIP_REJECT` for the first failed check of the spec, or the code of a spec failure that raises another exception (then the spec gives no answer for gossip). Only `LANTERN_VALID` changes seen, except that lantern_validate_partial_data_column_sidecar_gossip keeps a header it recorded before a failed cell check, as the spec does.
+- `LANTERN_OK`: `result` is `LANTERN_VALID` when every check holds and seen holds the message, `LANTERN_GOSSIP_IGNORE` or `LANTERN_GOSSIP_REJECT` for the first failed check of the spec, or the code of a spec failure that raises another exception (then the spec gives no answer for gossip). Only `LANTERN_VALID` changes seen.
 - `LANTERN_BUFFER_TOO_SMALL`: scratch is short, or a part of seen is full when every check held. Nothing is changed: the caller grows seen with lantern_seen_copy and calls again.
 
 ### Caller must
@@ -840,38 +1298,1585 @@ lantern_validate_partial_data_column_sidecar_gossip(seen, store, sidecar, curren
 
 - Makes the checks in spec order, and writes to seen only after the last one: "If the result is `valid`, update the store as the validation function would".
 - compute_time_at_slot_ms gives UINT64_MAX when the time does not fit in a u64, so such a slot is in the future; is_future_epoch is true when current_time_ms + `MAXIMUM_GOSSIP_CLOCK_DISPARITY` is before the genesis time, where the spec's subtraction raises.
-- is_non_strict_superset skips a seen bitfield of another length, where the spec's `zip(strict=True)` raises.
-- `prior_header != header` compares the hash_tree_root of the two headers.
-- The attester slashing intersection works on sorted copies of the two index lists in scratch.
 - `beacon_block`, a parent with no post-state: phase0 and altair give `LANTERN_GOSSIP_REJECT`. Bellatrix decides by is_execution_enabled(justified_state, block.body), then the parent's payload status. Capella and later decide by the parent's payload status.
 - `beacon_block`, bellatrix: the payload timestamp check and the `INVALIDATED` parent check run only when is_execution_enabled(head_state, block.body) holds. Capella and later run them always.
-- lantern_validate_blinded_block_gossip: the checks of `beacon_block` in the same order on a `SignedBlindedBeaconBlock`: the signature of the hash_tree_root of its `BlindedBeaconBlock` (that of the full block), the timestamp of its `execution_payload_header`, the count of its `blob_kzg_commitments`. Its execution is enabled: a blinded block has a payload. Phase0 and altair have no blinded block: `LANTERN_INVALID_EVENT`.
 - `beacon_block`, the commitment limit: `MAX_BLOBS_PER_BLOCK` (deneb), `MAX_BLOBS_PER_BLOCK_ELECTRA` (electra), the `max_blobs_per_block` of get_blob_parameters at the block's epoch (fulu).
-- `beacon_attestation_{subnet_id}` and `beacon_aggregate_and_proof`, phase0 to capella: the slot is within `ATTESTATION_PROPAGATION_SLOT_RANGE` of the current slot (is_within_slot_range). Deneb and later: the slot is not in the future and its epoch is the current or previous epoch.
-- `beacon_attestation_{subnet_id}`, phase0 to deneb: the message is an `Attestation`. It has exactly one aggregation bit set and as many bits as the committee; the participant is the committee member at the set bit, and is_valid_indexed_attestation checks its one signature.
-- `beacon_aggregate_and_proof`, phase0 to deneb: the committee index is `data.index`, and `aggregate_data_roots` is keyed by the data root alone. Electra and later key it by the data root and the committee index.
-- `voluntary_exit`, phase0 to capella: the signature domain is get_domain(state, `DOMAIN_VOLUNTARY_EXIT`, voluntary_exit.epoch). Deneb and later use the capella fork version, as process_voluntary_exit does.
-- `blob_sidecar_{subnet_id}`: the index limit is `MAX_BLOBS_PER_BLOCK` (deneb) or `MAX_BLOBS_PER_BLOCK_ELECTRA` (electra). A blob, commitment or proof that `crypto_kzg_verify_blob_kzg_proof` cannot decode gives `LANTERN_GOSSIP_REJECT`, where the spec's verify_blob_kzg_proof raises.
+- Reads the config values of the store's copy.
+
+### Function never
+
+- Keeps a pointer after it returns.
 
 ### Limits
 
-- Scratch, with n the validator count of head_state:
-
-| Topic | Scratch |
-|---|---|
-| `beacon_block` (fulu), `voluntary_exit`, `proposer_slashing`, `bls_to_execution_change`, `sync_committee_{subnet_id}` | S(0) |
-| `beacon_block` (phase0 to electra) | S(2), with n the validator count of proposer_state: get_beacon_proposer_index |
-| `blob_sidecar_{subnet_id}` | S(2), with n the validator count of proposer_state, and at least `CRYPTO_KZG_SCRATCH` of asm-crypto |
-| `beacon_attestation_{subnet_id}` | S(3) |
-| `beacon_aggregate_and_proof` | S(10) + `IndexedAttestation__fixed` + 8 |
-| `sync_committee_contribution_and_proof` | S(1) + 24 + 48 * `SYNC_COMMITTEE_SIZE` / `SYNC_COMMITTEE_SUBNET_COUNT` |
-| `attester_slashing` | S(7) + 72 + 8 * (a + b + min(a, b)), a and b the index counts of its two attestations |
-| `data_column_sidecar_{subnet_id}`, partial columns | S(0), and what the inclusion proof and the KZG check of the sidecar need |
+- Stack of its own: 176 bytes on x86-64 (return address included), 160 bytes on ARM64, 160 bytes on RISC-V.
+- Scratch, fulu: S(0), with n the validator count of head_state.
+- Scratch, phase0 to electra: S(2), with n the validator count of proposer_state: get_beacon_proposer_index.
 
 ### ABI
 
-- Argument order: as in the signatures. An argument after the eighth (the sixth on x86-64) is on the stack, as the core ABI says.
-- Forks: every fork has `beacon_block`, `beacon_aggregate_and_proof`, `beacon_attestation_{subnet_id}`, `voluntary_exit`, `proposer_slashing` and `attester_slashing`. The sync committee topics are in altair and later, `bls_to_execution_change` in capella and later, `blob_sidecar_{subnet_id}` in deneb and electra, the column topics in fulu.
+- Role: L1.
+- Symbol: `lantern_<fork>_validate_beacon_block_gossip` in the object of every fork, with `_` before it on macOS; `lantern_validate_beacon_block_gossip` inside the object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6); each argument is a pointer: a Uint64 argument points at a u64, and a Boolean output is a u64 of 0 or 1.
+- An argument after the sixth is on the stack on x86-64, as the core ABI says.
+- Argument order: `seen`, `store`, `signed_beacon_block`, `current_time_ms`, `head_state`, `proposer_state`, `scratch`, `result` in phase0, altair, capella and later; bellatrix adds `justified_state` after `proposer_state`.
+
+## Function `lantern_validate_blinded_block_gossip`
+
+The spec's validate_blinded_block_gossip for one message of `beacon_block`.
+
+### Signature
+
+```
+lantern_validate_blinded_block_gossip(seen, store, signed_blinded_beacon_block, current_time_ms, head_state, proposer_state, scratch, result) -> status                (phase0, altair, capella and later)
+lantern_validate_blinded_block_gossip(seen, store, signed_blinded_beacon_block, current_time_ms, head_state, proposer_state, justified_state, scratch, result) -> status   (bellatrix)
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `seen` | state | [`Seen`](#type-seen) |
+| `store` | input | [`Store`](fork-choice.md#type-store) |
+| `signed_blinded_beacon_block` | input | `SignedBlindedBeaconBlock` of the fork |
+| `current_time_ms` | input | u64 |
+| `head_state` | input | `BeaconState`: `store.block_states[get_head(store).root]` |
+| `proposer_state` | input | `BeaconState`: a copy of `store.block_states` of the message's parent block after process_slots to the message's slot; read only when the parent is a node of the store and the message's slot is after the parent's |
+| `justified_state` | input | `BeaconState`: `store.block_states[store.justified_checkpoint.root]`; bellatrix only |
+| `scratch` | scratch | [`Scratch`](helpers.md#type-scratch) |
+| `result` | output | [`Result`](helpers.md#type-result) |
+
+### Returns
+
+- `LANTERN_OK`: `result` is `LANTERN_VALID` when every check holds and seen holds the message, `LANTERN_GOSSIP_IGNORE` or `LANTERN_GOSSIP_REJECT` for the first failed check of the spec, or the code of a spec failure that raises another exception (then the spec gives no answer for gossip). Only `LANTERN_VALID` changes seen.
+- `LANTERN_BUFFER_TOO_SMALL`: scratch is short, or a part of seen is full when every check held. Nothing is changed: the caller grows seen with lantern_seen_copy and calls again.
+
+### Caller must
+
+- Pass the head state and the proposer state of the spec's steps. The spec copies `store.block_states[block.parent_root]` and runs process_slots on it; the caller does that once for each parent and slot.
+
+### Function does
+
+- Makes the checks in spec order, and writes to seen only after the last one: "If the result is `valid`, update the store as the validation function would".
+- compute_time_at_slot_ms gives UINT64_MAX when the time does not fit in a u64, so such a slot is in the future; is_future_epoch is true when current_time_ms + `MAXIMUM_GOSSIP_CLOCK_DISPARITY` is before the genesis time, where the spec's subtraction raises.
+- `beacon_block`, a parent with no post-state: phase0 and altair give `LANTERN_GOSSIP_REJECT`. Bellatrix decides by is_execution_enabled(justified_state, block.body), then the parent's payload status. Capella and later decide by the parent's payload status.
+- `beacon_block`, bellatrix: the payload timestamp check and the `INVALIDATED` parent check run only when is_execution_enabled(head_state, block.body) holds. Capella and later run them always.
+- The checks of `beacon_block` in the same order on a `SignedBlindedBeaconBlock`: the signature of the hash_tree_root of its `BlindedBeaconBlock` (that of the full block), the timestamp of its `execution_payload_header`, the count of its `blob_kzg_commitments`. Its execution is enabled: a blinded block has a payload. Phase0 and altair have no blinded block: `LANTERN_INVALID_EVENT`.
+- `beacon_block`, the commitment limit: `MAX_BLOBS_PER_BLOCK` (deneb), `MAX_BLOBS_PER_BLOCK_ELECTRA` (electra), the `max_blobs_per_block` of get_blob_parameters at the block's epoch (fulu).
+- Reads the config values of the store's copy.
+
+### Function never
+
+- Makes an OS call.
+- Keeps a pointer after it returns.
+
+### Limits
+
+- Stack of its own: 176 bytes on x86-64 (return address included), 160 bytes on ARM64, 160 bytes on RISC-V.
+- Scratch, fulu: S(0), with n the validator count of head_state.
+- Scratch, phase0 to electra: S(2), with n the validator count of proposer_state: get_beacon_proposer_index.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_<fork>_validate_blinded_block_gossip` in the object of every fork, with `_` before it on macOS; `lantern_validate_blinded_block_gossip` inside the object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- An argument after the sixth is on the stack on x86-64, as the core ABI says.
+- Argument order: `seen`, `store`, `signed_blinded_beacon_block`, `current_time_ms`, `head_state`, `proposer_state`, `scratch`, `result` in phase0, altair, capella and later; bellatrix adds `justified_state` after `proposer_state`.
+
+## Function `lantern_validate_beacon_aggregate_and_proof_gossip`
+
+The spec's validate_beacon_aggregate_and_proof_gossip for one message of `beacon_aggregate_and_proof`.
+
+### Signature
+
+```
+lantern_validate_beacon_aggregate_and_proof_gossip(seen, store, signed_aggregate_and_proof, current_time_ms, head_state, scratch, result) -> status
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `seen` | state | [`Seen`](#type-seen) |
+| `store` | input | [`Store`](fork-choice.md#type-store) |
+| `signed_aggregate_and_proof` | input | `SignedAggregateAndProof` of the fork |
+| `current_time_ms` | input | u64 |
+| `head_state` | input | `BeaconState`: `store.block_states[get_head(store).root]` |
+| `scratch` | scratch | [`Scratch`](helpers.md#type-scratch) |
+| `result` | output | [`Result`](helpers.md#type-result) |
+
+### Returns
+
+- `LANTERN_OK`: `result` is `LANTERN_VALID` when every check holds and seen holds the message, `LANTERN_GOSSIP_IGNORE` or `LANTERN_GOSSIP_REJECT` for the first failed check of the spec, or the code of a spec failure that raises another exception (then the spec gives no answer for gossip). Only `LANTERN_VALID` changes seen.
+- `LANTERN_BUFFER_TOO_SMALL`: scratch is short, or a part of seen is full when every check held. Nothing is changed: the caller grows seen with lantern_seen_copy and calls again.
+
+### Caller must
+
+- Pass the head state of the spec's steps.
+
+### Function does
+
+- Makes the checks in spec order, and writes to seen only after the last one: "If the result is `valid`, update the store as the validation function would".
+- compute_time_at_slot_ms gives UINT64_MAX when the time does not fit in a u64, so such a slot is in the future; is_future_epoch is true when current_time_ms + `MAXIMUM_GOSSIP_CLOCK_DISPARITY` is before the genesis time, where the spec's subtraction raises.
+- is_non_strict_superset skips a seen bitfield of another length, where the spec's `zip(strict=True)` raises.
+- `beacon_attestation_{subnet_id}` and `beacon_aggregate_and_proof`, phase0 to capella: the slot is within `ATTESTATION_PROPAGATION_SLOT_RANGE` of the current slot (is_within_slot_range). Deneb and later: the slot is not in the future and its epoch is the current or previous epoch.
+- `beacon_aggregate_and_proof`, phase0 to deneb: the committee index is `data.index`, and `aggregate_data_roots` is keyed by the data root alone. Electra and later key it by the data root and the committee index.
+- Reads the config values of the store's copy.
+
+### Function never
+
+- Makes an OS call.
+- Keeps a pointer after it returns.
+
+### Limits
+
+- Stack of its own: 256 bytes on x86-64 (return address included), 240 bytes on ARM64, 240 bytes on RISC-V.
+- Scratch: S(10) + `IndexedAttestation__fixed` + 8, with n the validator count of head_state.
+
+### ABI
+
+- Role: L1.
+- Symbol: `lantern_<fork>_validate_beacon_aggregate_and_proof_gossip` in the object of every fork, with `_` before it on macOS; `lantern_validate_beacon_aggregate_and_proof_gossip` inside the object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6); each argument is a pointer: a Uint64 argument points at a u64, and a Boolean output is a u64 of 0 or 1.
+- An argument after the sixth is on the stack on x86-64, as the core ABI says.
+- Argument order: `seen`, `store`, `signed_aggregate_and_proof`, `current_time_ms`, `head_state`, `scratch`, `result`.
+
+## Function `lantern_validate_beacon_attestation_gossip`
+
+The spec's validate_beacon_attestation_gossip for one message of `beacon_attestation_{subnet_id}`.
+
+### Signature
+
+```
+lantern_validate_beacon_attestation_gossip(seen, store, attestation, current_time_ms, subnet_id, head_state, scratch, result) -> status
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `seen` | state | [`Seen`](#type-seen) |
+| `store` | input | [`Store`](fork-choice.md#type-store) |
+| `attestation` | input | `Attestation` (phase0 to deneb) or `SingleAttestation` (electra and later) |
+| `current_time_ms` | input | u64 |
+| `subnet_id` | input | u64 |
+| `head_state` | input | `BeaconState`: `store.block_states[get_head(store).root]` |
+| `scratch` | scratch | [`Scratch`](helpers.md#type-scratch) |
+| `result` | output | [`Result`](helpers.md#type-result) |
+
+### Returns
+
+- `LANTERN_OK`: `result` is `LANTERN_VALID` when every check holds and seen holds the message, `LANTERN_GOSSIP_IGNORE` or `LANTERN_GOSSIP_REJECT` for the first failed check of the spec, or the code of a spec failure that raises another exception (then the spec gives no answer for gossip). Only `LANTERN_VALID` changes seen.
+- `LANTERN_BUFFER_TOO_SMALL`: scratch is short, or a part of seen is full when every check held. Nothing is changed: the caller grows seen with lantern_seen_copy and calls again.
+
+### Caller must
+
+- Pass the head state of the spec's steps.
+
+### Function does
+
+- Makes the checks in spec order, and writes to seen only after the last one: "If the result is `valid`, update the store as the validation function would".
+- compute_time_at_slot_ms gives UINT64_MAX when the time does not fit in a u64, so such a slot is in the future; is_future_epoch is true when current_time_ms + `MAXIMUM_GOSSIP_CLOCK_DISPARITY` is before the genesis time, where the spec's subtraction raises.
+- `beacon_attestation_{subnet_id}` and `beacon_aggregate_and_proof`, phase0 to capella: the slot is within `ATTESTATION_PROPAGATION_SLOT_RANGE` of the current slot (is_within_slot_range). Deneb and later: the slot is not in the future and its epoch is the current or previous epoch.
+- `beacon_attestation_{subnet_id}`, phase0 to deneb: the message is an `Attestation`. It has exactly one aggregation bit set and as many bits as the committee; the participant is the committee member at the set bit, and is_valid_indexed_attestation checks its one signature.
+- Reads the config values of the store's copy.
+
+### Function never
+
+- Makes an OS call.
+- Keeps a pointer after it returns.
+
+### Limits
+
+- Stack of its own: 160 bytes on x86-64 (return address included), 144 bytes on ARM64, 144 bytes on RISC-V.
+- Scratch: S(3), with n the validator count of head_state.
+
+### ABI
+
+- Role: L1.
+- Symbol: `lantern_<fork>_validate_beacon_attestation_gossip` in the object of every fork, with `_` before it on macOS; `lantern_validate_beacon_attestation_gossip` inside the object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6); each argument is a pointer: a Uint64 argument points at a u64, and a Boolean output is a u64 of 0 or 1.
+- An argument after the sixth is on the stack on x86-64, as the core ABI says.
+- Argument order: `seen`, `store`, `attestation`, `current_time_ms`, `subnet_id`, `head_state`, `scratch`, `result`.
+
+## Function `lantern_validate_voluntary_exit_gossip`
+
+The spec's validate_voluntary_exit_gossip for one message of `voluntary_exit`.
+
+### Signature
+
+```
+lantern_validate_voluntary_exit_gossip(seen, store, signed_voluntary_exit, current_time_ms, head_state, scratch, result) -> status
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `seen` | state | [`Seen`](#type-seen) |
+| `store` | input | [`Store`](fork-choice.md#type-store) |
+| `signed_voluntary_exit` | input | `SignedVoluntaryExit` |
+| `current_time_ms` | input | u64 |
+| `head_state` | input | `BeaconState`: `store.block_states[get_head(store).root]` |
+| `scratch` | scratch | [`Scratch`](helpers.md#type-scratch) |
+| `result` | output | [`Result`](helpers.md#type-result) |
+
+### Returns
+
+- `LANTERN_OK`: `result` is `LANTERN_VALID` when every check holds and seen holds the message, `LANTERN_GOSSIP_IGNORE` or `LANTERN_GOSSIP_REJECT` for the first failed check of the spec, or the code of a spec failure that raises another exception (then the spec gives no answer for gossip). Only `LANTERN_VALID` changes seen.
+- `LANTERN_BUFFER_TOO_SMALL`: scratch is short, or a part of seen is full when every check held. Nothing is changed: the caller grows seen with lantern_seen_copy and calls again.
+
+### Caller must
+
+- Pass the head state of the spec's steps.
+
+### Function does
+
+- Makes the checks in spec order, and writes to seen only after the last one: "If the result is `valid`, update the store as the validation function would".
+- compute_time_at_slot_ms gives UINT64_MAX when the time does not fit in a u64, so such a slot is in the future; is_future_epoch is true when current_time_ms + `MAXIMUM_GOSSIP_CLOCK_DISPARITY` is before the genesis time, where the spec's subtraction raises.
+- `voluntary_exit`, phase0 to capella: the signature domain is get_domain(state, `DOMAIN_VOLUNTARY_EXIT`, voluntary_exit.epoch). Deneb and later use the capella fork version, as process_voluntary_exit does.
+- Reads the config values of the store's copy.
+
+### Function never
+
+- Makes an OS call.
+- Keeps a pointer after it returns.
+
+### Limits
+
+- Stack of its own: 160 bytes on x86-64 (return address included), 160 bytes on ARM64, 160 bytes on RISC-V.
+- Scratch: S(0), with n the validator count of head_state.
+
+### ABI
+
+- Role: L1.
+- Symbol: `lantern_<fork>_validate_voluntary_exit_gossip` in the object of every fork, with `_` before it on macOS; `lantern_validate_voluntary_exit_gossip` inside the object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6); each argument is a pointer: a Uint64 argument points at a u64, and a Boolean output is a u64 of 0 or 1.
+- An argument after the sixth is on the stack on x86-64, as the core ABI says.
+- Argument order: `seen`, `store`, `signed_voluntary_exit`, `current_time_ms`, `head_state`, `scratch`, `result`.
+
+## Function `lantern_validate_proposer_slashing_gossip`
+
+The spec's validate_proposer_slashing_gossip for one message of `proposer_slashing`.
+
+### Signature
+
+```
+lantern_validate_proposer_slashing_gossip(seen, store, proposer_slashing, head_state, scratch, result) -> status
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `seen` | state | [`Seen`](#type-seen) |
+| `store` | input | [`Store`](fork-choice.md#type-store) |
+| `proposer_slashing` | input | `ProposerSlashing` |
+| `head_state` | input | `BeaconState`: `store.block_states[get_head(store).root]` |
+| `scratch` | scratch | [`Scratch`](helpers.md#type-scratch) |
+| `result` | output | [`Result`](helpers.md#type-result) |
+
+### Returns
+
+- `LANTERN_OK`: `result` is `LANTERN_VALID` when every check holds and seen holds the message, `LANTERN_GOSSIP_IGNORE` or `LANTERN_GOSSIP_REJECT` for the first failed check of the spec, or the code of a spec failure that raises another exception (then the spec gives no answer for gossip). Only `LANTERN_VALID` changes seen.
+- `LANTERN_BUFFER_TOO_SMALL`: scratch is short, or a part of seen is full when every check held. Nothing is changed: the caller grows seen with lantern_seen_copy and calls again.
+
+### Caller must
+
+- Pass the head state of the spec's steps.
+
+### Function does
+
+- Makes the checks in spec order, and writes to seen only after the last one: "If the result is `valid`, update the store as the validation function would".
+- Reads the config values of the store's copy.
+
+### Function never
+
+- Makes an OS call.
+- Keeps a pointer after it returns.
+
+### Limits
+
+- Stack of its own: 128 bytes on x86-64 (return address included), 112 bytes on ARM64, 112 bytes on RISC-V.
+- Scratch: S(0), with n the validator count of head_state.
+
+### ABI
+
+- Role: L1.
+- Symbol: `lantern_<fork>_validate_proposer_slashing_gossip` in the object of every fork, with `_` before it on macOS; `lantern_validate_proposer_slashing_gossip` inside the object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6); each argument is a pointer: a Uint64 argument points at a u64, and a Boolean output is a u64 of 0 or 1.
+- Argument order: `seen`, `store`, `proposer_slashing`, `head_state`, `scratch`, `result`.
+
+## Function `lantern_validate_attester_slashing_gossip`
+
+The spec's validate_attester_slashing_gossip for one message of `attester_slashing`.
+
+### Signature
+
+```
+lantern_validate_attester_slashing_gossip(seen, store, attester_slashing, head_state, scratch, result) -> status
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `seen` | state | [`Seen`](#type-seen) |
+| `store` | input | [`Store`](fork-choice.md#type-store) |
+| `attester_slashing` | input | `AttesterSlashing` of the fork |
+| `head_state` | input | `BeaconState`: `store.block_states[get_head(store).root]` |
+| `scratch` | scratch | [`Scratch`](helpers.md#type-scratch) |
+| `result` | output | [`Result`](helpers.md#type-result) |
+
+### Returns
+
+- `LANTERN_OK`: `result` is `LANTERN_VALID` when every check holds and seen holds the message, `LANTERN_GOSSIP_IGNORE` or `LANTERN_GOSSIP_REJECT` for the first failed check of the spec, or the code of a spec failure that raises another exception (then the spec gives no answer for gossip). Only `LANTERN_VALID` changes seen.
+- `LANTERN_BUFFER_TOO_SMALL`: scratch is short, or a part of seen is full when every check held. Nothing is changed: the caller grows seen with lantern_seen_copy and calls again.
+
+### Caller must
+
+- Pass the head state of the spec's steps.
+
+### Function does
+
+- Makes the checks in spec order, and writes to seen only after the last one: "If the result is `valid`, update the store as the validation function would".
+- The attester slashing intersection works on sorted copies of the two index lists in scratch.
+- Reads the config values of the store's copy.
+
+### Function never
+
+- Makes an OS call.
+- Keeps a pointer after it returns.
+
+### Limits
+
+- Stack of its own: 160 bytes on x86-64 (return address included), 144 bytes on ARM64, 144 bytes on RISC-V.
+- Scratch: S(7) + 72 + 8 * (a + b + min(a, b)), a and b the index counts of its two attestations, with n the validator count of head_state.
+
+### ABI
+
+- Role: L1.
+- Symbol: `lantern_<fork>_validate_attester_slashing_gossip` in the object of every fork, with `_` before it on macOS; `lantern_validate_attester_slashing_gossip` inside the object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6); each argument is a pointer: a Uint64 argument points at a u64, and a Boolean output is a u64 of 0 or 1.
+- Argument order: `seen`, `store`, `attester_slashing`, `head_state`, `scratch`, `result`.
+
+## Function `lantern_validate_sync_committee_contribution_and_proof_gossip`
+
+The spec's validate_sync_committee_contribution_and_proof_gossip for one message of `sync_committee_contribution_and_proof`.
+
+### Signature
+
+```
+lantern_validate_sync_committee_contribution_and_proof_gossip(seen, store, signed_contribution_and_proof, current_time_ms, head_state, scratch, result) -> status
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `seen` | state | [`Seen`](#type-seen) |
+| `store` | input | [`Store`](fork-choice.md#type-store) |
+| `signed_contribution_and_proof` | input | `SignedContributionAndProof` |
+| `current_time_ms` | input | u64 |
+| `head_state` | input | `BeaconState`: `store.block_states[get_head(store).root]` |
+| `scratch` | scratch | [`Scratch`](helpers.md#type-scratch) |
+| `result` | output | [`Result`](helpers.md#type-result) |
+
+### Returns
+
+- `LANTERN_OK`: `result` is `LANTERN_VALID` when every check holds and seen holds the message, `LANTERN_GOSSIP_IGNORE` or `LANTERN_GOSSIP_REJECT` for the first failed check of the spec, or the code of a spec failure that raises another exception (then the spec gives no answer for gossip). Only `LANTERN_VALID` changes seen.
+- `LANTERN_BUFFER_TOO_SMALL`: scratch is short, or a part of seen is full when every check held. Nothing is changed: the caller grows seen with lantern_seen_copy and calls again.
+
+### Caller must
+
+- Pass the head state of the spec's steps.
+
+### Function does
+
+- Makes the checks in spec order, and writes to seen only after the last one: "If the result is `valid`, update the store as the validation function would".
+- compute_time_at_slot_ms gives UINT64_MAX when the time does not fit in a u64, so such a slot is in the future; is_future_epoch is true when current_time_ms + `MAXIMUM_GOSSIP_CLOCK_DISPARITY` is before the genesis time, where the spec's subtraction raises.
+- is_non_strict_superset skips a seen bitfield of another length, where the spec's `zip(strict=True)` raises.
+- Verifies an aggregate signature with `crypto_bls_eth_fast_aggregate_verify` of asm-crypto.
+- Reads the config values of the store's copy.
+
+### Function never
+
+- Makes an OS call.
+- Keeps a pointer after it returns.
+
+### Limits
+
+- Stack of its own: 304 bytes on x86-64 (return address included), 272 bytes on ARM64, 272 bytes on RISC-V.
+- Scratch: S(1) + 24 + 48 * `SYNC_COMMITTEE_SIZE` / `SYNC_COMMITTEE_SUBNET_COUNT`, with n the validator count of head_state.
+
+### ABI
+
+- Role: L1.
+- Symbol: `lantern_<fork>_validate_sync_committee_contribution_and_proof_gossip` in the object of altair to fulu, with `_` before it on macOS; `lantern_validate_sync_committee_contribution_and_proof_gossip` inside the object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6); each argument is a pointer: a Uint64 argument points at a u64, and a Boolean output is a u64 of 0 or 1.
+- An argument after the sixth is on the stack on x86-64, as the core ABI says.
+- Argument order: `seen`, `store`, `signed_contribution_and_proof`, `current_time_ms`, `head_state`, `scratch`, `result`.
+
+## Function `lantern_validate_sync_committee_message_gossip`
+
+The spec's validate_sync_committee_message_gossip for one message of `sync_committee_{subnet_id}`.
+
+### Signature
+
+```
+lantern_validate_sync_committee_message_gossip(seen, store, sync_committee_message, current_time_ms, subnet_id, head_state, scratch, result) -> status
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `seen` | state | [`Seen`](#type-seen) |
+| `store` | input | [`Store`](fork-choice.md#type-store) |
+| `sync_committee_message` | input | `SyncCommitteeMessage` |
+| `current_time_ms` | input | u64 |
+| `subnet_id` | input | u64 |
+| `head_state` | input | `BeaconState`: `store.block_states[get_head(store).root]` |
+| `scratch` | scratch | [`Scratch`](helpers.md#type-scratch) |
+| `result` | output | [`Result`](helpers.md#type-result) |
+
+### Returns
+
+- `LANTERN_OK`: `result` is `LANTERN_VALID` when every check holds and seen holds the message, `LANTERN_GOSSIP_IGNORE` or `LANTERN_GOSSIP_REJECT` for the first failed check of the spec, or the code of a spec failure that raises another exception (then the spec gives no answer for gossip). Only `LANTERN_VALID` changes seen.
+- `LANTERN_BUFFER_TOO_SMALL`: scratch is short, or a part of seen is full when every check held. Nothing is changed: the caller grows seen with lantern_seen_copy and calls again.
+
+### Caller must
+
+- Pass the head state of the spec's steps.
+
+### Function does
+
+- Makes the checks in spec order, and writes to seen only after the last one: "If the result is `valid`, update the store as the validation function would".
+- compute_time_at_slot_ms gives UINT64_MAX when the time does not fit in a u64, so such a slot is in the future; is_future_epoch is true when current_time_ms + `MAXIMUM_GOSSIP_CLOCK_DISPARITY` is before the genesis time, where the spec's subtraction raises.
+- Reads the config values of the store's copy.
+
+### Function never
+
+- Makes an OS call.
+- Keeps a pointer after it returns.
+
+### Limits
+
+- Stack of its own: 128 bytes on x86-64 (return address included), 96 bytes on ARM64, 96 bytes on RISC-V.
+- Scratch: S(0), with n the validator count of head_state.
+
+### ABI
+
+- Role: L1.
+- Symbol: `lantern_<fork>_validate_sync_committee_message_gossip` in the object of altair to fulu, with `_` before it on macOS; `lantern_validate_sync_committee_message_gossip` inside the object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6); each argument is a pointer: a Uint64 argument points at a u64, and a Boolean output is a u64 of 0 or 1.
+- An argument after the sixth is on the stack on x86-64, as the core ABI says.
+- Argument order: `seen`, `store`, `sync_committee_message`, `current_time_ms`, `subnet_id`, `head_state`, `scratch`, `result`.
+
+## Function `lantern_validate_bls_to_execution_change_gossip`
+
+The spec's validate_bls_to_execution_change_gossip for one message of `bls_to_execution_change`.
+
+### Signature
+
+```
+lantern_validate_bls_to_execution_change_gossip(seen, store, signed_bls_to_execution_change, current_time_ms, head_state, scratch, result) -> status
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `seen` | state | [`Seen`](#type-seen) |
+| `store` | input | [`Store`](fork-choice.md#type-store) |
+| `signed_bls_to_execution_change` | input | `SignedBLSToExecutionChange` |
+| `current_time_ms` | input | u64 |
+| `head_state` | input | `BeaconState`: `store.block_states[get_head(store).root]` |
+| `scratch` | scratch | [`Scratch`](helpers.md#type-scratch) |
+| `result` | output | [`Result`](helpers.md#type-result) |
+
+### Returns
+
+- `LANTERN_OK`: `result` is `LANTERN_VALID` when every check holds and seen holds the message, `LANTERN_GOSSIP_IGNORE` or `LANTERN_GOSSIP_REJECT` for the first failed check of the spec, or the code of a spec failure that raises another exception (then the spec gives no answer for gossip). Only `LANTERN_VALID` changes seen.
+- `LANTERN_BUFFER_TOO_SMALL`: scratch is short, or a part of seen is full when every check held. Nothing is changed: the caller grows seen with lantern_seen_copy and calls again.
+
+### Caller must
+
+- Pass the head state of the spec's steps.
+
+### Function does
+
+- Makes the checks in spec order, and writes to seen only after the last one: "If the result is `valid`, update the store as the validation function would".
+- compute_time_at_slot_ms gives UINT64_MAX when the time does not fit in a u64, so such a slot is in the future; is_future_epoch is true when current_time_ms + `MAXIMUM_GOSSIP_CLOCK_DISPARITY` is before the genesis time, where the spec's subtraction raises.
+- Reads the config values of the store's copy.
+
+### Function never
+
+- Makes an OS call.
+- Keeps a pointer after it returns.
+
+### Limits
+
+- Stack of its own: 176 bytes on x86-64 (return address included), 176 bytes on ARM64, 176 bytes on RISC-V.
+- Scratch: S(0), with n the validator count of head_state.
+
+### ABI
+
+- Role: L1.
+- Symbol: `lantern_<fork>_validate_bls_to_execution_change_gossip` in the object of capella to fulu, with `_` before it on macOS; `lantern_validate_bls_to_execution_change_gossip` inside the object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6); each argument is a pointer: a Uint64 argument points at a u64, and a Boolean output is a u64 of 0 or 1.
+- An argument after the sixth is on the stack on x86-64, as the core ABI says.
+- Argument order: `seen`, `store`, `signed_bls_to_execution_change`, `current_time_ms`, `head_state`, `scratch`, `result`.
+
+## Function `lantern_validate_blob_sidecar_gossip`
+
+The spec's validate_blob_sidecar_gossip for one message of `blob_sidecar_{subnet_id}`.
+
+### Signature
+
+```
+lantern_validate_blob_sidecar_gossip(seen, store, blob_sidecar, current_time_ms, subnet_id, head_state, proposer_state, settings, scratch, result) -> status
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `seen` | state | [`Seen`](#type-seen) |
+| `store` | input | [`Store`](fork-choice.md#type-store) |
+| `blob_sidecar` | input | `BlobSidecar` |
+| `current_time_ms` | input | u64 |
+| `subnet_id` | input | u64 |
+| `head_state` | input | `BeaconState`: `store.block_states[get_head(store).root]` |
+| `proposer_state` | input | `BeaconState`: a copy of `store.block_states` of the message's parent block after process_slots to the message's slot; read only when the parent is a node of the store and the message's slot is after the parent's |
+| `settings` | input | asm-crypto `KzgSettings` |
+| `scratch` | scratch | [`Scratch`](helpers.md#type-scratch) |
+| `result` | output | [`Result`](helpers.md#type-result) |
+
+### Returns
+
+- `LANTERN_OK`: `result` is `LANTERN_VALID` when every check holds and seen holds the message, `LANTERN_GOSSIP_IGNORE` or `LANTERN_GOSSIP_REJECT` for the first failed check of the spec, or the code of a spec failure that raises another exception (then the spec gives no answer for gossip). Only `LANTERN_VALID` changes seen.
+- `LANTERN_BUFFER_TOO_SMALL`: scratch is short, or a part of seen is full when every check held. Nothing is changed: the caller grows seen with lantern_seen_copy and calls again.
+
+### Caller must
+
+- Pass the head state and the proposer state of the spec's steps. The spec copies `store.block_states[block.parent_root]` and runs process_slots on it; the caller does that once for each parent and slot.
+
+### Function does
+
+- Makes the checks in spec order, and writes to seen only after the last one: "If the result is `valid`, update the store as the validation function would".
+- compute_time_at_slot_ms gives UINT64_MAX when the time does not fit in a u64, so such a slot is in the future; is_future_epoch is true when current_time_ms + `MAXIMUM_GOSSIP_CLOCK_DISPARITY` is before the genesis time, where the spec's subtraction raises.
+- `prior_header != header` compares the hash_tree_root of the two headers.
+- `blob_sidecar_{subnet_id}`: the index limit is `MAX_BLOBS_PER_BLOCK` (deneb) or `MAX_BLOBS_PER_BLOCK_ELECTRA` (electra). A blob, commitment or proof that `crypto_kzg_verify_blob_kzg_proof` cannot decode gives `LANTERN_GOSSIP_REJECT`, where the spec's verify_blob_kzg_proof raises.
+- Verifies a KZG proof with `crypto_kzg_verify_blob_kzg_proof` of asm-crypto.
+- Reads the config values of the store's copy.
+
+### Function never
+
+- Makes an OS call.
+- Keeps a pointer after it returns.
+
+### Limits
+
+- Stack of its own: 144 bytes on x86-64 (return address included), 128 bytes on ARM64, 128 bytes on RISC-V.
+- Scratch: S(2), with n the validator count of proposer_state, and at least `CRYPTO_KZG_SCRATCH` of asm-crypto, with n the validator count of head_state.
+
+### ABI
+
+- Role: L1.
+- Symbol: `lantern_<fork>_validate_blob_sidecar_gossip` in the object of deneb to electra, with `_` before it on macOS; `lantern_validate_blob_sidecar_gossip` inside the object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6); each argument is a pointer: a Uint64 argument points at a u64, and a Boolean output is a u64 of 0 or 1.
+- An argument after the eighth (the sixth on x86-64) is on the stack, as the core ABI says.
+- Argument order: `seen`, `store`, `blob_sidecar`, `current_time_ms`, `subnet_id`, `head_state`, `proposer_state`, `settings`, `scratch`, `result`.
+
+## Function `lantern_validate_data_column_sidecar_gossip`
+
+The spec's validate_data_column_sidecar_gossip for one message of `data_column_sidecar_{subnet_id}`.
+
+### Signature
+
+```
+lantern_validate_data_column_sidecar_gossip(seen, store, sidecar, current_time_ms, subnet_id, head_state, proposer_state, settings, scratch, result) -> status
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `seen` | state | [`Seen`](#type-seen) |
+| `store` | input | [`Store`](fork-choice.md#type-store) |
+| `sidecar` | input | `DataColumnSidecar`, or `PartialDataColumnSidecar` for the partial check |
+| `current_time_ms` | input | u64 |
+| `subnet_id` | input | u64 |
+| `head_state` | input | `BeaconState`: `store.block_states[get_head(store).root]` |
+| `proposer_state` | input | `BeaconState`: a copy of `store.block_states` of the message's parent block after process_slots to the message's slot; read only when the parent is a node of the store and the message's slot is after the parent's |
+| `settings` | input | asm-crypto `KzgSettings` |
+| `scratch` | scratch | [`Scratch`](helpers.md#type-scratch) |
+| `result` | output | [`Result`](helpers.md#type-result) |
+
+### Returns
+
+- `LANTERN_OK`: `result` is `LANTERN_VALID` when every check holds and seen holds the message, `LANTERN_GOSSIP_IGNORE` or `LANTERN_GOSSIP_REJECT` for the first failed check of the spec, or the code of a spec failure that raises another exception (then the spec gives no answer for gossip). Only `LANTERN_VALID` changes seen.
+- `LANTERN_BUFFER_TOO_SMALL`: scratch is short, or a part of seen is full when every check held. Nothing is changed: the caller grows seen with lantern_seen_copy and calls again.
+
+### Caller must
+
+- Pass the head state and the proposer state of the spec's steps. The spec copies `store.block_states[block.parent_root]` and runs process_slots on it; the caller does that once for each parent and slot.
+
+### Function does
+
+- Makes the checks in spec order, and writes to seen only after the last one: "If the result is `valid`, update the store as the validation function would".
+- compute_time_at_slot_ms gives UINT64_MAX when the time does not fit in a u64, so such a slot is in the future; is_future_epoch is true when current_time_ms + `MAXIMUM_GOSSIP_CLOCK_DISPARITY` is before the genesis time, where the spec's subtraction raises.
+- `prior_header != header` compares the hash_tree_root of the two headers.
+- Reads the config values of the store's copy.
+
+### Function never
+
+- Makes an OS call.
+- Keeps a pointer after it returns.
+
+### Limits
+
+- Stack of its own: 144 bytes on x86-64 (return address included), 128 bytes on ARM64, 128 bytes on RISC-V.
+- Scratch: S(0), and what the inclusion proof and the KZG check of the sidecar need, with n the validator count of head_state.
+
+### ABI
+
+- Role: L1.
+- Symbol: `lantern_<fork>_validate_data_column_sidecar_gossip` in the object of fulu, with `_` before it on macOS; `lantern_validate_data_column_sidecar_gossip` inside the object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6); each argument is a pointer: a Uint64 argument points at a u64, and a Boolean output is a u64 of 0 or 1.
+- An argument after the eighth (the sixth on x86-64) is on the stack, as the core ABI says.
+- Argument order: `seen`, `store`, `sidecar`, `current_time_ms`, `subnet_id`, `head_state`, `proposer_state`, `settings`, `scratch`, `result`.
+
+## Function `lantern_validate_partial_data_column_sidecar_gossip`
+
+The spec's validate_partial_data_column_sidecar_gossip for one message of partial columns.
+
+### Signature
+
+```
+lantern_validate_partial_data_column_sidecar_gossip(seen, store, sidecar, current_time_ms, group_id, column_index, head_state, proposer_state, settings, scratch, result) -> status
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `seen` | state | [`Seen`](#type-seen) |
+| `store` | input | [`Store`](fork-choice.md#type-store) |
+| `sidecar` | input | `DataColumnSidecar`, or `PartialDataColumnSidecar` for the partial check |
+| `current_time_ms` | input | u64 |
+| `group_id` | input | `PartialDataColumnGroupID` |
+| `column_index` | input | u64 |
+| `head_state` | input | `BeaconState`: `store.block_states[get_head(store).root]` |
+| `proposer_state` | input | `BeaconState`: a copy of `store.block_states` of the message's parent block after process_slots to the message's slot; read only when the parent is a node of the store and the message's slot is after the parent's |
+| `settings` | input | asm-crypto `KzgSettings` |
+| `scratch` | scratch | [`Scratch`](helpers.md#type-scratch) |
+| `result` | output | [`Result`](helpers.md#type-result) |
+
+### Returns
+
+- `LANTERN_OK`: `result` is `LANTERN_VALID` when every check holds and seen holds the message, `LANTERN_GOSSIP_IGNORE` or `LANTERN_GOSSIP_REJECT` for the first failed check of the spec, or the code of a spec failure that raises another exception (then the spec gives no answer for gossip). Only `LANTERN_VALID` changes seen, except that it keeps a header it recorded before a failed cell check, as the spec does.
+- `LANTERN_BUFFER_TOO_SMALL`: scratch is short, or a part of seen is full when every check held. Nothing is changed: the caller grows seen with lantern_seen_copy and calls again.
+
+### Caller must
+
+- Pass the head state and the proposer state of the spec's steps. The spec copies `store.block_states[block.parent_root]` and runs process_slots on it; the caller does that once for each parent and slot.
+
+### Function does
+
+- Makes the checks in spec order, and writes to seen only after the last one: "If the result is `valid`, update the store as the validation function would".
+- compute_time_at_slot_ms gives UINT64_MAX when the time does not fit in a u64, so such a slot is in the future; is_future_epoch is true when current_time_ms + `MAXIMUM_GOSSIP_CLOCK_DISPARITY` is before the genesis time, where the spec's subtraction raises.
+- `prior_header != header` compares the hash_tree_root of the two headers.
+- Reads the config values of the store's copy.
+
+### Function never
+
+- Makes an OS call.
+- Keeps a pointer after it returns.
+
+### Limits
+
+- Stack of its own: 224 bytes on x86-64 (return address included), 208 bytes on ARM64, 208 bytes on RISC-V.
+- Scratch: S(0), and what the inclusion proof and the KZG check of the sidecar need, with n the validator count of head_state.
+
+### ABI
+
+- Role: L1.
+- Symbol: `lantern_<fork>_validate_partial_data_column_sidecar_gossip` in the object of fulu, with `_` before it on macOS; `lantern_validate_partial_data_column_sidecar_gossip` inside the object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6); each argument is a pointer: a Uint64 argument points at a u64, and a Boolean output is a u64 of 0 or 1.
+- An argument after the eighth (the sixth on x86-64) is on the stack, as the core ABI says.
+- Argument order: `seen`, `store`, `sidecar`, `current_time_ms`, `group_id`, `column_index`, `head_state`, `proposer_state`, `settings`, `scratch`, `result`.
+
+## Function `lantern_block_lookup`
+
+Where a block root is known: as a node of the store, as a block of seen, or not at all.
+
+### Signature
+
+```
+lantern_block_lookup(store, seen, root) -> (node, where, payload_status)
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `store` | input | [`Store`](fork-choice.md#type-store) |
+| `seen` | input | [`Seen`](#type-seen) |
+| `root` | input | Bytes32 |
+
+### Function does
+
+- Returns the node of the root, or `NODE_NONE`.
+- Returns as its second value 2 for a node of the store, 1 for a block of seen, 0 when the root is unknown.
+- Returns as its third value the block's payload status.
+- Reads the config values of the store's copy.
+
+### Function never
+
+- Writes memory but its own stack.
+- Makes an OS call.
+- Keeps a pointer after it returns.
+
+### Limits
+
+- Stack of its own: 48 bytes on x86-64 (return address included), 48 bytes on ARM64, 48 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_block_lookup`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- It returns three values: x0, x1, x2 on ARM64; rax, rdx, rcx on x86-64; a0, a1, a2 on RISC-V.
+- Argument order: `store`, `seen`, `root`.
+
+## Function `lantern_checkpoint_is`
+
+Whether get_checkpoint_block of a node is a root.
+
+### Signature
+
+```
+lantern_checkpoint_is(store, node, epoch, root) -> (status, flag)
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `store` | input | [`Store`](fork-choice.md#type-store) |
+| `node` | input | u64 in a register: a [`ForkChoiceNode`](fork-choice.md#type-forkchoicenode) |
+| `epoch` | input | u64 in a register |
+| `root` | input | Bytes32 |
+
+### Returns
+
+- `LANTERN_OK`: the second value is 1 when get_checkpoint_block(store, node, epoch) is `root`, else 0.
+- The statuses of lantern_checkpoint_block.
+
+### Function does
+
+- Reads the config values of the store's copy.
+
+### Function never
+
+- Writes memory but its own stack.
+- Makes an OS call.
+- Keeps a pointer after it returns.
+
+### Limits
+
+- Stack of its own: 32 bytes on x86-64 (return address included), 32 bytes on ARM64, 32 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_checkpoint_is`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- It returns two values: x0, rax or a0, then x1, rdx or a1.
+- Argument order: `store`, `node`, `epoch`, `root`.
+
+## Function `lantern_commitments_in_body`
+
+is_valid_merkle_branch of a list of KZG commitments against a body root.
+
+### Signature
+
+```
+lantern_commitments_in_body(scratch, commitments, count, branch, root) -> (status, valid)
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `scratch` | scratch | [`Scratch`](helpers.md#type-scratch) |
+| `commitments` | input | `count` KZG commitments of 48 bytes |
+| `count` | input | u64 in a register |
+| `branch` | input | `KZG_COMMITMENTS_INCLUSION_PROOF_DEPTH` nodes of 32 bytes |
+| `root` | input | Bytes32: the body root |
+
+### Returns
+
+- `LANTERN_OK`: the second value is 1 when the branch holds, else 0.
+- `LANTERN_BUFFER_TOO_SMALL`: `scratch` is short.
+
+### Function does
+
+- Hashes the list from a standalone copy at the end of `scratch`, then checks the branch at depth `KZG_COMMITMENTS_INCLUSION_PROOF_DEPTH` and index `BLOB_KZG_COMMITMENTS_SUBTREE_INDEX`.
+
+### Function never
+
+- Makes an OS call.
+- Keeps a pointer after it returns.
+
+### Limits
+
+- Stack of its own: 192 bytes on x86-64 (return address included), 192 bytes on ARM64, 192 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_commitments_in_body`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- It returns two values: x0, rax or a0, then x1, rdx or a1.
+- Argument order: `scratch`, `commitments`, `count`, `branch`, `root`.
+
+## Function `lantern_finalized_is_ancestor`
+
+Whether the store's finalized checkpoint is the checkpoint block of a node.
+
+### Signature
+
+```
+lantern_finalized_is_ancestor(store, node) -> (status, flag)
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `store` | input | [`Store`](fork-choice.md#type-store) |
+| `node` | input | u64 in a register: a [`ForkChoiceNode`](fork-choice.md#type-forkchoicenode) |
+
+### Returns
+
+- As lantern_checkpoint_is, with the store's finalized epoch and root.
+
+### Function does
+
+- Reads the config values of the store's copy.
+
+### Function never
+
+- Writes memory but its own stack.
+- Makes an OS call.
+- Keeps a pointer after it returns.
+
+### Limits
+
+- Stack of its own: 8 bytes on x86-64 (return address included), 0 bytes on ARM64, 0 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_finalized_is_ancestor`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- It returns two values: x0, rax or a0, then x1, rdx or a1.
+- Argument order: `store`, `node`.
+
+## Function `lantern_finalized_slot`
+
+The first slot of the store's finalized epoch.
+
+### Signature
+
+```
+lantern_finalized_slot(store) -> slot
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `store` | input | [`Store`](fork-choice.md#type-store) |
+
+### Function does
+
+- Returns compute_start_slot_at_epoch of the finalized epoch, or `UINT64_MAX` when it does not fit in a u64.
+- Reads the config values of the store's copy.
+
+### Function never
+
+- Calls another function.
+- Writes memory.
+- Makes an OS call.
+- Keeps a pointer after it returns.
+
+### Limits
+
+- Stack of its own: 8 bytes on x86-64 (return address included), 0 bytes on ARM64, 0 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_finalized_slot`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- Registers it changes, on ARM64 and x86-64: x0, x1; rax, rcx.
+- Argument order: `store`.
+
+## Function `lantern_header_checks`
+
+The checks of a block header that the sidecar topics share.
+
+### Signature
+
+```
+lantern_header_checks(header) -> (status, result, parent)
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `header` | input | `SignedBeaconBlockHeader` |
+
+### Returns
+
+- `LANTERN_OK`: the second value is `LANTERN_VALID`, `LANTERN_GOSSIP_IGNORE` or `LANTERN_GOSSIP_REJECT`, the third the parent node.
+- `LANTERN_BUFFER_TOO_SMALL`: the scratch is short.
+
+### Function does
+
+- Makes the checks of the sidecar topics from lantern_is_future_slot to the finalized ancestor, in spec order.
+
+### Function never
+
+- Makes an OS call.
+- Keeps a pointer after it returns.
+
+### Limits
+
+- Stack of its own: 48 bytes on x86-64 (return address included), 32 bytes on ARM64, 32 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_header_checks`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- Registers it reads, on ARM64, x86-64, RISC-V: seen in x19, rbx, s1; the store in x20, rbp, s2; current_time_ms in x22, r13, s4; the head state in x23, r14, s5; the scratch in x25, r15, s7. It changes none of them.
+- It returns three values: x0, x1, x2 on ARM64; rax, rdx, rcx on x86-64; a0, a1, a2 on RISC-V.
+- Argument order: `header`.
+
+## Function `lantern_is_current_or_previous_epoch`
+
+is_current_or_previous_epoch of the p2p spec.
+
+### Signature
+
+```
+lantern_is_current_or_previous_epoch(store, epoch, current_time_ms) -> flag
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `store` | input | [`Store`](fork-choice.md#type-store) |
+| `epoch` | input | u64 in a register |
+| `current_time_ms` | input | u64 in a register |
+
+### Function does
+
+- Returns 1 when the current time is within epoch `epoch` or epoch `epoch` + 1, with the `MAXIMUM_GOSSIP_CLOCK_DISPARITY` allowance, as the spec's two is_within_epoch calls give, else 0.
+- Reads the config values of the store's copy.
+
+### Function never
+
+- Writes memory but its own stack.
+- Makes an OS call.
+- Keeps a pointer after it returns.
+
+### Limits
+
+- Stack of its own: 96 bytes on x86-64 (return address included), 96 bytes on ARM64, 96 bytes on RISC-V.
+
+### ABI
+
+- Role: L1.
+- Symbol: `lantern_is_current_or_previous_epoch`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6); each argument is a pointer: a Uint64 argument points at a u64, and a Boolean output is a u64 of 0 or 1.
+- Argument order: `store`, `epoch`, `current_time_ms`.
+
+## Function `lantern_is_future_epoch`
+
+is_future_epoch of the p2p spec.
+
+### Signature
+
+```
+lantern_is_future_epoch(store, epoch, current_time_ms) -> flag
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `store` | input | [`Store`](fork-choice.md#type-store) |
+| `epoch` | input | u64 in a register |
+| `current_time_ms` | input | u64 in a register |
+
+### Function does
+
+- Returns 1 when the epoch of the slot at `current_time_ms` + `MAXIMUM_GOSSIP_CLOCK_DISPARITY` is below `epoch`, else 0.
+- Returns 1 when current_time_ms + `MAXIMUM_GOSSIP_CLOCK_DISPARITY` is before the genesis time, where the spec's subtraction raises.
+- Reads the config values of the store's copy.
+
+### Function never
+
+- Calls another function.
+- Writes memory.
+- Makes an OS call.
+- Keeps a pointer after it returns.
+
+### Limits
+
+- Stack of its own: 8 bytes on x86-64 (return address included), 0 bytes on ARM64, 0 bytes on RISC-V.
+
+### ABI
+
+- Role: L1.
+- Symbol: `lantern_is_future_epoch`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6); each argument is a pointer: a Uint64 argument points at a u64, and a Boolean output is a u64 of 0 or 1.
+- Registers it changes, on ARM64 and x86-64: x0, x3, x4, x16; rax, rcx, rdx.
+- Argument order: `store`, `epoch`, `current_time_ms`.
+
+## Function `lantern_is_future_slot`
+
+is_future_slot of the p2p spec.
+
+### Signature
+
+```
+lantern_is_future_slot(store, slot, current_time_ms) -> flag
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `store` | input | [`Store`](fork-choice.md#type-store) |
+| `slot` | input | u64 in a register |
+| `current_time_ms` | input | u64 in a register |
+
+### Function does
+
+- Returns 1 when `current_time_ms` + `MAXIMUM_GOSSIP_CLOCK_DISPARITY` is before the start of `slot`, else 0.
+- A slot whose start time does not fit in a u64 is in the future.
+- Reads the config values of the store's copy.
+
+### Function never
+
+- Calls another function.
+- Writes memory.
+- Makes an OS call.
+- Keeps a pointer after it returns.
+
+### Limits
+
+- Stack of its own: 8 bytes on x86-64 (return address included), 0 bytes on ARM64, 0 bytes on RISC-V.
+
+### ABI
+
+- Role: L1.
+- Symbol: `lantern_is_future_slot`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6); each argument is a pointer: a Uint64 argument points at a u64, and a Boolean output is a u64 of 0 or 1.
+- Registers it changes, on ARM64 and x86-64: x0, x3, x4, x16, x17; rax, rcx, r8.
+- Argument order: `store`, `slot`, `current_time_ms`.
+
+## Function `lantern_is_within_slot_range`
+
+is_within_slot_range of the p2p spec.
+
+### Signature
+
+```
+lantern_is_within_slot_range(store, slot, slot_range, current_time_ms) -> flag
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `store` | input | [`Store`](fork-choice.md#type-store) |
+| `slot` | input | u64 in a register |
+| `slot_range` | input | u64 in a register |
+| `current_time_ms` | input | u64 in a register |
+
+### Function does
+
+- Returns 1 when the current time is within the inclusive slot range [`slot`, `slot` + `slot_range`], with the `MAXIMUM_GOSSIP_CLOCK_DISPARITY` allowance on both ends, else 0.
+- Reads the config values of the store's copy.
+
+### Function never
+
+- Calls another function.
+- Writes memory.
+- Makes an OS call.
+- Keeps a pointer after it returns.
+
+### Limits
+
+- Stack of its own: 8 bytes on x86-64 (return address included), 0 bytes on ARM64, 0 bytes on RISC-V.
+
+### ABI
+
+- Role: L1.
+- Symbol: `lantern_is_within_slot_range`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6); each argument is a pointer: a Uint64 argument points at a u64, and a Boolean output is a u64 of 0 or 1.
+- Registers it changes, on ARM64 and x86-64: x0, x4 to x6, x16, x17; rax, r8, r9.
+- Argument order: `store`, `slot`, `slot_range`, `current_time_ms`.
+
+## Function `lantern_seen_add_bits`
+
+Appends a SeenBits entry to seen.
+
+### Signature
+
+```
+lantern_seen_add_bits(seen, kind, root, a, b, bits, length)
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `seen` | state | [`Seen`](#type-seen) |
+| `kind` | input | u64 in a register: the key's kind |
+| `root` | input | Bytes32 |
+| `a` | input | u64 in a register |
+| `b` | input | u64 in a register |
+| `bits` | input | `length` bits |
+| `length` | input | u64 in a register |
+
+### Caller must
+
+- `seen` has room for one more SeenBits entry.
+
+### Function does
+
+- Appends the SeenBits entry of the key (`kind`, `root`, `a`, `b`) with the bits.
+
+### Function never
+
+- Makes an OS call.
+- Keeps a pointer after it returns.
+
+### Limits
+
+- Stack of its own: 48 bytes on x86-64 (return address included), 48 bytes on ARM64, 48 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_seen_add_bits`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- On x86-64, `bits` is in r9 and `length` in rax.
+- Argument order: `seen`, `kind`, `root`, `a`, `b`, `bits`, `length`.
+
+## Function `lantern_seen_add_key`
+
+Appends a SeenKey entry to seen.
+
+### Signature
+
+```
+lantern_seen_add_key(seen, kind, a, b, c)
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `seen` | state | [`Seen`](#type-seen) |
+| `kind` | input | u64 in a register |
+| `a` | input | u64 in a register |
+| `b` | input | u64 in a register |
+| `c` | input | u64 in a register |
+
+### Caller must
+
+- `seen` has room for one more SeenKey entry.
+
+### Function does
+
+- Appends the SeenKey (`kind`, `a`, `b`, `c`).
+
+### Function never
+
+- Calls another function.
+- Makes an OS call.
+- Keeps a pointer after it returns.
+
+### Limits
+
+- Stack of its own: 8 bytes on x86-64 (return address included), 0 bytes on ARM64, 0 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_seen_add_key`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- Registers it changes, on ARM64 and x86-64: x5, x6; r9, r10.
+- Argument order: `seen`, `kind`, `a`, `b`, `c`.
+
+## Function `lantern_seen_bits_room`
+
+The free SeenBits entries of seen.
+
+### Signature
+
+```
+lantern_seen_bits_room(seen) -> entries
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `seen` | input | [`Seen`](#type-seen) |
+
+### Function does
+
+- Returns the free SeenBits entries.
+
+### Function never
+
+- Calls another function.
+- Writes memory.
+- Makes an OS call.
+- Keeps a pointer after it returns.
+
+### Limits
+
+- Stack of its own: 8 bytes on x86-64 (return address included), 0 bytes on ARM64, 0 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_seen_bits_room`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- Registers it changes, on ARM64 and x86-64: x0 to x3; rax, rcx, rdx.
+- Argument order: `seen`.
+
+## Function `lantern_seen_find_block`
+
+The SeenBlock of a root in seen.
+
+### Signature
+
+```
+lantern_seen_find_block(seen, root) -> entry
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `seen` | input | [`Seen`](#type-seen) |
+| `root` | input | Bytes32 |
+
+### Function does
+
+- Returns the [`SeenBlock`](#type-seenblock) of `root`, or 0.
+
+### Function never
+
+- Calls another function.
+- Writes memory.
+- Makes an OS call.
+- Keeps a pointer after it returns.
+
+### Limits
+
+- Stack of its own: 8 bytes on x86-64 (return address included), 0 bytes on ARM64, 0 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_seen_find_block`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- Registers it changes, on ARM64 and x86-64: x0, x2 to x9; rax, rcx, rdx, r11, xmm0 to xmm2.
+- Argument order: `seen`, `root`.
+
+## Function `lantern_seen_find_header`
+
+The SeenHeader of a block root in seen.
+
+### Signature
+
+```
+lantern_seen_find_header(seen, root) -> entry
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `seen` | input | [`Seen`](#type-seen) |
+| `root` | input | Bytes32: the block root |
+
+### Function does
+
+- Returns the SeenHeader of `root`, or 0.
+
+### Function never
+
+- Calls another function.
+- Writes memory.
+- Makes an OS call.
+- Keeps a pointer after it returns.
+
+### Limits
+
+- Stack of its own: 8 bytes on x86-64 (return address included), 0 bytes on ARM64, 0 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_seen_find_header`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- Registers it changes, on ARM64 and x86-64: x0, x2 to x10; rax, rcx, rdx, r11, xmm0 to xmm2.
+- Argument order: `seen`, `root`.
+
+## Function `lantern_seen_find_key`
+
+Whether seen holds a SeenKey.
+
+### Signature
+
+```
+lantern_seen_find_key(seen, kind, a, b, c) -> flag
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `seen` | input | [`Seen`](#type-seen) |
+| `kind` | input | u64 in a register |
+| `a` | input | u64 in a register |
+| `b` | input | u64 in a register |
+| `c` | input | u64 in a register |
+
+### Function does
+
+- Returns 1 when `seen` holds the SeenKey (`kind`, `a`, `b`, `c`), else 0.
+
+### Function never
+
+- Calls another function.
+- Writes memory.
+- Makes an OS call.
+- Keeps a pointer after it returns.
+
+### Limits
+
+- Stack of its own: 8 bytes on x86-64 (return address included), 0 bytes on ARM64, 0 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_seen_find_key`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- Registers it changes, on ARM64 and x86-64: x0, x5 to x8; rax, r9 to r11.
+- Argument order: `seen`, `kind`, `a`, `b`, `c`.
+
+## Function `lantern_seen_key_room`
+
+The free SeenKey entries of seen.
+
+### Signature
+
+```
+lantern_seen_key_room(seen) -> entries
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `seen` | input | [`Seen`](#type-seen) |
+
+### Function does
+
+- Returns the free SeenKey entries.
+
+### Function never
+
+- Calls another function.
+- Writes memory.
+- Makes an OS call.
+- Keeps a pointer after it returns.
+
+### Limits
+
+- Stack of its own: 8 bytes on x86-64 (return address included), 0 bytes on ARM64, 0 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_seen_key_room`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- Registers it changes, on ARM64: x0 to x2.
+- Argument order: `seen`.
+
+## Function `lantern_seen_superset`
+
+is_non_strict_superset of the SeenBits of a key, for some bits.
+
+### Signature
+
+```
+lantern_seen_superset(seen, kind, root, a, b, bits, length) -> flag
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `seen` | input | [`Seen`](#type-seen) |
+| `kind` | input | u64 in a register |
+| `root` | input | Bytes32 |
+| `a` | input | u64 in a register |
+| `b` | input | u64 in a register |
+| `bits` | input | `length` bits |
+| `length` | input | u64 in a register |
+
+### Function does
+
+- Returns 1 when one of the key's SeenBits entries has every bit of `bits` set, else 0.
+- Skips an entry whose bits have another length, where the spec's `zip(strict=True)` raises.
+
+### Function never
+
+- Calls another function.
+- Makes an OS call.
+- Keeps a pointer after it returns.
+
+### Limits
+
+- Stack of its own: 48 bytes on x86-64 (return address included), 0 bytes on ARM64, 0 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_seen_superset`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- On x86-64, `bits` is in r9 and `length` in rax.
+- Registers it changes, on ARM64 and x86-64: x0, x7 to x13; rax, rdi, r10, r11, xmm0 to xmm2.
+- Argument order: `seen`, `kind`, `root`, `a`, `b`, `bits`, `length`.
+
+## Function `lantern_verify_signed`
+
+lantern_verify_with_domain with get_domain of a state.
+
+### Signature
+
+```
+lantern_verify_signed(state, domain_type, epoch, type, object, pubkey, signature, scratch) -> (status, valid)
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `state` | input | `BeaconState` |
+| `domain_type` | input | u32 in a register |
+| `epoch` | input | u64 in a register |
+| `type` | input | the asm-ssz descriptor of `object` |
+| `object` | input | the signed object |
+| `pubkey` | input | 48 bytes |
+| `signature` | input | 96 bytes |
+| `scratch` | scratch | [`Scratch`](helpers.md#type-scratch) |
+
+### Returns
+
+- The statuses of lantern_get_domain and lantern_verify_with_domain; the second value is 1 when the signature holds.
+
+### Caller must
+
+- `state` is a valid `BeaconState` value (include/types.inc) with every PartRef in range.
+
+### Function does
+
+- Computes get_domain(state, domain_type, epoch), then calls lantern_verify_with_domain.
+
+### Function never
+
+- Makes an OS call.
+- Keeps a pointer after it returns.
+
+### Limits
+
+- Stack of its own: 96 bytes on x86-64 (return address included), 112 bytes on ARM64, 112 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_verify_signed`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- On x86-64, `signature` and `scratch` are the two stack arguments.
+- It returns two values: x0, rax or a0, then x1, rdx or a1.
+- Argument order: `state`, `domain_type`, `epoch`, `type`, `object`, `pubkey`, `signature`, `scratch`.
+
+## Function `lantern_verify_with_domain`
+
+bls.Verify of a public key, the signing root of an object under a domain, and a signature.
+
+### Signature
+
+```
+lantern_verify_with_domain(domain, type, object, pubkey, signature, scratch) -> (status, valid)
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `domain` | input | Bytes32 |
+| `type` | input | the asm-ssz descriptor of `object` |
+| `object` | input | the signed object |
+| `pubkey` | input | 48 bytes |
+| `signature` | input | 96 bytes |
+| `scratch` | scratch | [`Scratch`](helpers.md#type-scratch) |
+
+### Returns
+
+- The statuses of lantern_compute_signing_root and lantern_verify_root_signature; the second value is 1 when the signature holds.
+
+### Function does
+
+- Computes compute_signing_root(object, domain), then checks the signature with lantern_verify_root_signature.
+
+### Function never
+
+- Makes an OS call.
+- Keeps a pointer after it returns.
+
+### Limits
+
+- Stack of its own: 96 bytes on x86-64 (return address included), 96 bytes on ARM64, 96 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_verify_with_domain`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- It returns two values: x0, rax or a0, then x1, rdx or a1.
+- Argument order: `domain`, `type`, `object`, `pubkey`, `signature`, `scratch`.
 
 ## Type `NodeID`
 
@@ -883,28 +2888,31 @@ A Uint256: 32 bytes, little endian.
 
 ## Type `GossipTopic`
 
+A gossip topic: its fork digest, its name and its subnet.
+
+### Layout
+
 | Offset | Field | Type | Meaning |
 |---|---|---|---|
 | 0 | `fork_digest` | ForkDigest, in a u64 | The 4 bytes, then 4 zero bytes |
 | 8 | `name` | u64 | `GOSSIP_*` of include/lantern.inc |
 | 16 | `subnet_id` | u64 | The subnet of a subnet topic, else 0 |
 
-| Name | Topic | Subnet |
-|---|---|---|
-| `GOSSIP_BEACON_BLOCK` (1) | `beacon_block` | no |
-| `GOSSIP_BEACON_AGGREGATE_AND_PROOF` (2) | `beacon_aggregate_and_proof` | no |
-| `GOSSIP_BEACON_ATTESTATION` (3) | `beacon_attestation_{subnet_id}` | yes |
-| `GOSSIP_VOLUNTARY_EXIT` (4) | `voluntary_exit` | no |
-| `GOSSIP_PROPOSER_SLASHING` (5) | `proposer_slashing` | no |
-| `GOSSIP_ATTESTER_SLASHING` (6) | `attester_slashing` | no |
-| `GOSSIP_SYNC_COMMITTEE_CONTRIBUTION_AND_PROOF` (7) | `sync_committee_contribution_and_proof` | no |
-| `GOSSIP_SYNC_COMMITTEE` (8) | `sync_committee_{subnet_id}` | yes |
-| `GOSSIP_BLS_TO_EXECUTION_CHANGE` (9) | `bls_to_execution_change` | no |
-| `GOSSIP_BLOB_SIDECAR` (10) | `blob_sidecar_{subnet_id}` | yes |
-| `GOSSIP_DATA_COLUMN_SIDECAR` (11) | `data_column_sidecar_{subnet_id}` | yes |
-| `GOSSIP_LIGHT_CLIENT_FINALITY_UPDATE` (12) | `light_client_finality_update` | no |
-| `GOSSIP_LIGHT_CLIENT_OPTIMISTIC_UPDATE` (13) | `light_client_optimistic_update` | no |
+### Rules
 
+- `GOSSIP_BEACON_BLOCK` (1): the topic `beacon_block`.
+- `GOSSIP_BEACON_AGGREGATE_AND_PROOF` (2): the topic `beacon_aggregate_and_proof`.
+- `GOSSIP_BEACON_ATTESTATION` (3): the topic `beacon_attestation_{subnet_id}`, with a subnet.
+- `GOSSIP_VOLUNTARY_EXIT` (4): the topic `voluntary_exit`.
+- `GOSSIP_PROPOSER_SLASHING` (5): the topic `proposer_slashing`.
+- `GOSSIP_ATTESTER_SLASHING` (6): the topic `attester_slashing`.
+- `GOSSIP_SYNC_COMMITTEE_CONTRIBUTION_AND_PROOF` (7): the topic `sync_committee_contribution_and_proof`.
+- `GOSSIP_SYNC_COMMITTEE` (8): the topic `sync_committee_{subnet_id}`, with a subnet.
+- `GOSSIP_BLS_TO_EXECUTION_CHANGE` (9): the topic `bls_to_execution_change`.
+- `GOSSIP_BLOB_SIDECAR` (10): the topic `blob_sidecar_{subnet_id}`, with a subnet.
+- `GOSSIP_DATA_COLUMN_SIDECAR` (11): the topic `data_column_sidecar_{subnet_id}`, with a subnet.
+- `GOSSIP_LIGHT_CLIENT_FINALITY_UPDATE` (12): the topic `light_client_finality_update`.
+- `GOSSIP_LIGHT_CLIENT_OPTIMISTIC_UPDATE` (13): the topic `light_client_optimistic_update`.
 - `GossipTopic__mem` (24) bytes.
 
 ## Type `Seen`
@@ -926,8 +2934,14 @@ The spec's `Seen` of every fork, and the blocks of `store.blocks` that have no p
 
 - `SEEN_FIXED` (80) bytes of fixed fields; the parts follow in that order, and `headers` runs to the end of the buffer.
 - The capacity of a part is the bytes up to the next part's offset over its entry size.
+- `store.blocks` of the spec is the store's nodes and the `blocks` of seen: a root in seen names a block that is known, but failed its state transition or waits to be imported, so it has no post-state. A root in `store.block_states` is a node of the store.
+- `block_payload_statuses` of the spec is `BlockNode.payload_status` for a node and `SeenBlock.payload_status` for a block of seen.
 
 ## Type `SeenRoom`
+
+The capacities of the parts of a `Seen`.
+
+### Layout
 
 | Offset | Field | Type | Meaning |
 |---|---|---|---|
@@ -938,6 +2952,10 @@ The spec's `Seen` of every fork, and the blocks of `store.blocks` that have no p
 
 ## Type `SeenKey`
 
+One entry of a set of `Seen` keyed by numbers.
+
+### Layout
+
 | Offset | Field | Type | Meaning |
 |---|---|---|---|
 | 0 | `kind` | u64 | `SEEN_*` of include/lantern.inc: the spec's set |
@@ -945,23 +2963,26 @@ The spec's `Seen` of every fork, and the blocks of `store.blocks` that have no p
 | 16 | `b` | u64 | Second, or 0 |
 | 24 | `c` | u64 | Third, or 0 |
 
-| Kind | Set | (a, b, c) |
-|---|---|---|
-| `SEEN_PROPOSER_SLOT` (1) | `proposer_slots` | (slot, proposer index) |
-| `SEEN_AGGREGATOR_EPOCH` (2) | `aggregator_epochs` | (epoch, aggregator index) |
-| `SEEN_VOLUNTARY_EXIT` (3) | `voluntary_exit_indices` | (validator index) |
-| `SEEN_PROPOSER_SLASHING` (4) | `proposer_slashing_indices` | (validator index) |
-| `SEEN_ATTESTER_SLASHING` (5) | `attester_slashing_indices` | (validator index) |
-| `SEEN_ATTESTATION` (6) | `attestation_validator_epochs` | (epoch, validator index) |
-| `SEEN_SYNC_CONTRIBUTION` (7) | `sync_contribution_aggregator_slots` | (slot, aggregator index, subcommittee index) |
-| `SEEN_SYNC_MESSAGE` (8) | `sync_message_validator_slots` | (slot, validator index, subnet ID) |
-| `SEEN_BLS_CHANGE` (9) | `bls_to_execution_change_indices` | (validator index) |
-| `SEEN_DATA_COLUMN` (10) | `data_column_sidecar_tuples` | (slot, proposer index, column index) |
-| `SEEN_BLOB_SIDECAR` (11) | `blob_sidecar_tuples` | (slot, proposer index, blob index) |
+### Rules
 
+- `SEEN_PROPOSER_SLOT` (1): the spec's `proposer_slots`, keyed by (slot, proposer index).
+- `SEEN_AGGREGATOR_EPOCH` (2): the spec's `aggregator_epochs`, keyed by (epoch, aggregator index).
+- `SEEN_VOLUNTARY_EXIT` (3): the spec's `voluntary_exit_indices`, keyed by (validator index).
+- `SEEN_PROPOSER_SLASHING` (4): the spec's `proposer_slashing_indices`, keyed by (validator index).
+- `SEEN_ATTESTER_SLASHING` (5): the spec's `attester_slashing_indices`, keyed by (validator index).
+- `SEEN_ATTESTATION` (6): the spec's `attestation_validator_epochs`, keyed by (epoch, validator index).
+- `SEEN_SYNC_CONTRIBUTION` (7): the spec's `sync_contribution_aggregator_slots`, keyed by (slot, aggregator index, subcommittee index).
+- `SEEN_SYNC_MESSAGE` (8): the spec's `sync_message_validator_slots`, keyed by (slot, validator index, subnet ID).
+- `SEEN_BLS_CHANGE` (9): the spec's `bls_to_execution_change_indices`, keyed by (validator index).
+- `SEEN_DATA_COLUMN` (10): the spec's `data_column_sidecar_tuples`, keyed by (slot, proposer index, column index).
+- `SEEN_BLOB_SIDECAR` (11): the spec's `blob_sidecar_tuples`, keyed by (slot, proposer index, blob index).
 - `SeenKey__mem` (32) bytes.
 
 ## Type `SeenBits`
+
+The bits of an aggregate or a sync contribution that `Seen` keeps.
+
+### Layout
 
 | Offset | Field | Type | Meaning |
 |---|---|---|---|
@@ -972,18 +2993,30 @@ The spec's `Seen` of every fork, and the blocks of `store.blocks` that have no p
 | 56 | `length` | u64 | Number of bits |
 | 64 | `bits` | 256 bytes | The bits, in SSZ bit order |
 
+### Rules
+
 - `SeenBits__mem` (320) bytes: room for `MAX_VALIDATORS_PER_COMMITTEE` bits, the most a valid aggregate holds.
 
 ## Type `SeenBlock`
 
+A block of `store.blocks` with no post-state.
+
+### Layout
+
 | Offset | Field | Type | Meaning |
 |---|---|---|---|
-| 0 | `root` | Root | |
+| 0 | `root` | Root | hash_tree_root of the block |
 | 32 | `payload_status` | u64 | `PAYLOAD_STATUS_*` |
+
+### Rules
 
 - `SeenBlock__mem` (40) bytes.
 
 ## Type `SeenHeader`
+
+A partial data column header that `Seen` keeps.
+
+### Layout
 
 | Offset | Field | Type | Meaning |
 |---|---|---|---|
