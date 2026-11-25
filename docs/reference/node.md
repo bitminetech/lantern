@@ -998,7 +998,7 @@ lantern_node_import(store, node, data, state, options, scratch, result) -> statu
 | `node` | input | `Node` |
 | `data` | input | ByteList: the block's SSZ bytes |
 | `state` | state | `BeaconState`: a copy of the parent's post-state |
-| `options` | state | `BlockOptions` |
+| `options` | input | The first 40 bytes of a [`BlockOptions`](fork-choice.md#type-blockoptions): `payload_status`, `data_available`, `slots_done` |
 | `scratch` | scratch | `Scratch` |
 | `result` | output | `Result` |
 
@@ -1014,7 +1014,8 @@ lantern_node_import(store, node, data, state, options, scratch, result) -> statu
 ### Function does
 
 - Decodes into the end of `scratch` and passes the rest to lantern_on_block; the scratch `size` is restored on return.
-- Bellatrix: sets `pow_block` and `pow_parent` of `options` from the node's `PowBlock` entries.
+- Passes lantern_on_block a `BlockOptions` of its own: the 40 bytes of `options`, then the PowBlocks.
+- Bellatrix: `has_pow_block`, `has_pow_parent` and the PowBlocks from the node's `PowBlock` entries; other forks: `has_pow_block` and `has_pow_parent` 0.
 
 ### Function never
 
@@ -1022,7 +1023,7 @@ lantern_node_import(store, node, data, state, options, scratch, result) -> statu
 
 ### Limits
 
-- Stack of its own: 96 bytes on x86-64 (return address included), 96 bytes on ARM64, 96 bytes on RISC-V.
+- Stack of its own: 336 bytes on x86-64 (return address included), 336 bytes on ARM64, 336 bytes on RISC-V.
 
 ### ABI
 

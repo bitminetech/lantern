@@ -91,10 +91,11 @@ END_FUNCTION lantern_node_pow_block
 
 /*
  * (store, node, data, state, options, scratch, result): on_block of the SignedBeaconBlock in
- * data. Bellatrix: the pow_block and pow_parent of options from the PowBlocks of the node.
+ * data, with a BlockOptions of its own at L: the first 40 bytes of options, then the PowBlocks.
+ * Bellatrix: pow_block and pow_parent from the PowBlocks of the node.
  */
 SPEC_FUNCTION node_import
-    ENTER 0
+    ENTER 240
     mov     x19, x0
     mov     x25, x1
     mov     x20, x2
@@ -104,6 +105,13 @@ SPEC_FUNCTION node_import
     mov     x24, x6
     ldr     x28, [x23]                      /* the scratch size, restored on return */
     str     xzr, [x24]
+    add     x0, sp, #L                      /* a BlockOptions of its own: options, then the PowBlocks */
+    mov     x1, x22
+    mov     x2, #BlockOptions_pow_block
+    bl      lantern_copy
+    str     xzr, [sp, #(L + BlockOptions_has_pow_block)]
+    str     xzr, [sp, #(L + BlockOptions_has_pow_parent)]
+    add     x22, sp, #L
     ADDRESS x0, lantern_type_SignedBeaconBlock
     mov     x1, x20
     mov     x2, x23
@@ -119,13 +127,25 @@ SPEC_FUNCTION node_import
     mov     x0, x25
     add     x1, x9, #ExecutionPayload_parent_hash
     bl      lantern_node_pow_block
-    str     x0, [x22, #BlockOptions_pow_block]
-    mov     x1, x0
-    cbz     x1, 1f
+    cbz     x0, 1f
+    mov     x26, x0
+    mov     x9, #1
+    str     x9, [x22, #BlockOptions_has_pow_block]
+    add     x0, x22, #BlockOptions_pow_block
+    mov     x1, x26
+    mov     x2, #POW_BLOCK_BYTES
+    bl      lantern_copy
     mov     x0, x25
-    add     x1, x1, #PowBlock_parent_hash
+    add     x1, x26, #PowBlock_parent_hash
     bl      lantern_node_pow_block
-1:  str     x0, [x22, #BlockOptions_pow_parent]
+    cbz     x0, 1f
+    mov     x1, x0
+    mov     x9, #1
+    str     x9, [x22, #BlockOptions_has_pow_parent]
+    add     x0, x22, #BlockOptions_pow_parent
+    mov     x2, #POW_BLOCK_BYTES
+    bl      lantern_copy
+1:
 .endif
     mov     x0, x19
     mov     x1, x20
@@ -141,7 +161,7 @@ SPEC_FUNCTION node_import
     str     x9, [x24]
     mov     x0, #LANTERN_OK
 99: str     x28, [x23]
-    LEAVE 0
+    LEAVE 240
 SPEC_END node_import
 
 /*

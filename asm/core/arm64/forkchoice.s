@@ -1647,8 +1647,14 @@ SPEC_FUNCTION on_block
     ldr     x9, [sp, #(L + 296)]            /* if is_merge_transition_block(pre_state, block.body): validate_merge_block(block) */
     cbz     x9, 1f
     mov     x0, x25
-    ldr     x1, [x22, #BlockOptions_pow_block]
-    ldr     x2, [x22, #BlockOptions_pow_parent]
+    ldr     x9, [x22, #BlockOptions_has_pow_block]  /* the PowBlocks of options, 0 for None */
+    add     x1, x22, #BlockOptions_pow_block
+    cmp     x9, #0
+    csel    x1, x1, xzr, ne
+    ldr     x9, [x22, #BlockOptions_has_pow_parent]
+    add     x2, x22, #BlockOptions_pow_parent
+    cmp     x9, #0
+    csel    x2, x2, xzr, ne
     add     x3, x19, #Store_config
     bl      lantern_validate_merge_block
     cbnz    x0, 6f

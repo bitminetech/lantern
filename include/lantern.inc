@@ -494,10 +494,12 @@
 /* BlockOptions */
 .set BlockOptions_payload_status, 0   /* PAYLOAD_STATUS_*: the execution engine's answer for the payload */
 .set BlockOptions_data_available, 8
-.set BlockOptions_pow_block, 16       /* bellatrix: get_pow_block(payload.parent_hash), a PowBlock, or 0 for None */
-.set BlockOptions_pow_parent, 24      /* bellatrix: get_pow_block(pow_block.parent_hash), or 0 for None */
+.set BlockOptions_has_pow_block, 16   /* bellatrix: 1 when get_pow_block(payload.parent_hash) is a PowBlock, 0 for None */
+.set BlockOptions_has_pow_parent, 24  /* bellatrix: 1 when get_pow_block(pow_block.parent_hash) is a PowBlock, 0 for None */
 .set BlockOptions_slots_done, 32      /* 1: the state may be at the block's slot already, after an upgrade */
-.set BlockOptions__size, 40
+.set BlockOptions_pow_block, 40       /* the PowBlock of has_pow_block: POW_BLOCK_BYTES */
+.set BlockOptions_pow_parent, 136     /* the PowBlock of has_pow_parent: POW_BLOCK_BYTES */
+.set BlockOptions__size, 232
 
 /* ------------------------------------------------------------ Gossip (docs/reference/networking.md) */
 

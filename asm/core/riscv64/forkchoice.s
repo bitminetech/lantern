@@ -1683,8 +1683,16 @@ SPEC_FUNCTION on_block
     ld      t0, (L + 296)(sp)               # if is_merge_transition_block(pre_state, block.body): validate_merge_block(block)
     beqz    t0, 1f
     mv      a0, s7
-    ld      a1, BlockOptions_pow_block(s4)
-    ld      a2, BlockOptions_pow_parent(s4)
+    ld      t0, BlockOptions_has_pow_block(s4)  # the PowBlocks of options, 0 for None
+    snez    t0, t0
+    neg     t0, t0
+    addi    a1, s4, BlockOptions_pow_block
+    and     a1, a1, t0
+    ld      t0, BlockOptions_has_pow_parent(s4)
+    snez    t0, t0
+    neg     t0, t0
+    addi    a2, s4, BlockOptions_pow_parent
+    and     a2, a2, t0
     addi    a3, s1, Store_config
     call    lantern_validate_merge_block
     bnez    a0, 6f

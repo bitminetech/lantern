@@ -2373,14 +2373,15 @@ static void fc_block(fc_node *n, tv parts, tv step, const char **why) {
 
     /* BlockOptions: the engine's answer for the payload (optimistic sync tests), VALID when the case gives none. */
     const uint8_t *body0 = nested(block, field_offset("BeaconBlock", 4));
-    uint64_t options[5] = {PAYLOAD_VALID, 1, 0, 0, 0}; /* BlockOptions */
+    uint64_t options[29] = {PAYLOAD_VALID, 1, 0, 0, 0}; /* BlockOptions: 40 bytes, then two PowBlocks of 96 */
 #if FORK >= FORK_BELLATRIX
     const uint8_t *payload = nested(body0, field_offset("BeaconBlockBody", 9));
     const uint8_t *hash = payload + field_offset("ExecutionPayload", 12);
     /* get_pow_block: the PowBlocks of the case's pow_block steps, by hash. */
     const uint8_t *pow = find_pow(n, payload + field_offset("ExecutionPayload", 0));
-    options[2] = (uint64_t)(uintptr_t)pow;
-    options[3] = pow ? (uint64_t)(uintptr_t)find_pow(n, pow + 32) : 0;
+    const uint8_t *pow_parent = pow ? find_pow(n, pow + 32) : NULL;
+    if (pow) options[2] = 1, memcpy((uint8_t *)options + 40, pow, 96);
+    if (pow_parent) options[3] = 1, memcpy((uint8_t *)options + 136, pow_parent, 96);
 #else
     static const uint8_t no_hash[32];
     const uint8_t *hash = no_hash;

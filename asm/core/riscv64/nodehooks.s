@@ -83,12 +83,13 @@ END_FUNCTION lantern_node_pow_block
 
 /*
  * (store, node, data, state, options, scratch, result): on_block of the SignedBeaconBlock in
- * data. Bellatrix: the pow_block and pow_parent of options from the PowBlocks of the node.
+ * data, with a BlockOptions of its own at L: the first 40 bytes of options, then the PowBlocks.
+ * Bellatrix: pow_block and pow_parent from the PowBlocks of the node.
  * s1 store, s2 data then the block, s3 state, s4 options, s5 scratch, s6 result, s7 node,
- * s10 the scratch size, restored on return.
+ * s8 the PowBlock, s10 the scratch size, restored on return.
  */
 SPEC_FUNCTION node_import
-    ENTER 0
+    ENTER 240
     mv      s1, a0
     mv      s7, a1
     mv      s2, a2
@@ -98,6 +99,13 @@ SPEC_FUNCTION node_import
     mv      s6, a6
     ld      s10, 0(s5)
     sd      zero, 0(s6)
+    mv      a0, sp                          # a BlockOptions of its own: options, then the PowBlocks
+    mv      a1, s4
+    li      a2, BlockOptions_pow_block
+    call    lantern_copy
+    sd      zero, BlockOptions_has_pow_block(sp)
+    sd      zero, BlockOptions_has_pow_parent(sp)
+    mv      s4, sp
     ADDRESS a0, lantern_type_SignedBeaconBlock
     mv      a1, s2
     mv      a2, s5
@@ -113,12 +121,25 @@ SPEC_FUNCTION node_import
     mv      a0, s7
     ADDQ    a1, t0, ExecutionPayload_parent_hash
     call    lantern_node_pow_block
-    sd      a0, BlockOptions_pow_block(s4)
     beqz    a0, 1f
-    addi    a1, a0, PowBlock_parent_hash
+    mv      s8, a0
+    li      t0, 1
+    sd      t0, BlockOptions_has_pow_block(s4)
+    addi    a0, s4, BlockOptions_pow_block
+    mv      a1, s8
+    li      a2, POW_BLOCK_BYTES
+    call    lantern_copy
+    addi    a1, s8, PowBlock_parent_hash
     mv      a0, s7
     call    lantern_node_pow_block
-1:  sd      a0, BlockOptions_pow_parent(s4)
+    beqz    a0, 1f
+    mv      a1, a0
+    li      t0, 1
+    sd      t0, BlockOptions_has_pow_parent(s4)
+    addi    a0, s4, BlockOptions_pow_parent
+    li      a2, POW_BLOCK_BYTES
+    call    lantern_copy
+1:
 .endif
     mv      a0, s1
     mv      a1, s2
@@ -134,7 +155,7 @@ SPEC_FUNCTION node_import
     sd      t0, 0(s6)
     li      a0, LANTERN_OK
 99: sd      s10, 0(s5)
-    LEAVE 0
+    LEAVE 240
 SPEC_END node_import
 
 /*

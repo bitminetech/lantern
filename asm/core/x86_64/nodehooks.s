@@ -87,22 +87,30 @@ END_FUNCTION lantern_node_pow_block
 
 /*
  * (store, node, data, state, options, scratch, result): on_block of the SignedBeaconBlock in
- * data. Bellatrix: the pow_block and pow_parent of options from the PowBlocks of the node.
+ * data, with a BlockOptions of its own at L: the first 40 bytes of options, then the PowBlocks.
+ * Bellatrix: pow_block and pow_parent from the PowBlocks of the node.
  * rbx store, rbp data then the block, r12 state, r13 options, r14 scratch, r15 result, S7 node,
- * S8 the scratch size, restored on return.
+ * S8 the scratch size, restored on return, S9 the PowBlock.
  */
 SPEC_FUNCTION node_import
-    ENTER 0
+    ENTER 240
     mov     %rdi, %rbx
     mov     %rsi, S7(%rsp)
     mov     %rdx, %rbp
     mov     %rcx, %r12
     mov     %r8, %r13
     mov     %r9, %r14
-    mov     (0 + 96)(%rsp), %r15            # the seventh argument
+    mov     (240 + 96)(%rsp), %r15          # the seventh argument
     mov     (%r14), %rax
     mov     %rax, S8(%rsp)
     movq    $0, (%r15)
+    lea     L(%rsp), %rdi                   # a BlockOptions of its own: options, then the PowBlocks
+    mov     %r13, %rsi
+    mov     $BlockOptions_pow_block, %edx
+    call    lantern_copy
+    movq    $0, (L + BlockOptions_has_pow_block)(%rsp)
+    movq    $0, (L + BlockOptions_has_pow_parent)(%rsp)
+    lea     L(%rsp), %r13
     ADDRESS %rdi, lantern_type_SignedBeaconBlock
     mov     %rbp, %rsi
     mov     %r14, %rdx
@@ -118,13 +126,26 @@ SPEC_FUNCTION node_import
     mov     S7(%rsp), %rdi
     lea     ExecutionPayload_parent_hash(%rcx), %rsi
     call    lantern_node_pow_block
-    mov     %rax, BlockOptions_pow_block(%r13)
     test    %rax, %rax
     jz      1f
+    mov     %rax, S9(%rsp)
+    movq    $1, BlockOptions_has_pow_block(%r13)
+    lea     BlockOptions_pow_block(%r13), %rdi
+    mov     %rax, %rsi
+    mov     $POW_BLOCK_BYTES, %edx
+    call    lantern_copy
     mov     S7(%rsp), %rdi
-    lea     PowBlock_parent_hash(%rax), %rsi
+    mov     S9(%rsp), %rsi
+    add     $PowBlock_parent_hash, %rsi
     call    lantern_node_pow_block
-1:  mov     %rax, BlockOptions_pow_parent(%r13)
+    test    %rax, %rax
+    jz      1f
+    movq    $1, BlockOptions_has_pow_parent(%r13)
+    lea     BlockOptions_pow_parent(%r13), %rdi
+    mov     %rax, %rsi
+    mov     $POW_BLOCK_BYTES, %edx
+    call    lantern_copy
+1:
 .endif
     mov     %rbx, %rdi
     mov     %rbp, %rsi
@@ -140,7 +161,7 @@ SPEC_FUNCTION node_import
     xor     %eax, %eax
 99: mov     S8(%rsp), %rcx
     mov     %rcx, (%r14)
-    LEAVE 0
+    LEAVE 240
 SPEC_END node_import
 
 /*

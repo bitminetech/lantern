@@ -1707,8 +1707,13 @@ SPEC_FUNCTION on_block
     cmpq    $0, (L + 296)(%rsp)             # if is_merge_transition_block(pre_state, block.body): validate_merge_block(block)
     je      1f
     mov     S7(%rsp), %rdi
-    mov     BlockOptions_pow_block(%r13), %rsi
-    mov     BlockOptions_pow_parent(%r13), %rdx
+    xor     %eax, %eax                      # the PowBlocks of options, 0 for None
+    lea     BlockOptions_pow_block(%r13), %rsi
+    cmpq    $0, BlockOptions_has_pow_block(%r13)
+    cmove   %rax, %rsi
+    lea     BlockOptions_pow_parent(%r13), %rdx
+    cmpq    $0, BlockOptions_has_pow_parent(%r13)
+    cmove   %rax, %rdx
     lea     Store_config(%rbx), %rcx
     call    lantern_validate_merge_block
     test    %rax, %rax

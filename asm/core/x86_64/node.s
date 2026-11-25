@@ -11092,8 +11092,8 @@ FUNCTION lantern_node_run
     mov     NodeBlock_payload_status(%rsi,%rdi), %rcx
     mov     %rcx, (L + BlockOptions_payload_status)(%rsp)
 1:  mov     %rax, (L + BlockOptions_data_available)(%rsp)
-    movq    $0, (L + BlockOptions_pow_block)(%rsp)
-    movq    $0, (L + BlockOptions_pow_parent)(%rsp)
+    movq    $0, (L + BlockOptions_has_pow_block)(%rsp)
+    movq    $0, (L + BlockOptions_has_pow_parent)(%rsp)
     cmpq    $(100 + 84), 16(%r14)
     jb      18f
     mov     8(%r14), %rax

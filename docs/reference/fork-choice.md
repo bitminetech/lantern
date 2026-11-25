@@ -1978,9 +1978,11 @@ What lantern_on_block takes besides the block: the answers of the outside world.
 |---|---|---|---|
 | 0 | `payload_status` | u64 | `PAYLOAD_STATUS_*`: the execution engine's answer for the payload |
 | 8 | `data_available` | u64 | 1: is_data_available holds for the block; read from deneb on |
-| 16 | `pow_block` | pointer | Bellatrix: the `PowBlock` of get_pow_block(body.execution_payload.parent_hash), or 0 for None |
-| 24 | `pow_parent` | pointer | Bellatrix: the `PowBlock` of get_pow_block(pow_block.parent_hash), or 0 for None |
+| 16 | `has_pow_block` | u64 | Bellatrix: 1 when get_pow_block(body.execution_payload.parent_hash) is a `PowBlock`, 0 for None |
+| 24 | `has_pow_parent` | u64 | Bellatrix: 1 when get_pow_block(pow_block.parent_hash) is a `PowBlock`, 0 for None |
 | 32 | `slots_done` | u64 | 1: `state` may be at the block's slot already, as an upgrade at the fork's first slot leaves it; lantern_state_transition gets it |
+| 40 | `pow_block` | `PowBlock` (96 bytes) | The PowBlock of `has_pow_block` |
+| 136 | `pow_parent` | `PowBlock` (96 bytes) | The PowBlock of `has_pow_parent` |
 
 ## Type `ColumnSidecars`
 

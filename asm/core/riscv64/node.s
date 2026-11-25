@@ -11106,8 +11106,8 @@ FUNCTION lantern_node_run
     ld      t2, NodeBlock_payload_status(t1)
     sd      t2, (L + BlockOptions_payload_status)(sp)
 2:  sd      t3, (L + BlockOptions_data_available)(sp)
-    sd      zero, (L + BlockOptions_pow_block)(sp)
-    sd      zero, (L + BlockOptions_pow_parent)(sp)
+    sd      zero, (L + BlockOptions_has_pow_block)(sp)
+    sd      zero, (L + BlockOptions_has_pow_parent)(sp)
     ld      t0, 16(s5)
     li      t1, 100 + 84
     bltu    t0, t1, 18f

@@ -10996,8 +10996,8 @@ FUNCTION lantern_node_run
     ldr     x12, [x9, #NodeBlock_payload_status]
 1:  str     x12, [sp, #(L + BlockOptions_payload_status)]
     str     x11, [sp, #(L + BlockOptions_data_available)]
-    str     xzr, [sp, #(L + BlockOptions_pow_block)]
-    str     xzr, [sp, #(L + BlockOptions_pow_parent)]
+    str     xzr, [sp, #(L + BlockOptions_has_pow_block)]
+    str     xzr, [sp, #(L + BlockOptions_has_pow_parent)]
     ldr     x9, [x23, #16]
     cmp     x9, #(100 + 84)
     b.lo    18f
