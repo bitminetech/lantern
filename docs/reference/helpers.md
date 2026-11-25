@@ -45,6 +45,7 @@
 - [`lantern_compute_domain`](#function-lantern_compute_domain): a signature domain.
 - [`lantern_get_domain`](#function-lantern_get_domain): the domain of the state's fork for an epoch.
 - [`lantern_compute_signing_root`](#function-lantern_compute_signing_root): the root that a signature signs.
+- [`lantern_sha256_short`](#function-lantern_sha256_short): sHA-256 of at most 96 bytes.
 
 ### Types
 
@@ -1782,6 +1783,44 @@ lantern_compute_signing_root(type, object, domain, scratch, out) -> status
 - Symbol: `lantern_<fork>_compute_signing_root` in the object of every fork, with `_` before it on macOS; `lantern_compute_signing_root` inside the object.
 - Convention: the core ABI for each ISA (ARCHITECTURE.md section 6); each argument is a pointer: a Uint64 argument points at a u64, and a Boolean output is a u64 of 0 or 1.
 - Argument order: `type`, `object`, `domain`, `scratch`, `out`.
+
+## Function `lantern_sha256_short`
+
+SHA-256 of at most 96 bytes.
+
+### Signature
+
+```
+lantern_sha256_short(bytes, n, digest)
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `bytes` | input | `n` bytes |
+| `n` | input | u64 in a register: at most 96 |
+| `digest` | output | 32 bytes |
+
+### Function does
+
+- Writes SHA-256 of the bytes to `digest`, with crypto_sha256 of asm-crypto and a ByteList on its own stack.
+
+### Function never
+
+- Makes an OS call.
+- Keeps a pointer after it returns.
+
+### Limits
+
+- Stack of its own: 144 bytes on x86-64 (return address included), 144 bytes on ARM64, 144 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_sha256_short`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- Argument order: `bytes`, `n`, `digest`.
 
 ## Type `Config`
 

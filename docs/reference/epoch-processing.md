@@ -52,6 +52,9 @@
 - [`lantern_get_next_sync_committee_indices`](#function-lantern_get_next_sync_committee_indices): the members of the next sync committee.
 - [`lantern_process_proposer_lookahead`](#function-lantern_process_proposer_lookahead): shifts the proposer lookahead by an epoch.
 - [`lantern_process_epoch`](#function-lantern_process_epoch): every epoch step, in spec order.
+- [`lantern_add_deltas`](#function-lantern_add_deltas): adds the entries of one list to those of another.
+- [`lantern_record_room`](#function-lantern_record_room): whether previous_epoch_attestations can take the current ones.
+- [`lantern_zero_deltas`](#function-lantern_zero_deltas): sets the count of an output IndexList and zeros its entries.
 
 ### Types
 
@@ -2388,6 +2391,132 @@ lantern_process_epoch(state, config, scratch, result) -> status
 - Symbol: `lantern_<fork>_process_epoch` in the object of every fork, with `_` before it on macOS; `lantern_process_epoch` inside the object.
 - Convention: the core ABI for each ISA (ARCHITECTURE.md section 6); each argument is a pointer, and numbers are u64.
 - Argument order: `state`, `config`, `scratch`, `result`.
+
+## Function `lantern_add_deltas`
+
+Adds the entries of one list to those of another.
+
+### Signature
+
+```
+lantern_add_deltas(list, add, n) -> status
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `list` | state | u64 entries |
+| `add` | input | u64 entries |
+| `n` | input | u64 in a register: the entries |
+
+### Returns
+
+- `LANTERN_OK`: each entry of `list` holds its sum.
+- `LANTERN_INVALID_OVERFLOW`: a sum leaves the u64 range.
+
+### Function never
+
+- Calls another function.
+- Makes an OS call.
+- Keeps a pointer after it returns.
+
+### Limits
+
+- Stack of its own: 8 bytes on x86-64 (return address included), 0 bytes on ARM64, 0 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_add_deltas`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- Argument order: `list`, `add`, `n`.
+
+## Function `lantern_record_room`
+
+Whether previous_epoch_attestations can take the current ones.
+
+### Signature
+
+```
+lantern_record_room(state) -> status
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `state` | input | `BeaconState` |
+
+### Returns
+
+- `LANTERN_OK`: the part of previous_epoch_attestations has room for the entries of current_epoch_attestations.
+- `LANTERN_BUFFER_TOO_SMALL`: it has not.
+
+### Caller must
+
+- `state` is a valid `BeaconState` value (include/types.inc) whose parts have the room named under Limits.
+
+### Function never
+
+- Calls another function.
+- Writes memory.
+- Makes an OS call.
+- Keeps a pointer after it returns.
+
+### Limits
+
+- Stack of its own: 8 bytes on x86-64 (return address included), 0 bytes on ARM64, 0 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_record_room`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- Registers it changes, on x86-64 and RISC-V: rax, rcx, rdx, rsi, r8; a0, t0 to t4, a7.
+- Argument order: `state`.
+
+## Function `lantern_zero_deltas`
+
+Sets the count of an output IndexList and zeros its entries.
+
+### Signature
+
+```
+lantern_zero_deltas(list, n)
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `list` | output | [`IndexList`](helpers.md#type-indexlist) |
+| `n` | input | u64 in a register |
+
+### Caller must
+
+- `list` has room for `n` entries.
+
+### Function does
+
+- Writes `n` as the count of `list` and zeros its `n` entries.
+
+### Function never
+
+- Makes an OS call.
+- Keeps a pointer after it returns.
+
+### Limits
+
+- Stack of its own: 8 bytes on x86-64 (return address included), 0 bytes on ARM64, 0 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_zero_deltas`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- Registers it changes, on ARM64: x0 to x3.
+- Argument order: `list`, `n`.
 
 ## Type `PartSpec`
 

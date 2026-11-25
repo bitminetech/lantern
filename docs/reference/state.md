@@ -10,6 +10,11 @@
 - [`lantern_state_cache_size`](#function-lantern_state_cache_size): the bytes of a hash cache for a number of validators.
 - [`lantern_state_cache_init`](#function-lantern_state_cache_init): lays out an empty hash cache.
 - [`lantern_state_root`](#function-lantern_state_root): the hash tree root of a state, from a hash cache it brings up to date.
+- [`lantern_sr_hash`](#function-lantern_sr_hash): sHA-256 of two 32-byte nodes.
+- [`lantern_sr_layout`](#function-lantern_sr_layout): lays out the trees of a StateCache for a number of validators.
+- [`lantern_sr_tree`](#function-lantern_sr_tree): the root of one field of a state, from its CacheTree.
+- [`lantern_sr_zeros`](#function-lantern_sr_zeros): the zero hash of each depth from 0 to 40.
+- [`lantern_zero`](#function-lantern_zero): writes zero bytes.
 
 ### Types
 
@@ -55,10 +60,18 @@ lantern_beacon_state_copy_size(state, room, size) -> status
 - Phase0: the entries of previous_epoch_attestations and current_epoch_attestations are nested values, each starting with its size.
 - Gives the part of `latest_execution_payload_header` room for an `extra_data` of MAX_EXTRA_DATA_BYTES.
 
+### Function never
+
+- Makes an OS call.
+
+### Limits
+
+- Stack of its own: 8 bytes on x86-64 (return address included), 0 bytes on ARM64, 0 bytes on RISC-V.
+
 ### ABI
 
-- Role: L1.
-- Symbol: `lantern_<fork>_beacon_state_copy_size`, as in [helpers.md](helpers.md#common-rules).
+- Role: L0.
+- Symbol: `lantern_<fork>_beacon_state_copy_size` in the object of every fork, with `_` before it on macOS; `lantern_beacon_state_copy_size` inside the object.
 - Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
 - Argument order: `state`, `room`, `size`.
 
@@ -100,11 +113,16 @@ lantern_beacon_state_copy(state, room, out) -> status
 ### Function never
 
 - Writes outside `out` and its own stack.
+- Makes an OS call.
+
+### Limits
+
+- Stack of its own: 112 bytes on x86-64 (return address included), 112 bytes on ARM64, 112 bytes on RISC-V.
 
 ### ABI
 
-- Role: L1.
-- Symbol: `lantern_<fork>_beacon_state_copy`, as in [helpers.md](helpers.md#common-rules).
+- Role: L0.
+- Symbol: `lantern_<fork>_beacon_state_copy` in the object of every fork, with `_` before it on macOS; `lantern_beacon_state_copy` inside the object.
 - Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
 - Argument order: `state`, `room`, `out`.
 
@@ -133,11 +151,16 @@ lantern_copy(dst, src, n) -> nothing
 ### Function never
 
 - Reads or writes outside the n bytes of each.
+- Makes an OS call.
+
+### Limits
+
+- Stack of its own: 8 bytes on x86-64 (return address included), 0 bytes on ARM64, 0 bytes on RISC-V.
 
 ### ABI
 
 - Role: L0.
-- Symbol: the local label `lantern_copy` in each object of the core.
+- Symbol: `lantern_copy`, local to its object.
 - Convention: the core ABI for each ISA (ARCHITECTURE.md section 6). It returns no status.
 - Argument order: `dst`, `src`, `n`.
 
@@ -166,10 +189,18 @@ lantern_state_cache_size(validators, size) -> status
 
 - The header, then for each tree of the [`StateCache`](#type-statecache) table in order: its nodes, 32 bytes for each of ceil(capacity / 2^k) nodes at each level k from 0 up to the level of one node; its dirty bits, ceil(nodes of the level / 64) u64 at each level; and its copies, `copy` bytes for each of `capacity` leaves.
 
+### Function never
+
+- Makes an OS call.
+
+### Limits
+
+- Stack of its own: 32 bytes on x86-64 (return address included), 32 bytes on ARM64, 32 bytes on RISC-V.
+
 ### ABI
 
-- Role: L1.
-- Symbol: `lantern_<fork>_state_cache_size`, as in [helpers.md](helpers.md#common-rules).
+- Role: L0.
+- Symbol: `lantern_<fork>_state_cache_size` in the object of every fork, with `_` before it on macOS; `lantern_state_cache_size` inside the object.
 - Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
 - Argument order: `validators`, `size`.
 
@@ -199,10 +230,18 @@ lantern_state_cache_init(validators, cache) -> status
 
 - Writes `validators` and each `CacheTree` with the capacity of the table, `count` 0, the offsets of lantern_state_cache_size's order, and every dirty bit 0.
 
+### Function never
+
+- Makes an OS call.
+
+### Limits
+
+- Stack of its own: 32 bytes on x86-64 (return address included), 32 bytes on ARM64, 32 bytes on RISC-V.
+
 ### ABI
 
-- Role: L1.
-- Symbol: `lantern_<fork>_state_cache_init`, as in [helpers.md](helpers.md#common-rules).
+- Role: L0.
+- Symbol: `lantern_<fork>_state_cache_init` in the object of every fork, with `_` before it on macOS; `lantern_state_cache_init` inside the object.
 - Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
 - Argument order: `validators`, `cache`.
 
@@ -247,13 +286,211 @@ lantern_state_root(state, cache, scratch, out) -> status
 ### Function never
 
 - Writes outside `cache`, `scratch`, `out` and its own stack.
+- Makes an OS call.
+
+### Limits
+
+- Stack of its own: 112 bytes on x86-64 (return address included), 112 bytes on ARM64, 112 bytes on RISC-V.
 
 ### ABI
 
-- Role: L1.
-- Symbol: `lantern_<fork>_state_root`, as in [helpers.md](helpers.md#common-rules).
+- Role: L0.
+- Symbol: `lantern_<fork>_state_root` in the object of every fork, with `_` before it on macOS; `lantern_state_root` inside the object.
 - Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
 - Argument order: `state`, `cache`, `scratch`, `out`.
+
+## Function `lantern_sr_hash`
+
+SHA-256 of two 32-byte nodes.
+
+### Signature
+
+```
+lantern_sr_hash(left, right, out)
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `left` | input | 32 bytes |
+| `right` | input | 32 bytes |
+| `out` | output | 32 bytes; it may be `left` or `right` |
+
+### Function does
+
+- Writes SHA-256 of the 64 bytes `left` then `right` to `out`, with crypto_sha256 of asm-crypto.
+
+### Function never
+
+- Makes an OS call.
+
+### Limits
+
+- Stack of its own: 32 bytes on x86-64 (return address included), 32 bytes on ARM64, 32 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_sr_hash`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- Registers it reads, on ARM64, x86-64, RISC-V: the work area in x23, r14, s5.
+- Argument order: `left`, `right`, `out`.
+
+## Function `lantern_sr_layout`
+
+Lays out the trees of a StateCache for a number of validators.
+
+### Signature
+
+```
+lantern_sr_layout(validators, cache) -> bytes
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `validators` | input | u64 in a register |
+| `cache` | output | [`StateCache`](#type-statecache), or 0 |
+
+### Function does
+
+- Returns the bytes of the cache.
+- When `cache` is not 0, writes the layout of each tree into it.
+
+### Function never
+
+- Calls another function.
+- Makes an OS call.
+
+### Limits
+
+- Stack of its own: 112 bytes on x86-64 (return address included), 0 bytes on ARM64, 0 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_sr_layout`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- Argument order: `validators`, `cache`.
+
+## Function `lantern_sr_tree`
+
+The root of one field of a state, from its CacheTree.
+
+### Signature
+
+```
+lantern_sr_tree(tree, data, count, bytes, descriptor, depth, list, root) -> status
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `tree` | state | [`CacheTree`](#type-cachetree) |
+| `data` | input | the elements |
+| `count` | input | u64 in a register: the elements |
+| `bytes` | input | u64 in a register: the bytes of an element of a basic type, or 0 for containers |
+| `descriptor` | input | the asm-ssz type descriptor of the containers |
+| `depth` | input | u64 in a register: the depth of the limit |
+| `list` | input | u64 in a register: 1 for a list, whose root mixes in the count |
+| `root` | output | 32 bytes |
+
+### Returns
+
+- 0: `root` holds the root.
+- 1: the leaves pass the tree's capacity.
+- A status of ssz_hash_tree_root of asm-ssz.
+
+### Function does
+
+- Hashes again only the leaves that changed and the nodes above them, and records the new leaves.
+
+### Function never
+
+- Makes an OS call.
+
+### Limits
+
+- Stack of its own: 208 bytes on x86-64 (return address included), 208 bytes on ARM64, 208 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_sr_tree`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- Registers it reads, on ARM64, x86-64, RISC-V: the cache in x20, rbp, s2; the scratch, its front's size set, in x21, r12, s3; the work area in x23, r14, s5.
+- On x86-64, `bytes` and `descriptor` share rcx (a descriptor is an address above 4095), and r8 holds `depth` + 256 for a list; `root` is in r9.
+- Argument order: `tree`, `data`, `count`, `bytes`, `descriptor`, `depth`, `list`, `root`.
+
+## Function `lantern_sr_zeros`
+
+The zero hash of each depth from 0 to 40.
+
+### Signature
+
+```
+lantern_sr_zeros()
+```
+
+### Function does
+
+- Writes the zero hash of each depth 0 to 40 into the work area.
+
+### Function never
+
+- Makes an OS call.
+
+### Limits
+
+- Stack of its own: 112 bytes on x86-64 (return address included), 112 bytes on ARM64, 112 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_sr_zeros`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- Registers it reads, on ARM64, x86-64, RISC-V: the work area in x23, r14, s5.
+
+## Function `lantern_zero`
+
+Writes zero bytes.
+
+### Signature
+
+```
+lantern_zero(dst, n)
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `dst` | output | `n` bytes |
+| `n` | input | u64 in a register |
+
+### Function does
+
+- Writes `n` zero bytes at `dst`.
+
+### Function never
+
+- Calls another function.
+- Makes an OS call.
+
+### Limits
+
+- Stack of its own: 8 bytes on x86-64 (return address included), 0 bytes on ARM64, 0 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_zero`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- Registers it changes, on ARM64, x86-64, RISC-V: x0, x1; rax, rcx, rdi; a0 to a2.
+- Argument order: `dst`, `n`.
 
 ## Type `StateRoom`
 

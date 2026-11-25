@@ -63,6 +63,25 @@
 - [`lantern_committee_cache_init`](#function-lantern_committee_cache_init): lays out an empty committee cache.
 - [`lantern_pubkey_cache_size`](#function-lantern_pubkey_cache_size): the bytes of a public key cache for a number of validators.
 - [`lantern_pubkey_cache_init`](#function-lantern_pubkey_cache_init): lays out an empty public key cache.
+- [`lantern_attestation_memo`](#function-lantern_attestation_memo): process_attestation, with one get_base_reward_per_increment shared by the attestations of a block.
+- [`lantern_indexed_attestation_valid`](#function-lantern_indexed_attestation_valid): is_valid_indexed_attestation, with the sum of the keys from the key sums of a committee cache when it can.
+- [`lantern_attestation_key_sum`](#function-lantern_attestation_key_sum): the sum of the public keys of an attestation's attesting validators, from the key sums of a committee cache.
+- [`lantern_key_sum_make`](#function-lantern_key_sum_make): makes the KeySum of a committee.
+- [`lantern_key_sum_scan`](#function-lantern_key_sum_scan): the members of a committee whose PubkeyCache entries do not hold their keys.
+- [`lantern_committee_find`](#function-lantern_committee_find): the entry of a CommitteeCache for an epoch and a key.
+- [`lantern_committee_key`](#function-lantern_committee_key): the key of an epoch's shuffling in a CommitteeCache.
+- [`lantern_find_pubkey`](#function-lantern_find_pubkey): the index of the validator with a public key.
+- [`lantern_find_pubkeys`](#function-lantern_find_pubkeys): all_pubkeys.index(pubkey) for each key of a sync committee.
+- [`lantern_append_pending_deposit`](#function-lantern_append_pending_deposit): appends a PendingDeposit to a state.
+- [`lantern_append_withdrawal`](#function-lantern_append_withdrawal): appends a Withdrawal to a Withdrawals value.
+- [`lantern_concat_withdrawals`](#function-lantern_concat_withdrawals): the list all = prior + new, for get_balance_after_withdrawals.
+- [`lantern_all_zero`](#function-lantern_all_zero): whether bytes are all zero.
+- [`lantern_build_payload_header`](#function-lantern_build_payload_header): the ExecutionPayloadHeader of an execution payload, for lantern_process_execution_payload.
+- [`lantern_check_header_signature`](#function-lantern_check_header_signature): checks the signature of a signed block header of a proposer slashing.
+- [`lantern_randao_step`](#function-lantern_randao_step): process_randao, with or without the check of the reveal's signature.
+- [`lantern_sort_u64`](#function-lantern_sort_u64): sorts u64 entries ascending.
+- [`lantern_validator_room`](#function-lantern_validator_room): the fewest free entries in the validator lists of a state.
+- [`lantern_verify_root_signature`](#function-lantern_verify_root_signature): verifies a BLS signature over a signing root.
 
 ### Types
 
@@ -2725,7 +2744,7 @@ lantern_committee_cache_size(validators, size) -> status
 
 - Role: L0.
 - Symbol: `lantern_<fork>_committee_cache_size` in the object of every fork, with `_` before it on macOS; `lantern_committee_cache_size` inside the object.
-- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6); each argument is a pointer, and numbers are u64.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
 - Argument order: `validators`, `size`.
 
 ## Function `lantern_committee_cache_init`
@@ -2763,7 +2782,7 @@ lantern_committee_cache_init(validators, cache) -> status
 
 - Role: L0.
 - Symbol: `lantern_<fork>_committee_cache_init` in the object of every fork, with `_` before it on macOS; `lantern_committee_cache_init` inside the object.
-- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6); each argument is a pointer, and numbers are u64.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
 - Argument order: `validators`, `cache`.
 
 ## Function `lantern_pubkey_cache_size`
@@ -2804,7 +2823,7 @@ lantern_pubkey_cache_size(validators, size) -> status
 
 - Role: L0.
 - Symbol: `lantern_<fork>_pubkey_cache_size` in the object of every fork, with `_` before it on macOS; `lantern_pubkey_cache_size` inside the object.
-- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6); each argument is a pointer, and numbers are u64.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
 - Argument order: `validators`, `size`.
 
 ## Function `lantern_pubkey_cache_init`
@@ -2842,8 +2861,895 @@ lantern_pubkey_cache_init(validators, cache) -> status
 
 - Role: L0.
 - Symbol: `lantern_<fork>_pubkey_cache_init` in the object of every fork, with `_` before it on macOS; `lantern_pubkey_cache_init` inside the object.
-- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6); each argument is a pointer, and numbers are u64.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
 - Argument order: `validators`, `cache`.
+
+## Function `lantern_attestation_memo`
+
+process_attestation, with one get_base_reward_per_increment shared by the attestations of a block.
+
+### Signature
+
+```
+lantern_attestation_memo(state, attestation, config, scratch, result, memo) -> status
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `state` | state | `BeaconState` |
+| `attestation` | input | `Attestation` |
+| `config` | input | [`Config`](helpers.md#type-config) |
+| `scratch` | scratch | [`Scratch`](helpers.md#type-scratch) |
+| `result` | output | [`Result`](helpers.md#type-result) |
+| `memo` | state | u64: get_base_reward_per_increment of `state`, or 0 |
+
+### Returns
+
+- `LANTERN_OK`: `result` is `LANTERN_VALID`, `LANTERN_INVALID_ATTESTATION`, `LANTERN_INVALID_OVERFLOW`, or the first failed check of the functions it calls.
+- `LANTERN_BUFFER_TOO_SMALL`: `scratch` is short.
+
+### Caller must
+
+- `memo` holds 0, or get_base_reward_per_increment of `state` as it is now.
+- `state` is a valid `BeaconState` value (include/types.inc) with every PartRef in range.
+- Each block, body and operation argument is a valid asm-ssz Value of its type.
+- `scratch` is S(k) of [Type Scratch](helpers.md#type-scratch), with k under Limits.
+
+### Function does
+
+- Does what lantern_process_attestation does.
+- Takes get_base_reward_per_increment(state) from `memo` when it is not 0; else computes it and stores it in `memo`.
+- The operations of one block change no effective balance and no active validator of the current epoch, so the attestations of a block share one value.
+- Checks the scratch and the room of `state` before any change to `state`.
+
+### Function never
+
+- Makes an OS call.
+- Keeps a pointer after it returns.
+
+### Limits
+
+- Stack of its own: 304 bytes on x86-64 (return address included), 288 bytes on ARM64, 288 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_attestation_memo`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- Argument order: `state`, `attestation`, `config`, `scratch`, `result`, `memo`.
+
+## Function `lantern_indexed_attestation_valid`
+
+is_valid_indexed_attestation, with the sum of the keys from the key sums of a committee cache when it can.
+
+### Signature
+
+```
+lantern_indexed_attestation_valid(state, indexed_attestation, cache, scratch, out, attestation, committees) -> status
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `state` | input | `BeaconState` |
+| `indexed_attestation` | input | `IndexedAttestation` |
+| `cache` | state | [`PubkeyCache`](#type-pubkeycache), or 0 |
+| `scratch` | scratch | [`Scratch`](helpers.md#type-scratch) |
+| `out` | output | u64: 1 or 0 |
+| `attestation` | input | `Attestation` of which `indexed_attestation` is get_indexed_attestation, or 0 |
+| `committees` | state | [`CommitteeCache`](#type-committeecache), or 0 |
+
+### Returns
+
+- `LANTERN_OK`: `out` holds 1 or 0.
+- `LANTERN_BUFFER_TOO_SMALL`: `scratch` is short.
+- `LANTERN_INVALID_VALIDATOR_INDEX`: an index names no validator of `state`.
+
+### Caller must
+
+- `state` is a valid `BeaconState` value (include/types.inc) with every PartRef in range.
+- Each block, body and operation argument is a valid asm-ssz Value of its type.
+- `scratch` is S(k) of [Type Scratch](helpers.md#type-scratch), with k under Limits.
+
+### Function does
+
+- Gives what lantern_is_valid_indexed_attestation gives.
+- With `attestation`, `committees` and `cache` not 0, the sum of the keys may come from the key sums of `committees` (lantern_attestation_key_sum).
+- Verifies a signature with `crypto_bls_verify` of asm-crypto.
+- Verifies an aggregate signature with `crypto_bls_fast_aggregate_verify` of asm-crypto.
+
+### Function never
+
+- Makes an OS call.
+- Keeps a pointer after it returns.
+
+### Limits
+
+- Stack of its own: 400 bytes on x86-64 (return address included), 400 bytes on ARM64, 400 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_indexed_attestation_valid`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- Argument order: `state`, `indexed_attestation`, `cache`, `scratch`, `out`, `attestation`, `committees`.
+
+## Function `lantern_attestation_key_sum`
+
+The sum of the public keys of an attestation's attesting validators, from the key sums of a committee cache.
+
+### Signature
+
+```
+lantern_attestation_key_sum(state, attestation, committees, cache, out, message, signature, scratch) -> found
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `state` | input | `BeaconState` |
+| `attestation` | input | `Attestation` |
+| `committees` | state | [`CommitteeCache`](#type-committeecache) |
+| `cache` | state | [`PubkeyCache`](#type-pubkeycache) |
+| `out` | output | asm-crypto `G1Point` |
+| `message` | input | Bytes32: the signing root, for lantern_key_sum_make |
+| `signature` | input | 96 bytes, for lantern_key_sum_make |
+| `scratch` | scratch | [`Scratch`](helpers.md#type-scratch), for lantern_key_sum_make |
+
+### Caller must
+
+- `state` is a valid `BeaconState` value (include/types.inc) with every PartRef in range.
+- Each block, body and operation argument is a valid asm-ssz Value of its type.
+- `scratch` is S(k) of [Type Scratch](helpers.md#type-scratch), with k under Limits.
+
+### Function does
+
+- Returns 1 when `out` holds the sum, else 0.
+- Takes the key sum of each committee of the attestation from its [`KeySum`](#type-keysum), making it with lantern_key_sum_make when it has status 0.
+- For each committee: takes its key sum less the keys of the absent members when that takes fewer additions, else adds the keys of the present members.
+- Uses the key sums only when they save at least `KEYSUM_MIN_SAVED` additions.
+- Combines public keys with the `crypto_bls_g1_*` functions of asm-crypto.
+
+### Function never
+
+- Makes an OS call.
+- Keeps a pointer after it returns.
+
+### Limits
+
+- Stack of its own: 928 bytes on x86-64 (return address included), 896 bytes on ARM64, 928 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_attestation_key_sum`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- Argument order: `state`, `attestation`, `committees`, `cache`, `out`, `message`, `signature`, `scratch`.
+
+## Function `lantern_key_sum_make`
+
+Makes the KeySum of a committee.
+
+### Signature
+
+```
+lantern_key_sum_make(sum, members, count, validators, cache, message, signature, scratch) -> status
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `sum` | output | [`KeySum`](#type-keysum) |
+| `members` | input | the u64 validator indices of the committee |
+| `count` | input | u64: the members |
+| `validators` | input | the validators of the state |
+| `cache` | state | [`PubkeyCache`](#type-pubkeycache) |
+| `message` | input | Bytes32 |
+| `signature` | input | 96 bytes |
+| `scratch` | scratch | [`Scratch`](helpers.md#type-scratch); its last bytes take a list |
+
+### Caller must
+
+- `scratch` is S(k) of [Type Scratch](helpers.md#type-scratch), with k under Limits.
+
+### Function does
+
+- Returns 1 when the KeySum has status 1, 2 when it has status 2, and 0 when a callee fails.
+- Members whose cache entries do not hold their keys: first calls crypto_bls_fast_aggregate_verify_cached of asm-crypto with them, `message` and `signature`, which fills their entries; its answer is not used.
+- Then adds the members' keys with crypto_bls_g1_add of asm-crypto, in member order, from the point at infinity.
+- Combines public keys with the `crypto_bls_g1_*` functions of asm-crypto.
+
+### Function never
+
+- Makes an OS call.
+- Keeps a pointer after it returns.
+
+### Limits
+
+- Stack of its own: 576 bytes on x86-64 (return address included), 560 bytes on ARM64, 576 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_key_sum_make`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- Argument order: `sum`, `members`, `count`, `validators`, `cache`, `message`, `signature`, `scratch`.
+
+## Function `lantern_key_sum_scan`
+
+The members of a committee whose PubkeyCache entries do not hold their keys.
+
+### Signature
+
+```
+lantern_key_sum_scan(members, count, validators, cache, list) -> number
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `members` | input | the u64 validator indices |
+| `count` | input | u64 |
+| `validators` | input | the validators of the state |
+| `cache` | input | [`PubkeyCache`](#type-pubkeycache) |
+| `list` | output | u64 entries, or 0 |
+
+### Function does
+
+- Returns how many members have an entry that does not hold their key; writes each to `list` when it is not 0.
+- Returns -1 when a member is at or past the cache's count, or its entry has status 2 and the member's key.
+
+### Function never
+
+- Calls another function.
+- Makes an OS call.
+- Keeps a pointer after it returns.
+
+### Limits
+
+- Stack of its own: 112 bytes on x86-64 (return address included), 0 bytes on ARM64, 0 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_key_sum_scan`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- Argument order: `members`, `count`, `validators`, `cache`, `list`.
+
+## Function `lantern_committee_find`
+
+The entry of a CommitteeCache for an epoch and a key.
+
+### Signature
+
+```
+lantern_committee_find(cache, epoch, key) -> entry
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `cache` | input | [`CommitteeCache`](#type-committeecache) |
+| `epoch` | input | u64 |
+| `key` | input | 96 bytes: as lantern_committee_key gives |
+
+### Function does
+
+- Returns the valid [`CommitteeEntry`](#type-committeeentry) of `epoch` whose 96 bytes from `seed` equal `key`, or 0.
+
+### Function never
+
+- Calls another function.
+- Writes memory.
+- Makes an OS call.
+- Keeps a pointer after it returns.
+
+### Limits
+
+- Stack of its own: 8 bytes on x86-64 (return address included), 0 bytes on ARM64, 0 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_committee_find`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- Argument order: `cache`, `epoch`, `key`.
+
+## Function `lantern_committee_key`
+
+The key of an epoch's shuffling in a CommitteeCache.
+
+### Signature
+
+```
+lantern_committee_key(state, epoch, key) -> status
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `state` | input | `BeaconState` |
+| `epoch` | input | u64 |
+| `key` | output | 96 bytes |
+
+### Returns
+
+- `LANTERN_OK`: `key` holds the key.
+- The statuses of lantern_get_seed.
+
+### Caller must
+
+- `state` is a valid `BeaconState` value (include/types.inc) with every PartRef in range.
+
+### Function does
+
+- Writes get_seed(state, epoch, DOMAIN_BEACON_ATTESTER), then the decision root, then the state's genesis_validators_root.
+- The decision root is the block root at the last slot of epoch `epoch` - 5, or at slot 0 for epochs below 5.
+- Writes zero bytes for the decision root when that slot is not before the state's slot, or is more than `SLOTS_PER_HISTORICAL_ROOT` slots before it.
+
+### Function never
+
+- Makes an OS call.
+- Keeps a pointer after it returns.
+
+### Limits
+
+- Stack of its own: 112 bytes on x86-64 (return address included), 112 bytes on ARM64, 112 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_committee_key`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- Argument order: `state`, `epoch`, `key`.
+
+## Function `lantern_find_pubkey`
+
+The index of the validator with a public key.
+
+### Signature
+
+```
+lantern_find_pubkey(state, pubkey) -> index
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `state` | input | `BeaconState` |
+| `pubkey` | input | 48 bytes; 4-aligned on RISC-V |
+
+### Caller must
+
+- `state` is a valid `BeaconState` value (include/types.inc) with every PartRef in range.
+
+### Function does
+
+- Returns the index of the first validator whose pubkey is `pubkey`, or -1.
+
+### Function never
+
+- Calls another function.
+- Writes memory.
+- Makes an OS call.
+- Keeps a pointer after it returns.
+
+### Limits
+
+- Stack of its own: 8 bytes on x86-64 (return address included), 0 bytes on ARM64, 0 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_find_pubkey`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- Registers it changes, on x86-64: rax, rcx, rdx, r8, r9 and xmm0 to xmm4.
+- Argument order: `state`, `pubkey`.
+
+## Function `lantern_find_pubkeys`
+
+all_pubkeys.index(pubkey) for each key of a sync committee.
+
+### Signature
+
+```
+lantern_find_pubkeys(state, pubkeys, out, table) -> status
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `state` | input | `BeaconState` |
+| `pubkeys` | input | `SYNC_COMMITTEE_SIZE` keys of 48 bytes |
+| `out` | output | `SYNC_COMMITTEE_SIZE` u64 entries |
+| `table` | scratch | `SYNC_TABLE_BYTES` bytes; on x86-64 3 more words after them |
+
+### Caller must
+
+- `state` is a valid `BeaconState` value (include/types.inc) with every PartRef in range.
+
+### Function does
+
+- Returns 0 when `out` holds, for each key, the first validator with that key; -1 when a key is missing.
+- Makes one pass over the validators, with the distinct keys in a hash table at `table`.
+
+### Function never
+
+- Calls another function.
+- Makes an OS call.
+- Keeps a pointer after it returns.
+
+### Limits
+
+- Stack of its own: 8 bytes on x86-64 (return address included), 0 bytes on ARM64, 0 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_find_pubkeys`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- Registers it changes, on ARM64, x86-64, RISC-V: x0, x4 to x7, x9 to x17; rax, rdi, r8 to r11, xmm0 to xmm5; a0, a4 to a7, t0 to t6.
+- Argument order: `state`, `pubkeys`, `out`, `table`.
+
+## Function `lantern_append_pending_deposit`
+
+Appends a PendingDeposit to a state.
+
+### Signature
+
+```
+lantern_append_pending_deposit(state, deposit) -> status
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `state` | state | `BeaconState` |
+| `deposit` | input | `PendingDeposit` |
+
+### Returns
+
+- `LANTERN_OK`: `state.pending_deposits` holds the deposit at its end.
+- `LANTERN_BUFFER_TOO_SMALL`: `pending_deposits` has no room; `state` is unchanged.
+
+### Caller must
+
+- `state` is a valid `BeaconState` value (include/types.inc) with every PartRef in range.
+- Each block, body and operation argument is a valid asm-ssz Value of its type.
+
+### Function never
+
+- Makes an OS call.
+- Keeps a pointer after it returns.
+
+### Limits
+
+- Stack of its own: 8 bytes on x86-64 (return address included), 32 bytes on ARM64, 32 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_append_pending_deposit`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- Argument order: `state`, `deposit`.
+
+## Function `lantern_append_withdrawal`
+
+Appends a Withdrawal to a Withdrawals value.
+
+### Signature
+
+```
+lantern_append_withdrawal(withdrawals, index, validator_index, validator, amount)
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `withdrawals` | state | `Withdrawals` value |
+| `index` | input | u64 in a register |
+| `validator_index` | input | u64 in a register |
+| `validator` | input | `Validator` |
+| `amount` | input | u64 in a register |
+
+### Caller must
+
+- `withdrawals` has room for one more entry.
+
+### Function does
+
+- Appends Withdrawal(index, validator_index, the execution address of `validator`'s withdrawal credentials, amount).
+
+### Function never
+
+- Calls another function.
+- Makes an OS call.
+- Keeps a pointer after it returns.
+
+### Limits
+
+- Stack of its own: 8 bytes on x86-64 (return address included), 0 bytes on ARM64, 0 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_append_withdrawal`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- Argument order: `withdrawals`, `index`, `validator_index`, `validator`, `amount`.
+
+## Function `lantern_concat_withdrawals`
+
+The list all = prior + new, for get_balance_after_withdrawals.
+
+### Signature
+
+```
+lantern_concat_withdrawals(all, prior, new)
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `all` | output | `Withdrawals` value |
+| `prior` | input | `Withdrawals` value |
+| `new` | input | `Withdrawals` value |
+
+### Caller must
+
+- `all` has room for the entries of both.
+
+### Function does
+
+- Writes the entries of `prior`, then those of `new`, into `all`.
+
+### Function never
+
+- Calls another function.
+- Makes an OS call.
+- Keeps a pointer after it returns.
+
+### Limits
+
+- Stack of its own: 8 bytes on x86-64 (return address included), 0 bytes on ARM64, 0 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_concat_withdrawals`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- Registers it changes, on ARM64, x86-64, RISC-V: x0 to x3, x9 to x12; rax, rcx, rdi, rsi, r8; a0 to a3, t0 to t3.
+- Argument order: `all`, `prior`, `new`.
+
+## Function `lantern_all_zero`
+
+Whether bytes are all zero.
+
+### Signature
+
+```
+lantern_all_zero(bytes, n) -> flag
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `bytes` | input | `n` bytes |
+| `n` | input | u64 in a register |
+
+### Function does
+
+- Returns 1 when the `n` bytes are all zero, else 0.
+
+### Function never
+
+- Calls another function.
+- Writes memory.
+- Makes an OS call.
+- Keeps a pointer after it returns.
+
+### Limits
+
+- Stack of its own: 8 bytes on x86-64 (return address included), 0 bytes on ARM64, 0 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_all_zero`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- Argument order: `bytes`, `n`.
+
+## Function `lantern_build_payload_header`
+
+The ExecutionPayloadHeader of an execution payload, for lantern_process_execution_payload.
+
+### Signature
+
+```
+lantern_build_payload_header(header, payload, scratch, size) -> status
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `header` | output | `ExecutionPayloadHeader` |
+| `payload` | input | `ExecutionPayload` |
+| `scratch` | scratch | [`Scratch`](helpers.md#type-scratch), whose last `HEADER_ROOM` bytes hold `header` |
+| `size` | input | u64: the size of `scratch` |
+
+### Returns
+
+- `LANTERN_OK`: `header` holds the header.
+- The statuses of ssz_hash_tree_root of asm-ssz.
+
+### Caller must
+
+- Each block, body and operation argument is a valid asm-ssz Value of its type.
+- `scratch` is S(k) of [Type Scratch](helpers.md#type-scratch), with k under Limits.
+
+### Function does
+
+- Copies the fixed fields and writes transactions_root and withdrawals_root (from capella) as hash_tree_root of their lists.
+
+### Function never
+
+- Makes an OS call.
+- Keeps a pointer after it returns.
+
+### Limits
+
+- Stack of its own: 112 bytes on x86-64 (return address included), 112 bytes on ARM64, 112 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_build_payload_header`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- ARM64 and RISC-V take `payload`, `scratch` and `size` from the registers of lantern_process_execution_payload: x25, x23, x27; s7, s5, s9. x86-64 takes them in rsi, rdx and rcx.
+- It saves the callee saved registers it uses.
+- Argument order: `header`, `payload`, `scratch`, `size`.
+
+## Function `lantern_check_header_signature`
+
+Checks the signature of a signed block header of a proposer slashing.
+
+### Signature
+
+```
+lantern_check_header_signature(locals) -> status
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `locals` | state | the locals of lantern_process_proposer_slashing: +8 epoch, +16 domain type, +24 domain, +56 the signing root as a ByteList |
+
+### Returns
+
+- 0: the signature holds.
+- `LANTERN_INVALID_PROPOSER_SLASHING`: it does not.
+- The statuses of lantern_get_domain and lantern_compute_signing_root.
+
+### Function does
+
+- Checks the signature of the signed header by the proposer with DOMAIN_BEACON_PROPOSER at the header's epoch, through lantern_verify_root_signature.
+
+### Function never
+
+- Makes an OS call.
+- Keeps a pointer after it returns.
+
+### Limits
+
+- Stack of its own: 32 bytes on x86-64 (return address included), 32 bytes on ARM64, 32 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_check_header_signature`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- Registers it reads, on ARM64, x86-64, RISC-V: the signed header in x25, rsi, s7; the proposer in x24, r15, s6; the state in x19, rbx, s1; the scratch in x22, r13, s4.
+- Argument order: `locals`.
+
+## Function `lantern_randao_step`
+
+process_randao, with or without the check of the reveal's signature.
+
+### Signature
+
+```
+lantern_randao_step(state, body, config, scratch, result, skip) -> status
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `state` | state | `BeaconState` |
+| `body` | input | `BeaconBlockBody` |
+| `config` | input | [`Config`](helpers.md#type-config) |
+| `scratch` | scratch | [`Scratch`](helpers.md#type-scratch) |
+| `result` | output | [`Result`](helpers.md#type-result) |
+| `skip` | input | u64 in a register: 1 for block production with `skip_randao_verification`, else 0 |
+
+### Returns
+
+- `LANTERN_OK`: `result` is `LANTERN_VALID`, `LANTERN_INVALID_VALIDATOR_INDEX` or `LANTERN_INVALID_RANDAO_REVEAL`.
+- `LANTERN_BUFFER_TOO_SMALL`: `scratch` is short.
+
+### Caller must
+
+- `state` is a valid `BeaconState` value (include/types.inc) with every PartRef in range.
+- Each block, body and operation argument is a valid asm-ssz Value of its type.
+- `scratch` is S(k) of [Type Scratch](helpers.md#type-scratch), with k under Limits.
+
+### Function does
+
+- With `skip` 0: does what process_randao does.
+- With `skip` 1: makes no check of the reveal's signature, and mixes the reveal in as process_randao does.
+- Checks the scratch and the room of `state` before any change to `state`.
+
+### Function never
+
+- Makes an OS call.
+- Keeps a pointer after it returns.
+
+### Limits
+
+- Stack of its own: 272 bytes on x86-64 (return address included), 272 bytes on ARM64, 272 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_randao_step`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- Argument order: `state`, `body`, `config`, `scratch`, `result`, `skip`.
+
+## Function `lantern_sort_u64`
+
+Sorts u64 entries ascending.
+
+### Signature
+
+```
+lantern_sort_u64(entries, n)
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `entries` | state | `n` u64 entries |
+| `n` | input | u64 in a register |
+
+### Function does
+
+- Sorts the entries ascending, with heapsort.
+
+### Function never
+
+- Calls another function.
+- Makes an OS call.
+- Keeps a pointer after it returns.
+
+### Limits
+
+- Stack of its own: 8 bytes on x86-64 (return address included), 0 bytes on ARM64, 0 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_sort_u64`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- Registers it changes, on ARM64, x86-64, RISC-V: x2 to x8; rax, rcx, rdx, r8 to r11; a2 to a4, t0 to t4.
+- Argument order: `entries`, `n`.
+
+## Function `lantern_validator_room`
+
+The fewest free entries in the validator lists of a state.
+
+### Signature
+
+```
+lantern_validator_room(state) -> entries
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `state` | input | `BeaconState` |
+
+### Caller must
+
+- `state` is a valid `BeaconState` value (include/types.inc) with every PartRef in range.
+
+### Function does
+
+- Returns the fewest free entries among the validator lists of `state`.
+
+### Function never
+
+- Calls another function.
+- Writes memory.
+- Makes an OS call.
+- Keeps a pointer after it returns.
+
+### Limits
+
+- Stack of its own: 8 bytes on x86-64 (return address included), 0 bytes on ARM64, 0 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_validator_room`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- Argument order: `state`.
+
+## Function `lantern_verify_root_signature`
+
+Verifies a BLS signature over a signing root.
+
+### Signature
+
+```
+lantern_verify_root_signature(pubkey, signature, root, scratch) -> (status, valid)
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `pubkey` | input | 48 bytes |
+| `signature` | input | 96 bytes |
+| `root` | state | 56 bytes, 8-aligned: the last 32 hold the root; the first 24 become a ByteList header |
+| `scratch` | scratch | [`Scratch`](helpers.md#type-scratch) |
+
+### Returns
+
+- The status of crypto_bls_verify of asm-crypto.
+
+### Caller must
+
+- `scratch` is S(k) of [Type Scratch](helpers.md#type-scratch), with k under Limits.
+
+### Function does
+
+- Writes a ByteList header in the first 24 bytes of `root` and calls crypto_bls_verify with it.
+- Returns the status, then 1 when the signature holds, else 0.
+- Verifies a signature with `crypto_bls_verify` of asm-crypto.
+
+### Function never
+
+- Makes an OS call.
+- Keeps a pointer after it returns.
+
+### Limits
+
+- Stack of its own: 32 bytes on x86-64 (return address included), 32 bytes on ARM64, 32 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_verify_root_signature`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- It returns two values: x0, rax or a0, then x1, rdx or a1.
+- Argument order: `pubkey`, `signature`, `root`, `scratch`.
 
 ## Type `PubkeyCache`
 

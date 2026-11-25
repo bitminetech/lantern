@@ -7,6 +7,9 @@
 - [`lantern_initialize_beacon_state_from_eth1_size`](#function-lantern_initialize_beacon_state_from_eth1_size): the buffer size of a genesis state.
 - [`lantern_initialize_beacon_state_from_eth1`](#function-lantern_initialize_beacon_state_from_eth1): the genesis state of an eth1 block and its deposits.
 - [`lantern_is_valid_genesis_state`](#function-lantern_is_valid_genesis_state): whether a genesis state may start the chain.
+- [`lantern_merkle_add`](#function-lantern_merkle_add): appends a leaf to a deposit tree, as the deposit contract does.
+- [`lantern_merkle_root`](#function-lantern_merkle_root): the root of a deposit tree as a list, its length mixed in.
+- [`lantern_merkle_zeros`](#function-lantern_merkle_zeros): the zero hashes of the levels of a deposit tree.
 
 ## Spec
 
@@ -48,7 +51,7 @@ lantern_initialize_beacon_state_from_eth1_size(deposit_count, room, size) -> sta
 
 - Role: L0.
 - Symbol: `lantern_<fork>_initialize_beacon_state_from_eth1_size` in the object of phase0, with `_` before it on macOS; `lantern_initialize_beacon_state_from_eth1_size` inside the object.
-- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6); each argument is a pointer, and numbers are u64.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
 - Argument order: `deposit_count`, `room`, `size`.
 
 ## Function `lantern_initialize_beacon_state_from_eth1`
@@ -153,6 +156,122 @@ lantern_is_valid_genesis_state(state, config, out) -> status
 - Symbol: `lantern_<fork>_is_valid_genesis_state` in the object of phase0, with `_` before it on macOS; `lantern_is_valid_genesis_state` inside the object.
 - Convention: the core ABI for each ISA (ARCHITECTURE.md section 6); each argument is a pointer, and numbers are u64.
 - Argument order: `state`, `config`, `out`.
+
+## Function `lantern_merkle_add`
+
+Appends a leaf to a deposit tree, as the deposit contract does.
+
+### Signature
+
+```
+lantern_merkle_add(tree, leaf)
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `tree` | state | the deposit tree: its size, then a branch node of each level |
+| `leaf` | input | 32 bytes |
+
+### Function does
+
+- Adds the leaf and updates the branch as the deposit contract's deposit function does.
+
+### Function never
+
+- Makes an OS call.
+- Keeps a pointer after it returns.
+
+### Limits
+
+- Stack of its own: 160 bytes on x86-64 (return address included), 160 bytes on ARM64, 160 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_merkle_add`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- Argument order: `tree`, `leaf`.
+
+## Function `lantern_merkle_root`
+
+The root of a deposit tree as a list, its length mixed in.
+
+### Signature
+
+```
+lantern_merkle_root(tree, zeros, depth, out)
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `tree` | input | the deposit tree |
+| `zeros` | input | the zero hashes of each level (lantern_merkle_zeros) |
+| `depth` | input | u64 in a register: the levels |
+| `out` | output | 32 bytes |
+
+### Caller must
+
+- The `size` field of `out` is its buffer size.
+
+### Function does
+
+- Writes the root of the tree's leaves as a list of `depth` levels, mixed with its length.
+
+### Function never
+
+- Makes an OS call.
+- Keeps a pointer after it returns.
+
+### Limits
+
+- Stack of its own: 160 bytes on x86-64 (return address included), 160 bytes on ARM64, 160 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_merkle_root`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- Argument order: `tree`, `zeros`, `depth`, `out`.
+
+## Function `lantern_merkle_zeros`
+
+The zero hashes of the levels of a deposit tree.
+
+### Signature
+
+```
+lantern_merkle_zeros(zeros)
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `zeros` | output | `MERKLE_DEPTH` hashes of 32 bytes |
+
+### Function does
+
+- Writes the zero hash of each level 0 to `MERKLE_DEPTH` - 1.
+
+### Function never
+
+- Makes an OS call.
+- Keeps a pointer after it returns.
+
+### Limits
+
+- Stack of its own: 160 bytes on x86-64 (return address included), 160 bytes on ARM64, 160 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_merkle_zeros`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- Argument order: `zeros`.
 
 ## Test vectors
 

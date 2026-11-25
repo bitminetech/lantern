@@ -13,6 +13,10 @@
 - [`lantern_upgrade_to_electra`](#function-lantern_upgrade_to_electra): a deneb state as an electra state.
 - [`lantern_upgrade_to_fulu`](#function-lantern_upgrade_to_fulu): an electra state as a fulu state.
 - [`lantern_initialize_proposer_lookahead`](#function-lantern_initialize_proposer_lookahead): the proposers of the current and next epochs.
+- [`lantern_sort_by_eligibility`](#function-lantern_sort_by_eligibility): sorts validator indices by activation eligibility epoch, then index.
+- [`lantern_upgrade_deposit_count`](#function-lantern_upgrade_deposit_count): the pending deposits that upgrade_to_electra appends.
+- [`lantern_upgrade_empty_header`](#function-lantern_upgrade_empty_header): an empty ExecutionPayloadHeader.
+- [`lantern_upgrade_header`](#function-lantern_upgrade_header): the ExecutionPayloadHeader of a fork from that of the fork before.
 
 ## Spec
 
@@ -512,6 +516,171 @@ lantern_initialize_proposer_lookahead(state, scratch, out) -> status
 - Symbol: `lantern_<fork>_initialize_proposer_lookahead` in the object of fulu, with `_` before it on macOS; `lantern_initialize_proposer_lookahead` inside the object.
 - Convention: the core ABI for each ISA (ARCHITECTURE.md section 6); each argument is a pointer, and numbers are u64.
 - Argument order: `state`, `scratch`, `out`.
+
+## Function `lantern_sort_by_eligibility`
+
+Sorts validator indices by activation eligibility epoch, then index.
+
+### Signature
+
+```
+lantern_sort_by_eligibility(indices, n, validators)
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `indices` | state | `n` u64 validator indices |
+| `n` | input | u64 in a register |
+| `validators` | input | the validators of the state |
+
+### Function does
+
+- Sorts the indices by (activation_eligibility_epoch, index), with heapsort.
+
+### Function never
+
+- Calls another function.
+- Makes an OS call.
+- Keeps a pointer after it returns.
+
+### Limits
+
+- Stack of its own: 96 bytes on x86-64 (return address included), 0 bytes on ARM64, 0 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_sort_by_eligibility`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- Argument order: `indices`, `n`, `validators`.
+
+## Function `lantern_upgrade_deposit_count`
+
+The pending deposits that upgrade_to_electra appends.
+
+### Signature
+
+```
+lantern_upgrade_deposit_count(pre) -> count
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `pre` | input | `BeaconState` of deneb |
+
+### Caller must
+
+- `pre` is a valid `BeaconState` value of the fork before.
+- `out` is apart from `pre`.
+
+### Function does
+
+- Returns the pending deposits that upgrade_to_electra appends for `pre`.
+- Reads `pre` with the layouts of the fork before: include/types.inc of that fork, each type name under the prefix `PRE_` (include/ssz_types.inc, `SSZ_NAMES`).
+
+### Function never
+
+- Calls another function.
+- Writes memory.
+- Makes an OS call.
+- Keeps a pointer after it returns.
+- Changes `pre`.
+
+### Limits
+
+- Stack of its own: 8 bytes on x86-64 (return address included), 0 bytes on ARM64, 0 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_upgrade_deposit_count`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- Registers it changes, on ARM64: x0 to x8.
+- Argument order: `pre`.
+
+## Function `lantern_upgrade_empty_header`
+
+An empty ExecutionPayloadHeader.
+
+### Signature
+
+```
+lantern_upgrade_empty_header(header)
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `header` | output | `ExecutionPayloadHeader` of bellatrix |
+
+### Function does
+
+- Writes ExecutionPayloadHeader(): every field zero, and an empty extra_data.
+
+### Function never
+
+- Makes an OS call.
+- Keeps a pointer after it returns.
+
+### Limits
+
+- Stack of its own: 32 bytes on x86-64 (return address included), 32 bytes on ARM64, 32 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_upgrade_empty_header`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- Argument order: `header`.
+
+## Function `lantern_upgrade_header`
+
+The ExecutionPayloadHeader of a fork from that of the fork before.
+
+### Signature
+
+```
+lantern_upgrade_header(header, pre)
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `header` | output | `ExecutionPayloadHeader` of the object's fork |
+| `pre` | input | `ExecutionPayloadHeader` of the fork before |
+
+### Caller must
+
+- `pre` is a valid `BeaconState` value of the fork before.
+- `out` is apart from `pre`.
+
+### Function does
+
+- Copies the fields of `pre` and its extra_data; the fields the fork adds are zero.
+- Reads `pre` with the layouts of the fork before: include/types.inc of that fork, each type name under the prefix `PRE_` (include/ssz_types.inc, `SSZ_NAMES`).
+
+### Function never
+
+- Makes an OS call.
+- Keeps a pointer after it returns.
+- Changes `pre`.
+
+### Limits
+
+- Stack of its own: 32 bytes on x86-64 (return address included), 48 bytes on ARM64, 32 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_upgrade_header`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- Argument order: `header`, `pre`.
 
 ## Test vectors
 
