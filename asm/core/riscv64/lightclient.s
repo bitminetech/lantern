@@ -521,18 +521,32 @@ SPEC_END upgrade_lc_header
 .endif
 .endif
 
-# (kind, parts, out) -> status: the SSZ bytes of a light client object of the fork from its parts
-# (light-client.md). s1 parts, s2 out, s3 the kind's fields (LCO_*, 3 bits each), s4 the bytes of
+# (kind, header, sync_committee, branch, finalized_header, finality_branch, sync_aggregate, counts,
+# out) -> status: the SSZ bytes of a light client object of the fork from its parts
+# (light-client.md). s1 its parts, in a table of its own at L (LcParts), s2 out, s3 the kind's fields (LCO_*, 3 bits each), s4 the bytes of
 # the fixed part, s5 of the variable part, s6 the fixed cursor, s7 the variable cursor, s8 the
 # bytes of out, s9 and s10 a branch's roots and bytes. The fixed part's fields are 4-aligned.
+# Locals: L the parts (72 bytes).
 SPEC_FUNCTION lc_object
-    ENTER 0
+    ENTER 80
 .if FORK == FORK_PHASE0
     li      a0, LANTERN_NO_STATE_ANSWER
-    LEAVE 0
+    LEAVE 80
 .else
-    mv      s1, a1
-    mv      s2, a2
+    addi    s1, sp, L                       # its parts, in a table of its own
+    sd      a1, LcParts_header(s1)
+    sd      a2, LcParts_sync_committee(s1)
+    sd      a3, LcParts_branch(s1)
+    sd      a4, LcParts_finalized_header(s1)
+    sd      a5, LcParts_finality_branch(s1)
+    sd      a6, LcParts_sync_aggregate(s1)
+    ld      t0, 0(a7)                       # the counts
+    sd      t0, LcParts_branch_count(s1)
+    ld      t0, 8(a7)
+    sd      t0, LcParts_finality_count(s1)
+    ld      t0, 16(a7)
+    sd      t0, LcParts_signature_slot(s1)
+    ld      s2, (80 + 96)(sp)               # the ninth argument: out
     li      s3, LCO_BOOTSTRAP_FIELDS
     beqz    a0, 1f
     li      s3, LCO_UPDATE_FIELDS
@@ -680,13 +694,13 @@ SPEC_FUNCTION lc_object
     add     t0, s4, s5
     sd      t0, 16(s2)
     li      a0, LANTERN_OK
-    LEAVE 0
+    LEAVE 80
 96: li      a0, LANTERN_INVALID_ENCODING
-    LEAVE 0
+    LEAVE 80
 97: li      a0, LANTERN_INVALID_EVENT
-    LEAVE 0
+    LEAVE 80
 98: li      a0, LANTERN_BUFFER_TOO_SMALL
-    LEAVE 0
+    LEAVE 80
 .endif
 SPEC_END lc_object
 

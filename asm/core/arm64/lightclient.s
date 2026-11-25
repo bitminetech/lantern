@@ -514,19 +514,27 @@ SPEC_END upgrade_lc_header
 .endif
 
 /*
- * (kind, parts, out) -> status: the SSZ bytes of a light client object of the fork from its parts
- * (light-client.md). x19 parts, x20 out, x21 the kind's fields (LCO_*, 3 bits each), x22 the bytes
+ * (kind, header, sync_committee, branch, finalized_header, finality_branch, sync_aggregate, counts,
+ * out) -> status: the SSZ bytes of a light client object of the fork from its parts
+ * (light-client.md). x19 its parts, in a table of its own at L (LcParts), x20 out, x21 the kind's fields (LCO_*, 3 bits each), x22 the bytes
  * of the fixed part, x23 of the variable part, x24 the fixed cursor, x25 the variable cursor, x26
- * the bytes of out, x27 and x28 a branch's bytes and roots. Locals: none.
+ * the bytes of out, x27 and x28 a branch's bytes and roots. Locals: L the parts (72 bytes).
  */
 SPEC_FUNCTION lc_object
-    ENTER 0
+    ENTER 80
 .if FORK == FORK_PHASE0
     mov     x0, #LANTERN_NO_STATE_ANSWER
-    LEAVE 0
+    LEAVE 80
 .else
-    mov     x19, x1
-    mov     x20, x2
+    add     x19, sp, #L                     /* its parts, in a table of its own */
+    stp     x1, x2, [x19, #LcParts_header]
+    stp     x3, x4, [x19, #LcParts_branch]
+    stp     x5, x6, [x19, #LcParts_finality_branch]
+    ldp     x9, x10, [x7]                   /* the counts */
+    stp     x9, x10, [x19, #LcParts_branch_count]
+    ldr     x9, [x7, #16]
+    str     x9, [x19, #LcParts_signature_slot]
+    ldr     x20, [sp, #(96 + 80)]           /* the ninth argument: out */
     MOVQ    x21, LCO_BOOTSTRAP_FIELDS
     cbz     x0, 1f
     MOVQ    x21, LCO_UPDATE_FIELDS
@@ -670,13 +678,13 @@ SPEC_FUNCTION lc_object
     add     x10, x22, x23
     stp     x9, x10, [x20, #8]
     mov     x0, #LANTERN_OK
-    LEAVE 0
+    LEAVE 80
 96: mov     x0, #LANTERN_INVALID_ENCODING
-    LEAVE 0
+    LEAVE 80
 97: mov     x0, #LANTERN_INVALID_EVENT
-    LEAVE 0
+    LEAVE 80
 98: mov     x0, #LANTERN_BUFFER_TOO_SMALL
-    LEAVE 0
+    LEAVE 80
 .endif
 SPEC_END lc_object
 

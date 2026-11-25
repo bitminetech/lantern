@@ -581,45 +581,45 @@ LOCAL_FUNCTION lantern_lc_make_update
     LEAVE 0
 END_FUNCTION lantern_lc_make_update
 
-# L1, lantern_lc_better's: the LcParts rdx of the LcUpdate rsi of the fork rcx in the store rdi, the
-# branches at their counts. rbx the store, rbp the update, r12 the parts, r13 the fork.
-LOCAL_FUNCTION lantern_lc_better_parts
-    ENTER 0
-    mov     %rdi, %rbx
-    mov     %rsi, %rbp
-    mov     %rdx, %r12
-    mov     %rcx, %r13
-    mov     $LC_PART_HEADERS, %esi
-    mov     LcUpdate_attested_header(%rbp), %rdx
-    call    lantern_lc_ref
-    add     $LcHeader_header, %rax
-    mov     %rax, LcParts_header(%r12)
+
+# Inside lantern_lc_better: the parts of the LcUpdate update of the fork fork in the store rbx, into
+# its parts table at L, the branches at their counts. Uses rax, rcx, rdx, rsi, rdi.
+.macro LC_BETTER_PARTS update, fork
     mov     %rbx, %rdi
     mov     $LC_PART_HEADERS, %esi
-    mov     LcUpdate_finalized_header(%rbp), %rdx
+    mov     \update, %rax
+    mov     LcUpdate_attested_header(%rax), %rdx
     call    lantern_lc_ref
     add     $LcHeader_header, %rax
-    mov     %rax, LcParts_finalized_header(%r12)
+    mov     %rax, (L + LcParts_header)(%rsp)
+    mov     %rbx, %rdi
+    mov     $LC_PART_HEADERS, %esi
+    mov     \update, %rax
+    mov     LcUpdate_finalized_header(%rax), %rdx
+    call    lantern_lc_ref
+    add     $LcHeader_header, %rax
+    mov     %rax, (L + LcParts_finalized_header)(%rsp)
     mov     %rbx, %rdi
     mov     $LC_PART_COMMITTEES, %esi
-    mov     LcUpdate_next_sync_committee(%rbp), %rdx
+    mov     \update, %rax
+    mov     LcUpdate_next_sync_committee(%rax), %rdx
     call    lantern_lc_ref
     add     $LcCommittee_committee, %rax
-    mov     %rax, LcParts_sync_committee(%r12)
-    lea     LcUpdate_next_branch(%rbp), %rax
-    mov     %rax, LcParts_branch(%r12)
-    lea     LcUpdate_finality_branch(%rbp), %rax
-    mov     %rax, LcParts_finality_branch(%r12)
-    lea     LcUpdate_sync_aggregate(%rbp), %rax
-    mov     %rax, LcParts_sync_aggregate(%r12)
-    mov     LcUpdate_signature_slot(%rbp), %rax
-    mov     %rax, LcParts_signature_slot(%r12)
-    mov     %r13, %rcx
+    mov     %rax, (L + LcParts_sync_committee)(%rsp)
+    mov     \update, %rax
+    lea     LcUpdate_next_branch(%rax), %rcx
+    mov     %rcx, (L + LcParts_branch)(%rsp)
+    lea     LcUpdate_finality_branch(%rax), %rcx
+    mov     %rcx, (L + LcParts_finality_branch)(%rsp)
+    lea     LcUpdate_sync_aggregate(%rax), %rcx
+    mov     %rcx, (L + LcParts_sync_aggregate)(%rsp)
+    mov     LcUpdate_signature_slot(%rax), %rcx
+    mov     %rcx, (L + LcParts_signature_slot)(%rsp)
+    mov     \fork, %rcx
     LC_COUNTS
-    mov     %rcx, LcParts_branch_count(%r12)
-    mov     %rdx, LcParts_finality_count(%r12)
-    LEAVE 0
-END_FUNCTION lantern_lc_better_parts
+    mov     %rcx, (L + LcParts_branch_count)(%rsp)
+    mov     %rdx, (L + LcParts_finality_count)(%rsp)
+.endm
 
 # rax = 1 when lantern_is_better_update of the LcUpdate rsi's fork gives 1 for it and the
 # LcUpdate rdx upgraded to that fork, in the store rdi with the scratch rcx (LC_COMPARE_SCRATCH
@@ -636,17 +636,23 @@ LOCAL_FUNCTION lantern_lc_better
     call    lantern_lc_ref
     mov     %rax, %rbp
     mov     LcUpdate_fork(%rbp), %r14
-    mov     %rbx, %rdi                      # the new update: buffer 1
-    mov     %rbp, %rsi
-    lea     L(%rsp), %rdx
-    mov     %r14, %rcx
-    call    lantern_lc_better_parts
+    LC_BETTER_PARTS %rbp, %r14              # the new update: buffer 1
     movq    $(24 + LC_UPDATE_ROOM), (%r13)
-    mov     $LC_OBJECT_UPDATE, %edi
-    lea     L(%rsp), %rsi
-    mov     %r13, %rdx
     mov     %r14, %r10
+    sub     $32, %rsp                       # the seventh to ninth arguments: sync_aggregate, counts, out
+    mov     %r13, 16(%rsp)
+    mov     (32 + L + LcParts_sync_aggregate)(%rsp), %rax
+    mov     %rax, (%rsp)
+    lea     (32 + L + LcParts_branch_count)(%rsp), %rax
+    mov     %rax, 8(%rsp)
+    mov     $LC_OBJECT_UPDATE, %edi
+    mov     (32 + L + LcParts_header)(%rsp), %rsi   # the parts, each its own argument
+    mov     (32 + L + LcParts_sync_committee)(%rsp), %rdx
+    mov     (32 + L + LcParts_branch)(%rsp), %rcx
+    mov     (32 + L + LcParts_finalized_header)(%rsp), %r8
+    mov     (32 + L + LcParts_finality_branch)(%rsp), %r9
     FORK_CALL lc_object
+    add     $32, %rsp
     test    %rax, %rax
     jnz     9f
     mov     %rbx, %rdi                      # the old one, its headers upgraded: buffer 2
@@ -655,11 +661,7 @@ LOCAL_FUNCTION lantern_lc_better
     call    lantern_lc_ref
     mov     %rax, S7(%rsp)
     mov     LcUpdate_fork(%rax), %r15
-    mov     %rbx, %rdi
-    mov     %rax, %rsi
-    lea     L(%rsp), %rdx
-    mov     %r15, %rcx
-    call    lantern_lc_better_parts
+    LC_BETTER_PARTS S7(%rsp), %r15
     cmp     %r14, %r15
     je      1f
     lea     (2 * (24 + LC_UPDATE_ROOM))(%r13), %rdx   # the headers' buffers, after the two updates'
@@ -682,10 +684,21 @@ LOCAL_FUNCTION lantern_lc_better
     jnz     9f
 1:  lea     (24 + LC_UPDATE_ROOM)(%r13), %rdx
     movq    $(24 + LC_UPDATE_ROOM), (%rdx)
-    mov     $LC_OBJECT_UPDATE, %edi
-    lea     L(%rsp), %rsi
     mov     %r14, %r10
+    sub     $32, %rsp                       # the seventh to ninth arguments: sync_aggregate, counts, out
+    mov     %rdx, 16(%rsp)
+    mov     (32 + L + LcParts_sync_aggregate)(%rsp), %rax
+    mov     %rax, (%rsp)
+    lea     (32 + L + LcParts_branch_count)(%rsp), %rax
+    mov     %rax, 8(%rsp)
+    mov     $LC_OBJECT_UPDATE, %edi
+    mov     (32 + L + LcParts_header)(%rsp), %rsi   # the parts, each its own argument
+    mov     (32 + L + LcParts_sync_committee)(%rsp), %rdx
+    mov     (32 + L + LcParts_branch)(%rsp), %rcx
+    mov     (32 + L + LcParts_finalized_header)(%rsp), %r8
+    mov     (32 + L + LcParts_finality_branch)(%rsp), %r9
     FORK_CALL lc_object
+    add     $32, %rsp
     test    %rax, %rax
     jnz     9f
     mov     %r13, %rdi
@@ -1707,11 +1720,21 @@ FUNCTION lantern_lc_read
     LC_COUNTS
     mov     %rcx, (L + LcParts_branch_count)(%rsp)
     mov     %rdx, (L + LcParts_finality_count)(%rsp)
-30: mov     %rbp, %rdi
-    lea     L(%rsp), %rsi
-    mov     %r13, %rdx
-    mov     S8(%rsp), %r10
+30: mov     S8(%rsp), %r10
+    sub     $32, %rsp                       # the seventh to ninth arguments: sync_aggregate, counts, out
+    mov     %r13, 16(%rsp)
+    mov     (32 + L + LcParts_sync_aggregate)(%rsp), %rax
+    mov     %rax, (%rsp)
+    lea     (32 + L + LcParts_branch_count)(%rsp), %rax
+    mov     %rax, 8(%rsp)
+    mov     %rbp, %rdi
+    mov     (32 + L + LcParts_header)(%rsp), %rsi   # the parts, each its own argument
+    mov     (32 + L + LcParts_sync_committee)(%rsp), %rdx
+    mov     (32 + L + LcParts_branch)(%rsp), %rcx
+    mov     (32 + L + LcParts_finalized_header)(%rsp), %r8
+    mov     (32 + L + LcParts_finality_branch)(%rsp), %r9
     FORK_CALL lc_object
+    add     $32, %rsp
     test    %rax, %rax
     jnz     99f
     mov     S8(%rsp), %rcx

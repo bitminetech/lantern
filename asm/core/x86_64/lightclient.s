@@ -506,18 +506,33 @@ SPEC_END upgrade_lc_header
 .endif
 .endif
 
-# (kind, parts, out) -> status: the SSZ bytes of a light client object of the fork from its parts
-# (light-client.md). rbx parts, rbp out, r12 the kind's fields (LCO_*, 3 bits each), r13 the bytes
+# (kind, header, sync_committee, branch, finalized_header, finality_branch, sync_aggregate, counts,
+# out) -> status: the SSZ bytes of a light client object of the fork from its parts
+# (light-client.md). rbx its parts, in a table of its own at L (LcParts), rbp out, r12 the kind's fields (LCO_*, 3 bits each), r13 the bytes
 # of the fixed part, r14 of the variable part, r15 the fixed cursor, S7 the variable cursor, S8 the
-# bytes of out, S9 and S10 a branch's roots and bytes. Locals: none.
+# bytes of out, S9 and S10 a branch's roots and bytes. Locals: L the parts (72 bytes).
 SPEC_FUNCTION lc_object
-    ENTER 0
+    ENTER 80
 .if FORK == FORK_PHASE0
     mov     $LANTERN_NO_STATE_ANSWER, %eax
-    LEAVE 0
+    LEAVE 80
 .else
-    mov     %rsi, %rbx
-    mov     %rdx, %rbp
+    lea     L(%rsp), %rbx                   # its parts, in a table of its own
+    mov     %rsi, LcParts_header(%rbx)
+    mov     %rdx, LcParts_sync_committee(%rbx)
+    mov     %rcx, LcParts_branch(%rbx)
+    mov     %r8, LcParts_finalized_header(%rbx)
+    mov     %r9, LcParts_finality_branch(%rbx)
+    mov     (80 + 96)(%rsp), %rax           # the seventh to ninth arguments: sync_aggregate, counts, out
+    mov     %rax, LcParts_sync_aggregate(%rbx)
+    mov     (80 + 96 + 8)(%rsp), %rax
+    mov     (%rax), %rcx
+    mov     %rcx, LcParts_branch_count(%rbx)
+    mov     8(%rax), %rcx
+    mov     %rcx, LcParts_finality_count(%rbx)
+    mov     16(%rax), %rcx
+    mov     %rcx, LcParts_signature_slot(%rbx)
+    mov     (80 + 96 + 16)(%rsp), %rbp
     mov     $LCO_BOOTSTRAP_FIELDS, %r12d
     test    %rdi, %rdi
     jz      1f
@@ -671,13 +686,13 @@ SPEC_FUNCTION lc_object
     lea     (%r13,%r14), %rax
     mov     %rax, 16(%rbp)
     xor     %eax, %eax
-    LEAVE 0
+    LEAVE 80
 96: mov     $LANTERN_INVALID_ENCODING, %eax
-    LEAVE 0
+    LEAVE 80
 97: mov     $LANTERN_INVALID_EVENT, %eax
-    LEAVE 0
+    LEAVE 80
 98: mov     $LANTERN_BUFFER_TOO_SMALL, %eax
-    LEAVE 0
+    LEAVE 80
 .endif
 SPEC_END lc_object
 

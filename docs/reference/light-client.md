@@ -24,7 +24,6 @@
 - [`lantern_lc_at`](#function-lantern_lc_at): the address of an entry or record of a part of an LcStore.
 - [`lantern_lc_beacon_root`](#function-lantern_lc_beacon_root): hash_tree_root of a BeaconBlockHeader.
 - [`lantern_lc_better`](#function-lantern_lc_better): whether a new LcUpdate is better than an old one.
-- [`lantern_lc_better_parts`](#function-lantern_lc_better_parts): the LcParts of an LcUpdate of a fork, for lantern_lc_better.
 - [`lantern_lc_collect`](#function-lantern_lc_collect): frees the records of an LcStore that nothing refers to.
 - [`lantern_lc_committee`](#function-lantern_lc_committee): an LcCommittee reference of sync committee bytes.
 - [`lantern_lc_empty_header`](#function-lantern_lc_empty_header): a new LcHeader that holds the empty header of a fork.
@@ -64,7 +63,7 @@
 
 ### Types
 
-- [`LcParts`](#type-lcparts): the parts of a light client object.
+- [`LcCounts`](#type-lccounts): the counts and the slot of a light client object.
 - [`LcRoom`](#type-lcroom): LcRoom.
 - [`LcStore`](#type-lcstore): the light client data of a node: the model's `LightClientDataStore` (`cache` and `db`) and the parts of its test that it reads (`blocks`, `finalized_block_roots`, `latest_finalized_epoch`, `latest_finalized_bid`, `historical_tail_slot`).
 - [`LcBlock`](#type-lcblock): a block from the finalized one on: the model's `blocks` entry and, from `tail_slot`, its `CachedLightClientData`.
@@ -342,7 +341,7 @@ The SSZ bytes of a `LightClientBootstrap`, `LightClientUpdate`, `LightClientFina
 ### Signature
 
 ```
-lantern_lc_object(kind, parts, out) -> status
+lantern_lc_object(kind, header, sync_committee, branch, finalized_header, finality_branch, sync_aggregate, counts, out) -> status
 ```
 
 ### Arguments
@@ -350,7 +349,13 @@ lantern_lc_object(kind, parts, out) -> status
 | Name | Role | Type |
 |---|---|---|
 | `kind` | input | u64: `LC_OBJECT_*` |
-| `parts` | input | [`LcParts`](#type-lcparts) |
+| `header` | input | ByteList of a `LightClientHeader`: the bootstrap's `header`, else `attested_header` |
+| `sync_committee` | input | The SSZ bytes of a `SyncCommittee`: the bootstrap's current, the update's next, or 0 |
+| `branch` | input | Roots: the bootstrap's `current_sync_committee_branch`, the update's `next_sync_committee_branch` |
+| `finalized_header` | input | ByteList of a `LightClientHeader` |
+| `finality_branch` | input | Roots |
+| `sync_aggregate` | input | The SSZ bytes of a `SyncAggregate` |
+| `counts` | input | [`LcCounts`](#type-lccounts) |
 | `out` | output | ByteList: the SSZ bytes of the kind's type of the fork |
 
 ### Returns
@@ -377,14 +382,14 @@ lantern_lc_object(kind, parts, out) -> status
 
 ### Limits
 
-- Stack of its own: 96 bytes on x86-64 (return address included), 96 bytes on ARM64, 96 bytes on RISC-V.
+- Stack of its own: 176 bytes on x86-64 (return address included), 176 bytes on ARM64, 176 bytes on RISC-V.
 
 ### ABI
 
 - Role: L0.
 - Symbol: `lantern_<fork>_lc_object` in the object of every fork, with `_` before it on macOS; `lantern_lc_object` inside the object.
 - Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
-- Argument order: `kind`, `parts`, `out`.
+- Argument order: `kind`, `header`, `sync_committee`, `branch`, `finalized_header`, `finality_branch`, `sync_aggregate`, `counts`, `out`.
 
 ## Function `lantern_lc_anchor_header`
 
@@ -728,7 +733,7 @@ lantern_lc_read(lc, kind, key, out, fork) -> status
 
 ### Limits
 
-- Stack of its own: 176 bytes on x86-64 (return address included), 176 bytes on ARM64, 176 bytes on RISC-V.
+- Stack of its own: 208 bytes on x86-64 (return address included), 192 bytes on ARM64, 192 bytes on RISC-V.
 
 ### ABI
 
@@ -1010,7 +1015,7 @@ lantern_lc_better(store, new, old, scratch) -> flag
 
 ### Limits
 
-- Stack of its own: 176 bytes on x86-64 (return address included), 176 bytes on ARM64, 176 bytes on RISC-V.
+- Stack of its own: 208 bytes on x86-64 (return address included), 192 bytes on ARM64, 192 bytes on RISC-V.
 
 ### ABI
 
@@ -1018,46 +1023,6 @@ lantern_lc_better(store, new, old, scratch) -> flag
 - Symbol: `lantern_lc_better`, local to its object.
 - Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
 - Argument order: `store`, `new`, `old`, `scratch`.
-
-## Function `lantern_lc_better_parts`
-
-The LcParts of an LcUpdate of a fork, for lantern_lc_better.
-
-### Signature
-
-```
-lantern_lc_better_parts(store, update, parts, fork)
-```
-
-### Arguments
-
-| Name | Role | Type |
-|---|---|---|
-| `store` | input | [`LcStore`](#type-lcstore) |
-| `update` | input | [`LcUpdate`](#type-lcupdate) |
-| `parts` | output | [`LcParts`](#type-lcparts) |
-| `fork` | input | u64 in a register |
-
-### Function does
-
-- Writes the LcParts of the update for the fork, with the branches at their counts.
-
-### Function never
-
-- Makes an OS call.
-
-### Limits
-
-- Stack of its own: 96 bytes on x86-64 (return address included), 16 bytes on ARM64, 96 bytes on RISC-V.
-
-### ABI
-
-- Role: L0.
-- Symbol: `lantern_lc_better_parts`, local to its object.
-- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
-- On ARM64 it takes the store in x19, the fork in x24, the update in x25 and the parts in x26, the registers of lantern_lc_better; on x86-64 and RISC-V they are its arguments.
-- Registers it changes, on ARM64: x0 to x2, x9 to x12.
-- Argument order: `store`, `update`, `parts`, `fork`.
 
 ## Function `lantern_lc_collect`
 
@@ -2457,28 +2422,22 @@ lantern_node_api_lc_read(lc, work, data, scratch, view) -> status
 - Registers it reads, on ARM64, x86-64, RISC-V: the node in x19, rbx, s1.
 - Argument order: `lc`, `work`, `data`, `scratch`, `view`.
 
-## Type `LcParts`
+## Type `LcCounts`
 
-The parts of a light client object, for lantern_lc_object.
+The counts and the slot of a light client object, for lantern_lc_object.
 
 ### Layout
 
 | Offset | Field | Type | Meaning |
 |---|---|---|---|
-| 0 | `header` | pointer | A ByteList of a `LightClientHeader`: the bootstrap's `header`, else `attested_header` |
-| 8 | `sync_committee` | pointer | The SSZ bytes of a `SyncCommittee`: the bootstrap's current, the update's next |
-| 16 | `branch` | pointer | Roots: the bootstrap's `current_sync_committee_branch`, the update's `next_sync_committee_branch` |
-| 24 | `branch_count` | u64 | Their number |
-| 32 | `finalized_header` | pointer | A ByteList of a `LightClientHeader` |
-| 40 | `finality_branch` | pointer | Roots |
-| 48 | `finality_count` | u64 | Their number |
-| 56 | `sync_aggregate` | pointer | The SSZ bytes of a `SyncAggregate` |
-| 64 | `signature_slot` | u64 | |
+| 0 | `branch_count` | u64 | The roots of `branch` |
+| 8 | `finality_count` | u64 | The roots of `finality_branch` |
+| 16 | `signature_slot` | u64 | |
 
 ### Rules
 
-- `LcParts__mem` (72) bytes. lantern_lc_object reads the fields its kind uses.
-
+- 24 bytes.
+- lantern_lc_object reads the parts and counts its kind uses; it keeps them in a table of its own on its stack (`LcParts`, 72 bytes: the six parts, then these three values).
 ## Type `LcRoom`
 
 The capacities of the parts of an LcStore.

@@ -1381,11 +1381,11 @@
 .set LcParts_header, 0
 .set LcParts_sync_committee, 8
 .set LcParts_branch, 16
-.set LcParts_branch_count, 24
-.set LcParts_finalized_header, 32
-.set LcParts_finality_branch, 40
-.set LcParts_finality_count, 48
-.set LcParts_sync_aggregate, 56
+.set LcParts_finalized_header, 24
+.set LcParts_finality_branch, 32
+.set LcParts_sync_aggregate, 40
+.set LcParts_branch_count, 48              /* LcCounts: branch_count, finality_count, signature_slot */
+.set LcParts_finality_count, 56
 .set LcParts_signature_slot, 64
 .set LcParts__mem, 72
 .set LcRoom_blocks, 0

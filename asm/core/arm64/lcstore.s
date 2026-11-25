@@ -612,87 +612,10 @@ LOCAL_FUNCTION lantern_lc_make_update
 END_FUNCTION lantern_lc_make_update
 
 /*
- * x0 = 1 when lantern_is_better_update of the LcUpdate x1's fork gives 1 for it and the LcUpdate
- * x2 upgraded to that fork, in the store x0 with the scratch x3 (LC_COMPARE_SCRATCH bytes, checked
- * before); else 0. x19 the store, x20 the new update, x21 the old, x22 the scratch's buffers, x23
- * the new update's fork, x24 the fork of the update in the parts, x25 an update, x26 the parts.
- * Locals: L the parts, L + 72 the answer.
+ * Inside lantern_lc_better: the parts of the LcUpdate x25 of the fork x24 in the store x19, into
+ * its parts table x26, the branches at their counts. Uses x0-x2, x9-x12.
  */
-LOCAL_FUNCTION lantern_lc_better
-    ENTER 80
-    mov     x19, x0
-    mov     x21, x2
-    add     x22, x3, #8
-    add     x26, sp, #L
-    mov     x2, x1
-    mov     x1, #LC_PART_UPDATES
-    bl      lantern_lc_ref
-    mov     x20, x0
-    ldr     x23, [x20, #LcUpdate_fork]
-    mov     x25, x20                        /* the new update: buffer 1 */
-    mov     x24, x23
-    bl      lantern_lc_better_parts
-    MOVQ    x9, 24 + LC_UPDATE_ROOM
-    str     x9, [x22]
-    mov     x0, #LC_OBJECT_UPDATE
-    mov     x1, x26
-    mov     x2, x22
-    mov     x15, x23
-    FORK_CALL lc_object
-    cbnz    x0, 9f
-    mov     x0, x19                         /* the old one, its headers upgraded: buffer 2 */
-    mov     x1, #LC_PART_UPDATES
-    mov     x2, x21
-    bl      lantern_lc_ref
-    mov     x25, x0
-    ldr     x24, [x25, #LcUpdate_fork]
-    bl      lantern_lc_better_parts
-    cmp     x24, x23
-    b.eq    1f
-    MOVQ    x9, 2 * (24 + LC_UPDATE_ROOM)   /* the headers' buffers, after the two updates' */
-    add     x2, x22, x9
-    mov     x10, #(24 + LC_HEADER_ROOM)
-    str     x10, [x2]
-    ldr     x0, [x26, #LcParts_header]
-    str     x2, [x26, #LcParts_header]
-    mov     x1, x24
-    mov     x15, x23
-    FORK_CALL upgrade_lc_header
-    cbnz    x0, 9f
-    MOVQ    x9, 2 * (24 + LC_UPDATE_ROOM) + 24 + LC_HEADER_ROOM
-    add     x2, x22, x9
-    mov     x10, #(24 + LC_HEADER_ROOM)
-    str     x10, [x2]
-    ldr     x0, [x26, #LcParts_finalized_header]
-    str     x2, [x26, #LcParts_finalized_header]
-    mov     x1, x24
-    mov     x15, x23
-    FORK_CALL upgrade_lc_header
-    cbnz    x0, 9f
-1:  MOVQ    x9, 24 + LC_UPDATE_ROOM
-    add     x2, x22, x9
-    str     x9, [x2]
-    mov     x0, #LC_OBJECT_UPDATE
-    mov     x1, x26
-    mov     x15, x23
-    FORK_CALL lc_object
-    cbnz    x0, 9f
-    mov     x0, x22
-    MOVQ    x9, 24 + LC_UPDATE_ROOM
-    add     x1, x22, x9
-    add     x2, sp, #(L + 72)
-    mov     x15, x23
-    FORK_CALL is_better_update
-    cbnz    x0, 9f
-    ldr     x0, [sp, #(L + 72)]
-    LEAVE 80
-9:  mov     x0, #0
-    LEAVE 80
-END_FUNCTION lantern_lc_better
-
-/* L1, lantern_lc_better's: the LcParts x26 of the LcUpdate x25 of the fork x24 in the store x19, the branches at their counts. Uses x0-x2, x9-x12. */
-LOCAL_FUNCTION lantern_lc_better_parts
-    FRAME 0
+.macro LC_BETTER_PARTS
     mov     x0, x19
     mov     x1, #LC_PART_HEADERS
     ldr     x2, [x25, #LcUpdate_attested_header]
@@ -723,8 +646,98 @@ LOCAL_FUNCTION lantern_lc_better_parts
     LC_COUNTS
     str     x9, [x26, #LcParts_branch_count]
     str     x10, [x26, #LcParts_finality_count]
-    UNFRAME 0
-END_FUNCTION lantern_lc_better_parts
+.endm
+
+/*
+ * x0 = 1 when lantern_is_better_update of the LcUpdate x1's fork gives 1 for it and the LcUpdate
+ * x2 upgraded to that fork, in the store x0 with the scratch x3 (LC_COMPARE_SCRATCH bytes, checked
+ * before); else 0. x19 the store, x20 the new update, x21 the old, x22 the scratch's buffers, x23
+ * the new update's fork, x24 the fork of the update in the parts, x25 an update, x26 the parts.
+ * Locals: L the parts, L + 72 the answer.
+ */
+LOCAL_FUNCTION lantern_lc_better
+    ENTER 80
+    mov     x19, x0
+    mov     x21, x2
+    add     x22, x3, #8
+    add     x26, sp, #L
+    mov     x2, x1
+    mov     x1, #LC_PART_UPDATES
+    bl      lantern_lc_ref
+    mov     x20, x0
+    ldr     x23, [x20, #LcUpdate_fork]
+    mov     x25, x20                        /* the new update: buffer 1 */
+    mov     x24, x23
+    LC_BETTER_PARTS
+    MOVQ    x9, 24 + LC_UPDATE_ROOM
+    str     x9, [x22]
+    mov     x15, x23
+    sub     sp, sp, #16                     /* the ninth argument: out */
+    str     x22, [sp]
+    mov     x0, #LC_OBJECT_UPDATE
+    ldp     x1, x2, [x26, #LcParts_header]  /* the parts, each its own argument */
+    ldp     x3, x4, [x26, #LcParts_branch]
+    ldp     x5, x6, [x26, #LcParts_finality_branch]
+    add     x7, x26, #LcParts_branch_count
+    FORK_CALL lc_object
+    add     sp, sp, #16
+    cbnz    x0, 9f
+    mov     x0, x19                         /* the old one, its headers upgraded: buffer 2 */
+    mov     x1, #LC_PART_UPDATES
+    mov     x2, x21
+    bl      lantern_lc_ref
+    mov     x25, x0
+    ldr     x24, [x25, #LcUpdate_fork]
+    LC_BETTER_PARTS
+    cmp     x24, x23
+    b.eq    1f
+    MOVQ    x9, 2 * (24 + LC_UPDATE_ROOM)   /* the headers' buffers, after the two updates' */
+    add     x2, x22, x9
+    mov     x10, #(24 + LC_HEADER_ROOM)
+    str     x10, [x2]
+    ldr     x0, [x26, #LcParts_header]
+    str     x2, [x26, #LcParts_header]
+    mov     x1, x24
+    mov     x15, x23
+    FORK_CALL upgrade_lc_header
+    cbnz    x0, 9f
+    MOVQ    x9, 2 * (24 + LC_UPDATE_ROOM) + 24 + LC_HEADER_ROOM
+    add     x2, x22, x9
+    mov     x10, #(24 + LC_HEADER_ROOM)
+    str     x10, [x2]
+    ldr     x0, [x26, #LcParts_finalized_header]
+    str     x2, [x26, #LcParts_finalized_header]
+    mov     x1, x24
+    mov     x15, x23
+    FORK_CALL upgrade_lc_header
+    cbnz    x0, 9f
+1:  MOVQ    x9, 24 + LC_UPDATE_ROOM
+    add     x2, x22, x9
+    str     x9, [x2]
+    mov     x15, x23
+    sub     sp, sp, #16                     /* the ninth argument: out */
+    str     x2, [sp]
+    mov     x0, #LC_OBJECT_UPDATE
+    ldp     x1, x2, [x26, #LcParts_header]  /* the parts, each its own argument */
+    ldp     x3, x4, [x26, #LcParts_branch]
+    ldp     x5, x6, [x26, #LcParts_finality_branch]
+    add     x7, x26, #LcParts_branch_count
+    FORK_CALL lc_object
+    add     sp, sp, #16
+    cbnz    x0, 9f
+    mov     x0, x22
+    MOVQ    x9, 24 + LC_UPDATE_ROOM
+    add     x1, x22, x9
+    add     x2, sp, #(L + 72)
+    mov     x15, x23
+    FORK_CALL is_better_update
+    cbnz    x0, 9f
+    ldr     x0, [sp, #(L + 72)]
+    LEAVE 80
+9:  mov     x0, #0
+    LEAVE 80
+END_FUNCTION lantern_lc_better
+
 
 /*
  * x0 = status: the LcBlock of the block x3 (ByteList) with its post-state x2 in the store x0,
@@ -1710,11 +1723,17 @@ FUNCTION lantern_lc_read
     LC_COUNTS
     str     x9, [sp, #(L + LcParts_branch_count)]
     str     x10, [sp, #(L + LcParts_finality_count)]
-30: mov     x0, x20
-    add     x1, sp, #L
-    mov     x2, x22
+30: add     x9, sp, #L                      /* the parts, each its own argument */
     mov     x15, x26
+    sub     sp, sp, #16                     /* the ninth argument: out */
+    str     x22, [sp]
+    mov     x0, x20
+    ldp     x1, x2, [x9, #LcParts_header]
+    ldp     x3, x4, [x9, #LcParts_branch]
+    ldp     x5, x6, [x9, #LcParts_finality_branch]
+    add     x7, x9, #LcParts_branch_count
     FORK_CALL lc_object
+    add     sp, sp, #16
     cbnz    x0, 99f
     str     x26, [x23]
     LEAVE 80

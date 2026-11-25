@@ -584,45 +584,41 @@ LOCAL_FUNCTION lantern_lc_make_update
     LEAVE 0
 END_FUNCTION lantern_lc_make_update
 
-# L1, lantern_lc_better's: the LcParts a2 of the LcUpdate a1 of the fork a3 in the store a0, the branches at
-# their counts. s1 the store, s2 the update, s3 the parts, s4 the fork.
-LOCAL_FUNCTION lantern_lc_better_parts
-    ENTER 0
-    mv      s1, a0
-    mv      s2, a1
-    mv      s3, a2
-    mv      s4, a3
-    li      a1, LC_PART_HEADERS
-    ld      a2, LcUpdate_attested_header(s2)
-    call    lantern_lc_ref
-    addi    a0, a0, LcHeader_header
-    sd      a0, LcParts_header(s3)
+
+# Inside lantern_lc_better: the parts of the LcUpdate update of the fork fork in the store s1, into
+# its parts table at L, the branches at their counts. Uses a0-a2, t0, t1.
+.macro LC_BETTER_PARTS update, fork
     mv      a0, s1
     li      a1, LC_PART_HEADERS
-    ld      a2, LcUpdate_finalized_header(s2)
+    ld      a2, LcUpdate_attested_header(\update)
     call    lantern_lc_ref
     addi    a0, a0, LcHeader_header
-    sd      a0, LcParts_finalized_header(s3)
+    sd      a0, (L + LcParts_header)(sp)
+    mv      a0, s1
+    li      a1, LC_PART_HEADERS
+    ld      a2, LcUpdate_finalized_header(\update)
+    call    lantern_lc_ref
+    addi    a0, a0, LcHeader_header
+    sd      a0, (L + LcParts_finalized_header)(sp)
     mv      a0, s1
     li      a1, LC_PART_COMMITTEES
-    ld      a2, LcUpdate_next_sync_committee(s2)
+    ld      a2, LcUpdate_next_sync_committee(\update)
     call    lantern_lc_ref
     addi    a0, a0, LcCommittee_committee
-    sd      a0, LcParts_sync_committee(s3)
-    addi    t0, s2, LcUpdate_next_branch
-    sd      t0, LcParts_branch(s3)
-    addi    t0, s2, LcUpdate_finality_branch
-    sd      t0, LcParts_finality_branch(s3)
-    addi    t0, s2, LcUpdate_sync_aggregate
-    sd      t0, LcParts_sync_aggregate(s3)
-    ld      t0, LcUpdate_signature_slot(s2)
-    sd      t0, LcParts_signature_slot(s3)
-    mv      t0, s4
+    sd      a0, (L + LcParts_sync_committee)(sp)
+    addi    t0, \update, LcUpdate_next_branch
+    sd      t0, (L + LcParts_branch)(sp)
+    addi    t0, \update, LcUpdate_finality_branch
+    sd      t0, (L + LcParts_finality_branch)(sp)
+    addi    t0, \update, LcUpdate_sync_aggregate
+    sd      t0, (L + LcParts_sync_aggregate)(sp)
+    ld      t0, LcUpdate_signature_slot(\update)
+    sd      t0, (L + LcParts_signature_slot)(sp)
+    mv      t0, \fork
     LC_COUNTS
-    sd      t0, LcParts_branch_count(s3)
-    sd      t1, LcParts_finality_count(s3)
-    LEAVE 0
-END_FUNCTION lantern_lc_better_parts
+    sd      t0, (L + LcParts_branch_count)(sp)
+    sd      t1, (L + LcParts_finality_count)(sp)
+.endm
 
 # a0 = 1 when lantern_is_better_update of the LcUpdate a1's fork gives 1 for it and the
 # LcUpdate a2 upgraded to that fork, in the store a0 with the scratch a3 (LC_COMPARE_SCRATCH bytes,
@@ -639,18 +635,22 @@ LOCAL_FUNCTION lantern_lc_better
     call    lantern_lc_ref
     mv      s2, a0
     ld      s5, LcUpdate_fork(s2)
-    mv      a0, s1                          # the new update: buffer 1
-    mv      a1, s2
-    addi    a2, sp, L
-    mv      a3, s5
-    call    lantern_lc_better_parts
+    LC_BETTER_PARTS s2, s5                  # the new update: buffer 1
     li      t0, 24 + LC_UPDATE_ROOM
     sd      t0, 0(s4)
-    li      a0, LC_OBJECT_UPDATE
-    addi    a1, sp, L
-    mv      a2, s4
     mv      t6, s5
+    addi    sp, sp, -16                     # the ninth argument: out
+    sd      s4, 0(sp)
+    li      a0, LC_OBJECT_UPDATE
+    ld      a1, (16 + L + LcParts_header)(sp)       # the parts, each its own argument
+    ld      a2, (16 + L + LcParts_sync_committee)(sp)
+    ld      a3, (16 + L + LcParts_branch)(sp)
+    ld      a4, (16 + L + LcParts_finalized_header)(sp)
+    ld      a5, (16 + L + LcParts_finality_branch)(sp)
+    ld      a6, (16 + L + LcParts_sync_aggregate)(sp)
+    addi    a7, sp, 16 + L + LcParts_branch_count
     FORK_CALL lc_object
+    addi    sp, sp, 16
     bnez    a0, 9f
     mv      a0, s1                          # the old one, its headers upgraded: buffer 2
     li      a1, LC_PART_UPDATES
@@ -658,11 +658,7 @@ LOCAL_FUNCTION lantern_lc_better
     call    lantern_lc_ref
     mv      s7, a0
     ld      s6, LcUpdate_fork(s7)
-    mv      a0, s1
-    mv      a1, s7
-    addi    a2, sp, L
-    mv      a3, s6
-    call    lantern_lc_better_parts
+    LC_BETTER_PARTS s7, s6
     beq     s5, s6, 1f
     li      t0, 2 * (24 + LC_UPDATE_ROOM)   # the headers' buffers, after the two updates'
     add     a2, s4, t0
@@ -687,10 +683,19 @@ LOCAL_FUNCTION lantern_lc_better
 1:  li      t0, 24 + LC_UPDATE_ROOM
     add     a2, s4, t0
     sd      t0, 0(a2)
-    li      a0, LC_OBJECT_UPDATE
-    addi    a1, sp, L
     mv      t6, s5
+    addi    sp, sp, -16                     # the ninth argument: out
+    sd      a2, 0(sp)
+    li      a0, LC_OBJECT_UPDATE
+    ld      a1, (16 + L + LcParts_header)(sp)       # the parts, each its own argument
+    ld      a2, (16 + L + LcParts_sync_committee)(sp)
+    ld      a3, (16 + L + LcParts_branch)(sp)
+    ld      a4, (16 + L + LcParts_finalized_header)(sp)
+    ld      a5, (16 + L + LcParts_finality_branch)(sp)
+    ld      a6, (16 + L + LcParts_sync_aggregate)(sp)
+    addi    a7, sp, 16 + L + LcParts_branch_count
     FORK_CALL lc_object
+    addi    sp, sp, 16
     bnez    a0, 9f
     mv      a0, s4
     li      t0, 24 + LC_UPDATE_ROOM
@@ -1661,11 +1666,19 @@ FUNCTION lantern_lc_read
     LC_COUNTS
     sd      t0, (L + LcParts_branch_count)(sp)
     sd      t1, (L + LcParts_finality_count)(sp)
-30: mv      a0, s2
-    addi    a1, sp, L
-    mv      a2, s4
-    mv      t6, s8
+30: mv      t6, s8
+    addi    sp, sp, -16                     # the ninth argument: out
+    sd      s4, 0(sp)
+    mv      a0, s2
+    ld      a1, (16 + L + LcParts_header)(sp)       # the parts, each its own argument
+    ld      a2, (16 + L + LcParts_sync_committee)(sp)
+    ld      a3, (16 + L + LcParts_branch)(sp)
+    ld      a4, (16 + L + LcParts_finalized_header)(sp)
+    ld      a5, (16 + L + LcParts_finality_branch)(sp)
+    ld      a6, (16 + L + LcParts_sync_aggregate)(sp)
+    addi    a7, sp, 16 + L + LcParts_branch_count
     FORK_CALL lc_object
+    addi    sp, sp, 16
     bnez    a0, 99f
     sd      s8, 0(s5)
     LEAVE 80
