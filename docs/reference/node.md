@@ -865,7 +865,7 @@ lantern_node_run(node, store, seen, work, state_a, state_b, state_c, data, setti
 - `NODE_WORK_PUBLISH_SIDECAR`: the sidecar `arg` of the sidecars `state_b`, as a ByteList at `NodeEvent_chunk`, its block root at `NodeEvent_root`, its index at `NodeEvent_index` and its slot at `NodeEvent_checkpoint`; `LANTERN_INVALID_EVENT` past the last. With `target` 2^64 - 1, the block root and slot are `recon_root` and `recon_slot` (the reconstruction).
 - `NODE_WORK_FORKCHOICE`: engine_forkchoiceUpdated of the fork of the store's slot with the `block_hash` of the store's nodes of `head_root`, the justified checkpoint's root (safe) and the finalized checkpoint's root, in an HTTP POST to `engine_host` with a JWT of `jwt_secret` and the time `time_ms` / 1000, a ByteList at `NodeEvent_chunk`; `LANTERN_INVALID_UNKNOWN_BLOCK` when the store has no node of one of those roots, `LANTERN_NO_PAYLOAD` before bellatrix or when the head's `block_hash` is zero (no call).
 - `NODE_WORK_BLOB`: with `arg` 0, a `BlobSidecar`: lantern_node_blob_sidecar of the fork of its slot when it is deneb or electra; with `arg` 1, a `DataColumnSidecar`: lantern_node_column_sidecar when the fork of its slot is fulu. Each with the node's config and `settings`, the root at `NodeEvent_root`; a slot of another fork gives the result `LANTERN_INVALID_ENCODING`.
-- `NODE_WORK_GOSSIP`: lantern_node_gossip of the fork of the store's slot, with a `NodeGossip` of `seen`, the store, `time_ms`, the topic and subnet of `arg`, `state_a` as head, `state_b` as proposer, `state_c` as justified, `settings` and the node's config, its `root` at `NodeEvent_root` and its `index` at `NodeEvent_index`. A proposer or justified state whose slot's fork is not that of the store's slot is passed as 0; a head state whose slot's fork is not that of the store's slot gives the result `LANTERN_GOSSIP_IGNORE`, as at a fork's first slots, before the node imports a block of the new fork.
+- `NODE_WORK_GOSSIP`: lantern_node_gossip of the fork of the store's slot, with `seen`, the store, a `NodeGossip` of `time_ms` and the topic and subnet of `arg`, `state_a` as head, `state_b` as proposer, `state_c` as justified, `settings` and the node's config, its `root` at `NodeEvent_root` and its `index` at `NodeEvent_index`. A proposer or justified state whose slot's fork is not that of the store's slot is passed as 0; a head state whose slot's fork is not that of the store's slot gives the result `LANTERN_GOSSIP_IGNORE`, as at a fork's first slots, before the node imports a block of the new fork.
 - `NODE_WORK_API_ENCODE`: the response of the operation in `arg` (beacon-api.md, lantern_node_api_event), with the answer flags and the values of `arg`, as a ByteList at `NodeEvent_chunk` of the event; the event's `size` then covers it.
   - getLightClientBootstrap, getLightClientFinalityUpdate and getLightClientOptimisticUpdate: lantern_lc_read of `state_c` (the bootstrap of the root in `data`, the latest finality or optimistic update) into the end of `scratch`; as JSON, then lantern_node_json of the object's fork into the end of `scratch`, room for 4 times its bytes and 4096. No object: the error 404. No `state_c`, or no root of 32 bytes in `data` for the bootstrap: `LANTERN_INVALID_EVENT`.
   - getLightClientUpdatesByRange: for each period from the first 8 bytes of `data` below the next 8: lantern_lc_read of `state_c` (`LC_OBJECT_UPDATE`) into the end of `scratch`; from the first period with an update, up to the first with none; each as JSON with lantern_node_json of its fork, `NODE_JSON_LC_UPDATE`, into the end of `scratch`, or as SSZ with compute_fork_digest of the fork of its attested slot, the node's `genesis_validators_root` and config. No `state_c`, or `data` of other than 16 bytes: `LANTERN_INVALID_EVENT`.
@@ -888,7 +888,7 @@ lantern_node_run(node, store, seen, work, state_a, state_b, state_c, data, setti
   - The body: lantern_json_decode of the type of the operation `arg` % 2^8, of the fork `arg` / 2^16, into `scratch` (the subscriptions and prepareBeaconProposer: a JSON array of lantern's `BeaconCommitteeSubscription`, `SyncCommitteeSubscription` or `ProposerPreparation`, include/types.inc); for submitPoolBLSToExecutionChange, a JSON array, each item decoded so (from capella; before, the fork has no such type: `LANTERN_INVALID_ENCODING`). A body that is no such text: the result `LANTERN_INVALID_ENCODING`.
   - submitPoolAttestationsV2 and publishAggregateAndProofsV2: with `API_ANSWER_SSZ`, the SSZ list of the body: attestations from electra items of 240 bytes, the size of `SingleAttestation`; attestations before electra, and `SignedAggregateAndProof` items, found by the 4-byte offsets of the list (the first offset, a multiple of 4, gives the count; each at most the next and the body's length). A body that is no such list: `LANTERN_INVALID_ENCODING`. Else a JSON array, each item decoded as `Attestation` before electra and `SingleAttestation` from electra, or as the fork's `SignedAggregateAndProof` (`NODE_JSON_AGGREGATE_AND_PROOF`), `SyncCommitteeMessage` (`NODE_JSON_SYNC_COMMITTEE_MESSAGE`) or `SignedContributionAndProof` (`NODE_JSON_CONTRIBUTION_AND_PROOF`).
   - registerValidator: a JSON array of `SignedValidatorRegistrationV1`, or with `API_ANSWER_SSZ` the SSZ list of them (items of 180 bytes; a length that is no multiple of 180: `LANTERN_INVALID_ENCODING`). One scan of the validators of `state_a` finds each item's `pubkey`, through a table of the items at the end of `scratch` (a `scratch` without room for it: `LANTERN_BUFFER_TOO_SMALL`). Each item's record: `LANTERN_VALID` when it is eligible (beacon-api.md, registerValidator), else `LANTERN_GOSSIP_IGNORE`; its validator index as the second u64 (0 when it has none); then its SSZ bytes, as for an operation.
-  - Each operation in order: lantern_node_gossip of the fork `arg` / 2^16, with a `NodeGossip` of `seen`, the store, `time_ms`, the operation's topic, its subnet, `state_a` as head, no proposer or justified state, and the node's config. Its record: the result's code (u64), the subnet + 2^32 times the member (u64; the member at byte 16 of lantern_node_gossip's `root` for a valid attestation, else 0), then a ByteList of its SSZ bytes (offset 24, `size` 24 + the bytes to a multiple of 8, zero bytes after them).
+  - Each operation in order: lantern_node_gossip of the fork `arg` / 2^16, with `seen`, the store, a `NodeGossip` of `time_ms`, the operation's topic and its subnet, `state_a` as head, no proposer or justified state, and the node's config. Its record: the result's code (u64), the subnet + 2^32 times the member (u64; the member at byte 16 of lantern_node_gossip's `root` for a valid attestation, else 0), then a ByteList of its SSZ bytes (offset 24, `size` 24 + the bytes to a multiple of 8, zero bytes after them).
   - The subscriptions (prepareBeaconCommitteeSubnet, prepareSyncCommitteeSubnets) and prepareBeaconProposer: no gossip validation; each record's code is `LANTERN_VALID` and its subnet 0. An item of `BeaconCommitteeSubscription` whose `committees_at_slot` is 0 or above `MAX_COMMITTEES_PER_SLOT`, or whose `committee_index` is not below it, an item of `SyncCommitteeSubscription` with an index not below `SYNC_COMMITTEE_SIZE`, and a `ProposerPreparation` of another size than 28 bytes give the result `LANTERN_INVALID_ENCODING`.
   - The subnet: 0, but for an attestation compute_subnet_for_attestation(get_committee_count_per_slot(`state_a`, `data.target.epoch`), `data.slot`, the committee index: `data.index` before electra, `committee_index` from electra), as phase0 validator.md places it; an item whose bytes do not hold those fields has subnet 0, and its gossip validation rejects it.
   - Before the first: `seen` with fewer free `keys` entries than the operations (sync committee messages: `SYNC_COMMITTEE_SUBNET_COUNT` times their count) gives `LANTERN_BUFFER_TOO_SMALL`, so that no check of a list adds to `seen` before one is short.
@@ -934,7 +934,7 @@ lantern_node_run(node, store, seen, work, state_a, state_b, state_c, data, setti
 
 ### Limits
 
-- Stack of its own: 320 bytes on x86-64 (return address included), 304 bytes on ARM64, 304 bytes on RISC-V.
+- Stack of its own: 352 bytes on x86-64 (return address included), 336 bytes on ARM64, 336 bytes on RISC-V.
 
 ### ABI
 
@@ -2481,14 +2481,21 @@ The checks of `broadcast_validation` (beacon-api.md, publishBlockV2) of a block 
 ### Signature
 
 ```
-lantern_node_publish_check(gossip, block, sidecars, level, scratch) -> status
+lantern_node_publish_check(seen, store, gossip, head, proposer, justified, settings, config, block, sidecars, level, scratch) -> status
 ```
 
 ### Arguments
 
 | Name | Role | Type |
 |---|---|---|
-| `gossip` | input | `NodeGossip`: `state_b` the parent's post-state, changed by process_block with level 2 or 3 |
+| `seen` | state | `Seen` |
+| `store` | input | `Store` |
+| `gossip` | input | [`NodeGossip`](#type-nodegossip): its `topic` and `subnet` are not read |
+| `head` | input | `BeaconState`: the head's post-state |
+| `proposer` | state | `BeaconState`: the parent's post-state, changed by process_block with level 2 or 3 |
+| `justified` | input | `BeaconState`: the post-state of the justified root, or 0 |
+| `settings` | input | asm-crypto `KzgSettings`, or 0 |
+| `config` | input | `Config` |
 | `block` | input | ByteList: the `SignedBeaconBlock` |
 | `sidecars` | input | ByteList of lantern_node_publish_sidecars, or 0 |
 | `level` | input | u64: 1 gossip, 2 consensus, 3 consensus_and_equivocation; + 256 for a blinded block, a `SignedBlindedBeaconBlock` with no sidecars |
@@ -2512,14 +2519,14 @@ lantern_node_publish_check(gossip, block, sidecars, level, scratch) -> status
 
 ### Limits
 
-- Stack of its own: 208 bytes on x86-64 (return address included), 208 bytes on ARM64, 208 bytes on RISC-V.
+- Stack of its own: 288 bytes on x86-64 (return address included), 288 bytes on ARM64, 288 bytes on RISC-V.
 
 ### ABI
 
 - Role: L0.
 - Symbol: `lantern_<fork>_node_publish_check` in the object of every fork, with `_` before it on macOS; `lantern_node_publish_check` inside the object.
 - Convention: the core ABI for each ISA (ARCHITECTURE.md section 6); each argument is a pointer: a Uint64 argument points at a u64, and a Boolean output is a u64 of 0 or 1.
-- Argument order: `gossip`, `block`, `sidecars`, `level`, `scratch`.
+- Argument order: `seen`, `store`, `gossip`, `head`, `proposer`, `justified`, `settings`, `config`, `block`, `sidecars`, `level`, `scratch`.
 
 ## Function `lantern_node_pending`
 
@@ -2754,19 +2761,26 @@ lantern_node_attester_slashing(store, data, state, scratch, result) -> status
 
 ## Function `lantern_node_gossip`
 
-The gossip validation of the topic of a `NodeGossip` for SSZ bytes, decoded with the fork's types.
+The gossip validation of the topic of a `NodeGossip` for SSZ bytes, decoded with the fork's types, with the stores and states the topic reads.
 
 ### Signature
 
 ```
-lantern_node_gossip(args, data, scratch, result, root, index) -> status
+lantern_node_gossip(seen, store, gossip, head, proposer, justified, settings, config, data, scratch, result, root, index) -> status
 ```
 
 ### Arguments
 
 | Name | Role | Type |
 |---|---|---|
-| `args` | input | `NodeGossip` |
+| `seen` | state | `Seen` |
+| `store` | input | `Store` |
+| `gossip` | input | [`NodeGossip`](#type-nodegossip) |
+| `head` | input | `BeaconState`: the head's post-state |
+| `proposer` | state | `BeaconState`: a copy of the parent's post-state, or 0 |
+| `justified` | input | `BeaconState`: the post-state of the justified root, or 0 |
+| `settings` | input | asm-crypto `KzgSettings`, or 0 |
+| `config` | input | `Config` |
 | `data` | input | ByteList: the uncompressed message |
 | `scratch` | scratch | `Scratch` |
 | `result` | output | `Result` |
@@ -2795,14 +2809,14 @@ lantern_node_gossip(args, data, scratch, result, root, index) -> status
 
 ### Limits
 
-- Stack of its own: 144 bytes on x86-64 (return address included), 128 bytes on ARM64, 128 bytes on RISC-V.
+- Stack of its own: 224 bytes on x86-64 (return address included), 208 bytes on ARM64, 208 bytes on RISC-V.
 
 ### ABI
 
 - Role: L0.
 - Symbol: `lantern_<fork>_node_gossip` in the object of every fork, with `_` before it on macOS; `lantern_node_gossip` inside the object.
 - Convention: the core ABI for each ISA (ARCHITECTURE.md section 6); each argument is a pointer: a Uint64 argument points at a u64, and a Boolean output is a u64 of 0 or 1.
-- Argument order: `args`, `data`, `scratch`, `result`, `root`, `index`.
+- Argument order: `seen`, `store`, `gossip`, `head`, `proposer`, `justified`, `settings`, `config`, `data`, `scratch`, `result`, `root`, `index`.
 
 ## Function `lantern_node_blob_sidecar`
 
@@ -5918,7 +5932,7 @@ lantern_node_gossip_member() -> status
 - Role: L0.
 - Symbol: `lantern_node_gossip_member`, local to its object.
 - Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
-- Registers it reads, on ARM64, x86-64, RISC-V: the NodeGossip in x19, rbx, s1; the attestation in x20, rbp, s2; the scratch in x21, r12, s3; the root in x23, r14, s5: the registers of lantern_node_gossip.
+- Registers it reads, on ARM64, x86-64, RISC-V: the table of the inputs of lantern_node_gossip in x19, rbx, s1; the attestation in x20, rbp, s2; the scratch in x21, r12, s3; the root in x23, r14, s5: the registers of lantern_node_gossip.
 
 ## Function `lantern_node_gossip_shed`
 
@@ -10246,14 +10260,15 @@ The state transition of a published blinded block.
 ### Signature
 
 ```
-lantern_publish_blinded_transition(gossip, block, scratch) -> status
+lantern_publish_blinded_transition(state, config, block, scratch) -> status
 ```
 
 ### Arguments
 
 | Name | Role | Type |
 |---|---|---|
-| `gossip` | input | `NodeGossip` |
+| `state` | state | `BeaconState`: the proposer state of lantern_node_publish_check |
+| `config` | input | `Config` |
 | `block` | input | ByteList: the SignedBlindedBeaconBlock |
 | `scratch` | scratch | [`Scratch`](helpers.md#type-scratch) |
 
@@ -10265,7 +10280,7 @@ lantern_publish_blinded_transition(gossip, block, scratch) -> status
 
 ### Function does
 
-- On the proposer state of the gossip (node.md, lantern_node_publish_check): the body's root and the header's transactions_root.
+- On `state` (lantern_node_publish_check): the body's root and the header's transactions_root.
 - Then process_block of the block with the stand-in payload, those roots in the state, and its state root against the block's.
 - Leaves the size of the scratch as it came.
 
@@ -10282,7 +10297,7 @@ lantern_publish_blinded_transition(gossip, block, scratch) -> status
 - Role: L0.
 - Symbol: `lantern_publish_blinded_transition`, local to its object.
 - Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
-- Argument order: `gossip`, `block`, `scratch`.
+- Argument order: `state`, `config`, `block`, `scratch`.
 
 ## Function `lantern_publish_gossip`
 
@@ -10291,14 +10306,13 @@ lantern_node_gossip with its outputs on the stack.
 ### Signature
 
 ```
-lantern_publish_gossip(args, data, scratch) -> status
+lantern_publish_gossip(data, scratch) -> status
 ```
 
 ### Arguments
 
 | Name | Role | Type |
 |---|---|---|
-| `args` | input | `NodeGossip` |
 | `data` | input | ByteList: the uncompressed message |
 | `scratch` | scratch | [`Scratch`](helpers.md#type-scratch) |
 
@@ -10308,7 +10322,7 @@ lantern_publish_gossip(args, data, scratch) -> status
 
 ### Function does
 
-- Calls lantern_node_gossip with its result, root and index on its own stack.
+- Calls lantern_node_gossip with the inputs of the table of lantern_node_publish_check, its result, root and index on its own stack.
 
 ### Function never
 
@@ -10316,14 +10330,15 @@ lantern_publish_gossip(args, data, scratch) -> status
 
 ### Limits
 
-- Stack of its own: 64 bytes on x86-64 (return address included), 64 bytes on ARM64, 64 bytes on RISC-V.
+- Stack of its own: 128 bytes on x86-64 (return address included), 112 bytes on ARM64, 112 bytes on RISC-V.
 
 ### ABI
 
 - Role: L0.
 - Symbol: `lantern_publish_gossip`, local to its object.
 - Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
-- Argument order: `args`, `data`, `scratch`.
+- Registers it reads, on ARM64, x86-64, RISC-V: the table of the inputs of lantern_node_publish_check, a `NodeGossip` with them at its offsets, in x19, rbx, s1.
+- Argument order: `data`, `scratch`.
 
 ## Function `lantern_publish_unblind`
 
@@ -10884,27 +10899,20 @@ A Beacon API answer the node sends in chunks.
 
 ## Type `NodeGossip`
 
-The arguments of a gossip validation work.
+The values of a gossip validation work besides its stores and states.
 
 ### Layout
 
 | Offset | Field | Type | Meaning |
 |---|---|---|---|
-| 0 | `seen` | address | `Seen` |
-| 8 | `store` | address | `Store` |
-| 16 | `time_ms` | u64 | `current_time_ms` |
-| 24 | `topic` | u64 | `GOSSIP_*` |
-| 32 | `subnet` | u64 | |
-| 40 | `head` | address | The head's post-state |
-| 48 | `proposer` | address | A copy of the parent's post-state, or 0 |
-| 56 | `justified` | address | The post-state of the justified root, or 0 |
-| 64 | `settings` | address | asm-crypto `KzgSettings`, or 0 |
-| 72 | `config` | address | `Config` |
+| 0 | `time_ms` | u64 | `current_time_ms` |
+| 8 | `topic` | u64 | `GOSSIP_*` |
+| 16 | `subnet` | u64 | |
 
 ### Rules
 
-- `NodeGossip__mem` (80) bytes.
-
+- 24 bytes.
+- lantern_node_gossip and lantern_node_publish_check keep their inputs in a table of their own on their stack: `seen`, `store`, these three values, `head`, `proposer`, `justified`, `settings`, `config`, 8 bytes each (`NodeGossip__mem`, 80).
 ## Type `NodeAnchor`
 
 The anchor the node starts from.

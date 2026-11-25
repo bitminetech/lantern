@@ -12180,13 +12180,21 @@ LOCAL_FUNCTION lantern_node_api_submit_run
 33: ldr     x9, [x27, #8]
     str     x9, [sp, #(L + 64 + NodeGossip_subnet)]
     ldr     x15, [sp, #(L + 24)]
-    add     x0, sp, #(L + 64)
-    add     x1, x27, #16
-    mov     x2, x24
-    mov     x3, x27
-    add     x4, sp, #(L + 280)
-    add     x5, sp, #(L + 312)
+    add     x9, sp, #(L + 64)               /* the NodeGossip: each input its own argument */
+    add     x10, sp, #(L + 280)
+    add     x11, sp, #(L + 312)
+    sub     sp, sp, #48                     /* the ninth to thirteenth arguments: data, scratch, result, root, index */
+    add     x12, x27, #16
+    stp     x12, x24, [sp]
+    stp     x27, x10, [sp, #16]
+    str     x11, [sp, #32]
+    ldp     x0, x1, [x9, #NodeGossip_seen]
+    add     x2, x9, #NodeGossip_time_ms
+    ldp     x3, x4, [x9, #NodeGossip_head]
+    ldp     x5, x6, [x9, #NodeGossip_justified]
+    ldr     x7, [x9, #NodeGossip_config]
     FORK_CALL node_gossip
+    add     sp, sp, #48
     cbnz    x0, 99f
     ldr     x9, [sp, #(L + 16)]             /* a valid attestation: its member, 2^32 times, with the subnet */
     cmp     x9, #GOSSIP_BEACON_ATTESTATION
@@ -12226,13 +12234,21 @@ LOCAL_FUNCTION lantern_node_api_submit_run
     tbz     x9, #0, 371f
     str     x10, [sp, #(L + 64 + NodeGossip_subnet)]
     ldr     x15, [sp, #(L + 24)]
-    add     x0, sp, #(L + 64)
-    add     x1, x27, #16
-    mov     x2, x24
-    mov     x3, x27
-    add     x4, sp, #(L + 280)
-    add     x5, sp, #(L + 312)
+    add     x9, sp, #(L + 64)               /* the NodeGossip: each input its own argument */
+    add     x10, sp, #(L + 280)
+    add     x11, sp, #(L + 312)
+    sub     sp, sp, #48                     /* the ninth to thirteenth arguments: data, scratch, result, root, index */
+    add     x12, x27, #16
+    stp     x12, x24, [sp]
+    stp     x27, x10, [sp, #16]
+    str     x11, [sp, #32]
+    ldp     x0, x1, [x9, #NodeGossip_seen]
+    add     x2, x9, #NodeGossip_time_ms
+    ldp     x3, x4, [x9, #NodeGossip_head]
+    ldp     x5, x6, [x9, #NodeGossip_justified]
+    ldr     x7, [x9, #NodeGossip_config]
     FORK_CALL node_gossip
+    add     sp, sp, #48
     cbnz    x0, 99f
     ldr     x9, [x27]
     ldr     x10, [sp, #(L + 168)]

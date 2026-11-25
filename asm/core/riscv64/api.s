@@ -12524,13 +12524,26 @@ LOCAL_FUNCTION lantern_node_api_submit_run
 33: ld      t0, 8(s9)
     sd      t0, (L + 64 + NodeGossip_subnet)(sp)
     ld      t6, (L + 24)(sp)
-    addi    a0, sp, L + 64
-    addi    a1, s9, 16
-    mv      a2, s6
-    mv      a3, s9
-    addi    a4, sp, L + 272
-    addi    a5, sp, L + 304
+    addi    t0, sp, L + 64                  # the NodeGossip: each input its own argument
+    addi    t1, sp, L + 272
+    addi    t2, sp, L + 304
+    addi    sp, sp, -48                     # the ninth to thirteenth arguments: data, scratch, result, root, index
+    addi    t3, s9, 16
+    sd      t3, 0(sp)
+    sd      s6, 8(sp)
+    sd      s9, 16(sp)
+    sd      t1, 24(sp)
+    sd      t2, 32(sp)
+    ld      a0, NodeGossip_seen(t0)
+    ld      a1, NodeGossip_store(t0)
+    addi    a2, t0, NodeGossip_time_ms
+    ld      a3, NodeGossip_head(t0)
+    ld      a4, NodeGossip_proposer(t0)
+    ld      a5, NodeGossip_justified(t0)
+    ld      a6, NodeGossip_settings(t0)
+    ld      a7, NodeGossip_config(t0)
     FORK_CALL node_gossip
+    addi    sp, sp, 48
     bnez    a0, 99f
     ld      t0, (L + 16)(sp)                # a valid attestation: its member, 2^32 times, with the subnet
     li      t1, GOSSIP_BEACON_ATTESTATION
@@ -12573,13 +12586,26 @@ LOCAL_FUNCTION lantern_node_api_submit_run
     beqz    t0, 371f
     sd      t1, (L + 64 + NodeGossip_subnet)(sp)
     ld      t6, (L + 24)(sp)
-    addi    a0, sp, L + 64
-    addi    a1, s9, 16
-    mv      a2, s6
-    mv      a3, s9
-    addi    a4, sp, L + 272
-    addi    a5, sp, L + 304
+    addi    t0, sp, L + 64                  # the NodeGossip: each input its own argument
+    addi    t1, sp, L + 272
+    addi    t2, sp, L + 304
+    addi    sp, sp, -48                     # the ninth to thirteenth arguments: data, scratch, result, root, index
+    addi    t3, s9, 16
+    sd      t3, 0(sp)
+    sd      s6, 8(sp)
+    sd      s9, 16(sp)
+    sd      t1, 24(sp)
+    sd      t2, 32(sp)
+    ld      a0, NodeGossip_seen(t0)
+    ld      a1, NodeGossip_store(t0)
+    addi    a2, t0, NodeGossip_time_ms
+    ld      a3, NodeGossip_head(t0)
+    ld      a4, NodeGossip_proposer(t0)
+    ld      a5, NodeGossip_justified(t0)
+    ld      a6, NodeGossip_settings(t0)
+    ld      a7, NodeGossip_config(t0)
     FORK_CALL node_gossip
+    addi    sp, sp, 48
     bnez    a0, 99f
     ld      t0, 0(s9)
     ld      t1, (L + 160)(sp)

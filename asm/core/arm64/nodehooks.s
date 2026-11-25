@@ -3297,22 +3297,30 @@ LOCAL_FUNCTION lantern_node_gossip_member
 END_FUNCTION lantern_node_gossip_member
 
 /*
- * (args, data, scratch, result, root, index): the gossip validation of the topic args.topic for
+ * (seen, store, gossip, head, proposer, justified, settings, config, data, scratch, result, root,
+ * index): the gossip validation of the topic gossip.topic for
  * the message in data, decoded with the fork's type. For beacon_block, blob_sidecar and
  * data_column_sidecar the proposer state first gets process_slots to the message's slot. A valid
  * beacon_block gives its root and blob count; a valid blob_sidecar the root of its block header
  * and its index. x19 args, x20 the message, x21 scratch, x22 result, x23 root, x24 the topic,
  * x25 the slot, x26 the proposer state, x27 index, x28 the scratch size, restored on return.
- * Locals: (16 + L) a slot and a result. The two arguments past the eighth go at sp.
+ * x19 its inputs, in a table of its own: a NodeGossip at (16 + L + 16). Locals: (16 + L) a slot
+ * and a result. The two arguments past the eighth of its calls go at sp.
  */
 SPEC_FUNCTION node_gossip
-    ENTER_OUT 16, 16
-    mov     x19, x0
-    mov     x20, x1
-    mov     x21, x2
-    mov     x22, x3
-    mov     x23, x4
-    mov     x27, x5
+    ENTER_OUT 96, 16
+    add     x19, sp, #(16 + L + 16)         /* its inputs, in a table of its own */
+    stp     x0, x1, [x19, #NodeGossip_seen]
+    ldp     x9, x10, [x2]                   /* the values: time_ms, topic, subnet */
+    stp     x9, x10, [x19, #NodeGossip_time_ms]
+    ldr     x9, [x2, #16]
+    str     x9, [x19, #NodeGossip_subnet]
+    stp     x3, x4, [x19, #NodeGossip_head]
+    stp     x5, x6, [x19, #NodeGossip_justified]
+    str     x7, [x19, #NodeGossip_config]
+    ldp     x20, x21, [sp, #(16 + 96 + 96)] /* the ninth to thirteenth arguments: data, scratch, result, root, index */
+    ldp     x22, x23, [sp, #(16 + 96 + 96 + 16)]
+    ldr     x27, [sp, #(16 + 96 + 96 + 32)]
     ldr     x28, [x21]
     str     xzr, [x22]
     str     xzr, [x27]
@@ -3618,7 +3626,7 @@ SPEC_FUNCTION node_gossip
     b       99f
 8:  mov     x0, #LANTERN_BUFFER_TOO_SMALL
 99: str     x28, [x21]
-    LEAVE_OUT 16, 16
+    LEAVE_OUT 96, 16
 SPEC_END node_gossip
 
 .if FORK == FORK_DENEB || FORK == FORK_ELECTRA
@@ -6669,18 +6677,26 @@ SPEC_FUNCTION node_publish_decode
 SPEC_END node_publish_decode
 
 /*
- * (gossip, block, sidecars, level, scratch): node.md, lantern_node_publish_check. x19 gossip,
+ * (seen, store, gossip, head, proposer, justified, settings, config, block, sidecars, level,
+ * scratch): node.md, lantern_node_publish_check. x19 its inputs, in a table of its own: a
+ * NodeGossip at L+112,
  * x20 block, x21 sidecars, x22 level, x23 scratch, x24 a sidecar, x25 their end, x26 the scratch
  * size. Locals: L a Result, L+8 a root (32), L+40 an index, L+48 execution_valid 1, L+64 the
  * counts of seen's parts (40).
  */
 SPEC_FUNCTION node_publish_check
-    ENTER 112
-    mov     x19, x0
-    mov     x20, x1
-    mov     x21, x2
-    mov     x22, x3
-    mov     x23, x4
+    ENTER 192
+    add     x19, sp, #(L + 112)             /* its inputs, in a table of its own */
+    stp     x0, x1, [x19, #NodeGossip_seen]
+    ldp     x9, x10, [x2]                   /* the values: time_ms, topic, subnet */
+    stp     x9, x10, [x19, #NodeGossip_time_ms]
+    ldr     x9, [x2, #16]
+    str     x9, [x19, #NodeGossip_subnet]
+    stp     x3, x4, [x19, #NodeGossip_head]
+    stp     x5, x6, [x19, #NodeGossip_justified]
+    str     x7, [x19, #NodeGossip_config]
+    ldp     x20, x21, [sp, #(96 + 192)]     /* the ninth to twelfth arguments: block, sidecars, level, scratch */
+    ldp     x22, x23, [sp, #(96 + 192 + 16)]
     ldr     x26, [x23]
     ldr     x9, [x19, #NodeGossip_seen]     /* the counts of seen's parts, for a check that fails */
     ldr     x10, [x9, #(Seen_keys + 8)]
@@ -6697,9 +6713,8 @@ SPEC_FUNCTION node_publish_check
     mov     x9, #GOSSIP_BEACON_BLOCK        /* the beacon_block topic's checks */
     str     x9, [x19, #NodeGossip_topic]
     str     xzr, [x19, #NodeGossip_subnet]
-    mov     x0, x19
-    mov     x1, x20
-    mov     x2, x23
+    mov     x0, x20
+    mov     x1, x23
     bl      lantern_publish_gossip
     cbnz    x0, 9f
 .if FORK >= FORK_DENEB
@@ -6726,9 +6741,8 @@ SPEC_FUNCTION node_publish_check
     udiv    x14, x10, x13
     msub    x14, x14, x13, x10
     stp     x12, x14, [x19, #NodeGossip_topic]
-    mov     x0, x19
-    mov     x1, x24
-    mov     x2, x23
+    mov     x0, x24
+    mov     x1, x23
     bl      lantern_publish_gossip
     cbnz    x0, 9f
     ldr     x9, [x24]
@@ -6783,7 +6797,7 @@ SPEC_FUNCTION node_publish_check
     b       9f
 7:  str     x26, [x23]
     mov     x0, #LANTERN_OK
-    LEAVE 112
+    LEAVE 192
 6:  str     x26, [x23]
     mov     x0, #LANTERN_BUFFER_TOO_SMALL
     b       9f
@@ -6795,16 +6809,16 @@ SPEC_FUNCTION node_publish_check
     mov     x9, #GOSSIP_BLINDED_BLOCK
     str     x9, [x19, #NodeGossip_topic]
     str     xzr, [x19, #NodeGossip_subnet]
-    mov     x0, x19
-    mov     x1, x20
-    mov     x2, x23
+    mov     x0, x20
+    mov     x1, x23
     bl      lantern_publish_gossip
     cbnz    x0, 9f
     cmp     x22, #2
     b.lo    9f
-    mov     x0, x19
-    mov     x1, x20
-    mov     x2, x23
+    ldr     x0, [x19, #NodeGossip_proposer]
+    ldr     x1, [x19, #NodeGossip_config]
+    mov     x2, x20
+    mov     x3, x23
     bl      lantern_publish_blinded_transition
 .endif
 9:  ldr     x9, [x19, #NodeGossip_seen]     /* a check that fails, or no room: seen as it was */
@@ -6816,7 +6830,7 @@ SPEC_FUNCTION node_publish_check
     str     x11, [x9, #(Seen_headers + 8)]
     ldr     x10, [sp, #(L + 96)]
     str     x10, [x9, #Seen_header_bytes]
-    LEAVE 112
+    LEAVE 192
 SPEC_END node_publish_check
 
 /*
@@ -6990,20 +7004,20 @@ LOCAL_FUNCTION lantern_publish_unblind
 END_FUNCTION lantern_publish_unblind
 
 /*
- * (gossip x0, block x1, scratch x2) -> x0: the blinded transition of the blinded block x1 on
- * the proposer state of the gossip (node.md, lantern_node_publish_check): its body's root and
+ * (state x0, config x1, block x2, scratch x3) -> x0: the blinded transition of the blinded block
+ * x2 on the proposer state x0 (node.md, lantern_node_publish_check): its body's root and
  * header's transactions_root, then process_block of the block with the stand-in payload, those
  * roots in the state, and its state root against the block's: LANTERN_OK, its result, or
- * LANTERN_INVALID_STATE_ROOT. Scratch as it was. x19 gossip, x20 block, x21 scratch, x22 the
+ * LANTERN_INVALID_STATE_ROOT. Scratch as it was. x19 config, x20 block, x21 scratch, x22 the
  * state, x27 the scratch size. Locals: L the body's root, L+32 the transactions_root, L+64
  * execution_valid 1, L+72 a Result, L+80 the state root.
  */
 LOCAL_FUNCTION lantern_publish_blinded_transition
     ENTER 112
-    mov     x19, x0
-    mov     x20, x1
-    mov     x21, x2
-    ldr     x22, [x19, #NodeGossip_proposer]
+    mov     x22, x0
+    mov     x19, x1
+    mov     x20, x2
+    mov     x21, x3
     ldr     x27, [x21]
     ADDRESS x0, lantern_type_SignedBlindedBeaconBlock   /* the root of its body */
     mov     x1, x20
@@ -7048,7 +7062,7 @@ LOCAL_FUNCTION lantern_publish_blinded_transition
     str     x9, [sp, #(L + 64)]
     mov     x0, x22
     add     x2, sp, #(L + 64)
-    ldr     x3, [x19, #NodeGossip_config]
+    mov     x3, x19
     mov     x4, x21
     add     x5, sp, #(L + 72)
     bl      lantern_process_block
@@ -7092,12 +7106,27 @@ LOCAL_FUNCTION lantern_publish_blinded_transition
 END_FUNCTION lantern_publish_blinded_transition
 .endif
 
+/*
+ * (data x0, scratch x1) -> x0: lantern_node_gossip of the data with the inputs of the table x19
+ * of lantern_node_publish_check, its result, root and index on this frame: its status, else
+ * the Result.
+ */
 LOCAL_FUNCTION lantern_publish_gossip
     FRAME 48
-    add     x3, sp, #16
-    add     x4, sp, #24
-    add     x5, sp, #56
+    add     x11, sp, #16                    /* result, root, index */
+    add     x12, sp, #24
+    add     x13, sp, #56
+    sub     sp, sp, #48                     /* the ninth to thirteenth arguments */
+    stp     x0, x1, [sp]
+    stp     x11, x12, [sp, #16]
+    str     x13, [sp, #32]
+    ldp     x0, x1, [x19, #NodeGossip_seen]
+    add     x2, x19, #NodeGossip_time_ms
+    ldp     x3, x4, [x19, #NodeGossip_head]
+    ldp     x5, x6, [x19, #NodeGossip_justified]
+    ldr     x7, [x19, #NodeGossip_config]
     bl      lantern_node_gossip
+    add     sp, sp, #48
     cbnz    x0, 9f
     ldr     x0, [sp, #16]
 9:  UNFRAME 48

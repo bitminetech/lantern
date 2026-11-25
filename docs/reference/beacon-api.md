@@ -8015,7 +8015,7 @@ lantern_node_api_submit_run(node, store, seen, work, state_a, data, scratch, eve
 
 ### Limits
 
-- Stack of its own: 416 bytes on x86-64 (return address included), 416 bytes on ARM64, 416 bytes on RISC-V.
+- Stack of its own: 480 bytes on x86-64 (return address included), 464 bytes on ARM64, 464 bytes on RISC-V.
 
 ### ABI
 

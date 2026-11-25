@@ -3493,21 +3493,39 @@ LOCAL_FUNCTION lantern_node_gossip_member
 END_FUNCTION lantern_node_gossip_member
 
 /*
- * (args, data, scratch, result, root, index): the gossip validation of the topic args.topic for
+ * (seen, store, gossip, head, proposer, justified, settings, config, data, scratch, result, root,
+ * index): the gossip validation of the topic gossip.topic for
  * the message in data, decoded with the fork's type. For beacon_block, blob_sidecar and
  * data_column_sidecar the proposer state first gets process_slots to the message's slot. A valid
  * beacon_block gives its root and blob count; a valid blob_sidecar the root of its block header
  * and its index. rbx args, rbp the message, r12 scratch, r13 result, r14 root, r15 the topic;
  * S7-S10 the arguments past the sixth. Locals: L a slot, L+8 a result, L+16 the proposer state,
- * L+24 the scratch size, restored on return, L+32 index.
+ * L+24 the scratch size, restored on return, L+32 index, L+48 its inputs, in a table of its own
+ * (a NodeGossip, in rbx).
  */
 SPEC_FUNCTION node_gossip
-    ENTER 48
-    mov     %rdi, %rbx
-    mov     %rsi, %rbp
-    mov     %rdx, %r12
-    mov     %rcx, %r13
-    mov     %r8, %r14
+    ENTER 128
+    lea     (L + 48)(%rsp), %rbx            # its inputs, in a table of its own
+    mov     %rdi, NodeGossip_seen(%rbx)
+    mov     %rsi, NodeGossip_store(%rbx)
+    mov     (%rdx), %rax                    # the values: time_ms, topic, subnet
+    mov     %rax, NodeGossip_time_ms(%rbx)
+    mov     8(%rdx), %rax
+    mov     %rax, NodeGossip_topic(%rbx)
+    mov     16(%rdx), %rax
+    mov     %rax, NodeGossip_subnet(%rbx)
+    mov     %rcx, NodeGossip_head(%rbx)
+    mov     %r8, NodeGossip_proposer(%rbx)
+    mov     %r9, NodeGossip_justified(%rbx)
+    mov     (128 + 96)(%rsp), %rax          # the seventh and eighth arguments: settings, config
+    mov     %rax, NodeGossip_settings(%rbx)
+    mov     (128 + 96 + 8)(%rsp), %rax
+    mov     %rax, NodeGossip_config(%rbx)
+    mov     (128 + 96 + 16)(%rsp), %rbp     # data, scratch, result, root, index
+    mov     (128 + 96 + 24)(%rsp), %r12
+    mov     (128 + 96 + 32)(%rsp), %r13
+    mov     (128 + 96 + 40)(%rsp), %r14
+    mov     (128 + 96 + 48)(%rsp), %r9
     mov     %r9, (L + 32)(%rsp)
     movq    $0, (%r9)
     mov     (%r12), %rax
@@ -3833,7 +3851,7 @@ SPEC_FUNCTION node_gossip
 8:  mov     $LANTERN_BUFFER_TOO_SMALL, %eax
 99: mov     (L + 24)(%rsp), %rcx
     mov     %rcx, (%r12)
-    LEAVE 48
+    LEAVE 128
 SPEC_END node_gossip
 
 .if FORK == FORK_DENEB || FORK == FORK_ELECTRA
@@ -6968,18 +6986,35 @@ SPEC_FUNCTION node_publish_decode
 SPEC_END node_publish_decode
 
 /*
- * (gossip, block, sidecars, level, scratch): node.md, lantern_node_publish_check. rbx gossip,
+ * (seen, store, gossip, head, proposer, justified, settings, config, block, sidecars, level,
+ * scratch): node.md, lantern_node_publish_check. rbx its inputs, in a table of its own: a
+ * NodeGossip at L+112,
  * rbp block, r12 sidecars, r13 level, r14 scratch, r15 a sidecar. Locals: L a Result, L+8 a root
  * (32), L+40 the sidecars' end, L+48 execution_valid 1, L+56 the scratch size, L+64 the counts
  * of seen's parts (40).
  */
 SPEC_FUNCTION node_publish_check
-    ENTER 112
-    mov     %rdi, %rbx
-    mov     %rsi, %rbp
-    mov     %rdx, %r12
-    mov     %rcx, %r13
-    mov     %r8, %r14
+    ENTER 192
+    lea     (L + 112)(%rsp), %rbx           # its inputs, in a table of its own
+    mov     %rdi, NodeGossip_seen(%rbx)
+    mov     %rsi, NodeGossip_store(%rbx)
+    mov     (%rdx), %rax                    # the values: time_ms, topic, subnet
+    mov     %rax, NodeGossip_time_ms(%rbx)
+    mov     8(%rdx), %rax
+    mov     %rax, NodeGossip_topic(%rbx)
+    mov     16(%rdx), %rax
+    mov     %rax, NodeGossip_subnet(%rbx)
+    mov     %rcx, NodeGossip_head(%rbx)
+    mov     %r8, NodeGossip_proposer(%rbx)
+    mov     %r9, NodeGossip_justified(%rbx)
+    mov     (192 + 96)(%rsp), %rax          # the seventh and eighth arguments: settings, config
+    mov     %rax, NodeGossip_settings(%rbx)
+    mov     (192 + 96 + 8)(%rsp), %rax
+    mov     %rax, NodeGossip_config(%rbx)
+    mov     (192 + 96 + 16)(%rsp), %rbp     # block, sidecars, level, scratch
+    mov     (192 + 96 + 24)(%rsp), %r12
+    mov     (192 + 96 + 32)(%rsp), %r13
+    mov     (192 + 96 + 40)(%rsp), %r14
     mov     (%r14), %rax
     mov     %rax, (L + 56)(%rsp)
     mov     NodeGossip_seen(%rbx), %rcx     # the counts of seen's parts, for a check that fails
@@ -6999,9 +7034,8 @@ SPEC_FUNCTION node_publish_check
 .endif
     movq    $GOSSIP_BEACON_BLOCK, NodeGossip_topic(%rbx)    # the beacon_block topic's checks
     movq    $0, NodeGossip_subnet(%rbx)
-    mov     %rbx, %rdi
-    mov     %rbp, %rsi
-    mov     %r14, %rdx
+    mov     %rbp, %rdi
+    mov     %r14, %rsi
     call    lantern_publish_gossip
     test    %rax, %rax
     jnz     99f
@@ -7034,9 +7068,8 @@ SPEC_FUNCTION node_publish_check
     div     %rcx
     mov     %rsi, NodeGossip_topic(%rbx)
     mov     %rdx, NodeGossip_subnet(%rbx)
-    mov     %rbx, %rdi
-    mov     %r15, %rsi
-    mov     %r14, %rdx
+    mov     %r15, %rdi
+    mov     %r14, %rsi
     call    lantern_publish_gossip
     test    %rax, %rax
     jnz     99f
@@ -7087,7 +7120,7 @@ SPEC_FUNCTION node_publish_check
 7:  mov     (L + 56)(%rsp), %rcx
     mov     %rcx, (%r14)
     xor     %eax, %eax
-    LEAVE 112
+    LEAVE 192
 6:  mov     (L + 56)(%rsp), %rcx
     mov     %rcx, (%r14)
     mov     $LANTERN_BUFFER_TOO_SMALL, %eax
@@ -7106,22 +7139,22 @@ SPEC_FUNCTION node_publish_check
     mov     %rdx, (Seen_headers + 8)(%rcx)
     mov     (L + 96)(%rsp), %rdx
     mov     %rdx, Seen_header_bytes(%rcx)
-    LEAVE 112
+    LEAVE 192
 .if FORK >= FORK_BELLATRIX
 60: and     $255, %r13                      # blinded: the checks of beacon_block on it, then its transition; seen as it was
     movq    $GOSSIP_BLINDED_BLOCK, NodeGossip_topic(%rbx)
     movq    $0, NodeGossip_subnet(%rbx)
-    mov     %rbx, %rdi
-    mov     %rbp, %rsi
-    mov     %r14, %rdx
+    mov     %rbp, %rdi
+    mov     %r14, %rsi
     call    lantern_publish_gossip
     test    %rax, %rax
     jnz     99b
     cmp     $2, %r13
     jb      99b
-    mov     %rbx, %rdi
-    mov     %rbp, %rsi
-    mov     %r14, %rdx
+    mov     NodeGossip_proposer(%rbx), %rdi
+    mov     NodeGossip_config(%rbx), %rsi
+    mov     %rbp, %rdx
+    mov     %r14, %rcx
     call    lantern_publish_blinded_transition
     jmp     99b
 .endif
@@ -7300,20 +7333,20 @@ LOCAL_FUNCTION lantern_publish_unblind
 END_FUNCTION lantern_publish_unblind
 
 /*
- * (gossip rdi, block rsi, scratch rdx) -> rax: the blinded transition of the blinded block on
- * the proposer state of the gossip (node.md, lantern_node_publish_check): its body's root and
+ * (state rdi, config rsi, block rdx, scratch rcx) -> rax: the blinded transition of the blinded
+ * block rdx on the proposer state rdi (node.md, lantern_node_publish_check): its body's root and
  * header's transactions_root, then process_block of the block with the stand-in payload, those
  * roots in the state, and its state root against the block's: LANTERN_OK, its result, or
- * LANTERN_INVALID_STATE_ROOT. Scratch as it was. rbx gossip, rbp block, r12 scratch, r13 the
+ * LANTERN_INVALID_STATE_ROOT. Scratch as it was. rbx config, rbp block, r12 scratch, r13 the
  * state, r15 the scratch size. Locals: L the body's root, L+32 the transactions_root, L+64
  * execution_valid 1, L+72 a Result, L+80 the state root.
  */
 LOCAL_FUNCTION lantern_publish_blinded_transition
     ENTER 112
-    mov     %rdi, %rbx
-    mov     %rsi, %rbp
-    mov     %rdx, %r12
-    mov     NodeGossip_proposer(%rbx), %r13
+    mov     %rdi, %r13
+    mov     %rsi, %rbx
+    mov     %rdx, %rbp
+    mov     %rcx, %r12
     mov     (%r12), %r15
     ADDRESS %rdi, lantern_type_SignedBlindedBeaconBlock # the root of its body
     mov     %rbp, %rsi
@@ -7362,7 +7395,7 @@ LOCAL_FUNCTION lantern_publish_blinded_transition
     movq    $1, (L + 64)(%rsp)
     mov     %r13, %rdi
     lea     (L + 64)(%rsp), %rdx
-    mov     NodeGossip_config(%rbx), %rcx
+    mov     %rbx, %rcx
     mov     %r12, %r8
     lea     (L + 72)(%rsp), %r9
     call    lantern_process_block
@@ -7408,15 +7441,33 @@ END_FUNCTION lantern_publish_blinded_transition
 .endif
 
 /*
- * (gossip rdi, data rsi, scratch rdx) -> rax: LANTERN_OK when lantern_node_gossip of the data
- * holds, else its status or its result. Locals: a Result, a root (32), an index.
+ * (data rdi, scratch rsi) -> rax: lantern_node_gossip of the data with the inputs of the table rbx
+ * of lantern_node_publish_check, its result, root and index on this frame: LANTERN_OK when the
+ * result holds, else its status or its result. Locals: a Result, a root (32), an index.
  */
 LOCAL_FUNCTION lantern_publish_gossip
     FRAME 48
-    mov     %rsp, %rcx
-    lea     8(%rsp), %r8
-    lea     40(%rsp), %r9
+    mov     %rsp, %rax                      # result, root, index on this frame
+    sub     $64, %rsp                       # the seventh to thirteenth arguments
+    mov     %rdi, 16(%rsp)
+    mov     %rsi, 24(%rsp)
+    mov     %rax, 32(%rsp)
+    lea     8(%rax), %rcx
+    mov     %rcx, 40(%rsp)
+    lea     40(%rax), %rcx
+    mov     %rcx, 48(%rsp)
+    mov     NodeGossip_settings(%rbx), %rdx
+    mov     %rdx, (%rsp)
+    mov     NodeGossip_config(%rbx), %rdx
+    mov     %rdx, 8(%rsp)
+    mov     NodeGossip_seen(%rbx), %rdi
+    mov     NodeGossip_store(%rbx), %rsi
+    lea     NodeGossip_time_ms(%rbx), %rdx
+    mov     NodeGossip_head(%rbx), %rcx
+    mov     NodeGossip_proposer(%rbx), %r8
+    mov     NodeGossip_justified(%rbx), %r9
     call    lantern_node_gossip
+    add     $64, %rsp
     test    %rax, %rax
     jnz     9f
     mov     (%rsp), %rax

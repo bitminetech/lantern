@@ -11392,15 +11392,29 @@ FUNCTION lantern_node_run
     lea     Node_config(%rbx), %rax
     mov     %rax, (L + 96 + NodeGossip_config)(%rsp)
     mov     (L + 40)(%rsp), %r10
-    lea     (L + 96)(%rsp), %rdi
-    mov     %r14, %rsi
-    mov     %r15, %rdx
-    mov     S8(%rsp), %rcx
-    lea     NodeEvent_index(%rcx), %r9
-    lea     NodeEvent_result(%rcx), %r8
-    lea     NodeEvent_root(%rcx), %rcx
-    xchg    %rcx, %r8
+    lea     (L + 96)(%rsp), %rax            # the NodeGossip: each input its own argument
+    sub     $64, %rsp                       # the seventh to thirteenth arguments
+    mov     %r14, 16(%rsp)                  # data, scratch, result, root, index
+    mov     %r15, 24(%rsp)
+    mov     (64 + S8)(%rsp), %rcx
+    lea     NodeEvent_result(%rcx), %rdx
+    mov     %rdx, 32(%rsp)
+    lea     NodeEvent_root(%rcx), %rdx
+    mov     %rdx, 40(%rsp)
+    lea     NodeEvent_index(%rcx), %rdx
+    mov     %rdx, 48(%rsp)
+    mov     NodeGossip_settings(%rax), %rdx
+    mov     %rdx, (%rsp)
+    mov     NodeGossip_config(%rax), %rdx
+    mov     %rdx, 8(%rsp)
+    mov     NodeGossip_seen(%rax), %rdi
+    mov     NodeGossip_store(%rax), %rsi
+    lea     NodeGossip_time_ms(%rax), %rdx
+    mov     NodeGossip_head(%rax), %rcx
+    mov     NodeGossip_proposer(%rax), %r8
+    mov     NodeGossip_justified(%rax), %r9
     FORK_CALL node_gossip
+    add     $64, %rsp
     LEAVE 192
 69: mov     S8(%rsp), %rcx
     movq    $LANTERN_GOSSIP_IGNORE, NodeEvent_result(%rcx)
@@ -12214,12 +12228,26 @@ FUNCTION lantern_node_run
     lea     Node_config(%rbx), %rsi
     call    lantern_node_fork
     mov     %rax, %r10
-    lea     (L + 96)(%rsp), %rdi
-    mov     %r14, %rsi
-    mov     (L + 72)(%rsp), %rdx
-    mov     NodeAction_arg(%r12), %rcx
-    mov     %r15, %r8
+    lea     (L + 96)(%rsp), %rax            # the NodeGossip: each input its own argument
+    mov     (L + 72)(%rsp), %rdx            # the sidecars
+    mov     NodeAction_arg(%r12), %rcx      # the level
+    sub     $48, %rsp                       # the seventh to twelfth arguments
+    mov     %r14, 16(%rsp)                  # block, sidecars, level, scratch
+    mov     %rdx, 24(%rsp)
+    mov     %rcx, 32(%rsp)
+    mov     %r15, 40(%rsp)
+    mov     NodeGossip_settings(%rax), %rdx
+    mov     %rdx, (%rsp)
+    mov     NodeGossip_config(%rax), %rdx
+    mov     %rdx, 8(%rsp)
+    mov     NodeGossip_seen(%rax), %rdi
+    mov     NodeGossip_store(%rax), %rsi
+    lea     NodeGossip_time_ms(%rax), %rdx
+    mov     NodeGossip_head(%rax), %rcx
+    mov     NodeGossip_proposer(%rax), %r8
+    mov     NodeGossip_justified(%rax), %r9
     FORK_CALL node_publish_check
+    add     $48, %rsp
     cmp     $LANTERN_BUFFER_TOO_SMALL, %rax
     je      8449b
     test    %rax, %rax
@@ -12561,14 +12589,29 @@ FUNCTION lantern_node_run
     lea     Node_config(%rbx), %rax
     mov     %rax, (L + 96 + NodeGossip_config)(%rsp)
     mov     (L + 48)(%rsp), %r10
-    lea     (L + 96)(%rsp), %rdi
-    mov     %r14, %rsi
-    mov     %r15, %rdx
-    mov     S8(%rsp), %rcx
-    lea     NodeEvent_index(%rcx), %r9
-    lea     NodeEvent_root(%rcx), %r8
-    lea     NodeEvent_result(%rcx), %rcx
+    lea     (L + 96)(%rsp), %rax            # the NodeGossip: each input its own argument
+    sub     $64, %rsp                       # the seventh to thirteenth arguments
+    mov     %r14, 16(%rsp)                  # data, scratch, result, root, index
+    mov     %r15, 24(%rsp)
+    mov     (64 + S8)(%rsp), %rcx
+    lea     NodeEvent_result(%rcx), %rdx
+    mov     %rdx, 32(%rsp)
+    lea     NodeEvent_root(%rcx), %rdx
+    mov     %rdx, 40(%rsp)
+    lea     NodeEvent_index(%rcx), %rdx
+    mov     %rdx, 48(%rsp)
+    mov     NodeGossip_settings(%rax), %rdx
+    mov     %rdx, (%rsp)
+    mov     NodeGossip_config(%rax), %rdx
+    mov     %rdx, 8(%rsp)
+    mov     NodeGossip_seen(%rax), %rdi
+    mov     NodeGossip_store(%rax), %rsi
+    lea     NodeGossip_time_ms(%rax), %rdx
+    mov     NodeGossip_head(%rax), %rcx
+    mov     NodeGossip_proposer(%rax), %r8
+    mov     NodeGossip_justified(%rax), %r9
     FORK_CALL node_gossip
+    add     $64, %rsp
     mov     (L + 8)(%rsp), %rcx             # scratch whole again; a short one: IGNORE
     mov     %rcx, (%r15)
     test    %rax, %rax

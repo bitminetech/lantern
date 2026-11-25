@@ -11264,13 +11264,21 @@ FUNCTION lantern_node_run
     add     x9, x19, #Node_config
     str     x9, [sp, #(L + 96 + NodeGossip_config)]
     mov     x15, x28
-    add     x0, sp, #(L + 96)
-    mov     x1, x23
-    mov     x2, x24
-    add     x3, x25, #NodeEvent_result
-    add     x4, x25, #NodeEvent_root
-    add     x5, x25, #NodeEvent_index
+    add     x9, sp, #(L + 96)               /* the NodeGossip: each input its own argument */
+    sub     sp, sp, #48                     /* the ninth to thirteenth arguments: data, scratch, result, root, index */
+    stp     x23, x24, [sp]
+    add     x10, x25, #NodeEvent_result
+    add     x11, x25, #NodeEvent_root
+    stp     x10, x11, [sp, #16]
+    add     x10, x25, #NodeEvent_index
+    str     x10, [sp, #32]
+    ldp     x0, x1, [x9, #NodeGossip_seen]
+    add     x2, x9, #NodeGossip_time_ms
+    ldp     x3, x4, [x9, #NodeGossip_head]
+    ldp     x5, x6, [x9, #NodeGossip_justified]
+    ldr     x7, [x9, #NodeGossip_config]
     FORK_CALL node_gossip
+    add     sp, sp, #48
     LEAVE 192
 69: mov     x9, #LANTERN_GOSSIP_IGNORE
     str     x9, [x25, #NodeEvent_result]
@@ -12012,12 +12020,19 @@ FUNCTION lantern_node_run
     add     x1, x19, #Node_config
     bl      lantern_node_fork
     mov     x15, x0
-    add     x0, sp, #(L + 96)
-    mov     x1, x23
-    ldr     x2, [sp, #(L + 72)]
-    ldr     x3, [x21, #NodeAction_arg]
-    mov     x4, x24
+    add     x9, sp, #(L + 96)               /* the NodeGossip: each input its own argument */
+    ldr     x10, [sp, #(L + 72)]            /* the sidecars */
+    ldr     x11, [x21, #NodeAction_arg]     /* the level */
+    sub     sp, sp, #32                     /* the ninth to twelfth arguments: block, sidecars, level, scratch */
+    stp     x23, x10, [sp]
+    stp     x11, x24, [sp, #16]
+    ldp     x0, x1, [x9, #NodeGossip_seen]
+    add     x2, x9, #NodeGossip_time_ms
+    ldp     x3, x4, [x9, #NodeGossip_head]
+    ldp     x5, x6, [x9, #NodeGossip_justified]
+    ldr     x7, [x9, #NodeGossip_config]
     FORK_CALL node_publish_check
+    add     sp, sp, #32
     cmp     x0, #LANTERN_BUFFER_TOO_SMALL
     b.eq    8449b
     cbnz    x0, 8458b
@@ -12330,13 +12345,21 @@ FUNCTION lantern_node_run
     add     x9, x19, #Node_config
     str     x9, [sp, #(L + 96 + NodeGossip_config)]
     mov     x15, x28
-    add     x0, sp, #(L + 96)
-    mov     x1, x23
-    mov     x2, x24
-    add     x3, x25, #NodeEvent_result
-    add     x4, x25, #NodeEvent_root
-    add     x5, x25, #NodeEvent_index
+    add     x9, sp, #(L + 96)               /* the NodeGossip: each input its own argument */
+    sub     sp, sp, #48                     /* the ninth to thirteenth arguments: data, scratch, result, root, index */
+    stp     x23, x24, [sp]
+    add     x10, x25, #NodeEvent_result
+    add     x11, x25, #NodeEvent_root
+    stp     x10, x11, [sp, #16]
+    add     x10, x25, #NodeEvent_index
+    str     x10, [sp, #32]
+    ldp     x0, x1, [x9, #NodeGossip_seen]
+    add     x2, x9, #NodeGossip_time_ms
+    ldp     x3, x4, [x9, #NodeGossip_head]
+    ldp     x5, x6, [x9, #NodeGossip_justified]
+    ldr     x7, [x9, #NodeGossip_config]
     FORK_CALL node_gossip
+    add     sp, sp, #48
     ldr     x9, [sp, #(L + 8)]              /* scratch whole again; a short one: IGNORE */
     str     x9, [x24]
     cbz     x0, 9783f
