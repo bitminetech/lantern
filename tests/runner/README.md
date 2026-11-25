@@ -23,6 +23,7 @@ build/linux-x86_64/runner-minimal-fulu ~/.cache/lantern/vectors minimal-fulu-ope
 | `abi_<ISA>.s` | `abi_call`: calls a lantern function and checks that it keeps the registers and stack of the core ABI |
 | `run.sh`, `run.ps1` | Run the runners of one target on every core, and merge their results |
 | `tick_tables.py` | Writes the tick table of each documented function into its document from the results of every target and fork (CI) |
+| `heatmap.py` | Writes the verification heatmap into the README from the tick tables |
 | `docker.sh`, `macos.sh` | Build and run scripts |
 
 ## Runners

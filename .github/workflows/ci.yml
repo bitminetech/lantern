@@ -529,10 +529,12 @@ jobs:
         with: { pattern: results-*, path: results, merge-multiple: true }
       - name: Write the tick tables
         run: python3 -I tests/runner/tick_tables.py results
+      - name: Write the verification heatmap
+        run: python3 -I tests/runner/heatmap.py
       - name: Commit the tick tables
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         run: |
-          git add docs/reference
+          git add docs/reference docs/heatmap README.md
           if git diff --cached --quiet; then echo "The tick tables did not change."; exit 0; fi
           git -c user.name="github-actions[bot]" -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
               commit -q -m "Update the tick tables"
