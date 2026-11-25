@@ -61,6 +61,191 @@
 - [`lantern_node_state_checkpoints`](#function-lantern_node_state_checkpoints): the three checkpoints of a state, for one fork.
 - [`lantern_node_new_payload`](#function-lantern_node_new_payload): the HTTP request of engine_newPayload for a block's SSZ bytes, for one fork.
 - [`lantern_node_json`](#function-lantern_node_json): the JSON of a block's or a state's SSZ bytes, a chunk at a time, for one fork.
+- [`lantern_e1v_consider`](#function-lantern_e1v_consider): whether an Eth1Data is the data of a block of votes_to_consider.
+- [`lantern_e1v_match`](#function-lantern_e1v_match): whether an Eth1Data is get_eth1_data of an Eth1Block.
+- [`lantern_e1v_same`](#function-lantern_e1v_same): whether two Eth1Data values are equal.
+- [`lantern_node_act`](#function-lantern_node_act): appends a new action to the step's actions.
+- [`lantern_node_aggregate`](#function-lantern_node_aggregate): the aggregate of a SignedAggregateAndProof's bytes.
+- [`lantern_node_archive`](#function-lantern_node_archive): moves the finalized chain into the Db.
+- [`lantern_node_archive_base`](#function-lantern_node_archive_base): the base of a replay among the Db's state records.
+- [`lantern_node_archive_done`](#function-lantern_node_archive_done): handles a NODE_EV_DB_ARCHIVE.
+- [`lantern_node_archive_queue`](#function-lantern_node_archive_queue): queues the archive of a finalized block's post-state.
+- [`lantern_node_archive_state`](#function-lantern_node_archive_state): the BeaconState of an archive record's SSZ bytes.
+- [`lantern_node_attnets`](#function-lantern_node_attnets): the attestation subnets of the node at an epoch.
+- [`lantern_node_attnets_set`](#function-lantern_node_attnets_set): sets the node's attestation subnets of an epoch.
+- [`lantern_node_await`](#function-lantern_node_await): makes a block from the network wait for its blobs or columns.
+- [`lantern_node_backfill_ask`](#function-lantern_node_backfill_ask): sends the backfill's next BeaconBlocksByRange.
+- [`lantern_node_backfill_link`](#function-lantern_node_backfill_link): joins the backfill's blocks to the Db.
+- [`lantern_node_blob_added`](#function-lantern_node_blob_added): lets a block wait again for its blobs.
+- [`lantern_node_blob_held`](#function-lantern_node_blob_held): the node's valid entry of a sidecar.
+- [`lantern_node_blobs_held`](#function-lantern_node_blobs_held): whether the node holds every blob of a root.
+- [`lantern_node_block_entry`](#function-lantern_node_block_entry): the root entry of a BLOCK event.
+- [`lantern_node_body_item`](#function-lantern_node_body_item): an item of a list of a block's body.
+- [`lantern_node_checkpoint_state`](#function-lantern_node_checkpoint_state): the state id of a checkpoint state.
+- [`lantern_node_children`](#function-lantern_node_children): imports the blocks that wait for a block.
+- [`lantern_node_column_count`](#function-lantern_node_column_count): the columns the node samples.
+- [`lantern_node_column_raise_topics`](#function-lantern_node_column_raise_topics): subscribes to the column topics of newly custodied columns.
+- [`lantern_node_columns_held`](#function-lantern_node_columns_held): whether the node holds every column it samples of a root.
+- [`lantern_node_cross`](#function-lantern_node_cross): brings a state copy across the fork boundaries up to a slot's fork.
+- [`lantern_node_custody_columns`](#function-lantern_node_custody_columns): the columns of a node's custody groups, as bits.
+- [`lantern_node_custody_due`](#function-lantern_node_custody_due): queues the validator custody work of the store's epoch.
+- [`lantern_node_db_append`](#function-lantern_node_db_append): queues a DB_APPEND action.
+- [`lantern_node_db_block`](#function-lantern_node_db_block): the NODE_DB_REF of a slot's block in the Db.
+- [`lantern_node_db_sidecar`](#function-lantern_node_db_sidecar): the NODE_DB_REF of a sidecar of a slot in the Db.
+- [`lantern_node_db_sidecars`](#function-lantern_node_db_sidecars): moves the valid sidecars of a block to the Db.
+- [`lantern_node_db_slot`](#function-lantern_node_db_slot): the DbSlot of a slot with a block.
+- [`lantern_node_decode`](#function-lantern_node_decode): decodes SSZ bytes into the end of a scratch.
+- [`lantern_node_drop_message`](#function-lantern_node_drop_message): removes a message entry.
+- [`lantern_node_drop_peer`](#function-lantern_node_drop_peer): removes a peer entry and its streams.
+- [`lantern_node_drop_sidecars`](#function-lantern_node_drop_sidecars): drops the sidecar segments the node no longer serves.
+- [`lantern_node_drop_stream`](#function-lantern_node_drop_stream): removes a stream entry.
+- [`lantern_node_end_stream`](#function-lantern_node_end_stream): ends a stream and its BeaconBlocksByRange request.
+- [`lantern_node_engine_consume`](#function-lantern_node_engine_consume): drops bytes from the front of engine_in.
+- [`lantern_node_engine_failed`](#function-lantern_node_engine_failed): ends an engine call that failed.
+- [`lantern_node_engine_next`](#function-lantern_node_engine_next): starts the next engine call.
+- [`lantern_node_engine_read`](#function-lantern_node_engine_read): reads the engine's response bytes.
+- [`lantern_node_enr`](#function-lantern_node_enr): dials the node of a record when it is a peer the node wants.
+- [`lantern_node_enr_entries`](#function-lantern_node_enr_entries): queues the node's record entries for an epoch.
+- [`lantern_node_enr_pair`](#function-lantern_node_enr_pair): the value of a byte string pair of a record.
+- [`lantern_node_eth1_answer`](#function-lantern_node_eth1_answer): handles the answer of the eth1 call in flight.
+- [`lantern_node_eth1_block_add`](#function-lantern_node_eth1_block_add): adds an Eth1Block to the follower's blocks.
+- [`lantern_node_eth1_block_drop`](#function-lantern_node_eth1_block_drop): drops the lowest of the follower's blocks.
+- [`lantern_node_eth1_check_due`](#function-lantern_node_eth1_check_due): queues the ETH1_CHECK work of the head.
+- [`lantern_node_eth1_next`](#function-lantern_node_eth1_next): starts the follower's next eth1 call.
+- [`lantern_node_eth1_period`](#function-lantern_node_eth1_period): the start of the voting period of the store's slot.
+- [`lantern_node_eth1_reach`](#function-lantern_node_eth1_reach): the follow reach of the config.
+- [`lantern_node_eth1_send`](#function-lantern_node_eth1_send): sends an eth1 call.
+- [`lantern_node_eth1_snapshot`](#function-lantern_node_eth1_snapshot): puts the follower's Eth1Snapshot under a new id.
+- [`lantern_node_eth1_snapshot_size`](#function-lantern_node_eth1_snapshot_size): the bytes of the follower's Eth1Snapshot.
+- [`lantern_node_event`](#function-lantern_node_event): handles one event of a step.
+- [`lantern_node_f_slot`](#function-lantern_node_f_slot): the slot of the finalized block.
+- [`lantern_node_find_block`](#function-lantern_node_find_block): the block of a root.
+- [`lantern_node_find_checkpoint`](#function-lantern_node_find_checkpoint): the checkpoint entry of an epoch and a root.
+- [`lantern_node_find_message`](#function-lantern_node_find_message): the message entry of a libp2p handle.
+- [`lantern_node_find_opening`](#function-lantern_node_find_opening): the opening stream of a tag.
+- [`lantern_node_find_peer`](#function-lantern_node_find_peer): the peer entry of a libp2p handle.
+- [`lantern_node_find_stream`](#function-lantern_node_find_stream): the stream entry of a libp2p handle.
+- [`lantern_node_fork`](#function-lantern_node_fork): the fork of a slot.
+- [`lantern_node_free_block`](#function-lantern_node_free_block): frees a block entry.
+- [`lantern_node_free_responses`](#function-lantern_node_free_responses): the count of free NodeResponse entries.
+- [`lantern_node_gossip_member`](#function-lantern_node_gossip_member): the slot, committee and member of a valid beacon_attestation, for lantern_node_gossip.
+- [`lantern_node_gossip_shed`](#function-lantern_node_gossip_shed): frees the proposer states of gossip that no work uses.
+- [`lantern_node_gossip_state`](#function-lantern_node_gossip_state): the proposer state of a gossip message.
+- [`lantern_node_gossip_state_done`](#function-lantern_node_gossip_state_done): ends the use of a proposer state by a GOSSIP work.
+- [`lantern_node_head`](#function-lantern_node_head): finds the head of the node's store.
+- [`lantern_node_ids`](#function-lantern_node_ids): queues an action of one or two BufferIds.
+- [`lantern_node_import_now`](#function-lantern_node_import_now): starts the import of a block whose parent is imported.
+- [`lantern_node_json_decode`](#function-lantern_node_json_decode): lantern_json_decode with the type of a NODE_JSON_* kind.
+- [`lantern_node_lacks_sidecars`](#function-lantern_node_lacks_sidecars): whether a block lacks the blobs or columns it needs.
+- [`lantern_node_layout`](#function-lantern_node_layout): lays out the parts of a node.
+- [`lantern_node_lookup`](#function-lantern_node_lookup): queues a discv5 lookup when the node needs peers.
+- [`lantern_node_lvh`](#function-lantern_node_lvh): marks the blocks a latestValidHash makes invalid.
+- [`lantern_node_max_blobs`](#function-lantern_node_max_blobs): the blob sidecars one response may hold.
+- [`lantern_node_max_blocks`](#function-lantern_node_max_blocks): the blocks one request may name.
+- [`lantern_node_max_columns`](#function-lantern_node_max_columns): the column sidecars one response may hold.
+- [`lantern_node_message`](#function-lantern_node_message): takes a gossip MESSAGE of libp2p.
+- [`lantern_node_message_status`](#function-lantern_node_message_status): acts on a MESSAGE_STATUS of libp2p.
+- [`lantern_node_new_blob`](#function-lantern_node_new_blob): takes a sidecar entry.
+- [`lantern_node_new_block`](#function-lantern_node_new_block): takes a block entry.
+- [`lantern_node_new_checkpoint`](#function-lantern_node_new_checkpoint): takes a checkpoint entry.
+- [`lantern_node_new_id`](#function-lantern_node_new_id): a new BufferId.
+- [`lantern_node_next_peer`](#function-lantern_node_next_peer): the next peer that can serve a slot.
+- [`lantern_node_notice`](#function-lantern_node_notice): acts on a libp2p application notice.
+- [`lantern_node_open`](#function-lantern_node_open): opens a request stream of the node.
+- [`lantern_node_out`](#function-lantern_node_out): takes room for a libp2p event at the end of the node's queue.
+- [`lantern_node_out_consume`](#function-lantern_node_out_consume): drops the queued libp2p events that libp2p took.
+- [`lantern_node_out_count`](#function-lantern_node_out_count): the count of events in the front bytes of the node's queue.
+- [`lantern_node_out_handle`](#function-lantern_node_out_handle): queues a libp2p event of a handle.
+- [`lantern_node_p2p_append`](#function-lantern_node_p2p_append): queues the libp2p events of a range of P2P events.
+- [`lantern_node_p2p_left`](#function-lantern_node_p2p_left): the P2P events libp2p did not take.
+- [`lantern_node_p2p_notices`](#function-lantern_node_p2p_notices): acts on the application notices of libp2p actions.
+- [`lantern_node_p2p_round`](#function-lantern_node_p2p_round): one libp2p_step whose actions go in a P2P_LIST action.
+- [`lantern_node_justified`](#function-lantern_node_justified): queues the JUSTIFIED_STATE work of the store's justified checkpoint.
+- [`lantern_node_payload_retry`](#function-lantern_node_payload_retry): sends a block whose payload call failed back to wait.
+- [`lantern_node_peer_custody`](#function-lantern_node_peer_custody): sets the custody columns of a peer from its MetaData.
+- [`lantern_node_peer_room`](#function-lantern_node_peer_room): the peer room of the node.
+- [`lantern_node_peer_serves`](#function-lantern_node_peer_serves): whether a peer serves a slot.
+- [`lantern_node_peer_status`](#function-lantern_node_peer_status): keeps the Status of a peer and applies the Status rules.
+- [`lantern_node_pool_add`](#function-lantern_node_pool_add): adds an operation to the node's pool.
+- [`lantern_node_pool_check_done`](#function-lantern_node_pool_check_done): ends a POOL_CHECK work.
+- [`lantern_node_pool_checks`](#function-lantern_node_pool_checks): checks the pool against a new head.
+- [`lantern_node_pool_drop`](#function-lantern_node_pool_drop): removes a pool entry.
+- [`lantern_node_pow_block`](#function-lantern_node_pow_block): the PowBlock of a block hash.
+- [`lantern_node_prepare`](#function-lantern_node_prepare): starts the payload preparation of the next slot when it is due.
+- [`lantern_node_prepare_go`](#function-lantern_node_prepare_go): starts the payload preparation of a slot on the head.
+- [`lantern_node_produce_engine`](#function-lantern_node_produce_engine): starts the engine call of the first produceBlockV3 entry that waits.
+- [`lantern_node_produce_fail_at`](#function-lantern_node_produce_fail_at): fails a produceBlockV3 entry that waits for its payload.
+- [`lantern_node_produce_payload`](#function-lantern_node_produce_payload): takes the engine_getPayload result of a produceBlockV3 entry.
+- [`lantern_node_protocol`](#function-lantern_node_protocol): the method and version of a protocol index.
+- [`lantern_node_prune`](#function-lantern_node_prune): prunes the node at a new finalized epoch.
+- [`lantern_node_put`](#function-lantern_node_put): queues a BYTES_PUT of a ByteList under a new id.
+- [`lantern_node_rebuild`](#function-lantern_node_rebuild): rebuilds the post-state of an imported block.
+- [`lantern_node_recon_count`](#function-lantern_node_recon_count): the valid sidecars of a root.
+- [`lantern_node_reconstruct_due`](#function-lantern_node_reconstruct_due): starts or goes on with the column reconstruction.
+- [`lantern_node_reorg_count`](#function-lantern_node_reorg_count): counts a reorg at a new head.
+- [`lantern_node_request`](#function-lantern_node_request): answers the request of a stream.
+- [`lantern_node_respond`](#function-lantern_node_respond): writes a response of one chunk and ends the stream.
+- [`lantern_node_response`](#function-lantern_node_response): reads the response bytes of a request stream of the node.
+- [`lantern_node_reward_entry`](#function-lantern_node_reward_entry): the reward entry of a validator.
+- [`lantern_node_room`](#function-lantern_node_room): whether the actions have room for some bytes.
+- [`lantern_node_run_archive`](#function-lantern_node_run_archive): the ARCHIVE_LOAD work of lantern_node_run.
+- [`lantern_node_run_backfill`](#function-lantern_node_run_backfill): the BACKFILL work of lantern_node_run.
+- [`lantern_node_run_vote`](#function-lantern_node_run_vote): the BLOCK_ATTESTATION or BLOCK_SLASHING work of lantern_node_run.
+- [`lantern_node_sampled`](#function-lantern_node_sampled): whether the node samples a column.
+- [`lantern_node_seg_end`](#function-lantern_node_seg_end): the end of a block segment.
+- [`lantern_node_serve`](#function-lantern_node_serve): queues the SERVE works of the streams that serve.
+- [`lantern_node_serve_slot`](#function-lantern_node_serve_slot): the first slot a node must serve blocks of.
+- [`lantern_node_serving`](#function-lantern_node_serving): whether a stream that serves still lists a BufferId.
+- [`lantern_node_shed`](#function-lantern_node_shed): frees the post-states the node can rebuild.
+- [`lantern_node_short_columns`](#function-lantern_node_short_columns): the node's short columns.
+- [`lantern_node_side_end`](#function-lantern_node_side_end): the end of a sidecar segment.
+- [`lantern_node_sidecar_ask`](#function-lantern_node_sidecar_ask): sends the sidecar requests of a range.
+- [`lantern_node_sidecar_retry`](#function-lantern_node_sidecar_retry): asks again for the sidecars blocks wait for.
+- [`lantern_node_ssz_default`](#function-lantern_node_ssz_default): writes the SSZ default value of a type.
+- [`lantern_node_status_bytes`](#function-lantern_node_status_bytes): writes the node's Status.
+- [`lantern_node_status_refresh`](#function-lantern_node_status_refresh): sends the next Status refresh.
+- [`lantern_node_store_find`](#function-lantern_node_store_find): the store's node of a root.
+- [`lantern_node_store_slot`](#function-lantern_node_store_slot): the current slot of a store.
+- [`lantern_node_stream_list`](#function-lantern_node_stream_list): the ByteList that holds the bytes of a stream.
+- [`lantern_node_sub`](#function-lantern_node_sub): queues a SUBSCRIBE or UNSUBSCRIBE of a gossip topic.
+- [`lantern_node_subnet_topics`](#function-lantern_node_subnet_topics): queues the topics of a set of subnets.
+- [`lantern_node_subnets_want`](#function-lantern_node_subnets_want): the beacon_attestation subnets the node keeps.
+- [`lantern_node_subscribe`](#function-lantern_node_subscribe): keeps the node's gossip topics in step with the forks.
+- [`lantern_node_sync`](#function-lantern_node_sync): reads the sync's responses and sends its next requests.
+- [`lantern_node_sync_gap`](#function-lantern_node_sync_gap): moves the sync back to a gap a peer left.
+- [`lantern_node_sync_values`](#function-lantern_node_sync_values): the sync rewards of process_sync_aggregate at a state.
+- [`lantern_node_syncnets_want`](#function-lantern_node_syncnets_want): the sync_committee subnets the node keeps.
+- [`lantern_node_topics`](#function-lantern_node_topics): queues the gossip topics of a fork.
+- [`lantern_node_try_import`](#function-lantern_node_try_import): starts the import of a block when its parent has a post-state.
+- [`lantern_node_type_of_kind`](#function-lantern_node_type_of_kind): the TypeDescriptor of a NODE_JSON_* kind.
+- [`lantern_node_validation`](#function-lantern_node_validation): queues a VALIDATION of a gossip message.
+- [`lantern_node_vote_counts`](#function-lantern_node_vote_counts): the vote counts of a block for its event.
+- [`lantern_node_vote_due`](#function-lantern_node_vote_due): queues the GOSSIP_VOTE works of the messages that wait for a slot.
+- [`lantern_node_votes`](#function-lantern_node_votes): queues the vote works of an imported block.
+- [`lantern_node_window`](#function-lantern_node_window): the first epoch of a sidecar window.
+- [`lantern_node_work`](#function-lantern_node_work): queues a WORK action.
+- [`lantern_produce_add_signature`](#function-lantern_produce_add_signature): adds a signature to an aggregate.
+- [`lantern_produce_att_bits`](#function-lantern_produce_att_bits): the aggregation bits length of a drafted attestation.
+- [`lantern_produce_attestations`](#function-lantern_produce_attestations): writes the attestations of a produced block.
+- [`lantern_produce_attester_slashings`](#function-lantern_produce_attester_slashings): writes the attester slashings of a produced block.
+- [`lantern_produce_bid_parts`](#function-lantern_produce_bid_parts): the parts of the winning bid.
+- [`lantern_produce_blind`](#function-lantern_produce_blind): makes the produced block a BlindedBeaconBlock.
+- [`lantern_produce_blind_root`](#function-lantern_produce_blind_root): the state root of the produced blinded block.
+- [`lantern_produce_choice`](#function-lantern_produce_choice): whether the builder's bid wins.
+- [`lantern_produce_contents`](#function-lantern_produce_contents): makes the produced block a BlockContents.
+- [`lantern_produce_copy_bits`](#function-lantern_produce_copy_bits): sets the bits of an aggregate in a bitlist.
+- [`lantern_produce_differ`](#function-lantern_produce_differ): whether two byte strings differ.
+- [`lantern_produce_health`](#function-lantern_produce_health): whether the chain is healthy for a builder.
+- [`lantern_produce_in_slashing`](#function-lantern_produce_in_slashing): whether an index is in both attestations of a drafted attester slashing.
+- [`lantern_produce_records`](#function-lantern_produce_records): writes the drafted records of a topic.
+- [`lantern_produce_room`](#function-lantern_produce_room): whether bytes fit in out.
+- [`lantern_produce_same_data`](#function-lantern_produce_same_data): whether two AttestationData values are equal.
+- [`lantern_produce_slashed`](#function-lantern_produce_slashed): whether drafted slashings slash an index.
+- [`lantern_produce_standin`](#function-lantern_produce_standin): writes the stand-in payload of the winning bid.
+- [`lantern_produce_takes_slashing`](#function-lantern_produce_takes_slashing): whether an attester slashing slashes an index that no drafted proposer slashing does.
+- [`lantern_publish_blinded_transition`](#function-lantern_publish_blinded_transition): the state transition of a published blinded block.
+- [`lantern_publish_gossip`](#function-lantern_publish_gossip): lantern_node_gossip with its outputs on the stack.
+- [`lantern_publish_unblind`](#function-lantern_publish_unblind): the SignedBeaconBlock of a blinded block with its stand-in payload.
 
 ### Types
 
@@ -3226,6 +3411,6962 @@ lantern_node_json(kind, ssz, cursor, out) -> status
 - Symbol: `lantern_<fork>_node_json` in the object of every fork, with `_` before it on macOS; `lantern_node_json` inside the object.
 - Convention: the core ABI for each ISA (ARCHITECTURE.md section 6); each argument is a pointer: a Uint64 argument points at a u64, and a Boolean output is a u64 of 0 or 1.
 - Argument order: `kind`, `ssz`, `cursor`, `out`.
+
+## Function `lantern_e1v_consider`
+
+Whether an Eth1Data is the data of a block of votes_to_consider.
+
+### Signature
+
+```
+lantern_e1v_consider(data) -> flag
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `data` | input | `Eth1Data` |
+
+### Function does
+
+- Returns 1 when the data is that of a candidate block (phase0 get_eth1_vote): its timestamp + S * F at most the period start, + 2 * S * F at least it, and its deposit_count at least the state's; else 0.
+
+### Function never
+
+- Writes memory.
+- Makes an OS call.
+
+### Limits
+
+- Stack of its own: 48 bytes on x86-64 (return address included), 32 bytes on ARM64, 64 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_e1v_consider`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- Registers it reads, on ARM64: the blocks in x23, their count in x24, the state in x19, and S * F at L+8 of the caller's locals at x28.
+- Registers it changes, on ARM64, x86-64, RISC-V: x0, x9 to x14; rax, r9 to r11; a0, t0 to t5.
+- Argument order: `data`.
+
+## Function `lantern_e1v_match`
+
+Whether an Eth1Data is get_eth1_data of an Eth1Block.
+
+### Signature
+
+```
+lantern_e1v_match(data, block) -> flag
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `data` | input | `Eth1Data` |
+| `block` | input | [`Eth1Block`](eth1.md#type-eth1block) |
+
+### Function does
+
+- Returns 1 when `data` is get_eth1_data of the block, else 0.
+
+### Function never
+
+- Calls another function.
+- Writes memory.
+- Makes an OS call.
+
+### Limits
+
+- Stack of its own: 8 bytes on x86-64 (return address included), 0 bytes on ARM64, 0 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_e1v_match`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- Registers it changes, on ARM64, x86-64, RISC-V: x0, x9 to x12; rax, rcx, rdx, r8; a0, t0 to t3.
+- Argument order: `data`, `block`.
+
+## Function `lantern_e1v_same`
+
+Whether two Eth1Data values are equal.
+
+### Signature
+
+```
+lantern_e1v_same(a, b) -> flag
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `a` | input | 72 bytes |
+| `b` | input | 72 bytes |
+
+### Function does
+
+- Returns 1 when the 72 bytes are equal, else 0.
+
+### Function never
+
+- Calls another function.
+- Writes memory.
+- Makes an OS call.
+
+### Limits
+
+- Stack of its own: 8 bytes on x86-64 (return address included), 0 bytes on ARM64, 0 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_e1v_same`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- Registers it changes, on ARM64, x86-64, RISC-V: x0, x9 to x11; rax, rcx, rdx; a0, t0 to t3.
+- Argument order: `a`, `b`.
+
+## Function `lantern_node_act`
+
+Appends a new action to the step's actions.
+
+### Signature
+
+```
+lantern_node_act(kind, bytes) -> action
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `kind` | input | u64 in a register |
+| `bytes` | input | u64 in a register |
+
+### Function does
+
+- Returns the new action of `bytes` bytes, its size and kind written.
+
+### Function never
+
+- Calls another function.
+- Makes an OS call.
+
+### Limits
+
+- Stack of its own: 8 bytes on x86-64 (return address included), 0 bytes on ARM64, 0 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_node_act`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- Registers it reads, on ARM64, x86-64, RISC-V: the actions in x24, r15, s6.
+- Registers it changes, on ARM64, x86-64, RISC-V: x0, x9 to x11; rax, rcx; a0, t0 to t2.
+- Registers it reads, on ARM64, x86-64, RISC-V: the node in x19, rbx, s1.
+- Argument order: `kind`, `bytes`.
+
+## Function `lantern_node_aggregate`
+
+The aggregate of a SignedAggregateAndProof's bytes.
+
+### Signature
+
+```
+lantern_node_aggregate(bytes) -> (status, aggregate, length)
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `bytes` | input | ByteList |
+
+### Function does
+
+- Returns 0, the aggregate's SSZ bytes and their length; 2^64 - 1 when the bytes do not hold it.
+- The message's offset is at byte 0, the aggregate's at byte 8 of the message; the aggregate runs to the end.
+
+### Function never
+
+- Calls another function.
+- Writes memory.
+- Makes an OS call.
+
+### Limits
+
+- Stack of its own: 8 bytes on x86-64 (return address included), 0 bytes on ARM64, 0 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_node_aggregate`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- It returns three values: x0 to x2; rax, rdx, rcx; a0 to a2.
+- Registers it changes, on ARM64, x86-64, RISC-V: x0 to x2, x9 to x13; rax, rcx, rdx, r8 to r10; a0 to a2, t0 to t3, t6.
+- Argument order: `bytes`.
+
+## Function `lantern_node_archive`
+
+Moves the finalized chain into the Db.
+
+### Signature
+
+```
+lantern_node_archive(block)
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `block` | input | u64 in a register: the finalized `NodeBlock` |
+
+### Function does
+
+- With `NODE_FLAG_DB`: the canonical blocks from `db_next_slot` to the finalized block and their sidecars go to the Db in slot order: a record of each in the index and in a DB_APPEND action, then their bytes and entries go.
+- Keeps the finalized block's entry and the bytes a stream sends.
+- A record the Db refuses stops the archive until a later prune.
+
+### Function never
+
+- Makes an OS call.
+
+### Limits
+
+- Stack of its own: 192 bytes on x86-64 (return address included), 192 bytes on ARM64, 192 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_node_archive`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- Registers it reads, on ARM64, x86-64, RISC-V: the node in x19, rbx, s1.
+- Argument order: `block`.
+
+## Function `lantern_node_archive_base`
+
+The base of a replay among the Db's state records.
+
+### Signature
+
+```
+lantern_node_archive_base(slot) -> (slot, state)
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `slot` | input | u64 in a register |
+
+### Function does
+
+- Returns the highest slot at or below `slot` with a state record, from `archive_first` and above `base_slot` when that is at most `slot`, and its DbSlot's state; 2^64 - 1 with none (node.md, the replay).
+
+### Function never
+
+- Calls another function.
+- Writes memory.
+- Makes an OS call.
+
+### Limits
+
+- Stack of its own: 8 bytes on x86-64 (return address included), 0 bytes on ARM64, 0 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_node_archive_base`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- It returns two values: x0, rax or a0, then x1, rdx or a1.
+- Registers it changes, on ARM64, x86-64, RISC-V: x0, x1, x9 to x15; rax, rcx, rdx, rsi, r8 to r11; a0, a1, a7, t0 to t6.
+- Registers it reads, on ARM64, x86-64, RISC-V: the node in x19, rbx, s1.
+- Argument order: `slot`.
+
+## Function `lantern_node_archive_done`
+
+Handles a NODE_EV_DB_ARCHIVE.
+
+### Signature
+
+```
+lantern_node_archive_done(event)
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `event` | input | `NodeEvent` |
+
+### Function does
+
+- Sets `archive_busy` to 0.
+- A record of kind not 0 goes in the index with lantern_db_add, of the segment of its slot, and on `LANTERN_OK` the archive's fields take it (node.md, the archive).
+
+### Function never
+
+- Makes an OS call.
+
+### Limits
+
+- Stack of its own: 96 bytes on x86-64 (return address included), 96 bytes on ARM64, 96 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_node_archive_done`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- Registers it reads, on ARM64, x86-64, RISC-V: the node in x19, rbx, s1.
+- Argument order: `event`.
+
+## Function `lantern_node_archive_queue`
+
+Queues the archive of a finalized block's post-state.
+
+### Signature
+
+```
+lantern_node_archive_queue(block, slot)
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `block` | input | the finalized `NodeBlock` |
+| `slot` | input | u64 in a register |
+
+### Function does
+
+- With `archive_slots` not 0, a post-state, `archive_busy` 0, and `archive_slot` 2^64 - 1 or below `slot` by a run of `archive_slots`: queues a NODE_ACT_DB_ARCHIVE of the post-state (node.md, the archive).
+
+### Function never
+
+- Makes an OS call.
+
+### Limits
+
+- Stack of its own: 96 bytes on x86-64 (return address included), 96 bytes on ARM64, 96 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_node_archive_queue`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- Registers it reads, on ARM64, x86-64, RISC-V: the actions in x24, r15, s6.
+- Registers it reads, on ARM64, x86-64, RISC-V: the node in x19, rbx, s1.
+- Argument order: `block`, `slot`.
+
+## Function `lantern_node_archive_state`
+
+The BeaconState of an archive record's SSZ bytes.
+
+### Signature
+
+```
+lantern_node_archive_state(bytes, room, scratch, state) -> status
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `bytes` | input | ByteList: the SSZ bytes |
+| `room` | input | [`StateRoom`](state.md#type-stateroom) |
+| `scratch` | scratch | [`Scratch`](helpers.md#type-scratch) |
+| `state` | output | `BeaconState`, its `size` set by the caller |
+
+### Returns
+
+- `LANTERN_OK`: `state` holds the state.
+- `LANTERN_BUFFER_TOO_SMALL`: `state` or `scratch` is short; nothing is changed.
+- `LANTERN_INVALID_ENCODING`: the bytes are no state of the fork.
+
+### Caller must
+
+- `state` is a valid `BeaconState` value (include/types.inc) with every PartRef in range.
+
+### Function does
+
+- Decodes the state as lantern_node_anchor_block decodes its state, into `state` with `room` (node.md, NODE_WORK_ARCHIVE_LOAD).
+- Leaves the size of `scratch` as it came.
+
+### Function never
+
+- Makes an OS call.
+
+### Limits
+
+- Stack of its own: 112 bytes on x86-64 (return address included), 112 bytes on ARM64, 112 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_<fork>_node_archive_state` in the object of every fork, with `_` before it on macOS; `lantern_node_archive_state` inside the object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6); each argument is a pointer: a Uint64 argument points at a u64, and a Boolean output is a u64 of 0 or 1.
+- Argument order: `bytes`, `room`, `scratch`, `state`.
+
+## Function `lantern_node_attnets`
+
+The attestation subnets of the node at an epoch.
+
+### Signature
+
+```
+lantern_node_attnets(epoch) -> subnets
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `epoch` | input | u64 in a register |
+
+### Function does
+
+- Returns bit i for subnet i: lantern_compute_subscribed_subnet of the node ID for each index below `SUBNETS_PER_NODE`, of the fork of the store's slot; 0 on a failure.
+- It is apart from lantern_node_subscribe, as FORK_CALL takes the labels 81 to 89.
+
+### Function never
+
+- Makes an OS call.
+
+### Limits
+
+- Stack of its own: 128 bytes on x86-64 (return address included), 128 bytes on ARM64, 128 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_node_attnets`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- Registers it reads, on ARM64, x86-64, RISC-V: the node in x19, rbx, s1.
+- Argument order: `epoch`.
+
+## Function `lantern_node_attnets_set`
+
+Sets the node's attestation subnets of an epoch.
+
+### Signature
+
+```
+lantern_node_attnets_set(epoch)
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `epoch` | input | u64 in a register |
+
+### Function does
+
+- `attnets` takes the subnets of `epoch`; a change adds 1 to `metadata_seq`.
+
+### Function never
+
+- Makes an OS call.
+
+### Limits
+
+- Stack of its own: 16 bytes on x86-64 (return address included), 16 bytes on ARM64, 16 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_node_attnets_set`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- Registers it reads, on ARM64, x86-64, RISC-V: the node in x19, rbx, s1.
+- Argument order: `epoch`.
+
+## Function `lantern_node_await`
+
+Makes a block from the network wait for its blobs or columns.
+
+### Signature
+
+```
+lantern_node_await(index)
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `index` | input | u64 in a register: the block's index |
+
+### Function does
+
+- `NODE_BLOCK_BLOBS` while it needs sidecars the node does not hold; else `data_available` 1, `NODE_BLOCK_WAITING`, and its import.
+- Deneb and electra: it needs blobs when its blob count is 1 to the fork's limit and `NODE_BLOB_MAX`, and its epoch is in the blob window.
+- Fulu: it needs columns when its blob count is above 0 and its epoch is in the column window.
+
+### Function never
+
+- Makes an OS call.
+
+### Limits
+
+- Stack of its own: 96 bytes on x86-64 (return address included), 96 bytes on ARM64, 96 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_node_await`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- Registers it reads, on ARM64, x86-64, RISC-V: the node in x19, rbx, s1.
+- Argument order: `index`.
+
+## Function `lantern_node_backfill_ask`
+
+Sends the backfill's next BeaconBlocksByRange.
+
+### Signature
+
+```
+lantern_node_backfill_ask()
+```
+
+### Function does
+
+- With `NODE_FLAG_DB`, after the sync's requests: a request of the slots below `backfill_next` to a peer from `backfill_peer` on, when no request is open or unweighed, from `backfill_ms` on, while `backfill_next` is above the target and the streams part has room for three entries (node.md).
+
+### Function never
+
+- Makes an OS call.
+
+### Limits
+
+- Stack of its own: 160 bytes on x86-64 (return address included), 144 bytes on ARM64, 160 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_node_backfill_ask`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- Registers it reads, on ARM64, x86-64, RISC-V: the store in x20, rbp, s2.
+- Registers it reads, on ARM64, x86-64, RISC-V: the node in x19, rbx, s1.
+
+## Function `lantern_node_backfill_link`
+
+Joins the backfill's blocks to the Db.
+
+### Signature
+
+```
+lantern_node_backfill_link()
+```
+
+### Function does
+
+- With `NODE_FLAG_DB`: while a block in `NODE_BLOCK_BACKFILL` has the root `backfill_root` and a slot below `backfill_slot`, its record goes at the end of the segment of its slot with a DB_APPEND; `backfill_slot` and `backfill_root` follow, and the entry is free (node.md).
+- Then, with no backfill stream and no block in `NODE_BLOCK_BF_CHECKING`, the blocks left in `NODE_BLOCK_BACKFILL` go, and the last request is weighed.
+
+### Function never
+
+- Makes an OS call.
+
+### Limits
+
+- Stack of its own: 192 bytes on x86-64 (return address included), 192 bytes on ARM64, 192 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_node_backfill_link`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- Registers it reads, on ARM64, x86-64, RISC-V: the node in x19, rbx, s1.
+
+## Function `lantern_node_blob_added`
+
+Lets a block wait again for its blobs.
+
+### Signature
+
+```
+lantern_node_blob_added(root)
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `root` | input | Bytes32 |
+
+### Function does
+
+- A blob of `root` became `NODE_BLOB_VALID`: the block of that root in `NODE_BLOCK_BLOBS` waits for its blobs again.
+
+### Function never
+
+- Makes an OS call.
+
+### Limits
+
+- Stack of its own: 16 bytes on x86-64 (return address included), 32 bytes on ARM64, 16 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_node_blob_added`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- Registers it reads, on ARM64, x86-64, RISC-V: the node in x19, rbx, s1.
+- Argument order: `root`.
+
+## Function `lantern_node_blob_held`
+
+The node's valid entry of a sidecar.
+
+### Signature
+
+```
+lantern_node_blob_held(root, index) -> entry
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `root` | input | Bytes32 |
+| `index` | input | u64 in a register |
+
+### Function does
+
+- Returns the node's `NODE_BLOB_VALID` entry of the root and index, or 0.
+
+### Function never
+
+- Calls another function.
+- Writes memory.
+- Makes an OS call.
+
+### Limits
+
+- Stack of its own: 8 bytes on x86-64 (return address included), 0 bytes on ARM64, 0 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_node_blob_held`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- Registers it changes, on ARM64, x86-64, RISC-V: x0, x9 to x15; rax, rcx, rdx, r11, xmm0 to xmm2; a0, a6, a7, t0 to t3.
+- Registers it reads, on ARM64, x86-64, RISC-V: the node in x19, rbx, s1.
+- Argument order: `root`, `index`.
+
+## Function `lantern_node_blobs_held`
+
+Whether the node holds every blob of a root.
+
+### Signature
+
+```
+lantern_node_blobs_held(root, count) -> flag
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `root` | input | Bytes32 |
+| `count` | input | u64 in a register: 1 to `NODE_BLOB_MAX` |
+
+### Function does
+
+- Returns 1 when the node holds a `NODE_BLOB_VALID` entry of the root for each index below `count`, else 0.
+
+### Function never
+
+- Calls another function.
+- Writes memory.
+- Makes an OS call.
+
+### Limits
+
+- Stack of its own: 8 bytes on x86-64 (return address included), 0 bytes on ARM64, 0 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_node_blobs_held`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- Registers it changes, on ARM64, x86-64, RISC-V: x0, x9 to x16; rax, rcx, rdx, r8, r9, r11, xmm0 to xmm2; a0, a6, a7, t0 to t4.
+- Registers it reads, on ARM64, x86-64, RISC-V: the node in x19, rbx, s1.
+- Argument order: `root`, `count`.
+
+## Function `lantern_node_block_entry`
+
+The root entry of a BLOCK event.
+
+### Signature
+
+```
+lantern_node_block_entry(event) -> status
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `event` | input | `NodeEvent` of kind `NODE_EV_BLOCK` |
+
+### Function does
+
+- Writes the root entry: its first u64 0, then the root; or a first u64 not 0 when the bytes are no SignedBeaconBlock.
+- Returns the status.
+
+### Function never
+
+- Makes an OS call.
+
+### Limits
+
+- Stack of its own: 112 bytes on x86-64 (return address included), 112 bytes on ARM64, 112 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_node_block_entry`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- Registers it reads, on ARM64: the root entry's address in x28.
+- Registers it reads, on ARM64, x86-64, RISC-V: the node in x19, rbx, s1.
+- Argument order: `event`.
+
+## Function `lantern_node_body_item`
+
+An item of a list of a block's body.
+
+### Signature
+
+```
+lantern_node_body_item(bytes, list, index) -> (count, item, length)
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `bytes` | input | ByteList: the SignedBeaconBlock |
+| `list` | input | u64 in a register: 0 attester_slashings, 1 attestations |
+| `index` | input | u64 in a register |
+
+### Function does
+
+- Returns the list's count, or 2^64 - 1 when the bytes do not hold it; the offsets are at bytes 204 and 208 of the body in every fork.
+- For an index below the count, also returns the item's SSZ bytes and their length, else 0 and 0.
+
+### Function never
+
+- Calls another function.
+- Writes memory.
+- Makes an OS call.
+
+### Limits
+
+- Stack of its own: 8 bytes on x86-64 (return address included), 0 bytes on ARM64, 0 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_node_body_item`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- It returns three values: x0 to x2; rax, rdx, rcx; a0 to a2.
+- Registers it changes, on ARM64, x86-64, RISC-V: x0 to x2, x9 to x16; rax, rcx, rdx, r8 to r11; a0 to a5, t0 to t6.
+- Argument order: `bytes`, `list`, `index`.
+
+## Function `lantern_node_checkpoint_state`
+
+The state id of a checkpoint state.
+
+### Signature
+
+```
+lantern_node_checkpoint_state(epoch, root) -> id
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `epoch` | input | u64 in a register |
+| `root` | input | Bytes32 |
+
+### Function does
+
+- Returns the id of the checkpoint state of (`epoch`, `root`), or 0 when the root's block has no post-state.
+- A new checkpoint is a copy of that post-state, across the forks to the epoch's, and a TARGET_STATE work.
+
+### Function never
+
+- Makes an OS call.
+
+### Limits
+
+- Stack of its own: 96 bytes on x86-64 (return address included), 96 bytes on ARM64, 96 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_node_checkpoint_state`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- Registers it reads, on ARM64, x86-64, RISC-V: the node in x19, rbx, s1.
+- Argument order: `epoch`, `root`.
+
+## Function `lantern_node_children`
+
+Imports the blocks that wait for a block.
+
+### Signature
+
+```
+lantern_node_children(entry)
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `entry` | input | the `NodeBlock` |
+
+### Function does
+
+- Runs the import of each waiting block whose parent is the block.
+
+### Function never
+
+- Makes an OS call.
+
+### Limits
+
+- Stack of its own: 96 bytes on x86-64 (return address included), 96 bytes on ARM64, 96 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_node_children`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- Registers it reads, on ARM64, x86-64, RISC-V: the node in x19, rbx, s1.
+- Argument order: `entry`.
+
+## Function `lantern_node_column_count`
+
+The columns the node samples.
+
+### Signature
+
+```
+lantern_node_column_count() -> count
+```
+
+### Function does
+
+- Returns the bits of `Node_columns`.
+
+### Function never
+
+- Calls another function.
+- Writes memory.
+- Makes an OS call.
+
+### Limits
+
+- Stack of its own: 8 bytes on x86-64 (return address included), 0 bytes on ARM64, 0 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_node_column_count`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- Registers it changes, on ARM64, x86-64, RISC-V: x0, x9 to x11; rax, rcx, rdx; a0, t0, t1.
+- Registers it reads, on ARM64, x86-64, RISC-V: the node in x19, rbx, s1.
+
+## Function `lantern_node_column_raise_topics`
+
+Subscribes to the column topics of newly custodied columns.
+
+### Signature
+
+```
+lantern_node_column_raise_topics(before)
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `before` | input | 16 bytes: the columns before, as bits |
+
+### Function does
+
+- Queues a SUBSCRIBE of data_column_sidecar of each subnet of a column of the node's `columns` that no column of `before` had, at the node's `fork_digest`, and at its `next_digest` when it is not 0.
+
+### Function never
+
+- Makes an OS call.
+
+### Limits
+
+- Stack of its own: 96 bytes on x86-64 (return address included), 96 bytes on ARM64, 96 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_node_column_raise_topics`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- Registers it reads, on ARM64, x86-64, RISC-V: the actions in x24, r15, s6.
+- Registers it reads, on ARM64, x86-64, RISC-V: the node in x19, rbx, s1.
+- Argument order: `before`.
+
+## Function `lantern_node_columns_held`
+
+Whether the node holds every column it samples of a root.
+
+### Signature
+
+```
+lantern_node_columns_held(root) -> flag
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `root` | input | Bytes32 |
+
+### Function does
+
+- Returns 1 when the node holds a `NODE_BLOB_VALID` entry of the root for each column it samples, else 0.
+- Also gives the columns it samples and lacks, below 64 and from 64: in x11 and x17 on ARM64.
+
+### Function never
+
+- Calls another function.
+- Writes memory.
+- Makes an OS call.
+
+### Limits
+
+- Stack of its own: 8 bytes on x86-64 (return address included), 0 bytes on ARM64, 0 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_node_columns_held`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- Registers it changes, on ARM64, x86-64, RISC-V: x0, x9 to x17; rax, rcx, rdx, rsi, r8, r9, r11, xmm0 to xmm2; a0, a6, a7, t0 to t6.
+- Registers it reads, on ARM64, x86-64, RISC-V: the node in x19, rbx, s1.
+- Argument order: `root`.
+
+## Function `lantern_node_cross`
+
+Brings a state copy across the fork boundaries up to a slot's fork.
+
+### Signature
+
+```
+lantern_node_cross(copy, state, slot, target) -> id
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `copy` | input | u64 in a register: the copy's BufferId |
+| `state` | input | u64 in a register: the BufferId of the state |
+| `slot` | input | u64 in a register: the copy's slot |
+| `target` | input | u64 in a register: the slot whose fork to reach |
+
+### Caller must
+
+- `state` is a valid `BeaconState` value (include/types.inc) with every PartRef in range.
+
+### Function does
+
+- For each boundary up to the fork of `target`: a SLOTS work to the next fork's first slot when the copy is before it, a copy of the state as the upgrade's buffer, an UPGRADE work and a STATE_FREE of the copy before (node.md).
+- Returns the id of the last copy.
+
+### Function never
+
+- Makes an OS call.
+
+### Limits
+
+- Stack of its own: 96 bytes on x86-64 (return address included), 96 bytes on ARM64, 96 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_node_cross`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- Registers it reads, on ARM64, x86-64, RISC-V: the actions in x24, r15, s6.
+- Registers it reads, on ARM64, x86-64, RISC-V: the node in x19, rbx, s1.
+- Argument order: `copy`, `state`, `slot`, `target`.
+
+## Function `lantern_node_custody_columns`
+
+The columns of a node's custody groups, as bits.
+
+### Signature
+
+```
+lantern_node_custody_columns(node_id, groups, config, out) -> status
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `node_id` | input | `NodeID` |
+| `groups` | input | u64 in a register |
+| `config` | input | [`Config`](helpers.md#type-config) |
+| `out` | output | 16 bytes |
+
+### Returns
+
+- `LANTERN_OK`: `out` holds the columns of the groups of get_custody_groups(node_id, groups).
+- `LANTERN_INVALID_CUSTODY_GROUP`: `groups` is above `NUMBER_OF_CUSTODY_GROUPS` or 128; `out` holds no bits.
+
+### Function never
+
+- Makes an OS call.
+
+### Limits
+
+- Stack of its own: 1168 bytes on x86-64 (return address included), 1168 bytes on ARM64, 1168 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_node_custody_columns`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- Argument order: `node_id`, `groups`, `config`, `out`.
+
+## Function `lantern_node_custody_due`
+
+Queues the validator custody work of the store's epoch.
+
+### Signature
+
+```
+lantern_node_custody_due()
+```
+
+### Function does
+
+- From fulu, once each store epoch: with a NodeProposer entry whose until_epoch is above the store's epoch and F's post-state held, a NODE_WORK_CUSTODY of it (node.md, validator custody).
+
+### Function never
+
+- Makes an OS call.
+
+### Limits
+
+- Stack of its own: 96 bytes on x86-64 (return address included), 96 bytes on ARM64, 96 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_node_custody_due`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- Registers it reads, on ARM64, x86-64, RISC-V: the node in x19, rbx, s1.
+
+## Function `lantern_node_db_append`
+
+Queues a DB_APPEND action.
+
+### Signature
+
+```
+lantern_node_db_append(sidecars, id, segment, offset, record)
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `sidecars` | input | u64 in a register: 1 for a sidecar segment |
+| `id` | input | u64 in a register: the bytes' BufferId |
+| `segment` | input | u64 in a register |
+| `offset` | input | u64 in a register |
+| `record` | input | [`DbRecord`](db.md#type-dbrecord) |
+
+### Function does
+
+- Appends a DB_APPEND action of the record at `offset` of the segment.
+
+### Function never
+
+- Makes an OS call.
+
+### Limits
+
+- Stack of its own: 8 bytes on x86-64 (return address included), 64 bytes on ARM64, 0 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_node_db_append`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- Registers it reads, on ARM64, x86-64, RISC-V: the actions in x24, r15, s6.
+- Registers it changes, on x86-64 and RISC-V: rax, r10, xmm0; t0 to t3.
+- Registers it reads, on ARM64, x86-64, RISC-V: the node in x19, rbx, s1.
+- Argument order: `sidecars`, `id`, `segment`, `offset`, `record`.
+
+## Function `lantern_node_db_block`
+
+The NODE_DB_REF of a slot's block in the Db.
+
+### Signature
+
+```
+lantern_node_db_block(slot) -> ref
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `slot` | input | u64 in a register |
+
+### Function does
+
+- Returns the `NODE_DB_REF` of the Db record of the block of `slot`, or 0.
+
+### Function never
+
+- Calls another function.
+- Writes memory.
+- Makes an OS call.
+
+### Limits
+
+- Stack of its own: 8 bytes on x86-64 (return address included), 0 bytes on ARM64, 0 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_node_db_block`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- Registers it changes, on ARM64, x86-64, RISC-V: x0, x9 to x13; rax, rcx, rsi; a0, t0 to t3.
+- Registers it reads, on ARM64, x86-64, RISC-V: the node in x19, rbx, s1.
+- Argument order: `slot`.
+
+## Function `lantern_node_db_sidecar`
+
+The NODE_DB_REF of a sidecar of a slot in the Db.
+
+### Signature
+
+```
+lantern_node_db_sidecar(slot, index) -> ref
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `slot` | input | u64 in a register |
+| `index` | input | u64 in a register |
+
+### Function does
+
+- Returns the `NODE_DB_REF` of the record of the sidecar of `index`: the slot's first sidecar record plus its size times the slot's indices below `index`; or 0.
+
+### Function never
+
+- Calls another function.
+- Writes memory.
+- Makes an OS call.
+
+### Limits
+
+- Stack of its own: 8 bytes on x86-64 (return address included), 0 bytes on ARM64, 0 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_node_db_sidecar`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- Registers it changes, on ARM64, x86-64, RISC-V: x0, x9 to x15; rax, rcx, rdx, r8 to r11; a0, t0 to t6.
+- Registers it reads, on ARM64, x86-64, RISC-V: the node in x19, rbx, s1.
+- Argument order: `slot`, `index`.
+
+## Function `lantern_node_db_sidecars`
+
+Moves the valid sidecars of a block to the Db.
+
+### Signature
+
+```
+lantern_node_db_sidecars(block, writer)
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `block` | input | the `NodeBlock` entry |
+| `writer` | input | u64 in a register: 0 the archive, 1 the backfill |
+
+### Function does
+
+- Each `NODE_BLOB_VALID` sidecar of the block, by index: its record at the end of the sidecar segment of the block's slot, and a DB_APPEND (node.md).
+- The writer takes that segment and each end of it the record's end; the sidecar's bytes and entry go unless a stream sends them.
+- A record lantern_db_add refuses stays for the prune.
+
+### Function never
+
+- Makes an OS call.
+
+### Limits
+
+- Stack of its own: 208 bytes on x86-64 (return address included), 208 bytes on ARM64, 208 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_node_db_sidecars`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- Registers it reads, on ARM64, x86-64, RISC-V: the node in x19, rbx, s1.
+- Argument order: `block`, `writer`.
+
+## Function `lantern_node_db_slot`
+
+The DbSlot of a slot with a block.
+
+### Signature
+
+```
+lantern_node_db_slot(slot) -> entry
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `slot` | input | u64 in a register |
+
+### Function does
+
+- Returns the DbSlot of `slot` in the node's Db when it holds a block of that slot, else 0.
+
+### Function never
+
+- Calls another function.
+- Writes memory.
+- Makes an OS call.
+
+### Limits
+
+- Stack of its own: 8 bytes on x86-64 (return address included), 0 bytes on ARM64, 0 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_node_db_slot`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- Registers it changes, on ARM64, x86-64, RISC-V: x0, x9 to x13; rax, rcx, rdx; a0, t0 to t3.
+- Registers it reads, on ARM64, x86-64, RISC-V: the node in x19, rbx, s1.
+- Argument order: `slot`.
+
+## Function `lantern_node_decode`
+
+Decodes SSZ bytes into the end of a scratch.
+
+### Signature
+
+```
+lantern_node_decode(type, bytes, scratch) -> (status, value)
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `type` | input | the asm-ssz type descriptor |
+| `bytes` | input | ByteList |
+| `scratch` | scratch | [`Scratch`](helpers.md#type-scratch) |
+
+### Returns
+
+- 0: the second value is the decoded value.
+- 1: `scratch` is too small.
+- 2: the bytes are no encoding of the type.
+
+### Function does
+
+- Decodes into the end of `scratch`, whose size field then shrinks by the value's room; the caller restores it.
+
+### Function never
+
+- Makes an OS call.
+
+### Limits
+
+- Stack of its own: 112 bytes on x86-64 (return address included), 112 bytes on ARM64, 112 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_node_decode`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- It returns two values: x0, rax or a0, then x1, rdx or a1.
+- Argument order: `type`, `bytes`, `scratch`.
+
+## Function `lantern_node_drop_message`
+
+Removes a message entry.
+
+### Signature
+
+```
+lantern_node_drop_message(entry)
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `entry` | input | the `NodeMessage` |
+
+### Function does
+
+- The last entry takes its place.
+
+### Function never
+
+- Makes an OS call.
+
+### Limits
+
+- Stack of its own: 16 bytes on x86-64 (return address included), 32 bytes on ARM64, 16 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_node_drop_message`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- Registers it reads, on ARM64, x86-64, RISC-V: the node in x19, rbx, s1.
+- Argument order: `entry`.
+
+## Function `lantern_node_drop_peer`
+
+Removes a peer entry and its streams.
+
+### Signature
+
+```
+lantern_node_drop_peer(entry)
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `entry` | input | the `NodePeer` |
+
+### Function does
+
+- Removes the peer and ends each of its streams.
+
+### Function never
+
+- Makes an OS call.
+
+### Limits
+
+- Stack of its own: 96 bytes on x86-64 (return address included), 96 bytes on ARM64, 96 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_node_drop_peer`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- Registers it reads, on ARM64, x86-64, RISC-V: the node in x19, rbx, s1.
+- Argument order: `entry`.
+
+## Function `lantern_node_drop_sidecars`
+
+Drops the sidecar segments the node no longer serves.
+
+### Signature
+
+```
+lantern_node_drop_sidecars()
+```
+
+### Function does
+
+- With `NODE_FLAG_DB`: the drop slot is the first slot of the earlier of the blob window's and the column window's first epochs, at most the Db's end_slot, down to a multiple of `DB_SEGMENT_SLOTS`, at most 16 segments above `sidecar_floor` (node.md).
+- Queues a DB_DROP of each sidecar segment below it from `sidecar_floor`'s, calls lantern_db_drop_sidecars, and `sidecar_floor` takes it.
+
+### Function never
+
+- Makes an OS call.
+
+### Limits
+
+- Stack of its own: 112 bytes on x86-64 (return address included), 112 bytes on ARM64, 112 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_node_drop_sidecars`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- Registers it reads, on ARM64, x86-64, RISC-V: the node in x19, rbx, s1.
+
+## Function `lantern_node_drop_stream`
+
+Removes a stream entry.
+
+### Signature
+
+```
+lantern_node_drop_stream(entry)
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `entry` | input | the `NodeStream` |
+
+### Function does
+
+- Frees its NodeResponse; the last entry takes its place.
+
+### Function never
+
+- Makes an OS call.
+
+### Limits
+
+- Stack of its own: 16 bytes on x86-64 (return address included), 32 bytes on ARM64, 16 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_node_drop_stream`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- Registers it reads, on ARM64, x86-64, RISC-V: the node in x19, rbx, s1.
+- Argument order: `entry`.
+
+## Function `lantern_node_end_stream`
+
+Ends a stream and its BeaconBlocksByRange request.
+
+### Signature
+
+```
+lantern_node_end_stream(entry)
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `entry` | input | the `NodeStream` |
+
+### Function does
+
+- The stream entry goes, and the node's BeaconBlocksByRange request ends with it.
+- The sync's request: with blocks, sync_slot = max(sync_start, min(sync_got, sync_slot)); with none and not read to its end, sync_start.
+
+### Function never
+
+- Makes an OS call.
+
+### Limits
+
+- Stack of its own: 16 bytes on x86-64 (return address included), 32 bytes on ARM64, 16 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_node_end_stream`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- Registers it reads, on ARM64, x86-64, RISC-V: the node in x19, rbx, s1.
+- Argument order: `entry`.
+
+## Function `lantern_node_engine_consume`
+
+Drops bytes from the front of engine_in.
+
+### Signature
+
+```
+lantern_node_engine_consume(list, n)
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `list` | state | ByteList: `engine_in` |
+| `n` | input | u64 in a register |
+
+### Function does
+
+- The first `n` bytes leave the ByteList.
+
+### Function never
+
+- Makes an OS call.
+
+### Limits
+
+- Stack of its own: 16 bytes on x86-64 (return address included), 16 bytes on ARM64, 16 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_node_engine_consume`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- Registers it reads, on ARM64, x86-64, RISC-V: the node in x19, rbx, s1.
+- Argument order: `list`, `n`.
+
+## Function `lantern_node_engine_failed`
+
+Ends an engine call that failed.
+
+### Signature
+
+```
+lantern_node_engine_failed()
+```
+
+### Function does
+
+- An engine_newPayload's block takes `NODE_BLOCK_PAYLOAD` with retry the store's slot + 1; an engine_forkchoiceUpdated sets `NODE_FLAG_FCU` again.
+- `fcu_wait` for a forkchoiceUpdated, else `engine_wait`, becomes the slot + 1, and the call ends.
+
+### Function never
+
+- Makes an OS call.
+
+### Limits
+
+- Stack of its own: 96 bytes on x86-64 (return address included), 96 bytes on ARM64, 96 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_node_engine_failed`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- Registers it reads, on ARM64, x86-64, RISC-V: the node in x19, rbx, s1.
+
+## Function `lantern_node_engine_next`
+
+Starts the next engine call.
+
+### Signature
+
+```
+lantern_node_engine_next()
+```
+
+### Function does
+
+- With `NODE_FLAG_ENGINE`, when no call is in flight and the store's slot is at least `engine_wait`: a NEW_PAYLOAD work for the first block in `NODE_BLOCK_PAYLOAD` whose retry is at most the slot.
+- Else, with the slot at least `fcu_wait`: a preparation, or with `NODE_FLAG_FCU` from bellatrix on a FORKCHOICE work.
+
+### Function never
+
+- Makes an OS call.
+
+### Limits
+
+- Stack of its own: 96 bytes on x86-64 (return address included), 96 bytes on ARM64, 96 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_node_engine_next`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- Registers it reads, on ARM64, x86-64, RISC-V: the node in x19, rbx, s1.
+
+## Function `lantern_node_engine_read`
+
+Reads the engine's response bytes.
+
+### Signature
+
+```
+lantern_node_engine_read()
+```
+
+### Function does
+
+- A whole HTTP response in `engine_in` of the call in flight ends it, and the node acts on its result.
+- Leaves the size of the scratch as it came.
+
+### Function never
+
+- Makes an OS call.
+
+### Limits
+
+- Stack of its own: 256 bytes on x86-64 (return address included), 256 bytes on ARM64, 256 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_node_engine_read`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- Registers it reads, on ARM64, x86-64, RISC-V: the node in x19, rbx, s1.
+
+## Function `lantern_node_enr`
+
+Dials the node of a record when it is a peer the node wants.
+
+### Signature
+
+```
+lantern_node_enr(event)
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `event` | input | `NodeEvent` of kind `NODE_EV_ENR` |
+
+### Function does
+
+- Queues a DIAL of its TCP address when the record has an ip, a tcp pair of 1 or 2 bytes, an eth2 pair of compute_fork_digest at the store's epoch, a peer ID no NodePeer has, and there is room for a peer.
+- Leaves the size of the scratch as it came.
+
+### Function never
+
+- Makes an OS call.
+
+### Limits
+
+- Stack of its own: 240 bytes on x86-64 (return address included), 240 bytes on ARM64, 240 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_node_enr`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- Registers it reads, on ARM64, x86-64, RISC-V: the node in x19, rbx, s1.
+- Argument order: `event`.
+
+## Function `lantern_node_enr_entries`
+
+Queues the node's record entries for an epoch.
+
+### Signature
+
+```
+lantern_node_enr_entries(epoch, fork)
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `epoch` | input | u64 |
+| `fork` | input | u64 in a register |
+
+### Function does
+
+- With `NODE_FLAG_DISCV5`: a NODE_ACT_DISCV5 of SET_ENTRY events: eth2, attnets, from altair syncnets, from fulu cgc and nfd.
+
+### Function never
+
+- Makes an OS call.
+
+### Limits
+
+- Stack of its own: 112 bytes on x86-64 (return address included), 112 bytes on ARM64, 112 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_node_enr_entries`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- Registers it reads, on ARM64, x86-64, RISC-V: the node in x19, rbx, s1.
+- Argument order: `epoch`, `fork`.
+
+## Function `lantern_node_enr_pair`
+
+The value of a byte string pair of a record.
+
+### Signature
+
+```
+lantern_node_enr_pair(enr, bytes, key, key_length) -> (value, length)
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `enr` | input | the decoded `Enr` |
+| `bytes` | input | the record's bytes |
+| `key` | input | u64 in a register: up to 8 key bytes, little end first |
+| `key_length` | input | u64 in a register: at most 8 |
+
+### Function does
+
+- Returns the value of the pair whose key is `key`, and its length; 0 when there is none.
+
+### Function never
+
+- Calls another function.
+- Writes memory.
+- Makes an OS call.
+
+### Limits
+
+- Stack of its own: 8 bytes on x86-64 (return address included), 0 bytes on ARM64, 0 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_node_enr_pair`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- It returns two values: x0, rax or a0, then x1, rdx or a1.
+- Registers it changes, on ARM64, x86-64, RISC-V: x0, x1, x9 to x16; rax, rdx, rdi, r8 to r11; a0, a1, t0 to t6.
+- Argument order: `enr`, `bytes`, `key`, `key_length`.
+
+## Function `lantern_node_eth1_answer`
+
+Handles the answer of the eth1 call in flight.
+
+### Signature
+
+```
+lantern_node_eth1_answer(body, response)
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `body` | input | ByteList in scratch: the response body |
+| `response` | input | [`EngineResponse`](engine-api.md#type-engineresponse) |
+
+### Function does
+
+- Reads the block or the deposit logs into the follower (node.md, the eth1 follower).
+- A result the follower refuses, or a block of another number, makes `eth1_head_ms` `time_ms`.
+
+### Function never
+
+- Makes an OS call.
+
+### Limits
+
+- Stack of its own: 224 bytes on x86-64 (return address included), 224 bytes on ARM64, 224 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_node_eth1_answer`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- Registers it reads, on ARM64, x86-64, RISC-V: the node in x19, rbx, s1.
+- Argument order: `body`, `response`.
+
+## Function `lantern_node_eth1_block_add`
+
+Adds an Eth1Block to the follower's blocks.
+
+### Signature
+
+```
+lantern_node_eth1_block_add(block)
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `block` | input | [`Eth1Block`](eth1.md#type-eth1block), its number, hash and timestamp set |
+
+### Function does
+
+- The block joins `eth1_blocks` after the highest or before the lowest (node.md, the eth1 follower).
+- Its deposit count and root are those of the last `eth1_counts` entry at or below its number.
+
+### Function never
+
+- Makes an OS call.
+
+### Limits
+
+- Stack of its own: 128 bytes on x86-64 (return address included), 112 bytes on ARM64, 128 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_node_eth1_block_add`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- Registers it reads, on ARM64, x86-64, RISC-V: the node in x19, rbx, s1.
+- Argument order: `block`.
+
+## Function `lantern_node_eth1_block_drop`
+
+Drops the lowest of the follower's blocks.
+
+### Signature
+
+```
+lantern_node_eth1_block_drop()
+```
+
+### Function does
+
+- The lowest `eth1_blocks` entry goes; each other one moves down.
+
+### Function never
+
+- Makes an OS call.
+
+### Limits
+
+- Stack of its own: 96 bytes on x86-64 (return address included), 96 bytes on ARM64, 96 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_node_eth1_block_drop`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- Registers it reads, on ARM64, x86-64, RISC-V: the node in x19, rbx, s1.
+
+## Function `lantern_node_eth1_check_due`
+
+Queues the ETH1_CHECK work of the head.
+
+### Signature
+
+```
+lantern_node_eth1_check_due()
+```
+
+### Function does
+
+- With `NODE_FLAG_ENGINE` and `NODE_FLAG_ETH1`, after the head: when the store's epoch + 1 is above `eth1_check_epoch` and the head's post-state is held, an ETH1_CHECK work of it.
+
+### Function never
+
+- Makes an OS call.
+
+### Limits
+
+- Stack of its own: 96 bytes on x86-64 (return address included), 96 bytes on ARM64, 96 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_node_eth1_check_due`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- Registers it reads, on ARM64, x86-64, RISC-V: the node in x19, rbx, s1.
+
+## Function `lantern_node_eth1_next`
+
+Starts the follower's next eth1 call.
+
+### Signature
+
+```
+lantern_node_eth1_next() -> sent
+```
+
+### Function does
+
+- With `eth1_state` 1: the latest block when its poll is due, else the logs up to the follow head, else a block of the window (node.md, the eth1 follower).
+- Returns 1 when a call went, else 0.
+
+### Function never
+
+- Makes an OS call.
+
+### Limits
+
+- Stack of its own: 96 bytes on x86-64 (return address included), 96 bytes on ARM64, 96 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_node_eth1_next`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- Registers it reads, on ARM64, x86-64, RISC-V: the node in x19, rbx, s1.
+
+## Function `lantern_node_eth1_period`
+
+The start of the voting period of the store's slot.
+
+### Signature
+
+```
+lantern_node_eth1_period() -> seconds
+```
+
+### Function does
+
+- Returns voting_period_start_time of phase0 for the store's slot, in seconds.
+
+### Function never
+
+- Calls another function.
+- Writes memory.
+- Makes an OS call.
+
+### Limits
+
+- Stack of its own: 16 bytes on x86-64 (return address included), 16 bytes on ARM64, 16 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_node_eth1_period`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- Registers it changes, on ARM64, x86-64, RISC-V: x0, x9 to x11; rax, rcx, rdx; a0, a7, t0 to t2.
+- Registers it reads, on ARM64, x86-64, RISC-V: the node in x19, rbx, s1.
+
+## Function `lantern_node_eth1_reach`
+
+The follow reach of the config.
+
+### Signature
+
+```
+lantern_node_eth1_reach() -> seconds
+```
+
+### Function does
+
+- Returns 2 * `SECONDS_PER_ETH1_BLOCK` * `ETH1_FOLLOW_DISTANCE` of the config.
+
+### Function never
+
+- Calls another function.
+- Writes memory.
+- Makes an OS call.
+
+### Limits
+
+- Stack of its own: 8 bytes on x86-64 (return address included), 0 bytes on ARM64, 0 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_node_eth1_reach`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- Registers it changes, on ARM64 and RISC-V: x0, x9, x10; a0, a7, t0.
+- Registers it reads, on ARM64, x86-64, RISC-V: the node in x19, rbx, s1.
+
+## Function `lantern_node_eth1_send`
+
+Sends an eth1 call.
+
+### Signature
+
+```
+lantern_node_eth1_send(method, first, last) -> sent
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `method` | input | u64 in a register |
+| `first` | input | u64 in a register: the block number, or the logs' first |
+| `last` | input | u64 in a register: the logs' last |
+
+### Function does
+
+- Writes the call's request with the id `engine_id` in lantern_http_post with the JWT of `time_ms` / 1000, in a NODE_ACT_ENGINE.
+- `engine_method` takes the method and `eth1_call` the block asked or the last.
+- Returns 1 when it went, else 0.
+
+### Function never
+
+- Makes an OS call.
+
+### Limits
+
+- Stack of its own: 128 bytes on x86-64 (return address included), 128 bytes on ARM64, 128 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_node_eth1_send`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- Registers it reads, on ARM64, x86-64, RISC-V: the node in x19, rbx, s1.
+- Argument order: `method`, `first`, `last`.
+
+## Function `lantern_node_eth1_snapshot`
+
+Puts the follower's Eth1Snapshot under a new id.
+
+### Signature
+
+```
+lantern_node_eth1_snapshot() -> id
+```
+
+### Function does
+
+- Returns the id of a new BYTES_PUT of the follower's [`Eth1Snapshot`](#type-eth1snapshot) (node.md, NODE_PRODUCE_ETH1).
+
+### Function never
+
+- Makes an OS call.
+
+### Limits
+
+- Stack of its own: 96 bytes on x86-64 (return address included), 96 bytes on ARM64, 96 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_node_eth1_snapshot`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- Registers it reads, on ARM64, x86-64, RISC-V: the node in x19, rbx, s1.
+
+## Function `lantern_node_eth1_snapshot_size`
+
+The bytes of the follower's Eth1Snapshot.
+
+### Signature
+
+```
+lantern_node_eth1_snapshot_size() -> bytes
+```
+
+### Function does
+
+- Returns the bytes of the snapshot: with `eth1_state` 1 its blocks, the deposits from `eth1_deposit_index`, at most `MAX_DEPOSITS`, and every leaf; else none.
+- Also gives the blocks, the deposits, the leaves and the first deposit: in x1 to x4 on ARM64.
+
+### Function never
+
+- Calls another function.
+- Writes memory.
+- Makes an OS call.
+
+### Limits
+
+- Stack of its own: 8 bytes on x86-64 (return address included), 0 bytes on ARM64, 0 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_node_eth1_snapshot_size`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- Registers it reads, on ARM64, x86-64, RISC-V: the node in x19, rbx, s1.
+
+## Function `lantern_node_event`
+
+Handles one event of a step.
+
+### Signature
+
+```
+lantern_node_event(event)
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `event` | input | `NodeEvent` |
+
+### Function does
+
+- Does what node.md says the step does for the event's kind.
+
+### Function never
+
+- Makes an OS call.
+
+### Limits
+
+- Stack of its own: 144 bytes on x86-64 (return address included), 144 bytes on ARM64, 144 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_node_event`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- Registers it reads, on ARM64: the root entry of the step's first pass for a BLOCK event in x28.
+- Registers it reads, on ARM64, x86-64, RISC-V: the node in x19, rbx, s1.
+- Argument order: `event`.
+
+## Function `lantern_node_f_slot`
+
+The slot of the finalized block.
+
+### Signature
+
+```
+lantern_node_f_slot() -> slot
+```
+
+### Function does
+
+- Returns the slot of the block of the store's finalized root, or 2^64 - 1 when the node keeps none.
+
+### Function never
+
+- Makes an OS call.
+
+### Limits
+
+- Stack of its own: 16 bytes on x86-64 (return address included), 16 bytes on ARM64, 16 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_node_f_slot`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- Registers it reads, on ARM64, x86-64, RISC-V: the store in x20, rbp, s2.
+- Registers it changes, on ARM64, x86-64, RISC-V: x0, x9 to x15; rax, rcx, rdx, r11, xmm0 to xmm2; a0, a6, a7, t0 to t2.
+- Registers it reads, on ARM64, x86-64, RISC-V: the node in x19, rbx, s1.
+
+## Function `lantern_node_find_block`
+
+The block of a root.
+
+### Signature
+
+```
+lantern_node_find_block(root) -> (index, entry)
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `root` | input | Bytes32 |
+
+### Function does
+
+- Returns the index of the block whose root is `root`, or 2^64 - 1, and its entry.
+
+### Function never
+
+- Calls another function.
+- Writes memory.
+- Makes an OS call.
+
+### Limits
+
+- Stack of its own: 8 bytes on x86-64 (return address included), 0 bytes on ARM64, 0 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_node_find_block`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- It returns two values: x0, rax or a0, then x1, rdx or a1.
+- Registers it changes, on ARM64, x86-64, RISC-V: x0, x1, x9 to x15; rax, rcx, rdx, r11, xmm0 to xmm2; a0, a1, a6, a7, t0 to t2.
+- Registers it reads, on ARM64, x86-64, RISC-V: the node in x19, rbx, s1.
+- Argument order: `root`.
+
+## Function `lantern_node_find_checkpoint`
+
+The checkpoint entry of an epoch and a root.
+
+### Signature
+
+```
+lantern_node_find_checkpoint(epoch, root) -> (index, entry)
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `epoch` | input | u64 in a register |
+| `root` | input | Bytes32 |
+
+### Function does
+
+- Returns the index of the checkpoint (`epoch`, `root`), or 2^64 - 1, and its entry.
+
+### Function never
+
+- Calls another function.
+- Writes memory.
+- Makes an OS call.
+
+### Limits
+
+- Stack of its own: 8 bytes on x86-64 (return address included), 0 bytes on ARM64, 0 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_node_find_checkpoint`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- It returns two values: x0, rax or a0, then x1, rdx or a1.
+- Registers it changes, on ARM64, x86-64, RISC-V: x0, x1, x9 to x16; rax, rcx, rdx, r8, r11, xmm0 to xmm2; a0, a1, a6, a7, t0 to t3.
+- Registers it reads, on ARM64, x86-64, RISC-V: the node in x19, rbx, s1.
+- Argument order: `epoch`, `root`.
+
+## Function `lantern_node_find_message`
+
+The message entry of a libp2p handle.
+
+### Signature
+
+```
+lantern_node_find_message(handle) -> (index, entry)
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `handle` | input | u64 in a register |
+
+### Function does
+
+- Returns the index of the message of the libp2p handle, or 2^64 - 1, and its entry.
+
+### Function never
+
+- Calls another function.
+- Writes memory.
+- Makes an OS call.
+
+### Limits
+
+- Stack of its own: 8 bytes on x86-64 (return address included), 0 bytes on ARM64, 0 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_node_find_message`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- It returns two values: x0, rax or a0, then x1, rdx or a1.
+- Registers it changes, on ARM64, x86-64, RISC-V: x0, x1, x9 to x11; rax, rdx, rcx; a0, a1, a7, t0 to t2.
+- Registers it reads, on ARM64, x86-64, RISC-V: the node in x19, rbx, s1.
+- Argument order: `handle`.
+
+## Function `lantern_node_find_opening`
+
+The opening stream of a tag.
+
+### Signature
+
+```
+lantern_node_find_opening(tag) -> (index, entry)
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `tag` | input | u64 in a register |
+
+### Function does
+
+- Returns the index of the node's stream in `NODE_STREAM_OPENING` of the tag, or 2^64 - 1, and its entry.
+
+### Function never
+
+- Calls another function.
+- Writes memory.
+- Makes an OS call.
+
+### Limits
+
+- Stack of its own: 8 bytes on x86-64 (return address included), 0 bytes on ARM64, 0 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_node_find_opening`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- It returns two values: x0, rax or a0, then x1, rdx or a1.
+- Registers it changes, on ARM64, x86-64, RISC-V: x0, x1, x9 to x13; rax, rdx, rcx, rsi; a0, a1, a7, t0 to t4.
+- Registers it reads, on ARM64, x86-64, RISC-V: the node in x19, rbx, s1.
+- Argument order: `tag`.
+
+## Function `lantern_node_find_peer`
+
+The peer entry of a libp2p handle.
+
+### Signature
+
+```
+lantern_node_find_peer(handle) -> (index, entry)
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `handle` | input | u64 in a register |
+
+### Function does
+
+- Returns the index of the peer of the libp2p handle, or 2^64 - 1, and its entry.
+
+### Function never
+
+- Calls another function.
+- Writes memory.
+- Makes an OS call.
+
+### Limits
+
+- Stack of its own: 8 bytes on x86-64 (return address included), 0 bytes on ARM64, 0 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_node_find_peer`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- It returns two values: x0, rax or a0, then x1, rdx or a1.
+- Registers it changes, on ARM64, x86-64, RISC-V: x0, x1, x9 to x11; rax, rdx, rcx; a0, a1, t0 to t2.
+- Registers it reads, on ARM64, x86-64, RISC-V: the node in x19, rbx, s1.
+- Argument order: `handle`.
+
+## Function `lantern_node_find_stream`
+
+The stream entry of a libp2p handle.
+
+### Signature
+
+```
+lantern_node_find_stream(handle) -> (index, entry)
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `handle` | input | u64 in a register |
+
+### Function does
+
+- Returns the index of the stream of the libp2p handle, or 2^64 - 1, and its entry.
+
+### Function never
+
+- Calls another function.
+- Writes memory.
+- Makes an OS call.
+
+### Limits
+
+- Stack of its own: 8 bytes on x86-64 (return address included), 0 bytes on ARM64, 0 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_node_find_stream`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- It returns two values: x0, rax or a0, then x1, rdx or a1.
+- Registers it changes, on ARM64, x86-64, RISC-V: x0, x1, x9 to x12; rax, rdx, rcx, rsi; a0, a1, t0 to t3.
+- Registers it reads, on ARM64, x86-64, RISC-V: the node in x19, rbx, s1.
+- Argument order: `handle`.
+
+## Function `lantern_node_fork`
+
+The fork of a slot.
+
+### Signature
+
+```
+lantern_node_fork(slot, config) -> fork
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `slot` | input | u64 in a register |
+| `config` | input | [`Config`](helpers.md#type-config) |
+
+### Function does
+
+- Returns the last fork whose epoch is at most the epoch of `slot`.
+
+### Function never
+
+- Calls another function.
+- Writes memory.
+- Makes an OS call.
+
+### Limits
+
+- Stack of its own: 8 bytes on x86-64 (return address included), 0 bytes on ARM64, 0 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_node_fork`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- Registers it changes, on ARM64, x86-64, RISC-V: x0, x9 to x11; rax, rcx, rdx; a0, t0 to t2.
+- Argument order: `slot`, `config`.
+
+## Function `lantern_node_free_block`
+
+Frees a block entry.
+
+### Signature
+
+```
+lantern_node_free_block(entry)
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `entry` | state | the `NodeBlock` entry |
+
+### Function does
+
+- Queues a BYTES_FREE of its bytes.
+- Its root and parent_root become all 0xff bytes.
+
+### Function never
+
+- Makes an OS call.
+
+### Limits
+
+- Stack of its own: 32 bytes on x86-64 (return address included), 32 bytes on ARM64, 32 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_node_free_block`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- Registers it reads, on ARM64, x86-64, RISC-V: the node in x19, rbx, s1.
+- Argument order: `entry`.
+
+## Function `lantern_node_free_responses`
+
+The count of free NodeResponse entries.
+
+### Signature
+
+```
+lantern_node_free_responses() -> count
+```
+
+### Function does
+
+- Returns the count of free NodeResponse entries.
+
+### Function never
+
+- Calls another function.
+- Writes memory.
+- Makes an OS call.
+
+### Limits
+
+- Stack of its own: 8 bytes on x86-64 (return address included), 0 bytes on ARM64, 0 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_node_free_responses`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- Registers it changes, on ARM64, x86-64, RISC-V: x0, x9 to x12, x16; rax, rcx, rdx; a0, a7, t0 to t3.
+- Registers it reads, on ARM64, x86-64, RISC-V: the node in x19, rbx, s1.
+
+## Function `lantern_node_gossip_member`
+
+The slot, committee and member of a valid beacon_attestation, for lantern_node_gossip.
+
+### Signature
+
+```
+lantern_node_gossip_member() -> status
+```
+
+### Returns
+
+- `LANTERN_OK`: the root of lantern_node_gossip holds the four u64.
+- `LANTERN_BUFFER_TOO_SMALL`: the scratch cannot hold the committee.
+
+### Function does
+
+- Writes four u64 in the root: the attestation's `data.slot`, its committee index, its member and 0 (lantern_node_gossip).
+- The member, from electra: the place of `attester_index` in lantern_get_beacon_committee of the head state, + 2^16 times the committee's length; before electra, 0.
+- The committee is a list at the end of the scratch.
+
+### Function never
+
+- Makes an OS call.
+
+### Limits
+
+- Stack of its own: 112 bytes on x86-64 (return address included), 112 bytes on ARM64, 112 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_node_gossip_member`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- Registers it reads, on ARM64, x86-64, RISC-V: the NodeGossip in x19, rbx, s1; the attestation in x20, rbp, s2; the scratch in x21, r12, s3; the root in x23, r14, s5: the registers of lantern_node_gossip.
+
+## Function `lantern_node_gossip_shed`
+
+Frees the proposer states of gossip that no work uses.
+
+### Signature
+
+```
+lantern_node_gossip_shed()
+```
+
+### Function does
+
+- Each gossip_states entry with a state, no use and a slot + 2 at most the store's slot: a STATE_FREE of its state, when the actions have room (node.md, NodeGossipState).
+
+### Function never
+
+- Makes an OS call.
+
+### Limits
+
+- Stack of its own: 96 bytes on x86-64 (return address included), 96 bytes on ARM64, 96 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_node_gossip_shed`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- Registers it reads, on ARM64, x86-64, RISC-V: the actions in x24, r15, s6.
+- Registers it reads, on ARM64, x86-64, RISC-V: the node in x19, rbx, s1.
+
+## Function `lantern_node_gossip_state`
+
+The proposer state of a gossip message.
+
+### Signature
+
+```
+lantern_node_gossip_state(root, slot, post) -> id
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `root` | input | Bytes32: the parent root |
+| `slot` | input | u64 in a register |
+| `post` | input | u64 in a register: the BufferId of the parent's post-state |
+
+### Function does
+
+- Returns the state of the gossip_states entry of the root and the slot, with 1 more use (node.md, NodeGossipState).
+- Else, in the first entry with no use: a STATE_FREE of its state, then a copy of `post` with the root, the slot and 1 use.
+- Else a copy of `post` for the message alone.
+
+### Function never
+
+- Makes an OS call.
+
+### Limits
+
+- Stack of its own: 96 bytes on x86-64 (return address included), 96 bytes on ARM64, 96 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_node_gossip_state`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- Registers it reads, on ARM64, x86-64, RISC-V: the actions in x24, r15, s6.
+- Registers it reads, on ARM64, x86-64, RISC-V: the node in x19, rbx, s1.
+- Argument order: `root`, `slot`, `post`.
+
+## Function `lantern_node_gossip_state_done`
+
+Ends the use of a proposer state by a GOSSIP work.
+
+### Signature
+
+```
+lantern_node_gossip_state_done(state)
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `state` | input | u64 in a register: the BufferId, or 0 |
+
+### Caller must
+
+- `state` is a valid `BeaconState` value (include/types.inc) with every PartRef in range.
+
+### Function does
+
+- Its gossip_states entry has 1 use less.
+- A state of no entry goes: a STATE_FREE.
+
+### Function never
+
+- Makes an OS call.
+
+### Limits
+
+- Stack of its own: 96 bytes on x86-64 (return address included), 96 bytes on ARM64, 96 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_node_gossip_state_done`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- Registers it reads, on ARM64, x86-64, RISC-V: the actions in x24, r15, s6.
+- Registers it reads, on ARM64, x86-64, RISC-V: the node in x19, rbx, s1.
+- Argument order: `state`.
+
+## Function `lantern_node_head`
+
+Finds the head of the node's store.
+
+### Signature
+
+```
+lantern_node_head()
+```
+
+### Function does
+
+- Only when a work changed the store or the store's slot is new: the node's head root takes the root of get_head of the fork of the store's slot.
+- A new head counts a reorg (lantern_node_reorg_count); with `NODE_FLAG_ENGINE` it sets `NODE_FLAG_FCU` and `fcu_wait` 0.
+- With no head: again at the next step; for `LANTERN_NEED_JUSTIFIED_STATE`, lantern_node_justified.
+
+### Function never
+
+- Makes an OS call.
+
+### Limits
+
+- Stack of its own: 112 bytes on x86-64 (return address included), 112 bytes on ARM64, 112 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_node_head`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- Registers it reads, on ARM64, x86-64, RISC-V: the store in x20, rbp, s2; the scratch in x23, r14, s5; the actions in x24, r15, s6.
+- Registers it reads, on ARM64, x86-64, RISC-V: the node in x19, rbx, s1.
+
+## Function `lantern_node_ids`
+
+Queues an action of one or two BufferIds.
+
+### Signature
+
+```
+lantern_node_ids(kind, a, b)
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `kind` | input | u64 in a register |
+| `a` | input | u64 in a register: STATE_COPY the source, a FREE kind the id |
+| `b` | input | u64 in a register: STATE_COPY the new id |
+
+### Function does
+
+- Appends the action of `kind` with the ids.
+- A BYTES_FREE of bytes a NodeApi entry sends goes to the entry instead: `API_STREAM_OWN`.
+- So does a STATE_FREE of the state a validator stream reads: `API_STREAM_OWN_STATE`.
+- A STATE_FREE of the base state is no action.
+
+### Function never
+
+- Makes an OS call.
+
+### Limits
+
+- Stack of its own: 8 bytes on x86-64 (return address included), 48 bytes on ARM64, 0 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_node_ids`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- Registers it reads, on ARM64, x86-64, RISC-V: the actions in x24, r15, s6.
+- Registers it reads, on ARM64, x86-64, RISC-V: the node in x19, rbx, s1.
+- Argument order: `kind`, `a`, `b`.
+
+## Function `lantern_node_import_now`
+
+Starts the import of a block whose parent is imported.
+
+### Signature
+
+```
+lantern_node_import_now(index, status)
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `index` | input | u64 in a register: the block's index |
+| `status` | input | u64 in a register: its payload status |
+
+### Function does
+
+- A copy of the parent's post-state, across the forks to the block's (lantern_node_cross), and an IMPORT_BLOCK work; the block takes `NODE_BLOCK_IMPORTING`.
+- A parent with no post-state above F's slot is rebuilt first (lantern_node_rebuild).
+- A parent at or below F's slot makes the block `NODE_BLOCK_INVALID` and frees its bytes.
+
+### Function never
+
+- Makes an OS call.
+
+### Limits
+
+- Stack of its own: 96 bytes on x86-64 (return address included), 96 bytes on ARM64, 96 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_node_import_now`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- Registers it reads, on ARM64, x86-64, RISC-V: the scratch in x23, r14, s5; the actions in x24, r15, s6.
+- Registers it reads, on ARM64, x86-64, RISC-V: the node in x19, rbx, s1.
+- Argument order: `index`, `status`.
+
+## Function `lantern_node_json_decode`
+
+lantern_json_decode with the type of a NODE_JSON_* kind.
+
+### Signature
+
+```
+lantern_node_json_decode(kind, json, scratch, out, fault) -> status
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `kind` | input | u64 in a register: a NODE_JSON_* kind |
+| `json` | input | ByteList |
+| `scratch` | scratch | [`Scratch`](helpers.md#type-scratch) |
+| `out` | output | the decoded value |
+| `fault` | output | as lantern_json_decode |
+
+### Returns
+
+- As lantern_json_decode.
+- `LANTERN_INVALID_JSON`: the kind has no type in the fork.
+
+### Function does
+
+- Calls lantern_json_decode with the type lantern_node_type_of_kind gives (node.md, NODE_WORK_API_SUBMIT).
+
+### Function never
+
+- Makes an OS call.
+
+### Limits
+
+- Stack of its own: 16 bytes on x86-64 (return address included), 16 bytes on ARM64, 16 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_<fork>_node_json_decode` in the object of every fork, with `_` before it on macOS; `lantern_node_json_decode` inside the object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6); each argument is a pointer: a Uint64 argument points at a u64, and a Boolean output is a u64 of 0 or 1.
+- Registers it reads, on ARM64, x86-64, RISC-V: the node in x19, rbx, s1.
+- Argument order: `kind`, `json`, `scratch`, `out`, `fault`.
+
+## Function `lantern_node_lacks_sidecars`
+
+Whether a block lacks the blobs or columns it needs.
+
+### Signature
+
+```
+lantern_node_lacks_sidecars(entry) -> flag
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `entry` | input | the `NodeBlock` entry |
+
+### Function does
+
+- Returns 1 when the block needs blobs or columns it does not hold (node.md), else 0.
+
+### Function never
+
+- Makes an OS call.
+
+### Limits
+
+- Stack of its own: 96 bytes on x86-64 (return address included), 96 bytes on ARM64, 96 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_node_lacks_sidecars`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- Registers it reads, on ARM64, x86-64, RISC-V: the node in x19, rbx, s1.
+- Argument order: `entry`.
+
+## Function `lantern_node_layout`
+
+Lays out the parts of a node.
+
+### Signature
+
+```
+lantern_node_layout(node, room)
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `node` | state | the node |
+| `room` | input | u64 in a register: its bytes |
+
+### Function does
+
+- Lays out the parts of the node for `room` bytes at `NODE_FIXED`, with no entries.
+- Makes every NodeResponse entry, each free.
+
+### Function never
+
+- Calls another function.
+- Makes an OS call.
+
+### Limits
+
+- Stack of its own: 8 bytes on x86-64 (return address included), 0 bytes on ARM64, 0 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_node_layout`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- Registers it changes, on ARM64, x86-64, RISC-V: x9 to x12, x16; rax, rcx, rdx; a7, t0 to t3.
+- Argument order: `node`, `room`.
+
+## Function `lantern_node_lookup`
+
+Queues a discv5 lookup when the node needs peers.
+
+### Signature
+
+```
+lantern_node_lookup(tick)
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `tick` | input | asm-libp2p `Tick` |
+
+### Function does
+
+- With `NODE_FLAG_DISCV5`, below the open room or with short columns (node.md, the peer room), when `lookup_ms` is 0 or `NODE_LOOKUP_MS` before `time_ms`: a NODE_ACT_DISCV5 of a LOOKUP whose target is the 32 entropy bytes of the tick.
+- Then, with short columns and dialing + the peers at the capacity: a DISCONNECT of the last peer with `NODE_PEER_METADATA` whose custody holds none of the node's columns.
+
+### Function never
+
+- Makes an OS call.
+
+### Limits
+
+- Stack of its own: 96 bytes on x86-64 (return address included), 96 bytes on ARM64, 96 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_node_lookup`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- Registers it reads, on ARM64, x86-64, RISC-V: the actions in x24, r15, s6.
+- Registers it reads, on ARM64, x86-64, RISC-V: the node in x19, rbx, s1.
+- Argument order: `tick`.
+
+## Function `lantern_node_lvh`
+
+Marks the blocks a latestValidHash makes invalid.
+
+### Signature
+
+```
+lantern_node_lvh(node, hash, other)
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `node` | input | u64 in a register: the store's node to start from |
+| `hash` | input | Bytes32 or 0: the latestValidHash |
+| `other` | input | u64 in a register: a store node, or 2^64 - 1 |
+
+### Function does
+
+- Up the chain by parent from `node`: each node whose block_hash is not `hash` gets store_payload_status `INVALIDATED`, until the node with that hash (optimistic-sync.md).
+- A zero hash stops at the first zero block_hash.
+- With `hash` 0 (null), or a hash the chain does not have, only `other` gets it.
+
+### Function never
+
+- Makes an OS call.
+
+### Limits
+
+- Stack of its own: 128 bytes on x86-64 (return address included), 128 bytes on ARM64, 128 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_node_lvh`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- Registers it reads, on ARM64, x86-64, RISC-V: the store in x20, rbp, s2.
+- Registers it reads, on ARM64, x86-64, RISC-V: the node in x19, rbx, s1.
+- Argument order: `node`, `hash`, `other`.
+
+## Function `lantern_node_max_blobs`
+
+The blob sidecars one response may hold.
+
+### Signature
+
+```
+lantern_node_max_blobs() -> count
+```
+
+### Function does
+
+- Returns `MAX_REQUEST_BLOCKS_DENEB` times `MAX_BLOBS_PER_BLOCK` (deneb) or `MAX_BLOBS_PER_BLOCK_ELECTRA` (electra and later) of the fork of the store's slot.
+- At most the BufferIds a stream's list holds.
+
+### Function never
+
+- Makes an OS call.
+
+### Limits
+
+- Stack of its own: 16 bytes on x86-64 (return address included), 16 bytes on ARM64, 16 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_node_max_blobs`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- Registers it reads, on ARM64, x86-64, RISC-V: the node in x19, rbx, s1.
+
+## Function `lantern_node_max_blocks`
+
+The blocks one request may name.
+
+### Signature
+
+```
+lantern_node_max_blocks() -> count
+```
+
+### Function does
+
+- Returns `MAX_REQUEST_BLOCKS_DENEB` from deneb on, else `MAX_REQUEST_BLOCKS`, of the fork of the store's slot.
+- At most the BufferIds a stream's list holds.
+
+### Function never
+
+- Makes an OS call.
+
+### Limits
+
+- Stack of its own: 16 bytes on x86-64 (return address included), 16 bytes on ARM64, 16 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_node_max_blocks`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- Registers it reads, on ARM64, x86-64, RISC-V: the node in x19, rbx, s1.
+
+## Function `lantern_node_max_columns`
+
+The column sidecars one response may hold.
+
+### Signature
+
+```
+lantern_node_max_columns() -> count
+```
+
+### Function does
+
+- Returns compute_max_request_data_column_sidecars: `MAX_REQUEST_BLOCKS_DENEB` times `NUMBER_OF_COLUMNS`.
+- At most the BufferIds a stream's list holds.
+
+### Function never
+
+- Calls another function.
+- Writes memory.
+- Makes an OS call.
+
+### Limits
+
+- Stack of its own: 8 bytes on x86-64 (return address included), 0 bytes on ARM64, 0 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_node_max_columns`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- Registers it changes, on ARM64, x86-64, RISC-V: x0, x9; rax, rcx; a0, t0, t1.
+
+## Function `lantern_node_message`
+
+Takes a gossip MESSAGE of libp2p.
+
+### Signature
+
+```
+lantern_node_message(notice, p2p)
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `notice` | input | the libp2p MESSAGE notice |
+| `p2p` | input | the libp2p state that holds its data |
+
+### Function does
+
+- Queues its MESSAGE_ID, then adds a NodeMessage with its bytes, uncompressed, in a BYTES_PUT.
+- A topic of no name is read as of the node's `fork_digest`.
+- Leaves the size of the scratch as it came.
+
+### Function never
+
+- Makes an OS call.
+
+### Limits
+
+- Stack of its own: 160 bytes on x86-64 (return address included), 160 bytes on ARM64, 160 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_node_message`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- Registers it reads, on ARM64, x86-64, RISC-V: the store in x20, rbp, s2; the scratch in x23, r14, s5; the actions in x24, r15, s6.
+- Registers it reads, on ARM64, x86-64, RISC-V: the node in x19, rbx, s1.
+- Argument order: `notice`, `p2p`.
+
+## Function `lantern_node_message_status`
+
+Acts on a MESSAGE_STATUS of libp2p.
+
+### Signature
+
+```
+lantern_node_message_status(notice)
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `notice` | input | the libp2p MESSAGE_STATUS notice |
+
+### Function does
+
+- NEW: a GOSSIP work with the head state, for a block or block header a copy of its parent's post-state, and the state of the justified root; or a VALIDATION when the node holds no bytes for it.
+- Else the message's bytes and its entry go.
+
+### Function never
+
+- Makes an OS call.
+
+### Limits
+
+- Stack of its own: 96 bytes on x86-64 (return address included), 96 bytes on ARM64, 96 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_node_message_status`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- Registers it reads, on ARM64, x86-64, RISC-V: the store in x20, rbp, s2; the scratch in x23, r14, s5; the actions in x24, r15, s6.
+- Registers it reads, on ARM64, x86-64, RISC-V: the node in x19, rbx, s1.
+- Argument order: `notice`.
+
+## Function `lantern_node_new_blob`
+
+Takes a sidecar entry.
+
+### Signature
+
+```
+lantern_node_new_blob() -> (index, entry)
+```
+
+### Function does
+
+- Returns the index and the zeroed entry of a `NODE_BLOB_FREE` sidecar, or of a new one at the end.
+
+### Function never
+
+- Calls another function.
+- Makes an OS call.
+
+### Limits
+
+- Stack of its own: 8 bytes on x86-64 (return address included), 0 bytes on ARM64, 0 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_node_new_blob`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- It returns two values: x0, rax or a0, then x1, rdx or a1.
+- Registers it changes, on ARM64, x86-64, RISC-V: x0, x1, x9, x10; rax, rdx, rcx; a0, a1, t1, t2.
+- Registers it reads, on ARM64, x86-64, RISC-V: the node in x19, rbx, s1.
+
+## Function `lantern_node_new_block`
+
+Takes a block entry.
+
+### Signature
+
+```
+lantern_node_new_block() -> (index, entry)
+```
+
+### Function does
+
+- Returns the index and the zeroed entry of a `NODE_BLOCK_FREE` block, or of a new one at the end.
+
+### Function never
+
+- Calls another function.
+- Makes an OS call.
+
+### Limits
+
+- Stack of its own: 8 bytes on x86-64 (return address included), 0 bytes on ARM64, 0 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_node_new_block`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- It returns two values: x0, rax or a0, then x1, rdx or a1.
+- Registers it changes, on ARM64, x86-64, RISC-V: x0, x1, x9 to x11; rax, rdx, rcx; a0, a1, t1, t2.
+- Registers it reads, on ARM64, x86-64, RISC-V: the node in x19, rbx, s1.
+
+## Function `lantern_node_new_checkpoint`
+
+Takes a checkpoint entry.
+
+### Signature
+
+```
+lantern_node_new_checkpoint() -> (index, entry)
+```
+
+### Function does
+
+- Returns the index and the zeroed entry of a free checkpoint (epoch 2^64 - 1), or of a new one at the end.
+
+### Function never
+
+- Calls another function.
+- Makes an OS call.
+
+### Limits
+
+- Stack of its own: 8 bytes on x86-64 (return address included), 0 bytes on ARM64, 0 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_node_new_checkpoint`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- It returns two values: x0, rax or a0, then x1, rdx or a1.
+- Registers it changes, on ARM64, x86-64, RISC-V: x0, x1, x9, x10; rax, rdx, rcx; a0, a1, t1, t2.
+- Registers it reads, on ARM64, x86-64, RISC-V: the node in x19, rbx, s1.
+
+## Function `lantern_node_new_id`
+
+A new BufferId.
+
+### Signature
+
+```
+lantern_node_new_id() -> id
+```
+
+### Function does
+
+- Returns a new BufferId of the node.
+
+### Function never
+
+- Calls another function.
+- Makes an OS call.
+
+### Limits
+
+- Stack of its own: 8 bytes on x86-64 (return address included), 0 bytes on ARM64, 0 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_node_new_id`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- Registers it changes, on ARM64, x86-64, RISC-V: x0, x9; rax, rcx; a0, t0.
+- Registers it reads, on ARM64, x86-64, RISC-V: the node in x19, rbx, s1.
+
+## Function `lantern_node_next_peer`
+
+The next peer that can serve a slot.
+
+### Signature
+
+```
+lantern_node_next_peer(from, slot, need) -> (index, entry)
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `from` | input | u64 in a register: an index of the peers part |
+| `slot` | input | u64 in a register |
+| `need` | input | u64 in a register: bit 0 `NODE_PEER_METADATA`, bit 1 an earliest slot |
+
+### Function does
+
+- Returns the first peer from `from`, in the order of the peers part and around: with a Status of the node's `fork_digest` whose head_slot is at least `slot`; with `NODE_PEER_METADATA` when bit 0 of `need` is set; with an earliest_slot at most `slot` when bit 1 is.
+- Returns its index, or 2^64 - 1, and its entry.
+
+### Function never
+
+- Calls another function.
+- Writes memory.
+- Makes an OS call.
+
+### Limits
+
+- Stack of its own: 8 bytes on x86-64 (return address included), 0 bytes on ARM64, 0 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_node_next_peer`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- It returns two values: x0, rax or a0, then x1, rdx or a1.
+- Registers it changes, on ARM64, x86-64, RISC-V: x0, x1, x9 to x16; rax, rdx, rcx, rdi, r8 to r11; a0, a1, a7, t0 to t6.
+- Registers it reads, on ARM64, x86-64, RISC-V: the node in x19, rbx, s1.
+- Argument order: `from`, `slot`, `need`.
+
+## Function `lantern_node_notice`
+
+Acts on a libp2p application notice.
+
+### Signature
+
+```
+lantern_node_notice(notice, p2p)
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `notice` | input | the libp2p notice |
+| `p2p` | input | the libp2p state |
+
+### Function does
+
+- Does what node.md says the step does for the notice's kind.
+
+### Function never
+
+- Makes an OS call.
+
+### Limits
+
+- Stack of its own: 192 bytes on x86-64 (return address included), 192 bytes on ARM64, 192 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_node_notice`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- Registers it reads, on ARM64, x86-64, RISC-V: the store in x20, rbp, s2; the scratch in x23, r14, s5; the actions in x24, r15, s6.
+- Registers it reads, on ARM64, x86-64, RISC-V: the node in x19, rbx, s1.
+- Argument order: `notice`, `p2p`.
+
+## Function `lantern_node_open`
+
+Opens a request stream of the node.
+
+### Signature
+
+```
+lantern_node_open(method, version, handle, bytes, length) -> entry
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `method` | input | u64 in a register |
+| `version` | input | u64 in a register |
+| `handle` | input | u64 in a register: the peer's libp2p handle |
+| `bytes` | input | the request's SSZ bytes |
+| `length` | input | u64 in a register |
+
+### Function does
+
+- Adds a NodeStream in `NODE_STREAM_OPENING` whose list holds the request chunk, and queues an OPEN_STREAM of its protocol ID.
+- Status and GetMetaData take a free NodeResponse.
+- Returns the entry, or 0 when the streams part, the NodeResponse entries, the scratch or `p2p_out` have no room.
+- Leaves the size of the scratch as it came.
+
+### Function never
+
+- Makes an OS call.
+
+### Limits
+
+- Stack of its own: 336 bytes on x86-64 (return address included), 336 bytes on ARM64, 336 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_node_open`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- Registers it reads, on ARM64, x86-64, RISC-V: the scratch in x23, r14, s5.
+- Registers it reads, on ARM64, x86-64, RISC-V: the node in x19, rbx, s1.
+- Argument order: `method`, `version`, `handle`, `bytes`, `length`.
+
+## Function `lantern_node_out`
+
+Takes room for a libp2p event at the end of the node's queue.
+
+### Signature
+
+```
+lantern_node_out(bytes) -> event
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `bytes` | input | u64 in a register |
+
+### Function does
+
+- Returns room for an event of `bytes` bytes at the end of the node's queued libp2p events, its size written; or 0.
+
+### Function never
+
+- Calls another function.
+- Makes an OS call.
+
+### Limits
+
+- Stack of its own: 8 bytes on x86-64 (return address included), 0 bytes on ARM64, 0 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_node_out`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- Registers it changes, on ARM64, x86-64, RISC-V: x0, x9 to x12; rax, rcx, rdx, r8; a0, t0 to t3.
+- Registers it reads, on ARM64, x86-64, RISC-V: the node in x19, rbx, s1.
+- Argument order: `bytes`.
+
+## Function `lantern_node_out_consume`
+
+Drops the queued libp2p events that libp2p took.
+
+### Signature
+
+```
+lantern_node_out_consume(count)
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `count` | input | u64 in a register |
+
+### Function does
+
+- Drops the first `count` queued libp2p events; the rest move to the front.
+
+### Function never
+
+- Makes an OS call.
+
+### Limits
+
+- Stack of its own: 16 bytes on x86-64 (return address included), 32 bytes on ARM64, 16 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_node_out_consume`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- Registers it reads, on ARM64, x86-64, RISC-V: the node in x19, rbx, s1.
+- Argument order: `count`.
+
+## Function `lantern_node_out_count`
+
+The count of events in the front bytes of the node's queue.
+
+### Signature
+
+```
+lantern_node_out_count(bytes) -> count
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `bytes` | input | u64 in a register |
+
+### Function does
+
+- Returns the count of the events in the first `bytes` bytes of the node's queued libp2p events.
+
+### Function never
+
+- Calls another function.
+- Writes memory.
+- Makes an OS call.
+
+### Limits
+
+- Stack of its own: 8 bytes on x86-64 (return address included), 0 bytes on ARM64, 0 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_node_out_count`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- Registers it changes, on ARM64, x86-64, RISC-V: x0, x9 to x12; rax, rcx, rdx; a0, t0 to t3.
+- Registers it reads, on ARM64, x86-64, RISC-V: the node in x19, rbx, s1.
+- Argument order: `bytes`.
+
+## Function `lantern_node_out_handle`
+
+Queues a libp2p event of a handle.
+
+### Signature
+
+```
+lantern_node_out_handle(kind, handle)
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `kind` | input | u64 in a register: DISCONNECT, STREAM_CLOSE or STREAM_RESET |
+| `handle` | input | u64 in a register |
+
+### Function does
+
+- Queues the event of `kind` with the handle.
+
+### Function never
+
+- Makes an OS call.
+
+### Limits
+
+- Stack of its own: 32 bytes on x86-64 (return address included), 32 bytes on ARM64, 32 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_node_out_handle`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- Registers it reads, on ARM64, x86-64, RISC-V: the node in x19, rbx, s1.
+- Argument order: `kind`, `handle`.
+
+## Function `lantern_node_p2p_append`
+
+Queues the libp2p events of a range of P2P events.
+
+### Signature
+
+```
+lantern_node_p2p_append(first, end)
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `first` | input | the first P2P event |
+| `end` | input | the end of the P2P events |
+
+### Function does
+
+- The libp2p events of the P2P events from `first` to `end` join the end of the node's queued events.
+
+### Function never
+
+- Makes an OS call.
+
+### Limits
+
+- Stack of its own: 96 bytes on x86-64 (return address included), 96 bytes on ARM64, 96 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_node_p2p_append`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- Registers it reads, on ARM64, x86-64, RISC-V: the node in x19, rbx, s1.
+- Argument order: `first`, `end`.
+
+## Function `lantern_node_p2p_left`
+
+The P2P events libp2p did not take.
+
+### Signature
+
+```
+lantern_node_p2p_left(first, end, taken) -> (next, bytes)
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `first` | input | the first P2P event |
+| `end` | input | the end of the P2P events |
+| `taken` | input | u64 in a register: the libp2p events taken |
+
+### Function does
+
+- Returns the next P2P event after the first `taken` libp2p events, or `end`.
+- Returns the bytes of the libp2p events of the P2P events from there on.
+
+### Function never
+
+- Calls another function.
+- Writes memory.
+- Makes an OS call.
+
+### Limits
+
+- Stack of its own: 8 bytes on x86-64 (return address included), 0 bytes on ARM64, 0 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_node_p2p_left`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- It returns two values: x0, rax or a0, then x1, rdx or a1.
+- Registers it changes, on ARM64, x86-64, RISC-V: x0, x1, x9 to x11; rax, rdx, rcx, r8; a0, a1, t0 to t2.
+- Registers it reads, on ARM64, x86-64, RISC-V: the node in x19, rbx, s1.
+- Argument order: `first`, `end`, `taken`.
+
+## Function `lantern_node_p2p_notices`
+
+Acts on the application notices of libp2p actions.
+
+### Signature
+
+```
+lantern_node_p2p_notices(actions, p2p) -> time
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `actions` | input | ByteList: libp2p actions |
+| `p2p` | input | the libp2p state |
+
+### Function does
+
+- Calls lantern_node_notice for each application notice.
+- Returns the WAKEUP time of the actions.
+
+### Function never
+
+- Makes an OS call.
+
+### Limits
+
+- Stack of its own: 96 bytes on x86-64 (return address included), 96 bytes on ARM64, 96 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_node_p2p_notices`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- Registers it reads, on ARM64, x86-64, RISC-V: the actions in x24, r15, s6.
+- Registers it reads, on ARM64, x86-64, RISC-V: the node in x19, rbx, s1.
+- Argument order: `actions`, `p2p`.
+
+## Function `lantern_node_p2p_round`
+
+One libp2p_step whose actions go in a P2P_LIST action.
+
+### Signature
+
+```
+lantern_node_p2p_round(state, tick, events, scratch, keep, result) -> (status, list)
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `state` | state | the libp2p state |
+| `tick` | input | asm-libp2p `Tick` |
+| `events` | input | the event list |
+| `scratch` | scratch | [`Scratch`](helpers.md#type-scratch) |
+| `keep` | input | u64 in a register: bytes of action room to leave |
+| `result` | output | the libp2p `StepResult` |
+
+### Returns
+
+- 0: the second value is the actions' ByteList.
+- 1: the action room is short.
+- Else libp2p's status, with no action added.
+
+### Caller must
+
+- `state` is a valid `BeaconState` value (include/types.inc) with every PartRef in range.
+
+### Function does
+
+- Calls libp2p_step; its actions go in a P2P_LIST action that takes the action room left less `keep` bytes.
+
+### Function never
+
+- Makes an OS call.
+
+### Limits
+
+- Stack of its own: 96 bytes on x86-64 (return address included), 96 bytes on ARM64, 96 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_node_p2p_round`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- It returns two values: x0, rax or a0, then x1, rdx or a1.
+- Registers it reads, on ARM64, x86-64, RISC-V: the actions in x24, r15, s6.
+- Registers it reads, on ARM64, x86-64, RISC-V: the node in x19, rbx, s1.
+- Argument order: `state`, `tick`, `events`, `scratch`, `keep`, `result`.
+
+## Function `lantern_node_justified`
+
+Queues the JUSTIFIED_STATE work of the store's justified checkpoint.
+
+### Signature
+
+```
+lantern_node_justified()
+```
+
+### Function does
+
+- Queues a JUSTIFIED_STATE work for `store.justified_checkpoint`, unless one is queued.
+
+### Function never
+
+- Makes an OS call.
+
+### Limits
+
+- Stack of its own: 96 bytes on x86-64 (return address included), 96 bytes on ARM64, 96 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_node_justified`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- Registers it reads, on ARM64, x86-64, RISC-V: the store in x20, rbp, s2; the actions in x24, r15, s6.
+- Registers it reads, on ARM64, x86-64, RISC-V: the node in x19, rbx, s1.
+
+## Function `lantern_node_payload_retry`
+
+Sends a block whose payload call failed back to wait.
+
+### Signature
+
+```
+lantern_node_payload_retry(index)
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `index` | input | u64 in a register: the block's index |
+
+### Function does
+
+- The block, when in `NODE_BLOCK_EXECUTING`, takes `NODE_BLOCK_PAYLOAD` with retry the store's slot + 1.
+
+### Function never
+
+- Makes an OS call.
+
+### Limits
+
+- Stack of its own: 96 bytes on x86-64 (return address included), 96 bytes on ARM64, 96 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_node_payload_retry`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- Registers it reads, on ARM64, x86-64, RISC-V: the store in x20, rbp, s2.
+- Registers it reads, on ARM64, x86-64, RISC-V: the node in x19, rbx, s1.
+- Argument order: `index`.
+
+## Function `lantern_node_peer_custody`
+
+Sets the custody columns of a peer from its MetaData.
+
+### Signature
+
+```
+lantern_node_peer_custody(peer, groups)
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `peer` | state | the `NodePeer` entry |
+| `groups` | input | u64 in a register: its custody group count |
+
+### Function does
+
+- The peer takes `NODE_PEER_METADATA`.
+- Its custody: the columns of the groups of get_custody_groups(its node ID, `groups`) when its peer ID holds a secp256k1 key that decompresses; else no custody.
+
+### Function never
+
+- Makes an OS call.
+
+### Limits
+
+- Stack of its own: 320 bytes on x86-64 (return address included), 320 bytes on ARM64, 320 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_node_peer_custody`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- Registers it reads, on ARM64, x86-64, RISC-V: the node in x19, rbx, s1.
+- Argument order: `peer`, `groups`.
+
+## Function `lantern_node_peer_room`
+
+The peer room of the node.
+
+### Signature
+
+```
+lantern_node_peer_room() -> (capacity, open, used)
+```
+
+### Function does
+
+- Returns the capacity of the peers part, its open room (the capacity less capacity >> `NODE_PEER_SPARE_SHIFT`), and dialing + the peers (node.md, the peer room).
+
+### Function never
+
+- Calls another function.
+- Writes memory.
+- Makes an OS call.
+
+### Limits
+
+- Stack of its own: 8 bytes on x86-64 (return address included), 0 bytes on ARM64, 0 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_node_peer_room`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- It returns three values: x0 to x2; rax, rdx, rcx; a0 to a2.
+- Registers it changes, on ARM64, x86-64, RISC-V: x0 to x2, x9; rax, rdx, rcx, r8; a0 to a2, t0.
+- Registers it reads, on ARM64, x86-64, RISC-V: the node in x19, rbx, s1.
+
+## Function `lantern_node_peer_serves`
+
+Whether a peer serves a slot.
+
+### Signature
+
+```
+lantern_node_peer_serves(peer, slot) -> flag
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `peer` | input | the `NodePeer` entry |
+| `slot` | input | u64 in a register |
+
+### Function does
+
+- Returns 1 when the peer has `NODE_PEER_STATUS`, its head_slot + `SLOTS_PER_EPOCH` is at least `slot`, and its earliest_slot is at most `slot`; else 0 (node.md, the peer room).
+
+### Function never
+
+- Calls another function.
+- Writes memory.
+- Makes an OS call.
+
+### Limits
+
+- Stack of its own: 8 bytes on x86-64 (return address included), 0 bytes on ARM64, 0 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_node_peer_serves`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- Registers it changes, on ARM64, x86-64, RISC-V: x0, x9; rax, rcx; a0, t0, t1.
+- Argument order: `peer`, `slot`.
+
+## Function `lantern_node_peer_status`
+
+Keeps the Status of a peer and applies the Status rules.
+
+### Signature
+
+```
+lantern_node_peer_status(handle, bytes, length)
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `handle` | input | u64 in a register: the peer's libp2p handle |
+| `bytes` | input | the Status's SSZ bytes |
+| `length` | input | u64 in a register: 84, or 92 for v2 |
+
+### Function does
+
+- Keeps the Status in the peer's entry.
+- Then the Status rules (phase0 p2p-interface.md): a fork_digest the node does not have, or a finalized checkpoint at or before the node's finalized epoch that is not of the node's chain, gives a DISCONNECT.
+
+### Function never
+
+- Makes an OS call.
+
+### Limits
+
+- Stack of its own: 192 bytes on x86-64 (return address included), 192 bytes on ARM64, 192 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_node_peer_status`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- Registers it reads, on ARM64, x86-64, RISC-V: the store in x20, rbp, s2.
+- Registers it reads, on ARM64, x86-64, RISC-V: the node in x19, rbx, s1.
+- Argument order: `handle`, `bytes`, `length`.
+
+## Function `lantern_node_pool_add`
+
+Adds an operation to the node's pool.
+
+### Signature
+
+```
+lantern_node_pool_add(topic, bytes, length, fork, slot, index, member) -> flag
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `topic` | input | u64 in a register |
+| `bytes` | input | the SSZ bytes |
+| `length` | input | u64 in a register |
+| `fork` | input | u64 in a register |
+| `slot` | input | u64 in a register: a beacon_attestation's slot |
+| `index` | input | u64 in a register: its committee index |
+| `member` | input | u64 in a register: its member |
+
+### Function does
+
+- Returns 1 when the bytes join the pool, in its first free entry: a voluntary_exit, proposer_slashing, attester_slashing, bls_to_execution_change or beacon_attestation; else 0.
+- An attestation joins only while the pool holds fewer than 3/4 of its capacity.
+
+### Function never
+
+- Calls another function.
+- Makes an OS call.
+
+### Limits
+
+- Stack of its own: 8 bytes on x86-64 (return address included), 0 bytes on ARM64, 0 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_node_pool_add`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- On x86-64 the slot, the committee index and the member are three u64 at r8.
+- Registers it changes, on ARM64, x86-64, RISC-V: x0, x9 to x14; rax, r9 to r11; a0, a7, t0 to t4.
+- Registers it reads, on ARM64, x86-64, RISC-V: the node in x19, rbx, s1.
+- Argument order: `topic`, `bytes`, `length`, `fork`, `slot`, `index`, `member`.
+
+## Function `lantern_node_pool_check_done`
+
+Ends a POOL_CHECK work.
+
+### Signature
+
+```
+lantern_node_pool_check_done(event)
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `event` | input | `NodeEvent` of kind `NODE_EV_WORK_DONE` |
+
+### Function does
+
+- The pool entry at index `target` in `NODE_POOL_CHECKING`: for `LANTERN_VALID` it takes `NODE_POOL_KEPT`; else it goes.
+
+### Function never
+
+- Makes an OS call.
+
+### Limits
+
+- Stack of its own: 16 bytes on x86-64 (return address included), 16 bytes on ARM64, 16 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_node_pool_check_done`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- Registers it reads, on ARM64, x86-64, RISC-V: the actions in x24, r15, s6.
+- Registers it reads, on ARM64, x86-64, RISC-V: the node in x19, rbx, s1.
+- Argument order: `event`.
+
+## Function `lantern_node_pool_checks`
+
+Checks the pool against a new head.
+
+### Signature
+
+```
+lantern_node_pool_checks(state)
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `state` | input | u64 in a register: the head's post-state BufferId, or 0 |
+
+### Caller must
+
+- `state` is a valid `BeaconState` value (include/types.inc) with every PartRef in range.
+
+### Function does
+
+- Drops each attestation of the pool whose slot's epoch + 1 is below the epoch of the store's slot, and each sync committee message whose slot + 1 is below that slot.
+- Then each other entry in `NODE_POOL_KEPT` gets a POOL_CHECK work with `state` and takes `NODE_POOL_CHECKING`; with `state` 0, none.
+
+### Function never
+
+- Makes an OS call.
+
+### Limits
+
+- Stack of its own: 48 bytes on x86-64 (return address included), 48 bytes on ARM64, 48 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_node_pool_checks`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- Registers it reads, on ARM64, x86-64, RISC-V: the store in x20, rbp, s2; the actions in x24, r15, s6.
+- Registers it reads, on ARM64, x86-64, RISC-V: the node in x19, rbx, s1.
+- Argument order: `state`.
+
+## Function `lantern_node_pool_drop`
+
+Removes a pool entry.
+
+### Signature
+
+```
+lantern_node_pool_drop(index)
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `index` | input | u64 in a register |
+
+### Function does
+
+- The entry is free (topic 0); the pool's count drops past the free entries at its end.
+- Queues a BYTES_FREE of its bytes.
+
+### Function never
+
+- Makes an OS call.
+
+### Limits
+
+- Stack of its own: 16 bytes on x86-64 (return address included), 32 bytes on ARM64, 16 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_node_pool_drop`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- Registers it reads, on ARM64, x86-64, RISC-V: the actions in x24, r15, s6.
+- Registers it reads, on ARM64, x86-64, RISC-V: the node in x19, rbx, s1.
+- Argument order: `index`.
+
+## Function `lantern_node_pow_block`
+
+The PowBlock of a block hash.
+
+### Signature
+
+```
+lantern_node_pow_block(node, hash) -> block
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `node` | input | the node |
+| `hash` | input | Bytes32 |
+
+### Function does
+
+- Returns the node's PowBlock whose block_hash is `hash`, or 0.
+
+### Function never
+
+- Calls another function.
+- Writes memory.
+- Makes an OS call.
+
+### Limits
+
+- Stack of its own: 8 bytes on x86-64 (return address included), 0 bytes on ARM64, 0 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_node_pow_block`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- Registers it changes, on ARM64, x86-64, RISC-V: x0, x9 to x13; rax, rcx, rdx, r8, r11, xmm0 to xmm2; a0, a6, a7, t0 to t2.
+- Argument order: `node`, `hash`.
+
+## Function `lantern_node_prepare`
+
+Starts the payload preparation of the next slot when it is due.
+
+### Signature
+
+```
+lantern_node_prepare(slot) -> flag
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `slot` | input | u64 in a register: the store's slot |
+
+### Function does
+
+- When it is due (node.md, Payload preparation): a copy of the head's post-state at `slot` + 1, a PREPARE_PAYLOAD work of it with the next engine id, and the copy's STATE_FREE.
+- Returns 1 when it went, else 0.
+
+### Function never
+
+- Makes an OS call.
+
+### Limits
+
+- Stack of its own: 96 bytes on x86-64 (return address included), 96 bytes on ARM64, 96 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_node_prepare`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- On ARM64 it takes the store's slot in x25.
+- Registers it reads, on ARM64, x86-64, RISC-V: the store in x20, rbp, s2; the actions in x24, r15, s6.
+- Registers it reads, on ARM64, x86-64, RISC-V: the node in x19, rbx, s1.
+- Argument order: `slot`.
+
+## Function `lantern_node_prepare_go`
+
+Starts the payload preparation of a slot on the head.
+
+### Signature
+
+```
+lantern_node_prepare_go(slot, forced) -> flag
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `slot` | input | u64 in a register |
+| `forced` | input | u64 in a register: 1 to force it |
+
+### Function does
+
+- A copy of the head's post-state at `slot`, a PREPARE_PAYLOAD work of it with the next engine id and `forced` as its target, and the copy's STATE_FREE; it is the engine call in flight (node.md, Payload preparation).
+- Forced, a proposer with no fee recipient gets one of zero bytes.
+- Returns 1 when it went, 0 with no head post-state.
+
+### Function never
+
+- Makes an OS call.
+
+### Limits
+
+- Stack of its own: 96 bytes on x86-64 (return address included), 96 bytes on ARM64, 96 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_node_prepare_go`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- Registers it reads, on ARM64, x86-64, RISC-V: the store in x20, rbp, s2; the actions in x24, r15, s6.
+- Registers it reads, on ARM64, x86-64, RISC-V: the node in x19, rbx, s1.
+- Argument order: `slot`, `forced`.
+
+## Function `lantern_node_produce_engine`
+
+Starts the engine call of the first produceBlockV3 entry that waits.
+
+### Signature
+
+```
+lantern_node_produce_engine() -> flag
+```
+
+### Function does
+
+- With no engine call in flight, for the first produceBlockV3 entry in `NODE_PRODUCE_PAYLOAD` (node.md, Block production): a GET_PAYLOAD of payload_id when the payload of its slot on the head is `NODE_PAYLOAD_READY`; else a forced preparation of its slot, once.
+- A second preparation that ends with no payloadId fails the entry: 500.
+- Returns 1 when a call went, else 0.
+
+### Function never
+
+- Makes an OS call.
+
+### Limits
+
+- Stack of its own: 96 bytes on x86-64 (return address included), 96 bytes on ARM64, 96 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_node_produce_engine`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- Registers it reads, on ARM64, x86-64, RISC-V: the store in x20, rbp, s2; the actions in x24, r15, s6.
+- Registers it reads, on ARM64, x86-64, RISC-V: the node in x19, rbx, s1.
+
+## Function `lantern_node_produce_fail_at`
+
+Fails a produceBlockV3 entry that waits for its payload.
+
+### Signature
+
+```
+lantern_node_produce_fail_at(index)
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `index` | input | u64 in a register |
+
+### Function does
+
+- The entry at `index` ends with 500.
+
+### Function never
+
+- Makes an OS call.
+
+### Limits
+
+- Stack of its own: 16 bytes on x86-64 (return address included), 16 bytes on ARM64, 16 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_node_produce_fail_at`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- Registers it reads, on ARM64, x86-64, RISC-V: the node in x19, rbx, s1.
+- Argument order: `index`.
+
+## Function `lantern_node_produce_payload`
+
+Takes the engine_getPayload result of a produceBlockV3 entry.
+
+### Signature
+
+```
+lantern_node_produce_payload(body, response)
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `body` | input | ByteList in scratch: the response body |
+| `response` | input | [`EngineResponse`](engine-api.md#type-engineresponse) |
+
+### Function does
+
+- For the produceBlockV3 entry at `engine_target` in `NODE_PRODUCE_PAYLOAD`: lantern_node_payload_result decodes the result into a BYTES_PUT action, whose id the entry keeps as `filter_index` before its fold.
+- A result that does not decode: 500, and the action goes.
+
+### Function never
+
+- Makes an OS call.
+
+### Limits
+
+- Stack of its own: 224 bytes on x86-64 (return address included), 224 bytes on ARM64, 224 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_node_produce_payload`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- Registers it reads, on ARM64, x86-64, RISC-V: the scratch in x23, r14, s5; the actions in x24, r15, s6.
+- Registers it reads, on ARM64, x86-64, RISC-V: the node in x19, rbx, s1.
+- Argument order: `body`, `response`.
+
+## Function `lantern_node_protocol`
+
+The method and version of a protocol index.
+
+### Signature
+
+```
+lantern_node_protocol(index) -> (method, version)
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `index` | input | u64 in a register: an index of lantern_node_protocols |
+
+### Function does
+
+- Returns the method of the protocol, or 0, and its version.
+- The protocols go by method, then by version.
+
+### Function never
+
+- Calls another function.
+- Writes memory.
+- Makes an OS call.
+
+### Limits
+
+- Stack of its own: 8 bytes on x86-64 (return address included), 0 bytes on ARM64, 0 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_node_protocol`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- It returns two values: x0, rax or a0, then x1, rdx or a1.
+- Registers it changes, on ARM64, x86-64, RISC-V: x0, x1, x9 to x13; rax, rdx, rsi, r8; a0, a1, t0 to t4.
+- Argument order: `index`.
+
+## Function `lantern_node_prune`
+
+Prunes the node at a new finalized epoch.
+
+### Signature
+
+```
+lantern_node_prune()
+```
+
+### Function does
+
+- At a new finalized epoch of the store: lantern_store_prune.
+- Then the node keeps the finalized block, the blocks of the store, and the bytes and sidecars of the finalized block's ancestors.
+- Their states go, and so do the other branches, the invalid and waiting blocks at or below the finalized slot, and the checkpoints below the finalized epoch.
+- Bytes a stream sends stay until a later prune.
+
+### Function never
+
+- Makes an OS call.
+
+### Limits
+
+- Stack of its own: 96 bytes on x86-64 (return address included), 96 bytes on ARM64, 96 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_node_prune`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- Registers it reads, on ARM64, x86-64, RISC-V: the store in x20, rbp, s2; the actions in x24, r15, s6.
+- Registers it reads, on ARM64, x86-64, RISC-V: the node in x19, rbx, s1.
+
+## Function `lantern_node_put`
+
+Queues a BYTES_PUT of a ByteList under a new id.
+
+### Signature
+
+```
+lantern_node_put(list) -> id
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `list` | input | ByteList |
+
+### Function does
+
+- Returns the new id of the BYTES_PUT action.
+
+### Function never
+
+- Makes an OS call.
+
+### Limits
+
+- Stack of its own: 96 bytes on x86-64 (return address included), 96 bytes on ARM64, 96 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_node_put`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- Registers it reads, on ARM64, x86-64, RISC-V: the actions in x24, r15, s6.
+- Registers it reads, on ARM64, x86-64, RISC-V: the node in x19, rbx, s1.
+- Argument order: `list`.
+
+## Function `lantern_node_rebuild`
+
+Rebuilds the post-state of an imported block.
+
+### Signature
+
+```
+lantern_node_rebuild(entry) -> id
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `entry` | state | the `NodeBlock` entry, imported, above F's slot |
+
+### Function does
+
+- The path up to its nearest ancestor with a post-state, a copy of that post-state, then for each block of the path from the ancestor's child, in slot order: the copy across the fork boundaries to its slot and a REPLAY work (node.md).
+- The block takes the copy as its post-state; returns its id, or 0.
+- The path is a list at the end of the scratch, at most 8 bytes for each NodeBlock entry.
+
+### Function never
+
+- Makes an OS call.
+
+### Limits
+
+- Stack of its own: 112 bytes on x86-64 (return address included), 112 bytes on ARM64, 112 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_node_rebuild`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- Registers it reads, on ARM64, x86-64, RISC-V: the scratch in x23, r14, s5; the actions in x24, r15, s6.
+- Registers it reads, on ARM64, x86-64, RISC-V: the node in x19, rbx, s1.
+- Argument order: `entry`.
+
+## Function `lantern_node_recon_count`
+
+The valid sidecars of a root.
+
+### Signature
+
+```
+lantern_node_recon_count(root) -> count
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `root` | input | Bytes32 |
+
+### Function does
+
+- Returns the count of `NODE_BLOB_VALID` entries of the root.
+
+### Function never
+
+- Calls another function.
+- Writes memory.
+- Makes an OS call.
+
+### Limits
+
+- Stack of its own: 8 bytes on x86-64 (return address included), 0 bytes on ARM64, 0 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_node_recon_count`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- Registers it changes, on ARM64, x86-64, RISC-V: x0, x9 to x15; rax, rcx, rdx, rsi, r8 to r11; a0, a6, a7, t0 to t4.
+- Registers it reads, on ARM64, x86-64, RISC-V: the node in x19, rbx, s1.
+- Argument order: `root`.
+
+## Function `lantern_node_reconstruct_due`
+
+Starts or goes on with the column reconstruction.
+
+### Signature
+
+```
+lantern_node_reconstruct_due()
+```
+
+### Function does
+
+- At the quiet point, with `recon_state` 0: the first root of `NODE_BLOB_VALID` column sidecars of a fulu slot, `NUMBER_OF_COLUMNS` / 2 or more and fewer than `NUMBER_OF_COLUMNS`, not `recon_failed`, a third of its slot past, gets the join of their bytes, the buffer of all sidecars, and the work (node.md, the reconstruction).
+- With `recon_state` 2: a PUBLISH_SIDECAR of the next column the node lacks, or the end.
+- An entry of the root of the last entry weighed is not weighed again.
+
+### Function never
+
+- Makes an OS call.
+
+### Limits
+
+- Stack of its own: 112 bytes on x86-64 (return address included), 112 bytes on ARM64, 112 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_node_reconstruct_due`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- Registers it reads, on ARM64, x86-64, RISC-V: the store in x20, rbp, s2; the actions in x24, r15, s6.
+- Registers it reads, on ARM64, x86-64, RISC-V: the node in x19, rbx, s1.
+
+## Function `lantern_node_reorg_count`
+
+Counts a reorg at a new head.
+
+### Signature
+
+```
+lantern_node_reorg_count(root)
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `root` | input | Bytes32: the new head |
+
+### Function does
+
+- NodeMetrics `reorgs` takes 1 when get_ancestor of the new head at the old head's slot is not the old head.
+- With either not among the node's blocks, or a gap in the new head's chain, nothing.
+
+### Function never
+
+- Makes an OS call.
+
+### Limits
+
+- Stack of its own: 32 bytes on x86-64 (return address included), 32 bytes on ARM64, 32 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_node_reorg_count`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- Registers it reads, on ARM64, x86-64, RISC-V: the node in x19, rbx, s1.
+- Argument order: `root`.
+
+## Function `lantern_node_request`
+
+Answers the request of a stream.
+
+### Signature
+
+```
+lantern_node_request(entry)
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `entry` | state | the `NodeStream` |
+
+### Function does
+
+- When the request's bytes are all there: Status, Ping and MetaData get their answer, Goodbye a close, the served methods their serving; other methods get ResourceUnavailable (node.md).
+- Leaves the size of the scratch as it came.
+
+### Function never
+
+- Makes an OS call.
+
+### Limits
+
+- Stack of its own: 272 bytes on x86-64 (return address included), 256 bytes on ARM64, 304 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_node_request`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- Registers it reads, on ARM64, x86-64, RISC-V: the store in x20, rbp, s2; the scratch in x23, r14, s5; the actions in x24, r15, s6.
+- Registers it reads, on ARM64, x86-64, RISC-V: the node in x19, rbx, s1.
+- Argument order: `entry`.
+
+## Function `lantern_node_respond`
+
+Writes a response of one chunk and ends the stream.
+
+### Signature
+
+```
+lantern_node_respond(entry, result, payload, length)
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `entry` | input | the `NodeStream` |
+| `result` | input | u64 in a register: the response code |
+| `payload` | input | the payload's SSZ bytes |
+| `length` | input | u64 in a register |
+
+### Function does
+
+- Queues a STREAM_WRITE of the chunk and a STREAM_CLOSE, or a STREAM_RESET when the node has no room.
+- Then the stream entry goes.
+- Leaves the size of the scratch as it came.
+
+### Function never
+
+- Makes an OS call.
+
+### Limits
+
+- Stack of its own: 160 bytes on x86-64 (return address included), 160 bytes on ARM64, 160 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_node_respond`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- Registers it reads, on ARM64, x86-64, RISC-V: the scratch in x23, r14, s5.
+- Registers it reads, on ARM64, x86-64, RISC-V: the node in x19, rbx, s1.
+- Argument order: `entry`, `result`, `payload`, `length`.
+
+## Function `lantern_node_response`
+
+Reads the response bytes of a request stream of the node.
+
+### Signature
+
+```
+lantern_node_response(entry) -> flag
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `entry` | state | the `NodeStream` |
+
+### Function does
+
+- Reads each complete chunk: a Status goes to the peer's entry; a block becomes a NodeBlock in `NODE_BLOCK_HASHING`, a BYTES_PUT of its bytes and a SYNC_BLOCK work of its root.
+- A block of the sync's stream moves `sync_got` past its slot.
+- The stream ends after a Status, after the last chunk and STREAM_EOF, after an error result, or on a bad chunk (with a STREAM_RESET); the end after STREAM_EOF with no bytes left makes `next` 2.
+- Returns 1 when the bytes wait for room, else 0.
+- Leaves the size of the scratch as it came.
+
+### Function never
+
+- Makes an OS call.
+
+### Limits
+
+- Stack of its own: 208 bytes on x86-64 (return address included), 176 bytes on ARM64, 176 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_node_response`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- Registers it reads, on ARM64, x86-64, RISC-V: the store in x20, rbp, s2; the scratch in x23, r14, s5; the actions in x24, r15, s6.
+- Registers it reads, on ARM64, x86-64, RISC-V: the node in x19, rbx, s1.
+- Argument order: `entry`.
+
+## Function `lantern_node_reward_entry`
+
+The reward entry of a validator.
+
+### Signature
+
+```
+lantern_node_reward_entry(index, entries, count, state) -> (entry, count)
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `index` | input | u64 in a register: the validator index |
+| `entries` | state | `count` entries of 24 bytes: index, balance, member |
+| `count` | input | u64 in a register |
+| `state` | input | `BeaconState` |
+
+### Caller must
+
+- `state` is a valid `BeaconState` value (include/types.inc) with every PartRef in range.
+
+### Function does
+
+- Returns the entry of the validator; with none, a new one with its balance in `state` and member 0.
+- Returns the count of entries.
+- Returns 0 for an index past the validators.
+
+### Function never
+
+- Calls another function.
+- Makes an OS call.
+
+### Limits
+
+- Stack of its own: 8 bytes on x86-64 (return address included), 0 bytes on ARM64, 0 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_node_reward_entry`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- It returns the count in x2, rdx, a2.
+- Registers it changes, on ARM64, x86-64, RISC-V: x0, x2, x4 to x7, x16; rax, rdx, r8 to r10; a0, a2, a4 to a7, t0.
+- Argument order: `index`, `entries`, `count`, `state`.
+
+## Function `lantern_node_room`
+
+Whether the actions have room for some bytes.
+
+### Signature
+
+```
+lantern_node_room(bytes) -> flag
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `bytes` | input | u64 in a register |
+
+### Function does
+
+- Returns 1 when the actions have room for `bytes` bytes and 4096 more, else 0.
+
+### Function never
+
+- Calls another function.
+- Writes memory.
+- Makes an OS call.
+
+### Limits
+
+- Stack of its own: 8 bytes on x86-64 (return address included), 0 bytes on ARM64, 0 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_node_room`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- Registers it reads, on ARM64, x86-64, RISC-V: the actions in x24, r15, s6.
+- Registers it changes, on ARM64, x86-64, RISC-V: x0, x9 to x12; rax, rcx; a0, t0 to t3.
+- Argument order: `bytes`.
+
+## Function `lantern_node_run_archive`
+
+The ARCHIVE_LOAD work of lantern_node_run.
+
+### Signature
+
+```
+lantern_node_run_archive(state, full, record, scratch, node) -> status
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `state` | output | `BeaconState` |
+| `full` | input | the full record's bytes, or 0 |
+| `record` | input | the record's bytes |
+| `scratch` | scratch | [`Scratch`](helpers.md#type-scratch) |
+| `node` | input | the node |
+
+### Returns
+
+- `LANTERN_VALID`: `state` holds the record's state.
+- `LANTERN_INVALID_ENCODING`: the record does not decode.
+- `LANTERN_BUFFER_TOO_SMALL`: nothing changed.
+
+### Caller must
+
+- `state` is a valid `BeaconState` value (include/types.inc) with every PartRef in range.
+
+### Function does
+
+- Does NODE_WORK_ARCHIVE_LOAD (node.md).
+
+### Function never
+
+- Makes an OS call.
+
+### Limits
+
+- Stack of its own: 112 bytes on x86-64 (return address included), 112 bytes on ARM64, 112 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_node_run_archive`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- Argument order: `state`, `full`, `record`, `scratch`, `node`.
+
+## Function `lantern_node_run_backfill`
+
+The BACKFILL work of lantern_node_run.
+
+### Signature
+
+```
+lantern_node_run_backfill(data, state, scratch, event) -> status
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `data` | input | the block's bytes |
+| `state` | state | `BeaconState` |
+| `scratch` | scratch | [`Scratch`](helpers.md#type-scratch) |
+| `event` | output | `NodeEvent` |
+
+### Returns
+
+- As lantern_node_backfill, or as lantern_node_block_root.
+
+### Caller must
+
+- `state` is a valid `BeaconState` value (include/types.inc) with every PartRef in range.
+
+### Function does
+
+- Writes lantern_node_block_root of the fork of the block's slot at `root` of the event (node.md, BACKFILL).
+- Then, for `LANTERN_VALID`, lantern_node_backfill of the fork of the state's slot.
+
+### Function never
+
+- Makes an OS call.
+
+### Limits
+
+- Stack of its own: 96 bytes on x86-64 (return address included), 96 bytes on ARM64, 96 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_node_run_backfill`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- Registers it reads, on ARM64, x86-64, RISC-V: the node in x19, rbx, s1.
+- Argument order: `data`, `state`, `scratch`, `event`.
+
+## Function `lantern_node_run_vote`
+
+The BLOCK_ATTESTATION or BLOCK_SLASHING work of lantern_node_run.
+
+### Signature
+
+```
+lantern_node_run_vote(work, event) -> status
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `work` | input | `NodeAction` of the work |
+| `event` | output | `NodeEvent` |
+
+### Returns
+
+- As lantern_node_attestation or lantern_node_attester_slashing, or `LANTERN_INVALID_ENCODING` for an item that does not decode.
+
+### Function does
+
+- The item at index `arg` of the block's body, as a ByteList at the end of the scratch (node.md).
+- Then lantern_node_attestation with is_from_block 1 of the fork of its slot, or lantern_node_attester_slashing of the fork of the store's slot.
+
+### Function never
+
+- Makes an OS call.
+
+### Limits
+
+- Stack of its own: 128 bytes on x86-64 (return address included), 112 bytes on ARM64, 112 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_node_run_vote`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- Registers it reads, on ARM64, x86-64, RISC-V: the registers of lantern_node_run: the node in x19, rbx, s1; the store in x20, rbp, s2; `state_a` in x22, r13, s4; `data` in x23, r14, s5; the scratch in x24, r15, s6.
+- On ARM64 and RISC-V the event is in x25 and s7, not an argument.
+- Argument order: `work`, `event`.
+
+## Function `lantern_node_sampled`
+
+Whether the node samples a column.
+
+### Signature
+
+```
+lantern_node_sampled(column) -> flag
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `column` | input | u64 in a register |
+
+### Function does
+
+- Returns 1 when the node samples the column, else 0.
+
+### Function never
+
+- Calls another function.
+- Writes memory.
+- Makes an OS call.
+
+### Limits
+
+- Stack of its own: 8 bytes on x86-64 (return address included), 0 bytes on ARM64, 0 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_node_sampled`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- Registers it changes, on ARM64, x86-64, RISC-V: x0, x9, x10; rax, rcx; a0, t0, t1.
+- Registers it reads, on ARM64, x86-64, RISC-V: the node in x19, rbx, s1.
+- Argument order: `column`.
+
+## Function `lantern_node_seg_end`
+
+The end of a block segment.
+
+### Signature
+
+```
+lantern_node_seg_end(segment) -> end
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `segment` | input | u64 in a register |
+
+### Function does
+
+- Returns `db_block_end` for `db_block_segment`, else `backfill_end` for `backfill_segment`, else 0, a new segment.
+
+### Function never
+
+- Calls another function.
+- Writes memory.
+- Makes an OS call.
+
+### Limits
+
+- Stack of its own: 8 bytes on x86-64 (return address included), 0 bytes on ARM64, 0 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_node_seg_end`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- Registers it changes, on ARM64, x86-64, RISC-V: x0, x10, x11; rax; a0, t1.
+- Registers it reads, on ARM64, x86-64, RISC-V: the node in x19, rbx, s1.
+- Argument order: `segment`.
+
+## Function `lantern_node_serve`
+
+Queues the SERVE works of the streams that serve.
+
+### Signature
+
+```
+lantern_node_serve() -> flag
+```
+
+### Function does
+
+- A SERVE work of the next block of each stream in `NODE_STREAM_SERVE`, while the actions have room for it and 4096 bytes.
+- Returns 1 when a stream waits for room, else 0.
+
+### Function never
+
+- Makes an OS call.
+
+### Limits
+
+- Stack of its own: 96 bytes on x86-64 (return address included), 96 bytes on ARM64, 96 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_node_serve`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- Registers it reads, on ARM64, x86-64, RISC-V: the actions in x24, r15, s6.
+- Registers it reads, on ARM64, x86-64, RISC-V: the node in x19, rbx, s1.
+
+## Function `lantern_node_serve_slot`
+
+The first slot a node must serve blocks of.
+
+### Signature
+
+```
+lantern_node_serve_slot() -> slot
+```
+
+### Function does
+
+- Returns max(0, the store's epoch - compute_min_epochs_for_block_requests) * `SLOTS_PER_EPOCH`.
+
+### Function never
+
+- Makes an OS call.
+
+### Limits
+
+- Stack of its own: 112 bytes on x86-64 (return address included), 112 bytes on ARM64, 112 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_node_serve_slot`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- Registers it reads, on ARM64, x86-64, RISC-V: the store in x20, rbp, s2.
+- Registers it reads, on ARM64, x86-64, RISC-V: the node in x19, rbx, s1.
+
+## Function `lantern_node_serving`
+
+Whether a stream that serves still lists a BufferId.
+
+### Signature
+
+```
+lantern_node_serving(id) -> flag
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `id` | input | u64 in a register |
+
+### Function does
+
+- Returns 1 when a stream that serves lists `id` at or after its next, else 0.
+
+### Function never
+
+- Calls another function.
+- Writes memory.
+- Makes an OS call.
+
+### Limits
+
+- Stack of its own: 8 bytes on x86-64 (return address included), 0 bytes on ARM64, 0 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_node_serving`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- Registers it changes, on ARM64, x86-64, RISC-V: x0, x9 to x15; rax, rcx, rdx, rsi, r8, r9; a0, t0 to t4.
+- Registers it reads, on ARM64, x86-64, RISC-V: the node in x19, rbx, s1.
+- Argument order: `id`.
+
+## Function `lantern_node_shed`
+
+Frees the post-states the node can rebuild.
+
+### Signature
+
+```
+lantern_node_shed()
+```
+
+### Function does
+
+- Each imported block above F's slot with a post-state, other than the head and the justified root, whose slot is not the first of its epoch and is `NODE_STATE_KEEP_SLOTS` or more before the store's (with `NODE_FLAG_FEW_STATES`, any slot), with an imported child and every imported child of its epoch: a STATE_FREE, and state_id 0 (node.md).
+- Then a head with no post-state above F's slot gets it again.
+
+### Function never
+
+- Makes an OS call.
+
+### Limits
+
+- Stack of its own: 112 bytes on x86-64 (return address included), 112 bytes on ARM64, 112 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_node_shed`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- Registers it reads, on ARM64, x86-64, RISC-V: the store in x20, rbp, s2; the actions in x24, r15, s6.
+- Registers it reads, on ARM64, x86-64, RISC-V: the node in x19, rbx, s1.
+
+## Function `lantern_node_short_columns`
+
+The node's short columns.
+
+### Signature
+
+```
+lantern_node_short_columns() -> (low, high)
+```
+
+### Function does
+
+- Returns the short columns, below 64 and from 64 (node.md, the peer room): from fulu, the node's columns that fewer than `NODE_COLUMN_PEERS` peers with `NODE_PEER_METADATA` that serve the store's slot hold in their custody; none before fulu.
+
+### Function never
+
+- Makes an OS call.
+
+### Limits
+
+- Stack of its own: 112 bytes on x86-64 (return address included), 112 bytes on ARM64, 112 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_node_short_columns`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- It returns two values: x0, rax or a0, then x1, rdx or a1.
+- Registers it reads, on ARM64, x86-64, RISC-V: the store in x20, rbp, s2.
+- Registers it reads, on ARM64, x86-64, RISC-V: the node in x19, rbx, s1.
+
+## Function `lantern_node_side_end`
+
+The end of a sidecar segment.
+
+### Signature
+
+```
+lantern_node_side_end(segment) -> end
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `segment` | input | u64 in a register |
+
+### Function does
+
+- Returns `db_sidecar_end` for `db_sidecar_segment`, else `backfill_sidecar_end` for `backfill_sidecar_segment`, else 0, a new segment.
+
+### Function never
+
+- Calls another function.
+- Writes memory.
+- Makes an OS call.
+
+### Limits
+
+- Stack of its own: 8 bytes on x86-64 (return address included), 0 bytes on ARM64, 0 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_node_side_end`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- Registers it changes, on ARM64, x86-64, RISC-V: x0, x10; rax; a0, t1.
+- Registers it reads, on ARM64, x86-64, RISC-V: the node in x19, rbx, s1.
+- Argument order: `segment`.
+
+## Function `lantern_node_sidecar_ask`
+
+Sends the sidecar requests of a range.
+
+### Signature
+
+```
+lantern_node_sidecar_ask(peer, first, count, fork, columns) -> flag
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `peer` | input | the `NodePeer` entry |
+| `first` | input | u64 in a register: the range's first slot |
+| `count` | input | u64 in a register |
+| `fork` | input | u64 in a register: the fork of the store's slot |
+| `columns` | input | 16 bytes: the columns to ask, as bits |
+
+### Function does
+
+- A BlobSidecarsByRange v1 to `peer` of the range's slots in the blob window whose fork is deneb or electra (node.md).
+- Then from fulu the DataColumnSidecarsByRange v1 of the slots in the column window to the peers with `NODE_PEER_METADATA` that serve its first slot, from `sidecar_peer` and around.
+- Returns 1 when a request has no room or the node cannot open it, else 0.
+
+### Function never
+
+- Makes an OS call.
+
+### Limits
+
+- Stack of its own: 192 bytes on x86-64 (return address included), 192 bytes on ARM64, 192 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_node_sidecar_ask`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- Registers it reads, on ARM64, x86-64, RISC-V: the node in x19, rbx, s1.
+- Argument order: `peer`, `first`, `count`, `fork`, `columns`.
+
+## Function `lantern_node_sidecar_retry`
+
+Asks again for the sidecars blocks wait for.
+
+### Signature
+
+```
+lantern_node_sidecar_retry()
+```
+
+### Function does
+
+- With no BlobSidecarsByRange or DataColumnSidecarsByRange of the node open, no NodeBlob in `NODE_BLOB_VERIFYING`, a block below the store's slot in `NODE_BLOCK_BLOBS`, from `sidecar_ms` + `NODE_SIDECAR_RETRY_MS` on (node.md, the sidecar retry).
+- Then the sidecar requests of the slots of those blocks from the lowest to the highest, at most `NODE_SYNC_BATCH`, the blob request to a peer from `sidecar_peer`.
+- `sidecar_ms` takes `time_ms`, and `sidecar_peer` 1 more.
+
+### Function never
+
+- Makes an OS call.
+
+### Limits
+
+- Stack of its own: 112 bytes on x86-64 (return address included), 112 bytes on ARM64, 112 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_node_sidecar_retry`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- Registers it reads, on ARM64, x86-64, RISC-V: the store in x20, rbp, s2.
+- Registers it reads, on ARM64, x86-64, RISC-V: the node in x19, rbx, s1.
+
+## Function `lantern_node_ssz_default`
+
+Writes the SSZ default value of a type.
+
+### Signature
+
+```
+lantern_node_ssz_default(descriptor, type, out) -> bytes
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `descriptor` | input | the asm-ssz `TypeDescriptor` |
+| `type` | input | a type node of it |
+| `out` | output | the bytes |
+
+### Function does
+
+- Writes zero bytes for a fixed size type, none for a list, the byte 1 for a bitlist, and for a variable container or vector its fixed part with the offsets, then each variable part.
+- Returns the bytes written.
+
+### Function never
+
+- Makes an OS call.
+
+### Limits
+
+- Stack of its own: 96 bytes on x86-64 (return address included), 96 bytes on ARM64, 96 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_node_ssz_default`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- Argument order: `descriptor`, `type`, `out`.
+
+## Function `lantern_node_status_bytes`
+
+Writes the node's Status.
+
+### Signature
+
+```
+lantern_node_status_bytes(out)
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `out` | output | 92 bytes: Status v2, whose first 84 are Status v1 |
+
+### Function does
+
+- Writes compute_fork_digest of the store's epoch, the store's finalized checkpoint (a zero root at `GENESIS_EPOCH`), head_root and its slot, and earliest_slot.
+
+### Function never
+
+- Makes an OS call.
+
+### Limits
+
+- Stack of its own: 128 bytes on x86-64 (return address included), 128 bytes on ARM64, 128 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_node_status_bytes`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- Registers it reads, on ARM64, x86-64, RISC-V: the store in x20, rbp, s2.
+- Registers it reads, on ARM64, x86-64, RISC-V: the node in x19, rbx, s1.
+- Argument order: `out`.
+
+## Function `lantern_node_status_refresh`
+
+Sends the next Status refresh.
+
+### Signature
+
+```
+lantern_node_status_refresh()
+```
+
+### Function does
+
+- The first peer with `NODE_PEER_STATUS` whose `status_ms` + `NODE_STATUS_REFRESH_SLOTS` slots is at most `time_ms` gets a Status request (v2 from fulu, v1 before), when the streams part has room for it (node.md, the Status refresh).
+- Its `status_ms` takes `time_ms`.
+
+### Function never
+
+- Makes an OS call.
+
+### Limits
+
+- Stack of its own: 208 bytes on x86-64 (return address included), 192 bytes on ARM64, 208 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_node_status_refresh`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- Registers it reads, on ARM64, x86-64, RISC-V: the store in x20, rbp, s2; the scratch in x23, r14, s5.
+- Registers it reads, on ARM64, x86-64, RISC-V: the node in x19, rbx, s1.
+
+## Function `lantern_node_store_find`
+
+The store's node of a root.
+
+### Signature
+
+```
+lantern_node_store_find(root) -> (index, entry)
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `root` | input | Bytes32 |
+
+### Function does
+
+- Returns the index of the store's node whose root is `root`, or 2^64 - 1, and its entry.
+
+### Function never
+
+- Calls another function.
+- Writes memory.
+- Makes an OS call.
+
+### Limits
+
+- Stack of its own: 8 bytes on x86-64 (return address included), 0 bytes on ARM64, 0 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_node_store_find`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- It returns two values: x0, rax or a0, then x1, rdx or a1.
+- Registers it reads, on ARM64, x86-64, RISC-V: the store in x20, rbp, s2.
+- Registers it changes, on ARM64, x86-64, RISC-V: x0, x1, x9 to x15; rax, rdx, rcx, r11, xmm0 to xmm2; a0, a1, a6, a7, t0 to t2.
+- Argument order: `root`.
+
+## Function `lantern_node_store_slot`
+
+The current slot of a store.
+
+### Signature
+
+```
+lantern_node_store_slot(store) -> slot
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `store` | input | `Store` |
+
+### Function does
+
+- Returns (`time_ms` - `genesis_time_ms`) // `SLOT_DURATION_MS` of the store; 0 before genesis.
+
+### Function never
+
+- Calls another function.
+- Writes memory.
+- Makes an OS call.
+
+### Limits
+
+- Stack of its own: 8 bytes on x86-64 (return address included), 0 bytes on ARM64, 0 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_node_store_slot`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- Registers it changes, on ARM64, x86-64, RISC-V: x0, x9, x10; rax, rcx, rdx; a0, a7, t0 to t2.
+- Argument order: `store`.
+
+## Function `lantern_node_stream_list`
+
+The ByteList that holds the bytes of a stream.
+
+### Signature
+
+```
+lantern_node_stream_list(entry) -> list
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `entry` | input | the `NodeStream` |
+
+### Function does
+
+- Returns its NodeResponse's list, else its own.
+
+### Function never
+
+- Calls another function.
+- Writes memory.
+- Makes an OS call.
+
+### Limits
+
+- Stack of its own: 8 bytes on x86-64 (return address included), 0 bytes on ARM64, 0 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_node_stream_list`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- Registers it changes, on ARM64 and RISC-V: x0, x9, x10, x16; a0, a7, t0, t1.
+- Registers it reads, on ARM64, x86-64, RISC-V: the node in x19, rbx, s1.
+- Argument order: `entry`.
+
+## Function `lantern_node_sub`
+
+Queues a SUBSCRIBE or UNSUBSCRIBE of a gossip topic.
+
+### Signature
+
+```
+lantern_node_sub(topic, subnet, digest, kind)
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `topic` | input | u64 in a register: the topic |
+| `subnet` | input | u64 in a register |
+| `digest` | input | `ForkDigest` |
+| `kind` | input | u64 in a register: SUBSCRIBE or UNSUBSCRIBE |
+
+### Function does
+
+- Queues a libp2p event of `kind` of the gossip topic with the subnet at the ForkDigest.
+
+### Function never
+
+- Makes an OS call.
+
+### Limits
+
+- Stack of its own: 272 bytes on x86-64 (return address included), 272 bytes on ARM64, 272 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_node_sub`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- Registers it reads, on ARM64, x86-64, RISC-V: the node in x19, rbx, s1.
+- Argument order: `topic`, `subnet`, `digest`, `kind`.
+
+## Function `lantern_node_subnet_topics`
+
+Queues the topics of a set of subnets.
+
+### Signature
+
+```
+lantern_node_subnet_topics(subnets, kind, topic)
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `subnets` | input | u64 in a register: the subnets, as bits |
+| `kind` | input | u64 in a register: SUBSCRIBE or UNSUBSCRIBE |
+| `topic` | input | u64 in a register: beacon_attestation or sync_committee |
+
+### Function does
+
+- Queues an event of `kind` of the topic of each subnet, at the node's `fork_digest`, and at its `next_digest` when it is not 0.
+
+### Function never
+
+- Makes an OS call.
+
+### Limits
+
+- Stack of its own: 96 bytes on x86-64 (return address included), 96 bytes on ARM64, 96 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_node_subnet_topics`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- Registers it reads, on ARM64, x86-64, RISC-V: the node in x19, rbx, s1.
+- Argument order: `subnets`, `kind`, `topic`.
+
+## Function `lantern_node_subnets_want`
+
+The beacon_attestation subnets the node keeps.
+
+### Signature
+
+```
+lantern_node_subnets_want() -> subnets
+```
+
+### Function does
+
+- Returns the subnets of `attnets`, and each whose `subnet_until` is above the store's slot (an aggregator's subscription), as bits.
+
+### Function never
+
+- Makes an OS call.
+
+### Limits
+
+- Stack of its own: 16 bytes on x86-64 (return address included), 16 bytes on ARM64, 16 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_node_subnets_want`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- Registers it reads, on ARM64, x86-64, RISC-V: the store in x20, rbp, s2.
+- Registers it reads, on ARM64, x86-64, RISC-V: the node in x19, rbx, s1.
+
+## Function `lantern_node_subscribe`
+
+Keeps the node's gossip topics in step with the forks.
+
+### Signature
+
+```
+lantern_node_subscribe()
+```
+
+### Function does
+
+- One change a step, when `p2p_out` has room (node.md; altair p2p-interface.md, Transitioning the gossip): the topics of the fork of the store's epoch at its ForkDigest, once for each digest, with the record entries.
+- Else those of the epoch `NODE_SUBSCRIBE_AHEAD` later, when its digest differs.
+- Else, from `NODE_SUBSCRIBE_AHEAD` epochs after the digest changed, the old digest's topics leave.
+
+### Function never
+
+- Makes an OS call.
+
+### Limits
+
+- Stack of its own: 128 bytes on x86-64 (return address included), 128 bytes on ARM64, 128 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_node_subscribe`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- Registers it reads, on ARM64, x86-64, RISC-V: the store in x20, rbp, s2; the actions in x24, r15, s6.
+- Registers it reads, on ARM64, x86-64, RISC-V: the node in x19, rbx, s1.
+
+## Function `lantern_node_sync`
+
+Reads the sync's responses and sends its next requests.
+
+### Signature
+
+```
+lantern_node_sync() -> flag
+```
+
+### Function does
+
+- Reads the bytes of each response.
+- From fulu, each peer with a Status and no MetaData asked gets a GetMetaData v3.
+- Then, with no BeaconBlocksByRange of the node open: one to a peer from `sync_peer` of the node's ForkDigest (from fulu, with its MetaData read) whose Status head_slot is at least the next slot, max(the head's slot + 1, `sync_slot`), of at most `NODE_SYNC_BATCH` slots (node.md).
+- Before it, with room for two streams: a BlobSidecarsByRange of the range's slots in the blob window before fulu; from fulu, a DataColumnSidecarsByRange of the range's slots in the column window to each peer whose custody holds sampled columns no earlier peer was asked for, with room for those and the blocks' request.
+- Then the sidecar retry and the backfill's request.
+- Returns 1 when a response waits for room, else 0.
+
+### Function never
+
+- Makes an OS call.
+
+### Limits
+
+- Stack of its own: 208 bytes on x86-64 (return address included), 208 bytes on ARM64, 208 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_node_sync`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- Registers it reads, on ARM64, x86-64, RISC-V: the store in x20, rbp, s2; the scratch in x23, r14, s5; the actions in x24, r15, s6.
+- Registers it reads, on ARM64, x86-64, RISC-V: the node in x19, rbx, s1.
+
+## Function `lantern_node_sync_gap`
+
+Moves the sync back to a gap a peer left.
+
+### Signature
+
+```
+lantern_node_sync_gap()
+```
+
+### Function does
+
+- With no block in `NODE_BLOCK_HASHING` and a block in `NODE_BLOCK_WAITING` below `sync_slot` whose parent root no block has, `sync_slot` takes the head's slot + 1 (node.md, the gap rule).
+
+### Function never
+
+- Makes an OS call.
+
+### Limits
+
+- Stack of its own: 96 bytes on x86-64 (return address included), 96 bytes on ARM64, 96 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_node_sync_gap`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- Registers it reads, on ARM64, x86-64, RISC-V: the node in x19, rbx, s1.
+
+## Function `lantern_node_sync_values`
+
+The sync rewards of process_sync_aggregate at a state.
+
+### Signature
+
+```
+lantern_node_sync_values(state, scratch) -> (status, participant, proposer)
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `state` | input | `BeaconState` |
+| `scratch` | scratch | [`Scratch`](helpers.md#type-scratch) |
+
+### Caller must
+
+- `state` is a valid `BeaconState` value (include/types.inc) with every PartRef in range.
+
+### Function does
+
+- Returns a status, then participant_reward and proposer_reward of process_sync_aggregate at the state (altair beacon-chain.md).
+
+### Function never
+
+- Makes an OS call.
+
+### Limits
+
+- Stack of its own: 48 bytes on x86-64 (return address included), 48 bytes on ARM64, 48 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_node_sync_values`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- It returns three values: x0 to x2; rax, rdx, rcx; a0 to a2.
+- Argument order: `state`, `scratch`.
+
+## Function `lantern_node_syncnets_want`
+
+The sync_committee subnets the node keeps.
+
+### Signature
+
+```
+lantern_node_syncnets_want() -> subnets
+```
+
+### Function does
+
+- Returns each subnet whose `sync_until` is above the epoch of the store's slot, as bits.
+
+### Function never
+
+- Makes an OS call.
+
+### Limits
+
+- Stack of its own: 16 bytes on x86-64 (return address included), 16 bytes on ARM64, 16 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_node_syncnets_want`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- Registers it reads, on ARM64, x86-64, RISC-V: the store in x20, rbp, s2.
+- Registers it reads, on ARM64, x86-64, RISC-V: the node in x19, rbx, s1.
+
+## Function `lantern_node_topics`
+
+Queues the gossip topics of a fork.
+
+### Signature
+
+```
+lantern_node_topics(fork, digest, kind)
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `fork` | input | u64 in a register |
+| `digest` | input | `ForkDigest` |
+| `kind` | input | u64 in a register: SUBSCRIBE or UNSUBSCRIBE |
+
+### Function does
+
+- Queues an event of `kind` for each gossip topic of the fork at the ForkDigest.
+
+### Function never
+
+- Makes an OS call.
+
+### Limits
+
+- Stack of its own: 112 bytes on x86-64 (return address included), 112 bytes on ARM64, 112 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_node_topics`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- Registers it reads, on ARM64, x86-64, RISC-V: the node in x19, rbx, s1.
+- Argument order: `fork`, `digest`, `kind`.
+
+## Function `lantern_node_try_import`
+
+Starts the import of a block when its parent has a post-state.
+
+### Signature
+
+```
+lantern_node_try_import(index)
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `index` | input | u64 in a register: the block's index |
+
+### Function does
+
+- Calls lantern_node_import_now when the block's parent has a post-state.
+- A block whose parent is invalid becomes invalid.
+- With `NODE_FLAG_ENGINE` a block of bellatrix or later takes `NODE_BLOCK_PAYLOAD` instead: its import waits for engine_newPayload.
+
+### Function never
+
+- Makes an OS call.
+
+### Limits
+
+- Stack of its own: 96 bytes on x86-64 (return address included), 96 bytes on ARM64, 96 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_node_try_import`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- Registers it reads, on ARM64, x86-64, RISC-V: the store in x20, rbp, s2; the scratch in x23, r14, s5; the actions in x24, r15, s6.
+- Registers it reads, on ARM64, x86-64, RISC-V: the node in x19, rbx, s1.
+- Argument order: `index`.
+
+## Function `lantern_node_type_of_kind`
+
+The TypeDescriptor of a NODE_JSON_* kind.
+
+### Signature
+
+```
+lantern_node_type_of_kind(kind) -> type
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `kind` | input | u64 in a register |
+
+### Function does
+
+- Returns the TypeDescriptor of the kind in the fork's object, or 0.
+
+### Function never
+
+- Calls another function.
+- Writes memory.
+- Makes an OS call.
+
+### Limits
+
+- Stack of its own: 8 bytes on x86-64 (return address included), 0 bytes on ARM64, 0 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_node_type_of_kind`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- It takes the kind in x9, r10, t0.
+- It returns the type in x0, rdi, a0.
+- Registers it changes, on ARM64, x86-64, RISC-V: x0; rdi; a0, t1.
+- Argument order: `kind`.
+
+## Function `lantern_node_validation`
+
+Queues a VALIDATION of a gossip message.
+
+### Signature
+
+```
+lantern_node_validation(handle, result)
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `handle` | input | u64 in a register: the libp2p message handle |
+| `result` | input | u64 in a register |
+
+### Function does
+
+- Queues a VALIDATION event of the message with the result.
+
+### Function never
+
+- Makes an OS call.
+
+### Limits
+
+- Stack of its own: 32 bytes on x86-64 (return address included), 32 bytes on ARM64, 32 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_node_validation`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- Registers it reads, on ARM64, x86-64, RISC-V: the node in x19, rbx, s1.
+- Argument order: `handle`, `result`.
+
+## Function `lantern_node_vote_counts`
+
+The vote counts of a block for its event.
+
+### Signature
+
+```
+lantern_node_vote_counts(data, event)
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `data` | input | ByteList: the SignedBeaconBlock |
+| `event` | output | `NodeEvent` |
+
+### Function does
+
+- Writes the count of the block's attestations at `index` of the event and the count of its attester slashings at `root`; 0 for a list the bytes do not hold.
+
+### Function never
+
+- Makes an OS call.
+
+### Limits
+
+- Stack of its own: 32 bytes on x86-64 (return address included), 32 bytes on ARM64, 32 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_node_vote_counts`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- Argument order: `data`, `event`.
+
+## Function `lantern_node_vote_due`
+
+Queues the GOSSIP_VOTE works of the messages that wait for a slot.
+
+### Signature
+
+```
+lantern_node_vote_due() -> flag
+```
+
+### Function does
+
+- After the head: each NodeMessage in `NODE_MESSAGE_VOTE` whose slot is below the store's gets a GOSSIP_VOTE work and takes `NODE_MESSAGE_VOTING`, while the actions have room for it and 4096 bytes (node.md).
+- Returns 1 when an entry is left waiting, else 0.
+
+### Function never
+
+- Makes an OS call.
+
+### Limits
+
+- Stack of its own: 96 bytes on x86-64 (return address included), 96 bytes on ARM64, 96 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_node_vote_due`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- Registers it reads, on ARM64, x86-64, RISC-V: the store in x20, rbp, s2; the actions in x24, r15, s6.
+- Registers it reads, on ARM64, x86-64, RISC-V: the node in x19, rbx, s1.
+
+## Function `lantern_node_votes`
+
+Queues the vote works of an imported block.
+
+### Signature
+
+```
+lantern_node_votes(entry, attestations, slashings)
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `entry` | input | the `NodeBlock` entry |
+| `attestations` | input | u64 in a register: its attestation count |
+| `slashings` | input | u64 in a register: its attester slashing count |
+
+### Function does
+
+- A BLOCK_ATTESTATION of each attestation, then a BLOCK_SLASHING of each attester slashing with the post-state of the justified root; at most `NODE_VOTES_MAX` in all (node.md).
+
+### Function never
+
+- Makes an OS call.
+
+### Limits
+
+- Stack of its own: 96 bytes on x86-64 (return address included), 96 bytes on ARM64, 96 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_node_votes`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- Registers it reads, on ARM64, x86-64, RISC-V: the store in x20, rbp, s2; the actions in x24, r15, s6.
+- Registers it reads, on ARM64, x86-64, RISC-V: the node in x19, rbx, s1.
+- Argument order: `entry`, `attestations`, `slashings`.
+
+## Function `lantern_node_window`
+
+The first epoch of a sidecar window.
+
+### Signature
+
+```
+lantern_node_window(epochs, fork) -> epoch
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `epochs` | input | u64 in a register: the window's epochs |
+| `fork` | input | u64 in a register |
+
+### Function does
+
+- Returns max(the epoch of the store's slot - `epochs`, the epoch of the fork in the node's config).
+
+### Function never
+
+- Makes an OS call.
+
+### Limits
+
+- Stack of its own: 32 bytes on x86-64 (return address included), 16 bytes on ARM64, 32 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_node_window`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- Registers it reads, on ARM64, x86-64, RISC-V: the store in x20, rbp, s2.
+- Registers it reads, on ARM64, x86-64, RISC-V: the node in x19, rbx, s1.
+- Argument order: `epochs`, `fork`.
+
+## Function `lantern_node_work`
+
+Queues a WORK action.
+
+### Signature
+
+```
+lantern_node_work(kind, state_a, state_b, data, target, arg) -> action
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `kind` | input | u64 in a register |
+| `state_a` | input | u64 in a register: a BufferId |
+| `state_b` | input | u64 in a register: a BufferId |
+| `data` | input | u64 in a register: a BufferId |
+| `target` | input | u64 in a register |
+| `arg` | input | u64 in a register |
+
+### Function does
+
+- Returns a WORK action with the fields, `state_c` 0.
+
+### Function never
+
+- Makes an OS call.
+
+### Limits
+
+- Stack of its own: 8 bytes on x86-64 (return address included), 64 bytes on ARM64, 0 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_node_work`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- Registers it reads, on ARM64, x86-64, RISC-V: the actions in x24, r15, s6.
+- Registers it reads, on ARM64, x86-64, RISC-V: the node in x19, rbx, s1.
+- Argument order: `kind`, `state_a`, `state_b`, `data`, `target`, `arg`.
+
+## Function `lantern_produce_add_signature`
+
+Adds a signature to an aggregate.
+
+### Signature
+
+```
+lantern_produce_add_signature(aggregate, signature, scratch) -> status
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `aggregate` | state | BLSSignature |
+| `signature` | input | BLSSignature |
+| `scratch` | scratch | [`Scratch`](helpers.md#type-scratch) |
+
+### Returns
+
+- `LANTERN_OK`: `aggregate` holds the aggregate of the two.
+- `LANTERN_BUFFER_TOO_SMALL`: `scratch` cannot hold the list of the two.
+- A status of crypto_bls_aggregate.
+
+### Function does
+
+- Calls crypto_bls_aggregate of asm-crypto on a list of the two at the end of `scratch`.
+
+### Function never
+
+- Makes an OS call.
+
+### Limits
+
+- Stack of its own: 48 bytes on x86-64 (return address included), 48 bytes on ARM64, 48 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_produce_add_signature`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- Argument order: `aggregate`, `signature`, `scratch`.
+
+## Function `lantern_produce_att_bits`
+
+The aggregation bits length of a drafted attestation.
+
+### Signature
+
+```
+lantern_produce_att_bits(index) -> bits
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `index` | input | u64 in a register: a draft aggregate |
+
+### Function does
+
+- Returns its length; from electra, the lengths of the draft's aggregates of its data.
+
+### Function never
+
+- Calls another function.
+- Writes memory.
+- Makes an OS call.
+
+### Limits
+
+- Stack of its own: 8 bytes on x86-64 (return address included), 0 bytes on ARM64, 0 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_produce_att_bits`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- Registers it reads, on ARM64, x86-64, RISC-V: the aggregates in x21, r12, s3 and their count in x25, rbx, s7, of lantern_produce_attestations.
+- Registers it changes, on ARM64, x86-64, RISC-V: x0 to x4, x13 to x15; rax, rcx, rdx, rsi, r8, r9; a0, a1, t0 to t5.
+- Argument order: `index`.
+
+## Function `lantern_produce_attestations`
+
+Writes the attestations of a produced block.
+
+### Signature
+
+```
+lantern_produce_attestations(locals, position) -> (status, position)
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `locals` | input | the locals of lantern_node_produce_block |
+| `position` | input | u64 in a register: the write position in `out` |
+
+### Returns
+
+- 0: the second value is the write position after the list.
+- 1: `out` or the scratch is short.
+- A status of crypto_bls_aggregate.
+
+### Function does
+
+- Chooses the draft's aggregates by data.slot descending, then order, at most the fork's limit (node.md, lantern_node_produce_block).
+- Before electra an Attestation of each; from electra one Attestation for each data of the aggregates of every committee (compute_on_chain_aggregate).
+- Writes the list: offsets, then the attestations.
+
+### Function never
+
+- Makes an OS call.
+
+### Limits
+
+- Stack of its own: 128 bytes on x86-64 (return address included), 144 bytes on ARM64, 128 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_produce_attestations`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- It returns two values: x0, rax or a0, then x1, rdx or a1.
+- Registers it reads, on ARM64, x86-64, RISC-V: the registers of lantern_node_produce_block: the draft in x20, rbp, s2; the scratch in x22, r13, s4; `out` in x23, r14, s5.
+- Argument order: `locals`, `position`.
+
+## Function `lantern_produce_attester_slashings`
+
+Writes the attester slashings of a produced block.
+
+### Signature
+
+```
+lantern_produce_attester_slashings(position) -> (status, position)
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `position` | input | u64 in a register: the write position in `out` |
+
+### Returns
+
+- 0: the second value is the write position after the list.
+- 1: `out` is short.
+
+### Function does
+
+- Writes the draft's attester slashing records as an SSZ list: their offsets, then their bytes.
+
+### Function never
+
+- Makes an OS call.
+
+### Limits
+
+- Stack of its own: 96 bytes on x86-64 (return address included), 96 bytes on ARM64, 96 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_produce_attester_slashings`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- It returns two values: x0, rax or a0, then x1, rdx or a1.
+- Registers it reads, on ARM64, x86-64, RISC-V: the registers of lantern_node_produce_block: the draft in x20, rbp, s2; `out` in x23, r14, s5.
+- Argument order: `position`.
+
+## Function `lantern_produce_bid_parts`
+
+The parts of the winning bid.
+
+### Signature
+
+```
+lantern_produce_bid_parts(locals)
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `locals` | state | the locals of lantern_node_produce_block |
+
+### Caller must
+
+- lantern_node_produce_bid checked the bid's offsets.
+
+### Function does
+
+- Writes into the locals the parts of the bid at `PBL_BID`: its message, header, from deneb its commitments, from electra its requests.
+
+### Function never
+
+- Calls another function.
+- Makes an OS call.
+
+### Limits
+
+- Stack of its own: 8 bytes on x86-64 (return address included), 0 bytes on ARM64, 0 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_produce_bid_parts`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- Registers it changes, on ARM64, x86-64, RISC-V: x9 to x14; rax, rcx, rdx, rsi, r8, r9; a1 to a3, t0 to t4.
+- Argument order: `locals`.
+
+## Function `lantern_produce_blind`
+
+Makes the produced block a BlindedBeaconBlock.
+
+### Signature
+
+```
+lantern_produce_blind() -> status
+```
+
+### Returns
+
+- `LANTERN_OK`: `out` holds the BlindedBeaconBlock.
+- `LANTERN_BUFFER_TOO_SMALL`: the scratch is short.
+
+### Function does
+
+- Puts the header of the winning bid in the payload's place.
+- Moves the tail after it through the end of the scratch.
+- Grows the body's offsets after the payload's by the difference.
+
+### Function never
+
+- Makes an OS call.
+
+### Limits
+
+- Stack of its own: 64 bytes on x86-64 (return address included), 48 bytes on ARM64, 64 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_produce_blind`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- Registers it reads, on ARM64, x86-64, RISC-V: the registers of lantern_node_produce_block: `out` in x23, r14, s5; the scratch in x22, r13, s4.
+- On ARM64 and RISC-V it takes the block's bytes and its body in x25, x26 and s7, s8; on x86-64 at S7 and S8 of the locals at rdi.
+
+## Function `lantern_produce_blind_root`
+
+The state root of the produced blinded block.
+
+### Signature
+
+```
+lantern_produce_blind_root() -> status
+```
+
+### Returns
+
+- `LANTERN_OK`: the block's state_root is set.
+- A status of lantern_state_root or of the decoding.
+
+### Function does
+
+- Writes the state root that process_block of the builder's full block gives.
+- The state's latest_block_header.body_root becomes the hash_tree_root of the blinded body (the full body's), and its latest_execution_payload_header's transactions_root the bid's header's.
+- Then lantern_state_root into the block's state_root.
+
+### Function never
+
+- Makes an OS call.
+
+### Limits
+
+- Stack of its own: 32 bytes on x86-64 (return address included), 32 bytes on ARM64, 32 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_produce_blind_root`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- Registers it reads, on ARM64, x86-64, RISC-V: the registers of lantern_node_produce_block: the state in x19, rbx, s1; the scratch in x22, r13, s4; `out` in x23, r14, s5.
+- On ARM64 and RISC-V it takes the block's bytes in x25 and s7; on x86-64 at S7 of the locals at rdi.
+
+## Function `lantern_produce_choice`
+
+Whether the builder's bid wins.
+
+### Signature
+
+```
+lantern_produce_choice() -> flag
+```
+
+### Function does
+
+- Returns 1 when the engine's block_value (0 in bellatrix or with no result) is below builder_boost_factor * (the bid's value // 100), the product saturating at 2^256 - 1; else 0 (beacon-api.md, produceBlockV3).
+
+### Function never
+
+- Calls another function.
+- Writes memory.
+- Makes an OS call.
+
+### Limits
+
+- Stack of its own: 8 bytes on x86-64 (return address included), 0 bytes on ARM64, 0 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_produce_choice`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- Registers it reads, on ARM64, x86-64, RISC-V: the registers of lantern_node_produce_block: the params in x21, r12, s3; the bid at 40 of them.
+- Registers it changes, on ARM64, x86-64, RISC-V: x0 to x17; rax, rcx, rdx, rsi, rdi, r8 to r11; a0 to a7, t0 to t6.
+
+## Function `lantern_produce_contents`
+
+Makes the produced block a BlockContents.
+
+### Signature
+
+```
+lantern_produce_contents(locals) -> flag
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `locals` | input | the locals of lantern_node_produce_block |
+
+### Function does
+
+- `out` holds the block from offset 24; it becomes the BlockContents: the block moved 12 bytes on, the three offsets, the bundle's proofs and blobs.
+- The bundle is at 40 of the locals, its bytes at 48.
+- Returns 0, or 1 for a short `out`.
+
+### Function never
+
+- Makes an OS call.
+
+### Limits
+
+- Stack of its own: 48 bytes on x86-64 (return address included), 48 bytes on ARM64, 48 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_produce_contents`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- Registers it reads, on ARM64, x86-64, RISC-V: the registers of lantern_node_produce_block: `out` in x23, r14, s5.
+- Argument order: `locals`.
+
+## Function `lantern_produce_copy_bits`
+
+Sets the bits of an aggregate in a bitlist.
+
+### Signature
+
+```
+lantern_produce_copy_bits(bits, aggregate, cursor) -> cursor
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `bits` | state | the aggregation bits |
+| `aggregate` | input | a draft aggregate |
+| `cursor` | input | u64 in a register: a bit index |
+
+### Function does
+
+- Sets the aggregate's bits at bit `cursor` of `bits` on.
+- Returns the cursor after them.
+
+### Function never
+
+- Calls another function.
+- Makes an OS call.
+
+### Limits
+
+- Stack of its own: 8 bytes on x86-64 (return address included), 0 bytes on ARM64, 0 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_produce_copy_bits`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- Registers it changes, on ARM64, x86-64, RISC-V: x0, x9 to x15; rax, rcx, r8; a0, a3, t0 to t4.
+- Argument order: `bits`, `aggregate`, `cursor`.
+
+## Function `lantern_produce_differ`
+
+Whether two byte strings differ.
+
+### Signature
+
+```
+lantern_produce_differ(a, b, n) -> flag
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `a` | input | `n` bytes |
+| `b` | input | `n` bytes |
+| `n` | input | u64 in a register |
+
+### Function does
+
+- Returns 0 when the bytes are the same, else 1; any alignment.
+
+### Function never
+
+- Calls another function.
+- Writes memory.
+- Makes an OS call.
+
+### Limits
+
+- Stack of its own: 0 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_produce_differ`, local to its object. Only RISC-V have it.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- It is on ARM64 and RISC-V.
+- Registers it changes, on RISC-V: a0 to a2, t0, t1.
+- Argument order: `a`, `b`, `n`.
+
+## Function `lantern_produce_health`
+
+Whether the chain is healthy for a builder.
+
+### Signature
+
+```
+lantern_produce_health() -> flag
+```
+
+### Function does
+
+- Returns 1 when the chain of the state is healthy for a builder, else 0 (node.md, lantern_node_produce_check): the skips before its slot, the epochs since finality, the skipped slots of the last `SLOTS_PER_EPOCH`.
+
+### Function never
+
+- Calls another function.
+- Writes memory.
+- Makes an OS call.
+
+### Limits
+
+- Stack of its own: 8 bytes on x86-64 (return address included), 0 bytes on ARM64, 0 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_produce_health`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- Registers it reads, on ARM64, x86-64, RISC-V: the state in x19, rbx, s1.
+- Registers it changes, on ARM64, x86-64, RISC-V: x0 to x17; rax, rcx, rdx, rsi, rdi, r8 to r11; a0 to a7, t0 to t4.
+
+## Function `lantern_produce_in_slashing`
+
+Whether an index is in both attestations of a drafted attester slashing.
+
+### Signature
+
+```
+lantern_produce_in_slashing(index, record) -> flag
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `index` | input | u64 in a register |
+| `record` | input | a draft record |
+
+### Function does
+
+- Returns 1 when the index is in both attestations of the attester slashing whose SSZ bytes follow the record, else 0.
+
+### Function never
+
+- Calls another function.
+- Writes memory.
+- Makes an OS call.
+
+### Limits
+
+- Stack of its own: 8 bytes on x86-64 (return address included), 0 bytes on ARM64, 0 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_produce_in_slashing`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- Registers it changes, on ARM64, x86-64, RISC-V: x0, x7, x9 to x15; rax, rcx, rdx, rsi, r8 to r11; a0 to a5, t0 to t4.
+- Argument order: `index`, `record`.
+
+## Function `lantern_produce_records`
+
+Writes the drafted records of a topic.
+
+### Signature
+
+```
+lantern_produce_records(topic, position) -> (status, position)
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `topic` | input | u64 in a register |
+| `position` | input | u64 in a register: the write position in `out` |
+
+### Returns
+
+- 0: the second value is the write position after them.
+- 1: `out` is short.
+
+### Function does
+
+- Writes the SSZ bytes of the draft's records of the topic in their order, back to back.
+
+### Function never
+
+- Makes an OS call.
+
+### Limits
+
+- Stack of its own: 96 bytes on x86-64 (return address included), 96 bytes on ARM64, 96 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_produce_records`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- It returns two values: x0, rax or a0, then x1, rdx or a1.
+- Registers it reads, on ARM64, x86-64, RISC-V: the registers of lantern_node_produce_block: the draft in x20, rbp, s2; `out` in x23, r14, s5.
+- Argument order: `topic`, `position`.
+
+## Function `lantern_produce_room`
+
+Whether bytes fit in out.
+
+### Signature
+
+```
+lantern_produce_room(position, bytes) -> flag
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `position` | input | u64 in a register |
+| `bytes` | input | u64 in a register |
+
+### Function does
+
+- Returns 0 when `bytes` bytes from `position` fit in `out`, else 1.
+
+### Function never
+
+- Calls another function.
+- Writes memory.
+- Makes an OS call.
+
+### Limits
+
+- Stack of its own: 8 bytes on x86-64 (return address included), 0 bytes on ARM64, 0 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_produce_room`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- Registers it reads, on ARM64, x86-64, RISC-V: the registers of lantern_node_produce_block: `out` in x23, r14, s5.
+- Registers it changes, on ARM64, x86-64, RISC-V: x0, x16, x17; rax, rcx; a0, t5, t6.
+- Argument order: `position`, `bytes`.
+
+## Function `lantern_produce_same_data`
+
+Whether two AttestationData values are equal.
+
+### Signature
+
+```
+lantern_produce_same_data(a, b) -> flag
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `a` | input | 128 bytes |
+| `b` | input | 128 bytes |
+
+### Function does
+
+- Returns 1 when the 128 bytes are equal, else 0.
+
+### Function never
+
+- Calls another function.
+- Writes memory.
+- Makes an OS call.
+
+### Limits
+
+- Stack of its own: 8 bytes on x86-64 (return address included), 0 bytes on ARM64, 0 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_produce_same_data`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- Registers it changes, on ARM64, x86-64, RISC-V: x0, x9 to x12; rax, rcx, rdx; a0, t0 to t2.
+- Argument order: `a`, `b`.
+
+## Function `lantern_produce_slashed`
+
+Whether drafted slashings slash an index.
+
+### Signature
+
+```
+lantern_produce_slashed(index, records, end) -> flag
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `index` | input | u64 in a register |
+| `records` | input | the first draft record |
+| `end` | input | the end of the records |
+
+### Function does
+
+- Returns 1 when a proposer slashing record has the index as its proposer, or an attester slashing record has it in both attestations; else 0.
+
+### Function never
+
+- Makes an OS call.
+
+### Limits
+
+- Stack of its own: 96 bytes on x86-64 (return address included), 96 bytes on ARM64, 96 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_produce_slashed`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- Argument order: `index`, `records`, `end`.
+
+## Function `lantern_produce_standin`
+
+Writes the stand-in payload of the winning bid.
+
+### Signature
+
+```
+lantern_produce_standin(locals) -> status
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `locals` | state | the locals of lantern_node_produce_block |
+
+### Returns
+
+- `LANTERN_OK`: the stand-in's bytes and their count are at 24 of the locals.
+- `LANTERN_BUFFER_TOO_SMALL`: the scratch is short.
+- Another code of lantern_get_expected_withdrawals.
+
+### Function does
+
+- Writes the stand-in payload (node.md, lantern_node_produce_block, with a bid) at the end of the scratch below its expected withdrawals; the scratch size then drops below both.
+- The stand-in: the header's fields, its extra_data, no transactions, from capella the expected withdrawals in SSZ.
+
+### Function never
+
+- Makes an OS call.
+
+### Limits
+
+- Stack of its own: 48 bytes on x86-64 (return address included), 48 bytes on ARM64, 48 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_produce_standin`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- Registers it reads, on ARM64, x86-64, RISC-V: the registers of lantern_node_produce_block: the state in x19, rbx, s1; the scratch in x22, r13, s4.
+- Argument order: `locals`.
+
+## Function `lantern_produce_takes_slashing`
+
+Whether an attester slashing slashes an index that no drafted proposer slashing does.
+
+### Signature
+
+```
+lantern_produce_takes_slashing(bytes, count, records, end) -> flag
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `bytes` | input | the attester slashing's SSZ bytes |
+| `count` | input | u64 in a register |
+| `records` | input | the first draft record |
+| `end` | input | the end of the records |
+
+### Function does
+
+- Returns 1 when an index is in both attestations and no proposer slashing record has it as its proposer; else 0.
+- The attestations' indices are sorted, as is_valid_indexed_attestation holds them.
+
+### Function never
+
+- Calls another function.
+- Writes memory but its own stack.
+- Makes an OS call.
+
+### Limits
+
+- Stack of its own: 96 bytes on x86-64 (return address included), 0 bytes on ARM64, 0 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_produce_takes_slashing`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- Argument order: `bytes`, `count`, `records`, `end`.
+
+## Function `lantern_publish_blinded_transition`
+
+The state transition of a published blinded block.
+
+### Signature
+
+```
+lantern_publish_blinded_transition(gossip, block, scratch) -> status
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `gossip` | input | `NodeGossip` |
+| `block` | input | ByteList: the SignedBlindedBeaconBlock |
+| `scratch` | scratch | [`Scratch`](helpers.md#type-scratch) |
+
+### Returns
+
+- `LANTERN_OK`: the transition holds.
+- `LANTERN_INVALID_STATE_ROOT`: the state root differs from the block's.
+- A status of process_block or of the decoding.
+
+### Function does
+
+- On the proposer state of the gossip (node.md, lantern_node_publish_check): the body's root and the header's transactions_root.
+- Then process_block of the block with the stand-in payload, those roots in the state, and its state root against the block's.
+- Leaves the size of the scratch as it came.
+
+### Function never
+
+- Makes an OS call.
+
+### Limits
+
+- Stack of its own: 208 bytes on x86-64 (return address included), 208 bytes on ARM64, 208 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_publish_blinded_transition`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- Argument order: `gossip`, `block`, `scratch`.
+
+## Function `lantern_publish_gossip`
+
+lantern_node_gossip with its outputs on the stack.
+
+### Signature
+
+```
+lantern_publish_gossip(args, data, scratch) -> status
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `args` | input | `NodeGossip` |
+| `data` | input | ByteList: the uncompressed message |
+| `scratch` | scratch | [`Scratch`](helpers.md#type-scratch) |
+
+### Returns
+
+- The status of lantern_node_gossip when it is not `LANTERN_OK`, else its `Result`.
+
+### Function does
+
+- Calls lantern_node_gossip with its result, root and index on its own stack.
+
+### Function never
+
+- Makes an OS call.
+
+### Limits
+
+- Stack of its own: 64 bytes on x86-64 (return address included), 64 bytes on ARM64, 64 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_publish_gossip`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- Argument order: `args`, `data`, `scratch`.
+
+## Function `lantern_publish_unblind`
+
+The SignedBeaconBlock of a blinded block with its stand-in payload.
+
+### Signature
+
+```
+lantern_publish_unblind(blinded, state, scratch) -> (status, list)
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `blinded` | input | ByteList: the SignedBlindedBeaconBlock |
+| `state` | input | `BeaconState` |
+| `scratch` | scratch | [`Scratch`](helpers.md#type-scratch) |
+
+### Returns
+
+- `LANTERN_OK`: the second value is the ByteList of the block.
+- `LANTERN_BUFFER_TOO_SMALL` or `LANTERN_INVALID_ENCODING`, or a code of lantern_get_expected_withdrawals.
+
+### Caller must
+
+- `state` is a valid `BeaconState` value (include/types.inc) with every PartRef in range.
+
+### Function does
+
+- Writes the block with the stand-in payload of its header (node.md, lantern_node_publish_check) as a ByteList at the end of `scratch`.
+- The scratch size drops below it and its expected withdrawals; the caller restores it.
+
+### Function never
+
+- Makes an OS call.
+
+### Limits
+
+- Stack of its own: 128 bytes on x86-64 (return address included), 128 bytes on ARM64, 128 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_publish_unblind`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- It returns two values: x0, rax or a0, then x1, rdx or a1.
+- Argument order: `blinded`, `state`, `scratch`.
 
 ## Type `Node`
 
