@@ -29,10 +29,25 @@
 - [`lantern_is_data_available`](#function-lantern_is_data_available): checks the blobs or the column sidecars of a block.
 - [`lantern_verify_data_column_sidecar`](#function-lantern_verify_data_column_sidecar): checks the lengths of a column sidecar.
 - [`lantern_verify_data_column_sidecar_kzg_proofs`](#function-lantern_verify_data_column_sidecar_kzg_proofs): checks the cells of a column sidecar.
+- [`lantern_ancestor`](#function-lantern_ancestor): get_ancestor of a node, as a node.
+- [`lantern_attestation_score`](#function-lantern_attestation_score): get_attestation_score of a node, with the store's balances.
+- [`lantern_checkpoint_block`](#function-lantern_checkpoint_block): get_checkpoint_block of a node, as a node.
+- [`lantern_committee_fraction`](#function-lantern_committee_fraction): calculate_committee_fraction of the justified state, from the store's total balance.
+- [`lantern_filter_tree`](#function-lantern_filter_tree): get_filtered_node_tree as one flag per node.
+- [`lantern_find_node`](#function-lantern_find_node): the node of a block root in the store.
+- [`lantern_head`](#function-lantern_head): get_head of the store, with the weights of lantern_weights.
+- [`lantern_on_tick_per_slot`](#function-lantern_on_tick_per_slot): on_tick_per_slot of the spec.
+- [`lantern_u256_lo`](#function-lantern_u256_lo): whether one Uint256 is below another.
+- [`lantern_update_checkpoints`](#function-lantern_update_checkpoints): update_checkpoints of the spec.
+- [`lantern_update_unrealized_checkpoints`](#function-lantern_update_unrealized_checkpoints): update_unrealized_checkpoints of the spec.
+- [`lantern_validate_attestation`](#function-lantern_validate_attestation): validate_on_attestation, with the node of the head vote.
+- [`lantern_weight`](#function-lantern_weight): get_weight of a node, with the store's balances.
+- [`lantern_weights`](#function-lantern_weights): get_weight of every node at once.
 
 ### Types
 
 - [`Store`](#type-store): the fork choice store.
+- [`ForkChoiceNode`](#type-forkchoicenode): a node of the spec's fork choice: a u64, the index of its `BlockNode` in the store's `blocks`.
 - [`BlockNode`](#type-blocknode): one block of the store.
 - [`StoreValidator`](#type-storevalidator): the latest message and justified balance of one validator.
 - [`StoreRoom`](#type-storeroom): the capacities of a store.
@@ -43,20 +58,6 @@
 
 - Document: [consensus-specs v1.7.0-beta.4](https://github.com/ethereum/consensus-specs/tree/aa16bb4c156184e9548a997d53efaf2a228a6304/specs), `phase0/fork-choice.md` with the changes of `bellatrix`, `capella`, `deneb` and `fulu`, `bellatrix/optimistic-sync.md`, and `fulu/p2p-interface.md` for the column sidecar checks.
 - Section: Fork choice, each function at its definition in the fork of its object, from phase0 to fulu.
-
-## Common rules
-
-- As in [block-processing.md](block-processing.md#common-rules).
-- A `ForkChoiceNode` is a u64: the index of its `BlockNode` in the store. The spec's nodes are always blocks of `store.blocks`, and a root names one node, so the index stands for the root.
-- `store.blocks` is the `blocks` part of the `Store`; a `BlockNode` keeps the fields of the block that fork choice reads.
-- The caller keeps `store.block_states` and `store.checkpoint_states`, and passes the state a function reads as an argument. The store keeps the fields of those states that fork choice reads again later: the post-state `current_justified_checkpoint` of each block, and the balances of the justified checkpoint state.
-- `store.checkpoint_states[store.justified_checkpoint]` is read through the balances of the store. A function that reads it returns `LANTERN_NEED_JUSTIFIED_STATE`, before any change, when `balances_checkpoint` is not `justified_checkpoint`. The caller then passes that checkpoint state to lantern_store_justified_checkpoint_state and calls again.
-- A function that changes the store makes every check first and changes the store only after the last check holds, so a call that fails a spec check leaves the store unchanged ("Invalid calls to handlers must not modify store").
-- The config is the store's copy, made by lantern_get_forkchoice_store.
-- lantern_store_size, lantern_store_copy, lantern_store_payload_status and lantern_store_prune read no fork's layouts. Each is in the common object of the core (asm/core/<ISA>/common.s), and its symbol is its name.
-- A Uint64 result outside 0 to 2^64 - 1 fails with `LANTERN_INVALID_OVERFLOW`, as the spec's Uint64 does.
-- Optimistic sync: each node keeps the execution engine's answer for its payload as a `PayloadValidationStatus` (`PAYLOAD_STATUS_*` of bellatrix p2p-interface.md). An `INVALIDATED` node is removed from fork choice ("Consensus engines MUST support removing blocks from fork choice that transition from `NOT_VALIDATED` to `INVALIDATED`"): it and its subtree are not in the tree of get_filtered_node_tree, so get_head never walks to them, and get_weight counts neither the latest messages for them nor a proposer boost of them.
-- Spec helpers that only these functions call are L0 helpers of `asm/core/<ISA>/forkchoice.s`, named by the spec: get_voting_source, get_attestation_score, get_proposer_score, calculate_committee_fraction, update_checkpoints, update_unrealized_checkpoints, on_tick_per_slot, record_block_timeliness, get_shuffling_dependent_root, update_proposer_boost_root, compute_pulled_up_tip, update_latest_messages, is_head_weak, is_parent_strong and is_proposer_equivocation.
 
 ## Function `lantern_get_forkchoice_store`
 
@@ -86,6 +87,11 @@ lantern_get_forkchoice_store(anchor_state, anchor_block, config, room, scratch, 
 - `LANTERN_INVALID_ANCHOR`: `anchor_block.state_root` is not hash_tree_root(anchor_state).
 - `LANTERN_INVALID_OVERFLOW`: the anchor slot's time does not fit in a Uint64.
 
+### Caller must
+
+- `scratch` is S(k) of [Type Scratch](helpers.md#type-scratch), with k under Limits.
+- `config` is the store's copy, made by lantern_get_forkchoice_store.
+
 ### Function does
 
 - Sets `genesis_time_ms` to seconds_to_milliseconds(genesis_time), which gives UINT64_MAX when the product does not fit.
@@ -94,9 +100,22 @@ lantern_get_forkchoice_store(anchor_state, anchor_block, config, room, scratch, 
 - Gives `room.nodes` and `room.validators` entries of capacity to the two parts; every `StoreValidator` starts with no latest message.
 - Ends with lantern_store_justified_checkpoint_state of the anchor state.
 
+### Function never
+
+- Makes an OS call.
+- Keeps a pointer after it returns.
+
 ### Limits
 
+- Stack of its own: 176 bytes on x86-64 (return address included), 176 bytes on ARM64, 176 bytes on RISC-V.
 - Scratch: S(0).
+
+### ABI
+
+- Role: L1.
+- Symbol: `lantern_<fork>_get_forkchoice_store` in the object of every fork, with `_` before it on macOS; `lantern_get_forkchoice_store` inside the object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6); each argument is a pointer, and numbers are u64.
+- Argument order: `anchor_state`, `anchor_block`, `config`, `room`, `scratch`, `store`.
 
 ## Function `lantern_store_size`
 
@@ -108,10 +127,36 @@ The bytes of a store with the capacities of room.
 lantern_store_size(room, size) -> status
 ```
 
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `room` | input | [`StoreRoom`](#type-storeroom) |
+| `size` | output | u64 |
+
 ### Returns
 
 - `LANTERN_OK`: `size` holds `STORE_FIXED` + `room.nodes` * `BlockNode__mem` + `room.validators` * `StoreValidator__mem`.
 - `LANTERN_INVALID_OVERFLOW`: the size does not fit in a u64.
+
+### Function does
+
+
+### Function never
+
+- Makes an OS call.
+- Keeps a pointer after it returns.
+
+### Limits
+
+- Stack of its own: 8 bytes on x86-64 (return address included), 0 bytes on ARM64, 0 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_store_size`, with `_` before it on macOS.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- Argument order: `room`, `size`.
 
 ## Function `lantern_store_copy`
 
@@ -123,6 +168,14 @@ Copies store into out with the capacities of room: the resize function of the `S
 lantern_store_copy(store, room, out) -> status
 ```
 
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `store` | input | [`Store`](#type-store) |
+| `room` | input | [`StoreRoom`](#type-storeroom) |
+| `out` | output | [`Store`](#type-store), its `size` set by the caller |
+
 ### Returns
 
 - `LANTERN_OK`: `out` holds the store.
@@ -131,6 +184,22 @@ lantern_store_copy(store, room, out) -> status
 ### Function does
 
 - New `StoreValidator` entries have no latest message, no balance and no flags.
+
+### Function never
+
+- Makes an OS call.
+- Keeps a pointer after it returns.
+
+### Limits
+
+- Stack of its own: 112 bytes on x86-64 (return address included), 112 bytes on ARM64, 112 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_store_copy`, with `_` before it on macOS.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- Argument order: `store`, `room`, `out`.
 
 ## Function `lantern_store_justified_checkpoint_state`
 
@@ -158,11 +227,29 @@ lantern_store_justified_checkpoint_state(store, state) -> status
 ### Caller must
 
 - Pass the state of store_target_checkpoint_state for `store.justified_checkpoint`, or the anchor state for the anchor checkpoint.
+- `state` is a valid `BeaconState` value (include/types.inc) with every PartRef in range.
 
 ### Function does
 
 - For each entry i: `effective_balance` of validator i, `STORE_IN_REGISTRY`, and `STORE_ACTIVE_UNSLASHED` when it is active at get_current_epoch(state) and not slashed; entries past the registry get 0 and lose both flags. `STORE_EQUIVOCATING` stays.
 - Sets `balances_total` to get_total_balance of the active unslashed validators, and `balances_checkpoint` to `justified_checkpoint`.
+- Makes every check before it changes `store`, so a call that fails a spec check leaves `store` unchanged ("Invalid calls to handlers must not modify store").
+
+### Function never
+
+- Makes an OS call.
+- Keeps a pointer after it returns.
+
+### Limits
+
+- Stack of its own: 96 bytes on x86-64 (return address included), 0 bytes on ARM64, 0 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_<fork>_store_justified_checkpoint_state` in the object of every fork, with `_` before it on macOS; `lantern_store_justified_checkpoint_state` inside the object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- Argument order: `store`, `state`.
 
 ## Function `lantern_get_current_slot`
 
@@ -174,10 +261,36 @@ lantern_store_justified_checkpoint_state(store, state) -> status
 lantern_get_current_slot(store, out) -> status
 ```
 
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `store` | input | [`Store`](#type-store) |
+| `out` | output | u64 |
+
 ### Returns
 
 - `LANTERN_OK`: `out` holds the slot.
 - `LANTERN_INVALID_OVERFLOW`: `time_ms` is before `genesis_time_ms`.
+
+### Function does
+
+
+### Function never
+
+- Makes an OS call.
+- Keeps a pointer after it returns.
+
+### Limits
+
+- Stack of its own: 8 bytes on x86-64 (return address included), 0 bytes on ARM64, 0 bytes on RISC-V.
+
+### ABI
+
+- Role: L1.
+- Symbol: `lantern_<fork>_get_current_slot` in the object of every fork, with `_` before it on macOS; `lantern_get_current_slot` inside the object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6); each argument is a pointer, and numbers are u64.
+- Argument order: `store`, `out`.
 
 ## Function `lantern_get_current_store_epoch`
 
@@ -189,9 +302,35 @@ compute_epoch_at_slot(get_current_slot(store)).
 lantern_get_current_store_epoch(store, out) -> status
 ```
 
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `store` | input | [`Store`](#type-store) |
+| `out` | output | u64 |
+
 ### Returns
 
 - As lantern_get_current_slot.
+
+### Function does
+
+
+### Function never
+
+- Makes an OS call.
+- Keeps a pointer after it returns.
+
+### Limits
+
+- Stack of its own: 8 bytes on x86-64 (return address included), 0 bytes on ARM64, 0 bytes on RISC-V.
+
+### ABI
+
+- Role: L1.
+- Symbol: `lantern_<fork>_get_current_store_epoch` in the object of every fork, with `_` before it on macOS; `lantern_get_current_store_epoch` inside the object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6); each argument is a pointer, and numbers are u64.
+- Argument order: `store`, `out`.
 
 ## Function `lantern_get_ancestor`
 
@@ -203,6 +342,15 @@ The node itself when its slot is at most slot, else the ancestor of its parent.
 lantern_get_ancestor(store, node, slot, out) -> status
 ```
 
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `store` | input | [`Store`](#type-store) |
+| `node` | input | u64: a [`ForkChoiceNode`](#type-forkchoicenode) |
+| `slot` | input | u64 |
+| `out` | output | u64: a [`ForkChoiceNode`](#type-forkchoicenode) |
+
 ### Returns
 
 - `LANTERN_OK`: `out` holds the node.
@@ -211,6 +359,22 @@ lantern_get_ancestor(store, node, slot, out) -> status
 ### Caller must
 
 - Pass a node of the store.
+
+### Function never
+
+- Makes an OS call.
+- Keeps a pointer after it returns.
+
+### Limits
+
+- Stack of its own: 32 bytes on x86-64 (return address included), 32 bytes on ARM64, 32 bytes on RISC-V.
+
+### ABI
+
+- Role: L1.
+- Symbol: `lantern_<fork>_get_ancestor` in the object of every fork, with `_` before it on macOS; `lantern_get_ancestor` inside the object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6); each argument is a pointer, and numbers are u64.
+- Argument order: `store`, `node`, `slot`, `out`.
 
 ## Function `lantern_get_checkpoint_block`
 
@@ -222,11 +386,36 @@ The root of get_ancestor(root, compute_start_slot_at_epoch(epoch)).
 lantern_get_checkpoint_block(store, root, epoch, out) -> status
 ```
 
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `store` | input | [`Store`](#type-store) |
+| `root` | input | Bytes32 |
+| `epoch` | input | u64 |
+| `out` | output | Bytes32 |
+
 ### Returns
 
 - `LANTERN_OK`: `out` holds the Root.
 - `LANTERN_INVALID_UNKNOWN_BLOCK`: root is not in the store, or the walk leaves it.
 - `LANTERN_INVALID_OVERFLOW`: the start slot of epoch does not fit.
+
+### Function never
+
+- Makes an OS call.
+- Keeps a pointer after it returns.
+
+### Limits
+
+- Stack of its own: 48 bytes on x86-64 (return address included), 48 bytes on ARM64, 48 bytes on RISC-V.
+
+### ABI
+
+- Role: L1.
+- Symbol: `lantern_<fork>_get_checkpoint_block` in the object of every fork, with `_` before it on macOS; `lantern_get_checkpoint_block` inside the object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6); each argument is a pointer, and numbers are u64.
+- Argument order: `store`, `root`, `epoch`, `out`.
 
 ## Function `lantern_get_weight`
 
@@ -238,15 +427,40 @@ get_attestation_score of the node with the justified checkpoint state, plus get_
 lantern_get_weight(store, node, out) -> status
 ```
 
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `store` | input | [`Store`](#type-store) |
+| `node` | input | u64: a [`ForkChoiceNode`](#type-forkchoicenode) |
+| `out` | output | u64: Gwei |
+
 ### Returns
 
 - `LANTERN_OK`: `out` holds the Gwei.
-- `LANTERN_NEED_JUSTIFIED_STATE`: see Common rules.
+- `LANTERN_NEED_JUSTIFIED_STATE`: the store's balances are not those of its justified checkpoint state.
 - `LANTERN_INVALID_UNKNOWN_BLOCK`, `LANTERN_INVALID_OVERFLOW`: a spec failure of get_ancestor or of a sum.
 
 ### Function does
 
 - get_attestation_score: the sum of `effective_balance` over the entries with `STORE_ACTIVE_UNSLASHED`, a latest message, no `STORE_EQUIVOCATING`, and is_ancestor(latest message node, node).
+- Returns `LANTERN_NEED_JUSTIFIED_STATE`, before any change, when the store's `balances_checkpoint` is not its `justified_checkpoint`; the caller then passes that checkpoint state to lantern_store_justified_checkpoint_state and calls again.
+
+### Function never
+
+- Makes an OS call.
+- Keeps a pointer after it returns.
+
+### Limits
+
+- Stack of its own: 32 bytes on x86-64 (return address included), 32 bytes on ARM64, 32 bytes on RISC-V.
+
+### ABI
+
+- Role: L1.
+- Symbol: `lantern_<fork>_get_weight` in the object of every fork, with `_` before it on macOS; `lantern_get_weight` inside the object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6); each argument is a pointer, and numbers are u64.
+- Argument order: `store`, `node`, `out`.
 
 ## Function `lantern_get_filtered_node_tree`
 
@@ -275,14 +489,28 @@ lantern_get_filtered_node_tree(store, scratch, out) -> status
 ### Caller must
 
 - Keep `out` apart from `scratch`.
+- `scratch` is S(k) of [Type Scratch](helpers.md#type-scratch), with k under Limits.
 
 ### Function does
 
 - Marks the subtree in index order (a parent comes before its children), then runs filter_node_tree for all its nodes at once in reverse order: a node with children is in the tree when a child is; a leaf when its voting source and finalized checkpoint block agree with the store.
 
+### Function never
+
+- Makes an OS call.
+- Keeps a pointer after it returns.
+
 ### Limits
 
+- Stack of its own: 96 bytes on x86-64 (return address included), 96 bytes on ARM64, 96 bytes on RISC-V.
 - Scratch: S(1), with n the node count of the store.
+
+### ABI
+
+- Role: L1.
+- Symbol: `lantern_<fork>_get_filtered_node_tree` in the object of every fork, with `_` before it on macOS; `lantern_get_filtered_node_tree` inside the object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6); each argument is a pointer, and numbers are u64.
+- Argument order: `store`, `scratch`, `out`.
 
 ## Function `lantern_get_head`
 
@@ -294,22 +522,48 @@ From the justified node, the child of greatest (weight, root) among the viable n
 lantern_get_head(store, scratch, out) -> status
 ```
 
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `store` | input | [`Store`](#type-store) |
+| `scratch` | scratch | [`Scratch`](helpers.md#type-scratch) |
+| `out` | output | u64: a [`ForkChoiceNode`](#type-forkchoicenode) |
+
 ### Returns
 
 - `LANTERN_OK`: `out` holds the head node.
 - `LANTERN_BUFFER_TOO_SMALL`: scratch is short.
-- `LANTERN_NEED_JUSTIFIED_STATE`: see Common rules.
+- `LANTERN_NEED_JUSTIFIED_STATE`: the store's balances are not those of its justified checkpoint state.
 - `LANTERN_INVALID_UNKNOWN_BLOCK`, `LANTERN_INVALID_OVERFLOW`: a spec failure of lantern_get_filtered_node_tree or get_weight.
+
+### Caller must
+
+- `scratch` is S(k) of [Type Scratch](helpers.md#type-scratch), with k under Limits.
 
 ### Function does
 
 - Reads the tree of lantern_get_filtered_node_tree.
 - The weights of all nodes at once: each counted latest message (as get_attestation_score counts it) adds its `effective_balance` to its node, and get_proposer_score to the proposer boost node (as get_weight adds it); then, from the last node to the first, each node adds its weight to its parent's. A parent comes before its children, so each node then holds the sum over its subtree: get_weight of the node, as is_ancestor(latest message node, node) holds exactly for the messages of its subtree. A sum past 2^64 - 1, or a failure of the boost's get_proposer_score or node, is the result of the first child whose weight it is.
 - Compares roots as byte strings, first byte first.
+- Returns `LANTERN_NEED_JUSTIFIED_STATE`, before any change, when the store's `balances_checkpoint` is not its `justified_checkpoint`; the caller then passes that checkpoint state to lantern_store_justified_checkpoint_state and calls again.
+
+### Function never
+
+- Makes an OS call.
+- Keeps a pointer after it returns.
 
 ### Limits
 
+- Stack of its own: 32 bytes on x86-64 (return address included), 32 bytes on ARM64, 32 bytes on RISC-V.
 - Scratch: S(2), with n the node count of the store.
+
+### ABI
+
+- Role: L1.
+- Symbol: `lantern_<fork>_get_head` in the object of every fork, with `_` before it on macOS; `lantern_get_head` inside the object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6); each argument is a pointer, and numbers are u64.
+- Argument order: `store`, `scratch`, `out`.
 
 ## Function `lantern_on_tick`
 
@@ -321,6 +575,14 @@ on_tick_per_slot at the start of each slot up to the slot of time_ms, then at ti
 lantern_on_tick(store, time_ms, result) -> status
 ```
 
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `store` | state | [`Store`](#type-store) |
+| `time_ms` | input | u64: the time in milliseconds |
+| `result` | output | [`Result`](helpers.md#type-result) |
+
 ### Returns
 
 - `LANTERN_OK`: `result` is `LANTERN_VALID`, or `LANTERN_INVALID_OVERFLOW` when time_ms is before `genesis_time_ms`; then the store is unchanged.
@@ -328,6 +590,23 @@ lantern_on_tick(store, time_ms, result) -> status
 ### Function does
 
 - on_tick_per_slot: sets `time_ms`; at a new slot clears `proposer_boost_root`; at a new epoch runs update_checkpoints with the unrealized checkpoints.
+- Makes every check before it changes `store`, so a call that fails a spec check leaves `store` unchanged ("Invalid calls to handlers must not modify store").
+
+### Function never
+
+- Makes an OS call.
+- Keeps a pointer after it returns.
+
+### Limits
+
+- Stack of its own: 96 bytes on x86-64 (return address included), 96 bytes on ARM64, 96 bytes on RISC-V.
+
+### ABI
+
+- Role: L1.
+- Symbol: `lantern_<fork>_on_tick` in the object of every fork, with `_` before it on macOS; `lantern_on_tick` inside the object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6); each argument is a pointer, and numbers are u64.
+- Argument order: `store`, `time_ms`, `result`.
 
 ## Function `lantern_on_block`
 
@@ -354,7 +633,7 @@ lantern_on_block(store, signed_block, state, options, scratch, result) -> status
 
 - `LANTERN_OK`: `result` is `LANTERN_VALID` when the block is in the store, or the first failed check: `LANTERN_INVALID_UNKNOWN_BLOCK` (parent), `LANTERN_INVALID_PARENT_PAYLOAD`, `LANTERN_INVALID_FUTURE_SLOT`, `LANTERN_INVALID_NOT_FINALIZED`, `LANTERN_INVALID_DATA_UNAVAILABLE`, a check of lantern_state_transition, `LANTERN_INVALID_MERGE_BLOCK`, or a spec failure of get_head, get_ancestor or compute_pulled_up_tip.
 - `LANTERN_BUFFER_TOO_SMALL`: the store has no room for a node, scratch is short, or lantern_state_transition needs room in `state`. Nothing is changed.
-- `LANTERN_NEED_JUSTIFIED_STATE`: see Common rules. Nothing is changed.
+- `LANTERN_NEED_JUSTIFIED_STATE`: the store's balances are not those of its justified checkpoint state. Nothing is changed.
 
 ### Caller must
 
@@ -362,6 +641,8 @@ lantern_on_block(store, signed_block, state, options, scratch, result) -> status
 - Bellatrix: pass in `options.pow_block` the PowBlock of get_pow_block(body.execution_payload.parent_hash) and in `options.pow_parent` that of its parent_hash, each 0 when the execution layer has none.
 - Pass in `options.payload_status` the execution engine's answer for the payload: `VALID`, `NOT_VALIDATED` for an optimistic import, or `INVALIDATED`.
 - Keep `state` as `store.block_states[block_root]` when the call adds a node; a known block adds none and leaves `state` unchanged.
+- `state` is a valid `BeaconState` value (include/types.inc) with every PartRef in range.
+- `scratch` is S(k) of [Type Scratch](helpers.md#type-scratch), with k under Limits.
 
 ### Function does
 
@@ -374,10 +655,25 @@ lantern_on_block(store, signed_block, state, options, scratch, result) -> status
 - The node keeps `body.execution_payload.block_hash` (a zero hash before bellatrix) and `options.payload_status`. A `VALID` block makes its `NOT_VALIDATED` ancestors `VALID`, as a transition to `VALID` does.
 - Deneb and later: asserts `options.data_available` after the finalized checks.
 - Bellatrix: after state_transition, runs lantern_validate_merge_block when lantern_is_merge_transition_block holds for the parent's state and the body; it reads that before the state changes.
+- Returns `LANTERN_NEED_JUSTIFIED_STATE`, before any change, when the store's `balances_checkpoint` is not its `justified_checkpoint`; the caller then passes that checkpoint state to lantern_store_justified_checkpoint_state and calls again.
+- Makes every check before it changes `store`, so a call that fails a spec check leaves `store` unchanged ("Invalid calls to handlers must not modify store").
+
+### Function never
+
+- Makes an OS call.
+- Keeps a pointer after it returns.
 
 ### Limits
 
+- Stack of its own: 400 bytes on x86-64 (return address included), 400 bytes on ARM64, 400 bytes on RISC-V.
 - Scratch: that of lantern_state_transition, and S(2) with n the node count of the store, for get_head.
+
+### ABI
+
+- Role: L1.
+- Symbol: `lantern_<fork>_on_block` in the object of every fork, with `_` before it on macOS; `lantern_on_block` inside the object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6); each argument is a pointer, and numbers are u64.
+- Argument order: `store`, `signed_block`, `state`, `options`, `scratch`, `result`.
 
 ## Function `lantern_validate_merge_block`
 
@@ -403,9 +699,25 @@ lantern_validate_merge_block(block, pow_block, pow_parent, config) -> status
 - `LANTERN_OK`: every check holds.
 - `LANTERN_INVALID_MERGE_BLOCK`: a check fails, a PoW block is None, or a PoW block's hash is not the one asked for.
 
+### Caller must
+
+- `config` is the store's copy, made by lantern_get_forkchoice_store.
+
+### Function never
+
+- Makes an OS call.
+- Keeps a pointer after it returns.
+
+### Limits
+
+- Stack of its own: 112 bytes on x86-64 (return address included), 112 bytes on ARM64, 112 bytes on RISC-V.
+
 ### ABI
 
-- Forks: bellatrix.
+- Role: L1.
+- Symbol: `lantern_<fork>_validate_merge_block` in the object of bellatrix, with `_` before it on macOS; `lantern_validate_merge_block` inside the object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6); each argument is a pointer, and numbers are u64.
+- Argument order: `block`, `pow_block`, `pow_parent`, `config`.
 
 ## Function `lantern_is_valid_terminal_pow_block`
 
@@ -417,13 +729,38 @@ block.total_difficulty >= TERMINAL_TOTAL_DIFFICULTY and parent.total_difficulty 
 lantern_is_valid_terminal_pow_block(block, parent, config, out) -> status
 ```
 
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `block` | input | `PowBlock` |
+| `parent` | input | `PowBlock` |
+| `config` | input | [`Config`](helpers.md#type-config) |
+| `out` | output | u64: 1 or 0 |
+
 ### Returns
 
 - `LANTERN_OK`, always: `out` is 1 or 0.
 
+### Caller must
+
+- `config` is the store's copy, made by lantern_get_forkchoice_store.
+
+### Function never
+
+- Makes an OS call.
+- Keeps a pointer after it returns.
+
+### Limits
+
+- Stack of its own: 64 bytes on x86-64 (return address included), 64 bytes on ARM64, 64 bytes on RISC-V.
+
 ### ABI
 
-- Forks: bellatrix.
+- Role: L1.
+- Symbol: `lantern_<fork>_is_valid_terminal_pow_block` in the object of bellatrix, with `_` before it on macOS; `lantern_is_valid_terminal_pow_block` inside the object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6); each argument is a pointer, and numbers are u64.
+- Argument order: `block`, `parent`, `config`, `out`.
 
 ## Function `lantern_validate_on_attestation`
 
@@ -435,6 +772,14 @@ The asserts of validate_on_attestation.
 lantern_validate_on_attestation(store, attestation, is_from_block) -> status
 ```
 
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `store` | input | [`Store`](#type-store) |
+| `attestation` | input | `Attestation` |
+| `is_from_block` | input | u64: 1 or 0 |
+
 ### Returns
 
 - `LANTERN_OK`: every check holds.
@@ -443,6 +788,22 @@ lantern_validate_on_attestation(store, attestation, is_from_block) -> status
 - `LANTERN_INVALID_ATTESTATION_SLOT`: the head vote's block is after the attestation's slot.
 - `LANTERN_INVALID_FUTURE_SLOT`: the current slot is not after the attestation's slot.
 - `LANTERN_INVALID_OVERFLOW`: a slot sum does not fit.
+
+### Function never
+
+- Makes an OS call.
+- Keeps a pointer after it returns.
+
+### Limits
+
+- Stack of its own: 16 bytes on x86-64 (return address included), 16 bytes on ARM64, 16 bytes on RISC-V.
+
+### ABI
+
+- Role: L1.
+- Symbol: `lantern_<fork>_validate_on_attestation` in the object of every fork, with `_` before it on macOS; `lantern_validate_on_attestation` inside the object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6); each argument is a pointer, and numbers are u64.
+- Argument order: `store`, `attestation`, `is_from_block`.
 
 ## Function `lantern_store_target_checkpoint_state`
 
@@ -471,6 +832,28 @@ lantern_store_target_checkpoint_state(state, target, config, scratch, result) ->
 ### Caller must
 
 - Keep `state` as `store.checkpoint_states[target]`. The spec skips the call when the target is already there.
+- `state` is a valid `BeaconState` value (include/types.inc) with every PartRef in range.
+- `scratch` is S(k) of [Type Scratch](helpers.md#type-scratch), with k under Limits.
+- `config` is the store's copy, made by lantern_get_forkchoice_store.
+
+### Function does
+
+
+### Function never
+
+- Makes an OS call.
+- Keeps a pointer after it returns.
+
+### Limits
+
+- Stack of its own: 32 bytes on x86-64 (return address included), 32 bytes on ARM64, 32 bytes on RISC-V.
+
+### ABI
+
+- Role: L1.
+- Symbol: `lantern_<fork>_store_target_checkpoint_state` in the object of every fork, with `_` before it on macOS; `lantern_store_target_checkpoint_state` inside the object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6); each argument is a pointer, and numbers are u64.
+- Argument order: `state`, `target`, `config`, `scratch`, `result`.
 
 ## Function `lantern_on_attestation`
 
@@ -501,14 +884,29 @@ lantern_on_attestation(store, attestation, is_from_block, target_state, scratch,
 ### Caller must
 
 - Call lantern_validate_on_attestation first and make the target state only when it returns `LANTERN_OK`.
+- `scratch` is S(k) of [Type Scratch](helpers.md#type-scratch), with k under Limits.
 
 ### Function does
 
 - update_latest_messages: for each attesting index without `STORE_EQUIVOCATING`, sets the latest message to (target epoch, head vote node) when there is none or the target epoch is greater.
+- Makes every check before it changes `store`, so a call that fails a spec check leaves `store` unchanged ("Invalid calls to handlers must not modify store").
+
+### Function never
+
+- Makes an OS call.
+- Keeps a pointer after it returns.
 
 ### Limits
 
+- Stack of its own: 112 bytes on x86-64 (return address included), 112 bytes on ARM64, 112 bytes on RISC-V.
 - Scratch: S(8) + `FC_ATTEST_EXTRA`, with n the validators of `target_state`.
+
+### ABI
+
+- Role: L1.
+- Symbol: `lantern_<fork>_on_attestation` in the object of every fork, with `_` before it on macOS; `lantern_on_attestation` inside the object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6); each argument is a pointer, and numbers are u64.
+- Argument order: `store`, `attestation`, `is_from_block`, `target_state`, `scratch`, `result`.
 
 ## Function `lantern_on_attester_slashing`
 
@@ -535,9 +933,31 @@ lantern_on_attester_slashing(store, attester_slashing, state, scratch, result) -
 - `LANTERN_OK`: `result` is `LANTERN_VALID`, or `LANTERN_INVALID_ATTESTER_SLASHING` when the data are not slashable or an indexed attestation is not valid.
 - `LANTERN_BUFFER_TOO_SMALL`: scratch is short, or a common index has no `StoreValidator` entry. The store is unchanged.
 
+### Caller must
+
+- `state` is a valid `BeaconState` value (include/types.inc) with every PartRef in range.
+- `scratch` is S(k) of [Type Scratch](helpers.md#type-scratch), with k under Limits.
+
+### Function does
+
+- Makes every check before it changes `store`, so a call that fails a spec check leaves `store` unchanged ("Invalid calls to handlers must not modify store").
+
+### Function never
+
+- Makes an OS call.
+- Keeps a pointer after it returns.
+
 ### Limits
 
+- Stack of its own: 112 bytes on x86-64 (return address included), 112 bytes on ARM64, 112 bytes on RISC-V.
 - Scratch: S(7).
+
+### ABI
+
+- Role: L1.
+- Symbol: `lantern_<fork>_on_attester_slashing` in the object of every fork, with `_` before it on macOS; `lantern_on_attester_slashing` inside the object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6); each argument is a pointer, and numbers are u64.
+- Argument order: `store`, `attester_slashing`, `state`, `scratch`, `result`.
 
 ## Function `lantern_get_proposer_head`
 
@@ -564,19 +984,37 @@ lantern_get_proposer_head(store, head, slot, head_state, scratch, out) -> status
 
 - `LANTERN_OK`: `out` holds the node.
 - `LANTERN_BUFFER_TOO_SMALL`: scratch is short.
-- `LANTERN_NEED_JUSTIFIED_STATE`: see Common rules.
+- `LANTERN_NEED_JUSTIFIED_STATE`: the store's balances are not those of its justified checkpoint state.
 - `LANTERN_INVALID_UNKNOWN_BLOCK`: the head's parent is not in the store, or a walk leaves it.
 - `LANTERN_INVALID_PROPOSER_BOOST`: the head holds the proposer boost.
 - `LANTERN_INVALID_OVERFLOW`, `LANTERN_INVALID_VALIDATOR_INDEX`: a spec failure of a sum, or an equivocating committee member that the justified state lacks.
+
+### Caller must
+
+- `scratch` is S(k) of [Type Scratch](helpers.md#type-scratch), with k under Limits.
 
 ### Function does
 
 - Computes every condition, as the spec does, before it decides; is_head_weak reads the committees of `head_state` and the `effective_balance` of the store's entries.
 - Before fulu: the reorg also needs shuffling_stable: slot % SLOTS_PER_EPOCH != 0.
+- Returns `LANTERN_NEED_JUSTIFIED_STATE`, before any change, when the store's `balances_checkpoint` is not its `justified_checkpoint`; the caller then passes that checkpoint state to lantern_store_justified_checkpoint_state and calls again.
+
+### Function never
+
+- Makes an OS call.
+- Keeps a pointer after it returns.
 
 ### Limits
 
+- Stack of its own: 144 bytes on x86-64 (return address included), 144 bytes on ARM64, 144 bytes on RISC-V.
 - Scratch: S(3), with n the validators of `head_state`.
+
+### ABI
+
+- Role: L1.
+- Symbol: `lantern_<fork>_get_proposer_head` in the object of every fork, with `_` before it on macOS; `lantern_get_proposer_head` inside the object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6); each argument is a pointer, and numbers are u64.
+- Argument order: `store`, `head`, `slot`, `head_state`, `scratch`, `out`.
 
 ## Function `lantern_store_payload_status`
 
@@ -607,6 +1045,23 @@ lantern_store_payload_status(store, node, payload_status, result) -> status
 - `VALID`: the node and each `NOT_VALIDATED` ancestor up to the first that is not become `VALID`.
 - `INVALIDATED`: the node and each `NOT_VALIDATED` descendant become `INVALIDATED`.
 - Finding the node from a `latestValidHash` is the caller's: `BlockNode.block_hash` holds each payload's hash.
+- Makes every check before it changes `store`, so a call that fails a spec check leaves `store` unchanged ("Invalid calls to handlers must not modify store").
+
+### Function never
+
+- Makes an OS call.
+- Keeps a pointer after it returns.
+
+### Limits
+
+- Stack of its own: 8 bytes on x86-64 (return address included), 0 bytes on ARM64, 0 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_store_payload_status`, with `_` before it on macOS.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- Argument order: `store`, `node`, `payload_status`, `result`.
 
 ## Function `lantern_store_prune`
 
@@ -631,15 +1086,33 @@ lantern_store_prune(store, scratch) -> status
 - `LANTERN_BUFFER_TOO_SMALL`: scratch is short; the store is unchanged.
 - `LANTERN_INVALID_UNKNOWN_BLOCK`: no node has the root of the finalized checkpoint; the store is unchanged.
 
+### Caller must
+
+- `scratch` is S(k) of [Type Scratch](helpers.md#type-scratch), with k under Limits.
+
 ### Function does
 
 - Keeps the nodes in their order: the finalized node first, with `parent` `NODE_NONE`; each kept node's `parent` is its parent's new index.
 - A `latest_node` of a dropped node becomes `NODE_NONE`; `latest_epoch` stays, so later messages compare with it as before.
 - The dropped nodes are no descendants of the justified node, so get_head and get_weight give the same results.
+- Makes every check before it changes `store`, so a call that fails a spec check leaves `store` unchanged ("Invalid calls to handlers must not modify store").
+
+### Function never
+
+- Makes an OS call.
+- Keeps a pointer after it returns.
 
 ### Limits
 
+- Stack of its own: 96 bytes on x86-64 (return address included), 96 bytes on ARM64, 96 bytes on RISC-V.
 - Scratch: S(1), with n the node count of the store.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_store_prune`, with `_` before it on macOS.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- Argument order: `store`, `scratch`.
 
 ## Function `lantern_is_data_available`
 
@@ -670,13 +1143,27 @@ lantern_is_data_available(sidecars, settings, config, scratch, out) -> status   
 - `LANTERN_OK`: `out` holds 1 or 0. A KZG input that does not decode gives 0, as the spec's exception makes on_block fail.
 - `LANTERN_BUFFER_TOO_SMALL`: scratch is short.
 
+### Caller must
+
+- `scratch` is S(k) of [Type Scratch](helpers.md#type-scratch), with k under Limits.
+- `config` is the store's copy, made by lantern_get_forkchoice_store.
+
+### Function never
+
+- Makes an OS call.
+- Keeps a pointer after it returns.
+
 ### Limits
 
+- Stack of its own: 112 bytes on x86-64 (return address included), 112 bytes on ARM64, 112 bytes on RISC-V.
 - Scratch: deneb and electra, `CRYPTO_KZG_SCRATCH` + n * `CRYPTO_KZG_SCRATCH_PER_ENTRY` of asm-crypto, with n the blobs; fulu, `DA_SCRATCH_FIXED` + n * `DA_SCRATCH_PER_BLOB`, with n the most commitments of one sidecar.
 
 ### ABI
 
-- Forks: deneb and later.
+- Role: L1.
+- Symbol: `lantern_<fork>_is_data_available` in the object of deneb to fulu, with `_` before it on macOS; `lantern_is_data_available` inside the object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6); each argument is a pointer, and numbers are u64.
+- Argument order: `blob_kzg_commitments`, `blobs`, `proofs`, `settings`, `scratch`, `out` in deneb and electra; `sidecars`, `settings`, `config`, `scratch`, `out` in fulu.
 
 ## Function `lantern_verify_data_column_sidecar`
 
@@ -688,13 +1175,37 @@ The index, the commitment count against the blob limit of the epoch, and the col
 lantern_verify_data_column_sidecar(sidecar, config, out) -> status
 ```
 
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `sidecar` | input | `DataColumnSidecar` |
+| `config` | input | [`Config`](helpers.md#type-config) |
+| `out` | output | u64: 1 or 0 |
+
 ### Returns
 
 - `LANTERN_OK`: `out` holds 1 or 0.
 
+### Caller must
+
+- `config` is the store's copy, made by lantern_get_forkchoice_store.
+
+### Function never
+
+- Makes an OS call.
+- Keeps a pointer after it returns.
+
+### Limits
+
+- Stack of its own: 64 bytes on x86-64 (return address included), 128 bytes on ARM64, 128 bytes on RISC-V.
+
 ### ABI
 
-- Forks: fulu.
+- Role: L1.
+- Symbol: `lantern_<fork>_verify_data_column_sidecar` in the object of fulu, with `_` before it on macOS; `lantern_verify_data_column_sidecar` inside the object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6); each argument is a pointer, and numbers are u64.
+- Argument order: `sidecar`, `config`, `out`.
 
 ## Function `lantern_verify_data_column_sidecar_kzg_proofs`
 
@@ -706,6 +1217,15 @@ verify_cell_kzg_proof_batch of the commitments, the column index for each cell, 
 lantern_verify_data_column_sidecar_kzg_proofs(sidecar, settings, scratch, out) -> status
 ```
 
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `sidecar` | input | `DataColumnSidecar` |
+| `settings` | input | asm-crypto `KzgSettings` of the trusted setup |
+| `scratch` | scratch | [`Scratch`](helpers.md#type-scratch) |
+| `out` | output | u64: 1 or 0 |
+
 ### Returns
 
 - `LANTERN_OK`: `out` holds 1 or 0; 0 when a commitment, cell or proof does not decode.
@@ -714,18 +1234,643 @@ lantern_verify_data_column_sidecar_kzg_proofs(sidecar, settings, scratch, out) -
 ### Caller must
 
 - Pass a sidecar that verify_data_column_sidecar accepts.
+- `scratch` is S(k) of [Type Scratch](helpers.md#type-scratch), with k under Limits.
 
 ### Function does
 
 - Copies the four inputs into asm-crypto lists at the end of scratch and calls `crypto_kzg_verify_cell_kzg_proof_batch` with the front.
 
+### Function never
+
+- Makes an OS call.
+- Keeps a pointer after it returns.
+
 ### Limits
 
+- Stack of its own: 112 bytes on x86-64 (return address included), 112 bytes on ARM64, 112 bytes on RISC-V.
 - Scratch: `DA_SCRATCH_FIXED` + n * `DA_SCRATCH_PER_BLOB`, with n the commitments of the sidecar.
 
 ### ABI
 
-- Forks: fulu.
+- Role: L1.
+- Symbol: `lantern_<fork>_verify_data_column_sidecar_kzg_proofs` in the object of fulu, with `_` before it on macOS; `lantern_verify_data_column_sidecar_kzg_proofs` inside the object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6); each argument is a pointer, and numbers are u64.
+- Argument order: `sidecar`, `settings`, `scratch`, `out`.
+
+## Function `lantern_ancestor`
+
+get_ancestor of a node, as a node.
+
+### Signature
+
+```
+lantern_ancestor(store, node, slot) -> (status, ancestor)
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `store` | input | [`Store`](#type-store) |
+| `node` | input | u64 in a register: a ForkChoiceNode |
+| `slot` | input | u64 in a register |
+
+### Returns
+
+- `LANTERN_OK`: the second value is the node of get_ancestor(store, node, slot).
+- `LANTERN_INVALID_UNKNOWN_BLOCK`: a parent on the way is not in the store.
+
+### Function never
+
+- Calls another function.
+- Writes memory.
+- Makes an OS call.
+- Keeps a pointer after it returns.
+
+### Limits
+
+- Stack of its own: 8 bytes on x86-64 (return address included), 0 bytes on ARM64, 0 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_ancestor`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- It returns two values: x0, rax or a0, then x1, rdx or a1.
+- Registers it changes, on ARM64: x0, x1, x3 to x6, x16.
+- Argument order: `store`, `node`, `slot`.
+
+## Function `lantern_attestation_score`
+
+get_attestation_score of a node, with the store's balances.
+
+### Signature
+
+```
+lantern_attestation_score(store, node) -> (status, score)
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `store` | input | [`Store`](#type-store) |
+| `node` | input | u64 in a register: a ForkChoiceNode |
+
+### Returns
+
+- `LANTERN_OK`: the second value is the score.
+- `LANTERN_INVALID_OVERFLOW`: the sum leaves the u64 range; it is reported after the sum, as the spec's Gwei does.
+- `LANTERN_INVALID_UNKNOWN_BLOCK`: a block on the way is not in the store.
+
+### Function does
+
+- Reads the balances of the justified checkpoint state from the store.
+
+### Function never
+
+- Calls another function.
+- Writes memory.
+- Makes an OS call.
+- Keeps a pointer after it returns.
+
+### Limits
+
+- Stack of its own: 8 bytes on x86-64 (return address included), 0 bytes on ARM64, 0 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_attestation_score`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- It returns two values: x0, rax or a0, then x1, rdx or a1.
+- Registers it changes, on ARM64: x0 to x13.
+- Argument order: `store`, `node`.
+
+## Function `lantern_checkpoint_block`
+
+get_checkpoint_block of a node, as a node.
+
+### Signature
+
+```
+lantern_checkpoint_block(store, node, epoch) -> (status, checkpoint)
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `store` | input | [`Store`](#type-store) |
+| `node` | input | u64 in a register: a ForkChoiceNode |
+| `epoch` | input | u64 in a register |
+
+### Returns
+
+- `LANTERN_OK`: the second value is the node of get_checkpoint_block(store, node, epoch).
+- `LANTERN_INVALID_OVERFLOW`: the epoch's first slot leaves the u64 range.
+- The statuses of lantern_ancestor.
+
+### Function does
+
+
+### Function never
+
+- Writes memory.
+- Makes an OS call.
+- Keeps a pointer after it returns.
+
+### Limits
+
+- Stack of its own: 8 bytes on x86-64 (return address included), 0 bytes on ARM64, 0 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_checkpoint_block`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- It returns two values: x0, rax or a0, then x1, rdx or a1.
+- Argument order: `store`, `node`, `epoch`.
+
+## Function `lantern_committee_fraction`
+
+calculate_committee_fraction of the justified state, from the store's total balance.
+
+### Signature
+
+```
+lantern_committee_fraction(store, percent) -> (status, fraction)
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `store` | input | [`Store`](#type-store) |
+| `percent` | input | u64 in a register |
+
+### Returns
+
+- `LANTERN_OK`: the second value is the fraction.
+- `LANTERN_INVALID_OVERFLOW`: a product leaves the u64 range.
+
+### Function does
+
+
+### Function never
+
+- Calls another function.
+- Writes memory.
+- Makes an OS call.
+- Keeps a pointer after it returns.
+
+### Limits
+
+- Stack of its own: 8 bytes on x86-64 (return address included), 0 bytes on ARM64, 0 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_committee_fraction`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- It returns two values: x0, rax or a0, then x1, rdx or a1.
+- Registers it changes, on ARM64: x0 to x3.
+- Argument order: `store`, `percent`.
+
+## Function `lantern_filter_tree`
+
+get_filtered_node_tree as one flag per node.
+
+### Signature
+
+```
+lantern_filter_tree(store, scratch) -> (status, flags, justified)
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `store` | input | [`Store`](#type-store) |
+| `scratch` | scratch | [`Scratch`](helpers.md#type-scratch) of S(1) for the node count |
+
+### Returns
+
+- `LANTERN_OK`: the second value is the address of the flags at the end of `scratch`, the third the justified node.
+- `LANTERN_BUFFER_TOO_SMALL`: `scratch` is short.
+- `LANTERN_INVALID_OVERFLOW` or `LANTERN_INVALID_UNKNOWN_BLOCK`: a spec computation failed.
+
+### Caller must
+
+- `scratch` is S(k) of [Type Scratch](helpers.md#type-scratch), with k under Limits.
+
+### Function does
+
+- Sets `F_VIABLE` in the flags of each node in the tree of get_filtered_node_tree.
+- Leaves out an `INVALIDATED` node and its subtree.
+
+### Function never
+
+- Makes an OS call.
+- Keeps a pointer after it returns.
+
+### Limits
+
+- Stack of its own: 112 bytes on x86-64 (return address included), 112 bytes on ARM64, 112 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_filter_tree`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- It returns three values: x0, x1, x2 on ARM64; rax, rdx, rcx on x86-64; a0, a1, a2 on RISC-V.
+- Argument order: `store`, `scratch`.
+
+## Function `lantern_find_node`
+
+The node of a block root in the store.
+
+### Signature
+
+```
+lantern_find_node(store, root) -> node
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `store` | input | [`Store`](#type-store) |
+| `root` | input | Bytes32 |
+
+### Function does
+
+- Returns the node whose root is `root`, or `NODE_NONE`.
+
+### Function never
+
+- Calls another function.
+- Writes memory.
+- Makes an OS call.
+- Keeps a pointer after it returns.
+
+### Limits
+
+- Stack of its own: 8 bytes on x86-64 (return address included), 0 bytes on ARM64, 0 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_find_node`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- Registers it changes, on ARM64: x0, x2 to x11.
+- Argument order: `store`, `root`.
+
+## Function `lantern_head`
+
+get_head of the store, with the weights of lantern_weights.
+
+### Signature
+
+```
+lantern_head(store, scratch) -> (status, head)
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `store` | input | [`Store`](#type-store) |
+| `scratch` | scratch | [`Scratch`](helpers.md#type-scratch) of S(2) for the node count |
+
+### Returns
+
+- `LANTERN_OK`: the second value is the head node.
+- `LANTERN_BUFFER_TOO_SMALL`: `scratch` is short.
+- `LANTERN_INVALID_OVERFLOW`: a weight leaves the u64 range on the way to the head.
+
+### Caller must
+
+- `scratch` is S(k) of [Type Scratch](helpers.md#type-scratch), with k under Limits.
+
+### Function does
+
+- Walks from the justified node to the child of most weight, ties broken by the larger root, as get_head does.
+
+### Function never
+
+- Makes an OS call.
+- Keeps a pointer after it returns.
+
+### Limits
+
+- Stack of its own: 112 bytes on x86-64 (return address included), 112 bytes on ARM64, 112 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_head`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- It returns two values: x0, rax or a0, then x1, rdx or a1.
+- Argument order: `store`, `scratch`.
+
+## Function `lantern_on_tick_per_slot`
+
+on_tick_per_slot of the spec.
+
+### Signature
+
+```
+lantern_on_tick_per_slot(store, time_ms)
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `store` | state | [`Store`](#type-store) |
+| `time_ms` | input | u64 in a register: the time in milliseconds |
+
+### Caller must
+
+- `time_ms` is not before the store's `genesis_time_ms`.
+
+### Function does
+
+- Sets the store's time, resets the proposer boost at a new slot, and at a new epoch's first slot updates the checkpoints from the unrealized ones, as on_tick_per_slot does.
+- Makes every check before it changes `store`, so a call that fails a spec check leaves `store` unchanged ("Invalid calls to handlers must not modify store").
+
+### Function never
+
+- Makes an OS call.
+- Keeps a pointer after it returns.
+
+### Limits
+
+- Stack of its own: 8 bytes on x86-64 (return address included), 0 bytes on ARM64, 0 bytes on RISC-V.
+
+### ABI
+
+- Role: L1.
+- Symbol: `lantern_on_tick_per_slot`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6); each argument is a pointer, and numbers are u64.
+- Argument order: `store`, `time_ms`.
+
+## Function `lantern_u256_lo`
+
+Whether one Uint256 is below another.
+
+### Signature
+
+```
+lantern_u256_lo(a, b) -> flag
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `a` | input | Uint256: 32 bytes, little endian |
+| `b` | input | Uint256: 32 bytes, little endian |
+
+### Function does
+
+- Returns 1 when `a` is below `b`, else 0.
+
+### Function never
+
+- Calls another function.
+- Writes memory.
+- Makes an OS call.
+- Keeps a pointer after it returns.
+
+### Limits
+
+- Stack of its own: 8 bytes on x86-64 (return address included), 0 bytes on ARM64, 0 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_u256_lo`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- Registers it changes, on ARM64: x0, x2 to x4.
+- Argument order: `a`, `b`.
+
+## Function `lantern_update_checkpoints`
+
+update_checkpoints of the spec.
+
+### Signature
+
+```
+lantern_update_checkpoints(store, justified, finalized)
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `store` | state | [`Store`](#type-store) |
+| `justified` | input | `Checkpoint` |
+| `finalized` | input | `Checkpoint` |
+
+### Function does
+
+- Sets the store's justified and finalized checkpoints to these when their epochs are higher, as update_checkpoints does.
+- Makes every check before it changes `store`, so a call that fails a spec check leaves `store` unchanged ("Invalid calls to handlers must not modify store").
+
+### Function never
+
+- Calls another function.
+- Makes an OS call.
+- Keeps a pointer after it returns.
+
+### Limits
+
+- Stack of its own: 8 bytes on x86-64 (return address included), 0 bytes on ARM64, 0 bytes on RISC-V.
+
+### ABI
+
+- Role: L1.
+- Symbol: `lantern_update_checkpoints`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6); each argument is a pointer, and numbers are u64.
+- Registers it changes, on ARM64: x3, x16, x17.
+- Argument order: `store`, `justified`, `finalized`.
+
+## Function `lantern_update_unrealized_checkpoints`
+
+update_unrealized_checkpoints of the spec.
+
+### Signature
+
+```
+lantern_update_unrealized_checkpoints(store, justified, finalized)
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `store` | state | [`Store`](#type-store) |
+| `justified` | input | `Checkpoint` |
+| `finalized` | input | `Checkpoint` |
+
+### Function does
+
+- Sets the store's unrealized justified and finalized checkpoints to these when their epochs are higher, as update_unrealized_checkpoints does.
+- Makes every check before it changes `store`, so a call that fails a spec check leaves `store` unchanged ("Invalid calls to handlers must not modify store").
+
+### Function never
+
+- Calls another function.
+- Makes an OS call.
+- Keeps a pointer after it returns.
+
+### Limits
+
+- Stack of its own: 8 bytes on x86-64 (return address included), 0 bytes on ARM64, 0 bytes on RISC-V.
+
+### ABI
+
+- Role: L1.
+- Symbol: `lantern_update_unrealized_checkpoints`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6); each argument is a pointer, and numbers are u64.
+- Registers it changes, on ARM64: x3, x16, x17.
+- Argument order: `store`, `justified`, `finalized`.
+
+## Function `lantern_validate_attestation`
+
+validate_on_attestation, with the node of the head vote.
+
+### Signature
+
+```
+lantern_validate_attestation(store, data, is_from_block) -> (status, head)
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `store` | input | [`Store`](#type-store) |
+| `data` | input | `AttestationData` |
+| `is_from_block` | input | u64 in a register: 1 or 0 |
+
+### Returns
+
+- `LANTERN_OK`: the attestation passes; the second value is the node of its head vote.
+- `LANTERN_INVALID_ATTESTATION_TARGET`, `LANTERN_INVALID_ATTESTATION_SLOT`, `LANTERN_INVALID_FUTURE_SLOT`, `LANTERN_INVALID_UNKNOWN_BLOCK` or `LANTERN_INVALID_OVERFLOW`: a check of validate_on_attestation fails.
+
+### Function does
+
+- Makes the checks of validate_on_attestation, in its order.
+
+### Function never
+
+- Writes memory but its own stack.
+- Makes an OS call.
+- Keeps a pointer after it returns.
+
+### Limits
+
+- Stack of its own: 96 bytes on x86-64 (return address included), 96 bytes on ARM64, 96 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_validate_attestation`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- It returns two values: x0, rax or a0, then x1, rdx or a1.
+- Argument order: `store`, `data`, `is_from_block`.
+
+## Function `lantern_weight`
+
+get_weight of a node, with the store's balances.
+
+### Signature
+
+```
+lantern_weight(store, node) -> (status, weight)
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `store` | input | [`Store`](#type-store) |
+| `node` | input | u64 in a register: a ForkChoiceNode |
+
+### Returns
+
+- `LANTERN_OK`: the second value is the weight.
+- `LANTERN_INVALID_OVERFLOW`: a sum leaves the u64 range.
+- `LANTERN_INVALID_UNKNOWN_BLOCK`: a block on the way is not in the store.
+
+### Function does
+
+- Adds the proposer score when the proposer boost root is the node or a descendant of it, as get_weight does.
+
+### Function never
+
+- Writes memory but its own stack.
+- Makes an OS call.
+- Keeps a pointer after it returns.
+
+### Limits
+
+- Stack of its own: 96 bytes on x86-64 (return address included), 96 bytes on ARM64, 96 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_weight`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- It returns two values: x0, rax or a0, then x1, rdx or a1.
+- Argument order: `store`, `node`.
+
+## Function `lantern_weights`
+
+get_weight of every node at once.
+
+### Signature
+
+```
+lantern_weights(store, weights, flags) -> status
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `store` | input | [`Store`](#type-store) |
+| `weights` | output | u64 for each node |
+| `flags` | state | u64 for each node |
+
+### Returns
+
+- `LANTERN_OK`: each node's weight is in `weights`.
+- `LANTERN_INVALID_UNKNOWN_BLOCK`, or a failure of get_proposer_score: the proposer boost could not be added.
+
+### Function does
+
+- Each weight is get_weight of its node.
+- A sum past 2^64 - 1 sets `F_OVERFLOW` in the flags of the node and of each node above it.
+
+### Function never
+
+- Makes an OS call.
+- Keeps a pointer after it returns.
+
+### Limits
+
+- Stack of its own: 112 bytes on x86-64 (return address included), 112 bytes on ARM64, 112 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_weights`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- Argument order: `store`, `weights`, `flags`.
 
 ## Type `Store`
 
@@ -736,18 +1881,18 @@ The fork choice store: a value with two parts.
 | Offset | Field | Type | Meaning |
 |---|---|---|---|
 | 0 | `size` | u64 | Bytes of the buffer |
-| 8 | `time_ms` | u64 | |
-| 16 | `genesis_time_ms` | u64 | |
-| 24 | `justified_checkpoint` | Checkpoint | |
-| 64 | `finalized_checkpoint` | Checkpoint | |
-| 104 | `unrealized_justified_checkpoint` | Checkpoint | |
-| 144 | `unrealized_finalized_checkpoint` | Checkpoint | |
-| 184 | `proposer_boost_root` | Root | |
+| 8 | `time_ms` | u64 | The spec's `store.time`, in milliseconds |
+| 16 | `genesis_time_ms` | u64 | The spec's `store.genesis_time`, in milliseconds |
+| 24 | `justified_checkpoint` | Checkpoint | The spec's `store.justified_checkpoint` |
+| 64 | `finalized_checkpoint` | Checkpoint | The spec's `store.finalized_checkpoint` |
+| 104 | `unrealized_justified_checkpoint` | Checkpoint | The spec's `store.unrealized_justified_checkpoint` |
+| 144 | `unrealized_finalized_checkpoint` | Checkpoint | The spec's `store.unrealized_finalized_checkpoint` |
+| 184 | `proposer_boost_root` | Root | The spec's `store.proposer_boost_root` |
 | 216 | `balances_checkpoint` | Checkpoint | The checkpoint whose state gave the balances |
 | 256 | `balances_total` | u64 | get_total_balance of the active unslashed validators of that state |
 | 264 | `blocks` | PartRef | `BlockNode` entries, in the order they were added |
 | 280 | `validators` | PartRef | `StoreValidator` entries, entry i for validator i |
-| 296 | `config` | `Config` | |
+| 296 | `config` | `Config` | The config the store was made with (lantern_get_forkchoice_store) |
 
 ### Rules
 
@@ -755,17 +1900,32 @@ The fork choice store: a value with two parts.
 - A parent node has a lower index than its children.
 - The capacity of `blocks` is its part's bytes over `BlockNode__mem`; the `count` of `validators` is its capacity.
 - `equivocating_indices`, `latest_messages`, `block_timeliness` and `unrealized_justifications` are fields of the entries.
+- `store.blocks` of the spec is the `blocks` part.
+- The caller keeps `store.block_states` and `store.checkpoint_states`, and passes the state a function reads as an argument.
+- The store keeps the fields of those states that fork choice reads again later: the post-state `current_justified_checkpoint` of each block, and the balances of the justified checkpoint state.
+- `store.checkpoint_states[store.justified_checkpoint]` is read through the balances: `balances_checkpoint`, `balances_total` and the `effective_balance` and `flags` of the validator entries.
+
+## Type `ForkChoiceNode`
+
+A node of the spec's fork choice: a u64, the index of its `BlockNode` in the store's `blocks`.
+
+### Rules
+
+- The spec's nodes are always blocks of `store.blocks`, and a root names one node, so the index stands for the root.
+- `NODE_NONE` names no node.
 
 ## Type `BlockNode`
+
+The fields of a block that fork choice reads.
 
 ### Layout
 
 | Offset | Field | Type | Meaning |
 |---|---|---|---|
 | 0 | `root` | Root | hash_tree_root of the block |
-| 32 | `parent_root` | Root | |
-| 64 | `slot` | u64 | |
-| 72 | `proposer_index` | u64 | |
+| 32 | `parent_root` | Root | The block's `parent_root` |
+| 64 | `slot` | u64 | The block's slot |
+| 72 | `proposer_index` | u64 | The block's proposer |
 | 80 | `parent` | u64 | Index of the parent node, or `NODE_NONE` |
 | 88 | `justified_checkpoint` | Checkpoint | `current_justified_checkpoint` of the block's post-state |
 | 128 | `unrealized_justified_checkpoint` | Checkpoint | `unrealized_justifications[root]` |
@@ -777,8 +1937,12 @@ The fork choice store: a value with two parts.
 ### Rules
 
 - `BlockNode__mem` (224) bytes.
+- Optimistic sync: `payload_status` keeps the execution engine's answer for the payload as a `PayloadValidationStatus` (`PAYLOAD_STATUS_*` of bellatrix p2p-interface.md).
+- An `INVALIDATED` node is removed from fork choice ("Consensus engines MUST support removing blocks from fork choice that transition from `NOT_VALIDATED` to `INVALIDATED`"): it and its subtree are not in the tree of get_filtered_node_tree, so get_head never walks to them, and get_weight counts neither the latest messages for them nor a proposer boost of them.
 
 ## Type `StoreValidator`
+
+What fork choice keeps of one validator.
 
 ### Layout
 
@@ -795,6 +1959,8 @@ The fork choice store: a value with two parts.
 
 ## Type `StoreRoom`
 
+The capacities of a store's parts.
+
 ### Layout
 
 | Offset | Field | Type | Meaning |
@@ -803,6 +1969,8 @@ The fork choice store: a value with two parts.
 | 8 | `validators` | u64 | Capacity of `validators` |
 
 ## Type `BlockOptions`
+
+What lantern_on_block takes besides the block: the answers of the outside world.
 
 ### Layout
 
@@ -816,7 +1984,14 @@ The fork choice store: a value with two parts.
 
 ## Type `ColumnSidecars`
 
-A standalone asm-ssz Value of List[DataColumnSidecar, NUMBER_OF_COLUMNS]: size, then a `PartRef` at 8 to the nested sidecar values.
+The column sidecars of a block: a standalone asm-ssz Value of List[DataColumnSidecar, NUMBER_OF_COLUMNS].
+
+### Layout
+
+| Offset | Field | Type | Meaning |
+|---|---|---|---|
+| 0 | `size` | u64 | Bytes of the buffer |
+| 8 | `sidecars` | PartRef | The nested `DataColumnSidecar` values |
 
 ## Test vectors
 
