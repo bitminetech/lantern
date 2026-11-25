@@ -64,6 +64,8 @@
 - [`lantern_seen_superset`](#function-lantern_seen_superset): is_non_strict_superset of the SeenBits of a key, for some bits.
 - [`lantern_verify_signed`](#function-lantern_verify_signed): lantern_verify_with_domain with get_domain of a state.
 - [`lantern_verify_with_domain`](#function-lantern_verify_with_domain): bls.Verify of a public key, the signing root of an object under a domain, and a signature.
+- [`lantern_compressed_len`](#function-lantern_compressed_len): the most bytes of the Snappy frames of a payload, by the spec's formula.
+- [`lantern_next_fork_epoch`](#function-lantern_next_fork_epoch): next_fork_epoch after an epoch, for the ENR.
 
 ### Types
 
@@ -2877,6 +2879,91 @@ lantern_verify_with_domain(domain, type, object, pubkey, signature, scratch) -> 
 - Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
 - It returns two values: x0, rax or a0, then x1, rdx or a1.
 - Argument order: `domain`, `type`, `object`, `pubkey`, `signature`, `scratch`.
+
+## Function `lantern_compressed_len`
+
+The most bytes of the Snappy frames of a payload, by the spec's formula.
+
+### Signature
+
+```
+lantern_compressed_len(n) -> (bytes, overflow)
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `n` | input | u64 in a register |
+
+### Function does
+
+- Returns 32 + n + n // 6.
+- Reports an overflow: ARM64 and x86-64 set the carry flag; RISC-V returns 1 in a1, else 0.
+
+### Function never
+
+- Calls another function.
+- Writes memory.
+- Makes an OS call.
+- Keeps a pointer after it returns.
+
+### Limits
+
+- Stack of its own: 8 bytes on x86-64 (return address included), 0 bytes on ARM64, 0 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_compressed_len`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- `n` is in x0 on ARM64, rax on x86-64 and a0 on RISC-V; the result comes back in the same register.
+- Registers it changes, on ARM64, x86-64, RISC-V: x0, x9, x10; rax, rcx, rdx, r8; a0, a1, t0, t1.
+- Argument order: `n`.
+
+## Function `lantern_next_fork_epoch`
+
+next_fork_epoch after an epoch, for the ENR.
+
+### Signature
+
+```
+lantern_next_fork_epoch(epoch, config) -> epoch
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `epoch` | input | u64 in a register |
+| `config` | input | [`Config`](helpers.md#type-config) |
+
+### Caller must
+
+- The values of `config` are those of [Type Config](helpers.md#type-config); `NUMBER_OF_COLUMNS` is a preset value.
+
+### Function does
+
+- Returns the least fork epoch above `epoch` among the forks from altair up to the object's fork, and from fulu on each `BLOB_SCHEDULE` epoch from `FULU_FORK_EPOCH` on; else `FAR_FUTURE_EPOCH`.
+
+### Function never
+
+- Calls another function.
+- Writes memory.
+- Makes an OS call.
+- Keeps a pointer after it returns.
+
+### Limits
+
+- Stack of its own: 8 bytes on x86-64 (return address included), 0 bytes on ARM64, 0 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_next_fork_epoch`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- Registers it changes, on ARM64, x86-64, RISC-V: x0, x2 to x7; rax, rcx, rdx, r8, r9; a0, a2 to a5, t0, t1.
+- Argument order: `epoch`, `config`.
 
 ## Type `NodeID`
 
