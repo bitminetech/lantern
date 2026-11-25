@@ -507,14 +507,14 @@ mt_s166:
     .ascii "lantern_processing_epoch_transitions_total"
 .set mt_s166_len, 42
 mt_s167:
-    .ascii "Slot processing works that crossed an epoch boundary"
-.set mt_s167_len, 52
+    .ascii "Block imports and slot processing works that crossed an epoch boundary"
+.set mt_s167_len, 70
 mt_s168:
-    .ascii "lantern_processing_epoch_slots_seconds"
-.set mt_s168_len, 38
+    .ascii "lantern_processing_epoch_transition_seconds"
+.set mt_s168_len, 43
 mt_s169:
-    .ascii "Run time of each slot processing work that crossed an epoch boundary"
-.set mt_s169_len, 68
+    .ascii "Run time of each block import or slot processing work that crossed an epoch boundary"
+.set mt_s169_len, 84
 mt_s170:
     .ascii "lantern_processing_gossip_validation_seconds"
 .set mt_s170_len, 44

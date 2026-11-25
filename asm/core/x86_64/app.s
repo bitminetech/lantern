@@ -5647,7 +5647,8 @@ END_FUNCTION app_met_delay
 /*
  * L2: the metrics of a work that ran (app.md, the metrics): its run time since APP_MET_T0 and a
  * result other than LANTERN_OK, by kind; then by kind: gossip by topic and result, the requests
- * served by method, the column times and counts, a published block, an epoch crossed. rdi its
+ * served by method, the column times and counts, a published block, an epoch crossed by a block
+ * import or slot processing. rdi its
  * kind, rsi its data's table entry or 0. rbp the WORK_DONE event, r12 the kind, r13 the data
  * entry, r14 the microseconds, r15 the kind's slot. Locals: L the topic, L+8 the result's index.
  */
@@ -5800,17 +5801,27 @@ LOCAL_FUNCTION app_met_work
     jne     99f
     AM_INC  blocks_proposed
     jmp     99f
-70: cmp     $NODE_WORK_SLOTS, %r12          # SLOTS across an epoch boundary
+70: cmp     $NODE_WORK_SLOTS, %r12          # SLOTS to its arg, IMPORT_BLOCK to its block's slot:
+    jne     71f                             # across an epoch boundary from its state's slot
+    mov     NodeAction_arg(%rbp), %rax
+    jmp     72f
+71: cmp     $NODE_WORK_IMPORT_BLOCK, %r12
     jne     99f
-    mov     APP_MET_S0(%rbx), %rax
-    xor     %edx, %edx
+    test    %r13, %r13
+    jz      99f
+    mov     8(%r13), %rcx
+    cmpq    $108, 16(%rcx)
+    jb      99f
+    mov     8(%rcx), %rax
+    mov     100(%rcx,%rax), %rax
+72: xor     %edx, %edx
     mov     $SLOTS_PER_EPOCH, %ecx
     div     %rcx
     mov     %rax, %rsi
-    mov     NodeAction_arg(%rbp), %rax
+    mov     APP_MET_S0(%rbx), %rax
     xor     %edx, %edx
     div     %rcx
-    cmp     %rsi, %rax
+    cmp     %rax, %rsi
     jbe     99f
     AM_INC  epoch_transitions
     mov     $AppMetrics_epoch_seconds, %edi
@@ -5824,10 +5835,13 @@ END_FUNCTION app_met_work
  * L2: the metrics server (app.md): with --metrics categories, a shell context of APP_MET_CONNS
  * connections that listens on --metrics-address and --metrics-port, and its buffers: rax = 0, or 2
  * after a line on the standard error. Locals: L ShellParams or an Address, L+32 a size or a
- * ListenResult.
+ * ListenResult (LIBP2P_LR_SIZE, 40 bytes).
  */
+.if 32 + LIBP2P_LR_SIZE > 80
+.error "app_met_start: its locals hold no ListenResult"
+.endif
 LOCAL_FUNCTION app_met_start
-    ENTER 64
+    ENTER 80
     call    app_met_us                      # the start, for the uptime
     mov     %rax, APP_MET_START_US(%rbx)
     mov     (APP_MET_TICK + LIBP2P_TICK_UNIX)(%rbx), %rax
@@ -5902,7 +5916,7 @@ LOCAL_FUNCTION app_met_start
     mov     $APP_LOG_INFO, %edi
     call    app_line_end
 8:  xor     %eax, %eax
-    LEAVE 64
+    LEAVE 80
 96: call    app_line_start                  # listen on TCP port <p>: error <n>
     ADDRESS %rdi, app_m_listen
     mov     $app_m_listen_len, %esi
@@ -5917,9 +5931,9 @@ LOCAL_FUNCTION app_met_start
     mov     $APP_LOG_ERROR, %edi
     call    app_line_end
     mov     $2, %eax
-    LEAVE 64
+    LEAVE 80
 97: call    app_no_memory
-    LEAVE 64
+    LEAVE 80
 END_FUNCTION app_met_start
 
 /* L0: rax = the slot of the metrics connection rdi, while open at its generation, or 0. Uses rcx, rdx. */

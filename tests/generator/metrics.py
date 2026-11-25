@@ -306,9 +306,9 @@ NETWORK = [
 
 PROCESSING = _work_families() + [
     F("lantern_processing_epoch_transitions_total", "counter", "processing.epoch", "app", "epoch_transitions", "u64",
-      help="Slot processing works that crossed an epoch boundary"),
-    F("lantern_processing_epoch_slots_seconds", "histogram", "processing.epoch", "app", "epoch_seconds", "hist",
-      bounds="work", help="Run time of each slot processing work that crossed an epoch boundary"),
+      help="Block imports and slot processing works that crossed an epoch boundary"),
+    F("lantern_processing_epoch_transition_seconds", "histogram", "processing.epoch", "app", "epoch_seconds", "hist",
+      bounds="work", help="Run time of each block import or slot processing work that crossed an epoch boundary"),
     F("lantern_processing_gossip_validation_seconds", "histogram", "processing.gossip", "app", "gossip_seconds",
       "array_hist", labels=["topic"], bounds="work", help="Run time of each gossip validation, by topic"),
 ]

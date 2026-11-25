@@ -5683,12 +5683,24 @@ LOCAL_FUNCTION app_met_work
     cbnz    x9, 99f
     AM_INC  blocks_proposed
     b       99f
-70: cmp     x20, #NODE_WORK_SLOTS           /* SLOTS across an epoch boundary */
+    /* SLOTS to its arg and IMPORT_BLOCK to its block's slot: across an epoch boundary from its state's slot */
+70: cmp     x20, #NODE_WORK_SLOTS
+    b.ne    71f
+    ldr     x11, [x23, #NodeAction_arg]
+    b       72f
+71: cmp     x20, #NODE_WORK_IMPORT_BLOCK
     b.ne    99f
-    LDQ     x9, x19, APP_MET_S0
+    cbz     x21, 99f
+    ldr     x9, [x21, #8]
+    ldr     x10, [x9, #16]
+    cmp     x10, #108
+    b.lo    99f
+    ldr     x10, [x9, #8]
+    add     x10, x9, x10
+    ldr     x11, [x10, #100]
+72: LDQ     x9, x19, APP_MET_S0
     mov     x10, #SLOTS_PER_EPOCH
     udiv    x9, x9, x10
-    ldr     x11, [x23, #NodeAction_arg]
     udiv    x11, x11, x10
     cmp     x11, x9
     b.ls    99f
@@ -5704,10 +5716,13 @@ END_FUNCTION app_met_work
  * L2: the metrics server (app.md): with --metrics categories, a shell context of APP_MET_CONNS
  * connections that listens on --metrics-address and --metrics-port, and its buffers: x0 = 0, or 2
  * after a line on the standard error. Locals: L ShellParams or an Address, L+32 a size or a
- * ListenResult.
+ * ListenResult (LIBP2P_LR_SIZE, 40 bytes).
  */
+.if 32 + LIBP2P_LR_SIZE > 80
+.error "app_met_start: its locals hold no ListenResult"
+.endif
 LOCAL_FUNCTION app_met_start
-    ENTER 64
+    ENTER 80
     bl      app_met_us                      /* the start, for the uptime */
     STQ     x0, x19, APP_MET_START_US
     LDQ     x9, x19, APP_MET_TICK + LIBP2P_TICK_UNIX
@@ -5779,7 +5794,7 @@ LOCAL_FUNCTION app_met_start
     mov     x0, #APP_LOG_INFO
     bl      app_line_end
 8:  mov     x0, #0
-    LEAVE 64
+    LEAVE 80
     /* listen on TCP port <p>: error <n> */
 96: bl      app_line_start
     ADDRESS x0, app_m_listen
@@ -5795,7 +5810,7 @@ LOCAL_FUNCTION app_met_start
     mov     x0, #APP_LOG_ERROR
     bl      app_line_end
     mov     x0, #2
-    LEAVE 64
+    LEAVE 80
 97: bl      app_line_start
     ADDRESS x0, app_m_memory
     mov     x1, #app_m_memory_len
@@ -5803,7 +5818,7 @@ LOCAL_FUNCTION app_met_start
     mov     x0, #APP_LOG_ERROR
     bl      app_line_end
     mov     x0, #2
-    LEAVE 64
+    LEAVE 80
 END_FUNCTION app_met_start
 
 /* L0: x0 = the slot of the metrics connection x0, while open at its generation, or 0. Uses x9-x11, x16. */

@@ -5880,12 +5880,23 @@ LOCAL_FUNCTION app_met_work
     bnez    t0, 99f
     AM_INC  blocks_proposed
     j       99f
-70: li      t0, NODE_WORK_SLOTS             # SLOTS across an epoch boundary
+70: li      t0, NODE_WORK_SLOTS             # SLOTS to its arg, IMPORT_BLOCK to its block's slot:
+    bne     s2, t0, 71f                     # across an epoch boundary from its state's slot
+    ld      t2, NodeAction_arg(s5)
+    j       72f
+71: li      t0, NODE_WORK_IMPORT_BLOCK
     bne     s2, t0, 99f
-    LDQ     t0, s1, APP_MET_S0
+    beqz    s3, 99f
+    ld      t0, 8(s3)
+    ld      t1, 16(t0)
+    li      t2, 108
+    bltu    t1, t2, 99f
+    ld      t1, 8(t0)
+    add     t1, t0, t1
+    ld      t2, 100(t1)
+72: LDQ     t0, s1, APP_MET_S0
     li      t1, SLOTS_PER_EPOCH
     divu    t0, t0, t1
-    ld      t2, NodeAction_arg(s5)
     divu    t2, t2, t1
     bleu    t2, t0, 99f
     AM_INC  epoch_transitions
@@ -5900,10 +5911,13 @@ END_FUNCTION app_met_work
  * L2: the metrics server (app.md): with --metrics categories, a shell context of APP_MET_CONNS
  * connections that listens on --metrics-address and --metrics-port, and its buffers: a0 = 0, or 2
  * after a line on the standard error. Locals: L ShellParams or an Address, L+32 a size or a
- * ListenResult.
+ * ListenResult (LIBP2P_LR_SIZE, 40 bytes).
  */
+.if 32 + LIBP2P_LR_SIZE > 80
+.error "app_met_start: its locals hold no ListenResult"
+.endif
 LOCAL_FUNCTION app_met_start
-    ENTER 64
+    ENTER 80
     call    app_met_us                      # the start, for the uptime
     STQ     a0, s1, APP_MET_START_US
     LDQ     t0, s1, APP_MET_TICK + LIBP2P_TICK_UNIX
@@ -5981,7 +5995,7 @@ LOCAL_FUNCTION app_met_start
     li      a0, APP_LOG_INFO
     call    app_line_end
 8:  li      a0, 0
-    LEAVE 64
+    LEAVE 80
 96: call    app_line_start                  # listen on TCP port <p>: error <n>
     lla     a0, app_m_listen
     li      a1, app_m_listen_len
@@ -5996,9 +6010,9 @@ LOCAL_FUNCTION app_met_start
     li      a0, APP_LOG_ERROR
     call    app_line_end
     li      a0, 2
-    LEAVE 64
+    LEAVE 80
 97: call    app_no_memory
-    LEAVE 64
+    LEAVE 80
 END_FUNCTION app_met_start
 
 # L0: a0 = the slot of the metrics connection a0, while open at its generation, or 0. Uses t0-t2, a7.

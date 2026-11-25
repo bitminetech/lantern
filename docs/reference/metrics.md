@@ -164,8 +164,8 @@
 | `lantern_processing_history_work_failures_total` | `history` | counter | `AppMetrics.work_failures`, by `work`, from element 27 | Node works of the history stage whose result was not LANTERN_OK, by work kind |
 | `lantern_processing_validator_work_seconds` | `validator` | histogram | `AppMetrics.work_seconds`, by `work`, from element 30, work bounds | Run time of each node work of the validator stage, by work kind |
 | `lantern_processing_validator_work_failures_total` | `validator` | counter | `AppMetrics.work_failures`, by `work`, from element 30 | Node works of the validator stage whose result was not LANTERN_OK, by work kind |
-| `lantern_processing_epoch_transitions_total` | `epoch` | counter | `AppMetrics.epoch_transitions` | Slot processing works that crossed an epoch boundary |
-| `lantern_processing_epoch_slots_seconds` | `epoch` | histogram | `AppMetrics.epoch_seconds`, work bounds | Run time of each slot processing work that crossed an epoch boundary |
+| `lantern_processing_epoch_transitions_total` | `epoch` | counter | `AppMetrics.epoch_transitions` | Block imports and slot processing works that crossed an epoch boundary |
+| `lantern_processing_epoch_transition_seconds` | `epoch` | histogram | `AppMetrics.epoch_seconds`, work bounds | Run time of each block import or slot processing work that crossed an epoch boundary |
 | `lantern_processing_gossip_validation_seconds` | `gossip` | histogram | `AppMetrics.gossip_seconds`, by `topic`, work bounds | Run time of each gossip validation, by topic |
 
 ## The `node` category
@@ -569,7 +569,7 @@ The counters and run time histograms of the metrics that the app keeps (app.md, 
 | 1184 | `served` | u64 x 16 | SERVE works by `method` |
 | 1312 | `work_seconds` | [`Histogram`](#type-histogram) x 44 | Run time of each work, by the kind's slot (`METRIC_WORK_SLOTS`), work bounds |
 | 6240 | `work_failures` | u64 x 44 | Works of a result other than LANTERN_OK, by slot |
-| 6592 | `epoch_transitions` | u64 | SLOTS works to a later epoch than their state's |
+| 6592 | `epoch_transitions` | u64 | SLOTS works to, and IMPORT_BLOCK works of a block in, a later epoch than their state's slot |
 | 6600 | `epoch_seconds` | [`Histogram`](#type-histogram) | Their run times, work bounds |
 | 6712 | `gossip_seconds` | [`Histogram`](#type-histogram) x 14 | Run times of GOSSIP works by `topic`, work bounds |
 | 8280 | `step_seconds` | [`Histogram`](#type-histogram) | Run time of each lantern_node_step, work bounds |
