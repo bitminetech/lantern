@@ -14,6 +14,12 @@
 - [`lantern_db_drop_sidecars`](#function-lantern_db_drop_sidecars): drops the sidecars of the slots below a slot.
 - [`lantern_db_state_diff`](#function-lantern_db_state_diff): the diff of a state's SSZ bytes against a full state's.
 - [`lantern_db_state_patch`](#function-lantern_db_state_patch): a state's SSZ bytes from a full state's and a diff.
+- [`lantern_db_differ`](#function-lantern_db_differ): whether a word of a state differs from the start of the patch.
+- [`lantern_db_find`](#function-lantern_db_find): the entry of a block root in a Db.
+- [`lantern_db_insert`](#function-lantern_db_insert): puts a block root in the root table of a Db.
+- [`lantern_db_layout`](#function-lantern_db_layout): lays out the parts of a Db for a room.
+- [`lantern_db_rehash`](#function-lantern_db_rehash): builds the root table of a Db again from its entries.
+- [`lantern_db_word`](#function-lantern_db_word): the u64 of up to 8 bytes, zero above them.
 
 ### Types
 
@@ -21,33 +27,14 @@
 - [`DbRoom`](#type-dbroom): the capacities of a `Db`.
 - [`DbSlot`](#type-dbslot): what the history holds for one slot.
 - [`DbRecord`](#type-dbrecord): the header of a record in a segment.
+- [`DbSegment`](#type-dbsegment): a file of the history: the records of `DB_SEGMENT_SLOTS` slots of one kind.
+- [`DbStateDiff`](#type-dbstatediff): a diff that turns the SSZ bytes of the full state of a segment, `base`, into those of another state; lantern's own format of little endian u64s.
 
 ## Spec
 
-- Document: this file. The record format and the index are lantern's own; no outside specification defines them.
-- `p2p-interface.md` of phase0 and fulu of [consensus-specs v1.7.0-beta.4](https://github.com/ethereum/consensus-specs/tree/aa16bb4c156184e9548a997d53efaf2a228a6304/specs): the node serves blocks of `MIN_EPOCHS_FOR_BLOCK_REQUESTS` epochs and column sidecars of `MIN_EPOCHS_FOR_DATA_COLUMN_SIDECARS_REQUESTS` epochs, which the history holds.
+- Document: lantern's own record format and index of the history, in this file.
+- Section: the history that `p2p-interface.md` of phase0 and fulu of [consensus-specs v1.7.0-beta.4](https://github.com/ethereum/consensus-specs/tree/aa16bb4c156184e9548a997d53efaf2a228a6304/specs) asks the node to serve: blocks of `MIN_EPOCHS_FOR_BLOCK_REQUESTS` epochs and column sidecars of `MIN_EPOCHS_FOR_DATA_COLUMN_SIDECARS_REQUESTS` epochs.
 - ARCHITECTURE.md section 2: the index and the record format are core; the files are the shell's.
-
-## Common rules
-
-- As in [helpers.md](helpers.md#common-rules).
-- The history: the finalized blocks of the canonical chain, their blob or column sidecars, and with an archive some of their post-states, in segment files. A segment holds the records of `DB_SEGMENT_SLOTS` slots: segment `n` the slots from `n` * `DB_SEGMENT_SLOTS`. Blocks, sidecars and states are in separate segments, so each can be dropped on its own.
-- A record is a `DbRecord` header, then its SSZ bytes, then zero bytes up to a multiple of 8. A record starts at a multiple of 8 of its segment.
-- In a block segment the records are blocks, at most one for each slot, in any slot order: a backfill writes older blocks after newer ones. In a sidecar segment they are blob or column sidecars; those of one slot are together, in ascending index order.
-- In a state segment the records are post-states of the slots' blocks, at most one for each slot: the first, at offset 0, a `DB_STATE` of the SSZ bytes of a `BeaconState`; each later one a `DB_STATE_DIFF` of a diff against the first (the state diffs, below). So a state needs the segment's first record and its own.
-- A `Db` indexes the history of the slots from `first_slot` below `end_slot`: for each slot the offsets of its records in their segments, and for each block its root. A record's segment follows from its slot, so the index keeps offsets only. Every u64 argument is passed by its address, as ARCHITECTURE.md section 6 asks.
-- The functions read no file and make no OS call. The caller reads the segments and passes their bytes: each block segment before the sidecar segments, since a sidecar needs its slot's block.
-- Every function is in the common object of the core (asm/core/<ISA>/db.s), and its symbol is its name.
-
-## State diffs
-
-- A diff turns the SSZ bytes of the full state of a segment, `base`, into those of another state; its bytes, in lantern's own format of little endian u64s:
-  - At 0, `length`: the bytes of the state.
-  - From 8, the runs, each an `offset` (u64), a `count` (u64), `count` bytes, and zero bytes to a multiple of 8.
-- The patch: the first min(`base`'s bytes, `length`) bytes of `base`, zero bytes after them to `length`, then the bytes of each run at its `offset`.
-- A valid diff: each run's `count` is above 0, its `offset` is a multiple of 8 and at least the end (`offset` + `count`) of the run before it, it ends at `length` or below, and its padding bytes are zero; the last run ends the diff's bytes.
-- The runs lantern_db_state_diff writes: the words are the 8 byte pieces of the state's bytes from 0, the last one cut at `length`; a word differs when its bytes are not those of the patch's start (the first part of `base`, then zero bytes) at the same place. A run covers a group of differing words in which neighbours have at most 2 equal words between them; 3 or more equal words end a group, as another run's 16 bytes of header then cost less than those words. Its `offset` is its first word's, its end its last word's.
-- So a diff holds at most 24 + `length` rounded up to a multiple of 8 bytes: a run's header costs 16 bytes, and a second run leaves out 24 bytes or more.
 
 ## Function `lantern_db_size`
 
@@ -70,6 +57,23 @@ lantern_db_size(room, size) -> status
 
 - `LANTERN_OK`: `size` holds `DB_FIXED` plus the bytes of each part.
 - `LANTERN_INVALID_OVERFLOW`: the size is 2^64 or more, or `roots` is not a power of two.
+
+### Function never
+
+- Makes an OS call.
+- Keeps a pointer after it returns.
+- Reads a file.
+
+### Limits
+
+- Stack of its own: 8 bytes on x86-64 (return address included), 0 bytes on ARM64, 0 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_db_size`, with `_` before it on macOS.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- Argument order: `room`, `size`.
 
 ## Function `lantern_db_init`
 
@@ -94,6 +98,23 @@ lantern_db_init(room, slot, db) -> status
 - `LANTERN_OK`: `db` is written.
 - `LANTERN_BUFFER_TOO_SMALL`: `db` is smaller than lantern_db_size of `room`.
 - `LANTERN_INVALID_OVERFLOW`: as lantern_db_size.
+
+### Function never
+
+- Makes an OS call.
+- Keeps a pointer after it returns.
+- Reads a file.
+
+### Limits
+
+- Stack of its own: 112 bytes on x86-64 (return address included), 112 bytes on ARM64, 112 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_db_init`, with `_` before it on macOS.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- Argument order: `room`, `slot`, `db`.
 
 ## Function `lantern_db_copy`
 
@@ -122,6 +143,23 @@ lantern_db_copy(db, room, out) -> status
 ### Function does
 
 - Places each root again in the table of the new capacity.
+
+### Function never
+
+- Makes an OS call.
+- Keeps a pointer after it returns.
+- Reads a file.
+
+### Limits
+
+- Stack of its own: 112 bytes on x86-64 (return address included), 112 bytes on ARM64, 112 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_db_copy`, with `_` before it on macOS.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- Argument order: `db`, `room`, `out`.
 
 ## Function `lantern_db_add`
 
@@ -156,6 +194,23 @@ lantern_db_add(db, record, offset) -> status
 - So the sidecar records of a slot are of one size, and the record of index i lies at `sidecars` - 1 + that size times the count of the slot's indices below i: a node finds any sidecar without reading the segment.
 - `length` is at most `DB_RECORD_MAX` for each kind.
 
+### Function never
+
+- Makes an OS call.
+- Keeps a pointer after it returns.
+- Reads a file.
+
+### Limits
+
+- Stack of its own: 96 bytes on x86-64 (return address included), 96 bytes on ARM64, 96 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_db_add`, with `_` before it on macOS.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- Argument order: `db`, `record`, `offset`.
+
 ## Function `lantern_db_scan`
 
 Adds each whole record of a segment's bytes to the index, from the start, until one does not fit or breaks a rule.
@@ -181,10 +236,31 @@ lantern_db_scan(db, segment, segment_kind, bytes, valid) -> status
 - `LANTERN_OK`: `valid` holds the end of the last record added, 0 with none.
 - `LANTERN_BUFFER_TOO_SMALL`: as lantern_db_add, for the record at `valid`; the records before it are added.
 
+### Caller must
+
+- The caller reads the segments and passes their bytes: each block segment before the sidecar segments, since a sidecar needs its slot's block.
+
 ### Function does
 
 - A record fits when its header and its size are inside `bytes`, `length` is at most `DB_RECORD_MAX`, its slot is in the segment's slots, and its kind is `DB_BLOCK` in a block segment, a sidecar kind in a sidecar segment, and a state kind in a state segment. A record that does not fit, or that lantern_db_add rejects, ends the scan.
 - Calls lantern_db_add for each record that fits.
+
+### Function never
+
+- Makes an OS call.
+- Keeps a pointer after it returns.
+- Reads a file.
+
+### Limits
+
+- Stack of its own: 112 bytes on x86-64 (return address included), 112 bytes on ARM64, 112 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_db_scan`, with `_` before it on macOS.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- Argument order: `db`, `segment`, `segment_kind`, `bytes`, `valid`.
 
 ## Function `lantern_db_find_root`
 
@@ -207,6 +283,23 @@ lantern_db_find_root(db, root, slot) -> status
 ### Returns
 
 - `LANTERN_OK`: `slot` is written.
+
+### Function never
+
+- Makes an OS call.
+- Keeps a pointer after it returns.
+- Reads a file.
+
+### Limits
+
+- Stack of its own: 32 bytes on x86-64 (return address included), 16 bytes on ARM64, 32 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_db_find_root`, with `_` before it on macOS.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- Argument order: `db`, `root`, `slot`.
 
 ## Function `lantern_db_prune`
 
@@ -233,6 +326,23 @@ lantern_db_prune(db, slot) -> status
 
 - Drop whole segments only: a slot that is a multiple of `DB_SEGMENT_SLOTS`, so no kept slot has records in a dropped file.
 
+### Function never
+
+- Makes an OS call.
+- Keeps a pointer after it returns.
+- Reads a file.
+
+### Limits
+
+- Stack of its own: 96 bytes on x86-64 (return address included), 96 bytes on ARM64, 96 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_db_prune`, with `_` before it on macOS.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- Argument order: `db`, `slot`.
+
 ## Function `lantern_db_drop_sidecars`
 
 Drops the sidecars of the slots below a slot from the index, as a node does once they leave their serve range (deneb and fulu `p2p-interface.md`: the node serves sidecars of `MIN_EPOCHS_FOR_BLOB_SIDECARS_REQUESTS` and `MIN_EPOCHS_FOR_DATA_COLUMN_SIDECARS_REQUESTS` epochs).
@@ -257,6 +367,23 @@ lantern_db_drop_sidecars(db, slot) -> status
 ### Caller must
 
 - Drop whole sidecar segments only: a slot that is a multiple of `DB_SEGMENT_SLOTS`.
+
+### Function never
+
+- Makes an OS call.
+- Keeps a pointer after it returns.
+- Reads a file.
+
+### Limits
+
+- Stack of its own: 96 bytes on x86-64 (return address included), 96 bytes on ARM64, 96 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_db_drop_sidecars`, with `_` before it on macOS.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- Argument order: `db`, `slot`.
 
 ## Function `lantern_db_state_diff`
 
@@ -285,6 +412,23 @@ lantern_db_state_diff(base, state, out, size) -> status
 ### Function does
 
 - The runs of the state diffs' rules, in offset order.
+
+### Function never
+
+- Makes an OS call.
+- Keeps a pointer after it returns.
+- Reads a file.
+
+### Limits
+
+- Stack of its own: 128 bytes on x86-64 (return address included), 128 bytes on ARM64, 128 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_db_state_diff`, with `_` before it on macOS.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- Argument order: `base`, `state`, `out`, `size`.
 
 ## Function `lantern_db_state_patch`
 
@@ -315,6 +459,269 @@ lantern_db_state_patch(base, diff, out, size) -> status
 
 - The patch of the state diffs' rules.
 
+### Function never
+
+- Makes an OS call.
+- Keeps a pointer after it returns.
+- Reads a file.
+
+### Limits
+
+- Stack of its own: 96 bytes on x86-64 (return address included), 96 bytes on ARM64, 96 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_db_state_patch`, with `_` before it on macOS.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- Argument order: `base`, `diff`, `out`, `size`.
+
+## Function `lantern_db_differ`
+
+Whether a word of a state differs from the start of the patch.
+
+### Signature
+
+```
+lantern_db_differ(word) -> flag
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `word` | input | u64 in a register: the word's index |
+
+### Function does
+
+- Returns 1 when word `word` of the state differs from the same word of the patch's start (the first part of `base`, then zero bytes), else 0 ([`DbStateDiff`](#type-dbstatediff)).
+
+### Function never
+
+- Writes memory but its own stack.
+- Makes an OS call.
+- Keeps a pointer after it returns.
+- Reads a file.
+
+### Limits
+
+- Stack of its own: 16 bytes on x86-64 (return address included), 16 bytes on ARM64, 16 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_db_differ`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- On ARM64 `word` is in x1; on x86-64 in rdi; on RISC-V in a0.
+- Registers it reads, on ARM64, x86-64, RISC-V: the base's bytes in x19, rbx, s1; min(the base's count, the state's) in x20, rbp, s2; the state's bytes in x21, r12, s3; the state's count in x22, r13, s4.
+- Registers it changes, on ARM64, x86-64, RISC-V: x0 to x2, x9 to x14; rax, rcx, rdx, rsi, rdi, r8 to r11; a0, a1, t0 to t6.
+- Argument order: `word`.
+
+## Function `lantern_db_find`
+
+The entry of a block root in a Db.
+
+### Signature
+
+```
+lantern_db_find(db, root) -> index
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `db` | input | [`Db`](#type-db) |
+| `root` | input | Bytes32 |
+
+### Function does
+
+- Returns the entry index (slot - `first_slot`) of the block of `root`, or 2^64 - 1.
+
+### Function never
+
+- Calls another function.
+- Writes memory.
+- Makes an OS call.
+- Keeps a pointer after it returns.
+- Reads a file.
+
+### Limits
+
+- Stack of its own: 8 bytes on x86-64 (return address included), 0 bytes on ARM64, 0 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_db_find`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- Registers it changes, on ARM64, x86-64, RISC-V: x0, x2, x3, x9 to x17; rax, rcx, rdx, rdi, r8 to r11, xmm0 to xmm2; a0, a2, a6, a7, t0 to t6.
+- Argument order: `db`, `root`.
+
+## Function `lantern_db_insert`
+
+Puts a block root in the root table of a Db.
+
+### Signature
+
+```
+lantern_db_insert(db, root, value)
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `db` | state | [`Db`](#type-db) |
+| `root` | input | Bytes32 |
+| `value` | input | u64 in a register: the slot - `first_slot` + 1 of the block |
+
+### Caller must
+
+- The root table has a free entry.
+
+### Function does
+
+- Writes `value` at the first free entry from the u64 of the root's first 8 bytes, modulo the table's capacity, in order and around.
+
+### Function never
+
+- Calls another function.
+- Makes an OS call.
+- Keeps a pointer after it returns.
+- Reads a file.
+
+### Limits
+
+- Stack of its own: 8 bytes on x86-64 (return address included), 0 bytes on ARM64, 0 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_db_insert`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- Registers it changes, on ARM64, x86-64, RISC-V: x9 to x12; rax, r8, r9; t0 to t3.
+- Argument order: `db`, `root`, `value`.
+
+## Function `lantern_db_layout`
+
+Lays out the parts of a Db for a room.
+
+### Signature
+
+```
+lantern_db_layout(db, room)
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `db` | output | [`Db`](#type-db) |
+| `room` | input | [`DbRoom`](#type-dbroom) |
+
+### Function does
+
+- Places `slots` at `DB_FIXED`, then `roots`; each part's count is its capacity.
+
+### Function never
+
+- Calls another function.
+- Makes an OS call.
+- Keeps a pointer after it returns.
+- Reads a file.
+
+### Limits
+
+- Stack of its own: 8 bytes on x86-64 (return address included), 0 bytes on ARM64, 0 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_db_layout`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- Registers it changes, on ARM64, x86-64, RISC-V: x9 to x11; rax; t0, t1.
+- Argument order: `db`, `room`.
+
+## Function `lantern_db_rehash`
+
+Builds the root table of a Db again from its entries.
+
+### Signature
+
+```
+lantern_db_rehash(db)
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `db` | state | [`Db`](#type-db) |
+
+### Function does
+
+- Zeros the root table, then puts in the root of each block of `slots` (lantern_db_insert), and sets `blocks` to their count.
+
+### Function never
+
+- Makes an OS call.
+- Keeps a pointer after it returns.
+- Reads a file.
+
+### Limits
+
+- Stack of its own: 96 bytes on x86-64 (return address included), 96 bytes on ARM64, 96 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_db_rehash`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- Argument order: `db`.
+
+## Function `lantern_db_word`
+
+The u64 of up to 8 bytes, zero above them.
+
+### Signature
+
+```
+lantern_db_word(bytes, count) -> word
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `bytes` | input | the bytes |
+| `count` | input | u64 in a register, a signed count: 8 or more for a whole word, 0 or less for none |
+
+### Function does
+
+- Returns the little endian u64 of the first min(`count`, 8) bytes, zero above them.
+
+### Function never
+
+- Calls another function.
+- Writes memory.
+- Makes an OS call.
+- Keeps a pointer after it returns.
+- Reads a file.
+
+### Limits
+
+- Stack of its own: 8 bytes on x86-64 (return address included), 0 bytes on ARM64, 0 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_db_word`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- On ARM64 `bytes` and `count` are in x1 and x2; on x86-64 in rdi and rsi; on RISC-V in a0 and a1.
+- Registers it changes, on ARM64, x86-64, RISC-V: x0, x9 to x11; rax, rcx, rdx, r8; a0, t0 to t3.
+- Argument order: `bytes`, `count`.
+
 ## Type `Db`
 
 The index of the history: a value with parts.
@@ -333,9 +740,13 @@ The index of the history: a value with parts.
 ### Rules
 
 - `DB_FIXED` (64) bytes of fixed fields; the parts follow in the order slots, roots.
+- It indexes the history of the slots from `first_slot` below `end_slot`: for each slot the offsets of its records in their segments ([`DbSegment`](#type-dbsegment)), and for each block its root.
+- A record's segment follows from its slot, so the index keeps offsets only.
 - A block's root sits at the first free entry from the u64 of its first 8 bytes modulo the table's capacity, in order and around.
 
 ## Type `DbRoom`
+
+The capacities of the parts of a `Db`.
 
 ### Layout
 
@@ -346,6 +757,8 @@ The index of the history: a value with parts.
 
 ## Type `DbSlot`
 
+The records of one slot of the history.
+
 ### Layout
 
 | Offset | Field | Type | Meaning |
@@ -353,7 +766,7 @@ The index of the history: a value with parts.
 | 0 | `root` | Root | Its block's root, or zero |
 | 32 | `block` | u64 | 0, or the offset + 1 of its block record in its block segment |
 | 40 | `sidecars` | u64 | 0, or the offset + 1 of its first sidecar record in its sidecar segment |
-| 48 | `sidecar_count` | u64 | |
+| 48 | `sidecar_count` | u64 | The sidecars of the slot |
 | 56 | `sidecar_end` | u64 | The offset after its last sidecar record |
 | 64 | `sidecar_last` | u64 | The index of its last sidecar |
 | 72 | `indices` | 16 bytes | The indices of its sidecars: bit i % 8 of byte i / 8 for index i |
@@ -377,13 +790,50 @@ The header of a record.
 | 24 | `root` | Root | The block's root |
 | 56 | `bytes` | 24 bytes | A ByteList header of the SSZ bytes after the record's header: `size` 24 + `length`, `offset` 24 |
 | 72 | `length` | u64 | The count of `bytes`: the SSZ bytes after the header |
-| 80 | | | Size |
 
 ### Rules
 
-- A record's size: 80 + `length`, rounded up to a multiple of 8.
+- A record is this header, then its SSZ bytes, then zero bytes up to a multiple of 8: 80 + `length` bytes, rounded up.
+- A record starts at a multiple of 8 of its segment.
 - The ByteList at 56 is valid in place, so the record's bytes in a mapped segment need no copy: lantern_db_add refuses another `size` or `offset`.
 - `DB_RECORD_MAX`: 2^32 bytes of `length`.
+
+## Type `DbSegment`
+
+A file of the history: the records of `DB_SEGMENT_SLOTS` slots of one kind.
+
+### Layout
+
+| Offset | Field | Type | Meaning |
+|---|---|---|---|
+| 0 | `records` | [`DbRecord`](#type-dbrecord) records | Each record at a multiple of 8, back to back |
+
+### Rules
+
+- The history holds the finalized blocks of the canonical chain, their blob or column sidecars, and with an archive some of their post-states.
+- Segment `n` holds the records of the slots from `n` * `DB_SEGMENT_SLOTS`.
+- Blocks, sidecars and states are in separate segments, so each can be dropped on its own.
+- In a block segment the records are blocks, at most one for each slot, in any slot order: a backfill writes older blocks after newer ones.
+- In a sidecar segment they are blob or column sidecars; those of one slot are together, in ascending index order.
+- In a state segment they are post-states of the slots' blocks, at most one for each slot: the first, at offset 0, a `DB_STATE` of the SSZ bytes of a `BeaconState`; each later one a `DB_STATE_DIFF` of a [`DbStateDiff`](#type-dbstatediff) against the first. So a state needs the segment's first record and its own.
+
+## Type `DbStateDiff`
+
+A diff that turns the SSZ bytes of the full state of a segment, `base`, into those of another state; lantern's own format of little endian u64s.
+
+### Layout
+
+| Offset | Field | Type | Meaning |
+|---|---|---|---|
+| 0 | `length` | u64 | The bytes of the state |
+| 8 | `runs` | runs | Each an `offset` (u64), a `count` (u64), `count` bytes, and zero bytes to a multiple of 8 |
+
+### Rules
+
+- The patch: the first min(`base`'s bytes, `length`) bytes of `base`, zero bytes after them to `length`, then the bytes of each run at its `offset`.
+- A valid diff: each run's `count` is above 0, its `offset` is a multiple of 8 and at least the end (`offset` + `count`) of the run before it, it ends at `length` or below, and its padding bytes are zero; the last run ends the diff's bytes.
+- The runs lantern_db_state_diff writes: the words are the 8 byte pieces of the state's bytes from 0, the last one cut at `length`; a word differs when its bytes are not those of the patch's start (the first part of `base`, then zero bytes) at the same place. A run covers a group of differing words in which neighbours have at most 2 equal words between them; 3 or more equal words end a group, as another run's 16 bytes of header then cost less than those words. Its `offset` is its first word's, its end its last word's.
+- So a diff holds at most 24 + `length` rounded up to a multiple of 8 bytes: a run's header costs 16 bytes, and a second run leaves out 24 bytes or more.
 
 ## Test vectors
 
