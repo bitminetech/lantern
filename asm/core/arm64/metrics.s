@@ -396,15 +396,21 @@ END_FUNCTION lantern_mt_pair
 .endm
 
 /*
- * lantern_metrics_text(categories, sources, out) -> status
+ * lantern_metrics_text(categories, state, node, counters, app, process, gossip, profile, out) -> status
  * The Prometheus text of the metrics of the categories. x19 metrics_texts, x20 the cursor, x21 the
  * end of the room, x22 1 when the room ran out, x23 a table entry, x24 the entry's value, x25 its
  * kind, x26 a gossip topic, x27 the gossip topics left, x28 the element. Locals: L the categories,
- * L+8 the sources, L+16 out, L+24 the ticks per second, L+32 a LabelState (32 bytes), L+64 the
- * elements, L+72 the second label's value count.
+ * L+8 the sources' table, L+16 out, L+24 the ticks per second, L+32 a LabelState (32 bytes), L+64 the
+ * elements, L+72 the second label's value count, L+80 the sources' table: MetricsSources (56 bytes).
  */
 FUNCTION lantern_metrics_text
-    ENTER 80
+    ENTER 144
+    stp     x1, x2, [sp, #(L + 80 + MetricsSources_state)]     /* the sources, in a table of its own */
+    stp     x3, x4, [sp, #(L + 80 + MetricsSources_counters)]
+    stp     x5, x6, [sp, #(L + 80 + MetricsSources_process)]
+    str     x7, [sp, #(L + 80 + MetricsSources_profile)]
+    ldr     x2, [sp, #(96 + 144)]           /* the ninth argument: out */
+    add     x1, sp, #(L + 80)
     ldr     x0, [x0]
     stp     x0, x1, [sp, #L]
     str     x2, [sp, #(L + 16)]
@@ -646,9 +652,9 @@ FUNCTION lantern_metrics_text
     sub     x10, x20, x10
     str     x10, [x9, #16]
     mov     x0, #LANTERN_OK
-    LEAVE 80
+    LEAVE 144
 91: mov     x0, #LANTERN_BUFFER_TOO_SMALL
-    LEAVE 80
+    LEAVE 144
 END_FUNCTION lantern_metrics_text
 
 .set MN_CHAIN, 2 * SLOTS_PER_EPOCH         /* the head's chain from the previous epoch on: at most two epochs of blocks */
@@ -840,16 +846,19 @@ FUNCTION lantern_metrics_node
 END_FUNCTION lantern_metrics_node
 
 /*
- * lantern_metrics_answer(bytes, categories, sources, out) -> status
+ * lantern_metrics_answer(bytes, categories, state, node, counters, app, process, gossip, profile, out) -> status
  * The answer to the first request of a metrics connection's bytes. x19 metrics_texts, x20 the
  * cursor, x21 the end of the room, x22 1 when the room ran out, x23 out, x24 the status. Locals: L
- * bytes, L+8 categories, L+16 sources, L+24 HttpLimits.
+ * bytes, L+8 categories, L+24 HttpLimits, L+48 the sources (as MetricsSources, 56 bytes).
  */
 FUNCTION lantern_metrics_answer
-    ENTER 48
+    ENTER 112
     stp     x0, x1, [sp, #L]
-    str     x2, [sp, #(L + 16)]
-    mov     x23, x3
+    stp     x2, x3, [sp, #(L + 48 + MetricsSources_state)]     /* the sources */
+    stp     x4, x5, [sp, #(L + 48 + MetricsSources_counters)]
+    stp     x6, x7, [sp, #(L + 48 + MetricsSources_process)]
+    ldp     x9, x23, [sp, #(96 + 112)]      /* the ninth and tenth arguments: profile, out */
+    str     x9, [sp, #(L + 48 + MetricsSources_profile)]
     ADDRESS x19, metrics_texts
     ldr     x9, [x0, #16]                   /* room: the HttpRequest of the bytes, and the head */
     add     x9, x9, #(24 + HTTP_REQUEST_FIXED + 64 + METRICS_HEAD_ROOM)
@@ -886,9 +895,16 @@ FUNCTION lantern_metrics_answer
     ldr     x9, [x23]                       /* 200: the text after METRICS_HEAD_ROOM bytes */
     sub     x9, x9, #METRICS_HEAD_ROOM
     str     x9, [x23, #METRICS_HEAD_ROOM]
-    ldp     x0, x1, [sp, #(L + 8)]
-    add     x2, x23, #METRICS_HEAD_ROOM
+    ldr     x0, [sp, #(L + 8)]
+    ldp     x1, x2, [sp, #(L + 48 + MetricsSources_state)]
+    ldp     x3, x4, [sp, #(L + 48 + MetricsSources_counters)]
+    ldp     x5, x6, [sp, #(L + 48 + MetricsSources_process)]
+    ldr     x7, [sp, #(L + 48 + MetricsSources_profile)]
+    add     x9, x23, #METRICS_HEAD_ROOM
+    sub     sp, sp, #16                     /* the ninth argument: out */
+    str     x9, [sp]
     bl      lantern_metrics_text
+    add     sp, sp, #16
     cbnz    x0, 98f
     /* the head before it; then the text moves up to the head */
     add     x20, x23, #24
@@ -931,9 +947,9 @@ FUNCTION lantern_metrics_answer
     sub     x9, x20, x9
     str     x9, [x23, #16]
     mov     x0, #LANTERN_OK
-    LEAVE 48
+    LEAVE 112
 97: mov     x0, #LANTERN_HTTP_MORE
-    LEAVE 48
+    LEAVE 112
 98: mov     x0, #LANTERN_BUFFER_TOO_SMALL
-    LEAVE 48
+    LEAVE 112
 END_FUNCTION lantern_metrics_answer

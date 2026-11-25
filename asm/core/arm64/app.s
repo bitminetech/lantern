@@ -6081,11 +6081,17 @@ LOCAL_FUNCTION lantern_app_met_answer
     cbz     x0, 8f
 2:  ldp     x9, x10, [x20, #24]
     str     x10, [x9]
+    ADDQ    x11, x19, APP_MET_SOURCES       /* each source an argument */
+    sub     sp, sp, #16                     /* the ninth and tenth arguments: profile, out */
+    ldr     x10, [x11, #MetricsSources_profile]
+    stp     x10, x9, [sp]
     add     x0, x20, #APP_MET_REQUEST
     ADDQ    x1, x19, APP_OPTIONS + AppOptions_metrics
-    ADDQ    x2, x19, APP_MET_SOURCES
-    mov     x3, x9
+    ldp     x2, x3, [x11, #MetricsSources_state]
+    ldp     x4, x5, [x11, #MetricsSources_counters]
+    ldp     x6, x7, [x11, #MetricsSources_process]
     CALL_GLOBAL lantern_metrics_answer
+    add     sp, sp, #16
     cmp     x0, #LANTERN_HTTP_MORE
     b.eq    9f
     cbz     x0, 4f

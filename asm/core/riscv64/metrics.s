@@ -410,15 +410,24 @@ END_FUNCTION lantern_mt_pair
 .endm
 
 /*
- * lantern_metrics_text(categories, sources, out) -> status
+ * lantern_metrics_text(categories, state, node, counters, app, process, gossip, profile, out) -> status
  * The Prometheus text of the metrics of the categories. s1 metrics_texts, s2 the cursor, s3 the
  * end of the room, s4 1 when the room ran out, s5 a table entry, s6 the entry's value, s7 its kind,
  * s8 a gossip topic, s9 the gossip topics left, s10 the element. Locals: L the categories, L+8 the
  * sources, L+16 out, L+24 the ticks per second, L+32 a LabelState (32 bytes), L+64 the elements,
- * L+72 the second label's value count.
+ * L+72 the second label's value count, L+80 the sources' table: MetricsSources (56 bytes).
  */
 FUNCTION lantern_metrics_text
-    ENTER 80
+    ENTER 144
+    sd      a1, (L + 80 + MetricsSources_state)(sp)    # the sources, in a table of its own
+    sd      a2, (L + 80 + MetricsSources_node)(sp)
+    sd      a3, (L + 80 + MetricsSources_counters)(sp)
+    sd      a4, (L + 80 + MetricsSources_app)(sp)
+    sd      a5, (L + 80 + MetricsSources_process)(sp)
+    sd      a6, (L + 80 + MetricsSources_gossip)(sp)
+    sd      a7, (L + 80 + MetricsSources_profile)(sp)
+    ld      a2, (144 + 96)(sp)              # the ninth argument: out
+    addi    a1, sp, L + 80
     ld      t0, 0(a0)
     sd      t0, (L + 0)(sp)
     sd      a1, (L + 8)(sp)
@@ -665,9 +674,9 @@ FUNCTION lantern_metrics_text
     sub     t1, s2, t1
     sd      t1, 16(t0)
     li      a0, LANTERN_OK
-    LEAVE 80
+    LEAVE 144
 91: li      a0, LANTERN_BUFFER_TOO_SMALL
-    LEAVE 80
+    LEAVE 144
 END_FUNCTION lantern_metrics_text
 
 .set MN_CHAIN, 2 * SLOTS_PER_EPOCH         /* the head's chain from the previous epoch on: at most two epochs of blocks */
@@ -854,17 +863,24 @@ FUNCTION lantern_metrics_node
 END_FUNCTION lantern_metrics_node
 
 /*
- * lantern_metrics_answer(bytes, categories, sources, out) -> status
+ * lantern_metrics_answer(bytes, categories, state, node, counters, app, process, gossip, profile, out) -> status
  * The answer to the first request of a metrics connection's bytes. s1 metrics_texts, s2 the
  * cursor, s3 the end of the room, s4 1 when the room ran out, s5 out, s6 the status. Locals: L
- * bytes, L+8 categories, L+16 sources, L+24 HttpLimits.
+ * bytes, L+8 categories, L+24 HttpLimits, L+48 the sources (as MetricsSources, 56 bytes).
  */
 FUNCTION lantern_metrics_answer
-    ENTER 48
+    ENTER 112
     sd      a0, (L + 0)(sp)
     sd      a1, (L + 8)(sp)
-    sd      a2, (L + 16)(sp)
-    mv      s5, a3
+    sd      a2, (L + 48 + MetricsSources_state)(sp)    # the sources
+    sd      a3, (L + 48 + MetricsSources_node)(sp)
+    sd      a4, (L + 48 + MetricsSources_counters)(sp)
+    sd      a5, (L + 48 + MetricsSources_app)(sp)
+    sd      a6, (L + 48 + MetricsSources_process)(sp)
+    sd      a7, (L + 48 + MetricsSources_gossip)(sp)
+    ld      t0, (112 + 96)(sp)              # the ninth and tenth arguments: profile, out
+    sd      t0, (L + 48 + MetricsSources_profile)(sp)
+    ld      s5, (112 + 96 + 8)(sp)
     lla     s1, metrics_texts
     ld      t0, 16(a0)                      # room: the HttpRequest of the bytes, and the head
     addi    t0, t0, 24 + HTTP_REQUEST_FIXED + 64 + METRICS_HEAD_ROOM
@@ -901,9 +917,18 @@ FUNCTION lantern_metrics_answer
     addi    t0, t0, -METRICS_HEAD_ROOM
     sd      t0, METRICS_HEAD_ROOM(s5)
     ld      a0, (L + 8)(sp)
-    ld      a1, (L + 16)(sp)
-    addi    a2, s5, METRICS_HEAD_ROOM
+    ld      a1, (L + 48 + MetricsSources_state)(sp)
+    ld      a2, (L + 48 + MetricsSources_node)(sp)
+    ld      a3, (L + 48 + MetricsSources_counters)(sp)
+    ld      a4, (L + 48 + MetricsSources_app)(sp)
+    ld      a5, (L + 48 + MetricsSources_process)(sp)
+    ld      a6, (L + 48 + MetricsSources_gossip)(sp)
+    ld      a7, (L + 48 + MetricsSources_profile)(sp)
+    addi    t0, s5, METRICS_HEAD_ROOM
+    addi    sp, sp, -16                     # the ninth argument: out
+    sd      t0, 0(sp)
     call    lantern_metrics_text
+    addi    sp, sp, 16
     bnez    a0, 98f
     addi    s2, s5, 24                      # the head before it; then the text moves up to the head
     addi    s3, s5, METRICS_HEAD_ROOM
@@ -945,9 +970,9 @@ FUNCTION lantern_metrics_answer
     sub     t0, s2, t0
     sd      t0, 16(s5)
     li      a0, LANTERN_OK
-    LEAVE 48
+    LEAVE 112
 97: li      a0, LANTERN_HTTP_MORE
-    LEAVE 48
+    LEAVE 112
 98: li      a0, LANTERN_BUFFER_TOO_SMALL
-    LEAVE 48
+    LEAVE 112
 END_FUNCTION lantern_metrics_answer

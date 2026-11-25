@@ -368,15 +368,26 @@ END_FUNCTION lantern_mt_pair
 .endm
 
 /*
- * lantern_metrics_text(categories, sources, out) -> status
+ * lantern_metrics_text(categories, state, node, counters, app, process, gossip, profile, out) -> status
  * The Prometheus text of the metrics of the categories. rbx metrics_texts, r12 the cursor, r13 the
  * end of the room, r14 a table entry, r15 1 when the room ran out, rbp the entry's value. Locals: L
  * the categories, L+8 the sources, L+16 out, L+24 the ticks per second, L+32 a LabelState (32 bytes),
  * L+64 the element, L+72 the elements, L+80 the second label's value count, L+88 the kind, L+96 a
- * gossip topic, L+104 the gossip topics left.
+ * gossip topic, L+104 the gossip topics left, L+112 the sources' table: MetricsSources (56 bytes).
  */
 FUNCTION lantern_metrics_text
-    ENTER 112
+    ENTER 176
+    mov     %rsi, (L + 112 + MetricsSources_state)(%rsp)       # the sources, in a table of its own
+    mov     %rdx, (L + 112 + MetricsSources_node)(%rsp)
+    mov     %rcx, (L + 112 + MetricsSources_counters)(%rsp)
+    mov     %r8, (L + 112 + MetricsSources_app)(%rsp)
+    mov     %r9, (L + 112 + MetricsSources_process)(%rsp)
+    mov     (176 + 96)(%rsp), %rax          # the seventh to ninth arguments: gossip, profile, out
+    mov     %rax, (L + 112 + MetricsSources_gossip)(%rsp)
+    mov     (176 + 96 + 8)(%rsp), %rax
+    mov     %rax, (L + 112 + MetricsSources_profile)(%rsp)
+    mov     (176 + 96 + 16)(%rsp), %rdx
+    lea     (L + 112)(%rsp), %rsi
     mov     (%rdi), %rdi
     mov     %rdi, L(%rsp)
     mov     %rsi, (L + 8)(%rsp)
@@ -649,9 +660,9 @@ FUNCTION lantern_metrics_text
     sub     %rcx, %r12
     mov     %r12, 16(%rax)
     xor     %eax, %eax
-    LEAVE 112
+    LEAVE 176
 91: mov     $LANTERN_BUFFER_TOO_SMALL, %eax
-    LEAVE 112
+    LEAVE 176
 END_FUNCTION lantern_metrics_text
 
 .set MN_CHAIN, 2 * SLOTS_PER_EPOCH         /* the head's chain from the previous epoch on: at most two epochs of blocks */
@@ -837,17 +848,26 @@ FUNCTION lantern_metrics_node
 END_FUNCTION lantern_metrics_node
 
 /*
- * lantern_metrics_answer(bytes, categories, sources, out) -> status
+ * lantern_metrics_answer(bytes, categories, state, node, counters, app, process, gossip, profile, out) -> status
  * The answer to the first request of a metrics connection's bytes. rbx metrics_texts, r12 the
  * cursor, r13 the end of the room, r15 1 when the room ran out, rbp the status, r14 out. Locals: L
- * bytes, L+8 categories, L+16 sources, L+24 HttpLimits.
+ * bytes, L+8 categories, L+24 HttpLimits, L+48 the sources (as MetricsSources, 56 bytes).
  */
 FUNCTION lantern_metrics_answer
-    ENTER 48
+    ENTER 112
     mov     %rdi, L(%rsp)
     mov     %rsi, (L + 8)(%rsp)
-    mov     %rdx, (L + 16)(%rsp)
-    mov     %rcx, %r14
+    mov     %rdx, (L + 48 + MetricsSources_state)(%rsp)        # the sources
+    mov     %rcx, (L + 48 + MetricsSources_node)(%rsp)
+    mov     %r8, (L + 48 + MetricsSources_counters)(%rsp)
+    mov     %r9, (L + 48 + MetricsSources_app)(%rsp)
+    mov     (112 + 96)(%rsp), %rax          # the seventh to tenth arguments: process, gossip, profile, out
+    mov     %rax, (L + 48 + MetricsSources_process)(%rsp)
+    mov     (112 + 96 + 8)(%rsp), %rax
+    mov     %rax, (L + 48 + MetricsSources_gossip)(%rsp)
+    mov     (112 + 96 + 16)(%rsp), %rax
+    mov     %rax, (L + 48 + MetricsSources_profile)(%rsp)
+    mov     (112 + 96 + 24)(%rsp), %r14
     lea     metrics_texts(%rip), %rbx
     mov     16(%rdi), %rax                  # room: the HttpRequest of the bytes, and the head
     add     $(24 + HTTP_REQUEST_FIXED + 64 + METRICS_HEAD_ROOM), %rax
@@ -882,10 +902,21 @@ FUNCTION lantern_metrics_answer
     mov     (%r14), %rax                    # 200: the text after METRICS_HEAD_ROOM bytes
     sub     $METRICS_HEAD_ROOM, %rax
     mov     %rax, METRICS_HEAD_ROOM(%r14)
-    mov     (L + 8)(%rsp), %rdi
-    mov     (L + 16)(%rsp), %rsi
-    lea     METRICS_HEAD_ROOM(%r14), %rdx
+    lea     METRICS_HEAD_ROOM(%r14), %rax
+    sub     $32, %rsp                       # the seventh to ninth arguments: gossip, profile, out
+    mov     %rax, 16(%rsp)
+    mov     (32 + L + 48 + MetricsSources_gossip)(%rsp), %rax
+    mov     %rax, (%rsp)
+    mov     (32 + L + 48 + MetricsSources_profile)(%rsp), %rax
+    mov     %rax, 8(%rsp)
+    mov     (32 + L + 8)(%rsp), %rdi
+    mov     (32 + L + 48 + MetricsSources_state)(%rsp), %rsi
+    mov     (32 + L + 48 + MetricsSources_node)(%rsp), %rdx
+    mov     (32 + L + 48 + MetricsSources_counters)(%rsp), %rcx
+    mov     (32 + L + 48 + MetricsSources_app)(%rsp), %r8
+    mov     (32 + L + 48 + MetricsSources_process)(%rsp), %r9
     call    lantern_metrics_text
+    add     $32, %rsp
     test    %rax, %rax
     jnz     98f
     lea     24(%r14), %r12                  # the head before it, then the text moves up to the head
@@ -928,9 +959,9 @@ FUNCTION lantern_metrics_answer
     sub     %rax, %r12
     mov     %r12, 16(%r14)
     xor     %eax, %eax
-    LEAVE 48
+    LEAVE 112
 97: mov     $LANTERN_HTTP_MORE, %eax
-    LEAVE 48
+    LEAVE 112
 98: mov     $LANTERN_BUFFER_TOO_SMALL, %eax
-    LEAVE 48
+    LEAVE 112
 END_FUNCTION lantern_metrics_answer

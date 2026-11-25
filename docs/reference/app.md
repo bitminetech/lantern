@@ -3319,7 +3319,7 @@ lantern_app_met_answer(index)
 
 ### Limits
 
-- Stack of its own: 112 bytes on x86-64 (return address included), 112 bytes on ARM64, 112 bytes on RISC-V.
+- Stack of its own: 144 bytes on x86-64 (return address included), 128 bytes on ARM64, 128 bytes on RISC-V.
 
 ### ABI
 
@@ -3624,7 +3624,7 @@ lantern_app_met_sources()
 
 ### Function does
 
-- Fills MetricsSources (app.md): lantern_metrics_node of the node and the store; the head state's values by lantern_<fork>_metrics_state, again only for a new head state; the node's counters; the app's run times.
+- Fills its table of the metrics sources, each then an argument of lantern_metrics_answer: lantern_metrics_node of the node and the store; the head state's values by lantern_<fork>_metrics_state, again only for a new head state; the node's counters; the app's run times.
 
 ### Function never
 

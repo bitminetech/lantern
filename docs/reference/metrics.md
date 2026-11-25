@@ -26,7 +26,6 @@
 
 ### Types
 
-- [`MetricsSources`](#type-metricssources): the address of each source of values.
 - [`MetricsState`](#type-metricsstate): the values from the head's post-state.
 - [`MetricsNode`](#type-metricsnode): the values from the node and the store.
 - [`NodeMetrics`](#type-nodemetrics): the counters and delay histograms the node step keeps.
@@ -51,7 +50,7 @@ The Prometheus text of the metrics of the categories.
 ### Signature
 
 ```
-lantern_metrics_text(categories, sources, out) -> status
+lantern_metrics_text(categories, state, node, counters, app, process, gossip, profile, out) -> status
 ```
 
 ### Arguments
@@ -59,7 +58,13 @@ lantern_metrics_text(categories, sources, out) -> status
 | Name | Role | Type |
 |---|---|---|
 | `categories` | input | u64: the bits of the sub categories ([`MetricEntry`](#type-metricentry)) |
-| `sources` | input | [`MetricsSources`](#type-metricssources) |
+| `state` | input | [`MetricsState`](#type-metricsstate), or 0 |
+| `node` | input | [`MetricsNode`](#type-metricsnode), or 0 |
+| `counters` | input | [`NodeMetrics`](#type-nodemetrics), or 0 |
+| `app` | input | [`AppMetrics`](#type-appmetrics), or 0 |
+| `process` | input | [`MetricsProcess`](#type-metricsprocess), or 0 |
+| `gossip` | input | [`MetricsGossip`](#type-metricsgossip), well formed, or 0 |
+| `profile` | input | [`Profile`](#type-profile), or 0 |
 | `out` | output | `ByteList`, its `size` set by the caller |
 
 ### Returns
@@ -69,6 +74,7 @@ lantern_metrics_text(categories, sources, out) -> status
 
 ### Function does
 
+- A source of 0 is not given; its families do not go in.
 - Each family of the metric table whose bit is in `categories`, whose source is given and whose condition holds, in the order of the table: `# HELP <name> <help>`, `# TYPE <name> <type>`, then its samples. Every line ends with LF. With no such family: no bytes.
 - Conditions: `state`: the `MetricsState` with `present` 1; `altair`: `present` and `altair` 1; `electra`: `present` and `electra` 1; `state_root`: `present` and `state_root_present` 1; `fulu`: the `MetricsNode` with `fulu` 1; `max_fds`: the `MetricsProcess` with `max_fds` above 0; `profile`: the `Profile` with `ticks_per_second` above 0.
 - A value (u64 kind): `<name><labels> <value>`, in decimal.
@@ -91,14 +97,14 @@ lantern_metrics_text(categories, sources, out) -> status
 
 ### Limits
 
-- Stack of its own: 208 bytes on x86-64 (return address included), 176 bytes on ARM64, 176 bytes on RISC-V.
+- Stack of its own: 272 bytes on x86-64 (return address included), 240 bytes on ARM64, 240 bytes on RISC-V.
 
 ### ABI
 
 - Role: L0.
 - Symbol: `lantern_metrics_text`, with `_` before it on macOS.
 - Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
-- Argument order: `categories`, `sources`, `out`.
+- Argument order: `categories`, `state`, `node`, `counters`, `app`, `process`, `gossip`, `profile`, `out`.
 
 ## Function `lantern_metrics_answer`
 
@@ -107,7 +113,7 @@ The HTTP answer to the first request in a metrics server connection's bytes; the
 ### Signature
 
 ```
-lantern_metrics_answer(bytes, categories, sources, out) -> status
+lantern_metrics_answer(bytes, categories, state, node, counters, app, process, gossip, profile, out) -> status
 ```
 
 ### Arguments
@@ -116,7 +122,13 @@ lantern_metrics_answer(bytes, categories, sources, out) -> status
 |---|---|---|
 | `bytes` | input | ByteList: the connection's bytes so far |
 | `categories` | input | u64: the bits of the sub categories |
-| `sources` | input | [`MetricsSources`](#type-metricssources) |
+| `state` | input | [`MetricsState`](#type-metricsstate), or 0 |
+| `node` | input | [`MetricsNode`](#type-metricsnode), or 0 |
+| `counters` | input | [`NodeMetrics`](#type-nodemetrics), or 0 |
+| `app` | input | [`AppMetrics`](#type-appmetrics), or 0 |
+| `process` | input | [`MetricsProcess`](#type-metricsprocess), or 0 |
+| `gossip` | input | [`MetricsGossip`](#type-metricsgossip), well formed, or 0 |
+| `profile` | input | [`Profile`](#type-profile), or 0 |
 | `out` | output | `ByteList`, its `size` set by the caller |
 
 ### Returns
@@ -139,14 +151,14 @@ lantern_metrics_answer(bytes, categories, sources, out) -> status
 
 ### Limits
 
-- Stack of its own: 144 bytes on x86-64 (return address included), 144 bytes on ARM64, 144 bytes on RISC-V.
+- Stack of its own: 240 bytes on x86-64 (return address included), 224 bytes on ARM64, 224 bytes on RISC-V.
 
 ### ABI
 
 - Role: L0.
 - Symbol: `lantern_metrics_answer`, with `_` before it on macOS.
 - Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
-- Argument order: `bytes`, `categories`, `sources`, `out`.
+- Argument order: `bytes`, `categories`, `state`, `node`, `counters`, `app`, `process`, `gossip`, `profile`, `out`.
 
 ## Function `lantern_metrics_observe`
 
@@ -813,23 +825,6 @@ lantern_mt_value(brace, value)
 - Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
 - Registers it uses, on ARM64, x86-64, RISC-V: the cursor in x20, r12, s2; the end of the room in x21, r13, s3; the full flag in x22, r15, s4, which becomes 1 when the room runs out, and nothing is written from then on.
 - Argument order: `brace`, `value`.
-
-## Type `MetricsSources`
-
-The address of each source of values, for `lantern_metrics_text`; 0 for a source not given, whose families do not go in.
-
-### Layout
-
-| Offset | Field | Type | Meaning |
-|---|---|---|---|
-| 0 | `state` | address | [`MetricsState`](#type-metricsstate) |
-| 8 | `node` | address | [`MetricsNode`](#type-metricsnode) |
-| 16 | `counters` | address | [`NodeMetrics`](#type-nodemetrics) |
-| 24 | `app` | address | [`AppMetrics`](#type-appmetrics) |
-| 32 | `process` | address | [`MetricsProcess`](#type-metricsprocess) |
-| 40 | `gossip` | address | [`MetricsGossip`](#type-metricsgossip), well formed |
-| 48 | `profile` | address | [`Profile`](#type-profile) |
-| 56 | | | Size |
 
 ## Type `MetricsState`
 

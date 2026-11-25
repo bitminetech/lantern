@@ -6195,10 +6195,22 @@ LOCAL_FUNCTION lantern_app_met_answer
 2:  mov     24(%r12), %rcx
     mov     32(%r12), %rax
     mov     %rax, (%rcx)
+    sub     $32, %rsp                       # the seventh to tenth arguments: process, gossip, profile, out
+    mov     (APP_MET_SOURCES + MetricsSources_process)(%rbx), %rax
+    mov     %rax, (%rsp)
+    mov     (APP_MET_SOURCES + MetricsSources_gossip)(%rbx), %rax
+    mov     %rax, 8(%rsp)
+    mov     (APP_MET_SOURCES + MetricsSources_profile)(%rbx), %rax
+    mov     %rax, 16(%rsp)
+    mov     %rcx, 24(%rsp)
     lea     APP_MET_REQUEST(%r12), %rdi
     lea     (APP_OPTIONS + AppOptions_metrics)(%rbx), %rsi
-    lea     APP_MET_SOURCES(%rbx), %rdx
+    mov     (APP_MET_SOURCES + MetricsSources_state)(%rbx), %rdx
+    mov     (APP_MET_SOURCES + MetricsSources_node)(%rbx), %rcx
+    mov     (APP_MET_SOURCES + MetricsSources_counters)(%rbx), %r8
+    mov     (APP_MET_SOURCES + MetricsSources_app)(%rbx), %r9
     CALL_GLOBAL lantern_metrics_answer
+    add     $32, %rsp
     cmp     $LANTERN_HTTP_MORE, %rax
     je      9f
     test    %rax, %rax

@@ -435,9 +435,12 @@ ABI uint64_t lantern_engine_json_decode(const void *type, const void *json, void
 
 /* Application: docs/reference/app.md. */
 ABI uint64_t lantern_app_options(const void *args, void *options, void *fault);
-ABI uint64_t lantern_metrics_text(const void *categories, const void *sources, void *out);
+ABI uint64_t lantern_metrics_text(const void *categories, const void *state, const void *node, const void *counters,
+                                 const void *app, const void *process, const void *gossip, const void *profile, void *out);
 ABI uint64_t lantern_metrics_node(const void *node, const void *store, void *out);
-ABI uint64_t lantern_metrics_answer(const void *bytes, const void *categories, const void *sources, void *out);
+ABI uint64_t lantern_metrics_answer(const void *bytes, const void *categories, const void *state, const void *node,
+                                   const void *counters, const void *app, const void *process, const void *gossip,
+                                   const void *profile, void *out);
 ABI uint64_t lantern_metrics_observe(void *histogram, const void *bounds, const void *value);
 
 /* Network config: docs/reference/config.md. */
@@ -9778,7 +9781,8 @@ static void run_metrics_text(const char *file, case_file *f) {
             uint64_t size = 24 + tl - (uint64_t)pass, st;
             uint8_t *out = buffer(size);
             wr64(out, size);
-            st = CALL(lantern_metrics_text, &cat, sources, out);
+            st = CALL(lantern_metrics_text, &cat, sources[0], sources[1], sources[2], sources[3], sources[4], sources[5],
+                      sources[6], out);
             if (!guard_ok(out, size)) why = "lantern_metrics_text wrote out of bounds";
             else if (pass == 1 && st != 1) why = "one byte less room: status is not LANTERN_BUFFER_TOO_SMALL";
             else if (pass == 0 && st != 0) why = "status is not LANTERN_OK";
@@ -9865,7 +9869,8 @@ static void run_metrics_answer(const char *file, case_file *f) {
             uint64_t size = room - (uint64_t)pass, st;
             uint8_t *out = buffer(size);
             wr64(out, size);
-            st = CALL(lantern_metrics_answer, list, &cat, sources, out);
+            st = CALL(lantern_metrics_answer, list, &cat, sources[0], sources[1], sources[2], sources[3], sources[4],
+                      sources[5], sources[6], out);
             static char msg[200];
             if (!guard_ok(out, size)) why = "lantern_metrics_answer wrote out of bounds";
             else if (pass == 1 && st != 1) why = "one byte less room: status is not LANTERN_BUFFER_TOO_SMALL";

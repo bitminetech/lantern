@@ -6287,10 +6287,21 @@ LOCAL_FUNCTION lantern_app_met_answer
 2:  ld      a3, 24(s2)
     ld      t0, 32(s2)
     sd      t0, 0(a3)
+    ADDQ    t1, s1, APP_MET_SOURCES         # each source an argument
+    addi    sp, sp, -16                     # the ninth and tenth arguments: profile, out
+    ld      t0, MetricsSources_profile(t1)
+    sd      t0, 0(sp)
+    sd      a3, 8(sp)
     addi    a0, s2, APP_MET_REQUEST
     ADDQ    a1, s1, APP_OPTIONS + AppOptions_metrics
-    ADDQ    a2, s1, APP_MET_SOURCES
+    ld      a2, MetricsSources_state(t1)
+    ld      a3, MetricsSources_node(t1)
+    ld      a4, MetricsSources_counters(t1)
+    ld      a5, MetricsSources_app(t1)
+    ld      a6, MetricsSources_process(t1)
+    ld      a7, MetricsSources_gossip(t1)
     CALL_GLOBAL lantern_metrics_answer
+    addi    sp, sp, 16
     li      t0, LANTERN_HTTP_MORE
     beq     a0, t0, 9f
     beqz    a0, 4f
