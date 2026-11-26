@@ -556,10 +556,25 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" > "$RUNNER_TEMP/run.json"
-          gh api --paginate "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/jobs?per_page=100" \
-              --jq '.jobs[] | tojson' > "$RUNNER_TEMP/jobs.jsonl"
-          python3 -I tests/runner/panels.py "$RUNNER_TEMP/run.json" "$RUNNER_TEMP/jobs.jsonl"
+          # GitHub answers pages of 100 jobs of a large run with HTTP 502, so take 50 at a
+          # time and try 3 times. Without the jobs, the CI panel stays as it was and the
+          # tick tables are still committed.
+          got=""
+          for try in 1 2 3; do
+            if gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" > "$RUNNER_TEMP/run.json" &&
+               gh api --paginate "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/jobs?per_page=50" \
+                   --jq '.jobs[] | tojson' > "$RUNNER_TEMP/jobs.jsonl"; then
+              got=1
+              break
+            fi
+            sleep 15
+          done
+          if [ -n "$got" ]; then
+            python3 -I tests/runner/panels.py "$RUNNER_TEMP/run.json" "$RUNNER_TEMP/jobs.jsonl"
+          else
+            echo "GitHub did not give the jobs of this run, so the CI panel stays as it was."
+            python3 -I tests/runner/panels.py
+          fi
       - name: Commit the tick tables and README panels
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         run: |
