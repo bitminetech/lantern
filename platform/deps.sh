@@ -17,9 +17,9 @@ fetch() {
 fetch asm-ssz 3b48c1ce630eff7286f2caff9e0bb55e792ab7ea       # README Dependencies
 fetch asm-crypto a364b8c3c06b55607834f93cda7b7e315323b3b8    # README Dependencies
 fetch asm-snappy b84f65a17f51dead69d22a7f6c5a16f7b2975d2a    # README Dependencies
-fetch asm-libp2p 00afcc645a96ac3529d87e02b05d5d5e6e7f10f4    # README Dependencies
-fetch asm-quic 16d49e12d91d2d4004cc124860d128c200f87957      # README Dependencies
-fetch asm-discv5 fd900974adaca4d819cd8e940648b1c0b4e4618b    # README Dependencies
+fetch asm-libp2p 05350fee83505b184bdaf3ec019a0bada1afe4b6    # README Dependencies
+fetch asm-quic 8ce353c1df72f835a234118c7f8f022118d5dac0      # README Dependencies
+fetch asm-discv5 ce98c4091f41479c6ed1de27aa984f2cedc80be5    # README Dependencies
 fetch asm-rlp 40cca377a1621ed660a73724192a4a0b2c059a84       # README Dependencies
 
 # Each library's pin of another must match ours.
