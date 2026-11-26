@@ -1,5 +1,7 @@
 # Fork choice
 
+Fork choice and data availability.
+
 ## Contents
 
 ### Functions

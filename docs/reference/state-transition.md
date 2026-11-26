@@ -1,5 +1,7 @@
 # State transition
 
+Apply blocks and advance slots.
+
 ## Contents
 
 ### Functions

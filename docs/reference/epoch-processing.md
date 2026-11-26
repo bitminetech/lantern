@@ -1,5 +1,7 @@
 # Epoch processing
 
+Every epoch step, for every fork.
+
 ## Contents
 
 ### Functions

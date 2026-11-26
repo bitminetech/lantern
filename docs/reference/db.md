@@ -1,5 +1,7 @@
 # Database
 
+The stored history and its index.
+
 ## Contents
 
 ### Functions

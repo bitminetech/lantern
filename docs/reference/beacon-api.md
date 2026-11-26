@@ -1,5 +1,7 @@
 # Beacon API
 
+The Beacon API: HTTP, JSON and answers.
+
 ## Contents
 
 ### Functions

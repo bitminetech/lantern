@@ -1,5 +1,7 @@
 # Node
 
+The node: events, actions, sync, gossip.
+
 ## Contents
 
 ### Functions

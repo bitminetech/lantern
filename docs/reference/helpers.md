@@ -1,5 +1,7 @@
 # Beacon chain helpers
 
+Shuffling, domains and signing roots.
+
 ## Contents
 
 ### Functions

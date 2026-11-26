@@ -1,5 +1,7 @@
 # Networking rules
 
+Gossip rules, subnets, custody, topics.
+
 ## Contents
 
 ### Functions

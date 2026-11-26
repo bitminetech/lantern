@@ -1,5 +1,7 @@
 # Network config
 
+The network config file.
+
 ## Contents
 
 ### Functions

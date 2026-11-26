@@ -4,7 +4,7 @@
 # in $deps (and in $deps_off for the signatures-off runner), and liblantern-mainnet.a
 # and liblantern-minimal.a in OUT_DIR. On x86-64 and ARM64 also $deps_sha and
 # $deps_off_sha, with asm-crypto's sha variant, and liblantern-<preset>-lx.a, the
-# binary's copy of the core built with it (README, Target profile).
+# binary's copy of the core built with it (shell.md, The sha variant).
 
 # The asm-crypto objects lantern calls, and those that its dependencies call.
 CRYPTO_OBJECTS="sha256 hmac bls12381 chacha20 aes x25519 p256 secp256k1 sha512 ed25519 keccak"
@@ -67,7 +67,7 @@ build_objects() {
     llvm-objcopy $renames "$out/deps/crypto-bls12381.o" "$out/deps/crypto-bls12381-off.o"
     deps_off=$(echo "$deps" | sed 's#crypto-bls12381\.o#crypto-bls12381-off.o#')
 
-    # asm-crypto's sha variant (README, Target profile) on x86-64 and ARM64: its SHA-256 object,
+    # asm-crypto's sha variant (shell.md, The sha variant) on x86-64 and ARM64: its SHA-256 object,
     # and $deps_sha and $deps_off_sha, $deps and $deps_off with it.
     deps_sha=""
     deps_off_sha=""
@@ -115,7 +115,7 @@ build_objects() {
         else
             llvm-ar rcs "$out/liblantern-$preset.a" $objects
         fi
-        # The binary's sha copy (README, Target profile): the core objects but the shell, and
+        # The binary's sha copy (shell.md, The sha variant): the core objects but the shell, and
         # $deps_sha, each symbol they define with the prefix lx_. Their calls of the shell keep
         # its names. The entry point picks lx_lantern_app_main or lantern_app_main.
         if [ -n "$deps_sha" ]; then

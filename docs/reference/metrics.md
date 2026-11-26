@@ -1,5 +1,7 @@
 # Metrics
 
+Prometheus metrics.
+
 ## Contents
 
 ### Functions

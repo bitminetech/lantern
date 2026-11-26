@@ -29,7 +29,7 @@ try {
         if (Test-Path (Join-Path $RunnerDir "$runner$exe")) {
             "$runner $($_.Name)"
             "$runner-bls-off $($_.Name)"
-            # The same with asm-crypto's sha variant (README, Target profile).
+            # The same with asm-crypto's sha variant (shell.md, The sha variant).
             if (Test-Path (Join-Path $RunnerDir "$runner-sha$exe")) {
                 "$runner-sha $($_.Name)"
                 "$runner-bls-off-sha $($_.Name)"

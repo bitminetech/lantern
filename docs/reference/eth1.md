@@ -1,5 +1,7 @@
 # Eth1 follower
 
+Deposits from the execution chain.
+
 ## Contents
 
 ### Functions

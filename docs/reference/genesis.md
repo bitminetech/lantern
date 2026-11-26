@@ -1,5 +1,7 @@
 # Genesis
 
+The phase0 genesis state.
+
 ## Contents
 
 ### Functions

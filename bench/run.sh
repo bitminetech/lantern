@@ -26,7 +26,7 @@ clang --target=$target $march -std=c11 -O2 -Wall -Wextra -Werror -Wno-unused-fun
     -DPRESET=\"mainnet\" -DFORK=$(fork_number fulu) -DFORK_NAME=fulu bench/state.c -Iplatform/linux -Itests/runner \
     tests/runner/abi_$isa.s build/stf-$isa/liblantern-mainnet.a $deps -o build/stf-$isa/bench-state
 $q build/stf-$isa/bench-state /vectors $n
-# Then the same with asm-crypto'"'"'s sha variant (README, Target profile), on x86-64 and ARM64.
+# Then the same with asm-crypto'"'"'s sha variant (shell.md, The sha variant), on x86-64 and ARM64.
 if [ -e $out/deps/crypto-sha256x.o ]; then
     sha=$(echo "$deps" | sed "s#crypto-sha256\.o#crypto-sha256x.o#")
     clang --target=$target $march -std=c11 -O2 -Wall -Wextra -Werror -Wno-unused-function -static -fuse-ld=lld \

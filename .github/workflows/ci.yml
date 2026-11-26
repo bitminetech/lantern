@@ -535,10 +535,11 @@ jobs:
   # (ARCHITECTURE.md section 10). On a push to main, commit them when they changed. When
   # main has moved on, the push is skipped: the newer run writes the tables then.
   results:
-    needs: [linux, windows, macos]
+    needs: [key, vectors, build, build-macos, docs, linux, trusted-setup, devnet, restart, fork, checkpoint, assertoor, sync, differential, validator, windows, macos]
     if: always()
     runs-on: ubuntu-24.04
     permissions:
+      actions: read
       contents: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
@@ -551,14 +552,22 @@ jobs:
         run: python3 -I tests/runner/tick_tables.py results
       - name: Write the verification heatmap
         run: python3 -I tests/runner/heatmap.py
-      - name: Commit the tick tables
+      - name: Write the README panels
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" > "$RUNNER_TEMP/run.json"
+          gh api --paginate "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/jobs?per_page=100" \
+              --jq '.jobs[] | tojson' > "$RUNNER_TEMP/jobs.jsonl"
+          python3 -I tests/runner/panels.py "$RUNNER_TEMP/run.json" "$RUNNER_TEMP/jobs.jsonl"
+      - name: Commit the tick tables and README panels
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         run: |
-          git add docs/reference docs/heatmap README.md
-          if git diff --cached --quiet; then echo "The tick tables did not change."; exit 0; fi
+          git add docs/reference docs/heatmap docs/readme README.md
+          if git diff --cached --quiet; then echo "The tick tables and README panels did not change."; exit 0; fi
           git -c user.name="github-actions[bot]" -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
-              commit -q -m "Update the tick tables"
+              commit -q -m "Update the tick tables and README panels"
           if ! git push origin HEAD:main; then
             [ "$(git ls-remote origin refs/heads/main | cut -f1)" != "$GITHUB_SHA" ] || exit 1
-            echo "main has moved on, so this run does not update the tick tables."
+            echo "main has moved on, so this run does not update the tick tables or README panels."
           fi

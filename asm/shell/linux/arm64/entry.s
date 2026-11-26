@@ -4,7 +4,7 @@
  * Requirements: docs/reference/shell.md, _start. At _start, sp holds argc, then argv,
  * a 0, envp, a 0, then the auxiliary vector. x19 the argument count, x20 argv, x21 the argument
  * bytes, x22 the ArgList's size, x23 the ArgList, x24 the next byte, x25 1 when the CPU has
- * FEAT_SHA256 (README, Target profile).
+ * FEAT_SHA256 (shell.md, The sha variant).
  */
 .set ISA_ARM64, 1
 .include "ssz.inc"

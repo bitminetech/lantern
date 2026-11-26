@@ -1,5 +1,7 @@
 # Req/resp encoding
 
+Req/resp protocol IDs and chunks.
+
 ## Contents
 
 ### Functions

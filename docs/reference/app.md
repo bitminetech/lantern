@@ -1,5 +1,7 @@
 # Application
 
+The binary: options, startup and the loop.
+
 ## Contents
 
 ### Functions

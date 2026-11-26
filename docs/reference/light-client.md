@@ -1,5 +1,7 @@
 # Light client data
 
+Light client updates and their proofs.
+
 ## Contents
 
 ### Functions

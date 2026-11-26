@@ -1,5 +1,7 @@
 # Beacon state buffers
 
+Copies of states, and their hash caches.
+
 ## Contents
 
 ### Functions

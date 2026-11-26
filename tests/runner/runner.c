@@ -486,7 +486,7 @@ ABI uint64_t LF(get_execution_requests)(const void *list, void *out);
 
 /* ---------------------------------------------------------------- ABI check */
 
-#define STACK_CAP 65536 /* README: stack per call */
+#define STACK_CAP 65536 /* the stack limit (ARCHITECTURE.md section 6) */
 #define PAINT_BYTES (STACK_CAP + 4096)
 
 typedef struct {
@@ -12863,7 +12863,7 @@ static LONG WINAPI crash_report(EXCEPTION_POINTERS *e) {
 #endif
 
 #ifdef LANTERN_SHA_VARIANT
-/* The CPU features of asm-crypto's sha variant (README, Target profile). */
+/* The CPU features of asm-crypto's sha variant (shell.md, The sha variant). */
 #if defined(__x86_64__)
 #include <cpuid.h>
 static int sha_variant_supported(void) {

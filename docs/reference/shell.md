@@ -1,5 +1,7 @@
 # Shell
 
+Memory, files, the log and the clock.
+
 ## Contents
 
 ### Functions
@@ -36,6 +38,17 @@
 - Document: ARCHITECTURE.md section 2 (core and shell) and section 7 (operating systems).
 - Section: the shell of the lantern binary: memory, files, the log and the clock, for Linux (system calls), macOS (libSystem) and Windows (kernel32). Sockets, the monotonic clock and random bytes come from the shell of asm-libp2p.
 - The file functions serve the database of [db.md](db.md): files written once at their end, made durable, mapped to read, renamed into place, and deleted whole.
+
+## The `sha` variant
+
+On x86-64 and ARM64 the binary holds a second copy of the core and of the dependency cores, built with asm-crypto's `asm/core/<ISA>/sha256x.s` in place of `sha256.s`. Each symbol of that copy has the prefix `lx_`. The entry point runs that copy when the CPU has the features below.
+
+| ISA | Extra instructions | Feature check |
+|---|---|---|
+| x86-64 | SSSE3 and SHA | CPUID leaf 1 ECX bit 9, and leaf 7 subleaf 0 EBX bit 29 |
+| ARM64 | FEAT_SHA256 | Linux: bit 6 (`HWCAP_SHA2`) of `AT_HWCAP` (16). macOS: the sysctl `hw.optional.arm.FEAT_SHA256`. Windows: `IsProcessorFeaturePresent(PF_ARM_V8_CRYPTO_INSTRUCTIONS_AVAILABLE)` (30). |
+
+- Proof claims cover only the baseline copy.
 
 ## Function `lantern_shell_map`
 

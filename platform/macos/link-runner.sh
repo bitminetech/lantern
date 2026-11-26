@@ -28,7 +28,7 @@ for preset in mainnet minimal; do
         clang $flags -DBLS_OFF \
             "$root/tests/runner/runner.c" "$root/tests/runner/bls_off.c" -I"$root/platform/macos" -I"$root/tests/runner" \
             "$root/tests/runner/abi_$isa.s" "$out/liblantern-$preset.a" $deps_off -o "$out/runner-$preset-$fork-bls-off"
-        # The same two with asm-crypto's sha variant (README, Target profile): -sha.
+        # The same two with asm-crypto's sha variant (shell.md, The sha variant): -sha.
         clang $flags -DLANTERN_SHA_VARIANT \
             "$root/tests/runner/runner.c" -I"$root/platform/macos" -I"$root/tests/runner" \
             "$root/tests/runner/abi_$isa.s" "$out/liblantern-$preset.a" $deps_sha -o "$out/runner-$preset-$fork-sha"

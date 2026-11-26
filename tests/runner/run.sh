@@ -4,8 +4,8 @@
 # Usage: tests/runner/run.sh RUNNER_DIR VECTOR_DIR [FILE ...]
 #
 # RUNNER_DIR holds runner-<preset>-<fork> and runner-<preset>-<fork>-bls-off, and on
-# x86-64 and ARM64 the same with -sha, built with asm-crypto's sha variant (README,
-# Target profile). A file <preset>-<fork>-*.bin goes to the runners of its preset and fork;
+# x86-64 and ARM64 the same with -sha, built with asm-crypto's sha variant (shell.md,
+# The sha variant). A file <preset>-<fork>-*.bin goes to the runners of its preset and fork;
 # other files are left out. With no FILE, every .bin file in VECTOR_DIR runs.
 # QEMU is the command that runs the runners for an ISA other than the host's.
 # JOBS is the number of processes at once, the number of cores when unset.

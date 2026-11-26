@@ -1,5 +1,7 @@
 # Engine API client
 
+Engine API requests and responses.
+
 ## Contents
 
 ### Functions

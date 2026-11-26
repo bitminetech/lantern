@@ -103,7 +103,7 @@ FUNCTION mainCRTStartup
 6:  mov     %r13, %rcx
     CALL_GLOBAL LocalFree
     mov     %rbx, %rdi
-    xor     %eax, %eax                      # the sha variant (README, Target profile): cpuid
+    xor     %eax, %eax                      # the sha variant (shell.md, The sha variant): cpuid
     cpuid
     cmp     $7, %eax
     jb      60f

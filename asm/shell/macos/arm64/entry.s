@@ -66,7 +66,7 @@ FUNCTION main
 51: str     x12, [x11, #48]
     add     x9, x9, #1
     b       4b
-6:  ADDRESS x0, entry_sha_feature        /* the sha variant (README, Target profile): sysctlbyname */
+6:  ADDRESS x0, entry_sha_feature        /* the sha variant (shell.md, The sha variant): sysctlbyname */
     add     x1, sp, #L
     str     wzr, [x1]
     add     x2, sp, #(L + 8)
