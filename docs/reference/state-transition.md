@@ -60,6 +60,7 @@ lantern_state_transition(state, signed_block, options, config, scratch, result) 
 
 - The state root of the check is lantern_state_root with the `StateCache` at `CONFIG_STATE_CACHE` of `config`.
 - Checks the scratch and the room of `state` before any change to `state`.
+- Before process_block: lantern_block_sigs (block-processing.md), so the attestation checks of the block read their answers from the SigTable; after it, the SigTable's `used` as it was before.
 
 ### Function never
 

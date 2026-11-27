@@ -504,6 +504,79 @@ LOCAL_FUNCTION lantern_sig_find
 END_FUNCTION lantern_sig_find
 
 /*
+ * x0 = the valid of an entry of the SigTable of PubkeyCache x0 (or 0) with x3 keys, key k the 48 bytes at
+ * x1 + 128 * (u64 k at x2), the 32 byte message at x4 and the signature at x5, all the same bytes; else -1.
+ * A leaf; uses x6-x17.
+ */
+LOCAL_FUNCTION lantern_sig_find_indexed
+    UNWIND_END_PROLOGUE
+    cbz     x0, 9f
+    add     x6, x0, #PUBKEY_SIGS
+    ldr     x7, [x6, #SigTable_used]
+    add     x6, x6, #SigTable_entries
+    add     x7, x6, x7
+1:  cmp     x6, x7
+    b.hs    9f
+    ldr     x8, [x6, #SigEntry_keys]
+    mov     x9, #48
+    mul     x10, x8, x9
+    add     x10, x10, #SigEntry_key         /* the entry's bytes */
+    cmp     x8, x3
+    b.ne    8f
+    ldr     x11, [x6, #SigEntry_valid]
+    cmp     x11, #1
+    b.hi    8f
+    mov     x12, #0                         /* the signature */
+2:  add     x13, x6, x12
+    ldr     x14, [x13, #SigEntry_signature]
+    ldr     x15, [x5, x12]
+    cmp     x14, x15
+    b.ne    8f
+    add     x12, x12, #8
+    cmp     x12, #96
+    b.lo    2b
+    mov     x12, #0                         /* the message */
+3:  add     x13, x6, x12
+    ldr     x14, [x13, #(SigEntry_message + 24)]
+    ldr     x15, [x4, x12]
+    cmp     x14, x15
+    b.ne    8f
+    add     x12, x12, #8
+    cmp     x12, #32
+    b.lo    3b
+    mov     x12, #0                         /* each key */
+    add     x13, x6, #SigEntry_key
+4:  cmp     x12, x3
+    b.hs    7f
+    ldr     x9, [x2, x12, lsl #3]
+    add     x9, x1, x9, lsl #7
+    ldp     x14, x15, [x13]
+    ldp     x16, x17, [x9]
+    cmp     x14, x16
+    ccmp    x15, x17, #0, eq
+    b.ne    8f
+    ldp     x14, x15, [x13, #16]
+    ldp     x16, x17, [x9, #16]
+    cmp     x14, x16
+    ccmp    x15, x17, #0, eq
+    b.ne    8f
+    ldp     x14, x15, [x13, #32]
+    ldp     x16, x17, [x9, #32]
+    cmp     x14, x16
+    ccmp    x15, x17, #0, eq
+    b.ne    8f
+    add     x13, x13, #48
+    add     x12, x12, #1
+    b       4b
+7:  mov     x0, x11
+    ret
+8:  add     x6, x6, x10
+    b       1b
+9:  mov     x0, #-1
+    ret
+END_FUNCTION lantern_sig_find_indexed
+
+/*
  * lantern_verify_signed (x0 to x7) with x8 a PubkeyCache or 0: the SigTable's answer for the key,
  * the signing root and the signature when it holds them, else bls.Verify. Locals: sp+16 domain type,
  * sp+24 epoch, sp+32 domain (32), sp+64 type, object, key, signature, scratch, cache, sp+112 the root

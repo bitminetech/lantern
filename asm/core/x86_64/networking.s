@@ -496,6 +496,65 @@ LOCAL_FUNCTION lantern_sig_find
 END_FUNCTION lantern_sig_find
 
 /*
+ * rax = the valid of an entry of the SigTable of PubkeyCache rdi (or 0) with rcx keys, key k the 48 bytes at
+ * rsi + 128 * (u64 k at rdx), the 32 byte message at r8 and the signature at r9, all the same bytes; else -1.
+ * rbx the entry, rbp the end, r12 its keys, r13 its bytes, r14 its valid, r15 a key.
+ */
+LOCAL_FUNCTION lantern_sig_find_indexed
+    ENTER 0
+    test    %rdi, %rdi
+    jz      9f
+    lea     (PUBKEY_SIGS + SigTable_entries)(%rdi), %rbx
+    mov     (PUBKEY_SIGS + SigTable_used)(%rdi), %rbp
+    add     %rbx, %rbp
+1:  cmp     %rbp, %rbx
+    jae     9f
+    mov     SigEntry_keys(%rbx), %r12
+    imul    $48, %r12, %r13
+    add     $SigEntry_key, %r13             # the entry's bytes
+    cmp     %rcx, %r12
+    jne     8f
+    mov     SigEntry_valid(%rbx), %r14
+    cmp     $1, %r14
+    ja      8f
+    xor     %r10d, %r10d                    # the signature
+2:  mov     SigEntry_signature(%rbx,%r10), %r11
+    cmp     (%r9,%r10), %r11
+    jne     8f
+    add     $8, %r10
+    cmp     $96, %r10
+    jb      2b
+    xor     %r10d, %r10d                    # the message
+3:  mov     (SigEntry_message + 24)(%rbx,%r10), %r11
+    cmp     (%r8,%r10), %r11
+    jne     8f
+    add     $8, %r10
+    cmp     $32, %r10
+    jb      3b
+    lea     SigEntry_key(%rbx), %r10        # each key
+    xor     %r15d, %r15d
+4:  cmp     %rcx, %r15
+    jae     7f
+    mov     (%rdx,%r15,8), %r11
+    shl     $7, %r11
+    add     %rsi, %r11
+    .irp o, 0, 8, 16, 24, 32, 40
+    mov     \o(%r10), %rax
+    cmp     \o(%r11), %rax
+    jne     8f
+    .endr
+    add     $48, %r10
+    inc     %r15
+    jmp     4b
+7:  mov     %r14, %rax
+    LEAVE 0
+8:  add     %r13, %rbx
+    jmp     1b
+9:  mov     $-1, %rax
+    LEAVE 0
+END_FUNCTION lantern_sig_find_indexed
+
+/*
  * lantern_verify_signed with rax a PubkeyCache or 0: the SigTable's answer for the key, the signing root
  * and the signature when it holds them, else bls.Verify. Locals: rsp+0 domain type, rsp+8 epoch,
  * rsp+16 domain (32), rsp+48 type, object, key, cache, rsp+80 the root buffer (56: a ByteList header,

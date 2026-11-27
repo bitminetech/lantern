@@ -75,6 +75,7 @@ Gossip rules, subnets, custody, topics.
 - [`lantern_seen_superset`](#function-lantern_seen_superset): is_non_strict_superset of the SeenBits of a key, for some bits.
 - [`lantern_verify_signed`](#function-lantern_verify_signed): lantern_verify_with_domain with get_domain of a state.
 - [`lantern_sig_find`](#function-lantern_sig_find): the SigTable's answer for a check of keys, a message and a signature.
+- [`lantern_sig_find_indexed`](#function-lantern_sig_find_indexed): the SigTable's answer for a check of the keys of some validator indices.
 - [`lantern_verify_signed_cached`](#function-lantern_verify_signed_cached): lantern_verify_signed, with the answer of a SigTable when it holds the check.
 - [`lantern_verify_with_domain`](#function-lantern_verify_with_domain): bls.Verify of a public key, the signing root of an object under a domain, and a signature.
 - [`lantern_compressed_len`](#function-lantern_compressed_len): the most bytes of the Snappy frames of a payload, by the spec's formula.
@@ -3329,6 +3330,48 @@ lantern_sig_find(cache, keys, stride, count, message, signature) -> valid
 - Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
 - A leaf on ARM64 and RISC-V.
 - Argument order: `cache`, `keys`, `stride`, `count`, `message`, `signature`.
+
+## Function `lantern_sig_find_indexed`
+
+The SigTable's answer for a check of the keys of some validator indices, a message and a signature.
+
+### Signature
+
+```
+lantern_sig_find_indexed(cache, keys, indices, count, message, signature) -> valid
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `cache` | input | [`PubkeyCache`](block-processing.md#type-pubkeycache), or 0 |
+| `keys` | input | key i: the 48 bytes at `keys` + 128 i |
+| `indices` | input | u64 each |
+| `count` | input | u64 |
+| `message` | input | 32 bytes |
+| `signature` | input | 96 bytes |
+
+### Function does
+
+- Returns the `valid` of an entry of the cache's SigTable whose keys are the keys of the indices, in order, whose message and signature are those, byte for byte, and whose `valid` is 0 or 1; else -1, and -1 with no cache.
+
+### Function never
+
+- Makes an OS call.
+- Writes memory.
+
+### Limits
+
+- Stack of its own: 96 bytes on x86-64 (return address included), 0 bytes on ARM64, 0 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_sig_find_indexed`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- A leaf on ARM64 and RISC-V.
+- Argument order: `cache`, `keys`, `indices`, `count`, `message`, `signature`.
 
 ## Function `lantern_verify_signed_cached`
 

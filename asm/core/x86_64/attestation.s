@@ -837,7 +837,22 @@ LOCAL_FUNCTION lantern_indexed_attestation_valid
     movq    $56, (L + 40)(%rsp)
     movq    $24, (L + 48)(%rsp)
     movq    $32, (L + 56)(%rsp)
-    cmpq    $0, S8(%rsp)
+    mov     S8(%rsp), %rdi                  # the SigTable's answer, when it holds the check
+    test    %rdi, %rdi
+    jz      42f
+    mov     BeaconState_validators(%rbx), %rsi
+    lea     Validator_pubkey(%rbx,%rsi), %rsi
+    mov     %r14, %rdx
+    mov     %r15, %rcx
+    lea     (L + 64)(%rsp), %r8
+    lea     IndexedAttestation_signature(%rbp), %r9
+    call    lantern_sig_find_indexed
+    test    %rax, %rax
+    js      42f
+    mov     %rax, (%r13)
+    xor     %eax, %eax
+    LEAVE 304
+42: cmpq    $0, S8(%rsp)
     jne     40f
     mov     S7(%rsp), %rdi                  # bls.FastAggregateVerify(pubkeys, signing_root, signature)
     lea     (L + 40)(%rsp), %rsi
@@ -1916,3 +1931,314 @@ END_FUNCTION lantern_attestation_memo
 .if TIMELY_SOURCE_WEIGHT != TIMELY_HEAD_WEIGHT
 .error "lantern_process_attestation takes the source weight for the head flag"
 .endif
+
+/*
+ * (state, block, config, scratch) -> rax = LANTERN_OK: block-processing.md. The SigTable entry of each of the
+ * block's attestations, then their checks at once on the pool. rbx state, rbp an attestation, r12 scratch,
+ * r13 the SigTable, r14 the PubkeyCache, r15 the BlockSigs record. Locals: L config, L+24 the attestations
+ * left, L+32 the entries, L+40 the pool, L+48 the front's size, L+56 the next IndexedAttestation, L+64 the
+ * jobs, L+72 the scratch's size, L+80 the ShellJob.
+ */
+LOCAL_FUNCTION lantern_block_sigs
+    ENTER 112
+    mov     %rdi, %rbx
+    PART    %rbp, %rax, %rsi, BeaconBlock_body
+    mov     %rdx, L(%rsp)
+    mov     %rcx, %r12
+    mov     (%r12), %rax
+    mov     %rax, (L + 72)(%rsp)
+    mov     CONFIG_PUBKEY_CACHE(%rdx), %r14 # a PubkeyCache, and a pool with workers
+    test    %r14, %r14
+    jz      99f
+    mov     CONFIG_STATE_CACHE(%rdx), %rax
+    test    %rax, %rax
+    jz      99f
+    mov     StateCache_pool(%rax), %rax
+    test    %rax, %rax
+    jz      99f
+    mov     %rax, (L + 40)(%rsp)
+    mov     ShellPool_workers(%rax), %rcx
+    test    %rcx, %rcx
+    jz      99f
+    lea     PUBKEY_SIGS(%r14), %r13
+    PART    %rax, %rdx, %rbp, BeaconBlockBody_attestations
+    mov     %rax, %rbp
+    mov     %rdx, (L + 24)(%rsp)
+    cmp     $2, %rdx
+    jb      99f
+    inc     %rcx                            # the jobs: of the workers + 1, the attestations, BLOCK_SIG_JOBS, the fewest
+    cmp     %rdx, %rcx
+    cmova   %rdx, %rcx
+    mov     $BLOCK_SIG_JOBS, %eax
+    cmp     %rax, %rcx
+    cmova   %rax, %rcx
+    mov     %rcx, (L + 64)(%rsp)
+    imul    $BLOCK_SIG_SCRATCH, %rcx, %r8   # the region: the record and scratches, the pairs, an IndexedAttestation of each
+    add     $BlockSigs_scratch, %r8
+    mov     %rdx, %rax
+    shl     $4, %rax
+    add     %rax, %r8
+    mov     %rbp, %r9
+    mov     %rdx, %r10
+1:  test    %r10, %r10
+    jz      2f
+    mov     (Attestation_aggregation_bits + 8)(%r9), %rax
+    lea     (IndexedAttestation__fixed + 7)(,%rax,8), %rax
+    and     $-8, %rax
+    add     %rax, %r8
+    add     (%r9), %r9
+    dec     %r10
+    jmp     1b
+2:  mov     (L + 72)(%rsp), %rax            # the front keeps LANTERN_SCRATCH_FIXED bytes at least
+    and     $-8, %rax
+    MOVQ    %rcx, LANTERN_SCRATCH_FIXED
+    add     %r8, %rcx
+    cmp     %rcx, %rax
+    jb      99f
+    sub     %r8, %rax
+    mov     %rax, (L + 48)(%rsp)
+    lea     (%r12,%rax), %r15
+    mov     %r13, BlockSigs_table(%r15)
+    mov     (L + 64)(%rsp), %rcx
+    mov     %rcx, BlockSigs_jobs(%r15)
+    mov     BeaconState_validators(%rbx), %rax
+    lea     Validator_pubkey(%rbx,%rax), %rax
+    mov     %rax, BlockSigs_keys(%r15)
+    mov     %r14, BlockSigs_cache(%r15)
+    imul    $BLOCK_SIG_SCRATCH, %rcx, %rax
+    lea     BlockSigs_scratch(%r15,%rax), %rax
+    mov     %rax, BlockSigs_pairs(%r15)
+    mov     (L + 24)(%rsp), %rcx
+    shl     $4, %rcx
+    add     %rcx, %rax
+    mov     %rax, (L + 56)(%rsp)
+    movq    $0, (L + 32)(%rsp)
+3:  cmpq    $0, (L + 24)(%rsp)              # each attestation: its IndexedAttestation, sized by its bits
+    je      6f
+    mov     (L + 56)(%rsp), %r8
+    mov     (Attestation_aggregation_bits + 8)(%rbp), %rax
+    lea     (IndexedAttestation__fixed + 7)(,%rax,8), %rax
+    and     $-8, %rax
+    mov     %rax, (%r8)
+    mov     (L + 48)(%rsp), %rax
+    mov     %rax, (%r12)
+    mov     %rbx, %rdi
+    mov     %rbp, %rsi
+    mov     L(%rsp), %rdx
+    mov     CONFIG_COMMITTEE_CACHE(%rdx), %rdx
+    mov     %r12, %rcx
+    call    lantern_get_indexed_attestation
+    test    %rax, %rax
+    jnz     5f
+    mov     (L + 56)(%rsp), %r9             # its indices: some, each below the cache's count and the validators
+    mov     IndexedAttestation_attesting_indices(%r9), %rsi
+    add     %r9, %rsi
+    mov     (IndexedAttestation_attesting_indices + 8)(%r9), %rdx
+    test    %rdx, %rdx
+    jz      5f
+    mov     CRYPTO_BLS_CACHE_COUNT(%r14), %r10
+    mov     (BeaconState_validators + 8)(%rbx), %rax
+    cmp     %rax, %r10
+    cmova   %rax, %r10
+    xor     %ecx, %ecx
+31: cmp     %rdx, %rcx
+    jae     32f
+    cmp     %r10, (%rsi,%rcx,8)
+    jae     5f
+    inc     %rcx
+    jmp     31b
+32: imul    $48, %rdx, %rax                 # room for its entry: or no more entries
+    add     $SigEntry_key, %rax
+    add     SigTable_used(%r13), %rax
+    cmp     SigTable_room(%r13), %rax
+    ja      6f
+    mov     BlockSigs_keys(%r15), %rdi      # each key's cache entry holding it: the jobs only read the cache
+    mov     %r14, %rcx
+    call    lantern_block_sig_keys
+    test    %rax, %rax
+    jnz     5f
+    mov     (L + 48)(%rsp), %rax
+    mov     %rax, (%r12)
+    mov     %rbx, %rdi                      # its entry, after the others
+    mov     (L + 56)(%rsp), %rsi
+    mov     SigTable_used(%r13), %rdx
+    lea     SigTable_entries(%r13,%rdx), %rdx
+    mov     %r12, %rcx
+    call    lantern_block_sig_entry
+    test    %rax, %rax
+    jnz     5f
+    mov     SigTable_used(%r13), %rax
+    lea     SigTable_entries(%r13,%rax), %rdx
+    mov     (L + 56)(%rsp), %rsi
+    mov     (L + 32)(%rsp), %rcx
+    shl     $4, %rcx
+    add     BlockSigs_pairs(%r15), %rcx
+    mov     %rdx, (%rcx)
+    mov     %rsi, 8(%rcx)
+    imul    $48, SigEntry_keys(%rdx), %rcx
+    add     $SigEntry_key, %rcx
+    add     %rcx, SigTable_used(%r13)
+    mov     (%rsi), %rax
+    add     %rax, (L + 56)(%rsp)
+    incq    (L + 32)(%rsp)
+5:  add     (%rbp), %rbp
+    decq    (L + 24)(%rsp)
+    jmp     3b
+6:  mov     (L + 32)(%rsp), %rax            # two or more entries: the jobs
+    cmp     $2, %rax
+    jb      99f
+    mov     %rax, BlockSigs_count(%r15)
+    mov     BlockSigs_jobs(%r15), %rcx
+    cmp     %rax, %rcx
+    cmova   %rax, %rcx
+    mov     %rcx, BlockSigs_jobs(%r15)
+    ADDRESS %rax, lantern_block_sig_job
+    mov     %rax, (L + 80)(%rsp)
+    mov     %r15, (L + 88)(%rsp)
+    mov     %rcx, (L + 96)(%rsp)
+    mov     (L + 40)(%rsp), %rdi
+    lea     (L + 80)(%rsp), %rsi
+    CALL_GLOBAL lantern_shell_pool_run
+99: mov     (L + 72)(%rsp), %rax
+    mov     %rax, (%r12)
+    xor     %eax, %eax
+    LEAVE 112
+END_FUNCTION lantern_block_sigs
+
+/*
+ * rax = 0 when the PubkeyCache rcx entry of each of the rdx indices at rsi holds its key (key i at rdi + 128 i),
+ * after crypto_bls_key_cache_fill of those that did not; else its status. rbx keys, rbp the next index,
+ * r12 those left, r13 the cache, r14 an index, r15 its entry.
+ */
+LOCAL_FUNCTION lantern_block_sig_keys
+    ENTER 0
+    mov     %rdi, %rbx
+    mov     %rsi, %rbp
+    mov     %rdx, %r12
+    mov     %rcx, %r13
+1:  test    %r12, %r12
+    jz      8f
+    mov     (%rbp), %r14
+    add     $8, %rbp
+    imul    $CRYPTO_BLS_ENTRY_BYTES, %r14, %r15
+    add     CRYPTO_BLS_CACHE_OFFSET(%r13), %r15
+    add     %r13, %r15
+    mov     %r14, %rax
+    shl     $7, %rax
+    add     %rbx, %rax
+    cmpq    $0, CRYPTO_BLS_ENTRY_STATUS(%r15)
+    je      2f
+    .irp o, 0, 8, 16, 24, 32, 40
+    mov     \o(%rax), %rcx
+    cmp     (CRYPTO_BLS_ENTRY_KEY + \o)(%r15), %rcx
+    jne     2f
+    .endr
+    jmp     3f
+2:  mov     %rbx, %rdi
+    mov     %r14, %rsi
+    mov     $1, %edx
+    mov     %r13, %rcx
+    CALL_GLOBAL crypto_bls_key_cache_fill
+    test    %rax, %rax
+    jnz     9f
+3:  dec     %r12
+    jmp     1b
+8:  xor     %eax, %eax
+9:  LEAVE 0
+END_FUNCTION lantern_block_sig_keys
+
+/*
+ * (state rdi, IndexedAttestation rsi, entry rdx, scratch rcx) -> rax status: the SigEntry of the check of
+ * is_valid_indexed_attestation: its keys, its signing root, its signature, valid SIG_UNKNOWN. rbx state,
+ * rbp the indexed attestation, r12 the entry, r13 scratch, r14 the keys left, r15 the next index.
+ * Locals: L domain type, L+8 domain (32).
+ */
+LOCAL_FUNCTION lantern_block_sig_entry
+    ENTER 48
+    mov     %rdi, %rbx
+    mov     %rsi, %rbp
+    mov     %rdx, %r12
+    mov     %rcx, %r13
+    movl    $DOMAIN_BEACON_ATTESTER, L(%rsp)    # domain = get_domain(state, DOMAIN_BEACON_ATTESTER, data.target.epoch)
+    mov     %rbx, %rdi
+    lea     L(%rsp), %rsi
+    lea     (IndexedAttestation_data + AttestationData_target + Checkpoint_epoch)(%rbp), %rdx
+    mov     %r13, %rcx
+    lea     (L + 8)(%rsp), %r8
+    call    lantern_get_domain
+    test    %rax, %rax
+    jnz     9f
+    ADDRESS %rdi, lantern_type_AttestationData  # the signing root
+    lea     IndexedAttestation_data(%rbp), %rsi
+    lea     (L + 8)(%rsp), %rdx
+    mov     %r13, %rcx
+    lea     (SigEntry_message + 24)(%r12), %r8
+    call    lantern_compute_signing_root
+    test    %rax, %rax
+    jnz     9f
+    movq    $SIG_UNKNOWN, SigEntry_valid(%r12)
+    mov     (IndexedAttestation_attesting_indices + 8)(%rbp), %r14
+    mov     %r14, SigEntry_keys(%r12)
+    movq    $56, SigEntry_message(%r12)
+    movq    $24, (SigEntry_message + 8)(%r12)
+    movq    $32, (SigEntry_message + 16)(%r12)
+    lea     SigEntry_signature(%r12), %rdi
+    lea     IndexedAttestation_signature(%rbp), %rsi
+    mov     $96, %edx
+    call    lantern_copy
+    mov     IndexedAttestation_attesting_indices(%rbp), %r15
+    add     %rbp, %r15
+    mov     BeaconState_validators(%rbx), %r8
+    lea     Validator_pubkey(%rbx,%r8), %r8
+    lea     SigEntry_key(%r12), %rdi
+1:  test    %r14, %r14
+    jz      8f
+    mov     (%r15), %rax
+    add     $8, %r15
+    shl     $7, %rax
+    add     %r8, %rax
+    movdqu  (%rax), %xmm0
+    movdqu  16(%rax), %xmm1
+    movdqu  32(%rax), %xmm2
+    movdqu  %xmm0, (%rdi)
+    movdqu  %xmm1, 16(%rdi)
+    movdqu  %xmm2, 32(%rdi)
+    add     $48, %rdi
+    dec     %r14
+    jmp     1b
+8:  xor     %eax, %eax
+9:  LEAVE 48
+END_FUNCTION lantern_block_sig_entry
+
+/*
+ * A job of lantern_block_sigs (rdi the BlockSigs record, rsi the job k): each pair j with j mod n = k:
+ * crypto_bls_fast_aggregate_verify_cached of its IndexedAttestation's keys, the entry's message and
+ * signature, into the entry's valid. rbx the record, rbp j, r12 the scratch, r13 the entry.
+ */
+LOCAL_FUNCTION lantern_block_sig_job
+    ENTER 0
+    mov     %rdi, %rbx
+    mov     %rsi, %rbp
+    imul    $BLOCK_SIG_SCRATCH, %rbp, %r12
+    lea     BlockSigs_scratch(%rbx,%r12), %r12
+1:  cmp     BlockSigs_count(%rbx), %rbp
+    jae     9f
+    movq    $BLOCK_SIG_SCRATCH, (%r12)
+    mov     %rbp, %rax
+    shl     $4, %rax
+    add     BlockSigs_pairs(%rbx), %rax
+    mov     (%rax), %r13
+    mov     8(%rax), %rsi
+    mov     BlockSigs_keys(%rbx), %rdi
+    mov     BlockSigs_cache(%rbx), %rdx
+    lea     SigEntry_message(%r13), %rcx
+    lea     SigEntry_signature(%r13), %r8
+    mov     %r12, %r9
+    lea     SigEntry_valid(%r13), %rax
+    mov     %rax, S7(%rsp)                  # valid: the 7th argument, at the stack pointer
+    CALL_GLOBAL crypto_bls_fast_aggregate_verify_cached
+    add     BlockSigs_jobs(%rbx), %rbp
+    jmp     1b
+9:  xor     %eax, %eax
+    LEAVE 0
+END_FUNCTION lantern_block_sig_job

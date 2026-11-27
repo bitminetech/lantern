@@ -888,7 +888,19 @@ SPEC_FUNCTION state_transition
     jne     1f
     movq    $LANTERN_INVALID_BLOCK_SIGNATURE, (%r15)
     jmp     8f
-1:  mov     S8(%rsp), %rax
+1:  mov     CONFIG_PUBKEY_CACHE(%r13), %rax # the block's attestation signatures at once, into the SigTable
+    test    %rax, %rax
+    jz      11f
+    mov     (PUBKEY_SIGS + SigTable_used)(%rax), %rax
+    mov     %rax, (L + 40)(%rsp)
+    mov     S8(%rsp), %rax
+    mov     %rax, (%r14)
+    mov     %rbx, %rdi
+    mov     S7(%rsp), %rsi
+    mov     %r13, %rdx
+    mov     %r14, %rcx
+    call    lantern_block_sigs
+11: mov     S8(%rsp), %rax
     mov     %rax, (%r14)
     mov     %rbx, %rdi                      # process_block(state, block)
     mov     S7(%rsp), %rsi
@@ -897,7 +909,12 @@ SPEC_FUNCTION state_transition
     mov     %r14, %r8
     mov     %r15, %r9
     call    lantern_process_block
-    test    %rax, %rax
+    mov     CONFIG_PUBKEY_CACHE(%r13), %rcx # the SigTable without the block's entries
+    test    %rcx, %rcx
+    jz      12f
+    mov     (L + 40)(%rsp), %rdx
+    mov     %rdx, (PUBKEY_SIGS + SigTable_used)(%rcx)
+12: test    %rax, %rax
     jnz     7f
     cmpq    $0, (%r15)
     jne     8f

@@ -27,7 +27,7 @@ fetch() {
     fi
 }
 fetch asm-ssz ade8944b2b78640bc3a12690867b0c11ef64ed8d
-fetch asm-crypto 6df4597fa0c3584d5eef4f89cbc647797316853d
+fetch asm-crypto 0399796d7a5551a2a066964b5124844dbeb60ce6
 fetch asm-snappy b84f65a17f51dead69d22a7f6c5a16f7b2975d2a
 fetch asm-libp2p ba62d0a7a406834e751c9fce89a38d7f563bc70a
 fetch asm-quic d12ea4b467050a694ac9125ed1c2a88d9d97b041

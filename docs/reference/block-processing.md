@@ -66,6 +66,10 @@ Every block step, for every fork.
 - [`lantern_pubkey_cache_size`](#function-lantern_pubkey_cache_size): the bytes of a public key cache for a number of validators.
 - [`lantern_pubkey_cache_init`](#function-lantern_pubkey_cache_init): lays out an empty public key cache.
 - [`lantern_attestation_memo`](#function-lantern_attestation_memo): process_attestation, with one get_base_reward_per_increment shared by the attestations of a block.
+- [`lantern_block_sigs`](#function-lantern_block_sigs): the signature checks of a block's attestations at once on the pool, into the SigTable.
+- [`lantern_block_sig_keys`](#function-lantern_block_sig_keys): the PubkeyCache entries of some indices, filled.
+- [`lantern_block_sig_entry`](#function-lantern_block_sig_entry): the SigEntry of an indexed attestation's check.
+- [`lantern_block_sig_job`](#function-lantern_block_sig_job): a job of lantern_block_sigs.
 - [`lantern_indexed_attestation_valid`](#function-lantern_indexed_attestation_valid): is_valid_indexed_attestation, with the sum of the keys from the key sums of a committee cache when it can.
 - [`lantern_attestation_key_sum`](#function-lantern_attestation_key_sum): the sum of the public keys of an attestation's attesting validators, from the key sums of a committee cache.
 - [`lantern_key_sum_make`](#function-lantern_key_sum_make): makes the KeySum of a committee.
@@ -2962,6 +2966,7 @@ lantern_indexed_attestation_valid(state, indexed_attestation, cache, scratch, ou
 
 - Gives what lantern_is_valid_indexed_attestation gives.
 - With `attestation`, `committees` and `cache` not 0, the sum of the keys may come from the key sums of `committees` (lantern_attestation_key_sum).
+- With `cache` not 0 and an entry of every index: first the SigTable's answer (lantern_sig_find_indexed), when an entry holds the same keys, signing root and signature.
 - Verifies a signature with `crypto_bls_verify` of asm-crypto.
 - Verifies an aggregate signature with `crypto_bls_fast_aggregate_verify` of asm-crypto.
 
@@ -3755,6 +3760,192 @@ lantern_verify_root_signature(pubkey, signature, root, scratch) -> (status, vali
 - It returns two values: x0, rax or a0, then x1, rdx or a1.
 - Argument order: `pubkey`, `signature`, `root`, `scratch`.
 
+## Function `lantern_block_sigs`
+
+Before process_block, the signature checks of the block's attestations at once on the pool, into the PubkeyCache's SigTable.
+
+### Signature
+
+```
+lantern_block_sigs(state, block, config, scratch) -> status
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `state` | input | `BeaconState`: the state process_block takes |
+| `block` | input | `BeaconBlock` |
+| `config` | input | `Config` |
+| `scratch` | scratch | [`Scratch`](helpers.md#type-scratch) |
+
+### Returns
+
+- `LANTERN_OK`, always.
+
+### Function does
+
+- With a PubkeyCache at `CONFIG_PUBKEY_CACHE`, a StateCache whose `pool` has workers, and 2 or more attestations in the block: else nothing.
+- Keeps at the end of `scratch` a [`BlockSigs`](#type-blocksigs) record, the job scratches, a pair of each entry and an IndexedAttestation of each attestation, sized by its bits; and leaves the front, of `LANTERN_SCRATCH_FIXED` bytes at least, to its callees.
+- For each attestation, in block order: lantern_get_indexed_attestation; with some indices, each below the cache's count and the state's validators, and room in the SigTable: lantern_block_sig_keys, then lantern_block_sig_entry into the next entry. An attestation where a step fails gets no entry.
+- With 2 or more entries: lantern_shell_pool_run of the lower of the entries and the jobs (the workers + 1, at most `BLOCK_SIG_JOBS`) jobs of lantern_block_sig_job.
+- Each check of process_block then reads the SigTable (lantern_indexed_attestation_valid): an entry answers only a check of the same keys, message and signature, so every result is the one of a check of its own.
+- Gives `scratch` its `size` back.
+
+### Function never
+
+- Makes an OS call other than through lantern_shell_pool_run.
+- Changes `state` or `block`.
+- Keeps a pointer after it returns.
+
+### Limits
+
+- Stack of its own: 208 bytes on x86-64 (return address included), 208 bytes on ARM64, 208 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_block_sigs`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- Argument order: `state`, `block`, `config`, `scratch`.
+
+## Function `lantern_block_sig_keys`
+
+Fills the PubkeyCache entries of some indices that do not hold their keys, so that later checks only read them.
+
+### Signature
+
+```
+lantern_block_sig_keys(keys, indices, count, cache) -> status
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `keys` | input | key i: the 48 bytes at `keys` + 128 i: the pubkeys of a state's validators |
+| `indices` | input | u64 each |
+| `count` | input | u64 |
+| `cache` | state | [`PubkeyCache`](#type-pubkeycache) |
+
+### Returns
+
+- 0: each entry holds its key.
+- The status of crypto_bls_key_cache_fill when it is not 0.
+
+### Caller must
+
+- Pass indices below the cache's count.
+
+### Function does
+
+- For each index whose entry has status 0 or another key: crypto_bls_key_cache_fill of asm-crypto of that one index.
+- So afterwards each index's entry has a status other than 0 and the same key: crypto_bls_fast_aggregate_verify_cached of those indices writes no entry, and calls of it may run at once.
+
+### Function never
+
+- Makes an OS call.
+- Keeps a pointer after it returns.
+
+### Limits
+
+- Stack of its own: 96 bytes on x86-64 (return address included), 96 bytes on ARM64, 96 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_block_sig_keys`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- Argument order: `keys`, `indices`, `count`, `cache`.
+
+## Function `lantern_block_sig_entry`
+
+The SigEntry of the check that is_valid_indexed_attestation makes of an indexed attestation.
+
+### Signature
+
+```
+lantern_block_sig_entry(state, indexed_attestation, entry, scratch) -> status
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `state` | input | `BeaconState` |
+| `indexed_attestation` | input | `IndexedAttestation` |
+| `entry` | output | [`SigEntry`](#type-sigentry) with room for its keys |
+| `scratch` | scratch | [`Scratch`](helpers.md#type-scratch) |
+
+### Returns
+
+- `LANTERN_OK`: `entry` is written.
+- The statuses of lantern_get_domain and lantern_compute_signing_root.
+
+### Caller must
+
+- Pass indices that name validators of `state`.
+
+### Function does
+
+- Its message: compute_signing_root of the data under get_domain(state, `DOMAIN_BEACON_ATTESTER`, data.target.epoch).
+- Its keys: the pubkeys of the state's validators of the attesting indices, in order; its signature: the indexed attestation's; `valid` `SIG_UNKNOWN`.
+
+### Function never
+
+- Makes an OS call.
+- Keeps a pointer after it returns.
+
+### Limits
+
+- Stack of its own: 144 bytes on x86-64 (return address included), 144 bytes on ARM64, 144 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_block_sig_entry`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- Argument order: `state`, `indexed_attestation`, `entry`, `scratch`.
+
+## Function `lantern_block_sig_job`
+
+A job of lantern_block_sigs: the checks of its share of the block's entries.
+
+### Signature
+
+```
+lantern_block_sig_job(record, index)
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `record` | state | [`BlockSigs`](#type-blocksigs) |
+| `index` | input | u64 in a register: the job |
+
+### Function does
+
+- For each pair j with j mod `jobs` the job: crypto_bls_fast_aggregate_verify_cached of asm-crypto of the keys of its IndexedAttestation's indices, the entry's message and signature, with the record's PubkeyCache and the job's own scratch, into the entry's `valid`.
+- Reads the cache only: lantern_block_sig_keys filled each entry it reads.
+
+### Function never
+
+- Makes an OS call.
+- Writes outside its share of the entries' `valid` and its scratch.
+
+### Limits
+
+- Stack of its own: 96 bytes on x86-64 (return address included), 96 bytes on ARM64, 96 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_block_sig_job`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- A ShellJob function (shell.md): its status is not read.
+- Argument order: `record`, `index`.
+
 ## Type `PubkeyCache`
 
 The checked public key of each validator index: asm-crypto's [`BlsKeyCache`](https://github.com/bitminetech/asm-crypto/blob/0f80dd746dfa7a561610165065b9473e4d16a0ce/docs/reference/bls-signatures.md#type-blskeycache), whose keys are a state's validators' pubkeys.
@@ -3765,6 +3956,22 @@ The checked public key of each validator index: asm-crypto's [`BlsKeyCache`](htt
 - Between its fixed fields and its entries, at `PUBKEY_SIGS` (`CRYPTO_BLS_CACHE_FIXED`), a [`SigTable`](#type-sigtable) of `SIG_TABLE_BYTES` (2 MiB): asm-crypto reads only the fixed fields and the entries.
 - Only crypto_bls_fast_aggregate_verify_cached writes its entries, after lantern_pubkey_cache_init empties them.
 - An entry answers only for the key of its 48 bytes, so one cache serves states of any chain.
+
+## Type `BlockSigs`
+
+The record of the jobs of lantern_block_sigs, at the end of its scratch.
+
+### Layout
+
+| Offset | Field | Type | Meaning |
+|---|---|---|---|
+| 0 | `table` | u64 | The SigTable |
+| 8 | `jobs` | u64 | The jobs n |
+| 16 | `keys` | u64 | The pubkey of the state's first validator: key i at + 128 i |
+| 24 | `cache` | u64 | The PubkeyCache |
+| 32 | `count` | u64 | The entries |
+| 40 | `pairs` | u64 | The address of the pairs: (entry, IndexedAttestation) of each entry, 16 bytes each |
+| 48 | `scratch` | n x `BLOCK_SIG_SCRATCH` bytes | A scratch of each job |
 
 ## Type `SigTable`
 
@@ -3783,6 +3990,7 @@ Checked signatures: entries of the result of a BLS signature check with its whol
 - At `PUBKEY_SIGS` of a [`PubkeyCache`](#type-pubkeycache), `SIG_TABLE_BYTES` bytes in all.
 - An entry answers a check only when its keys, its message and its signature are those of the check, byte for byte, and its `valid` is 0 or 1: the answer is then the check's result, since `crypto_bls_verify` and the other checks of asm-crypto are functions of those bytes.
 - lantern_app_sigs empties it before the actions of each step and fills it; the checks of the step read it.
+- lantern_block_sigs adds the entries of a block's attestations before process_block, and lantern_state_transition gives `used` back after it.
 
 ## Type `SigEntry`
 

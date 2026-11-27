@@ -574,6 +574,16 @@
 .set SigEntry_key, 168
 .set SIG_ENTRY_ONE, SigEntry_key + 48       /* an entry of one key */
 .set SIG_UNKNOWN, 2
+/* BlockSigs (block-processing.md, lantern_block_sigs): the record of the jobs at the end of the scratch */
+.set BlockSigs_table, 0                    /* the SigTable */
+.set BlockSigs_jobs, 8                     /* the jobs n */
+.set BlockSigs_keys, 16                    /* the state's first validator's pubkey: key i at + 128 i */
+.set BlockSigs_cache, 24                   /* the PubkeyCache */
+.set BlockSigs_count, 32                   /* the entries */
+.set BlockSigs_pairs, 40                   /* (entry, IndexedAttestation) of each entry, 16 bytes each */
+.set BlockSigs_scratch, 48                 /* then n scratches of BLOCK_SIG_SCRATCH bytes */
+.set BLOCK_SIG_SCRATCH, 8448               /* a job's BlsScratch: CRYPTO_BLS_SCRATCH and the 32 message bytes, rounded up */
+.set BLOCK_SIG_JOBS, 16
 
 /* ShellPool (shell.md): the threads of lantern_shell_pool_run, a resource context of the shell */
 .set ShellPool_gen, 0                       /* u32: the generation of the last run; a worker waits on it */

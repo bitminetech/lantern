@@ -1065,6 +1065,16 @@ static void load_config(const char *dir) {
         exit(2);
     }
     wr64(config + CONFIG_STATE_CACHE, (uint64_t)(uintptr_t)state_cache);
+    { /* the cache's pool (StateCache_pool, 16), as the app gives it: state roots hash on it, and each block's
+         attestation signatures are checked on it (block-processing.md, lantern_block_sigs) */
+        static uint64_t runner_pool[1024]; /* 8192 bytes at a multiple of 8, as the atomics need */
+        uint64_t threads = 4, res[2] = {1, 0};
+        if (lantern_shell_pool_start(runner_pool, &threads, res) != 0 || res[0] != 0) {
+            fprintf(stderr, "lantern_shell_pool_start status\n");
+            exit(2);
+        }
+        wr64(state_cache + 16, (uint64_t)(uintptr_t)runner_pool);
+    }
     CALL(LF(committee_cache_size), &committee_validators, &csize);
     committee_cache = buffer(csize);
     wr64(committee_cache, csize);

@@ -854,7 +854,17 @@ SPEC_FUNCTION state_transition
     mov     x9, #LANTERN_INVALID_BLOCK_SIGNATURE
     str     x9, [x24]
     b       8f
-1:  str     x26, [x23]
+1:  ldr     x9, [x22, #CONFIG_PUBKEY_CACHE] /* the block's attestation signatures at once, into the SigTable */
+    cbz     x9, 11f
+    ldr     x10, [x9, #(PUBKEY_SIGS + SigTable_used)]
+    str     x10, [sp, #(L + 40)]
+    str     x26, [x23]
+    mov     x0, x19
+    mov     x1, x25
+    mov     x2, x22
+    mov     x3, x23
+    bl      lantern_block_sigs
+11: str     x26, [x23]
     mov     x0, x19                         /* process_block(state, block) */
     mov     x1, x25
     add     x2, x21, #8
@@ -862,7 +872,11 @@ SPEC_FUNCTION state_transition
     mov     x4, x23
     mov     x5, x24
     bl      lantern_process_block
-    cbnz    x0, 7f
+    ldr     x9, [x22, #CONFIG_PUBKEY_CACHE] /* the SigTable without the block's entries */
+    cbz     x9, 12f
+    ldr     x10, [sp, #(L + 40)]
+    str     x10, [x9, #(PUBKEY_SIGS + SigTable_used)]
+12: cbnz    x0, 7f
     ldr     x9, [x24]
     cbnz    x9, 8f
     ldr     x9, [x21]                       /* if validate_result: assert block.state_root == hash_tree_root(state) */

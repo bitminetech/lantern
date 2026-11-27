@@ -520,6 +520,70 @@ LOCAL_FUNCTION lantern_sig_find
 END_FUNCTION lantern_sig_find
 
 /*
+ * a0 = the valid of an entry of the SigTable of PubkeyCache a0 (or 0) with a3 keys, key k the 48 bytes at
+ * a1 + 128 * (u64 k at a2), the 32 byte message at a4 and the signature at a5, all the same bytes; else -1.
+ * A leaf; uses a6, a7, t0-t6.
+ */
+LOCAL_FUNCTION lantern_sig_find_indexed
+    UNWIND_END_PROLOGUE
+    beqz    a0, 9f
+    li      t0, PUBKEY_SIGS
+    add     t0, a0, t0
+    ld      t1, SigTable_used(t0)
+    addi    t0, t0, SigTable_entries
+    add     t1, t0, t1
+1:  bgeu    t0, t1, 9f
+    ld      t2, SigEntry_keys(t0)
+    li      t3, 48
+    mul     t3, t2, t3
+    addi    t3, t3, SigEntry_key            # the entry's bytes
+    bne     t2, a3, 8f
+    ld      a6, SigEntry_valid(t0)
+    li      t4, 1
+    bltu    t4, a6, 8f
+    li      t4, 0                           # the signature
+2:  add     t5, t0, t4
+    ld      t5, SigEntry_signature(t5)
+    add     t6, a5, t4
+    ld      t6, 0(t6)
+    bne     t5, t6, 8f
+    addi    t4, t4, 8
+    li      t5, 96
+    bltu    t4, t5, 2b
+    li      t4, 0                           # the message
+3:  add     t5, t0, t4
+    ld      t5, (SigEntry_message + 24)(t5)
+    add     t6, a4, t4
+    ld      t6, 0(t6)
+    bne     t5, t6, 8f
+    addi    t4, t4, 8
+    li      t5, 32
+    bltu    t4, t5, 3b
+    addi    t4, t0, SigEntry_key            # each key
+    li      t2, 0
+4:  bgeu    t2, a3, 7f
+    slli    a7, t2, 3
+    add     a7, a2, a7
+    ld      a7, 0(a7)
+    slli    a7, a7, 7
+    add     a7, a1, a7
+    .irp o, 0, 8, 16, 24, 32, 40
+    ld      t5, \o(t4)
+    ld      t6, \o(a7)
+    bne     t5, t6, 8f
+    .endr
+    addi    t4, t4, 48
+    addi    t2, t2, 1
+    j       4b
+7:  mv      a0, a6
+    ret
+8:  add     t0, t0, t3
+    j       1b
+9:  li      a0, -1
+    ret
+END_FUNCTION lantern_sig_find_indexed
+
+/*
  * lantern_verify_signed (a0 to a7) with t6 a PubkeyCache or 0: the SigTable's answer for the key, the
  * signing root and the signature when it holds them, else bls.Verify. Locals: sp+0 domain type, sp+8
  * epoch, sp+16 domain (32), sp+48 type, object, key, signature, scratch, cache, sp+96 the root buffer (56).

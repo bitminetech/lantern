@@ -851,7 +851,17 @@ SPEC_FUNCTION state_transition
     li      t0, LANTERN_INVALID_BLOCK_SIGNATURE
     sd      t0, 0(s6)
     j       8f
-1:  sd      s8, 0(s5)
+1:  ld      t0, CONFIG_PUBKEY_CACHE(s4)     # the block's attestation signatures at once, into the SigTable
+    beqz    t0, 11f
+    ld      t0, (PUBKEY_SIGS + SigTable_used)(t0)
+    sd      t0, (L + 40)(sp)
+    sd      s8, 0(s5)
+    mv      a0, s1
+    mv      a1, s7
+    mv      a2, s4
+    mv      a3, s5
+    call    lantern_block_sigs
+11: sd      s8, 0(s5)
     mv      a0, s1                          # process_block(state, block)
     mv      a1, s7
     addi    a2, s3, 8
@@ -859,7 +869,11 @@ SPEC_FUNCTION state_transition
     mv      a4, s5
     mv      a5, s6
     call    lantern_process_block
-    bnez    a0, 7f
+    ld      t0, CONFIG_PUBKEY_CACHE(s4)     # the SigTable without the block's entries
+    beqz    t0, 12f
+    ld      t1, (L + 40)(sp)
+    sd      t1, (PUBKEY_SIGS + SigTable_used)(t0)
+12: bnez    a0, 7f
     ld      t0, 0(s6)
     bnez    t0, 8f
     ld      t0, 0(s3)                       # if validate_result: assert block.state_root == hash_tree_root(state)
