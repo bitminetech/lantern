@@ -6368,6 +6368,9 @@ LOCAL_FUNCTION lantern_app_loop
     b.eq    3f
     str     x0, [x19, #APP_LAST_SLOT]
     str     x0, [sp, #(L + 8)]
+    ldr     x0, [x19, #APP_SEEN]            /* the Seen: the entries of past epochs and slots go */
+    ldr     x1, [x19, #APP_STORE]
+    CALL_GLOBAL lantern_seen_prune
     bl      lantern_app_line_start                  /* slot <s>, head 0x<root>, finalized epoch <e> */
     ADDRESS x0, app_m_slot
     mov     x1, #app_m_slot_len

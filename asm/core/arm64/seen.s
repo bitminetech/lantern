@@ -1,5 +1,5 @@
 /*
- * Sizing, making and growing Seen, ARM64: it reads no fork's layouts.
+ * Sizing, making, growing and pruning Seen, ARM64: it reads no fork's layouts.
  * Requirements: docs/reference/networking.md.
  */
 
@@ -150,3 +150,111 @@ FUNCTION lantern_seen_add_block
 9:  mov     x0, #LANTERN_BUFFER_TOO_SMALL
     UNFRAME 32
 END_FUNCTION lantern_seen_add_block
+
+/*
+ * Drop the entries of past epochs and slots from seen x0, with the time and the finalized epoch of
+ * store x1 (networking.md). A leaf; uses x2-x14. x8 the first epoch kept, x9 the first sync slot
+ * kept, x10 the finalized slot; x4 the entry read, x6 the entry written, x5 the entries left.
+ */
+LEAF lantern_seen_prune
+    ldr     x2, [x1, #Store_time_ms]        /* s: the current slot, 0 before genesis */
+    ldr     x3, [x1, #Store_genesis_time_ms]
+    subs    x2, x2, x3
+    csel    x2, xzr, x2, lo
+    ldr     x3, [x1, #(Store_config + CONFIG_SLOT_DURATION_MS)]
+    udiv    x2, x2, x3
+    subs    x9, x2, #1                      /* the first sync slot kept: s - 1 */
+    csel    x9, xzr, x9, lo
+    ldr     x3, [x1, #(Store_config + CONFIG_ATTESTATION_PROPAGATION_SLOT_RANGE)]
+    subs    x2, x2, x3
+    csel    x2, xzr, x2, lo
+    subs    x2, x2, #1
+    csel    x2, xzr, x2, lo
+    mov     x3, #SLOTS_PER_EPOCH            /* e: the epoch of s - range - 1 */
+    udiv    x2, x2, x3
+    subs    x8, x2, #1                      /* the first epoch kept: e - 1 */
+    csel    x8, xzr, x8, lo
+    ldr     x2, [x1, #Store_finalized_checkpoint]   /* f: the first slot of the finalized epoch */
+    umulh   x4, x2, x3
+    mul     x10, x2, x3
+    cmp     x4, #0
+    csinv   x10, x10, xzr, eq
+    PART    x4, x5, x0, Seen_keys           /* the keys */
+    mov     x6, x4
+10: cbz     x5, 19f
+    ldp     x11, x12, [x4]
+    cmp     x11, #SEEN_ATTESTATION
+    b.eq    11f
+    cmp     x11, #SEEN_AGGREGATOR_EPOCH
+    b.eq    11f
+    cmp     x11, #SEEN_PROPOSER_SLOT
+    b.eq    12f
+    cmp     x11, #SEEN_DATA_COLUMN
+    b.eq    12f
+    cmp     x11, #SEEN_BLOB_SIDECAR
+    b.eq    12f
+    cmp     x11, #SEEN_SYNC_CONTRIBUTION
+    b.eq    13f
+    cmp     x11, #SEEN_SYNC_MESSAGE
+    b.ne    15f
+13: cmp     x12, x9                         /* a sync slot: kept from s - 1 */
+    b.lo    16f
+    b       15f
+11: cmp     x12, x8                         /* an epoch: kept from the first epoch kept */
+    b.lo    16f
+    b       15f
+12: cmp     x12, x10                        /* a block's slot: kept above f */
+    b.ls    16f
+15: cmp     x4, x6                          /* kept: moved down over the dropped ones */
+    b.eq    14f
+    ldp     x11, x12, [x4]
+    ldp     x13, x14, [x4, #16]
+    stp     x11, x12, [x6]
+    stp     x13, x14, [x6, #16]
+14: add     x6, x6, #SeenKey__mem
+16: add     x4, x4, #SeenKey__mem
+    sub     x5, x5, #1
+    b       10b
+19: ldr     x11, [x0, #Seen_keys]           /* the count: the entries written */
+    add     x11, x0, x11
+    sub     x6, x6, x11
+    lsr     x6, x6, #5
+    str     x6, [x0, #(Seen_keys + 8)]
+    PART    x4, x5, x0, Seen_bits           /* the bits */
+    mov     x6, x4
+20: cbz     x5, 29f
+    ldr     x11, [x4, #SeenBits_kind]
+    cmp     x11, #SEEN_AGGREGATE
+    b.ne    21f
+    ldr     x12, [x4, #SeenBits_b]          /* an aggregate: its target epoch kept from the first epoch kept */
+    cmp     x12, x8
+    b.lo    26f
+    b       25f
+21: cmp     x11, #SEEN_CONTRIBUTION
+    b.ne    25f
+    ldr     x12, [x4, #SeenBits_a]          /* a contribution: its slot kept from s - 1 */
+    cmp     x12, x9
+    b.lo    26f
+25: cmp     x4, x6
+    b.eq    23f
+    mov     x7, #0
+24: add     x13, x4, x7
+    ldp     x11, x12, [x13]
+    add     x14, x6, x7
+    stp     x11, x12, [x14]
+    add     x7, x7, #16
+    cmp     x7, #SeenBits__mem
+    b.lo    24b
+23: add     x6, x6, #SeenBits__mem
+26: add     x4, x4, #SeenBits__mem
+    sub     x5, x5, #1
+    b       20b
+29: ldr     x11, [x0, #Seen_bits]
+    add     x11, x0, x11
+    sub     x6, x6, x11
+    mov     x12, #SeenBits__mem
+    udiv    x6, x6, x12
+    str     x6, [x0, #(Seen_bits + 8)]
+    mov     x0, #LANTERN_OK
+    ret
+END_FUNCTION lantern_seen_prune

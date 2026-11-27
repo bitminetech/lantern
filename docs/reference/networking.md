@@ -33,6 +33,7 @@ Gossip rules, subnets, custody, topics.
 - [`lantern_seen_init`](#function-lantern_seen_init): an empty `Seen`.
 - [`lantern_seen_copy`](#function-lantern_seen_copy): copies a `Seen` into a buffer with more capacity.
 - [`lantern_seen_add_block`](#function-lantern_seen_add_block): records a block that is known but has no post-state.
+- [`lantern_seen_prune`](#function-lantern_seen_prune): removes the entries of past epochs and slots from a `Seen`.
 - [`lantern_validate_beacon_block_gossip`](#function-lantern_validate_beacon_block_gossip): topic `beacon_block`.
 - [`lantern_validate_blinded_block_gossip`](#function-lantern_validate_blinded_block_gossip): the checks of topic `beacon_block` on a blinded block (beacon-api.md, publishBlindedBlockV2), from bellatrix.
 - [`lantern_validate_beacon_aggregate_and_proof_gossip`](#function-lantern_validate_beacon_aggregate_and_proof_gossip): topic `beacon_aggregate_and_proof`.
@@ -1264,6 +1265,60 @@ lantern_seen_add_block(seen, root, payload_status) -> status
 - Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
 - Argument order: `seen`, `root`, `payload_status`.
 
+## Function `lantern_seen_prune`
+
+Removes from seen the entries of past epochs and slots, which a time check of the spec's validation rules out: the bound on the size of `Seen` that the spec's sets lack.
+
+### Signature
+
+```
+lantern_seen_prune(seen, store) -> status
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `seen` | state | [`Seen`](#type-seen) |
+| `store` | input | [`Store`](fork-choice.md#type-store) |
+
+### Returns
+
+- `LANTERN_OK`: seen holds the entries the rules keep, in their order; each part keeps its offset and capacity.
+
+### Caller must
+
+- Validate no later message at a `current_time_ms` before `store.time_ms`.
+- Pass a store whose `time_ms` and finalized epoch never go back between calls.
+
+### Function does
+
+- With s the current slot of `store.time_ms` (0 before genesis) and f the first slot of the store's finalized epoch:
+  - drops a `SEEN_ATTESTATION` or `SEEN_AGGREGATOR_EPOCH` key, and a `SEEN_AGGREGATE` entry of `bits`, whose epoch is below e - 1, with e the epoch of s - `ATTESTATION_PROPAGATION_SLOT_RANGE` - 1 (0 below 0);
+  - drops a `SEEN_PROPOSER_SLOT`, `SEEN_DATA_COLUMN` or `SEEN_BLOB_SIDECAR` key whose slot is f or below;
+  - drops a `SEEN_SYNC_CONTRIBUTION` or `SEEN_SYNC_MESSAGE` key, and a `SEEN_CONTRIBUTION` entry of `bits`, whose slot is below s - 1;
+  - keeps the keys by validator index (`SEEN_VOLUNTARY_EXIT`, `SEEN_PROPOSER_SLASHING`, `SEEN_ATTESTER_SLASHING`, `SEEN_BLS_CHANGE`), `blocks` and `headers`.
+- A block, blob sidecar, sync message or contribution of a dropped key gets the spec's result: no [REJECT] check comes between its seen check and the time check that gives [IGNORE] (the finalized slot, or is_current_slot with `MAXIMUM_GOSSIP_CLOCK_DISPARITY`).
+- An attestation, aggregate or data column sidecar of a dropped key gets the spec's result, but one case: a message of a key the spec's seen holds, that fails a [REJECT] check before the time check, gets `LANTERN_GOSSIP_REJECT` where the spec gives [IGNORE].
+- The epochs kept hold the current and previous epoch of is_current_or_previous_epoch, the slots of is_within_slot_range with `ATTESTATION_PROPAGATION_SLOT_RANGE`, both with `MAXIMUM_GOSSIP_CLOCK_DISPARITY`, and the epochs lantern_node_liveness reads.
+- Reads the config values of the store's copy.
+
+### Function never
+
+- Makes an OS call.
+- Keeps a pointer after it returns.
+
+### Limits
+
+- Stack of its own: 8 bytes on x86-64 (return address included), 0 bytes on ARM64, 0 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_seen_prune`, with `_` before it on macOS.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- Argument order: `seen`, `store`.
+
 ## Function `lantern_validate_beacon_block_gossip`
 
 The spec's validate_beacon_block_gossip for one message of `beacon_block`.
@@ -1426,6 +1481,7 @@ lantern_validate_beacon_aggregate_and_proof_gossip(seen, store, signed_aggregate
 - is_non_strict_superset skips a seen bitfield of another length, where the spec's `zip(strict=True)` raises.
 - `beacon_attestation_{subnet_id}` and `beacon_aggregate_and_proof`, phase0 to capella: the slot is within `ATTESTATION_PROPAGATION_SLOT_RANGE` of the current slot (is_within_slot_range). Deneb and later: the slot is not in the future and its epoch is the current or previous epoch.
 - `beacon_aggregate_and_proof`, phase0 to deneb: the committee index is `data.index`, and `aggregate_data_roots` is keyed by the data root alone. Electra and later key it by the data root and the committee index.
+- `beacon_aggregate_and_proof`: the `SeenBits` entry holds the target epoch in `b`, for lantern_seen_prune; the data root fixes the target epoch, so an entry matches the same messages.
 - Reads the config values of the store's copy.
 
 ### Function never
@@ -3025,6 +3081,7 @@ The spec's `Seen` of every fork, and the blocks of `store.blocks` that have no p
 - The capacity of a part is the bytes up to the next part's offset over its entry size.
 - `store.blocks` of the spec is the store's nodes and the `blocks` of seen: a root in seen names a block that is known, but failed its state transition or waits to be imported, so it has no post-state. A root in `store.block_states` is a node of the store.
 - `block_payload_statuses` of the spec is `BlockNode.payload_status` for a node and `SeenBlock.payload_status` for a block of seen.
+- The spec's sets grow without a bound; lantern_seen_prune drops the entries of past epochs and slots.
 
 ## Type `SeenRoom`
 
@@ -3078,7 +3135,7 @@ The bits of an aggregate or a sync contribution that `Seen` keeps.
 | 0 | `kind` | u64 | `SEEN_AGGREGATE` (1) or `SEEN_CONTRIBUTION` (2) |
 | 8 | `root` | Root | The aggregate's data root, or the contribution's beacon_block_root |
 | 40 | `a` | u64 | The committee index, or the contribution's slot |
-| 48 | `b` | u64 | 0, or the subcommittee index |
+| 48 | `b` | u64 | The aggregate's target epoch, or the subcommittee index |
 | 56 | `length` | u64 | Number of bits |
 | 64 | `bits` | 256 bytes | The bits, in SSZ bit order |
 

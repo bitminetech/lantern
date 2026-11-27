@@ -1,5 +1,5 @@
 /*
- * Sizing, making and growing Seen, RISC-V: it reads no fork's layouts.
+ * Sizing, making, growing and pruning Seen, RISC-V: it reads no fork's layouts.
  * Requirements: docs/reference/networking.md.
  */
 
@@ -162,3 +162,117 @@ FUNCTION lantern_seen_add_block
 9:  li      a0, LANTERN_BUFFER_TOO_SMALL
     UNFRAME 32
 END_FUNCTION lantern_seen_add_block
+
+/*
+ * Drop the entries of past epochs and slots from seen a0, with the time and the finalized epoch of
+ * store a1 (networking.md). A leaf; uses t0-t6, a2-a5. a2 the first epoch kept, a3 the first sync
+ * slot kept, a4 the finalized slot; t3 the entry read, t5 the entry written, t4 the entries left.
+ */
+LEAF lantern_seen_prune
+    LDQ     t0, a1, Store_time_ms           # s: the current slot, 0 before genesis
+    LDQ     t1, a1, Store_genesis_time_ms
+    sub     t2, t0, t1
+    bgeu    t0, t1, 1f
+    li      t2, 0
+1:  LDQ     t1, a1, (Store_config + CONFIG_SLOT_DURATION_MS)
+    li      t0, 0
+    beqz    t1, 2f
+    divu    t0, t2, t1
+2:  li      a3, 0                           # the first sync slot kept: s - 1
+    beqz    t0, 3f
+    addi    a3, t0, -1
+3:  LDQ     t1, a1, (Store_config + CONFIG_ATTESTATION_PROPAGATION_SLOT_RANGE)
+    li      a2, 0                           # the first epoch kept: e - 1, with e the epoch of s - range - 1
+    bltu    t0, t1, 4f
+    sub     t0, t0, t1
+    beqz    t0, 4f
+    addi    t0, t0, -1
+    li      t1, SLOTS_PER_EPOCH
+    divu    t0, t0, t1
+    beqz    t0, 4f
+    addi    a2, t0, -1
+4:  LDQ     t0, a1, Store_finalized_checkpoint  # f: the first slot of the finalized epoch
+    li      t1, SLOTS_PER_EPOCH
+    mulhu   t2, t0, t1
+    mul     a4, t0, t1
+    beqz    t2, 5f
+    li      a4, -1
+5:  PART    t3, t4, a0, Seen_keys           # the keys
+    mv      t5, t3
+10: beqz    t4, 19f
+    ld      t0, SeenKey_kind(t3)
+    ld      t1, SeenKey_a(t3)
+    li      t2, SEEN_ATTESTATION
+    beq     t0, t2, 11f
+    li      t2, SEEN_AGGREGATOR_EPOCH
+    beq     t0, t2, 11f
+    li      t2, SEEN_PROPOSER_SLOT
+    beq     t0, t2, 12f
+    li      t2, SEEN_DATA_COLUMN
+    beq     t0, t2, 12f
+    li      t2, SEEN_BLOB_SIDECAR
+    beq     t0, t2, 12f
+    li      t2, SEEN_SYNC_CONTRIBUTION
+    beq     t0, t2, 13f
+    li      t2, SEEN_SYNC_MESSAGE
+    bne     t0, t2, 15f
+13: bltu    t1, a3, 16f                     # a sync slot: kept from s - 1
+    j       15f
+11: bltu    t1, a2, 16f                     # an epoch: kept from the first epoch kept
+    j       15f
+12: bgeu    a4, t1, 16f                     # a block's slot: kept above f
+15: beq     t3, t5, 14f                     # kept: moved down over the dropped ones
+    ld      t0, 0(t3)
+    ld      t1, 8(t3)
+    ld      t2, 16(t3)
+    ld      t6, 24(t3)
+    sd      t0, 0(t5)
+    sd      t1, 8(t5)
+    sd      t2, 16(t5)
+    sd      t6, 24(t5)
+14: addi    t5, t5, SeenKey__mem
+16: addi    t3, t3, SeenKey__mem
+    addi    t4, t4, -1
+    j       10b
+19: ld      t0, Seen_keys(a0)               # the count: the entries written
+    add     t0, a0, t0
+    sub     t5, t5, t0
+    srli    t5, t5, 5
+    sd      t5, (Seen_keys + 8)(a0)
+    PART    t3, t4, a0, Seen_bits           # the bits
+    mv      t5, t3
+20: beqz    t4, 29f
+    ld      t0, SeenBits_kind(t3)
+    li      t2, SEEN_AGGREGATE
+    bne     t0, t2, 21f
+    ld      t1, SeenBits_b(t3)              # an aggregate: its target epoch kept from the first epoch kept
+    bltu    t1, a2, 26f
+    j       25f
+21: li      t2, SEEN_CONTRIBUTION
+    bne     t0, t2, 25f
+    ld      t1, SeenBits_a(t3)              # a contribution: its slot kept from s - 1
+    bltu    t1, a3, 26f
+25: beq     t3, t5, 23f
+    li      a5, 0
+    li      t6, SeenBits__mem
+24: add     t0, t3, a5
+    ld      t1, 0(t0)
+    ld      t2, 8(t0)
+    add     t0, t5, a5
+    sd      t1, 0(t0)
+    sd      t2, 8(t0)
+    addi    a5, a5, 16
+    bltu    a5, t6, 24b
+23: addi    t5, t5, SeenBits__mem
+26: addi    t3, t3, SeenBits__mem
+    addi    t4, t4, -1
+    j       20b
+29: ld      t0, Seen_bits(a0)
+    add     t0, a0, t0
+    sub     t5, t5, t0
+    li      t1, SeenBits__mem
+    divu    t5, t5, t1
+    sd      t5, (Seen_bits + 8)(a0)
+    li      a0, LANTERN_OK
+    ret
+END_FUNCTION lantern_seen_prune

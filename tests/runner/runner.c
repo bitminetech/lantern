@@ -314,6 +314,7 @@ ABI uint64_t lantern_seen_size(const void *room, void *size);
 ABI uint64_t lantern_seen_init(const void *room, void *seen);
 ABI uint64_t lantern_seen_copy(const void *seen, const void *room, void *out);
 ABI uint64_t lantern_seen_add_block(void *seen, const void *root, const void *payload_status);
+ABI uint64_t lantern_seen_prune(void *seen, const void *store);
 #if FORK == FORK_BELLATRIX
 ABI uint64_t LF(validate_beacon_block_gossip)(void *seen, const void *store, const void *block, const void *now,
                                                   const void *head_state, const void *proposer_state,
@@ -8694,6 +8695,71 @@ static void seen_grow(seen_buf *s, const char **why) {
     seen_make(s, why);
 }
 
+/*
+ * networking.md, lantern_seen_prune: a Seen with a key of each kind, and a bits entry of each kind, at
+ * each value around its bound, pruned at a store's slot and finalized epoch. The entries kept, in
+ * their order, are those the rules keep; a second prune changes nothing; blocks and headers stay.
+ */
+static void seen_prune_check(const char **why) {
+    const uint64_t spe = SLOTS_PER_EPOCH_RUNNER, range = rd64(config + 392 + 16 * 32 + 104), slot_ms = rd64(config + 104);
+    const uint64_t s = 3 * range + 5 * spe + 3, fe = 2, f = fe * spe;
+    const uint64_t e = (s - range - 1) / spe, first_epoch = e - 1, sync_first = s - 1;
+    seen_buf seen = {NULL, 0, {64, 16, 4, 64}};
+    seen_make(&seen, why);
+    uint8_t *store = calloc(1, STORE_CONFIG + CONFIG_SIZE);
+    if (*why || !store) {
+        free(seen.b);
+        free(store);
+        if (!*why) *why = "seen_prune_check: no memory";
+        return;
+    }
+    memcpy(store + STORE_CONFIG, config, CONFIG_SIZE);
+    wr64(store + STORE_GENESIS_TIME_MS, 1000);
+    wr64(store + STORE_TIME_MS, 1000 + s * slot_ms + slot_ms / 2);
+    wr64(store + STORE_FINALIZED, fe);
+    uint8_t want[64 * 32], wbits[16 * 320];
+    uint64_t nk = 0, nw = 0, nb = 0, nwb = 0;
+    uint8_t *keys = seen.b + rd64(seen.b + SEEN_KEYS), *bits = seen.b + rd64(seen.b + 24);
+    for (uint64_t kind = 1; kind <= 11; kind++) {
+        int epoch = kind == 2 || kind == 6, slot = kind == 1 || kind == 10 || kind == 11, sync = kind == 7 || kind == 8;
+        uint64_t bound = epoch ? first_epoch : slot ? f + 1 : sync ? sync_first : 6;
+        for (uint64_t v = bound - 1; v <= bound + 1; v++, nk++) {
+            uint8_t *k = keys + nk * 32;
+            wr64(k, kind);
+            wr64(k + 8, v);
+            wr64(k + 16, 100 + nk);
+            wr64(k + 24, 200 + nk);
+            if (!(epoch || slot || sync) || v >= bound) memcpy(want + 32 * nw++, k, 32);
+        }
+    }
+    for (uint64_t kind = 1; kind <= 2; kind++) { /* an aggregate's bound is its target epoch in b; a contribution's its slot in a */
+        uint64_t bound = kind == 1 ? first_epoch : sync_first;
+        for (uint64_t v = bound - 1; v <= bound + 1; v++, nb++) {
+            uint8_t *b = bits + nb * 320;
+            memset(b, (int)(0x40 + nb), 320);
+            wr64(b, kind);
+            wr64(b + 40, kind == 1 ? 0 : v);
+            wr64(b + 48, kind == 1 ? v : 1);
+            wr64(b + 56, 8);
+            if (v >= bound) memcpy(wbits + 320 * nwb++, b, 320);
+        }
+    }
+    wr64(seen.b + SEEN_KEYS + 8, nk);
+    wr64(seen.b + 24 + 8, nb);
+    if (CALL(lantern_seen_prune, seen.b, store) != 0) *why = "seen_prune status";
+    else if (!guard_ok(seen.b, seen.size)) *why = "seen_prune wrote past seen";
+    else if (rd64(seen.b + SEEN_KEYS + 8) != nw || memcmp(keys, want, (size_t)(32 * nw))) *why = "seen_prune: the keys kept differ";
+    else if (rd64(seen.b + 24 + 8) != nwb || memcmp(bits, wbits, (size_t)(320 * nwb))) *why = "seen_prune: the bits kept differ";
+    else if (rd64(seen.b + 40 + 8) != 0 || rd64(seen.b + SEEN_HEADERS + 8) != 0) *why = "seen_prune changed blocks or headers";
+    else {
+        uint8_t *snap = copy_of(seen.b, seen.size);
+        if (CALL(lantern_seen_prune, seen.b, store) != 0 || memcmp(snap, seen.b, (size_t)seen.size)) *why = "a second seen_prune changed seen";
+        free(snap);
+    }
+    free(store);
+    free(seen.b);
+}
+
 /* The kept state of a root, or NULL. */
 static kept_state *kept_of(fc_node *n, const uint8_t *root) { return find_kept(n->blocks, n->nblocks, root, 0, 0); }
 
@@ -8848,7 +8914,27 @@ static void run_gossip(const char *file, const char *dir, const char *handler, c
         }
 #endif
         tv msgs = tv_get(meta, "messages"), m = msgs + 9;
-        for (uint64_t k = 0, c = rd64(msgs + 1); k < c && !why; k++, m = tv_skip(m)) {
+        if (!why) seen_prune_check(&why);
+        /* lantern_seen_prune before each message, at the earliest time of the messages from it on (its
+           Caller must), as the app prunes at each new slot: every result stays the spec's. */
+        uint64_t nmsg = rd64(msgs + 1), *prune_ms = calloc(nmsg + 1, 8);
+        {
+            tv mm = msgs + 9;
+            for (uint64_t k = 0; k < nmsg; k++, mm = tv_skip(mm)) {
+                tv tm = tv_get(mm, "current_time_ms");
+                prune_ms[k] = tm ? tv_u64(tm) : 0;
+            }
+            for (uint64_t k = nmsg; k-- > 1;)
+                if (prune_ms[k] < prune_ms[k - 1]) prune_ms[k - 1] = prune_ms[k];
+        }
+        for (uint64_t k = 0, c = nmsg; k < c && !why; k++, m = tv_skip(m)) {
+            {
+                uint64_t was = rd64(n.store + STORE_TIME_MS);
+                wr64(n.store + STORE_TIME_MS, prune_ms[k]);
+                if (CALL(lantern_seen_prune, seen.b, n.store) != 0) why = "seen_prune status";
+                wr64(n.store + STORE_TIME_MS, was);
+                if (!why && !guard_ok(seen.b, seen.size)) why = "seen_prune wrote past seen";
+            }
             char key[160];
             tv mn = tv_get(m, "message");
             snprintf(key, sizeof key, "%.*s", (int)rd64(mn + 1), (const char *)(mn + 9));
@@ -8979,6 +9065,7 @@ static void run_gossip(const char *file, const char *dir, const char *handler, c
         free(n.store);
         free(n.anchor);
         free(seen.b);
+        free(prune_ms);
         memcpy(config, base_config, CONFIG_SIZE);
         report(file, name, len, why == NULL, why);
     }

@@ -6583,6 +6583,9 @@ LOCAL_FUNCTION lantern_app_loop
     beq     a0, t0, 3f
     STQ     a0, s1, APP_LAST_SLOT
     sd      a0, (L + 8)(sp)
+    LDQ     a0, s1, APP_SEEN                # the Seen: the entries of past epochs and slots go
+    LDQ     a1, s1, APP_STORE
+    CALL_GLOBAL lantern_seen_prune
     call    lantern_app_line_start                  # slot <s>, head 0x<root>, finalized epoch <e>
     ADDRESS a0, app_m_slot
     li      a1, app_m_slot_len

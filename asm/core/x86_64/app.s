@@ -6481,6 +6481,9 @@ LOCAL_FUNCTION lantern_app_loop
     je      3f
     mov     %rax, APP_LAST_SLOT(%rbx)
     mov     %rax, (L + 8)(%rsp)
+    mov     APP_SEEN(%rbx), %rdi            # the Seen: the entries of past epochs and slots go
+    mov     APP_STORE(%rbx), %rsi
+    CALL_GLOBAL lantern_seen_prune
     call    lantern_app_line_start                  # slot <s>, head 0x<root>, finalized epoch <e>
     ADDRESS %rdi, app_m_slot
     mov     $app_m_slot_len, %esi

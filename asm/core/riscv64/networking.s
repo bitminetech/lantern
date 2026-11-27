@@ -1187,7 +1187,7 @@ SPEC_FUNCTION validate_beacon_aggregate_and_proof_gossip
 .else
     li      a3, 0                           # the key: the data root
 .endif
-    li      a4, 0
+    ld      a4, (L + 136)(sp)               # b: the target epoch, for lantern_seen_prune
     call    lantern_seen_superset
     bnez    a0, 4f
     mv      a0, s1                          # [IGNORE] the first valid aggregate for (target epoch, aggregator)
@@ -1376,7 +1376,7 @@ SPEC_FUNCTION validate_beacon_aggregate_and_proof_gossip
 .else
     li      a3, 0                           # the key: the data root
 .endif
-    li      a4, 0
+    ld      a4, (L + 136)(sp)               # b: the target epoch, for lantern_seen_prune
     call    lantern_seen_add_bits
     j       8f
 4:  li      a0, LANTERN_GOSSIP_IGNORE

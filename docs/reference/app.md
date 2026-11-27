@@ -3241,7 +3241,7 @@ lantern_app_loop()
 
 ### Function does
 
-- Reads the clock; queues a NODE_EV_TICK of the time and the shell's events; runs lantern_node_step with libp2p; writes a line at each new slot.
+- Reads the clock; queues a NODE_EV_TICK of the time and the shell's events; runs lantern_node_step with libp2p; at each new slot writes a line and runs lantern_seen_prune on the Seen with the store.
 - Then waits for the sockets until the node's wakeup, at most `APP_WAIT_MS`.
 
 ### Function never

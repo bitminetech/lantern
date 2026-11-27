@@ -1211,7 +1211,7 @@ SPEC_FUNCTION validate_beacon_aggregate_and_proof_gossip
 .else
     xor     %ecx, %ecx                      # the key: the data root
 .endif
-    xor     %r8d, %r8d
+    mov     (L + 136)(%rsp), %r8            # b: the target epoch, for lantern_seen_prune
     call    lantern_seen_superset
     test    %rax, %rax
     jnz     4f
@@ -1428,7 +1428,7 @@ SPEC_FUNCTION validate_beacon_aggregate_and_proof_gossip
 .else
     xor     %ecx, %ecx                      # the key: the data root
 .endif
-    xor     %r8d, %r8d
+    mov     (L + 136)(%rsp), %r8            # b: the target epoch, for lantern_seen_prune
     call    lantern_seen_add_bits
     jmp     8f
     GOSSIP_TAIL L, 160
