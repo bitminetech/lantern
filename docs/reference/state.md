@@ -730,7 +730,7 @@ lantern_sr_zeros()
 
 ### Function does
 
-- Writes the zero hash of each depth 0 to 40 into the work area.
+- Copies the zero hash of each depth 0 to 40 into the work area from `sr_zero_hashes` (include/zero_hashes.inc): depth 0 is 32 zero bytes, depth d + 1 is SHA-256 of depth d twice. The constants replace 40 SHA-256 calls of each lantern_state_root.
 
 ### Function never
 
@@ -738,7 +738,7 @@ lantern_sr_zeros()
 
 ### Limits
 
-- Stack of its own: 112 bytes on x86-64 (return address included), 112 bytes on ARM64, 112 bytes on RISC-V.
+- Stack of its own: 16 bytes on x86-64 (return address included), 16 bytes on ARM64, 16 bytes on RISC-V.
 
 ### ABI
 

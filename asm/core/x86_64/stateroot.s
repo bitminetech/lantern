@@ -79,6 +79,7 @@ state_cache_trees:
     .quad 0, STATE_CACHE_LIST, STATE_CACHE_COPY_PendingPartialWithdrawal
     .quad 0, STATE_CACHE_LIST, STATE_CACHE_COPY_PendingConsolidation
     .quad 0, (MIN_SEED_LOOKAHEAD + 1) * SLOTS_PER_EPOCH / 4, 0
+.include "zero_hashes.inc"
 
 .if FORK > FORK_PHASE0
 /* The fields of the fork's BeaconState, in order: kind, offset, tree, a, the limit's depth. */
@@ -276,22 +277,14 @@ LOCAL_FUNCTION lantern_sr_hash
     UNFRAME 16
 END_FUNCTION lantern_sr_hash
 
-/* The zero hash of each depth 0 to 40 in the area at r14. rbx the next, rbp the hashes left. */
+/* The zero hash of each depth 0 to 40 in the area at r14, from sr_zero_hashes. */
 LOCAL_FUNCTION lantern_sr_zeros
-    ENTER 16
-    mov     %r14, %rbx
-    pxor    %xmm0, %xmm0
-    movdqu  %xmm0, (%rbx)
-    movdqu  %xmm0, 16(%rbx)
-    mov     $40, %ebp
-1:  mov     %rbx, %rdi
-    mov     %rbx, %rsi
-    lea     32(%rbx), %rdx
-    call    lantern_sr_hash
-    add     $32, %rbx
-    dec     %rbp
-    jnz     1b
-    LEAVE 16
+    FRAME 0
+    mov     %r14, %rdi
+    ADDRESS %rsi, sr_zero_hashes
+    mov     $(41 * 32), %edx
+    call    lantern_copy
+    UNFRAME 0
 END_FUNCTION lantern_sr_zeros
 
 /*
