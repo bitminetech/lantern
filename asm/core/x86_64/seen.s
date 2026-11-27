@@ -17,16 +17,31 @@
     mov     %r13, ((\ref) + 8)(%r12)
 .endm
 
+/* rax = the slots of the index of a Seen of rcx keys: the smallest power of two at or above 2 * rcx. Uses rcx. */
+.macro SEEN_SLOTS
+    add     %rcx, %rcx
+    mov     $1, %eax
+100: cmp    %rcx, %rax
+    jae     101f
+    shl     $1, %rax
+    jmp     100b
+101:
+.endm
+
 LEAF lantern_seen_size
     mov     %rsi, %r9
     MOVQ    %r8, SEEN_FIXED
-    mov     SeenRoom_keys(%rdi), %rax       # keys * 32 fits
-    mov     %rax, %rcx
-    shr     $59, %rcx
-    jnz     9f
+    mov     SeenRoom_keys(%rdi), %rcx       # below SEEN_KEYS_MAX: the index, 4 bytes a slot, whole words
+    MOVQ    %rax, SEEN_KEYS_MAX
+    cmp     %rax, %rcx
+    jae     9f
+    SEEN_SLOTS
+    lea     7(,%rax,4), %rax
+    and     $-8, %rax
+    add     %rax, %r8
+    mov     SeenRoom_keys(%rdi), %rax       # keys * 32
     shl     $5, %rax
     add     %rax, %r8
-    jc      9f
     mov     SeenRoom_bits(%rdi), %rax
     mov     $SeenBits__mem, %ecx
     mul     %rcx
@@ -62,7 +77,13 @@ FUNCTION lantern_seen_init
     mov     16(%rsp), %rax
     cmp     %rax, (%rsi)
     jb      9f
-    MOVQ    %rax, SEEN_FIXED                # each part empty, at the offsets of room's capacities
+    mov     SeenRoom_keys(%rdi), %rcx       # each part empty, at the offsets of room's capacities: the index
+    SEEN_SLOTS
+    mov     %rax, (Seen_index + 8)(%rsi)
+    MOVQ    %rcx, SEEN_FIXED
+    mov     %rcx, Seen_index(%rsi)
+    lea     (SEEN_FIXED + 7)(,%rax,4), %rax
+    and     $-8, %rax
     mov     %rax, Seen_keys(%rsi)
     movq    $0, (Seen_keys + 8)(%rsi)
     mov     SeenRoom_keys(%rdi), %rcx
@@ -124,6 +145,8 @@ FUNCTION lantern_seen_copy
     mov     Seen_header_bytes(%rbx), %rdx
     mov     %rdx, Seen_header_bytes(%r12)
     call    lantern_copy
+    mov     %r12, %rdi                      # the index of its keys
+    call    lantern_seen_index
     xor     %eax, %eax
 7:  LEAVE 0
 9:  mov     $LANTERN_BUFFER_TOO_SMALL, %eax
@@ -575,6 +598,8 @@ FUNCTION lantern_seen_archive
     sub     %rdx, %rsi
     shl     $5, %rsi
     call    lantern_zero
+    mov     %rbx, %rdi                      # the index of the keys that stay
+    call    lantern_seen_index
     PART    %rsi, %rcx, %rbx, Seen_bits     # the bits that stay, moved down; zero after them
     mov     %rsi, %rdx
 6:  test    %rcx, %rcx
@@ -766,23 +791,20 @@ FUNCTION lantern_seen_recall
     mov     $HIST_BLOB, %esi
     cmp     $SEEN_BLOB_SIDECAR, %rax
     jne     70f
-10: PART    %rdi, %rcx, %rbx, Seen_keys     # seen holds it already: nothing to add
-11: test    %rcx, %rcx
-    jz      12f
-    cmp     %rax, (%rdi)
-    jne     13f
-    mov     L(%rsp), %rdx
-    cmp     %rdx, 8(%rdi)
-    jne     13f
-    mov     (L + 8)(%rsp), %rdx
-    cmp     %rdx, 16(%rdi)
-    jne     13f
-    mov     (L + 16)(%rsp), %rdx
-    cmp     %rdx, 24(%rdi)
-    je      70f
-13: add     $SeenKey__mem, %rdi
-    dec     %rcx
-    jmp     11b
+10: mov     %rsi, (L + 24)(%rsp)            # seen holds it already: nothing to add
+    mov     %r8, (L + 32)(%rsp)
+    mov     %r9, (L + 40)(%rsp)
+    mov     %rbx, %rdi
+    mov     SeenRecallItem_kind(%r15), %rsi
+    mov     SeenRecallItem_a(%r15), %rdx
+    mov     SeenRecallItem_b(%r15), %rcx
+    mov     SeenRecallItem_c(%r15), %r8
+    call    lantern_seen_find_key
+    test    %rax, %rax
+    jnz     70f
+    mov     (L + 24)(%rsp), %rsi
+    mov     (L + 32)(%rsp), %r8
+    mov     (L + 40)(%rsp), %r9
 12: mov     %rbp, %rdi
     lea     L(%rsp), %rdx
     mov     %r9, %rcx
@@ -793,19 +815,12 @@ FUNCTION lantern_seen_recall
     jne     14f
     incq    (L + 48)(%rsp)
     jmp     70f
-14: PART    %rdi, %rcx, %rbx, Seen_keys     # the key, after the others
-    mov     %rcx, %rax
-    shl     $5, %rax
-    add     %rax, %rdi
-    mov     SeenRecallItem_kind(%r15), %rax
-    mov     %rax, 0(%rdi)
-    mov     SeenRecallItem_a(%r15), %rax
-    mov     %rax, 8(%rdi)
-    mov     SeenRecallItem_b(%r15), %rax
-    mov     %rax, 16(%rdi)
-    mov     SeenRecallItem_c(%r15), %rax
-    mov     %rax, 24(%rdi)
-    incq    (Seen_keys + 8)(%rbx)
+14: mov     %rbx, %rdi                      # the key, after the others, and in the index
+    mov     SeenRecallItem_kind(%r15), %rsi
+    mov     SeenRecallItem_a(%r15), %rdx
+    mov     SeenRecallItem_b(%r15), %rcx
+    mov     SeenRecallItem_c(%r15), %r8
+    call    lantern_seen_add_key
     incq    SeenMark_added_keys(%r13)
     jmp     70f
 20: lea     SeenRecallItem_root(%r15), %rax # bits: none of (root, a, epoch) in seen
@@ -985,7 +1000,9 @@ LEAF lantern_seen_forget
     add     $8, %r10
     sub     $8, %r9
     jnz     32b
-9:  xor     %eax, %eax
+9:  cmpq    $0, SeenMark_added_keys(%rsi)  # keys removed: the index of those left
+    jne     lantern_seen_index
+    xor     %eax, %eax
     ret
 END_FUNCTION lantern_seen_forget
 
@@ -1009,7 +1026,13 @@ FUNCTION lantern_seen_restore
     ENTER 0
     mov     %rdi, %rbx
     mov     %rsi, %rbp
+    mov     (Seen_keys + 8)(%rbx), %r12     # keys removed: the index of those left
     SEEN_RESTORE Seen_keys, 0, SeenKey__mem
+    cmp     0(%rbp), %r12
+    je      1f
+    mov     %rbx, %rdi
+    call    lantern_seen_index
+1:
     SEEN_RESTORE Seen_bits, 8, SeenBits__mem
     SEEN_RESTORE Seen_blocks, 16, SeenBlock__mem
     mov     24(%rbp), %rax                  # the headers: their count, and zero after their bytes

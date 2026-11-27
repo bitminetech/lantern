@@ -18,18 +18,31 @@
     STQ     s4, s3, (\ref) + 8
 .endm
 
+/* dst = the slots of the index of a Seen of keys keys: the smallest power of two at or above 2 * keys. Uses t. */
+.macro SEEN_SLOTS dst, keys, t
+    slli    \t, \keys, 1
+    li      \dst, 1
+100: bgeu   \dst, \t, 101f
+    slli    \dst, \dst, 1
+    j       100b
+101:
+.endm
+
 LEAF lantern_seen_size
     ld      t0, SeenRoom_keys(a0)
     ld      t1, SeenRoom_bits(a0)
     ld      t2, SeenRoom_blocks(a0)
     ld      t3, SeenRoom_header_bytes(a0)
     li      t4, SEEN_FIXED
-    srli    t5, t0, 59                      # keys * 32 fits
+    srli    t5, t0, 31                      # below SEEN_KEYS_MAX: the index, 4 bytes a slot, whole words
     bnez    t5, 9f
-    slli    t5, t0, 5
-    add     t6, t4, t5
-    bltu    t6, t4, 9f
-    mv      t4, t6
+    SEEN_SLOTS t5, t0, t6
+    slli    t5, t5, 2
+    addi    t5, t5, 7
+    andi    t5, t5, -8
+    add     t4, t4, t5
+    slli    t5, t0, 5                       # keys * 32
+    add     t4, t4, t5
     li      t5, SeenBits__mem
     mulhu   t6, t1, t5
     bnez    t6, 9f
@@ -65,7 +78,14 @@ FUNCTION lantern_seen_init
     ld      t0, 16(sp)
     ld      t1, 0(a1)
     bltu    t1, t0, 9f
-    li      t0, SEEN_FIXED                  # each part empty, at the offsets of room's capacities
+    ld      t1, SeenRoom_keys(a0)           # each part empty, at the offsets of room's capacities: the index
+    SEEN_SLOTS t2, t1, t3
+    sd      t2, (Seen_index + 8)(a1)
+    li      t0, SEEN_FIXED
+    sd      t0, Seen_index(a1)
+    slli    t2, t2, 2
+    addi    t2, t2, (SEEN_FIXED + 7)
+    andi    t0, t2, -8
     sd      t0, Seen_keys(a1)
     sd      zero, (Seen_keys + 8)(a1)
     ld      t1, SeenRoom_keys(a0)
@@ -129,7 +149,8 @@ FUNCTION lantern_seen_copy
     ld      a2, Seen_header_bytes(s1)
     sd      a2, Seen_header_bytes(s3)
     call    lantern_copy
-    li      a0, LANTERN_OK
+    mv      a0, s3                          # the index of its keys
+    call    lantern_seen_index
 7:  LEAVE 0
 9:  li      a0, LANTERN_BUFFER_TOO_SMALL
     LEAVE 0
@@ -562,6 +583,8 @@ FUNCTION lantern_seen_archive
     slli    a1, a1, 5
     mv      a0, a2
     call    lantern_zero
+    mv      a0, s1                          # the index of the keys that stay
+    call    lantern_seen_index
     PART    t3, t4, s1, Seen_bits           # the bits that stay, moved down; zero after them
     mv      a2, t3
 6:  beqz    t4, 69f
@@ -740,19 +763,19 @@ FUNCTION lantern_seen_recall
     li      a1, HIST_BLOB
     li      t4, SEEN_BLOB_SIDECAR
     bne     t0, t4, 70f
-10: PART    t4, t5, s1, Seen_keys           # seen holds it already: nothing to add
-11: beqz    t5, 12f
-    ld      t6, 0(t4)
-    bne     t6, t0, 13f
-    ld      t6, 8(t4)
-    bne     t6, t1, 13f
-    ld      t6, 16(t4)
-    bne     t6, t2, 13f
-    ld      t6, 24(t4)
-    beq     t6, t3, 70f
-13: addi    t4, t4, SeenKey__mem
-    addi    t5, t5, -1
-    j       11b
+10: sd      a1, (L + 24)(sp)                # seen holds it already: nothing to add
+    sd      a3, (L + 32)(sp)
+    sd      a4, (L + 40)(sp)
+    mv      a0, s1
+    mv      a1, t0
+    mv      a2, t1
+    mv      a3, t2
+    mv      a4, t3
+    call    lantern_seen_find_key
+    bnez    a0, 70f
+    ld      a1, (L + 24)(sp)
+    ld      a3, (L + 32)(sp)
+    ld      a4, (L + 40)(sp)
 12: mv      a0, s2
     addi    a2, sp, L
     call    lantern_seen_history_find
@@ -762,19 +785,12 @@ FUNCTION lantern_seen_recall
     addi    t0, t0, 1
     sd      t0, (L + 48)(sp)
     j       70f
-14: PART    t4, t5, s1, Seen_keys           # the key, after the others
-    slli    t0, t5, 5
-    add     t4, t4, t0
-    ld      t0, SeenRecallItem_kind(s6)
-    sd      t0, 0(t4)
-    ld      t0, SeenRecallItem_a(s6)
-    sd      t0, 8(t4)
-    ld      t0, SeenRecallItem_b(s6)
-    sd      t0, 16(t4)
-    ld      t0, SeenRecallItem_c(s6)
-    sd      t0, 24(t4)
-    addi    t5, t5, 1
-    sd      t5, (Seen_keys + 8)(s1)
+14: mv      a0, s1                          # the key, after the others, and in the index
+    ld      a1, SeenRecallItem_kind(s6)
+    ld      a2, SeenRecallItem_a(s6)
+    ld      a3, SeenRecallItem_b(s6)
+    ld      a4, SeenRecallItem_c(s6)
+    call    lantern_seen_add_key
     ld      t0, SeenMark_added_keys(s4)
     addi    t0, t0, 1
     sd      t0, SeenMark_added_keys(s4)
@@ -955,7 +971,10 @@ LEAF lantern_seen_forget
     addi    t2, t2, 8
     addi    t4, t4, -8
     bnez    t4, 32b
-9:  li      a0, LANTERN_OK
+9:  ld      t0, SeenMark_added_keys(a1)     # keys removed: the index of those left
+    beqz    t0, 8f
+    tail    lantern_seen_index
+8:  li      a0, LANTERN_OK
     ret
 END_FUNCTION lantern_seen_forget
 
@@ -981,7 +1000,13 @@ FUNCTION lantern_seen_restore
     ENTER 0
     mv      s1, a0
     mv      s2, a1
+    ld      s3, (Seen_keys + 8)(s1)         # keys removed: the index of those left
     SEEN_RESTORE Seen_keys, 0, SeenKey__mem
+    ld      t0, 0(s2)
+    beq     t0, s3, 1f
+    mv      a0, s1
+    call    lantern_seen_index
+1:
     SEEN_RESTORE Seen_bits, 8, SeenBits__mem
     SEEN_RESTORE Seen_blocks, 16, SeenBlock__mem
     ld      t0, 24(s2)                      # the headers: their count, and zero after their bytes

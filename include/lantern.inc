@@ -510,7 +510,10 @@
 .set Seen_blocks, 40                   /* PartRef of SeenBlock */
 .set Seen_headers, 56                  /* PartRef of SeenHeader, back to back */
 .set Seen_header_bytes, 72             /* bytes of the headers part in use */
-.set SEEN_FIXED, 80
+.set Seen_index, 80                    /* PartRef of u32 slots: the hash index of keys */
+.set SEEN_FIXED, 96
+.set SEEN_HASH_M, -0x61C8864F          /* 0xFFFFFFFF9E3779B1: the multiplier of the index hash */
+.set SEEN_KEYS_MAX, 1 << 31            /* most keys of a Seen: a slot holds a position + 1 in a u32 */
 
 /* SeenRoom */
 .set SeenRoom_keys, 0

@@ -18,14 +18,29 @@
     STQ     x22, x21, (\ref) + 8
 .endm
 
+/* dst = the slots of the index of a Seen of keys keys: the smallest power of two at or above 2 * keys. Uses t. */
+.macro SEEN_SLOTS dst, keys, t
+    lsl     \t, \keys, #1
+    mov     \dst, #1
+100: cmp    \dst, \t
+    b.hs    101f
+    lsl     \dst, \dst, #1
+    b       100b
+101:
+.endm
+
 LEAF lantern_seen_size
     ldp     x2, x3, [x0, #SeenRoom_keys]
     ldp     x4, x5, [x0, #SeenRoom_blocks]
     MOVQ    x6, SEEN_FIXED
-    lsr     x7, x2, #59                     /* keys * 32 fits */
+    lsr     x7, x2, #31                     /* below SEEN_KEYS_MAX: the index, 4 bytes a slot, whole words */
     cbnz    x7, 9f
-    adds    x6, x6, x2, lsl #5
-    b.cs    9f
+    SEEN_SLOTS x7, x2, x8
+    lsl     x7, x7, #2
+    add     x7, x7, #7
+    and     x7, x7, #-8
+    add     x6, x6, x7
+    add     x6, x6, x2, lsl #5              /* keys * 32 */
     mov     x7, #SeenBits__mem
     umulh   x8, x3, x7
     cbnz    x8, 9f
@@ -58,7 +73,13 @@ FUNCTION lantern_seen_init
     ldr     x10, [x1]
     cmp     x10, x9
     b.lo    9f
-    MOVQ    x9, SEEN_FIXED                  /* each part empty, at the offsets of room's capacities */
+    ldr     x10, [x0, #SeenRoom_keys]       /* each part empty, at the offsets of room's capacities: the index */
+    SEEN_SLOTS x11, x10, x12
+    MOVQ    x9, SEEN_FIXED
+    stp     x9, x11, [x1, #Seen_index]
+    lsl     x11, x11, #2
+    add     x11, x11, #(SEEN_FIXED + 7)
+    and     x9, x11, #-8
     stp     x9, xzr, [x1, #Seen_keys]
     ldr     x10, [x0, #SeenRoom_keys]
     add     x9, x9, x10, lsl #5
@@ -120,7 +141,8 @@ FUNCTION lantern_seen_copy
     ldr     x2, [x19, #Seen_header_bytes]
     str     x2, [x21, #Seen_header_bytes]
     bl      lantern_copy
-    mov     x0, #LANTERN_OK
+    mov     x0, x21                         /* the index of its keys */
+    bl      lantern_seen_index
 7:  LEAVE 0
 9:  mov     x0, #LANTERN_BUFFER_TOO_SMALL
     LEAVE 0
@@ -519,6 +541,8 @@ FUNCTION lantern_seen_archive
     lsl     x1, x1, #5
     mov     x0, x6
     bl      lantern_zero
+    mov     x0, x19                         /* the index of the keys that stay */
+    bl      lantern_seen_index
     PART    x4, x5, x19, Seen_bits          /* the bits that stay, moved down; zero after them */
     mov     x6, x4
 6:  cbz     x5, 69f
@@ -695,18 +719,17 @@ FUNCTION lantern_seen_recall
     mov     x1, #HIST_BLOB
     cmp     x9, #SEEN_BLOB_SIDECAR
     b.ne    70f
-10: PART    x13, x14, x19, Seen_keys        /* seen holds it already: nothing to add */
-11: cbz     x14, 12f
-    ldp     x15, x16, [x13]
-    ldp     x17, x8, [x13, #16]
-    cmp     x15, x9
-    ccmp    x16, x10, #0, eq
-    ccmp    x17, x11, #0, eq
-    ccmp    x8, x12, #0, eq
-    b.eq    70f
-    add     x13, x13, #SeenKey__mem
-    sub     x14, x14, #1
-    b       11b
+10: stp     x1, x3, [sp, #(L + 24)]         /* seen holds it already: nothing to add */
+    str     x4, [sp, #(L + 40)]
+    mov     x0, x19
+    mov     x1, x9
+    mov     x2, x10
+    mov     x3, x11
+    mov     x4, x12
+    bl      lantern_seen_find_key
+    cbnz    x0, 70f
+    ldp     x1, x3, [sp, #(L + 24)]
+    ldr     x4, [sp, #(L + 40)]
 12: mov     x0, x20
     add     x2, sp, #L
     bl      lantern_seen_history_find
@@ -716,15 +739,11 @@ FUNCTION lantern_seen_recall
     add     x9, x9, #1
     str     x9, [sp, #(L + 48)]
     b       70f
-13: PART    x13, x14, x19, Seen_keys        /* the key, after the others */
-    add     x13, x13, x14, lsl #5
-    ldr     x9, [x24, #SeenRecallItem_kind]
-    ldp     x10, x11, [x24, #SeenRecallItem_a]
-    ldr     x12, [x24, #SeenRecallItem_c]
-    stp     x9, x10, [x13]
-    stp     x11, x12, [x13, #16]
-    add     x14, x14, #1
-    str     x14, [x19, #(Seen_keys + 8)]
+13: mov     x0, x19                         /* the key, after the others, and in the index */
+    ldr     x1, [x24, #SeenRecallItem_kind]
+    ldp     x2, x3, [x24, #SeenRecallItem_a]
+    ldr     x4, [x24, #SeenRecallItem_c]
+    bl      lantern_seen_add_key
     ldr     x9, [x22, #SeenMark_added_keys]
     add     x9, x9, #1
     str     x9, [x22, #SeenMark_added_keys]
@@ -900,7 +919,9 @@ LEAF lantern_seen_forget
 32: stp     xzr, xzr, [x6], #16
     subs    x8, x8, #16
     b.ne    32b
-9:  RETURN_OK
+9:  ldr     x2, [x1, #SeenMark_added_keys]  /* keys removed: the index of those left */
+    cbnz    x2, lantern_seen_index
+    RETURN_OK
 END_FUNCTION lantern_seen_forget
 
 /* Part ref of seen x19 takes the count at x20 + at; zero the bytes of the entries past it, of size bytes each. */
@@ -924,7 +945,14 @@ FUNCTION lantern_seen_restore
     ENTER 0
     mov     x19, x0
     mov     x20, x1
+    ldr     x21, [x19, #(Seen_keys + 8)]    /* keys removed: the index of those left */
     SEEN_RESTORE Seen_keys, 0, SeenKey__mem
+    ldr     x9, [x20]
+    cmp     x9, x21
+    b.eq    1f
+    mov     x0, x19
+    bl      lantern_seen_index
+1:
     SEEN_RESTORE Seen_bits, 8, SeenBits__mem
     SEEN_RESTORE Seen_blocks, 16, SeenBlock__mem
     ldr     x9, [x20, #24]                  /* the headers: their count, and zero after their bytes */

@@ -116,29 +116,6 @@ SPEC_END compute_columns_for_custody_group
 .error "the gossip code assumes the Seen layouts of include/lantern.inc"
 .endif
 
-/* rax = 1 when seen rdi holds the SeenKey (rsi kind, rdx a, rcx b, r8 c), else 0. A leaf; uses r9-r11. */
-LOCAL_FUNCTION lantern_seen_find_key
-    UNWIND_END_PROLOGUE
-    PART    %r9, %r10, %rdi, Seen_keys
-1:  test    %r10, %r10
-    jz      3f
-    cmp     %rsi, 0(%r9)
-    jne     2f
-    cmp     %rdx, 8(%r9)
-    jne     2f
-    cmp     %rcx, 16(%r9)
-    jne     2f
-    cmp     %r8, 24(%r9)
-    je      4f
-2:  add     $SeenKey__mem, %r9
-    dec     %r10
-    jmp     1b
-3:  xor     %eax, %eax
-    ret
-4:  mov     $1, %eax
-    ret
-END_FUNCTION lantern_seen_find_key
-
 /* rax = the free SeenKey entries of seen rdi. A leaf. */
 LOCAL_FUNCTION lantern_seen_key_room
     UNWIND_END_PROLOGUE
@@ -148,20 +125,6 @@ LOCAL_FUNCTION lantern_seen_key_room
     sub     (Seen_keys + 8)(%rdi), %rax
     ret
 END_FUNCTION lantern_seen_key_room
-
-/* Append the SeenKey (rsi kind, rdx a, rcx b, r8 c) to seen rdi, which has room. A leaf; uses r9, r10. */
-LOCAL_FUNCTION lantern_seen_add_key
-    UNWIND_END_PROLOGUE
-    PART    %r9, %r10, %rdi, Seen_keys
-    shl     $5, %r10
-    add     %r10, %r9
-    mov     %rsi, 0(%r9)
-    mov     %rdx, 8(%r9)
-    mov     %rcx, 16(%r9)
-    mov     %r8, 24(%r9)
-    incq    (Seen_keys + 8)(%rdi)
-    ret
-END_FUNCTION lantern_seen_add_key
 
 /* rax = the free SeenBits entries of seen rdi. A leaf; uses rcx, rdx. */
 LOCAL_FUNCTION lantern_seen_bits_room

@@ -70,6 +70,7 @@ Gossip rules, subnets, custody, topics.
 - [`lantern_seen_find_block`](#function-lantern_seen_find_block): the SeenBlock of a root in seen.
 - [`lantern_seen_find_header`](#function-lantern_seen_find_header): the SeenHeader of a block root in seen.
 - [`lantern_seen_find_key`](#function-lantern_seen_find_key): whether seen holds a SeenKey.
+- [`lantern_seen_index`](#function-lantern_seen_index): the index of seen from its keys.
 - [`lantern_seen_key_room`](#function-lantern_seen_key_room): the free SeenKey entries of seen.
 - [`lantern_seen_superset`](#function-lantern_seen_superset): is_non_strict_superset of the SeenBits of a key, for some bits.
 - [`lantern_verify_signed`](#function-lantern_verify_signed): lantern_verify_with_domain with get_domain of a state.
@@ -1144,8 +1145,8 @@ lantern_seen_size(room, size) -> status
 
 ### Returns
 
-- `LANTERN_OK`: `size` holds `SEEN_FIXED` + `room.keys` * `SeenKey__mem` + `room.bits` * `SeenBits__mem` + `room.blocks` * `SeenBlock__mem` + `room.header_bytes`.
-- `LANTERN_INVALID_OVERFLOW`: the size does not fit in a u64.
+- `LANTERN_OK`: `size` holds `SEEN_FIXED` + the bytes of the `index` + `room.keys` * `SeenKey__mem` + `room.bits` * `SeenBits__mem` + `room.blocks` * `SeenBlock__mem` + `room.header_bytes`.
+- `LANTERN_INVALID_OVERFLOW`: `room.keys` is `SEEN_KEYS_MAX` or more, or the size does not fit in a u64.
 
 ### Function never
 
@@ -1187,7 +1188,7 @@ lantern_seen_init(room, seen) -> status
 
 ### Function does
 
-- Zeroes the bytes of every part, so that the bytes after each part's entries are zero (Rules of `Seen`).
+- Zeroes the bytes of every part, so that the bytes after each part's entries are zero (Rules of `Seen`), and every slot of the `index` is empty.
 
 ### Function never
 
@@ -1225,7 +1226,7 @@ lantern_seen_copy(seen, room, out) -> status
 
 ### Returns
 
-- `LANTERN_OK`: `out` holds the entries of seen.
+- `LANTERN_OK`: `out` holds the entries of seen, and the `index` of its keys (lantern_seen_index).
 - `LANTERN_BUFFER_TOO_SMALL`: `out` is below lantern_seen_size of room, or a capacity is below what seen holds.
 
 ### Function never
@@ -1324,6 +1325,7 @@ lantern_seen_archive(seen, store, out) -> status
 - No valid message can add a moved key again: its epoch or slot fails the message's time check.
 - Sorts each chunk's entries by their words, unsigned, in word order: (epoch, index), (slot, proposer index, index), or (data root, committee index, target epoch).
 - Reads the config values of the store's copy.
+- Gives seen the `index` of the keys that stay (lantern_seen_index).
 
 ### Function never
 
@@ -1376,6 +1378,7 @@ lantern_seen_recall(seen, history, recall, mark) -> status
 - A `SEEN_RECALL_BITS` item (root, a, b) with no `SEEN_AGGREGATE` entry of seen of that root, a and b: one `SEEN_AGGREGATE` entry of each `HistBits` of the chunk of that key, with its bits.
 - Another item kind, or a key the history lacks: nothing.
 - Reads a chunk only inside the history's `size`, its entries only inside the chunk's `bytes`, and bits of at most `SEEN_BITS_BYTES`.
+- Looks up a key in seen with lantern_seen_find_key, and adds one with lantern_seen_add_key, so the `index` stays that of the keys.
 
 ### Function never
 
@@ -1385,7 +1388,7 @@ lantern_seen_recall(seen, history, recall, mark) -> status
 ### Limits
 
 - Stack of its own: 152 bytes on x86-64 (return address included), 160 bytes on ARM64, 176 bytes on RISC-V.
-- Time: a lookup in the history is a binary search of one chunk.
+- Time: a lookup in the history is a binary search of one chunk; one in seen, a probe sequence of the `index`.
 
 ### ABI
 
@@ -1422,6 +1425,7 @@ lantern_seen_forget(seen, mark) -> status
 ### Function does
 
 - Zeroes the bytes the removed entries leave after the others, so seen's bytes are those before lantern_seen_recall when the validation added nothing.
+- After it removed keys: the `index` of the keys left (lantern_seen_index).
 
 ### Function never
 
@@ -1468,6 +1472,7 @@ lantern_seen_restore(seen, counts) -> status
 
 - Sets each part's count, and `header_bytes`, to the one in counts.
 - Zeroes the bytes of each part after its entries, so seen's bytes are those it had when the counts were read.
+- After it removed keys: the `index` of the keys left (lantern_seen_index).
 
 ### Function never
 
@@ -2914,6 +2919,7 @@ lantern_seen_add_key(seen, kind, a, b, c)
 ### Function does
 
 - Appends the SeenKey (`kind`, `a`, `b`, `c`).
+- Writes its position + 1 to the first empty slot of its hash in the `index` (Rules of `Seen`).
 
 ### Function never
 
@@ -2923,7 +2929,7 @@ lantern_seen_add_key(seen, kind, a, b, c)
 
 ### Limits
 
-- Stack of its own: 8 bytes on x86-64 (return address included), 0 bytes on ARM64, 0 bytes on RISC-V.
+- Stack of its own: 32 bytes on x86-64 (return address included), 48 bytes on ARM64, 48 bytes on RISC-V.
 
 ### ABI
 
@@ -3075,17 +3081,19 @@ lantern_seen_find_key(seen, kind, a, b, c) -> flag
 ### Function does
 
 - Returns 1 when `seen` holds the SeenKey (`kind`, `a`, `b`, `c`), else 0.
+- Reads the slots of the key's hash in the `index` up to the first empty one, and compares the key each names (Rules of `Seen`).
 
 ### Function never
 
 - Calls another function.
-- Writes memory.
+- Writes memory but its own stack.
 - Makes an OS call.
 - Keeps a pointer after it returns.
 
 ### Limits
 
-- Stack of its own: 8 bytes on x86-64 (return address included), 0 bytes on ARM64, 0 bytes on RISC-V.
+- Stack of its own: 8 bytes on x86-64 (return address included), 32 bytes on ARM64, 48 bytes on RISC-V.
+- Time: one probe sequence of the `index`, not a pass over `keys`.
 
 ### ABI
 
@@ -3094,6 +3102,49 @@ lantern_seen_find_key(seen, kind, a, b, c) -> flag
 - Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
 - Registers it changes, on ARM64 and x86-64: x0, x5 to x8; rax, r9 to r11.
 - Argument order: `seen`, `kind`, `a`, `b`, `c`.
+
+## Function `lantern_seen_index`
+
+The `index` of seen from its keys.
+
+### Signature
+
+```
+lantern_seen_index(seen) -> status
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `seen` | state | [`Seen`](#type-seen) |
+
+### Returns
+
+- `LANTERN_OK`, always.
+
+### Function does
+
+- Empties every slot of the `index`, then writes the position + 1 of each key, in key order, to the first empty slot of its hash (Rules of `Seen`).
+
+### Function never
+
+- Calls another function.
+- Makes an OS call.
+- Keeps a pointer after it returns.
+
+### Limits
+
+- Stack of its own: 8 bytes on x86-64 (return address included), 0 bytes on ARM64, 0 bytes on RISC-V.
+- Time: the slots, then one probe sequence a key.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_seen_index`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- Registers it changes, on ARM64 and x86-64: x0 to x9; rax, rcx, rdx, rsi, r8 to r11.
+- Argument order: `seen`.
 
 ## Function `lantern_seen_key_room`
 
@@ -3512,14 +3563,20 @@ The spec's `Seen` of every fork, and the blocks of `store.blocks` that have no p
 | 40 | `blocks` | PartRef | `SeenBlock` entries |
 | 56 | `headers` | PartRef | `SeenHeader` entries, back to back: `partial_data_column_headers` |
 | 72 | `header_bytes` | u64 | Bytes of the `headers` part in use |
+| 80 | `index` | PartRef | u32 slots: the hash index of `keys` |
 
 ### Rules
 
-- `SEEN_FIXED` (80) bytes of fixed fields; the parts follow in that order, and `headers` runs to the end of the buffer.
+- `SEEN_FIXED` (96) bytes of fixed fields; the parts follow in the order `index`, `keys`, `bits`, `blocks`, `headers`, and `headers` runs to the end of the buffer.
+- The `index` has as its count the slots: the smallest power of two at or above 2 * the capacity of `keys`; its bytes are 4 a slot, up to a whole number of words.
+- A slot is 0 (empty) or the position of a key in `keys` + 1.
+- The hash of a key (`kind`, `a`, `b`, `c`), all words mod 2^64, with M = `SEEN_HASH_M` (0xFFFFFFFF9E3779B1): h = `kind`, then h = h * M + `c`, h = h * M + `b`, h = h * M + `a`, then h = h xor (h >> 29).
+- The `index` of a `Seen` is the one its keys give: every slot empty, then the position + 1 of each key, in key order, at the first empty slot of h, h + 1, ... mod the slots. So a key is in `keys` when a slot of that sequence before the first empty one names it.
+- At most half the slots are full, so each sequence reaches an empty slot.
 - The capacity of a part is the bytes up to the next part's offset over its entry size.
 - `store.blocks` of the spec is the store's nodes and the `blocks` of seen: a root in seen names a block that is known, but failed its state transition or waits to be imported, so it has no post-state. A root in `store.block_states` is a node of the store.
 - `block_payload_statuses` of the spec is `BlockNode.payload_status` for a node and `SeenBlock.payload_status` for a block of seen.
-- Every byte of a part after its entries is zero: lantern_seen_init zeroes the parts, and the functions that remove entries zero what they leave.
+- Every byte of a part after its entries is zero: lantern_seen_init zeroes the parts, and the functions that remove entries zero what they leave. The `index` has no entries in this sense: its bytes are its slots.
 - `Seen` holds the spec's sets for recent epochs; its history, a [`SeenHistory`](#type-seenhistory), holds the moved entries (lantern_seen_archive), and lantern_seen_recall copies a message's entries back for its validation.
 
 ## Type `SeenRoom`
@@ -3530,7 +3587,7 @@ The capacities of the parts of a `Seen`.
 
 | Offset | Field | Type | Meaning |
 |---|---|---|---|
-| 0 | `keys` | u64 | Capacity of `keys` |
+| 0 | `keys` | u64 | Capacity of `keys`: below `SEEN_KEYS_MAX` (2^31) |
 | 8 | `bits` | u64 | Capacity of `bits` |
 | 16 | `blocks` | u64 | Capacity of `blocks` |
 | 24 | `header_bytes` | u64 | Bytes of `headers` |

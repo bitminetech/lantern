@@ -124,28 +124,6 @@ SPEC_END compute_columns_for_custody_group
 .error "the gossip code assumes the Seen layouts of include/lantern.inc"
 .endif
 
-/* a0 = 1 when seen a0 holds the SeenKey (a1 kind, a2 a, a3 b, a4 c), else 0. A leaf; uses a5, t0-t2. */
-LOCAL_FUNCTION lantern_seen_find_key
-    UNWIND_END_PROLOGUE
-    PART    a5, t0, a0, Seen_keys
-1:  beqz    t0, 3f
-    ld      t1, 0(a5)
-    bne     t1, a1, 2f
-    ld      t1, 8(a5)
-    bne     t1, a2, 2f
-    ld      t1, 16(a5)
-    bne     t1, a3, 2f
-    ld      t1, 24(a5)
-    beq     t1, a4, 4f
-2:  addi    a5, a5, SeenKey__mem
-    addi    t0, t0, -1
-    j       1b
-3:  li      a0, 0
-    ret
-4:  li      a0, 1
-    ret
-END_FUNCTION lantern_seen_find_key
-
 /* a0 = the free SeenKey entries of seen a0. A leaf; uses a1, a2. */
 LOCAL_FUNCTION lantern_seen_key_room
     UNWIND_END_PROLOGUE
@@ -157,21 +135,6 @@ LOCAL_FUNCTION lantern_seen_key_room
     sub     a0, a2, a1
     ret
 END_FUNCTION lantern_seen_key_room
-
-/* Append the SeenKey (a1 kind, a2 a, a3 b, a4 c) to seen a0, which has room. A leaf; uses a5, t0. */
-LOCAL_FUNCTION lantern_seen_add_key
-    UNWIND_END_PROLOGUE
-    PART    a5, t0, a0, Seen_keys
-    slli    t1, t0, 5
-    add     a5, a5, t1
-    sd      a1, 0(a5)
-    sd      a2, 8(a5)
-    sd      a3, 16(a5)
-    sd      a4, 24(a5)
-    addi    t0, t0, 1
-    sd      t0, (Seen_keys + 8)(a0)
-    ret
-END_FUNCTION lantern_seen_add_key
 
 /* a0 = the free SeenBits entries of seen a0. A leaf; uses a1-a3. */
 LOCAL_FUNCTION lantern_seen_bits_room
