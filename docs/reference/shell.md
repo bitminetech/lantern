@@ -84,11 +84,11 @@ Linux makes direct system calls; macOS calls libSystem; Windows calls kernel32 (
 
 ## The `sha` variant
 
-On x86-64 and ARM64 the binary holds a second copy of the core and of the dependency cores, built with asm-crypto's `asm/core/<ISA>/sha256x.s` in place of `sha256.s`. Each symbol of that copy has the prefix `lx_`. The entry point runs that copy when the CPU has the features below.
+On x86-64 and ARM64 the binary holds a second copy of the core and of the dependency cores, built with asm-crypto's `asm/core/<ISA>/sha256x.s` in place of `sha256.s`, and on x86-64 its `bls12381x.s` (the field multiplication with `mulx`, `adcx` and `adox`) in place of `bls12381.s`. Each symbol of that copy has the prefix `lx_`. The entry point runs that copy when the CPU has the features below.
 
 | ISA | Extra instructions | Feature check |
 |---|---|---|
-| x86-64 | SSSE3 and SHA | CPUID leaf 1 ECX bit 9, and leaf 7 subleaf 0 EBX bit 29 |
+| x86-64 | SSSE3, SHA, BMI2 and ADX | CPUID leaf 1 ECX bit 9, and leaf 7 subleaf 0 EBX bits 29, 8 and 19 |
 | ARM64 | FEAT_SHA256 | Linux: bit 6 (`HWCAP_SHA2`) of `AT_HWCAP` (16). macOS: the sysctl `hw.optional.arm.FEAT_SHA256`. Windows: `IsProcessorFeaturePresent(PF_ARM_V8_CRYPTO_INSTRUCTIONS_AVAILABLE)` (30). |
 
 - Proof claims cover only the baseline copy.

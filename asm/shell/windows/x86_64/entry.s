@@ -116,6 +116,10 @@ FUNCTION mainCRTStartup
     cpuid
     bt      $29, %ebx                       # SHA
     jnc     60f
+    bt      $8, %ebx                        # BMI2, for asm-crypto's bls12381x.s
+    jnc     60f
+    bt      $19, %ebx                       # ADX
+    jnc     60f
     CALL_GLOBAL lx_lantern_app_main
     mov     %eax, %ecx
     CALL_GLOBAL ExitProcess

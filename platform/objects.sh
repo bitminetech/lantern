@@ -76,6 +76,13 @@ build_objects() {
             -c "$dep/asm-crypto/asm/core/$isa/sha256x.s" -o "$out/deps/crypto-sha256x.o"
         deps_sha=$(echo "$deps" | sed 's#crypto-sha256\.o#crypto-sha256x.o#')
         deps_off_sha=$(echo "$deps_off" | sed 's#crypto-sha256\.o#crypto-sha256x.o#')
+        if [ "$isa" = x86_64 ]; then   # and its BLS object with mulx, adcx and adox (bls12381x.s), and its signatures-off copy
+            as -I"$dep/asm-crypto/include" -I"$dep/asm-crypto/platform/$os" -I"$dep/asm-crypto/asm/core/$isa" \
+                -c "$dep/asm-crypto/asm/core/$isa/bls12381x.s" -o "$out/deps/crypto-bls12381x.o"
+            llvm-objcopy $renames "$out/deps/crypto-bls12381x.o" "$out/deps/crypto-bls12381x-off.o"
+            deps_sha=$(echo "$deps_sha" | sed 's#crypto-bls12381\.o#crypto-bls12381x.o#')
+            deps_off_sha=$(echo "$deps_off_sha" | sed 's#crypto-bls12381-off\.o#crypto-bls12381x-off.o#')
+        fi
     fi
 
     # One archive per preset. The core files include preset.inc from the
