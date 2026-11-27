@@ -3406,6 +3406,14 @@ A partial data column header that `Seen` keeps.
 | ARM64 | ✅ | ✅ | ✅ |  |
 | RISC-V | ✅ |  |  |  |
 
+### `lantern_seen_prune`
+
+| ISA | Linux | Windows | macOS | `equal` |
+|---|---|---|---|---|
+| x86-64 | ✅ | ✅ | ✅ |  |
+| ARM64 | ✅ | ✅ | ✅ |  |
+| RISC-V | ✅ |  |  |  |
+
 ### `lantern_validate_beacon_block_gossip`
 
 | ISA | Linux | Windows | macOS | `equal` |
