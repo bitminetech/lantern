@@ -589,19 +589,19 @@ END_FUNCTION lantern_sr_leaves
 # The level of an SrCtx: S8 its nodes, S9 its dirty bits, S10 its capacity, r15 its nodes in use, r13 it, to the next.
 .macro SR_UP
     mov     S10(%rsp), %rax
-    shl     $5, %rax
+    shl     $(5), %rax
     add     %rax, S8(%rsp)
     mov     S10(%rsp), %rax
-    add     $63, %rax
-    shr     $6, %rax
-    shl     $3, %rax
+    add     $(63), %rax
+    shr     $(6), %rax
+    shl     $(3), %rax
     add     %rax, S9(%rsp)
     mov     S10(%rsp), %rax
     inc     %rax
-    shr     $1, %rax
+    shr     $(1), %rax
     mov     %rax, S10(%rsp)
     inc     %r15
-    shr     $1, %r15
+    shr     $(1), %r15
     inc     %r13
 .endm
 
