@@ -20,10 +20,10 @@
 /* rax = the slots of the index of a Seen of rcx keys: the smallest power of two at or above 2 * rcx. Uses rcx. */
 .macro SEEN_SLOTS
     add     %rcx, %rcx
-    mov     $1, %eax
+    mov     $(1), %eax
 100: cmp    %rcx, %rax
     jae     101f
-    shl     $1, %rax
+    shl     $(1), %rax
     jmp     100b
 101:
 .endm
