@@ -172,9 +172,10 @@ LOCAL_FUNCTION lantern_app_state_cache
     UNFRAME 16
 END_FUNCTION lantern_app_state_cache
 
-# The pool of --threads (app.md): its threads started, and the StateCache hashes on it. Locals: sp+0 a FileOp.
+# The pool of --threads (app.md): its threads started, the StateCache hashes on it, and the anchor state's
+# keys are checked into the PubkeyCache with jobs of lantern_app_key_job. Locals: sp+0 a FileOp, sp+16 a ShellJob.
 LOCAL_FUNCTION lantern_app_pool
-    FRAME 16
+    FRAME 48
     ADDQ    a0, s1, APP_POOL
     ADDQ    a1, s1, APP_OPTIONS + AppOptions_threads
     mv      a2, sp
@@ -183,8 +184,43 @@ LOCAL_FUNCTION lantern_app_pool
     beqz    t0, 1f
     ADDQ    t1, s1, APP_POOL
     sd      t1, StateCache_pool(t0)
-1:  UNFRAME 16
+1:  LDQ     t2, s1, APP_CONFIG + CONFIG_PUBKEY_CACHE   # the anchor state's keys checked on the pool
+    beqz    t2, 2f
+    LDQ     t0, s1, APP_STATE
+    beqz    t0, 2f
+    LDQ     t3, t0, NODE_STATE_VALIDATORS
+    add     t3, t0, t3
+    LDQ     t4, t0, NODE_STATE_VALIDATORS + 8
+    ADDQ    t5, s1, APP_KEYS
+    sd      t3, 0(t5)
+    sd      t4, 8(t5)
+    sd      t2, 16(t5)
+    ADDRESS t6, lantern_app_key_job
+    sd      t6, 16(sp)
+    sd      t5, 24(sp)
+    addi    t4, t4, APP_KEY_JOB - 1
+    srli    t4, t4, APP_KEY_JOB_SHIFT
+    sd      t4, 32(sp)
+    ADDQ    a0, s1, APP_POOL
+    addi    a1, sp, 16
+    CALL_GLOBAL lantern_shell_pool_run
+2:  UNFRAME 48
 END_FUNCTION lantern_app_pool
+
+# A job of lantern_app_pool: crypto_bls_key_cache_fill of keys a1 * APP_KEY_JOB from the APP_KEYS record a0.
+LOCAL_FUNCTION lantern_app_key_job
+    FRAME 0
+    slli    a1, a1, APP_KEY_JOB_SHIFT
+    ld      t0, 8(a0)                       # count left, at most APP_KEY_JOB
+    sub     a2, t0, a1
+    li      t1, APP_KEY_JOB
+    bltu    a2, t1, 1f
+    mv      a2, t1
+1:  ld      a3, 16(a0)
+    ld      a0, 0(a0)
+    CALL_GLOBAL crypto_bls_key_cache_fill
+    UNFRAME 0
+END_FUNCTION lantern_app_key_job
 
 /* The pair at s1 + a0 goes back to lantern_shell_unmap and becomes 0, 0. */
 LOCAL_FUNCTION lantern_app_unmap

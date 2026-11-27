@@ -85,6 +85,7 @@ The binary: options, startup and the loop.
 - [`lantern_app_identity_put`](#function-lantern_app_identity_put): queues the identity's texts for the next node step.
 - [`lantern_app_ipv4`](#function-lantern_app_ipv4): reads an IPv4 address of an option.
 - [`lantern_app_key`](#function-lantern_app_key): makes the node's secp256k1 key.
+- [`lantern_app_key_job`](#function-lantern_app_key_job): a job of lantern_app_pool: the keys of a range of validators checked.
 - [`lantern_app_lc_grow`](#function-lantern_app_lc_grow): moves a light client store to a new buffer with twice the capacities.
 - [`lantern_app_no_memory`](#function-lantern_app_no_memory): writes the no memory line and gives 2.
 - [`lantern_app_lc_start`](#function-lantern_app_lc_start): makes the light client store as BufferId 2.
@@ -120,7 +121,7 @@ The binary: options, startup and the loop.
 - [`lantern_app_number`](#function-lantern_app_number): reads a decimal number of an endpoint.
 - [`lantern_app_p2p_events`](#function-lantern_app_p2p_events): passes the shell's events on.
 - [`lantern_app_path`](#function-lantern_app_path): a path in the network directory.
-- [`lantern_app_pool`](#function-lantern_app_pool): starts the pool of `--threads` and gives it to the StateCache.
+- [`lantern_app_pool`](#function-lantern_app_pool): starts the pool of `--threads`, gives it to the StateCache, and checks the anchor state's keys on it.
 - [`lantern_app_read`](#function-lantern_app_read): reads the file at APP_PATH into APP_FILE.
 - [`lantern_app_regrow`](#function-lantern_app_regrow): moves a state to new memory with twice the StateRoom.
 - [`lantern_app_space`](#function-lantern_app_space): skips white space of a text.
@@ -239,7 +240,7 @@ lantern_app_main(args) -> status
 
 - Reads the options with lantern_app_options.
 - Reads `config.yaml` of the network directory with lantern_config_parse over the pinned config of the preset, and `genesis.ssz` with lantern_<fork>_node_anchor of the fork of its slot.
-- A `StateCache` ([state.md](state.md#type-statecache)) for the anchor file's bytes / 121 + 65536 validators, from lantern_state_cache_size, lantern_shell_map and lantern_state_cache_init, at `CONFIG_STATE_CACHE` of the config before the store and the node start, so each state root of the node goes through it; with no memory for it, none. A `CommitteeCache` ([block-processing.md](block-processing.md#type-committeecache)) for as many validators, from lantern_committee_cache_size, lantern_shell_map and lantern_committee_cache_init, at `CONFIG_COMMITTEE_CACHE` the same way, and a `PubkeyCache` ([block-processing.md](block-processing.md#type-pubkeycache)) for as many, from lantern_pubkey_cache_size and lantern_pubkey_cache_init, at `CONFIG_PUBKEY_CACHE`. Then the pool of `--threads` (lantern_app_pool): its workers, and the `StateCache`'s `pool`.
+- A `StateCache` ([state.md](state.md#type-statecache)) for the anchor file's bytes / 121 + 65536 validators, from lantern_state_cache_size, lantern_shell_map and lantern_state_cache_init, at `CONFIG_STATE_CACHE` of the config before the store and the node start, so each state root of the node goes through it; with no memory for it, none. A `CommitteeCache` ([block-processing.md](block-processing.md#type-committeecache)) for as many validators, from lantern_committee_cache_size, lantern_shell_map and lantern_committee_cache_init, at `CONFIG_COMMITTEE_CACHE` the same way, and a `PubkeyCache` ([block-processing.md](block-processing.md#type-pubkeycache)) for as many, from lantern_pubkey_cache_size and lantern_pubkey_cache_init, at `CONFIG_PUBKEY_CACHE`. Then the pool of `--threads` (lantern_app_pool): its workers, the `StateCache`'s `pool`, and the anchor state's keys checked into the `PubkeyCache` with jobs on it.
 - Makes a new secp256k1 key. Starts the store (lantern_get_forkchoice_store), the node (lantern_node_init, with `NODE_FLAG_ENGINE` and `NODE_FLAG_ETH1` when it has an execution endpoint, `NODE_FLAG_DISCV5`, `NODE_FLAG_FEW_STATES` (a mainnet state is some hundreds of MB, and the blocks past F are some tens), `NODE_FLAG_SUPERNODE` with `--supernode`, `NODE_FLAG_BUILDER` with `--builder` and its text as the anchor's `builder_host`, and the anchor's `node_id`: keccak256 of the key's uncompressed point, x then y, in reverse byte order), the libp2p state with that key, and the discv5 state with the same key, the `ip` of `--enr-address`, and the `udp` and `tcp` of `--port`.
 - Decodes the KZG trusted setup with crypto_kzg_trusted_setup_of_bytes: include/trusted_setup_4096.bin, the compressed points of `presets/<preset>/trusted_setups/trusted_setup_4096.json` of the pinned spec (the same file for both presets): the 4096 of `g1_lagrange`, the 4096 of `g1_monomial`, then the 65 of `g2_monomial`.
 - Listens on TCP `--port` and binds UDP `--port` on every address, through the shell of asm-libp2p, gives each boot node to discv5, and listens for the Beacon API ([beacon-api.md](beacon-api.md)) on TCP `--http-address` and `--http-port`.
@@ -3104,6 +3105,43 @@ lantern_app_key() -> status
 - Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
 - Registers it reads, on ARM64, x86-64, RISC-V: the App in x19, rbx, s1.
 
+## Function `lantern_app_key_job`
+
+A job of lantern_app_pool: the keys of a range of validators checked into the PubkeyCache.
+
+### Signature
+
+```
+lantern_app_key_job(keys, index)
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `keys` | state | the `APP_KEYS` record: the first validator's key, the validators, the PubkeyCache |
+| `index` | input | u64 in a register: the job |
+
+### Function does
+
+- crypto_bls_key_cache_fill of asm-crypto for the validators `APP_KEY_JOB` x `index` to the lower of `APP_KEY_JOB` x (`index` + 1) and the validators, less 1. The jobs' ranges hold no index in common, as crypto_bls_key_cache_fill requires of calls at the same time.
+
+### Function never
+
+- Makes an OS call.
+
+### Limits
+
+- Stack of its own: 16 bytes on x86-64 (return address included), 16 bytes on ARM64, 16 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_app_key_job`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- A ShellJob function (shell.md): its status is not read.
+- Argument order: `keys`, `index`.
+
 ## Function `lantern_app_lc_grow`
 
 Moves a light client store to a new buffer with twice the capacities.
@@ -4335,7 +4373,7 @@ lantern_app_path(name, length)
 
 ## Function `lantern_app_pool`
 
-Starts the pool of `--threads` and gives it to the StateCache.
+Starts the pool of `--threads`, gives it to the StateCache, and checks the anchor state's keys into the PubkeyCache on it.
 
 ### Signature
 
@@ -4348,14 +4386,15 @@ lantern_app_pool()
 - lantern_shell_pool_start of `APP_POOL` with `threads` (shell.md): `threads` - 1 workers at most.
 - With a StateCache at `CONFIG_STATE_CACHE`: its `pool` takes `APP_POOL`, so each lantern_state_root of the node hashes its large trees on the pool.
 - A worker that cannot start leaves the pool with the workers started: the node runs as with fewer threads.
+- With a PubkeyCache at `CONFIG_PUBKEY_CACHE` and the anchor state: lantern_shell_pool_run of ceil(n / `APP_KEY_JOB`) jobs of lantern_app_key_job, n the state's validators, so each block and gossip check after the start finds the keys of those validators checked.
 
 ### Function never
 
-- Makes an OS call other than through lantern_shell_pool_start.
+- Makes an OS call other than through lantern_shell_pool_start and lantern_shell_pool_run.
 
 ### Limits
 
-- Stack of its own: 32 bytes on x86-64 (return address included), 32 bytes on ARM64, 32 bytes on RISC-V.
+- Stack of its own: 64 bytes on x86-64 (return address included), 64 bytes on ARM64, 64 bytes on RISC-V.
 
 ### ABI
 

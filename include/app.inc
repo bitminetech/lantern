@@ -148,7 +148,10 @@
 .set APP_HIST_ROOM, 1 << 20                 /* the memory history's room after its index; it doubles when short */
 .set APP_HIST_OUT_BYTES, 1 << 20            /* the chunks' first room; it doubles when short */
 .set APP_POOL, (APP_HIST + AppHist__size + 7) & ~7  /* ShellPool of --threads (app.md) */
-.set APP_SIZE, (APP_POOL + SHELL_POOL_SIZE + 4095) & ~4095
+.set APP_KEYS, APP_POOL + SHELL_POOL_SIZE  /* the key jobs of lantern_app_pool: keys, count, the PubkeyCache */
+.set APP_KEY_JOB_SHIFT, 12
+.set APP_KEY_JOB, 1 << APP_KEY_JOB_SHIFT    /* the keys of one job */
+.set APP_SIZE, (APP_KEYS + 24 + 4095) & ~4095
 .set APP_BLOCK_BYTES, 1 << 16               /* the anchor block */
 .set APP_BUF_ENTRY, 24                      /* a BufferId table entry: id, address, size */
 .set APP_BUFS_CAP, 64                      /* the BufferId table's first room; it doubles when full */

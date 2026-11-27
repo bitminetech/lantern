@@ -164,9 +164,13 @@ LOCAL_FUNCTION lantern_app_state_cache
     UNFRAME 16
 END_FUNCTION lantern_app_state_cache
 
-/* The pool of --threads (app.md): its threads started, and the StateCache hashes on it. Locals: (%rsp) a FileOp. */
+/*
+ * The pool of --threads (app.md): its threads started, the StateCache hashes on it, and the anchor
+ * state's keys are checked into the PubkeyCache with jobs of lantern_app_key_job. Locals: (%rsp) a
+ * FileOp, 16(%rsp) a ShellJob.
+ */
 LOCAL_FUNCTION lantern_app_pool
-    FRAME 16
+    FRAME 48
     lea     APP_POOL(%rbx), %rdi
     lea     (APP_OPTIONS + AppOptions_threads)(%rbx), %rsi
     mov     %rsp, %rdx
@@ -176,8 +180,47 @@ LOCAL_FUNCTION lantern_app_pool
     jz      1f
     lea     APP_POOL(%rbx), %rcx
     mov     %rcx, StateCache_pool(%rax)
-1:  UNFRAME 16
+1:  mov     (APP_CONFIG + CONFIG_PUBKEY_CACHE)(%rbx), %r8   # the anchor state's keys checked on the pool
+    test    %r8, %r8
+    jz      2f
+    mov     APP_STATE(%rbx), %rax
+    test    %rax, %rax
+    jz      2f
+    mov     NODE_STATE_VALIDATORS(%rax), %rcx
+    add     %rax, %rcx
+    mov     (NODE_STATE_VALIDATORS + 8)(%rax), %rdx
+    lea     APP_KEYS(%rbx), %rsi
+    mov     %rcx, (%rsi)
+    mov     %rdx, 8(%rsi)
+    mov     %r8, 16(%rsi)
+    lea     lantern_app_key_job(%rip), %rax
+    mov     %rax, 16(%rsp)
+    mov     %rsi, 24(%rsp)
+    add     $(APP_KEY_JOB - 1), %rdx
+    shr     $APP_KEY_JOB_SHIFT, %rdx
+    mov     %rdx, 32(%rsp)
+    lea     APP_POOL(%rbx), %rdi
+    lea     16(%rsp), %rsi
+    CALL_GLOBAL lantern_shell_pool_run
+2:  UNFRAME 48
 END_FUNCTION lantern_app_pool
+
+/* A job of lantern_app_pool: crypto_bls_key_cache_fill of keys rsi * APP_KEY_JOB from the APP_KEYS record rdi. */
+LOCAL_FUNCTION lantern_app_key_job
+    FRAME 0
+    mov     %rsi, %rax
+    shl     $APP_KEY_JOB_SHIFT, %rax
+    mov     8(%rdi), %rdx                   # count left, at most APP_KEY_JOB
+    sub     %rax, %rdx
+    mov     $APP_KEY_JOB, %ecx
+    cmp     %rcx, %rdx
+    cmova   %rcx, %rdx
+    mov     16(%rdi), %rcx
+    mov     (%rdi), %rdi
+    mov     %rax, %rsi
+    CALL_GLOBAL crypto_bls_key_cache_fill
+    UNFRAME 0
+END_FUNCTION lantern_app_key_job
 
 /* The pair at rbx + rdi goes back to lantern_shell_unmap and becomes 0, 0. */
 LOCAL_FUNCTION lantern_app_unmap

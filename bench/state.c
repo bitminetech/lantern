@@ -19,6 +19,18 @@ ABI uint64_t LF(get_beacon_proposer_index)(const void *state, void *out);
 ABI uint64_t LF(get_expected_withdrawals)(const void *state, void *scratch, void *out);
 ABI uint64_t LF(get_total_active_balance)(const void *state, void *scratch, void *out);
 ABI uint64_t lantern_shell_pool_stop(void *pool);
+ABI uint64_t lantern_shell_pool_run(void *pool, const void *job);
+ABI uint64_t crypto_bls_key_cache_fill(const void *keys, uint64_t first, uint64_t count, void *cache);
+
+/* A job of the key fill bench: crypto_bls_key_cache_fill of keys 4096 i to 4096 i + 4095. */
+typedef struct {
+    const uint8_t *keys;
+    uint8_t *cache;
+} fill_ctx;
+static ABI uint64_t fill_job(void *context, uint64_t index) {
+    fill_ctx *c = context;
+    return crypto_bls_key_cache_fill(c->keys, 4096 * index, 4096, c->cache);
+}
 
 static double now_s(void) {
     struct timespec t;
@@ -486,6 +498,28 @@ int main(int argc, char **argv) {
     uint8_t *pubkeys = buffer(pksize);
     wr64(pubkeys, pksize);
     CALL(LF(pubkey_cache_init), &n, pubkeys);
+    {   /* crypto_bls_key_cache_fill of the first 65536 keys: one call, then jobs of 4096 keys on a pool of 10 threads */
+        static uint64_t kpool[1024];
+        uint64_t kthreads = 10, kres[2], m = 65536;
+        uint8_t *kc = buffer(pksize);
+        wr64(kc, pksize);
+        CALL(LF(pubkey_cache_init), &n, kc);
+        fill_ctx fc = {state + rd64(state + field_offset("BeaconState", 11)), kc};
+        double f0 = now_s();
+        crypto_bls_key_cache_fill(fc.keys, 0, m, kc);
+        double f1 = now_s();
+        wr64(kc, pksize);
+        CALL(LF(pubkey_cache_init), &n, kc);
+        lantern_shell_pool_start(kpool, &kthreads, kres);
+        uint64_t job[3] = {(uint64_t)(uintptr_t)fill_job, (uint64_t)(uintptr_t)&fc, m / 4096};
+        double f2 = now_s();
+        lantern_shell_pool_run(kpool, job);
+        double f3 = now_s();
+        printf("key cache fill, %llu keys: 1 thread %.3f s, %llu threads %.3f s\n", (unsigned long long)m, f1 - f0,
+               (unsigned long long)kthreads, f3 - f2);
+        lantern_shell_pool_stop(kpool);
+        free(kc);
+    }
     time_indexed(state, n, 488, pubkeys, scratch, ssize);    /* one committee at 1000000 validators */
     time_indexed(state, n, 31232, pubkeys, scratch, ssize);  /* 64 of them: an electra aggregate of every committee of a slot */
     wr64(config + CONFIG_STATE_CACHE, (uint64_t)(uintptr_t)cache);

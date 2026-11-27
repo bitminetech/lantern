@@ -164,9 +164,13 @@ LOCAL_FUNCTION lantern_app_state_cache
     UNFRAME 16
 END_FUNCTION lantern_app_state_cache
 
-/* The pool of --threads (app.md): its threads started, and the StateCache hashes on it. Locals: sp+16 a FileOp. */
+/*
+ * The pool of --threads (app.md): its threads started, the StateCache hashes on it, and the anchor
+ * state's keys are checked into the PubkeyCache with jobs of lantern_app_key_job. Locals: sp+16 a
+ * FileOp, sp+32 a ShellJob.
+ */
 LOCAL_FUNCTION lantern_app_pool
-    FRAME 16
+    FRAME 48
     ADDQ    x0, x19, APP_POOL
     ADDQ    x1, x19, (APP_OPTIONS + AppOptions_threads)
     add     x2, sp, #16
@@ -175,8 +179,41 @@ LOCAL_FUNCTION lantern_app_pool
     cbz     x9, 1f
     ADDQ    x10, x19, APP_POOL
     str     x10, [x9, #StateCache_pool]
-1:  UNFRAME 16
+1:  LDQ     x9, x19, (APP_CONFIG + CONFIG_PUBKEY_CACHE)   /* the anchor state's keys checked on the pool */
+    cbz     x9, 2f
+    ldr     x10, [x19, #APP_STATE]
+    cbz     x10, 2f
+    LDQ     x11, x10, NODE_STATE_VALIDATORS
+    add     x11, x10, x11
+    LDQ     x12, x10, (NODE_STATE_VALIDATORS + 8)
+    ADDQ    x13, x19, APP_KEYS
+    stp     x11, x12, [x13]
+    str     x9, [x13, #16]
+    ADDRESS x14, lantern_app_key_job
+    add     x15, x12, #(APP_KEY_JOB - 1)
+    lsr     x15, x15, #APP_KEY_JOB_SHIFT
+    stp     x14, x13, [sp, #32]
+    str     x15, [sp, #48]
+    ADDQ    x0, x19, APP_POOL
+    add     x1, sp, #32
+    CALL_GLOBAL lantern_shell_pool_run
+2:  UNFRAME 48
 END_FUNCTION lantern_app_pool
+
+/* A job of lantern_app_pool: crypto_bls_key_cache_fill of keys x1 * APP_KEY_JOB from the APP_KEYS record x0. */
+LOCAL_FUNCTION lantern_app_key_job
+    FRAME 0
+    lsl     x1, x1, #APP_KEY_JOB_SHIFT
+    ldp     x9, x10, [x0]                   /* keys, count */
+    ldr     x3, [x0, #16]
+    sub     x2, x10, x1
+    mov     x11, #APP_KEY_JOB
+    cmp     x2, x11
+    csel    x2, x2, x11, lo
+    mov     x0, x9
+    CALL_GLOBAL crypto_bls_key_cache_fill
+    UNFRAME 0
+END_FUNCTION lantern_app_key_job
 
 /* The pair at x19 + x0 goes back to lantern_shell_unmap and becomes 0, 0. */
 LOCAL_FUNCTION lantern_app_unmap
