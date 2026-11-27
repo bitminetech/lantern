@@ -198,7 +198,8 @@ LOCAL_FUNCTION lantern_app_pool
     ADDRESS t6, lantern_app_key_job
     sd      t6, 16(sp)
     sd      t5, 24(sp)
-    addi    t4, t4, APP_KEY_JOB - 1
+    li      t6, APP_KEY_JOB - 1
+    add     t4, t4, t6
     srli    t4, t4, APP_KEY_JOB_SHIFT
     sd      t4, 32(sp)
     ADDQ    a0, s1, APP_POOL
