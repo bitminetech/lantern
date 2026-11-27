@@ -583,3 +583,203 @@ FUNCTION lantern_shell_process
     mov     x0, #LANTERN_OK
     LEAVE 160
 END_FUNCTION lantern_shell_process
+
+/* ---------------------------------------------------------------- the pool */
+
+.set PoolMac_mutex, ShellPool_os            /* pthread_mutex_t, 64 bytes */
+.set PoolMac_gen, ShellPool_os + 64         /* pthread_cond_t of a new generation, 48 bytes */
+.set PoolMac_done, ShellPool_os + 112       /* pthread_cond_t of the last worker done */
+.set PoolMac_threads, ShellPool_os + 160    /* a pthread_t for each worker */
+
+/* (pool, threads, result): docs/reference/shell.md. x19 pool, x20 the workers to start, x21 result, x22 the next worker. */
+FUNCTION lantern_shell_pool_start
+    ENTER 0
+    mov     x19, x0
+    ldr     x20, [x1]
+    mov     x21, x2
+    stp     xzr, xzr, [x21]
+    cmp     x20, #1                         /* 1 to SHELL_POOL_MAX threads, the caller included */
+    csinc   x20, x20, xzr, hs
+    cmp     x20, #SHELL_POOL_MAX
+    mov     x9, #SHELL_POOL_MAX
+    csel    x20, x20, x9, ls
+    sub     x20, x20, #1
+    str     xzr, [x19, #ShellPool_workers]
+    mov     x22, #0
+    cbz     x20, 9f
+    add     x0, x19, #PoolMac_mutex
+    mov     x1, #0
+    CALL_GLOBAL pthread_mutex_init
+    cbnz    x0, 8f
+    add     x0, x19, #PoolMac_gen
+    mov     x1, #0
+    CALL_GLOBAL pthread_cond_init
+    cbnz    x0, 8f
+    add     x0, x19, #PoolMac_done
+    mov     x1, #0
+    CALL_GLOBAL pthread_cond_init
+    cbnz    x0, 8f
+1:  cmp     x22, x20
+    b.hs    9f
+    add     x0, x19, #PoolMac_threads
+    add     x0, x0, x22, lsl #3
+    mov     x1, #0
+    ADDRESS x2, lantern_shell_pool_worker
+    mov     x3, x19
+    CALL_GLOBAL pthread_create
+    cbnz    x0, 8f
+    add     x22, x22, #1
+    str     x22, [x19, #ShellPool_workers]
+    b       1b
+8:  str     x0, [x21]                       /* pthread gives the error number */
+9:  str     x22, [x21, #8]
+    mov     x0, #LANTERN_OK
+    LEAVE 0
+END_FUNCTION lantern_shell_pool_start
+
+/* The jobs of the run of pool x0 until none is left. x19 pool. */
+LOCAL_FUNCTION lantern_shell_pool_jobs
+    ENTER 0
+    mov     x19, x0
+1:  add     x9, x19, #ShellPool_next        /* the next index */
+2:  ldxr    x10, [x9]
+    add     x11, x10, #1
+    stxr    w12, x11, [x9]
+    cbnz    w12, 2b
+    ldr     x13, [x19, #ShellPool_count]
+    cmp     x10, x13
+    b.hs    9f
+    ldr     x0, [x19, #ShellPool_context]
+    mov     x1, x10
+    ldr     x9, [x19, #ShellPool_function]
+    blr     x9
+    b       1b
+9:  LEAVE 0
+END_FUNCTION lantern_shell_pool_jobs
+
+/*
+ * A worker of pool x0, the start routine of pthread_create: each new generation's jobs, then its
+ * done count, under the mutex; it returns at stop. x19 pool, x20 the generation, x21 the mutex, x22 stop.
+ */
+LOCAL_FUNCTION lantern_shell_pool_worker
+    ENTER 0
+    mov     x19, x0
+    mov     w20, #0
+    add     x21, x19, #PoolMac_mutex
+1:  mov     x0, x21
+    CALL_GLOBAL pthread_mutex_lock
+2:  ldr     w10, [x19, #ShellPool_gen]      /* wait while it is the same */
+    cmp     w10, w20
+    b.ne    3f
+    add     x0, x19, #PoolMac_gen
+    mov     x1, x21
+    CALL_GLOBAL pthread_cond_wait
+    b       2b
+3:  mov     w20, w10
+    ldr     x22, [x19, #ShellPool_stop]
+    mov     x0, x21
+    CALL_GLOBAL pthread_mutex_unlock
+    cbnz    x22, 9f
+    mov     x0, x19
+    bl      lantern_shell_pool_jobs
+    mov     x0, x21
+    CALL_GLOBAL pthread_mutex_lock
+    ldr     w10, [x19, #ShellPool_done]
+    add     w10, w10, #1
+    str     w10, [x19, #ShellPool_done]
+    ldr     x11, [x19, #ShellPool_workers]
+    cmp     x10, x11
+    b.ne    4f
+    add     x0, x19, #PoolMac_done          /* the last one wakes the caller */
+    CALL_GLOBAL pthread_cond_signal
+4:  mov     x0, x21
+    CALL_GLOBAL pthread_mutex_unlock
+    b       1b
+9:  mov     x0, #0
+    LEAVE 0
+END_FUNCTION lantern_shell_pool_worker
+
+/* (pool, job): docs/reference/shell.md. x19 pool, x20 1 when the workers take part, x21 the mutex. */
+FUNCTION lantern_shell_pool_run
+    ENTER 0
+    mov     x19, x0
+    ldp     x9, x10, [x1, #ShellJob_function]
+    ldr     x11, [x1, #ShellJob_count]
+    stp     x9, x10, [x19, #ShellPool_function]
+    str     x11, [x19, #ShellPool_count]
+    str     xzr, [x19, #ShellPool_next]
+    mov     x20, #0
+    add     x21, x19, #PoolMac_mutex
+    ldr     x12, [x19, #ShellPool_workers]
+    cbz     x12, 5f                         /* no workers, or one job: the caller alone */
+    cmp     x11, #2
+    b.lo    5f
+    mov     x20, #1
+    mov     x0, x21                         /* the next generation, under the mutex */
+    CALL_GLOBAL pthread_mutex_lock
+    str     wzr, [x19, #ShellPool_done]
+    ldr     w13, [x19, #ShellPool_gen]
+    add     w13, w13, #1
+    str     w13, [x19, #ShellPool_gen]
+    add     x0, x19, #PoolMac_gen
+    CALL_GLOBAL pthread_cond_broadcast
+    mov     x0, x21
+    CALL_GLOBAL pthread_mutex_unlock
+5:  mov     x0, x19
+    bl      lantern_shell_pool_jobs
+    cbz     x20, 9f
+    mov     x0, x21                         /* every worker done, under the mutex */
+    CALL_GLOBAL pthread_mutex_lock
+6:  ldr     w10, [x19, #ShellPool_done]
+    ldr     x11, [x19, #ShellPool_workers]
+    cmp     x10, x11
+    b.eq    7f
+    add     x0, x19, #PoolMac_done
+    mov     x1, x21
+    CALL_GLOBAL pthread_cond_wait
+    b       6b
+7:  mov     x0, x21
+    CALL_GLOBAL pthread_mutex_unlock
+9:  mov     x0, #LANTERN_OK
+    LEAVE 0
+END_FUNCTION lantern_shell_pool_run
+
+/* (pool): docs/reference/shell.md. x19 pool, x20 the next worker, x21 the mutex. */
+FUNCTION lantern_shell_pool_stop
+    ENTER 0
+    mov     x19, x0
+    ldr     x9, [x19, #ShellPool_workers]
+    cbz     x9, 9f
+    add     x21, x19, #PoolMac_mutex
+    mov     x0, x21                         /* a new generation that ends them */
+    CALL_GLOBAL pthread_mutex_lock
+    mov     x9, #1
+    str     x9, [x19, #ShellPool_stop]
+    ldr     w13, [x19, #ShellPool_gen]
+    add     w13, w13, #1
+    str     w13, [x19, #ShellPool_gen]
+    add     x0, x19, #PoolMac_gen
+    CALL_GLOBAL pthread_cond_broadcast
+    mov     x0, x21
+    CALL_GLOBAL pthread_mutex_unlock
+    mov     x20, #0
+1:  ldr     x9, [x19, #ShellPool_workers]
+    cmp     x20, x9
+    b.hs    8f
+    add     x9, x19, #PoolMac_threads
+    ldr     x0, [x9, x20, lsl #3]
+    mov     x1, #0
+    CALL_GLOBAL pthread_join
+    add     x20, x20, #1
+    b       1b
+8:  add     x0, x19, #PoolMac_done
+    CALL_GLOBAL pthread_cond_destroy
+    add     x0, x19, #PoolMac_gen
+    CALL_GLOBAL pthread_cond_destroy
+    mov     x0, x21
+    CALL_GLOBAL pthread_mutex_destroy
+    str     xzr, [x19, #ShellPool_workers]
+    str     xzr, [x19, #ShellPool_stop]
+9:  mov     x0, #LANTERN_OK
+    LEAVE 0
+END_FUNCTION lantern_shell_pool_stop

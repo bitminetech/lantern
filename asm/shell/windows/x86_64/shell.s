@@ -745,3 +745,191 @@ FUNCTION lantern_shell_process
     xor     %eax, %eax
     LEAVE 128
 END_FUNCTION lantern_shell_process
+
+/* ---------------------------------------------------------------- the pool */
+
+.set PoolWin_lock, ShellPool_os             /* SRWLOCK, 0 is its initial value */
+.set PoolWin_gen, ShellPool_os + 8          /* CONDITION_VARIABLE of a new generation */
+.set PoolWin_done, ShellPool_os + 16        /* CONDITION_VARIABLE of the last worker done */
+.set PoolWin_threads, ShellPool_os + 64     /* a thread HANDLE for each worker */
+.set OS_INFINITE, 0xffffffff                /* winbase.h */
+
+/* (pool, threads, result): docs/reference/shell.md. rbx pool, rbp the workers to start, r12 result, r13 the next worker. */
+FUNCTION lantern_shell_pool_start
+    ENTER 16
+    mov     %rdi, %rbx
+    mov     (%rsi), %rbp
+    mov     %rdx, %r12
+    movq    $0, (%r12)
+    movq    $0, 8(%r12)
+    mov     $1, %eax                        /* 1 to SHELL_POOL_MAX threads, the caller included */
+    test    %rbp, %rbp
+    cmovz   %rax, %rbp
+    mov     $SHELL_POOL_MAX, %eax
+    cmp     %rax, %rbp
+    cmova   %rax, %rbp
+    dec     %rbp
+    movq    $0, ShellPool_workers(%rbx)
+    movq    $0, PoolWin_lock(%rbx)
+    movq    $0, PoolWin_gen(%rbx)
+    movq    $0, PoolWin_done(%rbx)
+    xor     %r13d, %r13d
+1:  cmp     %rbp, %r13
+    jae     9f
+    xor     %ecx, %ecx                      /* CreateThread(NULL, the stack, the worker, pool, 0, NULL) */
+    mov     $SHELL_POOL_STACK, %edx
+    lea     lantern_shell_pool_worker(%rip), %r8
+    mov     %rbx, %r9
+    movq    $0, L(%rsp)
+    movq    $0, (L + 8)(%rsp)
+    CALL_GLOBAL CreateThread
+    test    %rax, %rax
+    jz      8f
+    mov     %rax, PoolWin_threads(%rbx,%r13,8)
+    inc     %r13
+    mov     %r13, ShellPool_workers(%rbx)
+    jmp     1b
+8:  OS_LAST_ERROR
+    mov     %rax, (%r12)
+9:  mov     %r13, 8(%r12)
+    xor     %eax, %eax
+    LEAVE 16
+END_FUNCTION lantern_shell_pool_start
+
+/* The jobs of the run of pool rdi until none is left. rbx pool. */
+LOCAL_FUNCTION lantern_shell_pool_jobs
+    ENTER 0
+    mov     %rdi, %rbx
+1:  mov     $1, %esi                        /* the next index */
+    lock xadd %rsi, ShellPool_next(%rbx)
+    cmp     ShellPool_count(%rbx), %rsi
+    jae     9f
+    mov     ShellPool_context(%rbx), %rdi
+    call    *ShellPool_function(%rbx)
+    jmp     1b
+9:  LEAVE 0
+END_FUNCTION lantern_shell_pool_jobs
+
+/*
+ * A worker of pool rcx, the start routine of CreateThread (the Windows x64 convention): each new
+ * generation's jobs, then its done count, under the lock; at stop it ends with ExitThread, so it
+ * keeps no register of its caller. rbx pool, ebp the generation, r12 the lock, r13 stop.
+ */
+LOCAL_FUNCTION lantern_shell_pool_worker
+    ENTER 0
+    mov     %rcx, %rbx
+    xor     %ebp, %ebp
+    lea     PoolWin_lock(%rbx), %r12
+1:  mov     %r12, %rcx
+    CALL_GLOBAL AcquireSRWLockExclusive
+2:  mov     ShellPool_gen(%rbx), %eax       /* wait while it is the same */
+    cmp     %ebp, %eax
+    jne     3f
+    lea     PoolWin_gen(%rbx), %rcx
+    mov     %r12, %rdx
+    mov     $OS_INFINITE, %r8d
+    xor     %r9d, %r9d
+    CALL_GLOBAL SleepConditionVariableSRW
+    jmp     2b
+3:  mov     %eax, %ebp
+    mov     ShellPool_stop(%rbx), %r13
+    mov     %r12, %rcx
+    CALL_GLOBAL ReleaseSRWLockExclusive
+    test    %r13, %r13
+    jnz     9f
+    mov     %rbx, %rdi
+    call    lantern_shell_pool_jobs
+    mov     %r12, %rcx
+    CALL_GLOBAL AcquireSRWLockExclusive
+    mov     ShellPool_done(%rbx), %eax
+    inc     %eax
+    mov     %eax, ShellPool_done(%rbx)
+    cmp     ShellPool_workers(%rbx), %rax
+    jne     4f
+    lea     PoolWin_done(%rbx), %rcx        /* the last one wakes the caller */
+    CALL_GLOBAL WakeConditionVariable
+4:  mov     %r12, %rcx
+    CALL_GLOBAL ReleaseSRWLockExclusive
+    jmp     1b
+9:  xor     %ecx, %ecx
+    CALL_GLOBAL ExitThread
+    jmp     9b
+END_FUNCTION lantern_shell_pool_worker
+
+/* (pool, job): docs/reference/shell.md. rbx pool, rbp 1 when the workers take part, r12 the lock. */
+FUNCTION lantern_shell_pool_run
+    ENTER 0
+    mov     %rdi, %rbx
+    mov     ShellJob_function(%rsi), %rax
+    mov     %rax, ShellPool_function(%rbx)
+    mov     ShellJob_context(%rsi), %rax
+    mov     %rax, ShellPool_context(%rbx)
+    mov     ShellJob_count(%rsi), %rcx
+    mov     %rcx, ShellPool_count(%rbx)
+    movq    $0, ShellPool_next(%rbx)
+    xor     %ebp, %ebp
+    lea     PoolWin_lock(%rbx), %r12
+    cmpq    $0, ShellPool_workers(%rbx)     /* no workers, or one job: the caller alone */
+    je      5f
+    cmp     $2, %rcx
+    jb      5f
+    mov     $1, %ebp
+    mov     %r12, %rcx                      /* the next generation, under the lock */
+    CALL_GLOBAL AcquireSRWLockExclusive
+    movl    $0, ShellPool_done(%rbx)
+    incl    ShellPool_gen(%rbx)
+    lea     PoolWin_gen(%rbx), %rcx
+    CALL_GLOBAL WakeAllConditionVariable
+    mov     %r12, %rcx
+    CALL_GLOBAL ReleaseSRWLockExclusive
+5:  mov     %rbx, %rdi
+    call    lantern_shell_pool_jobs
+    test    %ebp, %ebp
+    jz      9f
+    mov     %r12, %rcx                      /* every worker done, under the lock */
+    CALL_GLOBAL AcquireSRWLockExclusive
+6:  mov     ShellPool_done(%rbx), %eax
+    cmp     ShellPool_workers(%rbx), %rax
+    je      7f
+    lea     PoolWin_done(%rbx), %rcx
+    mov     %r12, %rdx
+    mov     $OS_INFINITE, %r8d
+    xor     %r9d, %r9d
+    CALL_GLOBAL SleepConditionVariableSRW
+    jmp     6b
+7:  mov     %r12, %rcx
+    CALL_GLOBAL ReleaseSRWLockExclusive
+9:  xor     %eax, %eax
+    LEAVE 0
+END_FUNCTION lantern_shell_pool_run
+
+/* (pool): docs/reference/shell.md. rbx pool, rbp the next worker, r12 the lock. */
+FUNCTION lantern_shell_pool_stop
+    ENTER 0
+    mov     %rdi, %rbx
+    cmpq    $0, ShellPool_workers(%rbx)
+    je      9f
+    lea     PoolWin_lock(%rbx), %r12
+    mov     %r12, %rcx                      /* a new generation that ends them */
+    CALL_GLOBAL AcquireSRWLockExclusive
+    movq    $1, ShellPool_stop(%rbx)
+    incl    ShellPool_gen(%rbx)
+    lea     PoolWin_gen(%rbx), %rcx
+    CALL_GLOBAL WakeAllConditionVariable
+    mov     %r12, %rcx
+    CALL_GLOBAL ReleaseSRWLockExclusive
+    xor     %ebp, %ebp
+1:  cmp     ShellPool_workers(%rbx), %rbp
+    jae     8f
+    mov     PoolWin_threads(%rbx,%rbp,8), %rcx
+    mov     $OS_INFINITE, %edx
+    CALL_GLOBAL WaitForSingleObject
+    mov     PoolWin_threads(%rbx,%rbp,8), %rcx
+    CALL_GLOBAL CloseHandle
+    inc     %rbp
+    jmp     1b
+8:  movq    $0, ShellPool_workers(%rbx)
+    movq    $0, ShellPool_stop(%rbx)
+9:  xor     %eax, %eax
+    LEAVE 0
+END_FUNCTION lantern_shell_pool_stop

@@ -578,3 +578,197 @@ FUNCTION lantern_shell_process
     xor     %eax, %eax
     LEAVE 160
 END_FUNCTION lantern_shell_process
+
+# ---------------------------------------------------------------- the pool
+
+.set PoolMac_mutex, ShellPool_os            # pthread_mutex_t, 64 bytes
+.set PoolMac_gen, ShellPool_os + 64         # pthread_cond_t of a new generation, 48 bytes
+.set PoolMac_done, ShellPool_os + 112       # pthread_cond_t of the last worker done
+.set PoolMac_threads, ShellPool_os + 160    # a pthread_t for each worker
+
+# (pool, threads, result): docs/reference/shell.md. rbx pool, rbp the workers to start, r12 result, r13 the next worker.
+FUNCTION lantern_shell_pool_start
+    ENTER 0
+    mov     %rdi, %rbx
+    mov     (%rsi), %rbp
+    mov     %rdx, %r12
+    movq    $0, (%r12)
+    movq    $0, 8(%r12)
+    mov     $1, %eax                        # 1 to SHELL_POOL_MAX threads, the caller included
+    test    %rbp, %rbp
+    cmovz   %rax, %rbp
+    mov     $SHELL_POOL_MAX, %eax
+    cmp     %rax, %rbp
+    cmova   %rax, %rbp
+    dec     %rbp
+    movq    $0, ShellPool_workers(%rbx)
+    xor     %r13d, %r13d
+    test    %rbp, %rbp
+    jz      9f
+    lea     PoolMac_mutex(%rbx), %rdi
+    xor     %esi, %esi
+    CALL_GLOBAL pthread_mutex_init
+    test    %eax, %eax
+    jnz     8f
+    lea     PoolMac_gen(%rbx), %rdi
+    xor     %esi, %esi
+    CALL_GLOBAL pthread_cond_init
+    test    %eax, %eax
+    jnz     8f
+    lea     PoolMac_done(%rbx), %rdi
+    xor     %esi, %esi
+    CALL_GLOBAL pthread_cond_init
+    test    %eax, %eax
+    jnz     8f
+1:  cmp     %rbp, %r13
+    jae     9f
+    lea     PoolMac_threads(%rbx,%r13,8), %rdi
+    xor     %esi, %esi
+    lea     lantern_shell_pool_worker(%rip), %rdx
+    mov     %rbx, %rcx
+    CALL_GLOBAL pthread_create
+    test    %eax, %eax
+    jnz     8f
+    inc     %r13
+    mov     %r13, ShellPool_workers(%rbx)
+    jmp     1b
+8:  mov     %eax, %eax                      # pthread gives the error number
+    mov     %rax, (%r12)
+9:  mov     %r13, 8(%r12)
+    xor     %eax, %eax
+    LEAVE 0
+END_FUNCTION lantern_shell_pool_start
+
+# The jobs of the run of pool rdi until none is left. rbx pool.
+LOCAL_FUNCTION lantern_shell_pool_jobs
+    ENTER 0
+    mov     %rdi, %rbx
+1:  mov     $1, %esi                        # the next index
+    lock xadd %rsi, ShellPool_next(%rbx)
+    cmp     ShellPool_count(%rbx), %rsi
+    jae     9f
+    mov     ShellPool_context(%rbx), %rdi
+    call    *ShellPool_function(%rbx)
+    jmp     1b
+9:  LEAVE 0
+END_FUNCTION lantern_shell_pool_jobs
+
+# A worker of pool rdi, the start routine of pthread_create: each new generation's jobs, then its
+# done count, under the mutex; it returns at stop. rbx pool, ebp the generation, r12 the mutex, r13 stop.
+LOCAL_FUNCTION lantern_shell_pool_worker
+    ENTER 0
+    mov     %rdi, %rbx
+    xor     %ebp, %ebp
+    lea     PoolMac_mutex(%rbx), %r12
+1:  mov     %r12, %rdi
+    CALL_GLOBAL pthread_mutex_lock
+2:  mov     ShellPool_gen(%rbx), %eax       # wait while it is the same
+    cmp     %ebp, %eax
+    jne     3f
+    lea     PoolMac_gen(%rbx), %rdi
+    mov     %r12, %rsi
+    CALL_GLOBAL pthread_cond_wait
+    jmp     2b
+3:  mov     %eax, %ebp
+    mov     ShellPool_stop(%rbx), %r13
+    mov     %r12, %rdi
+    CALL_GLOBAL pthread_mutex_unlock
+    test    %r13, %r13
+    jnz     9f
+    mov     %rbx, %rdi
+    call    lantern_shell_pool_jobs
+    mov     %r12, %rdi
+    CALL_GLOBAL pthread_mutex_lock
+    mov     ShellPool_done(%rbx), %eax
+    inc     %eax
+    mov     %eax, ShellPool_done(%rbx)
+    cmp     ShellPool_workers(%rbx), %rax
+    jne     4f
+    lea     PoolMac_done(%rbx), %rdi        # the last one wakes the caller
+    CALL_GLOBAL pthread_cond_signal
+4:  mov     %r12, %rdi
+    CALL_GLOBAL pthread_mutex_unlock
+    jmp     1b
+9:  xor     %eax, %eax
+    LEAVE 0
+END_FUNCTION lantern_shell_pool_worker
+
+# (pool, job): docs/reference/shell.md. rbx pool, rbp 1 when the workers take part, r12 the mutex.
+FUNCTION lantern_shell_pool_run
+    ENTER 0
+    mov     %rdi, %rbx
+    mov     ShellJob_function(%rsi), %rax
+    mov     %rax, ShellPool_function(%rbx)
+    mov     ShellJob_context(%rsi), %rax
+    mov     %rax, ShellPool_context(%rbx)
+    mov     ShellJob_count(%rsi), %rcx
+    mov     %rcx, ShellPool_count(%rbx)
+    movq    $0, ShellPool_next(%rbx)
+    xor     %ebp, %ebp
+    lea     PoolMac_mutex(%rbx), %r12
+    cmpq    $0, ShellPool_workers(%rbx)     # no workers, or one job: the caller alone
+    je      5f
+    cmp     $2, %rcx
+    jb      5f
+    mov     $1, %ebp
+    mov     %r12, %rdi                      # the next generation, under the mutex
+    CALL_GLOBAL pthread_mutex_lock
+    movl    $0, ShellPool_done(%rbx)
+    incl    ShellPool_gen(%rbx)
+    lea     PoolMac_gen(%rbx), %rdi
+    CALL_GLOBAL pthread_cond_broadcast
+    mov     %r12, %rdi
+    CALL_GLOBAL pthread_mutex_unlock
+5:  mov     %rbx, %rdi
+    call    lantern_shell_pool_jobs
+    test    %ebp, %ebp
+    jz      9f
+    mov     %r12, %rdi                      # every worker done, under the mutex
+    CALL_GLOBAL pthread_mutex_lock
+6:  mov     ShellPool_done(%rbx), %eax
+    cmp     ShellPool_workers(%rbx), %rax
+    je      7f
+    lea     PoolMac_done(%rbx), %rdi
+    mov     %r12, %rsi
+    CALL_GLOBAL pthread_cond_wait
+    jmp     6b
+7:  mov     %r12, %rdi
+    CALL_GLOBAL pthread_mutex_unlock
+9:  xor     %eax, %eax
+    LEAVE 0
+END_FUNCTION lantern_shell_pool_run
+
+# (pool): docs/reference/shell.md. rbx pool, rbp the next worker, r12 the mutex.
+FUNCTION lantern_shell_pool_stop
+    ENTER 0
+    mov     %rdi, %rbx
+    cmpq    $0, ShellPool_workers(%rbx)
+    je      9f
+    lea     PoolMac_mutex(%rbx), %r12
+    mov     %r12, %rdi                      # a new generation that ends them
+    CALL_GLOBAL pthread_mutex_lock
+    movq    $1, ShellPool_stop(%rbx)
+    incl    ShellPool_gen(%rbx)
+    lea     PoolMac_gen(%rbx), %rdi
+    CALL_GLOBAL pthread_cond_broadcast
+    mov     %r12, %rdi
+    CALL_GLOBAL pthread_mutex_unlock
+    xor     %ebp, %ebp
+1:  cmp     ShellPool_workers(%rbx), %rbp
+    jae     8f
+    mov     PoolMac_threads(%rbx,%rbp,8), %rdi
+    xor     %esi, %esi
+    CALL_GLOBAL pthread_join
+    inc     %rbp
+    jmp     1b
+8:  lea     PoolMac_done(%rbx), %rdi
+    CALL_GLOBAL pthread_cond_destroy
+    lea     PoolMac_gen(%rbx), %rdi
+    CALL_GLOBAL pthread_cond_destroy
+    mov     %r12, %rdi
+    CALL_GLOBAL pthread_mutex_destroy
+    movq    $0, ShellPool_workers(%rbx)
+    movq    $0, ShellPool_stop(%rbx)
+9:  xor     %eax, %eax
+    LEAVE 0
+END_FUNCTION lantern_shell_pool_stop

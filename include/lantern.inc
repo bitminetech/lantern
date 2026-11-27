@@ -557,6 +557,26 @@
 .set SeenHeader_header_root, 32
 .set SeenHeader_header, 64
 
+/* ShellPool (shell.md): the threads of lantern_shell_pool_run, a resource context of the shell */
+.set ShellPool_gen, 0                       /* u32: the generation of the last run; a worker waits on it */
+.set ShellPool_done, 8                      /* u32: the workers done with the generation; the caller waits on it */
+.set ShellPool_stop, 16                     /* 1 when the workers end */
+.set ShellPool_function, 24                 /* the run's ShellJob */
+.set ShellPool_context, 32
+.set ShellPool_count, 40
+.set ShellPool_next, 48                     /* the index of the next job */
+.set ShellPool_workers, 56                  /* the threads besides the caller */
+.set ShellPool_os, 64                       /* the OS part: each worker's thread, stack, and the waits */
+.set SHELL_POOL_SIZE, 8192
+.set SHELL_POOL_MAX, 64                     /* the threads of a pool at most, the caller included */
+.set SHELL_POOL_STACK, 1 << 20              /* a worker's stack, a guard page included */
+
+/* ShellJob (shell.md): count calls of function(context, index) */
+.set ShellJob_function, 0
+.set ShellJob_context, 8
+.set ShellJob_count, 16
+.set ShellJob__mem, 24
+
 /* SeenHistory (networking.md): the file of the seen entries of past epochs, mapped to read */
 .set SeenHistory_size, 0                    /* bytes of the file in use */
 .set SeenHistory_magic, 8

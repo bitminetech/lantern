@@ -32,6 +32,9 @@ ABI uint64_t lantern_shell_remove(const void *path, uint64_t *result);
 ABI uint64_t lantern_shell_rename(const void *from, const void *to, uint64_t *result);
 ABI uint64_t lantern_shell_mkdir(const void *path, uint64_t *result);
 ABI uint64_t lantern_shell_sync_dir(const void *path, uint64_t *result);
+ABI uint64_t lantern_shell_pool_start(void *pool, const uint64_t *threads, uint64_t *result);
+ABI uint64_t lantern_shell_pool_run(void *pool, const void *job);
+ABI uint64_t lantern_shell_pool_stop(void *pool);
 
 static int failures;
 
@@ -60,6 +63,41 @@ static void read_file(const char *path, uint64_t n, uint64_t r[4]) {
     for (int k = 0; k < 4; k++) r[k] = 0xA5A5A5A5A5A5A5A5u;
     check(lantern_shell_read_file(l, r) == 0, "read_file: status 0");
     free(l);
+}
+
+/* A ShellJob of the pool test: entry i of the context gets 3 i + 1, and the number of the calls goes up. */
+typedef struct {
+    uint64_t *out, calls;
+} pool_ctx;
+
+static ABI uint64_t pool_job(void *context, uint64_t index) {
+    pool_ctx *c = context;
+    c->out[index] = 3 * index + 1;
+    __atomic_fetch_add(&c->calls, 1, __ATOMIC_RELAXED);
+    return 0;
+}
+
+/* The pool of threads (shell.md, lantern_shell_pool_start, _run, _stop): every index once, for each count. */
+static void pool_check(uint64_t threads) {
+    uint8_t *pool = calloc(1, 8192);
+    uint64_t result[2] = {7, 7}, n = 1 << 16;
+    pool_ctx c = {calloc(n, 8), 0};
+    if (!pool || !c.out) exit(2);
+    check(lantern_shell_pool_start(pool, &threads, result) == 0 && result[0] == 0 && result[1] == (threads ? threads : 1) - 1,
+          threads == 4 ? "pool_start: 4 threads, 3 workers" : "pool_start: 1 thread, no workers");
+    int ok = 1;
+    for (uint64_t round = 0; round < 200 && ok; round++) {
+        uint64_t count = round < 100 ? round : n - round;
+        memset(c.out, 0, (size_t)(8 * n));
+        c.calls = 0;
+        uint64_t job[3] = {(uint64_t)(uintptr_t)pool_job, (uint64_t)(uintptr_t)&c, count};
+        ok &= lantern_shell_pool_run(pool, job) == 0 && c.calls == count;
+        for (uint64_t i = 0; i < n && ok; i++) ok &= c.out[i] == (i < count ? 3 * i + 1 : 0);
+    }
+    check(ok, threads == 4 ? "pool_run: 200 runs on 4 threads, each index once" : "pool_run: 200 runs alone, each index once");
+    check(lantern_shell_pool_stop(pool) == 0 && ((uint64_t *)pool)[7] == 0, "pool_stop: the workers joined");
+    free(c.out);
+    free(pool);
 }
 
 int main(int argc, char **argv) {
@@ -220,6 +258,8 @@ int main(int argc, char **argv) {
     uint64_t ms = 0, now = (uint64_t)time(NULL) * 1000;
     check(lantern_shell_time_ms(&ms) == 0 && ms + 2000 > now && ms < now + 2000, "time_ms: the Unix time");
 
+    pool_check(4);
+    pool_check(1);
     printf("%s: %d failed\n", failures ? "FAIL" : "PASS", failures);
     return failures ? 1 : 0;
 }

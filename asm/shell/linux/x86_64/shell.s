@@ -620,3 +620,208 @@ FUNCTION lantern_shell_process
     xor     %eax, %eax
     UNFRAME 176
 END_FUNCTION lantern_shell_process
+
+# ---------------------------------------------------------------- the pool
+
+.set SYS_FUTEX, 202
+.set SYS_CLONE, 56
+.set SYS_EXIT, 60
+.set SYS_MPROTECT, 10
+.set OS_FUTEX_WAIT, 0                       # shared: CLONE_CHILD_CLEARTID wakes the thread ID word so
+.set OS_FUTEX_WAIT_PRIVATE, 128
+.set OS_FUTEX_WAKE_PRIVATE, 129
+.set OS_CLONE_THREAD, 0x350f00              # VM, FS, FILES, SIGHAND, THREAD, SYSVSEM, PARENT_SETTID, CHILD_CLEARTID
+.set OS_PROT_NONE, 0
+.set PoolThread_tid, 0                      # u32: the thread's ID, 0 once it has ended
+.set PoolThread_stack, 8
+.set PoolThread__mem, 16
+
+# (pool, threads, result): docs/reference/shell.md. rbx pool, rbp the workers to start, r12 result,
+# r13 the next worker, r14 its PoolThread.
+FUNCTION lantern_shell_pool_start
+    ENTER 0
+    mov     %rdi, %rbx
+    mov     (%rsi), %rbp
+    mov     %rdx, %r12
+    movq    $0, (%r12)
+    movq    $0, 8(%r12)
+    mov     $1, %eax                        # 1 to SHELL_POOL_MAX threads, the caller included
+    test    %rbp, %rbp
+    cmovz   %rax, %rbp
+    mov     $SHELL_POOL_MAX, %eax
+    cmp     %rax, %rbp
+    cmova   %rax, %rbp
+    dec     %rbp
+    movq    $0, ShellPool_workers(%rbx)
+    xor     %r13d, %r13d
+1:  cmp     %rbp, %r13
+    jae     9f
+    xor     %edi, %edi                      # its stack, the lowest page a guard
+    mov     $SHELL_POOL_STACK, %esi
+    mov     $OS_PROT_RW, %edx
+    mov     $OS_MAP_PRIVATE_ANON, %r10d
+    mov     $-1, %r8
+    xor     %r9d, %r9d
+    SYSCALL SYS_MMAP
+    cmp     $-4095, %rax
+    jae     8f
+    mov     %r13, %r14
+    shl     $4, %r14
+    lea     ShellPool_os(%rbx,%r14), %r14
+    mov     %rax, PoolThread_stack(%r14)
+    mov     %rax, %rdi
+    mov     $4096, %esi
+    mov     $OS_PROT_NONE, %edx
+    SYSCALL SYS_MPROTECT
+    mov     PoolThread_stack(%r14), %rsi    # the pool at the stack's top for the thread
+    add     $(SHELL_POOL_STACK - 16), %rsi
+    mov     %rbx, (%rsi)
+    mov     $OS_CLONE_THREAD, %edi
+    lea     PoolThread_tid(%r14), %rdx
+    lea     PoolThread_tid(%r14), %r10
+    xor     %r8d, %r8d
+    SYSCALL SYS_CLONE
+    test    %rax, %rax
+    jz      5f
+    cmp     $-4095, %rax
+    jae     7f
+    inc     %r13
+    mov     %r13, ShellPool_workers(%rbx)
+    jmp     1b
+5:  mov     (%rsp), %rdi                    # the new thread, on its own stack
+    jmp     lantern_shell_pool_worker
+7:  mov     %rax, %r15                      # no thread: its stack goes back
+    mov     PoolThread_stack(%r14), %rdi
+    mov     $SHELL_POOL_STACK, %esi
+    SYSCALL SYS_MUNMAP
+    mov     %r15, %rax
+8:  neg     %rax
+    mov     %rax, (%r12)
+9:  mov     %r13, 8(%r12)
+    xor     %eax, %eax
+    LEAVE 0
+END_FUNCTION lantern_shell_pool_start
+
+# The jobs of the run of pool rdi until none is left. rbx pool.
+LOCAL_FUNCTION lantern_shell_pool_jobs
+    ENTER 0
+    mov     %rdi, %rbx
+1:  mov     $1, %esi                        # the next index
+    lock xadd %rsi, ShellPool_next(%rbx)
+    cmp     ShellPool_count(%rbx), %rsi
+    jae     9f
+    mov     ShellPool_context(%rbx), %rdi
+    call    *ShellPool_function(%rbx)
+    jmp     1b
+9:  LEAVE 0
+END_FUNCTION lantern_shell_pool_jobs
+
+# A worker of pool rdi: each new generation's jobs, then its done count; it ends at stop. rbx pool, ebp the generation.
+LOCAL_FUNCTION lantern_shell_pool_worker
+    UNWIND_END_PROLOGUE
+    mov     %rdi, %rbx
+    xor     %ebp, %ebp
+1:  mov     ShellPool_gen(%rbx), %eax       # an aligned load: acquire
+    cmp     %ebp, %eax
+    jne     2f
+    lea     ShellPool_gen(%rbx), %rdi       # wait while it is the same
+    mov     $OS_FUTEX_WAIT_PRIVATE, %esi
+    mov     %ebp, %edx
+    xor     %r10d, %r10d
+    SYSCALL SYS_FUTEX
+    jmp     1b
+2:  mov     %eax, %ebp
+    cmpq    $0, ShellPool_stop(%rbx)
+    jne     9f
+    mov     %rbx, %rdi
+    call    lantern_shell_pool_jobs
+    mov     $1, %eax                        # done: a locked add, after the jobs' bytes
+    lock xadd %eax, ShellPool_done(%rbx)
+    inc     %eax
+    cmp     ShellPool_workers(%rbx), %rax
+    jne     1b
+    lea     ShellPool_done(%rbx), %rdi      # the last one wakes the caller
+    mov     $OS_FUTEX_WAKE_PRIVATE, %esi
+    mov     $1, %edx
+    SYSCALL SYS_FUTEX
+    jmp     1b
+9:  xor     %edi, %edi
+    SYSCALL SYS_EXIT
+    jmp     9b
+END_FUNCTION lantern_shell_pool_worker
+
+# (pool, job): docs/reference/shell.md. rbx pool, rbp 1 when the workers take part.
+FUNCTION lantern_shell_pool_run
+    ENTER 0
+    mov     %rdi, %rbx
+    mov     ShellJob_function(%rsi), %rax
+    mov     %rax, ShellPool_function(%rbx)
+    mov     ShellJob_context(%rsi), %rax
+    mov     %rax, ShellPool_context(%rbx)
+    mov     ShellJob_count(%rsi), %rcx
+    mov     %rcx, ShellPool_count(%rbx)
+    movq    $0, ShellPool_next(%rbx)
+    xor     %ebp, %ebp
+    cmpq    $0, ShellPool_workers(%rbx)     # no workers, or one job: the caller alone
+    je      5f
+    cmp     $2, %rcx
+    jb      5f
+    mov     $1, %ebp
+    movl    $0, ShellPool_done(%rbx)
+    incl    ShellPool_gen(%rbx)             # the next generation: a store after the job's
+    lea     ShellPool_gen(%rbx), %rdi
+    mov     $OS_FUTEX_WAKE_PRIVATE, %esi
+    mov     $0x7fffffff, %edx
+    SYSCALL SYS_FUTEX
+5:  mov     %rbx, %rdi
+    call    lantern_shell_pool_jobs
+    test    %ebp, %ebp
+    jz      9f
+6:  mov     ShellPool_done(%rbx), %edx      # every worker done: a load before their jobs' bytes
+    cmp     ShellPool_workers(%rbx), %rdx
+    je      9f
+    lea     ShellPool_done(%rbx), %rdi
+    mov     $OS_FUTEX_WAIT_PRIVATE, %esi
+    xor     %r10d, %r10d
+    SYSCALL SYS_FUTEX
+    jmp     6b
+9:  xor     %eax, %eax
+    LEAVE 0
+END_FUNCTION lantern_shell_pool_run
+
+# (pool): docs/reference/shell.md. rbx pool, rbp the next worker, r12 its PoolThread.
+FUNCTION lantern_shell_pool_stop
+    ENTER 0
+    mov     %rdi, %rbx
+    cmpq    $0, ShellPool_workers(%rbx)
+    je      9f
+    movq    $1, ShellPool_stop(%rbx)
+    incl    ShellPool_gen(%rbx)             # a new generation that ends them
+    lea     ShellPool_gen(%rbx), %rdi
+    mov     $OS_FUTEX_WAKE_PRIVATE, %esi
+    mov     $0x7fffffff, %edx
+    SYSCALL SYS_FUTEX
+    xor     %ebp, %ebp
+1:  cmp     ShellPool_workers(%rbx), %rbp
+    jae     8f
+    mov     %rbp, %r12
+    shl     $4, %r12
+    lea     ShellPool_os(%rbx,%r12), %r12
+2:  mov     PoolThread_tid(%r12), %edx      # joined: the kernel clears the ID when the thread has ended
+    test    %edx, %edx
+    jz      3f
+    lea     PoolThread_tid(%r12), %rdi
+    mov     $OS_FUTEX_WAIT, %esi
+    xor     %r10d, %r10d
+    SYSCALL SYS_FUTEX
+    jmp     2b
+3:  mov     PoolThread_stack(%r12), %rdi
+    mov     $SHELL_POOL_STACK, %esi
+    SYSCALL SYS_MUNMAP
+    inc     %rbp
+    jmp     1b
+8:  movq    $0, ShellPool_workers(%rbx)
+    movq    $0, ShellPool_stop(%rbx)
+9:  xor     %eax, %eax
+    LEAVE 0
+END_FUNCTION lantern_shell_pool_stop

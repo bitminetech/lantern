@@ -601,3 +601,219 @@ FUNCTION lantern_shell_process
     str     x9, [x13, #16]
     SHELL_RETURN 176
 END_FUNCTION lantern_shell_process
+
+/* ---------------------------------------------------------------- the pool */
+
+.set SYS_FUTEX, 98
+.set SYS_CLONE, 220
+.set SYS_EXIT, 93
+.set SYS_MPROTECT, 226
+.set OS_FUTEX_WAIT, 0                       /* shared: CLONE_CHILD_CLEARTID wakes the thread ID word so */
+.set OS_FUTEX_WAIT_PRIVATE, 128
+.set OS_FUTEX_WAKE_PRIVATE, 129
+.set OS_CLONE_THREAD, 0x350f00              /* VM, FS, FILES, SIGHAND, THREAD, SYSVSEM, PARENT_SETTID, CHILD_CLEARTID */
+.set OS_PROT_NONE, 0
+.set PoolThread_tid, 0                      /* u32: the thread's ID, 0 once it has ended */
+.set PoolThread_stack, 8
+.set PoolThread__mem, 16
+
+/*
+ * (pool, threads, result): docs/reference/shell.md. x19 pool, x20 the workers to start, x21
+ * result, x22 the next worker, x23 its PoolThread.
+ */
+FUNCTION lantern_shell_pool_start
+    ENTER 0
+    mov     x19, x0
+    ldr     x20, [x1]
+    mov     x21, x2
+    stp     xzr, xzr, [x21]
+    cmp     x20, #1                         /* 1 to SHELL_POOL_MAX threads, the caller included */
+    csinc   x20, x20, xzr, hs
+    cmp     x20, #SHELL_POOL_MAX
+    mov     x9, #SHELL_POOL_MAX
+    csel    x20, x20, x9, ls
+    sub     x20, x20, #1
+    str     xzr, [x19, #ShellPool_workers]
+    mov     x22, #0
+1:  cmp     x22, x20
+    b.hs    9f
+    mov     x0, #0                          /* its stack, the lowest page a guard */
+    MOVQ    x1, SHELL_POOL_STACK
+    mov     x2, #OS_PROT_RW
+    mov     x3, #OS_MAP_PRIVATE_ANON
+    mov     x4, #-1
+    mov     x5, #0
+    SYSCALL SYS_MMAP
+    cmn     x0, #4095
+    b.hs    8f
+    add     x23, x19, #ShellPool_os
+    add     x23, x23, x22, lsl #4
+    str     x0, [x23, #PoolThread_stack]
+    mov     x1, #4096
+    mov     x2, #OS_PROT_NONE
+    SYSCALL SYS_MPROTECT
+    ldr     x1, [x23, #PoolThread_stack]    /* the pool at the stack's top for the thread */
+    MOVQ    x9, SHELL_POOL_STACK
+    add     x1, x1, x9
+    sub     x1, x1, #16
+    str     x19, [x1]
+    MOVQ    x0, OS_CLONE_THREAD
+    add     x2, x23, #PoolThread_tid
+    mov     x3, #0
+    add     x4, x23, #PoolThread_tid
+    SYSCALL SYS_CLONE
+    cbz     x0, 5f
+    cmn     x0, #4095
+    b.hs    7f
+    add     x22, x22, #1
+    str     x22, [x19, #ShellPool_workers]
+    b       1b
+5:  ldr     x0, [sp]                        /* the new thread, on its own stack */
+    b       lantern_shell_pool_worker
+7:  mov     x24, x0                         /* no thread: its stack goes back */
+    ldr     x0, [x23, #PoolThread_stack]
+    MOVQ    x1, SHELL_POOL_STACK
+    SYSCALL SYS_MUNMAP
+    mov     x0, x24
+8:  neg     x0, x0
+    str     x0, [x21]
+9:  str     x22, [x21, #8]
+    mov     x0, #LANTERN_OK
+    LEAVE 0
+END_FUNCTION lantern_shell_pool_start
+
+/* The jobs of the run of pool x0 until none is left. x19 pool. */
+LOCAL_FUNCTION lantern_shell_pool_jobs
+    ENTER 0
+    mov     x19, x0
+1:  add     x9, x19, #ShellPool_next        /* the next index */
+2:  ldxr    x10, [x9]
+    add     x11, x10, #1
+    stxr    w12, x11, [x9]
+    cbnz    w12, 2b
+    ldr     x13, [x19, #ShellPool_count]
+    cmp     x10, x13
+    b.hs    9f
+    ldr     x0, [x19, #ShellPool_context]
+    mov     x1, x10
+    ldr     x9, [x19, #ShellPool_function]
+    blr     x9
+    b       1b
+9:  LEAVE 0
+END_FUNCTION lantern_shell_pool_jobs
+
+/* A worker of pool x0: each new generation's jobs, then its done count; it ends at stop. x19 pool, x20 the generation. */
+LOCAL_FUNCTION lantern_shell_pool_worker
+    UNWIND_END_PROLOGUE
+    mov     x29, #0                         /* the end of the frame chain */
+    mov     x19, x0
+    mov     w20, #0
+1:  add     x0, x19, #ShellPool_gen
+    ldar    w10, [x0]
+    cmp     w10, w20
+    b.ne    2f
+    mov     x1, #OS_FUTEX_WAIT_PRIVATE      /* wait while it is the same */
+    mov     w2, w20
+    mov     x3, #0
+    SYSCALL SYS_FUTEX
+    b       1b
+2:  mov     w20, w10
+    ldr     x10, [x19, #ShellPool_stop]
+    cbnz    x10, 9f
+    mov     x0, x19
+    bl      lantern_shell_pool_jobs
+    add     x0, x19, #ShellPool_done        /* done, with release: the jobs' bytes before it */
+3:  ldxr    w10, [x0]
+    add     w10, w10, #1
+    stlxr   w11, w10, [x0]
+    cbnz    w11, 3b
+    ldr     x12, [x19, #ShellPool_workers]
+    cmp     x10, x12
+    b.ne    1b
+    mov     x1, #OS_FUTEX_WAKE_PRIVATE      /* the last one wakes the caller */
+    mov     x2, #1
+    SYSCALL SYS_FUTEX
+    b       1b
+9:  mov     x0, #0
+    SYSCALL SYS_EXIT
+    b       9b
+END_FUNCTION lantern_shell_pool_worker
+
+/* (pool, job): docs/reference/shell.md. x19 pool, x20 1 when the workers take part. */
+FUNCTION lantern_shell_pool_run
+    ENTER 0
+    mov     x19, x0
+    ldp     x9, x10, [x1, #ShellJob_function]
+    ldr     x11, [x1, #ShellJob_count]
+    stp     x9, x10, [x19, #ShellPool_function]
+    str     x11, [x19, #ShellPool_count]
+    str     xzr, [x19, #ShellPool_next]
+    mov     x20, #0
+    ldr     x12, [x19, #ShellPool_workers]
+    cbz     x12, 5f                         /* no workers, or one job: the caller alone */
+    cmp     x11, #2
+    b.lo    5f
+    mov     x20, #1
+    str     wzr, [x19, #ShellPool_done]
+    add     x0, x19, #ShellPool_gen         /* the next generation, with release: the job before it */
+    ldr     w13, [x0]
+    add     w13, w13, #1
+    stlr    w13, [x0]
+    mov     x1, #OS_FUTEX_WAKE_PRIVATE
+    mov     x2, #0x7fffffff
+    SYSCALL SYS_FUTEX
+5:  mov     x0, x19
+    bl      lantern_shell_pool_jobs
+    cbz     x20, 9f
+6:  add     x0, x19, #ShellPool_done        /* every worker done, with acquire: their jobs' bytes after it */
+    ldar    w10, [x0]
+    ldr     x11, [x19, #ShellPool_workers]
+    cmp     x10, x11
+    b.eq    9f
+    mov     x1, #OS_FUTEX_WAIT_PRIVATE
+    mov     w2, w10
+    mov     x3, #0
+    SYSCALL SYS_FUTEX
+    b       6b
+9:  mov     x0, #LANTERN_OK
+    LEAVE 0
+END_FUNCTION lantern_shell_pool_run
+
+/* (pool): docs/reference/shell.md. x19 pool, x20 the next worker, x21 its PoolThread. */
+FUNCTION lantern_shell_pool_stop
+    ENTER 0
+    mov     x19, x0
+    ldr     x9, [x19, #ShellPool_workers]
+    cbz     x9, 9f
+    mov     x9, #1
+    str     x9, [x19, #ShellPool_stop]
+    add     x0, x19, #ShellPool_gen         /* a new generation that ends them */
+    ldr     w13, [x0]
+    add     w13, w13, #1
+    stlr    w13, [x0]
+    mov     x1, #OS_FUTEX_WAKE_PRIVATE
+    mov     x2, #0x7fffffff
+    SYSCALL SYS_FUTEX
+    mov     x20, #0
+1:  ldr     x9, [x19, #ShellPool_workers]
+    cmp     x20, x9
+    b.hs    8f
+    add     x21, x19, #ShellPool_os
+    add     x21, x21, x20, lsl #4
+2:  add     x0, x21, #PoolThread_tid        /* joined: the kernel clears the ID when the thread has ended */
+    ldar    w2, [x0]
+    cbz     w2, 3f
+    mov     x1, #OS_FUTEX_WAIT
+    mov     x3, #0
+    SYSCALL SYS_FUTEX
+    b       2b
+3:  ldr     x0, [x21, #PoolThread_stack]
+    MOVQ    x1, SHELL_POOL_STACK
+    SYSCALL SYS_MUNMAP
+    add     x20, x20, #1
+    b       1b
+8:  str     xzr, [x19, #ShellPool_workers]
+    str     xzr, [x19, #ShellPool_stop]
+9:  mov     x0, #LANTERN_OK
+    LEAVE 0
+END_FUNCTION lantern_shell_pool_stop

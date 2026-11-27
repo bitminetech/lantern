@@ -679,3 +679,198 @@ FUNCTION lantern_shell_process
     mov     x0, #LANTERN_OK
     LEAVE 112
 END_FUNCTION lantern_shell_process
+
+/* ---------------------------------------------------------------- the pool */
+
+.set PoolWin_lock, ShellPool_os             /* SRWLOCK, 0 is its initial value */
+.set PoolWin_gen, ShellPool_os + 8          /* CONDITION_VARIABLE of a new generation */
+.set PoolWin_done, ShellPool_os + 16        /* CONDITION_VARIABLE of the last worker done */
+.set PoolWin_threads, ShellPool_os + 64     /* a thread HANDLE for each worker */
+.set OS_INFINITE, 0xffffffff                /* winbase.h */
+
+/* (pool, threads, result): docs/reference/shell.md. x19 pool, x20 the workers to start, x21 result, x22 the next worker. */
+FUNCTION lantern_shell_pool_start
+    ENTER 0
+    mov     x19, x0
+    ldr     x20, [x1]
+    mov     x21, x2
+    stp     xzr, xzr, [x21]
+    cmp     x20, #1                         /* 1 to SHELL_POOL_MAX threads, the caller included */
+    csinc   x20, x20, xzr, hs
+    cmp     x20, #SHELL_POOL_MAX
+    mov     x9, #SHELL_POOL_MAX
+    csel    x20, x20, x9, ls
+    sub     x20, x20, #1
+    str     xzr, [x19, #ShellPool_workers]
+    stp     xzr, xzr, [x19, #PoolWin_lock]
+    str     xzr, [x19, #PoolWin_done]
+    mov     x22, #0
+1:  cmp     x22, x20
+    b.hs    9f
+    mov     x0, #0                          /* CreateThread(NULL, the stack, the worker, pool, 0, NULL) */
+    MOVQ    x1, SHELL_POOL_STACK
+    ADDRESS x2, lantern_shell_pool_worker
+    mov     x3, x19
+    mov     w4, #0
+    mov     x5, #0
+    CALL_GLOBAL CreateThread
+    cbz     x0, 8f
+    add     x9, x19, #PoolWin_threads
+    str     x0, [x9, x22, lsl #3]
+    add     x22, x22, #1
+    str     x22, [x19, #ShellPool_workers]
+    b       1b
+8:  OS_LAST_ERROR
+    str     x0, [x21]
+9:  str     x22, [x21, #8]
+    mov     x0, #LANTERN_OK
+    LEAVE 0
+END_FUNCTION lantern_shell_pool_start
+
+/* The jobs of the run of pool x0 until none is left. x19 pool. */
+LOCAL_FUNCTION lantern_shell_pool_jobs
+    ENTER 0
+    mov     x19, x0
+1:  add     x9, x19, #ShellPool_next        /* the next index */
+2:  ldxr    x10, [x9]
+    add     x11, x10, #1
+    stxr    w12, x11, [x9]
+    cbnz    w12, 2b
+    ldr     x13, [x19, #ShellPool_count]
+    cmp     x10, x13
+    b.hs    9f
+    ldr     x0, [x19, #ShellPool_context]
+    mov     x1, x10
+    ldr     x9, [x19, #ShellPool_function]
+    blr     x9
+    b       1b
+9:  LEAVE 0
+END_FUNCTION lantern_shell_pool_jobs
+
+/*
+ * A worker of pool x0, the start routine of CreateThread: each new generation's jobs, then its
+ * done count, under the lock; it returns 0 at stop. x19 pool, x20 the generation, x21 the lock, x22 stop.
+ */
+LOCAL_FUNCTION lantern_shell_pool_worker
+    ENTER 0
+    mov     x19, x0
+    mov     w20, #0
+    add     x21, x19, #PoolWin_lock
+1:  mov     x0, x21
+    CALL_GLOBAL AcquireSRWLockExclusive
+2:  ldr     w10, [x19, #ShellPool_gen]      /* wait while it is the same */
+    cmp     w10, w20
+    b.ne    3f
+    add     x0, x19, #PoolWin_gen
+    mov     x1, x21
+    mov     w2, #OS_INFINITE
+    mov     w3, #0
+    CALL_GLOBAL SleepConditionVariableSRW
+    b       2b
+3:  mov     w20, w10
+    ldr     x22, [x19, #ShellPool_stop]
+    mov     x0, x21
+    CALL_GLOBAL ReleaseSRWLockExclusive
+    cbnz    x22, 9f
+    mov     x0, x19
+    bl      lantern_shell_pool_jobs
+    mov     x0, x21
+    CALL_GLOBAL AcquireSRWLockExclusive
+    ldr     w10, [x19, #ShellPool_done]
+    add     w10, w10, #1
+    str     w10, [x19, #ShellPool_done]
+    ldr     x11, [x19, #ShellPool_workers]
+    cmp     x10, x11
+    b.ne    4f
+    add     x0, x19, #PoolWin_done          /* the last one wakes the caller */
+    CALL_GLOBAL WakeConditionVariable
+4:  mov     x0, x21
+    CALL_GLOBAL ReleaseSRWLockExclusive
+    b       1b
+9:  mov     x0, #0
+    LEAVE 0
+END_FUNCTION lantern_shell_pool_worker
+
+/* (pool, job): docs/reference/shell.md. x19 pool, x20 1 when the workers take part, x21 the lock. */
+FUNCTION lantern_shell_pool_run
+    ENTER 0
+    mov     x19, x0
+    ldp     x9, x10, [x1, #ShellJob_function]
+    ldr     x11, [x1, #ShellJob_count]
+    stp     x9, x10, [x19, #ShellPool_function]
+    str     x11, [x19, #ShellPool_count]
+    str     xzr, [x19, #ShellPool_next]
+    mov     x20, #0
+    add     x21, x19, #PoolWin_lock
+    ldr     x12, [x19, #ShellPool_workers]
+    cbz     x12, 5f                         /* no workers, or one job: the caller alone */
+    cmp     x11, #2
+    b.lo    5f
+    mov     x20, #1
+    mov     x0, x21                         /* the next generation, under the lock */
+    CALL_GLOBAL AcquireSRWLockExclusive
+    str     wzr, [x19, #ShellPool_done]
+    ldr     w13, [x19, #ShellPool_gen]
+    add     w13, w13, #1
+    str     w13, [x19, #ShellPool_gen]
+    add     x0, x19, #PoolWin_gen
+    CALL_GLOBAL WakeAllConditionVariable
+    mov     x0, x21
+    CALL_GLOBAL ReleaseSRWLockExclusive
+5:  mov     x0, x19
+    bl      lantern_shell_pool_jobs
+    cbz     x20, 9f
+    mov     x0, x21                         /* every worker done, under the lock */
+    CALL_GLOBAL AcquireSRWLockExclusive
+6:  ldr     w10, [x19, #ShellPool_done]
+    ldr     x11, [x19, #ShellPool_workers]
+    cmp     x10, x11
+    b.eq    7f
+    add     x0, x19, #PoolWin_done
+    mov     x1, x21
+    mov     w2, #OS_INFINITE
+    mov     w3, #0
+    CALL_GLOBAL SleepConditionVariableSRW
+    b       6b
+7:  mov     x0, x21
+    CALL_GLOBAL ReleaseSRWLockExclusive
+9:  mov     x0, #LANTERN_OK
+    LEAVE 0
+END_FUNCTION lantern_shell_pool_run
+
+/* (pool): docs/reference/shell.md. x19 pool, x20 the next worker, x21 the lock. */
+FUNCTION lantern_shell_pool_stop
+    ENTER 0
+    mov     x19, x0
+    ldr     x9, [x19, #ShellPool_workers]
+    cbz     x9, 9f
+    add     x21, x19, #PoolWin_lock
+    mov     x0, x21                         /* a new generation that ends them */
+    CALL_GLOBAL AcquireSRWLockExclusive
+    mov     x9, #1
+    str     x9, [x19, #ShellPool_stop]
+    ldr     w13, [x19, #ShellPool_gen]
+    add     w13, w13, #1
+    str     w13, [x19, #ShellPool_gen]
+    add     x0, x19, #PoolWin_gen
+    CALL_GLOBAL WakeAllConditionVariable
+    mov     x0, x21
+    CALL_GLOBAL ReleaseSRWLockExclusive
+    mov     x20, #0
+1:  ldr     x9, [x19, #ShellPool_workers]
+    cmp     x20, x9
+    b.hs    8f
+    add     x9, x19, #PoolWin_threads
+    ldr     x0, [x9, x20, lsl #3]
+    mov     w1, #OS_INFINITE
+    CALL_GLOBAL WaitForSingleObject
+    add     x9, x19, #PoolWin_threads
+    ldr     x0, [x9, x20, lsl #3]
+    CALL_GLOBAL CloseHandle
+    add     x20, x20, #1
+    b       1b
+8:  str     xzr, [x19, #ShellPool_workers]
+    str     xzr, [x19, #ShellPool_stop]
+9:  mov     x0, #LANTERN_OK
+    LEAVE 0
+END_FUNCTION lantern_shell_pool_stop
