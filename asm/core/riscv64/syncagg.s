@@ -114,7 +114,8 @@ SPEC_FUNCTION process_sync_aggregate
     add     a1, s1, a1
     addi    a2, s8, LIST_FIXED
     mv      a3, s7                          # the hash table, where the keys go
-    call    lantern_find_pubkeys
+    ld      a4, CONFIG_PUBKEY_CACHE(s3)     # with its SyncIndices
+    call    lantern_sync_indices
     mv      t0, a0
     li      a0, LANTERN_INVALID_SYNC_AGGREGATE
     bnez    t0, 6f
@@ -252,7 +253,8 @@ SPEC_FUNCTION process_sync_aggregate
     add     a1, s1, a1
     mv      a2, s9
     mv      a3, s7                          # the hash table, where the keys were
-    call    lantern_find_pubkeys
+    ld      a4, CONFIG_PUBKEY_CACHE(s3)     # with its SyncIndices
+    call    lantern_sync_indices
     mv      t0, a0
     li      a0, LANTERN_INVALID_SYNC_AGGREGATE
     bnez    t0, 6f
@@ -469,3 +471,65 @@ LOCAL_FUNCTION lantern_find_pubkeys
 13: li      a0, 0
     ret
 END_FUNCTION lantern_find_pubkeys
+
+/*
+ * lantern_find_pubkeys (a0 state, a1 keys, a2 out, a3 table) with a4 a PubkeyCache or 0: block-processing.md.
+ * Its SyncIndices when each names a validator of the state whose key is the key at its place; else the
+ * find, whose out then becomes the SyncIndices. s1 state, s2 keys, s3 out, s4 table, s5 the SyncIndices
+ * or 0, s6 k, s7 the first validator's pubkey, s8 the validators.
+ */
+LOCAL_FUNCTION lantern_sync_indices
+    ENTER 0
+    mv      s1, a0
+    mv      s2, a1
+    mv      s3, a2
+    mv      s4, a3
+    li      s5, 0
+    beqz    a4, 5f
+    li      t0, PUBKEY_SYNC
+    add     s5, a4, t0
+    ld      t0, 0(s5)
+    beqz    t0, 5f
+    PART    s7, s8, s1, BeaconState_validators
+    addi    s7, s7, Validator_pubkey
+    li      s6, 0
+1:  li      t0, SYNC_COMMITTEE_SIZE         # each index: a validator with the key at its place
+    bgeu    s6, t0, 3f
+    slli    t0, s6, 3
+    add     t0, s5, t0
+    ld      t0, 8(t0)
+    bgeu    t0, s8, 5f
+    slli    t0, t0, 7
+    add     t0, s7, t0
+    li      t1, 48
+    mul     t1, s6, t1
+    add     t1, s2, t1
+    .irp o, 0, 8, 16, 24, 32, 40
+    ld      t2, \o(t0)
+    ld      t3, \o(t1)
+    bne     t2, t3, 5f
+    .endr
+    addi    s6, s6, 1
+    j       1b
+3:  mv      a0, s3                          # out: the SyncIndices
+    addi    a1, s5, 8
+    li      a2, 8 * SYNC_COMMITTEE_SIZE
+    call    lantern_copy
+    li      a0, 0
+    LEAVE 0
+5:  mv      a0, s1                          # the find, then the SyncIndices from it
+    mv      a1, s2
+    mv      a2, s3
+    mv      a3, s4
+    call    lantern_find_pubkeys
+    bnez    a0, 9f
+    beqz    s5, 8f
+    addi    a0, s5, 8
+    mv      a1, s3
+    li      a2, 8 * SYNC_COMMITTEE_SIZE
+    call    lantern_copy
+    li      t0, 1
+    sd      t0, 0(s5)
+8:  li      a0, 0
+9:  LEAVE 0
+END_FUNCTION lantern_sync_indices

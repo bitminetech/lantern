@@ -564,6 +564,9 @@
 /* SigTable (block-processing.md): checked signatures, before the entries of a PubkeyCache */
 .set PUBKEY_SIGS, CRYPTO_BLS_CACHE_FIXED    /* the SigTable's offset in a PubkeyCache */
 .set SIG_TABLE_BYTES, 1 << 25
+.set PUBKEY_SYNC, PUBKEY_SIGS + SIG_TABLE_BYTES   /* the SyncIndices of a PubkeyCache: valid, then SYNC_COMMITTEE_SIZE indices */
+.set PUBKEY_SYNC_BYTES, (8 + 8 * SYNC_COMMITTEE_SIZE + 63) & ~63
+.set PUBKEY_ENTRIES, PUBKEY_SYNC + PUBKEY_SYNC_BYTES    /* the offset of a PubkeyCache's entries */
 .set SigTable_used, 0                       /* bytes of its entries */
 .set SigTable_room, 8                       /* bytes it has for entries */
 .set SigTable_entries, 16

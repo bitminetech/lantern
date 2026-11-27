@@ -214,7 +214,7 @@ SPEC_FUNCTION pubkey_cache_size
     ld      t0, 0(a0)
     li      t1, CRYPTO_BLS_ENTRY_BYTES
     mul     t0, t0, t1
-    li      t1, CRYPTO_BLS_CACHE_FIXED + SIG_TABLE_BYTES   # and the SigTable before the entries
+    li      t1, PUBKEY_ENTRIES          # and the SigTable and SyncIndices before the entries
     add     t0, t0, t1
     sd      t0, 0(a1)
     li      a0, LANTERN_OK
@@ -227,18 +227,21 @@ SPEC_FUNCTION pubkey_cache_init
     ld      t0, 0(a0)
     li      t1, CRYPTO_BLS_ENTRY_BYTES
     mul     t2, t0, t1
-    li      t3, CRYPTO_BLS_CACHE_FIXED + SIG_TABLE_BYTES
+    li      t3, PUBKEY_ENTRIES
     add     t2, t2, t3
     ld      t3, 0(a1)                       # size
     bltu    t3, t2, 9f
     li      t2, Validator__mem
     sd      t2, CRYPTO_BLS_CACHE_KEY_STRIDE(a1)
-    li      t2, CRYPTO_BLS_CACHE_FIXED + SIG_TABLE_BYTES
+    li      t2, PUBKEY_ENTRIES
     sd      t2, CRYPTO_BLS_CACHE_OFFSET(a1)
     sd      t0, CRYPTO_BLS_CACHE_COUNT(a1)
     sd      zero, (PUBKEY_SIGS + SigTable_used)(a1)   # an empty SigTable
     li      t3, SIG_TABLE_BYTES - SigTable_entries
     sd      t3, (PUBKEY_SIGS + SigTable_room)(a1)
+    li      t3, PUBKEY_SYNC                 # no SyncIndices
+    add     t3, a1, t3
+    sd      zero, 0(t3)
     add     t3, a1, t2                      # every entry empty
 1:  beqz    t0, 2f
     sd      zero, CRYPTO_BLS_ENTRY_STATUS(t3)

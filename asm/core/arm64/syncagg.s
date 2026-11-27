@@ -90,7 +90,8 @@ SPEC_FUNCTION process_sync_aggregate
     add     x1, x19, x1
     add     x2, x26, #LIST_FIXED
     mov     x3, x25                         /* the hash table, where the keys go */
-    bl      lantern_find_pubkeys
+    ldr     x4, [x21, #CONFIG_PUBKEY_CACHE] /* with its SyncIndices */
+    bl      lantern_sync_indices
     mov     x9, x0
     mov     x0, #LANTERN_INVALID_SYNC_AGGREGATE
     cbnz    x9, 6f
@@ -245,7 +246,8 @@ SPEC_FUNCTION process_sync_aggregate
     add     x1, x19, x1
     mov     x2, x27
     mov     x3, x25                         /* the hash table, where the keys were */
-    bl      lantern_find_pubkeys
+    ldr     x4, [x21, #CONFIG_PUBKEY_CACHE] /* with its SyncIndices */
+    bl      lantern_sync_indices
     mov     x9, x0
     mov     x0, #LANTERN_INVALID_SYNC_AGGREGATE
     cbnz    x9, 6f
@@ -470,3 +472,73 @@ LOCAL_FUNCTION lantern_find_pubkeys
 13: mov     x0, #0
     ret
 END_FUNCTION lantern_find_pubkeys
+
+/*
+ * lantern_find_pubkeys (x0 state, x1 keys, x2 out, x3 table) with x4 a PubkeyCache or 0: block-processing.md.
+ * Its SyncIndices when each names a validator of the state whose key is the key at its place; else the
+ * find, whose out then becomes the SyncIndices. x19 state, x20 keys, x21 out, x22 table, x23 the
+ * SyncIndices or 0, x24 k, x25 the first validator's pubkey, x26 the validators.
+ */
+LOCAL_FUNCTION lantern_sync_indices
+    ENTER 0
+    mov     x19, x0
+    mov     x20, x1
+    mov     x21, x2
+    mov     x22, x3
+    mov     x23, #0
+    cbz     x4, 5f
+    MOVQ    x9, PUBKEY_SYNC
+    add     x23, x4, x9
+    ldr     x9, [x23]
+    cbz     x9, 5f
+    PART    x25, x26, x19, BeaconState_validators
+    add     x25, x25, #Validator_pubkey
+    mov     x24, #0
+1:  cmp     x24, #SYNC_COMMITTEE_SIZE       /* each index: a validator with the key at its place */
+    b.hs    3f
+    add     x9, x23, #8
+    ldr     x10, [x9, x24, lsl #3]
+    cmp     x10, x26
+    b.hs    5f
+    add     x10, x25, x10, lsl #7
+    mov     x11, #48
+    madd    x11, x24, x11, x20
+    ldp     x12, x13, [x10]
+    ldp     x14, x15, [x11]
+    cmp     x12, x14
+    ccmp    x13, x15, #0, eq
+    b.ne    5f
+    ldp     x12, x13, [x10, #16]
+    ldp     x14, x15, [x11, #16]
+    cmp     x12, x14
+    ccmp    x13, x15, #0, eq
+    b.ne    5f
+    ldp     x12, x13, [x10, #32]
+    ldp     x14, x15, [x11, #32]
+    cmp     x12, x14
+    ccmp    x13, x15, #0, eq
+    b.ne    5f
+    add     x24, x24, #1
+    b       1b
+3:  mov     x0, x21                         /* out: the SyncIndices */
+    add     x1, x23, #8
+    MOVQ    x2, 8 * SYNC_COMMITTEE_SIZE
+    bl      lantern_copy
+    mov     x0, #0
+    LEAVE 0
+5:  mov     x0, x19                         /* the find, then the SyncIndices from it */
+    mov     x1, x20
+    mov     x2, x21
+    mov     x3, x22
+    bl      lantern_find_pubkeys
+    cbnz    x0, 9f
+    cbz     x23, 8f
+    add     x0, x23, #8
+    mov     x1, x21
+    MOVQ    x2, 8 * SYNC_COMMITTEE_SIZE
+    bl      lantern_copy
+    mov     x9, #1
+    str     x9, [x23]
+8:  mov     x0, #0
+9:  LEAVE 0
+END_FUNCTION lantern_sync_indices

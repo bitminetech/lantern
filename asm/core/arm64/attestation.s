@@ -208,7 +208,7 @@ SPEC_FUNCTION pubkey_cache_size
     mov     x10, #CRYPTO_BLS_ENTRY_BYTES
     mul     x9, x9, x10
     add     x9, x9, #CRYPTO_BLS_CACHE_FIXED
-    MOVQ    x10, SIG_TABLE_BYTES            /* and the SigTable before the entries */
+    MOVQ    x10, (PUBKEY_ENTRIES - CRYPTO_BLS_CACHE_FIXED)  /* and the SigTable and SyncIndices before the entries */
     add     x9, x9, x10
     str     x9, [x1]
     mov     x0, #LANTERN_OK
@@ -222,20 +222,22 @@ SPEC_FUNCTION pubkey_cache_init
     mov     x10, #CRYPTO_BLS_ENTRY_BYTES
     mul     x11, x9, x10
     add     x11, x11, #CRYPTO_BLS_CACHE_FIXED
-    MOVQ    x12, SIG_TABLE_BYTES
+    MOVQ    x12, (PUBKEY_ENTRIES - CRYPTO_BLS_CACHE_FIXED)
     add     x11, x11, x12
     ldr     x12, [x1]                       /* size */
     cmp     x12, x11
     b.lo    9f
     mov     x11, #Validator__mem
     str     x11, [x1, #CRYPTO_BLS_CACHE_KEY_STRIDE]
-    MOVQ    x11, (CRYPTO_BLS_CACHE_FIXED + SIG_TABLE_BYTES)
+    MOVQ    x11, PUBKEY_ENTRIES
     str     x11, [x1, #CRYPTO_BLS_CACHE_OFFSET]
     str     x9, [x1, #CRYPTO_BLS_CACHE_COUNT]
     add     x12, x1, #PUBKEY_SIGS           /* an empty SigTable */
     str     xzr, [x12, #SigTable_used]
     MOVQ    x13, (SIG_TABLE_BYTES - SigTable_entries)
     str     x13, [x12, #SigTable_room]
+    MOVQ    x13, PUBKEY_SYNC                /* no SyncIndices */
+    str     xzr, [x1, x13]
     add     x12, x1, x11                    /* every entry empty */
 1:  cbz     x9, 2f
     str     xzr, [x12, #CRYPTO_BLS_ENTRY_STATUS]

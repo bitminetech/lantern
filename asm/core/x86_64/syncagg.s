@@ -93,7 +93,9 @@ SPEC_FUNCTION process_sync_aggregate
     mov     S7(%rsp), %rdx
     add     $LIST_FIXED, %rdx
     mov     %r15, %rcx                      # the hash table, where the keys go
-    call    lantern_find_pubkeys
+    mov     (L + 216)(%rsp), %r8            # with its SyncIndices
+    mov     CONFIG_PUBKEY_CACHE(%r8), %r8
+    call    lantern_sync_indices
     mov     %rax, %rcx
     mov     $LANTERN_INVALID_SYNC_AGGREGATE, %eax
     test    %rcx, %rcx
@@ -235,7 +237,9 @@ SPEC_FUNCTION process_sync_aggregate
     mov     %rbx, %rdi
     lea     (BeaconState_current_sync_committee + SyncCommittee_pubkeys)(%rbx), %rsi
     mov     %r15, %rcx                      # the hash table, where the keys were
-    call    lantern_find_pubkeys
+    mov     (L + 216)(%rsp), %r8            # with its SyncIndices
+    mov     CONFIG_PUBKEY_CACHE(%r8), %r8
+    call    lantern_sync_indices
     mov     %rax, %rcx
     mov     $LANTERN_INVALID_SYNC_AGGREGATE, %eax
     test    %rcx, %rcx
@@ -474,3 +478,65 @@ LOCAL_FUNCTION lantern_find_pubkeys
 13: xor     %eax, %eax
     ret
 END_FUNCTION lantern_find_pubkeys
+
+/*
+ * lantern_find_pubkeys (rdi state, rsi keys, rdx out, rcx table) with r8 a PubkeyCache or 0: block-processing.md.
+ * Its SyncIndices when each names a validator of the state whose key is the key at its place; else the
+ * find, whose out then becomes the SyncIndices. rbx state, rbp keys, r12 out, r13 table, r14 the
+ * SyncIndices or 0, r15 k.
+ */
+LOCAL_FUNCTION lantern_sync_indices
+    ENTER 0
+    mov     %rdi, %rbx
+    mov     %rsi, %rbp
+    mov     %rdx, %r12
+    mov     %rcx, %r13
+    xor     %r14d, %r14d
+    test    %r8, %r8
+    jz      5f
+    lea     PUBKEY_SYNC(%r8), %r14
+    cmpq    $0, (%r14)
+    je      5f
+    mov     BeaconState_validators(%rbx), %r8   # r8 the first validator's pubkey, r9 the validators
+    lea     Validator_pubkey(%rbx,%r8), %r8
+    mov     (BeaconState_validators + 8)(%rbx), %r9
+    xor     %r15d, %r15d
+1:  cmp     $SYNC_COMMITTEE_SIZE, %r15      # each index: a validator with the key at its place
+    jae     3f
+    mov     8(%r14,%r15,8), %rax
+    cmp     %r9, %rax
+    jae     5f
+    shl     $7, %rax
+    add     %r8, %rax
+    imul    $48, %r15, %rdx
+    add     %rbp, %rdx
+    .irp o, 0, 8, 16, 24, 32, 40
+    mov     \o(%rax), %rcx
+    cmp     \o(%rdx), %rcx
+    jne     5f
+    .endr
+    inc     %r15
+    jmp     1b
+3:  mov     %r12, %rdi                      # out: the SyncIndices
+    lea     8(%r14), %rsi
+    mov     $(8 * SYNC_COMMITTEE_SIZE), %edx
+    call    lantern_copy
+    xor     %eax, %eax
+    LEAVE 0
+5:  mov     %rbx, %rdi                      # the find, then the SyncIndices from it
+    mov     %rbp, %rsi
+    mov     %r12, %rdx
+    mov     %r13, %rcx
+    call    lantern_find_pubkeys
+    test    %rax, %rax
+    jnz     9f
+    test    %r14, %r14
+    jz      8f
+    lea     8(%r14), %rdi
+    mov     %r12, %rsi
+    mov     $(8 * SYNC_COMMITTEE_SIZE), %edx
+    call    lantern_copy
+    movq    $1, (%r14)
+8:  xor     %eax, %eax
+9:  LEAVE 0
+END_FUNCTION lantern_sync_indices

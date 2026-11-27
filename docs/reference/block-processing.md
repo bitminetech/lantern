@@ -77,6 +77,7 @@ Every block step, for every fork.
 - [`lantern_committee_find`](#function-lantern_committee_find): the entry of a CommitteeCache for an epoch and a key.
 - [`lantern_committee_key`](#function-lantern_committee_key): the key of an epoch's shuffling in a CommitteeCache.
 - [`lantern_find_pubkey`](#function-lantern_find_pubkey): the index of the validator with a public key.
+- [`lantern_sync_indices`](#function-lantern_sync_indices): lantern_find_pubkeys, with the SyncIndices of a PubkeyCache.
 - [`lantern_find_pubkeys`](#function-lantern_find_pubkeys): all_pubkeys.index(pubkey) for each key of a sync committee.
 - [`lantern_append_pending_deposit`](#function-lantern_append_pending_deposit): appends a PendingDeposit to a state.
 - [`lantern_append_withdrawal`](#function-lantern_append_withdrawal): appends a Withdrawal to a Withdrawals value.
@@ -2061,7 +2062,7 @@ lantern_process_sync_aggregate(state, sync_aggregate, config, scratch, result) -
 ### Function does
 
 - With a key cache in the config (`CONFIG_PUBKEY_CACHE`), some members signed but not all, and every participant's index below the cache's `count`: committee_indices first, then crypto_bls_fast_aggregate_verify_cached of the validators' keys at the participants' indices. It equals eth_fast_aggregate_verify of the participants' keys: at least one key, and each index's key is the member's key. Else the spec's steps.
-- committee_indices: all_pubkeys.index(pubkey) of each member, in one pass over the validators. The distinct member keys sit in a hash table of 2 * SYNC_COMMITTEE_SIZE slots, in the scratch the keys of the signature check used. Each key takes the first validator that has it.
+- committee_indices: all_pubkeys.index(pubkey) of each member, from the cache's SyncIndices when they hold (lantern_sync_indices), else in one pass over the validators. The distinct member keys sit in a hash table of 2 * SYNC_COMMITTEE_SIZE slots, in the scratch the keys of the signature check used. Each key takes the first validator that has it.
 - A member key that no validator has: `LANTERN_INVALID_SYNC_AGGREGATE`.
 - get_base_reward_per_increment from the total of its get_total_active_balance call, with get_total_active_balance once: both calls get the same state and scratch size.
 - Checks the scratch and the room of `state` before any change to `state`.
@@ -2816,7 +2817,7 @@ lantern_pubkey_cache_size(validators, size) -> status
 
 ### Function does
 
-- `CRYPTO_BLS_CACHE_FIXED` + `SIG_TABLE_BYTES` + `CRYPTO_BLS_ENTRY_BYTES` * `validators` bytes (asm-crypto `include/bls12381.inc`): the fixed fields, the [`SigTable`](#type-sigtable), then the entries.
+- `PUBKEY_ENTRIES` + `CRYPTO_BLS_ENTRY_BYTES` * `validators` bytes (asm-crypto `include/bls12381.inc`): the fixed fields, the [`SigTable`](#type-sigtable), the SyncIndices, then the entries.
 
 ### Function never
 
@@ -2853,7 +2854,7 @@ lantern_pubkey_cache_init(validators, cache) -> status
 
 ### Returns
 
-- `LANTERN_OK`: `key_stride` is `Validator__mem`, `offset` is `CRYPTO_BLS_CACHE_FIXED` + `SIG_TABLE_BYTES`, `count` is `validators`, the SigTable at `PUBKEY_SIGS` is empty (`used` 0, `room` `SIG_TABLE_BYTES` - 16), and every entry's `status` is 0.
+- `LANTERN_OK`: `key_stride` is `Validator__mem`, `offset` is `PUBKEY_ENTRIES`, `count` is `validators`, the SigTable at `PUBKEY_SIGS` is empty (`used` 0, `room` `SIG_TABLE_BYTES` - 16), the SyncIndices hold none (`valid` 0), and every entry's `status` is 0.
 - `LANTERN_BUFFER_TOO_SMALL`: the `size` of `cache` is below what lantern_pubkey_cache_size gives.
 
 ### Function never
@@ -3263,6 +3264,54 @@ lantern_find_pubkey(state, pubkey) -> index
 - Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
 - Registers it changes, on x86-64: rax, rcx, rdx, r8, r9 and xmm0 to xmm4.
 - Argument order: `state`, `pubkey`.
+
+## Function `lantern_sync_indices`
+
+lantern_find_pubkeys, with the SyncIndices of a PubkeyCache.
+
+### Signature
+
+```
+lantern_sync_indices(state, pubkeys, out, table, cache) -> status
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `state` | input | `BeaconState` |
+| `pubkeys` | input | `SYNC_COMMITTEE_SIZE` keys of 48 bytes |
+| `out` | output | `SYNC_COMMITTEE_SIZE` u64 entries |
+| `table` | scratch | the `table` of lantern_find_pubkeys |
+| `cache` | state | [`PubkeyCache`](#type-pubkeycache), or 0 |
+
+### Caller must
+
+- `state` is a valid `BeaconState` value (include/types.inc) with every PartRef in range.
+
+### Function does
+
+- Returns what lantern_find_pubkeys returns, and `out` the same.
+- With `cache` and its SyncIndices `valid`: when each index k names a validator of `state` whose pubkey is key k, byte for byte, `out` takes the SyncIndices, with no pass over the validators.
+- That is lantern_find_pubkeys's `out`: the pubkeys of a state's validators are distinct (a deposit of a key that a validator has tops up that validator), so the one validator with key k is the first.
+- Else lantern_find_pubkeys; when it returns 0 and `cache` is not 0, its `out` becomes the SyncIndices, `valid` 1.
+
+### Function never
+
+- Makes an OS call.
+- Keeps a pointer after it returns.
+
+### Limits
+
+- Stack of its own: 96 bytes on x86-64 (return address included), 96 bytes on ARM64, 96 bytes on RISC-V.
+- Time: with SyncIndices that hold, `SYNC_COMMITTEE_SIZE` compares of 48 bytes, not a pass over the validators.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_sync_indices`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- Argument order: `state`, `pubkeys`, `out`, `table`, `cache`.
 
 ## Function `lantern_find_pubkeys`
 
@@ -3952,8 +4001,9 @@ The checked public key of each validator index: asm-crypto's [`BlsKeyCache`](htt
 
 ### Rules
 
-- `key_stride` is `Validator__mem`; `offset` is `CRYPTO_BLS_CACHE_FIXED` + `SIG_TABLE_BYTES`; `count` is the number of validator indices it holds.
+- `key_stride` is `Validator__mem`; `offset` is `PUBKEY_ENTRIES`; `count` is the number of validator indices it holds.
 - Between its fixed fields and its entries, at `PUBKEY_SIGS` (`CRYPTO_BLS_CACHE_FIXED`), a [`SigTable`](#type-sigtable) of `SIG_TABLE_BYTES` (32 MiB: the entries of a block of 8 attestations of every committee of a slot, about 1.8 MB each at 1.2M validators, and a step's gossip): asm-crypto reads only the fixed fields and the entries.
+- After the SigTable, at `PUBKEY_SYNC`, `PUBKEY_SYNC_BYTES` bytes of SyncIndices: a u64 `valid` (1 when they hold indices), then `SYNC_COMMITTEE_SIZE` u64 validator indices: the last indices lantern_sync_indices found. Then, at `PUBKEY_ENTRIES`, the entries.
 - Only crypto_bls_fast_aggregate_verify_cached writes its entries, after lantern_pubkey_cache_init empties them.
 - An entry answers only for the key of its 48 bytes, so one cache serves states of any chain.
 
