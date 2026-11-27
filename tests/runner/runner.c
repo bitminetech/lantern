@@ -117,6 +117,8 @@ ABI uint64_t LF(beacon_state_copy)(const void *state, const void *room, void *ou
 ABI uint64_t LF(state_cache_size)(const void *validators, void *size);
 ABI uint64_t LF(state_cache_init)(const void *validators, void *cache);
 ABI uint64_t LF(state_root)(const void *state, void *cache, void *scratch, void *out);
+ABI uint64_t LF(state_root_pool)(const void *state, void *cache, void *scratch, void *out, void *pool);
+ABI uint64_t lantern_shell_pool_start(void *pool, const uint64_t *threads, uint64_t *result);
 ABI uint64_t LF(state_branch)(const void *state, uint64_t field, void *cache, void *scratch, void *out);
 ABI uint64_t LF(execution_branch)(const void *body, void *scratch, void *out);
 ABI uint64_t LF(is_better_update)(const void *new_update, const void *old_update, void *out);
@@ -1191,6 +1193,80 @@ static uint8_t *regrow(uint8_t *state, uint64_t *size, uint64_t growth, const ch
     return out;
 }
 
+static uint64_t field_offset(const char *name, uint64_t i);
+
+/* The list of BeaconState field f with entries of esize bytes: entries i >= count take entry i % count, up to n. */
+static void grow_list(uint8_t *state, int f, uint64_t esize, uint64_t n) {
+    uint64_t ref = field_offset("BeaconState", f), count = rd64(state + ref + 8);
+    uint8_t *base = state + rd64(state + ref);
+    for (uint64_t i = count; i < n; i++) memcpy(base + i * esize, base + (i % count) * esize, (size_t)esize);
+    wr64(state + ref + 8, n);
+}
+
+/*
+ * state.md, lantern_state_root_pool: once a process, the first post state grown to 3 x 4096 + 100
+ * validators (four jobs of the validators' tree) gives with a pool of 4 threads and a cache of its own
+ * the root ssz_hash_tree_root gives: with the cache empty, unchanged, after changes in each grown list,
+ * and with 50 validators fewer; lantern_state_root with no cache agrees each time.
+ */
+static int pool_checked;
+static void state_root_pool_check(const uint8_t *small, const uint8_t *desc, const char **why) {
+#if FORK > FORK_PHASE0
+    static uint64_t pool[1024]; /* 8192 bytes at a multiple of 8, as the atomics need */
+    uint64_t n = 3 * 4096 + 100, need = 0, room[8] = {3 * 4096 + 100, 64, 4, 9000, 64, 64, 4, 4096}, threads = 4, res[2];
+    pool_checked = 1;
+    if (lantern_shell_pool_start(pool, &threads, res) != 0 || res[0] != 0 || res[1] != 3) {
+        *why = "state_root_pool: pool_start";
+        return;
+    }
+    CALL(LF(beacon_state_copy_size), small, room, &need);
+    uint8_t *st = buffer(need);
+    wr64(st, need);
+    uint64_t csize = 0;
+    CALL(LF(state_cache_size), &n, &csize);
+    uint8_t *cache = buffer(csize);
+    wr64(cache, csize);
+    uint64_t scsize;
+    uint8_t *scr = scratch_for(desc, &scsize);
+    if (CALL(LF(beacon_state_copy), small, room, st) != 0 || CALL(LF(state_cache_init), &n, cache) != 0) *why = "state_root_pool: copy or cache_init";
+    else {
+        grow_list(st, 11, 128, n);
+        grow_list(st, 12, 8, n);
+        grow_list(st, 15, 1, n);
+        grow_list(st, 16, 1, n);
+        grow_list(st, 21, 8, n);
+        uint64_t vref = field_offset("BeaconState", 11), bref = field_offset("BeaconState", 12), iref = field_offset("BeaconState", 21);
+        for (int step = 0; step < 4 && !*why; step++) {
+            if (step == 2) {
+                wr64(st + rd64(st + vref) + 5000 * 128 + 80, 31000000000ull); /* effective_balance */
+                wr64(st + rd64(st + vref) + (n - 1) * 128 + 80, 1);
+                wr64(st + rd64(st + bref) + 9000 * 8, 123);
+                wr64(st + rd64(st + iref) + 4095 * 8, 7);
+                st[rd64(st + field_offset("BeaconState", 16)) + 4096] ^= 1;
+            }
+            if (step == 3)
+                for (int f = 0; f < 5; f++) {
+                    static const int fs[5] = {11, 12, 15, 16, 21};
+                    uint64_t r = field_offset("BeaconState", (uint64_t)fs[f]);
+                    wr64(st + r + 8, n - 50);
+                }
+            uint8_t want[32], got[32], alone[32];
+            if (ssz_hash_tree_root(desc, st, scr, want) != 0) *why = "state_root_pool: hash_tree_root status";
+            else if (CALL(LF(state_root_pool), st, cache, fresh_scratch(), got, pool) != 0) *why = "state_root_pool: status";
+            else if (memcmp(got, want, 32)) *why = step == 0 ? "state_root_pool: the root, cache empty" : step == 1 ? "state_root_pool: the root, unchanged" : step == 2 ? "state_root_pool: the root after changes" : "state_root_pool: the root with fewer validators";
+            else if (CALL(LF(state_root), st, NULL, fresh_scratch(), alone) != 0 || memcmp(alone, want, 32)) *why = "state_root_pool: state_root with no cache";
+        }
+    }
+    free(st);
+    free(cache);
+    free(scr);
+#else
+    (void)small;
+    (void)desc;
+    (void)why;
+#endif
+}
+
 /* Whether state encodes to the bytes want. */
 static int state_equals(const uint8_t *state, const uint8_t *want, uint64_t len, const char **why) {
     const uint8_t *desc = type_by_name("BeaconState");
@@ -1215,6 +1291,10 @@ static int state_equals(const uint8_t *state, const uint8_t *want, uint64_t len,
         else if (CALL(LF(state_root), state, NULL, fresh_scratch(), got) != 0) *why = "post state: state_root status", ok = 0;
         else if (memcmp(got, want_root, 32)) *why = "post state: state_root with no cache differs", ok = 0;
         else cached_roots++;
+        if (ok && !pool_checked) {
+            state_root_pool_check(state, desc, why);
+            if (*why) ok = 0;
+        }
     }
     free(scr);
     return ok;

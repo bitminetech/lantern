@@ -12,9 +12,16 @@ Copies of states, and their hash caches.
 - [`lantern_state_cache_size`](#function-lantern_state_cache_size): the bytes of a hash cache for a number of validators.
 - [`lantern_state_cache_init`](#function-lantern_state_cache_init): lays out an empty hash cache.
 - [`lantern_state_root`](#function-lantern_state_root): the hash tree root of a state, from a hash cache it brings up to date.
+- [`lantern_state_root_pool`](#function-lantern_state_root_pool): lantern_state_root, with the large trees hashed by jobs on a pool of threads.
+- [`lantern_sr_root`](#function-lantern_sr_root): lantern_state_root with a pool or none.
 - [`lantern_sr_hash`](#function-lantern_sr_hash): sHA-256 of two 32-byte nodes.
 - [`lantern_sr_layout`](#function-lantern_sr_layout): lays out the trees of a StateCache for a number of validators.
 - [`lantern_sr_tree`](#function-lantern_sr_tree): the root of one field of a state, from its CacheTree.
+- [`lantern_sr_job`](#function-lantern_sr_job): a job of lantern_sr_tree: the leaves and lower levels of a range.
+- [`lantern_sr_leaves`](#function-lantern_sr_leaves): the leaves of a range of a CacheTree.
+- [`lantern_sr_levels`](#function-lantern_sr_levels): the parents of dirty nodes, level by level, of a range of a CacheTree.
+- [`lantern_sr_post`](#function-lantern_sr_post): the root of a CacheTree from its top.
+- [`lantern_sr_clean`](#function-lantern_sr_clean): empties a CacheTree after a failure.
 - [`lantern_sr_zeros`](#function-lantern_sr_zeros): the zero hash of each depth from 0 to 40.
 - [`lantern_zero`](#function-lantern_zero): writes zero bytes.
 
@@ -23,6 +30,7 @@ Copies of states, and their hash caches.
 - [`StateRoom`](#type-stateroom): the free entries a copy gives each list of the state.
 - [`StateCache`](#type-statecache): the Merkle trees of the large fields of the last state hashed.
 - [`CacheTree`](#type-cachetree): the tree of one field.
+- [`SrCtx`](#type-srctx): the work of lantern_sr_tree on one tree, or of one job on a range of it.
 
 ## Spec
 
@@ -292,7 +300,7 @@ lantern_state_root(state, cache, scratch, out) -> status
 
 ### Limits
 
-- Stack of its own: 112 bytes on x86-64 (return address included), 112 bytes on ARM64, 112 bytes on RISC-V.
+- Stack of its own: 8 bytes on x86-64 (return address included), 0 bytes on ARM64, 0 bytes on RISC-V: it goes on to lantern_sr_root with no pool.
 
 ### ABI
 
@@ -300,6 +308,98 @@ lantern_state_root(state, cache, scratch, out) -> status
 - Symbol: `lantern_<fork>_state_root` in the object of every fork, with `_` before it on macOS; `lantern_state_root` inside the object.
 - Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
 - Argument order: `state`, `cache`, `scratch`, `out`.
+
+## Function `lantern_state_root_pool`
+
+hash_tree_root(state) as lantern_state_root gives it, with the large trees hashed by jobs on a pool of threads.
+
+### Signature
+
+```
+lantern_state_root_pool(state, cache, scratch, out, pool) -> status
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `state` | input | `BeaconState` |
+| `cache` | state | `StateCache`, or 0 |
+| `scratch` | scratch | `Scratch` |
+| `out` | output | Bytes32 |
+| `pool` | state | [`ShellPool`](shell.md#type-shellpool) of lantern_shell_pool_start, or 0 |
+
+### Returns
+
+- As lantern_state_root.
+
+### Caller must
+
+- As lantern_state_root.
+- Keep `pool` free of other runs while it runs; the pool's threads read `state` and write `cache` and the end of `scratch`.
+
+### Function does
+
+- Gives the root, the status and the cache that lantern_state_root gives, for every pool: each tree of at least 2 x `SR_JOB_MIN` (4096) leaves is split by lantern_sr_tree into jobs on the pool.
+- With `pool` 0: lantern_state_root.
+
+### Function never
+
+- Makes an OS call other than through lantern_shell_pool_run.
+
+### Limits
+
+- Stack of its own: 8 bytes on x86-64 (return address included), 0 bytes on ARM64, 0 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_<fork>_state_root_pool` in the object of every fork, with `_` before it on macOS; `lantern_state_root_pool` inside the object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- Argument order: `state`, `cache`, `scratch`, `out`, `pool`.
+
+## Function `lantern_sr_root`
+
+lantern_state_root with a pool or none.
+
+### Signature
+
+```
+lantern_sr_root(state, cache, scratch, out, pool) -> status
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `state` | input | `BeaconState` |
+| `cache` | state | `StateCache`, or 0 |
+| `scratch` | scratch | `Scratch` |
+| `out` | output | Bytes32 |
+| `pool` | state | `ShellPool`, or 0 |
+
+### Returns
+
+- As lantern_state_root.
+
+### Function does
+
+- The steps of lantern_state_root (Function does there); each field of a tree goes to lantern_sr_tree with `pool`.
+
+### Function never
+
+- Makes an OS call other than through lantern_shell_pool_run.
+
+### Limits
+
+- Stack of its own: 112 bytes on x86-64 (return address included), 112 bytes on ARM64, 112 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_sr_root`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- Argument order: `state`, `cache`, `scratch`, `out`, `pool`.
 
 ## Function `lantern_sr_hash`
 
@@ -379,12 +479,12 @@ lantern_sr_layout(validators, cache) -> bytes
 
 ## Function `lantern_sr_tree`
 
-The root of one field of a state, from its CacheTree.
+The root of one field of a state, from its CacheTree, with jobs on a pool for a large tree.
 
 ### Signature
 
 ```
-lantern_sr_tree(tree, data, count, bytes, descriptor, depth, list, root) -> status
+lantern_sr_tree(tree, data, count, bytes, descriptor, depth, list, root, pool) -> status
 ```
 
 ### Arguments
@@ -399,6 +499,7 @@ lantern_sr_tree(tree, data, count, bytes, descriptor, depth, list, root) -> stat
 | `depth` | input | u64 in a register: the depth of the limit |
 | `list` | input | u64 in a register: 1 for a list, whose root mixes in the count |
 | `root` | output | 32 bytes |
+| `pool` | state | `ShellPool`, or 0 |
 
 ### Returns
 
@@ -408,15 +509,20 @@ lantern_sr_tree(tree, data, count, bytes, descriptor, depth, list, root) -> stat
 
 ### Function does
 
-- Hashes again only the leaves that changed and the nodes above them, and records the new leaves.
+- Hashes again only the leaves that changed and the nodes above them, and records the new leaves: lantern_sr_leaves of every leaf, lantern_sr_levels from level 0, then lantern_sr_post.
+- With fewer leaves n than the tree's `count`: leaf n - 1 is dirty first.
+- With a pool and n of at least 2 x `SR_JOB_MIN`: jobs of R leaves, R the larger of `SR_JOB_MIN` and the power of two at or above ceil(n / `SR_JOBS_MAX`), so at most `SR_JOBS_MAX` (64) jobs. Job j takes leaves j R to the lower of (j + 1) R and n, and levels 0 to log2(R) - 7, in a region of `SR_JOB_BYTES` (12288) bytes at the end of the scratch's front: its SrCtx, its area of zero hashes and hash input, and 7936 bytes of scratch. The ranges of the jobs at each of those levels are whole words of dirty bits apart, so no two jobs write one byte. lantern_shell_pool_run runs them; then lantern_sr_levels from level log2(R) - 6 over all leaves, then lantern_sr_post.
+- No pool, fewer leaves, or a front too short for the regions: the work of one thread.
+- A job that fails: lantern_sr_clean, then the work of one thread from no leaves. A failure there: lantern_sr_clean and its status.
+- The root is the same for every pool and every order of the jobs.
 
 ### Function never
 
-- Makes an OS call.
+- Makes an OS call other than through lantern_shell_pool_run.
 
 ### Limits
 
-- Stack of its own: 208 bytes on x86-64 (return address included), 208 bytes on ARM64, 208 bytes on RISC-V.
+- Stack of its own: 288 bytes on x86-64 (return address included), 288 bytes on ARM64, 288 bytes on RISC-V.
 
 ### ABI
 
@@ -425,7 +531,191 @@ lantern_sr_tree(tree, data, count, bytes, descriptor, depth, list, root) -> stat
 - Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
 - Registers it reads, on ARM64, x86-64, RISC-V: the cache in x20, rbp, s2; the scratch, its front's size set, in x21, r12, s3; the work area in x23, r14, s5.
 - On x86-64, `bytes` and `descriptor` share rcx (a descriptor is an address above 4095), and r8 holds `depth` + 256 for a list; `root` is in r9.
-- Argument order: `tree`, `data`, `count`, `bytes`, `descriptor`, `depth`, `list`, `root`.
+- `pool` is in x8, rax, t6.
+- Argument order: `tree`, `data`, `count`, `bytes`, `descriptor`, `depth`, `list`, `root`, `pool`.
+
+## Function `lantern_sr_job`
+
+A job of lantern_sr_tree: the leaves and the lower levels of one range.
+
+### Signature
+
+```
+lantern_sr_job(regions, index)
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `regions` | state | the regions of the jobs, `SR_JOB_BYTES` apart, each starting with an [`SrCtx`](#type-srctx) |
+| `index` | input | u64 in a register: the job |
+
+### Function does
+
+- lantern_sr_leaves of its SrCtx; its status into the SrCtx's `status`; with status 0, lantern_sr_levels from level 0 to its `levels`.
+
+### Function never
+
+- Makes an OS call.
+
+### Limits
+
+- Stack of its own: 96 bytes on x86-64 (return address included), 96 bytes on ARM64, 96 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_sr_job`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- A ShellJob function (shell.md): its status is not read.
+- Argument order: `regions`, `index`.
+
+## Function `lantern_sr_leaves`
+
+The leaves lo to hi of a CacheTree: those that changed take their new chunk or root and are dirty.
+
+### Signature
+
+```
+lantern_sr_leaves(context) -> status
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `context` | state | [`SrCtx`](#type-srctx) |
+
+### Returns
+
+- 0, or a status of ssz_hash_tree_root.
+
+### Function does
+
+- For each leaf of the range: a chunk, the last of the field padded with zeros, or the hash tree root of an element (with the SrCtx's scratch) when its copy differs; a leaf at or past `old` always takes it. Its dirty bit sets.
+
+### Function never
+
+- Makes an OS call.
+
+### Limits
+
+- Stack of its own: 112 bytes on x86-64 (return address included), 112 bytes on ARM64, 112 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_sr_leaves`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- Argument order: `context`.
+
+## Function `lantern_sr_levels`
+
+From one level up to the SrCtx's `levels`, the parents of the dirty nodes of its range.
+
+### Signature
+
+```
+lantern_sr_levels(context, first) -> nothing
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `context` | state | [`SrCtx`](#type-srctx) |
+| `first` | input | u64 in a register: the level to start at |
+
+### Function does
+
+- At each level k from `first` while the level holds more than one node and k is below `levels`: each dirty node of the words of dirty bits of lo / 2^k to hi / 2^k (rounded up) gives its parent the hash of it and its sibling, a sibling past the level being the zero hash of depth k; the parent is dirty and the word clears.
+
+### Function never
+
+- Makes an OS call.
+
+### Limits
+
+- Stack of its own: 160 bytes on x86-64 (return address included), 160 bytes on ARM64, 160 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_sr_levels`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- Argument order: `context`, `first`.
+
+## Function `lantern_sr_post`
+
+The root of a CacheTree from its top.
+
+### Signature
+
+```
+lantern_sr_post(context) -> nothing
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `context` | state | [`SrCtx`](#type-srctx) |
+
+### Function does
+
+- Clears the top's dirty bit; `out` takes the top node, or with no leaves the zero hash of the limit's depth; then hashes it with the zero hash of each depth up to the limit's; mixes in `count` for a list; the tree's `count` takes the leaves.
+
+### Function never
+
+- Makes an OS call.
+
+### Limits
+
+- Stack of its own: 96 bytes on x86-64 (return address included), 96 bytes on ARM64, 96 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_sr_post`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- Argument order: `context`.
+
+## Function `lantern_sr_clean`
+
+Empties a CacheTree after a failure.
+
+### Signature
+
+```
+lantern_sr_clean(context) -> nothing
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `context` | state | [`SrCtx`](#type-srctx) |
+
+### Function does
+
+- The tree's `count` and the SrCtx's `old` take 0, and every word of dirty bits of each level takes 0.
+
+### Function never
+
+- Makes an OS call.
+
+### Limits
+
+- Stack of its own: 8 bytes on x86-64 (return address included), 0 bytes on ARM64, 0 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_sr_clean`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- A leaf.
+- Argument order: `context`.
 
 ## Function `lantern_sr_zeros`
 
@@ -570,10 +860,44 @@ The Merkle tree of one field of the last state hashed.
 - Level 0 holds the leaves: a chunk, or an element's root.
 - Its nodes below `count` at each level are those of the last root; its dirty bits are 0 between calls.
 
+## Type `SrCtx`
+
+The work of lantern_sr_tree on one tree, or of one job on a range of it.
+
+### Layout
+
+| Offset | Field | Type | Meaning |
+|---|---|---|---|
+| 0 | `tree` | u64 | The CacheTree |
+| 8 | `data` | u64 | The elements |
+| 16 | `count` | u64 | The elements |
+| 24 | `elem` | u64 | The bytes of a basic element, or 0 |
+| 32 | `desc` | u64 | The type descriptor of a container element |
+| 40 | `depth` | u64 | The depth of the limit |
+| 48 | `list` | u64 | 1 for a list |
+| 56 | `out` | u64 | The root's 32 bytes |
+| 64 | `front` | u64 | The scratch size its ssz calls get |
+| 72 | `bytes` | u64 | count x elem |
+| 80 | `leaves` | u64 | The leaves of the tree |
+| 88 | `cache` | u64 | The StateCache |
+| 96 | `scratch` | u64 | Its scratch |
+| 104 | `area` | u64 | Its area: the zero hashes, a hash input, a chunk |
+| 112 | `status` | u64 | A job's status |
+| 120 | `lo` | u64 | The first leaf of its range |
+| 128 | `hi` | u64 | The leaf after its range |
+| 136 | `levels` | u64 | The levels it hashes |
+| 144 | `pool` | u64 | A ShellPool, or 0 |
+| 152 | `old` | u64 | The tree's count before |
+
+### Rules
+
+- `SrCtx__mem` (160) bytes.
+
 ## Test vectors
 
 - Each runner process keeps one `StateCache` of lantern_state_cache_size(4096) from lantern_state_cache_init, and the config of every call names it at `CONFIG_STATE_CACHE`, so each state transition of the vectors hashes through it.
 - The state of each case that the runner compares with a `post` state: lantern_state_root with that cache, and with 0, must give ssz_hash_tree_root of the state. The runner counts them in a NOTE.
+- Once a process, the first such state grown to 3 x 4096 + 100 validators: lantern_state_root_pool with a pool of 4 threads and a cache of its own must give ssz_hash_tree_root with the cache empty, unchanged, after changes in each grown list, and with 50 validators fewer.
 
 ## Results
 

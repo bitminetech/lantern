@@ -9,6 +9,35 @@
 .set STATE_ROOT_CHUNK, STATE_ROOT_HASH + 24 + 64    /* a last chunk, padded, or a length */
 .set STATE_ROOT_AREA, 4096
 
+# SrCtx: the work of lantern_sr_tree on one tree, or of one job on a range of its leaves.
+.set SrCtx_tree, 0                                  # the CacheTree
+.set SrCtx_data, 8
+.set SrCtx_count, 16                                # elements
+.set SrCtx_elem, 24                                 # bytes of a basic element, or 0
+.set SrCtx_desc, 32
+.set SrCtx_depth, 40                                # the limit's depth
+.set SrCtx_list, 48
+.set SrCtx_out, 56
+.set SrCtx_front, 64                                # the scratch size its ssz calls get
+.set SrCtx_bytes, 72                                # count * elem
+.set SrCtx_leaves, 80
+.set SrCtx_cache, 88
+.set SrCtx_scratch, 96
+.set SrCtx_area, 104
+.set SrCtx_status, 112                              # a job's status
+.set SrCtx_lo, 120                                  # the leaves of its range
+.set SrCtx_hi, 128
+.set SrCtx_levels, 136                              # the levels it hashes
+.set SrCtx_pool, 144                                # a ShellPool, or 0
+.set SrCtx_old, 152                                 # the tree's count before
+.set SrCtx__mem, 160
+.set SR_JOB_BYTES, 12288                            # a job's region: its SrCtx, its area, its scratch
+.set SR_JOB_AREA, 256
+.set SR_JOB_SCRATCH, SR_JOB_AREA + STATE_ROOT_AREA
+.set SR_JOB_MIN, 4096                               # a job's leaves at least: 64 words of dirty bits
+.set SR_JOBS_MAX, 64
+.set SR_JOBS_SHIFT, 6
+
 /* Field kinds of the table. */
 .set SR_LEAF, 1                                     /* inline, its bytes padded: a = the bytes */
 .set SR_TYPE, 2                                     /* inline, ssz_hash_tree_root: a = the descriptor */
@@ -264,53 +293,225 @@ END_FUNCTION lantern_sr_zeros
 /*
  * The root of a field from tree a0 (a CacheTree): data a1, count a2 elements, a3 the bytes of
  * an element of a basic type or 0 for containers of descriptor a4, the limit's depth a5, a6 1 for
- * a list (mixed with the count), the root to a7. a0 = 0, 1 when the leaves pass the capacity, or a
- * status of ssz_hash_tree_root. s2 the cache, s3 scratch with its front's size set, s5 the area.
- * s1 tree, s4 data then the level, s6 the leaves then the nodes of the level, s7 a leaf then a
- * word, s8 the level's nodes, s9 its dirty bits, s10 the old count then the level's capacity.
- * Locals: L count, L+8 element bytes, L+16 descriptor, L+24 depth, L+32 list, L+40 out, L+48 the
- * front's size, L+56 data bytes, L+64 the next level's nodes, L+72 its dirty bits, L+80 a word,
- * L+88 a parent, L+96 the leaves, L+104 a status.
+ * a list (mixed with the count), the root to a7, t6 a ShellPool or 0. a0 = 0, 1 when the leaves
+ * pass the capacity, or a status of ssz_hash_tree_root. s2 the cache, s3 scratch with its front's
+ * size set, s5 the area. With a pool and at least two jobs of leaves, jobs of lantern_sr_job hash
+ * ranges of the leaves and their lower levels at once, each in a region of SR_JOB_BYTES at the end
+ * of the front; a failed job makes the tree's work start again alone. s1 the SrCtx, s4 a job's
+ * SrCtx, s6 the leaves, s7 the jobs' leaves, s8 the jobs, s9 the first region, s10 a job.
+ * Locals: L the SrCtx, L+SrCtx__mem a ShellJob.
  */
 LOCAL_FUNCTION lantern_sr_tree
-    ENTER 112
-    mv      s1, a0
-    mv      s4, a1
-    sd      a2, L(sp)
-    sd      a3, (L + 8)(sp)
-    sd      a4, (L + 16)(sp)
-    sd      a5, (L + 24)(sp)
-    sd      a6, (L + 32)(sp)
-    sd      a7, (L + 40)(sp)
+    ENTER (SrCtx__mem + 32)
+    addi    s1, sp, L
+    sd      a0, SrCtx_tree(s1)
+    sd      a1, SrCtx_data(s1)
+    sd      a2, SrCtx_count(s1)
+    sd      a3, SrCtx_elem(s1)
+    sd      a4, SrCtx_desc(s1)
+    sd      a5, SrCtx_depth(s1)
+    sd      a6, SrCtx_list(s1)
+    sd      a7, SrCtx_out(s1)
+    sd      t6, SrCtx_pool(s1)
     ld      t0, 0(s3)
-    sd      t0, (L + 48)(sp)
+    sd      t0, SrCtx_front(s1)
     mul     t0, a2, a3
-    sd      t0, (L + 56)(sp)
+    sd      t0, SrCtx_bytes(s1)
     mv      s6, a2                          # the leaves: elements, or chunks
     beqz    a3, 1f
     addi    s6, t0, 31
     srli    s6, s6, 5
-1:  sd      s6, (L + 96)(sp)
-    ld      t0, CacheTree_capacity(s1)
+1:  sd      s6, SrCtx_leaves(s1)
+    sd      s2, SrCtx_cache(s1)
+    sd      s3, SrCtx_scratch(s1)
+    sd      s5, SrCtx_area(s1)
+    sd      zero, SrCtx_status(s1)
+    sd      zero, SrCtx_lo(s1)
+    sd      s6, SrCtx_hi(s1)
+    li      t0, 64
+    sd      t0, SrCtx_levels(s1)
+    ld      t0, CacheTree_capacity(a0)
     bleu    s6, t0, 2f
     li      a0, 1
-    LEAVE 112
-2:  ld      s10, CacheTree_count(s1)
-    ld      t0, CacheTree_nodes(s1)
-    add     s8, s2, t0
-    ld      t0, CacheTree_dirty(s1)
+    LEAVE (SrCtx__mem + 32)
+2:  ld      s10, CacheTree_count(a0)
+    sd      s10, SrCtx_old(s1)
+    bgeu    s6, s10, 3f                     # fewer leaves than the last root: the last one is dirty
+    beqz    s6, 3f
+    ld      t0, CacheTree_dirty(a0)
     add     s9, s2, t0
-    li      s7, 0
+    addi    t1, s6, -1
+    srli    t2, t1, 6
+    slli    t2, t2, 3
+    add     t2, s9, t2
+    ld      t3, 0(t2)
+    li      t4, 1
+    sll     t4, t4, t1
+    or      t3, t3, t4
+    sd      t3, 0(t2)
+3:  ld      t0, SrCtx_pool(s1)              # the jobs: 2 to SR_JOBS_MAX of a power of two of leaves
+    beqz    t0, 50f
+    addi    t1, s6, SR_JOBS_MAX - 1
+    srli    t1, t1, SR_JOBS_SHIFT
+    li      s7, SR_JOB_MIN
+    bleu    t1, s7, 4f
+    addi    t1, t1, -1                      # the bits of the count less 1
+    li      t2, 0
+41: srli    t1, t1, 1
+    addi    t2, t2, 1
+    bnez    t1, 41b
+    li      s7, 1
+    sll     s7, s7, t2
+4:  add     s8, s6, s7
+    addi    s8, s8, -1
+    divu    s8, s8, s7
+    li      t0, 2
+    bltu    s8, t0, 50f
+    li      t0, SR_JOB_BYTES                # their regions at the end of the front
+    mul     t1, s8, t0
+    ld      t2, SrCtx_front(s1)
+    bltu    t2, t1, 50f
+    sub     s9, t2, t1
+    add     s9, s3, s9
+    li      s10, 0
+5:  bgeu    s10, s8, 6f
+    li      t0, SR_JOB_BYTES
+    mul     s4, s10, t0
+    add     s4, s4, s9
+    mv      a0, s4
+    mv      a1, s1
+    li      a2, SrCtx__mem
+    call    lantern_copy
+    mul     t0, s10, s7                     # its range of leaves and its levels
+    sd      t0, SrCtx_lo(s4)
+    add     t1, t0, s7
+    bleu    t1, s6, 52f
+    mv      t1, s6
+52: sd      t1, SrCtx_hi(s4)
+    mv      t0, s7
+    li      t1, -1
+53: beqz    t0, 54f
+    srli    t0, t0, 1
+    addi    t1, t1, 1
+    j       53b
+54: addi    t1, t1, -6
+    sd      t1, SrCtx_levels(s4)
+    li      a0, SR_JOB_AREA                 # its area: the zero hashes and a hash input
+    add     a0, s4, a0
+    sd      a0, SrCtx_area(s4)
+    mv      a1, s5
+    li      a2, 41 * 32
+    call    lantern_copy
+    li      t0, SR_JOB_AREA + STATE_ROOT_HASH
+    add     t0, s4, t0
+    li      t1, 24 + 64
+    sd      t1, 0(t0)
+    li      t1, 24
+    sd      t1, 8(t0)
+    li      t1, 64
+    sd      t1, 16(t0)
+    li      t0, SR_JOB_SCRATCH              # its scratch
+    add     t0, s4, t0
+    li      t1, SR_JOB_BYTES - SR_JOB_SCRATCH
+    sd      t1, 0(t0)
+    sd      t0, SrCtx_scratch(s4)
+    sd      t1, SrCtx_front(s4)
+    addi    s10, s10, 1
+    j       5b
+6:  addi    a1, sp, L + SrCtx__mem          # the run
+    ADDRESS t0, lantern_sr_job
+    sd      t0, ShellJob_function(a1)
+    sd      s9, ShellJob_context(a1)
+    sd      s8, ShellJob_count(a1)
+    ld      a0, SrCtx_pool(s1)
+    CALL_GLOBAL lantern_shell_pool_run
+    li      s10, 0
+7:  bgeu    s10, s8, 8f
+    li      t0, SR_JOB_BYTES
+    mul     s4, s10, t0
+    add     s4, s4, s9
+    ld      t0, SrCtx_status(s4)
+    bnez    t0, 71f
+    addi    s10, s10, 1
+    j       7b
+71: mv      a0, s1                          # a failed job: the tree alone, from no leaves
+    call    lantern_sr_clean
+    ld      t0, SrCtx_front(s1)
+    sd      t0, 0(s3)
+    j       50f
+8:  mv      a0, s1                          # then the upper levels
+    ld      a1, SrCtx_levels(s9)
+    call    lantern_sr_levels
+    ld      t0, SrCtx_front(s1)
+    sd      t0, 0(s3)
+    j       60f
+50: mv      a0, s1                          # alone: the leaves, then every level
+    call    lantern_sr_leaves
+    beqz    a0, 51f
+    sd      a0, SrCtx_status(s1)            # a failure: the tree holds nothing
+    mv      a0, s1
+    call    lantern_sr_clean
+    ld      a0, SrCtx_status(s1)
+    LEAVE (SrCtx__mem + 32)
+51: mv      a0, s1
+    li      a1, 0
+    call    lantern_sr_levels
+60: mv      a0, s1
+    call    lantern_sr_post
+    li      a0, 0
+    LEAVE (SrCtx__mem + 32)
+END_FUNCTION lantern_sr_tree
+
+# A job of lantern_sr_tree: the SrCtx of job a1 of the regions at a0, its leaves then its levels; its status in it. s1 the SrCtx.
+LOCAL_FUNCTION lantern_sr_job
+    ENTER 0
+    li      t0, SR_JOB_BYTES
+    mul     s1, a1, t0
+    add     s1, s1, a0
+    mv      a0, s1
+    call    lantern_sr_leaves
+    sd      a0, SrCtx_status(s1)
+    bnez    a0, 9f
+    mv      a0, s1
+    li      a1, 0
+    call    lantern_sr_levels
+9:  li      a0, 0
+    LEAVE 0
+END_FUNCTION lantern_sr_job
+
+/*
+ * The leaves lo to hi of the SrCtx a0: a chunk, or an element's root, that differs from the last
+ * root's is written and made dirty. a0 = 0, or a status of ssz_hash_tree_root. s1 the SrCtx, s2
+ * the cache, s3 scratch, s4 data, s5 the area, s6 hi, s7 a leaf, s8 the level's nodes, s9 its
+ * dirty bits, s10 the old count. Locals: L the tree.
+ */
+LOCAL_FUNCTION lantern_sr_leaves
+    ENTER 16
+    mv      s1, a0
+    ld      t0, SrCtx_tree(s1)
+    sd      t0, L(sp)
+    ld      s2, SrCtx_cache(s1)
+    ld      s3, SrCtx_scratch(s1)
+    ld      s5, SrCtx_area(s1)
+    ld      s4, SrCtx_data(s1)
+    ld      s6, SrCtx_hi(s1)
+    ld      s7, SrCtx_lo(s1)
+    ld      s10, SrCtx_old(s1)
+    ld      t1, CacheTree_nodes(t0)
+    add     s8, s2, t1
+    ld      t1, CacheTree_dirty(t0)
+    add     s9, s2, t1
 3:  bgeu    s7, s6, 20f
     slli    t1, s7, 5
     add     t1, s8, t1                      # the leaf
-    ld      t0, (L + 8)(sp)
+    ld      t0, SrCtx_elem(s1)
     beqz    t0, 10f
     slli    t2, s7, 5
     add     t2, s4, t2                      # the chunk; the last one padded
     addi    t3, s7, 1
-    bne     t3, s6, 5f
-    ld      t3, (L + 56)(sp)
+    ld      t4, SrCtx_leaves(s1)
+    bne     t3, t4, 5f
+    ld      t3, SrCtx_bytes(s1)
     andi    t3, t3, 31
     beqz    t3, 5f
     li      t4, STATE_ROOT_CHUNK
@@ -343,10 +544,11 @@ LOCAL_FUNCTION lantern_sr_tree
     j       19f
 6:  COPY32  t1, t2
     j       18f
-10: ld      t0, CacheTree_copy(s1)          # an element and its copy
+10: ld      a3, L(sp)                       # an element and its copy
+    ld      t0, CacheTree_copy(a3)
     mul     t2, s7, t0
     add     t3, s4, t2
-    ld      t4, CacheTree_copies(s1)
+    ld      t4, CacheTree_copies(a3)
     add     t4, s2, t4
     add     t4, t4, t2
     bgeu    s7, s10, 12f
@@ -366,26 +568,15 @@ LOCAL_FUNCTION lantern_sr_tree
     sd      t6, 0(a2)
     addi    t5, t5, 8
     bltu    t5, t0, 13b
-    ld      t0, (L + 48)(sp)
+    ld      t0, SrCtx_front(s1)
     sd      t0, 0(s3)
-    ld      a0, (L + 16)(sp)
+    ld      a0, SrCtx_desc(s1)
     mv      a1, t3
     mv      a2, s3
     mv      a3, t1
     CALL_GLOBAL ssz_hash_tree_root
     beqz    a0, 18f
-    sd      a0, (L + 104)(sp)               # a failure: the tree holds nothing
-    sd      zero, CacheTree_count(s1)
-    addi    t0, s6, 63
-    srli    t0, t0, 6
-    mv      t1, s9
-14: beqz    t0, 15f
-    sd      zero, 0(t1)
-    addi    t1, t1, 8
-    addi    t0, t0, -1
-    j       14b
-15: ld      a0, (L + 104)(sp)
-    LEAVE 112
+    LEAVE 16
 18: srli    t0, s7, 6                       # the leaf is dirty
     slli    t0, t0, 3
     add     t0, s9, t0
@@ -396,32 +587,89 @@ LOCAL_FUNCTION lantern_sr_tree
     sd      t1, 0(t0)
 19: addi    s7, s7, 1
     j       3b
-20: bgeu    s6, s10, 21f                    # fewer leaves than the last root: the last one is dirty
-    beqz    s6, 21f
-    addi    t3, s6, -1
-    srli    t0, t3, 6
+20: li      a0, 0
+    LEAVE 16
+END_FUNCTION lantern_sr_leaves
+
+# The level of an SrCtx: s8 its nodes, s9 its dirty bits, s10 its capacity, s6 its nodes in use, s4 it, to the next.
+.macro SR_UP
+    slli    t0, s10, 5
+    add     s8, s8, t0
+    addi    t0, s10, 63
+    srli    t0, t0, 6
     slli    t0, t0, 3
-    add     t0, s9, t0
-    ld      t1, 0(t0)
-    li      t2, 1
-    sll     t2, t2, t3
-    or      t1, t1, t2
-    sd      t1, 0(t0)
-21: ld      s10, CacheTree_capacity(s1)
-    li      s4, 0                           # level by level, the parents of dirty nodes
+    add     s9, s9, t0
+    addi    s10, s10, 1
+    srli    s10, s10, 1
+    addi    s6, s6, 1
+    srli    s6, s6, 1
+    addi    s4, s4, 1
+.endm
+
+/* lo and hi of the locals at L + 32 and L + 40 to the next level. */
+.macro SR_UP_RANGE
+    ld      t0, (L + 32)(sp)
+    srli    t0, t0, 1
+    sd      t0, (L + 32)(sp)
+    ld      t0, (L + 40)(sp)
+    addi    t0, t0, 1
+    srli    t0, t0, 1
+    sd      t0, (L + 40)(sp)
+.endm
+
+/*
+ * From level a1 of the SrCtx a0, level by level up to its `levels`, the parents of dirty nodes
+ * of its range lo to hi. s1 the SrCtx, s2 the cache, s3 the last level, s4 the level, s5 the area,
+ * s6 the level's nodes in use, s7 a word, s8 the level's nodes, s9 its dirty bits, s10 its
+ * capacity. Locals: L the next level's nodes, L+8 its dirty bits, L+16 a word, L+24 a parent,
+ * L+32 lo, L+40 hi, L+48 the words' end, L+56 the first level.
+ */
+LOCAL_FUNCTION lantern_sr_levels
+    ENTER 64
+    mv      s1, a0
+    sd      a1, (L + 56)(sp)
+    ld      t1, SrCtx_tree(s1)
+    ld      s2, SrCtx_cache(s1)
+    ld      s5, SrCtx_area(s1)
+    ld      s3, SrCtx_levels(s1)
+    ld      t0, CacheTree_nodes(t1)
+    add     s8, s2, t0
+    ld      t0, CacheTree_dirty(t1)
+    add     s9, s2, t0
+    ld      s10, CacheTree_capacity(t1)
+    ld      s6, SrCtx_leaves(s1)
+    ld      t0, SrCtx_lo(s1)
+    sd      t0, (L + 32)(sp)
+    ld      t0, SrCtx_hi(s1)
+    sd      t0, (L + 40)(sp)
+    li      s4, 0
+1:  ld      t0, (L + 56)(sp)                # up to the first level
+    bgeu    s4, t0, 22f
+    SR_UP
+    SR_UP_RANGE
+    j       1b
 22: li      t0, 1
     bleu    s6, t0, 30f
+    bgeu    s4, s3, 30f
     slli    t0, s10, 5
     add     t0, s8, t0
-    sd      t0, (L + 64)(sp)
+    sd      t0, L(sp)
     addi    t1, s10, 63
     srli    t1, t1, 6
     slli    t1, t1, 3
     add     t1, s9, t1
-    sd      t1, (L + 72)(sp)
-    li      s7, 0
-23: addi    t0, s6, 63
+    sd      t1, (L + 8)(sp)
+    ld      t0, (L + 32)(sp)                # the words of the range
+    srli    s7, t0, 6
+    ld      t0, (L + 40)(sp)
+    addi    t0, t0, 63
     srli    t0, t0, 6
+    addi    t1, s6, 63
+    srli    t1, t1, 6
+    bleu    t0, t1, 221f
+    mv      t0, t1
+221: sd     t0, (L + 48)(sp)
+23: ld      t0, (L + 48)(sp)
     bgeu    s7, t0, 29f
     slli    t1, s7, 3
     add     t1, s9, t1
@@ -466,8 +714,8 @@ LOCAL_FUNCTION lantern_sr_tree
 25: slli    t5, s7, 6
     add     t4, t4, t5
     srli    t4, t4, 1                       # the parent
-    sd      t2, (L + 80)(sp)
-    sd      t4, (L + 88)(sp)
+    sd      t2, (L + 16)(sp)
+    sd      t4, (L + 24)(sp)
     slli    a0, t4, 6                       # the left child
     add     a0, s8, a0
     slli    t5, t4, 1
@@ -477,12 +725,12 @@ LOCAL_FUNCTION lantern_sr_tree
     bltu    t5, s6, 26f
     slli    a1, s4, 5
     add     a1, s5, a1
-26: ld      a2, (L + 64)(sp)
+26: ld      a2, L(sp)
     slli    t5, t4, 5
     add     a2, a2, t5
     call    lantern_sr_hash
-    ld      t4, (L + 88)(sp)                # the parent is dirty
-    ld      t0, (L + 72)(sp)
+    ld      t4, (L + 24)(sp)                # the parent is dirty
+    ld      t0, (L + 8)(sp)
     srli    t1, t4, 6
     slli    t1, t1, 3
     add     t0, t0, t1
@@ -491,59 +739,104 @@ LOCAL_FUNCTION lantern_sr_tree
     sll     t2, t2, t4
     or      t1, t1, t2
     sd      t1, 0(t0)
-    ld      t2, (L + 80)(sp)
+    ld      t2, (L + 16)(sp)
     j       24b
 28: addi    s7, s7, 1
     j       23b
-29: ld      s8, (L + 64)(sp)
-    ld      s9, (L + 72)(sp)
-    addi    s10, s10, 1
-    srli    s10, s10, 1
-    addi    s6, s6, 1
-    srli    s6, s6, 1
-    addi    s4, s4, 1
+29: SR_UP
+    SR_UP_RANGE
     j       22b
-30: sd      zero, 0(s9)                     # the top's bit
-    ld      t0, (L + 40)(sp)
+30: LEAVE 64
+END_FUNCTION lantern_sr_levels
+
+/*
+ * The root of the SrCtx a0 from its top: up to the limit's depth with zero hashes, the length mixed
+ * in for a list, to out; the tree's count becomes its leaves. s1 the SrCtx, s2 the cache, s4 the
+ * level, s5 the area, s6 the nodes in use, s8 the level's nodes, s9 its dirty bits, s10 its capacity.
+ */
+LOCAL_FUNCTION lantern_sr_post
+    ENTER 0
+    mv      s1, a0
+    ld      t1, SrCtx_tree(s1)
+    ld      s2, SrCtx_cache(s1)
+    ld      s5, SrCtx_area(s1)
+    ld      t0, CacheTree_nodes(t1)
+    add     s8, s2, t0
+    ld      t0, CacheTree_dirty(t1)
+    add     s9, s2, t0
+    ld      s10, CacheTree_capacity(t1)
+    ld      s6, SrCtx_leaves(s1)
+    li      s4, 0
+1:  li      t0, 1                           # the top
+    bleu    s6, t0, 2f
+    SR_UP
+    j       1b
+2:  sd      zero, 0(s9)                     # the top's bit
+    ld      t0, SrCtx_out(s1)
     bnez    s6, 31f
-    ld      t1, (L + 24)(sp)                # no leaves: the zero hash of the limit's depth
+    ld      t1, SrCtx_depth(s1)             # no leaves: the zero hash of the limit's depth
     slli    t1, t1, 5
     add     t1, s5, t1
     COPY32  t0, t1
     j       33f
 31: COPY32  t0, s8
-32: ld      t1, (L + 24)(sp)                # up to the limit's depth
+32: ld      t1, SrCtx_depth(s1)             # up to the limit's depth
     bgeu    s4, t1, 33f
-    ld      a0, (L + 40)(sp)
+    ld      a0, SrCtx_out(s1)
     slli    a1, s4, 5
     add     a1, s5, a1
     mv      a2, a0
     call    lantern_sr_hash
     addi    s4, s4, 1
     j       32b
-33: ld      t0, (L + 32)(sp)                # a list: mix_in_length
+33: ld      t0, SrCtx_list(s1)              # a list: mix_in_length
     beqz    t0, 34f
     li      a1, STATE_ROOT_CHUNK
     add     a1, s5, a1
-    ld      t1, L(sp)
-    sd      t1, 0(a1)
+    ld      t0, SrCtx_count(s1)
+    sd      t0, 0(a1)
     sd      zero, 8(a1)
     sd      zero, 16(a1)
     sd      zero, 24(a1)
-    ld      a0, (L + 40)(sp)
+    ld      a0, SrCtx_out(s1)
     mv      a2, a0
     call    lantern_sr_hash
-34: ld      t0, (L + 96)(sp)
-    sd      t0, CacheTree_count(s1)
-    li      a0, 0
-    LEAVE 112
-END_FUNCTION lantern_sr_tree
+34: ld      t0, SrCtx_leaves(s1)
+    ld      t1, SrCtx_tree(s1)
+    sd      t0, CacheTree_count(t1)
+    LEAVE 0
+END_FUNCTION lantern_sr_post
+
+# After a failure: the tree of the SrCtx a0 holds nothing, every dirty bit of each level 0. A leaf; uses t0-t4.
+LOCAL_FUNCTION lantern_sr_clean
+    UNWIND_END_PROLOGUE
+    ld      t0, SrCtx_tree(a0)
+    ld      t1, SrCtx_cache(a0)
+    sd      zero, CacheTree_count(t0)
+    sd      zero, SrCtx_old(a0)
+    ld      t2, CacheTree_dirty(t0)
+    add     t2, t1, t2
+    ld      t3, CacheTree_capacity(t0)
+1:  addi    t4, t3, 63
+    srli    t4, t4, 6
+2:  beqz    t4, 3f
+    sd      zero, 0(t2)
+    addi    t2, t2, 8
+    addi    t4, t4, -1
+    j       2b
+3:  li      t1, 1
+    bleu    t3, t1, 9f
+    addi    t3, t3, 1
+    srli    t3, t3, 1
+    j       1b
+9:  ret
+END_FUNCTION lantern_sr_clean
 .endif
 
 # The root of each field of the state into the leaves of the area, in field order: s1 state, s2 cache, s3
 # scratch, s5 the area, s10 the size of the front; s6, s7 and s8 are its own. To 90f for a tree past its
 # capacity, 98f for a refusal of ssz.
-.macro SR_FIELD_ROOTS
+.macro SR_FIELD_ROOTS pool
     ADDRESS s6, state_root_fields
     li      s7, SR_COUNT
     addi    s8, s5, STATE_ROOT_LEAVES
@@ -610,6 +903,11 @@ END_FUNCTION lantern_sr_tree
     addi    a0, a0, StateCache_trees
     ld      a5, 32(s6)
     mv      a7, s8
+.ifc \pool, none
+    li      t6, 0
+.else
+    ld      t6, \pool(sp)
+.endif
     call    lantern_sr_tree
     li      t0, 1
     beq     a0, t0, 90f
@@ -626,8 +924,23 @@ END_FUNCTION lantern_sr_tree
  * s7 the fields left, s8 the field's root, s10 the size of the front, which callees get.
  * Locals: L the scratch size on entry.
  */
-SPEC_FUNCTION state_root
+SPEC_LEAF state_root
+    li      a4, 0
+    j       lantern_sr_root
+SPEC_END state_root
+
+# (state, cache, scratch, out, pool): state.md. As lantern_state_root, with the jobs of lantern_sr_tree on pool.
+SPEC_LEAF state_root_pool
+    j       lantern_sr_root
+SPEC_END state_root_pool
+
+/*
+ * lantern_state_root with pool a4, or 0. Its registers as before, and locals: L the scratch size on
+ * entry, L+8 the pool.
+ */
+LOCAL_FUNCTION lantern_sr_root
     ENTER 16
+    sd      a4, (L + 8)(sp)
     mv      s1, a0
     mv      s2, a1
     mv      s3, a2
@@ -651,7 +964,7 @@ SPEC_FUNCTION state_root
     li      t0, 64
     sd      t0, 16(t1)
     call    lantern_sr_zeros
-    SR_FIELD_ROOTS
+    SR_FIELD_ROOTS (L + 8)
 50: li      s7, SR_COUNT                    # zeros to the width, then merkleize
 51: li      t0, STATE_ROOT_WIDTH
     bgeu    s7, t0, 52f
@@ -699,7 +1012,7 @@ SPEC_FUNCTION state_root
     mv      a3, s4
     CALL_GLOBAL ssz_hash_tree_root
     LEAVE 16
-SPEC_END state_root
+END_FUNCTION lantern_sr_root
 
 /*
  * s1 state, s2 cache, then a node, s3 scratch, s4 out, s5 the area at the end of scratch, s6 the
@@ -742,7 +1055,7 @@ SPEC_FUNCTION state_branch
     li      t0, 64
     sd      t0, 16(t1)
     call    lantern_sr_zeros
-    SR_FIELD_ROOTS
+    SR_FIELD_ROOTS none
     li      s7, SR_COUNT                    # zeros to the width
 2:  li      t0, STATE_ROOT_WIDTH
     bgeu    s7, t0, 3f

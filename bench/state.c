@@ -17,6 +17,7 @@ ABI uint64_t LF(get_committee_count_per_slot)(const void *state, const void *epo
 ABI uint64_t LF(get_beacon_proposer_index)(const void *state, void *out);
 ABI uint64_t LF(get_expected_withdrawals)(const void *state, void *scratch, void *out);
 ABI uint64_t LF(get_total_active_balance)(const void *state, void *scratch, void *out);
+ABI uint64_t lantern_shell_pool_stop(void *pool);
 
 static double now_s(void) {
     struct timespec t;
@@ -369,14 +370,6 @@ out:
     wr64(config + CONFIG_PUBKEY_CACHE, 0);
 }
 
-/* The list of BeaconState field f with entries of esize bytes: entries i >= count take entry i % count, up to n. */
-static void grow_list(uint8_t *state, int f, uint64_t esize, uint64_t n) {
-    uint64_t ref = field_offset("BeaconState", f), count = rd64(state + ref + 8);
-    uint8_t *base = state + rd64(state + ref);
-    for (uint64_t i = count; i < n; i++) memcpy(base + i * esize, base + (i % count) * esize, (size_t)esize);
-    wr64(state + ref + 8, n);
-}
-
 int main(int argc, char **argv) {
     if (argc < 2) {
         fprintf(stderr, "usage: %s VECTOR_DIR [VALIDATORS]\n", argv[0]);
@@ -448,6 +441,24 @@ int main(int argc, char **argv) {
     double c2 = now_s();
     printf("state cache: %llu MB; state_root empty %.3f s, unchanged %.3f s%s\n", (unsigned long long)(csize >> 20), c1 - c0,
            c2 - c1, rwhy ? " (root differs)" : "");
+    for (uint64_t threads = 4; threads <= 10; threads += 6) { /* lantern_state_root_pool: the same, on a pool */
+        static uint64_t pool[1024];
+        uint64_t pres[2];
+        memset(pool, 0, sizeof pool);
+        lantern_shell_pool_start(pool, &threads, pres);
+        CALL(LF(state_cache_init), &n, cache);
+        rwhy = NULL;
+        double p0 = now_s();
+        wr64(scratch, ssize);
+        if (CALL(LF(state_root_pool), state, cache, scratch, got, pool) != 0 || memcmp(got, root, 32)) rwhy = "differs";
+        double p1 = now_s();
+        wr64(scratch, ssize);
+        if (CALL(LF(state_root_pool), state, cache, scratch, got, pool) != 0 || memcmp(got, root, 32)) rwhy = "differs";
+        double p2 = now_s();
+        printf("state_root_pool, %llu threads: empty %.3f s, unchanged %.4f s%s\n", (unsigned long long)threads, p1 - p0, p2 - p1,
+               rwhy ? " (root differs)" : "");
+        lantern_shell_pool_stop(pool);
+    }
     {   /* get_beacon_committee of the state's slot, index 0: with no cache, then a CommitteeCache empty and filled */
         uint64_t ccsize = 0, cslot = rd64(state + 48), cidx = 0; /* NODE_STATE_SLOT 48 */
         CALL(LF(committee_cache_size), &n, &ccsize);
