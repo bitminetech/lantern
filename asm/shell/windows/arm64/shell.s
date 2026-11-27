@@ -316,13 +316,16 @@ FUNCTION lantern_shell_open
     stp     xzr, xzr, [x19]
     mov     x20, x0
     ldr     x9, [x1]
-    cmp     x9, #1
+    cmp     x9, #2
     b.hi    92f
     mov     w23, #OS_GENERIC_READ
     mov     w21, #OS_OPEN_EXISTING
-    b.ne    1f
+    cbz     x9, 1f
     mov     w23, #OS_GENERIC_WRITE
     mov     w21, #OS_OPEN_ALWAYS
+    cmp     x9, #1
+    b.eq    1f
+    mov     w23, #(OS_GENERIC_READ | OS_GENERIC_WRITE)
 1:  WIDE_ALLOC SHELL_WIDE_BYTES, 90f
     mov     x0, x20
     mov     x1, x22
@@ -394,6 +397,50 @@ FUNCTION lantern_shell_append
     mov     x0, #LANTERN_OK
     LEAVE 16
 END_FUNCTION lantern_shell_append
+
+/*
+ * (file, offset, bytes, result): docs/reference/shell.md. x19 result, x20 the file, x21 the bytes, x22
+ * their count, x23 written, x24 the offset. Locals: L the bytes WriteFile wrote, L+8 an OVERLAPPED
+ * (32 bytes) with the offset at L+24.
+ */
+FUNCTION lantern_shell_write_at
+    ENTER 48
+    mov     x19, x3
+    stp     xzr, xzr, [x19]
+    ldr     x20, [x0]
+    ldr     x24, [x1]
+    ldr     x21, [x2, #8]
+    add     x21, x2, x21
+    ldr     x22, [x2, #16]
+    mov     x23, #0
+1:  cmp     x23, x22
+    b.hs    9f
+    mov     x0, x20
+    add     x1, x21, x23
+    sub     x2, x22, x23
+    mov     x9, #SHELL_IO_MAX
+    cmp     x2, x9
+    csel    x2, x2, x9, ls
+    str     wzr, [sp, #L]
+    add     x3, sp, #L
+    stp     xzr, xzr, [sp, #(L + 8)]
+    add     x9, x24, x23                    /* Offset and OffsetHigh: the offset + the bytes written */
+    stp     x9, xzr, [sp, #(L + 24)]
+    add     x4, sp, #(L + 8)
+    CALL_GLOBAL WriteFile
+    cbz     w0, 80f
+    ldr     w0, [sp, #L]
+    cbz     w0, 7f
+    add     x23, x23, x0
+    b       1b
+7:  mov     x0, #OS_ERROR_WRITE_FAULT       /* no progress */
+    b       8f
+80: OS_LAST_ERROR
+8:  str     x0, [x19]
+9:  str     x23, [x19, #8]
+    mov     x0, #LANTERN_OK
+    LEAVE 48
+END_FUNCTION lantern_shell_write_at
 
 /* (file, result): docs/reference/shell.md. x19 result. */
 FUNCTION lantern_shell_sync

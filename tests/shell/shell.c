@@ -22,6 +22,7 @@ ABI uint64_t lantern_shell_write(const uint64_t *stream, const void *bytes);
 ABI uint64_t lantern_shell_time_ms(uint64_t *out);
 ABI uint64_t lantern_shell_open(const void *path, const uint64_t *mode, uint64_t *result);
 ABI uint64_t lantern_shell_append(const uint64_t *file, const void *bytes, uint64_t *result);
+ABI uint64_t lantern_shell_write_at(const uint64_t *file, const uint64_t *offset, const void *bytes, uint64_t *result);
 ABI uint64_t lantern_shell_sync(const uint64_t *file, uint64_t *result);
 ABI uint64_t lantern_shell_truncate(const uint64_t *file, const uint64_t *size, uint64_t *result);
 ABI uint64_t lantern_shell_close(const uint64_t *file);
@@ -160,6 +161,32 @@ int main(int argc, char **argv) {
         check(lantern_shell_open(ls, &mode, op) == 0 && op[0] == 0, "open: the file to read");
         file = op[1];
         lantern_shell_close(&file);
+        /* SHELL_OPEN_WRITE and write_at: over bytes, then past the end (a gap of zero bytes). */
+        mode = 2;
+        check(lantern_shell_open(ls, &mode, op) == 0 && op[0] == 0, "open: the file to read and write");
+        file = op[1];
+        uint64_t at = 100;
+        check(lantern_shell_write_at(&file, &at, lc, op) == 0 && op[0] == 0 && op[1] == 100, "write_at: 100 bytes at 100");
+        at = 6200;
+        check(lantern_shell_write_at(&file, &at, la, op) == 0 && op[0] == 0 && op[1] == 5000, "write_at: 5000 bytes past the end");
+        lantern_shell_sync(&file, op);
+        lantern_shell_close(&file);
+        {
+            static uint8_t want[11200];
+            memcpy(want, data, 6000);
+            memcpy(want + 6000, data + 7000, 100);
+            memcpy(want + 100, data + 7000, 100);
+            memset(want + 6100, 0, 100);
+            memcpy(want + 6200, data, 5000);
+            check(lantern_shell_map_file(ls, m) == 0 && m[0] == 0 && m[2] == 11200 && !memcmp((const void *)(uintptr_t)m[1], want, 11200),
+                  "map_file: the bytes of write_at, and zeros in the gap");
+            if (m[1]) lantern_shell_unmap_file(&m[1], &m[3]);
+        }
+        mode = 2;
+        check(lantern_shell_open(lo, &mode, op) == 0 && op[0] == 0, "open: a new file to read and write");
+        file = op[1];
+        lantern_shell_close(&file);
+        check(lantern_shell_remove(lo, op) == 0 && op[0] == 0, "remove: that file");
         mode = 7;
         check(lantern_shell_open(ls, &mode, op) == 0 && op[0] != 0 && op[1] == 0, "open: a faulty mode is an error");
         mode = 1;

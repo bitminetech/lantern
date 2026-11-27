@@ -13,6 +13,7 @@ Memory, files, the log and the clock.
 - [`lantern_shell_time_ms`](#function-lantern_shell_time_ms): reads the Unix time in milliseconds.
 - [`lantern_shell_open`](#function-lantern_shell_open): opens a file to read, or to append to.
 - [`lantern_shell_append`](#function-lantern_shell_append): writes bytes at the end of a file.
+- [`lantern_shell_write_at`](#function-lantern_shell_write_at): writes bytes at an offset of a file.
 - [`lantern_shell_sync`](#function-lantern_shell_sync): makes a file's bytes durable.
 - [`lantern_shell_truncate`](#function-lantern_shell_truncate): cuts a file to a size.
 - [`lantern_shell_close`](#function-lantern_shell_close): closes a file.
@@ -250,7 +251,7 @@ lantern_shell_time_ms(out) -> status
 
 ## Function `lantern_shell_open`
 
-Opens a file to read, or to append to, made when it is missing.
+Opens a file to read, to append to, or to read and write at offsets; made when it is missing, but to read.
 
 ### Signature
 
@@ -263,7 +264,7 @@ lantern_shell_open(path, mode, result) -> status
 | Name | Role | Type |
 |---|---|---|
 | `path` | input | ByteList: a path |
-| `mode` | input | u64: `SHELL_OPEN_READ` (0) or `SHELL_OPEN_APPEND` (1) |
+| `mode` | input | u64: `SHELL_OPEN_READ` (0), `SHELL_OPEN_APPEND` (1) or `SHELL_OPEN_WRITE` (2) |
 | `result` | output | `FileOp`: `value` the file |
 
 ### Returns
@@ -278,6 +279,7 @@ lantern_shell_open(path, mode, result) -> status
 
 - `SHELL_OPEN_READ`: Linux `openat` and macOS `open` with O_RDONLY and O_CLOEXEC; Windows `CreateFileW` with GENERIC_READ and OPEN_EXISTING.
 - `SHELL_OPEN_APPEND`: Linux and macOS with O_WRONLY, O_CREAT, O_APPEND and O_CLOEXEC, mode 0644; Windows `CreateFileW` with GENERIC_WRITE and OPEN_ALWAYS.
+- `SHELL_OPEN_WRITE`: Linux and macOS with O_RDWR, O_CREAT and O_CLOEXEC, mode 0644; Windows `CreateFileW` with GENERIC_READ, GENERIC_WRITE and OPEN_ALWAYS.
 - Windows shares the file for reading, writing and deleting.
 - Another mode: Linux and macOS `EINVAL`, Windows `ERROR_INVALID_PARAMETER`.
 - Returns `LANTERN_OK` when its result is written, also when the OS call failed; the result then holds the OS error.
@@ -339,6 +341,53 @@ lantern_shell_append(file, bytes, result) -> status
 - Symbol: `lantern_shell_append`, with `_` before it on macOS.
 - Convention: as `lantern_shell_map`.
 - Argument order: `file`, `bytes`, `result`.
+
+## Function `lantern_shell_write_at`
+
+Writes bytes at an offset of a file opened with `SHELL_OPEN_WRITE`.
+
+### Signature
+
+```
+lantern_shell_write_at(file, offset, bytes, result) -> status
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `file` | input | u64 |
+| `offset` | input | u64: the byte of the file the first byte goes to |
+| `bytes` | input | ByteList |
+| `result` | output | `FileOp`: `value` the bytes written |
+
+### Returns
+
+- `LANTERN_OK`, always.
+
+### Caller must
+
+- `file` is a u64: a file descriptor on Linux and macOS, a HANDLE on Windows.
+
+### Function does
+
+- Writes until every byte is written or the OS gives an error; `value` then holds the bytes written before it.
+- A call that writes no bytes is an error: Linux and macOS `EIO`, Windows `ERROR_WRITE_FAULT`.
+- An offset past the end of the file makes the file longer; the bytes between read as zero.
+- Linux: `pwrite64`. macOS: `pwrite`, at most 2^30 bytes a call. Windows: `WriteFile` with an OVERLAPPED holding the offset, at most 2^30 bytes a call.
+- Returns `LANTERN_OK` when its result is written, also when the OS call failed; the result then holds the OS error.
+- Makes an OS call again when Linux or macOS ends it early with `EINTR`.
+
+### Limits
+
+- Stack of its own on Linux: 48 bytes on x86-64 (return address included), 0 bytes on ARM64, 0 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_shell_write_at`, with `_` before it on macOS.
+- Convention: as `lantern_shell_map`.
+- Argument order: `file`, `offset`, `bytes`, `result`.
 
 ## Function `lantern_shell_sync`
 

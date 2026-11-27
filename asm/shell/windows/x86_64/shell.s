@@ -341,9 +341,14 @@ FUNCTION lantern_shell_open
     mov     (%rsi), %rax
     mov     $OS_GENERIC_READ, %r13d
     mov     $OS_OPEN_EXISTING, %r14d
-    cmp     $1, %rax
+    cmp     $2, %rax
     ja      92f
-    jne     1f
+    jb      2f
+    mov     $(OS_GENERIC_READ | OS_GENERIC_WRITE), %r13d
+    mov     $OS_OPEN_ALWAYS, %r14d
+    jmp     1f
+2:  test    %rax, %rax
+    jz      1f
     mov     $OS_GENERIC_WRITE, %r13d
     mov     $OS_OPEN_ALWAYS, %r14d
 1:  WIDE_ALLOC SHELL_WIDE_BYTES, 90f
@@ -423,6 +428,57 @@ FUNCTION lantern_shell_append
     xor     %eax, %eax
     LEAVE 16
 END_FUNCTION lantern_shell_append
+
+/*
+ * (file, offset, bytes, result): docs/reference/shell.md. rbx result, rbp the file, r12 the bytes, r13
+ * their count, r14 written, r15 the offset. Locals: L the fifth argument of WriteFile, L+8 the bytes
+ * it wrote, L+16 an OVERLAPPED (32 bytes) with the offset at L+32.
+ */
+FUNCTION lantern_shell_write_at
+    ENTER 48
+    mov     %rcx, %rbx
+    movq    $0, (%rbx)
+    movq    $0, 8(%rbx)
+    mov     (%rdi), %rbp
+    mov     (%rsi), %r15
+    mov     8(%rdx), %r12
+    add     %rdx, %r12
+    mov     16(%rdx), %r13
+    xor     %r14d, %r14d
+1:  cmp     %r13, %r14
+    jae     9f
+    mov     %rbp, %rcx
+    lea     (%r12,%r14), %rdx
+    mov     %r13, %r8
+    sub     %r14, %r8
+    mov     $SHELL_IO_MAX, %eax
+    cmp     %rax, %r8
+    cmova   %rax, %r8
+    movq    $0, (L + 8)(%rsp)
+    lea     (L + 8)(%rsp), %r9
+    movq    $0, (L + 16)(%rsp)
+    movq    $0, (L + 24)(%rsp)
+    lea     (%r15,%r14), %rax               # Offset and OffsetHigh: the offset + the bytes written
+    mov     %rax, (L + 32)(%rsp)
+    movq    $0, (L + 40)(%rsp)
+    lea     (L + 16)(%rsp), %rax
+    mov     %rax, L(%rsp)
+    CALL_GLOBAL WriteFile
+    test    %eax, %eax
+    jz      80f
+    mov     (L + 8)(%rsp), %eax
+    test    %rax, %rax
+    jz      7f
+    add     %rax, %r14
+    jmp     1b
+7:  mov     $OS_ERROR_WRITE_FAULT, %eax     # no progress
+    jmp     8f
+80: OS_LAST_ERROR
+8:  mov     %rax, (%rbx)
+9:  mov     %r14, 8(%rbx)
+    xor     %eax, %eax
+    LEAVE 48
+END_FUNCTION lantern_shell_write_at
 
 /* (file, result): docs/reference/shell.md. rbx result. */
 FUNCTION lantern_shell_sync

@@ -35,11 +35,13 @@
 .set SHELL_PATH_MAX, 4095
 .set SYS_FSYNC, 74
 .set SYS_FDATASYNC, 75
+.set SYS_PWRITE64, 18
 .set SYS_FTRUNCATE, 77
 .set SYS_MKDIRAT, 258
 .set SYS_UNLINKAT, 263
 .set SYS_RENAMEAT2, 316
 .set OS_O_APPEND_CREATE, 0x80441           # O_WRONLY | O_CREAT | O_APPEND | O_CLOEXEC
+.set OS_O_RDWR_CREATE, 0x80042             # O_RDWR | O_CREAT | O_CLOEXEC
 .set OS_MODE_FILE, 420                      # 0644
 .set OS_MODE_DIR, 493                       # 0755
 .set OS_PROT_READ, 1
@@ -255,9 +257,13 @@ FUNCTION lantern_shell_open
     movq    $0, 8(%rdx)
     mov     (%rsi), %rax
     mov     $OS_O_RDONLY_CLOEXEC, %ebx
-    cmp     $1, %rax
+    cmp     $2, %rax
     ja      92f
-    jne     1f
+    jb      3f
+    mov     $OS_O_RDWR_CREATE, %ebx
+    jmp     1f
+3:  test    %rax, %rax
+    jz      1f
     mov     $OS_O_APPEND_CREATE, %ebx
 1:  mov     %rdi, %rax
     CPATH   (L + 16), 91f
@@ -313,6 +319,46 @@ FUNCTION lantern_shell_append
 9:  xor     %eax, %eax
     UNFRAME 16
 END_FUNCTION lantern_shell_append
+
+# (file, offset, bytes, result): docs/reference/shell.md. r8 result, its value the bytes written; r9 the file.
+# Locals: 0 the count of the bytes, 8 their address, 16 the offset.
+FUNCTION lantern_shell_write_at
+    FRAME 32
+    mov     %rcx, %r8
+    movq    $0, (%r8)
+    movq    $0, 8(%r8)
+    mov     (%rdi), %r9
+    mov     (%rsi), %rax
+    mov     %rax, 16(%rsp)
+    mov     8(%rdx), %rax
+    add     %rdx, %rax
+    mov     %rax, 8(%rsp)
+    mov     16(%rdx), %rax
+    mov     %rax, (%rsp)
+1:  mov     8(%r8), %rsi                    # the bytes written so far
+    cmp     (%rsp), %rsi
+    jae     9f
+    mov     %r9, %rdi
+    mov     (%rsp), %rdx
+    sub     %rsi, %rdx
+    mov     16(%rsp), %r10                  # at the offset + those bytes
+    add     %rsi, %r10
+    add     8(%rsp), %rsi
+    SYSCALL SYS_PWRITE64
+    cmp     $-OS_EINTR, %rax
+    je      1b
+    cmp     $-4095, %rax
+    jae     8f
+    test    %rax, %rax
+    jz      7f
+    add     %rax, 8(%r8)
+    jmp     1b
+7:  mov     $-OS_EIO, %rax                  # no progress
+8:  neg     %rax
+    mov     %rax, (%r8)
+9:  xor     %eax, %eax
+    UNFRAME 32
+END_FUNCTION lantern_shell_write_at
 
 # (file, result): docs/reference/shell.md. r8 result, r9 the file.
 FUNCTION lantern_shell_sync

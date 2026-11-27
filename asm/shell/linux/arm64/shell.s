@@ -39,8 +39,10 @@
 .set SYS_FTRUNCATE, 46
 .set SYS_FSYNC, 82
 .set SYS_FDATASYNC, 83
+.set SYS_PWRITE64, 68
 .set SYS_RENAMEAT2, 276
 .set OS_O_APPEND_CREATE, 0x80441           /* O_WRONLY | O_CREAT | O_APPEND | O_CLOEXEC */
+.set OS_O_RDWR_CREATE, 0x80042             /* O_RDWR | O_CREAT | O_CLOEXEC */
 .set OS_MODE_FILE, 420                      /* 0644 */
 .set OS_MODE_DIR, 493                       /* 0755 */
 .set OS_PROT_READ, 1
@@ -266,10 +268,14 @@ FUNCTION lantern_shell_open
     mov     x9, x2
     stp     xzr, xzr, [x9]
     ldr     x10, [x1]
-    cmp     x10, #1
+    cmp     x10, #2
     b.hi    92f
     mov     x11, #OS_O_RDONLY_CLOEXEC
     MOVQ    x12, OS_O_APPEND_CREATE
+    cmp     x10, #1
+    csel    x11, x12, x11, eq
+    MOVQ    x12, OS_O_RDWR_CREATE
+    cmp     x10, #2
     csel    x10, x12, x11, eq
     mov     x6, sp
     CPATH   x0, x6, 91f
@@ -319,6 +325,37 @@ FUNCTION lantern_shell_append
     mov     x0, #LANTERN_OK
     ret
 END_FUNCTION lantern_shell_append
+
+/* (file, offset, bytes, result): docs/reference/shell.md. x9 result, x10 the file, x11 the bytes, x12 their count, x13 written, x14 the offset. */
+FUNCTION lantern_shell_write_at
+    UNWIND_END_PROLOGUE
+    mov     x9, x3
+    stp     xzr, xzr, [x9]
+    ldr     x10, [x0]
+    ldr     x14, [x1]
+    ldp     x11, x12, [x2, #8]
+    add     x11, x2, x11
+    mov     x13, #0
+1:  cmp     x13, x12
+    b.hs    9f
+    mov     x0, x10
+    add     x1, x11, x13
+    sub     x2, x12, x13
+    add     x3, x14, x13
+    SYSCALL SYS_PWRITE64
+    cmn     x0, #OS_EINTR
+    b.eq    1b
+    IF_ERROR x0, 8f
+    cbz     x0, 7f
+    add     x13, x13, x0
+    b       1b
+7:  mov     x0, #-OS_EIO                    /* no progress */
+8:  neg     x0, x0
+    str     x0, [x9]
+9:  str     x13, [x9, #8]
+    mov     x0, #LANTERN_OK
+    ret
+END_FUNCTION lantern_shell_write_at
 
 /* (file, result): docs/reference/shell.md. x9 result, x10 the file. */
 FUNCTION lantern_shell_sync

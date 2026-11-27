@@ -39,8 +39,10 @@
 .set SYS_FTRUNCATE, 46
 .set SYS_FSYNC, 82
 .set SYS_FDATASYNC, 83
+.set SYS_PWRITE64, 68
 .set SYS_RENAMEAT2, 276
 .set OS_O_APPEND_CREATE, 0x80441           # O_WRONLY | O_CREAT | O_APPEND | O_CLOEXEC
+.set OS_O_RDWR_CREATE, 0x80042             # O_RDWR | O_CREAT | O_CLOEXEC
 .set OS_MODE_FILE, 420                      # 0644
 .set OS_MODE_DIR, 493                       # 0755
 .set OS_PROT_READ, 1
@@ -281,8 +283,11 @@ FUNCTION lantern_shell_open
     sd      zero, 0(t0)
     sd      zero, 8(t0)
     ld      t1, 0(a1)
-    li      t2, 1
+    li      t2, 2
     bgtu    t1, t2, 92f
+    li      t3, OS_O_RDWR_CREATE
+    beq     t1, t2, 1f
+    li      t2, 1
     li      t3, OS_O_RDONLY_CLOEXEC
     bne     t1, t2, 1f
     li      t3, OS_O_APPEND_CREATE
@@ -335,6 +340,38 @@ FUNCTION lantern_shell_append
     li      a0, LANTERN_OK
     ret
 END_FUNCTION lantern_shell_append
+
+/* (file, offset, bytes, result): docs/reference/shell.md. t0 result, t1 the file, t2 the bytes, t3 their count, t4 written, t6 the offset. */
+FUNCTION lantern_shell_write_at
+    UNWIND_END_PROLOGUE
+    mv      t0, a3
+    sd      zero, 0(t0)
+    sd      zero, 8(t0)
+    ld      t1, 0(a0)
+    ld      t6, 0(a1)
+    ld      t2, 8(a2)
+    add     t2, a2, t2
+    ld      t3, 16(a2)
+    li      t4, 0
+1:  bgeu    t4, t3, 9f
+    mv      a0, t1
+    add     a1, t2, t4
+    sub     a2, t3, t4
+    add     a3, t6, t4
+    SYSCALL SYS_PWRITE64
+    li      t5, -OS_EINTR
+    beq     a0, t5, 1b
+    IF_ERROR a0, t5, 8f
+    beqz    a0, 7f
+    add     t4, t4, a0
+    j       1b
+7:  li      a0, -OS_EIO                     # no progress
+8:  neg     a0, a0
+    sd      a0, 0(t0)
+9:  sd      t4, 8(t0)
+    li      a0, LANTERN_OK
+    ret
+END_FUNCTION lantern_shell_write_at
 
 /* (file, result): docs/reference/shell.md. t0 result, t1 the file. */
 FUNCTION lantern_shell_sync

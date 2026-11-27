@@ -27,6 +27,7 @@
 .set SHELL_PATH_MAX, 4095
 .set SHELL_READ_FRAME, 4096                 /* read_file: the path with a zero after it */
 .set OS_O_APPEND_CREATE, 0x1000209         /* O_WRONLY | O_CREAT | O_APPEND | O_CLOEXEC, sys/fcntl.h */
+.set OS_O_RDWR_CREATE, 0x1000202           /* O_RDWR | O_CREAT | O_CLOEXEC, sys/fcntl.h */
 .set OS_F_FULLFSYNC, 51                     /* sys/fcntl.h */
 .set OS_PROT_READ, 1                        /* sys/mman.h */
 .set OS_MAP_SHARED, 1
@@ -257,10 +258,14 @@ FUNCTION lantern_shell_open
     mov     x19, x2
     stp     xzr, xzr, [x19]
     ldr     x10, [x1]
-    cmp     x10, #1
+    cmp     x10, #2
     b.hi    92f
     MOVQ    x11, OS_O_RDONLY_CLOEXEC
     MOVQ    x12, OS_O_APPEND_CREATE
+    cmp     x10, #1
+    csel    x11, x12, x11, eq
+    MOVQ    x12, OS_O_RDWR_CREATE
+    cmp     x10, #2
     csel    x20, x12, x11, eq
     add     x6, sp, #16
     CPATH   x0, x6, 91f
@@ -313,6 +318,39 @@ FUNCTION lantern_shell_append
     mov     x0, #LANTERN_OK
     LEAVE 0
 END_FUNCTION lantern_shell_append
+
+/* (file, offset, bytes, result): docs/reference/shell.md. x19 result, x20 the file, x21 the bytes, x22 their count, x23 written, x24 the offset. */
+FUNCTION lantern_shell_write_at
+    ENTER 0
+    mov     x19, x3
+    stp     xzr, xzr, [x19]
+    ldr     x20, [x0]
+    ldr     x24, [x1]
+    ldr     x21, [x2, #8]
+    add     x21, x2, x21
+    ldr     x22, [x2, #16]
+    mov     x23, #0
+1:  cmp     x23, x22
+    b.hs    9f
+    mov     w0, w20
+    add     x1, x21, x23
+    sub     x2, x22, x23
+    MOVQ    x3, SHELL_WRITE_MAX
+    cmp     x2, x3
+    csel    x2, x3, x2, hi
+    add     x3, x24, x23
+    CALL_GLOBAL pwrite
+    OS_CHECK 2f, 1b
+    b       8f
+2:  cbz     x0, 7f
+    add     x23, x23, x0
+    b       1b
+7:  mov     x0, #OS_EIO                     /* no progress */
+8:  str     x0, [x19]
+9:  str     x23, [x19, #8]
+    mov     x0, #LANTERN_OK
+    LEAVE 0
+END_FUNCTION lantern_shell_write_at
 
 /* (file, result): docs/reference/shell.md. x19 result, x20 the file. */
 FUNCTION lantern_shell_sync

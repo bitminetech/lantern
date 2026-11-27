@@ -27,6 +27,7 @@
 .set SHELL_PATH_MAX, 4095
 .set SHELL_READ_FRAME, 4096                 /* read_file: the path with a zero after it */
 .set OS_O_APPEND_CREATE, 0x1000209         /* O_WRONLY | O_CREAT | O_APPEND | O_CLOEXEC, sys/fcntl.h */
+.set OS_O_RDWR_CREATE, 0x1000202           /* O_RDWR | O_CREAT | O_CLOEXEC, sys/fcntl.h */
 .set OS_F_FULLFSYNC, 51                     /* sys/fcntl.h */
 .set OS_PROT_READ, 1                        /* sys/mman.h */
 .set OS_MAP_SHARED, 1
@@ -249,9 +250,13 @@ FUNCTION lantern_shell_open
     movq    $0, 8(%rbx)
     mov     (%rsi), %rax
     mov     $OS_O_RDONLY_CLOEXEC, %ebp
-    cmp     $1, %rax
+    cmp     $2, %rax
     ja      92f
-    jne     1f
+    jb      4f
+    mov     $OS_O_RDWR_CREATE, %ebp
+    jmp     1f
+4:  test    %rax, %rax
+    jz      1f
     mov     $OS_O_APPEND_CREATE, %ebp
 1:  mov     %rdi, %rax
     CPATH   L, 91f
@@ -306,6 +311,42 @@ FUNCTION lantern_shell_append
     xor     %eax, %eax
     LEAVE 0
 END_FUNCTION lantern_shell_append
+
+/* (file, offset, bytes, result): docs/reference/shell.md. rbx result, rbp the file, r12 the bytes, r13 their count, r14 written, r15 the offset. */
+FUNCTION lantern_shell_write_at
+    ENTER 0
+    mov     %rcx, %rbx
+    movq    $0, (%rbx)
+    movq    $0, 8(%rbx)
+    mov     (%rdi), %rbp
+    mov     (%rsi), %r15
+    mov     8(%rdx), %r12
+    add     %rdx, %r12
+    mov     16(%rdx), %r13
+    xor     %r14d, %r14d
+1:  cmp     %r13, %r14
+    jae     9f
+    mov     %ebp, %edi
+    lea     (%r12,%r14), %rsi
+    mov     %r13, %rdx
+    sub     %r14, %rdx
+    mov     $SHELL_WRITE_MAX, %eax
+    cmp     %rax, %rdx
+    cmova   %rax, %rdx
+    lea     (%r15,%r14), %rcx
+    CALL_GLOBAL pwrite
+    OS_CHECK 2f, 1b
+    jmp     8f
+2:  test    %rax, %rax
+    jz      7f
+    add     %rax, %r14
+    jmp     1b
+7:  mov     $OS_EIO, %eax                   # no progress
+8:  mov     %rax, (%rbx)
+9:  mov     %r14, 8(%rbx)
+    xor     %eax, %eax
+    LEAVE 0
+END_FUNCTION lantern_shell_write_at
 
 /* (file, result): docs/reference/shell.md. rbx result, ebp the file. */
 FUNCTION lantern_shell_sync
