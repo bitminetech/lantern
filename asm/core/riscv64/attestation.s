@@ -2045,13 +2045,13 @@ LOCAL_FUNCTION lantern_block_sigs
     bgeu    t4, t1, 5f
     addi    t3, t3, 1
     j       31b
-32: li      t0, 48                          # room for its entry: or no more entries
+32: li      t0, 48                          # room for its entry: else no entry of it
     mul     t0, a2, t0
     addi    t0, t0, SigEntry_key
     ld      t1, SigTable_used(s5)
     add     t0, t0, t1
     ld      t1, SigTable_room(s5)
-    bltu    t1, t0, 6f
+    bltu    t1, t0, 5f
     ld      a0, BlockSigs_keys(s7)          # each key's cache entry holding it: the jobs only read the cache
     mv      a3, s6
     call    lantern_block_sig_keys

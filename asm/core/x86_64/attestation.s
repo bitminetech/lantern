@@ -2047,11 +2047,11 @@ LOCAL_FUNCTION lantern_block_sigs
     jae     5f
     inc     %rcx
     jmp     31b
-32: imul    $48, %rdx, %rax                 # room for its entry: or no more entries
+32: imul    $48, %rdx, %rax                 # room for its entry: else no entry of it
     add     $SigEntry_key, %rax
     add     SigTable_used(%r13), %rax
     cmp     SigTable_room(%r13), %rax
-    ja      6f
+    ja      5f
     mov     BlockSigs_keys(%r15), %rdi      # each key's cache entry holding it: the jobs only read the cache
     mov     %r14, %rcx
     call    lantern_block_sig_keys

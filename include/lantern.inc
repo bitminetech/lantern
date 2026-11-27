@@ -563,7 +563,7 @@
 
 /* SigTable (block-processing.md): checked signatures, before the entries of a PubkeyCache */
 .set PUBKEY_SIGS, CRYPTO_BLS_CACHE_FIXED    /* the SigTable's offset in a PubkeyCache */
-.set SIG_TABLE_BYTES, 1 << 21
+.set SIG_TABLE_BYTES, 1 << 25
 .set SigTable_used, 0                       /* bytes of its entries */
 .set SigTable_room, 8                       /* bytes it has for entries */
 .set SigTable_entries, 16

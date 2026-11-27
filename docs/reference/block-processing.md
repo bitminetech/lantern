@@ -3787,7 +3787,7 @@ lantern_block_sigs(state, block, config, scratch) -> status
 
 - With a PubkeyCache at `CONFIG_PUBKEY_CACHE`, a StateCache whose `pool` has workers, and 2 or more attestations in the block: else nothing.
 - Keeps at the end of `scratch` a [`BlockSigs`](#type-blocksigs) record, the job scratches, a pair of each entry and an IndexedAttestation of each attestation, sized by its bits; and leaves the front, of `LANTERN_SCRATCH_FIXED` bytes at least, to its callees.
-- For each attestation, in block order: lantern_get_indexed_attestation; with some indices, each below the cache's count and the state's validators, and room in the SigTable: lantern_block_sig_keys, then lantern_block_sig_entry into the next entry. An attestation where a step fails gets no entry.
+- For each attestation, in block order: lantern_get_indexed_attestation; with some indices, each below the cache's count and the state's validators, and room in the SigTable for its entry: lantern_block_sig_keys, then lantern_block_sig_entry into the next entry. An attestation where a step fails gets no entry.
 - With 2 or more entries: lantern_shell_pool_run of the lower of the entries and the jobs (the workers + 1, at most `BLOCK_SIG_JOBS`) jobs of lantern_block_sig_job.
 - Each check of process_block then reads the SigTable (lantern_indexed_attestation_valid): an entry answers only a check of the same keys, message and signature, so every result is the one of a check of its own.
 - Gives `scratch` its `size` back.
@@ -3953,7 +3953,7 @@ The checked public key of each validator index: asm-crypto's [`BlsKeyCache`](htt
 ### Rules
 
 - `key_stride` is `Validator__mem`; `offset` is `CRYPTO_BLS_CACHE_FIXED` + `SIG_TABLE_BYTES`; `count` is the number of validator indices it holds.
-- Between its fixed fields and its entries, at `PUBKEY_SIGS` (`CRYPTO_BLS_CACHE_FIXED`), a [`SigTable`](#type-sigtable) of `SIG_TABLE_BYTES` (2 MiB): asm-crypto reads only the fixed fields and the entries.
+- Between its fixed fields and its entries, at `PUBKEY_SIGS` (`CRYPTO_BLS_CACHE_FIXED`), a [`SigTable`](#type-sigtable) of `SIG_TABLE_BYTES` (32 MiB: the entries of a block of 8 attestations of every committee of a slot, about 1.8 MB each at 1.2M validators, and a step's gossip): asm-crypto reads only the fixed fields and the entries.
 - Only crypto_bls_fast_aggregate_verify_cached writes its entries, after lantern_pubkey_cache_init empties them.
 - An entry answers only for the key of its 48 bytes, so one cache serves states of any chain.
 

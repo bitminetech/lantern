@@ -2063,12 +2063,12 @@ LOCAL_FUNCTION lantern_block_sigs
     b.hs    5f
     add     x14, x14, #1
     b       31b
-32: ldp     x12, x13, [x23, #SigTable_used] /* room for its entry: or no more entries */
+32: ldp     x12, x13, [x23, #SigTable_used] /* room for its entry: else no entry of it */
     mov     x14, #48
     madd    x14, x11, x14, x12
     add     x14, x14, #SigEntry_key
     cmp     x14, x13
-    b.hi    6f
+    b.hi    5f
     ldr     x0, [x25, #BlockSigs_keys]      /* each key's cache entry holding it: the jobs only read the cache */
     mov     x1, x10
     mov     x2, x11
