@@ -1196,12 +1196,14 @@ static uint8_t *regrow(uint8_t *state, uint64_t *size, uint64_t growth, const ch
 static uint64_t field_offset(const char *name, uint64_t i);
 
 /* The list of BeaconState field f with entries of esize bytes: entries i >= count take entry i % count, up to n. */
+#if FORK > FORK_PHASE0 || defined(BENCH)
 static void grow_list(uint8_t *state, int f, uint64_t esize, uint64_t n) {
     uint64_t ref = field_offset("BeaconState", f), count = rd64(state + ref + 8);
     uint8_t *base = state + rd64(state + ref);
     for (uint64_t i = count; i < n; i++) memcpy(base + i * esize, base + (i % count) * esize, (size_t)esize);
     wr64(state + ref + 8, n);
 }
+#endif
 
 /*
  * state.md, lantern_state_root_pool: once a process, the first post state grown to 3 x 4096 + 100

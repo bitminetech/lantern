@@ -5,6 +5,7 @@
  * Usage: bench-state VECTOR_DIR [N]
  */
 #define _POSIX_C_SOURCE 199309L /* clock_gettime */
+#define BENCH 1
 #define main runner_main
 #include "../tests/runner/runner.c"
 #undef main
