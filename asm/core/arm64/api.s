@@ -11804,17 +11804,18 @@ LOCAL_FUNCTION lantern_node_submit_copy
 END_FUNCTION lantern_node_submit_copy
 
 /*
- * (node x0, store x1, seen x2, work x3, state_a x4, data x5, scratch x6, event x7, room x8) -> status:
+ * (node x0, store x1, seen x2, work x3, state_a x4, data x5, scratch x6, event x7, room x8, history x9) -> status:
  * a NODE_WORK_API_SUBMIT of lantern_node_run (node.md): the operations of the body decoded as
  * records at NodeEvent_chunk of the event, then each checked by lantern_node_gossip of the fork
  * arg / 2^16 with seen. x19 node, x20 store, x21 work, x22 state_a, x23 data, x24 scratch, x25
  * event, x26 the event's end, x27 the next record, x28 the text's end, then the records left.
  * Locals: L seen, L+8 the kind, L+16 the topic, L+24 the fork, L+32 the operations, L+40 1 for
  * a list, L+48 where the text goes on, L+56 an item's start, L+64 a NodeGossip, L+152 a JsonFault,
- * L+280 a root, L+312 an index.
+ * L+280 a root, L+312 an index, L+320 history.
  */
 LOCAL_FUNCTION lantern_node_api_submit_run
-    ENTER 320
+    ENTER 336
+    str     x9, [sp, #(L + 320)]
     mov     x19, x0
     mov     x20, x1
     str     x2, [sp, #L]
@@ -12188,6 +12189,8 @@ LOCAL_FUNCTION lantern_node_api_submit_run
     stp     x12, x24, [sp]
     stp     x27, x10, [sp, #16]
     str     x11, [sp, #32]
+    ldr     x11, [sp, #(48 + L + 320)]      /* the fourteenth: the history */
+    str     x11, [sp, #40]
     ldp     x0, x1, [x9, #NodeGossip_seen]
     add     x2, x9, #NodeGossip_time_ms
     ldp     x3, x4, [x9, #NodeGossip_head]
@@ -12242,6 +12245,8 @@ LOCAL_FUNCTION lantern_node_api_submit_run
     stp     x12, x24, [sp]
     stp     x27, x10, [sp, #16]
     str     x11, [sp, #32]
+    ldr     x11, [sp, #(48 + L + 320)]      /* the fourteenth: the history */
+    str     x11, [sp, #40]
     ldp     x0, x1, [x9, #NodeGossip_seen]
     add     x2, x9, #NodeGossip_time_ms
     ldp     x3, x4, [x9, #NodeGossip_head]
@@ -12275,7 +12280,7 @@ LOCAL_FUNCTION lantern_node_api_submit_run
     str     x10, [x27]
     b       35b
 39: mov     x0, #LANTERN_OK
-    LEAVE 320
+    LEAVE 336
 50: add     x27, x25, #(NodeEvent_chunk + 24)   /* each subscription valid, else the result LANTERN_INVALID_ENCODING */
     ldr     x28, [sp, #(L + 32)]
     ldr     x9, [x21, #NodeAction_arg]      /* registrations: 180 bytes each, IGNORE until found eligible */
@@ -12351,11 +12356,11 @@ LOCAL_FUNCTION lantern_node_api_submit_run
     mov     x9, #NODE_EV_WORK_DONE_SIZE
     str     x9, [x25]
     mov     x0, #LANTERN_OK
-    LEAVE 320
+    LEAVE 336
 97: mov     x0, #LANTERN_BUFFER_TOO_SMALL
-    LEAVE 320
+    LEAVE 336
 98: mov     x0, #LANTERN_INVALID_EVENT
-99: LEAVE 320
+99: LEAVE 336
 END_FUNCTION lantern_node_api_submit_run
 
 /* x0 = x0 past the JSON white space (space, tab, LF, CR) before x28. Uses x9. */

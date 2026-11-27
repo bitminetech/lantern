@@ -7986,7 +7986,7 @@ The NODE_WORK_API_SUBMIT work of lantern_node_run.
 ### Signature
 
 ```
-lantern_node_api_submit_run(node, store, seen, work, state_a, data, scratch, event, room) -> status
+lantern_node_api_submit_run(node, store, seen, work, state_a, data, scratch, event, room, history) -> status
 ```
 
 ### Arguments
@@ -8002,6 +8002,7 @@ lantern_node_api_submit_run(node, store, seen, work, state_a, data, scratch, eve
 | `scratch` | scratch | [`Scratch`](helpers.md#type-scratch) |
 | `event` | output | `NodeEvent` |
 | `room` | input | u64 in a register: the bytes of the event's buffer |
+| `history` | input | [`SeenHistory`](networking.md#type-seenhistory), or 0 |
 
 ### Returns
 
@@ -8009,7 +8010,7 @@ lantern_node_api_submit_run(node, store, seen, work, state_a, data, scratch, eve
 
 ### Function does
 
-- Decodes the operations of the body as records at `NodeEvent_chunk` of the event, then checks each with lantern_node_gossip of the fork `arg` / 2^16 with `seen` (node.md, NODE_WORK_API_SUBMIT).
+- Decodes the operations of the body as records at `NodeEvent_chunk` of the event, then checks each with lantern_node_gossip of the fork `arg` / 2^16 with `seen` and `history` (node.md, NODE_WORK_API_SUBMIT).
 
 ### Function never
 
@@ -8017,15 +8018,15 @@ lantern_node_api_submit_run(node, store, seen, work, state_a, data, scratch, eve
 
 ### Limits
 
-- Stack of its own: 480 bytes on x86-64 (return address included), 464 bytes on ARM64, 464 bytes on RISC-V.
+- Stack of its own: 480 bytes on x86-64 (return address included), 480 bytes on ARM64, 464 bytes on RISC-V.
 
 ### ABI
 
 - Role: L0.
 - Symbol: `lantern_node_api_submit_run`, local to its object.
 - Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
-- It takes `room` in x8, rax, t0.
-- Argument order: `node`, `store`, `seen`, `work`, `state_a`, `data`, `scratch`, `event`, `room`.
+- It takes `room` in x8, rax, t0, and `history` in x9, the first stack argument, t1.
+- Argument order: `node`, `store`, `seen`, `work`, `state_a`, `data`, `scratch`, `event`, `room`, `history`.
 
 ## Function `lantern_node_api_subscribe`
 

@@ -48,7 +48,7 @@ FUNCTION abi_call
     mov     32(%r15), %rcx
     mov     40(%r15), %r8
     mov     112(%r15), %r9
-    sub     $48, %rsp                       /* arguments 7 to 11 on the stack */
+    sub     $48, %rsp                       /* arguments 7 to 12 on the stack */
     mov     120(%r15), %rax
     mov     %rax, 0(%rsp)
     mov     128(%r15), %rax
@@ -59,6 +59,8 @@ FUNCTION abi_call
     mov     %rax, 24(%rsp)
     mov     152(%r15), %rax
     mov     %rax, 32(%rsp)
+    mov     160(%r15), %rax
+    mov     %rax, 40(%rsp)
     mov     8(%r15), %rdi
     call    *%r11
     add     $48, %rsp

@@ -10924,10 +10924,10 @@ FUNCTION lantern_node_step
 END_FUNCTION lantern_node_step
 
 /*
- * (node, store, seen, work, state_a, state_b, state_c, data, settings, scratch, event): x19 node,
+ * (node, store, seen, work, state_a, state_b, state_c, data, settings, scratch, event, history): x19 node,
  * x20 store, x21 work, x22 state_a, x23 data, x24 scratch, x25 event, x26 the event's room.
  * Locals: L the BlockOptions (32), or a chunk's size, a fork digest and a ChunkHeader (64);
- * L+64 seen, L+72 state_b, L+80 state_c, L+88 settings, L+96 a NodeGossip.
+ * L+64 seen, L+72 state_b, L+80 state_c, L+88 settings, L+96 a NodeGossip, L+176 history.
  */
 /* The StateRoom of an upgraded state (node.md, NODE_WORK_UPGRADE): as the binary's anchor has. */
     RODATA
@@ -10947,6 +10947,8 @@ FUNCTION lantern_node_run
     ldp     x9, x24, [sp, #(96 + 192)]      /* the ninth to eleventh arguments */
     str     x9, [sp, #(L + 88)]
     ldr     x25, [sp, #(96 + 192 + 16)]
+    ldr     x9, [sp, #(96 + 192 + 24)]      /* the twelfth: the history of seen */
+    str     x9, [sp, #(L + 176)]
     ldr     x26, [x25]                      /* the event's room */
     cmp     x26, #NODE_EV_WORK_DONE_SIZE
     b.lo    7f
@@ -11272,6 +11274,8 @@ FUNCTION lantern_node_run
     stp     x10, x11, [sp, #16]
     add     x10, x25, #NodeEvent_index
     str     x10, [sp, #32]
+    ldr     x10, [sp, #(48 + L + 176)]      /* the fourteenth: the history */
+    str     x10, [sp, #40]
     ldp     x0, x1, [x9, #NodeGossip_seen]
     add     x2, x9, #NodeGossip_time_ms
     ldp     x3, x4, [x9, #NodeGossip_head]
@@ -12023,16 +12027,18 @@ FUNCTION lantern_node_run
     add     x9, sp, #(L + 96)               /* the NodeGossip: each input its own argument */
     ldr     x10, [sp, #(L + 72)]            /* the sidecars */
     ldr     x11, [x21, #NodeAction_arg]     /* the level */
-    sub     sp, sp, #32                     /* the ninth to twelfth arguments: block, sidecars, level, scratch */
+    sub     sp, sp, #48                     /* the ninth to thirteenth arguments: block, sidecars, level, scratch, history */
     stp     x23, x10, [sp]
     stp     x11, x24, [sp, #16]
+    ldr     x10, [sp, #(48 + L + 176)]
+    str     x10, [sp, #32]
     ldp     x0, x1, [x9, #NodeGossip_seen]
     add     x2, x9, #NodeGossip_time_ms
     ldp     x3, x4, [x9, #NodeGossip_head]
     ldp     x5, x6, [x9, #NodeGossip_justified]
     ldr     x7, [x9, #NodeGossip_config]
     FORK_CALL node_publish_check
-    add     sp, sp, #32
+    add     sp, sp, #48
     cmp     x0, #LANTERN_BUFFER_TOO_SMALL
     b.eq    8449b
     cbnz    x0, 8458b
@@ -12284,6 +12290,7 @@ FUNCTION lantern_node_run
     mov     x6, x24
     mov     x7, x25
     mov     x8, x26
+    ldr     x9, [sp, #(L + 176)]
     bl      lantern_node_api_submit_run
     LEAVE 192
 979: cmp    x9, #NODE_WORK_POOL_CHECK
@@ -12353,6 +12360,7 @@ FUNCTION lantern_node_run
     stp     x10, x11, [sp, #16]
     add     x10, x25, #NodeEvent_index
     str     x10, [sp, #32]
+    str     xzr, [sp, #40]                  /* the fourteenth: no history, as seen is empty */
     ldp     x0, x1, [x9, #NodeGossip_seen]
     add     x2, x9, #NodeGossip_time_ms
     ldp     x3, x4, [x9, #NodeGossip_head]

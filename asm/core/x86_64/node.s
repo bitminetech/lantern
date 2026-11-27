@@ -11023,6 +11023,8 @@ FUNCTION lantern_node_run
     mov     (192 + 96 + 24)(%rsp), %r15
     mov     (192 + 96 + 32)(%rsp), %rax
     mov     %rax, S8(%rsp)
+    mov     (192 + 96 + 40)(%rsp), %rcx     # the twelfth: the history of seen
+    mov     %rcx, (L + 176)(%rsp)
     mov     (%rax), %rcx                    # the event's room
     mov     %rcx, S9(%rsp)
     cmp     $NODE_EV_WORK_DONE_SIZE, %rcx
@@ -11403,6 +11405,8 @@ FUNCTION lantern_node_run
     mov     %rdx, 40(%rsp)
     lea     NodeEvent_index(%rcx), %rdx
     mov     %rdx, 48(%rsp)
+    mov     (64 + L + 176)(%rsp), %rdx     # the fourteenth: the history
+    mov     %rdx, 56(%rsp)
     mov     NodeGossip_settings(%rax), %rdx
     mov     %rdx, (%rsp)
     mov     NodeGossip_config(%rax), %rdx
@@ -12231,11 +12235,13 @@ FUNCTION lantern_node_run
     lea     (L + 96)(%rsp), %rax            # the NodeGossip: each input its own argument
     mov     (L + 72)(%rsp), %rdx            # the sidecars
     mov     NodeAction_arg(%r12), %rcx      # the level
-    sub     $48, %rsp                       # the seventh to twelfth arguments
-    mov     %r14, 16(%rsp)                  # block, sidecars, level, scratch
+    sub     $64, %rsp                       # the seventh to thirteenth arguments
+    mov     %r14, 16(%rsp)                  # block, sidecars, level, scratch, history
     mov     %rdx, 24(%rsp)
     mov     %rcx, 32(%rsp)
     mov     %r15, 40(%rsp)
+    mov     (64 + L + 176)(%rsp), %rdx
+    mov     %rdx, 48(%rsp)
     mov     NodeGossip_settings(%rax), %rdx
     mov     %rdx, (%rsp)
     mov     NodeGossip_config(%rax), %rdx
@@ -12247,7 +12253,7 @@ FUNCTION lantern_node_run
     mov     NodeGossip_proposer(%rax), %r8
     mov     NodeGossip_justified(%rax), %r9
     FORK_CALL node_publish_check
-    add     $48, %rsp
+    add     $64, %rsp
     cmp     $LANTERN_BUFFER_TOO_SMALL, %rax
     je      8449b
     test    %rax, %rax
@@ -12517,7 +12523,12 @@ FUNCTION lantern_node_run
     mov     %r15, %r10
     mov     S8(%rsp), %r11
     mov     S9(%rsp), %rax
+    sub     $16, %rsp                       # the history, on the stack
+    mov     (16 + L + 176)(%rsp), %rdx
+    mov     %rdx, (%rsp)
+    mov     (16 + L + 64)(%rsp), %rdx
     call    lantern_node_api_submit_run
+    add     $16, %rsp
     LEAVE 192
 979: cmp    $NODE_WORK_POOL_CHECK, %rax
     jne     9780f
@@ -12600,6 +12611,7 @@ FUNCTION lantern_node_run
     mov     %rdx, 40(%rsp)
     lea     NodeEvent_index(%rcx), %rdx
     mov     %rdx, 48(%rsp)
+    movq    $0, 56(%rsp)                    # the fourteenth: no history, as seen is empty
     mov     NodeGossip_settings(%rax), %rdx
     mov     %rdx, (%rsp)
     mov     NodeGossip_config(%rax), %rdx

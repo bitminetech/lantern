@@ -72,6 +72,16 @@ The binary: options, startup and the loop.
 - [`lantern_app_fork`](#function-lantern_app_fork): the fork of a slot.
 - [`lantern_app_grow`](#function-lantern_app_grow): moves the node, the store or the Seen to new memory with more room.
 - [`lantern_app_hex_digit`](#function-lantern_app_hex_digit): the value of a hex digit.
+- [`lantern_app_hist_chunk`](#function-lantern_app_hist_chunk): the history's chunk of a kind for an epoch.
+- [`lantern_app_hist_fail`](#function-lantern_app_hist_fail): writes a line that seen-history.bin cannot be written.
+- [`lantern_app_hist_grow`](#function-lantern_app_hist_grow): doubles the room of the chunks' ByteList.
+- [`lantern_app_hist_header`](#function-lantern_app_hist_header): the fixed fields of a new history.
+- [`lantern_app_hist_map`](#function-lantern_app_hist_map): maps seen-history.bin again.
+- [`lantern_app_hist_path`](#function-lantern_app_hist_path): the path of seen-history.bin.
+- [`lantern_app_hist_put`](#function-lantern_app_hist_put): writes bytes at an offset of the history.
+- [`lantern_app_hist_start`](#function-lantern_app_hist_start): sets up the Seen's history.
+- [`lantern_app_hist_step`](#function-lantern_app_hist_step): moves the Seen's entries of past epochs to its history.
+- [`lantern_app_hist_sync`](#function-lantern_app_hist_sync): makes the history's bytes durable.
 - [`lantern_app_identity_put`](#function-lantern_app_identity_put): queues the identity's texts for the next node step.
 - [`lantern_app_ipv4`](#function-lantern_app_ipv4): reads an IPv4 address of an option.
 - [`lantern_app_key`](#function-lantern_app_key): makes the node's secp256k1 key.
@@ -278,6 +288,7 @@ lantern_app_main(args) -> status
 - Each `NODE_ACT_DB_STATE` whose `custody_count` and `custody_slot` are not those of the anchor or of the last one written: `<dir>/custody.bin` gets them, 16 bytes, synced. A failure gives a `cannot write` line.
 - A start with `--checkpoint-state` and `--checkpoint-block`, and no `<dir>/anchor.ssz`, takes them in place of `genesis.ssz`: the two files go into one buffer in the form of `anchor.ssz` (the state's bytes, then the block's message from byte 100 of its `SignedBeaconBlock`) for lantern_node_anchor_block of the fork of the state's slot; a block file below 184 bytes gives a line `<path>: too short`. The anchor's `history_slot` is its slot. Then a line `checkpoint at slot <n>` on the standard output.
 - A start with `--data-dir` and a `<dir>/custody.bin` of 16 bytes: the anchor's `custody_count` and `custody_slot` are its two u64.
+- The Seen's history: `<dir>/seen-history.bin` with `--data-dir`, else memory (lantern_app_hist_start); each new slot moves the Seen's entries of past epochs there (lantern_app_hist_step), and each lantern_node_run reads it as `history`.
 - A start with `--data-dir` and a `<dir>/anchor.ssz` reads it in place of `genesis.ssz` and of the checkpoint files, with lantern_node_anchor_block of the fork of its state's slot. The first block segment file there, from 0 to the anchor's segment, gives the anchor's `history_slot`; the `Db` has room from it to the last block segment file there from the anchor's on, and a segment more, with a power of two of roots above twice those slots. After lantern_node_init, while the `Db`'s `first_slot` leaves its room short of that end (a start from a checkpoint puts it at the backfill's target, node.md), `db_slots` doubles, then `db_roots` while it is not above twice `db_slots`, as a short room grows. Then each segment file goes to lantern_node_db_scan, the blocks', then the sidecars', then the states', and a file with bytes after its last whole record is cut there. Then a line `restart at slot <n>` on the standard output. The node syncs the blocks after the anchor from its peers; those the `Db` holds already get no second record.
 - The log: each line is the UTC time of lantern_shell_time_ms as `YYYY-MM-DD HH:MM:SS.mmm`, a space, its level in 5 characters (`ERROR`, `WARN `, `INFO ` or `DEBUG`), a space, the message and an LF. A line goes out when its level is at most `log_level`, in the order error, warn, info, debug: ERROR and WARN lines to the standard error, INFO and DEBUG lines to the standard output.
   - ERROR: the lines of a faulty option or a failed start, `cannot write`, and `a node step: no room`.
@@ -2632,6 +2643,361 @@ lantern_app_hex_digit(byte) -> value
 - Registers it changes, on ARM64, x86-64, RISC-V: x0; rax, rdi; a0, t0, t1.
 - Argument order: `byte`.
 
+## Function `lantern_app_hist_chunk`
+
+The history's chunk of a kind for an epoch.
+
+### Signature
+
+```
+lantern_app_hist_chunk(epoch, kind) -> chunk
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `epoch` | input | u64 in a register |
+| `kind` | input | u64 in a register: a `HIST_*` kind |
+
+### Returns
+
+- The chunk its index entry of the epoch names for the kind, or 0.
+
+### Function does
+
+- Gives the chunk only when it lies inside the history's `size`, is of that kind, holds the epoch between `epoch_lo` and `epoch_hi`, and its entries fit in its bytes: an index entry a crash left before its `size` was written names no chunk.
+
+### Function never
+
+- Makes an OS call.
+
+### Limits
+
+- Stack of its own: 8 bytes on x86-64 (return address included), 0 bytes on ARM64, 0 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_app_hist_chunk`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- Registers it reads, on ARM64, x86-64, RISC-V: the AppHist in x28, r15, s10.
+- Argument order: `epoch`, `kind`.
+
+## Function `lantern_app_hist_fail`
+
+Writes a line that seen-history.bin cannot be written.
+
+### Signature
+
+```
+lantern_app_hist_fail(error)
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `error` | input | u64 in a register: the OS error |
+
+### Function does
+
+- Writes "cannot write <dir>/seen-history.bin: error <n>" on the standard error and adds 1 to the db failures metric.
+
+### Function never
+
+- Makes an OS call.
+
+### Limits
+
+- Stack of its own: 32 bytes on x86-64 (return address included), 32 bytes on ARM64, 32 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_app_hist_fail`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- Registers it reads, on ARM64, x86-64, RISC-V: the App in x19, rbx, s1.
+- Argument order: `error`.
+
+## Function `lantern_app_hist_grow`
+
+Doubles the room of the chunks' ByteList.
+
+### Signature
+
+```
+lantern_app_hist_grow() -> status
+```
+
+### Returns
+
+- 0, or 1 when the OS gives no memory; then nothing is changed.
+
+### Function does
+
+- Copies the ByteList's header and bytes into new memory of twice its room and gives the old memory back.
+
+### Function never
+
+- Makes an OS call.
+
+### Limits
+
+- Stack of its own: 32 bytes on x86-64 (return address included), 32 bytes on ARM64, 32 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_app_hist_grow`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- Registers it reads, on ARM64, x86-64, RISC-V: the App in x19, rbx, s1, and the AppHist in x28, r15, s10.
+
+## Function `lantern_app_hist_header`
+
+The fixed fields of a new history.
+
+### Signature
+
+```
+lantern_app_hist_header(history)
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `history` | output | the first `SEEN_HISTORY_FIXED` bytes of a [`SeenHistory`](networking.md#type-seenhistory) |
+
+### Function does
+
+- Writes `size` and `data_start` `SEEN_HISTORY_DATA`, `magic`, `version`, `capacity` `SEEN_HISTORY_CAPACITY`, and `first_epoch` the store's finalized epoch.
+
+### Function never
+
+- Makes an OS call.
+
+### Limits
+
+- Stack of its own: 8 bytes on x86-64 (return address included), 0 bytes on ARM64, 0 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_app_hist_header`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- Registers it reads, on ARM64, x86-64, RISC-V: the App in x19, rbx, s1.
+- Argument order: `history`.
+
+## Function `lantern_app_hist_map`
+
+Maps seen-history.bin again.
+
+### Signature
+
+```
+lantern_app_hist_map()
+```
+
+### Function does
+
+- Unmaps the file's last map, then maps the whole file to read into `AppHist_map`; 0 and 0 when that fails.
+
+### Function never
+
+- Makes an OS call.
+
+### Limits
+
+- Stack of its own: 16 bytes on x86-64 (return address included), 16 bytes on ARM64, 16 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_app_hist_map`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- Registers it reads, on ARM64, x86-64, RISC-V: the App in x19, rbx, s1, and the AppHist in x28, r15, s10.
+
+## Function `lantern_app_hist_path`
+
+The path of seen-history.bin.
+
+### Signature
+
+```
+lantern_app_hist_path()
+```
+
+### Function does
+
+- Writes <dir>/seen-history.bin of the data directory as a ByteList at `APP_PATH`.
+
+### Function never
+
+- Makes an OS call.
+
+### Limits
+
+- Stack of its own: 16 bytes on x86-64 (return address included), 16 bytes on ARM64, 16 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_app_hist_path`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- Registers it reads, on ARM64, x86-64, RISC-V: the App in x19, rbx, s1.
+
+## Function `lantern_app_hist_put`
+
+Writes bytes at an offset of the history.
+
+### Signature
+
+```
+lantern_app_hist_put(bytes, length, offset) -> status
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `bytes` | input | `length` bytes |
+| `length` | input | u64 in a register |
+| `offset` | input | u64 in a register: the history's byte the first byte goes to |
+
+### Returns
+
+- 0, or the OS error; 1 when the memory history cannot grow.
+
+### Function does
+
+- `APP_HIST_FILE`: lantern_shell_write_at of the file.
+- `APP_HIST_MEMORY`: copies them into the memory, which first grows to twice its size, or to the end of the bytes when that is more, with the history's bytes copied.
+
+### Function never
+
+- Makes an OS call.
+
+### Limits
+
+- Stack of its own: 144 bytes on x86-64 (return address included), 144 bytes on ARM64, 144 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_app_hist_put`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- Registers it reads, on ARM64, x86-64, RISC-V: the App in x19, rbx, s1, and the AppHist in x28, r15, s10.
+- Argument order: `bytes`, `length`, `offset`.
+
+## Function `lantern_app_hist_start`
+
+Sets up the Seen's history.
+
+### Signature
+
+```
+lantern_app_hist_start()
+```
+
+### Caller must
+
+- Call it after the store and the Seen are made.
+
+### Function does
+
+- Makes the chunks' ByteList of `APP_HIST_OUT_BYTES`; with no memory the mode is `APP_HIST_NONE`.
+- With --data-dir: opens <dir>/seen-history.bin to write at offsets and maps it; a file whose map holds a `SeenHistory` of `SEEN_HISTORY_MAGIC`, `SEEN_HISTORY_VERSION`, `SEEN_HISTORY_CAPACITY` and data start `SEEN_HISTORY_DATA`, with a `size` from the data start to the map's size, stays: its chunks are the history of the node's past runs.
+- Another file starts again: cut to no bytes, then to `SEEN_HISTORY_DATA` bytes of zeros, the header of lantern_app_hist_header written and synced, and mapped. The mode is `APP_HIST_FILE`.
+- Without --data-dir, or when the file fails (a cannot write line): the history is memory of `SEEN_HISTORY_DATA` + `APP_HIST_ROOM` bytes with that header, mode `APP_HIST_MEMORY`.
+
+### Function never
+
+- Makes an OS call.
+
+### Limits
+
+- Stack of its own: 112 bytes on x86-64 (return address included), 112 bytes on ARM64, 112 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_app_hist_start`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- Registers it reads, on ARM64, x86-64, RISC-V: the App in x19, rbx, s1.
+
+## Function `lantern_app_hist_step`
+
+Moves the Seen's entries of past epochs to its history.
+
+### Signature
+
+```
+lantern_app_hist_step()
+```
+
+### Caller must
+
+- Call it once at each new slot, before the next node step validates a message.
+
+### Function does
+
+- Nothing in mode `APP_HIST_NONE`. A file with no map is mapped again first; one that cannot be skips the step, the Seen unchanged.
+- lantern_seen_archive of the Seen with the store into the chunks' ByteList, which doubles while short.
+- Each chunk: when an epoch of its range has an index entry of its kind naming a chunk (lantern_app_hist_chunk), lantern_seen_chunk_merge of that chunk and this one takes this one's place; then it goes to the end of the history (lantern_app_hist_put at its `size`).
+- A chunk with an epoch below `first_epoch` or past `capacity` index entries goes to no place: 1 more db failure.
+- Then, each durable before the next (lantern_app_hist_sync): the chunks; the index entries from the lowest to the highest epoch of the chunks, each epoch of a chunk's range naming it for its kind; the new `size`.
+- In mode `APP_HIST_FILE`, maps the file again, so the next lantern_node_run reads the new chunks.
+- A failure of a write or a sync: a cannot write line, the `size` unchanged.
+
+### Function never
+
+- Makes an OS call.
+
+### Limits
+
+- Stack of its own: 144 bytes on x86-64 (return address included), 112 bytes on ARM64, 112 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_app_hist_step`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- Registers it reads, on ARM64, x86-64, RISC-V: the App in x19, rbx, s1.
+
+## Function `lantern_app_hist_sync`
+
+Makes the history's bytes durable.
+
+### Signature
+
+```
+lantern_app_hist_sync() -> status
+```
+
+### Returns
+
+- 0, or the OS error.
+
+### Function does
+
+- `APP_HIST_FILE`: lantern_shell_sync of the file. `APP_HIST_MEMORY`: nothing.
+
+### Function never
+
+- Makes an OS call.
+
+### Limits
+
+- Stack of its own: 16 bytes on x86-64 (return address included), 16 bytes on ARM64, 16 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_app_hist_sync`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- Registers it reads, on ARM64, x86-64, RISC-V: the App in x19, rbx, s1, and the AppHist in x28, r15, s10.
+
 ## Function `lantern_app_identity_put`
 
 Queues the identity's texts for the next node step.
@@ -3241,7 +3607,7 @@ lantern_app_loop()
 
 ### Function does
 
-- Reads the clock; queues a NODE_EV_TICK of the time and the shell's events; runs lantern_node_step with libp2p; at each new slot writes a line and runs lantern_seen_prune on the Seen with the store.
+- Reads the clock; queues a NODE_EV_TICK of the time and the shell's events; runs lantern_node_step with libp2p; at each new slot runs lantern_app_hist_step and writes a line.
 - Then waits for the sockets until the node's wakeup, at most `APP_WAIT_MS`.
 
 ### Function never

@@ -132,7 +132,22 @@
 .set APP_MET_TRIES, 8
 .set APP_MET_EVENT_BYTES, 1 << 20
 .set APP_MET_ACT_BYTES, 1 << 18
-.set APP_SIZE, (APP_MET_SLOT0 + APP_MET_CONNS * APP_MET_SLOT + 4095) & ~4095
+.set APP_HIST, APP_MET_SLOT0 + APP_MET_CONNS * APP_MET_SLOT   /* AppHist: the Seen's history (app.md) */
+.set AppHist_map, 0                         /* pair: the SeenHistory, mapped from the file or in memory; or 0 */
+.set AppHist_file, 16                       /* the file of seen-history.bin */
+.set AppHist_mode, 24                       /* APP_HIST_NONE, APP_HIST_MEMORY or APP_HIST_FILE */
+.set AppHist_out, 32                        /* pair: a ByteList of the chunks of lantern_seen_archive */
+.set AppHist_op, 48                         /* a FileOp or FileResult */
+.set AppHist_kinds, 80                      /* HIST_KINDS records of a step: the chunk's offset (0 none), epoch_lo, epoch_hi */
+.set AppHist_word, AppHist_kinds + 24 * HIST_KINDS  /* a u64 of a write */
+.set AppHist__size, AppHist_word + 8
+.set APP_OPEN_WRITE, 2                      /* SHELL_OPEN_WRITE of lantern_shell_open (shell.md) */
+.set APP_HIST_NONE, 0                       /* no history: lantern_seen_archive is not called */
+.set APP_HIST_MEMORY, 1                     /* without --data-dir, or when the file fails at the start */
+.set APP_HIST_FILE, 2                       /* <dir>/seen-history.bin */
+.set APP_HIST_ROOM, 1 << 20                 /* the memory history's room after its index; it doubles when short */
+.set APP_HIST_OUT_BYTES, 1 << 20            /* the chunks' first room; it doubles when short */
+.set APP_SIZE, (APP_HIST + AppHist__size + 4095) & ~4095
 .set APP_BLOCK_BYTES, 1 << 16               /* the anchor block */
 .set APP_BUF_ENTRY, 24                      /* a BufferId table entry: id, address, size */
 .set APP_BUFS_CAP, 64                      /* the BufferId table's first room; it doubles when full */
@@ -254,6 +269,9 @@ app_anchor_tmp_name:
 app_custody_name:
     .ascii "custody.bin"
 .set app_custody_name_len, 11
+app_hist_name:
+    .ascii "seen-history.bin"
+.set app_hist_name_len, 16
 app_m_line:
     .ascii ": faulty line "
 .set app_m_line_len, 14

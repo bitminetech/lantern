@@ -50,6 +50,7 @@ The node: events, actions, sync, gossip.
 - [`lantern_node_attestation`](#function-lantern_node_attestation): on_attestation of an attestation's SSZ bytes, for one fork.
 - [`lantern_node_attester_slashing`](#function-lantern_node_attester_slashing): on_attester_slashing of a slashing's SSZ bytes, for one fork.
 - [`lantern_node_gossip`](#function-lantern_node_gossip): the gossip validation of a message's SSZ bytes, for one fork.
+- [`lantern_node_seen_keys`](#function-lantern_node_seen_keys): the keys of a decoded gossip message that lantern_seen_recall looks up.
 - [`lantern_node_blob_sidecar`](#function-lantern_node_blob_sidecar): the checks of a blob sidecar of a response, for deneb or electra.
 - [`lantern_node_column_sidecar`](#function-lantern_node_column_sidecar): the checks of a column sidecar of a response, for fulu.
 - [`lantern_node_db_scan`](#function-lantern_node_db_scan): adds a segment file's records to the node's `Db`.
@@ -797,7 +798,7 @@ One `NODE_ACT_WORK` with its buffers. It writes the `NODE_EV_WORK_DONE` event of
 ### Signature
 
 ```
-lantern_node_run(node, store, seen, work, state_a, state_b, state_c, data, settings, scratch, event) -> status
+lantern_node_run(node, store, seen, work, state_a, state_b, state_c, data, settings, scratch, event, history) -> status
 ```
 
 ### Arguments
@@ -815,6 +816,7 @@ lantern_node_run(node, store, seen, work, state_a, state_b, state_c, data, setti
 | `settings` | input | asm-crypto `KzgSettings`, or 0 |
 | `scratch` | scratch | `Scratch` |
 | `event` | output | `NodeEvent`: its `size` set by the caller to the bytes of the buffer, `NODE_EV_WORK_DONE_SIZE` or more |
+| `history` | input | [`SeenHistory`](networking.md#type-seenhistory), or 0 |
 
 ### Returns
 
@@ -943,7 +945,7 @@ lantern_node_run(node, store, seen, work, state_a, state_b, state_c, data, setti
 - Role: L0.
 - Symbol: `lantern_node_run`, with `_` before it on macOS.
 - Convention: the core ABI for each ISA (ARCHITECTURE.md section 6); each argument is a pointer: a Uint64 argument points at a u64, and a Boolean output is a u64 of 0 or 1.
-- Argument order: `node`, `store`, `seen`, `work`, `state_a`, `state_b`, `state_c`, `data`, `settings`, `scratch`, `event`.
+- Argument order: `node`, `store`, `seen`, `work`, `state_a`, `state_b`, `state_c`, `data`, `settings`, `scratch`, `event`, `history`.
 
 ## Function `lantern_node_protocols`
 
@@ -1220,7 +1222,7 @@ lantern_node_attester_duties(state, config, ids, scratch, out) -> status
 
 ### Limits
 
-- Stack of its own: 288 bytes on x86-64 (return address included), 288 bytes on ARM64, 288 bytes on RISC-V.
+- Stack of its own: 304 bytes on x86-64 (return address included), 304 bytes on ARM64, 304 bytes on RISC-V.
 
 ### ABI
 
@@ -2483,7 +2485,7 @@ The checks of `broadcast_validation` (beacon-api.md, publishBlockV2) of a block 
 ### Signature
 
 ```
-lantern_node_publish_check(seen, store, gossip, head, proposer, justified, settings, config, block, sidecars, level, scratch) -> status
+lantern_node_publish_check(seen, store, gossip, head, proposer, justified, settings, config, block, sidecars, level, scratch, history) -> status
 ```
 
 ### Arguments
@@ -2502,6 +2504,7 @@ lantern_node_publish_check(seen, store, gossip, head, proposer, justified, setti
 | `sidecars` | input | ByteList of lantern_node_publish_sidecars, or 0 |
 | `level` | input | u64: 1 gossip, 2 consensus, 3 consensus_and_equivocation; + 256 for a blinded block, a `SignedBlindedBeaconBlock` with no sidecars |
 | `scratch` | scratch | `Scratch` |
+| `history` | input | [`SeenHistory`](networking.md#type-seenhistory), or 0: lantern_node_gossip's |
 
 ### Returns
 
@@ -2511,6 +2514,7 @@ lantern_node_publish_check(seen, store, gossip, head, proposer, justified, setti
 
 ### Function does
 
+- A check that does not hold gives seen back the bytes it had (lantern_seen_restore): the checks of a block to publish add nothing to seen unless all hold.
 - Level 3 adds no check: the beacon_block topic's checks already ignore a second block of a proposer and slot.
 - A blinded block: lantern_validate_blinded_block_gossip in place of the beacon_block topic's checks; from level 2 the blinded transition of beacon-api.md (the block with the stand-in payload, in scratch, decoded, then process_block; the state's `latest_block_header.body_root` and `latest_execution_payload_header.transactions_root` then the roots of the blinded block's body and header). The checks leave `seen` as it was in every case, so the full block passes the beacon_block topic's checks when the builder's broadcast brings it.
 - A status or result but `LANTERN_OK` leaves `seen` as it was: the counts of its parts (`keys`, `bits`, `blocks`, `headers`, `header_bytes`) go back to those before the call, so the entries the checks added go. The checks of these topics only add entries.
@@ -2528,7 +2532,7 @@ lantern_node_publish_check(seen, store, gossip, head, proposer, justified, setti
 - Role: L0.
 - Symbol: `lantern_<fork>_node_publish_check` in the object of every fork, with `_` before it on macOS; `lantern_node_publish_check` inside the object.
 - Convention: the core ABI for each ISA (ARCHITECTURE.md section 6); each argument is a pointer: a Uint64 argument points at a u64, and a Boolean output is a u64 of 0 or 1.
-- Argument order: `seen`, `store`, `gossip`, `head`, `proposer`, `justified`, `settings`, `config`, `block`, `sidecars`, `level`, `scratch`.
+- Argument order: `seen`, `store`, `gossip`, `head`, `proposer`, `justified`, `settings`, `config`, `block`, `sidecars`, `level`, `scratch`, `history`.
 
 ## Function `lantern_node_pending`
 
@@ -2768,7 +2772,7 @@ The gossip validation of the topic of a `NodeGossip` for SSZ bytes, decoded with
 ### Signature
 
 ```
-lantern_node_gossip(seen, store, gossip, head, proposer, justified, settings, config, data, scratch, result, root, index) -> status
+lantern_node_gossip(seen, store, gossip, head, proposer, justified, settings, config, data, scratch, result, root, index, history) -> status
 ```
 
 ### Arguments
@@ -2788,6 +2792,7 @@ lantern_node_gossip(seen, store, gossip, head, proposer, justified, settings, co
 | `result` | output | `Result` |
 | `root` | output | Root |
 | `index` | output | u64 |
+| `history` | input | [`SeenHistory`](networking.md#type-seenhistory), or 0 |
 
 ### Returns
 
@@ -2803,6 +2808,7 @@ lantern_node_gossip(seen, store, gossip, head, proposer, justified, settings, co
 - A valid blob_sidecar or data_column_sidecar: hash_tree_root of its `signed_block_header.message` in `root`, its `index` in `index`.
 - A valid sync_committee message: in `root` four u64, its `slot`, 2^`subnet`, 0 and 0.
 - A valid beacon_attestation: in `root` four u64, its `data.slot`, its committee index (`data.index` before electra, `committee_index` from electra), its member and 0. The member, from electra: the place of `attester_index` in lantern_get_beacon_committee of the head state, that slot and that committee index (with the `CommitteeCache` of the config) + 2^16 times the committee's length; before electra 0. The spec's validation reads that committee of the head state too.
+- With a history: before the topic's function, lantern_node_seen_keys of the message and lantern_seen_recall of them; after it, lantern_seen_forget, so seen holds after the call only what the topic's function added.
 - Decodes into the end of `scratch`; the scratch `size` is restored on return.
 
 ### Function never
@@ -2811,14 +2817,61 @@ lantern_node_gossip(seen, store, gossip, head, proposer, justified, settings, co
 
 ### Limits
 
-- Stack of its own: 224 bytes on x86-64 (return address included), 208 bytes on ARM64, 208 bytes on RISC-V.
+- Stack of its own: 528 bytes on x86-64 (return address included), 512 bytes on ARM64, 512 bytes on RISC-V.
 
 ### ABI
 
 - Role: L0.
 - Symbol: `lantern_<fork>_node_gossip` in the object of every fork, with `_` before it on macOS; `lantern_node_gossip` inside the object.
 - Convention: the core ABI for each ISA (ARCHITECTURE.md section 6); each argument is a pointer: a Uint64 argument points at a u64, and a Boolean output is a u64 of 0 or 1.
-- Argument order: `seen`, `store`, `gossip`, `head`, `proposer`, `justified`, `settings`, `config`, `data`, `scratch`, `result`, `root`, `index`.
+- Argument order: `seen`, `store`, `gossip`, `head`, `proposer`, `justified`, `settings`, `config`, `data`, `scratch`, `result`, `root`, `index`, `history`.
+
+## Function `lantern_node_seen_keys`
+
+The keys of a decoded gossip message that lantern_seen_recall looks up.
+
+### Signature
+
+```
+lantern_node_seen_keys(topic, message, scratch, recall) -> status
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `topic` | input | u64 in a register: the `NodeGossip` topic |
+| `message` | input | the decoded message |
+| `scratch` | scratch | `Scratch` |
+| `recall` | output | [`SeenRecall`](networking.md#type-seenrecall) |
+
+### Returns
+
+- `LANTERN_OK`: `recall` holds the message's keys of the kinds lantern_seen_archive moves.
+- `LANTERN_BUFFER_TOO_SMALL`: `scratch` cannot hold the hash of the aggregate's data.
+
+### Function does
+
+- beacon_aggregate_and_proof: a `SEEN_AGGREGATOR_EPOCH` key (the target epoch, the aggregator index) and a `SEEN_RECALL_BITS` item (hash_tree_root of the `AttestationData`, the committee index, the target epoch); the committee index from electra is the first bit of `committee_bits`, before electra 0.
+- beacon_attestation from electra: a `SEEN_ATTESTATION` key (the target epoch, `attester_index`).
+- blob_sidecar and data_column_sidecar: a key (the slot, the proposer index, the index) of the header's message.
+- Another topic: no items.
+
+### Function never
+
+- Makes an OS call.
+- Keeps a pointer after it returns.
+
+### Limits
+
+- Stack of its own: 96 bytes on x86-64 (return address included), 96 bytes on ARM64, 96 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_node_seen_keys`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- Argument order: `topic`, `message`, `scratch`, `recall`.
 
 ## Function `lantern_node_blob_sidecar`
 

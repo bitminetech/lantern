@@ -11033,6 +11033,8 @@ FUNCTION lantern_node_run
     sd      t0, (L + 88)(sp)
     ld      s6, (192 + 96 + 8)(sp)
     ld      s7, (192 + 96 + 16)(sp)
+    ld      t0, (192 + 96 + 24)(sp)         # the twelfth: the history of seen
+    sd      t0, (L + 176)(sp)
     ld      s8, 0(s7)                       # the event's room
     li      t0, NODE_EV_WORK_DONE_SIZE
     bltu    s8, t0, 7f
@@ -11381,6 +11383,8 @@ FUNCTION lantern_node_run
     sd      t1, 24(sp)
     addi    t1, s7, NodeEvent_index
     sd      t1, 32(sp)
+    ld      t1, (48 + L + 176)(sp)          # the fourteenth: the history
+    sd      t1, 40(sp)
     ld      a0, NodeGossip_seen(t0)
     ld      a1, NodeGossip_store(t0)
     addi    a2, t0, NodeGossip_time_ms
@@ -12151,11 +12155,13 @@ FUNCTION lantern_node_run
     addi    t0, sp, (L + 96)                # the NodeGossip: each input its own argument
     ld      t1, (L + 72)(sp)                # the sidecars
     ld      t2, NodeAction_arg(s3)          # the level
-    addi    sp, sp, -32                     # the ninth to twelfth arguments: block, sidecars, level, scratch
+    addi    sp, sp, -48                     # the ninth to thirteenth arguments: block, sidecars, level, scratch, history
     sd      s5, 0(sp)
     sd      t1, 8(sp)
     sd      t2, 16(sp)
     sd      s6, 24(sp)
+    ld      t1, (48 + L + 176)(sp)
+    sd      t1, 32(sp)
     ld      a0, NodeGossip_seen(t0)
     ld      a1, NodeGossip_store(t0)
     addi    a2, t0, NodeGossip_time_ms
@@ -12165,7 +12171,7 @@ FUNCTION lantern_node_run
     ld      a6, NodeGossip_settings(t0)
     ld      a7, NodeGossip_config(t0)
     FORK_CALL node_publish_check
-    addi    sp, sp, 32
+    addi    sp, sp, 48
     li      t0, LANTERN_BUFFER_TOO_SMALL
     beq     a0, t0, 8449b
     bnez    a0, 8458b
@@ -12424,6 +12430,7 @@ FUNCTION lantern_node_run
     mv      a6, s6
     mv      a7, s7
     mv      t0, s8
+    ld      t1, (L + 176)(sp)
     call    lantern_node_api_submit_run
     LEAVE 192
 979: li     t1, NODE_WORK_POOL_CHECK
@@ -12498,6 +12505,7 @@ FUNCTION lantern_node_run
     sd      t1, 24(sp)
     addi    t1, s7, NodeEvent_index
     sd      t1, 32(sp)
+    sd      zero, 40(sp)                    # the fourteenth: no history, as seen is empty
     ld      a0, NodeGossip_seen(t0)
     ld      a1, NodeGossip_store(t0)
     addi    a2, t0, NodeGossip_time_ms

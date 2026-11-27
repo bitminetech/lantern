@@ -12117,17 +12117,18 @@ LOCAL_FUNCTION lantern_node_submit_copy
 END_FUNCTION lantern_node_submit_copy
 
 /*
- * (node a0, store a1, seen a2, work a3, state_a a4, data a5, scratch a6, event a7, room t0) -> a0:
+ * (node a0, store a1, seen a2, work a3, state_a a4, data a5, scratch a6, event a7, room t0, history t1) -> a0:
  * a NODE_WORK_API_SUBMIT of lantern_node_run (node.md): the operations of the body decoded as
  * records at NodeEvent_chunk of the event, then each checked by lantern_node_gossip of the fork
  * arg / 2^16 with seen. s1 node, s2 store, s3 work, s4 state_a, s5 data, s6 scratch, s7 the event,
  * s8 its end, s9 the next record, s10 the text's end, then the records left. Locals: L seen, L+8
  * the kind, L+16 the topic, L+24 the fork, L+32 the operations, L+40 1 for a list, L+48 where the
  * text goes on, L+56 an item's start, L+64 a NodeGossip, L+144 a JsonFault, L+272 a root, L+304
- * an index.
+ * an index, L+312 the history.
  */
 LOCAL_FUNCTION lantern_node_api_submit_run
     ENTER 320
+    sd      t1, (L + 312)(sp)
     mv      s1, a0
     mv      s2, a1
     sd      a2, (L + 0)(sp)
@@ -12534,6 +12535,8 @@ LOCAL_FUNCTION lantern_node_api_submit_run
     sd      s9, 16(sp)
     sd      t1, 24(sp)
     sd      t2, 32(sp)
+    ld      t3, (48 + L + 312)(sp)          # the fourteenth: the history
+    sd      t3, 40(sp)
     ld      a0, NodeGossip_seen(t0)
     ld      a1, NodeGossip_store(t0)
     addi    a2, t0, NodeGossip_time_ms
@@ -12596,6 +12599,8 @@ LOCAL_FUNCTION lantern_node_api_submit_run
     sd      s9, 16(sp)
     sd      t1, 24(sp)
     sd      t2, 32(sp)
+    ld      t3, (48 + L + 312)(sp)          # the fourteenth: the history
+    sd      t3, 40(sp)
     ld      a0, NodeGossip_seen(t0)
     ld      a1, NodeGossip_store(t0)
     addi    a2, t0, NodeGossip_time_ms

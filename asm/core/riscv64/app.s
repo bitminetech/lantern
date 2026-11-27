@@ -1068,6 +1068,7 @@ LOCAL_FUNCTION lantern_app_start
     LDQ     a1, s1, APP_SEEN
     CALL_GLOBAL lantern_seen_init
     bnez    a0, 94f
+    call    lantern_app_hist_start                  # and its history
     li      a0, APP_KZG                     # the KZG trusted setup
     li      a1, CRYPTO_KZG_SETTINGS_SIZE
     call    lantern_app_alloc
@@ -1726,13 +1727,15 @@ LOCAL_FUNCTION lantern_app_work
 1:  LDQ     t0, s1, APP_WORK_EVENT          # the event's room
     LDQ     t1, s1, (APP_WORK_EVENT + 8)
     sd      t1, 0(t0)
-    addi    sp, sp, -32                     # the ninth to eleventh arguments: settings, scratch, event
+    addi    sp, sp, -32                     # the ninth to twelfth arguments: settings, scratch, event, history
     LDQ     t0, s1, APP_KZG
     sd      t0, 0(sp)
     SCRATCH t2
     sd      t2, 8(sp)
     LDQ     t0, s1, APP_WORK_EVENT
     sd      t0, 16(sp)
+    LDQ     t0, s1, (APP_HIST + AppHist_map)   # the Seen's history
+    sd      t0, 24(sp)
     LDQ     a0, s1, APP_NODE
     LDQ     a1, s1, APP_STORE
     LDQ     a2, s1, APP_SEEN
@@ -6553,6 +6556,538 @@ LOCAL_FUNCTION lantern_app_p2p_events
 END_FUNCTION lantern_app_p2p_events
 
 /*
+ * The Seen's history (app.md): with --data-dir, <dir>/seen-history.bin, opened to write at offsets
+ * and mapped to read; a file that is not a SeenHistory of this layout starts again empty, from the
+ * store's finalized epoch. Without --data-dir, or when the file fails, the history is in memory.
+ * s10 the AppHist. Locals: L a u64.
+ */
+LOCAL_FUNCTION lantern_app_hist_start
+    ENTER 16
+    ADDQ    s10, s1, APP_HIST
+    li      a0, APP_HIST + AppHist_out
+    li      a1, APP_HIST_OUT_BYTES
+    call    lantern_app_alloc
+    beqz    a0, 99f
+    li      t0, 24
+    sd      t0, 8(a0)
+    sd      zero, 16(a0)
+    LDQ     t0, s1, (APP_OPTIONS + AppOptions_data_dir + 8)
+    beqz    t0, 50f
+    call    lantern_app_hist_path
+    li      t0, APP_OPEN_WRITE
+    sd      t0, L(sp)
+    ADDQ    a0, s1, APP_PATH
+    addi    a1, sp, L
+    addi    a2, s10, AppHist_op
+    CALL_GLOBAL lantern_shell_open
+    ld      a0, AppHist_op(s10)
+    bnez    a0, 40f
+    ld      t0, (AppHist_op + 8)(s10)
+    sd      t0, AppHist_file(s10)
+    li      t0, APP_HIST_FILE
+    sd      t0, AppHist_mode(s10)
+    call    lantern_app_hist_map
+    ld      t0, AppHist_map(s10)            # a SeenHistory of this layout stays
+    beqz    t0, 20f
+    ld      t1, (AppHist_map + 8)(s10)
+    li      t2, SEEN_HISTORY_DATA
+    bltu    t1, t2, 20f
+    ld      t3, SeenHistory_magic(t0)
+    li      t4, SEEN_HISTORY_MAGIC
+    bne     t3, t4, 20f
+    ld      t3, SeenHistory_version(t0)
+    li      t4, SEEN_HISTORY_VERSION
+    bne     t3, t4, 20f
+    ld      t3, SeenHistory_capacity(t0)
+    li      t4, SEEN_HISTORY_CAPACITY
+    bne     t3, t4, 20f
+    ld      t3, SeenHistory_data_start(t0)
+    bne     t3, t2, 20f
+    ld      t3, SeenHistory_size(t0)
+    bltu    t3, t2, 20f
+    bgeu    t1, t3, 99f
+20: ld      t0, AppHist_map(s10)            # else it starts again: no bytes, then the index's zeros
+    beqz    t0, 21f
+    addi    a0, s10, AppHist_map
+    addi    a1, s10, AppHist_map + 8
+    CALL_GLOBAL lantern_shell_unmap_file
+    sd      zero, AppHist_map(s10)
+    sd      zero, (AppHist_map + 8)(s10)
+21: sd      zero, L(sp)
+    addi    a0, s10, AppHist_file
+    addi    a1, sp, L
+    addi    a2, s10, AppHist_op
+    CALL_GLOBAL lantern_shell_truncate
+    ld      a0, AppHist_op(s10)
+    bnez    a0, 30f
+    li      t0, SEEN_HISTORY_DATA
+    sd      t0, L(sp)
+    addi    a0, s10, AppHist_file
+    addi    a1, sp, L
+    addi    a2, s10, AppHist_op
+    CALL_GLOBAL lantern_shell_truncate
+    ld      a0, AppHist_op(s10)
+    bnez    a0, 30f
+    ADDQ    a0, s1, APP_TMP
+    call    lantern_app_hist_header
+    ADDQ    a0, s1, APP_TMP
+    li      a1, SEEN_HISTORY_FIXED
+    li      a2, 0
+    call    lantern_app_hist_put
+    bnez    a0, 30f
+    call    lantern_app_hist_sync
+    bnez    a0, 30f
+    call    lantern_app_hist_map
+    ld      t0, AppHist_map(s10)
+    bnez    t0, 99f
+    li      a0, 1
+30: sd      a0, L(sp)                       # a failure: a line, the file closed, the history in memory
+    addi    a0, s10, AppHist_file
+    CALL_GLOBAL lantern_shell_close
+    ld      a0, L(sp)
+40: call    lantern_app_hist_fail
+50: li      a0, APP_HIST
+    li      a1, SEEN_HISTORY_DATA + APP_HIST_ROOM
+    call    lantern_app_alloc
+    beqz    a0, 98f
+    call    lantern_app_hist_header
+    li      t0, APP_HIST_MEMORY
+    sd      t0, AppHist_mode(s10)
+99: LEAVE 16
+98: sd      zero, AppHist_mode(s10)
+    LEAVE 16
+END_FUNCTION lantern_app_hist_start
+
+/* The fixed fields of a new SeenHistory at a0, from the store's finalized epoch. A leaf. */
+LOCAL_FUNCTION lantern_app_hist_header
+    UNWIND_END_PROLOGUE
+    li      t0, SEEN_HISTORY_DATA
+    sd      t0, SeenHistory_size(a0)
+    sd      t0, SeenHistory_data_start(a0)
+    li      t1, SEEN_HISTORY_MAGIC
+    sd      t1, SeenHistory_magic(a0)
+    li      t1, SEEN_HISTORY_VERSION
+    sd      t1, SeenHistory_version(a0)
+    LDQ     t1, s1, APP_STORE
+    ld      t1, Store_finalized_checkpoint(t1)
+    sd      t1, SeenHistory_first_epoch(a0)
+    li      t1, SEEN_HISTORY_CAPACITY
+    sd      t1, SeenHistory_capacity(a0)
+    sd      zero, 48(a0)
+    sd      zero, 56(a0)
+    ret
+END_FUNCTION lantern_app_hist_header
+
+/* The path of seen-history.bin: a ByteList at APP_PATH. */
+LOCAL_FUNCTION lantern_app_hist_path
+    FRAME 0
+    ADDRESS a0, app_hist_name
+    li      a1, app_hist_name_len
+    ADDQ    a2, s1, APP_PATH
+    call    lantern_app_db_file
+    UNFRAME 0
+END_FUNCTION lantern_app_hist_path
+
+/* The file mapped again at AppHist_map, or 0, 0 when that fails. s10 the AppHist. */
+LOCAL_FUNCTION lantern_app_hist_map
+    FRAME 0
+    ld      t0, AppHist_map(s10)
+    beqz    t0, 1f
+    addi    a0, s10, AppHist_map
+    addi    a1, s10, AppHist_map + 8
+    CALL_GLOBAL lantern_shell_unmap_file
+    sd      zero, AppHist_map(s10)
+    sd      zero, (AppHist_map + 8)(s10)
+1:  call    lantern_app_hist_path
+    ADDQ    a0, s1, APP_PATH
+    addi    a1, s10, AppHist_op
+    CALL_GLOBAL lantern_shell_map_file
+    ld      t0, AppHist_op(s10)
+    bnez    t0, 2f
+    ld      t0, (AppHist_op + 8)(s10)
+    sd      t0, AppHist_map(s10)
+    ld      t0, (AppHist_op + 24)(s10)
+    sd      t0, (AppHist_map + 8)(s10)
+2:  UNFRAME 0
+END_FUNCTION lantern_app_hist_map
+
+/* A line cannot write <dir>/seen-history.bin: error a0, and a db failure. Locals: sp+0 the error. */
+LOCAL_FUNCTION lantern_app_hist_fail
+    FRAME 16
+    sd      a0, 0(sp)
+    AM_INC  db_failures
+    call    lantern_app_hist_path
+    call    lantern_app_line_start
+    ADDRESS a0, app_m_write
+    li      a1, app_m_write_len
+    call    lantern_app_line_text
+    call    lantern_app_line_path
+    ADDRESS a0, app_m_error
+    li      a1, app_m_error_len
+    call    lantern_app_line_text
+    ld      a0, 0(sp)
+    call    lantern_app_line_u64
+    li      a0, APP_LOG_ERROR
+    call    lantern_app_line_end
+    UNFRAME 16
+END_FUNCTION lantern_app_hist_fail
+
+/*
+ * The a1 bytes at a0 to byte a2 of the history: the file's, or the memory's, which doubles when
+ * short. a0 = 0, or the OS error (1 with no memory). s10 the AppHist. Locals: L a ByteList of the
+ * bytes, L+24 the offset, L+32 the old memory.
+ */
+LOCAL_FUNCTION lantern_app_hist_put
+    ENTER 48
+    mv      s2, a0
+    mv      s3, a1
+    mv      s4, a2
+    ld      t0, AppHist_mode(s10)
+    li      t1, APP_HIST_FILE
+    bne     t0, t1, 10f
+    addi    t0, sp, L
+    sub     t1, s2, t0
+    sd      t1, (L + 8)(sp)
+    addi    t1, s3, 24
+    sd      t1, L(sp)
+    sd      s3, (L + 16)(sp)
+    sd      s4, (L + 24)(sp)
+    addi    a0, s10, AppHist_file
+    addi    a1, sp, L + 24
+    addi    a2, sp, L
+    addi    a3, s10, AppHist_op
+    CALL_GLOBAL lantern_shell_write_at
+    ld      a0, AppHist_op(s10)
+    LEAVE 48
+10: add     s5, s4, s3                      # the memory: its end
+    ld      t0, (AppHist_map + 8)(s10)
+    bgeu    t0, s5, 12f
+    slli    a0, t0, 1                       # short: twice, or the end
+    bgeu    a0, s5, 11f
+    mv      a0, s5
+11: mv      s6, a0
+    call    lantern_app_map
+    beqz    a0, 19f
+    ld      a1, AppHist_map(s10)
+    ld      a2, (AppHist_map + 8)(s10)
+    sd      a1, (L + 32)(sp)
+    sd      a2, (L + 40)(sp)
+    sd      a0, AppHist_map(s10)
+    sd      s6, (AppHist_map + 8)(s10)
+    call    lantern_copy
+    addi    a0, sp, L + 32
+    addi    a1, sp, L + 40
+    CALL_GLOBAL lantern_shell_unmap
+12: ld      a0, AppHist_map(s10)
+    add     a0, a0, s4
+    mv      a1, s2
+    mv      a2, s3
+    call    lantern_copy
+    li      a0, 0
+    LEAVE 48
+19: li      a0, 1
+    LEAVE 48
+END_FUNCTION lantern_app_hist_put
+
+/* The history's bytes durable: the file's sync. a0 = 0, or the OS error. s10 the AppHist. */
+LOCAL_FUNCTION lantern_app_hist_sync
+    FRAME 0
+    li      a0, 0
+    ld      t0, AppHist_mode(s10)
+    li      t1, APP_HIST_FILE
+    bne     t0, t1, 1f
+    addi    a0, s10, AppHist_file
+    addi    a1, s10, AppHist_op
+    CALL_GLOBAL lantern_shell_sync
+    ld      a0, AppHist_op(s10)
+1:  UNFRAME 0
+END_FUNCTION lantern_app_hist_sync
+
+/* The chunks' ByteList with twice its room: a0 = 0, or 1 with no memory. s10 the AppHist. Locals: sp+0 the old pair. */
+LOCAL_FUNCTION lantern_app_hist_grow
+    FRAME 16
+    ld      a0, (AppHist_out + 8)(s10)
+    slli    a0, a0, 1
+    call    lantern_app_map
+    beqz    a0, 9f
+    ld      a1, AppHist_out(s10)
+    ld      a2, (AppHist_out + 8)(s10)
+    sd      a1, 0(sp)
+    sd      a2, 8(sp)
+    sd      a0, AppHist_out(s10)
+    slli    t0, a2, 1
+    sd      t0, (AppHist_out + 8)(s10)
+    ld      a2, 16(a1)
+    addi    a2, a2, 24
+    call    lantern_copy
+    ld      t0, AppHist_out(s10)
+    ld      t1, (AppHist_out + 8)(s10)
+    sd      t1, 0(t0)
+    mv      a0, sp
+    addi    a1, sp, 8
+    CALL_GLOBAL lantern_shell_unmap
+    li      a0, 0
+    UNFRAME 16
+9:  li      a0, 1
+    UNFRAME 16
+END_FUNCTION lantern_app_hist_grow
+
+/*
+ * a0 = the chunk of HIST kind a1 the history's index names for epoch a0, when it lies inside the
+ * history's size, is of that kind, holds that epoch in its range and its entries in its bytes; else 0.
+ * A leaf; uses a2-a6, t0-t3. s10 the AppHist.
+ */
+LOCAL_FUNCTION lantern_app_hist_chunk
+    UNWIND_END_PROLOGUE
+    ld      a2, AppHist_map(s10)
+    beqz    a2, 9f
+    ld      a3, SeenHistory_size(a2)
+    ld      t0, SeenHistory_first_epoch(a2)
+    bltu    a0, t0, 9f
+    sub     a4, a0, t0
+    ld      t0, SeenHistory_capacity(a2)
+    bgeu    a4, t0, 9f
+    li      t0, SEEN_HISTORY_ENTRY
+    mul     a4, a4, t0
+    addi    a4, a4, SEEN_HISTORY_FIXED
+    slli    t0, a1, 3
+    add     a4, a4, t0
+    add     a4, a2, a4
+    ld      a5, 0(a4)
+    beqz    a5, 9f
+    addi    t0, a5, SEEN_CHUNK_FIXED
+    bltu    a3, t0, 9f
+    add     a6, a2, a5
+    ld      t1, SeenChunk_bytes(a6)
+    sub     t2, a3, a5
+    bltu    t2, t1, 9f
+    ld      t2, SeenChunk_kind(a6)
+    bne     t2, a1, 9f
+    ld      t2, SeenChunk_epoch_lo(a6)
+    bltu    a0, t2, 9f
+    ld      t2, SeenChunk_epoch_hi(a6)
+    bltu    t2, a0, 9f
+    li      t2, 16                          # its entry's bytes
+    li      t3, HIST_COLUMN
+    bltu    a1, t3, 1f
+    li      t2, 24
+    li      t3, HIST_AGGREGATE
+    bltu    a1, t3, 1f
+    li      t2, HistBits__mem
+1:  ld      t3, SeenChunk_count(a6)
+    mulhu   t0, t3, t2
+    bnez    t0, 9f
+    mul     t3, t3, t2
+    addi    t3, t3, SEEN_CHUNK_FIXED
+    bltu    t1, t3, 9f
+    mv      a0, a6
+    ret
+9:  li      a0, 0
+    ret
+END_FUNCTION lantern_app_hist_chunk
+
+/*
+ * At each new slot (app.md, lantern_app_loop): lantern_seen_archive moves the Seen's entries of
+ * past epochs to chunks; each chunk, merged with the history's chunks of its kind that its epochs'
+ * index entries name, goes to the end of the history; once those are durable, the index entries of
+ * their epochs, then the size. A chunk with an epoch outside the index goes, with a db failure.
+ * s2 the chunks' ByteList, s3 the next chunk, s4 the end of the chunks, s5 the history's new size,
+ * s6 the chunk, s7 an epoch, s8 the last chunk merged, s9 the kind, s10 the AppHist.
+ * Locals: L the chunk's offset before a merge, L+8 the old chunk.
+ */
+LOCAL_FUNCTION lantern_app_hist_step
+    ENTER 16
+    ADDQ    s10, s1, APP_HIST
+    ld      t0, AppHist_mode(s10)
+    beqz    t0, 99f
+    ld      t1, AppHist_map(s10)            # a file not mapped: mapped again first
+    bnez    t1, 1f
+    li      t1, APP_HIST_FILE
+    bne     t0, t1, 99f
+    call    lantern_app_hist_map
+    ld      t1, AppHist_map(s10)
+    beqz    t1, 99f
+1:  ld      s2, AppHist_out(s10)            # the chunks, more room while short
+    sd      zero, 16(s2)
+    LDQ     a0, s1, APP_SEEN
+    LDQ     a1, s1, APP_STORE
+    mv      a2, s2
+    CALL_GLOBAL lantern_seen_archive
+    beqz    a0, 2f
+    li      t0, LANTERN_BUFFER_TOO_SMALL
+    bne     a0, t0, 99f
+    call    lantern_app_hist_grow
+    bnez    a0, 99f
+    j       1b
+2:  ld      s4, 16(s2)
+    beqz    s4, 99f
+    addi    s4, s4, 24
+    li      s3, 24
+    ld      t0, AppHist_map(s10)
+    ld      s5, SeenHistory_size(t0)
+    addi    t0, s10, AppHist_kinds
+    li      t1, HIST_KINDS
+11: sd      zero, 0(t0)
+    addi    t0, t0, 24
+    addi    t1, t1, -1
+    bnez    t1, 11b
+3:  bgeu    s3, s4, 6f                      # each chunk
+    mv      s6, s3
+    ld      s2, AppHist_out(s10)
+    add     t0, s2, s6
+    ld      t1, SeenChunk_bytes(t0)
+    add     s3, s3, t1
+    ld      s9, SeenChunk_kind(t0)
+    ld      t2, AppHist_map(s10)
+    ld      t3, SeenHistory_first_epoch(t2)
+    ld      t4, SeenHistory_capacity(t2)
+    ld      t5, SeenChunk_epoch_lo(t0)
+    ld      t6, SeenChunk_epoch_hi(t0)
+    bltu    t5, t3, 51f
+    sub     t6, t6, t3
+    bgeu    t6, t4, 51f
+    mv      s7, t5
+    li      s8, 0
+4:  ld      s2, AppHist_out(s10)            # each epoch of its range: a chunk there merges in
+    add     t0, s2, s6
+    ld      t1, SeenChunk_epoch_hi(t0)
+    bltu    t1, s7, 5f
+    mv      a0, s7
+    mv      a1, s9
+    call    lantern_app_hist_chunk
+    beqz    a0, 41f
+    ld      t0, AppHist_map(s10)
+    sub     t1, a0, t0
+    beq     t1, s8, 41f
+    mv      s8, t1
+    sd      a0, (L + 8)(sp)
+42: ld      s2, AppHist_out(s10)
+    ld      t0, 16(s2)
+    addi    t0, t0, 24
+    sd      t0, L(sp)
+    ld      a0, (L + 8)(sp)
+    add     a1, s2, s6
+    mv      a2, s2
+    CALL_GLOBAL lantern_seen_chunk_merge
+    beqz    a0, 43f
+    call    lantern_app_hist_grow
+    bnez    a0, 99f
+    j       42b
+43: ld      s6, L(sp)
+41: addi    s7, s7, 1
+    j       4b
+5:  ld      s2, AppHist_out(s10)            # the chunk to the end
+    add     a0, s2, s6
+    ld      a1, SeenChunk_bytes(a0)
+    mv      a2, s5
+    call    lantern_app_hist_put
+    bnez    a0, 90f
+    ld      s2, AppHist_out(s10)
+    add     t0, s2, s6
+    addi    t1, s10, AppHist_kinds
+    li      t2, 24
+    mul     t2, s9, t2
+    add     t1, t1, t2
+    sd      s5, 0(t1)
+    ld      t2, SeenChunk_epoch_lo(t0)
+    sd      t2, 8(t1)
+    ld      t2, SeenChunk_epoch_hi(t0)
+    sd      t2, 16(t1)
+    ld      t2, SeenChunk_bytes(t0)
+    add     s5, s5, t2
+    j       3b
+51: AM_INC  db_failures                     # an epoch outside the index
+    j       3b
+6:  li      s7, -1                          # the epochs of the chunks written
+    li      s8, 0
+    addi    t0, s10, AppHist_kinds
+    li      t1, HIST_KINDS
+61: ld      t2, 0(t0)
+    beqz    t2, 62f
+    ld      t3, 8(t0)
+    ld      t4, 16(t0)
+    bgeu    t3, s7, 63f
+    mv      s7, t3
+63: bgeu    s8, t4, 62f
+    mv      s8, t4
+62: addi    t0, t0, 24
+    addi    t1, t1, -1
+    bnez    t1, 61b
+    li      t0, -1
+    beq     s7, t0, 99f
+    call    lantern_app_hist_sync           # the chunks durable
+    bnez    a0, 90f
+    sub     t0, s8, s7                      # the index entries of those epochs, after the chunks' bytes
+    addi    t0, t0, 1
+    li      t1, SEEN_HISTORY_ENTRY
+    mul     s8, t0, t1
+7:  ld      s2, AppHist_out(s10)
+    ld      t0, 0(s2)
+    ld      t1, 8(s2)
+    ld      t2, 16(s2)
+    sub     t0, t0, t1
+    sub     t0, t0, t2
+    bgeu    t0, s8, 71f
+    call    lantern_app_hist_grow
+    bnez    a0, 99f
+    j       7b
+71: add     s6, s2, t1
+    add     s6, s6, t2
+    ld      t0, AppHist_map(s10)
+    ld      t1, SeenHistory_first_epoch(t0)
+    sub     s9, s7, t1
+    li      t2, SEEN_HISTORY_ENTRY
+    mul     s9, s9, t2
+    addi    s9, s9, SEEN_HISTORY_FIXED
+    mv      a0, s6
+    add     a1, t0, s9
+    mv      a2, s8
+    call    lantern_copy
+    addi    t0, s10, AppHist_kinds
+    li      t1, 0                           # t1 the kind
+72: ld      t2, 0(t0)
+    beqz    t2, 75f
+    ld      t3, 8(t0)
+    ld      t4, 16(t0)
+73: bltu    t4, t3, 75f
+    sub     t5, t3, s7
+    li      t6, SEEN_HISTORY_ENTRY
+    mul     t5, t5, t6
+    slli    t6, t1, 3
+    add     t5, t5, t6
+    add     t5, s6, t5
+    sd      t2, 0(t5)
+    addi    t3, t3, 1
+    j       73b
+75: addi    t0, t0, 24
+    addi    t1, t1, 1
+    li      t2, HIST_KINDS
+    bltu    t1, t2, 72b
+    mv      a0, s6
+    mv      a1, s8
+    mv      a2, s9
+    call    lantern_app_hist_put
+    bnez    a0, 90f
+    call    lantern_app_hist_sync
+    bnez    a0, 90f
+    sd      s5, AppHist_word(s10)           # then the size
+    addi    a0, s10, AppHist_word
+    li      a1, 8
+    li      a2, SeenHistory_size
+    call    lantern_app_hist_put
+    bnez    a0, 90f
+    call    lantern_app_hist_sync
+    bnez    a0, 90f
+    ld      t0, AppHist_mode(s10)
+    li      t1, APP_HIST_FILE
+    bne     t0, t1, 99f
+    call    lantern_app_hist_map
+99: LEAVE 16
+90: call    lantern_app_hist_fail
+    LEAVE 16
+END_FUNCTION lantern_app_hist_step
+
+/*
  * The loop: the clock, a NODE_EV_TICK of the time and the shell's events, lantern_node_step
  * with libp2p, a line at each new slot, then a wait for the sockets until the node's wakeup, at
  * most APP_WAIT_MS. Locals: L the time, L+8 the wait, L+16 the NODE_EV_TICK.
@@ -6583,9 +7118,7 @@ LOCAL_FUNCTION lantern_app_loop
     beq     a0, t0, 3f
     STQ     a0, s1, APP_LAST_SLOT
     sd      a0, (L + 8)(sp)
-    LDQ     a0, s1, APP_SEEN                # the Seen: the entries of past epochs and slots go
-    LDQ     a1, s1, APP_STORE
-    CALL_GLOBAL lantern_seen_prune
+    call    lantern_app_hist_step                   # the Seen: the entries of past epochs to its history
     call    lantern_app_line_start                  # slot <s>, head 0x<root>, finalized epoch <e>
     ADDRESS a0, app_m_slot
     li      a1, app_m_slot_len

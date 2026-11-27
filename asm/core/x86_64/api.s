@@ -12036,19 +12036,22 @@ LOCAL_FUNCTION lantern_node_submit_copy
 END_FUNCTION lantern_node_submit_copy
 
 /*
- * (node rdi, store rsi, seen rdx, work rcx, state_a r8, data r9, scratch r10, event r11, room rax)
- * -> rax: a NODE_WORK_API_SUBMIT of lantern_node_run (node.md): the operations of the body decoded
+ * (node rdi, store rsi, seen rdx, work rcx, state_a r8, data r9, scratch r10, event r11, room rax,
+ * history on the stack) -> rax: a NODE_WORK_API_SUBMIT of lantern_node_run (node.md): the operations of the body decoded
  * as records at NodeEvent_chunk of the event, then each checked by lantern_node_gossip of the fork
  * arg / 2^16 with seen. rbx node, rbp store, r12 work, r13 state_a, r14 data, r15 scratch, S7 the
  * event, S8 its end, S9 the next record, S10 the text's end. Locals: L seen, L+8 the kind, L+16
  * the topic, L+24 the fork, L+32 the operations, L+40 1 for a list, L+48 where the text goes on,
- * L+56 an item's start, L+64 a NodeGossip, L+144 a JsonFault, L+272 a root, L+304 an index.
+ * L+56 an item's start, L+64 a NodeGossip, L+144 a JsonFault, L+272 a root, L+304 an index,
+ * L+312 the history.
  */
 LOCAL_FUNCTION lantern_node_api_submit_run
     ENTER 320
     mov     %rdi, %rbx
     mov     %rsi, %rbp
     mov     %rdx, L(%rsp)
+    mov     (320 + 96)(%rsp), %rdx          # the history, on the stack
+    mov     %rdx, (L + 312)(%rsp)
     mov     %rcx, %r12
     mov     %r8, %r13
     mov     %r9, %r14
@@ -12453,6 +12456,8 @@ LOCAL_FUNCTION lantern_node_api_submit_run
     mov     %rcx, 32(%rsp)
     mov     %r8, 40(%rsp)
     mov     %r9, 48(%rsp)
+    mov     (64 + L + 312)(%rsp), %rdx     # the fourteenth: the history
+    mov     %rdx, 56(%rsp)
     mov     NodeGossip_settings(%rax), %rdx
     mov     %rdx, (%rsp)
     mov     NodeGossip_config(%rax), %rdx
@@ -12515,6 +12520,8 @@ LOCAL_FUNCTION lantern_node_api_submit_run
     mov     %rcx, 32(%rsp)
     mov     %r8, 40(%rsp)
     mov     %r9, 48(%rsp)
+    mov     (64 + L + 312)(%rsp), %rdx     # the fourteenth: the history
+    mov     %rdx, 56(%rsp)
     mov     NodeGossip_settings(%rax), %rdx
     mov     %rdx, (%rsp)
     mov     NodeGossip_config(%rax), %rdx

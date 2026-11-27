@@ -3298,17 +3298,18 @@ END_FUNCTION lantern_node_gossip_member
 
 /*
  * (seen, store, gossip, head, proposer, justified, settings, config, data, scratch, result, root,
- * index): the gossip validation of the topic gossip.topic for
+ * index, history): the gossip validation of the topic gossip.topic for
  * the message in data, decoded with the fork's type. For beacon_block, blob_sidecar and
  * data_column_sidecar the proposer state first gets process_slots to the message's slot. A valid
  * beacon_block gives its root and blob count; a valid blob_sidecar the root of its block header
  * and its index. x19 args, x20 the message, x21 scratch, x22 result, x23 root, x24 the topic,
  * x25 the slot, x26 the proposer state, x27 index, x28 the scratch size, restored on return.
  * x19 its inputs, in a table of its own: a NodeGossip at (16 + L + 16). Locals: (16 + L) a slot
- * and a result. The two arguments past the eighth of its calls go at sp.
+ * and a result, (16 + L + 96) a SeenRecall, (16 + L + 360) a SeenMark, (16 + L + 392) the history.
+ * The two arguments past the eighth of its calls go at sp.
  */
 SPEC_FUNCTION node_gossip
-    ENTER_OUT 96, 16
+    ENTER_OUT 400, 16
     add     x19, sp, #(16 + L + 16)         /* its inputs, in a table of its own */
     stp     x0, x1, [x19, #NodeGossip_seen]
     ldp     x9, x10, [x2]                   /* the values: time_ms, topic, subnet */
@@ -3318,9 +3319,13 @@ SPEC_FUNCTION node_gossip
     stp     x3, x4, [x19, #NodeGossip_head]
     stp     x5, x6, [x19, #NodeGossip_justified]
     str     x7, [x19, #NodeGossip_config]
-    ldp     x20, x21, [sp, #(16 + 96 + 96)] /* the ninth to thirteenth arguments: data, scratch, result, root, index */
-    ldp     x22, x23, [sp, #(16 + 96 + 96 + 16)]
-    ldr     x27, [sp, #(16 + 96 + 96 + 32)]
+    add     x9, sp, #(16 + 96 + 400)        /* the ninth to fourteenth arguments: data, scratch, result, root, index, history */
+    ldp     x20, x21, [x9]
+    ldp     x22, x23, [x9, #16]
+    ldp     x27, x9, [x9, #32]
+    str     x9, [sp, #(16 + L + 392)]
+    stp     xzr, xzr, [sp, #(16 + L + 360)]  /* the SeenMark: nothing recalled yet */
+    stp     xzr, xzr, [sp, #(16 + L + 376)]
     ldr     x28, [x21]
     str     xzr, [x22]
     str     xzr, [x27]
@@ -3429,7 +3434,21 @@ SPEC_FUNCTION node_gossip
     mov     x9, #LANTERN_GOSSIP_IGNORE      /* the slots do not run: no answer of the spec */
     str     x9, [x22]
     b       99f
-20: ldr     x0, [x19, #NodeGossip_seen]     /* the check of the topic */
+20: ldr     x0, [sp, #(16 + L + 392)]   /* the message's keys the history holds, back into seen */
+    cbz     x0, 201f
+    mov     x0, x24
+    mov     x1, x20
+    mov     x2, x21
+    add     x3, sp, #(16 + L + 96)
+    bl      lantern_node_seen_keys
+    cbnz    x0, 99f
+    ldr     x0, [x19, #NodeGossip_seen]
+    ldr     x1, [sp, #(16 + L + 392)]
+    add     x2, sp, #(16 + L + 96)
+    add     x3, sp, #(16 + L + 360)
+    CALL_GLOBAL lantern_seen_recall
+    cbnz    x0, 99f
+201: ldr    x0, [x19, #NodeGossip_seen]     /* the check of the topic */
     ldr     x1, [x19, #NodeGossip_store]
     mov     x2, x20
     add     x3, x19, #NodeGossip_time_ms
@@ -3626,8 +3645,99 @@ SPEC_FUNCTION node_gossip
     b       99f
 8:  mov     x0, #LANTERN_BUFFER_TOO_SMALL
 99: str     x28, [x21]
-    LEAVE_OUT 96, 16
+    mov     x25, x0                         /* seen without what the history gave */
+    ldr     x0, [x19, #NodeGossip_seen]
+    add     x1, sp, #(16 + L + 360)
+    CALL_GLOBAL lantern_seen_forget
+    mov     x0, x25
+    LEAVE_OUT 400, 16
 SPEC_END node_gossip
+
+/*
+ * (topic x0, message x1, scratch x2, recall x3) -> x0: the SeenRecall of a decoded gossip message
+ * (node.md, lantern_node_gossip): the keys of the kinds lantern_seen_archive moves, from its fields.
+ * LANTERN_OK, or LANTERN_BUFFER_TOO_SMALL when scratch cannot hold the aggregate data's hash.
+ * x19 the message, x20 recall, x21 scratch.
+ */
+LOCAL_FUNCTION lantern_node_seen_keys
+    ENTER 0
+    mov     x19, x1
+    mov     x20, x3
+    mov     x21, x2
+    str     xzr, [x20, #SeenRecall_count]
+    add     x9, x20, #SeenRecall_items
+    cmp     x0, #GOSSIP_BEACON_AGGREGATE_AND_PROOF
+    b.ne    2f
+    PART    x10, x11, x19, SignedAggregateAndProof_message  /* (target epoch, aggregator index), and the bits */
+    ldr     x12, [x10, #AggregateAndProof_aggregator_index]
+    PART    x13, x11, x10, AggregateAndProof_aggregate
+    LDQ     x14, x13, Attestation_data + AttestationData_target + Checkpoint_epoch
+    mov     x15, #SEEN_AGGREGATOR_EPOCH
+    stp     x15, x14, [x9, #SeenRecallItem_kind]
+    stp     x12, xzr, [x9, #SeenRecallItem_b]
+    mov     x15, #0                         /* the committee index: 0 before electra */
+.if FORK >= FORK_ELECTRA
+    LDQ     x15, x13, Attestation_committee_bits    /* its first committee bit */
+    rbit    x15, x15
+    clz     x15, x15
+.endif
+    mov     x16, #SEEN_RECALL_BITS
+    stp     x16, x15, [x9, #(SeenRecallItem__mem + SeenRecallItem_kind)]
+    stp     x14, xzr, [x9, #(SeenRecallItem__mem + SeenRecallItem_b)]
+    mov     x16, #2
+    str     x16, [x20, #SeenRecall_count]
+    ADDRESS x0, lantern_type_AttestationData
+    ADDQ    x1, x13, Attestation_data
+    mov     x2, x21
+    add     x3, x20, #(SeenRecall_items + SeenRecallItem__mem + SeenRecallItem_root)
+    CALL_GLOBAL ssz_hash_tree_root
+    cbz     x0, 9f
+    cmp     x0, #SSZ_BUFFER_TOO_SMALL
+    mov     x0, #LANTERN_BUFFER_TOO_SMALL
+    b.eq    8f
+    str     xzr, [x20, #SeenRecall_count]
+    b       9f
+2:
+.if FORK >= FORK_ELECTRA
+    cmp     x0, #GOSSIP_BEACON_ATTESTATION
+    b.ne    3f
+    mov     x15, #SEEN_ATTESTATION          /* (target epoch, attester index) */
+    LDQ     x14, x19, SingleAttestation_data + AttestationData_target + Checkpoint_epoch
+    stp     x15, x14, [x9, #SeenRecallItem_kind]
+    ldr     x12, [x19, #SingleAttestation_attester_index]
+    stp     x12, xzr, [x9, #SeenRecallItem_b]
+    b       7f
+3:
+.endif
+.if FORK == FORK_DENEB || FORK == FORK_ELECTRA
+    cmp     x0, #GOSSIP_BLOB_SIDECAR
+    b.ne    4f
+    mov     x15, #SEEN_BLOB_SIDECAR         /* (slot, proposer index, index) */
+    LDQ     x14, x19, BlobSidecar_signed_block_header + SignedBeaconBlockHeader_message + BeaconBlockHeader_slot
+    LDQ     x12, x19, BlobSidecar_signed_block_header + SignedBeaconBlockHeader_message + BeaconBlockHeader_proposer_index
+    ldr     x13, [x19, #BlobSidecar_index]
+    stp     x15, x14, [x9, #SeenRecallItem_kind]
+    stp     x12, x13, [x9, #SeenRecallItem_b]
+    b       7f
+4:
+.endif
+.if FORK >= FORK_FULU
+    cmp     x0, #GOSSIP_DATA_COLUMN_SIDECAR
+    b.ne    9f
+    mov     x15, #SEEN_DATA_COLUMN          /* (slot, proposer index, index) */
+    LDQ     x14, x19, DataColumnSidecar_signed_block_header + SignedBeaconBlockHeader_message + BeaconBlockHeader_slot
+    LDQ     x12, x19, DataColumnSidecar_signed_block_header + SignedBeaconBlockHeader_message + BeaconBlockHeader_proposer_index
+    ldr     x13, [x19, #DataColumnSidecar_index]
+    stp     x15, x14, [x9, #SeenRecallItem_kind]
+    stp     x12, x13, [x9, #SeenRecallItem_b]
+    b       7f
+.endif
+    b       9f
+7:  mov     x16, #1
+    str     x16, [x20, #SeenRecall_count]
+9:  mov     x0, #LANTERN_OK
+8:  LEAVE 0
+END_FUNCTION lantern_node_seen_keys
 
 .if FORK == FORK_DENEB || FORK == FORK_ELECTRA
 /*
@@ -6678,14 +6788,14 @@ SPEC_END node_publish_decode
 
 /*
  * (seen, store, gossip, head, proposer, justified, settings, config, block, sidecars, level,
- * scratch): node.md, lantern_node_publish_check. x19 its inputs, in a table of its own: a
- * NodeGossip at L+112,
+ * scratch, history): node.md, lantern_node_publish_check. x19 its inputs, in a table of its own: a
+ * NodeGossip at L+112, then the history,
  * x20 block, x21 sidecars, x22 level, x23 scratch, x24 a sidecar, x25 their end, x26 the scratch
  * size. Locals: L a Result, L+8 a root (32), L+40 an index, L+48 execution_valid 1, L+64 the
  * counts of seen's parts (40).
  */
 SPEC_FUNCTION node_publish_check
-    ENTER 192
+    ENTER 208
     add     x19, sp, #(L + 112)             /* its inputs, in a table of its own */
     stp     x0, x1, [x19, #NodeGossip_seen]
     ldp     x9, x10, [x2]                   /* the values: time_ms, topic, subnet */
@@ -6695,8 +6805,10 @@ SPEC_FUNCTION node_publish_check
     stp     x3, x4, [x19, #NodeGossip_head]
     stp     x5, x6, [x19, #NodeGossip_justified]
     str     x7, [x19, #NodeGossip_config]
-    ldp     x20, x21, [sp, #(96 + 192)]     /* the ninth to twelfth arguments: block, sidecars, level, scratch */
-    ldp     x22, x23, [sp, #(96 + 192 + 16)]
+    ldp     x20, x21, [sp, #(96 + 208)]     /* the ninth to thirteenth arguments: block, sidecars, level, scratch, history */
+    ldp     x22, x23, [sp, #(96 + 208 + 16)]
+    ldr     x9, [sp, #(96 + 208 + 32)]
+    str     x9, [x19, #NodeGossip__mem]
     ldr     x26, [x23]
     ldr     x9, [x19, #NodeGossip_seen]     /* the counts of seen's parts, for a check that fails */
     ldr     x10, [x9, #(Seen_keys + 8)]
@@ -6797,7 +6909,7 @@ SPEC_FUNCTION node_publish_check
     b       9f
 7:  str     x26, [x23]
     mov     x0, #LANTERN_OK
-    LEAVE 192
+    LEAVE 208
 6:  str     x26, [x23]
     mov     x0, #LANTERN_BUFFER_TOO_SMALL
     b       9f
@@ -6821,16 +6933,12 @@ SPEC_FUNCTION node_publish_check
     mov     x3, x23
     bl      lantern_publish_blinded_transition
 .endif
-9:  ldr     x9, [x19, #NodeGossip_seen]     /* a check that fails, or no room: seen as it was */
-    ldp     x10, x11, [sp, #(L + 64)]
-    str     x10, [x9, #(Seen_keys + 8)]
-    str     x11, [x9, #(Seen_bits + 8)]
-    ldp     x10, x11, [sp, #(L + 80)]
-    str     x10, [x9, #(Seen_blocks + 8)]
-    str     x11, [x9, #(Seen_headers + 8)]
-    ldr     x10, [sp, #(L + 96)]
-    str     x10, [x9, #Seen_header_bytes]
-    LEAVE 192
+9:  mov     x24, x0                         /* a check that fails, or no room: seen as it was */
+    ldr     x0, [x19, #NodeGossip_seen]
+    add     x1, sp, #(L + 64)
+    CALL_GLOBAL lantern_seen_restore
+    mov     x0, x24
+    LEAVE 208
 SPEC_END node_publish_check
 
 /*
@@ -7116,10 +7224,12 @@ LOCAL_FUNCTION lantern_publish_gossip
     add     x11, sp, #16                    /* result, root, index */
     add     x12, sp, #24
     add     x13, sp, #56
-    sub     sp, sp, #48                     /* the ninth to thirteenth arguments */
+    sub     sp, sp, #48                     /* the ninth to fourteenth arguments */
     stp     x0, x1, [sp]
     stp     x11, x12, [sp, #16]
     str     x13, [sp, #32]
+    ldr     x13, [x19, #NodeGossip__mem]    /* the fourteenth: the history */
+    str     x13, [sp, #40]
     ldp     x0, x1, [x19, #NodeGossip_seen]
     add     x2, x19, #NodeGossip_time_ms
     ldp     x3, x4, [x19, #NodeGossip_head]

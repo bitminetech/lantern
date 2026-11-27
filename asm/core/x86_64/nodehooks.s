@@ -3494,17 +3494,17 @@ END_FUNCTION lantern_node_gossip_member
 
 /*
  * (seen, store, gossip, head, proposer, justified, settings, config, data, scratch, result, root,
- * index): the gossip validation of the topic gossip.topic for
+ * index, history): the gossip validation of the topic gossip.topic for
  * the message in data, decoded with the fork's type. For beacon_block, blob_sidecar and
  * data_column_sidecar the proposer state first gets process_slots to the message's slot. A valid
  * beacon_block gives its root and blob count; a valid blob_sidecar the root of its block header
  * and its index. rbx args, rbp the message, r12 scratch, r13 result, r14 root, r15 the topic;
  * S7-S10 the arguments past the sixth. Locals: L a slot, L+8 a result, L+16 the proposer state,
  * L+24 the scratch size, restored on return, L+32 index, L+48 its inputs, in a table of its own
- * (a NodeGossip, in rbx).
+ * (a NodeGossip, in rbx), L+128 a SeenRecall, L+392 a SeenMark, L+424 the history.
  */
 SPEC_FUNCTION node_gossip
-    ENTER 128
+    ENTER 432
     lea     (L + 48)(%rsp), %rbx            # its inputs, in a table of its own
     mov     %rdi, NodeGossip_seen(%rbx)
     mov     %rsi, NodeGossip_store(%rbx)
@@ -3517,16 +3517,23 @@ SPEC_FUNCTION node_gossip
     mov     %rcx, NodeGossip_head(%rbx)
     mov     %r8, NodeGossip_proposer(%rbx)
     mov     %r9, NodeGossip_justified(%rbx)
-    mov     (128 + 96)(%rsp), %rax          # the seventh and eighth arguments: settings, config
+    mov     (432 + 96)(%rsp), %rax          # the seventh and eighth arguments: settings, config
     mov     %rax, NodeGossip_settings(%rbx)
-    mov     (128 + 96 + 8)(%rsp), %rax
+    mov     (432 + 96 + 8)(%rsp), %rax
     mov     %rax, NodeGossip_config(%rbx)
-    mov     (128 + 96 + 16)(%rsp), %rbp     # data, scratch, result, root, index
-    mov     (128 + 96 + 24)(%rsp), %r12
-    mov     (128 + 96 + 32)(%rsp), %r13
-    mov     (128 + 96 + 40)(%rsp), %r14
-    mov     (128 + 96 + 48)(%rsp), %r9
+    mov     (432 + 96 + 16)(%rsp), %rbp     # data, scratch, result, root, index
+    mov     (432 + 96 + 24)(%rsp), %r12
+    mov     (432 + 96 + 32)(%rsp), %r13
+    mov     (432 + 96 + 40)(%rsp), %r14
+    mov     (432 + 96 + 48)(%rsp), %r9
     mov     %r9, (L + 32)(%rsp)
+    mov     (432 + 96 + 56)(%rsp), %rax     # the fourteenth: the history
+    mov     %rax, (L + 424)(%rsp)
+    xor     %eax, %eax                      # the SeenMark: nothing recalled yet
+    mov     %rax, (L + 392)(%rsp)
+    mov     %rax, (L + 400)(%rsp)
+    mov     %rax, (L + 408)(%rsp)
+    mov     %rax, (L + 416)(%rsp)
     movq    $0, (%r9)
     mov     (%r12), %rax
     mov     %rax, (L + 24)(%rsp)
@@ -3636,7 +3643,23 @@ SPEC_FUNCTION node_gossip
     je      20f
     movq    $LANTERN_GOSSIP_IGNORE, (%r13)  # the slots do not run: no answer of the spec
     jmp     99f
-20: mov     NodeGossip_seen(%rbx), %rdi     # the check of the topic
+20: cmpq    $0, (L + 424)(%rsp)             # the message's keys the history holds, back into seen
+    je      201f
+    mov     %r15, %rdi
+    mov     %rbp, %rsi
+    mov     %r12, %rdx
+    lea     (L + 128)(%rsp), %rcx
+    call    lantern_node_seen_keys
+    test    %rax, %rax
+    jnz     99f
+    mov     NodeGossip_seen(%rbx), %rdi
+    mov     (L + 424)(%rsp), %rsi
+    lea     (L + 128)(%rsp), %rdx
+    lea     (L + 392)(%rsp), %rcx
+    CALL_GLOBAL lantern_seen_recall
+    test    %rax, %rax
+    jnz     99f
+201: mov    NodeGossip_seen(%rbx), %rdi     # the check of the topic
     mov     NodeGossip_store(%rbx), %rsi
     mov     %rbp, %rdx
     lea     NodeGossip_time_ms(%rbx), %rcx
@@ -3851,8 +3874,104 @@ SPEC_FUNCTION node_gossip
 8:  mov     $LANTERN_BUFFER_TOO_SMALL, %eax
 99: mov     (L + 24)(%rsp), %rcx
     mov     %rcx, (%r12)
-    LEAVE 128
+    mov     %rax, %r15                      # seen without what the history gave
+    mov     NodeGossip_seen(%rbx), %rdi
+    lea     (L + 392)(%rsp), %rsi
+    CALL_GLOBAL lantern_seen_forget
+    mov     %r15, %rax
+    LEAVE 432
 SPEC_END node_gossip
+
+/*
+ * (topic rdi, message rsi, scratch rdx, recall rcx) -> rax: the SeenRecall of a decoded gossip message
+ * (node.md, lantern_node_gossip): the keys of the kinds lantern_seen_archive moves, from its fields.
+ * LANTERN_OK, or LANTERN_BUFFER_TOO_SMALL when scratch cannot hold the aggregate data's hash.
+ * rbx the message, rbp recall, r12 scratch, r13 the aggregate, r9 the items.
+ */
+LOCAL_FUNCTION lantern_node_seen_keys
+    ENTER 0
+    mov     %rsi, %rbx
+    mov     %rcx, %rbp
+    mov     %rdx, %r12
+    movq    $0, SeenRecall_count(%rbp)
+    lea     SeenRecall_items(%rbp), %r9
+    cmp     $GOSSIP_BEACON_AGGREGATE_AND_PROOF, %rdi
+    jne     2f
+    PART    %r10, %r11, %rbx, SignedAggregateAndProof_message   # (target epoch, aggregator index), and the bits
+    mov     AggregateAndProof_aggregator_index(%r10), %rdx
+    PART    %r13, %r11, %r10, AggregateAndProof_aggregate
+    mov     (Attestation_data + AttestationData_target + Checkpoint_epoch)(%r13), %rax
+    movq    $SEEN_AGGREGATOR_EPOCH, SeenRecallItem_kind(%r9)
+    mov     %rax, SeenRecallItem_a(%r9)
+    mov     %rdx, SeenRecallItem_b(%r9)
+    movq    $0, SeenRecallItem_c(%r9)
+    xor     %ecx, %ecx                      # the committee index: 0 before electra
+.if FORK >= FORK_ELECTRA
+    mov     Attestation_committee_bits(%r13), %rdx  # its first committee bit
+    mov     $64, %ecx
+    bsf     %rdx, %rdx
+    cmovnz  %rdx, %rcx
+.endif
+    movq    $SEEN_RECALL_BITS, (SeenRecallItem__mem + SeenRecallItem_kind)(%r9)
+    mov     %rcx, (SeenRecallItem__mem + SeenRecallItem_a)(%r9)
+    mov     %rax, (SeenRecallItem__mem + SeenRecallItem_b)(%r9)
+    movq    $0, (SeenRecallItem__mem + SeenRecallItem_c)(%r9)
+    movq    $2, SeenRecall_count(%rbp)
+    ADDRESS %rdi, lantern_type_AttestationData
+    lea     Attestation_data(%r13), %rsi
+    mov     %r12, %rdx
+    lea     (SeenRecall_items + SeenRecallItem__mem + SeenRecallItem_root)(%rbp), %rcx
+    CALL_GLOBAL ssz_hash_tree_root
+    test    %rax, %rax
+    jz      9f
+    cmp     $SSZ_BUFFER_TOO_SMALL, %rax
+    mov     $LANTERN_BUFFER_TOO_SMALL, %eax
+    je      8f
+    movq    $0, SeenRecall_count(%rbp)
+    jmp     9f
+2:
+.if FORK >= FORK_ELECTRA
+    cmp     $GOSSIP_BEACON_ATTESTATION, %rdi
+    jne     3f
+    movq    $SEEN_ATTESTATION, SeenRecallItem_kind(%r9)  # (target epoch, attester index)
+    mov     (SingleAttestation_data + AttestationData_target + Checkpoint_epoch)(%rbx), %rax
+    mov     %rax, SeenRecallItem_a(%r9)
+    mov     SingleAttestation_attester_index(%rbx), %rax
+    mov     %rax, SeenRecallItem_b(%r9)
+    movq    $0, SeenRecallItem_c(%r9)
+    jmp     7f
+3:
+.endif
+.if FORK == FORK_DENEB || FORK == FORK_ELECTRA
+    cmp     $GOSSIP_BLOB_SIDECAR, %rdi
+    jne     4f
+    movq    $SEEN_BLOB_SIDECAR, SeenRecallItem_kind(%r9)  # (slot, proposer index, index)
+    mov     (BlobSidecar_signed_block_header + SignedBeaconBlockHeader_message + BeaconBlockHeader_slot)(%rbx), %rax
+    mov     %rax, SeenRecallItem_a(%r9)
+    mov     (BlobSidecar_signed_block_header + SignedBeaconBlockHeader_message + BeaconBlockHeader_proposer_index)(%rbx), %rax
+    mov     %rax, SeenRecallItem_b(%r9)
+    mov     BlobSidecar_index(%rbx), %rax
+    mov     %rax, SeenRecallItem_c(%r9)
+    jmp     7f
+4:
+.endif
+.if FORK >= FORK_FULU
+    cmp     $GOSSIP_DATA_COLUMN_SIDECAR, %rdi
+    jne     9f
+    movq    $SEEN_DATA_COLUMN, SeenRecallItem_kind(%r9)  # (slot, proposer index, index)
+    mov     (DataColumnSidecar_signed_block_header + SignedBeaconBlockHeader_message + BeaconBlockHeader_slot)(%rbx), %rax
+    mov     %rax, SeenRecallItem_a(%r9)
+    mov     (DataColumnSidecar_signed_block_header + SignedBeaconBlockHeader_message + BeaconBlockHeader_proposer_index)(%rbx), %rax
+    mov     %rax, SeenRecallItem_b(%r9)
+    mov     DataColumnSidecar_index(%rbx), %rax
+    mov     %rax, SeenRecallItem_c(%r9)
+    jmp     7f
+.endif
+    jmp     9f
+7:  movq    $1, SeenRecall_count(%rbp)
+9:  xor     %eax, %eax
+8:  LEAVE 0
+END_FUNCTION lantern_node_seen_keys
 
 .if FORK == FORK_DENEB || FORK == FORK_ELECTRA
 /*
@@ -6987,14 +7106,14 @@ SPEC_END node_publish_decode
 
 /*
  * (seen, store, gossip, head, proposer, justified, settings, config, block, sidecars, level,
- * scratch): node.md, lantern_node_publish_check. rbx its inputs, in a table of its own: a
- * NodeGossip at L+112,
+ * scratch, history): node.md, lantern_node_publish_check. rbx its inputs, in a table of its own: a
+ * NodeGossip at L+112, then the history,
  * rbp block, r12 sidecars, r13 level, r14 scratch, r15 a sidecar. Locals: L a Result, L+8 a root
  * (32), L+40 the sidecars' end, L+48 execution_valid 1, L+56 the scratch size, L+64 the counts
  * of seen's parts (40).
  */
 SPEC_FUNCTION node_publish_check
-    ENTER 192
+    ENTER 208
     lea     (L + 112)(%rsp), %rbx           # its inputs, in a table of its own
     mov     %rdi, NodeGossip_seen(%rbx)
     mov     %rsi, NodeGossip_store(%rbx)
@@ -7007,14 +7126,16 @@ SPEC_FUNCTION node_publish_check
     mov     %rcx, NodeGossip_head(%rbx)
     mov     %r8, NodeGossip_proposer(%rbx)
     mov     %r9, NodeGossip_justified(%rbx)
-    mov     (192 + 96)(%rsp), %rax          # the seventh and eighth arguments: settings, config
+    mov     (208 + 96)(%rsp), %rax          # the seventh and eighth arguments: settings, config
     mov     %rax, NodeGossip_settings(%rbx)
-    mov     (192 + 96 + 8)(%rsp), %rax
+    mov     (208 + 96 + 8)(%rsp), %rax
     mov     %rax, NodeGossip_config(%rbx)
-    mov     (192 + 96 + 16)(%rsp), %rbp     # block, sidecars, level, scratch
-    mov     (192 + 96 + 24)(%rsp), %r12
-    mov     (192 + 96 + 32)(%rsp), %r13
-    mov     (192 + 96 + 40)(%rsp), %r14
+    mov     (208 + 96 + 16)(%rsp), %rbp     # block, sidecars, level, scratch
+    mov     (208 + 96 + 24)(%rsp), %r12
+    mov     (208 + 96 + 32)(%rsp), %r13
+    mov     (208 + 96 + 40)(%rsp), %r14
+    mov     (208 + 96 + 48)(%rsp), %rax     # the thirteenth: the history, after the table
+    mov     %rax, NodeGossip__mem(%rbx)
     mov     (%r14), %rax
     mov     %rax, (L + 56)(%rsp)
     mov     NodeGossip_seen(%rbx), %rcx     # the counts of seen's parts, for a check that fails
@@ -7120,7 +7241,7 @@ SPEC_FUNCTION node_publish_check
 7:  mov     (L + 56)(%rsp), %rcx
     mov     %rcx, (%r14)
     xor     %eax, %eax
-    LEAVE 192
+    LEAVE 208
 6:  mov     (L + 56)(%rsp), %rcx
     mov     %rcx, (%r14)
     mov     $LANTERN_BUFFER_TOO_SMALL, %eax
@@ -7128,18 +7249,12 @@ SPEC_FUNCTION node_publish_check
 8:  mov     (L + 56)(%rsp), %rcx
     mov     %rcx, (%r14)
     mov     $LANTERN_INVALID_ENCODING, %eax
-99: mov     NodeGossip_seen(%rbx), %rcx     # a check that fails, or no room: seen as it was
-    mov     (L + 64)(%rsp), %rdx
-    mov     %rdx, (Seen_keys + 8)(%rcx)
-    mov     (L + 72)(%rsp), %rdx
-    mov     %rdx, (Seen_bits + 8)(%rcx)
-    mov     (L + 80)(%rsp), %rdx
-    mov     %rdx, (Seen_blocks + 8)(%rcx)
-    mov     (L + 88)(%rsp), %rdx
-    mov     %rdx, (Seen_headers + 8)(%rcx)
-    mov     (L + 96)(%rsp), %rdx
-    mov     %rdx, Seen_header_bytes(%rcx)
-    LEAVE 192
+99: mov     %rax, %r15                      # a check that fails, or no room: seen as it was
+    mov     NodeGossip_seen(%rbx), %rdi
+    lea     (L + 64)(%rsp), %rsi
+    CALL_GLOBAL lantern_seen_restore
+    mov     %r15, %rax
+    LEAVE 208
 .if FORK >= FORK_BELLATRIX
 60: and     $255, %r13                      # blinded: the checks of beacon_block on it, then its transition; seen as it was
     movq    $GOSSIP_BLINDED_BLOCK, NodeGossip_topic(%rbx)
@@ -7456,6 +7571,8 @@ LOCAL_FUNCTION lantern_publish_gossip
     mov     %rcx, 40(%rsp)
     lea     40(%rax), %rcx
     mov     %rcx, 48(%rsp)
+    mov     NodeGossip__mem(%rbx), %rdx    # the fourteenth: the history
+    mov     %rdx, 56(%rsp)
     mov     NodeGossip_settings(%rbx), %rdx
     mov     %rdx, (%rsp)
     mov     NodeGossip_config(%rbx), %rdx

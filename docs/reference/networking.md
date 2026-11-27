@@ -33,7 +33,14 @@ Gossip rules, subnets, custody, topics.
 - [`lantern_seen_init`](#function-lantern_seen_init): an empty `Seen`.
 - [`lantern_seen_copy`](#function-lantern_seen_copy): copies a `Seen` into a buffer with more capacity.
 - [`lantern_seen_add_block`](#function-lantern_seen_add_block): records a block that is known but has no post-state.
-- [`lantern_seen_prune`](#function-lantern_seen_prune): removes the entries of past epochs and slots from a `Seen`.
+- [`lantern_seen_archive`](#function-lantern_seen_archive): moves the entries of past epochs out of a `Seen`, as sorted chunks for its history.
+- [`lantern_seen_recall`](#function-lantern_seen_recall): copies a message's past entries from the history back into a `Seen`.
+- [`lantern_seen_forget`](#function-lantern_seen_forget): removes what lantern_seen_recall added.
+- [`lantern_seen_restore`](#function-lantern_seen_restore): gives the parts of a `Seen` back the counts they had.
+- [`lantern_seen_chunk_merge`](#function-lantern_seen_chunk_merge): merges two `SeenChunk` of one kind into one.
+- [`lantern_seen_floors`](#function-lantern_seen_floors): the bounds lantern_seen_archive moves entries below.
+- [`lantern_seen_sort`](#function-lantern_seen_sort): sorts records of words in place.
+- [`lantern_seen_history_find`](#function-lantern_seen_history_find): the first entry of a key in the history's chunk of an epoch.
 - [`lantern_validate_beacon_block_gossip`](#function-lantern_validate_beacon_block_gossip): topic `beacon_block`.
 - [`lantern_validate_blinded_block_gossip`](#function-lantern_validate_blinded_block_gossip): the checks of topic `beacon_block` on a blinded block (beacon-api.md, publishBlindedBlockV2), from bellatrix.
 - [`lantern_validate_beacon_aggregate_and_proof_gossip`](#function-lantern_validate_beacon_aggregate_and_proof_gossip): topic `beacon_aggregate_and_proof`.
@@ -80,6 +87,11 @@ Gossip rules, subnets, custody, topics.
 - [`SeenBits`](#type-seenbits): | Offset | Field | Type | Meaning |.
 - [`SeenBlock`](#type-seenblock): | Offset | Field | Type | Meaning |.
 - [`SeenHeader`](#type-seenheader): | Offset | Field | Type | Meaning |.
+- [`SeenHistory`](#type-seenhistory): the file of the entries of past epochs.
+- [`SeenChunk`](#type-seenchunk): one kind's entries of some epochs, sorted.
+- [`HistBits`](#type-histbits): the key of one aggregate bitset in a chunk.
+- [`SeenRecall`](#type-seenrecall): the keys of one message.
+- [`SeenMark`](#type-seenmark): what lantern_seen_recall added.
 
 ## Spec
 
@@ -1171,6 +1183,10 @@ lantern_seen_init(room, seen) -> status
 - `LANTERN_OK`: `seen` is empty, with the capacities of room.
 - `LANTERN_BUFFER_TOO_SMALL`: `seen` is below lantern_seen_size of room.
 
+### Function does
+
+- Zeroes the bytes of every part, so that the bytes after each part's entries are zero (Rules of `Seen`).
+
 ### Function never
 
 - Makes an OS call.
@@ -1265,14 +1281,14 @@ lantern_seen_add_block(seen, root, payload_status) -> status
 - Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
 - Argument order: `seen`, `root`, `payload_status`.
 
-## Function `lantern_seen_prune`
+## Function `lantern_seen_archive`
 
-Removes from seen the entries of past epochs and slots, which a time check of the spec's validation rules out: the bound on the size of `Seen` that the spec's sets lack.
+Moves the entries of past epochs and slots out of seen: those of the kinds the history keeps go to `out` as sorted chunks, the proven ones go; `Seen` and its history together hold the spec's sets.
 
 ### Signature
 
 ```
-lantern_seen_prune(seen, store) -> status
+lantern_seen_archive(seen, store, out) -> status
 ```
 
 ### Arguments
@@ -1281,27 +1297,129 @@ lantern_seen_prune(seen, store) -> status
 |---|---|---|
 | `seen` | state | [`Seen`](#type-seen) |
 | `store` | input | [`Store`](fork-choice.md#type-store) |
+| `out` | state | ByteList: the chunks follow its bytes |
 
 ### Returns
 
-- `LANTERN_OK`: seen holds the entries the rules keep, in their order; each part keeps its offset and capacity.
+- `LANTERN_OK`: `out` holds after its bytes one [`SeenChunk`](#type-seenchunk) of each kind with entries that moved; seen holds the entries that stay, in their order, with zero bytes after them.
+- `LANTERN_BUFFER_TOO_SMALL`: `out` has too little room for the chunks. Nothing is changed.
 
 ### Caller must
 
 - Validate no later message at a `current_time_ms` before `store.time_ms`.
 - Pass a store whose `time_ms` and finalized epoch never go back between calls.
+- Add each chunk to the history before the next validation that reads it.
 
 ### Function does
 
-- With s the current slot of `store.time_ms` (0 before genesis) and f the first slot of the store's finalized epoch:
-  - drops a `SEEN_ATTESTATION` or `SEEN_AGGREGATOR_EPOCH` key, and a `SEEN_AGGREGATE` entry of `bits`, whose epoch is below e - 1, with e the epoch of s - `ATTESTATION_PROPAGATION_SLOT_RANGE` - 1 (0 below 0);
-  - drops a `SEEN_PROPOSER_SLOT`, `SEEN_DATA_COLUMN` or `SEEN_BLOB_SIDECAR` key whose slot is f or below;
-  - drops a `SEEN_SYNC_CONTRIBUTION` or `SEEN_SYNC_MESSAGE` key, and a `SEEN_CONTRIBUTION` entry of `bits`, whose slot is below s - 1;
+- With s the current slot of `store.time_ms` (0 before genesis), e the epoch of s - `ATTESTATION_PROPAGATION_SLOT_RANGE` - 1 (0 below 0), the first epoch kept e - 1 (0 below 0), and f the first slot of the store's finalized epoch:
+  - moves a `SEEN_ATTESTATION` or `SEEN_AGGREGATOR_EPOCH` key whose epoch is below the first epoch kept, to a `HIST_ATTESTATION` or `HIST_AGGREGATOR` chunk of (epoch, index) entries;
+  - moves a `SEEN_DATA_COLUMN` or `SEEN_BLOB_SIDECAR` key whose slot is below f, to a `HIST_COLUMN` or `HIST_BLOB` chunk of (slot, proposer index, index) entries;
+  - moves a `SEEN_AGGREGATE` entry of `bits` whose target epoch `b` is below the first epoch kept, to a `HIST_AGGREGATE` chunk of [`HistBits`](#type-histbits) entries and their bits;
+  - drops a `SEEN_PROPOSER_SLOT` key whose slot is f or below, and a `SEEN_SYNC_CONTRIBUTION` or `SEEN_SYNC_MESSAGE` key, or a `SEEN_CONTRIBUTION` entry of `bits`, whose slot is below s - 1;
   - keeps the keys by validator index (`SEEN_VOLUNTARY_EXIT`, `SEEN_PROPOSER_SLASHING`, `SEEN_ATTESTER_SLASHING`, `SEEN_BLS_CHANGE`), `blocks` and `headers`.
-- A block, blob sidecar, sync message or contribution of a dropped key gets the spec's result: no [REJECT] check comes between its seen check and the time check that gives [IGNORE] (the finalized slot, or is_current_slot with `MAXIMUM_GOSSIP_CLOCK_DISPARITY`).
-- An attestation, aggregate or data column sidecar of a dropped key gets the spec's result, but one case: a message of a key the spec's seen holds, that fails a [REJECT] check before the time check, gets `LANTERN_GOSSIP_REJECT` where the spec gives [IGNORE].
-- The epochs kept hold the current and previous epoch of is_current_or_previous_epoch, the slots of is_within_slot_range with `ATTESTATION_PROPAGATION_SLOT_RANGE`, both with `MAXIMUM_GOSSIP_CLOCK_DISPARITY`, and the epochs lantern_node_liveness reads.
+- A dropped key changes no result: no [REJECT] check of its message comes between its seen check and the time check that then gives [IGNORE] (the finalized slot, or is_current_slot with `MAXIMUM_GOSSIP_CLOCK_DISPARITY`).
+- No valid message can add a moved key again: its epoch or slot fails the message's time check.
+- Sorts each chunk's entries by their words, unsigned, in word order: (epoch, index), (slot, proposer index, index), or (data root, committee index, target epoch).
 - Reads the config values of the store's copy.
+
+### Function never
+
+- Makes an OS call.
+- Keeps a pointer after it returns.
+
+### Limits
+
+- Stack of its own: 168 bytes on x86-64 (return address included), 144 bytes on ARM64, 176 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_seen_archive`, with `_` before it on macOS.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- Argument order: `seen`, `store`, `out`.
+
+## Function `lantern_seen_recall`
+
+Copies into seen the entries of a message's keys that the history holds and seen does not, so that a validation sees the spec's sets.
+
+### Signature
+
+```
+lantern_seen_recall(seen, history, recall, mark) -> status
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `seen` | state | [`Seen`](#type-seen) |
+| `history` | input | [`SeenHistory`](#type-seenhistory), or 0 |
+| `recall` | input | [`SeenRecall`](#type-seenrecall) |
+| `mark` | output | [`SeenMark`](#type-seenmark) |
+
+### Returns
+
+- `LANTERN_OK`: seen holds after its keys and bits the entries it added; `mark` says how many.
+- `LANTERN_BUFFER_TOO_SMALL`: `keys` or `bits` of seen has too little room for them. Nothing is changed.
+- `LANTERN_INVALID_EVENT`: `recall` has more than `SEEN_RECALL_MAX` items. Nothing is changed.
+
+### Caller must
+
+- Call lantern_seen_forget with `mark` after the validation that reads them, before seen is archived or copied.
+
+### Function does
+
+- A key item of `SEEN_ATTESTATION`, `SEEN_AGGREGATOR_EPOCH`, `SEEN_DATA_COLUMN` or `SEEN_BLOB_SIDECAR` that seen does not hold, and the chunk of its kind and epoch holds: one key.
+- A `SEEN_RECALL_BITS` item (root, a, b) with no `SEEN_AGGREGATE` entry of seen of that root, a and b: one `SEEN_AGGREGATE` entry of each `HistBits` of the chunk of that key, with its bits.
+- Another item kind, or a key the history lacks: nothing.
+- Reads a chunk only inside the history's `size`, its entries only inside the chunk's `bytes`, and bits of at most `SEEN_BITS_BYTES`.
+
+### Function never
+
+- Makes an OS call.
+- Keeps a pointer after it returns.
+
+### Limits
+
+- Stack of its own: 152 bytes on x86-64 (return address included), 160 bytes on ARM64, 176 bytes on RISC-V.
+- Time: a lookup in the history is a binary search of one chunk.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_seen_recall`, with `_` before it on macOS.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- Argument order: `seen`, `history`, `recall`, `mark`.
+
+## Function `lantern_seen_forget`
+
+Removes from seen the entries lantern_seen_recall added, and moves the entries added after them down.
+
+### Signature
+
+```
+lantern_seen_forget(seen, mark) -> status
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `seen` | state | [`Seen`](#type-seen) |
+| `mark` | input | [`SeenMark`](#type-seenmark) |
+
+### Returns
+
+- `LANTERN_OK`, always.
+
+### Caller must
+
+- Pass the `mark` of the last lantern_seen_recall, with seen changed since only by entries added after its keys and bits.
+
+### Function does
+
+- Zeroes the bytes the removed entries leave after the others, so seen's bytes are those before lantern_seen_recall when the validation added nothing.
 
 ### Function never
 
@@ -1315,9 +1433,228 @@ lantern_seen_prune(seen, store) -> status
 ### ABI
 
 - Role: L0.
-- Symbol: `lantern_seen_prune`, with `_` before it on macOS.
+- Symbol: `lantern_seen_forget`, with `_` before it on macOS.
 - Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
-- Argument order: `seen`, `store`.
+- Argument order: `seen`, `mark`.
+
+## Function `lantern_seen_restore`
+
+Gives the parts of a `Seen` back the counts they had.
+
+### Signature
+
+```
+lantern_seen_restore(seen, counts) -> status
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `seen` | state | [`Seen`](#type-seen) |
+| `counts` | input | 5 u64: the counts of `keys`, `bits` and `blocks`, the count of `headers` and `header_bytes` |
+
+### Returns
+
+- `LANTERN_OK`, always.
+
+### Caller must
+
+- Pass counts read from seen before entries were added, with seen changed since only by entries added at the end of its parts.
+
+### Function does
+
+- Sets each part's count, and `header_bytes`, to the one in counts.
+- Zeroes the bytes of each part after its entries, so seen's bytes are those it had when the counts were read.
+
+### Function never
+
+- Makes an OS call.
+- Keeps a pointer after it returns.
+
+### Limits
+
+- Stack of its own: 96 bytes on x86-64 (return address included), 96 bytes on ARM64, 96 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_seen_restore`, with `_` before it on macOS.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- Argument order: `seen`, `counts`.
+
+## Function `lantern_seen_chunk_merge`
+
+Merges two `SeenChunk` of one kind into one.
+
+### Signature
+
+```
+lantern_seen_chunk_merge(a, b, out) -> status
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `a` | input | [`SeenChunk`](#type-seenchunk) |
+| `b` | input | [`SeenChunk`](#type-seenchunk) of the kind of `a` |
+| `out` | state | ByteList: the merged chunk follows its bytes |
+
+### Returns
+
+- `LANTERN_OK`: `out` holds after its bytes one `SeenChunk` of the entries of a and b.
+- `LANTERN_BUFFER_TOO_SMALL`: `out` has fewer than the bytes of a and b less `SEEN_CHUNK_FIXED` of room. Nothing is changed.
+
+### Caller must
+
+- Pass chunks as lantern_seen_archive writes them: entries sorted, `bytes` the end of their entries and bits, the bits of each `HistBits` inside its chunk.
+
+### Function does
+
+- The merged chunk: the kind of a, `epoch_lo` the lower of the two, `epoch_hi` the higher, `count` the sum, `bytes` the sum less `SEEN_CHUNK_FIXED`.
+- Its entries: those of a and b in the order of lantern_seen_archive (their words, or for `HIST_AGGREGATE` the root, the committee index and the target epoch), a's first of two equal ones.
+- `HIST_AGGREGATE`: the bits of each entry follow all the entries, in the entries' order, and its `bits` holds their new offset from the merged chunk's start.
+
+### Function never
+
+- Makes an OS call.
+- Keeps a pointer after it returns.
+
+### Limits
+
+- Stack of its own: 128 bytes on x86-64 (return address included), 96 bytes on ARM64, 96 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_seen_chunk_merge`, with `_` before it on macOS.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- Argument order: `a`, `b`, `out`.
+
+## Function `lantern_seen_floors`
+
+The bounds lantern_seen_archive moves entries below.
+
+### Signature
+
+```
+lantern_seen_floors(store) -> (first epoch, first sync slot, finalized slot)
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `store` | input | [`Store`](fork-choice.md#type-store) in x1, rsi, a1 |
+
+### Returns
+
+- The first epoch kept, the first sync slot kept and the first slot of the finalized epoch, in x8, x9, x10 on ARM64, r8, r9, r11 on x86-64, a5, a6, a7 on RISC-V (lantern_seen_archive, Function does).
+
+### Function does
+
+- Reads the store's `time_ms`, its genesis time, its finalized epoch and the config values of its copy.
+
+### Function never
+
+- Makes an OS call.
+- Keeps a pointer after it returns.
+
+### Limits
+
+- Stack of its own: 8 bytes on x86-64 (return address included), 0 bytes on ARM64, 0 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_seen_floors`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- A leaf.
+
+## Function `lantern_seen_sort`
+
+Sorts records of words in place.
+
+### Signature
+
+```
+lantern_seen_sort(records, count, words, key)
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `records` | state | `count` records of `words` u64 |
+| `count` | input | u64 in a register |
+| `words` | input | u64 in a register: the words of a record |
+| `key` | input | u64 in a register: the words compared, from the first |
+
+### Function does
+
+- Sorts the records by their first `key` words, unsigned and in word order: a heapsort, with no memory but the records'.
+
+### Function never
+
+- Makes an OS call.
+- Keeps a pointer after it returns.
+
+### Limits
+
+- Stack of its own: 112 bytes on x86-64 (return address included), 0 bytes on ARM64, 96 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_seen_sort`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- Argument order: `records`, `count`, `words`, `key`.
+
+## Function `lantern_seen_history_find`
+
+The first entry of a key in the history's chunk of an epoch.
+
+### Signature
+
+```
+lantern_seen_history_find(history, kind, key, words, epoch) -> (entry, chunk)
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `history` | input | [`SeenHistory`](#type-seenhistory), or 0 |
+| `kind` | input | u64 in a register: a `HIST_*` kind |
+| `key` | input | `words` u64 |
+| `words` | input | u64 in a register: the words compared |
+| `epoch` | input | u64 in a register |
+
+### Returns
+
+- The first entry of the chunk whose first `words` words are those of key, and the chunk; or 0.
+
+### Function does
+
+- Takes the index entry of the epoch for the kind, and its chunk, only when both lie inside the history's `size`, the chunk is of that kind and its entries fit in its bytes.
+- Finds the entry by a binary search of the sorted entries.
+
+### Function never
+
+- Makes an OS call.
+- Keeps a pointer after it returns.
+
+### Limits
+
+- Stack of its own: 96 bytes on x86-64 (return address included), 0 bytes on ARM64, 0 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_seen_history_find`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- Argument order: `history`, `kind`, `key`, `words`, `epoch`.
 
 ## Function `lantern_validate_beacon_block_gossip`
 
@@ -1481,7 +1818,7 @@ lantern_validate_beacon_aggregate_and_proof_gossip(seen, store, signed_aggregate
 - is_non_strict_superset skips a seen bitfield of another length, where the spec's `zip(strict=True)` raises.
 - `beacon_attestation_{subnet_id}` and `beacon_aggregate_and_proof`, phase0 to capella: the slot is within `ATTESTATION_PROPAGATION_SLOT_RANGE` of the current slot (is_within_slot_range). Deneb and later: the slot is not in the future and its epoch is the current or previous epoch.
 - `beacon_aggregate_and_proof`, phase0 to deneb: the committee index is `data.index`, and `aggregate_data_roots` is keyed by the data root alone. Electra and later key it by the data root and the committee index.
-- `beacon_aggregate_and_proof`: the `SeenBits` entry holds the target epoch in `b`, for lantern_seen_prune; the data root fixes the target epoch, so an entry matches the same messages.
+- `beacon_aggregate_and_proof`: the `SeenBits` entry holds the target epoch in `b`, for lantern_seen_archive; the data root fixes the target epoch, so an entry matches the same messages.
 - Reads the config values of the store's copy.
 
 ### Function never
@@ -3082,7 +3419,8 @@ The spec's `Seen` of every fork, and the blocks of `store.blocks` that have no p
 - The capacity of a part is the bytes up to the next part's offset over its entry size.
 - `store.blocks` of the spec is the store's nodes and the `blocks` of seen: a root in seen names a block that is known, but failed its state transition or waits to be imported, so it has no post-state. A root in `store.block_states` is a node of the store.
 - `block_payload_statuses` of the spec is `BlockNode.payload_status` for a node and `SeenBlock.payload_status` for a block of seen.
-- The spec's sets grow without a bound; lantern_seen_prune drops the entries of past epochs and slots.
+- Every byte of a part after its entries is zero: lantern_seen_init zeroes the parts, and the functions that remove entries zero what they leave.
+- `Seen` holds the spec's sets for recent epochs; its history, a [`SeenHistory`](#type-seenhistory), holds the moved entries (lantern_seen_archive), and lantern_seen_recall copies a message's entries back for its validation.
 
 ## Type `SeenRoom`
 
@@ -3170,6 +3508,100 @@ A partial data column header that `Seen` keeps.
 | 0 | `block_root` | Root | The key of `partial_data_column_headers` |
 | 32 | `header_root` | Root | hash_tree_root of the header |
 | 64 | `header` | `PartialDataColumnHeader` | The header's value; its size is the entry's size minus 64 |
+
+
+## Type `SeenHistory`
+
+The file of the entries lantern_seen_archive moved out of `Seen`, mapped to read.
+
+### Layout
+
+| Offset | Field | Type | Meaning |
+|---|---|---|---|
+| 0 | `size` | u64 | Bytes of the file in use |
+| 8 | `magic` | u64 | `SEEN_HISTORY_MAGIC` |
+| 16 | `version` | u64 | `SEEN_HISTORY_VERSION` (1) |
+| 24 | `first_epoch` | u64 | The epoch of index entry 0 |
+| 32 | `capacity` | u64 | Index entries |
+| 40 | `data_start` | u64 | The offset of the first chunk |
+| 64 | `index` | `capacity` * `SEEN_HISTORY_ENTRY` bytes | For each epoch, the file offset of the `SeenChunk` of each `HIST_*` kind holding it, or 0 |
+
+### Rules
+
+- `SEEN_HISTORY_FIXED` (64) bytes of fixed fields; `SEEN_HISTORY_ENTRY` (48) bytes an index entry, `HIST_KINDS` (5) offsets of 8 bytes and 8 zero bytes.
+- Chunks follow from `data_start`, each at a multiple of 8.
+- A reader takes an index entry or a chunk only when it lies inside `size`: a chunk written after the last `size` is not there yet.
+- The app writes a chunk, then its epochs' index entries, then `size`, each made durable before the next (app.md).
+
+## Type `SeenChunk`
+
+One `HIST_*` kind's entries of some epochs, sorted.
+
+### Layout
+
+| Offset | Field | Type | Meaning |
+|---|---|---|---|
+| 0 | `kind` | u64 | `HIST_ATTESTATION` (0), `HIST_AGGREGATOR` (1), `HIST_COLUMN` (2), `HIST_BLOB` (3) or `HIST_AGGREGATE` (4) |
+| 8 | `epoch_lo` | u64 | The lowest epoch of its entries |
+| 16 | `epoch_hi` | u64 | The highest epoch of its entries |
+| 24 | `count` | u64 | Entries |
+| 32 | `bytes` | u64 | Bytes of the chunk, these fields included; a multiple of 8 |
+| 40 | `entries` | `count` entries | Sorted by their words, unsigned, in word order |
+
+### Rules
+
+- `SEEN_CHUNK_FIXED` (40) bytes of fixed fields.
+- `HIST_ATTESTATION` and `HIST_AGGREGATOR`: 16 bytes an entry, (epoch, index).
+- `HIST_COLUMN` and `HIST_BLOB`: 24 bytes an entry, (slot, proposer index, index); its epoch is the slot's.
+- `HIST_AGGREGATE`: a `HistBits` an entry, sorted by (root, committee index, target epoch); then the bits, each in whole 8 byte words.
+
+## Type `HistBits`
+
+The key of one `SEEN_AGGREGATE` bitset in a `HIST_AGGREGATE` chunk.
+
+### Layout
+
+| Offset | Field | Type | Meaning |
+|---|---|---|---|
+| 0 | `root` | Root | The aggregate's data root |
+| 32 | `a` | u64 | The committee index |
+| 40 | `epoch` | u64 | The target epoch |
+| 48 | `length` | u64 | Number of bits |
+| 56 | `bits` | u64 | The offset of the bits from the chunk's start |
+
+### Rules
+
+- `HistBits__mem` (64) bytes.
+
+## Type `SeenRecall`
+
+The keys of one message whose entries lantern_seen_recall copies back.
+
+### Layout
+
+| Offset | Field | Type | Meaning |
+|---|---|---|---|
+| 0 | `count` | u64 | Items, at most `SEEN_RECALL_MAX` (4) |
+| 8 | `items` | `count` items of 64 bytes | Each: `kind` at 0 (a `SEEN_*` key kind, or `SEEN_RECALL_BITS`), `a` at 8, `b` at 16, `c` at 24, `root` at 32 |
+
+### Rules
+
+- A key item names a `SeenKey` (kind, a, b, c).
+- `SEEN_RECALL_BITS` (256) names the `SEEN_AGGREGATE` bitsets of (root, a, b = the target epoch).
+- `SEEN_RECALL_SIZE` bytes holds the most items.
+
+## Type `SeenMark`
+
+What lantern_seen_recall added, for lantern_seen_forget.
+
+### Layout
+
+| Offset | Field | Type | Meaning |
+|---|---|---|---|
+| 0 | `keys` | u64 | Keys of seen before |
+| 8 | `added_keys` | u64 | Keys added |
+| 16 | `bits` | u64 | Bits entries of seen before |
+| 24 | `added_bits` | u64 | Bits entries added |
 
 ## Test vectors
 

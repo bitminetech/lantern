@@ -433,7 +433,7 @@ lantern_shell_sync(file, result) -> status
 
 ## Function `lantern_shell_truncate`
 
-Cuts a file opened with `SHELL_OPEN_APPEND` to a size.
+Cuts a file opened with `SHELL_OPEN_APPEND` or `SHELL_OPEN_WRITE` to a size; a larger size makes it longer, the new bytes zero.
 
 ### Signature
 

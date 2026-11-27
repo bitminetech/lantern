@@ -1073,6 +1073,7 @@ LOCAL_FUNCTION lantern_app_start
     CALL_GLOBAL lantern_seen_init
     test    %rax, %rax
     jnz     94f
+    call    lantern_app_hist_start                  # and its history
     mov     $APP_KZG, %edi                  # the KZG trusted setup
     mov     $CRYPTO_KZG_SETTINGS_SIZE, %esi
     call    lantern_app_alloc
@@ -1729,7 +1730,7 @@ LOCAL_FUNCTION lantern_app_work
 1:  mov     APP_WORK_EVENT(%rbx), %rax      # the event's room
     mov     (APP_WORK_EVENT + 8)(%rbx), %rcx
     mov     %rcx, (%rax)
-    sub     $48, %rsp                       # the seventh to eleventh arguments: state_c, data, settings, scratch, event
+    sub     $48, %rsp                       # the seventh to twelfth arguments: state_c, data, settings, scratch, event, history
     xor     %eax, %eax
     test    %r14, %r14
     jz      11f
@@ -1746,6 +1747,8 @@ LOCAL_FUNCTION lantern_app_work
     mov     %rax, 24(%rsp)
     mov     APP_WORK_EVENT(%rbx), %rax
     mov     %rax, 32(%rsp)
+    mov     (APP_HIST + AppHist_map)(%rbx), %rax   # the Seen's history
+    mov     %rax, 40(%rsp)
     mov     APP_NODE(%rbx), %rdi
     mov     APP_STORE(%rbx), %rsi
     mov     APP_SEEN(%rbx), %rdx
@@ -6453,6 +6456,555 @@ LOCAL_FUNCTION lantern_app_p2p_events
 END_FUNCTION lantern_app_p2p_events
 
 /*
+ * The Seen's history (app.md): with --data-dir, <dir>/seen-history.bin, opened to write at offsets
+ * and mapped to read; a file that is not a SeenHistory of this layout starts again empty, from the
+ * store's finalized epoch. Without --data-dir, or when the file fails, the history is in memory.
+ * r15 the AppHist. Locals: L a u64.
+ */
+LOCAL_FUNCTION lantern_app_hist_start
+    ENTER 16
+    lea     APP_HIST(%rbx), %r15
+    mov     $(APP_HIST + AppHist_out), %edi
+    mov     $APP_HIST_OUT_BYTES, %esi
+    call    lantern_app_alloc
+    test    %rax, %rax
+    jz      99f
+    movq    $24, 8(%rax)
+    movq    $0, 16(%rax)
+    cmpq    $0, (APP_OPTIONS + AppOptions_data_dir + 8)(%rbx)
+    je      50f
+    call    lantern_app_hist_path
+    movq    $APP_OPEN_WRITE, L(%rsp)
+    lea     APP_PATH(%rbx), %rdi
+    lea     L(%rsp), %rsi
+    lea     AppHist_op(%r15), %rdx
+    CALL_GLOBAL lantern_shell_open
+    mov     AppHist_op(%r15), %rax
+    test    %rax, %rax
+    jnz     40f
+    mov     (AppHist_op + 8)(%r15), %rax
+    mov     %rax, AppHist_file(%r15)
+    movq    $APP_HIST_FILE, AppHist_mode(%r15)
+    call    lantern_app_hist_map
+    mov     AppHist_map(%r15), %rcx         # a SeenHistory of this layout stays
+    test    %rcx, %rcx
+    jz      20f
+    mov     (AppHist_map + 8)(%r15), %rdx
+    mov     $SEEN_HISTORY_DATA, %eax
+    cmp     %rax, %rdx
+    jb      20f
+    movabs  $SEEN_HISTORY_MAGIC, %rsi
+    cmp     %rsi, SeenHistory_magic(%rcx)
+    jne     20f
+    cmpq    $SEEN_HISTORY_VERSION, SeenHistory_version(%rcx)
+    jne     20f
+    cmpq    $SEEN_HISTORY_CAPACITY, SeenHistory_capacity(%rcx)
+    jne     20f
+    cmp     %rax, SeenHistory_data_start(%rcx)
+    jne     20f
+    mov     SeenHistory_size(%rcx), %rsi
+    cmp     %rax, %rsi
+    jb      20f
+    cmp     %rdx, %rsi
+    jbe     99f
+20: cmpq    $0, AppHist_map(%r15)           # else it starts again: no bytes, then the index's zeros
+    je      21f
+    lea     AppHist_map(%r15), %rdi
+    lea     (AppHist_map + 8)(%r15), %rsi
+    CALL_GLOBAL lantern_shell_unmap_file
+    movq    $0, AppHist_map(%r15)
+    movq    $0, (AppHist_map + 8)(%r15)
+21: movq    $0, L(%rsp)
+    lea     AppHist_file(%r15), %rdi
+    lea     L(%rsp), %rsi
+    lea     AppHist_op(%r15), %rdx
+    CALL_GLOBAL lantern_shell_truncate
+    mov     AppHist_op(%r15), %rax
+    test    %rax, %rax
+    jnz     30f
+    movq    $SEEN_HISTORY_DATA, L(%rsp)
+    lea     AppHist_file(%r15), %rdi
+    lea     L(%rsp), %rsi
+    lea     AppHist_op(%r15), %rdx
+    CALL_GLOBAL lantern_shell_truncate
+    mov     AppHist_op(%r15), %rax
+    test    %rax, %rax
+    jnz     30f
+    lea     APP_TMP(%rbx), %rdi
+    call    lantern_app_hist_header
+    lea     APP_TMP(%rbx), %rdi
+    mov     $SEEN_HISTORY_FIXED, %esi
+    xor     %edx, %edx
+    call    lantern_app_hist_put
+    test    %rax, %rax
+    jnz     30f
+    call    lantern_app_hist_sync
+    test    %rax, %rax
+    jnz     30f
+    call    lantern_app_hist_map
+    cmpq    $0, AppHist_map(%r15)
+    jne     99f
+    mov     $1, %eax
+30: mov     %rax, L(%rsp)                   # a failure: a line, the file closed, the history in memory
+    lea     AppHist_file(%r15), %rdi
+    CALL_GLOBAL lantern_shell_close
+    mov     L(%rsp), %rax
+40: mov     %rax, %rdi
+    call    lantern_app_hist_fail
+50: mov     $APP_HIST, %edi
+    mov     $(SEEN_HISTORY_DATA + APP_HIST_ROOM), %esi
+    call    lantern_app_alloc
+    test    %rax, %rax
+    jz      98f
+    mov     %rax, %rdi
+    call    lantern_app_hist_header
+    movq    $APP_HIST_MEMORY, AppHist_mode(%r15)
+99: LEAVE 16
+98: movq    $0, AppHist_mode(%r15)
+    LEAVE 16
+END_FUNCTION lantern_app_hist_start
+
+/* The fixed fields of a new SeenHistory at rdi, from the store's finalized epoch. A leaf. */
+LOCAL_FUNCTION lantern_app_hist_header
+    UNWIND_END_PROLOGUE
+    movq    $SEEN_HISTORY_DATA, SeenHistory_size(%rdi)
+    movabs  $SEEN_HISTORY_MAGIC, %rax
+    mov     %rax, SeenHistory_magic(%rdi)
+    movq    $SEEN_HISTORY_VERSION, SeenHistory_version(%rdi)
+    mov     APP_STORE(%rbx), %rax
+    mov     Store_finalized_checkpoint(%rax), %rax
+    mov     %rax, SeenHistory_first_epoch(%rdi)
+    movq    $SEEN_HISTORY_CAPACITY, SeenHistory_capacity(%rdi)
+    movq    $SEEN_HISTORY_DATA, SeenHistory_data_start(%rdi)
+    movq    $0, 48(%rdi)
+    movq    $0, 56(%rdi)
+    ret
+END_FUNCTION lantern_app_hist_header
+
+/* The path of seen-history.bin: a ByteList at APP_PATH. */
+LOCAL_FUNCTION lantern_app_hist_path
+    FRAME 0
+    ADDRESS %rdi, app_hist_name
+    mov     $app_hist_name_len, %esi
+    lea     APP_PATH(%rbx), %rdx
+    call    lantern_app_db_file
+    UNFRAME 0
+END_FUNCTION lantern_app_hist_path
+
+/* The file mapped again at AppHist_map, or 0, 0 when that fails. r15 the AppHist. */
+LOCAL_FUNCTION lantern_app_hist_map
+    FRAME 0
+    cmpq    $0, AppHist_map(%r15)
+    je      1f
+    lea     AppHist_map(%r15), %rdi
+    lea     (AppHist_map + 8)(%r15), %rsi
+    CALL_GLOBAL lantern_shell_unmap_file
+    movq    $0, AppHist_map(%r15)
+    movq    $0, (AppHist_map + 8)(%r15)
+1:  call    lantern_app_hist_path
+    lea     APP_PATH(%rbx), %rdi
+    lea     AppHist_op(%r15), %rsi
+    CALL_GLOBAL lantern_shell_map_file
+    cmpq    $0, AppHist_op(%r15)
+    jne     2f
+    mov     (AppHist_op + 8)(%r15), %rax
+    mov     %rax, AppHist_map(%r15)
+    mov     (AppHist_op + 24)(%r15), %rax
+    mov     %rax, (AppHist_map + 8)(%r15)
+2:  UNFRAME 0
+END_FUNCTION lantern_app_hist_map
+
+/* A line cannot write <dir>/seen-history.bin: error rdi, and a db failure. Locals: (%rsp) the error. */
+LOCAL_FUNCTION lantern_app_hist_fail
+    FRAME 16
+    mov     %rdi, (%rsp)
+    AM_INC  db_failures
+    call    lantern_app_hist_path
+    call    lantern_app_line_start
+    ADDRESS %rdi, app_m_write
+    mov     $app_m_write_len, %esi
+    call    lantern_app_line_text
+    call    lantern_app_line_path
+    ADDRESS %rdi, app_m_error
+    mov     $app_m_error_len, %esi
+    call    lantern_app_line_text
+    mov     (%rsp), %rdi
+    call    lantern_app_line_u64
+    mov     $APP_LOG_ERROR, %edi
+    call    lantern_app_line_end
+    UNFRAME 16
+END_FUNCTION lantern_app_hist_fail
+
+/*
+ * The rsi bytes at rdi to byte rdx of the history: the file's, or the memory's, which doubles when
+ * short. rax = 0, or the OS error (1 with no memory). r15 the AppHist. Locals: L a ByteList of the
+ * bytes, L+24 the offset, L+32 the old memory.
+ */
+LOCAL_FUNCTION lantern_app_hist_put
+    ENTER 48
+    mov     %rdi, %rbp
+    mov     %rsi, %r12
+    mov     %rdx, %r13
+    cmpq    $APP_HIST_FILE, AppHist_mode(%r15)
+    jne     10f
+    lea     L(%rsp), %rcx
+    mov     %rbp, %rax
+    sub     %rcx, %rax
+    mov     %rax, (L + 8)(%rsp)
+    lea     24(%r12), %rax
+    mov     %rax, L(%rsp)
+    mov     %r12, (L + 16)(%rsp)
+    mov     %r13, (L + 24)(%rsp)
+    lea     AppHist_file(%r15), %rdi
+    lea     (L + 24)(%rsp), %rsi
+    lea     L(%rsp), %rdx
+    lea     AppHist_op(%r15), %rcx
+    CALL_GLOBAL lantern_shell_write_at
+    mov     AppHist_op(%r15), %rax
+    LEAVE 48
+10: lea     (%r13,%r12), %r14               # the memory: its end
+    mov     (AppHist_map + 8)(%r15), %rdi
+    cmp     %rdi, %r14
+    jbe     12f
+    add     %rdi, %rdi                      # short: twice, or the end
+    cmp     %r14, %rdi
+    cmovb   %r14, %rdi
+    mov     %rdi, %r14
+    call    lantern_app_map
+    test    %rax, %rax
+    jz      19f
+    mov     AppHist_map(%r15), %rsi
+    mov     (AppHist_map + 8)(%r15), %rdx
+    mov     %rsi, (L + 32)(%rsp)
+    mov     %rdx, (L + 40)(%rsp)
+    mov     %rax, AppHist_map(%r15)
+    mov     %r14, (AppHist_map + 8)(%r15)
+    mov     %rax, %rdi
+    call    lantern_copy
+    lea     (L + 32)(%rsp), %rdi
+    lea     (L + 40)(%rsp), %rsi
+    CALL_GLOBAL lantern_shell_unmap
+12: mov     AppHist_map(%r15), %rdi
+    add     %r13, %rdi
+    mov     %rbp, %rsi
+    mov     %r12, %rdx
+    call    lantern_copy
+    xor     %eax, %eax
+    LEAVE 48
+19: mov     $1, %eax
+    LEAVE 48
+END_FUNCTION lantern_app_hist_put
+
+/* The history's bytes durable: the file's sync. rax = 0, or the OS error. r15 the AppHist. */
+LOCAL_FUNCTION lantern_app_hist_sync
+    FRAME 0
+    xor     %eax, %eax
+    cmpq    $APP_HIST_FILE, AppHist_mode(%r15)
+    jne     1f
+    lea     AppHist_file(%r15), %rdi
+    lea     AppHist_op(%r15), %rsi
+    CALL_GLOBAL lantern_shell_sync
+    mov     AppHist_op(%r15), %rax
+1:  UNFRAME 0
+END_FUNCTION lantern_app_hist_sync
+
+/* The chunks' ByteList with twice its room: rax = 0, or 1 with no memory. r15 the AppHist. Locals: (%rsp) the old pair. */
+LOCAL_FUNCTION lantern_app_hist_grow
+    FRAME 16
+    mov     (AppHist_out + 8)(%r15), %rdi
+    add     %rdi, %rdi
+    call    lantern_app_map
+    test    %rax, %rax
+    jz      9f
+    mov     AppHist_out(%r15), %rsi
+    mov     (AppHist_out + 8)(%r15), %rdx
+    mov     %rsi, (%rsp)
+    mov     %rdx, 8(%rsp)
+    mov     %rax, AppHist_out(%r15)
+    add     %rdx, %rdx
+    mov     %rdx, (AppHist_out + 8)(%r15)
+    mov     %rax, %rdi
+    mov     16(%rsi), %rdx
+    add     $24, %rdx
+    call    lantern_copy
+    mov     AppHist_out(%r15), %rax
+    mov     (AppHist_out + 8)(%r15), %rcx
+    mov     %rcx, (%rax)
+    mov     %rsp, %rdi
+    lea     8(%rsp), %rsi
+    CALL_GLOBAL lantern_shell_unmap
+    xor     %eax, %eax
+    UNFRAME 16
+9:  mov     $1, %eax
+    UNFRAME 16
+END_FUNCTION lantern_app_hist_grow
+
+/*
+ * rax = the chunk of HIST kind rsi the history's index names for epoch rdi, when it lies inside the
+ * history's size, is of that kind, holds that epoch in its range and its entries in its bytes; else 0.
+ * A leaf; uses rax, rcx, rdx, r8-r11. r15 the AppHist.
+ */
+LOCAL_FUNCTION lantern_app_hist_chunk
+    UNWIND_END_PROLOGUE
+    mov     AppHist_map(%r15), %r8
+    test    %r8, %r8
+    jz      9f
+    mov     %rdi, %rax
+    sub     SeenHistory_first_epoch(%r8), %rax
+    jb      9f
+    cmp     SeenHistory_capacity(%r8), %rax
+    jae     9f
+    imul    $SEEN_HISTORY_ENTRY, %rax, %rax
+    lea     SEEN_HISTORY_FIXED(%rax,%rsi,8), %rax
+    mov     (%r8,%rax), %r9
+    test    %r9, %r9
+    jz      9f
+    mov     SeenHistory_size(%r8), %r10
+    lea     SEEN_CHUNK_FIXED(%r9), %rax
+    cmp     %r10, %rax
+    ja      9f
+    add     %r8, %r9
+    sub     %r9, %r10                       # the bytes after the chunk's start
+    add     %r8, %r10
+    mov     SeenChunk_bytes(%r9), %r11
+    cmp     %r10, %r11
+    ja      9f
+    cmp     SeenChunk_kind(%r9), %rsi
+    jne     9f
+    cmp     SeenChunk_epoch_lo(%r9), %rdi
+    jb      9f
+    cmp     SeenChunk_epoch_hi(%r9), %rdi
+    ja      9f
+    mov     $16, %ecx                       # its entry's bytes
+    cmp     $HIST_COLUMN, %rsi
+    jb      1f
+    mov     $24, %ecx
+    cmp     $HIST_AGGREGATE, %rsi
+    jb      1f
+    mov     $HistBits__mem, %ecx
+1:  mov     SeenChunk_count(%r9), %rax
+    mul     %rcx
+    jc      9f
+    add     $SEEN_CHUNK_FIXED, %rax
+    cmp     %r11, %rax
+    ja      9f
+    mov     %r9, %rax
+    ret
+9:  xor     %eax, %eax
+    ret
+END_FUNCTION lantern_app_hist_chunk
+
+/*
+ * At each new slot (app.md, lantern_app_loop): lantern_seen_archive moves the Seen's entries of
+ * past epochs to chunks; each chunk, merged with the history's chunks of its kind that its epochs'
+ * index entries name, goes to the end of the history; once those are durable, the index entries of
+ * their epochs, then the size. A chunk with an epoch outside the index goes, with a db failure.
+ * rbp the chunk, r12 the next chunk, r13 the end of the chunks, r14 the history's new size, r15 the
+ * AppHist. Locals: L the chunk's offset before a merge, L+8 the old chunk, L+16 an epoch, L+24 the
+ * last chunk merged, L+32 the kind, L+40 the bytes of the index entries.
+ */
+LOCAL_FUNCTION lantern_app_hist_step
+    ENTER 48
+    lea     APP_HIST(%rbx), %r15
+    mov     AppHist_mode(%r15), %rax
+    test    %rax, %rax
+    jz      99f
+    cmpq    $0, AppHist_map(%r15)           # a file not mapped: mapped again first
+    jne     1f
+    cmp     $APP_HIST_FILE, %rax
+    jne     99f
+    call    lantern_app_hist_map
+    cmpq    $0, AppHist_map(%r15)
+    je      99f
+1:  mov     AppHist_out(%r15), %rdx         # the chunks, more room while short
+    movq    $0, 16(%rdx)
+    mov     APP_SEEN(%rbx), %rdi
+    mov     APP_STORE(%rbx), %rsi
+    CALL_GLOBAL lantern_seen_archive
+    test    %rax, %rax
+    jz      2f
+    cmp     $LANTERN_BUFFER_TOO_SMALL, %rax
+    jne     99f
+    call    lantern_app_hist_grow
+    test    %rax, %rax
+    jnz     99f
+    jmp     1b
+2:  mov     AppHist_out(%r15), %rax
+    mov     16(%rax), %r13
+    test    %r13, %r13
+    jz      99f
+    add     $24, %r13
+    mov     $24, %r12d
+    mov     AppHist_map(%r15), %rax
+    mov     SeenHistory_size(%rax), %r14
+    xor     %ecx, %ecx
+11: movq    $0, AppHist_kinds(%r15,%rcx,8)
+    add     $3, %ecx
+    cmp     $(3 * HIST_KINDS), %ecx
+    jb      11b
+3:  cmp     %r13, %r12                      # each chunk
+    jae     6f
+    mov     %r12, %rbp
+    mov     AppHist_out(%r15), %rdx
+    add     %rbp, %rdx
+    add     SeenChunk_bytes(%rdx), %r12
+    mov     SeenChunk_kind(%rdx), %rax
+    mov     %rax, (L + 32)(%rsp)
+    mov     AppHist_map(%r15), %rcx
+    mov     SeenChunk_epoch_lo(%rdx), %rax
+    cmp     SeenHistory_first_epoch(%rcx), %rax
+    jb      51f
+    mov     %rax, (L + 16)(%rsp)
+    mov     SeenChunk_epoch_hi(%rdx), %rax
+    sub     SeenHistory_first_epoch(%rcx), %rax
+    cmp     SeenHistory_capacity(%rcx), %rax
+    jae     51f
+    movq    $0, (L + 24)(%rsp)
+4:  mov     AppHist_out(%r15), %rdx         # each epoch of its range: a chunk there merges in
+    add     %rbp, %rdx
+    mov     (L + 16)(%rsp), %rdi
+    cmp     SeenChunk_epoch_hi(%rdx), %rdi
+    ja      5f
+    mov     (L + 32)(%rsp), %rsi
+    call    lantern_app_hist_chunk
+    test    %rax, %rax
+    jz      41f
+    mov     %rax, %rcx
+    sub     AppHist_map(%r15), %rcx
+    cmp     (L + 24)(%rsp), %rcx
+    je      41f
+    mov     %rcx, (L + 24)(%rsp)
+    mov     %rax, (L + 8)(%rsp)
+42: mov     AppHist_out(%r15), %rdx
+    mov     16(%rdx), %rax
+    add     $24, %rax
+    mov     %rax, L(%rsp)
+    mov     (L + 8)(%rsp), %rdi
+    lea     (%rdx,%rbp), %rsi
+    CALL_GLOBAL lantern_seen_chunk_merge
+    test    %rax, %rax
+    jz      43f
+    call    lantern_app_hist_grow
+    test    %rax, %rax
+    jnz     99f
+    jmp     42b
+43: mov     L(%rsp), %rbp
+41: incq    (L + 16)(%rsp)
+    jmp     4b
+5:  mov     AppHist_out(%r15), %rdi         # the chunk to the end
+    add     %rbp, %rdi
+    mov     SeenChunk_bytes(%rdi), %rsi
+    mov     %r14, %rdx
+    call    lantern_app_hist_put
+    test    %rax, %rax
+    jnz     90f
+    mov     AppHist_out(%r15), %rdx
+    add     %rbp, %rdx
+    imul    $24, (L + 32)(%rsp), %rcx
+    lea     AppHist_kinds(%r15,%rcx), %rcx
+    mov     %r14, (%rcx)
+    mov     SeenChunk_epoch_lo(%rdx), %rax
+    mov     %rax, 8(%rcx)
+    mov     SeenChunk_epoch_hi(%rdx), %rax
+    mov     %rax, 16(%rcx)
+    add     SeenChunk_bytes(%rdx), %r14
+    jmp     3b
+51: AM_INC  db_failures                     # an epoch outside the index
+    jmp     3b
+6:  mov     $-1, %r12                       # the epochs of the chunks written: r12 the lowest, r13 the highest
+    xor     %r13d, %r13d
+    xor     %ecx, %ecx
+61: cmpq    $0, AppHist_kinds(%r15,%rcx,8)
+    je      62f
+    mov     (AppHist_kinds + 8)(%r15,%rcx,8), %rax
+    cmp     %r12, %rax
+    cmovb   %rax, %r12
+    mov     (AppHist_kinds + 16)(%r15,%rcx,8), %rax
+    cmp     %r13, %rax
+    cmova   %rax, %r13
+62: add     $3, %ecx
+    cmp     $(3 * HIST_KINDS), %ecx
+    jb      61b
+    cmp     $-1, %r12
+    je      99f
+    call    lantern_app_hist_sync           # the chunks durable
+    test    %rax, %rax
+    jnz     90f
+    mov     %r13, %rax                      # the index entries of those epochs, after the chunks' bytes
+    sub     %r12, %rax
+    inc     %rax
+    imul    $SEEN_HISTORY_ENTRY, %rax, %rax
+    mov     %rax, (L + 40)(%rsp)
+7:  mov     AppHist_out(%r15), %rdx
+    mov     (%rdx), %rax
+    sub     8(%rdx), %rax
+    sub     16(%rdx), %rax
+    cmp     (L + 40)(%rsp), %rax
+    jae     71f
+    call    lantern_app_hist_grow
+    test    %rax, %rax
+    jnz     99f
+    jmp     7b
+71: mov     8(%rdx), %rbp
+    add     16(%rdx), %rbp
+    add     %rdx, %rbp
+    mov     AppHist_map(%r15), %rsi
+    mov     %r12, %r13
+    sub     SeenHistory_first_epoch(%rsi), %r13
+    imul    $SEEN_HISTORY_ENTRY, %r13, %r13
+    add     $SEEN_HISTORY_FIXED, %r13
+    add     %r13, %rsi
+    mov     %rbp, %rdi
+    mov     (L + 40)(%rsp), %rdx
+    call    lantern_copy
+    xor     %ecx, %ecx                      # rcx the kind
+72: lea     (%rcx,%rcx,2), %r10
+    mov     AppHist_kinds(%r15,%r10,8), %r8
+    test    %r8, %r8
+    jz      75f
+    mov     (AppHist_kinds + 8)(%r15,%r10,8), %rax
+    mov     (AppHist_kinds + 16)(%r15,%r10,8), %r9
+73: cmp     %r9, %rax
+    ja      75f
+    mov     %rax, %r11
+    sub     %r12, %r11
+    imul    $SEEN_HISTORY_ENTRY, %r11, %r11
+    lea     (%r11,%rcx,8), %r11
+    mov     %r8, (%rbp,%r11)
+    inc     %rax
+    jmp     73b
+75: inc     %ecx
+    cmp     $HIST_KINDS, %ecx
+    jb      72b
+    mov     %rbp, %rdi
+    mov     (L + 40)(%rsp), %rsi
+    mov     %r13, %rdx
+    call    lantern_app_hist_put
+    test    %rax, %rax
+    jnz     90f
+    call    lantern_app_hist_sync
+    test    %rax, %rax
+    jnz     90f
+    mov     %r14, AppHist_word(%r15)        # then the size
+    lea     AppHist_word(%r15), %rdi
+    mov     $8, %esi
+    mov     $SeenHistory_size, %edx
+    call    lantern_app_hist_put
+    test    %rax, %rax
+    jnz     90f
+    call    lantern_app_hist_sync
+    test    %rax, %rax
+    jnz     90f
+    cmpq    $APP_HIST_FILE, AppHist_mode(%r15)
+    jne     99f
+    call    lantern_app_hist_map
+99: LEAVE 48
+90: mov     %rax, %rdi
+    call    lantern_app_hist_fail
+    LEAVE 48
+END_FUNCTION lantern_app_hist_step
+
+/*
  * The loop: the clock, a NODE_EV_TICK of the time and the shell's events, lantern_node_step
  * with libp2p, a line at each new slot, then a wait for the sockets until the node's wakeup, at
  * most APP_WAIT_MS. Locals: L the time, L+8 the wait, L+16 the NODE_EV_TICK.
@@ -6481,9 +7033,7 @@ LOCAL_FUNCTION lantern_app_loop
     je      3f
     mov     %rax, APP_LAST_SLOT(%rbx)
     mov     %rax, (L + 8)(%rsp)
-    mov     APP_SEEN(%rbx), %rdi            # the Seen: the entries of past epochs and slots go
-    mov     APP_STORE(%rbx), %rsi
-    CALL_GLOBAL lantern_seen_prune
+    call    lantern_app_hist_step                   # the Seen: the entries of past epochs to its history
     call    lantern_app_line_start                  # slot <s>, head 0x<root>, finalized epoch <e>
     ADDRESS %rdi, app_m_slot
     mov     $app_m_slot_len, %esi

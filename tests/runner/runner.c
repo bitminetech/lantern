@@ -280,7 +280,8 @@ ABI uint64_t lantern_node_step(void *node, void *store, void *p2p, const void *t
                                void *actions, void *result);
 ABI uint64_t lantern_node_protocols(void *out, void *count);
 ABI uint64_t lantern_node_run(void *node, void *store, void *seen, const void *work, void *state_a, void *state_b,
-                              void *state_c, const void *data, const void *settings, void *scratch, void *event);
+                              void *state_c, const void *data, const void *settings, void *scratch, void *event,
+                              const void *history);
 #if FORK == FORK_DENEB || FORK == FORK_ELECTRA
 ABI uint64_t LF(is_data_available)(const void *blob_kzg_commitments, const void *blobs, const void *proofs,
                                        const void *settings, void *scratch, void *out);
@@ -314,7 +315,10 @@ ABI uint64_t lantern_seen_size(const void *room, void *size);
 ABI uint64_t lantern_seen_init(const void *room, void *seen);
 ABI uint64_t lantern_seen_copy(const void *seen, const void *room, void *out);
 ABI uint64_t lantern_seen_add_block(void *seen, const void *root, const void *payload_status);
-ABI uint64_t lantern_seen_prune(void *seen, const void *store);
+ABI uint64_t lantern_seen_archive(void *seen, const void *store, void *out);
+ABI uint64_t lantern_seen_recall(void *seen, const void *history, const void *recall, void *mark);
+ABI uint64_t lantern_seen_forget(void *seen, const void *mark);
+ABI uint64_t lantern_seen_chunk_merge(const void *a, const void *b, void *out);
 #if FORK == FORK_BELLATRIX
 ABI uint64_t LF(validate_beacon_block_gossip)(void *seen, const void *store, const void *block, const void *now,
                                                   const void *head_state, const void *proposer_state,
@@ -491,7 +495,7 @@ ABI uint64_t LF(get_execution_requests)(const void *list, void *out);
 #define PAINT_BYTES (STACK_CAP + 4096)
 
 typedef struct {
-    uint64_t fn, arg[5], paint, status, fault, stack, scratch[4], arg5, more[5]; /* more: arguments 7 to 11 */
+    uint64_t fn, arg[5], paint, status, fault, stack, scratch[4], arg5, more[6]; /* more: arguments 7 to 12 */
 } abi_ctx;
 ABI void abi_call(abi_ctx *ctx);
 
@@ -515,13 +519,13 @@ static fn_stats *stats_for(const char *name) {
     return &stats[stats_count++];
 }
 
-/* Call lantern function f, named name, with up to 11 pointer arguments. */
+/* Call lantern function f, named name, with up to 12 pointer arguments. */
 __attribute__((unused)) static uint64_t checked_call(const char *name, uint64_t f, const void *const *args, size_t n) {
     abi_ctx c;
     memset(&c, 0, sizeof c);
     c.fn = f;
-    if (n > 11) {
-        fprintf(stderr, "%s: more than 11 arguments\n", name);
+    if (n > 12) {
+        fprintf(stderr, "%s: more than 12 arguments\n", name);
         exit(2);
     }
     for (size_t i = 0; i < n && i < 5; i++) c.arg[i] = (uint64_t)(uintptr_t)args[i];
@@ -2741,9 +2745,68 @@ typedef struct {
 
 struct p2p_net;
 
+/*
+ * networking.md, SeenHistory: the history the app keeps, in memory: header, index and the chunks of
+ * lantern_seen_archive, each epoch's index entry naming its chunk, as the app writes them.
+ */
+#define HIST_FIXED 64
+#define HIST_ENTRY 48
+typedef struct {
+    uint8_t *b;
+    uint64_t room;
+} hist_buf;
+
+static void hist_init(hist_buf *h, uint64_t first_epoch, uint64_t entries) {
+    uint64_t start = HIST_FIXED + entries * HIST_ENTRY;
+    h->room = start + (64u << 20);
+    h->b = calloc(1, (size_t)h->room);
+    if (!h->b) return;
+    wr64(h->b, start);
+    wr64(h->b + 8, 0x3154534948534c4cull);
+    wr64(h->b + 16, 1);
+    wr64(h->b + 24, first_epoch);
+    wr64(h->b + 32, entries);
+    wr64(h->b + 40, start);
+}
+
+/* Each chunk of the ByteList out after the history's bytes, and its epochs' index entries. */
+static void hist_add(hist_buf *h, const uint8_t *out, const char **why) {
+    uint64_t at = rd64(out + 8), len = rd64(out + 16);
+    for (uint64_t p = 0; p < len && !*why;) {
+        const uint8_t *c = out + at + p;
+        uint64_t kind = rd64(c), lo = rd64(c + 8), hi = rd64(c + 16), bytes = rd64(c + 32), size = rd64(h->b);
+        if (bytes < 40 || size + bytes > h->room) {
+            *why = "a chunk of seen_archive: its bytes";
+            return;
+        }
+        memcpy(h->b + size, c, (size_t)bytes);
+        for (uint64_t e = lo; e <= hi; e++) {
+            uint64_t first = rd64(h->b + 24), n = rd64(h->b + 32);
+            if (e < first || e - first >= n) continue;
+            uint8_t *ent = h->b + HIST_FIXED + (e - first) * HIST_ENTRY + 8 * kind;
+            if (rd64(ent)) *why = "a second chunk of one kind for an epoch";
+            wr64(ent, size);
+        }
+        wr64(h->b, size + bytes);
+        p += bytes;
+    }
+}
+
+/* A ByteList of room bytes for lantern_seen_archive. */
+static uint8_t *archive_out(uint64_t room) {
+    uint8_t *b = buffer(24 + room);
+    wr64(b, 24 + room);
+    wr64(b + 8, 24);
+    wr64(b + 16, 0);
+    return b;
+}
+
 struct node_shell {
     struct p2p_net *net; /* node-p2p: the network of the node's libp2p state */
     uint8_t *seen;       /* the Seen of the node's gossip */
+    uint8_t *history;    /* the SeenHistory the node reads, or NULL */
+    hist_buf hist;       /* the history, as the app keeps it (app.md, lantern_app_loop) */
+    uint64_t hist_slot;  /* the slot of its last lantern_seen_archive */
     uint64_t seen_size, seen_room[4];
     uint8_t *node, *actions;
     uint64_t node_size, room[NODE_ROOM_FIELDS], actions_size;
@@ -3539,7 +3602,7 @@ static void shell_work(fc_node *n, const uint8_t *work, const char **why) {
         memset(ev, FILL, (size_t)ev_size);
         wr64(ev, ev_size);
         st = CALL(lantern_node_run, s->node, n->store, s->seen, work, a ? a->b : NULL, b ? b->b : NULL, c ? c->b : NULL,
-                  d ? d->b : NULL, settings, kind == WORK_ARCHIVE_LOAD ? sized_scratch(16u << 20) : fresh_scratch(), ev);
+                  d ? d->b : NULL, settings, kind == WORK_ARCHIVE_LOAD ? sized_scratch(16u << 20) : fresh_scratch(), ev, s->history);
         if (st != 0 && (memcmp(snode, s->node, (size_t)s->node_size) || memcmp(sstore, n->store, (size_t)n->size) ||
                         (a && memcmp(sa, a->b, (size_t)a->size)))) {
             static char msg[128];
@@ -3970,6 +4033,20 @@ static void shell_step(fc_node *n, const char **why) {
         at += size;
     }
     free(events);
+    /* app.md, lantern_app_loop: at each new slot the Seen's past entries go to its history, which the works read */
+    if (!*why && s->seen) {
+        uint64_t t0 = rd64(n->store + STORE_TIME_MS), g = rd64(n->store + STORE_GENESIS_TIME_MS), d = rd64(n->store + STORE_CONFIG + 104);
+        uint64_t slot = t0 > g && d ? (t0 - g) / d : 0;
+        if (!s->hist.b) hist_init(&s->hist, 0, 1u << 16);
+        if (s->hist.b && (slot != s->hist_slot || !s->history)) {
+            uint8_t *aout = archive_out(4u << 20);
+            s->hist_slot = slot;
+            if (CALL(lantern_seen_archive, s->seen, n->store, aout) != 0) *why = "lantern_seen_archive status";
+            else hist_add(&s->hist, aout, why);
+            free(aout);
+            s->history = s->hist.b;
+        }
+    }
 }
 
 /* The first place of needle in the len bytes at hay, or NULL. */
@@ -4496,6 +4573,7 @@ static void shell_close(fc_node *n, uint8_t *anchor_block) {
     free(s->bld);
     for (int e = 0; e < s->nev; e++) free(s->ev[e].b);
     free(s->seen);
+    free(s->hist.b);
     for (size_t k = 0; k < s->nbufs; k++) free(s->bufs[k].b);
     free(s->bufs);
     free(s->pending);
@@ -4701,7 +4779,7 @@ static void slashing_no_state_check(fc_node *n, const uint8_t *bytes, uint64_t l
 #if FORK >= FORK_DENEB
     settings = kzg_settings;
 #endif
-    uint64_t st = CALL(lantern_node_run, s->node, n->store, s->seen, work, NULL, NULL, NULL, data, settings, fresh_scratch(), ev);
+    uint64_t st = CALL(lantern_node_run, s->node, n->store, s->seen, work, NULL, NULL, NULL, data, settings, fresh_scratch(), ev, s->history);
     if (st != 0) *why = "an attester slashing work with no state: status not 0";
     else if (rd64(ev + EV_RESULT) != 41) *why = "an attester slashing work with no state: not LANTERN_NEED_JUSTIFIED_STATE";
     else if (memcmp(sstore, n->store, (size_t)n->size) || memcmp(snode, s->node, (size_t)s->node_size))
@@ -8695,69 +8773,333 @@ static void seen_grow(seen_buf *s, const char **why) {
     seen_make(s, why);
 }
 
+static int cmp_words2(const void *x, const void *y) {
+    for (int i = 0; i < 2; i++) {
+        uint64_t a = rd64((const uint8_t *)x + 8 * i), b = rd64((const uint8_t *)y + 8 * i);
+        if (a != b) return a < b ? -1 : 1;
+    }
+    return 0;
+}
+static int cmp_words3(const void *x, const void *y) {
+    for (int i = 0; i < 3; i++) {
+        uint64_t a = rd64((const uint8_t *)x + 8 * i), b = rd64((const uint8_t *)y + 8 * i);
+        if (a != b) return a < b ? -1 : 1;
+    }
+    return 0;
+}
+
+/* A HIST_AGGREGATE entry with its bits, for chunk_cmp: the 6 key words, the length, the bits. */
+typedef struct {
+    const uint8_t *e, *bits;
+} hist_rec;
+
+static int hist_rec_cmp(const void *x, const void *y) {
+    const hist_rec *a = x, *b = y;
+    for (int w = 0; w < 7; w++) {
+        uint64_t u = rd64(a->e + 8 * w), v = rd64(b->e + 8 * w);
+        if (u != v) return u < v ? -1 : 1;
+    }
+    return memcmp(a->bits, b->bits, (size_t)((rd64(a->e + 48) + 63) / 64 * 8));
+}
+
+/* The epoch of entry e of HIST kind k. */
+static uint64_t hist_epoch(uint64_t k, const uint8_t *e) {
+    return k < 2 ? rd64(e) : k < 4 ? rd64(e) / SLOTS_PER_EPOCH_RUNNER : rd64(e + 40);
+}
+
 /*
- * networking.md, lantern_seen_prune: a Seen with a key of each kind, and a bits entry of each kind, at
- * each value around its bound, pruned at a store's slot and finalized epoch. The entries kept, in
- * their order, are those the rules keep; a second prune changes nothing; blocks and headers stay.
+ * networking.md, lantern_seen_chunk_merge: each chunk of the ByteList out split in two, its even and
+ * its odd entries, each a chunk of its own; their merge holds the chunk's fields, its entries in order,
+ * and for HIST_AGGREGATE each entry's bits. One byte less room: BUFFER_TOO_SMALL, out unchanged.
  */
-static void seen_prune_check(const char **why) {
+static void seen_merge_check(const uint8_t *out, const char **why) {
+    uint64_t at = rd64(out + 8), len = rd64(out + 16);
+    for (uint64_t p = 0; p < len && !*why;) {
+        const uint8_t *c = out + at + p;
+        uint64_t k = rd64(c), n = rd64(c + 24), bytes = rd64(c + 32), el = k < 2 ? 16 : k < 4 ? 24 : 64;
+        uint8_t *h[2] = {calloc(1, (size_t)bytes), calloc(1, (size_t)bytes)}, *m = archive_out(bytes), *m2 = archive_out(bytes - 1);
+        hist_rec *r1 = calloc((size_t)n + 1, sizeof *r1), *r2 = calloc((size_t)n + 1, sizeof *r2);
+        if (!h[0] || !h[1] || !r1 || !r2) {
+            *why = "seen_merge_check: no memory";
+        } else {
+            uint64_t cnt[2] = {0, 0}, bw[2] = {0, 0};
+            for (int j = 0; j < 2; j++) {
+                wr64(h[j], k);
+                wr64(h[j] + 8, ~0ull);
+                wr64(h[j] + 16, 0);
+            }
+            for (uint64_t i = 0; i < n; i++) cnt[i & 1]++;
+            for (uint64_t i = 0, q[2] = {0, 0}; i < n; i++) {
+                int j = (int)(i & 1);
+                const uint8_t *e = c + 40 + el * i;
+                uint8_t *d = h[j] + 40 + el * q[j]++;
+                memcpy(d, e, (size_t)el);
+                uint64_t ep = hist_epoch(k, e);
+                if (ep < rd64(h[j] + 8)) wr64(h[j] + 8, ep);
+                if (ep > rd64(h[j] + 16)) wr64(h[j] + 16, ep);
+                if (k == 4) {
+                    uint64_t w = (rd64(e + 48) + 63) / 64, off = 40 + el * cnt[j] + bw[j];
+                    memcpy(h[j] + off, c + rd64(e + 56), (size_t)(8 * w));
+                    wr64(d + 56, off);
+                    bw[j] += 8 * w;
+                }
+            }
+            for (int j = 0; j < 2; j++) {
+                wr64(h[j] + 24, cnt[j]);
+                wr64(h[j] + 32, 40 + el * cnt[j] + bw[j]);
+            }
+            if (CALL(lantern_seen_chunk_merge, h[0], h[1], m) != 0 || rd64(m + 16) != bytes) {
+                *why = "seen_chunk_merge: a status or its length";
+            } else {
+                const uint8_t *g = m + 24;
+                if (rd64(g) != k || rd64(g + 8) != rd64(c + 8) || rd64(g + 16) != rd64(c + 16) || rd64(g + 24) != n || rd64(g + 32) != bytes)
+                    *why = "seen_chunk_merge: the chunk's fields";
+                else if (k < 4 && memcmp(g + 40, c + 40, (size_t)(el * n)))
+                    *why = "seen_chunk_merge: the entries";
+                else if (k == 4) {
+                    for (uint64_t i = 0; i < n; i++) {
+                        r1[i] = (hist_rec){c + 40 + 64 * i, c + rd64(c + 40 + 64 * i + 56)};
+                        r2[i] = (hist_rec){g + 40 + 64 * i, g + rd64(g + 40 + 64 * i + 56)};
+                        if (rd64(g + 40 + 64 * i + 56) < 40 + 64 * n || rd64(g + 40 + 64 * i + 56) > bytes)
+                            *why = "seen_chunk_merge: a bits offset";
+                    }
+                    for (uint64_t i = 1; i < n && !*why; i++)
+                        for (int w = 0; w < 6; w++) {
+                            uint64_t u = rd64(g + 40 + 64 * (i - 1) + 8 * w), v = rd64(g + 40 + 64 * i + 8 * w);
+                            if (u < v) break;
+                            if (u > v) {
+                                *why = "seen_chunk_merge: the entries' order";
+                                break;
+                            }
+                        }
+                    qsort(r1, (size_t)n, sizeof *r1, hist_rec_cmp);
+                    qsort(r2, (size_t)n, sizeof *r2, hist_rec_cmp);
+                    for (uint64_t i = 0; i < n && !*why; i++)
+                        if (hist_rec_cmp(r1 + i, r2 + i)) *why = "seen_chunk_merge: an entry's bits";
+                }
+            }
+            if (!*why && (CALL(lantern_seen_chunk_merge, h[0], h[1], m2) != 1 || rd64(m2 + 16)))
+                *why = "seen_chunk_merge: one byte short";
+        }
+        free(h[0]);
+        free(h[1]);
+        free(m);
+        free(m2);
+        free(r1);
+        free(r2);
+        p += bytes;
+    }
+}
+
+/*
+ * networking.md, lantern_seen_archive, lantern_seen_recall, lantern_seen_forget: a Seen with a key of
+ * each kind, and a bits entry of each kind, at each value around its bound, archived at a store's slot
+ * and finalized epoch. The entries kept, in their order, are those the rules keep, and zero bytes follow
+ * them; each archived kind is one chunk of its sorted entries; a second archive changes nothing. Each
+ * archived key and bitset comes back with lantern_seen_recall from a history of the chunks, a key seen
+ * holds or the history lacks does not, and lantern_seen_forget gives back seen's bytes.
+ */
+static void seen_archive_check(const char **why) {
     const uint64_t spe = SLOTS_PER_EPOCH_RUNNER, range = rd64(config + 392 + 16 * 32 + 104), slot_ms = rd64(config + 104);
     const uint64_t s = 3 * range + 5 * spe + 3, fe = 2, f = fe * spe;
     const uint64_t e = (s - range - 1) / spe, first_epoch = e - 1, sync_first = s - 1;
     seen_buf seen = {NULL, 0, {64, 16, 4, 64}};
     seen_make(&seen, why);
-    uint8_t *store = calloc(1, STORE_CONFIG + CONFIG_SIZE);
-    if (*why || !store) {
+    uint8_t *store = calloc(1, STORE_CONFIG + CONFIG_SIZE), *out = archive_out(1u << 16);
+    hist_buf hist = {NULL, 0};
+    if (!*why) hist_init(&hist, 0, s / spe + 4);
+    if (*why || !store || !hist.b) {
         free(seen.b);
         free(store);
-        if (!*why) *why = "seen_prune_check: no memory";
+        free(out);
+        free(hist.b);
+        if (!*why) *why = "seen_archive_check: no memory";
         return;
     }
     memcpy(store + STORE_CONFIG, config, CONFIG_SIZE);
     wr64(store + STORE_GENESIS_TIME_MS, 1000);
     wr64(store + STORE_TIME_MS, 1000 + s * slot_ms + slot_ms / 2);
     wr64(store + STORE_FINALIZED, fe);
-    uint8_t want[64 * 32], wbits[16 * 320];
-    uint64_t nk = 0, nw = 0, nb = 0, nwb = 0;
+    uint8_t want[64 * 32], wbits[16 * 320], arch[4][64 * 24], abits[16 * 320];
+    uint64_t nk = 0, nw = 0, nb = 0, nwb = 0, na[4] = {0}, nab = 0;
     uint8_t *keys = seen.b + rd64(seen.b + SEEN_KEYS), *bits = seen.b + rd64(seen.b + 24);
     for (uint64_t kind = 1; kind <= 11; kind++) {
-        int epoch = kind == 2 || kind == 6, slot = kind == 1 || kind == 10 || kind == 11, sync = kind == 7 || kind == 8;
-        uint64_t bound = epoch ? first_epoch : slot ? f + 1 : sync ? sync_first : 6;
+        int epoch = kind == 2 || kind == 6, column = kind == 10 || kind == 11, proposer = kind == 1, sync = kind == 7 || kind == 8;
+        int hk = kind == 6 ? 0 : kind == 2 ? 1 : kind == 10 ? 2 : kind == 11 ? 3 : -1;
+        uint64_t bound = epoch ? first_epoch : column ? f : proposer ? f + 1 : sync ? sync_first : 6;
         for (uint64_t v = bound - 1; v <= bound + 1; v++, nk++) {
             uint8_t *k = keys + nk * 32;
             wr64(k, kind);
             wr64(k + 8, v);
-            wr64(k + 16, 100 + nk);
+            wr64(k + 16, 300 - nk);
             wr64(k + 24, 200 + nk);
-            if (!(epoch || slot || sync) || v >= bound) memcpy(want + 32 * nw++, k, 32);
+            if (!(epoch || column || proposer || sync) || v >= bound) memcpy(want + 32 * nw++, k, 32);
+            else if (hk >= 0) memcpy(arch[hk] + (hk < 2 ? 16 : 24) * na[hk]++, k + 8, hk < 2 ? 16 : 24);
         }
     }
     for (uint64_t kind = 1; kind <= 2; kind++) { /* an aggregate's bound is its target epoch in b; a contribution's its slot in a */
         uint64_t bound = kind == 1 ? first_epoch : sync_first;
         for (uint64_t v = bound - 1; v <= bound + 1; v++, nb++) {
             uint8_t *b = bits + nb * 320;
-            memset(b, (int)(0x40 + nb), 320);
+            memset(b, 0, 320);
+            memset(b + 8, (int)(0x40 + nb), 32);
+            memset(b + 64, (int)(0x60 + nb), 1);
             wr64(b, kind);
             wr64(b + 40, kind == 1 ? 0 : v);
             wr64(b + 48, kind == 1 ? v : 1);
             wr64(b + 56, 8);
             if (v >= bound) memcpy(wbits + 320 * nwb++, b, 320);
+            else if (kind == 1) memcpy(abits + 320 * nab++, b, 320);
         }
     }
     wr64(seen.b + SEEN_KEYS + 8, nk);
     wr64(seen.b + 24 + 8, nb);
-    if (CALL(lantern_seen_prune, seen.b, store) != 0) *why = "seen_prune status";
-    else if (!guard_ok(seen.b, seen.size)) *why = "seen_prune wrote past seen";
-    else if (rd64(seen.b + SEEN_KEYS + 8) != nw || memcmp(keys, want, (size_t)(32 * nw))) *why = "seen_prune: the keys kept differ";
-    else if (rd64(seen.b + 24 + 8) != nwb || memcmp(bits, wbits, (size_t)(320 * nwb))) *why = "seen_prune: the bits kept differ";
-    else if (rd64(seen.b + 40 + 8) != 0 || rd64(seen.b + SEEN_HEADERS + 8) != 0) *why = "seen_prune changed blocks or headers";
+    qsort(arch[0], (size_t)na[0], 16, cmp_words2);
+    qsort(arch[1], (size_t)na[1], 16, cmp_words2);
+    qsort(arch[2], (size_t)na[2], 24, cmp_words3);
+    qsort(arch[3], (size_t)na[3], 24, cmp_words3);
+    uint64_t room_keys = rd64(seen.b + 24) / 32 - rd64(seen.b + SEEN_KEYS) / 32, room_bits = (rd64(seen.b + 40) - rd64(seen.b + 24)) / 320;
+    if (CALL(lantern_seen_archive, seen.b, store, out) != 0) *why = "seen_archive status";
+    else if (!guard_ok(seen.b, seen.size)) *why = "seen_archive wrote past seen";
+    else if (rd64(seen.b + SEEN_KEYS + 8) != nw || memcmp(keys, want, (size_t)(32 * nw))) *why = "seen_archive: the keys kept differ";
+    else if (rd64(seen.b + 24 + 8) != nwb || memcmp(bits, wbits, (size_t)(320 * nwb))) *why = "seen_archive: the bits kept differ";
+    else if (rd64(seen.b + 40 + 8) != 0 || rd64(seen.b + SEEN_HEADERS + 8) != 0) *why = "seen_archive changed blocks or headers";
     else {
-        uint8_t *snap = copy_of(seen.b, seen.size);
-        if (CALL(lantern_seen_prune, seen.b, store) != 0 || memcmp(snap, seen.b, (size_t)seen.size)) *why = "a second seen_prune changed seen";
+        for (uint64_t i = 32 * nw; i < 32 * room_keys && !*why; i++)
+            if (keys[i]) *why = "seen_archive: a nonzero byte after the keys";
+        for (uint64_t i = 320 * nwb; i < 320 * room_bits && !*why; i++)
+            if (bits[i]) *why = "seen_archive: a nonzero byte after the bits";
+    }
+    /* the chunks: kinds 0 to 3 as sorted entries, then the aggregates' HistBits and bits */
+    uint64_t at = rd64(out + 8), len = rd64(out + 16), p = 0;
+    for (int hk = 0; hk < 5 && !*why; hk++) {
+        uint64_t count = hk < 4 ? na[hk] : nab;
+        if (!count) continue;
+        const uint8_t *c = out + at + p;
+        uint64_t es = hk < 2 ? 16 : hk < 4 ? 24 : 64;
+        if (p + 40 > len || rd64(c) != (uint64_t)hk || rd64(c + 24) != count) *why = "seen_archive: a chunk's kind or count";
+        else if (hk < 4 && memcmp(c + 40, arch[hk], (size_t)(count * es))) *why = "seen_archive: a chunk's entries";
+        else if (hk == 4) {
+            for (uint64_t i = 0; i < count && !*why; i++) {
+                const uint8_t *hb = c + 40 + 64 * i, *sb = abits + 320 * i;
+                if (memcmp(hb, sb + 8, 32) || rd64(hb + 32) != rd64(sb + 40) || rd64(hb + 40) != rd64(sb + 48) || rd64(hb + 48) != 8 ||
+                    memcmp(c + rd64(hb + 56), sb + 64, 8))
+                    *why = "seen_archive: an aggregate's HistBits or bits";
+            }
+        }
+        if (!*why) p += rd64(c + 32);
+    }
+    if (!*why && p != len) *why = "seen_archive: out's length";
+    if (!*why) {
+        uint8_t *snap = copy_of(seen.b, seen.size), *out2 = archive_out(1u << 16);
+        if (CALL(lantern_seen_archive, seen.b, store, out2) != 0 || memcmp(snap, seen.b, (size_t)seen.size) || rd64(out2 + 16))
+            *why = "a second seen_archive changed seen or archived more";
+        free(out2);
+        hist_add(&hist, out, why);
+        seen_merge_check(out, why);
+        /* recall: each archived key and bitset, then forget gives back the bytes */
+        uint8_t rec[8 + 4 * 64], mark[32];
+        for (int hk = 0; hk < 5 && !*why; hk++) {
+            uint64_t count = hk < 4 ? na[hk] : nab;
+            for (uint64_t i = 0; i < count && !*why; i++) {
+                memset(rec, 0, sizeof rec);
+                wr64(rec, 1);
+                uint8_t *it = rec + 8;
+                if (hk < 4) {
+                    static const uint64_t kinds[4] = {6, 2, 10, 11};
+                    wr64(it, kinds[hk]);
+                    memcpy(it + 8, arch[hk] + (hk < 2 ? 16 : 24) * i, hk < 2 ? 16 : 24);
+                    wr64(it + 24, hk < 2 ? 0 : rd64(it + 24));
+                } else {
+                    wr64(it, 256);
+                    wr64(it + 8, rd64(abits + 320 * i + 40));
+                    wr64(it + 16, rd64(abits + 320 * i + 48));
+                    memcpy(it + 32, abits + 320 * i + 8, 32);
+                }
+                if (CALL(lantern_seen_recall, seen.b, hist.b, rec, mark) != 0) *why = "seen_recall status";
+                else if (hk < 4 && (rd64(mark + 8) != 1 || rd64(seen.b + SEEN_KEYS + 8) != nw + 1 ||
+                                    rd64(keys + 32 * nw) != rd64(it) || memcmp(keys + 32 * nw + 8, it + 8, 24)))
+                    *why = "seen_recall: an archived key does not come back";
+                else if (hk == 4 && (rd64(mark + 24) != 1 || memcmp(bits + 320 * nwb, abits + 320 * i, 320)))
+                    *why = "seen_recall: an archived bitset does not come back";
+                else if (CALL(lantern_seen_recall, seen.b, hist.b, rec, mark) != 0 || rd64(mark + 8) || rd64(mark + 24))
+                    *why = "seen_recall: a key seen holds comes again";
+                else if (CALL(lantern_seen_forget, seen.b, mark) != 0) *why = "seen_forget status";
+                else {
+                    uint8_t mark1[32];
+                    wr64(mark1, nw);
+                    wr64(mark1 + 8, hk < 4);
+                    wr64(mark1 + 16, nwb);
+                    wr64(mark1 + 24, hk == 4);
+                    if (CALL(lantern_seen_forget, seen.b, mark1) != 0 || memcmp(snap, seen.b, (size_t)seen.size))
+                        *why = "seen_forget: seen's bytes do not come back";
+                }
+            }
+        }
+        if (!*why) { /* a key the history lacks, and a kept key: nothing */
+            memset(rec, 0, sizeof rec);
+            wr64(rec, 2);
+            wr64(rec + 8, 6);
+            wr64(rec + 16, first_epoch - 1);
+            wr64(rec + 24, 999999);
+            memcpy(rec + 72, want, 32);
+            if (CALL(lantern_seen_recall, seen.b, hist.b, rec, mark) != 0 || rd64(mark + 8) || rd64(mark + 24) || memcmp(snap, seen.b, (size_t)seen.size))
+                *why = "seen_recall: a key the history lacks, or a kept key, comes";
+        }
         free(snap);
     }
     free(store);
+    free(out);
+    free(hist.b);
     free(seen.b);
+}
+
+/*
+ * The SeenRecall of a gossip message (node.md, lantern_node_gossip): the keys of its kind from its
+ * fields, as the node reads them. Attestations before electra need none: their time checks come first.
+ */
+static void gossip_recall(const char *topic, const uint8_t *msg, uint8_t *rec, const char **why) {
+    memset(rec, 0, 8 + 4 * 64);
+    uint8_t *it = rec + 8;
+    uint64_t n = 0;
+    if (!strcmp(topic, "beacon_aggregate_and_proof")) {
+        const uint8_t *m = nested(msg, field_offset("SignedAggregateAndProof", 0));
+        const uint8_t *agg = nested(m, field_offset("AggregateAndProof", 1));
+        const uint8_t *data = agg + field_offset("Attestation", 1);
+        uint64_t target = rd64(data + field_offset("AttestationData", 4)), index = 0;
+#if FORK >= FORK_ELECTRA
+        const uint8_t *cb = agg + field_offset("Attestation", 3);
+        for (index = 0; index < 64 && !(cb[index / 8] >> (index % 8) & 1); index++);
+#endif
+        wr64(it, 2);
+        wr64(it + 8, target);
+        wr64(it + 16, rd64(m + field_offset("AggregateAndProof", 0)));
+        it += 64, n++;
+        wr64(it, 256);
+        wr64(it + 8, index);
+        wr64(it + 16, target);
+        root_of("AttestationData", data, it + 32, why);
+        n++;
+    }
+#if FORK >= FORK_ELECTRA
+    else if (!strcmp(topic, "beacon_attestation")) {
+        const uint8_t *data = msg + field_offset("SingleAttestation", 2);
+        wr64(it, 6);
+        wr64(it + 8, rd64(data + field_offset("AttestationData", 4)));
+        wr64(it + 16, rd64(msg + field_offset("SingleAttestation", 1)));
+        n++;
+    }
+#endif
+    else if (!strcmp(topic, "data_column_sidecar") || !strcmp(topic, "blob_sidecar")) {
+        int column = !strcmp(topic, "data_column_sidecar");
+        const uint8_t *h = msg + field_offset(column ? "DataColumnSidecar" : "BlobSidecar", 4);
+        wr64(it, column ? 10 : 11);
+        wr64(it + 8, rd64(h + field_offset("BeaconBlockHeader", 0)));
+        wr64(it + 16, rd64(h + field_offset("BeaconBlockHeader", 1)));
+        wr64(it + 24, rd64(msg + field_offset(column ? "DataColumnSidecar" : "BlobSidecar", 0)));
+        n++;
+    }
+    wr64(rec, n);
 }
 
 /* The kept state of a root, or NULL. */
@@ -8914,9 +9256,13 @@ static void run_gossip(const char *file, const char *dir, const char *handler, c
         }
 #endif
         tv msgs = tv_get(meta, "messages"), m = msgs + 9;
-        if (!why) seen_prune_check(&why);
-        /* lantern_seen_prune before each message, at the earliest time of the messages from it on (its
-           Caller must), as the app prunes at each new slot: every result stays the spec's. */
+        if (!why) seen_archive_check(&why);
+        /* lantern_seen_archive before each message, at the earliest time of the messages from it on (its
+           Caller must), into a history as the app keeps it, and lantern_seen_recall of the message's keys
+           before its validation and lantern_seen_forget after, as the node does: every result stays the spec's. */
+        hist_buf hist = {NULL, 0};
+        if (!why) hist_init(&hist, 0, 1u << 16);
+        if (!why && !hist.b) why = "no memory for a history";
         uint64_t nmsg = rd64(msgs + 1), *prune_ms = calloc(nmsg + 1, 8);
         {
             tv mm = msgs + 9;
@@ -8930,10 +9276,13 @@ static void run_gossip(const char *file, const char *dir, const char *handler, c
         for (uint64_t k = 0, c = nmsg; k < c && !why; k++, m = tv_skip(m)) {
             {
                 uint64_t was = rd64(n.store + STORE_TIME_MS);
+                uint8_t *aout = archive_out(4u << 20);
                 wr64(n.store + STORE_TIME_MS, prune_ms[k]);
-                if (CALL(lantern_seen_prune, seen.b, n.store) != 0) why = "seen_prune status";
+                if (CALL(lantern_seen_archive, seen.b, n.store, aout) != 0) why = "seen_archive status";
                 wr64(n.store + STORE_TIME_MS, was);
-                if (!why && !guard_ok(seen.b, seen.size)) why = "seen_prune wrote past seen";
+                if (!why && !guard_ok(seen.b, seen.size)) why = "seen_archive wrote past seen";
+                if (!why) hist_add(&hist, aout, &why);
+                free(aout);
             }
             char key[160];
             tv mn = tv_get(m, "message");
@@ -8978,6 +9327,19 @@ static void run_gossip(const char *file, const char *dir, const char *handler, c
             uint8_t *proposer = slotp && !why ? gossip_proposer_state(&n, parentp, rd64(slotp), &psize, &why) : NULL;
             const uint8_t *head_state = hk ? hk->state : NULL, *pstate = proposer ? proposer : head_state;
             uint64_t result = 0xA5A5A5A5A5A5A5A5u, st = 0;
+            uint8_t rec[8 + 4 * 64], mark[32];
+            int recalled = 0;
+            if (!why) gossip_recall(topics[t].topic, msg, rec, &why);
+            while (!why && rd64(rec)) {
+                uint64_t rs = CALL(lantern_seen_recall, seen.b, hist.b, rec, mark);
+                if (rs == 1) {
+                    seen_grow(&seen, &why);
+                    continue;
+                }
+                if (rs != 0) why = "seen_recall status";
+                recalled = 1;
+                break;
+            }
 #if FORK >= FORK_FULU
             /* networking.md, lantern_validate_partial_data_column_sidecar_gossip, Returns: with a short scratch
                (1 MiB, then up by 256 KiB, past the KZG check's need), a non-zero status leaves every Seen byte
@@ -9056,6 +9418,7 @@ static void run_gossip(const char *file, const char *dir, const char *handler, c
                 if (st != 1) break;
                 seen_grow(&seen, &why);
             }
+            if (!why && recalled && CALL(lantern_seen_forget, seen.b, mark) != 0) why = "seen_forget status";
             if (!why && !guard_ok(seen.b, seen.size)) why = "wrote past seen";
             if (!why && st != 0) {
                 static char msg2[64];
@@ -9073,6 +9436,36 @@ static void run_gossip(const char *file, const char *dir, const char *handler, c
                     why = msg2;
                 }
             }
+#if FORK >= FORK_ELECTRA
+            if (!why && result == 0 && !strcmp(topics[t].topic, "beacon_attestation")) {
+                /* The spec's Seen keeps a valid attestation's key: a later message of that key with data.index 1
+                   is IGNORE, as its seen check comes first, also once the key is in the history
+                   (networking.md, lantern_seen_recall); with the key dropped it would be REJECT. */
+                uint64_t target = rd64(msg + field_offset("SingleAttestation", 2) + field_offset("AttestationData", 4));
+                uint64_t spe = SLOTS_PER_EPOCH_RUNNER, range = rd64(config + 392 + 16 * 32 + 104), slot_ms = rd64(config + 104);
+                uint64_t later = rd64(n.store + STORE_GENESIS_TIME_MS) + ((target + 3) * spe + range + 2) * slot_ms, was = rd64(n.store + STORE_TIME_MS);
+                uint8_t *s2 = copy_of(seen.b, seen.size), *h2 = copy_of(hist.b, hist.room), *aout = archive_out(4u << 20), *crafted = copy_of(msg, vsize);
+                hist_buf hh = {h2, hist.room};
+                uint8_t rec2[8 + 4 * 64], mark2[32];
+                uint64_t r3 = 0, st3;
+                wr64(n.store + STORE_TIME_MS, later);
+                if (CALL(lantern_seen_archive, s2, n.store, aout) != 0) why = "seen_archive status, later";
+                wr64(n.store + STORE_TIME_MS, was);
+                if (!why) hist_add(&hh, aout, &why);
+                wr64(crafted + field_offset("SingleAttestation", 2) + field_offset("AttestationData", 1), 1);
+                if (!why) gossip_recall("beacon_attestation", crafted, rec2, &why);
+                if (!why && CALL(lantern_seen_recall, s2, hh.b, rec2, mark2) != 0) why = "seen_recall status, later";
+                if (!why) {
+                    st3 = CALL(LF(validate_beacon_attestation_gossip), s2, n.store, crafted, &later, &subnet, head_state, fresh_scratch(), &r3);
+                    if (st3 != 0 || r3 != GOSSIP_IGNORE || rd64(mark2 + 8) != 1)
+                        why = "a key in the history: a later message of it with data.index 1 is not IGNORE";
+                }
+                free(s2);
+                free(h2);
+                free(aout);
+                free(crafted);
+            }
+#endif
             free(proposer);
             free(group);
             free(msg);
@@ -9085,6 +9478,7 @@ static void run_gossip(const char *file, const char *dir, const char *handler, c
         free(n.anchor);
         free(seen.b);
         free(prune_ms);
+        free(hist.b);
         memcpy(config, base_config, CONFIG_SIZE);
         report(file, name, len, why == NULL, why);
     }

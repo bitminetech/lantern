@@ -1160,7 +1160,7 @@ SPEC_FUNCTION validate_beacon_aggregate_and_proof_gossip
 .else
     mov     x3, #0                          /* the key: the data root */
 .endif
-    ldr     x4, [sp, #(L + 136)]            /* b: the target epoch, for lantern_seen_prune */
+    ldr     x4, [sp, #(L + 136)]            /* b: the target epoch, for lantern_seen_archive */
     bl      lantern_seen_superset
     cbnz    x0, 4f
     mov     x0, x19                         /* [IGNORE] the first valid aggregate for (target epoch, aggregator) */
@@ -1352,7 +1352,7 @@ SPEC_FUNCTION validate_beacon_aggregate_and_proof_gossip
 .else
     mov     x3, #0
 .endif
-    ldr     x4, [sp, #(L + 136)]            /* b: the target epoch, for lantern_seen_prune */
+    ldr     x4, [sp, #(L + 136)]            /* b: the target epoch, for lantern_seen_archive */
     bl      lantern_seen_add_bits
     b       8f
 4:  mov     x0, #LANTERN_GOSSIP_IGNORE

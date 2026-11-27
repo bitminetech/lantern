@@ -125,12 +125,12 @@ FUNCTION abi_call
     ldp     x1, x2, [x28, #16]
     ldp     x3, x4, [x28, #32]
     ldr     x5, [x28, #112]
-    ldp     x6, x7, [x28, #120]             /* arguments 7 and 8 in x6, x7; 9 to 11 on the stack */
+    ldp     x6, x7, [x28, #120]             /* arguments 7 and 8 in x6, x7; 9 to 12 on the stack */
     sub     sp, sp, #32
     ldp     x9, x10, [x28, #136]
     stp     x9, x10, [sp]
-    ldr     x9, [x28, #152]
-    str     x9, [sp, #16]
+    ldp     x9, x10, [x28, #152]
+    stp     x9, x10, [sp, #16]
     ldr     x0, [x28, #8]
     blr     x16
     add     sp, sp, #32

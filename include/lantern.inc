@@ -557,6 +557,62 @@
 .set SeenHeader_header_root, 32
 .set SeenHeader_header, 64
 
+/* SeenHistory (networking.md): the file of the seen entries of past epochs, mapped to read */
+.set SeenHistory_size, 0                    /* bytes of the file in use */
+.set SeenHistory_magic, 8
+.set SeenHistory_version, 16
+.set SeenHistory_first_epoch, 24           /* the epoch of index entry 0 */
+.set SeenHistory_capacity, 32              /* index entries */
+.set SeenHistory_data_start, 40            /* the offset of the first SeenChunk */
+.set SEEN_HISTORY_FIXED, 64
+.set SEEN_HISTORY_MAGIC, 0x3154534948534c4c   /* "LLSHIST1" */
+.set SEEN_HISTORY_VERSION, 1
+.set SEEN_HISTORY_CAPACITY, 1 << 18        /* index entries of a new file: about 3.2 years of mainnet epochs */
+.set SEEN_HISTORY_ENTRY, 48                /* an index entry: the file offset of the SeenChunk of each HIST_* kind, or 0 */
+.set SEEN_HISTORY_DATA, SEEN_HISTORY_FIXED + SEEN_HISTORY_CAPACITY * SEEN_HISTORY_ENTRY   /* data_start of a new file */
+.set HIST_ATTESTATION, 0                   /* SEEN_ATTESTATION keys: (epoch, validator index), 16 bytes */
+.set HIST_AGGREGATOR, 1                    /* SEEN_AGGREGATOR_EPOCH keys: (epoch, aggregator index), 16 bytes */
+.set HIST_COLUMN, 2                        /* SEEN_DATA_COLUMN keys: (slot, proposer index, column index), 24 bytes */
+.set HIST_BLOB, 3                          /* SEEN_BLOB_SIDECAR keys: (slot, proposer index, blob index), 24 bytes */
+.set HIST_AGGREGATE, 4                     /* SEEN_AGGREGATE bits: HistBits, then the bits */
+.set HIST_KINDS, 5
+
+/* SeenChunk: one HIST_* kind's entries of some epochs, sorted, then for HIST_AGGREGATE the bits */
+.set SeenChunk_kind, 0
+.set SeenChunk_epoch_lo, 8
+.set SeenChunk_epoch_hi, 16
+.set SeenChunk_count, 24
+.set SeenChunk_bytes, 32                   /* bytes of the chunk, these fields included; a multiple of 8 */
+.set SEEN_CHUNK_FIXED, 40
+
+/* HistBits: the key of one SeenBits in a HIST_AGGREGATE chunk */
+.set HistBits_root, 0
+.set HistBits_a, 32                        /* the committee index */
+.set HistBits_epoch, 40                    /* the target epoch: SeenBits b */
+.set HistBits_length, 48
+.set HistBits_bits, 56                     /* the offset of its bits from the chunk's start */
+.set HistBits__mem, 64
+
+/* SeenRecall: the keys of one message whose past entries go back into seen before its validation */
+.set SeenRecall_count, 0
+.set SeenRecall_items, 8                   /* SeenRecallItem entries */
+.set SeenRecallItem_kind, 0                /* a SEEN_* key kind, or SEEN_RECALL_BITS */
+.set SeenRecallItem_a, 8
+.set SeenRecallItem_b, 16
+.set SeenRecallItem_c, 24
+.set SeenRecallItem_root, 32
+.set SeenRecallItem__mem, 64
+.set SEEN_RECALL_BITS, 256                 /* the SeenBits of (root, a, b = epoch) of SEEN_AGGREGATE */
+.set SEEN_RECALL_MAX, 4
+.set SEEN_RECALL_SIZE, 8 + SEEN_RECALL_MAX * SeenRecallItem__mem
+
+/* SeenMark: what lantern_seen_recall added, for lantern_seen_forget */
+.set SeenMark_keys, 0                      /* the count of keys before */
+.set SeenMark_added_keys, 8
+.set SeenMark_bits, 16                     /* the count of bits before */
+.set SeenMark_added_bits, 24
+.set SeenMark__mem, 32
+
 /*
  * The list limits of the req/resp message types that are config values: the values of the
  * mainnet and minimal configs (include/types.inc, Req/resp messages).

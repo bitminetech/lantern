@@ -69,9 +69,9 @@ build/linux-x86_64/runner-minimal-fulu ~/.cache/lantern/vectors minimal-fulu-ope
 | 72 | `stack` | Bytes of stack the call used |
 | 80 | `scratch[4]` | `abi_call`'s own: the stack pointer and the control words |
 | 112 | `arg5` | Argument 6 |
-| 120 | `more[5]` | Arguments 7 to 11 |
+| 120 | `more[6]` | Arguments 7 to 12 |
 
-- Arguments past those in registers go on the stack as the core ABI says: 7 to 11 on x86-64, 9 to 11 on ARM64 and RISC-V.
+- Arguments past those in registers go on the stack as the core ABI says: 7 to 12 on x86-64, 9 to 12 on ARM64 and RISC-V.
 
 ### Bits of fault
 

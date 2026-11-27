@@ -97,7 +97,7 @@ FUNCTION abi_call
     ld      a3, 32(s11)
     ld      a4, 40(s11)
     ld      a5, 112(s11)
-    ld      a6, 120(s11)                    # arguments 7 and 8 in a6, a7; 9 to 11 on the stack
+    ld      a6, 120(s11)                    # arguments 7 and 8 in a6, a7; 9 to 12 on the stack
     ld      a7, 128(s11)
     addi    sp, sp, -32
     ld      t1, 136(s11)
@@ -106,6 +106,8 @@ FUNCTION abi_call
     sd      t1, 8(sp)
     ld      t1, 152(s11)
     sd      t1, 16(sp)
+    ld      t1, 160(s11)
+    sd      t1, 24(sp)
     ld      a0, 8(s11)
     jalr    t0
     addi    sp, sp, 32
