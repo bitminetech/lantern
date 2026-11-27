@@ -26,12 +26,12 @@ fetch() {
         git -C "$dir" checkout -q FETCH_HEAD
     fi
 }
-fetch asm-ssz 3b48c1ce630eff7286f2caff9e0bb55e792ab7ea
-fetch asm-crypto a364b8c3c06b55607834f93cda7b7e315323b3b8
+fetch asm-ssz ade8944b2b78640bc3a12690867b0c11ef64ed8d
+fetch asm-crypto 6df4597fa0c3584d5eef4f89cbc647797316853d
 fetch asm-snappy b84f65a17f51dead69d22a7f6c5a16f7b2975d2a
-fetch asm-libp2p 05350fee83505b184bdaf3ec019a0bada1afe4b6
-fetch asm-quic 8ce353c1df72f835a234118c7f8f022118d5dac0
-fetch asm-discv5 ce98c4091f41479c6ed1de27aa984f2cedc80be5
+fetch asm-libp2p ba62d0a7a406834e751c9fce89a38d7f563bc70a
+fetch asm-quic d12ea4b467050a694ac9125ed1c2a88d9d97b041
+fetch asm-discv5 6b51c0cf16153886d59737c33216aca3570eaaf8
 fetch asm-rlp 40cca377a1621ed660a73724192a4a0b2c059a84
 
 # Each library's pin of another must match ours.
