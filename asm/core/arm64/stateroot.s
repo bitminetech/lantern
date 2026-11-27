@@ -240,6 +240,7 @@ SPEC_FUNCTION state_cache_init
     cmp     x10, x0
     b.lo    9f
     str     x9, [x1, #StateCache_validators]
+    str     xzr, [x1, #StateCache_pool]
     mov     x0, x9
     bl      lantern_sr_layout
     mov     x0, #LANTERN_OK
@@ -841,8 +842,10 @@ END_FUNCTION lantern_sr_clean
  * of the front, which callees get.
  */
 SPEC_LEAF state_root
-    mov     x4, #0
-    b       lantern_sr_root
+    mov     x4, #0                          /* the cache's pool, or none */
+    cbz     x1, 1f
+    ldr     x4, [x1, #StateCache_pool]
+1:  b       lantern_sr_root
 SPEC_END state_root
 
 /* (state, cache, scratch, out, pool): state.md. As lantern_state_root, with the jobs of lantern_sr_tree on pool. */

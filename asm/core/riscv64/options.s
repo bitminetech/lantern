@@ -143,6 +143,8 @@ FUNCTION lantern_app_options
     sd      t0, AppOptions_http_port(s2)
     li      t0, APP_DEFAULT_TARGET_PEERS
     sd      t0, AppOptions_target_peers(s2)
+    li      t0, APP_DEFAULT_THREADS
+    sd      t0, AppOptions_threads(s2)
     li      t0, APP_DEFAULT_LOG_LEVEL
     STQ     t0, s2, AppOptions_log_level
     li      t0, APP_DEFAULT_HTTP_ADDRESS

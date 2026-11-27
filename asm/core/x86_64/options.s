@@ -145,6 +145,7 @@ FUNCTION lantern_app_options
     movq    $APP_DEFAULT_PORT, AppOptions_port(%rbp)
     movq    $APP_DEFAULT_HTTP_PORT, AppOptions_http_port(%rbp)
     movq    $APP_DEFAULT_TARGET_PEERS, AppOptions_target_peers(%rbp)
+    movq    $APP_DEFAULT_THREADS, AppOptions_threads(%rbp)
     movq    $APP_DEFAULT_LOG_LEVEL, AppOptions_log_level(%rbp)
     movq    $APP_DEFAULT_HTTP_ADDRESS, AppOptions_http_address(%rbp)
     movq    $APP_DEFAULT_HTTP_CONNECTIONS, AppOptions_http_max_connections(%rbp)

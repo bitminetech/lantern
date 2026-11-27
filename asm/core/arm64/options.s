@@ -150,6 +150,8 @@ FUNCTION lantern_app_options
     str     x9, [x20, #AppOptions_http_port]
     mov     x9, #APP_DEFAULT_TARGET_PEERS
     str     x9, [x20, #AppOptions_target_peers]
+    mov     x9, #APP_DEFAULT_THREADS
+    str     x9, [x20, #AppOptions_threads]
     mov     x9, #APP_DEFAULT_LOG_LEVEL
     str     x9, [x20, #AppOptions_log_level]
     MOVQ    x9, APP_DEFAULT_HTTP_ADDRESS

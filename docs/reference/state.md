@@ -287,6 +287,7 @@ lantern_state_root(state, cache, scratch, out) -> status
 
 ### Function does
 
+- lantern_sr_root with the cache's `pool`, or with none when `cache` is 0: with a pool, the jobs of lantern_state_root_pool, and the same root.
 - With `cache` 0, in phase0, or when a field of a tree has more leaves than the tree's capacity: ssz_hash_tree_root of the state, with the cache left as it is.
 - Else merkleize of the roots of the state's fields:
   - A field of a tree: its leaves are its chunks for a list or vector of basic values, the last padded with zeros, or the hash tree root of each element for a list of containers. With n leaves, a leaf at an index of at least `count`, or whose chunk or element bytes (`copy` bytes) differ from the tree's, takes the new chunk or root, its copy takes the element's bytes, and it is dirty; with n below `count`, leaf n - 1 is dirty too. Level by level, each node with a dirty child takes the hash of its two children, a child past the ceil(n / 2^k) nodes of level k being the zero hash of depth k, and is dirty; the child's bit clears. The node at level ceil(log2(n)), hashed with the zero hash of each depth up to the depth of the field's limit, is the root of a vector; a list's is mixed with its length. With n 0, the zero hash of the limit's depth. `count` takes n.
@@ -296,7 +297,7 @@ lantern_state_root(state, cache, scratch, out) -> status
 ### Function never
 
 - Writes outside `cache`, `scratch`, `out` and its own stack.
-- Makes an OS call.
+- Makes an OS call other than through lantern_shell_pool_run, with the cache's pool.
 
 ### Limits
 
@@ -816,7 +817,8 @@ The Merkle trees of the large fields of the last state that lantern_state_root h
 |---|---|---|---|
 | 0 | `size` | u64 | Bytes of the buffer, this field included |
 | 8 | `validators` | u64 | The validators it was laid out for |
-| 16 | `trees` | `CacheTree` × `STATE_CACHE_TREES` | The trees, in the order of the Rules |
+| 16 | `pool` | u64 | A [`ShellPool`](shell.md#type-shellpool) whose jobs hash its large trees (lantern_state_root), or 0 |
+| 24 | `trees` | `CacheTree` × `STATE_CACHE_TREES` | The trees, in the order of the Rules |
 
 ### Rules
 
@@ -836,7 +838,8 @@ The Merkle trees of the large fields of the last state that lantern_state_root h
 - Tree 13, pending_partial_withdrawals: PendingPartialWithdrawal roots, copies of `PendingPartialWithdrawal__mem` bytes; capacity `STATE_CACHE_LIST`.
 - Tree 14, pending_consolidations: PendingConsolidation roots, copies of `PendingConsolidation__mem` bytes; capacity `STATE_CACHE_LIST`.
 - Tree 15, proposer_lookahead: Chunks; capacity (MIN_SEED_LOOKAHEAD + 1) * SLOTS_PER_EPOCH / 4.
-- 16 + 48 * `STATE_CACHE_TREES` bytes of header, then the bytes of each tree.
+- 24 + 48 * `STATE_CACHE_TREES` bytes of header, then the bytes of each tree.
+- lantern_state_cache_init sets `pool` to 0; its owner may set it to a pool it started.
 - A tree of a field that the state's fork does not hold keeps its `count`.
 
 ## Type `CacheTree`
@@ -897,7 +900,7 @@ The work of lantern_sr_tree on one tree, or of one job on a range of it.
 
 - Each runner process keeps one `StateCache` of lantern_state_cache_size(4096) from lantern_state_cache_init, and the config of every call names it at `CONFIG_STATE_CACHE`, so each state transition of the vectors hashes through it.
 - The state of each case that the runner compares with a `post` state: lantern_state_root with that cache, and with 0, must give ssz_hash_tree_root of the state. The runner counts them in a NOTE.
-- Once a process, the first such state grown to 3 x 4096 + 100 validators: lantern_state_root_pool with a pool of 4 threads and a cache of its own must give ssz_hash_tree_root with the cache empty, unchanged, after changes in each grown list, and with 50 validators fewer.
+- Once a process, the first such state grown to 3 x 4096 + 100 validators: lantern_state_root_pool with a pool of 4 threads and a cache of its own must give ssz_hash_tree_root with the cache empty, unchanged, after changes in each grown list, and with 50 validators fewer; then lantern_state_root with that pool as the cache's `pool`, with 10 balances fewer.
 
 ## Results
 

@@ -1209,7 +1209,8 @@ static void grow_list(uint8_t *state, int f, uint64_t esize, uint64_t n) {
  * state.md, lantern_state_root_pool: once a process, the first post state grown to 3 x 4096 + 100
  * validators (four jobs of the validators' tree) gives with a pool of 4 threads and a cache of its own
  * the root ssz_hash_tree_root gives: with the cache empty, unchanged, after changes in each grown list,
- * and with 50 validators fewer; lantern_state_root with no cache agrees each time.
+ * and with 50 validators fewer; lantern_state_root with no cache agrees each time, and with the cache's
+ * pool set, 10 balances fewer.
  */
 static int pool_checked;
 static void state_root_pool_check(const uint8_t *small, const uint8_t *desc, const char **why) {
@@ -1257,6 +1258,12 @@ static void state_root_pool_check(const uint8_t *small, const uint8_t *desc, con
             else if (CALL(LF(state_root_pool), st, cache, fresh_scratch(), got, pool) != 0) *why = "state_root_pool: status";
             else if (memcmp(got, want, 32)) *why = step == 0 ? "state_root_pool: the root, cache empty" : step == 1 ? "state_root_pool: the root, unchanged" : step == 2 ? "state_root_pool: the root after changes" : "state_root_pool: the root with fewer validators";
             else if (CALL(LF(state_root), st, NULL, fresh_scratch(), alone) != 0 || memcmp(alone, want, 32)) *why = "state_root_pool: state_root with no cache";
+            if (!*why && step == 3) { /* the cache's pool (StateCache_pool, 16): lantern_state_root hashes on it */
+                wr64(cache + 16, (uint64_t)(uintptr_t)pool);
+                wr64(st + field_offset("BeaconState", 12) + 8, n - 60);
+                if (ssz_hash_tree_root(desc, st, scr, want) != 0 || CALL(LF(state_root), st, cache, fresh_scratch(), got) != 0 || memcmp(got, want, 32))
+                    *why = "state_root: the root with the cache's pool";
+            }
         }
     }
     free(st);

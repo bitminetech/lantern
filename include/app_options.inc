@@ -76,6 +76,9 @@ app_options:
     .quad 12, AppOptions_metrics_port, APP_OPTION_PORT
     .ascii "metrics-port"
     .space 24 - 12
+    .quad 7, AppOptions_threads, APP_OPTION_PEERS
+    .ascii "threads"
+    .space 24 - 7
 app_options_end:
 app_categories_table:                   /* each --metrics name (include/metrics.inc): its bits, length, name in 24 bytes */
     METRIC_CATEGORY_NAMES

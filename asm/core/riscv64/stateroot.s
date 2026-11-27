@@ -247,6 +247,7 @@ SPEC_FUNCTION state_cache_init
     bltu    t0, a0, 9f
     ld      a0, 8(sp)
     sd      a0, StateCache_validators(a1)
+    sd      zero, StateCache_pool(a1)
     call    lantern_sr_layout
     li      a0, LANTERN_OK
     UNFRAME 16
@@ -925,8 +926,10 @@ END_FUNCTION lantern_sr_clean
  * Locals: L the scratch size on entry.
  */
 SPEC_LEAF state_root
-    li      a4, 0
-    j       lantern_sr_root
+    li      a4, 0                           # the cache's pool, or none
+    beqz    a1, 1f
+    ld      a4, StateCache_pool(a1)
+1:  j       lantern_sr_root
 SPEC_END state_root
 
 # (state, cache, scratch, out, pool): state.md. As lantern_state_root, with the jobs of lantern_sr_tree on pool.

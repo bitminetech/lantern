@@ -172,6 +172,20 @@ LOCAL_FUNCTION lantern_app_state_cache
     UNFRAME 16
 END_FUNCTION lantern_app_state_cache
 
+# The pool of --threads (app.md): its threads started, and the StateCache hashes on it. Locals: sp+0 a FileOp.
+LOCAL_FUNCTION lantern_app_pool
+    FRAME 16
+    ADDQ    a0, s1, APP_POOL
+    ADDQ    a1, s1, APP_OPTIONS + AppOptions_threads
+    mv      a2, sp
+    CALL_GLOBAL lantern_shell_pool_start
+    LDQ     t0, s1, APP_CONFIG + CONFIG_STATE_CACHE
+    beqz    t0, 1f
+    ADDQ    t1, s1, APP_POOL
+    sd      t1, StateCache_pool(t0)
+1:  UNFRAME 16
+END_FUNCTION lantern_app_pool
+
 /* The pair at s1 + a0 goes back to lantern_shell_unmap and becomes 0, 0. */
 LOCAL_FUNCTION lantern_app_unmap
     FRAME 16
@@ -929,6 +943,7 @@ LOCAL_FUNCTION lantern_app_start
 4:  call    lantern_app_file_free
     mv      a0, s3
     call    lantern_app_state_cache
+    call    lantern_app_pool                       # and the pool of --threads
     li      t0, 121                         # the store: nodes, and validators below the file's bytes / 121
     divu    t1, s3, t0
     li      t0, 4096

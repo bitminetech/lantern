@@ -190,7 +190,8 @@
 /* StateCache and CacheTree (docs/reference/state.md). */
 .set StateCache_size, 0
 .set StateCache_validators, 8
-.set StateCache_trees, 16
+.set StateCache_pool, 16                       /* a ShellPool whose jobs hash its large trees, or 0 */
+.set StateCache_trees, 24
 .set STATE_CACHE_TREES, 16
 .set CacheTree_capacity, 0
 .set CacheTree_count, 8
@@ -199,7 +200,7 @@
 .set CacheTree_copies, 32
 .set CacheTree_copy, 40
 .set CacheTree__mem, 48
-.set STATE_CACHE_FIXED, 16 + 48 * 16
+.set STATE_CACHE_FIXED, 24 + 48 * 16
 .set STATE_CACHE_HISTORICAL_ROOTS, 4096         /* leaves of the historical_roots tree */
 .set STATE_CACHE_LIST, 65536                    /* leaves of the historical_summaries and two pending trees */
 .set STATE_CACHE_PENDING_DEPOSITS, 262144       /* leaves of the pending_deposits tree */
@@ -1725,7 +1726,8 @@
 .set AppOptions_metrics, 200          /* the bits of the metrics categories (METRICS_*) */
 .set AppOptions_metrics_address, 208  /* IPv4, its 4 bytes in network order in the low bytes */
 .set AppOptions_metrics_port, 216
-.set AppOptions__size, 224
+.set AppOptions_threads, 224          /* the threads of lantern, its loop's included */
+.set AppOptions__size, 232
 .set APP_DEFAULT_PORT, 9000
 .set APP_DEFAULT_HTTP_PORT, 5052
 .set APP_DEFAULT_TARGET_PEERS, 64
@@ -1737,6 +1739,7 @@
 .set APP_DEFAULT_METRICS, METRICS_BEACON
 .set APP_DEFAULT_METRICS_ADDRESS, 0x0100007f  /* 127.0.0.1 */
 .set APP_DEFAULT_METRICS_PORT, 8008
+.set APP_DEFAULT_THREADS, 4
 
 .if DB_SEGMENT_SLOTS != 1 << DB_SEGMENT_SHIFT
 .error "DB_SEGMENT_SHIFT is not the log of DB_SEGMENT_SLOTS"

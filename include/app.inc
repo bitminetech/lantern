@@ -147,7 +147,8 @@
 .set APP_HIST_FILE, 2                       /* <dir>/seen-history.bin */
 .set APP_HIST_ROOM, 1 << 20                 /* the memory history's room after its index; it doubles when short */
 .set APP_HIST_OUT_BYTES, 1 << 20            /* the chunks' first room; it doubles when short */
-.set APP_SIZE, (APP_HIST + AppHist__size + 4095) & ~4095
+.set APP_POOL, (APP_HIST + AppHist__size + 7) & ~7  /* ShellPool of --threads (app.md) */
+.set APP_SIZE, (APP_POOL + SHELL_POOL_SIZE + 4095) & ~4095
 .set APP_BLOCK_BYTES, 1 << 16               /* the anchor block */
 .set APP_BUF_ENTRY, 24                      /* a BufferId table entry: id, address, size */
 .set APP_BUFS_CAP, 64                      /* the BufferId table's first room; it doubles when full */

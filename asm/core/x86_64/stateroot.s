@@ -253,6 +253,7 @@ SPEC_FUNCTION state_cache_init
     jb      9f
     mov     8(%rsp), %rdi
     mov     %rdi, StateCache_validators(%rsi)
+    movq    $0, StateCache_pool(%rsi)
     call    lantern_sr_layout
     xor     %eax, %eax
     UNFRAME 16
@@ -902,8 +903,11 @@ END_FUNCTION lantern_sr_clean
  * the front, which callees get.
  */
 SPEC_LEAF state_root
-    xor     %r8d, %r8d
-    jmp     lantern_sr_root
+    xor     %r8d, %r8d                      # the cache's pool, or none
+    test    %rsi, %rsi
+    jz      1f
+    mov     StateCache_pool(%rsi), %r8
+1:  jmp     lantern_sr_root
 SPEC_END state_root
 
 # (state, cache, scratch, out, pool): state.md. As lantern_state_root, with the jobs of lantern_sr_tree on pool.
