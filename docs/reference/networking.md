@@ -2264,7 +2264,7 @@ lantern_validate_blob_sidecar_gossip(seen, store, blob_sidecar, current_time_ms,
 
 - Makes the checks in spec order, and writes to seen only after the last one: "If the result is `valid`, update the store as the validation function would".
 - compute_time_at_slot_ms gives UINT64_MAX when the time does not fit in a u64, so such a slot is in the future; is_future_epoch is true when current_time_ms + `MAXIMUM_GOSSIP_CLOCK_DISPARITY` is before the genesis time, where the spec's subtraction raises.
-- `prior_header != header` compares the hash_tree_root of the two headers.
+- `prior_header != header` compares the two headers: their hash_tree_root, then, when those are equal, their decoded bytes, so that a hash collision cannot pass.
 - `blob_sidecar_{subnet_id}`: the index limit is `MAX_BLOBS_PER_BLOCK` (deneb) or `MAX_BLOBS_PER_BLOCK_ELECTRA` (electra). A blob, commitment or proof that `crypto_kzg_verify_blob_kzg_proof` cannot decode gives `LANTERN_GOSSIP_REJECT`, where the spec's verify_blob_kzg_proof raises.
 - Verifies a KZG proof with `crypto_kzg_verify_blob_kzg_proof` of asm-crypto.
 - Reads the config values of the store's copy.
@@ -2325,7 +2325,7 @@ lantern_validate_data_column_sidecar_gossip(seen, store, sidecar, current_time_m
 
 - Makes the checks in spec order, and writes to seen only after the last one: "If the result is `valid`, update the store as the validation function would".
 - compute_time_at_slot_ms gives UINT64_MAX when the time does not fit in a u64, so such a slot is in the future; is_future_epoch is true when current_time_ms + `MAXIMUM_GOSSIP_CLOCK_DISPARITY` is before the genesis time, where the spec's subtraction raises.
-- `prior_header != header` compares the hash_tree_root of the two headers.
+- `prior_header != header` compares the two headers: their hash_tree_root, then, when those are equal, their decoded bytes, so that a hash collision cannot pass.
 - Reads the config values of the store's copy.
 
 ### Function never
@@ -2385,7 +2385,7 @@ lantern_validate_partial_data_column_sidecar_gossip(seen, store, sidecar, curren
 
 - Makes the checks in spec order, and writes to seen only after the last one: "If the result is `valid`, update the store as the validation function would".
 - compute_time_at_slot_ms gives UINT64_MAX when the time does not fit in a u64, so such a slot is in the future; is_future_epoch is true when current_time_ms + `MAXIMUM_GOSSIP_CLOCK_DISPARITY` is before the genesis time, where the spec's subtraction raises.
-- `prior_header != header` compares the hash_tree_root of the two headers.
+- `prior_header != header` compares the two headers: their hash_tree_root, then, when those are equal, their decoded bytes, so that a hash collision cannot pass.
 - With cells, checks that scratch holds what the KZG check needs before it records a new header, so a short scratch changes no byte of seen.
 - Reads the config values of the store's copy.
 

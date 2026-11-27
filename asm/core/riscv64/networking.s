@@ -2812,6 +2812,19 @@ SPEC_FUNCTION validate_partial_data_column_sidecar_gossip
     addi    t0, a0, SeenHeader_header_root
     addi    t1, sp, L + 32
     NE32    t0, t1, 5f
+    addi    t0, a0, SeenHeader_header       # and the same bytes: equal roots alone could be a collision
+    ld      t1, 0(t0)
+    ld      t2, 0(s9)
+    bne     t1, t2, 5f
+    li      t2, 0
+291: bgeu   t2, t1, 2f
+    add     t3, t0, t2
+    lbu     t3, 0(t3)
+    add     t4, s9, t2
+    lbu     t4, 0(t4)
+    bne     t3, t4, 5f
+    addi    t2, t2, 1
+    j       291b
 2:  ADDRESS a0, lantern_type_BeaconBlockHeader          # [REJECT] the block header's root is the group id
     addi    a1, s9, PartialDataColumnHeader_signed_block_header + SignedBeaconBlockHeader_message
     mv      a2, s7

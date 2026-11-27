@@ -2904,6 +2904,19 @@ SPEC_FUNCTION validate_partial_data_column_sidecar_gossip
     add     $SeenHeader_header_root, %rax
     lea     (L + 48)(%rsp), %rcx
     NE32    %rax, %rcx, 5f
+    add     $(SeenHeader_header - SeenHeader_header_root), %rax   # and the same bytes: equal roots alone could be a collision
+    mov     S9(%rsp), %rsi
+    mov     (%rax), %rcx
+    cmp     (%rsi), %rcx
+    jne     5f
+    xor     %edx, %edx
+291: cmp    %rcx, %rdx
+    jae     2f
+    movzbl  (%rax,%rdx), %r11d
+    cmp     (%rsi,%rdx), %r11b
+    jne     5f
+    inc     %rdx
+    jmp     291b
 2:  ADDRESS %rdi, lantern_type_BeaconBlockHeader        # [REJECT] the block header's root is the group id
     mov     S9(%rsp), %rsi
     add     $(PartialDataColumnHeader_signed_block_header + SignedBeaconBlockHeader_message), %rsi

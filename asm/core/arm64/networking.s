@@ -2813,6 +2813,20 @@ SPEC_FUNCTION validate_partial_data_column_sidecar_gossip
     add     x14, x0, #SeenHeader_header_root
     add     x15, sp, #(L + 32)
     NE32    x14, x15, 5f
+    add     x14, x0, #SeenHeader_header     /* and the same bytes: equal roots alone could be a collision */
+    ldr     x15, [x14]
+    ldr     x16, [x27]
+    cmp     x15, x16
+    b.ne    5f
+    mov     x16, #0
+291: cmp    x16, x15
+    b.hs    2f
+    ldrb    w12, [x14, x16]
+    ldrb    w13, [x27, x16]
+    cmp     w12, w13
+    b.ne    5f
+    add     x16, x16, #1
+    b       291b
 2:  ADDRESS x0, lantern_type_BeaconBlockHeader          /* [REJECT] the block header's root is the group id */
     add     x1, x27, #(PartialDataColumnHeader_signed_block_header + SignedBeaconBlockHeader_message)
     mov     x2, x25
