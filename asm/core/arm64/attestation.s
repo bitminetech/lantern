@@ -2108,6 +2108,28 @@ LOCAL_FUNCTION lantern_block_sigs
 6:  cmp     x28, #2                         /* two or more entries: the jobs */
     b.lo    99f
     str     x28, [x25, #BlockSigs_count]
+    str     xzr, [x25, #BlockSigs_next]
+    ldr     x9, [x25, #BlockSigs_pairs]     /* the pairs, most keys first: an insertion sort */
+    mov     x10, #1
+61: cmp     x10, x28
+    b.hs    64f
+    add     x11, x9, x10, lsl #4
+    ldp     x12, x13, [x11]
+    ldr     x14, [x12, #SigEntry_keys]
+62: cmp     x11, x9
+    b.ls    63f
+    ldur    x15, [x11, #-16]
+    ldr     x16, [x15, #SigEntry_keys]
+    cmp     x16, x14
+    b.hs    63f
+    ldp     x15, x16, [x11, #-16]
+    stp     x15, x16, [x11]
+    sub     x11, x11, #16
+    b       62b
+63: stp     x12, x13, [x11]
+    add     x10, x10, #1
+    b       61b
+64:
     ldr     x10, [x25, #BlockSigs_jobs]
     cmp     x10, x28
     csel    x10, x10, x28, lo
@@ -2233,21 +2255,25 @@ LOCAL_FUNCTION lantern_block_sig_entry
 END_FUNCTION lantern_block_sig_entry
 
 /*
- * A job of lantern_block_sigs (x0 the BlockSigs record, x1 the job k): each pair j with j mod n = k:
- * crypto_bls_fast_aggregate_verify_cached of its IndexedAttestation's keys, the entry's message and
- * signature, into the entry's valid. x19 the record, x20 j, x21 the pairs, x22 their count, x23 n, x24 the scratch.
+ * A job of lantern_block_sigs (x0 the BlockSigs record, x1 the job k): while the counter `next` gives a
+ * pair j below the count: crypto_bls_fast_aggregate_verify_cached of its IndexedAttestation's keys, the
+ * entry's message and signature, into the entry's valid. x19 the record, x20 j, x21 the pairs, x22 their
+ * count, x24 the scratch of job k.
  */
 LOCAL_FUNCTION lantern_block_sig_job
     ENTER 0
     mov     x19, x0
-    mov     x20, x1
     ldr     x21, [x19, #BlockSigs_pairs]
     ldr     x22, [x19, #BlockSigs_count]
-    ldr     x23, [x19, #BlockSigs_jobs]
     MOVQ    x9, BLOCK_SIG_SCRATCH
-    madd    x24, x20, x9, x19
+    madd    x24, x1, x9, x19
     add     x24, x24, #BlockSigs_scratch
-1:  cmp     x20, x22
+1:  add     x10, x19, #BlockSigs_next       /* j = next, next + 1: one pair to one job */
+2:  ldaxr   x20, [x10]
+    add     x11, x20, #1
+    stlxr   w12, x11, [x10]
+    cbnz    w12, 2b
+    cmp     x20, x22
     b.hs    9f
     MOVQ    x9, BLOCK_SIG_SCRATCH
     str     x9, [x24]
@@ -2260,7 +2286,6 @@ LOCAL_FUNCTION lantern_block_sig_job
     mov     x5, x24
     add     x6, x9, #SigEntry_valid
     CALL_GLOBAL crypto_bls_fast_aggregate_verify_cached
-    add     x20, x20, x23
     b       1b
 9:  mov     x0, #0
     LEAVE 0

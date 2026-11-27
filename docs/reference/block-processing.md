@@ -3788,7 +3788,7 @@ lantern_block_sigs(state, block, config, scratch) -> status
 - With a PubkeyCache at `CONFIG_PUBKEY_CACHE`, a StateCache whose `pool` has workers, and 2 or more attestations in the block: else nothing.
 - Keeps at the end of `scratch` a [`BlockSigs`](#type-blocksigs) record, the job scratches, a pair of each entry and an IndexedAttestation of each attestation, sized by its bits; and leaves the front, of `LANTERN_SCRATCH_FIXED` bytes at least, to its callees.
 - For each attestation, in block order: lantern_get_indexed_attestation; with some indices, each below the cache's count and the state's validators, and room in the SigTable for its entry: lantern_block_sig_keys, then lantern_block_sig_entry into the next entry. An attestation where a step fails gets no entry.
-- With 2 or more entries: lantern_shell_pool_run of the lower of the entries and the jobs (the workers + 1, at most `BLOCK_SIG_JOBS`) jobs of lantern_block_sig_job.
+- With 2 or more entries: sorts the pairs by the keys of their entries, most first (an insertion sort, which keeps the order of equal ones), sets `next` to 0, then lantern_shell_pool_run of the lower of the entries and the jobs (the workers + 1, at most `BLOCK_SIG_JOBS`) jobs of lantern_block_sig_job.
 - Each check of process_block then reads the SigTable (lantern_indexed_attestation_valid): an entry answers only a check of the same keys, message and signature, so every result is the one of a check of its own.
 - Gives `scratch` its `size` back.
 
@@ -3926,13 +3926,13 @@ lantern_block_sig_job(record, index)
 
 ### Function does
 
-- For each pair j with j mod `jobs` the job: crypto_bls_fast_aggregate_verify_cached of asm-crypto of the keys of its IndexedAttestation's indices, the entry's message and signature, with the record's PubkeyCache and the job's own scratch, into the entry's `valid`.
+- Takes pairs j from `next` (an atomic add of 1: `ldaxr` and `stlxr` on ARM64, `lock xadd` on x86-64, `amoadd.d` on RISC-V) while j is below `count`, so each pair goes to one job and a job that ends early takes more. For each: crypto_bls_fast_aggregate_verify_cached of asm-crypto of the keys of its IndexedAttestation's indices, the entry's message and signature, with the record's PubkeyCache and the job's own scratch, into the entry's `valid`.
 - Reads the cache only: lantern_block_sig_keys filled each entry it reads.
 
 ### Function never
 
 - Makes an OS call.
-- Writes outside its share of the entries' `valid` and its scratch.
+- Writes outside the `valid` of the entries it takes, `next` and its scratch.
 
 ### Limits
 
@@ -3970,8 +3970,9 @@ The record of the jobs of lantern_block_sigs, at the end of its scratch.
 | 16 | `keys` | u64 | The pubkey of the state's first validator: key i at + 128 i |
 | 24 | `cache` | u64 | The PubkeyCache |
 | 32 | `count` | u64 | The entries |
-| 40 | `pairs` | u64 | The address of the pairs: (entry, IndexedAttestation) of each entry, 16 bytes each |
-| 48 | `scratch` | n x `BLOCK_SIG_SCRATCH` bytes | A scratch of each job |
+| 40 | `pairs` | u64 | The address of the pairs: (entry, IndexedAttestation) of each entry, 16 bytes each, most keys first |
+| 48 | `next` | u64 | The next pair a job takes: a counter the jobs add 1 to atomically |
+| 56 | `scratch` | n x `BLOCK_SIG_SCRATCH` bytes | A scratch of each job |
 
 ## Type `SigTable`
 

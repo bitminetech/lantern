@@ -2092,6 +2092,29 @@ LOCAL_FUNCTION lantern_block_sigs
 6:  li      t0, 2                           # two or more entries: the jobs
     bltu    s10, t0, 99f
     sd      s10, BlockSigs_count(s7)
+    sd      zero, BlockSigs_next(s7)
+    ld      t0, BlockSigs_pairs(s7)         # the pairs, most keys first: an insertion sort
+    li      t1, 1
+62: bgeu    t1, s10, 66f
+    slli    t2, t1, 4
+    add     t2, t0, t2
+    ld      t3, 0(t2)
+    ld      t4, 8(t2)
+    ld      t5, SigEntry_keys(t3)
+63: bgeu    t0, t2, 65f
+    ld      t6, -16(t2)
+    ld      a0, SigEntry_keys(t6)
+    bgeu    a0, t5, 65f
+    sd      t6, 0(t2)
+    ld      t6, -8(t2)
+    sd      t6, 8(t2)
+    addi    t2, t2, -16
+    j       63b
+65: sd      t3, 0(t2)
+    sd      t4, 8(t2)
+    addi    t1, t1, 1
+    j       62b
+66:
     ld      t1, BlockSigs_jobs(s7)
     bleu    t1, s10, 61f
     mv      t1, s10
@@ -2214,19 +2237,21 @@ LOCAL_FUNCTION lantern_block_sig_entry
 END_FUNCTION lantern_block_sig_entry
 
 /*
- * A job of lantern_block_sigs (a0 the BlockSigs record, a1 the job k): each pair j with j mod n = k:
- * crypto_bls_fast_aggregate_verify_cached of its IndexedAttestation's keys, the entry's message and
- * signature, into the entry's valid. s1 the record, s2 j, s3 the scratch.
+ * A job of lantern_block_sigs (a0 the BlockSigs record, a1 the job k): while the counter `next` gives a
+ * pair j below the count: crypto_bls_fast_aggregate_verify_cached of its IndexedAttestation's keys, the
+ * entry's message and signature, into the entry's valid. s1 the record, s2 j, s3 the scratch of job k.
  */
 LOCAL_FUNCTION lantern_block_sig_job
     ENTER 0
     mv      s1, a0
-    mv      s2, a1
     li      t0, BLOCK_SIG_SCRATCH
-    mul     s3, s2, t0
+    mul     s3, a1, t0
     add     s3, s3, s1
     addi    s3, s3, BlockSigs_scratch
-1:  ld      t0, BlockSigs_count(s1)
+1:  li      t0, 1                           # j = next, next + 1: one pair to one job
+    addi    t1, s1, BlockSigs_next
+    amoadd.d.aqrl s2, t0, (t1)
+    ld      t0, BlockSigs_count(s1)
     bgeu    s2, t0, 9f
     li      t0, BLOCK_SIG_SCRATCH
     sd      t0, 0(s3)
@@ -2242,8 +2267,6 @@ LOCAL_FUNCTION lantern_block_sig_job
     mv      a5, s3
     addi    a6, t1, SigEntry_valid
     CALL_GLOBAL crypto_bls_fast_aggregate_verify_cached
-    ld      t0, BlockSigs_jobs(s1)
-    add     s2, s2, t0
     j       1b
 9:  li      a0, 0
     LEAVE 0

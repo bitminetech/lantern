@@ -580,8 +580,9 @@
 .set BlockSigs_keys, 16                    /* the state's first validator's pubkey: key i at + 128 i */
 .set BlockSigs_cache, 24                   /* the PubkeyCache */
 .set BlockSigs_count, 32                   /* the entries */
-.set BlockSigs_pairs, 40                   /* (entry, IndexedAttestation) of each entry, 16 bytes each */
-.set BlockSigs_scratch, 48                 /* then n scratches of BLOCK_SIG_SCRATCH bytes */
+.set BlockSigs_pairs, 40                   /* (entry, IndexedAttestation) of each entry, 16 bytes each, most keys first */
+.set BlockSigs_next, 48                    /* the next pair a job takes: an atomic counter */
+.set BlockSigs_scratch, 56                 /* then n scratches of BLOCK_SIG_SCRATCH bytes */
 .set BLOCK_SIG_SCRATCH, 8448               /* a job's BlsScratch: CRYPTO_BLS_SCRATCH and the 32 message bytes, rounded up */
 .set BLOCK_SIG_JOBS, 16
 

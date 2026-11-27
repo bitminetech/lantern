@@ -2088,6 +2088,32 @@ LOCAL_FUNCTION lantern_block_sigs
     cmp     $2, %rax
     jb      99f
     mov     %rax, BlockSigs_count(%r15)
+    movq    $0, BlockSigs_next(%r15)
+    mov     BlockSigs_pairs(%r15), %r8      # the pairs, most keys first: an insertion sort
+    mov     $1, %r9d
+61: cmp     %rax, %r9
+    jae     64f
+    mov     %r9, %r10
+    shl     $4, %r10
+    add     %r8, %r10
+    mov     (%r10), %rsi
+    mov     8(%r10), %rdi
+    mov     SigEntry_keys(%rsi), %r11
+62: cmp     %r8, %r10
+    jbe     63f
+    mov     -16(%r10), %rcx
+    cmp     %r11, SigEntry_keys(%rcx)
+    jae     63f
+    mov     %rcx, (%r10)
+    mov     -8(%r10), %rcx
+    mov     %rcx, 8(%r10)
+    sub     $16, %r10
+    jmp     62b
+63: mov     %rsi, (%r10)
+    mov     %rdi, 8(%r10)
+    inc     %r9
+    jmp     61b
+64:
     mov     BlockSigs_jobs(%r15), %rcx
     cmp     %rax, %rcx
     cmova   %rax, %rcx
@@ -2211,17 +2237,19 @@ LOCAL_FUNCTION lantern_block_sig_entry
 END_FUNCTION lantern_block_sig_entry
 
 /*
- * A job of lantern_block_sigs (rdi the BlockSigs record, rsi the job k): each pair j with j mod n = k:
- * crypto_bls_fast_aggregate_verify_cached of its IndexedAttestation's keys, the entry's message and
- * signature, into the entry's valid. rbx the record, rbp j, r12 the scratch, r13 the entry.
+ * A job of lantern_block_sigs (rdi the BlockSigs record, rsi the job k): while the counter `next` gives a
+ * pair j below the count: crypto_bls_fast_aggregate_verify_cached of its IndexedAttestation's keys, the
+ * entry's message and signature, into the entry's valid. rbx the record, rbp j, r12 the scratch of job k,
+ * r13 the entry.
  */
 LOCAL_FUNCTION lantern_block_sig_job
     ENTER 0
     mov     %rdi, %rbx
-    mov     %rsi, %rbp
-    imul    $BLOCK_SIG_SCRATCH, %rbp, %r12
+    imul    $BLOCK_SIG_SCRATCH, %rsi, %r12
     lea     BlockSigs_scratch(%rbx,%r12), %r12
-1:  cmp     BlockSigs_count(%rbx), %rbp
+1:  mov     $1, %ebp                        # j = next, next + 1: one pair to one job
+    lock xadd %rbp, BlockSigs_next(%rbx)
+    cmp     BlockSigs_count(%rbx), %rbp
     jae     9f
     movq    $BLOCK_SIG_SCRATCH, (%r12)
     mov     %rbp, %rax
@@ -2237,7 +2265,6 @@ LOCAL_FUNCTION lantern_block_sig_job
     lea     SigEntry_valid(%r13), %rax
     mov     %rax, S7(%rsp)                  # valid: the 7th argument, at the stack pointer
     CALL_GLOBAL crypto_bls_fast_aggregate_verify_cached
-    add     BlockSigs_jobs(%rbx), %rbp
     jmp     1b
 9:  xor     %eax, %eax
     LEAVE 0
