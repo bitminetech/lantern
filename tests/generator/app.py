@@ -19,7 +19,7 @@ DEFAULTS = {"network_dir": "", "execution": "", "jwt_secret": "", "boot_nodes": 
             "http_port": 5052, "target_peers": 64, "data_dir": "", "checkpoint_state": "", "checkpoint_block": "",
             "log_level": 2, "http_address": ip4(127, 0, 0, 1), "http_max_connections": 64,
             "supernode": 0, "builder": "", "archive": 0, "metrics": 1, "metrics_address": ip4(127, 0, 0, 1),
-            "metrics_port": 8008}
+            "metrics_port": 8008, "threads": 4}
 
 
 def options(**values):
@@ -58,6 +58,8 @@ GOOD = [
     ("supernode_between", ["--supernode", "--port", "7", "--supernode", "--network-dir=n"],
      options(network_dir="n", port=7, supernode=1)),
     ("builder", ["--network-dir", "n", "--builder", "http://127.0.0.1:18550"], options(network_dir="n", builder="127.0.0.1:18550")),
+    ("threads", ["--threads", "16", "--network-dir", "n"], options(network_dir="n", threads=16)),
+    ("threads_limits", ["--network-dir", "n", "--threads=1", "--threads", "1024"], options(network_dir="n", threads=1024)),
     ("builder_without_scheme", ["--builder=localhost:18550", "--network-dir", "n"], options(network_dir="n", builder="localhost:18550")),
     ("metrics_beacon", ["--network-dir", "n", "--metrics", "beacon"], options(network_dir="n", metrics=1)),
     ("metrics_none", ["--network-dir", "n", "--metrics", ""], options(network_dir="n", metrics=0)),
@@ -93,6 +95,8 @@ FAULTS = [
     ("port_u64_overflow", ["--port", "18446744073709551616", "--network-dir", "/n"], 1),
     ("peers_zero", ["--network-dir", "/n", "--target-peers", "0"], 3),
     ("peers_too_many", ["--network-dir", "/n", "--target-peers", "1025"], 3),
+    ("threads_zero", ["--network-dir", "/n", "--threads", "0"], 3),
+    ("threads_too_many", ["--threads", "1025", "--network-dir", "/n"], 1),
     ("address_three_parts", ["--network-dir", "/n", "--enr-address", "10.0.0"], 3),
     ("address_five_parts", ["--network-dir", "/n", "--enr-address", "1.2.3.4.5"], 3),
     ("address_part_too_big", ["--network-dir", "/n", "--enr-address", "10.0.0.256"], 3),

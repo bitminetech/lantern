@@ -10277,7 +10277,7 @@ static void run_db_state_diff(const char *file, case_file *f) {
 /* ---------------------------------------------------------------- Application */
 
 #define INVALID_OPTION 61
-#define APP_OPTIONS_SIZE 224
+#define APP_OPTIONS_SIZE 232
 
 /*
  * app-options: lantern_app_options over each case's command line (tests/generator/app.py), as an
@@ -10290,8 +10290,8 @@ static void run_app_options(const char *file, case_file *f) {
     static const uint64_t text_at[] = {0, 16, 32, 48, 96, 112, 128, 176};
     static const char *numbers[] = {"port", "enr_address", "http_port", "target_peers", "log_level", "http_address",
                                     "http_max_connections", "supernode", "archive", "metrics", "metrics_address",
-                                    "metrics_port"};
-    static const uint64_t number_at[] = {64, 72, 80, 88, 144, 152, 160, 168, 192, 200, 208, 216};
+                                    "metrics_port", "threads"};
+    static const uint64_t number_at[] = {64, 72, 80, 88, 144, 152, 160, 168, 192, 200, 208, 216, 224};
     for (uint64_t i = 0; i < f->count; i++) {
         const char *name, *why = NULL;
         uint64_t len, total = 0, alen;
@@ -10332,7 +10332,7 @@ static void run_app_options(const char *file, case_file *f) {
                     inside = start >= rd64(list + 40 + 16 * k) && start + got <= rd64(list + 40 + 16 * k) + rd64(list + 48 + 16 * k);
                 if (got != wl || !inside || (wl && memcmp(list + start, w, (size_t)wl))) why = texts[t];
             }
-            for (int t = 0; t < 12 && !why; t++)
+            for (int t = 0; t < 13 && !why; t++)
                 if (rd64(opts + number_at[t]) != tv_u64(tv_get(want, numbers[t]))) why = numbers[t];
         } else if (st != INVALID_OPTION) why = "status is not LANTERN_INVALID_OPTION";
         else if (fault != tv_u64(wfault)) why = "fault is not the case's index";
