@@ -2049,6 +2049,7 @@ lantern_validate_partial_data_column_sidecar_gossip(seen, store, sidecar, curren
 - Makes the checks in spec order, and writes to seen only after the last one: "If the result is `valid`, update the store as the validation function would".
 - compute_time_at_slot_ms gives UINT64_MAX when the time does not fit in a u64, so such a slot is in the future; is_future_epoch is true when current_time_ms + `MAXIMUM_GOSSIP_CLOCK_DISPARITY` is before the genesis time, where the spec's subtraction raises.
 - `prior_header != header` compares the hash_tree_root of the two headers.
+- With cells, checks that scratch holds what the KZG check needs before it records a new header, so a short scratch changes no byte of seen.
 - Reads the config values of the store's copy.
 
 ### Function never

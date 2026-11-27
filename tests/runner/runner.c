@@ -8978,6 +8978,25 @@ static void run_gossip(const char *file, const char *dir, const char *handler, c
             uint8_t *proposer = slotp && !why ? gossip_proposer_state(&n, parentp, rd64(slotp), &psize, &why) : NULL;
             const uint8_t *head_state = hk ? hk->state : NULL, *pstate = proposer ? proposer : head_state;
             uint64_t result = 0xA5A5A5A5A5A5A5A5u, st = 0;
+#if FORK >= FORK_FULU
+            /* networking.md, lantern_validate_partial_data_column_sidecar_gossip, Returns: with a short scratch
+               (1 MiB, then up by 256 KiB, past the KZG check's need), a non-zero status leaves every Seen byte
+               as it was. Each try starts from the same Seen. */
+            if (!why && !strcmp(topics[t].topic, "partial_data_column_sidecar")) {
+                while (!why && seen.room[3] < (1u << 17)) seen_grow(&seen, &why); /* room for a header: the scratch is what is short */
+                uint8_t *snap = copy_of(seen.b, seen.size);
+                for (uint64_t sz = 1u << 20; sz < SCRATCH_BYTES && !why; sz += 1u << 18) {
+                    uint8_t *sc = fresh_scratch();
+                    uint64_t r2 = 0, s2;
+                    wr64(sc, sz);
+                    s2 = CALL(LF(validate_partial_data_column_sidecar_gossip), seen.b, n.store, msg, &now, group, &column, head_state,
+                              pstate, kzg_settings, sc, &r2);
+                    if (s2 != 0 && memcmp(snap, seen.b, (size_t)seen.size)) why = "a short scratch: a non-zero status changed seen";
+                    memcpy(seen.b, snap, (size_t)seen.size);
+                }
+                free(snap);
+            }
+#endif
             for (int tries = 0; tries < 24 && !why; tries++) {
                 uint8_t *snap = copy_of(seen.b, seen.size);
                 const char *nm = topics[t].topic;

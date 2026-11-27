@@ -2843,7 +2843,17 @@ SPEC_FUNCTION validate_partial_data_column_sidecar_gossip
     ld      t0, (L + 64)(sp)
     ld      t1, (PartialDataColumnHeader_signed_block_header + SignedBeaconBlockHeader_message + BeaconBlockHeader_proposer_index)(s9)
     bne     t0, t1, 5f
-    mv      a0, s1                          # seen.partial_data_column_headers[group_id.beacon_block_root] = header
+    beqz    s10, 23f                        # with cells: the KZG check's scratch, before seen changes
+    li      t0, DA_SCRATCH_PER_BLOB
+    mulhu   t1, s10, t0
+    bnez    t1, 9f
+    mul     t0, s10, t0
+    li      t1, DA_SCRATCH_FIXED
+    add     t2, t0, t1
+    bltu    t2, t1, 9f
+    ld      t0, 0(s7)
+    bltu    t0, t2, 9f
+23: mv      a0, s1                          # seen.partial_data_column_headers[group_id.beacon_block_root] = header
     ld      a1, L(sp)
     call    lantern_seen_find_header
     bnez    a0, 3f

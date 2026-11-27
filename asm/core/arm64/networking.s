@@ -2845,7 +2845,18 @@ SPEC_FUNCTION validate_partial_data_column_sidecar_gossip
     ldr     x10, [x27, #(PartialDataColumnHeader_signed_block_header + SignedBeaconBlockHeader_message + BeaconBlockHeader_proposer_index)]
     cmp     x9, x10
     b.ne    5f
-    mov     x0, x19                         /* seen.partial_data_column_headers[group_id.beacon_block_root] = header */
+    cbz     x28, 23f                        /* with cells: the KZG check's scratch, before seen changes */
+    MOVQ    x9, DA_SCRATCH_PER_BLOB
+    umulh   x10, x28, x9
+    cbnz    x10, 9f
+    mul     x9, x28, x9
+    MOVQ    x10, DA_SCRATCH_FIXED
+    adds    x9, x9, x10
+    b.cs    9f
+    ldr     x10, [x25]
+    cmp     x10, x9
+    b.lo    9f
+23: mov     x0, x19                         /* seen.partial_data_column_headers[group_id.beacon_block_root] = header */
     ldr     x1, [sp, #L]
     bl      lantern_seen_find_header
     cbnz    x0, 3f

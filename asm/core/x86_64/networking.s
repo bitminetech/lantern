@@ -2942,7 +2942,18 @@ SPEC_FUNCTION validate_partial_data_column_sidecar_gossip
     mov     (L + 80)(%rsp), %rax
     cmp     (PartialDataColumnHeader_signed_block_header + SignedBeaconBlockHeader_message + BeaconBlockHeader_proposer_index)(%rcx), %rax
     jne     5f
-    mov     %rbx, %rdi                      # seen.partial_data_column_headers[group_id.beacon_block_root] = header
+    cmpq    $0, S10(%rsp)                   # with cells: the KZG check's scratch, before seen changes
+    je      23f
+    mov     S10(%rsp), %rax
+    MOVQ    %rcx, DA_SCRATCH_PER_BLOB
+    mul     %rcx
+    jc      9f
+    MOVQ    %rcx, DA_SCRATCH_FIXED
+    add     %rcx, %rax
+    jc      9f
+    cmp     %rax, (%r15)
+    jb      9f
+23: mov     %rbx, %rdi                      # seen.partial_data_column_headers[group_id.beacon_block_root] = header
     mov     (L + 8)(%rsp), %rsi
     call    lantern_seen_find_header
     test    %rax, %rax
