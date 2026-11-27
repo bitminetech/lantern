@@ -208,6 +208,8 @@ SPEC_FUNCTION pubkey_cache_size
     mov     x10, #CRYPTO_BLS_ENTRY_BYTES
     mul     x9, x9, x10
     add     x9, x9, #CRYPTO_BLS_CACHE_FIXED
+    MOVQ    x10, SIG_TABLE_BYTES            /* and the SigTable before the entries */
+    add     x9, x9, x10
     str     x9, [x1]
     mov     x0, #LANTERN_OK
     UNFRAME 16
@@ -220,15 +222,21 @@ SPEC_FUNCTION pubkey_cache_init
     mov     x10, #CRYPTO_BLS_ENTRY_BYTES
     mul     x11, x9, x10
     add     x11, x11, #CRYPTO_BLS_CACHE_FIXED
+    MOVQ    x12, SIG_TABLE_BYTES
+    add     x11, x11, x12
     ldr     x12, [x1]                       /* size */
     cmp     x12, x11
     b.lo    9f
     mov     x11, #Validator__mem
     str     x11, [x1, #CRYPTO_BLS_CACHE_KEY_STRIDE]
-    mov     x11, #CRYPTO_BLS_CACHE_FIXED
+    MOVQ    x11, (CRYPTO_BLS_CACHE_FIXED + SIG_TABLE_BYTES)
     str     x11, [x1, #CRYPTO_BLS_CACHE_OFFSET]
     str     x9, [x1, #CRYPTO_BLS_CACHE_COUNT]
-    add     x12, x1, #CRYPTO_BLS_CACHE_FIXED   /* every entry empty */
+    add     x12, x1, #PUBKEY_SIGS           /* an empty SigTable */
+    str     xzr, [x12, #SigTable_used]
+    MOVQ    x13, (SIG_TABLE_BYTES - SigTable_entries)
+    str     x13, [x12, #SigTable_room]
+    add     x12, x1, x11                    /* every entry empty */
 1:  cbz     x9, 2f
     str     xzr, [x12, #CRYPTO_BLS_ENTRY_STATUS]
     add     x12, x12, x10

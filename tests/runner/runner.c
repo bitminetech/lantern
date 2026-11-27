@@ -332,6 +332,10 @@ ABI uint64_t LF(validate_beacon_block_gossip)(void *seen, const void *store, con
 ABI uint64_t LF(validate_beacon_aggregate_and_proof_gossip)(void *seen, const void *store, const void *aggregate,
                                                                 const void *now, const void *head_state, void *scratch,
                                                                 void *result);
+#if FORK >= FORK_ELECTRA
+ABI uint64_t LF(node_attestation_sig)(const void *head, const void *data, void *scratch, void *entry);
+ABI uint64_t crypto_bls_verify(const void *public_key, const void *message, const void *signature, void *scratch, void *valid);
+#endif
 ABI uint64_t LF(validate_beacon_attestation_gossip)(void *seen, const void *store, const void *attestation, const void *now,
                                                         const void *subnet_id, const void *head_state, void *scratch,
                                                         void *result);
@@ -9199,6 +9203,35 @@ static void root_of(const char *type, const uint8_t *value, uint8_t root[32], co
     if (CALL(ssz_hash_tree_root, type_by_name(type), value, fresh_scratch(), root) != 0) *why = "hash_tree_root status";
 }
 
+#if FORK >= FORK_ELECTRA && !defined(BLS_OFF)
+/*
+ * block-processing.md, SigTable; node.md, lantern_node_attestation_sig: the SingleAttestation value msg (240
+ * bytes, its SSZ bytes) gives lantern_node_attestation_sig's entry of head, checked with crypto_bls_verify, as the
+ * one entry of the SigTable of the config's PubkeyCache; the validation then reads it. Its result must be
+ * the case's. 0, or why not.
+ */
+static const char *sig_table_fill(const uint8_t *msg, const uint8_t *head) {
+    uint8_t *pc = (uint8_t *)(uintptr_t)rd64(config + CONFIG_PUBKEY_CACHE);
+    if (!pc) return NULL;
+    uint8_t *table = pc + 32, *entry = table + 16, data[24 + 240], scr[8448];
+    wr64(table, 0);
+    memset(entry, 0, 216);
+    wr64(data, sizeof data);
+    wr64(data + 8, 24);
+    wr64(data + 16, 240);
+    memcpy(data + 24, msg, 240);
+    if (CALL(LF(node_attestation_sig), head, data, fresh_scratch(), entry) != 0) return "node_attestation_sig status";
+    if (rd64(entry) != 2) return NULL; /* no input: an attester past the validators */
+    if (rd64(entry + 8) != 1 || rd64(entry + 16) != 56 || rd64(entry + 24) != 24 || rd64(entry + 32) != 32 || memcmp(entry + 72, msg + 144, 96))
+        return "node_attestation_sig: the entry's fields";
+    wr64(scr, sizeof scr);
+    crypto_bls_verify(entry + 168, entry + 16, entry + 72, scr, entry);
+    wr64(table, 216);
+    return NULL;
+}
+#endif
+
+
 /* A copy of the state of parent_root after process_slots to slot, or NULL when lantern reads none. */
 static uint8_t *gossip_proposer_state(fc_node *n, const uint8_t *parent_root, uint64_t slot, uint64_t *size,
                                       const char **why) {
@@ -9463,8 +9496,12 @@ static void run_gossip(const char *file, const char *dir, const char *handler, c
                 }
                 else if (!strcmp(nm, "beacon_aggregate_and_proof"))
                     st = CALL(LF(validate_beacon_aggregate_and_proof_gossip), sb, store, msg, &now, head_state, fresh_scratch(), &result);
-                else if (!strcmp(nm, "beacon_attestation"))
+                else if (!strcmp(nm, "beacon_attestation")) {
+#if FORK >= FORK_ELECTRA && !defined(BLS_OFF)
+                    if (tries == 0) why = sig_table_fill(msg, head_state); /* the check reads the SigTable's entry */
+#endif
                     st = CALL(LF(validate_beacon_attestation_gossip), sb, store, msg, &now, &subnet, head_state, fresh_scratch(), &result);
+                }
                 else if (!strcmp(nm, "voluntary_exit"))
                     st = CALL(LF(validate_voluntary_exit_gossip), sb, store, msg, &now, head_state, fresh_scratch(), &result);
                 else if (!strcmp(nm, "proposer_slashing"))
@@ -10273,6 +10310,7 @@ static void run_db_state_diff(const char *file, case_file *f) {
         report(file, name, len, !why, why);
     }
 }
+
 
 /* ---------------------------------------------------------------- Application */
 

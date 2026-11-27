@@ -151,7 +151,10 @@
 .set APP_KEYS, APP_THREADS + SHELL_POOL_SIZE  /* the key jobs of lantern_app_pool: keys, count, the PubkeyCache */
 .set APP_KEY_JOB_SHIFT, 12
 .set APP_KEY_JOB, 1 << APP_KEY_JOB_SHIFT    /* the keys of one job */
-.set APP_SIZE, (APP_KEYS + 24 + 4095) & ~4095
+.set APP_SIGS, APP_KEYS + 24              /* the signature jobs of lantern_app_sigs: the SigTable, the jobs, then each job's scratch */
+.set APP_SIG_JOBS, 16                       /* the jobs of a batch at most */
+.set APP_SIG_SCRATCH, 8448                  /* a job's scratch: CRYPTO_BLS_SCRATCH and a message of 32 bytes */
+.set APP_SIZE, (APP_SIGS + 16 + APP_SIG_JOBS * APP_SIG_SCRATCH + 4095) & ~4095
 .set APP_BLOCK_BYTES, 1 << 16               /* the anchor block */
 .set APP_BUF_ENTRY, 24                      /* a BufferId table entry: id, address, size */
 .set APP_BUFS_CAP, 64                      /* the BufferId table's first room; it doubles when full */

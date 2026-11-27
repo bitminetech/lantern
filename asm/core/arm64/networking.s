@@ -464,6 +464,122 @@ LOCAL_FUNCTION lantern_verify_signed
 7:  UNFRAME 96
 END_FUNCTION lantern_verify_signed
 
+/*
+ * x0 = the valid of an entry of the SigTable of PubkeyCache x0 (or 0) with x3 keys, the first at x1
+ * and each x2 bytes after the one before, the 32 byte message at x4 and the signature at x5,
+ * all the same bytes; else -1. A leaf; uses x6-x17.
+ */
+LOCAL_FUNCTION lantern_sig_find
+    UNWIND_END_PROLOGUE
+    cbz     x0, 9f
+    add     x6, x0, #PUBKEY_SIGS
+    ldr     x7, [x6, #SigTable_used]
+    add     x6, x6, #SigTable_entries
+    add     x7, x6, x7
+1:  cmp     x6, x7
+    b.hs    9f
+    ldr     x8, [x6, #SigEntry_keys]
+    mov     x9, #48
+    mul     x10, x8, x9
+    add     x10, x10, #SigEntry_key         /* the entry's bytes */
+    cmp     x8, x3
+    b.ne    8f
+    ldr     x11, [x6, #SigEntry_valid]
+    cmp     x11, #1
+    b.hi    8f
+    mov     x12, #0                         /* the signature */
+2:  add     x13, x6, x12
+    ldr     x14, [x13, #SigEntry_signature]
+    ldr     x15, [x5, x12]
+    cmp     x14, x15
+    b.ne    8f
+    add     x12, x12, #8
+    cmp     x12, #96
+    b.lo    2b
+    mov     x12, #0                         /* the message */
+3:  add     x13, x6, x12
+    ldr     x14, [x13, #(SigEntry_message + 24)]
+    ldr     x15, [x4, x12]
+    cmp     x14, x15
+    b.ne    8f
+    add     x12, x12, #8
+    cmp     x12, #32
+    b.lo    3b
+    mov     x12, #0                         /* each key */
+    add     x13, x6, #SigEntry_key
+    mov     x9, x1
+4:  cmp     x12, x3
+    b.hs    7f
+    ldp     x14, x15, [x13]
+    ldp     x16, x17, [x9]
+    cmp     x14, x16
+    ccmp    x15, x17, #0, eq
+    b.ne    8f
+    ldp     x14, x15, [x13, #16]
+    ldp     x16, x17, [x9, #16]
+    cmp     x14, x16
+    ccmp    x15, x17, #0, eq
+    b.ne    8f
+    ldp     x14, x15, [x13, #32]
+    ldp     x16, x17, [x9, #32]
+    cmp     x14, x16
+    ccmp    x15, x17, #0, eq
+    b.ne    8f
+    add     x13, x13, #48
+    add     x9, x9, x2
+    add     x12, x12, #1
+    b       4b
+7:  mov     x0, x11
+    ret
+8:  add     x6, x6, x10
+    b       1b
+9:  mov     x0, #-1
+    ret
+END_FUNCTION lantern_sig_find
+
+/*
+ * lantern_verify_signed (x0 to x7) with x8 a PubkeyCache or 0: the SigTable's answer for the key,
+ * the signing root and the signature when it holds them, else bls.Verify. Locals: sp+16 domain type,
+ * sp+24 epoch, sp+32 domain (32), sp+64 type, object, key, signature, scratch, cache, sp+112 the root
+ * buffer (56: a ByteList header, then the root).
+ */
+LOCAL_FUNCTION lantern_verify_signed_cached
+    FRAME 160
+    str     w1, [sp, #16]
+    str     x2, [sp, #24]
+    stp     x3, x4, [sp, #64]
+    stp     x5, x6, [sp, #80]
+    stp     x7, x8, [sp, #96]
+    add     x1, sp, #16
+    add     x2, sp, #24
+    mov     x3, x7
+    add     x4, sp, #32
+    bl      lantern_get_domain
+    cbnz    x0, 7f
+    ldp     x0, x1, [sp, #64]               /* the signing root */
+    add     x2, sp, #32
+    ldr     x3, [sp, #96]
+    add     x4, sp, #(112 + 24)
+    bl      lantern_compute_signing_root
+    cbnz    x0, 7f
+    ldr     x0, [sp, #104]
+    ldr     x1, [sp, #80]
+    mov     x2, #48
+    mov     x3, #1
+    add     x4, sp, #(112 + 24)
+    ldr     x5, [sp, #88]
+    bl      lantern_sig_find
+    tbnz    x0, #63, 1f
+    mov     x1, x0                          /* the table's answer */
+    mov     x0, #LANTERN_OK
+    b       7f
+1:  ldp     x0, x1, [sp, #80]               /* bls.Verify */
+    add     x2, sp, #112
+    ldr     x3, [sp, #96]
+    bl      lantern_verify_root_signature
+7:  UNFRAME 160
+END_FUNCTION lantern_verify_signed_cached
+
 /* dst = &state.validators[idx] of state st; branch to fail when idx is not below the count. Uses x16, x17. */
 .macro VALIDATOR_AT dst, st, idx, fail
     PART    \dst, x17, \st, BeaconState_validators
@@ -881,7 +997,8 @@ SPEC_FUNCTION validate_beacon_attestation_gossip
     add     x5, x9, #Validator_pubkey
     add     x6, x21, #SingleAttestation_signature
     mov     x7, x24
-    bl      lantern_verify_signed
+    ldr     x8, [x20, #(Store_config + CONFIG_PUBKEY_CACHE)]   /* with the SigTable of checked signatures */
+    bl      lantern_verify_signed_cached
     cbnz    x0, 7f
     cbz     x1, 5f
     mov     x0, x20                         /* [REJECT] the target block is an ancestor of the LMD vote block */
@@ -1040,7 +1157,8 @@ SPEC_FUNCTION validate_beacon_attestation_gossip
     add     x5, x9, #Validator_pubkey
     add     x6, x21, #Attestation_signature
     mov     x7, x24
-    bl      lantern_verify_signed
+    ldr     x8, [x20, #(Store_config + CONFIG_PUBKEY_CACHE)]   /* with the SigTable of checked signatures */
+    bl      lantern_verify_signed_cached
     cbnz    x0, 7f
     cbz     x1, 5f
     mov     x0, x20                         /* [REJECT] the target block is an ancestor of the LMD vote block */

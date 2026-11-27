@@ -50,6 +50,8 @@ The node: events, actions, sync, gossip.
 - [`lantern_node_attestation`](#function-lantern_node_attestation): on_attestation of an attestation's SSZ bytes, for one fork.
 - [`lantern_node_attester_slashing`](#function-lantern_node_attester_slashing): on_attester_slashing of a slashing's SSZ bytes, for one fork.
 - [`lantern_node_gossip`](#function-lantern_node_gossip): the gossip validation of a message's SSZ bytes, for one fork.
+- [`lantern_node_sig_input`](#function-lantern_node_sig_input): the inputs of the signature check of a beacon_attestation message, for a SigTable.
+- [`lantern_node_attestation_sig`](#function-lantern_node_attestation_sig): the inputs of a SingleAttestation's signature check, for one fork from electra.
 - [`lantern_node_seen_keys`](#function-lantern_node_seen_keys): the keys of a decoded gossip message that lantern_seen_recall looks up.
 - [`lantern_node_blob_sidecar`](#function-lantern_node_blob_sidecar): the checks of a blob sidecar of a response, for deneb or electra.
 - [`lantern_node_column_sidecar`](#function-lantern_node_column_sidecar): the checks of a column sidecar of a response, for fulu.
@@ -2825,6 +2827,99 @@ lantern_node_gossip(seen, store, gossip, head, proposer, justified, settings, co
 - Symbol: `lantern_<fork>_node_gossip` in the object of every fork, with `_` before it on macOS; `lantern_node_gossip` inside the object.
 - Convention: the core ABI for each ISA (ARCHITECTURE.md section 6); each argument is a pointer: a Uint64 argument points at a u64, and a Boolean output is a u64 of 0 or 1.
 - Argument order: `seen`, `store`, `gossip`, `head`, `proposer`, `justified`, `settings`, `config`, `data`, `scratch`, `result`, `root`, `index`, `history`.
+
+## Function `lantern_node_sig_input`
+
+The inputs of the signature check of a beacon_attestation message, as a SigEntry for a SigTable.
+
+### Signature
+
+```
+lantern_node_sig_input(node, store, head, data, scratch, entry) -> status, written
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `node` | input | `Node` |
+| `store` | input | `Store` |
+| `head` | input | `BeaconState`: the head's post-state of the GOSSIP work |
+| `data` | input | ByteList: the message's SSZ bytes |
+| `scratch` | scratch | `Scratch` |
+| `entry` | output | [`SigEntry`](block-processing.md#type-sigentry) of one key |
+
+### Returns
+
+- `LANTERN_OK`: `written` 1 when `entry` holds the inputs, else 0.
+- A status of get_domain or compute_signing_root.
+
+### Function does
+
+- With the fork of the store's slot and of head's slot the same: lantern_node_attestation_sig of that fork. Else nothing, `written` 0: as for lantern_node_gossip, such a head gives IGNORE.
+
+### Function never
+
+- Makes an OS call.
+- Writes outside `entry`, `scratch` and its own stack.
+
+### Limits
+
+- Stack of its own: 112 bytes on x86-64 (return address included), 96 bytes on ARM64, 96 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_node_sig_input`, with `_` before it on macOS.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- `written` is returned in x1, rdx, a1.
+- Argument order: `node`, `store`, `head`, `data`, `scratch`, `entry`.
+
+## Function `lantern_node_attestation_sig`
+
+The inputs of the signature check of a SingleAttestation's SSZ bytes, as validate_beacon_attestation_gossip makes it.
+
+### Signature
+
+```
+lantern_node_attestation_sig(head, data, scratch, entry) -> status, written
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `head` | input | `BeaconState` |
+| `data` | input | ByteList |
+| `scratch` | scratch | `Scratch` |
+| `entry` | output | `SigEntry` of one key |
+
+### Returns
+
+- `LANTERN_OK`: `written` 1 when `entry` holds the inputs, else 0.
+- A status of get_domain or compute_signing_root.
+
+### Function does
+
+- From electra: with 240 bytes (a SingleAttestation, whose SSZ bytes are its value) and an attester below the validators of head: the attester's pubkey of head as the key, compute_signing_root(data, get_domain(head, DOMAIN_BEACON_ATTESTER, data.target.epoch)) as the message, the signature, `keys` 1 and `valid` `SIG_UNKNOWN`.
+- Before electra, or other bytes: `written` 0.
+- The entry's inputs are those of the attester's check of validate_beacon_attestation_gossip with head; when they are not, no check reads the entry: lantern_sig_find compares them byte for byte.
+
+### Function never
+
+- Makes an OS call.
+
+### Limits
+
+- Stack of its own: 144 bytes on x86-64 (return address included), 144 bytes on ARM64, 144 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_<fork>_node_attestation_sig` in the object of every fork, with `_` before it on macOS; `lantern_node_attestation_sig` inside the object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- `written` is returned in x1, rdx, a1.
+- Argument order: `head`, `data`, `scratch`, `entry`.
 
 ## Function `lantern_node_seen_keys`
 

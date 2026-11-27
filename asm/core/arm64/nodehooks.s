@@ -7520,3 +7520,78 @@ SPEC_FUNCTION node_publish_sidecars
     LEAVE 400
 SPEC_END node_publish_sidecars
 .endif
+
+/*
+ * (head, data, scratch, entry) -> x0 status, x1 1 when entry holds the inputs of the signature check
+ * of the beacon_attestation message of the SSZ bytes data (a SingleAttestation, from electra): the
+ * attester's key of head, compute_signing_root of its data with get_domain(head,
+ * DOMAIN_BEACON_ATTESTER, data.target.epoch), and its signature, as a SigEntry of one key not checked
+ * yet. Else 0. x19 head, x20 the bytes, x21 scratch, x22 entry. Locals: L the domain type, L+8 the domain.
+ */
+SPEC_FUNCTION node_attestation_sig
+    ENTER 48
+.if FORK >= FORK_ELECTRA
+.if SingleAttestation_attester_index != 8 || SingleAttestation_data != 16 || SingleAttestation_signature != 144 || SingleAttestation__mem != 240
+.error "node_attestation_sig reads a SingleAttestation's SSZ bytes as its value"
+.endif
+    mov     x19, x0
+    mov     x21, x2
+    mov     x22, x3
+    ldr     x9, [x1, #16]                   /* 240 bytes: a SingleAttestation's value */
+    cmp     x9, #SingleAttestation__mem
+    b.ne    8f
+    ldr     x9, [x1, #8]
+    add     x20, x1, x9
+    ldr     x9, [x20, #SingleAttestation_attester_index]
+    LDQ     x10, x19, BeaconState_validators + 8
+    cmp     x9, x10
+    b.hs    8f
+    PART    x10, x11, x19, BeaconState_validators   /* the key */
+    add     x10, x10, x9, lsl #7
+    add     x10, x10, #Validator_pubkey
+    add     x11, x22, #SigEntry_key
+    ldp     x12, x13, [x10]
+    stp     x12, x13, [x11]
+    ldp     x12, x13, [x10, #16]
+    stp     x12, x13, [x11, #16]
+    ldp     x12, x13, [x10, #32]
+    stp     x12, x13, [x11, #32]
+    mov     x9, #0                          /* the signature */
+1:  add     x10, x20, x9
+    ldr     x11, [x10, #SingleAttestation_signature]
+    add     x12, x22, x9
+    str     x11, [x12, #SigEntry_signature]
+    add     x9, x9, #8
+    cmp     x9, #96
+    b.lo    1b
+    mov     x9, #SIG_UNKNOWN
+    mov     x10, #1
+    stp     x9, x10, [x22, #SigEntry_valid]
+    mov     x9, #56                         /* the message: a ByteList of the 32 bytes of the root */
+    mov     x10, #24
+    stp     x9, x10, [x22, #SigEntry_message]
+    mov     x9, #32
+    str     x9, [x22, #(SigEntry_message + 16)]
+    mov     w9, #DOMAIN_BEACON_ATTESTER
+    str     w9, [sp, #L]
+    mov     x0, x19
+    add     x1, sp, #L
+    add     x2, x20, #(SingleAttestation_data + AttestationData_target + Checkpoint_epoch)
+    mov     x3, x21
+    add     x4, sp, #(L + 8)
+    bl      lantern_get_domain
+    cbnz    x0, 9f
+    ADDRESS x0, lantern_type_AttestationData
+    add     x1, x20, #SingleAttestation_data
+    add     x2, sp, #(L + 8)
+    mov     x3, x21
+    add     x4, x22, #(SigEntry_message + 24)
+    bl      lantern_compute_signing_root
+    cbnz    x0, 9f
+    mov     x1, #1
+    LEAVE 48
+.endif
+8:  mov     x0, #LANTERN_OK
+    mov     x1, #0
+9:  LEAVE 48
+SPEC_END node_attestation_sig

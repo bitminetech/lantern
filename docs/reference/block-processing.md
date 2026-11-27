@@ -88,6 +88,8 @@ Every block step, for every fork.
 ### Types
 
 - [`PubkeyCache`](#type-pubkeycache): the decoded public keys of the validators.
+- [`SigTable`](#type-sigtable): checked signatures with their whole inputs, in a PubkeyCache.
+- [`SigEntry`](#type-sigentry): one checked signature.
 - [`CommitteeCache`](#type-committeecache): the shuffled active validators of a few epochs.
 - [`CommitteeEntry`](#type-committeeentry): one epoch's shuffling in a `CommitteeCache`.
 - [`KeySum`](#type-keysum): the sum of one committee's public keys in a `CommitteeCache`.
@@ -2810,7 +2812,7 @@ lantern_pubkey_cache_size(validators, size) -> status
 
 ### Function does
 
-- `CRYPTO_BLS_CACHE_FIXED` + `CRYPTO_BLS_ENTRY_BYTES` * `validators` bytes (asm-crypto `include/bls12381.inc`).
+- `CRYPTO_BLS_CACHE_FIXED` + `SIG_TABLE_BYTES` + `CRYPTO_BLS_ENTRY_BYTES` * `validators` bytes (asm-crypto `include/bls12381.inc`): the fixed fields, the [`SigTable`](#type-sigtable), then the entries.
 
 ### Function never
 
@@ -2847,7 +2849,7 @@ lantern_pubkey_cache_init(validators, cache) -> status
 
 ### Returns
 
-- `LANTERN_OK`: `key_stride` is `Validator__mem`, `offset` is `CRYPTO_BLS_CACHE_FIXED`, `count` is `validators`, and every entry's `status` is 0.
+- `LANTERN_OK`: `key_stride` is `Validator__mem`, `offset` is `CRYPTO_BLS_CACHE_FIXED` + `SIG_TABLE_BYTES`, `count` is `validators`, the SigTable at `PUBKEY_SIGS` is empty (`used` 0, `room` `SIG_TABLE_BYTES` - 16), and every entry's `status` is 0.
 - `LANTERN_BUFFER_TOO_SMALL`: the `size` of `cache` is below what lantern_pubkey_cache_size gives.
 
 ### Function never
@@ -3759,9 +3761,46 @@ The checked public key of each validator index: asm-crypto's [`BlsKeyCache`](htt
 
 ### Rules
 
-- `key_stride` is `Validator__mem`; `offset` is `CRYPTO_BLS_CACHE_FIXED`; `count` is the number of validator indices it holds.
+- `key_stride` is `Validator__mem`; `offset` is `CRYPTO_BLS_CACHE_FIXED` + `SIG_TABLE_BYTES`; `count` is the number of validator indices it holds.
+- Between its fixed fields and its entries, at `PUBKEY_SIGS` (`CRYPTO_BLS_CACHE_FIXED`), a [`SigTable`](#type-sigtable) of `SIG_TABLE_BYTES` (2 MiB): asm-crypto reads only the fixed fields and the entries.
 - Only crypto_bls_fast_aggregate_verify_cached writes its entries, after lantern_pubkey_cache_init empties them.
 - An entry answers only for the key of its 48 bytes, so one cache serves states of any chain.
+
+## Type `SigTable`
+
+Checked signatures: entries of the result of a BLS signature check with its whole inputs, which a check of the same inputs takes in place of a pairing.
+
+### Layout
+
+| Offset | Field | Type | Meaning |
+|---|---|---|---|
+| 0 | `used` | u64 | Bytes of its entries |
+| 8 | `room` | u64 | Bytes it has for entries |
+| 16 | `entries` | [`SigEntry`](#type-sigentry) back to back | |
+
+### Rules
+
+- At `PUBKEY_SIGS` of a [`PubkeyCache`](#type-pubkeycache), `SIG_TABLE_BYTES` bytes in all.
+- An entry answers a check only when its keys, its message and its signature are those of the check, byte for byte, and its `valid` is 0 or 1: the answer is then the check's result, since `crypto_bls_verify` and the other checks of asm-crypto are functions of those bytes.
+- lantern_app_sigs empties it before the actions of each step and fills it; the checks of the step read it.
+
+## Type `SigEntry`
+
+One checked signature of a `SigTable`.
+
+### Layout
+
+| Offset | Field | Type | Meaning |
+|---|---|---|---|
+| 0 | `valid` | u64 | 1 or 0, the check's result; `SIG_UNKNOWN` (2) while not checked |
+| 8 | `keys` | u64 | The keys k |
+| 16 | `message` | ByteList | A header of 24 bytes (56, 24, 32), then the 32 bytes of the message: a signing root |
+| 72 | `signature` | BLSSignature | 96 bytes |
+| 168 | `key` | BLSPubkey x k | The keys, 48 bytes each |
+
+### Rules
+
+- 168 + 48 k bytes; `SIG_ENTRY_ONE` (216) for one key.
 
 ## Type `CommitteeCache`
 

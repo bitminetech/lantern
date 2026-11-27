@@ -124,6 +124,8 @@ The binary: options, startup and the loop.
 - [`lantern_app_pool`](#function-lantern_app_pool): starts the pool of `--threads`, gives it to the StateCache, and checks the anchor state's keys on it.
 - [`lantern_app_read`](#function-lantern_app_read): reads the file at APP_PATH into APP_FILE.
 - [`lantern_app_regrow`](#function-lantern_app_regrow): moves a state to new memory with twice the StateRoom.
+- [`lantern_app_sig_job`](#function-lantern_app_sig_job): a job of lantern_app_sigs: the signature checks of its share of the SigTable.
+- [`lantern_app_sigs`](#function-lantern_app_sigs): checks the gossip attestation signatures of a step at once on the pool.
 - [`lantern_app_space`](#function-lantern_app_space): skips white space of a text.
 - [`lantern_app_start`](#function-lantern_app_start): the start of the binary.
 - [`lantern_app_state_bytes`](#function-lantern_app_state_bytes): does a NODE_ACT_STATE_BYTES.
@@ -327,6 +329,7 @@ lantern_app_actions()
 
 ### Function does
 
+- First lantern_app_sigs: the gossip attestation signatures of the step, checked at once on the pool.
 - Does BYTES_PUT, STATE_COPY, STATE_FREE and BYTES_FREE on the BufferId table, and each WORK with lantern_app_work, in the order of the step's actions.
 - Hands each Beacon API, database, discv5, engine and builder action to its part of the app.
 
@@ -4477,6 +4480,76 @@ lantern_app_regrow(entry) -> status
 - Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
 - Registers it reads, on ARM64, x86-64, RISC-V: the App in x19, rbx, s1.
 - Argument order: `entry`.
+
+## Function `lantern_app_sig_job`
+
+A job of lantern_app_sigs: the signature checks of its share of the SigTable.
+
+### Signature
+
+```
+lantern_app_sig_job(record, index)
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `record` | state | the `APP_SIGS` record: the SigTable, the jobs n, then n scratches of `APP_SIG_SCRATCH` bytes |
+| `index` | input | u64 in a register: the job |
+
+### Function does
+
+- For each entry k of the SigTable with k mod n the job: crypto_bls_verify of asm-crypto of its key, message and signature, its `valid` the result, with the job's own scratch.
+
+### Function never
+
+- Makes an OS call.
+- Writes outside its share of the entries' `valid` and its scratch.
+
+### Limits
+
+- Stack of its own: 112 bytes on x86-64 (return address included), 96 bytes on ARM64, 96 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_app_sig_job`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- A ShellJob function (shell.md): its status is not read.
+- Argument order: `record`, `index`.
+
+## Function `lantern_app_sigs`
+
+Before the actions of a step, checks the signatures of its beacon_attestation GOSSIP works at once on the pool, into the PubkeyCache's SigTable.
+
+### Signature
+
+```
+lantern_app_sigs()
+```
+
+### Function does
+
+- With a PubkeyCache and workers in the pool of `--threads`: empties the SigTable.
+- For each WORK action of `NODE_WORK_GOSSIP` of the topic beacon_attestation: its bytes from the BYTES_PUT action of its `data` id before it, its head from its `state_a`, and lantern_node_sig_input into the next entry of the SigTable while it has room.
+- With 2 or more entries: lantern_shell_pool_run of the lower of the entries, the workers + 1 and `APP_SIG_JOBS` (16) jobs of lantern_app_sig_job.
+- Then lantern_app_actions does the actions in order; each GOSSIP work's signature check reads the SigTable (networking.md), so its result is the one of a check of its own.
+
+### Function never
+
+- Makes an OS call other than through lantern_shell_pool_run.
+
+### Limits
+
+- Stack of its own: 144 bytes on x86-64 (return address included), 128 bytes on ARM64, 128 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_app_sigs`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- Registers it reads, on ARM64, x86-64, RISC-V: the App in x19, rbx, s1.
 
 ## Function `lantern_app_space`
 

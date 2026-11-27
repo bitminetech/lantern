@@ -40,6 +40,41 @@ LOCAL_FUNCTION lantern_node_fork
     ret
 END_FUNCTION lantern_node_fork
 
+/*
+ * (node, store, head, data, scratch, entry): node.md. The inputs of the signature check of a
+ * beacon_attestation message of the SSZ bytes data, by the node_attestation_sig of the fork of the store's
+ * slot when head's slot is of that fork. s1 node, s2 store, s3 head, s4 data, s5 scratch, s6 entry,
+ * s7 the fork.
+ */
+FUNCTION lantern_node_sig_input
+    ENTER 0
+    mv      s1, a0
+    mv      s2, a1
+    mv      s3, a2
+    mv      s4, a3
+    mv      s5, a4
+    mv      s6, a5
+    mv      a0, s2
+    call    lantern_node_store_slot
+    addi    a1, s1, Node_config
+    call    lantern_node_fork
+    mv      s7, a0
+    ld      a0, NODE_STATE_SLOT(s3)
+    addi    a1, s1, Node_config
+    call    lantern_node_fork
+    bne     a0, s7, 5f
+    mv      t6, s7
+    mv      a0, s3
+    mv      a1, s4
+    mv      a2, s5
+    mv      a3, s6
+    FORK_CALL node_attestation_sig
+    LEAVE 0
+5:  li      a0, LANTERN_OK                  # a head of another fork: none
+    li      a1, 0
+    LEAVE 0
+END_FUNCTION lantern_node_sig_input
+
 /* a0 = the current slot of the store a0: (time_ms - genesis_time_ms) // SLOT_DURATION_MS, 0 before genesis. Uses t0-t2, a7. */
 LOCAL_FUNCTION lantern_node_store_slot
     UNWIND_END_PROLOGUE

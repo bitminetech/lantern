@@ -2958,11 +2958,150 @@ LOCAL_FUNCTION lantern_app_work_entry
 END_FUNCTION lantern_app_work_entry
 
 /*
+ * Before the actions of a step (app.md): the beacon_attestation messages of its GOSSIP works, their
+ * signatures checked at once on the pool into the PubkeyCache's SigTable, which the works' checks
+ * then read. Only with a PubkeyCache and workers. x20 the next action, x21 the end, x22 data, x23 an
+ * action or a state, x24 the SigTable, x25 the first action, x26 the entries.
+ */
+LOCAL_FUNCTION lantern_app_sigs
+    ENTER 32
+    LDQ     x9, x19, (APP_CONFIG + CONFIG_PUBKEY_CACHE)
+    cbz     x9, 99f
+    LDQ     x10, x19, (APP_THREADS + ShellPool_workers)
+    cbz     x10, 99f
+    add     x24, x9, #PUBKEY_SIGS
+    str     xzr, [x24, #SigTable_used]
+    ldr     x20, [x19, #APP_ACTIONS]
+    ldr     x21, [x20, #16]
+    add     x20, x20, #24
+    add     x21, x20, x21
+    mov     x25, x20
+    mov     x26, #0
+1:  cmp     x20, x21
+    b.hs    5f
+    ldr     x9, [x20, #8]
+    cmp     x9, #NODE_ACT_WORK
+    b.ne    4f
+    ldr     x9, [x20, #NodeAction_work_kind]
+    cmp     x9, #NODE_WORK_GOSSIP
+    b.ne    4f
+    ldr     x9, [x20, #NodeAction_arg]
+    and     x9, x9, #255
+    cmp     x9, #GOSSIP_BEACON_ATTESTATION
+    b.ne    4f
+    ldp     x9, x10, [x24, #SigTable_used]  /* room for an entry of one key */
+    add     x9, x9, #SIG_ENTRY_ONE
+    cmp     x9, x10
+    b.hi    5f
+    ldr     x22, [x20, #NodeAction_data]    /* its bytes: the BYTES_PUT of its id before it */
+    cbz     x22, 4f
+    mov     x23, x25
+2:  cmp     x23, x20
+    b.hs    4f
+    ldr     x9, [x23, #8]
+    cmp     x9, #NODE_ACT_BYTES_PUT
+    b.ne    3f
+    ldr     x9, [x23, #16]
+    cmp     x9, x22
+    b.eq    31f
+3:  ldr     x9, [x23]
+    add     x23, x23, x9
+    b       2b
+31: add     x22, x23, #24
+    ldr     x0, [x20, #NodeAction_state_a]  /* the head */
+    bl      lantern_app_work_entry
+    cmn     x0, #1
+    b.eq    4f
+    cbz     x0, 4f
+    ldr     x23, [x0, #8]
+    ldr     x0, [x19, #APP_NODE]
+    ldr     x1, [x19, #APP_STORE]
+    mov     x2, x23
+    mov     x3, x22
+    SCRATCH x4
+    ldr     x9, [x24, #SigTable_used]
+    add     x5, x24, #SigTable_entries
+    add     x5, x5, x9
+    CALL_GLOBAL lantern_node_sig_input
+    cbnz    x0, 4f
+    cbz     x1, 4f
+    ldr     x9, [x24, #SigTable_used]
+    add     x9, x9, #SIG_ENTRY_ONE
+    str     x9, [x24, #SigTable_used]
+    add     x26, x26, #1
+4:  ldr     x9, [x20]
+    add     x20, x20, x9
+    b       1b
+5:  cmp     x26, #2                         /* two or more: the jobs */
+    b.lo    99f
+    LDQ     x9, x19, (APP_THREADS + ShellPool_workers)
+    add     x9, x9, #1
+    cmp     x9, x26
+    csel    x9, x9, x26, lo
+    cmp     x9, #APP_SIG_JOBS
+    mov     x10, #APP_SIG_JOBS
+    csel    x9, x9, x10, ls
+    ADDQ    x10, x19, APP_SIGS
+    stp     x24, x9, [x10]
+    ADDRESS x11, lantern_app_sig_job
+    stp     x11, x10, [sp, #L]
+    str     x9, [sp, #(L + 16)]
+    ADDQ    x0, x19, APP_THREADS
+    add     x1, sp, #L
+    CALL_GLOBAL lantern_shell_pool_run
+99: LEAVE 32
+END_FUNCTION lantern_app_sigs
+
+/*
+ * A job of lantern_app_sigs: of the APP_SIGS record x0 (the SigTable, the jobs n, then n scratches of
+ * APP_SIG_SCRATCH bytes), each entry k with k mod n = x1: crypto_bls_verify of its key, message and
+ * signature into its valid. x20 the record, x21 the job, x22 the next entry, x23 the end, x24 k,
+ * x25 the scratch, x26 n.
+ */
+LOCAL_FUNCTION lantern_app_sig_job
+    ENTER 0
+    mov     x20, x0
+    mov     x21, x1
+    ldp     x9, x26, [x20]
+    ldr     x10, [x9, #SigTable_used]
+    add     x22, x9, #SigTable_entries
+    add     x23, x22, x10
+    MOVQ    x11, APP_SIG_SCRATCH
+    madd    x25, x21, x11, x20
+    add     x25, x25, #16
+    mov     x24, #0
+1:  cmp     x22, x23
+    b.hs    9f
+    udiv    x9, x24, x26
+    msub    x9, x9, x26, x24
+    cmp     x9, x21
+    b.ne    2f
+    MOVQ    x9, APP_SIG_SCRATCH
+    str     x9, [x25]
+    add     x0, x22, #SigEntry_key
+    add     x1, x22, #SigEntry_message
+    add     x2, x22, #SigEntry_signature
+    mov     x3, x25
+    add     x4, x22, #SigEntry_valid
+    CALL_GLOBAL crypto_bls_verify
+2:  ldr     x9, [x22, #SigEntry_keys]
+    mov     x10, #48
+    mul     x9, x9, x10
+    add     x9, x9, #SigEntry_key
+    add     x22, x22, x9
+    add     x24, x24, #1
+    b       1b
+9:  mov     x0, #0
+    LEAVE 0
+END_FUNCTION lantern_app_sig_job
+
+/*
  * The actions of the step, in order: BYTES_PUT, STATE_COPY, STATE_FREE and BYTES_FREE on the
  * BufferId table, WORK by lantern_app_work. x20 the next action, x21 the end, x22 its size, x23 an entry.
  */
 LOCAL_FUNCTION lantern_app_actions
     ENTER 0
+    bl      lantern_app_sigs                /* the gossip signatures at once, first */
     ldr     x20, [x19, #APP_ACTIONS]
     ldr     x21, [x20, #16]
     add     x20, x20, #24

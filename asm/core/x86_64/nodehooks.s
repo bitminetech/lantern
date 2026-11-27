@@ -7869,3 +7869,68 @@ SPEC_FUNCTION node_publish_sidecars
     LEAVE 416
 SPEC_END node_publish_sidecars
 .endif
+
+/*
+ * (head, data, scratch, entry) -> rax status, rdx 1 when entry holds the inputs of the signature check
+ * of the beacon_attestation message of the SSZ bytes data (a SingleAttestation, from electra): the
+ * attester's key of head, compute_signing_root of its data with get_domain(head,
+ * DOMAIN_BEACON_ATTESTER, data.target.epoch), and its signature, as a SigEntry of one key not checked
+ * yet. Else 0. rbx head, rbp the bytes, r12 scratch, r13 entry. Locals: L the domain type, L+8 the domain.
+ */
+SPEC_FUNCTION node_attestation_sig
+    ENTER 48
+.if FORK >= FORK_ELECTRA
+.if SingleAttestation_attester_index != 8 || SingleAttestation_data != 16 || SingleAttestation_signature != 144 || SingleAttestation__mem != 240
+.error "node_attestation_sig reads a SingleAttestation's SSZ bytes as its value"
+.endif
+    mov     %rdi, %rbx
+    mov     %rdx, %r12
+    mov     %rcx, %r13
+    cmpq    $SingleAttestation__mem, 16(%rsi)   # 240 bytes: a SingleAttestation's value
+    jne     8f
+    mov     8(%rsi), %rbp
+    add     %rsi, %rbp
+    mov     SingleAttestation_attester_index(%rbp), %rax
+    cmp     (BeaconState_validators + 8)(%rbx), %rax
+    jae     8f
+    mov     BeaconState_validators(%rbx), %rcx  # the key
+    add     %rbx, %rcx
+    shl     $7, %rax
+    lea     Validator_pubkey(%rcx,%rax), %rcx
+    .irp o, 0, 8, 16, 24, 32, 40
+    mov     \o(%rcx), %rax
+    mov     %rax, (SigEntry_key + \o)(%r13)
+    .endr
+    .irp o, 0, 8, 16, 24, 32, 40, 48, 56, 64, 72, 80, 88
+    mov     (SingleAttestation_signature + \o)(%rbp), %rax
+    mov     %rax, (SigEntry_signature + \o)(%r13)
+    .endr
+    movq    $SIG_UNKNOWN, SigEntry_valid(%r13)
+    movq    $1, SigEntry_keys(%r13)
+    movq    $56, SigEntry_message(%r13)     # the message: a ByteList of the 32 bytes of the root
+    movq    $24, (SigEntry_message + 8)(%r13)
+    movq    $32, (SigEntry_message + 16)(%r13)
+    movl    $DOMAIN_BEACON_ATTESTER, L(%rsp)
+    mov     %rbx, %rdi
+    lea     L(%rsp), %rsi
+    lea     (SingleAttestation_data + AttestationData_target + Checkpoint_epoch)(%rbp), %rdx
+    mov     %r12, %rcx
+    lea     (L + 8)(%rsp), %r8
+    call    lantern_get_domain
+    test    %rax, %rax
+    jnz     9f
+    ADDRESS %rdi, lantern_type_AttestationData
+    lea     SingleAttestation_data(%rbp), %rsi
+    lea     (L + 8)(%rsp), %rdx
+    mov     %r12, %rcx
+    lea     (SigEntry_message + 24)(%r13), %r8
+    call    lantern_compute_signing_root
+    test    %rax, %rax
+    jnz     9f
+    mov     $1, %edx
+    LEAVE 48
+.endif
+8:  xor     %eax, %eax
+    xor     %edx, %edx
+9:  LEAVE 48
+SPEC_END node_attestation_sig

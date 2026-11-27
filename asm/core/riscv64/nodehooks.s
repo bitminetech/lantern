@@ -7784,3 +7784,73 @@ SPEC_FUNCTION node_publish_sidecars
     LEAVE 400
 SPEC_END node_publish_sidecars
 .endif
+
+/*
+ * (head, data, scratch, entry) -> a0 status, a1 1 when entry holds the inputs of the signature check
+ * of the beacon_attestation message of the SSZ bytes data (a SingleAttestation, from electra): the
+ * attester's key of head, compute_signing_root of its data with get_domain(head,
+ * DOMAIN_BEACON_ATTESTER, data.target.epoch), and its signature, as a SigEntry of one key not checked
+ * yet. Else 0. s1 head, s2 the bytes, s3 scratch, s4 entry. Locals: L the domain type, L+8 the domain.
+ */
+SPEC_FUNCTION node_attestation_sig
+    ENTER 48
+.if FORK >= FORK_ELECTRA
+.if SingleAttestation_attester_index != 8 || SingleAttestation_data != 16 || SingleAttestation_signature != 144 || SingleAttestation__mem != 240
+.error "node_attestation_sig reads a SingleAttestation's SSZ bytes as its value"
+.endif
+    mv      s1, a0
+    mv      s3, a2
+    mv      s4, a3
+    ld      t0, 16(a1)                      # 240 bytes: a SingleAttestation's value
+    li      t1, SingleAttestation__mem
+    bne     t0, t1, 8f
+    ld      t0, 8(a1)
+    add     s2, a1, t0
+    ld      t0, SingleAttestation_attester_index(s2)
+    LDQ     t1, s1, BeaconState_validators + 8
+    bgeu    t0, t1, 8f
+    PART    t1, t2, s1, BeaconState_validators     # the key
+    slli    t0, t0, 7
+    add     t1, t1, t0
+    addi    t1, t1, Validator_pubkey
+    .irp o, 0, 8, 16, 24, 32, 40
+    ld      t2, \o(t1)
+    sd      t2, (SigEntry_key + \o)(s4)
+    .endr
+    .irp o, 0, 8, 16, 24, 32, 40, 48, 56, 64, 72, 80, 88
+    ld      t2, (SingleAttestation_signature + \o)(s2)
+    sd      t2, (SigEntry_signature + \o)(s4)
+    .endr
+    li      t0, SIG_UNKNOWN
+    sd      t0, SigEntry_valid(s4)
+    li      t0, 1
+    sd      t0, SigEntry_keys(s4)
+    li      t0, 56                          # the message: a ByteList of the 32 bytes of the root
+    sd      t0, SigEntry_message(s4)
+    li      t0, 24
+    sd      t0, (SigEntry_message + 8)(s4)
+    li      t0, 32
+    sd      t0, (SigEntry_message + 16)(s4)
+    li      t0, DOMAIN_BEACON_ATTESTER
+    sw      t0, L(sp)
+    mv      a0, s1
+    addi    a1, sp, L
+    addi    a2, s2, SingleAttestation_data + AttestationData_target + Checkpoint_epoch
+    mv      a3, s3
+    addi    a4, sp, L + 8
+    call    lantern_get_domain
+    bnez    a0, 9f
+    ADDRESS a0, lantern_type_AttestationData
+    addi    a1, s2, SingleAttestation_data
+    addi    a2, sp, L + 8
+    mv      a3, s3
+    addi    a4, s4, SigEntry_message + 24
+    call    lantern_compute_signing_root
+    bnez    a0, 9f
+    li      a1, 1
+    LEAVE 48
+.endif
+8:  li      a0, LANTERN_OK
+    li      a1, 0
+9:  LEAVE 48
+SPEC_END node_attestation_sig

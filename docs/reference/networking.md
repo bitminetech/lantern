@@ -73,6 +73,8 @@ Gossip rules, subnets, custody, topics.
 - [`lantern_seen_key_room`](#function-lantern_seen_key_room): the free SeenKey entries of seen.
 - [`lantern_seen_superset`](#function-lantern_seen_superset): is_non_strict_superset of the SeenBits of a key, for some bits.
 - [`lantern_verify_signed`](#function-lantern_verify_signed): lantern_verify_with_domain with get_domain of a state.
+- [`lantern_sig_find`](#function-lantern_sig_find): the SigTable's answer for a check of keys, a message and a signature.
+- [`lantern_verify_signed_cached`](#function-lantern_verify_signed_cached): lantern_verify_signed, with the answer of a SigTable when it holds the check.
 - [`lantern_verify_with_domain`](#function-lantern_verify_with_domain): bls.Verify of a public key, the signing root of an object under a domain, and a signature.
 - [`lantern_compressed_len`](#function-lantern_compressed_len): the most bytes of the Snappy frames of a payload, by the spec's formula.
 - [`lantern_next_fork_epoch`](#function-lantern_next_fork_epoch): next_fork_epoch after an epoch, for the ENR.
@@ -1819,6 +1821,7 @@ lantern_validate_beacon_aggregate_and_proof_gossip(seen, store, signed_aggregate
 - `beacon_attestation_{subnet_id}` and `beacon_aggregate_and_proof`, phase0 to capella: the slot is within `ATTESTATION_PROPAGATION_SLOT_RANGE` of the current slot (is_within_slot_range). Deneb and later: the slot is not in the future and its epoch is the current or previous epoch.
 - `beacon_aggregate_and_proof`, phase0 to deneb: the committee index is `data.index`, and `aggregate_data_roots` is keyed by the data root alone. Electra and later key it by the data root and the committee index.
 - `beacon_aggregate_and_proof`: the `SeenBits` entry holds the target epoch in `b`, for lantern_seen_archive; the data root fixes the target epoch, so an entry matches the same messages.
+- `beacon_attestation`: the attester's signature check takes the answer of the SigTable of the store's config's PubkeyCache when it holds the same key, signing root and signature (lantern_verify_signed_cached).
 - Reads the config values of the store's copy.
 
 ### Function never
@@ -3229,6 +3232,103 @@ lantern_verify_signed(state, domain_type, epoch, type, object, pubkey, signature
 - On x86-64, `signature` and `scratch` are the two stack arguments.
 - It returns two values: x0, rax or a0, then x1, rdx or a1.
 - Argument order: `state`, `domain_type`, `epoch`, `type`, `object`, `pubkey`, `signature`, `scratch`.
+
+## Function `lantern_sig_find`
+
+The SigTable's answer for a check of keys, a message and a signature.
+
+### Signature
+
+```
+lantern_sig_find(cache, keys, stride, count, message, signature) -> valid
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `cache` | input | [`PubkeyCache`](block-processing.md#type-pubkeycache), or 0 |
+| `keys` | input | the first key of 48 bytes |
+| `stride` | input | u64 in a register: the bytes from one key to the next |
+| `count` | input | u64 in a register: the keys |
+| `message` | input | 32 bytes |
+| `signature` | input | 96 bytes |
+
+### Returns
+
+- The `valid` of the first entry of the cache's SigTable whose keys, message and signature are those bytes and whose `valid` is 0 or 1; or 2^64 - 1 when none is, or `cache` is 0.
+
+### Function does
+
+- Compares the signature, then the message, then each key, byte for byte.
+
+### Function never
+
+- Makes an OS call.
+- Writes memory.
+
+### Limits
+
+- Stack of its own: 96 bytes on x86-64 (return address included), 0 bytes on ARM64, 0 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_sig_find`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- A leaf on ARM64 and RISC-V.
+- Argument order: `cache`, `keys`, `stride`, `count`, `message`, `signature`.
+
+## Function `lantern_verify_signed_cached`
+
+lantern_verify_signed, with the answer of a SigTable when it holds the check.
+
+### Signature
+
+```
+lantern_verify_signed_cached(state, domain_type, epoch, type, object, key, signature, scratch, cache) -> status, valid
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `state` | input | `BeaconState` |
+| `domain_type` | input | u32 in a register |
+| `epoch` | input | u64 in a register |
+| `type` | input | the asm-ssz type descriptor of `object` |
+| `object` | input | a value of `type` |
+| `key` | input | BLSPubkey |
+| `signature` | input | BLSSignature |
+| `scratch` | scratch | `Scratch` |
+| `cache` | input | `PubkeyCache`, or 0 |
+
+### Returns
+
+- As lantern_verify_signed: the status, and `valid` 1 or 0.
+
+### Function does
+
+- get_domain(state, domain_type, epoch) and compute_signing_root(object, domain), as lantern_verify_signed.
+- With lantern_sig_find of `cache` for the key, the root and the signature not 2^64 - 1: that answer. Else bls.Verify of them (lantern_verify_root_signature).
+- Gives the result of lantern_verify_signed for every input: an entry answers only for the same bytes.
+
+### Function never
+
+- Makes an OS call.
+
+### Limits
+
+- Stack of its own: 160 bytes on x86-64 (return address included), 176 bytes on ARM64, 176 bytes on RISC-V.
+
+### ABI
+
+- Role: L0.
+- Symbol: `lantern_verify_signed_cached`, local to its object.
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- `cache` is in x8, rax, t6; on x86-64 `signature` and `scratch` are the two stack arguments, as for lantern_verify_signed.
+- `valid` is returned in x1, rdx, a1.
+- Argument order: `state`, `domain_type`, `epoch`, `type`, `object`, `key`, `signature`, `scratch`, `cache`.
 
 ## Function `lantern_verify_with_domain`
 

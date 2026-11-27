@@ -495,6 +495,114 @@ LOCAL_FUNCTION lantern_verify_signed
 7:  UNFRAME 96
 END_FUNCTION lantern_verify_signed
 
+/*
+ * a0 = the valid of an entry of the SigTable of PubkeyCache a0 (or 0) with a3 keys, the first at a1
+ * and each a2 bytes after the one before, the 32 byte message at a4 and the signature at a5, all the
+ * same bytes; else -1. A leaf; uses a6, a7, t0-t6.
+ */
+LOCAL_FUNCTION lantern_sig_find
+    UNWIND_END_PROLOGUE
+    beqz    a0, 9f
+    li      t0, PUBKEY_SIGS
+    add     t0, a0, t0
+    ld      t1, SigTable_used(t0)
+    addi    t0, t0, SigTable_entries
+    add     t1, t0, t1
+1:  bgeu    t0, t1, 9f
+    ld      t2, SigEntry_keys(t0)
+    li      t3, 48
+    mul     t3, t2, t3
+    addi    t3, t3, SigEntry_key            # the entry's bytes
+    bne     t2, a3, 8f
+    ld      a6, SigEntry_valid(t0)
+    li      t4, 1
+    bltu    t4, a6, 8f
+    li      t4, 0                           # the signature
+2:  add     t5, t0, t4
+    ld      t5, SigEntry_signature(t5)
+    add     t6, a5, t4
+    ld      t6, 0(t6)
+    bne     t5, t6, 8f
+    addi    t4, t4, 8
+    li      t5, 96
+    bltu    t4, t5, 2b
+    li      t4, 0                           # the message
+3:  add     t5, t0, t4
+    ld      t5, (SigEntry_message + 24)(t5)
+    add     t6, a4, t4
+    ld      t6, 0(t6)
+    bne     t5, t6, 8f
+    addi    t4, t4, 8
+    li      t5, 32
+    bltu    t4, t5, 3b
+    addi    t4, t0, SigEntry_key            # each key
+    mv      a7, a1
+    li      t2, 0
+4:  bgeu    t2, a3, 7f
+    .irp o, 0, 8, 16, 24, 32, 40
+    ld      t5, \o(t4)
+    ld      t6, \o(a7)
+    bne     t5, t6, 8f
+    .endr
+    addi    t4, t4, 48
+    add     a7, a7, a2
+    addi    t2, t2, 1
+    j       4b
+7:  mv      a0, a6
+    ret
+8:  add     t0, t0, t3
+    j       1b
+9:  li      a0, -1
+    ret
+END_FUNCTION lantern_sig_find
+
+/*
+ * lantern_verify_signed (a0 to a7) with t6 a PubkeyCache or 0: the SigTable's answer for the key, the
+ * signing root and the signature when it holds them, else bls.Verify. Locals: sp+0 domain type, sp+8
+ * epoch, sp+16 domain (32), sp+48 type, object, key, signature, scratch, cache, sp+96 the root buffer (56).
+ */
+LOCAL_FUNCTION lantern_verify_signed_cached
+    FRAME 160
+    sw      a1, 0(sp)
+    sd      a2, 8(sp)
+    sd      a3, 48(sp)
+    sd      a4, 56(sp)
+    sd      a5, 64(sp)
+    sd      a6, 72(sp)
+    sd      a7, 80(sp)
+    sd      t6, 88(sp)
+    mv      a1, sp
+    addi    a2, sp, 8
+    mv      a3, a7
+    addi    a4, sp, 16
+    call    lantern_get_domain
+    bnez    a0, 7f
+    ld      a0, 48(sp)                      # the signing root
+    ld      a1, 56(sp)
+    addi    a2, sp, 16
+    ld      a3, 80(sp)
+    addi    a4, sp, 96 + 24
+    call    lantern_compute_signing_root
+    bnez    a0, 7f
+    ld      a0, 88(sp)
+    ld      a1, 64(sp)
+    li      a2, 48
+    li      a3, 1
+    addi    a4, sp, 96 + 24
+    ld      a5, 72(sp)
+    call    lantern_sig_find
+    bltz    a0, 1f
+    mv      a1, a0                          # the table's answer
+    li      a0, LANTERN_OK
+    j       7f
+1:  ld      a0, 64(sp)                      # bls.Verify
+    ld      a1, 72(sp)
+    addi    a2, sp, 96
+    ld      a3, 80(sp)
+    call    lantern_verify_root_signature
+7:  UNFRAME 160
+END_FUNCTION lantern_verify_signed_cached
+
 /* dst = &state.validators[idx] of state st; branch to fail when idx is not below the count. Uses a6, a7. */
 .macro VALIDATOR_AT dst, st, idx, fail
     PART    \dst, a6, \st, BeaconState_validators
@@ -905,8 +1013,9 @@ SPEC_FUNCTION validate_beacon_attestation_gossip
     addi    a4, s3, SingleAttestation_data
     addi    a5, t0, Validator_pubkey
     addi    a6, s3, SingleAttestation_signature
+    LDQ     t6, s2, Store_config + CONFIG_PUBKEY_CACHE   # with the SigTable of checked signatures
     mv      a7, s6
-    call    lantern_verify_signed
+    call    lantern_verify_signed_cached
     bnez    a0, 7f
     beqz    a1, 5f
     mv      a0, s2                          # [REJECT] the target block is an ancestor of the LMD vote block
@@ -1064,8 +1173,9 @@ SPEC_FUNCTION validate_beacon_attestation_gossip
     addi    a4, s3, Attestation_data
     addi    a5, t0, Validator_pubkey
     addi    a6, s3, Attestation_signature
+    LDQ     t6, s2, Store_config + CONFIG_PUBKEY_CACHE   # with the SigTable of checked signatures
     mv      a7, s6
-    call    lantern_verify_signed
+    call    lantern_verify_signed_cached
     bnez    a0, 7f
     beqz    a1, 5f
     mv      a0, s2                          # [REJECT] the target block is an ancestor of the LMD vote block

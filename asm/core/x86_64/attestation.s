@@ -190,7 +190,7 @@ SPEC_END committee_cache_init
 SPEC_FUNCTION pubkey_cache_size
     FRAME 16
     imul    $CRYPTO_BLS_ENTRY_BYTES, (%rdi), %rax
-    add     $CRYPTO_BLS_CACHE_FIXED, %rax
+    add     $(CRYPTO_BLS_CACHE_FIXED + SIG_TABLE_BYTES), %rax   # and the SigTable before the entries
     mov     %rax, (%rsi)
     xor     %eax, %eax
     UNFRAME 16
@@ -201,13 +201,15 @@ SPEC_FUNCTION pubkey_cache_init
     FRAME 16
     mov     (%rdi), %rcx
     imul    $CRYPTO_BLS_ENTRY_BYTES, %rcx, %rax
-    add     $CRYPTO_BLS_CACHE_FIXED, %rax
+    add     $(CRYPTO_BLS_CACHE_FIXED + SIG_TABLE_BYTES), %rax
     cmp     %rax, (%rsi)
     jb      9f
     movq    $Validator__mem, CRYPTO_BLS_CACHE_KEY_STRIDE(%rsi)
-    movq    $CRYPTO_BLS_CACHE_FIXED, CRYPTO_BLS_CACHE_OFFSET(%rsi)
+    movq    $(CRYPTO_BLS_CACHE_FIXED + SIG_TABLE_BYTES), CRYPTO_BLS_CACHE_OFFSET(%rsi)
     mov     %rcx, CRYPTO_BLS_CACHE_COUNT(%rsi)
-    lea     CRYPTO_BLS_CACHE_FIXED(%rsi), %rax  # every entry empty
+    movq    $0, (PUBKEY_SIGS + SigTable_used)(%rsi)   # an empty SigTable
+    movq    $(SIG_TABLE_BYTES - SigTable_entries), (PUBKEY_SIGS + SigTable_room)(%rsi)
+    lea     (CRYPTO_BLS_CACHE_FIXED + SIG_TABLE_BYTES)(%rsi), %rax  # every entry empty
 1:  test    %rcx, %rcx
     jz      2f
     movq    $0, CRYPTO_BLS_ENTRY_STATUS(%rax)

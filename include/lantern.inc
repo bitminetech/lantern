@@ -558,6 +558,20 @@
 .set SeenHeader_header_root, 32
 .set SeenHeader_header, 64
 
+/* SigTable (block-processing.md): checked signatures, before the entries of a PubkeyCache */
+.set PUBKEY_SIGS, CRYPTO_BLS_CACHE_FIXED    /* the SigTable's offset in a PubkeyCache */
+.set SIG_TABLE_BYTES, 1 << 21
+.set SigTable_used, 0                       /* bytes of its entries */
+.set SigTable_room, 8                       /* bytes it has for entries */
+.set SigTable_entries, 16
+.set SigEntry_valid, 0                      /* 1 or 0 once checked; SIG_UNKNOWN before */
+.set SigEntry_keys, 8                       /* the 48 byte keys after the signature */
+.set SigEntry_message, 16                   /* a ByteList header, then the 32 bytes of the message */
+.set SigEntry_signature, 72
+.set SigEntry_key, 168
+.set SIG_ENTRY_ONE, SigEntry_key + 48       /* an entry of one key */
+.set SIG_UNKNOWN, 2
+
 /* ShellPool (shell.md): the threads of lantern_shell_pool_run, a resource context of the shell */
 .set ShellPool_gen, 0                       /* u32: the generation of the last run; a worker waits on it */
 .set ShellPool_done, 8                      /* u32: the workers done with the generation; the caller waits on it */
