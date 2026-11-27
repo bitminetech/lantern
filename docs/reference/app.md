@@ -4383,8 +4383,8 @@ lantern_app_pool()
 
 ### Function does
 
-- lantern_shell_pool_start of `APP_POOL` with `threads` (shell.md): `threads` - 1 workers at most.
-- With a StateCache at `CONFIG_STATE_CACHE`: its `pool` takes `APP_POOL`, so each lantern_state_root of the node hashes its large trees on the pool.
+- lantern_shell_pool_start of `APP_THREADS` with `threads` (shell.md): `threads` - 1 workers at most.
+- With a StateCache at `CONFIG_STATE_CACHE`: its `pool` takes `APP_THREADS`, so each lantern_state_root of the node hashes its large trees on the pool.
 - A worker that cannot start leaves the pool with the workers started: the node runs as with fewer threads.
 - With a PubkeyCache at `CONFIG_PUBKEY_CACHE` and the anchor state: lantern_shell_pool_run of ceil(n / `APP_KEY_JOB`) jobs of lantern_app_key_job, n the state's validators, so each block and gossip check after the start finds the keys of those validators checked.
 

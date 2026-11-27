@@ -176,13 +176,13 @@ END_FUNCTION lantern_app_state_cache
 # keys are checked into the PubkeyCache with jobs of lantern_app_key_job. Locals: sp+0 a FileOp, sp+16 a ShellJob.
 LOCAL_FUNCTION lantern_app_pool
     FRAME 48
-    ADDQ    a0, s1, APP_POOL
+    ADDQ    a0, s1, APP_THREADS
     ADDQ    a1, s1, APP_OPTIONS + AppOptions_threads
     mv      a2, sp
     CALL_GLOBAL lantern_shell_pool_start
     LDQ     t0, s1, APP_CONFIG + CONFIG_STATE_CACHE
     beqz    t0, 1f
-    ADDQ    t1, s1, APP_POOL
+    ADDQ    t1, s1, APP_THREADS
     sd      t1, StateCache_pool(t0)
 1:  LDQ     t2, s1, APP_CONFIG + CONFIG_PUBKEY_CACHE   # the anchor state's keys checked on the pool
     beqz    t2, 2f
@@ -202,7 +202,7 @@ LOCAL_FUNCTION lantern_app_pool
     add     t4, t4, t6
     srli    t4, t4, APP_KEY_JOB_SHIFT
     sd      t4, 32(sp)
-    ADDQ    a0, s1, APP_POOL
+    ADDQ    a0, s1, APP_THREADS
     addi    a1, sp, 16
     CALL_GLOBAL lantern_shell_pool_run
 2:  UNFRAME 48

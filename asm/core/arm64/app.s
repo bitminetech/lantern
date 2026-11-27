@@ -171,13 +171,13 @@ END_FUNCTION lantern_app_state_cache
  */
 LOCAL_FUNCTION lantern_app_pool
     FRAME 48
-    ADDQ    x0, x19, APP_POOL
+    ADDQ    x0, x19, APP_THREADS
     ADDQ    x1, x19, (APP_OPTIONS + AppOptions_threads)
     add     x2, sp, #16
     CALL_GLOBAL lantern_shell_pool_start
     LDQ     x9, x19, (APP_CONFIG + CONFIG_STATE_CACHE)
     cbz     x9, 1f
-    ADDQ    x10, x19, APP_POOL
+    ADDQ    x10, x19, APP_THREADS
     str     x10, [x9, #StateCache_pool]
 1:  LDQ     x9, x19, (APP_CONFIG + CONFIG_PUBKEY_CACHE)   /* the anchor state's keys checked on the pool */
     cbz     x9, 2f
@@ -194,7 +194,7 @@ LOCAL_FUNCTION lantern_app_pool
     lsr     x15, x15, #APP_KEY_JOB_SHIFT
     stp     x14, x13, [sp, #32]
     str     x15, [sp, #48]
-    ADDQ    x0, x19, APP_POOL
+    ADDQ    x0, x19, APP_THREADS
     add     x1, sp, #32
     CALL_GLOBAL lantern_shell_pool_run
 2:  UNFRAME 48

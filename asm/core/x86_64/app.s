@@ -171,14 +171,14 @@ END_FUNCTION lantern_app_state_cache
  */
 LOCAL_FUNCTION lantern_app_pool
     FRAME 48
-    lea     APP_POOL(%rbx), %rdi
+    lea     APP_THREADS(%rbx), %rdi
     lea     (APP_OPTIONS + AppOptions_threads)(%rbx), %rsi
     mov     %rsp, %rdx
     CALL_GLOBAL lantern_shell_pool_start
     mov     (APP_CONFIG + CONFIG_STATE_CACHE)(%rbx), %rax
     test    %rax, %rax
     jz      1f
-    lea     APP_POOL(%rbx), %rcx
+    lea     APP_THREADS(%rbx), %rcx
     mov     %rcx, StateCache_pool(%rax)
 1:  mov     (APP_CONFIG + CONFIG_PUBKEY_CACHE)(%rbx), %r8   # the anchor state's keys checked on the pool
     test    %r8, %r8
@@ -199,7 +199,7 @@ LOCAL_FUNCTION lantern_app_pool
     add     $(APP_KEY_JOB - 1), %rdx
     shr     $APP_KEY_JOB_SHIFT, %rdx
     mov     %rdx, 32(%rsp)
-    lea     APP_POOL(%rbx), %rdi
+    lea     APP_THREADS(%rbx), %rdi
     lea     16(%rsp), %rsi
     CALL_GLOBAL lantern_shell_pool_run
 2:  UNFRAME 48

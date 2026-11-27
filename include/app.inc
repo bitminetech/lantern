@@ -147,8 +147,8 @@
 .set APP_HIST_FILE, 2                       /* <dir>/seen-history.bin */
 .set APP_HIST_ROOM, 1 << 20                 /* the memory history's room after its index; it doubles when short */
 .set APP_HIST_OUT_BYTES, 1 << 20            /* the chunks' first room; it doubles when short */
-.set APP_POOL, (APP_HIST + AppHist__size + 7) & ~7  /* ShellPool of --threads (app.md) */
-.set APP_KEYS, APP_POOL + SHELL_POOL_SIZE  /* the key jobs of lantern_app_pool: keys, count, the PubkeyCache */
+.set APP_THREADS, (APP_HIST + AppHist__size + 7) & ~7  /* ShellPool of --threads (app.md) */
+.set APP_KEYS, APP_THREADS + SHELL_POOL_SIZE  /* the key jobs of lantern_app_pool: keys, count, the PubkeyCache */
 .set APP_KEY_JOB_SHIFT, 12
 .set APP_KEY_JOB, 1 << APP_KEY_JOB_SHIFT    /* the keys of one job */
 .set APP_SIZE, (APP_KEYS + 24 + 4095) & ~4095
