@@ -47,6 +47,41 @@ Memory, files, the log, the clock and threads.
 - Section: the shell of the lantern binary: memory, files, the log and the clock, for Linux (system calls), macOS (libSystem) and Windows (kernel32). Sockets, the monotonic clock and random bytes come from the shell of asm-libp2p.
 - The file functions serve the database of [db.md](db.md): files written once at their end, made durable, mapped to read, renamed into place, and deleted whole.
 
+## OS calls
+
+Linux makes direct system calls; macOS calls libSystem; Windows calls kernel32 (shell32 for the command line).
+
+| OS | Calls | Used by | Requirements |
+|---|---|---|---|
+| Linux | `mmap`, `munmap` | lantern_shell_map, lantern_shell_unmap, lantern_shell_map_file, lantern_shell_unmap_file, the pool's stacks | Anonymous private memory read and write; a file mapped with PROT_READ and MAP_SHARED |
+| Linux | `openat`, `close`, `read`, `fstat` | lantern_shell_read_file, lantern_shell_open, lantern_shell_close, lantern_shell_map_file, lantern_shell_sync_dir | AT_FDCWD paths; O_CLOEXEC on every file; `st_size` of the file |
+| Linux | `write`, `pwrite64`, `ftruncate` | lantern_shell_write, lantern_shell_append, lantern_shell_write_at, lantern_shell_truncate | O_APPEND puts each `write` at the end; `pwrite64` at an offset past the end leaves zero bytes between |
+| Linux | `fdatasync`, `fsync` | lantern_shell_sync, lantern_shell_sync_dir | The bytes, and a directory's entries, durable on return |
+| Linux | `mkdirat`, `unlinkat`, `renameat2` | lantern_shell_mkdir, lantern_shell_remove, lantern_shell_rename | `renameat2` with no flags replaces the target in one step |
+| Linux | `clock_gettime` | lantern_shell_time_ms | CLOCK_REALTIME |
+| Linux | `getrusage`, `prlimit64` | lantern_shell_process | RUSAGE_SELF; RLIMIT_NOFILE read only |
+| Linux | `clone`, `futex`, `mprotect`, `exit` | lantern_shell_pool_start, lantern_shell_pool_run, lantern_shell_pool_stop, lantern_shell_pool_worker | `clone` with CLONE_VM, CLONE_FS, CLONE_FILES, CLONE_SIGHAND, CLONE_THREAD, CLONE_SYSVSEM, CLONE_PARENT_SETTID and CLONE_CHILD_CLEARTID; FUTEX_WAIT_PRIVATE and FUTEX_WAKE_PRIVATE on the pool's words, FUTEX_WAIT on a thread ID word, which the kernel clears and wakes when the thread ends; a guard page with no access |
+| Linux | `exit_group` | `_start` | The process's status |
+| macOS | `mmap`, `munmap` | as Linux | MAP_PRIVATE and MAP_ANON; PROT_READ and MAP_SHARED for a file |
+| macOS | `open`, `close`, `read`, `lseek`, `__error` | as Linux | O_CLOEXEC on every file; `lseek` to the end gives a file's size; `__error` gives errno after a call that gives -1 |
+| macOS | `write`, `pwrite` | lantern_shell_write, lantern_shell_append, lantern_shell_write_at | At most 2^30 bytes a call, as these refuse more than INT_MAX |
+| macOS | `ftruncate` | lantern_shell_truncate | A larger size makes the file longer with zero bytes |
+| macOS | `fcntl`, `fsync` | lantern_shell_sync, lantern_shell_sync_dir | `fcntl` with F_FULLFSYNC, else `fsync` on a file system without it |
+| macOS | `mkdir`, `unlink`, `rename` | as Linux | `rename` replaces the target in one step |
+| macOS | `clock_gettime_nsec_np` | lantern_shell_time_ms | CLOCK_REALTIME |
+| macOS | `getrusage`, `getrlimit` | lantern_shell_process | RUSAGE_SELF; RLIMIT_NOFILE |
+| macOS | `pthread_create`, `pthread_join`, `pthread_mutex_init`, `pthread_mutex_lock`, `pthread_mutex_unlock`, `pthread_mutex_destroy`, `pthread_cond_init`, `pthread_cond_wait`, `pthread_cond_signal`, `pthread_cond_broadcast`, `pthread_cond_destroy` | the pool's functions | Default attributes: a worker's stack is the default of `pthread_create` |
+| macOS | `sysctlbyname` | `main` on ARM64 | `hw.optional.arm.FEAT_SHA256` for the `sha` variant |
+| Windows | `VirtualAlloc`, `VirtualFree` | lantern_shell_map, lantern_shell_unmap, paths in UTF-16 | MEM_COMMIT and MEM_RESERVE with PAGE_READWRITE; MEM_RELEASE |
+| Windows | `CreateFileW`, `ReadFile`, `WriteFile`, `GetFileSizeEx`, `SetFilePointerEx`, `SetEndOfFile`, `FlushFileBuffers`, `CloseHandle`, `GetStdHandle` | the file functions and lantern_shell_write | Files shared for reading, writing and deleting; at most 2^30 bytes a `ReadFile` or `WriteFile`; an OVERLAPPED offset for lantern_shell_write_at |
+| Windows | `CreateFileMappingW`, `MapViewOfFile`, `UnmapViewOfFile` | lantern_shell_map_file, lantern_shell_unmap_file | PAGE_READONLY and FILE_MAP_READ |
+| Windows | `CreateDirectoryW`, `DeleteFileW`, `MoveFileExW` | lantern_shell_mkdir, lantern_shell_remove, lantern_shell_rename | MOVEFILE_REPLACE_EXISTING and MOVEFILE_WRITE_THROUGH |
+| Windows | `MultiByteToWideChar`, `GetLastError` | lantern_shell_wide, every failure | Paths from UTF-8 to UTF-16; the error of the failed call, never 0 |
+| Windows | `GetSystemTimePreciseAsFileTime` | lantern_shell_time_ms | 100 ns ticks from 1601 |
+| Windows | `GetProcessTimes`, `K32GetProcessMemoryInfo` | lantern_shell_process | The current process |
+| Windows | `CreateThread`, `WaitForSingleObject`, `ExitThread`, `AcquireSRWLockExclusive`, `ReleaseSRWLockExclusive`, `SleepConditionVariableSRW`, `WakeConditionVariable`, `WakeAllConditionVariable` | the pool's functions | A stack of `SHELL_POOL_STACK` bytes for each worker; an SRW lock and condition variables that start at 0; `ExitThread` on x86-64 only |
+| Windows | `GetCommandLineW`, `CommandLineToArgvW`, `WideCharToMultiByte`, `LocalFree`, `ExitProcess`, `IsProcessorFeaturePresent` | `mainCRTStartup` | The arguments in UTF-8; `IsProcessorFeaturePresent` (30) on ARM64 for the `sha` variant |
+
 ## The `sha` variant
 
 On x86-64 and ARM64 the binary holds a second copy of the core and of the dependency cores, built with asm-crypto's `asm/core/<ISA>/sha256x.s` in place of `sha256.s`. Each symbol of that copy has the prefix `lx_`. The entry point runs that copy when the CPU has the features below.
